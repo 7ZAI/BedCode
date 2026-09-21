@@ -157,9 +157,9 @@ mod tests {
     #[test]
     fn test_has_permission_consults_manager() {
         let (ctx, _, _) = make_context(&["terminal:input"]);
-        // storage 默认授予，无需显式请求
-        assert!(ctx.has_permission("storage"));
+        // 票 02 起无默认授予：未声明的权限一律拿不到（storage 也曾是默认位）
         assert!(ctx.has_permission("terminal:input"));
+        assert!(!ctx.has_permission("storage"));
         assert!(!ctx.has_permission("terminal:output"));
     }
 

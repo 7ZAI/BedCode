@@ -1167,6 +1167,7 @@ mod tests {
 
         let all_permissions: &[&str] = &[
             "storage",
+            "database:main",
             "broadcast",
             "terminal:input",
             "terminal:output",

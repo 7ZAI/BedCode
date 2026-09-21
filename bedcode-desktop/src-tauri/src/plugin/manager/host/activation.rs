@@ -148,6 +148,17 @@ impl PluginHost {
             // 重新授权：deactivate 会 revoke_all，再次激活时必须重新授予
             let permissions = loaded.manifest.permissions.clone();
             let granted = self.permission.grant_permissions(plugin_id, &permissions);
+            // 词汇表外的声明会在授权时被过滤（= 没声明）。票 01 已把生产 manifest 的
+            // 装饰词汇清零、票 02 又取消了 storage 的默认授予，因此「声明了却没生效」
+            // 必须可见——否则第三方插件作者只能靠运行时 permission denied 反推。
+            let dropped: Vec<&String> = permissions.iter().filter(|p| !granted.contains(p.as_str())).collect();
+            if !dropped.is_empty() {
+                tracing::warn!(
+                    plugin_id = %plugin_id,
+                    dropped = ?dropped,
+                    "manifest 声明的权限不在 SDK 词汇表内，授权时被过滤"
+                );
+            }
             loaded.granted_permissions = granted;
 
             // 置中间态后再释放锁执行 WASM activate：列表查询在激活期间

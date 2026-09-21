@@ -38,6 +38,15 @@ pub const PERMISSION_UI_INPUT: &str = "ui:input";
 pub const PERMISSION_UI_FILE_HANDLER: &str = "ui:fileHandler";
 pub const PERMISSION_NETWORK_HTTP: &str = "network:http";
 pub const PERMISSION_STORAGE: &str = "storage";
+/// 宿主主库 SQL 面（host-database 的 `db_*`，票 02 / P0-1）
+///
+/// 与 `storage`（插件自有 KV 存储 + `host-plugin-database` 私有库）**分域**：
+/// 主库是内核与全部插件共用的库，里面有 `plugin_secrets`（明文宿主托管密钥）、
+/// `pairings`、`connection_history`、`settings` 等他人数据。旧形态下所有插件
+/// 自动持有 `storage`，主库面又只靠正则表名隔离（逗号多表即可读穿）——
+/// 现在主库面要显式声明本位，且访问受 SQLite 引擎层表名白名单仲裁。
+/// 当前生产插件零消费者，改判为第一方按需申请的高危位（见 AGENTS §7、票 03 逐位确认）。
+pub const PERMISSION_DATABASE_MAIN: &str = "database:main";
 pub const PERMISSION_FS_READ: &str = "fs:read";
 pub const PERMISSION_FS_WRITE: &str = "fs:write";
 pub const PERMISSION_BROADCAST: &str = "broadcast";
@@ -110,6 +119,7 @@ pub const PERMISSION_VOCABULARY: &[(&str, &str)] = &[
     (stringify!(PERMISSION_UI_FILE_HANDLER), PERMISSION_UI_FILE_HANDLER),
     (stringify!(PERMISSION_NETWORK_HTTP), PERMISSION_NETWORK_HTTP),
     (stringify!(PERMISSION_STORAGE), PERMISSION_STORAGE),
+    (stringify!(PERMISSION_DATABASE_MAIN), PERMISSION_DATABASE_MAIN),
     (stringify!(PERMISSION_FS_READ), PERMISSION_FS_READ),
     (stringify!(PERMISSION_FS_WRITE), PERMISSION_FS_WRITE),
     (stringify!(PERMISSION_BROADCAST), PERMISSION_BROADCAST),
@@ -271,6 +281,12 @@ impl PermissionManager {
     }
 
     /// 为插件授权（从 manifest permissions 字段解析，过滤非法权限）
+    ///
+    /// 只授予 manifest 声明且在本表内的权限——**没有任何默认授予**（票 02：
+    /// 旧形态在此无条件塞进 `storage`，使主库/私有库权限门恒过，
+    /// 「manifest 声明即信任」变成了「不声明也有」）。
+    /// 词汇表外的声明会被过滤，调用方（宿主激活路径）负责把被过滤项告警出来，
+    /// 不允许静默丢弃。
     pub fn grant_permissions(&self, plugin_id: &str, requested: &[String]) -> HashSet<String> {
         let valid_set: HashSet<&str> = VALID_PERMISSIONS.iter().copied().collect();
         let granted: HashSet<String> = requested
@@ -278,10 +294,6 @@ impl PermissionManager {
             .filter(|p| valid_set.contains(p.as_str()))
             .cloned()
             .collect();
-
-        // storage 权限默认授予
-        let mut granted = granted;
-        granted.insert(PERMISSION_STORAGE.to_string());
 
         let mut lock = self.granted.write().unwrap_or_else(|e| e.into_inner());
         lock.insert(plugin_id.to_string(), granted.clone());
@@ -347,7 +359,44 @@ mod tests {
         ]);
         assert!(granted.contains("terminal:input"));
         assert!(!granted.contains("invalid:permission"));
-        assert!(granted.contains("storage"));
+        // 票 02：storage 不再是「人人自动持有」的默认位
+        assert!(
+            !granted.contains(PERMISSION_STORAGE),
+            "storage 不得再被默认授予——它曾是主库/私有库权限门恒过的根因"
+        );
+    }
+
+    /// 票 02 反例：不声明就没有，声明了才给（无默认授予、无隐式扩权）
+    #[test]
+    fn storage_is_not_granted_unless_declared() {
+        let pm = PermissionManager::new();
+        pm.grant_permissions("quiet-plugin", &[]);
+        assert!(!pm.check("quiet-plugin", PERMISSION_STORAGE));
+        assert!(!pm.check("quiet-plugin", PERMISSION_DATABASE_MAIN));
+        assert!(!pm.check_api("quiet-plugin", "storage.get"));
+
+        pm.grant_permissions("loud-plugin", &[PERMISSION_STORAGE.to_string()]);
+        assert!(pm.check("loud-plugin", PERMISSION_STORAGE));
+        assert!(pm.check_api("loud-plugin", "storage.get"));
+    }
+
+    /// 票 02：主库面与私有库面是两个位，互不代持
+    #[test]
+    fn main_db_bit_is_separate_from_plugin_storage_bit() {
+        let pm = PermissionManager::new();
+        pm.grant_permissions("one-faced", &[PERMISSION_STORAGE.to_string()]);
+        assert!(pm.check("one-faced", PERMISSION_STORAGE));
+        assert!(
+            !pm.check("one-faced", PERMISSION_DATABASE_MAIN),
+            "持有 storage 不等于可碰宿主主库"
+        );
+
+        pm.grant_permissions("two-faced", &[PERMISSION_DATABASE_MAIN.to_string()]);
+        assert!(pm.check("two-faced", PERMISSION_DATABASE_MAIN));
+        assert!(
+            !pm.check("two-faced", PERMISSION_STORAGE),
+            "主库位不应反向附带私有库/KV 能力"
+        );
     }
 
     #[test]

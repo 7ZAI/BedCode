@@ -3,12 +3,13 @@
 //! 含 SQL 表名前缀校验与 rusqlite 列 → JSON 转换辅助
 
 use crate::plugin::manager::wasm_runtime::{block_on_async, WasmHostContext};
-use crate::plugin::permission::PERMISSION_STORAGE;
+use crate::plugin::permission::{PERMISSION_DATABASE_MAIN, PERMISSION_STORAGE};
 use crate::system::constants::plugin::{
     PLUGIN_DB_EXECUTE_BATCH_MAX_STATEMENTS, PLUGIN_DB_QUERY_MAX_BYTES, PLUGIN_DB_QUERY_MAX_ROWS,
     PLUGIN_DB_STATEMENT_TIMEOUT_SECS,
 };
 use regex::Regex;
+use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -81,9 +82,182 @@ impl Drop for ProgressHandlerGuard<'_> {
     }
 }
 
+// ==================== Main-DB Table Authorization（票 02 / P0-1） ====================
+
+/// 插件在本插件前缀之外**不可见**的表，由 SQLite 引擎在 prepare 阶段逐个动作仲裁。
+///
+/// 为什么不能只靠 `validate_sql_table_prefix`：那是八个正则模式的尽力而为匹配，
+/// 逗号多表（`FROM 自己的表 a, plugin_secrets b`）、引号/方括号标识符、`main.` 库名限定、
+/// `ATTACH`、`PRAGMA` 都会漏过去——漏一种写法就是一个无需任何权限即可读穿
+/// `plugin_secrets`（明文宿主托管密钥）与全部配对记录的洞。本守卫把边界放到引擎：
+/// 语句真正触碰某张表的那一步才仲裁，写法再怎么变都要经过它。
+///
+/// 正则校验保留，但**不是边界**——它只提供更早、更可读的失败文案。
+/// 拒绝走 `Deny`：`prepare` 直接失败（`not authorized`），错误原样回给插件，
+/// 不静默改写、不返回空结果。
+///
+/// 作用域仅覆盖这一次调用：主库是内核与全部插件共用的单一连接（全局 Mutex 串行），
+/// 守卫 Drop 即卸载，绝不残留到内核自己的读写上（与 `ProgressHandlerGuard` 同形态）。
+fn with_main_db_guards<T>(
+    plugin_id: &str,
+    conn: &rusqlite::Connection,
+    timeout: Duration,
+    sql: &str,
+    f: impl FnOnce(&rusqlite::Connection) -> Result<T, String>,
+) -> Result<T, String> {
+    let prefix = main_db_table_prefix(plugin_id);
+    let catalog_named = names_schema_catalog(sql);
+    conn.authorizer(Some(move |ctx: AuthContext<'_>| {
+        authorize_main_db_action(&prefix, catalog_named, &ctx.action)
+    }));
+    let _guard = AuthorizerGuard { conn };
+    with_statement_timeout(plugin_id, conn, timeout, f)
+}
+
+/// 表名白名单守卫的卸载器（含 panic 展开路径）
+struct AuthorizerGuard<'a> {
+    conn: &'a rusqlite::Connection,
+}
+
+impl Drop for AuthorizerGuard<'_> {
+    fn drop(&mut self) {
+        self.conn.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
+    }
+}
+
+/// 单个动作的仲裁：带表名的动作按前缀放行，自省/挂载类一律拒
+///
+/// 放行的 `Select` / `Transaction` / `Savepoint` / `Function` / `Recursive` / `Reindex`
+/// 都不携带跨表访问（真正的读写由同时上报的 `Read`/`Insert`/`Update`/`Delete` 把关）：
+/// - `Function`：`ALTER TABLE` 内部会用到 `printf` / `substr` 等内置函数
+/// - `Reindex`：`CREATE INDEX` 必然附带一条隐式 Reindex，拒它等于禁建索引
+/// - `Transaction`：批次事务由 rusqlite 自己发 BEGIN/COMMIT（插件侧裸事务控制
+///   已在 `reject_bare_transaction_control` 拦掉）
+///
+/// `DropTrigger` 刻意不放行：rusqlite 0.32 该变体只上报触发器名，判不出归属表，
+/// 按前缀门会误伤他插件同名对象 → fail-closed 拒绝（触发器创建本就被
+/// `reject_bare_transaction_control` 的末 token 启发式挡住，见票 02 Comments）。
+fn authorize_main_db_action(prefix: &str, catalog_named: bool, action: &AuthAction<'_>) -> Authorization {
+    let name: &str = match action {
+        AuthAction::Read { table_name, .. }
+        | AuthAction::Update { table_name, .. }
+        | AuthAction::Insert { table_name }
+        | AuthAction::Delete { table_name }
+        | AuthAction::AlterTable { table_name, .. }
+        | AuthAction::CreateTable { table_name }
+        | AuthAction::CreateTempTable { table_name }
+        | AuthAction::CreateVtable { table_name, .. }
+        | AuthAction::DropTable { table_name }
+        | AuthAction::DropTempTable { table_name }
+        | AuthAction::DropVtable { table_name, .. }
+        | AuthAction::Analyze { table_name }
+        | AuthAction::CreateIndex { table_name, .. }
+        | AuthAction::CreateTempIndex { table_name, .. }
+        | AuthAction::DropIndex { table_name, .. }
+        | AuthAction::DropTempIndex { table_name, .. }
+        | AuthAction::CreateTrigger { table_name, .. }
+        | AuthAction::CreateTempTrigger { table_name, .. } => table_name,
+        // 视图名与表名同处一个名字空间，同样能指到他表 → 按同一前缀门把关
+        AuthAction::CreateView { view_name } | AuthAction::DropView { view_name } => view_name,
+        AuthAction::Select
+        | AuthAction::Transaction { .. }
+        | AuthAction::Savepoint { .. }
+        | AuthAction::Function { .. }
+        | AuthAction::Recursive
+        | AuthAction::Reindex { .. } => return Authorization::Allow,
+        // PRAGMA（`database_list` 直接把宿主库文件路径交给插件）、ATTACH/DETACH
+        // （挂载任意库文件 = 跨库读写）以及未识别的动作码：fail-closed
+        _ => return Authorization::Deny,
+    };
+    if is_schema_catalog(name) {
+        // DDL 记账必然读写 sqlite_master / sqlite_sequence；但语句自己点名这些表
+        // （读表清单、`UPDATE sqlite_master` 改 rootpage 等）就是越界 → 拒
+        return if catalog_named {
+            Authorization::Deny
+        } else {
+            Authorization::Allow
+        };
+    }
+    if name.starts_with(prefix) {
+        Authorization::Allow
+    } else {
+        Authorization::Deny
+    }
+}
+
+/// 插件在主库的表名前缀（`plugin_{sanitized_id}_`）
+fn main_db_table_prefix(plugin_id: &str) -> String {
+    let sanitized_id = plugin_id.replace('.', "_").replace('-', "_");
+    format!("plugin_{}_", sanitized_id)
+}
+
+/// SQLite 内部目录表：DDL 记账必然触达，插件不得在语句里直接点名
+///
+/// 白名单而非 `sqlite_` 前缀通配：`sqlite_stat1` 之类可被 ANALYZE 写入的内部表
+/// 不给放行（fail-closed）。
+fn is_schema_catalog(name: &str) -> bool {
+    name.eq_ignore_ascii_case("sqlite_master")
+        || name.eq_ignore_ascii_case("sqlite_temp_master")
+        || name.eq_ignore_ascii_case("sqlite_sequence")
+}
+
+/// 语句是否点名了目录表（去注释与字符串字面量后按词元匹配）
+///
+/// 双引号/反引号/方括号包起来的是**标识符**，保留在扫描范围内——那正是
+/// `"sqlite_master"` 这种规避写法的入口；只有单引号字符串与注释可以吞掉。
+fn names_schema_catalog(sql: &str) -> bool {
+    strip_sql_literals_and_comments(sql)
+        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .any(is_schema_catalog)
+}
+
+/// 剥掉 `--` 行注释、`/* */` 块注释与单引号字符串字面量
+fn strip_sql_literals_and_comments(sql: &str) -> String {
+    let chars: Vec<char> = sql.chars().collect();
+    let mut out = String::with_capacity(sql.len());
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '\'' {
+            i += 1;
+            while i < chars.len() {
+                if chars[i] == '\'' {
+                    if chars.get(i + 1) == Some(&'\'') {
+                        i += 2;
+                        continue;
+                    }
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            out.push(' ');
+            continue;
+        }
+        if c == '-' && chars.get(i + 1) == Some(&'-') {
+            while i < chars.len() && chars[i] != '\n' {
+                i += 1;
+            }
+            continue;
+        }
+        if c == '/' && chars.get(i + 1) == Some(&'*') {
+            i += 2;
+            while i < chars.len() && !(chars[i] == '*' && chars.get(i + 1) == Some(&'/')) {
+                i += 1;
+            }
+            i += 2;
+            out.push(' ');
+            continue;
+        }
+        out.push(c);
+        i += 1;
+    }
+    out
+}
+
 /// 主库执行 SQL（权限 + 表名前缀校验 + 超时护栏），返回受影响行数
 pub(crate) fn db_execute(host_ctx: &WasmHostContext, plugin_id: &str, sql: &str) -> Result<u32, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_STORAGE, "host_db_execute") {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_DATABASE_MAIN, "host_db_execute") {
         return Err("permission denied".to_string());
     }
     reject_bare_transaction_control(sql)?;
@@ -92,7 +266,7 @@ pub(crate) fn db_execute(host_ctx: &WasmHostContext, plugin_id: &str, sql: &str)
     let timeout = Duration::from_secs(PLUGIN_DB_STATEMENT_TIMEOUT_SECS);
     block_on_async(async {
         let db = db.lock().await;
-        with_statement_timeout(plugin_id, db.conn(), timeout, |conn| {
+        with_main_db_guards(plugin_id, db.conn(), timeout, sql, |conn| {
             conn.execute(sql, []).map_err(|e| e.to_string())
         })
     })
@@ -102,7 +276,7 @@ pub(crate) fn db_execute(host_ctx: &WasmHostContext, plugin_id: &str, sql: &str)
 
 /// 主库查询（权限 + 表名前缀校验 + 超时护栏），返回行数组 JSON 字符串
 pub(crate) fn db_query(host_ctx: &WasmHostContext, plugin_id: &str, sql: &str) -> Result<Option<String>, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_STORAGE, "host_db_query") {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_DATABASE_MAIN, "host_db_query") {
         return Err("permission denied".to_string());
     }
     validate_sql_table_prefix(plugin_id, sql).map_err(|e| e.to_string())?;
@@ -110,7 +284,7 @@ pub(crate) fn db_query(host_ctx: &WasmHostContext, plugin_id: &str, sql: &str) -
     let timeout = Duration::from_secs(PLUGIN_DB_STATEMENT_TIMEOUT_SECS);
     let value = block_on_async(async {
         let db = db.lock().await;
-        with_statement_timeout(plugin_id, db.conn(), timeout, |conn| {
+        with_main_db_guards(plugin_id, db.conn(), timeout, sql, |conn| {
             query_to_json(plugin_id, conn, sql)
         })
     })
@@ -173,7 +347,7 @@ pub(crate) fn db_execute_params(
     sql: &str,
     params_json: &str,
 ) -> Result<u32, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_STORAGE, "host_db_execute_params") {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_DATABASE_MAIN, "host_db_execute_params") {
         return Err("permission denied".to_string());
     }
     reject_bare_transaction_control(sql)?;
@@ -183,7 +357,7 @@ pub(crate) fn db_execute_params(
     let timeout = Duration::from_secs(PLUGIN_DB_STATEMENT_TIMEOUT_SECS);
     block_on_async(async {
         let db = db.lock().await;
-        with_statement_timeout(plugin_id, db.conn(), timeout, |conn| {
+        with_main_db_guards(plugin_id, db.conn(), timeout, sql, |conn| {
             execute_with_params(conn, sql, &params)
         })
     })
@@ -198,7 +372,7 @@ pub(crate) fn db_query_params(
     sql: &str,
     params_json: &str,
 ) -> Result<Option<String>, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_STORAGE, "host_db_query_params") {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_DATABASE_MAIN, "host_db_query_params") {
         return Err("permission denied".to_string());
     }
     validate_sql_table_prefix(plugin_id, sql).map_err(|e| e.to_string())?;
@@ -207,7 +381,7 @@ pub(crate) fn db_query_params(
     let timeout = Duration::from_secs(PLUGIN_DB_STATEMENT_TIMEOUT_SECS);
     let value = block_on_async(async {
         let db = db.lock().await;
-        with_statement_timeout(plugin_id, db.conn(), timeout, |conn| {
+        with_main_db_guards(plugin_id, db.conn(), timeout, sql, |conn| {
             query_with_params_to_json(plugin_id, conn, sql, &params)
         })
     })
@@ -345,7 +519,7 @@ fn execute_batch_on_conn(conn: &rusqlite::Connection, sqls: &[String]) -> Result
 
 /// 主库事务批次执行（权限 + 表名前缀 + 语句数上限 + 超时护栏）
 pub(crate) fn db_execute_batch(host_ctx: &WasmHostContext, plugin_id: &str, sqls_json: &str) -> Result<u32, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_STORAGE, "host_db_execute_batch") {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_DATABASE_MAIN, "host_db_execute_batch") {
         return Err("permission denied".to_string());
     }
     let sqls = parse_sqls_json(sqls_json)?;
@@ -362,7 +536,9 @@ pub(crate) fn db_execute_batch(host_ctx: &WasmHostContext, plugin_id: &str, sqls
     let timeout = Duration::from_secs(PLUGIN_DB_STATEMENT_TIMEOUT_SECS);
     block_on_async(async {
         let db = db.lock().await;
-        with_statement_timeout(plugin_id, db.conn(), timeout, |conn| execute_batch_on_conn(conn, &sqls))
+        with_main_db_guards(plugin_id, db.conn(), timeout, &sqls.join(";"), |conn| {
+            execute_batch_on_conn(conn, &sqls)
+        })
     })
     .map_err(|e| format!("database error: {}", e))
 }
@@ -554,16 +730,12 @@ fn query_to_json(plugin_id: &str, conn: &rusqlite::Connection, sql: &str) -> Res
 /// WASM 插件只能操作 `plugin_{sanitized_id}_` 前缀的表，
 /// 防止插件读写宿主或其他插件的数据表
 ///
-/// # Table Name Extraction
-/// 从 SQL 中提取表名，覆盖常见 DML/DDL 语句：
-/// - CREATE TABLE / INSERT INTO / UPDATE / DELETE FROM
-/// - SELECT ... FROM / ALTER TABLE / DROP TABLE
-///
-/// # Sanitization
-/// plugin_id 中的 `.` 和 `-` 替换为 `_`，确保表名前缀合法
+/// **本函数不是安全边界**（票 02）：八个正则模式是尽力而为匹配，逗号多表、引号标识符、
+/// `main.` 限定、ATTACH、PRAGMA 都可能漏。真正的边界是 `with_main_db_guards` 里
+/// 由 SQLite 引擎逐动作回调的表名仲裁。这里保留的价值是**早失败 + 可读文案**
+/// （直接报出违规表名，而不是引擎的 `not authorized`）。
 fn validate_sql_table_prefix(plugin_id: &str, sql: &str) -> crate::Result<()> {
-    let sanitized_id = plugin_id.replace('.', "_").replace('-', "_");
-    let expected_prefix = format!("plugin_{}_", sanitized_id);
+    let expected_prefix = main_db_table_prefix(plugin_id);
 
     let table_names = extract_table_names(sql);
 
@@ -594,6 +766,9 @@ fn extract_table_names(sql: &str) -> Vec<String> {
         r#"(?i)\bJOIN\s+[`"\[]?(\w+)[`"\]]?"#,
         r#"(?i)\bALTER\s+TABLE\s+[`"\[]?(\w+)[`"\]]?"#,
         r#"(?i)\bDROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?[`"\[]?(\w+)[`"\]]?"#,
+        // ALTER TABLE ... RENAME TO 只改目标名，引擎侧的 AlterTable 动作只上报原表名，
+        // 漏掉这条就等于「把自己的表改到他前缀下」可自由命名 → 文本层补上
+        r#"(?i)\bRENAME\s+TO\s+[`"\[]?(\w+)[`"\]]?"#,
     ];
 
     for pattern in &patterns {
@@ -663,34 +838,386 @@ mod tests {
     use super::*;
     use crate::plugin::manager::wasm_runtime::host_impl::tests::{build_host_ctx, grant_permissions};
 
-    /// 权限门（票 01 门禁用例）：未授予 `storage` 时主库/私有库四面对外拒绝，
-    /// 且拒绝发生在 SQL 校验与取库之前（错误只报权限名，不泄露语句是否合法）
+    /// 权限门三态（票 01 + 票 02）：主库面与私有库面是两个位，互不代持
+    ///
+    /// ① 什么都不给 → 两面都拒；② 只给 `storage` → 私有库放行、主库仍拒；
+    /// ③ 只给 `database:main` → 主库进到 SQL 校验、私有库拒。
+    /// 旧形态下 `storage` 由 SDK 无条件默认授予，主库权限门恒过——本用例锁住它已不再成立。
     #[test]
-    fn db_ops_denied_without_storage_permission() {
+    fn main_db_and_private_db_faces_require_separate_bits() {
         let ctx = build_host_ctx();
         let sql = "SELECT value FROM plugin_secrets";
-        assert_eq!(db_execute(&ctx, "com.bedcode.no-db", sql).unwrap_err(), "permission denied");
-        assert_eq!(db_query(&ctx, "com.bedcode.no-db", sql).unwrap_err(), "permission denied");
+        let own = "SELECT 1";
+
+        // ① 未授予：两面一律拒
         assert_eq!(
-            plugin_db_execute(&ctx, "com.bedcode.no-db", sql).unwrap_err(),
+            db_query(&ctx, "com.bedcode.no-db", sql).unwrap_err(),
             "permission denied"
         );
         assert_eq!(
-            plugin_db_query(&ctx, "com.bedcode.no-db", sql).unwrap_err(),
+            plugin_db_query(&ctx, "com.bedcode.no-db", own).unwrap_err(),
             "permission denied"
+        );
+        assert_eq!(
+            db_execute(&ctx, "com.bedcode.no-db", sql).unwrap_err(),
+            "permission denied"
+        );
+        assert_eq!(
+            plugin_db_execute(&ctx, "com.bedcode.no-db", own).unwrap_err(),
+            "permission denied"
+        );
+
+        // ② 只给 storage：私有库放行（错误来自无头上下文而非权限），主库仍按权限拒
+        grant_permissions(&ctx, "com.bedcode.kv-only", &[PERMISSION_STORAGE]);
+        let private_err = plugin_db_execute(&ctx, "com.bedcode.kv-only", own).unwrap_err();
+        assert!(
+            !private_err.contains("permission denied"),
+            "持有 storage 的私有库面不应被权限门拒: {private_err}"
+        );
+        assert_eq!(
+            db_execute(&ctx, "com.bedcode.kv-only", sql).unwrap_err(),
+            "permission denied",
+            "storage 不再自动可碰主库"
+        );
+
+        // ③ 只给 database:main：主库放行到 SQL 校验，私有库反而被拒
+        grant_permissions(&ctx, "com.bedcode.main-only", &[PERMISSION_DATABASE_MAIN]);
+        let main_err = db_execute(&ctx, "com.bedcode.main-only", sql).unwrap_err();
+        assert!(
+            !main_err.contains("permission denied"),
+            "持有 database:main 的主库面应进到 SQL 校验: {main_err}"
+        );
+        assert_eq!(
+            plugin_db_execute(&ctx, "com.bedcode.main-only", own).unwrap_err(),
+            "permission denied",
+            "database:main 不反向附带私有库/KV 能力"
         );
     }
 
-    /// 正例（与上条成对，防「恒拒绝」假绿）：授予后主库面进到 SQL 校验之后
+    // ==================== 主库隔离纵深（票 02，P0-1） ====================
+    //
+    // 断言面 = 宿主函数对**真实主库**的执行结果（`build_host_ctx` 的库跑过 init_schema，
+    // 里面就有 `plugin_secrets`），不断言 `extract_table_names` 的内部返回。
+    // 攻击者视角：插件已合法持有主库面，试图借一条语句读到/搬走别人的表。
+
+    const ATTACKER: &str = "com.bedcode.attacker";
+    const ATTACKER_PREFIX: &str = "plugin_com_bedcode_attacker_";
+    const SECRET: &str = "PLAINTEXT-HOST-MANAGED-SECRET";
+
+    /// 授予主库面（票 02：主库独立权限位）
+    fn grant_main_db(ctx: &WasmHostContext, plugin_id: &str) {
+        grant_permissions(ctx, plugin_id, &[PERMISSION_DATABASE_MAIN]);
+    }
+
+    /// 直接在宿主主库上播种（模拟「别的插件/宿主自己的数据本来就在这张库里」）
+    fn seed_main(ctx: &WasmHostContext, sql: &str) {
+        let db = Arc::clone(&ctx.db);
+        crate::plugin::manager::wasm_runtime::block_on_async(async move {
+            let db = db.lock().await;
+            db.conn().execute_batch(sql).expect("宿主侧播种语句应成功");
+        });
+    }
+
+    /// 主库里某张表当前的行数（用于断言「拒绝不留副作用」）
+    fn main_row_count(ctx: &WasmHostContext, table: &str) -> i64 {
+        let db = Arc::clone(&ctx.db);
+        crate::plugin::manager::wasm_runtime::block_on_async(async move {
+            let db = db.lock().await;
+            db.conn()
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get::<_, i64>(0))
+                .unwrap_or(-1)
+        })
+    }
+
+    /// 攻击者自己的表与一张暂存表就位（红测的前提：跨表读写的两端都真实存在）
+    fn attacker_tables_ready(ctx: &WasmHostContext) {
+        grant_main_db(ctx, ATTACKER);
+        seed_main(
+            ctx,
+            &format!(
+                "CREATE TABLE {ATTACKER_PREFIX}x (k TEXT); \
+                 CREATE TABLE {ATTACKER_PREFIX}stolen (value TEXT); \
+                 INSERT INTO {ATTACKER_PREFIX}x (k) VALUES ('own-row');"
+            ),
+        );
+    }
+
+    /// 反例①（逗号多表读）：`FROM 自己的表 a, plugin_secrets b` 只提取到第一个表名，
+    /// 校验放行后明文密钥被整行读出——本轮 P0-1 的原始攻击链
     #[test]
-    fn db_execute_granted_passes_permission_gate() {
+    fn main_db_comma_multitable_read_of_secrets_is_denied() {
         let ctx = build_host_ctx();
-        grant_permissions(&ctx, "com.bedcode.db-ok", &[PERMISSION_STORAGE]);
-        let err = db_execute(&ctx, "com.bedcode.db-ok", "SELECT value FROM plugin_secrets")
-            .expect_err("主库禁止非本插件前缀表");
+        seed_main(
+            &ctx,
+            &format!(
+                "INSERT OR REPLACE INTO plugin_secrets (plugin_id, key, value, updated_at) \
+                 VALUES ('com.bedcode.victim', 'jwt-key', '{SECRET}', '2026-09-21');"
+            ),
+        );
+        attacker_tables_ready(&ctx);
+
+        let sql = &format!("SELECT b.value FROM {ATTACKER_PREFIX}x a, plugin_secrets b WHERE a.k = 'own-row'");
+        let result = db_query(&ctx, ATTACKER, "SELECT 1 AS one");
+        assert!(result.is_ok(), "本插件单表查询应放行: {result:?}");
+
+        let outcome = db_query(&ctx, ATTACKER, sql);
+        assert!(outcome.is_err(), "逗号多表跨读主库他表必须被拒，实际放行: {outcome:?}");
+        if let Ok(Some(rows)) = &outcome {
+            panic!("跨表读放行且取回数据（密钥泄露）: {rows}");
+        }
+    }
+
+    /// 反例②（逗号多表搬数据）：把别人的表内容写进**自己**的表，绕过之后可任意读走
+    #[test]
+    fn main_db_comma_multitable_exfil_write_is_denied() {
+        let ctx = build_host_ctx();
+        seed_main(
+            &ctx,
+            &format!(
+                "INSERT OR REPLACE INTO plugin_secrets (plugin_id, key, value, updated_at) \
+                 VALUES ('com.bedcode.victim', 'jwt-key', '{SECRET}', '2026-09-21');"
+            ),
+        );
+        attacker_tables_ready(&ctx);
+
+        let sql = &format!(
+            "INSERT INTO {ATTACKER_PREFIX}stolen (value) \
+             SELECT b.value FROM {ATTACKER_PREFIX}x a, plugin_secrets b"
+        );
+        let outcome = db_execute(&ctx, ATTACKER, sql);
+        assert!(outcome.is_err(), "逗号多表跨写搬运必须被拒，实际放行: {outcome:?}");
+        assert_eq!(
+            main_row_count(&ctx, &format!("{ATTACKER_PREFIX}stolen")),
+            0,
+            "被拒的语句不得留下任何副作用（暂存表必须仍为空）"
+        );
+    }
+
+    /// 反例③（引号/方括号标识符变体）：正则只吃裸标识符，带引号的他表名照样是跨表读
+    #[test]
+    fn main_db_quoted_identifier_cross_read_is_denied() {
+        let ctx = build_host_ctx();
+        attacker_tables_ready(&ctx);
+
+        for sql in [
+            &format!("SELECT b.value FROM {ATTACKER_PREFIX}x a, \"plugin_secrets\" b")[..],
+            &format!("SELECT b.value FROM {ATTACKER_PREFIX}x a, [plugin_secrets] b")[..],
+            &format!("SELECT b.value FROM {ATTACKER_PREFIX}x a, `plugin_secrets` b")[..],
+            // 库名限定：main 是宿主主库自身的 schema 名
+            "SELECT value FROM main.plugin_secrets",
+        ] {
+            let outcome = db_query(&ctx, ATTACKER, sql);
+            assert!(outcome.is_err(), "跨表读变体未被拒: {sql} → {outcome:?}");
+        }
+    }
+
+    /// 反例④（ATTACH）：挂载任意数据库文件 = 既能把别处的库读进来，也能往里写
+    #[test]
+    fn main_db_attach_is_denied() {
+        let ctx = build_host_ctx();
+        attacker_tables_ready(&ctx);
+        for sql in ["ATTACH ':memory:' AS evil", "ATTACH DATABASE ':memory:' AS evil"] {
+            let outcome = db_execute(&ctx, ATTACKER, sql);
+            assert!(outcome.is_err(), "ATTACH 任意库必须被拒: {sql} → {outcome:?}");
+        }
+    }
+
+    /// 反例⑤（PRAGMA）：`database_list` 直接把宿主主库文件路径交给插件
+    #[test]
+    fn main_db_pragma_is_denied() {
+        let ctx = build_host_ctx();
+        attacker_tables_ready(&ctx);
+        for sql in [
+            "PRAGMA database_list",
+            "PRAGMA writable_schema = ON",
+            "SELECT name FROM sqlite_master",
+        ] {
+            let outcome = db_query(&ctx, ATTACKER, sql);
+            assert!(outcome.is_err(), "主库自省面必须被拒: {sql} → {outcome:?}");
+        }
+    }
+
+    /// 正例（纵深不得过拦）：本插件前缀对象的完整生命周期照常可用
+    #[test]
+    fn main_db_own_prefix_tables_still_work_end_to_end() {
+        let ctx = build_host_ctx();
+        attacker_tables_ready(&ctx);
+        let table = format!("{ATTACKER_PREFIX}notes");
+        db_execute(
+            &ctx,
+            ATTACKER,
+            &format!("CREATE TABLE {table} (id INTEGER PRIMARY KEY, v TEXT)"),
+        )
+        .expect("建自己的表应放行");
+        db_execute(&ctx, ATTACKER, &format!("INSERT INTO {table} (v) VALUES ('a')")).expect("写自己的表应放行");
+        assert_eq!(
+            db_query(&ctx, ATTACKER, &format!("SELECT v FROM {table}"))
+                .expect("读自己的表应放行")
+                .as_deref(),
+            Some(r#"[{"v":"a"}]"#),
+            "查询结果应原样返回"
+        );
+        db_execute(&ctx, ATTACKER, &format!("UPDATE {table} SET v = 'b' WHERE v = 'a'")).expect("更新自己的表应放行");
+        db_execute(&ctx, ATTACKER, &format!("DELETE FROM {table} WHERE v = 'b'")).expect("删除自己的表应放行");
+        // 自连接（自己的表出现两次）与带引号形态都必须放行
+        db_query(&ctx, ATTACKER, &format!("SELECT a.id FROM {table} a, {table} b"))
+            .expect("本插件表之间的逗号多表应放行");
+        db_query(&ctx, ATTACKER, &format!("SELECT * FROM \"{table}\"")).expect("带引号标识符的本插件表应放行");
+        db_execute(&ctx, ATTACKER, &format!("ALTER TABLE {table} ADD COLUMN extra TEXT")).expect("改自己的表应放行");
+        db_execute(&ctx, ATTACKER, &format!("DROP TABLE {table}")).expect("删自己的表应放行");
+    }
+
+    /// 正例（DDL 记账必然触达 sqlite_master / sqlite_sequence，不得因此过拦）
+    #[test]
+    fn main_db_own_prefix_ddl_family_still_works() {
+        let ctx = build_host_ctx();
+        attacker_tables_ready(&ctx);
+        let table = format!("{ATTACKER_PREFIX}auto");
+        // AUTOINCREMENT 会写 sqlite_sequence
+        db_execute(
+            &ctx,
+            ATTACKER,
+            &format!("CREATE TABLE {table} (id INTEGER PRIMARY KEY AUTOINCREMENT, v TEXT)"),
+        )
+        .expect("AUTOINCREMENT 建表应放行");
+        db_execute(&ctx, ATTACKER, &format!("INSERT INTO {table} (v) VALUES ('a'), ('b')")).expect("批量插入应放行");
+        db_execute(
+            &ctx,
+            ATTACKER,
+            &format!("CREATE INDEX {ATTACKER_PREFIX}ix ON {table} (v)"),
+        )
+        .expect("在自己表上建索引应放行（隐式 Reindex 不得被拒）");
+        db_execute(&ctx, ATTACKER, &format!("DROP INDEX {ATTACKER_PREFIX}ix")).expect("删自己的索引应放行");
+        db_execute(
+            &ctx,
+            ATTACKER,
+            &format!("CREATE VIEW {ATTACKER_PREFIX}v AS SELECT v FROM {table}"),
+        )
+        .expect("在自己表上建视图应放行");
+        assert_eq!(
+            db_query(&ctx, ATTACKER, &format!("SELECT v FROM {ATTACKER_PREFIX}v"))
+                .expect("读自己的视图应放行")
+                .as_deref(),
+            Some(r#"[{"v":"a"},{"v":"b"}]"#)
+        );
+        db_execute(&ctx, ATTACKER, &format!("DROP VIEW {ATTACKER_PREFIX}v")).expect("删自己的视图应放行");
+        // 触发器用例本票不覆盖：`CREATE TRIGGER ... BEGIN ... END` 以 END 结尾，
+        // 会被既有的 `reject_bare_transaction_control`（末 token 白名单）当成裸事务控制
+        // 拒掉——与本票的表名纵深无关，是启发式检测的既有误拒（已登记票 02 Comments）
+        db_execute(&ctx, ATTACKER, &format!("DROP TABLE {table}")).expect("删表应放行");
+    }
+
+    /// 反例（引擎层才是边界）：正则层不认的写法必须由守卫拦下，且给出引擎的拒因
+    #[test]
+    fn main_db_authorizer_error_names_the_boundary() {
+        let ctx = build_host_ctx();
+        attacker_tables_ready(&ctx);
+        let err = db_query(&ctx, ATTACKER, "SELECT * FROM plugin_settings").unwrap_err();
         assert!(
-            !err.contains("permission denied"),
-            "已授予 storage 仍被权限门拒绝: {err}"
+            err.contains("does not match required prefix"),
+            "正则层能识别的写法应保持既有文案: {err}"
+        );
+        let err = db_query(
+            &ctx,
+            ATTACKER,
+            &format!("SELECT b.value FROM {ATTACKER_PREFIX}x a, plugin_secrets b"),
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("prohibited") && err.contains("plugin_secrets"),
+            "正则层漏掉的写法应由引擎守卫拒绝并报出被禁对象（不是静默返回空）: {err}"
+        );
+        assert!(!err.contains(SECRET), "拒绝文案不得回带被查内容: {err}");
+    }
+
+    /// 反例（目录表）：DDL 会隐式记账到 sqlite_master，但插件自己点名一律拒
+    #[test]
+    fn main_db_schema_catalog_direct_reference_is_denied() {
+        let ctx = build_host_ctx();
+        attacker_tables_ready(&ctx);
+        for sql in [
+            "SELECT name FROM sqlite_master WHERE type = 'table'",
+            "SELECT * FROM \"sqlite_master\"",
+            "SELECT * FROM [sqlite_sequence]",
+        ] {
+            let outcome = db_query(&ctx, ATTACKER, sql);
+            assert!(outcome.is_err(), "目录表直接读必须被拒: {sql} → {outcome:?}");
+        }
+        for sql in [
+            "UPDATE sqlite_master SET tbl_name = 'x' WHERE 1 = 1",
+            "INSERT INTO sqlite_sequence (name, seq) VALUES ('anything', 1)",
+            "DELETE FROM sqlite_master WHERE 1 = 1",
+        ] {
+            let outcome = db_execute(&ctx, ATTACKER, sql);
+            assert!(outcome.is_err(), "目录表直接写必须被拒: {sql} → {outcome:?}");
+        }
+        // 拒了之后目录仍在：证明拒绝发生在 prepare，而不是把库改坏了
+        assert!(
+            main_row_count(&ctx, "plugin_secrets") >= 0,
+            "主库应仍可正常自省（宿主侧）"
+        );
+    }
+
+    /// 反例（RENAME TO）：把自有表改名到别的前缀 = 在前缀之外凭空造表
+    #[test]
+    fn main_db_rename_to_foreign_prefix_is_denied() {
+        let ctx = build_host_ctx();
+        attacker_tables_ready(&ctx);
+        let outcome = db_execute(
+            &ctx,
+            ATTACKER,
+            &format!("ALTER TABLE {ATTACKER_PREFIX}x RENAME TO plugin_secrets"),
+        );
+        assert!(outcome.is_err(), "RENAME TO 他表名必须被拒: {outcome:?}");
+        // 自己的前缀内改名仍可用
+        db_execute(
+            &ctx,
+            ATTACKER,
+            &format!("ALTER TABLE {ATTACKER_PREFIX}x RENAME TO {ATTACKER_PREFIX}y"),
+        )
+        .expect("前缀内改名应放行");
+    }
+
+    /// 正例（扫描器不过拦）：字符串字面量里出现目录表名不算插件点名
+    #[test]
+    fn main_db_catalog_name_inside_literal_is_allowed() {
+        let ctx = build_host_ctx();
+        attacker_tables_ready(&ctx);
+        db_execute(
+            &ctx,
+            ATTACKER,
+            "INSERT INTO plugin_com_bedcode_attacker_x (k) VALUES ('sqlite_master')",
+        )
+        .expect("字符串字面量里的目录表名不得触发拒绝");
+        assert_eq!(
+            db_query(
+                &ctx,
+                ATTACKER,
+                "SELECT k FROM plugin_com_bedcode_attacker_x WHERE k = 'sqlite_master'",
+            )
+            .expect("读回自己的数据应放行")
+            .as_deref(),
+            Some(r#"[{"k":"sqlite_master"}]"#)
+        );
+    }
+
+    /// 纵深只作用在主库面：同一条跨表 SQL，主库报前缀不符，私有库不受该约束
+    /// （无头上下文拿不到私有库句柄，因此比对的是错误归属而非执行结果）
+    #[test]
+    fn private_db_face_unaffected_by_main_db_isolation() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, ATTACKER, &[PERMISSION_DATABASE_MAIN, PERMISSION_STORAGE]);
+        let sql = "SELECT * FROM plugin_secrets";
+        let main_err = db_query(&ctx, ATTACKER, sql).expect_err("主库跨表读必须被拒");
+        assert!(
+            main_err.contains("does not match required prefix") || main_err.contains("prohibited"),
+            "主库拒绝应给出隔离理由，got: {main_err}"
+        );
+        let private_err =
+            plugin_db_query(&ctx, ATTACKER, sql).expect_err("无头上下文取不到私有库句柄（但不应因主库纵深而拒）");
+        assert!(
+            !private_err.contains("does not match required prefix") && !private_err.contains("prohibited"),
+            "私有库不该被主库表名前缀/授权仲裁拦下，got: {private_err}"
         );
     }
 
@@ -854,7 +1381,7 @@ mod tests {
     fn db_entry_execute_and_query_with_guards() {
         use crate::plugin::manager::wasm_runtime::host_impl::tests as host_tests;
         let ctx = host_tests::build_host_ctx();
-        host_tests::grant_permissions(&ctx, "p1", &[PERMISSION_STORAGE]);
+        host_tests::grant_permissions(&ctx, "p1", &[PERMISSION_DATABASE_MAIN, PERMISSION_STORAGE]);
         db_execute(&ctx, "p1", "CREATE TABLE plugin_p1_t (x INTEGER)").expect("create table");
         for i in 0..3i64 {
             let params = format!("[{}]", i);
@@ -878,7 +1405,7 @@ mod tests {
     fn execute_batch_commits_all_or_rolls_back_all() {
         use crate::plugin::manager::wasm_runtime::host_impl::tests as host_tests;
         let ctx = host_tests::build_host_ctx();
-        host_tests::grant_permissions(&ctx, "p1", &[PERMISSION_STORAGE]);
+        host_tests::grant_permissions(&ctx, "p1", &[PERMISSION_DATABASE_MAIN, PERMISSION_STORAGE]);
         db_execute(
             &ctx,
             "p1",
@@ -921,7 +1448,7 @@ mod tests {
     fn execute_batch_statement_count_capped() {
         use crate::plugin::manager::wasm_runtime::host_impl::tests as host_tests;
         let ctx = host_tests::build_host_ctx();
-        host_tests::grant_permissions(&ctx, "p1", &[PERMISSION_STORAGE]);
+        host_tests::grant_permissions(&ctx, "p1", &[PERMISSION_DATABASE_MAIN, PERMISSION_STORAGE]);
         let many: Vec<String> = (0..PLUGIN_DB_EXECUTE_BATCH_MAX_STATEMENTS + 1)
             .map(|i| format!("INSERT INTO plugin_p1_x VALUES ({})", i))
             .collect();
@@ -935,7 +1462,7 @@ mod tests {
     fn bare_transaction_control_rejected_at_execute() {
         use crate::plugin::manager::wasm_runtime::host_impl::tests as host_tests;
         let ctx = host_tests::build_host_ctx();
-        host_tests::grant_permissions(&ctx, "p1", &[PERMISSION_STORAGE]);
+        host_tests::grant_permissions(&ctx, "p1", &[PERMISSION_DATABASE_MAIN, PERMISSION_STORAGE]);
         for sql in [
             "BEGIN",
             "BEGIN TRANSACTION",

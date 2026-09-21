@@ -9,6 +9,7 @@
   "pluginType": "rust-ts",
   "rustLibrary": "bedcode_plugin_sdk_test",
   "permissions": [
+    "database:main",
     "storage",
     "broadcast",
     "terminal:input",
