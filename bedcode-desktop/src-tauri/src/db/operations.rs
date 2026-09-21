@@ -486,7 +486,14 @@ impl Database {
             "INSERT INTO quick_actions (id, name, content, icon, color, category, sort_order, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             rusqlite::params![
-                row.id, row.name, row.content, row.icon, row.color, row.category, row.sort_order, row.created_at
+                row.id,
+                row.name,
+                row.content,
+                row.icon,
+                row.color,
+                row.category,
+                row.sort_order,
+                row.created_at
             ],
         )?;
         Ok(())

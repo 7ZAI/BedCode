@@ -7,10 +7,10 @@ pub mod db;
 pub mod enums;
 pub mod events;
 pub mod mdns;
-pub mod peer_net;
 mod peer_engine_receive;
 mod peer_engine_remote;
 mod peer_engine_transfer;
+pub mod peer_net;
 pub mod plugin;
 pub mod process;
 pub mod pty;
@@ -356,6 +356,21 @@ pub fn run() {
             let db = Database::new(&db_path)?;
             db.init_schema()?;
 
+            // 票 02 阶段 A 观测信号（`session_configs` 表退役前置）：遗留行数
+            // 落 info 结构化字段，发布侧据此判断还有多少安装点的配置真源
+            // 尚未迁入插件私有库。本行只观测、不改行为（迁移仍由
+            // com.bedcode.session 激活时执行，见 config/ops.rs::migrate）
+            match db.count_legacy_session_configs() {
+                Ok(legacy_rows) => tracing::info!(
+                    legacy_rows = legacy_rows,
+                    "legacy session_configs rows present at startup"
+                ),
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    "failed to count legacy session_configs rows (observation only)"
+                ),
+            }
+
             let db = Arc::new(Mutex::new(db));
 
             // 宿主密钥托管（票 05）：注入主库句柄并预生成 JWT 密钥（首启随机
@@ -394,8 +409,6 @@ pub fn run() {
             )));
             // 注入消息总线 dispatcher（两阶段初始化）
             tauri::async_runtime::block_on(plugin_host.init_message_bus());
-            let pairing_service = Arc::new(server::services::pairing_service::PairingService::new());
-            let qr_manager = Arc::new(utils::auth::QrTokenManager::new());
             let mdns_advertiser = Arc::new(tokio::sync::RwLock::new(mdns::advertiser::MdnsAdvertiser::new()));
 
             // 创建同步事件通道
@@ -415,8 +428,6 @@ pub fn run() {
                 .session_manager(session_manager.clone())
                 .config_manager(config_manager.clone())
                 .plugin_host(plugin_host.clone())
-                .pairing_service(pairing_service.clone())
-                .qr_manager(qr_manager.clone())
                 .mdns_advertiser(mdns_advertiser.clone())
                 .app_handle(Some(app_handle_arc.clone()))
                 .sync_tx(sync_tx.clone())
@@ -428,8 +439,6 @@ pub fn run() {
             app.manage(db.clone());
             app.manage(config_manager.clone());
             app.manage(session_manager.clone());
-            app.manage(pairing_service.clone());
-            app.manage(qr_manager.clone());
             app.manage(mdns_advertiser.clone());
             app.manage(plugin_host.clone());
             app.manage(plugin_host.wasm_runtime().fs_auth().clone());
@@ -617,24 +626,10 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            // WSL
-            commands::wsl::list_wsl_distributions,
-            commands::wsl::is_wsl_available,
-            // Session Config
-            commands::session_config::create_session_config,
-            commands::session_config::list_session_configs,
-            commands::session_config::get_session_config,
-            commands::session_config::delete_session_config,
-            commands::session_config::update_session_config,
-            // Session
-            commands::session::start_session,
-            commands::session::create_session_no_start,
-            commands::session::start_existing_session,
+            // Session（只留引擎事实 + 终端渲染管道：列表 / 单查 / 尺寸裁决；
+            // 会话编排与配置 CRUD 命令面已注销，见 commands/session.rs 头部注释）
             commands::session::list_sessions,
             commands::session::get_session,
-            commands::session::kill_session,
-            commands::session::delete_session,
-            commands::session::restart_session,
             commands::session::resize_session,
             // PTY Input
             commands::pty_input::write_to_session,
@@ -643,26 +638,13 @@ pub fn run() {
             commands::terminal_stream::subscribe_terminal_channel,
             commands::terminal_stream::unsubscribe_terminal_channel,
             commands::terminal_stream::terminal_channel_ack,
-            // Pairing
-            commands::system::generate_pairing_code,
-            commands::system::get_current_pairing_code,
-            commands::system::verify_pairing_code,
-            commands::system::clear_pairing_code,
-            commands::system::get_pairing_code_ttl,
-            commands::system::set_pairing_code_ttl,
-            commands::system::list_paired_devices,
-            commands::system::remove_paired_device,
-            commands::system::list_connection_history,
-            commands::system::delete_connection_history,
+            // 配对 / QR / 连接历史命令面已注销：产品面归 com.bedcode.session 插件的
+            // session.pairing.* / session.qr.* / session.devices.* / session.history.*
+            // （凭据签发与 `pairings` 表仍在内核 auth 模块，宿主只留原语与记录面；
+            // 见 .scratch/2026-09-21-host-rust-residue/issues/05）
             commands::system::set_log_level,
             commands::system::save_log_settings,
             commands::opener::open_log_dir,
-            // QR Code
-            commands::qr::generate_qr_code,
-            commands::qr::clear_qr_code,
-            commands::qr::get_qr_connection_info,
-            commands::qr::get_qr_token_ttl,
-            commands::qr::set_qr_token_ttl,
             commands::settings::get_all_db_settings,
             commands::settings::set_db_setting,
             // Settings
@@ -673,8 +655,6 @@ pub fn run() {
             commands::system::ping,
             commands::system::get_app_version,
             commands::system::get_startup_time,
-            commands::system::get_local_ip_addresses,
-            commands::system::get_system_info,
             commands::system::confirm_window_close,
             // Dev Console Relay（仅 dev：前端 console 日志转发，写 runtime.*.log + frontend.*.log 单独文件，见 commands::dev_logs）
             #[cfg(debug_assertions)]
@@ -702,7 +682,6 @@ pub fn run() {
             commands::plugin::plugin_list_rust_commands,
             commands::plugin::plugin_dev_reload,
             commands::plugin::plugin_fs_auth_respond,
-            commands::opener::plugin_reveal_in_dir,
             // Server
             commands::server::server_start,
             commands::server::server_stop,
@@ -717,10 +696,6 @@ pub fn run() {
             commands::server::set_traffic_encryption_config,
             commands::server::get_link_crypto_fingerprint,
             commands::server::reset_server_network_config,
-            // mDNS
-            commands::mdns::mdns_start_advertise,
-            commands::mdns::mdns_stop_advertise,
-            commands::mdns::mdns_is_advertising,
             // Peer Net
             peer_net::start_peer_node,
             peer_net::stop_peer_node,

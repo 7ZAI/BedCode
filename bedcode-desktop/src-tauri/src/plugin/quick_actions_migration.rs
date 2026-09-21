@@ -146,8 +146,7 @@ mod tests {
     /// api 常量与插件 manifest 声明一致（防漂移的第一道闸，闭环测试兜底真实调用）
     #[test]
     fn import_api_matches_plugin_manifest() {
-        let manifest_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../plugins/session/plugin.json");
+        let manifest_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../plugins/session/plugin.json");
         let raw = std::fs::read_to_string(&manifest_path).expect("session plugin.json 可读");
         let manifest: serde_json::Value = serde_json::from_str(&raw).expect("manifest JSON");
         assert!(

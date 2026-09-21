@@ -33,9 +33,7 @@ const API_DELETE: &str = "com.bedcode.session.config-delete";
 
 /// 插件不可用时的显性错误（无降级；文案面向用户可见的错误通道）
 fn plugin_required_error(op: &str) -> AppError {
-    AppError::Plugin(format!(
-        "session plugin not active: {op} requires com.bedcode.session"
-    ))
+    AppError::Plugin(format!("session plugin not active: {op} requires com.bedcode.session"))
 }
 
 /// 探活 + 报错（统一两处判据：锚点在注册表且插件已激活）
@@ -54,7 +52,9 @@ pub async fn list_configs(host_ctx: &WasmHostContext) -> Result<Vec<SessionConfi
         Ok(value) => serde_json::from_value(value).map_err(AppError::Serialization),
         Err(e) => {
             tracing::error!(error = %e, "session config list failed via plugin");
-            Err(AppError::Plugin(format!("session config list failed (plugin error): {e}")))
+            Err(AppError::Plugin(format!(
+                "session config list failed (plugin error): {e}"
+            )))
         }
     }
 }
@@ -88,7 +88,9 @@ pub async fn create_config(
         Ok(value) => serde_json::from_value(value).map_err(AppError::Serialization),
         Err(e) => {
             tracing::error!(error = %e, "session config create failed via plugin");
-            Err(AppError::Plugin(format!("session config create failed (plugin error): {e}")))
+            Err(AppError::Plugin(format!(
+                "session config create failed (plugin error): {e}"
+            )))
         }
     }
 }
@@ -123,7 +125,9 @@ pub async fn update_config(
         Ok(value) => serde_json::from_value(value).map_err(AppError::Serialization),
         Err(e) => {
             tracing::error!(config_id = %id, error = %e, "session config update failed via plugin");
-            Err(AppError::Plugin(format!("session config update failed (plugin error): {e}")))
+            Err(AppError::Plugin(format!(
+                "session config update failed (plugin error): {e}"
+            )))
         }
     }
 }
@@ -135,7 +139,9 @@ pub async fn delete_config(host_ctx: &WasmHostContext, id: &str) -> Result<()> {
         Ok(_) => Ok(()),
         Err(e) => {
             tracing::error!(config_id = %id, error = %e, "session config delete failed via plugin");
-            Err(AppError::Plugin(format!("session config delete failed (plugin error): {e}")))
+            Err(AppError::Plugin(format!(
+                "session config delete failed (plugin error): {e}"
+            )))
         }
     }
 }

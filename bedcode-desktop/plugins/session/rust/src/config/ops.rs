@@ -73,6 +73,10 @@ mod wasm_legacy {
 pub struct MigrationReport {
     /// marker 已在 → 本次未执行迁移（一次性语义）
     pub already_migrated: bool,
+    /// 本次扫描到的 legacy 主库行数（票 02 阶段 A 的发布侧观测信号：
+    /// 「还有多少安装点的遗留行未迁入」）；`already_migrated = true` 时为 0
+    /// ——没扫就没数，不凭空报数
+    pub legacy_rows: usize,
     pub imported: usize,
     /// 目标私有库已有同 id 行 → 跳过（幂等）
     pub skipped_existing: usize,
@@ -140,12 +144,14 @@ pub fn migrate(
     if store.marker(MIGRATION_MARKER)?.is_some() {
         return Ok(MigrationReport {
             already_migrated: true,
+            legacy_rows: 0,
             imported: 0,
             skipped_existing: 0,
         });
     }
 
     let ids = legacy.legacy_ids()?;
+    let legacy_rows = ids.len();
     let mut imported = 0usize;
     let mut skipped_existing = 0usize;
     for id in ids {
@@ -163,6 +169,7 @@ pub fn migrate(
     store.set_marker(MIGRATION_MARKER, &now_rfc3339())?;
     Ok(MigrationReport {
         already_migrated: false,
+        legacy_rows,
         imported,
         skipped_existing,
     })
@@ -467,11 +474,14 @@ mod tests {
             MockConfigStore::config("legacy-1", "从主库迁入"),
         ]);
 
+        // 正例 C-02-1：未迁移 + legacy 2 行（其中 1 行同 id 已存在）→ 导入 1 / 跳过 1，
+        // 观测信号报出本次扫描到的 legacy 行数 2
         let first = migrate(&store, &legacy).expect("first migrate");
         assert_eq!(
             first,
             MigrationReport {
                 already_migrated: false,
+                legacy_rows: 2,
                 imported: 1,
                 skipped_existing: 1
             }
@@ -484,18 +494,20 @@ mod tests {
             "私有库既有行不被 legacy 覆盖（私有库才是真源）"
         );
 
-        // 第二次执行：marker 已在 → 不写任何行
+        // 反例 C-02-2：marker 已在 → 不写任何行，且不报 legacy 行数（没扫就没数）
         let puts_before = store.put_count();
         let second = migrate(&store, &legacy).expect("second migrate");
         assert!(second.already_migrated, "marker 存在即不重跑");
+        assert_eq!(second.legacy_rows, 0, "已迁移则未扫描 legacy，不得报数");
         assert_eq!(store.put_count(), puts_before, "重复迁移不得写库");
         assert_eq!(store.all().unwrap().len(), 2);
 
-        // 一次性语义的护栏：marker 之后 legacy 新增行也不被导入
+        // 反例 C-02-3（一次性语义护栏）：marker 已跑 + legacy 新增行 → 不再导入
         // （否则「插件侧删除配置」会被下次激活重新导入 → 删除失效）
         legacy.push(MockConfigStore::config("legacy-2", "迁移后新增"));
         let third = migrate(&store, &legacy).expect("third migrate");
         assert!(third.already_migrated);
+        assert_eq!(third.legacy_rows, 0, "已迁移则不再扫描 legacy");
         assert_eq!(
             store.all().unwrap().len(),
             2,
@@ -531,6 +543,10 @@ mod tests {
         legacy.drop_ids.lock().unwrap().push("gone".to_string());
         let report = migrate(&store, &legacy).expect("migrate tolerates race");
         assert_eq!(report.imported, 0);
+        assert_eq!(
+            report.legacy_rows, 1,
+            "扫描到的清单行数照报（竞态消失的行仍计入扫描数，观测信号不缩水）"
+        );
         assert!(store.all().unwrap().is_empty());
         assert!(
             store.marker(MIGRATION_MARKER).unwrap().is_some(),

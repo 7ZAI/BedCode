@@ -8,6 +8,6 @@ mod operations;
 
 pub use database::Database;
 pub use models::{
-    connection_method, connection_result, ConnectionHistory, LegacyQuickActionRow, Pairing, SessionConfig,
-    Setting, CONNECTION_HISTORY_MAX_PER_DEVICE,
+    connection_method, connection_result, ConnectionHistory, LegacyQuickActionRow, Pairing, SessionConfig, Setting,
+    CONNECTION_HISTORY_MAX_PER_DEVICE,
 };

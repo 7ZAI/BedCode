@@ -107,6 +107,28 @@ impl Database {
         Ok(())
     }
 
+    /// 统计 legacy `session_configs` 表行数（票 02 阶段 A 观测信号）
+    ///
+    /// 该表是会话配置的**旧真源**，v21 之后只剩一个用途：`com.bedcode.session`
+    /// 激活时经 `LegacyConfigSource` 一次性迁入插件私有库。退表（阶段 B）前需
+    /// 由发布侧确认「还有多少安装点的遗留行尚未迁入插件私有库」——本计数即该
+    /// 信号的数据源（宿主启动时以结构化字段 `legacy_rows` 落 info 日志）。
+    /// 表不存在时返回 0（全新安装，或阶段 B 删表之后）。
+    pub fn count_legacy_session_configs(&self) -> crate::Result<usize> {
+        let table_exists: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'session_configs'",
+            [],
+            |row| row.get(0),
+        )?;
+        if table_exists == 0 {
+            return Ok(0);
+        }
+        let rows: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM session_configs", [], |row| row.get(0))?;
+        Ok(rows.max(0) as usize)
+    }
+
     /// Get a reference to the connection
     pub fn conn(&self) -> &Connection {
         &self.conn
@@ -140,6 +162,33 @@ mod tests {
         let db = Database::new(Path::new(":memory:")).expect("open in-memory db");
         db.init_schema().expect("init schema");
         db
+    }
+
+    /// 票 02 阶段 A：legacy 行数计数是「未迁移安装点」的发布侧信号，必须
+    /// 逐行准确，且在阶段 B 删表之后仍可调用（表缺失 → 0，不 panic）
+    #[test]
+    fn count_legacy_session_configs_tracks_rows_and_survives_table_drop() {
+        let db = open_in_memory_and_init();
+        assert_eq!(
+            db.count_legacy_session_configs().expect("count on fresh db"),
+            0,
+            "全新库（或已迁移安装）不得报出遗留行"
+        );
+
+        db.conn()
+            .execute(
+                "INSERT INTO session_configs
+                 (id, name, environment, wsl_distro, working_dir, command, auto_start, created_at, updated_at)
+                 VALUES ('legacy-1', '旧配置', 'linux', NULL, '/tmp', 'bash', 0,
+                         '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+                [],
+            )
+            .expect("insert legacy row");
+        assert_eq!(db.count_legacy_session_configs().expect("count"), 1);
+
+        // 阶段 B（删表）之后本函数仍被启动路径调用：表缺失必须归零而非报错
+        db.conn().execute("DROP TABLE session_configs", []).expect("drop table");
+        assert_eq!(db.count_legacy_session_configs().expect("count after drop"), 0);
     }
 
     #[test]

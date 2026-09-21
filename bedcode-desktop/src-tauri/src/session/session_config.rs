@@ -459,10 +459,16 @@ mod tests {
         let (tx, mut rx) = tokio::sync::broadcast::channel::<DesktopSyncEvent>(8);
         m.set_sync_tx(tx).await;
 
-        m.delete_config_with_source(&cfg.id, Some("d1".to_string())).await.unwrap();
+        m.delete_config_with_source(&cfg.id, Some("d1".to_string()))
+            .await
+            .unwrap();
         let event = rx.recv().await.expect("应收到 ConfigRemoved 事件");
         match event {
-            DesktopSyncEvent::ConfigRemoved { config_id, config_name, source_device } => {
+            DesktopSyncEvent::ConfigRemoved {
+                config_id,
+                config_name,
+                source_device,
+            } => {
                 assert_eq!(config_id, cfg.id);
                 assert_eq!(config_name, "toBeDeleted", "事件应携带删除前读到的名字");
                 assert_eq!(source_device.as_deref(), Some("d1"));
@@ -490,7 +496,10 @@ mod tests {
         .unwrap();
         let event = rx.recv().await.expect("应收到 ConfigCreated 事件");
         match event {
-            DesktopSyncEvent::ConfigCreated { config_id, source_device } => {
+            DesktopSyncEvent::ConfigCreated {
+                config_id,
+                source_device,
+            } => {
                 assert!(!config_id.is_empty());
                 assert_eq!(source_device.as_deref(), Some("d2"));
             }
@@ -513,12 +522,24 @@ mod tests {
         let (tx, mut rx) = tokio::sync::broadcast::channel::<DesktopSyncEvent>(8);
         m.set_sync_tx(tx).await;
 
-        m.update_config_with_source(&cfg.id, Some("v2".into()), None, None, None, None, None, Some("d3".into()))
-            .await
-            .unwrap();
+        m.update_config_with_source(
+            &cfg.id,
+            Some("v2".into()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("d3".into()),
+        )
+        .await
+        .unwrap();
         let event = rx.recv().await.expect("应收到 ConfigUpdated 事件");
         match event {
-            DesktopSyncEvent::ConfigUpdated { config_id, source_device } => {
+            DesktopSyncEvent::ConfigUpdated {
+                config_id,
+                source_device,
+            } => {
                 assert_eq!(config_id, cfg.id);
                 assert_eq!(source_device.as_deref(), Some("d3"));
             }
