@@ -31,8 +31,6 @@ pub const PERMISSION_STORAGE: &str = "storage";
 pub const PERMISSION_FS_READ: &str = "fs:read";
 pub const PERMISSION_FS_WRITE: &str = "fs:write";
 pub const PERMISSION_BROADCAST: &str = "broadcast";
-/// 系统文件操作：在系统文件管理器中显示本地文件/目录（传输完成「打开本地目录」）
-pub const PERMISSION_SYSTEM_OPEN: &str = "system:open";
 /// 定时器：注册宿主周期回调（到点调用插件 command，见 ADR 0003）
 pub const PERMISSION_TIMER: &str = "timer:schedule";
 /// 进程执行：在桌面端进程内 spawn 外部命令/脚本（host-process，v8）
@@ -98,7 +96,6 @@ static VALID_PERMISSIONS: &[&str] = &[
     PERMISSION_FS_READ,
     PERMISSION_FS_WRITE,
     PERMISSION_BROADCAST,
-    PERMISSION_SYSTEM_OPEN,
     PERMISSION_TIMER,
     PERMISSION_PROCESS,
     PERMISSION_APP_CLI,
@@ -150,7 +147,6 @@ static PERMISSION_API_MAP: &[(&str, &[&str])] = &[
     (PERMISSION_BROADCAST, &["broadcast.sync"]),
     (PERMISSION_FS_READ, &["fs.read", "fs.copy"]),
     (PERMISSION_FS_WRITE, &["fs.write", "fs.copy"]),
-    (PERMISSION_SYSTEM_OPEN, &["system.revealInDir"]),
     (PERMISSION_TIMER, &["timer.register"]),
     (PERMISSION_PROCESS, &["process.run", "process.kill"]),
     (PERMISSION_APP_CLI, &["app.cliInstall", "app.cliUninstall"]),

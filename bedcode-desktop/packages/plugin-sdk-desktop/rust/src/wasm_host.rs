@@ -933,4 +933,8 @@ impl HostPlatform for WasmHost {
             )
         })
     }
+
+    fn platform_reveal_in_dir(&self, path: &str) -> Result<(), HostError> {
+        host_platform::reveal_in_dir(path).map_err(|e| host_err("platform_reveal_in_dir", e))
+    }
 }

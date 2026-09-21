@@ -24,4 +24,11 @@ pub trait HostPlatform {
     /// 无可用地址时返回空数组——「没有可用地址」是合法状态，调用方渲染占位提示；
     /// 这与 `platform_wsl_distros` 的显性报错口径不同（那里空列表与「未安装」不可区分）。
     fn platform_local_ipv4_addresses(&self) -> Result<Vec<String>, HostError>;
+    /// 在系统文件管理器中定位并选中文件/目录（v22 函数级追加）
+    ///
+    /// 参数为绝对路径；路径不存在时宿主**显性报错**（`reveal: path not found: …`）。
+    /// 与 `pick-*` 同口径：定位是平台交互动作、不读数据，**不需要权限声明**
+    /// （ADR 0022 裁剪线）；本原语替代已退役的宿主命令 `plugin_reveal_in_dir`
+    /// 与 `system:open` 权限（`context.system.revealInDir`）。
+    fn platform_reveal_in_dir(&self, path: &str) -> Result<(), HostError>;
 }

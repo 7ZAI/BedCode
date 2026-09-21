@@ -183,6 +183,17 @@ interface host-platform {
     /// **空数组**（与 `wsl-distros` 的显性报错口径不同：此处「没有可用地址」是
     /// 合法状态，前端渲染「未找到可用的 IPv4 地址」提示）。
     local-ipv4-addresses: func() -> result<string, string>;
+    /// 在系统文件管理器中定位并选中文件/目录（v22 函数级追加）：参数为绝对路径，
+    /// 路径不存在时**显性报错**（`reveal: path not found: …`）。平台实现：Windows
+    /// Shell COM（`SHOpenFolderAndSelectItems`，含 `\\?\` verbatim 前缀剥离与
+    /// `ERROR_FILE_NOT_FOUND` 兜底）/ macOS `open -R` / Linux `xdg-open`（打开所在
+    /// 目录，无选中语义）。
+    ///
+    /// 与 `pick-*` 同口径：定位是**平台交互动作、不读取任何数据**（路径本就由调用方
+    /// 提供），故**不叠加权限门**（ADR 0022 裁剪线）；原先挂在宿主命令
+    /// `plugin_reveal_in_dir` + `system:open` 权限上的形态是「能力已存在但没有原语」
+    /// 的遗留形态（见 `.scratch/2026-09-21-host-rust-residue/issues/04`）。
+    reveal-in-dir: func(path: string) -> result<_, string>;
 }
 
 /// 插件互调（ADR-0017）：发布 JSON-RPC 请求 + 同步等待回复

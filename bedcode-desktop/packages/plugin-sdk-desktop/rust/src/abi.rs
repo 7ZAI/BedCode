@@ -94,11 +94,19 @@
 //!   不再提供这两个 import；旧产物（≤v20）若仍 import 它们将在实例化期被拒，
 //!   需按 v21 SDK 重新构建。
 //!
+//! - v22: `host-platform.reveal-in-dir`（desktop 独有，双端偏离同 host-platform）：
+//!   在系统文件管理器中定位并选中文件/目录的平台原语（票 04）。原先该能力只挂在
+//!   宿主命令 `plugin_reveal_in_dir` + `system:open` 权限 + 前端 `context.system`
+//!   桥上（「能力已存在但没有原语」的遗留形态），现按 ADR 0022 裁剪线归入
+//!   `host-platform`——与 `pick-*` 同口径（平台交互动作、不读数据）故**不叠加
+//!   权限门**，`system:open` 权限随宿主命令面与前端 API 一并退役（五同步点全落）。
+//!   既有 interface 的函数级追加，纯增量，v21 及以下插件二进制不受影响。
+//!
 //! 编号口径（AGENTS.md §7 教训）：本号以 `abi.rs` 与 WIT 版本表实读为准，
 //! 规格正文的「17 → 19」是并发线（host-notification v18）尚未落地时的预判；
 //! 本分支实测 v18 已被「host-auth 认证记录面」占用（票 05），故会话语义下沉的
 //! 第二批次取 v19。
-pub const ABI_VERSION: u32 = 21;
+pub const ABI_VERSION: u32 = 22;
 
 /// 组件形态标识：`abi.form() == FORM_COMPONENT`（WIT `abi` 接口的 form() 声明）
 ///
@@ -112,14 +120,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_abi_version_is_v21() {
-        // 版本号序列与历史 core ABI 共用：v21 = host-session 收敛退役（删 `create` /
-        // `restart`，创建与重启编排全部归插件），叠加 v20 host-task 宿主并发任务域、
+    fn test_abi_version_is_v22() {
+        // 版本号序列与历史 core ABI 共用：v22 = host-platform.reveal-in-dir（平台定位
+        // 原语，无权限门；`system:open` 随之退役），叠加 v21 host-session 收敛退役
+        // （删 `create` / `restart`）、v20 host-task 宿主并发任务域、
         // v19 host-session 配置面与创建/动作面（会话语义下沉批次之二）、
         // v18 host-auth 认证记录面（同批次之一）、v17 认证策略导出（auth-policy）、
         // v16 插件私有伪终端原语（host-pty）、v15 密钥托管（host-auth / secret-store）、
         // v14 host-websocket、v13 host-mdns v2、v12 总线二进制载荷与 v11 host-peer 传输控制三原语
-        assert_eq!(ABI_VERSION, 21);
+        assert_eq!(ABI_VERSION, 22);
     }
 
     #[test]
