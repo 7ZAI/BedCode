@@ -123,10 +123,8 @@ async fn init_test_app_context() {
         let plugins_dir = std::env::temp_dir().join(format!("bedcode-itest-plugins-{}", std::process::id()));
         std::fs::create_dir_all(&plugins_dir).expect("create temp plugins dir failed");
 
-        // 会话管理器用独立内存库（会话持久化与配对记录互不相干，避免共用连接）
-        let session_db = Database::new(Path::new(":memory:")).expect("create session db failed");
-        session_db.init_schema().expect("init session db schema failed");
-        let session_manager = Arc::new(SessionManager::from_database(session_db, Arc::new(PathBuf::from("."))));
+        // 会话管理器（v21 无库依赖：会话配置/launch 映射归插件，内核不再注入存储）
+        let session_manager = Arc::new(SessionManager::new(Arc::new(PathBuf::from("."))));
         let config_manager = Arc::new(SessionConfigManager::new(db.clone()));
         let plugin_host = Arc::new(
             PluginHost::new(

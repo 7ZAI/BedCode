@@ -71,9 +71,7 @@ async fn init_test_app_context() {
         let plugins_dir = std::env::temp_dir().join(format!("bedcode-itest-plugins-{}", std::process::id()));
         std::fs::create_dir_all(&plugins_dir).expect("create temp plugins dir failed");
 
-        let session_db = Database::new(Path::new(":memory:")).expect("create session db failed");
-        session_db.init_schema().expect("init session db schema failed");
-        let session_manager = Arc::new(SessionManager::from_database(session_db, Arc::new(PathBuf::from("."))));
+        let session_manager = Arc::new(SessionManager::new(Arc::new(PathBuf::from("."))));
         let config_manager = Arc::new(SessionConfigManager::new(db.clone()));
         let plugin_host = Arc::new(
             PluginHost::new(
