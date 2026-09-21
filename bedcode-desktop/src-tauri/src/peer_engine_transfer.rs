@@ -24,8 +24,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use bedcode_peer_net::{
-    CancelToken, Connection, DiscoveredPeerRecord, FileMeta, NodeId, OutgoingFile, PauseCmd,
-    PauseSlot, PeerNetNode, TerminalState, TransferEvent,
+    CancelToken, Connection, DiscoveredPeerRecord, FileMeta, NodeId, OutgoingFile, PauseCmd, PauseSlot, PeerNetNode,
+    TerminalState, TransferEvent,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
@@ -359,15 +359,13 @@ pub async fn resume_peer_transfer(app: AppHandle, batch_id: String) -> crate::Re
         }
     };
     match resume_mode {
-        ResumeMode::Serve => {
-            match super::peer_engine_receive::handler_and_config(&app).await {
-                Some((handler, _)) if handler.set_serve_paused(&batch_id, false).await => {
-                    set_running_status(&app, &batch_id).await;
-                    Ok(true)
-                }
-                _ => Ok(false),
+        ResumeMode::Serve => match super::peer_engine_receive::handler_and_config(&app).await {
+            Some((handler, _)) if handler.set_serve_paused(&batch_id, false).await => {
+                set_running_status(&app, &batch_id).await;
+                Ok(true)
             }
-        }
+            _ => Ok(false),
+        },
         ResumeMode::Live => {
             let sent = match app.state::<PeerTransferState>().pause_slot_of(&batch_id) {
                 Some(slot) => slot.send(PauseCmd::Resume).await,
@@ -443,9 +441,7 @@ enum ResumeMode {
 
 /// 活跃发送会话是否存在（pauses 表在会话周期内存在即视为活跃）
 fn peer_transfer_state_has(app: &AppHandle, batch_id: &str) -> bool {
-    app.state::<PeerTransferState>()
-        .pause_slot_of(batch_id)
-        .is_some()
+    app.state::<PeerTransferState>().pause_slot_of(batch_id).is_some()
 }
 
 /// 任务状态置回 running 并推送（resume 的 Live/Serve 分支共用）
@@ -611,7 +607,9 @@ pub(crate) async fn send_files_to_peer_with_policy(
 
 /// 发送方向并发上限（插件设置真源，经发送载荷脉冲同步宿主；缺省 3）
 async fn current_concurrency(app: &AppHandle) -> usize {
-    super::peer_engine_receive::ensure_settings_loaded(app).await.concurrency as usize
+    super::peer_engine_receive::ensure_settings_loaded(app)
+        .await
+        .concurrency as usize
 }
 
 /// 锁内统计发送方向 running 数（并发槽占用；服务侧拉取记账任务 sources 为空，
@@ -1017,7 +1015,11 @@ async fn set_serve_pause_status(app: &AppHandle, batch_id: &str, paused: bool) {
             .iter_mut()
             .find(|t| t.dto.batch_id == batch_id && serve_status_tracked(&t.dto.status))
         {
-            task.dto.status = if paused { "paused".to_string() } else { "running".to_string() };
+            task.dto.status = if paused {
+                "paused".to_string()
+            } else {
+                "running".to_string()
+            };
             task.dto.rate_bps = 0.0;
             task.dto.updated_at_ms = now_ms();
         }

@@ -242,7 +242,8 @@ async fn gcm_ciphertext_tamper_rejected_with_400() {
 }
 
 #[actix_web::test]
-async fn strict_policy_rejects_unnegotiated_requests() {    let _guard = GLOBAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+async fn strict_policy_rejects_unnegotiated_requests() {
+    let _guard = GLOBAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     init_identity_once();
 
     // allowPlaintextFallback=false：未携带协商头的非豁免请求一律拒绝

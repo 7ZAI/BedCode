@@ -10,6 +10,7 @@ pub mod error_boundary;
 pub mod info;
 pub mod lifecycle;
 pub mod logging;
+pub mod opener;
 pub mod power;
 pub mod power_wake;
 

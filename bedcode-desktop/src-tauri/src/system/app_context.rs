@@ -6,11 +6,9 @@
 use crate::db::Database;
 use crate::mdns::advertiser::MdnsAdvertiser;
 use crate::plugin::PluginHost;
-use crate::server::services::pairing_service::PairingService;
 use crate::session::{SessionConfigManager, SessionManager};
 use crate::system::info::SystemInfo;
 use crate::utils::auth::biometric::BiometricChallengeManager;
-use crate::utils::auth::QrTokenManager;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::AppHandle;
@@ -29,10 +27,6 @@ pub struct AppContext {
     config_manager: Arc<SessionConfigManager>,
     /// 插件宿主（生命周期管理）
     plugin_host: Arc<PluginHost>,
-    /// 配对服务
-    pairing_service: Arc<PairingService>,
-    /// QR Token 管理器
-    qr_manager: Arc<QrTokenManager>,
     /// 生物认证挑战值管理器
     biometric_challenges: Arc<BiometricChallengeManager>,
     /// mDNS 广播管理器
@@ -95,14 +89,6 @@ impl AppContext {
         &self.plugin_host
     }
 
-    pub fn pairing_service(&self) -> &Arc<PairingService> {
-        &self.pairing_service
-    }
-
-    pub fn qr_manager(&self) -> &Arc<QrTokenManager> {
-        &self.qr_manager
-    }
-
     pub fn biometric_challenges(&self) -> &Arc<BiometricChallengeManager> {
         &self.biometric_challenges
     }
@@ -134,8 +120,6 @@ pub struct AppContextBuilder {
     session_manager: Option<Arc<SessionManager>>,
     config_manager: Option<Arc<SessionConfigManager>>,
     plugin_host: Option<Arc<PluginHost>>,
-    pairing_service: Option<Arc<PairingService>>,
-    qr_manager: Option<Arc<QrTokenManager>>,
     biometric_challenges: Option<Arc<BiometricChallengeManager>>,
     mdns_advertiser: Option<Arc<tokio::sync::RwLock<MdnsAdvertiser>>>,
     app_handle: Option<Arc<AppHandle>>,
@@ -151,8 +135,6 @@ impl AppContextBuilder {
             session_manager: None,
             config_manager: None,
             plugin_host: None,
-            pairing_service: None,
-            qr_manager: None,
             biometric_challenges: None,
             mdns_advertiser: None,
             app_handle: None,
@@ -179,16 +161,6 @@ impl AppContextBuilder {
 
     pub fn plugin_host(mut self, ph: Arc<PluginHost>) -> Self {
         self.plugin_host = Some(ph);
-        self
-    }
-
-    pub fn pairing_service(mut self, ps: Arc<PairingService>) -> Self {
-        self.pairing_service = Some(ps);
-        self
-    }
-
-    pub fn qr_manager(mut self, qm: Arc<QrTokenManager>) -> Self {
-        self.qr_manager = Some(qm);
         self
     }
 
@@ -224,8 +196,6 @@ impl AppContextBuilder {
             session_manager: self.session_manager.expect("AppContext: session_manager is required"),
             config_manager: self.config_manager.expect("AppContext: config_manager is required"),
             plugin_host: self.plugin_host.expect("AppContext: plugin_host is required"),
-            pairing_service: self.pairing_service.expect("AppContext: pairing_service is required"),
-            qr_manager: self.qr_manager.expect("AppContext: qr_manager is required"),
             biometric_challenges: self
                 .biometric_challenges
                 .unwrap_or_else(|| Arc::new(BiometricChallengeManager::new())),

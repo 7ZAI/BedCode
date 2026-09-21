@@ -40,7 +40,6 @@ static PROPERTY_COMMENTS: &[(&str, &str)] = &[
     ("ui.terminal_bg_opacity", "终端背景图片不透明度（0-100，越小图片越淡）"),
     ("ui.animations_enabled", "全局动画效果总开关（true/false，关闭后禁用所有页面过渡/动画，默认开启）"),
     ("channels.status_broadcast_capacity", "会话状态变更广播容量 - 用于通知状态更新"),
-    ("channels.restart_broadcast_capacity", "会话重启事件广播容量 - 用于通知会话重启"),
     ("channels.event_broadcast_capacity", "统一事件广播容量 - 整合所有事件类型"),
     ("channels.global_queue_max_bytes", "全局输出队列最大字节数 - 限制总内存占用，超出后丢弃最旧字节块（TB v3，默认 50MB）"),
     ("channels.global_queue_max_chunks", "全局输出队列最大字节块数 - 防御性条目上限，抗极小块风暴（默认 65536）"),
@@ -129,7 +128,6 @@ static PROPERTY_GROUPS: &[(&str, &[&str])] = &[
         "Channel 容量配置",
         &[
             "channels.status_broadcast_capacity",
-            "channels.restart_broadcast_capacity",
             "channels.event_broadcast_capacity",
             "channels.global_queue_max_bytes",
             "channels.global_queue_max_chunks",
@@ -428,8 +426,6 @@ pub enum HistoryStartMode {
 pub struct ChannelsConfig {
     /// 会话状态变更广播容量 - 用于通知状态更新
     pub status_broadcast_capacity: usize,
-    /// 会话重启事件广播容量 - 用于通知会话重启
-    pub restart_broadcast_capacity: usize,
     /// 统一事件广播容量 - 整合所有事件类型
     pub event_broadcast_capacity: usize,
     /// 全局输出队列最大字节数 - 限制总内存占用，超出后丢弃最旧字节块（TB v3）
@@ -448,7 +444,6 @@ impl Default for ChannelsConfig {
     fn default() -> Self {
         Self {
             status_broadcast_capacity: 64,
-            restart_broadcast_capacity: 64,
             event_broadcast_capacity: 256,
             global_queue_max_bytes: 50 * 1024 * 1024, // 50MB（TB v3 字节块队列软上限）
             global_queue_max_chunks: 65_536,
@@ -523,7 +518,9 @@ impl TerminalConfig {
             ));
         }
         if high >= ring_max_bytes {
-            return Some(format!("需满足 high({high}) < ring({ring_max_bytes})（上游缓存须大于下游窗口）"));
+            return Some(format!(
+                "需满足 high({high}) < ring({ring_max_bytes})（上游缓存须大于下游窗口）"
+            ));
         }
         None
     }
@@ -738,7 +735,6 @@ impl AppConfig {
             },
             channels: ChannelsConfig {
                 status_broadcast_capacity: parse_value(props, "channels.status_broadcast_capacity", 64),
-                restart_broadcast_capacity: parse_value(props, "channels.restart_broadcast_capacity", 64),
                 event_broadcast_capacity: parse_value(props, "channels.event_broadcast_capacity", 256),
                 global_queue_max_bytes: parse_value(props, "channels.global_queue_max_bytes", 50 * 1024 * 1024),
                 global_queue_max_chunks: parse_value(props, "channels.global_queue_max_chunks", 65_536),
@@ -761,18 +757,10 @@ impl AppConfig {
                 max_buffer_size: parse_value(props, "terminal.max_buffer_size", 65536),
                 batch_bytes: parse_value(props, "terminal.batch_bytes", 64 * 1024),
                 read_buffer_size: parse_value(props, "terminal.read_buffer_size", 4096),
-                subscriber_high_water_bytes: parse_value(
-                    props,
-                    "terminal.subscriber_high_water_bytes",
-                    128 * 1024,
-                ),
+                subscriber_high_water_bytes: parse_value(props, "terminal.subscriber_high_water_bytes", 128 * 1024),
                 subscriber_low_water_bytes: parse_value(props, "terminal.subscriber_low_water_bytes", 64 * 1024),
                 subscriber_park_poll_ms: parse_value(props, "terminal.subscriber_park_poll_ms", 200),
-                subscriber_zombie_timeout_ms: parse_value(
-                    props,
-                    "terminal.subscriber_zombie_timeout_ms",
-                    30_000,
-                ),
+                subscriber_zombie_timeout_ms: parse_value(props, "terminal.subscriber_zombie_timeout_ms", 30_000),
             },
             log: LogConfig {
                 file_level: parse_value(props, "log.file_level", default_log_file_level()),
@@ -901,10 +889,6 @@ impl AppConfig {
         map.insert(
             "channels.status_broadcast_capacity".to_string(),
             self.channels.status_broadcast_capacity.to_string(),
-        );
-        map.insert(
-            "channels.restart_broadcast_capacity".to_string(),
-            self.channels.restart_broadcast_capacity.to_string(),
         );
         map.insert(
             "channels.event_broadcast_capacity".to_string(),

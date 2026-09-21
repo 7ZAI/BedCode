@@ -33,7 +33,7 @@ impl SystemInfo {
             os_version: sysinfo::System::os_version().unwrap_or_default(),
             device_name: desktop_device_name(),
             hostname: sysinfo::System::host_name().unwrap_or_default(),
-            local_ips: crate::commands::system::get_local_ip_addresses(),
+            local_ips: local_ipv4_addresses(),
             app_version: env!("CARGO_PKG_VERSION").to_string(),
         }
     }
@@ -66,11 +66,32 @@ fn desktop_device_name() -> String {
 
 /// 兜底设备名：`{os}-{首个IPv4}`，无可用 IP 时回退默认常量
 fn fallback_os_ip_name() -> String {
-    let ips = crate::commands::system::get_local_ip_addresses();
+    let ips = local_ipv4_addresses();
     match ips.first() {
         Some(ip) => format!("{}-{}", std::env::consts::OS, ip),
         None => crate::system::constants::mdns::DEFAULT_HOSTNAME.to_string(),
     }
+}
+
+/// 本地 IPv4 地址列表（排除回环与链路本地）——**引擎事实**
+///
+/// 宿主命令面 `get_local_ip_addresses` 已注销（产品面归 `com.bedcode.session`
+/// 的 `session.network.info`，其下是 ABI v19 原语 `host-platform.local-ipv4-addresses`）；
+/// 本函数只服务宿主引擎自身：设备名兜底、启动提示与 [`SystemInfo`] 采集。
+/// 口径与 `host_impl/platform.rs::platform_local_ipv4_addresses` 一致。
+pub fn local_ipv4_addresses() -> Vec<String> {
+    local_ip_address::list_afinet_netifas()
+        .map(|interfaces| {
+            interfaces
+                .into_iter()
+                .filter(|(_, ip)| match ip {
+                    std::net::IpAddr::V4(ipv4) => !ipv4.is_loopback() && !ipv4.is_link_local(),
+                    std::net::IpAddr::V6(_) => false,
+                })
+                .map(|(_, ip)| ip.to_string())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 #[cfg(test)]

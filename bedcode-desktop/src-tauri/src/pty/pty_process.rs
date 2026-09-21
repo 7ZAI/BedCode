@@ -632,16 +632,16 @@ mod tests {
     async fn write_str_reaches_process_output() {
         use crate::session::GlobalOutputManager;
 
-        let sid = format!("itest-pty-write-{}", std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos());
+        let sid = format!(
+            "itest-pty-write-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
         let marker = format!("BEDCODE_PTY_WRITE_{sid}");
-        let session = PtySession::with_id(
-            sid.clone(),
-            linux_config(&format!("echo {marker}; sleep 5")),
-        )
-        .expect("openpty");
+        let session =
+            PtySession::with_id(sid.clone(), linux_config(&format!("echo {marker}; sleep 5"))).expect("openpty");
 
         let manager = GlobalOutputManager::global();
         manager.register_session(&sid).await;

@@ -11,7 +11,7 @@ pub mod pty_reader;
 pub mod pty_ring;
 pub mod wsl;
 
-pub use lifecycle::{PtyTerminationGate, PtyTerminated};
+pub use lifecycle::{PtyTerminated, PtyTerminationGate};
 pub use output_sink::{PtyOutputSink, SessionOutputSink};
 pub use pty_handler::{PtyHandler, PtySessionHandler};
 pub use pty_process::{PtyCommandSource, PtySession, PtySlaveFdPolicy};

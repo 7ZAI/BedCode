@@ -1037,11 +1037,7 @@ mod cancel_regression_tests {
     async fn dismiss_pending_offer_dismisses_as_reject_and_replies_false() {
         let state = PeerReceiveState::default();
         let (tx, rx) = tokio::sync::oneshot::channel();
-        state
-            .pending
-            .lock()
-            .expect("lock")
-            .insert("b1".to_string(), tx);
+        state.pending.lock().expect("lock").insert("b1".to_string(), tx);
         state.inner.lock().expect("lock").tasks.insert(
             0,
             PeerTransferDto {
@@ -1063,13 +1059,12 @@ mod cancel_regression_tests {
 
         assert!(dismiss_pending_offer(&state, "b1"), "pending offer 破除必须命中 true");
         assert_eq!(rx.await, Ok(false), "pending 询问必须回执 false（视同拒绝）");
-        assert!(state.pending.lock().expect("lock").get("b1").is_none(), "pending 必须移除");
+        assert!(
+            state.pending.lock().expect("lock").get("b1").is_none(),
+            "pending 必须移除"
+        );
         let inner = state.inner.lock().expect("lock");
-        let task = inner
-            .tasks
-            .iter()
-            .find(|t| t.batch_id == "b1")
-            .expect("任务行保留");
+        let task = inner.tasks.iter().find(|t| t.batch_id == "b1").expect("任务行保留");
         assert_eq!(task.status, "rejected", "pending 落态 rejected");
         assert_eq!(task.reject_reason.as_deref(), Some("user-rejected"));
     }
@@ -1077,7 +1072,10 @@ mod cancel_regression_tests {
     #[test]
     fn dismiss_pending_offer_miss_returns_false_and_keeps_state() {
         let state = PeerReceiveState::default();
-        assert!(!dismiss_pending_offer(&state, "unknown"), "无 pending → false（不是错误）");
+        assert!(
+            !dismiss_pending_offer(&state, "unknown"),
+            "无 pending → false（不是错误）"
+        );
         assert!(state.pending.lock().expect("lock").is_empty());
     }
 }

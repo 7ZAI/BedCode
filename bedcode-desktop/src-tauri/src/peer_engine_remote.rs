@@ -11,8 +11,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use bedcode_peer_net::{
-    browse_shared_dir, list_shared_roots, pull_shared_file, CancelToken, NodeId, PauseCmd, PauseSlot,
-    PeerNetError, TransferEvent,
+    browse_shared_dir, list_shared_roots, pull_shared_file, CancelToken, NodeId, PauseCmd, PauseSlot, PeerNetError,
+    TransferEvent,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
@@ -370,7 +370,9 @@ async fn run_pull_queue(
 ) {
     let state = app.state::<PeerRemoteState>();
     // 并发上限：拉取方向与发送方向共用设置（默认 3，1..=8）
-    let concurrency = super::peer_engine_receive::ensure_settings_loaded(&app).await.concurrency as usize;
+    let concurrency = super::peer_engine_receive::ensure_settings_loaded(&app)
+        .await
+        .concurrency as usize;
     let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(concurrency.max(1)));
     let mut set = tokio::task::JoinSet::new();
     for (index, file) in files.into_iter().enumerate() {
@@ -385,17 +387,13 @@ async fn run_pull_queue(
         let batch_id = format!("pull-{nanos}-{index}");
         let token = CancelToken::child(&cancel_root);
         let pause = PauseSlot::new();
-        state
-            .pulls
-            .lock()
-            .expect("peer remote pulls lock poisoned")
-            .insert(
-                batch_id.clone(),
-                PullSession {
-                    token: token.clone(),
-                    pause: Some(Arc::clone(&pause)),
-                },
-            );
+        state.pulls.lock().expect("peer remote pulls lock poisoned").insert(
+            batch_id.clone(),
+            PullSession {
+                token: token.clone(),
+                pause: Some(Arc::clone(&pause)),
+            },
+        );
 
         // 任务行先于会话登记：全部任务行同步呈现，首个 Progress 到达前
         // UI 即显示进行中（并发编排下不再随传输逐条出现）

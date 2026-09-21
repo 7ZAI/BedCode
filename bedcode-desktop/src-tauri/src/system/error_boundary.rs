@@ -44,10 +44,7 @@ where
 ///
 /// 等价语义：线程体 panic 被捕获并记录（与 tokio 变体同款 error_guarded），
 /// 不静默崩溃；返回的 `std::thread::JoinHandle` 由调用方决定是否 join。
-pub fn spawn_os_thread(
-    task_name: &'static str,
-    body: impl FnOnce() + Send + 'static,
-) -> std::thread::JoinHandle<()> {
+pub fn spawn_os_thread(task_name: &'static str, body: impl FnOnce() + Send + 'static) -> std::thread::JoinHandle<()> {
     std::thread::Builder::new()
         .name(task_name.to_string())
         .spawn(move || {
@@ -200,7 +197,9 @@ mod tests {
             capture_log(|| {
                 let rt = tokio::runtime::Runtime::new().unwrap();
                 rt.block_on(async {
-                    let handle = spawn_with_error_boundary("task-str", async { panic!("str-message"); });
+                    let handle = spawn_with_error_boundary("task-str", async {
+                        panic!("str-message");
+                    });
                     handle.await.unwrap();
                 });
             })

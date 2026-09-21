@@ -28,9 +28,9 @@ use tokio::io::AsyncReadExt;
 
 use bedcode_peer_net::{
     Connection, ConnectionHandler, DiscoveredPeerRecord, DiscoveryCache, DiscoveryConfig, DiscoveryDaemon,
-    HandlerFuture, NodeId, NodeIdentity, PeerNetError, PeerNetNode, PeerNetNodeConfig, RunningNode,
-    SharedDirEntry, SharedDirHandler, SharedDirRoot, SharedDirStore, StaticPeerRecord, TransferConfig, TransferEvent,
-    TrustEvent, TrustStore, TrustedPeerEntry, CAP_FILE_TRANSFER,
+    HandlerFuture, NodeId, NodeIdentity, PeerNetError, PeerNetNode, PeerNetNodeConfig, RunningNode, SharedDirEntry,
+    SharedDirHandler, SharedDirRoot, SharedDirStore, StaticPeerRecord, TransferConfig, TransferEvent, TrustEvent,
+    TrustStore, TrustedPeerEntry, CAP_FILE_TRANSFER,
 };
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
@@ -482,10 +482,7 @@ pub async fn respond_peer_consent(app: AppHandle, request_id: String, accepted: 
 #[tauri::command]
 /// 可信条目 → DTO（纯函数，供测试）：展示名持久化名优先、在线缓存名兑底，
 /// 均缺为 None（前端以短指纹兑底）；短指纹取前 8 位；加入时刻转 RFC3339
-pub(crate) fn trust_entry_to_dto(
-    entry: &TrustedPeerEntry,
-    online_names: &HashMap<NodeId, String>,
-) -> TrustedPeerDto {
+pub(crate) fn trust_entry_to_dto(entry: &TrustedPeerEntry, online_names: &HashMap<NodeId, String>) -> TrustedPeerDto {
     TrustedPeerDto {
         display_name: entry
             .display_name
@@ -610,7 +607,10 @@ pub(crate) async fn resume_all_transfers_for_plugin(app: AppHandle) -> crate::Re
     Ok(crate::peer_engine_transfer::resume_all_peer_transfers(app).await? as u32)
 }
 
-pub(crate) async fn list_remote_roots_for_plugin(app: AppHandle, node_id: String) -> crate::Result<Vec<PeerSharedRootDto>> {
+pub(crate) async fn list_remote_roots_for_plugin(
+    app: AppHandle,
+    node_id: String,
+) -> crate::Result<Vec<PeerSharedRootDto>> {
     crate::peer_engine_remote::list_peer_shared_roots(app, node_id).await
 }
 
@@ -1050,8 +1050,8 @@ async fn stop_locked(state: &tauri::State<'_, PeerNetState>, app: &AppHandle) ->
             // 引擎 daemon 停：退订浏览 + 注销自身广播（共享守护不 shutdown）
             runtime.daemon.stop().await.map_err(map_peer_net_error)?;
             // 注销宿主身份广播登记（owner=host，MdnsService ADVERTISERS）
-            let _ = crate::plugin::manager::wasm_runtime::host_impl::mdns::
-                stop_host_service(&runtime.host_adv);            runtime.running.shutdown().await;
+            let _ = crate::plugin::manager::wasm_runtime::host_impl::mdns::stop_host_service(&runtime.host_adv);
+            runtime.running.shutdown().await;
             tracing::info!("peer-net node stopped");
             Ok(())
         }
@@ -1511,12 +1511,16 @@ mod peer_net_tests {
             SharedDirEntry {
                 id: "a".to_string(),
                 name: "A".to_string(),
-                root: SharedDirRoot::Fs { path: real_root.clone() },
+                root: SharedDirRoot::Fs {
+                    path: real_root.clone(),
+                },
             },
             SharedDirEntry {
                 id: "b".to_string(),
                 name: "B".to_string(),
-                root: SharedDirRoot::Fs { path: real_root_b.clone() },
+                root: SharedDirRoot::Fs {
+                    path: real_root_b.clone(),
+                },
             },
         ];
         store.replace_all(&entries).expect("replace_all");
@@ -1525,4 +1529,3 @@ mod peer_net_tests {
         assert_eq!(store.list()[1].id, "b");
     }
 }
-
