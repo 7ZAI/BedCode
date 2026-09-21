@@ -57,17 +57,19 @@ bedcode-desktop/                      # 桌面端项目 (Tauri 2.0 + Vue 3)
 ├── src/                              # Vue 3 前端（扁平化结构 + 领域子目录）
 │   ├── components/                   # UI 组件：桌面布局、侧边栏、终端预览、
 │   │                                 #   标题栏、通知卡片/徽章、退出确认、文件系统授权弹窗、通用基础组件；
-│   │                                 #   settings/ 下为设置页分组子组件（外观/配对/链路加密/会话/系统/日志/关于）
-│   ├── composables/                  # 业务逻辑 composable：桌面命令、网络、配对、插件管理、PTY 输出、
-│   │                                 #   全局终端、快捷键、主题、字体、WSL、更新检查等；
+│   │                                 #   settings/ 下为设置页分组子组件（外观/链路加密/系统/日志/关于；
+│   │                                 #   配对「票 14」与会话分组已随域下沉 com.bedcode.session 插件）
+│   ├── composables/                  # 业务逻辑 composable：桌面命令、网络（服务器）、插件管理、PTY 输出、
+│   │                                 #   全局终端、快捷键、主题、字体、更新检查等（配对 / WSL / 设备一族
+│   │                                 #   已随域下沉 com.bedcode.session 插件，设备连接通知亦在其内）；
 │   │                                 #   terminal/ 下为终端内核域（写入管线/渲染器/resize/设置同步/滚动，
 │   │                                 #   TerminalPreview 拆分产物，经 terminalKernel 交换实例与回调）；
-│   │                                 #   commands/ 下为 Rust 命令封装按领域拆分（会话/设备/设置/事件监听），
+│   │                                 #   commands/ 下为 Rust 命令封装按领域拆分（会话引擎事实/设置），
 │   │                                 #   useDesktopCommands 为聚合层 re-export
-│   ├── stores/                       # Pinia 全局状态：设备、会话、设置、输入助手、快捷操作、WSL、i18n
-│   ├── views/                        # 页面：设备、插件、插件配置、会话兜底壳（会话页由
-│   │                                 #   com.bedcode.session 插件贡献，见 plugins/session/）、
-│   │                                 #   设置（编排层）、终端窗口、服务器
+│   ├── stores/                       # Pinia 全局状态：会话（引擎事实 + 插件动作）、设置、i18n
+│   ├── views/                        # 页面：插件、插件详情、插件配置、设置（编排层）、终端窗口、服务器
+│   │                                 #   （设备 / 会话 / 会话配置页已随票 13/14 下沉 com.bedcode.session
+│   │                                 #   插件；/server 为无侧边栏入口的诊断页，落地页为 /plugins）
 │   ├── plugin/                       # 前端插件系统：加载器、注册表、权限、上下文、事件、命令、
 │   │                                 #   共享模块运行时、运行时事件监听（runtime-listeners）；components/ 下为插件 UI 宿主组件
 │   ├── utils/                        # 工具函数（Tauri invoke 封装、终端主题数据 terminalThemes、格式化 format 等）
@@ -78,8 +80,9 @@ bedcode-desktop/                      # 桌面端项目 (Tauri 2.0 + Vue 3)
 └── src-tauri/                        # Rust 后端（Tokio 异步）
     ├── resources/                    # 打包资源：应用配置 + 内置插件构建产物（wasm/js/plugin.json）
     └── src/                          # 模块按领域扁平组织，每领域配同名入口文件（commands.rs、db.rs 等）
-        ├── commands/                 # Tauri invoke 命令层：按领域拆分（devices、mdns、plugin、
-        │                             #   pty_input、qr、server、session、session_config、settings、system、wsl）
+        ├── commands/                 # Tauri invoke 命令层：按领域拆分（devices、opener、plugin、
+        │                             #   pty_input、server、session、settings、system）；只保留宿主页面
+        │                             #   （外壳 / 终端引擎）直调的命令，业务面一律归插件命令面
         ├── db/                       # SQLite：连接管理、数据模型、CRUD 操作、Schema
         ├── enums/                    # 枚举类型：认证、控制、插件、PTY 状态、会话、Shell、特殊键、同步
         ├── events/                   # 全局事件系统：AppEvent trait、事件匹配、SessionManager→前端转发、
@@ -283,11 +286,14 @@ WIT 契约 `host-task`（5 函数：execute-batch / submit / status / cancel / l
 
 ### 会话管理 — `src-tauri/src/session/`
 
-- **session_manager / storage / session_config**：会话管理器、会话存储、配置 CRUD
+- **session_manager**：会话编排与登记（创建执行端 / 启动 / 尺寸裁决登记 / 注解槽 / 移除）
+- **session_config**：`SessionConfigManager`——v21 后只剩一个用途：`com.bedcode.session`
+  一次性 legacy 迁移通道读主库 `session_configs`（表退役见 scratch 票 02）；业务 CRUD 真源在插件私有库
 - **session_output**：输出管理（缓存/队列/订阅/全局），支撑多端输出回放
 - **session_lifecycle**：生命周期事件（Creating/Created/Stopping/Stopped）与监听器机制，插件扩展点
 - **input_line**：会话输入扩展点（SessionInputListener + 提交行重构）
-- **event_bus / session_event**：统一事件广播与会话事件模型
+- **event_bus / session_event**：统一事件广播与会话事件模型（v21 起重启广播通道已退役，
+  只保留状态事件；`session-restarted` 由插件经 `host-events.emit` 补发）
 
 ### PTY 管理 — `src-tauri/src/pty/`
 

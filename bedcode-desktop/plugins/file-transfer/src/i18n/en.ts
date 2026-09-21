@@ -199,6 +199,10 @@ const en: MessageSchema = {
   'transfer.eta.seconds': '{count}s left',
   'transfer.eta.minutes': '{count}m {seconds}s left',
   'transfer.eta.hours': '{count}h {minutes}m left',
+
+  // ==================== Global notifications (wording taken verbatim from host `common.notification.*`) ====================
+  'transfer.notification.peerConnected': '"{name}" connected',
+  'transfer.notification.peerDisconnected': '"{name}" disconnected',
 }
 
 export default en

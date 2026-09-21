@@ -322,6 +322,18 @@ const en: MessageSchema = {
   'task.scheduledSectionActive': 'Active',
   'task.scheduledSectionFinished': 'History',
   'task.scheduledClearFinished': 'Clear',
+
+  // ==================== Global notifications (wording taken verbatim from host `common.notification.*`) ====================
+  'session.notification.deviceConnected': '"{name}" connected',
+  'session.notification.deviceDisconnected': '"{name}" disconnected',
+  'session.notification.mobileDevice': 'Mobile device',
+
+  // ==================== Settings section "Session" (wording taken verbatim from host `settings.session.*`) ====================
+  'session.settings.title': 'Session',
+  'session.settings.defaultEnvironment': 'Default environment',
+  'session.settings.defaultCommand': 'Default command',
+  'session.settings.saved': 'Saved',
+  'session.settings.saveFailed': 'Save failed',
 }
 
 export default en

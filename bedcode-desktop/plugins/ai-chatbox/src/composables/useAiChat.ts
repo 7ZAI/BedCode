@@ -28,10 +28,10 @@ export interface FrameScheduler {
 function classifyError(message: string): string | null {
   const m = message.toLowerCase()
   if (/context.*length|maximum context|token.*(limit|exceeded)|context_length/i.test(m)) {
-    return 'desktop.plugin.aiChatbox.contextLimitExceeded'
+    return 'com.bedcode.ai-chatbox.contextLimitExceeded'
   }
   if (/permission|authorization|access denied|not authorized/i.test(m)) {
-    return 'desktop.plugin.aiChatbox.authRevoked'
+    return 'com.bedcode.ai-chatbox.authRevoked'
   }
   return null
 }
@@ -243,7 +243,7 @@ export function useAiChat(
     const provider = config.activeProvider.value
     const conv: ConversationMeta = {
       id: generateId(),
-      title: 'desktop.plugin.aiChatbox.newConversation',
+      title: 'com.bedcode.ai-chatbox.newConversation',
       createdAt: nowIso(),
       updatedAt: nowIso(),
       providerId: config.activeProviderId.value,
@@ -308,18 +308,18 @@ export function useAiChat(
   async function sendMessage(content: string, replaceLast = false): Promise<void> {
     const provider = config.buildRequestProvider()
     if (!provider) {
-      lastError.value = 'desktop.plugin.aiChatbox.pleaseConfigure'
+      lastError.value = 'com.bedcode.ai-chatbox.pleaseConfigure'
       return
     }
     if (sending.value) return
 
     // 发送前校验（原 Rust 校验前移）：apiKey 非空 + baseUrl 合法
     if (!provider.apiKey.trim()) {
-      lastError.value = 'desktop.plugin.aiChatbox.apiKeyRequired'
+      lastError.value = 'com.bedcode.ai-chatbox.apiKeyRequired'
       return
     }
     if (!isValidBaseUrl(provider.baseUrl)) {
-      lastError.value = 'desktop.plugin.aiChatbox.baseUrlInvalid'
+      lastError.value = 'com.bedcode.ai-chatbox.baseUrlInvalid'
       return
     }
 
@@ -334,7 +334,7 @@ export function useAiChat(
       await saveMessage(conv.id, userMsg)
 
       // 标题 = 首条消息前 30 字
-      if (!conv.title || conv.title === 'desktop.plugin.aiChatbox.newConversation') {
+      if (!conv.title || conv.title === 'com.bedcode.ai-chatbox.newConversation') {
         conv.title = content.slice(0, 30) + (content.length > 30 ? '…' : '')
         await saveConversation(conv)
       }
@@ -452,7 +452,7 @@ export function useAiChat(
       if (maxRetries <= 0 || rateLimitAttempt >= maxRetries) {
         if (rateLimitAttempt > 0) {
           console.error('[AI Chatbox] Rate limit persists after retries:', errorText)
-          finishStream(false, 'desktop.plugin.aiChatbox.rateLimitExhausted', undefined, replaceLast)
+          finishStream(false, 'com.bedcode.ai-chatbox.rateLimitExhausted', undefined, replaceLast)
         } else {
           // 自动重试关闭（maxRetries=0）：透传原始错误，避免"重试 0 次"的误导文案
           finishStream(false, errorText, undefined, replaceLast)
@@ -549,7 +549,7 @@ export function useAiChat(
   /** 终止限流重试等待（滑出条终止按钮）：取消退避定时器并按"已终止"收尾 */
   function abortRateLimitRetry(): void {
     if (!rateLimitRetry.value) return
-    finishStream(false, 'desktop.plugin.aiChatbox.rateLimitAborted')
+    finishStream(false, 'com.bedcode.ai-chatbox.rateLimitAborted')
   }
 
   /** 重新生成：删除最后 assistant 消息（前端 + 文件覆盖），重跑最后一条用户消息 */

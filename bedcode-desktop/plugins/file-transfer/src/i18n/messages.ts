@@ -193,4 +193,8 @@ export type MessageSchema = {
   'transfer.eta.seconds': string
   'transfer.eta.minutes': string
   'transfer.eta.hours': string
+
+  // ==================== 全局通知（宿主 useGlobalNotifications 承接的对等连接） ====================
+  'transfer.notification.peerConnected': string
+  'transfer.notification.peerDisconnected': string
 }

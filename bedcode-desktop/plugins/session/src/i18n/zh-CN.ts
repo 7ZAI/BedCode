@@ -317,6 +317,18 @@ const zhCN: MessageSchema = {
   'task.scheduledSectionActive': '进行中',
   'task.scheduledSectionFinished': '历史',
   'task.scheduledClearFinished': '清空',
+
+  // ==================== 全局通知（文案逐字取自宿主 `common.notification.*`） ====================
+  'session.notification.deviceConnected': '"{name}" 已连接',
+  'session.notification.deviceDisconnected': '"{name}" 已断开连接',
+  'session.notification.mobileDevice': '移动设备',
+
+  // ==================== 设置页「会话」分组（文案逐字取自宿主 `settings.session.*`） ====================
+  'session.settings.title': '会话',
+  'session.settings.defaultEnvironment': '默认执行环境',
+  'session.settings.defaultCommand': '默认启动命令',
+  'session.settings.saved': '已保存',
+  'session.settings.saveFailed': '保存失败',
 }
 
 export default zhCN

@@ -771,8 +771,11 @@ async function refresh(): Promise<void> {
   }
 }
 
-function openCreateDialog(): void {
+async function openCreateDialog(): Promise<void> {
   editingConfig.value = null
+  // 每次新建前重读默认值：设置页「会话」分组（SessionSettingsSection）改过的
+  // 默认环境/命令即时生效，不依赖页面重新挂载
+  await loadFormDefaults()
   showCreateDialog.value = true
 }
 

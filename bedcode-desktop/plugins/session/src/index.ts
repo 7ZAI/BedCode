@@ -24,6 +24,7 @@ import SessionCenterView from './components/SessionCenterView.vue'
 import DeviceCenterView from './components/DeviceCenterView.vue'
 import ConnectionHistoryView from './components/ConnectionHistoryView.vue'
 import PairingSettingsSection from './components/PairingSettingsSection.vue'
+import SessionSettingsSection from './components/SessionSettingsSection.vue'
 import TaskHistoryView from './components/TaskHistoryView.vue'
 import TaskQueueModal from './components/TaskQueueModal.vue'
 import taskModalCss from './components/task-queue-modal.css?inline'
@@ -36,7 +37,8 @@ import { currentSessionId, sharedRouter } from './utils/route'
 import { taskModalVisible } from './state'
 import { messages } from './i18n'
 import sessionDevMock from './devMock'
-import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
+import { startDeviceNotifications } from './notifications'
+import type { Disposable, PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 
 // dev-shell 领域种子数据（SDK PluginDevMock 协议；真实宿主忽略）
 export const devMock = sessionDevMock
@@ -60,6 +62,11 @@ const DEVICES_HISTORY_ORDER = DEVICES_SLOT_ORDER + 1
 const TASKS_ORDER = SESSIONS_SLOT_ORDER + 10
 /** 设置分组槽位：顶替宿主内置「配对设置」分组的原位（该内置分组已退役） */
 const PAIRING_SECTION_ORDER = 200
+/**
+ * 设置分组槽位：顶替宿主内置「会话」分组的原位（宿主 `BUILTIN_SECTION_ORDERS.session`
+ * = 400，该内置分组随域下沉退役，槽位值保留不复用）
+ */
+const SESSION_SECTION_ORDER = 400
 
 /** 侧边栏图标：宿主同款 Heroicons outline path（同图标体系） */
 const PAIRING_ICON = 'M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z'
@@ -183,6 +190,8 @@ let eventDisposables: { dispose(): void }[] = []
 let stopLocaleWatch: (() => void) | null = null
 let stopRouteWatch: (() => void) | null = null
 let toolbarDisposable: { dispose(): void } | null = null
+/** 设备连接通知订阅句柄（激活期常驻，停用时注销） */
+let deviceNotifications: Disposable | null = null
 
 /**
  * 注册侧边栏目录、插件页与设置分组
@@ -217,6 +226,14 @@ function registerPluginUi(context: PluginContext): void {
       titleKey: 'pairing.settings.title',
       order: PAIRING_SECTION_ORDER,
       component: PairingSettingsSection,
+    }),
+    // 会话默认值分组：宿主内置「会话」分组（失效 UI——改的是无人消费的宿主设置）
+    // 随域下沉到本插件，写插件存储 `session.formDefaults`（新建表单的真实默认值源）
+    context.ui.registerSettingsSection({
+      id: 'session.settings',
+      titleKey: 'session.settings.title',
+      order: SESSION_SECTION_ORDER,
+      component: SessionSettingsSection,
     }),
   )
 }
@@ -365,6 +382,10 @@ export async function activate(context: PluginContext): Promise<void> {
   eventDisposables.push(context.events.on('task:status-changed', onTaskStatusChanged))
   eventDisposables.push(context.events.on('session:mode-changed', onSessionModeChanged))
 
+  // 设备上下线通知：设备域归属本插件，宿主 `useGlobalNotifications` 已退役，
+  // 不再替本域弹 toast（启动期经 connect-list 种子化在线基线）
+  deviceNotifications = startDeviceNotifications(context)
+
   console.log('[Session Center] Plugin activated')
 }
 
@@ -375,6 +396,8 @@ export async function deactivate(): Promise<void> {
   stopLocaleWatch = null
   toolbarDisposable?.dispose()
   toolbarDisposable = null
+  deviceNotifications?.dispose()
+  deviceNotifications = null
   for (const d of disposables) {
     d.dispose()
   }

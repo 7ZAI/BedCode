@@ -4,7 +4,7 @@
     <div v-if="collapsed" class="flex flex-col items-center gap-1 py-2">
       <button
         class="p-1.5 text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] rounded transition-colors"
-        :title="t('desktop.plugin.aiChatbox.expandConversations')"
+        :title="t('com.bedcode.ai-chatbox.expandConversations')"
         @click="$emit('toggle-collapse')"
       >
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -18,7 +18,7 @@
       </button>
       <button
         class="p-1.5 text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] rounded transition-colors"
-        :title="t('desktop.plugin.aiChatbox.newConversation')"
+        :title="t('com.bedcode.ai-chatbox.newConversation')"
         @click="$emit('new')"
       >
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -37,12 +37,12 @@
       <!-- 头部 -->
       <div class="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)]">
         <span class="text-sm font-medium text-[var(--text-secondary)]">
-          {{ t('desktop.plugin.aiChatbox.conversations') }}
+          {{ t('com.bedcode.ai-chatbox.conversations') }}
         </span>
         <div class="flex items-center gap-0.5">
           <button
             class="p-1 text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] rounded transition-colors"
-            :title="t('desktop.plugin.aiChatbox.newConversation')"
+            :title="t('com.bedcode.ai-chatbox.newConversation')"
             @click="$emit('new')"
           >
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -56,7 +56,7 @@
           </button>
           <button
             class="p-1 text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] rounded transition-colors"
-            :title="t('desktop.plugin.aiChatbox.collapseConversations')"
+            :title="t('com.bedcode.ai-chatbox.collapseConversations')"
             @click="$emit('toggle-collapse')"
           >
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -109,7 +109,7 @@
           >
             <button
               class="p-0.5 text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] rounded"
-              :title="t('desktop.plugin.aiChatbox.rename')"
+              :title="t('com.bedcode.ai-chatbox.rename')"
               @click.stop="startRename(conv)"
             >
               <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -123,7 +123,7 @@
             </button>
             <button
               class="p-0.5 text-[var(--text-tertiary)] hover:text-[var(--color-danger)] rounded"
-              :title="t('desktop.plugin.aiChatbox.delete')"
+              :title="t('com.bedcode.ai-chatbox.delete')"
               @click.stop="$emit('delete', conv)"
             >
               <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -156,10 +156,10 @@
             </svg>
           </div>
           <p class="text-xs text-[var(--text-tertiary)]">
-            {{ t('desktop.plugin.aiChatbox.noConversations') }}
+            {{ t('com.bedcode.ai-chatbox.noConversations') }}
           </p>
           <p class="text-xs text-[var(--text-tertiary)]/70 mt-2">
-            {{ t('desktop.plugin.aiChatbox.noConversationsHint') }}
+            {{ t('com.bedcode.ai-chatbox.noConversationsHint') }}
           </p>
         </div>
       </div>
@@ -202,15 +202,15 @@ const renameInputRef = ref<HTMLInputElement | null>(null)
 
 /** 新对话占位标题（i18n key）显示为默认文案 */
 function displayTitle(title: string): string {
-  if (!title || title === 'desktop.plugin.aiChatbox.newConversation') {
-    return t('desktop.plugin.aiChatbox.newConversation')
+  if (!title || title === 'com.bedcode.ai-chatbox.newConversation') {
+    return t('com.bedcode.ai-chatbox.newConversation')
   }
   return title
 }
 
 function startRename(conv: ConversationMeta): void {
   editingId.value = conv.id
-  renameDraft.value = conv.title === 'desktop.plugin.aiChatbox.newConversation' ? '' : conv.title
+  renameDraft.value = conv.title === 'com.bedcode.ai-chatbox.newConversation' ? '' : conv.title
   nextTick(() => {
     renameInputRef.value?.focus()
   })

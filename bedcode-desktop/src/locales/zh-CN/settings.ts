@@ -19,11 +19,6 @@ export default {
       fingerprintDesc: '本机身份密钥指纹（SHA-256 前 16 位），请与移动端展示值人工比对',
       saveFailed: '链路加密配置保存失败',
     },
-    session: {
-      title: '会话默认设置',
-      defaultEnvironment: '默认执行环境',
-      defaultCommand: '默认启动命令',
-    },
     system: {
       title: '系统设置',
       preventSleep: '防止系统休眠',
@@ -60,7 +55,6 @@ export default {
       title: '界面设置',
     },
     appearance: {
-      title: '外观',
       theme: '主题',
       palette: '主题色板',
       paletteWarm: '暖调工作台',
@@ -79,24 +73,8 @@ export default {
       fontNormal: '正常',
       fontLarge: '大',
       fontXl: '超大',
-      terminalCacheCount: '终端缓存数量',
       animations: '动画效果',
       animationsDesc: '关闭后全局禁用页面切换与交互过渡动画',
-    },
-    connection: {
-      title: '连接设置',
-      autoReconnect: '自动重连',
-      keepAlive: '保持连接',
-      reconnectInterval: '重连间隔 (秒)',
-      defaultPort: '默认端口',
-    },
-    notification: {
-      title: '通知设置',
-      notifyOnWaiting: '等待输入时通知',
-      notifyOnConnection: '连接状态变化通知',
-      vibrate: '振动反馈',
-      notifyInBackground: '后台运行时通知',
-      soundOnTaskComplete: '任务完成提示音',
     },
     about: {
       title: '关于',
@@ -109,23 +87,7 @@ export default {
       downloadingUpdate: '正在下载更新...',
       downloadComplete: '下载完成，正在安装...',
       installingUpdate: '正在安装更新...',
-      currentVersion: '当前版本',
-      latestVersion: '最新版本',
       downloadUpdate: '立即更新',
-      goToDownload: '前往下载',
-      cancel: '取消',
-    },
-    actions: {
-      resetSettings: '重置设置',
-      clearAllData: '清除所有数据',
-      clearDataConfirm: '确定要清除所有数据吗？此操作无法撤销。',
-    },
-    browser: {
-      confirmOpen: '确定要在浏览器中打开此链接吗？',
-    },
-    shortcuts: {
-      title: '快捷键设置',
-      description: '配置终端快捷键面板的显示按键',
     },
   },
 }

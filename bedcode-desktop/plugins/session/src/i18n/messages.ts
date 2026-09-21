@@ -344,4 +344,17 @@ export type MessageSchema = {
   'task.scheduledStatusFailed': string
   'task.scheduledStatusMissed': string
   'task.scheduledError': string
+
+  // ==================== 全局通知（宿主 useGlobalNotifications 承接的设备上下线） ====================
+  'session.notification.deviceConnected': string
+  'session.notification.deviceDisconnected': string
+  'session.notification.mobileDevice': string
+
+  // ==================== 设置页「会话」分组（默认执行环境 / 默认启动命令） ====================
+  // 槽位：宿主 `BUILTIN_SECTION_ORDERS.session`（400）退役后由本分组占据原位
+  'session.settings.title': string
+  'session.settings.defaultEnvironment': string
+  'session.settings.defaultCommand': string
+  'session.settings.saved': string
+  'session.settings.saveFailed': string
 }

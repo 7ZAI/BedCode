@@ -61,18 +61,8 @@ const CONTRIBUTION_KINDS: Record<string, ContributionKind> = {
     labelKey: 'desktop.plugin.chip.terminal',
     count: (p) => (p.contributes.terminal ? 1 : 0),
   },
-  toolProviders: {
-    emoji: '🛠️',
-    labelKey: 'desktop.plugin.chip.toolProviders',
-    count: (p) => p.contributes.toolProviders?.length ?? 0,
-    params: (p) => ({ count: p.contributes.toolProviders?.length ?? 0 }),
-  },
-  fileHandlers: {
-    emoji: '📁',
-    labelKey: 'desktop.plugin.chip.fileHandlers',
-    count: (p) => p.contributes.fileHandlers?.length ?? 0,
-    params: (p) => ({ count: p.contributes.fileHandlers?.length ?? 0 }),
-  },
+  // `toolProviders` / `fileHandlers` 不再列为 chip：宿主侧从未落地消费实现
+  // （声明了也不会生效），展示为「扩展点」是误导——摘除展示，类型字段暂留兼容。
   configuration: {
     emoji: '🎛️',
     labelKey: 'desktop.plugin.chip.configuration',

@@ -4,8 +4,8 @@
       <h4 class="text-base font-medium text-[var(--text-primary)]">
         {{
           mode === 'edit'
-            ? t('desktop.plugin.aiChatbox.editProvider')
-            : t('desktop.plugin.aiChatbox.addProvider')
+            ? t('com.bedcode.ai-chatbox.editProvider')
+            : t('com.bedcode.ai-chatbox.addProvider')
         }}
       </h4>
       <span
@@ -18,7 +18,7 @@
     <!-- 名称 -->
     <div>
       <label class="block text-xs font-medium mb-1.5 text-[var(--text-secondary)]">
-        {{ t('desktop.plugin.aiChatbox.name') }}
+        {{ t('com.bedcode.ai-chatbox.name') }}
       </label>
       <input
         v-model="form.name"
@@ -30,7 +30,7 @@
     <!-- Base URL -->
     <div>
       <label class="block text-xs font-medium mb-1.5 text-[var(--text-secondary)]">
-        {{ t('desktop.plugin.aiChatbox.baseUrl') }}
+        {{ t('com.bedcode.ai-chatbox.baseUrl') }}
       </label>
       <input
         v-model="form.baseUrl"
@@ -43,7 +43,7 @@
     <!-- API Key -->
     <div>
       <label class="block text-xs font-medium mb-1.5 text-[var(--text-secondary)]">
-        {{ t('desktop.plugin.aiChatbox.apiKey') }}
+        {{ t('com.bedcode.ai-chatbox.apiKey') }}
       </label>
       <div class="flex gap-2">
         <input
@@ -56,11 +56,11 @@
           class="h-[36px] px-3 text-sm rounded-btn bg-[var(--bg-hover)] text-[var(--text-secondary)] hover:bg-[var(--bg-input)] transition-colors flex-shrink-0"
           @click="showKey = !showKey"
         >
-          {{ showKey ? t('desktop.plugin.aiChatbox.hide') : t('desktop.plugin.aiChatbox.show') }}
+          {{ showKey ? t('com.bedcode.ai-chatbox.hide') : t('com.bedcode.ai-chatbox.show') }}
         </button>
       </div>
       <p class="mt-1 text-xs text-[var(--text-tertiary)]">
-        {{ t('desktop.plugin.aiChatbox.apiKeyHint') }}
+        {{ t('com.bedcode.ai-chatbox.apiKeyHint') }}
       </p>
     </div>
 
@@ -73,8 +73,8 @@
       >
         {{
           fetching
-            ? t('desktop.plugin.aiChatbox.fetchingModels')
-            : t('desktop.plugin.aiChatbox.fetchModels')
+            ? t('com.bedcode.ai-chatbox.fetchingModels')
+            : t('com.bedcode.ai-chatbox.fetchModels')
         }}
       </button>
       <button
@@ -84,8 +84,8 @@
       >
         {{
           testing
-            ? t('desktop.plugin.aiChatbox.testing')
-            : t('desktop.plugin.aiChatbox.testConnection')
+            ? t('com.bedcode.ai-chatbox.testing')
+            : t('com.bedcode.ai-chatbox.testConnection')
         }}
       </button>
       <span v-if="fetchError" class="text-xs text-[var(--color-danger)] flex-1 break-words">{{
@@ -95,14 +95,14 @@
         v-else-if="testResult !== null"
         class="text-xs flex-1 break-words"
         :class="testOk ? 'text-[var(--color-primary)]' : 'text-[var(--color-danger)]'"
-        >{{ testOk ? t('desktop.plugin.aiChatbox.testOk') : testResult }}</span
+        >{{ testOk ? t('com.bedcode.ai-chatbox.testOk') : testResult }}</span
       >
     </div>
 
     <!-- 模型列表 -->
     <div>
       <label class="block text-xs font-medium mb-1.5 text-[var(--text-secondary)]">
-        {{ t('desktop.plugin.aiChatbox.modelList') }}
+        {{ t('com.bedcode.ai-chatbox.modelList') }}
       </label>
       <ModelListEditor v-model:models="form.models" />
     </div>
@@ -114,7 +114,7 @@
         class="h-[36px] px-4 text-sm rounded-btn bg-[var(--color-danger-light)] text-[var(--color-danger)] hover:opacity-80 transition-opacity"
         @click="askDelete = true"
       >
-        {{ t('desktop.plugin.aiChatbox.deleteProvider') }}
+        {{ t('com.bedcode.ai-chatbox.deleteProvider') }}
       </button>
       <span v-else></span>
       <div class="flex gap-2">
@@ -123,7 +123,7 @@
           :disabled="!canSave"
           @click="save"
         >
-          {{ t('desktop.plugin.aiChatbox.saveProvider') }}
+          {{ t('com.bedcode.ai-chatbox.saveProvider') }}
         </button>
       </div>
     </div>
@@ -131,8 +131,8 @@
     <!-- 删除确认（编辑模式；与列表行删除共用同一弹窗） -->
     <ConfirmDialog
       v-if="askDelete && initialValues"
-      :title="t('desktop.plugin.aiChatbox.confirmDeleteTitle')"
-      :body="t('desktop.plugin.aiChatbox.confirmDeleteBody', { name: initialValues.name })"
+      :title="t('com.bedcode.ai-chatbox.confirmDeleteTitle')"
+      :body="t('com.bedcode.ai-chatbox.confirmDeleteBody', { name: initialValues.name })"
       @confirm="emit('delete', initialValues.id)"
       @cancel="askDelete = false"
     />
@@ -215,10 +215,10 @@ async function onFetchModels(): Promise<void> {
     if (result.length > 0) {
       form.models = result
     } else {
-      fetchError.value = t('desktop.plugin.aiChatbox.fetchModelsEmpty')
+      fetchError.value = t('com.bedcode.ai-chatbox.fetchModelsEmpty')
     }
   } catch (e: any) {
-    fetchError.value = `${t('desktop.plugin.aiChatbox.fetchModelsFailed')}: ${String(e?.message || e)}`
+    fetchError.value = `${t('com.bedcode.ai-chatbox.fetchModelsFailed')}: ${String(e?.message || e)}`
   } finally {
     fetching.value = false
   }

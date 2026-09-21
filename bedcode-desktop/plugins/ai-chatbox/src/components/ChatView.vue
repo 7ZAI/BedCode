@@ -54,7 +54,7 @@
               <button
                 v-if="hasProvider"
                 class="p-1.5 text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] rounded transition-colors flex-shrink-0"
-                :title="t('desktop.plugin.aiChatbox.providerConfig')"
+                :title="t('com.bedcode.ai-chatbox.providerConfig')"
                 @click="showConfigPage = true"
               >
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -99,16 +99,16 @@
               </svg>
             </div>
             <p class="text-sm text-[var(--text-secondary)] mb-1">
-              {{ t('desktop.plugin.aiChatbox.pleaseConfigure') }}
+              {{ t('com.bedcode.ai-chatbox.pleaseConfigure') }}
             </p>
             <p class="text-xs text-[var(--text-tertiary)] mb-4">
-              {{ t('desktop.plugin.aiChatbox.emptyHint') }}
+              {{ t('com.bedcode.ai-chatbox.emptyHint') }}
             </p>
             <button
               class="px-4 py-2 text-sm bg-brand text-[var(--color-primary-contrast)] hover:bg-brand-hover rounded-btn transition-colors"
               @click="showConfigPage = true"
             >
-              {{ t('desktop.plugin.aiChatbox.configureModel') }}
+              {{ t('com.bedcode.ai-chatbox.configureModel') }}
             </button>
           </div>
 
@@ -133,7 +133,7 @@
                   </svg>
                 </div>
                 <p class="text-sm text-[var(--text-tertiary)]">
-                  {{ t('desktop.plugin.aiChatbox.startNewChat') }}
+                  {{ t('com.bedcode.ai-chatbox.startNewChat') }}
                 </p>
               </div>
 
@@ -169,10 +169,10 @@
               <div v-if="canRegenerate" class="flex justify-center">
                 <button
                   class="px-3 h-7 text-xs rounded-btn bg-[var(--bg-hover)] text-[var(--text-secondary)] hover:bg-[var(--bg-input)] transition-colors"
-                  :title="t('desktop.plugin.aiChatbox.regenerate')"
+                  :title="t('com.bedcode.ai-chatbox.regenerate')"
                   @click="regenerate"
                 >
-                  {{ t('desktop.plugin.aiChatbox.regenerate') }}
+                  {{ t('com.bedcode.ai-chatbox.regenerate') }}
                 </button>
               </div>
             </div>
@@ -201,7 +201,7 @@
                   </svg>
                   <span class="flex-1 min-w-0 truncate">
                     {{
-                      t('desktop.plugin.aiChatbox.rateLimitRetryIn', {
+                      t('com.bedcode.ai-chatbox.rateLimitRetryIn', {
                         seconds: rateLimitRetry.countdownSec,
                         attempt: rateLimitRetry.attempt,
                         max: rateLimitRetry.maxRetries,
@@ -212,14 +212,14 @@
                     class="flex-shrink-0 px-2 py-0.5 text-xs rounded border border-[color-mix(in_srgb,currentColor_40%,transparent)] hover:bg-[color-mix(in_srgb,currentColor_12%,transparent)] transition-colors"
                     @click="abortRateLimitRetry"
                   >
-                    {{ t('desktop.plugin.aiChatbox.rateLimitStop') }}
+                    {{ t('com.bedcode.ai-chatbox.rateLimitStop') }}
                   </button>
                 </div>
               </Transition>
               <ChatInput
                 :disabled="sending || !hasProvider"
                 :streaming="isStreaming"
-                :placeholder="t('desktop.plugin.aiChatbox.inputPlaceholder')"
+                :placeholder="t('com.bedcode.ai-chatbox.inputPlaceholder')"
                 @send="sendMessage"
                 @stop="stopGeneration"
               >
@@ -318,11 +318,11 @@ function toggleSidebar(): void {
 /** 当前对话标题（无对话选中时显示面板名；新对话占位显示默认文案） */
 const currentTitle = computed(() => {
   if (!currentConversation.value) {
-    return t('desktop.plugin.aiChatbox.title')
+    return t('com.bedcode.ai-chatbox.title')
   }
   const title = currentConversation.value.title
-  if (!title || title === 'desktop.plugin.aiChatbox.newConversation') {
-    return t('desktop.plugin.aiChatbox.newConversation')
+  if (!title || title === 'com.bedcode.ai-chatbox.newConversation') {
+    return t('com.bedcode.ai-chatbox.newConversation')
   }
   return title
 })

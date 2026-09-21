@@ -4,9 +4,10 @@ import { pluginLoader } from '@/plugin/loader'
 const router = createRouter({
   history: createWebHistory(),
   routes: [
-    // 默认落地服务器管理页：会话/设备配对入口已下沉插件（票 13/14），
-    // 宿主不再有默认业务页，服务器常驻是桌面端主面板
-    { path: '/', redirect: '/server' },
+    // 默认落地插件页：会话 / 设备配对入口已下沉插件（票 13/14），宿主不再有
+    // 业务页；服务器页（/server）按产品决策「常驻不可开关」已从导航移除入口
+    // （仍可经 URL 直达做诊断），故落地页取插件管理
+    { path: '/', redirect: '/plugins' },
     {
       path: '/server',
       name: 'server',

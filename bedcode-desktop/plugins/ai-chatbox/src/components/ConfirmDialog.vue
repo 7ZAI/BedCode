@@ -59,8 +59,8 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 
-const confirmText = t('desktop.plugin.aiChatbox.delete')
-const cancelText = t('desktop.plugin.aiChatbox.cancel')
+const confirmText = t('com.bedcode.ai-chatbox.delete')
+const cancelText = t('com.bedcode.ai-chatbox.cancel')
 
 function onConfirm(): void {
   emit('confirm')

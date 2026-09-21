@@ -4,11 +4,11 @@
  * 协作实体：真实 xterm Terminal（happy-dom 中 open() 进带尺寸 DOM 元素可用，
  * 已实测 buffer 解析/渲染正常——无需桩）+ useTerminalOutputStreamChannel
  * （真实，帧解析/游标连续性/Channel 订阅构造全部真实执行）+ useSessionStore
- * （真实 Pinia）+ useTerminalInputMarkers（真实，输入标记联动）。
+ * （真实 Pinia）。
  *
- * 覆盖用户路径：会话创建 → 启动 → 输出流订阅 → 二进制帧渲染到 xterm buffer
+ * 覆盖用户路径：会话列表刷新 → 输出流订阅 → 二进制帧渲染到 xterm buffer
  * → 连续性不变量（offset 缺口触发保留游标重订阅）→ 输入回传参数构造（write_to_session
- * 参数）→ 输入标记记录 → 会话终止。
+ * 参数）→ 会话停止（插件命令面 `session.close` + 列表刷新）。
  *
  * 测试 seam：
  * - 只 mock @tauri-apps/api/core 的 invoke 边界 + Channel 类（桌面端终端输出
@@ -31,7 +31,6 @@ import {
   type OutputStreamFrame,
 } from '@/composables/useTerminalOutputStreamChannel'
 import { useSessionStore } from '@/stores/session'
-import { useTerminalInputMarkers } from '@/composables/useTerminalInputMarkers'
 import { logger } from '@/utils/frontendLogger'
 import { makeSessionInfo } from '@/__tests__/fixtures/index'
 
@@ -111,11 +110,8 @@ function installInvokeMock() {
         return Promise.resolve(undefined)
       case 'terminal_channel_ack':
         return Promise.resolve(undefined)
-      case 'create_session_no_start':
-        return Promise.resolve('session-1')
-      case 'start_existing_session':
-        return Promise.resolve(undefined)
-      case 'kill_session':
+      case 'plugin_invoke':
+        // 会话中心插件命令面（停止/读配置）：处理器由用例断言参数，返回空
         return Promise.resolve(undefined)
       case 'list_sessions':
         return Promise.resolve([...sessionDb])
@@ -172,30 +168,28 @@ afterEach(() => {
 // ==================== 场景 ====================
 
 describe('终端流：xterm × useTerminalOutputStreamChannel × useSessionStore × useTerminalInputMarkers', () => {
-  it('会话控制：创建 → 启动（两阶段）→ 终止，invoke 参数与 activeSession 状态联动', async () => {
+  it('会话控制：列表刷新 + 停止会话经插件命令面（session.close），两阶段启动已退役', async () => {
     const sessionStore = useSessionStore()
 
-    // 两阶段启动第一阶段：创建会话（不启动 PTY）；后端 DB 同步出现 starting 会话
-    sessionDb = [makeSessionInfo({ id: 'session-1', status: 'starting' })]
-    const sessionId = await sessionStore.createSession('config-1')
-    expect(sessionId).toBe('session-1')
-    expect(invokeCalls('create_session_no_start')).toEqual([[{ configId: 'config-1' }]])
-    expect(sessionStore.sessions).toHaveLength(1)
-    expect(sessionStore.sessions[0].status).toBe('starting')
-
-    // 第二阶段：启动已创建会话 → 状态 running + activeSession 联动
+    // 引擎事实面：DB 里的 running 会话反射到 store（插件创建即启动，无 starting 中间态）
     sessionDb = [makeSessionInfo({ id: 'session-1', status: 'running' })]
-    await sessionStore.startSession('session-1')
-    expect(invokeCalls('start_existing_session')).toEqual([[{ sessionId: 'session-1' }]])
-    expect(sessionStore.activeSession?.id).toBe('session-1')
-    expect(sessionStore.sessions[0].status).toBe('running')
+    await sessionStore.loadSessions()
+    expect(invokeCalls('list_sessions')).toEqual([[]])
+    expect(sessionStore.sessions.map((s) => `${s.id}:${s.status}`)).toEqual(['session-1:running'])
 
-    // 终止会话 → 列表清空 + activeSession 置空
-    sessionDb = []
-    await sessionStore.killSession('session-1')
-    expect(invokeCalls('kill_session')).toEqual([[{ sessionId: 'session-1' }]])
-    expect(sessionStore.sessions).toHaveLength(0)
-    expect(sessionStore.activeSession).toBeNull()
+    // 停止会话：编排在 com.bedcode.session 插件（session.close），宿主只刷新列表
+    sessionDb = [makeSessionInfo({ id: 'session-1', status: 'stopped' })]
+    await sessionStore.stopSession('session-1')
+    expect(invokeCalls('plugin_invoke')).toEqual([
+      [
+        {
+          pluginId: 'com.bedcode.session',
+          command: 'session.close',
+          args: { sessionId: 'session-1' },
+        },
+      ],
+    ])
+    expect(sessionStore.sessions.map((s) => s.status)).toEqual(['stopped'])
   })
 
   it('输出流渲染：Channel 订阅参数构造 → 二进制帧写入 xterm buffer（含续传帧）', async () => {
@@ -431,23 +425,15 @@ describe('终端流：xterm × useTerminalOutputStreamChannel × useSessionStore
     stream.stop()
   })
 
-  it('输入回传：write_to_session 参数构造 + 输入标记（xterm IMarker）联动', async () => {
+  it('输入回传：write_to_session 参数构造 + resize 参数构造', async () => {
     const term = createTerminal()
     const sessionStore = useSessionStore()
-    const inputMarkers = useTerminalInputMarkers()
     sessionDb = [makeSessionInfo({ id: 'session-1', status: 'running' })]
     await sessionStore.loadSessions()
 
-    // 模拟 TerminalPreview 的 onData 接线：单字符输入 + 回车提交记录标记
-    let currentLine = ''
+    // 模拟 TerminalPreview 的 onData 接线：单字符输入直通会话
     const onData = (data: string) => {
       sessionStore.writeToSession('session-1', data)
-      if (data === '\r' || data === '\n') {
-        inputMarkers.record(term, currentLine)
-        currentLine = ''
-      } else if (data.length === 1 && data.charCodeAt(0) >= 32) {
-        currentLine += data
-      }
     }
 
     onData('e')
@@ -470,15 +456,13 @@ describe('终端流：xterm × useTerminalOutputStreamChannel × useSessionStore
       [{ sessionId: 'session-1', data: 'i' }],
       [{ sessionId: 'session-1', data: '\r' }],
     ])
-    // 输入标记联动：回车记录整行输入
-    expect(inputMarkers.visibleMarkers.value).toHaveLength(1)
-    expect(inputMarkers.visibleMarkers.value[0].text).toBe('echo hi')
-    expect(inputMarkers.visibleMarkers.value[0].line).toBe(0)
 
     // PTY 尺寸同步参数构造（TerminalPreview onResize 的 store 路径；默认 force=false）
     await sessionStore.resizeSession('session-1', 80, 24)
     expect(invokeCalls('resize_session')).toEqual([
       [{ sessionId: 'session-1', cols: 80, rows: 24, force: false }],
     ])
+    // 终端未被输入路径改动（渲染侧只消费输出流）
+    expect(term.buffer.active.cursorY).toBe(0)
   })
 })

@@ -48,7 +48,6 @@ import DesktopLayout from '@/components/DesktopLayout.vue'
 import SplashLoading from '@/components/SplashLoading.vue'
 import FsAuthDialog from '@/components/FsAuthDialog.vue'
 import ExitConfirmModal from '@/components/ExitConfirmModal.vue'
-import { useGlobalNotifications } from '@/composables/useGlobalNotifications'
 import { useTheme } from '@/composables/useTheme'
 import { useFontSize } from '@/composables/useFontSize'
 import { useKeyboardShortcuts } from '@/composables/useKeyboardShortcuts'
@@ -89,10 +88,6 @@ const toastOptions: ToasterProps['toastOptions'] = {
   },
 }
 
-// 全局通知监听
-const { startListening: startGlobalNotifications, stopListening: stopGlobalNotifications } =
-  useGlobalNotifications()
-
 // 键盘快捷键（会话 / 设备配对页已下沉插件，宿主无对应页面，快捷键随之删除）
 useKeyboardShortcuts([
   { key: ',', ctrl: true, handler: () => router.push('/settings') },
@@ -110,7 +105,6 @@ let unlistenCloseRequested: UnlistenFn | null = null
 onMounted(async () => {
   setupTheme()
   setupFontSize()
-  startGlobalNotifications()
 
   // 首帧渲染完成即开始计时，最低展示 900ms 后淡出启动画面
   splashTimer = setTimeout(() => {
@@ -128,7 +122,6 @@ onMounted(async () => {
 onUnmounted(() => {
   if (splashTimer) clearTimeout(splashTimer)
   cleanupTheme()
-  stopGlobalNotifications()
   unlistenCloseRequested?.()
 })
 </script>

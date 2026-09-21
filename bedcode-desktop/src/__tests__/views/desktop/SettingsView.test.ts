@@ -12,7 +12,6 @@ vi.mock('@tauri-apps/api/core', () => ({
     if (cmd === 'get_app_settings') {
       return {
         network: { port: 8765 },
-        session: { default_environment: 'windows', default_command: 'claude' },
         ui: { theme: 'system', language: 'zh-CN', animations_enabled: true },
         log: { level: 'info' },
       }
@@ -40,12 +39,12 @@ vi.mock('@tauri-apps/plugin-os', () => ({
 describe('SettingsView 分组渲染', () => {
   const registry = getPluginRegistry()
 
-  /** 内置分组标题 key（顺序与写死的分组组件一一对应；
-   * 票 14：`settings.pairing.title` 已退役——配对分组改由 com.bedcode.session 贡献） */
+  /** 内置分组标题 key（顺序与写死的分组组件一一对应）；
+   * 已退役内置分组：`settings.pairing.title`（票 14，配对分组改由 com.bedcode.session
+   * 贡献）与 `settings.session.title`（会话默认值分组随域下沉同一插件） */
   const BUILTIN_TITLE_KEYS = [
     'settings.ui.title',
     'settings.linkCrypto.title',
-    'settings.session.title',
     'settings.system.title',
     'settings.log.title',
     'settings.about.title',
@@ -81,7 +80,7 @@ describe('SettingsView 分组渲染', () => {
     registry.clearPlugin('com.bedcode.session')
   })
 
-  it('未注册贡献时渲染 6 个内置分组，标题序列与内置分组定义一致', async () => {
+  it('未注册贡献时渲染 5 个内置分组，标题序列与内置分组定义一致', async () => {
     const wrapper = await mountView()
     expect(titles(wrapper)).toEqual(BUILTIN_TITLES)
   })
@@ -92,12 +91,12 @@ describe('SettingsView 分组渲染', () => {
     // 覆盖 zh-CN / zh / en 三种 locale 取值，避免受设置 store 的语言默认值影响
     for (const locale of ['zh-CN', 'zh', 'en']) {
       i18n.global.mergeLocaleMessage(locale, {
-        'com.bedcode.session.settings.session.title': '终端会话与设备',
+        'com.bedcode.session.pairing.settings.title': '终端会话与设备',
       })
     }
     registry.registerSettingsSection('com.bedcode.session', {
       id: 'session-settings',
-      titleKey: 'settings.session.title',
+      titleKey: 'pairing.settings.title',
       order: 150,
       component: { template: '<div data-testid="plugin-body">plugin body</div>' },
     })
@@ -115,7 +114,7 @@ describe('SettingsView 分组渲染', () => {
     registry.setPluginState('com.bedcode.session', { state: 'Activated' })
     registry.registerSettingsSection('com.bedcode.session', {
       id: 'session-settings',
-      titleKey: 'settings.session.title',
+      titleKey: 'pairing.settings.title',
       order: 150,
       component: { template: '<div data-testid="plugin-body">plugin body</div>' },
     })

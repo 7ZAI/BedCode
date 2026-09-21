@@ -1,14 +1,5 @@
 // ==================== Desktop Types ====================
 
-export interface WslDistro {
-  name: string
-  /** 是否为默认发行版（Rust pty/wsl.rs 恒序列化） */
-  is_default: boolean
-  state: string
-  /** WSL 版本（1/2） */
-  version: number
-}
-
 export interface SessionInfo {
   id: string
   name: string
@@ -40,28 +31,7 @@ export interface SessionConfig {
   autoStart?: boolean
 }
 
-export interface DeviceConnectionInfo {
-  addr: string
-  device_id: string
-  /** 设备指纹，用于与数据库 pairings 记录关联匹配 */
-  fingerprint?: string
-  session_count: number
-}
-
 // ==================== Shared Types ====================
-
-// ANSI Renderer
-export interface AnsiRenderOptions {
-  backgroundColor?: string
-  foregroundColor?: string
-  fontFamily?: string
-  fontSize?: number
-  lineHeight?: number
-  fontWeight?: string | number
-  bold?: boolean
-  italic?: boolean
-  useClasses?: boolean
-}
 
 // Keyboard Shortcuts
 export interface Shortcut {
@@ -74,46 +44,6 @@ export interface Shortcut {
   handler?: () => void
   description?: string
   ignoreInput?: boolean
-}
-
-// QR Code
-export interface QrConnectionInfo {
-  url: string
-  host: string
-  port: number
-  token: string
-  /** 剩余有效时间（秒） */
-  remaining_secs: number
-}
-
-// Session Status Events
-export interface SessionStatusEvent {
-  sessionId: string
-  oldStatus: string | null
-  newStatus: string
-  sessionName: string
-}
-
-export interface SessionRestartEvent {
-  oldSessionId: string
-  newSessionId: string
-  sessionName: string
-}
-
-export interface SessionEventPayload {
-  type: string
-  event_type?: string
-  session?: { id: string; name: string; status: string }
-  device_name?: string
-}
-
-export interface DeviceEventPayload {
-  addr?: string
-  device_id?: string
-  /** 设备指纹（稳定设备身份，后端 device-* 事件均携带；与 DeviceConnectionInfo 同键，用于在线态去重） */
-  fingerprint?: string
-  device_name?: string
-  event?: string
 }
 
 export interface TerminalWindowState {

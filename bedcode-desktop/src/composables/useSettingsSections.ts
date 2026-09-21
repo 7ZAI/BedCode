@@ -14,15 +14,17 @@ import { getPluginRegistry, isContributionActiveState } from '@/plugin/registry'
 import PluginSettingsSection from '@/plugin/components/PluginSettingsSection.vue'
 import SettingsAppearanceSection from '@/components/settings/SettingsAppearanceSection.vue'
 import SettingsLinkCryptoSection from '@/components/settings/SettingsLinkCryptoSection.vue'
-import SettingsSessionSection from '@/components/settings/SettingsSessionSection.vue'
 import SettingsSystemSection from '@/components/settings/SettingsSystemSection.vue'
 import SettingsLoggingSection from '@/components/settings/SettingsLoggingSection.vue'
 import SettingsAboutSection from '@/components/settings/SettingsAboutSection.vue'
 
 /** 内置分组排序槽位 — 区间间隔 100，供贡献分组插入。
  * 「关于」恒在最末（9999），贡献分组缺省 600 时落在「日志」之后、「关于」之前。
- * 票 14：`pairing` 槽位（200）的内置分组已退役，由 `com.bedcode.session` 贡献的
- * 「配对设置」分组占据原位——槽位值保留不复用，防止第三方分组撞位。 */
+ * 退役槽位（内置分组已下沉，槽位值保留不复用，防止第三方分组撞位）：
+ * - `pairing`（200）→ `com.bedcode.session` 贡献的「配对设置」分组（票 14）
+ * - `session`（400）→ 同一插件贡献的「会话」分组（默认执行环境 / 默认启动命令）——
+ *   宿主原内置分组改的是无人消费的 `settings.session.default_*`（失效 UI），
+ *   下沉后写插件存储 `session.formDefaults`，即新建会话表单的真实默认值源 */
 export const BUILTIN_SECTION_ORDERS = {
   appearance: 100,
   pairing: 200,
@@ -96,12 +98,8 @@ export function useSettingsSections(
         component: SettingsLinkCryptoSection,
         props: {},
       },
-      {
-        key: 'session',
-        order: BUILTIN_SECTION_ORDERS.session,
-        component: SettingsSessionSection,
-        props: {},
-      },
+      // 原内置「会话」分组（key: 'session'，order 400）已退役——会话默认值
+      // 改由 com.bedcode.session 贡献的分组（同 order 400）接管，写插件存储
       {
         key: 'system',
         order: BUILTIN_SECTION_ORDERS.system,

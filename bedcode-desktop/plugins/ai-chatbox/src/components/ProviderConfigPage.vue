@@ -18,8 +18,8 @@
         </svg>
         {{
           view === 'list'
-            ? t('desktop.plugin.aiChatbox.backToChat')
-            : t('desktop.plugin.aiChatbox.back')
+            ? t('com.bedcode.ai-chatbox.backToChat')
+            : t('com.bedcode.ai-chatbox.back')
         }}
       </button>
       <h3 class="text-sm font-medium text-[var(--text-primary)]">{{ headerTitle }}</h3>
@@ -44,14 +44,14 @@
           >
             <path stroke-linecap="round" stroke-linejoin="round" d="M12 5v14M5 12h14" />
           </svg>
-          {{ t('desktop.plugin.aiChatbox.addProvider') }}
+          {{ t('com.bedcode.ai-chatbox.addProvider') }}
         </button>
 
         <div
           v-if="providers.length === 0"
           class="mt-8 text-center text-xs text-[var(--text-tertiary)]"
         >
-          {{ t('desktop.plugin.aiChatbox.noProvidersHint') }}
+          {{ t('com.bedcode.ai-chatbox.noProvidersHint') }}
         </div>
 
         <!-- 供应商行：点击进编辑；hover 出现删除 -->
@@ -73,12 +73,12 @@
             <span
               v-if="activeProviderId === p.id"
               class="w-2 h-2 rounded-full bg-brand flex-shrink-0"
-              :title="t('desktop.plugin.aiChatbox.activeProvider')"
+              :title="t('com.bedcode.ai-chatbox.activeProvider')"
             ></span>
             <!-- hover 删除按钮（stop 阻止触发行进编辑） -->
             <button
               class="p-1.5 text-[var(--text-tertiary)] opacity-0 group-hover:opacity-100 hover:text-[var(--color-danger)] rounded transition-colors flex-shrink-0"
-              :title="t('desktop.plugin.aiChatbox.deleteProvider')"
+              :title="t('com.bedcode.ai-chatbox.deleteProvider')"
               @click.stop="askDelete(p)"
             >
               <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -97,7 +97,7 @@
       <!-- 视图二：模板选择（4 预设 + 自定义） -->
       <div v-else-if="view === 'templates'" key="templates" class="flex-1 overflow-y-auto p-4">
         <p class="text-xs text-[var(--text-secondary)] mb-3">
-          {{ t('desktop.plugin.aiChatbox.selectTemplate') }}
+          {{ t('com.bedcode.ai-chatbox.selectTemplate') }}
         </p>
         <div class="grid grid-cols-2 gap-2">
           <button
@@ -129,7 +129,7 @@
               </svg>
             </span>
             <span class="text-sm text-[var(--text-primary)]">{{
-              t('desktop.plugin.aiChatbox.customTemplate')
+              t('com.bedcode.ai-chatbox.customTemplate')
             }}</span>
           </button>
         </div>
@@ -154,8 +154,8 @@
     <!-- 行删除确认（表单内删除走 ProviderForm 自己的弹窗） -->
     <ConfirmDialog
       v-if="deleteTarget"
-      :title="t('desktop.plugin.aiChatbox.confirmDeleteTitle')"
-      :body="t('desktop.plugin.aiChatbox.confirmDeleteBody', { name: deleteTarget.name })"
+      :title="t('com.bedcode.ai-chatbox.confirmDeleteTitle')"
+      :body="t('com.bedcode.ai-chatbox.confirmDeleteBody', { name: deleteTarget.name })"
       @confirm="confirmDelete"
       @cancel="deleteTarget = null"
     />
@@ -215,13 +215,13 @@ const existingNames = computed(() => props.providers.map((p) => p.name))
 
 /** 顶栏标题随视图与模式切换 */
 const headerTitle = computed(() => {
-  if (view.value === 'templates') return t('desktop.plugin.aiChatbox.selectTemplate')
+  if (view.value === 'templates') return t('com.bedcode.ai-chatbox.selectTemplate')
   if (view.value === 'form') {
     return editingMode.value === 'edit'
-      ? t('desktop.plugin.aiChatbox.editProvider')
-      : t('desktop.plugin.aiChatbox.addProvider')
+      ? t('com.bedcode.ai-chatbox.editProvider')
+      : t('com.bedcode.ai-chatbox.addProvider')
   }
-  return t('desktop.plugin.aiChatbox.providerConfig')
+  return t('com.bedcode.ai-chatbox.providerConfig')
 })
 
 /** 返回：表单（添加）→ 模板选择；表单（编辑）→ 列表；模板选择 → 列表；列表 → 聊天 */

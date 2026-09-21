@@ -68,8 +68,8 @@ describe('useSettingsSections', () => {
     usedPluginIds.clear()
   })
 
-  it('未注册贡献时只有内置分组，顺序与改造前逐分组一致（票 14：pairing 分组已退役）', () => {
-    expect(keys()).toEqual(['appearance', 'linkCrypto', 'session', 'system', 'logging', 'about'])
+  it('未注册贡献时只有内置分组，顺序与改造前逐分组一致（退役：pairing 票 14 / session 随域下沉）', () => {
+    expect(keys()).toEqual(['appearance', 'linkCrypto', 'system', 'logging', 'about'])
   })
 
   it('内置分组排序槽位间隔 100，且「关于」恒在最末', () => {
@@ -84,7 +84,6 @@ describe('useSettingsSections', () => {
     expect(keys()).toEqual([
       'appearance',
       'linkCrypto',
-      'session',
       'system',
       'logging',
       'plugin-com.bedcode.session-session-settings',
@@ -99,7 +98,6 @@ describe('useSettingsSections', () => {
       'appearance',
       'plugin-com.bedcode.session-pairing',
       'linkCrypto',
-      'session',
       'plugin-com.bedcode.session-task',
       'system',
       'logging',
@@ -132,8 +130,8 @@ describe('useSettingsSections', () => {
 
     registry.clearPlugin('com.bedcode.session')
     expect(keys()).not.toContain('plugin-com.bedcode.session-session-settings')
-    // 票 14：内置分组共 6 项（原 7 项中的 pairing 分组已退役）
-    expect(keys()).toHaveLength(6)
+    // 内置分组共 5 项（原 7 项中的 pairing「票 14」与 session「随域下沉」已退役）
+    expect(keys()).toHaveLength(5)
   })
 
   it('插件进入 error 态后贡献分组被摘除，恢复激活后重新出现', () => {

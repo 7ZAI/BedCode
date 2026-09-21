@@ -65,7 +65,7 @@
         <button
           class="thinking-toggle"
           :aria-expanded="reasoningExpanded"
-          :title="t('desktop.plugin.aiChatbox.thinkingProcess')"
+          :title="t('com.bedcode.ai-chatbox.thinkingProcess')"
           @click="reasoningExpanded = !reasoningExpanded"
         >
           <svg
@@ -82,7 +82,7 @@
               d="M9 5l7 7-7 7"
             />
           </svg>
-          <span class="truncate">{{ t('desktop.plugin.aiChatbox.thinkingProcess') }}</span>
+          <span class="truncate">{{ t('com.bedcode.ai-chatbox.thinkingProcess') }}</span>
         </button>
         <!-- 思考内容为模型 scratchpad 草稿，非成品 Markdown：纯文本展示（预换行），
              不经过渲染管线，天然免疫 prompt injection 的 HTML 注入 -->
@@ -117,7 +117,7 @@
         >
           <button
             class="p-1 text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] rounded transition-colors"
-            :title="t('desktop.plugin.aiChatbox.copyMessage')"
+            :title="t('com.bedcode.ai-chatbox.copyMessage')"
             @click="copyContent"
           >
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -131,7 +131,7 @@
           </button>
           <button
             class="p-1 text-[var(--text-tertiary)] hover:text-[var(--color-danger)] rounded transition-colors"
-            :title="t('desktop.plugin.aiChatbox.deleteMessage')"
+            :title="t('com.bedcode.ai-chatbox.deleteMessage')"
             @click="$emit('delete', message)"
           >
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -289,13 +289,13 @@ function enhanceCodeBlocks(): void {
     langEl.textContent = lang
     const btn = document.createElement('button')
     btn.className = 'md-copy-btn'
-    btn.textContent = t('desktop.plugin.aiChatbox.copy')
+    btn.textContent = t('com.bedcode.ai-chatbox.copy')
     btn.addEventListener('click', () => {
       const text = code?.innerText ?? ''
       navigator.clipboard.writeText(text).catch(() => {})
-      btn.textContent = t('desktop.plugin.aiChatbox.copied')
+      btn.textContent = t('com.bedcode.ai-chatbox.copied')
       setTimeout(() => {
-        btn.textContent = t('desktop.plugin.aiChatbox.copy')
+        btn.textContent = t('com.bedcode.ai-chatbox.copy')
       }, 1500)
     })
     header.append(langEl, btn)

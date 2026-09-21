@@ -22,11 +22,6 @@ export default {
         'Fingerprint of the local identity key (first 16 hex of SHA-256); verify against the value shown on the mobile device',
       saveFailed: 'Failed to save link encryption settings',
     },
-    session: {
-      title: 'Session Defaults',
-      defaultEnvironment: 'Default Environment',
-      defaultCommand: 'Default Start Command',
-    },
     system: {
       title: 'System Settings',
       preventSleep: 'Prevent System Sleep',
@@ -64,7 +59,6 @@ export default {
       title: 'UI Settings',
     },
     appearance: {
-      title: 'Appearance',
       theme: 'Theme',
       palette: 'Color Palette',
       paletteWarm: 'Warm Workbench',
@@ -83,24 +77,8 @@ export default {
       fontNormal: 'Normal',
       fontLarge: 'Large',
       fontXl: 'Extra Large',
-      terminalCacheCount: 'Terminal Cache Count',
       animations: 'Animations',
       animationsDesc: 'Turn off to disable all page transitions and interaction animations',
-    },
-    connection: {
-      title: 'Connection Settings',
-      autoReconnect: 'Auto Reconnect',
-      keepAlive: 'Keep Alive',
-      reconnectInterval: 'Reconnect Interval (s)',
-      defaultPort: 'Default Port',
-    },
-    notification: {
-      title: 'Notification Settings',
-      notifyOnWaiting: 'Notify on Waiting Input',
-      notifyOnConnection: 'Notify on Connection Change',
-      vibrate: 'Vibrate',
-      notifyInBackground: 'Notify in Background',
-      soundOnTaskComplete: 'Sound on Task Complete',
     },
     about: {
       title: 'About',
@@ -113,23 +91,7 @@ export default {
       downloadingUpdate: 'Downloading update...',
       downloadComplete: 'Download complete, installing...',
       installingUpdate: 'Installing update...',
-      currentVersion: 'Current version',
-      latestVersion: 'Latest version',
       downloadUpdate: 'Update Now',
-      goToDownload: 'Go to Download',
-      cancel: 'Cancel',
-    },
-    actions: {
-      resetSettings: 'Reset Settings',
-      clearAllData: 'Clear All Data',
-      clearDataConfirm: 'Are you sure you want to clear all data? This action cannot be undone.',
-    },
-    browser: {
-      confirmOpen: 'Are you sure you want to open this link in a browser?',
-    },
-    shortcuts: {
-      title: 'Shortcut Settings',
-      description: 'Configure shortcut keys for the terminal panel',
     },
   },
 }

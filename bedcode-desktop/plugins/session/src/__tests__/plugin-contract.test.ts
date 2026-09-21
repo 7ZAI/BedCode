@@ -89,6 +89,8 @@ describe('C1 插件身份五处一致', () => {
       'session:read',
       'session:write',
       'storage',
+      // 票 21（v20 host-task）：git 域 diff_file_tree 三路只读走 host-task 池
+      'task:run',
       'terminal:input',
       'terminal:observe',
       'timer:schedule',
@@ -337,7 +339,7 @@ describe('C3 前端入口契约', () => {
     expect(rec.registeredMessages.map((r) => r.locale).sort()).toEqual(['en', 'zh-CN'])
     expect(rec.registeredMessages[0].keys.length).toBeGreaterThan(40)
     // 票 14/17：四个侧边栏目录（设备与配对 / 连接历史 / 终端会话 / 任务历史）
-    // + 一个设置分组
+    // + 两个设置分组（配对 200「票 14」/ 会话 400「宿主失效分组随域下沉」）
     expect(rec.panels.map((p) => p.id)).toEqual([
       'session.pairing',
       'session.history',
@@ -345,8 +347,8 @@ describe('C3 前端入口契约', () => {
       'session.task-history',
     ])
     expect(rec.panels.map((p) => p.order)).toEqual([100, 101, 200, 210])
-    expect(rec.sections).toHaveLength(1)
-    expect(rec.sections[0].id).toBe('pairing.settings')
+    expect(rec.sections.map((s) => s.id)).toEqual(['pairing.settings', 'session.settings'])
+    expect(rec.sections.map((s) => s.order)).toEqual([200, 400])
     // 贡献面标题取命名空间化后的 i18n key（注册时被宿主静态捕获）
     expect(rec.panels.map((p) => p.title)).toEqual([
       'pairing.sidebar.title',
@@ -362,9 +364,12 @@ describe('C3 前端入口契约', () => {
     await settle()
 
     expect(rec.execute).toHaveBeenCalledWith('session.task.set-platform', { platform: 'linux' })
-    // 入口自身订阅状态/模式两条留痕；常驻挂载的弹窗额外订阅队列与预设变更，
+    // 入口自身订阅状态/模式两条留痕，常驻挂载的弹窗额外订阅队列与预设变更，
+    // 设备上下线通知（宿主 useGlobalNotifications 承接）也在激活期常驻订阅——
     // 故断言的是「激活后可观测到的话题并集」，不是入口单独那两条
     expect([...new Set(rec.events)].sort()).toEqual([
+      'device-connected',
+      'device-disconnected',
       'session:mode-changed',
       'task:preset-changed',
       'task:queue-changed',
@@ -419,6 +424,7 @@ describe('C3 前端入口契约', () => {
         'panel:session.sidebar',
         'panel:session.task-history',
         'section:pairing.settings',
+        'section:session.settings',
         'toolbar:session.task.open-modal',
       ].sort(),
     )

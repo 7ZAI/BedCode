@@ -12,7 +12,7 @@
         }}</span>
         <button
           class="p-1 text-[var(--text-tertiary)] hover:text-[var(--color-danger)] rounded transition-colors flex-shrink-0"
-          :title="t('desktop.plugin.aiChatbox.removeModel')"
+          :title="t('com.bedcode.ai-chatbox.removeModel')"
           @click="removeModel(i)"
         >
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -27,7 +27,7 @@
       </div>
     </div>
     <div v-else class="px-3 py-2 text-xs text-[var(--text-tertiary)]">
-      {{ t('desktop.plugin.aiChatbox.noModels') }}
+      {{ t('com.bedcode.ai-chatbox.noModels') }}
     </div>
 
     <!-- 添加模型 -->
@@ -36,7 +36,7 @@
         v-model="draft"
         type="text"
         class="flex-1 h-[36px] px-3 text-sm bg-[var(--bg-input)] text-[var(--text-primary)] border border-[var(--border-input)] rounded-input placeholder:text-[var(--text-tertiary)] focus:outline-none focus:border-brand transition-colors"
-        :placeholder="t('desktop.plugin.aiChatbox.modelId')"
+        :placeholder="t('com.bedcode.ai-chatbox.modelId')"
         @keydown.enter="addModel"
       />
       <button
@@ -44,7 +44,7 @@
         :disabled="!draft.trim()"
         @click="addModel"
       >
-        {{ t('desktop.plugin.aiChatbox.addModel') }}
+        {{ t('com.bedcode.ai-chatbox.addModel') }}
       </button>
     </div>
   </div>

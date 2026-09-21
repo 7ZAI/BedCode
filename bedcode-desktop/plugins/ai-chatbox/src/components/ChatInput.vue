@@ -24,7 +24,7 @@
       <button
         v-if="streaming"
         class="w-8 h-8 flex-shrink-0 rounded-full flex items-center justify-center bg-[var(--bg-hover)] text-[var(--text-secondary)] hover:bg-[var(--bg-input)] transition-colors"
-        :title="t('desktop.plugin.aiChatbox.stop')"
+        :title="t('com.bedcode.ai-chatbox.stop')"
         @click="$emit('stop')"
       >
         <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
@@ -40,7 +40,7 @@
             ? 'bg-brand text-[var(--color-primary-contrast)] hover:opacity-90'
             : 'bg-[var(--bg-hover)] text-[var(--text-tertiary)]'
         "
-        :title="t('desktop.plugin.aiChatbox.send')"
+        :title="t('com.bedcode.ai-chatbox.send')"
         :disabled="disabled || !canSend"
         @click="send"
       >

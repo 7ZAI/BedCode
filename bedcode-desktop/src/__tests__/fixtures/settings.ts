@@ -7,9 +7,9 @@
  *  不影响序列化，故 fixture 取「全部小节都在」的最大线协议形态）。
  *
  * 消费方差异：前端 stores/settings.ts 的 Settings 类型是 AppConfig 的子集视图
- * （只取 network/session/ui 三个小节；network 又只声明 port/qr_host/prevent_sleep，
- *  qr_host 为前端自建扩展字段，Rust NetworkConfig 无此字段——save 时被 serde
- *  忽略，属既有设计）。channels/terminal/log 前端不消费，fixture 一并建模防漂移。
+ * （只取 network/ui 两个小节；session 段的默认值已归 `com.bedcode.session` 插件
+ *  存储，前端不再持有——本 fixture 仍按 Rust DTO 全量建模防漂移）。
+ *  channels/terminal/log 前端不消费，fixture 一并建模防漂移。
  *
  * 命名规则：serde 默认 snake_case。
  * 对齐机制：DTO_FIELDS 清单（含嵌套小节）+ 工厂内 assertDtoFields 运行时断言。

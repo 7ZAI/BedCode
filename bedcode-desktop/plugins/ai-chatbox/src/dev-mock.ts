@@ -9,159 +9,6 @@
  */
 import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 
-// ==================== 宿主 i18n key 补齐（dev-shell 无宿主 locale，运行时由宿主注入） ====================
-// 与 bedcode-desktop/src/locales/{zh-CN,en}/desktop.ts 的 desktop.plugin.aiChatbox 段同步
-
-const HOST_KEYS_ZH = {
-  desktop: {
-    plugin: {
-      aiChatbox: {
-        noProvider: '未配置模型',
-        configureModel: '配置模型',
-        title: 'AI 对话',
-        newConversation: '新对话',
-        conversations: '对话',
-        noConversations: '暂无对话',
-        noConversationsHint: '点击 + 创建第一个对话',
-        emptyHint: '支持 DeepSeek / 通义千问 / OpenAI / Anthropic 等供应商',
-        rename: '重命名',
-        send: '发送',
-        stop: '停止',
-        model: '模型',
-        regenerate: '重新生成',
-        inputPlaceholder: '输入消息...（Enter 发送，Shift+Enter 换行）',
-        startNewChat: '开始新对话',
-        pleaseConfigure: '请先配置 AI 模型',
-        you: '我',
-        assistant: 'AI',
-        copy: '复制',
-        copyMessage: '复制消息',
-        delete: '删除',
-        deleteMessage: '删除消息',
-        providerConfig: '模型供应商配置',
-        backToChat: '返回聊天',
-        back: '返回',
-        addProvider: '添加供应商',
-        editProvider: '编辑供应商',
-        save: '保存',
-        saveProvider: '保存',
-        deleteProvider: '删除供应商',
-        selectTemplate: '选择模板',
-        customTemplate: '自定义',
-        confirmDeleteTitle: '删除供应商',
-        confirmDeleteBody: '确定删除「{name}」？删除后需重新配置',
-        noProvidersHint: '暂无供应商，点击上方「添加供应商」开始',
-        activeProvider: '当前使用',
-        name: '名称',
-        baseUrl: 'Base URL',
-        apiKey: 'API Key',
-        apiKeyHint: 'API Key 明文存储于本机配置，请妥善保管',
-        show: '显示',
-        hide: '隐藏',
-        modelList: '模型列表',
-        addModel: '添加',
-        modelId: '输入模型 ID 回车添加',
-        noModels: '暂无模型',
-        removeModel: '移除模型',
-        fetchModels: '拉取模型列表',
-        fetchingModels: '拉取中...',
-        fetchModelsFailed: '拉取模型失败',
-        fetchModelsEmpty: '未获取到模型',
-        testConnection: '测试连接',
-        testing: '测试中...',
-        testOk: '连接正常',
-        clear: '清空',
-        cancel: '取消',
-        contextLimitExceeded: '超出上下文长度，请新建对话',
-        authRevoked: '目录授权已失效，请在设置中重新授权',
-        requestFailed: '请求失败',
-        apiKeyRequired: '请先填写 API Key',
-        baseUrlInvalid: 'Base URL 地址无效',
-        rateLimitRetryIn: '供应商限流，{seconds} 秒后自动重试（第 {attempt}/{max} 次）',
-        rateLimitStop: '终止',
-        rateLimitExhausted: '供应商限流：自动重试后仍失败，请稍后重试或更换模型',
-        rateLimitAborted: '已终止限流重试',
-      },
-    },
-  },
-}
-
-const HOST_KEYS_EN = {
-  desktop: {
-    plugin: {
-      aiChatbox: {
-        noProvider: 'No model configured',
-        configureModel: 'Configure Model',
-        title: 'AI Chat',
-        newConversation: 'New Chat',
-        conversations: 'Conversations',
-        noConversations: 'No conversations yet',
-        noConversationsHint: 'Click + to create your first chat',
-        emptyHint: 'Supports DeepSeek / Qwen / OpenAI / Anthropic providers',
-        rename: 'Rename',
-        send: 'Send',
-        stop: 'Stop',
-        model: 'Model',
-        regenerate: 'Regenerate',
-        inputPlaceholder: 'Type a message... (Enter to send, Shift+Enter for newline)',
-        startNewChat: 'Start a new chat',
-        pleaseConfigure: 'Configure an AI provider first',
-        you: 'You',
-        assistant: 'AI',
-        copy: 'Copy',
-        copyMessage: 'Copy message',
-        delete: 'Delete',
-        deleteMessage: 'Delete message',
-        providerConfig: 'Provider Settings',
-        backToChat: 'Back to chat',
-        back: 'Back',
-        addProvider: 'Add Provider',
-        editProvider: 'Edit Provider',
-        save: 'Save',
-        saveProvider: 'Save',
-        deleteProvider: 'Delete Provider',
-        selectTemplate: 'Choose Template',
-        customTemplate: 'Custom',
-        confirmDeleteTitle: 'Delete Provider',
-        confirmDeleteBody: 'Delete "{name}"? You will need to reconfigure it',
-        noProvidersHint: 'No providers yet. Click "Add Provider" to get started',
-        activeProvider: 'Active',
-        name: 'Name',
-        baseUrl: 'Base URL',
-        apiKey: 'API Key',
-        apiKeyHint: 'API key is stored in plain text on this device',
-        show: 'Show',
-        hide: 'Hide',
-        modelList: 'Models',
-        addModel: 'Add',
-        modelId: 'Type a model ID and press Enter',
-        noModels: 'No models yet',
-        removeModel: 'Remove model',
-        fetchModels: 'Fetch Models',
-        fetchingModels: 'Fetching...',
-        fetchModelsFailed: 'Failed to fetch models',
-        fetchModelsEmpty: 'No models returned',
-        testConnection: 'Test Connection',
-        testing: 'Testing...',
-        testOk: 'Connection OK',
-        clear: 'Clear',
-        cancel: 'Cancel',
-        contextLimitExceeded: 'Context length exceeded — start a new conversation',
-        authRevoked: 'Directory authorization revoked — re-authorize in settings',
-        requestFailed: 'Request failed',
-        apiKeyRequired: 'API key is required',
-        baseUrlInvalid: 'Invalid Base URL',
-        rateLimitRetryIn:
-          'Provider rate limited — retrying in {seconds}s (attempt {attempt}/{max})',
-        rateLimitStop: 'Stop',
-        rateLimitExhausted:
-          'Rate limited by provider: retries exhausted — try again later or switch model',
-        rateLimitAborted: 'Rate limit retry stopped',
-      },
-    },
-  },
-}
-
 // ==================== 模拟状态 ====================
 
 interface MockMessage {
@@ -389,7 +236,8 @@ function registerCommands(context: PluginContext): void {
             'API error 429: {"error":{"message":"Rate limit reached for requests. Please try again in 20s","type":"429","code":"rate_limit_exceeded"}}',
           done: true,
         })
-      }, 300) as unknown as number // SAFETY: mock 运行于浏览器（DOM lib），setTimeout 返回 number；断言消除 node types 混入的 Timeout 类型差异（timers 数组存 number）
+      // SAFETY: mock 运行于浏览器（DOM lib），setTimeout 返回 number；断言消除 node types 混入的 Timeout 类型差异（timers 数组存 number）
+      }, 300) as unknown as number
       timers.push(h)
       return { ok: true }
     }
@@ -419,7 +267,8 @@ function registerCommands(context: PluginContext): void {
         })
       }
     }
-    const handle = setInterval(tick, 30) as unknown as number // SAFETY: 同 setTimeout——浏览器环境 setInterval 返回 number，断言消除 node types 的 Timeout 差异
+    // SAFETY: 同 setTimeout——浏览器环境 setInterval 返回 number，断言消除 node types 的 Timeout 差异
+    const handle = setInterval(tick, 30) as unknown as number
     timers.push(handle)
     return { ok: true }
   })
@@ -466,13 +315,6 @@ async function seedMockData(context: PluginContext): Promise<void> {
 export async function registerDevMock(context: PluginContext): Promise<void> {
   if (mockRegistered) return
   mockRegistered = true
-
-  // 补齐宿主 desktop.plugin.aiChatbox 文案（真实运行时由宿主注入）
-  const hostI18n = context.i18n.getI18n()
-  if (hostI18n?.global?.mergeLocaleMessage) {
-    hostI18n.global.mergeLocaleMessage('zh-CN', HOST_KEYS_ZH)
-    hostI18n.global.mergeLocaleMessage('en', HOST_KEYS_EN)
-  }
 
   registerCommands(context)
 

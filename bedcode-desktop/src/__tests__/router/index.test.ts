@@ -15,11 +15,12 @@ describe('Router Configuration', () => {
   })
 
   describe('route definitions', () => {
-    it('should have root route redirecting to server', () => {
+    it('should have root route redirecting to plugins', () => {
       const route = router.getRoutes().find((r) => r.path === '/')
 
       expect(route).toBeDefined()
-      expect(route?.redirect).toBe('/server')
+      // 服务器页已无侧边栏入口（服务器常驻不可开关），落地页取插件管理
+      expect(route?.redirect).toBe('/plugins')
     })
 
     it('should have server route', () => {

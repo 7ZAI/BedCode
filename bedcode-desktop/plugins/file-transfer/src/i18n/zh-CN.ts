@@ -187,6 +187,10 @@ const zhCN: MessageSchema = {
   'transfer.eta.seconds': '剩 {count} 秒',
   'transfer.eta.minutes': '剩 {count} 分 {seconds} 秒',
   'transfer.eta.hours': '剩 {count} 小时 {minutes} 分',
+
+  // ==================== 全局通知（文案逐字取自宿主 `common.notification.*`） ====================
+  'transfer.notification.peerConnected': '"{name}" 已建立连接',
+  'transfer.notification.peerDisconnected': '"{name}" 已断开连接',
 }
 
 export default zhCN

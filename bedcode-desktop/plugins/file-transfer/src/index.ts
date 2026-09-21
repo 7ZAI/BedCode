@@ -9,9 +9,14 @@ import ConsentDialog from './components/ConsentDialog.vue'
 import { messages } from './i18n'
 import styles from './styles.css?inline'
 import { watch } from 'vue'
-import type { PluginContext, PluginDialogHandle } from '@binblink/bedcode-plugin-sdk-desktop'
+import type {
+  Disposable,
+  PluginContext,
+  PluginDialogHandle,
+} from '@binblink/bedcode-plugin-sdk-desktop'
 import peerDevMock from './devMock'
 import { useConsent, type ConsentController } from './composables/useConsent'
+import { startPeerNotifications } from './notifications'
 
 // dev-shell 领域种子数据（SDK PluginDevMock 协议；真实宿主忽略）
 export const devMock = peerDevMock
@@ -23,6 +28,8 @@ let stopLocaleWatch: (() => void) | null = null
 let consentController: ConsentController | null = null
 let stopConsentWatch: (() => void) | null = null
 let consentDialog: PluginDialogHandle | null = null
+/** 对等连接通知订阅句柄（激活期常驻，停用时注销） */
+let peerNotifications: Disposable | null = null
 
 /**
  * 注册侧边栏面板
@@ -101,6 +108,10 @@ export async function activate(context: PluginContext): Promise<void> {
     { immediate: true },
   )
 
+  // 对等连接上下线通知：对等链路是本插件的业务事实，通知随插件归属
+  //（宿主 `useGlobalNotifications` 已退役，不再替本域弹 toast）
+  peerNotifications = startPeerNotifications(context)
+
   console.log('[File Transfer] Plugin activated (wasm mode)')
 }
 
@@ -113,5 +124,7 @@ export async function deactivate(): Promise<void> {
   consentDialog = null
   consentController?.stop()
   consentController = null
+  peerNotifications?.dispose()
+  peerNotifications = null
   console.log('[File Transfer] Plugin deactivated')
 }
