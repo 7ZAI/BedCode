@@ -1184,21 +1184,17 @@ mod tests {
 
             let storage = Arc::new(PluginStorage::new(db.clone()));
 
-            let resource_dir = Arc::new(std::path::PathBuf::from("."));
-            // 会话管理器与会话配置管理器共用同一内核库（**生产同构**：两端都包同一
-            // 主库）。票 10 起这是硬要求——宿主 `restart_session` 经
-            // `SessionStorage::get_config` 读配置（插件编排重启的执行端），配置面
-            // 写入的行必须对它可见，否则重启恒报 `Config not found`；schema 也必须
-            // 建立，否则查 `session_configs` 报 `no such table`（票 07 的旧教训）。
+            // 配置管理器持一个建好 schema 的内核库：票 02 的 legacy 迁移通道经
+            // `host-session.config-*` 读 `session_configs`，表不存在即报
+            // `no such table`（票 07 的旧教训）。会话管理器自 v21 起无库依赖
+            // （内核不再读配置表），故此处不再共库。
             let kernel_db = Arc::new(Mutex::new({
                 let db = Database::new(&std::path::PathBuf::from(":memory:")).unwrap();
                 db.init_schema().unwrap();
                 db
             }));
-            let session_manager = Arc::new(SessionManager::new_with_handlers(
-                Arc::new(crate::pty::PtySessionHandler::new()),
-                resource_dir.clone(),
-            ));
+            let session_manager =
+                Arc::new(SessionManager::new_with_handlers(Arc::new(crate::pty::PtySessionHandler::new())));
 
             let config_manager = Arc::new(SessionConfigManager::new(kernel_db));
 

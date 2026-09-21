@@ -287,7 +287,7 @@ pub fn run() {
             // 系统唤醒时强制窗口重绘（详见 system::power_wake 模块文档）
             crate::system::power_wake::spawn_wake_monitor(app_handle.clone());
 
-            // 保存 resource_dir 供后续会话创建时使用
+            // 保存 resource_dir 供 AppContext 与插件资源加载使用
             let resource_dir = app_handle.path().resource_dir().expect("Failed to get resource dir");
 
             // 解析桌面端插件目录
@@ -388,7 +388,7 @@ pub fn run() {
             let system_info = Arc::new(system::info::SystemInfo::collect());
 
             let resource_dir_arc = Arc::new(resource_dir);
-            let session_manager = Arc::new(session::SessionManager::new(resource_dir_arc.clone()));
+            let session_manager = Arc::new(session::SessionManager::new());
             let config_manager = Arc::new(session::SessionConfigManager::new(db.clone()));
             // app_handle_arc 需在 plugin_host 之前创建，因为 PluginHost::new() 需要它构建 HostContextFns
             let app_handle_arc = Arc::new(app_handle.clone());

@@ -496,7 +496,7 @@ mod tests {
             crate::db::Database::new(Path::new(":memory:")).expect("shared db"),
         ));
         shared_db.lock().await.init_schema().expect("init schema");
-        let sm = Arc::new(SessionManager::new(Arc::new(std::path::PathBuf::from("."))));
+        let sm = Arc::new(SessionManager::new());
         let cm = Arc::new(SessionConfigManager::new(Arc::clone(&shared_db)));
         let fake_static: &'static FakeBroadcaster = Box::leak(Box::new(FakeBroadcaster::new()));
         let ws: &'static (dyn SyncBroadcaster + Send + Sync) = fake_static;

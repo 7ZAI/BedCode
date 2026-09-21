@@ -8,7 +8,6 @@ use crate::events::DesktopSyncEvent;
 use crate::pty::{PtyHandler, PtySessionHandler};
 use crate::session::session_lifecycle::SessionLifecycleEvent;
 use crate::session::{
-    event_bus::{DefaultSessionEventBus, SessionEventBus},
     input_line::{SessionInputListener, SubmittedLineTracker},
     session_components::{
         CanonicalRendererRegistry, DefaultCanonicalRendererRegistry, DefaultPtyRegistry, DefaultSessionInfoRegistry,
@@ -18,10 +17,10 @@ use crate::session::{
     session_output::GlobalOutputManager,
 };
 use crate::session::{SessionInfo, SessionInfoView, SessionStatusEvent};
+use crate::system::config::AppConfig;
 use crate::system::error_boundary::spawn_with_error_boundary;
 use crate::Result;
 use chrono::Utc;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
@@ -37,17 +36,14 @@ pub struct SessionManager {
     session_info: Arc<DefaultSessionInfoRegistry>,
     /// 正统渲染端注册表（每会话 PTY 尺寸归属端，尺寸裁决 + 背压门控权威）
     canonical_renderer: Arc<DefaultCanonicalRendererRegistry>,
-    /// 事件总线
-    event_bus: Arc<DefaultSessionEventBus>,
+    /// 会话状态变更广播（前端事件转发与 WS 通道经 [`Self::subscribe_status`] 订阅）
+    status_tx: broadcast::Sender<SessionStatusEvent>,
     /// PTY 处理器
     pty_handler: Arc<PtySessionHandler>,
     /// 运行标志
     running: Arc<AtomicBool>,
     /// 同步事件发送器（用于向客户端广播增量数据）
     sync_tx: RwLock<Option<broadcast::Sender<DesktopSyncEvent>>>,
-    /// 资源目录路径（用于项目级 hooks 脚本复制）
-    #[allow(dead_code)] // 预留字段：公开构造参数,后续用于项目级 hooks 脚本复制
-    resource_dir: Arc<PathBuf>,
     /// 会话生命周期监听器注册表
     lifecycle_listeners: Arc<RwLock<Vec<Arc<dyn SessionLifecycleListener>>>>,
     /// 会话输入监听器注册表（提交输入行观察，见 ADR 0001）
@@ -68,24 +64,24 @@ pub struct SessionManager {
 impl SessionManager {
     /// 获取会话状态变化广播发送器
     pub fn status_tx(&self) -> broadcast::Sender<SessionStatusEvent> {
-        self.event_bus.status_sender()
+        self.status_tx.clone()
     }
 
     /// 创建新的 Session Manager（使用具体实现）
     ///
     /// 无库依赖：v21 起内核不再读会话配置表（命名唯一化 / config→launch 映射 /
     /// 重启执行器全部归插件），故不再注入 `SessionStorage`。
-    pub fn new(resource_dir: Arc<PathBuf>) -> Self {
+    pub fn new() -> Self {
         let pty_handler = Arc::new(PtySessionHandler::new());
-        Self::new_with_handlers(pty_handler, resource_dir)
+        Self::new_with_handlers(pty_handler)
     }
 
     /// 创建新的 Session Manager（使用具体类型注入）
-    pub fn new_with_handlers(pty_handler: Arc<PtySessionHandler>, resource_dir: Arc<PathBuf>) -> Self {
+    pub fn new_with_handlers(pty_handler: Arc<PtySessionHandler>) -> Self {
         let pty_registry = Arc::new(DefaultPtyRegistry::new());
         let session_info = Arc::new(DefaultSessionInfoRegistry::new());
         let canonical_renderer = Arc::new(DefaultCanonicalRendererRegistry::new());
-        let event_bus = Arc::new(DefaultSessionEventBus::new());
+        let (status_tx, _) = broadcast::channel(AppConfig::global().channels.status_broadcast_capacity);
         let running = Arc::new(AtomicBool::new(true));
         let lifecycle_listeners = Arc::new(RwLock::new(Vec::new()));
         let input_listeners = Arc::new(RwLock::new(Vec::new()));
@@ -94,11 +90,10 @@ impl SessionManager {
             pty_registry,
             session_info,
             canonical_renderer,
-            event_bus,
+            status_tx,
             pty_handler,
             running,
             sync_tx: RwLock::new(None),
-            resource_dir,
             lifecycle_listeners,
             input_listeners,
             submitted_line_tracker: SubmittedLineTracker::new(),
@@ -401,7 +396,7 @@ impl SessionManager {
     /// 启动生命周期处理器
     async fn start_lifecycle_handler(&self, session_id: &str) {
         let session_info = self.session_info.clone();
-        let status_tx = self.event_bus.status_sender();
+        let status_tx = self.status_tx.clone();
         let pty_registry = self.pty_registry.clone();
         let line_tracker = self.submitted_line_tracker.clone();
         let sid = session_id.to_string();
@@ -682,7 +677,7 @@ impl SessionManager {
             .await;
 
         // 发送状态变化事件
-        let _ = self.event_bus.status_sender().send(SessionStatusEvent {
+        let _ = self.status_tx.send(SessionStatusEvent {
             session_id: session_id.to_string(),
             old_status: Some(SessionStatus::Running),
             new_status: SessionStatus::Stopped,
@@ -755,7 +750,7 @@ impl SessionManager {
 
     /// 订阅会话状态变化
     pub fn subscribe_status(&self) -> broadcast::Receiver<SessionStatusEvent> {
-        self.event_bus.status_sender().subscribe()
+        self.status_tx.subscribe()
     }
 
     /// 获取会话状态
@@ -766,23 +761,6 @@ impl SessionManager {
     /// 更新会话状态
     pub async fn update_session_status(&self, session_id: &str, status: SessionStatus) {
         self.session_info.update_status(session_id, status).await;
-    }
-
-    /// 清理已停止的会话
-    pub async fn cleanup_stopped_sessions(&self) {
-        let sessions = self.session_info.list().await;
-        let stopped_ids: Vec<String> = sessions
-            .iter()
-            .filter(|info| info.status == SessionStatus::Stopped)
-            .map(|info| info.id.clone())
-            .collect();
-
-        for id in stopped_ids {
-            let _ = self.pty_registry.remove(&id).await;
-            let _ = self.session_info.remove(&id).await;
-            self.canonical_renderer.clear(&id).await;
-            tracing::debug!(session_id = %id, "Cleaned up stopped session");
-        }
     }
 
     /// 关闭 SessionManager，停止所有会话
@@ -804,7 +782,7 @@ impl SessionManager {
 
 impl Default for SessionManager {
     fn default() -> Self {
-        Self::new(Arc::new(std::path::PathBuf::from(".")))
+        Self::new()
     }
 }
 

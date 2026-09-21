@@ -124,7 +124,7 @@ async fn init_test_app_context() {
         std::fs::create_dir_all(&plugins_dir).expect("create temp plugins dir failed");
 
         // 会话管理器（v21 无库依赖：会话配置/launch 映射归插件，内核不再注入存储）
-        let session_manager = Arc::new(SessionManager::new(Arc::new(PathBuf::from("."))));
+        let session_manager = Arc::new(SessionManager::new());
         let config_manager = Arc::new(SessionConfigManager::new(db.clone()));
         let plugin_host = Arc::new(
             PluginHost::new(
