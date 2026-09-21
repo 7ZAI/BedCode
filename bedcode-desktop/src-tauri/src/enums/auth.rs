@@ -126,12 +126,18 @@ mod tests {
     /// snake_case 标签锁（跨端契约：移动端 TS 依赖这些字面量）
     #[test]
     fn auth_stage_wire_labels_locked() {
-        assert_eq!(serde_json::to_string(&AuthStage::Authenticated).unwrap(), "\"authenticated\"");
+        assert_eq!(
+            serde_json::to_string(&AuthStage::Authenticated).unwrap(),
+            "\"authenticated\""
+        );
         assert_eq!(
             serde_json::to_string(&AuthStage::ExchangeCertificate).unwrap(),
             "\"exchange_certificate\""
         );
-        assert_eq!(serde_json::to_string(&AuthStage::Reauthenticate).unwrap(), "\"reauthenticate\"");
+        assert_eq!(
+            serde_json::to_string(&AuthStage::Reauthenticate).unwrap(),
+            "\"reauthenticate\""
+        );
     }
 
     /// 未知 variant 反序列化拒绝（协议错位不得静默吞掉）

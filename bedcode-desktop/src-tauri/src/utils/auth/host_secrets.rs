@@ -43,7 +43,12 @@ impl HostSecretStore {
     /// 时返回既有值，不重置。
     pub(crate) fn get_or_generate(&self, key: &str, len: usize) -> Result<Vec<u8>, String> {
         // 缓存读（热路径：JwtService 每请求构造，命中后零 DB 访问）
-        if let Some(v) = self.cache.read().map_err(|e| format!("secret cache poisoned: {}", e))?.get(key) {
+        if let Some(v) = self
+            .cache
+            .read()
+            .map_err(|e| format!("secret cache poisoned: {}", e))?
+            .get(key)
+        {
             return Ok(v.clone());
         }
 

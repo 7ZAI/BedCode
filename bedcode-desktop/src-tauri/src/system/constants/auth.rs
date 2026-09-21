@@ -1,13 +1,11 @@
-//! 认证相关常量（JWT / 配对 / QR Token）
+//! 认证相关常量（JWT / 配对）
 
 /// JWT 签发者标识
 pub const JWT_ISSUER: &str = "BedCode";
 
-/// 配对码位数
-pub const PAIRING_CODE_DIGITS: usize = 6;
-
-/// 配对码有效期（秒）
+/// 配对码有效期缺省（秒）
+///
+/// 真源与策略在 `com.bedcode.session` 插件；宿主这边只剩一个用途：
+/// `host-auth` 记录面的 `pairing_code_ttl` 设置缺省（`host_impl/config.rs`），
+/// 与插件侧 `pairing/code.rs::PAIRING_CODE_TTL_SECS` 同值对齐。
 pub const PAIRING_CODE_TTL_SECS: u64 = 60;
-
-/// QR Token 随机字节数（128-bit = 32 hex 字符）
-pub const QR_TOKEN_BYTES: usize = 16;

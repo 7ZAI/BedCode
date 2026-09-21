@@ -376,8 +376,8 @@ pub(crate) fn auth_trusted_device_upsert(
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_AUTH, "host_auth_trusted_device_upsert") {
         return Err("permission denied".to_string());
     }
-    let record: serde_json::Value = serde_json::from_str(record_json)
-        .map_err(|e| format!("auth error: invalid record json: {}", e))?;
+    let record: serde_json::Value =
+        serde_json::from_str(record_json).map_err(|e| format!("auth error: invalid record json: {}", e))?;
     let device_name = record
         .get("deviceName")
         .and_then(|v| v.as_str())
@@ -446,11 +446,16 @@ pub(crate) fn auth_connection_history_record(
     plugin_id: &str,
     record_json: &str,
 ) -> Result<(), String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_AUTH, "host_auth_connection_history_record") {
+    if !super::check_permission(
+        host_ctx,
+        plugin_id,
+        PERMISSION_AUTH,
+        "host_auth_connection_history_record",
+    ) {
         return Err("permission denied".to_string());
     }
-    let record: serde_json::Value = serde_json::from_str(record_json)
-        .map_err(|e| format!("auth error: invalid record json: {}", e))?;
+    let record: serde_json::Value =
+        serde_json::from_str(record_json).map_err(|e| format!("auth error: invalid record json: {}", e))?;
     let fingerprint = record
         .get("fingerprint")
         .and_then(|v| v.as_str())
@@ -471,13 +476,8 @@ pub(crate) fn auth_connection_history_record(
     let db = host_ctx.db.clone();
     block_on_async(async move {
         let db = db.lock().await;
-        db.record_connection_event_by_fingerprint(
-            &fingerprint,
-            &method,
-            &result,
-            address.as_deref(),
-        )
-        .map_err(|e| format!("database error: {}", e))
+        db.record_connection_event_by_fingerprint(&fingerprint, &method, &result, address.as_deref())
+            .map_err(|e| format!("database error: {}", e))
     })?;
     Ok(())
 }
@@ -488,7 +488,12 @@ pub(crate) fn auth_biometric_credential_bound(
     plugin_id: &str,
     fingerprint: &str,
 ) -> Result<bool, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_AUTH, "host_auth_biometric_credential_bound") {
+    if !super::check_permission(
+        host_ctx,
+        plugin_id,
+        PERMISSION_AUTH,
+        "host_auth_biometric_credential_bound",
+    ) {
         return Err("permission denied".to_string());
     }
     let db = host_ctx.db.clone();
@@ -512,7 +517,12 @@ pub(crate) fn auth_biometric_verify_signature(
     message: &str,
     signature: &str,
 ) -> Result<bool, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_AUTH, "host_auth_biometric_verify_signature") {
+    if !super::check_permission(
+        host_ctx,
+        plugin_id,
+        PERMISSION_AUTH,
+        "host_auth_biometric_verify_signature",
+    ) {
         return Err("permission denied".to_string());
     }
     let db = host_ctx.db.clone();
@@ -544,7 +554,12 @@ pub(crate) fn auth_biometric_credential_bind(
     fingerprint: &str,
     public_key: &str,
 ) -> Result<bool, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_AUTH, "host_auth_biometric_credential_bind") {
+    if !super::check_permission(
+        host_ctx,
+        plugin_id,
+        PERMISSION_AUTH,
+        "host_auth_biometric_credential_bind",
+    ) {
         return Err("permission denied".to_string());
     }
     let db = host_ctx.db.clone();
@@ -603,8 +618,7 @@ pub(crate) fn auth_device_token_verify(
     }
     let jwt = crate::utils::auth::jwt::JwtService::new();
     match jwt.verify_token_with_expiry(token) {
-        Ok(claims) => serde_json::to_string(&claims)
-            .map_err(|e| format!("auth error: claims serialize failed: {}", e)),
+        Ok(claims) => serde_json::to_string(&claims).map_err(|e| format!("auth error: claims serialize failed: {}", e)),
         Err(e) => Err(match e {
             JwtError::TokenExpired => "expired".to_string(),
             _ => "invalid".to_string(),
@@ -613,10 +627,7 @@ pub(crate) fn auth_device_token_verify(
 }
 
 /// 链路身份 Kd 公钥材料读取（`link_crypto::identity_parts` 语义）；未就绪 → None
-pub(crate) fn auth_link_identity_parts(
-    host_ctx: &WasmHostContext,
-    plugin_id: &str,
-) -> Result<Option<String>, String> {
+pub(crate) fn auth_link_identity_parts(host_ctx: &WasmHostContext, plugin_id: &str) -> Result<Option<String>, String> {
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_AUTH, "host_auth_link_identity_parts") {
         return Err("permission denied".to_string());
     }
