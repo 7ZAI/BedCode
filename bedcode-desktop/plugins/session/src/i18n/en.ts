@@ -53,6 +53,8 @@ const en: MessageSchema = {
   'session.terminal.restart': 'Restart Session',
   'session.terminal.opening': 'Opening terminal window...',
   'session.terminal.openFailed': 'Failed to open terminal window',
+  'session.terminal.rendererDesktop': 'Desktop',
+  'session.terminal.rendererMobile': 'Mobile',
 
   // ==================== Operating overlay ====================
   'session.operating.starting': 'Starting session...',

@@ -52,6 +52,8 @@ const zhCN: MessageSchema = {
   'session.terminal.restart': '重启会话',
   'session.terminal.opening': '正在打开终端窗口...',
   'session.terminal.openFailed': '打开终端窗口失败',
+  'session.terminal.rendererDesktop': '桌面',
+  'session.terminal.rendererMobile': '移动端',
 
   // ==================== 操作中遮罩 ====================
   'session.operating.starting': '正在启动会话...',

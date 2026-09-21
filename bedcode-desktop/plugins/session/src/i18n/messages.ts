@@ -56,6 +56,8 @@ export type MessageSchema = {
   'session.terminal.restart': string
   'session.terminal.opening': string
   'session.terminal.openFailed': string
+  'session.terminal.rendererDesktop': string
+  'session.terminal.rendererMobile': string
 
   // ==================== 操作中遮罩 ====================
   'session.operating.starting': string
