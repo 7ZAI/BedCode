@@ -4,6 +4,30 @@
 //! 经 `use super::*` 可见）；fixture 互斥与产物构建语义不变。
 
 use super::*;
+
+/// 经插件命令面向**配置真源**（插件私有库）播种一条配置 → 写入后的配置
+///
+/// 测试播种必须落真源：v21 起主库 `session_configs` 只剩 legacy 迁移通道（已无写者），
+/// 插件侧解析链（task 域 agent / workingDir 判定、scheduled → launch spec）读的是私有库。
+/// 只写主库的 fixture 对解析链不可见，会让用例测到一个生产里不存在的形状。
+async fn seed_config_in_plugin_store(
+    plugin: &mut LoadedWasmPlugin,
+    name: &str,
+    working_dir: &str,
+    command: &str,
+) -> crate::db::SessionConfig {
+    let draft = serde_json::json!({
+        "name": name,
+        "environment": "linux",
+        "workingDir": working_dir,
+        "command": command,
+    });
+    let out = plugin
+        .invoke_command("session.config.upsert", &draft.to_string())
+        .expect("seed config via plugin command");
+    serde_json::from_str(&out).expect("seeded config json")
+}
+
 #[test]
 
 fn test_session_plugin_artifact_lifecycle() {
@@ -319,22 +343,14 @@ fn test_session_task_domain_closed_loop() {
     // 6. 状态推进序列（票 15 的对照核心）：受支持 agent 会话收到提交输入 →
     //    任务行 in_progress → 注解槽投影；会话 Stopped → 兜底中断 interrupted
     //
-    // 播种走内核真源（配置 + 会话），start=false 故不 spawn 进程：本用例只推进
-    // 状态机，不需要真实 PTY。
+    // 播种走真源（配置在插件私有库 + 会话在内核注册表），start=false 故不 spawn 进程：
+    // 本用例只推进状态机，不需要真实 PTY。
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     let (annotations_after_input, annotations_after_stopped, status_after_stopped) = rt.block_on(async {
-        let cm = host_ctx.config_manager.clone();
         let sm = host_ctx.session_manager.clone();
 
-        let config = cm
-            .create_config(
-                "任务域探针".to_string(),
-                "linux".to_string(),
-                "/tmp".to_string(),
-                "claude".to_string(),
-            )
-            .await
-            .expect("seed claude config");
+        // agent 判定读配置真源的 command（claude → 受支持 agent → 建任务行）
+        let config = seed_config_in_plugin_store(&mut plugin, "任务域探针", "/tmp", "claude").await;
 
         let sid = sm
             .create_session_from_spec(
@@ -564,22 +580,12 @@ fn test_session_task_http_and_scheduled_closed_loop() {
         "HTTP 入队项必须能从 HTTP 列表读回（同一私有库）, got: {r}"
     );
 
-    // 4. 定时任务：HTTP create → list 可见 pending；配置播种走内核主库（session_create
-    //    的解析链与搬迁前同形，见 task/scheduled.rs 模块文档）
+    // 4. 定时任务：HTTP create → list 可见 pending；配置播种走插件真源
+    //    （scheduled → launch spec 的解析链读私有库，见 task/scheduled.rs 模块文档）
     let rt = tokio::runtime::Runtime::new().expect("runtime");
-    let config_id = rt.block_on(async {
-        host_ctx
-            .config_manager
-            .create_config(
-                "定时探针".to_string(),
-                "linux".to_string(),
-                "/tmp".to_string(),
-                "claude".to_string(),
-            )
-            .await
-            .expect("seed scheduled config")
-            .id
-    });
+    let config_id = rt
+        .block_on(async { seed_config_in_plugin_store(&mut plugin, "定时探针", "/tmp", "claude").await })
+        .id;
 
     let r = http_call(
         &mut plugin,
@@ -1386,8 +1392,8 @@ fn test_session_config_api_closed_loop() {
 /// 3. 经插件命令面 `session.config.list` 观测真源：两条 legacy 逐字段一致 + 插件侧业务排序
 /// 4. 再往 legacy 追加一条 + 重激活 → 真源**不重复导入**（marker 一次性语义；否则
 ///    「插件侧删除配置 → 下次激活被 legacy 复活」会让删除失效）
-/// 5. 经宿主桥接新建 → 只落真源（v21 投影停写：内核创建/重启执行器已退役）
-/// 6. 注销互调面 → 配置面显性报错（插件必需，无宿主降级）
+/// 5. 经插件命令面新建 → 只落真源（v21 投影停写：内核创建/重启执行器已退役）
+/// 6. 收尾注销（配置面的「插件必需」已是结构保证：宿主侧无配置调用路径）
 ///
 /// 私有库经 `plugin_db_root()` 注入（无头上下文无 AppHandle，见该字段文档）；
 /// 用例开始前清空本插件私有库目录，保证 marker 状态干净（同进程重复跑不漂移）。
@@ -1441,23 +1447,31 @@ fn test_session_config_private_store_closed_loop() {
             false,
         ))
         .expect("seed legacy a");
-        // legacy B 用 `upsert_config` 播种：宿主 `create_config_full` 的
+        // legacy B 补齐 wslDistro / autoStart：宿主 `create_config_full` 的
         // `_wsl_distro` / `_auto_start` 参数**被忽略**（既有缺陷：改造前经命令面
-        // 建配置同样丢 wslDistro / autoStart），而真实行可由 update 路径带上——
-        // 故这里用保留了完整字段的写入面构造，迁移必须逐字段搬运
-        let now = chrono::Utc::now();
-        let legacy_b = block_on_async(cm.upsert_config(crate::db::SessionConfig {
-            id: "legacy-b".to_string(),
-            name: "Legacy B".to_string(),
-            environment: "wsl2".to_string(),
-            wsl_distro: Some("Ubuntu".to_string()),
-            working_dir: "/srv/b".to_string(),
-            command: "zsh".to_string(),
-            auto_start: true,
-            created_at: now,
-            updated_at: now,
-        }))
+        // 建配置同样丢这两个字段），而 update 面保留它们——故先建后改造出真实的
+        // 存量行形状，迁移必须逐字段搬运
+        let legacy_b_draft = block_on_async(cm.create_config_full(
+            "Legacy B".to_string(),
+            "wsl2".to_string(),
+            Some("Ubuntu".to_string()),
+            "/srv/b".to_string(),
+            "zsh".to_string(),
+            true,
+        ))
         .expect("seed legacy b");
+        let legacy_b = block_on_async(cm.update_config_with_source(
+            &legacy_b_draft.id,
+            None,
+            None,
+            Some("Ubuntu".to_string()),
+            None,
+            None,
+            Some(true),
+            None,
+        ))
+        .expect("complete legacy b fields");
+        assert_eq!(legacy_b.id, legacy_b_draft.id, "补齐字段不换 id（迁移按 id 比对）");
 
         // ==================== 2. 激活（建表 + 迁移） ====================
         let instances = Arc::new(RwLock::new(HashMap::new()));
@@ -1524,29 +1538,21 @@ fn test_session_config_private_store_closed_loop() {
             "marker 已在 → 重激活不得再导入（否则插件侧删除会被 legacy 复活）, got: {listed}"
         );
 
-        // ==================== 5. 桥接新建 → 只落真源（v21 投影已退役） ====================
-        let created = crate::utils::session_config_bridge::create_config(
-            &host_ctx,
-            "Bridge New".to_string(),
-            "linux".to_string(),
-            None,
-            "/srv/bridge".to_string(),
-            "bash".to_string(),
-        )
-        .await
-        .expect("bridge create");
+        // ==================== 5. 插件命令面新建 → 只落真源（v21 投影已退役） ====================
+        let created =
+            seed_config_in_plugin_store(&mut *session.lock().await, "Bridge New", "/srv/bridge", "bash").await;
         assert_eq!(created.id.len(), 36, "id 由插件生成（UUID v4 形态）");
 
         let listed = session
             .lock()
             .await
             .invoke_command("session.config.list", "{}")
-            .expect("session.config.list after bridge create");
+            .expect("session.config.list after plugin create");
         let rows: Vec<serde_json::Value> = serde_json::from_str(&listed).expect("config list json");
-        assert_eq!(rows.len(), 3, "真源必须含桥接新建的配置, got: {listed}");
+        assert_eq!(rows.len(), 3, "真源必须含新建的配置, got: {listed}");
 
         // v21：主库投影停写（内核创建/重启执行器已退役，投影无读者）——
-        // 桥接新建只落插件私有库，宿主不再持有业务副本
+        // 插件侧新建只落私有库，宿主不再持有业务副本
         assert!(
             block_on_async(cm.get_config(&created.id))
                 .expect("projection get")
@@ -1554,16 +1560,11 @@ fn test_session_config_private_store_closed_loop() {
             "投影必须停写（宿主不留业务副本）"
         );
 
-        // ==================== 6. 插件必需：注销互调面 → 配置面显性报错 ====================
-        host_ctx.api_registry().unregister(SESSION_ID);
-        let err = crate::utils::session_config_bridge::list_configs(&host_ctx)
-            .await
-            .expect_err("插件不可用 → 配置面必须显性报错（无宿主降级）");
-        assert!(
-            err.to_string().contains("session plugin not active"),
-            "错误必须指明插件未激活, got: {err}"
-        );
-
+        // ==================== 6. 收尾 ====================
+        // 「插件必需、无宿主降级」在配置面已是结构保证：宿主侧不存在任何配置调用
+        // 路径（`session_config_bridge` 随票 05 配置命令面注销失去主体，本批删除）。
+        // 原「注销互调面 → 显性报错」断言测的就是该桥接，无主体可测故撤除；
+        // 互调失败的显性报错仍由 session_create / session_action 两条桥的用例覆盖。
         session.lock().await.deactivate().expect("final deactivate");
     });
 }
@@ -1683,16 +1684,8 @@ fn test_business_endpoints_dual_track_closed_loop() {
 
         // ==================== 1. 会话配置播种（插件真源，激活后必经） ====================
         // v21：配置面插件必需（无宿主降级），故播种必须在激活之后
-        let seeded_config = crate::utils::session_config_bridge::create_config(
-            &host_ctx,
-            "工作台".to_string(),
-            "linux".to_string(),
-            None,
-            working_dir.clone(),
-            "bash".to_string(),
-        )
-        .await
-        .expect("seed config");
+        let seeded_config =
+            seed_config_in_plugin_store(&mut *session.lock().await, "工作台", &working_dir, "bash").await;
 
         // ==================== handoff：legacy 主库 → 插件私有库 ====================
         let report = crate::plugin::quick_actions_migration::migrate(&host_ctx, &legacy_db)
@@ -2081,16 +2074,7 @@ fn test_session_create_with_spec_closed_loop() {
         session.lock().await.activate().expect("activate session");
 
         // ==================== 2. 播种配置（插件真源；激活后必经） ====================
-        let seeded = crate::utils::session_config_bridge::create_config(
-            &host_ctx,
-            "编排会话".to_string(),
-            "linux".to_string(),
-            None,
-            "/srv/orch".to_string(),
-            "bash".to_string(),
-        )
-        .await
-        .expect("seed config via bridge");
+        let seeded = seed_config_in_plugin_store(&mut *session.lock().await, "编排会话", "/srv/orch", "bash").await;
 
         let sm = host_ctx.session_manager.clone();
         async fn wait_session(
@@ -2272,16 +2256,7 @@ fn test_session_actions_closed_loop() {
 
         // ==================== 1. 播种配置（插件真源）+ 创建会话（不启动，无进程） ====================
         // working_dir 用 /tmp：重启会真实 spawn（cwd 必须存在），其余动作不启动
-        let seeded = crate::utils::session_config_bridge::create_config(
-            &host_ctx,
-            "动作会话".to_string(),
-            "linux".to_string(),
-            None,
-            "/tmp".to_string(),
-            "bash".to_string(),
-        )
-        .await
-        .expect("seed config via bridge");
+        let seeded = seed_config_in_plugin_store(&mut *session.lock().await, "动作会话", "/tmp", "bash").await;
 
         let sid = crate::utils::session_create_bridge::create_session_via_plugin(
             &host_ctx, &seeded.id, None, None, false, None,
@@ -2571,16 +2546,7 @@ fn test_session_annotate_and_devices_closed_loop() {
         session.lock().await.activate().expect("activate session");
 
         // ==================== 1. 播种配置 + 创建会话（不启动，无进程） ====================
-        let seeded = crate::utils::session_config_bridge::create_config(
-            &host_ctx,
-            "注解会话".to_string(),
-            "linux".to_string(),
-            None,
-            "/tmp".to_string(),
-            "bash".to_string(),
-        )
-        .await
-        .expect("seed config via bridge");
+        let seeded = seed_config_in_plugin_store(&mut *session.lock().await, "注解会话", "/tmp", "bash").await;
 
         let sid = crate::utils::session_create_bridge::create_session_via_plugin(
             &host_ctx, &seeded.id, None, None, false, None,

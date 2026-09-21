@@ -17,7 +17,7 @@ use bedcode_plugin_api::constants::{
     CODEX_HOOK_SCRIPT_NAME, HOOK_SCRIPT_NAME, OPENCODE_CONFIG_DIR_NAME, OPENCODE_HOOK_SCRIPT_NAME,
     OPENCODE_PLUGINS_DIR_NAME, PI_CONFIG_DIR_NAME, PI_EXTENSIONS_DIR_NAME, PI_HOOK_SCRIPT_NAME,
 };
-use bedcode_plugin_api::host::{ConfigKey, HostConfig, HostFs, HostLog, HostSession, HostStorage};
+use bedcode_plugin_api::host::{ConfigKey, HostConfig, HostFs, HostLog, HostStorage};
 use bedcode_plugin_api::wasm_host::WasmHost;
 use serde::{Deserialize, Serialize};
 
@@ -338,11 +338,14 @@ pub fn cleanup_all_agent_integrations(host: &WasmHost) -> AllAgentIntegrationRes
     cleanup_global_hooks(host);
     host.log_info("cleanup_all_agent_integrations: global hooks cleaned");
 
-    // 2. 获取所有会话配置
-    let configs = match host.session_config_list() {
-        Ok(Some(value)) => value,
-        _ => {
-            host.log_error("cleanup_all_agent_integrations: failed to get session config list");
+    // 2. 获取所有会话配置（真源 = 插件私有库；主库旧表自 v21 投影写退役后已无写者）
+    let configs = match crate::config::list_via_host() {
+        Ok(value) => value,
+        Err(e) => {
+            host.log_error(&format!(
+                "cleanup_all_agent_integrations: failed to get session config list: {}",
+                e
+            ));
             return result;
         }
     };

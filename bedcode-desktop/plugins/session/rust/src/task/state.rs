@@ -92,7 +92,7 @@ fn find_claude_sid_by_session(host: &WasmHost, bedcode_sid: &str) -> Option<Stri
 
 // ==================== 会话输入 → 任务创建 ====================
 
-/// 查询会话启动命令（config_id → session_config_list 匹配 command）
+/// 查询会话启动命令（config_id → 配置真源匹配 command）
 fn session_command(host: &WasmHost, session_id: &str) -> Option<String> {
     // 1. session_get 获取 config_id（SessionInfo 序列化为 camelCase）
     let config_id = host
@@ -105,10 +105,9 @@ fn session_command(host: &WasmHost, session_id: &str) -> Option<String> {
                 .map(|s| s.to_string())
         })?;
 
-    // 2. session_config_list 查找对应配置的启动命令
-    host.session_config_list()
+    // 2. 配置真源（插件私有库）查找对应配置的启动命令
+    crate::config::list_via_host()
         .ok()
-        .flatten()
         .and_then(|configs| {
             configs
                 .as_array()
@@ -124,7 +123,7 @@ fn session_command(host: &WasmHost, session_id: &str) -> Option<String> {
         })
 }
 
-/// 查询会话配置的工程目录（session_get → configId → session_config_list 匹配 workingDir）
+/// 查询会话配置的工程目录（session_get → configId → 配置真源匹配 workingDir）
 fn session_working_dir(host: &WasmHost, session_id: &str) -> Option<String> {
     // 1. session_get 获取 config_id（SessionInfo 序列化为 camelCase）
     let config_id = host
@@ -137,10 +136,9 @@ fn session_working_dir(host: &WasmHost, session_id: &str) -> Option<String> {
                 .map(|s| s.to_string())
         })?;
 
-    // 2. session_config_list 查找对应配置的工程目录
-    host.session_config_list()
+    // 2. 配置真源（插件私有库）查找对应配置的工程目录
+    crate::config::list_via_host()
         .ok()
-        .flatten()
         .and_then(|configs| {
             configs
                 .as_array()
@@ -1311,7 +1309,7 @@ pub fn list_task_history(host: &WasmHost, filter: &TaskHistoryFilter) -> anyhow:
 /// 回填任务行的工程目录
 ///
 /// 早期版本的任务行创建时未写入 working_dir（列恒为空），此处按
-/// session_id → configId → 配置 workingDir 链路现场解析并回填，
+/// session_id → configId → 配置真源 workingDir 链路现场解析并回填，
 /// 旧任务行也能展示执行会话的配置工程目录；新行插入时已写入，跳过。
 fn backfill_working_dirs(host: &WasmHost, mut rows: Vec<Value>) -> Vec<Value> {
     // session_id → config_id（已停止的会话仍在列表中，仅被删除的会话无法回填）
@@ -1330,10 +1328,8 @@ fn backfill_working_dirs(host: &WasmHost, mut rows: Vec<Value>) -> Vec<Value> {
         .collect();
 
     // config_id → 配置工程目录
-    let config_working_dirs: HashMap<String, String> = host
-        .session_config_list()
+    let config_working_dirs: HashMap<String, String> = crate::config::list_via_host()
         .ok()
-        .flatten()
         .and_then(|v| v.as_array().cloned())
         .unwrap_or_default()
         .iter()
@@ -1447,10 +1443,8 @@ pub fn task_history_stats(host: &WasmHost, filter: &TaskHistoryFilter) -> anyhow
 /// 结果按活跃度排序：有活动任务 > 有待执行队列 > 其余，同档按名称排序。
 pub fn list_running_sessions(host: &WasmHost) -> Vec<Value> {
     // config_id → working_dir 映射（会话配置列表含路径信息，供前端展示会话标签）
-    let config_working_dirs: HashMap<String, String> = host
-        .session_config_list()
+    let config_working_dirs: HashMap<String, String> = crate::config::list_via_host()
         .ok()
-        .flatten()
         .and_then(|v| v.as_array().cloned())
         .unwrap_or_default()
         .iter()

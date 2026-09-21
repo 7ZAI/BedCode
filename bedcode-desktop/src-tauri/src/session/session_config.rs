@@ -33,11 +33,6 @@ impl SessionConfigManager {
         }
     }
 
-    /// 从 Database 创建（兼容旧 API）
-    pub fn from_database(db: Database) -> Self {
-        Self::new(Arc::new(Mutex::new(db)))
-    }
-
     /// 设置同步事件发送器
     pub async fn set_sync_tx(&self, sync_tx: broadcast::Sender<DesktopSyncEvent>) {
         let mut tx = self.sync_tx.write().await;
@@ -50,18 +45,6 @@ impl SessionConfigManager {
         if let Some(sender) = &*tx {
             let _ = sender.send(event);
         }
-    }
-
-    /// 创建新配置
-    pub async fn create_config(
-        &self,
-        name: String,
-        environment: String,
-        working_dir: String,
-        command: String,
-    ) -> Result<SessionConfig> {
-        self.create_config_with_source(name, environment, None, working_dir, command, false, None)
-            .await
     }
 
     /// 创建新配置（带来源设备）
@@ -263,67 +246,6 @@ impl SessionConfigManager {
         Ok(())
     }
 
-    /// 按 id 覆盖写（票 08 的**主库投影**入口）
-    ///
-    /// 真源在插件私有库；宿主把插件写入结果投影回主库，供内核会话启动路径
-    /// （`session_manager` → `storage.get_config`）读取。与
-    /// `create_config_full` / `update_config` 的差别只有两点：
-    /// - **保留调用方给的 id**（插件生成的 id 必须与后续 `config_id` 一致，
-    ///   不能用 `SessionConfig::new` 另生成一个）
-    /// - 存在性判定决定 `INSERT` 还是 `UPDATE`，并据此发 `ConfigCreated` /
-    ///   `ConfigUpdated` 同步事件（移动端按事件类型增量刷新）
-    ///
-    /// 票 09（`create-with-spec`）落地后随旧表一起退役。
-    pub async fn upsert_config(&self, config: SessionConfig) -> Result<SessionConfig> {
-        let existed = self.get_config(&config.id).await?.is_some();
-
-        let db = self.db.clone();
-        let stored = config.clone();
-        tokio::task::spawn_blocking(move || {
-            let db = db.blocking_lock();
-            if existed {
-                db.update_session_config(&stored)
-            } else {
-                db.create_session_config(&stored)
-            }
-        })
-        .await
-        .map_err(|e| crate::AppError::Internal(format!("Task join error: {}", e)))??;
-
-        let event = if existed {
-            DesktopSyncEvent::ConfigUpdated {
-                config_id: config.id.clone(),
-                source_device: None,
-            }
-        } else {
-            DesktopSyncEvent::ConfigCreated {
-                config_id: config.id.clone(),
-                source_device: None,
-            }
-        };
-        self.publish_sync_event(event).await;
-        tracing::debug!(config_id = %config.id, existed, "session config projected to host store");
-        Ok(config)
-    }
-
-    /// 根据 session_id 获取会话配置
-    ///
-    /// 先通过 SessionManager 查找 SessionInfo 获取 config_id，
-    /// 再根据 config_id 加载完整配置
-    pub async fn get_config_by_session_id(
-        &self,
-        session_id: &str,
-        session_manager: &crate::session::SessionManager,
-    ) -> Result<SessionConfig> {
-        let info = session_manager.get_session_info(session_id).await?;
-        self.get_config(&info.config_id).await?.ok_or_else(|| {
-            crate::AppError::NotFound(format!(
-                "Config not found: {} (session: {})",
-                info.config_id, session_id
-            ))
-        })
-    }
-
     /// 验证配置参数
     pub fn validate_config(name: &str, environment: &str, _working_dir: &str, _command: &str) -> Result<()> {
         if name.trim().is_empty() {
@@ -359,11 +281,13 @@ mod tests {
 
     /// 创建一条配置并返回
     async fn create_one(m: &SessionConfigManager, name: &str) -> SessionConfig {
-        m.create_config(
+        m.create_config_full(
             name.to_string(),
             "linux".to_string(),
+            None,
             "/home/u".to_string(),
             "bash".to_string(),
+            false,
         )
         .await
         .expect("create config")
