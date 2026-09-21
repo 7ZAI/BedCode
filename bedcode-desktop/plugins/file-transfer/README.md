@@ -30,7 +30,7 @@
   - `settings_store.rs` — 接收策略 / 下载目录 / 加密开关（插件 storage 真源，推送引擎 `set-receive-policy` / `set-download-dir` 闸门）
 - **TS 前端**：`FileTransferView`（主视图）、`PeerDevicesPanel`（对端设备面板）、`TaskPanel`（传输队列）、`RemoteFileTable`（远程目录浏览）、`BatchRequestDialog`（接收批次审批）、`ConsentDialog`（首连确认弹窗）、`TrustedPeersSection`（信任对端管理）、`SettingsPanel`（设置）、`FileTypeIcon`（文件类型图标）
 - **Composables**：`usePeerDevices` / `useTasks` / `useRemoteFs` / `useReceiving` / `useSettings` / `useConsent` / `useTrustedPeers` / `deviceState`（设备缓存状态机纯函数）
-- **宿主能力**：`fileservice` / `transfer` 通道 + `mdns` 发现 + `peer` 连接/consent/transfer 原语 + `storage` / `fs:*` / `system:open` / `broadcast` / `bus` / `timer:schedule`
+- **宿主能力**：`fileservice` / `transfer` 通道 + `mdns` 发现 + `peer` 连接/consent/transfer 原语 + `storage` / `fs:*` / `host-platform`（`pick-files` / `reveal-in-dir` 原语，无需权限声明）/ `broadcast` / `bus` / `timer:schedule`
 
 ## 目录结构
 
@@ -83,7 +83,6 @@ node scripts/build.js --rust-only
 | `storage` | 插件独立 storage（设备快照、设置、预授权路径） |
 | `fs:read` / `fs:write` | 本地文件读写 |
 | `network:http` | 对端 HTTP 通信 |
-| `system:open` | 打开下载目录 / 传输文件 |
 | `broadcast` / `bus` | 状态变更广播与插件间通信 |
 | `timer:schedule` | consent 弹窗倒计时 |
 | `ui:sidebar` | 侧边栏「文件传输」视图 |

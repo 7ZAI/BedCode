@@ -10,28 +10,40 @@
 
 **Blocked by:** 无（独立死代码清理，可与票 03/04 并行）
 
-**Status:** ready-for-agent
+**Status:** done（2026-09-21）
 
 ## 待删清单（grep 锚点已核实，均无发送方）
 
-- [ ] `src-tauri/src/session/event_bus.rs`：`DefaultSessionEventBus.restart_tx` 字段与初始化、
+- [x] `src-tauri/src/session/event_bus.rs`：`DefaultSessionEventBus.restart_tx` 字段与初始化、
       `restart_sender()`、`SessionEvent::Restarted` 变体与 `publish` 中的对应分支、trait
       `SessionEventBus` 的 `restart_sender()`
-- [ ] `src-tauri/src/session/session_manager.rs`：`restart_tx()`、`subscribe_restart()`、
+- [x] `src-tauri/src/session/session_manager.rs`：`restart_tx()`、`subscribe_restart()`、
       `use crate::session::{... SessionRestartEvent ...}` 导入
-- [ ] `src-tauri/src/session/session_event.rs`：`SessionRestartEvent` 结构体
-- [ ] `src-tauri/src/session.rs`：`SessionRestartEvent` 再导出
-- [ ] `src-tauri/src/events/forwarder.rs`：`forward_restart_events()` 及其 spawn 调用点
-- [ ] `src-tauri/src/system/constants/event.rs`：`SESSION_RESTARTED` 常量
-- [ ] `src-tauri/src/system/config.rs`：`channels.restart_broadcast_capacity` 六处
+- [x] `src-tauri/src/session/session_event.rs`：`SessionRestartEvent` 结构体
+- [x] `src-tauri/src/session.rs`：`SessionRestartEvent` 再导出
+- [x] `src-tauri/src/events/forwarder.rs`：`forward_restart_events()` 及其 spawn 调用点
+- [x] `src-tauri/src/system/constants/event.rs`：`SESSION_RESTARTED` 常量
+- [x] `src-tauri/src/system/config.rs`：`channels.restart_broadcast_capacity` 六处
       （props 描述表 / props 键清单 / 结构体字段 / 默认值 / `parse_value` / 序列化输出）
 
 ## 验收
 
-- [ ] `grep -rn "restart_tx\|subscribe_restart\|SessionRestartEvent\|SESSION_RESTARTED\|restart_broadcast_capacity" src-tauri/src` 为空
-- [ ] 前端 `session-restarted` 行为不变：由插件 `actions.rs::flush_pending_restart` 在
+- [x] `grep -rn "restart_tx\|subscribe_restart\|SessionRestartEvent\|SESSION_RESTARTED\|restart_broadcast_capacity" src-tauri/src` 为空
+- [x] 前端 `session-restarted` 行为不变：由插件 `actions.rs::flush_pending_restart` 在
       Created 之后补发（载荷 camelCase `{oldSessionId,newSessionId,sessionName}`）；本票**不动插件侧**
-- [ ] 桌面 `cargo test --lib` 全绿；无残留进程
+- [x] 桌面 `cargo test --lib` 全绿（1088/0）；无残留进程
+
+## Comments
+
+### ③ 实施记录（2026-09-21）
+
+- 七处锚点全部删除，`grep` 复核为空；`DefaultSessionEventBus` 只剩 `status_tx` / `event_tx`
+  两个channel（`event_bus.rs` 头注释与 `forwarder.rs` 类型注释改写为「重启事件归插件补发」）。
+- 配置键退役口径按 ② 执行：`AppConfig::from_properties` 是「已知键解析 + 未知键忽略」，
+  旧 `config.properties` 里的 `channels.restart_broadcast_capacity` 被静默忽略（无报错、无迁移）；
+  CHANGELOG 已记「配置项移除」。
+- 门禁：桌面 `cargo test --lib` 1088/0（含本批与并行 in-flight 的 host-task 指标用例）；
+  前端零改动（`session-restarted` 无宿主前端消费者，`useSessionStatusListener` 已在票 05 批次删除）。
 
 ## Comments
 

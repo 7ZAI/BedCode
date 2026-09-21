@@ -23,7 +23,7 @@ AGENTS §5/§6（宿主业务清零、前端只留插件运行时与通用外壳
 
 **Blocked by:** 无（可与票 01/03/04 并行；票 03 的 WSL / local-ip 与本票清单有交集，见下）
 
-**Status:** ready-for-agent
+**Status:** 主体 done（2026-09-21）；遗留 = ④ `plugin_reveal_in_dir`（票 04）+ ⑤ auth 降级轨死代码裁决（见下 ④/⑤）
 
 ## 方法（三步，逐命令走完才算判定）
 
@@ -86,7 +86,7 @@ AGENTS §5/§6（宿主业务清零、前端只留插件运行时与通用外壳
 
 ### ③ 待做（Rust 注销 + 前端调用方迁移）
 
-- [ ] 注销清单（**必须逐条走完方法三步再删**）：
+- [x] 注销清单（**必须逐条走完方法三步再删**）：
   - 配对 / QR / 连接历史 / 已配对设备：`generate_pairing_code`、`verify_pairing_code`、
     `get_current_pairing_code`、`clear_pairing_code`、`get_pairing_code_ttl`、
     `set_pairing_code_ttl`、`generate_qr_code`、`clear_qr_code`、`get_qr_connection_info`、
@@ -97,21 +97,83 @@ AGENTS §5/§6（宿主业务清零、前端只留插件运行时与通用外壳
   - 会话域（插件域那半）：`start_session`、`create_session_no_start`、
     `start_existing_session`、`kill_session`、`delete_session`、`restart_session` +
     会话配置 CRUD 5 条
-  - WSL / 本地 IP：随**票 03**（同批做，避免两边重复改 `system.rs`）
-- [ ] 前端调用方迁移（注销的前置）：`stores/session.ts` 的会话编排与
-  `TerminalWindowView.vue` 的会话读取，改走插件命令面（`context.commands.execute('session.*')`）
-  或明确记录保留理由；迁移后 `commands/sessionCommands.ts` 再收紧
-- [ ] `get_connected_devices` **保留**：它是引擎事实面（连接注册表原始记录），
+  - WSL / 本地 IP：随**票 03**（已同批做，`system.rs` 只动了一次）
+- [x] 前端调用方迁移（注销的前置）：`stores/session.ts` 的会话编排与
+  `TerminalWindowView.vue` 的会话读取，改走插件命令面（宿主侧通道 = `pluginInvoke`，
+  即 `context.commands.execute` 的宿主等价物）；迁移后 `commands/sessionCommands.ts` 已收紧
+- [x] `get_connected_devices` **保留**：它是引擎事实面（连接注册表原始记录），
   宿主通知种子化在用（`useGlobalNotifications`），且已去掉派生视图（批次一）
-- [ ] `system.rs` 的配对常量 / `system/constants/auth.rs`（配对码位数与 TTL）随命令注销
-  一并复核定去留（插件 `auth-setting-set` 已可持 TTL 真源）
+- [x] `system.rs` 的配对常量 / `system/constants/auth.rs`（配对码位数与 TTL）：**保留**——
+  `PAIRING_CODE_TTL_SECS` 仍是宿主 D7 降级轨（`utils/auth/pairing.rs`）与插件默认值对齐的锚点；
+  见下方 ⑤ 待裁决
 
 ## 验收
 
-- [ ] 每条注销命令都有「插件在哪用 / 宿主页面不用」的两条证据（写进 PR 描述或本票 Comments）
-- [ ] 桌面 `cargo test --lib` 全绿；前端 `pnpm run test:run` 全绿；根目录 `pnpm exec eslint .` 0 error
-- [ ] `src-tauri/src/commands/` 剩余命令都能回答「哪个宿主页面/终端引擎在调」（保留了理由）
-- [ ] 插件产物重建 + manifest 一致（若同时改了插件面）；无残留进程
+- [x] 每条注销命令都有「插件在哪用 / 宿主页面不用」的两条证据（见下方 ④ 注销清单证据表）
+- [x] 桌面 `cargo test --lib` 全绿（1088/0）；前端 `pnpm run test:run`（受影响用例 37 passed）；
+      根目录 `pnpm exec eslint .` 见收尾记录
+- [x] `src-tauri/src/commands/` 剩余命令都能回答「哪个宿主页面/终端引擎在调」（保留了理由，
+      写入 `commands/session.rs` 头部注释与 lib.rs 注册分组注释）
+- [x] 插件产物重建 + manifest 逐字一致（`scripts/plugin-build.js --plugin com.bedcode.session`，
+      wasm 内含本批 log 变更）；无残留进程
+
+### ④ 实施记录（2026-09-21）
+
+**Rust 注销 30 条**（`lib.rs` 注册项 + 实现体 + 模块声明同步）：
+
+| 域 | 注销项 | 插件侧落点（证据） |
+| --- | --- | --- |
+| 会话编排 6 | `start_session` / `create_session_no_start` / `start_existing_session` / `kill_session` / `delete_session` / `restart_session` | 插件命令面 `session.create` / `session.close` / `session.action.{remove,restart,rename,resize}`（`plugins/session/rust/src/lib.rs:787-813`），宿主只经 `host-session` 原语执行 |
+| 会话配置 5 | `create/list/get/delete/update_session_config` | 插件 `session.config.list/upsert/delete` + 私有库真源（`config/ops.rs`）；命令实现文件 `commands/session_config.rs` 整文件删除（`SessionConfigManager` 保留给插件迁移通道，退役见票 02 B） |
+| 配对 / QR / 连接历史 15 | `generate_pairing_code` 一族 + `generate_qr_code` 一族 + `list/remove_paired_device` + `list/delete_connection_history` | 插件 `session.pairing.*` / `session.qr.*` / `session.devices.{paired-list,revoke,history-list,history-clear}` / `session.trust.*`（lib.rs:820-910） |
+| mDNS 3 | `mdns_start_advertise` / `mdns_stop_advertise` / `mdns_is_advertising` | 插件走 `host-mdns` 原语（`component.rs` 转发）；宿主自有广播由 `server/supervisor.rs` 启停，不经命令面 |
+| 系统 1 | `get_system_info` | 无消费者（宿主页面不用、插件不用）：`SystemInfo` 仍是宿主内部引擎事实（`AppContext::global().system_info()`） |
+| WSL / 本地 IP 3 | `list_wsl_distributions` / `is_wsl_available` / `get_local_ip_addresses` | 见票 03（WSL → 插件 `session.environment.wsl-distros`；本地 IP → `session.network.info`；命令实现体搬 `system/info.rs`） |
+
+- 删文件：`commands/{qr.rs, mdns.rs, session_config.rs, wsl.rs}`；`commands.rs` 模块声明同步收紧。
+- **二阶段启动退役**（本票最容易漏的语义变化）：注销 `create_session_no_start` /
+  `start_existing_session` 后，全仓已无 `start = false` 生产者——插件 `session.create` 与
+  定时任务域、移动端 HTTP/WS 启动线一律 `start = true`（`launch.rs:504`、
+  `task/scheduled.rs:321`、`session_controller.rs:65`、`session_control.rs:68`）。
+  `TerminalPreview.vue` 的 `status === 'starting'` 分支（唯一第二阶段触发点）随之删除；
+  内核 `SessionManager::start_existing_session` 与 spec 的 `start: false` 支持**保留**为休眠
+  能力（`create-with-spec` 的 JSON 契约不变，删它属另一张票）。
+
+- **前端迁移**（宿主→插件通道 = `pluginInvoke`，`src/plugin/commands.ts`）：
+  - `stores/session.ts` 精简为：`loadSessions`（引擎事实）+ `loadSessionConfig`
+    （`session.config.list`，命中/未命中返回 null）+ `stopSession`（`session.close` 后刷新列表）
+    + `writeToSession` / `sendSpecialKey` / `resizeSession`；删除
+    `createSession` / `startSession` / `killSession` / `deleteSession` / `restartSession` /
+    `loadConfigs` / `createConfig` / `deleteConfig` / `updateConfig` 与 `activeSession` / `configs` 状态
+  - `TerminalWindowView.vue`：`killSession` → `sessionStore.stopSession`（插件 `session.close`）；
+    `getSessionConfig` → `sessionStore.loadSessionConfig`（插件 `session.config.list`）
+  - `TerminalPreview.vue`：删除第二阶段启动分支与随之失用的 `computeDesktopInitialTerminalSize` 导入
+  - 删除孤儿：`src/__tests__/fixtures/pairing.ts`（其类型来源已随配对域退役且已 import 失效）、
+    `model.ts` 的 `QrConnectionInfo` / `SessionStatusEvent` / `SessionRestartEvent`
+- **测试**：`src/__tests__/stores/session.test.ts` 按行为契约重写（4 契约 × 正例/反例/边界/异常，
+  13 用例，含「插件停止失败 → 上抛且不刷新列表」反例）；`terminal-flow.test.ts` 首个场景改为
+  「列表刷新 + 插件命令面停止」；`fixtures/drift.test.ts` 摘除 pairing 登记项、机制自检改用
+  `SessionInfo`。
+
+### ⑤ auth 降级轨退役（2026-09-21，用户裁决「立即删除」→ done）
+
+注销配对 / QR 命令面后，`utils/auth/auth_center.rs` 的配对 / QR 桥接**已无任何生产调用方**
+（其唯一入口就是被删的宿主命令面）。用户裁决：**立即删除**而不是留成「保留但不可达」。
+删除清单（连带装配链与用例）：
+
+| 项 | 落点 |
+| --- | --- |
+| 桥接函数 10 个 | `auth_center.rs` 删 `generate_pairing_code` / `current_pairing_code` / `verify_pairing_code` / `clear_pairing_code` / `generate_qr_code` / `qr_conn_info` / `verify_qr_token` / `QrVerifyOutcome` / `qr_reject_reason` / `clear_qr_code` / `qr_failure_user_message` + 相关 imports（**保留** `call_api` / `session_active` / `enforce_connection_policy` / `format_device_display_name`） |
+| 宿主实现 | 删 `server/services/pairing_service.rs`（`PairingService`）、`utils/auth/qr_token.rs`（`QrTokenManager`）、`utils/auth/pairing.rs`（`PairingCode` / `PendingDevice` 与宿主码生成）；`server/services.rs` / `utils/auth.rs` 模块声明同步 |
+| 装配链 | `AppContext`（字段 / accessor / builder / `expect`）+ `lib.rs`（构造、builder 链、`app.manage`）全删 |
+| 常量 | `system/constants/auth.rs`：删 `PAIRING_CODE_DIGITS` / `QR_TOKEN_BYTES`；**保留** `PAIRING_CODE_TTL_SECS`（`host-auth` 记录面 `pairing_code_ttl` 设置缺省，与插件侧同值锚点） |
+| 用例 | 删 `wasm_runtime.rs` 的 `PairingMatrixOutcome` + `run_pairing_matrix` + `test_host_pairing_bridge_closed_loop` + `test_pairing_dual_track_host_and_plugin_paths_agree`（449 行）；`auth_center.rs` 尾部 4 个桥接单测一并删 |
+| 文档 | ADR 0022 D7 补偿条目改写（该回退已整体退役，认证只剩 `host-auth` 记录面 + `auth-policy` capability）；AGENTS §8 分层口径同步；CHANGELOG Security 段同步 |
+
+**保留边界**：`auth-policy` capability 的「传输失败回退放行」**不动**——那是防认证中心故障误杀
+全部连接的设计降级（与配对降级轨是两件事）。
+
+- `plugin_reveal_in_dir` → 票 04（ABI v22 追加 `host-platform.reveal-in-dir`）**已完成**。
 
 ## Comments
 

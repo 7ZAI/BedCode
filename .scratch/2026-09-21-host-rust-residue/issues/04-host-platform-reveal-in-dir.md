@@ -12,7 +12,7 @@
 
 **Blocked by:** 无（ABI 追加需与 `abi.rs` / WIT / SDK 五同步点同批次落）
 
-**Status:** ready-for-agent
+**Status:** done（2026-09-21；两处待裁决由用户裁定：**不叠加权限门** → `system:open` 随之退役）
 
 ## 现状（锚点已核实）
 
@@ -28,27 +28,61 @@
 
 ## 改动
 
-- [ ] WIT（ABI **v22**，desktop-only）：`host-platform` 追加
+- [x] WIT（ABI **v22**，desktop-only）：`host-platform` 追加
       `reveal-in-dir: func(path: string) -> result<_, string>`，权限跟 `platform` 域
       （或新增 `platform:reveal`——按风险域拆分口径二选一，选定后五同步点全落）
-- [ ] SDK：`HostPlatform::platform_reveal_in_dir`（或 trait 追加）+ `wasm_host.rs` 绑定
-      + `component.rs` 转发 + `host_impl/platform.rs` 实现本体（**从 `commands/opener.rs`
-      搬入** `reveal_in_dir_platform` 及平台分支，含 verbatim 前缀与兜底注释一并搬）
-- [ ] 插件侧：file-transfer 改为经 SDK 调原语（`context` 面不再需要宿主 API）
-- [ ] 退役：删 `commands/opener.rs::plugin_reveal_in_dir` + `require_system_open` +
+      → **裁决结果：不加权限门**（与 `pick-*` 同口径；见下方 Comments ③）
+- [x] SDK：`HostPlatform::platform_reveal_in_dir`（trait 追加）+ `wasm_host.rs` 绑定
+      + `component.rs` 转发 + `host_impl/platform.rs` 实现体
+- [x] 插件侧：file-transfer 改为经 SDK 调原语（`context` 面不再需要宿主 API）
+- [x] 退役：删 `commands/opener.rs::plugin_reveal_in_dir` + `require_system_open` +
       lib.rs 注册 + 前端 `commands.ts` / `context.ts` / `types.ts` / `permission.ts` 的
-      `revealInDir` 映射；**`system:open` 权限是否一并退役按「是否还有其它消费者」裁决**
-      （五同步点：SDK 常量与 API 映射 / 打包 CLI / 前端合法集合 / 宿主能力清单 / host_impl 权限门）
-- [ ] `open_log_dir`（同文件）**保留**：它是宿主设置页的日志目录入口，不经插件权限链
+      `revealInDir` 映射；**`system:open` 权限一并退役**（五同步点全落）
+- [x] `open_log_dir`（同文件）**保留**：它是宿主设置页的日志目录入口，不经插件权限链
 
 ## 验收
 
-- [ ] 三平台行为不回归（Windows 中文路径 / `\\?\` 前缀 / PIDL 失败兜底 / macOS `open -R` /
-      Linux `xdg-open`）：至少钉住参数与平台分支选择的单测（真实 GUI 行为留真机）
-- [ ] 插件未激活调用 → 显性报错；路径不存在 → 显性报错（与现状 `NotFound` 文案一致）
-- [ ] 桌面 `cargo test --lib` + SDK/插件 crate 全绿；插件产物重建 + manifest 一致；
+- [x] 三平台行为不回归（Windows 中文路径 / `\\?\` 前缀 / PIDL 失败兜底 / macOS `open -R` /
+      Linux `xdg-open`）：单元测试钉住纯函数与参数选择（`strip_verbatim_prefix` /
+      `unix_reveal_command` 两平台参数 / 缺路径 NotFound），真实 GUI 行为留真机
+- [x] 插件未激活调用 → 显性报错（原语由宿主插件调用链仲裁）；路径不存在 → 显性报错
+      （`reveal: path not found: …`，与原命令文案逐字一致）
+- [x] 桌面 `cargo test --lib` + SDK/插件 crate 全绿；插件产物重建 + manifest 一致；
       前端 `pnpm run test:run` + 根 eslint 0 error
-- [ ] AGENTS §7 能力清单计数、`abi.rs` 版本沿革、CHANGELOG、code-map 同步
+- [x] AGENTS §7 能力清单计数、`abi.rs` 版本沿革、CHANGELOG、code-map 同步
+
+## Comments ③ 实施记录（2026-09-21，用户裁决 + 落点偏离说明）
+
+**裁决**：不叠加权限门（选项 a）。理由：`reveal-in-dir` 与 `pick-files` / `pick-folder` /
+`wsl-distros` / `local-ipv4-addresses` 同属「平台交互动作」——不读取任何数据（路径本就由
+调用方提供），`host-platform` 域保持「无权限门」的一致性优于新开 `platform:reveal` 的
+形式化收税。连带结论：`system:open` 权限退役（其唯一消费者 file-transfer 改走原语）。
+
+**五同步点全落**（`system:open` 退役）：
+
+| 同步点 | 落点 |
+| --- | --- |
+| SDK 常量与 API 映射 | `packages/plugin-sdk-desktop/rust/src/permission.rs`：删 `PERMISSION_SYSTEM_OPEN` 常量 + 清单项 + `(PERMISSION_SYSTEM_OPEN, &["system.revealInDir"])` 映射 |
+| 前端合法集合 | `src/plugin/permission.ts` 删 `'system:open': ['system.revealInDir']`（合法集合即由该表推导） |
+| 宿主命令面 / 权限门 | `commands/opener.rs` 删命令 + `require_system_open`；`lib.rs` 删注册 |
+| 宿主能力清单 | `host_impl/platform.rs::platform_reveal_in_dir`（`host-platform` 域无权限门，登记在同一域） |
+| 插件消费方（打包侧随 manifest 校验） | `plugins/file-transfer/plugin.json` 删 `system:open` + 加 `file-transfer.reveal-in-dir` 命令；README 权限表同步 |
+
+**落点偏离（记录在案）**：票面要求实现本体搬进 `host_impl/platform.rs`，实测**不可行**——
+`host_impl/mod.rs` 是 `pub(super) mod platform;`，命令层（`commands/opener.rs::open_log_dir`
+仍要用同一份平台分发）不可见。故实现本体落在**引擎模块** `system/opener.rs`
+（`reveal_in_dir` 平台分发 + `reveal_existing_in_dir` 校验入口 + `strip_verbatim_prefix` /
+`unix_reveal_command` 纯函数），`host_impl/platform.rs::platform_reveal_in_dir` 退化为
+「校验 + `Result<(), String>` 适配」；这也更贴「原语实现不挂命令层」的分层。
+
+**插件侧改造**：file-transfer 新增自有命令 `file-transfer.reveal-in-dir`（前端
+`context.commands.execute('file-transfer.reveal-in-dir', { path })`），WASM 侧调
+`h.platform_reveal_in_dir(&path)`（与既有 `file-transfer.pick-files` 同形）；
+`context.system.revealInDir` 与其 mock（dev-shell）、SDK TS 类型 `SystemAPI`、
+i18n `noSystemOpenPermission`（zh-CN / en）一并删除。
+
+**ABI**：`abi.rs` v21 → v22（沿革条目 + 用例改名 `test_abi_version_is_v22`）；WIT 函数级追加，
+纯增量、v21 及以下产物不受影响。**票 02 阶段 B 的 ABI 号让位为 v23**（已在票 02 内更新）。
 
 ## Comments
 

@@ -1,6 +1,6 @@
 # 宿主 Rust 侧收敛收尾（host-business-decarriage 之后的三批遗留）
 
-Status: active（三批主体已落地，本规格只登记**遗留小票**；票 01-04 未开工）
+Status: active（三批主体已落地；遗留票 01/02A/03/05 主体已实施，02B 待发布侧确认、04 待裁决，见下表）
 Date: 2026-09-21
 范围: **仅桌面端**（`bedcode-desktop/`）；`bedcode-mobile/` 零改动（双端偏离，见 ADR 0022）
 决策依据: `docs/adr/0022`（裁剪线、无业务内核、双端偏离）、AGENTS.md §5/§7/§8/§9/§10、
@@ -25,13 +25,13 @@ file-transfer 插件 59/0、插件产物重建 + manifest 一致、无残留进�
 
 ## 遗留票（本规格要做的四件事）
 
-| # | 票 | 性质 | 依赖 |
-| --- | --- | --- | --- |
-| 01 | 重启广播总线死链清理 | 死代码清理（无行为变化） | 无 |
-| 02 | `session_configs` 表与 legacy 配置通道退役 | 数据迁移 + ABI 追加（需守卫） | 需确认各安装点 migration marker 已跑过 |
-| 03 | `wsl` / `local_ip` 宿主命令去重 | 跨端前端同改（插件命令面已有落点） | 无（可与 01 并行） |
-| 04 | `plugin_reveal_in_dir` 原语化 | ABI 追加（`host-platform.reveal-in-dir`） | 可与 01/03 并行 |
-| 05 | `commands/` 面收敛（逐命令判定） | 判据 + Rust 注销 + 前端调用方迁移 | 与 02（配置 CRUD）、03（WSL/local-ip）、04（reveal）有交集，按票内说明合并实施 |
+| # | 票 | 性质 | 依赖 | 状态 |
+| --- | --- | --- | --- | --- |
+| 01 | 重启广播总线死链清理 | 死代码清理（无行为变化） | 无 | **done**（2026-09-21） |
+| 02 | `session_configs` 表与 legacy 配置通道退役 | 数据迁移 + ABI 追加（需守卫） | 需确认各安装点 migration marker 已跑过 | **阶段 A done**；阶段 B blocked（ABI v23） |
+| 03 | `wsl` / `local_ip` 宿主命令去重 | 跨端前端同改（插件命令面已有落点） | 无（可与 01 并行） | **done**（前端封装实测为孤儿 → 直接删而非平移） |
+| 04 | `plugin_reveal_in_dir` 原语化 | ABI 追加（`host-platform.reveal-in-dir`） | 可与 01/03 并行 | **done**（2026-09-21，ABI **v22**；裁决「不加权限门」→ `system:open` 退役） |
+| 05 | `commands/` 面收敛（逐命令判定） | 判据 + Rust 注销 + 前端调用方迁移 | 与 02（配置 CRUD）、03（WSL/local-ip）、04（reveal）有交集，按票内说明合并实施 | **主体 done**（30 条命令注销 + 前端迁移）；遗留 reveal（票 04）与 auth 降级轨死代码裁决（票内 ⑤） |
 
 ### 命令面收敛判据（票 05，2026-09-21 追加口径）
 

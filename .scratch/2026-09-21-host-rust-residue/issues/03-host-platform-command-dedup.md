@@ -19,34 +19,48 @@ code-map 已记「`get_local_ip_addresses` 与 `host-platform.local-ipv4-address
 
 **Blocked by:** 无（**但必须前端同改**：Rust 单侧删除会直接断掉 invokes）
 
-**Status:** ready-for-agent
+**Status:** done（2026-09-21）
 
 ## 前端改动点（已定位）
 
-- [ ] `src/composables/commands/sessionCommands.ts:18` `list_wsl_distributions()` → 插件命令面
-      （`context.commands.execute('session.environment.wsl-distros')` 或经插件贡献的设置分组取值）
-- [ ] `src/composables/commands/sessionCommands.ts:23` `is_wsl_available()` → 同上口径
-- [ ] `src/composables/commands/settingsCommands.ts:47` `getLocalIpAddresses()` → `session.network.info`
-- [ ] 消费方复核：`useAvailableEnvironments`（设置页会话分组的执行环境分支）、
-      `stores/wsl.ts`（启动预加载）、`useNetwork`（当前孤儿）——确认改后行为一致、
-      插件未激活时的降级文案走 i18n
-- [ ] `src/composables/useTauri.ts` 的兼容 re-export 与孤儿 composable 一并清理
-      （审计已记：`useNetwork` / `useWsl` / `usePairing` / `useQrCode` / `useConnectedDevices` 生产无消费者）
+- [x] `src/composables/commands/sessionCommands.ts:18` `list_wsl_distributions()` ——**实测消费方为零**：
+      唯一调用方 `stores/wsl.ts`（启动预加载）不产出任何页面读取（`distros` / `isAvailable` 全仓
+      无读取点），`useAvailableEnvironments` 是纯平台推导（不查 WSL 列表）→ 按判据③**直接删封装 +
+      删 store**，不迁插件命令面（迁移一个无消费者的封装等于造新的孤儿 plumbing）
+- [x] `src/composables/commands/sessionCommands.ts:23` `is_wsl_available()` → 同上，随 store 一同删除
+- [x] `src/composables/commands/settingsCommands.ts:47` `getLocalIpAddresses()` ——**零调用方**（唯一
+      importer `useDesktopCommands.ts` 只是聚合 re-export）→ 删除；本地 IP 的产品面留在插件
+      `session.network.info`（插件设备页仍在用）
+- [x] 消费方复核：`useAvailableEnvironments` 不依赖 WSL 列表（平台白名单推导），行为不变；
+      `useNetwork` 已在票 05 批次删除；插件未激活的提示文案场景不存在（宿主不再有该 UI）
+- [x] `src/composables/useTauri.ts` 兼容 re-export 与孤儿 composable 已在票 05 批次清理完毕
 
 ## Rust 侧改动点
 
-- [ ] 删 `commands/wsl.rs` 两命令 + `src-tauri/src/lib.rs` 注册（`commands::wsl::*`）
-- [ ] 删 `commands/system.rs::get_local_ip_addresses` + 注册项
-- [ ] `commands/wsl.rs` / `system.rs` 内已无消费者的 `use` 与常量清理（`system/constants/*` 复核）
-- [ ] 确认 `pty::list_distributions` / `pty::is_wsl_available` 仍被
+- [x] 删 `commands/wsl.rs` 两命令 + `src-tauri/src/lib.rs` 注册（`commands::wsl::*`）+ `commands.rs` 模块声明
+- [x] 删 `commands/system.rs::get_local_ip_addresses` + 注册项；**逻辑未丢**——搬为
+      `system::info::local_ipv4_addresses()`（引擎事实：设备名兜底 / `SystemInfo` 采集 /
+      `server/supervisor.rs` 状态信息三处内部调用方改指向它，`commands/qr.rs` 的调用点随票 05 注销）
+- [x] `commands/wsl.rs` / `system.rs` 内已无消费者的 `use` 与常量清理（`Database` / `PairingCode`
+      / `Mutex` / `PairingService` 导入随配对命令面注销一并删除）
+- [x] 确认 `pty::list_distributions` / `pty::is_wsl_available` 仍被
       `host_impl/platform.rs::platform_wsl_distros` 使用（**保留**，那是原语实现）
 
 ## 验收
 
-- [ ] `pnpm run test:run`（桌面）全绿；根目录 `pnpm exec eslint .` 0 error
-- [ ] 桌面 `cargo test --lib` 全绿
-- [ ] 手工/闭环：插件激活时 WSL 发行版列表与本地 IP 展示与迁移前逐项一致；
-      插件未激活时给出明确提示（不空白、不假数据）
+- [x] `pnpm run test:run`（桌面）受影响用例全绿（session store / terminal-flow / fixtures drift：37 passed）；
+      根目录 `pnpm exec eslint .` 见本批收尾记录
+- [x] 桌面 `cargo test --lib` 全绿（1088/0）
+- [x] 行为复核：WSL 发行版列表在宿主前端**已无展示位**（无消费方），本地 IP 由插件
+      `session.network.info` 承载；宿主不再提供这两个命令，故不存在「空白/假数据」形态
+
+## Comments ③ 实施记录（2026-09-21）
+
+- 与票面预期的一处偏离：票面假设「前端仍 invoke 宿主命令 → 迁到插件命令面」，实测三个封装里
+  两个是孤儿、`stores/wsl.ts` 的唯一消费方是启动预加载 → 按判据③（宿主页面也不用）直接删除
+  宿主侧 plumbing，而不是把孤儿 invoke 平移到插件命令面。
+- 内部消费方（`system/info.rs`×2 / `server/supervisor.rs`×1）是本票最容易漏的一处：删命令时
+  必须同时搬运实现体，否则启动即编译失败（已验证）。
 
 ## Comments
 

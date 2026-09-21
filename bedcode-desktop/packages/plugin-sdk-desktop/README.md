@@ -98,7 +98,7 @@ export async function deactivate(): Promise<void> {
 | `context.http` | 注册 HTTP 端点（供 Agent CLI hooks 等调用） | `network:http` |
 | `context.fileService` | 文件服务挂载（`mount`）、对端信息、系统目录 / 文件选择 | `fileservice` |
 | `context.i18n` | 宿主 i18n：注册插件翻译、`t()` 快捷翻译 | 默认授予 |
-| `context.system` | 系统级操作（如在文件管理器中显示） | `system:open` |
+
 
 权限声明示例：`"permissions": ["storage", "ui:sidebar", "terminal:output", "network:http"]`。
 

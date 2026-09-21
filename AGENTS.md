@@ -153,7 +153,7 @@ pnpm exec eslint .
 v18 认证记录面）、`host-pty`（v16）、`auth-policy` 导出（v17，认证中心能力，票 12 server
 认证中间件取策略）、`host-session` 会话语义批次与 `host-platform.wsl-distros`（v19）、
 `host-task`（v20 并发任务域 + `events-task` 可选导出）只在 desktop WIT/ABI/SDK 演进；
-当前 desktop **v21**（v21 = host-session 收敛退役：删 `create` / `restart`，创建与重启编排全部归插件——首个**接口函数删除**，旧产物需按 v21 SDK 重建）、mobile 11。移动端要接同类能力时再补该端 interface 并对齐计数（恢复
+当前 desktop **v22**（v22 = `host-platform.reveal-in-dir` 平台定位原语——函数级追加、**不叠加权限门**，`system:open` 权限与宿主 `plugin_reveal_in_dir` 命令、前端 `context.system` API 随之退役；v21 = host-session 收敛退役：删 `create` / `restart`，创建与重启编排全部归插件——首个**接口函数删除**，旧产物需按 v21 SDK 重建）、mobile 11。移动端要接同类能力时再补该端 interface 并对齐计数（恢复
 条件见同一节）。**同一批次内函数级追加不再 bump**（v19 已含配置面 / 创建与动作面 /
 注解槽 / 连接清单四组；票 02/03 又追加 `host-fs.read-dir / canonicalize / stat` 与
 `host-process.run-sync`——文件浏览域下沉所需的引擎级原语，仍保持 v19），别拿批次号当函数号数
@@ -170,7 +170,7 @@ v18 认证记录面）、`host-pty`（v16）、`auth-policy` 导出（v17，认�
 ### 安全红线（不可违反）
 
 - **禁止提交密钥/凭据**：仓库内唯一例外是签名真源 `bedcode.keystore`（私有仓库设计，见 §9 Android）；新增的任何密钥、token、密码禁止入库、禁止进日志、禁止写进文档/备注；API token 泄露按仓库规范删除重建
-- 认证链路（JWT / 设备指纹 / 二维码 / 生物凭证）只走既有 auth 模块，禁止旁路；**日志与存储中凭据只记长度不落明文**（`token.length()` 模式）。**分层口径（ADR 0022 会话语义下沉批次）**：配对码 / QR 的**编排与 TTL 策略**真源在 `com.bedcode.session` 插件，而**签发、验签执行点、密钥托管（host-auth secret-store）、`pairings` / `connection_history` 表**留宿主——宿主命令面经 `utils/auth/auth_center.rs` 桥接调用插件，插件未激活 / 探活超时（5s）时回退宿主实现并 `warn` 留痕，该回退是 D7 设计的降级路径，**不算旁路**；新代码不得绕过 auth_center 桥接与宿主门面自行签发或验签
+- 认证链路（JWT / 设备指纹 / 二维码 / 生物凭证）只走既有 auth 模块，禁止旁路；**日志与存储中凭据只记长度不落明文**（`token.length()` 模式）。**分层口径（ADR 0022 会话语义下沉批次）**：配对码 / QR 的**编排、签发与验签执行**全在 `com.bedcode.session` 插件（`pairing/` / `qr/` / `auth_http`），**密钥托管（host-auth secret-store）、`pairings` / `connection_history` 表**留宿主——宿主这边只剩 `host-auth` 记录面与 `auth-policy` capability（认证策略取用；其 capability 传输失败时回退放行，防认证中心故障误杀全部连接，`warn` 留痕，**不算旁路**）。**配对 / QR 的宿主降级实现已整体退役**（2026-09-21，宿主命令面注销同批）：`utils/auth/auth_center.rs` 的配对 / QR 桥接函数、`PairingService`、`QrTokenManager`、`utils/auth/pairing.rs` 与应用上下文装配链全部删除——插件未激活时前端命令面显性报错，不存在宿主代签路径；新代码不得绕过插件自行签发或验签
 - 输入校验与权限仲裁在 Rust 端，前端校验仅是 UX；WebSocket/HTTP 接入必须过认证与过滤链（TrafficFilterChain）
 
 ### 日志红线

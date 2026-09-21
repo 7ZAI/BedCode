@@ -98,7 +98,6 @@ The `PluginContext` received by `activate(context)` is the **single channel** th
 | `context.http` | Register HTTP endpoints (e.g. for Agent CLI hooks) | `network:http` |
 | `context.fileService` | File service mount, peer info, system dir / file pickers | `fileservice` |
 | `context.i18n` | Host i18n: register plugin translations, `t()` helper | granted by default |
-| `context.system` | System-level operations (e.g. reveal in file manager) | `system:open` |
 
 Permission example: `"permissions": ["storage", "ui:sidebar", "terminal:output", "network:http"]`.
 
