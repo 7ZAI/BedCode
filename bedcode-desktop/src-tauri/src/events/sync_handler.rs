@@ -487,8 +487,14 @@ mod tests {
     }
 
     /// 构造 handler：cm 与 sm 共用同一 db（config 落库后两处可见）；Fake 泄漏为 &'static
-    async fn test_handler() -> (Arc<SyncEventHandler>, &'static FakeBroadcaster, Arc<tokio::sync::Mutex<crate::db::Database>>) {
-        let shared_db = Arc::new(tokio::sync::Mutex::new(crate::db::Database::new(Path::new(":memory:")).expect("shared db")));
+    async fn test_handler() -> (
+        Arc<SyncEventHandler>,
+        &'static FakeBroadcaster,
+        Arc<tokio::sync::Mutex<crate::db::Database>>,
+    ) {
+        let shared_db = Arc::new(tokio::sync::Mutex::new(
+            crate::db::Database::new(Path::new(":memory:")).expect("shared db"),
+        ));
         shared_db.lock().await.init_schema().expect("init schema");
         let sm = Arc::new(SessionManager::new(Arc::new(std::path::PathBuf::from("."))));
         let cm = Arc::new(SessionConfigManager::new(Arc::clone(&shared_db)));
@@ -540,7 +546,11 @@ mod tests {
             .await;
         let calls = fake.take_calls();
         assert_eq!(calls.len(), 1, "应广播一次: {calls:?}");
-        assert!(matches!(calls[0].payload, SyncPayload::SessionCreated { .. }), "实际: {:?}", calls[0].payload);
+        assert!(
+            matches!(calls[0].payload, SyncPayload::SessionCreated { .. }),
+            "实际: {:?}",
+            calls[0].payload
+        );
         assert_eq!(calls[0].exclude_device.as_deref(), Some("d1"), "来源设备应被排除");
     }
 
@@ -556,7 +566,11 @@ mod tests {
             })
             .await;
         let calls = fake.take_calls();
-        assert!(matches!(calls[0].payload, SyncPayload::SessionStopped { .. }), "实际: {:?}", calls[0].payload);
+        assert!(
+            matches!(calls[0].payload, SyncPayload::SessionStopped { .. }),
+            "实际: {:?}",
+            calls[0].payload
+        );
         assert_eq!(calls[0].exclude_device.as_deref(), Some("d2"));
     }
 
@@ -572,7 +586,11 @@ mod tests {
             })
             .await;
         let calls = fake.take_calls();
-        assert!(matches!(calls[0].payload, SyncPayload::SessionRemoved { .. }), "实际: {:?}", calls[0].payload);
+        assert!(
+            matches!(calls[0].payload, SyncPayload::SessionRemoved { .. }),
+            "实际: {:?}",
+            calls[0].payload
+        );
         assert_eq!(calls[0].exclude_device.as_deref(), Some("d3"));
     }
 
@@ -625,7 +643,10 @@ mod tests {
             })
             .await;
         let calls = fake.take_calls();
-        assert!(matches!(calls[0].payload, SyncPayload::SessionModeChanged { auto_approve: true, .. }));
+        assert!(matches!(
+            calls[0].payload,
+            SyncPayload::SessionModeChanged { auto_approve: true, .. }
+        ));
         assert!(calls[0].exclude_device.is_none());
     }
 
@@ -643,7 +664,10 @@ mod tests {
             })
             .await;
         let calls = fake.take_calls();
-        assert!(matches!(calls[0].payload, SyncPayload::TaskQueueChanged { queue_count: 3, .. }));
+        assert!(matches!(
+            calls[0].payload,
+            SyncPayload::TaskQueueChanged { queue_count: 3, .. }
+        ));
     }
 
     /// TaskScheduledChanged → 广播 TaskScheduledChanged

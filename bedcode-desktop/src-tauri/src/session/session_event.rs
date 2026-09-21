@@ -75,12 +75,7 @@ pub fn task_fields_from_slot(
             None
         }
     });
-    (
-        text("taskStatus"),
-        text("taskReason"),
-        text("taskUpdatedAt"),
-        questions,
-    )
+    (text("taskStatus"), text("taskReason"), text("taskUpdatedAt"), questions)
 }
 
 /// 会话视图（**对外形状**：前端命令 / 控制帧 / 移动端 DTO 的构造源）
@@ -123,15 +118,6 @@ pub struct SessionStatusEvent {
     pub session_id: String,
     pub old_status: Option<SessionStatus>,
     pub new_status: SessionStatus,
-    pub session_name: String,
-}
-
-/// 会话重启事件
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SessionRestartEvent {
-    pub old_session_id: String,
-    pub new_session_id: String,
     pub session_name: String,
 }
 

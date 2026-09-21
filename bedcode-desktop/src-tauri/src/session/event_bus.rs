@@ -1,9 +1,13 @@
 //! Event Bus
 //!
-//! 统一事件广播 - 整合 status/restart 广播通道
+//! 统一事件广播 - 会话状态广播通道
 //! SessionEventBus trait 已内联到此文件
+//!
+//! v21 起「会话重启」不再有内核广播通道：重启编排归 `com.bedcode.session` 插件
+//! （`remove` + `create-with-spec`），前端 `session-restarted` 事件由插件在 Created
+//! 生命周期之后经 `host-events.emit` 补发。
 
-use crate::session::{SessionRestartEvent, SessionStatusEvent};
+use crate::session::SessionStatusEvent;
 use crate::system::config::AppConfig;
 use tokio::sync::broadcast;
 
@@ -11,7 +15,6 @@ use tokio::sync::broadcast;
 #[derive(Debug, Clone)]
 pub enum SessionEvent {
     StatusChanged(SessionStatusEvent),
-    Restarted(SessionRestartEvent),
 }
 
 /// 会话事件总线
@@ -19,13 +22,11 @@ pub trait SessionEventBus: Send + Sync {
     fn publish(&self, event: SessionEvent);
     fn subscribe(&self) -> broadcast::Receiver<SessionEvent>;
     fn status_sender(&self) -> broadcast::Sender<SessionStatusEvent>;
-    fn restart_sender(&self) -> broadcast::Sender<SessionRestartEvent>;
 }
 
 /// 会话事件总线实现
 pub struct DefaultSessionEventBus {
     status_tx: broadcast::Sender<SessionStatusEvent>,
-    restart_tx: broadcast::Sender<SessionRestartEvent>,
     event_tx: broadcast::Sender<SessionEvent>,
 }
 
@@ -33,14 +34,9 @@ impl DefaultSessionEventBus {
     pub fn new() -> Self {
         let config = AppConfig::global();
         let (status_tx, _) = broadcast::channel(config.channels.status_broadcast_capacity);
-        let (restart_tx, _) = broadcast::channel(config.channels.restart_broadcast_capacity);
         let (event_tx, _) = broadcast::channel(config.channels.event_broadcast_capacity);
 
-        Self {
-            status_tx,
-            restart_tx,
-            event_tx,
-        }
+        Self { status_tx, event_tx }
     }
 }
 
@@ -58,11 +54,6 @@ impl SessionEventBus for DefaultSessionEventBus {
                     let _ = self.status_tx.send(e.clone());
                 }
             }
-            SessionEvent::Restarted(e) => {
-                if self.restart_tx.receiver_count() > 0 {
-                    let _ = self.restart_tx.send(e.clone());
-                }
-            }
         }
         let _ = self.event_tx.send(event);
     }
@@ -73,9 +64,5 @@ impl SessionEventBus for DefaultSessionEventBus {
 
     fn status_sender(&self) -> broadcast::Sender<SessionStatusEvent> {
         self.status_tx.clone()
-    }
-
-    fn restart_sender(&self) -> broadcast::Sender<SessionRestartEvent> {
-        self.restart_tx.clone()
     }
 }

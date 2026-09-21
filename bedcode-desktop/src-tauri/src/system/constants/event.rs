@@ -5,9 +5,6 @@
 /// 会话状态变更事件
 pub const SESSION_STATUS_CHANGED: &str = "session-status-changed";
 
-/// 会话重启事件
-pub const SESSION_RESTARTED: &str = "session-restarted";
-
 /// 设备连接/认证事件
 pub const DEVICE_CONNECTED: &str = "device-connected";
 

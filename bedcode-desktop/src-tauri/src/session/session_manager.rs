@@ -11,13 +11,13 @@ use crate::session::{
     event_bus::{DefaultSessionEventBus, SessionEventBus},
     input_line::{SessionInputListener, SubmittedLineTracker},
     session_components::{
-        CanonicalRendererRegistry, DefaultCanonicalRendererRegistry, DefaultPtyRegistry,
-        DefaultSessionInfoRegistry, PtyRegistry, RendererSource, ResizeOutcome, SessionInfoRegistry,
+        CanonicalRendererRegistry, DefaultCanonicalRendererRegistry, DefaultPtyRegistry, DefaultSessionInfoRegistry,
+        PtyRegistry, RendererSource, ResizeOutcome, SessionInfoRegistry,
     },
     session_lifecycle::SessionLifecycleListener,
     session_output::GlobalOutputManager,
 };
-use crate::session::{SessionInfo, SessionInfoView, SessionRestartEvent, SessionStatusEvent};
+use crate::session::{SessionInfo, SessionInfoView, SessionStatusEvent};
 use crate::system::error_boundary::spawn_with_error_boundary;
 use crate::Result;
 use chrono::Utc;
@@ -69,11 +69,6 @@ impl SessionManager {
     /// 获取会话状态变化广播发送器
     pub fn status_tx(&self) -> broadcast::Sender<SessionStatusEvent> {
         self.event_bus.status_sender()
-    }
-
-    /// 获取会话重启广播发送器
-    pub fn restart_tx(&self) -> broadcast::Sender<SessionRestartEvent> {
-        self.event_bus.restart_sender()
     }
 
     /// 创建新的 Session Manager（使用具体实现）
@@ -761,11 +756,6 @@ impl SessionManager {
     /// 订阅会话状态变化
     pub fn subscribe_status(&self) -> broadcast::Receiver<SessionStatusEvent> {
         self.event_bus.status_sender().subscribe()
-    }
-
-    /// 订阅会话重启
-    pub fn subscribe_restart(&self) -> broadcast::Receiver<SessionRestartEvent> {
-        self.event_bus.restart_sender().subscribe()
     }
 
     /// 获取会话状态

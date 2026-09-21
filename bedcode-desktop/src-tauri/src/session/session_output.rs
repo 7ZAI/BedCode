@@ -253,7 +253,11 @@ impl UnifiedOutputQueue {
         match self.chunks.get(idx) {
             Some(chunk) if chunk.start_offset <= from => {
                 let cut = (from - chunk.start_offset) as usize;
-                let bytes = if cut == 0 { chunk.bytes.clone() } else { chunk.bytes.slice(cut..) };
+                let bytes = if cut == 0 {
+                    chunk.bytes.clone()
+                } else {
+                    chunk.bytes.slice(cut..)
+                };
                 Ok(Some(RingSlice {
                     start_offset: from,
                     bytes,
@@ -992,7 +996,11 @@ mod tests {
 
         // from_offset > max_offset：收敛到 max_offset（防御）
         let pull = manager
-            .register_subscriber("c2", Some(999), Arc::new(std::sync::atomic::AtomicU8::new(MODE_REALTIME)))
+            .register_subscriber(
+                "c2",
+                Some(999),
+                Arc::new(std::sync::atomic::AtomicU8::new(MODE_REALTIME)),
+            )
             .await;
         assert_eq!(pull.handle.start_offset, 12);
 

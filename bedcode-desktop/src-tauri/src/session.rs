@@ -20,9 +20,7 @@ mod session_components;
 mod session_output;
 
 pub use session_config::SessionConfigManager;
-pub use session_event::{
-    task_fields_from_slot, SessionInfo, SessionInfoView, SessionRestartEvent, SessionStatusEvent,
-};
+pub use session_event::{task_fields_from_slot, SessionInfo, SessionInfoView, SessionStatusEvent};
 pub use session_manager::SessionManager;
 
 // 从 session_components 重导出
