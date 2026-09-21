@@ -38,7 +38,6 @@ export type {
   StorageAPI,
   HttpAPI,
   I18nAPI,
-  SystemAPI,
   PluginContext,
   PluginModule,
   PluginDevMock,

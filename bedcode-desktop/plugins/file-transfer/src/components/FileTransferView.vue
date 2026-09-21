@@ -175,10 +175,10 @@ async function handleUpload(): Promise<void> {
   if (ok > 0) queueVisible.value = true
 }
 
-/** 下载完成 → 打开本地所在目录（system.revealInDir） */
+/** 下载完成 → 打开本地所在目录（插件自有命令 → 宿主原语 host-platform.reveal-in-dir） */
 async function handleOpenFolder(path: string): Promise<void> {
   try {
-    await context.system.revealInDir(path)
+    await context.commands.execute('file-transfer.reveal-in-dir', { path })
   } catch (e) {
     console.error('[File Transfer] open folder failed:', e)
   }

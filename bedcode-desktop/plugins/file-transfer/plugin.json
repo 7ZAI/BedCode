@@ -19,7 +19,6 @@
     "network:http",
     "peer",
     "storage",
-    "system:open",
     "timer:schedule",
     "transfer",
     "ui:dialog",
@@ -59,7 +58,11 @@
       {
         "id": "file-transfer.pick-files",
         "title": "file-transfer.pick-files"
-      },
+        },
+        {
+        "id": "file-transfer.reveal-in-dir",
+        "title": "file-transfer.reveal-in-dir"
+        },
       {
         "id": "file-transfer.enqueue",
         "title": "Enqueue Transfer"

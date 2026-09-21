@@ -1053,6 +1053,11 @@ mod tests {
             // file-transfer 不消费本机地址枚举（票 14 为设备页 QR 引入）
             unimplemented!()
         }
+        fn platform_reveal_in_dir(&self, _path: &str) -> Result<(), HostError> {
+            // 「打开本地目录」命令（`file-transfer.reveal-in-dir`）只在 wasm 侧 dispatch
+            // 触达（`invoke_command` 经 `host()`），peer.rs 用例不涉及
+            unimplemented!()
+        }
     }
 
     /// mount-local 追加预授权路径：新增目录落 preauth_paths（宿主启用门禁读取）；

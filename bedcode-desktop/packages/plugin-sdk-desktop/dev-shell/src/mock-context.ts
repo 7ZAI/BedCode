@@ -227,12 +227,8 @@ export function createMockContext(pluginId: string, extensionPath: string): Plug
     },
   }
 
-  // ==================== SystemAPI（dev-shell 浏览器环境 no-op，与宿主接口对齐） ====================
-  const system = {
-    async revealInDir(_path: string): Promise<void> {
-      pushLog('info', pluginId, 'system.revealInDir (mock) 浏览器环境不支持')
-    },
-  }
+  // 注：原 `system.revealInDir` 插件 API 已退役——定位改为内核原语
+  // `host-platform.reveal-in-dir`（ABI v22），dev-shell 无对应 mock（插件在 WASM 侧调用）
 
   const context = {
     id: pluginId,
@@ -245,7 +241,6 @@ export function createMockContext(pluginId: string, extensionPath: string): Plug
     storage,
     http,
     i18n,
-    system,
     _disposables: disposables,
   }
   return context

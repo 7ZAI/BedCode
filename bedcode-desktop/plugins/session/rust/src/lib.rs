@@ -463,9 +463,16 @@ impl WasmPlugin for SessionPlugin {
         // 降级轨兜底（命令面回落主库投影，见 spec 票 08 §4），故配置面故障 ≠ 产品面故障。
         match config::ensure_schema_via_host() {
             Ok(()) => match config::migrate_via_host() {
+                // 票 02 阶段 A 观测信号：`legacy_rows` = 本机主库遗留配置行数，
+                // `already_migrated` = 插件私有库迁移 marker 态。两者一起给发布侧
+                // 判断「还有多少安装点的遗留行未迁入私有库」——`session_configs`
+                // 表退役（阶段 B）的前置确认，本批只观测、不改行为。
                 Ok(report) => host.log_info(&format!(
-                    "session config store ready (imported={} skipped_existing={} already_migrated={})",
-                    report.imported, report.skipped_existing, report.already_migrated
+                    "session config store ready (legacy_rows={} imported={} skipped_existing={} already_migrated={})",
+                    report.legacy_rows,
+                    report.imported,
+                    report.skipped_existing,
+                    report.already_migrated
                 )),
                 Err(e) => host.log_warn(&format!(
                     "session config migration failed at activate (config face degraded): {}",

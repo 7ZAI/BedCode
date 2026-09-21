@@ -206,6 +206,22 @@ impl WasmPlugin for FileTransferPlugin {
 
             // ==================== 发送 ====================
             "file-transfer.pick-files" => Ok(serde_json::to_value(h.platform_pick_files()?)?),
+            // 下载完成「打开本地目录」：走 ABI v22 平台原语 `host-platform.reveal-in-dir`
+            // （与 pick-files 同域、同口径，不叠加权限门）。原先经宿主前端
+            // `context.system.revealInDir` + `system:open` 权限 + Tauri 命令
+            // `plugin_reveal_in_dir` 的桥已随原语化退役（票 04）。
+            "file-transfer.reveal-in-dir" => {
+                let path = args
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if path.is_empty() {
+                    return Err(anyhow::anyhow!("reveal-in-dir: empty path rejected"));
+                }
+                h.platform_reveal_in_dir(&path)?;
+                Ok(serde_json::json!({ "revealed": true }))
+            }
             "file-transfer.enqueue" => peer::enqueue(&h, &args, active_node()),
             "file-transfer.list-tasks" => peer::list_tasks(&h),
             "file-transfer.cancel" => peer::cancel_task(&h, &args),
