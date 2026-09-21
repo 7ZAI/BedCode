@@ -5,83 +5,45 @@ use crate::Result;
 use std::sync::Arc;
 use tauri::State;
 
-/// 解析启动端终端组件默认网格（>0 才生效；None 时由内核/插件兜底默认尺寸）
-fn initial_size(cols: Option<u16>, rows: Option<u16>) -> Option<(u16, u16)> {
-    match (cols, rows) {
-        (Some(c), Some(r)) if c > 0 && r > 0 => Some((c, r)),
-        _ => None,
-    }
-}
-
 #[tauri::command]
 pub async fn start_session(
     host: State<'_, Arc<crate::plugin::PluginHost>>,
-    session_manager: State<'_, Arc<SessionManager>>,
     config_id: String,
     cols: Option<u16>,
     rows: Option<u16>,
 ) -> Result<String> {
     tracing::info!(config_id = %config_id, "start_session called");
-    // 票 09：创建编排下沉会话中心插件（命名唯一化 / config→launch spec 映射 /
-    // 创建即启动）。插件可用 → 由插件编排并经 `create-with-spec` 执行；不可用 →
-    // 降级宿主旧路径（读主库投影 + 命名服务 + 配置映射服务），行为逐字等价。
-    if let Some(session_id) = crate::utils::session_create_bridge::create_session_via_plugin(
+    // 票 09 + host-business-decarriage 收尾：创建编排**只在**会话中心插件
+    // （命名唯一化 / config→launch spec 映射 / 创建即启动），本命令是薄转发。
+    // 插件未激活 → 显性报错（无宿主降级：宿主旧路径只读主库投影，对票 08 之后
+    // 真源在插件私有库的新配置本就无法启动，属伪降级）。
+    crate::utils::session_create_bridge::create_session_via_plugin(
         host.wasm_host_ctx(),
         &config_id,
         cols,
         rows,
         true,
+        None,
     )
-    .await?
-    {
-        return Ok(session_id);
-    }
-    // 降级：宿主旧路径（README 保持迁移前行为；双轨期未激活是常态）
-    let result = session_manager
-        .create_session_with_source(&config_id, None, initial_size(cols, rows))
-        .await;
-    match result {
-        Ok(id) => {
-            tracing::info!(session_id = %id, "Session created successfully (host fallback)");
-            Ok(id)
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "Failed to create session (host fallback)");
-            Err(e)
-        }
-    }
+    .await
 }
 
 #[tauri::command]
 pub async fn create_session_no_start(
     host: State<'_, Arc<crate::plugin::PluginHost>>,
-    session_manager: State<'_, Arc<SessionManager>>,
     config_id: String,
 ) -> Result<String> {
     tracing::info!(config_id = %config_id, "create_session_no_start called");
-    // 票 09：两阶段第一阶段（只创建不启动）经插件编排；插件不可用降级宿主旧路径
-    if let Some(session_id) = crate::utils::session_create_bridge::create_session_via_plugin(
+    // 两阶段第一阶段（只创建不启动）同样由插件编排（`start=false`），无宿主降级。
+    crate::utils::session_create_bridge::create_session_via_plugin(
         host.wasm_host_ctx(),
         &config_id,
         None,
         None,
         false,
+        None,
     )
-    .await?
-    {
-        return Ok(session_id);
-    }
-    let result = session_manager.create_session_no_start(&config_id).await;
-    match result {
-        Ok(id) => {
-            tracing::info!(session_id = %id, "Session created (not started) successfully (host fallback)");
-            Ok(id)
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "Failed to create session (not started) (host fallback)");
-            Err(e)
-        }
-    }
+    .await
 }
 
 #[tauri::command]
@@ -157,20 +119,14 @@ pub async fn delete_session(
 
 /// 重启会话（同一 session id 重建并启动）
 ///
-/// 票 10：重启编排下沉会话中心插件（存在性预检给出同步可见的失败）；插件不可用时
-/// 降级宿主执行器（`SessionManager::restart_session`，即插件侧调用的同一执行端）。
+/// 票 10 + v21：重启编排**只在**会话中心插件（存在性预检 + `remove` + 同 id
+/// `create-with-spec`）；内核重启执行器已退役，插件未激活时显性报错（无降级轨）。
 #[tauri::command]
 pub async fn restart_session(
     host: State<'_, Arc<crate::plugin::PluginHost>>,
-    session_manager: State<'_, Arc<SessionManager>>,
     session_id: String,
 ) -> Result<String> {
-    if let Some(session_id) =
-        crate::utils::session_action_bridge::restart_session_via_plugin(host.wasm_host_ctx(), &session_id).await?
-    {
-        return Ok(session_id);
-    }
-    session_manager.restart_session(&session_id).await
+    crate::utils::session_action_bridge::restart_session_via_plugin(host.wasm_host_ctx(), &session_id).await
 }
 
 /// 调整会话终端大小（桌面本地路径，正统渲染端身份恒为 Desktop）

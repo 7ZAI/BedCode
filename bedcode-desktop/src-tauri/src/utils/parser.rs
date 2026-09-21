@@ -9,4 +9,4 @@ pub mod types;
 
 pub use ansi::{AnsiParser, AnsiStyle, StyledSegment};
 pub use markdown::{MarkdownBlock, MarkdownParser};
-pub use service::{detect_waiting_input, OutputParser, ParsedSegment};
+pub use service::{OutputParser, ParsedSegment};

@@ -636,18 +636,6 @@ pub(crate) async fn set_download_dir_for_plugin(app: AppHandle, path: Option<Str
     crate::peer_engine_receive::set_peer_download_dir(app, path).await
 }
 
-pub(crate) async fn pick_files_for_plugin(app: AppHandle) -> crate::Result<Vec<String>> {
-    crate::peer_engine_transfer::peer_pick_files(app).await
-}
-
-pub(crate) async fn pick_folder_for_plugin(app: AppHandle) -> crate::Result<Vec<String>> {
-    crate::peer_engine_transfer::peer_pick_folder(app).await
-}
-
-pub(crate) async fn pick_folders_for_plugin(app: AppHandle) -> crate::Result<Vec<String>> {
-    crate::peer_engine_transfer::peer_pick_folders(app).await
-}
-
 /// 文件传输插件 id：peer-net 节点的唯一消费方（全仓唯一声明 `peer` 权限的插件），
 /// 节点生命周期随其启用状态
 pub const FILE_TRANSFER_PLUGIN_ID: &str = "com.bedcode.file-transfer";

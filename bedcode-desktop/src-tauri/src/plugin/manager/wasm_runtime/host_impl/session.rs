@@ -307,6 +307,17 @@ pub(crate) struct LaunchSpec {
     /// 是否创建即启动（缺省 true；false = 两阶段第一阶段）
     #[serde(default = "default_spec_start")]
     pub start: bool,
+    /// 启动端设备名（可选，非业务解释的纯事实）：移动端经 HTTP/WS 触发启动时由插件
+    /// 透传设备名，内核据此把「正统渲染端」初始归属固定为启动端（与旧宿主路径
+    /// `create_session_with_source` 的归属语义逐字一致）；桌面本地启动缺省为 None
+    /// （归属 Desktop）。
+    #[serde(default)]
+    pub source_device: Option<String>,
+    /// 指定会话 id（可选）：**重启编排**用——插件先 `remove` 旧会话，再以同一 id
+    /// 重建（线协议与终端订阅键不变）。缺省由宿主预生成 UUID；指定 id 已被在册
+    /// 会话占用时显性拒绝（不覆盖，避免与重启语义冲突）。
+    #[serde(default)]
+    pub session_id: Option<String>,
 }
 
 fn default_spec_start() -> bool {
@@ -379,16 +390,31 @@ pub(crate) fn session_create_with_spec(
         return Err(format!("permission denied: {}", PERMISSION_SESSION_WRITE));
     }
     let (spec, launch_config) = resolve_launch_spec(spec_json)?;
+    // 会话 id：spec 指定（重启 = 同一 id 重建）或宿主预生成
+    let session_id = match spec.session_id.as_deref().map(str::trim) {
+        Some("") => return Err("session error: empty session id".to_string()),
+        Some(id) => id.to_string(),
+        None => Uuid::new_v4().to_string(),
+    };
+    // id 冲突仲裁（§8：最终仲裁在 Rust 端）：指定 id 已被在册会话占用 → 显性拒绝，
+    // 不静默覆盖（重启编排的正确序是「先 remove 再 create」，宿主只做事实校验）
+    if let Some(existing) = block_on_async(host_ctx.session_manager.get_session(&session_id)) {
+        return Err(format!(
+            "session error: session id already exists: {} (name={})",
+            session_id, existing.name
+        ));
+    }
 
     let sm = host_ctx.session_manager.clone();
-    let session_id = Uuid::new_v4().to_string();
     let sid = session_id.clone();
     let pid = plugin_id.to_string();
     let cid = spec.config_id.unwrap_or_default();
     let start = spec.start;
+    // 启动端归属（票 09/D3）：spec 可携带 source_device，缺省 None = 桌面本地启动
+    let source_device = spec.source_device.clone();
     spawn_with_error_boundary("host_session_create_with_spec", async move {
         match sm
-            .create_session_from_spec(launch_config, cid.clone(), None, start, Some(&sid))
+            .create_session_from_spec(launch_config, cid.clone(), source_device, start, Some(&sid))
             .await
         {
             Ok(_) => {
@@ -415,53 +441,6 @@ pub(crate) fn session_create_with_spec(
     Ok(session_id)
 }
 
-/// 按配置创建新会话（v6，ADR 0003），返回预生成的 session_id
-///
-/// 创建为宿主异步执行：wasm 调用栈内同步创建会死锁 —— `create_session`
-/// 会同步分发 Creating/Created 生命周期事件，而事件回灌同一插件实例需要
-/// 重新获取 `wasm_plugins` 写锁（该锁正被当前 wasm 调用持有，tokio RwLock
-/// 不可重入），且 wasmtime Store 不可重入。因此此处预生成会话 ID 立即返回，
-/// 实际创建在宿主上下文异步执行：事件分发发生在 wasm 调用返回（锁释放）后，
-/// hooks 仍先于 PTY 启动就位。
-pub(crate) fn session_create(host_ctx: &WasmHostContext, plugin_id: &str, config_id: &str) -> Result<String, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_SESSION_WRITE, "host_session_create") {
-        return Err("permission denied".to_string());
-    }
-    if config_id.is_empty() {
-        return Err("session error: empty config_id".to_string());
-    }
-    let sm = host_ctx.session_manager.clone();
-    // 预生成会话 ID 并异步创建：插件侧照常将 job 置 creating 并记录 session_id，
-    // 等待 Created 事件（携带同一 session_id）完成匹配，语义与同步创建一致
-    let session_id = Uuid::new_v4().to_string();
-    let cid = config_id.to_string();
-    let sid = session_id.clone();
-    let pid = plugin_id.to_string();
-    spawn_with_error_boundary("host_session_create", async move {
-        match sm.create_session_with_id(&cid, &sid).await {
-            Ok(_) => {
-                tracing::info!(
-                    plugin_id = %pid,
-                    config_id = %cid,
-                    session_id = %sid,
-                    "host_session_create: session created (async)"
-                );
-            }
-            Err(e) => {
-                // 创建失败无同步返回通道：插件侧由 creating 超时看门狗置 failed
-                tracing::error!(
-                    plugin_id = %pid,
-                    config_id = %cid,
-                    session_id = %sid,
-                    error = %e,
-                    "host_session_create: create_session failed (async)"
-                );
-            }
-        }
-    });
-    Ok(session_id)
-}
-
 /// 关闭（终止）会话（v7，需要 `session:write` 权限）
 ///
 /// 包一层核心已有的 `SessionManager::kill_session_with_source`，供插件
@@ -470,8 +449,7 @@ pub(crate) fn session_create(host_ctx: &WasmHostContext, plugin_id: &str, config
 ///
 /// **异步执行**：`kill_session_with_source` 会同步分发 Stopping/Stopped
 /// 生命周期事件，事件回灌同一插件实例需要重新获取 `wasm_plugins` 写锁
-/// （tokio RwLock 不可重入）——与 `session_create` 同理，此处 spawn 异步执行，
-/// wasm 调用立即返回。
+/// （tokio RwLock 不可重入），故此处 spawn 异步执行、wasm 调用立即返回。
 pub(crate) fn session_close(host_ctx: &WasmHostContext, plugin_id: &str, session_id: &str) -> Result<(), String> {
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_SESSION_WRITE, "host_session_close") {
         return Err("permission denied".to_string());
@@ -511,52 +489,14 @@ pub(crate) fn session_close(host_ctx: &WasmHostContext, plugin_id: &str, session
 //
 // - **编排与裁决在插件**：重启前存在性预检与失败可见、移除的调用顺序、尺寸的正统端
 //   判定与覆盖确认策略（`plugins/session` 的 `actions` 模块）
-// - **执行与登记在内核**：`SessionManager::restart_session` / `remove_session` /
-//   `resize_session` 执行器保留（移动端 HTTP/WS 路径与插件未激活时的降级轨仍直连
-//   它们），本层只做权限门 / 参数仲裁 / 原语形状适配
+// - **执行与登记在内核**：`SessionManager::remove_session` / `resize_session`
+//   执行器保留（移动端 HTTP/WS 路径与插件未激活时的降级轨仍直连它们），本层只做
+//   权限门 / 参数仲裁 / 原语形状适配
+//
+// 重启不再有独立原语（v21 退役）：插件编排 = `remove` + `create-with-spec`
+// （spec 带 `sessionId` 保住同 id 重建语义），见 host-business-decarriage 收尾。
 //
 // 权限门一律先于参数处理（AGENTS §7/§8：最终仲裁在 Rust 端）。
-
-/// 重启会话（v19，权限 `session:write`）
-///
-/// 宿主执行器 = `SessionManager::restart_session`（移除旧会话 + 以同一 id 重建并
-/// 启动，正统端归属回到启动端；Creating/Created 事件顺序与迁移前逐字一致）。
-///
-/// **异步执行**：重启会同步分发 Creating/Created 生命周期事件，事件回灌同一插件
-/// 实例需重新获取 `wasm_plugins` 写锁（tokio RwLock 不可重入 + wasmtime Store
-/// 不可重入，理由同 [`session_create`]）——故立即返回「已受理」，实际重启在宿主
-/// 上下文执行；失败落 `error` 日志（插件侧以存在性预检给出同步可见的失败）。
-pub(crate) fn session_restart(host_ctx: &WasmHostContext, plugin_id: &str, session_id: &str) -> Result<(), String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_SESSION_WRITE, "host_session_restart") {
-        return Err("permission denied".to_string());
-    }
-    if session_id.trim().is_empty() {
-        return Err("session error: empty session_id".to_string());
-    }
-    let sm = host_ctx.session_manager.clone();
-    let sid = session_id.to_string();
-    let pid = plugin_id.to_string();
-    spawn_with_error_boundary("host_session_restart", async move {
-        match sm.restart_session(&sid).await {
-            Ok(_) => {
-                tracing::info!(
-                    plugin_id = %pid,
-                    session_id = %sid,
-                    "host_session_restart: session restarted (async)"
-                );
-            }
-            Err(e) => {
-                tracing::error!(
-                    plugin_id = %pid,
-                    session_id = %sid,
-                    error = %e,
-                    "host_session_restart: restart_session failed (async)"
-                );
-            }
-        }
-    });
-    Ok(())
-}
 
 /// 移除会话（v19，权限 `session:write`）
 ///
@@ -786,23 +726,6 @@ mod tests {
         assert_eq!(err, "permission denied");
     }
 
-    /// 无 session:write 权限：创建会话被拒绝
-    #[test]
-    fn session_create_permission_denied() {
-        let ctx = build_host_ctx();
-        let err = session_create(&ctx, PLUGIN, "cfg-1").unwrap_err();
-        assert_eq!(err, "permission denied");
-    }
-
-    /// 空 config_id：权限通过后参数校验拒绝（避免无效会话创建）
-    #[test]
-    fn session_create_empty_config_id_rejected() {
-        let ctx = build_host_ctx();
-        grant_permissions(&ctx, PLUGIN, &[PERMISSION_SESSION_WRITE]);
-        let err = session_create(&ctx, PLUGIN, "").unwrap_err();
-        assert_eq!(err, "session error: empty config_id");
-    }
-
     /// 无 session:write 权限：关闭会话被拒绝
     #[test]
     fn session_close_permission_denied() {
@@ -995,20 +918,6 @@ mod tests {
         grant_permissions(&ctx, PLUGIN, &[PERMISSION_SESSION_READ]);
         let result = session_get(&ctx, PLUGIN, "no-such-session").expect("get ok");
         assert!(result.is_none());
-    }
-
-    /// 预生成 session_id：同步返回 UUID v4，实际创建在后台异步执行
-    ///
-    /// 配置不存在时后台创建失败仅记录日志（插件侧由 creating 超时看门狗接管），
-    /// 同步路径不受影响 —— 断言返回值的 UUID 形态而非创建结果
-    #[tokio::test]
-    async fn session_create_returns_pre_generated_uuid() {
-        let ctx = build_host_ctx();
-        grant_permissions(&ctx, PLUGIN, &[PERMISSION_SESSION_WRITE]);
-        let sid = session_create(&ctx, PLUGIN, "no-such-config").expect("pre-generated id");
-        assert_eq!(sid.len(), 36);
-        let uuid = Uuid::parse_str(&sid).expect("valid uuid");
-        assert_eq!(uuid.get_version_num(), 4);
     }
 
     /// 关闭不存在的会话：同步返回 Ok（异步 kill 失败仅记录日志）
@@ -1230,11 +1139,10 @@ mod tests {
         sid
     }
 
-    /// 四原语缺权限：一律**权限门先于参数处理**（非法 id 也报权限错，不泄漏参数面）
+    /// 三原语缺权限：一律**权限门先于参数处理**（非法 id 也报权限错，不泄漏参数面）
     #[test]
     fn session_actions_permission_denied() {
         let ctx = build_host_ctx();
-        assert_eq!(session_restart(&ctx, PLUGIN, "s1").unwrap_err(), "permission denied");
         assert_eq!(session_remove(&ctx, PLUGIN, "s1").unwrap_err(), "permission denied");
         assert_eq!(
             session_rename(&ctx, PLUGIN, "s1", "n").unwrap_err(),
@@ -1253,10 +1161,6 @@ mod tests {
         let ctx = build_host_ctx();
         grant_permissions(&ctx, PLUGIN, &[PERMISSION_SESSION_WRITE]);
 
-        assert_eq!(
-            session_restart(&ctx, PLUGIN, "").unwrap_err(),
-            "session error: empty session_id"
-        );
         assert_eq!(
             session_remove(&ctx, PLUGIN, "  ").unwrap_err(),
             "session error: empty session_id"
@@ -1389,15 +1293,6 @@ mod tests {
         assert_eq!(after["id"], sid, "既有字段（宽解析）不受追加字段影响");
 
         block_on_async(ctx.session_manager.remove_session(&sid)).expect("cleanup");
-    }
-
-    /// 重启：原语立即受理（宿主异步执行），未知会话在宿主侧只记日志——
-    /// 同步可见的失败由插件侧存在性预检提供（此处只钉「受理语义 + 权限门」）
-    #[tokio::test]
-    async fn session_restart_is_accepted_and_async() {
-        let ctx = build_host_ctx();
-        grant_permissions(&ctx, PLUGIN, &[PERMISSION_SESSION_WRITE]);
-        session_restart(&ctx, PLUGIN, "no-such-session").expect("受理即返回（失败落日志）");
     }
 
     // ==================== 注解槽与连接清单（v19，票 11） ====================

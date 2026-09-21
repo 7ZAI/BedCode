@@ -375,27 +375,19 @@ interface host-session {
     /// `{"type":"Windows","shell":"PowerShell"}`，与宿主 `ExecutionEnvironment`
     /// serde 同形）。宿主只做执行：shell 包装 / 发行版转换（按 environment）/ 尺寸
     /// 缺省（spec 缺省或非法时用宿主默认网格）/ ID 预生成（返回预生成 session_id，
-    /// 实际创建**异步执行**，理由同 `create`——事件回灌同一插件实例需重新获取
-    /// wasm_plugins 写锁，wasmtime Store 不可重入）。
+    /// 实际创建**异步执行**——事件回灌同一插件实例需重新获取 wasm_plugins 写锁，
+    /// wasmtime Store 不可重入）。`session-id` 可显式指定（重启编排：先 `remove`
+    /// 旧会话再以同一 id 重建），已被在册会话占用时显性拒绝。
     /// `start = false` 时只创建会话与 PTY（状态 `Starting`，不启动进程，也不注册
     /// 输出管理器），供「两阶段启动」编排的第一阶段使用。映射决策（命名唯一化 /
     /// config→launch / 是否启动）全部在插件侧完成，本原语不做任何业务解释。
     create-with-spec: func(spec-json: string) -> result<string, string>;
     lifecycle-register: func() -> result<_, string>;
     input-register: func() -> result<_, string>;
-    create: func(config-id: string) -> result<string, string>;
     /// 关闭（终止）会话（v7）：停止 PTY 并置 Stopped，会话记录保留
     /// （与用户手动关闭一致）；宿主分发 Stopping/Stopped 生命周期事件。
     /// 供插件在定时自动任务执行完后清理自己创建的会话。
     close: func(session-id: string) -> result<_, string>;
-    /// 重启会话（v19，权限 `session:write`）：宿主执行器保留（`restart_session`
-    /// 语义 = 移除旧会话 + 以**同一 id** 重建并启动，正统端归属回到启动端），
-    /// 编排（存在性预检、失败可见、调用顺序）与决策由插件完成。
-    /// **异步执行**：重启会同步分发 Creating/Created 生命周期事件，事件回灌同一
-    /// 插件实例需重新获取 wasm_plugins 写锁（wasmtime Store 不可重入，与
-    /// `create` / `close` 同理），故原语立即返回、宿主异步执行；未知会话 /
-    /// 配置缺失在宿主侧只记日志（插件以存在性预检给出同步可见的失败）。
-    restart: func(session-id: string) -> result<_, string>;
     /// 移除会话（v19，权限 `session:write`）：注册表清理（输出管理器 / PTY 注册表
     /// / 会话记录 / 正统端归属）+ 会话删除同步事件，进程随句柄释放终止。
     /// 未知 id 幂等成功（与宿主 `remove_session` 语义一致）。

@@ -142,6 +142,15 @@ pub struct LaunchSpec {
     pub config_id: String,
     /// 两阶段启动编排决策：false = 只创建不启动（第一阶段）
     pub start: bool,
+    /// 启动端设备名（可选）：桌面本地启动缺省；移动端经 HTTP/WS 启动时带设备名，
+    /// 内核据此把「正统渲染端」初始归属固定为启动端（移动端单独启动的会话不会被
+    /// 桌面端首次 resize 误判为需要覆盖确认）。纯事实透传，不含业务解释。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_device: Option<String>,
+    /// 指定会话 id（可选）：重启编排用（先 remove 旧会话，再以同一 id 重建）。
+    /// 普通创建缺省 → 宿主预生成 UUID。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 /// 配置 → launch spec（映射决策层；校验已由 `config::ops::normalize` 完成，
@@ -170,6 +179,10 @@ pub fn build_launch_spec(
         environment,
         config_id: config.id.clone(),
         start,
+        // 启动端归属由调用方（编排入口）按请求来源填入，纯映射层不猜
+        source_device: None,
+        // 会话 id 由调用方（重启编排）按需填入，普通创建交给宿主预生成
+        session_id: None,
     })
 }
 
@@ -196,6 +209,9 @@ pub struct CreateSessionRequest {
     /// 两阶段启动编排决策：缺省 true（创建即启动；与宿主 start_session 语义一致）
     #[serde(default = "default_start")]
     pub start: bool,
+    /// 启动端设备名（可选；移动端 HTTP/WS 启动路径携带 → 正统端初始归属该端）
+    #[serde(default)]
+    pub source_device: Option<String>,
 }
 
 fn default_start() -> bool {
@@ -487,6 +503,8 @@ pub fn create_via_host(draft_json: &serde_json::Value) -> Result<serde_json::Val
     // config→launch spec 映射 + 两阶段启动决策
     let mut spec = build_launch_spec(&config, request.cols, request.rows, request.start)?;
     spec.name = unique_name;
+    // 启动端事实透传（移动端启动 → 正统端初始归属该端；桌面本地启动为 None）
+    spec.source_device = request.source_device.clone();
     // 宿主 create-with-spec 执行（shell 包装 / WSL 转换 / 尺寸缺省 / ID 预生成）
     let spec_json =
         serde_json::to_value(&spec).map_err(|e| format!("launch spec serialize failed: {}", e))?;

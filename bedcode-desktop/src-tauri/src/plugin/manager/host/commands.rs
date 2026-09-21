@@ -371,12 +371,7 @@ mod tests {
     async fn test_plugin_host() -> Arc<PluginHost> {
         let db = Arc::new(Mutex::new(Database::new(Path::new(":memory:")).expect("in-memory db")));
         db.lock().await.init_schema().expect("init schema");
-        let session_db = Database::new(Path::new(":memory:")).expect("session db");
-        session_db.init_schema().expect("session schema");
-        let sm = Arc::new(crate::session::SessionManager::from_database(
-            session_db,
-            Arc::new(std::path::PathBuf::from(".")),
-        ));
+        let sm = Arc::new(crate::session::SessionManager::default());
         let cm = Arc::new(SessionConfigManager::new(db.clone()));
         let dir = std::env::temp_dir().join(format!("bedcode-cmd-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("temp dir");

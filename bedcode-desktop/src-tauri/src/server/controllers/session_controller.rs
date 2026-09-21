@@ -49,7 +49,6 @@ pub async fn list_sessions(_req: HttpRequest) -> HttpResponse {
 /// POST /api/sessions/start
 pub async fn start_session(req: HttpRequest, body: web::Json<StartSessionRequest>) -> HttpResponse {
     let ctx = AppContext::global();
-    let session_manager = ctx.session_manager();
 
     let device_name = get_claims_from_request(&req).and_then(|c| c.device_name);
 
@@ -61,9 +60,17 @@ pub async fn start_session(req: HttpRequest, body: web::Json<StartSessionRequest
         _ => None,
     };
 
-    match session_manager
-        .create_session_with_source(&body.config_id, device_name, initial_size)
-        .await
+    // host-business-decarriage 收尾：移动端 HTTP 启动线同样走插件编排
+    // （插件必需，无宿主降级）；响应形状与错误码 1002 保持不变。
+    match crate::utils::session_create_bridge::create_session_via_plugin(
+        ctx.plugin_host().wasm_host_ctx(),
+        &body.config_id,
+        initial_size.map(|(c, _)| c),
+        initial_size.map(|(_, r)| r),
+        true,
+        device_name.as_deref(),
+    )
+    .await
     {
         Ok(session_id) => {
             // 无头/测试上下文无 AppHandle：跳过前端刷新通知

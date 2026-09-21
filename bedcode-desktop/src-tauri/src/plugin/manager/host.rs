@@ -1887,10 +1887,7 @@ mod tests {
         let db = Arc::new(Mutex::new(Database::new(&PathBuf::from(":memory:")).unwrap()));
         db.lock().await.init_schema().unwrap();
         let storage = Arc::new(PluginStorage::new(db.clone()));
-        let session_manager = Arc::new(SessionManager::from_database(
-            Database::new(&PathBuf::from(":memory:")).unwrap(),
-            Arc::new(PathBuf::from(".")),
-        ));
+        let session_manager = Arc::new(SessionManager::default());
         let config_manager = Arc::new(SessionConfigManager::new(Arc::new(Mutex::new(
             Database::new(&PathBuf::from(":memory:")).unwrap(),
         ))));
@@ -3599,10 +3596,7 @@ mod tests {
             .await
             .expect("seed persisted activation state");
 
-        let session_manager = Arc::new(SessionManager::from_database(
-            Database::new(&std::path::PathBuf::from(":memory:")).unwrap(),
-            Arc::new(std::path::PathBuf::from(".")),
-        ));
+        let session_manager = Arc::new(SessionManager::default());
         let config_manager = Arc::new(SessionConfigManager::new(Arc::new(Mutex::new(
             Database::new(&std::path::PathBuf::from(":memory:")).unwrap(),
         ))));

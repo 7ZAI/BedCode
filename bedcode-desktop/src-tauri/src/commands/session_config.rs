@@ -1,11 +1,10 @@
 //! Session Config Commands
 //!
-//! 票 08：配置真源迁入会话中心插件私有库——本文件四个命令改为**薄转发**
-//! （经 `utils::session_config_bridge`）。命令签名与返回形状保持不变
-//! （前端与移动端零改判）；插件不可用时桥接自动降级宿主 `SessionConfigManager`
-//! （迁移前行为，无单点）。
+//! 票 08 + v21：配置真源在会话中心插件私有库——本文件五个命令是**薄转发**
+//! （经 `utils::session_config_bridge`），命令签名与返回形状保持不变（前端与
+//! 移动端零改判）。插件未激活时桥接**显性报错**（无宿主降级：主库投影随内核
+//! 创建/重启执行器退役一并停写，宿主不再持有业务副本）。
 
-use crate::session::SessionConfigManager;
 use crate::Result;
 use std::sync::Arc;
 use tauri::State;
@@ -13,7 +12,6 @@ use tauri::State;
 #[tauri::command(rename_all = "snake_case")]
 pub async fn create_session_config(
     host: State<'_, Arc<crate::plugin::PluginHost>>,
-    config_manager: State<'_, Arc<SessionConfigManager>>,
     name: String,
     environment: String,
     working_dir: String,
@@ -22,7 +20,6 @@ pub async fn create_session_config(
 ) -> Result<crate::db::SessionConfig> {
     let result = crate::utils::session_config_bridge::create_config(
         host.wasm_host_ctx(),
-        &config_manager,
         name,
         environment,
         wsl_distro,
@@ -42,33 +39,29 @@ pub async fn create_session_config(
 #[tauri::command]
 pub async fn list_session_configs(
     host: State<'_, Arc<crate::plugin::PluginHost>>,
-    config_manager: State<'_, Arc<SessionConfigManager>>,
 ) -> Result<Vec<crate::db::SessionConfig>> {
-    crate::utils::session_config_bridge::list_configs(host.wasm_host_ctx(), &config_manager).await
+    crate::utils::session_config_bridge::list_configs(host.wasm_host_ctx()).await
 }
 
 #[tauri::command]
 pub async fn get_session_config(
     host: State<'_, Arc<crate::plugin::PluginHost>>,
-    config_manager: State<'_, Arc<SessionConfigManager>>,
     id: String,
 ) -> Result<Option<crate::db::SessionConfig>> {
-    crate::utils::session_config_bridge::get_config(host.wasm_host_ctx(), &config_manager, &id).await
+    crate::utils::session_config_bridge::get_config(host.wasm_host_ctx(), &id).await
 }
 
 #[tauri::command]
 pub async fn delete_session_config(
     host: State<'_, Arc<crate::plugin::PluginHost>>,
-    config_manager: State<'_, Arc<SessionConfigManager>>,
     id: String,
 ) -> Result<()> {
-    crate::utils::session_config_bridge::delete_config(host.wasm_host_ctx(), &config_manager, &id).await
+    crate::utils::session_config_bridge::delete_config(host.wasm_host_ctx(), &id).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn update_session_config(
     host: State<'_, Arc<crate::plugin::PluginHost>>,
-    config_manager: State<'_, Arc<SessionConfigManager>>,
     id: String,
     name: String,
     environment: String,
@@ -79,7 +72,6 @@ pub async fn update_session_config(
 ) -> Result<crate::db::SessionConfig> {
     crate::utils::session_config_bridge::update_config(
         host.wasm_host_ctx(),
-        &config_manager,
         &id,
         name,
         environment,

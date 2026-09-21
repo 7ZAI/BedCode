@@ -1,30 +1,98 @@
 //! host-platform 逻辑层 —— 通用平台能力域（ADR 0022 v2，issue 13 Phase 2）
 //!
 //! 系统对话框等与领域无关的平台交互。选源对话框本身即用户授权动作，
-//! 不叠加权限门（与 host-platform 原语契约同口径）。底层复用 peer-net
-//! 的既有实现（Phase 4 旧接口退役时实现本体迁来或改挂通用 dialog 层）。
+//! 不叠加权限门（与 host-platform 原语契约同口径）。
+//!
+//! 实现本体在此（host-business-decarriage 收尾）：历史上选源对话框挂在
+//! `peer_engine_transfer`（对等传输域）下，经 `peer_net` 转发而来——那是
+//! 「peer 命令面复用」时期的错放（ADR 0022 v2 已把 pick-* 判归 host-platform）。
+//! 传输域不再承载平台对话框，插件一律走本域。
 
 use crate::plugin::manager::wasm_runtime::{block_on_async, WasmHostContext};
+use tauri_plugin_dialog::DialogExt;
 
 /// 系统多文件选择器 → string[] JSON（用户取消为空数组）
 pub(crate) fn platform_pick_files(host_ctx: &WasmHostContext) -> Result<String, String> {
     let app = require_app(host_ctx)?;
-    let paths = sync_result(block_on_async(crate::peer_net::pick_files_for_plugin(app)))?;
+    let paths = sync_result(block_on_async(pick_files(app)))?;
     serde_json::to_string(&paths).map_err(|e| format!("serialize picked files failed: {e}"))
 }
 
 /// 系统文件夹选择器 → 绝对路径；用户取消返回空串
 pub(crate) fn platform_pick_folder(host_ctx: &WasmHostContext) -> Result<String, String> {
     let app = require_app(host_ctx)?;
-    let paths = sync_result(block_on_async(crate::peer_net::pick_folder_for_plugin(app)))?;
+    let paths = sync_result(block_on_async(pick_folder(app)))?;
     Ok(paths.into_iter().next().unwrap_or_default())
 }
 
 /// 系统多目录选择器 → string[] JSON（用户取消为空数组）
 pub(crate) fn platform_pick_folders(host_ctx: &WasmHostContext) -> Result<String, String> {
     let app = require_app(host_ctx)?;
-    let paths = sync_result(block_on_async(crate::peer_net::pick_folders_for_plugin(app)))?;
+    let paths = sync_result(block_on_async(pick_folders(app)))?;
     serde_json::to_string(&paths).map_err(|e| format!("serialize picked folders failed: {e}"))
+}
+
+// ==================== 选源对话框（阻塞至用户选择；取消 → 空） ====================
+
+async fn pick_files(app_handle: tauri::AppHandle) -> crate::Result<Vec<String>> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app_handle.dialog().file().pick_files(move |selection| {
+        if tx.send(selection).is_err() {
+            tracing::debug!("platform_pick_files: receiver dropped before dialog completed");
+        }
+    });
+    match rx.await {
+        Ok(Some(paths)) => paths.into_iter().map(path_to_string).collect(),
+        // 用户取消选择
+        Ok(None) => Ok(Vec::new()),
+        Err(e) => Err(crate::AppError::Plugin(format!(
+            "platform_pick_files: dialog channel closed: {e}"
+        ))),
+    }
+}
+
+async fn pick_folder(app_handle: tauri::AppHandle) -> crate::Result<Vec<String>> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app_handle.dialog().file().pick_folder(move |selection| {
+        if tx.send(selection).is_err() {
+            tracing::debug!("platform_pick_folder: receiver dropped before dialog completed");
+        }
+    });
+    match rx.await {
+        Ok(Some(path)) => Ok(vec![path_to_string(path)?]),
+        // 用户取消选择
+        Ok(None) => Ok(Vec::new()),
+        Err(e) => Err(crate::AppError::Plugin(format!(
+            "platform_pick_folder: dialog channel closed: {e}"
+        ))),
+    }
+}
+
+async fn pick_folders(app_handle: tauri::AppHandle) -> crate::Result<Vec<String>> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app_handle.dialog().file().pick_folders(move |selection| {
+        if tx.send(selection).is_err() {
+            tracing::debug!("platform_pick_folders: receiver dropped before dialog completed");
+        }
+    });
+    match rx.await {
+        Ok(Some(paths)) => paths.into_iter().map(path_to_string).collect(),
+        // 用户取消选择
+        Ok(None) => Ok(Vec::new()),
+        Err(e) => Err(crate::AppError::Plugin(format!(
+            "platform_pick_folders: dialog channel closed: {e}"
+        ))),
+    }
+}
+
+/// Dialog FilePath → UTF-8 绝对路径串（非 UTF-8 路径显式报错而非静默丢弃）
+fn path_to_string(file_path: tauri_plugin_dialog::FilePath) -> crate::Result<String> {
+    let path = file_path
+        .into_path()
+        .map_err(|e| crate::AppError::InvalidInput(format!("platform pick: failed to convert selected path: {e}")))?;
+    path.to_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| crate::AppError::InvalidInput("platform pick: selected path is not valid UTF-8".to_string()))
 }
 
 fn require_app(host_ctx: &WasmHostContext) -> Result<tauri::AppHandle, String> {

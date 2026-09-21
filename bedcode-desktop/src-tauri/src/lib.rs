@@ -372,9 +372,8 @@ pub fn run() {
             // 采集系统基本信息（OS / 设备名称 / IP），挂载到 AppContext 供全局引用
             let system_info = Arc::new(system::info::SystemInfo::collect());
 
-            let storage = Arc::new(session::SessionStorage::new(db.clone()));
             let resource_dir_arc = Arc::new(resource_dir);
-            let session_manager = Arc::new(session::SessionManager::new(storage, resource_dir_arc.clone()));
+            let session_manager = Arc::new(session::SessionManager::new(resource_dir_arc.clone()));
             let config_manager = Arc::new(session::SessionConfigManager::new(db.clone()));
             // app_handle_arc 需在 plugin_host 之前创建，因为 PluginHost::new() 需要它构建 HostContextFns
             let app_handle_arc = Arc::new(app_handle.clone());

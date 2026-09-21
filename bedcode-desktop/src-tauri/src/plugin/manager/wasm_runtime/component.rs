@@ -332,20 +332,12 @@ impl bedcode::plugin::host_session::Host for WasmPluginState {
         lifecycle::session_input_register(&self.host_ctx, &self.plugin_id)
     }
 
-    fn create(&mut self, config_id: String) -> Result<String, String> {
-        session::session_create(&self.host_ctx, &self.plugin_id, &config_id)
-    }
-
     fn create_with_spec(&mut self, spec_json: String) -> Result<String, String> {
         session::session_create_with_spec(&self.host_ctx, &self.plugin_id, &spec_json)
     }
 
     fn close(&mut self, session_id: String) -> Result<(), String> {
         session::session_close(&self.host_ctx, &self.plugin_id, &session_id)
-    }
-
-    fn restart(&mut self, session_id: String) -> Result<(), String> {
-        session::session_restart(&self.host_ctx, &self.plugin_id, &session_id)
     }
 
     fn remove(&mut self, session_id: String) -> Result<(), String> {

@@ -1,11 +1,14 @@
 //! Session Components
 //!
-//! 会话管理器的内部组件：注册表、命名服务、配置映射、状态检测
+//! 会话管理器的内部组件：PTY / 会话信息 / 正统渲染端注册表
 //! 这些组件各自只有一个实现，trait 已内联到此文件
+//!
+//! v21 起「命名服务 / 配置映射」已退役（映射决策归插件）：本文件不再含
+//! NamingService / ConfigMapper——插件侧的对应实现见
+//! `plugins/session/rust/src/launch.rs`。
 
-use crate::db::SessionConfig;
 use crate::enums::SessionStatus;
-use crate::pty::{ExecutionEnvironment, PtySession, SessionLaunchConfig, WindowsShell};
+use crate::pty::PtySession;
 use crate::session::SessionInfo;
 use crate::Result;
 use std::collections::HashMap;
@@ -225,129 +228,6 @@ impl SessionInfoRegistry for DefaultSessionInfoRegistry {
         let previous = info.name.clone();
         info.name = name.to_string();
         Some(previous)
-    }
-}
-
-// ==================== Naming Service ====================
-
-/// 会话命名服务 - 生成唯一的会话名称
-pub trait NamingService: Send + Sync {
-    fn generate_unique_name(&self, config_id: &str, base_name: &str, sessions: &[SessionInfo]) -> String;
-}
-
-pub struct DefaultNamingService;
-
-impl DefaultNamingService {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-impl Default for DefaultNamingService {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl NamingService for DefaultNamingService {
-    fn generate_unique_name(&self, config_id: &str, base_name: &str, sessions: &[SessionInfo]) -> String {
-        // 从同配置的活跃会话名称中提取最大编号，避免删除后编号回退导致重名
-        let max_index = sessions
-            .iter()
-            .filter(|s| s.config_id == config_id && s.status != SessionStatus::Stopped)
-            .filter_map(|s| {
-                // 匹配 "baseName(N)" 格式，提取数字 N
-                let name = &s.name;
-                if name == base_name {
-                    Some(0)
-                } else if let Some(rest) = name.strip_prefix(base_name) {
-                    rest.strip_prefix('(')
-                        .and_then(|r| r.strip_suffix(')'))
-                        .and_then(|n| n.parse::<usize>().ok())
-                } else {
-                    None
-                }
-            })
-            .max();
-
-        match max_index {
-            None => base_name.to_string(),
-            Some(0) => format!("{}(1)", base_name),
-            Some(n) => format!("{}({})", base_name, n + 1),
-        }
-    }
-}
-
-// ==================== Config Mapper ====================
-
-/// 配置映射服务 - 将数据库配置转换为启动配置
-pub trait ConfigMapper: Send + Sync {
-    fn to_launch_config(&self, config: &SessionConfig) -> Result<SessionLaunchConfig>;
-}
-
-pub struct DefaultConfigMapper;
-
-impl DefaultConfigMapper {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-impl Default for DefaultConfigMapper {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl ConfigMapper for DefaultConfigMapper {
-    fn to_launch_config(&self, config: &SessionConfig) -> Result<SessionLaunchConfig> {
-        let environment = match config.environment.as_str() {
-            "wsl2" => ExecutionEnvironment::Wsl2 {
-                distro: config.wsl_distro.clone().unwrap_or_else(|| "Ubuntu".to_string()),
-            },
-            // Linux 原生环境：直接跑 bash，不带 distro
-            "linux" => ExecutionEnvironment::Linux,
-            _ => ExecutionEnvironment::Windows {
-                shell: WindowsShell::PowerShell,
-            },
-        };
-
-        Ok(SessionLaunchConfig {
-            name: config.name.clone(),
-            environment,
-            working_dir: config.working_dir.clone(),
-            command: config.command.clone(),
-            env_vars: std::collections::HashMap::new(),
-            cols: 120,
-            rows: 40,
-        })
-    }
-}
-
-// ==================== Status Detector ====================
-
-/// 状态检测服务 - 检测会话状态（如等待输入）
-pub trait StatusDetector: Send + Sync {
-    fn detect_waiting_input(&self, output: &str) -> bool;
-}
-
-pub struct DefaultStatusDetector;
-
-impl DefaultStatusDetector {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-impl Default for DefaultStatusDetector {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl StatusDetector for DefaultStatusDetector {
-    fn detect_waiting_input(&self, output: &str) -> bool {
-        crate::utils::parser::detect_waiting_input(output)
     }
 }
 

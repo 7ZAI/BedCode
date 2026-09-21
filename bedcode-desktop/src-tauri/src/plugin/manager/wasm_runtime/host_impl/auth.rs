@@ -649,10 +649,7 @@ mod tests {
             storage.clone(),
             None,
         ));
-        let session_manager = Arc::new(SessionManager::from_database(
-            crate::db::Database::new(&db_path.with_extension("session.db")).expect("session db"),
-            Arc::new(std::path::PathBuf::from(".")),
-        ));
+        let session_manager = Arc::new(SessionManager::default());
         let config_manager = Arc::new(SessionConfigManager::new(Arc::new(tokio::sync::Mutex::new({
             let db = crate::db::Database::new(&db_path.with_extension("config.db")).expect("config db");
             db.init_schema().expect("init schema");

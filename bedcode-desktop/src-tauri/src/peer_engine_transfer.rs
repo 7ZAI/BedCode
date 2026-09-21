@@ -1298,75 +1298,11 @@ fn unique_remote_path(requested: String, used: &mut HashSet<String>) -> String {
 }
 
 // ==================== 发送源选择 ====================
-
-/// 选择待发送文件（桌面端多选；用户取消返回空数组）
-///
-/// 宿主自有命令不经插件门控——发送表单是宿主内置 UI 而非插件面板。
-pub async fn peer_pick_files(app_handle: AppHandle) -> crate::Result<Vec<String>> {
-    use tauri_plugin_dialog::DialogExt;
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    app_handle.dialog().file().pick_files(move |selection| {
-        if tx.send(selection).is_err() {
-            tracing::debug!("peer_pick_files: receiver dropped before dialog completed");
-        }
-    });
-    match rx.await {
-        Ok(Some(paths)) => paths.into_iter().map(path_to_string).collect(),
-        // 用户取消选择
-        Ok(None) => Ok(Vec::new()),
-        Err(e) => Err(crate::AppError::Plugin(format!(
-            "peer_pick_files: dialog channel closed: {e}"
-        ))),
-    }
-}
-
-/// 选择待发送文件夹（桌面端单次单个，可多次累加；用户取消返回空数组）
-pub async fn peer_pick_folder(app_handle: AppHandle) -> crate::Result<Vec<String>> {
-    use tauri_plugin_dialog::DialogExt;
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    app_handle.dialog().file().pick_folder(move |selection| {
-        if tx.send(selection).is_err() {
-            tracing::debug!("peer_pick_folder: receiver dropped before dialog completed");
-        }
-    });
-    match rx.await {
-        Ok(Some(path)) => Ok(vec![path_to_string(path)?]),
-        // 用户取消选择
-        Ok(None) => Ok(Vec::new()),
-        Err(e) => Err(crate::AppError::Plugin(format!(
-            "peer_pick_folder: dialog channel closed: {e}"
-        ))),
-    }
-}
-
-/// 系统多目录选择器（一次可选多个；用户取消返回空数组）
-pub async fn peer_pick_folders(app_handle: AppHandle) -> crate::Result<Vec<String>> {
-    use tauri_plugin_dialog::DialogExt;
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    app_handle.dialog().file().pick_folders(move |selection| {
-        if tx.send(selection).is_err() {
-            tracing::debug!("peer_pick_folders: receiver dropped before dialog completed");
-        }
-    });
-    match rx.await {
-        Ok(Some(paths)) => paths.into_iter().map(path_to_string).collect(),
-        // 用户取消选择
-        Ok(None) => Ok(Vec::new()),
-        Err(e) => Err(crate::AppError::Plugin(format!(
-            "peer_pick_folders: dialog channel closed: {e}"
-        ))),
-    }
-}
-
-/// Dialog FilePath → UTF-8 绝对路径串（非 UTF-8 路径显式报错而非静默丢弃）
-fn path_to_string(file_path: tauri_plugin_dialog::FilePath) -> crate::Result<String> {
-    let path = file_path
-        .into_path()
-        .map_err(|e| crate::AppError::InvalidInput(format!("peer pick: failed to convert selected path: {e}")))?;
-    path.to_str()
-        .map(|s| s.to_string())
-        .ok_or_else(|| crate::AppError::InvalidInput("peer pick: selected path is not valid UTF-8".to_string()))
-}
+//
+// 选源对话框（`peer_pick_files` / `peer_pick_folder` / `peer_pick_folders`）已迁出
+// 本域：ADR 0022 v2 判 pick-* 属 `host-platform`（与 peer 领域无关），实现本体
+// 现位于 `plugin/manager/wasm_runtime/host_impl/platform.rs`。
+// 传输域不再承载平台对话框能力——需要选源一律经 host-platform 原语。
 
 // ==================== 测试 ====================
 

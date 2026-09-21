@@ -78,10 +78,7 @@ pub(super) mod tests {
         db.init_schema().expect("init schema");
         let db = Arc::new(Mutex::new(db));
         let storage = Arc::new(PluginStorage::new(db.clone()));
-        let session_manager = Arc::new(SessionManager::from_database(
-            Database::new(&Path::new(":memory:")).expect("in-memory db"),
-            Arc::new(std::path::PathBuf::from(".")),
-        ));
+        let session_manager = Arc::new(SessionManager::default());
         let config_manager = Arc::new(SessionConfigManager::new(Arc::new(Mutex::new({
             let db = Database::new(&Path::new(":memory:")).expect("in-memory db");
             db.init_schema().expect("init schema");

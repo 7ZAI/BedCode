@@ -40,13 +40,20 @@ fn log_fallback(api: &str, err: &AppError) {
     );
 }
 
-/// 经会话中心插件重启会话（同一 session id 重建并启动）
+/// 经会话中心插件重启会话（同一 session id 重建并启动）——**插件必需**
 ///
-/// - `Ok(Some(session_id))`：插件编排成功（存在性预检通过 + 重启已受理）
-/// - `Ok(None)`：插件不可用 / 互调失败 → 调用方降级宿主执行器（无单点）
-pub async fn restart_session_via_plugin(host_ctx: &WasmHostContext, session_id: &str) -> Result<Option<String>> {
+/// v21 起内核重启执行器退役（`host-session.restart` 一并删除），重启 = 插件编排
+/// 「`remove` + 同 id `create-with-spec`」；故本桥接不再有宿主降级轨：插件未激活 /
+/// 互调失败一律显性报错。
+pub async fn restart_session_via_plugin(host_ctx: &WasmHostContext, session_id: &str) -> Result<String> {
     if !session_active(host_ctx) {
-        return Ok(None);
+        tracing::warn!(
+            session_id = %session_id,
+            "session restart refused: session plugin not active (plugin required, kernel executor retired)"
+        );
+        return Err(AppError::Plugin(
+            "session plugin not active: session restart requires com.bedcode.session".to_string(),
+        ));
     }
     let params = serde_json::json!({ "sessionId": session_id });
     match call_api(host_ctx, API_RESTART, params) {
@@ -57,11 +64,11 @@ pub async fn restart_session_via_plugin(host_ctx: &WasmHostContext, session_id: 
                 .ok_or_else(|| AppError::Plugin(format!("session-restart reply missing sessionId: {v}")))?
                 .to_string();
             tracing::info!(session_id = %sid, "session restart orchestrated via plugin");
-            Ok(Some(sid))
+            Ok(sid)
         }
         Err(e) => {
-            log_fallback(API_RESTART, &e);
-            Ok(None)
+            tracing::error!(session_id = %session_id, error = %e, "session restart failed via plugin");
+            Err(AppError::Plugin(format!("session restart failed (plugin error): {e}")))
         }
     }
 }

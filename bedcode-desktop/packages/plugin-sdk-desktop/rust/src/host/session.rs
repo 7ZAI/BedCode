@@ -52,13 +52,6 @@ pub trait HostSession {
     /// 未授权时返回错误
     fn session_input_register(&self) -> Result<(), HostError>;
 
-    /// 按会话配置创建新会话（v6，需要 `session:write` 权限）
-    ///
-    /// 成功返回新会话的 session_id；会话创建完成后宿主分发 `Created`
-    /// 生命周期事件（带 session_id + config_id），已注册生命周期监听器的
-    /// 插件可据此感知新会话就绪（定时自动任务的会话就绪信号，见 ADR 0003）
-    fn session_create(&self, config_id: &str) -> Result<String, HostError>;
-
     /// 按启动规格创建会话（v19，需要 `session:write` 权限）
     ///
     /// `spec` 为插件算好的 launch spec-json（camelCase）：
@@ -74,13 +67,6 @@ pub trait HostSession {
     /// 宿主分发 `Stopping` / `Stopped` 生命周期事件。用于插件在任务
     /// 执行完毕后清理自己创建的会话（如定时自动任务会话）
     fn session_close(&self, session_id: &str) -> Result<(), HostError>;
-
-    /// 重启会话（v19，需要 `session:write` 权限）
-    ///
-    /// 宿主执行器保留：移除旧会话 + 以同一 `session_id` 重建并启动，正统端归属
-    /// 回到启动端。**异步执行**（Creating/Created 事件回灌需锁释放，理由同
-    /// `session_create`），故返回即代表「重启已受理」；失败在宿主侧落 `error` 日志。
-    fn session_restart(&self, session_id: &str) -> Result<(), HostError>;
 
     /// 移除会话（v19，需要 `session:write` 权限）
     ///

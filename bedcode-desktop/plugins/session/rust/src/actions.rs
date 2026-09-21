@@ -4,10 +4,12 @@
 //!
 //! - **在插件**：动作编排（先校验会话存在性再动作 → 失败同步可见；调用顺序）；
 //!   **尺寸裁决规则**——正统端判定（无归属 / 单端 / 多端争用）与覆盖确认策略
-//!   （何时回执 `needsConfirmation` 而不落任何改动）
-//! - **留宿主**：执行器与登记事实——`host-session` 的 `restart` / `remove` /
-//!   `rename` / `resize` 四原语（`resize` **只登记与执行、不裁决**）；「谁是当前
-//!   正统渲染端」的登记事实经既有 `get` 原语的 `canonicalRenderer` 字段读取
+//!   （何时回执 `needsConfirmation` 而不落任何改动）；**重启编排**——插件读自身
+//!   配置真源算 launch spec，走「`remove` 旧会话 + 以同一 id `create-with-spec`」两步
+//!   （host-business-decarriage 收尾：不再依赖内核 `restart` 读主库配置投影）
+//! - **留宿主**：执行器与登记事实——`host-session` 的 `remove` / `rename` / `resize`
+//!   原语（`resize` **只登记与执行、不裁决**）与 `create-with-spec` 的 id 冲突仲裁；
+//!   「谁是当前正统渲染端」的登记事实经既有 `get` 原语的 `canonicalRenderer` 字段读取
 //!
 //! 移动端 HTTP / WS 路径与插件未激活时的降级轨仍直连宿主 `SessionManager`
 //! 执行器（宿主裁决分支保留，双轨无单点）——故本模块的规则迁移不改变今天
@@ -360,26 +362,114 @@ mod tests {
 // native 单测全覆盖，这里只是「读事实 → 判定 → 调原语」的调用编排。
 
 #[cfg(target_arch = "wasm32")]
-use bedcode_plugin_api::host::HostSession;
+use crate::config::store::ConfigStore;
+#[cfg(target_arch = "wasm32")]
+use bedcode_plugin_api::host::{HostEvents, HostLog, HostSession};
 #[cfg(target_arch = "wasm32")]
 use bedcode_plugin_api::wasm_host::WasmHost;
 
-/// 重启编排：存在性预检（失败同步可见）→ `host-session.restart`（宿主异步执行）
+/// 前端「重启完成」事件名（与宿主 `system/constants/event.rs::SESSION_RESTARTED`
+/// 逐字一致；前端 `useSessionStatusListener` 监听同名事件）
+#[cfg(target_arch = "wasm32")]
+const EVENT_SESSION_RESTARTED: &str = "session-restarted";
+
+/// 待补发「重启完成」事件的会话：`session-id → 重启前会话名`
+///
+/// 重启 = 「remove 旧会话 + 以同一 id 重建」两步，而前端 `session-restarted` 必须
+/// 在会话**真正就绪后**发（内核执行器的旧实现就是最后一步广播）——就绪信号取
+/// Created 生命周期事件，故在此登记、由 [`flush_pending_restart`] 消费并发射。
+/// 条目仅在宿主异步创建失败时残留（该失败无同步返回通道），体量极小且按 id 覆盖。
+#[cfg(target_arch = "wasm32")]
+static PENDING_RESTART: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
+
+/// Created 生命周期到达时补发重启完成事件（lib.rs 的 Created 分支调用）
+///
+/// 载荷形状与宿主 `SessionRestartEvent`（camelCase）逐字一致——重启保持同一 id，
+/// 故 `oldSessionId == newSessionId`，与迁移前的前端可观察结果相同。
+#[cfg(target_arch = "wasm32")]
+pub fn flush_pending_restart(host: &WasmHost, session_id: &str) {
+    let name = {
+        let mut pending = PENDING_RESTART.lock().unwrap_or_else(|e| e.into_inner());
+        match pending.iter().position(|(id, _)| id == session_id) {
+            Some(idx) => Some(pending.remove(idx).1),
+            None => None,
+        }
+    };
+    let Some(name) = name else { return };
+    host.emit_event(
+        EVENT_SESSION_RESTARTED,
+        &serde_json::json!({
+            "oldSessionId": session_id,
+            "newSessionId": session_id,
+            "sessionName": name,
+        }),
+    );
+    host.log_debug(&format!(
+        "restart: session-restarted emitted after Created, session_id={}",
+        session_id
+    ));
+}
+
+/// 重启编排：存在性预检 → 读配置真源算 spec → `remove` 旧会话 → 同 id `create-with-spec`
+///
+/// 外部行为与内核执行器逐字等价：同一 session id（线协议与终端订阅键不变）、
+/// 名字与 configId 保持、正统渲染端归属回到桌面端（spec 不带 `sourceDevice`）、
+/// 生命周期事件序列 Creating → Created、同步事件 SessionRemoved → SessionCreated。
+/// 唯一差别是**配置来源**：插件私有库（真源）而不是主库投影——这也是本迁移的目的。
 #[cfg(target_arch = "wasm32")]
 pub fn restart_via_host(draft_json: &serde_json::Value) -> Result<serde_json::Value, String> {
     let request = SessionTargetRequest::parse(draft_json)?;
     if request.session_id.trim().is_empty() {
         return Err("empty sessionId".to_string());
     }
-    // 编排职责 1：存在性预检——原语的重启为异步执行（事件回灌需锁释放），
-    // 失败无同步返回通道；插件先读会话，把「会话不存在」变成同步可见的失败
+    // 编排职责 1：存在性预检——「会话不存在」在此同步可见（重建为宿主异步执行）
     let session = read_session(&request.session_id)?;
+    let config_id = session
+        .get("configId")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let name = session
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    if config_id.is_empty() {
+        return Err(format!("会话缺少 configId，无法重建：{}", request.session_id));
+    }
+    // 编排职责 2：配置真源在插件私有库 → 同一 id 的 launch spec（沿用旧名，不重命名）
+    let config = WasmHost
+        .get(&config_id)
+        .map_err(|e| format!("config read failed: {}", e))?
+        .ok_or_else(|| format!("会话配置不存在：{}", config_id))?;
+    let mut spec = crate::launch::build_launch_spec(&config, None, None, true)?;
+    spec.name = name.clone();
+    spec.session_id = Some(request.session_id.clone());
+    // 编排职责 3：先摘除旧会话（内核执行器同序；SessionRemoved 同步事件形状不变）
     WasmHost
-        .session_restart(&request.session_id)
-        .map_err(|e| format!("host restart failed: {}", e.message))?;
+        .session_remove(&request.session_id)
+        .map_err(|e| format!("host remove failed: {}", e.message))?;
+    // 编排职责 4：同 id 重建（宿主异步执行 + id 冲突仲裁；此处已先行摘除故不冲突）
+    let spec_json =
+        serde_json::to_value(&spec).map_err(|e| format!("launch spec serialize failed: {}", e))?;
+    let created = WasmHost
+        .session_create_with_spec(&spec_json)
+        .map_err(|e| format!("host create-with-spec failed: {}", e.message))?;
+    if created != request.session_id {
+        return Err(format!(
+            "重启未保持同一 session id：created={} expected={}",
+            created, request.session_id
+        ));
+    }
+    // 编排职责 5：登记待补发前端事件（Created 到达即发，与内核执行器同序）
+    {
+        let mut pending = PENDING_RESTART.lock().unwrap_or_else(|e| e.into_inner());
+        pending.retain(|(id, _)| id != &request.session_id);
+        pending.push((request.session_id.clone(), name.clone()));
+    }
     Ok(serde_json::json!({
         "sessionId": request.session_id,
-        "name": session.get("name").cloned().unwrap_or(serde_json::Value::Null),
+        "name": name,
     }))
 }
 
@@ -495,6 +585,11 @@ fn read_session(session_id: &str) -> Result<serde_json::Value, String> {
 pub fn restart_via_host(_draft_json: &serde_json::Value) -> Result<serde_json::Value, String> {
     Err("session restart unavailable outside wasm runtime".to_string())
 }
+
+/// native 无宿主事件面：补发重启完成事件是 wasm 专属（native 生命周期回调由测试
+/// 直接驱动，不需要前端事件）
+#[cfg(not(target_arch = "wasm32"))]
+pub fn flush_pending_restart(_host: &bedcode_plugin_api::wasm_host::WasmHost, _session_id: &str) {}
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn remove_via_host(_draft_json: &serde_json::Value) -> Result<serde_json::Value, String> {

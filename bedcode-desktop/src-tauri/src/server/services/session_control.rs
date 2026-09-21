@@ -61,11 +61,21 @@ pub async fn handle_control(
         }
 
         SessionControlAction::StartSession { config_id } => {
+            // host-business-decarriage 收尾：WS 控制路径与 HTTP 启动线同源——创建编排
+            // 走会话中心插件（插件必需，无宿主降级）。响应消息形状不变。
             // WS 控制路径未携带初始尺寸（协议未扩展）：None → 用配置默认值；
-            // 移动端 UI 实际走 HTTP start（携带终端组件默认网格）
-            let session_id = session_manager
-                .create_session_with_source(&config_id, device_name.clone(), None)
-                .await?;
+            // 移动端 UI 实际走 HTTP start（携带终端组件默认网格）。
+            let session_id = crate::utils::session_create_bridge::create_session_via_plugin(
+                crate::system::app_context::AppContext::global()
+                    .plugin_host()
+                    .wasm_host_ctx(),
+                &config_id,
+                None,
+                None,
+                true,
+                device_name.as_deref(),
+            )
+            .await?;
             Ok(Some(Message::SessionControl {
                 message_id: request_message_id,
                 expect_response: false,

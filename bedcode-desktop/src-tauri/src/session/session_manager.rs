@@ -11,14 +11,11 @@ use crate::session::{
     event_bus::{DefaultSessionEventBus, SessionEventBus},
     input_line::{SessionInputListener, SubmittedLineTracker},
     session_components::{
-        resolve_initial_size, CanonicalRendererRegistry, ConfigMapper, DefaultCanonicalRendererRegistry,
-        DefaultConfigMapper, DefaultNamingService, DefaultPtyRegistry, DefaultSessionInfoRegistry,
-        DefaultStatusDetector, NamingService, PtyRegistry, RendererSource, ResizeOutcome, SessionInfoRegistry,
-        StatusDetector,
+        CanonicalRendererRegistry, DefaultCanonicalRendererRegistry, DefaultPtyRegistry,
+        DefaultSessionInfoRegistry, PtyRegistry, RendererSource, ResizeOutcome, SessionInfoRegistry,
     },
     session_lifecycle::SessionLifecycleListener,
     session_output::GlobalOutputManager,
-    storage::{SessionStorage, SessionStore},
 };
 use crate::session::{SessionInfo, SessionInfoView, SessionRestartEvent, SessionStatusEvent};
 use crate::system::error_boundary::spawn_with_error_boundary;
@@ -42,16 +39,8 @@ pub struct SessionManager {
     canonical_renderer: Arc<DefaultCanonicalRendererRegistry>,
     /// 事件总线
     event_bus: Arc<DefaultSessionEventBus>,
-    /// 命名服务
-    naming_service: Arc<DefaultNamingService>,
-    /// 配置映射服务
-    config_mapper: Arc<DefaultConfigMapper>,
-    /// 状态检测服务
-    status_detector: Arc<DefaultStatusDetector>,
     /// PTY 处理器
     pty_handler: Arc<PtySessionHandler>,
-    /// 会话存储（数据库操作）
-    storage: Arc<SessionStorage>,
     /// 运行标志
     running: Arc<AtomicBool>,
     /// 同步事件发送器（用于向客户端广播增量数据）
@@ -88,32 +77,20 @@ impl SessionManager {
     }
 
     /// 创建新的 Session Manager（使用具体实现）
-    pub fn new(storage: Arc<SessionStorage>, resource_dir: Arc<PathBuf>) -> Self {
+    ///
+    /// 无库依赖：v21 起内核不再读会话配置表（命名唯一化 / config→launch 映射 /
+    /// 重启执行器全部归插件），故不再注入 `SessionStorage`。
+    pub fn new(resource_dir: Arc<PathBuf>) -> Self {
         let pty_handler = Arc::new(PtySessionHandler::new());
-        Self::new_with_handlers(storage, pty_handler, resource_dir)
-    }
-
-    /// 从数据库创建 Session Manager（兼容旧 API）
-    pub fn from_database(db: crate::db::Database, resource_dir: Arc<PathBuf>) -> Self {
-        let db = Arc::new(tokio::sync::Mutex::new(db));
-        let storage = Arc::new(SessionStorage::new(db));
-        let pty_handler = Arc::new(PtySessionHandler::new());
-        Self::new_with_handlers(storage, pty_handler, resource_dir)
+        Self::new_with_handlers(pty_handler, resource_dir)
     }
 
     /// 创建新的 Session Manager（使用具体类型注入）
-    pub fn new_with_handlers(
-        storage: Arc<SessionStorage>,
-        pty_handler: Arc<PtySessionHandler>,
-        resource_dir: Arc<PathBuf>,
-    ) -> Self {
+    pub fn new_with_handlers(pty_handler: Arc<PtySessionHandler>, resource_dir: Arc<PathBuf>) -> Self {
         let pty_registry = Arc::new(DefaultPtyRegistry::new());
         let session_info = Arc::new(DefaultSessionInfoRegistry::new());
         let canonical_renderer = Arc::new(DefaultCanonicalRendererRegistry::new());
         let event_bus = Arc::new(DefaultSessionEventBus::new());
-        let naming_service = Arc::new(DefaultNamingService::new());
-        let config_mapper = Arc::new(DefaultConfigMapper::new());
-        let status_detector = Arc::new(DefaultStatusDetector::new());
         let running = Arc::new(AtomicBool::new(true));
         let lifecycle_listeners = Arc::new(RwLock::new(Vec::new()));
         let input_listeners = Arc::new(RwLock::new(Vec::new()));
@@ -123,11 +100,7 @@ impl SessionManager {
             session_info,
             canonical_renderer,
             event_bus,
-            naming_service,
-            config_mapper,
-            status_detector,
             pty_handler,
-            storage,
             running,
             sync_tx: RwLock::new(None),
             resource_dir,
@@ -259,215 +232,6 @@ impl SessionManager {
         tracing::info!(session_id = %session_id, "Registered session in GlobalOutputManager");
     }
 
-    /// 从配置创建会话
-    pub async fn create_session(&self, config_id: &str) -> Result<String> {
-        self.create_session_with_source(config_id, None, None).await
-    }
-
-    /// 从配置创建会话（带来源设备）
-    ///
-    /// source_device: 触发操作的设备名称，桌面本地操作为 None
-    /// initial_size: 启动端终端组件的默认网格（cols, rows），None 时用配置默认值
-    pub async fn create_session_with_source(
-        &self,
-        config_id: &str,
-        source_device: Option<String>,
-        initial_size: Option<(u16, u16)>,
-    ) -> Result<String> {
-        self.create_session_with_source_and_id(config_id, source_device, None, initial_size)
-            .await
-    }
-
-    /// 从配置创建会话（指定会话 ID）
-    ///
-    /// 供宿主在 wasm 调用上下文之外预生成会话 ID 的异步创建场景使用
-    /// （插件定时任务触发，见 host_session_create）：wasm 调用栈内同步创建
-    /// 会因生命周期事件（Creating/Created）回灌同一插件实例而死锁，
-    /// 因此创建改为宿主异步执行，先返回预生成 ID 供插件记录匹配键。
-    pub async fn create_session_with_id(&self, config_id: &str, session_id: &str) -> Result<String> {
-        self.create_session_with_source_and_id(config_id, None, Some(session_id), None)
-            .await
-    }
-
-    /// 创建会话公共实现：session_id 为 None 时由 PTY 层自行生成
-    ///
-    /// instrument（链路追踪）：会话创建是低频链路关键入口，span 在运行时日志
-    /// (runtime/error.*.log) 中以 `create_session_with_source_and_id{...}:` 前缀
-    /// 聚合下游事件，便于按会话排查；fmt 层事件 scope 自动输出 span 链
-    #[tracing::instrument(skip(self), fields(config_id = %config_id))]
-    async fn create_session_with_source_and_id(
-        &self,
-        config_id: &str,
-        source_device: Option<String>,
-        session_id: Option<&str>,
-        initial_size: Option<(u16, u16)>,
-    ) -> Result<String> {
-        // 从存储加载配置
-        let config: crate::db::SessionConfig = self
-            .storage
-            .get_config(config_id)
-            .await?
-            .ok_or_else(|| crate::AppError::NotFound(format!("Config not found: {}", config_id)))?;
-
-        // 分发 Creating 事件（同步阻塞，确保 hooks 在 PTY 启动前就位）
-        self.dispatch_lifecycle_event(SessionLifecycleEvent::Creating {
-            config_id: config_id.to_string(),
-            command: config.command.clone(),
-            working_dir: config.working_dir.clone(),
-            source_device: source_device.clone(),
-        })
-        .await;
-
-        // 获取现有会话列表用于生成唯一名称
-        let sessions = self.session_info.list().await;
-        let session_name = self
-            .naming_service
-            .generate_unique_name(config_id, &config.name, &sessions);
-
-        // 使用配置映射服务构建启动配置（启动端默认网格覆盖配置缺省值，
-        // PTY openpty 即以正确行列创建，避免 80x24 首帧回绕）
-        let mut launch_config = self.config_mapper.to_launch_config(&config)?;
-        let (cols, rows) = resolve_initial_size(launch_config.cols, launch_config.rows, initial_size);
-        launch_config.cols = cols;
-        launch_config.rows = rows;
-
-        // 创建 PTY 会话（指定 ID 或由 PTY 层生成）
-        let pty_session = match session_id {
-            Some(sid) => self
-                .pty_handler
-                .create_session_with_id(sid.to_string(), launch_config.clone())?,
-            None => self.pty_handler.create_session(launch_config.clone())?,
-        };
-        let session_id = pty_session.id().to_string();
-
-        // 注册输出管理器须在 PTY 启动（PtyReader 随 start() 即刻读 PTY 输出）之前：
-        // 注册晚于启动时，首帧输出经 GlobalOutputManager::on_output 以 "session not
-        // found" 丢弃——早期字节不进任何队列（移动端订阅/HTTP 历史同源），永久丢失。
-        // start 失败时回滚注册，防孤儿会话残留（无 PTY、无订阅者，后续无法注销）
-        self.register_output_manager(&session_id).await;
-        if let Err(e) = pty_session.start().await {
-            GlobalOutputManager::global().unregister_session(&session_id).await;
-            return Err(e);
-        }
-
-        // 启动生命周期处理器
-        self.start_lifecycle_handler(&session_id).await;
-
-        // 创建会话信息
-        let info = SessionInfo {
-            id: session_id.clone(),
-            config_id: config_id.to_string(),
-            name: session_name.clone(),
-            status: SessionStatus::Running,
-            created_at: Utc::now(),
-            started_at: Some(Utc::now()),
-            stopped_at: None,
-            session_type: SessionType::Pty,
-        };
-
-        // 保存到各服务
-        self.pty_registry.insert(session_id.clone(), pty_session).await;
-        // 正统渲染端初始归属 = 启动端：PTY 在「启动按钮」按下时即创建并运行，
-        // 先于任何终端视图打开；其初始网格尺寸由首个打开终端的 resize 确立。
-        // 故归属在启动时按来源固定：桌面本地启动（source_device=None）为
-        // Desktop；移动端经 HTTP/WS 启动（source_device=claims 设备名）为
-        // Mobile{device_name}。归属随启动端确立，避免移动端单独启动会话时
-        // 首次 resize 误弹覆盖确认（见 resize_session 裁决）。
-        let initial_canonical = match &source_device {
-            Some(name) => RendererSource::Mobile {
-                device_name: name.clone(),
-            },
-            None => RendererSource::Desktop,
-        };
-        self.canonical_renderer.set(&session_id, initial_canonical).await;
-        self.session_info.insert(info).await;
-
-        // 分发 Created 事件（异步通知）
-        self.dispatch_lifecycle_event(SessionLifecycleEvent::Created {
-            session_id: session_id.clone(),
-            config_id: config_id.to_string(),
-            name: session_name.clone(),
-            working_dir: config.working_dir.clone(),
-        })
-        .await;
-
-        // 发布同步事件：会话创建
-        self.publish_sync_event(DesktopSyncEvent::SessionCreated {
-            session_id: session_id.clone(),
-            source_device,
-        })
-        .await;
-
-        tracing::info!(session_id = %session_id, "Session created: {}", session_name);
-        Ok(session_id)
-    }
-
-    /// 创建会话但不启动 PTY（仅创建会话信息）
-    /// 返回 session_id，前端准备好后可调用 start_existing_session 启动
-    pub async fn create_session_no_start(&self, config_id: &str) -> Result<String> {
-        // 从存储加载配置
-        let config: crate::db::SessionConfig = self
-            .storage
-            .get_config(config_id)
-            .await?
-            .ok_or_else(|| crate::AppError::NotFound(format!("Config not found: {}", config_id)))?;
-
-        // 分发 Creating 事件（同步阻塞，确保 hooks 在 PTY 启动前就位）
-        self.dispatch_lifecycle_event(SessionLifecycleEvent::Creating {
-            config_id: config_id.to_string(),
-            command: config.command.clone(),
-            working_dir: config.working_dir.clone(),
-            source_device: None,
-        })
-        .await;
-
-        // 获取现有会话列表用于生成唯一名称
-        let sessions = self.session_info.list().await;
-        let session_name = self
-            .naming_service
-            .generate_unique_name(config_id, &config.name, &sessions);
-
-        // 使用配置映射服务构建启动配置
-        let launch_config = self.config_mapper.to_launch_config(&config)?;
-
-        // 创建 PTY 会话
-        let pty_session = self.pty_handler.create_session(launch_config.clone())?;
-        let session_id = pty_session.id().to_string();
-
-        // 不启动 PTY，只保存会话信息
-        // pty_session.start().await?; // 这里不启动
-
-        // 启动生命周期处理器
-        self.start_lifecycle_handler(&session_id).await;
-
-        // 创建会话信息（状态为 starting）
-        let info = SessionInfo {
-            id: session_id.clone(),
-            config_id: config_id.to_string(),
-            name: session_name.clone(),
-            status: SessionStatus::Starting,
-            created_at: Utc::now(),
-            started_at: None,
-            stopped_at: None,
-            session_type: SessionType::Pty,
-        };
-
-        // 保存到各服务
-        self.pty_registry.insert(session_id.clone(), pty_session).await;
-        // 正统渲染端初始为空：首位设置尺寸的端经 resize_session 抢占归属
-        self.session_info.insert(info).await;
-
-        // 发布同步事件：会话创建（状态为 starting）
-        self.publish_sync_event(DesktopSyncEvent::SessionCreated {
-            session_id: session_id.clone(),
-            source_device: None,
-        })
-        .await;
-
-        tracing::info!(session_id = %session_id, "Session created (not started): {}", session_name);
-        Ok(session_id)
-    }
-
     /// 按启动规格创建会话（票 09 `create-with-spec` 的执行端）
     ///
     /// `launch_config` 由插件算好（命名唯一化 / config→launch 映射 / 尺寸决策在
@@ -475,11 +239,10 @@ impl SessionManager {
     /// 配置映射服务——内核只按 `start` 分支执行：Creating 事件 → PTY 创建 →
     /// 输出注册（早于启动）→ 启动 / 不启动 → 生命周期 → 会话记录 → 事件分发。
     ///
-    /// 行为等价对标（票 09「两条创建路径经插件编排且行为等价」）：
-    /// - `start = true`：顺序与状态与 [`Self::create_session_with_source_and_id`]
-    ///   一致（Running + 正统渲染端归属启动端 + Created 生命周期事件）；
-    /// - `start = false`：顺序与状态与 [`Self::create_session_no_start`] 一致
-    ///   （Starting + 不启动进程 + 不注册输出管理器 + 无 Created 事件）。
+    /// 行为对标（票 09「两条创建路径经插件编排且行为等价」，host-business-decarriage
+    /// 收尾后宿主侧只剩本执行端）：
+    /// - `start = true`：Running + 正统渲染端归属启动端 + Created 生命周期事件；
+    /// - `start = false`：Starting + 不启动进程 + 不注册输出管理器 + 无 Created 事件。
     ///
     /// 顺序不变量（既有全链路测试守护，不得破坏）：
     /// - 输出消费者（GlobalOutputManager）注册 **早于** PTY 启动（PtyReader 随
@@ -524,8 +287,8 @@ impl SessionManager {
                 return Err(e);
             }
         } else {
-            // 只创建不启动：不注册输出管理器（进程未启动无输出源，与既有
-            // create_session_no_start 分支一致）；PTY 已 openpty 就绪，由后续
+            // 只创建不启动：不注册输出管理器（进程未启动无输出源，与两阶段启动
+            // 第一阶段语义一致）；PTY 已 openpty 就绪，由后续
             // start_existing_session 接管启动与输出注册。
         }
 
@@ -683,101 +446,6 @@ impl SessionManager {
                 }
             }
         });
-    }
-
-    /// 重启会话
-    pub async fn restart_session(&self, session_id: &str) -> Result<String> {
-        // 获取会话信息
-        let (config_id, old_name) = {
-            let info = self
-                .session_info
-                .get(session_id)
-                .await
-                .ok_or_else(|| crate::AppError::NotFound(format!("Session not found: {}", session_id)))?;
-            (info.config_id.clone(), info.name.clone())
-        };
-
-        // 移除旧会话
-        self.remove_session(session_id).await?;
-
-        // 获取配置
-        let config = self
-            .storage
-            .get_config(&config_id)
-            .await?
-            .ok_or_else(|| crate::AppError::NotFound(format!("Config not found: {}", config_id)))?;
-
-        // 分发 Creating 事件（同步阻塞，确保 hooks 在 PTY 启动前就位）
-        self.dispatch_lifecycle_event(SessionLifecycleEvent::Creating {
-            config_id: config_id.clone(),
-            command: config.command.clone(),
-            working_dir: config.working_dir.clone(),
-            source_device: None,
-        })
-        .await;
-
-        // 构建启动配置（复用配置映射服务）
-        let mut launch_config = self.config_mapper.to_launch_config(&config)?;
-        launch_config.name = old_name.clone();
-
-        let old_name_for_info = old_name.clone();
-        let old_name_for_event = old_name.clone();
-
-        // 创建 PTY 会话（使用相同 ID
-        let pty_session = self
-            .pty_handler
-            .create_session_with_id(session_id.to_string(), launch_config.clone())?;
-
-        // 启动生命周期处理器
-        self.start_lifecycle_handler(session_id).await;
-
-        // 注册输出管理器须在 PTY 启动（PtyReader 随 start() 即刻读 PTY 输出）之前：
-        // remove_session 已注销本会话，此处必须重新注册，否则 PTY 输出经
-        // GlobalOutputManager::on_output 以 "session not found" 丢弃，订阅返回
-        // SESSION_NOT_FOUND（前端终端空白）。start 失败时回滚注册，防孤儿会话残留。
-        self.register_output_manager(session_id).await;
-        if let Err(e) = pty_session.start().await {
-            GlobalOutputManager::global().unregister_session(session_id).await;
-            return Err(e);
-        }
-
-        // 创建会话信息
-        let info = SessionInfo {
-            id: session_id.to_string(),
-            config_id: config_id.clone(),
-            name: old_name_for_info,
-            status: SessionStatus::Running,
-            created_at: chrono::Utc::now(),
-            started_at: Some(chrono::Utc::now()),
-            stopped_at: None,
-            session_type: SessionType::Pty,
-        };
-
-        // 保存到各服务
-        self.pty_registry.insert(session_id.to_string(), pty_session).await;
-        // 正统渲染端归属：重启由桌面端发起（source_device=None）→ Desktop
-        self.canonical_renderer.set(&session_id, RendererSource::Desktop).await;
-        self.session_info.insert(info).await;
-
-        tracing::info!(session_id = %session_id, "Session restarted: {}", old_name_for_event);
-
-        // 分发 Created 事件（异步通知）
-        self.dispatch_lifecycle_event(SessionLifecycleEvent::Created {
-            session_id: session_id.to_string(),
-            config_id: config_id.clone(),
-            name: old_name_for_event.clone(),
-            working_dir: config.working_dir.clone(),
-        })
-        .await;
-
-        // 发送重启事件
-        let _ = self.event_bus.restart_sender().send(SessionRestartEvent {
-            old_session_id: session_id.to_string(),
-            new_session_id: session_id.to_string(),
-            session_name: old_name,
-        });
-
-        Ok(session_id.to_string())
     }
 
     /// 获取会话
@@ -1110,18 +778,6 @@ impl SessionManager {
         self.session_info.update_status(session_id, status).await;
     }
 
-    /// 检测等待输入状态
-    pub async fn detect_waiting_input(&self, session_id: &str, output: &str) -> bool {
-        let waiting = self.status_detector.detect_waiting_input(output);
-
-        if waiting {
-            self.update_session_status(session_id, SessionStatus::WaitingInput)
-                .await;
-        }
-
-        waiting
-    }
-
     /// 清理已停止的会话
     pub async fn cleanup_stopped_sessions(&self) {
         let sessions = self.session_info.list().await;
@@ -1158,15 +814,7 @@ impl SessionManager {
 
 impl Default for SessionManager {
     fn default() -> Self {
-        let db = crate::db::Database::new(std::path::Path::new(":memory:")).expect("Failed to create memory database");
-        db.init_schema().expect("Failed to init schema");
-
-        let db = Arc::new(tokio::sync::Mutex::new(db));
-        let storage = Arc::new(SessionStorage::new(db));
-        let pty_handler = Arc::new(PtySessionHandler::new());
-        let resource_dir = Arc::new(std::path::PathBuf::from("."));
-
-        Self::new_with_handlers(storage, pty_handler, resource_dir)
+        Self::new(Arc::new(std::path::PathBuf::from(".")))
     }
 }
 
@@ -1270,47 +918,21 @@ mod tests {
         assert!(matches!(err, crate::AppError::NotFound(_)));
     }
 
-    /// 票 09 行为等价对照 A：`create_session_from_spec(start=false)` 与既有
-    /// `create_session_no_start` 产出的会话形状逐项一致（Starting / 名称用
-    /// spec 传入 / config_id 透传 / started_at 空 / 正统渲染端初始为空）。
+    /// 票 09 行为契约 A：`create_session_from_spec(start=false)` 产出的会话形状
+    /// 逐项符合两阶段启动第一阶段（Starting / 名称用 spec 传入 / config_id 透传 /
+    /// started_at 空 / 正统渲染端初始为空），且内核不做二次命名。
     ///
-    /// 对照基准（旧路径）：同一条 linux 配置 → no_start 创建，唯一名首见 = 原名。
-    /// spec 路径取名由插件负责（此处直接注入同一「唯一化后」名），两条路径
-    /// 并列时名称一致，证明内核不加第二套命名。
+    /// host-business-decarriage 收尾后宿主侧已无 `create_session_no_start` 对照
+    /// 基准（编排全在插件），本用例只钉执行端自身契约。
     #[tokio::test]
-    async fn test_create_session_from_spec_matches_no_start_legacy() {
+    async fn test_create_session_from_spec_start_false_is_starting() {
         use crate::enums::ExecutionEnvironment;
         use std::collections::HashMap;
 
-        let db = crate::db::Database::new(std::path::Path::new(":memory:")).expect("mem db");
-        db.init_schema().expect("schema");
-        let config = crate::db::SessionConfig::new(
-            "cfg-equiv".to_string(),
-            "linux".to_string(),
-            "/tmp".to_string(),
-            "bash".to_string(),
-        );
-        let config_id = config.id.clone();
-        db.create_session_config(&config).expect("create config");
-        let manager = SessionManager::from_database(db, Arc::new(std::path::PathBuf::from(".")));
+        let manager = SessionManager::default();
+        let config_id = "cfg-equiv".to_string();
 
-        // 对照基准：旧路径 create_session_no_start（不 spawn 进程）
-        let legacy_sid = manager
-            .create_session_no_start(&config_id)
-            .await
-            .expect("legacy no-start");
-        let legacy_info = manager.session_info.get(&legacy_sid).await.expect("legacy info");
-        assert_eq!(legacy_info.status, SessionStatus::Starting);
-        assert_eq!(legacy_info.config_id, config_id.as_str());
-        assert_eq!(legacy_info.name, "cfg-equiv", "无竞争时唯一名 = 原名");
-        assert_eq!(legacy_info.started_at, None);
-        assert_eq!(
-            manager.canonical_renderer_of(&legacy_sid).await,
-            None,
-            "no_start 初始无正统端"
-        );
-
-        // spec 路径：同一配置语义 + 插件算好的唯一化名 + start=false
+        // 插件算好的唯一化名 + start=false（不 spawn 进程）
         let launch_config = SessionLaunchConfig {
             name: "cfg-equiv".to_string(),
             environment: ExecutionEnvironment::Linux,
@@ -1325,23 +947,18 @@ mod tests {
             .await
             .expect("spec create");
         let spec_info = manager.session_info.get(&spec_sid).await.expect("spec info");
-        assert_eq!(
-            spec_info.status,
-            SessionStatus::Starting,
-            "start=false → Starting，与 no_start 一致"
-        );
+        assert_eq!(spec_info.status, SessionStatus::Starting, "start=false → Starting");
         assert_eq!(spec_info.config_id, config_id.as_str(), "configId 透传");
         assert_eq!(spec_info.name, "cfg-equiv", "内核不再二次命名");
         assert_eq!(spec_info.started_at, None);
         assert_eq!(manager.canonical_renderer_of(&spec_sid).await, None);
 
-        // 两会话并列：名称由插件决策，同一 spec 名两次创建不互撞（宿主不干预）
+        // 名称由插件决策：同一 spec 名两次创建不互撞（宿主不干预唯一化）
         let mut names: Vec<String> = manager.list_sessions().await.into_iter().map(|s| s.name).collect();
         names.sort();
-        assert_eq!(names, vec!["cfg-equiv".to_string(), "cfg-equiv".to_string()]);
+        assert_eq!(names, vec!["cfg-equiv".to_string()]);
 
         // 清理：不 spawn 进程，仅释放 openpty 的 slave fd
-        manager.remove_session(&legacy_sid).await.expect("remove legacy");
         manager.remove_session(&spec_sid).await.expect("remove spec");
     }
 
@@ -1386,21 +1003,8 @@ mod tests {
     /// 同键覆盖后写赢、异键并存互不干扰；会话不存在不写孤儿键
     #[tokio::test]
     async fn test_annotate_roundtrip_opaque_and_overwrite() {
-        let db = crate::db::Database::new(std::path::Path::new(":memory:")).expect("mem db");
-        db.init_schema().expect("schema");
-        let config = crate::db::SessionConfig::new(
-            "cfg-ann".to_string(),
-            "linux".to_string(),
-            "/tmp".to_string(),
-            "bash".to_string(),
-        );
-        let config_id = config.id.clone();
-        db.create_session_config(&config).expect("create config");
-        let manager = SessionManager::from_database(db, Arc::new(std::path::PathBuf::from(".")));
-        let sid = manager
-            .create_session_no_start(&config_id)
-            .await
-            .expect("create session");
+        let manager = SessionManager::default();
+        let sid = seed_idle_session(&manager, "cfg-ann").await;
 
         // 不透明透传：怪键名 / 怪取值原样落槽
         assert!(manager.annotate_session(&sid, "taskStatus", "in_progress").await);
@@ -1427,21 +1031,8 @@ mod tests {
     /// —— 写槽前后视图字段的出现/缺省是同一构造点的两个态（含 M2 降级口径）
     #[tokio::test]
     async fn test_annotate_feeds_public_view_task_fields() {
-        let db = crate::db::Database::new(std::path::Path::new(":memory:")).expect("mem db");
-        db.init_schema().expect("schema");
-        let config = crate::db::SessionConfig::new(
-            "cfg-ann2".to_string(),
-            "linux".to_string(),
-            "/tmp".to_string(),
-            "bash".to_string(),
-        );
-        let config_id = config.id.clone();
-        db.create_session_config(&config).expect("create config");
-        let manager = SessionManager::from_database(db, Arc::new(std::path::PathBuf::from(".")));
-        let sid = manager
-            .create_session_no_start(&config_id)
-            .await
-            .expect("create session");
+        let manager = SessionManager::default();
+        let sid = seed_idle_session(&manager, "cfg-ann2").await;
 
         // 写槽前：视图任务字段缺省（插件未激活 / 未写槽 → 字段为空，M2 降级口径）
         let before = manager.session_view(&sid).await.expect("view");
@@ -1469,21 +1060,8 @@ mod tests {
     /// 经此路径，重建后槽为空态起始）
     #[tokio::test]
     async fn test_annotate_cleaned_on_session_remove() {
-        let db = crate::db::Database::new(std::path::Path::new(":memory:")).expect("mem db");
-        db.init_schema().expect("schema");
-        let config = crate::db::SessionConfig::new(
-            "cfg-ann3".to_string(),
-            "linux".to_string(),
-            "/tmp".to_string(),
-            "bash".to_string(),
-        );
-        let config_id = config.id.clone();
-        db.create_session_config(&config).expect("create config");
-        let manager = SessionManager::from_database(db, Arc::new(std::path::PathBuf::from(".")));
-        let sid = manager
-            .create_session_no_start(&config_id)
-            .await
-            .expect("create session");
+        let manager = SessionManager::default();
+        let sid = seed_idle_session(&manager, "cfg-ann3").await;
         assert!(manager.annotate_session(&sid, "k", "v").await);
         assert!(!manager.session_annotations(&sid).await.is_empty());
 
@@ -1493,5 +1071,31 @@ mod tests {
 
     fn renderer_desktop() -> RendererSource {
         RendererSource::Desktop
+    }
+
+    /// 测试用会话夹具：经执行端建一个「只创建不启动」的会话（不 spawn 进程）。
+    ///
+    /// host-business-decarriage 收尾后宿主侧不再有读配置表的创建路径，测试直接
+    /// 注入插件会算好的 launch spec（命名 / config→launch 映射属插件决策）。
+    async fn seed_idle_session(manager: &SessionManager, config_id: &str) -> String {
+        use crate::enums::ExecutionEnvironment;
+        manager
+            .create_session_from_spec(
+                SessionLaunchConfig {
+                    name: config_id.to_string(),
+                    environment: ExecutionEnvironment::Linux,
+                    working_dir: "/tmp".to_string(),
+                    command: "bash".to_string(),
+                    env_vars: std::collections::HashMap::new(),
+                    cols: 120,
+                    rows: 40,
+                },
+                config_id.to_string(),
+                None,
+                false,
+                None,
+            )
+            .await
+            .expect("seed idle session")
     }
 }

@@ -8,16 +8,19 @@
 //!   [`crate::schema`] 的幂等重命名迁移负责，本模块只按统一名读写。
 //! - HTTP 端点 path 段（`scheduled-jobs/{create,list,remove,reset}`）**一个不改**
 //!   （D1「改基址不改路径」）；改的是基址前缀所属的插件 id。
-//! - 宿主会话创建仍走 `host-session.create`（[`WasmHost::session_create`]）：配置真源
-//!   虽在插件私有库（票 08），但主库那份投影由宿主桥接单写维护，`session_create` 的
-//!   解析链与搬迁前同形。改走 `create-with-spec` 会换掉解析路径，破坏本票要求的
-//!   「同一输入 → 同一状态推进序列」双轨对照，故不在搬迁票里顺手改。
+//! - **会话创建走插件自身编排入口**（[`crate::launch::create_via_host`]，即互调 api
+//!   `session-create` 的同一入口）：读配置真源（插件私有库，票 08）→ 命名唯一化 →
+//!   config→launch spec → 宿主 `create-with-spec` 执行。host-business-decarriage
+//!   收尾后不再经 legacy `host-session.create(config-id)`：那条链要读主库配置投影，
+//!   而投影只服务「迁移前老配置」——对票 08 之后新建的配置本就创建不出会话（伪可用），
+//!   投影与 legacy 通道随之退役。状态推进序列不变（同为宿主异步创建 + 预生成 id +
+//!   等待 Created 事件）。
 //!
 //! 状态机：
 //!
 //! ```text
-//! pending ──(到期，session_create 成功)──▶ creating ──(Created 事件到达，prompts 入队)──▶ executed
-//! pending ──(到期，session_create 失败)──▶ failed
+//! pending ──(到期，创建受理成功)──▶ creating ──(Created 事件到达，prompts 入队)──▶ executed
+//! pending ──(到期，创建失败)──▶ failed
 //! pending ──(超过宽限期仍未执行，如应用关闭期间到期)──▶ missed（不补跑）
 //! creating ──(应用重启，会话丢失)──▶ failed
 //! missed / failed ──(用户 reset：可改触发时间)──▶ pending（重新加入调度）
@@ -219,7 +222,7 @@ pub fn reset_job_with_broadcast(host: &WasmHost, job_id: &str, trigger_at: Optio
 /// 0. 超过宽限时长的 creating 任务标 failed（宿主异步创建失败时
 ///    Created 事件不会到达，看门狗兑底）
 /// 1. 超过宽限期的 pending 任务标 missed（应用关闭期间错过，不补跑）
-/// 2. 宽限期内的到期任务：session_create 排队宿主异步创建（返回预生成
+/// 2. 宽限期内的到期任务：经插件编排入口排队宿主异步创建（返回预生成
 ///    会话 ID），置 creating 等待 Created 事件入队
 /// 3. 定时会话首轮下发兜底（TUI 型 agent 无 idle 信号时的宽限主动调度）
 ///
@@ -308,10 +311,23 @@ pub fn handle_scheduler_tick(host: &WasmHost, now_utc: &str) -> Result<(), Strin
             job_id, config_id
         ));
 
-        // 创建会话（核心 SessionManager::create_session，v6 host function）。
-        // 宿主异步创建并立即返回预生成 session_id：成功时 PTY 随后启动，
-        // Created 生命周期事件随后到达（事件分发在 wasm 调用返回后，锁已释放）
-        match host.session_create(&config_id) {
+        // 创建会话：走插件自身编排入口（与互调 api `session-create` 同源）——
+        // 读配置真源（插件私有库）→ 命名唯一化 → config→launch spec → 宿主
+        // `create-with-spec` 执行。宿主异步创建并立即返回预生成 session_id：成功时
+        // PTY 随后启动，Created 生命周期事件随后到达（事件分发在 wasm 调用返回后，
+        // 锁已释放）。legacy `host-session.create(config-id)` 不再使用（读主库投影）。
+        let created = crate::launch::create_via_host(&serde_json::json!({
+            "configId": config_id,
+            "start": true,
+        }))
+        .and_then(|reply| {
+            reply
+                .get("sessionId")
+                .and_then(|s| s.as_str())
+                .map(str::to_string)
+                .ok_or_else(|| format!("session-create reply missing sessionId: {reply}"))
+        });
+        match created {
             Ok(session_id) => {
                 // 置 creating 并记录 session_id：Created 事件的匹配键。
                 // 先于事件到达更新（session_create 返回时事件尚未分发），不会丢失匹配

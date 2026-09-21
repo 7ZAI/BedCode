@@ -354,10 +354,6 @@ impl HostSession for WasmHost {
         host_session::input_register().map_err(|e| host_err("session_input_register", e))
     }
 
-    fn session_create(&self, config_id: &str) -> Result<String, HostError> {
-        host_session::create(config_id).map_err(|e| host_err("session_create", e))
-    }
-
     fn session_create_with_spec(&self, spec: &serde_json::Value) -> Result<String, HostError> {
         host_session::create_with_spec(&spec.to_string())
             .map_err(|e| host_err("session_create_with_spec", e))
@@ -365,10 +361,6 @@ impl HostSession for WasmHost {
 
     fn session_close(&self, session_id: &str) -> Result<(), HostError> {
         host_session::close(session_id).map_err(|e| host_err("session_close", e))
-    }
-
-    fn session_restart(&self, session_id: &str) -> Result<(), HostError> {
-        host_session::restart(session_id).map_err(|e| host_err("session_restart", e))
     }
 
     fn session_remove(&self, session_id: &str) -> Result<(), HostError> {

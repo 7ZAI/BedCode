@@ -647,6 +647,9 @@ impl WasmPlugin for SessionPlugin {
                     "on_session_lifecycle: Created event session_id={} config_id={}",
                     session_id, config_id
                 ));
+                // 重启编排（remove + 同 id create-with-spec）的完成信号：会话就绪后
+                // 才补发前端 `session-restarted`（与内核执行器旧序一致）
+                actions::flush_pending_restart(&host, session_id);
                 task::scheduled::handle_session_created(&host, session_id, config_id);
             }
             // Stopped：会话意外退出兜底——agent 的 Stop hook 没机会推送终态时，

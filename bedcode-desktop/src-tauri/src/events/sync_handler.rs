@@ -490,11 +490,7 @@ mod tests {
     async fn test_handler() -> (Arc<SyncEventHandler>, &'static FakeBroadcaster, Arc<tokio::sync::Mutex<crate::db::Database>>) {
         let shared_db = Arc::new(tokio::sync::Mutex::new(crate::db::Database::new(Path::new(":memory:")).expect("shared db")));
         shared_db.lock().await.init_schema().expect("init schema");
-        let storage = Arc::new(crate::session::SessionStorage::new(Arc::clone(&shared_db)));
-        let sm = Arc::new(SessionManager::new(
-            storage,
-            Arc::new(std::path::PathBuf::from(".")),
-        ));
+        let sm = Arc::new(SessionManager::new(Arc::new(std::path::PathBuf::from("."))));
         let cm = Arc::new(SessionConfigManager::new(Arc::clone(&shared_db)));
         let fake_static: &'static FakeBroadcaster = Box::leak(Box::new(FakeBroadcaster::new()));
         let ws: &'static (dyn SyncBroadcaster + Send + Sync) = fake_static;
@@ -506,19 +502,29 @@ mod tests {
         (handler, fake_static, shared_db)
     }
 
-    /// 预置一个会话（config 落库后 create_session_no_start，不 spawn PTY）
-    async fn seed_session(shared_db: &Arc<tokio::sync::Mutex<crate::db::Database>>, sm: &SessionManager) -> String {
-        let config = crate::db::SessionConfig::new(
+    /// 预置一个会话（经执行端 `create_session_from_spec(start=false)`，不 spawn PTY）
+    ///
+    /// 宿主侧创建编排已随 host-business-decarriage 收尾下沉插件，测试直接注入
+    /// 插件会算好的 launch spec（命名 / config→launch 映射属插件决策）。
+    async fn seed_session(_shared_db: &Arc<tokio::sync::Mutex<crate::db::Database>>, sm: &SessionManager) -> String {
+        use crate::enums::ExecutionEnvironment;
+        sm.create_session_from_spec(
+            crate::enums::SessionLaunchConfig {
+                name: "itest-sync".to_string(),
+                environment: ExecutionEnvironment::Linux,
+                working_dir: "/tmp".to_string(),
+                command: "bash".to_string(),
+                env_vars: std::collections::HashMap::new(),
+                cols: 120,
+                rows: 40,
+            },
             "itest-sync".to_string(),
-            "linux".to_string(),
-            "/tmp".to_string(),
-            "bash".to_string(),
-        );
-        {
-            let guard = shared_db.lock().await;
-            guard.create_session_config(&config).expect("create config");
-        }
-        sm.create_session_no_start(&config.id).await.expect("create session")
+            None,
+            false,
+            None,
+        )
+        .await
+        .expect("create session")
     }
 
     /// SessionCreated → 广播 SyncPayload::SessionCreated（票据 22）

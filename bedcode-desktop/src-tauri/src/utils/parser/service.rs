@@ -12,7 +12,6 @@ pub use super::{AnsiParser, MarkdownParser, StyledSegment};
 pub struct OutputParser {
     ansi_parser: AnsiParser,
     progress_regex: Regex,
-    waiting_patterns: Vec<Regex>,
 }
 
 impl OutputParser {
@@ -21,17 +20,6 @@ impl OutputParser {
             ansi_parser: AnsiParser::new(),
             // Match progress patterns like "50%", "[50/100]", "Loading... 50%"
             progress_regex: Regex::new(r"(\d+)%|\[(\d+)/(\d+)\]|progress[:\s]*(\d+)%?").unwrap(),
-            waiting_patterns: vec![
-                Regex::new(r"> $").unwrap(),
-                Regex::new(r"❯ $").unwrap(),
-                Regex::new(r"\?\s*$").unwrap(),
-                Regex::new(r"\[Y/n\]\s*$").unwrap(),
-                Regex::new(r"\[y/N\]\s*$").unwrap(),
-                Regex::new(r"press any key").unwrap(),
-                Regex::new(r"Press any key").unwrap(),
-                Regex::new(r"waiting for input").unwrap(),
-                Regex::new(r"Enter your choice").unwrap(),
-            ],
         }
     }
 
@@ -76,24 +64,6 @@ impl OutputParser {
         segments
     }
 
-    /// Detect if output indicates waiting for input
-    pub fn detect_waiting_input(&self, output: &str) -> bool {
-        let clean = self.ansi_parser.strip_ansi(output);
-
-        // Check last few lines (without reversing)
-        let lines: Vec<&str> = clean.lines().rev().take(5).collect();
-
-        for line in lines {
-            for pattern in &self.waiting_patterns {
-                if pattern.is_match(line) {
-                    return true;
-                }
-            }
-        }
-
-        false
-    }
-
     /// Get clean text without ANSI codes
     pub fn clean_output(&self, text: &str) -> String {
         self.ansi_parser.strip_ansi(text)
@@ -122,24 +92,9 @@ impl Default for OutputParser {
     }
 }
 
-/// Detect waiting input from output string (convenience function)
-pub fn detect_waiting_input(output: &str) -> bool {
-    let parser = OutputParser::new();
-    parser.detect_waiting_input(output)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_detect_waiting() {
-        let parser = OutputParser::new();
-        assert!(parser.detect_waiting_input("> "));
-        assert!(parser.detect_waiting_input("Some text\n❯ "));
-        assert!(parser.detect_waiting_input("Continue? [Y/n] "));
-        assert!(!parser.detect_waiting_input("No prompt here"));
-    }
 
     #[test]
     fn test_parse_ansi() {

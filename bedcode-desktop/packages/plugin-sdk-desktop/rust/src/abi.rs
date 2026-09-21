@@ -84,12 +84,21 @@
 //!   `wsl-distros`（WSL 发行版名枚举，宿主无 WSL 时显性报错而非空数组）——
 //!   会话配置表单的执行环境分支需要平台事实，无业务语义（ADR 0022 裁剪线）
 //!
+//! - v20: host-task 宿主并发任务域（WASM 插件调度 OS 线程池真并行执行单元操作
+//!   计划，desktop 独有双端偏离）
+//! - v21: **host-session 收敛退役**（host-business-decarriage 收尾，desktop 独有，
+//!   双端偏离同 host-session）：删除 `create`（legacy 按 configId 创建）与
+//!   `restart`（内核重启执行器）两函数——创建编排统一走 `create-with-spec`
+//!   （重启 = 插件侧 `remove` + 同 id `create-with-spec`，spec 增可选 `sessionId`
+//!   字段，JSON 内部追加不属于接口变化）。这是**接口函数删除**（非增量），宿主
+//!   不再提供这两个 import；旧产物（≤v20）若仍 import 它们将在实例化期被拒，
+//!   需按 v21 SDK 重新构建。
+//!
 //! 编号口径（AGENTS.md §7 教训）：本号以 `abi.rs` 与 WIT 版本表实读为准，
 //! 规格正文的「17 → 19」是并发线（host-notification v18）尚未落地时的预判；
 //! 本分支实测 v18 已被「host-auth 认证记录面」占用（票 05），故会话语义下沉的
-//! 第二批次取 v19；v20 = host-task 宿主并发任务域（WASM 插件调度 OS 线程池真
-//! 并行执行单元操作计划，desktop 独有双端偏离）。
-pub const ABI_VERSION: u32 = 20;
+//! 第二批次取 v19。
+pub const ABI_VERSION: u32 = 21;
 
 /// 组件形态标识：`abi.form() == FORM_COMPONENT`（WIT `abi` 接口的 form() 声明）
 ///
@@ -103,14 +112,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_abi_version_is_v20() {
-        // 版本号序列与历史 core ABI 共用：v20 = host-task 宿主并发任务域（WASM
-        // 插件调度 OS 线程池真并行执行单元操作计划，desktop 独有双端偏离），叠加
-        // v19 host-session 配置面（会话语义下沉批次之二）、v18 host-auth 认证记录面
-        // （同批次之一）、v17 认证策略导出（auth-policy）、v16 插件私有伪终端原语
-        // （host-pty）、v15 密钥托管（host-auth / secret-store）、v14 host-websocket、
-        // v13 host-mdns v2、v12 总线二进制载荷与 v11 host-peer 传输控制三原语
-        assert_eq!(ABI_VERSION, 20);
+    fn test_abi_version_is_v21() {
+        // 版本号序列与历史 core ABI 共用：v21 = host-session 收敛退役（删 `create` /
+        // `restart`，创建与重启编排全部归插件），叠加 v20 host-task 宿主并发任务域、
+        // v19 host-session 配置面与创建/动作面（会话语义下沉批次之二）、
+        // v18 host-auth 认证记录面（同批次之一）、v17 认证策略导出（auth-policy）、
+        // v16 插件私有伪终端原语（host-pty）、v15 密钥托管（host-auth / secret-store）、
+        // v14 host-websocket、v13 host-mdns v2、v12 总线二进制载荷与 v11 host-peer 传输控制三原语
+        assert_eq!(ABI_VERSION, 21);
     }
 
     #[test]

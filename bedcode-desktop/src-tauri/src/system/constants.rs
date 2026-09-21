@@ -4,7 +4,6 @@
 
 pub mod auth;
 pub mod event;
-pub mod file;
 pub mod lifecycle;
 pub mod mdns;
 pub mod network;
