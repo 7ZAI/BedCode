@@ -1,76 +1,23 @@
 //! Session Commands
+//!
+//! 宿主命令面**只保留终端渲染管道与引擎事实**（ADR 0022 裁剪线 + 终端红线）：
+//! - `list_sessions` / `get_session`：引擎记录（+ 注解槽任务字段），终端窗口与
+//!   通知种子化的读取面
+//! - `resize_session`：尺寸裁决（插件裁决 + 内核登记/执行，保留宿主降级执行器）
+//!
+//! 会话**编排**命令（`start_session` / `create_session_no_start` /
+//! `start_existing_session` / `kill_session` / `delete_session` / `restart_session`）
+//! 已按 2026-09-21 命令面收敛注销（`.scratch/2026-09-21-host-rust-residue/issues/05`）：
+//! 创建/停止/移除/重启的业务面归 `com.bedcode.session` 插件命令面
+//! （`session.create` / `session.close` / `session.action.*`），宿主只经
+//! `host-session` 原语执行（见 `plugin/manager/wasm_runtime/host_impl/session.rs`）。
+//! 两阶段启动（建而不启 + 后续 `start_existing_session`）随之退役——v21 起唯一
+//! 生产者（会话中心插件与移动端 HTTP/WS 线）一律 `start = true`。
 
 use crate::session::{RendererSource, ResizeOutcome, SessionManager};
 use crate::Result;
 use std::sync::Arc;
 use tauri::State;
-
-#[tauri::command]
-pub async fn start_session(
-    host: State<'_, Arc<crate::plugin::PluginHost>>,
-    config_id: String,
-    cols: Option<u16>,
-    rows: Option<u16>,
-) -> Result<String> {
-    tracing::info!(config_id = %config_id, "start_session called");
-    // 票 09 + host-business-decarriage 收尾：创建编排**只在**会话中心插件
-    // （命名唯一化 / config→launch spec 映射 / 创建即启动），本命令是薄转发。
-    // 插件未激活 → 显性报错（无宿主降级：宿主旧路径只读主库投影，对票 08 之后
-    // 真源在插件私有库的新配置本就无法启动，属伪降级）。
-    crate::utils::session_create_bridge::create_session_via_plugin(
-        host.wasm_host_ctx(),
-        &config_id,
-        cols,
-        rows,
-        true,
-        None,
-    )
-    .await
-}
-
-#[tauri::command]
-pub async fn create_session_no_start(
-    host: State<'_, Arc<crate::plugin::PluginHost>>,
-    config_id: String,
-) -> Result<String> {
-    tracing::info!(config_id = %config_id, "create_session_no_start called");
-    // 两阶段第一阶段（只创建不启动）同样由插件编排（`start=false`），无宿主降级。
-    crate::utils::session_create_bridge::create_session_via_plugin(
-        host.wasm_host_ctx(),
-        &config_id,
-        None,
-        None,
-        false,
-        None,
-    )
-    .await
-}
-
-#[tauri::command]
-pub async fn start_existing_session(
-    session_manager: State<'_, Arc<SessionManager>>,
-    session_id: String,
-    cols: Option<u16>,
-    rows: Option<u16>,
-) -> Result<()> {
-    tracing::info!(session_id = %session_id, "start_existing_session called");
-    // 两阶段启动第二阶段：spawn 前按请求端尺寸调整 PTY
-    let initial_size = match (cols, rows) {
-        (Some(c), Some(r)) if c > 0 && r > 0 => Some((c, r)),
-        _ => None,
-    };
-    let result = session_manager.start_existing_session(&session_id, initial_size).await;
-    match result {
-        Ok(_) => {
-            tracing::info!(session_id = %session_id, "Session started successfully");
-            Ok(())
-        }
-        Err(e) => {
-            tracing::error!("Failed to start session: {}", e);
-            Err(e)
-        }
-    }
-}
 
 /// 列出会话（对外视图：引擎记录 + 注解槽任务字段，票 12）
 ///
@@ -91,42 +38,6 @@ pub async fn get_session(
     session_id: String,
 ) -> Result<Option<crate::session::SessionInfoView>> {
     Ok(session_manager.session_view(&session_id).await)
-}
-
-#[tauri::command]
-pub async fn kill_session(session_manager: State<'_, Arc<SessionManager>>, session_id: String) -> Result<()> {
-    session_manager.kill_session(&session_id).await
-}
-
-/// 删除（移除）会话
-///
-/// 票 10：移除编排下沉会话中心插件（存在性预检 + 失败可见），宿主执行器保留为
-/// 降级路径（插件未激活 / 互调失败时行为与迁移前逐字一致）。
-#[tauri::command]
-pub async fn delete_session(
-    host: State<'_, Arc<crate::plugin::PluginHost>>,
-    session_manager: State<'_, Arc<SessionManager>>,
-    session_id: String,
-) -> Result<()> {
-    if crate::utils::session_action_bridge::remove_session_via_plugin(host.wasm_host_ctx(), &session_id)
-        .await?
-        .is_some()
-    {
-        return Ok(());
-    }
-    session_manager.remove_session(&session_id).await
-}
-
-/// 重启会话（同一 session id 重建并启动）
-///
-/// 票 10 + v21：重启编排**只在**会话中心插件（存在性预检 + `remove` + 同 id
-/// `create-with-spec`）；内核重启执行器已退役，插件未激活时显性报错（无降级轨）。
-#[tauri::command]
-pub async fn restart_session(
-    host: State<'_, Arc<crate::plugin::PluginHost>>,
-    session_id: String,
-) -> Result<String> {
-    crate::utils::session_action_bridge::restart_session_via_plugin(host.wasm_host_ctx(), &session_id).await
 }
 
 /// 调整会话终端大小（桌面本地路径，正统渲染端身份恒为 Desktop）

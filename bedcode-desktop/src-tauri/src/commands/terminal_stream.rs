@@ -250,11 +250,19 @@ mod tests {
             let (_tx, _rx) = tokio::sync::mpsc::channel::<forward::ForwardOutput>(4);
             // 直接登记拉取订阅者，验证 unsubscribe 清理生效
             session
-                .register_subscriber("channel-sess-1-0", None, Arc::new(AtomicU8::new(forward::MODE_REALTIME)))
+                .register_subscriber(
+                    "channel-sess-1-0",
+                    None,
+                    Arc::new(AtomicU8::new(forward::MODE_REALTIME)),
+                )
                 .await;
             assert_eq!(session.pull_subscriber_count().await, 1);
             assert!(manager.unsubscribe("sess-1", "channel-sess-1-0").await);
-            assert_eq!(session.pull_subscriber_count().await, 0, "unsubscribe 必须清掉拉取订阅者");
+            assert_eq!(
+                session.pull_subscriber_count().await,
+                0,
+                "unsubscribe 必须清掉拉取订阅者"
+            );
         });
     }
 }

@@ -3,9 +3,9 @@
 //! Tauri commands — 前端 PluginContext 的每个 API 调用通过 Tauri invoke 到达此桥接层
 //! Rust 端做权限校验后执行操作
 
-use crate::plugin::security::fs_auth::FsAuthChecker;
 use crate::plugin::manager::host::PluginHost;
 use crate::plugin::manager::types::DesktopPluginInfo;
+use crate::plugin::security::fs_auth::FsAuthChecker;
 use std::sync::Arc;
 use tauri::State;
 
@@ -37,10 +37,7 @@ pub async fn plugin_get_info(
 /// 不进入激活流程。`plugin_activate` 内部的 preauthorize 保留为兜底
 /// （启动 auto-activate 无头场景 + 已授权路径短路无二次弹窗）。
 #[tauri::command]
-pub async fn plugin_preauthorize(
-    plugin_id: String,
-    plugin_host: State<'_, Arc<PluginHost>>,
-) -> crate::Result<()> {
+pub async fn plugin_preauthorize(plugin_id: String, plugin_host: State<'_, Arc<PluginHost>>) -> crate::Result<()> {
     tracing::info!(plugin_id = %plugin_id, "[API] plugin_preauthorize");
     let result = plugin_host.preauthorize_plugin(&plugin_id).await;
     if let Err(ref e) = result {
@@ -371,13 +368,8 @@ mod tests {
     /// 诊断上报命令：ok/error 两条路径都只写 tracing，恒返回 Ok（issue 04）
     #[tokio::test]
     async fn frontend_load_report_always_ok() {
-        let ok_report = super::plugin_frontend_load_report(
-            "com.bedcode.demo".into(),
-            "import".into(),
-            true,
-            None,
-        )
-        .await;
+        let ok_report =
+            super::plugin_frontend_load_report("com.bedcode.demo".into(), "import".into(), true, None).await;
         let fail_report = super::plugin_frontend_load_report(
             "com.bedcode.demo".into(),
             "activate".into(),

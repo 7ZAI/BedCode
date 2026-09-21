@@ -131,7 +131,10 @@ mod tests {
     /// WindowsShell wire 标签锁
     #[test]
     fn windows_shell_wire_labels_locked() {
-        assert_eq!(serde_json::to_string(&WindowsShell::PowerShell).unwrap(), "\"PowerShell\"");
+        assert_eq!(
+            serde_json::to_string(&WindowsShell::PowerShell).unwrap(),
+            "\"PowerShell\""
+        );
         assert_eq!(serde_json::to_string(&WindowsShell::Cmd).unwrap(), "\"Cmd\"");
     }
 

@@ -209,10 +209,7 @@ mod tests {
     #[test]
     fn test_windows_to_wsl_path_forward_slash_forms() {
         // 正斜杠形式必须与反斜杠形式等价（票据 01：曾解析出发行版名残留）
-        assert_eq!(
-            windows_to_wsl_path("//wsl.localhost/Ubuntu/home/user"),
-            "/home/user"
-        );
+        assert_eq!(windows_to_wsl_path("//wsl.localhost/Ubuntu/home/user"), "/home/user");
         assert_eq!(windows_to_wsl_path("//wsl$/Ubuntu/home/user"), "/home/user");
         // 正斜杠磁盘路径同样归一化
         assert_eq!(windows_to_wsl_path("C:/Users/test"), "/mnt/c/Users/test");
@@ -238,7 +235,8 @@ mod tests {
     #[test]
     fn test_parse_wsl_list_output_version_fallback_and_line_skips() {
         // 版本列非法 → 回退 2；首行表头 / 空行 / 少于 3 列的行跳过
-        let out = "  NAME      STATE           VERSION\n\n* Unknown   Running         ???\n    OnlyName\n  Two      Cols\n";
+        let out =
+            "  NAME      STATE           VERSION\n\n* Unknown   Running         ???\n    OnlyName\n  Two      Cols\n";
         let distros = parse_wsl_list_output(out);
         assert_eq!(distros.len(), 1);
         assert_eq!(distros[0].name, "Unknown");
@@ -274,5 +272,4 @@ mod tests {
             "\\\\wsl$\\Ubuntu\\home\\user"
         );
     }
-
 }

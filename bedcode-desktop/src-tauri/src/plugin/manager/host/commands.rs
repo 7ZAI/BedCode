@@ -225,7 +225,9 @@ impl PluginHost {
                 enriched_args.as_object_mut().map(|obj| {
                     obj.insert(
                         "resource_dir".to_string(),
-                        serde_json::Value::String(crate::plugin::manager::loader::strip_verbatim_prefix(&loaded.extension_path)),
+                        serde_json::Value::String(crate::plugin::manager::loader::strip_verbatim_prefix(
+                            &loaded.extension_path,
+                        )),
                     );
                 });
             }

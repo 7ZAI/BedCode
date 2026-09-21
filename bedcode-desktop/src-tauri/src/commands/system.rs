@@ -5,19 +5,11 @@
 //! 桌面端专用命令在 desktop/commands.rs
 //! 移动端专用命令在 mobile/commands/mobile_commands.rs
 
-use crate::db::Database;
-use crate::utils::auth::PairingCode;
 use crate::Result;
 use serde::Serialize;
 use std::sync::Arc;
 use tauri::{Manager, State};
-use tokio::sync::Mutex;
 use tracing_subscriber::filter::EnvFilter;
-
-#[cfg(any(target_os = "android", target_os = "ios"))]
-use crate::mobile::remote::PairingService;
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-use crate::server::services::pairing_service::PairingService;
 
 /// 运行中会话摘要信息，用于窗口关闭确认弹窗
 #[derive(Debug, Clone, Serialize)]
@@ -28,113 +20,6 @@ pub struct RunningSessionInfo {
     pub name: String,
     /// 会话状态（Running / Starting / WaitingInput）
     pub status: String,
-}
-
-// ==================== Pairing Commands ====================
-
-/// 生成配对码（有效期取数据库中的 pairing_code_ttl，缺省回退常量）
-///
-/// 票 11 命令面桥接：认证中心激活时经互调转发（状态以认证中心为准），
-/// 否则降级宿主 PairingService（双轨并存期无单点）。TTL 配置仍读宿主 DB。
-#[tauri::command]
-pub async fn generate_pairing_code(
-    host: State<'_, Arc<crate::plugin::PluginHost>>,
-    pairing_service: State<'_, Arc<PairingService>>,
-    db: State<'_, Arc<Mutex<Database>>>,
-) -> Result<PairingCode> {
-    let ttl = {
-        let db = db.lock().await;
-        db.get_setting("pairing_code_ttl")
-            .ok()
-            .flatten()
-            .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(crate::system::constants::auth::PAIRING_CODE_TTL_SECS)
-    };
-    crate::utils::auth::auth_center::generate_pairing_code(host.wasm_host_ctx(), &pairing_service, ttl).await
-}
-
-/// 获取配对码有效期（秒）
-#[tauri::command]
-pub async fn get_pairing_code_ttl(db: State<'_, Arc<Mutex<Database>>>) -> Result<u64> {
-    let db = db.lock().await;
-    match db.get_setting("pairing_code_ttl") {
-        Ok(Some(value)) => value.parse::<u64>().map_err(|e| crate::AppError::Config(e.to_string())),
-        _ => Ok(crate::system::constants::auth::PAIRING_CODE_TTL_SECS),
-    }
-}
-
-/// 设置配对码有效期（秒）
-#[tauri::command]
-pub async fn set_pairing_code_ttl(db: State<'_, Arc<Mutex<Database>>>, ttl: u64) -> Result<()> {
-    let db = db.lock().await;
-    db.set_setting("pairing_code_ttl", &ttl.to_string())
-        .map_err(|e| crate::AppError::Config(e.to_string()))
-}
-
-/// 获取当前配对码
-///
-/// 票 11 命令面桥接：认证中心激活时经互调取状态，否则降级宿主实现。
-#[tauri::command]
-pub async fn get_current_pairing_code(
-    host: State<'_, Arc<crate::plugin::PluginHost>>,
-    pairing_service: State<'_, Arc<PairingService>>,
-) -> Result<Option<PairingCode>> {
-    crate::utils::auth::auth_center::current_pairing_code(host.wasm_host_ctx(), &pairing_service).await
-}
-
-/// 验证配对码
-///
-/// 票 11 命令面桥接：认证中心激活时经互调验证（一次性消费在认证中心侧），
-/// 否则降级宿主实现。
-#[tauri::command]
-pub async fn verify_pairing_code(
-    host: State<'_, Arc<crate::plugin::PluginHost>>,
-    pairing_service: State<'_, Arc<PairingService>>,
-    code: String,
-) -> Result<bool> {
-    crate::utils::auth::auth_center::verify_pairing_code(host.wasm_host_ctx(), &pairing_service, &code).await
-}
-
-/// 清除当前配对码
-///
-/// 票 11 命令面桥接：认证中心激活时经互调清除，否则降级宿主实现。
-#[tauri::command]
-pub async fn clear_pairing_code(
-    host: State<'_, Arc<crate::plugin::PluginHost>>,
-    pairing_service: State<'_, Arc<PairingService>>,
-) -> Result<()> {
-    crate::utils::auth::auth_center::clear_pairing_code(host.wasm_host_ctx(), &pairing_service).await
-}
-
-/// 获取已配对设备
-#[tauri::command]
-pub async fn list_paired_devices(db: State<'_, Arc<Mutex<Database>>>) -> Result<Vec<crate::db::Pairing>> {
-    let db = db.lock().await;
-    db.get_pairings()
-}
-
-/// 移除配对设备
-#[tauri::command]
-pub async fn remove_paired_device(db: State<'_, Arc<Mutex<Database>>>, id: String) -> Result<()> {
-    let db = db.lock().await;
-    db.remove_pairing(&id)
-}
-
-/// 获取设备连接历史
-#[tauri::command]
-pub async fn list_connection_history(
-    db: State<'_, Arc<Mutex<Database>>>,
-    device_id: String,
-) -> Result<Vec<crate::db::ConnectionHistory>> {
-    let db = db.lock().await;
-    db.get_connection_history(&device_id)
-}
-
-/// 删除设备连接历史
-#[tauri::command]
-pub async fn delete_connection_history(db: State<'_, Arc<Mutex<Database>>>, device_id: String) -> Result<()> {
-    let db = db.lock().await;
-    db.delete_connection_history(&device_id)
 }
 
 // ==================== Settings Commands ====================
@@ -286,8 +171,8 @@ fn validate_terminal_bg_source(source: &str) -> Result<(std::path::PathBuf, Stri
     }
 
     // 限制文件大小，避免超大图片占用过多存储
-    let metadata = std::fs::metadata(src)
-        .map_err(|e| crate::AppError::Config(format!("读取图片文件信息失败 {source}: {e}")))?;
+    let metadata =
+        std::fs::metadata(src).map_err(|e| crate::AppError::Config(format!("读取图片文件信息失败 {source}: {e}")))?;
     if metadata.len() > TERMINAL_BG_MAX_BYTES {
         return Err(crate::AppError::InvalidInput(format!(
             "图片文件过大（{} 字节），上限 {} 字节",
@@ -351,32 +236,6 @@ pub fn get_app_version() -> String {
 #[tauri::command]
 pub fn get_startup_time(start_time: State<'_, crate::AppStartTime>) -> u64 {
     start_time.0.elapsed().as_millis() as u64
-}
-
-/// 获取本地 IPv4 地址（排除回环和链路本地地址）
-#[tauri::command]
-pub fn get_local_ip_addresses() -> Vec<String> {
-    local_ip_address::list_afinet_netifas()
-        .map(|interfaces| {
-            interfaces
-                .into_iter()
-                .filter(|(_, ip)| match ip {
-                    std::net::IpAddr::V4(ipv4) => !ipv4.is_loopback() && !ipv4.is_link_local(),
-                    std::net::IpAddr::V6(_) => false,
-                })
-                .map(|(_, ip)| ip.to_string())
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-// ==================== 系统信息查询 ====================
-
-/// 获取系统基本信息（OS / 设备名称 / IP 地址，启动时采集一次）
-#[tauri::command]
-pub fn get_system_info(app_handle: tauri::AppHandle) -> crate::system::SystemInfo {
-    use tauri::Manager;
-    (**app_handle.state::<Arc<crate::system::SystemInfo>>().inner()).clone()
 }
 
 // ==================== Window Close Commands ====================

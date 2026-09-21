@@ -194,7 +194,10 @@ mod tests {
         for (action, expected_type) in cases {
             let json = serde_json::to_string(&action).unwrap();
             // type 标签锁（移动端 TS 依赖）
-            assert!(json.contains(&format!("\"type\":\"{expected_type}\"")), "标签缺失: {json}");
+            assert!(
+                json.contains(&format!("\"type\":\"{expected_type}\"")),
+                "标签缺失: {json}"
+            );
             let back: SessionControlAction = serde_json::from_str(&json).unwrap();
             let json2 = serde_json::to_string(&back).unwrap();
             assert_eq!(json, json2, "变体往返不一致: {json}");
@@ -204,10 +207,7 @@ mod tests {
     /// 未知变体拒绝（协议错位不得静默吞掉）
     #[test]
     fn session_control_action_unknown_variant_rejected() {
-        assert!(serde_json::from_str::<SessionControlAction>(
-            r#"{"type":"bogus_action"}"#
-        )
-        .is_err());
+        assert!(serde_json::from_str::<SessionControlAction>(r#"{"type":"bogus_action"}"#).is_err());
     }
 
     /// SessionConfigAction 往返 + 标签锁
@@ -219,7 +219,10 @@ mod tests {
         ];
         for (action, expected_type) in cases {
             let json = serde_json::to_string(&action).unwrap();
-            assert!(json.contains(&format!("\"type\":\"{expected_type}\"")), "标签缺失: {json}");
+            assert!(
+                json.contains(&format!("\"type\":\"{expected_type}\"")),
+                "标签缺失: {json}"
+            );
             let back: SessionConfigAction = serde_json::from_str(&json).unwrap();
             assert_eq!(serde_json::to_string(&back).unwrap(), json, "往返不一致: {json}");
         }
