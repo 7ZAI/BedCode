@@ -129,6 +129,27 @@ api 名双投窗口。
 **前置**：Blocked by 票 06。
 **验收**：升级后用户既有会话配置/任务/配对完整（有断言）；旧前缀/旧 api 窗口内可用。
 
+**状态：✅ done（2026-09-22，票 07 提交）**：
+- **私有库 id 路径迁移**：新增 `plugin/session_db_migration.rs`（形状沿用
+  task_data_migration：账本即版本戳 / best-effort 不阻断启动 / INSERT OR IGNORE 幂等）；
+  旧路径 `…/plugins/com.bedcode.session/plugin.db` → 新路径
+  `…/com.bedcode.terminal-session/plugin.db`；动态枚举旧库全部用户表，task 域改名表
+  经 `TASK_TABLE_COPIES` 字典对齐（老版本 `session_mapping` → `task_session_mapping`），
+  列名交集拷贝；目标库缺失（改名插件未激活过）走纯文件重命名整体位移；
+  不搬 sqlite_% 内部表、不建空表替插件决定 schema；账本键
+  `session_db.migrated_from=com.bedcode.session` 写目标 plugin_meta；挂钩 lib.rs
+  （PluginHost::new 之后，与 task_data 迁移同点）。测试 6 例（升级搬运 / 幂等跳过 /
+  首装跳过 / 纯位移 / 主键冲突保目标行 / 旧表独有记 missing）全绿；
+- **旧 HTTP 前缀双投窗口**：`LEGACY_HTTP_PLUGIN_ALIASES` 追加
+  `com.bedcode.session → com.bedcode.terminal-session`（既有 auto-task 条目同款机制），
+  `plugin_http_path_allowed` 判定不变；plugin_controller 测试 7/7 绿；
+- **旧 api 名双投窗口**：`host/activation.rs` 新增 `with_api_aliases`（改名插件激活时
+  把旧名 api 一并登记到 ApiRegistry，属主仍为新插件——旧调用方按旧名互调照常可达，
+  owner_of 解旧名落到新插件，与回复道 sender 校验口径一致）；纯函数测试 4 例全绿；
+- **验证**：cargo check 0 error；session_e2e 13/13（激活登记改动后无回归）；
+  vitest 75/735 全绿；eslint 0 error。全量 Rust 其余失败仍属并发在途
+  wasm-core-audit 票线（bus topic ACL / pty 事件面重构），与本票无交集。
+
 ## 票 08 · C 文档与登记
 
 **范围**：AGENTS.md §7（插件清单、HOST_PRIMITIVE_CAPABILITIES 计数）、code-map、

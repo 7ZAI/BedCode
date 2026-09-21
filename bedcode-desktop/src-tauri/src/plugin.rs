@@ -26,6 +26,9 @@ pub mod quick_actions_migration;
 pub mod security;
 /// 旧 auto-task 私有库任务数据一次性搬运（票 17，宿主侧一次性迁移）
 pub mod task_data_migration;
+/// 终端会话中心私有库 id 路径迁移（票 07 B2：com.bedcode.session →
+/// com.bedcode.terminal-session，改名后既有数据落新路径）
+pub mod session_db_migration;
 
 // ==================== Facade 再导出 ====================
 // 外部消费方（Tauri 命令层、system、peer 等）只经 facade 引用，

@@ -80,13 +80,18 @@ pub(crate) fn plugin_http_path_allowed(declared: &[String], full_path: &str) -> 
     declared.is_empty() || declared.iter().any(|p| p == full_path)
 }
 
-/// 旧插件 id → 接管方 id（票 16 D1「桌面侧可选兜底」的落点）
+/// 旧插件 id → 接管方 id（票 16 D1「桌面侧可选兜底」的落点；票 07 B2 追加 id 改名项）
 ///
 /// 语义是「旧前缀的 HTTP 面改由新插件应答」，不是两个插件共享请求：只在旧插件
 /// **未激活**且接管方**已激活**时生效（见 [`resolve_http_owner`]）。合并插件退役
 /// 旧 auto-task 后端（票 17）后，移动端与已部署在项目里的旧 hook 脚本仍能按原
-/// 路径打到桌面端；切断判定与代价评估记在票 16 Comments。
-const LEGACY_HTTP_PLUGIN_ALIASES: &[(&str, &str)] = &[("com.bedcode.auto-task", "com.bedcode.terminal-session")];
+/// 路径打到桌面端；票 06 插件 id 改名后，旧 id 的 HTTP 前缀
+/// `/api/plugin/com.bedcode.session/*` 在双投窗口内同样兜底到新插件（票 07 验收：
+/// 旧前缀窗口内可用）；切断判定与代价评估记在票 16 Comments。
+const LEGACY_HTTP_PLUGIN_ALIASES: &[(&str, &str)] = &[
+    ("com.bedcode.auto-task", "com.bedcode.terminal-session"),
+    ("com.bedcode.session", "com.bedcode.terminal-session"),
+];
 
 /// 查旧前缀的接管方 id（无声明即 None）
 pub(crate) fn legacy_http_alias(requested: &str) -> Option<&'static str> {
@@ -426,6 +431,8 @@ mod tests {
     #[test]
     fn legacy_http_alias_maps_only_retired_plugin_prefix() {
         assert_eq!(legacy_http_alias("com.bedcode.auto-task"), Some("com.bedcode.terminal-session"));
+        // 票 07 B2：改名前的旧 id 前缀同样兜底到新插件（双投窗口）
+        assert_eq!(legacy_http_alias("com.bedcode.session"), Some("com.bedcode.terminal-session"));
         // 新 id 自身、其它在位插件、未知 id 都没有接管方
         assert_eq!(legacy_http_alias("com.bedcode.terminal-session"), None);
         assert_eq!(legacy_http_alias("com.bedcode.file-transfer"), None);

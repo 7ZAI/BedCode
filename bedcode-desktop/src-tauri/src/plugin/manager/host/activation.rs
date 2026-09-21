@@ -358,8 +358,11 @@ impl PluginHost {
         }
 
         // 登记互调 api 清单（ADR-0017）：激活后 `bedcode.api.*` 请求可路由到本插件。
-        // 未声明 api 的插件登记空清单，幂等无操作
-        self.wasm_host_ctx.api_registry().register(plugin_id, &plan.api);
+        // 未声明 api 的插件登记空清单，幂等无操作。
+        // 票 07 B2：改名插件额外登记旧 api 名（双投窗口）——仍指向本插件，
+        // 未更新的旧调用方按旧名互调时照常可达
+        let api_list = with_api_aliases(plugin_id, &plan.api);
+        self.wasm_host_ctx.api_registry().register(plugin_id, &api_list);
 
         // core-plugin-manager：系统组件激活后装配能力注册表——实例化时探测到的
         // 可路由能力导出（host-* 同形接口）注册为系统组件提供者，应用插件的
@@ -678,5 +681,113 @@ impl PluginHost {
         } else {
             false
         }
+    }
+}
+
+// ==================== 旧 api 名双投窗口（票 07 B2） ====================
+
+/// 改名插件的 api 名别名：`(新插件 id, 旧插件 id)`。
+///
+/// 双投窗口语义：改名插件激活时除现名 api 外，还把旧名 api 一并登记到
+/// `ApiRegistry`（属主仍是本插件）——未更新的旧调用方按旧名互调（`bedcode.api
+/// .com.bedcode.session.*`）时照常可达；`owner_of` 解旧名时也落到本插件，
+/// 回复道 sender 校验口径一致。与 HTTP 前缀别名（`legacy_http_alias`）同一决策；
+/// 窗口关闭（全量更新后）时删除本条即可。
+const LEGACY_API_PLUGIN_ALIASES: &[(&str, &str)] =
+    &[("com.bedcode.terminal-session", "com.bedcode.session")];
+
+/// 为新 plugin_id 的 api 清单附加旧名别名；无别名命中时原样返回。
+///
+/// 纯函数（测试直接断言）：api 名 = `{plugin_id}.{连字符方法名}`，按 id 精确
+/// 命中改名表后，把每个现名 api 生成旧名等价项；已在清单里的旧名去重。
+fn with_api_aliases(plugin_id: &str, apis: &[String]) -> Vec<String> {
+    let Some((_, old_id)) = LEGACY_API_PLUGIN_ALIASES
+        .iter()
+        .find(|(new_id, _)| *new_id == plugin_id)
+    else {
+        return apis.to_vec();
+    };
+    let mut out = apis.to_vec();
+    for api in apis {
+        if let Some(suffix) = api.strip_prefix(&format!("{plugin_id}.")) {
+            let old = format!("{old_id}.{suffix}");
+            if !out.contains(&old) {
+                out.push(old);
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn apis(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// 改名插件：旧 api 名补齐、新名保留、无重复
+    #[test]
+    fn aliases_latest_renamed_plugin_apis() {
+        let out = with_api_aliases(
+            "com.bedcode.terminal-session",
+            &apis(&[
+                "com.bedcode.terminal-session.pairing-code-generate",
+                "com.bedcode.terminal-session.config-list",
+            ]),
+        );
+        assert_eq!(
+            out,
+            apis(&[
+                "com.bedcode.terminal-session.pairing-code-generate",
+                "com.bedcode.terminal-session.config-list",
+                "com.bedcode.session.pairing-code-generate",
+                "com.bedcode.session.config-list",
+            ])
+        );
+    }
+
+    /// 已在清单里显式声明旧名：去重，不重复登记
+    #[test]
+    fn aliases_dedupe_explicit_old_name() {
+        let out = with_api_aliases(
+            "com.bedcode.terminal-session",
+            &apis(&[
+                "com.bedcode.terminal-session.trust-list",
+                "com.bedcode.session.trust-list",
+            ]),
+        );
+        assert_eq!(
+            out,
+            apis(&[
+                "com.bedcode.terminal-session.trust-list",
+                "com.bedcode.session.trust-list",
+            ]),
+            "显式旧名不得重复"
+        );
+    }
+
+    /// 未改名插件 / 未知前缀：原样返回，不生成别名
+    #[test]
+    fn aliases_off_for_other_plugins() {
+        let out = with_api_aliases(
+            "com.bedcode.file-transfer",
+            &apis(&["com.bedcode.file-transfer.list-remote"]),
+        );
+        assert_eq!(out, apis(&["com.bedcode.file-transfer.list-remote"]));
+        // 前缀必须精确命中改名插件 id（不得把其它 id 误当改名者）
+        let out = with_api_aliases(
+            "com.bedcode.terminal-session-extra",
+            &apis(&["com.bedcode.terminal-session-extra.x"]),
+        );
+        assert_eq!(out, apis(&["com.bedcode.terminal-session-extra.x"]));
+    }
+
+    /// 空清单：返回空（不生成无意义别名）
+    #[test]
+    fn aliases_empty_list_stays_empty() {
+        let out = with_api_aliases("com.bedcode.terminal-session", &[]);
+        assert!(out.is_empty());
     }
 }
