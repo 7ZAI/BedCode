@@ -3,7 +3,7 @@
 //! 演示 spec `.scratch/2026-09-19-pty-base-service/spec.md` 的插件侧用法，并作为
 //! 宿主测试套件的端到端载体（最高 seam：WIT → 宿主实现 → 组件接线 → 权限 → SDK → 真 PTY）：
 //!
-//! - **activate 期订阅** owner 作用域退出事件 `pty:exit.<owner>`：宿主不缓冲、不重放，
+//! - **activate 期订阅** 属主私有退出事件 `<owner>::pty:exit`：宿主不缓冲、不重放，
 //!   晚订阅期间的丢失靠 `is-running` 快照自愈（spec D4 硬约束），故订阅必须在任何
 //!   spawn 之前完成；
 //! - 命令驱动创建与交互回路：`pty-spawn`（裸命令 + 参数数组 + env/cwd/尺寸）/
@@ -19,7 +19,7 @@ use bedcode_plugin_api::wasm::WasmPlugin;
 use bedcode_plugin_api::wasm_host::WasmHost;
 use bedcode_plugin_api::BusMessage;
 
-/// 收到的 `pty:exit.<owner>` 事件 payload（宿主按属主投递，非属主物理收不到）
+/// 收到的 `<owner>::pty:exit` 事件 payload（宿主按属主投递；跨属主订阅被总线门禁拒绝）
 static EVENTS: std::sync::Mutex<Vec<serde_json::Value>> = std::sync::Mutex::new(Vec::new());
 
 /// host-pty fixture 插件
@@ -131,7 +131,7 @@ impl WasmPlugin for PtyTestPlugin {
                 let running = host.pty_is_running(&pty_id).map_err(|e| anyhow::anyhow!("pty_is_running: {e}"))?;
                 Ok(serde_json::json!({ "running": running }))
             }
-            // 终止并销毁（`pty:spawn` 域）；`pty:exit.<owner>`（reason=killed）随后投递
+            // 终止并销毁（`pty:spawn` 域）；`<owner>::pty:exit`（reason=killed）随后投递
             "pty-kill" => {
                 let pty_id = require_str(&args, "ptyId")?;
                 host.pty_kill(&pty_id).map_err(|e| anyhow::anyhow!("pty_kill: {e}"))?;
@@ -156,7 +156,7 @@ impl WasmPlugin for PtyTestPlugin {
         }
     }
 
-    /// 总线消息入口：记录 owner 作用域事件（本票只有 `pty:exit` 一条）
+    /// 总线消息入口：记录属主私有事件（本票只有 `pty:exit` 一条）
     fn on_message(msg: &BusMessage) -> anyhow::Result<()> {
         EVENTS.lock().unwrap().push(serde_json::json!({
             "topic": msg.topic,

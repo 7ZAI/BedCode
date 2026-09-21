@@ -213,7 +213,7 @@ spec D3 否决），ABI desktop 15 → 16（v15 归 `host-auth`；mobile 不跟�
 - **输出面**：每句柄一条 `PtyRing`（单生产者 + 全局偏移 + 字节/条目双上限，容量是 spawn 的插件声明
   参数，宿主以 `PLUGIN_PTY_RING_MAX_BYTES` 仲裁）；读线程经 `PtyRingSink`（`PtyOutputSink` 实现）
   投递，源侧零等待；
-- **生命周期**：唯一事件 `pty:exit.<owner>`（payload `{ptyId, reason: stopped|killed|error, exitCode?}`），
+- **生命周期**：唯一事件 `<owner>::pty:exit`（属主私有 topic，票 05；payload `{ptyId, reason: stopped|killed|error, exitCode?}`），
   由 spawn 时起动的退出监听在 `PtyTerminationGate`（EOF + 子进程回收）齐备后发布，**exit 即摘除句柄与环**；
   终止 / 摘除 / 发布遵循单一发布者不变量（只有 `remove` 成功者发布，故三条路径恰好一条事件）；
 - **回收**：插件停用 → `pty::purge_for_plugin`（`host.rs::deactivate_plugin_inner`，紧邻 mdns / ws

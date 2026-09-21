@@ -4,7 +4,7 @@
 //! 并作为宿主测试套件的端到端载体（`plugin-sdk-test` 不并入：避免权限与
 //! 依赖混杂，见 spec §B7）：
 //!
-//! - **activate 期订阅** owner 作用域状态事件
+//! - **activate 期订阅** 属主私有状态事件
 //!   （`ws:open/error/close.<owner>`、`ws:client-connect/disconnect.<owner>`）：
 //!   宿主不缓冲、不重放，晚订阅期间的事件永久丢失（D3 硬约束），故必须在
 //!   首次 connect / register-endpoint 之前完成订阅；
@@ -33,7 +33,7 @@ use bedcode_plugin_api::BusMessage;
 /// 收到的 WS 帧：`(标识, kind, payload)`——客户端域标识为 `wsc-<uuid>`，
 /// 服务端域为 `wse-<uuid>/wsc-<uuid>`（端点/对端）。实例级全局（见文件头注释）
 static FRAMES: std::sync::Mutex<Vec<(String, String, Vec<u8>)>> = std::sync::Mutex::new(Vec::new());
-/// 收到的总线状态事件 payload（owner 作用域 topic 的投递内容）
+/// 收到的总线状态事件 payload（属主私有 topic 的投递内容）
 static EVENTS: std::sync::Mutex<Vec<serde_json::Value>> = std::sync::Mutex::new(Vec::new());
 /// 端点回显开关（`ws-endpoint-echo` 命令控制；false = 只收集不回显）
 static ECHO_ENABLED: std::sync::Mutex<bool> = std::sync::Mutex::new(false);

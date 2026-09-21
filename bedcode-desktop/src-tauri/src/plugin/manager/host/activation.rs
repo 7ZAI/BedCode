@@ -493,7 +493,7 @@ impl PluginHost {
         crate::plugin::manager::wasm_runtime::host_impl::ws::purge_for_plugin(plugin_id);
 
         // PTY 基础能力服务（ABI v16，spec D2）：插件停用即 kill 并摘除其全部私有
-        // PTY，逐条补发 `pty:exit.<owner>`（reason=killed）——孤儿进程不随插件消失
+        // PTY，逐条补发 `<owner>::pty:exit`（reason=killed）——孤儿进程不随插件消失
         // 而悬挂。必须在下方 `remove_all_subscriptions` 之前，否则补发的事件无人可投。
         crate::plugin::manager::wasm_runtime::host_impl::pty::purge_for_plugin(plugin_id, &self.message_bus);
 

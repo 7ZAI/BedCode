@@ -68,9 +68,6 @@
    旁路 `check_namespace` → 6 红（订阅/发布/二进制发布/退订/端到端）；旁路订阅面两条规则 → 7 红
    （含回复道两条 + legacy 一条）；旁路 `ReplyHandler` 的 sender 校验 → 1 红（抢答用例）。
 7. **未做 / 遗留**：
-   - 对侧在途文件 `plugin/manager/host/activation.rs` 里那句注释「逐条补发 `pty:exit.<owner>`」
-     未随本票改形（该文件当时挂着对侧 114 行未提交改动，避免费把对侧内容卷进本票 commit），
-     由对侧收尾或下条文档票处理；
    - 移动端跟演清单（见上节）；
    - `bedcode-desktop/src-tauri/src/plugin/bus.rs` 的 `subscribe_static` 仍是「宿主侧无门禁」入口
      （本票刻意保留：`peer_net` 的刷新订阅、api 回复订阅都靠它），
@@ -85,6 +82,13 @@
    `api_registry.rs` 测试字符串 `com.bedcode.session.*` 一并换成 `com.bedcode.terminal-session.*`
    （仅测试内自洽字面量，无行为影响）。AGENTS.md / CHANGELOG.md / code-map.md 三处文档
    本票只提交自己的 hunk（`git apply --cached` 局部暂存），对侧未提交的行留在工作区。
+
+   **实际收尾与本条第 9 点的差别（如实记）**：对侧随后又落了 `36a142027`（票 07）与
+   `c284f92ae`（其票 08 文档），后者把本票写在 AGENTS.md / CHANGELOG.md / code-map.md 的
+   文档行连同其未提交的行一起提交了 → 局部暂存未及执行，本票文档散在
+   `5b008eb5c` / `c284f92ae` / `d3eecff73` 三个 commit 里。收尾另加一个纯注释/文档
+   commit 清掉残余旧串引用（`activation.rs`、`code-map` pty 行、SDK `abi.rs` 历史条目、
+   WIT v13/v14 历史条目与两处函数注释、pty/ws 夹具模块头）。
 
 ## 门禁实跑数字（2026-09-22）
 

@@ -40,7 +40,8 @@
 //!   声明 v11 及以下的插件二进制仍可加载（后续统一重编译再对齐）
 //! - v13: host-mdns v2（mDNS 基础能力服务契约）：新增
 //!   `advertise` / `stop-advertise` / `is-advertising` 三原语 + 浏览事件
-//!   定向投递 `mdns:found.<owner>` / `mdns:lost.<owner>`（payload 增
+//!   定向投递 `mdns:found.<owner>` / `mdns:lost.<owner>`（当时形态，票 05 起为
+//!   `<owner>::mdns:found|lost`；payload 增
 //!   serviceType / browserId 字段）。纯增量变更，v12 插件二进制不受影响
 //! - v14: host-websocket 基础能力服务（WS 传输原语）：新增
 //!   `host-websocket`（客户端域 connect/send-text/send-binary/close/
@@ -53,7 +54,8 @@
 //!   见 .scratch/2026-09-19-pty-base-service/spec.md D7）。新接口走 bump，
 //!   v14 及以下的插件二进制仍可加载（`version > 当前 → 拒绝` 语义）
 //! - v16: 插件私有伪终端原语（host-pty）：`spawn/write/resize/kill/ring-fetch/
-//!   is-running` 六函数 + `pty:exit.<owner>` 事件（spec D7）。输出面为
+//!   is-running` 六函数 + `pty:exit.<owner>` 事件（当时形态，票 05 起为
+//!   `<owner>::pty:exit`；spec D7）。输出面为
 //!   「单生产者环形缓冲 + 插件拉取游标」纯拉取模型（无 push 回调，D3）；
 //!   属主隔离 + 权限两域（pty:spawn / pty:io）。纯增量新接口，v15 及以下
 //!   插件二进制不受影响
