@@ -28,6 +28,7 @@
 
 use super::{host, is_windows, path_rejected_for_script, pending, sh_quote, shell_invocation, PendingRun, AUTH_KEY, DATA_DIR, HOME};
 use crate::install::now_ms;
+use bedcode_plugin_api::host::{HostTask, TaskPlan, TaskUnit};
 use crate::usage_parse::{
     parse_claude_session, parse_pi_session, ModelUsage, NormalizedEvent, ParsedSession,
     MAX_FILE_BYTES,
@@ -361,14 +362,20 @@ pub(crate) fn handle_scan_done(event: &ProcessDoneEvent) -> anyhow::Result<()> {
         }
     }
     let now = now_ms(&h).unwrap_or(0);
-    for (section, path) in &listing {
+
+    // 会话文件读内容：v20 host-task `execute-batch` **并行**（读是主流开销——
+    // 大量 JSONL 日志文件逐个串行 fs_read 各占一次宿主调用；池线程真并发替代）。
+    // 解析与 DB 写保持串行：SQLite 连接单 Mutex，水位/upsert 依赖顺序处理。
+    let read_results = parallel_read(&h, &listing);
+
+    for (idx, (section, path)) in listing.iter().enumerate() {
         let Some(slot) = per_adapter.get_mut(section.as_str()) else {
             continue;
         };
         slot.0 += 1;
         // 逐文件水位：内容字节长未变 → 跳过解析（JSONL append-only）
-        let content_opt = match h.fs_read(path) {
-            Ok(c) => c,
+        let content_opt = match &read_results[idx] {
+            Ok(opt) => opt.clone(),
             Err(e) => {
                 h.log_warn(&format!("usage: read session file failed: {e}"));
                 continue;
@@ -431,6 +438,62 @@ pub(crate) fn handle_scan_done(event: &ProcessDoneEvent) -> anyhow::Result<()> {
     write_state(&h, &state);
     h.log_info("usage scan finished");
     emit_and_return(&h, &state).map(|_| ())
+}
+
+/// 并行读全部会话文件内容（v20 host-task `execute-batch`：`fs.read` 单元池线程
+/// 真并发）。返回按入参顺序的结果：`Ok(Some(content))` / `Ok(None)`（枚举与读取
+/// 间隙被删除）/ `Err`（宿主读失败，文案与 [`WasmHost::fs_read`] 同源）。
+/// 批次级失败（宿主拒绝 plan / 权限缺失 / 响应损坏）整体降级为逐条 Err——
+/// 调用方按原串行路径的 `log_warn + continue` 语义处理，不抛致命错误。
+fn parallel_read(
+    h: &WasmHost,
+    listing: &[(String, String)],
+) -> Vec<Result<Option<String>, String>> {
+    if listing.is_empty() {
+        return Vec::new();
+    }
+    let units: Vec<TaskUnit> = listing
+        .iter()
+        .enumerate()
+        .map(|(i, (_, path))| TaskUnit::fs_read(&format!("r{i}"), path))
+        .collect();
+    let raw = match HostTask::execute_batch(h, &TaskPlan::new(units).to_json()) {
+        Ok(r) => r,
+        Err(e) => {
+            let msg = format!("usage: batch read failed: {}", e.message);
+            return (0..listing.len()).map(|_| Err(msg.clone())).collect();
+        }
+    };
+    let parsed: serde_json::Value = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(_) => {
+            let msg = "usage: batch read: invalid host response".to_string();
+            return (0..listing.len()).map(|_| Err(msg.clone())).collect();
+        }
+    };
+    let results = parsed["results"].as_array().cloned().unwrap_or_default();
+    let mut out = Vec::with_capacity(listing.len());
+    for i in 0..listing.len() {
+        let entry = results.get(i).cloned().unwrap_or(serde_json::Value::Null);
+        if entry["ok"] == true {
+            // fs.read 原返回 Option<String>：value 字段缺失 = None（文件不存在）；
+            // 存在 = JSON 编码字符串（`"内容"`）
+            match entry.get("value").and_then(|v| v.as_str()) {
+                None => out.push(Ok(None)),
+                Some(v) => match serde_json::from_str::<Option<String>>(v) {
+                    Ok(opt) => out.push(Ok(opt)),
+                    Err(e) => out.push(Err(format!("usage: decode read result failed: {e}"))),
+                },
+            }
+        } else {
+            let err = entry["error"]
+                .as_str()
+                .unwrap_or("unknown batch unit error")
+                .to_string();
+            out.push(Err(err));
+        }
+    }
+    out
 }
 
 // ==================== 适配器分派 ====================

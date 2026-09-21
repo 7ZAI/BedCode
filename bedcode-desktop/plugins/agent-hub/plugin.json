@@ -16,7 +16,8 @@
     "network:http",
     "process:run",
     "storage",
-    "ui:sidebar"
+    "ui:sidebar",
+    "task:run"
   ],
   "contributes": {
     "commands": [

@@ -29,6 +29,21 @@ pub trait GitPort {
         cwd: &str,
         args: &[&str],
     ) -> Result<bedcode_plugin_api::host::ProcessSyncResult, String>;
+
+    /// 批量只读执行（v20 host-task：生产实现用 `execute-batch` 真并行——status
+    /// 树等互相独立的只读 git 命令并发执行，替代串行排队）；结果按入参顺序返回
+    /// （fail-collect：单条失败不中断其余，错误定位与该命令单测语义一致）。
+    /// native 测试的 Mock 实现保持默认串行（确定性注入不变）。
+    fn run_batch(
+        &self,
+        cwd: &str,
+        batch: &[Vec<String>],
+    ) -> Vec<Result<bedcode_plugin_api::host::ProcessSyncResult, String>> {
+        batch
+            .iter()
+            .map(|args| self.run(cwd, &args.iter().map(|s| s.as_str()).collect::<Vec<_>>()))
+            .collect()
+    }
 }
 
 // ==================== wasm 实现（host-fs / host-process） ====================
@@ -80,6 +95,80 @@ pub mod wasm_impl {
             });
             HostProcess::process_run_sync(self, &request.to_string())
                 .map_err(|e| format!("file browse: git run failed: {}", e.message))
+        }
+
+        /// 批量只读执行：host-task `execute-batch` 真并行（v20）。
+        ///
+        /// 单元 params = run-sync request 原样（command=git），宿主池线程并发；
+        /// 结果按入参顺序回填——transport 级失败（execute-batch 全拒）按序铺 Err，
+        /// 单元级 succeed/fail 走 fail-collect（单条失败不中断其余，错误随该单元）。
+        /// 错误文案与 [`Self::run`] 同源（同一个 process_run_sync 宿主实现），调用方
+        /// 逐条映射时保持既有的 `Internal error:` 前缀不变。
+        fn run_batch(
+            &self,
+            cwd: &str,
+            batch: &[Vec<String>],
+        ) -> Vec<Result<bedcode_plugin_api::host::ProcessSyncResult, String>> {
+            use bedcode_plugin_api::host::{HostTask, TaskPlan, TaskUnit};
+
+            let units: Vec<TaskUnit> = batch
+                .iter()
+                .enumerate()
+                .map(|(i, args)| {
+                    TaskUnit::process_run_sync(
+                        &format!("git{i}"),
+                        serde_json::json!({
+                            "command": "git",
+                            "args": args,
+                            "cwd": cwd,
+                            "timeout_ms": 60_000,
+                        }),
+                    )
+                })
+                .collect();
+            let raw = match HostTask::execute_batch(self, &TaskPlan::new(units).to_json()) {
+                Ok(r) => r,
+                Err(e) => {
+                    // 批次级失败（如宿主拒绝 plan / 权限缺失）：全部置同样的传输错误
+                    let msg = format!("file browse: git batch failed: {}", e.message);
+                    return (0..batch.len()).map(|_| Err(msg.clone())).collect();
+                }
+            };
+
+            let parsed: serde_json::Value = match serde_json::from_str(&raw) {
+                Ok(v) => v,
+                Err(_) => {
+                    let msg = "file browse: git batch: invalid host response".to_string();
+                    return (0..batch.len()).map(|_| Err(msg.clone())).collect();
+                }
+            };
+            let results = parsed["results"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+            // 按入参顺序取单元结果（host 保序）：ok → 恢复 ProcessSyncResult；
+            // !ok → Err（与 run 的 transport 错误同语义，前缀由调用方按 run_git_lines 规则加）
+            let mut out = Vec::with_capacity(batch.len());
+            for (i, args) in batch.iter().enumerate() {
+                let entry = results.get(i).cloned().unwrap_or(serde_json::Value::Null);
+                if entry["ok"] == true {
+                    match entry["value"].as_str().and_then(|v| serde_json::from_str::<bedcode_plugin_api::host::ProcessSyncResult>(v).ok()) {
+                        Some(r) => out.push(Ok(r)),
+                        None => out.push(Err(format!(
+                            "file browse: git batch unit {} ({}): invalid result payload",
+                            i,
+                            args.join(" ")
+                        ))),
+                    }
+                } else {
+                    let err = entry["error"]
+                        .as_str()
+                        .unwrap_or("unknown batch unit error")
+                        .to_string();
+                    out.push(Err(err));
+                }
+            }
+            out
         }
     }
 }

@@ -19,6 +19,7 @@
     "session:read",
     "session:write",
     "storage",
+    "task:run",
     "terminal:input",
     "terminal:observe",
     "timer:schedule",

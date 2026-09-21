@@ -330,23 +330,34 @@ pub fn file_name_of(path: &str) -> String {
 
 // ==================== git diff 树（宿主 get_diff_file_tree 语义） ====================
 
-/// 三个 git 命令 → 去重合并 → exclude 过滤 → 嵌套树（宿主逐字语义）
+/// 三个只读 git 命令 → **并行**（v20 host-task execute-batch，池线程真并发）→
+/// 去重合并 → exclude 过滤 → 嵌套树（宿主逐字语义；票 03/04 串行 run-sync 先例
+/// 的升级——三命令互相独立、只读，无 git 仓库锁冲突）
 pub fn diff_file_tree(
     git: &impl GitPort,
     working_dir: &str,
     filters: &[ExcludeFilter],
 ) -> Result<Vec<serde_json::Value>, String> {
-    let unstaged = run_git_lines(git, working_dir, &["diff", "--name-only"])?;
-    let staged = run_git_lines(git, working_dir, &["diff", "--cached", "--name-only"])?;
-    let untracked = run_git_lines(
-        git,
-        working_dir,
-        &["ls-files", "--others", "--exclude-standard"],
-    )?;
+    let batch = [
+        vec!["diff".to_string(), "--name-only".to_string()],
+        vec![
+            "diff".to_string(),
+            "--cached".to_string(),
+            "--name-only".to_string(),
+        ],
+        vec![ "ls-files".to_string(), "--others".to_string(), "--exclude-standard".to_string() ],
+    ];
+    let results = git.run_batch(working_dir, &batch);
 
+    // **串行语义保持**：按入参顺序判错，第一条失败即返回其错误（与旧串行实现
+    // 的「第 N 步失败 → 报第 N 个错误」逐字一致；fail-collect 只影响其余命令
+    // 是否被发起，不影响错误排序）；全部成功 → 按序合并去重
     let mut all_paths: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for path in unstaged.into_iter().chain(staged).chain(untracked) {
-        all_paths.insert(path);
+    for (i, result) in results.into_iter().enumerate() {
+        let lines = git_result_to_lines(result, batch[i].iter().map(|s| s.as_str()).collect::<Vec<_>>().as_slice())?;
+        for line in lines {
+            all_paths.insert(line);
+        }
     }
 
     // 过滤被排除规则命中的路径中的目录组件（宿主语义：逐组件检查 parent+name）
@@ -379,9 +390,17 @@ fn run_git_lines(
     working_dir: &str,
     args: &[&str],
 ) -> Result<Vec<String>, String> {
-    let result = git
-        .run(working_dir, args)
-        .map_err(|e| format!("Internal error: Failed to execute git: {e}"))?;
+    git_result_to_lines(git.run(working_dir, args), args)
+}
+
+/// `ProcessSyncResult` → 非空行列表（transport Err / 超时 / 非零退出码的错误
+/// 文案与宿主 AppError Display 逐字一致）。`run` 与 `run_batch`（并行单元）
+/// 共用——保证串行/并行两条路径错误语义相同。
+fn git_result_to_lines(
+    result: Result<bedcode_plugin_api::host::ProcessSyncResult, String>,
+    args: &[&str],
+) -> Result<Vec<String>, String> {
+    let result = result.map_err(|e| format!("Internal error: Failed to execute git: {e}"))?;
     if result.timed_out {
         return Err("Internal error: git command timed out".to_string());
     }
