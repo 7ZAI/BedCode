@@ -56,7 +56,7 @@ pub(super) fn check_permission(host_ctx: &WasmHostContext, plugin_id: &str, perm
 // ==================== Tests ====================
 
 #[cfg(test)]
-pub(super) mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::db::Database;
     use crate::plugin::bus::MessageBus;

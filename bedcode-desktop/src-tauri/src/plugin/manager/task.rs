@@ -171,6 +171,53 @@ struct TaskRegistry {
     job_seq: AtomicU64,
 }
 
+/// host-task 进程级指标（core-monitor 的 `task` 段数据源；纯原子，热路径零锁，
+/// 零日志——AGENTS.md §8 红线）。`jobs_active` 不单独记账：实时读注册表长度，
+/// 避免「插入/移除埋点漂移」风险。
+pub(crate) struct TaskMetrics {
+    /// 累计提交计划数（submit + execute-batch）
+    jobs_submitted_total: AtomicU64,
+    /// 配额类拒绝累计（超每插件在册上限 / plan 无效，fail-visible）
+    jobs_rejected_total: AtomicU64,
+    /// 单元完成累计（含失败，ok/fail 归任务结果）
+    units_completed_total: AtomicU64,
+    /// 同时执行单元数高水位（≈ 池利用率代理）
+    concurrent_units_peak: AtomicU64,
+    concurrent_units_current: AtomicU64,
+    /// 回调事件丢弃累计（progress + terminal，channel 满）
+    events_dropped_total: AtomicU64,
+}
+
+// 全局实例（core-task 为进程级单例，指标随注册表生命周期）
+static TASK_METRICS: LazyLock<TaskMetrics> = LazyLock::new(|| TaskMetrics {
+    jobs_submitted_total: AtomicU64::new(0),
+    jobs_rejected_total: AtomicU64::new(0),
+    units_completed_total: AtomicU64::new(0),
+    concurrent_units_peak: AtomicU64::new(0),
+    concurrent_units_current: AtomicU64::new(0),
+    events_dropped_total: AtomicU64::new(0),
+});
+
+/// task 段快照（MetricsRegistry::snapshot 汇入 core-monitor；键 camelCase 沿
+/// JSON 惯例）：jobs submitted/active/rejected + units completed + 并发高水位
+/// + 回调丢弃 + 池线程数常量
+pub(crate) fn task_metrics_snapshot() -> serde_json::Value {
+    let active = REGISTRY
+        .jobs
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .len();
+    serde_json::json!({
+        "jobsSubmittedTotal": TASK_METRICS.jobs_submitted_total.load(Ordering::Relaxed),
+        "jobsActive": active,
+        "jobsRejectedTotal": TASK_METRICS.jobs_rejected_total.load(Ordering::Relaxed),
+        "unitsCompletedTotal": TASK_METRICS.units_completed_total.load(Ordering::Relaxed),
+        "concurrentUnitsPeak": TASK_METRICS.concurrent_units_peak.load(Ordering::Relaxed),
+        "eventsDroppedTotal": TASK_METRICS.events_dropped_total.load(Ordering::Relaxed),
+        "poolThreads": C::PLUGIN_TASK_POOL_THREADS,
+    })
+}
+
 /// 事件条目：属主 + 事件 JSON + 投递目标上下文（消费任务经 host_ctx.services() 取 services）
 struct EventEntry {
     owner: String,
@@ -233,9 +280,20 @@ fn pool_loop(rx: &Arc<Mutex<mpsc::Receiver<QueuedUnit>>>) {
             .unwrap_or_else(|e| e.into_inner())
             .get(&item.job_id)
             .cloned();
-        let Some(job) = job else { continue };
-        run_unit(&item, &job);
+        let Some(removed_job) = job else {
+            // 注册表无此任务（execute-batch 已摘除 / purge 已清）：丢弃队列残留
+            continue;
+        };
+        run_unit(&item, &removed_job);
     }
+}
+
+/// 单元执行开始：并发计数 + 高水位（与完成时 fetch_sub 成对）
+fn unit_started() {
+    let cur = TASK_METRICS.concurrent_units_current.fetch_add(1, Ordering::Relaxed) + 1;
+    TASK_METRICS
+        .concurrent_units_peak
+        .fetch_max(cur, Ordering::Relaxed);
 }
 
 // ==================== 单元执行 ====================
@@ -472,6 +530,12 @@ pub(crate) fn purge_for_plugin(plugin_id: &str) -> usize {
             cancelled += 1;
         }
     }
+    // 摘除该插件全部在册任务（含已终态残留）：停用后无人可访问，防孤儿占
+    // 配额（惰性 GC 只在下一次提交时清本插件的）与内存；jobs_active 随之归零
+    {
+        let mut jobs = REGISTRY.jobs.lock().unwrap_or_else(|e| e.into_inner());
+        jobs.retain(|_, h| h.owner() != plugin_id);
+    }
     // 移除回调 channel → tx drop → 消费任务 recv 返回 None 自行退出
     REGISTRY
         .queues
@@ -511,14 +575,20 @@ fn register_job(
 ) -> Result<String, String> {
     // 每插件在册任务上限（含 running + queued；execute-batch 瞬时登记同算）
     {
-        let jobs = REGISTRY.jobs.lock().unwrap_or_else(|e| e.into_inner());
+        let mut jobs = REGISTRY.jobs.lock().unwrap_or_else(|e| e.into_inner());
+        // 惰性 GC：先移除本插件**终态**任务（终态已不在 running/queued，不占配额；
+        // 否则 submit 任务完成后残留 map，第 5 个 submit 被配额误拒）。终态任务
+        // 在下次同插件提交前仍可 status 自愈查询；purge 时全量清。
+        jobs.retain(|_, h| h.owner() != owner || h.phase() == JobPhase::Running);
         let count = jobs.values().filter(|h| h.owner() == owner).count();
         if count >= C::PLUGIN_TASK_MAX_JOBS_PER_PLUGIN {
+            TASK_METRICS.jobs_rejected_total.fetch_add(1, Ordering::Relaxed);
             return Err(format!(
                 "task: too many jobs for plugin (limit {})",
                 C::PLUGIN_TASK_MAX_JOBS_PER_PLUGIN
             ));
         }
+        TASK_METRICS.jobs_submitted_total.fetch_add(1, Ordering::Relaxed);
     }
 
     let units_len = plan.units.len();
@@ -593,7 +663,12 @@ fn run_unit(item: &QueuedUnit, job: &Arc<JobHandle>) {
         (inner.units[item.index].clone(), inner.owner.clone())
     };
 
+    // 单元执行开始：并发计数 + 高水位（完成时 fetch_sub 成对）
+    unit_started();
     let done = execute_unit(&job.host_ctx, &owner, &unit);
+    // 单元完成：累计 + 并发归位（开始计数在 execute_unit 前成对）
+    TASK_METRICS.units_completed_total.fetch_add(1, Ordering::Relaxed);
+    TASK_METRICS.concurrent_units_current.fetch_sub(1, Ordering::Relaxed);
 
     let mut inner = job.inner.lock().unwrap_or_else(|e| e.into_inner());
     // cancel 竞态下结果照记（spec：运行中单元跑完）
@@ -819,6 +894,7 @@ fn enqueue_event(host_ctx: &Arc<WasmHostContext>, owner: &str, event: serde_json
     match tx.try_send(entry) {
         Ok(()) => {}
         Err(tmpsc::error::TrySendError::Full(_)) => {
+            TASK_METRICS.events_dropped_total.fetch_add(1, Ordering::Relaxed);
             if terminal {
                 tracing::error!(
                     plugin_id = %owner,
@@ -919,6 +995,125 @@ mod tests {
         )
         .unwrap_err();
         assert!(e.contains("maxConcurrency"));
+    }
+
+    #[test]
+    fn metrics_snapshot_shape_is_stable() {
+        // 快照形状（camelCase 键）锚定，防监控消费方（诊断页 / CLI）断档
+        let snap = task_metrics_snapshot();
+        for key in [
+            "jobsSubmittedTotal",
+            "jobsActive",
+            "jobsRejectedTotal",
+            "unitsCompletedTotal",
+            "concurrentUnitsPeak",
+            "eventsDroppedTotal",
+            "poolThreads",
+        ] {
+            assert!(snap.get(key).is_some(), "task 指标缺 {key}");
+        }
+        assert_eq!(
+            snap["poolThreads"],
+            C::PLUGIN_TASK_POOL_THREADS,
+            "池线程数与常量一致"
+        );
+    }
+
+    #[test]
+    fn unit_metrics_peak_monotonic_and_rebalanced() {
+        // 并发计数成对：started 后 current=1、peak≥1；完成（fetch_sub）归位后
+        // 不影响累计指标（unitsCompletedTotal 单调增）
+        TASK_METRICS.units_completed_total.store(0, Ordering::Relaxed);
+        unit_started();
+        let after_start = TASK_METRICS.concurrent_units_current.load(Ordering::Relaxed);
+        assert_eq!(after_start, 1, "开始后当前并发 = 1");
+        TASK_METRICS.concurrent_units_current.fetch_sub(1, Ordering::Relaxed);
+        assert_eq!(
+            TASK_METRICS.concurrent_units_current.load(Ordering::Relaxed),
+            0,
+            "完成归位"
+        );
+        assert!(
+            TASK_METRICS.concurrent_units_peak.load(Ordering::Relaxed) >= 1,
+            "peak 高水位不为 0"
+        );
+        assert_eq!(TASK_METRICS.units_completed_total.load(Ordering::Relaxed), 0, "累计由 run_unit 负责");
+    }
+
+    #[test]
+    fn register_job_lazy_gc_frees_terminal_jobs() {
+        // submit 终态后占在册配额是 bug：惰性 GC 在下一次提交时移除本插件终态任务。
+        // 直接验证 retain 语义（不依赖真实 submit 的异步终态时序）：
+        // 构造一个终态 + 一个 running 的同属主任务，retain 后只剩 running。
+        let job_terminal = Arc::new(JobHandle {
+            inner: Mutex::new(JobInner {
+                owner: "gc-test".to_string(),
+                units: vec![PlanUnit {
+                    id: "u".to_string(),
+                    kind: "fs.stat".to_string(),
+                    params: serde_json::json!({}),
+                }],
+                phase: JobPhase::Completed,
+                results: vec![None; 1],
+                remaining: 0,
+                next_to_start: 1,
+                done: 1,
+                failed: 0,
+                created_at_ms: 0,
+                started_at_ms: 0,
+                job_timeout_ms: 60000,
+                progress_every_units: 10,
+                progress_every_ms: 500,
+                last_progress_ms: 0,
+                dropped_events: 0,
+            }),
+            finished: Mutex::new(true),
+            condvar: Condvar::new(),
+            emit_events: true,
+            host_ctx: build_test_ctx().clone(),
+        });
+        let job_running = Arc::new(JobHandle {
+            inner: Mutex::new(JobInner {
+                owner: "gc-test".to_string(),
+                units: vec![PlanUnit {
+                    id: "u".to_string(),
+                    kind: "fs.stat".to_string(),
+                    params: serde_json::json!({}),
+                }],
+                phase: JobPhase::Running,
+                results: vec![None; 1],
+                remaining: 1,
+                next_to_start: 0,
+                done: 0,
+                failed: 0,
+                created_at_ms: 0,
+                started_at_ms: 0,
+                job_timeout_ms: 60000,
+                progress_every_units: 10,
+                progress_every_ms: 500,
+                last_progress_ms: 0,
+                dropped_events: 0,
+            }),
+            finished: Mutex::new(false),
+            condvar: Condvar::new(),
+            emit_events: true,
+            host_ctx: build_test_ctx().clone(),
+        });
+        {
+            let mut jobs = REGISTRY.jobs.lock().unwrap_or_else(|e| e.into_inner());
+            jobs.insert("task-gc-a".to_string(), job_terminal);
+            jobs.insert("task-gc-b".to_string(), job_running);
+            // 惰性 GC 语义（register_job 中的 retain 谓词）
+            jobs.retain(|_, h| h.owner() != "gc-test" || h.phase() == JobPhase::Running);
+            assert_eq!(jobs.len(), 1, "终态任务被 GC，running 保留");
+            assert!(jobs.contains_key("task-gc-b"));
+            jobs.clear();
+        }
+    }
+
+    /// 测试构造 helper：无头 WasmHostContext（与 host_impl tests 同源）
+    fn build_test_ctx() -> Arc<WasmHostContext> {
+        crate::plugin::manager::wasm_runtime::host_impl::tests::build_host_ctx()
     }
 
     #[test]

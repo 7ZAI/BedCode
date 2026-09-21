@@ -4299,6 +4299,10 @@ mod tests {
                 "session:read",
                 "session:write",
                 "storage",
+                // 票 21（v20 host-task）：`task:run` ——git 域 diff_file_tree 三路只读
+                // 命令改走 execute-batch 并行（池线程真并发，替代 run-sync 串行）。
+                // 注意顺序：wasm 产物经 manifest-gen **ASCII 升序**重排（task < terminal）
+                "task:run",
                 "terminal:input",
                 "terminal:observe",
                 "timer:schedule",
@@ -4313,7 +4317,7 @@ mod tests {
             "票 05：host-auth + host-peer；票 08：session:read（config-list 精简列表）+\
              session:config（config-get 全量行，迁移读 legacy 用）+ storage（配置私有库）；\
              票 14：ui:sidebar + ui:settings（两个纯前端贡献面）；票 15：任务域五位；\
-             票 17：ui:input（任务弹窗工具栏入口）"
+             票 17：ui:input（任务弹窗工具栏入口）；票 21：task:run（git 域 execute-batch 并行）"
         );
         let declared_api: Vec<String> = manifest["api"]
             .as_array()

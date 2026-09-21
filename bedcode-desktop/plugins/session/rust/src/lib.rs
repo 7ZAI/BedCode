@@ -1590,6 +1590,9 @@ mod tests {
                 "ui:sidebar".to_string(),
                 // 票 14：`ui:sidebar`（票 13 起运行期注册侧边栏目录实际需要，此前漏
                 // 声明）、`ui:settings`（设置页配对分组贡献面）同为纯前端贡献面权限
+                // 票 21（v20 host-task）：`task:run` ——git 域 diff_file_tree 三路只读
+                // 命令改走 execute-batch 并行（池线程真并发，替代 run-sync 串行）
+                "task:run".to_string(),
             ],
             "spec D2 权限表：认证 auth/peer + 进程 process:run（票 03 git）+ 会话 \
              session:read/session:config/session:write + storage + ui:input/ui:sidebar/ui:settings"

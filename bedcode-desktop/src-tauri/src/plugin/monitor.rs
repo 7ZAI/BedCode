@@ -322,7 +322,12 @@ impl MetricsRegistry {
             .clone()
     }
 
-    /// 全量快照（JSON）：`{ "plugins": { "<plugin_id>": { ... } } }`
+    /// 全量快照（JSON）：`{ "plugin": { "<plugin_id>": { ... } }, "task": { ... } }`
+    ///
+    /// `task` 段来自 host-task 进程级指标（core-task 埋点源，见
+    /// [`crate::plugin::manager::task::task_metrics_snapshot`]）：任务提交/激活/拒绝
+    /// 计数、单元完成累计、并发高水位、回调丢弃计数（spec §5.1）——与插件维度
+    /// 指标并列，均为纯原子记账、快照导出是唯一消费口。
     pub fn snapshot(&self) -> serde_json::Value {
         let map = self.plugins.read().expect("metrics lock poisoned");
         let plugins: serde_json::Map<String, serde_json::Value> = map
@@ -334,7 +339,10 @@ impl MetricsRegistry {
                 )
             })
             .collect();
-        serde_json::json!({ "plugins": plugins })
+        serde_json::json!({
+            "plugins": plugins,
+            "task": crate::plugin::manager::task::task_metrics_snapshot(),
+        })
     }
 }
 

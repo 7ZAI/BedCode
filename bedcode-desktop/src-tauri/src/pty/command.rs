@@ -61,6 +61,10 @@ pub fn build_command(config: &SessionLaunchConfig) -> crate::Result<CommandBuild
             cmd.arg("-lic");
 
             let wsl_path = windows_to_wsl_path(&config.working_dir);
+            // 与 Linux 分支同款 bash 单引号转义（WSL 内是真实 bash -lic）：
+            // 路径含 `'` 会闭合 `cd '…'` 字面量执行任意命令（票据 02 仅补了
+            // PowerShell/CMD/Linux 三路，WSL 遗漏）。单引号 → `'\''`。
+            let wsl_path = wsl_path.replace('\'', "'\\''");
             let wsl_command = format!("cd '{}' && pwd && {}", wsl_path, config.command);
             cmd.arg(wsl_command);
             cmd
@@ -184,6 +188,33 @@ mod tests {
             cmd.get_cwd().map(|c| c.to_string_lossy().into_owned()),
             Some("D:\\work".to_string())
         );
+    }
+
+    #[test]
+    fn wsl2_escapes_single_quote_in_working_dir() {
+        // WSL 分支同样走 bash -lic：working_dir 含 `'` 会闭合 `cd '…'` 字面量
+        // 执行任意命令（票据 02 为 PowerShell/CMD/Linux 补过，WSL 遗漏——本测试
+        // 锁定 bash 单引号转义 `'` → `'\''`，与 Linux 分支同款）
+        let mut c = config(
+            ExecutionEnvironment::Wsl2 {
+                distro: "Ubuntu".to_string(),
+            },
+            "pwd",
+        );
+        c.working_dir = "C:\\x'; touch /tmp/pwned ' ; #".to_string();
+        let cmd = build_command(&c).unwrap();
+        let argv = argv(&cmd);
+        let full = argv.iter().find(|a| a.contains("pwd")).unwrap();
+
+        // 单引号被转义为 `'\''`（bash 字面量续接），注入语句整体成为路径字面量
+        // （与 Linux 分支计数同源：windows_to_wsl_path → 同款 replace）
+        let wsl_path = windows_to_wsl_path(&c.working_dir).replace('\'', "'\\''");
+        assert!(
+            full.contains(&format!("cd '{wsl_path}'")),
+            "转义后的路径应在单引号字面量内: {full}"
+        );
+        // 原始注入形态（未转义引号闭合）不应出现在命令体里
+        assert!(!full.contains("touch /tmp/pwned ' "), "注入片段必须被引号围住: {full}");
     }
 
     #[test]
