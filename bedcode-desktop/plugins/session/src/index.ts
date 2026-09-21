@@ -27,6 +27,9 @@ import PairingSettingsSection from './components/PairingSettingsSection.vue'
 import SessionSettingsSection from './components/SessionSettingsSection.vue'
 import TaskHistoryView from './components/TaskHistoryView.vue'
 import TaskQueueModal from './components/TaskQueueModal.vue'
+// 终端窗口视图（票 03a 壳迁入；type='page' 不进侧边栏菜单，宿主 /terminal-window/:id
+// 路由经 TerminalWindowHostView → PluginViewHost 渲染本视图）
+import TerminalWindowView from './views/terminal/TerminalWindowView.vue'
 import taskModalCss from './components/task-queue-modal.css?inline'
 // 开源 Vue3 日期/时间选择组件（替代原生 datetime-local 控件，样式可随主题定制）
 import datepickerCss from '@vuepic/vue-datepicker/dist/main.css?inline'
@@ -126,6 +129,16 @@ const PANELS: PanelSpec[] = [
     icon: TASKS_ICON,
     component: TaskHistoryView,
     kind: 'sidebar',
+  },
+  {
+    // 终端窗口视图（票 03a）：不进侧边栏菜单，仅宿主 /terminal-window/:id 路由
+    // 深链直达（同 session.history 的 type='page' 先例）
+    id: 'session.terminal-window',
+    titleKey: 'session.terminal.windowTitle',
+    order: 0,
+    icon: '',
+    component: TerminalWindowView,
+    kind: 'page',
   },
 ]
 

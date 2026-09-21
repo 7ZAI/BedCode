@@ -338,15 +338,17 @@ describe('C3 前端入口契约', () => {
     // 翻译表两语言齐（zh-CN / en），且注册发生在组件挂载前（激活时即完成）
     expect(rec.registeredMessages.map((r) => r.locale).sort()).toEqual(['en', 'zh-CN'])
     expect(rec.registeredMessages[0].keys.length).toBeGreaterThan(40)
-    // 票 14/17：四个侧边栏目录（设备与配对 / 连接历史 / 终端会话 / 任务历史）
-    // + 两个设置分组（配对 200「票 14」/ 会话 400「宿主失效分组随域下沉」）
+    // 票 14/17：五个侧边栏目录（设备与配对 / 连接历史 / 终端会话 / 任务历史
+    // + 终端窗口视图，票 03a）+ 两个设置分组（配对 200「票 14」/ 会话 400
+    // 「宿主失效分组随域下沉」）
     expect(rec.panels.map((p) => p.id)).toEqual([
       'session.pairing',
       'session.history',
       'session.sidebar',
       'session.task-history',
+      'session.terminal-window',
     ])
-    expect(rec.panels.map((p) => p.order)).toEqual([100, 101, 200, 210])
+    expect(rec.panels.map((p) => p.order)).toEqual([100, 101, 200, 210, 0])
     expect(rec.sections.map((s) => s.id)).toEqual(['pairing.settings', 'session.settings'])
     expect(rec.sections.map((s) => s.order)).toEqual([200, 400])
     // 贡献面标题取命名空间化后的 i18n key（注册时被宿主静态捕获）
@@ -355,6 +357,7 @@ describe('C3 前端入口契约', () => {
       'pairing.history.sidebar.title',
       'session.sidebar.title',
       'task.historyTitle',
+      'session.terminal.windowTitle',
     ])
   })
 
@@ -423,6 +426,7 @@ describe('C3 前端入口契约', () => {
         'panel:session.pairing',
         'panel:session.sidebar',
         'panel:session.task-history',
+        'panel:session.terminal-window',
         'section:pairing.settings',
         'section:session.settings',
         'toolbar:session.task.open-modal',
@@ -446,18 +450,20 @@ describe('C3 前端入口契约', () => {
 })
 
 describe('C5 侧边栏贡献与宿主内置槽位对齐（票 13/14/17）', () => {
-  it('manifest 声明四个视图（三侧边栏 + 一二级页），且与运行期注册同 id', () => {
+  it('manifest 声明五个视图（三侧边栏 + 两二级页），且与运行期注册同 id', () => {
     const views = manifest.contributes.views as { id: string; type: string; component: string }[]
-    expect(views).toHaveLength(4)
+    expect(views).toHaveLength(5)
     // 票 14 收尾：连接历史改经设备列表入口深链直达，type='page' 不进侧边栏菜单；
+    // 票 03a：终端窗口视图同为 type='page'（宿主 /terminal-window/:id 深链直达）；
     // 其余三目录仍为侧边栏 menu
     expect(views.map((v) => v.id)).toEqual([
       'session.pairing',
       'session.history',
       'session.sidebar',
       'session.task-history',
+      'session.terminal-window',
     ])
-    expect(views.map((v) => v.type)).toEqual(['sidebar', 'page', 'sidebar', 'sidebar'])
+    expect(views.map((v) => v.type)).toEqual(['sidebar', 'page', 'sidebar', 'sidebar', 'page'])
 
     const index = readFileSync(resolve(PLUGIN_ROOT, 'src/index.ts'), 'utf-8')
     // 运行期注册的 id 与 manifest 一致（不一致 → 宿主视图注册表与清单漂移）
@@ -466,6 +472,7 @@ describe('C5 侧边栏贡献与宿主内置槽位对齐（票 13/14/17）', () =
       'session.history',
       'session.sidebar',
       'session.task-history',
+      'session.terminal-window',
     ]) {
       expect(index, `运行期注册缺 ${id}`).toContain(`id: '${id}'`)
     }

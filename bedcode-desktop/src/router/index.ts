@@ -48,7 +48,10 @@ const router = createRouter({
     {
       path: '/terminal-window/:id',
       name: 'terminal-window',
-      component: () => import('@/views/TerminalWindowView.vue'),
+      // 票 03a：终端窗口内容整体下沉 session 插件——路由改插件视图宿主
+      // （能力注入 + PluginViewHost 渲染插件 `session.terminal-window` 视图）；
+      // 旧宿主 TerminalWindowView.vue 保留至票 05 统一摘除
+      component: () => import('@/views/TerminalWindowHostView.vue'),
     },
   ],
 })

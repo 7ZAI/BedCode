@@ -51,13 +51,40 @@ export type MessageSchema = {
   'session.time.minutesSecondsAgo': string
   'session.time.hoursMinutesAgo': string
 
-  // ==================== 终端窗口（本体留宿主，插件只触发） ====================
+  // ==================== 终端窗口（视图壳票 03a 迁入，本体在插件） ====================
   'session.terminal.view': string
   'session.terminal.restart': string
   'session.terminal.opening': string
   'session.terminal.openFailed': string
   'session.terminal.rendererDesktop': string
   'session.terminal.rendererMobile': string
+  // 终端窗口视图（票 03a，manifest/注册元数据 title）
+  'session.terminal.windowTitle': string
+  // 壳（票 03a 自宿主 desktop.terminal.* 迁入）
+  'session.terminal.defaultName': string
+  'session.terminal.settings': string
+  'session.terminal.theme': string
+  'session.terminal.fontSize': string
+  'session.terminal.clearScreen': string
+  'session.terminal.refreshFormat': string
+  'session.terminal.minimize': string
+  'session.terminal.maximize': string
+  'session.terminal.close': string
+  'session.terminal.loadingSession': string
+  'session.terminal.scrollToBottom': string
+  'session.terminal.uptime': string
+  'session.terminal.stopped': string
+  'session.terminal.stopFailed': string
+  'session.terminal.historyTruncated': string
+  'session.terminal.bgImage': string
+  'session.terminal.bgImageSelect': string
+  'session.terminal.bgImageRemove': string
+  'session.terminal.bgImageOpacity': string
+  'session.terminal.bgImageSetFailed': string
+  'session.terminal.rendererOverrideTitle': string
+  'session.terminal.rendererOverrideBody': string
+  'session.terminal.rendererOverrideCancel': string
+  'session.terminal.rendererOverrideConfirm': string
 
   // ==================== 操作中遮罩 ====================
   'session.operating.starting': string
