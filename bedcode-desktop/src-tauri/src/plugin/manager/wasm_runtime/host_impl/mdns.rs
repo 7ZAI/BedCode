@@ -745,14 +745,8 @@ mod tests {
             assert_ne!(bid_a, bid_b, "distinct browser handles");
         }
         // A 的定向 topic 与 B 的互斥（宿主只向属主命名空间投递）
-        assert_eq!(
-            owned_topic(&owner_a, MDNS_FOUND),
-            "test-plugin-iso-a::mdns:found"
-        );
-        assert_ne!(
-            owned_topic(&owner_a, MDNS_FOUND),
-            owned_topic(&owner_b, MDNS_FOUND)
-        );
+        assert_eq!(owned_topic(&owner_a, MDNS_FOUND), "test-plugin-iso-a::mdns:found");
+        assert_ne!(owned_topic(&owner_a, MDNS_FOUND), owned_topic(&owner_b, MDNS_FOUND));
         assert_ne!(owned_topic(&owner_a, MDNS_LOST), owned_topic(&owner_b, MDNS_LOST));
         // purge A 只回收 A 的句柄，B 的浏览不受影响
         assert_eq!(super::purge_for_plugin(&owner_a), 1);

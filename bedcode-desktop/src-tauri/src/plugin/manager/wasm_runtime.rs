@@ -1716,7 +1716,7 @@ mod tests {
         value
     }
 
-    /// 读 fixture 已收事件列表（`pty:exit.<owner>` 投递事实源）
+    /// 读 fixture 已收事件列表（`<owner>::pty:exit` 投递事实源）
     async fn pty_fixture_events(plugin: &Arc<Mutex<LoadedWasmPlugin>>) -> Vec<serde_json::Value> {
         let state = pty_fixture_call(plugin, "pty-state", serde_json::json!({})).await;
         state["events"].as_array().cloned().unwrap_or_default()

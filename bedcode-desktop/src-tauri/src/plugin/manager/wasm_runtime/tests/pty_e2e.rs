@@ -4,6 +4,7 @@
 //! 经 `use super::*` 可见）；fixture 互斥与产物构建语义不变。
 
 use super::*;
+use bedcode_plugin_api::host::{pty_event_topic, PTY_EXIT};
 /// 端到端（最高 seam）：WIT 契约 → 宿主实现 → 组件接线 → 权限两域 → SDK → 真 PTY 输出
 ///
 /// 覆盖票 02 主干：spawn 真实命令拿句柄 → `ring-fetch` 拉到输出字节 → 二次按
@@ -51,7 +52,7 @@ fn test_pty_spawn_ring_fetch_roundtrip() {
             .lock()
             .await
             .activate()
-            .expect("activate A = 订阅 pty:exit.<A>");
+            .expect("activate A = 订阅 <A>::pty:exit");
 
         // wasmtime 不支持跨 Engine 实例化，B 用自己 runtime 编译的组件
         let component_b = runtime_b
@@ -267,7 +268,7 @@ fn test_pty_interactive_io_loop_roundtrip() {
 /// 端到端（票 04 生命面）：kill / 自然退出 / 停用回收三条路径的退出事件与摘除
 ///
 /// 覆盖 WIT → 宿主 → SDK → guest 事件回调的完整一圈：`pty-kill` 后属主经
-/// `on_message` 收到 `pty:exit.<owner>`（reason=killed）且句柄不可再寻址；进程
+/// `on_message` 收到 `<owner>::pty:exit`（reason=killed）且句柄不可再寻址；进程
 /// 自然退出带出真实退出码；`purge_for_plugin`（deactivate 路径调用的同一函数）
 /// 只回收本人，它插件的 PTY 与其事件流不受影响。
 #[test]
@@ -318,7 +319,11 @@ fn test_pty_exit_event_and_purge_roundtrip() {
         assert_eq!(kill_result["ok"], true, "kill 必须回报成功");
 
         let event = pty_wait_exit_event(&plugin_a, &killed_id).await;
-        assert_eq!(event["topic"], format!("pty:exit.{PLUGIN_A}"), "topic 内嵌属主");
+        assert_eq!(
+            event["topic"],
+            pty_event_topic(PTY_EXIT, PLUGIN_A),
+            "topic 为属主私有命名空间"
+        );
         assert_eq!(event["sender"], "host", "事件由宿主发布");
         assert_eq!(event["payload"]["reason"], "killed", "kill 路径 reason 固定");
 
@@ -614,8 +619,8 @@ fn test_pty_isolation_and_contract_matrix_roundtrip() {
         let event = pty_wait_exit_event(&plugin_a, &pty_id).await;
         assert_eq!(
             event["topic"],
-            format!("pty:exit.{PLUGIN_A}"),
-            "①-g 退出事件必须落在属主作用域 topic: {event}"
+            pty_event_topic(PTY_EXIT, PLUGIN_A),
+            "①-g 退出事件必须落在属主私有 topic: {event}"
         );
         assert_eq!(
             event["payload"]["reason"], "killed",

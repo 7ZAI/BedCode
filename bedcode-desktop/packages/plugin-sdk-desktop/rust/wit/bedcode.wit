@@ -50,6 +50,24 @@ interface host-events {
 
 /// 消息总线（原 bus.rs：bus_publish/subscribe/unsubscribe）
 ///
+/// ## topic 命名空间（审计票 05：总线是强制边界，不只是约定）
+///
+/// - **私有命名空间** `<plugin-id>::<name>`：某插件的收件箱。宿主按属主定向投递
+///   生命周期事件（`<owner>::pty:exit`、`<owner>::ws:*`、`<owner>::mdns:found|lost`）。
+///   **只有属主能订阅、只有属主与宿主能发布**——跨命名空间的订阅/伪发布在 Rust 端
+///   显式拒绝（错误透传给 guest，不静默丢弃）。分隔符 `::` 为保留字：插件 id 字符集
+///   是 `[a-z0-9-]` 分段，`:` 不可能出现，故属主判定无歧义且不依赖激活态/安装态。
+///   边界由**串形态**决定（机制 B），而非「解析 owner 段 + 查插件表」（机制 A）——
+///   后者的判定会随属主是否已激活/是否已安装而漏。
+/// - **公开 topic**（不含 `::`）：插件间广播道（`task:*` / `peer:*` /
+///   `bedcode.api.*`），任何已激活插件可订阅可发布。
+/// - **互调回复道** `bedcode.api.reply.<caller>.<request-id>`：caller 的收件箱但
+///   刻意留在公开道形态（响应者是他人，必须能发布进来）。窃听由「订阅面 host-only」
+///   堵（回复订阅由宿主在 `host-api-call` 内静态注册），抢答由「宿主校验回复 `sender`
+///   == api 声明属主」堵（`sender` 由宿主按 Caller state 落章，guest 不可自报）。
+/// - **退役形态** `<base>.<own-plugin-id>`（旧 SDK 助手产出的定向串）：订阅面显式
+///   拒绝并回带新形态，避免旧产物静默断流。
+///
 /// 载荷格式（v11）：
 /// - `publish`（JSON 文本，v1 起）：结构化载荷，现有订阅方零回归；
 /// - `publish-binary`（字节列，v11 起）：零 JSON 编解码，可传非 UTF-8
@@ -134,7 +152,9 @@ interface host-peer {
 
 /// mDNS 浏览纯能力（ADR 0022 v2）：browse-only，发现/离开事件原样透传
 ///
-/// 发现/离开经消息总线 `mdns:found` / `mdns:lost` 推送（host-bus 订阅），
+/// 发现/离开经消息总线**属主私有 topic** 推送（host-bus 订阅，票 05）：
+/// `<owner>::mdns:found` / `<owner>::mdns:lost`（构造用 SDK `mdns_event_topic`，
+/// 跨属主订阅被宿主拒绝），
 /// payload 原样透传：`{ instanceName, addresses: string[], port, txtRecords:
 /// Record<string,string> }`，宿主不做任何加工。设备列表（去重/TTL 过期/展示名
 /// 解读）是发现事件的派生视图，由消费插件自建缓存。
@@ -259,10 +279,11 @@ interface host-app {
 /// `not owner of ws handle`）；插件停用时宿主自动回收其全部句柄与端点。
 /// 权限：客户端域需 `ws:client`，服务端域需 `ws:server`。
 ///
-/// 事件投递（D2/D3）：状态事件经 host-bus 订阅，topic **内嵌 owner**
-/// （非属主物理上订阅不到），标识在 payload：
-///   客户端域  `ws:open.<owner>` / `ws:error.<owner>` / `ws:close.<owner>`
-///   服务端域  `ws:client-connect.<owner>` / `ws:client-disconnect.<owner>`
+/// 事件投递（D2/D3）：状态事件经 host-bus 订阅，走**属主私有命名空间**
+/// （`<owner>::…`，票 05：跨属主订阅在宿主侧显式拒绝，他人既订不到也伪投递不进；
+/// 构造一律用 SDK `ws_event_topic`，勿手拼），标识在 payload：
+///   客户端域  `<owner>::ws:open` / `<owner>::ws:error` / `<owner>::ws:close`
+///   服务端域  `<owner>::ws:client-connect` / `<owner>::ws:client-disconnect`
 /// 插件**须在 activate 期（或首次 connect/register-endpoint 之前）完成订阅**：
 /// 宿主不缓冲、不重放，晚订阅期间的事件永久丢失；丢失自愈靠
 /// `is-connected` / `list-clients` / `list-endpoints` 查询原语。
@@ -600,8 +621,8 @@ interface host-auth {
 /// - **输出纯拉取**（无 push 回调，spec D3）：宿主为每个 PTY 维护有界环形缓冲，插件按
 ///   自己的节奏以游标拉取；慢插件只损失自己的历史（淘汰最旧 + `truncated`），
 ///   背压绝不回传到 PTY 读取端
-/// - **生命周期事件**：仅 `pty:exit.<owner>` 一条（host-bus 订阅，topic 内嵌 owner，
-///   非属主物理订阅不到）。payload `{ ptyId, reason, exitCode? }`（camelCase），
+/// - **生命周期事件**：仅 `<owner>::pty:exit` 一条（host-bus 订阅，属主私有命名空间，
+///   票 05：跨属主订阅被宿主拒绝）。payload `{ ptyId, reason, exitCode? }`（camelCase），
 ///   `reason = "stopped" | "killed" | "error"`。**须在 activate 期订阅**：宿主不缓冲、
 ///   不重放，晚订阅期间的丢失靠 `is-running` 快照自愈。事件发出即摘除注册表与环，
 ///   插件应先消费完输出（`ring-fetch` 的 `next-offset` 不再前进）再等退出事件
@@ -763,7 +784,7 @@ interface manifest {
 /// - v15：host-auth 密钥托管原语（secret-store 四函数 + 主库 plugin_secrets
 ///   持久化），纯增量，v14 插件不受影响
 /// - v16：host-pty 插件私有伪终端原语（spawn/write/resize/kill/ring-fetch/
-///   is-running 六函数 + `pty:exit.<owner>` 事件），纯增量新接口，
+///   is-running 六函数 + `<owner>::pty:exit` 事件），纯增量新接口，
 ///   v15 及更早插件不受影响
 /// - v17：认证策略导出 auth-policy（verify-device-token，desktop 独有——认证中心
 ///   能力，宿主 server 中间件验签后取策略），纯增量新接口，v16 及更早插件不受影响
@@ -781,6 +802,14 @@ interface manifest {
 ///   操作计划，权限 `task:run` + 每单元既有域权限门双门） + 可选导出
 ///   events-task#on-task-event（宿主动态探测，同 events-ws 模式，旧产物零回归），
 ///   纯增量新接口，v19 及更早插件不受影响
+///
+/// **不 bump 版本号的语义变更（审计票 05，落在 v22 批次内）**：host-bus topic 命名空间。
+/// 函数签名零变化，故不动版本号；但**定向事件的 topic 串**由 `<base>.<owner>` 改为
+/// `<owner>::<base>`，且跨属主的订阅/伪发布由「无人拦截」改为**宿主显式拒绝**。
+/// 旧产物不兼容且不会静默断流：按旧形态订阅会在 activate 期拿到点明新形态的错误，
+/// 必须按 v22 SDK（`owned_topic` / `*_event_topic`）重建。宿主独有能力面
+/// （host-pty / host-websocket / host-mdns 的定向事件）；移动端 host-mdns 仍用旧形态，
+/// 双端偏离登记见 ADR 0022「双端偏离」口径与 `.scratch/2026-09-21-wasm-core-audit/issues/05-bus-topic-acl.md`
 interface abi {
     version: func() -> u32;
     form: func() -> u32;

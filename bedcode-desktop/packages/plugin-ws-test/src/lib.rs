@@ -49,8 +49,12 @@ impl WasmPlugin for WsTestPlugin {
         serde_json::from_str(include_str!("../plugin.json")).expect("plugin.json must be valid PluginManifest")
     }
 
-    /// 订阅 owner 作用域状态事件（**必须在任何 connect / register-endpoint 之前**：
+    /// 订阅属主私有状态事件（**必须在任何 connect / register-endpoint 之前**：
     /// 宿主不重放）
+    ///
+    /// 订阅失败降级为日志，理由同 host-pty fixture：隔离用例把同一产物以第二个
+    /// 属主 id 实例化，而 guest 只能按编译期 `Self::ID` 拼命名空间，票 05 门禁
+    /// 本就该拒这种跨属主订阅；属主本体的投递由 e2e 的收事件断言行为性兜住。
     fn activate() -> anyhow::Result<()> {
         let host = WasmHost;
         for topic in [
@@ -60,10 +64,11 @@ impl WasmPlugin for WsTestPlugin {
             ws_event_topic(WS_CLIENT_CONNECT, Self::ID),
             ws_event_topic(WS_CLIENT_DISCONNECT, Self::ID),
         ] {
-            host.bus_subscribe(&topic)
-                .map_err(|e| anyhow::anyhow!("bus_subscribe({topic}) failed: {e}"))?;
+            match host.bus_subscribe(&topic) {
+                Ok(()) => host.log_info(&format!("ws-test fixture: subscribed {topic}")),
+                Err(e) => host.log_info(&format!("ws-test fixture: subscribe {topic} skipped: {e}")),
+            }
         }
-        host.log_info("ws-test fixture activated: owner-scoped ws topics subscribed");
         Ok(())
     }
 

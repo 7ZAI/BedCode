@@ -34,8 +34,8 @@
 //!
 //! # 退出事件与订阅时序（硬约束）
 //!
-//! 进程退出（任意原因）→ 宿主发布 owner 作用域 topic [`PTY_EXIT`]，payload
-//! `{ ptyId, reason, exitCode? }`（camelCase），`reason = "stopped" | "killed" | "error"`。
+//! 进程退出（任意原因）→ 宿主发布属主私有 topic [`PTY_EXIT`]（`<owner>::pty:exit`），
+//! payload `{ ptyId, reason, exitCode? }`（camelCase），`reason = "stopped" | "killed" | "error"`。
 //!
 //! **必须在 `activate` 期完成 `bus_subscribe`**（用 [`pty_event_topic`] 生成，勿手拼）：
 //! 宿主不缓冲、不重放，晚订阅期间的事件永久丢失且不报错；丢失后的自愈入口是
@@ -45,17 +45,18 @@
 
 use super::HostError;
 
-// ==================== 退出事件 topic（owner 作用域，勿手拼） ====================
+// ==================== 退出事件 topic（属主私有命名空间，勿手拼） ====================
 
 /// PTY 进程退出（唯一的生命周期事件）
 pub const PTY_EXIT: &str = "pty:exit";
 
-/// 生成属主作用域事件 topic：`pty:<event>.<owner>`
+/// 生成属主私有事件 topic：`<owner>::pty:<event>`
 ///
-/// `owner` 必须传本插件 ID（topic 内嵌属主，他人订阅物理上收不到）。
-/// `event` 用 [`PTY_EXIT`] 常量，避免手拼拼错导致「订阅了却永远收不到」。
+/// `owner` 必须传本插件 ID（票 05 命名空间：定向事件只投属主收件箱，
+/// 他人订阅被宿主拒绝）。`event` 用 [`PTY_EXIT`] 常量，避免手拼拼错导致
+/// 「订阅了却永远收不到」。
 pub fn pty_event_topic(event: &str, plugin_id: &str) -> String {
-    format!("{event}.{plugin_id}")
+    super::bus::owned_topic(plugin_id, event)
 }
 
 // ==================== 拉取结果与 spawn 参数 ====================
@@ -230,10 +231,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pty_event_topic_embeds_owner_and_event() {
-        // topic 形状必须与宿主侧 format!("pty:exit.{owner}") 逐字节一致
-        assert_eq!(pty_event_topic(PTY_EXIT, "com.x"), "pty:exit.com.x");
-        // 属主隔离：不同插件的 topic 互不相等（非属主物理上收不到）
+    fn pty_event_topic_uses_owner_namespace() {
+        // 形状由 `bus::owned_topic` 单源决定：宿主投递侧与本构造侧共用同一函数，
+        // 不存在「逐字节一致」漂移面（票 05）
+        assert_eq!(pty_event_topic(PTY_EXIT, "com.x"), "com.x::pty:exit");
+        // 属主隔离：不同插件的 topic 互不相等（他人订阅被宿主拒绝）
         assert_ne!(pty_event_topic(PTY_EXIT, "a"), pty_event_topic(PTY_EXIT, "b"));
     }
 

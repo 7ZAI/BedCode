@@ -967,7 +967,7 @@ pub(crate) fn dropped_frame_count(plugin_id: &str) -> u64 {
 /// 发布状态事件到插件消息总线（sender = "host"；订阅侧按精确 topic 分发）
 ///
 /// 经连接持有的总线实例发送（非全局单例）：与 `deliver_frame` 同源，
-/// 宿主测试可用自建上下文的 bus 直接断言 owner 作用域 topic
+/// 宿主测试可用自建上下文的 bus 直接断言属主私有 topic（`<owner>::ws:*`）
 fn publish_ws(bus: &MessageBus, topic: &str, payload: serde_json::Value) {
     bus.publish(topic, "host", payload);
 }

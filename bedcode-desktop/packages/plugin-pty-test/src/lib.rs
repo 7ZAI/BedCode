@@ -33,13 +33,20 @@ impl WasmPlugin for PtyTestPlugin {
         serde_json::from_str(include_str!("../plugin.json")).expect("plugin.json must be valid PluginManifest")
     }
 
-    /// 订阅 owner 作用域退出事件（**必须在任何 spawn 之前**：宿主不重放）
+    /// 订阅属主私有退出事件（**必须在任何 spawn 之前**：宿主不重放）
+    ///
+    /// 订阅失败降级为日志：隔离用例把同一产物以第二个属主 id 实例化
+    /// （`com.bedcode.pty-test.peer`），而 guest 只能按编译期 `Self::ID` 拼自己的
+    /// 命名空间 —— 票 05 的命名空间门禁会拒这种跨属主订阅（正是要它拒的行为）。
+    /// 属主本体的订阅是否真生效，由 e2e 的「A 必须收到 pty:exit 投递」行为性兜住，
+    /// 不靠这里的 Err。
     fn activate() -> anyhow::Result<()> {
         let host = WasmHost;
         let topic = pty_event_topic(PTY_EXIT, Self::ID);
-        host.bus_subscribe(&topic)
-            .map_err(|e| anyhow::anyhow!("bus_subscribe({topic}) failed: {e}"))?;
-        host.log_info("pty-test fixture activated: owner-scoped pty:exit topic subscribed");
+        match host.bus_subscribe(&topic) {
+            Ok(()) => host.log_info(&format!("pty-test fixture activated: subscribed {topic}")),
+            Err(e) => host.log_info(&format!("pty-test fixture activated: subscribe {topic} skipped: {e}")),
+        }
         Ok(())
     }
 

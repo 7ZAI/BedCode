@@ -35,14 +35,16 @@ pub mod ws;
 
 pub use app::HostApp;
 pub use auth::HostAuth;
-pub use bus::HostBus;
+pub use bus::{
+    owned_topic, topic_owner, HostBus, API_TOPIC_PREFIX, REPLY_TOPIC_PREFIX, TOPIC_NS_SEP,
+};
 pub use config::{ConfigKey, HostConfig};
 pub use database::{HostDatabase, HostPluginDatabase};
 pub use events::HostEvents;
 pub use fs::{FsDirEntry, FsNodeType, FsStat, HostFs};
 pub use http::HostHttp;
 pub use log::HostLog;
-pub use mdns::HostMdns;
+pub use mdns::{mdns_event_topic, HostMdns, MDNS_FOUND, MDNS_LOST};
 pub use peer::HostPeer;
 pub use platform::HostPlatform;
 pub use process::{HostProcess, ProcessSyncResult};

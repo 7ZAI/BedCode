@@ -5,6 +5,10 @@
 //! `bedcode.api.*` 请求 topic 做目标校验：api 名必须命中注册表，
 //! 否则拒绝 —— 「注册即声明，未声明不可调」由宿主强制。
 //!
+//! 注册表同时是「api → 声明属主」的解析入口（[`ApiRegistry::owner_of`]）：
+//! 互调回复道据此校验回复 `sender`（票 05），与门禁判定读同一张表，
+//! 不存在「门禁放行但属主解析不一致」的漂移。
+//!
 //! 注册表只存「目标 api 是否存在」（层 1），不校验调用方身份、不做
 //! 版本化（ADR-0017 已决）；激活态插件的 api 才在表中，因此「已注册」
 //! 等价于「目标插件已激活」。
@@ -46,6 +50,14 @@ impl ApiRegistry {
     pub fn contains(&self, api: &str) -> bool {
         let map = self.apis.read().unwrap_or_else(|e| e.into_inner());
         map.contains_key(api)
+    }
+
+    /// 声明该 api 的插件 ID（票 05 回复道 sender 校验依据）
+    ///
+    /// 与 [`Self::contains`] 同表同语义：未登记（未声明 / 已停用注销）→ `None`。
+    pub fn owner_of(&self, api: &str) -> Option<String> {
+        let map = self.apis.read().unwrap_or_else(|e| e.into_inner());
+        map.get(api).cloned()
     }
 
     /// 已登记的 api 清单（诊断/测试用）
@@ -117,5 +129,34 @@ mod tests {
         reg.register("p1", &[]);
         reg.unregister("ghost");
         assert_eq!(reg.len(), 0);
+    }
+
+    /// `owner_of` 与 `contains` 同表同语义：命中返回声明方，未命中返回 None
+    /// （票 05 回复道 sender 校验依据——门禁放行与属主解析不得漂移）
+    #[test]
+    fn owner_of_matches_contains_semantics() {
+        let reg = ApiRegistry::new();
+        reg.register(
+            "com.bedcode.terminal-session",
+            &["com.bedcode.terminal-session.pair".to_string()],
+        );
+        assert_eq!(
+            reg.owner_of("com.bedcode.terminal-session.pair").as_deref(),
+            Some("com.bedcode.terminal-session")
+        );
+        assert_eq!(reg.owner_of("com.bedcode.terminal-session.nope"), None);
+        // 注销后两者同时失效
+        reg.unregister("com.bedcode.terminal-session");
+        assert_eq!(reg.owner_of("com.bedcode.terminal-session.pair"), None);
+        assert!(!reg.contains("com.bedcode.terminal-session.pair"));
+    }
+
+    /// 同名 api 被后登记方覆盖：属主解析跟着注册表走（回复校验以最终属主为准）
+    #[test]
+    fn owner_of_follows_last_register() {
+        let reg = ApiRegistry::new();
+        reg.register("p1", &["shared.api".to_string()]);
+        reg.register("p2", &["shared.api".to_string()]);
+        assert_eq!(reg.owner_of("shared.api").as_deref(), Some("p2"));
     }
 }

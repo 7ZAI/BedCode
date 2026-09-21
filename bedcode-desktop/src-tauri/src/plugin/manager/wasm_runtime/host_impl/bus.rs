@@ -1,13 +1,77 @@
 //! 消息总线域宿主实现（插件间 Topic 发布/订阅）
 
+use bedcode_plugin_api::host::bus::{
+    is_legacy_owner_suffix, is_reply_topic, owned_topic, topic_owner, API_TOPIC_PREFIX,
+};
+
 use crate::plugin::manager::wasm_runtime::WasmHostContext;
+
+// ==================== Topic 命名空间门禁（审计票 05，P0-4） ====================
+
+/// 命名空间门禁：`<owner>::<name>` 形态的 topic 只有属主插件（与宿主）可读写
+///
+/// 形态即边界——判定只看串，不查激活表、不看安装表，因此与「属主是否已激活 /
+/// 是否已安装」无关，抢在属主之前订阅或伪发布都进不去（这是选命名空间而非
+/// 「解析 owner 段」的根本原因：后者的边界会随时序漏）。
+fn check_namespace(plugin_id: &str, topic: &str, action: &str, target: &str) -> Result<(), String> {
+    let owner = match topic_owner(topic) {
+        Some(owner) => owner,
+        None => return Ok(()),
+    };
+    if owner == plugin_id {
+        return Ok(());
+    }
+    tracing::warn!(
+        plugin_id = %plugin_id,
+        topic = %topic,
+        namespace_owner = %owner,
+        "bus {action}: cross-namespace topic rejected (topic namespace gate, audit ticket 05)"
+    );
+    Err(format!(
+        "bus error: topic '{topic}' is in the namespace of plugin '{owner}' — only {target} may {action} it"
+    ))
+}
+
+/// 订阅面门禁（`subscribe` / `subscribe-binary`）：命名空间 + 两条订阅专属形态规则
+///
+/// - 回复道 `bedcode.api.reply.*`：caller 的收件箱，订阅由宿主在 `host-api-call`
+///   内静态注册（见 host_impl/api.rs），对 WASM 一律关闭——此前任意插件可订阅他人
+///   回复道窃听互调结果，且 correlation id 是可猜的单调计数器（`req-1`、`req-2`…）；
+/// - legacy 定向形态 `<base>.<own-id>`：票 05 迁移前 SDK 助手产出的串，宿主已改投
+///   命名空间 topic，放行会让旧产物**静默断流**（订阅得到、永远收不到），故显式拒绝
+///   并回带新形态。
+fn check_subscribe_access(plugin_id: &str, topic: &str) -> Result<(), String> {
+    check_namespace(plugin_id, topic, "subscribe", "that plugin (and the host)")?;
+    if is_reply_topic(topic) {
+        tracing::warn!(
+            plugin_id = %plugin_id,
+            topic = %topic,
+            "bus subscribe: reply lane is host-managed, rejected (audit ticket 05)"
+        );
+        return Err(format!(
+            "bus error: topic '{topic}' is on the inter-plugin reply lane (bedcode.api.reply.*) \u{2014} reply subscriptions are host-managed by host-api-call"
+        ));
+    }
+    if is_legacy_owner_suffix(topic, plugin_id) {
+        tracing::warn!(
+            plugin_id = %plugin_id,
+            topic = %topic,
+            "bus subscribe: legacy owner-suffix directed topic form rejected (audit ticket 05)"
+        );
+        return Err(format!(
+            "bus error: legacy directed-topic form '{topic}' is retired, subscribe '{new_form}' instead (SDK owned_topic / *_event_topic)",
+            new_form = owned_topic(plugin_id, &topic[..topic.len() - plugin_id.len() - 1])
+        ));
+    }
+    Ok(())
+}
 
 /// 互调门禁（ADR-0017 层 1，JSON 与二进制发布共用）：`bedcode.api.<api>` 请求
 /// topic 的目标 api 必须命中某已激活插件的声明清单（注册表只在激活态登记）；
 /// `bedcode.api.reply.` 是响应通道（回复 topic 的调用方即为目标），免校验；
 /// 普通广播 topic 不校验，保持向后兼容。
 fn check_api_gate(host_ctx: &WasmHostContext, plugin_id: &str, topic: &str) -> Result<(), String> {
-    if let Some(api) = topic.strip_prefix("bedcode.api.") {
+    if let Some(api) = topic.strip_prefix(API_TOPIC_PREFIX) {
         if !api.starts_with("reply.") {
             // 互调门经 core-security 授权框架路由（三段管线；行为与直查注册表等价）
             let req = crate::plugin::security::AuthRequest {
@@ -33,6 +97,19 @@ fn check_api_gate(host_ctx: &WasmHostContext, plugin_id: &str, topic: &str) -> R
     Ok(())
 }
 
+/// 请求 topic 的目标 api **声明属主**（票 05 回复道 sender 校验依据）
+///
+/// 与 [`check_api_gate`] 读同一张注册表（`ApiCallAuthorizer` 的命中判定即
+/// `registry.contains`），故「门禁放行」与「取到属主」不会漂移。
+/// 回复道 / 公开 topic → `None`（无属主可校验）。
+pub(crate) fn api_gate_target_owner(host_ctx: &WasmHostContext, request_topic: &str) -> Option<String> {
+    let api = request_topic.strip_prefix(API_TOPIC_PREFIX)?;
+    if api.starts_with("reply.") {
+        return None;
+    }
+    host_ctx.api_registry().owner_of(api)
+}
+
 /// 发布 JSON 消息到 Topic（同步投递，总线内部异步派发）
 pub(crate) fn bus_publish(
     host_ctx: &WasmHostContext,
@@ -43,6 +120,7 @@ pub(crate) fn bus_publish(
     let payload: serde_json::Value =
         serde_json::from_str(payload_json).map_err(|e| format!("bus error: invalid JSON payload: {}", e))?;
 
+    check_namespace(plugin_id, topic, "publish", "that plugin (and the host)")?;
     check_api_gate(host_ctx, plugin_id, topic)?;
 
     let bus = host_ctx.message_bus.clone();
@@ -58,6 +136,7 @@ pub(crate) fn bus_publish_binary(
     topic: &str,
     payload: Vec<u8>,
 ) -> Result<(), String> {
+    check_namespace(plugin_id, topic, "publish", "that plugin (and the host)")?;
     check_api_gate(host_ctx, plugin_id, topic)?;
 
     let bus = host_ctx.message_bus.clone();
@@ -70,7 +149,11 @@ pub(crate) fn bus_publish_binary(
 /// 异步投递订阅请求，避免在 wasm 调用栈内同步等待 subscribers 写锁：
 /// bus 派发路径持 subscribers 读锁执行插件回调（on_message / on_session_lifecycle 等），
 /// 若插件在这些回调中订阅/退订，同步等待写锁会与派发任务形成同任务重入死锁。
+///
+/// 命名空间/回复道/legacy 门禁在 spawn **之前**同步判定：错误必须回给 guest，
+/// 不能退化成「返回 Ok 但没订阅上」。
 pub(crate) fn bus_subscribe(host_ctx: &WasmHostContext, plugin_id: &str, topic: &str) -> Result<(), String> {
+    check_subscribe_access(plugin_id, topic)?;
     let bus = host_ctx.message_bus.clone();
     let Ok(handle) = tokio::runtime::Handle::try_current() else {
         tracing::warn!(plugin_id = %plugin_id, topic = %topic, "bus_subscribe: no runtime context, subscription dropped");
@@ -87,6 +170,7 @@ pub(crate) fn bus_subscribe(host_ctx: &WasmHostContext, plugin_id: &str, topic: 
 /// 以二进制格式偏好订阅（v11）：只接收 publish-binary 投递，
 /// JSON 消息对其按格式不匹配拒绝（与 subscribe 同因异步投递）
 pub(crate) fn bus_subscribe_binary(host_ctx: &WasmHostContext, plugin_id: &str, topic: &str) -> Result<(), String> {
+    check_subscribe_access(plugin_id, topic)?;
     let bus = host_ctx.message_bus.clone();
     let Ok(handle) = tokio::runtime::Handle::try_current() else {
         tracing::warn!(plugin_id = %plugin_id, topic = %topic, "bus_subscribe_binary: no runtime context, subscription dropped");
@@ -101,7 +185,11 @@ pub(crate) fn bus_subscribe_binary(host_ctx: &WasmHostContext, plugin_id: &str, 
 }
 
 /// 取消订阅（与 subscribe 同因异步投递）
+///
+/// 只过命名空间门：legacy/回复道形态在此不拦——退订是清理动作，必须幂等可用
+/// （旧产物退订它曾订阅过的串不应被新规则噎住）
 pub(crate) fn bus_unsubscribe(host_ctx: &WasmHostContext, plugin_id: &str, topic: &str) -> Result<(), String> {
+    check_namespace(plugin_id, topic, "unsubscribe", "that plugin (and the host)")?;
     let bus = host_ctx.message_bus.clone();
     let Ok(handle) = tokio::runtime::Handle::try_current() else {
         tracing::warn!(plugin_id = %plugin_id, topic = %topic, "bus_unsubscribe: no runtime context, unsubscribe dropped");
@@ -284,5 +372,119 @@ mod tests {
         let ctx = build_host_ctx();
         bus_subscribe(&ctx, "plugin-a", "topic").expect("subscribe ok");
         bus_unsubscribe(&ctx, "plugin-a", "topic").expect("unsubscribe ok");
+    }
+
+    // ==================== topic 命名空间门禁（审计票 05，P0-4） ====================
+
+    /// 他人命名空间 topic（跨属主订阅 = 窃听他人定向事件流）：拒绝
+    #[tokio::test]
+    async fn subscribe_rejects_other_namespace() {
+        let ctx = build_host_ctx();
+        let err = bus_subscribe(&ctx, "com.evil", "com.victim::pty:exit").unwrap_err();
+        assert!(err.contains("namespace"), "got: {}", err);
+        assert!(err.contains("com.victim"), "错误须点出属主: got: {}", err);
+    }
+
+    /// 他人命名空间 topic（二进制偏好订阅同样拒）：拒绝
+    #[tokio::test]
+    async fn subscribe_binary_rejects_other_namespace() {
+        let ctx = build_host_ctx();
+        let err = bus_subscribe_binary(&ctx, "com.evil", "com.victim::blob:chunk").unwrap_err();
+        assert!(err.contains("namespace"), "got: {}", err);
+    }
+
+    /// 自己的命名空间 topic：放行（宿主定向投递的正常订阅路径）
+    #[tokio::test]
+    async fn subscribe_allows_own_namespace() {
+        let ctx = build_host_ctx();
+        bus_subscribe(&ctx, "com.victim", "com.victim::pty:exit").expect("own namespace must pass");
+    }
+
+    /// 跨命名空间伪发布（他人收件箱投毒）：拒绝
+    #[tokio::test]
+    async fn publish_rejects_other_namespace() {
+        let ctx = build_host_ctx();
+        let err = bus_publish(&ctx, "com.evil", "com.victim::pty:exit", "{}").unwrap_err();
+        assert!(err.contains("namespace"), "got: {}", err);
+    }
+
+    /// 跨命名空间伪发布（二进制发布不得绕过 JSON 面的门禁）：拒绝
+    #[tokio::test]
+    async fn publish_binary_rejects_other_namespace() {
+        let ctx = build_host_ctx();
+        let err = bus_publish_binary(&ctx, "com.evil", "com.victim::blob:chunk", vec![1, 2]).unwrap_err();
+        assert!(err.contains("namespace"), "got: {}", err);
+    }
+
+    /// 公开 topic（不含 `::`）不受命名空间门禁影响：既有广播约定零回归
+    #[tokio::test]
+    async fn publish_public_topic_unaffected_by_namespace_gate() {
+        let ctx = build_host_ctx();
+        bus_publish(&ctx, "com.evil", "task:status-changed", "{}").expect("public topic must pass");
+        bus_subscribe(&ctx, "com.evil", "peer:consent").expect("public subscribe must pass");
+    }
+
+    /// legacy 定向形态（`<base>.<自身 id>`，SDK 旧助手产出的串）：显式拒绝并回带新形态，
+    /// 不得退化成「订阅成功但永远收不到」的静默断流
+    #[tokio::test]
+    async fn subscribe_rejects_legacy_owner_suffix() {
+        let ctx = build_host_ctx();
+        let err = bus_subscribe(&ctx, "com.victim", "pty:exit.com.victim").unwrap_err();
+        assert!(err.contains("legacy"), "got: {}", err);
+        assert!(err.contains("com.victim::pty:exit"), "错误须给出新形态: got: {}", err);
+    }
+
+    /// 退订同样受门禁约束（他人命名空间不可寻址）
+    #[tokio::test]
+    async fn unsubscribe_rejects_other_namespace() {
+        let ctx = build_host_ctx();
+        let err = bus_unsubscribe(&ctx, "com.evil", "com.victim::pty:exit").unwrap_err();
+        assert!(err.contains("namespace"), "got: {}", err);
+    }
+
+    // ==================== 互调回复道订阅面（P1-4 之一） ====================
+
+    /// 插件订阅他人回复道（窃听互调回复；correlation id 是可猜的单调计数器）：拒绝
+    #[tokio::test]
+    async fn subscribe_rejects_reply_lane() {
+        let ctx = build_host_ctx();
+        let err = bus_subscribe(&ctx, "com.evil", "bedcode.api.reply.com.victim.req-1").unwrap_err();
+        assert!(err.contains("reply"), "got: {}", err);
+    }
+
+    /// 自身回复道亦不对 WASM 开放：回复订阅由宿主在 host-api-call 内静态注册
+    #[tokio::test]
+    async fn subscribe_rejects_own_reply_lane() {
+        let ctx = build_host_ctx();
+        let err = bus_subscribe(&ctx, "com.victim", "bedcode.api.reply.com.victim.req-1").unwrap_err();
+        assert!(err.contains("reply"), "got: {}", err);
+    }
+
+    /// 二进制偏好订阅回复道同样拒绝
+    #[tokio::test]
+    async fn subscribe_binary_rejects_reply_lane() {
+        let ctx = build_host_ctx();
+        let err = bus_subscribe_binary(&ctx, "com.evil", "bedcode.api.reply.com.victim.req-1").unwrap_err();
+        assert!(err.contains("reply"), "got: {}", err);
+    }
+
+    /// 请求道不受回复道门禁影响（服务方必须能订阅 `bedcode.api.*`）
+    #[tokio::test]
+    async fn subscribe_allows_api_request_lane() {
+        let ctx = build_host_ctx();
+        bus_subscribe(&ctx, "com.victim", "bedcode.api.com.victim.echo").expect("request lane must pass");
+    }
+
+    /// 端到端：B 订阅不到 A 的定向事件流，也就收不到宿主投给 A 的事件
+    #[tokio::test]
+    async fn cross_namespace_subscriber_never_receives_directed_event() {
+        let ctx = build_host_ctx();
+        ctx.message_bus.set_dispatcher(Arc::new(NoopDispatcher)).await;
+        assert!(bus_subscribe(&ctx, "com.evil", "com.victim::pty:exit").is_err());
+
+        // 宿主按新形态定向投递给 victim：evil 无订阅者条目，收不到任何投递
+        ctx.message_bus
+            .publish("com.victim::pty:exit", "host", serde_json::json!({ "ptyId": "p-1" }));
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     }
 }

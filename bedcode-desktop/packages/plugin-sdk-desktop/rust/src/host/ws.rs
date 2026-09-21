@@ -6,17 +6,17 @@
 //!
 //! # 事件与帧的两条投递通道（务必按此订阅）
 //!
-//! 1. **状态事件**走消息总线 owner 作用域 topic（用 [`ws_event_topic`] 或
+//! 1. **状态事件**走消息总线属主私有 topic（用 [`ws_event_topic`] 或
 //!    [`WS_OPEN`] / [`WS_ERROR`] / [`WS_CLOSE`] / [`WS_CLIENT_CONNECT`] /
 //!    [`WS_CLIENT_DISCONNECT`] 生成，勿手拼）：
 //!
 //!    | topic | payload |
 //!    | --- | --- |
-//!    | `ws:open.<owner>` | `{ handle, url, protocol? }` |
-//!    | `ws:error.<owner>` | `{ handle, message }` |
-//!    | `ws:close.<owner>` | `{ handle, code?, reason?, wasClean }` |
-//!    | `ws:client-connect.<owner>` | `{ endpointId, clientId, addr, authenticated }` |
-//!    | `ws:client-disconnect.<owner>` | `{ endpointId, clientId, code?, reason?, wasClean }` |
+//!    | `<owner>::ws:open` | `{ handle, url, protocol? }` |
+//!    | `<owner>::ws:error` | `{ handle, message }` |
+//!    | `<owner>::ws:close` | `{ handle, code?, reason?, wasClean }` |
+//!    | `<owner>::ws:client-connect` | `{ endpointId, clientId, addr, authenticated }` |
+//!    | `<owner>::ws:client-disconnect` | `{ endpointId, clientId, code?, reason?, wasClean }` |
 //!
 //!    **必须在 `activate` 期（或首次 connect / register-endpoint 之前）完成
 //!    `bus_subscribe`**：宿主不缓冲、不重放，晚订阅期间的事件永久丢失
@@ -41,13 +41,13 @@ pub const WS_CLIENT_CONNECT: &str = "ws:client-connect";
 /// 端点客户端断开（服务端域）
 pub const WS_CLIENT_DISCONNECT: &str = "ws:client-disconnect";
 
-/// 生成属主作用域状态事件 topic：`ws:<event>.<owner>`
+/// 生成属主私有状态事件 topic：`<owner>::ws:<event>`
 ///
-/// `owner` 必须传本插件 ID（宿主按调用方注入，topic 内嵌属主——他人订阅
-/// 物理上收不到）。`event` 用本模块的 `WS_*` 常量，避免手拼拼错导致
-/// 「订阅了却永远收不到」（漏订阅不报错）。
+/// `owner` 必须传本插件 ID（票 05 命名空间：宿主把状态事件定向投进属主
+/// 收件箱，他人订阅被宿主拒绝）。`event` 用本模块的 `WS_*` 常量，避免手拼
+/// 拼错导致「订阅了却永远收不到」（漏订阅不报错）。
 pub fn ws_event_topic(event: &str, plugin_id: &str) -> String {
-    format!("{event}.{plugin_id}")
+    super::bus::owned_topic(plugin_id, event)
 }
 
 /// WebSocket 能力 trait —— 函数签名与 WIT `host-websocket` 一一对应
@@ -118,20 +118,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ws_event_topic_embeds_owner_and_event() {
-        // topic 形状与宿主侧 format!("ws:open.{owner}") 必须逐字节一致
-        assert_eq!(ws_event_topic(WS_OPEN, "com.x"), "ws:open.com.x");
-        assert_eq!(ws_event_topic(WS_CLOSE, "com.x"), "ws:close.com.x");
-        assert_eq!(ws_event_topic(WS_ERROR, "com.x"), "ws:error.com.x");
+    fn ws_event_topic_uses_owner_namespace() {
+        // 形状由 `bus::owned_topic` 单源决定：宿主投递侧与本构造侧共用同一函数，
+        // 不存在「逐字节一致」漂移面（票 05）
+        assert_eq!(ws_event_topic(WS_OPEN, "com.x"), "com.x::ws:open");
+        assert_eq!(ws_event_topic(WS_CLOSE, "com.x"), "com.x::ws:close");
+        assert_eq!(ws_event_topic(WS_ERROR, "com.x"), "com.x::ws:error");
         assert_eq!(
             ws_event_topic(WS_CLIENT_CONNECT, "com.x"),
-            "ws:client-connect.com.x"
+            "com.x::ws:client-connect"
         );
         assert_eq!(
             ws_event_topic(WS_CLIENT_DISCONNECT, "com.x"),
-            "ws:client-disconnect.com.x"
+            "com.x::ws:client-disconnect"
         );
-        // 属主隔离：不同插件的 topic 互不相等（非属主物理上收不到）
+        // 属主隔离：不同插件的 topic 互不相等（他人订阅被宿主拒绝）
         assert_ne!(ws_event_topic(WS_OPEN, "a"), ws_event_topic(WS_OPEN, "b"));
     }
 }

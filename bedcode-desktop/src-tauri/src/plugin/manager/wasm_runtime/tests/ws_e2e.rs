@@ -4,10 +4,11 @@
 //! 经 `use super::*` 可见）；fixture 互斥与产物构建语义不变。
 
 use super::*;
+use bedcode_plugin_api::host::{ws_event_topic, WS_CLIENT_CONNECT, WS_CLIENT_DISCONNECT, WS_CLOSE, WS_OPEN};
 /// host-websocket 客户端域端到端（ABI v14）
 ///
 /// fixture 插件（`packages/plugin-ws-test`）→ 宿主 `connect`（**真握手**）→
-/// 文本 / 二进制回文经 `events-ws` 回灌 → owner 作用域状态事件
+/// 文本 / 二进制回文经 `events-ws` 回灌 → 属主私有状态事件
 /// （`ws:open` / `ws:close`）经 host-bus 投递 → `close` 后 `is-connected`
 /// 立即为 false（spec D3 时序）。
 ///
@@ -32,8 +33,8 @@ fn test_ws_client_outbound_roundtrip() {
         use tokio_tungstenite::tungstenite::Message;
 
         const PLUGIN_ID: &str = "com.bedcode.ws-test";
-        let open_topic = format!("ws:open.{PLUGIN_ID}");
-        let close_topic = format!("ws:close.{PLUGIN_ID}");
+        let open_topic = ws_event_topic(WS_OPEN, PLUGIN_ID);
+        let close_topic = ws_event_topic(WS_CLOSE, PLUGIN_ID);
 
         // ==================== mock echo server（进程内） ====================
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -113,7 +114,7 @@ fn test_ws_client_outbound_roundtrip() {
             .to_string();
         assert!(handle.starts_with("wsc-"), "连接句柄形状应为 wsc-<uuid>，got: {handle}");
 
-        // ws:open（owner 作用域 topic，activate 期已订阅）必须投递且带 handle
+        // <owner>::ws:open（属主私有 topic，activate 期已订阅）必须投递且带 handle
         let state = ws_poll_state(
             &plugin,
             |s| ws_event_payload(s, &open_topic).is_some(),
@@ -264,8 +265,8 @@ fn test_ws_endpoint_server_domain_roundtrip() {
         use tokio_tungstenite::tungstenite::Message;
 
         const PLUGIN_ID: &str = "com.bedcode.ws-test";
-        let connect_topic = format!("ws:client-connect.{PLUGIN_ID}");
-        let disconnect_topic = format!("ws:client-disconnect.{PLUGIN_ID}");
+        let connect_topic = ws_event_topic(WS_CLIENT_CONNECT, PLUGIN_ID);
+        let disconnect_topic = ws_event_topic(WS_CLIENT_DISCONNECT, PLUGIN_ID);
 
         // ==================== 宿主服务器 + fixture 装载 ====================
         let (server_handle, server_task, port) = {

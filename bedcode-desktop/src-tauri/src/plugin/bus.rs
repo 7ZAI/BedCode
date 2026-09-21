@@ -400,6 +400,16 @@ impl MessageBus {
         }
     }
 
+    /// 某 topic 当前订阅者条数（诊断用：回复道/定向 topic 的订阅泄漏与收敛核对）
+    pub async fn subscriber_count(&self, topic: &str) -> usize {
+        self.subscribers
+            .read()
+            .await
+            .get(topic)
+            .map(|subs| subs.len())
+            .unwrap_or(0)
+    }
+
     /// 移除插件的所有订阅（停用时调用）
     ///
     /// 移除订阅者即 drop 其队列发送端，消费任务随 channel 关闭自动退出

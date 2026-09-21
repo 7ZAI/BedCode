@@ -90,7 +90,7 @@ async fn instantiate_probe_fixture(runtime: &WasmRuntime, host_ctx: &Arc<WasmHos
         .lock()
         .await
         .activate()
-        .expect("activate probe fixture = 订阅 pty:exit.<owner>");
+        .expect("activate probe fixture = 订阅 <owner>::pty:exit");
     plugin
 }
 

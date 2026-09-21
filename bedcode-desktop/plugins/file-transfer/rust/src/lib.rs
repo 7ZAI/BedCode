@@ -13,7 +13,9 @@
 //!
 //! 双写期（Phase 3）：旧命令面保持可用；`peer:devices` 订阅降级为日志对账源。
 
-use bedcode_plugin_api::host::{HostBus, HostEvents, HostLog, HostMdns, HostPeer, HostPlatform};
+use bedcode_plugin_api::host::{
+    mdns_event_topic, HostBus, HostEvents, HostLog, HostMdns, HostPeer, HostPlatform, MDNS_FOUND, MDNS_LOST,
+};
 use bedcode_plugin_api::types::PluginManifest;
 use bedcode_plugin_api::wasm_host::WasmHost;
 use bedcode_plugin_api::{BusMessage, WasmPlugin};
@@ -33,16 +35,17 @@ pub(crate) use peer::PLUGIN_ID;
 /// 依赖 peer-net crate，此处常量对齐 spec v2 §4.2）
 const PEER_MDNS_SERVICE_TYPE: &str = "_bedcode-peer._tcp.local.";
 
-/// 定向发现事件 topic（spec v2 §5.2：事件按属主投递，owner = 本插件 id）。
+/// 定向发现事件 topic（spec v2 §5.2 + 审计票 05：事件按属主私有命名空间投递，
+/// owner = 本插件 id，形如 `com.bedcode.file-transfer::mdns:found`）。
 /// LazyLock 而非 concat!：PLUGIN_ID 是 const `&str` 而非字面量，concat! 只收
 /// 字面量，故运行时拼一次（bus_subscribe / on_message 每消息复用它）
 static MDNS_FOUND_TOPIC: std::sync::LazyLock<String> =
-    std::sync::LazyLock::new(|| format!("mdns:found.{PLUGIN_ID}"));
+    std::sync::LazyLock::new(|| mdns_event_topic(MDNS_FOUND, PLUGIN_ID));
 static MDNS_LOST_TOPIC: std::sync::LazyLock<String> =
-    std::sync::LazyLock::new(|| format!("mdns:lost.{PLUGIN_ID}"));
+    std::sync::LazyLock::new(|| mdns_event_topic(MDNS_LOST, PLUGIN_ID));
 
 /// 自建 browse 句柄（host-mdns，spec v2 / ticket 05：本插件自建浏览、事件
-/// 定向投递 `mdns:found.<PLUGIN_ID>`；None = 未激活/翻修失败降级态）
+/// 定向投递 `<PLUGIN_ID>::mdns:found`；None = 未激活/翻修失败降级态）
 static MDNS_BROWSER: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 
 fn mdns_browser() -> &'static Mutex<Option<String>> {
@@ -96,7 +99,7 @@ impl WasmPlugin for FileTransferPlugin {
         // 发现事件（mdns:*）改经 host-mdns 自建 browse 收定向 topic（spec v2 /
         // ticket 05，D2 一期迁移）：不再订阅全局 `mdns:found` / `mdns:lost`
         // （全局桥接已退役 D1）——本插件自建浏览、事件按属主投递到
-        // `mdns:found.<PLUGIN_ID>` / `mdns:lost.<PLUGIN_ID>`
+        // `<PLUGIN_ID>::mdns:found` / `<PLUGIN_ID>::mdns:lost`（票 05 命名空间）
         for topic in [
             MDNS_FOUND_TOPIC.as_str(),
             MDNS_LOST_TOPIC.as_str(),

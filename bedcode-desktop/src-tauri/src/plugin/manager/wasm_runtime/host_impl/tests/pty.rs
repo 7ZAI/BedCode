@@ -395,7 +395,7 @@ async fn zero_exit_code_is_reported_as_value_not_absent_field() {
     );
 }
 
-/// 事件定向：非属主 topic 零投递，属主 topic 恰好一条（不重放、不双发）
+/// 事件定向：他人命名空间零投递，属主 topic 恰好一条（不重放、不双发）
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn exit_events_are_owner_scoped_and_exactly_once() {
@@ -416,7 +416,7 @@ async fn exit_events_are_owner_scoped_and_exactly_once() {
     assert_eq!(event["payload"]["ptyId"], mine);
     assert!(
         other_events.try_recv().is_err(),
-        "非属主 topic 物理上收不到他人事件（topic 内嵌属主）"
+        "他人命名空间收不到他人事件（宿主只向属主投递，且他人订阅被门禁拒）"
     );
     // 恰好一次：监听任务与停用回收之外不再有第二个发布者
     assert!(
