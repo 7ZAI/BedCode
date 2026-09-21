@@ -4,7 +4,7 @@
 
 **Blocked by:** 06（调用方身份语义与前端通道一致后再定 `device` 口径）
 
-**Status:** ready-for-human（涉跨端协议形状，需用户确认「是否动线协议」）
+**Status:** ready-for-agent（裁决已收齐并落票：沿用 none|jwt 两档、不动线协议档位，见「裁决」块）
 
 ## 现状（已复核）
 

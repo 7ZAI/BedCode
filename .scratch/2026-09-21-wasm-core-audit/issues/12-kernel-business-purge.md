@@ -4,7 +4,7 @@
 
 **Blocked by:** 11（收敛后才有单一改造点）
 
-**Status:** ready-for-human（涉及 peer-net 归属的产品裁决，见需裁决项）
+**Status:** ready-for-agent（裁决已收齐并落票：peer-net 选项 A，见「裁决」块）
 
 ## 现状（已复核）
 
