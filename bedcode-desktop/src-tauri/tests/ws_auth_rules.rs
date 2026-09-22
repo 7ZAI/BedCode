@@ -28,13 +28,11 @@ use bedcode_lib::mdns::advertiser::MdnsAdvertiser;
 use bedcode_lib::plugin::PluginHost;
 use bedcode_lib::server::app::start_http_server;
 use bedcode_lib::server::message::{AuthPayload, AuthStage, Message, SessionControlAction};
-use bedcode_lib::server::services::pairing_service::PairingService;
 use bedcode_lib::server::ws::WebSocketManager;
 use bedcode_lib::session::{SessionConfigManager, SessionManager};
 use bedcode_lib::system::app_context::AppContextBuilder;
 use bedcode_lib::system::constants::network::SYNC_EVENT_BROADCAST_CAPACITY;
 use bedcode_lib::system::info::SystemInfo;
-use bedcode_lib::utils::auth::QrTokenManager;
 use bedcode_lib::AppConfig;
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
@@ -47,6 +45,24 @@ type WsRecv = futures_util::stream::SplitStream<WebSocketStream<TcpStream>>;
 type WsSend = futures_util::stream::SplitSink<WebSocketStream<TcpStream>, WsMsg>;
 
 // ==================== 基建（与 04 broadcast_shutdown 同款模式） ====================
+
+/// 会话中心插件 id（认证端点编排的权威实现方）
+const SESSION_PLUGIN_ID: &str = "com.bedcode.terminal-session";
+
+/// 随包插件产物目录（`cargo test` 前须重建产物，见 AGENTS §3）
+///
+/// 产物缺失时**显性失败**而非跳过：本 target 的认证换取链没有别的驱动方式，
+/// 静默 `[skip]` 会把「未验证」伪装成「通过」。
+fn bundled_plugins_dir() -> PathBuf {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/plugins/desktop");
+    assert!(
+        dir.join("com.bedcode.terminal-session/bedcode_plugin_terminal_session.wasm")
+            .exists(),
+        "插件产物缺失：先跑 `node scripts/plugin-build.js --plugin terminal-session`（workdir bedcode-desktop），目录 {}",
+        dir.display()
+    );
+    dir
+}
 
 /// 探测空闲端口：绑定 127.0.0.1:0 由 OS 分配，立即释放后交给服务器绑定
 fn pick_free_port() -> u16 {
@@ -64,7 +80,7 @@ async fn spawn_test_server(port: u16) -> std::io::Result<(ServerHandle, tokio::t
 
 /// 组装真实服务 AppContext（app_handle=None 无头模式），每个测试进程只 init 一次
 ///
-/// 与 04 同款完整组装（session/config 接入 sync_tx + SyncEventHandler 注册）：
+/// 与 04 同款完整组装（session 接入 sync_tx + SyncEventHandler 注册；config 域自 v22 只读、无事件源）：
 /// 场景 3 的免 token 业务消息 echo 走 session_control → remove_session_with_source
 /// → 广播发布链路，sync 接线保证链路完整（不含断言广播，但保持生产组装一致性）
 async fn init_test_app_context() {
@@ -78,18 +94,24 @@ async fn init_test_app_context() {
         ));
         db.lock().await.init_schema().expect("init db schema failed");
 
-        let plugins_dir = std::env::temp_dir().join(format!("bedcode-itest-plugins-{}", std::process::id()));
-        std::fs::create_dir_all(&plugins_dir).expect("create temp plugins dir failed");
+        // 票 13：认证端点编排已整体下沉会话中心插件（宿主 /api/auth/* 无实现，网关按
+        // PluginRequired 转发）→ 测试必须加载并激活**真实插件产物**。/api/auth/* 走
+        // 的路由判定要求 activated + manifest 已声明该端点，两者缺一即被网关拒。
+        let plugins_dir = bundled_plugins_dir();
+        // 用户插件目录：独立空目录。复用 plugins_dir 会让随包插件被标成
+        // UserInstalled 来源，激活时撞审批门禁（无批准记录 → NeedsApproval）
+        let user_plugins_dir =
+            std::env::temp_dir().join(format!("bedcode-itest-userplugins-{}", std::process::id()));
+        std::fs::create_dir_all(&user_plugins_dir).expect("create temp user plugins dir failed");
 
-        let session_db = Database::new(Path::new(":memory:")).expect("create session db failed");
-        session_db.init_schema().expect("init session db schema failed");
-        let session_manager = Arc::new(SessionManager::from_database(session_db, Arc::new(PathBuf::from("."))));
+        // v21 起 SessionManager 无库依赖（会话配置真源归插件私有库）
+        let session_manager = Arc::new(SessionManager::new());
         let config_manager = Arc::new(SessionConfigManager::new(db.clone()));
         let plugin_host = Arc::new(
             PluginHost::new(
                 db.clone(),
                 &plugins_dir,
-                &plugins_dir, // user_plugins_dir：测试上下文无用户插件，复用同一空目录
+                &user_plugins_dir, // 用户插件目录：独立空目录（见上方来源标注说明）
                 session_manager.clone(),
                 config_manager.clone(),
                 None,
@@ -97,9 +119,13 @@ async fn init_test_app_context() {
             .await,
         );
         plugin_host.init_message_bus().await;
+        // 激活会话中心：配对码 / QR 的签发与验签执行在插件，密钥托管与记录面走
+        // host-auth 原语（主库）——不依赖无头下不可达的插件私有库。
+        plugin_host
+            .activate_plugin(SESSION_PLUGIN_ID, false)
+            .await
+            .expect("activate com.bedcode.terminal-session (bundled artifact)");
 
-        let pairing_service = Arc::new(PairingService::new());
-        let qr_manager = Arc::new(QrTokenManager::new());
         let mdns_advertiser = Arc::new(tokio::sync::RwLock::new(MdnsAdvertiser::new()));
         let (sync_tx, _) = tokio::sync::broadcast::channel::<DesktopSyncEvent>(SYNC_EVENT_BROADCAST_CAPACITY);
         let system_info = Arc::new(SystemInfo::collect());
@@ -109,8 +135,6 @@ async fn init_test_app_context() {
             .session_manager(session_manager.clone())
             .config_manager(config_manager.clone())
             .plugin_host(plugin_host.clone())
-            .pairing_service(pairing_service.clone())
-            .qr_manager(qr_manager.clone())
             .mdns_advertiser(mdns_advertiser.clone())
             .app_handle(None)
             .sync_tx(sync_tx.clone())
@@ -119,7 +143,6 @@ async fn init_test_app_context() {
             .build_and_init();
 
         session_manager.set_sync_tx(sync_tx.clone()).await;
-        config_manager.set_sync_tx(sync_tx.clone()).await;
 
         let ws_manager = WebSocketManager::global();
         ws_manager.init().await.expect("init WebSocketManager failed");

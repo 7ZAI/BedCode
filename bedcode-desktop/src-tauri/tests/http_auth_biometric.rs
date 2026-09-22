@@ -29,7 +29,6 @@ use bedcode_lib::system::app_context::AppContextBuilder;
 use bedcode_lib::system::constants::network::SYNC_EVENT_BROADCAST_CAPACITY;
 use bedcode_lib::system::info::SystemInfo;
 use bedcode_lib::utils::auth::jwt::JwtService;
-use bedcode_lib::utils::auth::QrTokenManager;
 use bedcode_lib::AppConfig;
 use p256::ecdsa::signature::Signer;
 use p256::ecdsa::SigningKey;
@@ -44,6 +43,24 @@ fn post_json(client: &reqwest::Client, url: &str, value: &serde_json::Value) -> 
         .post(url)
         .header("Content-Type", "application/json")
         .body(serde_json::to_string(value).expect("serialize json body failed"))
+}
+
+/// 会话中心插件 id（认证端点编排的权威实现方）
+const SESSION_PLUGIN_ID: &str = "com.bedcode.terminal-session";
+
+/// 随包插件产物目录（`cargo test` 前须重建产物，见 AGENTS §3）
+///
+/// 产物缺失时**显性失败**而非跳过：本 target 的生物认证链没有别的驱动方式，
+/// 静默 `[skip]` 会把「未验证」伪装成「通过」。
+fn bundled_plugins_dir() -> PathBuf {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/plugins/desktop");
+    assert!(
+        dir.join("com.bedcode.terminal-session/bedcode_plugin_terminal_session.wasm")
+            .exists(),
+        "插件产物缺失：先跑 `node scripts/plugin-build.js --plugin terminal-session`（workdir bedcode-desktop），目录 {}",
+        dir.display()
+    );
+    dir
 }
 
 /// 探测空闲端口：绑定 127.0.0.1:0 由 OS 分配，立即释放后交给服务器绑定
@@ -63,9 +80,13 @@ async fn spawn_test_server(port: u16) -> io::Result<(ServerHandle, tokio::task::
 /// 组装真实服务 AppContext（app_handle=None 无头模式），每个测试进程只 init 一次
 ///
 /// 与 ws_pairing_auth.rs 同一策略：全部服务真实实现 + 内存 SQLite，仅 Tauri
-/// 前端事件能力降级。生物认证端点只用到 db / biometric_challenges / app_handle，
-/// 其余字段（session/plugin/mdns 等）仍按生产组合方式填齐，避免 AppContext
-/// 缺字段在其余路由意外触发时 panic
+/// 前端事件能力降级。
+///
+/// 票 13：三条生物认证端点（challenge / verify / bind）的编排已整体下沉会话中心
+/// 插件——宿主 /api/auth/* 无实现，网关按 PluginRequired 转发，故测试必须加载并
+/// 激活**真实插件产物**（插件的公钥验签 / 挑战签发经 host-auth 原语落到主库，
+/// 不依赖无头下不可达的插件私有库）。其余字段（session/mdns 等）仍按生产组合
+/// 方式填齐，避免 AppContext 缺字段在其余路由意外触发时 panic
 async fn init_test_app_context() {
     static INIT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     if INIT.get().is_some() {
@@ -77,18 +98,21 @@ async fn init_test_app_context() {
         ));
         db.lock().await.init_schema().expect("init db schema failed");
 
-        let plugins_dir = std::env::temp_dir().join(format!("bedcode-bioitest-plugins-{}", std::process::id()));
-        std::fs::create_dir_all(&plugins_dir).expect("create temp plugins dir failed");
+        let plugins_dir = bundled_plugins_dir();
+        // 用户插件目录：独立空目录（复用 plugins_dir 会让随包插件被标成
+        // UserInstalled 来源，激活时撞审批门禁）
+        let user_plugins_dir =
+            std::env::temp_dir().join(format!("bedcode-bioitest-userplugins-{}", std::process::id()));
+        std::fs::create_dir_all(&user_plugins_dir).expect("create temp user plugins dir failed");
 
-        let session_db = Database::new(Path::new(":memory:")).expect("create session db failed");
-        session_db.init_schema().expect("init session db schema failed");
-        let session_manager = Arc::new(SessionManager::from_database(session_db, Arc::new(PathBuf::from("."))));
+        // v21 起 SessionManager 无库依赖（会话配置真源归插件私有库）
+        let session_manager = Arc::new(SessionManager::new());
         let config_manager = Arc::new(SessionConfigManager::new(db.clone()));
         let plugin_host = Arc::new(
             PluginHost::new(
                 db.clone(),
                 &plugins_dir,
-                &plugins_dir, // user_plugins_dir：测试上下文无用户插件，复用同一空目录
+                &user_plugins_dir, // 用户插件目录：独立空目录（见上方来源标注说明）
                 session_manager.clone(),
                 config_manager.clone(),
                 None,
@@ -96,9 +120,11 @@ async fn init_test_app_context() {
             .await,
         );
         plugin_host.init_message_bus().await;
+        plugin_host
+            .activate_plugin(SESSION_PLUGIN_ID, false)
+            .await
+            .expect("activate com.bedcode.terminal-session (bundled artifact)");
 
-        let pairing_service = Arc::new(bedcode_lib::server::services::pairing_service::PairingService::new());
-        let qr_manager = Arc::new(QrTokenManager::new());
         let mdns_advertiser = Arc::new(tokio::sync::RwLock::new(MdnsAdvertiser::new()));
         let (sync_tx, _) = tokio::sync::broadcast::channel::<DesktopSyncEvent>(SYNC_EVENT_BROADCAST_CAPACITY);
         let system_info = Arc::new(SystemInfo::collect());
@@ -108,8 +134,6 @@ async fn init_test_app_context() {
             .session_manager(session_manager.clone())
             .config_manager(config_manager.clone())
             .plugin_host(plugin_host.clone())
-            .pairing_service(pairing_service.clone())
-            .qr_manager(qr_manager.clone())
             .mdns_advertiser(mdns_advertiser.clone())
             .app_handle(None)
             .sync_tx(sync_tx)

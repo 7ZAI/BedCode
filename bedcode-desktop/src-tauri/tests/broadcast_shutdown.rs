@@ -41,14 +41,12 @@ use bedcode_lib::mdns::advertiser::MdnsAdvertiser;
 use bedcode_lib::plugin::PluginHost;
 use bedcode_lib::server::app::start_http_server;
 use bedcode_lib::server::message::{AuthPayload, AuthStage, Message, SessionControlAction};
-use bedcode_lib::server::services::pairing_service::PairingService;
 use bedcode_lib::server::ws::registry::WsSessionRegistry;
 use bedcode_lib::server::ws::WebSocketManager;
 use bedcode_lib::session::{SessionConfigManager, SessionManager};
 use bedcode_lib::system::app_context::AppContextBuilder;
 use bedcode_lib::system::constants::network::SYNC_EVENT_BROADCAST_CAPACITY;
 use bedcode_lib::system::info::SystemInfo;
-use bedcode_lib::utils::auth::QrTokenManager;
 use bedcode_lib::AppConfig;
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
@@ -83,6 +81,24 @@ where
 
 // ==================== 基建（与 02 ws_pairing_auth 同款模式） ====================
 
+/// 会话中心插件 id（认证端点编排的权威实现方）
+const SESSION_PLUGIN_ID: &str = "com.bedcode.terminal-session";
+
+/// 随包插件产物目录（`cargo test` 前须重建产物，见 AGENTS §3）
+///
+/// 产物缺失时**显性失败**而非跳过：本 target 的令牌换取链没有别的驱动方式，
+/// 静默 `[skip]` 会把「未验证」伪装成「通过」。
+fn bundled_plugins_dir() -> PathBuf {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/plugins/desktop");
+    assert!(
+        dir.join("com.bedcode.terminal-session/bedcode_plugin_terminal_session.wasm")
+            .exists(),
+        "插件产物缺失：先跑 `node scripts/plugin-build.js --plugin terminal-session`（workdir bedcode-desktop），目录 {}",
+        dir.display()
+    );
+    dir
+}
+
 /// 探测空闲端口：绑定 127.0.0.1:0 由 OS 分配，立即释放后交给服务器绑定
 fn pick_free_port() -> u16 {
     let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("probe free port failed");
@@ -104,7 +120,7 @@ async fn spawn_test_server(port: u16) -> std::io::Result<(ServerHandle, tokio::t
 ///
 /// 与 02 的差异：额外完成 sync_tx 接线 + SyncEventHandler 注册——这是本票
 /// 广播链路的必要半程，严格复刻生产 lib.rs 的组装顺序：
-/// 1. session_manager/config_manager set_sync_tx（事件发布侧）
+/// 1. session_manager set_sync_tx（事件发布侧；v22 起 SessionConfigManager 只读、不发配置事件）
 /// 2. global_matcher register_source + register SyncEventHandler（消费侧）
 async fn init_test_app_context() {
     // OnceLock 守卫：本二进制只有一个 #[tokio::test]，但防未来新增测试重复组装
@@ -119,9 +135,14 @@ async fn init_test_app_context() {
         ));
         db.lock().await.init_schema().expect("init db schema failed");
 
-        // 插件目录：独立临时目录（空目录即可——扫描无插件，WASM 引擎仍走真实初始化）
-        let plugins_dir = std::env::temp_dir().join(format!("bedcode-itest-plugins-{}", std::process::id()));
-        std::fs::create_dir_all(&plugins_dir).expect("create temp plugins dir failed");
+        // 票 13：/api/auth/*（配对码换取 JWT）的编排已整体下沉会话中心插件——宿主
+        // 无实现、网关按 PluginRequired 拒转发，故测试改用**真实插件产物**驱动配对。
+        let plugins_dir = bundled_plugins_dir();
+        // 用户插件目录：独立空目录（复用 plugins_dir 会让随包插件被标成
+        // UserInstalled 来源，激活时撞审批门禁）
+        let user_plugins_dir =
+            std::env::temp_dir().join(format!("bedcode-itest-userplugins-{}", std::process::id()));
+        std::fs::create_dir_all(&user_plugins_dir).expect("create temp user plugins dir failed");
 
         // 会话管理器（v21 无库依赖：会话配置/launch 映射归插件，内核不再注入存储）
         let session_manager = Arc::new(SessionManager::new());
@@ -130,7 +151,7 @@ async fn init_test_app_context() {
             PluginHost::new(
                 db.clone(),
                 &plugins_dir,
-                &plugins_dir, // user_plugins_dir：测试上下文无用户插件，复用同一空目录
+                &user_plugins_dir, // 用户插件目录：独立空目录（见上方来源标注说明）
                 session_manager.clone(),
                 config_manager.clone(),
                 None, // 无头/测试上下文无 AppHandle
@@ -139,9 +160,12 @@ async fn init_test_app_context() {
         );
         // 两阶段初始化：注入消息总线 dispatcher（与 lib.rs 生产路径一致）
         plugin_host.init_message_bus().await;
+        // 激活会话中心（随包 FileScan 来源 → 免审批门禁）：/api/auth/* 转发的前置
+        plugin_host
+            .activate_plugin(SESSION_PLUGIN_ID, false)
+            .await
+            .expect("activate com.bedcode.terminal-session (bundled artifact)");
 
-        let pairing_service = Arc::new(PairingService::new());
-        let qr_manager = Arc::new(QrTokenManager::new());
         let mdns_advertiser = Arc::new(tokio::sync::RwLock::new(MdnsAdvertiser::new()));
         let (sync_tx, _) = tokio::sync::broadcast::channel::<DesktopSyncEvent>(SYNC_EVENT_BROADCAST_CAPACITY);
         let system_info = Arc::new(SystemInfo::collect());
@@ -151,8 +175,6 @@ async fn init_test_app_context() {
             .session_manager(session_manager.clone())
             .config_manager(config_manager.clone())
             .plugin_host(plugin_host.clone())
-            .pairing_service(pairing_service.clone())
-            .qr_manager(qr_manager.clone())
             .mdns_advertiser(mdns_advertiser.clone())
             .app_handle(None)
             .sync_tx(sync_tx.clone())
@@ -162,7 +184,6 @@ async fn init_test_app_context() {
 
         // 与生产 lib.rs 同款：会话管理器/配置管理器接入事件总线
         session_manager.set_sync_tx(sync_tx.clone()).await;
-        config_manager.set_sync_tx(sync_tx.clone()).await;
 
         // 与生产同款：注册同步事件处理器（broadcast 消费侧）
         let ws_manager = WebSocketManager::global();
@@ -674,7 +695,8 @@ async fn broadcast_and_shutdown_flow() {
         "no error-level logs are allowed during broadcast & shutdown flow"
     );
 
-    // 清理临时插件目录
-    let plugins_dir = std::env::temp_dir().join(format!("bedcode-itest-plugins-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(plugins_dir);
+    // 清理临时用户插件目录（随包产物目录 resources/plugins/desktop 不得触碰）
+    let user_plugins_dir =
+        std::env::temp_dir().join(format!("bedcode-itest-userplugins-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(user_plugins_dir);
 }

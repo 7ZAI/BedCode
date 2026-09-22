@@ -24,13 +24,11 @@ use bedcode_lib::events::DesktopSyncEvent;
 use bedcode_lib::mdns::advertiser::MdnsAdvertiser;
 use bedcode_lib::plugin::PluginHost;
 use bedcode_lib::server::app::start_http_server;
-use bedcode_lib::server::services::pairing_service::PairingService;
 use bedcode_lib::session::{GlobalOutputManager, OutputEvent, SessionConfigManager, SessionManager};
 use bedcode_lib::system::app_context::{AppContext, AppContextBuilder};
 use bedcode_lib::system::constants::network::SYNC_EVENT_BROADCAST_CAPACITY;
 use bedcode_lib::system::info::SystemInfo;
 use bedcode_lib::utils::auth::jwt::JwtService;
-use bedcode_lib::utils::auth::QrTokenManager;
 use bedcode_lib::AppConfig;
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
@@ -86,8 +84,6 @@ async fn init_test_app_context() {
         );
         plugin_host.init_message_bus().await;
 
-        let pairing_service = Arc::new(PairingService::new());
-        let qr_manager = Arc::new(QrTokenManager::new());
         let mdns_advertiser = Arc::new(tokio::sync::RwLock::new(MdnsAdvertiser::new()));
         let (sync_tx, _) = tokio::sync::broadcast::channel::<DesktopSyncEvent>(SYNC_EVENT_BROADCAST_CAPACITY);
         let system_info = Arc::new(SystemInfo::collect());
@@ -97,8 +93,6 @@ async fn init_test_app_context() {
             .session_manager(session_manager.clone())
             .config_manager(config_manager.clone())
             .plugin_host(plugin_host.clone())
-            .pairing_service(pairing_service.clone())
-            .qr_manager(qr_manager.clone())
             .mdns_advertiser(mdns_advertiser.clone())
             .app_handle(None)
             .sync_tx(sync_tx)
