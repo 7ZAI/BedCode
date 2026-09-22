@@ -176,11 +176,16 @@ export default {
         configuration: 'Configurable',
         lifecycle: 'Lifecycle',
       },
-      // Permission metadata
+      // Permission metadata (covers the whole SDK vocabulary; `risk` exists only for
+      // high-risk permissions and drives the red emphasis in the approval dialog)
       perm: {
         unknown: 'Unknown permission',
         storage: { title: 'Storage', desc: 'Read/write plugin local storage' },
-        'terminal:input': { title: 'Terminal Input', desc: 'Send input to terminal sessions' },
+        'terminal:input': {
+          title: 'Terminal Input',
+          desc: 'Send input to terminal sessions',
+          risk: 'Can inject arbitrary input (including Enter) into your terminal sessions',
+        },
         'terminal:output': { title: 'Terminal Output', desc: 'Listen to terminal output' },
         'terminal:observe': {
           title: 'Terminal Observe',
@@ -188,6 +193,10 @@ export default {
         },
         'session:read': { title: 'Session Read', desc: 'Read session list and status' },
         'session:write': { title: 'Session Write', desc: 'Create, stop or modify sessions' },
+        'session:config': {
+          title: 'Session Config',
+          desc: 'Create, update or delete session configurations (working dir, command)',
+        },
         'ui:sidebar': { title: 'Sidebar Panel', desc: 'Register panels in sidebar' },
         'ui:input': { title: 'Input Extension', desc: 'Extend terminal input area' },
         'ui:toolbox': { title: 'Toolbox Page', desc: 'Register pages in toolbox' },
@@ -195,10 +204,52 @@ export default {
           title: 'Settings Section',
           desc: 'Contribute a settings section to the host settings page',
         },
+        'ui:statusbar': { title: 'Status Bar Item', desc: 'Register items in status bar and title bar' },
+        'ui:dialog': { title: 'Plugin Dialog', desc: 'Show host-styled dialogs' },
+        'ui:pageToolbar': { title: 'Page Toolbar', desc: 'Register action buttons in page toolbars' },
+        'ui:fileHandler': { title: 'File Handler', desc: 'Register handlers that open files by extension' },
         'network:http': { title: 'HTTP Network', desc: 'Make HTTP requests' },
+        'database:main': {
+          title: 'Main Database',
+          desc: 'Read/write the host main database',
+          risk: 'Direct access to the host database, including devices, trust records and settings',
+        },
         'fs:read': { title: 'File Read', desc: 'Read local file system' },
         'fs:write': { title: 'File Write', desc: 'Write to local file system' },
         broadcast: { title: 'Broadcast', desc: 'Broadcast events to other plugins' },
+        'timer:schedule': { title: 'Scheduled Task', desc: 'Register periodic host callbacks' },
+        'process:run': {
+          title: 'Process Run',
+          desc: 'Run external commands on the host machine',
+          risk: 'Can run arbitrary commands and scripts on your machine',
+        },
+        'app:cli': { title: 'Bundled CLI', desc: "Install the plugin's CLI tool onto PATH" },
+        peer: { title: 'Peer Network', desc: 'Discover devices, dial peers and exchange files' },
+        mdns: { title: 'LAN Discovery', desc: 'Advertise and browse LAN services' },
+        'ws:client': { title: 'WebSocket Client', desc: 'Open outbound WebSocket connections' },
+        'ws:server': { title: 'WebSocket Server', desc: 'Listen on WebSocket endpoints in the LAN' },
+        auth: { title: 'Credential Store', desc: "Read/write this plugin's host-managed credentials" },
+        'pty:spawn': {
+          title: 'Private PTY Spawn',
+          desc: 'Spawn and kill the plugin own pseudo-terminals',
+          risk: 'Can spawn pseudo-terminals and start arbitrary shells on your machine',
+        },
+        'pty:io': { title: 'Private PTY IO', desc: "Read, write and resize the plugin's own terminal sessions" },
+        'task:run': { title: 'Concurrent Tasks', desc: 'Run tasks on the host thread pool' },
+      },
+      // ==================== Permission approval (ADR 0020) ====================
+      approve: {
+        hint: 'This plugin permission list is not confirmed yet; approve it before enabling.',
+        action: 'Approve permissions',
+        title: 'Approve plugin permissions',
+        desc: '"{name}" requests the permissions below. They take effect only after approval. If plugin files change afterwards, the approval is revoked automatically.',
+        highRiskLabel: 'High risk',
+        empty: 'This plugin requests no permissions',
+        confirm: 'Approve',
+        cancel: 'Cancel',
+        approving: 'Approving...',
+        success: 'Plugin {name} approved',
+        failed: 'Approval failed: {error}',
       },
       // Stats bar
       stat: {

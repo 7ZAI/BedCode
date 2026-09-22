@@ -77,6 +77,21 @@ export async function pluginDeactivate(pluginId: string): Promise<void> {
   logger.log(`[PluginCmd] pluginDeactivate(${pluginId}) succeeded`)
 }
 
+/**
+ * 批准用户安装插件的权限清单（ADR 0020 审批门禁）
+ *
+ * 宿主按当前 manifest 记录批准集 + 目录内容哈希；返回本次批准的权限清单。
+ * 批准只解除闸门，不隐式启用（调用方需显式再走 activate）。
+ *
+ * @returns 批准生效的权限清单（词汇表内的声明位）
+ */
+export async function pluginApprove(pluginId: string): Promise<string[]> {
+  logger.log(`[PluginCmd] pluginApprove(${pluginId}) invoking...`)
+  const approved = await invoke<string[]>('plugin_approve', { pluginId })
+  logger.log(`[PluginCmd] pluginApprove(${pluginId}) approved ${approved.length} permission(s)`)
+  return approved
+}
+
 /** 标记插件错误 */
 export async function pluginMarkError(pluginId: string, error: string): Promise<void> {
   return await invoke('plugin_mark_error', { pluginId, error })

@@ -94,6 +94,20 @@
                   })
                 }}
               </p>
+              <!-- 待授权：权限清单未经人工确认，启用前必须审批（ADR 0020） -->
+              <div v-if="isNeedsApproval(plugin.state)" class="mt-2 flex items-center gap-2">
+                <span
+                  class="text-[calc(11px*var(--ui-scale))] leading-relaxed text-amber-600 dark:text-amber-400"
+                >
+                  {{ $t('desktop.plugin.approve.hint') }}
+                </span>
+                <button
+                  class="h-6 px-2 rounded-[6px] text-[calc(11px*var(--ui-scale))] font-medium bg-[var(--color-primary)] text-[var(--color-primary-contrast)] hover:opacity-90 transition-opacity shrink-0"
+                  @click="openApprove(plugin)"
+                >
+                  {{ $t('desktop.plugin.approve.action') }}
+                </button>
+              </div>
             </div>
             <!-- 操作列：启停 + 配置，上下并排 -->
             <div class="flex flex-col gap-2 shrink-0">
@@ -316,6 +330,13 @@
       </div>
     </div>
 
+    <!-- ==================== 权限审批弹层（待授权状态的启用前置） ==================== -->
+    <PluginApprovalDialog
+      :plugin="approveTarget"
+      @close="closeApprove"
+      @approved="onApproved"
+    />
+
     <!-- ==================== 启停遮罩弹窗 ==================== -->
     <Teleport to="body">
       <Transition name="overlay">
@@ -408,6 +429,7 @@ import { useToast } from '@/composables/useToast'
 import i18n from '@/locales'
 import PluginIcon from '@/components/PluginIcon.vue'
 import CollapseSection from '@/components/CollapseSection.vue'
+import PluginApprovalDialog from '@/components/PluginApprovalDialog.vue'
 import {
   getContributionChips,
   getPermissionMeta,
@@ -417,6 +439,7 @@ import {
   isDegraded,
   getDegradedMessage,
   isErrorState,
+  isNeedsApproval,
   hasConfiguration,
   isRunning,
   formatBytes,
@@ -437,6 +460,9 @@ const togglingPluginInfo = ref<{ id: string; name: string; message: string } | n
 const showUninstallConfirm = ref(false)
 const uninstallTarget = ref<PluginInfo | null>(null)
 const uninstalling = ref(false)
+/** 权限审批弹层状态（approveThenEnable：由「启用」入口触发时批准后自动继续启用） */
+const approveTarget = ref<PluginInfo | null>(null)
+const approveThenEnable = ref(false)
 
 const TOGGLE_TIMEOUT_MS = 30000
 
@@ -465,18 +491,55 @@ function goBack(): void {
   router.push({ path: '/plugins', query: { ...route.query } })
 }
 
-/** 状态徽章样式（Error 红 / Degraded 琥珀 / Activated 绿 / 其余中性） */
+/** 状态徽章样式（Error 红 / Degraded 与待授权 琥珀 / Activated 绿 / 其余中性） */
 function stateBadgeClass(state: PluginState): string {
   if (isErrorState(state)) return 'bg-red-50 dark:bg-red-500/10 text-red-600 dark:text-red-400'
-  if (isDegraded(state))
+  if (isDegraded(state) || isNeedsApproval(state))
     return 'bg-amber-50 dark:bg-amber-500/10 text-amber-600 dark:text-amber-400'
   if (isActivated(state))
     return 'bg-green-50 dark:bg-green-500/10 text-green-600 dark:text-green-400'
   return 'bg-[var(--bg-hover)] text-[var(--text-tertiary)]'
 }
 
-/** 切换启停（带遮罩） */
+/** 打开权限审批弹层（approveThenEnable=false：仅审批，不自动启用） */
+function openApprove(target: PluginInfo): void {
+  approveThenEnable.value = false
+  approveTarget.value = target
+}
+
+/** 关闭审批弹层（遮罩/取消；不动插件状态） */
+function closeApprove(): void {
+  approveTarget.value = null
+  approveThenEnable.value = false
+}
+
+/** 批准成功：关闭弹层并刷新；由「启用」入口触发时继续启用 */
+async function onApproved(pluginId: string): Promise<void> {
+  const continueEnable = approveThenEnable.value
+  closeApprove()
+  await loadPlugin()
+  if (continueEnable) {
+    await runToggle(pluginId, true)
+  }
+}
+
+/**
+ * 切换启停入口：待授权状态的「启用」先走审批（批准后自动继续启用），
+ * 其余情况直接执行启停
+ */
 async function handleToggle(id: string, enable: boolean): Promise<void> {
+  if (togglingId.value) return
+  const target = plugin.value
+  if (enable && target && isNeedsApproval(target.state)) {
+    approveThenEnable.value = true
+    approveTarget.value = target
+    return
+  }
+  await runToggle(id, enable)
+}
+
+/** 执行启停（带遮罩） */
+async function runToggle(id: string, enable: boolean): Promise<void> {
   if (togglingId.value) return
   const name = plugin.value?.name || id
 

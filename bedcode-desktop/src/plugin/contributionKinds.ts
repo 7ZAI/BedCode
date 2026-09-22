@@ -82,9 +82,25 @@ export interface PermissionMeta {
   emoji: string
   titleKey: string
   descKey: string
+  /** 高危位的后果文案（仅高危位有；审批弹层据此红色强调，见 HIGH_RISK_PERMISSIONS） */
+  riskKey?: string
 }
 
-/** 13 项桌面端权限元数据注册表（未知权限回退原始串，见 getPermissionMeta） */
+/**
+ * 高危权限位（ADR 0020 审批裁决 3：整单批准 + 高位视觉强调）
+ *
+ * 判据是「一旦授予即可在用户机器上执行任意代码 / 读写他人数据」：
+ * 进程执行、伪终端创建（等价于任意命令）、终端输入（注入执行）、主库面（内含
+ * 设备/信任/设置等他方数据）。清单固定，变更需同步 risk 文案与弹层行为。
+ */
+export const HIGH_RISK_PERMISSIONS: readonly string[] = [
+  'process:run',
+  'pty:spawn',
+  'terminal:input',
+  'database:main',
+]
+
+/** 权限元数据注册表（覆盖 SDK 词汇表全部条目；未知权限回退原始串，见 getPermissionMeta） */
 const PERMISSION_META: Record<string, PermissionMeta> = {
   storage: {
     emoji: '💾',
@@ -95,6 +111,7 @@ const PERMISSION_META: Record<string, PermissionMeta> = {
     emoji: '⌨️',
     titleKey: 'desktop.plugin.perm.terminal:input.title',
     descKey: 'desktop.plugin.perm.terminal:input.desc',
+    riskKey: 'desktop.plugin.perm.terminal:input.risk',
   },
   'terminal:output': {
     emoji: '📺',
@@ -116,6 +133,11 @@ const PERMISSION_META: Record<string, PermissionMeta> = {
     titleKey: 'desktop.plugin.perm.session:write.title',
     descKey: 'desktop.plugin.perm.session:write.desc',
   },
+  'session:config': {
+    emoji: '🛠️',
+    titleKey: 'desktop.plugin.perm.session:config.title',
+    descKey: 'desktop.plugin.perm.session:config.desc',
+  },
   'ui:sidebar': {
     emoji: '📋',
     titleKey: 'desktop.plugin.perm.ui:sidebar.title',
@@ -136,10 +158,36 @@ const PERMISSION_META: Record<string, PermissionMeta> = {
     titleKey: 'desktop.plugin.perm.ui:settings.title',
     descKey: 'desktop.plugin.perm.ui:settings.desc',
   },
+  'ui:statusbar': {
+    emoji: '📊',
+    titleKey: 'desktop.plugin.perm.ui:statusbar.title',
+    descKey: 'desktop.plugin.perm.ui:statusbar.desc',
+  },
+  'ui:dialog': {
+    emoji: '🪟',
+    titleKey: 'desktop.plugin.perm.ui:dialog.title',
+    descKey: 'desktop.plugin.perm.ui:dialog.desc',
+  },
+  'ui:pageToolbar': {
+    emoji: '🧷',
+    titleKey: 'desktop.plugin.perm.ui:pageToolbar.title',
+    descKey: 'desktop.plugin.perm.ui:pageToolbar.desc',
+  },
+  'ui:fileHandler': {
+    emoji: '🗂️',
+    titleKey: 'desktop.plugin.perm.ui:fileHandler.title',
+    descKey: 'desktop.plugin.perm.ui:fileHandler.desc',
+  },
   'network:http': {
     emoji: '🌐',
     titleKey: 'desktop.plugin.perm.network:http.title',
     descKey: 'desktop.plugin.perm.network:http.desc',
+  },
+  'database:main': {
+    emoji: '🗄️',
+    titleKey: 'desktop.plugin.perm.database:main.title',
+    descKey: 'desktop.plugin.perm.database:main.desc',
+    riskKey: 'desktop.plugin.perm.database:main.risk',
   },
   'fs:read': {
     emoji: '📂',
@@ -155,6 +203,63 @@ const PERMISSION_META: Record<string, PermissionMeta> = {
     emoji: '📩',
     titleKey: 'desktop.plugin.perm.broadcast.title',
     descKey: 'desktop.plugin.perm.broadcast.desc',
+  },
+  'timer:schedule': {
+    emoji: '⏱️',
+    titleKey: 'desktop.plugin.perm.timer:schedule.title',
+    descKey: 'desktop.plugin.perm.timer:schedule.desc',
+  },
+  'process:run': {
+    emoji: '⚡',
+    titleKey: 'desktop.plugin.perm.process:run.title',
+    descKey: 'desktop.plugin.perm.process:run.desc',
+    riskKey: 'desktop.plugin.perm.process:run.risk',
+  },
+  'app:cli': {
+    emoji: '🔗',
+    titleKey: 'desktop.plugin.perm.app:cli.title',
+    descKey: 'desktop.plugin.perm.app:cli.desc',
+  },
+  peer: {
+    emoji: '📡',
+    titleKey: 'desktop.plugin.perm.peer.title',
+    descKey: 'desktop.plugin.perm.peer.desc',
+  },
+  mdns: {
+    emoji: '🔍',
+    titleKey: 'desktop.plugin.perm.mdns.title',
+    descKey: 'desktop.plugin.perm.mdns.desc',
+  },
+  'ws:client': {
+    emoji: '🔌',
+    titleKey: 'desktop.plugin.perm.ws:client.title',
+    descKey: 'desktop.plugin.perm.ws:client.desc',
+  },
+  'ws:server': {
+    emoji: '🛰️',
+    titleKey: 'desktop.plugin.perm.ws:server.title',
+    descKey: 'desktop.plugin.perm.ws:server.desc',
+  },
+  auth: {
+    emoji: '🔑',
+    titleKey: 'desktop.plugin.perm.auth.title',
+    descKey: 'desktop.plugin.perm.auth.desc',
+  },
+  'pty:spawn': {
+    emoji: '🖥️',
+    titleKey: 'desktop.plugin.perm.pty:spawn.title',
+    descKey: 'desktop.plugin.perm.pty:spawn.desc',
+    riskKey: 'desktop.plugin.perm.pty:spawn.risk',
+  },
+  'pty:io': {
+    emoji: '⌨️',
+    titleKey: 'desktop.plugin.perm.pty:io.title',
+    descKey: 'desktop.plugin.perm.pty:io.desc',
+  },
+  'task:run': {
+    emoji: '🧵',
+    titleKey: 'desktop.plugin.perm.task:run.title',
+    descKey: 'desktop.plugin.perm.task:run.desc',
   },
 }
 
@@ -178,13 +283,37 @@ export function getContributionChips(plugin: PluginInfo): ContributionChip[] {
 }
 
 /** 获取权限元数据（未知权限回退原始字符串） */
-export function getPermissionMeta(perm: string): { emoji: string; title: string; desc: string } {
+export function getPermissionMeta(perm: string): {
+  emoji: string
+  title: string
+  desc: string
+  risk?: string
+} {
   const t = i18n.global.t
   const meta = PERMISSION_META[perm]
   if (!meta) {
     return { emoji: '🔐', title: perm, desc: t('desktop.plugin.perm.unknown') }
   }
-  return { emoji: meta.emoji, title: t(meta.titleKey), desc: t(meta.descKey) }
+  return {
+    emoji: meta.emoji,
+    title: t(meta.titleKey),
+    desc: t(meta.descKey),
+    risk: meta.riskKey ? t(meta.riskKey) : undefined,
+  }
+}
+
+/**
+ * 是否为高危权限位（审批弹层红色强调 + 后果文案）
+ *
+ * 真源是 [`HIGH_RISK_PERMISSIONS`]；弹层只对命中的位追加风险行，其余位不出现红色元素。
+ */
+export function isHighRiskPermission(perm: string): boolean {
+  return HIGH_RISK_PERMISSIONS.includes(perm)
+}
+
+/** 是否为「待人工批准」状态（未确认权限清单，启用前需审批） */
+export function isNeedsApproval(state: PluginState): boolean {
+  return state.state === 'NeedsApproval'
 }
 
 /** 详细信息行（详情页"详细信息"折叠区使用） */

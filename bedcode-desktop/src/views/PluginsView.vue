@@ -360,6 +360,9 @@
         </button>
       </template>
     </Modal>
+
+    <!-- ==================== 权限审批弹层（待授权插件启用前置） ==================== -->
+    <PluginApprovalDialog :plugin="approveTarget" @close="closeApprove" @approved="onApproved" />
   </div>
 </template>
 
@@ -378,10 +381,12 @@ import LoadingOverlay from '@/components/LoadingOverlay.vue'
 import PluginPageToolbar from '@/plugin/components/PluginPageToolbar.vue'
 import PluginIcon from '@/components/PluginIcon.vue'
 import Modal from '@/components/Modal.vue'
+import PluginApprovalDialog from '@/components/PluginApprovalDialog.vue'
 import { open } from '@tauri-apps/plugin-dialog'
 import { pluginInstallFromFile } from '@/plugin/commands'
 import { useToast } from '@/composables/useToast'
 import i18n from '@/locales'
+import type { PluginInfo } from '@/plugin/types'
 import {
   getContributionChips,
   getStateKey,
@@ -389,6 +394,7 @@ import {
   getDegradedMessage,
   isErrorState,
   getErrorMessage,
+  isNeedsApproval,
   hasConfiguration,
   isRunning,
 } from '@/plugin/contributionKinds'
@@ -402,6 +408,8 @@ const t = i18n.global.t
 /** 加载插件弹窗状态 */
 const showInstallSheet = ref(false)
 const installing = ref(false)
+/** 权限审批弹层目标（待授权插件点启用时先审批，批准后自动继续启用） */
+const approveTarget = ref<PluginInfo | null>(null)
 
 /** 从文件安装：文件选择器选 zip 插件包 → 后端安装 → 刷新列表 */
 async function handleInstallFile(): Promise<void> {
@@ -437,9 +445,26 @@ function goDetail(pluginId: string): void {
   router.push({ name: 'plugin-detail', params: { id: pluginId } })
 }
 
-/** 处理切换 */
+/** 处理切换：待授权插件的「启用」先走审批弹层（批准后自动继续启用） */
 async function handleToggle(id: string, enable: boolean): Promise<void> {
+  const target = plugins.value.find((p) => p.id === id)
+  if (enable && target && isNeedsApproval(target.state)) {
+    approveTarget.value = target
+    return
+  }
   await togglePlugin(id, enable)
+}
+
+/** 关闭审批弹层 */
+function closeApprove(): void {
+  approveTarget.value = null
+}
+
+/** 批准成功：刷新列表后继续启用（与详情页同语义） */
+async function onApproved(pluginId: string): Promise<void> {
+  closeApprove()
+  await loadPlugins()
+  await togglePlugin(pluginId, true)
 }
 
 onMounted(() => {
