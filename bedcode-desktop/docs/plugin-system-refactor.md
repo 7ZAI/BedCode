@@ -36,7 +36,7 @@
   - `plugins/auto-task/rust/src/hooks.rs`：`ensure_project_hooks`/`build_hooks_config`/`is_hooks_port_token_matching` 去掉 token 参数（改名 `is_hooks_port_matching`，env 前缀仅 `BEDCODE_PORT`）
   - `plugins/auto-task/rust/src/token.rs`：删除死文件（无 `mod token`）
   - `plugins/auto-task/scripts/auto_task_hook.py`：删 3 处 token 门控、payload `token` 字段、`&token=` 查询参数、文档字符串
-  - `server/controllers/plugin_controller.rs` + `server/middleware/jwt_auth.rs`：更新注释（无 plugin token 概念）
+  - `server/http/controllers/plugin_controller.rs` + `server/http/middleware/jwt_auth.rs`：更新注释（无 plugin token 概念）
   - `plugins/auto-task/rust/src/state.rs`：网关认证注释措辞调整
 - [x] **P1.2 补齐 WASM host function 权限校验**
   - `host_session_list` / `host_session_get` / `host_session_config_list` → `session:read`

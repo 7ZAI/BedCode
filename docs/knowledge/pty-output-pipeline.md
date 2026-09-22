@@ -78,16 +78,16 @@ UnifiedOutputQueue（字节块环，唯一缓冲，50MB）
 
 ### 1.2 订阅者执行体（合帧 + 窗口门控）与编码（TB v3）
 
-- `server/ws/terminal_ws/subscriber.rs`（每订阅链路一个执行体）：
+- `server/websocket/terminal_ws/subscriber.rs`（每订阅链路一个执行体）：
   - 循环：等唤醒（`watch` 新数据 / ack）→ 读水印 → 截断检测 → 合帧推进 → 窗口门控 → `out_tx` 交接
   - **合帧**：realtime = 时间窗（`flush_interval`）+ 字节窗（`max_buffer_size`）；batch = 满 `batch_bytes` 才发（无时间窗）；`flush_interval = ZERO` = 零缓冲直通；模式翻转即时 flush 残留批次
   - **窗口门控**：`next − acked ≥ 高位水` → 驻留（`park_until_ack`，ack 唤醒 + `park_poll` 兜底轮询）；窗口降到低位水解除
   - **僵尸回收**：窗口持续不降超 `subscriber_zombie_timeout_ms` → 下发 `error{code:"lag_truncated"}` + 关闭该连接（只影响这一路）
   - 历史边界（I7）：`[历史帧] → HistoryEnd → [实时帧]`；**空历史也必发 HistoryEnd**（否则客户端等不到边界）；重同步后不再发（resync 帧自带边界）
-- `server/ws/terminal_ws/forward.rs`：
+- `server/websocket/terminal_ws/forward.rs`：
   - `encode_output_frame_v3(start_offset, is_waiting, data)`：`magic "TB"(2) + version=3(1) + flags(1) + start_offset(8 LE) + len(4 LE) + data`（16 字节头；flags bit0 = is_waiting；无事件数编码、无 128 上限）
   - `OutputBuffer`（纯决策/编码单元）：`is_contiguous_with(start)` 连续性切批判定 + `should_flush(mode, batch_bytes, max_buffer_size, since_last_flush, flush_interval)` 合帧触发判定——**新旧路径共用同一实现**（帧头区间 = 负载；带洞/重叠必切批）
-- `server/ws/terminal_ws/control_frame.rs` 控制帧（JSON）：
+- `server/websocket/terminal_ws/control_frame.rs` 控制帧（JSON）：
   - 客户端 → 服务端：`auth {token}`、`subscribe {from_offset?}`（缺省 = 服务端从 min_offset 全量回放，老客户端兼容）、`input {data(base64), special_key?}`、`mode {realtime|batch}`
   - 服务端 → 客户端：`auth_ok`、`subscribe_ok {protocol:3, snapshot_offset, min_offset, history_bytes}`、`history_end {snapshot_offset}`、`resync {min_offset, snapshot_offset}`（§1.5）、`session_stopped {session_id}`、`error {code, message}`
 - 背压 ack（客户端 → 服务端二进制）：TB 帧头 + flags ACK(0x02) + `acked_offset(8 LE)` + `len(4 LE)` + session_id 负载；服务端按 `client_id`（= 连接地址）路由到**该订阅者私有**的 ack 水位（单调前移，I6；陈旧/乱序 ack 天然忽略）

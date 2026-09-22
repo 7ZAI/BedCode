@@ -1,6 +1,6 @@
 # 移动端连接桌面端 — 认证机制
 
-> **⚠️ 时效提示（2026-09-10 更新）**：本文主干（设备发现 / WS 连接 / 三种认证方式 / 重连机制）仍然有效；但自 2026-09-10 起，移动端认证请求体新增 `uidHash` 字段（设备唯一 ID 哈希，跨卸载重装稳定），桌面端据其合并同一设备的重复配对记录——本文字段表未覆盖。认证明细以 `bedcode-mobile/src-tauri/src/auth/http.rs`（DeviceAuthContext）与桌面端 `server/` DTO 为准。
+> **⚠️ 时效提示（2026-09-10 更新）**：本文主干（设备发现 / WS 连接 / 三种认证方式 / 重连机制）仍然有效；但自 2026-09-10 起，移动端认证请求体新增 `uidHash` 字段（设备唯一 ID 哈希，跨卸载重装稳定），桌面端据其合并同一设备的重复配对记录——本文字段表未覆盖。认证明细以 `bedcode-mobile/src-tauri/src/auth/http.rs`（DeviceAuthContext）与桌面端 `server/http/dtos/` 为准。
 
 本文档描述移动端（Mobile）连接桌面端（Desktop）的完整链路，包括设备发现、WebSocket 连接建立、三种认证方式（配对码 / QR 码 / JWT 重认证）以及断线重连机制。
 
@@ -207,7 +207,7 @@ Mobile                              Desktop
 - **一次性**: 验证成功后立即消耗，不可复用
 - **每次请求生成新码**: 不复用现有配对码，确保用户有足够时间输入
 
-源码: `bedcode-desktop/src-tauri/src/utils/auth/pairing.rs`、`bedcode-desktop/src-tauri/src/server/services/pairing_service.rs`
+源码: `bedcode-desktop/plugins/terminal-session/rust/src/pairing/`（配对码生成 / 验证编排已随认证记录下沉认证中心插件；宿主 `utils/auth/pairing.rs` 已删）
 
 ### 5.3 桌面端处理
 
@@ -217,7 +217,7 @@ Mobile                              Desktop
 4. 收到 `VerifyCode` + 配对码 → 调用 `PairingService::verify_and_consume_code()`
 5. 验证通过 → 生成 JWT Token，记录配对到数据库，回复 `Authenticated`
 
-源码: `bedcode-desktop/src-tauri/src/server/services/auth_service.rs`
+源码: `bedcode-desktop/plugins/terminal-session/rust/src/pairing/`（`RequestPairing` → 配对码编排在认证中心插件；宿主侧 WS 首消息认证窗口在 `bedcode-desktop/src-tauri/src/server/websocket/conn.rs`，`PairingService` 已退役）
 
 ### 5.4 移动端处理
 
@@ -460,7 +460,7 @@ Disconnected ──connect()──► Connecting ──WS握手──► Connect
 | `/api/auth/reauth` | POST | JWT 重认证 |
 | `/api/health` | GET | 健康检查（连接探测用） |
 
-源码: `bedcode-desktop/src-tauri/src/server/controllers/auth_controller.rs`
+源码: `bedcode-desktop/plugins/terminal-session/rust/src/auth_http/`（`/api/auth/*` 端点编排已下沉认证中心插件，宿主不再注册认证业务路由——JWT 之前的入口经网关免验签转发）
 
 ---
 
@@ -470,14 +470,14 @@ Disconnected ──connect()──► Connecting ──WS握手──► Connect
 
 | 文件 | 职责 |
 |------|------|
-| `src-tauri/src/utils/auth/jwt.rs` | JWT 生成/验证（HS256，7 天有效期） |
-| `src-tauri/src/utils/auth/pairing.rs` | 配对码数据结构（6 位数字，60 秒有效期） |
-| `src-tauri/src/utils/auth/qr_token.rs` | QR Token 管理（128-bit hex，一次性） |
-| `src-tauri/src/server/services/auth_service.rs` | WS 认证消息处理（核心路由） |
-| `src-tauri/src/server/services/pairing_service.rs` | 配对码业务逻辑 |
-| `src-tauri/src/server/controllers/auth_controller.rs` | HTTP 认证 API |
-| `src-tauri/src/server/ws/terminal_ws.rs` | WS Actor，消息分发 |
-| `src-tauri/src/server/ws/websocket_manager.rs` | WS 连接管理器（单例） |
+| `src-tauri/src/utils/auth/jwt.rs` | JWT 生成/验证（HS256，7 天有效期；宿主 `host-auth` 密钥托管） |
+| `plugins/terminal-session/rust/src/pairing/code.rs` | 配对码生成/验证（6 位数字，60 秒有效期；编排已下沉认证中心插件） |
+| `plugins/terminal-session/rust/src/pairing/qr.rs` | QR 配对 Token（一次性；编排已下沉认证中心插件） |
+| `src-tauri/src/server/websocket/conn.rs` | WS 连接骨架：首消息认证窗口（JWT 重连 / 配对流程） |
+| `plugins/terminal-session/rust/src/pairing/` | 配对码业务逻辑（认证中心插件，宿主 `PairingService` 已退役） |
+| `plugins/terminal-session/rust/src/auth_http/` | HTTP 认证 API（认证中心插件，宿主经网关免验签转发） |
+| `src-tauri/src/server/websocket/terminal_ws/` + `websocket/conn.rs` | WS 终端输出端子面（control_frame / forward / subscriber）+ 连接骨架 |
+| `src-tauri/src/server/websocket/websocket_manager.rs` | WS 连接管理器（单例） |
 | `src-tauri/src/mdns/advertiser.rs` | mDNS 服务广播 |
 | `src-tauri/src/enums/auth.rs` | AuthStage / AuthPayload 定义 |
 

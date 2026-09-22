@@ -87,6 +87,9 @@ bedcode-desktop/                      # 桌面端项目 (Tauri 2.0 + Vue 3)
         │                             #   re-export / 服务器九域，按 `// ====================` 分隔分组；
         │                             #   只保留宿主页面（外壳 / 终端引擎）直调的命令，业务面一律归插件命令面
         ├── db/                       # SQLite：连接管理、数据模型、CRUD 操作、Schema
+        │                             #   v24：settings / plugin_storage / plugin_secrets 三表（业务表
+        │                             #   pairings / connection_history / session_configs 已退役，存量由
+        │                             #   plugin/auth_records_migration.rs 迁入认证中心私有库）
         ├── enums/                    # 枚举类型：认证、控制、插件、PTY 状态、会话、Shell、特殊键、同步
         ├── events/                   # 全局事件系统：AppEvent trait、事件匹配、SessionManager→前端转发、
         │                             #   同步事件定义与处理（→ WebSocket 广播）
@@ -98,7 +101,8 @@ bedcode-desktop/                      # 桌面端项目 (Tauri 2.0 + Vue 3)
         │                             #   宿主不持有传输历史、设置或任务真源
         ├── plugin/                   # 插件系统（WASM 组件沙箱架构，核心模块，详见 Core Modules）
         ├── pty/                      # PTY 管理：进程生命周期、输出读取/缓存/监听、命令构建、WSL 支持
-        ├── server/                   # Actix Web HTTP + WS 服务器（核心模块，详见 Core Modules）
+        ├── server/                   # 服务器（核心模块，详见 Core Modules）：core/ 传输无关内核 +
+        │                             #   http/ 与 websocket/ 两个传输面，单端口组合物在 core/app.rs
         ├── session/                  # 会话管理（核心模块，详见 Core Modules）
         ├── system/                   # 系统模块：应用上下文 (DI 容器)、配置、错误类型、生命周期钩子、
         │                             #   日志格式化、休眠阻止；constants/ 下按领域分组的常量
@@ -148,6 +152,12 @@ Rust 侧按内核五模块组织（`plugin.rs` 为唯一组合点/facade，外�
     能力名 → 宿主原语 / WASM 系统组件实例二选一装配；应用插件的 host-* import 由 Linker 经此
     host-side 转发到系统组件同形导出；系统组件内置、默认启用、先于应用插件激活
   - **storage / types / validation / watcher**：插件存储、类型定义、校验、开发模式热重载监听
+- **一次性 handoff 模块（宿主侧迁移）**：`quick_actions_migration`（快捷指令 legacy 主库 → 会话插件
+  私有库，经互调 api 推送）、`auth_records_migration`（2026-09-22 认证记录下沉：legacy `pairings` /
+  `connection_history` 存量行 → 认证中心私有库 `auth_records` 域，经互调 api `auth-records-import`
+  推送，生物公钥寄主 `plugin_secrets` key=`biometric:<fp>`；推送成功即 DROP 两表）、
+  `task_data_migration` / `session_db_migration`（插件私有库路径迁移）——均跑在 `PluginHost::new`
+  之后、插件按持久化状态激活后；幂等（插件侧 marker），失败不阻断启动
 - **security/（core-security）**：资源授权——framework（统一授权框架：ResourceKind × 三段决策管线
   声明/审批/强制，fs / api-call 资源实现）、approval（用户 zip 安装插件的权限审批与内容钉扎，ADR 0020：
   批准记录 + 目录哈希，`PluginHost::activate_plugin` 前置 `approval_gate` 裁决，弹层 UI 为
@@ -189,7 +199,7 @@ ABI v14；宿实现 `plugin/manager/wasm_runtime/host_impl/ws.rs`。**零业务�
   收发原语 `send-text-to-client` / `send-binary-to-client` / `broadcast-text` / `broadcast-binary`、
   踢出 `close-client`（缺省 4004）、注销 `unregister-endpoint`（含下线全部客户端 4005）、
   清单 `list-clients` / `list-endpoints`（丢失事件后的自愈快照）；
-- **端点注册表**：`server/ws/endpoint.rs`（端点句柄 → 属主 / 挂载路径 / 认证策略 / 上限 / 事件总线）；
+- **端点注册表**：`server/websocket/endpoint.rs`（端点句柄 → 属主 / 挂载路径 / 认证策略 / 上限 / 事件总线）；
 - **双通道投递**：状态事件走消息总线**属主私有 topic**（`<owner>::ws:open|error|close`、
   `<owner>::ws:client-connect|client-disconnect`，标识在 payload；票 05 命名空间门禁——
   跨属主订阅在 Rust 端显式拒绝，他人也伪投递不进）；
@@ -200,17 +210,19 @@ ABI v14；宿实现 `plugin/manager/wasm_runtime/host_impl/ws.rs`。**零业务�
 
 WIT 契约 `host-auth`（v15 密钥托管四函数 + v18 记录面四函数，SDK `rust/wit/bedcode.wit`）、
 **无可选导出**，ABI desktop 17 → 18（mobile 不跟演，见 ADR 0022「双端偏离」）；宿实现
-`plugin/manager/wasm_runtime/host_impl/auth.rs`。**裁剪线（ADR 0022）**：宿主只给
-「读原始记录 / 软删撤销 / 白名单设置写入」，排序、`is-active` 过滤、解读与展示组织全部归插件。
+`plugin/manager/wasm_runtime/host_impl/auth.rs`。**v24 认证记录下沉**：记录面四函数
+（trusted-devices-list / revoke、connection-history-list）随 `pairings` / `connection_history`
+表退役——配对设备 / 连接历史真源在认证中心私有库 `auth_records` 域（插件
+`auth_records/`，表 `auth_pairings` / `auth_connection_history`），存量数据由宿主 handoff
+`plugin/auth_records_migration.rs` 一次性迁入（经互调 api `auth-records-import`）；
+`host-auth` 只保留密钥托管 / 生物凭证原语（bound/verify/bind，公钥在 `plugin_secrets`
+key=`biometric:<fp>`）/ device-token / link-identity / setting。**裁剪线（ADR 0022）**：宿主只给
+引擎级原语，排序、过滤、解读与展示组织全部归插件。
 
-- **`trusted-devices-list`**：内核 `pairings` 表**全表**原始记录（含 `is_active = 0` 的软删行，
-  不排序）。全量返回是刻意的——撤销检测依赖「已撤销记录仍可见」，只回活跃集合会让
-  「已撤销」与「从未配对」不可区分（判定退化为 fail-open）。JSON 元素
-  `{id, deviceName, deviceFingerprint, address?, pairedAt, lastSeen?, connectCount, isActive}`；
-- **`trusted-device-revoke`**：内核 `remove_pairing` 语义（`is_active = 0` 软删 + 连带删除该设备
-  连接历史），返回是否命中；未知 id 幂等 `false`，已软删记录再撤销仍 `true`（不重复写）。
-  **不做**断开在线连接（宿主现状语义）；
-- **`connection-history-list(device-id)`**：内核 `connection_history` 原始记录（`device_id` = `pairings.id`）；
+- **（v24 退役）** `trusted-devices-list` / `trusted-device-revoke` /
+  `connection-history-list`：宿主主库 `pairings` / `connection_history` 已删表，三原语不再提供——
+  配对记录读写归认证中心私有库（插件 `auth_records::records/revoke`），撤销语义不变
+  （`is_active = 0` 软删 + 连带删连接历史；软删行保留供撤销检测）；
 - **`auth-setting-set(key, value)`**：内核 `settings` 表写入，键白名单 `pairing_code_ttl` /
   `qr_token_ttl` + 正整数校验（宿主命令面据此取 TTL；读取走宿主配置 / 命令面）；
 - **凭据红线（AGENTS §8）**：`pairings.session_token` / `public_key` 不出口，日志只记长度。
@@ -271,41 +283,45 @@ WIT 契约 `host-task`（5 函数：execute-batch / submit / status / cancel / l
 - **fixture 闭环**：`packages/plugin-task-test`（wasm32-wasip3）+ `wasm_runtime.rs` 的
   `test_task_*`（并行保序 / 事件管道 / status / cancel 幂等 / legacy 降级 / 双门权限）。
 
-### 服务器 — `src-tauri/src/server/`（Actix Web HTTP + WS）
+### 服务器 — `src-tauri/src/server/`（Actix Web HTTP + WS 单端口）
 
-移动端与桌面端通信的唯一入口：
+移动端与桌面端通信的唯一入口。三层读法：`core/` 传输无关内核、`http/` / `websocket/` 两个传输面；
+`core/app.rs` 是**唯一**同时认识两面的文件（单端口组合物，I3 豁免，票 08 结构锁钉死）。
+每个传输面的路由改动只落在自己目录的 `routes.rs`。
 
-- **controllers/ + dtos/**：HTTP REST 控制器与请求/响应 DTO（auth、plugin、session）——
-  票 02/03/04 contract 后 config / file / git 控制器已全部退役（config_dto / file_dto /
-  git_dto 保留为形状契约锚点）
-- **gateway.rs**：**HTTP 协议网关**（平台基础服务，宿主业务清零票 01）——一张业务 URL 别名路由表
-  （`/api/configs`、`/api/quick-actions`、`/api/file-tree|file-tree-children|file-content|diff-tree|file-diff`、
-  `/api/git/*` → 目标插件端点，条目带归属插件 + 业务域 + 方法声明）+ 中间件 `business_gateway`。
-  判定是纯函数 `decide(verified, activated, declared, endpoint_auth)`：**宿主已验签 + 目标插件已激活 +
-  该端点在插件 manifest `contributes.httpEndpoints` 逐字声明**三者齐备才切插件，否则原样落宿主旧实现
-  （双轨期）；认证要求取「条目 `RouteAuth` 与插件声明档位**较严者**」（票 08），两者任一要验签而未验签
-  即 `AuthRequired` → 401（不再报成「插件未激活」）。
-  转发复用 `controllers/plugin_controller.rs::forward_to_plugin` 同一内核与同一声明治理（不另发明传输机制），
-  调用方身份也同一出处（`caller_identity` → `caller` = device/localhost/anonymous + `device` 上下文）；
-  宿主业务实现退役后条目 `FallbackPolicy` 翻 `PluginRequired` → 明确报「插件未激活」而不给假数据
-  （票 02：configs / quick-actions；票 03：五个文件浏览端点；票 04：git 三端点——十条业务别名已全部
-  PluginRequired，宿主业务路由清零）。
-  载荷纪律：降级分支不 `into_parts`，payload 原样留给宿主 handler
-- **controllers/plugin_controller.rs**：`ANY /api/plugin/{id}/{path}` 代理——属主解析（旧前缀别名）→
-  **只认 manifest 声明**的精确匹配（票 08 起未声明清单不再换来「前缀内 ANY 放行」）→ 端点级认证档位
-  （`auth: "none"` 之外一律要求已验签）→ 同一 `forward_to_plugin` 内核
-- **middleware/**：CORS、JWT 网关（公开路径/插件路径放行规则；具名中间件 `jwt_auth::jwt_gateway`，
-  协议网关必须挂在它**之后**——`Scope::wrap` 后注册者先执行，故 `app.rs` 里网关写在验签之前）、
-  HTTP 流量过滤器中间件
-- **filter.rs**：传输层流量过滤器责任链——TrafficFilter trait + 全局
-  TrafficFilterChain 单例；HTTP（请求体/响应体）与 WS（收发帧）统一接入，
-  过滤器可观察/改写收发数据
-- **link_crypto.rs**：局域网链路报文加密（issue 01-04）——X25519 静态身份密钥
-  Kd（落盘/指纹/损坏拒重建）、HKDF 方向分离派生、HTTP 信封协议 + WS 双 ECDH
-  握手与帧编解码；以 LinkEncryptionFilter 注册进全局链生效；配置域
-  trafficEncryption 全部默认关（opt-in），get/set 命令供设置页调用
-- **services/**：业务服务（认证、配对、会话配置/控制、终端服务）
-- **ws/**：全部 WS 服务层（连接骨架 + 通道处理器 + 注册表 + 端点表 + 终端转发子模块）
+- **core/**（传输无关内核）：`app.rs` 单端口组合物（`start_http_server` + App 级 wrap——CORS / Logger /
+  metrics 计数 / `TrafficFilter`——+ 只调两侧 `configure_routes` 的装配）；`supervisor.rs` 服务器生命周期 /
+  mDNS 联动 / 指标采样；`port_checker.rs` 端口探测与冲突弹窗；`filter.rs` 跨传输流量过滤器链
+  （TrafficFilterChain + TrafficChannel{Http,WsTerminal,WsEvent,WsPlugin}）；`metrics.rs` 跨传输计数器；
+  `link_crypto.rs` 链路加密（HTTP 信封 + WS 帧两分支共享身份与配置，不可拆）
+- **http/**（HTTP 传输面）：
+  - **routes.rs**：两个公开端点（`/api/health` 健康检查、`/static/terminal-bg` 背景图，均不经 JWT——
+    理由见各自注释）+ `/api` scope 与其 wrap 链（JWT 验签 → 业务网关，顺序硬约束）；
+  - **gateway.rs**：**HTTP 协议网关**（平台基础服务，宿主业务清零票 01）——一张业务 URL 别名路由表
+    （`/api/configs`、`/api/quick-actions`、`/api/file-tree|file-tree-children|file-content|diff-tree|file-diff`、
+    `/api/git/*` → 目标插件端点，条目带归属插件 + 业务域 + 方法声明）+ 中间件 `business_gateway`。
+    判定是纯函数 `decide(verified, activated, declared, endpoint_auth)`：**宿主已验签 + 目标插件已激活 +
+    该端点在插件 manifest `contributes.httpEndpoints` 逐字声明**三者齐备才切插件，否则原样落宿主旧实现
+    （双轨期）；认证要求取「条目 `RouteAuth` 与插件声明档位**较严者**」（票 08），两者任一要验签而未验签
+    即 `AuthRequired` → 401（不再报成「插件未激活」）。
+    转发复用 `controllers/plugin_controller.rs::forward_to_plugin` 同一内核与同一声明治理（不另发明传输机制），
+    调用方身份也同一出处（`caller_identity` → `caller` = device/localhost/anonymous + `device` 上下文）；
+    宿主业务实现退役后条目 `FallbackPolicy` 翻 `PluginRequired` → 明确报「插件未激活」而不给假数据
+    （票 02：configs / quick-actions；票 03：五个文件浏览端点；票 04：git 三端点——十条业务别名已全部
+    PluginRequired，宿主业务路由清零）。
+    载荷纪律：降级分支不 `into_parts`，payload 原样留给宿主 handler
+  - **controllers/**：`plugin_controller.rs` `ANY /api/plugin/{id}/{path}` 代理——属主解析（旧前缀别名）→
+    **只认 manifest 声明**的精确匹配（票 08 起未声明清单不再换来「前缀内 ANY 放行」）→ 端点级认证档位
+    （`auth: "none"` 之外一律要求已验签）→ 同一 `forward_to_plugin` 内核；`session_controller.rs`
+    会话 REST 控制器；**dtos/** 请求/响应 DTO（票 02/03/04 contract 后 config / file / git 控制器已全部
+    退役，config_dto / file_dto / git_dto 保留为形状契约锚点）
+  - **middleware/**：`jwt_auth` JWT 网关（公开路径/插件路径放行规则；具名中间件 `jwt_gateway`，
+    协议网关必须挂在它**之后**——`Scope::wrap` 后注册者先执行，故 `http/routes.rs` 里网关写在验签之前）、
+    `http_filter` HTTP 流量过滤器中间件
+- **websocket/**（WS 传输面）：
+  - **routes.rs**：三条握手端点（`/ws/terminal/session/{id}`、`/ws/event`、`/ws/plugin/{plugin_id}/{path}`，
+    未注册 / 属主未激活 404、连接数超限**升级前** 503）+ `ws_frame_limit` + 属主激活闸门
+    `endpoint_owner_activated`
   - **conn.rs**：**通用连接骨架**（零业务语义）——心跳（5s ping / 45s 超时）、首消息认证策略
     `AuthMode{Required,None}` 与认证窗口、帧级流量过滤链（inbound / outbound）、注册表登记与
     离线判定、连接终止原因（`CloseOutcome`）透出、优雅关闭；`ChannelHandler` trait 是通道协议
@@ -313,14 +329,15 @@ WIT 契约 `host-task`（5 函数：execute-batch / submit / status / cancel / l
   - **channel/{terminal,event,plugin}.rs**：三个通道实现——`/ws/terminal/session/{id}`（控制帧协议）、
     `/ws/event`（旧 `Message` 兼容面）、`/ws/plugin/{plugin_id}/{path}`（插件端点：认证策略由端点
     声明、帧转投属主插件、接入/断开事件上报）。**新增通道 = 新增一个实现 + 路由构造点，不改骨架**；
+  - **registry.rs / endpoint.rs**：连接注册表（`ChannelKind{Terminal,Event,Plugin}` + owner/endpoint_id，
+    广播过滤、在线判定、端点域寻址与属主回收）；插件端点注册表（属主 + 挂载路径 + 认证策略 + 上限 +
+    总线；只碰本人的回收）；
   - **subscription.rs**：输出订阅原语（订阅/退订/传播模式 + 背压 ack + 桥接任务）；
-  - **endpoint.rs**：插件端点注册表（属主 + 挂载路径 + 认证策略 + 上限 + 总线；只碰本人的回收）；
-  - **registry.rs**：连接注册表（`ChannelKind{Terminal,Event,Plugin}` + owner/endpoint_id，
-    广播过滤、在线判定、端点域寻址与属主回收）；
   - **terminal_ws/**（control_frame / forward / subscriber）与 **message.rs**（移动端兼容红线）、
     **websocket_manager.rs**（生命周期与优雅停机；停机前对插件端点客户端下发 1001）、**session.rs**
-- **app.rs / supervisor.rs**：路由配置（含插件端点通配路由 `/ws/plugin/{plugin_id}/{path:.*}`，
-  未注册 / 属主未激活 404、连接数超限升级前 503）与服务器启动、服务器生命周期管理；另有端口检查、指标
+    （WsSession 连接态）、**connection_types.rs**（连接事件）；
+  - **services/**（session_control / terminal_service）：会话控制与终端输入**不是 WS 传输原语**
+    （ADR 0022 裁剪线视角，归属应为会话业务、后续下沉插件线）——本目录只是临时住处
 
 ### 会话管理 — `src-tauri/src/session/`
 
@@ -329,14 +346,11 @@ WIT 契约 `host-task`（5 函数：execute-batch / submit / status / cancel / l
   「先权限门后属主」的判定与文案在 `host_impl`，与会话销毁一并注销）；
   会话状态变更直接持 `broadcast::Sender<SessionStatusEvent>`（原 `event_bus.rs` 的
   `SessionEvent`/`SessionEventBus` 只剩单一状态事件、无订阅者，已收缩删除）
-- **session_config**：`SessionConfigManager`——v22 起收缩为**只读**迁移通道：唯一用途是
-  `com.bedcode.terminal-session` 的一次性 legacy 迁移（plugin 激活时经 host-session 读取面
-  `config-list` / `config-get` 读主库 `session_configs`，marker 幂等，见插件 `config/ops.rs::migrate`）；
-  业务 CRUD 真源在插件私有库。写面已整体退役：v22 删 host-session 写原语
-  （`config-upsert` / `config-delete`，死接口）与权限位 `session:config`（config-get 改挂 `session:read`），
-  `SessionConfigManager` 的写方法与 Config 同步事件发布随之删除（引擎层 SQL 写接口保留为
-  基础服务）；主库 `session_configs` 表保留为迁移源，观测信号（启动 `legacy_rows` 计数）归零后
-  作 contract 删除（`.scratch/2026-09-22-pty-business-downsink/spec.md` 阶段 1/2）
+- **session_config**：`SessionConfigManager`——v24 起为装配占位壳（无业务方法）：
+  v22 曾收缩为只读迁移通道（读主库 `session_configs` 迁私有库）；2026-09-22 用户裁定
+  `session_configs` 表直接退役（不等 legacy 观测归零），host-session 配置面
+  （config-list / config-get）随表删除，插件私有库是会话配置唯一真源，无迁移步骤。
+  类型保留仅因装配链引用（`WasmHostContext.config_manager` 等），待装配链清空后整体删除；
 - **session_output**：输出管理（缓存/队列/订阅/全局），支撑多端输出回放
 - **session_lifecycle**：生命周期事件（Creating/Created/Stopping/Stopped）与监听器机制，插件扩展点
 - **input_line**：会话输入扩展点（SessionInputListener + 提交行重构）
@@ -402,7 +416,7 @@ Rust 侧以 `abi.rs` 为宿主/插件共同引用的单一事实来源（签名�
 | Tauri 命令 | `src-tauri/src/commands.rs` |
 | PTY 进程与输出 | `src-tauri/src/pty/` |
 | 会话管理与生命周期 | `src-tauri/src/session/` |
-| HTTP/WS 服务器、REST 控制器、终端 WS | `src-tauri/src/server/` |
+| HTTP/WS 服务器（core/http/websocket 三层）、REST 控制器、终端 WS | `src-tauri/src/server/` |
 | 设备认证 / 配对 / QR Token | `src-tauri/src/utils/auth/` |
 | ANSI / Markdown 解析 | `src-tauri/src/utils/parser/` |
 | 数据库 | `src-tauri/src/db/` |
@@ -411,7 +425,7 @@ Rust 侧以 `abi.rs` 为宿主/插件共同引用的单一事实来源（签名�
 | 对等网络（节点/信任/发现） | `src-tauri/src/peer_net.rs` |
 | 对等传输引擎适配（发送/接收/远端浏览） | `src-tauri/src/peer_net.rs`、`peer_engine_transfer.rs`、`peer_engine_receive.rs`、`peer_engine_remote.rs` |
 | 对等网络底座 crate | `../packages/peer-net`、`../packages/link-crypto` |
-| 链路加密（HTTP 信封 + WS 帧） | `src-tauri/src/server/link_crypto.rs`、`src/composables/`（useLinkCrypto） |
+| 链路加密（HTTP 信封 + WS 帧） | `src-tauri/src/server/core/link_crypto.rs`、`src/composables/`（useLinkCrypto） |
 | 插件系统 (Rust) | `src-tauri/src/plugin/` |
 | 插件系统 (前端) | `src/plugin/`、`src/composables/`（usePluginManager） |
 | 插件开发 SDK | `packages/plugin-sdk-desktop/` |
@@ -446,7 +460,7 @@ Claude Code (PTY)
 - **生命周期扩展**：插件经 `SessionLifecycleListener` 在 Creating 阶段注入 hooks、Stopped 阶段清理
 - **输入扩展点**：插件经 `SessionInputListener` 观察提交的输入行
 
-涉及目录：`plugins/terminal-session/`（`rust/src/task/` + `src/components/TaskHistoryView.vue` / `TaskQueueModal.vue`）、`src-tauri/src/plugin/`、`src-tauri/src/server/controllers/`（plugin_controller）、`src-tauri/src/events/`、`src-tauri/src/session/`（lifecycle/input_line）、`src-tauri/src/pty/`。
+涉及目录：`plugins/terminal-session/`（`rust/src/task/` + `src/components/TaskHistoryView.vue` / `TaskQueueModal.vue`）、`src-tauri/src/plugin/`、`src-tauri/src/server/http/controllers/`（plugin_controller）、`src-tauri/src/events/`、`src-tauri/src/session/`（lifecycle/input_line）、`src-tauri/src/pty/`。
 
 ### 按类型查找
 
@@ -457,15 +471,15 @@ Claude Code (PTY)
 | 系统常量 | `src-tauri/src/system/constants/*.rs` |
 | 数据库 | `src-tauri/src/db/*.rs` |
 | 枚举类型 | `src-tauri/src/enums/*.rs` |
-| 业务服务 | `src-tauri/src/server/services/*.rs` |
-| DTO | `src-tauri/src/server/dtos/*.rs` |
+| WS 会话控制 / 终端服务 | `src-tauri/src/server/websocket/services/*.rs` |
+| DTO | `src-tauri/src/server/http/dtos/*.rs` |
 | 前端插件系统 | `src/plugin/` |
 | 插件源码 | `plugins/*/` |
 | 插件 SDK | `packages/plugin-sdk-desktop/` |
 | WASM 宿主能力 | `src-tauri/src/plugin/manager/wasm_runtime/host_impl/` |
 | 插件随包 CLI 安装/卸载 | `src-tauri/src/plugin/host/` |
 | 对等网络 | `src-tauri/src/peer_*.rs`（命令注册于 `lib.rs`） |
-| 链路加密 | `src-tauri/src/server/link_crypto.rs` |
+| 链路加密 | `src-tauri/src/server/core/link_crypto.rs` |
 | 加密工具（报文/文件传输加密） | `src-tauri/src/utils/crypto/` |
 | 认证工具 | `src-tauri/src/utils/auth/*.rs` |
 | 解析器 | `src-tauri/src/utils/parser/*.rs` |

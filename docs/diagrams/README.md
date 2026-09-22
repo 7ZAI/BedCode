@@ -44,7 +44,7 @@
 | [pty-output-flow-desktop.html](./pty-output-flow-desktop.html) | dataflow | 桌面端：`pty_reader.rs` 读 PTY fd → `SessionOutputManager`（unacked 64KB→pause / 8KB→resume）→ `OutputBuffer`/`forward_loop` → `TerminalWs` actor（TB v3 二进制帧） | [pty-output-flow-desktop.json](./pty-output-flow-desktop.json) |
 | [pty-output-flow-mobile.html](./pty-output-flow-mobile.html) | dataflow | 移动端：`TerminalLink`（TB v3 解析 + ack 节流）→ `SessionCache`（16MB LRU）→ `terminalBuffer` → `writeCoalescer` → `xterm.js`，含 ack 反馈环 | [pty-output-flow-mobile.json](./pty-output-flow-mobile.json) |
 
-关键代码锚点：`bedcode-desktop/src-tauri/src/pty/pty_reader.rs`、`bedcode-desktop/src-tauri/src/session/session_output.rs`、`bedcode-desktop/src-tauri/src/server/ws/terminal_ws.rs`、`bedcode-mobile/src-tauri/src/terminal_link.rs`、`bedcode-mobile/src/composables/useTerminalBuffer.ts`、`bedcode-mobile/src/composables/writeCoalescer.ts`、`bedcode-mobile/src/stores/terminalBuffer.ts`
+关键代码锚点：`bedcode-desktop/src-tauri/src/pty/pty_reader.rs`、`bedcode-desktop/src-tauri/src/session/session_output.rs`、`bedcode-desktop/src-tauri/src/server/websocket/terminal_ws/`（control_frame / forward / subscriber 三子模块）+ `websocket/conn.rs`（连接骨架，原 `ws/terminal_ws.rs` 已无承载）、`bedcode-mobile/src-tauri/src/terminal_link.rs`、`bedcode-mobile/src/composables/useTerminalBuffer.ts`、`bedcode-mobile/src/composables/writeCoalescer.ts`、`bedcode-mobile/src/stores/terminalBuffer.ts`
 
 ## 相关
 
