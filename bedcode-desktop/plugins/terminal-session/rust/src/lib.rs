@@ -1558,11 +1558,11 @@ mod tests {
 
     /// 能力面声明只随已落地语义增长：票 05 = pairing 八项 + trust 两项 + consent 一项；
     /// 票 08 = config 三项（配置真源私有库）；票 09 = session-create（创建编排）；
-    /// 票 10 = 会话动作四项（restart / remove / rename / resize 裁决）；
+    /// 票 10 = 会话动作四项 + 配置面只读化（v22，`session:config` 权限随写原语退役）；
     /// 票 11 = annotate（注解槽写面）+ devices-connect-list（设备派生视图）。
     /// 权限 = `auth`（host-auth 密钥托管 + 记录面）+ `peer`（consent 取可信集 /
-    /// trust peer 段）+ `storage`（票 08 私有库）+ `session:read` / `session:config`
-    /// （配置面）+ `session:write`（创建与动作原语）。未经评审不得预声明（D2 权限
+    /// trust peer 段）+ `storage`（票 08 私有库）+ `session:read`（配置读取面 + 会话
+    /// 记录）+ `session:write`（创建与动作原语）。未经评审不得预声明（D2 权限
     /// 与能力映射一对一对应）
     #[test]
     fn declares_only_landed_domain_surface() {
@@ -1583,15 +1583,17 @@ mod tests {
                 // 票 03：文件浏览域 git diff 经 host-process run-sync（同步执行并
                 // 捕获输出；与 process:run 同信任域——执行任意命令，声明即信任）
                 "process:run".to_string(),
-                // 票 08：`session:read`（config-list 精简列表 + get 登记事实）+
-                // `session:config`（config-get 全量行 + 后续写入）
-                // ——迁移读 legacy 主库的唯一通道
-                "session:config".to_string(),
+                // 票 08：`session:read`（config-list 精简列表 + get 全量行）——
+                // v22 起配置面只读，`session:config` 权限已随写原语退役；
+                // 读取面是迁移读 legacy 主库的唯一通道
                 "session:read".to_string(),
                 // 票 09/10：host-session.create-with-spec 与四项会话动作原语
                 "session:write".to_string(),
                 // 票 08：host-plugin-database（配置真源私有库）
                 "storage".to_string(),
+                // 票 21（v20 host-task）：`task:run` ——git 域 diff_file_tree 三路只读
+                // 命令改走 execute-batch 并行（池线程真并发，替代 run-sync 串行）
+                "task:run".to_string(),
                 "terminal:input".to_string(),
                 "terminal:observe".to_string(),
                 "timer:schedule".to_string(),
@@ -1601,11 +1603,6 @@ mod tests {
                 "ui:input".to_string(),
                 "ui:settings".to_string(),
                 "ui:sidebar".to_string(),
-                // 票 14：`ui:sidebar`（票 13 起运行期注册侧边栏目录实际需要，此前漏
-                // 声明）、`ui:settings`（设置页配对分组贡献面）同为纯前端贡献面权限
-                // 票 21（v20 host-task）：`task:run` ——git 域 diff_file_tree 三路只读
-                // 命令改走 execute-batch 并行（池线程真并发，替代 run-sync 串行）
-                "task:run".to_string(),
             ],
             "spec D2 权限表：认证 auth/peer + 进程 process:run（票 03 git）+ 会话 \
              session:read/session:config/session:write + storage + ui:input/ui:sidebar/ui:settings"

@@ -123,6 +123,7 @@ mod tests {
             environment: env,
             working_dir: "D:\\work".to_string(),
             command: command.to_string(),
+            command_args: None,
             env_vars: HashMap::new(),
             cols: 120,
             rows: 40,

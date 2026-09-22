@@ -193,6 +193,12 @@ pub(crate) struct LaunchSpec {
     pub name: String,
     /// 命令串（原始命令语义，宿主嵌入 shell 包装）
     pub command: String,
+    /// 裸 argv（pty 票 1 新增，可选）：非空时宿主按 argv 数组原样 exec——
+    /// **不做 shell 包装 / WSL 转换**（插件侧已算好完整 argv，`launch.rs::build_argv`）；
+    /// 缺省/空 → 走 `command` 字符串 + 宿主 `build_command` 包装的旧路径。
+    /// 字段追加不 bump（函数签名不变）；老宿主忽略该字段走旧路径，新老双向兼容。
+    #[serde(default)]
+    pub command_args: Option<Vec<String>>,
     /// 追加参数（可选；非空时以空格拼接追加到 command 后，shell 再解释）
     #[serde(default)]
     pub args: Vec<String>,
@@ -248,11 +254,28 @@ pub(crate) fn resolve_launch_spec(
     if spec.name.trim().is_empty() {
         return Err("session error: launch spec name is empty".to_string());
     }
-    if spec.command.trim().is_empty() {
-        return Err("session error: launch spec command is empty".to_string());
-    }
     if spec.cwd.trim().is_empty() {
         return Err("session error: launch spec cwd is empty".to_string());
+    }
+
+    // pty 票 1：`command_args` 非空 → 裸 argv 路径。引擎只守可 exec 边界：
+    // argv[0] 非空（空 argv0 无法 spawn）+ 无 NUL 字节（exec 注入面）；元素本身的
+    // shell 语义不做校验（raw exec 天然免注入，转义防护归插件 `build_argv`）。
+    // command 非空校验仅在旧路径（无 command_args）时生效。
+    let command_args = match &spec.command_args {
+        Some(args) if !args.is_empty() => {
+            if args[0].trim().is_empty() {
+                return Err("session error: launch spec commandArgs[0] is empty".to_string());
+            }
+            if args.iter().any(|a| a.contains('\0')) {
+                return Err("session error: launch spec commandArgs contains NUL byte".to_string());
+            }
+            Some(args.clone())
+        }
+        _ => None,
+    };
+    if command_args.is_none() && spec.command.trim().is_empty() {
+        return Err("session error: launch spec command is empty".to_string());
     }
 
     // 构造启动配置：command + args 追加；尺寸缺省 = 默认网格（与既有
@@ -266,6 +289,7 @@ pub(crate) fn resolve_launch_spec(
         environment: spec.environment.clone(),
         working_dir: spec.cwd.clone(),
         command,
+        command_args,
         env_vars: spec.env.clone(),
         cols: spec.cols.filter(|c| *c > 0).unwrap_or(120),
         rows: spec.rows.filter(|r| *r > 0).unwrap_or(40),
@@ -853,6 +877,61 @@ mod tests {
         assert!(!spec.start, "start=false 透传");
     }
 
+    /// commandArgs（pty 票 1 裸 argv 路径）：非空 → `command_args` 透传（宿主 raw
+    /// exec）；缺省/空 → 旧路径（`command` 字符串 + shell 包装）；argv[0] 空 / NUL
+    /// 拒绝（可 exec 边界）；commandArgs 与 command 并存时 raw 优先（command 仅冗余
+    /// 透传，不再校验非空）
+    #[test]
+    fn resolve_launch_spec_command_args_raw_argv_path() {
+        // ① raw argv 路径：Linux 环境 + 插件算好的 bash -lic 包装 argv
+        let (_, lc) = resolve_launch_spec(
+            r#"{
+                "name": "dev(1)",
+                "command": "bash",
+                "commandArgs": ["bash", "-lic", "cd '/home/u' && pwd && pnpm dev"],
+                "cwd": "/home/u",
+                "environment": {"type": "Linux"}
+            }"#,
+        )
+        .expect("resolve ok");
+        assert_eq!(
+            lc.command_args.as_deref(),
+            Some(&["bash".to_string(), "-lic".to_string(), "cd '/home/u' && pwd && pnpm dev".to_string()][..]),
+            "commandArgs 必须整体透传（宿主不解释 argv）"
+        );
+        assert_eq!(lc.command, "bash", "command 字段仅冗余透传，原样保留");
+
+        // ② 缺省（无 commandArgs）→ 旧路径 None；command 非空校验仍生效
+        let (_, lc) = resolve_launch_spec(r#"{"name":"s","command":"bash","cwd":"/","environment":{"type":"Linux"}}"#)
+            .expect("resolve ok");
+        assert!(lc.command_args.is_none(), "缺省必须 None，走旧路径 shell 包装");
+        let err = resolve_launch_spec(r#"{"name":"s","command":"","cwd":"/","environment":{"type":"Linux"}}"#);
+        assert!(err.is_err(), "旧路径空 command 必须拒绝");
+
+        // ③ 空数组（commandArgs: []）→ 视为旧路径（None）
+        let (_, lc) =
+            resolve_launch_spec(r#"{"name":"s","command":"bash","commandArgs":[],"cwd":"/","environment":{"type":"Linux"}}"#)
+                .expect("resolve ok");
+        assert!(lc.command_args.is_none(), "空数组视为旧路径");
+
+        // ④ raw 路径下 command 可为空字符串（仅 argv 生效）
+        let (_, lc) = resolve_launch_spec(
+            r#"{"name":"s","command":"","commandArgs":["wsl.exe","-d","Ubuntu","--","bash","-lic","pwd"],"cwd":"/","environment":{"type":"Wsl2","distro":"Ubuntu"}}"#,
+        )
+        .expect("raw path with empty command ok");
+        assert!(lc.command_args.is_some(), "raw 路径存在即生效（command 空不再拒绝）");
+
+        // ⑤ 可 exec 边界：argv[0] 空 / 含 NUL → 显性拒绝
+        let err = resolve_launch_spec(
+            r#"{"name":"s","command":"","commandArgs":["","-lic"],"cwd":"/","environment":{"type":"Linux"}}"#,
+        );
+        assert!(err.unwrap_err().contains("commandArgs[0] is empty"), "空 argv0 必须拒绝");
+        let err = resolve_launch_spec(
+            r#"{"name":"s","command":"","commandArgs":["bash","-c","echo \u0000"],"cwd":"/","environment":{"type":"Linux"}}"#,
+        );
+        assert!(err.unwrap_err().contains("contains NUL"), "NUL 字节必须拒绝");
+    }
+
     /// 空会话库：列表返回空 JSON 数组（内存 SessionManager）
     #[tokio::test]
     async fn session_list_empty_ok() {
@@ -903,6 +982,7 @@ mod tests {
             environment: ExecutionEnvironment::Linux,
             working_dir: "/tmp".to_string(),
             command: "bash".to_string(),
+            command_args: None,
             env_vars: std::collections::HashMap::new(),
             cols: 120,
             rows: 40,
@@ -931,6 +1011,7 @@ mod tests {
             environment: ExecutionEnvironment::Linux,
             working_dir: "/tmp".to_string(),
             command: "bash".to_string(),
+            command_args: None,
             env_vars: std::collections::HashMap::new(),
             cols: 120,
             rows: 40,

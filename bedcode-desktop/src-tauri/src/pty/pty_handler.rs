@@ -59,6 +59,7 @@ mod tests {
             },
             working_dir: std::env::temp_dir().to_string_lossy().into_owned(),
             command: "echo hello".to_string(),
+            command_args: None,
             env_vars: HashMap::new(),
             cols: 80,
             rows: 24,

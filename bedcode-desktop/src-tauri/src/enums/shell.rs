@@ -53,6 +53,12 @@ pub struct SessionLaunchConfig {
     pub working_dir: String,
     /// 启动命令
     pub command: String,
+    /// 裸 argv（可选，pty 票 1 新增路径）：非空时宿主按 argv 数组原样 exec，
+    /// **不做 shell 包装**（无 bash -lic / PowerShell -Command / CMD /K、无 WSL 路径转换）；
+    /// 缺省/空 → 走 `command` 字符串 + 宿主 `build_command` 包装的旧路径。
+    /// 插件经 `create-with-spec` 的 `commandArgs` 字段传入。
+    #[serde(default)]
+    pub command_args: Option<Vec<String>>,
     /// 环境变量
     #[serde(default)]
     pub env_vars: HashMap<String, String>,
@@ -82,6 +88,7 @@ impl SessionLaunchConfig {
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_else(|_| ".".to_string()),
             command: command.into(),
+            command_args: None,
             env_vars: HashMap::new(),
             cols: default_cols(),
             rows: default_rows(),
@@ -158,6 +165,7 @@ mod tests {
             environment: ExecutionEnvironment::Linux,
             working_dir: "/home/u".to_string(),
             command: "bash".to_string(),
+            command_args: None,
             env_vars: {
                 let mut m = HashMap::new();
                 m.insert("FOO".to_string(), "bar".to_string());

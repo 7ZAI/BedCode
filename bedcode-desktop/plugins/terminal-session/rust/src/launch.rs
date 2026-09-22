@@ -123,6 +123,10 @@ pub struct LaunchSpec {
     pub name: String,
     /// 原始命令串（宿主嵌入 shell 包装）
     pub command: String,
+    /// 裸 argv（pty 票 1）：`build_argv` 算好的完整 argv（shell 包装/转义已在插件
+    /// 侧完成），宿主 raw exec 不做二次解释；缺省/空 → 旧路径（command 字符串）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command_args: Option<Vec<String>>,
     /// 追加参数（当前配置无 args 概念，恒为空数组）
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<String>,
@@ -168,9 +172,19 @@ pub fn build_launch_spec(
     } else {
         config.command.clone()
     };
+    // pty 票 1：shell 包装下沉——完整 argv 由插件算好（转义/WSL 转换在此层），
+    // 宿主经 `commandArgs` raw exec；command 字符串仍随 spec 透传（旧宿主忽略
+    // commandArgs 走旧路径，新老双向兼容）。先借 command 算 argv，再 move 进 spec。
+    let command_args = Some(build_argv(
+        &config.environment,
+        config.wsl_distro.as_deref(),
+        &config.working_dir,
+        &command,
+    )?);
     Ok(LaunchSpec {
         name: String::new(), // 占位：调用方先命名唯一化再填入
         command,
+        command_args,
         args: Vec::new(),
         cwd: config.working_dir.clone(),
         cols,
@@ -192,6 +206,110 @@ fn default_command_for(environment: &str) -> String {
         "powershell".to_string()
     } else {
         "bash".to_string()
+    }
+}
+
+// ==================== shell 包装下沉（pty 票 1）：build_argv ====================
+
+/// Windows 路径 → WSL 内路径（复刻宿主 `pty/wsl.rs::windows_to_wsl_path`，下行
+/// 语义逐字等价：正斜杠/反斜杠两种输入形态都归一化，WSL2 新旧前缀 + 盘符分支）
+pub fn windows_to_wsl_path(path: &str) -> String {
+    // 先统一分隔符，使 `/` 与 `\` 两种写法走同一套解析（盘符分支再转回）
+    let path = path.replace('/', "\\");
+
+    if path.starts_with("\\\\wsl.localhost\\") {
+        // 新格式: \\wsl.localhost\Ubuntu\home\user -> /home/user（WSL2 1903+）
+        let rest = path.trim_start_matches('\\').trim_start_matches("wsl.localhost\\");
+        let parts: Vec<&str> = rest.splitn(2, '\\').collect();
+        if parts.len() >= 2 {
+            return format!("/{}", parts[1].replace('\\', "/"));
+        }
+        return rest.replace('\\', "/");
+    }
+
+    if path.starts_with("\\\\wsl$") {
+        // 旧格式: \\wsl$\Ubuntu\home\user -> /home/user
+        let rest = path.trim_start_matches('\\');
+        let parts: Vec<&str> = rest.splitn(3, '\\').collect();
+        if parts.len() >= 3 {
+            return format!("/{}", parts[2].replace('\\', "/"));
+        }
+        return rest.replace('\\', "/");
+    }
+
+    // 盘符路径: C:\Users\test -> /mnt/c/Users/test
+    if path.len() >= 2 && path.chars().nth(1) == Some(':') {
+        let drive = path.chars().next().unwrap().to_ascii_lowercase();
+        let rest = &path[2..].replace('\\', "/");
+        return format!("/mnt/{}{}", drive, rest);
+    }
+
+    // 类 Unix 路径透传
+    path.replace('\\', "/")
+}
+
+/// shell 包装 → argv（pty 票 1：宿主 `pty/command.rs::build_command` 的插件侧复刻）
+///
+/// 由插件计算**完整 argv**（含 bash -lic 包装、wsl.exe 前缀、转义），经
+/// `create-with-spec.commandArgs` 交宿主 raw exec（宿主不再做 shell 解释）。
+/// 分支决策与转义规则与宿主旧实现逐语义等价：
+/// - linux：`bash -lic "cd '<esc>' && pwd && <cmd>"`（-i 让 .bashrc 交互守卫通过）
+/// - wsl2：`wsl.exe -d <distro> -- bash -lic <脚本>`（路径先转 WSL 形态）
+/// - windows：PowerShell（config 域三值之一，无 CMD 分支；与 `resolve_environment`
+///   的 `{"type":"Windows","shell":"PowerShell"}` 输出一致）
+///
+/// **安全边界（working_dir 来自配置 wire，不可信）**：
+/// - PowerShell：单引号字面量内 `'` → `''`（`&;$"` 在单引号串内为字面，无需转义）
+/// - Linux/WSL：bash 单引号内 `'` → `'\''`（闭合注入防护，与宿主同款）
+/// - CMD 不产生（插件侧无 cmd 环境分支；若宿主旧路径仍被旧产物使用，其危险字符
+///   拒绝逻辑保留在宿主 `build_command` 内直至旧路径退役）
+pub fn build_argv(
+    environment: &str,
+    wsl_distro: Option<&str>,
+    working_dir: &str,
+    command: &str,
+) -> Result<Vec<String>, String> {
+    match environment.to_ascii_lowercase().as_str() {
+        "linux" => {
+            // bash 单引号转义：working_dir 含 `'` 会闭合 `cd '…'` 字面量执行任意命令
+            let escaped = working_dir.replace('\'', "'\\''");
+            let script = format!("cd '{}' && pwd && {}", escaped, command);
+            Ok(vec!["bash".to_string(), "-lic".to_string(), script])
+        }
+        "wsl2" => {
+            let distro = wsl_distro
+                .map(|d| d.trim().to_string())
+                .filter(|d| !d.is_empty())
+                .unwrap_or_else(|| "Ubuntu".to_string());
+            let wsl_path = windows_to_wsl_path(working_dir);
+            let escaped = wsl_path.replace('\'', "'\\''");
+            let script = format!("cd '{}' && pwd && {}", escaped, command);
+            Ok(vec![
+                "wsl.exe".to_string(),
+                "-d".to_string(),
+                distro,
+                "--".to_string(),
+                "bash".to_string(),
+                "-lic".to_string(),
+                script,
+            ])
+        }
+        "windows" => {
+            // PowerShell 单引号内 `'` → `''`；其余字符（`&;$"`）在单引号串内为字面
+            let escaped = working_dir.replace('\'', "''");
+            let script = format!(
+                "chcp 65001 > $null; [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new(); Set-Location '{}'; Write-Host 'Working directory:' $PWD.Path; {}",
+                escaped, command
+            );
+            Ok(vec![
+                "powershell.exe".to_string(),
+                "-NoLogo".to_string(),
+                "-NoExit".to_string(),
+                "-Command".to_string(),
+                script,
+            ])
+        }
+        other => Err(format!("build_argv: unsupported environment: {other}")),
     }
 }
 
@@ -415,6 +533,69 @@ mod tests {
         // wire 键名 camelCase 锁定
         assert!(json.get("configId").is_some(), "configId 键名锁定");
         assert!(json.get("cwd").is_some(), "cwd 键名锁定");
+    }
+
+    // ==================== build_argv（pty 票 1：shell 包装下沉） ====================
+
+    /// linux：bash -lic 包装 + 单引号转义（working_dir 含 `'` → `'\''`，闭合注入防护）
+    #[test]
+    fn build_argv_linux_bash_lic_with_quote_escape() {
+        let argv = build_argv("linux", None, "/home/usr/o'brien", "pnpm dev").expect("argv");
+        assert_eq!(argv[0], "bash");
+        assert_eq!(argv[1], "-lic");
+        assert_eq!(
+            argv[2],
+            "cd '/home/usr/o'\\''brien' && pwd && pnpm dev",
+            "工作目录含单引号必须闭合转义（与宿主 build_command Linux 分支同款）"
+        );
+    }
+
+    /// wsl2：wsl.exe 前缀 + distro 透传 + WSL 路径转换 + bash 脚本
+    #[test]
+    fn build_argv_wsl2_prefix_and_path_conversion() {
+        let argv = build_argv("wsl2", Some("Ubuntu-22.04"), r"\\wsl.localhost\Ubuntu/home/user", "zsh")
+            .expect("argv");
+        assert_eq!(
+            argv,
+            vec![
+                "wsl.exe", "-d", "Ubuntu-22.04", "--", "bash", "-lic",
+                "cd '/home/user' && pwd && zsh",
+            ]
+        );
+        // distro 缺省 → Ubuntu（与 resolve_environment 同款缺省）
+        let argv = build_argv("wsl2", None, "/home/u", "bash").expect("argv");
+        assert_eq!(argv[2], "Ubuntu", "distro 缺省 Ubuntu");
+        // 正斜杠 WSL 前缀形态与反斜杠等价（复刻宿主 wsl.rs 票据 01 修复）
+        assert_eq!(windows_to_wsl_path("//wsl.localhost/Ubuntu/home/user"), "/home/user");
+        assert_eq!(windows_to_wsl_path("//wsl$/Ubuntu/home/user"), "/home/user");
+    }
+
+    /// windows：PowerShell 包装（chcp 65001 UTF-8 + Set-Location）+ `'` → `''` 转义
+    #[test]
+    fn build_argv_windows_powershell_utf8_and_escape() {
+        let argv = build_argv("windows", None, r"D:\work\it's", "dir").expect("argv");
+        assert_eq!(argv[0], "powershell.exe");
+        assert!(argv.iter().any(|a| a == "-NoExit"));
+        let script = argv.last().unwrap();
+        assert!(script.contains("chcp 65001 > $null"), "UTF-8 输出编码必须设置");
+        assert!(script.contains("Set-Location 'D:\\work\\it''s'"), "单引号 → '' 转义");
+        assert!(script.contains("; dir"));
+    }
+
+    /// 未知环境：显性报错（不静默兜底）
+    #[test]
+    fn build_argv_unsupported_environment_errors() {
+        let err = build_argv("bogus", None, "/tmp", "bash").unwrap_err();
+        assert!(err.contains("unsupported environment"), "got: {err}");
+    }
+
+    /// Windows 路径转换全形态（复刻宿主 wsl.rs 测试：盘符 / 新旧 WSL 前缀 / 类 Unix 透传）
+    #[test]
+    fn windows_to_wsl_path_all_forms() {
+        assert_eq!(windows_to_wsl_path("C:\\Users\\test"), "/mnt/c/Users/test");
+        assert_eq!(windows_to_wsl_path("D:/Projects/my-app"), "/mnt/d/Projects/my-app");
+        assert_eq!(windows_to_wsl_path(r"\\wsl$\Ubuntu\home\user"), "/home/user");
+        assert_eq!(windows_to_wsl_path("/home/user"), "/home/user");
     }
 
     /// 空命令兜底：config.command 空 → 按环境分支给默认 shell

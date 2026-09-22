@@ -1,6 +1,6 @@
 # PTY 业务语义下沉专项（Business PTY Downsink）
 
-Status: in-progress（2026-09-22 立项；阶段 1 实施中）
+Status: in-progress（2026-09-22 立项；**票 1 已 landed 2026-09-22**；阶段 1 已 landed fc760448e）
 Date: 2026-09-22
 范围: **仅桌面端**（`bedcode-desktop/src-tauri/src/pty/`、`src-tauri/src/session/` 的 Business 消费线、
 `plugins/terminal-session/` 的 launch 域、`packages/plugin-sdk-desktop/`）；`bedcode-mobile/` 零改动、
@@ -106,10 +106,30 @@ WSL 单引号转义遗漏补齐（注释：「票据 02 仅补了 PowerShell/CMD
 - **票 1（核心）**：create-with-spec 加 `commandArgs` 新路径（宿主 resolve_launch_spec + PtySession Raw 接线）+
   插件 launch.rs `build_argv`（复刻+修正转义）+ commandArgs 全链路 e2e（真实 wasm 闭环 + 双轨对照：
   新旧 spec 各起一次会话，输出/状态/尺寸行为逐项一致断言）
+  
+  **✅ 已 landed（2026-09-22）**：`commandArgs` 字段追加（不 bump，desktop 仍 v23）；宿主
+  `resolve_launch_spec` 解析 + 可 exec 边界校验（argv[0] 非空 / NUL 拒绝，win 单测）；`PtySession` start()
+  双路径（raw exec 时 cwd 仅 Windows/Linux 设置，WSL2 cwd 语义在 argv 脚本内）；插件 `launch.rs`
+  `build_argv`（三环境：Linux bash -lic / WSL2 wsl.exe / Windows PowerShell，单引号转义复刻宿主 + WSL
+  路径转换含正斜杠归一化）→ `LaunchSpec.command_args`；native 单测 5 项（环境矩阵 + 转义反例 +
+  unsupported 报错）；宿主全量 1132/0、插件 213/0、session_e2e 13/13（真实新产物走 raw 路径闭环）。
+  `BEDCODE_SESSION_ID` 注入双路径保持（开放点 1 暂按引擎原语）。
 - **票 2（收尾退役）**：宿主 build_command/wsl.rs 删除、Business 变体移除、旧路径代码/测试清理；
   command.rs 测试迁移与插件侧契约测试对齐；`PtyCommandSource` 简化
+  
+  **尚未实施**：旧路径仍需覆盖旧插件产物兼容窗口；窗口判定见票 1 landed 后的双轨共存期。
 - **票 3（独立，行为修正）**：`PtySlaveFdPolicy` 统一 ReleaseOnSpawn（自然退出 → Stopped 事件评估）
+  **尚未实施**（行为修正单独评估）
 - **票 4（独立，注入归属裁定）**：BEDCODE_SESSION_ID 注入点原语化 vs 插件 env（开放点 1 定案）
+  **暂按引擎原语保留**（票 1 落地：双路径注入保持一致，不新增 spec 字段）
+
+## 阶段 2 评估结论（2026-09-22）
+
+- **主库 `session_configs` 表退役**：等待发布侧观测（`legacy_rows` 启动计数归零）——不可本地提前删
+  （老安装点升级后未激活插件迁移前仍需通道）；读面 `config-list` / `config-get` 随表退役
+- **`DesktopSyncEvent::Config*` 事件链**：**不可单端删除**——移动端 `handler/sync.rs` 穷尽 match
+  + 前端 `useMobileCommands.ts` 完整监听注册（`onSyncConfigCreated/Updated/Removed`）为活跃消费者；
+  宿主已无发布方（惰性代码），删除属协议面收缩需**双端同步专项**（单独立项，含移动端 match 收敛）
 
 ## 开放点
 

@@ -397,7 +397,7 @@ interface host-session {
     config-get: func(config-id: string) -> result<option<string>, string>;
     /// 会话启动规格创建（v19，权限 `session:write`）：接收插件算好的 launch
     /// spec-json——
-    /// `{name, command, args?, cwd, cols?, rows?, env?, environment?, configId?, start?}`
+    /// `{name, command, commandArgs?, args?, cwd, cols?, rows?, env?, environment?, configId?, start?}`
     /// （`environment` = `{"type":"Wsl2","distro":...}` | `{"type":"Linux"}` |
     /// `{"type":"Windows","shell":"PowerShell"}`，与宿主 `ExecutionEnvironment`
     /// serde 同形）。宿主只做执行：shell 包装 / 发行版转换（按 environment）/ 尺寸
@@ -408,6 +408,14 @@ interface host-session {
     /// `start = false` 时只创建会话与 PTY（状态 `Starting`，不启动进程，也不注册
     /// 输出管理器），供「两阶段启动」编排的第一阶段使用。映射决策（命名唯一化 /
     /// config→launch / 是否启动）全部在插件侧完成，本原语不做任何业务解释。
+    ///
+    /// **裸 argv 路径（pty 票 1，字段追加不 bump）**：`commandArgs` 非空时宿主按
+    /// argv 数组原样 exec——**不做 shell 包装 / WSL 路径转换**（完整 argv 由插件
+    /// `launch.rs::build_argv` 算好，含 bash -lic 包装、wsl.exe 前缀与转义），
+    /// `environment` 仅冗余透传；缺省/空 → 旧路径（`command` 字符串 + 宿主
+    /// `build_command` 包装）。`BEDCODE_SESSION_ID` 会话身份注入在两种路径下都保持
+    /// （业务会话身份引擎原语，host-pty 插件私有 PTY 不注入）。引擎只守可 exec 边界：
+    /// argv[0] 非空 + 无 NUL 字节；shell 注入防护责任在插件侧 `build_argv`。
     create-with-spec: func(spec-json: string) -> result<string, string>;
     lifecycle-register: func() -> result<_, string>;
     input-register: func() -> result<_, string>;

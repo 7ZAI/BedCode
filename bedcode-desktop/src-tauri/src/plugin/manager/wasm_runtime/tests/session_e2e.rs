@@ -357,6 +357,7 @@ fn test_session_task_domain_closed_loop() {
                     environment: crate::enums::ExecutionEnvironment::Linux,
                     working_dir: "/tmp".to_string(),
                     command: "claude".to_string(),
+                    command_args: None,
                     env_vars: std::collections::HashMap::new(),
                     cols: 120,
                     rows: 40,

@@ -3,7 +3,9 @@
 //! 封装 portable-pty，提供跨平台的 PTY 管理功能
 //! 核心职责：PTY 会话的生命周期管理（创建、启动、终止、resize）
 
-use crate::enums::SessionLaunchConfig;
+use crate::enums::{ExecutionEnvironment, SessionLaunchConfig};
+// 仅在 Windows 平台使用（kill 的 taskkill 路径），避免 Linux/macOS 编译下 unused 警告
+#[cfg(target_os = "windows")]
 use crate::process::create_command;
 use crate::pty::command::build_command;
 use crate::pty::lifecycle::{PtyTerminated, PtyTerminationGate};
@@ -262,7 +264,31 @@ impl PtySession {
             })?;
             let cmd = match command_source {
                 PtyCommandSource::Business(config) => {
-                    let mut cmd = build_command(&config)?;
+                    // pty 票 1：`command_args` 非空 → 裸 argv exec（插件算好的 shell
+                    // 包装/argv 数组），宿主不二次包装、不做 WSL 转换；缺省/空 → 旧路径
+                    // `build_command`（bash -lic 等 shell 包装）。两种路径都注入
+                    // `BEDCODE_SESSION_ID`（业务会话身份，Claude Code hooks 关联用）。
+                    let mut cmd = match &config.command_args {
+                        Some(args) if !args.is_empty() => {
+                            let mut builder = CommandBuilder::new(&args[0]);
+                            for a in &args[1..] {
+                                builder.arg(a);
+                            }
+                            // cwd 设置与旧路径同口径：仅 Windows/Linux 显式设置
+                            // （WSL2 的 cwd 语义在插件算好的 argv 脚本内用 cd 表达）
+                            if matches!(
+                                config.environment,
+                                ExecutionEnvironment::Windows { .. } | ExecutionEnvironment::Linux
+                            ) {
+                                builder.cwd(&config.working_dir);
+                            }
+                            for (k, v) in &config.env_vars {
+                                builder.env(k, v);
+                            }
+                            builder
+                        }
+                        _ => build_command(&config)?,
+                    };
                     // 注入 BedCode session ID 到进程环境变量，
                     // 让 Claude Code hooks 能关联到 BedCode 的 PTY 会话
                     // （业务会话语义，现役行为不变）
@@ -336,14 +362,17 @@ impl PtySession {
 
         // 分块写入：每块之间短暂 yield，让 PTY 有时间消费缓冲区
         for chunk in data.chunks(CHUNK_SIZE) {
-            let mut state = self.state.lock().await;
-            let writer = state.writer.as_mut().ok_or_else(|| {
-                tracing::error!("[PtyProcess] write: writer not available");
-                crate::AppError::Pty("Writer not available".to_string())
-            })?;
-            writer.write_all(chunk)?;
-            writer.flush()?;
-            drop(state);
+            // 锁严格限制在块内（写完成即释放，绝不跨 await 持锁）：write_all/flush
+            // 是同步 syscall 且 TM 上快速完成，但 yield 点放锁外
+            {
+                let mut state = self.state.lock().await;
+                let writer = state.writer.as_mut().ok_or_else(|| {
+                    tracing::error!("[PtyProcess] write: writer not available");
+                    crate::AppError::Pty("Writer not available".to_string())
+                })?;
+                writer.write_all(chunk)?;
+                writer.flush()?;
+            }
             // 让出执行权，避免连续写入导致 PTY 缓冲区溢出
             tokio::task::yield_now().await;
         }
@@ -569,6 +598,7 @@ mod tests {
             },
             working_dir: std::env::temp_dir().to_string_lossy().into_owned(),
             command: "echo hello".to_string(),
+            command_args: None,
             env_vars: HashMap::new(),
             cols: 80,
             rows: 24,
@@ -608,6 +638,7 @@ mod tests {
             environment: ExecutionEnvironment::Linux,
             working_dir: std::env::temp_dir().to_string_lossy().into_owned(),
             command: command.to_string(),
+            command_args: None,
             env_vars: HashMap::new(),
             cols: 120,
             rows: 40,
