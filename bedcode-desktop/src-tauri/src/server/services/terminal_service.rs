@@ -3,7 +3,7 @@
 //! 处理终端相关消息（输入、输出等）
 
 use crate::enums::{TerminalAction, TerminalPayload};
-use crate::server::message::Message;
+use crate::server::ws::message::Message;
 use crate::session::SessionManager;
 use crate::Result;
 use std::sync::Arc;

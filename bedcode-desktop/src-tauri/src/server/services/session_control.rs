@@ -3,7 +3,8 @@
 //! 处理会话启动/停止/缩放等控制逻辑
 //! 终端输出订阅统一走 TerminalAction::Subscribe 路径（JoinSession 链已删除）
 
-use crate::server::message::{Message, SessionControlAction, SessionSummary};
+use crate::enums::{SessionControlAction, SessionSummary};
+use crate::server::ws::message::Message;
 use crate::session::{GlobalOutputManager, RendererSource, SessionManager};
 use crate::Result;
 use std::net::SocketAddr;
@@ -54,7 +55,7 @@ pub async fn handle_control(
                 session_id: None,
                 timestamp: chrono::Utc::now().timestamp_millis(),
                 token: String::new(),
-                payload: crate::server::message::SessionControlPayload {
+                payload: crate::enums::SessionControlPayload {
                     action: SessionControlAction::SessionList { sessions: all_sessions },
                 },
             }))
@@ -82,7 +83,7 @@ pub async fn handle_control(
                 session_id: Some(session_id.clone()),
                 timestamp: chrono::Utc::now().timestamp_millis(),
                 token: String::new(),
-                payload: crate::server::message::SessionControlPayload {
+                payload: crate::enums::SessionControlPayload {
                     action: SessionControlAction::StartSession { config_id },
                 },
             }))
@@ -103,7 +104,7 @@ pub async fn handle_control(
                 session_id: Some(session_id.clone()),
                 timestamp: chrono::Utc::now().timestamp_millis(),
                 token: String::new(),
-                payload: crate::server::message::SessionControlPayload {
+                payload: crate::enums::SessionControlPayload {
                     action: SessionControlAction::StopSession { session_id },
                 },
             }))
@@ -124,7 +125,7 @@ pub async fn handle_control(
                 session_id: Some(session_id.clone()),
                 timestamp: chrono::Utc::now().timestamp_millis(),
                 token: String::new(),
-                payload: crate::server::message::SessionControlPayload {
+                payload: crate::enums::SessionControlPayload {
                     action: SessionControlAction::RemoveSession { session_id },
                 },
             }))
