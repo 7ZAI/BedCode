@@ -677,6 +677,14 @@ impl HostPeer for WasmHost {
     fn peer_set_download_dir(&self, path: &str) -> Result<(), HostError> {
         host_peer::set_download_dir(path).map_err(|e| host_err("peer_set_download_dir", e))
     }
+
+    fn peer_start_node(&self) -> Result<bool, HostError> {
+        host_peer::start_node().map_err(|e| host_err("peer_start_node", e))
+    }
+
+    fn peer_stop_node(&self) -> Result<bool, HostError> {
+        host_peer::stop_node().map_err(|e| host_err("peer_stop_node", e))
+    }
 }
 
 // ==================== host-mdns（ADR 0022 v2）====================

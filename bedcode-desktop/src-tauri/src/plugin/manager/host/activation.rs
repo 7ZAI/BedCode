@@ -79,30 +79,46 @@ impl PluginHost {
     /// - WASM 插件：调用 __bedcode_activate 导出函数
     /// - TS-only 插件：前端模块加载在 PluginLoader 中完成
     pub async fn activate_plugin(&self, plugin_id: &str, persist: bool) -> crate::Result<()> {
-        // 外壳：激活成功后接线 peer-net 节点生命周期（file-transfer 是节点唯一
-        // 消费方，节点随插件启停——旧 setup 无条件自启已退役，停用即服务下线）
+        // 外壳（审计票 12）：激活**失败**时按属主回收 peer-net 节点。
+        // 节点生命周期已改由插件自己经 `host-peer.start-node` 请求，内核不再认得
+        // 任何产品 id；这里只剩一条与产品无关的补偿——插件可能在 activate() 里已经
+        // 把节点带起来、随后才失败，若不回收就会出现「插件未激活、本机仍在
+        // `_bedcode-peer` 广播」。旧实现靠「外壳只在成功时才起节点」天然没有这个
+        // 窗口，改成插件自起之后，补偿必须显式存在。属主不匹配即 no-op，
+        // 所以任何插件都能安全走这一条
         let result = self.activate_plugin_inner(plugin_id, persist).await;
-        if result.is_ok() && plugin_id == crate::peer_net::FILE_TRANSFER_PLUGIN_ID {
-            match crate::system::app_context::AppContext::try_global() {
-                Some(ctx) => {
-                    if let Some(app) = ctx.app_handle() {
-                        if let Err(e) = crate::peer_net::ensure_node_started(app).await {
-                            tracing::error!(
-                                plugin_id = %plugin_id,
-                                error = %e,
-                                "peer-net node start on plugin activation failed"
-                            );
-                        }
-                    }
-                }
-                // boot 装配期 AppContext 未注册：静默跳过，由 boot 末尾的状态
-                // 对账（sync_node_with_plugin_state）兜底
-                None => {
-                    tracing::debug!("peer-net node start skipped: AppContext not ready (boot assembly)");
-                }
-            }
+        if result.is_err() {
+            self.release_peer_node_if_owned(plugin_id, "activation failed").await;
         }
         result
+    }
+
+    /// 按属主释放 peer-net 节点（审计票 12）：该插件起着节点就停掉，没起过是 no-op
+    ///
+    /// 无 app_handle 的无头上下文（测试）直接跳过。停用与激活失败两条生命周期路径
+    /// 共用它，替代旧的两个 `plugin_id == FILE_TRANSFER_PLUGIN_ID` 硬编码分支
+    async fn release_peer_node_if_owned(&self, plugin_id: &str, reason: &str) {
+        let Some(app) = self.wasm_host_ctx.app_handle() else {
+            return;
+        };
+        match crate::peer_net::release_node_for(app, plugin_id).await {
+            Ok(true) => {
+                tracing::info!(
+                    plugin_id = %plugin_id,
+                    reason = %reason,
+                    "peer-net node released: its owning plugin stopped running"
+                );
+            }
+            Ok(false) => {}
+            Err(error) => {
+                tracing::error!(
+                    plugin_id = %plugin_id,
+                    error = %error,
+                    reason = %reason,
+                    "peer-net node release on plugin lifecycle failed"
+                );
+            }
+        }
     }
 
     /// 审批门禁（ADR 0020 / 审计票 03）：返回用户安装插件的生效权限集
@@ -583,27 +599,13 @@ impl PluginHost {
     }
 
     pub async fn deactivate_plugin(&self, plugin_id: &str, persist: bool) -> crate::Result<()> {
-        // 外壳：停用成功后接线 peer-net 节点生命周期（file-transfer 停用即
-        // 服务下线，对端即时感知；幂等）
+        // 外壳（审计票 12）：停用**成功**后按属主回收 peer-net 节点（对端即时感知
+        // 下线；该插件没起过节点则 no-op，幂等）。插件自己也会经
+        // `host-peer.stop-node` 关停，这一层是它没能关停（忘了调 / deactivate 里
+        // 提前返回）时的兜底——按属主判断，不认产品 id
         let result = self.deactivate_plugin_inner(plugin_id, persist).await;
-        if result.is_ok() && plugin_id == crate::peer_net::FILE_TRANSFER_PLUGIN_ID {
-            match crate::system::app_context::AppContext::try_global() {
-                Some(ctx) => {
-                    if let Some(app) = ctx.app_handle() {
-                        if let Err(e) = crate::peer_net::stop_node_for_plugin(app).await {
-                            tracing::error!(
-                                plugin_id = %plugin_id,
-                                error = %e,
-                                "peer-net node stop on plugin deactivation failed"
-                            );
-                        }
-                    }
-                }
-                // boot 装配期 AppContext 未注册：由 boot 末尾的状态对账兜底
-                None => {
-                    tracing::debug!("peer-net node stop skipped: AppContext not ready (boot assembly)");
-                }
-            }
+        if result.is_ok() {
+            self.release_peer_node_if_owned(plugin_id, "plugin deactivated").await;
         }
         result
     }

@@ -1,7 +1,15 @@
 //! 运行期错误通知节流 + fs 预授权（preauth）用例。
 
-use super::*;
 use super::scaffold::*;
+use super::*;
+
+/// 被测插件 id（本文件的测试夹具，不是内核常量）
+///
+/// 审计票 12 起 `FILE_TRANSFER_PLUGIN_ID` 从 `manager/host.rs` 与 `peer_net.rs` 删除——
+/// 内核不再硬编码产品身份（peer-net 节点改按属主记账）。本用例测的是「共享根为空的
+/// 插件可以启用先行」这条通用 preauth 语义，用一个具名夹具插件 id 即可，
+/// 不需要内核侧留着那个常量
+const FILE_TRANSFER_PLUGIN_ID: &str = "com.bedcode.file-transfer";
 
 #[tokio::test]
 async fn notify_plugin_runtime_error_throttle_and_no_app_context() {
@@ -45,7 +53,7 @@ async fn preauthorize_empty_paths_passes() {
 #[tokio::test]
 async fn preauthorize_file_transfer_empty_shared_roots_passes() {
     let host = setup_host().await;
-    let result = host.preauthorize_plugin(super::FILE_TRANSFER_PLUGIN_ID).await;
+    let result = host.preauthorize_plugin(FILE_TRANSFER_PLUGIN_ID).await;
     assert!(
         result.is_ok(),
         "file-transfer with empty shared_roots must pass (enable-first), got: {:?}",

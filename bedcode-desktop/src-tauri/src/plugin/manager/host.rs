@@ -23,9 +23,6 @@ use std::sync::{Arc, OnceLock};
 use tauri::Emitter;
 use tokio::sync::{Mutex, RwLock};
 
-/// file-transfer 插件 ID(启用先行门禁测试用;移动端无独立镜像常量)。
-pub const FILE_TRANSFER_PLUGIN_ID: &str = "com.bedcode.file-transfer";
-
 /// WASM 插件 trap 自动重载最小间隔（秒）
 ///
 /// wasmtime 同步引擎下任何一次 trap 都会污染整个 Store（`set_trapped`），

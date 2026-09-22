@@ -216,6 +216,12 @@ mod tests {
         fn peer_set_download_dir(&self, _path: &str) -> Result<(), HostError> {
             unimplemented_peer!()
         }
+        fn peer_start_node(&self) -> Result<bool, HostError> {
+            unimplemented_peer!()
+        }
+        fn peer_stop_node(&self) -> Result<bool, HostError> {
+            unimplemented_peer!()
+        }
     }
 
     fn sample_peer(node_id: &str, name: &str) -> serde_json::Value {
@@ -359,6 +365,12 @@ mod tests {
                 unimplemented_peer!()
             }
             fn peer_set_download_dir(&self, _p: &str) -> Result<(), HostError> {
+                unimplemented_peer!()
+            }
+            fn peer_start_node(&self) -> Result<bool, HostError> {
+                unimplemented_peer!()
+            }
+            fn peer_stop_node(&self) -> Result<bool, HostError> {
                 unimplemented_peer!()
             }
         }

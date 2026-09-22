@@ -114,12 +114,24 @@ impl WasmPlugin for FileTransferPlugin {
         // 自建 browse 对等网络服务类型（共享守护，事件定向投递）；引擎未就绪
         // 时降级（空列表 + 提示），刷新命令补建
         ensure_mdns_browse(&h);
-        // 引擎电源：节点/mDNS 生命周期由宿主 activate/deactivate 外壳直接驱动
-        // （plugin/host.rs 接线 ensure_node_started），插件侧无需声明
+        // 引擎电源不在这里：节点/mDNS 生命周期由本插件自己请求（见下方
+        // peer_start_node 与 host-mdns 自建 browse），审计票 12 起宿主侧没有
+        // 按产品 id 的开关外壳了
         // 激活即推送注册表镜像（重启后引擎广播面由本插件重建）：
         // 引擎未启动时静默——首次增删共享目录时会再推
         if let Err(e) = roots_registry::ensure_table(&h) {
             h.log_info(&format!("shared_roots table init deferred: {e}"));
+        }
+        // 引擎电源（审计票 12）：peer-net 节点由**本插件自己**经 host-peer 原语请求，
+        // 内核不再按硬编码产品 id 开关。放在 activate 的最后一步，等价于旧外壳的
+        // `result.is_ok()` 门——前面任何一步失败都不会把节点带起来。
+        // 起节点失败不翻成激活失败（与旧行为一致：旧外壳只 log_error，
+        // 激活结果由 inner 决定），否则一次引擎故障会变成插件整体不可用
+        match h.peer_start_node() {
+            Ok(changed) => h.log_info(&format!(
+                "peer-net node requested by this activation (state changed: {changed})"
+            )),
+            Err(e) => h.log_error(&format!("peer-net node start failed (plugin stays active): {e}")),
         }
         Ok(())
     }
@@ -151,9 +163,14 @@ impl WasmPlugin for FileTransferPlugin {
         ] {
             let _ = h.bus_unsubscribe(topic);
         }
-        // 引擎电源：本插件下线 → 节点/mDNS 服务下线由宿主 deactivate 外壳直接
-        // 驱动（plugin/host.rs 接线 stop_node_for_plugin），会话已在上方关闭，
-        // 对端经断流事件即时感知
+        // 引擎电源（审计票 12）：本插件下线 → 自己关停节点（会话已在上方关闭，
+        // 对端经断流事件即时感知）。放在最后一步，与旧外壳的 `result.is_ok()` 门同形。
+        // 宿主侧另有一条按属主的兜底清理，本步失败或被漏调都不会让节点泄漏在
+        // 已停用的插件名下；非属主调用会报错，这里只记录不翻成停用失败
+        match h.peer_stop_node() {
+            Ok(_) => h.log_info("peer-net node stopped with plugin"),
+            Err(e) => h.log_info(&format!("peer-net node stop skipped/failed (non-fatal): {e}")),
+        }
         Ok(())
     }
 

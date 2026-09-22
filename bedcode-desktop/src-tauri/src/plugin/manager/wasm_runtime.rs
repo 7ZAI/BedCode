@@ -1072,6 +1072,17 @@ impl WasmHostContext {
         self.session_manager.clone()
     }
 
+    /// 应用句柄引用；无头 / 测试上下文为 None
+    ///
+    /// 存在的理由（审计票 12）：`app_handle` 字段是模块私有的，而 peer-net 节点的
+    /// **属主清理钩子**在 `manager/host/activation.rs`——那里不是本模块的后代，读不到
+    /// 字段。此前那条路走 `AppContext::try_global()`，但 boot 装配期全局尚未注册，
+    /// 「插件在 activate 里起了节点、随后激活失败」这个窗口就拿不到句柄去收，
+    /// 所以直接从上下文字段取（它在 `PluginHost::new` 之前就已就位）
+    pub(crate) fn app_handle(&self) -> Option<&tauri::AppHandle> {
+        self.app_handle.as_deref()
+    }
+
     /// 获取或懒加载插件独立数据库
     ///
     /// 首次调用时创建目录 + 打开/创建 plugin.db + 缓存连接

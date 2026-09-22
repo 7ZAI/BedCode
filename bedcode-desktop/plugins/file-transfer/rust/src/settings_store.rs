@@ -172,6 +172,8 @@ mod tests {
             self.pushed_dirs.borrow_mut().push(path.to_string());
             Ok(())
         }
+        fn peer_start_node(&self) -> Result<bool, bedcode_plugin_api::host::HostError> { unimplemented!() }
+        fn peer_stop_node(&self) -> Result<bool, bedcode_plugin_api::host::HostError> { unimplemented!() }
     }
 
     #[test]

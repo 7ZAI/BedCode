@@ -369,9 +369,10 @@ pub fn run() {
             let peer_net_data_dir = app_handle.path().app_data_dir().expect("Failed to get app data dir");
             crate::peer_net::init_node_identity(&peer_net_data_dir)?;
 
-            // 对等网络节点状态容器（ticket 03）：节点生命周期随文件传输插件
-            // 启停（插件管理器 activate/deactivate 外壳接线，
-            // 见 peer_net::ensure_node_started；旧 setup 无条件自启已退役）
+            // 对等网络节点状态容器（ticket 03）：节点生命周期按**属主**随插件启停
+            // （审计票 12——插件经 host-peer.start-node / stop-node 自行请求，
+            // 内核只记账；见 peer_net::start_node_owned / release_node_for。
+            // 旧 setup 无条件自启与旧的按产品 id 开关外壳都已退役）
             app.manage(crate::peer_net::PeerNetState::default());
             // peer-engine 状态仅保存当前引擎会话控制句柄与事件快照，不是业务持久化真源；
             // 任务、历史、设置均由 file-transfer 插件私有库持有。
@@ -474,15 +475,13 @@ pub fn run() {
             // DROP 两表清理。迁移失败不阻断启动。
             crate::plugin::auth_records_migration::run();
             app.manage(system_info.clone());
-            // peer-net 节点与文件传输插件状态对账：boot 装配期 AppContext 全局
-            // 尚未注册，activate 外壳内的节点启动会被静默跳过（2026-09-06 实机
-            // 实证：已激活插件的节点不随 boot 启动，需手动开关插件才广播）——
-            // 装配完成后按最终插件状态补对账
-            if let Err(e) =
-                tauri::async_runtime::block_on(crate::peer_net::sync_node_with_plugin_state(&app_handle_arc))
-            {
-                tracing::error!(error = %e, "peer-net node sync after boot assembly failed");
-            }
+            // peer-net 节点的启动不再需要 boot 对账（审计票 12）：旧实现要在装配末尾
+            // 按硬编码插件 id 补一次状态对账，因为 activate 外壳经
+            // `AppContext::try_global()` 取句柄，而 boot 装配期全局尚未注册
+            // （2026-09-06 实机实证：已激活插件的节点不随 boot 启动）。现在改由插件
+            // 在自己的 activate 里调 `host-peer.start-node`，宿主从 WasmHostContext
+            // 的 app_handle 字段取句柄（PluginHost::new 之前就早已就位，不依赖全局），
+            // 所以 boot 期直接起得来，那条对账连同它的产品耦合一起退役
             // ==================== 开发模式：启动插件文件监听 ====================
             // 仅 debug 构建启用，监听插件产物变化触发热重载
             // notify 回调在非 Tokio 线程中运行，必须通过 Handle::spawn 而非 tokio::spawn

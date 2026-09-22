@@ -1033,6 +1033,12 @@ mod tests {
         fn peer_set_download_dir(&self, _path: &str) -> Result<(), HostError> {
             unimplemented!()
         }
+        fn peer_start_node(&self) -> Result<bool, HostError> {
+            unimplemented!()
+        }
+        fn peer_stop_node(&self) -> Result<bool, HostError> {
+            unimplemented!()
+        }
     }
 
     impl HostPlatform for MockHost {

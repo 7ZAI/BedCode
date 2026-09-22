@@ -65,4 +65,12 @@ pub trait HostPeer {
     ) -> Result<u32, HostError>;
     /// 设置接收落点目录（空串 = 恢复默认；引擎落盘配置原语）
     fn peer_set_download_dir(&self, path: &str) -> Result<(), HostError>;
+    /// 按需启动本机 peer 节点（引擎级生命周期原语，审计票 12）：幂等。
+    /// 返回 `true` = 本次调用把节点从「未跑」带到「跑」（调用方即成为节点属主）；
+    /// `false` = 节点本就在跑。已被别的插件起着的节点不可被本调用接管（报错，
+    /// 文案不回带他方身份）——谁起谁停，内核不再按硬编码插件 id 猜归属
+    fn peer_start_node(&self) -> Result<bool, HostError>;
+    /// 让本机节点下线（幂等；未跑为 no-op）：停广播 / 关监听 / 排水连接与入站记账。
+    /// 仅节点属主可关停，非属主报错（文案不回带属主身份）
+    fn peer_stop_node(&self) -> Result<bool, HostError>;
 }

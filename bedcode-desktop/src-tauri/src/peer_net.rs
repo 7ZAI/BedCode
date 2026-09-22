@@ -119,6 +119,9 @@ pub struct PeerNetState {
     /// 双装配时次者 bind 回退 :0 随机端口、首个 runtime 泄漏。不持 runtime
     /// 锁跨 await（与全仓短持锁风格一致），闸门只串行化装配本身
     lifecycle_gate: tokio::sync::Semaphore,
+    /// 节点属主（审计票 12）：起节点的插件 id，停即清空。
+    /// 见 [`node_owner`] / [`start_node_owned`] / [`release_node_for`]
+    node_owner: std::sync::Mutex<Option<String>>,
 }
 
 impl Default for PeerNetState {
@@ -132,6 +135,7 @@ impl Default for PeerNetState {
             inbound_peers: std::sync::Mutex::new(HashMap::new()),
             inbound_conns: std::sync::Mutex::new(HashMap::new()),
             lifecycle_gate: tokio::sync::Semaphore::new(1),
+            node_owner: std::sync::Mutex::new(None),
         }
     }
 }
@@ -636,54 +640,88 @@ pub(crate) async fn set_download_dir_for_plugin(app: AppHandle, path: Option<Str
     crate::peer_engine_receive::set_peer_download_dir(app, path).await
 }
 
-/// 文件传输插件 id：peer-net 节点的唯一消费方（全仓唯一声明 `peer` 权限的插件），
-/// 节点生命周期随其启用状态
-pub const FILE_TRANSFER_PLUGIN_ID: &str = "com.bedcode.file-transfer";
-
-/// 文件传输插件激活 → 确保节点运行（幂等；boot 自动激活与运行时启用共用漏斗）
+/// 节点属主记账（审计票 12）：把节点从「未跑」带到「跑」的那个**调用方插件 id**。
 ///
-/// 生命周期随属主插件：旧实现 setup 阶段无条件自启，插件停用后本机仍在
-/// `_bedcode-peer` 广播（对端照样发现，与终端链路 `_bedcode` 服务的独立
-/// 语义相悖）且监听未关——受信对端可直连数据面（consent 只拦未信任首连）。
-/// 改为插件激活驱动启动、停用驱动关停。
-pub async fn ensure_node_started(app: &AppHandle) -> crate::Result<()> {
+/// 取代旧的两处按硬编码产品 id 分支（`activation.rs` 的激活/停用外壳）与 boot 末尾
+/// 按 id 对账的 `sync_node_with_plugin_state`：内核不再认得任何产品，只按
+/// 「谁起谁停」这条与产品无关的规则记账。`None` = 节点未跑，或跑着但无插件属主
+/// （只可能来自宿主命令面 `start_peer_node`——它不是插件，不认领属主）。
+pub fn node_owner(app: &AppHandle) -> Option<String> {
+    let state = app.state::<PeerNetState>();
+    let owner = state.node_owner.lock().expect("node owner lock poisoned").clone();
+    owner
+}
+
+/// 插件按需启动本机节点（引擎级生命周期原语，审计票 12；幂等）
+///
+/// 返回 `true` = 本次调用把节点从「未跑」带到「跑」。属主规则：
+/// 无主时可被认领（含宿主命令面先起的情况）；同主重复调用幂等；
+/// **他主拒绝接管**，错误文案不回带对方 id（与 `host-peer` 句柄属主门同口径，票 05）。
+pub async fn start_node_owned(app: &AppHandle, caller: &str) -> crate::Result<bool> {
+    let state = app.state::<PeerNetState>();
+    {
+        let mut guard = state.node_owner.lock().expect("node owner lock poisoned");
+        if let Some(owner) = guard.as_ref() {
+            if owner != caller {
+                return Err(crate::AppError::Plugin(
+                    "peer node is already owned by another plugin".to_string(),
+                ));
+            }
+        }
+    }
+    let was_running = { state.runtime.lock().await.is_some() };
     let data_dir = app_data_dir(app)?;
-    let device_name = resolve_device_name(&app);
-    let state = app.state::<PeerNetState>();
-    start_locked(&state, &data_dir, device_name, app).await.map(|_| ())
-}
-
-/// 文件传输插件停用 → 服务下线：停广播/关监听/排水连接与入站记账（对端即时
-/// 感知断开），幂等（节点未启动为 no-op）
-pub async fn stop_node_for_plugin(app: &AppHandle) -> crate::Result<()> {
-    let state = app.state::<PeerNetState>();
-    stop_locked(&state, app).await
-}
-
-/// 文件传输插件当前是否已激活（AppContext 全局未就绪视为未激活）
-async fn plugin_transfer_activated() -> bool {
-    match crate::system::app_context::AppContext::try_global() {
-        Some(ctx) => ctx.plugin_host().is_activated(FILE_TRANSFER_PLUGIN_ID).await,
-        None => false,
+    let device_name = resolve_device_name(app);
+    start_locked(&state, &data_dir, device_name, app).await?;
+    // 认领放在装配成功之后：起不来的插件不该把节点锁在自己名下
+    {
+        let mut guard = state.node_owner.lock().expect("node owner lock poisoned");
+        if guard.is_none() {
+            *guard = Some(caller.to_string());
+        }
     }
+    Ok(!was_running)
 }
 
-/// peer-net 节点与文件传输插件运行状态对齐（状态驱动对账，幂等）
+/// 属主插件让节点下线（引擎级原语，审计票 12；节点未跑为 no-op）
 ///
-/// 插件已激活 → 确保节点运行；未激活 → 服务下线。boot 装配完成后调用一次，
-/// 运行时开关由插件 activate/deactivate 外壳（ensure_node_started /
-/// stop_node_for_plugin）直接驱动——boot 装配期 AppContext 全局尚未注册，
-/// activate 外壳内的节点启动会被静默跳过（2026-09-06 实机实证：已激活插件的
-/// 节点不随 boot 启动，需手动开关插件才广播），状态对账不依赖外壳是否已
-/// 执行。语义：插件运行 mDNS 就运行，插件不运行 mDNS 也不运行。
-pub async fn sync_node_with_plugin_state(app: &AppHandle) -> crate::Result<bool> {
-    let activated = plugin_transfer_activated().await;
-    if activated {
-        ensure_node_started(app).await?;
-    } else {
-        stop_node_for_plugin(app).await?;
+/// 非属主一律拒绝（文案不回带属主 id）。关停与清账同处——`stop_locked` 里清属主，
+/// 所以本函数不需要在关停失败时补偿
+pub async fn stop_node_owned(app: &AppHandle, caller: &str) -> crate::Result<bool> {
+    let state = app.state::<PeerNetState>();
+    let owned = state
+        .node_owner
+        .lock()
+        .expect("node owner lock poisoned")
+        .as_deref()
+        == Some(caller);
+    if !owned {
+        return Err(crate::AppError::Plugin(
+            "not owner of peer node".to_string(),
+        ));
     }
-    Ok(activated)
+    stop_locked(&state, app).await?;
+    Ok(true)
+}
+
+/// 内核侧按属主清理节点（审计票 12）：插件停用或激活失败时调用
+///
+/// 属主匹配才关停；不匹配（含无主）一律 no-op 且**不报错**——这条是任意插件的
+/// 生命周期都能安全挂上的通用钩子，替代旧的两个 `plugin_id == FILE_TRANSFER_PLUGIN_ID`
+/// 分支。返回是否真的关停了节点
+pub async fn release_node_for(app: &AppHandle, former_owner: &str) -> crate::Result<bool> {
+    let state = app.state::<PeerNetState>();
+    let owned = state
+        .node_owner
+        .lock()
+        .expect("node owner lock poisoned")
+        .as_deref()
+        == Some(former_owner);
+    if !owned {
+        return Ok(false);
+    }
+    stop_locked(&state, app).await?;
+    Ok(true)
 }
 
 // ==================== 内部装配 ====================
@@ -987,6 +1025,9 @@ async fn stop_locked(state: &tauri::State<'_, PeerNetState>, app: &AppHandle) ->
         .acquire()
         .await
         .expect("lifecycle gate never closed");
+    // 关停与清账同处（审计票 12）：不管走哪条路径停下来（属主原语 / 内核属主清理 /
+    // 宿主命令面人工停 / 退出排水），节点一旦下线就不再属于任何插件
+    *state.node_owner.lock().expect("node owner lock poisoned") = None;
     // 主动拨号的存活连接随关停一并终结：通知活性泵关闭（drop 连接 → 对端经
     // EOF 感知本机下线），并逐个通知前端摘除已连接徽标——连接表随节点生命
     // 周期走，重启后从空表开始

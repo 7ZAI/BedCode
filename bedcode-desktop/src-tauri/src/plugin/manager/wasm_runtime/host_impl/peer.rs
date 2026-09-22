@@ -151,7 +151,14 @@ pub(crate) fn peer_dial(host_ctx: &WasmHostContext, plugin_id: &str, endpoint_js
     let port = endpoint.port;
     let dto = sync_result(block_on_async(crate::peer_net::dial_peer_endpoint(app, endpoint)))?;
     match dto.status.as_str() {
-        "connected" => Ok(with_handles(|t| t.mint_session(SessionEntry { node_id, addr, port, owner: plugin_id.to_string() }))),
+        "connected" => Ok(with_handles(|t| {
+            t.mint_session(SessionEntry {
+                node_id,
+                addr,
+                port,
+                owner: plugin_id.to_string(),
+            })
+        })),
         other => Err(format!("dial endpoint failed: peer {other}")),
     }
 }
@@ -473,14 +480,36 @@ pub(crate) fn peer_set_download_dir(host_ctx: &WasmHostContext, plugin_id: &str,
     sync_result(block_on_async(crate::peer_net::set_download_dir_for_plugin(app, path)))
 }
 
+/// 按需启动本机 peer 节点（审计票 12 引擎级生命周期原语）：幂等，
+/// 返回 `true` = 本次调用把节点从「未跑」带到「跑」（调用方即成为属主）。
+///
+/// 内核侧不再持有产品 id 常量——旧 `activation.rs` 的「插件 id == file-transfer 就起节点」
+/// 外壳由本原语 + `peer_net` 的属主记账替代。他主占用时以错误上抛，
+/// 且**文案不回带对方 id**（与 `ensure_handle_owner` 同口径，票 05）
+pub(crate) fn peer_start_node(host_ctx: &WasmHostContext, plugin_id: &str) -> Result<bool, String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_PEER, "host_peer_start_node") {
+        return Err(denied());
+    }
+    let app = require_app(host_ctx)?;
+    sync_result(block_on_async(crate::peer_net::start_node_owned(&app, plugin_id)))
+}
+
+/// 属主插件让本机节点下线（审计票 12）：停广播 / 关监听 / 排水连接与入站记账。
+/// 非属主拒绝（不猜测「谁该停」，也不提供强制关停的后门）
+pub(crate) fn peer_stop_node(host_ctx: &WasmHostContext, plugin_id: &str) -> Result<bool, String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_PEER, "host_peer_stop_node") {
+        return Err(denied());
+    }
+    let app = require_app(host_ctx)?;
+    sync_result(block_on_async(crate::peer_net::stop_node_owned(&app, plugin_id)))
+}
+
 // ==================== Tests ====================
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugin::manager::wasm_runtime::host_impl::tests::{
-        build_host_ctx, grant_permissions,
-    };
+    use crate::plugin::manager::wasm_runtime::host_impl::tests::{build_host_ctx, grant_permissions};
     use crate::plugin::permission::PERMISSION_PEER;
 
     /// 权限门（票 01 门禁用例）：未授予 `peer` 即拒绝，且不触碰句柄表/引擎
@@ -502,12 +531,8 @@ mod tests {
     fn peer_granted_passes_permission_gate() {
         let ctx = build_host_ctx();
         grant_permissions(&ctx, "com.bedcode.peer-ok", &[PERMISSION_PEER]);
-        let err = super::peer_close(&ctx, "com.bedcode.peer-ok", "sess-nonexistent")
-            .expect_err("无头上下文不应可断开");
-        assert!(
-            !err.contains("permission denied"),
-            "已授予 peer 仍被权限门拒绝: {err}"
-        );
+        let err = super::peer_close(&ctx, "com.bedcode.peer-ok", "sess-nonexistent").expect_err("无头上下文不应可断开");
+        assert!(!err.contains("permission denied"), "已授予 peer 仍被权限门拒绝: {err}");
         assert!(err.contains("headless"), "预期无头上下文错误: {err}");
     }
 
@@ -531,10 +556,7 @@ mod tests {
         let err = ensure_handle_owner(&got, "com.bedcode.intruder-b", &h).unwrap_err();
         assert_eq!(err, format!("not owner of peer handle: {h}"));
         // 错误文案不回带真实属主身份
-        assert!(
-            !err.contains("owner-a"),
-            "拒绝文案不得泄露属主插件 id: {err}"
-        );
+        assert!(!err.contains("owner-a"), "拒绝文案不得泄露属主插件 id: {err}");
     }
 
     /// 非属主 close 的拒绝路径零副作用：句柄仍在册，别人仍可用

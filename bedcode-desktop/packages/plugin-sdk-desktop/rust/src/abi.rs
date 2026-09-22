@@ -121,11 +121,20 @@
 //!   `plugin_secrets`）/ device-token-* / link-identity-parts / auth-setting-set。
 //!   破坏性收缩（WIT 删除 import 函数），旧插件二进制须按 v24 SDK 重建。
 //!
+//! - v25: `host-peer` 增节点生命周期引擎原语 `start-node` / `stop-node`（审计票 12
+//!   裁决 1 = 选项 A）——peer-net 节点从「内核按硬编码产品 id 开关」改为「属主插件按声明
+//!   自行请求、内核只记账」。内核侧同步退役 `peer_net::FILE_TRANSFER_PLUGIN_ID`、
+//!   激活/停用外壳的按 id 分支，以及 boot 末尾按 id 对账的 `sync_node_with_plugin_state`
+//!   （第三个入口，立项时未列）。属主语义 = 谁起谁停：把节点带起来的那次调用者即属主，
+//!   非属主既不能接管也不能关停（错误不回带他方身份）。既有 interface 的函数级追加，
+//!   纯增量——v24 及以下插件二进制不受影响，但要用这两个原语须按 v25 SDK 重建。
+//!   桌面独有接口（host-peer 不在 mobile WIT），移动端不跟演（ADR 0022 双端偏离节）。
+//!
 //! 编号口径（AGENTS.md §7 教训）：本号以 `abi.rs` 与 WIT 版本表实读为准，
 //! 规格正文的「17 → 19」是并发线（host-notification v18）尚未落地时的预判；
 //! 本分支实测 v18 已被「host-auth 认证记录面」占用（票 05），故会话语义下沉的
 //! 第二批次取 v19。
-pub const ABI_VERSION: u32 = 24;
+pub const ABI_VERSION: u32 = 25;
 
 /// 组件形态标识：`abi.form() == FORM_COMPONENT`（WIT `abi` 接口的 form() 声明）
 ///
@@ -139,9 +148,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_abi_version_is_v24() {
-        // 版本号序列与历史 core ABI 共用：v24 = 认证记录下沉（2026-09-22，host-auth
-        // 记录面七函数退役 + host-session config 读取面退役），叠加 v23 host-session
+    fn test_abi_version_is_v25() {
+        // 版本号序列与历史 core ABI 共用：v25 = host-peer 节点生命周期原语
+        // （start-node / stop-node，审计票 12 裁决 1 = 选项 A；内核侧去产品身份），
+        // 叠加 v24 认证记录下沉（2026-09-22，host-auth 记录面七函数退役 + host-session
+        // config 读取面退役）、v23 host-session
         // 配置面写原语退役（session:config 同步退役）、v22 host-platform.reveal-in-dir
         // （平台定位原语，无权限门；`system:open` 退役）、v21 host-session 收敛退役
         // （删 `create` / `restart`）、v20 host-task 宿主并发任务域、v19 host-session
@@ -149,7 +160,7 @@ mod tests {
         // （同批次之一）、v17 认证策略导出（auth-policy）、v16 插件私有伪终端原语
         // （host-pty）、v15 密钥托管（host-auth / secret-store）、v14 host-websocket、
         // v13 host-mdns v2、v12 总线二进制载荷与 v11 host-peer 传输控制三原语
-        assert_eq!(ABI_VERSION, 24);
+        assert_eq!(ABI_VERSION, 25);
     }
 
     #[test]

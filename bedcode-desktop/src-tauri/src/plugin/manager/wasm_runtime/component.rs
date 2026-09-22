@@ -537,6 +537,14 @@ impl bedcode::plugin::host_peer::Host for WasmPluginState {
     fn set_download_dir(&mut self, path: String) -> Result<(), String> {
         peer::peer_set_download_dir(&self.host_ctx, &self.plugin_id, &path)
     }
+
+    fn start_node(&mut self) -> Result<bool, String> {
+        peer::peer_start_node(&self.host_ctx, &self.plugin_id)
+    }
+
+    fn stop_node(&mut self) -> Result<bool, String> {
+        peer::peer_stop_node(&self.host_ctx, &self.plugin_id)
+    }
 }
 
 // ==================== host-mdns / host-platform（ADR 0022 v2）====================
