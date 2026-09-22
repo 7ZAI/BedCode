@@ -576,6 +576,48 @@ mod tests {
         assert_eq!(installed, id);
     }
 
+    /// 跨语言真源锁（票 14）：生产者 `packages/plugin-sdk-desktop/bin/wasm-hash.js` 与宿主
+    /// 必须算出同一个串。这里的向量与 SDK 用例 `__tests__/wasm-hash.test.ts` 的
+    /// `WASM_BYTES_SHA256` 是同一条（外部独立实现算出后双向钉死）——换算法、换大小写、
+    /// 换取文件规则，两侧任一偏离都在此转红。
+    #[test]
+    fn producer_and_host_share_the_same_digest_vector() {
+        const VECTOR_BYTES: &[u8] = &[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
+        const VECTOR_SHA256: &str = "93a44bbb96c751218e4c00d479e4c14358122a389acca16205b1e4d0dc5f9476";
+
+        // 取文件规则同源：JS 侧 `${rustLibrary}.wasm` 用的字面量必须等于本常量
+        assert_eq!(WASM_FILE_EXT, ".wasm", "生产者按 `.wasm` 后缀取文件，改这里要同步改 wasm-hash.js");
+
+        let tmp = tempfile::tempdir().unwrap();
+        let wasm = tmp.path().join("bedcode_plugin_vector.wasm");
+        std::fs::write(&wasm, VECTOR_BYTES).unwrap();
+        assert_eq!(
+            PluginDownloader::sha256_file(&wasm).unwrap(),
+            VECTOR_SHA256,
+            "宿主摘要与生产者钉死的向量不符（算法/输出形态漂移）"
+        );
+
+        // 生产者产出的清单值确实被宿主接受（小写 64 位十六进制、trim 后比对）
+        let plugins_dir = tmp.path().join("plugins");
+        let zip_path = build_wasm_zip(tmp.path(), "com.test.vector-pin", VECTOR_BYTES, VECTOR_SHA256);
+        let installed = PluginDownloader::install_from_file(zip_path.to_str().unwrap(), &plugins_dir).unwrap();
+        assert_eq!(installed, "com.test.vector-pin");
+
+        // 反例：同一批字节但摘要被换成另一条合法形态的向量 → 拒装
+        let bad_zip = build_wasm_zip(
+            tmp.path(),
+            "com.test.vector-drift",
+            VECTOR_BYTES,
+            "3f499bf4c9e7483e804244d5e485b3537b2135690a7ce7b3fd7cb2544217d729",
+        );
+        let err =
+            PluginDownloader::install_from_file(bad_zip.to_str().unwrap(), &plugins_dir).unwrap_err();
+        assert!(
+            err.to_string().contains("WASM content mismatch"),
+            "摘要漂移必须被拒装，实际: {err}"
+        );
+    }
+
     /// 条目数超上限 → 拒绝（限内放行，验证裁决确实按 limits 走）
     #[test]
     fn extract_rejects_entry_count_over_limit() {

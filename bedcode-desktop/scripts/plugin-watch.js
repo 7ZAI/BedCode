@@ -151,6 +151,8 @@ export function startPluginWatch({ root, resourcesDir, extraFiles = [], wasmFile
         const src = resolve(root, f)
         if (existsSync(src)) cpSync(src, resolve(resourcesDir, basename(f)))
       }
+      // 源清单被覆盖后重算摘要（票 14：wasmHash 只存在于产物，dev 刷新不能把它抹掉）
+      injectWasmHash(resourcesDir, { log: () => {} })
       console.log(`[watch] ${new Date().toLocaleTimeString()} 产物已复制 → ${resourcesDir}`)
     } catch (e) {
       console.error(`[watch] 复制失败: ${e.message}`)

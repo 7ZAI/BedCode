@@ -12,7 +12,8 @@
  *
  * create  从 SDK 内置模板生成插件工程（默认 ts-only；--rust 附带 WASM 后端脚手架）；
  *          --registry 时引用已发布的 SDK 版本，否则引用本地 SDK 相对路径
- * build   串联 vite build → cargo wasm32（rust-ts 插件）；--resources-dir 时复制产物到宿主资源目录
+ * build   串联 vite build → cargo wasm32（rust-ts 插件）；--resources-dir 时复制产物到宿主资源目录，
+ *          并把 wasm 字节的 SHA-256 注入**产物** plugin.json 的 wasmHash（源清单不带该键，见 bin/wasm-hash.js）
  * dev     启动浏览器开发环境（dev-shell）：vite dev server + HMR（Rust 后端不在浏览器运行）
  * manifest 按插件源码自动填充 plugin.json 的 contributes/permissions；--check 只检查（CI 用）
  * validate 校验 plugin.json 结构与字段合法性（CI 用，exit 1 表示不合法）
@@ -34,6 +35,7 @@ import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { generateManifest } from './manifest-gen.js'
 import { validateManifest } from './manifest-validate.js'
+import { injectWasmHash } from './wasm-hash.js'
 
 const SDK_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const TEMPLATE_DIR = join(SDK_ROOT, 'template')
@@ -241,7 +243,8 @@ function cmdBuild(flags) {
   const rustOnly = flags['rust-only'] === true
   const resourcesDir = flags['resources-dir']
 
-  // 0. 根据源码自动填充 contributes/permissions（构建前同步，保证产物与源码一致）
+  // 0. 根据源码自动填充 contributes/permissions（构建前同步，保证产物与源码一致；
+  //    一致口径不含 wasmHash——它由第 3 步注入产物，源清单不带）
   try {
     const { changed, report } = generateManifest(cwd)
     if (changed) {
@@ -306,6 +309,10 @@ function cmdBuild(flags) {
     copyFileSync(manifestPath, join(dest, 'plugin.json'))
     if (hasWasm && !frontendOnly) {
       copyFileSync(wasmPath, join(dest, `${rustLibrary}.wasm`))
+    }
+    if (hasWasm) {
+      // 摘要注入产物清单：源 plugin.json 保持不带 wasmHash（票 14）
+      injectWasmHash(dest, { log: (m) => console.log(`[bedcode-plugin-desktop] ${m}`) })
     }
     console.log(`\n[bedcode-plugin-desktop] 产物已复制到: ${dest}`)
   }

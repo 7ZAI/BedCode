@@ -7,11 +7,13 @@
  *
  * 权限词汇不在此手抄：读 SDK 生成物 `bin/permission-vocabulary.json`
  * （真源 `rust/src/permission.rs`，重跑 SDK 的 `pnpm run gen:permissions`）。
+ * `wasmHash` 的形态正则亦不手抄：取自 `bin/wasm-hash.js`（与产物注入、分发校验同一真源）。
  */
 
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { WASM_HASH_PATTERN } from './wasm-hash.js'
 
 const SDK_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const VOCABULARY_PATH = join(SDK_ROOT, 'bin', 'permission-vocabulary.json')
@@ -85,6 +87,19 @@ export function validateManifest(dir) {
   }
   if (manifest.pluginType === 'rust-ts' && !manifest.rustLibrary) {
     errors.push('pluginType=rust-ts 时必须提供 rustLibrary（与 Cargo.toml 包名一致）')
+  }
+
+  // wasmHash（票 14）：形态非法即拒；**值由构建注入产物**，源清单带它属于误用——
+  // manifest-gen 只回填 contributes/permissions，陈旧摘要会一路活到分发链（该链按字节复核后拒发）。
+  if (manifest.wasmHash !== undefined && manifest.wasmHash !== null && manifest.wasmHash !== '') {
+    if (typeof manifest.wasmHash !== 'string' || !WASM_HASH_PATTERN.test(manifest.wasmHash)) {
+      errors.push(
+        `wasmHash 形态非法（须为小写 64 位十六进制 SHA-256）: ${JSON.stringify(manifest.wasmHash)}`,
+      )
+    }
+    warnings.push(
+      'wasmHash 由构建链注入产物 plugin.json，源清单不必手写该键（写了也不会被刷新）',
+    )
   }
 
   // 权限：SDK 词汇真源之外的声明会在授权时被静默过滤，等于装饰词汇 → 直接拒绝

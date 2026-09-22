@@ -17,6 +17,7 @@ import { resolve, dirname, basename } from 'path'
 import { fileURLToPath } from 'url'
 import { startPluginWatch } from '../../../scripts/plugin-watch.js'
 import { WASM_TARGET, wasip3CargoEnv } from '../../../../scripts/plugin-wasm-config.mjs'
+import { injectWasmHash } from '../../../packages/plugin-sdk-desktop/bin/wasm-hash.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -120,6 +121,9 @@ function copyArtifacts() {
     cpSync(fallbackWasmPath, resolve(RESOURCES_DIR, `${RUST_LIB_NAME}.wasm`))
     console.log(`[build] Copied WASM (${fallbackProfile} fallback): ${RUST_LIB_NAME}.wasm`)
   }
+
+  // WASM 内容摘要写进产物清单（票 14：只写产物，源 plugin.json 不带该键）
+  injectWasmHash(RESOURCES_DIR, { log: (m) => console.log(`[build] ${m}`) })
 
   console.log(`[build] Artifacts copied to: ${RESOURCES_DIR}`)
   for (const name of HOOK_SCRIPTS) {

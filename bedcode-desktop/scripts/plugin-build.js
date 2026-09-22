@@ -64,7 +64,8 @@ const pluginDir = resolve(ROOT, config.pluginDir)
 console.log(`Running plugin build in: ${pluginDir}`)
 
 // 构建前：按源码自动填充 plugin.json 的 contributes/permissions
-// （与插件源码单一真源约定，保证产物与源码一致）
+// （与插件源码单一真源约定，保证产物与源码一致——一致的口径是「除构建注入的 wasmHash 外逐字一致」，
+//   wasmHash 只存在于产物目录，源清单不带；见 packages/plugin-sdk-desktop/bin/wasm-hash.js）
 try {
   const { changed, report } = generateManifest(pluginDir)
   if (changed) {

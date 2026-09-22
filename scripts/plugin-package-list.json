@@ -3,7 +3,7 @@
     "agent-hub",
     "ai-chatbox",
     "file-transfer",
-    "session"
+    "terminal-session"
   ],
   "mobile": [
     "ai-chatbox",
