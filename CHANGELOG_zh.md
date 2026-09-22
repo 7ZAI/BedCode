@@ -48,6 +48,9 @@
 
 #### 桌面端
 - 端到端等价回归**零改动断言**通过：`pty_session_chain`、`ws_session_route`、`ws_auth_rules`、`http_auth_biometric`、`server_integration`、`link_crypto_http`、`broadcast_shutdown`、`build_manifest_smoke`（S2 接缝文件与本批次前基线零 diff）
+- 五个集成测试 target 恢复为可编译可跑绿（审计票 13）：它们此前引用已退役符号（`pairing_service` / `QrTokenManager` / `SessionManager::from_database` / `restart_session`）。现改为真实驱动插件侧路径——`/api/auth/*` 已无宿主实现，故各套件在测试内激活随包 `com.bedcode.terminal-session` 产物（产物缺失显性失败，不静默跳过）；会话创建的编排读插件私有库（无头集成二进制不可达），改驱动内核执行端 `create_session_from_spec`（= 插件经 `host-session.create-with-spec` 到达的同一入口）。`cargo test` 重新成为全 target 门禁：lib 1134 + 八个集成 target 全绿，`[skip]` 计数 0
+- 恢复后的生物认证套件当场抓出一条真实回归（同票）：插件把连接历史的 `auth_method` / `result` 写成大写（`BIOMETRIC` / `SUCCESS`），而内核规范取值与连接历史页（i18n key 映射 + `result === 'success'` 计数）都是小写——设备历史页会把认证方式显示成「未知」且成功计数错误。已在插件侧以 `history_value` 常量模块修正，测试断言一字未改
+- 插件构建链恢复（审计票 15）：`manifest-gen.js` 手写的 Rust 权限映射表既没跟演 v23 退役的 `session:config`（插件仍在合法调用改挂 `session:read` 的 legacy 读取通道），也没跟演主库 SQL 面的 `database:main` 拆分，于是给插件注入未知权限、`plugin-build.js` 直接拒绝构建。现两处均已跟演，并加了一道加载期护栏：映射项指向词汇表外权限即抛错
 - 故障半径行为测试补齐：`Error` 态贡献面整组摘除、再激活整组恢复、内置入口让位与摘除共用同一判据、设置分组回落纯内置形态、配对桥接降级到宿主服务
 - 迁入的任务 UI 首次获得前端测试面（旧插件本来为零）：弹窗按需取数、入队/清空/开关的命令契约、历史视图加载与筛选一致性，外加两条同源护栏——前端调用的每条命令必有 Rust 分派臂、`t()` 用到的每个文案 key 必在两语言表内
 
