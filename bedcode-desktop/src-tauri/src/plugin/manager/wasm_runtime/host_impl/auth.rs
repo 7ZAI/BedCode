@@ -353,7 +353,7 @@ pub(crate) fn auth_link_identity_parts(host_ctx: &WasmHostContext, plugin_id: &s
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_AUTH, "host_auth_link_identity_parts") {
         return Err("permission denied".to_string());
     }
-    match crate::server::link_crypto::identity_parts() {
+    match crate::server::core::link_crypto::identity_parts() {
         Some((fingerprint, public_b64)) => {
             let payload = serde_json::json!({
                 "publicB64": public_b64,

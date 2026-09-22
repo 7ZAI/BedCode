@@ -120,7 +120,7 @@ pub fn register(
     }
 
     // 宿主配置上限为硬边界：插件只能收紧，不能放宽（spec §4.4 上限截断为常量）
-    let host_limit = crate::server::app::ws_frame_limit().max(1);
+    let host_limit = crate::server::core::app::ws_frame_limit().max(1);
     let entry = EndpointEntry {
         endpoint_id: format!("{ENDPOINT_HANDLE_PREFIX}{}", uuid::Uuid::new_v4()),
         owner: owner.to_string(),
@@ -315,7 +315,10 @@ mod tests {
         )
         .expect("register");
         assert_eq!(entry.max_clients, PLUGIN_WS_MAX_CLIENTS_PER_ENDPOINT);
-        assert_eq!(entry.max_message_bytes, crate::server::app::ws_frame_limit().max(1));
+        assert_eq!(
+            entry.max_message_bytes,
+            crate::server::core::app::ws_frame_limit().max(1)
+        );
 
         // 下限保护：0 被抬到 1（不能注册出「任何连接都拒绝」的端点）
         let zero = register(

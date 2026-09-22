@@ -22,7 +22,7 @@ use bedcode_lib::db::Database;
 use bedcode_lib::events::DesktopSyncEvent;
 use bedcode_lib::mdns::advertiser::MdnsAdvertiser;
 use bedcode_lib::plugin::PluginHost;
-use bedcode_lib::server::app::start_http_server;
+use bedcode_lib::server::core::app::start_http_server;
 use bedcode_lib::session::{SessionConfigManager, SessionManager};
 use bedcode_lib::system::app_context::AppContext;
 use bedcode_lib::system::app_context::AppContextBuilder;

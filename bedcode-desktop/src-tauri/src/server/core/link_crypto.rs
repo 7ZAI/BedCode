@@ -29,7 +29,9 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use crate::db::Database;
-use crate::server::filter::{Direction, FilterContext, TrafficChannel, TrafficFilter, TrafficFilterChain, Verdict};
+use crate::server::core::filter::{
+    Direction, FilterContext, TrafficChannel, TrafficFilter, TrafficFilterChain, Verdict,
+};
 use crate::system::error::{AppError, Result};
 
 // ==================== 协议核心再导出（issue 09 共享 crate） ====================
@@ -719,12 +721,12 @@ impl LinkEncryptionFilter {
         };
         match result {
             Ok(sealed) => {
-                crate::server::metrics::MetricsCollector::global().inc_encrypted_frame();
+                crate::server::core::metrics::MetricsCollector::global().inc_encrypted_frame();
                 ctx.data = sealed;
                 Verdict::Continue
             }
             Err(e) => {
-                crate::server::metrics::MetricsCollector::global().inc_decrypt_failure();
+                crate::server::core::metrics::MetricsCollector::global().inc_decrypt_failure();
                 Verdict::Reject(format!("ws frame crypto failed: {e}"))
             }
         }
@@ -780,12 +782,12 @@ impl LinkEncryptionFilter {
                 // 仅实际解封了请求体才计加密帧：空 body 协商只派生响应密钥，
                 // 计帧会高估加密吞吐（指标语义：成功处理帧/请求）
                 if had_body {
-                    crate::server::metrics::MetricsCollector::global().inc_encrypted_frame();
+                    crate::server::core::metrics::MetricsCollector::global().inc_encrypted_frame();
                 }
                 Verdict::Continue
             }
             Err(e) => {
-                crate::server::metrics::MetricsCollector::global().inc_decrypt_failure();
+                crate::server::core::metrics::MetricsCollector::global().inc_decrypt_failure();
                 Verdict::Reject(format!("http request decrypt failed: {e}"))
             }
         }
@@ -806,12 +808,12 @@ impl LinkEncryptionFilter {
                 route = ctx.route,
                 "http response key miss; response sent plaintext"
             );
-            crate::server::metrics::MetricsCollector::global().inc_response_key_miss();
+            crate::server::core::metrics::MetricsCollector::global().inc_response_key_miss();
             return Verdict::Continue;
         };
         match encrypt_http_body(&keys.response, &ctx.data, &http_aad(Direction::Outbound, ctx.route)) {
             Ok(envelope_json) => {
-                crate::server::metrics::MetricsCollector::global().inc_encrypted_frame();
+                crate::server::core::metrics::MetricsCollector::global().inc_encrypted_frame();
                 ctx.data = envelope_json;
                 // 响应加密标记（spec §4）：移动端据 `X-BedCode-Crypto: v1`
                 // 识别加密响应并解信封；值必须带 "v" 前缀（与请求侧
@@ -822,7 +824,7 @@ impl LinkEncryptionFilter {
                 Verdict::Continue
             }
             Err(e) => {
-                crate::server::metrics::MetricsCollector::global().inc_decrypt_failure();
+                crate::server::core::metrics::MetricsCollector::global().inc_decrypt_failure();
                 Verdict::Reject(format!("http response encrypt failed: {e}"))
             }
         }
@@ -944,7 +946,7 @@ mod tests {
     use base64::Engine;
     use std::sync::Mutex;
 
-    use crate::server::filter::Direction;
+    use crate::server::core::filter::Direction;
 
     /// 触碰全局配置快照的测试必须持此锁串行执行：
     /// cargo test 同模块用例默认多线程并行，否则 enabled 开关互踩产生偶发红

@@ -20,8 +20,8 @@ use std::io;
 use std::time::{Duration, Instant};
 
 use actix_web::dev::ServerHandle;
-use bedcode_lib::server::app::start_http_server;
-use bedcode_lib::server::supervisor::ServerSupervisor;
+use bedcode_lib::server::core::app::start_http_server;
+use bedcode_lib::server::core::supervisor::ServerSupervisor;
 use bedcode_lib::utils::auth::jwt::{JwtClaims, JwtService};
 use bedcode_lib::AppConfig;
 

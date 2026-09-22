@@ -272,7 +272,7 @@ fn test_ws_endpoint_server_domain_roundtrip() {
         let (server_handle, server_task, port) = {
             let config = crate::system::config::AppConfig::default().network;
             let port = ws_pick_free_port();
-            let (handle, server) = crate::server::app::start_http_server(port, &config)
+            let (handle, server) = crate::server::core::app::start_http_server(port, &config)
                 .await
                 .expect("start host http+ws server");
             (handle, tokio::spawn(server), port)
@@ -762,7 +762,7 @@ fn test_ws_two_plugin_isolation() {
         let (server_handle, server_task, port) = {
             let config = crate::system::config::AppConfig::default().network;
             let port = ws_pick_free_port();
-            let (handle, server) = crate::server::app::start_http_server(port, &config)
+            let (handle, server) = crate::server::core::app::start_http_server(port, &config)
                 .await
                 .expect("start host http+ws server");
             (handle, tokio::spawn(server), port)

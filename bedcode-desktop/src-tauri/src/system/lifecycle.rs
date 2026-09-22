@@ -273,7 +273,7 @@ pub fn register_core_lifecycle_hooks() {
 
     // ServerSupervisor — 优先级 30，停止 HTTP/WS 服务器
     registry.on_shutdown("server-supervisor", 30, || async {
-        let supervisor = crate::server::supervisor::ServerSupervisor::global();
+        let supervisor = crate::server::core::supervisor::ServerSupervisor::global();
         if supervisor.is_running().await {
             if let Err(e) = supervisor.stop().await {
                 tracing::error!("Failed to stop server during shutdown: {}", e);

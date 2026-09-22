@@ -719,12 +719,15 @@ mod tests {
 
     /// 两条别名锁共同的扫描目标：宿主路由装配源码
     ///
-    /// 单一取源点：`server/` 三层化把路由搬走后（票 04/05/06/07），只需重指这一行
-    /// `include_str!`，下面的前置会当场验证新目标仍是「活的宿主路由面」。
-    const APP_RS: &str = include_str!("app.rs");
+    /// 单一取源点：`server/` 三层化把路由搬走后（票 04/05/06/07），只需重指下面的
+    /// `include_str!` 与 `APP_RS_LABEL` **两行**（漏改 LABEL 只影响失败消息点名，
+    /// 2026-09-23 票 04 变异验证实测过这个漂移），前置会当场验证新目标仍是「活的宿主路由面」。
+    /// 票 04 已把路由面搬进 `core/`（本文件仍在 `server/` 根，故相对路径无 `../`；
+    /// 票 05 把本文件搬进 `http/` 时同批改成 `../core/app.rs`）。路由一拆为三是票 07。
+    const APP_RS: &str = include_str!("core/app.rs");
 
     /// 失败消息里显示的目标名（`include_str!` 的相对路径无法自报，故单独记一份）
-    const APP_RS_LABEL: &str = "server/app.rs";
+    const APP_RS_LABEL: &str = "server/core/app.rs";
 
     /// 扫描目标 `configure_routes` 函数体的路由标识符基线数
     ///
@@ -814,7 +817,7 @@ mod tests {
     #[test]
     fn calibration_scans_only_the_configure_routes_body() {
         let src = "\
-use crate::server::app::{API_HEALTH_PATH, WS_EVENT_PATH};
+use crate::server::core::app::{API_HEALTH_PATH, WS_EVENT_PATH};
 /// 文档注释里的 \"/api/doc-comment\" 不是路由
 pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     cfg.route(\"/sessions\", web::get().to(h));

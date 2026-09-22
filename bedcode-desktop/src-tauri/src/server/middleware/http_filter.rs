@@ -1,7 +1,7 @@
 //! HTTP Traffic Filter Middleware
 //!
 //! 把 HTTP 请求体（入站）与响应体（出站）送入 [`TrafficFilterChain`] 责任链，
-//! 以标准 actix Transform/Service 形式实现，由 `server/app.rs` 最内层 `.wrap()` 接入。
+//! 以标准 actix Transform/Service 形式实现，由 `server/core/app.rs` 最内层 `.wrap()` 接入。
 //!
 //! 快速路径：链为空 / WS 升级握手 / HEAD → 不缓冲直接透传。
 //!
@@ -23,8 +23,8 @@ use actix_web::{
 };
 use tracing::Instrument;
 
+use crate::server::core::filter::{Direction, FilterContext, TrafficChannel, TrafficFilterChain};
 use crate::server::dtos::common_dto::{ApiResponse, CODE_INVALID_REQUEST};
-use crate::server::filter::{Direction, FilterContext, TrafficChannel, TrafficFilterChain};
 
 // ==================== Transform（构造层） ====================
 
@@ -92,7 +92,7 @@ where
         // 链路加密协商头（issue 02）：原样透传给过滤器，解析归 link_crypto
         let negotiation = req
             .headers()
-            .get(crate::server::link_crypto::NEGOTIATION_HEADER)
+            .get(crate::server::core::link_crypto::NEGOTIATION_HEADER)
             .and_then(|v| v.to_str().ok())
             .unwrap_or("")
             .to_string();
@@ -269,7 +269,7 @@ fn request_id_is_stable_format_and_unique_enough() {
 }
 mod tests {
     use super::*;
-    use crate::server::filter::{TrafficFilter, Verdict};
+    use crate::server::core::filter::{TrafficFilter, Verdict};
     use actix_web::{test, web, App};
 
     /// 全局链是进程级单例，串行化触碰它的集成测试

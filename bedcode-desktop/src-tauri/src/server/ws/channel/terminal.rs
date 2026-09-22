@@ -13,7 +13,7 @@ use std::any::Any;
 use super::super::conn::{AuthMode, ChannelHandler, ChannelMessage, ConnCtx, WsConnBase};
 use crate::enums::special_key::KeyCombo;
 use crate::enums::{TerminalAction, TerminalPayload};
-use crate::server::link_crypto;
+use crate::server::core::link_crypto;
 use crate::server::ws::terminal_ws::control_frame::{self, ServerFrame};
 use crate::session::{GlobalOutputManager, SessionStatus};
 use crate::system::app_context::AppContext;

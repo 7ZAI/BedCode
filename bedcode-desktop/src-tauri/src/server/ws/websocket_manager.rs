@@ -6,7 +6,7 @@
 //!
 //! 服务依赖通过 AppContext::global() 获取，不再重复存储
 
-use crate::server::message::Message as BusinessMessage;
+use crate::server::ws::message::Message as BusinessMessage;
 use crate::server::ws::registry::WsSessionRegistry;
 use crate::session::GlobalOutputManager;
 use crate::system::constants::server::WS_EVENT_BROADCAST_CAPACITY;
@@ -112,7 +112,7 @@ impl WebSocketManager {
         std::thread::spawn(move || {
             let rt = actix_rt::Runtime::new().expect("Failed to create Actix runtime");
             rt.block_on(async move {
-                let result = crate::server::app::start_http_server(port, &net_config).await;
+                let result = crate::server::core::app::start_http_server(port, &net_config).await;
                 match result {
                     Ok((handle, server)) => {
                         // 先发送 handle，让调用方可以开始使用服务器

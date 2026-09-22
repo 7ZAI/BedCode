@@ -147,7 +147,7 @@ async fn endpoint_owner_activated(plugin_id: &str) -> bool {
 
 /// 健康检查端点 — 移动端 WS 连接前探测桌面端是否可达
 async fn health_check() -> HttpResponse {
-    let supervisor = crate::server::supervisor::ServerSupervisor::global();
+    let supervisor = crate::server::core::supervisor::ServerSupervisor::global();
     let status_info = supervisor.get_status_info().await;
     HttpResponse::Ok().json(json!({
         "status": "ok",
@@ -328,12 +328,12 @@ pub async fn start_http_server(
             .wrap(cors)
             .wrap(actix_web::middleware::Logger::default())
             .wrap_fn(|req, srv| {
-                crate::server::metrics::MetricsCollector::global().inc_http_request();
+                crate::server::core::metrics::MetricsCollector::global().inc_http_request();
                 srv.call(req)
             })
             // 流量过滤器责任链（HTTP 接入点）：请求体入站过滤 + 响应体出站过滤。
             // 挂在最内层：CORS/日志层拒绝的请求不进入缓冲逻辑；
-            // 链为空时零开销透传（加密等扩展经 server::filter::TrafficFilterChain 注册）
+            // 链为空时零开销透传（加密等扩展经 server::core::filter::TrafficFilterChain 注册）
             .wrap(crate::server::middleware::http_filter::TrafficFilter)
             .configure(configure_routes)
     })

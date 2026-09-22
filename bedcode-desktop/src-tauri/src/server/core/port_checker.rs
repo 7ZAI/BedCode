@@ -1,7 +1,8 @@
 //! 端口可用性检查模块
 //!
-//! 在 WebSocket 服务器启动前检查端口是否被占用，
-//! 被占用时弹窗提示用户选择新端口
+//! 服务器启动前检查端口是否被占用，被占用时弹窗提示用户选择新端口。
+//! 检查的是 HTTP 与 WS **共用的那一个**端口（actix 单端口模型），旧文案里的
+//! 「WebSocket 服务器」是历史遗留
 
 use crate::system::config::AppConfig;
 use crate::system::constants::server::{BIND_ADDRESS, MAX_PORT, PORT_SEARCH_MAX_ATTEMPTS};

@@ -27,7 +27,7 @@ pub(crate) fn config_get(host_ctx: &WasmHostContext, plugin_id: &str, key: &str)
     let value = match config_key {
         ConfigKey::NetworkPort => {
             // 优先获取服务器实际运行端口（端口冲突时会被重新分配）
-            let supervisor = crate::server::supervisor::ServerSupervisor::global();
+            let supervisor = crate::server::core::supervisor::ServerSupervisor::global();
             let actual_port = block_on_async(supervisor.get_status_info()).port;
             // 实际端口为 0 表示服务器未启动，回退到配置值
             if actual_port > 0 {

@@ -74,7 +74,7 @@ pub fn is_plugin_path(path: &str) -> bool {
 
 /// HTTP 网关中间件（`/api` scope）：验签通过注入 claims，否则按路径规则放行 / 401
 ///
-/// 从 `server/app.rs` 的路由构造里提出来成为具名中间件，目的是让「协议网关挂在验签之后」
+/// 从 `server/core/app.rs` 的路由构造里提出来成为具名中间件，目的是让「协议网关挂在验签之后」
 /// 这一顺序约束可被真实 actix 栈测到（见 `server/gateway.rs` 的中间件用例），而不是靠注释
 /// 约定。业务 JWT 的验签执行点始终在这里，不下沉、不外移（AGENTS.md §8 认证红线）。
 pub(crate) async fn jwt_gateway<B>(req: ServiceRequest, next: Next<B>) -> Result<ServiceResponse, Error>

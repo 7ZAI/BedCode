@@ -18,8 +18,8 @@ use actix::prelude::*;
 
 use super::super::conn::{AuthMode, ChannelHandler, ConnCtx, WsConnBase};
 use crate::enums::{SessionControlPayload, TerminalPayload};
-use crate::server::link_crypto;
-use crate::server::message::Message;
+use crate::server::core::link_crypto;
+use crate::server::ws::message::Message;
 use crate::system::app_context::AppContext;
 
 /// 事件通道处理器（无自有状态：旧协议面全在骨架与订阅原语上）

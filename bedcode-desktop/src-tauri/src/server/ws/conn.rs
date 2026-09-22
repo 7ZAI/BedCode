@@ -23,8 +23,8 @@ use std::time::{Duration, Instant};
 use tauri::Emitter;
 
 use crate::enums::auth::CryptoProposal;
-use crate::server::filter::{Direction, FilterContext, TrafficChannel, TrafficFilterChain};
-use crate::server::link_crypto;
+use crate::server::core::filter::{Direction, FilterContext, TrafficChannel, TrafficFilterChain};
+use crate::server::core::link_crypto;
 use crate::server::ws::registry::{ChannelKind, WsRegistration, WsSessionRegistry};
 use crate::server::ws::session::WsSession;
 use crate::server::ws::subscription::SubscriptionState;
@@ -409,7 +409,7 @@ impl WsConnBase {
     pub(crate) fn send_text_filtered(&self, text: String, ctx: &mut ConnCtx) {
         let chain = TrafficFilterChain::global();
         if chain.is_empty() {
-            crate::server::metrics::MetricsCollector::global().inc_ws_sent();
+            crate::server::core::metrics::MetricsCollector::global().inc_ws_sent();
             ctx.text(text);
             return;
         }
@@ -425,7 +425,7 @@ impl WsConnBase {
         };
         match chain.run_outbound(&mut fctx) {
             Ok(()) => {
-                crate::server::metrics::MetricsCollector::global().inc_ws_sent();
+                crate::server::core::metrics::MetricsCollector::global().inc_ws_sent();
                 ctx.text(String::from_utf8_lossy(&fctx.data).into_owned());
             }
             Err(rej) => {
@@ -445,7 +445,7 @@ impl WsConnBase {
     pub(crate) fn send_binary_filtered(&self, data: Vec<u8>, ctx: &mut ConnCtx) {
         let chain = TrafficFilterChain::global();
         if chain.is_empty() {
-            crate::server::metrics::MetricsCollector::global().inc_ws_sent();
+            crate::server::core::metrics::MetricsCollector::global().inc_ws_sent();
             ctx.binary(data);
             return;
         }
@@ -461,7 +461,7 @@ impl WsConnBase {
         };
         match chain.run_outbound(&mut fctx) {
             Ok(()) => {
-                crate::server::metrics::MetricsCollector::global().inc_ws_sent();
+                crate::server::core::metrics::MetricsCollector::global().inc_ws_sent();
                 ctx.binary(fctx.data);
             }
             Err(rej) => {
@@ -757,7 +757,7 @@ impl StreamHandler<Result<WsMessage, ProtocolError>> for WsConnBase {
                 self.hb = Instant::now();
             }
             WsMessage::Text(text) => {
-                crate::server::metrics::MetricsCollector::global().inc_ws_received();
+                crate::server::core::metrics::MetricsCollector::global().inc_ws_received();
                 // 入站先过流量过滤链（解密/审计）；被拒即链路加密失败 → 已 Close 4003
                 let Some(text) = self.filter_inbound_text(text.to_string(), ctx) else {
                     return;
@@ -769,7 +769,7 @@ impl StreamHandler<Result<WsMessage, ProtocolError>> for WsConnBase {
                 }
             }
             WsMessage::Binary(data) => {
-                crate::server::metrics::MetricsCollector::global().inc_ws_received();
+                crate::server::core::metrics::MetricsCollector::global().inc_ws_received();
                 // 入站先过流量过滤链，被拒即链路加密失败 → 已 Close 4003（不丢帧续跑）
                 let Some(data) = self.filter_inbound_data(data.to_vec(), "binary", ctx) else {
                     return;

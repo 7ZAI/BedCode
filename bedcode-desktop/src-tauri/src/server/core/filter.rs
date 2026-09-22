@@ -23,7 +23,7 @@
 //!
 //! ```
 //! use std::sync::Arc;
-//! use bedcode_lib::server::filter::{Direction, FilterContext, TrafficFilter, Verdict};
+//! use bedcode_lib::server::core::filter::{Direction, FilterContext, TrafficFilter, Verdict};
 //!
 //! struct AesGcmCipher { /* key material */ }
 //!
@@ -50,9 +50,9 @@
 //!
 //! # 接线点
 //!
-//! - HTTP：`server/app.rs` 最内层 wrap_fn → [`super::http_filter`]（启用过滤器时
-//!   请求体/响应体会整体缓冲后转换；链为空时零影响）
-//! - WS：`server/ws/terminal_ws.rs` 收帧（StreamHandler）与全部出站写帧路径；
+//! - HTTP：`server/core/app.rs` 最内层 wrap_fn → [`crate::server::middleware::http_filter`]
+//!   （启用过滤器时请求体/响应体会整体缓冲后转换；链为空时零影响）
+//! - WS：`server/ws/conn.rs` 收帧与全部出站写帧路径；
 //!   心跳 Ping/Pong 属协议控制帧，不过滤
 
 use std::sync::{Arc, RwLock};

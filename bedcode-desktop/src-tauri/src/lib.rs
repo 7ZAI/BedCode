@@ -345,7 +345,7 @@ pub fn run() {
             let ws_port = app_config.network.port;
 
             // 检查端口可用性
-            let ws_port = match server::port_checker::check_and_resolve_port(&app_handle, ws_port) {
+            let ws_port = match server::core::port_checker::check_and_resolve_port(&app_handle, ws_port) {
                 Ok(port) => port,
                 Err(e) => {
                     tracing::error!("Port check failed: {}", e);
@@ -501,7 +501,7 @@ pub fn run() {
 
             // 链路加密装配句柄（issue 01）：init_at_startup 需访问数据目录与 DB 状态
             let link_crypto_app_handle = app_handle.clone();
-            let supervisor = server::supervisor::ServerSupervisor::global();
+            let supervisor = server::core::supervisor::ServerSupervisor::global();
             let ws_port_for_spawn = ws_port;
             // 产品决策：服务器永久自启动，不再可配置（本地功能依赖此服务，
             // 见 ServerSupervisor 类注释；config 中 network.auto_start 已废弃）
@@ -509,7 +509,7 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 // 链路加密先于服务器启动装配：第一条流量就要被开关裁决（spec §6）；
                 // 身份损坏时强制回退全关，不阻断启动
-                server::link_crypto::init_at_startup(&link_crypto_app_handle).await;
+                server::core::link_crypto::init_at_startup(&link_crypto_app_handle).await;
 
                 supervisor.init_config(ws_port_for_spawn, auto_start).await;
 
