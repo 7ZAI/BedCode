@@ -304,10 +304,14 @@ WIT 契约 `host-task`（5 函数：execute-batch / submit / status / cancel / l
   「先权限门后属主」的判定与文案在 `host_impl`，与会话销毁一并注销）；
   会话状态变更直接持 `broadcast::Sender<SessionStatusEvent>`（原 `event_bus.rs` 的
   `SessionEvent`/`SessionEventBus` 只剩单一状态事件、无订阅者，已收缩删除）
-- **session_config**：`SessionConfigManager`——v21 后只剩一个用途：`com.bedcode.terminal-session`
-  一次性 legacy 迁移通道读主库 `session_configs`（表退役见 scratch 票 02）；业务 CRUD 真源在插件私有库，
-  主库投影写入口（`upsert_config`）与宿主侧配置桥接 `utils/session_config_bridge.rs` 已随票 05
-  命令面注销一并退役（宿主不再持有任何配置调用路径）
+- **session_config**：`SessionConfigManager`——v22 起收缩为**只读**迁移通道：唯一用途是
+  `com.bedcode.terminal-session` 的一次性 legacy 迁移（plugin 激活时经 host-session 读取面
+  `config-list` / `config-get` 读主库 `session_configs`，marker 幂等，见插件 `config/ops.rs::migrate`）；
+  业务 CRUD 真源在插件私有库。写面已整体退役：v22 删 host-session 写原语
+  （`config-upsert` / `config-delete`，死接口）与权限位 `session:config`（config-get 改挂 `session:read`），
+  `SessionConfigManager` 的写方法与 Config 同步事件发布随之删除（引擎层 SQL 写接口保留为
+  基础服务）；主库 `session_configs` 表保留为迁移源，观测信号（启动 `legacy_rows` 计数）归零后
+  作 contract 删除（`.scratch/2026-09-22-pty-business-downsink/spec.md` 阶段 1/2）
 - **session_output**：输出管理（缓存/队列/订阅/全局），支撑多端输出回放
 - **session_lifecycle**：生命周期事件（Creating/Created/Stopping/Stopped）与监听器机制，插件扩展点
 - **input_line**：会话输入扩展点（SessionInputListener + 提交行重构）

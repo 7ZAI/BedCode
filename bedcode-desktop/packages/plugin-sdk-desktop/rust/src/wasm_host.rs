@@ -326,24 +326,11 @@ impl HostSession for WasmHost {
         }
     }
 
-    fn session_config_upsert(
-        &self,
-        config: &serde_json::Value,
-    ) -> Result<serde_json::Value, HostError> {
-        let written = host_session::config_upsert(&config.to_string())
-            .map_err(|e| host_err("session_config_upsert", e))?;
-        parse_json("session_config_upsert", written)
-    }
-
     fn session_config_get(&self, config_id: &str) -> Result<Option<serde_json::Value>, HostError> {
         match host_session::config_get(config_id).map_err(|e| host_err("session_config_get", e))? {
             Some(s) => parse_json("session_config_get", s).map(Some),
             None => Ok(None),
         }
-    }
-
-    fn session_config_delete(&self, config_id: &str) -> Result<bool, HostError> {
-        host_session::config_delete(config_id).map_err(|e| host_err("session_config_delete", e))
     }
 
     fn session_lifecycle_register(&self) -> Result<(), HostError> {

@@ -63,7 +63,8 @@ describe('C1 插件身份五处一致', () => {
     // 权限清单与 D2 能力映射一一对应：auth = host-auth（密钥托管 + 认证记录面）、
     // peer = host-peer（consent 取可信集 / trust 的 peer 段）、
     // storage = host-plugin-database（票 08 配置真源私有库）、
-    // session:read / session:config = host-session 配置面（迁移读 legacy + 真源 CRUD）、
+    // session:read = host-session 配置读取面（v22 起只读：config-list/get 是迁移读 legacy
+    //   的一次性通道；`session:config` 权限已随写原语退役——真源 CRUD 全走插件私有库）、
     // session:write = host-session 创建与动作原语（票 09 create-with-spec、
     //   票 10 restart / remove / rename / resize）
     // ui:sidebar（票 13 起实际需要——侧边栏目录注册经前端权限门快速失败）、
@@ -85,7 +86,6 @@ describe('C1 插件身份五处一致', () => {
       'peer',
       // 票 03：文件浏览域 git diff 经 host-process run-sync（同步执行并捕获输出）
       'process:run',
-      'session:config',
       'session:read',
       'session:write',
       'storage',

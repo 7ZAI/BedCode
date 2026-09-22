@@ -1,7 +1,7 @@
 # 桌面 WASM 内核全面审查（安全授权 / 扩展性 / 模块称职度）
 
 Status: 进行中（审查已完成并取证，本文件是结论与证据真源。修复票 `issues/01..12` + 测试清理票 `issues/13`；
-已落地 01 / 02 / 04 / 05，P0 还剩 03（审批链未接线）与 06（前端 plugin_id 自报）。逐票状态看 `issues/*` 的 Status 行，
+已落地 01 / 02 / 03 / 04 / 05，**P0 只剩 06（前端 plugin_id 自报，需先收产品裁决）**。逐票状态看 `issues/*` 的 Status 行，
 接手顺序与门禁跑法看 `handoff-2026-09-22.md`）
 Date: 2026-09-21
 范围: **仅桌面端** WASM 内核 `bedcode-desktop/src-tauri/src/plugin/**`（含 `wasm_runtime`/`host_impl`/`security`/`bus`/`config`/`monitor`/`manager/**`）+ 前端插件通道 `bedcode-desktop/src/plugin/**` + SDK `packages/plugin-sdk-desktop/**` + 入站面 `server/**` 中与插件相关的路径。移动端零改动，受损/对齐项见 §7。

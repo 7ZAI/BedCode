@@ -322,41 +322,23 @@ impl WasmPlugin for SdkTestPlugin {
             }
             // ==================== host-session 配置面（v19）闭环探针 ====================
             // 票 07 的验收点是原语自身在真实运行时可用：新建 → 读回 → 覆盖 →
-            // 删除 → 读回确认消失，一条链贯穿 WIT → SDK → host_impl。
-            // 权限（session:config）由宿主 host_impl 权限门裁决，探针不做本地校验。
-            //
-            // args：{ name? }（缺省 probe-config；避免与真实配置重名）
+            // v22：host-session 配置面只读化（config-upsert/delete 已退役），
+            // 探针只走读取面：config-list 拿 id 清单 → config-get 逐条全量。
             "test_session_config_face" => {
-                let name = args
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("probe-config")
-                    .to_string();
-                let created = host.session_config_upsert(&serde_json::json!({
-                    "name": name,
-                    "environment": "linux",
-                    "workingDir": "/srv/probe",
-                    "command": "bash",
-                }))?;
-                let id = created
-                    .get("id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default()
-                    .to_string();
-                let got = host.session_config_get(&id)?.unwrap_or(serde_json::Value::Null);
-                // 覆盖：只改 name，未声明字段必须回落既有值
-                let updated = host.session_config_upsert(&serde_json::json!({
-                    "id": id,
-                    "name": format!("{}-2", name),
-                }))?;
-                let deleted = host.session_config_delete(&id)?;
-                let after_delete = host.session_config_get(&id)?.unwrap_or(serde_json::Value::Null);
+                let list = host.session_config_list()?.unwrap_or_else(|| serde_json::json!([]));
+                let mut rows = Vec::new();
+                if let Some(arr) = list.as_array() {
+                    for row in arr {
+                        if let Some(id) = row.get("id").and_then(|v| v.as_str()) {
+                            rows.push(
+                                host.session_config_get(id)?.unwrap_or_else(|| serde_json::Value::Null),
+                            );
+                        }
+                    }
+                }
                 Ok(serde_json::json!({
-                    "created": created,
-                    "got": got,
-                    "updated": updated,
-                    "deleted": deleted,
-                    "afterDelete": after_delete,
+                    "list": list,
+                    "rows": rows,
                 }))
             }
             _ => Err(anyhow::anyhow!("Unknown command: {}", name)),

@@ -104,11 +104,17 @@
 //!   权限门**，`system:open` 权限随宿主命令面与前端 API 一并退役（五同步点全落）。
 //!   既有 interface 的函数级追加，纯增量，v21 及以下插件二进制不受影响。
 //!
+//! - v23: host-session 配置面**写原语退役**（删 `config-upsert` / `config-delete`）：
+//!   业务配置真源自票 08 起在插件私有库，宿主写原语无调用者即死接口；读取面
+//!   （`config-list` / `config-get`）保留为一次性 legacy 迁移通道（迁移窗口结束随主库
+//!   表退役）。权限位 `session:config` 同步退役（config-get 改挂 `session:read`，五同步点
+//!   全落）。破坏性收缩（WIT 删除 import 函数），旧插件二进制须重编译。
+//!
 //! 编号口径（AGENTS.md §7 教训）：本号以 `abi.rs` 与 WIT 版本表实读为准，
 //! 规格正文的「17 → 19」是并发线（host-notification v18）尚未落地时的预判；
 //! 本分支实测 v18 已被「host-auth 认证记录面」占用（票 05），故会话语义下沉的
 //! 第二批次取 v19。
-pub const ABI_VERSION: u32 = 22;
+pub const ABI_VERSION: u32 = 23;
 
 /// 组件形态标识：`abi.form() == FORM_COMPONENT`（WIT `abi` 接口的 form() 声明）
 ///
@@ -122,15 +128,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_abi_version_is_v22() {
-        // 版本号序列与历史 core ABI 共用：v22 = host-platform.reveal-in-dir（平台定位
-        // 原语，无权限门；`system:open` 随之退役），叠加 v21 host-session 收敛退役
-        // （删 `create` / `restart`）、v20 host-task 宿主并发任务域、
+    fn test_abi_version_is_v23() {
+        // 版本号序列与历史 core ABI 共用：v23 = host-session 配置面写原语退役
+        // （删 config-upsert / config-delete，权限 session:config 同步退役），叠加
+        // v22 host-platform.reveal-in-dir（平台定位原语，无权限门；`system:open` 退役）、
+        // v21 host-session 收敛退役（删 `create` / `restart`）、v20 host-task 宿主并发任务域、
         // v19 host-session 配置面与创建/动作面（会话语义下沉批次之二）、
         // v18 host-auth 认证记录面（同批次之一）、v17 认证策略导出（auth-policy）、
         // v16 插件私有伪终端原语（host-pty）、v15 密钥托管（host-auth / secret-store）、
         // v14 host-websocket、v13 host-mdns v2、v12 总线二进制载荷与 v11 host-peer 传输控制三原语
-        assert_eq!(ABI_VERSION, 22);
+        assert_eq!(ABI_VERSION, 23);
     }
 
     #[test]

@@ -153,7 +153,7 @@ pnpm exec eslint .
 v18 认证记录面）、`host-pty`（v16）、`auth-policy` 导出（v17，认证中心能力，票 12 server
 认证中间件取策略）、`host-session` 会话语义批次与 `host-platform.wsl-distros`（v19）、
 `host-task`（v20 并发任务域 + `events-task` 可选导出）只在 desktop WIT/ABI/SDK 演进；
-当前 desktop **v22**（v22 = `host-platform.reveal-in-dir` 平台定位原语——函数级追加、**不叠加权限门**，`system:open` 权限与宿主 `plugin_reveal_in_dir` 命令、前端 `context.system` API 随之退役；v21 = host-session 收敛退役：删 `create` / `restart`，创建与重启编排全部归插件——首个**接口函数删除**，旧产物需按 v21 SDK 重建）、mobile 11。移动端要接同类能力时再补该端 interface 并对齐计数（恢复
+当前 desktop **v23**（v23 = host-session 配置面写原语退役：删 `config-upsert` / `config-delete`，读取面 `config-list` / `config-get` 保留为一次性 legacy 迁移通道，权限位 `session:config` 同步退役（config-get 改挂 `session:read`）；v22 = `host-platform.reveal-in-dir` 平台定位原语——函数级追加、**不叠加权限门**，`system:open` 权限与宿主 `plugin_reveal_in_dir` 命令、前端 `context.system` API 随之退役；v21 = host-session 收敛退役：删 `create` / `restart`，创建与重启编排全部归插件——首个**接口函数删除**，旧产物需按 v21 SDK 重建）、mobile 11。移动端要接同类能力时再补该端 interface 并对齐计数（恢复
 条件见同一节）。**同一批次内函数级追加不再 bump**（v19 已含配置面 / 创建与动作面 /
 注解槽 / 连接清单四组；票 02/03 又追加 `host-fs.read-dir / canonicalize / stat` 与
 `host-process.run-sync`——文件浏览域下沉所需的引擎级原语，仍保持 v19），别拿批次号当函数号数。**不 bump 的行为变更（审计票 05）**：`host-bus` topic **命名空间**——函数签名零变化故不动版本号，但定向事件串由 `<base>.<owner>` 改为 `<owner>::<base>`（`pty:exit` / `ws:*` / `mdns:found|lost`），且跨属主订阅/伪发布由「无人拦截」改为**宿主显式拒绝**；旧产物不静默断流（按旧形态订阅会在 activate 期拿到点明新形态的错误），须按 v22 SDK（`owned_topic` / `*_event_topic`）重建。移动端 `host-mdns` 仍用旧形态、mobile 总线无门禁 → 该端跟演时需同批补 SDK 原语 + 总线 ACL + mobile file-transfer 迁移，桌面结果不构成移动端的正确性依据

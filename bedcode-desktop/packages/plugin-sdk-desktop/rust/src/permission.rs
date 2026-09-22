@@ -18,13 +18,6 @@ pub const PERMISSION_TERMINAL_OUTPUT: &str = "terminal:output";
 pub const PERMISSION_TERMINAL_OBSERVE: &str = "terminal:observe";
 pub const PERMISSION_SESSION_READ: &str = "session:read";
 pub const PERMISSION_SESSION_WRITE: &str = "session:write";
-/// 会话配置读写（host-session 配置面，v19）：`config-upsert` / `config-get` /
-/// `config-delete`
-///
-/// 与 `session:read` / `session:write` 分域：读会话运行时状态与「增删改会话配置
-/// （含 workingDir / command，等价于预先编排将要执行的命令）」是两种信任等级，
-/// 便于「只观测」的插件最小授权（spec 用户故事 23）
-pub const PERMISSION_SESSION_CONFIG: &str = "session:config";
 pub const PERMISSION_UI_SIDEBAR: &str = "ui:sidebar";
 pub const PERMISSION_UI_TOOLBOX: &str = "ui:toolbox";
 pub const PERMISSION_UI_STATUSBAR: &str = "ui:statusbar";
@@ -108,7 +101,6 @@ pub const PERMISSION_VOCABULARY: &[(&str, &str)] = &[
     (stringify!(PERMISSION_TERMINAL_OBSERVE), PERMISSION_TERMINAL_OBSERVE),
     (stringify!(PERMISSION_SESSION_READ), PERMISSION_SESSION_READ),
     (stringify!(PERMISSION_SESSION_WRITE), PERMISSION_SESSION_WRITE),
-    (stringify!(PERMISSION_SESSION_CONFIG), PERMISSION_SESSION_CONFIG),
     (stringify!(PERMISSION_UI_SIDEBAR), PERMISSION_UI_SIDEBAR),
     (stringify!(PERMISSION_UI_TOOLBOX), PERMISSION_UI_TOOLBOX),
     (stringify!(PERMISSION_UI_STATUSBAR), PERMISSION_UI_STATUSBAR),
@@ -185,13 +177,6 @@ pub static PERMISSION_API_MAP: &[(&str, &[&str])] = &[
         ],
     ),
     (PERMISSION_SESSION_WRITE, &["session.create", "session.stop"]),
-    // 配置面为 WASM 优先权限（前端经插件命令通道取数，不直调宿主域命令）；
-    // 登记三个方法名，与 host_impl 的权限门同域
-    (PERMISSION_SESSION_CONFIG, &[
-        "session.configUpsert",
-        "session.configGet",
-        "session.configDelete",
-    ]),
     (PERMISSION_UI_SIDEBAR, &["ui.registerSidebarPanel", "ui.registerPage"]),
     (PERMISSION_UI_TOOLBOX, &["ui.registerToolboxPage"]),
     (PERMISSION_UI_STATUSBAR, &["ui.registerStatusBarItem", "ui.registerTitleBarItem"]),

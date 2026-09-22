@@ -313,16 +313,8 @@ impl bedcode::plugin::host_session::Host for WasmPluginState {
         session::session_config_list(&self.host_ctx, &self.plugin_id)
     }
 
-    fn config_upsert(&mut self, config_json: String) -> Result<String, String> {
-        session::session_config_upsert(&self.host_ctx, &self.plugin_id, &config_json)
-    }
-
     fn config_get(&mut self, config_id: String) -> Result<Option<String>, String> {
         session::session_config_get(&self.host_ctx, &self.plugin_id, &config_id)
-    }
-
-    fn config_delete(&mut self, config_id: String) -> Result<bool, String> {
-        session::session_config_delete(&self.host_ctx, &self.plugin_id, &config_id)
     }
 
     fn lifecycle_register(&mut self) -> Result<(), String> {

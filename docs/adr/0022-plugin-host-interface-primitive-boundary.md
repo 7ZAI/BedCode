@@ -123,7 +123,9 @@ spec：`.scratch/2026-09-19-terminal-session-plugin/spec.md`（D2–D7），实�
 | 面 | 追加 | 批次 | 权限位 |
 | --- | --- | --- | --- |
 | `host-auth` 记录面 | `trusted-devices-list` / `trusted-device-revoke` / `connection-history-list` / `auth-setting-set` | v18 | `auth` |
-| `host-session` 配置面 | `config-upsert` / `config-get` / `config-delete` | v19 | `session:config`（新增位） |
+| `host-session` 配置面 | `config-upsert` / `config-get` / `config-delete` | v19 | `session:config`（新增位）
+|
+| → 配置面写原语 `config-upsert` / `config-delete` **已随 v23 退役**（真源在插件私有库，宿主写原语无调用者即死接口）；读取面 `config-list` / `config-get` 保留为一次性 legacy 迁移通道（迁移窗口结束随主库表退役），权限收编 `session:read` |
 | `host-session` 创建与动作面 | `create-with-spec` / `remove` / `rename` / `resize`（原表的 `restart` 已于 v21 退役，见下「v21 收敛退役」） | v19（函数级追加不 bump） | `session:write` |
 | `host-session` 事实面 | `annotate`（注解槽）/ `connections-list`（连接注册表原始记录） | v19 | `session:write` / `session:read` |
 | `host-platform` | `wsl-distros` | v19 | `platform` 现状 |
@@ -208,7 +210,7 @@ roadmap 阶段 3（`.scratch/2026-09-10-plugin-kernel-roadmap/spec.md`）把「�
 
 ## 双端偏离（host-websocket / host-pty 等桌面独有接口）
 
-- 移动端是**远程终端控制端**，不承载 PTY / mDNS 广播 / WS 服务端等主机侧引擎，故 `host-websocket`（desktop v14）、`host-auth`（v15 密钥托管；v18 追加认证记录面四函数）、`host-pty`（v16）、`auth-policy` 导出（v17，认证能力——宿主 server 中间件验签后取策略）、**会话语义下沉批次（v18 / v19：`host-session` 配置面 + 创建与动作面 + 注解槽 + 连接清单、`host-platform.wsl-distros`）** 均为**桌面独有接口**：mobile 的 WIT / ABI / SDK 不跟演也不投影（ADR 0018 双端各自演进的文档化偏离，同 wasmtime 桌面 48 / 移动 47 分叉先例）。当前 **desktop v22 / mobile 11**。
+- 移动端是**远程终端控制端**，不承载 PTY / mDNS 广播 / WS 服务端等主机侧引擎，故 `host-websocket`（desktop v14）、`host-auth`（v15 密钥托管；v18 追加认证记录面四函数）、`host-pty`（v16）、`auth-policy` 导出（v17，认证能力——宿主 server 中间件验签后取策略）、**会话语义下沉批次（v18 / v19：`host-session` 配置面 + 创建与动作面 + 注解槽 + 连接清单、`host-platform.wsl-distros`）** 均为**桌面独有接口**：mobile 的 WIT / ABI / SDK 不跟演也不投影（ADR 0018 双端各自演进的文档化偏离，同 wasmtime 桌面 48 / 移动 47 分叉先例）。当前 **desktop v23 / mobile 11**（v23 = host-session 配置面写原语退役，见 v10 登记；desktop 独有接口持续演进不要求移动端跟演）。
 - **偏离不止 WIT 面**：本批次同时经用户 2026-09-19 授权**豁免 AGENTS.md §9「协议改动必须两端同步部署」**，豁免范围严格限于该 spec（`.scratch/2026-09-19-terminal-session-plugin/spec.md` D1）。自守边界：线协议**形状**（会话 DTO 字段、同步事件、WS 控制帧、认证握手报文）保持不变——保持它并不需要移动端改一行代码，且它是后置适配专项的成本基线。移动端受损面 M1–M5 已挂进路线图（`.scratch/2026-09-10-plugin-kernel-roadmap/spec.md`），桌面端不为其负责（spec Out of Scope）。
 - **恢复条件**：当移动端需要同类能力（例如本地跑交互进程）时，再在该端 WIT 增补对应 interface 并对齐 ABI 计数；在此之前「改 WIT 必须双端同步」这一硬约束的适用范围限于**双端共有的接口**（host-peer / host-fs / host-http 等）。
 - SDK 双端独立包（`plugin-sdk-desktop` / `plugin-sdk-mobile`），互不影响；宿主侧 `version > 当前 → 拒绝` 的兼容语义保证旧插件（≤v16）零迁移仍可加载。
@@ -296,3 +298,13 @@ host-business-decarriage 收尾批次（`.scratch/2026-09-20-host-business-decar
   校验），宿主 Channel 输出传输（`terminal_stream` 命令面）随前端消费方一并摘除。④ **终端窗口域下沉收口**
   （票 05）：宿主 `TerminalPreview` / `composables/terminal` / `utils/terminal` 与 attachSink 契约摘除，
   宿主终端窗口 API 过激活门禁（session 插件停用 → 显性报错，不留降级代办）。移动端零改动，双端偏离表不变。
+- **2026-09-22 v10（当前）**：**host-session 配置面写原语退役（ABI desktop 22→23）**：
+  删 `config-upsert` / `config-delete`（业务配置真源自票 08 起在插件私有库，宿主写原语无调用者——
+  死接口删除，行为零变化）；读取面 `config-list` / `config-get` 保留为**一次性 legacy 迁移通道**
+  （`terminal-session` 激活时读主库 `session_configs` 迁入私有库，marker 幂等；/api/sessions/start 已
+  走插件编排不再读主库——票 09 起的退役绑定条件已满足）；权限位 `session:config` 同步退役
+  （config-get 改挂 `session:read`，五同步点全落，`gen:permissions` 重出）；`SessionConfigManager`
+  收缩为只读迁移通道（写路径 + Config 事件发布删除，引擎层 SQL 写接口保留为基础服务）；
+  主库 `session_configs` 表保留为迁移源，观测信号（启动 `legacy_rows` 计数）归零后作 contract 删除
+  （迁移窗口结束再删读面与表）。桌面独有接口，移动端零改动。实施见
+  `.scratch/2026-09-22-pty-business-downsink/spec.md`（阶段 1）。

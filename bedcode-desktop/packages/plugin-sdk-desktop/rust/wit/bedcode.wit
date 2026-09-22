@@ -387,19 +387,14 @@ interface host-session {
     list-sessions: func() -> result<option<string>, string>;
     get: func(session-id: string) -> result<option<string>, string>;
     config-list: func() -> result<option<string>, string>;
-    /// 会话配置写入（v19，权限 `session:config`）：入参为配置 JSON
-    /// （`{id?, name, environment, wslDistro?, workingDir, command, autoStart?}`）
-    /// —— `id` 缺省/空 → 新建；`id` 命中 → 覆盖；`id` 非空但未命中 →
-    /// **显性报错**（不静默新建，避免拼错 id 写成第三份配置）。
-    /// 返回写入后的完整配置 JSON（含宿主生成/回填的 id 与时间戳）。
-    /// 校验沿用宿主配置命令面的规则（名字非空等）；业务规则（环境取值 /
-    /// WSL 分支 / 空命令兜底）随票 08 下沉插件，本原语只做输入仲裁。
-    config-upsert: func(config-json: string) -> result<string, string>;
-    /// 读取单个会话配置（v19，权限 `session:config`）；不存在返回 `ok(none)`
+    /// 读取单个会话配置（权限 `session:read`）；不存在返回 `ok(none)`
+    ///
+    /// v22 起 config-upsert / config-delete 已退役（业务真源在插件私有库，
+    /// 插件的写路径全走私有库；宿主写原语无调用者即死接口，删除不改变行为）。
+    /// 本读取面与 `config-list` 保留为**一次性 legacy 迁移通道**：`terminal-session`
+    /// 插件激活时经它读主库 `session_configs`（老版本升级残留），幂等迁入私有库
+    /// （marker 控制，`config/ops.rs::migrate`）；迁移窗口结束随主库表一并退役。
     config-get: func(config-id: string) -> result<option<string>, string>;
-    /// 删除会话配置（v19，权限 `session:config`），返回是否命中
-    /// （未知 id 幂等 `false`，不报错）
-    config-delete: func(config-id: string) -> result<bool, string>;
     /// 会话启动规格创建（v19，权限 `session:write`）：接收插件算好的 launch
     /// spec-json——
     /// `{name, command, args?, cwd, cols?, rows?, env?, environment?, configId?, start?}`

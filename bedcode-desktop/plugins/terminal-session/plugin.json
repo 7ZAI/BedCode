@@ -15,7 +15,6 @@
     "fs:write",
     "peer",
     "process:run",
-    "session:config",
     "session:read",
     "session:write",
     "storage",

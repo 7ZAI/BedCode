@@ -34,22 +34,13 @@ pub trait HostSession {
     /// 供插件遍历项目目录（如批量清理 hooks）
     fn session_config_list(&self) -> Result<Option<serde_json::Value>, HostError>;
 
-    /// 新建或按 id 覆盖一条会话配置（v19，需要 `session:config` 权限）
+    /// 读取单条会话配置（v22 起权限 `session:read`）；不存在返回 `Ok(None)`
     ///
-    /// 入参形如 `{id?, name, environment, wslDistro?, workingDir, command, autoStart?}`：
-    /// `id` 缺省/空 → 新建（宿主生成 id）；`id` 命中 → 覆盖；`id` 非空但未命中 →
-    /// 显性报错（不静默新建）。返回写入后的完整配置（camelCase，含时间戳）。
-    fn session_config_upsert(
-        &self,
-        config: &serde_json::Value,
-    ) -> Result<serde_json::Value, HostError>;
-
-    /// 读取单条会话配置（v19，需要 `session:config` 权限）；不存在返回 `Ok(None)`
+    /// v22 起 `session_config_upsert` / `session_config_delete` 已退役（业务真源在
+    /// 插件私有库，宿主写原语无调用者）；本读取面与 `session_config_list` 保留为
+    /// 一次性 legacy 迁移通道（`terminal-session` 插件激活时读主库 `session_configs`，
+    /// marker 幂等，`config/ops.rs::migrate`）。迁移窗口结束随主库表一并退役。
     fn session_config_get(&self, config_id: &str) -> Result<Option<serde_json::Value>, HostError>;
-
-    /// 删除会话配置（v19，需要 `session:config` 权限），返回是否命中
-    /// （未知 id 幂等 `false`，不报错）
-    fn session_config_delete(&self, config_id: &str) -> Result<bool, HostError>;
 
     /// 注册会话生命周期监听器
     ///
