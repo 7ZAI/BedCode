@@ -157,38 +157,6 @@ pub fn windows_to_wsl_path(path: &str) -> String {
 
 /// 将 WSL 路径转换为 Windows 路径
 ///
-/// /mnt/c/Users/test -> C:\Users\test
-/// /home -> \\wsl$\Ubuntu\home (需要发行版名称)
-pub fn wsl_to_windows_path(path: &str, distro: Option<&str>) -> String {
-    // 检查是否是 /mnt/... 路径
-    if path.starts_with("/mnt/") && path.len() >= 6 {
-        let drive = path.chars().nth(5).unwrap().to_ascii_uppercase();
-        let rest = &path[6..].replace('/', "\\");
-        return format!("{}:{}", drive, rest);
-    }
-
-    // 其他路径需要通过 WSL 发行版访问
-    if let Some(d) = distro {
-        return format!("\\\\wsl$\\{}{}", d, path.replace('/', "\\"));
-    }
-
-    path.replace('/', "\\")
-}
-
-/// 检查 WSL 是否可用
-pub fn is_wsl_available() -> bool {
-    create_command("cmd.exe")
-        .args(["/c", "chcp 65001 >nul && wsl --version"])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
-
-/// 获取默认 WSL 发行版
-pub fn get_default_distro() -> Result<Option<String>> {
-    let distros = list_distributions()?;
-    Ok(distros.into_iter().find(|d| d.is_default).map(|d| d.name))
-}
 
 #[cfg(test)]
 mod tests {
@@ -264,12 +232,4 @@ mod tests {
         assert_eq!(decoded, "* Ubuntu Running 2\n");
     }
 
-    #[test]
-    fn test_wsl_to_windows_path() {
-        assert_eq!(wsl_to_windows_path("/mnt/c/Users/test", None), "C:\\Users\\test");
-        assert_eq!(
-            wsl_to_windows_path("/home/user", Some("Ubuntu")),
-            "\\\\wsl$\\Ubuntu\\home\\user"
-        );
-    }
 }

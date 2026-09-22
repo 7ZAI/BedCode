@@ -23,6 +23,4 @@ pub use crate::enums::{ExecutionEnvironment, PtySessionStatus, SessionLaunchConf
 // Re-export from submodules
 pub use command::build_command;
 pub use pty_reader::PtyReader;
-pub use wsl::{
-    get_default_distro, is_wsl_available, list_distributions, windows_to_wsl_path, wsl_to_windows_path, WslDistro,
-};
+pub use wsl::{list_distributions, windows_to_wsl_path, WslDistro};
