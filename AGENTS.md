@@ -155,10 +155,19 @@ pnpm exec eslint .
 - [ ] 对外可调 API 在 manifest `api` 字段声明，经 `#[plugin_api]` 宏 + JSON-RPC 2.0；**未声明不可调**（ADR 0017）
 - [ ] 契约边界单点维护在 WIT（`packages/plugin-sdk-*/rust/wit/bedcode.wit`）；改 WIT 必须双端同步 + ABI bump（wasmtime 桌面 48 / 移动 47 分叉中，见 `.scratch/2026-09-18-wasmtime-48-upgrade/spec.md`；双端对齐后恢复锁死表述）。**双端偏离（已文档化，ADR 0022「双端偏离」节）**：
 桌面独有接口不要求移动端跟演——`host-websocket`（v14）、`host-auth`（v15 密钥托管 /
-v18 认证记录面）、`host-pty`（v16）、`auth-policy` 导出（v17，认证中心能力，票 12 server
+v18 认证记录面（v24 已退役，见下））、`host-pty`（v16）、`auth-policy` 导出（v17，认证中心能力，票 12 server
 认证中间件取策略）、`host-session` 会话语义批次与 `host-platform.wsl-distros`（v19）、
 `host-task`（v20 并发任务域 + `events-task` 可选导出）只在 desktop WIT/ABI/SDK 演进；
-当前 desktop **v23**（v23 = host-session 配置面写原语退役：删 `config-upsert` / `config-delete`，读取面 `config-list` / `config-get` 保留为一次性 legacy 迁移通道，权限位 `session:config` 同步退役（config-get 改挂 `session:read`）；v22 = `host-platform.reveal-in-dir` 平台定位原语——函数级追加、**不叠加权限门**，`system:open` 权限与宿主 `plugin_reveal_in_dir` 命令、前端 `context.system` API 随之退役；v21 = host-session 收敛退役：删 `create` / `restart`，创建与重启编排全部归插件——首个**接口函数删除**，旧产物需按 v21 SDK 重建）、mobile 11。移动端要接同类能力时再补该端 interface 并对齐计数（恢复
+当前 desktop **v25**（v25 = `host-peer` 增节点生命周期引擎原语
+（`start-node` / `stop-node`，审计票 12 选项 A）——peer-net 节点从「内核按硬编码产品 id 开关」改为
+「属主插件自行请求、内核只记账」：`FILE_TRANSFER_PLUGIN_ID` 双定义、激活/停用按 id 外壳与 boot
+按 id 对账（`sync_node_with_plugin_state`）全部退役，激活失败改走按属主补偿；函数级追加不破坏
+旧产物，要用须按 v25 SDK 重建；桌面独有（host-peer 不在 mobile WIT，移动端不跟演）；v24 = 认证记录下沉 + 配置面退役：host-auth 删 7 记录面原语
+（trusted-devices-list / revoke、connection-history-list / clear、upsert / touch / record——
+配对设备 / 连接历史真源随 2026-09-22 用户裁定下沉 `com.bedcode.terminal-session`
+私有库 auth_records 域，宿主不再持有，存量数据由宿主 handoff
+`plugin/auth_records_migration.rs` 经互调 api 推送），host-session 删 config-list /
+config-get（`session_configs` 表退役，私有库即真源）；v23 = host-session 配置面写原语退役：删 `config-upsert` / `config-delete`，读取面 `config-list` / `config-get` 保留为一次性 legacy 迁移通道，权限位 `session:config` 同步退役（config-get 改挂 `session:read`）；v22 = `host-platform.reveal-in-dir` 平台定位原语——函数级追加、**不叠加权限门**，`system:open` 权限与宿主 `plugin_reveal_in_dir` 命令、前端 `context.system` API 随之退役；v21 = host-session 收敛退役：删 `create` / `restart`，创建与重启编排全部归插件——首个**接口函数删除**，旧产物需按 v21 SDK 重建）、mobile 11。移动端要接同类能力时再补该端 interface 并对齐计数（恢复
 条件见同一节）。**同一批次内函数级追加不再 bump**（v19 已含配置面 / 创建与动作面 /
 注解槽 / 连接清单四组；票 02/03 又追加 `host-fs.read-dir / canonicalize / stat` 与
 `host-process.run-sync`——文件浏览域下沉所需的引擎级原语，仍保持 v19），别拿批次号当函数号数。**不 bump 的行为变更（审计票 05）**：`host-bus` topic **命名空间**——函数签名零变化故不动版本号，但定向事件串由 `<base>.<owner>` 改为 `<owner>::<base>`（`pty:exit` / `ws:*` / `mdns:found|lost`），且跨属主订阅/伪发布由「无人拦截」改为**宿主显式拒绝**；旧产物不静默断流（按旧形态订阅会在 activate 期拿到点明新形态的错误），须按 v22 SDK（`owned_topic` / `*_event_topic`）重建。移动端 `host-mdns` 仍用旧形态、mobile 总线无门禁 → 该端跟演时需同批补 SDK 原语 + 总线 ACL + mobile file-transfer 迁移，桌面结果不构成移动端的正确性依据
@@ -182,7 +191,7 @@ v18 认证记录面）、`host-pty`（v16）、`auth-policy` 导出（v17，认�
 ### 安全红线（不可违反）
 
 - **禁止提交密钥/凭据**：仓库内唯一例外是签名真源 `bedcode.keystore`（私有仓库设计，见 §9 Android）；新增的任何密钥、token、密码禁止入库、禁止进日志、禁止写进文档/备注；API token 泄露按仓库规范删除重建
-- 认证链路（JWT / 设备指纹 / 二维码 / 生物凭证）只走既有 auth 模块，禁止旁路；**日志与存储中凭据只记长度不落明文**（`token.length()` 模式）。**分层口径（ADR 0022 会话语义下沉批次）**：配对码 / QR 的**编排、签发与验签执行**全在 `com.bedcode.terminal-session` 插件（`pairing/` / `qr/` / `auth_http`；2026-09-22 票 06 起新 id，旧 id `com.bedcode.session` 的 HTTP/API 名留双投窗口），**密钥托管（host-auth secret-store）、`pairings` / `connection_history` 表**留宿主——宿主这边只剩 `host-auth` 记录面与 `auth-policy` capability（认证策略取用；其 capability 传输失败时回退放行，防认证中心故障误杀全部连接，`warn` 留痕，**不算旁路**）。**配对 / QR 的宿主降级实现已整体退役**（2026-09-21，宿主命令面注销同批）：`utils/auth/auth_center.rs` 的配对 / QR 桥接函数、`PairingService`、`QrTokenManager`、`utils/auth/pairing.rs` 与应用上下文装配链全部删除——插件未激活时前端命令面显性报错，不存在宿主代签路径；新代码不得绕过插件自行签发或验签
+- 认证链路（JWT / 设备指纹 / 二维码 / 生物凭证）只走既有 auth 模块，禁止旁路；**日志与存储中凭据只记长度不落明文**（`token.length()` 模式）。**分层口径（ADR 0022 会话语义下沉批次）**：配对码 / QR 的**编排、签发与验签执行**全在 `com.bedcode.terminal-session` 插件（`pairing/` / `qr/` / `auth_http`；2026-09-22 票 06 起新 id，旧 id `com.bedcode.session` 的 HTTP/API 名留双投窗口）；**认证记录（配对设备 / 连接历史）真源下沉认证中心私有库**（`auth_records` 域：`auth_pairings` / `auth_connection_history`，2026-09-22 用户裁定，逆转早期「信任表留宿主」结论）——宿主主库 `pairings` / `connection_history` / `session_configs` 三表退役，存量数据由宿主 handoff `plugin/auth_records_migration.rs` 一次性迁入（生物公钥寄主 `plugin_secrets` key=`biometric:<fp>`，session_token 死列丢弃）；**宿主只剩 `host-auth` 密钥托管 / 生物凭证原语 / 认证策略 capability**（`auth-policy` 取用，其 capability 传输失败时回退放行，防认证中心故障误杀全部连接，`warn` 留痕，**不算旁路**）。**配对 / QR 的宿主降级实现已整体退役**（2026-09-21，宿主命令面注销同批）：`utils/auth/auth_center.rs` 的配对 / QR 桥接函数、`PairingService`、`QrTokenManager`、`utils/auth/pairing.rs` 与应用上下文装配链全部删除——插件未激活时前端命令面显性报错，不存在宿主代签路径；新代码不得绕过插件自行签发或验签
 - 输入校验与权限仲裁在 Rust 端，前端校验仅是 UX；WebSocket/HTTP 接入必须过认证与过滤链（TrafficFilterChain）
 
 ### 日志红线
