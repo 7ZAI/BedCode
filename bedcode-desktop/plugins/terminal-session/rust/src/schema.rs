@@ -221,6 +221,9 @@ pub fn prefixed_table_names() -> Vec<&'static str> {
         "plugin_meta",
         "task_history",
         "task_queue",
+        // 2026-09-22 认证记录下沉：认证记录域表（配对设备 + 连接历史）
+        "auth_pairings",
+        "auth_connection_history",
     ];
     names.extend(TABLE_RENAMES.iter().map(|e| e.prefixed));
     names

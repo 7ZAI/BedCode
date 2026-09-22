@@ -526,23 +526,16 @@ impl WsConnBase {
             registry.set_authenticated(&client_id, device_name, fp).await;
         });
 
-        // 更新配对设备的 last_seen 和 connect_count，并同步设备展示名
-        // （重连携带真实设备名时刷新历史记录，避免旧名残留；空串视为未上报，保留原值）
-        let fingerprint = claims.fingerprint.clone();
-        let display_name =
-            claims.device_name.as_deref().filter(|n| !n.trim().is_empty()).map(|n| {
-                crate::utils::auth::auth_center::format_device_display_name(n, &self.session.addr.to_string())
-            });
-        actix::spawn(async move {
-            if let Some(fp) = fingerprint {
-                let app_ctx = AppContext::global();
-                let db = app_ctx.db().clone();
-                let db_guard = db.lock().await;
-                if let Err(e) = db_guard.update_pairing_last_seen(&fp, display_name.as_deref()) {
-                    tracing::warn!(fingerprint = %fp, error = %e, "Failed to update pairing last_seen");
-                }
+        // v24 认证记录下沉：配对记录真源 = 认证中心插件私有库，宿主不再直写主库。
+        // 认证成功经互调 api 通知认证中心刷新 last_seen / connect_count。
+        // 插件未激活 → 跳过（记录缺失不阻断认证，沿用旧 update_pairing_last_seen
+        // 失败的 warn 降级语义）。display_name 不出现在 touch 原语（名称刷新由
+        // reauth / 配对路径携带，见 auth_http 域）。
+        if let Some(fp) = claims.fingerprint.clone() {
+            if let Some(ctx) = AppContext::try_global() {
+                crate::utils::auth::auth_center::notify_connection_touch(ctx.plugin_host(), &fp);
             }
-        });
+        }
 
         // 通知桌面端（无头/测试上下文无 AppHandle：跳过前端事件）
         let app_ctx = AppContext::global();
@@ -699,12 +692,15 @@ impl Actor for WsConnBase {
                                 },
                             );
                         }
-                        // 回填连接历史断开时间（连接历史按 pairings.id 键控，须按指纹
-                        // 解析——claims.sub 是移动端自身 ID，直接传会匹配不到 open 行）
-                        let db_guard = app_ctx.db().lock().await;
-                        if let Err(e) = db_guard.close_open_connection_event_by_fingerprint(fp) {
-                            tracing::warn!(fingerprint = %fp, error = %e, "Failed to close connection history");
-                        }
+                        // v24 认证记录下沉：连接历史真源 = 认证中心私有库，宿主不再
+                        // 直写主库。断开回填经互调 api 通知认证中心（认证中心按指纹
+                        // 解析 device_id 并回填最近 open 连接；重点同旧路径——
+                        // claims.sub 是移动端自身 ID，直接传会匹配不到 open 行，
+                        // 必须按指纹解析）。插件未激活 → 跳过（历史缺失不阻断断连）。
+                        crate::utils::auth::auth_center::notify_connection_close(
+                            app_ctx.plugin_host(),
+                            fp,
+                        );
                     }
                     offline
                 }

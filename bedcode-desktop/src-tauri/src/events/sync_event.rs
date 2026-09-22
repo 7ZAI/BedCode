@@ -39,28 +39,6 @@ pub enum DesktopSyncEvent {
         source_device: Option<String>,
     },
 
-    // === 配置相关 ===
-    /// 配置创建
-    ConfigCreated {
-        config_id: String,
-        /// 触发操作的设备名称（桌面本地操作为 None）
-        source_device: Option<String>,
-    },
-    /// 配置更新
-    ConfigUpdated {
-        config_id: String,
-        /// 触发操作的设备名称（桌面本地操作为 None）
-        source_device: Option<String>,
-    },
-    /// 配置删除
-    ConfigRemoved {
-        config_id: String,
-        /// 配置名称（用于通知客户端）
-        config_name: String,
-        /// 触发操作的设备名称（桌面本地操作为 None）
-        source_device: Option<String>,
-    },
-
     // === 任务状态相关 ===
     /// Plugin 任务状态变更
     TaskStatusChanged {

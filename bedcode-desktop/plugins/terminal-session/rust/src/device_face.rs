@@ -201,16 +201,12 @@ fn qr_connection_info(
 
 /// 已配对设备列表：`PairedDeviceInfo[]`（camelCase，与前端 DTO 同形）
 ///
-/// 数据源 = host-auth `trusted-devices-list` **全表原始记录**（含软删行），
-/// 本模块只保留 `isActive = true` 的行并按其 RFC3339 `pairedAt` 倒序——过滤与
-/// 排序是插件的展示组织，内核只给原始事实（ADR 0022 裁剪线）。
-/// 凭据列（session token / public key）不在记录面内（宿主 §8 红线）。
+/// 数据源 = 认证中心私有库（2026-09-22 下沉；真源 [`crate::auth_records`]），
+/// 只保留 `isActive = true` 的行并按其 RFC3339 `pairedAt` 倒序——过滤与排序是
+/// 插件的展示组织（ADR 0022 裁剪线）。凭据列不在记录面内（§8 红线）。
 #[cfg(target_arch = "wasm32")]
 pub fn paired_list_via_host() -> Result<serde_json::Value, String> {
-    let raw = WasmHost
-        .auth_trusted_devices_list()
-        .map_err(|e| e.message)?;
-    Ok(serde_json::Value::Array(active_pairings(&raw)))
+    crate::auth_records::paired_list()
 }
 
 /// 已配对设备列表（native 无宿主环境）
@@ -269,12 +265,10 @@ pub fn active_pairings(raw: &serde_json::Value) -> Vec<serde_json::Value> {
 
 // ==================== 连接历史 ====================
 
-/// 设备连接历史：原始记录 JSON 数组（`device-id` = 配对记录 id，倒序由宿主查询给出）
+/// 设备连接历史：原始记录 JSON 数组（`device-id` = 配对记录 id，倒序）
 #[cfg(target_arch = "wasm32")]
 pub fn history_list_via_host(device_id: &str) -> Result<serde_json::Value, String> {
-    WasmHost
-        .auth_connection_history_list(device_id)
-        .map_err(|e| e.message)
+    crate::auth_records::history_list(device_id)
 }
 
 /// 设备连接历史（native 无宿主环境）
@@ -288,10 +282,7 @@ pub fn history_list_via_host(_device_id: &str) -> Result<serde_json::Value, Stri
 /// 不影响配对状态（与撤销配对的连带删除区分开：那是隐式清理，本函数是显式动作）。
 #[cfg(target_arch = "wasm32")]
 pub fn history_clear_via_host(device_id: &str) -> Result<serde_json::Value, String> {
-    let cleared = WasmHost
-        .auth_connection_history_clear(device_id)
-        .map_err(|e| e.message)?;
-    Ok(serde_json::json!({ "cleared": cleared }))
+    crate::auth_records::history_clear(device_id)
 }
 
 /// 清空设备连接历史（native 无宿主环境）

@@ -1,435 +1,19 @@
 //! Database operations
 
-use super::CONNECTION_HISTORY_MAX_PER_DEVICE;
-use super::{ConnectionHistory, Database, LegacyQuickActionRow, Pairing, SessionConfig, Setting};
+use super::{
+    Database, LegacyAuthRows, LegacyConnectionRow, LegacyPairingRow, LegacyQuickActionRow, Setting,
+};
 use crate::Result;
 use chrono::{DateTime, Utc};
-use uuid::Uuid;
 
+/// Helper function to parse datetime from string, with proper error handling for rusqlite
 /// Helper function to parse datetime from string, with proper error handling for rusqlite
 fn parse_datetime_sql(s: &str, field_name: &str) -> std::result::Result<DateTime<Utc>, rusqlite::Error> {
     s.parse()
         .map_err(|e| rusqlite::Error::InvalidParameterName(format!("Invalid datetime for {}: {}", field_name, e)))
 }
 
-/// Helper function to parse optional datetime from string for rusqlite
-fn parse_optional_datetime_sql(
-    s: Option<String>,
-    field_name: &str,
-) -> std::result::Result<Option<DateTime<Utc>>, rusqlite::Error> {
-    s.map(|dt| parse_datetime_sql(&dt, field_name)).transpose()
-}
-
 impl Database {
-    // ==================== Pairing Operations ====================
-
-    pub fn add_pairing(
-        &self,
-        device_name: &str,
-        fingerprint: &str,
-        public_key: &str,
-        address: Option<&str>,
-        uid_hash: Option<&str>,
-    ) -> Result<String> {
-        let id = Uuid::new_v4().to_string();
-        let now = Utc::now().to_rfc3339();
-
-        // 同一稳定设备 UID 的存量配对（指纹不同：移动端更新/重装导致身份再派生）：
-        // 直接迁移原件——复用原记录 id，连接历史 / connect_count / 生物凭证不分裂
-        if let Some(hash) = uid_hash {
-            let existing_id = self
-                .conn()
-                .query_row(
-                    "SELECT id FROM pairings WHERE uid_hash = ?1 AND is_active = 1 AND device_fingerprint != ?2 LIMIT 1",
-                    rusqlite::params![hash, fingerprint],
-                    |row| row.get::<_, String>(0),
-                )
-                .ok();
-            if let Some(existing_id) = existing_id {
-                self.conn().execute(
-                    "UPDATE pairings SET device_fingerprint = ?1, device_name = ?2, public_key = ?3,
-                     address = ?4, last_seen = ?5, connect_count = connect_count + 1, is_active = 1
-                     WHERE id = ?6",
-                    rusqlite::params![fingerprint, device_name, public_key, address, now, existing_id],
-                )?;
-                tracing::info!(
-                    pairing_id = %existing_id,
-                    uid_hash = %hash,
-                    fingerprint = %fingerprint,
-                    "Pairing merged by stable device UID (identity re-derived)"
-                );
-                return Ok(existing_id);
-            }
-        }
-
-        // UPSERT：新设备插入 connect_count=1，已有设备更新 last_seen + connect_count+1
-        self.conn().execute(
-            "INSERT INTO pairings (id, device_name, device_fingerprint, public_key, address, session_token, uid_hash, paired_at, last_seen, connect_count, is_active)
-             VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7, ?7, 1, 1)
-             ON CONFLICT(device_fingerprint) DO UPDATE SET
-                device_name = excluded.device_name,
-                public_key = excluded.public_key,
-                address = excluded.address,
-                uid_hash = COALESCE(excluded.uid_hash, pairings.uid_hash),
-                last_seen = excluded.last_seen,
-                connect_count = connect_count + 1,
-                is_active = 1",
-            rusqlite::params![id, device_name, fingerprint, public_key, address, uid_hash, now],
-        )?;
-
-        // 返回实际记录 id（冲突时取已有 id）
-        let existing_id: String = self
-            .conn()
-            .query_row(
-                "SELECT id FROM pairings WHERE device_fingerprint = ?1",
-                rusqlite::params![fingerprint],
-                |row| row.get(0),
-            )
-            .unwrap_or(id);
-
-        Ok(existing_id)
-    }
-
-    /// 更新已配对设备的 last_seen 和 connect_count（JWT 重连时调用）
-    ///
-    /// `device_name` 为 Some 时同步更新展示名（重连时设备上报了新的真实设备名），
-    /// None 时保留原值
-    pub fn update_pairing_last_seen(&self, fingerprint: &str, device_name: Option<&str>) -> Result<()> {
-        let now = Utc::now().to_rfc3339();
-        self.conn().execute(
-            "UPDATE pairings SET last_seen = ?1, connect_count = connect_count + 1,
-             device_name = COALESCE(?2, device_name)
-             WHERE device_fingerprint = ?3 AND is_active = 1",
-            rusqlite::params![now, device_name, fingerprint],
-        )?;
-        Ok(())
-    }
-
-    pub fn update_pairing_token(&self, pairing_id: &str, token: &str) -> Result<()> {
-        self.conn().execute(
-            "UPDATE pairings SET session_token = ?1 WHERE id = ?2",
-            rusqlite::params![token, pairing_id],
-        )?;
-        Ok(())
-    }
-
-    pub fn verify_session_token(&self, device_fingerprint: &str, token: &str) -> Result<bool> {
-        let count: i32 = self.conn().query_row(
-            "SELECT COUNT(*) FROM pairings WHERE device_fingerprint = ?1 AND session_token = ?2 AND is_active = 1",
-            rusqlite::params![device_fingerprint, token],
-            |row| row.get(0),
-        )?;
-        Ok(count > 0)
-    }
-
-    pub fn get_pairings(&self) -> Result<Vec<Pairing>> {
-        let mut stmt = self.conn().prepare(
-            "SELECT id, device_name, device_fingerprint, public_key, address, session_token, uid_hash, paired_at, last_seen, connect_count, is_active
-             FROM pairings WHERE is_active = 1 ORDER BY paired_at DESC"
-        )?;
-
-        let pairings = stmt
-            .query_map([], |row| {
-                Ok(Pairing {
-                    id: row.get(0)?,
-                    device_name: row.get(1)?,
-                    device_fingerprint: row.get(2)?,
-                    public_key: row.get(3)?,
-                    address: row.get(4)?,
-                    session_token: row.get(5)?,
-                    uid_hash: row.get(6)?,
-                    paired_at: parse_datetime_sql(&row.get::<_, String>(7)?, "paired_at")?,
-                    last_seen: parse_optional_datetime_sql(row.get::<_, Option<String>>(8)?, "last_seen")?,
-                    connect_count: row.get(9)?,
-                    is_active: row.get::<_, i32>(10)? == 1,
-                })
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-
-        Ok(pairings)
-    }
-
-    pub fn remove_pairing(&self, id: &str) -> Result<()> {
-        self.conn()
-            .execute("UPDATE pairings SET is_active = 0 WHERE id = ?1", rusqlite::params![id])?;
-        // 移除设备连带删除连接历史（无审计需求）
-        self.delete_connection_history(id)?;
-        Ok(())
-    }
-
-    pub fn verify_pairing(&self, fingerprint: &str) -> Result<bool> {
-        let count: i32 = self.conn().query_row(
-            "SELECT COUNT(*) FROM pairings WHERE device_fingerprint = ?1 AND is_active = 1",
-            rusqlite::params![fingerprint],
-            |row| row.get(0),
-        )?;
-        Ok(count > 0)
-    }
-
-    // ==================== Connection History Operations ====================
-
-    /// 根据指纹查找活跃配对记录 id（设备 ID）
-    pub fn find_pairing_id_by_fingerprint(&self, fingerprint: &str) -> Result<Option<String>> {
-        let result = self.conn().query_row(
-            "SELECT id FROM pairings WHERE device_fingerprint = ?1 AND is_active = 1",
-            rusqlite::params![fingerprint],
-            |row| row.get::<_, String>(0),
-        );
-        match result {
-            Ok(id) => Ok(Some(id)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e.into()),
-        }
-    }
-
-    /// 根据指纹获取活跃配对记录（含公钥，用于生物认证验签）
-    pub fn get_pairing_by_fingerprint(&self, fingerprint: &str) -> Result<Option<Pairing>> {
-        let mut stmt = self.conn().prepare(
-            "SELECT id, device_name, device_fingerprint, public_key, address, session_token, uid_hash, paired_at, last_seen, connect_count, is_active
-             FROM pairings WHERE device_fingerprint = ?1 AND is_active = 1"
-        )?;
-
-        let pairing = stmt
-            .query_row(rusqlite::params![fingerprint], |row| {
-                Ok(Pairing {
-                    id: row.get(0)?,
-                    device_name: row.get(1)?,
-                    device_fingerprint: row.get(2)?,
-                    public_key: row.get(3)?,
-                    address: row.get(4)?,
-                    session_token: row.get(5)?,
-                    uid_hash: row.get(6)?,
-                    paired_at: parse_datetime_sql(&row.get::<_, String>(7)?, "paired_at")?,
-                    last_seen: parse_optional_datetime_sql(row.get::<_, Option<String>>(8)?, "last_seen")?,
-                    connect_count: row.get(9)?,
-                    is_active: row.get::<_, i32>(10)? == 1,
-                })
-            })
-            .ok();
-
-        Ok(pairing)
-    }
-
-    /// 更新配对记录的公钥（生物凭证绑定/解绑）
-    pub fn update_pairing_public_key(&self, pairing_id: &str, public_key: &str) -> Result<()> {
-        self.conn().execute(
-            "UPDATE pairings SET public_key = ?1 WHERE id = ?2 AND is_active = 1",
-            rusqlite::params![public_key, pairing_id],
-        )?;
-        Ok(())
-    }
-
-    /// 记录连接事件（按设备 ID），插入后清理超限的旧记录
-    pub fn record_connection_event(
-        &self,
-        device_id: &str,
-        auth_method: &str,
-        result: &str,
-        address: Option<&str>,
-    ) -> Result<()> {
-        let now = Utc::now().to_rfc3339();
-        self.conn().execute(
-            "INSERT INTO connection_history (device_id, auth_method, result, address, connected_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            rusqlite::params![device_id, auth_method, result, address, now],
-        )?;
-        self.prune_connection_history(device_id)?;
-        Ok(())
-    }
-
-    /// 记录连接事件（按设备指纹解析设备 ID，未配对/未激活则忽略）
-    pub fn record_connection_event_by_fingerprint(
-        &self,
-        fingerprint: &str,
-        auth_method: &str,
-        result: &str,
-        address: Option<&str>,
-    ) -> Result<()> {
-        if let Some(device_id) = self.find_pairing_id_by_fingerprint(fingerprint)? {
-            self.record_connection_event(&device_id, auth_method, result, address)?;
-        }
-        Ok(())
-    }
-
-    /// 回填最近一条未关闭连接的断开时间
-    pub fn close_open_connection_event(&self, device_id: &str) -> Result<()> {
-        let now = Utc::now().to_rfc3339();
-        let id: Option<i64> = self
-            .conn()
-            .query_row(
-                "SELECT id FROM connection_history WHERE device_id = ?1 AND disconnected_at IS NULL
-             ORDER BY connected_at DESC LIMIT 1",
-                rusqlite::params![device_id],
-                |row| row.get(0),
-            )
-            .ok();
-        if let Some(id) = id {
-            self.conn().execute(
-                "UPDATE connection_history SET disconnected_at = ?1 WHERE id = ?2",
-                rusqlite::params![now, id],
-            )?;
-        }
-        Ok(())
-    }
-
-    /// 按指纹回填断开时间（WS 断链路径专用）
-    ///
-    /// connection_history 的 device_id 是 pairings.id（写入路径按指纹解析），
-    /// 而 WS 会话持有的 device_id 是 JWT claims.sub（移动端自身 ID）——两者不自洽，
-    /// 直接关历史会永远匹配不到 open 行。统一按指纹解析成 pairings.id 再回填。
-    pub fn close_open_connection_event_by_fingerprint(&self, fingerprint: &str) -> Result<()> {
-        if let Some(device_id) = self.find_pairing_id_by_fingerprint(fingerprint)? {
-            self.close_open_connection_event(&device_id)?;
-        }
-        Ok(())
-    }
-
-    /// 获取设备连接历史（按时间倒序）
-    pub fn get_connection_history(&self, device_id: &str) -> Result<Vec<ConnectionHistory>> {
-        let mut stmt = self.conn().prepare(
-            "SELECT id, device_id, auth_method, result, address, connected_at, disconnected_at
-             FROM connection_history WHERE device_id = ?1 ORDER BY connected_at DESC",
-        )?;
-
-        let rows = stmt.query_map(rusqlite::params![device_id], |row| {
-            Ok(ConnectionHistory {
-                id: row.get(0)?,
-                device_id: row.get(1)?,
-                auth_method: row.get(2)?,
-                result: row.get(3)?,
-                address: row.get(4)?,
-                connected_at: parse_datetime_sql(&row.get::<_, String>(5)?, "connected_at")?,
-                disconnected_at: parse_optional_datetime_sql(row.get::<_, Option<String>>(6)?, "disconnected_at")?,
-            })
-        })?;
-
-        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
-    }
-
-    /// 删除设备连接历史（移除配对时级联清理）
-    pub fn delete_connection_history(&self, device_id: &str) -> Result<()> {
-        self.conn().execute(
-            "DELETE FROM connection_history WHERE device_id = ?1",
-            rusqlite::params![device_id],
-        )?;
-        Ok(())
-    }
-
-    /// 每设备最多保留 MAX 条，超限删除最旧的
-    fn prune_connection_history(&self, device_id: &str) -> Result<()> {
-        self.conn().execute(
-            "DELETE FROM connection_history WHERE device_id = ?1 AND id NOT IN (
-                SELECT id FROM connection_history WHERE device_id = ?1
-                ORDER BY connected_at DESC LIMIT ?2
-            )",
-            rusqlite::params![device_id, CONNECTION_HISTORY_MAX_PER_DEVICE],
-        )?;
-        Ok(())
-    }
-
-    // ==================== Session Config Operations ====================
-
-    pub fn create_session_config(&self, config: &SessionConfig) -> Result<()> {
-        self.conn().execute(
-            "INSERT INTO session_configs (id, name, environment, wsl_distro, working_dir, command, auto_start, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            rusqlite::params![
-                config.id,
-                config.name,
-                config.environment,
-                config.wsl_distro,
-                config.working_dir,
-                config.command,
-                config.auto_start as i32,
-                config.created_at.to_rfc3339(),
-                config.updated_at.to_rfc3339(),
-            ],
-        )?;
-        Ok(())
-    }
-
-    pub fn get_session_configs(&self) -> Result<Vec<SessionConfig>> {
-        let mut stmt = self.conn().prepare(
-            "SELECT id, name, environment, wsl_distro, working_dir, command, auto_start, created_at, updated_at
-             FROM session_configs ORDER BY name",
-        )?;
-
-        let configs = stmt
-            .query_map([], |row| {
-                Ok(SessionConfig {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    environment: row.get(2)?,
-                    wsl_distro: row.get(3)?,
-                    working_dir: row.get(4)?,
-                    command: row.get(5)?,
-                    auto_start: row.get::<_, i32>(6)? == 1,
-                    created_at: parse_datetime_sql(&row.get::<_, String>(7)?, "created_at")?,
-                    updated_at: parse_datetime_sql(&row.get::<_, String>(8)?, "updated_at")?,
-                })
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-
-        Ok(configs)
-    }
-
-    pub fn get_session_config(&self, id: &str) -> Result<Option<SessionConfig>> {
-        let mut stmt = self.conn().prepare(
-            "SELECT id, name, environment, wsl_distro, working_dir, command, auto_start, created_at, updated_at
-             FROM session_configs WHERE id = ?1",
-        )?;
-
-        let config = stmt
-            .query_row(rusqlite::params![id], |row| {
-                Ok(SessionConfig {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    environment: row.get(2)?,
-                    wsl_distro: row.get(3)?,
-                    working_dir: row.get(4)?,
-                    command: row.get(5)?,
-                    auto_start: row.get::<_, i32>(6)? == 1,
-                    created_at: parse_datetime_sql(&row.get::<_, String>(7)?, "created_at")?,
-                    updated_at: parse_datetime_sql(&row.get::<_, String>(8)?, "updated_at")?,
-                })
-            })
-            .ok();
-
-        Ok(config)
-    }
-
-    pub fn delete_session_config(&self, id: &str) -> Result<()> {
-        self.conn()
-            .execute("DELETE FROM session_configs WHERE id = ?1", rusqlite::params![id])?;
-        Ok(())
-    }
-
-    pub fn update_session_config(&self, config: &SessionConfig) -> Result<()> {
-        let now = Utc::now().to_rfc3339();
-        self.conn().execute(
-            "UPDATE session_configs SET
-                name = ?1,
-                environment = ?2,
-                wsl_distro = ?3,
-                working_dir = ?4,
-                command = ?5,
-                auto_start = ?6,
-                updated_at = ?7
-             WHERE id = ?8",
-            rusqlite::params![
-                config.name,
-                config.environment,
-                config.wsl_distro,
-                config.working_dir,
-                config.command,
-                config.auto_start as i32,
-                now,
-                config.id,
-            ],
-        )?;
-        Ok(())
-    }
-
     /// legacy 主库 `quick_actions` 行只读视图（票 02 迁移 handoff 用）
     ///
     /// 表不存在（契约退役后的全新安装 / 已清理）→ `Ok(None)`；存在 → 全行
@@ -499,6 +83,158 @@ impl Database {
         Ok(())
     }
 
+    // ==================== Legacy Auth Records（2026-09-22 认证记录下沉，迁移只读视图） ====================
+
+    /// legacy 主库 `pairings` / `connection_history` 行只读视图（迁移 handoff 用）
+    ///
+    /// **表不存在**（全新安装 / 已清理）→ `Ok(None)`（两表以 `pairings` 为准探测：
+    /// 同批退役，同一存量旧库要么都有要么都没有）。存在 → 公开行 + 生物凭证
+    /// 公钥元组。时间戳保持 DB 原始字符串不重解析——逐字节搬运给插件；
+    /// `session_token` 死列（零生产消费者）不读、不迁移（凭据零复制）。
+    pub fn list_legacy_auth_rows(&self) -> Result<Option<LegacyAuthRows>> {
+        let pairings_exist: bool = self.conn().query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='pairings')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !pairings_exist {
+            return Ok(None);
+        }
+
+        // 配对公开行（含软删行：撤销语义依赖「已撤销记录仍可见」）+ 公钥元组
+        let mut pairing_stmt = self.conn().prepare(
+            "SELECT id, device_name, device_fingerprint, public_key, address, uid_hash, \
+             paired_at, last_seen, connect_count, is_active \
+             FROM pairings ORDER BY paired_at",
+        )?;
+        let mut pairings = Vec::new();
+        let mut biometric_public_keys = Vec::new();
+        let pairing_rows = pairing_stmt.query_map([], |row| {
+            let public_key: String = row.get(3)?;
+            Ok((
+                LegacyPairingRow {
+                    id: row.get(0)?,
+                    device_name: row.get(1)?,
+                    device_fingerprint: row.get(2)?,
+                    address: row.get(4)?,
+                    uid_hash: row.get(5)?,
+                    paired_at: row.get(6)?,
+                    last_seen: row.get(7)?,
+                    connect_count: row.get(8)?,
+                    is_active: row.get::<_, i64>(9)? != 0,
+                },
+                // §8：公钥只随指纹元组进 plugin_secrets，不进入公开行 JSON
+                (row.get::<_, String>(2)?, public_key),
+            ))
+        })?;
+        for row in pairing_rows {
+            let (public_row, key_pair) = row?;
+            pairings.push(public_row);
+            biometric_public_keys.push(key_pair);
+        }
+
+        // 连接历史行
+        let mut history_stmt = self.conn().prepare(
+            "SELECT id, device_id, auth_method, result, address, connected_at, disconnected_at \
+             FROM connection_history ORDER BY connected_at",
+        )?;
+        let history = history_stmt
+            .query_map([], |row| {
+                Ok(LegacyConnectionRow {
+                    id: row.get(0)?,
+                    device_id: row.get(1)?,
+                    auth_method: row.get(2)?,
+                    result: row.get(3)?,
+                    address: row.get(4)?,
+                    connected_at: row.get(5)?,
+                    disconnected_at: row.get(6)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        Ok(Some(LegacyAuthRows {
+            pairings,
+            history,
+            biometric_public_keys,
+        }))
+    }
+
+    /// legacy 主库 `pairings` / `connection_history` 行播种（迁移闭环测试用；
+    /// 表不存在时先按旧 schema 建表——模拟存量旧库，全新安装的表在 schema.sql
+    /// 已不再创建）。`session_token` 列也建出，验证迁移方明确不读（凭据零复制）。
+    #[cfg(test)]
+    pub fn seed_legacy_auth_rows(
+        &self,
+        pairing: &LegacyPairingRow,
+        public_key: &str,
+        session_token: Option<&str>,
+        history: &[LegacyConnectionRow],
+    ) -> Result<()> {
+        self.conn()
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS pairings (\
+                 id TEXT PRIMARY KEY, \
+                 device_name TEXT NOT NULL, \
+                 device_fingerprint TEXT NOT NULL UNIQUE, \
+                 public_key TEXT NOT NULL, \
+                 address TEXT, \
+                 session_token TEXT, \
+                 uid_hash TEXT, \
+                 paired_at TEXT NOT NULL, \
+                 last_seen TEXT, \
+                 connect_count INTEGER DEFAULT 1, \
+                 is_active INTEGER DEFAULT 1);\
+                 CREATE TABLE IF NOT EXISTS connection_history (\
+                 id INTEGER PRIMARY KEY AUTOINCREMENT, \
+                 device_id TEXT NOT NULL, \
+                 auth_method TEXT NOT NULL, \
+                 result TEXT NOT NULL, \
+                 address TEXT, \
+                 connected_at TEXT NOT NULL, \
+                 disconnected_at TEXT);",
+            )?;
+        self.conn().execute(
+            "INSERT OR REPLACE INTO pairings \
+             (id, device_name, device_fingerprint, public_key, address, session_token, \
+              uid_hash, paired_at, last_seen, connect_count, is_active) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            rusqlite::params![
+                pairing.id,
+                pairing.device_name,
+                pairing.device_fingerprint,
+                public_key,
+                pairing.address,
+                session_token,
+                pairing.uid_hash,
+                pairing.paired_at,
+                pairing.last_seen,
+                pairing.connect_count,
+                pairing.is_active
+            ],
+        )?;
+        for h in history {
+            // 显式 id（旧表自增列也允许显式插入）；幂等：同 id 覆盖
+            self.conn().execute(
+                "INSERT OR REPLACE INTO connection_history \
+                 (id, device_id, auth_method, result, address, connected_at, disconnected_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                rusqlite::params![
+                    h.id, h.device_id, h.auth_method, h.result, h.address, h.connected_at, h.disconnected_at
+                ],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// 迁移成功后清理 legacy 表（本模块是两表存续的唯一意图方：schema.sql 已
+    /// 不再创建；仅在存量旧库持有，迁移成功即 DROP，避免残留死表）
+    pub fn drop_legacy_auth_tables(&self) -> Result<()> {
+        self.conn().execute_batch(
+            "DROP TABLE IF EXISTS connection_history; DROP TABLE IF EXISTS pairings;",
+        )?;
+        Ok(())
+    }
+
     // ==================== Settings ====================
 
     pub fn get_setting(&self, key: &str) -> Result<Option<String>> {
@@ -541,85 +277,3 @@ impl Database {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::path::Path;
-
-    /// 测试库：内存 SQLite + 完整 schema/迁移
-    fn test_db() -> Database {
-        let db = Database::new(Path::new(":memory:")).unwrap();
-        db.init_schema().unwrap();
-        db
-    }
-
-    /// 同一 uid_hash 下指纹再派生（移动端更新/重装）：合并回原配对记录
-    ///
-    /// 回归：设备身份再派生后桌面不得当新设备——连接历史 / connect_count /
-    /// 生物凭证都挂原记录 id
-    #[test]
-    fn add_pairing_merges_by_uid_hash_when_fingerprint_changes() {
-        let db = test_db();
-
-        let id1 = db
-            .add_pairing("Phone", "fp-old", "pk", Some("192.168.1.5"), Some("uid-hash-1"))
-            .unwrap();
-        // 同设备指纹变化的二次配对（更新/重装后的身份再派生）
-        let id2 = db
-            .add_pairing("Phone", "fp-new", "pk2", Some("192.168.1.6"), Some("uid-hash-1"))
-            .unwrap();
-
-        assert_eq!(id1, id2, "同 uid_hash 应复用原配对记录");
-
-        // 活跃配对只剩一条，指纹已迁移到新值，connect_count 累计
-        let pairings = db.get_pairings().unwrap();
-        assert_eq!(pairings.len(), 1);
-        assert_eq!(pairings[0].id, id1);
-        assert_eq!(pairings[0].device_fingerprint, "fp-new");
-        assert_eq!(pairings[0].uid_hash.as_deref(), Some("uid-hash-1"));
-        assert_eq!(pairings[0].connect_count, 2);
-
-        // 新指纹能解析到同一记录（连接历史据此不分裂）
-        let resolved = db.find_pairing_id_by_fingerprint("fp-new").unwrap();
-        assert_eq!(resolved.as_deref(), Some(id1.as_str()));
-    }
-
-    /// 不同 uid_hash（确属不同设备）不允许合并：各自独立配对
-    #[test]
-    fn add_pairing_keeps_distinct_uid_hashes_separate() {
-        let db = test_db();
-
-        let id_a = db.add_pairing("A", "fp-a", "pk", None, Some("uid-a")).unwrap();
-        let id_b = db.add_pairing("B", "fp-b", "pk", None, Some("uid-b")).unwrap();
-        let id_a2 = db.add_pairing("A", "fp-a", "pk", None, Some("uid-a")).unwrap();
-
-        assert_ne!(id_a, id_b);
-        assert_eq!(id_a, id_a2, "同指纹 upsert 仍复用原记录");
-        assert_eq!(db.get_pairings().unwrap().len(), 2);
-    }
-
-    /// 断开时间回填：按指纹解析 pairings.id 后关闭 open 行
-    ///
-    /// 回归：WS 断链传移动端 device_id（claims.sub）匹配不到记录键，
-    /// disconnected_at 永不回填
-    #[test]
-    fn close_open_connection_event_by_fingerprint_backfills_disconnect() {
-        let db = test_db();
-        let pairing_id = db.add_pairing("Phone", "fp-1", "pk", None, None).unwrap();
-
-        db.record_connection_event_by_fingerprint("fp-1", "qr", "success", Some("192.168.1.5"))
-            .unwrap();
-
-        // 直接用移动端 device_id 关闭：应匹配不到（旧路径的 bug 行为）
-        db.close_open_connection_event("mobile-device-id-not-pairing-id")
-            .unwrap();
-        let hist = db.get_connection_history(&pairing_id).unwrap();
-        assert_eq!(hist.len(), 1);
-        assert!(hist[0].disconnected_at.is_none(), "旧的错误键不应误关行");
-
-        // 按指纹关闭：正确解析并回填
-        db.close_open_connection_event_by_fingerprint("fp-1").unwrap();
-        let hist = db.get_connection_history(&pairing_id).unwrap();
-        assert!(hist[0].disconnected_at.is_some(), "按指纹关闭应回填 disconnected_at");
-    }
-}

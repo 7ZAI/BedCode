@@ -7,8 +7,8 @@ pub use crate::server::ws::message::Message;
 
 // Re-export types from shared enums module (payload types)
 pub use crate::enums::{
-    AuthPayload, AuthStage, KeyCombo, QuickActionSummary, SessionConfigAction, SessionConfigPayload,
-    SessionConfigSummary, SessionControlAction, SessionControlPayload, SessionSummary, TerminalAction, TerminalPayload,
+    AuthPayload, AuthStage, KeyCombo, SessionControlAction, SessionControlPayload, SessionSummary, TerminalAction,
+    TerminalPayload,
 };
 
 // Re-export types from connection_types module

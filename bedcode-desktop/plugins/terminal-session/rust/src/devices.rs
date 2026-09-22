@@ -197,25 +197,15 @@ pub fn connect_list_via_host() -> Result<serde_json::Value, String> {
         .session_list()
         .map_err(|e| e.message)?
         .unwrap_or(serde_json::Value::Null);
-    let trusted = WasmHost
-        .auth_trusted_devices_list()
-        .map_err(|e| e.message)?;
-    // 全量原始记录（含软删行 `isActive=false`）→ 推导；活跃过滤在 `derive_connected`
-    // 内完成（撤销检测依赖软删行可见；派生视图不得把已撤销设备合并为 paired）
-    let paired: Vec<(String, String, String, bool)> = trusted
-        .as_array()
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|d| {
-                    let id = d.get("id")?.as_str()?.to_string();
-                    let name = d.get("deviceName")?.as_str()?.to_string();
-                    let fp = d.get("deviceFingerprint")?.as_str()?.to_string();
-                    let active = d.get("isActive").and_then(|v| v.as_bool()).unwrap_or(true);
-                    Some((id, name, fp, active))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    // 配对记录真源 = 认证中心私有库（2026-09-22 下沉；含软删行）
+    let records = crate::auth_records::records().map_err(|e| e)?;
+    // 全量原始记录（含软删行 `is_active=false`）→ 推导；活跃过滤在
+    // `derive_connected` 内完成（撤销检测依赖软删行可见；派生视图不得把已撤销
+    // 设备合并为 paired）
+    let paired: Vec<(String, String, String, bool)> = records
+        .into_iter()
+        .map(|d| (d.id, d.device_name, d.device_fingerprint, d.is_active))
+        .collect();
     let rows = derive_connected(
         &parse_connections(&connections),
         &parse_sessions(&sessions),

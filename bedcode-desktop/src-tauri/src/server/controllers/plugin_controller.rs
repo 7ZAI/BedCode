@@ -679,9 +679,15 @@ mod tests {
     /// 票 16：旧前缀别名表——只登记已退役/在退役的那一条，且必须指向合并插件
     #[test]
     fn legacy_http_alias_maps_only_retired_plugin_prefix() {
-        assert_eq!(legacy_http_alias("com.bedcode.auto-task"), Some("com.bedcode.terminal-session"));
+        assert_eq!(
+            legacy_http_alias("com.bedcode.auto-task"),
+            Some("com.bedcode.terminal-session")
+        );
         // 票 07 B2：改名前的旧 id 前缀同样兜底到新插件（双投窗口）
-        assert_eq!(legacy_http_alias("com.bedcode.session"), Some("com.bedcode.terminal-session"));
+        assert_eq!(
+            legacy_http_alias("com.bedcode.session"),
+            Some("com.bedcode.terminal-session")
+        );
         // 新 id 自身、其它在位插件、未知 id 都没有接管方
         assert_eq!(legacy_http_alias("com.bedcode.terminal-session"), None);
         assert_eq!(legacy_http_alias("com.bedcode.file-transfer"), None);

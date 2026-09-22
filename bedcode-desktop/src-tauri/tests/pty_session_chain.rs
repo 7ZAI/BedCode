@@ -81,6 +81,18 @@ fn bundled_plugins_dir() -> PathBuf {
     dir
 }
 
+/// 无头集成测试的会话中心插件私有库根（v24 认证记录下沉后配对/历史真源在
+/// 私有库；无头上下文无 AppHandle，经 `set_plugin_db_root` 注入，activate 前设置）
+fn session_plugin_db_root() -> &'static PathBuf {
+    static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    ROOT.get_or_init(|| {
+        let dir =
+            std::env::temp_dir().join(format!("bedcode-ptychain-pluginroot-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    })
+}
+
 /// 探测空闲端口：绑定 127.0.0.1:0 由 OS 分配，立即释放后交给服务器绑定
 fn pick_free_port() -> u16 {
     let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("probe free port failed");
@@ -146,8 +158,7 @@ async fn init_test_app_context() {
         let plugins_dir = bundled_plugins_dir();
         // 用户插件目录：独立空目录（复用 plugins_dir 会让随包插件被标成
         // UserInstalled 来源，激活时撞审批门禁）
-        let user_plugins_dir =
-            std::env::temp_dir().join(format!("bedcode-itest-userplugins-{}", std::process::id()));
+        let user_plugins_dir = std::env::temp_dir().join(format!("bedcode-itest-userplugins-{}", std::process::id()));
         std::fs::create_dir_all(&user_plugins_dir).expect("create temp user plugins dir failed");
 
         // v21 起 SessionManager 无库依赖（会话配置真源归插件私有库，内核只按 spec 执行）
@@ -166,6 +177,12 @@ async fn init_test_app_context() {
         );
         // 两阶段初始化：注入消息总线 dispatcher（与 lib.rs 生产路径一致）
         plugin_host.init_message_bus().await;
+        // v24 认证记录下沉：配对/历史真源 = 认证中心私有库。无头上下文无
+        // AppHandle，必须在 activation 前注入私有库根（activate 建表走
+        // host-plugin-database；配对/信任链路无私有库即不可用）
+        plugin_host
+            .wasm_host_ctx()
+            .set_plugin_db_root(Some(session_plugin_db_root().clone()));
         // 激活会话中心（随包 FileScan 来源 → 免审批门禁）：/api/auth/* 转发的前置
         plugin_host
             .activate_plugin(SESSION_PLUGIN_ID, false)
@@ -442,14 +459,7 @@ async fn pty_session_chain_flow() {
     // （插件编排读私有库，无头集成测试不可达，见文件头「票 13 口径」）
     let manager = AppContext::global().session_manager();
     let session_id = manager
-        .create_session_from_spec(
-            test_launch_config(),
-            TEST_CONFIG_ID.to_string(),
-            None,
-            true,
-            None,
-            None,
-        )
+        .create_session_from_spec(test_launch_config(), TEST_CONFIG_ID.to_string(), None, true, None, None)
         .await
         .unwrap_or_else(|e| {
             panic!(
@@ -699,7 +709,8 @@ async fn pty_session_chain_flow() {
         .expect("server must exit Ok after graceful stop");
 
     // 清理临时用户插件目录（随包产物目录 resources/plugins/desktop 不得触碰）
-    let user_plugins_dir =
-        std::env::temp_dir().join(format!("bedcode-itest-userplugins-{}", std::process::id()));
+    let user_plugins_dir = std::env::temp_dir().join(format!("bedcode-itest-userplugins-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(user_plugins_dir);
+    // 私有库根清理（含认证中心私有库测试数据）
+    let _ = std::fs::remove_dir_all(session_plugin_db_root());
 }

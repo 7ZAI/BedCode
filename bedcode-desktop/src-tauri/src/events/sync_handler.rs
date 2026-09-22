@@ -3,11 +3,10 @@
 //! 同步事件处理器，将 DesktopSyncEvent 转换为 SyncData WebSocket 消息并广播
 
 use super::matcher::EventHandler;
-use crate::enums::{SessionConfigSummary, SessionSummary, SyncPayload};
+use crate::enums::{SessionSummary, SyncPayload};
 use crate::events::DesktopSyncEvent;
 use crate::server::ws::message::Message;
 use crate::server::ws::WebSocketManager;
-use crate::session::SessionConfigManager;
 use crate::session::SessionManager;
 use std::sync::Arc;
 
@@ -16,7 +15,6 @@ use std::sync::Arc;
 /// 将 DesktopSyncEvent 转换为 SyncData WebSocket 消息并广播给客户端
 pub struct SyncEventHandler {
     session_manager: Arc<SessionManager>,
-    config_manager: Arc<SessionConfigManager>,
     ws_manager: &'static (dyn SyncBroadcaster + Send + Sync),
 }
 
@@ -46,15 +44,10 @@ impl SyncBroadcaster for crate::server::ws::WebSocketManager {
 
 impl SyncEventHandler {
     /// 创建新的同步事件处理器
-    pub fn new(
-        session_manager: Arc<SessionManager>,
-        config_manager: Arc<SessionConfigManager>,
-        ws_manager: &'static WebSocketManager,
-    ) -> Self {
+    pub fn new(session_manager: Arc<SessionManager>, ws_manager: &'static WebSocketManager) -> Self {
         let ws_manager: &'static (dyn SyncBroadcaster + Send + Sync) = ws_manager;
         Self {
             session_manager,
-            config_manager,
             ws_manager,
         }
     }
@@ -88,26 +81,6 @@ impl SyncEventHandler {
                 source_device,
             } => {
                 self.handle_session_removed(&session_id, source_device).await;
-            }
-            DesktopSyncEvent::ConfigCreated {
-                config_id,
-                source_device,
-            } => {
-                self.handle_config_created(&config_id, source_device).await;
-            }
-            DesktopSyncEvent::ConfigUpdated {
-                config_id,
-                source_device,
-            } => {
-                self.handle_config_updated(&config_id, source_device).await;
-            }
-            DesktopSyncEvent::ConfigRemoved {
-                config_id,
-                config_name,
-                source_device,
-            } => {
-                self.handle_config_removed(&config_id, &config_name, source_device)
-                    .await;
             }
             DesktopSyncEvent::TaskStatusChanged {
                 session_id,
@@ -250,79 +223,6 @@ impl SyncEventHandler {
     }
 
     /// 处理配置创建事件
-    async fn handle_config_created(&self, config_id: &str, source_device: Option<String>) {
-        // 获取配置信息
-        let Ok(Some(config)) = self.config_manager.get_config(config_id).await else {
-            tracing::warn!(config_id = %config_id, "[SyncEventHandler] Config not found");
-            return;
-        };
-
-        // 构建 SessionConfigSummary
-        let config_summary = SessionConfigSummary {
-            id: config.id,
-            name: config.name,
-            environment: config.environment,
-            wsl_distro: config.wsl_distro,
-            working_dir: config.working_dir,
-            command: config.command,
-        };
-
-        // 提取 source_device 值
-        let source_device_str = source_device.clone().unwrap_or_default();
-
-        // 构建同步载荷
-        let payload = SyncPayload::ConfigCreated {
-            config: config_summary,
-            source_device: source_device_str.clone(),
-        };
-
-        // 广播消息
-        self.broadcast_sync_data(payload, Some(&source_device_str)).await;
-    }
-
-    /// 处理配置更新事件
-    async fn handle_config_updated(&self, config_id: &str, source_device: Option<String>) {
-        // 获取配置信息
-        let Ok(Some(config)) = self.config_manager.get_config(config_id).await else {
-            tracing::warn!(config_id = %config_id, "[SyncEventHandler] Config not found");
-            return;
-        };
-
-        // 构建 SessionConfigSummary
-        let config_summary = SessionConfigSummary {
-            id: config.id,
-            name: config.name,
-            environment: config.environment,
-            wsl_distro: config.wsl_distro,
-            working_dir: config.working_dir,
-            command: config.command,
-        };
-
-        // 提取 source_device 值
-        let source_device_str = source_device.clone().unwrap_or_default();
-
-        // 构建同步载荷
-        let payload = SyncPayload::ConfigUpdated {
-            config: config_summary,
-            source_device: source_device_str.clone(),
-        };
-
-        // 广播消息
-        self.broadcast_sync_data(payload, Some(&source_device_str)).await;
-    }
-
-    /// 处理配置删除事件
-    async fn handle_config_removed(&self, config_id: &str, config_name: &str, source_device: Option<String>) {
-        // 构建同步载荷
-        let payload = SyncPayload::ConfigRemoved {
-            config_id: config_id.to_string(),
-            config_name: config_name.to_string(),
-        };
-
-        // 广播消息
-        self.broadcast_sync_data(payload, source_device.as_deref()).await;
-    }
-
     /// 处理任务状态变更事件
     async fn handle_task_status_changed(
         &self,
@@ -417,13 +317,11 @@ impl EventHandler<DesktopSyncEvent> for SyncEventHandler {
     fn handle(&self, event: DesktopSyncEvent) {
         // 克隆必要的数据用于异步任务
         let session_manager = self.session_manager.clone();
-        let config_manager = self.config_manager.clone();
         let ws_manager = self.ws_manager;
 
         tokio::spawn(async move {
             let handler = SyncEventHandler {
                 session_manager,
-                config_manager,
                 ws_manager,
             };
             handler.process_event(event).await;
@@ -434,10 +332,8 @@ impl EventHandler<DesktopSyncEvent> for SyncEventHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::Database;
     use crate::events::DesktopSyncEvent;
     use crate::server::ws::message::Message;
-    use std::path::Path;
     use std::sync::Mutex;
 
     /// Fake 广播器：记录所有广播调用（票据 22）
@@ -487,32 +383,22 @@ mod tests {
     }
 
     /// 构造 handler：cm 与 sm 共用同一 db（config 落库后两处可见）；Fake 泄漏为 &'static
-    async fn test_handler() -> (
-        Arc<SyncEventHandler>,
-        &'static FakeBroadcaster,
-        Arc<tokio::sync::Mutex<crate::db::Database>>,
-    ) {
-        let shared_db = Arc::new(tokio::sync::Mutex::new(
-            crate::db::Database::new(Path::new(":memory:")).expect("shared db"),
-        ));
-        shared_db.lock().await.init_schema().expect("init schema");
+    async fn test_handler() -> (Arc<SyncEventHandler>, &'static FakeBroadcaster) {
         let sm = Arc::new(SessionManager::new());
-        let cm = Arc::new(SessionConfigManager::new(Arc::clone(&shared_db)));
         let fake_static: &'static FakeBroadcaster = Box::leak(Box::new(FakeBroadcaster::new()));
         let ws: &'static (dyn SyncBroadcaster + Send + Sync) = fake_static;
         let handler = Arc::new(SyncEventHandler {
             session_manager: sm,
-            config_manager: cm,
             ws_manager: ws,
         });
-        (handler, fake_static, shared_db)
+        (handler, fake_static)
     }
 
     /// 预置一个会话（经执行端 `create_session_from_spec(start=false)`，不 spawn PTY）
     ///
     /// 宿主侧创建编排已随 host-business-decarriage 收尾下沉插件，测试直接注入
     /// 插件会算好的 launch spec（命名 / config→launch 映射属插件决策）。
-    async fn seed_session(_shared_db: &Arc<tokio::sync::Mutex<crate::db::Database>>, sm: &SessionManager) -> String {
+    async fn seed_session(sm: &SessionManager) -> String {
         use crate::enums::ExecutionEnvironment;
         sm.create_session_from_spec(
             crate::enums::SessionLaunchConfig {
@@ -538,8 +424,8 @@ mod tests {
     /// SessionCreated → 广播 SyncPayload::SessionCreated（票据 22）
     #[tokio::test]
     async fn session_created_event_broadcasts_session_created() {
-        let (handler, fake, shared_db) = test_handler().await;
-        let sid = seed_session(&shared_db, &handler.session_manager).await;
+        let (handler, fake) = test_handler().await;
+        let sid = seed_session(&handler.session_manager).await;
         handler
             .process_event(DesktopSyncEvent::SessionCreated {
                 session_id: sid.clone(),
@@ -559,8 +445,8 @@ mod tests {
     /// SessionStopped → 广播 SyncPayload::SessionStopped（排除来源设备）
     #[tokio::test]
     async fn session_stopped_event_broadcasts_session_stopped() {
-        let (handler, fake, shared_db) = test_handler().await;
-        let sid = seed_session(&shared_db, &handler.session_manager).await;
+        let (handler, fake) = test_handler().await;
+        let sid = seed_session(&handler.session_manager).await;
         handler
             .process_event(DesktopSyncEvent::SessionStopped {
                 session_id: sid.clone(),
@@ -579,8 +465,8 @@ mod tests {
     /// SessionRemoved → 广播 SessionRemoved（排除来源设备）
     #[tokio::test]
     async fn session_removed_event_broadcasts_session_removed() {
-        let (handler, fake, shared_db) = test_handler().await;
-        let sid = seed_session(&shared_db, &handler.session_manager).await;
+        let (handler, fake) = test_handler().await;
+        let sid = seed_session(&handler.session_manager).await;
         handler
             .process_event(DesktopSyncEvent::SessionRemoved {
                 session_id: sid.clone(),
@@ -599,7 +485,7 @@ mod tests {
     /// SessionStatusChanged → 广播（无来源设备 → 全量广播）
     #[tokio::test]
     async fn session_status_changed_broadcasts_to_all() {
-        let (handler, fake, shared_db) = test_handler().await;
+        let (handler, fake) = test_handler().await;
         handler
             .process_event(DesktopSyncEvent::SessionStatusChanged {
                 session_id: "s-any".to_string(),
@@ -612,32 +498,10 @@ mod tests {
         assert!(calls[0].exclude_device.is_none(), "状态变更应全量广播");
     }
 
-    /// ConfigRemoved → 广播 ConfigRemoved（携带 config_name）
-    #[tokio::test]
-    async fn config_removed_event_broadcasts_config_removed() {
-        let (handler, fake, shared_db) = test_handler().await;
-        handler
-            .process_event(DesktopSyncEvent::ConfigRemoved {
-                config_id: "cfg-1".to_string(),
-                config_name: "dev".to_string(),
-                source_device: Some("d4".to_string()),
-            })
-            .await;
-        let calls = fake.take_calls();
-        match &calls[0].payload {
-            SyncPayload::ConfigRemoved { config_id, config_name } => {
-                assert_eq!(config_id, "cfg-1");
-                assert_eq!(config_name, "dev", "config_name 必须透传");
-            }
-            other => panic!("期望 ConfigRemoved，实际: {other:?}"),
-        }
-        assert_eq!(calls[0].exclude_device.as_deref(), Some("d4"));
-    }
-
     /// SessionModeChanged → 广播 SessionModeChanged
     #[tokio::test]
     async fn session_mode_changed_broadcasts() {
-        let (handler, fake, shared_db) = test_handler().await;
+        let (handler, fake) = test_handler().await;
         handler
             .process_event(DesktopSyncEvent::SessionModeChanged {
                 session_id: "s-1".to_string(),
@@ -655,7 +519,7 @@ mod tests {
     /// TaskQueueChanged → 广播 TaskQueueChanged
     #[tokio::test]
     async fn task_queue_changed_broadcasts() {
-        let (handler, fake, shared_db) = test_handler().await;
+        let (handler, fake) = test_handler().await;
         handler
             .process_event(DesktopSyncEvent::TaskQueueChanged {
                 session_id: "s-1".to_string(),
@@ -675,7 +539,7 @@ mod tests {
     /// TaskScheduledChanged → 广播 TaskScheduledChanged
     #[tokio::test]
     async fn task_scheduled_changed_broadcasts() {
-        let (handler, fake, shared_db) = test_handler().await;
+        let (handler, fake) = test_handler().await;
         handler
             .process_event(DesktopSyncEvent::TaskScheduledChanged {
                 job_id: "job-1".to_string(),
@@ -690,7 +554,7 @@ mod tests {
     /// 未知会话的 SessionCreated：不广播（会话不存在 → 直接返回）
     #[tokio::test]
     async fn session_created_for_unknown_session_skips_broadcast() {
-        let (handler, fake, shared_db) = test_handler().await;
+        let (handler, fake) = test_handler().await;
         handler
             .process_event(DesktopSyncEvent::SessionCreated {
                 session_id: "ghost".to_string(),
@@ -704,8 +568,8 @@ mod tests {
     /// 会话摘要的任务字段缺失，**wire 上不出现该键**（与迁移前恒 `None` 的形状等价）
     #[tokio::test]
     async fn session_created_without_slot_omits_task_fields() {
-        let (handler, fake, shared_db) = test_handler().await;
-        let sid = seed_session(&shared_db, &handler.session_manager).await;
+        let (handler, fake) = test_handler().await;
+        let sid = seed_session(&handler.session_manager).await;
 
         handler
             .process_event(DesktopSyncEvent::SessionCreated {
@@ -732,8 +596,8 @@ mod tests {
     /// 字段名与形状不变）
     #[tokio::test]
     async fn session_created_carries_task_fields_from_slot() {
-        let (handler, fake, shared_db) = test_handler().await;
-        let sid = seed_session(&shared_db, &handler.session_manager).await;
+        let (handler, fake) = test_handler().await;
+        let sid = seed_session(&handler.session_manager).await;
         assert!(
             handler
                 .session_manager

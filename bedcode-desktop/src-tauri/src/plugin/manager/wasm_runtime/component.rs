@@ -93,39 +93,11 @@ impl bedcode::plugin::host_auth::Host for WasmPluginState {
         auth::auth_secret_keys(&self.host_ctx, &self.plugin_id)
     }
 
-    fn trusted_devices_list(&mut self) -> Result<String, String> {
-        auth::auth_trusted_devices_list(&self.host_ctx, &self.plugin_id)
-    }
-
-    fn trusted_device_revoke(&mut self, id: String) -> Result<bool, String> {
-        auth::auth_trusted_device_revoke(&self.host_ctx, &self.plugin_id, &id)
-    }
-
-    fn connection_history_list(&mut self, device_id: String) -> Result<String, String> {
-        auth::auth_connection_history_list(&self.host_ctx, &self.plugin_id, &device_id)
-    }
-
     fn auth_setting_set(&mut self, key: String, value: String) -> Result<(), String> {
         auth::auth_setting_set(&self.host_ctx, &self.plugin_id, &key, &value)
     }
 
-    fn connection_history_clear(&mut self, device_id: String) -> Result<bool, String> {
-        auth::auth_connection_history_clear(&self.host_ctx, &self.plugin_id, &device_id)
-    }
-
-    // ==================== v19 函数级追加（票 07：认证链 HTTP 面下沉） ====================
-
-    fn trusted_device_upsert(&mut self, record_json: String) -> Result<String, String> {
-        auth::auth_trusted_device_upsert(&self.host_ctx, &self.plugin_id, &record_json)
-    }
-
-    fn trusted_device_touch(&mut self, fingerprint: String) -> Result<(), String> {
-        auth::auth_trusted_device_touch(&self.host_ctx, &self.plugin_id, &fingerprint)
-    }
-
-    fn connection_history_record(&mut self, record_json: String) -> Result<(), String> {
-        auth::auth_connection_history_record(&self.host_ctx, &self.plugin_id, &record_json)
-    }
+    // ==================== v19 保留面（v24 修订语义：公钥托管在 plugin_secrets） ====================
 
     fn biometric_credential_bound(&mut self, fingerprint: String) -> Result<bool, String> {
         auth::auth_biometric_credential_bound(&self.host_ctx, &self.plugin_id, &fingerprint)
@@ -309,14 +281,6 @@ impl bedcode::plugin::host_session::Host for WasmPluginState {
         session::session_get(&self.host_ctx, &self.plugin_id, &session_id)
     }
 
-    fn config_list(&mut self) -> Result<Option<String>, String> {
-        session::session_config_list(&self.host_ctx, &self.plugin_id)
-    }
-
-    fn config_get(&mut self, config_id: String) -> Result<Option<String>, String> {
-        session::session_config_get(&self.host_ctx, &self.plugin_id, &config_id)
-    }
-
     fn lifecycle_register(&mut self) -> Result<(), String> {
         lifecycle::session_lifecycle_register(&self.host_ctx, &self.plugin_id)
     }
@@ -366,14 +330,15 @@ impl bedcode::plugin::host_session::Host for WasmPluginState {
         from_offset: u64,
         max_bytes: u32,
     ) -> Result<Option<bedcode::plugin::host_session::RingFetchResult>, String> {
-        session::session_output_ring_fetch(&self.host_ctx, &self.plugin_id, &session_id, from_offset, max_bytes)
-            .map(|fetched| {
+        session::session_output_ring_fetch(&self.host_ctx, &self.plugin_id, &session_id, from_offset, max_bytes).map(
+            |fetched| {
                 fetched.map(|ring| bedcode::plugin::host_session::RingFetchResult {
                     data: ring.data,
                     next_offset: ring.next_offset,
                     truncated: ring.truncated,
                 })
-            })
+            },
+        )
     }
 }
 

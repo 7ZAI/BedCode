@@ -1,38 +1,10 @@
 -- Schema for Claude Code Remote
 
--- Paired devices table
-CREATE TABLE IF NOT EXISTS pairings (
-    id TEXT PRIMARY KEY,
-    device_name TEXT NOT NULL,
-    device_fingerprint TEXT NOT NULL UNIQUE,
-    public_key TEXT NOT NULL,
-    address TEXT,
-    session_token TEXT,
-    -- 设备唯一 ID（ANDROID_ID 等）哈希：跨指纹合并配对记录的锚点
-    uid_hash TEXT,
-    paired_at TEXT NOT NULL,
-    last_seen TEXT,
-    connect_count INTEGER DEFAULT 1,
-    is_active INTEGER DEFAULT 1
-);
-
--- Session configurations table
-CREATE TABLE IF NOT EXISTS session_configs (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    environment TEXT NOT NULL CHECK(environment IN ('windows', 'wsl2', 'linux')),
-    wsl_distro TEXT,
-    working_dir TEXT NOT NULL,
-    command TEXT NOT NULL,
-    auto_start INTEGER DEFAULT 0,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-
--- Quick actions table（票 02 contract 退役：真源已下沉 session 插件私有库）
--- 旧库存量数据由宿主侧 handoff（plugin/quick_actions_migration.rs）迁入插件；
--- 全新安装不再建表。已存在的旧表不主动 DROP（数据零丢失原则，退役后待
--- 各安装点 handoff 跑过再清理）。
+-- 2026-09-22 认证记录下沉（v24）：`pairings` / `connection_history` / `session_configs`
+-- 三表退役——认证记录（配对设备 / 连接历史）与会话配置真源已下沉
+-- `com.bedcode.terminal-session` 插件私有库（旧库存量由宿主 handoff 迁移：
+-- `plugin/auth_records_migration.rs` 推 pairings/connection_history，quick_actions
+-- 同款的 config 迁移已随 v21 完成）。内核主库只保留配置与引擎原语。
 
 -- App settings table
 CREATE TABLE IF NOT EXISTS settings (
@@ -40,25 +12,6 @@ CREATE TABLE IF NOT EXISTS settings (
     value TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
-
--- Device connection history table
--- 按设备（pairings.id）记录每次连接事件：认证方式、结果、起止时间
--- 每次认证成功/失败插入一条；断开时回填 disconnected_at
-CREATE TABLE IF NOT EXISTS connection_history (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    device_id TEXT NOT NULL,
-    auth_method TEXT NOT NULL,
-    result TEXT NOT NULL,
-    address TEXT,
-    connected_at TEXT NOT NULL,
-    disconnected_at TEXT
-);
-
--- Create indexes
-CREATE INDEX IF NOT EXISTS idx_pairings_fingerprint ON pairings(device_fingerprint);
-CREATE INDEX IF NOT EXISTS idx_pairings_active ON pairings(is_active);
-CREATE INDEX IF NOT EXISTS idx_session_configs_name ON session_configs(name);
-CREATE INDEX IF NOT EXISTS idx_connection_history_device ON connection_history(device_id, connected_at DESC);
 
 -- Plugin key-value storage (per-plugin isolation)
 CREATE TABLE IF NOT EXISTS plugin_storage (
@@ -72,7 +25,9 @@ CREATE TABLE IF NOT EXISTS plugin_storage (
 -- 密钥托管（v15 host-auth secret-store，按插件属主隔离）
 -- 明文不落日志（宿主只记长度）；本表是凭据的唯一指定存储位（AGENTS.md §8
 -- 「日志与存储中凭据只记长度不落明文」的例外/指定位——secret-store 的用途即
--- 可读回凭据，其余任何存储/日志位置禁止出现值本身）
+-- 可读回凭据，其余任何存储/日志位置禁止出现值本身）。
+-- v24 追加：生物凭证公钥亦托管于此（key = `biometric:<fingerprint>`，
+-- 配对记录下沉后公钥随 §8 凭据红线留宿主）
 CREATE TABLE IF NOT EXISTS plugin_secrets (
     plugin_id  TEXT NOT NULL,
     key        TEXT NOT NULL,

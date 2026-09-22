@@ -504,41 +504,33 @@ fn trusted_device_upsert(
     address: Option<&str>,
     uid_hash: Option<&str>,
 ) -> Result<String, String> {
-    let record = serde_json::json!({
-        "deviceName": device_name,
-        "fingerprint": fingerprint,
-        "publicKey": public_key,
-        "address": address,
-        "uidHash": uid_hash,
-    });
-    host.auth_trusted_device_upsert(&record.to_string()).map_err(|e| e.message)
+    // 2026-09-22 认证记录下沉：配对记录真源 = 认证中心私有库。
+    // `public_key` 不再写入配对记录（§8 凭据红线：公钥留宿主 plugin_secrets，
+    // 生物绑定经 host-auth `biometric-credential-bind` 原语单独处理）——此处
+    // 直接忽略该参数（调用方仍传 None，保留签名避免大面积改动）。
+    let _ = (host, public_key);
+    crate::auth_records::upsert(device_name, fingerprint, address, uid_hash)
 }
 
 #[cfg(target_arch = "wasm32")]
 fn connection_history_record(
-    host: &WasmHost,
+    _host: &WasmHost,
     fingerprint: &str,
     method: &str,
     result: &str,
     address: Option<&str>,
 ) -> Result<(), String> {
-    let record = serde_json::json!({
-        "fingerprint": fingerprint,
-        "method": method,
-        "result": result,
-        "address": address,
-    });
-    host.auth_connection_history_record(&record.to_string()).map_err(|e| e.message)
+    crate::auth_records::record_connection_event(fingerprint, method, result, address)
 }
 
-/// 连接计数 / last_seen 刷新（host-auth `trusted-device-touch` 原语）
+/// 连接计数 / last_seen 刷新（2026-09-22 下沉：真源 = 认证中心私有库）
 #[cfg(target_arch = "wasm32")]
-fn trusted_device_touch(host: &WasmHost, fingerprint: &str) -> Result<(), String> {
-    use bedcode_plugin_api::host::HostAuth;
-    host.auth_trusted_device_touch(fingerprint).map_err(|e| e.message)
+fn trusted_device_touch(_host: &WasmHost, fingerprint: &str) -> Result<(), String> {
+    crate::auth_records::touch(fingerprint)
 }
 
-/// 绑定/解绑生物凭证（host-auth `biometric-credential-bind` 原语）
+/// 绑定/解绑生物凭证（host-auth `biometric-credential-bind` 原语——**公钥留宿主**
+/// plugin_secrets，配对记录下沉后此路仍走宿主，凭据红线保持）
 #[cfg(target_arch = "wasm32")]
 fn biometric_credential_bind(host: &WasmHost, fingerprint: &str, public_key: &str) -> Result<bool, String> {
     use bedcode_plugin_api::host::HostAuth;

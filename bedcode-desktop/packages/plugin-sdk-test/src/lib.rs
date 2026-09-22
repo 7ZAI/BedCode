@@ -14,7 +14,7 @@
 //! （magic \0asm 0d，免 ComponentEncoder/componentize，见票 03）。
 
 use bedcode_plugin_api::host::{
-    ConfigKey, HostAuth, HostBus, HostConfig, HostDatabase, HostEvents, HostLog, HostSession, HostStorage,
+    ConfigKey, HostBus, HostConfig, HostDatabase, HostEvents, HostLog, HostSession, HostStorage,
 };
 use bedcode_plugin_api::types::PluginManifest;
 use bedcode_plugin_api::wasm::WasmPlugin;
@@ -291,55 +291,6 @@ impl WasmPlugin for SdkTestPlugin {
                     Ok(v) => Ok(serde_json::json!({ "unexpected": v })),
                     Err(e) => Err(anyhow::anyhow!("{}", e)),
                 }
-            }
-            // ==================== host-auth 记录面（v18）四原语闭环探针 ====================
-            // 产品侧消费方（设置分组 / 设备视图）归后续票；本探针让宿主 S1 闭环能贯穿
-            // WIT → SDK → host_impl 全链，覆盖「读原始记录 / 撤销 / 连接历史 / 设置写入」
-            // 四函数的真实 wasm 行为。权限由宿主测试显式授予（auth）。
-            //
-            // args：{ deviceId?, revokeId?, settingKey?, settingValue? }
-            "test_auth_record_face" => {
-                let device_id = args.get("deviceId").and_then(|v| v.as_str()).unwrap_or("p-1");
-                let setting_key = args
-                    .get("settingKey")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("pairing_code_ttl");
-                let setting_value = args.get("settingValue").and_then(|v| v.as_str()).unwrap_or("777");
-                let before = host.auth_trusted_devices_list()?;
-                let history = host.auth_connection_history_list(device_id)?;
-                host.auth_setting_set(setting_key, setting_value)?;
-                let revoked = match args.get("revokeId").and_then(|v| v.as_str()) {
-                    Some(id) => Some(host.auth_trusted_device_revoke(id)?),
-                    None => None,
-                };
-                let after = host.auth_trusted_devices_list()?;
-                Ok(serde_json::json!({
-                    "before": before,
-                    "after": after,
-                    "history": history,
-                    "revoked": revoked,
-                }))
-            }
-            // ==================== host-session 配置面（v19）闭环探针 ====================
-            // 票 07 的验收点是原语自身在真实运行时可用：新建 → 读回 → 覆盖 →
-            // v22：host-session 配置面只读化（config-upsert/delete 已退役），
-            // 探针只走读取面：config-list 拿 id 清单 → config-get 逐条全量。
-            "test_session_config_face" => {
-                let list = host.session_config_list()?.unwrap_or_else(|| serde_json::json!([]));
-                let mut rows = Vec::new();
-                if let Some(arr) = list.as_array() {
-                    for row in arr {
-                        if let Some(id) = row.get("id").and_then(|v| v.as_str()) {
-                            rows.push(
-                                host.session_config_get(id)?.unwrap_or_else(|| serde_json::Value::Null),
-                            );
-                        }
-                    }
-                }
-                Ok(serde_json::json!({
-                    "list": list,
-                    "rows": rows,
-                }))
             }
             _ => Err(anyhow::anyhow!("Unknown command: {}", name)),
         }

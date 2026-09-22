@@ -13,6 +13,9 @@
 //! 所有模块可用。
 
 pub mod bus;
+/// 认证记录 legacy 主库 → 认证中心插件私有库的一次性搬运（2026-09-22 用户裁定：
+/// pairings/connection_history 下沉；宿主侧 handoff，插件 marker 幂等）
+pub mod auth_records_migration;
 pub mod config;
 pub mod manager;
 pub mod monitor;

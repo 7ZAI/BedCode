@@ -63,6 +63,94 @@ fn bundled_plugins_dir() -> PathBuf {
     dir
 }
 
+/// 无头集成测试的会话中心插件私有库根（经 [`WasmHostContext::set_plugin_db_root`]
+/// 注入；认证记录下沉 v24 后配对 / 历史 / 计数真源在插件私有库，无私有库的
+/// 无头上下文无法驱动认证链路）。进程级固定：init 一次，测试结束清理。
+fn session_plugin_db_root() -> &'static PathBuf {
+    static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    ROOT.get_or_init(|| {
+        let dir = std::env::temp_dir().join(format!("bedcode-bioitest-pluginroot-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    })
+}
+
+/// 会话中心插件私有库文件（插件 activate 后存在，schema 见插件
+/// `auth_records::store::SCHEMA`：auth_pairings / auth_connection_history）
+fn session_plugin_db_path() -> PathBuf {
+    session_plugin_db_root().join("com.bedcode.terminal-session").join("plugin.db")
+}
+
+/// 白盒种子：直写认证中心私有库 `auth_pairings` 播种配对（id 固定，测试持有；
+/// schema 由插件 activate 建出）
+fn seed_pairing_in_plugin_db(id: &str, device_name: &str, fingerprint: &str) {
+    let conn = rusqlite::Connection::open(session_plugin_db_path()).expect("open plugin db");
+    conn.execute(
+        "INSERT OR REPLACE INTO auth_pairings \
+         (id, device_name, device_fingerprint, address, uid_hash, paired_at, last_seen, \
+          connect_count, is_active) \
+         VALUES (?1, ?2, ?3, NULL, NULL, '2026-09-22T00:00:00Z', NULL, 1, 1)",
+        rusqlite::params![id, device_name, fingerprint],
+    )
+    .expect("seed pairing into plugin db");
+}
+
+/// 白盒断言：认证中心私有库中某设备的连接历史（auth_method, result）
+fn plugin_db_history(device_id: &str) -> Vec<(String, String)> {
+    let conn = rusqlite::Connection::open(session_plugin_db_path()).expect("open plugin db");
+    let mut stmt = conn
+        .prepare("SELECT auth_method, result FROM auth_connection_history WHERE device_id = ?1")
+        .expect("prepare history query");
+    let rows = stmt
+        .query_map(rusqlite::params![device_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .expect("query history");
+    rows.filter_map(std::result::Result::ok).collect()
+}
+
+/// 白盒断言：认证中心私有库中某指纹的配对显示名（无行 → None）
+fn plugin_db_pairing_name(fingerprint: &str) -> Option<String> {
+    let conn = rusqlite::Connection::open(session_plugin_db_path()).expect("open plugin db");
+    conn.query_row(
+        "SELECT device_name FROM auth_pairings WHERE device_fingerprint = ?1",
+        rusqlite::params![fingerprint],
+        |row| row.get::<_, String>(0),
+    )
+    .ok()
+}
+
+/// 白盒断言/种子（异步版本）：宿主主库 `plugin_secrets` 公钥读
+async fn biometric_public_key_in_db(fingerprint: &str) -> Option<String> {
+    let db_guard = AppContext::global().db().lock().await;
+    db_guard
+        .conn()
+        .query_row(
+            "SELECT value FROM plugin_secrets WHERE plugin_id = ?1 AND key = ?2",
+            rusqlite::params![SESSION_PLUGIN_ID, format!("biometric:{fingerprint}")],
+            |row| row.get::<_, String>(0),
+        )
+        .ok()
+}
+
+/// 白盒种子：写宿主主库 `plugin_secrets` 生物凭证公钥（幂等覆盖）
+async fn seed_biometric_public_key(fingerprint: &str, public_key: &str) {
+    let db_guard = AppContext::global().db().lock().await;
+    db_guard
+        .conn()
+        .execute(
+            "INSERT INTO plugin_secrets (plugin_id, key, value, updated_at) VALUES (?1, ?2, ?3, ?4) \
+             ON CONFLICT(plugin_id, key) DO UPDATE SET value = ?3, updated_at = ?4",
+            rusqlite::params![
+                SESSION_PLUGIN_ID,
+                format!("biometric:{fingerprint}"),
+                public_key,
+                "2026-09-22T00:00:00Z"
+            ],
+        )
+        .expect("seed biometric public key");
+}
+
 /// 探测空闲端口：绑定 127.0.0.1:0 由 OS 分配，立即释放后交给服务器绑定
 fn pick_free_port() -> u16 {
     let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("probe free port failed");
@@ -120,6 +208,11 @@ async fn init_test_app_context() {
             .await,
         );
         plugin_host.init_message_bus().await;
+        // v24 认证记录下沉：配对/历史真源 = 认证中心私有库。无头上下文无 AppHandle，
+        // 必须在 activation 前注入私有库根（activate 建表走 host-plugin-database）
+        plugin_host
+            .wasm_host_ctx()
+            .set_plugin_db_root(Some(session_plugin_db_root().clone()));
         plugin_host
             .activate_plugin(SESSION_PLUGIN_ID, false)
             .await
@@ -207,15 +300,14 @@ async fn http_biometric_auth_contract() {
     let verify_url = format!("{base}/api/auth/biometric-verify");
     let bind_url = format!("{base}/api/auth/biometric-bind");
 
-    // 测试用配对：SPKI base64 公钥写入 DB（等价于已配对 + 已绑定生物凭证）
+    // 测试用配对：v24 认证记录下沉后双落点——配对记录在认证中心私有库
+    // `auth_pairings`（白盒种子：直写私有库，schema 由 activate 建出）；生物
+    // 公钥在宿主 `plugin_secrets`（key = `biometric:<fp>`，§8 指定存储位）
     let (spki_b64, signing_key) = make_keypair();
     let fingerprint = "fp-bio-http-001";
-    let pairing_id = {
-        let db_guard = AppContext::global().db().lock().await;
-        db_guard
-            .add_pairing("Bio Phone", fingerprint, &spki_b64, None, None)
-            .expect("add pairing failed")
-    };
+    let pairing_id = "p-bio-http-001";
+    seed_biometric_public_key(fingerprint, &spki_b64).await;
+    seed_pairing_in_plugin_db(pairing_id, "Bio Phone", fingerprint);
 
     // ==================== T1：未配对指纹调 challenge → 1008 ====================
 
@@ -236,16 +328,11 @@ async fn http_biometric_auth_contract() {
     let body = body_json(resp).await;
     assert_eq!(body["code"], 1008, "未配对设备挑战签发必须返回 1008");
     assert!(body["data"].is_null(), "失败响应的 data 字段必须缺省");
-    // 未配对指纹不落连接历史（find_pairing_id_by_fingerprint 为 None → no-op）
-    let db_guard = AppContext::global().db().lock().await;
+    // 未配对指纹不落连接历史（配对记录查询为 None → record_event no-op）
     assert!(
-        db_guard
-            .get_connection_history("unpaired-dev")
-            .expect("query history")
-            .is_empty(),
+        plugin_db_history("unpaired-dev").is_empty(),
         "未配对指纹不应产生连接历史"
     );
-    drop(db_guard);
 
     // ==================== T2：已配对设备 challenge → 200 + nonce ====================
 
@@ -308,27 +395,24 @@ async fn http_biometric_auth_contract() {
     assert_eq!(claims.sub, pairing_id, "JWT sub 必须等于配对记录 id");
     assert_eq!(claims.fingerprint.as_deref(), Some(fingerprint), "JWT 必须携带设备指纹");
 
-    // add_pairing 必须保留 public_key（新的 verify 端点传 pairing.public_key，
-    // 既有的 verify/qr 端点传空串会清空生物凭证——此处必须防覆盖）
+    // 配对播种必须保留生物公钥（verify 端点只读公钥验签，不得覆盖/清空——
+    // §8 凭据红线：公钥在宿主 plugin_secrets，@plugin_secrets）
     {
-        let db_guard = AppContext::global().db().lock().await;
-        let pairing = db_guard
-            .get_pairing_by_fingerprint(fingerprint)
-            .expect("query pairing")
-            .expect("pairing must exist");
-        assert_eq!(pairing.public_key, spki_b64, "验证后生物公钥必须原样保留");
-        assert_eq!(pairing.device_name, "Bio Phone", "add_pairing 不应改设备展示名");
+        let stored = biometric_public_key_in_db(fingerprint).await;
+        assert_eq!(stored.as_deref(), Some(spki_b64.as_str()), "验证后生物公钥必须原样保留");
+        assert_eq!(
+            plugin_db_pairing_name(fingerprint).as_deref(),
+            Some("Bio Phone"),
+            "配对播种不应改设备展示名"
+        );
     }
 
-    // 连接历史出现一次 biometric success
+    // 连接历史出现一次 biometric success（真源 = 认证中心私有库）
     {
-        let db_guard = AppContext::global().db().lock().await;
-        let history = db_guard.get_connection_history(&pairing_id).expect("query history");
+        let history = plugin_db_history(pairing_id);
         assert!(
-            history
-                .iter()
-                .any(|h| h.auth_method == "biometric" && h.result == "success"),
-            "验证成功必须记录 biometric/success 连接历史"
+            history.iter().any(|(m, r)| m == "biometric" && r == "success"),
+            "验证成功必须记录 biometric/success 连接历史, got: {history:?}"
         );
     }
 
@@ -474,12 +558,12 @@ async fn http_biometric_auth_contract() {
     assert_eq!(body["code"], 0, "有效 token 绑定公钥必须成功");
     assert_eq!(body["data"]["bound"], true, "非空公钥绑定 bound 必须为 true");
     {
-        let db_guard = AppContext::global().db().lock().await;
-        let pairing = db_guard
-            .get_pairing_by_fingerprint(fingerprint)
-            .expect("query pairing")
-            .expect("pairing must exist");
-        assert_eq!(pairing.public_key, new_spki_b64, "绑定后公钥必须更新为新值");
+        let stored = biometric_public_key_in_db(fingerprint).await;
+        assert_eq!(
+            stored.as_deref(),
+            Some(new_spki_b64.as_str()),
+            "绑定后公钥必须更新为新值（宿主 plugin_secrets）"
+        );
     }
 
     // ==================== T8：空公钥解绑 → code 0 + bound=false ====================
@@ -503,12 +587,8 @@ async fn http_biometric_auth_contract() {
     assert_eq!(body["code"], 0, "空公钥解绑必须成功");
     assert_eq!(body["data"]["bound"], false, "空公钥解绑 bound 必须为 false");
     {
-        let db_guard = AppContext::global().db().lock().await;
-        let pairing = db_guard
-            .get_pairing_by_fingerprint(fingerprint)
-            .expect("query pairing")
-            .expect("pairing must exist");
-        assert_eq!(pairing.public_key, "", "解绑后公钥必须清空");
+        let stored = biometric_public_key_in_db(fingerprint).await;
+        assert_eq!(stored, None, "解绑后公钥键必须删除（宿主 plugin_secrets 无行）");
     }
 
     // ==================== T9：无效 token 绑定 → code 1001 ====================
@@ -573,4 +653,6 @@ async fn http_biometric_auth_contract() {
 
     let plugins_dir = std::env::temp_dir().join(format!("bedcode-bioitest-plugins-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(plugins_dir);
+    // 私有库根目录清理（含 auth_pairings / auth_connection_history 测试数据）
+    let _ = std::fs::remove_dir_all(session_plugin_db_root());
 }

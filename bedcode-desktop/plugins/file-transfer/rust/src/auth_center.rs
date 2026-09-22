@@ -185,6 +185,21 @@ pub(crate) trait SessionCenterApi {
     fn annotate(draft: serde_json::Value) -> Result<serde_json::Value, String>;
     #[api("devices-connect-list")]
     fn devices_connect_list() -> Result<serde_json::Value, String>;
+
+    // ============ 2026-09-22 认证记录下沉追加（宿主/其他插件消费；本插件不消费） ============
+    // 认证中心私有库 auth_records 域带来的五个 api，签名与 provider 侧
+    // （`terminal-session/rust/src/lib.rs` 的 `#[plugin_api]` impl）逐字对齐：
+    // 本插件只用 consent/trust 三项，其余全部仅承载构建期防漂移比对。
+    #[api("auth-records-import")]
+    fn auth_records_import(rows: serde_json::Value) -> Result<serde_json::Value, String>;
+    #[api("devices-list")]
+    fn devices_list() -> Result<serde_json::Value, String>;
+    #[api("history-list")]
+    fn history_list(device_id: String) -> Result<serde_json::Value, String>;
+    #[api("connection-touch")]
+    fn connection_touch(fingerprint: String) -> Result<(), String>;
+    #[api("connection-close")]
+    fn connection_close(fingerprint: String) -> Result<(), String>;
 }
 
 // ==================== 可注入面（native 单测驱动编排） ====================

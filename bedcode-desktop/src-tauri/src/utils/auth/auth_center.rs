@@ -167,6 +167,61 @@ pub fn enforce_connection_policy(plugin_host: &PluginHost, token: &str) -> std::
     }
 }
 
+// ==================== 认证记录通知（v24 认证记录下沉，WS 中间件回调） ====================
+//
+// 认证记录（配对设备 / 连接历史）真源下沉认证中心后，宿主 WS 认证中间件不再
+// 直写主库：认证成功（last_seen / connect_count）与断开回填（disconnected_at）
+// 经互调 api 通知认证中心插件（`connection-touch` / `connection-close`）。
+// 降级语义（无单点）：插件未激活 / 互调失败 → warn + 跳过（记录缺失不阻断
+// 认证与断连——与 v24 前 update_pairing_last_seen / close_open 失败 warn 同语义）。
+
+/// WS 认证成功：通知认证中心刷新配对记录（last_seen / connect_count）
+///
+/// **异步 fire-and-forget**（ambient runtime 后台执行）：WS 认证/断连常在
+/// actix current_thread runtime 的驱动线程上运行——若在此同步等待互调 reply
+/// 会自锁（reply 的 MessageBus 投递 spawn 到同一 current_thread runtime，而
+/// 该 runtime 的调度线程正被本调用阻塞，投递永不执行 → 超时）。记录刷新是
+/// 降级语义（失败 warn + 跳过，不阻断认证），后台执行即可。
+pub fn notify_connection_touch(plugin_host: &PluginHost, fingerprint: &str) {
+    let host_ctx = plugin_host.wasm_host_ctx().clone();
+    let fp = fingerprint.to_string();
+    if !session_active(&host_ctx) {
+        return; // 插件未激活：记录更新跳过（不阻断认证）
+    }
+    let params = serde_json::json!(fp);
+    crate::plugin::manager::wasm_runtime::ambient_handle().spawn(async move {
+        match call_api(&host_ctx, "com.bedcode.terminal-session.connection-touch", params) {
+            Ok(_) => tracing::debug!(
+                fingerprint = %fp,
+                "WS auth: connection touch notified to auth center"
+            ),
+            Err(e) => log_fallback("auth center connection-touch", &e),
+        }
+    });
+}
+
+/// WS 断链：通知认证中心回填最近 open 连接的断开时间
+///
+/// 与 touch 同口径：异步 fire-and-forget（ambient runtime），避免 actix
+/// current_thread 上下文同步等互调 reply 自锁；失败 warn + 跳过。
+pub fn notify_connection_close(plugin_host: &PluginHost, fingerprint: &str) {
+    let host_ctx = plugin_host.wasm_host_ctx().clone();
+    let fp = fingerprint.to_string();
+    if !session_active(&host_ctx) {
+        return; // 插件未激活：回填跳过（不阻断断开语义）
+    }
+    let params = serde_json::json!(fp);
+    crate::plugin::manager::wasm_runtime::ambient_handle().spawn(async move {
+        match call_api(&host_ctx, "com.bedcode.terminal-session.connection-close", params) {
+            Ok(_) => tracing::debug!(
+                fingerprint = %fp,
+                "WS disconnect: connection close notified to auth center"
+            ),
+            Err(e) => log_fallback("auth center connection-close", &e),
+        }
+    });
+}
+
 /// 格式化设备显示名称：名称 + 首次连接 IP（原 `auth_service` 同名函数，
 /// 票 07 后 WS 重认证路径仍在宿主使用——HTTP 路径的同构实现在插件 auth_http）
 pub fn format_device_display_name(device_name: &str, address: &str) -> String {

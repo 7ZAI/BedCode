@@ -61,7 +61,7 @@ describe('C1 插件身份五处一致', () => {
     expect(cargoToml).toContain('crate-type = ["cdylib"]')
   })
 
-  it('票 05/08/09/10/11 + 票 15/16/17 + 票 02 能力面：八域廿二项 api + auth/peer/storage/session:*/terminal:*/ui:* 权限', () => {
+  it('票 05/08/09/10/11 + 票 15/16/17 + 票 02 + 认证记录下沉：八域廿七项 api + auth/peer/storage/session:*/terminal:*/ui:* 权限', () => {
     // 权限清单与 D2 能力映射一一对应：auth = host-auth（密钥托管 + 认证记录面）、
     // peer = host-peer（consent 取可信集 / trust 的 peer 段）、
     // storage = host-plugin-database（票 08 配置真源私有库）、
@@ -117,6 +117,14 @@ describe('C1 插件身份五处一致', () => {
       'com.bedcode.terminal-session.config-delete',
       // 票 02：快捷指令迁移导入（宿主 handoff 经互调推送 legacy 行）
       'com.bedcode.terminal-session.quick-actions-import',
+      // 2026-09-22 认证记录下沉：legacy 主库 pairings / connection_history 迁入本插件
+      // 私有库 auth_records 域（宿主 handoff 推送导入）+ 认证记录的互调查询面 +
+      // 宿主 WS 认证/断链路径的连接计数与断开回填回调
+      'com.bedcode.terminal-session.auth-records-import',
+      'com.bedcode.terminal-session.devices-list',
+      'com.bedcode.terminal-session.history-list',
+      'com.bedcode.terminal-session.connection-touch',
+      'com.bedcode.terminal-session.connection-close',
       'com.bedcode.terminal-session.session-create',
       'com.bedcode.terminal-session.session-restart',
       'com.bedcode.terminal-session.session-remove',

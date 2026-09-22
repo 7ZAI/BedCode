@@ -2,18 +2,17 @@
 //!
 //! 职责边界（spec D3/D5）：
 //! - **在插件**：配置校验规则（环境取值 / WSL 分支合法性 / 空命令兜底）、业务排序与
-//!   展示组织、真源读写与一次性幂等迁移
-//! - **留宿主**：主库旧表作为「引擎输入投影」（`session/session_manager.rs` 启动会话时
-//!   读它；票 09 的 `create-with-spec` 落地后该项依赖消失、旧表可退役）、schema 级
-//!   最终仲裁（NOT NULL / CHECK）、同步事件广播（移动端可见形状不变）
+//!   展示组织、真源读写
+//! - **留宿主**：schema 级最终仲裁（NOT NULL / CHECK）、同步事件广播（移动端可见
+//!   形状不变）
 //!
-//! 插件读 legacy 主库的唯一合法通道是宿主 `host-session` 配置面（票 07）——主库表名强制
-//! `plugin_<id>_` 前缀，插件直连会被前缀校验拒。
+//! **2026-09-22（v24）**：legacy 迁移通道（host-session 配置面 config-list /
+//! config-get 读取）随 `session_configs` 表退役删除——私有库即唯一真源，无迁移步骤。
 //!
 //! 模块构成：
 //! - [`model`]：wire 模型（camelCase，与宿主 DTO 同形）+ 时钟 / ID 值对象
 //! - [`store`]：存储端口（wasm = 插件私有库；native 单测注入内存实现）
-//! - [`ops`]：校验与归一化、业务排序、写入、迁移编排（真源策略全在此层）
+//! - [`ops`]：校验与归一化、业务排序、写入（真源策略全在此层）
 
 pub mod model;
 pub mod ops;
@@ -89,13 +88,4 @@ pub fn delete_via_host(_id: &str) -> Result<bool, String> {
     Err("config delete unavailable outside wasm runtime".to_string())
 }
 
-/// 一次性幂等迁移：legacy 主库（经 host-session 配置面读）→ 本插件私有库
-#[cfg(target_arch = "wasm32")]
-pub fn migrate_via_host() -> Result<ops::MigrationReport, String> {
-    ops::migrate(&WasmHost, &WasmHost)
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-pub fn migrate_via_host() -> Result<ops::MigrationReport, String> {
-    Err("config migration unavailable outside wasm runtime".to_string())
-}
+// ==================== 会话配置域激活 ====================

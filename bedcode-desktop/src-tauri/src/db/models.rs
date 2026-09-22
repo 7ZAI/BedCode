@@ -2,45 +2,9 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
-/// Paired device
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Pairing {
-    pub id: String,
-    pub device_name: String,
-    pub device_fingerprint: String,
-    pub public_key: String,
-    pub address: Option<String>,
-    pub session_token: Option<String>,
-    /// 设备唯一 ID 哈希（跨指纹合并锚点，移动端更新/重装后指纹再派生仍归同一设备）
-    pub uid_hash: Option<String>,
-    pub paired_at: DateTime<Utc>,
-    pub last_seen: Option<DateTime<Utc>>,
-    pub connect_count: i32,
-    pub is_active: bool,
-}
-
-/// 设备连接历史事件
-///
-/// 每次认证成功/失败记录一条；认证方式取值见 `auth_method` 常量
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ConnectionHistory {
-    pub id: i64,
-    /// 关联 pairings.id（设备 ID）
-    pub device_id: String,
-    /// 认证方式：pairing_code / qr / biometric / jwt
-    pub auth_method: String,
-    /// 结果：success / failed
-    pub result: String,
-    pub address: Option<String>,
-    pub connected_at: DateTime<Utc>,
-    pub disconnected_at: Option<DateTime<Utc>>,
-}
-
-/// 连接历史的认证方式取值
+/// 连接历史的认证方式取值（审计/展示语义归消费方；真源随认证记录下沉
+/// 认证中心插件私有库——宿主侧常量保留供既有 HTTP/日志面引用）
 pub mod connection_method {
     /// 配对码
     pub const PAIRING_CODE: &str = "pairing_code";
@@ -58,41 +22,6 @@ pub mod connection_result {
     pub const SUCCESS: &str = "success";
     /// 认证失败
     pub const FAILED: &str = "failed";
-}
-
-/// 每设备保留的最大历史条数
-pub const CONNECTION_HISTORY_MAX_PER_DEVICE: i64 = 100;
-
-/// Session configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SessionConfig {
-    pub id: String,
-    pub name: String,
-    pub environment: String,
-    pub wsl_distro: Option<String>,
-    pub working_dir: String,
-    pub command: String,
-    pub auto_start: bool,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
-impl SessionConfig {
-    pub fn new(name: String, environment: String, working_dir: String, command: String) -> Self {
-        let now = Utc::now();
-        Self {
-            id: Uuid::new_v4().to_string(),
-            name,
-            environment,
-            wsl_distro: None,
-            working_dir,
-            command,
-            auto_start: false,
-            created_at: now,
-            updated_at: now,
-        }
-    }
 }
 
 /// legacy 主库 `quick_actions` 行（票 02 迁移只读视图）
@@ -113,6 +42,56 @@ pub struct LegacyQuickActionRow {
     pub category: Option<String>,
     pub sort_order: i64,
     pub created_at: String,
+}
+
+/// legacy 主库配对行（2026-09-22 认证记录下沉，迁移只读视图）
+///
+/// 与认证中心插件 `auth_records::model::PairingRecord` 同形（camelCase）；
+/// **本结构不含凭据列**（`public_key` / `session_token` 不随任何 JSON/记录面
+/// 流动，§8 凭据红线——公钥走 [`LegacyAuthRows::biometric_public_keys`]
+/// 直达 `plugin_secrets`，session_token 死列直接丢弃）。`paired_at` 等时间戳
+/// 保持 DB 原始字符串不重解析，保证逐字节搬运。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LegacyPairingRow {
+    pub id: String,
+    pub device_name: String,
+    pub device_fingerprint: String,
+    pub address: Option<String>,
+    pub uid_hash: Option<String>,
+    pub paired_at: String,
+    pub last_seen: Option<String>,
+    pub connect_count: i64,
+    pub is_active: bool,
+}
+
+/// legacy 主库连接历史行（2026-09-22 认证记录下沉，迁移只读视图）
+///
+/// 与认证中心插件 `auth_records::model::ConnectionEventRecord` 同形
+/// （camelCase）；`connected_at` 等时间戳保持 DB 原始字符串逐字节搬运。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LegacyConnectionRow {
+    pub id: i64,
+    pub device_id: String,
+    pub auth_method: String,
+    pub result: String,
+    pub address: Option<String>,
+    pub connected_at: String,
+    pub disconnected_at: Option<String>,
+}
+
+/// legacy 主库认证记录整体（2026-09-22 认证记录下沉，迁移只读视图）
+///
+/// 宿主 `plugin/auth_records_migration.rs` 的输入：配对公开行 + 连接历史行
+/// 经互调 api 推给认证中心；生物凭证公钥（`biometric_public_keys`）单独寄主
+/// 到 `plugin_secrets`（key = `biometric:<fingerprint>`）。
+pub struct LegacyAuthRows {
+    pub pairings: Vec<LegacyPairingRow>,
+    pub history: Vec<LegacyConnectionRow>,
+    /// (device_fingerprint, public_key) 对——§8 凭据红线：只进
+    /// `plugin_secrets`（可读回凭据指定存储位），禁止经任何序列化/日志面出现
+    pub biometric_public_keys: Vec<(String, String)>,
 }
 
 /// App setting

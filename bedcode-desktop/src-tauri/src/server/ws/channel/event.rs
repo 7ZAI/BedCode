@@ -91,8 +91,8 @@ impl EventChannel {
             }
             _ => {
                 if !conn.session.authenticated {
-                    // 未认证连接首条消息必须走 Auth 分派；其他消息类型（SessionConfig
-                    // 等）一律拒绝并关闭。无 message_id 的通知类消息用 Message::error
+                    // 未认证连接首条消息必须走 Auth 分派；其他消息类型
+                    // 一律拒绝并关闭。无 message_id 的通知类消息用 Message::error
                     // （无 id），spec §4.3 拒绝对称
                     let error = Message::error("AUTH_REQUIRED", "Please authenticate first");
                     if let Ok(json) = error.to_json() {

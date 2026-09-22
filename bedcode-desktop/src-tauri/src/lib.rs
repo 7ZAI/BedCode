@@ -382,21 +382,6 @@ pub fn run() {
             let db = Database::new(&db_path)?;
             db.init_schema()?;
 
-            // 票 02 阶段 A 观测信号（`session_configs` 表退役前置）：遗留行数
-            // 落 info 结构化字段，发布侧据此判断还有多少安装点的配置真源
-            // 尚未迁入插件私有库。本行只观测、不改行为（迁移仍由
-            // com.bedcode.terminal-session 激活时执行，见 config/ops.rs::migrate）
-            match db.count_legacy_session_configs() {
-                Ok(legacy_rows) => tracing::info!(
-                    legacy_rows = legacy_rows,
-                    "legacy session_configs rows present at startup"
-                ),
-                Err(e) => tracing::warn!(
-                    error = %e,
-                    "failed to count legacy session_configs rows (observation only)"
-                ),
-            }
-
             let db = Arc::new(Mutex::new(db));
 
             // 宿主密钥托管（票 05）：注入主库句柄并预生成 JWT 密钥（首启随机
@@ -481,6 +466,13 @@ pub fn run() {
             // 触发——PluginHost::new 之后插件已按持久化状态自动激活，互调面已登记；
             // 插件未激活时跳过（数据留主库，双轨期继续服务）；插件侧 marker 幂等
             crate::plugin::quick_actions_migration::run();
+            // 认证记录 legacy 主库 → 认证中心插件私有库的一次性搬运（2026-09-22
+            // 用户裁定：pairings / connection_history 下沉 terminal-session 私有库，
+            // 生物公钥寄主 plugin_secrets）：同位置触发——PluginHost::new 之后认证
+            // 中心插件已按持久化状态自动激活；插件未激活时跳过（数据留在 legacy
+            // 表不 DROP，下次启动重试）；推送成功（含 already_migrated 回执）后
+            // DROP 两表清理。迁移失败不阻断启动。
+            crate::plugin::auth_records_migration::run();
             app.manage(system_info.clone());
             // peer-net 节点与文件传输插件状态对账：boot 装配期 AppContext 全局
             // 尚未注册，activate 外壳内的节点启动会被静默跳过（2026-09-06 实机
@@ -534,11 +526,7 @@ pub fn run() {
                     .await;
 
                 // 注册处理器
-                let sync_handler = Arc::new(SyncEventHandler::new(
-                    ctx.session_manager().clone(),
-                    ctx.config_manager().clone(),
-                    ws_manager,
-                ));
+                let sync_handler = Arc::new(SyncEventHandler::new(ctx.session_manager().clone(), ws_manager));
                 global_matcher().register::<DesktopSyncEvent>(sync_handler).await;
                 tracing::info!("[BedCode] SyncEventHandler registered");
 

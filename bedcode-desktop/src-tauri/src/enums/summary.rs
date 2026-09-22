@@ -25,24 +25,3 @@ pub struct SessionSummary {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_reason: Option<String>,
 }
-
-/// 会话配置摘要
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionConfigSummary {
-    pub id: String,
-    pub name: String,
-    pub environment: String,
-    pub wsl_distro: Option<String>,
-    pub working_dir: String,
-    pub command: String,
-}
-
-/// 快捷指令摘要
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QuickActionSummary {
-    pub id: String,
-    pub name: String,
-    pub content: String,
-    pub icon: Option<String>,
-    pub color: Option<String>,
-}

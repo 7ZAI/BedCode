@@ -105,8 +105,8 @@ fn consume(fingerprint: &str, nonce: &str) -> Result<(), String> {
 /// 验证生物认证签名 → 配对记录（`{id, deviceName}`，供 JWT sub 与回执）
 ///
 /// 流程与宿主 `verify_biometric_challenge` 逐段对齐：消费挑战 → 配对存在性
-/// （trusted-devices-list 按指纹查活跃记录）→ 绑定判定（宿主原语）→ 验签
-/// （宿主原语，公钥不出宿主）。
+/// （认证中心私有库按指纹查活跃记录，2026-09-22 下沉）→ 绑定判定（宿主原语）
+/// → 验签（宿主原语，公钥不出宿主）。
 pub fn verify_signature(
     host: &WasmHost,
     fingerprint: &str,
@@ -118,15 +118,10 @@ pub fn verify_signature(
     }
     consume(fingerprint, nonce).map_err(|_| MSG_CHALLENGE_INVALID.to_string())?;
 
-    let records = host
-        .auth_trusted_devices_list()
-        .map_err(|e| e.message)?
-        .as_array()
-        .cloned()
-        .unwrap_or_default();
-    let entry = records
-        .iter()
-        .find(|r| r["deviceFingerprint"].as_str() == Some(fingerprint) && r["isActive"].as_bool() == Some(true));
+    // 配对记录真源 = 认证中心私有库（2026-09-22 下沉；活跃记录判定）
+    let entry = crate::auth_records::records()?
+        .into_iter()
+        .find(|r| r.device_fingerprint == fingerprint && r.is_active);
     let Some(entry) = entry else {
         return Err(MSG_DEVICE_NOT_PAIRED.to_string());
     };
@@ -145,8 +140,8 @@ pub fn verify_signature(
         return Err(MSG_SIGNATURE_INVALID.to_string());
     }
     Ok(serde_json::json!({
-        "id": entry["id"],
-        "deviceName": entry["deviceName"],
+        "id": entry.id,
+        "deviceName": entry.device_name,
     }))
 }
 

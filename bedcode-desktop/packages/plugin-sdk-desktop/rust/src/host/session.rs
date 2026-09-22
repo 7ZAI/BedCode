@@ -30,18 +30,6 @@ pub trait HostSession {
     /// 获取单个会话；不存在返回 `Ok(None)`
     fn session_get(&self, session_id: &str) -> Result<Option<serde_json::Value>, HostError>;
 
-    /// 列出所有会话配置的精简列表（仅 id / workingDir / command），
-    /// 供插件遍历项目目录（如批量清理 hooks）
-    fn session_config_list(&self) -> Result<Option<serde_json::Value>, HostError>;
-
-    /// 读取单条会话配置（v22 起权限 `session:read`）；不存在返回 `Ok(None)`
-    ///
-    /// v22 起 `session_config_upsert` / `session_config_delete` 已退役（业务真源在
-    /// 插件私有库，宿主写原语无调用者）；本读取面与 `session_config_list` 保留为
-    /// 一次性 legacy 迁移通道（`terminal-session` 插件激活时读主库 `session_configs`，
-    /// marker 幂等，`config/ops.rs::migrate`）。迁移窗口结束随主库表一并退役。
-    fn session_config_get(&self, config_id: &str) -> Result<Option<serde_json::Value>, HostError>;
-
     /// 注册会话生命周期监听器
     ///
     /// 调用后宿主为该插件创建监听器并注册到 SessionManager，

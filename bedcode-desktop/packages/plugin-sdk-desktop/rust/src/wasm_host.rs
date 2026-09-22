@@ -91,49 +91,11 @@ impl HostAuth for WasmHost {
         host_auth::secret_keys().map_err(|e| host_err("auth_secret_keys", e))
     }
 
-    fn auth_trusted_devices_list(&self) -> Result<serde_json::Value, HostError> {
-        host_auth::trusted_devices_list()
-            .map_err(|e| host_err("auth_trusted_devices_list", e))
-            .and_then(|s| parse_json("auth_trusted_devices_list", s))
-    }
-
-    fn auth_trusted_device_revoke(&self, id: &str) -> Result<bool, HostError> {
-        host_auth::trusted_device_revoke(id).map_err(|e| host_err("auth_trusted_device_revoke", e))
-    }
-
-    fn auth_connection_history_list(
-        &self,
-        device_id: &str,
-    ) -> Result<serde_json::Value, HostError> {
-        host_auth::connection_history_list(device_id)
-            .map_err(|e| host_err("auth_connection_history_list", e))
-            .and_then(|s| parse_json("auth_connection_history_list", s))
-    }
-
     fn auth_setting_set(&self, key: &str, value: &str) -> Result<(), HostError> {
         host_auth::auth_setting_set(key, value).map_err(|e| host_err("auth_setting_set", e))
     }
 
-    fn auth_connection_history_clear(&self, device_id: &str) -> Result<bool, HostError> {
-        host_auth::connection_history_clear(device_id)
-            .map_err(|e| host_err("auth_connection_history_clear", e))
-    }
-
-    // ==================== v19 函数级追加（票 07：认证链 HTTP 面下沉） ====================
-
-    fn auth_trusted_device_upsert(&self, record_json: &str) -> Result<String, HostError> {
-        host_auth::trusted_device_upsert(record_json)
-            .map_err(|e| host_err("auth_trusted_device_upsert", e))
-    }
-
-    fn auth_trusted_device_touch(&self, fingerprint: &str) -> Result<(), HostError> {
-        host_auth::trusted_device_touch(fingerprint).map_err(|e| host_err("auth_trusted_device_touch", e))
-    }
-
-    fn auth_connection_history_record(&self, record_json: &str) -> Result<(), HostError> {
-        host_auth::connection_history_record(record_json)
-            .map_err(|e| host_err("auth_connection_history_record", e))
-    }
+    // ==================== v19 保留面（v24 修订语义：公钥托管在 plugin_secrets） ====================
 
     fn auth_biometric_credential_bound(&self, fingerprint: &str) -> Result<bool, HostError> {
         host_auth::biometric_credential_bound(fingerprint)
@@ -315,20 +277,6 @@ impl HostSession for WasmHost {
     fn session_get(&self, session_id: &str) -> Result<Option<serde_json::Value>, HostError> {
         match host_session::get(session_id).map_err(|e| host_err("session_get", e))? {
             Some(s) => parse_json("session_get", s).map(Some),
-            None => Ok(None),
-        }
-    }
-
-    fn session_config_list(&self) -> Result<Option<serde_json::Value>, HostError> {
-        match host_session::config_list().map_err(|e| host_err("session_config_list", e))? {
-            Some(s) => parse_json("session_config_list", s).map(Some),
-            None => Ok(None),
-        }
-    }
-
-    fn session_config_get(&self, config_id: &str) -> Result<Option<serde_json::Value>, HostError> {
-        match host_session::config_get(config_id).map_err(|e| host_err("session_config_get", e))? {
-            Some(s) => parse_json("session_config_get", s).map(Some),
             None => Ok(None),
         }
     }

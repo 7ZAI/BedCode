@@ -10,12 +10,15 @@ use super::*;
 /// 测试播种必须落真源：v21 起主库 `session_configs` 只剩 legacy 迁移通道（已无写者），
 /// 插件侧解析链（task 域 agent / workingDir 判定、scheduled → launch spec）读的是私有库。
 /// 只写主库的 fixture 对解析链不可见，会让用例测到一个生产里不存在的形状。
+///
+/// v24（2026-09-22）：主库 `session_configs` 表退役，返回 upsert 回执 JSON
+/// （camelCase，含 `id`）——不再依赖已删除的 `crate::db::SessionConfig` 模型。
 async fn seed_config_in_plugin_store(
     plugin: &mut LoadedWasmPlugin,
     name: &str,
     working_dir: &str,
     command: &str,
-) -> crate::db::SessionConfig {
+) -> serde_json::Value {
     let draft = serde_json::json!({
         "name": name,
         "environment": "linux",
@@ -102,10 +105,12 @@ fn test_session_plugin_artifact_lifecycle() {
         .collect();
     assert_eq!(
         declared_api.len(),
-        22,
+        27,
         "pairing 八项 + trust 两项 + consent 一项 + config 三项 + session-create 一项（票 09）+ \
              会话动作四项（票 10）+ annotate + devices-connect-list 两项（票 11）\
-             + quick-actions-import 一项（票 02）, got: {declared_api:?}"
+             + quick-actions-import 一项（票 02）\
+             + v24 认证记录下沉五项（auth-records-import / devices-list / history-list / \
+             connection-touch / connection-close），got: {declared_api:?}"
     );
     // 票 08：宿主配置命令面转发依赖这三项（缺一即静默降级到只读投影）
     for consumed in [
@@ -231,6 +236,7 @@ fn test_session_task_domain_closed_loop() {
         &[
             "auth",
             "peer",
+            "storage",
             "session:read",
             "session:write",
             "storage",
@@ -377,7 +383,7 @@ fn test_session_task_domain_closed_loop() {
                     cols: 120,
                     rows: 40,
                 },
-                config.id.clone(),
+                config["id"].as_str().unwrap().to_string(),
                 None,
                 false,
                 None,
@@ -496,6 +502,7 @@ fn test_session_task_http_and_scheduled_closed_loop() {
         &[
             "auth",
             "peer",
+            "storage",
             "session:read",
             "session:write",
             "storage",
@@ -606,7 +613,7 @@ fn test_session_task_http_and_scheduled_closed_loop() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     let config_id = rt
         .block_on(async { seed_config_in_plugin_store(&mut plugin, "定时探针", "/tmp", "claude").await })
-        .id;
+        ["id"].as_str().unwrap().to_string();
 
     let r = http_call(
         &mut plugin,
@@ -888,10 +895,11 @@ fn test_session_task_http_and_scheduled_closed_loop() {
 
 /// 票 05 会话中心互调闭环（消费方 = sdk-test caller 角色），两条路径：
 ///
-/// **trust 路径（列表 → 撤销 → 列表变化）**：内核 `pairings` 表播种（1 活跃 +
-/// 1 已软删）→ `trust-list` 只回活跃条目（软删行不出现，但原始记录里仍在，撤销
-/// 检测因此成立）→ `trust-revoke` 软删内核真源 → 再 `trust-list` 立即消失 →
-/// 直查内核表确认 `is_active = 0`（**真源一致性**：插件不再自持账本）。
+/// **trust 路径（列表 → 撤销 → 列表变化）**：认证中心私有库 `auth_pairings`
+/// 播种（1 活跃 + 1 已软删，v24 认证记录下沉后真源在私有库）→ `trust-list` 只回
+/// 活跃条目（软删行不出现，但原始记录里仍在，撤销检测因此成立）→
+/// `trust-revoke` 软删私有库真源 → 再 `trust-list` 立即消失 → 直查私有库表确认
+/// `is_active = 0`（**真源一致性**：插件不再自持账本）。
 ///
 /// **consent 路径**（headless 宿主：host-peer require_app 失败 → 信任不可验证 →
 /// fail-closed 按未知处理，见 consent/ops.rs 模块文档）：阶段 1（无用户意向）→ ask；
@@ -929,7 +937,7 @@ fn test_session_trust_and_consent_api_closed_loop() {
     // auth（secret-store + 记录面）+ peer（consent 取可信集 / trust peer 段）
     host_ctx
         .permission
-        .grant_permissions(session_id, &["auth".to_string(), "peer".to_string()]);
+        .grant_permissions(session_id, &["auth".to_string(), "peer".to_string(), "storage".to_string()]);
     // 登记目标插件声明的 api（等价 PluginHost::activate_plugin 的登记）。
     // 清单读插件工程 manifest（单一真源），不在测试里抄第二份。
     let session_api_list = session_apis();
@@ -940,23 +948,6 @@ fn test_session_trust_and_consent_api_closed_loop() {
 
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
-        // 内核真源播种：1 活跃配对 + 1 已软删记录（撤销检测依赖软删行可见）
-        {
-            let db = host_ctx.db.lock().await;
-            for (id, name, fp, active, paired_at) in [
-                ("p-live", "Trust Phone", "fp-live", 1, "2026-09-19T00:00:00Z"),
-                ("p-revoked", "Revoked Pad", "fp-revoked", 0, "2026-09-18T00:00:00Z"),
-            ] {
-                db.conn()
-                    .execute(
-                        "INSERT INTO pairings (id, device_name, device_fingerprint, public_key, address, \
-                             paired_at, connect_count, is_active) VALUES (?1, ?2, ?3, 'pk', NULL, ?4, 1, ?5)",
-                        rusqlite::params![id, name, fp, paired_at, active],
-                    )
-                    .expect("seed kernel pairing");
-            }
-        }
-
         let session = Arc::new(Mutex::new(
             wasm_runtime
                 .instantiate_component(&session_component, session_id, host_ctx.clone(), &[], None)
@@ -979,7 +970,30 @@ fn test_session_trust_and_consent_api_closed_loop() {
         session.lock().await.activate().expect("session activate");
         consumer.lock().await.activate().expect("consumer activate");
 
-        // ==================== trust：列表（内核真源 → 统一视图） ====================
+        // v24 认证记录下沉：配对真源 = 认证中心私有库 `auth_pairings`。activate
+        // 已建表（auth_records::ensure_schema_via_host），此处直写播种
+        // （1 活跃 + 1 已软删——撤销检测依赖软删行可见）
+        {
+            let db_path = plugin_db_root().join(bridge::SESSION_PLUGIN_ID).join("plugin.db");
+            let conn = rusqlite::Connection::open(&db_path)
+                .unwrap_or_else(|e| panic!("打开认证中心私有库失败 {}: {e}", db_path.display()));
+            let _ = conn.busy_timeout(std::time::Duration::from_secs(10));
+            for (id, name, fp, active, paired_at) in [
+                ("p-live", "Trust Phone", "fp-live", 1, "2026-09-19T00:00:00Z"),
+                ("p-revoked", "Revoked Pad", "fp-revoked", 0, "2026-09-18T00:00:00Z"),
+            ] {
+                conn.execute(
+                    "INSERT OR REPLACE INTO auth_pairings \
+                     (id, device_name, device_fingerprint, address, uid_hash, paired_at, \
+                      last_seen, connect_count, is_active) \
+                     VALUES (?1, ?2, ?3, NULL, NULL, ?4, NULL, 1, ?5)",
+                    rusqlite::params![id, name, fp, paired_at, active],
+                )
+                .expect("seed auth_pairings");
+            }
+        }
+
+        // ==================== trust：列表（私有库真源 → 统一视图） ====================
         let result = consumer
             .lock()
             .await
@@ -1023,19 +1037,19 @@ fn test_session_trust_and_consent_api_closed_loop() {
             "撤销后立即从统一视图消失, got: {result}"
         );
 
-        // 内核表断言：软删而非物理删除（宿主 remove_pairing 语义），且真的落库
+        // 私有库表断言：软删而非物理删除（auth_records::revoke 语义），且真的落库
         {
-            let db = host_ctx.db.lock().await;
-            let active: i32 = db
-                .conn()
-                .query_row("SELECT is_active FROM pairings WHERE id = 'p-live'", [], |row| {
+            let db_path = plugin_db_root().join(bridge::SESSION_PLUGIN_ID).join("plugin.db");
+            let conn = rusqlite::Connection::open(&db_path)
+                .unwrap_or_else(|e| panic!("打开认证中心私有库失败 {}: {e}", db_path.display()));
+            let active: i32 = conn
+                .query_row("SELECT is_active FROM auth_pairings WHERE id = 'p-live'", [], |row| {
                     row.get(0)
                 })
                 .expect("p-live 必须仍在（软删保留记录）");
-            assert_eq!(active, 0, "撤销写的是内核真源（is_active = 0），不是插件私有账本");
-            let rows: i32 = db
-                .conn()
-                .query_row("SELECT COUNT(*) FROM pairings", [], |row| row.get(0))
+            assert_eq!(active, 0, "撤销写的是认证中心私有库真源（is_active = 0）");
+            let rows: i32 = conn
+                .query_row("SELECT COUNT(*) FROM auth_pairings", [], |row| row.get(0))
                 .expect("count");
             assert_eq!(rows, 2, "软删保留记录（不物理删除）");
         }
@@ -1121,499 +1135,6 @@ fn test_session_trust_and_consent_api_closed_loop() {
     });
 }
 
-/// 票 05 host-auth 记录面四原语闭环（真实 wasm guest + 真实宿主实现）：
-/// `trusted-devices-list` / `trusted-device-revoke` / `connection-history-list` /
-/// `auth-setting-set` 四函数经 WIT → SDK → host_impl 全链走一遍。
-///
-/// 产品侧消费方（设置分组 / 设备视图）归后续票（14 起），故此处用 sdk-test
-/// 探针命令直调四个原语：本票的验收点是**原语自身**在真实运行时可用、权限门生效、
-/// 写入落在内核表（`pairings` / `settings`），而不是某个 UI 的呈现。
-#[test]
-
-fn test_host_auth_record_face_closed_loop() {
-    const PROBE_ID: &str = "com.bedcode.auth-probe";
-
-    let (wasm_runtime, host_ctx) = setup_wasm_runtime();
-    let probe_component = wasm_runtime
-        .compile_component(&build_sdk_test_component())
-        .expect("compile sdk-test probe component");
-
-    // 未授权 auth 的实例：四函数全被权限门拒绝（负向断言，先钉住门）
-    host_ctx
-        .permission
-        .grant_permissions("com.bedcode.auth-probe-denied", &["storage".to_string()]);
-
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    rt.block_on(async {
-        // 内核真源播种：1 活跃配对 + 该设备的连接历史
-        {
-            let db = host_ctx.db.lock().await;
-            db.conn()
-                .execute(
-                    "INSERT INTO pairings (id, device_name, device_fingerprint, public_key, address, \
-                         paired_at, connect_count, is_active) VALUES ('p-1', 'Probe Phone', 'fp-probe', 'pk', NULL, \
-                         '2026-09-19T00:00:00Z', 1, 1)",
-                    [],
-                )
-                .expect("seed pairing");
-            db.conn()
-                .execute(
-                    "INSERT INTO connection_history (device_id, auth_method, result, address, connected_at) \
-                         VALUES ('p-1', 'jwt', 'success', '192.168.1.9:8765', '2026-09-19T01:00:00Z')",
-                    [],
-                )
-                .expect("seed history");
-        }
-
-        let denied = Arc::new(Mutex::new(
-            wasm_runtime
-                .instantiate_component(
-                    &probe_component,
-                    "com.bedcode.auth-probe-denied",
-                    host_ctx.clone(),
-                    &[],
-                    None,
-                )
-                .expect("instantiate denied probe"),
-        ));
-        let instances = Arc::new(RwLock::new(HashMap::from([(
-            "com.bedcode.auth-probe-denied".to_string(),
-            denied.clone(),
-        )])));
-        host_ctx
-            .message_bus
-            .set_dispatcher(Arc::new(TestInstanceDispatcher {
-                instances: Arc::clone(&instances),
-            }))
-            .await;
-        denied.lock().await.activate().expect("probe activate");
-
-        // 负向：无 auth 权限 → permission denied（原语自身拒绝，非宿主测试旁路）
-        let result = denied
-            .lock()
-            .await
-            .invoke_command("test_auth_record_face", "{}")
-            .expect("denied probe returns JSON");
-        let r: serde_json::Value = serde_json::from_str(&result).unwrap();
-        assert!(
-            r["error"]
-                .as_str()
-                .map(|e| e.contains("permission denied"))
-                .unwrap_or(false),
-            "未授权插件必须被 host-auth 记录面拒绝, got: {result}"
-        );
-        denied.lock().await.deactivate().expect("denied deactivate");
-
-        // 正向：授权 auth → 四原语全链（列表 → 撤销 → 列表变化 + 历史 + 设置写入）
-        host_ctx.permission.grant_permissions(PROBE_ID, &["auth".to_string()]);
-        let probe = Arc::new(Mutex::new(
-            wasm_runtime
-                .instantiate_component(&probe_component, PROBE_ID, host_ctx.clone(), &[], None)
-                .expect("instantiate probe"),
-        ));
-        instances.write().await.insert(PROBE_ID.to_string(), probe.clone());
-        probe.lock().await.activate().expect("probe activate");
-
-        let result = probe
-            .lock()
-            .await
-            .invoke_command(
-                "test_auth_record_face",
-                r#"{"deviceId":"p-1","revokeId":"p-1","settingKey":"pairing_code_ttl","settingValue":"777"}"#,
-            )
-            .expect("record face probe");
-        let r: serde_json::Value = serde_json::from_str(&result).unwrap();
-
-        // 撤销前的原始记录：含凭据列排除检查（§8 红线）
-        let before: Vec<serde_json::Value> = serde_json::from_value(r["before"].clone())
-            .unwrap_or_else(|e| panic!("before 不是数组（{e}）, got: {result}"));
-        assert_eq!(before.len(), 1, "原始记录 1 条, got: {result}");
-        assert_eq!(before[0]["id"], "p-1");
-        assert_eq!(before[0]["deviceName"], "Probe Phone");
-        assert_eq!(before[0]["isActive"], true);
-        let before_raw = r["before"].to_string();
-        assert!(
-            !before_raw.contains("publicKey") && !before_raw.contains("sessionToken") && !before_raw.contains("PUBLIC"),
-            "凭据列不得出口（§8 红线）: {result}"
-        );
-
-        // 撤销后的原始记录：软删行仍可见（撤销检测依据），isActive=false
-        let after: Vec<serde_json::Value> = serde_json::from_value(r["after"].clone())
-            .unwrap_or_else(|e| panic!("after 不是数组（{e}）, got: {result}"));
-        assert_eq!(after.len(), 1, "软删保留记录, got: {result}");
-        assert_eq!(after[0]["isActive"], false, "撤销后 isActive=false");
-        assert_eq!(r["revoked"], true, "撤销命中");
-
-        // 连接历史原语：按 device_id 寻址回原始记录
-        let history: Vec<serde_json::Value> = serde_json::from_value(r["history"].clone())
-            .unwrap_or_else(|e| panic!("history 不是数组（{e}）, got: {result}"));
-        assert_eq!(history.len(), 1, "连接历史 1 条, got: {result}");
-        assert_eq!(history[0]["deviceId"], "p-1");
-        assert_eq!(history[0]["authMethod"], "jwt");
-
-        // 设置写入原语：落内核 settings 表（宿主命令面据此取 TTL）
-        {
-            let db = host_ctx.db.lock().await;
-            let ttl: String = db
-                .conn()
-                .query_row("SELECT value FROM settings WHERE key = 'pairing_code_ttl'", [], |row| {
-                    row.get(0)
-                })
-                .expect("pairing_code_ttl 必须已写入内核 settings 表");
-            assert_eq!(ttl, "777", "设置写入走内核真源");
-        }
-
-        probe.lock().await.deactivate().expect("probe deactivate");
-    });
-}
-
-/// 票 07 host-session 配置面闭环（v22 起**只读**）：`config-list` / `config-get` 读取面经
-/// WIT → SDK → host_impl 全链走一遍，两态各一：
-///
-/// - **未授予 `session:read`**：读取原语被权限门拒绝（负向，先钉住门），且内核
-///   配置表零变化（拒绝无副作用）
-/// - **授予后**：引擎层 SQL 播种 legacy 一条 → 探针经 `config-list` 拿 id 清单 →
-///   `config-get` 逐条全量读回逐字段一致；并**经内核配置管理器反查**确认读取面
-///   不增删配置（只读契约）
-///
-/// 消费方（设置分组 / 会话视图）归后续票，故用 sdk-test 探针命令直调读取面：
-/// 本票验收点是**读取原语自身**在真实运行时可用。全部走内存库
-/// （`setup_wasm_runtime`），不污染真实数据目录。
-#[test]
-
-fn test_session_config_api_closed_loop() {
-    // 会话插件私有库是进程级共享路径：与其它会话闭环用例串行（见锁文档）
-    let _serial = session_plugin_db_guard();
-    const PROBE_ID: &str = "com.bedcode.terminal-session-config-probe";
-    const DENIED_ID: &str = "com.bedcode.terminal-session-config-probe-denied";
-
-    let (wasm_runtime, host_ctx) = setup_wasm_runtime();
-    let probe_component = wasm_runtime
-        .compile_component(&build_sdk_test_component())
-        .expect("compile sdk-test probe component");
-
-    // 负向实例只授 storage：session:read 缺失（v22 配置面读取权限 = session:read）
-    host_ctx
-        .permission
-        .grant_permissions(DENIED_ID, &["storage".to_string()]);
-
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    rt.block_on(async {
-        // ==================== 负向：未授权 session:read ====================
-        let denied = Arc::new(Mutex::new(
-            wasm_runtime
-                .instantiate_component(&probe_component, DENIED_ID, host_ctx.clone(), &[], None)
-                .expect("instantiate denied probe"),
-        ));
-        let instances = Arc::new(RwLock::new(HashMap::from([(DENIED_ID.to_string(), denied.clone())])));
-        host_ctx
-            .message_bus
-            .set_dispatcher(Arc::new(TestInstanceDispatcher {
-                instances: Arc::clone(&instances),
-            }))
-            .await;
-        denied.lock().await.activate().expect("denied activate");
-
-        let result = denied
-            .lock()
-            .await
-            .invoke_command("test_session_config_face", "{}")
-            .expect("denied probe returns JSON");
-        let r: serde_json::Value = serde_json::from_str(&result).unwrap();
-        assert!(
-            r["error"]
-                .as_str()
-                .map(|e| e.contains("permission denied"))
-                .unwrap_or(false),
-            "未授权插件必须被配置读取面拒绝, got: {result}"
-        );
-        {
-            // 权限拒绝先于一切参数处理：内核配置表必须零写入（只读面不写）
-            let cm = host_ctx.config_manager.clone();
-            let configs = block_on_async(cm.list_configs()).expect("list configs");
-            assert!(
-                configs.is_empty(),
-                "权限拒绝不得留下任何配置, got: {} 条",
-                configs.len()
-            );
-        }
-        denied.lock().await.deactivate().expect("denied deactivate");
-
-        // ==================== 正向：授予 session:read + 播种 legacy ====================
-        // 引擎层 SQL 直插一条 legacy（v22 宿主写路径不存在；模拟老版本升级残留）
-        let seeded = {
-            let db = host_ctx.config_manager.db();
-            let cfg = crate::db::SessionConfig::new(
-                "probe-config".to_string(),
-                "linux".to_string(),
-                "/srv/probe".to_string(),
-                "bash".to_string(),
-            );
-            let cfg_db = cfg.clone();
-            tokio::task::spawn_blocking(move || db.blocking_lock().create_session_config(&cfg_db))
-                .await
-                .expect("seed probe legacy join")
-                .expect("seed probe legacy");
-            cfg
-        };
-        host_ctx
-            .permission
-            .grant_permissions(PROBE_ID, &["session:read".to_string()]);
-        let probe = Arc::new(Mutex::new(
-            wasm_runtime
-                .instantiate_component(&probe_component, PROBE_ID, host_ctx.clone(), &[], None)
-                .expect("instantiate probe"),
-        ));
-        instances.write().await.insert(PROBE_ID.to_string(), probe.clone());
-        probe.lock().await.activate().expect("probe activate");
-
-        let result = probe
-            .lock()
-            .await
-            .invoke_command("test_session_config_face", "{}")
-            .expect("config face probe");
-        let r: serde_json::Value = serde_json::from_str(&result).unwrap();
-        assert!(r["error"].is_null(), "授权后不得报错, got: {result}");
-
-        // 读取面闭环：config-list 拿到播种 id → config-get 逐字段一致
-        let list = r["list"].as_array().expect("list is array");
-        assert_eq!(list.len(), 1, "必须列出播种的 legacy 行, got: {list:?}");
-        assert_eq!(list[0]["id"], seeded.id);
-        assert_eq!(list[0]["workingDir"], "/srv/probe");
-
-        let rows = r["rows"].as_array().expect("rows is array");
-        assert_eq!(rows.len(), 1, "逐条 get 必须读回播种行");
-        let got = &rows[0];
-        for field in ["id", "name", "environment", "workingDir", "command"] {
-            // 播种值（snake_case 字段）vs 读取面返回（camelCase）
-            let seeded_v = match field {
-                "id" => serde_json::json!(seeded.id),
-                "name" => serde_json::json!(seeded.name),
-                "environment" => serde_json::json!(seeded.environment),
-                "workingDir" => serde_json::json!(seeded.working_dir),
-                "command" => serde_json::json!(seeded.command),
-                _ => unreachable!(),
-            };
-            assert_eq!(got[field], seeded_v, "读取面字段 {field} 必须与播种行一致, got: {got}");
-        }
-
-        // 只读契约：读操作不改变内核表（仍 1 条，无新增/删除）
-        {
-            let cm = host_ctx.config_manager.clone();
-            let configs = block_on_async(cm.list_configs()).expect("list configs after read");
-            assert_eq!(configs.len(), 1, "读取面不得增删配置, 残留: {:?}", configs);
-        }
-        probe.lock().await.deactivate().expect("probe deactivate");
-    });
-}
-
-/// 票 08 S1 闭环：配置真源迁入插件私有库（真实 session 产物 + 真实 host-session 配置面）
-///
-/// 链路与断言：
-/// 1. 播种 legacy 主库（宿主 `SessionConfigManager`，即 `host-session.config-*` 的读取面）
-/// 2. 激活会话中心（授予 spec D2 权限表：auth / peer / session:read / storage）
-///    → 插件建表 + 一次性幂等迁移
-/// 3. 经插件命令面 `session.config.list` 观测真源：两条 legacy 逐字段一致 + 插件侧业务排序
-/// 4. 再往 legacy 追加一条 + 重激活 → 真源**不重复导入**（marker 一次性语义；否则
-///    「插件侧删除配置 → 下次激活被 legacy 复活」会让删除失效）
-/// 5. 经插件命令面新建 → 只落真源（v21 投影停写：内核创建/重启执行器已退役）
-/// 6. 收尾注销（配置面的「插件必需」已是结构保证：宿主侧无配置调用路径）
-///
-/// 私有库经 `plugin_db_root()` 注入（无头上下文无 AppHandle，见该字段文档）；
-/// 用例开始前清空本插件私有库目录，保证 marker 状态干净（同进程重复跑不漂移）。
-#[test]
-
-fn test_session_config_private_store_closed_loop() {
-    let _serial = session_plugin_db_guard();
-    const SESSION_ID: &str = "com.bedcode.terminal-session";
-    let session_api_list = session_apis();
-    let wasm_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../resources/plugins/desktop/com.bedcode.terminal-session/bedcode_plugin_terminal_session.wasm");
-    if !wasm_path.exists() {
-        eprintln!("[skip] session wasip3 artifact not built");
-        return;
-    }
-
-    let (wasm_runtime, host_ctx) = setup_wasm_runtime();
-    // 私有库清空（marker 干净）
-    let _ = std::fs::remove_dir_all(plugin_db_root().join(SESSION_ID));
-
-    let component = wasm_runtime
-        .compile_component(&std::fs::read(&wasm_path).expect("read session artifact"))
-        .expect("compile session artifact");
-
-    host_ctx.permission.grant_permissions(
-        SESSION_ID,
-        &[
-            "auth".to_string(),
-            "peer".to_string(),
-            "session:read".to_string(),
-            "storage".to_string(),
-        ],
-    );
-    host_ctx.api_registry().register(
-        SESSION_ID,
-        &session_api_list.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-    );
-
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    rt.block_on(async {
-        let cm = host_ctx.config_manager.clone();
-
-        // ==================== 1. legacy 主库播种 ====================
-        // v22 起 SessionConfigManager 为只读迁移通道（写面随 host-session 写原语退役），
-        // 播种改走引擎层 SQL 写接口（`db.create_session_config`）——这更接近真实形状：
-        // 老版本升级残留就是主库表里的行，与宿主写路径无关。
-        let legacy_a = {
-            let db = host_ctx.config_manager.db();
-            let cfg = crate::db::SessionConfig::new(
-                "Legacy A".to_string(),
-                "linux".to_string(),
-                "/srv/a".to_string(),
-                "bash".to_string(),
-            );
-            let cfg_db = cfg.clone();
-            tokio::task::spawn_blocking(move || db.blocking_lock().create_session_config(&cfg_db))
-                .await
-                .expect("seed legacy a join")
-                .expect("seed legacy a");
-            cfg
-        };
-        // legacy B：直插带 wslDistro / autoStart 的行（此前用 create+update 绕开
-        // create 丢字段的缺陷造出真实存量形状；v22 直插 SQL 更直接）
-        let legacy_b = {
-            let db = host_ctx.config_manager.db();
-            let cfg = crate::db::SessionConfig {
-                id: uuid::Uuid::new_v4().to_string(),
-                name: "Legacy B".to_string(),
-                environment: "wsl2".to_string(),
-                wsl_distro: Some("Ubuntu".to_string()),
-                working_dir: "/srv/b".to_string(),
-                command: "zsh".to_string(),
-                auto_start: true,
-                created_at: chrono::Utc::now(),
-                updated_at: chrono::Utc::now(),
-            };
-            let cfg_db = cfg.clone();
-            tokio::task::spawn_blocking(move || db.blocking_lock().create_session_config(&cfg_db))
-                .await
-                .expect("seed legacy b join")
-                .expect("seed legacy b");
-            cfg
-        };
-        assert_ne!(legacy_a.id, legacy_b.id, "两条 legacy 行 id 必须不同（迁移按 id 比对）");
-
-        // ==================== 2. 激活（建表 + 迁移） ====================
-        let instances = Arc::new(RwLock::new(HashMap::new()));
-        let session = Arc::new(Mutex::new(
-            wasm_runtime
-                .instantiate_component(&component, SESSION_ID, host_ctx.clone(), &[], None)
-                .expect("instantiate session"),
-        ));
-        instances.write().await.insert(SESSION_ID.to_string(), session.clone());
-        host_ctx
-            .message_bus
-            .set_dispatcher(Arc::new(TestInstanceDispatcher {
-                instances: Arc::clone(&instances),
-            }))
-            .await;
-        session.lock().await.activate().expect("activate session");
-
-        // ==================== 3. 真源（插件私有库）逐字段一致 ====================
-        let listed = session
-            .lock()
-            .await
-            .invoke_command("session.config.list", "{}")
-            .expect("session.config.list");
-        let rows: Vec<serde_json::Value> = serde_json::from_str(&listed).expect("config list json");
-        assert_eq!(rows.len(), 2, "legacy 两条必须全部迁入, got: {listed}");
-        let row_of = |id: &str| {
-            rows.iter()
-                .find(|r| r["id"] == id)
-                .cloned()
-                .unwrap_or_else(|| panic!("配置 {id} 未迁入: {listed}"))
-        };
-        let a = row_of(&legacy_a.id);
-        assert_eq!(a["name"], "Legacy A");
-        assert_eq!(a["environment"], "linux");
-        assert_eq!(a["workingDir"], "/srv/a");
-        assert_eq!(a["command"], "bash");
-        let b = row_of(&legacy_b.id);
-        assert_eq!(b["wslDistro"], "Ubuntu");
-        assert_eq!(b["command"], "zsh");
-        assert_eq!(b["autoStart"], true);
-        assert_eq!(rows[0]["name"], "Legacy A", "业务排序在插件侧：name 升序");
-
-        // ==================== 4. 一次性护栏：重激活不重复导入 ====================
-        // 引擎层 SQL 直插第三条 legacy（v22 起宿主写路径不存在）
-        {
-            let db = host_ctx.config_manager.db();
-            let cfg = crate::db::SessionConfig::new(
-                "Legacy C".to_string(),
-                "linux".to_string(),
-                "/srv/c".to_string(),
-                "bash".to_string(),
-            );
-            let cfg_db = cfg.clone();
-            tokio::task::spawn_blocking(move || db.blocking_lock().create_session_config(&cfg_db))
-                .await
-                .expect("seed legacy c join")
-                .expect("seed legacy c");
-        }
-        session.lock().await.deactivate().expect("deactivate");
-        session.lock().await.activate().expect("reactivate");
-        let listed = session
-            .lock()
-            .await
-            .invoke_command("session.config.list", "{}")
-            .expect("session.config.list after reactivate");
-        let rows: Vec<serde_json::Value> = serde_json::from_str(&listed).expect("config list json");
-        assert_eq!(
-            rows.len(),
-            2,
-            "marker 已在 → 重激活不得再导入（否则插件侧删除会被 legacy 复活）, got: {listed}"
-        );
-
-        // ==================== 5. 插件命令面新建 → 只落真源（v21 投影已退役） ====================
-        let created =
-            seed_config_in_plugin_store(&mut *session.lock().await, "Bridge New", "/srv/bridge", "bash").await;
-        assert_eq!(created.id.len(), 36, "id 由插件生成（UUID v4 形态）");
-
-        let listed = session
-            .lock()
-            .await
-            .invoke_command("session.config.list", "{}")
-            .expect("session.config.list after plugin create");
-        let rows: Vec<serde_json::Value> = serde_json::from_str(&listed).expect("config list json");
-        assert_eq!(rows.len(), 3, "真源必须含新建的配置, got: {listed}");
-
-        // v21：主库投影停写（内核创建/重启执行器已退役，投影无读者）——
-        // 插件侧新建只落私有库，宿主不再持有业务副本
-        assert!(
-            block_on_async(cm.get_config(&created.id))
-                .expect("projection get")
-                .is_none(),
-            "投影必须停写（宿主不留业务副本）"
-        );
-
-        // ==================== 6. 收尾 ====================
-        // 「插件必需、无宿主降级」在配置面已是结构保证：宿主侧不存在任何配置调用
-        // 路径（`session_config_bridge` 随票 05 配置命令面注销失去主体，本批删除）。
-        // 原「注销互调面 → 显性报错」断言测的就是该桥接，无主体可测故撤除；
-        // 互调失败的显性报错仍由 session_create / session_action 两条桥的用例覆盖。
-        session.lock().await.deactivate().expect("final deactivate");
-    });
-}
-
-/// 票 02/03 双轨对照闭环（真实 session 产物 + 真实宿主原语）
-///
-/// 业务端点插件面输出与宿主旧 DTO 形状**逐字节一致**（configs /
-/// quick-actions / file-tree / file-tree-children / file-content），并验证
-/// 迁移 handoff（legacy 主库 → 插件私有库）幂等 + 双轨切换后的确定性错误。
-///
-/// 链路：临时工作区（file-tree 数据源）→ legacy 主库播种（session_configs
-/// 经 cm、quick_actions 经 seed 助手）→ 激活会话中心（配置迁移 + 快捷指令
-/// 建表）→ handoff 推送 → `_http_endpoint` 五端点 → 与 golden 逐字段比对。
 #[test]
 
 fn test_business_endpoints_dual_track_closed_loop() {
@@ -1688,7 +1209,7 @@ fn test_business_endpoints_dual_track_closed_loop() {
         SESSION_ID,
         &[
             "auth".to_string(),
-            "peer".to_string(),
+            "peer".to_string(), "storage".to_string(),
             "session:read".to_string(),
             "session:write".to_string(),
             "storage".to_string(),
@@ -1797,7 +1318,7 @@ fn test_business_endpoints_dual_track_closed_loop() {
         let configs = http(&session, "GET", "configs", serde_json::Value::Null).await;
         let golden_configs = serde_json::to_value(crate::server::dtos::config_dto::ConfigListResponseData {
             configs: vec![crate::server::dtos::config_dto::ConfigItem {
-                id: seeded_config.id.clone(),
+                id: seeded_config["id"].as_str().unwrap().to_string(),
                 name: "工作台".into(),
                 environment: "linux".into(),
                 wsl_distro: None,
@@ -1817,7 +1338,7 @@ fn test_business_endpoints_dual_track_closed_loop() {
             &session,
             "POST",
             "file-tree",
-            serde_json::json!({ "sessionId": seeded_config.id, "excludeDirs": ["node_modules"] }),
+            serde_json::json!({ "sessionId": seeded_config["id"], "excludeDirs": ["node_modules"] }),
         )
         .await;
         assert_eq!(
@@ -1841,7 +1362,7 @@ fn test_business_endpoints_dual_track_closed_loop() {
             "body": serde_json::Value::Null,
             // query 键名 snake_case（宿主 FileTreeChildrenQuery 无 rename，移动端
             // useHttpApi 同名构造）——camelCase 是假绿，真机请求会解析不到 session_id
-            "query": serde_json::json!({ "session_id": seeded_config.id, "dir_path": "src", "exclude_dirs": "" }),
+            "query": serde_json::json!({ "session_id": seeded_config["id"], "dir_path": "src", "exclude_dirs": "" }),
         });
         let children_env: serde_json::Value = serde_json::from_str(
             &session
@@ -1867,7 +1388,7 @@ fn test_business_endpoints_dual_track_closed_loop() {
             &session,
             "POST",
             "file-content",
-            serde_json::json!({ "sessionId": seeded_config.id, "filePath": "src/main.rs" }),
+            serde_json::json!({ "sessionId": seeded_config["id"], "filePath": "src/main.rs" }),
         )
         .await;
         assert_eq!(
@@ -1880,7 +1401,7 @@ fn test_business_endpoints_dual_track_closed_loop() {
             &session,
             "POST",
             "file-content",
-            serde_json::json!({ "sessionId": seeded_config.id, "filePath": "../outside.txt" }),
+            serde_json::json!({ "sessionId": seeded_config["id"], "filePath": "../outside.txt" }),
         )
         .await;
         assert_eq!(
@@ -1893,7 +1414,7 @@ fn test_business_endpoints_dual_track_closed_loop() {
             &session,
             "POST",
             "file-content",
-            serde_json::json!({ "sessionId": seeded_config.id, "filePath": "../outside.txt" }),
+            serde_json::json!({ "sessionId": seeded_config["id"], "filePath": "../outside.txt" }),
         )
         .await;
         assert_eq!(escape["body"]["code"], 403, "穿越工作目录必须拒绝");
@@ -1907,7 +1428,7 @@ fn test_business_endpoints_dual_track_closed_loop() {
             &session,
             "POST",
             "diff-tree",
-            serde_json::json!({ "sessionId": seeded_config.id, "excludeDirs": [] }),
+            serde_json::json!({ "sessionId": seeded_config["id"], "excludeDirs": [] }),
         )
         .await;
         assert_eq!(diff_tree["body"]["code"], 400);
@@ -1916,7 +1437,7 @@ fn test_business_endpoints_dual_track_closed_loop() {
             &session,
             "POST",
             "file-diff",
-            serde_json::json!({ "sessionId": seeded_config.id, "filePath": "src/main.rs" }),
+            serde_json::json!({ "sessionId": seeded_config["id"], "filePath": "src/main.rs" }),
         )
         .await;
         assert_eq!(file_diff["body"]["code"], 400);
@@ -1950,7 +1471,7 @@ fn test_business_endpoints_dual_track_closed_loop() {
             "path": "git/branches",
             "headers": {},
             "body": serde_json::Value::Null,
-            "query": serde_json::json!({ "session_id": seeded_config.id }),
+            "query": serde_json::json!({ "session_id": seeded_config["id"] }),
         });
         let branches_env: serde_json::Value = serde_json::from_str(
             &session
@@ -1980,7 +1501,7 @@ fn test_business_endpoints_dual_track_closed_loop() {
             "path": "git/status",
             "headers": {},
             "body": serde_json::Value::Null,
-            "query": serde_json::json!({ "session_id": seeded_config.id }),
+            "query": serde_json::json!({ "session_id": seeded_config["id"] }),
         });
         let status_env: serde_json::Value = serde_json::from_str(
             &session
@@ -1999,7 +1520,7 @@ fn test_business_endpoints_dual_track_closed_loop() {
             &session,
             "POST",
             "git/checkout",
-            serde_json::json!({ "sessionId": seeded_config.id, "branch": "dev" }),
+            serde_json::json!({ "sessionId": seeded_config["id"], "branch": "dev" }),
         )
         .await;
         assert_eq!(checkout["body"]["code"], 0);
@@ -2023,7 +1544,7 @@ fn test_business_endpoints_dual_track_closed_loop() {
             &session,
             "POST",
             "git/checkout",
-            serde_json::json!({ "sessionId": seeded_config.id, "branch": "main;rm -rf /" }),
+            serde_json::json!({ "sessionId": seeded_config["id"], "branch": "main;rm -rf /" }),
         )
         .await;
         assert_eq!(inject["body"]["code"], 500);
@@ -2070,14 +1591,14 @@ fn test_session_create_with_spec_closed_loop() {
     // 本测试对私有库只读真源（不测迁移），用独立目录消除并行文件竞争。
     let mut host_ctx = host_ctx;
     if let Some(ctx) = Arc::get_mut(&mut host_ctx) {
-        ctx.plugin_db_root = Some(std::env::temp_dir().join(format!(
+        ctx.set_plugin_db_root(Some(std::env::temp_dir().join(format!(
                     "bedcode_plugin_dbs_spec_{}_{}",
                     std::process::id(),
                     std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap_or_default()
                         .as_nanos()
-                )));
+                ))));
     }
     let _ = std::fs::remove_dir_all(plugin_db_root().join(SESSION_ID));
     let component = wasm_runtime
@@ -2088,7 +1609,7 @@ fn test_session_create_with_spec_closed_loop() {
         SESSION_ID,
         &[
             "auth".to_string(),
-            "peer".to_string(),
+            "peer".to_string(), "storage".to_string(),
             "session:read".to_string(),
             // 票 09：host-session.create-with-spec（创建编排执行端）
             "session:write".to_string(),
@@ -2138,7 +1659,7 @@ fn test_session_create_with_spec_closed_loop() {
 
         // ==================== 3. 编排创建（start=false，两阶段第一阶段） ====================
         let sid1 = crate::utils::session_create_bridge::create_session_via_plugin(
-            &host_ctx, &seeded.id, None, None, false, None,
+            &host_ctx, &seeded["id"].as_str().unwrap(), None, None, false, None,
         )
         .await
         .expect("plugin active → 必须编排成功");
@@ -2150,23 +1671,23 @@ fn test_session_create_with_spec_closed_loop() {
             "start=false → Starting"
         );
         assert_eq!(info1.name, "编排会话", "命名唯一化首见 = 原名（插件决策）");
-        assert_eq!(info1.config_id, seeded.id, "configId 透传（会话记录标真源配置）");
+        assert_eq!(info1.config_id, seeded["id"].as_str().unwrap().to_string(), "configId 透传（会话记录标真源配置）");
         assert_eq!(sm.canonical_renderer_of(&sid1).await, None, "不启动 → 正统端为空");
 
         // ==================== 4. 命名唯一化：同配置第二次 → 原名(1) ====================
         let sid2 = crate::utils::session_create_bridge::create_session_via_plugin(
-            &host_ctx, &seeded.id, None, None, false, None,
+            &host_ctx, &seeded["id"].as_str().unwrap(), None, None, false, None,
         )
         .await
         .expect("plugin active → 必须编排成功");
         let info2 = wait_session(&sm, &sid2).await;
         assert_eq!(info2.name, "编排会话(1)", "重名冲突 → 插件改写为 (1) 后缀");
-        assert_eq!(info2.config_id, seeded.id);
+        assert_eq!(info2.config_id, seeded["id"].as_str().unwrap().to_string());
 
         // ==================== 5. 插件必需：注销互调面 → 显性报错（无宿主降级） ====================
         host_ctx.api_registry().unregister(SESSION_ID);
         let err = crate::utils::session_create_bridge::create_session_via_plugin(
-            &host_ctx, &seeded.id, None, None, false, None,
+            &host_ctx, &seeded["id"].as_str().unwrap(), None, None, false, None,
         )
         .await
         .expect_err("插件不可用 → 必须显性报错（host-business-decarriage 收尾：降级轨已删）");
@@ -2235,14 +1756,14 @@ fn test_session_actions_closed_loop() {
     // （各自 remove_dir_all + 写同一 SQLite 文件 → BUSY/缺失），见票 09 同款处置
     let mut host_ctx = host_ctx;
     if let Some(ctx) = Arc::get_mut(&mut host_ctx) {
-        ctx.plugin_db_root = Some(std::env::temp_dir().join(format!(
+        ctx.set_plugin_db_root(Some(std::env::temp_dir().join(format!(
                 "bedcode_plugin_dbs_actions_{}_{}",
                 std::process::id(),
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_nanos()
-            )));
+            ))));
     }
     let _ = std::fs::remove_dir_all(plugin_db_root().join(SESSION_ID));
 
@@ -2254,7 +1775,7 @@ fn test_session_actions_closed_loop() {
         SESSION_ID,
         &[
             "auth".to_string(),
-            "peer".to_string(),
+            "peer".to_string(), "storage".to_string(),
             "session:read".to_string(),
             "session:write".to_string(),
             "storage".to_string(),
@@ -2303,7 +1824,7 @@ fn test_session_actions_closed_loop() {
         let seeded = seed_config_in_plugin_store(&mut *session.lock().await, "动作会话", "/tmp", "bash").await;
 
         let sid = crate::utils::session_create_bridge::create_session_via_plugin(
-            &host_ctx, &seeded.id, None, None, false, None,
+            &host_ctx, &seeded["id"].as_str().unwrap(), None, None, false, None,
         )
         .await
         .expect("plugin active → 必须编排成功");
@@ -2442,7 +1963,7 @@ fn test_session_actions_closed_loop() {
         let info = wait_session(&sm, &sid).await;
         assert_eq!(info.status, crate::enums::SessionStatus::Running, "重启后 Running");
         assert_eq!(info.name, "重命名后", "重启保持名字（不做二次命名）");
-        assert_eq!(info.config_id, seeded.id, "重启保持 configId");
+        assert_eq!(info.config_id, seeded["id"].as_str().unwrap().to_string(), "重启保持 configId");
         assert_eq!(
             sm.canonical_renderer_of(&sid).await,
             Some(RendererSource::Desktop),
@@ -2451,7 +1972,7 @@ fn test_session_actions_closed_loop() {
         assert_eq!(
             capture.lock().unwrap_or_else(|e| e.into_inner()).clone(),
             vec![
-                format!("Creating(config={})", seeded.id),
+                format!("Creating(config={})", seeded["id"].as_str().unwrap()),
                 "Created(id=<sid>, name=重命名后)".to_string()
             ],
             "重启事件序列 = Creating → Created（与迁移前逐字一致）"
@@ -2539,14 +2060,14 @@ fn test_session_annotate_and_devices_closed_loop() {
     // （各自 remove_dir_all + 写同一 SQLite 文件 → BUSY/缺失），见票 09 同款处置
     let mut host_ctx = host_ctx;
     if let Some(ctx) = Arc::get_mut(&mut host_ctx) {
-        ctx.plugin_db_root = Some(std::env::temp_dir().join(format!(
+        ctx.set_plugin_db_root(Some(std::env::temp_dir().join(format!(
                 "bedcode_plugin_dbs_annotate_{}_{}",
                 std::process::id(),
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_nanos()
-            )));
+            ))));
     }
     let _ = std::fs::remove_dir_all(plugin_db_root().join(SESSION_ID));
 
@@ -2558,7 +2079,7 @@ fn test_session_annotate_and_devices_closed_loop() {
         SESSION_ID,
         &[
             "auth".to_string(),
-            "peer".to_string(),
+            "peer".to_string(), "storage".to_string(),
             "session:read".to_string(),
             "session:write".to_string(),
             "storage".to_string(),
@@ -2592,7 +2113,7 @@ fn test_session_annotate_and_devices_closed_loop() {
         let seeded = seed_config_in_plugin_store(&mut *session.lock().await, "注解会话", "/tmp", "bash").await;
 
         let sid = crate::utils::session_create_bridge::create_session_via_plugin(
-            &host_ctx, &seeded.id, None, None, false, None,
+            &host_ctx, &seeded["id"].as_str().unwrap(), None, None, false, None,
         )
         .await
         .expect("plugin active → 必须编排成功");
@@ -2753,8 +2274,8 @@ fn test_filetransfer_consumes_session_center_closed_loop() {
     // - file-transfer 声明 peer（宿主应答/降级直查路径需权限门放行）
     host_ctx
         .permission
-        .grant_permissions(session_id, &["auth".to_string(), "peer".to_string()]);
-    host_ctx.permission.grant_permissions(FT_ID, &["peer".to_string()]);
+        .grant_permissions(session_id, &["auth".to_string(), "peer".to_string(), "storage".to_string()]);
+    host_ctx.permission.grant_permissions(FT_ID, &["peer".to_string(), "storage".to_string()]);
     let center_apis = session_apis();
     host_ctx.api_registry().register(
         session_id,
@@ -3046,14 +2567,14 @@ fn test_session_output_ring_fetch_closed_loop() {
     let (wasm_runtime, host_ctx) = setup_wasm_runtime();
     let mut host_ctx = host_ctx;
     if let Some(ctx) = Arc::get_mut(&mut host_ctx) {
-        ctx.plugin_db_root = Some(std::env::temp_dir().join(format!(
+        ctx.set_plugin_db_root(Some(std::env::temp_dir().join(format!(
             "bedcode_plugin_dbs_outring_{}_{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_nanos()
-        )));
+        ))));
     }
     let _ = std::fs::remove_dir_all(plugin_db_root().join(SESSION_ID));
 
@@ -3065,7 +2586,7 @@ fn test_session_output_ring_fetch_closed_loop() {
         SESSION_ID,
         &[
             "auth".to_string(),
-            "peer".to_string(),
+            "peer".to_string(), "storage".to_string(),
             "session:read".to_string(),
             "session:write".to_string(),
             // 票 04：输出消费二进制原语（terminal:output）
@@ -3109,7 +2630,7 @@ fn test_session_output_ring_fetch_closed_loop() {
         .await;
         let sm = host_ctx.session_manager.clone();
         let sid = crate::utils::session_create_bridge::create_session_via_plugin(
-            &host_ctx, &seeded.id, None, None, false, None,
+            &host_ctx, &seeded["id"].as_str().unwrap(), None, None, false, None,
         )
         .await
         .expect("plugin active → 必须编排成功");

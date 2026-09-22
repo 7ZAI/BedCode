@@ -110,11 +110,22 @@
 //!   表退役）。权限位 `session:config` 同步退役（config-get 改挂 `session:read`，五同步点
 //!   全落）。破坏性收缩（WIT 删除 import 函数），旧插件二进制须重编译。
 //!
+//! - v24: 认证记录下沉（2026-09-22 用户裁定）——`pairings` / `connection_history`
+//!   不再留宿主主库（§8「留宿主」口径撤销），认证记录归认证中心
+//!   （`com.bedcode.terminal-session`）私有库，经其互调 api 服务。host-auth 记录面
+//!   七函数（trusted-devices-list / trusted-device-revoke / connection-history-list /
+//!   connection-history-clear / trusted-device-upsert / trusted-device-touch /
+//!   connection-history-record）**退役删除**；host-session 配置面读取面
+//!   （`config-list` / `config-get`）随 session_configs 主库表退役一并删除（legacy
+//!   迁移通道关闭）。保留面：secret-store / biometric-*（公钥托管在宿主
+//!   `plugin_secrets`）/ device-token-* / link-identity-parts / auth-setting-set。
+//!   破坏性收缩（WIT 删除 import 函数），旧插件二进制须按 v24 SDK 重建。
+//!
 //! 编号口径（AGENTS.md §7 教训）：本号以 `abi.rs` 与 WIT 版本表实读为准，
 //! 规格正文的「17 → 19」是并发线（host-notification v18）尚未落地时的预判；
 //! 本分支实测 v18 已被「host-auth 认证记录面」占用（票 05），故会话语义下沉的
 //! 第二批次取 v19。
-pub const ABI_VERSION: u32 = 23;
+pub const ABI_VERSION: u32 = 24;
 
 /// 组件形态标识：`abi.form() == FORM_COMPONENT`（WIT `abi` 接口的 form() 声明）
 ///
@@ -128,16 +139,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_abi_version_is_v23() {
-        // 版本号序列与历史 core ABI 共用：v23 = host-session 配置面写原语退役
-        // （删 config-upsert / config-delete，权限 session:config 同步退役），叠加
-        // v22 host-platform.reveal-in-dir（平台定位原语，无权限门；`system:open` 退役）、
-        // v21 host-session 收敛退役（删 `create` / `restart`）、v20 host-task 宿主并发任务域、
-        // v19 host-session 配置面与创建/动作面（会话语义下沉批次之二）、
-        // v18 host-auth 认证记录面（同批次之一）、v17 认证策略导出（auth-policy）、
-        // v16 插件私有伪终端原语（host-pty）、v15 密钥托管（host-auth / secret-store）、
-        // v14 host-websocket、v13 host-mdns v2、v12 总线二进制载荷与 v11 host-peer 传输控制三原语
-        assert_eq!(ABI_VERSION, 23);
+    fn test_abi_version_is_v24() {
+        // 版本号序列与历史 core ABI 共用：v24 = 认证记录下沉（2026-09-22，host-auth
+        // 记录面七函数退役 + host-session config 读取面退役），叠加 v23 host-session
+        // 配置面写原语退役（session:config 同步退役）、v22 host-platform.reveal-in-dir
+        // （平台定位原语，无权限门；`system:open` 退役）、v21 host-session 收敛退役
+        // （删 `create` / `restart`）、v20 host-task 宿主并发任务域、v19 host-session
+        // 配置面与创建/动作面（会话语义下沉批次之二）、v18 host-auth 认证记录面
+        // （同批次之一）、v17 认证策略导出（auth-policy）、v16 插件私有伪终端原语
+        // （host-pty）、v15 密钥托管（host-auth / secret-store）、v14 host-websocket、
+        // v13 host-mdns v2、v12 总线二进制载荷与 v11 host-peer 传输控制三原语
+        assert_eq!(ABI_VERSION, 24);
     }
 
     #[test]

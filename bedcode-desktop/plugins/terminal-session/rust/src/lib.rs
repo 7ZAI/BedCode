@@ -31,6 +31,9 @@
 
 /// 会话动作域（票 10）：重启 / 移除 / 改名编排 + 尺寸正统端裁决
 mod actions;
+/// 认证记录域（2026-09-22 下沉）：配对设备 + 连接历史真源 = 本插件私有库，
+/// 宿主 host-auth 记录面原语退役后本域自持（见模块文档）
+pub mod auth_records;
 /// 认证链 HTTP 编排域（票 07）：/api/auth/* 七端点 + JWT 签发 + 挑战状态机
 /// （密钥托管与信任表留宿主，经 host-auth 原语回调统一认证，见模块文档）
 pub mod auth_http;
@@ -159,6 +162,39 @@ pub trait SessionApi {
     /// `quick_actions_migration` 的唯一写入通道（spec 决策 6：不新增 host 原语）。
     #[api("quick-actions-import")]
     fn quick_actions_import(rows: serde_json::Value) -> Result<serde_json::Value, String>;
+
+    // ==================== 2026-09-22 认证记录下沉：互调查询面 + 迁移导入 ====================
+
+    /// 一次性幂等导入（宿主 handoff 推送的 legacy 主库 pairings / connection_history
+    /// 行）→ `MigrationReport`（`{alreadyMigrated, importedPairings, importedHistory,
+    /// credentialColumnsStripped, failed}`）。marker 已在 → 整体跳过。这是宿主侧
+    /// `auth_records_migration` 的唯一写入通道（凭据列剥离由插件侧完成）。
+    #[api("auth-records-import")]
+    fn auth_records_import(rows: serde_json::Value) -> Result<serde_json::Value, String>;
+
+    /// 活跃配对设备列表（`PairedDeviceInfo[]`，pairedAt 倒序）——其他插件经
+    /// ADR 0017 互调查询认证中心获取配对记录。区别于 `trust-list`：只回配对
+    /// 段（不含 peer），供设备页 / 文件传输等按设备寻址的消费方使用。
+    #[api("devices-list")]
+    fn devices_list() -> Result<serde_json::Value, String>;
+
+    /// 设备连接历史（`device-id` = 配对记录 id；倒序）——其他插件查询认证中心
+    /// 获取连接记录的互调面。
+    #[api("history-list")]
+    fn history_list(device_id: String) -> Result<serde_json::Value, String>;
+
+    /// 连接计数 / last_seen 刷新（宿主 WS 认证路径回调：移动端持 JWT 开 WS 时
+    /// 经此通知认证中心更新配对记录）。入参 `{ fingerprint }`。
+    /// 插件未激活 → 宿主静默跳过（记录缺失不阻断认证，降级语义与旧
+    /// `update_pairing_last_seen` 失败 warn 一致）。
+    #[api("connection-touch")]
+    fn connection_touch(fingerprint: String) -> Result<(), String>;
+
+    /// 断开回填（宿主 WS 断链路径回调）：认证中心按指纹解析 device_id 并回填
+    /// 最近一条 open 连接的断开时间。入参 `{ fingerprint }`。
+    /// 插件未激活 → 宿主静默跳过（连接历史缺失不阻断断开语义）。
+    #[api("connection-close")]
+    fn connection_close(fingerprint: String) -> Result<(), String>;
 
     // ==================== 票 09：会话创建编排（命名唯一化 + launch spec + 两阶段） ====================
 
@@ -292,6 +328,28 @@ impl SessionApi for SessionPlugin {
 
     fn quick_actions_import(rows: serde_json::Value) -> Result<serde_json::Value, String> {
         quick_actions::import_via_host(rows)
+    }
+
+    // ==================== 2026-09-22 认证记录下沉：互调查询面 + 迁移导入 ====================
+
+    fn auth_records_import(rows: serde_json::Value) -> Result<serde_json::Value, String> {
+        auth_records::import_via_host(rows)
+    }
+
+    fn devices_list() -> Result<serde_json::Value, String> {
+        auth_records::paired_list()
+    }
+
+    fn history_list(device_id: String) -> Result<serde_json::Value, String> {
+        auth_records::history_list(&device_id)
+    }
+
+    fn connection_touch(fingerprint: String) -> Result<(), String> {
+        auth_records::touch(&fingerprint)
+    }
+
+    fn connection_close(fingerprint: String) -> Result<(), String> {
+        auth_records::close_open_connection(&fingerprint)
     }
 
     // ==================== 票 09：会话创建编排 ====================
@@ -457,30 +515,17 @@ impl WasmPlugin for SessionPlugin {
                 e
             )),
         }
-        // 票 08：配置真源在本插件私有库——建表 + 一次性幂等迁移（legacy 主库 → 私有库）。
+        // 票 08：配置真源在本插件私有库——建表（幂等）。
         //
         // **失败不阻断激活**（与上方密钥探活同口径，D7 故障隔离）：配置存储不可用时
         // 只降级配置面——配对 / 信任 / 同意 / auth-policy 必须照常工作，不能让一个
         // 「私有库建不出来」把整个插件（连带认证路径）打成 Degraded。宿主侧对此有
         // 降级轨兜底（命令面回落主库投影，见 spec 票 08 §4），故配置面故障 ≠ 产品面故障。
+        //
+        // **v24**：legacy 迁移通道（host-session config-list/get 读取面）随
+        // `session_configs` 表退役删除——私有库即真源，无迁移步骤。
         match config::ensure_schema_via_host() {
-            Ok(()) => match config::migrate_via_host() {
-                // 票 02 阶段 A 观测信号：`legacy_rows` = 本机主库遗留配置行数，
-                // `already_migrated` = 插件私有库迁移 marker 态。两者一起给发布侧
-                // 判断「还有多少安装点的遗留行未迁入私有库」——`session_configs`
-                // 表退役（阶段 B）的前置确认，本批只观测、不改行为。
-                Ok(report) => host.log_info(&format!(
-                    "session config store ready (legacy_rows={} imported={} skipped_existing={} already_migrated={})",
-                    report.legacy_rows,
-                    report.imported,
-                    report.skipped_existing,
-                    report.already_migrated
-                )),
-                Err(e) => host.log_warn(&format!(
-                    "session config migration failed at activate (config face degraded): {}",
-                    e
-                )),
-            },
+            Ok(()) => host.log_info("session config store ready (no legacy migration; private store is source of truth)"),
             Err(e) => host.log_warn(&format!(
                 "session config schema init failed at activate (config face degraded): {}",
                 e
@@ -493,6 +538,19 @@ impl WasmPlugin for SessionPlugin {
             Ok(()) => host.log_info("quick action store ready (private table quick_actions)"),
             Err(e) => host.log_warn(&format!(
                 "quick action schema init failed at activate (quick action face degraded): {}",
+                e
+            )),
+        }
+        // 2026-09-22 认证记录下沉：认证记录域（配对设备 + 连接历史）建表（幂等）。
+        // 与配置面同口径——失败只降级认证记录域：配对 / 信任 / 认证链按「无记录」
+        // 降级（撤销是唯一显式拒绝信号，读取失败从宽放行），不阻断激活（D7）。
+        // 存量数据由宿主侧 handoff（auth_records_migration）经互调 api 推送，不在此拉取。
+        match auth_records::ensure_schema_via_host() {
+            Ok(()) => host.log_info(
+                "auth records store ready (private tables auth_pairings / auth_connection_history)",
+            ),
+            Err(e) => host.log_warn(&format!(
+                "auth records schema init failed at activate (auth records face degraded): {}",
                 e
             )),
         }
@@ -1639,10 +1697,12 @@ mod tests {
         assert_eq!(actual, expected, "manifest api 必须与 trait 声明一致");
         assert_eq!(
             manifest.api.len(),
-            22,
+            27,
             "pairing 八项 + trust 两项（list/revoke）+ consent 一项（decide）+ config 三项 + \
              session-create 一项（票 09）+ 会话动作四项（票 10 restart/remove/rename/resize）\
-             + 票 11 annotate + devices-connect-list 两项 + 票 02 quick-actions-import 一项"
+             + 票 11 annotate + devices-connect-list 两项 + 票 02 quick-actions-import 一项 + \
+             2026-09-22 认证记录下沉五项（auth-records-import / devices-list / history-list / \
+             connection-touch / connection-close）"
         );
     }
 

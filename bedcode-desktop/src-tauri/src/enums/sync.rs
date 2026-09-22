@@ -5,7 +5,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::plugin::PluginQuestion;
-use super::summary::{SessionConfigSummary, SessionSummary};
+use super::summary::SessionSummary;
 
 /// 同步载荷 - 支持多种数据类型的增量同步
 ///
@@ -31,22 +31,6 @@ pub enum SyncPayload {
     SessionStopped { session_id: String, session_name: String },
     /// 会话删除
     SessionRemoved { session_id: String, session_name: String },
-
-    // === 会话配置同步 ===
-    /// 配置创建
-    ConfigCreated {
-        config: SessionConfigSummary,
-        /// 触发操作的设备名称（桌面本地操作为空字符串）
-        source_device: String,
-    },
-    /// 配置更新
-    ConfigUpdated {
-        config: SessionConfigSummary,
-        /// 触发操作的设备名称（桌面本地操作为空字符串）
-        source_device: String,
-    },
-    /// 配置删除
-    ConfigRemoved { config_id: String, config_name: String },
 
     // === 任务状态同步 ===
     /// Plugin 任务状态变更

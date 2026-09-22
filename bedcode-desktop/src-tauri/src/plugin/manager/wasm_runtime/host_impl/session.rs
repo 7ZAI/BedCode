@@ -1,9 +1,7 @@
 //! 会话域宿主实现（会话查询、配置 CRUD、配置列表与会话创建）
 
 use crate::plugin::manager::wasm_runtime::{block_on_async, WasmHostContext};
-use crate::plugin::permission::{
-    PERMISSION_SESSION_READ, PERMISSION_SESSION_WRITE, PERMISSION_TERMINAL_OUTPUT,
-};
+use crate::plugin::permission::{PERMISSION_SESSION_READ, PERMISSION_SESSION_WRITE, PERMISSION_TERMINAL_OUTPUT};
 use crate::session::RingFetchOutput;
 use crate::system::constants::plugin::PLUGIN_SESSION_RING_FETCH_MAX_BYTES;
 use crate::system::error_boundary::spawn_with_error_boundary;
@@ -123,61 +121,7 @@ pub(crate) fn session_get(
         .map_err(|e| format!("session error: JSON serialization failed: {}", e))
 }
 
-/// 列出会话配置精简列表（id/name/workingDir/command）
-pub(crate) fn session_config_list(host_ctx: &WasmHostContext, plugin_id: &str) -> Result<Option<String>, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_SESSION_READ, "host_session_config_list") {
-        return Err("permission denied".to_string());
-    }
-    let cm = host_ctx.config_manager.clone();
-    let configs = block_on_async(cm.list_configs()).map_err(|e| format!("session error: {}", e))?;
-    // 精简输出：仅包含插件需要的字段，避免传输不必要的数据
-    // （name 供插件 UI 展示会话配置选择列表，如定时任务选配置）
-    let simplified: Vec<serde_json::Value> = configs
-        .iter()
-        .map(|c| {
-            serde_json::json!({
-                "id": c.id,
-                "name": c.name,
-                "workingDir": c.working_dir,
-                "command": c.command,
-            })
-        })
-        .collect();
-    serde_json::to_string(&simplified)
-        .map(Some)
-        .map_err(|e| format!("session error: JSON serialization failed: {}", e))
-}
-
-// ==================== 会话配置读取面（v22 起仅保留 legacy 迁移通道） ====================
-
-/// 读取单条会话配置（v22 起权限 `session:read`）；不存在返回 `Ok(None)`
-/// （与 `session_get` 同约定：缺记录不是错误，缺 id 才是）
-///
-/// v22 起 config-upsert / config-delete 已退役：终端插件写路径全走私有库，
-/// 宿主写原语无调用者即死接口；剩余 host_impl 只有本读取面与 `session_config_list`，
-/// 服务 `terminal-session` 插件的一**次性 legacy 迁移**（`config/ops.rs::migrate` 经它
-/// 读主库 `session_configs`，marker 幂等）。迁移窗口结束随主库表一并退役。
-pub(crate) fn session_config_get(
-    host_ctx: &WasmHostContext,
-    plugin_id: &str,
-    config_id: &str,
-) -> Result<Option<String>, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_SESSION_READ, "host_session_config_get") {
-        return Err(format!("permission denied: {}", PERMISSION_SESSION_READ));
-    }
-    if config_id.trim().is_empty() {
-        return Err("session error: empty config_id".to_string());
-    }
-    let cm = host_ctx.config_manager.clone();
-    match block_on_async(cm.get_config(config_id)).map_err(|e| format!("session error: {}", e))? {
-        Some(config) => serde_json::to_string(&config)
-            .map(Some)
-            .map_err(|e| format!("session error: JSON serialization failed: {}", e)),
-        None => Ok(None),
-    }
-}
-
-// ==================== 会话启动规格创建（v19，权限 session:write） ====================
+/// 会话启动规格创建（v19，权限 session:write） ====================
 
 /// `create-with-spec` 入参结构（插件算好的 launch spec，camelCase）
 ///
@@ -651,7 +595,12 @@ pub(crate) fn session_output_ring_fetch(
     from_offset: u64,
     max_bytes: u32,
 ) -> Result<Option<RingFetchOutput>, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_TERMINAL_OUTPUT, "host_session_output_ring_fetch") {
+    if !super::check_permission(
+        host_ctx,
+        plugin_id,
+        PERMISSION_TERMINAL_OUTPUT,
+        "host_session_output_ring_fetch",
+    ) {
         return Err("permission denied".to_string());
     }
     // 属主校验（与 terminal_send 同形态，票 04 P0-3）：会话输出是会话域的私密数据面
@@ -703,14 +652,6 @@ mod tests {
     }
 
     /// 无 session:read 权限：配置列表被拒绝
-    #[test]
-    fn session_config_list_permission_denied() {
-        let ctx = build_host_ctx();
-        let err = session_config_list(&ctx, PLUGIN).unwrap_err();
-        assert_eq!(err, "permission denied");
-    }
-
-    /// 无 session:write 权限：关闭会话被拒绝
     #[test]
     fn session_close_permission_denied() {
         let ctx = build_host_ctx();
@@ -896,7 +837,13 @@ mod tests {
         .expect("resolve ok");
         assert_eq!(
             lc.command_args.as_deref(),
-            Some(&["bash".to_string(), "-lic".to_string(), "cd '/home/u' && pwd && pnpm dev".to_string()][..]),
+            Some(
+                &[
+                    "bash".to_string(),
+                    "-lic".to_string(),
+                    "cd '/home/u' && pwd && pnpm dev".to_string()
+                ][..]
+            ),
             "commandArgs 必须整体透传（宿主不解释 argv）"
         );
         assert_eq!(lc.command, "bash", "command 字段仅冗余透传，原样保留");
@@ -909,9 +856,10 @@ mod tests {
         assert!(err.is_err(), "旧路径空 command 必须拒绝");
 
         // ③ 空数组（commandArgs: []）→ 视为旧路径（None）
-        let (_, lc) =
-            resolve_launch_spec(r#"{"name":"s","command":"bash","commandArgs":[],"cwd":"/","environment":{"type":"Linux"}}"#)
-                .expect("resolve ok");
+        let (_, lc) = resolve_launch_spec(
+            r#"{"name":"s","command":"bash","commandArgs":[],"cwd":"/","environment":{"type":"Linux"}}"#,
+        )
+        .expect("resolve ok");
         assert!(lc.command_args.is_none(), "空数组视为旧路径");
 
         // ④ raw 路径下 command 可为空字符串（仅 argv 生效）
@@ -925,7 +873,10 @@ mod tests {
         let err = resolve_launch_spec(
             r#"{"name":"s","command":"","commandArgs":["","-lic"],"cwd":"/","environment":{"type":"Linux"}}"#,
         );
-        assert!(err.unwrap_err().contains("commandArgs[0] is empty"), "空 argv0 必须拒绝");
+        assert!(
+            err.unwrap_err().contains("commandArgs[0] is empty"),
+            "空 argv0 必须拒绝"
+        );
         let err = resolve_launch_spec(
             r#"{"name":"s","command":"","commandArgs":["bash","-c","echo \u0000"],"cwd":"/","environment":{"type":"Linux"}}"#,
         );
@@ -938,15 +889,6 @@ mod tests {
         let ctx = build_host_ctx();
         grant_permissions(&ctx, PLUGIN, &[PERMISSION_SESSION_READ]);
         let json = session_list(&ctx, PLUGIN).expect("list ok").expect("some value");
-        assert_eq!(json, "[]");
-    }
-
-    /// 空配置库：精简配置列表返回空 JSON 数组
-    #[tokio::test]
-    async fn session_config_list_empty_ok() {
-        let ctx = build_host_ctx();
-        grant_permissions(&ctx, PLUGIN, &[PERMISSION_SESSION_READ]);
-        let json = session_config_list(&ctx, PLUGIN).expect("list ok").expect("some value");
         assert_eq!(json, "[]");
     }
 
@@ -1054,12 +996,9 @@ mod tests {
         session_rename(&ctx, owner, &sid, "属主改名").expect("属主改名应放行");
 
         for (label, outcome) in [
-            ("close", session_close(&ctx, intruder, &sid).map(|_|())),
+            ("close", session_close(&ctx, intruder, &sid).map(|_| ())),
             ("remove", session_remove(&ctx, intruder, &sid)),
-            (
-                "rename",
-                session_rename(&ctx, intruder, &sid, "越权改名").map(|_| ()),
-            ),
+            ("rename", session_rename(&ctx, intruder, &sid, "越权改名").map(|_| ())),
             (
                 "resize",
                 session_resize(&ctx, intruder, &sid, 80, 24, r#"{"kind":"desktop"}"#).map(|_| ()),
@@ -1070,10 +1009,7 @@ mod tests {
             ),
         ] {
             let err = outcome.err().unwrap_or_else(|| panic!("非属主 {label} 必须被拒"));
-            assert!(
-                err.contains("not owner"),
-                "{label} 应按属主拒绝，got: {err}"
-            );
+            assert!(err.contains("not owner"), "{label} 应按属主拒绝，got: {err}");
         }
 
         // 越权失败零副作用：会话仍在册、名字未变、注解未被写入

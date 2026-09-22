@@ -7,10 +7,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::enums::auth::AuthPayload;
-use crate::enums::control::{
-    SessionConfigAction, SessionConfigPayload, SessionControlAction, SessionControlPayload, TerminalAction,
-    TerminalPayload,
-};
+use crate::enums::control::{SessionControlAction, SessionControlPayload, TerminalAction, TerminalPayload};
 use crate::enums::special_key::KeyCombo;
 use crate::enums::summary::SessionSummary;
 use crate::enums::SyncPayload;
@@ -87,22 +84,6 @@ pub enum Message {
         #[serde(default = "default_token")]
         token: String,
         payload: SessionControlPayload,
-    },
-
-    /// 会话配置消息 (双向)
-    /// 会话配置查询：列出配置/快捷指令等
-    #[serde(rename = "session_config")]
-    SessionConfig {
-        #[serde(default = "generate_message_id")]
-        message_id: String,
-        #[serde(default)]
-        expect_response: bool,
-        timestamp: i64,
-        session_id: Option<String>,
-        /// 认证令牌
-        #[serde(default = "default_token")]
-        token: String,
-        payload: SessionConfigPayload,
     },
 
     /// 错误消息 (服务端 → 客户端)
@@ -363,30 +344,6 @@ impl Message {
         }
     }
 
-    /// 创建会话配置消息
-    pub fn session_config(action: SessionConfigAction, session_id: Option<&str>) -> Self {
-        Message::SessionConfig {
-            message_id: generate_message_id(),
-            expect_response: false,
-            timestamp: Utc::now().timestamp_millis(),
-            session_id: session_id.map(|s| s.to_string()),
-            token: String::new(),
-            payload: SessionConfigPayload { action },
-        }
-    }
-
-    /// 创建会话配置消息（带响应期望）
-    pub fn session_config_with_response(action: SessionConfigAction, session_id: Option<&str>) -> Self {
-        Message::SessionConfig {
-            message_id: generate_message_id(),
-            expect_response: true,
-            timestamp: Utc::now().timestamp_millis(),
-            session_id: session_id.map(|s| s.to_string()),
-            token: String::new(),
-            payload: SessionConfigPayload { action },
-        }
-    }
-
     /// 创建认证消息
     pub fn auth(session_id: Option<String>, payload: AuthPayload) -> Self {
         Message::Auth {
@@ -489,7 +446,6 @@ impl Message {
             Message::Terminal { message_id, .. } => Some(message_id),
             Message::Auth { message_id, .. } => Some(message_id),
             Message::SessionControl { message_id, .. } => Some(message_id),
-            Message::SessionConfig { message_id, .. } => Some(message_id),
             Message::Error { message_id, .. } => message_id.as_deref(),
             Message::ServerClosed { .. } => None,
             Message::ClientDisconnected { .. } => None,
@@ -505,7 +461,6 @@ impl Message {
             Message::Terminal { .. } => Some("terminal"),
             Message::Auth { .. } => Some("auth"),
             Message::SessionControl { .. } => Some("session_control"),
-            Message::SessionConfig { .. } => Some("session_config"),
             Message::Error { .. } => Some("error"),
             Message::ServerClosed { .. } => Some("server_closed"),
             Message::ClientDisconnected { .. } => Some("client_disconnected"),
@@ -521,7 +476,6 @@ impl Message {
             Message::Terminal { expect_response, .. } => *expect_response,
             Message::Auth { expect_response, .. } => *expect_response,
             Message::SessionControl { expect_response, .. } => *expect_response,
-            Message::SessionConfig { expect_response, .. } => *expect_response,
             Message::Error { expect_response, .. } => *expect_response,
             Message::ServerClosed { .. } => false,
             Message::ClientDisconnected { .. } => false,
@@ -537,7 +491,6 @@ impl Message {
             Message::Terminal { token, .. } => token,
             Message::Auth { token, .. } => token,
             Message::SessionControl { token, .. } => token,
-            Message::SessionConfig { token, .. } => token,
             Message::Error { token, .. } => token,
             Message::ServerClosed { token, .. } => token,
             Message::ClientDisconnected { token, .. } => token,
@@ -589,21 +542,6 @@ impl Message {
                 token,
                 payload,
             } => Message::SessionControl {
-                message_id: request_id.to_string(),
-                expect_response,
-                timestamp,
-                session_id,
-                token,
-                payload,
-            },
-            Message::SessionConfig {
-                message_id: _,
-                expect_response,
-                timestamp,
-                session_id,
-                token,
-                payload,
-            } => Message::SessionConfig {
                 message_id: request_id.to_string(),
                 expect_response,
                 timestamp,
@@ -672,21 +610,6 @@ impl Message {
                 payload,
                 ..
             } => Message::SessionControl {
-                message_id,
-                expect_response,
-                timestamp,
-                session_id,
-                token: token.to_string(),
-                payload,
-            },
-            Message::SessionConfig {
-                message_id,
-                expect_response,
-                timestamp,
-                session_id,
-                payload,
-                ..
-            } => Message::SessionConfig {
                 message_id,
                 expect_response,
                 timestamp,
@@ -801,7 +724,6 @@ mod tests {
     use super::*;
     use crate::enums::auth::AuthStage;
     use crate::enums::special_key::KeyCode;
-    use crate::enums::summary::SessionConfigSummary;
     use serde_json::Value;
     // CloseCode 在 tungstenite 0.24 中不公开导出，需从 frame::coding 引入
     use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
@@ -991,26 +913,6 @@ mod tests {
     }
 
     #[test]
-    fn session_config_constructors_preserve_action() {
-        let m = Message::session_config(SessionConfigAction::ListQuickActions, Some("s1"));
-        assert!(!m.expect_response());
-        match &m {
-            Message::SessionConfig {
-                session_id,
-                payload: SessionConfigPayload { action },
-                ..
-            } => {
-                assert_eq!(session_id.as_deref(), Some("s1"));
-                assert!(matches!(action, SessionConfigAction::ListQuickActions));
-            }
-            _ => panic!("期望 session_config 消息"),
-        }
-
-        let m2 = Message::session_config_with_response(SessionConfigAction::ListSessionConfigs, None);
-        assert!(m2.expect_response());
-    }
-
-    #[test]
     fn auth_constructor_carries_stage_and_payload_fields() {
         let payload = AuthPayload {
             stage: AuthStage::Reauthenticate,
@@ -1181,10 +1083,6 @@ mod tests {
                 Message::session_control(SessionControlAction::ListSessions, None),
                 "session_control",
             ),
-            (
-                Message::session_config(SessionConfigAction::ListSessionConfigs, None),
-                "session_config",
-            ),
             (Message::error("E", "m"), "error"),
             (Message::server_closed("r", false), "server_closed"),
             (Message::client_disconnected("d", "r"), "client_disconnected"),
@@ -1214,14 +1112,6 @@ mod tests {
         assert_eq!(Message::client_disconnected("d", "r").message_id(), None);
         assert_eq!(Message::session_event("c", sample_session(), "d").message_id(), None);
         assert_eq!(Message::ack("req").message_id(), None);
-        assert_eq!(
-            Message::sync_data(SyncPayload::ConfigRemoved {
-                config_id: "c".to_string(),
-                config_name: "n".to_string(),
-            })
-            .message_id(),
-            None
-        );
         // error 的消息 ID 可选：无关联请求时为 None，error_with_id 时为 Some
         assert!(Message::error("E", "m").message_id().is_none());
         assert_eq!(Message::error_with_id("req-1", "E", "m").message_id(), Some("req-1"));
@@ -1233,7 +1123,6 @@ mod tests {
         assert!(!Message::input("s", "x", None).expect_response());
         assert!(Message::subscribe_with_response("s").expect_response());
         assert!(Message::session_control_with_response(SessionControlAction::ListSessions, None).expect_response());
-        assert!(Message::session_config_with_response(SessionConfigAction::ListSessionConfigs, None).expect_response());
         assert!(!Message::server_closed("r", false).expect_response());
         assert!(!Message::ack("req").expect_response());
         assert!(!Message::sync_data(SyncPayload::SessionModeChanged {
@@ -1250,7 +1139,6 @@ mod tests {
             Message::input("s", "x", None),
             Message::auth(Some("s".into()), AuthPayload::default()),
             Message::session_control(SessionControlAction::ListSessions, None),
-            Message::session_config(SessionConfigAction::ListSessionConfigs, None),
             Message::error("E", "m"),
             Message::server_closed("r", true),
             Message::client_disconnected("d", "r"),
@@ -1365,7 +1253,6 @@ mod tests {
                 },
                 Some("s"),
             ),
-            Message::session_config(SessionConfigAction::ListQuickActions, None),
             Message::auth(
                 Some("s".into()),
                 AuthPayload {
@@ -1406,32 +1293,6 @@ mod tests {
             Message::sync_data(SyncPayload::SessionRemoved {
                 session_id: "s".to_string(),
                 session_name: "dev".to_string(),
-            }),
-            Message::sync_data(SyncPayload::ConfigCreated {
-                config: SessionConfigSummary {
-                    id: "c1".to_string(),
-                    name: "dev".to_string(),
-                    environment: "linux".to_string(),
-                    wsl_distro: None,
-                    working_dir: "/home/u".to_string(),
-                    command: "bash".to_string(),
-                },
-                source_device: "d1".to_string(),
-            }),
-            Message::sync_data(SyncPayload::ConfigUpdated {
-                config: SessionConfigSummary {
-                    id: "c1".to_string(),
-                    name: "dev".to_string(),
-                    environment: "linux".to_string(),
-                    wsl_distro: Some("Ubuntu".to_string()),
-                    working_dir: "/home/u".to_string(),
-                    command: "bash".to_string(),
-                },
-                source_device: "d1".to_string(),
-            }),
-            Message::sync_data(SyncPayload::ConfigRemoved {
-                config_id: "c1".to_string(),
-                config_name: "dev".to_string(),
             }),
             Message::sync_data(SyncPayload::TaskStatusChanged {
                 session_id: "s".to_string(),

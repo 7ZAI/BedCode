@@ -1,11 +1,11 @@
 //! Control Types
 //!
-//! 会话控制、会话配置和终端消息类型定义
+//! 会话控制与终端消息类型定义
 
 use serde::{Deserialize, Serialize};
 
 use super::special_key::KeyCombo;
-use super::summary::{QuickActionSummary, SessionConfigSummary, SessionSummary};
+use super::summary::SessionSummary;
 
 // ==================== Session Control ====================
 
@@ -43,29 +43,6 @@ pub enum SessionControlAction {
         change_type: String,
         session: SessionSummary,
     },
-}
-
-// ==================== Session Config ====================
-
-/// 会话配置载荷
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionConfigPayload {
-    /// 配置动作
-    pub action: SessionConfigAction,
-}
-
-/// 会话配置动作
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum SessionConfigAction {
-    /// 列出会话配置
-    ListSessionConfigs,
-    /// 会话配置列表响应
-    SessionConfigList { configs: Vec<SessionConfigSummary> },
-    /// 列出快捷指令
-    ListQuickActions,
-    /// 快捷指令列表响应
-    QuickActionList { actions: Vec<QuickActionSummary> },
 }
 
 // ==================== Terminal ====================
@@ -208,24 +185,6 @@ mod tests {
     #[test]
     fn session_control_action_unknown_variant_rejected() {
         assert!(serde_json::from_str::<SessionControlAction>(r#"{"type":"bogus_action"}"#).is_err());
-    }
-
-    /// SessionConfigAction 往返 + 标签锁
-    #[test]
-    fn session_config_action_roundtrip() {
-        let cases: Vec<(SessionConfigAction, &str)> = vec![
-            (SessionConfigAction::ListSessionConfigs, "list_session_configs"),
-            (SessionConfigAction::ListQuickActions, "list_quick_actions"),
-        ];
-        for (action, expected_type) in cases {
-            let json = serde_json::to_string(&action).unwrap();
-            assert!(
-                json.contains(&format!("\"type\":\"{expected_type}\"")),
-                "标签缺失: {json}"
-            );
-            let back: SessionConfigAction = serde_json::from_str(&json).unwrap();
-            assert_eq!(serde_json::to_string(&back).unwrap(), json, "往返不一致: {json}");
-        }
     }
 
     /// TerminalAction 全变体往返（含特殊键与订阅响应字段）

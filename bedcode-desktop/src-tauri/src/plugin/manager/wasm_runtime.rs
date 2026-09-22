@@ -441,9 +441,10 @@ pub struct WasmHostContext {
     /// 插件私有库根目录覆盖（布局 `<root>/<plugin_id>/plugin.db`）
     ///
     /// 生产为 `None`：走 `app_handle` 的 `app_data_dir()/plugins/<plugin_id>`；
-    /// 无头测试经此注入（tao 事件循环不允许在测试线程建 AppHandle，故测试只能
-    /// 经注入点拿到真实私有库——票 08 的 S1 闭环需要它）。
-    plugin_db_root: Option<PathBuf>,
+    /// 无头测试经 [`Self::set_plugin_db_root`] 注入（tao 事件循环不允许在测试
+    /// 线程建 AppHandle，故测试只能经注入点拿到真实私有库——票 08 的 S1 闭环
+    /// 需要它）。
+    plugin_db_root: Arc<std::sync::RwLock<Option<PathBuf>>>,
     permission: Arc<PermissionManager>,
     fs_auth: Arc<FsAuthChecker>,
     message_bus: Arc<crate::plugin::bus::MessageBus>,
@@ -953,9 +954,26 @@ impl WasmHostContext {
             security,
             capabilities: crate::plugin::manager::capability::CapabilityRegistry::new(),
             // 私有库根目录覆盖：生产 None（走 app_handle 的 app_data_dir），
-            // 无头测试在构造后注入（见 setup_wasm_runtime）
-            plugin_db_root: None,
+            // 无头测试在构造后经 `set_plugin_db_root` 注入（见 setup_wasm_runtime）
+            plugin_db_root: Arc::new(std::sync::RwLock::new(None)),
         }
+    }
+
+    /// 插件私有库根目录覆盖：生产为 `None`（走 `app_handle` 的
+    /// `app_data_dir()/plugins/<plugin_id>`）；无头/集成测试无 AppHandle
+    /// （tao 事件循环不允许测试线程建 AppHandle），激活会话中心等插件前经此
+    /// 注入临时根目录以获得真实私有库——认证记录下沉（v24）后配对/历史真源
+    /// 在插件私有库，无私有库的无头上下文无法驱动认证链路。
+    pub fn set_plugin_db_root(&self, root: Option<PathBuf>) {
+        *self.plugin_db_root.write().unwrap_or_else(|e| e.into_inner()) = root;
+    }
+
+    /// 读取插件私有库根目录覆盖（None = 走 app_handle 派生）
+    fn plugin_db_root_opt(&self) -> Option<PathBuf> {
+        self.plugin_db_root
+            .read()
+            .map(|g| g.clone())
+            .unwrap_or_else(|e| e.into_inner().clone())
     }
 
     /// 获取进程注册表引用（host-process）
@@ -1071,7 +1089,7 @@ impl WasmHostContext {
         // - 生产：`app_handle` 派生 `app_data_dir()/plugins/<plugin_id>`
         // - 无头测试：`plugin_db_root` 注入（tao 事件循环不允许在测试线程建
         //   AppHandle，故无头上下文必须显式给根目录才能测插件私有库）
-        let plugin_dir = match (&self.app_handle, &self.plugin_db_root) {
+        let plugin_dir = match (&self.app_handle, self.plugin_db_root_opt()) {
             (Some(app_handle), _) => {
                 let app_data_dir = app_handle
                     .path()
@@ -1237,7 +1255,7 @@ mod tests {
             );
             // 注入插件私有库根目录（无头上下文无 AppHandle，见字段文档）：
             // 票 08 的 S1 闭环需要真实私有库（host-plugin-database）
-            host_ctx.plugin_db_root = Some(plugin_db_root());
+            host_ctx.set_plugin_db_root(Some(plugin_db_root()));
             let host_ctx = Arc::new(host_ctx);
 
             (wasm_runtime, host_ctx)

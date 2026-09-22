@@ -386,15 +386,6 @@ interface host-config {
 interface host-session {
     list-sessions: func() -> result<option<string>, string>;
     get: func(session-id: string) -> result<option<string>, string>;
-    config-list: func() -> result<option<string>, string>;
-    /// 读取单个会话配置（权限 `session:read`）；不存在返回 `ok(none)`
-    ///
-    /// v22 起 config-upsert / config-delete 已退役（业务真源在插件私有库，
-    /// 插件的写路径全走私有库；宿主写原语无调用者即死接口，删除不改变行为）。
-    /// 本读取面与 `config-list` 保留为**一次性 legacy 迁移通道**：`terminal-session`
-    /// 插件激活时经它读主库 `session_configs`（老版本升级残留），幂等迁入私有库
-    /// （marker 控制，`config/ops.rs::migrate`）；迁移窗口结束随主库表一并退役。
-    config-get: func(config-id: string) -> result<option<string>, string>;
     /// 会话启动规格创建（v19，权限 `session:write`）：接收插件算好的 launch
     /// spec-json——
     /// `{name, command, commandArgs?, args?, cwd, cols?, rows?, env?, environment?, configId?, start?}`
@@ -530,72 +521,38 @@ interface host-auth {
     /// 列举属主密钥名（供诊断/清理；不返回值本身）
     secret-keys: func() -> result<list<string>, string>;
 
-    // ==================== v18：认证记录面（只读 / 撤销 + 认证域设置写入） ====================
-    // 定位（ADR 0022 裁剪线）：无业务语义的凭据与记录存取——宿主返回**原始记录**，
-    // 排序、过滤（active / 过期）、展示组织与派生视图一律在插件侧；本接口不解释
-    // 「什么算已连接设备」，也不做任何产品判定。
-    //
-    // 属主说明：记录为宿主全局数据（无句柄表），故无「属主段」校验；权限门
-    // （`auth`）即授权边界，越权插件连不上这四个函数。
-    //
-    // 凭据红线（AGENTS.md §8）：`pairings.session_token` / `public_key` 等凭据列
-    // **不出口**；记录 JSON 只含公开视图字段。
+    // ==================== v18：认证域设置写入 ====================
 
-    /// 已配对设备原始记录（内核 `pairings` 全表，含 `is-active = false` 的软删行，
-    /// 不排序——撤销检测依赖「已撤销记录仍可见」，只回唯一活跃集合会让撤销决策
-    /// fail-open）。JSON 数组，元素：
-    /// `{ id, deviceName, deviceFingerprint, address?, pairedAt(RFC3339),
-    ///    lastSeen?(RFC3339), connectCount, isActive }`
-    trusted-devices-list: func() -> result<string, string>;
-    /// 撤销信任（内核 `remove_pairing` 语义：`is-active = false` 软删 + 连带删除
-    /// 该设备连接历史）。返回是否命中记录；未知 id 幂等返回 `ok(false)`。
-    /// **不做**断开在线连接（保持宿主现状语义，属新协议工作）。
-    trusted-device-revoke: func(id: string) -> result<bool, string>;
-    /// 设备连接历史原始记录（`device-id` = `pairings.id`，按时间倒序由宿主查询给出）。
-    /// JSON 数组，元素：
-    /// `{ id, deviceId, authMethod, result, address?, connectedAt(RFC3339),
-    ///    disconnectedAt?(RFC3339) }`
-    connection-history-list: func(device-id: string) -> result<string, string>;
     /// 认证域设置项写入（内核 `settings` 表，键白名单：`pairing_code_ttl` /
     /// `qr_token_ttl`，值为十进制秒数）。读取走宿主配置面（`host-config` / 宿主命令面）；
     /// 白名单外键一律拒绝——设置表是宿主真源，不接受插件写入任意键。
     auth-setting-set: func(key: string, value: string) -> result<_, string>;
-    /// 清空某设备的连接历史（v19 函数级追加，票 14）：删除 `connection_history`
-    /// 中该 `device-id` 的全部记录，返回是否命中了至少一条。
-    /// 与 `trusted-device-revoke` 的连带删除同语义（那是撤销配对时的隐式清理，
-    /// 本函数是设备页「清空历史」按钮的显式动作）；**不影响配对状态**。
-    connection-history-clear: func(device-id: string) -> result<bool, string>;
 
-    // ==================== v19 函数级追加（票 07：认证链 HTTP 面下沉） ====================
-    // 定位：认证**执行编排**移插件（用户裁定，ADR 0022 修订口径），但密钥托管、
-    // `pairings` / `connection_history` 表与生物凭证公钥**留宿主**——本组原语是
-    // 插件编排回调宿主统一认证的引擎面。全部为无业务语义的记录/密码学存取。
+    // ==================== v24：认证记录下沉（2026-09-22 用户裁定） ====================
+    // 用户裁定：`pairings` / `connection_history` 不再留宿主主库（§8「留宿主」
+    // 口径撤销），认证记录归认证中心（`com.bedcode.terminal-session`）私有库，
+    // 经其互调 api（`auth-records-import` / `devices-list` / `history-list`）服务。
+    // 宿主 host-auth 记录面原语（v18/v19 七函数：trusted-devices-list /
+    // trusted-device-revoke / connection-history-list / connection-history-clear /
+    // trusted-device-upsert / trusted-device-touch / connection-history-record）
+    // 随之**退役删除**。旧产物（v23 SDK 构建）在 activate 期拿到点明新形态的
+    // 错误，须按 v24 SDK 重建。
+    //
+    // 保留面（凭据与密码学不动，§8 红线）：secret-store 密钥托管、生物凭证
+    // 公钥托管 + 验签执行（biometric-*，宿主 `plugin_secrets`）、JWT 签发/验签
+    // （device-token-*）、链路身份（link-identity-parts）。
 
-    /// 信任记录写入（内核 `add_pairing` 语义：同名设备按指纹归并更新
-    /// connect_count / last_seen，`uidHash` 命中时复用原记录 id 防历史分裂）。
-    /// record-json（camelCase）：`{ deviceName, fingerprint, publicKey?,
-    /// address?, uidHash? }`——`publicKey` **缺省 = 保留既有值**（传空串会清掉
-    /// 生物凭证，缺省语义专防此坑）。返回配对记录 id（幂等归并后命中的 id）。
-    trusted-device-upsert: func(record-json: string) -> result<string, string>;
-    /// 连接计数 / last_seen 刷新（内核 `update_pairing_last_seen` 语义：
-    /// 不改设备名——HTTP 重认证路径无客户端地址上下文，名称刷新由 WS 路径承担）。
-    trusted-device-touch: func(fingerprint: string) -> result<_, string>;
-    /// 连接历史追加（内核 `record_connection_event_by_fingerprint` 语义：
-    /// 指纹不存在时静默跳过——挑战签发失败路径依赖此语义）。
-    /// record-json：`{ fingerprint, method, result, address? }`
-    /// （method/result 为内核常量字符串：`PAIRING_CODE|QR|JWT|BIOMETRIC` ×
-    /// `SUCCESS|FAILED`）。
-    connection-history-record: func(record-json: string) -> result<_, string>;
-    /// 「已配对且绑定生物凭证公钥」查询（挑战签发闸门；判定 = 记录存在、
-    /// `is-active` 且 `public_key` 非空）。公钥本身**不出口**（凭据红线）。
+    /// 「已配对且绑定生物凭证公钥」查询（挑战签发闸门；判定 = 宿主托管公钥存在
+    /// （`plugin_secrets`）。配对状态由认证中心私有库判定（插件侧先查自己库）。
+    /// 公钥本身**不出口**（凭据红线）。
     biometric-credential-bound: func(fingerprint: string) -> result<bool, string>;
     /// 生物认证签名验证（P-256 ECDSA，SPKI DER base64 公钥 + r||s base64 签名）：
-    /// 用**宿主托管**的绑定公钥验 `message`，返回验签结果；未配对 / 未绑定
-    /// 公钥返回 `ok(false)`。密钥与公钥不出宿主（凭据红线），验签执行点在宿主。
+    /// 用**宿主托管**的绑定公钥验 `message`，返回验签结果；未绑定公钥返回
+    /// `ok(false)`。密钥与公钥不出宿主（凭据红线），验签执行点在宿主。
     biometric-verify-signature: func(fingerprint: string, message: string, signature: string) -> result<bool, string>;
-    /// 绑定/解绑生物凭证公钥（内核 `update_pairing_public_key` 语义：**只改凭证
-    /// 不动 connect_count / last_seen**——与认证登录路径的计数语义刻意不同）。
-    /// `public-key` 空串 = 解绑。未配对返回 `ok(false)`；成功 `ok(true)`。
+    /// 绑定/解绑生物凭证公钥（宿主托管语义：**只改凭证不动计数**——与认证登录
+    /// 路径的计数语义刻意不同）。`public-key` 空串 = 解绑。未找到配对记录返回
+    /// `ok(false)`；成功 `ok(true)`。
     biometric-credential-bind: func(fingerprint: string, public-key: string) -> result<bool, string>;
     /// 链路身份 Kd 公钥材料读取（`link_crypto::identity_parts` 语义）：
     /// `ok(none)` = 身份未就绪。JSON：`{ publicB64, fingerprint }`。
