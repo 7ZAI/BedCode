@@ -60,6 +60,12 @@ pub(super) async fn setup_host() -> PluginHost {
     ));
 
     wasm_host_ctx.security().set_monitor(wasm_runtime.monitor());
+    // v24 认证记录下沉：认证中心（terminal-session）配对/历史真源在插件私有库。
+    // 无头测试无 AppHandle，注入进程级临时根使激活建表/播种/断言可达私有库
+    // （auth-policy 闭环等依赖）
+    wasm_host_ctx.set_plugin_db_root(Some(
+        std::env::temp_dir().join(format!("bedcode-hosttest-pluginroot-{}", std::process::id())),
+    ));
 
     PluginHost {
         plugins: Arc::new(RwLock::new(HashMap::new())),

@@ -151,10 +151,16 @@ fn a03_p1b_wasip3_artifact_full_closed_loop() {
     if let Some(ctx) = Arc::get_mut(&mut host_ctx) {
         let isolate = std::env::temp_dir().join(format!("bedcode_a03_p1b_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&isolate);
-        ctx.plugin_db_root = Some(isolate);
+        ctx.set_plugin_db_root(Some(isolate));
     }
     let mut plugin = wasm_runtime
-        .load_plugin_from_file(&wasm_path, "com.bedcode.terminal-session", Arc::clone(&host_ctx), &[], None)
+        .load_plugin_from_file(
+            &wasm_path,
+            "com.bedcode.terminal-session",
+            Arc::clone(&host_ctx),
+            &[],
+            None,
+        )
         .expect("load wasip3 session: all imports must resolve");
 
     assert_eq!(plugin.activate().expect("activate"), 0, "activate 必须成功");

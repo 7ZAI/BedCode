@@ -1,9 +1,8 @@
 //! 系统组件（capability 路由 / 认证策略闭环 / trap 隔离 / boot 次序）用例。
 
-use super::*;
 use super::scaffold::*;
 use super::wasm_flow_test::*;
-
+use super::*;
 
 /// 系统组件 fixture 插件 ID（与 packages/plugin-system-test 的 manifest 一致）
 const TEST_SYSTEM_PLUGIN_ID: &str = "com.bedcode.system-test";
@@ -211,8 +210,10 @@ async fn test_server_auth_policy_closed_loop() {
     let mut loaded = make_plugin(session_id, PluginSource::Wasm, PluginState::Loaded);
     loaded.manifest.rust_library = "bedcode_plugin_terminal_session".to_string();
     // 权限经 manifest 声明在 activate 时授予（生产装配路径；手工 grant 会被
-    // activate 的 manifest 重新授权覆盖）
-    loaded.manifest.permissions = vec!["auth".to_string(), "peer".to_string()];
+    // activate 的 manifest 重新授权覆盖）。storage 必要：认证记录下沉（v24）后
+    // 配对真源在插件私有库（host-plugin-database 走 storage 权限门）
+    loaded.manifest.permissions =
+        vec!["auth".to_string(), "peer".to_string(), "storage".to_string()];
     host.plugins.write().await.insert(session_id.to_string(), loaded);
 
     host.wasm_host_ctx().api_registry().register(session_id, &[]);
@@ -250,46 +251,57 @@ async fn test_server_auth_policy_closed_loop() {
         .register(session_id, &[bridge::SESSION_MARKER_API.to_string()]);
     assert!(bridge::session_active(host.wasm_host_ctx()));
 
-    // 内核无配对记录 → 放行（无信任锚点，仅凭验签；搬迁前语义）
+    // 私有库无配对记录 → 放行（无信任锚点，仅凭验签；搬迁前语义）
     assert!(
         bridge::enforce_connection_policy(&host, &valid_token).is_ok(),
-        "内核无记录 → 放行"
+        "私有库无记录 → 放行"
     );
 
-    // 内核写入活跃配对记录（配对完成流的宿主写入路径）→ 放行
+    // 认证中心私有库写入活跃配对记录（v24 下沉后真源在私有库）→ 放行
+    // activate 已建表（auth_records::ensure_schema_via_host），此处直写播种
     {
-        let db = host.wasm_host_ctx().database().lock().await;
-        db.conn()
-            .execute(
-                "INSERT INTO pairings (id, device_name, device_fingerprint, public_key, address, \
-                 paired_at, connect_count, is_active) VALUES (?1, 'Pixel 9', 'fp-abc', 'pk', NULL, \
-                 '2026-09-19T00:00:00Z', 1, 1)",
-                rusqlite::params![PAIRING_ID],
-            )
-            .expect("seed kernel pairing");
+        let db_path = std::env::temp_dir()
+            .join(format!("bedcode-hosttest-pluginroot-{}", std::process::id()))
+            .join(bridge::SESSION_PLUGIN_ID)
+            .join("plugin.db");
+        let conn = rusqlite::Connection::open(&db_path)
+            .unwrap_or_else(|e| panic!("打开认证中心私有库失败 {}: {e}", db_path.display()));
+        let _ = conn.busy_timeout(std::time::Duration::from_secs(10));
+        conn.execute(
+            "INSERT OR REPLACE INTO auth_pairings \
+             (id, device_name, device_fingerprint, address, uid_hash, paired_at, \
+              last_seen, connect_count, is_active) \
+             VALUES (?1, 'Pixel 9', 'fp-abc', NULL, NULL, '2026-09-19T00:00:00Z', NULL, 1, 1)",
+            rusqlite::params![PAIRING_ID],
+        )
+        .expect("seed auth_pairings");
     }
     assert!(
         bridge::enforce_connection_policy(&host, &valid_token).is_ok(),
         "已配对设备 → 放行"
     );
 
-    // 经插件撤销（软删内核真源）→ 拒绝（拒绝原因必须可读）
+    // 经插件撤销（软删私有库真源）→ 拒绝（拒绝原因必须可读）
     let revoked = host
         .invoke_rust_command(session_id, "session.trust.revoke", json!({"id": PAIRING_ID}))
         .await
         .expect("session.trust.revoke");
     assert_eq!(revoked["removed"], true);
     {
-        let db = host.wasm_host_ctx().database().lock().await;
-        let active: i32 = db
-            .conn()
+        let db_path = std::env::temp_dir()
+            .join(format!("bedcode-hosttest-pluginroot-{}", std::process::id()))
+            .join(bridge::SESSION_PLUGIN_ID)
+            .join("plugin.db");
+        let conn = rusqlite::Connection::open(&db_path)
+            .unwrap_or_else(|e| panic!("打开认证中心私有库失败 {}: {e}", db_path.display()));
+        let active: i32 = conn
             .query_row(
-                "SELECT is_active FROM pairings WHERE id = ?1",
+                "SELECT is_active FROM auth_pairings WHERE id = ?1",
                 rusqlite::params![PAIRING_ID],
                 |row| row.get(0),
             )
             .expect("软删保留记录");
-        assert_eq!(active, 0, "撤销由插件写内核真源（host-auth 记录面）");
+        assert_eq!(active, 0, "撤销由插件写私有库真源（is_active = 0）");
     }
     let deny = bridge::enforce_connection_policy(&host, &valid_token).expect_err("撤销后必须拒绝");
     assert!(deny.contains("revoked"), "拒绝原因可读: {}", deny);
@@ -551,4 +563,3 @@ async fn test_boot_activates_system_components_before_app_plugins() {
         _ => panic!("both plugins must record activated_at"),
     }
 }
-

@@ -41,3 +41,15 @@
 - **留宿主**：secret-store（`jwt.key` 及全部密钥托管）、`pairings` / `connection_history` 表、生物凭证公钥托管与验签执行（新原语）、link_crypto 身份。
 - **移插件**：七端点编排、配对码 / QR / 挑战状态机、JWT 签发与 Claims 构造、连接历史与信任记录的**调用决策**（经原语写）。
 - 桌面命令面（`commands/system.rs` → `auth_center` 桥接 → 插件）不动，其 D7 降级轨保留（HTTP 面无降级 = 用户裁定的「常开」语义）。
+
+## Comments（追加，2026-09-22 认证记录下沉）
+
+### ④ 2026-09-22 用户裁定：认证记录下沉，逆转本票「信任表留宿主」结论
+
+本票 §③ 的「`pairings` / `connection_history` 表留宿主」结论被替换（`.scratch/2026-09-22-auth-records-downsize/spec.md`，ready-for-agent 已实施完成）：
+
+- 配对设备 / 连接历史真源 → 认证中心私有库 `auth_records` 域（`auth_pairings` / `auth_connection_history`）；宿主主库两表 + `session_configs` 退役（schema.sql 删 CREATE，存量由宿主 handoff `plugin/auth_records_migration.rs` 一次性迁入，成功即 DROP）
+- host-auth **记录面原语**（trusted-devices-list / revoke、connection-history-list，本票 ① 表的上四行）+ host-session 配置读取面随表退役（WIT/SDK/ABI v24）
+- **保持宿主**（不变）：secret-store（`jwt.key`）、生物凭证公钥托管与验签执行（迁移后键位 `plugin_secrets` key=`biometric:<fp>`）、link_crypto 身份、`auth-policy` capability（策略取用，传输失败回退放行）
+- WS 认证/断连的配对记录刷新改经互调 api 通知认证中心（`connection-touch` / `connection-close`，异步 fire-and-forget 防 actix current_thread 自锁）
+- 本票验收单中「信任表写面经 host-auth 原语（upsert/touch/history-record），`pairings` / `connection_history` 表仍留宿主」一项随 v24 退役；七端点编排下沉与 JWT 同构、网关公开路由等其余验收不变
