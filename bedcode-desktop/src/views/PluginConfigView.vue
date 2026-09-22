@@ -240,7 +240,12 @@
 import { ref, onMounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { pluginGetInfo, pluginStorageGet, pluginStorageSet } from '@/plugin/commands'
+import {
+  ensureHostCredential,
+  pluginGetInfo,
+  pluginStorageGet,
+  pluginStorageSet,
+} from '@/plugin/commands'
 import PluginPageToolbar from '@/plugin/components/PluginPageToolbar.vue'
 import { Select } from '@/components'
 import { useToast } from '@/composables/useToast'
@@ -382,8 +387,8 @@ async function loadConfig(): Promise<void> {
       return
     }
 
-    // 从 storage 读取已保存的配置
-    const saved = await pluginStorageGet(pluginId.value, 'config')
+    // 从 storage 读取已保存的配置（宿主凭证：宿主配置页读写插件存储的职权，审计票 06）
+    const saved = await pluginStorageGet(pluginId.value, 'config', await ensureHostCredential())
     const defaults = buildDefaults(schema)
     configValues.value = saved ? { ...defaults, ...saved } : defaults
   } catch (e: any) {
@@ -398,7 +403,12 @@ async function saveConfig(): Promise<void> {
   if (!configSchema.value) return
   saving.value = true
   try {
-    await pluginStorageSet(pluginId.value, 'config', { ...configValues.value })
+    await pluginStorageSet(
+      pluginId.value,
+      'config',
+      { ...configValues.value },
+      await ensureHostCredential(),
+    )
     toast.success(t('desktop.plugin.configSaved'))
   } catch (e: any) {
     toast.error(t('desktop.plugin.saveConfigFailed'))

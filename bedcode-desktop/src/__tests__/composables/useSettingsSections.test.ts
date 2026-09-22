@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { getPluginRegistry } from '@/plugin/registry'
 import { createPluginContext } from '@/plugin/context'
 import {
@@ -8,6 +8,13 @@ import {
 } from '@/composables/useSettingsSections'
 import { isValidPermission, hasPermissionForApi } from '@/plugin/permission'
 import { makePluginInfo } from '@/__tests__/fixtures/plugin'
+
+// 前端通道身份（审计票 06）：createPluginContext 需要宿主签发的通道令牌
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: vi.fn(async (cmd: string) =>
+    cmd === 'plugin_frontend_loader_session' ? 'loader-session' : 'channel-token',
+  ),
+}))
 
 /**
  * 设置分组扩展点测试 — 注册 / 排序 / 权限门 / 停用与 error 态摘除
@@ -186,14 +193,16 @@ describe('ui:settings 权限门', () => {
     expect(hasPermissionForApi(['ui:sidebar'], 'ui.registerSettingsSection')).toBe(false)
   })
 
-  it('缺 ui:settings 权限时 registerSettingsSection 抛错，授权后返回可释放句柄', () => {
-    const denied = createPluginContext(makePluginInfo({ id: 'com.bedcode.denied', permissions: [] }))
+  it('缺 ui:settings 权限时 registerSettingsSection 抛错，授权后返回可释放句柄', async () => {
+    const denied = await createPluginContext(
+      makePluginInfo({ id: 'com.bedcode.denied', permissions: [] }),
+    )
     expect(() =>
       denied.ui.registerSettingsSection({ id: 'x', titleKey: 'x.title', component: {} }),
     ).toThrow(/lacks permission for ui\.registerSettingsSection/)
 
     const registry = getPluginRegistry()
-    const granted = createPluginContext(
+    const granted = await createPluginContext(
       makePluginInfo({ id: 'com.bedcode.granted', permissions: ['ui:settings'] }),
     )
     const d = granted.ui.registerSettingsSection({

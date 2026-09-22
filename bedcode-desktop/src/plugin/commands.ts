@@ -8,6 +8,30 @@ import { invoke } from '@tauri-apps/api/core'
 import { logger } from '@/utils/frontendLogger'
 import type { PluginInfo } from './types'
 
+// ==================== 前端通道身份（审计票 06 / P0-5） ====================
+
+/**
+ * 宿主面凭证（loader 会话密钥）缓存
+ *
+ * 宿主前端 bootstrap 在**导入任何插件模块之前**调用 {@link ensureHostCredential} 取得它，
+ * 之后一直复用（页面加载时由宿主 `on_page_load` 钩子重置，本缓存随页面卸载一起消失）。
+ * 插件前端拿不到它：密钥「首个调用者生效」，插件代码开始运行时已被宿主占位。
+ */
+let hostCredentialCache: string | null = null
+
+/**
+ * 取得宿主面凭证（幂等）：宿主面命令（`pluginInvoke` / 插件存储 / fs 授权应答）的凭证来源
+ *
+ * 必须在插件模块导入前调用一次（`pluginLoader.loadAll()` 首行）；之后的宿主调用点复用缓存。
+ */
+export async function ensureHostCredential(): Promise<string> {
+  if (hostCredentialCache) return hostCredentialCache
+  hostCredentialCache = await invoke<string>('plugin_frontend_loader_session')
+  logger.log('[PluginCmd] host credential acquired (loader session)')
+  return hostCredentialCache
+}
+
+
 /** Registry entry types from Rust backend */
 export interface CommandEntry {
   plugin_id: string
@@ -92,6 +116,19 @@ export async function pluginApprove(pluginId: string): Promise<string[]> {
   return approved
 }
 
+/**
+ * 为插件前端签发通道令牌（审计票 06；由宿主 loader 在创建 PluginContext 时调用）
+ *
+ * 需宿主面凭证 + 插件处于运行态；令牌决定插件面命令的身份（`plugin_id` 只作目标）。
+ * 令牌随停用回收，页面加载后需重新签发。
+ */
+export async function pluginChannelToken(pluginId: string): Promise<string> {
+  const loaderSession = await ensureHostCredential()
+  const token = await invoke<string>('plugin_channel_token', { pluginId, loaderSession })
+  logger.log(`[PluginCmd] pluginChannelToken(${pluginId}) issued`)
+  return token
+}
+
 /** 标记插件错误 */
 export async function pluginMarkError(pluginId: string, error: string): Promise<void> {
   return await invoke('plugin_mark_error', { pluginId, error })
@@ -133,19 +170,32 @@ export async function pluginFrontendLoadReport(
   })
 }
 
-/** 插件存储：获取值 */
-export async function pluginStorageGet(pluginId: string, key: string): Promise<any> {
-  return await invoke('plugin_storage_get', { pluginId, key })
+/** 插件存储：获取值（`credential` 决定身份：宿主凭证可读写任意插件，插件令牌只能读写自己） */
+export async function pluginStorageGet(
+  pluginId: string,
+  key: string,
+  credential: string,
+): Promise<any> {
+  return await invoke('plugin_storage_get', { pluginId, key, credential })
 }
 
 /** 插件存储：设置值 */
-export async function pluginStorageSet(pluginId: string, key: string, value: any): Promise<void> {
-  return await invoke('plugin_storage_set', { pluginId, key, value })
+export async function pluginStorageSet(
+  pluginId: string,
+  key: string,
+  value: any,
+  credential: string,
+): Promise<void> {
+  return await invoke('plugin_storage_set', { pluginId, key, value, credential })
 }
 
 /** 插件存储：删除值 */
-export async function pluginStorageDelete(pluginId: string, key: string): Promise<void> {
-  return await invoke('plugin_storage_delete', { pluginId, key })
+export async function pluginStorageDelete(
+  pluginId: string,
+  key: string,
+  credential: string,
+): Promise<void> {
+  return await invoke('plugin_storage_delete', { pluginId, key, credential })
 }
 
 /** 插件终端：发送输入 */
@@ -153,8 +203,24 @@ export async function pluginTerminalSendInput(
   pluginId: string,
   sessionId: string,
   text: string,
+  credential: string,
 ): Promise<void> {
-  return await invoke('plugin_terminal_send_input', { pluginId, sessionId, text })
+  return await invoke('plugin_terminal_send_input', { pluginId, sessionId, text, credential })
+}
+
+/**
+ * 回复文件系统授权请求（宿主面命令：需宿主凭证）
+ *
+ * 授权请求事件是广播的，插件前端也能监听到——命令绑定宿主凭证后，
+ * 插件无法替用户「同意」自己的文件访问请求（审计票 06）。
+ */
+export async function pluginFsAuthRespond(
+  requestId: string,
+  allowed: boolean,
+  remember: boolean,
+): Promise<void> {
+  const credential = await ensureHostCredential()
+  return await invoke('plugin_fs_auth_respond', { requestId, allowed, remember, credential })
 }
 
 /** 获取所有命令 */
@@ -179,13 +245,19 @@ export interface PluginCommandEntry {
   title: string
 }
 
-/** 调用 Rust 插件的自定义 command */
+/**
+ * 调用 Rust 插件的自定义 command
+ *
+ * `credential` 决定身份（审计票 06）：宿主面凭证可驱动任意插件的 command（宿主 UI 职权），
+ * 插件令牌只能驱动自己的 command。
+ */
 export async function pluginInvoke(
   pluginId: string,
   command: string,
-  args?: unknown,
+  args: unknown,
+  credential: string,
 ): Promise<unknown> {
-  return await invoke('plugin_invoke', { pluginId, command, args: args ?? null })
+  return await invoke('plugin_invoke', { pluginId, command, args: args ?? null, credential })
 }
 
 /** 获取所有 Rust 插件的 command 列表 */

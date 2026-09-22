@@ -14,7 +14,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { logger } from '@/utils/frontendLogger'
-import { pluginInvoke } from '@/plugin/commands'
+import { ensureHostCredential, pluginInvoke } from '@/plugin/commands'
 import {
   listSessions,
   writeToSession,
@@ -47,7 +47,14 @@ export const useSessionStore = defineStore('session', () => {
    * 未命中返回 null（配置已删除 / 会话由移动端创建）
    */
   async function loadSessionConfig(configId: string): Promise<SessionConfig | null> {
-    const configs = (await pluginInvoke(SESSION_PLUGIN_ID, 'session.config.list')) as SessionConfig[]
+    // 宿主面命令：带宿主凭证（身份由凭证绑定，非参数自报；审计票 06）
+    const credential = await ensureHostCredential()
+    const configs = (await pluginInvoke(
+      SESSION_PLUGIN_ID,
+      'session.config.list',
+      undefined,
+      credential,
+    )) as SessionConfig[]
     return configs.find((c) => c.id === configId) ?? null
   }
 
@@ -59,7 +66,7 @@ export const useSessionStore = defineStore('session', () => {
    */
   async function stopSession(sessionId: string) {
     logger.log('stopSession called with sessionId:', sessionId)
-    await pluginInvoke(SESSION_PLUGIN_ID, 'session.close', { sessionId })
+    await pluginInvoke(SESSION_PLUGIN_ID, 'session.close', { sessionId }, await ensureHostCredential())
     sessions.value = await listSessions()
   }
 

@@ -28,7 +28,6 @@ function makePlugin(overrides: Partial<PluginInfo> = {}): PluginInfo {
     description: '',
     author: 'tester',
     main: 'index.js',
-    sandbox: 'inline',
     pluginType: 'ts-only',
     rustLibrary: '',
     permissions: ['storage', 'process:run', 'pty:spawn'],

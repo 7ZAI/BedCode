@@ -44,7 +44,7 @@
  */
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { logger } from '@/utils/frontendLogger'
-import { pluginListCommands, pluginInvoke, type CommandEntry } from '../commands'
+import { ensureHostCredential, pluginListCommands, pluginInvoke, type CommandEntry } from '../commands'
 import { pluginLoader } from '../loader'
 
 const visible = ref(false)
@@ -93,7 +93,7 @@ async function executeCommand(cmd: CommandEntry) {
 
   // Rust 插件（WASM）：通过 pluginInvoke 路由到 PluginHost
   try {
-    await pluginInvoke(cmd.plugin_id, cmd.command_id)
+    await pluginInvoke(cmd.plugin_id, cmd.command_id, undefined, await ensureHostCredential())
   } catch (e: any) {
     logger.error(`[PluginCommandPalette] Failed to execute ${cmd.command_id}:`, e)
   }

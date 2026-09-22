@@ -109,7 +109,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-import { invoke } from '@tauri-apps/api/core'
+import { pluginFsAuthRespond } from '@/plugin/commands'
 
 const { t } = useI18n()
 
@@ -157,22 +157,14 @@ async function allow() {
   if (!request.value) return
   const { requestId } = request.value
   request.value = null
-  await invoke('plugin_fs_auth_respond', {
-    requestId,
-    allowed: true,
-    remember: remember.value,
-  })
+  await pluginFsAuthRespond(requestId, true, remember.value)
 }
 
 async function deny() {
   if (!request.value) return
   const { requestId } = request.value
   request.value = null
-  await invoke('plugin_fs_auth_respond', {
-    requestId,
-    allowed: false,
-    remember: false,
-  })
+  await pluginFsAuthRespond(requestId, false, false)
 }
 </script>
 

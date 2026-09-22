@@ -34,24 +34,20 @@ class PluginLoaderClass {
    */
   async loadAll(): Promise<void> {
     logger.log('[PluginLoader] loadAll() started')
+    // 审计票 06：宿主面凭证必须在本方法导入任何插件模块之前取得——插件代码只在模块被导入后
+    // 才运行，密钥「首个调用者生效」因此恒由宿主前端赢得（见 plugin/security/frontend_channel.rs）
+    await pluginCmds.ensureHostCredential()
     const manifests = await pluginCmds.pluginListLoaded()
     logger.log(`[PluginLoader] Found ${manifests.length} plugin(s) from backend`)
 
     for (const manifest of manifests) {
       logger.log(
-        `[PluginLoader] Processing plugin: ${manifest.id} (type=${manifest.pluginType}, state=${manifest.state.state}, sandbox=${manifest.sandbox})`,
+        `[PluginLoader] Processing plugin: ${manifest.id} (type=${manifest.pluginType}, state=${manifest.state.state})`,
       )
 
       // Rust-only 插件：Rust 端已通过静态注册激活，前端无需加载
       if (manifest.pluginType === 'rust') {
         logger.log(`[PluginLoader] Rust plugin ${manifest.id} managed by backend, skipping`)
-        continue
-      }
-
-      if (manifest.sandbox !== 'inline') {
-        logger.warn(
-          `[PluginLoader] Skipping ${manifest.id}: unsupported sandbox mode "${manifest.sandbox}"`,
-        )
         continue
       }
 
@@ -105,7 +101,7 @@ class PluginLoaderClass {
       await this.reportLoadDiagnostic(manifest.id, 'import', true)
 
       stage = 'activate'
-      const context = createPluginContext(manifest)
+      const context = await createPluginContext(manifest)
       await this.activateWithTimeout(module, context, ACTIVATE_TIMEOUT)
       logger.log(`[PluginLoader] Frontend activate() called: ${manifest.id}`)
       await this.reportLoadDiagnostic(manifest.id, 'activate', true)
@@ -152,7 +148,7 @@ class PluginLoaderClass {
       await this.reportLoadDiagnostic(manifest.id, 'import', true)
 
       stage = 'activate'
-      const context = createPluginContext(manifest)
+      const context = await createPluginContext(manifest)
       await this.activateWithTimeout(module, context, ACTIVATE_TIMEOUT)
       logger.log(`[PluginLoader] Frontend activate() called: ${manifest.id}`)
       await this.reportLoadDiagnostic(manifest.id, 'activate', true)
@@ -325,7 +321,7 @@ class PluginLoaderClass {
       await this.reportLoadDiagnostic(pluginId, 'import', true)
 
       stage = 'activate'
-      const context = createPluginContext(info)
+      const context = await createPluginContext(info)
       await this.activateWithTimeout(module, context, ACTIVATE_TIMEOUT)
       await this.reportLoadDiagnostic(pluginId, 'activate', true)
 
@@ -352,6 +348,8 @@ class PluginLoaderClass {
   /** 加载 inline 模式插件 */
   private async loadInline(manifest: PluginInfo): Promise<void> {
     const ACTIVATE_TIMEOUT = 5000
+    // 宿主面凭证（幂等缓存）：热重载/按需激活路径可能不经过 loadAll
+    await pluginCmds.ensureHostCredential()
     // 失败上报需标注发生在哪一步（issue 04：导入/激活/失败三条路径各上报一次）
     let stage: 'import' | 'activate' = 'import'
 
@@ -369,8 +367,8 @@ class PluginLoaderClass {
       await this.reportLoadDiagnostic(manifest.id, 'import', true)
 
       stage = 'activate'
-      // 创建 PluginContext
-      const context = createPluginContext(manifest)
+      // 创建 PluginContext（异步：先换本插件的前端通道令牌，见 createPluginContext）
+      const context = await createPluginContext(manifest)
 
       // 调用 activate
       await this.activateWithTimeout(module, context, ACTIVATE_TIMEOUT)

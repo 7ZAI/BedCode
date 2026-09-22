@@ -38,7 +38,14 @@ vi.mock('@/utils/terminalInitialSize', () => ({
     computeDesktopInitialTerminalSize(...(args as [])),
 }))
 
-function makeContext(permissions: string[]) {
+// 前端通道身份（审计票 06）：createPluginContext 需要宿主签发的通道令牌
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: vi.fn(async (cmd: string) =>
+    cmd === 'plugin_frontend_loader_session' ? 'loader-session' : 'channel-token',
+  ),
+}))
+
+async function makeContext(permissions: string[]) {
   const info = {
     id: 'com.test.plugin',
     name: 'Test',
@@ -46,7 +53,6 @@ function makeContext(permissions: string[]) {
     description: '',
     author: '',
     main: 'index.js',
-    sandbox: 'inline',
     pluginType: 'ts-only',
     permissions,
     state: { state: 'Activated' },
@@ -55,7 +61,7 @@ function makeContext(permissions: string[]) {
     source: 'builtin',
     sizeBytes: 0,
   } as unknown as PluginInfo
-  return createPluginContext(info)
+  return await createPluginContext(info)
 }
 
 describe('PluginContext.session 终端窗口原语', () => {
@@ -70,7 +76,7 @@ describe('PluginContext.session 终端窗口原语', () => {
   })
 
   it('C1 无 session:read 权限时四个方法均快速失败并指名 api', async () => {
-    const ctx = makeContext([])
+    const ctx = await makeContext([])
 
     await expect(ctx.session.predictTerminalSize()).rejects.toThrow(
       'lacks permission for session.predictTerminalSize',
@@ -90,7 +96,7 @@ describe('PluginContext.session 终端窗口原语', () => {
   })
 
   it('C2 openTerminal 委派宿主窗口管理器并回传是否新建窗口', async () => {
-    const ctx = makeContext(['session:read'])
+    const ctx = await makeContext(['session:read'])
 
     await expect(ctx.session.openTerminal({ id: 's-1', name: 'dev' })).resolves.toBe(true)
     expect(openTerminalWindow).toHaveBeenCalledWith({ id: 's-1', name: 'dev' })
@@ -101,7 +107,7 @@ describe('PluginContext.session 终端窗口原语', () => {
   })
 
   it('C3 closeTerminal 委派宿主窗口管理器（参数为会话 id）', async () => {
-    const ctx = makeContext(['session:read'])
+    const ctx = await makeContext(['session:read'])
 
     await ctx.session.closeTerminal('s-9')
     expect(closeTerminalWindow).toHaveBeenCalledWith('s-9')
@@ -110,7 +116,7 @@ describe('PluginContext.session 终端窗口原语', () => {
   it('C4 predictTerminalSize 以宿主设置字体大小 + 窗口创建比例调用宿主预测', async () => {
     const settingsStore = useSettingsStore()
     settingsStore.settings.ui.terminal_font_size = 15
-    const ctx = makeContext(['session:read'])
+    const ctx = await makeContext(['session:read'])
 
     await expect(ctx.session.predictTerminalSize()).resolves.toEqual({ cols: 120, rows: 30 })
     expect(computeDesktopInitialTerminalSize).toHaveBeenCalledWith(15, { widthRatio: 0.6 })
@@ -118,13 +124,13 @@ describe('PluginContext.session 终端窗口原语', () => {
 
   it('C5 预测不可用（null）时原样返回，由宿主兜底默认网格', async () => {
     computeDesktopInitialTerminalSize.mockResolvedValue(null as never)
-    const ctx = makeContext(['session:read'])
+    const ctx = await makeContext(['session:read'])
 
     await expect(ctx.session.predictTerminalSize()).resolves.toBeNull()
   })
 
-  it('C6 isTerminalOpen 同步反映宿主窗口登记事实（决定是否显示就绪 loading）', () => {
-    const ctx = makeContext(['session:read'])
+  it('C6 isTerminalOpen 同步反映宿主窗口登记事实（决定是否显示就绪 loading）', async () => {
+    const ctx = await makeContext(['session:read'])
 
     hasTerminalWindow.mockReturnValue(false)
     expect(ctx.session.isTerminalOpen('s-1')).toBe(false)
@@ -136,7 +142,7 @@ describe('PluginContext.session 终端窗口原语', () => {
 
   it('C7 会话中心插件未激活时终端窗口三方法显性报错，不委派宿主窗口管理器（票 05）', async () => {
     getPluginRegistry().setPluginState(SESSION_PLUGIN_ID, { state: 'Deactivated' })
-    const ctx = makeContext(['session:read'])
+    const ctx = await makeContext(['session:read'])
 
     await expect(ctx.session.openTerminal({ id: 's-1', name: 'dev' })).rejects.toThrow(
       'session plugin com.bedcode.terminal-session is not active',

@@ -23,6 +23,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { useSessionStore } from '@/stores/session'
+import { ensureHostCredential } from '@/plugin/commands'
 import { makeSessionInfo } from '@/__tests__/fixtures/index'
 
 /** IPC 边界 mock（invoke 是唯一跨进程 seam） */
@@ -41,8 +42,14 @@ function argsOf(cmd: string): unknown[] {
   return call ? call.slice(1) : []
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   mockInvoke.mockReset()
+  // 前端通道身份（审计票 06）：宿主凭证/令牌获取在用例断言范围之外——统一给固定值，
+  // 并在每个用例前预热凭证缓存（否则首个用例的 invoke 调用列表会多出一次取凭证）
+  mockInvoke.mockImplementation(async (cmd: string) =>
+    cmd === 'plugin_frontend_loader_session' ? 'loader-session' : undefined,
+  )
+  await ensureHostCredential()
   setActivePinia(createPinia())
 })
 
@@ -100,6 +107,7 @@ describe('Session Store', () => {
         pluginId: SESSION_PLUGIN_ID,
         command: 'session.config.list',
         args: null,
+        credential: 'loader-session',
       })
     })
 
@@ -139,6 +147,7 @@ describe('Session Store', () => {
           pluginId: SESSION_PLUGIN_ID,
           command: 'session.close',
           args: { sessionId: 'session-1' },
+          credential: 'loader-session',
         },
       ])
       expect(store.sessions).toEqual([])

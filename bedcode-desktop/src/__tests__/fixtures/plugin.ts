@@ -92,7 +92,6 @@ export interface PluginInfoFixture {
   description: string
   author: string
   main: string
-  sandbox: string
   pluginType: PluginType
   /** WASM 库文件名（无 rust 库的插件为空字符串，Rust 恒序列化） */
   rustLibrary: string
@@ -120,7 +119,6 @@ export const PLUGIN_INFO_DTO_FIELDS = [
   'description',
   'author',
   'main',
-  'sandbox',
   'pluginType',
   'rustLibrary',
   'permissions',
@@ -141,7 +139,6 @@ export function makePluginInfo(overrides: Partial<PluginInfoFixture> = {}): Plug
     description: 'A demo plugin',
     author: 'BedCode Team',
     main: 'dist/main.js',
-    sandbox: 'inline',
     pluginType: 'ts-only',
     rustLibrary: '',
     permissions: [],
@@ -187,7 +184,6 @@ type PluginScalarKeys =
   | 'description'
   | 'author'
   | 'main'
-  | 'sandbox'
   | 'pluginType'
   | 'rustLibrary'
   | 'permissions'

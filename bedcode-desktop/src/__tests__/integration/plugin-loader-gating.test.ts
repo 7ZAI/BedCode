@@ -5,7 +5,7 @@
  * - Activated：放行（现状）
  * - Degraded：也放行（实例在运行、扩展点已注册），且 console.warn 标注降级原因
  * - 其余状态（Activating 中间态 / Loaded / Error / NeedsApproval / Deactivated）：
- *   跳过；rust 类型（后端自管）与 isolated sandbox 同样跳过
+ *   跳过；rust 类型（后端自管）同样跳过
  *
  * issue 04：放行插件的导入失败路径经 plugin_frontend_load_report 上报一次
  * （宿主内部诊断通道，仅写 tracing 不入状态机）；跳过的插件零上报；
@@ -116,10 +116,9 @@ describe('pluginLoader.loadAll 启动加载门禁', () => {
             pluginType: 'rust',
             state: { state: 'Activated' },
           }),
-          // isolated sandbox 不支持，跳过
+          // sandbox 字段已退役（审计票 06：前端不做隔离）：不再参与门禁，Activated 照常放行
           makePluginInfo({
-            id: 'com.bedcode.gate-isolated',
-            sandbox: 'isolated',
+            id: 'com.bedcode.gate-retired-sandbox',
             state: { state: 'Activated' },
           }),
         ])
@@ -140,7 +139,8 @@ describe('pluginLoader.loadAll 启动加载门禁', () => {
     expect(markErrorCount('com.bedcode.gate-approval')).toBe(0)
     expect(markErrorCount('com.bedcode.gate-off')).toBe(0)
     expect(markErrorCount('com.bedcode.gate-rust')).toBe(0)
-    expect(markErrorCount('com.bedcode.gate-isolated')).toBe(0)
+    // 退役 sandbox 字段不再门禁：Activated 仍走加载（探针 = mark_error）
+    expect(markErrorCount('com.bedcode.gate-retired-sandbox')).toBe(1)
 
     // Degraded 的降级原因经 console.warn 标注（含插件 id 与原始错误串）
     const warns = consoleWarnSpy.mock.calls.map((args) => String(args[0]))
@@ -165,7 +165,6 @@ describe('pluginLoader.loadAll 启动加载门禁', () => {
       'com.bedcode.gate-approval',
       'com.bedcode.gate-off',
       'com.bedcode.gate-rust',
-      'com.bedcode.gate-isolated',
     ]) {
       expect(frontendReports(skipped)).toHaveLength(0)
     }

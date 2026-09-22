@@ -23,7 +23,6 @@ export interface PluginManifest {
   description: string
   author: string
   main: string
-  sandbox: 'inline' | 'isolated'
   pluginType: PluginType
   /** WASM 库文件名（仅 rust-ts 类型插件使用） */
   rustLibrary?: string
@@ -147,7 +146,6 @@ export interface PluginInfo {
   description: string
   author: string
   main: string
-  sandbox: string
   pluginType: PluginType
   /** WASM 库文件名（仅 rust-ts 类型插件使用） */
   rustLibrary?: string
