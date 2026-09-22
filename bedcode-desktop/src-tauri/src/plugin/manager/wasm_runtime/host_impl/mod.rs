@@ -113,10 +113,9 @@ pub(crate) mod tests {
     /// 本函数只确认「新增权限位确实进了两份生成物」——漏跑生成器即转红。
     pub(crate) fn generated_vocabulary_know(permission: &str) {
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let cli = std::fs::read_to_string(
-            manifest_dir.join("../packages/plugin-sdk-desktop/bin/permission-vocabulary.json"),
-        )
-        .expect("CLI 权限词汇生成物可读");
+        let cli =
+            std::fs::read_to_string(manifest_dir.join("../packages/plugin-sdk-desktop/bin/permission-vocabulary.json"))
+                .expect("CLI 权限词汇生成物可读");
         let frontend = std::fs::read_to_string(manifest_dir.join("../src/plugin/permission.vocabulary.ts"))
             .expect("前端权限词汇生成物可读");
         assert!(

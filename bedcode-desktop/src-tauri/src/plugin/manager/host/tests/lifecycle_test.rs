@@ -176,10 +176,10 @@ async fn test_deactivate_all_covers_degraded() {
             PluginState::Degraded("init failed".to_string()),
         ),
     );
-    host.plugins
-        .write()
-        .await
-        .insert(TEST_PLUGIN_ID.to_string(), make_plugin(TEST_PLUGIN_ID, PluginSource::FileScan, PluginState::Activated));
+    host.plugins.write().await.insert(
+        TEST_PLUGIN_ID.to_string(),
+        make_plugin(TEST_PLUGIN_ID, PluginSource::FileScan, PluginState::Activated),
+    );
 
     host.deactivate_all().await.unwrap();
 
@@ -188,7 +188,10 @@ async fn test_deactivate_all_covers_degraded() {
         PluginState::Deactivated,
         "Degraded 实例必须在退出流程中被停用"
     );
-    assert_eq!(host.get_plugin(TEST_PLUGIN_ID).await.unwrap().state, PluginState::Deactivated);
+    assert_eq!(
+        host.get_plugin(TEST_PLUGIN_ID).await.unwrap().state,
+        PluginState::Deactivated
+    );
 }
 
 /// 重复激活去重（审计票 09）：`Activating` 是瞬时态，此时再请求激活必须**幂等返回**

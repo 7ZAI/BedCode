@@ -509,9 +509,7 @@ fn is_self_broadcast(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugin::manager::wasm_runtime::host_impl::tests::{
-        build_host_ctx, grant_permissions,
-    };
+    use crate::plugin::manager::wasm_runtime::host_impl::tests::{build_host_ctx, grant_permissions};
 
     /// 权限门（票 01 门禁用例）：未授予 `mdns` 即拒绝浏览/广播，不触达引擎
     #[test]
@@ -533,12 +531,8 @@ mod tests {
     fn mdns_granted_passes_permission_gate() {
         let ctx = build_host_ctx();
         grant_permissions(&ctx, "com.bedcode.mdns-ok", &[PERMISSION_MDNS]);
-        let err = mdns_advertise(&ctx, "com.bedcode.mdns-ok", "not-a-json")
-            .expect_err("坏配置应报错");
-        assert!(
-            !err.contains("permission denied"),
-            "已授予 mdns 仍被权限门拒绝: {err}"
-        );
+        let err = mdns_advertise(&ctx, "com.bedcode.mdns-ok", "not-a-json").expect_err("坏配置应报错");
+        assert!(!err.contains("permission denied"), "已授予 mdns 仍被权限门拒绝: {err}");
         assert!(err.contains("invalid config"), "预期参数校验错误: {err}");
     }
 

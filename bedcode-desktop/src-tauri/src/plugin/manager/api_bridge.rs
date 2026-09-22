@@ -20,9 +20,7 @@ use tauri::State;
 /// 宿主前端在导入任何插件模块之前调用（`pluginLoader.loadAll()` 首行），插件代码开始运行时
 /// 密钥已被占位。页面加载时由 `on_page_load` 钩子重置，dev 下刷新可重新取得。
 #[tauri::command]
-pub async fn plugin_frontend_loader_session(
-    plugin_host: State<'_, Arc<PluginHost>>,
-) -> crate::Result<String> {
+pub async fn plugin_frontend_loader_session(plugin_host: State<'_, Arc<PluginHost>>) -> crate::Result<String> {
     let session = plugin_host.frontend_channel().issue_loader_session()?;
     tracing::info!("[API] plugin_frontend_loader_session: 宿主面凭证已签发");
     Ok(session)
@@ -127,10 +125,7 @@ pub async fn plugin_deactivate(plugin_id: String, plugin_host: State<'_, Arc<Plu
 /// 生效权限 = 批准 ∩ manifest 请求；批准与插件目录内容哈希绑定，
 /// 目录内容在批准后变化 → 批准自动撤销并回到 NeedsApproval。
 #[tauri::command]
-pub async fn plugin_approve(
-    plugin_id: String,
-    plugin_host: State<'_, Arc<PluginHost>>,
-) -> crate::Result<Vec<String>> {
+pub async fn plugin_approve(plugin_id: String, plugin_host: State<'_, Arc<PluginHost>>) -> crate::Result<Vec<String>> {
     tracing::info!(plugin_id = %plugin_id, "[API] plugin_approve");
     let result = plugin_host.approve_plugin(&plugin_id).await;
     if let Err(ref e) = result {

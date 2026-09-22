@@ -1,7 +1,7 @@
 //! WASM 插件实例化后的激活 / 调用 / 重载 / 定时器 / 监听器用例（含组件 fixture 脚手架）。
 
-use super::*;
 use super::scaffold::*;
+use super::*;
 
 // ==================== WASM 插件（真实组件测试插件） ====================
 
@@ -319,4 +319,3 @@ async fn test_session_listener_registration_via_services() {
     let l2 = PluginInputListener::new(TEST_PLUGIN_ID.to_string(), host);
     assert_eq!(SessionInputListener::plugin_id(&l2), Some(TEST_PLUGIN_ID));
 }
-

@@ -55,14 +55,15 @@ mod tests {
         grant_permissions(
             &ctx,
             intruder,
-            &[PERMISSION_TERMINAL_INPUT, PERMISSION_SESSION_READ, PERMISSION_SESSION_WRITE],
+            &[
+                PERMISSION_TERMINAL_INPUT,
+                PERMISSION_SESSION_READ,
+                PERMISSION_SESSION_WRITE,
+            ],
         );
 
         let err = terminal_send(&ctx, intruder, &sid, "rm -rf /").unwrap_err();
-        assert!(
-            err.contains("not owner"),
-            "非属主终端注入必须被拒，got: {err}"
-        );
+        assert!(err.contains("not owner"), "非属主终端注入必须被拒，got: {err}");
         // 权限门与属主门分档可辨：同一越权方少了 terminal:input 时报的是权限拒绝
         let outsider = "com.bedcode.no-input-perm";
         grant_permissions(&ctx, outsider, &[PERMISSION_SESSION_READ]);

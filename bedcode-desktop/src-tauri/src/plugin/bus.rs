@@ -225,7 +225,7 @@ impl MessageBus {
 
             let subscribers = subscribers_arc.read().await;
             let Some(subs) = subscribers.get(&topic) else {
-                tracing::debug!("MessageBus: no subscribers for topic '{}', message dropped", topic);
+                tracing::debug!(topic = %topic, "MessageBus: no subscribers for topic, message dropped");
                 return;
             };
 
