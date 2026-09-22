@@ -57,7 +57,7 @@ fn bundled_plugins_dir() -> PathBuf {
     assert!(
         dir.join("com.bedcode.terminal-session/bedcode_plugin_terminal_session.wasm")
             .exists(),
-        "插件产物缺失：先跑 `node scripts/plugin-build.js --plugin terminal-session`（workdir bedcode-desktop），目录 {}",
+        "插件产物缺失：先跑 `node scripts/plugin-build.js --plugin com.bedcode.terminal-session`（workdir bedcode-desktop），目录 {}",
         dir.display()
     );
     dir
