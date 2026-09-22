@@ -7,8 +7,8 @@ AGENTS §10 要求的 `cargo test`（全 target）重新成为一个真实门禁
 
 **Blocked by:** 无（纯测试面，不改生产代码）
 
-**Status:** in-progress（2026-09-22：4/5 target 绿；`http_auth_biometric` 卡在一条**真实生产漂移**，
-待用户裁决——见「实施记录」§3）
+**Status:** done（2026-09-22：五 target 全绿；`cargo test` 全 target 通过。过程中逼出一条真实生产漂移
+——已由用户授权在本票修复，见「实施记录」§3；另发现构建链一处陈旧映射，见 §6，未修、已报告）
 
 ## 现状（2026-09-22 逐 target 实测：`cargo check --test <name>`）
 
@@ -37,9 +37,11 @@ AGENTS §10 要求的 `cargo test`（全 target）重新成为一个真实门禁
 
 ## 验收
 
-- [x] `cargo check --lib --tests` 零错误（实测 0 error）；`[ ]` `cargo test`（全 target，非 `--lib`）跑绿**未达成**：
-      4/5 绿（`ws_session_route` / `pty_session_chain` / `ws_auth_rules` / `broadcast_shutdown`），
-      `http_auth_biometric` 卡在真实漂移（见实施记录 §3），待用户裁决
+- [x] `cargo check --lib --tests` 零错误（实测 0 error）；`cargo test`（全 target，非 `--lib`）**跑绿**：
+      lib **1135 passed / 0 failed** + 8 个集成 target 全 ok（`ws_session_route` 0.33s / `pty_session_chain` 0.62s /
+      `ws_auth_rules` 14.42s / `broadcast_shutdown` 1.53s / `http_auth_biometric` 0.46s /
+      `link_crypto_http` 4 passed / `server_integration` ok / `build_manifest_smoke` ok）；
+      `[skip]` 计数 **0**（插件闭环用例真的跑了，不是静默跳过）
 - [x] 逐 target 先做**归属判断**并写在票面 Comments：
       ① 语义已被 in-tree 用例覆盖（如 `src/plugin/manager/wasm_runtime/tests/session_e2e.rs`
       的会话闭环、`host_impl/tests/pty.rs` 的属主矩阵）→ 允许删除，但必须点名「被哪条用例覆盖」；
@@ -107,7 +109,7 @@ restart 按插件同一步骤 `remove_session_with_source` + 同 id 重建；WS 
 `ListSessions` / `StopSession` / `RemoveSession` 与未认证拒绝（内核路径）。**不是功能缺口**：
 插件侧编排有 lib 用例（`session_e2e.rs`，含私有库注入），见 §1 表末。
 
-### 3. 阻塞项：连接历史「认证方式 / 结果」大小写漂移（真实缺陷，本票未修）
+### 3. 真实漂移：连接历史「认证方式 / 结果」大小写（本票已修，用户 2026-09-22 授权）
 
 现象：`http_auth_biometric` T3 断言 `auth_method == "biometric" && result == "success"` 失败；
 实测库里存的是 `method="BIOMETRIC" result="SUCCESS"`。
@@ -116,16 +118,19 @@ restart 按插件同一步骤 `remove_session_with_source` + 同 id 重建；WS 
 
 - 内核取值真源：`src-tauri/src/db/models.rs` 的 `connection_method::{PAIRING_CODE,QR,BIOMETRIC,JWT}` 与
   `connection_result::{SUCCESS,FAILED}` **全为小写**，`ConnectionHistory` 文档注释写明取值集合。
-- 写入面：`plugins/terminal-session/rust/src/auth_http/mod.rs` 共 9 处字面量**全大写**
-  （行 200 / 230 / 259 / 279 / 302 / 326 / 358 / 363，`"PAIRING_CODE"` / `"QR"` / `"BIOMETRIC"` / `"JWT"` ×
-  `"SUCCESS"` / `"FAILED"`）；宿主原语 `host_impl/auth.rs::auth_connection_history_record` 与
-  `db/operations.rs::record_connection_event` **不归一化**（原样落库）。
+- 写入面：`plugins/terminal-session/rust/src/auth_http/mod.rs` 共 9 处调用点、17 处字面量**全大写**
+  （行 161/162/200/230/259/279/302/326/358/363）；宿主原语
+  `host_impl/auth.rs::auth_connection_history_record` 与 `db/operations.rs::record_connection_event`
+  **不归一化**（原样落库）。
 - 消费面（用户可见）：插件自己的前端 `plugins/terminal-session/src/composables/useConnectionHistory.ts`
   的 `METHOD_KEY_SUFFIX` 只认小写（未命中兜底 `unknown`），成功计数按 `e.result === 'success'` 判定
-  → 现状下连接历史页认证方式显示「未知」、成功/失败计数全错。
+  → 修复前连接历史页认证方式显示「未知」、成功/失败计数全错。
 
-处理：验收③要求「发现真实功能缺口停下来向用户报告，不在本票顺手补实现」→ 已停下报告。
-若不修，本 target 恒红；若修（改插件 9 处字面量为小写或抽常量），断言可原样转绿。
+处理：验收③要求「发现真实功能缺口停下来向用户报告」→ 已停下报告；用户裁决「本票顺手修」，故本票含一处
+**生产代码修复**（授权越线）：`auth_http/mod.rs` 新增 `history_value` 常量模块（小写取值，注释写明
+「大小写是对外形状、不是内部枚举，禁止统一大写」），9 处调用点全部改用它。**断言未改一字**（仍严格比小写）。
+修复后实测：`http_auth_biometric` ok（0.46s），且这条断言在修复前是红的、修复后转绿——本身就是该断言的
+承重证据（变异自检等价物）。
 
 ### 4. 一次性诊断（已还原，用于枚举 T4–T10）
 
@@ -136,14 +141,40 @@ restart 按插件同一步骤 `remove_session_with_source` + 同 id 重建；WS 
 ### 5. 门禁实测（2026-09-22 本机）
 
 - `cargo check --lib --tests`：**0 error**
-- `cargo test --test <t>` 逐个：`ws_session_route` ok(0.07s) / `pty_session_chain` ok(0.44s) /
-  `ws_auth_rules` ok(14.14s) / `broadcast_shutdown` ok(1.41s) / `http_auth_biometric` **FAILED**(0.18s，见 §3)
-- 前置：`resources/plugins/desktop/com.bedcode.terminal-session/` 产物存在（今日本机构建产物）；
-  产物缺失时四个 target **显性失败**并提示重建命令（`node scripts/plugin-build.js --plugin terminal-session`），
-  **不静默 `[skip]`**
-- 全 target `cargo test` 未跑：对侧「PTY 业务下沉」线在途（期间 lib 红过两次，已等其恢复后取数），
-  且 http target 未绿
-- 行尾：4 个 CRLF 文件改后 `CR 行数 == 总行数`；`pty_session_chain` CR=0
+- `cargo test`（**全 target**）：lib **1135 passed / 0 failed**；8 个集成 target 全 ok
+  （`ws_session_route` 0.33s / `pty_session_chain` 0.62s / `ws_auth_rules` 14.42s / `broadcast_shutdown` 1.53s /
+  `http_auth_biometric` 0.46s / `link_crypto_http` 4 passed / `server_integration` / `build_manifest_smoke`）；
+  doctest 1 passed + 2 ignored（既有 `#[ignore]` 标记，与本票无关）；`[skip]` 计数 **0**
+- 插件侧：`plugins/terminal-session/rust` 的 `cargo test` **213 passed / 0 failed**（改 `auth_http` 后复核）
+- 前置：`resources/plugins/desktop/com.bedcode.terminal-session/` 产物为**修复后重建**版本
+  （`node plugins/terminal-session/scripts/build.js --rust-only`，产物不入库）；
+  产物缺失时四个 target **显性失败**并提示重建命令
+  （`node scripts/plugin-build.js --plugin com.bedcode.terminal-session`，workdir `bedcode-desktop`），**不静默 `[skip]`**
+- 行尾：4 个 CRLF 文件改后 `CR 行数 == 总行数`；`pty_session_chain` / 插件 `auth_http/mod.rs` CR=0
+- 收尾：无残留进程与监听端口（8765 / 1420 / 5173 均空）
+- 对侧「PTY 业务下沉」线在途（`pty.rs` / `pty/pty_process.rs` / `session/session_manager.rs`），
+  期间 lib 红过两次——已等其恢复后取数，本票从未改动这三个文件
+
+### 6. 构建链发现（未修，已报告用户）
+
+标准插件构建链在本仓**当前状态下跑不通**（与本票改动无关）：
+
+```
+node scripts/plugin-build.js --plugin com.bedcode.terminal-session
+→ [manifest-gen] permissions + session:config（Rust host 调用）
+→ [plugin-build] manifest ✗ 未知权限: session:config
+→ plugin.json 校验失败（exit 1）
+```
+
+根因：`packages/plugin-sdk-desktop/bin/manifest-gen.js:63` 仍把
+`session_config_(upsert|get|delete)` 映射到 **已退役**的 `session:config`；而 v23 收掉了该权限位
+（读取面 `config-list` / `config-get` 保留为 legacy 迁移通道、`config-get` 改挂 `session:read`），
+插件 `config/ops.rs:41,59` 仍在合法调用这两个读取原语 → 自动填充注入未知权限 → 校验必挂。
+
+副作用取证：该脚本会先 `generateManifest` **改写源 `plugin.json`**（本次注入了 `session:config`），
+已 `git checkout --` 还原，工作区无残留。本票用 `--rust-only` 路径重建 wasm 产物绕过该步。
+修法（属 SDK/tooling 面，未含在本票）：映射改为 `session_config_(list|get)` → `session:read`，
+删掉已退役的 `upsert|delete` 映射。
 
 ## Comments
 
