@@ -1432,6 +1432,28 @@ pub const GIT_HTTP_ENDPOINTS: &[&str] = &["git/branches", "git/status", "git/che
 /// 认证链 HTTP 端点（票 07）：网关 /api/auth/* 七条公开路由的插件接管声明
 pub const AUTH_HTTP_ENDPOINTS: &[&str] = auth_http::AUTH_HTTP_ENDPOINTS;
 
+/// 免凭证（`auth: "none"`）端点清单——plugin.json `httpEndpoints` 里对象条目的唯一真源
+///
+/// 票 08 裁决 1：宿主对 HTTP 端点的缺省档已翻成最严档 `jwt`（未声明 auth 即要求
+/// 移动端 JWT 验签）。本清单是**仅有的两批**必须免凭证可达的端点，逐条理由：
+/// - `task-status` / `session-mode`：Claude Code / codex / pi / opencode 的 hook 脚本由
+///   插件注入 PTY 环境，拿不到 JWT，只能按环回地址匿名调用（宿主转发的 `caller`
+///   字段给 `localhost`，插件据此可自行区分，裁决 3）；
+/// - `auth/*` 七条：本身是「拿 token 之前」的公开入口（配对 / QR / 重认证 / 生物绑定），
+///   与网关别名表 `RouteAuth::Public` 同一批；票 08 起两处取较严者，故这里必须声明
+///   `none`，否则移动端配对链路会被判 401。验签执行点仍在插件 auth 域 + `host-auth`。
+pub const NO_AUTH_HTTP_ENDPOINTS: &[&str] = &[
+    "task-status",
+    "session-mode",
+    "auth/pairing",
+    "auth/verify",
+    "auth/qr-connect",
+    "auth/reauth",
+    "auth/biometric-challenge",
+    "auth/biometric-verify",
+    "auth/biometric-bind",
+];
+
 /// 业务域 HTTP 分派入口（先业务域后任务域，路径全等匹配）
 ///
 /// 返回体形状固定为 `{status, body, contentType?}`（`http_response` 辅助），

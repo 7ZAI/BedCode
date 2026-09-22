@@ -13,7 +13,9 @@
 //!    每条带归属插件与业务域，形状 golden 见 [`business_endpoint_shapes_are_locked_for_dual_track`]。
 //! 2. **验签不移动**：移动端 JWT 仍在宿主 `/api` scope 的中间件里统一校验（AGENTS.md §8 认证
 //!    红线），网关只挂在它**之后**（[`unverified_requests_never_reach_gateway`]）；转发只透传
-//!    claims 派生的设备标识，**JWT 本体与指纹不出宿主**。
+//!    claims 派生的设备标识与 [`caller`] 三档调用方身份（票 08），**JWT 本体与指纹不出宿主**。
+//!    别名条目自带的 [`RouteAuth`] 与插件端点声明的档位**取较严者**（见 [`decide`]）——
+//!    两个声明面都不得单方面把宿主要求验签的业务端点放开。
 //! 3. **不发明传输机制**：转发复用 `controllers/plugin_controller` 的同一内核
 //!    （[`forward_to_plugin`]）与同一端点声明治理（manifest `contributes.httpEndpoints`）。
 //!
@@ -38,11 +40,11 @@ use actix_web::{web, Error, FromRequest, HttpResponse};
 use serde_json::Value;
 
 use crate::server::controllers::plugin_controller::{
-    filter_plugin_request_headers, forward_to_plugin, PluginHttpRequest,
+    caller_identity, filter_plugin_request_headers, forward_to_plugin, HttpCaller, PluginHttpRequest,
 };
 use crate::server::dtos::{ApiResponse, CODE_INVALID_REQUEST, CODE_PLUGIN_AUTH_FAILED};
-use crate::server::middleware::jwt_auth::get_claims_from_request;
 use crate::system::app_context::AppContext;
+use bedcode_plugin_api::EndpointAuth;
 
 /// session 插件 id（配置 / 快捷指令 / 文件浏览 / git 四域的接管方）
 const SESSION_PLUGIN: &str = "com.bedcode.terminal-session";
@@ -311,40 +313,49 @@ pub fn route_for_request(path: &str, method: &str) -> Option<&'static BusinessRo
 /// 网关对一次业务请求的处置
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GatewayDecision<'a> {
-    /// 目标插件在位且已声明该端点 → 切插件路径
+    /// 目标插件在位且已声明该端点、认证前置齐备 → 切插件路径
     Forward(&'a BusinessRoute),
-    /// 未激活 / 未声明 / 无宿主上下文 → 原样落宿主旧实现
+    /// 未激活 / 未声明 → 原样落宿主旧实现
     HostFallback,
     /// 宿主实现已退役且插件不可用 → 明确报错（不给假数据）
     PluginRequired(&'a BusinessRoute),
+    /// 端点要求已验签（宿主条目或插件声明任一）而本次请求没有 → 401
+    ///
+    /// 单独一档而不是回 [`GatewayDecision::PluginRequired`]：那会把「你没登录」报成
+    /// 「插件未激活」，指错方向。
+    AuthRequired(&'a BusinessRoute),
 }
 
 /// 降级判定（纯函数，双轨语义的单一事实源）
 ///
-/// - `verified`：宿主 JWT 中间件是否已验签并注入 claims（[`device_context`] 的有无）。
-///   **false 时绝不转发**——这道守卫让「未验签请求不得进插件」成为网关自身的性质，
-///   不依赖中间件注册顺序（顺序错乱时最多多一次降级，不会漏验签）。
+/// - `verified`：宿主 JWT 中间件是否已验签并注入 claims（[`caller_identity`] 的 device 档）。
+///   **需要验签时绝不转发**——这道守卫是网关自身的性质，不依赖中间件注册顺序
+///   （顺序错乱时最多多拒一次，不会漏验签）。
 /// - `declared`：属主插件 manifest 声明的端点全路径清单。**空清单按「未声明」处理**——与
-///   `/api/plugin/*` 那条路由相反（那里空清单 = 前缀内放行，为既有插件零迁移）：网关交出去的
+///   `/api/plugin/*` 那条路由同一判据（票 08 起两处都不再放行未声明）：网关交出去的
 ///   是**宿主自有业务**，插件没显式声明这个业务端点就绝不交出去。
+/// - `endpoint_auth`：属主插件对该端点声明的认证档位（票 08）。与别名条目自带的
+///   [`RouteAuth`] **取较严者**——`Public` 条目不因插件声明 `jwt` 而被放宽，
+///   `Authenticated` 条目也不因插件声明 `none` 而放松：两个声明面谁都不能单方面开门。
 pub fn decide<'a>(
     route: &'a BusinessRoute,
     verified: bool,
     activated: bool,
     declared: &[String],
+    endpoint_auth: EndpointAuth,
 ) -> GatewayDecision<'a> {
     let target = route.declared_path();
-    // 认证前置：Authenticated 条目要求宿主已验签；Public 条目（/api/auth/*）
-    // 本身在 JWT 之前，跳过该前置——验签执行点在插件 auth 域 + host-auth 原语
-    let verified_ok = verified || route.auth == RouteAuth::Public;
-    if verified_ok && activated && declared.contains(&target) {
-        GatewayDecision::Forward(route)
-    } else {
-        match route.fallback {
+    if !(activated && declared.contains(&target)) {
+        return match route.fallback {
             FallbackPolicy::HostImplementation => GatewayDecision::HostFallback,
             FallbackPolicy::PluginRequired => GatewayDecision::PluginRequired(route),
-        }
+        };
     }
+    let requires_verification = route.auth == RouteAuth::Authenticated || endpoint_auth == EndpointAuth::Jwt;
+    if requires_verification && !verified {
+        return GatewayDecision::AuthRequired(route);
+    }
+    GatewayDecision::Forward(route)
 }
 
 /// 「插件未激活」响应：与 `/api/plugin/*` 路由的未激活响应同口径（HTTP 200 + 业务码 1007）
@@ -366,15 +377,16 @@ fn bad_request(message: &str) -> HttpResponse {
     HttpResponse::Ok().json(ApiResponse::<()>::error(CODE_INVALID_REQUEST, message))
 }
 
-/// 可信设备上下文：验签通过后取 claims 派生标识（凭据本体不外泄，AGENTS.md §8）
-fn device_context(req: &actix_web::HttpRequest) -> Option<Value> {
-    let claims = get_claims_from_request(req)?;
-    let mut device = serde_json::Map::new();
-    device.insert("deviceId".to_string(), Value::String(claims.sub));
-    if let Some(name) = claims.device_name {
-        device.insert("deviceName".to_string(), Value::String(name));
-    }
-    Some(Value::Object(device))
+/// 「调用方未验签」响应：HTTP 401 + 业务码 1007，与 JWT 中间件的 401 同一码
+///
+/// 这条分支生产链路正常走不到（中间件在网关之外已把无 JWT 的业务请求 401），
+/// 它是「中间件顺序被改错 / 插件把 `Authenticated` 条目的端点声明成 `none` 之外的档」
+/// 时的兜底，所以回 401 而不是回「插件未激活」。
+fn unauthorized_response(route: &BusinessRoute) -> HttpResponse {
+    HttpResponse::Unauthorized().json(ApiResponse::<()>::error(
+        CODE_PLUGIN_AUTH_FAILED,
+        &format!("Authentication required for {}", route.path),
+    ))
 }
 
 /// 查询串 → 转发用 JSON 对象
@@ -433,38 +445,34 @@ where
         return next.call(req).await.map(|res| res.map_into_boxed_body());
     };
 
-    // 转发前置①：Authenticated 条目要求宿主已验签（claims 在 extensions 里），
-    // 拿不到就是没验签或中间件顺序被打乱——原样交回链条，绝不把业务请求递给插件。
-    // Public 条目（票 07 /api/auth/*）在 JWT 之前，无此前置，device 上下文为 None。
-    let device = device_context(req.request());
-    // 转发前置②：目标插件在位且已声明该业务端点。无 AppContext（无头 / 库级测试 /
-    // 初始化中间态）= 插件面不可判定 → Authenticated 条目走旧实现，Public 条目按
-    // 其 fallback 策略处置（auth 面已 contract：明确报插件未激活）。
-    let decision = match (device.as_ref(), route.auth) {
-        (None, RouteAuth::Authenticated) => GatewayDecision::HostFallback,
-        (None, RouteAuth::Public) => match AppContext::try_global() {
-            None => GatewayDecision::HostFallback,
-            Some(ctx) => {
-                let host = ctx.plugin_host();
-                let activated = host.is_activated(route.plugin_id).await;
-                let declared = host.registry().list_http_endpoint_paths(route.plugin_id).await;
-                decide(route, true, activated, &declared)
-            }
-        },
-        (Some(_), _) => match AppContext::try_global() {
-            None => GatewayDecision::HostFallback,
-            Some(ctx) => {
-                let host = ctx.plugin_host();
-                let activated = host.is_activated(route.plugin_id).await;
-                let declared = host.registry().list_http_endpoint_paths(route.plugin_id).await;
-                decide(route, true, activated, &declared)
-            }
-        },
+    // 调用方身份（票 08）：device 档 = 宿主 JWT 中间件已验签并注入 claims。
+    // 环回 / 匿名两档只在插件把该端点显式声明成 `auth: "none"` 时才可能走到转发。
+    let (caller, device) = caller_identity(req.request());
+    let verified = matches!(caller, HttpCaller::Device);
+    // 无 AppContext（无头 / 库级测试 / 初始化中间态）= 插件面不可判定 → 交回链条，
+    // 绝不凭别名表就把请求递给不存在的插件。
+    let decision = match AppContext::try_global() {
+        None => GatewayDecision::HostFallback,
+        Some(ctx) => {
+            let host = ctx.plugin_host();
+            let activated = host.is_activated(route.plugin_id).await;
+            let registry = host.registry();
+            let declared = registry.list_http_endpoint_paths(route.plugin_id).await;
+            // 档位按属主声明查；查不到条目（未声明）时给最严档——那种情形下面
+            // `declared` 判定先落，档位取值不影响结果，只是不许有「查不到=免凭证」的形状
+            let endpoint_auth = registry
+                .find_http_endpoint(&route.declared_path())
+                .await
+                .map(|e| e.auth)
+                .unwrap_or(EndpointAuth::Jwt);
+            decide(route, verified, activated, &declared, endpoint_auth)
+        }
     };
     tracing::debug!(
         path = %path,
         plugin_id = %route.plugin_id,
         domain = route.domain.as_str(),
+        caller = %caller.as_str(),
         forward = matches!(decision, GatewayDecision::Forward(_)),
         "HTTP 协议网关判定"
     );
@@ -474,6 +482,16 @@ where
         GatewayDecision::PluginRequired(_) => {
             let (http_req, _payload) = req.into_parts();
             Ok(ServiceResponse::new(http_req, plugin_unavailable_response(route)))
+        }
+        GatewayDecision::AuthRequired(_) => {
+            tracing::warn!(
+                path = %path,
+                plugin_id = %route.plugin_id,
+                caller = %caller.as_str(),
+                "业务端点要求已验签调用方，本次请求未通过宿主 JWT 验签"
+            );
+            let (http_req, _payload) = req.into_parts();
+            Ok(ServiceResponse::new(http_req, unauthorized_response(route)))
         }
         GatewayDecision::Forward(_) => {
             // 判定完成才开始消费载荷：query / headers / claims 只读，body 走 payload
@@ -496,6 +514,7 @@ where
                 headers,
                 body,
                 query,
+                caller,
                 device,
             };
             let resp = forward_to_plugin(route.plugin_id, &request).await;
@@ -796,7 +815,7 @@ mod tests {
         assert!(route_for_request("", "GET").is_none());
     }
 
-    /// 双轨判定：只有「已验签 + 在位 + 已声明」三者齐备才切插件
+    /// 双轨判定：只有「认证前置齐备 + 在位 + 已声明」才切插件
     ///
     /// 判定语义与具体条目的 contract 状态无关，故用**合成的** HostImplementation
     /// 条目验证降级分支（表内条目已全部随票 02/03/04 contract 翻 PluginRequired，
@@ -815,27 +834,95 @@ mod tests {
         let r = &DUAL_TRACK;
         let declared = vec![r.declared_path()];
 
-        assert_eq!(decide(r, true, true, &declared), GatewayDecision::Forward(r));
+        assert_eq!(
+            decide(r, true, true, &declared, EndpointAuth::Jwt),
+            GatewayDecision::Forward(r)
+        );
         // 未验签 → 绝不转发（即使命令齐备）：验签执行点在宿主，网关不替插件放行陌生请求
-        assert_eq!(decide(r, false, true, &declared), GatewayDecision::HostFallback);
+        assert_eq!(
+            decide(r, false, true, &declared, EndpointAuth::Jwt),
+            GatewayDecision::AuthRequired(r),
+            "未验签要报「要认证」，不得静默回落宿主实现"
+        );
         // 未激活 → 降级宿主
-        assert_eq!(decide(r, true, false, &declared), GatewayDecision::HostFallback);
+        assert_eq!(
+            decide(r, true, false, &declared, EndpointAuth::Jwt),
+            GatewayDecision::HostFallback
+        );
         // 激活但未声明该业务端点 → 仍走宿主。票 01 落地时 session 插件正落在这一格
         // （已激活、只声明了任务域端点），所以业务端点不会提前切过去。
-        assert_eq!(decide(r, true, true, &[]), GatewayDecision::HostFallback);
+        assert_eq!(
+            decide(r, true, true, &[], EndpointAuth::Jwt),
+            GatewayDecision::HostFallback
+        );
         assert_eq!(
             decide(
                 r,
                 true,
                 true,
-                &["/api/plugin/com.bedcode.terminal-session/task-status".to_string()]
+                &["/api/plugin/com.bedcode.terminal-session/task-status".to_string()],
+                EndpointAuth::Jwt
             ),
             GatewayDecision::HostFallback
         );
         // 声明面禁止前缀匹配：更深的子路径不得借父声明命中
         assert_eq!(
-            decide(r, true, true, &[format!("{}/extra", r.declared_path())]),
+            decide(
+                r,
+                true,
+                true,
+                &[format!("{}/extra", r.declared_path())],
+                EndpointAuth::Jwt
+            ),
             GatewayDecision::HostFallback
+        );
+    }
+
+    /// 票 08：宿主条目档位与插件声明档位**取较严者**，两向都不许单方面开门
+    #[test]
+    fn decide_takes_the_stricter_of_route_and_endpoint_auth() {
+        // Authenticated 条目 + 插件声明 none：仍要求验签（插件不能放开宿主要求）
+        const GUARDED: BusinessRoute = BusinessRoute {
+            path: "/api/configs",
+            plugin_id: SESSION_PLUGIN,
+            endpoint: "configs",
+            methods: &["GET"],
+            domain: BusinessDomain::SessionConfig,
+            fallback: FallbackPolicy::PluginRequired,
+            auth: RouteAuth::Authenticated,
+        };
+        // Public 条目（/api/auth/* 在 JWT 之前）+ 插件声明 jwt：仍要求验签
+        const PUBLIC: BusinessRoute = BusinessRoute {
+            path: "/api/auth/pairing",
+            plugin_id: SESSION_PLUGIN,
+            endpoint: "auth/pairing",
+            methods: &["POST"],
+            domain: BusinessDomain::Auth,
+            fallback: FallbackPolicy::PluginRequired,
+            auth: RouteAuth::Public,
+        };
+        let guarded_declared = vec![GUARDED.declared_path()];
+        let public_declared = vec![PUBLIC.declared_path()];
+
+        assert_eq!(
+            decide(&GUARDED, false, true, &guarded_declared, EndpointAuth::None),
+            GatewayDecision::AuthRequired(&GUARDED),
+            "插件声明 none 不得放开宿主 Authenticated 条目的验签前置"
+        );
+        assert_eq!(
+            decide(&PUBLIC, false, true, &public_declared, EndpointAuth::Jwt),
+            GatewayDecision::AuthRequired(&PUBLIC),
+            "公开别名遇到插件的 jwt 声明必须改判为要验签"
+        );
+        // 两档都为 none 时才免验签转发（配对入口的真实形态）
+        assert_eq!(
+            decide(&PUBLIC, false, true, &public_declared, EndpointAuth::None),
+            GatewayDecision::Forward(&PUBLIC)
+        );
+        // 未声明条目优先按 fallback 处置，档位判定不参与（否则未声明变成 401 而非「未激活」）
+        assert_eq!(
+            decide(&PUBLIC, false, true, &[], EndpointAuth::Jwt),
+            GatewayDecision::PluginRequired(&PUBLIC)
         );
     }
 
@@ -852,25 +939,25 @@ mod tests {
             auth: RouteAuth::Authenticated,
         };
         assert_eq!(
-            decide(&RETIRED, true, false, &[]),
+            decide(&RETIRED, true, false, &[], EndpointAuth::Jwt),
             GatewayDecision::PluginRequired(&RETIRED)
         );
         assert_eq!(
-            decide(&RETIRED, true, true, &[]),
+            decide(&RETIRED, true, true, &[], EndpointAuth::Jwt),
             GatewayDecision::PluginRequired(&RETIRED),
             "在位但未声明同样算不可用：真源已不在宿主"
         );
-        // 未验签同样不转发；已退役的条目按策略回「插件未激活」。生产链路里这一格到不了
-        // `decide`——`business_gateway` 在拿不到 claims 时更早短路为 HostFallback，
-        // 请求会由验签中间件 401（见 unverified_requests_never_reach_gateway）。
+        // 未验签：条目已声明也要认证，报 401 而不是「插件未激活」（方向不能指错）。
+        // 生产链路里这一格由 JWT 中间件先 401（见 unverified_requests_never_reach_gateway），
+        // 本条锁的是中间件顺序错乱时网关自己的兜底。
         assert_eq!(
-            decide(&RETIRED, false, true, &[RETIRED.declared_path()]),
-            GatewayDecision::PluginRequired(&RETIRED)
+            decide(&RETIRED, false, true, &[RETIRED.declared_path()], EndpointAuth::Jwt),
+            GatewayDecision::AuthRequired(&RETIRED)
         );
         // 在位且已声明后照旧切换：翻策略只改「不可用时怎么答」，不改切换条件
         let declared = vec![RETIRED.declared_path()];
         assert_eq!(
-            decide(&RETIRED, true, true, &declared),
+            decide(&RETIRED, true, true, &declared, EndpointAuth::Jwt),
             GatewayDecision::Forward(&RETIRED)
         );
     }
@@ -906,7 +993,8 @@ mod tests {
 
     /// 转发入参形状：与 `/api/plugin/*` 共用同一构造器，故两条路径不可能各答一版
     ///
-    /// `device` 只在网关路径出现（宿主已验签）；未验签的 `/api/plugin/*` 不得凭空多出设备上下文。
+    /// `device` 只在已验签时出现；未验签的调用方不得凭空多出设备上下文，但仍必须带
+    /// `caller`（票 08）——插件据此区分环回 hook 与局域网匿名。
     #[test]
     fn forwarded_request_shape_locks_device_and_headers() {
         let mut headers = serde_json::Map::new();
@@ -920,6 +1008,7 @@ mod tests {
                 "session_id".to_string(),
                 Value::String("s-1".to_string()),
             )])),
+            caller: HttpCaller::Device,
             device: Some(serde_json::json!({ "deviceId": "device-1" })),
         });
         assert_eq!(
@@ -930,6 +1019,7 @@ mod tests {
                 "headers": { "content-type": "application/json" },
                 "body": null,
                 "query": { "session_id": "s-1" },
+                "caller": "device",
                 "device": { "deviceId": "device-1" },
             })
         );
@@ -939,47 +1029,15 @@ mod tests {
             headers: serde_json::Map::new(),
             body: Value::Null,
             query: Value::Object(serde_json::Map::new()),
+            caller: HttpCaller::Localhost,
             device: None,
         });
         assert!(no_device.get("device").is_none(), "无验签结果时不写 device 键");
-    }
-
-    /// 设备上下文只给标识：JWT 本体与指纹不得进入转发入参（AGENTS.md §8）
-    #[test]
-    fn device_context_carries_only_identity_fields() {
-        use actix_web::HttpMessage;
-
-        let req = actix_web::test::TestRequest::get()
-            .uri("/api/configs")
-            .to_http_request();
-        assert!(device_context(&req).is_none(), "未验签请求没有设备上下文");
-
-        // claims 走真实签发/验签链路（不手搓结构体，字段增减不会让本用例假绿）
-        let jwt = JwtService::new();
-        let token = jwt
-            .generate_token(
-                "device-1".to_string(),
-                Some("Pixel 9".to_string()),
-                Some("fp-secret".to_string()),
-            )
-            .expect("issue token");
-        let claims = jwt.verify_token_with_expiry(&token).expect("verify token");
         assert_eq!(
-            claims.fingerprint.as_deref(),
-            Some("fp-secret"),
-            "前置：claims 里确实带指纹，下面断言的「不外泄」才有意义"
+            no_device.get("caller").and_then(|v| v.as_str()),
+            Some("localhost"),
+            "免凭证调用方也必须带可区分的身份"
         );
-
-        let req = actix_web::test::TestRequest::get()
-            .uri("/api/configs")
-            .to_http_request();
-        req.extensions_mut().insert(claims);
-        let device = device_context(&req).expect("已验签请求带设备上下文");
-        assert_eq!(
-            device,
-            serde_json::json!({ "deviceId": "device-1", "deviceName": "Pixel 9" })
-        );
-        assert!(!device.to_string().contains("fp-secret"), "指纹不得透传给插件");
     }
 
     /// 查询串解析：与 `web::Query<HashMap<String,String>>` 提取器同口径

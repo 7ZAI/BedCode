@@ -6,7 +6,10 @@
 use actix_web::{web, HttpRequest, HttpResponse};
 use std::collections::HashMap;
 
+use bedcode_plugin_api::EndpointAuth;
+
 use crate::server::dtos::{ApiResponse, CODE_INVALID_REQUEST, CODE_PLUGIN_AUTH_FAILED};
+use crate::server::middleware::jwt_auth::get_claims_from_request;
 use crate::system::app_context::AppContext;
 
 // ==================== 插件动态 HTTP 端点代理 ====================
@@ -70,14 +73,86 @@ pub(crate) fn plugin_http_headers(response: &serde_json::Value) -> Vec<(String, 
 
 // ==================== 路由判定（纯函数，供测试固化） ====================
 
-/// 声明式路径匹配（票 16 固化票据 03 的两条判据）
+/// 声明式路径匹配（票 16 立、票 08 收口）
 ///
-/// - `declared` 为空 = 插件未声明 `contributes.httpEndpoints` → **前缀内放行**，
-///   未知道路返回 404 与否由插件自己判（过渡策略：既有插件零迁移）。
-/// - `declared` 非空 = 已声明 → 按完整路径**精确匹配**，未命中即 404（请求不会
-///   到达插件，避免未声明路径被枚举）。
+/// **只认声明**：`declared` 是属主插件 manifest 声明（`contributes.httpEndpoints` /
+/// `toolProviders`）登记出的全路径清单，未命中即 404——请求不到达插件，未声明路径
+/// 不可被枚举。
+///
+/// 票据 03 时代的 `declared.is_empty() → 前缀内放行`（既有插件零迁移）已于票 08 退役：
+/// 核实清单（见 `.scratch/2026-09-21-wasm-core-audit/issues/08`）确认桌面四个生产插件
+/// 里只有 `com.bedcode.terminal-session` 实现 `_http_endpoint` 且已声明清单，其余三个
+/// 既无实现也无声明 → 短路在生产面无消费者。未声明清单的插件自此**没有 HTTP 面**。
 pub(crate) fn plugin_http_path_allowed(declared: &[String], full_path: &str) -> bool {
-    declared.is_empty() || declared.iter().any(|p| p == full_path)
+    declared.iter().any(|p| p == full_path)
+}
+
+/// 端点认证判定（纯函数，票 08）：声明档位 + 本次请求是否已过宿主验签 → 是否放行
+///
+/// `Jwt` 档要求 `verified`（宿主 JWT 中间件已注入 claims）；`None` 档免凭证，但仍
+/// 携带 [`HttpCaller`] 身份，让插件自己按身份收紧（裁决 3）。
+pub(crate) fn plugin_http_auth_allowed(auth: EndpointAuth, verified: bool) -> bool {
+    match auth {
+        EndpointAuth::Jwt => verified,
+        EndpointAuth::None => true,
+    }
+}
+
+/// 宿主判定的调用方身份（票 08 裁决 3）——转发给插件的 `caller` 字段取值
+///
+/// 三档互斥，按「已验签 > 环回 > 匿名」优先判定：
+/// - [`HttpCaller::Device`]：JWT 验签通过的可信设备，`device` 字段带 claims 派生标识
+/// - [`HttpCaller::Localhost`]：环回调用方（Claude Code / codex hook 脚本、本机工具），
+///   无凭证可给，插件按「本机」这一固定标识区分
+/// - [`HttpCaller::Anonymous`]：局域网内的匿名调用方（既未验签也非环回）
+///
+/// 凭据红线：任何一档都不带 JWT 本体与设备指纹（AGENTS.md §8）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HttpCaller {
+    Device,
+    Localhost,
+    Anonymous,
+}
+
+impl HttpCaller {
+    /// 转发字段取值（线协议字符串，插件侧按它分派）
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Device => "device",
+            Self::Localhost => "localhost",
+            Self::Anonymous => "anonymous",
+        }
+    }
+
+    /// 身份判定（纯函数，供测试）：`verified` = 宿主已验签注入 claims，
+    /// `loopback` = TCP 对端是环回地址
+    pub(crate) fn classify(verified: bool, loopback: bool) -> Self {
+        match (verified, loopback) {
+            (true, _) => Self::Device,
+            (false, true) => Self::Localhost,
+            (false, false) => Self::Anonymous,
+        }
+    }
+}
+
+/// 本次请求的调用方身份与可信设备上下文（`/api/plugin/*` 与业务网关共用一条判据）
+///
+/// claims 只在验签通过后存在（`jwt_gateway` 注入），因此 `device` 与
+/// [`HttpCaller::Device`] 同源同步；设备上下文只取 claims 派生标识，
+/// **JWT 本体与指纹不出宿主**（AGENTS.md §8 凭据红线）。
+pub(crate) fn caller_identity(req: &actix_web::HttpRequest) -> (HttpCaller, Option<serde_json::Value>) {
+    let claims = get_claims_from_request(req);
+    let loopback = req.peer_addr().is_some_and(|addr| addr.ip().is_loopback());
+    let caller = HttpCaller::classify(claims.is_some(), loopback);
+    let device = claims.map(|claims| {
+        let mut device = serde_json::Map::new();
+        device.insert("deviceId".to_string(), serde_json::Value::String(claims.sub));
+        if let Some(name) = claims.device_name {
+            device.insert("deviceName".to_string(), serde_json::Value::String(name));
+        }
+        serde_json::Value::Object(device)
+    });
+    (caller, device)
 }
 
 /// 旧插件 id → 接管方 id（票 16 D1「桌面侧可选兜底」的落点；票 07 B2 追加 id 改名项）
@@ -137,7 +212,9 @@ pub(crate) struct PluginHttpRequest<'a> {
     pub headers: serde_json::Map<String, serde_json::Value>,
     pub body: serde_json::Value,
     pub query: serde_json::Value,
-    /// 宿主验签后的可信设备上下文（仅网关路径注入；`/api/plugin/*` 无 JWT 时为 None）
+    /// 宿主判定的调用方身份（票 08 裁决 3：`device` / `localhost` / `anonymous`）
+    pub caller: HttpCaller,
+    /// 宿主验签后的可信设备上下文（仅 [`HttpCaller::Device`] 时有值）
     ///
     /// 只给 claims 派生的标识字段，**JWT 本体与指纹一律不透传**（AGENTS.md §8 凭据红线）。
     pub device: Option<serde_json::Value>,
@@ -145,8 +222,8 @@ pub(crate) struct PluginHttpRequest<'a> {
 
 /// 插件 `_http_endpoint` 入参构造（纯函数，供双轨契约测试逐字段锁定）
 ///
-/// `headers` 字段为票据 04 增量追加、`device` 为票 01 网关追加——都是字段级追加，
-/// 老插件忽略未知字段（协议增量原则）。
+/// `headers` 字段为票据 04 增量追加、`device` 为票 01 网关追加、`caller` 为票 08 追加
+/// ——都是字段级追加，老插件忽略未知字段（协议增量原则）。
 pub(crate) fn build_plugin_http_args(req: &PluginHttpRequest) -> serde_json::Value {
     let mut args = serde_json::json!({
         "method": req.method,
@@ -154,6 +231,8 @@ pub(crate) fn build_plugin_http_args(req: &PluginHttpRequest) -> serde_json::Val
         "headers": serde_json::Value::Object(req.headers.clone()),
         "body": req.body,
         "query": req.query,
+        // 免凭证调用方不再「没有身份」：三档固定取值让插件能区分本机 hook 与局域网匿名
+        "caller": req.caller.as_str(),
     });
     if let Some(device) = &req.device {
         args["device"] = device.clone();
@@ -218,8 +297,10 @@ pub(crate) async fn forward_to_plugin(owner: &str, req: &PluginHttpRequest<'_>) 
 /// 插件动态 HTTP 端点 — 请求到达后通过 PluginHost.invoke_rust_command 路由到插件 handler。
 /// 仅支持已激活的 Rust / WASM 插件，TS-only 插件的 HTTP 端点通过前端 Tauri event 桥接。
 ///
-/// 认证：JWT 由网关中间件统一校验；无 JWT 的本地调用方（如 hook 脚本）由中间件放行，
-/// 此 handler 仅校验插件激活状态
+/// 认证：`jwt_gateway` 中间件先验签（有效 JWT 时注入 claims），本 handler 按**属主端点
+/// 声明的档位**决定是否要求已验签（票 08）：manifest 未声明 `auth` 即最严档 `jwt`，
+/// 免凭证必须逐条显式声明 `auth: "none"`。服务监听 0.0.0.0，收紧前「插件端点对局域网
+/// 无凭证可达」正是本票处置的风险。
 pub async fn plugin_http_endpoint(
     req: HttpRequest,
     path: web::Path<(String, String)>,
@@ -228,11 +309,8 @@ pub async fn plugin_http_endpoint(
 ) -> HttpResponse {
     let (plugin_id, endpoint_path) = path.into_inner();
 
-    // 认证由网关中间件统一处理：
-    // - JWT 请求：中间件校验通过后 claims 已注入 extensions
-    // - 无 JWT 的请求（如 hook 脚本）：中间件对 /api/plugin/* 路径放行；
-    //   本 handler 不校验任何凭证（历史 BEDCODE_TOKEN 凭证从未被宿主校验，已移除），
-    //   仅校验插件激活状态。服务监听 0.0.0.0，插件端点对局域网可达
+    // 中间件只做「有 JWT 就验签」；本路由无凭证的请求（环回 hook、局域网匿名）
+    // 放行到这里，由下面的端点级档位判定决定是否真的到达插件。
 
     // 检查插件是否已激活；未激活时旧前缀可兜底转给接管方（票 16，见 resolve_http_owner）
     let ctx = AppContext::global();
@@ -253,9 +331,9 @@ pub async fn plugin_http_endpoint(
         }
     };
 
-    // 端点注册治理（票据 03 判据，票 16 固化）：插件已声明（manifest
-    // contributes.httpEndpoints / toolProviders）时做精确路径匹配，未注册路径 404；
-    // 未声明插件保持旧前缀 ANY 行为（auto-task 等既有插件零迁移）。
+    // 端点注册治理（票据 03 判据、票 16 固化、票 08 收口）：只认 manifest 声明
+    // （contributes.httpEndpoints / toolProviders），未声明路径 404——「未声明清单
+    // → 前缀内 ANY 放行」的过渡策略已退役，未声明清单的插件没有 HTTP 面。
     // 声明清单按**属主插件**查（旧前缀兜底时按接管方的清单判定），full_path 同样
     // 按属主拼——插件侧收到的 `path` 字段保持请求原样，双轨期两实现共用同一分派表。
     let declared = plugin_host.registry().list_http_endpoint_paths(owner).await;
@@ -273,6 +351,33 @@ pub async fn plugin_http_endpoint(
         ));
     }
 
+    // 认证档位（票 08）：按属主声明判定，未声明 auth 即要求宿主已验签
+    let (caller, device) = caller_identity(&req);
+    let auth = plugin_host
+        .registry()
+        .find_http_endpoint(&full_path)
+        .await
+        // 上一步刚按同一张表放行；取不到条目只可能是两次 await 之间插件被停用，
+        // 此时按最严档处理而非放行（fail-closed）
+        .map(|e| e.auth)
+        .unwrap_or(EndpointAuth::Jwt);
+    if !plugin_http_auth_allowed(auth, matches!(caller, HttpCaller::Device)) {
+        tracing::warn!(
+            plugin_id = %owner,
+            path = %full_path,
+            caller = %caller.as_str(),
+            auth = %auth.as_str(),
+            "plugin http endpoint requires an authenticated caller"
+        );
+        return HttpResponse::Unauthorized().json(ApiResponse::<()>::error(
+            CODE_PLUGIN_AUTH_FAILED,
+            &format!(
+                "Plugin endpoint '{}' requires auth \"jwt\"; present a valid JWT or declare auth: \"none\" in contributes.httpEndpoints",
+                full_path
+            ),
+        ));
+    }
+
     if owner != plugin_id {
         tracing::debug!(
             requested_plugin_id = %plugin_id,
@@ -281,8 +386,9 @@ pub async fn plugin_http_endpoint(
         );
     }
 
-    // 构造请求参数：method、path、白名单 headers、body、query
-    // headers 字段为票据 04 增量追加——老插件忽略未知字段（字段演进增量原则）
+    // 构造请求参数：method、path、白名单 headers、body、query、调用方身份
+    // headers 字段为票据 04 增量追加，caller / device 为票 01 / 票 08 追加——
+    // 老插件忽略未知字段（字段演进增量原则）
     let method = req.method().as_str();
     let request_headers = filter_plugin_request_headers(req.headers());
     let request = PluginHttpRequest {
@@ -297,8 +403,8 @@ pub async fn plugin_http_endpoint(
                 .map(|(k, v)| (k, serde_json::Value::String(v)))
                 .collect(),
         ),
-        // 本路由不要求 JWT（hook 脚本无法持有 token），无验签结果可透传
-        device: None,
+        caller,
+        device,
     };
     forward_to_plugin(owner, &request).await
 }
@@ -386,14 +492,17 @@ mod tests {
         assert_eq!(plugin_http_content_type(&serde_json::json!({"contentType": 123})), None);
     }
 
-    /// 票 16：声明式匹配的两条判据固化（此前逻辑内联在 handler 里，无测试覆盖）
+    /// 票 16 立、票 08 收口：声明式匹配只剩「精确命中」一格
     ///
-    /// 「未声明 → 前缀内放行」是既有插件（auto-task 从未声明）零迁移的前提；
-    /// 「已声明 → 精确命中」是新插件的审计面。两者都必须在这一处判定，不允许
-    /// 出现第三种（如前缀匹配声明路径——那会让 `/task-status` 声明放行
+    /// 票据 03 的「未声明 → 前缀内放行」（既有插件零迁移）已退役——核实清单
+    /// （`.scratch/2026-09-21-wasm-core-audit/issues/08`）确认桌面四个生产插件里只有
+    /// `com.bedcode.terminal-session` 实现 `_http_endpoint` 且早已声明清单，短路在生产面
+    /// 没有消费者；留着它，未声明清单的插件（含仓外 zip 装的第三方）就等于 HTTP 面全开。
+    ///
+    /// 已声明侧禁止前缀匹配（那会让 `/task-status` 声明放行
     /// `/task-status/../../admin`）。
     #[test]
-    fn declared_paths_match_exactly_and_undeclared_pass_through() {
+    fn declared_paths_match_exactly_and_undeclared_grant_nothing() {
         let declared: Vec<String> = vec![
             "/api/plugin/com.bedcode.terminal-session/task-status".to_string(),
             "/api/plugin/com.bedcode.terminal-session/task-queue/add".to_string(),
@@ -420,11 +529,117 @@ mod tests {
             &declared,
             "/api/plugin/com.bedcode.terminal-session/TASK-STATUS"
         ));
-        // 未声明（空清单）：前缀内 ANY 放行，404 由插件自判
-        assert!(plugin_http_path_allowed(
+        // 未声明（空清单）：前缀内一律拒绝——未声明 = 没有 HTTP 面
+        assert!(
+            !plugin_http_path_allowed(&[], "/api/plugin/com.bedcode.auto-task/anything"),
+            "票 08：未声明清单不得再换来前缀内放行"
+        );
+        assert!(!plugin_http_path_allowed(
             &[],
-            "/api/plugin/com.bedcode.auto-task/anything"
+            "/api/plugin/com.bedcode.terminal-session/task-status"
         ));
+    }
+
+    /// 票 08：端点级认证判定只有「档位 × 是否已验签」两个输入，四格全覆盖
+    #[test]
+    fn auth_tier_judges_verification_state_only() {
+        assert!(
+            plugin_http_auth_allowed(EndpointAuth::Jwt, true),
+            "已验签的可信设备可命中 jwt 档"
+        );
+        assert!(
+            !plugin_http_auth_allowed(EndpointAuth::Jwt, false),
+            "要验签的端点遇到未验签调用方（含环回 hook）必须拒——收紧的本体"
+        );
+        assert!(plugin_http_auth_allowed(EndpointAuth::None, true));
+        assert!(
+            plugin_http_auth_allowed(EndpointAuth::None, false),
+            "显式声明 none 是免凭证可达的唯一形态"
+        );
+    }
+
+    /// 票 08：身份判定的优先级与线协议取值
+    ///
+    /// 已验签压倒环回（本机带 token 的请求就是 device）；拿不到对端地址时按匿名处理
+    /// （fail-closed：绝不因为「读不到地址」就升成本机身份）。
+    #[test]
+    fn caller_classification_priority_and_wire_values() {
+        assert_eq!(HttpCaller::classify(true, true), HttpCaller::Device);
+        assert_eq!(HttpCaller::classify(true, false), HttpCaller::Device);
+        assert_eq!(HttpCaller::classify(false, true), HttpCaller::Localhost);
+        assert_eq!(HttpCaller::classify(false, false), HttpCaller::Anonymous);
+        // 线协议取值是插件侧的判据，改名即破坏契约
+        assert_eq!(HttpCaller::Device.as_str(), "device");
+        assert_eq!(HttpCaller::Localhost.as_str(), "localhost");
+        assert_eq!(HttpCaller::Anonymous.as_str(), "anonymous");
+    }
+
+    /// 票 08 + 凭据红线：`caller_identity` 只给 claims 派生标识，JWT 本体与指纹不外泄
+    ///
+    /// claims 走真实签发/验签链路（不手搓结构体，字段增减不会让本用例假绿）。
+    #[test]
+    fn caller_identity_carries_only_host_derived_labels() {
+        use crate::utils::auth::jwt::JwtService;
+        use actix_web::HttpMessage;
+
+        // 无 claims、无对端地址（TestRequest 默认）→ anonymous，且不带设备上下文
+        let req = actix_web::test::TestRequest::get()
+            .uri("/api/plugin/com.bedcode.terminal-session/task-status")
+            .to_http_request();
+        assert_eq!(
+            caller_identity(&req),
+            (HttpCaller::Anonymous, None),
+            "未验签且取不到对端地址时按最弱身份处理"
+        );
+
+        // 无 claims 但对端是环回 → localhost（hook 脚本可被插件区分）
+        let req = actix_web::test::TestRequest::get()
+            .uri("/api/plugin/com.bedcode.terminal-session/task-status")
+            .peer_addr("127.0.0.1:54321".parse().expect("loopback addr"))
+            .to_http_request();
+        assert_eq!(caller_identity(&req), (HttpCaller::Localhost, None));
+
+        // 非环回对端同样落 anonymous（IPv6 环回则算本机）
+        let req = actix_web::test::TestRequest::get()
+            .uri("/api/plugin/com.bedcode.terminal-session/task-status")
+            .peer_addr("192.168.1.7:54321".parse().expect("lan addr"))
+            .to_http_request();
+        assert_eq!(caller_identity(&req).0, HttpCaller::Anonymous);
+        let req = actix_web::test::TestRequest::get()
+            .uri("/api/plugin/com.bedcode.terminal-session/task-status")
+            .peer_addr("[::1]:54321".parse().expect("ipv6 loopback addr"))
+            .to_http_request();
+        assert_eq!(caller_identity(&req).0, HttpCaller::Localhost);
+
+        // 已验签 → device + claims 派生标识；指纹与 token 本体一律不进转发入参
+        let jwt = JwtService::new();
+        let token = jwt
+            .generate_token(
+                "device-1".to_string(),
+                Some("Pixel 9".to_string()),
+                Some("fp-secret".to_string()),
+            )
+            .expect("issue token");
+        let claims = jwt.verify_token_with_expiry(&token).expect("verify token");
+        assert_eq!(
+            claims.fingerprint.as_deref(),
+            Some("fp-secret"),
+            "前置：claims 里确实带指纹，下面断言的「不外泄」才有意义"
+        );
+        let req = actix_web::test::TestRequest::get()
+            .uri("/api/plugin/com.bedcode.terminal-session/task-status")
+            .peer_addr("192.168.1.7:54321".parse().expect("lan addr"))
+            .to_http_request();
+        req.extensions_mut().insert(claims);
+        let (caller, device) = caller_identity(&req);
+        assert_eq!(caller, HttpCaller::Device, "已验签压倒对端地址判定");
+        assert_eq!(
+            device,
+            Some(serde_json::json!({ "deviceId": "device-1", "deviceName": "Pixel 9" }))
+        );
+        let rendered = device.expect("device 上下文").to_string();
+        assert!(!rendered.contains("fp-secret"), "指纹不得透传给插件");
+        assert!(!rendered.contains(&token), "JWT 本体不得透传给插件");
     }
 
     /// 票 16：旧前缀别名表——只登记已退役/在退役的那一条，且必须指向合并插件

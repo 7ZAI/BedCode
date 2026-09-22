@@ -103,14 +103,24 @@ export interface PluginContributes {
   toolProviders: ToolProviderContribution[]
   fileHandlers: FileHandlerContribution[]
   /**
-   * 插件 HTTP 端点清单（`_http_endpoint` 的路径白名单）。
-   * 条目为相对路径段（不含 `/api/plugin/<插件 id>/` 前缀）。声明后宿主对未注册路径
-   * 返回 404；缺省（空清单）视为「未声明」，宿主保持前缀内 ANY 放行的过渡策略。
+   * 插件 HTTP 端点清单（`_http_endpoint` 的路径白名单 + 认证档位，票 08）。
+   * 条目为相对路径段（不含 `/api/plugin/<插件 id>/` 前缀）。宿主**只认声明**：未声明
+   * 的路径 404，未声明清单等于没有 HTTP 面（票据 03 的「前缀内 ANY 放行」过渡策略已退役）。
+   * 条目可写成对象以声明档位；缺 `auth` 即最严档 `jwt`，免凭证必须逐条显式写 `none`。
    */
-  httpEndpoints?: string[]
+  httpEndpoints?: HttpEndpointContribution[]
   configuration?: PluginConfiguration
   lifecycle?: LifecycleContribution
 }
+
+/** HTTP 端点认证档位（与 WS 端点注册面同一张词汇表，票 08） */
+export type EndpointAuthTier = 'none' | 'jwt'
+
+/**
+ * 一条 HTTP 端点声明：纯路径段（档位取宿主最严缺省）或带 `auth` 的对象形态。
+ * 与 Rust 侧 `HttpEndpointContribution`（serde untagged）逐形对应。
+ */
+export type HttpEndpointContribution = string | { path: string; auth?: EndpointAuthTier }
 
 /** 生命周期扩展点声明 */
 export interface LifecycleContribution {

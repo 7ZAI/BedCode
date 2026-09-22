@@ -414,7 +414,9 @@ pub(crate) fn ws_register_endpoint(
             crate::system::constants::plugin::PLUGIN_WS_ENDPOINT_PATH_MAX_LEN
         ));
     }
-    let auth = EndpointAuth::parse(config.auth.as_deref())?;
+    // 缺省档 = none（WS 历史行为）；未定义取值报错，绝不静默降级为较宽档位
+    let auth = EndpointAuth::parse_with(config.auth.as_deref(), EndpointAuth::None)
+        .map_err(|e| format!("ws register-endpoint: {e}"))?;
 
     let entry = crate::server::ws::endpoint::register(
         plugin_id,

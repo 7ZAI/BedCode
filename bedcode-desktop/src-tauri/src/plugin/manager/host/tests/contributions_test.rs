@@ -166,6 +166,56 @@ async fn contributions_identical_across_entry_points() {
         .await;
 }
 
+/// 票 08：manifest 声明的认证档位必须**穿过注册委派链**到达路由可查的形状。
+/// registry 自己有用例锁解析与登记，这里锁的是 `register_plugin_contributions`
+/// 这一跳没把档位丢掉——丢了就等于插件声明的 `auth: "none"` 静默变成要验签
+/// （或反向：缺省档被填成 none，局域网免凭证可达）。
+#[tokio::test(flavor = "multi_thread")]
+async fn registered_http_endpoints_carry_declared_auth_tier() {
+    use bedcode_plugin_api::{EndpointAuth, HttpEndpointContribution};
+
+    let mut plugin = make_plugin(TEST_PLUGIN_ID, PluginSource::FileScan, PluginState::Loaded);
+    let mut contributes = all_contributions();
+    // 追加一条显式免凭证声明（既有 "test/hello" 是纯路径条目 = 缺省档）
+    contributes.http_endpoints.push(HttpEndpointContribution::Declared {
+        path: "test/public".into(),
+        auth: Some("none".into()),
+    });
+    plugin.manifest.contributes = contributes;
+
+    let host = setup_host().await;
+    host.plugins.write().await.insert(TEST_PLUGIN_ID.to_string(), plugin);
+    host.register_plugin_contributions(TEST_PLUGIN_ID).await;
+
+    async fn tier(host: &PluginHost, endpoint: &str) -> Option<EndpointAuth> {
+        host.registry()
+            .find_http_endpoint(&format!("/api/plugin/{}/{}", TEST_PLUGIN_ID, endpoint))
+            .await
+            .map(|e| e.auth)
+    }
+
+    assert_eq!(
+        tier(&host, "test/hello").await,
+        Some(EndpointAuth::Jwt),
+        "纯路径条目必须落最严档（票 08 裁决 1「未声明即最严」）"
+    );
+    assert_eq!(
+        tier(&host, "test/public").await,
+        Some(EndpointAuth::None),
+        "显式 auth:none 必须原样登记，供本机 hook 免凭证调用"
+    );
+    assert_eq!(
+        tier(&host, "test/tool").await,
+        Some(EndpointAuth::Jwt),
+        "toolProviders 声明面无 auth 字段 → 一律最严档"
+    );
+    assert_eq!(
+        tier(&host, "test/not-declared").await,
+        None,
+        "未声明的相对段不得出现在注册表里（路由侧即 404）"
+    );
+}
+
 /// 源码漂移锁：六个 registry 注册调用**只允许出现在 `register_plugin_contributions` 一处**。
 /// 三份手抄的历史成因是「新 contributes 项要同改三处」，漏改即静默不注册。
 #[test]

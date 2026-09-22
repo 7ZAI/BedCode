@@ -195,14 +195,16 @@ pub struct PluginContributes {
     pub tool_providers: Vec<ToolProviderContribution>,
     #[serde(default)]
     pub file_handlers: Vec<FileHandlerContribution>,
-    /// 插件 HTTP 端点清单（`_http_endpoint` 的路径白名单，票 16）
+    /// 插件 HTTP 端点清单（`_http_endpoint` 的路径白名单 + 认证档位，票 16 / 票 08）
     ///
     /// 条目是**相对路径段**（不含 `/api/plugin/<插件 id>/` 前缀，前缀由宿主补），
-    /// 与请求里 `path` 字段逐字一致。宿主 registry 据此生成完整路径登记；路由侧
-    /// 「已声明 → 精确匹配、未声明 → 前缀内 ANY 放行」是票据 03 的过渡策略，
-    /// 本字段让新插件第一次能走「声明命中」那一轨（审计面：清单即端点真源）。
+    /// 与请求里 `path` 字段逐字一致。宿主 registry 据此生成完整路径登记，路由侧
+    /// **只按声明精确匹配**：未声明的端点 404（票 08 起「未声明清单 → 前缀内 ANY
+    /// 放行」的票据 03 过渡策略已退役，未声明插件的 HTTP 面整体不可达）。
+    /// 每条可同时声明认证档位（[`HttpEndpointContribution::Declared`]），缺省即最严
+    /// 档 `jwt`——免凭证必须逐条显式写 `auth: "none"`。
     #[serde(default)]
-    pub http_endpoints: Vec<String>,
+    pub http_endpoints: Vec<HttpEndpointContribution>,
     /// 配置声明
     #[serde(default)]
     pub configuration: Option<PluginConfiguration>,
@@ -286,6 +288,98 @@ pub struct FileHandlerContribution {
     pub viewer: String,
     #[serde(default)]
     pub icon: Option<String>,
+}
+
+/// 端点认证档位（WS 端点注册与 HTTP 端点声明共用这一张词汇表）
+///
+/// 只有 `none | jwt` 两档。**缺省档位由各传输面自己决定**，不在这里表达：
+/// WS 首消息认证的历史缺省是 `none`（插件自管认证），HTTP 声明缺省是 `jwt`
+/// （票 08 裁决 1「未声明即最严」）。未知取值一律 Err，绝不静默降级为较宽档位。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EndpointAuth {
+    /// 免凭证：宿主不校验 JWT（环回 hook、配对 / QR 这类「拿 token 之前」的入口）
+    None,
+    /// 必须通过宿主 JWT 验签
+    Jwt,
+}
+
+impl EndpointAuth {
+    /// manifest / 线协议取值
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Jwt => "jwt",
+        }
+    }
+
+    /// 解析声明值：缺省 / 空串 → `default`（由调用方给档位）；未知取值 → Err
+    ///
+    /// 大小写敏感——与 WS 注册面既有行为一致，`"JWT"` 视为拼写错误而非合法档位。
+    pub fn parse_with(raw: Option<&str>, default: Self) -> Result<Self, String> {
+        match raw.map(str::trim).unwrap_or("") {
+            "" => Ok(default),
+            "none" => Ok(Self::None),
+            "jwt" => Ok(Self::Jwt),
+            other => Err(format!(
+                "unknown auth '{}' (expected \"none\" or \"jwt\")",
+                other
+            )),
+        }
+    }
+}
+
+/// 一条 HTTP 端点声明（票 08：两种形态并存）
+///
+/// - `"configs"` —— 只声明路径段，认证档位取宿主默认（最严档 `jwt`）
+/// - `{ "path": "task-status", "auth": "none" }` —— 显式声明档位
+///
+/// 两形态并存是为了零迁移：既有 manifest 的 `string[]` 不必重写，收紧只作用在
+/// 「未声明 auth」的端点上（默认变严）。`auth` 保留原始字符串，档位仲裁在宿主
+/// registry（[`EndpointAuth::parse_with`]）——声明面负责表达，判定面负责解释。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum HttpEndpointContribution {
+    /// 仅路径段（认证档位 = 宿主默认）
+    Path(String),
+    /// 路径段 + 显式认证档位
+    Declared {
+        /// 相对路径段，与宿主传入 `_http_endpoint` 的 `path` 字段逐字一致
+        path: String,
+        /// `"none"` | `"jwt"`；缺省 = 宿主默认档位
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        auth: Option<String>,
+    },
+}
+
+impl HttpEndpointContribution {
+    /// 声明的相对路径段
+    pub fn path(&self) -> &str {
+        match self {
+            Self::Path(p) => p,
+            Self::Declared { path, .. } => path,
+        }
+    }
+
+    /// 声明的认证档位原始值（`None` = 未声明，由宿主按默认档处理）
+    pub fn auth_raw(&self) -> Option<&str> {
+        match self {
+            Self::Path(_) => None,
+            Self::Declared { auth, .. } => auth.as_deref(),
+        }
+    }
+}
+
+impl From<&str> for HttpEndpointContribution {
+    fn from(path: &str) -> Self {
+        Self::Path(path.to_string())
+    }
+}
+
+impl From<String> for HttpEndpointContribution {
+    fn from(path: String) -> Self {
+        Self::Path(path)
+    }
 }
 
 /// 插件运行时状态
@@ -598,7 +692,14 @@ mod tests {
         let c: PluginContributes = serde_json::from_value(json).unwrap();
         assert_eq!(c.terminal.as_ref().unwrap().input_handlers, vec!["in1"]);
         assert_eq!(c.tool_providers[0].endpoint, "http://x");
-        assert_eq!(c.http_endpoints, vec!["task-status", "task-queue/add"]);
+        assert_eq!(
+            c.http_endpoints,
+            vec![
+                HttpEndpointContribution::Path("task-status".into()),
+                HttpEndpointContribution::Path("task-queue/add".into()),
+            ],
+            "纯字符串条目解析为 Path 形态（未声明档位）"
+        );
         assert_eq!(c.file_handlers[0].extensions, vec!["md"]);
         assert_eq!(c.configuration.as_ref().unwrap().properties.len(), 1);
         assert!(c.lifecycle.as_ref().unwrap().on_startup);
@@ -617,4 +718,104 @@ mod tests {
         );
     }
 
+    /// 票 08：`httpEndpoints` 两形态并存——`string` 与 `{path, auth}` 必须都能解析，
+    /// 否则既有插件的 manifest 会在解析期整表丢掉端点声明（表现为全部 404）。
+    #[test]
+    fn test_http_endpoints_parse_both_forms() {
+        let c: PluginContributes = serde_json::from_value(serde_json::json!({
+            "httpEndpoints": [
+                "configs",
+                { "path": "task-status", "auth": "none" },
+                { "path": "task-queue/add", "auth": "jwt" },
+                { "path": "session-mode" }
+            ]
+        }))
+        .unwrap();
+        assert_eq!(c.http_endpoints.len(), 4);
+        assert_eq!(c.http_endpoints[0].path(), "configs");
+        assert_eq!(
+            c.http_endpoints[0].auth_raw(),
+            None,
+            "纯字符串条目 = 未声明档位"
+        );
+        assert_eq!(c.http_endpoints[1].path(), "task-status");
+        assert_eq!(c.http_endpoints[1].auth_raw(), Some("none"));
+        assert_eq!(c.http_endpoints[2].auth_raw(), Some("jwt"));
+        // 对象条目缺 auth 键 → 同样落「未声明」，由宿主按最严默认档仲裁
+        assert_eq!(c.http_endpoints[3].path(), "session-mode");
+        assert_eq!(c.http_endpoints[3].auth_raw(), None, "对象条目不带 auth = 未声明档位");
+    }
+
+    /// 票 08：产物 manifest 与源逐字一致（构建链既有口径）——序列化必须原样保持
+    /// 两形态，不得把 `"configs"` 改写成对象或反向（那会让 manifest-gen 的逐字节
+    /// 比对每次构建即红）。
+    #[test]
+    fn test_http_endpoints_round_trip_preserves_form() {
+        let src = serde_json::json!([
+            "configs",
+            { "path": "task-status", "auth": "none" },
+            { "path": "session-mode" }
+        ]);
+        let parsed: Vec<HttpEndpointContribution> = serde_json::from_value(src.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&parsed).unwrap(), src);
+    }
+
+    /// 票 08：形态错误的条目不会「降级成未声明」——整表解析失败（宿主拒绝激活），
+    /// 而不是静默收下少一项的清单（少一项即一个端点 404，静默失效最难查）。
+    #[test]
+    fn test_http_endpoints_reject_malformed_entries() {
+        let parse = |raw: serde_json::Value| {
+            serde_json::from_value::<Vec<HttpEndpointContribution>>(raw).is_err()
+        };
+        // path 非字符串 → 两形态都不匹配
+        assert!(parse(serde_json::json!([{ "path": 1 }])));
+        // 数字条目 → 解析失败（不得静默当成「未声明该端点」少收一项）
+        assert!(parse(serde_json::json!([42])));
+        // 数组条目 → 同上
+        assert!(parse(serde_json::json!([["task-status"]])));
+    }
+
+    /// 票 08：认证档位词汇——两档之外的取值一律 Err（绝不静默降级为较宽档位）。
+    /// 缺省档由调用方给：WS = none（历史行为）、HTTP = jwt（未声明即最严）。
+    #[test]
+    fn test_endpoint_auth_parse_with_default_and_unknown() {
+        assert_eq!(
+            EndpointAuth::parse_with(None, EndpointAuth::Jwt),
+            Ok(EndpointAuth::Jwt)
+        );
+        assert_eq!(
+            EndpointAuth::parse_with(Some(""), EndpointAuth::None),
+            Ok(EndpointAuth::None),
+            "空串 = 缺省档（WS 既有行为）"
+        );
+        assert_eq!(
+            EndpointAuth::parse_with(Some("  none  "), EndpointAuth::Jwt),
+            Ok(EndpointAuth::None),
+            "前后空白容忍，档位取值仍须逐字匹配"
+        );
+        assert_eq!(
+            EndpointAuth::parse_with(Some("jwt"), EndpointAuth::None),
+            Ok(EndpointAuth::Jwt)
+        );
+        // 大小写敏感：JWT / Bearer / token 这些拼写都算未知取值（WS 既有口径）
+        for bad in ["JWT", "token", "bearer", "local-only", "pairing-scope"] {
+            let err = EndpointAuth::parse_with(Some(bad), EndpointAuth::Jwt)
+                .expect_err("未知档位必须报错，不得回落到默认档");
+            assert!(
+                err.contains(bad) && err.contains("none") && err.contains("jwt"),
+                "错误文案须点明非法取值与合法档位: {err}"
+            );
+        }
+        assert_eq!(EndpointAuth::None.as_str(), "none");
+        assert_eq!(EndpointAuth::Jwt.as_str(), "jwt");
+    }
+
+    /// 既有测试的补位：`From<&str>` 让老写法 `vec!["x".into()]` 继续可用，
+    /// 但产出的是「未声明档位」条目——不能顺手把 auth 填成任何一档。
+    #[test]
+    fn test_http_endpoint_from_str_is_path_form() {
+        let e = HttpEndpointContribution::from("task-status");
+        assert_eq!(e, HttpEndpointContribution::Path("task-status".to_string()));
+        assert_eq!(e.auth_raw(), None);
+    }
 }

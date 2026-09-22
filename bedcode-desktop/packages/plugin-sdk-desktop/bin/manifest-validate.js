@@ -109,23 +109,47 @@ export function validateManifest(dir) {
     errors.push('contributes 必须是对象')
   }
 
-  // contributes.httpEndpoints（票 16：_http_endpoint 的路径白名单声明）
-  // 空/缺省 = 未声明，宿主按前缀内 ANY 放行（既有插件零迁移）；一旦声明就必须是
-  // 可用的相对路径段——条目非法会让声明侧「看起来有清单」而实际永远匹配不上。
+  // contributes.httpEndpoints（票 16 路径白名单、票 08 追加认证档位）
+  // 宿主**只认声明**：未声明路径 404，未声明清单等于没有 HTTP 面。条目两形态并存——
+  // 纯路径段（档位 = 宿主最严缺省 jwt）或 `{ path, auth }`。条目非法会让声明侧
+  // 「看起来有清单」而实际永远匹配不上，故构建期就判死；`auth` 取值真源是
+  // rust/src/types.rs 的 EndpointAuth（none|jwt），写错的条目在宿主侧不登记（端点不可达）。
+  const HTTP_ENDPOINT_AUTH_TIERS = ['none', 'jwt']
   const httpEndpoints = manifest.contributes?.httpEndpoints
   if (httpEndpoints !== undefined && httpEndpoints !== null) {
     if (!Array.isArray(httpEndpoints)) {
-      errors.push('contributes.httpEndpoints 必须是字符串数组')
+      errors.push('contributes.httpEndpoints 必须是「路径段字符串」或「{path, auth} 对象」的数组')
     } else {
-      const bad = httpEndpoints.filter(
-        (p) => typeof p !== 'string' || p.trim() === '' || p.includes('..'),
-      )
-      if (bad.length) {
-        errors.push(
-          `contributes.httpEndpoints 条目非法（须为非空相对路径段、不含 ..）: ${bad.join(', ')}`,
-        )
+      for (const entry of httpEndpoints) {
+        const isString = typeof entry === 'string'
+        const isObject = entry !== null && typeof entry === 'object' && !Array.isArray(entry)
+        if (!isString && !isObject) {
+          errors.push(
+            `contributes.httpEndpoints 条目形态非法（须为字符串或 {path, auth} 对象）: ${JSON.stringify(entry)}`,
+          )
+          continue
+        }
+        const path = isString ? entry : entry.path
+        if (typeof path !== 'string' || path.trim() === '' || path.includes('..')) {
+          errors.push(
+            `contributes.httpEndpoints 条目 path 非法（须为非空相对路径段、不含 ..）: ${JSON.stringify(entry)}`,
+          )
+        }
+        if (isString) continue
+        const extraKeys = Object.keys(entry).filter((k) => k !== 'path' && k !== 'auth')
+        if (extraKeys.length) {
+          errors.push(
+            `contributes.httpEndpoints 条目含未知字段（只允许 path / auth）: ${extraKeys.join(', ')} → ${JSON.stringify(entry)}`,
+          )
+        }
+        if (entry.auth !== undefined && !HTTP_ENDPOINT_AUTH_TIERS.includes(entry.auth)) {
+          errors.push(
+            `contributes.httpEndpoints 条目 auth 取值非法（须为 ${HTTP_ENDPOINT_AUTH_TIERS.join(' | ')}，缺省即最严档 jwt）: ${JSON.stringify(entry)}`,
+          )
+        }
       }
       const normalized = httpEndpoints
+        .map((entry) => (typeof entry === 'string' ? entry : entry?.path))
         .filter((p) => typeof p === 'string')
         .map((p) => p.trim().replace(/^\/+/, ''))
       const dup = normalized.filter((p, i) => normalized.indexOf(p) !== i)

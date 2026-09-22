@@ -2,13 +2,17 @@
 //!
 //! 挂载在 /api scope 上，统一拦截认证：
 //! - /api/auth/* — 放行（公开路由，配对/登录）
-//! - /api/plugin/* — 优先校验 JWT，无 JWT 时放行（hook 脚本由插件注入 PTY 环境、
-//!   无法持有 JWT；handler 不校验任何凭证，仅检查插件激活状态）
+//! - /api/plugin/* — 有 JWT 就验签并注入 claims；无 JWT 一律**放行到 handler**，
+//!   由 handler 按**端点声明的档位**决定要不要真的到达插件（票 08）：manifest
+//!   `contributes.httpEndpoints` 未声明 `auth` 即最严档 `jwt`（无凭证 → 401），
+//!   免凭证必须逐条显式声明 `auth: "none"`（环回 hook 脚本无法持有 JWT，正是这一格）。
+//!   本中间件不做端点级判定，因为它还不知道属主插件是谁（旧前缀兜底在 handler 里解）。
 //! - 其余 /api/* — 必须通过 JWT 校验
 //!
-//! 信任边界：服务监听 BIND_ADDRESS（0.0.0.0），局域网内任意设备均可无凭证调用
-//! 已激活插件的 HTTP 端点（含写操作）。插件端点的安全增益只能来自插件自身的
-//! 业务校验，本中间件对此不提供保护。
+//! 信任边界：服务监听 BIND_ADDRESS（0.0.0.0）。票 08 前「局域网内任意设备可无凭证
+//! 调用已激活插件的 HTTP 端点（含写操作）」；现在这一面由插件的逐端点声明承担——
+//! 未显式声明 `auth: "none"` 的端点要求验签，且插件拿得到宿主判定的调用方身份
+//! （`caller` = device / localhost / anonymous）用于自行收紧。
 //!
 //! 校验通过后将 JwtClaims 注入 request extensions，handler 通过 get_claims_from_request 提取。
 
@@ -61,8 +65,9 @@ pub fn is_public_path(path: &str) -> bool {
 
 /// 判断请求路径是否属于插件端点
 ///
-/// 插件端点优先走 JWT 校验；无 JWT 的本地调用方（如 Claude Code hook 脚本）放行，
-/// handler 仅校验插件激活状态。
+/// 插件端点**有 JWT 就验签**（claims 注入后由 handler 按端点档位判定）；无 JWT 的
+/// 请求放行到 handler——端点级认证在 `plugin_controller::plugin_http_endpoint`，
+/// 不在这里（本层还解析不出属主插件，旧前缀兜要按接管方的声明判）。
 pub fn is_plugin_path(path: &str) -> bool {
     path.starts_with("/api/plugin/")
 }
@@ -89,8 +94,9 @@ where
         return next.call(req).await.map(|res| res.map_into_boxed_body());
     }
 
-    // 插件端点：无 JWT 时放行（handler 不校验任何凭证，仅检查插件激活状态；
-    // 信任边界：服务监听 0.0.0.0，插件端点对局域网内任意设备可达）
+    // 插件端点：无 JWT 时放行到 handler（票 08）——真正的「这个端点要不要凭证」由
+    // handler 按属主插件 manifest 声明的档位判定，环回 hook 才能免 JWT 命中显式声明
+    // `auth: "none"` 的那几条
     if is_plugin_path(&path) {
         return next.call(req).await.map(|res| res.map_into_boxed_body());
     }

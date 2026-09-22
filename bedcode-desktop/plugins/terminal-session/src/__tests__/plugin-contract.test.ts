@@ -174,7 +174,9 @@ describe('C1 插件身份五处一致', () => {
     // HTTP_ENDPOINTS + rust/src/lib.rs 的 BUSINESS_HTTP_ENDPOINTS（票 02））。
     // 宿主对已声明插件走完整路径精确匹配：漏一项即该端点被宿主
     // 404（移动端与项目里的 hook 静默失效），多一项即放行到插件里才 404（审计歧义）。
-    const httpEndpoints = manifest.contributes.httpEndpoints as string[]
+    // 票 08：条目两形态——纯路径段 = 缺省最严档 jwt，对象条目显式声明 auth:none。
+    type HttpEndpointEntry = string | { path: string; auth?: 'none' | 'jwt' }
+    const httpEndpoints = manifest.contributes.httpEndpoints as HttpEndpointEntry[]
     expect(httpEndpoints).toEqual([
       'configs',
       'quick-actions',
@@ -188,15 +190,17 @@ describe('C1 插件身份五处一致', () => {
       'git/status',
       'git/checkout',
       // 票 07：认证链七端点（公开路由——JWT 之前的入口，编排归插件）
-      'auth/pairing',
-      'auth/verify',
-      'auth/qr-connect',
-      'auth/reauth',
-      'auth/biometric-challenge',
-      'auth/biometric-verify',
-      'auth/biometric-bind',
-      'task-status',
-      'session-mode',
+      // 票 08：这七条的调用方手里还没有 token，必须免凭证可达
+      { path: 'auth/pairing', auth: 'none' },
+      { path: 'auth/verify', auth: 'none' },
+      { path: 'auth/qr-connect', auth: 'none' },
+      { path: 'auth/reauth', auth: 'none' },
+      { path: 'auth/biometric-challenge', auth: 'none' },
+      { path: 'auth/biometric-verify', auth: 'none' },
+      { path: 'auth/biometric-bind', auth: 'none' },
+      // 票 08：hook 脚本由插件注入 PTY 环境、拿不到 JWT，只能环回匿名调用
+      { path: 'task-status', auth: 'none' },
+      { path: 'session-mode', auth: 'none' },
       'session-settings',
       'task-history/current',
       'task-history/list',
@@ -215,9 +219,35 @@ describe('C1 插件身份五处一致', () => {
     ])
     expect(httpEndpoints.length).toBe(34)
     // 条目必须是相对段（不带前导斜杠、不带插件前缀），否则宿主拼出的全路径匹配不上
-    for (const endpoint of httpEndpoints) {
+    const endpointPaths = httpEndpoints.map((e) => (typeof e === 'string' ? e : e.path))
+    for (const endpoint of endpointPaths) {
       expect(endpoint).not.toMatch(/^\//)
       expect(endpoint).not.toContain('api/plugin')
+    }
+    // 票 08：免凭证档位集合与 rust/src/lib.rs 的 NO_AUTH_HTTP_ENDPOINTS 同源。
+    // 少一条 → hook / 移动端配对被宿主判 401；多一条 → 写端点对局域网匿名敞开。
+    const noneTiered = httpEndpoints
+      .filter((e): e is { path: string; auth: 'none' } => typeof e === 'object' && e.auth === 'none')
+      .map((e) => e.path)
+      .sort()
+    expect(noneTiered).toEqual([
+      'auth/biometric-bind',
+      'auth/biometric-challenge',
+      'auth/biometric-verify',
+      'auth/pairing',
+      'auth/qr-connect',
+      'auth/reauth',
+      'auth/verify',
+      'session-mode',
+      'task-status',
+    ])
+    expect(noneTiered.length).toBe(9)
+    // 除 none 之外不许写出第二档（缺省即最严档 jwt，显式 jwt 是第二份真源；
+    // 对象条目不带 auth 同理——要么写全要么用字符串形态）
+    for (const endpoint of httpEndpoints) {
+      if (typeof endpoint === 'object') {
+        expect(endpoint.auth, `对象条目必须显式 auth:"none"（当前 ${endpoint.path}）`).toBe('none')
+      }
     }
     // 声明清单必须能在 Rust 侧分派表里找到同名条目（两侧同源，缺一即红）：
     // 任务域在 task/mod.rs，业务域（configs / quick-actions）与文件浏览域（票 03）
@@ -225,13 +255,17 @@ describe('C1 插件身份五处一致', () => {
     const taskSource = readFileSync(resolve(PLUGIN_ROOT, 'rust/src/task/mod.rs'), 'utf-8')
     const libSource = readFileSync(resolve(PLUGIN_ROOT, 'rust/src/lib.rs'), 'utf-8')
     const fileBrowseSource = readFileSync(resolve(PLUGIN_ROOT, 'rust/src/file_browse/mod.rs'), 'utf-8')
-    for (const endpoint of httpEndpoints) {
+    for (const endpoint of endpointPaths) {
       expect(
         taskSource.includes(`"${endpoint}"`)
           || libSource.includes(`"${endpoint}"`)
           || fileBrowseSource.includes(`"${endpoint}"`),
         `分派表缺 ${endpoint}`,
       ).toBe(true)
+    }
+    // 票 08：免凭证清单本身也在 lib.rs 有真源（两侧同源，改一处即红）
+    for (const endpoint of noneTiered) {
+      expect(libSource.includes(`"${endpoint}"`), `NO_AUTH_HTTP_ENDPOINTS 缺 ${endpoint}`).toBe(true)
     }
   })
 })

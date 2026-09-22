@@ -27,35 +27,12 @@ pub const ENDPOINT_HANDLE_PREFIX: &str = "wse-";
 /// 插件端点挂载路径前缀：完整路径 `{PREFIX}/{plugin_id}/{path}`（spec D5）
 pub const PLUGIN_ENDPOINT_ROUTE_PREFIX: &str = "/ws/plugin";
 
-/// 端点首消息认证策略（spec D8）
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EndpointAuth {
-    /// 跳过首消息认证状态机（连上即可收发，插件自管认证）
-    None,
-    /// 宿主校验首消息 `{"type":"auth","token":"<jwt>"}`；超时 / 失败 → close(4001)
-    Jwt,
-}
-
-impl EndpointAuth {
-    /// 解析插件传入的 `auth` 字段（缺省 / 空串 = `none`，大小写不敏感）
-    pub fn parse(raw: Option<&str>) -> Result<Self, String> {
-        match raw.map(str::trim).unwrap_or("") {
-            "" | "none" => Ok(Self::None),
-            "jwt" => Ok(Self::Jwt),
-            other => Err(format!(
-                "ws register-endpoint: unknown auth '{other}' (expected \"none\" or \"jwt\")"
-            )),
-        }
-    }
-
-    /// 线协议取值（事件 payload 与文档口径）
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::None => "none",
-            Self::Jwt => "jwt",
-        }
-    }
-}
+/// 端点认证档位（spec D8）——词汇表真源在 SDK（`bedcode_plugin_api::EndpointAuth`）
+///
+/// 票 08 起 WS 注册面与 HTTP 声明面共用这一张表，避免「两 transport 各自抄一遍
+/// `none|jwt`」的词汇漂移。缺省档位各面自己给：WS = `None`（本文件，历史行为），
+/// HTTP = `Jwt`（见 `plugin::manager::registry`，票 08 裁决 1「未声明即最严」）。
+pub use bedcode_plugin_api::EndpointAuth;
 
 /// 已注册端点（克隆开销 = 一次 `Arc` + 三个短字符串）
 #[derive(Clone)]
@@ -245,15 +222,24 @@ mod tests {
         register(owner, path, EndpointAuth::None, None, None, Arc::new(MessageBus::new()))
     }
 
+    /// WS 注册面的档位**策略**：缺省 = `none`（插件自管首消息认证，历史行为）。
+    /// 档位词汇本身由 SDK 锁（`EndpointAuth::parse_with` 及其 SDK 单测），这里只锁
+    /// WS 传给它的缺省档与「未定义取值不回落」这两条 transport 级判据。
     #[test]
-    fn auth_parse_accepts_documented_values_only() {
-        assert_eq!(EndpointAuth::parse(None).unwrap(), EndpointAuth::None);
-        assert_eq!(EndpointAuth::parse(Some("")).unwrap(), EndpointAuth::None);
-        assert_eq!(EndpointAuth::parse(Some(" none ")).unwrap(), EndpointAuth::None);
-        assert_eq!(EndpointAuth::parse(Some("jwt")).unwrap(), EndpointAuth::Jwt);
+    fn ws_endpoint_auth_defaults_to_none_and_rejects_unknown() {
+        let d = |raw: Option<&str>| EndpointAuth::parse_with(raw, EndpointAuth::None);
+        assert_eq!(d(None).unwrap(), EndpointAuth::None);
+        assert_eq!(d(Some("")).unwrap(), EndpointAuth::None);
+        assert_eq!(d(Some(" none ")).unwrap(), EndpointAuth::None);
+        assert_eq!(d(Some("jwt")).unwrap(), EndpointAuth::Jwt);
         // 未定义取值必须报错（不静默降级为 none —— 认证策略错误方向危险）
-        assert!(EndpointAuth::parse(Some("JWT")).is_err());
-        assert!(EndpointAuth::parse(Some("token")).is_err());
+        for bad in ["JWT", "token"] {
+            let err = d(Some(bad)).expect_err("未定义档位不得回落到缺省档");
+            assert!(
+                err.contains(bad) && err.contains("none") && err.contains("jwt"),
+                "文案须点明非法取值与合法档位: {err}"
+            );
+        }
     }
 
     #[test]

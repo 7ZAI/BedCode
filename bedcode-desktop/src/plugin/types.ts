@@ -65,16 +65,23 @@ export interface PluginContributes {
   toolProviders: ToolProviderContribution[]
   fileHandlers: FileHandlerContribution[]
   /**
-   * 插件 HTTP 端点清单（`_http_endpoint` 的路径白名单，票 16）：条目为不含
-   * `/api/plugin/<插件 id>/` 前缀的相对路径段。空/缺省 = 未声明，宿主路由按
-   * 票据 03 的过渡策略在前缀内 ANY 放行。
+   * 插件 HTTP 端点清单（`_http_endpoint` 的路径白名单 + 认证档位，票 16 / 票 08）：
+   * 条目为不含 `/api/plugin/<插件 id>/` 前缀的相对路径段，可写成 `{ path, auth }`
+   * 声明档位。宿主只认声明：未声明路径 404，空/缺省清单 = 该插件没有 HTTP 面
+   * （票据 03 的「前缀内 ANY 放行」过渡策略已随票 08 退役）。
    */
-  httpEndpoints?: string[]
+  httpEndpoints?: HttpEndpointContribution[]
   /** 配置声明 */
   configuration?: PluginConfiguration
   /** 生命周期钩子声明 */
   lifecycle?: LifecycleContribution
 }
+
+/** HTTP 端点认证档位（票 08，与 SDK `EndpointAuthTier` 同形） */
+export type EndpointAuthTier = 'none' | 'jwt'
+
+/** 一条 HTTP 端点声明：纯路径段（档位 = 宿主最严缺省 jwt）或 `{ path, auth }` 对象 */
+export type HttpEndpointContribution = string | { path: string; auth?: EndpointAuthTier }
 
 /** 生命周期扩展点声明 */
 export interface LifecycleContribution {

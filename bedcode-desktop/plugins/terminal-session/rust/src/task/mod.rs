@@ -413,16 +413,28 @@ mod tests {
     /// 宿主对已声明插件走精确匹配：清单少一项 → 该端点被宿主 404（移动端与 hook
     /// 脚本静默失效）；多一项 → 未实现的路径被放行到插件里才 404（审计歧义）。
     /// 两向都比对，顺序不敏感（宿主按集合匹配）。
+    ///
+    /// 票 08：条目两形态并存（纯路径段 = 缺省最严档 `jwt`，对象条目声明 `auth`），
+    /// 因此「路径集合一致」之外还锁档位集合一致——少标一个 `none` 就等于把 hook 或
+    /// 移动端配对链路判成 401，多标一个 `none` 就等于把写端点敞开给局域网匿名调用方。
     #[test]
     fn http_endpoints_manifest_matches_dispatch_list() {
         let manifest: serde_json::Value =
             serde_json::from_str(include_str!("../../../plugin.json")).expect("plugin.json 合法");
-        let declared = manifest["contributes"]["httpEndpoints"]
+        let entries = manifest["contributes"]["httpEndpoints"]
             .as_array()
             .unwrap_or_else(|| panic!("manifest 未声明 contributes.httpEndpoints: {}", &manifest["contributes"]))
             .iter()
-            .map(|v| v.as_str().expect("端点条目必须是字符串"))
+            .map(|v| match v {
+                serde_json::Value::String(path) => (path.as_str(), None),
+                serde_json::Value::Object(obj) => (
+                    obj["path"].as_str().unwrap_or_else(|| panic!("对象条目缺 path: {v}")),
+                    obj["auth"].as_str(),
+                ),
+                other => panic!("端点条目形态非法: {other}"),
+            })
             .collect::<Vec<_>>();
+        let declared: Vec<&str> = entries.iter().map(|(p, _)| *p).collect();
 
         let mut expected = HTTP_ENDPOINTS.to_vec();
         expected.extend(crate::BUSINESS_HTTP_ENDPOINTS.iter().copied());
@@ -445,6 +457,54 @@ mod tests {
             assert!(
                 declared.iter().any(|d| d == endpoint),
                 "manifest 缺 git 域端点 {endpoint}"
+            );
+        }
+    }
+
+    /// 票 08：免凭证档位集合与 [`crate::NO_AUTH_HTTP_ENDPOINTS`] 逐字一致
+    ///
+    /// 三个方向各自锁死：
+    /// 1. manifest 标了 `none` 的端点 == 常量清单（少标 → hook / 配对链路被宿主判 401；
+    ///    多标 → 写端点对局域网匿名敞开）；
+    /// 2. 认证链七条与 hook 两条**必须**全在 none 清单里（这两批是「拿不到 JWT」的调用方）；
+    /// 3. 不许显式写 `auth: "jwt"`——缺省即最严档，写出来是第二份真源，会随裁决漂移。
+    #[test]
+    fn none_auth_endpoints_match_manifest_and_cover_public_surface() {
+        let manifest: serde_json::Value =
+            serde_json::from_str(include_str!("../../../plugin.json")).expect("plugin.json 合法");
+        let entries: Vec<(&str, Option<&str>)> = manifest["contributes"]["httpEndpoints"]
+            .as_array()
+            .expect("httpEndpoints 数组")
+            .iter()
+            .map(|v| match v {
+                serde_json::Value::String(path) => (path.as_str(), None),
+                serde_json::Value::Object(obj) => (obj["path"].as_str().expect("path"), obj["auth"].as_str()),
+                other => panic!("端点条目形态非法: {other}"),
+            })
+            .collect();
+
+        let mut none_declared: Vec<&str> = entries
+            .iter()
+            .filter(|(_, auth)| matches!(auth, Some("none")))
+            .map(|(p, _)| *p)
+            .collect();
+        none_declared.sort();
+        let mut expected_none = crate::NO_AUTH_HTTP_ENDPOINTS.to_vec();
+        expected_none.sort();
+        assert_eq!(
+            none_declared, expected_none,
+            "auth:none 的端点集合必须与 NO_AUTH_HTTP_ENDPOINTS 一致"
+        );
+
+        for redundant in entries.iter().filter(|(_, auth)| auth.is_some() && !matches!(auth, Some("none"))) {
+            panic!("禁止显式声明 auth:{:?}——缺省即最严档 jwt（票 08 裁决 1）", redundant.1);
+        }
+
+        // 「拿不到 JWT 的调用方」两批必须全部在免凭证清单里
+        for endpoint in crate::AUTH_HTTP_ENDPOINTS.iter().chain(&["task-status", "session-mode"]) {
+            assert!(
+                expected_none.contains(endpoint),
+                "{endpoint} 的调用方拿不到 JWT（hook 脚本 / 配对入口），必须声明 auth:none"
             );
         }
     }
