@@ -44,7 +44,7 @@
 ## Comments
 
 - 2026-09-23 立项：来源 spec §8。文档票排在路径定稿之后，是因为票 04 起每票都自带「本票涉及的文档内链同步」子项——那些是**随改动走的**注释与 rustdoc 链接，本票管的是**独立于代码的文档体系**，两者不要混，也别互相以为对方做过。
-- 2026-09-23 done（commit `166ad3d0e`，6 文件 +118/-84）：全部门禁绿，两处与票面数字不同，按实测办理并回写如下：
+- 2026-09-23 done（commit `83b09c587`，7 文件 +165/-84）：全部门禁绿，两处与票面数字不同，按实测办理并回写如下：
 
   **1. code-map 服务器节三层重写 + 五处重指向**——Project Structure 的 `server/` 行标注三层；Core Modules 服务器节按 `core/`（组合物/生命周期/过滤器链/链路加密）/ `http/`（routes/gateway/controllers/middleware）/ `websocket/`（routes/conn/channel/registry/subscription/terminal_ws/message/websocket_manager/session/services）重写；Quick Navigation「链路加密」与「按类型查找」的 业务服务/DTO/链路加密 行改指 `server/{websocket,http,core}/`；自动化任务段落 `server/controllers/` → `server/http/controllers/`；端点注册表条目 `server/ws/endpoint.rs` → `server/websocket/endpoint.rs`。重写时顺带修正两处**既有失真**：`middleware/` 描述里的「CORS」（`middleware/cors.rs` 已于票 02 删除）与 `services/` 的「认证、配对」（实际只有 session_control / terminal_service，认证编排已下沉插件）。
   **2. mobile-desktop-auth.md 8 处全为既存失真（本任务之前文件就不存在）**——`:210/:220/:463` 与 `:476-478` 指向的 `server/services/{pairing,auth}_service.rs`、`server/controllers/auth_controller.rs`、`utils/auth/{pairing,qr_token}.rs` 均已随认证下沉删除；改指 `plugins/terminal-session/rust/src/{pairing,auth_http}/`（配对/QR/HTTP 认证编排真源）与 `server/websocket/{conn.rs,terminal_ws/,websocket_manager.rs}`。`:3` 时效提示的「桌面端 `server/` DTO」改指 `server/http/dtos/`。**这些文件的删除与本次 server 拆分无关（2026-09-21/22 认证下沉时已删）**，本票只是按 AGENTS §12 顺手修正文档。
