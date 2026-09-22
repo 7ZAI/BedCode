@@ -689,6 +689,12 @@ impl PluginHost {
             }
         }
 
+        // 二次清扫（审计票 09）：`task::purge_for_plugin` 在本函数早段执行，早于 guest
+        // `on_shutdown` / `deactivate`，在飞单元可能在 purge 之后才跑完并补投终态事件。
+        // guest 清理结束后再收一次（幂等：已终态任务 cancel 返回 false、注册表条目与
+        // 回调队列已摘除），补上这个次序小窗。
+        crate::plugin::manager::task::purge_for_plugin(plugin_id);
+
         // 统一清理：取消注册和撤销权限
         self.registry.unregister_plugin(plugin_id).await;
         self.permission.revoke_all(plugin_id);

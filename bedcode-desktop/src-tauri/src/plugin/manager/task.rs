@@ -847,12 +847,41 @@ impl TaskRegistry {
 
 // ==================== 回调管道（每插件有界 channel + 消费派发任务） ====================
 
+/// 是否允许为该属主新建回调 channel（审计票 09）
+///
+/// 只有「注册表里还有该属主的在册任务」才允许新建：purge（插件停用回收）之后到期的
+/// 在飞单元会走到 `enqueue_event`，若此时重建 channel + 消费派发任务，二者会永久残留
+/// 且事件会派发给已停用的插件。
+fn may_open_callback_channel(owner: &str) -> bool {
+    REGISTRY
+        .jobs
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .values()
+        .any(|h| h.owner() == owner)
+}
+
 /// 入队回调事件（无返回值、尽力投递；terminal 优先，progress 可丢）
 ///
 /// 每插件一条有界 channel（深度 = PLUGIN_TASK_CALLBACK_QUEUE_DEPTH）：满时
 /// progress 丢弃 + `warn!` + `droppedEvents` 计数；terminal 也丢则 `error!` 留痕。
 /// 入队失败只在插件侧事件计数上反映（status 可见），不阻塞任务执行。
+///
+/// 属主已从注册表摘除（purge / 从未登记任务）时直接丢弃，不重建 channel——见
+/// [`may_open_callback_channel`]。
 fn enqueue_event(host_ctx: &Arc<WasmHostContext>, owner: &str, event: serde_json::Value, terminal: bool) {
+    // purge 后到达的事件不得重建回调 channel（审计票 09）：插件已停用、其任务已从注册表
+    // 摘除，此处若新建 channel + consumer 会永久残留（停用后不会再有人 purge 它）并把
+    // 事件派发给已停用的插件。判据 = 注册表里已无该属主的在册任务（`submit` 的 started
+    // 事件在 `register_job` 之后投出，任务必在表；`execute-batch` 不留痕但也不投事件）。
+    if !may_open_callback_channel(owner) {
+        tracing::debug!(
+            plugin_id = %owner,
+            "[host-task] no registered job for owner (purged/unregistered), event dropped"
+        );
+        return;
+    }
+
     let entry = EventEntry {
         owner: owner.to_string(),
         host_ctx: host_ctx.clone(),
@@ -945,6 +974,20 @@ mod tests {
     fn parse_plan_rejects_empty_units() {
         let e = parse_plan(r#"{"units":[]}"#).unwrap_err();
         assert!(e.contains("no units"));
+    }
+
+    /// purge 之后到期的在飞单元不得重建回调 channel（审计票 09）：重建出来的 channel 与
+    /// 消费派发任务无人再回收，且事件会派发给已停用的插件。
+    #[test]
+    fn may_open_callback_channel_requires_registered_job() {
+        let owner = "com.bedcode.task-purge-probe";
+        purge_for_plugin(owner);
+        assert!(
+            !may_open_callback_channel(owner),
+            "purge 后该属主已无在册任务，不得再新建回调 channel"
+        );
+        let queues = REGISTRY.queues.lock().unwrap_or_else(|e| e.into_inner());
+        assert!(queues.get(owner).is_none(), "purge 后回调队列不得残留/复活");
     }
 
     #[test]
