@@ -56,16 +56,46 @@ const FRONTEND_PERMISSION_RULES = [
 
 /** Rust host API 调用 → 权限 */
 const RUST_PERMISSION_RULES = [
-  { re: /\b(storage_get|storage_set|storage_delete|db_execute|db_query)\b/, perm: 'storage' },
+  // 插件私有 KV（host-storage）
+  { re: /\b(storage_get|storage_set|storage_delete)\b/, perm: 'storage' },
+  // 主库 SQL 面（票 02 高危位）：内核 `db_*` 与插件私有库 `plugin_db_*` 分域——
+  // 主库位只按需授予第一方，故这里必须映射 `database:main` 而非 `storage`
+  // （映射成 storage 会让插件「声明成功、运行时被拒」）。负向后视排除
+  // `plugin_db_execute` / `plugin_db_query` 这类私有库形态（其前置字符是 `_`）。
+  { re: /(?<![_\w])db_(execute|query)\w*/, perm: 'database:main' },
   { re: /\bterminal_send\b/, perm: 'terminal:input' },
-  { re: /\b(session_list|session_get)\b/, perm: 'session:read' },
-  // 会话配置读写（host-session v19）：new plugin 侧经 SDK HostSession 调用即推导该位
-  { re: /\bsession_config_(upsert|get|delete)\b/, perm: 'session:config' },
+  // 会话读取面：`session_list` / `session_get` + v23 起留作**一次性 legacy 迁移通道**的
+  // `session_config_list` / `session_config_get`（`config-get` 改挂 `session:read`）。
+  // **`session_config_upsert` / `session_config_delete` 已随 v23 从 ABI 删除**，`session:config`
+  // 权限位同步退役——映射表若留着旧项，就会给插件注入词汇表外的权限（见下方加载期自检）。
+  { re: /\b(session_list|session_get|session_config_list|session_config_get)\b/, perm: 'session:read' },
   { re: /\bhttp_fetch\b/, perm: 'network:http' },
   { re: /\b(fs_read|fs_copy)\b/, perm: 'fs:read' },
   { re: /\bfs_write\b/, perm: 'fs:write' },
+  // 插件私有库（host-plugin-database）与私有 KV 同挂 storage
   { re: /\bplugin_db_\w+\b/, perm: 'storage' },
 ]
+
+/**
+ * 映射表加载期自检：任何指向「词汇表外权限」的规则立即抛错，绝不静默往下走。
+ *
+ * 真源是 `rust/src/permission.rs`（生成 `bin/permission-vocabulary.json`），而本表是手写的
+ * 宿主方法名映射——两者漏跟演一次，后果是 manifest-gen 给插件注入非法权限位，随后
+ * `plugin-build.js` 的 manifest 校验必挂（整条 `plugins:build` 链不可用，2026-09-22 实测：
+ * v23 退役 `session:config` 后本表未跟演）。
+ */
+{
+  const vocab = new Set(permissionVocabulary().permissions)
+  for (const rule of [...FRONTEND_PERMISSION_RULES, ...RUST_PERMISSION_RULES]) {
+    if (!vocab.has(rule.perm)) {
+      throw new Error(
+        `manifest-gen: 权限映射表含词汇表外权限 '${rule.perm}'（规则 ${rule.re}）——` +
+          `真源 packages/plugin-sdk-desktop/rust/src/permission.rs 变更（退役/改名）后必须跟演本表，` +
+          `并重跑 SDK 的 pnpm run gen:permissions`,
+      )
+    }
+  }
+}
 
 // ==================== 文件收集 ====================
 
