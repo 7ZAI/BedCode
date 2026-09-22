@@ -179,10 +179,6 @@ pub const PLUGIN_TASK_MAX_UNITS_PER_PLAN: usize = 256;
 /// （保护回调载荷与插件线性内存，spec §7；大结果别靠 status 兜底）
 pub const PLUGIN_TASK_UNIT_RESULT_MAX_BYTES: usize = 1024 * 1024;
 
-/// 单元缺省超时（毫秒）：plan 未给 `timeoutMs` 时按此执行（与 process
-/// DEFAULT_TIMEOUT_MS 同档）；超时按该单元失败收集（fail-collect，不拖垮任务）
-pub const PLUGIN_TASK_UNIT_TIMEOUT_MS: u64 = 600_000;
-
 /// 任务墙钟缺省超时（毫秒）：plan 未给 `jobTimeoutMs` 时按此执行；超时 →
 /// cancelled + 已完成单元结果保留（运行中单元跑完或超时）
 pub const PLUGIN_TASK_JOB_TIMEOUT_MS: u64 = 3_600_000;

@@ -38,7 +38,7 @@ Date: 2026-09-21
 | `bus.rs` + `host_impl/bus.rs` | 🔴 背压/解环真实，topic 无命名空间 | 每订阅者 64 有界队列 + `try_send` 丢弃计数（`bus.rs:263-285`）、消费任务独立 spawn（`:338`）、仅 trait 注入无 PluginHost 反引用（`bus.rs:54` + `host/services.rs:370`）；但订阅侧零校验（`host_impl/bus.rs:73-101`），见 §4-P0-4 |
 | `config.rs` | ✅ 真被消费（⚠️一层未接线） | Engine 四参数进 `wasm_runtime.rs:644-679`，Store 八上限经 `ResourceLimiter` 与燃料注入生效；`validate` 拒 0 值/拒预留<上限；`set_config`（`wasm_runtime.rs:730`）生产零调用 → 「运行时覆盖」层尚未接线 |
 | `monitor.rs` | ⚠️ 有产无消 | 埋点全接线（`component.rs:956` 燃料、`wasm_runtime.rs:326` 内存、`framework.rs:156` 授权计数、`bus.rs:251,268` 丢弃），全原子零日志；`MetricsRegistry::snapshot` 无任何生产消费者（无 Tauri command，前端用无关的 `get_server_metrics`）→ 票据 03 承诺的「诊断页统一数据源」未兑现 |
-| `manager/task.rs`（core-task） | ⚠️ 配额基本兑现，一处承诺未落 | 池 8 / 每插件 4 / 256 单元 / 1MiB / 任务 3600s / 回调队列 64 / 保留 64 均有比较式落点；**`PLUGIN_TASK_UNIT_TIMEOUT_MS`（`system/constants/plugin.rs:176`）全仓零引用** → 单元级超时未实现；两条重入红线经核成立 |
+| `manager/task.rs`（core-task） | ⚠️ 配额基本兑现，一处承诺未落 | 池 8 / 每插件 4 / 256 单元 / 1MiB / 任务 3600s / 回调队列 64 / 保留 64 均有比较式落点；**`PLUGIN_TASK_UNIT_TIMEOUT_MS` 全仓零引用** → 2026-09-22 票 09 裁决 B 处置：常量退役（不可兑现），口径改为「v20 无单元级抢占，任务墙钟是唯一兜底」，文档与 SDK 注释同步；两条重入红线经核成立 |
 | `permission.rs` | ✅ 纯 re-export，无本地漂移列表 | 6 行 `pub use bedcode_plugin_api::permission::*` |
 
 ---
@@ -91,7 +91,7 @@ Date: 2026-09-21
 - **P0-5 前端命令面 plugin_id 自报**：`manager/api_bridge.rs:130-147` 校验的是**参数里那个 plugin_id** 的激活态与权限 → 同 webview 内任一插件前端可 `invoke('plugin_storage_get', {pluginId:'受害者', key})` 读写他插件 storage；`api_bridge.rs:254` 注释「前端无法伪造 plugin_id」不成立。`sandbox:'isolated'` 只存在于类型定义（`src/plugin/types.ts:26`），`loader.ts:51` 把所有非 inline 跳过 → 所有插件前端代码与宿主同权共生。
 - **P1-1 LAN 无凭证插件 HTTP 面**：`server/middleware/jwt_auth.rs:92-95` 对 `/api/plugin/**` 无 JWT 直接放行（`:9-11` 注释自陈「0.0.0.0 监听，局域网内任意设备均可无凭证调用已激活插件的 HTTP 端点（含写操作）」）；未声明 `contributes.httpEndpoints` 的插件整前缀放行（`plugin_controller.rs:71-80`）；此路径 `device: None`（`:135-138`）→ 插件无从判调用方。对照：WS 侧有声明式 `auth: none|jwt`（code-map:156-157），HTTP 侧无对等原语。
 - **P1-2 fs_auth 白名单过宽**：见 §2 该行。
-- **P1-3 task 单元超时未实现**：挂死单元永久占用进程级 8 线程池槽位，跨插件无隔离。
+- **P1-3 task 单元超时未实现**：挂死单元永久占用进程级 8 线程池槽位，跨插件无隔离 → 2026-09-22 票 09 裁决 B：不实现单元级抢占，退役该常量并如实写文档；残余风险转入待立项 E5'（宿主调用侧统一超时闸门）。
 - **P1-4 互调接收侧无门**：ADR 0017 层 1 只校验目标声明；`host_impl/api.rs:39-50` ReplyHandler 不校验 `msg.sender`，配合 P0-4 可订阅他人 api topic 抢答（**待复核**，票 05 范围内确认）。
 
 ### 扩展性：漂移实测（脚本比对三副本）

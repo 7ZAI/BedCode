@@ -194,8 +194,7 @@ interface events-task {
 | `PLUGIN_TASK_MAX_JOBS_PER_PLUGIN` | 4 | 每插件并发在册任务上限（含 running + queued） |
 | `PLUGIN_TASK_MAX_UNITS_PER_PLAN` | 256 | 单计划单元数上限 |
 | `PLUGIN_TASK_UNIT_RESULT_MAX_BYTES` | 1 MiB | 单元结果上限，超出截断 + `truncated` 标记（保护回调载荷与线性内存） |
-| `PLUGIN_TASK_UNIT_TIMEOUT_MS`（缺省） | 600_000 | 单元缺省超时（与 process DEFAULT_TIMEOUT_MS 同档） |
-| `PLUGIN_TASK_JOB_TIMEOUT_MS`（缺省） | 3_600_000 | 任务墙钟缺省超时 |
+| `PLUGIN_TASK_JOB_TIMEOUT_MS`（缺省） | 3_600_000 | 任务墙钟缺省超时（**唯一的超时兜底**：v20 无单元级抢占，见下） |
 | `PLUGIN_TASK_CALLBACK_QUEUE_DEPTH` | 64 | 每插件回调队列深度 |
 | `PLUGIN_TASK_STATUS_RESULTS_MAX` | 64 | status 终态结果保留条数上限（超出只留计数——大结果别靠 status 兜底） |
 
@@ -206,7 +205,10 @@ interface events-task {
 1. **池线程永不回调进插件**：回调只经 §5.3 的派发任务 + `with_wasm_plugin_call`（F4 模式），从机制上不触碰 guest 调用栈；
 2. **插件禁止在 guest 调用栈内同步等待自己任务的事件**：回调需要 F1 的锁，而 guest 正持有它 → 自死锁。等待语义一律走 `execute-batch`（宿主侧 join，不经 Store）；异步任务的结果消费只能在事件回调 / 后续空闲调用里做；
 3. **回调内再 submit 允许**（新调用、新拿锁，非嵌套），但受 §7 配额约束，SDK 文档提示避免「回调风暴」模式；
-4. **`execute-batch` 阻塞上限**：单批单元数与单元超时上限（§7）决定最坏阻塞时长，SDK 文档沿用 run-sync 的「百毫秒～秒级适用」口径，长任务一律 `submit`。
+4. **`execute-batch` 阻塞上限**：由单批单元数、各单元自身耗时与任务墙钟（§7）共同决定最坏
+   阻塞时长；**没有单元级超时**（审计票 09 裁决 B：单元执行体是同步阻塞直调，池线程内无中断点，
+   原 `PLUGIN_TASK_UNIT_TIMEOUT_MS` 已退役）。SDK 文档沿用 run-sync 的「百毫秒～秒级适用」口径，
+   长任务一律 `submit`，阻塞型单元的超时走被调用方自带参数。
 
 ---
 
