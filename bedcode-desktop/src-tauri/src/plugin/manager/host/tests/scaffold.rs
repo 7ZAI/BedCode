@@ -77,9 +77,7 @@ pub(super) async fn setup_host() -> PluginHost {
         runtime_error_notify_throttle: Arc::new(std::sync::Mutex::new(HashMap::new())),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         user_plugins_dir: std::env::temp_dir().join("bedcode-test-user-plugins"),
-        frontend_channel: Arc::new(
-            crate::plugin::security::frontend_channel::FrontendChannelRegistry::new(),
-        ),
+        frontend_channel: Arc::new(crate::plugin::security::frontend_channel::FrontendChannelRegistry::new()),
     }
 }
 
@@ -106,7 +104,6 @@ pub(super) fn make_plugin(id: &str, source: PluginSource, state: PluginState) ->
             resource_overrides: None,
         },
         state,
-        granted_permissions: HashSet::new(),
         extension_path: String::new(),
         activated_at: None,
         source,
@@ -181,4 +178,3 @@ inventory::submit! {
         on_shutdown: synthetic_on_shutdown,
     }
 }
-

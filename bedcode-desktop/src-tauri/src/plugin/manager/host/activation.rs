@@ -268,7 +268,8 @@ impl PluginHost {
                     "manifest 声明的权限不在 SDK 词汇表内，授权时被过滤"
                 );
             }
-            loaded.granted_permissions = granted;
+            // 授权结果留在 PermissionManager 才是权限判定的唯一入口；此处不再写
+            // LoadedPlugin 镜像字段（票 11 第 4 项）
 
             // 置中间态后再释放锁执行 WASM activate：列表查询在激活期间
             // 可见 Activating（瞬时态，终态由下方 phase 2/3 写入）
@@ -805,8 +806,7 @@ impl PluginHost {
 /// .com.bedcode.session.*`）时照常可达；`owner_of` 解旧名时也落到本插件，
 /// 回复道 sender 校验口径一致。与 HTTP 前缀别名（`legacy_http_alias`）同一决策；
 /// 窗口关闭（全量更新后）时删除本条即可。
-const LEGACY_API_PLUGIN_ALIASES: &[(&str, &str)] =
-    &[("com.bedcode.terminal-session", "com.bedcode.session")];
+const LEGACY_API_PLUGIN_ALIASES: &[(&str, &str)] = &[("com.bedcode.terminal-session", "com.bedcode.session")];
 
 /// 为新 plugin_id 的 api 清单附加旧名别名；无别名命中时原样返回。
 ///

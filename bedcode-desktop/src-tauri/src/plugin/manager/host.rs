@@ -166,7 +166,9 @@ impl PluginHost {
             let manifest = (entry.create_manifest)();
             let plugin_id = manifest.id.clone();
 
-            let granted = permission.grant_permissions(&plugin_id, &manifest.permissions);
+            // 授权结果只落在 PermissionManager（唯一真源）；LoadedPlugin 不再镜像
+            // 一份 granted 列表（票 11 第 4 项：镜像字段只写不读）
+            permission.grant_permissions(&plugin_id, &manifest.permissions);
 
             // 内置常驻语义：随二进制分发、无独立启停，注册即激活。
             // 直接置 Activated 使 notify_startup 的 on_startup 回调与
@@ -175,7 +177,6 @@ impl PluginHost {
             let loaded = LoadedPlugin {
                 manifest,
                 state: PluginState::Activated,
-                granted_permissions: granted,
                 extension_path: String::new(),
                 activated_at: Some(Utc::now()),
                 source: PluginSource::StaticRegistry,
@@ -193,70 +194,14 @@ impl PluginHost {
         let mut wasm_plugins_map: HashMap<String, Arc<Mutex<LoadedWasmPlugin>>> = HashMap::new();
 
         for (id, loaded) in file_plugins.into_iter().chain(user_plugins) {
-            // 如果 manifest 声明了 rust_library，尝试加载 WASM 模块
-            if !loaded.manifest.rust_library.is_empty() {
-                let plugin_dir = Path::new(&loaded.extension_path);
-                let wasm_filename = format!("{}.wasm", loaded.manifest.rust_library);
-                let wasm_path = plugin_dir.join(&wasm_filename);
-
-                if !wasm_path.exists() {
-                    tracing::error!(
-                        "WASM module not found for plugin {} v{}: {}",
-                        loaded.manifest.id,
-                        loaded.manifest.version,
-                        wasm_path.display()
-                    );
-                    // 不 continue：manifest 仍注册（Error 状态），避免 WASM 缺失时
-                    // 插件从列表消失（与移动端行为一致，仅跳过 WASM 实例）
-                    all_plugins.insert(
-                        id,
-                        LoadedPlugin {
-                            state: PluginState::Error(format!("WASM module not found: {}", wasm_path.display())),
-                            ..loaded
-                        },
-                    );
-                    continue;
-                }
-
-                // 阶段 A 共存入口：按产物格式自动选择 core module / component
-                match wasm_runtime.load_plugin_from_file(
-                    &wasm_path,
-                    &id,
-                    wasm_host_ctx.clone(),
-                    &loaded.manifest.wasi_preopen_dirs,
-                    loaded.manifest.resource_overrides.as_ref(),
-                ) {
-                    Ok(wasm_plugin) => {
-                        tracing::info!(
-                            "WASM plugin loaded: {} v{} (module: {})",
-                            loaded.manifest.id,
-                            loaded.manifest.version,
-                            wasm_filename
-                        );
-                        wasm_plugins_map.insert(id.clone(), Arc::new(Mutex::new(wasm_plugin)));
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            "Failed to load WASM for plugin {} v{}: {}",
-                            loaded.manifest.id,
-                            loaded.manifest.version,
-                            e
-                        );
-                        // 同上：WASM 加载失败仅丢弃运行时实例，manifest 仍注册，
-                        // 保证插件列表可见且状态可诊断
-                        all_plugins.insert(
-                            id,
-                            LoadedPlugin {
-                                state: PluginState::Error(format!("WASM load failed: {}", e)),
-                                ..loaded
-                            },
-                        );
-                        continue;
-                    }
-                }
+            // WASM 实例化收为一条路径（票 11 第 2 项）：声明了 `rust_library` 的插件
+            // 按同一函数实例化，未声明的纯前端插件走它的空分支（无实例、原记录入表）；
+            // 文件缺失 / 加载失败 → Error 态入表（manifest 仍注册，列表可见可诊断）
+            let (entry, wasm_instance) = Self::instantiate_wasm_plugin(&wasm_runtime, &wasm_host_ctx, &loaded);
+            if let Some(instance) = wasm_instance {
+                wasm_plugins_map.insert(id.clone(), instance);
             }
-
-            all_plugins.insert(id, loaded);
+            all_plugins.insert(id, entry);
         }
 
         let host = Self {
@@ -275,9 +220,7 @@ impl PluginHost {
             runtime_error_notify_throttle: Arc::new(std::sync::Mutex::new(HashMap::new())),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             user_plugins_dir: user_plugins_dir.to_path_buf(),
-            frontend_channel: Arc::new(
-                crate::plugin::security::frontend_channel::FrontendChannelRegistry::new(),
-            ),
+            frontend_channel: Arc::new(crate::plugin::security::frontend_channel::FrontendChannelRegistry::new()),
         };
 
         // 两阶段初始化：将 PluginHost（作为 PluginServices 实现）注入 WasmHostContext
@@ -392,9 +335,7 @@ impl PluginHost {
     }
 
     /// 前端插件通道身份注册表（loader 会话密钥 / 插件令牌）
-    pub fn frontend_channel(
-        &self,
-    ) -> &Arc<crate::plugin::security::frontend_channel::FrontendChannelRegistry> {
+    pub fn frontend_channel(&self) -> &Arc<crate::plugin::security::frontend_channel::FrontendChannelRegistry> {
         &self.frontend_channel
     }
 
@@ -498,17 +439,16 @@ mod tests {
     /// 测试用组件形态 WASM 插件 ID（与 plugin-component-test 的 manifest 一致）
     const TEST_WASM_PLUGIN_ID: &str = "com.bedcode.component-test";
 
-
     // 用例与脚手架按域拆分（票 11 第 7 项）：内联块只留 imports / 测试常量 / 子模块声明。
     // 模块树 `host::tests::<文件>` 与内联形态等价；各域文件经 `use super::*;` 拿到宿主项
     // 与测试常量，跨文件复用的脚手架另按需显式引入（顶层项已标 `pub(super)`）。
-    mod scaffold;
-    mod host_api_test;
-    mod contributions_test;
-    mod lifecycle_test;
-    mod commands_test;
-    mod wasm_flow_test;
-    mod runtime_preauth_test;
-    mod system_component_test;
     mod approval_test;
+    mod commands_test;
+    mod contributions_test;
+    mod host_api_test;
+    mod lifecycle_test;
+    mod runtime_preauth_test;
+    mod scaffold;
+    mod system_component_test;
+    mod wasm_flow_test;
 }

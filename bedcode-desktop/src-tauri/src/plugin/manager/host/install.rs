@@ -5,15 +5,13 @@
 
 use super::*;
 impl PluginHost {
-    /// 停用插件
-    /// 中止指定插件的定时器（停用时调用，v6 ADR 0003）
     /// 从 zip 分发包安装插件（dev 合入）
     ///
     /// 解压校验（manifest/身份/路径安全）→ 重新扫描用户目录 → WASM 实例化 →
     /// 注册 manifest 扩展点。同 id 已安装时回滚安装目录并报错（需先卸载）。
     pub async fn install_from_zip(&self, zip_path: &str) -> crate::Result<String> {
         let plugin_id =
-            crate::plugin::downloader::PluginDownloader::install_from_file(zip_path, &self.user_plugins_dir)?;
+            crate::plugin::manager::downloader::PluginDownloader::install_from_file(zip_path, &self.user_plugins_dir)?;
 
         if self.plugins.read().await.contains_key(&plugin_id) {
             let dir = self.user_plugins_dir.join(&plugin_id);
@@ -40,49 +38,10 @@ impl PluginHost {
             )));
         };
 
-        let wasm_plugin = if !loaded.manifest.rust_library.is_empty() {
-            let wasm_path = Path::new(&loaded.extension_path).join(format!(
-                "{}{}",
-                loaded.manifest.rust_library,
-                crate::system::constants::plugin::WASM_FILE_EXT
-            ));
-            match self.wasm_runtime.load_plugin_from_file(
-                &wasm_path,
-                &plugin_id,
-                self.wasm_host_ctx.clone(),
-                &loaded.manifest.wasi_preopen_dirs,
-                loaded.manifest.resource_overrides.as_ref(),
-            ) {
-                Ok(wasm_plugin) => Some(Arc::new(Mutex::new(wasm_plugin))),
-                Err(e) => {
-                    tracing::error!(
-                        plugin_id = %plugin_id,
-                        error = %e,
-                        "[PluginHost] Failed to load WASM for newly installed plugin"
-                    );
-                    None
-                }
-            }
-        } else {
-            None
-        };
-
-        // 写入 plugins / wasm_plugins map（WASM 实例化失败时插件以 Error 态入表，
-        // 保证列表可见可诊断，与 new() 初始化语义一致）
-        {
-            let mut plugins = self.plugins.write().await;
-            plugins.insert(
-                plugin_id.clone(),
-                if wasm_plugin.is_some() || loaded.manifest.rust_library.is_empty() {
-                    loaded.clone()
-                } else {
-                    LoadedPlugin {
-                        state: PluginState::Error(format!("WASM load failed: {}", loaded.extension_path)),
-                        ..loaded.clone()
-                    }
-                },
-            );
-        }
+        // 实例化收为一条路径（票 11 第 2 项）：与 `new()` 扫描路径共用同一函数，
+        // 失败态语义也由它裁决（Error 入表、列表可见可诊断）
+        let (entry, wasm_plugin) = Self::instantiate_wasm_plugin(&self.wasm_runtime, &self.wasm_host_ctx, &loaded);
+        self.plugins.write().await.insert(plugin_id.clone(), entry);
         if let Some(wp) = wasm_plugin {
             self.wasm_plugins.write().await.insert(plugin_id.clone(), wp);
         }

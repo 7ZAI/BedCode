@@ -11,6 +11,9 @@
 
 pub mod api_bridge;
 pub(crate) mod capability;
+// 插件 zip 分发包解压安装：core-plugin-manager 的安装职责，已自 `plugin/downloader`
+// 归位到此（票 11 第 5 项），引用方改为 `crate::plugin::manager::downloader`。
+pub mod downloader;
 pub mod host;
 pub mod loader;
 pub mod registry;

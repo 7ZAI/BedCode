@@ -5,10 +5,83 @@
 
 use super::*;
 impl PluginHost {
-    /// 重建 WASM 插件实例（load_plugin_from_file + 替换 map 条目）
+    /// 插件 WASM 实例化的**唯一实现**（票 11 第 2 项）
     ///
-    /// 激活路径：声明 WASI 预打开目录的插件首次授权后实例未覆盖新授权目录时
-    /// 重建，使 /data 挂载与授权一致；热重载路径同样复用（停用 → 重建 → 重注册）。
+    /// 启动扫描路径（`host.rs::new`）与 zip 安装路径（`install.rs::install_from_zip`）
+    /// 此前各持一份近乎复制的实例化逻辑（连 wasm 后缀都是一处硬编码 `".wasm"`、
+    /// 一处走 `WASM_FILE_EXT` 常量），实例化策略升级必须同改两处——这正是
+    /// 「一处修复要同步两处」的漂移面，故收为一条，两入口只负责落表。
+    ///
+    /// 设计成关联函数而非方法：`new()` 构造 Self 之前就要为扫描到的插件建实例，
+    /// 此时还没有 `&self`，只能显式传运行时与宿主上下文。
+    ///
+    /// 返回 `(入表记录, WASM 实例)`：
+    /// - 未声明 `rust_library` → 纯前端插件：原记录入表，无实例；
+    /// - wasm 文件缺失（部署残缺）/ 加载失败（编译或 link 错） → 记录降级为
+    ///   `PluginState::Error` 而**不丢弃**：插件仍见于列表且状态可诊断。
+    pub(crate) fn instantiate_wasm_plugin(
+        wasm_runtime: &Arc<WasmRuntime>,
+        wasm_host_ctx: &Arc<WasmHostContext>,
+        loaded: &LoadedPlugin,
+    ) -> (LoadedPlugin, Option<Arc<Mutex<LoadedWasmPlugin>>>) {
+        let manifest = &loaded.manifest;
+        if manifest.rust_library.is_empty() {
+            return (loaded.clone(), None);
+        }
+
+        let wasm_path = Path::new(&loaded.extension_path).join(format!(
+            "{}{}",
+            manifest.rust_library,
+            crate::system::constants::plugin::WASM_FILE_EXT
+        ));
+        if !wasm_path.exists() {
+            tracing::error!(
+                plugin_id = %manifest.id,
+                path = %wasm_path.display(),
+                "WASM module not found for plugin; plugin kept as Error state"
+            );
+            return (
+                LoadedPlugin {
+                    state: PluginState::Error(format!("WASM module not found: {}", wasm_path.display())),
+                    ..loaded.clone()
+                },
+                None,
+            );
+        }
+
+        match wasm_runtime.load_plugin_from_file(
+            &wasm_path,
+            &manifest.id,
+            wasm_host_ctx.clone(),
+            &manifest.wasi_preopen_dirs,
+            manifest.resource_overrides.as_ref(),
+        ) {
+            Ok(instance) => {
+                tracing::info!(
+                    plugin_id = %manifest.id,
+                    version = %manifest.version,
+                    "WASM plugin loaded"
+                );
+                (loaded.clone(), Some(Arc::new(Mutex::new(instance))))
+            }
+            Err(e) => {
+                tracing::error!(
+                    plugin_id = %manifest.id,
+                    error = %e,
+                    path = %wasm_path.display(),
+                    "Failed to load WASM plugin instance; plugin kept as Error state"
+                );
+                (
+                    LoadedPlugin {
+                        state: PluginState::Error(format!("WASM load failed: {}", e)),
+                        ..loaded.clone()
+                    },
+                    None,
+                )
+            }
+        }
+    }
+
     /// 重建 WASM 插件实例（load_plugin_from_file + 替换 map 条目）
     ///
     /// 激活路径：声明 WASI 预打开目录的插件首次授权后实例未覆盖新授权目录时
@@ -60,13 +133,6 @@ impl PluginHost {
         Ok(())
     }
 
-    /// 停用插件
-    /// 中止指定插件的定时器（停用时调用，v6 ADR 0003）
-    /// 从 zip 分发包安装插件（dev 合入）
-    ///
-    /// 解压校验（manifest/身份/路径安全）→ 重新扫描用户目录 → WASM 实例化 →
-    /// 注册 manifest 扩展点。同 id 已安装时回滚安装目录并报错（需先卸载）。
-
     /// 热重载 WASM 插件（开发模式）
     ///
     /// 执行完整的卸载-重载-激活循环：
@@ -95,30 +161,8 @@ impl PluginHost {
         // 2. 重新编译并实例化 WASM 模块（替换 wasm_plugins map 条目）
         self.rebuild_wasm_instance(plugin_id).await?;
 
-        // 3. 重新注册 manifest contributes
-        let m = {
-            let plugins = self.plugins.read().await;
-            let loaded = plugins
-                .get(plugin_id)
-                .ok_or_else(|| crate::AppError::Plugin(format!("Plugin not found after reload: {}", plugin_id)))?;
-            loaded.manifest.clone()
-        };
-        self.registry.register_commands(&m.id, &m.contributes.commands).await;
-        self.registry.register_views(&m.id, &m.contributes.views).await;
-        if let Some(ref term) = m.contributes.terminal {
-            self.registry
-                .register_terminal_handlers(&m.id, &term.input_handlers, &term.output_parsers)
-                .await;
-        }
-        self.registry
-            .register_tool_providers(&m.id, &m.contributes.tool_providers)
-            .await;
-        self.registry
-            .register_http_endpoints(&m.id, &m.contributes.http_endpoints)
-            .await;
-        self.registry
-            .register_file_handlers(&m.id, &m.contributes.file_handlers)
-            .await;
+        // 3. 重新注册 manifest contributes（委派单条注册唯一实现，票 11 第 3 项）
+        self.register_plugin_contributions(plugin_id).await;
 
         // 4. 重新激活
         self.activate_plugin(plugin_id, false).await?;

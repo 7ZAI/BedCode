@@ -5,7 +5,6 @@
 
 use bedcode_plugin_api::{PluginContributes, PluginManifest, PluginState, PluginType};
 use chrono::{DateTime, Utc};
-use std::collections::HashSet;
 use std::path::Path;
 
 /// 已加载插件的内部表示
@@ -13,7 +12,6 @@ use std::path::Path;
 pub struct LoadedPlugin {
     pub manifest: PluginManifest,
     pub state: PluginState,
-    pub granted_permissions: HashSet<String>,
     pub extension_path: String,
     pub activated_at: Option<DateTime<Utc>>,
     /// 插件来源：静态注册或文件扫描
@@ -182,7 +180,6 @@ mod tests {
         LoadedPlugin {
             manifest: sample_manifest(),
             state: PluginState::Activated,
-            granted_permissions: HashSet::from(["broadcast".to_string()]),
             extension_path: "/nonexistent/plugins/com.bedcode.test".to_string(),
             activated_at: Some(Utc::now()),
             source,

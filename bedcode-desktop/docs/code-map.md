@@ -65,7 +65,7 @@ bedcode-desktop/                      # 桌面端项目 (Tauri 2.0 + Vue 3)
 │   │                                 #   terminal/ 已无：终端渲染/写入/IME 随票 01-05 整体下沉
 │   │                                 #   plugins/terminal-session（宿主只剩窗口编排原语
 │   │                                 #   useSessionWindows 与 view 壳 TerminalWindowHostView）；
-│   │                                 #   commands/ 下为 Rust 命令封装按领域拆分（会话引擎事实/设置），
+│   │                                 #   commands.rs 为 Rust 命令封装聚合（九域：会话引擎事实/设置等），
 │   │                                 #   useDesktopCommands 为聚合层 re-export
 │   ├── stores/                       # Pinia 全局状态：会话（引擎事实 + 插件动作）、设置、i18n
 │   ├── views/                        # 页面：插件、插件详情、插件配置、设置（编排层）、终端窗口、服务器
@@ -81,9 +81,10 @@ bedcode-desktop/                      # 桌面端项目 (Tauri 2.0 + Vue 3)
 └── src-tauri/                        # Rust 后端（Tokio 异步）
     ├── resources/                    # 打包资源：应用配置 + 内置插件构建产物（wasm/js/plugin.json）
     └── src/                          # 模块按领域扁平组织，每领域配同名入口文件（commands.rs、db.rs 等）
-        ├── commands/                 # Tauri invoke 命令层：按领域拆分（devices、opener、plugin、
-        │                             #   pty_input、server、session、settings、system）；只保留宿主页面
-        │                             #   （外壳 / 终端引擎）直调的命令，业务面一律归插件命令面
+        ├── commands.rs               # Tauri invoke 命令层（2026-09-22 单文件聚合）：会话引擎事实 /
+        │                             #   PTY 输入 / 系统设置 / opener / devices / dev 日志转发 / 插件
+        │                             #   re-export / 服务器九域，按 `// ====================` 分隔分组；
+        │                             #   只保留宿主页面（外壳 / 终端引擎）直调的命令，业务面一律归插件命令面
         ├── db/                       # SQLite：连接管理、数据模型、CRUD 操作、Schema
         ├── enums/                    # 枚举类型：认证、控制、插件、PTY 状态、会话、Shell、特殊键、同步
         ├── events/                   # 全局事件系统：AppEvent trait、事件匹配、SessionManager→前端转发、
@@ -105,7 +106,7 @@ bedcode-desktop/                      # 桌面端项目 (Tauri 2.0 + Vue 3)
         │                             #   RSA、X25519、KDF，用于 HTTP 报文与文件加密传输）
         ├── process.rs                # 进程工具（create_command）
         ├── lib.rs                    # 库入口（模块声明 + 日志初始化 + Tauri 应用搭建；对等网络模块的
-        │                             #   Tauri 命令也直接在此注册，不经 commands/）
+        │                             #   Tauri 命令也直接在此注册，不经 commands.rs）
         └── main.rs                   # 二进制入口（panic hook）
 ```
 
@@ -119,9 +120,11 @@ bedcode-desktop/                      # 桌面端项目 (Tauri 2.0 + Vue 3)
 Rust 侧按内核五模块组织（`plugin.rs` 为唯一组合点/facade，外部消费方只经 facade 再导出引用）：
 
 - **manager/（core-plugin-manager，核心）**：插件加载、注册、生命周期与运行时
-  - **downloader**（dev 合入，暂挂 `plugin/downloader.rs`）：插件 zip 包本地安装——
-    解压 → manifest/身份校验 → 路径穿越防护 → wasm 存在性校验 → 写来源标记 →
-    移动到 `app_data_dir/plugins`（按五模块划分应归位 manager，后续一并迁移）
+  - **downloader**（`manager/downloader.rs`；2026-09-22 自 `plugin/downloader.rs` 归位于此，
+    安装属 core-plugin-manager 职责，审计票 11 第 5 项）：插件 zip 包本地安装——
+    解压（条目/体积/单文件上限）→ manifest 解析与必填校验（真源 `validation::parse_manifest_json`）→
+    id 反向域名校验 → 路径穿越防护 → wasm 存在性与 `wasm_hash` 摘要校验 → 写来源标记 →
+    移动到 `app_data_dir/plugins`
   - **api_bridge**：插件 API 桥接 — 前端 PluginContext 的 API 调用经 Tauri invoke 到达此层，Rust 端权限校验后执行。
     **身份由凭证绑定而非参数自报**（审计票 06，见 `plugin/security/frontend_channel.rs`）：
     `plugin_*` 命令都带 `credential`（宿主面 loader 会话密钥 / 插件面通道令牌），参数里的 `plugin_id`
@@ -129,7 +132,10 @@ Rust 侧按内核五模块组织（`plugin.rs` 为唯一组合点/facade，外�
     与 `plugin_channel_token`（用 loader 密钥为运行中插件换令牌，停用即回收）是两枚凭证的来源
   - **host / host/**：插件生命周期管理（加载/激活/停用）；host/ 子模块负责插件随包 CLI 的安装/卸载
     （bin 解析、PATH 条目维护、平台注册）及 commands/listeners/services 拆分
-  - **loader / registry**：文件扫描 + WASM 组件加载、插件注册表
+  - **loader / registry**：文件扫描与 `plugin.json` 解析、插件注册表。**loader 不做 WASM 实例化**——
+    启动扫描与 zip 安装两条入口共用 `host/wasm.rs::instantiate_wasm_plugin`（唯一的实例化实现，
+    审计票 11 第 2 项）；contributes 注册的唯一实现是 `host/register.rs::register_plugin_contributions`
+    （启动期全量 / 安装 / 热重载三入口共用，票 11 第 3 项）
   - **wasm_runtime + wasm_runtime/host_impl/**：wasmtime Engine/Store/Instance 生命周期管理（含 component.rs
     WASI preview2 接线）；宿主能力实现按功能域拆分于 host_impl/（api/app/storage/database/terminal/session/
     events/http/mdns/ws/pty/log/fs/config/bus/lifecycle/process/timer/peer/status/platform/wsl_fs），
@@ -141,8 +147,8 @@ Rust 侧按内核五模块组织（`plugin.rs` 为唯一组合点/facade，外�
 - **security/（core-security）**：资源授权——framework（统一授权框架：ResourceKind × 三段决策管线
   声明/审批/强制，fs / api-call 资源实现）、approval（用户 zip 安装插件的权限审批与内容钉扎，ADR 0020：
   批准记录 + 目录哈希，`PluginHost::activate_plugin` 前置 `approval_gate` 裁决，弹层 UI 为
-  `PluginApprovalDialog.vue`）、fs_auth（文件系统访问三层校验：
-  路径白名单 → 插件白名单 → 弹窗授权，弹窗 UI 为 `FsAuthDialog.vue`）、
+  `PluginApprovalDialog.vue`）、fs_auth（文件系统访问四层校验：
+  路径白名单 → 插件白名单 → 已授权路径前缀（持久化）→ 弹窗授权，弹窗 UI 为 `FsAuthDialog.vue`）、
   frontend_channel（前端通道身份：loader 会话密钥 / 插件通道令牌 → 身份，审计票 06）、
   api_registry（互调门，ADR 0017）
 - **bus（core-bus）**：插件间 Topic 消息总线（发布/订阅，JSON + 二进制双载荷 + 背压），经 MessageDispatcher trait 解耦与 PluginHost 的循环引用。
@@ -380,7 +386,7 @@ Rust 侧以 `abi.rs` 为宿主/插件共同引用的单一事实来源（签名�
 
 | 功能 | 目录 |
 |------|------|
-| Tauri 命令 | `src-tauri/src/commands/` |
+| Tauri 命令 | `src-tauri/src/commands.rs` |
 | PTY 进程与输出 | `src-tauri/src/pty/` |
 | 会话管理与生命周期 | `src-tauri/src/session/` |
 | HTTP/WS 服务器、REST 控制器、终端 WS | `src-tauri/src/server/` |
@@ -433,7 +439,7 @@ Claude Code (PTY)
 
 | 类型 | 路径模式 |
 |------|----------|
-| Tauri Commands | `src-tauri/src/commands/*.rs` |
+| Tauri Commands | `src-tauri/src/commands.rs` |
 | 错误处理 | `src-tauri/src/system/error.rs` |
 | 系统常量 | `src-tauri/src/system/constants/*.rs` |
 | 数据库 | `src-tauri/src/db/*.rs` |

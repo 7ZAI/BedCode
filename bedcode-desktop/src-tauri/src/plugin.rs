@@ -14,21 +14,17 @@
 
 pub mod bus;
 pub mod config;
-/// 插件 zip 分发包解压安装（dev 合入）：按本分支结构应归位 `manager`
-/// （core-plugin-manager 的安装职责），当前保留 dev 路径以免改动引用方
-/// （`manager/host.rs` 以 `crate::plugin::downloader` 引用），后续一并归位。
-pub mod downloader;
 pub mod manager;
 pub mod monitor;
 pub mod permission;
 /// 快捷指令 legacy 主库 → session 插件私有库的一次性搬运（票 02，宿主侧 handoff）
 pub mod quick_actions_migration;
 pub mod security;
-/// 旧 auto-task 私有库任务数据一次性搬运（票 17，宿主侧一次性迁移）
-pub mod task_data_migration;
 /// 终端会话中心私有库 id 路径迁移（票 07 B2：com.bedcode.session →
 /// com.bedcode.terminal-session，改名后既有数据落新路径）
 pub mod session_db_migration;
+/// 旧 auto-task 私有库任务数据一次性搬运（票 17，宿主侧一次性迁移）
+pub mod task_data_migration;
 
 // ==================== Facade 再导出 ====================
 // 外部消费方（Tauri 命令层、system、peer 等）只经 facade 引用，

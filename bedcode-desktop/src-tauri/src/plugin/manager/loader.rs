@@ -164,7 +164,9 @@ impl PluginLoader {
 
                     // 授权并过滤非法权限
 
-                    let granted = permission_mgr.grant_permissions(&plugin_id, &manifest.permissions);
+                    // 授权结果只落在 PermissionManager（唯一真源）；LoadedPlugin 不再
+                    // 镜像一份 granted 列表（票 11 第 4 项：镜像字段只写不读）
+                    permission_mgr.grant_permissions(&plugin_id, &manifest.permissions);
 
                     // 根据 rust_library 字段判断来源：有 WASM 模块则为 Wasm，否则为 FileScan；
 
@@ -197,8 +199,6 @@ impl PluginLoader {
                         manifest,
 
                         state: PluginState::Loaded,
-
-                        granted_permissions: granted,
 
                         extension_path,
 
@@ -233,22 +233,10 @@ impl PluginLoader {
         let content = fs::read_to_string(path)
             .map_err(|e| crate::AppError::Plugin(format!("Failed to read plugin.json: {}", e)))?;
 
-        let manifest: PluginManifest = serde_json::from_str(&content)
-            .map_err(|e| crate::AppError::Plugin(format!("Failed to parse plugin.json: {}", e)))?;
+        // 解析与必填字段校验走唯一真源（票 11 第 6 项）
+        let manifest = crate::plugin::manager::validation::parse_manifest_json(&content)?;
 
-        if manifest.id.is_empty() {
-            return Err(crate::AppError::Plugin("plugin.json missing id field".to_string()));
-        }
-
-        if manifest.name.is_empty() {
-            return Err(crate::AppError::Plugin("plugin.json missing name field".to_string()));
-        }
-
-        if manifest.version.is_empty() {
-            return Err(crate::AppError::Plugin("plugin.json missing version field".to_string()));
-        }
-
-        // TS-only 插件必须有 main 字段
+        // TS-only 插件必须有 main 字段（目录扫描入口独有的一道）
 
         if manifest.plugin_type == PluginType::TsOnly && manifest.main.is_empty() {
             return Err(crate::AppError::Plugin(

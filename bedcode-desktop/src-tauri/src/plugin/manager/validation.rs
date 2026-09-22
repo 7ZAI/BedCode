@@ -13,6 +13,38 @@
 //! 保证 id 不可歧义（一个 id 只对应一个目录、一份 manifest），为审批
 //! 门禁（approval.rs）提供可钉扎的身份锚点。完整模型见 docs/adr/。
 
+use bedcode_plugin_api::PluginManifest;
+
+/// 校验 manifest 必填字段
+///
+/// loader 目录扫描（`loader.rs::load_manifest`）与 zip 安装
+/// （`downloader.rs::install_zip`）两条入口此前各抄一份 id/name/version 非空
+/// 检查，新增必填约束时须同改两处——收敛到此处成为唯一真源（票 11 第 6 项）。
+///
+/// 两条入口各自独有的一道不在收敛范围：安装侧额外要求 id 是反向域名
+/// （无签名链时防冒名 id），扫描侧额外要求 TS-only 插件声明 `main`。
+/// 它们不是重复项，合并（取并集）会改变既有路径的口径。
+pub fn validate_manifest_required(manifest: &PluginManifest) -> crate::Result<()> {
+    if manifest.id.is_empty() {
+        return Err(crate::AppError::Plugin("plugin.json missing id field".to_string()));
+    }
+    if manifest.name.is_empty() {
+        return Err(crate::AppError::Plugin("plugin.json missing name field".to_string()));
+    }
+    if manifest.version.is_empty() {
+        return Err(crate::AppError::Plugin("plugin.json missing version field".to_string()));
+    }
+    Ok(())
+}
+
+/// 解析 manifest 文本（含必填字段校验）——两条入口的读取/解析/必填统一口径
+pub fn parse_manifest_json(content: &str) -> crate::Result<PluginManifest> {
+    let manifest: PluginManifest = serde_json::from_str(content)
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to parse plugin.json: {}", e)))?;
+    validate_manifest_required(&manifest)?;
+    Ok(manifest)
+}
+
 /// 插件 id 最大长度（反向域名约定，避免超长 id 打日志/路径）
 pub const PLUGIN_ID_MAX_LEN: usize = 100;
 
@@ -103,9 +135,15 @@ mod tests {
 
     #[test]
     fn test_dir_binding() {
-        assert!(validate_dir_binding("com.bedcode.terminal-session", "com.bedcode.terminal-session"));
+        assert!(validate_dir_binding(
+            "com.bedcode.terminal-session",
+            "com.bedcode.terminal-session"
+        ));
         // 目录名与 id 不一致：伪造/复制目录
-        assert!(!validate_dir_binding("com.bedcode.evil", "com.bedcode.terminal-session"));
+        assert!(!validate_dir_binding(
+            "com.bedcode.evil",
+            "com.bedcode.terminal-session"
+        ));
         assert!(!validate_dir_binding("session", "com.bedcode.terminal-session"));
     }
 }

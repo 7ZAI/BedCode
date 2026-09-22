@@ -146,7 +146,7 @@ pnpm exec eslint .
 
 插件位于 `plugins/<plugin-id>/`（独立 package：`plugin.json` + `rust/` WASM 后端 + `src/` TS 前端 + `vite.config.ts`）。开发/修改插件逐项核对：
 
-- [ ] manifest 声明 `permissions`（前端快速失败 + Rust 端最终仲裁；文件系统走 fs_auth 三层校验：路径白名单 → 插件白名单 → 弹窗授权）
+- [ ] manifest 声明 `permissions`（前端快速失败 + Rust 端最终仲裁；文件系统走 fs_auth 四层校验：路径白名单 → 插件白名单 → 已授权路径前缀（持久化）→ 弹窗授权）
 - [ ] 对外可调 API 在 manifest `api` 字段声明，经 `#[plugin_api]` 宏 + JSON-RPC 2.0；**未声明不可调**（ADR 0017）
 - [ ] 契约边界单点维护在 WIT（`packages/plugin-sdk-*/rust/wit/bedcode.wit`）；改 WIT 必须双端同步 + ABI bump（wasmtime 桌面 48 / 移动 47 分叉中，见 `.scratch/2026-09-18-wasmtime-48-upgrade/spec.md`；双端对齐后恢复锁死表述）。**双端偏离（已文档化，ADR 0022「双端偏离」节）**：
 桌面独有接口不要求移动端跟演——`host-websocket`（v14）、`host-auth`（v15 密钥托管 /
