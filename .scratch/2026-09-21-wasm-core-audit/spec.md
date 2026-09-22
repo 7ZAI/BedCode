@@ -1,9 +1,10 @@
 # 桌面 WASM 内核全面审查（安全授权 / 扩展性 / 模块称职度）
 
 Status: 进行中（审查已完成并取证，本文件是结论与证据真源。修复票 `issues/01..12` + 测试清理票 `issues/13`
-+ 新立票 `issues/14`（`wasm_hash` 生产者，由票 03 登记项单独立票）；**已落地 01 / 02 / 03 / 04 / 05 / 06，
-P0 全部完成**，剩 P1 结构/清理票 07–12 与测试面 13 / 14。逐票状态看 `issues/*` 的 Status 行，
-接手顺序与门禁跑法看 `handoff-2026-09-22.md`）
++ 新立票 `issues/14`（`wasm_hash` 生产者，由票 03 登记项单独立票）与 `issues/15`（构建链权限映射漂移）；
+**已落地 01 / 02 / 03 / 04 / 05 / 06 / 07 / 08 / 09 / 11 / 13 / 14 / 15，P0 全部完成**，
+剩 P1 结构票 `10`（monitor 出口 + config 二选一）与 `12`（内核业务清零），以及票 07 延后的 preopen 只读档。
+逐票状态看 `issues/*` 的 Status 行，接手顺序与门禁跑法看 `handoff-2026-09-22.md`）
 Date: 2026-09-21
 范围: **仅桌面端** WASM 内核 `bedcode-desktop/src-tauri/src/plugin/**`（含 `wasm_runtime`/`host_impl`/`security`/`bus`/`config`/`monitor`/`manager/**`）+ 前端插件通道 `bedcode-desktop/src/plugin/**` + SDK `packages/plugin-sdk-desktop/**` + 入站面 `server/**` 中与插件相关的路径。移动端零改动，受损/对齐项见 §7。
 决策依据: `docs/adr/0017`（互调门）、`0019`（wasmtime 锁版）、`0020`（身份校验与权限审批）、`0022`（裁剪线/双端偏离）；`.scratch/2026-09-10-platform-kernel/spec.md`（无业务内核清单，权威真源）；`.scratch/2026-09-10-plugin-kernel-roadmap/spec.md`（阶段 0-4）；AGENTS.md §5/§7/§8/§9。

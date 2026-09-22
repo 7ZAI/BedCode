@@ -167,6 +167,12 @@ v18 认证记录面）、`host-pty`（v16）、`auth-policy` 导出（v17，认�
 - [ ] 插件导出：`activate`/`deactivate`、`command`、`_http_endpoint`、terminal hooks、生命周期/输入扩展点
 - [ ] 插件 HTTP 面（`_http_endpoint`，审计票 08）：**只认声明**——`contributes.httpEndpoints` 未声明的路径宿主直接 404（「未声明清单 → 前缀内 ANY 放行」的零迁移过渡已退役，未声明清单等于没有 HTTP 面）。每条可写 `{path, auth}` 声明认证档位，档位词汇 `none | jwt`（真源桌面 SDK `rust/src/types.rs::EndpointAuth`，与 `host-websocket` 注册面共用同一枚举；缺省档各面自定：WS = `none`、HTTP = **`jwt` 最严**），非法取值构建期由 `manifest-validate.js` 拒绝、运行期不登记该条（端点不可达）；`auth: "none"` 是免凭证可达的唯一形态，写给「拿不到 JWT 的调用方」（本机 hook 脚本、配对 / QR 这类 token 之前的入口）。宿主转发的入参带 `caller` = `device | localhost | anonymous`（环回按 TCP 对端判），可信设备另带 `device` 对象——**JWT 本体与设备指纹不透传**（§8 凭据红线）。网关别名条目的 `RouteAuth` 与插件声明档位**取较严者**，两方都不得单方面开门
 - [ ] 存储：插件独立库（私有 SQLite）/ 主库前缀隔离（表名强制 `plugin_id_` 前缀，且由 SQLite authorizer 在引擎层仲裁——逗号多表、引号标识符、`main.` 限定、ATTACH/PRAGMA 都绕不过去，见票 02）；**禁止在 dev-shell 写具体业务 mock**——mock 数据/演示种子归各自插件工程（插件入口导出 `devMock`）
+- [ ] 产物摘要 `wasmHash`（审计票 14）：**由构建链注入产物目录的 plugin.json，源清单不写该键**
+  （`packages/plugin-sdk-desktop/bin/wasm-hash.js` 按 `<rustLibrary>.wasm` 现算 SHA-256；四插件
+  `scripts/build.js`、dev 复制 `scripts/plugin-watch.js`、SDK CLI `build --resources-dir` 三个装配点共用
+  这一实现）。源里手写它不会被 `manifest-gen` 刷新 → `manifest-validate` 告警，且发布链
+  `scripts/package-plugins.mjs` 出包前逐条复核（缺键/形态非法/字节失配即 exit 1）。
+  「产物与源 manifest 逐字一致」的口径自本票起收窄为**除注入的 wasmHash 外一致**；移动端仍无生产者（桌面独有）
 - [ ] 日志：target=`bedcode_lib::plugin::plugin_log`，`[plugin:xxx]` 前缀，WASM trap backtrace 不得关闭（详情见 `docs/knowledge/logging.md`）
 
 ---

@@ -92,10 +92,10 @@
    可删）；② 对侧 `plugin.json` 去 `session:config` 后其前端契约用例期望数组未同步 → 上面那条前端红
    **归属对侧**（`git status` 可查该文件与其 manifest 的改动均非本票）。
 10. **未做 / 遗留（登记，不静默）**：
-   - `wasm_hash` **目前没有生产者**：打包 CLI（`packages/plugin-sdk-desktop/bin/cli.js`）原样拷贝
-     `plugin.json`、不注入摘要，与移动端现状一致（该端同样无生产者）。本票落地的是「声明即校验」通道，
-     发布者要吃到这层保护需自己填；真正的兜底是审批门禁的目录哈希钉扎。若要自动注入，属打包链变更，
-     单独评估（会动所有插件的产物与 `manifest-gen` 比对）；
+   - `wasm_hash` ~~目前没有生产者~~ **已由票 14 关闭（2026-09-22）**：桌面打包链现在默认把产物
+     `<rustLibrary>.wasm` 的 SHA-256 注入**产物** `plugin.json`（源清单不带该键），分发链
+     `scripts/package-plugins.mjs` 出包前逐条复核——票 03 落地的「声明即校验」通道自此默认生效，
+     不再依赖发布者手填。移动端仍无生产者，该偏离随票 14 裁决项 3 登记；
    - 移动端 `effective_permissions` / `grant_permissions` 的 `storage` 特例仍在（本票桌面-only），
      双端偏离已写进 ADR 0020 修订记录；
    - `.dev-shell` 无审批 mock：插件列表 / 详情走真实宿主命令面，dev-shell 只覆盖插件内命令；

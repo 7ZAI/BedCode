@@ -124,7 +124,10 @@ Rust 侧按内核五模块组织（`plugin.rs` 为唯一组合点/facade，外�
     安装属 core-plugin-manager 职责，审计票 11 第 5 项）：插件 zip 包本地安装——
     解压（条目/体积/单文件上限）→ manifest 解析与必填校验（真源 `validation::parse_manifest_json`）→
     id 反向域名校验 → 路径穿越防护 → wasm 存在性与 `wasm_hash` 摘要校验 → 写来源标记 →
-    移动到 `app_data_dir/plugins`
+    移动到 `app_data_dir/plugins`。
+    `wasm_hash` **有生产者**（审计票 14）：打包链 `packages/plugin-sdk-desktop/bin/wasm-hash.js` 把产物
+    `<rustLibrary>.wasm` 的 SHA-256 注入**产物** plugin.json（源清单不带该键），
+    `scripts/package-plugins.mjs` 出包前逐条复核——声明不再依赖发布者手填
   - **api_bridge**：插件 API 桥接 — 前端 PluginContext 的 API 调用经 Tauri invoke 到达此层，Rust 端权限校验后执行。
     **身份由凭证绑定而非参数自报**（审计票 06，见 `plugin/security/frontend_channel.rs`）：
     `plugin_*` 命令都带 `credential`（宿主面 loader 会话密钥 / 插件面通道令牌），参数里的 `plugin_id`
