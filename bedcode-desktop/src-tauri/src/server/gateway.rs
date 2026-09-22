@@ -715,6 +715,148 @@ mod tests {
         }
     }
 
+    // ==================== 别名锁自校准前置 ====================
+
+    /// 两条别名锁共同的扫描目标：宿主路由装配源码
+    ///
+    /// 单一取源点：`server/` 三层化把路由搬走后（票 04/05/06/07），只需重指这一行
+    /// `include_str!`，下面的前置会当场验证新目标仍是「活的宿主路由面」。
+    const APP_RS: &str = include_str!("app.rs");
+
+    /// 失败消息里显示的目标名（`include_str!` 的相对路径无法自报，故单独记一份）
+    const APP_RS_LABEL: &str = "server/app.rs";
+
+    /// 扫描目标 `configure_routes` 函数体的路由标识符基线数
+    ///
+    /// 现值 14 = 12 条路径字面量 + `API_HEALTH_PATH` + `WS_EVENT_PATH` 两个常量标识符。
+    /// **常量必须纳入计数**：只匹配 `"/…"` 字面量的话，`/api/health` 整行删掉照样绿。
+    ///
+    /// HTTP/WS 路由面拆分（票 07）后本锁的扫描目标收窄为 HTTP 侧，基线随之改钉 **11**——
+    /// 判据与新旧清单见票 07。这是实测钉出来的数，禁止当魔法数放宽成「>= 1」。
+    const HOST_ROUTE_IDENTIFIERS_BASELINE: usize = 14;
+
+    /// 取 `configure_routes` 函数体：签名行之后到首个顶格 `}`
+    ///
+    /// 计数必须限定在函数体：整文件会把 `use` 行与文档注释里的路径字面量算进来，
+    /// 基线被撑虚高之后，「指错文件即红」的判别力就没了。
+    fn configure_routes_body(src: &str) -> Option<&str> {
+        let head = src.find("fn configure_routes")?;
+        let open = src[head..].find('{').map(|i| head + i + 1)?;
+        let close = src[open..].find("\n}").map(|i| open + i)?;
+        Some(&src[open..close])
+    }
+
+    /// 数函数体里的路由标识符，与 spec §7 的门禁命令
+    /// `grep -oE '"/[^"]*"|API_HEALTH_PATH|WS_EVENT_PATH'` 同形
+    fn route_identifier_count(body: &str) -> usize {
+        let mut count = body.matches("API_HEALTH_PATH").count() + body.matches("WS_EVENT_PATH").count();
+        let mut rest = body;
+        while let Some(open) = rest.find("\"/") {
+            let after = &rest[open + 1..];
+            let Some(close) = after.find('"') else { break };
+            count += 1;
+            rest = &after[close + 1..];
+        }
+        count
+    }
+
+    /// 取扫描目标里的 `configure_routes` 函数体；取不到即目标已不含宿主路由装配
+    fn configure_routes_body_or_panic<'a>(label: &str, src: &'a str) -> &'a str {
+        configure_routes_body(src)
+            .unwrap_or_else(|| panic!("锁已空转：扫描目标 {label} 里没有 configure_routes 函数体"))
+    }
+
+    /// 前置（第一条锁）：扫描目标必须命中基线数量的路由标识符
+    ///
+    /// 别名表现有 17 条**全部** `PluginRequired`，而那条锁对每条断言的是
+    /// `!APP_RS.contains(path)`——只做 17 次否定断言。`include_str!` 指到一个「存在但没有
+    /// 路由字面量」的文件时，17 条全部恒真、全绿；路径**不存在**编译器会抓，指错文件只有
+    /// 这条前置能抓。
+    fn assert_host_route_surface_is_live(label: &str, src: &str) {
+        let hit = route_identifier_count(configure_routes_body_or_panic(label, src));
+        assert!(
+            hit >= HOST_ROUTE_IDENTIFIERS_BASELINE,
+            "锁已空转：扫描目标 {label} 的 configure_routes 只命中 {hit} 条路由标识符，\
+             低于基线 {HOST_ROUTE_IDENTIFIERS_BASELINE}（12 条路径字面量 + API_HEALTH_PATH + WS_EVENT_PATH）",
+        );
+    }
+
+    /// 前置（第二条锁）：扫描目标非空，且确实执行「挂路由」这个动作
+    ///
+    /// 那条锁扫的 `git_controller::` / `auth_controller::` 两个 handler 名已随业务下沉退役，
+    /// 零命中是**合法现状**、不能拿它当判据；能判的只有「被扫文件仍是宿主路由装配处」。
+    fn assert_host_route_surface_not_empty(label: &str, src: &str) {
+        let body = configure_routes_body_or_panic(label, src);
+        assert!(
+            !body.trim().is_empty() && body.contains(".route("),
+            "锁已空转：扫描目标 {label} 的 configure_routes 函数体内没有任何 .route( 绑定",
+        );
+    }
+
+    /// 计数式自身：路径字面量与两个路由常量都算一项，非路径文本不算
+    ///
+    /// 与 spec §7 的门禁命令同形（含其「注释里的引号路径也算一项」的口径——只会虚高不会漏，
+    /// 放宽方向与门禁一致）。这条锁的全部判别力来自「常量纳入计数」，
+    /// 故把该行为永久钉成用例，而不只靠一次变异验证。
+    #[test]
+    fn calibration_counts_path_literals_and_route_constants() {
+        let live = "\
+    cfg.route(\"/sessions\", web::get().to(h));
+    cfg.route(\"/static/terminal-bg\", web::get().to(h));
+    cfg.route(WS_EVENT_PATH, web::get().to(event_ws));
+    cfg.route(API_HEALTH_PATH, web::get().to(health_check));
+";
+        assert_eq!(route_identifier_count(live), 4);
+        assert_eq!(route_identifier_count("use crate::server::controllers;"), 0);
+    }
+
+    /// 目标取函数体而不是整文件：`use` 行与函数体外的常量不得混进计数
+    #[test]
+    fn calibration_scans_only_the_configure_routes_body() {
+        let src = "\
+use crate::server::app::{API_HEALTH_PATH, WS_EVENT_PATH};
+/// 文档注释里的 \"/api/doc-comment\" 不是路由
+pub fn configure_routes(cfg: &mut web::ServiceConfig) {
+    cfg.route(\"/sessions\", web::get().to(h));
+}
+const ELSEWHERE: &str = \"/api/elsewhere\";
+";
+        let body = configure_routes_body(src).expect("函数体");
+        assert_eq!(
+            route_identifier_count(body),
+            1,
+            "整文件计数会把 use 行的两个常量、文档注释与函数体后的字面量都算进来"
+        );
+        assert!(
+            body.contains("/sessions")
+                && !body.contains("API_HEALTH_PATH")
+                && !body.contains("doc-comment")
+                && !body.contains("elsewhere"),
+            "计数范围越界，实际取到: {body}"
+        );
+        assert!(configure_routes_body("pub fn nothing() {}").is_none());
+    }
+
+    /// 前置必须咬得动：死目标（有 `configure_routes` 但函数体是空的）上跑第一条锁的前置 → 红
+    #[test]
+    #[should_panic(expected = "锁已空转")]
+    fn calibration_panics_when_route_surface_is_dead() {
+        assert_host_route_surface_is_live(
+            "server/_dead_target.rs",
+            "pub fn configure_routes(cfg: &mut web::ServiceConfig) {}\n",
+        );
+    }
+
+    /// 前置必须咬得动：死目标上跑第二条锁的前置 → 红
+    #[test]
+    #[should_panic(expected = "锁已空转")]
+    fn calibration_panics_when_route_surface_mounts_nothing() {
+        assert_host_route_surface_not_empty(
+            "server/_dead_target.rs",
+            "pub fn configure_routes(cfg: &mut web::ServiceConfig) {\n    // 空\n}\n",
+        );
+    }
+
     /// 别名表与宿主路由面同源：每条业务路径都必须仍注册在 `app.rs` 的 `/api` scope 里
     ///
     /// 网关是「加一层」而不是「换路由」——降级分支依赖旧路由原样存在。这条静态扫描把依赖
@@ -725,7 +867,7 @@ mod tests {
     /// 宿主再挂同路径 handler 就是死业务面（票 02/03/04 contract 的反向守护）。
     #[test]
     fn every_alias_still_has_a_host_route() {
-        const APP_RS: &str = include_str!("app.rs");
+        assert_host_route_surface_is_live(APP_RS_LABEL, APP_RS);
         for r in BUSINESS_ROUTES {
             let literal = format!("\"{}\"", r.path.strip_prefix("/api").expect("/api/ 前缀"));
             match r.fallback {
@@ -755,7 +897,7 @@ mod tests {
     /// 新增业务端点的正路只有两条：下沉插件 + 上表，或论证它确属引擎协议面（不碰业务 handler）。
     #[test]
     fn business_handlers_are_only_mounted_on_aliased_paths() {
-        const APP_RS: &str = include_str!("app.rs");
+        assert_host_route_surface_not_empty(APP_RS_LABEL, APP_RS);
         const BUSINESS_HANDLERS: &[&str] = &["git_controller::", "auth_controller::"];
         let mut offenders = Vec::new();
         for marker in BUSINESS_HANDLERS {
