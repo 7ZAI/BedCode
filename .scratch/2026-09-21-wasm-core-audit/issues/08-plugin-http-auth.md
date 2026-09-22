@@ -156,6 +156,22 @@ test_component_trap_emits_host_error_log`（`captured: []`）。判据三条：
 | HTTP 声明缺省档 `Jwt` → `None`（照抄 WS） | registry 4 条 + `registered_http_endpoints_carry_declared_auth_tier` | 5 条全红 ✓ |
 | plugin.json 漏标一条 hook 的 `none` | 插件 Rust `none_auth_endpoints_match_manifest_and_cover_public_surface` | 红 ✓（213 passed / 1 failed） |
 | `EndpointAuth::parse_with` 未知档位静默回落缺省 | SDK `test_endpoint_auth_parse_with_default_and_unknown` | 红 ✓（104 passed / 1 failed） |
+| 401 构造器误用 `HttpResponse::Ok()`（沿用宿主业务面 200 + 业务码的习惯） | `unauthenticated_response_is_http_401_with_both_remedies_named` | 红 ✓（断言点明「免凭证拒绝必须是 HTTP 401」） |
+
+### 首提交后补的一处真实缺口（`89fcf57f2` 之后）
+
+401 那条分支起初只有纯函数被锁（`plugin_http_auth_allowed`），**响应形状本身没用例**——
+「判定对但回错状态码 / 文案含糊」测不到。补法：把 `/api/plugin/*` 的拒绝响应收成一个具名
+构造器 `plugin_http_unauthenticated_response`（与网关既有的 `unauthorized_response` 对称），
+两边各加一条真实 actix body 读取的形状用例（401 + 1007 + 文案点名端点与两条出路，
+且网关那条反向断言「不得把未登录报成插件未激活」）。补后 `plugin_controller` + `gateway`
+两模块 32 passed，新增 2 条各自命中；上表第 6 行即其变异自检。
+
+**仍未覆盖的（如实登记）**：`plugin_http_endpoint` 整条 handler 链（属主解析 → 声明匹配 →
+档位判定）没有端到端用例——它需要 `AppContext::global()` 与一个已激活插件，现有测试面里
+没有这个夹具（网关侧有真实 actix 栈用例 `unverified_requests_never_reach_gateway`，
+但它锁的是中间件顺序，不穿到 handler 的档位分支）。要做成套需先给 handler 建可注入的
+AppContext 夹具，属独立工程，不在本票夹带（列遗留 7）。
 
 前三处在同一次 `src-tauri` 跑内并行生效、各自命中预期用例；五处全部还原后复绿（58 passed）。
 
@@ -172,6 +188,9 @@ test_component_trap_emits_host_error_log`（`captured: []`）。判据三条：
 5. **移动端跟演**：`plugin-sdk-mobile` 无 `httpEndpoints` 声明面（grep 证实），该端接同类能力时
    补自己的 SDK 类型 + 打包链校验，桌面结果不构成其正确性依据（ADR 0022「双端偏离」）。
 6. **CHANGELOG 只补英文**：沿用本线票 01–06 的既有一致口径（审计票条目未落 `CHANGELOG_zh.md`）。
+7. **handler 端到端夹具**：`plugin_http_endpoint` 要 `AppContext::global()` + 已激活插件才能整链测，
+   现有夹具（`host_impl::tests::build_host_ctx` 造的是 `WasmHostContext`）覆盖不到。补好后应测三格：
+   未声明 → 404、`jwt` + 无凭证 → 401、`none` + 环回 → 真的到达插件。
 
 ### 裁决（2026-09-22 用户裁决，开工前已定）
 
