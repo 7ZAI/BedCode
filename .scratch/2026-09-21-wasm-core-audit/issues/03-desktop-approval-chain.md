@@ -108,6 +108,12 @@
    --cacheinfo`）只提交本票 hunk（3/1），对侧 hunk 留在工作区未提交，文档 commit 最终为 `400b4c79f`。
    教训与票 05 第 9 条一致：**共享文档文件（code-map / AGENTS.md / CHANGELOG.md）提交前逐文件核
    `git diff --numstat`，跨线共用的文件必须局部暂存**。
+   **反向夹带（同批记录）**：本票的 `docs(scratch)` 提交后来被对侧 `fc760448e`（其 ABI v23 提交）
+   连同其自身改动一起提交 —— 对侧从共享暂存区提交时把本票已暂存的三个 scratch 文件
+   （`issues/03`、`handoff-2026-09-22.md`、`spec.md`）带走了（`git show --stat fc760448e` 可见）。
+   用户 2026-09-22 对此类散落已表态「散落没有关系」，故**不改写对侧 commit**，仅在此记证。
+   ⇒ 共用 worktree 下的实操纪律：**暂存后立刻提交**（窗口越短越好），或直接用
+   `git commit -- <path>` 只提交指定路径，不把内容留在共享暂存区里等。
 
 ## Comments
 
