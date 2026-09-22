@@ -120,6 +120,85 @@ impl PluginHost {
 
     /// 根据持久化状态自动激活之前已激活的插件
 
+    /// 存量兼容（ADR 0020 迁移）：升级前已启用的用户插件首启自动批准一次
+    ///
+    /// 审批门禁上线前，用户安装的插件按 manifest 全量授权即可运行；直接按新门禁拒绝
+    /// 会把用户现有功能打死（票 03 裁决 1）。因此对「持久化状态为已启用 且 尚无批准
+    /// 记录」的用户安装插件补一条批准记录并 `warn` 留痕——用户仍可在插件详情页看到
+    /// 完整权限清单。从未启用过的用户插件不在此列，照常走人工审批。
+    ///
+    /// 不做「权限清单变更时重弹」——本轮不加（裁决 1，留作后续可选项）。
+    async fn auto_approve_legacy_user_plugin(&self, plugin_id: &str) {
+        use crate::plugin::security::approval;
+
+        let (is_user_installed, extension_path, version, requested) = {
+            let plugins = self.plugins.read().await;
+            match plugins.get(plugin_id) {
+                Some(loaded) => (
+                    loaded.source == PluginSource::UserInstalled,
+                    loaded.extension_path.clone(),
+                    loaded.manifest.version.clone(),
+                    loaded.manifest.permissions.clone(),
+                ),
+                // 列表对账已过滤过期 id，此处兜底静默跳过
+                None => return,
+            }
+        };
+        if !is_user_installed || extension_path.is_empty() {
+            return;
+        }
+
+        let store = approval::PluginApprovalStore::new(self.storage.clone());
+        match store.get(plugin_id).await {
+            // 已有批准记录（含哈希不匹配的失效记录）：交给审批门禁按哈希裁决，不越权补批
+            Ok(Some(_)) => return,
+            Ok(None) => {}
+            Err(e) => {
+                tracing::warn!(
+                    plugin_id = %plugin_id,
+                    error = %e,
+                    "[PluginHost] 读取审批记录失败，跳过存量用户插件自动批准"
+                );
+                return;
+            }
+        }
+
+        let approved = approval::known_permissions(&requested);
+        let dir = PathBuf::from(&extension_path);
+        let content_hash = match tokio::task::spawn_blocking(move || approval::compute_dir_hash(&dir)).await {
+            Ok(Ok(hash)) => hash,
+            Ok(Err(e)) => {
+                tracing::warn!(
+                    plugin_id = %plugin_id,
+                    error = %e,
+                    "[PluginHost] 计算插件目录哈希失败，跳过存量用户插件自动批准"
+                );
+                return;
+            }
+            Err(e) => {
+                tracing::warn!(
+                    plugin_id = %plugin_id,
+                    error = %e,
+                    "[PluginHost] 哈希任务失败，跳过存量用户插件自动批准"
+                );
+                return;
+            }
+        };
+
+        match store.approve(plugin_id, &approved, &content_hash, &version).await {
+            Ok(()) => tracing::warn!(
+                plugin_id = %plugin_id,
+                permission_count = approved.len(),
+                "[PluginHost] 存量用户安装插件首启自动批准一次（审批门禁上线前的遗留启用状态）"
+            ),
+            Err(e) => tracing::warn!(
+                plugin_id = %plugin_id,
+                error = %e,
+                "[PluginHost] 存量用户插件自动批准写入失败"
+            ),
+        }
+    }
+
     /// 根据持久化状态自动激活之前已激活的插件
     pub(crate) async fn auto_activate_from_persisted_state(&self) {
         let activated_map = match self.storage.load_activated_plugins().await {
@@ -171,6 +250,8 @@ impl PluginHost {
 
         for plugin_id in &to_activate {
             tracing::info!(plugin_id = %plugin_id, "[PluginHost] Auto-activating plugin");
+            // 存量兼容（ADR 0020）：审批门禁上线前就已启用的用户插件，首启补一次自动批准
+            self.auto_approve_legacy_user_plugin(plugin_id).await;
             if let Err(e) = self.activate_plugin(plugin_id, false).await {
                 tracing::error!(plugin_id = %plugin_id, error = %e, "[PluginHost] Failed to auto-activate plugin");
             }

@@ -48,6 +48,14 @@ pub struct PluginManifest {
     /// 仅 rust-ts 类型插件使用，宿主根据平台自动添加后缀
     #[serde(default)]
     pub rust_library: String,
+    /// WASM 模块内容 SHA-256（小写十六进制；缺省空串 = 不校验）
+    ///
+    /// 由**发布者**在打包时填入：宿主 `downloader` 安装期比对 zip 内 wasm 文件的
+    /// 摘要，拦截「包内二进制与 manifest 声明不符」的替换（与移动端同形）。
+    /// 缺省空串时跳过校验（既有插件零迁移）——但**空串不等于安全**：
+    /// 插件内容仍受审批门禁的目录哈希钉扎约束（`plugin/security/approval.rs`）。
+    #[serde(default)]
+    pub wasm_hash: String,
     /// 插件图标：图片路径（相对插件目录）或内联 SVG 标记
     #[serde(default)]
     pub icon: Option<String>,

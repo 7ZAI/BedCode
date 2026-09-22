@@ -171,6 +171,7 @@ mod tests {
             contributes: PluginContributes::default(),
             plugin_type: PluginType::RustTs,
             rust_library: "bedcode_test.wasm".to_string(),
+            wasm_hash: String::new(),
             icon: None,
             wasi_preopen_dirs: vec![],
             kind: bedcode_plugin_api::PluginKind::Application,

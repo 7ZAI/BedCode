@@ -38,6 +38,7 @@ impl WasmPlugin for Wasip3TestPlugin {
             contributes: Default::default(),
             plugin_type: PluginType::Rust,
             rust_library: String::new(),
+            wasm_hash: String::new(),
             icon: None,
             wasi_preopen_dirs: Vec::new(),
             kind: PluginKind::Application,

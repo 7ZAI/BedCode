@@ -96,6 +96,86 @@ impl PluginHost {
         Ok(plugin_id)
     }
 
+    // ==================== 权限审批（ADR 0020 / 审计票 03） ====================
+
+    /// 人工批准用户安装插件的权限清单（审批弹层的前端命令落点）
+    ///
+    /// 语义（与移动端一致）：
+    /// - 只对 `UserInstalled` 来源生效——随包内置插件属应用构建信任域，免审批；
+    /// - 记录「词汇表内的声明权限」+ 批准时刻的插件目录内容哈希（内容钉扎）；
+    /// - 批准只解除闸门，不隐式启用：激活仍由用户显式触发（下一次
+    ///   `activate_plugin` 由审批门禁按哈希复核）。
+    ///
+    /// 返回本次批准的权限清单（供前端 toast/日志用）。
+    pub async fn approve_plugin(&self, plugin_id: &str) -> crate::Result<Vec<String>> {
+        let (source, extension_path, version, requested) = {
+            let plugins = self.plugins.read().await;
+            let loaded = plugins
+                .get(plugin_id)
+                .ok_or_else(|| crate::AppError::Plugin(format!("Plugin not found: {}", plugin_id)))?;
+            (
+                loaded.source.clone(),
+                loaded.extension_path.clone(),
+                loaded.manifest.version.clone(),
+                loaded.manifest.permissions.clone(),
+            )
+        };
+
+        if source != PluginSource::UserInstalled {
+            return Err(crate::AppError::Plugin(format!(
+                "Plugin '{}' (source: {}) is trusted by build, approval is not required",
+                plugin_id,
+                source.as_str()
+            )));
+        }
+        if extension_path.is_empty() {
+            return Err(crate::AppError::Plugin(format!(
+                "Plugin '{}' has no extension path, cannot pin approval content",
+                plugin_id
+            )));
+        }
+
+        let approved = crate::plugin::security::approval::known_permissions(&requested);
+        // 目录哈希不进 async 事件循环（插件目录可能较大，避免阻塞 runtime worker）
+        let dir = PathBuf::from(&extension_path);
+        let content_hash =
+            tokio::task::spawn_blocking(move || crate::plugin::security::approval::compute_dir_hash(&dir))
+                .await
+                .map_err(|e| crate::AppError::Plugin(format!("Approval hash task failed: {}", e)))??;
+
+        crate::plugin::security::approval::PluginApprovalStore::new(self.storage.clone())
+            .approve(plugin_id, &approved, &content_hash, &version)
+            .await?;
+
+        // 词汇表外的声明不写进批准集，此处如实告警（否则用户看不出差异）
+        let dropped: Vec<&String> = requested.iter().filter(|p| !approved.contains(p)).collect();
+        // 待授权态复位为「已停用」：批准解除了闸门，但未启用仍是事实，
+        // 前端据此把状态徽章从「待授权」换成「已停用」
+        {
+            let mut plugins = self.plugins.write().await;
+            if let Some(loaded) = plugins.get_mut(plugin_id) {
+                if matches!(loaded.state, PluginState::NeedsApproval) {
+                    loaded.state = PluginState::Deactivated;
+                }
+            }
+        }
+
+        tracing::info!(
+            plugin_id = %plugin_id,
+            permission_count = approved.len(),
+            "[PluginHost] 用户安装插件已获人工批准（内容哈希已钉扎）"
+        );
+        if !dropped.is_empty() {
+            tracing::warn!(
+                plugin_id = %plugin_id,
+                dropped = ?dropped,
+                "manifest 声明的权限不在 SDK 词汇表内，未写入批准清单"
+            );
+        }
+
+        Ok(approved)
+    }
+
     /// 卸载插件：删除插件所有数据（存储 + 激活状态 + 安装目录 + 私有数据库，dev 合入）
     ///
     /// 适用范围：**所有来源的插件**（内置随包 / 用户 zip 安装 / 文件扫描 / 静态注册）。

@@ -115,10 +115,19 @@ impl PluginApprovalStore {
     }
 }
 
+/// 哈希排除的运行时数据文件（非安装内容）
+///
+/// 插件私有 SQLite 库位于插件安装目录内（`app_data/plugins/<id>/plugin.db`，
+/// 见 `wasm_runtime.rs` 的私有库路径装配），批准之后运行期会持续变化；
+/// 把它计入哈希会让「批准 → 启用 → 停用 → 再启用」每次都判成 HashMismatch
+/// 并撤销批准，插件再也起不来。排除的只是**数据面**：plugin.json / index.js /
+/// *.wasm 等代码面仍在哈希内，替换代码依然会被抓住。
+const HASH_EXCLUDED_FILES: &[&str] = &["plugin.db", "plugin.db-wal", "plugin.db-shm", "plugin.db-journal"];
+
 /// 计算插件目录内容 SHA-256（相对路径排序 + 文件内容）
 ///
 /// 覆盖目录下全部文件（含 plugin.json / wasm / js 产物），
-/// 任一文件被替换都会导致哈希变化。
+/// 任一文件被替换都会导致哈希变化；运行时数据文件见 [`HASH_EXCLUDED_FILES`]。
 pub fn compute_dir_hash(dir: &Path) -> crate::Result<String> {
     let mut files: Vec<(String, Vec<u8>)> = Vec::new();
 
@@ -134,6 +143,9 @@ pub fn compute_dir_hash(dir: &Path) -> crate::Result<String> {
             if path.is_dir() {
                 collect(&path, base, files)?;
             } else if path.is_file() {
+                if HASH_EXCLUDED_FILES.iter().any(|name| path.file_name().is_some_and(|n| n == *name)) {
+                    continue;
+                }
                 let content = std::fs::read(&path)
                     .map_err(|e| AppError::Plugin(format!("Failed to read '{}' for hashing: {}", rel, e)))?;
                 files.push((rel, content));
@@ -156,32 +168,50 @@ pub fn compute_dir_hash(dir: &Path) -> crate::Result<String> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
-/// 计算生效权限集：用户批准 ∩ manifest 请求（storage 恒授予）
+/// 计算生效权限集：用户批准 ∩ manifest 请求
 ///
 /// `trusted=true`（内置插件）时直接全量返回请求权限。
+///
+/// **没有任何恒授予的特例**：`storage` 曾在旧形态下被无条件塞进结果集，
+/// 使「manifest 声明即信任」退化为「不声明也有」（票 02 已在
+/// `PermissionManager::grant_permissions` 取消默认位，本处是同一决策的收尾）。
 pub fn effective_permissions(
     requested: &[String],
     approval: Option<&PluginApproval>,
     trusted: bool,
 ) -> HashSet<String> {
-    let mut effective: HashSet<String> = if trusted {
-        requested.iter().cloned().collect()
-    } else {
-        match approval {
-            Some(appr) => {
-                let approved: HashSet<&str> = appr.approved_permissions.iter().map(|s| s.as_str()).collect();
-                requested
-                    .iter()
-                    .filter(|p| approved.contains(p.as_str()))
-                    .cloned()
-                    .collect()
-            }
-            None => HashSet::new(),
+    if trusted {
+        return requested.iter().cloned().collect();
+    }
+    match approval {
+        Some(appr) => {
+            let approved: HashSet<&str> = appr.approved_permissions.iter().map(|s| s.as_str()).collect();
+            requested
+                .iter()
+                .filter(|p| approved.contains(p.as_str()))
+                .cloned()
+                .collect()
         }
-    };
-    // storage 恒授予：插件自身配置空间的读写（与 PermissionManager 语义一致）
-    effective.insert(crate::plugin::permission::PERMISSION_STORAGE.to_string());
-    effective
+        None => HashSet::new(),
+    }
+}
+
+/// 过滤出 SDK 词汇表内的权限（保持声明顺序、去重）
+///
+/// 审批记录里存的必须是「真能生效的位」——把词汇表外的装饰声明也写进批准清单，
+/// 会让用户看到的批准集与实际生效集不一致（授权时仍会被 `PermissionManager`
+/// 过滤掉），弹层就成了假账。词汇真源是 SDK 的 [`VALID_PERMISSIONS`]。
+///
+/// [`VALID_PERMISSIONS`]: crate::plugin::permission::VALID_PERMISSIONS
+pub fn known_permissions(requested: &[String]) -> Vec<String> {
+    let valid: HashSet<&str> = crate::plugin::permission::VALID_PERMISSIONS.iter().copied().collect();
+    let mut seen: HashSet<&str> = HashSet::new();
+    requested
+        .iter()
+        .filter(|p| valid.contains(p.as_str()))
+        .filter(|p| seen.insert(p.as_str()))
+        .cloned()
+        .collect()
 }
 
 /// 校验审批状态：哈希钉扎检查
@@ -273,42 +303,79 @@ mod tests {
         assert_ne!(h3, h4, "新增文件后哈希必须变化");
     }
 
+    fn approval_with(perms: &[&str]) -> PluginApproval {
+        PluginApproval {
+            approved_permissions: perms.iter().map(|p| p.to_string()).collect(),
+            content_hash: "h".to_string(),
+            version: "1.0.0".to_string(),
+            approved_at: "now".to_string(),
+        }
+    }
+
     #[test]
     fn test_effective_permissions_gating() {
         let requested = vec!["fs:read".to_string(), "process:run".to_string(), "storage".to_string()];
 
-        // 未批准：仅 storage
+        // 未批准：一位都不生效（反例：旧形态恒授 storage）
         let eff = effective_permissions(&requested, None, false);
-        assert!(eff.contains("storage"));
-        assert!(!eff.contains("fs:read"));
-        assert!(!eff.contains("process:run"));
+        assert!(eff.is_empty(), "无批准记录时生效权限必须为空集，实际: {:?}", eff);
 
-        // 批准子集：批准 ∩ 请求，storage 恒有
-        let approval = PluginApproval {
-            approved_permissions: vec!["fs:read".to_string()],
-            content_hash: "h".to_string(),
-            version: "1.0.0".to_string(),
-            approved_at: "now".to_string(),
-        };
-        let eff = effective_permissions(&requested, Some(&approval), false);
-        assert!(eff.contains("storage"));
-        assert!(eff.contains("fs:read"));
+        // 批准子集：批准 ∩ 请求（正例 + 两条反例）
+        let eff = effective_permissions(&requested, Some(&approval_with(&["fs:read"])), false);
+        assert!(eff.contains("fs:read"), "批准的位且在请求内 → 生效");
         assert!(!eff.contains("process:run"), "未批准的 process:run 不得授予");
+        assert!(!eff.contains("storage"), "storage 不再有恒授予特例");
 
         // 批准了请求里没有的权限：不生效（交集语义）
-        let approval_extra = PluginApproval {
-            approved_permissions: vec!["fs:write".to_string()],
-            content_hash: "h".to_string(),
-            version: "1.0.0".to_string(),
-            approved_at: "now".to_string(),
-        };
-        let eff = effective_permissions(&requested, Some(&approval_extra), false);
-        assert!(!eff.contains("fs:write"));
+        let eff = effective_permissions(&requested, Some(&approval_with(&["fs:write"])), false);
+        assert!(eff.is_empty(), "批准集与请求集无交集 → 空集，实际: {:?}", eff);
 
-        // 内置可信：全量
+        // 内置可信：全量（含 storage，因为请求里有）
         let eff = effective_permissions(&requested, None, true);
+        assert_eq!(eff.len(), 3);
         assert!(eff.contains("process:run"));
-        assert!(eff.contains("fs:read"));
+        assert!(eff.contains("storage"));
+    }
+
+    /// `known_permissions`：保留词汇内位、丢弃词汇外位、去重且保持声明顺序
+    #[test]
+    fn test_known_permissions_filters_and_dedupes() {
+        let requested = vec![
+            "process:run".to_string(),
+            "not:a:real:permission".to_string(),
+            "process:run".to_string(),
+            "database:main".to_string(),
+            "".to_string(),
+        ];
+        assert_eq!(
+            known_permissions(&requested),
+            vec!["process:run".to_string(), "database:main".to_string()],
+            "词汇内位按声明顺序保留（去重），装饰词汇被丢弃"
+        );
+        assert!(known_permissions(&[]).is_empty());
+    }
+
+    /// 运行时数据文件（私有库及其 SQLite 边车文件）不参与哈希：
+    /// 否则「批准 → 启用（建库）→ 再启用」会被误判为内容被替换
+    #[test]
+    fn test_compute_dir_hash_ignores_runtime_data_files() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = tmp.path().join("p");
+        write_plugin_dir(&dir, &[("plugin.json", r#"{"id":"com.test.p"}"#)]);
+        let before = compute_dir_hash(&dir).unwrap();
+
+        // 私有库被创建（首次启用）→ 哈希不变
+        std::fs::write(dir.join("plugin.db"), b"SQLite format 3").unwrap();
+        assert_eq!(compute_dir_hash(&dir).unwrap(), before, "新建 plugin.db 不得改变哈希");
+
+        // WAL / SHM 边车文件增长 → 哈希不变
+        std::fs::write(dir.join("plugin.db-wal"), vec![0u8; 32]).unwrap();
+        std::fs::write(dir.join("plugin.db-shm"), vec![1u8; 32]).unwrap();
+        assert_eq!(compute_dir_hash(&dir).unwrap(), before, "SQLite 边车文件不得改变哈希");
+
+        // 代码面仍受钉扎保护（反例：同目录下的其它新文件会改哈希）
+        std::fs::write(dir.join("evil.js"), "// injected").unwrap();
+        assert_ne!(compute_dir_hash(&dir).unwrap(), before, "非排除文件名仍必须改变哈希");
     }
 
     #[test]

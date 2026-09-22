@@ -415,10 +415,10 @@ pub fn run() {
             let (sync_tx, _) =
                 tokio::sync::broadcast::channel::<events::DesktopSyncEvent>(SYNC_EVENT_BROADCAST_CAPACITY);
 
-            // 设置 SessionManager 和 SessionConfigManager 的同步事件发送器
+            // 设置 SessionManager 的同步事件发送器（v22 起 SessionConfigManager 为只读
+            // 迁移通道，不发配置事件——写面与 Config* 广播已随 host-session 写原语退役）
             tauri::async_runtime::block_on(async {
                 session_manager.set_sync_tx(sync_tx.clone()).await;
-                config_manager.set_sync_tx(sync_tx.clone()).await;
             });
 
             // ==================== 注册到 AppContext 全局容器 ====================
@@ -672,6 +672,7 @@ pub fn run() {
             commands::plugin::plugin_preauthorize,
             commands::plugin::plugin_activate,
             commands::plugin::plugin_deactivate,
+            commands::plugin::plugin_approve,
             commands::plugin::plugin_install_from_file,
             commands::plugin::plugin_uninstall,
             commands::plugin::plugin_mark_error,

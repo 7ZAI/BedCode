@@ -89,8 +89,92 @@ impl PluginHost {
         result
     }
 
+    /// 审批门禁（ADR 0020 / 审计票 03）：返回用户安装插件的生效权限集
+    ///
+    /// - `Ok(None)`：来源免审批（静态注册 / 随包扫描 / 内置 WASM）→ 宿主按 manifest 全量授权；
+    /// - `Ok(Some(effective))`：用户 zip 安装且批准有效 → 生效权限 = 批准 ∩ 请求；
+    /// - `Err`：无批准记录（Pending）或批准后目录内容变化（HashMismatch）→ 置
+    ///   `NeedsApproval` + 拒绝激活（**禁止**静默降级为「部分权限」——用户必须先看见
+    ///   「这个插件要哪些权限」再决定）。
+    ///
+    /// 必须在持有 `plugins` 锁之外调用：目录哈希是阻塞 IO（走 `spawn_blocking`），
+    /// 且失败路径要回写插件状态。
+    async fn approval_gate(&self, plugin_id: &str) -> crate::Result<Option<HashSet<String>>> {
+        use crate::plugin::security::approval::{self, ApprovalStatus};
+
+        let (source, extension_path, requested) = {
+            let plugins = self.plugins.read().await;
+            match plugins.get(plugin_id) {
+                Some(loaded) => (
+                    loaded.source.clone(),
+                    loaded.extension_path.clone(),
+                    loaded.manifest.permissions.clone(),
+                ),
+                None => return Err(crate::AppError::Plugin(format!("Plugin not found: {}", plugin_id))),
+            }
+        };
+        // 信任分档（裁决 2）：随包内置插件属应用构建信任域，本门禁只作用 UserInstalled
+        if source != PluginSource::UserInstalled {
+            return Ok(None);
+        }
+
+        let approvals = approval::PluginApprovalStore::new(self.storage.clone());
+        let record = approvals.get(plugin_id).await?;
+        // 目录哈希不进 async 事件循环
+        let dir = PathBuf::from(&extension_path);
+        let record_for_hash = record.clone();
+        let (status, _current_hash) =
+            tokio::task::spawn_blocking(move || approval::verify_approval(record_for_hash.as_ref(), &dir))
+                .await
+                .map_err(|e| crate::AppError::Plugin(format!("Approval verify task failed: {}", e)))??;
+
+        match status {
+            ApprovalStatus::Approved => Ok(Some(approval::effective_permissions(
+                &requested,
+                record.as_ref(),
+                false,
+            ))),
+            ApprovalStatus::Pending | ApprovalStatus::HashMismatch => {
+                let mismatch = status == ApprovalStatus::HashMismatch;
+                if mismatch {
+                    tracing::warn!(
+                        plugin_id = %plugin_id,
+                        "[PluginHost] 插件目录内容与批准时不一致，撤销批准并要求重新审批"
+                    );
+                    // 撤销失败不阻断本次拒绝（插件仍无法激活），但必须留痕
+                    if let Err(e) = approvals.revoke(plugin_id).await {
+                        tracing::error!(
+                            plugin_id = %plugin_id,
+                            error = %e,
+                            "[PluginHost] 撤销失效批准失败（本次拒绝激活不受影响）"
+                        );
+                    }
+                }
+                {
+                    let mut plugins = self.plugins.write().await;
+                    if let Some(loaded) = plugins.get_mut(plugin_id) {
+                        loaded.state = PluginState::NeedsApproval;
+                    }
+                }
+                tracing::warn!(
+                    plugin_id = %plugin_id,
+                    hash_mismatch = mismatch,
+                    "[PluginHost] 激活被审批门禁拒绝"
+                );
+                Err(crate::AppError::Plugin(format!(
+                    "Plugin '{}' requires user approval before activation (or its files changed since approval)",
+                    plugin_id
+                )))
+            }
+        }
+    }
+
     pub(crate) async fn activate_plugin_inner(&self, plugin_id: &str, persist: bool) -> crate::Result<()> {
         tracing::info!(plugin_id = %plugin_id, persist, "[PluginHost] activate_plugin");
+
+        // 阶段 0.0（无锁）：审批门禁（ADR 0020）——用户 zip 安装的插件必须先获人工批准，
+        // 且批准与目录内容哈希绑定。排在预授权之前：未获批准的插件不该先弹文件系统授权窗
+        let approval_effective = self.approval_gate(plugin_id).await?;
 
         // 阶段 0(无锁):预授权 — 必须在持 plugins 锁之前完成,失败直接
         // 返回 Err,前端 catch 后回退 toggle。loading 遮罩由前端 toggle
@@ -146,12 +230,24 @@ impl PluginHost {
             }
 
             // 重新授权：deactivate 会 revoke_all，再次激活时必须重新授予
-            let permissions = loaded.manifest.permissions.clone();
+            //
+            // 只授「生效权限」：用户安装插件是 批准 ∩ 请求（approval_gate），内置来源是
+            // manifest 全量。多授一位就等于审批门禁被绕过——PermissionManager 是宿主机能门
+            // 的运行时真源（guest 内嵌权限集只作上限，见 wasm 实例化注释）。
+            let permissions = match &approval_effective {
+                Some(effective) => effective.iter().cloned().collect::<Vec<String>>(),
+                None => loaded.manifest.permissions.clone(),
+            };
             let granted = self.permission.grant_permissions(plugin_id, &permissions);
             // 词汇表外的声明会在授权时被过滤（= 没声明）。票 01 已把生产 manifest 的
             // 装饰词汇清零、票 02 又取消了 storage 的默认授予，因此「声明了却没生效」
             // 必须可见——否则第三方插件作者只能靠运行时 permission denied 反推。
-            let dropped: Vec<&String> = permissions.iter().filter(|p| !granted.contains(p.as_str())).collect();
+            let dropped: Vec<&String> = loaded
+                .manifest
+                .permissions
+                .iter()
+                .filter(|p| !granted.contains(p.as_str()))
+                .collect();
             if !dropped.is_empty() {
                 tracing::warn!(
                     plugin_id = %plugin_id,

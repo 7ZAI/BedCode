@@ -129,6 +129,7 @@ mod tests {
                 contributes: PluginContributes::default(),
                 plugin_type: PluginType::Rust,
                 rust_library: String::new(),
+                wasm_hash: String::new(),
                 api: vec![],
                 icon: None,
                 wasi_preopen_dirs: vec![],

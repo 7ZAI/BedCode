@@ -68,6 +68,23 @@ pub async fn plugin_deactivate(plugin_id: String, plugin_host: State<'_, Arc<Plu
     result
 }
 
+/// 批准用户安装插件的权限清单（ADR 0020 审批门禁的放行操作）
+///
+/// 生效权限 = 批准 ∩ manifest 请求；批准与插件目录内容哈希绑定，
+/// 目录内容在批准后变化 → 批准自动撤销并回到 NeedsApproval。
+#[tauri::command]
+pub async fn plugin_approve(
+    plugin_id: String,
+    plugin_host: State<'_, Arc<PluginHost>>,
+) -> crate::Result<Vec<String>> {
+    tracing::info!(plugin_id = %plugin_id, "[API] plugin_approve");
+    let result = plugin_host.approve_plugin(&plugin_id).await;
+    if let Err(ref e) = result {
+        tracing::error!(plugin_id = %plugin_id, error = %e, "[API] plugin_approve failed");
+    }
+    result
+}
+
 /// 标记插件错误
 #[tauri::command]
 pub async fn plugin_mark_error(
