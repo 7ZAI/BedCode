@@ -47,6 +47,23 @@ const CODE_BIO_CHALLENGE: i32 = 1008;
 const CODE_BIO_VERIFY: i32 = 1009;
 const CODE_BIO_BIND: i32 = 1010;
 
+/// 连接历史取值（**与内核 `db::models::connection_method` / `connection_result` 逐字一致**）
+///
+/// 宿主原语 `auth_connection_history_record` 原样落库、**不做大小写归一化**，而消费侧
+/// （桌面连接历史页 `useConnectionHistory.ts`：`METHOD_KEY_SUFFIX` 映射 i18n key、
+/// `result === 'success'` 计数）只认小写——大小写是**对外形状**，不是内部枚举，
+/// 不得在这里「统一大写」（票 13 实测：写大写会让方式显示为未知、成功/失败计数全错）。
+/// native 构建无调用方（写入点全部 `#[cfg(target_arch = "wasm32")]`）→ 不报未使用。
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+mod history_value {
+    pub const PAIRING_CODE: &str = "pairing_code";
+    pub const QR: &str = "qr";
+    pub const BIOMETRIC: &str = "biometric";
+    pub const JWT: &str = "jwt";
+    pub const SUCCESS: &str = "success";
+    pub const FAILED: &str = "failed";
+}
+
 // ==================== 响应信封辅助（HTTP 200 + 业务码，宿主同口径） ====================
 
 /// 宿主旧 auth 端点的错误口径是 `HttpResponse::Ok().json(ApiResponse::error(..))`
@@ -158,8 +175,8 @@ fn handle_verify(host: &WasmHost, body: &serde_json::Value) -> serde_json::Value
         let _ = connection_history_record(
             host,
             &fingerprint,
-            "PAIRING_CODE",
-            "FAILED",
+            history_value::PAIRING_CODE,
+            history_value::FAILED,
             Some(&address),
         );
         // 「是否有当前码」与验证同源（宿主同逻辑：文案二选一）
@@ -197,7 +214,13 @@ fn handle_verify(host: &WasmHost, body: &serde_json::Value) -> serde_json::Value
     ) {
         host.log_warn(&format!("auth http: pairing record failed: {e}"));
     }
-    let _ = connection_history_record(host, &fingerprint, "PAIRING_CODE", "SUCCESS", Some(&address));
+    let _ = connection_history_record(
+        host,
+        &fingerprint,
+        history_value::PAIRING_CODE,
+        history_value::SUCCESS,
+        Some(&address),
+    );
 
     // 通知桌面前端有设备连接
     let _ = emit_device_connected(host, &address, &device_id, Some(&device_name), Some(&fingerprint));
@@ -227,7 +250,13 @@ fn handle_qr_connect(host: &WasmHost, body: &serde_json::Value) -> serde_json::V
     };
     if verify["valid"].as_bool() != Some(true) {
         let reason = verify["reason"].as_str().unwrap_or("QR token invalid");
-        let _ = connection_history_record(host, &fingerprint, "QR", "FAILED", Some(&address));
+        let _ = connection_history_record(
+            host,
+            &fingerprint,
+            history_value::QR,
+            history_value::FAILED,
+            Some(&address),
+        );
         return error_response(CODE_QR_INVALID, qr_failure_user_message(reason));
     }
 
@@ -256,7 +285,13 @@ fn handle_qr_connect(host: &WasmHost, body: &serde_json::Value) -> serde_json::V
     ) {
         host.log_warn(&format!("auth http: pairing record failed: {e}"));
     }
-    let _ = connection_history_record(host, &fingerprint, "QR", "SUCCESS", Some(&address));
+    let _ = connection_history_record(
+        host,
+        &fingerprint,
+        history_value::QR,
+        history_value::SUCCESS,
+        Some(&address),
+    );
 
     let _ = emit_device_connected(host, &address, &device_id, Some(&device_name), Some(&fingerprint));
 
@@ -276,7 +311,13 @@ fn handle_reauth(host: &WasmHost, body: &serde_json::Value) -> serde_json::Value
     let claims = match jwt::verify_device_token(host, &session_token) {
         Ok(c) => c,
         Err(e) => {
-            let _ = connection_history_record(host, &fingerprint, "JWT", "FAILED", None);
+            let _ = connection_history_record(
+                host,
+                &fingerprint,
+                history_value::JWT,
+                history_value::FAILED,
+                None,
+            );
             host.log_warn(&format!("auth http: reauth verify failed: {e}"));
             return error_response(CODE_TOKEN_FAILURE, &e);
         }
@@ -299,7 +340,13 @@ fn handle_reauth(host: &WasmHost, body: &serde_json::Value) -> serde_json::Value
 
     // last_seen / connect_count 刷新（HTTP 重认证路径无地址，名称刷新由 WS 承担）
     if let Some(fp) = token_fingerprint.as_deref() {
-        let _ = connection_history_record(host, fp, "JWT", "SUCCESS", None);
+        let _ = connection_history_record(
+            host,
+            fp,
+            history_value::JWT,
+            history_value::SUCCESS,
+            None,
+        );
         if let Err(e) = trusted_device_touch(host, fp) {
             host.log_warn(&format!("auth http: pairing touch failed: {e}"));
         }
@@ -323,7 +370,13 @@ fn handle_biometric_challenge(host: &WasmHost, body: &serde_json::Value) -> serd
         Err(e) => {
             host.log_warn(&format!("auth http: biometric challenge failed: {e}"));
             // 挑战签发失败 = 认证尝试失败（未配对指纹不落库——宿主原语内跳过）
-            let _ = connection_history_record(host, &fingerprint, "BIOMETRIC", "FAILED", None);
+            let _ = connection_history_record(
+                host,
+                &fingerprint,
+                history_value::BIOMETRIC,
+                history_value::FAILED,
+                None,
+            );
             // 宿主同口径：DB 故障也归 1008；其余统一「未绑定」文案
             error_response(CODE_BIO_CHALLENGE, &e)
         }
@@ -355,12 +408,24 @@ fn handle_biometric_verify(host: &WasmHost, body: &serde_json::Value) -> serde_j
             if let Err(e) = trusted_device_upsert(host, &record_name, &fingerprint, None, None, None) {
                 host.log_warn(&format!("auth http: pairing record failed: {e}"));
             }
-            let _ = connection_history_record(host, &fingerprint, "BIOMETRIC", "SUCCESS", None);
+            let _ = connection_history_record(
+                host,
+                &fingerprint,
+                history_value::BIOMETRIC,
+                history_value::SUCCESS,
+                None,
+            );
             let _ = emit_device_connected(host, "", &pairing_id, Some(&record_name), Some(&fingerprint));
             ok_with_data(token_response(&token, expires_in))
         }
         Err(msg) => {
-            let _ = connection_history_record(host, &fingerprint, "BIOMETRIC", "FAILED", None);
+            let _ = connection_history_record(
+                host,
+                &fingerprint,
+                history_value::BIOMETRIC,
+                history_value::FAILED,
+                None,
+            );
             error_response(CODE_BIO_VERIFY, &msg)
         }
     }
