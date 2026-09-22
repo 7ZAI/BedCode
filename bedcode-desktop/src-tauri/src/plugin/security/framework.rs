@@ -463,6 +463,9 @@ mod tests {
     /// 返回 (permission, storage, authorizer, framework)——authorizer 供单阶段直调，
     /// framework 已注册同一实例供管线端到端；storage 供预置持久授权记录
     #[allow(clippy::type_complexity)]
+    /// 第一方清单里的插件 id（票 07：`fs_auth::FIRST_PARTY_TRUSTED_DIRS` 的条目）
+    const FIRST_PARTY_PLUGIN: &str = "com.bedcode.terminal-session";
+
     fn fs_environment() -> (
         Arc<PermissionManager>,
         Arc<crate::plugin::manager::storage::PluginStorage>,
@@ -527,28 +530,38 @@ mod tests {
         );
     }
 
-    /// 端到端：白名单路径（.claude 目录段）在有 fs:read 声明时经三层校验放行
+    /// 端到端（票 07 改判）：**第一方**在具名集成目录段内经三层校验放行，
+    /// 第三方在同一目录段被拒——旧实现按 `.claude/` 子串对**任何**插件放行，
+    /// 那条判据已退役，这里锁的是改造后的两侧行为。
     #[tokio::test]
-    async fn fs_whitelisted_path_allowed_end_to_end() {
+    async fn fs_first_party_integration_dir_allowed_third_party_denied() {
         let (permission, _storage, _authorizer, fw) = fs_environment();
+        permission.grant_permissions(FIRST_PARTY_PLUGIN, &[PERMISSION_FS_READ.to_string()]);
         permission.grant_permissions("com.test.p", &[PERMISSION_FS_READ.to_string()]);
 
         let tmp = tempfile::TempDir::new().unwrap();
-        let target = tmp.path().join(".claude").join("sub").join("f.txt");
+        let target = tmp.path().join("proj").join(".claude").join("sub").join("f.txt");
         std::fs::create_dir_all(target.parent().unwrap()).unwrap();
         std::fs::write(&target, "x").unwrap();
 
         assert_eq!(
-            fw.authorize(&fs_req("com.test.p", "read", target.to_str().unwrap())),
+            fw.authorize(&fs_req(FIRST_PARTY_PLUGIN, "read", target.to_str().unwrap())),
             AuthDecision::Allow,
-            "whitelist path must pass the full pipeline"
+            "第一方在其具名集成目录段内须免弹窗放行"
+        );
+        assert!(
+            matches!(
+                fw.authorize(&fs_req("com.test.p", "read", target.to_str().unwrap())),
+                AuthDecision::Deny(_)
+            ),
+            "第三方在同一 `.claude` 段必须被拒（无头无弹窗）——票 07 红测的管线侧"
         );
     }
 
-    /// 端到端反例：无 fs:read 声明时，即便路径命中白名单也拒绝
-    /// （声明段是管线第一道闸门，权限不足优先于路径白名单）
+    /// 端到端反例：无 fs:read 声明时，即便路径落在第一方集成目录段也拒绝
+    /// （声明段是管线第一道闸门，权限不足优先于目录预授权）
     #[tokio::test]
-    async fn fs_undeclared_permission_denied_even_for_whitelisted_path() {
+    async fn fs_undeclared_permission_denied_even_for_trusted_dir() {
         let (_permission, _storage, _authorizer, fw) = fs_environment();
 
         let tmp = tempfile::TempDir::new().unwrap();
@@ -558,10 +571,10 @@ mod tests {
 
         assert!(
             matches!(
-                fw.authorize(&fs_req("com.test.p", "read", target.to_str().unwrap())),
+                fw.authorize(&fs_req(FIRST_PARTY_PLUGIN, "read", target.to_str().unwrap())),
                 AuthDecision::Deny(_)
             ),
-            "undeclared permission must be denied before path checks"
+            "未声明 fs:read 时目录预授权也不得越过声明闸门"
         );
     }
 

@@ -255,14 +255,22 @@ mod tests {
 
     const PLUGIN: &str = "test-plugin";
 
-    /// 每个测试独立的临时目录 + .claude 白名单段根目录
-    ///
-    /// 无头 fs_auth 只放行白名单路径（弹窗通道不可用），`.claude` 目录段命中
-    /// 白名单直接绕过校验；TempDir 随测试结束自动清理，测试间互不干扰
-    fn claude_temp_root(name: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+    /// 每个测试独立的临时目录根（纯文件辅助函数用，不经 fs_auth）
+    fn bare_temp_root(name: &str) -> (tempfile::TempDir, std::path::PathBuf) {
         let dir = tempfile::tempdir().expect("tempdir");
-        let root = dir.path().join(".claude").join(name);
+        let root = dir.path().join(name);
         std::fs::create_dir_all(&root).expect("create root");
+        (dir, root)
+    }
+
+    /// 临时目录根 + **持久化授权预置**（票 07 后无弹窗放行的唯一测试入口）
+    ///
+    /// 旧做法把目录塞进 `.claude` 段借路径白名单免检——那条白名单对**任何**插件都
+    /// 放行，已随票 07 退役。这里改走生产同款通道：用户在弹窗里勾选「记住」后落的
+    /// `fs_granted_paths` 前缀记录，测的仍然是 fs 原语本身而不是授权豁免的后门。
+    fn granted_temp_root(name: &str, ctx: &WasmHostContext) -> (tempfile::TempDir, std::path::PathBuf) {
+        let (dir, root) = bare_temp_root(name);
+        block_on_async(ctx.fs_auth().save_granted_path(PLUGIN, &root.to_string_lossy())).expect("seed persisted grant");
         (dir, root)
     }
 
@@ -271,7 +279,7 @@ mod tests {
     /// write_text_file 自动创建不存在的父目录 + 读写往返
     #[test]
     fn write_text_file_creates_parent_dirs_roundtrip() {
-        let (_dir, root) = claude_temp_root("roundtrip");
+        let (_dir, root) = bare_temp_root("roundtrip");
         let path = root.join("a/b/c/roundtrip.txt");
         write_text_file(path.to_str().unwrap(), "hello").expect("write ok");
         assert_eq!(read_text_file(path.to_str().unwrap()).expect("read ok"), "hello");
@@ -280,7 +288,7 @@ mod tests {
     /// read_text_file 不存在的文件返回 NotFound（与 std 语义一致，供上层翻译为 None）
     #[test]
     fn read_text_file_missing_returns_not_found() {
-        let (_dir, root) = claude_temp_root("missing");
+        let (_dir, root) = bare_temp_root("missing");
         let path = root.join("missing.txt");
         let err = read_text_file(path.to_str().unwrap()).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
@@ -289,7 +297,7 @@ mod tests {
     /// delete_file 幂等：不存在的文件视为成功
     #[test]
     fn delete_file_missing_idempotent() {
-        let (_dir, root) = claude_temp_root("delete");
+        let (_dir, root) = bare_temp_root("delete");
         let path = root.join("never-exists.txt");
         delete_file(path.to_str().unwrap()).expect("delete missing ok");
         // 写入后删除，再次删除仍 Ok
@@ -301,7 +309,7 @@ mod tests {
     /// copy_file 目标父目录不存在时自动创建
     #[test]
     fn copy_file_creates_parent_dirs() {
-        let (_dir, root) = claude_temp_root("copy");
+        let (_dir, root) = bare_temp_root("copy");
         let src = root.join("src.txt");
         let dst = root.join("deep/nested/dst.txt");
         write_text_file(src.to_str().unwrap(), "payload").unwrap();
@@ -312,7 +320,7 @@ mod tests {
     /// write_file_bytes / read_file_bytes 二进制往返
     #[test]
     fn write_read_file_bytes_roundtrip() {
-        let (_dir, root) = claude_temp_root("bytes");
+        let (_dir, root) = bare_temp_root("bytes");
         let path = root.join("data.bin");
         let bytes: Vec<u8> = (0..=255u8).collect();
         write_file_bytes(path.to_str().unwrap(), &bytes).expect("write ok");
@@ -387,14 +395,14 @@ mod tests {
         assert_eq!(err, "permission denied");
     }
 
-    // ==================== 端到端（白名单路径 + 内存上下文） ====================
+    // ==================== 端到端（已授权临时根 + 内存上下文） ====================
 
     /// 写→读往返（fs_write 自动建父目录；SDK 契约：文件不存在 fs_read 返回 Ok(None)）
     #[tokio::test]
     async fn fs_write_then_read_roundtrip() {
         let ctx = build_host_ctx();
         grant_permissions(&ctx, PLUGIN, &[PERMISSION_FS_READ, PERMISSION_FS_WRITE]);
-        let (_dir, root) = claude_temp_root("e2e-roundtrip");
+        let (_dir, root) = granted_temp_root("e2e-roundtrip", &ctx);
         let path = root.join("roundtrip.txt");
 
         fs_write(&ctx, PLUGIN, path.to_str().unwrap(), "hello wasm").expect("write ok");
@@ -409,7 +417,7 @@ mod tests {
     async fn fs_read_missing_file_returns_none() {
         let ctx = build_host_ctx();
         grant_permissions(&ctx, PLUGIN, &[PERMISSION_FS_READ]);
-        let (_dir, root) = claude_temp_root("e2e-missing");
+        let (_dir, root) = granted_temp_root("e2e-missing", &ctx);
         let path = root.join("missing.txt");
         assert!(fs_read(&ctx, PLUGIN, path.to_str().unwrap())
             .expect("read ok")
@@ -421,7 +429,7 @@ mod tests {
     async fn fs_exists_tracks_file_lifecycle() {
         let ctx = build_host_ctx();
         grant_permissions(&ctx, PLUGIN, &[PERMISSION_FS_READ, PERMISSION_FS_WRITE]);
-        let (_dir, root) = claude_temp_root("e2e-exists");
+        let (_dir, root) = granted_temp_root("e2e-exists", &ctx);
         let path = root.join("exists.txt");
         assert!(!fs_exists(&ctx, PLUGIN, path.to_str().unwrap()).expect("missing false"));
         fs_write(&ctx, PLUGIN, path.to_str().unwrap(), "x").unwrap();
@@ -435,7 +443,7 @@ mod tests {
     async fn fs_delete_missing_idempotent() {
         let ctx = build_host_ctx();
         grant_permissions(&ctx, PLUGIN, &[PERMISSION_FS_READ, PERMISSION_FS_WRITE]);
-        let (_dir, root) = claude_temp_root("e2e-delete");
+        let (_dir, root) = granted_temp_root("e2e-delete", &ctx);
         let path = root.join("delete-missing.txt");
         fs_delete(&ctx, PLUGIN, path.to_str().unwrap()).expect("delete missing ok");
     }
@@ -445,7 +453,7 @@ mod tests {
     async fn fs_copy_end_to_end() {
         let ctx = build_host_ctx();
         grant_permissions(&ctx, PLUGIN, &[PERMISSION_FS_READ, PERMISSION_FS_WRITE]);
-        let (_dir, root) = claude_temp_root("e2e-copy");
+        let (_dir, root) = granted_temp_root("e2e-copy", &ctx);
         let src = root.join("copy-src.txt");
         let dst = root.join("nested/copy-dst.txt");
         fs_write(&ctx, PLUGIN, src.to_str().unwrap(), "payload").unwrap();
@@ -474,7 +482,7 @@ mod tests {
         assert_eq!(authz["allow"], 0);
     }
 
-    /// 埋点：白名单路径放行 → 决策进 `authz.allow` 计数
+    /// 埋点：已授权路径放行 → 决策进 `authz.allow` 计数
     #[tokio::test]
     async fn fs_allowed_decision_counted_into_monitor() {
         let ctx = build_host_ctx();
@@ -482,9 +490,9 @@ mod tests {
         let monitor = Arc::new(MetricsRegistry::new());
         ctx.security().set_monitor(monitor.clone());
 
-        let (_dir, root) = claude_temp_root("fs-monitor-allow");
+        let (_dir, root) = granted_temp_root("fs-monitor-allow", &ctx);
         let path = root.join("f.txt");
-        // 白名单路径放行（文件不存在按 SDK 契约返回 Ok(None)）
+        // 已授权路径放行（文件不存在按 SDK 契约返回 Ok(None)）
         assert!(fs_read(&ctx, PLUGIN, path.to_str().unwrap())
             .expect("read ok")
             .is_none());
@@ -500,7 +508,7 @@ mod tests {
     async fn fs_write_denied_when_only_read_permission_granted() {
         let ctx = build_host_ctx();
         grant_permissions(&ctx, PLUGIN, &[PERMISSION_FS_READ]);
-        let (_dir, root) = claude_temp_root("fs-write-gate");
+        let (_dir, root) = bare_temp_root("fs-write-gate");
         let path = root.join("f.txt");
 
         assert_eq!(
@@ -515,7 +523,7 @@ mod tests {
     async fn fs_copy_requires_read_and_write_permissions() {
         let ctx = build_host_ctx();
         grant_permissions(&ctx, PLUGIN, &[PERMISSION_FS_READ]);
-        let (_dir, root) = claude_temp_root("fs-copy-gate");
+        let (_dir, root) = bare_temp_root("fs-copy-gate");
         let src = root.join("a.txt");
         let dst = root.join("b.txt");
 

@@ -41,7 +41,13 @@ fn test_session_plugin_artifact_lifecycle() {
     }
     let (wasm_runtime, host_ctx) = setup_wasm_runtime();
     let mut plugin = wasm_runtime
-        .load_plugin_from_file(&wasm_path, "com.bedcode.terminal-session", Arc::clone(&host_ctx), &[], None)
+        .load_plugin_from_file(
+            &wasm_path,
+            "com.bedcode.terminal-session",
+            Arc::clone(&host_ctx),
+            &[],
+            None,
+        )
         .expect("load wasip3 session: all imports must resolve");
 
     assert_eq!(plugin.activate().expect("activate"), 0);
@@ -134,7 +140,10 @@ fn test_session_plugin_artifact_lifecycle() {
     );
     // 文件传输插件经互调消费 consent / trust：两条 api 必须在声明面里，
     // 否则「未声明 api 不可调」门禁会把它的调用整片拒掉（静默降级）
-    for consumed in ["com.bedcode.terminal-session.consent-decide", "com.bedcode.terminal-session.trust-list"] {
+    for consumed in [
+        "com.bedcode.terminal-session.consent-decide",
+        "com.bedcode.terminal-session.trust-list",
+    ] {
         assert!(
             declared_api.iter().any(|a| a == consumed),
             "manifest 缺消费方 api {consumed}"
@@ -239,7 +248,13 @@ fn test_session_task_domain_closed_loop() {
         .collect::<Vec<_>>(),
     );
     let mut plugin = wasm_runtime
-        .load_plugin_from_file(&wasm_path, "com.bedcode.terminal-session", Arc::clone(&host_ctx), &[], None)
+        .load_plugin_from_file(
+            &wasm_path,
+            "com.bedcode.terminal-session",
+            Arc::clone(&host_ctx),
+            &[],
+            None,
+        )
         .expect("load wasip3 session");
     assert_eq!(plugin.activate().expect("activate"), 0);
 
@@ -498,7 +513,13 @@ fn test_session_task_http_and_scheduled_closed_loop() {
         .collect::<Vec<_>>(),
     );
     let mut plugin = wasm_runtime
-        .load_plugin_from_file(&wasm_path, "com.bedcode.terminal-session", Arc::clone(&host_ctx), &[], None)
+        .load_plugin_from_file(
+            &wasm_path,
+            "com.bedcode.terminal-session",
+            Arc::clone(&host_ctx),
+            &[],
+            None,
+        )
         .expect("load wasip3 session");
     assert_eq!(plugin.activate().expect("activate"), 0);
 
@@ -1373,10 +1394,7 @@ fn test_session_config_api_closed_loop() {
                 "command" => serde_json::json!(seeded.command),
                 _ => unreachable!(),
             };
-            assert_eq!(
-                got[field], seeded_v,
-                "读取面字段 {field} 必须与播种行一致, got: {got}"
-            );
+            assert_eq!(got[field], seeded_v, "读取面字段 {field} 必须与播种行一致, got: {got}");
         }
 
         // 只读契约：读操作不改变内核表（仍 1 条，无新增/删除）
@@ -1620,6 +1638,17 @@ fn test_business_endpoints_dual_track_closed_loop() {
     let working_dir = work.to_string_lossy().to_string();
 
     let (wasm_runtime, host_ctx) = setup_wasm_runtime();
+    // 票 07：为**工作区根**预置持久化授权（生产里 = 用户第一次打开文件树时点的授权 +
+    // 记住）。文件浏览根是用户选的任意目录，不在第一方集成目录清单里（清单只覆盖
+    // `.claude` 这类具名段）。授权落在工作区根而不是会话目录：越界探测
+    // （`../outside.txt`）必须先被宿主 exists 判成 404，而不是被权限层拦成 500——
+    // 那条 404/403 的分层语义是插件契约的一部分。
+    block_on_async(
+        host_ctx
+            .fs_auth()
+            .save_granted_path(SESSION_ID, &ws.path().to_string_lossy()),
+    )
+    .expect("seed fs grant for workspace");
     // 私有库清空（marker 干净）
     let _ = std::fs::remove_dir_all(plugin_db_root().join(SESSION_ID));
     let rt = tokio::runtime::Runtime::new().expect("runtime");
@@ -2642,10 +2671,7 @@ fn test_session_annotate_and_devices_closed_loop() {
             .expect("ghost annotate returns json");
         let r: serde_json::Value = serde_json::from_str(&ghost).unwrap();
         assert!(
-            r["error"]
-                .as_str()
-                .map(|e| e.contains("not owner"))
-                .unwrap_or(false),
+            r["error"].as_str().map(|e| e.contains("not owner")).unwrap_or(false),
             "未知会话必须显性报错, got: {ghost}"
         );
         assert!(sm.session_annotations("ghost").await.is_empty(), "绝不写孤儿键");

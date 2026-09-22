@@ -30,7 +30,7 @@ pub mod source;
 #[cfg(target_arch = "wasm32")]
 use crate::file_browse::source::FsPort;
 #[cfg(target_arch = "wasm32")]
-use bedcode_plugin_api::host::HostSession;
+use bedcode_plugin_api::host::{HostFs, HostSession};
 use bedcode_plugin_api::http_response;
 use bedcode_plugin_api::wasm_host::WasmHost;
 
@@ -92,7 +92,24 @@ fn resolve_working_dir_via_host(id: &str) -> Result<String, String> {
         Ok(None) => None,
         Err(e) => return Err(format!("session list failed: {}", e.message)),
     };
-    ops::resolve_working_dir(&WasmHost, sessions.as_deref(), id)
+    let dir = ops::resolve_working_dir(&WasmHost, sessions.as_deref(), id)?;
+    // 票 07：申请工作区访问授权。宿主侧不再有「内置插件任意路径免弹窗」，
+    // 文件浏览根（用户选的任意目录）只有在插件主动申请并被人记住之后才可访问；
+    // 申请收在这条公共前置上，而不是散进 8 个 handler。已授权时 host 直接返回
+    // true（同一张授权表，不重复弹框）。
+    if !dir.is_empty() {
+        match WasmHost.fs_request_auth(&[dir.clone()]) {
+            Ok(true) => {}
+            Ok(false) => return Err(format!("Not authorized: workspace access not granted for {dir}")),
+            Err(e) => {
+                return Err(format!(
+                    "Not authorized: workspace access request failed for {dir}: {}",
+                    e.message
+                ))
+            }
+        }
+    }
+    Ok(dir)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -100,11 +117,17 @@ fn resolve_working_dir_via_host(_id: &str) -> Result<String, String> {
     Err("file browse unavailable outside wasm runtime".to_string())
 }
 
-/// working_dir 解析失败 → 与宿主同口径的 HTTP 错误响应（NotFound → 404，其余 500）
+/// working_dir 解析失败 → 与宿主同口径的 HTTP 错误响应
+///
+/// NotFound → 404（与宿主旧实现的 exists 前置逐字同口径）；
+/// 未授权 → 403 + 出路（票 07：宿主 fs 面收紧后，「没授权」必须与「路径不存在」
+/// 分得开，否则前端只会看到一个含糊的 500）；其余 500。
 #[cfg(target_arch = "wasm32")]
 fn working_dir_error_response(e: &str) -> serde_json::Value {
     let code = if e.starts_with("Not found:") {
         404
+    } else if e.starts_with("Not authorized:") {
+        403
     } else {
         500
     };

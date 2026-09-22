@@ -1,18 +1,97 @@
 //! 文件系统访问校验器
 //!
-//! 四层策略：路径白名单 → 插件白名单 → 已授权路径前缀（持久化）→ 弹窗授权
+//! ## 三层策略（票 07 收敛；此前的「四层」里第一层是死数据 + 子串 hack）
 //!
-//! 插件请求文件访问时，按优先级校验：
-//! 1. 路径白名单：预定义安全路径前缀，匹配即放行
-//! 2. 插件白名单：受信任的内置插件直接放行
-//! 3. 弹窗授权：询问用户，授权后记住路径前缀
+//! 1. **第一方集成目录预授权**（[`FIRST_PARTY_TRUSTED_DIRS`]）：只对具名第一方插件、
+//!    只在其归属清单点名的目录段内免弹窗——不是「白名单插件任意路径放行」，
+//!    也不是「路径里出现 `.claude/` 就放行」；
+//! 2. **已授权路径前缀**（弹窗时勾选记住，持久化在插件私有存储）；
+//! 3. **弹窗授权**（前两层都未命中；无头上下文没有弹窗通道 → 保守拒绝）。
+//!
+//! 每条判定都在日志里点明**命中的是哪一层**（`layer = ...`），排障时不必靠猜：
+//! 免弹窗来源不唯一（清单 / 记住的授权 / 用户刚同意），无层号日志就无法回答
+//! 「为什么这次没弹框」。
+//!
+//! ## 为什么第一层不再是「全局路径白名单」
+//!
+//! 旧实现按 `.claude/` **子串**匹配，对**所有**带 `fs:read` 的插件生效：任意位置的
+//! 同名目录段（`/tmp/attacker-controlled/.claude/x`）都免弹窗，等于把「访问未授权
+//! 目录按需弹窗」的兜底架空；而它的真实消费者只有两个第一方插件（agent-hub 分发
+//! 技能到 `~/.claude/skills`、terminal-session 写项目集成目录）。改造后：
+//! 第三方 `fs:read` 插件读 `~/.claude/**` 必须过弹窗（红测断言），第一方按归属清单免弹窗。
+//!
+//! ## 不在本校验器里的事
+//!
+//! 任务单元（core-task 池线程）**不得触发弹窗**——判据由调用侧走 [`FsAuthChecker::is_granted`]，
+//! 未授权直接 fail-visible 拒绝（见 `host_impl::task`）。
 
 use crate::plugin::manager::storage::PluginStorage;
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::Emitter;
 use tokio::sync::{oneshot, Mutex};
+
+/// 命中的授权层（日志与拒绝文案用它说明判据来源）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FsGrantLayer {
+    /// 第一方集成目录预授权（按插件 id 归属）
+    FirstPartyDir,
+    /// 用户此前授权并记住的路径前缀
+    Persisted,
+}
+
+impl FsGrantLayer {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::FirstPartyDir => "first-party-dir",
+            Self::Persisted => "persisted-grant",
+        }
+    }
+}
+
+/// 第一方免弹窗目录的形态
+#[derive(Debug, Clone, Copy)]
+enum TrustedDir {
+    /// 家目录下的相对前缀（`~/.agents/skills` 这类宿主已知位置）
+    Home(&'static str),
+    /// 任意项目根下的同名**目录段**（agent CLI 的项目级配置目录约定：
+    /// `<project>/.claude` / `.codex` / `.pi` / `.opencode`）。
+    /// 按路径段全等匹配，因此 `.claudex/` 与 `/x.claude` 都不命中——旧实现用
+    /// `contains(".claude/")` 子串，相邻名字也能命中。
+    ProjectSegment(&'static str),
+}
+
+/// 第一方插件的集成目录归属清单（票 07）
+///
+/// 逐条写明「谁、为什么必须免弹窗」，新增条目要说得出消费它的函数；说不出归属的
+/// 一律不加——让它走弹窗 + 记住，而不是往这张表里塞特权。判据：该目录的位置由
+/// **第三方 CLI 的约定**决定（插件无从让用户挑），且每次会话都会访问。
+const FIRST_PARTY_TRUSTED_DIRS: &[(&str, &[TrustedDir])] = &[
+    (
+        // agent-hub 技能库：规范库在 `~/.agents/skills`，分发目标由
+        // `plugins/agent-hub/rust/src/skills.rs::TARGET_SEGS` 决定（claude / pi 家级私有目录）。
+        // 分发与落后检测逐文件读写这些目录，弹窗会把一次「同步技能」拆成 N 次点击。
+        "com.bedcode.agent-hub",
+        &[
+            TrustedDir::Home(".agents"),
+            TrustedDir::Home(".claude/skills"),
+            TrustedDir::Home(".pi/agent/skills"),
+        ],
+    ),
+    (
+        // terminal-session 的 agent 集成面：`task/hooks.rs` 在会话启动前把 hooks / 扩展
+        // 写进项目根的 `.claude` / `.codex` / `.pi` / `.opencode`，并清理全局
+        // `~/.claude/settings.json` 里属于本插件的那段。项目根由用户选，目录段名由
+        // 各 CLI 约定——只有段名是能写进清单的那一半。
+        "com.bedcode.terminal-session",
+        &[
+            TrustedDir::ProjectSegment(".claude"),
+            TrustedDir::ProjectSegment(".codex"),
+            TrustedDir::ProjectSegment(".pi"),
+            TrustedDir::ProjectSegment(".opencode"),
+        ],
+    ),
+];
 
 /// 文件操作类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,10 +123,6 @@ struct PendingRequest {
 
 /// 文件系统访问校验器
 pub struct FsAuthChecker {
-    /// 路径白名单前缀列表（canonicalize 后的绝对路径）
-    path_whitelist: Vec<PathBuf>,
-    /// 插件白名单（plugin_id → true）
-    plugin_whitelist: HashSet<String>,
     /// 插件存储（持久化已授权路径）
     storage: Arc<PluginStorage>,
     /// 待处理的弹窗授权请求
@@ -61,23 +136,7 @@ impl FsAuthChecker {
     ///
     /// `app_handle` 为 None 时（无头/测试上下文）弹窗授权层不可用，直接拒绝
     pub fn new(storage: Arc<PluginStorage>, app_handle: Option<Arc<tauri::AppHandle>>) -> Self {
-        // 路径白名单：.claude/ 子目录（Claude Code 配置目录）
-        // 不在此处硬编码绝对路径，运行时动态匹配路径后缀
-        let path_whitelist = Vec::new();
-
-        // 插件白名单：受信任的内置插件
-        // - session: 终端会话中心（票 17 起顶替旧 auto-task），任务域写用户项目里的
-        //   Agent 集成（.claude / .codex / .pi / .opencode 配置目录），路径段白名单
-        //   已覆盖其目标目录，插件自身第一方可信
-        // - file-transfer: 内网文件传输插件，共享目录由用户在插件设置页显式配置，
-        //   信任模型 = 配对 + 用户显式配置的目录白名单，插件自身第一方可信
-        let mut plugin_whitelist = HashSet::new();
-        plugin_whitelist.insert("com.bedcode.terminal-session".to_string());
-        plugin_whitelist.insert("com.bedcode.file-transfer".to_string());
-
         Self {
-            path_whitelist,
-            plugin_whitelist,
             storage,
             pending_requests: Arc::new(Mutex::new(Vec::new())),
             app_handle,
@@ -100,38 +159,38 @@ impl FsAuthChecker {
             }
         };
 
-        // 第一层：路径白名单
-        if self.match_path_whitelist(&canonical) {
+        if let Some(layer) = self.matched_layer(plugin_id, &canonical).await {
             tracing::debug!(
                 plugin_id = %plugin_id,
                 path = %path,
-                "fs_auth: allowed by path whitelist"
+                layer = layer.as_str(),
+                "fs_auth: allowed without dialog"
             );
             return true;
         }
 
-        // 第二层：插件白名单
-        if self.plugin_whitelist.contains(plugin_id) {
-            tracing::debug!(
-                plugin_id = %plugin_id,
-                path = %path,
-                "fs_auth: allowed by plugin whitelist"
-            );
-            return true;
-        }
-
-        // 第三层：已授权路径前缀（持久化）
-        if self.check_granted_path(plugin_id, &canonical).await {
-            tracing::debug!(
-                plugin_id = %plugin_id,
-                path = %path,
-                "fs_auth: allowed by previously granted path"
-            );
-            return true;
-        }
-
-        // 第四层：弹窗授权（前三道都未命中才走到这里）
+        // 第三层：弹窗授权（前两层都未命中才走到这里）
         self.request_user_auth(plugin_id, path, operation).await
+    }
+
+    /// 免弹窗判据（第一、二层）：命中则返回**命中的是哪一层**
+    ///
+    /// 单点给 `check` / `check_batch` / `is_granted` 三处用——三条入口的免弹窗范围
+    /// 必须逐字相同，否则「无弹窗面」（WASI 预打开 / 任务单元）与「弹窗面」会给出
+    /// 两套答案（同一目录一边可写一边被拒）。
+    async fn matched_layer(&self, plugin_id: &str, canonical: &Path) -> Option<FsGrantLayer> {
+        if self.first_party_dir_matches(plugin_id, canonical) {
+            return Some(FsGrantLayer::FirstPartyDir);
+        }
+        if self.check_granted_path(plugin_id, canonical).await {
+            return Some(FsGrantLayer::Persisted);
+        }
+        None
+    }
+
+    /// 第一方集成目录判定（见 [`first_party_dir_matches_with_home`]）
+    fn first_party_dir_matches(&self, plugin_id: &str, canonical: &Path) -> bool {
+        first_party_dir_matches_with_home(plugin_id, canonical, dirs::home_dir().as_deref())
     }
 
     /// 处理用户授权回复（由前端 Tauri command 调用）
@@ -167,14 +226,8 @@ impl FsAuthChecker {
                 }
             };
 
-            // 路径白名单 / 插件白名单 / 已授权前缀 → 直接放行
-            if self.match_path_whitelist(&canonical) {
-                continue;
-            }
-            if self.plugin_whitelist.contains(plugin_id) {
-                continue;
-            }
-            if self.check_granted_path(plugin_id, &canonical).await {
+            // 第一方目录 / 已授权前缀 → 直接放行（与单路径 check 同一判据）
+            if self.matched_layer(plugin_id, &canonical).await.is_some() {
                 continue;
             }
             ungranted.push(path.clone());
@@ -187,22 +240,18 @@ impl FsAuthChecker {
         self.request_user_auth_batch(plugin_id, &ungranted, operation).await
     }
 
-    /// 查询路径是否已授权（白名单 / 受信任插件 / 持久化授权），**不弹窗**
+    /// 查询路径是否已授权（第一方目录 / 持久化授权），**不弹窗**
     ///
-    /// 供 WASI 预打开目录校验用：仅为已授权目录建立 preopen，
-    /// 防止插件借自身 storage 配置（config 可由插件写）指向任意路径
-    /// 绕过授权弹窗。无头/测试上下文同样适用（读持久化授权）。
+    /// 两个无弹窗消费者共用它，语义都是「没有授权就是没有」：
+    /// - WASI 预打开目录校验：只为已授权目录建 preopen，防止插件借自身 storage 配置
+    ///   （config 可由插件写）指向任意路径绕过授权弹窗；
+    /// - 任务单元（core-task 池线程）：未授权即 fail-visible 拒绝，绝不从池线程弹窗
+    ///   （弹窗会占用池槽位最长 30s，且用户在错误的时机看到错误的问题）。
     pub async fn is_granted(&self, plugin_id: &str, path: &str) -> bool {
         let Some(canonical) = Self::canonicalize_path(path) else {
             return false;
         };
-        if self.match_path_whitelist(&canonical) {
-            return true;
-        }
-        if self.plugin_whitelist.contains(plugin_id) {
-            return true;
-        }
-        self.check_granted_path(plugin_id, &canonical).await
+        self.matched_layer(plugin_id, &canonical).await.is_some()
     }
 
     /// 弹窗请求用户授权（批量：一次弹窗展示全部未授权路径）
@@ -272,35 +321,7 @@ impl FsAuthChecker {
         }
     }
 
-    /// 路径白名单匹配
-    ///
-    /// 匹配规则：路径中包含 `.claude/` 目录段，或以插件数据目录为前缀
-    fn match_path_whitelist(&self, canonical: &Path) -> bool {
-        let path_str = canonical.to_string_lossy();
-
-        // 匹配 .claude/ 目录（跨平台：/ 和 \）
-        let separators = ['/', '\\'];
-        for sep in separators {
-            if path_str.contains(&format!("{}.claude{}", sep, sep)) {
-                return true;
-            }
-            // 路径以 .claude 结尾的目录
-            if path_str.ends_with(&format!("{}.claude", sep)) {
-                return true;
-            }
-        }
-
-        // 匹配插件数据目录前缀
-        for prefix in &self.path_whitelist {
-            if canonical.starts_with(prefix) {
-                return true;
-            }
-        }
-
-        false
-    }
-
-    /// 检查已授权路径前缀
+    /// 检查已授权路径前缀（第二层）
     async fn check_granted_path(&self, plugin_id: &str, canonical: &Path) -> bool {
         let storage_key = format!("fs_granted_paths");
         let granted = match self.storage.get(plugin_id, &storage_key).await {
@@ -393,8 +414,11 @@ impl FsAuthChecker {
         }
     }
 
-    /// 持久化授权路径前缀
-    async fn save_granted_path(&self, plugin_id: &str, path: &str) -> anyhow::Result<()> {
+    /// 持久化授权路径前缀（用户勾选「记住」后的落账动作）
+    ///
+    /// `pub(crate)`：除 `respond` 之外，闭环用例需要预置「用户已授权」状态——票 07 后
+    /// 这是无弹窗放行的**唯一**测试入口（旧写法靠 `.claude` 路径白名单，已退役）。
+    pub(crate) async fn save_granted_path(&self, plugin_id: &str, path: &str) -> anyhow::Result<()> {
         let storage_key = "fs_granted_paths".to_string();
 
         let mut granted: Vec<serde_json::Value> = match self.storage.get(plugin_id, &storage_key).await {
@@ -483,6 +507,36 @@ fn strip_verbatim_prefix(path: &Path) -> PathBuf {
     path.to_path_buf()
 }
 
+/// 第一方集成目录判定的可注入 home 变体（测试用临时目录构造伪 HOME，
+/// 与 `component.rs::resolve_preopen_dirs_with_home` 同一形态）
+///
+/// `home = None` 时 `Home` 形态**不放开**（只剩段名形态可用）：取不到家目录就把
+/// `~/.agents` 这类清单退化成「任意位置的 `.agents` 段」是反向的降级。
+fn first_party_dir_matches_with_home(plugin_id: &str, canonical: &Path, home: Option<&Path>) -> bool {
+    let Some((_, dirs)) = FIRST_PARTY_TRUSTED_DIRS.iter().find(|(id, _)| *id == plugin_id) else {
+        return false;
+    };
+    dirs.iter().any(|d| match d {
+        TrustedDir::Home(rel) => match home {
+            // 组件边界匹配（strip_prefix）：`~/.agents` 不覆盖 `~/.agentsx`
+            Some(h) => canonical.strip_prefix(h.join(rel)).is_ok(),
+            None => false,
+        },
+        TrustedDir::ProjectSegment(seg) => path_has_named_segment(canonical, seg),
+    })
+}
+
+/// 路径的**自身或任一祖先目录段**是否恰为 `seg`（段名全等，不是子串）
+///
+/// 命中 `<project>/.claude`（目录本身）与 `<project>/.claude/settings.json`、
+/// `<project>/.claude/hooks/x.py`（后代），不命中 `<project>/.claudex/…`
+/// 与 `<project>/x.claude/…`——旧实现用 `contains(".claude/")` 子串，相邻命名一并放过。
+fn path_has_named_segment(canonical: &Path, seg: &str) -> bool {
+    canonical
+        .ancestors()
+        .any(|a| a.file_name().is_some_and(|name| name == seg))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -498,17 +552,88 @@ mod tests {
         FsAuthChecker::new(Arc::new(PluginStorage::new(Arc::new(Mutex::new(db)))), None)
     }
 
+    /// canonical 后的临时目录根：`matched_layer` 收的是生产形态（已 canonicalize）路径，
+    /// 拿未规范化的 `temp_dir()` 比对会因符号链接（macOS `/var` → `/private/var`）
+    /// 让前缀与段名判定错位，测出与实现无关的红
+    fn canonical_temp_dir() -> PathBuf {
+        std::fs::canonicalize(std::env::temp_dir()).expect("temp dir must be canonicalizable")
+    }
+
+    /// 票 07 红测本体：**第三方** `fs:read` 插件读任意位置的 `.claude/` 不再免弹窗
+    ///
+    /// 旧实现按 `.claude/` 子串放行所有插件，`/tmp/x/.claude/settings.json` 这种
+    /// 攻击者可控位置也免弹窗——「访问未授权目录按需弹窗」的兜底被架空。
+    /// 无头上下文没有弹窗通道 → 未授权即拒；这正是判据：改造前这里返回 true。
     #[tokio::test]
-    async fn check_batch_whitelist_path_bypasses_dialog() {
+    async fn third_party_cannot_silently_read_claude_dir() {
         let checker = headless_checker().await;
-        // 路径白名单（.claude/ 目录段）命中 → 直接放行，无需弹窗
         let path = std::env::temp_dir()
             .join(".claude")
             .join("settings.json")
             .to_string_lossy()
             .to_string();
-        assert!(checker.check_batch("com.bedcode.test", &[path], FsOp::Read).await);
-        assert!(checker.pending_requests.lock().await.is_empty());
+        assert!(
+            !checker
+                .check_batch("com.bedcode.test", &[path.clone()], FsOp::Read)
+                .await,
+            "第三方插件不得静默读 .claude 目录段: {path}"
+        );
+        assert!(
+            !checker.check("com.bedcode.test", &path, FsOp::Read).await,
+            "单路径入口同判据（check 与 check_batch 不能两套答案）"
+        );
+        assert!(
+            checker.pending_requests.lock().await.is_empty(),
+            "拒绝路径不得残留 pending"
+        );
+    }
+
+    /// 第一方按归属清单免弹窗：terminal-session 写项目集成目录（段名形态）
+    #[tokio::test]
+    async fn first_party_project_integration_dirs_stay_silent() {
+        let checker = headless_checker().await;
+        for seg in [".claude", ".codex", ".pi", ".opencode"] {
+            let path = std::env::temp_dir()
+                .join("some-project")
+                .join(seg)
+                .join("settings.json")
+                .to_string_lossy()
+                .to_string();
+            assert!(
+                checker
+                    .check_batch("com.bedcode.terminal-session", &[path.clone()], FsOp::Write)
+                    .await,
+                "会话启动前写项目集成目录是本插件的产品面，不得弹窗: {path}"
+            );
+        }
+    }
+
+    /// 收紧的另一半：第一方插件**清单外**的路径不再任意放行
+    ///
+    /// 旧「插件白名单 = 任意路径免弹窗」把 terminal-session / file-transfer 变成
+    /// 全盘可读可写；改造后它们与第三方一样只覆盖到具名目录，其余走弹窗 + 记住。
+    #[tokio::test]
+    async fn first_party_outside_declared_dirs_requires_grant() {
+        let checker = headless_checker().await;
+        let outside = std::env::temp_dir()
+            .join("home-not-declared")
+            .join("secrets.env")
+            .to_string_lossy()
+            .to_string();
+        for plugin in ["com.bedcode.terminal-session", "com.bedcode.agent-hub"] {
+            assert!(
+                !checker.check_batch(plugin, &[outside.clone()], FsOp::Read).await,
+                "{plugin} 读清单外路径必须走授权，不得免弹窗"
+            );
+        }
+        // file-transfer 的白名单条目已删：它一个 fs 原语都不调（走 peer-net），
+        // 留着特权只剩风险没有收益
+        assert!(
+            !checker
+                .check_batch("com.bedcode.file-transfer", &[outside], FsOp::Read)
+                .await,
+            "file-transfer 不再享有 fs 特权（零消费者）"
+        );
     }
 
     #[tokio::test]
@@ -518,6 +643,133 @@ mod tests {
         let path = std::env::temp_dir().to_string_lossy().to_string();
         assert!(!checker.check_batch("com.bedcode.test", &[path], FsOp::Read).await);
         assert!(checker.pending_requests.lock().await.is_empty());
+    }
+
+    /// 命中层的归属必须说得出来（日志「为什么这次没弹框」全靠它）
+    #[tokio::test]
+    async fn matched_layer_names_the_reason_for_no_dialog() {
+        let checker = headless_checker().await;
+        let base = canonical_temp_dir();
+        let dir = base.join("fs-auth-layer");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("f.txt");
+
+        // 未授权：无层可报
+        assert_eq!(
+            checker.matched_layer("com.bedcode.test", &file).await,
+            None,
+            "未授权路径不得凭空报出一层"
+        );
+
+        // 持久化授权 → persisted-grant
+        checker
+            .save_granted_path("com.bedcode.test", &file.to_string_lossy())
+            .await
+            .unwrap();
+        assert_eq!(
+            checker.matched_layer("com.bedcode.test", &file).await,
+            Some(FsGrantLayer::Persisted)
+        );
+
+        // 第一方目录 → first-party-dir（与持久化层分得开）
+        let claude = base.join("proj").join(".claude").join("settings.json");
+        assert_eq!(
+            checker.matched_layer("com.bedcode.terminal-session", &claude).await,
+            Some(FsGrantLayer::FirstPartyDir)
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 清单判据表（可注入 home 的纯函数面，逐形态锁边界）
+    #[test]
+    fn first_party_dir_rules_match_segments_and_home_prefixes() {
+        let home = std::path::Path::new("/home/u");
+        let p = |s: &str| std::path::PathBuf::from(s);
+
+        // Home 形态：家目录下按组件前缀命中，相邻命名与「别处的同名目录」都不命中
+        assert!(first_party_dir_matches_with_home(
+            "com.bedcode.agent-hub",
+            &p("/home/u/.agents/skills/x/SKILL.md"),
+            Some(home)
+        ));
+        assert!(first_party_dir_matches_with_home(
+            "com.bedcode.agent-hub",
+            &p("/home/u/.claude/skills/a.md"),
+            Some(home)
+        ));
+        assert!(
+            !first_party_dir_matches_with_home(
+                "com.bedcode.agent-hub",
+                &p("/home/u/.claude/settings.json"),
+                Some(home)
+            ),
+            "agent-hub 只拿到 skills 子树，不是整个 ~/.claude"
+        );
+        assert!(!first_party_dir_matches_with_home(
+            "com.bedcode.agent-hub",
+            &p("/home/other/.agents/x"),
+            Some(home)
+        ));
+        assert!(
+            !first_party_dir_matches_with_home("com.bedcode.agent-hub", &p("/home/u/.agentsx/y"), Some(home)),
+            "组件边界：前缀不得吃掉相邻目录名"
+        );
+        // 取不到 home → Home 形态不放开（绝不退化成「任意位置的 .agents 段」）
+        assert!(!first_party_dir_matches_with_home(
+            "com.bedcode.agent-hub",
+            &p("/home/u/.agents/skills/x"),
+            None
+        ));
+
+        // ProjectSegment 形态：段名全等，非子串
+        assert!(first_party_dir_matches_with_home(
+            "com.bedcode.terminal-session",
+            &p("/srv/proj/.claude/hooks/x.py"),
+            None
+        ));
+        assert!(
+            first_party_dir_matches_with_home("com.bedcode.terminal-session", &p("/srv/proj/.claude"), None),
+            "集成目录本身（read_dir / 建目录）也要覆盖"
+        );
+        assert!(
+            !first_party_dir_matches_with_home("com.bedcode.terminal-session", &p("/srv/proj/.claudex/a"), None),
+            "子串不得放过相邻段名"
+        );
+        assert!(!first_party_dir_matches_with_home(
+            "com.bedcode.terminal-session",
+            &p("/srv/proj/x.claude/a"),
+            None
+        ));
+        // 收紧的本体：会话项目根本身**不在**清单里（今天它免弹窗 = 全盘可读）
+        assert!(
+            !first_party_dir_matches_with_home("com.bedcode.terminal-session", &p("/srv/proj/src/main.rs"), None),
+            "项目根文件浏览须走弹窗 + 记住，不再有任意路径特权"
+        );
+
+        // 未列入清单的插件：一律不放开
+        for id in ["com.bedcode.test", "com.bedcode.ai-chatbox", "com.example.third"] {
+            assert!(
+                !first_party_dir_matches_with_home(id, &p("/home/u/.claude/settings.json"), Some(home)),
+                "{id} 不在第一方清单里"
+            );
+        }
+    }
+
+    /// 清单本身是审计面：条目非空、id 不重复、只放第一方
+    #[test]
+    fn first_party_list_is_well_formed() {
+        let mut seen: Vec<&str> = Vec::new();
+        for (id, dirs) in FIRST_PARTY_TRUSTED_DIRS {
+            assert!(!dirs.is_empty(), "{id} 占了条目却不给目录，等于回到任意路径放行");
+            assert!(id.starts_with("com.bedcode."), "清单只放第一方: {id}");
+            assert!(
+                !seen.contains(id),
+                "同一插件 id 不得出现两次（第一个会被静默忽略）: {id}"
+            );
+            seen.push(id);
+        }
+        // 已知消费者清单（增删条目必须同时交代这里与票 07 的归属注释）
+        assert_eq!(seen, vec!["com.bedcode.agent-hub", "com.bedcode.terminal-session"]);
     }
 
     #[tokio::test]
@@ -576,41 +828,44 @@ mod tests {
 
     // ==================== is_granted（WASI 预打开校验，无弹窗） ====================
 
+    /// `is_granted` 的免弹窗集合 == `matched_layer` 的集合（票 07 后不再等于「任意路径」）
+    ///
+    /// 它是 WASI 预打开与任务单元的唯一判据：这里放开一分，那两条无弹窗通道就放开一分。
     #[tokio::test]
-    async fn is_granted_matches_whitelist_and_trusted_plugin() {
+    async fn is_granted_covers_first_party_dirs_and_persisted_grants_only() {
         let checker = headless_checker().await;
-        // .claude/ 白名单目录段 → 直接放行（不经弹窗，无需授权记录）
-        let whitelisted = std::env::temp_dir().join(".claude").to_string_lossy().to_string();
-        assert!(checker.is_granted("com.bedcode.test", &whitelisted).await);
-        // 受信任插件白名单 → 任意路径放行
+        // 第三方 + 任意位置的 .claude 段 → 不放开（旧实现在这里返回 true）
+        let third_party = std::env::temp_dir().join(".claude").to_string_lossy().to_string();
+        assert!(
+            !checker.is_granted("com.bedcode.test", &third_party).await,
+            "第三方插件不得经 is_granted 静默拿到 .claude 目录"
+        );
+        // 第一方清单内 → 放开（且不经弹窗）
         assert!(
             checker
-                .is_granted("com.bedcode.terminal-session", &std::env::temp_dir().to_string_lossy())
+                .is_granted(
+                    "com.bedcode.terminal-session",
+                    &std::env::temp_dir()
+                        .join("proj/.claude/settings.json")
+                        .to_string_lossy()
+                )
                 .await
         );
-    }
-
-    #[tokio::test]
-    async fn is_granted_only_after_persisted_grant() {
-        let checker = headless_checker().await;
-        let base = std::env::temp_dir();
-        let granted_dir = base.join("fs-auth-isgranted");
-        std::fs::create_dir_all(&granted_dir).unwrap();
-        let dir = granted_dir.to_string_lossy().to_string();
-
-        // 未授权：is_granted 为 false（不弹窗）
-        assert!(!checker.is_granted("com.bedcode.test", &dir).await);
-
-        // 保存授权（fs_request_auth 用户同意后的持久化结果）：is_granted 变 true
-        checker
-            .save_granted_path("com.bedcode.test", &format!("{}/sub", dir))
-            .await
-            .unwrap();
-        assert!(checker.is_granted("com.bedcode.test", &dir).await);
-
-        // 非授权插件/未授权路径仍 false
-        assert!(!checker.is_granted("com.bedcode.other", &dir).await);
-
-        std::fs::remove_dir_all(&granted_dir).unwrap();
+        // 第一方清单外 → 不放开（旧「插件白名单 = 任意路径」已退役）
+        assert!(
+            !checker
+                .is_granted("com.bedcode.terminal-session", &std::env::temp_dir().to_string_lossy())
+                .await,
+            "白名单插件的全盘特权已退役"
+        );
+        // 持久化授权 → 放开，且只对获授权的插件放开
+        let dir = canonical_temp_dir().join("fs-auth-isgranted");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.to_string_lossy().to_string();
+        assert!(!checker.is_granted("com.bedcode.test", &path).await);
+        checker.save_granted_path("com.bedcode.test", &path).await.unwrap();
+        assert!(checker.is_granted("com.bedcode.test", &path).await);
+        assert!(!checker.is_granted("com.bedcode.other", &path).await);
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

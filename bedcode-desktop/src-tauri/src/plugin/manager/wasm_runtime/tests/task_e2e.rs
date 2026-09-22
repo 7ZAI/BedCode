@@ -4,6 +4,16 @@
 //! 经 `use super::*` 可见）；fixture 互斥与产物构建语义不变。
 
 use super::*;
+/// 预置「用户已记住」的 fs 授权记录（票 07 后测试侧唯一的无弹窗放行方式）
+///
+/// 旧写法把测试目录塞进 `.claude` 段借路径白名单蒙过校验；那条白名单对任何插件都
+/// 放行，已随票 07 退役。这里改走生产同款：`fs_granted_paths` 前缀记录。
+fn seed_fs_grant(ctx: &crate::plugin::manager::wasm_runtime::WasmHostContext, plugin_id: &str, dir: &std::path::Path) {
+    crate::plugin::manager::wasm_runtime::block_on_async(
+        ctx.fs_auth().save_granted_path(plugin_id, &dir.to_string_lossy()),
+    )
+    .expect("seed fs_granted_paths 记录");
+}
 /// execute-batch：8 个 fs.stat 并发 → 全完成、结果按 id 关联、顺序保序
 #[test]
 
@@ -27,10 +37,12 @@ fn test_task_execute_batch_fixture_parallel_results() {
             &task_fixture_plugin_id(),
             &["task:run", "fs:read"],
         );
-        // fs_auth 三层：路径须在授权根（.claude 前缀，无头 security 框架默认放行）
+        // fs_auth 第二层：给 fixture 插件预置该根的持久化授权。票 07 前这里靠
+        // `.claude` 路径段蒙过校验（对任何插件都免弹窗），现在走生产同款记录
         let dir = tempfile::tempdir().expect("tempdir");
-        let root = dir.path().join(".claude").join("task-stat");
+        let root = dir.path().join("task-stat");
         std::fs::create_dir_all(&root).expect("create root");
+        seed_fs_grant(&host_ctx, &task_fixture_plugin_id(), &root);
         let tmp = root.join("stat.txt");
         std::fs::write(&tmp, b"hello task").expect("write temp file");
 
@@ -95,8 +107,9 @@ fn test_task_submit_events_dispatched_and_status() {
         );
 
         let dir = tempfile::tempdir().expect("tempdir");
-        let root = dir.path().join(".claude").join("task-submit");
+        let root = dir.path().join("task-submit");
         std::fs::create_dir_all(&root).expect("create root");
+        seed_fs_grant(&host_ctx, &task_fixture_plugin_id(), &root);
         let tmp = root.join("a.txt");
         std::fs::write(&tmp, b"x").expect("write temp file");
         let plan = serde_json::json!({

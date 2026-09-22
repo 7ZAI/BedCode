@@ -958,6 +958,16 @@ impl WasmHostContext {
     }
 
     /// 获取进程注册表引用（host-process）
+    /// 文件系统访问校验器（票 07：闭环用例预置「已记住」授权记录的唯一入口）
+    pub(crate) fn fs_auth(&self) -> &Arc<FsAuthChecker> {
+        &self.fs_auth
+    }
+
+    /// 权限管理器（core-task 单元预检读声明闸门用，见 `manager::task`）
+    pub(crate) fn permission(&self) -> &Arc<crate::plugin::permission::PermissionManager> {
+        &self.permission
+    }
+
     pub fn process_registry(&self) -> &Arc<ProcessRegistry> {
         &self.process_registry
     }
@@ -1194,8 +1204,9 @@ mod tests {
                 db.init_schema().unwrap();
                 db
             }));
-            let session_manager =
-                Arc::new(SessionManager::new_with_handlers(Arc::new(crate::pty::PtySessionHandler::new())));
+            let session_manager = Arc::new(SessionManager::new_with_handlers(Arc::new(
+                crate::pty::PtySessionHandler::new(),
+            )));
 
             let config_manager = Arc::new(SessionConfigManager::new(kernel_db));
 
@@ -2036,7 +2047,8 @@ mod tests {
     /// 比对同一真源）。宿主测试按它登记注册表——在测试里再抄一份 api 字符串就是
     /// 第二真源，桥接锚点漂移会退化成「本来就该被测出来的静默降级」。
     fn session_apis() -> Vec<String> {
-        let manifest_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../plugins/terminal-session/plugin.json");
+        let manifest_path =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../plugins/terminal-session/plugin.json");
         let raw = std::fs::read_to_string(&manifest_path).expect("session plugin.json 可读");
         let manifest: serde_json::Value = serde_json::from_str(&raw).expect("session manifest JSON");
         manifest["api"]
