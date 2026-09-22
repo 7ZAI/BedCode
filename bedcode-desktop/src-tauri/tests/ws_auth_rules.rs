@@ -259,7 +259,7 @@ async fn http_pair_and_get_token(port: u16, device_id: &str, device_name: &str, 
     let base = format!("http://127.0.0.1:{port}");
     let client = reqwest::Client::new();
 
-    // 1) 请求配对码（HTTP DTO 为 camelCase，见 dtos/auth_dto.rs `rename_all`）
+    // 1) 请求配对码（HTTP DTO 为 camelCase，见认证中心插件 auth_http 域 `rename_all`）
     let resp: serde_json::Value = client
         .post(format!("{base}/api/auth/pairing"))
         .json(&serde_json::json!({
