@@ -14,7 +14,7 @@ pub mod wsl;
 pub use lifecycle::{PtyTerminated, PtyTerminationGate};
 pub use output_sink::{PtyOutputSink, SessionOutputSink};
 pub use pty_handler::{PtyHandler, PtySessionHandler};
-pub use pty_process::{PtyCommandSource, PtySession, PtySlaveFdPolicy};
+pub use pty_process::{PtyCommandSource, PtySession};
 pub use pty_ring::{PtyRing, PtyRingFetch, PtyRingSink};
 
 // Re-export from enums

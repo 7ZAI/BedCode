@@ -423,6 +423,12 @@ impl SessionManager {
         let status_tx = self.status_tx.clone();
         let pty_registry = self.pty_registry.clone();
         let line_tracker = self.submitted_line_tracker.clone();
+        // 票 3：自然退出路径与 kill 同语义——同步事件（SessionStopped）与生命周期
+        // Stopped 都分发（任务域「意外退出兜底」依赖生命周期 Stopped，见插件
+        // `task/state.rs`；此前 Hold 压制下自然退出永不触发，任务卡死）
+        // sync_tx 是 tauri RwLock（不可 clone）——预读 sender 副本进闭包
+        let sync_tx_sender = self.sync_tx.read().await.clone();
+        let lifecycle_listeners = self.lifecycle_listeners.clone();
         let sid = session_id.to_string();
 
         tokio::spawn(async move {
@@ -437,7 +443,7 @@ impl SessionManager {
                         session_id = %sid,
                         exit_code = ?terminated.exit_code,
                         killed = terminated.killed,
-                        "PTY 终态（业务会话线仅取状态）"
+                        "PTY 终态（业务会话线：翻 Stopped + 分发）"
                     );
 
                     // PTY 已退出：清理该会话的输入行缓冲区（残余内容不补发，见 ADR 0001）
@@ -454,7 +460,23 @@ impl SessionManager {
                             session_id: sid.clone(),
                             old_status: Some(SessionStatus::Running),
                             new_status: session_status,
-                            session_name,
+                            session_name: session_name.clone(),
+                        });
+                    }
+
+                    // 发布同步事件：会话停止（与 kill 路径同形状，移动端会话列表刷新）
+                    if let Some(sender) = &sync_tx_sender {
+                        let _ = sender.send(DesktopSyncEvent::SessionStopped {
+                            session_id: sid.clone(),
+                            source_device: None,
+                        });
+                    }
+
+                    // 分发生命周期 Stopped（异步通知，插件会话生命周期监听收尾）
+                    for listener in lifecycle_listeners.read().await.iter().cloned().collect::<Vec<_>>() {
+                        listener.on_session_lifecycle(&SessionLifecycleEvent::Stopped {
+                            session_id: sid.clone(),
+                            source_device: None,
                         });
                     }
                 }
@@ -1104,5 +1126,85 @@ mod tests {
             )
             .await
             .expect("seed idle session")
+    }
+
+    /// 生命周期监听器记录 mock（与 session_e2e 的 LifecycleCapture 同形）
+    #[derive(Default)]
+    struct RecordingLifecycleListener {
+        events: std::sync::Arc<tokio::sync::RwLock<Vec<SessionLifecycleEvent>>>,
+    }
+
+    impl SessionLifecycleListener for RecordingLifecycleListener {
+        fn on_session_lifecycle(&self, event: &SessionLifecycleEvent) {
+            let events = std::sync::Arc::clone(&self.events);
+            let event = event.clone();
+            tokio::task::spawn(async move {
+                events.write().await.push(event);
+            });
+        }
+    }
+
+    /// 票 3：业务会话**自然退出**（统一 ReleaseOnSpawn）→ 既有终态处理链解锁——
+    /// 状态翻 Stopped + SessionStatusEvent + 生命周期 Stopped + SessionStopped 同步
+    /// 事件。此前 Hold 压制下自然退出不可观测（状态滞留 Running、任务域「意外退出
+    /// 兜底」永不触发而卡死，见插件 task/state.rs 注释）。
+    #[tokio::test]
+    async fn test_natural_exit_marks_stopped_and_dispatches_lifecycle() {
+        use crate::enums::ExecutionEnvironment;
+        use std::collections::HashMap;
+
+        let manager = SessionManager::default();
+        let listener = std::sync::Arc::new(RecordingLifecycleListener::default());
+        manager.register_lifecycle_listener(listener.clone()).await;
+        // spawn 前订阅状态事件（避免错过 Stopped）
+        let mut status_rx = manager.subscribe_status();
+
+        let sid = manager
+            .create_session_from_spec(
+                SessionLaunchConfig {
+                    name: "natural-exit".to_string(),
+                    environment: ExecutionEnvironment::Linux,
+                    working_dir: "/tmp".to_string(),
+                    command: "exit 7".to_string(),
+                    command_args: None,
+                    env_vars: HashMap::new(),
+                    cols: 100,
+                    rows: 30,
+                },
+                "cfg-natural".to_string(),
+                None,
+                true,
+                None,
+                None,
+            )
+            .await
+            .expect("spawn exit 7");
+
+        // 等状态事件：自然退出 → Stopped（不 kill）
+        let status = tokio::time::timeout(std::time::Duration::from_secs(5), status_rx.recv())
+            .await
+            .expect("natural exit status event timeout")
+            .expect("status event");
+        assert_eq!(
+            status.new_status,
+            SessionStatus::Stopped,
+            "自然退出必须翻 Stopped（不再滞留 Running）"
+        );
+        assert_eq!(status.session_id, sid);
+
+        // 生命周期 Stopped 必须分发（任务域意外退出兜底依赖）
+        let events = listener.events.read().await.clone();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, SessionLifecycleEvent::Stopped { session_id, .. } if session_id == &sid)),
+            "生命周期 Stopped 必须分发, got: {events:?}"
+        );
+
+        // 状态落库
+        let info = manager.get_session(&sid).await.expect("session info");
+        assert_eq!(info.status, SessionStatus::Stopped, "会话记录状态必须落 Stopped");
+
+        manager.remove_session(&sid).await.expect("cleanup");
     }
 }

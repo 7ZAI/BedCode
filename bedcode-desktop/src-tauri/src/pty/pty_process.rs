@@ -23,24 +23,18 @@ use std::thread::JoinHandle;
 use tokio::sync::{broadcast, Mutex};
 use uuid::Uuid;
 
-/// PTY slave fd 生命周期策略
+/// PTY slave fd 生命周期策略（票 3 已统一为 `ReleaseOnSpawn`，枚举退役）
 ///
-/// **为什么需要它**：父进程只要还持有 slave fd，内核就不会让 master 侧读返回 EOF——
+/// **为什么统一释放**：父进程只要还持有 slave fd，内核就不会让 master 侧读返回 EOF——
 /// 「子进程自然退出」因此在读线程上是不可观测的（读线程会永久阻塞在 `read()`，
 /// 每会话泄漏一条线程）。释放 slave 后，子进程一退出就读到 EOF，
 /// 「读线程关闭」才成为可靠的输出终结信号（实证见 2026-09-19 票 01 记录）。
 ///
-/// 业务终端会话线维持 `Hold`（现役语义：终态事件只在 kill/销毁时到达），
-/// 插件私有 PTY 用 `ReleaseOnSpawn`（host-pty 的 `pty:exit` 事件依赖它）。
-/// 统一为 `ReleaseOnSpawn` 会让业务会话在自然退出时开始翻 Stopped 并下发状态事件，
-/// 属跨线行为修正，登记在票 07 的抽取候选，不在本期做。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PtySlaveFdPolicy {
-    /// spawn 后继续持有 slave fd（业务会话现役语义）
-    Hold,
-    /// spawn 后立即释放 slave fd（插件私有 PTY：退出可观测）
-    ReleaseOnSpawn,
-}
+/// 业务线曾用 `Hold`（终态事件只在 kill/销毁时到达），压制了既有的终态处理链
+/// （`session_manager` 订阅任务收到 PtyTerminated → 置 Stopped + 状态事件），导致
+/// 会话自然退出时状态滞留 Running、任务域「意外退出兜底」永不触发（插件
+/// `task/state.rs` 注释明证会永久卡在运行中）。票 3 统一为释放：自然退出 → EOF →
+/// 终态事件 → 既有处理链解锁（翻 Stopped + 状态事件 + 生命周期 Stopped）。
 
 /// PTY 子进程命令来源
 ///
@@ -73,8 +67,6 @@ pub struct PtySessionState {
     pub command: Option<PtyCommandSource>,
     /// 启动后的 master（resize / 读取端克隆来源）
     pub master: Option<Box<dyn MasterPty + Send>>,
-    /// 启动后仍保有的 slave 句柄；`ReleaseOnSpawn` 策略下为 `None`
-    pub slave_hold: Option<Box<dyn SlavePty + Send>>,
     /// 写入器
     pub writer: Option<Box<dyn Write + Send>>,
     /// 读取线程句柄
@@ -98,8 +90,6 @@ pub struct PtySession {
     id: String,
     /// 输出投递目标（业务会话环 / 插件自备缓冲）
     sink: Arc<dyn PtyOutputSink>,
-    /// slave fd 生命周期策略
-    slave_policy: PtySlaveFdPolicy,
 }
 
 // 自动派生 Send + Sync，因为所有内部字段都是线程安全的
@@ -109,7 +99,7 @@ pub struct PtySession {
 // String 是 Send + Sync
 
 impl PtySession {
-    /// 创建新的 PTY 会话（业务终端会话线：默认输出总线 sink + `Hold`）
+    /// 创建新的 PTY 会话（业务终端会话线：默认输出总线 sink）
     pub fn new(config: SessionLaunchConfig) -> Result<Self> {
         let id = Uuid::new_v4().to_string();
         Self::with_id(id, config)
@@ -118,22 +108,24 @@ impl PtySession {
     /// 使用指定 ID 创建 PTY 会话（用于重启时复用旧 ID）
     ///
     /// 输出投递到业务会话输出总线（`SessionOutputSink`）——宿主业务终端会话线。
+    /// spawn 后释放 slave fd（票 3 统一）：自然退出 → EOF → 终态事件 → 既有处理链
+    /// 翻 Stopped（修复会话状态滞留 Running / 任务域意外退出兜底不触发）。
     pub fn with_id(id: String, config: SessionLaunchConfig) -> Result<Self> {
         let sink = Arc::new(SessionOutputSink::new(&id));
-        Self::build_from_config(id, config, sink, PtySlaveFdPolicy::Hold)
+        Self::build_from_config(id, config, sink)
     }
 
     /// 使用指定 ID 与**自备输出汇**创建插件私有 PTY 会话
     ///
     /// 插件私有 PTY（host-pty）走这条入口：输出投递到插件自己的缓冲，
     /// 不注册 `GlobalOutputManager`、不进业务会话链路（ADR 0022 业务隔离）；
-    /// 并在 spawn 后释放 slave fd，使「进程退出」在读线程上以 EOF 形式可观测
-    /// （`pty:exit` 事件与 ring 摘除依赖它，见 [`PtySlaveFdPolicy`]）。
+    /// spawn 后释放 slave fd，使「进程退出」在读线程上以 EOF 形式可观测
+    /// （`pty:exit` 事件与 ring 摘除依赖它）。
     ///
     /// 命令仍走业务线 `build_command`（shell 包装）；需要裸 argv exec 的
     /// host-pty 用 [`PtySession::with_private_command`]。
     pub fn with_private_sink(id: String, config: SessionLaunchConfig, sink: Arc<dyn PtyOutputSink>) -> Result<Self> {
-        Self::build_from_config(id, config, sink, PtySlaveFdPolicy::ReleaseOnSpawn)
+        Self::build_from_config(id, config, sink)
     }
 
     /// 插件私有 PTY + **裸命令**（host-pty 的 spawn 入口，spec D5）
@@ -162,7 +154,6 @@ impl PtySession {
             rows,
             PtyCommandSource::Raw(command),
             sink,
-            PtySlaveFdPolicy::ReleaseOnSpawn,
         )
     }
 
@@ -171,7 +162,6 @@ impl PtySession {
         id: String,
         config: SessionLaunchConfig,
         sink: Arc<dyn PtyOutputSink>,
-        slave_policy: PtySlaveFdPolicy,
     ) -> Result<Self> {
         let (name, cols, rows) = (config.name.clone(), config.cols, config.rows);
         Self::build(
@@ -181,7 +171,6 @@ impl PtySession {
             rows,
             PtyCommandSource::Business(config),
             sink,
-            slave_policy,
         )
     }
 
@@ -192,7 +181,6 @@ impl PtySession {
         rows: u16,
         command: PtyCommandSource,
         sink: Arc<dyn PtyOutputSink>,
-        slave_policy: PtySlaveFdPolicy,
     ) -> Result<Self> {
         let pty_system = native_pty_system();
 
@@ -225,7 +213,6 @@ impl PtySession {
             pair: Some(pair),
             command: Some(command),
             master: None,
-            slave_hold: None,
             writer: Some(writer),
             running: running.clone(),
             reader_handle: None,
@@ -239,7 +226,6 @@ impl PtySession {
             gate,
             id,
             sink,
-            slave_policy,
         })
     }
 
@@ -317,19 +303,14 @@ impl PtySession {
         // 获取进程 ID 用于后续强制终止
         let pid = child.process_id();
 
-        // 拆分 pair：master 常驻（resize / 读取端来源），slave 按策略决定去留
+        // 拆分 pair：master 常驻（resize / 读取端来源）；slave 统一立即释放——
+        // 丢掉 slave 即关闭父进程侧 slave fd：子进程一退出 master 读即 EOF，
+        // 终态门（读线程关闭 + 回收齐备）得以触发（票 3 统一语义）
         let PtyPair { slave, master } = pair;
         {
             let mut state = self.state.lock().await;
             state.master = Some(master);
-            state.slave_hold = match self.slave_policy {
-                PtySlaveFdPolicy::Hold => Some(slave),
-                // 丢掉 slave 即关闭父进程侧 slave fd：子进程退出后 master 读才会返回 EOF
-                PtySlaveFdPolicy::ReleaseOnSpawn => {
-                    drop(slave);
-                    None
-                }
-            };
+            drop(slave);
             state.process_id = pid;
         }
 
@@ -546,7 +527,6 @@ impl Clone for PtySession {
             gate: self.gate.clone(),
             id: self.id.clone(),
             sink: self.sink.clone(),
-            slave_policy: self.slave_policy,
         }
     }
 }
@@ -817,28 +797,22 @@ mod tests {
     }
 
     /// 业务会话线（`Hold`）现役语义回归锁：子进程自然退出**不产生**终态事件
-    /// （父进程持有 slave fd → master 读无 EOF），必须等 kill/销毁才翻终态。
-    ///
-    /// 这条断言冻结的是「票 01 业务链路零变化」：若有人把默认策略改成
-    /// `ReleaseOnSpawn`，本用例会失败并强制其评估业务会话状态机影响。
+    /// 业务会话自然退出（票 3 统一 ReleaseOnSpawn）：EOF 可观测 → 终态事件自动到达，
+    /// 既有处理链（session_manager 订阅任务）据此翻 Stopped——修复 Hold 下状态滞留
+    /// Running / 任务域「意外退出兜底」永不触发的问题。
     #[cfg(target_os = "linux")]
     #[tokio::test]
-    async fn hold_policy_keeps_natural_exit_unobserved_until_killed() {
+    async fn natural_exit_emits_termination_event_without_kill() {
         let session = PtySession::new(linux_config("exit 7")).expect("openpty");
         let mut lifecycle_rx = session.subscribe_lifecycle();
         session.start().await.expect("start");
 
-        assert!(
-            matches!(
-                tokio::time::timeout(std::time::Duration::from_millis(500), lifecycle_rx.recv()).await,
-                Err(_elapsed)
-            ),
-            "Hold 策略下自然退出不得发出终态事件（业务线现役语义）"
-        );
-
-        session.kill().await.expect("kill");
         let terminated = recv_termination(&mut lifecycle_rx).await;
-        assert!(terminated.killed, "kill 后必须带出 killed=true");
+        assert!(
+            !terminated.killed,
+            "自然退出必须 killed=false（区别于 kill 路径），exit_code 应为 7"
+        );
+        assert_eq!(terminated.exit_code, Some(7), "自然退出必须带出真实退出码");
     }
 
     /// 真 PTY 被 kill：终态事件与自然退出可区分（killed=true）

@@ -119,7 +119,14 @@ WSL 单引号转义遗漏补齐（注释：「票据 02 仅补了 PowerShell/CMD
   
   **尚未实施**：旧路径仍需覆盖旧插件产物兼容窗口；窗口判定见票 1 landed 后的双轨共存期。
 - **票 3（独立，行为修正）**：`PtySlaveFdPolicy` 统一 ReleaseOnSpawn（自然退出 → Stopped 事件评估）
-  **尚未实施**（行为修正单独评估）
+  
+  **✅ 已 landed（2026-09-22）**：统一 `ReleaseOnSpawn`——`Hold` 变体/`slave_policy`/`slave_hold`
+  字段删除，spawn 后统一释放 slave fd。**本质是修复现役卡死 bug**：`task/state.rs` 注释明证任务域
+  「意外退出兜底」依赖宿主分发生命周期 Stopped，Hold 压制下自然退出永不触发（任务卡在运行中）；
+  处理链（session_manager 订阅任务）本就存在，统一后自然退出 → EOF → 终态事件 → 翻 Stopped +
+  状态事件 + **新补的** SessionStopped 同步事件与生命周期 Stopped 分发（对齐 kill 路径）。
+  验证：宿主全量 1135/0（含反转的 `natural_exit_emits_termination_event_without_kill` 与新增
+  `test_natural_exit_marks_stopped_and_dispatches_lifecycle` 真 PTY exit 集成断言）；vitest 748/748。
 - **票 4（独立，注入归属裁定）**：BEDCODE_SESSION_ID 注入点原语化 vs 插件 env（开放点 1 定案）
   **暂按引擎原语保留**（票 1 落地：双路径注入保持一致，不新增 spec 字段）
 
