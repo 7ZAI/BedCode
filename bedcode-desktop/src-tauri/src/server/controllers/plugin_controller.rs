@@ -292,6 +292,20 @@ pub(crate) async fn forward_to_plugin(owner: &str, req: &PluginHttpRequest<'_>) 
     }
 }
 
+/// 「调用方未验签」响应（票 08）：HTTP 401 + 业务码 1007，与 JWT 中间件的 401 同一码
+///
+/// 文案同时点名两条出路（带合法 JWT / 在 manifest 逐条声明 `auth: "none"`）——
+/// 收紧后打不通的调用方必须能从错误里读出该改哪一侧，而不是只看到「authentication failed」。
+pub(crate) fn plugin_http_unauthenticated_response(full_path: &str) -> HttpResponse {
+    HttpResponse::Unauthorized().json(ApiResponse::<()>::error(
+        CODE_PLUGIN_AUTH_FAILED,
+        &format!(
+            "Plugin endpoint '{}' requires auth \"jwt\"; present a valid JWT or declare auth: \"none\" in contributes.httpEndpoints",
+            full_path
+        ),
+    ))
+}
+
 /// ANY /api/plugin/{plugin_id}/{path:.*}
 ///
 /// 插件动态 HTTP 端点 — 请求到达后通过 PluginHost.invoke_rust_command 路由到插件 handler。
@@ -369,13 +383,7 @@ pub async fn plugin_http_endpoint(
             auth = %auth.as_str(),
             "plugin http endpoint requires an authenticated caller"
         );
-        return HttpResponse::Unauthorized().json(ApiResponse::<()>::error(
-            CODE_PLUGIN_AUTH_FAILED,
-            &format!(
-                "Plugin endpoint '{}' requires auth \"jwt\"; present a valid JWT or declare auth: \"none\" in contributes.httpEndpoints",
-                full_path
-            ),
-        ));
+        return plugin_http_unauthenticated_response(&full_path);
     }
 
     if owner != plugin_id {
@@ -640,6 +648,32 @@ mod tests {
         let rendered = device.expect("device 上下文").to_string();
         assert!(!rendered.contains("fp-secret"), "指纹不得透传给插件");
         assert!(!rendered.contains(&token), "JWT 本体不得透传给插件");
+    }
+
+    /// 票 08：认证拒绝的响应形状是「401 + 1007 + 点名两条出路」，而不是 200 带业务码
+    ///
+    /// 走真实 actix body 读取（不是只看构造器），否则「忘了 `.Unauthorized()`」
+    /// 这种最可能的写错方式不会被测到。
+    #[actix_web::test]
+    async fn unauthenticated_response_is_http_401_with_both_remedies_named() {
+        let resp = plugin_http_unauthenticated_response("/api/plugin/com.bedcode.terminal-session/task-queue/add");
+        assert_eq!(
+            resp.status(),
+            actix_web::http::StatusCode::UNAUTHORIZED,
+            "免凭证拒绝必须是 HTTP 401，不能沿用宿主业务面的 200 + 业务码"
+        );
+        let body = actix_web::body::to_bytes(resp.into_body()).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["code"], CODE_PLUGIN_AUTH_FAILED as u64);
+        let message = json["message"].as_str().unwrap_or_default();
+        assert!(
+            message.contains("/api/plugin/com.bedcode.terminal-session/task-queue/add"),
+            "文案须点名被拒端点: {message}"
+        );
+        assert!(
+            message.contains("jwt") && message.contains("contributes.httpEndpoints"),
+            "文案须给出两条出路: {message}"
+        );
     }
 
     /// 票 16：旧前缀别名表——只登记已退役/在退役的那一条，且必须指向合并插件

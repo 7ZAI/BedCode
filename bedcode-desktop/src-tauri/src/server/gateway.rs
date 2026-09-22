@@ -989,6 +989,27 @@ mod tests {
         );
     }
 
+    /// 票 08：「要验签而未验签」的响应形状是 401 + 1007 + 点名对外路径，
+    /// 与「插件未激活」（200 + 1007）分得开——方向不能指错
+    #[actix_web::test]
+    async fn auth_required_response_says_authentication_not_activation() {
+        let r = route("/api/configs", "GET");
+        let resp = unauthorized_response(r);
+        assert_eq!(resp.status(), actix_web::http::StatusCode::UNAUTHORIZED);
+        let body = actix_web::body::to_bytes(resp.into_body()).await.unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["code"], CODE_PLUGIN_AUTH_FAILED as u64);
+        assert_eq!(
+            json["message"],
+            serde_json::json!("Authentication required for /api/configs"),
+            "文案按对外别名路径说，不暴露插件端点段"
+        );
+        assert!(
+            !json["message"].as_str().unwrap_or_default().contains("not activated"),
+            "不得把未登录报成插件未激活"
+        );
+    }
+
     // ==================== 转发入参 ====================
 
     /// 转发入参形状：与 `/api/plugin/*` 共用同一构造器，故两条路径不可能各答一版
