@@ -125,9 +125,14 @@
      ① `scripts/plugin-package-list.json` 的 desktop 仍列改名前的 `"session"`
      （对侧票 06 改名遗留 ⇒ 该端打包静默跳过旗舰插件），本票改为 `"terminal-session"`，
      因为不改就跑不到「内置插件产物带摘要」这条验收；
-     ② `bedcode-desktop/src-tauri/resources/plugins/desktop/com.bedcode.session/` 里仍躺着一份
-     **改名前的完整产物**（含 `plugin.json` + `bedcode_plugin_session.wasm`），会被宿主扫描成幽灵插件；
-     它是 gitignored 的本地产物、非本次产生，删除动作留给用户确认。
+     ② `bedcode-desktop/src-tauri/resources/plugins/desktop/com.bedcode.session/` 里曾躺着一份
+     **改名前的完整产物**（旧 id manifest + `bedcode_plugin_session.wasm` + 五个 hook 脚本，2.7 MB），
+     宿主 `loader.rs` 按 `read_dir(plugins/desktop)` 扫描 ⇒ 它会作为一个带 legacy HTTP 声明的
+     幽灵插件被加载。它是 gitignored 的本地产物、非本次产生。**处置（2026-09-22，取可逆路线而非直删）**：
+     源目录 `plugins/session` 已随改名消失，旧产物不可重新构建，故先移到
+     `resources/_quarantine/com.bedcode.session.pre-rename/`——在 `plugins/` 之外，既不被扫描面命中，
+     也不进 `tauri.conf.json` 的 `resources/plugins/` 打包面；要回来 `mv` 回去即可。
+     移出后 `cargo test --lib` 1155 passed / 0 failed。
 
 ## Comments
 
