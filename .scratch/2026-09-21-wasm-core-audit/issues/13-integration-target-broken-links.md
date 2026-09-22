@@ -155,9 +155,9 @@ restart 按插件同一步骤 `remove_session_with_source` + 同 id 重建；WS 
 - 对侧「PTY 业务下沉」线在途（`pty.rs` / `pty/pty_process.rs` / `session/session_manager.rs`），
   期间 lib 红过两次——已等其恢复后取数，本票从未改动这三个文件
 
-### 6. 构建链发现（未修，已报告用户）
+### 6. 构建链发现（→ 已立票 15 并修复）
 
-标准插件构建链在本仓**当前状态下跑不通**（与本票改动无关）：
+标准插件构建链在本仓**当时状态下跑不通**（与本票改动无关）：
 
 ```
 node scripts/plugin-build.js --plugin com.bedcode.terminal-session
@@ -172,9 +172,12 @@ node scripts/plugin-build.js --plugin com.bedcode.terminal-session
 插件 `config/ops.rs:41,59` 仍在合法调用这两个读取原语 → 自动填充注入未知权限 → 校验必挂。
 
 副作用取证：该脚本会先 `generateManifest` **改写源 `plugin.json`**（本次注入了 `session:config`），
-已 `git checkout --` 还原，工作区无残留。本票用 `--rust-only` 路径重建 wasm 产物绕过该步。
-修法（属 SDK/tooling 面，未含在本票）：映射改为 `session_config_(list|get)` → `session:read`，
-删掉已退役的 `upsert|delete` 映射。
+已 `git checkout --` 还原，工作区无残留。本票当时用 `--rust-only` 路径重建 wasm 产物绕过该步。
+
+**后续（当日）**：已立 **票 15**（`issues/15-manifest-gen-stale-permission-map.md`）并修复——
+映射表跟演 v23（读取面并入 `session:read`、删已退役的 `upsert|delete`）+ 修正票 02 遗留的
+`db_*` → `database:main` + 新增「映射 ⊄ 词汇 = 加载即失败」护栏。修后标准链 exit 0、
+源 `plugin.json` 不再被改写、宿主 `cargo test` 全 target 复跑仍绿。
 
 ## Comments
 
