@@ -135,7 +135,9 @@ Rust 侧按内核五模块组织（`plugin.rs` 为唯一组合点/facade，外�
     host-side 转发到系统组件同形导出；系统组件内置、默认启用、先于应用插件激活
   - **storage / types / validation / watcher**：插件存储、类型定义、校验、开发模式热重载监听
 - **security/（core-security）**：资源授权——framework（统一授权框架：ResourceKind × 三段决策管线
-  声明/审批/强制，fs / api-call 资源实现）、approval（授权审批）、fs_auth（文件系统访问三层校验：
+  声明/审批/强制，fs / api-call 资源实现）、approval（用户 zip 安装插件的权限审批与内容钉扎，ADR 0020：
+  批准记录 + 目录哈希，`PluginHost::activate_plugin` 前置 `approval_gate` 裁决，弹层 UI 为
+  `PluginApprovalDialog.vue`）、fs_auth（文件系统访问三层校验：
   路径白名单 → 插件白名单 → 弹窗授权，弹窗 UI 为 `FsAuthDialog.vue`）、api_registry（互调门，ADR 0017）
 - **bus（core-bus）**：插件间 Topic 消息总线（发布/订阅，JSON + 二进制双载荷 + 背压），经 MessageDispatcher trait 解耦与 PluginHost 的循环引用。
   **`bus` 不是桌面端权限位**（移动端 SDK 有 `PERMISSION_BUS`，属 ADR 0018 双端契约分叉）：桌面总线订阅/发布不经权限门，
