@@ -21,7 +21,7 @@ pub mod utils;
 
 // ==================== Re-exports ====================
 
-use commands::system::RunningSessionInfo;
+use commands::RunningSessionInfo;
 use system::constants::network::SYNC_EVENT_BROADCAST_CAPACITY;
 pub use system::{AppConfig, AppContext, AppError, Result};
 
@@ -516,7 +516,7 @@ pub fn run() {
                 use crate::events::global_matcher;
                 use crate::events::{DesktopSyncEvent, SyncEventHandler};
 
-                let ws_manager = crate::server::ws::WebSocketManager::global();
+                let ws_manager = crate::server::websocket::WebSocketManager::global();
                 ws_manager.init().await.expect("Failed to initialize WebSocketManager");
 
                 // 注册事件源
@@ -645,13 +645,13 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             // Session（只留引擎事实 + 终端渲染管道：列表 / 单查 / 尺寸裁决；
-            // 会话编排与配置 CRUD 命令面已注销，见 commands/session.rs 头部注释）
-            commands::session::list_sessions,
-            commands::session::get_session,
-            commands::session::resize_session,
+            // 会话编排与配置 CRUD 命令面已注销，见 commands.rs 会话命令节头部注释）
+            commands::list_sessions,
+            commands::get_session,
+            commands::resize_session,
             // PTY Input
-            commands::pty_input::write_to_session,
-            commands::pty_input::send_special_key,
+            commands::write_to_session,
+            commands::send_special_key,
             // 终端输出面（票 05 摘除）：旧 Channel 传输命令
             // （subscribe_terminal_channel / unsubscribe_terminal_channel /
             // terminal_channel_ack，commands/terminal_stream.rs）已随宿主前端
@@ -661,63 +661,61 @@ pub fn run() {
             // session.pairing.* / session.qr.* / session.devices.* / session.history.*
             // （凭据签发与 `pairings` 表仍在内核 auth 模块，宿主只留原语与记录面；
             // 见 .scratch/2026-09-21-host-rust-residue/issues/05）
-            commands::system::set_log_level,
-            commands::system::save_log_settings,
-            commands::opener::open_log_dir,
-            commands::settings::get_all_db_settings,
-            commands::settings::set_db_setting,
+            commands::set_log_level,
+            commands::save_log_settings,
+            commands::open_log_dir,
             // Settings
-            commands::system::get_app_settings,
-            commands::system::save_app_settings,
-            commands::system::set_terminal_bg_image,
+            commands::get_app_settings,
+            commands::save_app_settings,
+            commands::set_terminal_bg_image,
             // Utility
-            commands::system::ping,
-            commands::system::get_app_version,
-            commands::system::get_startup_time,
-            commands::system::confirm_window_close,
-            // Dev Console Relay（仅 dev：前端 console 日志转发，写 runtime.*.log + frontend.*.log 单独文件，见 commands::dev_logs）
+            commands::ping,
+            commands::get_app_version,
+            commands::get_startup_time,
+            commands::confirm_window_close,
+            // Dev Console Relay（仅 dev：前端 console 日志转发，写 runtime.*.log + frontend.*.log 单独文件，见 commands.rs Dev Console Log Relay 节）
             #[cfg(debug_assertions)]
-            commands::dev_logs::report_frontend_log,
-            commands::devices::get_connected_devices,
+            commands::report_frontend_log,
+            commands::get_connected_devices,
             // Plugin
-            commands::plugin::plugin_list_loaded,
-            commands::plugin::plugin_get_info,
-            commands::plugin::plugin_preauthorize,
-            commands::plugin::plugin_activate,
-            commands::plugin::plugin_deactivate,
-            commands::plugin::plugin_approve,
-            commands::plugin::plugin_frontend_loader_session,
-            commands::plugin::plugin_channel_token,
-            commands::plugin::plugin_install_from_file,
-            commands::plugin::plugin_uninstall,
-            commands::plugin::plugin_mark_error,
-            commands::plugin::plugin_frontend_load_report,
-            commands::plugin::plugin_get_activated_state,
-            commands::plugin::plugin_storage_get,
-            commands::plugin::plugin_storage_set,
-            commands::plugin::plugin_storage_delete,
-            commands::plugin::plugin_terminal_send_input,
-            commands::plugin::plugin_list_commands,
-            commands::plugin::plugin_list_views,
-            commands::plugin::plugin_find_file_handler,
-            commands::plugin::plugin_invoke,
-            commands::plugin::plugin_list_rust_commands,
-            commands::plugin::plugin_dev_reload,
-            commands::plugin::plugin_fs_auth_respond,
+            commands::plugin_list_loaded,
+            commands::plugin_get_info,
+            commands::plugin_preauthorize,
+            commands::plugin_activate,
+            commands::plugin_deactivate,
+            commands::plugin_approve,
+            commands::plugin_frontend_loader_session,
+            commands::plugin_channel_token,
+            commands::plugin_install_from_file,
+            commands::plugin_uninstall,
+            commands::plugin_mark_error,
+            commands::plugin_frontend_load_report,
+            commands::plugin_get_activated_state,
+            commands::plugin_storage_get,
+            commands::plugin_storage_set,
+            commands::plugin_storage_delete,
+            commands::plugin_terminal_send_input,
+            commands::plugin_list_commands,
+            commands::plugin_list_views,
+            commands::plugin_find_file_handler,
+            commands::plugin_invoke,
+            commands::plugin_list_rust_commands,
+            commands::plugin_dev_reload,
+            commands::plugin_fs_auth_respond,
             // Server
-            commands::server::server_start,
-            commands::server::server_stop,
-            commands::server::server_restart,
-            commands::server::get_server_status,
-            commands::server::get_server_metrics,
-            commands::server::get_server_network_config,
-            commands::server::update_server_port,
-            commands::server::update_server_auto_start,
-            commands::server::update_server_network_config,
-            commands::server::get_traffic_encryption_config,
-            commands::server::set_traffic_encryption_config,
-            commands::server::get_link_crypto_fingerprint,
-            commands::server::reset_server_network_config,
+            commands::server_start,
+            commands::server_stop,
+            commands::server_restart,
+            commands::get_server_status,
+            commands::get_server_metrics,
+            commands::get_server_network_config,
+            commands::update_server_port,
+            commands::update_server_auto_start,
+            commands::update_server_network_config,
+            commands::get_traffic_encryption_config,
+            commands::set_traffic_encryption_config,
+            commands::get_link_crypto_fingerprint,
+            commands::reset_server_network_config,
             // Peer Net
             peer_net::start_peer_node,
             peer_net::stop_peer_node,
