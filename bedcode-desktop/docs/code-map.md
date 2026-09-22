@@ -122,7 +122,11 @@ Rust 侧按内核五模块组织（`plugin.rs` 为唯一组合点/facade，外�
   - **downloader**（dev 合入，暂挂 `plugin/downloader.rs`）：插件 zip 包本地安装——
     解压 → manifest/身份校验 → 路径穿越防护 → wasm 存在性校验 → 写来源标记 →
     移动到 `app_data_dir/plugins`（按五模块划分应归位 manager，后续一并迁移）
-  - **api_bridge**：插件 API 桥接 — 前端 PluginContext 的 API 调用经 Tauri invoke 到达此层，Rust 端权限校验后执行
+  - **api_bridge**：插件 API 桥接 — 前端 PluginContext 的 API 调用经 Tauri invoke 到达此层，Rust 端权限校验后执行。
+    **身份由凭证绑定而非参数自报**（审计票 06，见 `plugin/security/frontend_channel.rs`）：
+    `plugin_*` 命令都带 `credential`（宿主面 loader 会话密钥 / 插件面通道令牌），参数里的 `plugin_id`
+    只作目标；`plugin_frontend_loader_session`（宿主前端 bootstrap，首个调用者生效，页面加载重置）
+    与 `plugin_channel_token`（用 loader 密钥为运行中插件换令牌，停用即回收）是两枚凭证的来源
   - **host / host/**：插件生命周期管理（加载/激活/停用）；host/ 子模块负责插件随包 CLI 的安装/卸载
     （bin 解析、PATH 条目维护、平台注册）及 commands/listeners/services 拆分
   - **loader / registry**：文件扫描 + WASM 组件加载、插件注册表
@@ -138,7 +142,9 @@ Rust 侧按内核五模块组织（`plugin.rs` 为唯一组合点/facade，外�
   声明/审批/强制，fs / api-call 资源实现）、approval（用户 zip 安装插件的权限审批与内容钉扎，ADR 0020：
   批准记录 + 目录哈希，`PluginHost::activate_plugin` 前置 `approval_gate` 裁决，弹层 UI 为
   `PluginApprovalDialog.vue`）、fs_auth（文件系统访问三层校验：
-  路径白名单 → 插件白名单 → 弹窗授权，弹窗 UI 为 `FsAuthDialog.vue`）、api_registry（互调门，ADR 0017）
+  路径白名单 → 插件白名单 → 弹窗授权，弹窗 UI 为 `FsAuthDialog.vue`）、
+  frontend_channel（前端通道身份：loader 会话密钥 / 插件通道令牌 → 身份，审计票 06）、
+  api_registry（互调门，ADR 0017）
 - **bus（core-bus）**：插件间 Topic 消息总线（发布/订阅，JSON + 二进制双载荷 + 背压），经 MessageDispatcher trait 解耦与 PluginHost 的循环引用。
   **`bus` 不是桌面端权限位**（移动端 SDK 有 `PERMISSION_BUS`，属 ADR 0018 双端契约分叉）：桌面总线订阅/发布不经权限门，
   访问控制归 **topic 命名空间**（票 05 已落地）——`<plugin-id>::<name>` 是某插件的收件箱，宿主按形态仲裁：
