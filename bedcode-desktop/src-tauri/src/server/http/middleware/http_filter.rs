@@ -24,7 +24,7 @@ use actix_web::{
 use tracing::Instrument;
 
 use crate::server::core::filter::{Direction, FilterContext, TrafficChannel, TrafficFilterChain};
-use crate::server::dtos::common_dto::{ApiResponse, CODE_INVALID_REQUEST};
+use crate::server::http::dtos::common_dto::{ApiResponse, CODE_INVALID_REQUEST};
 
 // ==================== Transform（构造层） ====================
 

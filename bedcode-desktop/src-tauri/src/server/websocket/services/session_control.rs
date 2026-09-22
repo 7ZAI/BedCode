@@ -4,7 +4,7 @@
 //! 终端输出订阅统一走 TerminalAction::Subscribe 路径（JoinSession 链已删除）
 
 use crate::enums::{SessionControlAction, SessionSummary};
-use crate::server::ws::message::Message;
+use crate::server::websocket::message::Message;
 use crate::session::{GlobalOutputManager, RendererSource, SessionManager};
 use crate::Result;
 use std::net::SocketAddr;

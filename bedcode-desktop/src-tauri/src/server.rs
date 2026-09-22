@@ -2,13 +2,8 @@
 //!
 //! Actix-web 服务器 - HTTP API、WebSocket 终端、认证和会话管理
 
-pub mod connection_types;
-pub mod controllers;
 pub mod core;
-pub mod dtos;
-pub mod gateway;
-pub mod middleware;
-pub mod services;
-pub mod ws;
+pub mod http;
+pub mod websocket;
 
-pub use connection_types::DeviceConnectionInfo;
+pub use websocket::connection_types::DeviceConnectionInfo;

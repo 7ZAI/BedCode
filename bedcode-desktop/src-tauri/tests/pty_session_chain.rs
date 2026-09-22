@@ -47,7 +47,7 @@ use bedcode_lib::mdns::advertiser::MdnsAdvertiser;
 use bedcode_lib::plugin::PluginHost;
 use bedcode_lib::server::core::app::start_http_server;
 use bedcode_lib::enums::{AuthPayload, AuthStage, SessionControlAction, SessionControlPayload};
-use bedcode_lib::server::ws::message::Message;
+use bedcode_lib::server::websocket::message::Message;
 use bedcode_lib::session::{SessionConfigManager, SessionManager};
 use bedcode_lib::system::app_context::AppContext;
 use bedcode_lib::system::app_context::AppContextBuilder;

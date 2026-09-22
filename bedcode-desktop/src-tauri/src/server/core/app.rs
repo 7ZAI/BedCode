@@ -9,10 +9,10 @@ use actix_web_actors::ws as actix_ws;
 use serde_json::json;
 use std::time::Duration;
 
-use crate::server::controllers::{plugin_controller, session_controller};
-use crate::server::ws::channel::plugin::PluginChannel;
-use crate::server::ws::conn::{ConnSpec, WsConnBase};
-use crate::server::ws::registry::{ChannelKind, WsSessionRegistry};
+use crate::server::http::controllers::{plugin_controller, session_controller};
+use crate::server::websocket::channel::plugin::PluginChannel;
+use crate::server::websocket::conn::{ConnSpec, WsConnBase};
+use crate::server::websocket::registry::{ChannelKind, WsSessionRegistry};
 use crate::system::constants::server::{
     API_HEALTH_PATH, BIND_ADDRESS, CORS_MAX_AGE_SECS, PLACEHOLDER_PEER_ADDR, WS_EVENT_PATH,
 };
@@ -78,8 +78,8 @@ async fn plugin_endpoint_ws(
     stream: web::Payload,
 ) -> Result<HttpResponse, Error> {
     let (plugin_id, suffix) = path.into_inner();
-    let mount = crate::server::ws::endpoint::mount_path(&plugin_id, &suffix);
-    let Some(entry) = crate::server::ws::endpoint::find_by_mount(&mount) else {
+    let mount = crate::server::websocket::endpoint::mount_path(&plugin_id, &suffix);
+    let Some(entry) = crate::server::websocket::endpoint::find_by_mount(&mount) else {
         tracing::debug!(mount_path = %mount, "plugin ws endpoint not registered, rejecting 404");
         return Ok(HttpResponse::NotFound().finish());
     };
@@ -261,9 +261,9 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             // 注册顺序 = 由内到外（`Scope::wrap` 后注册者先执行），故网关在前、验签在后。
             // 顺序语义由 server/gateway.rs 的中间件用例钉死；即便写反，网关的「已验签」
             // 前置也会把未验签的业务请求挡在插件之外（降级宿主，由验签中间件 401）。
-            .wrap(actix_web::middleware::from_fn(crate::server::gateway::business_gateway))
+            .wrap(actix_web::middleware::from_fn(crate::server::http::gateway::business_gateway))
             .wrap(actix_web::middleware::from_fn(
-                crate::server::middleware::jwt_auth::jwt_gateway,
+                crate::server::http::middleware::jwt_auth::jwt_gateway,
             ))
             // 票 07 contract：/api/auth/* 七端点编排已下沉 session 插件（公开路由——
             // JWT 之前的入口经网关免验签转发），宿主不再注册认证业务路由
@@ -334,7 +334,7 @@ pub async fn start_http_server(
             // 流量过滤器责任链（HTTP 接入点）：请求体入站过滤 + 响应体出站过滤。
             // 挂在最内层：CORS/日志层拒绝的请求不进入缓冲逻辑；
             // 链为空时零开销透传（加密等扩展经 server::core::filter::TrafficFilterChain 注册）
-            .wrap(crate::server::middleware::http_filter::TrafficFilter)
+            .wrap(crate::server::http::middleware::http_filter::TrafficFilter)
             .configure(configure_routes)
     })
     .bind(format!("{}:{}", BIND_ADDRESS, port))?

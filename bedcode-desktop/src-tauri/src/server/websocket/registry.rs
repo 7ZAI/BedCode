@@ -760,10 +760,10 @@ mod tests {
             ChannelKind::Terminal => WsConnBase::new_for_session(addr, "test-session".to_string()),
             ChannelKind::Event => WsConnBase::new_event(addr),
             ChannelKind::Plugin => WsConnBase::new(
-                crate::server::ws::conn::ConnSpec {
+                crate::server::websocket::conn::ConnSpec {
                     owner: owner.map(|s| s.to_string()),
                     endpoint_id: endpoint_id.map(|s| s.to_string()),
-                    ..crate::server::ws::conn::ConnSpec::new(addr, ChannelKind::Plugin)
+                    ..crate::server::websocket::conn::ConnSpec::new(addr, ChannelKind::Plugin)
                 },
                 Box::new(StubChannel),
             ),
@@ -791,14 +791,14 @@ mod tests {
     /// 测试用空通道处理器（不被驱动，仅满足骨架构造约束）
     struct StubChannel;
 
-    impl crate::server::ws::conn::ChannelHandler for StubChannel {
-        fn auth_mode(&self) -> crate::server::ws::conn::AuthMode {
-            crate::server::ws::conn::AuthMode::None
+    impl crate::server::websocket::conn::ChannelHandler for StubChannel {
+        fn auth_mode(&self) -> crate::server::websocket::conn::AuthMode {
+            crate::server::websocket::conn::AuthMode::None
         }
 
-        fn on_text(&mut self, _conn: &mut WsConnBase, _text: String, _ctx: &mut crate::server::ws::conn::ConnCtx) {}
+        fn on_text(&mut self, _conn: &mut WsConnBase, _text: String, _ctx: &mut crate::server::websocket::conn::ConnCtx) {}
 
-        fn on_binary(&mut self, _conn: &mut WsConnBase, _data: Vec<u8>, _ctx: &mut crate::server::ws::conn::ConnCtx) {}
+        fn on_binary(&mut self, _conn: &mut WsConnBase, _data: Vec<u8>, _ctx: &mut crate::server::websocket::conn::ConnCtx) {}
     }
 
     /// 把条目列表转成测试用 HashMap

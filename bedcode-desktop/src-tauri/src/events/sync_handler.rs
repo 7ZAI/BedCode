@@ -5,8 +5,8 @@
 use super::matcher::EventHandler;
 use crate::enums::{SessionSummary, SyncPayload};
 use crate::events::DesktopSyncEvent;
-use crate::server::ws::message::Message;
-use crate::server::ws::WebSocketManager;
+use crate::server::websocket::message::Message;
+use crate::server::websocket::WebSocketManager;
 use crate::session::SessionManager;
 use std::sync::Arc;
 
@@ -32,13 +32,13 @@ pub trait SyncBroadcaster: Send + Sync {
 }
 
 #[async_trait::async_trait]
-impl SyncBroadcaster for crate::server::ws::WebSocketManager {
+impl SyncBroadcaster for crate::server::websocket::WebSocketManager {
     async fn broadcast(&self, message: &Message) -> crate::Result<()> {
-        crate::server::ws::WebSocketManager::broadcast(self, message).await
+        crate::server::websocket::WebSocketManager::broadcast(self, message).await
     }
 
     async fn broadcast_sync_to_others(&self, exclude_device_name: &str, message: &Message) -> crate::Result<()> {
-        crate::server::ws::WebSocketManager::broadcast_sync_to_others(self, exclude_device_name, message).await
+        crate::server::websocket::WebSocketManager::broadcast_sync_to_others(self, exclude_device_name, message).await
     }
 }
 
@@ -333,7 +333,7 @@ impl EventHandler<DesktopSyncEvent> for SyncEventHandler {
 mod tests {
     use super::*;
     use crate::events::DesktopSyncEvent;
-    use crate::server::ws::message::Message;
+    use crate::server::websocket::message::Message;
     use std::sync::Mutex;
 
     /// Fake 广播器：记录所有广播调用（票据 22）

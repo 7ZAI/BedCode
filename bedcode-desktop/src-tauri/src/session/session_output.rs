@@ -19,7 +19,7 @@ use tokio::sync::{watch, Notify, RwLock};
 /// 输出事件（= 历史保存/回放的最小字节块，每次 PTY read 一块）
 ///
 /// `data` 存储原始字节数据，在发送到 WebSocket 时才编码为 TB v3 二进制帧
-///（见 server/ws/terminal_ws/forward.rs）
+///（见 server/websocket/terminal_ws/forward.rs）
 ///
 /// `start_offset` 为会话内累计字节偏移（写入路径 SessionOutputManager::on_output
 /// 在串行临界区内分配 = 队列 max_offset），事件字节区间为
@@ -349,7 +349,7 @@ pub struct SubscribeResponse {
 /// 订阅者传播模式（双速）：realtime = 读即传（时间窗 + 字节窗合并）；
 /// batch = 累计满 batch_bytes 才转发一帧（无时间窗）
 ///
-/// 常量定义在 session 层（订阅者状态的一部分），`server::ws::terminal_ws::forward`
+/// 常量定义在 session 层（订阅者状态的一部分），`server::websocket::terminal_ws::forward`
 /// 重导出以保持既有引用点；避免 session 反向依赖 server。
 pub const MODE_REALTIME: u8 = 0;
 pub const MODE_BATCH: u8 = 1;
@@ -482,7 +482,7 @@ pub struct PullSubscriber {
 ///
 /// **源零等待（I2）**：`on_output` 只做「分配 offset + 入环 + 通告水印」，
 /// 不向任何订阅者投递、不等待任何订阅者；环满淘汰最旧。投递、合帧与背压
-/// 节流全部归属各订阅者执行体（`server/ws/terminal_ws/subscriber.rs`）。
+/// 节流全部归属各订阅者执行体（`server/websocket/terminal_ws/subscriber.rs`）。
 pub struct SessionOutputManager {
     session_id: String,
     output_queue: Arc<RwLock<UnifiedOutputQueue>>,

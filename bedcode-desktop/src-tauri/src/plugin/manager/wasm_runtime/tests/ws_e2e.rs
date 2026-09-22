@@ -553,7 +553,7 @@ fn test_ws_endpoint_server_domain_roundtrip() {
             other => panic!("期望 Close(4005)，got: {other:?}"),
         }
         assert!(
-            crate::server::ws::endpoint::get(&endpoint_id).is_none(),
+            crate::server::websocket::endpoint::get(&endpoint_id).is_none(),
             "停用回收端点表条目（只碰本人）"
         );
         // 停用路径同样恰好一条 disconnect 事件
@@ -663,7 +663,7 @@ fn test_ws_endpoint_server_domain_roundtrip() {
         server_task.abort();
         plugin.lock().await.deactivate().expect("deactivate = 0");
         // 全局端点表在本进程内跨用例共享：显式清理（deactivate 不触达宿主侧回收）
-        crate::server::ws::endpoint::purge_for_plugin(PLUGIN_ID);
+        crate::server::websocket::endpoint::purge_for_plugin(PLUGIN_ID);
     }));
 }
 
@@ -826,7 +826,7 @@ fn test_ws_two_plugin_isolation() {
             other => panic!("期望 Close(4005)，got: {other:?}"),
         }
         assert!(
-            crate::server::ws::endpoint::get(&endpoint_a).is_none(),
+            crate::server::websocket::endpoint::get(&endpoint_a).is_none(),
             "A 的端点随停用回收"
         );
         assert!(
@@ -853,8 +853,8 @@ fn test_ws_two_plugin_isolation() {
         plugin_b.lock().await.deactivate().expect("deactivate B");
         crate::plugin::manager::wasm_runtime::host_impl::ws::purge_for_plugin(PLUGIN_A);
         crate::plugin::manager::wasm_runtime::host_impl::ws::purge_for_plugin(PLUGIN_B);
-        crate::server::ws::endpoint::purge_for_plugin(PLUGIN_A);
-        crate::server::ws::endpoint::purge_for_plugin(PLUGIN_B);
+        crate::server::websocket::endpoint::purge_for_plugin(PLUGIN_A);
+        crate::server::websocket::endpoint::purge_for_plugin(PLUGIN_B);
         peer.abort();
     }));
 }

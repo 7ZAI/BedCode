@@ -1,6 +1,6 @@
 //! WS 通道处理器实现
 //!
-//! 骨架（`server::ws::conn`）负责连接生命周期，通道负责协议语义。
+//! 骨架（`server::websocket::conn`）负责连接生命周期，通道负责协议语义。
 //! 阶段 A 落地两个实现：
 //!
 //! - [`terminal`]：终端路由 `/ws/terminal/session/{id}` 控制帧协议；

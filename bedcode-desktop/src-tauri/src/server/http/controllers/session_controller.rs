@@ -9,9 +9,9 @@
 //! - POST   /api/sessions/{id}/input
 //! - DELETE /api/sessions/{id}/remove
 
-use crate::server::dtos::session_dto::*;
-use crate::server::dtos::ApiResponse;
-use crate::server::middleware::jwt_auth::get_claims_from_request;
+use crate::server::http::dtos::session_dto::*;
+use crate::server::http::dtos::ApiResponse;
+use crate::server::http::middleware::jwt_auth::get_claims_from_request;
 use crate::session::{GlobalOutputManager, RendererSource};
 use crate::system::app_context::AppContext;
 use actix_web::{web, HttpRequest, HttpResponse};

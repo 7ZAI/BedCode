@@ -22,7 +22,7 @@
 //!   （且仅当接入事件已发布——认证失败/超时不留「无接入的断开」噪音）。
 //!
 //! 连接生命周期（心跳 / 认证超时 / 帧级过滤链 / 注册表）全部由骨架
-//! [`crate::server::ws::conn`] 承担，本文件只实现通道协议。
+//! [`crate::server::websocket::conn`] 承担，本文件只实现通道协议。
 
 use actix::prelude::*;
 use actix_web_actors::ws::{CloseCode, CloseReason};
@@ -35,7 +35,7 @@ use super::super::conn::{AuthMode, ChannelHandler, ConnCtx, WsConnBase};
 use super::super::endpoint::{EndpointAuth, EndpointEntry};
 use crate::plugin::bus::MessageBus;
 use crate::plugin::manager::wasm_runtime::host_impl::ws::deliver_endpoint_frame;
-use crate::server::ws::registry::WsSessionRegistry;
+use crate::server::websocket::registry::WsSessionRegistry;
 use crate::utils::auth::jwt::{jwt_error_message, JwtService};
 
 /// 插件端点认证失败 / 超时的关闭码（spec D8；4000 段为应用自定义码）
@@ -352,7 +352,7 @@ impl ChannelHandler for PluginChannel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::server::ws::endpoint::{register, EndpointAuth};
+    use crate::server::websocket::endpoint::{register, EndpointAuth};
     use std::net::SocketAddr;
     use std::sync::Arc;
 

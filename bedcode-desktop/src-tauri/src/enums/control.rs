@@ -66,7 +66,7 @@ pub struct TerminalPayload {
 /// - UnsubscribeResponse: 取消订阅响应 (服务端 → 客户端)
 ///
 /// PTY 输出不再经 JSON 文本帧（v2 base64 Output action 已随 JoinSession 链
-/// 删除），统一走 TB v3 二进制帧（server/ws/terminal_ws/forward.rs）
+/// 删除），统一走 TB v3 二进制帧（server/websocket/terminal_ws/forward.rs）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TerminalAction {

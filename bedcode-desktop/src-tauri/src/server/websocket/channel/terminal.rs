@@ -5,7 +5,7 @@
 //! `input` 直通 PTY。控制帧为简化协议（无 message_id / expect_response）。
 //!
 //! 连接生命周期（心跳 / 认证超时 / 帧级过滤链 / 注册表）全部由骨架
-//! [`crate::server::ws::conn`] 承担，本文件只实现通道协议。
+//! [`crate::server::websocket::conn`] 承担，本文件只实现通道协议。
 
 use actix::prelude::*;
 use std::any::Any;
@@ -14,7 +14,7 @@ use super::super::conn::{AuthMode, ChannelHandler, ChannelMessage, ConnCtx, WsCo
 use crate::enums::special_key::KeyCombo;
 use crate::enums::{TerminalAction, TerminalPayload};
 use crate::server::core::link_crypto;
-use crate::server::ws::terminal_ws::control_frame::{self, ServerFrame};
+use crate::server::websocket::terminal_ws::control_frame::{self, ServerFrame};
 use crate::session::{GlobalOutputManager, SessionStatus};
 use crate::system::app_context::AppContext;
 use crate::system::error_boundary::spawn_with_error_boundary;
@@ -234,7 +234,7 @@ impl TerminalChannel {
                 action: TerminalAction::Input { data, special_key },
             };
             if let Err(e) =
-                crate::server::services::terminal_service::handle_input(&session_id, payload, &Some(sm)).await
+                crate::server::websocket::services::terminal_service::handle_input(&session_id, payload, &Some(sm)).await
             {
                 tracing::error!(session_id = %session_id, error = %e, "Terminal input error");
             }

@@ -666,7 +666,7 @@ impl Handler<TerminalControlFrame> for WsConnBase {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::server::ws::terminal_ws::forward::MODE_REALTIME;
+    use crate::server::websocket::terminal_ws::forward::MODE_REALTIME;
 
     /// 构造合法 ack 帧（TB v3 布局：magic(2) + version(1) + flags(1) +
     /// offset(8 LE) + len(4 LE) + session_id UTF-8）

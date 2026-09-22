@@ -104,7 +104,7 @@ fn test_app() -> actix_web::App<
     >,
 > {
     App::new()
-        .wrap(bedcode_lib::server::middleware::http_filter::TrafficFilter)
+        .wrap(bedcode_lib::server::http::middleware::http_filter::TrafficFilter)
         .route("/echo", web::post().to(echo_handler))
 }
 

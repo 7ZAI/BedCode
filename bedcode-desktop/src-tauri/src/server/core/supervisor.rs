@@ -145,7 +145,7 @@ impl ServerSupervisor {
         }
 
         // 委托 WebSocketManager 启动 Actix Web
-        let ws_manager = crate::server::ws::WebSocketManager::global();
+        let ws_manager = crate::server::websocket::WebSocketManager::global();
         match ws_manager.start(port).await {
             Ok(_handle) => {
                 // 重置指标采集器，确保 uptime 和计数器从零开始
@@ -193,9 +193,9 @@ impl ServerSupervisor {
                         .await
                         {
                             // 收到 Started 事件（正常启动广播）：忽略，继续监听崩溃
-                            Ok(Ok(crate::server::ws::ServerEvent::Started)) => {}
+                            Ok(Ok(crate::server::websocket::ServerEvent::Started)) => {}
                             // 收到 Stopped 事件（仅崩溃路径发送）→ 判定为崩溃
-                            Ok(Ok(crate::server::ws::ServerEvent::Stopped)) => {
+                            Ok(Ok(crate::server::websocket::ServerEvent::Stopped)) => {
                                 let mut inner = inner_for_monitor.write().await;
                                 // 仅在 Running 状态下处理（避免与正常 stop 冲突）
                                 if inner.status == ServerStatus::Running {
@@ -257,7 +257,7 @@ impl ServerSupervisor {
         }
 
         // 委托 WebSocketManager 停止 Actix Web
-        let ws_manager = crate::server::ws::WebSocketManager::global();
+        let ws_manager = crate::server::websocket::WebSocketManager::global();
         if let Err(e) = ws_manager.stop().await {
             // 停止失败：服务器可能仍在运行，恢复 Running 状态供重试
             let mut inner = self.inner.write().await;
@@ -384,7 +384,7 @@ async fn metrics_sampling_task(inner: Arc<RwLock<SupervisorInner>>, cancel: Arc<
         drop(inner_guard);
 
         // 异步获取连接数（WsSessionRegistry 是 async 的）
-        let connections = crate::server::ws::registry::WsSessionRegistry::global()
+        let connections = crate::server::websocket::registry::WsSessionRegistry::global()
             .client_count()
             .await;
 

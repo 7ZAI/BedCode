@@ -16,7 +16,7 @@
 //!    claims 派生的设备标识与 [`caller`] 三档调用方身份（票 08），**JWT 本体与指纹不出宿主**。
 //!    别名条目自带的 [`RouteAuth`] 与插件端点声明的档位**取较严者**（见 [`decide`]）——
 //!    两个声明面都不得单方面把宿主要求验签的业务端点放开。
-//! 3. **不发明传输机制**：转发复用 `controllers/plugin_controller` 的同一内核
+//! 3. **不发明传输机制**：转发复用 `http/controllers/plugin_controller` 的同一内核
 //!    （[`forward_to_plugin`]）与同一端点声明治理（manifest `contributes.httpEndpoints`）。
 //!
 //! ## 双轨与降级
@@ -39,10 +39,10 @@ use actix_web::middleware::Next;
 use actix_web::{web, Error, FromRequest, HttpResponse};
 use serde_json::Value;
 
-use crate::server::controllers::plugin_controller::{
+use crate::server::http::controllers::plugin_controller::{
     caller_identity, filter_plugin_request_headers, forward_to_plugin, HttpCaller, PluginHttpRequest,
 };
-use crate::server::dtos::{ApiResponse, CODE_INVALID_REQUEST, CODE_PLUGIN_AUTH_FAILED};
+use crate::server::http::dtos::{ApiResponse, CODE_INVALID_REQUEST, CODE_PLUGIN_AUTH_FAILED};
 use crate::system::app_context::AppContext;
 use bedcode_plugin_api::EndpointAuth;
 
@@ -528,8 +528,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::server::controllers::plugin_controller::build_plugin_http_args;
-    use crate::server::middleware::jwt_auth::jwt_gateway;
+    use crate::server::http::controllers::plugin_controller::build_plugin_http_args;
+    use crate::server::http::middleware::jwt_auth::jwt_gateway;
     use crate::utils::auth::jwt::JwtService;
 
     fn route(path: &str, method: &str) -> &'static BusinessRoute {
@@ -722,9 +722,9 @@ mod tests {
     /// 单一取源点：`server/` 三层化把路由搬走后（票 04/05/06/07），只需重指下面的
     /// `include_str!` 与 `APP_RS_LABEL` **两行**（漏改 LABEL 只影响失败消息点名，
     /// 2026-09-23 票 04 变异验证实测过这个漂移），前置会当场验证新目标仍是「活的宿主路由面」。
-    /// 票 04 已把路由面搬进 `core/`（本文件仍在 `server/` 根，故相对路径无 `../`；
-    /// 票 05 把本文件搬进 `http/` 时同批改成 `../core/app.rs`）。路由一拆为三是票 07。
-    const APP_RS: &str = include_str!("core/app.rs");
+    /// 票 05 已把本文件搬进 `http/`：相对 `core/app.rs` 为两级（`http/` → `server/` → `core/`），
+    /// 故用 `../core/app.rs`。路由一拆为三是票 07（届时随路由搬移再重指）。
+    const APP_RS: &str = include_str!("../core/app.rs");
 
     /// 失败消息里显示的目标名（`include_str!` 的相对路径无法自报，故单独记一份）
     const APP_RS_LABEL: &str = "server/core/app.rs";
@@ -810,7 +810,7 @@ mod tests {
     cfg.route(API_HEALTH_PATH, web::get().to(health_check));
 ";
         assert_eq!(route_identifier_count(live), 4);
-        assert_eq!(route_identifier_count("use crate::server::controllers;"), 0);
+        assert_eq!(route_identifier_count("use crate::server::http::controllers;"), 0);
     }
 
     /// 目标取函数体而不是整文件：`use` 行与函数体外的常量不得混进计数
@@ -1458,13 +1458,13 @@ const ELSEWHERE: &str = \"/api/elsewhere\";
     /// 票 02/03/04 的插件端点回包必须与本用例逐字段相同（含可选字段的缺席形态）。
     #[test]
     fn business_endpoint_shapes_are_locked_for_dual_track() {
-        use crate::server::dtos::config_dto::{
+        use crate::server::http::dtos::config_dto::{
             ConfigItem, ConfigListResponseData, QuickActionItem, QuickActionListResponseData,
         };
-        use crate::server::dtos::file_dto::{
+        use crate::server::http::dtos::file_dto::{
             FileContentResponseData, FileDiffLine, FileDiffResponseData, FileTreeNode, FileTreeResponseData,
         };
-        use crate::server::dtos::git_dto::{GitBranchesResponseData, GitCheckoutResponseData, GitStatusResponseData};
+        use crate::server::http::dtos::git_dto::{GitBranchesResponseData, GitCheckoutResponseData, GitStatusResponseData};
 
         // GET /api/configs
         assert_shape(

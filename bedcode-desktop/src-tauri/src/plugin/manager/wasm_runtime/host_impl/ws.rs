@@ -11,8 +11,8 @@
 //!   成功返回句柄并发布 `<owner>::ws:open`，失败只回 Err 不发事件；
 //!   **不自动重连**（编排归插件）；**不启用 TLS**（`wss://` 显式拒绝，D7）；
 //! - **服务端域（入站）**：插件在宿主 WS 服务器上挂载端点（`/ws/plugin/<owner>/<path>`，
-//!   spec D5）。端点表见 [`crate::server::ws::endpoint`]，连接侧通道见
-//!   [`crate::server::ws::channel::plugin`]——宿主只做引擎级动作（命名空间注入、
+//!   spec D5）。端点表见 [`crate::server::websocket::endpoint`]，连接侧通道见
+//!   [`crate::server::websocket::channel::plugin`]——宿主只做引擎级动作（命名空间注入、
 //!   认证策略执行、帧转发、按属主回收），**业务语义完全归插件**；
 //! - **事件**：状态事件走消息总线属主私有 topic（票 05 命名空间）
 //!   （`<owner>::ws:open|error|close`、`<owner>::ws:client-connect|client-disconnect`，
@@ -27,8 +27,8 @@ use bedcode_plugin_api::host::ws::{WS_CLOSE, WS_ERROR, WS_OPEN};
 use crate::plugin::bus::{MessageBus, WsFrameDispatch};
 use crate::plugin::manager::wasm_runtime::WasmHostContext;
 use crate::plugin::permission::{PERMISSION_WS_CLIENT, PERMISSION_WS_SERVER};
-use crate::server::ws::endpoint::EndpointAuth;
-use crate::server::ws::registry::WsSessionRegistry;
+use crate::server::websocket::endpoint::EndpointAuth;
+use crate::server::websocket::registry::WsSessionRegistry;
 use crate::system::constants::plugin::{
     PLUGIN_WS_CONNECT_TIMEOUT_SECS, PLUGIN_WS_MAX_CONNS_PER_PLUGIN, PLUGIN_WS_MAX_MESSAGE_BYTES,
     PLUGIN_WS_SEND_QUEUE_CAPACITY,
@@ -373,8 +373,8 @@ fn enqueue(plugin_id: &str, handle: &str, frame: OutboundFrame) -> Result<(), St
 // 业务语义（消息格式 / 房间 / 协议 / 重连策略）完全归插件（D1）。
 
 /// 端点域属主仲裁：未注册 / 非属主 → `Err`（跨插件不可互操作）
-fn owned_endpoint(endpoint_id: &str, plugin_id: &str) -> Result<crate::server::ws::endpoint::EndpointEntry, String> {
-    match crate::server::ws::endpoint::get(endpoint_id) {
+fn owned_endpoint(endpoint_id: &str, plugin_id: &str) -> Result<crate::server::websocket::endpoint::EndpointEntry, String> {
+    match crate::server::websocket::endpoint::get(endpoint_id) {
         Some(entry) if entry.owner == plugin_id => Ok(entry),
         Some(_) => Err(NOT_ENDPOINT_OWNER.to_string()),
         None => Err(format!("ws endpoint not found: {endpoint_id}")),
@@ -385,7 +385,7 @@ fn owned_endpoint(endpoint_id: &str, plugin_id: &str) -> Result<crate::server::w
 ///
 /// 校验顺序：权限门 → 形状校验（空 / 含 `/` / 含 `.` / 超长）→ 认证策略解析
 /// → 端点数上限与同插件冲突（失败零副作用）。返回端点句柄 `wse-<uuid>`；
-/// 完整挂载路径 = [`crate::server::ws::endpoint::mount_path`]（插件侧可推导）。
+/// 完整挂载路径 = [`crate::server::websocket::endpoint::mount_path`]（插件侧可推导）。
 pub(crate) fn ws_register_endpoint(
     host_ctx: &WasmHostContext,
     plugin_id: &str,
@@ -418,7 +418,7 @@ pub(crate) fn ws_register_endpoint(
     let auth = EndpointAuth::parse_with(config.auth.as_deref(), EndpointAuth::None)
         .map_err(|e| format!("ws register-endpoint: {e}"))?;
 
-    let entry = crate::server::ws::endpoint::register(
+    let entry = crate::server::websocket::endpoint::register(
         plugin_id,
         path,
         auth,
@@ -584,13 +584,13 @@ pub(crate) fn ws_unregister_endpoint(
     ) {
         return Err(denied_server());
     }
-    let Some(entry) = crate::server::ws::endpoint::get(endpoint_id) else {
+    let Some(entry) = crate::server::websocket::endpoint::get(endpoint_id) else {
         return Ok(false);
     };
     if entry.owner != plugin_id {
         return Err(NOT_ENDPOINT_OWNER.to_string());
     }
-    crate::server::ws::endpoint::remove(endpoint_id);
+    crate::server::websocket::endpoint::remove(endpoint_id);
     let endpoint = entry.endpoint_id.clone();
     let closed = crate::plugin::manager::wasm_runtime::block_on_async(async move {
         WsSessionRegistry::global()
@@ -649,7 +649,7 @@ pub(crate) fn ws_list_endpoints(host_ctx: &WasmHostContext, plugin_id: &str) -> 
     ) {
         return Err(denied_server());
     }
-    let entries = crate::server::ws::endpoint::list_by_owner(plugin_id);
+    let entries = crate::server::websocket::endpoint::list_by_owner(plugin_id);
     let mut list: Vec<serde_json::Value> = Vec::with_capacity(entries.len());
     for entry in entries {
         let endpoint = entry.endpoint_id.clone();
@@ -692,7 +692,7 @@ pub(crate) fn purge_for_plugin(plugin_id: &str) -> usize {
     }
 
     // 服务端域：端点表回收 + 其在线客户端 4005 下线
-    let endpoints = crate::server::ws::endpoint::purge_for_plugin(plugin_id);
+    let endpoints = crate::server::websocket::endpoint::purge_for_plugin(plugin_id);
     for entry in endpoints {
         let endpoint = entry.endpoint_id.clone();
         let closed = crate::plugin::manager::wasm_runtime::block_on_async(async move {
@@ -1249,7 +1249,7 @@ mod tests {
 
     /// 摘除端点（全局表跨用例共享，用例结束必须清理）
     fn drop_endpoint(endpoint_id: &str) {
-        crate::server::ws::endpoint::remove(endpoint_id);
+        crate::server::websocket::endpoint::remove(endpoint_id);
     }
 
     #[tokio::test]
@@ -1280,7 +1280,7 @@ mod tests {
             .unwrap_err()
             .contains("unknown auth"));
         assert_eq!(
-            crate::server::ws::endpoint::count_by_owner(&plugin),
+            crate::server::websocket::endpoint::count_by_owner(&plugin),
             0,
             "校验失败零副作用"
         );
@@ -1289,12 +1289,12 @@ mod tests {
         let open = register_endpoint(&ctx, &plugin, "open");
         let guarded = ws_register_endpoint(&ctx, &plugin, r#"{"path":"guarded","auth":"jwt"}"#).expect("jwt endpoint");
         assert_eq!(
-            crate::server::ws::endpoint::get(&open).unwrap().auth,
+            crate::server::websocket::endpoint::get(&open).unwrap().auth,
             EndpointAuth::None,
             "缺省 auth = none"
         );
         assert_eq!(
-            crate::server::ws::endpoint::get(&guarded).unwrap().auth,
+            crate::server::websocket::endpoint::get(&guarded).unwrap().auth,
             EndpointAuth::Jwt
         );
 
@@ -1312,7 +1312,7 @@ mod tests {
         assert!(endpoint.starts_with("wse-"), "句柄前缀 wse-，got: {endpoint}");
 
         // 完整挂载路径由插件侧推导（宿主注入属主命名空间段，spec D5）
-        let entry = crate::server::ws::endpoint::get(&endpoint).expect("endpoint exists");
+        let entry = crate::server::websocket::endpoint::get(&endpoint).expect("endpoint exists");
         assert_eq!(entry.owner, plugin);
         assert_eq!(entry.mount_path, format!("/ws/plugin/{plugin}/chat"));
 
@@ -1345,7 +1345,7 @@ mod tests {
         ids.push(register_endpoint(&ctx, &plugin, "lobby"));
 
         let mut i = ids.len();
-        while crate::server::ws::endpoint::count_by_owner(&plugin) < limit {
+        while crate::server::websocket::endpoint::count_by_owner(&plugin) < limit {
             ids.push(register_endpoint(&ctx, &plugin, &format!("p{i}")));
             i += 1;
         }
@@ -1354,7 +1354,7 @@ mod tests {
             .unwrap_err()
             .contains("endpoint limit reached"));
         assert_eq!(
-            crate::server::ws::endpoint::count_by_owner(&plugin),
+            crate::server::websocket::endpoint::count_by_owner(&plugin),
             limit,
             "超限拒绝不得留下副作用"
         );
@@ -1391,7 +1391,7 @@ mod tests {
             NOT_ENDPOINT_OWNER
         );
         assert!(
-            crate::server::ws::endpoint::get(&endpoint).is_some(),
+            crate::server::websocket::endpoint::get(&endpoint).is_some(),
             "拒绝不得消费端点"
         );
         // 属主本人可用（无在线客户端 → 清单空数组，计数 0）
@@ -1446,11 +1446,11 @@ mod tests {
         purge_for_plugin(&victim);
 
         assert!(
-            crate::server::ws::endpoint::get(&victim_endpoint).is_none(),
+            crate::server::websocket::endpoint::get(&victim_endpoint).is_none(),
             "本人端点随停用回收"
         );
         assert!(
-            crate::server::ws::endpoint::get(&bystander_endpoint).is_some(),
+            crate::server::websocket::endpoint::get(&bystander_endpoint).is_some(),
             "他人端点不受影响"
         );
         // 幂等：再次回收无命中
@@ -1565,13 +1565,13 @@ mod tests {
         // 「他人的东西不出现在本人视图里」= 零可见
         assert_eq!(ws_list_endpoints(&ctx, &intruder).unwrap(), "[]", "他人端点零可见");
         assert_eq!(
-            crate::server::ws::endpoint::list_by_owner(&intruder).len(),
+            crate::server::websocket::endpoint::list_by_owner(&intruder).len(),
             0,
             "他人端点表条目零可见"
         );
 
         // 零副作用：拒绝不得消费句柄 / 注销端点 / 断开连接
-        assert!(crate::server::ws::endpoint::get(&endpoint).is_some(), "端点未被注销");
+        assert!(crate::server::websocket::endpoint::get(&endpoint).is_some(), "端点未被注销");
         assert!(ws_is_connected(&ctx, &owner, &handle).unwrap(), "本人连接未被关闭");
         assert_eq!(ws_list_clients(&ctx, &owner, &endpoint).unwrap(), "[]");
         assert_eq!(ws_list_endpoints(&ctx, &owner).unwrap().contains("iso"), true);

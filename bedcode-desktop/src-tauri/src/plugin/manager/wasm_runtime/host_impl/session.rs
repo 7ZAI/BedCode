@@ -560,7 +560,7 @@ pub(crate) fn session_connections_list(host_ctx: &WasmHostContext, plugin_id: &s
     ) {
         return Err("permission denied".to_string());
     }
-    let manager = crate::server::ws::WebSocketManager::global();
+    let manager = crate::server::websocket::WebSocketManager::global();
     let clients = block_on_async(manager.list_clients());
     let values: Vec<serde_json::Value> = clients
         .into_iter()

@@ -50,9 +50,9 @@
 //!
 //! # 接线点
 //!
-//! - HTTP：`server/core/app.rs` 最内层 wrap_fn → [`crate::server::middleware::http_filter`]
+//! - HTTP：`server/core/app.rs` 最内层 wrap_fn → [`crate::server::http::middleware::http_filter`]
 //!   （启用过滤器时请求体/响应体会整体缓冲后转换；链为空时零影响）
-//! - WS：`server/ws/conn.rs` 收帧与全部出站写帧路径；
+//! - WS：`server/websocket/conn.rs` 收帧与全部出站写帧路径；
 //!   心跳 Ping/Pong 属协议控制帧，不过滤
 
 use std::sync::{Arc, RwLock};

@@ -8,8 +8,8 @@ use std::collections::HashMap;
 
 use bedcode_plugin_api::EndpointAuth;
 
-use crate::server::dtos::{ApiResponse, CODE_INVALID_REQUEST, CODE_PLUGIN_AUTH_FAILED};
-use crate::server::middleware::jwt_auth::get_claims_from_request;
+use crate::server::http::dtos::{ApiResponse, CODE_INVALID_REQUEST, CODE_PLUGIN_AUTH_FAILED};
+use crate::server::http::middleware::jwt_auth::get_claims_from_request;
 use crate::system::app_context::AppContext;
 
 // ==================== 插件动态 HTTP 端点代理 ====================

@@ -41,9 +41,9 @@ use bedcode_lib::mdns::advertiser::MdnsAdvertiser;
 use bedcode_lib::plugin::PluginHost;
 use bedcode_lib::server::core::app::start_http_server;
 use bedcode_lib::enums::{AuthPayload, AuthStage, SessionControlAction};
-use bedcode_lib::server::ws::message::Message;
-use bedcode_lib::server::ws::registry::WsSessionRegistry;
-use bedcode_lib::server::ws::WebSocketManager;
+use bedcode_lib::server::websocket::message::Message;
+use bedcode_lib::server::websocket::registry::WsSessionRegistry;
+use bedcode_lib::server::websocket::WebSocketManager;
 use bedcode_lib::session::{SessionConfigManager, SessionManager};
 use bedcode_lib::system::app_context::AppContextBuilder;
 use bedcode_lib::system::constants::network::SYNC_EVENT_BROADCAST_CAPACITY;
@@ -273,7 +273,7 @@ where
 }
 
 /// 从注册表查找客户端条目
-async fn registry_entry(client_id: &str) -> Option<bedcode_lib::server::ws::registry::ClientSummary> {
+async fn registry_entry(client_id: &str) -> Option<bedcode_lib::server::websocket::registry::ClientSummary> {
     WsSessionRegistry::global()
         .list_clients()
         .await

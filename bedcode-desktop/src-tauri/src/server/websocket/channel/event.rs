@@ -12,14 +12,14 @@
 //! `.scratch/2026-09-18-ws-base-service/issues/01-dead-code-removal.md` Comments）。
 //!
 //! 连接生命周期（心跳 / 认证超时 / 帧级过滤链 / 注册表）全部由骨架
-//! [`crate::server::ws::conn`] 承担，本文件只实现通道协议。
+//! [`crate::server::websocket::conn`] 承担，本文件只实现通道协议。
 
 use actix::prelude::*;
 
 use super::super::conn::{AuthMode, ChannelHandler, ConnCtx, WsConnBase};
 use crate::enums::{SessionControlPayload, TerminalPayload};
 use crate::server::core::link_crypto;
-use crate::server::ws::message::Message;
+use crate::server::websocket::message::Message;
 use crate::system::app_context::AppContext;
 
 /// 事件通道处理器（无自有状态：旧协议面全在骨架与订阅原语上）
@@ -231,7 +231,7 @@ impl EventChannel {
                 let app_ctx = AppContext::global();
                 let sm = app_ctx.session_manager().clone();
                 actix::spawn(async move {
-                    if let Err(e) = crate::server::services::terminal_service::handle_input(
+                    if let Err(e) = crate::server::websocket::services::terminal_service::handle_input(
                         &session_id,
                         TerminalPayload {
                             action: crate::enums::TerminalAction::Input { data, special_key },
@@ -283,7 +283,7 @@ impl EventChannel {
             let app_ctx = AppContext::global();
             let session_manager = Some(app_ctx.session_manager().clone());
 
-            let result = crate::server::services::session_control::handle_control_message(
+            let result = crate::server::websocket::services::session_control::handle_control_message(
                 message_id.clone(),
                 None, // session_id
                 chrono::Utc::now().timestamp_millis(),

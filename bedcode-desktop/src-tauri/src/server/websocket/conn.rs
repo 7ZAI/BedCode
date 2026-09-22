@@ -8,7 +8,7 @@
 //! - **通道级（[`ChannelHandler`]）**：收帧解析、关闭回调、认证通过回调、认证策略声明。
 //!
 //! 终端通道（`/ws/terminal/session/{id}` 控制帧协议）与事件通道（`/ws/event` 旧
-//! `Message` 兼容面）是该 trait 的两个实现（`server::ws::channel`）。往宿主 WS 服务器
+//! `Message` 兼容面）是该 trait 的两个实现（`server::websocket::channel`）。往宿主 WS 服务器
 //! 挂新通道 = 新增一个实现 + 路由构造点，不再改本文件（spec §3.2 A1）。
 //!
 //! wire 协议零变更：帧大小上限仍由路由侧 `frame_size` 生效，心跳间隔 / 认证超时 /
@@ -25,9 +25,9 @@ use tauri::Emitter;
 use crate::enums::auth::CryptoProposal;
 use crate::server::core::filter::{Direction, FilterContext, TrafficChannel, TrafficFilterChain};
 use crate::server::core::link_crypto;
-use crate::server::ws::registry::{ChannelKind, WsRegistration, WsSessionRegistry};
-use crate::server::ws::session::WsSession;
-use crate::server::ws::subscription::SubscriptionState;
+use crate::server::websocket::registry::{ChannelKind, WsRegistration, WsSessionRegistry};
+use crate::server::websocket::session::WsSession;
+use crate::server::websocket::subscription::SubscriptionState;
 use crate::session::GlobalOutputManager;
 use crate::system::app_context::AppContext;
 use crate::system::constants::event;
@@ -244,7 +244,7 @@ impl WsConnBase {
                 bound_session: Some(session_id),
                 ..ConnSpec::new(addr, ChannelKind::Terminal)
             },
-            Box::new(crate::server::ws::channel::terminal::TerminalChannel::new()),
+            Box::new(crate::server::websocket::channel::terminal::TerminalChannel::new()),
         )
     }
 
@@ -255,7 +255,7 @@ impl WsConnBase {
     pub fn new_event(addr: SocketAddr) -> Self {
         Self::new(
             ConnSpec::new(addr, ChannelKind::Event),
-            Box::new(crate::server::ws::channel::event::EventChannel::new()),
+            Box::new(crate::server::websocket::channel::event::EventChannel::new()),
         )
     }
 
@@ -542,7 +542,7 @@ impl WsConnBase {
         if let Some(handle) = app_ctx.app_handle() {
             let _ = handle.emit(
                 event::DEVICE_CONNECTED,
-                &crate::server::connection_types::DeviceConnectionEvent {
+                &crate::server::websocket::connection_types::DeviceConnectionEvent {
                     addr: self.session.addr.to_string(),
                     device_id: claims.sub.clone(),
                     device_name: self.session.device_name.clone(),
@@ -683,7 +683,7 @@ impl Actor for WsConnBase {
                         if let Some(handle) = app_ctx.app_handle() {
                             let _ = handle.emit(
                                 crate::system::constants::event::DEVICE_DISCONNECTED,
-                                &crate::server::connection_types::DeviceConnectionEvent {
+                                &crate::server::websocket::connection_types::DeviceConnectionEvent {
                                     addr: addr.clone(),
                                     device_id: device_id.clone(),
                                     device_name,

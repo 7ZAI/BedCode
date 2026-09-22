@@ -1289,16 +1289,16 @@ fn test_business_endpoints_dual_track_closed_loop() {
 
         // --- GET quick-actions：插件面 == 宿主旧 QuickActionItem 形状（逐字节） ---
         let quick = http(&session, "GET", "quick-actions", serde_json::Value::Null).await;
-        let golden_quick = serde_json::to_value(crate::server::dtos::config_dto::QuickActionListResponseData {
+        let golden_quick = serde_json::to_value(crate::server::http::dtos::config_dto::QuickActionListResponseData {
             actions: vec![
-                crate::server::dtos::config_dto::QuickActionItem {
+                crate::server::http::dtos::config_dto::QuickActionItem {
                     id: "qa-2".into(),
                     name: "构建".into(),
                     content: "pnpm run build".into(),
                     icon: None,
                     color: Some("#0f0".into()),
                 },
-                crate::server::dtos::config_dto::QuickActionItem {
+                crate::server::http::dtos::config_dto::QuickActionItem {
                     id: "qa-1".into(),
                     name: "部署".into(),
                     content: "pnpm run deploy".into(),
@@ -1316,8 +1316,8 @@ fn test_business_endpoints_dual_track_closed_loop() {
 
         // --- GET configs：插件面 == 宿主旧 ConfigItem 形状 ---
         let configs = http(&session, "GET", "configs", serde_json::Value::Null).await;
-        let golden_configs = serde_json::to_value(crate::server::dtos::config_dto::ConfigListResponseData {
-            configs: vec![crate::server::dtos::config_dto::ConfigItem {
+        let golden_configs = serde_json::to_value(crate::server::http::dtos::config_dto::ConfigListResponseData {
+            configs: vec![crate::server::http::dtos::config_dto::ConfigItem {
                 id: seeded_config["id"].as_str().unwrap().to_string(),
                 name: "工作台".into(),
                 environment: "linux".into(),
@@ -2218,7 +2218,7 @@ fn test_session_annotate_and_devices_closed_loop() {
         // `devices-connect-list` 互调 api 与宿主 `utils/devices_bridge` 已随
         // host-business-decarriage 收尾退役（宿主唯一消费方只需指纹字段）。
         assert_eq!(
-            crate::server::ws::WebSocketManager::global().list_clients().await.len(),
+            crate::server::websocket::WebSocketManager::global().list_clients().await.len(),
             0,
             "无头上下文连接注册表为空 → 宿主事实面为空"
         );

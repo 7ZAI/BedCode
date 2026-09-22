@@ -136,7 +136,7 @@ fn log_fallback(api: &str, err: &AppError) {
 /// - 认证中心策略拒绝（guest 自报 Err）→ 上抛拒绝原因（调用方拒绝连接）
 /// - 能力调用传输失败（实例缺失/trap）→ 宿主策略回退（防认证中心故障误杀全部连接）
 ///
-/// 调用方：`server/ws/conn.rs::authenticate_jwt`（WS 终端/事件通道首消息认证）+
+/// 调用方：`server/websocket/conn.rs::authenticate_jwt`（WS 终端/事件通道首消息认证）+
 /// `server/middleware/jwt_auth.rs::extract_and_verify_jwt`（HTTP /api 网关）。
 pub fn enforce_connection_policy(plugin_host: &PluginHost, token: &str) -> std::result::Result<(), String> {
     let host_ctx = plugin_host.wasm_host_ctx();

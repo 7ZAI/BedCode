@@ -24,8 +24,8 @@ impl WatchMode {
     /// 订阅者执行体模式原子取值（对齐 forward::MODE_REALTIME / MODE_BATCH）
     pub fn as_u8(self) -> u8 {
         match self {
-            WatchMode::Realtime => crate::server::ws::terminal_ws::forward::MODE_REALTIME,
-            WatchMode::Batch => crate::server::ws::terminal_ws::forward::MODE_BATCH,
+            WatchMode::Realtime => crate::server::websocket::terminal_ws::forward::MODE_REALTIME,
+            WatchMode::Batch => crate::server::websocket::terminal_ws::forward::MODE_BATCH,
         }
     }
 }
