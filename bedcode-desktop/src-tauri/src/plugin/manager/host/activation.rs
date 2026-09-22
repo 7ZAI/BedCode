@@ -17,6 +17,19 @@ impl PluginHost {
         result
     }
 
+    /// 插件实例是否在运行（`Activated` / `Degraded`）
+    ///
+    /// 与 [`Self::is_activated`] 的区别：Degraded 的实例是活的（前端模块会加载、扩展点已注册），
+    /// 只是启动初始化未完成。前端通道令牌的签发条件是「运行中」而非严格 Activated
+    /// （审计票 06；功能门禁仍严格 Activated）。
+    pub async fn is_running(&self, plugin_id: &str) -> bool {
+        let plugins = self.plugins.read().await;
+        plugins
+            .get(plugin_id)
+            .map(|p| matches!(p.state, PluginState::Activated | PluginState::Degraded(_)))
+            .unwrap_or(false)
+    }
+
     /// 停用所有已激活的插件（应用关闭流程）
     pub async fn deactivate_all(&self) -> crate::Result<()> {
         // 置关闭标志：deactivate 内的卸载动作（CLI 清理等）跳过，
@@ -664,6 +677,9 @@ impl PluginHost {
         // 统一清理：取消注册和撤销权限
         self.registry.unregister_plugin(plugin_id).await;
         self.permission.revoke_all(plugin_id);
+        // 前端通道令牌随停用回收（审计票 06）：令牌是「该插件当前这次激活」的凭证，
+        // 停用后旧令牌不得继续解析出身份（下次激活由 loader 重新签发）
+        self.frontend_channel().revoke_plugin(plugin_id);
         // 注销互调 api 清单（ADR-0017）：停用后目标调用被门禁拒绝
         self.wasm_host_ctx.api_registry().unregister(plugin_id);
         // core-plugin-manager：系统组件停用即撤销其能力提供，能力回落宿主原语

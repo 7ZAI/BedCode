@@ -32,7 +32,6 @@ impl WasmPlugin for Wasip3TestPlugin {
             description: "wasip3 编译链测试插件".to_string(),
             author: String::new(),
             main: String::new(),
-            sandbox: "inline".to_string(),
             permissions: Vec::new(),
             api: Vec::new(),
             contributes: Default::default(),

@@ -5,7 +5,6 @@
   "description": "Agent CLI 统一管理台：环境检测与一键安装、Skills 管理、供应商统一配置、使用统计与会话日志解析。\n使用：侧边栏「Agent Hub」→ 概览查看各 CLI 安装状态与环境；安装与更新在「安装与更新」页操作；Skills 浏览/编辑/分发/GitHub 安装/本地导入在「Skills」页操作。",
   "author": "BedCode",
   "main": "index.js",
-  "sandbox": "inline",
   "pluginType": "rust-ts",
   "rustLibrary": "bedcode_plugin_agent_hub",
   "icon": "icon.svg",

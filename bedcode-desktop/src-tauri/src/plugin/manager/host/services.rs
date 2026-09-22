@@ -361,6 +361,7 @@ impl Clone for PluginHost {
             runtime_error_notify_throttle: self.runtime_error_notify_throttle.clone(),
             shutting_down: self.shutting_down.clone(),
             user_plugins_dir: self.user_plugins_dir.clone(),
+            frontend_channel: self.frontend_channel.clone(),
         }
     }
 }

@@ -9,6 +9,60 @@ use crate::plugin::security::fs_auth::FsAuthChecker;
 use std::sync::Arc;
 use tauri::State;
 
+// ==================== 前端通道身份（审计票 06 / P0-5） ====================
+//
+// 本桥的插件面命令**不再信任参数里的 plugin_id**：调用方必须带 `credential`，
+// 身份由宿主解析（宿主面 loader 密钥 → 可操作任意目标；插件面令牌 → 目标必须是自己）。
+// 机制与威胁模型见 `plugin/security/frontend_channel.rs`。
+
+/// 宿主前端 bootstrap：取得本次页面加载的 loader 会话密钥（**首个调用者生效**）
+///
+/// 宿主前端在导入任何插件模块之前调用（`pluginLoader.loadAll()` 首行），插件代码开始运行时
+/// 密钥已被占位。页面加载时由 `on_page_load` 钩子重置，dev 下刷新可重新取得。
+#[tauri::command]
+pub async fn plugin_frontend_loader_session(
+    plugin_host: State<'_, Arc<PluginHost>>,
+) -> crate::Result<String> {
+    let session = plugin_host.frontend_channel().issue_loader_session()?;
+    tracing::info!("[API] plugin_frontend_loader_session: 宿主面凭证已签发");
+    Ok(session)
+}
+
+/// 插件前端：为指定插件签发通道令牌（需 loader 会话密钥 + 插件处于运行态）
+///
+/// 令牌随停用回收；同一插件重新签发会作废旧令牌。
+#[tauri::command]
+pub async fn plugin_channel_token(
+    plugin_id: String,
+    loader_session: String,
+    plugin_host: State<'_, Arc<PluginHost>>,
+) -> crate::Result<String> {
+    if !plugin_host.frontend_channel().verify_loader_session(&loader_session) {
+        tracing::warn!(plugin_id = %plugin_id, "[API] plugin_channel_token: loader 会话凭证无效");
+        return Err(crate::AppError::Plugin(
+            "invalid frontend loader session credential".to_string(),
+        ));
+    }
+    // 运行态（Activated / Degraded）才签发：未激活插件没有 granted 集，令牌无意义
+    if !plugin_host.is_running(&plugin_id).await {
+        tracing::warn!(plugin_id = %plugin_id, "[API] plugin_channel_token: 插件未运行，拒绝签发");
+        return Err(crate::AppError::Plugin(format!(
+            "Plugin {} is not running, channel token refused",
+            plugin_id
+        )));
+    }
+    let token = plugin_host
+        .frontend_channel()
+        .issue_token(&loader_session, &plugin_id)?;
+    tracing::info!(plugin_id = %plugin_id, "[API] plugin_channel_token: 插件面令牌已签发");
+    Ok(token)
+}
+
+/// 插件面命令的统一身份校验（fail-closed 语义与裁决规则见 `frontend_channel::authorize`）
+fn authorize_plugin_call(plugin_host: &PluginHost, plugin_id: &str, credential: &str) -> crate::Result<()> {
+    plugin_host.frontend_channel().authorize(plugin_id, credential)
+}
+
 // ==================== Plugin Lifecycle ====================
 
 /// 获取所有已加载插件列表
@@ -142,13 +196,16 @@ pub async fn plugin_frontend_load_report(
 
 /// 插件存储：获取值
 ///
-/// 校验调用者身份：plugin_id 对应的插件必须处于 Activated 状态
+/// 身份：`credential` 决定调用方（宿主面 / 该插件自己）；`plugin_id` 只作目标。
+/// 校验通过后再查激活态与 `storage` 权限（查的是**目标插件**的 granted 集）。
 #[tauri::command]
 pub async fn plugin_storage_get(
     plugin_id: String,
     key: String,
+    credential: String,
     plugin_host: State<'_, Arc<PluginHost>>,
 ) -> crate::Result<Option<serde_json::Value>> {
+    authorize_plugin_call(&plugin_host, &plugin_id, &credential)?;
     if !plugin_host.is_activated(&plugin_id).await {
         return Err(crate::AppError::Plugin(format!(
             "Plugin {} is not activated",
@@ -170,8 +227,10 @@ pub async fn plugin_storage_set(
     plugin_id: String,
     key: String,
     value: serde_json::Value,
+    credential: String,
     plugin_host: State<'_, Arc<PluginHost>>,
 ) -> crate::Result<()> {
+    authorize_plugin_call(&plugin_host, &plugin_id, &credential)?;
     if !plugin_host.is_activated(&plugin_id).await {
         return Err(crate::AppError::Plugin(format!(
             "Plugin {} is not activated",
@@ -192,8 +251,10 @@ pub async fn plugin_storage_set(
 pub async fn plugin_storage_delete(
     plugin_id: String,
     key: String,
+    credential: String,
     plugin_host: State<'_, Arc<PluginHost>>,
 ) -> crate::Result<()> {
+    authorize_plugin_call(&plugin_host, &plugin_id, &credential)?;
     if !plugin_host.is_activated(&plugin_id).await {
         return Err(crate::AppError::Plugin(format!(
             "Plugin {} is not activated",
@@ -217,8 +278,10 @@ pub async fn plugin_terminal_send_input(
     plugin_id: String,
     session_id: String,
     text: String,
+    credential: String,
     plugin_host: State<'_, Arc<PluginHost>>,
 ) -> crate::Result<()> {
+    authorize_plugin_call(&plugin_host, &plugin_id, &credential)?;
     if !plugin_host.is_activated(&plugin_id).await {
         return Err(crate::AppError::Plugin(format!(
             "Plugin {} is not activated",
@@ -267,15 +330,19 @@ pub async fn plugin_find_file_handler(
 
 /// 调用 Rust 插件的自定义 command
 ///
-/// 统一路由：前端通过 `invoke('plugin_invoke', { pluginId, command, args })` 调用
-/// PluginHost 内部查找对应 handler 并执行，前端无法伪造 plugin_id
+/// 统一路由：前端通过 `invoke('plugin_invoke', { pluginId, command, args, credential })` 调用。
+/// **身份由 `credential` 绑定**（审计票 06）：插件只能驱动自己的 command（目标必须等于令牌
+/// 身份），宿主前端持 loader 会话密钥可驱动任意插件的 command（宿主职权）。
+/// 此前该命令只查 `is_activated`，任何插件前端都能以他人 plugin_id 触发其命令副作用。
 #[tauri::command]
 pub async fn plugin_invoke(
     plugin_id: String,
     command: String,
     args: serde_json::Value,
+    credential: String,
     plugin_host: State<'_, Arc<PluginHost>>,
 ) -> crate::Result<serde_json::Value> {
+    authorize_plugin_call(&plugin_host, &plugin_id, &credential)?;
     plugin_host.invoke_rust_command(&plugin_id, &command, args).await
 }
 
@@ -311,13 +378,29 @@ pub async fn plugin_dev_reload(plugin_id: String, plugin_host: State<'_, Arc<Plu
 // ==================== File System Auth ====================
 
 /// 回复文件系统授权请求（由前端弹窗调用）
+///
+/// **只接受宿主面凭证**（loader 会话密钥，审计票 06）：授权请求事件是广播的，插件前端也
+/// 能 `listen` 到，若该命令不绑身份，插件就能替用户「同意」自己的文件访问请求——
+/// 那是把授权弹窗变成摆设。宿主弹窗 `FsAuthDialog.vue` 持宿主面凭证，插件拿不到。
 #[tauri::command]
 pub async fn plugin_fs_auth_respond(
     request_id: String,
     allowed: bool,
     remember: bool,
+    credential: String,
+    plugin_host: State<'_, Arc<PluginHost>>,
     fs_auth: State<'_, Arc<FsAuthChecker>>,
 ) -> crate::Result<()> {
+    use crate::plugin::security::frontend_channel::ChannelIdentity;
+    if plugin_host.frontend_channel().resolve(&credential) != Some(ChannelIdentity::Host) {
+        tracing::warn!(
+            request_id = %request_id,
+            "[API] plugin_fs_auth_respond: 非宿主面凭证，拒绝替代用户决策"
+        );
+        return Err(crate::AppError::Plugin(
+            "file system authorization must be answered by the host frontend".to_string(),
+        ));
+    }
     tracing::info!(
         "[API] plugin_fs_auth_respond: request_id={}, allowed={}, remember={}",
         request_id,

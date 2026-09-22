@@ -124,7 +124,6 @@ mod tests {
                 description: String::new(),
                 author: String::new(),
                 main: String::new(),
-                sandbox: "inline".to_string(),
                 permissions: vec!["storage".to_string()],
                 contributes: PluginContributes::default(),
                 plugin_type: PluginType::Rust,

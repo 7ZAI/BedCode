@@ -5,7 +5,6 @@
   "description": "终端会话中心：配对与信任、会话配置与生命周期编排、任务队列与 Agent 集成的单一权威。\n使用：侧边栏「设备配对 / 连接历史 / 终端会话 / Agent任务」四目录；会话创建时自动安装项目 hooks 同步任务状态；终端工具栏按钮打开任务队列弹窗；设置页贡献分组管理配对码 TTL、QR 有效期与 hooks。",
   "author": "BedCode",
   "main": "index.js",
-  "sandbox": "inline",
   "pluginType": "rust-ts",
   "rustLibrary": "bedcode_plugin_terminal_session",
   "permissions": [

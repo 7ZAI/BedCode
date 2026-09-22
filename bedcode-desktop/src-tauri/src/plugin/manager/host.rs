@@ -85,6 +85,9 @@ pub struct PluginHost {
     shutting_down: Arc<std::sync::atomic::AtomicBool>,
     /// 用户插件目录（zip 安装目标，dev 合入）：卸载与 zip 安装均以此目录为落点
     user_plugins_dir: PathBuf,
+    /// 前端插件通道身份（审计票 06 / P0-5）：loader 会话密钥 + 插件令牌 →
+    /// 身份解析，堵住「前端 `plugin_*` 命令自报 plugin_id」这条通道
+    frontend_channel: Arc<crate::plugin::security::frontend_channel::FrontendChannelRegistry>,
 }
 
 impl PluginHost {
@@ -272,6 +275,9 @@ impl PluginHost {
             runtime_error_notify_throttle: Arc::new(std::sync::Mutex::new(HashMap::new())),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             user_plugins_dir: user_plugins_dir.to_path_buf(),
+            frontend_channel: Arc::new(
+                crate::plugin::security::frontend_channel::FrontendChannelRegistry::new(),
+            ),
         };
 
         // 两阶段初始化：将 PluginHost（作为 PluginServices 实现）注入 WasmHostContext
@@ -383,6 +389,27 @@ impl PluginHost {
 
     pub fn storage(&self) -> &Arc<PluginStorage> {
         &self.storage
+    }
+
+    /// 前端插件通道身份注册表（loader 会话密钥 / 插件令牌）
+    pub fn frontend_channel(
+        &self,
+    ) -> &Arc<crate::plugin::security::frontend_channel::FrontendChannelRegistry> {
+        &self.frontend_channel
+    }
+
+    /// 重置前端通道会话（新的一次页面加载）：旧 loader 密钥与全部插件令牌失效
+    ///
+    /// 由 Tauri `on_page_load` 钩子调用（dev 下页面刷新需能重新取得宿主面凭证），
+    /// 也可在测试中显式调用以模拟前端重启。
+    pub fn reset_frontend_loader_session(&self, reason: &str) -> usize {
+        let revoked = self.frontend_channel.reset();
+        tracing::info!(
+            reason = %reason,
+            revoked_tokens = revoked,
+            "[PluginChannel] 前端通道会话已重置"
+        );
+        revoked
     }
 
     /// 获取 WASM 运行时引用
@@ -544,6 +571,9 @@ mod tests {
             runtime_error_notify_throttle: Arc::new(std::sync::Mutex::new(HashMap::new())),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             user_plugins_dir: std::env::temp_dir().join("bedcode-test-user-plugins"),
+            frontend_channel: Arc::new(
+                crate::plugin::security::frontend_channel::FrontendChannelRegistry::new(),
+            ),
         }
     }
 
@@ -557,7 +587,6 @@ mod tests {
                 description: String::new(),
                 author: String::new(),
                 main: "index.ts".to_string(),
-                sandbox: "inline".to_string(),
                 permissions: vec!["storage".to_string(), "terminal:input".to_string()],
                 api: vec![],
                 contributes: PluginContributes::default(),
@@ -594,7 +623,6 @@ mod tests {
             description: String::new(),
             author: String::new(),
             main: String::new(),
-            sandbox: "inline".to_string(),
             permissions: vec![],
             api: vec![],
             contributes: PluginContributes::default(),
@@ -2223,7 +2251,7 @@ mod tests {
             let dir = plugins_dir.join(id);
             std::fs::create_dir_all(&dir).unwrap();
             let manifest = format!(
-                r#"{{"id": "{}", "name": "{}", "version": "0.1.0", "sandbox": "inline", "pluginType": "rust-ts", "rustLibrary": "{}", "permissions": ["storage"]{}}}"#,
+                r#"{{"id": "{}", "name": "{}", "version": "0.1.0", "pluginType": "rust-ts", "rustLibrary": "{}", "permissions": ["storage"]{}}}"#,
                 id, id, rust_lib, manifest_extra
             );
             std::fs::write(dir.join("plugin.json"), manifest).unwrap();

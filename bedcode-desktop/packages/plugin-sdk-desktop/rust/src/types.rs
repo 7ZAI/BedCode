@@ -24,9 +24,6 @@ pub struct PluginManifest {
     /// 入口文件路径（相对于插件根目录，TS-only 插件使用）
     #[serde(default)]
     pub main: String,
-    /// 沙箱模式：MVP 仅支持 "inline"
-    #[serde(default = "default_sandbox")]
-    pub sandbox: String,
     /// 请求的权限列表
     #[serde(default)]
     pub permissions: Vec<String>,
@@ -115,10 +112,6 @@ pub struct ResourceOverrides {
     pub max_memories: Option<usize>,
     /// 单 Store 表数量上限；None = 继承
     pub max_tables: Option<usize>,
-}
-
-fn default_sandbox() -> String {
-    "inline".to_string()
 }
 
 fn default_plugin_type() -> PluginType {
@@ -322,7 +315,6 @@ pub struct PluginInfo {
     pub description: String,
     pub author: String,
     pub main: String,
-    pub sandbox: String,
     pub plugin_type: PluginType,
     pub permissions: Vec<String>,
     pub state: PluginState,
@@ -344,7 +336,6 @@ mod tests {
             "id": "com.bedcode.demo",
             "name": "Demo",
             "version": "0.1.0",
-            "sandbox": "inline",
             "permissions": ["storage", "terminal:input"],
             "pluginType": "rust-ts",
             "contributes": {
@@ -356,7 +347,6 @@ mod tests {
         assert_eq!(m.id, "com.bedcode.demo");
         assert_eq!(m.version, "0.1.0");
         assert_eq!(m.description, "");
-        assert_eq!(m.sandbox, "inline");
         assert_eq!(m.plugin_type, PluginType::RustTs);
         assert_eq!(m.permissions, vec!["storage", "terminal:input"]);
         assert_eq!(m.contributes.commands.len(), 1);
@@ -374,11 +364,27 @@ mod tests {
         let m: PluginManifest = serde_json::from_value(json).unwrap();
         let back = serde_json::to_value(&m).unwrap();
         assert_eq!(back["pluginType"], serde_json::json!("ts-only"));
-        assert_eq!(back["sandbox"], serde_json::json!("inline"));
         assert_eq!(back["description"], serde_json::json!(""));
         // contributes 序列化时带全部字段（serde(default) 只影响反序列化）
         assert_eq!(back["contributes"]["commands"], serde_json::json!([]));
         assert_eq!(back["contributes"]["subscribes"], serde_json::json!([]));
+    }
+
+    /// 退役字段兼容（审计票 06 裁决 2）：`sandbox` 已从 manifest 退役（前端不做隔离，
+    /// 安全边界在 Rust 端与 WASM 端），旧 plugin.json 仍带该字段时必须照常解析，
+    /// 且不得再被序列化回产物（避免把退役字段继续传播给下游）
+    #[test]
+    fn test_manifest_ignores_retired_sandbox_field() {
+        let json = serde_json::json!({
+            "id": "com.bedcode.legacy",
+            "name": "Legacy",
+            "version": "1.0.0",
+            "sandbox": "isolated"
+        });
+        let m: PluginManifest = serde_json::from_value(json).unwrap();
+        assert_eq!(m.id, "com.bedcode.legacy");
+        let back = serde_json::to_value(&m).unwrap();
+        assert!(back.get("sandbox").is_none(), "退役字段不得再出现在序列化输出: {back}");
     }
 
     #[test]

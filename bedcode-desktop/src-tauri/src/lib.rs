@@ -140,6 +140,31 @@ where
 /// 应用启动时间，用于计算启动耗时
 pub struct AppStartTime(std::time::Instant);
 
+/// 前端插件通道会话的生命周期钩子（审计票 06）
+///
+/// 每次页面加载重置 loader 会话密钥与全部插件令牌：宿主前端 bootstrap 会在导入任何插件模块
+/// 之前重新取得密钥，而插件代码只在模块被导入后才开始运行——「首个调用者生效」因此恒由宿主
+/// 前端赢得；dev 下页面刷新也能重新取得（否则刷新后插件前端全部拿不到凭证）。
+fn frontend_channel_session_hook() -> tauri::plugin::TauriPlugin<tauri::Wry> {
+    tauri::plugin::Builder::<tauri::Wry>::new("bedcode-frontend-channel")
+        .on_page_load(|webview, payload| {
+            let Some(plugin_host) = webview
+                .app_handle()
+                .try_state::<std::sync::Arc<crate::plugin::manager::host::PluginHost>>()
+            else {
+                // 页面加载早于 setup 装配 PluginHost（不应发生）：留痕不 panic
+                tracing::warn!("[PluginChannel] page load before PluginHost managed, session not reset");
+                return;
+            };
+            tracing::debug!(
+                url = %payload.url(),
+                "[PluginChannel] 页面加载，重置前端通道会话"
+            );
+            plugin_host.reset_frontend_loader_session("page-load");
+        })
+        .build()
+}
+
 pub fn run() {
     use tauri::Emitter;
 
@@ -152,7 +177,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init());
+        .plugin(tauri_plugin_process::init())
+        .plugin(frontend_channel_session_hook());
 
     // WDIO 测试插件仅 debug 构建注册（release 不编译该依赖、不注册该插件）
     #[cfg(debug_assertions)]
@@ -673,6 +699,8 @@ pub fn run() {
             commands::plugin::plugin_activate,
             commands::plugin::plugin_deactivate,
             commands::plugin::plugin_approve,
+            commands::plugin::plugin_frontend_loader_session,
+            commands::plugin::plugin_channel_token,
             commands::plugin::plugin_install_from_file,
             commands::plugin::plugin_uninstall,
             commands::plugin::plugin_mark_error,

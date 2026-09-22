@@ -73,7 +73,6 @@ pub struct DesktopPluginInfo {
     pub description: String,
     pub author: String,
     pub main: String,
-    pub sandbox: String,
     pub plugin_type: PluginType,
     /// WASM 模块文件名（仅 rust-ts 类型插件使用）
     pub rust_library: String,
@@ -102,7 +101,6 @@ impl From<&LoadedPlugin> for DesktopPluginInfo {
             description: p.manifest.description.clone(),
             author: p.manifest.author.clone(),
             main: p.manifest.main.clone(),
-            sandbox: p.manifest.sandbox.clone(),
             plugin_type: p.manifest.plugin_type.clone(),
             rust_library: p.manifest.rust_library.clone(),
             permissions: p.manifest.permissions.clone(),
@@ -165,7 +163,6 @@ mod tests {
             description: "descriptive text".to_string(),
             author: "tester".to_string(),
             main: "index.ts".to_string(),
-            sandbox: "inline".to_string(),
             permissions: vec!["broadcast".to_string(), "storage".to_string()],
             api: vec![],
             contributes: PluginContributes::default(),
@@ -212,7 +209,6 @@ mod tests {
         assert_eq!(info.description, "descriptive text");
         assert_eq!(info.author, "tester");
         assert_eq!(info.main, "index.ts");
-        assert_eq!(info.sandbox, "inline");
         assert_eq!(info.plugin_type, PluginType::RustTs);
         assert_eq!(info.rust_library, "bedcode_test.wasm");
         assert_eq!(info.permissions, vec!["broadcast", "storage"]);

@@ -256,15 +256,6 @@ impl PluginLoader {
             ));
         }
 
-        // MVP 只支持 inline 模式
-
-        if manifest.sandbox != "inline" {
-            return Err(crate::AppError::Plugin(format!(
-                "Unsupported sandbox mode: {}, MVP only supports inline",
-                manifest.sandbox
-            )));
-        }
-
         Ok(manifest)
     }
 }
@@ -332,15 +323,17 @@ mod tests {
         assert!(result.is_err());
     }
 
+    /// 退役字段兼容（审计票 06 裁决 2）：`sandbox` 已退役（前端不做隔离，安全边界只在
+    /// Rust 端与 WASM 端），旧产物带该键时按「老端忽略未知字段」的演进约定照常加载
     #[test]
-    fn test_load_manifest_unsupported_sandbox() {
+    fn test_load_manifest_ignores_retired_sandbox_field() {
         let tmp_dir = tempfile::TempDir::new().unwrap();
-        let plugin_dir = tmp_dir.path().join("isolated-plugin");
+        let plugin_dir = tmp_dir.path().join("legacy-sandbox-plugin");
         fs::create_dir_all(&plugin_dir).unwrap();
 
         let manifest_json = serde_json::json!({
-            "id": "com.test.isolated",
-            "name": "Isolated Plugin",
+            "id": "com.test.legacy-sandbox",
+            "name": "Legacy Sandbox Plugin",
             "version": "1.0.0",
             "main": "index.ts",
             "sandbox": "isolated"
@@ -349,7 +342,7 @@ mod tests {
         let manifest_path = plugin_dir.join("plugin.json");
         fs::write(&manifest_path, serde_json::to_string_pretty(&manifest_json).unwrap()).unwrap();
 
-        let result = PluginLoader::load_manifest(&manifest_path);
-        assert!(result.is_err());
+        let manifest = PluginLoader::load_manifest(&manifest_path).expect("退役字段不得阻塞加载");
+        assert_eq!(manifest.id, "com.test.legacy-sandbox");
     }
 }
