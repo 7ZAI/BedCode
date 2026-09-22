@@ -10,8 +10,11 @@ use super::*;
 /// `PluginStorage::get(plugin_id, "preauth_paths")` 读取。
 pub type PreauthProvider = Arc<dyn Fn(&str) -> Vec<String> + Send + Sync>;
 
-/// 预授权 storage key(file-transfer mount-local 时追加写入;其他插件可由
-/// provider 动态提供;缺字段 = 视为「无预授权路径」,直接放行)。
+/// 预授权 storage key（宿主只按这个 key 读插件私有 storage，**不认得是谁写的**：
+/// 写入方是插件自己的挂载配置面，经 `host-storage` 用同名 key 追加/去重）。
+/// 需要「启用前先拿到目录授权」的插件也可由 provider 动态提供；
+/// 缺字段 = 视为「无预授权路径」，直接放行（启用先行，避免
+/// 「配置需激活 → 激活需先配置」死锁）。
 pub const PREAUTH_PATHS_STORAGE_KEY: &str = "preauth_paths";
 
 /// 预授权提供者注册表:静态注册 + host function 动态注册共用,跨 PluginHost
