@@ -147,8 +147,11 @@ Rust 侧按内核五模块组织（`plugin.rs` 为唯一组合点/facade，外�
 - **security/（core-security）**：资源授权——framework（统一授权框架：ResourceKind × 三段决策管线
   声明/审批/强制，fs / api-call 资源实现）、approval（用户 zip 安装插件的权限审批与内容钉扎，ADR 0020：
   批准记录 + 目录哈希，`PluginHost::activate_plugin` 前置 `approval_gate` 裁决，弹层 UI 为
-  `PluginApprovalDialog.vue`）、fs_auth（文件系统访问四层校验：
-  路径白名单 → 插件白名单 → 已授权路径前缀（持久化）→ 弹窗授权，弹窗 UI 为 `FsAuthDialog.vue`）、
+  `PluginApprovalDialog.vue`）、fs_auth（文件系统访问**三层**校验：第一方具名集成目录预授权
+  （`FIRST_PARTY_TRUSTED_DIRS`，逐条注释归属）→ 已授权路径前缀（持久化「记住」）→ 弹窗授权，
+  弹窗 UI 为 `FsAuthDialog.vue`；票 07 退役了旧的「`.claude/` 子串路径白名单」与
+  「内置插件 = 任意路径放行」两条特权，命中层随日志 `layer=` 输出，
+  任务单元只走 `is_granted`（无弹窗、未授权即拒））、
   frontend_channel（前端通道身份：loader 会话密钥 / 插件通道令牌 → 身份，审计票 06）、
   api_registry（互调门，ADR 0017）
 - **bus（core-bus）**：插件间 Topic 消息总线（发布/订阅，JSON + 二进制双载荷 + 背压），经 MessageDispatcher trait 解耦与 PluginHost 的循环引用。
