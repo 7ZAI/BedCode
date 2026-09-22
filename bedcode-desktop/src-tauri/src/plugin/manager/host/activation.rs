@@ -38,9 +38,12 @@ impl PluginHost {
 
         let plugin_ids: Vec<String> = {
             let plugins = self.plugins.read().await;
+            // Degraded 也是活实例（前端模块已加载、扩展点已注册、持久化态按启用计，
+            // 见 `get_activated_state`）→ 退出时必须同样收到 `on_shutdown`；
+            // 此前只收 Activated，Degraded 插件在应用关闭时被静默跳过（审计票 09）。
             plugins
                 .values()
-                .filter(|p| matches!(p.state, PluginState::Activated))
+                .filter(|p| matches!(p.state, PluginState::Activated | PluginState::Degraded(_)))
                 .map(|p| p.manifest.id.clone())
                 .collect()
         };
@@ -216,6 +219,17 @@ impl PluginHost {
             match &loaded.state {
                 PluginState::Activated => {
                     tracing::debug!(plugin_id = %plugin_id, "[PluginHost] Plugin already activated, skipping");
+                    return Ok(());
+                }
+                // 并发双激活去重（审计票 09）：实例锁只保证串行、不保证去重，落进 `_`
+                // 分支会让第二次调用再跑一次 guest `activate()`（现仅靠 SDK OnceLock 兜底）。
+                // 此处幂等返回 Ok——返回 Ok 只表示「已在激活中」，终态以状态机为准；
+                // 「等待在途激活完成」需要跨调用同步原语与额外死锁面，本轮不引入。
+                PluginState::Activating => {
+                    tracing::debug!(
+                        plugin_id = %plugin_id,
+                        "[PluginHost] Plugin already activating, duplicate activation ignored"
+                    );
                     return Ok(());
                 }
                 PluginState::Error(e) => {

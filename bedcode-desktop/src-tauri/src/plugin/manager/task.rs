@@ -16,8 +16,10 @@
 //!   条目），运行中单元跑完（结果照记）；终态通知经 condvar（`execute-batch`
 //!   同步等待用）。
 //! - 生命周期：`purge_for_plugin`（宿主停用回收）cancel 全部在册任务 + 清回调
-//!   队列；应用 shutdown 时 cancel 全任务并等池排空（有上限），沿 Graceful
-//!   Shutdown ADR。
+//!   队列。**没有「应用 shutdown 时 cancel 全任务并等池排空」这一步**（审计票 09
+//!   核实后删除该承诺，避免注释漂移）：池是进程级 std OS 线程，应用退出即随进程
+//!   回收，且退出后已无结果消费方；生命周期入口只有 `purge_for_plugin`（按插件）
+//!   与 `cancel`（按任务）两处。
 //!
 //! 回调管道（spec §5.3）：每插件一条**有界** tokio channel（深度
 //! [`PLUGIN_TASK_CALLBACK_QUEUE_DEPTH`]）+ 单消费派发任务（tokio，串行 = 实例锁

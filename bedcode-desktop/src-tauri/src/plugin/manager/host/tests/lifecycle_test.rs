@@ -1,7 +1,7 @@
 //! 非 WASM 插件的激活 / 停用 / 持久化 / 启动期自动激活用例。
 
-use super::*;
 use super::scaffold::*;
+use super::*;
 
 // ==================== 激活 / 停用（非 WASM 插件） ====================
 
@@ -162,3 +162,51 @@ async fn test_auto_activate_from_persisted_state() {
     assert_eq!(persisted.get(TEST_PLUGIN_ID), Some(&true));
 }
 
+/// 退出路径必须覆盖 Degraded 实例（审计票 09）：Degraded 是活实例（前端模块已加载、
+/// 扩展点已注册、持久化态按「启用」计，见 `get_activated_state`），只收 Activated
+/// 会让它在应用关闭时被静默跳过、收不到 `on_shutdown`。
+#[tokio::test(flavor = "multi_thread")]
+async fn test_deactivate_all_covers_degraded() {
+    let host = setup_host().await;
+    host.plugins.write().await.insert(
+        "com.bedcode.degraded".to_string(),
+        make_plugin(
+            "com.bedcode.degraded",
+            PluginSource::FileScan,
+            PluginState::Degraded("init failed".to_string()),
+        ),
+    );
+    host.plugins
+        .write()
+        .await
+        .insert(TEST_PLUGIN_ID.to_string(), make_plugin(TEST_PLUGIN_ID, PluginSource::FileScan, PluginState::Activated));
+
+    host.deactivate_all().await.unwrap();
+
+    assert_eq!(
+        host.get_plugin("com.bedcode.degraded").await.unwrap().state,
+        PluginState::Deactivated,
+        "Degraded 实例必须在退出流程中被停用"
+    );
+    assert_eq!(host.get_plugin(TEST_PLUGIN_ID).await.unwrap().state, PluginState::Deactivated);
+}
+
+/// 重复激活去重（审计票 09）：`Activating` 是瞬时态，此时再请求激活必须**幂等返回**
+/// 且不推进状态机——此前它落进 `_ =>` 分支，第二次调用会把 guest `activate()` 跑第二遍
+/// （实例锁只保证串行、不保证去重）。
+#[tokio::test(flavor = "multi_thread")]
+async fn test_repeat_activation_during_activating_is_idempotent() {
+    let host = setup_host().await;
+    host.plugins.write().await.insert(
+        TEST_PLUGIN_ID.to_string(),
+        make_plugin(TEST_PLUGIN_ID, PluginSource::FileScan, PluginState::Activating),
+    );
+
+    host.activate_plugin(TEST_PLUGIN_ID, false).await.unwrap();
+
+    assert_eq!(
+        host.get_plugin(TEST_PLUGIN_ID).await.unwrap().state,
+        PluginState::Activating,
+        "Activating 期间的重复激活必须原样返回，不得推进状态机"
+    );
+}
