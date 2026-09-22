@@ -4,7 +4,7 @@
 
 **Blocked by:** 无
 
-**Status:** in-progress（2026-09-22 完成 3 项并提交 `28cf5e889`；单元超时与 purge 次序留待下轮，理由见「实施记录」）
+**Status:** 待裁决（2026-09-22：验收 2 已存在、3/4/5/6 已完成并提交 `28cf5e889` + `a2b169a0b`；**只剩验收 1 单元超时**，需用户在「看门狗抢占」与「退役常量」间裁决，见实施记录 §D）
 
 ## 现状
 
@@ -51,14 +51,33 @@
 **缺一条配额用例**：`task.rs` 的 `mod tests` 只有纯函数用例（无 `WasmHostContext` 构造工具），
 补它要先造宿主上下文 fixture —— 留待下轮连同单元超时一起做。
 
-### C. 未完成（留待下轮，避免半成品）
+### C. 已完成：purge 次序与回调 channel 复活（验收 6，提交 `a2b169a0b`）
 
-- **验收 1 单元超时**：`PLUGIN_TASK_UNIT_TIMEOUT_MS` 仍零引用。`execute_unit` 是**同步阻塞体**
-  （`fs::fs_read` / `http::http_fetch` / `process::process_run_sync` 直调），池线程内无法协作中断；
-  要真正「超时后释放槽位」需看门狗线程 + 弃用线程补偿（或把阻塞单元改成可中断调用），属独立设计，
-  本轮不做。
-- **验收 6 purge 次序 / purge 后回调 channel 复活**：需 `deactivate_plugin_inner` 与
-  `enqueue_event`（`task.rs:861-868`）联动改造，同上留待下轮。
+- `enqueue_event` 新增判据 `may_open_callback_channel(owner)`：注册表里已无该属主在册任务时直接
+  丢弃、**不新建** channel（`purge_for_plugin` 只 cancel 任务、不中断在跑单元，此前在飞单元跑完
+  走到这里会重建 channel + 消费派发任务 → 二者永久残留，且事件派发给已停用的插件）。
+  判据不误伤正常路径：`submit` 的 started 事件在 `register_job` 之后投出，任务必在表；
+  `execute-batch` 不留痕但也不投事件。
+- `deactivate_plugin_inner` 在 guest `on_shutdown` / `deactivate` **之后**再跑一遍
+  `task::purge_for_plugin`（幂等二次清扫），补上「原 purge 早于 guest 清理」的次序小窗。
+- 用例 `may_open_callback_channel_requires_registered_job` + 变异自检（函数改恒 true → 转红）；
+  既有 `task_e2e::test_task_submit_events_dispatched_and_status` 仍绿，作为「正常路径未被误伤」的
+  回归证据。
+
+### D. 未完成：单元超时（验收 1）——**需用户裁决后实施**
+
+`PLUGIN_TASK_UNIT_TIMEOUT_MS` 仍零引用。根因：`execute_unit` 是**同步阻塞体**（`fs::fs_read` /
+`http::http_fetch` / `process::process_run_sync` 直调），池线程内没有抢占点。
+
+- **选项 A：看门狗 + 弃用线程补偿**（真释放槽位）。新增 in-flight 单元表
+  （job_id / index / owner / started_at_ms）+ 一条监督线程按 `PLUGIN_TASK_UNIT_TIMEOUT_MS` 扫描，
+  超时单元写 fail-visible 结果并推进并发窗口；被卡住的池线程永不返回 ⇒ 必须为池补 spawn 一条新
+  线程，否则长期运行后池被耗尽（比现状更糟）。代价：新增全局状态与一条常驻线程，且要处理
+  「监督线程与池线程同时写一个单元结果」的竞态（需给单元加 Pending/Running/Done 状态位）。
+- **选项 B：退役常量 + 如实写文档**（与验收 3 同思路）。删除 `PLUGIN_TASK_UNIT_TIMEOUT_MS`，
+  文档写明「v20 不提供单元级抢占：任务级墙钟 `PLUGIN_TASK_JOB_TIMEOUT_MS` 是唯一兜底，阻塞单元
+  的超时由被调用方自带参数负责（如 `process.run-sync` 的 timeout）」。代价：票面承诺不兑现，
+  但消除「常量与实现脱钩」的漂移。
 
 ### D. 门禁（实跑）
 
