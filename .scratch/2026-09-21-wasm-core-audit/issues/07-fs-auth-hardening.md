@@ -4,7 +4,8 @@
 
 **Blocked by:** 01
 
-**Status:** in-progress（2026-09-22：验收 1 / 2 / 4 / 5 / 6 / 7 完成；**第 3 项（preopen 只读档 + 五同步点）经用户裁决延到下一批**）
+**Status:** done（2026-09-22 第一批：验收 1 / 2 / 4 / 5 / 6 / 7；**第二批（同日）补齐验收 3 = preopen 只读档 + 五同步点**，
+见「实施记录（第二批）」；该批同时收掉遗留 2 的判定）
 
 ## 本批范围裁决（2026-09-22 用户裁决）
 
@@ -30,7 +31,7 @@
 
 - [x] `.claude/` 免弹窗规则移出代码：改为内核配置/设置项里的**路径白名单数据**（默认空），或改为「宿主已知的第一方集成目录」显式清单并逐条注释归属；改造后 `fs:read` 插件默认无法静默读 `~/.claude/**`（红测断言）→ 走**显式具名清单**（裁决 1）；死字段 `path_whitelist` 一并删除（不留无人走的分层），层数由四收为三
 - [x] 插件白名单语义收窄：白名单只表示「激活时按 manifest 声明目录预授权、无弹窗」，不再是任意路径放行——`check()` 内改为继续走持久化授权判定 + 声明目录前缀比对；两内置插件的声明目录来自其 manifest / 设置页真源（file-transfer 共享目录、session 的 Agent 集成目录）→ 见「真源核对」：file-transfer 零 fs 消费者，条目直接删除
-- [ ] manifest 支持 preopen 只读声明（`{path, readonly}` 或 `wasiPreopenDirs` 增只读形态），SDK TS/Rust + 打包 CLI + 前端合法集同步（AGENTS §7 五同步点）→ **本批不做**（裁决 2：`component.rs` 与 SDK 在隔壁线手上）
+- [x] manifest 支持 preopen 只读声明（`{path, readonly}` 或 `wasiPreopenDirs` 增只读形态），SDK TS/Rust + 打包 CLI + 前端合法集同步（AGENTS §7 五同步点）→ **第二批已做**（2026-09-22，走 `{path, readonly}` 两形态并存，见「实施记录（第二批）」）
 - [x] 层级注释与文档统一（三层 or 四层，code-map:137 与 AGENTS §7 一并改口径），错误/日志文案说明**命中的是哪一层**
 - [x] 复核并处置 `task.rs:291` 注释：若池线程确实可能触发弹窗 → 改为「池线程只走 `is_granted` 无弹窗判定，未授权即 fail-visible 拒绝」；若不会 → 注释保留并在本票 Comments 记录判据 → **注释是假的**，已补真实现（见「task 弹窗判据核对」）
 - [x] 回归：`fs_auth` 既有用例（含 canonicalize 前置、相邻目录前缀不误匹配）全部保留；宿主真实闭环 `cargo test` 全绿
@@ -125,11 +126,153 @@ staged 删除或他们的在途 hunk 卷进本票。⇒ **他们的 diff 里因�
 
 ### 遗留（本票不做，须另立项或下一批）
 
-1. preopen 只读档 + 五同步点（裁决 2 延后）。
-2. **`is_granted` 在 `wasm_runtime.rs:207` 与 `component.rs:1498` 之外再无消费者**：
+1. ~~preopen 只读档 + 五同步点（裁决 2 延后）。~~ **第二批已完成**，见文末「实施记录（第二批）」。
+2. ~~**`is_granted` 在 `wasm_runtime.rs:207` 与 `component.rs:1498` 之外再无消费者**：
    WASI 预打开只覆盖 manifest 声明目录，插件经 `host-fs` 的路径授权与预打开集合是两套——
-   下次动 preopen 时一并判「要不要让它们对齐」。
+   下次动 preopen 时一并判「要不要让它们对齐」。~~ **第二批已判：不对齐**（结论与理由见
+   「两套集合为何不对齐」）。附带纠正一句：第一批之后 `is_granted` 已有三个生产消费者
+   （`component.rs:1477` 预打开、`task.rs:327` 任务单元、`framework.rs:207` authorize 阶段 2）。
 3. **无头/无 AppHandle 场景一律拒绝**（本批未改，行为不变）：生产里 fs 弹窗需要前端在跑；
    若将来有 headless 服务形态，fs 面需要另设非交互授权通道。
 4. 文件浏览的授权是**按工作区根一次**，切换工作目录会再弹一次——如实接受（这是「按需授权」的定义，
    不是缺陷）；插件没有也不该有「记住所有历史工作区」的特权。
+5. **只读档零生产消费者**：截至本批，四个生产插件里只有 `com.bedcode.ai-chatbox` 声明
+   `wasiPreopenDirs`，且它要写数据，所以**没有任何产物用到 `{path, readonly}` 形态**。
+   形态、门禁与用例都就位了，缺的是一个真实读者——不要在「为了让新档位看起来被用」的动机下
+   回头改 ai-chatbox 的语义。
+
+## 实施记录（第二批，2026-09-22）：preopen 只读档 + 五同步点
+
+用户 2026-09-22 夜裁决：三张未完成票（07 延后项 / 10 / 12）都在对侧在途热区，先做本项——
+它是唯一「对侧在途文件只有格式化 diff、且不触发 WIT/ABI bump」的一张。
+
+### 形态：`{path, readonly}` 两形态并存
+
+`wasiPreopenDirs` 条目从 `string[]` 扩成「裸路径字符串 或 `{path, readonly}` 对象」，
+**逐字仿票 08 的 `contributes.httpEndpoints` `{path, auth}` 先例**（同一份 manifest 里已经有
+一个「两形态并存 + 构建期判形态 + 宿主判取值」的先例，不该另起一套）。
+
+**缺省档 = 可写**，这一处**有意偏离**票 08 的「缺省即最严」，理由两条，写下来免得下轮当成漏做：
+
+1. 既有 manifest 全是裸字符串，且当时**只有可写一档**——把「未声明」解释成可写才是零迁移；
+2. 若「写成对象但没写 readonly」= 只读、而「写成字符串」= 可写，同一个列表里会出现
+   **两种形态各自的缺省档不同**这种反向意外（票 08 那边不存在这个问题：档位在旧形态里根本没有
+   对应物，收紧作用在「同一条目新增的可选键」上）。
+
+`readonly: false` 与「不写该键」是同一个合法态。
+
+### 档位不构成免授权通道（裁决 3 落地）
+
+只读档只作用在 guest 的**写能力**上：`resolve_preopen_dirs` 的 `is_granted` 过滤对两档一视同仁，
+`preauthorize_plugin` 收集弹窗候选时同样不看档位。裁决 3 当初否掉的正是「声明即免弹窗」，
+所以这里必须反向按住——变异 M3（`dir.readonly() || is_granted(...)`）就是这条的守门用例。
+
+### 反序列化为何手写而不是 derive
+
+先按 `#[serde(untagged, deny_unknown_fields)]` 做过：未知键确实**会被拒**（不静默降级），
+但错误串只有 `data did not match any variant of untagged enum WasiPreopenDir`——不点名键、
+不点名合法字段。而这条声明是**第三方 zip 绕开我们构建 CLI 时唯一的仲裁点**（AGENTS §6：
+输入校验与权限仲裁在 Rust 端，前端校验只是 UX），错误不可定位等于把 CLI 拦得住的拼写错误
+变成用户看不懂的「插件加载失败」。于是 `WasiPreopenDir` 改成 derive Serialize + 手写
+`Deserialize`（走 `from_json`），与 `EndpointAuth::parse_with`「未知取值一律 Err，
+绝不静默降级为较宽档位」同口径。变异 M4 证明这条承重。
+
+### 五同步点实际落点
+
+| 同步点 | 落点 | 内容 |
+| --- | --- | --- |
+| SDK Rust | `packages/plugin-sdk-desktop/rust/src/types.rs` | 新增 `WasiPreopenDir`（`Path` / `Declared` + `from_json` + 手写 `Deserialize` + `path()` / `readonly()` / `with_path()`），`PluginManifest.wasi_preopen_dirs` 换成 `Vec<WasiPreopenDir>` |
+| SDK TS | `packages/plugin-sdk-desktop/src/types.ts` | `PluginManifest.wasiPreopenDirs?` + `WasiPreopenDirDecl` / `WasiPreopenDir` 两个导出类型 |
+| 打包 CLI | `packages/plugin-sdk-desktop/bin/manifest-validate.js` | 条目形态 / path 非空 / 未知键 / `readonly` 非布尔四类构建期错误，文案点名键与合法字段 |
+| 宿主 Rust | `wasm_runtime/component.rs`（`build_wasi_ctx` 按档选 `FsPerms::ReadOnly`/`ReadWrite`，日志带 `perms = read-only|read-write`）+ `wasm_runtime.rs` / `host/activation.rs` / `host/preauth.rs` / `host.rs` 签名与导入 | 档位沿 `expand → resolve → mount` 一路带下去 |
+| 前端 | 无 | 见下条「前端合法集为何没有第五处」 |
+
+**前端合法集为何没动**：AGENTS §7 那句「前端合法集」指的是**权限位**的合法集
+（`src/plugin/permission.vocabulary.ts`，读 SDK 生成物）。本项不是权限位，且
+`bedcode-desktop/src/plugin/types.ts` 里的前端 `PluginManifest` 是一份**故意收窄的双写副本**
+——`api` / `wasmHash` / `type` / `dependencies` / `resourceOverrides` 都不在里面，前端没有任何
+一处读 `wasiPreopenDirs`（全仓 grep 只有 `usePluginManager.ts` 的一句注释）。往收窄副本里补一个
+只有宿主 Rust 读的字段，是给下一轮多留一处必须同步的漂移面，故不落。**这不是漏做。**
+
+### 两处容易漏的点
+
+1. **`with_path` 的档位粘性**：`${home}` 展开在 `expand_preopen_declarations` 里做，若展开实现
+   顺手重建条目（`WasiPreopenDir::writable(expanded)`），只读声明会在到达 `preopened_dir` **之前**
+   就被抹掉——外部看不出来（路径对、挂载成功、只是档错了）。所以展开走 `with_path` 而不是重建，
+   并单独立 `expand_preopen_declarations_keeps_read_only_tier`（变异 M2 由它 + 端到端一起按住）。
+2. **只读档仍然幂等建目录**：`preopened_dir` 要求目录已存在（wasmtime 语义），宿主建空目录只是
+   给 guest 一个可挂载的锚点，guest 自己写不进去（写能力在 WASI 层由 `OpenMode` 拒）。
+   把「只读」实现成「干脆不建 / 不挂」会让插件连读都读不到——`build_wasi_ctx_mounts_read_only_dir_and_reports_it`
+   按住这条。
+3. **激活期的漂移检测只比路径、不比档位**（`activation.rs` 阶段 2）：档位由 manifest 决定，而
+   manifest 变更（重装 / dev-reload）必然走 `load_plugin_from_file` 重新实例化，不存在
+   「路径相同、档位陈旧」的实例存活窗口。已把这段判断写进注释，防止下轮误加档位比较。
+
+### 两套集合为何不对齐（收掉遗留 2）
+
+WASI 预打开是**声明驱动、实例期定形**的挂载集合（要求目录已存在、生命周期内不变、改一次要重建实例）；
+`host-fs` 的路径授权是**调用驱动、逐次仲裁**的活集合。对齐的两个方向都不成立：
+
+- 把预打开扩到「已授权全集」⇒ 等于「授权过就能预打开任意目录」，正是裁决 3 否掉的形态，
+  而且每次新增授权都要重建实例；
+- 把 `host-fs` 收窄到「仅预打开目录」⇒ 直接打断 terminal-session 的文件浏览（根是用户选的任意目录，
+  见「真源核对」表第三行）。
+
+**结论：两套集合是两种能力，不合并、不互相推导。**只读档的加入不改变这个判断（它只收窄第一套的写能力）。
+
+### 行为变更（用户可见）
+
+- **零变化**：既有 manifest 全部是裸路径形态，档位落在可写侧，挂载行为与改造前逐字一致。
+  新档位要生效必须插件主动改成对象形态。
+- 一处**新增的严格性**：`wasiPreopenDirs` 条目里出现未知键、或 `readonly` 写成非布尔，
+  构建期被 `manifest-validate` 拒、运行期使整份 manifest 解析失败（该插件不加载并在日志点名条目）。
+  此前这些键会被 serde 静默忽略。选择「拒」而不是「忽略该条」的理由见上文仲裁点。
+- **SDK 公开面是 source-breaking**：`PluginManifest.wasi_preopen_dirs` 的类型由 `Vec<String>`
+  变成 `Vec<WasiPreopenDir>`，外部 Rust 插件若读写该字段需按新 SDK 重建（仓内消费者只有
+  `vec![]` / `Vec::new()` 三处，全部零改动通过）。按票 06 的既有口径登记：
+  **下次发布 SDK 时按 0.x 记 breaking**（npm/cargo 版本号本轮不动，发布链强制两处一致）。
+
+### 门禁实跑（第二批）
+
+- SDK Rust `cargo test --lib`：**114 passed / 0 failed**（本票新增 9 条：两形态解析、缺省档、
+  `readonly` 两值、未知键、六类非法形态逐个点名、序列化回形态、空数组省略键、混列顺序、
+  `with_path` 粘性）
+- 宿主 `~/.cargo/bin/cargo test --lib`：**1158 passed / 0 failed**（= 1155 + 本票 3 条新用例）；
+  `cargo test` **全 target 绿**（lib 1158 + 集成 12 passed / 2 ignored，逐 target 0 failed）；
+  `[skip]` 前缀计数 **0**
+- 防假绿：`cargo check --lib --tests` 干净（改的是签名与类型，`--lib` 单看会漏掉测试引用）
+- 产物链：`node plugins/ai-chatbox/scripts/build.js` 与 `agent-hub` 成功（ai-chatbox 是唯一的
+  `wasiPreopenDirs` 声明者，产物里该键按字符串形态原样保留、`wasmHash` 已注入）→
+  `node scripts/package-plugins.mjs --target desktop --skip-build --no-zip --only com.bedcode.ai-chatbox`
+  复核通过
+- SDK JS：`vitest run --pool=forks` **14 files / 158 passed**（含 `manifest-validate.test.ts`
+  从 13 → 22 条）；`pnpm run build`（tsup `--dts`）成功 ⇒ 新增 TS 类型可生成
+- 前端：`NODE_OPTIONS=--max-old-space-size=4096 vitest run --pool=forks --maxWorkers=2`
+  **79 files / 788 passed、1 failed** —— 唯一红是 `plugins/terminal-session/src/__tests__/plugin-contract.test.ts`
+  的「C1 插件身份五处一致」api 数组 pin，**既有红**（交接文档 §6 已登记，成因是对侧在途改了
+  `plugins/terminal-session/plugin.json` 的 api 清单），与本票零交集
+- 根 `pnpm run test:run`（`scripts/*.test.mjs`）：**67 passed / 0 failed**
+- `pnpm exec eslint .`：**0 error**（120 warning 不计入门禁）
+- `pnpm exec vue-tsc --noEmit`：仅 §6 登记的 3 条既有红（`TerminalMock.vue` 缺 `@/utils/terminal*`），
+  无新增
+- `rustfmt --check`（按文件，`src-tauri/rustfmt.toml` max_width=120）：本批改动的 6 个宿主文件
+  **各 0 diff**。**未对共享文件写回**——`component.rs` / `runtime_preauth_test.rs` 对侧在途，
+  按它们 rustfmt-clean 的建议**手工**改的行（链式调用折行、`assert_ne!` 多行化），
+  行尾与相邻 hunk 零沾染（`host.rs` 只加了一个导入名，`WasiPreopenDir` 经 `use super::*` 链
+  供 `activation.rs` 与该测试文件用，无 unused-import 告警）
+- 变异自检五处，各自命中预期用例后还原复绿：
+  | # | 变异 | 转红的用例 |
+  | --- | --- | --- |
+  | M1 | 挂载时忽略档位（`if false && dir.readonly()`） | `test_wasi_preopen_read_only_std_fs_e2e`（guest 写出 `{"ok":true}`），可写档 e2e 仍绿 ⇒ 两条 e2e 各钉一档 |
+  | M2 | `${home}` 展开时重建条目、丢掉档位 | `expand_preopen_declarations_keeps_read_only_tier` + 只读 e2e（2 红） |
+  | M3 | 只读档免授权（`dir.readonly() \|\| is_granted(...)`） | `resolve_preopen_dirs_filters_ungranted_and_blank`（该用例已塞进一条未授权的只读声明） |
+  | M4 | `from_json` 去掉未知键检查 | `test_wasi_preopen_rejects_unknown_key_in_object_entry` |
+  | M5 | CLI 去掉 `readonly` 布尔检查 | `manifest-validate.test.ts` 的 C-W5 |
+- **对侧在途红（非本票造成，逐文件归属已核）**：`node plugins/terminal-session/scripts/build.js`
+  与 `plugins/file-transfer/scripts/build.js` 当前编译失败——terminal-session 报 3 处
+  （`src/auth_records/mod.rs:54/116`、`src/trust/source.rs:28`，`auth_records/` 是对侧**未跟踪的
+  新目录**）；file-transfer 报 1 处（构建期 api 漂移锁比对对侧在途的 `plugins/terminal-session/plugin.json`）。
+  错误路径与本票 diff 零交集，且四个插件的 guest 源码里 `wasi_preopen` 命中数为 **0**
+  （guest 不读该字段）。**未代修、未 stash、未 checkout 对侧内容**；产物沿用 21:21 那份
+  （票 07/14 收尾时构建），故 `--lib` 的 S1 闭环用例仍跑真产物（`[skip]` = 0 已核）。
+  留给对侧收尾后复跑：两条 build.js + 那条 C1 api pin 前端红。

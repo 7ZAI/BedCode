@@ -3,7 +3,8 @@
 Status: 进行中（审查已完成并取证，本文件是结论与证据真源。修复票 `issues/01..12` + 测试清理票 `issues/13`
 + 新立票 `issues/14`（`wasm_hash` 生产者，由票 03 登记项单独立票）与 `issues/15`（构建链权限映射漂移）；
 **已落地 01 / 02 / 03 / 04 / 05 / 06 / 07 / 08 / 09 / 11 / 13 / 14 / 15，P0 全部完成**，
-剩 P1 结构票 `10`（monitor 出口 + config 二选一）与 `12`（内核业务清零），以及票 07 延后的 preopen 只读档。
+票 07 的延后项（preopen 只读档 + 五同步点）已于 2026-09-22 第二批补齐 ⇒ **票 07 转 done**。
+剩 P1 结构票 `10`（monitor 出口 + config 二选一）与 `12`（内核业务清零）两张。
 逐票状态看 `issues/*` 的 Status 行，接手顺序与门禁跑法看 `handoff-2026-09-22.md`）
 Date: 2026-09-21
 范围: **仅桌面端** WASM 内核 `bedcode-desktop/src-tauri/src/plugin/**`（含 `wasm_runtime`/`host_impl`/`security`/`bus`/`config`/`monitor`/`manager/**`）+ 前端插件通道 `bedcode-desktop/src/plugin/**` + SDK `packages/plugin-sdk-desktop/**` + 入站面 `server/**` 中与插件相关的路径。移动端零改动，受损/对齐项见 §7。
@@ -47,7 +48,7 @@ Date: 2026-09-21
 ## 3. 守住的边界（本轮确认，勿回退）
 
 - **无裸网络旁路**：`p2::add_to_linker_async` + `p3::add_to_linker`（`component.rs:730-737`）虽全量接线 WASI，但 wasmtime-wasi 48 的 `WasiCtxBuilder::new()` 默认「TCP/UDP 允许但所有地址默认拒绝、ip-name-lookup 拒绝」（该 crate `src/ctx.rs:47-66`，`sockets/mod.rs:160-165` `SocketAddrCheck::default` 恒 false），代码亦未调 `inherit_network`；`wasmtime-wasi-http` 不在依赖树 → 插件无法绕开 `host-http`。SSRF 侧公网→私网跳转 Stop（`host_impl/http.rs:49-73`）。
-- **无文件系统旁路**：WASI preopen 逐个经 `fs_auth.is_granted`（无弹窗版）过滤（`component.rs:1477-1490`），无 tokio 上下文时返回空 = fail-closed；`FsPerms::ReadWrite` 是唯一的放宽点（无只读档，见票 07）。
+- **无文件系统旁路**：WASI preopen 逐个经 `fs_auth.is_granted`（无弹窗版）过滤（`component.rs:1457-1479`），无 tokio 上下文时返回空 = fail-closed；挂载档由 manifest 条目声明（票 07 第二批：`{path, readonly}` 两形态，只读档 → `FsPerms::ReadOnly`，选档在 `component.rs:1374-1378`），**档位只收紧 guest 写能力、不放宽授权**——未授权目录两档都挂不上（变异自检 M3 按住这条）。
 - **资源与逃逸**：`memory_reservation` + `memory_may_move(false)` + `max_wasm_stack`（`wasm_runtime.rs:665-677`）+ `ResourceLimiter`（`:314-356`）；AOT 产物只写宿主 cache 目录、明确不放插件目录（`wasm_runtime.rs:213-219,696-710`，理由：`Component::deserialize` 是 unsafe、假定数据可信）。
 - **身份不可伪造（guest 侧）**：`plugin_id` 是 Store state 字段，由宿主在实例化时写入（`component.rs:836-838`），Host trait 转发时一律取 `&self.plugin_id`（如 `component.rs:163-166`），非 guest 传参；`host_api_call`/`bus` 的 caller 身份同源。
 - **故障半径**：`catch_unwind` + trap 限频自动重载（`host/commands.rs:72-157`）；实例串行靠 `Arc<Mutex<LoadedWasmPlugin>>` 且**持锁跨 `.await`**（`commands.rs:149`、`host.rs:366`），符合 AGENTS §7 A0-3「禁止 await 点释放锁」。

@@ -43,7 +43,8 @@ bedcode-desktop/                      # 桌面端项目 (Tauri 2.0 + Vue 3)
 │   ├── plugin-sdk-test/              # SDK 接口测试用插件 crate
 │   ├── plugin-system-test/           # 系统组件形态测试插件 crate（导出 host-* 同形能力接口，验证能力装配
 │   │                                 #   框架：注册表路由 / host-side 转发 / 依赖检查 / trap 隔离）
-│   └── plugin-wasi-test/             # WASI preopen 测试插件（wasm32-wasip2，std::fs 直写预打开目录）
+│   └── plugin-wasi-test/             # WASI preopen 测试插件（wasm32-wasip2，std::fs 直读写预打开目录；
+│                                     #   同一 fixture 分钉可写档与只读档两种挂载）
 ├── plugins/                          # 插件源码目录（每个插件独立 package：plugin.json 元数据 +
 │                                     #   rust/ WASM 后端 + src/ TS 前端 + vite.config.ts 独立构建）
 │   ├── agent-hub/                    # Agent Hub 插件：Agent CLI 统一管理台——环境检测与一键安装、
