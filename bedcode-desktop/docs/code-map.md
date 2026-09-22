@@ -274,13 +274,19 @@ WIT 契约 `host-task`（5 函数：execute-batch / submit / status / cancel / l
 - **gateway.rs**：**HTTP 协议网关**（平台基础服务，宿主业务清零票 01）——一张业务 URL 别名路由表
   （`/api/configs`、`/api/quick-actions`、`/api/file-tree|file-tree-children|file-content|diff-tree|file-diff`、
   `/api/git/*` → 目标插件端点，条目带归属插件 + 业务域 + 方法声明）+ 中间件 `business_gateway`。
-  判定是纯函数 `decide(verified, activated, declared)`：**宿主已验签 + 目标插件已激活 + 该端点在插件
-  manifest `contributes.httpEndpoints` 逐字声明**三者齐备才切插件，否则原样落宿主旧实现（双轨期）。
-  转发复用 `controllers/plugin_controller.rs::forward_to_plugin` 同一内核与同一声明治理（不另发明传输机制）；
+  判定是纯函数 `decide(verified, activated, declared, endpoint_auth)`：**宿主已验签 + 目标插件已激活 +
+  该端点在插件 manifest `contributes.httpEndpoints` 逐字声明**三者齐备才切插件，否则原样落宿主旧实现
+  （双轨期）；认证要求取「条目 `RouteAuth` 与插件声明档位**较严者**」（票 08），两者任一要验签而未验签
+  即 `AuthRequired` → 401（不再报成「插件未激活」）。
+  转发复用 `controllers/plugin_controller.rs::forward_to_plugin` 同一内核与同一声明治理（不另发明传输机制），
+  调用方身份也同一出处（`caller_identity` → `caller` = device/localhost/anonymous + `device` 上下文）；
   宿主业务实现退役后条目 `FallbackPolicy` 翻 `PluginRequired` → 明确报「插件未激活」而不给假数据
   （票 02：configs / quick-actions；票 03：五个文件浏览端点；票 04：git 三端点——十条业务别名已全部
   PluginRequired，宿主业务路由清零）。
   载荷纪律：降级分支不 `into_parts`，payload 原样留给宿主 handler
+- **controllers/plugin_controller.rs**：`ANY /api/plugin/{id}/{path}` 代理——属主解析（旧前缀别名）→
+  **只认 manifest 声明**的精确匹配（票 08 起未声明清单不再换来「前缀内 ANY 放行」）→ 端点级认证档位
+  （`auth: "none"` 之外一律要求已验签）→ 同一 `forward_to_plugin` 内核
 - **middleware/**：CORS、JWT 网关（公开路径/插件路径放行规则；具名中间件 `jwt_auth::jwt_gateway`，
   协议网关必须挂在它**之后**——`Scope::wrap` 后注册者先执行，故 `app.rs` 里网关写在验签之前）、
   HTTP 流量过滤器中间件
