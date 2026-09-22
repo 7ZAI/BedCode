@@ -12,7 +12,4 @@ pub use crate::enums::{
 };
 
 // Re-export types from connection_types module
-pub use crate::server::connection_types::{
-    AuthPayload as ConnAuthPayload, AuthStage as ConnAuthStage, DeviceConnectionEvent, DeviceConnectionInfo,
-    PairingCodeGeneratedEvent,
-};
+pub use crate::server::connection_types::{DeviceConnectionEvent, DeviceConnectionInfo};

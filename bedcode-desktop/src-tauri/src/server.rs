@@ -3,7 +3,6 @@
 //! Actix-web 服务器 - HTTP API、WebSocket 终端、认证和会话管理
 
 pub mod app;
-pub mod client_info;
 pub mod connection_types;
 pub mod controllers;
 pub mod dtos;
@@ -18,8 +17,5 @@ pub mod services;
 pub mod supervisor;
 pub mod ws;
 
-pub use crate::enums::control::SessionControlAction;
-pub use client_info::ClientInfo;
-pub use connection_types::*;
-pub use filter::{Direction, FilterContext, Rejection, TrafficChannel, TrafficFilter, TrafficFilterChain, Verdict};
+pub use connection_types::DeviceConnectionInfo;
 pub use message::*;

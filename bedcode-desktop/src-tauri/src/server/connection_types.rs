@@ -4,14 +4,6 @@
 
 use serde::Serialize;
 
-/// 配对码生成事件 payload
-#[derive(Debug, Clone, Serialize)]
-pub struct PairingCodeGeneratedEvent {
-    pub code: String,
-    pub expires_in: u64,
-    pub device_name: Option<String>,
-}
-
 /// 设备连接/断开事件（发给前端）
 #[derive(Debug, Clone, Serialize)]
 pub struct DeviceConnectionEvent {
@@ -33,5 +25,3 @@ pub struct DeviceConnectionInfo {
     pub session_count: usize,
 }
 
-// Re-export from shared module for backward compatibility
-pub use crate::enums::{AuthPayload, AuthStage};
