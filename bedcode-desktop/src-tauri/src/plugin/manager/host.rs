@@ -14,7 +14,7 @@ use crate::plugin::permission::PermissionManager;
 use crate::session::{SessionConfigManager, SessionManager};
 use crate::system::constants::event;
 use crate::system::constants::plugin::{PLUGIN_CALLBACK_TIMEOUT_SECS, PLUGIN_MANIFEST_FILE};
-use bedcode_plugin_api::{PluginKind, PluginState};
+use bedcode_plugin_api::{PluginKind, PluginState, WasiPreopenDir};
 use chrono::Utc;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};

@@ -31,7 +31,7 @@ use super::{block_on_async, StoreSpec, WasmHostContext, WasmPluginState};
 use crate::plugin::config::StoreLimits;
 use crate::plugin::monitor::LifecycleEvent;
 use crate::AppError;
-use bedcode_plugin_api::abi;
+use bedcode_plugin_api::{abi, WasiPreopenDir};
 use std::sync::Arc;
 use wasmtime::component::{bindgen, Component, Instance, Linker};
 use wasmtime::{ResourceLimiter, Store};
@@ -797,7 +797,7 @@ impl LoadedWasmPlugin {
         component: &Component,
         plugin_id: &str,
         host_ctx: Arc<WasmHostContext>,
-        declared_preopen_dirs: &[String],
+        declared_preopen_dirs: &[WasiPreopenDir],
         spec: StoreSpec,
     ) -> crate::Result<Self> {
         // WASI 上下文：按 manifest 声明（wasiPreopenDirs，展开+授权过滤）预打开
@@ -1374,6 +1374,10 @@ impl LoadedWasmPlugin {
 /// 目录逐项预打开到 guest 路径 `/data`、`/data1`、…；无声明时为空上下文。
 /// 单项失败仅告警不阻断（该目录 guest 不可见，由插件激活时自检并引导用户）。
 ///
+/// 挂载档由条目声明决定（审计票 07 只读档）：`readonly: true` → `FsPerms::ReadOnly`，
+/// 其余（裸路径 / `readonly` 缺省或 false）→ `FsPerms::ReadWrite`，与改造前逐字一致。
+/// 档位**不影响是否放行**——未授权目录两档都建不出 preopen（`resolve_preopen_dirs`）。
+///
 /// 返回 `(WasiCtx, 实际预打开成功目录)`：后者供激活时判定「新授权目录是否已
 /// 纳入当前实例」（见 [`LoadedWasmPlugin::preopened_dirs`]）。
 ///
@@ -1381,10 +1385,13 @@ impl LoadedWasmPlugin {
 /// `preopened_dir` 要求目录已存在（wasmtime 语义），首次启用前数据目录通常
 /// 尚未创建，缺失会导致 preopen 静默失败、/data 挂不上。故此处先幂等
 /// `create_dir_all` 再挂载——修复首次启用「WASI 预打开目录未就绪」死循环。
+/// 只读档同样先建目录：宿主建空目录只是给 guest 一个可挂载的锚点，guest 自己
+/// 仍写不进去——写能力在 WASI 层由 `OpenMode` 拒掉（见 wasmtime-wasi 的
+/// `preopened_dir`：`ReadOnly` → `OpenMode::READ`）。
 pub(crate) fn build_wasi_ctx(
     host_ctx: &WasmHostContext,
     plugin_id: &str,
-    declared_dirs: &[String],
+    declared_dirs: &[WasiPreopenDir],
 ) -> (wasmtime_wasi::WasiCtx, Vec<String>) {
     let mut builder = WasiCtxBuilder::new();
     let mut preopened = Vec::new();
@@ -1398,29 +1405,36 @@ pub(crate) fn build_wasi_ctx(
         } else {
             format!("/data{}", i)
         };
-        if let Err(e) = std::fs::create_dir_all(&dir) {
+        let host_path = dir.path().to_string();
+        let (perms, perms_label) = if dir.readonly() {
+            (FsPerms::ReadOnly, "read-only")
+        } else {
+            (FsPerms::ReadWrite, "read-write")
+        };
+        if let Err(e) = std::fs::create_dir_all(&host_path) {
             tracing::warn!(
                 plugin_id = %plugin_id,
-                dir = %dir,
+                dir = %host_path,
                 error = %e,
                 "WASI preopen dir creation failed, directory not visible to plugin"
             );
             continue;
         }
-        match builder.preopened_dir(&dir, &guest_path, FsPerms::ReadWrite) {
+        match builder.preopened_dir(&host_path, &guest_path, perms) {
             Ok(_) => {
                 tracing::info!(
                     plugin_id = %plugin_id,
-                    dir = %dir,
+                    dir = %host_path,
+                    perms = %perms_label,
                     "WASI preopened dir at {} (manifest declared)",
                     guest_path
                 );
-                preopened.push(dir);
+                preopened.push(host_path);
             }
             Err(e) => {
                 tracing::warn!(
                     plugin_id = %plugin_id,
-                    dir = %dir,
+                    dir = %host_path,
                     error = %e,
                     "WASI preopen failed, directory not visible to plugin"
                 );
@@ -1430,12 +1444,12 @@ pub(crate) fn build_wasi_ctx(
     (builder.build(), preopened)
 }
 
-/// 展开 manifest `wasiPreopenDirs` 声明为主机路径候选列表
+/// 展开 manifest `wasiPreopenDirs` 声明为主机路径候选列表（挂载档原样带过）
 ///
 /// 纯字符串处理（`${home}` 展开 + 剥尾部分隔符 + 滤空），不查授权、不依赖
 /// tokio 运行时——preauthorize 阶段用它收集「需弹窗授权」的路径候选
 /// （`resolve_preopen_dirs` 在此基础上再过滤未授权项）。
-pub(crate) fn expand_preopen_declarations(plugin_id: &str, declared_dirs: &[String]) -> Vec<String> {
+pub(crate) fn expand_preopen_declarations(plugin_id: &str, declared_dirs: &[WasiPreopenDir]) -> Vec<WasiPreopenDir> {
     expand_preopen_declarations_with_home(plugin_id, declared_dirs, None)
 }
 
@@ -1443,17 +1457,17 @@ pub(crate) fn expand_preopen_declarations(plugin_id: &str, declared_dirs: &[Stri
 /// 避免依赖真实 `$HOME` 导致的无主目录环境静默跳过，dev 合入）
 fn expand_preopen_declarations_with_home(
     plugin_id: &str,
-    declared_dirs: &[String],
+    declared_dirs: &[WasiPreopenDir],
     home_override: Option<&std::path::Path>,
-) -> Vec<String> {
+) -> Vec<WasiPreopenDir> {
     let home = home_override
         .map(|p| p.to_string_lossy().trim_end_matches(['/', '\\']).to_string())
         .or_else(|| dirs::home_dir().map(|p| p.to_string_lossy().trim_end_matches(['/', '\\']).to_string()));
     declared_dirs
         .iter()
-        .filter_map(|raw| {
+        .filter_map(|decl| {
             let dir = match home.as_ref() {
-                Some(home) => raw.trim().replacen("${home}", home, 1),
+                Some(home) => decl.path().trim().replacen("${home}", home, 1),
                 None => {
                     tracing::warn!(plugin_id = %plugin_id, "wasiPreopenDirs: home_dir unavailable, skipping");
                     return None;
@@ -1463,22 +1477,23 @@ fn expand_preopen_declarations_with_home(
             // 剥掉（/tmp/x → tmp/x），相对化后授权匹配必然失败——Windows 盘符
             // 前缀掩盖了此问题，Linux 首次跑通前从未暴露
             let dir = dir.trim().trim_end_matches(['/', '\\']).trim_end().to_string();
-            (!dir.is_empty()).then_some(dir)
+            (!dir.is_empty()).then(|| decl.clone().with_path(dir))
         })
         .collect()
 }
 
-/// 解析 manifest `wasiPreopenDirs` 声明为可预打开的主机路径列表
+/// 解析 manifest `wasiPreopenDirs` 声明为可预打开的主机路径列表（含挂载档）
 ///
 /// - 先经 [`expand_preopen_declarations`] 展开
 /// - 仅保留已授权目录（is_granted 无弹窗校验）：manifest 路径可能指向任意
-///   主机位置，不得绕过授权机制建立预打开
+///   主机位置，不得绕过授权机制建立预打开。只读档同样要授权——档位只收紧
+///   guest 能力，不放宽宿主边界（票 07 裁决 3）
 /// - 无 tokio 运行时上下文（无头场景）无法查询授权 → 返回空（不阻断加载）
 pub(crate) fn resolve_preopen_dirs(
     host_ctx: &WasmHostContext,
     plugin_id: &str,
-    declared_dirs: &[String],
-) -> Vec<String> {
+    declared_dirs: &[WasiPreopenDir],
+) -> Vec<WasiPreopenDir> {
     resolve_preopen_dirs_with_home(host_ctx, plugin_id, declared_dirs, None)
 }
 
@@ -1486,15 +1501,15 @@ pub(crate) fn resolve_preopen_dirs(
 fn resolve_preopen_dirs_with_home(
     host_ctx: &WasmHostContext,
     plugin_id: &str,
-    declared_dirs: &[String],
+    declared_dirs: &[WasiPreopenDir],
     home_override: Option<&std::path::Path>,
-) -> Vec<String> {
+) -> Vec<WasiPreopenDir> {
     if tokio::runtime::Handle::try_current().is_err() {
         return Vec::new();
     }
     expand_preopen_declarations_with_home(plugin_id, declared_dirs, home_override)
         .into_iter()
-        .filter(|dir| block_on_async(host_ctx.fs_auth.is_granted(plugin_id, dir)))
+        .filter(|dir| block_on_async(host_ctx.fs_auth.is_granted(plugin_id, dir.path())))
         .collect()
 }
 
@@ -1716,6 +1731,14 @@ mod tests {
         (ctx, dir)
     }
 
+    /// 预开声明的断言投影：`(主机路径, 挂载档)`
+    ///
+    /// 所有解析类断言都走它，而不是只比路径——只比路径的话，「展开/过滤过程中
+    /// 把只读档丢掉」（实现退化成 `Vec<String>`）在内层链路上看不出来。
+    fn preopen_tiers(out: &[WasiPreopenDir]) -> Vec<(&str, bool)> {
+        out.iter().map(|d| (d.path(), d.readonly())).collect()
+    }
+
     #[tokio::test]
     async fn resolve_preopen_dirs_empty_when_no_declaration() {
         let (ctx, _dir) = preopen_ctx("com.bedcode.test").await;
@@ -1728,9 +1751,9 @@ mod tests {
         let pid = "com.bedcode.test";
         let granted = dir.path().to_string_lossy().to_string();
 
-        // 已授权目录保留；头尾空白与多余分隔符被清理
-        let out = resolve_preopen_dirs(&ctx, pid, &[format!(" {} /", granted)]);
-        assert_eq!(out, vec![granted]);
+        // 已授权目录保留；头尾空白与多余分隔符被清理；裸路径档 = 可写
+        let out = resolve_preopen_dirs(&ctx, pid, &[WasiPreopenDir::writable(format!(" {} /", granted))]);
+        assert_eq!(preopen_tiers(&out), vec![(granted.as_str(), false)]);
     }
 
     #[tokio::test]
@@ -1748,10 +1771,12 @@ mod tests {
             &ctx,
             pid,
             &[
-                rogue.to_string_lossy().to_string(),
-                missing.to_string_lossy().to_string(),
-                "   ".to_string(),
-                "/".to_string(),
+                WasiPreopenDir::writable(rogue.to_string_lossy().to_string()),
+                // 只读档同样要授权：声明 ~/.ssh 式的路径为 readonly 不得换来预打开
+                // （票 07 裁决 3——档位收紧 guest 能力，不是免弹窗通道）
+                WasiPreopenDir::read_only(missing.to_string_lossy().to_string()),
+                WasiPreopenDir::writable("   ".to_string()),
+                WasiPreopenDir::writable("/".to_string()),
             ],
         );
         assert!(out.is_empty(), "未授权/空白声明全部剔除，实际: {:?}", out);
@@ -1776,9 +1801,13 @@ mod tests {
         )
         .expect("seed granted path");
 
-        let out = resolve_preopen_dirs(&ctx, pid, &["${home}/.bedcode-wasi-preopen-test".to_string()]);
+        let out = resolve_preopen_dirs(
+            &ctx,
+            pid,
+            &[WasiPreopenDir::writable("${home}/.bedcode-wasi-preopen-test")],
+        );
         assert_eq!(out.len(), 1);
-        assert!(out[0].ends_with(".bedcode-wasi-preopen-test"));
+        assert!(out[0].path().ends_with(".bedcode-wasi-preopen-test"));
         std::fs::remove_dir_all(&probe).ok();
     }
 
@@ -1795,15 +1824,34 @@ mod tests {
         let out = expand_preopen_declarations(
             "com.bedcode.test",
             &[
-                "${home}/.bedcode/ai-chatbox".to_string(),
-                format!(" {}/trailing/ ", home_str),
-                "   ".to_string(),
-                String::new(),
+                WasiPreopenDir::writable("${home}/.bedcode/ai-chatbox".to_string()),
+                WasiPreopenDir::read_only(format!(" {}/readonly-trailing/ ", home_str)),
+                WasiPreopenDir::writable(format!(" {}/trailing/ ", home_str)),
+                WasiPreopenDir::writable("   ".to_string()),
+                WasiPreopenDir::writable(String::new()),
             ],
         );
-        assert_eq!(out.len(), 2, "实际: {:?}", out);
-        assert!(out[0].ends_with("/.bedcode/ai-chatbox"), "实际: {:?}", out);
-        assert!(out[1].ends_with("/trailing"), "实际: {:?}", out);
+        assert_eq!(out.len(), 3, "实际: {:?}", out);
+        assert!(out[0].path().ends_with("/.bedcode/ai-chatbox"), "实际: {:?}", out);
+        // 展开只换路径，档位逐条跟着自己的声明走（不得被相邻条目串档）
+        assert!(out[1].path().ends_with("/readonly-trailing"), "实际: {:?}", out);
+        assert!(out[2].path().ends_with("/trailing"), "实际: {:?}", out);
+    }
+
+    /// 展开后仍保留只读档（with_path 的档位粘性）——反例：展开实现自己重建条目、
+    /// 只带路径不带档位时，只读声明会在到达 preopen 之前退化成可写
+    #[test]
+    fn expand_preopen_declarations_keeps_read_only_tier() {
+        let Some(home) = dirs::home_dir() else {
+            return; // 无主目录环境跳过
+        };
+        let out = expand_preopen_declarations(
+            "com.bedcode.test",
+            &[WasiPreopenDir::read_only("${home}/.bedcode-ro-probe".to_string())],
+        );
+        assert_eq!(out.len(), 1, "实际: {:?}", out);
+        assert!(out[0].path().ends_with("/.bedcode-ro-probe"), "实际: {:?}", out);
+        assert!(out[0].readonly(), "只读档必须在 ${{home}} 展开后仍然生效");
     }
 
     /// 已授权但目录尚不存在（首次启用场景）：build_wasi_ctx 先幂等创建再 preopen，
@@ -1826,9 +1874,42 @@ mod tests {
         )
         .expect("seed granted path");
 
-        let (wasi_ctx, preopened) = build_wasi_ctx(&ctx, pid, &[missing.to_string_lossy().to_string()]);
+        let (wasi_ctx, preopened) = build_wasi_ctx(
+            &ctx,
+            pid,
+            &[WasiPreopenDir::writable(missing.to_string_lossy().to_string())],
+        );
         assert_eq!(preopened, vec![missing.to_string_lossy().to_string()]);
         assert!(missing.is_dir(), "host must create the missing preopen dir");
+        drop(wasi_ctx);
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    /// 只读档同样建目录并计入 preopened：宿主建空目录只是给 guest 一个可挂载的
+    /// 锚点，写能力在 WASI 层由 OpenMode 拒（guest 侧的实际拒绝见 wasi_e2e 闭环）；
+    /// 若把只读实现成「干脆不挂」，插件连读都读不到，是本票的反例
+    #[tokio::test]
+    async fn build_wasi_ctx_mounts_read_only_dir_and_reports_it() {
+        let (ctx, _dir) = preopen_ctx("com.bedcode.test").await;
+        let pid = "com.bedcode.test";
+        let base = std::env::temp_dir().join(format!("bedcode-wasi-ro-{}", std::process::id()));
+        let missing = base.join("ro-child");
+        std::fs::create_dir_all(&base).unwrap();
+        crate::plugin::manager::wasm_runtime::host_impl::storage::storage_set(
+            &ctx,
+            pid,
+            "fs_granted_paths",
+            serde_json::json!([base.to_string_lossy()]),
+        )
+        .expect("seed granted path");
+
+        let (wasi_ctx, preopened) = build_wasi_ctx(
+            &ctx,
+            pid,
+            &[WasiPreopenDir::read_only(missing.to_string_lossy().to_string())],
+        );
+        assert_eq!(preopened, vec![missing.to_string_lossy().to_string()]);
+        assert!(missing.is_dir(), "只读档也要有可挂载的锚点目录");
         drop(wasi_ctx);
         std::fs::remove_dir_all(&base).ok();
     }
@@ -1858,8 +1939,8 @@ mod tests {
             &ctx,
             pid,
             &[
-                bad_dir.to_string_lossy().to_string(),
-                ok_dir.to_string_lossy().to_string(),
+                WasiPreopenDir::writable(bad_dir.to_string_lossy().to_string()),
+                WasiPreopenDir::writable(ok_dir.to_string_lossy().to_string()),
             ],
         );
         assert_eq!(preopened, vec![ok_dir.to_string_lossy().to_string()]);

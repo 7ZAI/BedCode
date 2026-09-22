@@ -57,7 +57,34 @@ export interface PluginManifest {
    * 硬上限）——插件只能自我收紧，放宽请求被钳回上限。缺省 = 全部继承。
    */
   resourceOverrides?: ResourceOverrides
+  /**
+   * WASI 预打开目录声明（manifest `wasiPreopenDirs`，仅 wasm32-wasip2 插件）
+   *
+   * 条目两形态：裸路径字符串 = 可写挂载（既有形态，零迁移）；
+   * `{ path, readonly: true }` = 只读挂载。宿主实例化时逐项过授权
+   * （无弹窗的 is_granted）后才挂载，未授权目录无论哪一档都挂不上——
+   * 只读档收紧的是 guest 的写能力，不是免授权通道。
+   *
+   * 缺省空 = 无预打开。支持 `${home}` 展开为主目录。
+   */
+  wasiPreopenDirs?: WasiPreopenDir[]
 }
+
+/**
+ * 一条 WASI 预打开目录声明（manifest `wasiPreopenDirs` 的对象形态）
+ *
+ * `readonly` 缺省 = 可写，与改造前行为一致；只有显式 `true` 才挂只读档。
+ * 未知字段会被宿主判为非法条目（整份 manifest 解析失败），不要往里加键。
+ */
+export interface WasiPreopenDirDecl {
+  /** 主机路径，支持 `${home}` 前缀 */
+  path: string
+  /** `true` = 只读挂载；缺省 / `false` = 可写 */
+  readonly?: boolean
+}
+
+/** WASI 预打开目录声明条目：裸路径（可写）或 `{ path, readonly }` 对象 */
+export type WasiPreopenDir = string | WasiPreopenDirDecl
 
 /**
  * 单插件 Store 资源上限覆盖请求（manifest `resourceOverrides`）

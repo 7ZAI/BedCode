@@ -174,5 +174,45 @@ export function validateManifest(dir) {
     }
   }
 
+  // wasiPreopenDirs（票 07 只读档）：条目两形态——裸路径字符串（可写，既有形态）
+  // 或 `{ path, readonly }` 对象。这里管形态，宿主 Rust 端（SDK
+  // rust/src/types.rs::WasiPreopenDir::from_json）管仲裁：未知键 / 非布尔 readonly
+  // 若被静默忽略，只读声明会退化成可写挂载，所以两侧都不放过。
+  const preopenDirs = manifest.wasiPreopenDirs
+  if (preopenDirs !== undefined && preopenDirs !== null) {
+    if (!Array.isArray(preopenDirs)) {
+      errors.push('wasiPreopenDirs 必须是「路径字符串」或「{path, readonly} 对象」的数组')
+    } else {
+      for (const entry of preopenDirs) {
+        const isString = typeof entry === 'string'
+        const isObject = entry !== null && typeof entry === 'object' && !Array.isArray(entry)
+        if (!isString && !isObject) {
+          errors.push(
+            `wasiPreopenDirs 条目形态非法（须为路径字符串或 {path, readonly} 对象）: ${JSON.stringify(entry)}`,
+          )
+          continue
+        }
+        const path = isString ? entry : entry.path
+        if (typeof path !== 'string' || path.trim() === '') {
+          errors.push(
+            `wasiPreopenDirs 条目 path 非法（须为非空字符串，支持 \${home} 前缀）: ${JSON.stringify(entry)}`,
+          )
+        }
+        if (isString) continue
+        const extraKeys = Object.keys(entry).filter((k) => k !== 'path' && k !== 'readonly')
+        if (extraKeys.length) {
+          errors.push(
+            `wasiPreopenDirs 条目含未知字段（只允许 path / readonly）: ${extraKeys.join(', ')} → ${JSON.stringify(entry)}`,
+          )
+        }
+        if (entry.readonly !== undefined && typeof entry.readonly !== 'boolean') {
+          errors.push(
+            `wasiPreopenDirs 条目 readonly 必须是布尔（缺省即可写；写错不会静默降级）: ${JSON.stringify(entry)}`,
+          )
+        }
+      }
+    }
+  }
+
   return { manifest, errors, warnings }
 }

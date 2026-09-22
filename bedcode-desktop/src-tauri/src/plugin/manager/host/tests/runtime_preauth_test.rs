@@ -56,6 +56,9 @@ async fn preauthorize_file_transfer_empty_shared_roots_passes() {
 /// manifest `wasiPreopenDirs` 声明目录并入预授权收集(如 ai-chatbox 数据
 /// 目录)。未授权 + 无头上下文(check_batch 保守拒绝)→ 返回「授权被拒」
 /// 错误——若声明目录未被收集,空路径会直接放行,本用例即失去意义
+///
+/// 声明特意用**只读档**（票 07）：档位只收紧 guest 的写能力，不构成免授权通道，
+/// 所以只读目录同样必须被收集并因未授权而拒绝
 #[tokio::test]
 async fn preauthorize_collects_manifest_preopen_dirs_ungranted_denied() {
     let host = setup_host().await;
@@ -69,7 +72,7 @@ async fn preauthorize_collects_manifest_preopen_dirs_ungranted_denied() {
         .get_mut(TEST_PLUGIN_ID)
         .expect("test plugin in map")
         .manifest
-        .wasi_preopen_dirs = vec!["${home}/.bedcode-preauth-probe".to_string()];
+        .wasi_preopen_dirs = vec![WasiPreopenDir::read_only("${home}/.bedcode-preauth-probe")];
 
     let err = host
         .preauthorize_plugin(TEST_PLUGIN_ID)
@@ -101,7 +104,7 @@ async fn preauthorize_manifest_preopen_dir_granted_passes() {
         .get_mut(TEST_PLUGIN_ID)
         .expect("test plugin in map")
         .manifest
-        .wasi_preopen_dirs = vec!["${home}/.bedcode-preauth-probe".to_string()];
+        .wasi_preopen_dirs = vec![WasiPreopenDir::writable("${home}/.bedcode-preauth-probe")];
     host.storage
         .set(TEST_PLUGIN_ID, "fs_granted_paths", json!([expanded]))
         .await

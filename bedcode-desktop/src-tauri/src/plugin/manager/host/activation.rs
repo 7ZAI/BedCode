@@ -205,7 +205,7 @@ impl PluginHost {
             source: PluginSource,
             api: Vec<String>,
             subscribes: Vec<String>,
-            declared_preopen_dirs: Vec<String>,
+            declared_preopen_dirs: Vec<WasiPreopenDir>,
             kind: PluginKind,
             dependencies: Vec<String>,
         }
@@ -348,7 +348,10 @@ impl PluginHost {
                             // 避免「持 map 锁 + 实例锁」的组合与未来热重载写锁交叉
                             drop(wasm_plugins);
                             let preopened = inst.lock().await.preopened_dirs().to_vec();
-                            !resolved.iter().all(|d| preopened.iter().any(|p| p == d))
+                            // 只比路径不比挂载档：档位由 manifest 决定，而 manifest 变更
+                            // （重装 / dev-reload）必然走 load_plugin_from_file 重新实例化，
+                            // 不存在「路径相同档位陈旧」的实例存活窗口
+                            !resolved.iter().all(|d| preopened.iter().any(|p| p == d.path()))
                         }
                         // 实例缺失：走重建路径补建（与 reload 语义一致）
                         None => true,

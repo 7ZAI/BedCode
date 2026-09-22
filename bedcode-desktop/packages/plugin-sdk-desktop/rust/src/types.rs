@@ -62,8 +62,12 @@ pub struct PluginManifest {
     /// 路径 `/data`、`/data1`、…；未授权/展开失败的目录跳过（不阻断加载）。
     /// 支持 `${home}` 变量展开为主目录绝对路径。缺省空数组 = 无预打开
     /// （既有 wasm32-unknown-unknown 插件不受影响）。
+    ///
+    /// 条目两形态（[`WasiPreopenDir`]）：裸路径 = 可写挂载，`{path, readonly}`
+    /// = 只读挂载。只读档只收紧 guest 对该目录的写能力，**不放宽授权**——
+    /// 未授权目录无论哪一档都建不出 preopen（审计票 07 裁决 3）。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub wasi_preopen_dirs: Vec<String>,
+    pub wasi_preopen_dirs: Vec<WasiPreopenDir>,
     /// 组件类型：`system`（系统组件）/ `application`（应用插件）
     ///
     /// 系统组件：内置、默认启用、只停不删、先于应用插件激活，其导出
@@ -367,6 +371,130 @@ impl HttpEndpointContribution {
             Self::Path(_) => None,
             Self::Declared { auth, .. } => auth.as_deref(),
         }
+    }
+}
+
+/// 一条 WASI 预打开目录声明（manifest `wasiPreopenDirs`，审计票 07 增只读档）
+///
+/// - `"/data/x"` —— 可写挂载（既有 manifest 的唯一形态，零迁移）
+/// - `{ "path": "/data/x", "readonly": true }` —— 只读挂载
+///
+/// **缺省档 = 可写**，与改造前的行为逐字一致：本字段收紧的是「插件能声明什么」，
+/// 不是「已声明的插件失去什么」。两形态共用同一默认，避免同一个列表里
+/// 「写成对象就悄悄变只读、写成字符串就可写」这种反向意外。
+///
+/// 只读档只作用在 guest 侧写能力（宿主按 [`Self::readonly`] 选 `FsPerms`），
+/// **不构成更松的授权**：两种形态都要先过 `is_granted` 才建得出 preopen
+/// （票 07 裁决 3——「声明即免弹窗」会让插件声明 `~/.ssh` 就能预打开）。
+///
+/// `readonly` 用 `Option<bool>` 而非 `bool`：三态里 `None` = 未声明，序列化该
+/// 条目时不回写此键，产物与源清单保持逐字一致（票 14 口径）。
+///
+/// 反序列化走手写实现（[`WasiPreopenDir::from_json`]）而非 serde derive：
+/// derive 的 `untagged` 只会给出「data did not match any variant」这种不点名的
+/// 错误，而这条声明是第三方 zip 绕开构建 CLI 时唯一的仲裁点——错误必须点名到键
+/// 与非法取值（与 [`EndpointAuth::parse_with`] 同口径），且未知键一律拒绝。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub enum WasiPreopenDir {
+    /// 仅路径（挂载档 = 可写）
+    Path(String),
+    /// 路径 + 显式挂载档
+    Declared {
+        /// 主机路径，支持 `${home}` 展开
+        path: String,
+        /// `true` = 只读挂载；缺省 / `false` = 可写（与既有行为一致）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        readonly: Option<bool>,
+    },
+}
+
+impl WasiPreopenDir {
+    /// 构造可写档条目（宿主内部与测试用）
+    pub fn writable(path: impl Into<String>) -> Self {
+        Self::Path(path.into())
+    }
+
+    /// 构造只读档条目
+    pub fn read_only(path: impl Into<String>) -> Self {
+        Self::Declared {
+            path: path.into(),
+            readonly: Some(true),
+        }
+    }
+
+    /// 声明的主机路径（未展开 `${home}`）
+    pub fn path(&self) -> &str {
+        match self {
+            Self::Path(p) => p,
+            Self::Declared { path, .. } => path,
+        }
+    }
+
+    /// 挂载档：`true` = 只读。未声明即可写（缺省档见类型注释）
+    pub fn readonly(&self) -> bool {
+        match self {
+            Self::Path(_) => false,
+            Self::Declared { readonly, .. } => readonly.unwrap_or(false),
+        }
+    }
+
+    /// 以展开后的主机路径替换自身路径，挂载档保持不变
+    ///
+    /// `${home}` 展开与尾分隔符清理走这一步，避免各消费方自己重建条目时丢掉档位。
+    pub fn with_path(self, path: impl Into<String>) -> Self {
+        let readonly = self.readonly();
+        Self::Declared {
+            path: path.into(),
+            readonly: readonly.then_some(true),
+        }
+    }
+
+    /// 解析一条 manifest 声明：`"路径"` 字符串 或 `{path, readonly}` 对象
+    ///
+    /// 只管形态，不管语义：空串与 `${home}` 不可用留给展开阶段处理（既有口径）。
+    /// 未知键报错而非忽略——拼成 `read_only` 若被静默吞掉，条目会退化成可写
+    /// 挂载，插件的自我收紧声明就此消失且无人报错。
+    pub fn from_json(value: &serde_json::Value) -> Result<Self, String> {
+        match value {
+            serde_json::Value::String(s) => Ok(Self::Path(s.clone())),
+            serde_json::Value::Object(map) => {
+                for key in map.keys() {
+                    if key != "path" && key != "readonly" {
+                        return Err(format!(
+                            "wasiPreopenDirs 条目含未知字段（只允许 path / readonly）: {key} → {value}"
+                        ));
+                    }
+                }
+                let path = map
+                    .get("path")
+                    .and_then(|p| p.as_str())
+                    .ok_or_else(|| format!("wasiPreopenDirs 条目缺 path 或 path 不是字符串: {value}"))?;
+                let readonly = match map.get("readonly") {
+                    None => None,
+                    Some(v) => Some(v.as_bool().ok_or_else(|| {
+                        format!("wasiPreopenDirs 条目 readonly 必须是布尔（true / false）: {value}")
+                    })?),
+                };
+                Ok(Self::Declared {
+                    path: path.to_string(),
+                    readonly,
+                })
+            }
+            other => Err(format!(
+                "wasiPreopenDirs 条目形态非法（须为路径字符串或 {{path, readonly}} 对象）: {other}"
+            )),
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for WasiPreopenDir {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        Self::from_json(&value).map_err(serde::de::Error::custom)
     }
 }
 
@@ -817,5 +945,154 @@ mod tests {
         let e = HttpEndpointContribution::from("task-status");
         assert_eq!(e, HttpEndpointContribution::Path("task-status".to_string()));
         assert_eq!(e.auth_raw(), None);
+    }
+
+    // ==================== WasiPreopenDir（manifest wasiPreopenDirs，票 07 只读档） ====================
+
+    /// 裸路径 = 既有条目形态，必须原样解析且档位在可写侧
+    #[test]
+    fn test_wasi_preopen_bare_string_is_writable_tier() {
+        let d: WasiPreopenDir = serde_json::from_str(r#""${home}/.bedcode/ai-chatbox""#).unwrap();
+        assert_eq!(d, WasiPreopenDir::Path("${home}/.bedcode/ai-chatbox".to_string()));
+        assert_eq!(d.path(), "${home}/.bedcode/ai-chatbox");
+        assert!(!d.readonly(), "裸路径档 = 可写（改造前的唯一形态）");
+    }
+
+    /// 对象形态但没写 readonly：同样落到可写档（缺省档 = 改造前行为，
+    /// 收紧只作用在显式写 readonly 的条目上）
+    #[test]
+    fn test_wasi_preopen_object_without_readonly_defaults_to_writable() {
+        let d: WasiPreopenDir = serde_json::from_str(r#"{"path":"/data/x"}"#).unwrap();
+        assert_eq!(d.path(), "/data/x");
+        assert!(!d.readonly());
+    }
+
+    /// 显式 readonly: true / false 各自生效（false 不得被当成「未声明」以外的东西）
+    #[test]
+    fn test_wasi_preopen_readonly_flag_both_values() {
+        let ro: WasiPreopenDir = serde_json::from_str(r#"{"path":"/data/x","readonly":true}"#).unwrap();
+        assert_eq!(ro.path(), "/data/x");
+        assert!(ro.readonly(), "readonly:true 必须挂只读档");
+
+        let rw: WasiPreopenDir = serde_json::from_str(r#"{"path":"/data/x","readonly":false}"#).unwrap();
+        assert!(!rw.readonly(), "readonly:false 是可写档");
+    }
+
+    /// 未知键必须报错：`read_only` 这种拼写若被静默忽略，条目会退化成可写挂载
+    /// ——插件的自我收紧声明被吞掉且无人报错（与 EndpointAuth「未知档位一律 Err，
+    /// 绝不静默降级为较宽档位」同一条口径）
+    #[test]
+    fn test_wasi_preopen_rejects_unknown_key_in_object_entry() {
+        let err = serde_json::from_str::<WasiPreopenDir>(r#"{"path":"/x","read_only":true}"#)
+            .expect_err("read_only 是拼错的未知键，静默忽略等于把只读声明降级成可写")
+            .to_string();
+        assert!(
+            err.contains("read_only") && err.contains("path") && err.contains("readonly"),
+            "错误文案须点名未知键并给出允许字段: {err}"
+        );
+    }
+
+    /// 非法形态与非法取值逐个拒绝，且错误文案点名到键——这条是第三方 zip 绕开
+    /// 构建 CLI 时唯一能给出可定位信息的地方
+    #[test]
+    fn test_wasi_preopen_rejects_malformed_entries() {
+        for (raw, needle) in [
+            (r#"{"path":"/x","readonly":"true"}"#, "readonly 必须是布尔"),
+            (r#"{"path":"/x","readonly":1}"#, "readonly 必须是布尔"),
+            (r#"{"readonly":true}"#, "缺 path"),
+            (r#"{"path":42}"#, "缺 path"),
+            (r#"42"#, "条目形态非法"),
+            (r#"[{"path":"/x"}]"#, "条目形态非法"),
+            (r#"null"#, "条目形态非法"),
+        ] {
+            let err = serde_json::from_str::<WasiPreopenDir>(raw)
+                .expect_err(&format!("非法声明必须解析失败: {raw}"))
+                .to_string();
+            assert!(err.contains(needle), "错误文案须点名问题（期望含「{needle}」）: {err}");
+        }
+    }
+
+    /// 序列化回到声明形态（未写 readonly 的对象条目不得被回填 `"readonly":false`）——
+    /// 产物与源清单逐字一致的口径（票 14）依赖这一条
+    #[test]
+    fn test_wasi_preopen_serializes_back_to_declared_form() {
+        assert_eq!(
+            serde_json::to_string(&WasiPreopenDir::Path("/x".to_string())).unwrap(),
+            r#""/x""#
+        );
+        assert_eq!(serde_json::to_string(&WasiPreopenDir::writable("/x")).unwrap(), r#""/x""#);
+        assert_eq!(
+            serde_json::to_string(&WasiPreopenDir::read_only("/x")).unwrap(),
+            r#"{"path":"/x","readonly":true}"#
+        );
+        // 只写了 path 的对象条目不得被回写成 `"readonly":false`
+        assert_eq!(
+            serde_json::to_string(&WasiPreopenDir::Declared {
+                path: "/x".to_string(),
+                readonly: None
+            })
+            .unwrap(),
+            r#"{"path":"/x"}"#
+        );
+    }
+
+    /// 空数组整键省略（既有 manifest 零迁移：不声明就不出现在产物里）
+    #[test]
+    fn test_wasi_preopen_dirs_omitted_when_empty() {
+        let json = serde_json::json!({
+            "id": "com.bedcode.demo",
+            "name": "Demo",
+            "version": "0.1.0",
+            "pluginType": "rust-ts",
+            "wasiPreopenDirs": []
+        });
+        let m: PluginManifest = serde_json::from_value(json).unwrap();
+        assert!(m.wasi_preopen_dirs.is_empty());
+        let back = serde_json::to_value(&m).unwrap();
+        assert!(back.get("wasiPreopenDirs").is_none(), "空声明不得回写成键: {back}");
+    }
+
+    /// 两形态混列：档位逐条独立，顺序即 guest 挂载顺序（/data、/data1…）
+    #[test]
+    fn test_wasi_preopen_dirs_mixed_forms_parse_in_order() {
+        let json = serde_json::json!({
+            "id": "com.bedcode.demo",
+            "name": "Demo",
+            "version": "0.1.0",
+            "pluginType": "rust-ts",
+            "wasiPreopenDirs": [
+                "${home}/.bedcode/ai-chatbox",
+                { "path": "${home}/.ssh", "readonly": true },
+                { "path": "${home}/write-me" }
+            ]
+        });
+        let m: PluginManifest = serde_json::from_value(json).unwrap();
+        assert_eq!(m.wasi_preopen_dirs.len(), 3);
+        let tiers: Vec<(&str, bool)> = m
+            .wasi_preopen_dirs
+            .iter()
+            .map(|d| (d.path(), d.readonly()))
+            .collect();
+        assert_eq!(
+            tiers,
+            vec![
+                ("${home}/.bedcode/ai-chatbox", false),
+                ("${home}/.ssh", true),
+                ("${home}/write-me", false),
+            ]
+        );
+    }
+
+    /// with_path 只换路径、不换档位：宿主展开 `${home}` 靠它，
+    /// 若实现改成重建条目而丢掉档位，只读声明会在到达 preopen 前退化成可写
+    #[test]
+    fn test_wasi_preopen_with_path_keeps_tier() {
+        let ro = WasiPreopenDir::read_only("${home}/.ssh").with_path("/home/u/.ssh");
+        assert_eq!(ro.path(), "/home/u/.ssh");
+        assert!(ro.readonly(), "展开后仍须是只读档");
+
+        let rw = WasiPreopenDir::writable("${home}/x").with_path("/home/u/x");
+        assert_eq!(rw.path(), "/home/u/x");
+        assert!(!rw.readonly(), "可写档展开后不得被串成只读");
     }
 }

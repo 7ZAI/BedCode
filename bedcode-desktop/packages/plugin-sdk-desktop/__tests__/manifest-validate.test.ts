@@ -13,6 +13,15 @@
  *   此处不手抄）——非法值混进产物会让宿主安装端拒装，构建期即拦；
  * - C-V6 该字段由构建注入**产物**（票 14 裁决 A），源清单写了不会被刷新 → 只告警不报错；
  *   缺省与空串都是合法态（宿主 `wasm_hash.trim().is_empty()` = 未声明，跳过比对）。
+ *
+ * `wasiPreopenDirs` 规则（票 07 只读档）：
+ * - C-W1 条目两形态并存：裸路径字符串（可写，既有形态）/ `{path, readonly}`，都合法；
+ *   `readonly` 缺省 = 可写，所以既有 manifest 零迁移；
+ * - C-W2 缺省 / null / 空数组都是合法态（无预打开目录）；
+ * - C-W3 形态错误（数字 / null / 数组 / path 空或全空白）不得降级成「未声明该目录」；
+ * - C-W4 `readonly` 非布尔（`"true"` / `1`）即构建失败——宿主 Rust 侧同样拒绝，
+ *   两侧都不允许「静默降级为可写」；
+ * - C-W5 未知键（`read_only` 这类拼写）报错并点名该键与允许字段。
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
@@ -176,5 +185,96 @@ describe('wasmHash 校验', () => {
     const { errors, warnings } = outcomeForWasmHash('')
     expect(errors).toEqual([])
     expect(warnings).toEqual([])
+  })
+})
+
+// ==================== wasiPreopenDirs（票 07 只读档）====================
+
+/** 写一份只关心 wasiPreopenDirs 的最小 manifest，返回与该字段相关的错误 */
+function errorsForWasiPreopenDirs(dirs: unknown): string[] {
+  const manifest: Record<string, unknown> = {
+    id: 'com.example.test',
+    name: 'Test Plugin',
+    version: '1.0.0',
+    main: 'index.js',
+    pluginType: 'rust-ts',
+    rustLibrary: 'test_plugin',
+    permissions: [],
+    contributes: {},
+  }
+  if (dirs !== undefined) manifest.wasiPreopenDirs = dirs
+  writeFileSync(join(cwd, 'plugin.json'), JSON.stringify(manifest, null, 2), 'utf-8')
+  const { errors } = validateManifest(cwd)
+  return errors.filter((e) => e.includes('wasiPreopenDirs'))
+}
+
+describe('wasiPreopenDirs 校验', () => {
+  it('C-W1 裸路径与带 readonly 的对象形态都合法', () => {
+    expect(errorsForWasiPreopenDirs(['${home}/.bedcode/ai-chatbox', '/srv/data'])).toEqual([])
+    expect(
+      errorsForWasiPreopenDirs([
+        { path: '${home}/.ssh', readonly: true },
+        { path: '${home}/write-me', readonly: false },
+        { path: '${home}/no-flag' },
+      ]),
+    ).toEqual([])
+  })
+
+  it('C-W1 两形态混列合法（同一列表里档位逐条独立）', () => {
+    expect(errorsForWasiPreopenDirs(['/a', { path: '/b', readonly: true }, '/c'])).toEqual([])
+  })
+
+  it('C-W2 缺省 / null / 空数组均为合法态（无预打开目录）', () => {
+    expect(errorsForWasiPreopenDirs(undefined)).toEqual([])
+    expect(errorsForWasiPreopenDirs(null)).toEqual([])
+    expect(errorsForWasiPreopenDirs([])).toEqual([])
+  })
+
+  it('C-W2 该规则不越界：其它字段合法时零错误', () => {
+    // 反例守卫：若过滤串写成 includes('preopen') 之类，合法 manifest 也会被判错
+    expect(errorsForWasiPreopenDirs(['/x'])).toEqual([])
+  })
+
+  it('C-W3 整体非数组被拒，且错误文案给出两形态的正确写法', () => {
+    const errors = errorsForWasiPreopenDirs('${home}/x')
+    expect(errors).toHaveLength(1)
+    expect(errors[0]).toContain('path')
+    expect(errors[0]).toContain('readonly')
+  })
+
+  it('C-W4 条目形态非法即拒，不得降级成「未声明该目录」', () => {
+    for (const bad of [42, null, true, ['/x'], {}]) {
+      const errors = errorsForWasiPreopenDirs(['/ok', bad])
+      expect(errors.length, `非法条目 ${JSON.stringify(bad)} 必须报错`).toBeGreaterThan(0)
+    }
+  })
+
+  it('C-W4 空 path / 全空白 path / 非字符串 path 各报一条', () => {
+    expect(errorsForWasiPreopenDirs(['   '])).toHaveLength(1)
+    expect(errorsForWasiPreopenDirs([''])).toHaveLength(1)
+    expect(errorsForWasiPreopenDirs([{ path: 42 }])).toHaveLength(1)
+    expect(errorsForWasiPreopenDirs([{ path: '' }])).toHaveLength(1)
+  })
+
+  it('C-W5 readonly 非布尔即拒：静默忽略会把只读声明降级成可写挂载', () => {
+    for (const bad of ['true', 1, 'false', null, {}]) {
+      const errors = errorsForWasiPreopenDirs([{ path: '/x', readonly: bad }])
+      expect(errors.length, `readonly=${JSON.stringify(bad)} 必须报错`).toBeGreaterThan(0)
+      expect(errors.some((e) => e.includes('readonly')), `错误文案须点名 readonly: ${errors}`).toBe(true)
+    }
+  })
+
+  it('C-W5 未知键即拒并点名该键（read_only 这类拼错不得静默通过）', () => {
+    const errors = errorsForWasiPreopenDirs([{ path: '/x', read_only: true }])
+    expect(errors).toHaveLength(1)
+    expect(errors[0]).toContain('read_only')
+    expect(errors[0]).toContain('path')
+    expect(errors[0]).toContain('readonly')
+  })
+
+  it('C-W4 合法条目混在非法条目里时，只报非法那一条', () => {
+    const errors = errorsForWasiPreopenDirs([{ path: '/ok', readonly: true }, 7])
+    expect(errors).toHaveLength(1)
+    expect(errors[0]).toContain('7')
   })
 })

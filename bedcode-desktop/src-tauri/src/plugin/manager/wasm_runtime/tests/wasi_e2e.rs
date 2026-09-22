@@ -35,7 +35,7 @@ fn test_wasi_preopen_std_fs_e2e() {
         .expect("seed granted path");
 
         // 实例化：组件导入 wasi 接口，宿主按声明（授权过滤后）preopen /data
-        let declared = vec![dir.path().to_string_lossy().to_string()];
+        let declared = vec![WasiPreopenDir::writable(dir.path().to_string_lossy().to_string())];
         let plugin = wasm_runtime
             .instantiate_component(&component, pid, host_ctx.clone(), &declared, None)
             .expect("instantiate wasi test component");
@@ -98,6 +98,103 @@ fn test_wasi_preopen_std_fs_e2e() {
             .and_then(|v| v.as_bool())
             .unwrap_or(true);
         assert!(!leaked, "WASI sandbox must block access outside preopen root");
+    })
+    .join()
+    .expect("guest call thread panicked");
+}
+
+/// 只读档 preopen 端到端（审计票 07）：同一 fixture、同一挂载路径，声明改成
+/// `{path, readonly: true}` → guest 读得到、写不进，宿主侧字节不变。
+///
+/// 与 `test_wasi_preopen_std_fs_e2e` 成对：那条锁住「可写档仍能写」（缺省档
+/// 未被动过），本条锁住「声明只读就真的只读」。两条各杀死一个变异——
+/// 把 `FsPerms::ReadOnly` 写死成 `ReadWrite` 红本条，反过来写死成 `ReadOnly`
+/// 红上一条。
+///
+/// 读断言排在写断言之后仍然要成立：这既证明目录确实挂上了（写失败不是
+/// 「路径不存在」的假阳性），也证明 guest 的 Err 返回没有污染 Store。
+#[test]
+fn test_wasi_preopen_read_only_std_fs_e2e() {
+    let (wasm_runtime, host_ctx) = setup_wasm_runtime();
+    let component = wasm_runtime
+        .compile_component(&build_wasi_test_component())
+        .expect("compile wasi test component");
+    let pid = "com.bedcode.wasi-test";
+
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let (mut plugin, dir) = rt.block_on(async {
+        host_ctx.permission.grant_permissions(pid, &["storage".to_string()]);
+        let dir = tempfile::tempdir().expect("tempdir");
+        // 宿主侧预置可读内容：只读档下 guest 无从造出这个文件，读到它即证明
+        // 「挂载生效 + 读放行」，而不是「写失败顺带什么都读不到」
+        std::fs::write(dir.path().join("demo.txt"), "preexisting-from-host").expect("seed host file");
+        crate::plugin::manager::wasm_runtime::host_impl::storage::storage_set(
+            &host_ctx,
+            pid,
+            "fs_granted_paths",
+            serde_json::json!([dir.path().to_string_lossy()]),
+        )
+        .expect("seed granted path");
+
+        let declared = vec![WasiPreopenDir::read_only(dir.path().to_string_lossy().to_string())];
+        let plugin = wasm_runtime
+            .instantiate_component(&component, pid, host_ctx.clone(), &declared, None)
+            .expect("instantiate wasi test component with read-only preopen");
+        (plugin, dir)
+    });
+
+    std::thread::spawn(move || {
+        // 1. 写被拒：guest 的 invoke_command Err 由 SDK 编成 {"error": ...} 回带，
+        //    绝不出现 ok:true
+        let r = plugin
+            .invoke_command("wasi-test.write-file", "{}")
+            .expect("write command must reach guest");
+        let v: serde_json::Value = serde_json::from_str(&r).expect("guest reply must be JSON");
+        assert_ne!(
+            v.get("ok").and_then(|x| x.as_bool()),
+            Some(true),
+            "只读档下 guest 写不得成功，实际回复: {r}"
+        );
+        assert!(
+            v.get("error")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .contains("wasi write failed"),
+            "预期 guest 报 std::fs::write 失败（而非其它错误），实际回复: {r}"
+        );
+
+        // 2. 读放行（写失败之后仍读得到宿主预置内容）
+        let r = plugin
+            .invoke_command("wasi-test.read-file", "{}")
+            .expect("read command must still work on a read-only preopen");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&r)
+                .unwrap()
+                .get("content")
+                .and_then(|v| v.as_str())
+                .unwrap_or(""),
+            "preexisting-from-host"
+        );
+
+        // 3. 列举放行：preopen 根对 guest 可见
+        let r = plugin.invoke_command("wasi-test.list", "{}").expect("list command");
+        let entries = serde_json::from_str::<serde_json::Value>(&r)
+            .unwrap()
+            .get("entries")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            entries.iter().any(|e| e.as_str() == Some("demo.txt")),
+            "只读 preopen 目录仍须可列举，实际: {:?}",
+            entries
+        );
+
+        // 4. 宿主侧字节未被动过（写被拒不是「写到了别处」）
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("demo.txt")).expect("host file must still exist"),
+            "preexisting-from-host"
+        );
     })
     .join()
     .expect("guest call thread panicked");

@@ -37,7 +37,7 @@ use wasmtime::{Cache, CacheConfig, Config, Engine, ResourceLimiter, WasmBacktrac
 pub(crate) use crate::plugin::config::plugin_debug_mode;
 use crate::plugin::config::{CoreConfig, StoreLimits};
 use crate::plugin::monitor::{LifecycleEvent, MetricsRegistry, PluginMetrics};
-use bedcode_plugin_api::ResourceOverrides;
+use bedcode_plugin_api::{ResourceOverrides, WasiPreopenDir};
 
 /// 从 catch_unwind 的 panic 载荷提取人类可读消息（统一 panic 诊断文案）
 pub fn panic_payload_to_string(panic: &Box<dyn std::any::Any + Send>) -> String {
@@ -834,13 +834,14 @@ impl WasmRuntime {
     /// 从文件加载 WASM 插件（阶段 C 起仅组件形态）
     ///
     /// `declared_preopen_dirs`：manifest 声明的 WASI 预打开目录（原始值，
-    /// 支持 ${home}；实例化时经展开+授权过滤，见 component::build_wasi_ctx）
+    /// 支持 ${home} 与只读档；实例化时经展开+授权过滤并按档位挂载，
+    /// 见 component::build_wasi_ctx）
     pub fn load_plugin_from_file(
         &self,
         path: &Path,
         plugin_id: &str,
         host_ctx: Arc<WasmHostContext>,
-        declared_preopen_dirs: &[String],
+        declared_preopen_dirs: &[WasiPreopenDir],
         resource_overrides: Option<&ResourceOverrides>,
     ) -> crate::Result<LoadedWasmPlugin> {
         let bytes = std::fs::read(path).map_err(|e| {
@@ -868,7 +869,7 @@ impl WasmRuntime {
         component: &wasmtime::component::Component,
         plugin_id: &str,
         host_ctx: Arc<WasmHostContext>,
-        declared_preopen_dirs: &[String],
+        declared_preopen_dirs: &[WasiPreopenDir],
         resource_overrides: Option<&ResourceOverrides>,
     ) -> crate::Result<LoadedWasmPlugin> {
         let (limits, fuel_enabled) = {

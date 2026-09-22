@@ -68,7 +68,9 @@ impl PluginHost {
         }
 
         // 1.5 并入 manifest wasiPreopenDirs 声明目录(展开不过滤授权,未授权
-        // 项正需在此弹窗)。短读锁克隆后立即释放:check_batch 会发事件、可能
+        // 项正需在此弹窗)。只读档同样要弹窗授权——档位收紧 guest 写能力，
+        // 不构成免授权通道（票 07 裁决 3）。
+        // 短读锁克隆后立即释放:check_batch 会发事件、可能
         // 回调宿主,跨 await 持锁有死锁风险
         let declared = {
             let plugins = self.plugins.read().await;
@@ -78,8 +80,9 @@ impl PluginHost {
                 .unwrap_or_default()
         };
         for dir in crate::plugin::manager::wasm_runtime::expand_preopen_declarations(plugin_id, &declared) {
-            if !paths.contains(&dir) {
-                paths.push(dir);
+            let path = dir.path().to_string();
+            if !paths.contains(&path) {
+                paths.push(path);
             }
         }
 
