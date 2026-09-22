@@ -1,0 +1,1412 @@
+--- a/bedcode-desktop/packages/plugin-sdk-desktop/rust/src/abi.rs
++++ b/bedcode-desktop/packages/plugin-sdk-desktop/rust/src/abi.rs
+@@ -121,11 +121,20 @@
+ //!   `plugin_secrets`）/ device-token-* / link-identity-parts / auth-setting-set。
+ //!   破坏性收缩（WIT 删除 import 函数），旧插件二进制须按 v24 SDK 重建。
+ //!
++//! - v25: `host-peer` 增节点生命周期引擎原语 `start-node` / `stop-node`（审计票 12
++//!   裁决 1 = 选项 A）——peer-net 节点从「内核按硬编码产品 id 开关」改为「属主插件按声明
++//!   自行请求、内核只记账」。内核侧同步退役 `peer_net::FILE_TRANSFER_PLUGIN_ID`、
++//!   激活/停用外壳的按 id 分支，以及 boot 末尾按 id 对账的 `sync_node_with_plugin_state`
++//!   （第三个入口，立项时未列）。属主语义 = 谁起谁停：把节点带起来的那次调用者即属主，
++//!   非属主既不能接管也不能关停（错误不回带他方身份）。既有 interface 的函数级追加，
++//!   纯增量——v24 及以下插件二进制不受影响，但要用这两个原语须按 v25 SDK 重建。
++//!   桌面独有接口（host-peer 不在 mobile WIT），移动端不跟演（ADR 0022 双端偏离节）。
++//!
+ //! 编号口径（AGENTS.md §7 教训）：本号以 `abi.rs` 与 WIT 版本表实读为准，
+ //! 规格正文的「17 → 19」是并发线（host-notification v18）尚未落地时的预判；
+ //! 本分支实测 v18 已被「host-auth 认证记录面」占用（票 05），故会话语义下沉的
+ //! 第二批次取 v19。
+-pub const ABI_VERSION: u32 = 24;
++pub const ABI_VERSION: u32 = 25;
+ 
+ /// 组件形态标识：`abi.form() == FORM_COMPONENT`（WIT `abi` 接口的 form() 声明）
+ ///
+@@ -139,9 +148,11 @@
+     use super::*;
+ 
+     #[test]
+-    fn test_abi_version_is_v24() {
+-        // 版本号序列与历史 core ABI 共用：v24 = 认证记录下沉（2026-09-22，host-auth
+-        // 记录面七函数退役 + host-session config 读取面退役），叠加 v23 host-session
++    fn test_abi_version_is_v25() {
++        // 版本号序列与历史 core ABI 共用：v25 = host-peer 节点生命周期原语
++        // （start-node / stop-node，审计票 12 裁决 1 = 选项 A；内核侧去产品身份），
++        // 叠加 v24 认证记录下沉（2026-09-22，host-auth 记录面七函数退役 + host-session
++        // config 读取面退役）、v23 host-session
+         // 配置面写原语退役（session:config 同步退役）、v22 host-platform.reveal-in-dir
+         // （平台定位原语，无权限门；`system:open` 退役）、v21 host-session 收敛退役
+         // （删 `create` / `restart`）、v20 host-task 宿主并发任务域、v19 host-session
+@@ -149,7 +160,7 @@
+         // （同批次之一）、v17 认证策略导出（auth-policy）、v16 插件私有伪终端原语
+         // （host-pty）、v15 密钥托管（host-auth / secret-store）、v14 host-websocket、
+         // v13 host-mdns v2、v12 总线二进制载荷与 v11 host-peer 传输控制三原语
+-        assert_eq!(ABI_VERSION, 24);
++        assert_eq!(ABI_VERSION, 25);
+     }
+ 
+     #[test]
+--- a/bedcode-desktop/packages/plugin-sdk-desktop/rust/src/host/peer.rs
++++ b/bedcode-desktop/packages/plugin-sdk-desktop/rust/src/host/peer.rs
+@@ -65,4 +65,12 @@
+     ) -> Result<u32, HostError>;
+     /// 设置接收落点目录（空串 = 恢复默认；引擎落盘配置原语）
+     fn peer_set_download_dir(&self, path: &str) -> Result<(), HostError>;
++    /// 按需启动本机 peer 节点（引擎级生命周期原语，审计票 12）：幂等。
++    /// 返回 `true` = 本次调用把节点从「未跑」带到「跑」（调用方即成为节点属主）；
++    /// `false` = 节点本就在跑。已被别的插件起着的节点不可被本调用接管（报错，
++    /// 文案不回带他方身份）——谁起谁停，内核不再按硬编码插件 id 猜归属
++    fn peer_start_node(&self) -> Result<bool, HostError>;
++    /// 让本机节点下线（幂等；未跑为 no-op）：停广播 / 关监听 / 排水连接与入站记账。
++    /// 仅节点属主可关停，非属主报错（文案不回带属主身份）
++    fn peer_stop_node(&self) -> Result<bool, HostError>;
+ }
+--- a/bedcode-desktop/packages/plugin-sdk-desktop/rust/src/wasm_host.rs
++++ b/bedcode-desktop/packages/plugin-sdk-desktop/rust/src/wasm_host.rs
+@@ -677,6 +677,14 @@
+     fn peer_set_download_dir(&self, path: &str) -> Result<(), HostError> {
+         host_peer::set_download_dir(path).map_err(|e| host_err("peer_set_download_dir", e))
+     }
++
++    fn peer_start_node(&self) -> Result<bool, HostError> {
++        host_peer::start_node().map_err(|e| host_err("peer_start_node", e))
++    }
++
++    fn peer_stop_node(&self) -> Result<bool, HostError> {
++        host_peer::stop_node().map_err(|e| host_err("peer_stop_node", e))
++    }
+ }
+ 
+ // ==================== host-mdns（ADR 0022 v2）====================
+--- a/bedcode-desktop/packages/plugin-sdk-desktop/rust/wit/bedcode.wit
++++ b/bedcode-desktop/packages/plugin-sdk-desktop/rust/wit/bedcode.wit
+@@ -148,6 +148,17 @@
+     /// 设置接收落点目录（空串 = 恢复默认 Downloads\BedCode\；引擎落盘配置原语，
+     /// ADR 0022 v3）
+     set-download-dir: func(path: string) -> result<_, string>;
++    /// 按需启动本机 peer 节点（引擎级生命周期原语，审计票 12）：数据目录与设备名
++    /// 由宿主解析，起来后开始广播与监听。幂等——节点已在跑时返回 false（未改变状态）。
++    ///
++    /// 属主语义：把节点从「未跑」带到「跑」的那次调用，其调用方成为节点属主；
++    /// 已被别的插件起着的节点**不可被本调用接管**（报错，且文案不回带他方身份）。
++    /// 谁起谁停：内核不再按硬编码插件 id 猜测节点归属
++    /// （旧 `peer_net::FILE_TRANSFER_PLUGIN_ID` 与激活外壳随之退役）。
++    start-node: func() -> result<bool, string>;
++    /// 让本机节点下线（幂等；节点未跑为 no-op）：停广播 / 关监听 / 排水连接与
++    /// 入站记账。仅节点属主可关停——非属主报错，文案不回带属主身份
++    stop-node: func() -> result<bool, string>;
+ }
+ 
+ /// mDNS 浏览纯能力（ADR 0022 v2）：browse-only，发现/离开事件原样透传
+--- a/bedcode-desktop/plugins/file-transfer/rust/src/lib.rs
++++ b/bedcode-desktop/plugins/file-transfer/rust/src/lib.rs
+@@ -1,364 +1,381 @@
+-//! File Transfer Plugin (WASM, Desktop) — 业务自持版（issue 13 Phase 3）
+-//!
+-//! ADR 0022 v2 后插件接管全部业务状态，宿主只提供无业务语义的引擎原语：
+-//!
+-//! - 设备缓存：前端 deviceState.ts 自持（found/lost/TTL/cap 位），本 crate 只做
+-//!   browse 生命周期、`mdns:*` 透传与快照持久化（见 device_bridge）；
+-//! - 共享根注册表：plugin-database 真源 + `set-shared-roots` 全量推送（roots_registry）；
+-//! - 任务队列与历史：`peer:transfer`/`peer:receive` 快照驱动的自有存储
+-//!   （transfer_store），终态归档 + 200 封顶 + 重启 interrupted 标注 + retryMeta 回放；
+-//! - 接收策略：插件 storage 真源，auto 分支在 on_message 自动应答，
+-//!   ask 弹窗留在前端；配置经保留原语推送宿主闸门（settings_store，A1）；
+-//! - 加密参数化：send 载荷元素级 `{path, encrypt}`（步骤 5，零 ABI）。
+-//!
+-//! 双写期（Phase 3）：旧命令面保持可用；`peer:devices` 订阅降级为日志对账源。
+-
+-use bedcode_plugin_api::host::{
+-    mdns_event_topic, HostBus, HostEvents, HostLog, HostMdns, HostPeer, HostPlatform, MDNS_FOUND, MDNS_LOST,
+-};
+-use bedcode_plugin_api::types::PluginManifest;
+-use bedcode_plugin_api::wasm_host::WasmHost;
+-use bedcode_plugin_api::{BusMessage, WasmPlugin};
+-use std::sync::Mutex;
+-use std::sync::OnceLock;
+-
+-mod auth_center;
+-mod device_bridge;
+-mod peer;
+-mod roots_registry;
+-mod settings_store;
+-mod transfer_store;
+-
+-pub(crate) use peer::PLUGIN_ID;
+-
+-/// 对等网络 mDNS 服务类型（与 peer-net crate `SERVICE_TYPE` 同值；插件不直接
+-/// 依赖 peer-net crate，此处常量对齐 spec v2 §4.2）
+-const PEER_MDNS_SERVICE_TYPE: &str = "_bedcode-peer._tcp.local.";
+-
+-/// 定向发现事件 topic（spec v2 §5.2 + 审计票 05：事件按属主私有命名空间投递，
+-/// owner = 本插件 id，形如 `com.bedcode.file-transfer::mdns:found`）。
+-/// LazyLock 而非 concat!：PLUGIN_ID 是 const `&str` 而非字面量，concat! 只收
+-/// 字面量，故运行时拼一次（bus_subscribe / on_message 每消息复用它）
+-static MDNS_FOUND_TOPIC: std::sync::LazyLock<String> =
+-    std::sync::LazyLock::new(|| mdns_event_topic(MDNS_FOUND, PLUGIN_ID));
+-static MDNS_LOST_TOPIC: std::sync::LazyLock<String> =
+-    std::sync::LazyLock::new(|| mdns_event_topic(MDNS_LOST, PLUGIN_ID));
+-
+-/// 自建 browse 句柄（host-mdns，spec v2 / ticket 05：本插件自建浏览、事件
+-/// 定向投递 `<PLUGIN_ID>::mdns:found`；None = 未激活/翻修失败降级态）
+-static MDNS_BROWSER: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+-
+-fn mdns_browser() -> &'static Mutex<Option<String>> {
+-    MDNS_BROWSER.get_or_init(|| Mutex::new(None))
+-}
+-
+-/// 自建 mDNS browse（幂等：已有句柄不动；失败降级返回 None，刷新时补建）
+-fn ensure_mdns_browse(h: &WasmHost) -> Option<String> {
+-    let mut slot = mdns_browser().lock().expect("mdns browser slot lock");
+-    if slot.is_some() {
+-        return slot.clone();
+-    }
+-    match h.mdns_browse(PEER_MDNS_SERVICE_TYPE) {
+-        Ok(id) => {
+-            h.log_info(&format!("mdns self-browse started: {id}"));
+-            *slot = Some(id.clone());
+-            Some(id)
+-        }
+-        Err(e) => {
+-            // 引擎未就绪/停用降级：空列表 + 提示，不阻断插件激活（spec v2 §9）
+-            h.log_info(&format!("mdns self-browse deferred (non-fatal): {e}"));
+-            None
+-        }
+-    }
+-}
+-
+-/// 当前选中的对端节点 ID（单对端 UX：桌面端 ⇄ 移动端）
+-static ACTIVE_NODE: OnceLock<Mutex<String>> = OnceLock::new();
+-
+-fn active_node() -> &'static Mutex<String> {
+-    ACTIVE_NODE.get_or_init(|| Mutex::new(String::new()))
+-}
+-
+-fn host() -> WasmHost {
+-    WasmHost
+-}
+-
+-struct FileTransferPlugin;
+-
+-impl WasmPlugin for FileTransferPlugin {
+-    const ID: &'static str = PLUGIN_ID;
+-
+-    fn manifest() -> PluginManifest {
+-        serde_json::from_str(include_str!("../../plugin.json"))
+-            .expect("plugin.json must be valid PluginManifest")
+-    }
+-
+-    fn activate() -> anyhow::Result<()> {
+-        let h = host();
+-        h.log_info("File Transfer plugin activating (self-hosted, desktop)");
+-        // 发现事件（mdns:*）改经 host-mdns 自建 browse 收定向 topic（spec v2 /
+-        // ticket 05，D2 一期迁移）：不再订阅全局 `mdns:found` / `mdns:lost`
+-        // （全局桥接已退役 D1）——本插件自建浏览、事件按属主投递到
+-        // `<PLUGIN_ID>::mdns:found` / `<PLUGIN_ID>::mdns:lost`（票 05 命名空间）
+-        for topic in [
+-            MDNS_FOUND_TOPIC.as_str(),
+-            MDNS_LOST_TOPIC.as_str(),
+-            "peer:devices",
+-            "peer:transfer",
+-            "peer:receive",
+-            "peer:consent",
+-            "peer:connection",
+-        ] {
+-            let _ = h.bus_subscribe(topic);
+-        }
+-        // 自建 browse 对等网络服务类型（共享守护，事件定向投递）；引擎未就绪
+-        // 时降级（空列表 + 提示），刷新命令补建
+-        ensure_mdns_browse(&h);
+-        // 引擎电源：节点/mDNS 生命周期由宿主 activate/deactivate 外壳直接驱动
+-        // （plugin/host.rs 接线 ensure_node_started），插件侧无需声明
+-        // 激活即推送注册表镜像（重启后引擎广播面由本插件重建）：
+-        // 引擎未启动时静默——首次增删共享目录时会再推
+-        if let Err(e) = roots_registry::ensure_table(&h) {
+-            h.log_info(&format!("shared_roots table init deferred: {e}"));
+-        }
+-        Ok(())
+-    }
+-
+-    fn deactivate() -> anyhow::Result<()> {
+-        let h = host();
+-        // 关闭插件 = 服务下线：先自建 browse 回收句柄（宿主 purge 兜底不泄漏）
+-        if let Some(id) = mdns_browser().lock().expect("mdns browser slot lock").take() {
+-            let _ = h.mdns_stop_browse(&id);
+-        }
+-        // 再断开全部活跃对等连接（对端即时感知断开，否则 TLS 连接残留、对端
+-        // 仍显示在线——「关闭插件 对方无感知」）
+-        for handle in device_bridge::drain_sessions() {
+-            if let Err(e) = h.peer_close(&handle) {
+-                h.log_info(&format!("deactivate: peer_close {handle} failed (non-fatal): {e}"));
+-            }
+-        }
+-        // endpoint memo 随会话一并清空（与移动端同构）：跨启停残留旧地址会在
+-        // 对端换 IP/端口后让数据面重拨命中过期 memo
+-        device_bridge::clear_peer_state();
+-        for topic in [
+-            MDNS_FOUND_TOPIC.as_str(),
+-            MDNS_LOST_TOPIC.as_str(),
+-            "peer:devices",
+-            "peer:transfer",
+-            "peer:receive",
+-            "peer:consent",
+-            "peer:connection",
+-        ] {
+-            let _ = h.bus_unsubscribe(topic);
+-        }
+-        // 引擎电源：本插件下线 → 节点/mDNS 服务下线由宿主 deactivate 外壳直接
+-        // 驱动（plugin/host.rs 接线 stop_node_for_plugin），会话已在上方关闭，
+-        // 对端经断流事件即时感知
+-        Ok(())
+-    }
+-
+-    fn invoke_command(name: &str, args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+-        let h = host();
+-        match name {
+-            // ==================== 设备（自建缓存的宿主侧出口） ====================
+-            // 「探索发现」直达后端：确保自建 browse 存活（激活时引擎未就绪则在此
+-            // 补建）后经总线请求宿主即时重查 + 连接态重发（宿主 peer_net 静态
+-            // 订阅 peer:discovery-refresh 消费；mdns:found 缓存重发已退役 D1，
+-            // 设备列表由自建 browse 的定向事件流自行收敛）
+-            "file-transfer.refresh-devices" => {
+-                ensure_mdns_browse(&h);
+-                h.bus_publish(
+-                    "peer:discovery-refresh",
+-                    &serde_json::json!({ "requestedBy": PLUGIN_ID }),
+-                )?;
+-                Ok(serde_json::json!({ "ok": true }))
+-            }
+-            "file-transfer.get-device-snapshot" => Ok(serde_json::json!({
+-                "devices": device_bridge::load_snapshot(&h)?
+-            })),
+-            "file-transfer.save-device-snapshot" => {
+-                let entries: Vec<device_bridge::DeviceSnapshotEntry> =
+-                    serde_json::from_value(args.get("devices").cloned().unwrap_or_default())
+-                        .map_err(|e| anyhow::anyhow!("invalid device snapshot: {e}"))?;
+-                device_bridge::save_snapshot(&h, &entries)?;
+-                Ok(serde_json::json!({ "ok": true }))
+-            }
+-
+-            // ==================== 连接 ====================
+-            "file-transfer.dial-peer" => peer::dial_peer(&h, &args),
+-            "file-transfer.disconnect-peer" => peer::disconnect_peer(&h, &args),
+-            "file-transfer.set-active-peer" => {
+-                let id = args.get("peerId").and_then(|v| v.as_str()).unwrap_or("").to_string();
+-                *active_node().lock().expect("active node lock") = id;
+-                Ok(serde_json::json!({ "ok": true }))
+-            }
+-            // 入站连接的对端寻址登记：被连侧没有拨号 memo，数据面命令经它重拨
+-            // （endpoint 来源 = 前端自建设备缓存，connection-changed 时回填）
+-            "file-transfer.remember-peer-endpoint" => {
+-                let endpoint: device_bridge::DialEndpoint =
+-                    serde_json::from_value(args.get("endpoint").cloned().unwrap_or_default())
+-                        .map_err(|e| anyhow::anyhow!("invalid endpoint: {e}"))?;
+-                // 空 node_id 拒绝：写入污染 memo（后续任意 node_id 查询均不命中但
+-                // 长期驻留静态表）且掩盖前端缺字段 bug
+-                if endpoint.node_id.is_empty() {
+-                    return Err(anyhow::anyhow!("remember-peer-endpoint: empty node_id rejected"));
+-                }
+-                device_bridge::remember_endpoint(&endpoint);
+-                Ok(serde_json::json!({ "ok": true }))
+-            }
+-
+-            // ==================== 发送 ====================
+-            "file-transfer.pick-files" => Ok(serde_json::to_value(h.platform_pick_files()?)?),
+-            // 下载完成「打开本地目录」：走 ABI v22 平台原语 `host-platform.reveal-in-dir`
+-            // （与 pick-files 同域、同口径，不叠加权限门）。原先经宿主前端
+-            // `context.system.revealInDir` + `system:open` 权限 + Tauri 命令
+-            // `plugin_reveal_in_dir` 的桥已随原语化退役（票 04）。
+-            "file-transfer.reveal-in-dir" => {
+-                let path = args
+-                    .get("path")
+-                    .and_then(|v| v.as_str())
+-                    .unwrap_or("")
+-                    .to_string();
+-                if path.is_empty() {
+-                    return Err(anyhow::anyhow!("reveal-in-dir: empty path rejected"));
+-                }
+-                h.platform_reveal_in_dir(&path)?;
+-                Ok(serde_json::json!({ "revealed": true }))
+-            }
+-            "file-transfer.enqueue" => peer::enqueue(&h, &args, active_node()),
+-            "file-transfer.list-tasks" => peer::list_tasks(&h),
+-            "file-transfer.cancel" => peer::cancel_task(&h, &args),
+-            "file-transfer.retry" => peer::retry_task(&h, &args),
+-            "file-transfer.pause" => peer::pause_task(&h, &args),
+-            "file-transfer.resume" => peer::resume_task(&h, &args),
+-            "file-transfer.resume-all" => peer::resume_all_tasks(&h),
+-            "file-transfer.remove-task" => Err(anyhow::anyhow!(
+-                "unsupported: task removal is not part of the transfer lifecycle"
+-            )),
+-
+-            // ==================== 接收端 ====================
+-            "file-transfer.list-batches" => peer::list_batches(&h),
+-            "file-transfer.list-receiving" => peer::list_receiving(&h),
+-            "file-transfer.list-history" => peer::list_history(&h),
+-            "file-transfer.approve-batch" => {
+-                let batch_id = require_str(&args, "batchId")?;
+-                h.peer_respond_transfer(&batch_id, true)?;
+-                Ok(serde_json::json!({ "ok": true }))
+-            }
+-            "file-transfer.reject-batch" => {
+-                let batch_id = require_str(&args, "batchId")?;
+-                h.peer_respond_transfer(&batch_id, false)?;
+-                Ok(serde_json::json!({ "ok": true }))
+-            }
+-            "file-transfer.cancel-receiving" => peer::cancel_receiving(&h, &args),
+-            "file-transfer.clear-history" => peer::clear_history(&h),
+-
+-            // ==================== 信任层（票 10 起经认证中心决策） ====================
+-            // consent / 信任列表改经互调认证中心（auth.decide-consent /
+-            // auth.list-trusted-devices）；认证中心不可用时双轨降级直答宿主
+-            // （迁移前行为，见 auth_center 模块文档）。撤销无互调 api，维持宿主
+-            // 原语直通（与认证中心 peer 段共享同一宿主 trust store，数据一致）。
+-            "file-transfer.respond-consent" => {
+-                let request_id = require_str(&args, "requestId")?;
+-                let accepted = args.get("accepted").and_then(|v| v.as_bool()).unwrap_or(false);
+-                let hit = auth_center::decide_and_respond(&h, &request_id, accepted)
+-                    .map_err(anyhow::Error::msg)?;
+-                Ok(serde_json::json!({ "hit": hit }))
+-            }
+-            "file-transfer.list-trusted" => {
+-                auth_center::list_trusted(&h).map_err(anyhow::Error::msg)
+-            }
+-            "file-transfer.revoke-trusted" => {
+-                let node_id = require_str(&args, "nodeId")?;
+-                let removed = h.peer_revoke_trusted(&node_id)?;
+-                Ok(serde_json::json!({ "removed": removed }))
+-            }
+-
+-            // ==================== 远端浏览 / 拉取 ====================
+-            "file-transfer.list-remote" => peer::list_remote(&h, &args, active_node()),
+-            "file-transfer.pull-files" => peer::pull_files(&h, &args, active_node()),
+-
+-            // ==================== 设置（真源 = 插件 storage + 注册表） ====================
+-            "file-transfer.get-settings" => peer::get_settings(&h),
+-            "file-transfer.set-settings" => peer::set_settings(&h, &args),
+-            "file-transfer.pick-download-dir" => peer::pick_download_dir(&h),
+-            "file-transfer.mount-local" => peer::mount_local(&h, &args),
+-            "file-transfer.update-roots" => peer::update_roots(&h, &args),
+-
+-            _ => Err(anyhow::anyhow!("unknown command: {}", name)),
+-        }
+-    }
+-
+-    fn on_message(msg: &BusMessage) -> anyhow::Result<()> {
+-        let h = host();
+-
+-        // 定向发现事件透传（wire 形状不过翻译）；设备缓存状态机在前端。
+-        // 注：payload 增量追加 serviceType / browserId（spec v2 §5.2），
+-        // 前端按「忽略未知字段」增量原则兼容，这里原样透传
+-        if msg.topic == *MDNS_FOUND_TOPIC || msg.topic == *MDNS_LOST_TOPIC {
+-            let event = if msg.topic == *MDNS_FOUND_TOPIC { "mdns-found" } else { "mdns-lost" };
+-            h.emit_event(&format!("plugin:file-transfer:{event}"), &msg.payload);
+-            return Ok(());
+-        }
+-
+-        // 首连确认：决策权归认证中心（票 10，auth.decide-consent 阶段 1 信任
+-        // 预检）。已信任 → 免确认自动放行（不弹窗）；未知 peer / 认证中心不可用
+-        // → 照旧转发前端弹窗询问（双轨兜底与迁移前行为等价）。
+-        if msg.topic == "peer:consent" {
+-            if auth_center::evaluate_and_maybe_respond(&h, &msg.payload) {
+-                return Ok(());
+-            }
+-            h.emit_event("plugin:file-transfer:consent-requested", &msg.payload);
+-            return Ok(());
+-        }
+-        if msg.topic == "peer:connection" {
+-            if msg.payload.get("connected").and_then(|v| v.as_bool()) == Some(false) {
+-                if let Some(node_id) = msg.payload.get("nodeId").and_then(|v| v.as_str()) {
+-                    device_bridge::forget_session(node_id);
+-                }
+-            }
+-            h.emit_event("plugin:file-transfer:connection-changed", &msg.payload);
+-            return Ok(());
+-        }
+-
+-        // 双写期对账源：宿主发现快照 vs 前端自建缓存规模差异仅记日志
+-        if msg.topic == "peer:devices" {
+-            if let Some(n) = msg.payload.as_array().map(|a| a.len()) {
+-                h.log_info(&format!("reconcile: host discovery cache size = {n}"));
+-            }
+-            return Ok(());
+-        }
+-
+-        if msg.topic == "peer:transfer" {
+-            if let Some(arr) = msg.payload.as_array() {
+-                peer::merge_and_emit(&h, arr, "send");
+-            }
+-            return Ok(());
+-        }
+-
+-        if msg.topic == "peer:receive" {
+-            if let Some(arr) = msg.payload.as_array() {
+-                // auto 分支先应答（accept/reject 策略下无弹窗；ask 留给前端倒计时）
+-                peer::auto_answer_pending(&h, arr);
+-                peer::merge_and_emit(&h, arr, "receive");
+-            }
+-            return Ok(());
+-        }
+-
+-        Ok(())
+-    }
+-
+-    fn on_shutdown() -> anyhow::Result<()> {
+-        host().log_info("File Transfer plugin shut down (self-hosted, desktop)");
+-        Ok(())
+-    }
+-}
+-
+-fn require_str(args: &serde_json::Value, key: &str) -> anyhow::Result<String> {
+-    args.get(key)
+-        .and_then(|v| v.as_str())
+-        .map(|s| s.to_string())
+-        .ok_or_else(|| anyhow::anyhow!("missing {key}"))
+-}
+-
+-bedcode_plugin_api::wasm_entry!(FileTransferPlugin);
++//! File Transfer Plugin (WASM, Desktop) — 业务自持版（issue 13 Phase 3）
++//!
++//! ADR 0022 v2 后插件接管全部业务状态，宿主只提供无业务语义的引擎原语：
++//!
++//! - 设备缓存：前端 deviceState.ts 自持（found/lost/TTL/cap 位），本 crate 只做
++//!   browse 生命周期、`mdns:*` 透传与快照持久化（见 device_bridge）；
++//! - 共享根注册表：plugin-database 真源 + `set-shared-roots` 全量推送（roots_registry）；
++//! - 任务队列与历史：`peer:transfer`/`peer:receive` 快照驱动的自有存储
++//!   （transfer_store），终态归档 + 200 封顶 + 重启 interrupted 标注 + retryMeta 回放；
++//! - 接收策略：插件 storage 真源，auto 分支在 on_message 自动应答，
++//!   ask 弹窗留在前端；配置经保留原语推送宿主闸门（settings_store，A1）；
++//! - 加密参数化：send 载荷元素级 `{path, encrypt}`（步骤 5，零 ABI）。
++//!
++//! 双写期（Phase 3）：旧命令面保持可用；`peer:devices` 订阅降级为日志对账源。
++
++use bedcode_plugin_api::host::{
++    mdns_event_topic, HostBus, HostEvents, HostLog, HostMdns, HostPeer, HostPlatform, MDNS_FOUND, MDNS_LOST,
++};
++use bedcode_plugin_api::types::PluginManifest;
++use bedcode_plugin_api::wasm_host::WasmHost;
++use bedcode_plugin_api::{BusMessage, WasmPlugin};
++use std::sync::Mutex;
++use std::sync::OnceLock;
++
++mod auth_center;
++mod device_bridge;
++mod peer;
++mod roots_registry;
++mod settings_store;
++mod transfer_store;
++
++pub(crate) use peer::PLUGIN_ID;
++
++/// 对等网络 mDNS 服务类型（与 peer-net crate `SERVICE_TYPE` 同值；插件不直接
++/// 依赖 peer-net crate，此处常量对齐 spec v2 §4.2）
++const PEER_MDNS_SERVICE_TYPE: &str = "_bedcode-peer._tcp.local.";
++
++/// 定向发现事件 topic（spec v2 §5.2 + 审计票 05：事件按属主私有命名空间投递，
++/// owner = 本插件 id，形如 `com.bedcode.file-transfer::mdns:found`）。
++/// LazyLock 而非 concat!：PLUGIN_ID 是 const `&str` 而非字面量，concat! 只收
++/// 字面量，故运行时拼一次（bus_subscribe / on_message 每消息复用它）
++static MDNS_FOUND_TOPIC: std::sync::LazyLock<String> =
++    std::sync::LazyLock::new(|| mdns_event_topic(MDNS_FOUND, PLUGIN_ID));
++static MDNS_LOST_TOPIC: std::sync::LazyLock<String> =
++    std::sync::LazyLock::new(|| mdns_event_topic(MDNS_LOST, PLUGIN_ID));
++
++/// 自建 browse 句柄（host-mdns，spec v2 / ticket 05：本插件自建浏览、事件
++/// 定向投递 `<PLUGIN_ID>::mdns:found`；None = 未激活/翻修失败降级态）
++static MDNS_BROWSER: OnceLock<Mutex<Option<String>>> = OnceLock::new();
++
++fn mdns_browser() -> &'static Mutex<Option<String>> {
++    MDNS_BROWSER.get_or_init(|| Mutex::new(None))
++}
++
++/// 自建 mDNS browse（幂等：已有句柄不动；失败降级返回 None，刷新时补建）
++fn ensure_mdns_browse(h: &WasmHost) -> Option<String> {
++    let mut slot = mdns_browser().lock().expect("mdns browser slot lock");
++    if slot.is_some() {
++        return slot.clone();
++    }
++    match h.mdns_browse(PEER_MDNS_SERVICE_TYPE) {
++        Ok(id) => {
++            h.log_info(&format!("mdns self-browse started: {id}"));
++            *slot = Some(id.clone());
++            Some(id)
++        }
++        Err(e) => {
++            // 引擎未就绪/停用降级：空列表 + 提示，不阻断插件激活（spec v2 §9）
++            h.log_info(&format!("mdns self-browse deferred (non-fatal): {e}"));
++            None
++        }
++    }
++}
++
++/// 当前选中的对端节点 ID（单对端 UX：桌面端 ⇄ 移动端）
++static ACTIVE_NODE: OnceLock<Mutex<String>> = OnceLock::new();
++
++fn active_node() -> &'static Mutex<String> {
++    ACTIVE_NODE.get_or_init(|| Mutex::new(String::new()))
++}
++
++fn host() -> WasmHost {
++    WasmHost
++}
++
++struct FileTransferPlugin;
++
++impl WasmPlugin for FileTransferPlugin {
++    const ID: &'static str = PLUGIN_ID;
++
++    fn manifest() -> PluginManifest {
++        serde_json::from_str(include_str!("../../plugin.json"))
++            .expect("plugin.json must be valid PluginManifest")
++    }
++
++    fn activate() -> anyhow::Result<()> {
++        let h = host();
++        h.log_info("File Transfer plugin activating (self-hosted, desktop)");
++        // 发现事件（mdns:*）改经 host-mdns 自建 browse 收定向 topic（spec v2 /
++        // ticket 05，D2 一期迁移）：不再订阅全局 `mdns:found` / `mdns:lost`
++        // （全局桥接已退役 D1）——本插件自建浏览、事件按属主投递到
++        // `<PLUGIN_ID>::mdns:found` / `<PLUGIN_ID>::mdns:lost`（票 05 命名空间）
++        for topic in [
++            MDNS_FOUND_TOPIC.as_str(),
++            MDNS_LOST_TOPIC.as_str(),
++            "peer:devices",
++            "peer:transfer",
++            "peer:receive",
++            "peer:consent",
++            "peer:connection",
++        ] {
++            let _ = h.bus_subscribe(topic);
++        }
++        // 自建 browse 对等网络服务类型（共享守护，事件定向投递）；引擎未就绪
++        // 时降级（空列表 + 提示），刷新命令补建
++        ensure_mdns_browse(&h);
++        // 引擎电源不在这里：节点/mDNS 生命周期由本插件自己请求（见下方
++        // peer_start_node 与 host-mdns 自建 browse），审计票 12 起宿主侧没有
++        // 按产品 id 的开关外壳了
++        // 激活即推送注册表镜像（重启后引擎广播面由本插件重建）：
++        // 引擎未启动时静默——首次增删共享目录时会再推
++        if let Err(e) = roots_registry::ensure_table(&h) {
++            h.log_info(&format!("shared_roots table init deferred: {e}"));
++        }
++        // 引擎电源（审计票 12）：peer-net 节点由**本插件自己**经 host-peer 原语请求，
++        // 内核不再按硬编码产品 id 开关。放在 activate 的最后一步，等价于旧外壳的
++        // `result.is_ok()` 门——前面任何一步失败都不会把节点带起来。
++        // 起节点失败不翻成激活失败（与旧行为一致：旧外壳只 log_error，
++        // 激活结果由 inner 决定），否则一次引擎故障会变成插件整体不可用
++        match h.peer_start_node() {
++            Ok(changed) => h.log_info(&format!(
++                "peer-net node requested by this activation (state changed: {changed})"
++            )),
++            Err(e) => h.log_error(&format!("peer-net node start failed (plugin stays active): {e}")),
++        }
++        Ok(())
++    }
++
++    fn deactivate() -> anyhow::Result<()> {
++        let h = host();
++        // 关闭插件 = 服务下线：先自建 browse 回收句柄（宿主 purge 兜底不泄漏）
++        if let Some(id) = mdns_browser().lock().expect("mdns browser slot lock").take() {
++            let _ = h.mdns_stop_browse(&id);
++        }
++        // 再断开全部活跃对等连接（对端即时感知断开，否则 TLS 连接残留、对端
++        // 仍显示在线——「关闭插件 对方无感知」）
++        for handle in device_bridge::drain_sessions() {
++            if let Err(e) = h.peer_close(&handle) {
++                h.log_info(&format!("deactivate: peer_close {handle} failed (non-fatal): {e}"));
++            }
++        }
++        // endpoint memo 随会话一并清空（与移动端同构）：跨启停残留旧地址会在
++        // 对端换 IP/端口后让数据面重拨命中过期 memo
++        device_bridge::clear_peer_state();
++        for topic in [
++            MDNS_FOUND_TOPIC.as_str(),
++            MDNS_LOST_TOPIC.as_str(),
++            "peer:devices",
++            "peer:transfer",
++            "peer:receive",
++            "peer:consent",
++            "peer:connection",
++        ] {
++            let _ = h.bus_unsubscribe(topic);
++        }
++        // 引擎电源（审计票 12）：本插件下线 → 自己关停节点（会话已在上方关闭，
++        // 对端经断流事件即时感知）。放在最后一步，与旧外壳的 `result.is_ok()` 门同形。
++        // 宿主侧另有一条按属主的兜底清理，本步失败或被漏调都不会让节点泄漏在
++        // 已停用的插件名下；非属主调用会报错，这里只记录不翻成停用失败
++        match h.peer_stop_node() {
++            Ok(_) => h.log_info("peer-net node stopped with plugin"),
++            Err(e) => h.log_info(&format!("peer-net node stop skipped/failed (non-fatal): {e}")),
++        }
++        Ok(())
++    }
++
++    fn invoke_command(name: &str, args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
++        let h = host();
++        match name {
++            // ==================== 设备（自建缓存的宿主侧出口） ====================
++            // 「探索发现」直达后端：确保自建 browse 存活（激活时引擎未就绪则在此
++            // 补建）后经总线请求宿主即时重查 + 连接态重发（宿主 peer_net 静态
++            // 订阅 peer:discovery-refresh 消费；mdns:found 缓存重发已退役 D1，
++            // 设备列表由自建 browse 的定向事件流自行收敛）
++            "file-transfer.refresh-devices" => {
++                ensure_mdns_browse(&h);
++                h.bus_publish(
++                    "peer:discovery-refresh",
++                    &serde_json::json!({ "requestedBy": PLUGIN_ID }),
++                )?;
++                Ok(serde_json::json!({ "ok": true }))
++            }
++            "file-transfer.get-device-snapshot" => Ok(serde_json::json!({
++                "devices": device_bridge::load_snapshot(&h)?
++            })),
++            "file-transfer.save-device-snapshot" => {
++                let entries: Vec<device_bridge::DeviceSnapshotEntry> =
++                    serde_json::from_value(args.get("devices").cloned().unwrap_or_default())
++                        .map_err(|e| anyhow::anyhow!("invalid device snapshot: {e}"))?;
++                device_bridge::save_snapshot(&h, &entries)?;
++                Ok(serde_json::json!({ "ok": true }))
++            }
++
++            // ==================== 连接 ====================
++            "file-transfer.dial-peer" => peer::dial_peer(&h, &args),
++            "file-transfer.disconnect-peer" => peer::disconnect_peer(&h, &args),
++            "file-transfer.set-active-peer" => {
++                let id = args.get("peerId").and_then(|v| v.as_str()).unwrap_or("").to_string();
++                *active_node().lock().expect("active node lock") = id;
++                Ok(serde_json::json!({ "ok": true }))
++            }
++            // 入站连接的对端寻址登记：被连侧没有拨号 memo，数据面命令经它重拨
++            // （endpoint 来源 = 前端自建设备缓存，connection-changed 时回填）
++            "file-transfer.remember-peer-endpoint" => {
++                let endpoint: device_bridge::DialEndpoint =
++                    serde_json::from_value(args.get("endpoint").cloned().unwrap_or_default())
++                        .map_err(|e| anyhow::anyhow!("invalid endpoint: {e}"))?;
++                // 空 node_id 拒绝：写入污染 memo（后续任意 node_id 查询均不命中但
++                // 长期驻留静态表）且掩盖前端缺字段 bug
++                if endpoint.node_id.is_empty() {
++                    return Err(anyhow::anyhow!("remember-peer-endpoint: empty node_id rejected"));
++                }
++                device_bridge::remember_endpoint(&endpoint);
++                Ok(serde_json::json!({ "ok": true }))
++            }
++
++            // ==================== 发送 ====================
++            "file-transfer.pick-files" => Ok(serde_json::to_value(h.platform_pick_files()?)?),
++            // 下载完成「打开本地目录」：走 ABI v22 平台原语 `host-platform.reveal-in-dir`
++            // （与 pick-files 同域、同口径，不叠加权限门）。原先经宿主前端
++            // `context.system.revealInDir` + `system:open` 权限 + Tauri 命令
++            // `plugin_reveal_in_dir` 的桥已随原语化退役（票 04）。
++            "file-transfer.reveal-in-dir" => {
++                let path = args
++                    .get("path")
++                    .and_then(|v| v.as_str())
++                    .unwrap_or("")
++                    .to_string();
++                if path.is_empty() {
++                    return Err(anyhow::anyhow!("reveal-in-dir: empty path rejected"));
++                }
++                h.platform_reveal_in_dir(&path)?;
++                Ok(serde_json::json!({ "revealed": true }))
++            }
++            "file-transfer.enqueue" => peer::enqueue(&h, &args, active_node()),
++            "file-transfer.list-tasks" => peer::list_tasks(&h),
++            "file-transfer.cancel" => peer::cancel_task(&h, &args),
++            "file-transfer.retry" => peer::retry_task(&h, &args),
++            "file-transfer.pause" => peer::pause_task(&h, &args),
++            "file-transfer.resume" => peer::resume_task(&h, &args),
++            "file-transfer.resume-all" => peer::resume_all_tasks(&h),
++            "file-transfer.remove-task" => Err(anyhow::anyhow!(
++                "unsupported: task removal is not part of the transfer lifecycle"
++            )),
++
++            // ==================== 接收端 ====================
++            "file-transfer.list-batches" => peer::list_batches(&h),
++            "file-transfer.list-receiving" => peer::list_receiving(&h),
++            "file-transfer.list-history" => peer::list_history(&h),
++            "file-transfer.approve-batch" => {
++                let batch_id = require_str(&args, "batchId")?;
++                h.peer_respond_transfer(&batch_id, true)?;
++                Ok(serde_json::json!({ "ok": true }))
++            }
++            "file-transfer.reject-batch" => {
++                let batch_id = require_str(&args, "batchId")?;
++                h.peer_respond_transfer(&batch_id, false)?;
++                Ok(serde_json::json!({ "ok": true }))
++            }
++            "file-transfer.cancel-receiving" => peer::cancel_receiving(&h, &args),
++            "file-transfer.clear-history" => peer::clear_history(&h),
++
++            // ==================== 信任层（票 10 起经认证中心决策） ====================
++            // consent / 信任列表改经互调认证中心（auth.decide-consent /
++            // auth.list-trusted-devices）；认证中心不可用时双轨降级直答宿主
++            // （迁移前行为，见 auth_center 模块文档）。撤销无互调 api，维持宿主
++            // 原语直通（与认证中心 peer 段共享同一宿主 trust store，数据一致）。
++            "file-transfer.respond-consent" => {
++                let request_id = require_str(&args, "requestId")?;
++                let accepted = args.get("accepted").and_then(|v| v.as_bool()).unwrap_or(false);
++                let hit = auth_center::decide_and_respond(&h, &request_id, accepted)
++                    .map_err(anyhow::Error::msg)?;
++                Ok(serde_json::json!({ "hit": hit }))
++            }
++            "file-transfer.list-trusted" => {
++                auth_center::list_trusted(&h).map_err(anyhow::Error::msg)
++            }
++            "file-transfer.revoke-trusted" => {
++                let node_id = require_str(&args, "nodeId")?;
++                let removed = h.peer_revoke_trusted(&node_id)?;
++                Ok(serde_json::json!({ "removed": removed }))
++            }
++
++            // ==================== 远端浏览 / 拉取 ====================
++            "file-transfer.list-remote" => peer::list_remote(&h, &args, active_node()),
++            "file-transfer.pull-files" => peer::pull_files(&h, &args, active_node()),
++
++            // ==================== 设置（真源 = 插件 storage + 注册表） ====================
++            "file-transfer.get-settings" => peer::get_settings(&h),
++            "file-transfer.set-settings" => peer::set_settings(&h, &args),
++            "file-transfer.pick-download-dir" => peer::pick_download_dir(&h),
++            "file-transfer.mount-local" => peer::mount_local(&h, &args),
++            "file-transfer.update-roots" => peer::update_roots(&h, &args),
++
++            _ => Err(anyhow::anyhow!("unknown command: {}", name)),
++        }
++    }
++
++    fn on_message(msg: &BusMessage) -> anyhow::Result<()> {
++        let h = host();
++
++        // 定向发现事件透传（wire 形状不过翻译）；设备缓存状态机在前端。
++        // 注：payload 增量追加 serviceType / browserId（spec v2 §5.2），
++        // 前端按「忽略未知字段」增量原则兼容，这里原样透传
++        if msg.topic == *MDNS_FOUND_TOPIC || msg.topic == *MDNS_LOST_TOPIC {
++            let event = if msg.topic == *MDNS_FOUND_TOPIC { "mdns-found" } else { "mdns-lost" };
++            h.emit_event(&format!("plugin:file-transfer:{event}"), &msg.payload);
++            return Ok(());
++        }
++
++        // 首连确认：决策权归认证中心（票 10，auth.decide-consent 阶段 1 信任
++        // 预检）。已信任 → 免确认自动放行（不弹窗）；未知 peer / 认证中心不可用
++        // → 照旧转发前端弹窗询问（双轨兜底与迁移前行为等价）。
++        if msg.topic == "peer:consent" {
++            if auth_center::evaluate_and_maybe_respond(&h, &msg.payload) {
++                return Ok(());
++            }
++            h.emit_event("plugin:file-transfer:consent-requested", &msg.payload);
++            return Ok(());
++        }
++        if msg.topic == "peer:connection" {
++            if msg.payload.get("connected").and_then(|v| v.as_bool()) == Some(false) {
++                if let Some(node_id) = msg.payload.get("nodeId").and_then(|v| v.as_str()) {
++                    device_bridge::forget_session(node_id);
++                }
++            }
++            h.emit_event("plugin:file-transfer:connection-changed", &msg.payload);
++            return Ok(());
++        }
++
++        // 双写期对账源：宿主发现快照 vs 前端自建缓存规模差异仅记日志
++        if msg.topic == "peer:devices" {
++            if let Some(n) = msg.payload.as_array().map(|a| a.len()) {
++                h.log_info(&format!("reconcile: host discovery cache size = {n}"));
++            }
++            return Ok(());
++        }
++
++        if msg.topic == "peer:transfer" {
++            if let Some(arr) = msg.payload.as_array() {
++                peer::merge_and_emit(&h, arr, "send");
++            }
++            return Ok(());
++        }
++
++        if msg.topic == "peer:receive" {
++            if let Some(arr) = msg.payload.as_array() {
++                // auto 分支先应答（accept/reject 策略下无弹窗；ask 留给前端倒计时）
++                peer::auto_answer_pending(&h, arr);
++                peer::merge_and_emit(&h, arr, "receive");
++            }
++            return Ok(());
++        }
++
++        Ok(())
++    }
++
++    fn on_shutdown() -> anyhow::Result<()> {
++        host().log_info("File Transfer plugin shut down (self-hosted, desktop)");
++        Ok(())
++    }
++}
++
++fn require_str(args: &serde_json::Value, key: &str) -> anyhow::Result<String> {
++    args.get(key)
++        .and_then(|v| v.as_str())
++        .map(|s| s.to_string())
++        .ok_or_else(|| anyhow::anyhow!("missing {key}"))
++}
++
++bedcode_plugin_api::wasm_entry!(FileTransferPlugin);
+--- a/bedcode-desktop/src-tauri/src/lib.rs
++++ b/bedcode-desktop/src-tauri/src/lib.rs
+@@ -369,9 +369,10 @@
+             let peer_net_data_dir = app_handle.path().app_data_dir().expect("Failed to get app data dir");
+             crate::peer_net::init_node_identity(&peer_net_data_dir)?;
+ 
+-            // 对等网络节点状态容器（ticket 03）：节点生命周期随文件传输插件
+-            // 启停（插件管理器 activate/deactivate 外壳接线，
+-            // 见 peer_net::ensure_node_started；旧 setup 无条件自启已退役）
++            // 对等网络节点状态容器（ticket 03）：节点生命周期按**属主**随插件启停
++            // （审计票 12——插件经 host-peer.start-node / stop-node 自行请求，
++            // 内核只记账；见 peer_net::start_node_owned / release_node_for。
++            // 旧 setup 无条件自启与旧的按产品 id 开关外壳都已退役）
+             app.manage(crate::peer_net::PeerNetState::default());
+             // peer-engine 状态仅保存当前引擎会话控制句柄与事件快照，不是业务持久化真源；
+             // 任务、历史、设置均由 file-transfer 插件私有库持有。
+@@ -474,15 +475,13 @@
+             // DROP 两表清理。迁移失败不阻断启动。
+             crate::plugin::auth_records_migration::run();
+             app.manage(system_info.clone());
+-            // peer-net 节点与文件传输插件状态对账：boot 装配期 AppContext 全局
+-            // 尚未注册，activate 外壳内的节点启动会被静默跳过（2026-09-06 实机
+-            // 实证：已激活插件的节点不随 boot 启动，需手动开关插件才广播）——
+-            // 装配完成后按最终插件状态补对账
+-            if let Err(e) =
+-                tauri::async_runtime::block_on(crate::peer_net::sync_node_with_plugin_state(&app_handle_arc))
+-            {
+-                tracing::error!(error = %e, "peer-net node sync after boot assembly failed");
+-            }
++            // peer-net 节点的启动不再需要 boot 对账（审计票 12）：旧实现要在装配末尾
++            // 按硬编码插件 id 补一次状态对账，因为 activate 外壳经
++            // `AppContext::try_global()` 取句柄，而 boot 装配期全局尚未注册
++            // （2026-09-06 实机实证：已激活插件的节点不随 boot 启动）。现在改由插件
++            // 在自己的 activate 里调 `host-peer.start-node`，宿主从 WasmHostContext
++            // 的 app_handle 字段取句柄（PluginHost::new 之前就早已就位，不依赖全局），
++            // 所以 boot 期直接起得来，那条对账连同它的产品耦合一起退役
+             // ==================== 开发模式：启动插件文件监听 ====================
+             // 仅 debug 构建启用，监听插件产物变化触发热重载
+             // notify 回调在非 Tokio 线程中运行，必须通过 Handle::spawn 而非 tokio::spawn
+@@ -662,63 +661,63 @@
+             // session.pairing.* / session.qr.* / session.devices.* / session.history.*
+             // （凭据签发与 `pairings` 表仍在内核 auth 模块，宿主只留原语与记录面；
+             // 见 .scratch/2026-09-21-host-rust-residue/issues/05）
+-            commands::system::set_log_level,
+-            commands::system::save_log_settings,
+-            commands::opener::open_log_dir,
+-            commands::settings::get_all_db_settings,
+-            commands::settings::set_db_setting,
++            commands::set_log_level,
++            commands::save_log_settings,
++            commands::open_log_dir,
++            commands::get_all_db_settings,
++            commands::set_db_setting,
+             // Settings
+-            commands::system::get_app_settings,
+-            commands::system::save_app_settings,
+-            commands::system::set_terminal_bg_image,
++            commands::get_app_settings,
++            commands::save_app_settings,
++            commands::set_terminal_bg_image,
+             // Utility
+-            commands::system::ping,
+-            commands::system::get_app_version,
+-            commands::system::get_startup_time,
+-            commands::system::confirm_window_close,
+-            // Dev Console Relay（仅 dev：前端 console 日志转发，写 runtime.*.log + frontend.*.log 单独文件，见 commands::dev_logs）
++            commands::ping,
++            commands::get_app_version,
++            commands::get_startup_time,
++            commands::confirm_window_close,
++            // Dev Console Relay（仅 dev：前端 console 日志转发，写 runtime.*.log + frontend.*.log 单独文件，见 commands.rs Dev Console Log Relay 节）
+             #[cfg(debug_assertions)]
+-            commands::dev_logs::report_frontend_log,
+-            commands::devices::get_connected_devices,
++            commands::report_frontend_log,
++            commands::get_connected_devices,
+             // Plugin
+-            commands::plugin::plugin_list_loaded,
+-            commands::plugin::plugin_get_info,
+-            commands::plugin::plugin_preauthorize,
+-            commands::plugin::plugin_activate,
+-            commands::plugin::plugin_deactivate,
+-            commands::plugin::plugin_approve,
+-            commands::plugin::plugin_frontend_loader_session,
+-            commands::plugin::plugin_channel_token,
+-            commands::plugin::plugin_install_from_file,
+-            commands::plugin::plugin_uninstall,
+-            commands::plugin::plugin_mark_error,
+-            commands::plugin::plugin_frontend_load_report,
+-            commands::plugin::plugin_get_activated_state,
+-            commands::plugin::plugin_storage_get,
+-            commands::plugin::plugin_storage_set,
+-            commands::plugin::plugin_storage_delete,
+-            commands::plugin::plugin_terminal_send_input,
+-            commands::plugin::plugin_list_commands,
+-            commands::plugin::plugin_list_views,
+-            commands::plugin::plugin_find_file_handler,
+-            commands::plugin::plugin_invoke,
+-            commands::plugin::plugin_list_rust_commands,
+-            commands::plugin::plugin_dev_reload,
+-            commands::plugin::plugin_fs_auth_respond,
++            commands::plugin_list_loaded,
++            commands::plugin_get_info,
++            commands::plugin_preauthorize,
++            commands::plugin_activate,
++            commands::plugin_deactivate,
++            commands::plugin_approve,
++            commands::plugin_frontend_loader_session,
++            commands::plugin_channel_token,
++            commands::plugin_install_from_file,
++            commands::plugin_uninstall,
++            commands::plugin_mark_error,
++            commands::plugin_frontend_load_report,
++            commands::plugin_get_activated_state,
++            commands::plugin_storage_get,
++            commands::plugin_storage_set,
++            commands::plugin_storage_delete,
++            commands::plugin_terminal_send_input,
++            commands::plugin_list_commands,
++            commands::plugin_list_views,
++            commands::plugin_find_file_handler,
++            commands::plugin_invoke,
++            commands::plugin_list_rust_commands,
++            commands::plugin_dev_reload,
++            commands::plugin_fs_auth_respond,
+             // Server
+-            commands::server::server_start,
+-            commands::server::server_stop,
+-            commands::server::server_restart,
+-            commands::server::get_server_status,
+-            commands::server::get_server_metrics,
+-            commands::server::get_server_network_config,
+-            commands::server::update_server_port,
+-            commands::server::update_server_auto_start,
+-            commands::server::update_server_network_config,
+-            commands::server::get_traffic_encryption_config,
+-            commands::server::set_traffic_encryption_config,
+-            commands::server::get_link_crypto_fingerprint,
+-            commands::server::reset_server_network_config,
++            commands::server_start,
++            commands::server_stop,
++            commands::server_restart,
++            commands::get_server_status,
++            commands::get_server_metrics,
++            commands::get_server_network_config,
++            commands::update_server_port,
++            commands::update_server_auto_start,
++            commands::update_server_network_config,
++            commands::get_traffic_encryption_config,
++            commands::set_traffic_encryption_config,
++            commands::get_link_crypto_fingerprint,
++            commands::reset_server_network_config,
+             // Peer Net
+             peer_net::start_peer_node,
+             peer_net::stop_peer_node,
+--- a/bedcode-desktop/src-tauri/src/peer_net.rs
++++ b/bedcode-desktop/src-tauri/src/peer_net.rs
+@@ -119,6 +119,9 @@
+     /// 双装配时次者 bind 回退 :0 随机端口、首个 runtime 泄漏。不持 runtime
+     /// 锁跨 await（与全仓短持锁风格一致），闸门只串行化装配本身
+     lifecycle_gate: tokio::sync::Semaphore,
++    /// 节点属主（审计票 12）：起节点的插件 id，停即清空。
++    /// 见 [`node_owner`] / [`start_node_owned`] / [`release_node_for`]
++    node_owner: std::sync::Mutex<Option<String>>,
+ }
+ 
+ impl Default for PeerNetState {
+@@ -132,6 +135,7 @@
+             inbound_peers: std::sync::Mutex::new(HashMap::new()),
+             inbound_conns: std::sync::Mutex::new(HashMap::new()),
+             lifecycle_gate: tokio::sync::Semaphore::new(1),
++            node_owner: std::sync::Mutex::new(None),
+         }
+     }
+ }
+@@ -636,54 +640,88 @@
+     crate::peer_engine_receive::set_peer_download_dir(app, path).await
+ }
+ 
+-/// 文件传输插件 id：peer-net 节点的唯一消费方（全仓唯一声明 `peer` 权限的插件），
+-/// 节点生命周期随其启用状态
+-pub const FILE_TRANSFER_PLUGIN_ID: &str = "com.bedcode.file-transfer";
+-
+-/// 文件传输插件激活 → 确保节点运行（幂等；boot 自动激活与运行时启用共用漏斗）
+-///
+-/// 生命周期随属主插件：旧实现 setup 阶段无条件自启，插件停用后本机仍在
+-/// `_bedcode-peer` 广播（对端照样发现，与终端链路 `_bedcode` 服务的独立
+-/// 语义相悖）且监听未关——受信对端可直连数据面（consent 只拦未信任首连）。
+-/// 改为插件激活驱动启动、停用驱动关停。
+-pub async fn ensure_node_started(app: &AppHandle) -> crate::Result<()> {
+-    let data_dir = app_data_dir(app)?;
+-    let device_name = resolve_device_name(&app);
++/// 节点属主记账（审计票 12）：把节点从「未跑」带到「跑」的那个**调用方插件 id**。
++///
++/// 取代旧的两处按硬编码产品 id 分支（`activation.rs` 的激活/停用外壳）与 boot 末尾
++/// 按 id 对账的 `sync_node_with_plugin_state`：内核不再认得任何产品，只按
++/// 「谁起谁停」这条与产品无关的规则记账。`None` = 节点未跑，或跑着但无插件属主
++/// （只可能来自宿主命令面 `start_peer_node`——它不是插件，不认领属主）。
++pub fn node_owner(app: &AppHandle) -> Option<String> {
+     let state = app.state::<PeerNetState>();
+-    start_locked(&state, &data_dir, device_name, app).await.map(|_| ())
++    let owner = state.node_owner.lock().expect("node owner lock poisoned").clone();
++    owner
+ }
+ 
+-/// 文件传输插件停用 → 服务下线：停广播/关监听/排水连接与入站记账（对端即时
+-/// 感知断开），幂等（节点未启动为 no-op）
+-pub async fn stop_node_for_plugin(app: &AppHandle) -> crate::Result<()> {
++/// 插件按需启动本机节点（引擎级生命周期原语，审计票 12；幂等）
++///
++/// 返回 `true` = 本次调用把节点从「未跑」带到「跑」。属主规则：
++/// 无主时可被认领（含宿主命令面先起的情况）；同主重复调用幂等；
++/// **他主拒绝接管**，错误文案不回带对方 id（与 `host-peer` 句柄属主门同口径，票 05）。
++pub async fn start_node_owned(app: &AppHandle, caller: &str) -> crate::Result<bool> {
+     let state = app.state::<PeerNetState>();
+-    stop_locked(&state, app).await
++    {
++        let mut guard = state.node_owner.lock().expect("node owner lock poisoned");
++        if let Some(owner) = guard.as_ref() {
++            if owner != caller {
++                return Err(crate::AppError::Plugin(
++                    "peer node is already owned by another plugin".to_string(),
++                ));
++            }
++        }
++    }
++    let was_running = { state.runtime.lock().await.is_some() };
++    let data_dir = app_data_dir(app)?;
++    let device_name = resolve_device_name(app);
++    start_locked(&state, &data_dir, device_name, app).await?;
++    // 认领放在装配成功之后：起不来的插件不该把节点锁在自己名下
++    {
++        let mut guard = state.node_owner.lock().expect("node owner lock poisoned");
++        if guard.is_none() {
++            *guard = Some(caller.to_string());
++        }
++    }
++    Ok(!was_running)
+ }
+ 
+-/// 文件传输插件当前是否已激活（AppContext 全局未就绪视为未激活）
+-async fn plugin_transfer_activated() -> bool {
+-    match crate::system::app_context::AppContext::try_global() {
+-        Some(ctx) => ctx.plugin_host().is_activated(FILE_TRANSFER_PLUGIN_ID).await,
+-        None => false,
++/// 属主插件让节点下线（引擎级原语，审计票 12；节点未跑为 no-op）
++///
++/// 非属主一律拒绝（文案不回带属主 id）。关停与清账同处——`stop_locked` 里清属主，
++/// 所以本函数不需要在关停失败时补偿
++pub async fn stop_node_owned(app: &AppHandle, caller: &str) -> crate::Result<bool> {
++    let state = app.state::<PeerNetState>();
++    let owned = state
++        .node_owner
++        .lock()
++        .expect("node owner lock poisoned")
++        .as_deref()
++        == Some(caller);
++    if !owned {
++        return Err(crate::AppError::Plugin(
++            "not owner of peer node".to_string(),
++        ));
+     }
++    stop_locked(&state, app).await?;
++    Ok(true)
+ }
+ 
+-/// peer-net 节点与文件传输插件运行状态对齐（状态驱动对账，幂等）
++/// 内核侧按属主清理节点（审计票 12）：插件停用或激活失败时调用
+ ///
+-/// 插件已激活 → 确保节点运行；未激活 → 服务下线。boot 装配完成后调用一次，
+-/// 运行时开关由插件 activate/deactivate 外壳（ensure_node_started /
+-/// stop_node_for_plugin）直接驱动——boot 装配期 AppContext 全局尚未注册，
+-/// activate 外壳内的节点启动会被静默跳过（2026-09-06 实机实证：已激活插件的
+-/// 节点不随 boot 启动，需手动开关插件才广播），状态对账不依赖外壳是否已
+-/// 执行。语义：插件运行 mDNS 就运行，插件不运行 mDNS 也不运行。
+-pub async fn sync_node_with_plugin_state(app: &AppHandle) -> crate::Result<bool> {
+-    let activated = plugin_transfer_activated().await;
+-    if activated {
+-        ensure_node_started(app).await?;
+-    } else {
+-        stop_node_for_plugin(app).await?;
++/// 属主匹配才关停；不匹配（含无主）一律 no-op 且**不报错**——这条是任意插件的
++/// 生命周期都能安全挂上的通用钩子，替代旧的两个 `plugin_id == FILE_TRANSFER_PLUGIN_ID`
++/// 分支。返回是否真的关停了节点
++pub async fn release_node_for(app: &AppHandle, former_owner: &str) -> crate::Result<bool> {
++    let state = app.state::<PeerNetState>();
++    let owned = state
++        .node_owner
++        .lock()
++        .expect("node owner lock poisoned")
++        .as_deref()
++        == Some(former_owner);
++    if !owned {
++        return Ok(false);
+     }
+-    Ok(activated)
++    stop_locked(&state, app).await?;
++    Ok(true)
+ }
+ 
+ // ==================== 内部装配 ====================
+@@ -987,6 +1025,9 @@
+         .acquire()
+         .await
+         .expect("lifecycle gate never closed");
++    // 关停与清账同处（审计票 12）：不管走哪条路径停下来（属主原语 / 内核属主清理 /
++    // 宿主命令面人工停 / 退出排水），节点一旦下线就不再属于任何插件
++    *state.node_owner.lock().expect("node owner lock poisoned") = None;
+     // 主动拨号的存活连接随关停一并终结：通知活性泵关闭（drop 连接 → 对端经
+     // EOF 感知本机下线），并逐个通知前端摘除已连接徽标——连接表随节点生命
+     // 周期走，重启后从空表开始
+--- a/bedcode-desktop/src-tauri/src/plugin/manager/host.rs
++++ b/bedcode-desktop/src-tauri/src/plugin/manager/host.rs
+@@ -23,9 +23,6 @@
+ use tauri::Emitter;
+ use tokio::sync::{Mutex, RwLock};
+ 
+-/// file-transfer 插件 ID(启用先行门禁测试用;移动端无独立镜像常量)。
+-pub const FILE_TRANSFER_PLUGIN_ID: &str = "com.bedcode.file-transfer";
+-
+ /// WASM 插件 trap 自动重载最小间隔（秒）
+ ///
+ /// wasmtime 同步引擎下任何一次 trap 都会污染整个 Store（`set_trapped`），
+--- a/bedcode-desktop/src-tauri/src/plugin/manager/host/activation.rs
++++ b/bedcode-desktop/src-tauri/src/plugin/manager/host/activation.rs
+@@ -79,32 +79,48 @@
+     /// - WASM 插件：调用 __bedcode_activate 导出函数
+     /// - TS-only 插件：前端模块加载在 PluginLoader 中完成
+     pub async fn activate_plugin(&self, plugin_id: &str, persist: bool) -> crate::Result<()> {
+-        // 外壳：激活成功后接线 peer-net 节点生命周期（file-transfer 是节点唯一
+-        // 消费方，节点随插件启停——旧 setup 无条件自启已退役，停用即服务下线）
++        // 外壳（审计票 12）：激活**失败**时按属主回收 peer-net 节点。
++        // 节点生命周期已改由插件自己经 `host-peer.start-node` 请求，内核不再认得
++        // 任何产品 id；这里只剩一条与产品无关的补偿——插件可能在 activate() 里已经
++        // 把节点带起来、随后才失败，若不回收就会出现「插件未激活、本机仍在
++        // `_bedcode-peer` 广播」。旧实现靠「外壳只在成功时才起节点」天然没有这个
++        // 窗口，改成插件自起之后，补偿必须显式存在。属主不匹配即 no-op，
++        // 所以任何插件都能安全走这一条
+         let result = self.activate_plugin_inner(plugin_id, persist).await;
+-        if result.is_ok() && plugin_id == crate::peer_net::FILE_TRANSFER_PLUGIN_ID {
+-            match crate::system::app_context::AppContext::try_global() {
+-                Some(ctx) => {
+-                    if let Some(app) = ctx.app_handle() {
+-                        if let Err(e) = crate::peer_net::ensure_node_started(app).await {
+-                            tracing::error!(
+-                                plugin_id = %plugin_id,
+-                                error = %e,
+-                                "peer-net node start on plugin activation failed"
+-                            );
+-                        }
+-                    }
+-                }
+-                // boot 装配期 AppContext 未注册：静默跳过，由 boot 末尾的状态
+-                // 对账（sync_node_with_plugin_state）兜底
+-                None => {
+-                    tracing::debug!("peer-net node start skipped: AppContext not ready (boot assembly)");
+-                }
+-            }
++        if result.is_err() {
++            self.release_peer_node_if_owned(plugin_id, "activation failed").await;
+         }
+         result
+     }
+ 
++    /// 按属主释放 peer-net 节点（审计票 12）：该插件起着节点就停掉，没起过是 no-op
++    ///
++    /// 无 app_handle 的无头上下文（测试）直接跳过。停用与激活失败两条生命周期路径
++    /// 共用它，替代旧的两个 `plugin_id == FILE_TRANSFER_PLUGIN_ID` 硬编码分支
++    async fn release_peer_node_if_owned(&self, plugin_id: &str, reason: &str) {
++        let Some(app) = self.wasm_host_ctx.app_handle() else {
++            return;
++        };
++        match crate::peer_net::release_node_for(app, plugin_id).await {
++            Ok(true) => {
++                tracing::info!(
++                    plugin_id = %plugin_id,
++                    reason = %reason,
++                    "peer-net node released: its owning plugin stopped running"
++                );
++            }
++            Ok(false) => {}
++            Err(error) => {
++                tracing::error!(
++                    plugin_id = %plugin_id,
++                    error = %error,
++                    reason = %reason,
++                    "peer-net node release on plugin lifecycle failed"
++                );
++            }
++        }
++    }
++
+     /// 审批门禁（ADR 0020 / 审计票 03）：返回用户安装插件的生效权限集
+     ///
+     /// - `Ok(None)`：来源免审批（静态注册 / 随包扫描 / 内置 WASM）→ 宿主按 manifest 全量授权；
+@@ -583,27 +599,13 @@
+     }
+ 
+     pub async fn deactivate_plugin(&self, plugin_id: &str, persist: bool) -> crate::Result<()> {
+-        // 外壳：停用成功后接线 peer-net 节点生命周期（file-transfer 停用即
+-        // 服务下线，对端即时感知；幂等）
++        // 外壳（审计票 12）：停用**成功**后按属主回收 peer-net 节点（对端即时感知
++        // 下线；该插件没起过节点则 no-op，幂等）。插件自己也会经
++        // `host-peer.stop-node` 关停，这一层是它没能关停（忘了调 / deactivate 里
++        // 提前返回）时的兜底——按属主判断，不认产品 id
+         let result = self.deactivate_plugin_inner(plugin_id, persist).await;
+-        if result.is_ok() && plugin_id == crate::peer_net::FILE_TRANSFER_PLUGIN_ID {
+-            match crate::system::app_context::AppContext::try_global() {
+-                Some(ctx) => {
+-                    if let Some(app) = ctx.app_handle() {
+-                        if let Err(e) = crate::peer_net::stop_node_for_plugin(app).await {
+-                            tracing::error!(
+-                                plugin_id = %plugin_id,
+-                                error = %e,
+-                                "peer-net node stop on plugin deactivation failed"
+-                            );
+-                        }
+-                    }
+-                }
+-                // boot 装配期 AppContext 未注册：由 boot 末尾的状态对账兜底
+-                None => {
+-                    tracing::debug!("peer-net node stop skipped: AppContext not ready (boot assembly)");
+-                }
+-            }
++        if result.is_ok() {
++            self.release_peer_node_if_owned(plugin_id, "plugin deactivated").await;
+         }
+         result
+     }
+--- a/bedcode-desktop/src-tauri/src/plugin/manager/host/tests/runtime_preauth_test.rs
++++ b/bedcode-desktop/src-tauri/src/plugin/manager/host/tests/runtime_preauth_test.rs
+@@ -1,7 +1,15 @@
+ //! 运行期错误通知节流 + fs 预授权（preauth）用例。
+ 
+-use super::*;
+ use super::scaffold::*;
++use super::*;
++
++/// 被测插件 id（本文件的测试夹具，不是内核常量）
++///
++/// 审计票 12 起 `FILE_TRANSFER_PLUGIN_ID` 从 `manager/host.rs` 与 `peer_net.rs` 删除——
++/// 内核不再硬编码产品身份（peer-net 节点改按属主记账）。本用例测的是「共享根为空的
++/// 插件可以启用先行」这条通用 preauth 语义，用一个具名夹具插件 id 即可，
++/// 不需要内核侧留着那个常量
++const FILE_TRANSFER_PLUGIN_ID: &str = "com.bedcode.file-transfer";
+ 
+ #[tokio::test]
+ async fn notify_plugin_runtime_error_throttle_and_no_app_context() {
+@@ -45,7 +53,7 @@
+ #[tokio::test]
+ async fn preauthorize_file_transfer_empty_shared_roots_passes() {
+     let host = setup_host().await;
+-    let result = host.preauthorize_plugin(super::FILE_TRANSFER_PLUGIN_ID).await;
++    let result = host.preauthorize_plugin(FILE_TRANSFER_PLUGIN_ID).await;
+     assert!(
+         result.is_ok(),
+         "file-transfer with empty shared_roots must pass (enable-first), got: {:?}",
+--- a/bedcode-desktop/src-tauri/src/plugin/manager/wasm_runtime.rs
++++ b/bedcode-desktop/src-tauri/src/plugin/manager/wasm_runtime.rs
+@@ -1072,6 +1072,17 @@
+         self.session_manager.clone()
+     }
+ 
++    /// 应用句柄引用；无头 / 测试上下文为 None
++    ///
++    /// 存在的理由（审计票 12）：`app_handle` 字段是模块私有的，而 peer-net 节点的
++    /// **属主清理钩子**在 `manager/host/activation.rs`——那里不是本模块的后代，读不到
++    /// 字段。此前那条路走 `AppContext::try_global()`，但 boot 装配期全局尚未注册，
++    /// 「插件在 activate 里起了节点、随后激活失败」这个窗口就拿不到句柄去收，
++    /// 所以直接从上下文字段取（它在 `PluginHost::new` 之前就已就位）
++    pub(crate) fn app_handle(&self) -> Option<&tauri::AppHandle> {
++        self.app_handle.as_deref()
++    }
++
+     /// 获取或懒加载插件独立数据库
+     ///
+     /// 首次调用时创建目录 + 打开/创建 plugin.db + 缓存连接
+--- a/bedcode-desktop/src-tauri/src/plugin/manager/wasm_runtime/component.rs
++++ b/bedcode-desktop/src-tauri/src/plugin/manager/wasm_runtime/component.rs
+@@ -537,6 +537,14 @@
+     fn set_download_dir(&mut self, path: String) -> Result<(), String> {
+         peer::peer_set_download_dir(&self.host_ctx, &self.plugin_id, &path)
+     }
++
++    fn start_node(&mut self) -> Result<bool, String> {
++        peer::peer_start_node(&self.host_ctx, &self.plugin_id)
++    }
++
++    fn stop_node(&mut self) -> Result<bool, String> {
++        peer::peer_stop_node(&self.host_ctx, &self.plugin_id)
++    }
+ }
+ 
+ // ==================== host-mdns / host-platform（ADR 0022 v2）====================
+--- a/bedcode-desktop/src-tauri/src/plugin/manager/wasm_runtime/host_impl/peer.rs
++++ b/bedcode-desktop/src-tauri/src/plugin/manager/wasm_runtime/host_impl/peer.rs
+@@ -151,7 +151,14 @@
+     let port = endpoint.port;
+     let dto = sync_result(block_on_async(crate::peer_net::dial_peer_endpoint(app, endpoint)))?;
+     match dto.status.as_str() {
+-        "connected" => Ok(with_handles(|t| t.mint_session(SessionEntry { node_id, addr, port, owner: plugin_id.to_string() }))),
++        "connected" => Ok(with_handles(|t| {
++            t.mint_session(SessionEntry {
++                node_id,
++                addr,
++                port,
++                owner: plugin_id.to_string(),
++            })
++        })),
+         other => Err(format!("dial endpoint failed: peer {other}")),
+     }
+ }
+@@ -473,14 +480,36 @@
+     sync_result(block_on_async(crate::peer_net::set_download_dir_for_plugin(app, path)))
+ }
+ 
++/// 按需启动本机 peer 节点（审计票 12 引擎级生命周期原语）：幂等，
++/// 返回 `true` = 本次调用把节点从「未跑」带到「跑」（调用方即成为属主）。
++///
++/// 内核侧不再持有产品 id 常量——旧 `activation.rs` 的「插件 id == file-transfer 就起节点」
++/// 外壳由本原语 + `peer_net` 的属主记账替代。他主占用时以错误上抛，
++/// 且**文案不回带对方 id**（与 `ensure_handle_owner` 同口径，票 05）
++pub(crate) fn peer_start_node(host_ctx: &WasmHostContext, plugin_id: &str) -> Result<bool, String> {
++    if !super::check_permission(host_ctx, plugin_id, PERMISSION_PEER, "host_peer_start_node") {
++        return Err(denied());
++    }
++    let app = require_app(host_ctx)?;
++    sync_result(block_on_async(crate::peer_net::start_node_owned(&app, plugin_id)))
++}
++
++/// 属主插件让本机节点下线（审计票 12）：停广播 / 关监听 / 排水连接与入站记账。
++/// 非属主拒绝（不猜测「谁该停」，也不提供强制关停的后门）
++pub(crate) fn peer_stop_node(host_ctx: &WasmHostContext, plugin_id: &str) -> Result<bool, String> {
++    if !super::check_permission(host_ctx, plugin_id, PERMISSION_PEER, "host_peer_stop_node") {
++        return Err(denied());
++    }
++    let app = require_app(host_ctx)?;
++    sync_result(block_on_async(crate::peer_net::stop_node_owned(&app, plugin_id)))
++}
++
+ // ==================== Tests ====================
+ 
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+-    use crate::plugin::manager::wasm_runtime::host_impl::tests::{
+-        build_host_ctx, grant_permissions,
+-    };
++    use crate::plugin::manager::wasm_runtime::host_impl::tests::{build_host_ctx, grant_permissions};
+     use crate::plugin::permission::PERMISSION_PEER;
+ 
+     /// 权限门（票 01 门禁用例）：未授予 `peer` 即拒绝，且不触碰句柄表/引擎
+@@ -531,10 +560,7 @@
+         let err = ensure_handle_owner(&got, "com.bedcode.intruder-b", &h).unwrap_err();
+         assert_eq!(err, format!("not owner of peer handle: {h}"));
+         // 错误文案不回带真实属主身份
+-        assert!(
+-            !err.contains("owner-a"),
+-            "拒绝文案不得泄露属主插件 id: {err}"
+-        );
++        assert!(!err.contains("owner-a"), "拒绝文案不得泄露属主插件 id: {err}");
+     }
+ 
+     /// 非属主 close 的拒绝路径零副作用：句柄仍在册，别人仍可用
