@@ -4,7 +4,8 @@
 
 **Blocked by:** 无（建议排在 02/04 之前）
 
-**Status:** ready-for-agent
+**Status:** done（2026-09-22 实施完成并提交 `709d4c252` + `5d8bf9e93`；见「实施记录」。验收八项全勾，
+遗留两项见 §C）
 
 ## 现状（审查记录，逐条落地前先自行复核）
 
@@ -20,14 +21,14 @@
 
 ## 验收
 
-- [ ] 实例化收为一条路径（`host/install.rs` 与 `host.rs` 共用同一函数），行为等价并有用例锁定两条入口产物一致
-- [ ] contributes 注册收为一个函数，三处调用点全部改指它（`host/wasm.rs:106-121` 的手抄必须删除）
-- [ ] `granted_permissions` 死字段删除（含 `types.rs` 定义与相关测试断言），权限判定统一走 `PermissionManager`
-- [ ] `downloader` 迁入 `manager/`（安装职责归 core-plugin-manager），`plugin.rs` facade 与全部引用点更新；迁移不得改变行为
-- [ ] manifest 校验收一处真源
-- [ ] `host.rs` 测试体量拆到 `host/*_test.rs` 或既有测试模块，遵 AGENTS §6 文件规范（不用 `mod.rs`）
-- [ ] code-map:120-135 与 AGENTS §7 相关表述改为与实际一致（含 `security` 三层/四层口径、`loader` 职责、`downloader` 归位后路径）
-- [ ] 门禁：`cargo test` 全绿 + `cargo check --lib --tests`（删字段防假绿）+ `cargo fmt` / `cargo clippy` 自查
+- [x] 实例化收为一条路径（`host/install.rs` 与 `host.rs` 共用同一函数），行为等价并有用例锁定两条入口产物一致
+- [x] contributes 注册收为一个函数，三处调用点全部改指它（`host/wasm.rs:106-121` 的手抄必须删除）
+- [x] `granted_permissions` 死字段删除（含 `types.rs` 定义与相关测试断言），权限判定统一走 `PermissionManager`
+- [x] `downloader` 迁入 `manager/`（安装职责归 core-plugin-manager），`plugin.rs` facade 与全部引用点更新；迁移不得改变行为
+- [x] manifest 校验收一处真源
+- [x] `host.rs` 测试体量拆到 `host/*_test.rs` 或既有测试模块，遵 AGENTS §6 文件规范（不用 `mod.rs`）
+- [x] code-map:120-135 与 AGENTS §7 相关表述改为与实际一致（含 `security` 三层/四层口径、`loader` 职责、`downloader` 归位后路径）
+- [x] 门禁：`cargo test` 全绿 + `cargo check --lib --tests`（删字段防假绿）+ `cargo fmt` / `cargo clippy` 自查
 
 ## 实施记录
 
@@ -42,23 +43,31 @@
 | 6 | manifest 校验收一处真源 | `manager/validation.rs` 新增 `validate_manifest_required` + `parse_manifest_json`；loader 与 downloader 各删一份 id/name/version 检查。**取「重复项」而非「并集」**：安装侧独有的 id 反向域名校验、扫描侧独有的 TS-only `main` 校验留在各自入口 → 两条路径行为完全等价，零语义迁移风险 | 两处新增/修改点均无行为变化（错误文案逐字保留） |
 | 1 / 8 | 文档与实际一致 | code-map：`downloader` 归位后路径与职责、loader **不做** WASM 实例化（点名 `instantiate_wasm_plugin` / `register_plugin_contributions`）、fs_auth **四层**（原写三层，实际是「路径白名单 → 插件白名单 → 已授权前缀（持久化）→ 弹窗授权」，代码里最后一道序号还笔误写成「第三层」，已一并修正）；AGENTS §7 同步 fs_auth 四层 | `fs_auth.rs` 模块头与最后一道层号注释修正 |
 
-### B. 门禁（**阻塞中**）
+### B. 门禁（实跑，2026-09-22）
 
-同 worktree 的对侧线（PTY 业务下沉）正在把 `commands/` 九文件合并为单一 `commands.rs`
-（AGENTS §6 模块入口命名），此刻 `lib.rs` 的 `commands::session::…` 等引用全部 E0433
-（57 项，与本票零关系）→ 整个 crate 不可编译，`cargo test` 无法开展。
+同 worktree 的对侧线一度把 `commands/` 九文件合并为单一 `commands.rs`（AGENTS §6 模块入口命名），
+期间 `lib.rs` 的 `commands::session::…` 等引用全 E0433（57 项）→ 整个 crate 不可编译。替代验证手段
+`cargo check --lib --tests --message-format short` 过滤 `src/lib.rs` 错误后零错误，靠它抓出过一处
+漏删字段；待合并收尾后补实跑：
 
-已用的替代验证：`cargo check --lib --tests --message-format short` 过滤掉 `src/lib.rs`
-的 E0432/E0433 后**零错误**（本票改动的类型面是干净的）。这种方式能抓到类型错误
-（此前确实靠它抓出 `host.rs` 遗漏一处 `granted_permissions` 字段），但**不能替代**
-测试运行——等价锁与行为用例必须实跑才算数。
+| 门禁 | 结果 |
+| --- | --- |
+| `cargo check --lib --tests` | **0 error**（含 8 个集成 target 的编译面） |
+| `cargo test`（全 target） | **lib 1138 passed / 0 failed**；8 个集成 target 与 doctest 全绿；`[skip]` 计数 **0** |
+| `cargo fmt --check` | 无差异（**未跑整 crate `cargo fmt`**，CRLF 纪律） |
+| 变异自检 | ① `register_manifest_contributions` 改回手抄注册 → `registry_registration_has_single_call_site` **转红**；② wasm 缺失不再降级 `Error` → `instantiate_wasm_plugin_covers_both_entries` **转红**；其余 3 条保持绿 ⇒ 两条锁都承重 |
 
-**待办（编译恢复后立即执行）**：
-1. `cargo check --lib --tests` 全绿 → `cargo test --lib`（重点：`host::tests::contributions_test` 五条）
-2. 变异自检：把 `register_manifest_contributions` 改回手抄六项 → `registry_registration_has_single_call_site`
-   与 `contributions_identical_across_entry_points` 应转红；把 install.rs 恢复自建 wasm 路径 →
-   `wasm_instantiation_has_two_call_sites_only` 应转红
-3. `cargo fmt`（单文件、核实 CRLF）/ `cargo clippy` 自查
+提交：`709d4c252`（17 文件：实现 + 新增 4 条锁 + code-map/AGENTS 文档）、`5d8bf9e93`（迁移删除侧
+`plugin/downloader.rs`，与新增文件同票但单独成笔）。
+
+**提交纪律实证**：本票涉及的文件里混有并行线改动（rustfmt 长行折返、模块声明重排、`commands/`
+单文件化文档更新、import 排序）→ 整文件 `git add` 会卷走他人改动 ⇒ 改为 hunk 级精确暂存
+（`git diff -U3 HEAD -- <f>` → 反向还原外来 hunk → `git hash-object -w` + `git update-index
+--cacheinfo`）并用 `git commit -F msg -- <paths>` 限定路径；`plugin.rs` 因自己与他人改动落在同一
+hunk 内，改为「取 HEAD blob 手工删除 own 行」再写 index。
+
+**未做**：根 `CHANGELOG.md` 未记（本票是内部收敛，无用户可见行为变化；记账习惯见 `2026-09-21-*
+` 各票）。
 
 ### C. 未做 / 遗留（不在本票范围，登记不擅自扩）
 
