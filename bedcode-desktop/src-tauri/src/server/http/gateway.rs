@@ -722,21 +722,25 @@ mod tests {
     /// 单一取源点：`server/` 三层化把路由搬走后（票 04/05/06/07），只需重指下面的
     /// `include_str!` 与 `APP_RS_LABEL` **两行**（漏改 LABEL 只影响失败消息点名，
     /// 2026-09-23 票 04 变异验证实测过这个漂移），前置会当场验证新目标仍是「活的宿主路由面」。
-    /// 票 05 已把本文件搬进 `http/`：相对 `core/app.rs` 为两级（`http/` → `server/` → `core/`），
-    /// 故用 `../core/app.rs`。路由一拆为三是票 07（届时随路由搬移再重指）。
-    const APP_RS: &str = include_str!("../core/app.rs");
+    /// 票 07 已把路由装配一拆为三：`/api` 面与两个公开端点在 `http/routes.rs`（与本文件
+    /// **同目录**，故用 `routes.rs`），三条 WS 握手在 `websocket/routes.rs`——别名表只管
+    /// `/api` 面，扫描目标收窄为 HTTP 侧，基线随之改钉 11（判据见下）。
+    const APP_RS: &str = include_str!("routes.rs");
 
     /// 失败消息里显示的目标名（`include_str!` 的相对路径无法自报，故单独记一份）
-    const APP_RS_LABEL: &str = "server/core/app.rs";
+    const APP_RS_LABEL: &str = "server/http/routes.rs";
 
     /// 扫描目标 `configure_routes` 函数体的路由标识符基线数
     ///
-    /// 现值 14 = 12 条路径字面量 + `API_HEALTH_PATH` + `WS_EVENT_PATH` 两个常量标识符。
+    /// 现值 **11** = 10 条路径字面量 + `API_HEALTH_PATH` 常量标识符（`WS_EVENT_PATH` 已随
+    /// 三条 WS 握手路由归 `websocket/routes.rs`，本锁只扫 HTTP 侧，不再计入）。
     /// **常量必须纳入计数**：只匹配 `"/…"` 字面量的话，`/api/health` 整行删掉照样绿。
     ///
-    /// HTTP/WS 路由面拆分（票 07）后本锁的扫描目标收窄为 HTTP 侧，基线随之改钉 **11**——
-    /// 判据与新旧清单见票 07。这是实测钉出来的数，禁止当魔法数放宽成「>= 1」。
-    const HOST_ROUTE_IDENTIFIERS_BASELINE: usize = 14;
+    /// 历史沿革：拆前 14 = 12 条路径字面量 + `API_HEALTH_PATH` + `WS_EVENT_PATH`；
+    /// 票 07 拆分后 HTTP 侧实测 11（判据清单：`/api`、`/plugin/{plugin_id}/{path:.*}`、
+    /// `/sessions`、`/sessions/start`、`/sessions/{id}/{stop,resize,input,history,remove}`、
+    /// `/static/terminal-bg`、`API_HEALTH_PATH`）。这是实测钉出来的数，禁止当魔法数放宽成「>= 1」。
+    const HOST_ROUTE_IDENTIFIERS_BASELINE: usize = 11;
 
     /// 取 `configure_routes` 函数体：签名行之后到首个顶格 `}`
     ///
@@ -780,7 +784,7 @@ mod tests {
         assert!(
             hit >= HOST_ROUTE_IDENTIFIERS_BASELINE,
             "锁已空转：扫描目标 {label} 的 configure_routes 只命中 {hit} 条路由标识符，\
-             低于基线 {HOST_ROUTE_IDENTIFIERS_BASELINE}（12 条路径字面量 + API_HEALTH_PATH + WS_EVENT_PATH）",
+             低于基线 {HOST_ROUTE_IDENTIFIERS_BASELINE}（10 条路径字面量 + API_HEALTH_PATH）",
         );
     }
 
@@ -817,7 +821,7 @@ mod tests {
     #[test]
     fn calibration_scans_only_the_configure_routes_body() {
         let src = "\
-use crate::server::core::app::{API_HEALTH_PATH, WS_EVENT_PATH};
+use crate::server::http::routes::API_HEALTH_PATH;
 /// 文档注释里的 \"/api/doc-comment\" 不是路由
 pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     cfg.route(\"/sessions\", web::get().to(h));

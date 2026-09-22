@@ -976,7 +976,7 @@ fn publish_ws(bus: &MessageBus, topic: &str, payload: serde_json::Value) {
 
 /// 帧/消息字节上限：与移动端终端链路同一事实源；配置不可读时回退常量
 fn max_message_bytes() -> usize {
-    crate::server::core::app::ws_frame_limit().max(PLUGIN_WS_MAX_MESSAGE_BYTES.min(1))
+    crate::server::websocket::routes::ws_frame_limit().max(PLUGIN_WS_MAX_MESSAGE_BYTES.min(1))
 }
 
 // ==================== Tests ====================

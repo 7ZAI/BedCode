@@ -86,7 +86,7 @@ pub const PLUGIN_WS_CONNECT_TIMEOUT_SECS: u64 = 10;
 
 /// 插件 WS 单帧/单消息字节上限兜底（配置不可读时使用）。
 ///
-/// 正常路径取 `server::app::ws_frame_limit()`（网络配置：ws_max_frame_size_kb ×
+/// 正常路径取 `server::websocket::routes::ws_frame_limit()`（网络配置：ws_max_frame_size_kb ×
 /// ws_max_message_size_mb），与移动端终端链路同一事实源（spec §4.4）
 pub const PLUGIN_WS_MAX_MESSAGE_BYTES: usize = 1024 * 1024;
 
