@@ -50,7 +50,11 @@ cd bedcode-desktop && pnpm run tauri:dev
 cd bedcode-desktop && pnpm run tauri:build
 
 # 关插件前端 watch 的 dev（需要 app 不被反复重启时，如票 01 人工基线连续观察）
-cd bedcode-desktop && node scripts/dev-run.js --no-watch
+cd bedcode-desktop && pnpm run tauri:dev -- --no-watch
+#   必须经 pnpm 转发（`pnpm run tauri:dev -- --no-watch`），**不能**直接
+#   `node scripts/dev-run.js --no-watch`：宿主命令入口取 PKG_MGR_CLI = pnpm_execpath，
+#   该环境变量只在 pnpm 跑生命周期脚本时存在；裸 node 调用会落到 Windows 布局的
+#   npm-cli.js 回退路径上，Linux 下直接 ENOENT 崩（2026-09-24 实测踩过）。
 #   为什么要有这条：插件 watch 把 vite 产物复制进 src-tauri/resources/plugins/desktop/<id>/，
 #   而 tauri dev 的 file watch 覆盖整个 src-tauri/ → 每次前端重建重启一次宿主、清空一次当日日志。
 #   默认仍开启 watch（不带 flag 行为不变）；关掉后改插件前端需自行

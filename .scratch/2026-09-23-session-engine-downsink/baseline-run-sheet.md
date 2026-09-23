@@ -21,8 +21,13 @@
 **起跑命令（2026-09-24 用户裁定：把 watch 参数化，用参数关，默认仍开启）**：
 
 ```bash
-cd bedcode-desktop && node scripts/dev-run.js --no-watch
+cd bedcode-desktop && pnpm run tauri:dev -- --no-watch
 ```
+
+⚠ **必须经 pnpm 转发**，不能直接 `node scripts/dev-run.js --no-watch`：宿主命令入口是
+`PKG_MGR_CLI = process.env.pnpm_execpath ?? npm_execpath ?? <Windows 布局回退>`，
+`pnpm_execpath` 只在 pnpm 跑生命周期脚本时存在——裸 node 调用在 Linux 上会去 spawn
+一个不存在的 `npm-cli.js`，直接 ENOENT 崩（本轮实测踩过，报错误导性很强）。
 
 票面第一条原字面是 `pnpm run tauri:dev`（= `node scripts/dev-run.js`，带插件前端 watch）。
 用 `--no-watch` 属**已记账的偏离**，理由与影响面：
