@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { GENERATED_VALID_PERMISSIONS } from '@/plugin/permission.vocabulary'
+import { GENERATED_VALID_PERMISSIONS } from '@/plugin/permission-vocabulary'
 import {
   getPermissionMeta,
   isHighRiskPermission,

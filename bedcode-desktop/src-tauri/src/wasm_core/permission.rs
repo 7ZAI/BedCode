@@ -145,7 +145,7 @@ mod tests {
     #[test]
     fn permission_vocabulary_is_equal_across_all_three_copies() {
         let root = desktop_root();
-        let ts = read(&root.join("src/plugin/permission.vocabulary.ts"));
+        let ts = read(&root.join("src/plugin/permission-vocabulary.ts"));
         let json = read(&root.join("packages/plugin-sdk-desktop/bin/permission-vocabulary.json"));
 
         let (ts_perms, ts_api) = parse_generated_ts(&ts);
@@ -188,7 +188,7 @@ mod tests {
     #[test]
     fn generated_copies_are_marked_and_consumed_not_copied() {
         let root = desktop_root();
-        let ts = read(&root.join("src/plugin/permission.vocabulary.ts"));
+        let ts = read(&root.join("src/plugin/permission-vocabulary.ts"));
         let json = read(&root.join("packages/plugin-sdk-desktop/bin/permission-vocabulary.json"));
         assert!(ts.contains("生成物，勿手改"), "前端生成物缺少生成物标注");
         assert!(
@@ -198,7 +198,7 @@ mod tests {
 
         let frontend = read(&root.join("src/plugin/permission.ts"));
         assert!(
-            frontend.contains("./permission.vocabulary"),
+            frontend.contains("./permission-vocabulary"),
             "前端 permission.ts 必须 import 生成物，而不是自带权限清单"
         );
         for perm in VALID_PERMISSIONS {

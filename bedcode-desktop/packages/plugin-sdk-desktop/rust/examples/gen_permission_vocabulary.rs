@@ -4,7 +4,7 @@
 //! 不再手抄同一张表（票 01：权限词汇单源）：
 //!
 //! - `bin/permission-vocabulary.json` —— 打包 CLI（`bedcode-plugin-desktop validate`）读
-//! - `src/plugin/permission.vocabulary.ts`（宿主前端）—— 前端权限面读
+//! - `src/plugin/permission-vocabulary.ts`（宿主前端）—— 前端权限面读
 //!
 //! 跑法：SDK 包根目录下 `pnpm run gen:permissions`。
 //! 生成物与真源的一致性由宿主 `src-tauri/src/plugin/permission.rs` 的词汇漂移锁断言，
@@ -19,7 +19,7 @@ use bedcode_plugin_api::permission::{PERMISSION_API_MAP, VALID_PERMISSIONS};
 /// 生成物路径（相对 SDK 包根目录）
 const JSON_OUT: &str = "bin/permission-vocabulary.json";
 /// 生成物路径（相对 SDK 包根目录上两级，即 bedcode-desktop 根）
-const TS_OUT: &str = "../../src/plugin/permission.vocabulary.ts";
+const TS_OUT: &str = "../../src/plugin/permission-vocabulary.ts";
 
 fn main() {
     let argv: Vec<String> = std::env::args().skip(1).collect();

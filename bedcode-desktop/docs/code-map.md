@@ -179,7 +179,7 @@ Rust 侧按内核五模块组织（`wasm_core.rs` 为唯一组合点/facade，�
   运行时指标埋点（指标注册表 + 快照导出；见 `.scratch/wasm-core/`）
 - **permission**：权限词汇**只读再导出**（bedcode-plugin-api 再导出；真源在
   `packages/plugin-sdk-desktop/rust/src/permission.rs`）。打包 CLI 与前端合法集读的是生成物
-  （`plugin-sdk-desktop/bin/permission-vocabulary.json`、`src/plugin/permission.vocabulary.ts`），
+  （`plugin-sdk-desktop/bin/permission-vocabulary.json`、`src/plugin/permission-vocabulary.ts`），
   加/拆权限位后跑 SDK 的 `pnpm run gen:permissions` 重出；三副本一致性与「每条词汇都有门禁落点」
   由本文件 `wasm_core/permission.rs` 的词汇漂移锁断言（票 01）
 

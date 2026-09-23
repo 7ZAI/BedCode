@@ -117,7 +117,7 @@ pub(crate) mod tests {
         let cli =
             std::fs::read_to_string(manifest_dir.join("../packages/plugin-sdk-desktop/bin/permission-vocabulary.json"))
                 .expect("CLI 权限词汇生成物可读");
-        let frontend = std::fs::read_to_string(manifest_dir.join("../src/plugin/permission.vocabulary.ts"))
+        let frontend = std::fs::read_to_string(manifest_dir.join("../src/plugin/permission-vocabulary.ts"))
             .expect("前端权限词汇生成物可读");
         assert!(
             cli.contains(&format!("\"{permission}\"")),

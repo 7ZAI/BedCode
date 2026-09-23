@@ -4,7 +4,7 @@
  * 前端快速失败 — 调用 Rust API 前先检查权限
  * Rust 端做最终仲裁，前端检查仅用于 UI 反馈和避免无效 invoke
  *
- * 权限词汇与 API 映射都取自生成物 `permission.vocabulary.ts`（真源是桌面 SDK 的
+ * 权限词汇与 API 映射都取自生成物 `permission-vocabulary.ts`（真源是桌面 SDK 的
  * `rust/src/permission.rs`）；在本文件里另立清单会让「加一个权限位」变成三处手抄，
  * 由宿主 `src-tauri/src/plugin/permission.rs` 的词汇漂移锁守住三处一致。
  */
@@ -12,7 +12,7 @@
 import {
   GENERATED_PERMISSION_API_MAP,
   GENERATED_VALID_PERMISSIONS,
-} from './permission.vocabulary'
+} from './permission-vocabulary'
 
 /** 合法权限列表（生成物） */
 const VALID_PERMISSIONS = new Set<string>(GENERATED_VALID_PERMISSIONS)

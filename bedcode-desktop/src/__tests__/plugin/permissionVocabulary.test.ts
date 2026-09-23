@@ -16,7 +16,7 @@ import { hasPermissionForApi, isValidPermission } from '@/plugin/permission'
 import {
   GENERATED_PERMISSION_API_MAP,
   GENERATED_VALID_PERMISSIONS,
-} from '@/plugin/permission.vocabulary'
+} from '@/plugin/permission-vocabulary'
 
 /** 从源码里抓出前端实际门住的 API 方法名 */
 function requiredApiNames(file: string): string[] {
@@ -84,7 +84,7 @@ describe('权限词汇前端锁', () => {
 
   it('L4 前端权限面不再自带权限清单（只读生成物）', () => {
     const source = readFileSync('src/plugin/permission.ts', 'utf-8')
-    expect(source).toContain('./permission.vocabulary')
+    expect(source).toContain('./permission-vocabulary')
     for (const perm of GENERATED_VALID_PERMISSIONS) {
       expect(source, `permission.ts 仍手抄权限 ${perm}`).not.toContain(`'${perm}'`)
     }
