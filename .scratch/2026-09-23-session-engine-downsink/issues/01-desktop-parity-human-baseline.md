@@ -40,6 +40,48 @@
 
 ## Comments
 
+### 2026-09-24 06:2x · 环境已起跑成功，但基线卡在「插件未激活」；10 项仍零条观测
+
+用户裁定即刻跑（不等对侧）。环境起来了，**没跑成清单的原因换成了第三个**——
+不是构建链红、不是树不稳定，是**运行态前置没满足**。
+
+**起跑事实**（HEAD 已含票 06：`0f7567477`，其 M6/M7 桌面侧恢复落在我三笔提交之上；
+工作区只剩 `docs/diagrams/*` 5 个文件，不影响运行态）：
+
+- 宿主起：`Server started on port 8767 (in-process)`，`Initialization complete:
+  4 plugin(s) total, 4 wasm, 1 activated, 0 degraded, 0 error`
+- 插件产物预演三条全 FRESH → 未触发补建（票 13 前置再次确认满足）
+- 红线三判据（`session plugin not active` / `failed via plugin`）：**0 条**
+
+**阻塞点：`com.bedcode.terminal-session` 是 `state=Loaded`，只有 file-transfer 从持久化状态
+自动激活了。** P1-b 无降级轨（§8），会话真源插件没激活 → 终端窗口/会话面全部不可用 →
+**清单 10 项一条都观测不了**。这正是「基线看起来挂了，其实是环境没就绪」的形态。
+处置走 UI（插件管理里启用「会话中心」），不改持久化状态文件绕——顺带说一句，
+**「启用会话中心插件」本身就该是基线的一条前置检查**，已补进复跑单 §1a。
+
+**本轮的三个附带产出（都已核到源码/实路径，不是推测）：**
+
+1. **落盘日志取证路径的两个坑，会直接造成假绿**（复跑单 §1b 已改）：
+   ① 日志文件名**按 UTC 不按本地日期**——本地 09-24 06:2x 起的一轮落在 `runtime.2026-09-23.log`，
+   而票面原先给的 `runtime.$(date +%F).log` **指向不存在的文件**，grep 空文件 = 「无异常」；
+   ② 落盘时间戳是 UTC ISO（`2026-09-23T22:25:36Z`），与 dev stdout 的本地时分不同形，
+   按时分 grep 恒 0 命中。另：**每次 dev 启动会重写当日日志**
+   （stdout 有 `[logging] dev reset: replaced today's log`），中途重启 = 前半程证据清零。
+2. **立 [`issues/16-plugin-watch-missing-wasmhash-import.md`](16-plugin-watch-missing-wasmhash-import.md)**：
+   dev 插件 watch 复制链最后一步 `injectWasmHash` **没 import**（`plugin-watch.js:155` vs 真源
+   `packages/plugin-sdk-desktop/bin/wasm-hash.js:42`），每次前端重建必抛
+   `ReferenceError`；且复制是**做了一半**——源 `plugin.json`（按设计不含 `wasmHash`）已覆盖到
+   resources，补救那步没跑，实测三个插件产物清单 `wasmHash=ABSENT`，宿主
+   `downloader.rs:144` 于是**静默跳过内容摘要校验**。归属：`7d036a3cd`（审计票 14 装配点统一）
+   的漏改，**非 P1-b 回归**。
+3. **本机噪音基线已量化**（复跑单 §3.10 记成表）：4 条 WARN 孤儿目录
+   （`scheduler` 已退役 / `session` 改名前旧 id / `terminal-session`、`file-transfer` 空壳）
+   + 2 条 ERROR 重复 id 拒绝（`ai-chatbox` / `agent-hub`，**去重行为正确、级别用错**，
+   按 §8 该是 `warn!`）。⇒ 本机的判据是「0 未解释 ERROR」而不是「0 ERROR」。
+
+**当前状态**：dev 进程仍在跑（pid 1793133 系），端口 8767 在听，窗口已渲染完前端
+（PluginLoader 前端装载日志可见）。**等人把「会话中心」启用后**即可从 §3.1 键盘输入开始逐条走。
+
 ### 2026-09-24 05:2x · 准备工作完成（agent 侧），本轮仍未开跑——但挡路的原因换了
 
 **先说清状态**：这一轮做的是**前置与配套**，不是基线本身；10 项清单依旧零条观测，

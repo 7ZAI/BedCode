@@ -26,9 +26,37 @@ HEAD 提交        :
 工作区污染       : （preflight [2] 段原样粘贴）
 插件产物预演     : （preflight [3] 段：FRESH / 需补建）
 宿主 lib 可编译  : （preflight [4] 段）
-当日日志         : ~/.local/share/com.bedcode.app/logs/runtime.<date>.log
+插件激活态       : ← 关键前置，见下节「1a」
+日志文件实路径    : ← 用 `ls -t …/logs/runtime.*.log | head -1` 取，禁止按本地日期拼名
 日志起跑前行数   : （用于只读增量：tail -n +<行数+1>）
 ```
+
+### 1a. 起跑后第一件事：确认 `com.bedcode.terminal-session` 已激活
+
+P1-b 起会话真源在插件，宿主无降级轨（AGENTS §8）。该插件未激活时**清单 10 项一条都观测不了**
+（终端窗口打不开 / 会话面显性报错），而这看起来像「基线挂了」而不是「环境没就绪」。
+判据在 dev stdout 的这两行：
+
+```
+[PluginHost] Initialization complete: 4 plugin(s) total, 4 wasm, N activated, 0 degraded, 0 error
+[PluginHost]   - com.bedcode.terminal-session (state=Activated, type=RustTs)   ← 必须是 Activated
+```
+
+`state=Loaded` 就是没激活（2026-09-24 首轮即撞上：只有 file-transfer 从持久化状态自动激活）。
+**处置**：在插件管理界面启用「会话中心」后重跑，不要改持久化状态文件去绕。
+
+### 1b. 日志路径与格式的三个坑（2026-09-24 实测，都是会让人误判「无异常」的坑）
+
+1. **文件名按 UTC，不按本地日期**。本地 `2026-09-24 06:2x CST` 起的那轮，日志落在
+   `runtime.2026-09-23.log`（UTC 仍是 09-23T22:2x）。
+   ⇒ 票面写的 `runtime.$(date +%F).log` 会指向一个**不存在的文件**，
+   grep 空文件 = 假绿「无异常」。一律用：
+   `LOG="$(ls -t "$HOME/.local/share/com.bedcode.app/logs/"runtime.*.log | head -1)"`
+2. **落盘日志时间戳是 UTC ISO**（`2026-09-23T22:25:36Z`），与 dev stdout 的
+   `2026-09-24 06:22:33.334` **不同形**。⇒ 按本地时分 grep 恒为 0 命中，别拿它当「没发生」。
+3. **每次 dev 启动会重写当日日志**（stdout 可见 `[logging] dev reset: replaced today's log …`）。
+   ⇒ 基线跑到一半重启 = **前半程证据清零**。要么一轮跑完，要么每轮结束立刻把增量另存
+   `/tmp/baseline-run-<hhmm>.log` 再记账。
 
 > **污染必须记**：本仓库常有并发批次在同一 worktree 写盘，且 `src-tauri/target` 已 20G /
 > 磁盘仅剩 ~19G，**无法另开 worktree 跑干净树**（此路已在票末排除）。所以基线一律
@@ -134,15 +162,28 @@ HEAD 提交        :
 ### 3.10 全程日志体检（agent 跑）
 
 ```bash
-LOG=~/.local/share/com.bedcode.app/logs/runtime.$(date +%F).log
+# 路径按 mtime 取，不要按本地日期拼（见 1b 坑 1）
+LOG="$(ls -t "$HOME/.local/share/com.bedcode.app/logs/"runtime.*.log | head -1)"; echo "$LOG"
 # 只看本次增量（行数从「## 1 起跑记录」取）
 tail -n +<N> "$LOG" > /tmp/baseline-run.log
 grep -cE 'ERROR|WARN' /tmp/baseline-run.log
 grep -E 'session plugin not active|failed via plugin|\[plugin:' /tmp/baseline-run.log | tail -40
 ```
 
-- **预期**：**零**条 `session plugin not active` / `failed via plugin`；
-  其余 `WARN`/`ERROR` 逐条给归属结论（可恢复噪音写明「非回归」）
+- **红线判据（必须零条）**：`session plugin not active` / `refused: session plugin not active`
+  / `failed via plugin`
+- **先扣除「本机环境噪音」再统计 ERROR/WARN**（2026-09-24 06:2x 实测基线，全部来自
+  `~/.local/share/com.bedcode.app/plugins/` 里跨批次留下的目录，**与 P1-b 无关**）：
+
+  | 条数 | 级别 | 内容 | 判 |
+  | --- | --- | --- | --- |
+  | 4 | WARN | `Skipping dir without plugin.json (orphan residue)` → `com.bedcode.scheduler`（已退役）/ `.session`（改名前旧 id）/ `.terminal-session`、`.file-transfer`（空壳） | 非回归；本机残留 |
+  | 2 | ERROR | `Rejecting duplicate plugin id "com.bedcode.ai-chatbox" / "com.bedcode.agent-hub" … already loaded from another directory` | 去重**行为正确**（内置胜出，用户目录副本被拒），但级别用错：可恢复的过滤拒绝按 AGENTS §8 应为 `warn!` |
+
+  ⇒ 本机的「干净起跑」不是 0 ERROR，而是 **0 未解释 ERROR**；报数时写「2 条重复 id 拒绝（已判非回归）」。
+  级别误用这条若要对齐 §8，另立新票，不在本票修。
+- **先排除另一类刷屏**：`peer mDNS search started …` 这类 DEBUG 每 4–8 秒一条
+  （实测 5 分钟 250+ 行），`grep -c 'DEBUG'` 的大小不代表健康度——按级别统计只数 ERROR/WARN。
 - **结果**：☐ 无红线 ☐ 有红线 → 记 `issues/__`
 - **备注**：
 

@@ -145,13 +145,29 @@ fi
 # ==================== 5. 取证位置 ====================
 echo
 echo "----- [5] 运行期取证 -----"
-echo "当日日志      : $RUN_LOG"
-if [ -f "$RUN_LOG" ]; then
-  echo "  已存在，$(wc -l < "$RUN_LOG") 行 / $(du -h "$RUN_LOG" | cut -f1) —— 起跑前先记下当前行数，"
-  echo "  跑完只看增量：tail -n +$(( $(wc -l < "$RUN_LOG") + 1 )) \"$RUN_LOG\" > /tmp/baseline-run.log"
+# 日志文件名按 UTC 不按本地日期：本地 09-24 06:2x 起的一轮落在 runtime.09-23.log。
+# 按 $(date +%F) 拼名会指向不存在的文件，grep 空文件 = 假绿「无异常」（2026-09-24 实测）。
+LATEST_LOG="$(ls -t "$HOME/.local/share/com.bedcode.app/logs/"runtime.*.log 2>/dev/null | head -1 || true)"
+echo "本地日期      : $(date +%F)（UTC $(date -u +%F)）—— 落盘日志按 UTC 命名"
+echo "当日日志(票面) : $RUN_LOG  $([ -f "$RUN_LOG" ] && echo 存在 || echo '不存在（正常：UTC 名不同）')"
+echo "实取日志(mtime) : ${LATEST_LOG:-尚无}"
+if [ -n "$LATEST_LOG" ]; then
+  echo "  $([ "$(find "$LATEST_LOG" -mmin -30 2>/dev/null | wc -l)" = 1 ] \
+        && echo '30 分钟内写过 → 是本轮的日志' \
+        || echo '最近 30 分钟没写过 → 上一轮的残留，起跑后需重新取')"
+  echo "  当前 $(( $(wc -l < "$LATEST_LOG") )) 行；跑完只看增量："
+  echo "    tail -n +$(( $(wc -l < "$LATEST_LOG") + 1 )) \"$LATEST_LOG\" > /tmp/baseline-run.log"
+  echo "  ⚠ 每次 dev 启动会重写当日日志（stdout 见 '[logging] dev reset: replaced today's log'）"
+  echo "    → 中途重启 = 前半程证据清零，重启前先把增量另存"
 else
-  echo "  尚未生成（今日还没跑过 dev）；起跑后会自动创建"
+  echo "  尚未生成（今日还没跑过 dev）；起跑后会自动创建（名字按 UTC）"
 fi
+echo
+echo "⚠ 起跑后第一件事：确认 com.bedcode.terminal-session 是 Activated 而非 Loaded——"
+echo "  P1-b 无降级轨，它没激活则本清单 10 项一条都观测不了（看起来像基线挂了）。"
+echo "  判据在 dev stdout：'Initialization complete: … N activated' 与"
+echo "  '- com.bedcode.terminal-session (state=Activated, …)'。Loaded 就去插件管理界面启用，"
+echo "  不要改持久化状态文件绕。"
 echo
 echo "关键锚点（会话面 fail-visible 红线，AGENTS §8）："
 cat <<'ANCHORS'
@@ -163,8 +179,10 @@ cat <<'ANCHORS'
   [plugin:                           ← 插件 WASM 侧日志统一前缀
 ANCHORS
 echo
-echo "grep 一行式（跑完直接贴进票末 Comments）："
-echo "  grep -E 'session plugin not active|failed via plugin|\\[plugin:' '$RUN_LOG' | tail -40"
+echo "grep 一行式（跑完直接贴进票末 Comments；路径用上面「实取日志」那一条）："
+printf '  LOG="%s"\n' "${LATEST_LOG:-\$NOT_YET}"
+echo '  grep -E "session plugin not active|failed via plugin|\[plugin:" "$LOG" | tail -40'
+echo "  （落盘时间戳是 UTC ISO，按本地时分 grep 恒 0 命中，别拿它当「没发生」）"
 echo
 echo "目测项无工具可替代：截图工具缺失（无 grim/spectacle/import），"
 echo "只有 xdotool + fcitx5 —— IME 组合窗、回显、拽底、「回到底部」按钮时机必须人眼看。"
