@@ -18,6 +18,7 @@ use crate::server::websocket::terminal_ws::control_frame::{self, ServerFrame};
 use crate::session::{GlobalOutputManager, SessionStatus};
 use crate::system::app_context::AppContext;
 use crate::system::error_boundary::spawn_with_error_boundary;
+use crate::wasm_core::host_api::pty::broadcast_handle_for_session;
 
 /// 新路由认证结果：认证通过后校验绑定会话是否存在（spec §5.1：
 /// 不存在的会话 → 认证通过后 error(SESSION_NOT_FOUND) + 关闭）
@@ -146,12 +147,15 @@ impl TerminalChannel {
 
         match conn.authenticate_jwt(&token) {
             Ok(_) => {
-                // 会话存在性校验放异步块：has_session 需持 GlobalOutputManager 锁；
-                // 加密协商回执与密码表注册延后到 SessionAuthOutcome（auth_ok 发出后生效）
+                // 会话存在性校验放异步块：引擎优先（票 06，插件会话的环在宿主 PTY
+                // 引擎，经票 05 广播声明可直读；M6 受损面的恢复点），内核 `has_session`
+                // 保留为旧内核会话/测试夹具的兜底。加密协商回执与密码表注册延后到
+                // SessionAuthOutcome（auth_ok 发出后生效）
                 let session_id = conn.bound_session.clone().unwrap();
                 let actor_addr = ctx.address();
                 actix::spawn(async move {
-                    let exists = GlobalOutputManager::global().has_session(&session_id).await;
+                    let exists = broadcast_handle_for_session(&session_id).is_some()
+                        || GlobalOutputManager::global().has_session(&session_id).await;
                     let _ = actor_addr
                         .send(ChannelMessage(Box::new(SessionAuthOutcome { session_id, exists })))
                         .await;
@@ -301,6 +305,13 @@ impl ChannelHandler for TerminalChannel {
         // 终端路由：监听绑定会话的停止事件，主动推送 session_stopped 帧
         // （会话停止后不再有输出，前端据此提示并断开，避免悬挂等待）
         if let Some(session_id) = conn.bound_session.clone() {
+            // 引擎优先（票 06）：插件会话的停止通知由引擎订阅者**宽限排空后**发出
+            // （`engine_subscriber_loop` 发 `ForwardOutput::SessionStopped`，尾帧先行、
+            // 顺序保证），此处不再起 watcher 双发；旧内核会话（无广播声明）保持
+            // 内核 status 兜底 watcher（`ws_session_route` 夹具依赖此路径）。
+            if broadcast_handle_for_session(&session_id).is_some() {
+                return;
+            }
             let addr = ctx.address();
             let handle = spawn_with_error_boundary("ws_session_stopped_monitor", async move {
                 let app_ctx = AppContext::global();

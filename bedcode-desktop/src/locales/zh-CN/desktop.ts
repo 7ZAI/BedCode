@@ -222,6 +222,12 @@ export default {
           risk: '可创建伪终端并在你的机器上启动任意 shell',
         },
         'pty:io': { title: '私有终端读写', desc: '读写与调整插件自有终端会话' },
+        'crypto:aead': {
+          title: '对称加密',
+          desc: '使用认证加密（AES-GCM / ChaCha20-Poly1305）加密与解密数据',
+        },
+        'crypto:asym': { title: '非对称密钥', desc: '生成非对称密钥对并进行签名 / 验签' },
+        'crypto:kdf': { title: '密钥派生', desc: '用 HKDF 等密钥派生函数派生子密钥' },
         'task:run': { title: '并发任务', desc: '调用宿主线程池并发执行任务' },
       },
       // ==================== 权限审批（ADR 0020） ====================

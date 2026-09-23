@@ -267,6 +267,24 @@ const PERMISSION_META: Record<string, PermissionMeta> = {
     titleKey: 'desktop.plugin.perm.task:run.title',
     descKey: 'desktop.plugin.perm.task:run.desc',
   },
+  // 票 03（host-crypto）：crypto 三权限位（crypto:aead / asym / kdf）。
+  // 密钥由宿主托管，算法运算是中危能力——不进 HIGH_RISK_PERMISSIONS，
+  // 按「高危位才带 risk 文案」不变量，不设 riskKey。
+  'crypto:aead': {
+    emoji: '🔐',
+    titleKey: 'desktop.plugin.perm.crypto:aead.title',
+    descKey: 'desktop.plugin.perm.crypto:aead.desc',
+  },
+  'crypto:asym': {
+    emoji: '🔑',
+    titleKey: 'desktop.plugin.perm.crypto:asym.title',
+    descKey: 'desktop.plugin.perm.crypto:asym.desc',
+  },
+  'crypto:kdf': {
+    emoji: '🔁',
+    titleKey: 'desktop.plugin.perm.crypto:kdf.title',
+    descKey: 'desktop.plugin.perm.crypto:kdf.desc',
+  },
 }
 
 // ==================== 展示辅助函数 ====================

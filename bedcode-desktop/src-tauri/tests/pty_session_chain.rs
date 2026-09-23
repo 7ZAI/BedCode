@@ -579,31 +579,98 @@ async fn pty_session_chain_flow() {
         other => panic!("expected SessionControl(SessionList) response, got: {other:?}"),
     }
 
-    // ==================== 场景 2：WS 终端输出通道（P1-b 记账受损面，P3 恢复） ====================
+    // ==================== 场景 2：WS 终端输出通道（P1-b 受损面恢复，票 06 红→绿） ====================
     //
-    // 移动端 `/ws/terminal/session/{id}` 输出订阅读宿主 `GlobalOutputManager`，而
-    // P1-b 起生产会话（插件创建）的输出在宿主 PTY 引擎 `PtyRing`——移动端输出面
-    // 受损（受损清单：M3，P3 形态 B 直读 PtyRing 恢复）。此处锁定受损形态：
-    // JWT 认证通过后会话不存在于输出管理器 → error(SESSION_NOT_FOUND) + 关闭。
+    // 移动端 `/ws/terminal/session/{id}` 输出订阅原读宿主 `GlobalOutputManager`，而
+    // P1-b 起生产会话（插件创建）的输出在宿主 PTY 引擎 `PtyRing`——票 06 起经票 05
+    // 的广播声明（hostBroadcastSessionId）改直读同进程 `PtyRing`（零跨 WASM 边界）。
+    // 此处断言恢复形态：auth_ok → subscribe_ok → 写 echo → 收输出帧 → HTTP 历史可取。
     let (mut sink_t, mut stream_t, _addr_t) = connect_ws(port, &format!("/ws/terminal/session/{session_id}")).await;
 
-    // 2a. 首消息 JWT 认证 → 会话存在性校验（异步，GlobalOutputManager）失败 →
-    // error(SESSION_NOT_FOUND) + 关闭（P3 形态 B 前移动端终端不可用）
+    // 2a. 首消息 JWT 认证 → 引擎广播声明存在 → auth_ok（不再是 SESSION_NOT_FOUND）
     sink_t
         .send(WsMsg::Text(format!(r#"{{"type":"auth","token":"{token}"}}"#).into()))
         .await
         .expect("send auth frame failed");
     let auth_resp = recv_frame_json(&mut stream_t).await;
     assert_eq!(
-        auth_resp["type"], "error",
-        "P1-b 受损面：插件会话输出订阅应报 error（P3 形态 B 恢复）, got: {auth_resp}"
+        auth_resp["type"], "auth_ok",
+        "P1-b 受损面已恢复：插件会话应 auth_ok（P3 形态 B 直读引擎环）, got: {auth_resp}"
     );
+
+    // 2b. subscribe（无 from_offset = 全量回放）→ subscribe_ok 快照三件套 + history_end
+    sink_t
+        .send(WsMsg::Text(r#"{"type":"subscribe"}"#.into()))
+        .await
+        .expect("send subscribe failed");
+    let sub_ok = recv_frame_json(&mut stream_t).await;
     assert_eq!(
-        auth_resp["code"], "SESSION_NOT_FOUND",
-        "受损面错误码应明确, got: {auth_resp}"
+        sub_ok["type"], "subscribe_ok",
+        "插件会话订阅应 subscribe_ok（引擎环直读）, got: {sub_ok}"
     );
-    drop(sink_t);
-    drop(stream_t);
+    assert_eq!(sub_ok["protocol"], 3, "TB v3 协议版本不变（老客户端零改动）");
+    let snapshot_offset = sub_ok["snapshot_offset"].as_u64().expect("snapshot_offset");
+    let min_offset = sub_ok["min_offset"].as_u64().expect("min_offset");
+    assert!(
+        snapshot_offset >= min_offset,
+        "快照边界须 ≥ 驻留起点（min={min_offset}, snapshot={snapshot_offset})"
+    );
+    // history_end（空历史也必发，移动端历史拼接锚点）
+    let hist_end = recv_frame_json(&mut stream_t).await;
+    assert_eq!(hist_end["type"], "history_end", "订阅后应收到 history_end, got: {hist_end}");
+    assert_eq!(
+        hist_end["snapshot_offset"], snapshot_offset as u64,
+        "history_end 边界与 subscribe_ok 快照一致"
+    );
+
+    // 2c. 写 echo marker（PTY 输入走控制帧 input，Base64 明文协议）→ 收输出帧
+    let marker = "BEDCODE_MOBILE_OUTPUT_MARKER_061";
+    let echo_cmd = format!("echo {marker}\n");
+    let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, echo_cmd.as_bytes());
+    sink_t
+        .send(WsMsg::Text(format!(r#"{{"type":"input","data":"{b64}"}}"#).into()))
+        .await
+        .expect("send input frame failed");
+    let collected = collect_terminal_output_until(&mut stream_t, marker, Duration::from_secs(10)).await;
+    assert!(
+        collected.contains(marker),
+        "插件会话输出必须能通过 WS 终端通道收到（引擎环直读）：collected={collected:?}"
+    );
+
+    // 2d. HTTP 一次性历史：GET /api/sessions/{id}/history 改读引擎环快照（M7 恢复）
+    let client = reqwest::Client::new();
+    let base = format!("http://127.0.0.1:{port}");
+    let hist_resp: serde_json::Value = client
+        .get(format!("{base}/api/sessions/{session_id}/history"))
+        .header("Authorization", format!("Bearer {token}"))
+        .query(&[("from", "0")])
+        .send()
+        .await
+        .expect("history request failed")
+        .json()
+        .await
+        .expect("history response parse failed");
+    assert_eq!(hist_resp["code"], 0, "历史应可取（引擎环快照）, got: {hist_resp}");
+    let data = hist_resp["data"].clone();
+    let decoded = base64::Engine::decode(
+        &base64::engine::general_purpose::STANDARD,
+        data["dataBase64"].as_str().expect("dataBase64"),
+    )
+    .expect("dataBase64 decode");
+    let decoded_text = String::from_utf8_lossy(&decoded);
+    assert!(
+        decoded_text.contains(marker),
+        "HTTP 历史必须包含 echo 输出（引擎环快照）：decoded={decoded_text:?}"
+    );
+    // 元数据自洽：min ≤ snapshot，history_bytes = snapshot - min（引擎环驻留语义）
+    assert_eq!(
+        data["snapshotOffset"].as_u64().unwrap() as i64
+            - data["minOffset"].as_u64().unwrap() as i64,
+        data["historyBytes"].as_u64().unwrap() as i64,
+        "historyBytes = snapshotOffset - minOffset（引擎环连续驻留语义）"
+    );
+
+    // 场景 2 的终端通道保持打开：场景 3 停止会话后断言 session_stopped 帧（终态收尾）
 
     // ==================== 场景 3：停止插件会话 → 状态一致（P1-b 插件背书） ====================
 
@@ -665,6 +732,19 @@ async fn pty_session_chain_flow() {
         "session must report stopped after StopSession (pty:exit 终态异步收尾)"
     );
 
+    // 3c. 终态收尾（票 06）：引擎订阅者在宽限排空后向终端通道发 session_stopped 帧。
+    // 此刻场景 2 的终端 WS 仍打开（sink_t/stream_t 未 drop）——断言收到停止帧，
+    // 且帧序在尾帧之后（宽限排空保证，见 engine_subscriber_loop）
+    let stopped_frame = recv_frame_json(&mut stream_t).await;
+    assert_eq!(
+        stopped_frame["type"], "session_stopped",
+        "插件会话停止后终端通道应收到 session_stopped（终态收尾）, got: {stopped_frame}"
+    );
+    assert_eq!(
+        stopped_frame["session_id"], session_id,
+        "session_stopped 应携带会话 id"
+    );
+
     // ==================== 场景 4：未认证客户端创建会话被拒 ====================
 
     let (mut sink_b, mut stream_b, _addr_b) = connect_ws(port, "/ws/event").await;
@@ -705,7 +785,7 @@ async fn pty_session_chain_flow() {
 
     // 先发 Close 让服务端 actor 走 stopping()（注销注册表 + 取消订阅），再优雅停机，
     // 避免 stop(true) 等待长连接（与 02 相同策略）
-    for (mut sink, mut stream) in [(sink_a, stream_a), (sink_b, stream_b)] {
+    for (mut sink, mut stream) in [(sink_a, stream_a), (sink_b, stream_b), (sink_t, stream_t)] {
         let _ = sink.send(WsMsg::Close(None)).await;
         let _ = tokio::time::timeout(Duration::from_secs(2), stream.next()).await;
         drop(sink);

@@ -34,6 +34,7 @@
 
 use crate::protocol::{RendererSource, ResizeOutcome, SessionInfoView};
 use crate::utils::auth::auth_center::call_api;
+use crate::wasm_core::host_api::pty::broadcast_handle_for_session;
 use crate::wasm_core::manager::runtime::WasmHostContext;
 use crate::{AppError, Result};
 
@@ -244,14 +245,28 @@ pub async fn special_key(host_ctx: &WasmHostContext, session_id: &str, key: &str
     Ok(())
 }
 
-// ==================== 输出面（P3 形态 B：改直读同进程 `PtyRing`；本批留宿主直读） ====================
+// ==================== 输出面（P3 形态 B：直读同进程 `PtyRing`） ====================
 
 /// 一次性历史快照：`(data, min_offset, snapshot_offset, history_bytes)`
 ///
-/// 今日读业务输出环 `GlobalOutputManager`——P1-b 起业务会话输出在 `PtyRing`，
-/// 此函数对插件会话返回 `None`（移动端 HTTP 历史 404，受损清单记账）；
-/// P3 形态 B 后由宿主 server 直读同进程 `PtyRing`（零跨 WASM 边界）恢复。
+/// **引擎优先（票 06，M7 恢复）**：插件会话的输出环在宿主 PTY 引擎（票 05 广播
+/// 声明），经 [`broadcast_handle_for_session`] 直读同进程 `PtyRing`（零跨 WASM
+/// 边界）——`from` 旧于 `min_offset` 时如实返回驻留起点（缺口由 `min_offset`
+/// 显式上报，客户端据此判定截断，不假装连续）。旧内核会话（无广播声明）保持
+/// `GlobalOutputManager::snapshot_bytes` 兑底。
 pub async fn history_snapshot(session_id: &str, from: u64) -> Option<(Vec<u8>, u64, u64, u64)> {
+    if let Some(handle) = broadcast_handle_for_session(session_id) {
+        let (data, min_offset, snapshot_offset, history_bytes) = {
+            let ring = handle.ring.lock().unwrap_or_else(|e| e.into_inner());
+            let (min, max) = ring.watermarks();
+            // 宿主直读不受 `PLUGIN_PTY_RING_FETCH_MAX_BYTES`（那是 WASM 边界限额）；
+            // 从 `from.max(min)` 起拉取到产出端，一次取净驻留历史
+            let start = from.max(min);
+            let fetched = ring.fetch(start, max.saturating_sub(start) as usize);
+            (fetched.data, min, max, max.saturating_sub(min))
+        };
+        return Some((data, min_offset, snapshot_offset, history_bytes));
+    }
     crate::session::GlobalOutputManager::global()
         .snapshot_bytes(session_id, from)
         .await

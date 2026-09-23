@@ -223,6 +223,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **多消费者并发拉取语义写进契约（票 07 的输入）**：同一句柄的环可被属主插件 `ring-fetch` 与宿主广播面（直读同进程 `PtyRing`）同时拉取——游标各调用方自持、拉取是纯读，淘汰由产出量全局驱动；宿主直读不受 `PLUGIN_PTY_RING_FETCH_MAX_BYTES`（WASM 边界拷贝限额）约束
 - `com.bedcode.terminal-session` 与本票同批声明（`launch.rs::spawn_session` 每次 spawn 带本字段）——移动端输出面（票 06）据此直读恢复。ADR 0022 v15（含 host-pty 第 2 条措辞修订「不注册业务输出总线 → 不默认注册；按 spawn 声明 opt-in 只读订阅」）
 
+#### Mobile output channel & history read the engine ring directly — M6/M7 restored on the desktop side (desktop, session engine downsink ticket 06)
+- **WS 终端通道（`/ws/terminal/session/{id}`）对插件会话全链路恢复**：auth 存在性 = 引擎广播声明优先（`broadcast_handle_for_session().is_some()`，内核 `has_session` 仅兑底旧内核会话/测试夹具）；订阅经新引擎订阅者执行体（`terminal_ws/subscriber.rs::spawn_engine_subscriber` + `engine_subscriber_loop`）直读同进程 `PtyRing`——帧形状与内核环订阅者逐字一致（subscribe_ok 三件套 / history_end / resync / TB v3 / ack 窗口 / 双速模式 / 僵尸回收，老客户端零改动）
+- 引擎环无 watch 通道 → 自适应轮询（快档 50ms / 连续空闲 5 次后慢档 250ms，镜像前端 `output.pull` 节奏；07 实测后可调）。终态 = `PtySession::subscribe_lifecycle()` 宽限排空（300ms，P0 已记：终态事件 ≠ sink 已收尾帧）后经新增 `ForwardOutput::SessionStopped` → `ServerFrame::SessionStopped`（尾帧先行、帧序保证）；订阅任务持有 `PtySession` clone 保活 lifecycle sender（否则注册表终态摘除即断 sender → 排空与停止帧全丢，实测捕获）
+- **HTTP 历史（`GET /api/sessions/{id}/history`）引擎优先**：`session_gateway::history_snapshot` 改读引擎环水印 + fetch 驻留段（`from < min_offset` 如实报缺口，不假装连续），内核环兑底
+- **测试红→绿**：`pty_session_chain` 场景 2 翻正（auth_ok → subscribe_ok → history_end → echo marker 收输出帧 → HTTP 历史含 marker → session_stopped）；新增引擎订阅者单测 5 项 + 清理用例扩展（引擎句柄退休）；ws_session_route（内核 fake session 协议测试）经兑底路径保持绿
+- **借道修复（对侧遗留，非本票引入）**：host-crypto 票 03 的 `crypto:aead/asym/kdf` 权限位补齐前端 `PERMISSION_META` 注册与 zh-CN/en 文案（`permissionMeta.test.ts` 红转绿）
+
 ### Fixes
 
 #### Desktop

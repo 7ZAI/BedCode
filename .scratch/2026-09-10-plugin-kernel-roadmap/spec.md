@@ -177,8 +177,8 @@ M6–M9 由会话引擎下沉 P1-b（`.scratch/2026-09-23-session-engine-downsin
 | M3 | 配对码 / QR 有效期展示与实际 TTL 不一致 | TTL 真源进了插件贡献设置分组，未激活时走宿主兜底默认 | 已可能发生 | 移动端读认证域设置项的取值路径复核一次 |
 | M4 | 移动端插件无法调用 `host-session` v19 批次新函数 | 移动端 SDK 不跟演（WIT 无该接口，ABI 11） | 既定偏离（ADR 0022「双端偏离」节） | 移动端真要接同类能力时补该端 interface + host_impl + 计数对齐 |
 | M5 | 「撤销已配对设备」仍不断开在线连接 | 本批次刻意保持宿主现状语义（只置 `is_active=0` + 删历史） | 未变 | 若要撤销即踢下线，是新协议工作，需双端立项 |
-| M6 | WS 终端通道对**插件会话**报 `error(SESSION_NOT_FOUND)`：移动端连不上任何新建会话的输出 | 会话引擎下沉 P1-b（2026-09-23）：会话真源与 PTY 句柄移到 `com.bedcode.terminal-session` 登记域，`channel/terminal.rs` 仍按内核登记查会话 | **已触发**（桌面端功能等价，移动端按用户 2026-09-23「不用管」授权记账） | P3 形态 B：宿主 server 直读同进程 `PtyRing`（`host-pty` spawn 增引擎级广播声明，ADR 0022 第 2 条措辞随之修订） |
-| M7 | `GET /api/sessions/{id}/history` 对插件会话 404 | 同上：`GlobalOutputManager` 里不再有插件会话的字节（业务输出环只服务内核会话） | 已触发 | 与 M6 同批：改读 `PtyRing` 快照（`session_gateway::history_snapshot` 已是收口点） |
+| M6 | WS 终端通道对**插件会话**报 `error(SESSION_NOT_FOUND)`：移动端连不上任何新建会话的输出 | 会话引擎下沉 P1-b（2026-09-23）：会话真源与 PTY 句柄移到 `com.bedcode.terminal-session` 登记域，`channel/terminal.rs` 仍按内核登记查会话 | **已恢复（桌面侧待联调）**——票 06（2026-09-24）起经票 05 广播声明直读同进程 `PtyRing`（auth_ok → subscribe_ok → 输出帧 → session_stopped 全链路在 `pty_session_chain` 翻正为恢复断言）；移动端仍需一次真机联调（本票不承诺移动端回归完成） | P3 形态 B：宿主 server 直读同进程 `PtyRing`（`host-pty` spawn 增引擎级广播声明，ADR 0022 第 2 条措辞随之修订）——已实施；真机联调后置移动端适配专项 |
+| M7 | `GET /api/sessions/{id}/history` 对插件会话 404 | 同上：`GlobalOutputManager` 里不再有插件会话的字节（业务输出环只服务内核会话） | 已恢复（桌面侧待联调）——票 06 起 `session_gateway::history_snapshot` 引擎优先（`PtyRing` 快照，`from<min` 如实上报缺口）；`pty_session_chain` 断言 HTTP 历史含 echo 输出；移动端仍需一次真机联调 | 与 M6 同批：改读 `PtyRing` 快照（`session_gateway::history_snapshot` 已是收口点）——已实施 |
 | M8 | 内核会话（若经测试 / 旧路径产生）与插件会话**两张名单**：移动端列表只见插件登记域 | P1-b 起窄转发层只查插件（无内核合并视图，刻意不留降级轨） | 已触发 | 桌面 P4 删宿主 `session/` 后自然收敛；移动端只需复核列表渲染对空态的处理 |
 | M9 | `SyncPayload::Session*` 增量推送里依赖宿主回查的分支退化（会话名 / 概要为空） | P1-b 事件改由插件经 `host-events` 自携带载荷；宿主 `sync_handler` 的「回查内核」兜底对插件会话拿不到东西 | 已触发（新载荷形状未变，兜底分支只对内核路径生效） | 移动端适配专项里按新载荷字段（`session` / `sessionName`）联调一次即可，无需改协议 |
 

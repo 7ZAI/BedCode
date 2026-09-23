@@ -36,6 +36,10 @@ pub(crate) enum ForwardOutput {
         code: String,
         message: String,
     },
+    /// 会话停止通知（引擎环订阅者专用，票 06）：终态宽限排空完成后发出——
+    /// 尾帧已先行投递，会话停止帧必须在其后到达（移动端据此断开终端视图）。
+    /// 内核环订阅者不经此路径（该路径的 session_stopped 由通道 watcher 发）。
+    SessionStopped { session_id: String },
 }
 
 // ==================== TB v3（spec §5.3，本地环回 + 新远程通道） ====================

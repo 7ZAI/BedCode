@@ -596,7 +596,7 @@ P0–P5 是**阶段划分与裁决记录**，保留作为理由；开工请以�
 | 03 | 终端输入修饰/提交行观察面退役裁定（P2 残段） | 01 | ready-for-agent |
 | 04 | 连接清单迁独立原语（不随会话 interface 一起死） | — | done（2026-09-24 落成 `host-connection` + `connection:read`） |
 | 05 | PTY 引擎级宿主广播声明 + 会话→句柄只读映射 | — | done（2026-09-24 landed，字段定名 `hostBroadcastSessionId`） |
-| 06 | 移动端输出通道与历史直读引擎游标环（M6/M7 收口） | 05 | ready-for-agent |
+| 06 | 移动端输出通道与历史直读引擎游标环（M6/M7 收口） | 05 | done（2026-09-24，见票文件） |
 | 07 | 多端并发输出实测与环限额裁决（不许估算） | 06 | ready-for-human |
 | 08 | 宿主会话命令面与前端会话 API 注销 | 02 | ready-for-agent |
 | 09 | 事件面收口：删宿主回查兜底与内核状态订阅转接 | 01, 08 | ready-for-agent |

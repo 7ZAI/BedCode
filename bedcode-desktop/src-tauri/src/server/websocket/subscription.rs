@@ -19,8 +19,9 @@ use super::message::Message;
 use super::terminal_ws::control_frame::{self, ServerFrame};
 use super::terminal_ws::{forward, subscriber};
 use crate::protocol::RendererSource;
-use crate::session::GlobalOutputManager;
+use crate::session::{GlobalOutputManager, SubscriberHandle};
 use crate::system::error_boundary::spawn_with_error_boundary;
+use crate::wasm_core::host_api::pty::broadcast_handle_for_session;
 
 /// 转发统计打点帧数（链路调试字节对账；不打逐帧 WS 发送日志，防输出风暴刷屏）
 const FORWARD_STATS_FRAMES: u64 = 100;
@@ -51,6 +52,9 @@ struct PullReadyParts {
     response: crate::session::SubscribeResponse,
     subscriber_task: tokio::task::JoinHandle<()>,
     out_rx: tokio::sync::mpsc::Receiver<forward::ForwardOutput>,
+    /// 引擎环订阅句柄（票 06）：引擎订阅者自持（未在内核管理器登记），
+    /// 经就绪消息回传连接侧，供 ack 路由（`handle_ack_binary`）与退订/断连清理
+    engine_handle: Option<Arc<SubscriberHandle>>,
 }
 
 /// 一条订阅链路的任务组（订阅者执行体 + 桥接）
@@ -101,7 +105,7 @@ struct UnsubscribeResult {
 
 // ==================== 订阅状态 ====================
 
-/// 单连接内的订阅状态（任务表 / 流代数 / 传播模式）
+/// 单连接内的订阅状态（任务表 / 流代数 / 传播模式 / 引擎句柄）
 pub(crate) struct SubscriptionState {
     /// 拉取模型订阅链路任务表（key = `client_id:session_id`）
     ///
@@ -121,6 +125,12 @@ pub(crate) struct SubscriptionState {
     /// 会话未停，满 terminal.batch_bytes 才转发）。由 SetMode 控制帧实时
     /// 切换，订阅者执行体每次循环读取；重订阅时重置为 realtime
     subscriber_modes: HashMap<String, Arc<AtomicU8>>,
+    /// 引擎环订阅句柄表（key = `client_id:session_id` → 票 06 引擎订阅者自持句柄）
+    ///
+    /// 引擎订阅者未在内核管理器登记（环直读、无共享记账），但 ack 帧仍按
+    /// `client_id:session_id` 寻址 → 连接侧持表以便 `handle_ack_binary` 路由。
+    /// 退订 / 替换 / 断连时 retire + 摘除（执行体在下一次唤醒检查点退出）。
+    engine_subscribers: HashMap<String, Arc<SubscriberHandle>>,
 }
 
 impl SubscriptionState {
@@ -129,18 +139,40 @@ impl SubscriptionState {
             pull_tasks: HashMap::new(),
             stream_generations: HashMap::new(),
             subscriber_modes: HashMap::new(),
+            engine_subscribers: HashMap::new(),
+        }
+    }
+
+    /// 登记引擎环订阅句柄（订阅就绪时调用）
+    pub(crate) fn insert_engine_subscriber(&mut self, key: String, handle: Arc<SubscriberHandle>) {
+        if let Some(prev) = self.engine_subscribers.insert(key, handle.clone()) {
+            // 极端竞态（并发重订阅）：旧句柄立即失效（任务在下一次唤醒检查点退出）
+            prev.retire();
+        }
+    }
+
+    /// 取引擎环订阅句柄（ack 路由；不存在 → None）
+    pub(crate) fn engine_subscriber(&self, key: &str) -> Option<Arc<SubscriberHandle>> {
+        self.engine_subscribers.get(key).cloned()
+    }
+
+    /// 摘除并退订引擎环订阅句柄（退订 / 替换时调用）
+    pub(crate) fn remove_engine_subscriber(&mut self, key: &str) {
+        if let Some(prev) = self.engine_subscribers.remove(key) {
+            prev.retire();
         }
     }
 
     /// 断连清理纯逻辑（`stopping` 前半段，供测试）：中止全部输出转发/订阅任务、
-    /// 流代数全部失效（+1）、清空订阅者模式表。返回后三个表均为空——abort 的
-    /// JoinHandle 在异步取消窗口内仍可能把残留帧投递到 actor 邮箱，代数递增与
+    /// 流代数全部失效（+1）、清空订阅者模式表、引擎句柄全部退订。返回后各表均为空——
+    /// abort 的 JoinHandle 在异步取消窗口内仍可能把残留帧投递到 actor 邮箱，代数递增与
     /// abort 互补：actor 侧按代数丢弃旧代残留帧，杜绝旧流帧注入
     /// 新订阅通道（移动端字节游标错位 → 连续性违反 → 重订阅风暴的根源）
     pub(crate) fn cleanup_subscription_state(
         pull_tasks: &mut HashMap<String, PullTasks>,
         stream_generations: &mut HashMap<String, Arc<AtomicU64>>,
         subscriber_modes: &mut HashMap<String, Arc<AtomicU8>>,
+        engine_subscribers: &mut HashMap<String, Arc<SubscriberHandle>>,
     ) {
         // 中止所有订阅链路任务：连接已断开，残留缓冲帧不再需要投递
         for (_, tasks) in pull_tasks.drain() {
@@ -152,6 +184,10 @@ impl SubscriptionState {
         }
         // 订阅者模式原子随连接销毁（SetMode 仅存活于连接生命周期）
         subscriber_modes.clear();
+        // 引擎环订阅句柄全部退订（执行体在下一次唤醒检查点退出；abort 已先行）
+        for (_, handle) in engine_subscribers.drain() {
+            handle.retire();
+        }
     }
 
     /// 连接关闭时的整体清理
@@ -160,6 +196,7 @@ impl SubscriptionState {
             &mut self.pull_tasks,
             &mut self.stream_generations,
             &mut self.subscriber_modes,
+            &mut self.engine_subscribers,
         );
     }
 
@@ -170,6 +207,8 @@ impl SubscriptionState {
             tracing::debug!(key = %key, "[WsConnBase] aborting previous subscriber tasks");
             prev.abort();
         }
+        // 引擎环订阅句柄随链路替换一并退订（旧执行体在下次唤醒检查点退出）
+        self.remove_engine_subscriber(key);
         let generation = self
             .stream_generations
             .entry(key.to_string())
@@ -264,17 +303,39 @@ impl WsConnBase {
         let session_for_task = session_id.clone();
         let client_id_for_task = client_id.clone();
         tokio::spawn(async move {
-            let ready = match GlobalOutputManager::global().session(&session_for_task).await {
-                Some(manager) => {
-                    let spawned =
-                        subscriber::spawn_subscriber(&manager, &client_id_for_task, from_offset, mode, cfg).await;
+            // 引擎优先（票 06）：插件会话的输出环在宿主 PTY 引擎（票 05 广播声明），
+            // 直读同进程 `PtyRing` 零跨 WASM 边界；内核环订阅保留为旧内核会话的兜底。
+            let ready = match broadcast_handle_for_session(&session_for_task) {
+                Some(handle) => {
+                    let spawned = subscriber::spawn_engine_subscriber(
+                        &handle,
+                        &session_for_task,
+                        &client_id_for_task,
+                        from_offset,
+                        mode,
+                        cfg,
+                    )
+                    .await;
                     Some(PullReadyParts {
                         response: spawned.response,
                         subscriber_task: spawned.task,
                         out_rx: spawned.out_rx,
+                        engine_handle: spawned.engine_handle,
                     })
                 }
-                None => None,
+                None => match GlobalOutputManager::global().session(&session_for_task).await {
+                    Some(manager) => {
+                        let spawned =
+                            subscriber::spawn_subscriber(&manager, &client_id_for_task, from_offset, mode, cfg).await;
+                        Some(PullReadyParts {
+                            response: spawned.response,
+                            subscriber_task: spawned.task,
+                            out_rx: spawned.out_rx,
+                            engine_handle: None,
+                        })
+                    }
+                    None => None,
+                },
             };
             let _ = addr
                 .send(PullSubscriberReady {
@@ -307,7 +368,7 @@ impl WsConnBase {
         let addr = ctx.address();
         let request_id = message_id;
 
-        // 代数递增 + 中止本链路任务组：旧流残留帧被代数校验丢弃，
+        // 代数递增 + 中止本链路任务组 + 引擎句柄退休：旧流残留帧被代数校验丢弃，
         // 不会与后续新订阅的流交错（其余订阅者不受影响）
         let _ = self.subscriptions.bump_generation(&key);
         self.subscriptions.remove_mode(&key);
@@ -335,6 +396,20 @@ impl WsConnBase {
         let source = Self::ack_source_for(self.session.device_name.as_deref());
         match Self::ack_frame_outcome(bytes, source) {
             Some((acked_offset, session_id, source)) => {
+                let key = format!("{client_id}:{session_id}");
+                // 引擎优先（票 06）：引擎环订阅句柄在连接侧登记（未在内核管理器），
+                // ack 直写其私有水位并唤醒驻留中的执行体；无引擎句柄 → 内核兜底
+                if let Some(handle) = self.subscriptions.engine_subscriber(&key) {
+                    handle.on_ack(acked_offset);
+                    tracing::trace!(
+                        session_id = %session_id,
+                        client_id = %client_id,
+                        acked_offset,
+                        source = ?source,
+                        "engine subscriber ack applied"
+                    );
+                    return;
+                }
                 actix::spawn(async move {
                     let applied = GlobalOutputManager::global()
                         .ack_subscriber(&session_id, &client_id, acked_offset)
@@ -484,6 +559,25 @@ impl WsConnBase {
                             }
                         }
                     }
+                    // 会话停止通知（引擎环订阅者，票 06）：宽限排空后尾帧已先行
+                    // 投递，本帧在其后到达——移动端据此断开终端视图（与通道 watcher
+                    // 发的内核会话 session_stopped 同形状；引擎会话不再双发）
+                    forward::ForwardOutput::SessionStopped { session_id: sid } => {
+                        if forward_control {
+                            let text = ServerFrame::SessionStopped { session_id: sid }.to_json();
+                            if addr
+                                .send(TerminalControlFrame {
+                                    text,
+                                    stream_key: key.clone(),
+                                    generation,
+                                })
+                                .await
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
+                    }
                     // 僵尸订阅者回收：尽力下发 error 后关闭本连接（只影响这一路）
                     forward::ForwardOutput::Terminate { code, message } => {
                         tracing::warn!(
@@ -612,7 +706,12 @@ impl Handler<PullSubscriberReady> for WsConnBase {
             subscriber: parts.subscriber_task,
             bridge,
         };
-        self.subscriptions.insert_tasks(key, tasks);
+        self.subscriptions.insert_tasks(key.clone(), tasks);
+        // 引擎环订阅句柄登记（票 06）：ack 帧按 `client_id:session_id` 寻址到连接侧；
+        // 退订 / 替换 / 断连时经 `remove_engine_subscriber` / cleanup 退休
+        if let Some(handle) = parts.engine_handle {
+            self.subscriptions.insert_engine_subscriber(key, handle);
+        }
     }
 }
 
@@ -740,6 +839,7 @@ mod tests {
         let mut pull_tasks = HashMap::new();
         let mut generations = HashMap::new();
         let mut modes = HashMap::new();
+        let mut engine_subscribers = HashMap::new();
 
         // 两条订阅链路（不同 key），各挂一对永不完成的执行体/桥接任务
         let gen1 = Arc::new(AtomicU64::new(0));
@@ -755,16 +855,40 @@ mod tests {
             generations.insert(key.to_string(), Arc::clone(gen));
             modes.insert(key.to_string(), Arc::new(AtomicU8::new(MODE_REALTIME)));
         }
+        // 引擎环订阅句柄（票 06）：构造两条并断言清理后全部 retired + 摘除
+        let engine_handles: Vec<Arc<SubscriberHandle>> = (0..2)
+            .map(|i| {
+                Arc::new(SubscriberHandle::new(
+                    format!("sv{i}"),
+                    format!("c{i}"),
+                    0,
+                    0,
+                    Arc::new(AtomicU8::new(MODE_REALTIME)),
+                ))
+            })
+            .collect();
+        engine_subscribers.insert("c1:sv".to_string(), Arc::clone(&engine_handles[0]));
+        engine_subscribers.insert("c2:sv2".to_string(), Arc::clone(&engine_handles[1]));
 
-        SubscriptionState::cleanup_subscription_state(&mut pull_tasks, &mut generations, &mut modes);
+        SubscriptionState::cleanup_subscription_state(
+            &mut pull_tasks,
+            &mut generations,
+            &mut modes,
+            &mut engine_subscribers,
+        );
 
-        // 任务表/代数表/模式表全部清空
+        // 任务表/代数表/模式表/引擎句柄表全部清空
         assert!(pull_tasks.is_empty(), "pull_tasks 必须全部清空");
         assert!(generations.is_empty(), "stream_generations 必须全部清空");
         assert!(modes.is_empty(), "subscriber_modes 必须全部清空");
+        assert!(engine_subscribers.is_empty(), "engine_subscribers 必须全部清空");
         // 流代数全部 +1（残留帧校验依据）
         assert_eq!(gen1.load(Ordering::SeqCst), 1);
         assert_eq!(gen2.load(Ordering::SeqCst), 1);
+        // 引擎句柄全部 retired（执行体在下一次唤醒检查点退出）
+        for h in &engine_handles {
+            assert!(h.is_retired(), "引擎环订阅句柄必须被 retire");
+        }
     }
 
     #[test]
@@ -772,7 +896,15 @@ mod tests {
         let mut pull_tasks = HashMap::new();
         let mut generations = HashMap::new();
         let mut modes = HashMap::new();
-        SubscriptionState::cleanup_subscription_state(&mut pull_tasks, &mut generations, &mut modes);
-        assert!(pull_tasks.is_empty() && generations.is_empty() && modes.is_empty());
+        let mut engine_subscribers = HashMap::new();
+        SubscriptionState::cleanup_subscription_state(
+            &mut pull_tasks,
+            &mut generations,
+            &mut modes,
+            &mut engine_subscribers,
+        );
+        assert!(
+            pull_tasks.is_empty() && generations.is_empty() && modes.is_empty() && engine_subscribers.is_empty()
+        );
     }
 }

@@ -341,10 +341,13 @@ WIT 契约 `host-task`（5 函数：execute-batch / submit / status / cancel / l
   - **registry.rs / endpoint.rs**：连接注册表（`ChannelKind{Terminal,Event,Plugin}` + owner/endpoint_id，
     广播过滤、在线判定、端点域寻址与属主回收）；插件端点注册表（属主 + 挂载路径 + 认证策略 + 上限 +
     总线；只碰本人的回收）；
-  - **subscription.rs**：输出订阅原语（订阅/退订/传播模式 + 背压 ack + 桥接任务）；
+  - **subscription.rs**：输出订阅原语（订阅/退订/传播模式 + 背压 ack + 桥接任务；票 06 起引擎环订阅句柄登记与 ack 路由）；
   - **terminal_ws/**（control_frame / forward / subscriber）与 **message.rs**（移动端兼容红线）、
     **websocket_manager.rs**（生命周期与优雅停机；停机前对插件端点客户端下发 1001）、**session.rs**
     （WsSession 连接态）、**connection_types.rs**（连接事件）；
+  - **terminal_ws/subscriber.rs**：票 06 起含引擎环订阅者（`spawn_engine_subscriber` /
+    `engine_subscriber_loop`）——经票 05 广播声明直读同进程 `PtyRing`（轮询 + 终态宽限排空 +
+    SessionStopped 帧，帧语义与内核环订阅者逐字一致；`pty_session_chain` 场景 2 为恢复断言）；
   - **services/**（session_control / terminal_service）：会话控制与终端输入**不是 WS 传输原语**
     （ADR 0022 裁剪线视角，归属应为会话业务、后续下沉插件线）——本目录只是临时住处
 
@@ -393,8 +396,10 @@ WIT 契约 `host-task`（5 函数：execute-batch / submit / status / cancel / l
   `SessionOutputSink`**——业务会话的输出汇实现（2026-09-23 P0 自 `pty/output_sink.rs` 归位：
   pty 引擎只留 `PtyOutputSink` 抽象，引擎不认识会话输出总线）。
   **P1-b 影响**：插件会话的输出在 `PtyRing`（`host-pty.ring-fetch`），本管理器对插件会话
-  **无字节** → 移动端 WS 输出通道与 HTTP 历史 404（路线图 M6/M7），P3 形态 B 由宿主 server
-  直读 `PtyRing` 恢复
+  **无字节** → 移动端 WS 输出通道与 HTTP 历史 404（路线图 M6/M7）。**票 06 已恢复**：
+  WS 终端通道经 `terminal_ws/subscriber.rs` 引擎订阅者直读 `PtyRing`，HTTP 历史经
+  `session_gateway::history_snapshot` 引擎优先（均以票 05 广播声明为映射；本管理器仅兑底
+  旧内核会话/测试夹具）
 - **session_lifecycle**：生命周期事件（Creating/Created/Stopping/Stopped）与监听器机制，插件扩展点
   （P1-b 起 `Creating` 不再是创建路径的必经输入——插件自己先做 agent 集成再 spawn，
   资源目录改经 `host-app.plugin-resource-dir`；本机制降为兼容面，随 P4 退役）

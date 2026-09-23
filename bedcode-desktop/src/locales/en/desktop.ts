@@ -236,6 +236,12 @@ export default {
           risk: 'Can spawn pseudo-terminals and start arbitrary shells on your machine',
         },
         'pty:io': { title: 'Private PTY IO', desc: "Read, write and resize the plugin's own terminal sessions" },
+        'crypto:aead': {
+          title: 'Authenticated Encryption',
+          desc: 'Encrypt and decrypt data with AEAD (AES-GCM / ChaCha20-Poly1305)',
+        },
+        'crypto:asym': { title: 'Asymmetric Keys', desc: 'Generate asymmetric key pairs and sign / verify signatures' },
+        'crypto:kdf': { title: 'Key Derivation', desc: 'Derive subkeys with HKDF and similar KDFs' },
         'task:run': { title: 'Concurrent Tasks', desc: 'Run tasks on the host thread pool' },
       },
       // ==================== Permission approval (ADR 0020) ====================
