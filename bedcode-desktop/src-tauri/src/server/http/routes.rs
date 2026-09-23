@@ -16,7 +16,7 @@ use actix_web::{web, HttpResponse};
 use serde_json::json;
 
 use crate::server::http::controllers::{plugin_controller, session_controller};
-use crate::system::constants::server::API_HEALTH_PATH;
+use crate::system::constants::API_HEALTH_PATH;
 
 /// 健康检查端点 — 移动端 WS 连接前探测桌面端是否可达
 async fn health_check() -> HttpResponse {
@@ -49,7 +49,7 @@ fn terminal_bg_content_type(ext: &str) -> &'static str {
 /// 仅扫描白名单扩展名的固定前缀文件，不接受任意路径参数，无目录穿越风险。
 /// 图片为用户自选的壁纸，不含敏感信息，局域网可见可接受。
 async fn terminal_bg_image() -> HttpResponse {
-    use crate::system::constants::terminal::{TERMINAL_BG_EXTENSIONS, TERMINAL_BG_FILE_PREFIX};
+    use crate::system::constants::{TERMINAL_BG_EXTENSIONS, TERMINAL_BG_FILE_PREFIX};
     use tauri::Manager;
 
     let data_dir = match crate::system::app_context::AppContext::global().app_handle() {

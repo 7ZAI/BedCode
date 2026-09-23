@@ -20,7 +20,7 @@
 //! （同一裁决规则、同一 `ResizeOutcome` 形状，见 `plugins/terminal-session/rust/src/actions.rs`
 //! 与 `session/session_manager.rs` 的四态对照测试）。
 
-use crate::plugin::manager::wasm_runtime::WasmHostContext;
+use crate::wasm_core::manager::runtime::WasmHostContext;
 use crate::session::{RendererSource, ResizeOutcome};
 use crate::utils::auth::auth_center::{call_api, session_active};
 use crate::{AppError, Result};

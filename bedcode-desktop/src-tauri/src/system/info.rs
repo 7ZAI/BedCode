@@ -69,7 +69,7 @@ fn fallback_os_ip_name() -> String {
     let ips = local_ipv4_addresses();
     match ips.first() {
         Some(ip) => format!("{}-{}", std::env::consts::OS, ip),
-        None => crate::system::constants::mdns::DEFAULT_HOSTNAME.to_string(),
+        None => crate::system::constants::DEFAULT_HOSTNAME.to_string(),
     }
 }
 

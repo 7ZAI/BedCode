@@ -20,7 +20,7 @@
 //! Known lossy scenarios (accepted): TUI history-recall text does not pass through the input stream;
 //! multi-line input under modifyOtherKeys mode may be split.
 
-use crate::system::constants::terminal::MAX_SUBMITTED_LINE_BUFFER_BYTES;
+use crate::system::constants::MAX_SUBMITTED_LINE_BUFFER_BYTES;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 

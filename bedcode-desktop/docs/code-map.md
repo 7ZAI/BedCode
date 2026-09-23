@@ -39,7 +39,7 @@ bedcode-desktop/                      # 桌面端项目 (Tauri 2.0 + Vue 3)
 │   │   └── src/                      # TS SDK：插件类型定义、共享模块运行时代理（__BEDCODE_SHARED__）、
 │   │                                 #   Vite 构建插件（vue/pinia/vue-i18n 外部化）
 │   ├── plugin-component-test/        # 测试用 WASM 插件 crate（Component Model 绑定验证与连通性测试，
-│   │                                 #   覆盖宿主调用路径，供宿主 wasm_runtime 测试套件做签名验证）
+│   │                                 #   覆盖宿主调用路径，供宿主 runtime 测试套件做签名验证）
 │   ├── plugin-sdk-test/              # SDK 接口测试用插件 crate
 │   ├── plugin-system-test/           # 系统组件形态测试插件 crate（导出 host-* 同形能力接口，验证能力装配
 │   │                                 #   框架：注册表路由 / host-side 转发 / 依赖检查 / trap 隔离）
@@ -89,7 +89,7 @@ bedcode-desktop/                      # 桌面端项目 (Tauri 2.0 + Vue 3)
         ├── db/                       # SQLite：连接管理、数据模型、CRUD 操作、Schema
         │                             #   v24：settings / plugin_storage / plugin_secrets 三表（业务表
         │                             #   pairings / connection_history / session_configs 已退役，存量由
-        │                             #   plugin/auth_records_migration.rs 迁入认证中心私有库）
+        │                             #   wasm_core/legacy/auth_records_migration.rs 迁入认证中心私有库）
         ├── enums/                    # 枚举类型：认证、控制、插件、PTY 状态、会话、Shell、特殊键、同步
         ├── events/                   # 全局事件系统：AppEvent trait、事件匹配、SessionManager→前端转发、
         │                             #   同步事件定义与处理（→ WebSocket 广播）
@@ -105,7 +105,7 @@ bedcode-desktop/                      # 桌面端项目 (Tauri 2.0 + Vue 3)
         │                             #   http/ 与 websocket/ 两个传输面，单端口组合物在 core/app.rs
         ├── session/                  # 会话管理（核心模块，详见 Core Modules）
         ├── system/                   # 系统模块：应用上下文 (DI 容器)、配置、错误类型、生命周期钩子、
-        │                             #   日志格式化、休眠阻止；constants/ 下按领域分组的常量
+        │                             #   日志格式化、休眠阻止；constants.rs 按领域分组的常量（`// ====` 分隔）
         ├── utils/                    # 工具：auth/（JWT、配对、QR Token）、parser/（ANSI、Markdown 解析）、
         │                             #   crypto/（对称/非对称/混合加密：AES-GCM、ChaCha20-Poly1305、
         │                             #   RSA、X25519、KDF，用于 HTTP 报文与文件加密传输）
@@ -119,10 +119,10 @@ bedcode-desktop/                      # 桌面端项目 (Tauri 2.0 + Vue 3)
 
 ## Core Modules（核心模块）
 
-### 插件系统 — `src-tauri/src/plugin/`（WASM 内核五模块，组件沙箱架构）
+### 插件系统 — `src-tauri/src/wasm_core/`（WASM 内核五模块，组件沙箱架构）
 
 基于 wasmtime Component Model 加载和执行插件，前端（`src/plugin/`）与 Rust 侧双层配合。
-Rust 侧按内核五模块组织（`plugin.rs` 为唯一组合点/facade，外部消费方只经 facade 再导出引用）：
+Rust 侧按内核五模块组织（`wasm_core.rs` 为唯一组合点/facade，外部消费方只经 facade 再导出引用）：
 
 - **manager/（core-plugin-manager，核心）**：插件加载、注册、生命周期与运行时
   - **downloader**（`manager/downloader.rs`；2026-09-22 自 `plugin/downloader.rs` 归位于此，
@@ -134,7 +134,7 @@ Rust 侧按内核五模块组织（`plugin.rs` 为唯一组合点/facade，外�
     `<rustLibrary>.wasm` 的 SHA-256 注入**产物** plugin.json（源清单不带该键），
     `scripts/package-plugins.mjs` 出包前逐条复核——声明不再依赖发布者手填
   - **api_bridge**：插件 API 桥接 — 前端 PluginContext 的 API 调用经 Tauri invoke 到达此层，Rust 端权限校验后执行。
-    **身份由凭证绑定而非参数自报**（审计票 06，见 `plugin/security/frontend_channel.rs`）：
+    **身份由凭证绑定而非参数自报**（审计票 06，见 `wasm_core/security/frontend_channel.rs`）：
     `plugin_*` 命令都带 `credential`（宿主面 loader 会话密钥 / 插件面通道令牌），参数里的 `plugin_id`
     只作目标；`plugin_frontend_loader_session`（宿主前端 bootstrap，首个调用者生效，页面加载重置）
     与 `plugin_channel_token`（用 loader 密钥为运行中插件换令牌，停用即回收）是两枚凭证的来源
@@ -144,10 +144,11 @@ Rust 侧按内核五模块组织（`plugin.rs` 为唯一组合点/facade，外�
     启动扫描与 zip 安装两条入口共用 `host/wasm.rs::instantiate_wasm_plugin`（唯一的实例化实现，
     审计票 11 第 2 项）；contributes 注册的唯一实现是 `host/register.rs::register_plugin_contributions`
     （启动期全量 / 安装 / 热重载三入口共用，票 11 第 3 项）
-  - **wasm_runtime + wasm_runtime/host_impl/**：wasmtime Engine/Store/Instance 生命周期管理（含 component.rs
-    WASI preview2 接线）；宿主能力实现按功能域拆分于 host_impl/（api/app/storage/database/terminal/session/
-    events/http/mdns/ws/pty/log/fs/config/bus/lifecycle/process/timer/peer/status/platform/wsl_fs），
-    统一注册到 Linker
+  - **runtime（`manager/runtime/`，原 wasm_runtime）**：wasmtime Engine/Store/Instance 生命周期管理（含 component.rs
+    WASI preview2 接线）；实例互调（JSON-RPC 路由）与宿主上下文（WasmHostContext）定义
+- **host_api（`wasm_core/host_api/`，原 wasm_runtime/host_impl，宿主对外接口模块）**：宿主能力实现
+    按功能域拆分（api/app/storage/database/terminal/session/events/http/mdns/ws/pty/log/fs/config/bus/
+    lifecycle/process/timer/peer/status/platform/wsl_fs + api_bridge 前端命令桥），统一注册到 Linker
   - **capability**：能力注册表与系统组件装配（manifest `type: system|application` + `dependencies`）——
     能力名 → 宿主原语 / WASM 系统组件实例二选一装配；应用插件的 host-* import 由 Linker 经此
     host-side 转发到系统组件同形导出；系统组件内置、默认启用、先于应用插件激活
@@ -173,19 +174,19 @@ Rust 侧按内核五模块组织（`plugin.rs` 为唯一组合点/facade，外�
   访问控制归 **topic 命名空间**（票 05 已落地）——`<plugin-id>::<name>` 是某插件的收件箱，宿主按形态仲裁：
   只有属主（与宿主）能订阅、只有属主（与宿主）能发布，判定不查激活表也不查安装表；公开 topic（不含 `::`）
   仍是插件间广播道。`bedcode.api.reply.*` 回复道对 WASM 订阅面关闭、回复 `sender` 按 api 声明属主校验
-  （见 `host_impl/api.rs`）。形态原语在桌面 SDK `host::bus`（`owned_topic` / `topic_owner`），宿主与插件共用
+  （见 `wasm_core/host_api/api.rs`）。形态原语在桌面 SDK `host::bus`（`owned_topic` / `topic_owner`），宿主与插件共用
 - **config（core-config）/ monitor（core-monitor）**：Engine/Store 运行参数配置面（配置文件 + 运行时覆盖）、
   运行时指标埋点（指标注册表 + 快照导出；见 `.scratch/wasm-core/`）
 - **permission**：权限词汇**只读再导出**（bedcode-plugin-api 再导出；真源在
   `packages/plugin-sdk-desktop/rust/src/permission.rs`）。打包 CLI 与前端合法集读的是生成物
   （`plugin-sdk-desktop/bin/permission-vocabulary.json`、`src/plugin/permission.vocabulary.ts`），
   加/拆权限位后跑 SDK 的 `pnpm run gen:permissions` 重出；三副本一致性与「每条词汇都有门禁落点」
-  由本文件 `plugin/permission.rs` 的词汇漂移锁断言（票 01）
+  由本文件 `wasm_core/permission.rs` 的词汇漂移锁断言（票 01）
 
 ### 宿主能力实现域 · WebSocket 基础能力服务 — `host-websocket`（ABI v14）
 
 WIT 契约 `host-websocket`（14 函数，SDK `rust/wit/bedcode.wit`）、可选导出 `events-ws`、
-ABI v14；宿实现 `plugin/manager/wasm_runtime/host_impl/ws.rs`。**零业务代码红线（ADR 0022）**：
+ABI v14；宿实现 `wasm_core/host_api/ws.rs`。**零业务代码红线（ADR 0022）**：
 宿主只做引擎原语（连接生命周期 / 帧收发 / 句柄登记 / 属主仲裁 / 按属主回收 / 事件定向投递），
 消息格式、房间、协议、重连策略一律归插件。权限按域拆 `ws:client`（出站暴露面）/ `ws:server`（入站暴露面）。
 
@@ -210,11 +211,11 @@ ABI v14；宿实现 `plugin/manager/wasm_runtime/host_impl/ws.rs`。**零业务�
 
 WIT 契约 `host-auth`（v15 密钥托管四函数 + v18 记录面四函数，SDK `rust/wit/bedcode.wit`）、
 **无可选导出**，ABI desktop 17 → 18（mobile 不跟演，见 ADR 0022「双端偏离」）；宿实现
-`plugin/manager/wasm_runtime/host_impl/auth.rs`。**v24 认证记录下沉**：记录面四函数
+`wasm_core/host_api/auth.rs`。**v24 认证记录下沉**：记录面四函数
 （trusted-devices-list / revoke、connection-history-list）随 `pairings` / `connection_history`
 表退役——配对设备 / 连接历史真源在认证中心私有库 `auth_records` 域（插件
 `auth_records/`，表 `auth_pairings` / `auth_connection_history`），存量数据由宿主 handoff
-`plugin/auth_records_migration.rs` 一次性迁入（经互调 api `auth-records-import`）；
+`wasm_core/legacy/auth_records_migration.rs` 一次性迁入（经互调 api `auth-records-import`）；
 `host-auth` 只保留密钥托管 / 生物凭证原语（bound/verify/bind，公钥在 `plugin_secrets`
 key=`biometric:<fp>`）/ device-token / link-identity / setting。**裁剪线（ADR 0022）**：宿主只给
 引擎级原语，排序、过滤、解读与展示组织全部归插件。
@@ -231,7 +232,7 @@ key=`biometric:<fp>`）/ device-token / link-identity / setting。**裁剪线（
 
 WIT 契约 `host-pty`（6 函数，SDK `rust/wit/bedcode.wit`）、**无可选导出**（push 输出模型已被
 spec D3 否决），ABI desktop 15 → 16（v15 归 `host-auth`；mobile 不跟演，见 ADR 0022「双端偏离」）；
-宿实现 `plugin/manager/wasm_runtime/host_impl/pty.rs`，引擎侧 `src-tauri/src/pty/`
+宿实现 `wasm_core/host_api/pty.rs`，引擎侧 `src-tauri/src/pty/`
 （`pty_process.rs` / `pty_reader.rs` / `output_sink.rs` / `lifecycle.rs` / `pty_ring.rs`）。
 **零业务代码红线（ADR 0022）**：只给裸伪终端原语，业务会话线（`host-terminal` / `host-session` /
 `terminal-hooks`）与本接口互不转发——插件 PTY 不进 `SessionComponents`、不注册 `GlobalOutputManager`。
@@ -253,7 +254,7 @@ spec D3 否决），ABI desktop 15 → 16（v15 归 `host-auth`；mobile 不跟�
   回收、先于订阅注销）kill 并摘除本人全部 PTY、逐条补发 killed 事件；
 - **属主隔离**：六函数一律先过权限门再查属主，他人句柄 `not owner of pty handle`，摘除后
   `pty handle not found`；fixture 闭环见 `packages/plugin-pty-test`（wasm32-wasip3）与
-  `wasm_runtime.rs` 的 `test_pty_*` 矩阵。
+  `manager/runtime.rs` 的 `test_pty_*` 矩阵。
 
 ### 宿主能力实现域 · 并发任务 — `host-task`（ABI v20）
 
@@ -264,14 +265,14 @@ WIT 契约 `host-task`（5 函数：execute-batch / submit / status / cancel / l
 `PLUGIN_TASK_POOL_THREADS`）真并行执行既有宿主原语（fs.* / process.run-sync / http.fetch，
 零新 DTO）。
 
-- **执行引擎（core-task）**：`plugin/manager/task.rs`（TaskRegistry + 专用线程池 + 每任务
-  并发窗口 + condvar 终态通知 + 每插件有界回调 channel/消费派发任务）；入口 `host_impl/task.rs`
+- **执行引擎（core-task）**：`wasm_core/manager/task.rs`（TaskRegistry + 专用线程池 + 每任务
+  并发窗口 + condvar 终态通知 + 每插件有界回调 channel/消费派发任务）；入口 `wasm_core/host_api/task.rs`
   （`task:run` 权限门 + plan 解析 + 配额仲裁；单元执行时另过 kind 对应域权限门——双门结构）；
 - **两档 API**：`execute-batch` 同步扇出→join（阻塞 Store，同 run-sync 语义，仅限快操作）；
   `submit` 异步登记返句柄 `task-<hex>`，进度/终态经 `dispatch_task_event` → `events-task`
   回调（started → progress* → completed/failed/cancelled；回调尽力投递，`status`/`list-jobs`
   自愈快照是权威真源）；
-- **配额（`system/constants/plugin.rs` `PLUGIN_TASK_*`）**：池 8 线程 / 每插件在册任务 4 /
+- **配额（`system/constants.rs` `PLUGIN_TASK_*`）**：池 8 线程 / 每插件在册任务 4 /
   单 plan 256 单元 / 单元结果 1 MiB 截断 / 缺省单元 600s、任务 3600s 超时 / 回调队列 64 /
   status 终态结果保留 64 条——超限 fail-visible；
 - **协作式取消/超时**：phase 翻转后未开始单元 skipped（快照补条目），运行中单元跑完结果照记；
@@ -280,7 +281,7 @@ WIT 契约 `host-task`（5 函数：execute-batch / submit / status / cancel / l
   回收）cancel 全部在册任务 + 清回调队列；
 - **重入红线（spec §8）**：池线程永不回调进插件（回调只经消费派发任务 + 实例锁）；插件禁止
   在 guest 调用栈内同步等待自己任务的事件（自死锁），等待一律走 execute-batch；
-- **fixture 闭环**：`packages/plugin-task-test`（wasm32-wasip3）+ `wasm_runtime.rs` 的
+- **fixture 闭环**：`packages/plugin-task-test`（wasm32-wasip3）+ `manager/runtime.rs` 的
   `test_task_*`（并行保序 / 事件管道 / status / cancel 幂等 / legacy 降级 / 双门权限）。
 
 ### 服务器 — `src-tauri/src/server/`（Actix Web HTTP + WS 单端口）
@@ -343,7 +344,7 @@ WIT 契约 `host-task`（5 函数：execute-batch / submit / status / cancel / l
 
 - **session_manager**：会话编排与登记（创建执行端 / 启动 / 尺寸裁决登记 / 注解槽 / 移除 /
   **属主登记**：`session-id → 创建方 plugin_id` 不透明表，票 04——内核只存事实，
-  「先权限门后属主」的判定与文案在 `host_impl`，与会话销毁一并注销）；
+  「先权限门后属主」的判定与文案在 `host_api`，与会话销毁一并注销）；
   会话状态变更直接持 `broadcast::Sender<SessionStatusEvent>`（原 `event_bus.rs` 的
   `SessionEvent`/`SessionEventBus` 只剩单一状态事件、无订阅者，已收缩删除）
 - **session_config**：`SessionConfigManager`——v24 起为装配占位壳（无业务方法）：
@@ -381,7 +382,7 @@ AppEvent trait + 事件匹配处理器；SessionManager 事件双路分发：转
   （重装即新身份，不做设备标识派生）；setup 阶段自动启动节点 + 发现守护；首连确认闸门经
   `peer-consent-requested` 事件桥接前端弹应用内确认框（迁移规则匹配在前端层，见插件 useConsent）
 - **插件入口（真入口）— WIT `host-peer`**：定义于 SDK `rust/wit/bedcode.wit`，宿主实现在
-  `plugin/manager/wasm_runtime/host_impl/peer.rs`（ADR 0022 v3 终态 13 原语）：`dial-peer`（按 endpoint
+  `wasm_core/host_api/peer.rs`（ADR 0022 v3 终态 13 原语）：`dial-peer`（按 endpoint
   拨号，返 session 句柄）、`close`（session/传输句柄统一关闭）、`respond-consent`、`list-trusted`、
   `revoke-trusted`、`send-files`、`respond-transfer`、`set-receive-policy`、`set-shared-roots`、
   `list-shared-roots`、`browse-directory`、`pull-files`、`set-download-dir`；
@@ -389,7 +390,7 @@ AppEvent trait + 事件匹配处理器；SessionManager 事件双路分发：转
 - **命令面（注册于 `lib.rs`）**：票 06 后只剩节点生命周期（`start_peer_node` /
   `stop_peer_node`）、首连确认（`respond_peer_consent`）与信任管理
   （`list_trusted_peers` / `revoke_trusted_peer`）——后三者函数体同时是 host-peer 原语的
-  真源（`host_impl/peer.rs` 直接调用）。接收配置（策略/落点/加密/并发）、历史查询、
+  真源（`wasm_core/host_api/peer.rs` 直接调用）。接收配置（策略/落点/加密/并发）、历史查询、
   远端浏览、发送编排等宿主命令已全部注销：设置面由插件经 `set-receive-policy` /
   `set-download-dir` 等原语推送引擎闸门（`peer_net::*_for_plugin`），任务与历史真源在
   file-transfer 插件私有库
@@ -426,12 +427,12 @@ Rust 侧以 `abi.rs` 为宿主/插件共同引用的单一事实来源（签名�
 | 对等传输引擎适配（发送/接收/远端浏览） | `src-tauri/src/peer_net.rs`、`peer_engine_transfer.rs`、`peer_engine_receive.rs`、`peer_engine_remote.rs` |
 | 对等网络底座 crate | `../packages/peer-net`、`../packages/link-crypto` |
 | 链路加密（HTTP 信封 + WS 帧） | `src-tauri/src/server/core/link_crypto.rs`、`src/composables/`（useLinkCrypto） |
-| 插件系统 (Rust) | `src-tauri/src/plugin/` |
+| 插件系统 (Rust) | `src-tauri/src/wasm_core/` |
 | 插件系统 (前端) | `src/plugin/`、`src/composables/`（usePluginManager） |
 | 插件开发 SDK | `packages/plugin-sdk-desktop/` |
 | 测试插件 | `packages/plugin-component-test/`、`plugin-sdk-test/`、`plugin-system-test/`、`plugin-wasi-test/` |
 | 插件源码 | `plugins/agent-hub/`、`plugins/ai-chatbox/`、`plugins/file-transfer/`、`plugins/terminal-session/`（终端会话中心：配对与信任 + 会话编排 + Agent 任务域 + 快捷指令域（票 02）+ 文件浏览域（票 03），票 17 起顶替旧 `com.bedcode.auto-task` 插件；HTTP 业务端点经网关别名表接管 /api/configs /api/quick-actions / 文件浏览五端点） |
-| 系统常量 / 错误类型 / 生命周期 | `src-tauri/src/system/`（constants/ 按领域分组） |
+| 系统常量 / 错误类型 / 生命周期 | `src-tauri/src/system/`（constants.rs 按领域分组） |
 | 应用上下文 (DI) | `src-tauri/src/system/`（app_context） |
 | 前端页面 / 组件 / 状态 | `src/views/`、`src/components/`、`src/stores/` |
 | 前端业务逻辑 | `src/composables/` |
@@ -460,7 +461,7 @@ Claude Code (PTY)
 - **生命周期扩展**：插件经 `SessionLifecycleListener` 在 Creating 阶段注入 hooks、Stopped 阶段清理
 - **输入扩展点**：插件经 `SessionInputListener` 观察提交的输入行
 
-涉及目录：`plugins/terminal-session/`（`rust/src/task/` + `src/components/TaskHistoryView.vue` / `TaskQueueModal.vue`）、`src-tauri/src/plugin/`、`src-tauri/src/server/http/controllers/`（plugin_controller）、`src-tauri/src/events/`、`src-tauri/src/session/`（lifecycle/input_line）、`src-tauri/src/pty/`。
+涉及目录：`plugins/terminal-session/`（`rust/src/task/` + `src/components/TaskHistoryView.vue` / `TaskQueueModal.vue`）、`src-tauri/src/wasm_core/`、`src-tauri/src/server/http/controllers/`（plugin_controller）、`src-tauri/src/events/`、`src-tauri/src/session/`（lifecycle/input_line）、`src-tauri/src/pty/`。
 
 ### 按类型查找
 
@@ -468,7 +469,7 @@ Claude Code (PTY)
 |------|----------|
 | Tauri Commands | `src-tauri/src/commands.rs` |
 | 错误处理 | `src-tauri/src/system/error.rs` |
-| 系统常量 | `src-tauri/src/system/constants/*.rs` |
+| 系统常量 | `src-tauri/src/system/constants.rs`（单一文件，`// ====` 按领域分组） |
 | 数据库 | `src-tauri/src/db/*.rs` |
 | 枚举类型 | `src-tauri/src/enums/*.rs` |
 | WS 会话控制 / 终端服务 | `src-tauri/src/server/websocket/services/*.rs` |
@@ -476,8 +477,8 @@ Claude Code (PTY)
 | 前端插件系统 | `src/plugin/` |
 | 插件源码 | `plugins/*/` |
 | 插件 SDK | `packages/plugin-sdk-desktop/` |
-| WASM 宿主能力 | `src-tauri/src/plugin/manager/wasm_runtime/host_impl/` |
-| 插件随包 CLI 安装/卸载 | `src-tauri/src/plugin/host/` |
+| WASM 宿主能力 | `src-tauri/src/wasm_core/host_api/` |
+| 插件随包 CLI 安装/卸载 | `src-tauri/src/wasm_core/host/` |
 | 对等网络 | `src-tauri/src/peer_*.rs`（命令注册于 `lib.rs`） |
 | 链路加密 | `src-tauri/src/server/core/link_crypto.rs` |
 | 加密工具（报文/文件传输加密） | `src-tauri/src/utils/crypto/` |

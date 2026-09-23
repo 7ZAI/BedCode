@@ -5,7 +5,7 @@
 //! 「WebSocket 服务器」是历史遗留
 
 use crate::system::config::AppConfig;
-use crate::system::constants::server::{BIND_ADDRESS, MAX_PORT, PORT_SEARCH_MAX_ATTEMPTS};
+use crate::system::constants::{BIND_ADDRESS, MAX_PORT, PORT_SEARCH_MAX_ATTEMPTS};
 use crate::Result;
 use std::net::TcpListener;
 use tauri::{AppHandle, Manager};

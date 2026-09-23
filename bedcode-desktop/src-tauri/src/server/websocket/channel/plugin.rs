@@ -33,8 +33,8 @@ use tokio::sync::mpsc;
 
 use super::super::conn::{AuthMode, ChannelHandler, ConnCtx, WsConnBase};
 use super::super::endpoint::{EndpointAuth, EndpointEntry};
-use crate::plugin::bus::MessageBus;
-use crate::plugin::manager::wasm_runtime::host_impl::ws::deliver_endpoint_frame;
+use crate::wasm_core::bus::MessageBus;
+use crate::wasm_core::host_api::ws::deliver_endpoint_frame;
 use crate::server::websocket::registry::WsSessionRegistry;
 use crate::utils::auth::jwt::{jwt_error_message, JwtService};
 
@@ -265,7 +265,7 @@ impl ChannelHandler for PluginChannel {
             let endpoint_id = self.endpoint_id.clone();
             let client_id = self.client_id.clone();
             crate::system::error_boundary::spawn_with_error_boundary_on(
-                &crate::plugin::manager::wasm_runtime::ambient_handle(),
+                &crate::wasm_core::manager::runtime::ambient_handle(),
                 "ws_endpoint_delivery",
                 run_endpoint_delivery(rx, bus, owner, endpoint_id, client_id),
             );

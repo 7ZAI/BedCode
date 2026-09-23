@@ -17,7 +17,7 @@ use actix_web_actors::ws as actix_ws;
 use crate::server::websocket::channel::plugin::PluginChannel;
 use crate::server::websocket::conn::{ConnSpec, WsConnBase};
 use crate::server::websocket::registry::{ChannelKind, WsSessionRegistry};
-use crate::system::constants::server::{PLACEHOLDER_PEER_ADDR, WS_EVENT_PATH};
+use crate::system::constants::{PLACEHOLDER_PEER_ADDR, WS_EVENT_PATH};
 
 /// WS 帧/消息大小上限（字节）
 ///

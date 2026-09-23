@@ -968,7 +968,7 @@ async fn start_locked(
     // 登记——TXT/ServiceInfo 仍由引擎构造（D3），本处只做句柄登记；全局
     // `mdns:found` / `mdns:lost` 桥接与缓存重发通道已退役（D1）——插件发现
     // 改经 host-mdns 自建 browse 收定向事件（file-transfer 一期同迁，D2）
-    let mdns_daemon = crate::plugin::manager::wasm_runtime::host_impl::mdns::shared_daemon();
+    let mdns_daemon = crate::wasm_core::host_api::mdns::shared_daemon();
     let daemon = bedcode_peer_net::spawn_peer_mdns_daemon(
         &node,
         &running,
@@ -980,7 +980,7 @@ async fn start_locked(
     )
     .map_err(map_peer_net_error)?;
     // 宿主身份广播登记（owner=host）：节点停机时随 runtime 注销（stop_host_service）
-    let host_adv = crate::plugin::manager::wasm_runtime::host_impl::mdns::register_host_service(
+    let host_adv = crate::wasm_core::host_api::mdns::register_host_service(
         bedcode_peer_net::SERVICE_TYPE,
         daemon.service_fullname(),
     )
@@ -1091,7 +1091,7 @@ async fn stop_locked(state: &tauri::State<'_, PeerNetState>, app: &AppHandle) ->
             // 引擎 daemon 停：退订浏览 + 注销自身广播（共享守护不 shutdown）
             runtime.daemon.stop().await.map_err(map_peer_net_error)?;
             // 注销宿主身份广播登记（owner=host，MdnsService ADVERTISERS）
-            let _ = crate::plugin::manager::wasm_runtime::host_impl::mdns::stop_host_service(&runtime.host_adv);
+            let _ = crate::wasm_core::host_api::mdns::stop_host_service(&runtime.host_adv);
             runtime.running.shutdown().await;
             tracing::info!("peer-net node stopped");
             Ok(())
@@ -1241,7 +1241,7 @@ struct DiscoveryRefreshHandler {
     app: AppHandle,
 }
 
-impl crate::plugin::BusMessageHandler for DiscoveryRefreshHandler {
+impl crate::wasm_core::BusMessageHandler for DiscoveryRefreshHandler {
     fn on_message(&self, _msg: &bedcode_plugin_api::BusMessage) -> anyhow::Result<()> {
         let app = self.app.clone();
         crate::system::error_boundary::spawn_with_error_boundary("peer_net_discovery_refresh_handler", async move {

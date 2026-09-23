@@ -9,11 +9,12 @@
 //! 会话被拒（与 02 票 AUTH_REQUIRED 行为衔接）。
 //!
 //! 环境依赖（PTY 断言失败时先区分测试环境问题与链路缺陷）：
-//! - Windows：真实 PTY 需 spawn powershell.exe（非 "wsl2" 环境 →
-//!   WindowsShell::PowerShell，build_command 已注入 chcp 65001 + UTF-8
-//!   OutputEncoding）。PATH 缺 powershell / 系统禁 ConPTY 属环境问题；
-//! - Linux/macOS：走 ExecutionEnvironment::Linux 原生 bash（见 pty/command.rs）。
-//!   两种环境下 StartSession 失败都会回 SESSION_CONTROL_ERROR，panic 消息带原始错误
+//! - Windows：真实 PTY 需 spawn powershell.exe（`-NoExit -Command`，UTF-8 输出编码
+//!   由 `test_launch_config` 的 argv 决定——2026-09-23 PTY 解耦后宿主不再包装）。
+//!   PATH 缺 powershell / 系统禁 ConPTY 属环境问题；
+//! - Linux/macOS：走 ExecutionEnvironment::Linux 原生 bash（`bash -lic`，尾部
+//!   `exec bash` 保驻留）。两种环境下 StartSession 失败都会回
+//!   SESSION_CONTROL_ERROR，panic 消息带原始错误
 //! - 输出编码：启动脚本已强制 UTF-8，断言用 ASCII marker，失败时断言消息
 //!   附带已收集的原始文本（可见是否收到启动横幅等半程输出）辅助判别
 //!
@@ -44,14 +45,14 @@ use bedcode_lib::db::Database;
 use bedcode_lib::enums::{ExecutionEnvironment, SessionLaunchConfig, WindowsShell};
 use bedcode_lib::events::DesktopSyncEvent;
 use bedcode_lib::mdns::advertiser::MdnsAdvertiser;
-use bedcode_lib::plugin::PluginHost;
+use bedcode_lib::wasm_core::PluginHost;
 use bedcode_lib::server::core::app::start_http_server;
 use bedcode_lib::enums::{AuthPayload, AuthStage, SessionControlAction, SessionControlPayload};
 use bedcode_lib::server::websocket::message::Message;
 use bedcode_lib::session::{SessionConfigManager, SessionManager};
 use bedcode_lib::system::app_context::AppContext;
 use bedcode_lib::system::app_context::AppContextBuilder;
-use bedcode_lib::system::constants::network::SYNC_EVENT_BROADCAST_CAPACITY;
+use bedcode_lib::system::constants::SYNC_EVENT_BROADCAST_CAPACITY;
 use bedcode_lib::system::info::SystemInfo;
 use bedcode_lib::AppConfig;
 use futures_util::{SinkExt, StreamExt};
@@ -116,21 +117,47 @@ async fn spawn_test_server(port: u16) -> std::io::Result<(ServerHandle, tokio::t
 const TEST_CONFIG_ID: &str = "itest-pty";
 
 /// 内核执行端入参（= 插件 `session-create` 算出的 launch spec 形状）
+///
+/// 2026-09-23 PTY 解耦票：宿主不再做 shell 包装，命令以 **argv 形态**给出——这里
+/// 手写与插件 `launch.rs::build_argv` 同形的产物（Linux `bash -lic` / Windows
+/// PowerShell `-NoExit -Command`）。shell 必须**驻留**：场景 2/5 要往会话里写
+/// `echo` 并观察回显，而 `bash -lic "<只跑一次的脚本>"` 会在脚本结束后立即退出
+/// （实测退出码 0，slave 关闭后续输入无回显），故在脚本尾部 `exec bash` 换成交互
+/// shell（产物内 `cd … && pwd && <用户命令>` 的用户命令通常本身就是常驻 shell）。
 fn test_launch_config() -> SessionLaunchConfig {
-    let environment = if cfg!(target_os = "windows") {
-        ExecutionEnvironment::Windows {
-            shell: WindowsShell::PowerShell,
-        }
+    let workdir = std::env::temp_dir().to_string_lossy().into_owned();
+    let startup_marker_cmd = "echo BEDCODE_PTY_STARTUP_MARKER";
+    let (environment, command_args) = if cfg!(target_os = "windows") {
+        (
+            ExecutionEnvironment::Windows {
+                shell: WindowsShell::PowerShell,
+            },
+            vec![
+                "powershell.exe".to_string(),
+                "-NoLogo".to_string(),
+                "-NoExit".to_string(),
+                "-Command".to_string(),
+                startup_marker_cmd.to_string(),
+            ],
+        )
     } else {
-        ExecutionEnvironment::Linux
+        (
+            ExecutionEnvironment::Linux,
+            vec![
+                "bash".to_string(),
+                "-lic".to_string(),
+                format!("cd '{}' && pwd && {}; exec bash", workdir, startup_marker_cmd),
+            ],
+        )
     };
     SessionLaunchConfig {
         name: "itest-pty".to_string(),
         environment,
-        working_dir: std::env::temp_dir().to_string_lossy().into_owned(),
-        // 启动命令输出固定 marker（区分「环境就绪但输入链路断」与「PTY 起不来」）
-        command: "echo BEDCODE_PTY_STARTUP_MARKER".to_string(),
-        command_args: None,
+        working_dir: workdir,
+        // 启动命令输出固定 marker（区分「环境就绪但输入链路断」与「PTY 起不来」）；
+        // 诊断字段，宿主不解释（实际 exec 的是 command_args）
+        command: startup_marker_cmd.to_string(),
+        command_args,
         env_vars: HashMap::new(),
         cols: 120,
         rows: 40,

@@ -11,7 +11,7 @@ mod peer_engine_receive;
 mod peer_engine_remote;
 mod peer_engine_transfer;
 pub mod peer_net;
-pub mod plugin;
+pub mod wasm_core;
 pub mod process;
 pub mod pty;
 pub mod server;
@@ -22,7 +22,7 @@ pub mod utils;
 // ==================== Re-exports ====================
 
 use commands::RunningSessionInfo;
-use system::constants::network::SYNC_EVENT_BROADCAST_CAPACITY;
+use system::constants::SYNC_EVENT_BROADCAST_CAPACITY;
 pub use system::{AppConfig, AppContext, AppError, Result};
 
 // ==================== Application Setup ====================
@@ -150,7 +150,7 @@ fn frontend_channel_session_hook() -> tauri::plugin::TauriPlugin<tauri::Wry> {
         .on_page_load(|webview, payload| {
             let Some(plugin_host) = webview
                 .app_handle()
-                .try_state::<std::sync::Arc<crate::plugin::manager::host::PluginHost>>()
+                .try_state::<std::sync::Arc<crate::wasm_core::manager::host::PluginHost>>()
             else {
                 // 页面加载早于 setup 装配 PluginHost（不应发生）：留痕不 panic
                 tracing::warn!("[PluginChannel] page load before PluginHost managed, session not reset");
@@ -411,7 +411,7 @@ pub fn run() {
                 .app_data_dir()
                 .expect("Failed to get app data dir")
                 .join("plugins");
-            let plugin_host = Arc::new(tauri::async_runtime::block_on(plugin::PluginHost::new(
+            let plugin_host = Arc::new(tauri::async_runtime::block_on(wasm_core::PluginHost::new(
                 db.clone(),
                 &plugins_dir,
                 &user_plugins_dir,
@@ -457,23 +457,23 @@ pub fn run() {
             // 旧 auto-task 私有库 → 合并插件私有库的一次性搬运（票 17）：必须跑在
             // PluginHost::new 之后——合并插件 activate 里的库内改名与建表已完成，
             // 目标表此刻才存在；幂等（账本已落即整体跳过），失败不阻断启动
-            crate::plugin::task_data_migration::run(&app_handle_arc);
+            crate::wasm_core::legacy::task_data_migration::run(&app_handle_arc);
             // 终端会话中心私有库 id 路径迁移（票 07 B2）：改名后既有用户数据
             // （会话配置 / 任务历史 / 迁移账本）在旧 id 路径，换名后的插件读新路径
             // ——同样跑在 PluginHost::new 之后（改名插件已激活、目标库已建表）；
             // 幂等（账本已落即跳过），失败不阻断启动
-            crate::plugin::session_db_migration::run(&app_handle_arc);
+            crate::wasm_core::legacy::session_db_migration::run(&app_handle_arc);
             // 快捷指令 legacy 主库 → session 插件私有库的一次性搬运（票 02）：同位置
             // 触发——PluginHost::new 之后插件已按持久化状态自动激活，互调面已登记；
             // 插件未激活时跳过（数据留主库，双轨期继续服务）；插件侧 marker 幂等
-            crate::plugin::quick_actions_migration::run();
+            crate::wasm_core::legacy::quick_actions_migration::run();
             // 认证记录 legacy 主库 → 认证中心插件私有库的一次性搬运（2026-09-22
             // 用户裁定：pairings / connection_history 下沉 terminal-session 私有库，
             // 生物公钥寄主 plugin_secrets）：同位置触发——PluginHost::new 之后认证
             // 中心插件已按持久化状态自动激活；插件未激活时跳过（数据留在 legacy
             // 表不 DROP，下次启动重试）；推送成功（含 already_migrated 回执）后
             // DROP 两表清理。迁移失败不阻断启动。
-            crate::plugin::auth_records_migration::run();
+            crate::wasm_core::legacy::auth_records_migration::run();
             app.manage(system_info.clone());
             // peer-net 节点的启动不再需要 boot 对账（审计票 12）：旧实现要在装配末尾
             // 按硬编码插件 id 补一次状态对账，因为 activate 外壳经
@@ -489,7 +489,7 @@ pub fn run() {
             #[cfg(debug_assertions)]
             {
                 let runtime_handle = tauri::async_runtime::block_on(async { tokio::runtime::Handle::current() });
-                let _dev_watcher = plugin::watcher::PluginDevWatcher::start(plugins_dir.to_path_buf(), runtime_handle);
+                let _dev_watcher = wasm_core::watcher::PluginDevWatcher::start(plugins_dir.to_path_buf(), runtime_handle);
                 // dev_watcher 需要 hold 住生命周期，存入 AppContext 或 leak
                 // 使用 Box::leak 使 watcher 生命周期与进程一致（开发模式可接受）
                 Box::leak(Box::new(_dev_watcher));
@@ -617,7 +617,7 @@ pub fn run() {
                                 running.len()
                             );
 
-                            if let Err(e) = ah.emit(system::constants::event::WINDOW_CLOSE_REQUESTED, &running) {
+                            if let Err(e) = ah.emit(system::constants::WINDOW_CLOSE_REQUESTED, &running) {
                                 tracing::error!("Failed to emit window-close-requested: {}", e);
                             }
                         }

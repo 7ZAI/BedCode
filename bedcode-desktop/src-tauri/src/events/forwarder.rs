@@ -3,7 +3,7 @@
 //! 将 SessionManager 的内部事件统一转发到 Tauri 前端
 
 use crate::session::SessionManager;
-use crate::system::constants::event;
+use crate::system::constants::SESSION_STATUS_CHANGED;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 
@@ -35,8 +35,8 @@ impl EventForwarder {
         let mut rx = self.session_manager.subscribe_status();
         tauri::async_runtime::spawn(async move {
             while let Ok(event) = rx.recv().await {
-                if let Err(e) = app_handle.emit(event::SESSION_STATUS_CHANGED, &event) {
-                    tracing::error!("Failed to emit {} event: {}", event::SESSION_STATUS_CHANGED, e);
+                if let Err(e) = app_handle.emit(SESSION_STATUS_CHANGED, &event) {
+                    tracing::error!("Failed to emit {} event: {}", SESSION_STATUS_CHANGED, e);
                 }
             }
         });

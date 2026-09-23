@@ -9,7 +9,7 @@
 use crate::server::websocket::message::Message as BusinessMessage;
 use crate::server::websocket::registry::WsSessionRegistry;
 use crate::session::GlobalOutputManager;
-use crate::system::constants::server::WS_EVENT_BROADCAST_CAPACITY;
+use crate::system::constants::WS_EVENT_BROADCAST_CAPACITY;
 use crate::system::error::AppError;
 use crate::Result;
 use std::net::SocketAddr;

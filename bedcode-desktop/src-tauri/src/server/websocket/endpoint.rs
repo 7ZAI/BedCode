@@ -16,8 +16,8 @@
 //! `maxClients` / `maxMessageBytes` 一律按宿主常量 / 配置上限截断（插件不能放宽
 //! 宿主安全边界）。
 
-use crate::plugin::bus::MessageBus;
-use crate::system::constants::plugin::{PLUGIN_WS_MAX_CLIENTS_PER_ENDPOINT, PLUGIN_WS_MAX_ENDPOINTS_PER_PLUGIN};
+use crate::wasm_core::bus::MessageBus;
+use crate::system::constants::{PLUGIN_WS_MAX_CLIENTS_PER_ENDPOINT, PLUGIN_WS_MAX_ENDPOINTS_PER_PLUGIN};
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex};
 
@@ -31,7 +31,7 @@ pub const PLUGIN_ENDPOINT_ROUTE_PREFIX: &str = "/ws/plugin";
 ///
 /// 票 08 起 WS 注册面与 HTTP 声明面共用这一张表，避免「两 transport 各自抄一遍
 /// `none|jwt`」的词汇漂移。缺省档位各面自己给：WS = `None`（本文件，历史行为），
-/// HTTP = `Jwt`（见 `plugin::manager::registry`，票 08 裁决 1「未声明即最严」）。
+/// HTTP = `Jwt`（见 `wasm_core::manager::registry`，票 08 裁决 1「未声明即最严」）。
 pub use bedcode_plugin_api::EndpointAuth;
 
 /// 已注册端点（克隆开销 = 一次 `Arc` + 三个短字符串）

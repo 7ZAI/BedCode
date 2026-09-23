@@ -13,7 +13,7 @@ use crate::server::core::metrics::ServerMetrics;
 use crate::server::core::supervisor::{ServerStatusInfo, ServerSupervisor};
 use crate::session::{RendererSource, ResizeOutcome, SessionManager};
 use crate::system::config::{AppConfig, NetworkConfig};
-use crate::system::constants::terminal::{TERMINAL_BG_EXTENSIONS, TERMINAL_BG_FILE_PREFIX, TERMINAL_BG_MAX_BYTES};
+use crate::system::constants::{TERMINAL_BG_EXTENSIONS, TERMINAL_BG_FILE_PREFIX, TERMINAL_BG_MAX_BYTES};
 use crate::Result;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -67,7 +67,7 @@ pub async fn get_session(
 /// 对外行为（返回形状与 NeedsConfirmation 语义）不变。
 #[tauri::command]
 pub async fn resize_session(
-    host: State<'_, Arc<crate::plugin::PluginHost>>,
+    host: State<'_, Arc<crate::wasm_core::PluginHost>>,
     session_manager: State<'_, Arc<SessionManager>>,
     session_id: String,
     cols: u16,
@@ -362,7 +362,7 @@ pub fn open_log_dir() -> Result<()> {
 /// 由本路径产出，保持 0 以维持前端类型形状）。
 #[tauri::command]
 pub async fn get_connected_devices(
-    _host: State<'_, Arc<crate::plugin::PluginHost>>,
+    _host: State<'_, Arc<crate::wasm_core::PluginHost>>,
 ) -> Result<Vec<crate::server::DeviceConnectionInfo>> {
     let manager = crate::server::websocket::WebSocketManager::global();
     let clients = manager.list_clients().await;
@@ -451,7 +451,7 @@ pub fn report_frontend_log(logs: Vec<FrontendLogEntry>) {
 
 // 插件系统 Tauri 命令 — 重新导出 api_bridge 中的所有命令
 
-pub use crate::plugin::api_bridge::*;
+pub use crate::wasm_core::api_bridge::*;
 
 // ==================== Server Control Commands ====================
 

@@ -30,8 +30,8 @@ use crate::server::websocket::session::WsSession;
 use crate::server::websocket::subscription::SubscriptionState;
 use crate::session::GlobalOutputManager;
 use crate::system::app_context::AppContext;
-use crate::system::constants::event;
-use crate::system::constants::server::{HEARTBEAT_INTERVAL_SECS, REMOTE_CLIENT_TIMEOUT_SECS, WS_AUTH_TIMEOUT_SECS};
+use crate::system::constants::DEVICE_CONNECTED;
+use crate::system::constants::{HEARTBEAT_INTERVAL_SECS, REMOTE_CLIENT_TIMEOUT_SECS, WS_AUTH_TIMEOUT_SECS};
 use crate::utils::auth::jwt::JwtService;
 
 /// 心跳间隔
@@ -541,7 +541,7 @@ impl WsConnBase {
         let app_ctx = AppContext::global();
         if let Some(handle) = app_ctx.app_handle() {
             let _ = handle.emit(
-                event::DEVICE_CONNECTED,
+                DEVICE_CONNECTED,
                 &crate::server::websocket::connection_types::DeviceConnectionEvent {
                     addr: self.session.addr.to_string(),
                     device_id: claims.sub.clone(),
@@ -682,7 +682,7 @@ impl Actor for WsConnBase {
                         // 上下文无 AppHandle：跳过（保持 let _ 丢弃错误语义）
                         if let Some(handle) = app_ctx.app_handle() {
                             let _ = handle.emit(
-                                crate::system::constants::event::DEVICE_DISCONNECTED,
+                                crate::system::constants::DEVICE_DISCONNECTED,
                                 &crate::server::websocket::connection_types::DeviceConnectionEvent {
                                     addr: addr.clone(),
                                     device_id: device_id.clone(),

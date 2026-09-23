@@ -7,7 +7,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use crate::system::constants::lifecycle::HOOK_TIMEOUT_SECS;
+use crate::system::constants::HOOK_TIMEOUT_SECS;
 
 /// 生命周期阶段
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

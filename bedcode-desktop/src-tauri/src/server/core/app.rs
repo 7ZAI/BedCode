@@ -14,7 +14,7 @@ use actix_cors::Cors;
 use actix_web::{dev::Service, http::KeepAlive, web, App, HttpServer};
 use std::time::Duration;
 
-use crate::system::constants::server::{BIND_ADDRESS, CORS_MAX_AGE_SECS};
+use crate::system::constants::{BIND_ADDRESS, CORS_MAX_AGE_SECS};
 
 /// 构建路由配置 — 组合物：只做两侧装配，不承载任何端点
 ///

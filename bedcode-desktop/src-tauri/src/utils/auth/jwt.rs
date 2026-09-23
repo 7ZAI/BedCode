@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::system::constants::auth::JWT_ISSUER;
+use crate::system::constants::JWT_ISSUER;
 use crate::utils::auth::host_secrets;
 
 /// 默认 JWT 过期时间（7 天）

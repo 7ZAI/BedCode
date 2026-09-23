@@ -10,9 +10,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use crate::system::constants::mdns;
-use crate::system::constants::server::{
-    DEFAULT_SERVER_PORT, METRICS_HISTORY_CAPACITY, METRICS_SAMPLING_INTERVAL_SECS, SERVER_RESTART_DELAY_MS,
+use crate::system::constants::{
+    DEFAULT_SERVER_PORT, METRICS_HISTORY_CAPACITY, METRICS_SAMPLING_INTERVAL_SECS,
+    SERVER_RESTART_DELAY_MS, SERVICE_NAME_PREFIX, TXT_KEY_DEVICE_NAME, TXT_KEY_PLATFORM,
+    TXT_KEY_VERSION, TXT_VALUE_PLATFORM,
 };
 use crate::system::error::AppError;
 use crate::Result;
@@ -418,7 +419,7 @@ fn start_mdns_advertisement(port: u16) {
         .system_info()
         .device_name
         .clone();
-    let service_name = format!("{}{}", mdns::SERVICE_NAME_PREFIX, device_name);
+    let service_name = format!("{}{}", SERVICE_NAME_PREFIX, device_name);
 
     tokio::spawn(async move {
         let ctx = crate::system::app_context::AppContext::global();
@@ -426,9 +427,9 @@ fn start_mdns_advertisement(port: u16) {
         let a = advertiser.read().await;
 
         let mut txt_records = std::collections::HashMap::new();
-        txt_records.insert(mdns::TXT_KEY_PLATFORM.to_string(), mdns::TXT_VALUE_PLATFORM.to_string());
-        txt_records.insert(mdns::TXT_KEY_DEVICE_NAME.to_string(), service_name.clone());
-        txt_records.insert(mdns::TXT_KEY_VERSION.to_string(), env!("CARGO_PKG_VERSION").to_string());
+        txt_records.insert(TXT_KEY_PLATFORM.to_string(), TXT_VALUE_PLATFORM.to_string());
+        txt_records.insert(TXT_KEY_DEVICE_NAME.to_string(), service_name.clone());
+        txt_records.insert(TXT_KEY_VERSION.to_string(), env!("CARGO_PKG_VERSION").to_string());
 
         let config = crate::mdns::types::AdvertiseConfig {
             service_name,

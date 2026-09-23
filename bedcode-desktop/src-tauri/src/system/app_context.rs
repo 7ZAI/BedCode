@@ -5,7 +5,7 @@
 
 use crate::db::Database;
 use crate::mdns::advertiser::MdnsAdvertiser;
-use crate::plugin::PluginHost;
+use crate::wasm_core::PluginHost;
 use crate::session::{SessionConfigManager, SessionManager};
 use crate::system::info::SystemInfo;
 use crate::utils::auth::biometric::BiometricChallengeManager;

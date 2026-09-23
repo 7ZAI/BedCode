@@ -34,12 +34,21 @@
 ### 改进
 
 #### 桌面端
+- **WASM 内核模块 `plugin` 改名 `wasm_core` + 结构规整（桌面端）**：`src-tauri/src/plugin` 改名为 `src-tauri/src/wasm_core`（对齐 wasm-core spec 命名），全仓 `crate::wasm_core` 路径替换 `crate::plugin`。宿主对外接口归入新增 `host_api` 模块（`wasm_core/host_api/`）：全部 host-* 原语实现（原 `manager/wasm_runtime/host_impl/`，21 组能力域）+ 前端命令桥 `api_bridge`。`manager/wasm_runtime` 改名 `manager/runtime`；四个一次性宿主侧迁移（auth-records / quick-actions / session-db / task-data）归组到 `wasm_core/legacy/`。facade（`wasm_core.rs`）仍是唯一组合点；`host_api` 移出 `runtime` 子树后 `WasmHostContext` 字段改 `pub(crate)` 供内核内部访问。纯改名/归位重构，无行为变化；桌面 `cargo test` 1153 单测 + 集成全绿
 - 旧 HTTP 前缀 `com.bedcode.auto-task/*` 由宿主显式别名表在旧插件缺席时应答；「保留 vs 切断」的成本对比与裁决记在票面而非留为隐含
 - 插件私有库表名按域前缀统一（`task_*` / `session_*`），配可逆改名账本与回滚路径，并加源码扫描护栏（漏改一处 SQL 即编译期红）
+
+### 修复
+
+#### 桌面端
+- **终端会话中心插件的 Tailwind 工具类根本没被编译** —— 插件目录改名后 `bedcode-desktop/tailwind.config.js` 仍写 `./plugins/session/src/**`（另有一条指向已退役插件的 `./plugins/scheduler/src/**`），而缺 `./plugins/terminal-session/src/**`。Tailwind 只在宿主编译（无第二处 content 注入点，插件产物也不携带编译后的 Tailwind），于是**仅本插件使用**的类全部拿不到规则：插件 405 个 class 令牌中 165 个为插件独有，其中 158 个无 CSS —— 9 个 Vue 文件 / 77 处引用丢失间距、固定尺寸（`w-96`、`max-h-[440px]`、`h-[168px]`）、栅格（`grid-cols-[auto_1fr]`）、z-index/定位与状态色。修法：content 改指 `terminal-session` 并删两条死路径；新增护栏用例 `src/__tests__/plugin/tailwindContentCoverage.test.ts` 双向锁住 `plugins/*` 与 content 清单
+- **插件引用的两个宿主设计类全仓不存在**：`wb-select`（终端头部 / 设置面板 4 处原生 select）与 `wb-btn-secondary`（背景图选择按钮）无任何定义——宿主样式表只有 `wb-btn-ghost` / `wb-btn-primary` / `wb-mono` / `wb-section-title` / `wb-sidebar-section` / `wb-toolbar`。死类名已清除：select 改带 `cursor-pointer` + `focus:border-brand`（与宿主表单控件同一套焦点反馈），选择按钮改用迁移前就在用的 `wb-btn-ghost`
+- **`.plugin-icon` 是宿主工具栏组件的 scoped 类**（scoped 不外泄），插件复刻的三处扩展点图标槽因此没有任何规则；插件现于自身 scoped 块内定义同款 `font-size: calc(14px * var(--ui-scale)); line-height: 1`
 
 ### 安全
 
 #### 桌面端
+- 用户目录副本不再能顶替同 id 的随包插件：启动时的两次目录扫描（随包 `resources/plugins/desktop` → 用户目录 `app_data/plugins`）各持一份 `seen_ids`，同 id 的用户副本在合并时静默覆盖了内置条目（「重复 id 被拒绝」的注释只在单次扫描内成立；由于强制「目录名 = manifest id」，该判据此前实为死代码）。被顶替的插件随后按 `UserInstalled` 读取——信任档从应用构建信任域降级——激活被审批门禁拒绝（`requires user approval before activation`），这正是 `app_data/plugins` 下 `com.bedcode.agent-hub` / `com.bedcode.ai-chatbox` 的陈旧 `file-install` 副本卡住两个随包插件的原因。两次扫描现在共享同一份去重集合（`PluginLoader::load_builtin_and_user`）：内置条目胜出，用户副本被拒绝并留日志
 - `fs_auth` 内置受信任插件白名单种子已改指 `com.bedcode.terminal-session`（随票 06 改名；写用户项目 agent 集成的就是合并插件；不改指会把它静默降级成逐目录弹窗授权）
 - 认证分层成文且单点仲裁：配对码 / QR 的编排在插件，签发、验签执行点、密钥托管（host-auth secret-store）与 `pairings` / `connection_history` 表留宿主；插件未激活时宿主桥接回退到宿主实现并 `warn` 留痕，这是设计内降级路径，不算旁路
 - 凭据仍只记长度不落明文；插件权限清单收口为 15 项且每位都能追到真实消费点（spec 表格里两位查无调用点的位刻意不声明）

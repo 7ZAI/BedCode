@@ -34,16 +34,16 @@
 //!
 //! 互调调用约定：请求 topic `bedcode.api.<plugin-id>.<method>`，回复 topic
 //! `bedcode.api.reply.<caller>.<request-id>`；caller 为宿主虚拟身份
-//! [`crate::plugin::manager::wasm_runtime::host_impl::api::HOST_API_CALLER_ID`]
+//! [`crate::wasm_core::host_api::api::HOST_API_CALLER_ID`]
 //! （互调门禁只校验目标 api 声明，不校验调用方）。
 
-use crate::plugin::manager::wasm_runtime::WasmHostContext;
+use crate::wasm_core::manager::runtime::WasmHostContext;
 use crate::{AppError, Result};
 
 // 票 12 C3：认证策略取认证中心 capability 导出（验签执行留宿主中间件）
-use crate::plugin::manager::capability::{CAP_AUTH_POLICY, EXPORT_AUTH_VERIFY_DEVICE_TOKEN};
-use crate::plugin::manager::host::PluginHost;
-use crate::plugin::manager::wasm_runtime::block_on_async;
+use crate::wasm_core::manager::capability::{CAP_AUTH_POLICY, EXPORT_AUTH_VERIFY_DEVICE_TOKEN};
+use crate::wasm_core::manager::host::PluginHost;
+use crate::wasm_core::manager::runtime::block_on_async;
 
 /// 终端会话中心插件 ID（票 04 起为配对 / QR 语义的权威实现方，票 05 起兼管
 /// trust / consent / 认证策略）
@@ -189,7 +189,7 @@ pub fn notify_connection_touch(plugin_host: &PluginHost, fingerprint: &str) {
         return; // 插件未激活：记录更新跳过（不阻断认证）
     }
     let params = serde_json::json!(fp);
-    crate::plugin::manager::wasm_runtime::ambient_handle().spawn(async move {
+    crate::wasm_core::manager::runtime::ambient_handle().spawn(async move {
         match call_api(&host_ctx, "com.bedcode.terminal-session.connection-touch", params) {
             Ok(_) => tracing::debug!(
                 fingerprint = %fp,
@@ -211,7 +211,7 @@ pub fn notify_connection_close(plugin_host: &PluginHost, fingerprint: &str) {
         return; // 插件未激活：回填跳过（不阻断断开语义）
     }
     let params = serde_json::json!(fp);
-    crate::plugin::manager::wasm_runtime::ambient_handle().spawn(async move {
+    crate::wasm_core::manager::runtime::ambient_handle().spawn(async move {
         match call_api(&host_ctx, "com.bedcode.terminal-session.connection-close", params) {
             Ok(_) => tracing::debug!(
                 fingerprint = %fp,

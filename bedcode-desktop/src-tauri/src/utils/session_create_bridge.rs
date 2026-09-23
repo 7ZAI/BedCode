@@ -25,7 +25,7 @@
 //! （spec D3「两阶段启动的编排决策」），内核 `create_session_from_spec` 按
 //! `start` 分支执行（Running / Starting + 输出注册时机）。
 
-use crate::plugin::manager::wasm_runtime::WasmHostContext;
+use crate::wasm_core::manager::runtime::WasmHostContext;
 use crate::utils::auth::auth_center::{call_api, session_active};
 use crate::{AppError, Result};
 
