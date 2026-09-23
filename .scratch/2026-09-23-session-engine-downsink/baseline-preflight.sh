@@ -187,7 +187,21 @@ echo
 echo "目测项无工具可替代：截图工具缺失（无 grim/spectacle/import），"
 echo "只有 xdotool + fcitx5 —— IME 组合窗、回显、拽底、「回到底部」按钮时机必须人眼看。"
 
-# ==================== 6. 结论 ====================
+# ==================== 6. 宿主源编辑抖动（跑人工基线的独占性判据）====================
+echo
+echo "----- [6] 宿主源近期改动（基线独占性）-----"
+# `tauri dev` watch 整个 src-tauri/：并发批次每存一次盘，基线 app 就重启一次、
+# 日志被 `[logging] dev reset` 清零一次（2026-09-24 实测十分钟重启 11 次）。
+RECENT_SRC=$(find "$DESKTOP/src-tauri/src" -name '*.rs' -newermt '-10 minutes' 2>/dev/null | head -5)
+if [ -n "$RECENT_SRC" ]; then
+  echo "  ⚠ 最近 10 分钟有宿主源文件被改（很可能有人正在编辑，基线会被反复重启）："
+  echo "$RECENT_SRC" | sed 's/^/     /'
+  BLOCKERS+=("宿主源 10 分钟内有改动：基线独占性不成立，等其停笔再跑")
+else
+  echo '  ✅ 最近 10 分钟无宿主源改动 → tauri dev 不会因对侧存盘被反复重启'
+fi
+
+# ==================== 7. 结论 ====================
 echo
 echo "=============== 结论 ==============="
 if [ "${#BLOCKERS[@]}" -eq 0 ]; then

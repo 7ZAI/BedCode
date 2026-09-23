@@ -20,13 +20,48 @@
 
 ## 1. 起跑记录（每次复跑填一次）
 
+### 本轮：2026-09-24 06:2x–06:4x（首轮实质观测）
+
+```
+日期 / 时间      : 06:22 首启 → 06:41 起稳定实例（本地 CST）
+HEAD 提交        : 0f7567477（票 06 landed，在本专项票 13/14 三笔之上）
+工作区污染       : docs/diagrams/*（文档线，不影响运行态）
+                   + 并发批次此刻在改 enums/auth.rs、server/core/link_crypto.rs、
+                     websocket/channel/{event,terminal}.rs → 见下「重启抖动」
+插件产物预演     : ai-chatbox / terminal-session / file-transfer 三条全 FRESH（起跑不补建）
+宿主 lib 可编译  : cargo check --lib 通过
+插件激活态       : terminal-session Activated、agent-hub Activated、file-transfer Activated
+日志实路径       : …/logs/runtime.2026-09-23.log（按 UTC 命名，见 §1c）
+稳定实例健康度   : 红线 0 · 凭证拒绝 0 · ERROR 仅 2 条（重复 id 拒绝，§3.10 判非回归）
+```
+
+**一条重要更正（我第一版把原因判错了）**：首轮 `pnpm run tauri:dev` 十分钟内**宿主重启 11 次**。
+我先归因给「plugin-watch 复制 → `resources/**` 变更 → tauri 重启」，但它只贡献 3 次
+（三条 `resources/.../index.js changed`）；**主因是并发批次在保存 `src-tauri/src/**` 宿主源文件**，
+而 `tauri dev` watch 的正是 `src-tauri/` 整个目录——对侧每存一次盘，基线 app 重启一次、
+日志被 `[logging] dev reset` 清零一次。
+
+⇒ **判据（补进每次起跑）**：走清单之前先确认「没人在编辑宿主源」。两种观测任选：
+`grep -cE "Running DevCommand" <dev日志>` 隔 100 秒取差（本轮 4→4，增量 0 才算稳）；
+或 `find bedcode-desktop/src-tauri/src -newermt '-3 minutes' -name '*.rs'` 为空。
+**不稳定时不要开始走清单**——半程重启会把已观测条目连同证据一起作废（本轮真实代价：
+首实例的 3 条凭证拒绝证据就散在被重置的日志里，只能靠 §3.11 的时序记录留档）。
+
+**本轮已顺带验通、不需人测的一条**：06:30 那轮插件激活后建了真实会话——
+`host-pty: 插件私有 PTY 已创建` → `[plugin:…] session created via host-pty (session_id=806fad27-…)`
+→ `SyncEventHandler SessionCreated` → `/terminal-window/<id>` 独立窗 page-load。
+即「插件自持 PTY 建会话 + 事件面自足 + 桌面开终端窗」这条 P1-b 主链**真机可用**。
+
+### 每次复跑要填的空格
+
 ```
 日期 / 时间      :
 HEAD 提交        :
 工作区污染       : （preflight [2] 段原样粘贴）
 插件产物预演     : （preflight [3] 段：FRESH / 需补建）
 宿主 lib 可编译  : （preflight [4] 段）
-插件激活态       : ← 关键前置，见下节「1a」
+插件激活态       : ← 关键前置，见 §1b
+重启抖动         : ← 上节判据，增量 0 才继续
 日志文件实路径    : ← 用 `ls -t …/logs/runtime.*.log | head -1` 取，禁止按本地日期拼名
 日志起跑前行数   : （用于只读增量：tail -n +<行数+1>）
 ```
