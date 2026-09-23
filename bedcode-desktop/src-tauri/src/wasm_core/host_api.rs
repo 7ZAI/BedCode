@@ -17,6 +17,7 @@ pub(super) mod app;
 pub(super) mod auth;
 pub(super) mod bus;
 pub(super) mod config;
+pub(super) mod connection;
 pub(crate) mod crypto;
 pub(super) mod database;
 pub(super) mod events;

@@ -549,39 +549,14 @@ pub(crate) fn session_annotate(
     Ok(())
 }
 
-/// 连接注册表原始记录清单（v19，权限 `session:read`，票 11）
+/// 连接注册表原始记录清单——**票 04 起本函数是别名**（实现在 `host_api::connection`，
+/// WIT 面是 `host-connection.connections-list`，权限判据 `connection:read`）。
 ///
-/// **无排序无解读**：直取内核 WS 连接注册表（`WebSocketManager::list_clients`）的
-/// 全部原始条目序列化返回，不排序（保留注册表存储序）、不过滤（含未认证连接）、
-/// 不合并（不关联配对记录）、不加派生字段。JSON 数组，元素字段名 = 注册表原始
-/// 字段（camelCase）：`{clientId, deviceName?, fingerprint?, addr, authenticated,
-/// connectedAt}`。排序 / 在线判定 / 会话数 / 任务状态合并是插件侧派生视图的职责
-/// （spec D3「派生视图（在线判定 + 会话数 + 任务状态合并）」）。
+/// 保留到票 10 随 `host-session` interface 一并删除；期间**不提供第二把钥匙**：
+/// 走本函数的调用同样要求 `connection:read`（换判据属票 04 已登记的「不 bump 行为变更」，
+/// 未声明新位的旧产物拿 `permission denied`，fail-visible）。
 pub(crate) fn session_connections_list(host_ctx: &WasmHostContext, plugin_id: &str) -> Result<String, String> {
-    if !super::check_permission(
-        host_ctx,
-        plugin_id,
-        PERMISSION_SESSION_READ,
-        "host_session_connections_list",
-    ) {
-        return Err("permission denied".to_string());
-    }
-    let manager = crate::server::websocket::WebSocketManager::global();
-    let clients = block_on_async(manager.list_clients());
-    let values: Vec<serde_json::Value> = clients
-        .into_iter()
-        .map(|c| {
-            serde_json::json!({
-                "clientId": c.client_id,
-                "deviceName": c.device_name,
-                "fingerprint": c.fingerprint,
-                "addr": c.addr,
-                "authenticated": c.authenticated,
-                "connectedAt": c.connected_at,
-            })
-        })
-        .collect();
-    serde_json::to_string(&values).map_err(|e| format!("session error: JSON serialization failed: {}", e))
+    super::connection::connection_list(host_ctx, plugin_id)
 }
 
 /// 会话输出环拉取（票 04，权限 `terminal:output` + 属主校验）：按游标拉取会话输出
@@ -1302,20 +1277,7 @@ mod tests {
         block_on_async(ctx.session_manager.remove_session(&sid)).expect("remove");
     }
 
-    /// connections-list 权限门：缺 `session:read` → 显性拒绝；授权后可读，
-    /// 无头上下文注册表为空 → 合法空数组（形状恒定）
-    #[tokio::test]
-    async fn session_connections_list_permission_and_empty_shape() {
-        let ctx = build_host_ctx();
-        let err = session_connections_list(&ctx, PLUGIN).unwrap_err();
-        assert_eq!(err, "permission denied");
-
-        grant_permissions(&ctx, PLUGIN, &[PERMISSION_SESSION_READ]);
-        let raw = session_connections_list(&ctx, PLUGIN).expect("connections list");
-        let parsed: serde_json::Value = serde_json::from_str(&raw).expect("json array");
-        assert!(parsed.is_array(), "必须为 JSON 数组（无头注册表为空）");
-        assert_eq!(parsed, serde_json::json!([]));
-    }
+    // connections-list 的权限门与形状锁已随实现迁至 `host_api::connection::tests`（票 04）
 
     // ==================== 票 04：output-ring-fetch（输出消费二进制原语） ====================
 

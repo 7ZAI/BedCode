@@ -469,6 +469,10 @@ interface host-session {
     /// `{ clientId, deviceName?, fingerprint?, addr, authenticated, connectedAt }`
     /// （`clientId` = 注册表键 = 连接地址串；`deviceName` / `fingerprint` 来自
     /// JWT claims，认证前为 null；`connectedAt` 为 epoch 毫秒）。
+    ///
+    /// **票 04 起本函数是别名**：真源面已迁 `host-connection.connections-list`（同一宿主
+    /// 实现），权限判据同步改挂 `connection:read`；本条随 `host-session` interface
+    /// 的 P4 退役一并删除（票 10）。
     connections-list: func() -> result<string, string>;
 
     /// 一次拉取的返回（游标语义见 `output-ring-fetch`；与 host-pty `ring-fetch-result`
@@ -496,6 +500,32 @@ interface host-session {
     /// 宿主 GlobalOutputManager 保有环本体；游标由调用方（插件）自持——插件注册
     /// 游标 + 自有水位，宿主不做任何投递（背压语义沿用 2026-09-17 pull 模型）。
     output-ring-fetch: func(session-id: string, from-offset: u64, max-bytes: u32) -> result<option<ring-fetch-result>, string>;
+}
+
+/// 宿主 server 的在册连接清单（票 04，自 `host-session.connections-list` 迁出）
+///
+/// **为什么单独成 interface**：这份事实的主语是宿主 WS 服务的连接注册表
+/// （`WsSessionRegistry`），不是插件自己开的 socket（那是 `host-websocket` 的
+/// `ws:client` / `ws:server`），也不是会话（会话真源已在 `com.bedcode.terminal-session`
+/// 登记域）。它历史上住进 `host-session` 只是当时顺手——而 `host-session` 整 interface
+/// 随 P4 退役，这份**只有宿主机进程知道、且零会话语义**的事实必须换个家活下来
+/// （ADR 0022 v12 裁决 5「迁独立原语」）。
+///
+/// 权限 `connection:read`（票 04 新位，替代原 `session:read`；`host-session` 上的
+/// 同名旧函数在删除前**共用这一判据**，不留第二把钥匙）。
+///
+/// **无排序无解读**：返回内核 WS 连接注册表的全部原始条目，按注册表存储序
+/// （HashMap 迭代序，不保证稳定），不做过滤（含未认证连接）、不做合并（不关联配对记录）、
+/// 不加派生字段（无会话数 / 在线判定——那些是插件侧派生视图的职责，spec D3/D4）。
+/// JSON 数组，元素（原始字段名，camelCase）：
+/// `{ clientId, deviceName?, fingerprint?, addr, authenticated, connectedAt }`
+/// （`clientId` = 注册表键 = 连接地址串；`deviceName` / `fingerprint` 来自 JWT claims，
+/// 认证前为 null；`connectedAt` 为 epoch 毫秒）。
+///
+/// 注：WIT 中 `list` 是关键字，故函数名沿用 `connections-list`——迁出未改名，
+/// 插件侧调用点与回归用例断言零改动（票 04 验收第 2 条的「只能来自改名」因此不触发）。
+interface host-connection {
+    connections-list: func() -> result<string, string>;
 }
 
 /// 主数据库（原 database.rs：db_execute/query/execute_params/query_params）
@@ -871,6 +901,7 @@ world plugin {
     import host-plugin-database;
     import host-terminal;
     import host-session;
+    import host-connection;
     import host-events;
     import host-http;
     import host-fs;

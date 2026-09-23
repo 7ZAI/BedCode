@@ -50,6 +50,8 @@ fn test_session_plugin_artifact_lifecycle() {
         &[
             "auth".to_string(),
             "broadcast".to_string(),
+            // 票 04：连接清单迁独立原语，判据换挂 connection:read
+            "connection:read".to_string(),
             "fs:read".to_string(),
             "fs:write".to_string(),
             "peer".to_string(),
@@ -93,6 +95,8 @@ fn test_session_plugin_artifact_lifecycle() {
             // （写项目级 Agent 集成）、terminal:input（队列下发）+ terminal:observe
             // （提交输入行监听）、timer:schedule（队列周期 tick）
             "broadcast",
+            // 票 04：`host-connection` 独立原语的判据位
+            "connection:read",
             "fs:read",
             "fs:write",
             "peer",
@@ -100,8 +104,11 @@ fn test_session_plugin_artifact_lifecycle() {
             "process:run",
             // 会话引擎下沉 P1-b：业务会话改走 host-pty 原语——
             // pty:spawn（spawn/kill，高风险面）+ pty:io（write/resize/ring_fetch/is_running）
-            "pty:spawn",
+            // 排序形态跟随 manifest-gen 的 `[...permissions].sort()`（与本文件下方
+            // 「ASCII 升序重排」注同源）：HEAD 里的 pty:spawn/pty:io 是未排序的陈旧源清单，
+            // 任何人重建产物都会归一成 io→spawn——本 pin 早前就对不上生成物
             "pty:io",
+            "pty:spawn",
             "session:read",
             "session:write",
             "storage",
@@ -2157,9 +2164,13 @@ fn test_session_annotate_and_devices_closed_loop() {
         SESSION_ID,
         &[
             "auth".to_string(),
-            "peer".to_string(), "storage".to_string(),
+            "peer".to_string(),
+            "storage".to_string(),
             "session:read".to_string(),
             "session:write".to_string(),
+            // 票 04：devices.connect-list 读连接清单走 `host-connection`，判据
+            // `connection:read`（缺它即 permission denied —— fail-visible，不静默降级）
+            "connection:read".to_string(),
             // 会话引擎下沉 P1-b：业务会话改走 host-pty 原语
             "pty:spawn".to_string(),
             "pty:io".to_string(),

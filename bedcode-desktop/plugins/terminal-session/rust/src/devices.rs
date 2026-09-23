@@ -2,7 +2,8 @@
 //!
 //! 职责边界（spec D3/D4）——「这台设备上有几个会话、在跑什么」这道派生题：
 //!
-//! - **原始事实在内核**：连接注册表（`host-session.connections-list`，无排序无解读
+//! - **原始事实在内核**：连接注册表（`host-connection.connections-list`，票 04 起独立原语，
+//!   权限 `connection:read`；无排序无解读
 //!   的地址 / 设备标识 / 指纹）+ 配对记录（`host-auth.trusted-devices-list`，真源
 //!   内核 `pairings` 表）+ 会话列表（`host-session.list-sessions`，含 `canonicalRenderer`
 //!   与 `annotations` 透传）
@@ -33,7 +34,7 @@
 //! - `session.annotate` `{sessionId, key, value}` → 注解槽写入（expand 期双写的写面）
 
 #[cfg(target_arch = "wasm32")]
-use bedcode_plugin_api::host::{HostAuth, HostSession};
+use bedcode_plugin_api::host::{HostAuth, HostConnection};
 #[cfg(target_arch = "wasm32")]
 use bedcode_plugin_api::wasm_host::WasmHost;
 
@@ -41,7 +42,7 @@ use bedcode_plugin_api::wasm_host::WasmHost;
 
 // ==================== wire 解析（宿主原语回执 → 本模块结构） ====================
 
-/// 连接注册表原始记录（`host-session.connections-list` 元素，camelCase）
+/// 连接注册表原始记录（`host-connection.connections-list` 元素，camelCase）
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectionRecord {
     pub client_id: String,

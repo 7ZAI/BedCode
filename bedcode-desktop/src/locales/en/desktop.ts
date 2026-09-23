@@ -193,6 +193,7 @@ export default {
         },
         'session:read': { title: 'Session Read', desc: 'Read session list and status' },
         'session:write': { title: 'Session Write', desc: 'Create, stop or modify sessions' },
+        'connection:read': { title: 'Connection List', desc: 'Read the host server\'s registered connections (device identifiers, including unauthenticated)' },
         'session:config': {
           title: 'Session Config',
           desc: 'Create, update or delete session configurations (working dir, command)',

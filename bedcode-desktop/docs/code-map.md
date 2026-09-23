@@ -149,8 +149,10 @@ Rust 侧按内核五模块组织（`wasm_core.rs` 为唯一组合点/facade，�
   - **runtime（`manager/runtime/`，原 wasm_runtime）**：wasmtime Engine/Store/Instance 生命周期管理（含 component.rs
     WASI preview2 接线）；实例互调（JSON-RPC 路由）与宿主上下文（WasmHostContext）定义
 - **host_api（`wasm_core/host_api/`，原 wasm_runtime/host_impl，宿主对外接口模块）**：宿主能力实现
-    按功能域拆分（api/app/storage/database/terminal/session/events/http/mdns/ws/pty/log/fs/config/bus/
-    lifecycle/process/timer/peer/status/platform/wsl_fs + api_bridge 前端命令桥），统一注册到 Linker
+    按功能域拆分（api/app/storage/database/terminal/session/**connection**/events/http/mdns/ws/pty/log/fs/
+    config/bus/lifecycle/process/timer/peer/status/platform/wsl_fs + api_bridge 前端命令桥），统一注册到 Linker。
+    `connection.rs`（票 04）= 宿主 server 在册连接清单原语 `host-connection`，判据 `connection:read`，
+    与会话域解耦（`host_api::session::session_connections_list` 仅留同判据别名，随票 10 删）
   - **capability**：能力注册表与系统组件装配（manifest `type: system|application` + `dependencies`）——
     能力名 → 宿主原语 / WASM 系统组件实例二选一装配；应用插件的 host-* import 由 Linker 经此
     host-side 转发到系统组件同形导出；系统组件内置、默认启用、先于应用插件激活

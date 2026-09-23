@@ -16,6 +16,7 @@ pub mod app;
 pub mod auth;
 pub mod bus;
 pub mod config;
+pub mod connection;
 pub mod crypto;
 pub mod database;
 pub mod events;
@@ -40,6 +41,7 @@ pub use bus::{
     owned_topic, topic_owner, HostBus, API_TOPIC_PREFIX, REPLY_TOPIC_PREFIX, TOPIC_NS_SEP,
 };
 pub use config::{ConfigKey, HostConfig};
+pub use connection::HostConnection;
 pub use crypto::{CryptoKeypair, HostCrypto};
 pub use database::{HostDatabase, HostPluginDatabase};
 pub use events::HostEvents;

@@ -26,8 +26,8 @@ use super::{block_on_async, StoreSpec, WasmHostContext, WasmPluginState};
 #[cfg(test)]
 use crate::wasm_core::config::StoreLimits;
 use crate::wasm_core::host_api::{
-    api, app, auth, bus, config, crypto, database, events, fs, http, lifecycle, log, mdns, peer, platform, process, pty,
-    session, status, storage, task, terminal, timer, ws,
+    api, app, auth, bus, config, connection, crypto, database, events, fs, http, lifecycle, log, mdns, peer, platform,
+    process, pty, session, status, storage, task, terminal, timer, ws,
 };
 use crate::wasm_core::monitor::LifecycleEvent;
 use crate::AppError;
@@ -357,6 +357,14 @@ impl bedcode::plugin::host_plugin_database::Host for WasmPluginState {
 
     fn execute_batch(&mut self, sqls_json: String) -> Result<u32, String> {
         database::plugin_db_execute_batch(&self.host_ctx, &self.plugin_id, &sqls_json)
+    }
+}
+
+/// 在册连接清单（票 04）：独立 interface，不随 `host-session` 退役。
+/// 实现与 `host-session` 的旧别名入口共用同一函数与同一判据（`connection:read`）。
+impl bedcode::plugin::host_connection::Host for WasmPluginState {
+    fn connections_list(&mut self) -> Result<String, String> {
+        connection::connection_list(&self.host_ctx, &self.plugin_id)
     }
 }
 
@@ -778,6 +786,7 @@ pub(crate) fn add_to_linker(linker: &mut Linker<WasmPluginState>) -> crate::Resu
         bedcode::plugin::host_process::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_pty::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_crypto::add_to_linker::<WasmPluginState, D>,
+        bedcode::plugin::host_connection::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_session::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_timer::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_events::add_to_linker::<WasmPluginState, D>,

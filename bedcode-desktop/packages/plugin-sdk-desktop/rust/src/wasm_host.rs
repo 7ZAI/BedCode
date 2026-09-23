@@ -15,7 +15,7 @@
 //! trait 签名（`host/*` 定义）保持不变，插件业务代码零改动。
 
 use crate::host::{
-    ConfigKey, FsDirEntry, FsStat, HostApp, HostAuth, HostBus, HostConfig, HostDatabase, HostError,
+    ConfigKey, FsDirEntry, FsStat, HostApp, HostAuth, HostBus, HostConfig, HostConnection, HostDatabase, HostError,
     HostEvents, HostFs, HostHttp, HostLog, HostMdns, HostPeer, HostPlatform, HostPluginDatabase,
     HostCrypto, HostProcess, HostPty, HostSession, HostStorage, HostTask, HostTerminal, HostWebsocket,
     CryptoKeypair, ProcessSyncResult, PtyRingFetch, SessionRingFetch,
@@ -23,7 +23,7 @@ use crate::host::{
 use crate::wasm::bedcode::plugin::{
     host_app, host_auth, host_bus, host_config, host_database, host_events, host_fs, host_http,
     host_crypto, host_log, host_mdns, host_peer, host_platform, host_plugin_database, host_process, host_pty,
-    host_session, host_storage, host_task, host_terminal, host_timer, host_websocket,
+    host_connection, host_session, host_storage, host_task, host_terminal, host_timer, host_websocket,
 };
 
 /// 宿主 API 绑定（WASM 插件侧）
@@ -322,11 +322,6 @@ impl HostSession for WasmHost {
         host_session::annotate(session_id, key, value).map_err(|e| host_err("session_annotate", e))
     }
 
-    fn connections_list(&self) -> Result<serde_json::Value, HostError> {
-        let raw = host_session::connections_list().map_err(|e| host_err("connections_list", e))?;
-        parse_json("connections_list", raw)
-    }
-
     fn session_output_ring_fetch(
         &self,
         session_id: &str,
@@ -342,6 +337,17 @@ impl HostSession for WasmHost {
                 })
             })
             .map_err(|e| host_err("session_output_ring_fetch", e))
+    }
+}
+
+// ==================== HostConnection ====================
+
+impl HostConnection for WasmHost {
+    /// 走 `host-connection` 而非 `host-session`（票 04）：这份宿主 server 的连接事实
+    /// 不随会话 interface 退役；权限判据是 `connection:read`。
+    fn connections_list(&self) -> Result<serde_json::Value, HostError> {
+        let raw = host_connection::connections_list().map_err(|e| host_err("connections_list", e))?;
+        parse_json("connections_list", raw)
     }
 }
 

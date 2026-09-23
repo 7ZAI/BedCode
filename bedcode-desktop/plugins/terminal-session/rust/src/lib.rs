@@ -1689,7 +1689,8 @@ mod tests {
     /// 能力面声明只随已落地语义增长：票 05 = pairing 八项 + trust 两项 + consent 一项；
     /// 票 08 = config 三项（配置真源私有库）；票 09 = session-create（创建编排）；
     /// 票 10 = 会话动作四项 + 配置面只读化（v22，`session:config` 权限随写原语退役）；
-    /// 票 11 = annotate（注解槽写面）+ devices-connect-list（设备派生视图）。
+    /// 票 11 = annotate（注解槽写面）+ devices-connect-list（设备派生视图）；
+    /// 会话下沉票 04 = `connection:read`（连接清单换独立原语 `host-connection` 的判据位）。
     /// 权限 = `auth`（host-auth 密钥托管 + 记录面）+ `peer`（consent 取可信集 /
     /// trust peer 段）+ `storage`（票 08 私有库）+ `session:read`（配置读取面 + 会话
     /// 记录）+ `session:write`（创建与动作原语）。未经评审不得预声明（D2 权限
@@ -1710,6 +1711,10 @@ mod tests {
                 // `broadcast`（任务/模式/队列状态广播）、
                 // `timer:schedule`（队列延迟 clear 与静默超时的周期驱动）
                 "broadcast".to_string(),
+                // 票 04：在册连接清单从 `host-session.connections-list` 迁独立原语
+                // `host-connection.connections-list`，权限判据同步换挂 `connection:read`
+                // （审计单值化：谁能读连接清单只由本位回答，`session:read` 不再代答）
+                "connection:read".to_string(),
                 "fs:read".to_string(),
                 "fs:write".to_string(),
                 "peer".to_string(),
@@ -1722,8 +1727,10 @@ mod tests {
                 // 会话引擎下沉 P1-b：业务会话改走 host-pty 原语——
                 // `pty:spawn`（spawn/kill，高风险面）+ `pty:io`（write/resize/
                 // ring_fetch/is_running 数据面），会话真源切换的必要能力
-                "pty:spawn".to_string(),
+                // 排序形态 = manifest-gen 的 `[...permissions].sort()`（ASCII 升序，
+                // pty:io < pty:spawn）：本 pin 读的是构建链归一后的清单，非手改顺序
                 "pty:io".to_string(),
+                "pty:spawn".to_string(),
                 "session:read".to_string(),
                 // 票 09/10：host-session.create-with-spec 与四项会话动作原语
                 "session:write".to_string(),

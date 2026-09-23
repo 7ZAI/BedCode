@@ -18,6 +18,13 @@ pub const PERMISSION_TERMINAL_OUTPUT: &str = "terminal:output";
 pub const PERMISSION_TERMINAL_OBSERVE: &str = "terminal:observe";
 pub const PERMISSION_SESSION_READ: &str = "session:read";
 pub const PERMISSION_SESSION_WRITE: &str = "session:write";
+/// 宿主 server 在册连接清单读取（WIT `host-connection`，票 04，desktop 独有）：枚举宿主
+/// WS 连接注册表的原始条目（含 `fingerprint` 设备标识、未认证连接也在册）。
+///
+/// **为什么单独立位**（票 04 裁决）：原挂 `session:read`，但那回答不了审计问题
+/// 「谁能读到别人的连接清单」——连接在册与否与会话读写无关（会话真源已在插件登记域）。
+/// 域名与权限位同源：`host-connection` ↔ `connection:read`。
+pub const PERMISSION_CONNECTION_READ: &str = "connection:read";
 pub const PERMISSION_UI_SIDEBAR: &str = "ui:sidebar";
 pub const PERMISSION_UI_TOOLBOX: &str = "ui:toolbox";
 pub const PERMISSION_UI_STATUSBAR: &str = "ui:statusbar";
@@ -108,6 +115,7 @@ pub const PERMISSION_VOCABULARY: &[(&str, &str)] = &[
     (stringify!(PERMISSION_TERMINAL_OBSERVE), PERMISSION_TERMINAL_OBSERVE),
     (stringify!(PERMISSION_SESSION_READ), PERMISSION_SESSION_READ),
     (stringify!(PERMISSION_SESSION_WRITE), PERMISSION_SESSION_WRITE),
+    (stringify!(PERMISSION_CONNECTION_READ), PERMISSION_CONNECTION_READ),
     (stringify!(PERMISSION_UI_SIDEBAR), PERMISSION_UI_SIDEBAR),
     (stringify!(PERMISSION_UI_TOOLBOX), PERMISSION_UI_TOOLBOX),
     (stringify!(PERMISSION_UI_STATUSBAR), PERMISSION_UI_STATUSBAR),

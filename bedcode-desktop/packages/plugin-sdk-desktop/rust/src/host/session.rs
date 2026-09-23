@@ -95,12 +95,8 @@ pub trait HostSession {
     /// 回执的 `annotations` 字段（同槽透传）。
     fn session_annotate(&self, session_id: &str, key: &str, value: &str) -> Result<(), HostError>;
 
-    /// 连接注册表原始记录清单（v19，需要 `session:read` 权限，票 11）
-    ///
-    /// 无排序无解读：返回内核 WS 连接注册表全部原始条目（`{clientId, deviceName?,
-    /// fingerprint?, addr, authenticated, connectedAt}`），不过滤不合并不加派生字段
-    /// ——在线判定 / 会话数 / 任务状态合并是插件侧派生视图的职责（spec D3/D4）。
-    fn connections_list(&self) -> Result<serde_json::Value, HostError>;
+    // connections_list 已迁 `crate::host::HostConnection`（票 04）：
+    // 它是宿主 server 的连接事实，不随本 interface 退役（ADR 0022 v12 裁决 5）。
 
     /// 会话输出环拉取（票 04，需要 `terminal:output` 权限 + 属主校验）：按游标拉取
     /// 会话输出原始字节（WIT `list<u8>` 直传，不 JSON 化）。

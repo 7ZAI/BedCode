@@ -73,6 +73,9 @@ const RUST_PERMISSION_RULES = [
   // **`session_config_upsert` / `session_config_delete` 已随 v23 从 ABI 删除**，`session:config`
   // 权限位同步退役——映射表若留着旧项，就会给插件注入词汇表外的权限（见下方加载期自检）。
   { re: /\b(session_list|session_get|session_config_list|session_config_get)\b/, perm: 'session:read' },
+  // 在册连接清单（票 04）：SDK 方法名 `connections_list`（WIT `host-connection`），
+  // 权限位与域名同源 `connection:read`——不再由 `session:read` 代答「谁能读连接清单」。
+  { re: /\bconnections_list\b/, perm: 'connection:read' },
   { re: /\bhttp_fetch\b/, perm: 'network:http' },
   { re: /\b(fs_read|fs_copy)\b/, perm: 'fs:read' },
   { re: /\bfs_write\b/, perm: 'fs:write' },

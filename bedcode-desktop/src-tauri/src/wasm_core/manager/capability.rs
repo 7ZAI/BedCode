@@ -61,6 +61,7 @@ const HOST_PRIMITIVE_CAPABILITIES: &[&str] = &[
     "host-plugin-database",
     "host-terminal",
     "host-session",
+    "host-connection",
     "host-events",
     "host-http",
     "host-fs",

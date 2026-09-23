@@ -127,7 +127,8 @@ spec：`.scratch/2026-09-19-terminal-session-plugin/spec.md`（D2–D7），实�
 |
 | → 配置面写原语 `config-upsert` / `config-delete` **已随 v23 退役**（真源在插件私有库，宿主写原语无调用者即死接口）；读取面 `config-list` / `config-get` 保留为一次性 legacy 迁移通道（迁移窗口结束随主库表退役），权限收编 `session:read` |
 | `host-session` 创建与动作面 | `create-with-spec` / `remove` / `rename` / `resize`（原表的 `restart` 已于 v21 退役，见下「v21 收敛退役」） | v19（函数级追加不 bump） | `session:write` |
-| `host-session` 事实面 | `annotate`（注解槽）/ `connections-list`（连接注册表原始记录） | v19 | `session:write` / `session:read` |
+| `host-session` 事实面 | `annotate`（注解槽）/ ~~`connections-list`~~（**v14 起迁 `host-connection`**，此处只留同判据别名，随票 10 删） | v19 | `session:write` / `connection:read`（原 `session:read`） |
+| `host-connection`（v14 新增 interface） | `connections-list`（宿主 server 在册连接原始记录） | v14（函数级搬迁，不 bump） | `connection:read`（新增位） |
 | `host-platform` | `wsl-distros` | v19 | `platform` 现状 |
 | `auth-policy` 导出 | `verify-device-token`（宿主中间件验签后取策略） | v17 | 能力导出，非宿主原语 |
 | 前端贡献面 | `ui.registerSettingsSection`（设置分组扩展点） | 无 WIT（纯前端） | `ui:settings`（新增位） |
@@ -373,7 +374,7 @@ host-business-decarriage 收尾批次（`.scratch/2026-09-20-host-business-decar
   不用空串拼路径去读一个不存在的文件）。宿主实现与生命周期事件 payload 同源
   （`strip_verbatim_prefix(extension_path)`），未知插件显性报错。实施见
   `.scratch/2026-09-23-session-engine-downsink/spec.md`（P1-b 前置 A）。
-- **2026-09-24 v13（当前）**：**会话真源下沉落地（P1-b，ABI 不变，desktop 仍 v25；移动端零改动，
+- **2026-09-24 v13**：**会话真源下沉落地（P1-b，ABI 不变，desktop 仍 v25；移动端零改动，
   受损清单 M6–M9 记入路线图）**。业务会话的登记 / 状态机 / 生命周期分发 / 创建 / 停止 / 输入 /
   尺寸裁决整体归 `com.bedcode.terminal-session` 私有登记域，宿主只剩 PTY 引擎与 `host-pty` 原语面。
   ① **创建走 `host-pty.spawn`**：会话 id 由插件自产、`BEDCODE_SESSION_ID` 由插件注入 spawn `env`
@@ -388,3 +389,18 @@ host-business-decarriage 收尾批次（`.scratch/2026-09-20-host-business-decar
   `SyncEvent` 的四个会话变体是 `broadcast_sync` 的 JSON 载荷增量（函数签名零变化、载荷自足），
   与 v22 的 `host-bus` 命名空间同类「不 bump 的行为变更」口径；旧产物不静默断流（宿主侧处理器
   保留「回查内核」兜底分支）。实施与验收见 `.scratch/2026-09-23-session-engine-downsink/spec.md`。
+
+- **2026-09-24 v14（当前）**：**`host-connection` 独立原语落成（票 04，ABI 不变；移动端零改动）**。
+  v12 裁决 5「连接清单迁独立原语」实施：WIT 新 interface `host-connection` + `world plugin`
+  追加 import + 宿主实现落 `wasm_core/host_api/connection.rs`。函数名**沿用
+  `connections-list`**（WIT 里 `list` 是关键字，故迁出零改名——插件调用点与派生视图回归用例
+  断言一字未动，票 04 验收第 2 条的「改动只能来自改名」因此不触发）。
+  ① **权限判据 `session:read` → `connection:read`**（新增位，域名与位名同源）。
+  ② `host-session` 上的旧入口改为**同判据的别名转发**，不留第二把钥匙：只授 `session:read`
+  的插件走两条路径都拿 `permission denied`（宿主侧有单钥匙锁与字节一致锁两条用例）。
+  ③ 属**不 bump 的行为变更**（同 v22 `host-bus` topic 命名空间口径）：未声明新位的旧产物
+  fail-visible 拒绝，不静默降级；生产唯一消费方 `com.bedcode.terminal-session` 与本票同批
+  重建产物（manifest 声明 + 插件 rust/前端两处权限 pin 同步）。
+  ④ 返回字节逐字不变（六字段 camelCase、注册表存储序、连 `session error: …` 错误前缀都保留——
+  改文案属线协议变更，另案）。旧别名随 `host-session` interface 退役（票 10）删除。
+  实施与验收见 `.scratch/2026-09-23-session-engine-downsink/issues/04-connections-list-own-primitive.md`。

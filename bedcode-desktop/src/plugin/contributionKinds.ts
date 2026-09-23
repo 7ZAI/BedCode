@@ -128,6 +128,12 @@ const PERMISSION_META: Record<string, PermissionMeta> = {
     titleKey: 'desktop.plugin.perm.session:read.title',
     descKey: 'desktop.plugin.perm.session:read.desc',
   },
+  // 票 04：`host-connection` 独立原语的判据位（读宿主 server 在册连接）
+  'connection:read': {
+    emoji: '🔌',
+    titleKey: 'desktop.plugin.perm.connection:read.title',
+    descKey: 'desktop.plugin.perm.connection:read.desc',
+  },
   'session:write': {
     emoji: '✏️',
     titleKey: 'desktop.plugin.perm.session:write.title',

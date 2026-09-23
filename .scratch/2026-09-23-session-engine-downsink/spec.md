@@ -594,7 +594,7 @@ P0–P5 是**阶段划分与裁决记录**，保留作为理由；开工请以�
 | 01 | 桌面功能等价人工基线（无头测不到的那些） | — | ready-for-human |
 | 02 | prefactor：对外 wire 类型与终端转义表迁出内核会话目录 | — | done（2026-09-24） |
 | 03 | 终端输入修饰/提交行观察面退役裁定（P2 残段） | 01 | ready-for-agent |
-| 04 | 连接清单迁独立原语（不随会话 interface 一起死） | — | ready-for-agent |
+| 04 | 连接清单迁独立原语（不随会话 interface 一起死） | — | done（2026-09-24 落成 `host-connection` + `connection:read`） |
 | 05 | PTY 引擎级宿主广播声明 + 会话→句柄只读映射 | — | ready-for-agent |
 | 06 | 移动端输出通道与历史直读引擎游标环（M6/M7 收口） | 05 | ready-for-agent |
 | 07 | 多端并发输出实测与环限额裁决（不许估算） | 06 | ready-for-human |
@@ -664,7 +664,7 @@ P0–P5 是**阶段划分与裁决记录**，保留作为理由；开工请以�
 | `rename` | :434 | v19 | 插件内部 → 删 |
 | `resize` | :441 | v19 | 改 `host-pty.resize` → 删 |
 | `annotate` | :450 | v19 | 插件私有库 → 删 |
-| `connections-list` | :459 | v19 | **待定**：WS 连接注册表是宿主 server 事实 → 应迁到别的原语或保留独立 interface |
+| ~~`connections-list`~~ | :459 | v19 | **票 04 已落成**：迁独立 interface `host-connection.connections-list`（权限换挂 `connection:read`）；`host-session` 上仅留同判据别名，随票 10 删 |
 | `output-ring-fetch` | :485 | 票 04 | 改 `host-pty.ring-fetch` → 删 |
 
 ### 4.2 `host-pty` 现役函数（`bedcode.wit:605-639`，v16，终态唯一 PTY 出口）
@@ -711,6 +711,11 @@ P0–P5 是**阶段划分与裁决记录**，保留作为理由；开工请以�
 5. **`connections-list`（WS 连接注册表）**：**不随 `host-session` 退役** —— 它是宿主 server 的连接事实、无产品语义。
    处置：迁到独立原语（候选 `host-events` 扩展或新开极窄 interface；实施期按消费方定），
    权限位 `session:read` 中该面的部分随迁。
+   **落成（票 04，2026-09-24）**：取「新开极窄 interface」方案 → WIT `host-connection`（函数名沿用
+   `connections-list`，因 WIT 保留字 `list` 不可用，故迁出零改名）；`host-events` 落选理由是它是
+   **推**语义（emit/broadcast/publish）而本面是**拉**一次快照，且会把 v22 的 topic 命名空间裁决牵进来。
+   权限位不是「随迁 `session:read`」而是**新立 `connection:read`**（域名同源，审计单值化），
+   且旧 `host-session` 入口改为同判据别名——不留第二把钥匙；属不 bump 的行为变更（fail-visible）。
 
 ---
 
@@ -739,7 +744,7 @@ P0–P5 是**阶段划分与裁决记录**，保留作为理由；开工请以�
       ——**记账**：WS 同步面（`SyncEvent` 会话四变体）载荷自足、形状不变；Tauri 前端事件
       `session-status-changed` 仍由内核 `subscribe_status()` 驱动，对插件会话**不再有流量**
       （前端 `stores/session.ts` 无生产调用方 → 影响面为零），随 P4 事件下沉一并收口
-- [ ] `connections-list` 不随 `host-session` 退役（迁独立原语，有测试）
+- [x] `connections-list` 不随 `host-session` 退役（票 04 落成 `host-connection` + `connection:read`；宿主侧有单钥匙锁 / 字节一致锁 / 生成物词汇锁三条用例，插件侧派生视图回归用例零改动通过）
 - [ ] ABI bump 同步四处（WIT / `abi.rs` / CHANGELOG / AGENTS §7）+ ADR 0022 补记（含 host-pty 第 2 条措辞修订）
 - [x] `cargo test` 全绿、`pnpm run test:run` 全绿、`eslint` 0 error；测试后无残留进程/端口
       ——**P1-b 批次实测（2026-09-24）**：宿主 lib 1135/0（`[skip]` = 0）、集成 8 target 逐个串行全绿、

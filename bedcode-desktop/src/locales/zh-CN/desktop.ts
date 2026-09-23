@@ -185,6 +185,7 @@ export default {
         'terminal:observe': { title: '终端观察', desc: '观察终端输入提交事件' },
         'session:read': { title: '会话读取', desc: '读取会话列表与状态' },
         'session:write': { title: '会话写入', desc: '创建、停止或修改会话' },
+        'connection:read': { title: '连接清单读取', desc: '读取宿主服务的在册连接（含设备标识与未认证连接）' },
         'session:config': { title: '会话配置', desc: '增删改会话配置（工作目录、启动命令等）' },
         'ui:sidebar': { title: '侧边栏面板', desc: '在侧边栏注册面板' },
         'ui:input': { title: '输入扩展', desc: '扩展终端输入区域功能' },

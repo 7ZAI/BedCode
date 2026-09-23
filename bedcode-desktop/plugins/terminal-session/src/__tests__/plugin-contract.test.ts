@@ -84,6 +84,8 @@ describe('C1 插件身份五处一致', () => {
       'auth',
       // 票 02：私库 SQL + 私有 KV 同挂 storage；broadcast = 广播同步（任务/模式/队列）
       'broadcast',
+      // 会话下沉票 04：连接清单迁独立原语 host-connection，判据换挂 connection:read
+      'connection:read',
       // 票 15：fs:read + fs:write 写项目级 Agent 集成
       'fs:read',
       'fs:write',
@@ -94,8 +96,10 @@ describe('C1 插件身份五处一致', () => {
       // 会话引擎下沉 P1-b：业务会话改走 host-pty 原语——
       // pty:spawn（spawn/kill，高风险面）+ pty:io（write/resize/ring_fetch/is_running
       // 数据面），会话真源切换的必要能力
-      'pty:spawn',
+      // 排序形态 = manifest-gen 的 `[...permissions].sort()`（生成物口径）：
+      // pty:io 必在 pty:spawn 前，重建产物即归一
       'pty:io',
+      'pty:spawn',
       'session:read',
       'session:write',
       'storage',
