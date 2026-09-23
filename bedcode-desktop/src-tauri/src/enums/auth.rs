@@ -70,12 +70,20 @@ pub struct AuthPayload {
 
 /// WS 链路加密协商载荷（issue 04）：请求侧携客户端临时 X25519 公钥（ek），
 /// 响应侧携服务端临时公钥回执。v 当前固定 1
+///
+/// 套件参数化（票 05）：`suite` 携加密套件名（算法组合，经宿主机 crypto 引擎
+/// 白名单校验）；**旧客户端不携带该字段 → 解析为 None → 走默认套件**（线协议
+/// 增量演进 expand–contract，移动端旧端不断流）。只有默认套件一套时，非默认名
+/// 由宿主显式拒绝（fail-visible），不静默降级。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CryptoProposal {
     pub v: u8,
     /// 临时 X25519 公钥（base64）
     pub ek: String,
+    /// 协商套件名（算法组合，如 "x25519+aes-256-gcm+hkdf-sha256"）；缺省走默认套件
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suite: Option<String>,
 }
 
 impl Default for AuthPayload {
@@ -160,6 +168,7 @@ mod tests {
             crypto: Some(CryptoProposal {
                 v: 1,
                 ek: "EK==".to_string(),
+                suite: Some("x25519aesgcmhkdf".to_string()),
             }),
             ..Default::default()
         };
@@ -170,6 +179,11 @@ mod tests {
         assert_eq!(back.device_id.as_deref(), Some("d1"));
         assert_eq!(back.public_key.as_deref(), Some("SPKI-BASE64"));
         assert_eq!(back.crypto.as_ref().map(|c| c.ek.as_str()), Some("EK=="));
+        assert_eq!(
+            back.crypto.as_ref().and_then(|c| c.suite.as_deref()),
+            Some("x25519aesgcmhkdf"),
+            "suite 字段应被解析"
+        );
         // 空字段被 skip 掉（默认序列化紧凑形态）
         assert!(!json.contains("pairing_code"), "空字段应被跳过: {json}");
     }
@@ -180,9 +194,30 @@ mod tests {
         let json = serde_json::to_string(&CryptoProposal {
             v: 1,
             ek: "EK==".to_string(),
+            suite: None,
         })
         .unwrap();
         assert!(json.contains("\"ek\""), "camelCase ek 标签: {json}");
         assert!(!json.contains("ek_"), "不得出现 snake_case 标签: {json}");
+        // suite 缺省被 skip（老客户端不携带时线协议形状不变）
+        assert!(!json.contains("suite"), "suite 为 None 应被 skip: {json}");
+    }
+
+    /// 票 05：suite 字段缺省 → None；新客户端携带 → 解析；线协议增量演进
+    #[test]
+    fn crypto_proposal_suite_optional_expand() {
+        // 老客户端不携带 suite：解析为 None（BK 兼容，默认套件）
+        let old: CryptoProposal = serde_json::from_str(r#"{"v":1,"ek":"QUJD"}"#).unwrap();
+        assert_eq!(old.suite, None);
+
+        // 新客户端携带：suite 被解析
+        let new: CryptoProposal =
+            serde_json::from_str(r#"{"v":1,"ek":"QUJD","suite":"x25519aesgcmhkdf"}"#).unwrap();
+        assert_eq!(new.suite.as_deref(), Some("x25519aesgcmhkdf"));
+
+        // 未知字段忽略（serde 默认），老端/新端互容
+        let lenient: CryptoProposal =
+            serde_json::from_str(r#"{"v":1,"ek":"QUJD","future":1}"#).unwrap();
+        assert_eq!(lenient.suite, None);
     }
 }

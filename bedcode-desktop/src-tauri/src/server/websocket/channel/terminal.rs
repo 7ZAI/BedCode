@@ -253,16 +253,29 @@ impl TerminalChannel {
             let mut handshake = None;
             if let Some(proposal) = conn.pending_ws_crypto.take() {
                 if link_crypto::current_config().enabled {
-                    match link_crypto::derive_ws_session_ciphers(&proposal.ek) {
-                        Ok(hs) => {
-                            handshake = Some(hs);
-                            tracing::info!(
-                                addr = %conn.session.addr,
-                                "ws link encryption negotiated, frames encrypted from now on"
-                            );
+                    // 票 05 套件参数化：先按协商套件名解析（缺省→默认，未知名→拒绝告警），
+                    // 成功后落审计日志（只记套件名，不含任何密钥材料），再做握手。
+                    match link_crypto::resolve_link_suite(proposal.suite.as_deref()) {
+                        Ok(suite) => {
+                            match link_crypto::derive_ws_session_ciphers(&proposal.ek) {
+                                Ok(hs) => {
+                                    handshake = Some(hs);
+                                    tracing::info!(
+                                        addr = %conn.session.addr,
+                                        suite = suite.name,
+                                        "ws link encryption negotiated, frames encrypted from now on"
+                                    );
+                                }
+                                Err(e) => tracing::warn!(addr = %conn.session.addr, error = %e, "ws link crypto handshake failed, staying plaintext"),
+                            }
                         }
                         Err(e) => {
-                            tracing::warn!(addr = %conn.session.addr, error = %e, "ws link crypto handshake failed, staying plaintext")
+                            // 未知套件名：fail-visible，拒绝此协商（不静默降级到默认套件）
+                            tracing::warn!(
+                                addr = %conn.session.addr,
+                                error = %e,
+                                "ws link crypto suite rejected, staying plaintext"
+                            );
                         }
                     }
                 }

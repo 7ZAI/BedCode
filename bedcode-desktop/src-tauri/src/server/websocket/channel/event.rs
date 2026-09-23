@@ -163,12 +163,28 @@ impl EventChannel {
                 let mut ws_handshake = None;
                 if let Some(proposal) = conn.pending_ws_crypto.take() {
                     if link_crypto::current_config().enabled {
-                        match link_crypto::derive_ws_session_ciphers(&proposal.ek) {
-                            Ok(hs) => ws_handshake = Some(hs),
+                        // 票 05 套件参数化：先按协商套件名解析（缺省→默认，未知名→拒绝告警），
+                        // 成功后落审计日志（只记套件名，不含任何密钥材料），再做握手。
+                        match link_crypto::resolve_link_suite(proposal.suite.as_deref()) {
+                            Ok(suite) => match link_crypto::derive_ws_session_ciphers(&proposal.ek) {
+                                Ok(hs) => {
+                                    ws_handshake = Some(hs);
+                                    tracing::info!(
+                                        addr = %conn.session.addr,
+                                        suite = suite.name,
+                                        "ws link encryption negotiated (legacy route)"
+                                    );
+                                }
+                                Err(e) => tracing::warn!(
+                                    addr = %conn.session.addr,
+                                    error = %e,
+                                    "ws link crypto handshake failed, staying plaintext"
+                                ),
+                            },
                             Err(e) => tracing::warn!(
                                 addr = %conn.session.addr,
                                 error = %e,
-                                "ws link crypto handshake failed, staying plaintext"
+                                "ws link crypto suite rejected, staying plaintext"
                             ),
                         }
                     }
@@ -189,6 +205,7 @@ impl EventChannel {
                         crypto: ws_handshake.as_ref().map(|hs| crate::enums::auth::CryptoProposal {
                             v: 1,
                             ek: hs.server_ek_b64.clone(),
+                            suite: None,
                         }),
                         ..Default::default()
                     },
@@ -198,10 +215,6 @@ impl EventChannel {
                 }
                 if let Some(hs) = ws_handshake {
                     link_crypto::ws_register_ciphers(&conn.session.addr.to_string(), hs.ciphers);
-                    tracing::info!(
-                        addr = %conn.session.addr,
-                        "ws link encryption negotiated (legacy route), frames encrypted from now on"
-                    );
                 }
             }
             Err((code, message)) => {

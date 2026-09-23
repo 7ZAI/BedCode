@@ -350,11 +350,72 @@ pub fn derive_http_traffic_keys(shared_ikm: &[u8], http_path: &str) -> Result<Ht
 // WS_TRANSCRIPT_PREFIX / ORIGIN_TEXT / ORIGIN_BINARY）已抽至共享 crate，
 // 经文件头 `pub use proto::{...}` 保持既有模块路径与测试可见性不变。
 
-/// 单方向密码上下文与双向密码状态：
-/// WsDirectionCipher 实现在共享 crate（文件头再导出，字段形状不变）；带序号
-/// 计数器的 WsSessionCiphers 注册表类型留在桌面侧。
+// ==================== 链路加密套件（票 05 套件参数化） ====================
+// 「套件」= 一组合法的算法组合（密钥交换 + AEAD + KDF），按名字寻址。名字即
+// 引擎词汇（三算法名都必须在 crypto/ 注册表白名单内，杜绝随手拼一个不存在的组合）。
+// 当前线协议只实现**一套**（X25519 + AES-256-GCM + HKDF-SHA256，与移动端线协议
+// 金样逐字节一致）；方案只是把「套件名」变成可注入参数 + 白名单校验，为后续
+// 加入新套件留好入口——今天只接受默认名，未知名由宿主显式拒绝（fail-visible），
+// 绝不在协商处静默降级到别的套件。
+
+/// 链路加密套件：密钥交换 + AEAD + KDF 三次算法组合（字节级协议面搭档）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkSuite {
+    /// 稳定谜别名（wire 上承载的协商名）
+    pub name: &'static str,
+    /// 密钥交换（ECDH）算法名（引擎注册表词表）
+    pub key_agreement: &'static str,
+    /// AEAD 算法名（引擎注册表词表）
+    pub aead: &'static str,
+    /// KDF 算法名（引擎注册表词表）
+    pub kdf: &'static str,
+}
+
+/// 默认套件：X25519 + AES-256-GCM + HKDF-SHA256（与移动端线协议金样一致；
+/// 也是 `CryptoProposal.suite` 缺省时的选择）。
+pub const DEFAULT_LINK_SUITE: LinkSuite = LinkSuite {
+    name: "x25519+aes-256-gcm+hkdf-sha256",
+    key_agreement: KEY_AGREEMENT_X25519,
+    aead: AEAD_AES_256_GCM,
+    kdf: KDF_HKDF_SHA256,
+};
+
+/// 已知套件表（当前仅默认一套；加入新套件在此登记，并实现对应的握手派生）。
+const KNOWN_LINK_SUITES: &[LinkSuite] = &[DEFAULT_LINK_SUITE];
+
+/// 解析协商套件：`Some(名)` → 在已知套件表内命中才接受（且三算法名都必须在
+/// 引擎白名单内），否则显式拒绝（fail-closed，不静默降级）；`None`（老客户端
+/// 不携带）→ 默认套件。返回选中的套件供调用方审计。
+pub fn resolve_link_suite(suite: Option<&str>) -> Result<&'static LinkSuite> {
+    let name = match suite {
+        Some(n) if !n.is_empty() => n,
+        // 缺省 / 空串 → 默认套件（老客户端不断流）
+        _ => return Ok(&DEFAULT_LINK_SUITE),
+    };
+    if name == DEFAULT_LINK_SUITE.name {
+        return Ok(&DEFAULT_LINK_SUITE);
+    }
+    // 未知套件名：显式拒绝，绝不静默落到默认套件（协商是安全面，降级即旁路）
+    let known = KNOWN_LINK_SUITES.iter().map(|s| s.name).collect::<Vec<_>>().join(", ");
+    Err(AppError::InvalidInput(format!(
+        "未知链路加密套件: '{name}'（当前支持: {known}）"
+    )))
+}
+
+/// 单条 `LinkSuite` 选时的算法名都落在引擎注册表白名单（供测试断言
+/// 套件与引擎词汇不漂移）。
+/// 链路加密套件校验（供测试）：本函数先经引擎注册表解析三算法名，任一名不在
+/// 白名单即 panic（套件与引擎词汇漂移应立即暴露）。仅测试使用，非生产路径。
+#[cfg(test)]
+fn assert_suite_algorithms_registered(s: &LinkSuite) {
+    resolve_key_agreement(s.key_agreement).expect("套件密钥交换算法必须在引擎白名单");
+    resolve_aead(s.aead).expect("套件 AEAD 算法必须在引擎白名单");
+    resolve_kdf(s.kdf).expect("套件 KDF 算法必须在引擎白名单");
+}
 
 /// 一条 WS 连接的双向密码状态（服务端视角；发送/接收序号严格单调）
+/// WsDirectionCipher 实现在共享 crate（文件头再导出，字段形状不变）；带序号
+/// 计数器的 WsSessionCiphers 注册表类型留在桌面侧。
 pub struct WsSessionCiphers {
     pub client_to_server: WsDirectionCipher,
     pub server_to_client: WsDirectionCipher,
@@ -1159,6 +1220,42 @@ mod tests {
             hex::encode(&s2c[..]),
             "794e4ffee86bb924154f79f47cdcbdd41d723f6d6d8a473ecb0c6ca7afd0c49a004d687b"
         );
+    }
+
+    // ---------- 链路加密套件解析（票 05 套件参数化） ----------
+
+    /// 默认套件三算法名都在引擎注册表白名单内（套件与引擎词汇不漂移）
+    #[test]
+    fn default_link_suite_algorithms_registered() {
+        assert_suite_algorithms_registered(&DEFAULT_LINK_SUITE);
+    }
+
+    /// 缺省（老客户端不携带 suite）→ 默认套件；显式传默认名 → 默认套件
+    #[test]
+    fn resolve_link_suite_default_when_absent_or_default_name() {
+        // 老客户端不携带 / 空串 → 默认套件（不断流）
+        assert_eq!(resolve_link_suite(None).unwrap().name, DEFAULT_LINK_SUITE.name);
+        assert_eq!(resolve_link_suite(Some("")).unwrap().name, DEFAULT_LINK_SUITE.name);
+        // 新客户端携带默认套件名 → 接受
+        assert_eq!(
+            resolve_link_suite(Some(DEFAULT_LINK_SUITE.name)).unwrap().name,
+            DEFAULT_LINK_SUITE.name
+        );
+    }
+
+    /// 未知套件名 → 显式拒绝（fail-visible，不静默降级到默认）
+    #[test]
+    fn resolve_link_suite_unknown_rejected() {
+        match resolve_link_suite(Some("aes-128-gcm+rsa")) {
+            Ok(s) => panic!("未知套件必须拒绝，实际选择: {}", s.name),
+            Err(e) => {
+                assert!(
+                    matches!(e, AppError::InvalidInput(_)),
+                    "未知套件必须 fail-visible，实际: {e}"
+                );
+                assert!(e.to_string().contains("aes-128-gcm+rsa"), "错误应含套件名: {e}");
+            }
+        }
     }
 
     // ---------- WS 会话加密（issue 04） ----------
