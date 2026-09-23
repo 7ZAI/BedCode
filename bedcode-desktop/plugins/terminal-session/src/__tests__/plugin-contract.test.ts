@@ -82,12 +82,20 @@ describe('C1 插件身份五处一致', () => {
     // 声明本就是死声明——多一项就是审计噪音）。
     expect(manifest.permissions).toEqual([
       'auth',
+      // 票 02：私库 SQL + 私有 KV 同挂 storage；broadcast = 广播同步（任务/模式/队列）
       'broadcast',
+      // 票 15：fs:read + fs:write 写项目级 Agent 集成
       'fs:read',
       'fs:write',
+      // 票 05：host-peer（consent 取可信集 / trust 的 peer 段）
       'peer',
       // 票 03：文件浏览域 git diff 经 host-process run-sync（同步执行并捕获输出）
       'process:run',
+      // 会话引擎下沉 P1-b：业务会话改走 host-pty 原语——
+      // pty:spawn（spawn/kill，高风险面）+ pty:io（write/resize/ring_fetch/is_running
+      // 数据面），会话真源切换的必要能力
+      'pty:spawn',
+      'pty:io',
       'session:read',
       'session:write',
       'storage',
@@ -136,6 +144,10 @@ describe('C1 插件身份五处一致', () => {
       // 会话引擎下沉 P1：登记域读取面（宿主窄转发层真源切换时的取数口，形状 = SessionInfoView）
       'com.bedcode.terminal-session.session-list',
       'com.bedcode.terminal-session.session-get',
+      // 会话引擎下沉 P1-b：停止（登记 Stopping + host-pty.kill）与输入写入
+      // （提交行重建 + host-pty.write；special 标记直写绕过重建）
+      'com.bedcode.terminal-session.session-close',
+      'com.bedcode.terminal-session.session-input',
     ])
     // 桥接锚点：宿主 auth_center 以 trust-list 探活（配对 / trust / policy 同一桥接门），
     // 改名即两侧失联（永久静默降级）

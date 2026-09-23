@@ -402,7 +402,7 @@ pub fn handle_scheduler_tick(host: &WasmHost, now_utc: &str) -> Result<(), Strin
         // 一次性取消全部 pending 项并广播（复用 check_waiting_timeouts 的
         // cancel 语义：移动端预设据此落 interrupted），cancelled 不再命中
         // 本查询，后续 tick 静默跳过
-        if host.session_get(&session_id).ok().flatten().is_none() {
+        if crate::session::view_via_host(&session_id).ok().flatten().is_none() {
             let pending_ids: Vec<String> = host
                 .plugin_db_query_params(
                     "SELECT id FROM task_queue WHERE session_id = ?1 AND status = 'pending'",

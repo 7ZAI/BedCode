@@ -364,6 +364,35 @@ mod tests {
         ]
     }
 
+    /// P1-b：任务域不得再经「会话真源已在插件登记域」后失效的宿主原语
+    ///
+    /// `host-terminal.terminal_send` 与 `host-session.{get,close,list,annotate,…}`
+    /// 的属主判定与会话查询都查内核 `SessionManager`；P1-b 起创建走 `host-pty.spawn`，
+    /// 内核不再登记会话 → 这些调用对真实会话恒失败（`not owner of session` /
+    /// `NotFound`），且失败点静默（下发任务被标中断、终端输入丢失）。
+    /// 队列下发与读面已改走 `crate::session::{input_via_pty, view_via_host,
+    /// close_via_pty, internal_records_json}`；本锁防的是「顺手改回宿主绕一圈」。
+    #[test]
+    fn task_sources_never_route_through_dead_host_session_surface() {
+        let dead_calls = [
+            "host.terminal_send(",
+            "host.session_get(",
+            "host.session_close(",
+            "host.session_list(",
+            "host.session_annotate(",
+            "host.session_output_ring_fetch(",
+        ];
+        for (file, src) in task_domain_sources() {
+            for dead in dead_calls {
+                assert!(
+                    !src.contains(dead),
+                    "{file} 仍在调已失效的宿主会话面 {dead}：真源在本插件登记域，\
+                     经宿主绕一圈必拿 not owner of session / NotFound"
+                );
+            }
+        }
+    }
+
     /// 票 16（D5）：私有库表名统一后，任务域源码里不得再出现旧表名的 **SQL 用法**
     ///
     /// 只扫 SQL 关键字紧邻的位置：`upsert_session_mapping` 之类的函数名与

@@ -14,6 +14,8 @@
     "fs:write",
     "peer",
     "process:run",
+    "pty:spawn",
+    "pty:io",
     "session:read",
     "session:write",
     "storage",
@@ -25,6 +27,8 @@
     "ui:settings",
     "ui:sidebar"
   ],
+  "dependencies": ["host-pty"],
+  "ptyQuota": 8,
   "api": [
     "com.bedcode.terminal-session.pairing-code-generate",
     "com.bedcode.terminal-session.pairing-code-status",
@@ -54,7 +58,9 @@
     "com.bedcode.terminal-session.annotate",
     "com.bedcode.terminal-session.devices-connect-list",
     "com.bedcode.terminal-session.session-list",
-    "com.bedcode.terminal-session.session-get"
+    "com.bedcode.terminal-session.session-get",
+    "com.bedcode.terminal-session.session-close",
+    "com.bedcode.terminal-session.session-input"
   ],
   "contributes": {
     "commands": [

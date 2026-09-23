@@ -30,7 +30,7 @@ pub mod source;
 #[cfg(target_arch = "wasm32")]
 use crate::file_browse::source::FsPort;
 #[cfg(target_arch = "wasm32")]
-use bedcode_plugin_api::host::{HostFs, HostSession};
+use bedcode_plugin_api::host::HostFs;
 use bedcode_plugin_api::http_response;
 use bedcode_plugin_api::wasm_host::WasmHost;
 
@@ -84,15 +84,11 @@ pub fn handle_http_endpoint(
 
 // ==================== 公共前置：working_dir 解析 ====================
 
-/// working_dir 解析（wasm 侧：会话列表经 host-session，配置真源经私有库）
+/// working_dir 解析（wasm 侧：会话记录真源在本域，配置真源经私有库）
 #[cfg(target_arch = "wasm32")]
 fn resolve_working_dir_via_host(id: &str) -> Result<String, String> {
-    let sessions = match WasmHost.session_list() {
-        Ok(Some(json)) => Some(json.to_string()),
-        Ok(None) => None,
-        Err(e) => return Err(format!("session list failed: {}", e.message)),
-    };
-    let dir = ops::resolve_working_dir(&WasmHost, sessions.as_deref(), id)?;
+    let sessions = crate::session::internal_records_json()?.to_string();
+    let dir = ops::resolve_working_dir(&WasmHost, Some(&sessions), id)?;
     // 票 07：申请工作区访问授权。宿主侧不再有「内置插件任意路径免弹窗」，
     // 文件浏览根（用户选的任意目录）只有在插件主动申请并被人记住之后才可访问；
     // 申请收在这条公共前置上，而不是散进 8 个 handler。已授权时 host 直接返回

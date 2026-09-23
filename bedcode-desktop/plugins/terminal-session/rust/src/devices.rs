@@ -193,10 +193,9 @@ pub fn derive_connected(
 #[cfg(target_arch = "wasm32")]
 pub fn connect_list_via_host() -> Result<serde_json::Value, String> {
     let connections = WasmHost.connections_list().map_err(|e| e.message)?;
-    let sessions = WasmHost
-        .session_list()
-        .map_err(|e| e.message)?
-        .unwrap_or(serde_json::Value::Null);
+    // P1-b 起会话真源在本域：读原始记录（含 ptyId / canonicalRenderer /
+    // annotations 私有字段，只供本插件内部派生，不经互调面出网）
+    let sessions = crate::session::internal_records_json()?;
     // 配对记录真源 = 认证中心私有库（2026-09-22 下沉；含软删行）
     let records = crate::auth_records::records().map_err(|e| e)?;
     // 全量原始记录（含软删行 `is_active=false`）→ 推导；活跃过滤在
@@ -220,17 +219,11 @@ pub fn connect_list_via_host() -> Result<serde_json::Value, String> {
     Err("device derived view unavailable outside wasm runtime".to_string())
 }
 
-/// 会话注解槽写入（wasm 运行时）：expand 期双写的「写面」
-///
-/// P1 双写：宿主 `annotate` 原语是本阶段权威，同批判定插件会话登记域镜像
-/// （会话不在册则跳过，见 `session::note_annotation_via_host`）。
+/// 会话注解槽写入（wasm 运行时）：**真源 = 本域记录**（P1-b 起不再经宿主
+/// `host-session.annotate`——会话登记已不在宿主；未知会话显性报错）。
 #[cfg(target_arch = "wasm32")]
 pub fn annotate_via_host(session_id: &str, key: &str, value: &str) -> Result<(), String> {
-    WasmHost
-        .session_annotate(session_id, key, value)
-        .map_err(|e| e.message)?;
-    crate::session::note_annotation_via_host(session_id, key, value);
-    Ok(())
+    crate::session::note_annotation(session_id, key, value)
 }
 
 /// 会话注解槽写入（native 无宿主环境）

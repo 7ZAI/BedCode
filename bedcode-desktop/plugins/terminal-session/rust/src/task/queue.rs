@@ -561,8 +561,8 @@ pub fn try_dispatch_next(host: &WasmHost, session_id: &str) {
         return;
     }
 
-    // 确认会话仍在运行
-    if host.session_get(session_id).ok().flatten().is_none() {
+    // 确认会话仍在运行（P1-b 真源在本域登记视图；不存在/已停止时跳过）
+    if crate::session::view_via_host(session_id).ok().flatten().is_none() {
         host.log_warn(&format!(
             "try_dispatch_next: session {} not found or not running",
             session_id
@@ -664,8 +664,12 @@ pub fn on_session_idle(host: &WasmHost, session_id: &str) {
 
 /// 下发任务：置 executing → 写任务行（source 随队列项）→ 发送 prompt
 ///
-/// 顺序约束：先写任务行再 terminal_send —— 输入监听（on_input_submitted）
+/// 顺序约束：先写任务行再投递输入 —— 提交行观察（`handle_submitted_input`）
 /// 依赖 has_active_task 跳过插件自身投递的输入行，任务行必须先落库
+///
+/// P1-b：输入走本插件登记域写入管线（`session::input_via_pty`），不再绕
+/// `host-terminal.terminal_send`——该原语的属主判定查内核会话表，对插件会话恒拒
+/// （真源已不在宿主），是死端。
 fn dispatch_task(
     host: &WasmHost,
     session_id: &str,
@@ -689,13 +693,13 @@ fn dispatch_task(
     // prompt 统一去尾部空白后拼提交符，避免重复换行。
     // 行重建（input_line.rs）对 \r 与 \n 均视为提交，插件自身的输入监听跳过逻辑不受影响。
     let input_line = format!("{}{}", prompt.trim_end(), input_submit_char());
-    if let Err(e) = host.terminal_send(session_id, &input_line) {
+    if let Err(e) = crate::session::input_via_pty(session_id, &input_line, false) {
         host.log_error(&format!(
-            "dispatch_task: terminal_send failed: task_id={} err={}",
+            "dispatch_task: session input failed: task_id={} err={}",
             task_id, e
         ));
         // 发送失败：任务行已写入，标为中断避免假 in_progress 悬挂
-        mark_latest_task_interrupted(host, session_id, "terminal_send failed on dispatch");
+        mark_latest_task_interrupted(host, session_id, "session input failed on dispatch");
         let _ = host.plugin_db_execute_params(
             "UPDATE task_queue SET status = 'done', updated_at = datetime('now') WHERE id = ?1",
             &sql_params![task_id],
@@ -753,8 +757,8 @@ fn maybe_close_scheduled_session(host: &WasmHost, session_id: &str) {
         .unwrap_or("")
         .to_string();
 
-    // 确认会话仍在运行（已关闭/不存在时跳过，避免无效调用）
-    if host.session_get(session_id).ok().flatten().is_none() {
+    // 确认会话仍在运行（已关闭/不存在时跳过，避免无效调用）；P1-b 真源在本域
+    if crate::session::view_via_host(session_id).ok().flatten().is_none() {
         return;
     }
 
@@ -762,7 +766,8 @@ fn maybe_close_scheduled_session(host: &WasmHost, session_id: &str) {
         "maybe_close_scheduled_session: closing session_id={} (scheduled job_id={} finished)",
         session_id, job_id
     ));
-    if let Err(e) = host.session_close(session_id) {
+    // P1-b 起停止走本域编排（登记 Stopping + host-pty.kill；终态由 pty:exit 收尾）
+    if let Err(e) = crate::session::close_via_pty(session_id, None) {
         host.log_error(&format!(
             "maybe_close_scheduled_session: session_close failed: session_id={} err={}",
             session_id, e
@@ -827,12 +832,13 @@ pub fn send_due_clears(host: &WasmHost, now_utc: &str) -> Result<(), String> {
         let clear_command =
             agent::clear_command_for(crate::task::state::session_agent(host, &session_id))
                 .unwrap_or("/clear");
-        if let Err(e) = host.terminal_send(
+        if let Err(e) = crate::session::input_via_pty(
             &session_id,
             &format!("{}{}", clear_command, input_submit_char()),
+            false,
         ) {
             host.log_error(&format!(
-                "send_due_clears: terminal_send clear failed: task_id={} err={}",
+                "send_due_clears: session input clear failed: task_id={} err={}",
                 task_id, e
             ));
             // clear 发送失败：回退 pending，下次终态触发时重试调度。

@@ -8,7 +8,7 @@
 use bedcode_plugin_api::constants::{EVENT_SESSION_MODE_CHANGED, EVENT_TASK_STATUS_CHANGED};
 use bedcode_plugin_api::events::{PluginQuestion, SyncEvent};
 use bedcode_plugin_api::host::{
-    ConfigKey, HostBus, HostConfig, HostEvents, HostLog, HostPluginDatabase, HostSession,
+    ConfigKey, HostBus, HostConfig, HostEvents, HostLog, HostPluginDatabase,
 };
 use bedcode_plugin_api::http_response;
 use bedcode_plugin_api::sql_params;
@@ -93,10 +93,9 @@ fn find_claude_sid_by_session(host: &WasmHost, bedcode_sid: &str) -> Option<Stri
 // ==================== 会话输入 → 任务创建 ====================
 
 /// 查询会话启动命令（config_id → 配置真源匹配 command）
-fn session_command(host: &WasmHost, session_id: &str) -> Option<String> {
-    // 1. session_get 获取 config_id（SessionInfo 序列化为 camelCase）
-    let config_id = host
-        .session_get(session_id)
+fn session_command(_host: &WasmHost, session_id: &str) -> Option<String> {
+    // 1. 会话登记域（P1-b 真源）取 config_id（视图为 camelCase SessionInfoView）
+    let config_id = crate::session::view_via_host(session_id)
         .ok()
         .flatten()
         .and_then(|info| {
@@ -123,11 +122,10 @@ fn session_command(host: &WasmHost, session_id: &str) -> Option<String> {
         })
 }
 
-/// 查询会话配置的工程目录（session_get → configId → 配置真源匹配 workingDir）
-fn session_working_dir(host: &WasmHost, session_id: &str) -> Option<String> {
-    // 1. session_get 获取 config_id（SessionInfo 序列化为 camelCase）
-    let config_id = host
-        .session_get(session_id)
+/// 查询会话配置的工程目录（会话登记域 → configId → 配置真源匹配 workingDir）
+fn session_working_dir(_host: &WasmHost, session_id: &str) -> Option<String> {
+    // 1. 会话登记域（P1-b 真源）取 config_id（视图为 camelCase SessionInfoView）
+    let config_id = crate::session::view_via_host(session_id)
         .ok()
         .flatten()
         .and_then(|info| {
@@ -230,8 +228,12 @@ pub fn publish_task_slots(
 }
 
 /// 单键写入：失败只记 warn（含 key 与 session_id 上下文，值不落日志）
+///
+/// **P1-b：写入登记域注解槽**（宿主注解面随会话登记一并下沉——`host-session.annotate`
+/// 的 `ensure_session_owner` 查内核属主表，对插件会话必失败，是死端；会话不在登记域
+/// 时 `note_annotation` 显性报错，任务字段降级、任务行仍是真源）。
 fn write_task_slot(host: &WasmHost, session_id: &str, key: &str, value: Option<&str>) {
-    if let Err(e) = host.session_annotate(session_id, key, value.unwrap_or("")) {
+    if let Err(e) = crate::session::note_annotation(session_id, key, value.unwrap_or("")) {
         host.log_warn(&format!(
             "task annotation slot write failed (task field degraded, row stays source of truth): \
              session_id={} key={} err={}",
@@ -440,6 +442,57 @@ fn insert_task_row(host: &WasmHost, session_id: &str, input: &str, agent: &str, 
             session_id, source, e
         )),
     }
+}
+
+/// 提交输入行 → 任务创建的完整过滤链 + 写表（P1-b 起由本域自驱调用）
+///
+/// 原宿主 `on_input_submitted` 回调里的业务侧过滤（票 15）：输入路径改走本插件
+/// `session-input` 互调 api 后，宿主不再分发 `on_input_submitted`，此链随写入管线
+/// 归位本域。**纯观察**：任何一步失败只降级任务域（记日志返回，不向上抛错——
+/// 不影响输入本身，D7）。
+///
+/// 过滤链（与旧回调逐字一致）：
+/// 1. 空行回车直接忽略（宿主不做语义过滤，空提交同样通知，忽略是消费方决策）；
+/// 2. `/` 开头 = CLI 命令（/clear、/model，ADR-0004），不产生任务记录；
+/// 3. 非完整支持自动任务的 agent 会话不当作任务；
+/// 4. 已有进行中任务不重复创建（队列调度投递的输入与最新 in_progress 记录
+///    之间依赖此检查避免自触发循环，ADR 0001）。
+pub fn handle_submitted_input(host: &WasmHost, session_id: &str, text: &str) {
+    // 业务侧过滤：宿主不做语义过滤（空提交同样通知），空行回车直接忽略
+    if text.trim().is_empty() {
+        return;
+    }
+
+    // 命令过滤（ADR-0004）：以 / 开头的提交行是 CLI 命令（/clear、/model），
+    // 不产生任务记录
+    if crate::task::agent::is_command_input(text) {
+        host.log_debug(&format!(
+            "handle_submitted_input: session={} input is a command, skip task creation",
+            session_id
+        ));
+        return;
+    }
+
+    // 仅在完整支持自动任务的 agent 会话中把输入当作任务
+    let session_agent_name = session_agent(host, session_id);
+    if !crate::task::agent::is_supported(session_agent_name) {
+        host.log_debug(&format!(
+            "handle_submitted_input: session={} agent '{}' is not supported, skip task creation",
+            session_id, session_agent_name
+        ));
+        return;
+    }
+
+    // 会话已有进行中的任务则不再创建（见函数文档第 4 条）
+    if has_active_task(host, session_id) {
+        host.log_info(&format!(
+            "handle_submitted_input: session={} has active task, input not tracked as new task",
+            session_id
+        ));
+        return;
+    }
+
+    create_task_from_input(host, session_id, text);
 }
 
 /// 从提交的输入行创建任务记录（宿主 on_input_submitted 会话扩展调用）
@@ -1312,11 +1365,10 @@ pub fn list_task_history(host: &WasmHost, filter: &TaskHistoryFilter) -> anyhow:
 /// session_id → configId → 配置真源 workingDir 链路现场解析并回填，
 /// 旧任务行也能展示执行会话的配置工程目录；新行插入时已写入，跳过。
 fn backfill_working_dirs(host: &WasmHost, mut rows: Vec<Value>) -> Vec<Value> {
-    // session_id → config_id（已停止的会话仍在列表中，仅被删除的会话无法回填）
-    let session_configs: HashMap<String, String> = host
-        .session_list()
+    // session_id → config_id（已停止的会话仍在列表中，仅被删除的会话无法回填）；
+    // P1-b 起会话真源在本域（原始记录数组，与旧 host-session.list-sessions 同构）
+    let session_configs: HashMap<String, String> = crate::session::internal_records_json()
         .ok()
-        .flatten()
         .and_then(|v| v.as_array().cloned())
         .unwrap_or_default()
         .iter()
@@ -1459,10 +1511,8 @@ pub fn list_running_sessions(host: &WasmHost) -> Vec<Value> {
         })
         .collect();
 
-    let sessions = host
-        .session_list()
+    let sessions = crate::session::internal_records_json()
         .ok()
-        .flatten()
         .and_then(|v| v.as_array().cloned())
         .unwrap_or_default();
 

@@ -364,7 +364,7 @@ mod tests {
 #[cfg(target_arch = "wasm32")]
 use crate::config::store::ConfigStore;
 #[cfg(target_arch = "wasm32")]
-use bedcode_plugin_api::host::{HostEvents, HostLog, HostSession};
+use bedcode_plugin_api::host::{HostEvents, HostLog, HostPty};
 #[cfg(target_arch = "wasm32")]
 use bedcode_plugin_api::wasm_host::WasmHost;
 
@@ -410,108 +410,139 @@ pub fn flush_pending_restart(host: &WasmHost, session_id: &str) {
     ));
 }
 
-/// 重启编排：存在性预检 → 读配置真源算 spec → `remove` 旧会话 → 同 id `create-with-spec`
+/// 重启编排（P1-b：真源在本域，PTY 在宿主引擎）
 ///
 /// 外部行为与内核执行器逐字等价：同一 session id（线协议与终端订阅键不变）、
-/// 名字与 configId 保持、正统渲染端归属回到桌面端（spec 不带 `sourceDevice`）、
-/// 生命周期事件序列 Creating → Created、同步事件 SessionRemoved → SessionCreated。
-/// 唯一差别是**配置来源**：插件私有库（真源）而不是主库投影——这也是本迁移的目的。
+/// 名字与 configId 保持、正统渲染端归属回到桌面端（spawn 不带 `sourceDevice`）、
+/// 同步事件序列 SessionRemoved → SessionCreated。执行顺序：
+///
+/// 1. 存在性预检（同步可见）；
+/// 2. 配置真源 → 同一 id 的 launch spec（沿用旧名，不重命名）；
+/// 3. **先摘记录后杀旧 PTY**：旧 pty 的退出事件（`pty:exit`）到达时按 pty_id
+///    反查已无记录 → no-op，避免「旧会话终态广播」与「重建」交错；
+/// 4. 登记待补发前端事件（`session-restarted` 在 Created 逻辑里随就绪发射）；
+/// 5. `launch::spawn_session` 重建（spawn → 登记同 id → Created → 广播
+///    SessionCreated）。
 #[cfg(target_arch = "wasm32")]
 pub fn restart_via_host(draft_json: &serde_json::Value) -> Result<serde_json::Value, String> {
     let request = SessionTargetRequest::parse(draft_json)?;
     if request.session_id.trim().is_empty() {
         return Err("empty sessionId".to_string());
     }
-    // 编排职责 1：存在性预检——「会话不存在」在此同步可见（重建为宿主异步执行）
-    let session = read_session(&request.session_id)?;
-    let config_id = session
-        .get("configId")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default()
-        .to_string();
-    let name = session
-        .get("name")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default()
-        .to_string();
+    // 编排职责 1：存在性预检——「会话不存在」同步可见
+    let record = crate::session::record_via_host(&request.session_id)?
+        .ok_or_else(|| format!("会话不存在：{}", request.session_id))?;
+    let config_id = record.config_id.clone();
+    let name = record.name.clone();
     if config_id.is_empty() {
         return Err(format!("会话缺少 configId，无法重建：{}", request.session_id));
     }
-    // 编排职责 2：配置真源在插件私有库 → 同一 id 的 launch spec（沿用旧名，不重命名）
+    // 编排职责 2：配置真源在插件私有库 → 同一 id 的 launch spec（沿用旧名）
     let config = WasmHost
         .get(&config_id)
         .map_err(|e| format!("config read failed: {}", e))?
         .ok_or_else(|| format!("会话配置不存在：{}", config_id))?;
-    let mut spec = crate::launch::build_launch_spec(&config, None, None, true)?;
-    spec.name = name.clone();
-    spec.session_id = Some(request.session_id.clone());
-    // 编排职责 3：先摘除旧会话（内核执行器同序；SessionRemoved 同步事件形状不变）
-    WasmHost
-        .session_remove(&request.session_id)
-        .map_err(|e| format!("host remove failed: {}", e.message))?;
-    // P1 双写：登记域镜像同序摘除（旧记录连带注解槽清理，与宿主 remove 语义一致）
-    crate::session::note_removed_via_host(&request.session_id);
-    // 编排职责 4：同 id 重建（宿主异步执行 + id 冲突仲裁；此处已先行摘除故不冲突）
-    let spec_json =
-        serde_json::to_value(&spec).map_err(|e| format!("launch spec serialize failed: {}", e))?;
-    let created = WasmHost
-        .session_create_with_spec(&spec_json)
-        .map_err(|e| format!("host create-with-spec failed: {}", e.message))?;
-    if created != request.session_id {
-        return Err(format!(
-            "重启未保持同一 session id：created={} expected={}",
-            created, request.session_id
-        ));
+    let spec = crate::launch::build_launch_spec(&config, None, None, true)?;
+
+    // 编排职责 3：先摘记录 + 广播 SessionRemoved，再杀旧 PTY（退出事件按已无
+    // 记录 no-op，见函数文档）
+    crate::session::note_removed(&request.session_id)?;
+    let _ = WasmHost.broadcast_sync(&bedcode_plugin_api::events::SyncEvent::SessionRemoved {
+        session_id: request.session_id.clone(),
+        session_name: name.clone(),
+        source_device: String::new(),
+    });
+    if let Some(old_pty) = record.pty_id.as_deref() {
+        if let Err(e) = WasmHost.pty_kill(old_pty) {
+            // 句柄已摘除 = 旧进程已自然退出，重启不受影响（重建会开新 PTY）
+            WasmHost.log_debug(&format!(
+                "restart: old pty kill failed (continuing): {}",
+                e.message
+            ));
+        }
     }
-    // P1 双写：镜像以同 id 重建（重启不重命名；`start = true` → Running + 桌面归属）
-    crate::session::note_created_via_host(&request.session_id, &config_id, &name, true, None);
-    // 编排职责 5：登记待补发前端事件（Created 到达即发，与内核执行器同序）
+    // 编排职责 4：登记待补发前端事件（spawn_session 的 Created 逻辑即发）
     {
         let mut pending = PENDING_RESTART.lock().unwrap_or_else(|e| e.into_inner());
         pending.retain(|(id, _)| id != &request.session_id);
         pending.push((request.session_id.clone(), name.clone()));
     }
+    // 编排职责 5：同 id 重建（spawn → 登记 → Created → 广播 SessionCreated）
+    crate::launch::spawn_session(
+        &config_id,
+        &spec,
+        &request.session_id,
+        &name,
+        &None,
+    )
+    .map_err(|e| format!("重启重建失败：{e}"))?;
     Ok(serde_json::json!({
         "sessionId": request.session_id,
         "name": name,
     }))
 }
 
-/// 移除编排：存在性预检 → `host-session.remove`（同步执行，失败可见）
+/// 移除编排：存在性预检 → 摘记录（含注解槽）→ 杀 PTY → 广播 SessionRemoved
 #[cfg(target_arch = "wasm32")]
 pub fn remove_via_host(draft_json: &serde_json::Value) -> Result<serde_json::Value, String> {
     let request = SessionTargetRequest::parse(draft_json)?;
     if request.session_id.trim().is_empty() {
         return Err("empty sessionId".to_string());
     }
-    read_session(&request.session_id)?;
-    WasmHost
-        .session_remove(&request.session_id)
-        .map_err(|e| format!("host remove failed: {}", e.message))?;
-    // P1 双写：登记域镜像同序摘除（含注解槽）
-    crate::session::note_removed_via_host(&request.session_id);
+    // 触发操作的来源设备名（广播排除语义；移动端带 claims 设备名，桌面本地为空）
+    let source_device = draft_json
+        .get("sourceDevice")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    // 存在性宽容（对齐内核 `remove_session_with_source` 的幂等语义）：删不存在的
+    // 会话不是错误（移动端移除已消失会话、WS 控制面 ghost 回显都不应报错），
+    // 且仍广播 SessionRemoved（多客户端一致性：其他端需刷新列表——内核同口径）。
+    let Some(record) = crate::session::record_via_host(&request.session_id)? else {
+        let _ = WasmHost.broadcast_sync(&bedcode_plugin_api::events::SyncEvent::SessionRemoved {
+            session_id: request.session_id.clone(),
+            session_name: String::new(),
+            source_device: source_device.clone(),
+        });
+        return Ok(serde_json::json!({
+            "sessionId": request.session_id,
+            "removed": true,
+        }));
+    };
+    // 先摘记录（旧 pty 退出事件按无记录 no-op），再杀旧 PTY
+    crate::session::note_removed(&request.session_id)?;
+    if let Some(old_pty) = record.pty_id.as_deref() {
+        if let Err(e) = WasmHost.pty_kill(old_pty) {
+            WasmHost.log_debug(&format!(
+                "remove: pty kill failed (already gone): {}",
+                e.message
+            ));
+        }
+    }
+    let _ = WasmHost.broadcast_sync(&bedcode_plugin_api::events::SyncEvent::SessionRemoved {
+        session_id: request.session_id.clone(),
+        session_name: record.name,
+        source_device: source_device.clone(),
+    });
     Ok(serde_json::json!({ "sessionId": request.session_id, "removed": true }))
 }
 
-/// 停止编排（票 13）：存在性预检 → `host-session.close`（宿主异步执行：停止 PTY
-/// 并置 `Stopped`，会话记录保留；与用户手动关闭一致）。
-///
-/// 与 restart 同口径：原语异步执行无同步失败通道，「会话不存在」由插件预检变成
-/// 同步可见的失败；会话表单据此关闭对应终端窗口。
+/// 停止编排（互调 api `session-close` / 命令面 `session.close`）：存在性预检 →
+/// 登记 `Stopping` + 发起 `host-pty.kill`（终态由 `pty:exit` 事件收尾，见
+/// [`crate::session::close_via_pty`]）。与旧 `host-session.close` 的差异：
+/// kill 已发起即同步回执（旧实现宿主异步 fire-and-forget），终态广播仍只在
+/// 退出事件处发出（单一发布者不变量）。
 #[cfg(target_arch = "wasm32")]
 pub fn close_via_host(draft_json: &serde_json::Value) -> Result<serde_json::Value, String> {
     let request = SessionTargetRequest::parse(draft_json)?;
     if request.session_id.trim().is_empty() {
         return Err("empty sessionId".to_string());
     }
-    read_session(&request.session_id)?;
-    WasmHost
-        .session_close(&request.session_id)
-        .map_err(|e| format!("host close failed: {}", e.message))?;
+    crate::session::close_via_pty(&request.session_id, None)?;
     Ok(serde_json::json!({ "sessionId": request.session_id, "stopped": true }))
 }
 
-/// 改名编排（名字合法性由宿主原语最终仲裁，此处只做空值 UX 校验）
+/// 改名编排（真源 = 本域记录，不再经宿主 `host-session.rename`）
 #[cfg(target_arch = "wasm32")]
 pub fn rename_via_host(draft_json: &serde_json::Value) -> Result<serde_json::Value, String> {
     let request = RenameRequest::parse(draft_json)?;
@@ -521,12 +552,10 @@ pub fn rename_via_host(draft_json: &serde_json::Value) -> Result<serde_json::Val
     if request.name.trim().is_empty() {
         return Err("empty session name".to_string());
     }
-    read_session(&request.session_id)?;
-    let previous = WasmHost
-        .session_rename(&request.session_id, &request.name)
-        .map_err(|e| format!("host rename failed: {}", e.message))?;
-    // P1 双写：登记域镜像改名（只动展示名，与宿主 rename 语义一致）
-    crate::session::note_renamed_via_host(&request.session_id, &request.name);
+    let record = crate::session::record_via_host(&request.session_id)?
+        .ok_or_else(|| format!("会话不存在：{}", request.session_id))?;
+    let previous = record.name.clone();
+    crate::session::note_renamed(&request.session_id, &request.name)?;
     Ok(serde_json::json!({
         "sessionId": request.session_id,
         "name": request.name,
@@ -534,7 +563,7 @@ pub fn rename_via_host(draft_json: &serde_json::Value) -> Result<serde_json::Val
     }))
 }
 
-/// 尺寸裁决编排：读登记事实 → 插件侧裁决 → 仅「可应用」时调用 `host-session.resize`
+/// 尺寸裁决编排（P1-b：登记事实在本域记录，执行走 `host-pty.resize`）
 ///
 /// 需确认时**不触碰任何状态**（零改动），把当前正统端回执给调用方弹窗确认；
 /// 确认后调用方带 `force` 重发，走接管分支。
@@ -547,8 +576,9 @@ pub fn resize_via_host(draft_json: &serde_json::Value) -> Result<serde_json::Val
     if request.cols == 0 || request.rows == 0 {
         return Err("invalid size (cols/rows must be > 0)".to_string());
     }
-    let session = read_session(&request.session_id)?;
-    let current = parse_canonical(&session)?;
+    let record = crate::session::record_via_host(&request.session_id)?
+        .ok_or_else(|| format!("会话不存在：{}", request.session_id))?;
+    let current = record.canonical_renderer.clone();
     match decide_resize(current.as_ref(), &request.requester, request.force) {
         ResizeDecision::NeedsConfirmation { current } => {
             Ok(serde_json::to_value(ResizeOutcome::NeedsConfirmation {
@@ -557,38 +587,23 @@ pub fn resize_via_host(draft_json: &serde_json::Value) -> Result<serde_json::Val
             .map_err(|e| format!("outcome serialize failed: {}", e))?)
         }
         ResizeDecision::Apply => {
-            let applied = WasmHost
-                .session_resize(
-                    &request.session_id,
-                    request.cols,
-                    request.rows,
-                    &serde_json::json!(&request.requester),
-                )
-                .map_err(|e| format!("host resize failed: {}", e.message))?;
-            // 归属以宿主登记事实为准（原语回执 canonical）：不臆造执行结果
-            let canonical = applied
-                .get("canonical")
-                .cloned()
-                .ok_or_else(|| format!("host resize reply missing canonical: {}", applied))
-                .and_then(|v| {
-                    serde_json::from_value::<RendererSource>(v)
-                        .map_err(|e| format!("invalid canonical in resize reply: {}", e))
-                })?;
-            // P1 双写：正统端归属登记镜像（以宿主原语回执为准，不臆造执行结果）
-            crate::session::note_canonical_via_host(&request.session_id, &canonical);
-            Ok(serde_json::to_value(ResizeOutcome::Applied { canonical })
-                .map_err(|e| format!("outcome serialize failed: {}", e))?)
+            let Some(pty_id) = record.pty_id.as_deref() else {
+                return Err(format!(
+                    "会话缺少 PTY 句柄，无法 resize：{}",
+                    request.session_id
+                ));
+            };
+            WasmHost
+                .pty_resize(pty_id, request.cols, request.rows)
+                .map_err(|e| format!("host pty resize failed: {}", e.message))?;
+            // 归属以裁决结果为准（Apply = 请求方即位正统）：登记后回执
+            crate::session::note_canonical(&request.session_id, &request.requester)?;
+            Ok(serde_json::to_value(ResizeOutcome::Applied {
+                canonical: request.requester,
+            })
+            .map_err(|e| format!("outcome serialize failed: {}", e))?)
         }
     }
-}
-
-/// 读单个会话（不存在 → 显性报错：所有动作的可见失败面）
-#[cfg(target_arch = "wasm32")]
-fn read_session(session_id: &str) -> Result<serde_json::Value, String> {
-    WasmHost
-        .session_get(session_id)
-        .map_err(|e| format!("session read failed: {}", e.message))?
-        .ok_or_else(|| format!("会话不存在：{}", session_id))
 }
 
 #[cfg(not(target_arch = "wasm32"))]

@@ -678,56 +678,191 @@ mod tests {
 // ==================== 编排入口（wasm 运行时薄包装，native 显性失败） ====================
 //
 // lib.rs 的互调 api 面的 `session-create` 只调这个入口；native（cargo test）下
-// `WasmHost` 没有 `ConfigStore` / `HostSession` impl（wasm 专属 import 符号不在
+// `WasmHost` 没有 `ConfigStore` / `HostPty` impl（wasm 专属 import 符号不在
 // native 链接），因此这里的 wasm 专属逻辑与 `config/mod.rs` 同模式隔离。
 // 命名唯一化 / 映射 / 决策的纯逻辑已在上面 native 单测全量覆盖，此处只是
-// 「读真源 → 算 spec → 调宿主原语」的调用编排。
+// 「读真源 → 算 spec → host-pty.spawn 执行」的调用编排。
 
 #[cfg(target_arch = "wasm32")]
 use crate::config::store::ConfigStore;
 
 #[cfg(target_arch = "wasm32")]
-use bedcode_plugin_api::host::HostSession;
+use bedcode_plugin_api::host::{HostApp, HostConfig, HostEvents, HostLog, HostPty};
 #[cfg(target_arch = "wasm32")]
 use bedcode_plugin_api::wasm_host::WasmHost;
 
-/// `session-create` 编排：读配置真源（插件私有库）→ 命名唯一化（读宿主会话列表）
-/// → config→launch spec 映射 → 两阶段启动决策 → 宿主 `create-with-spec` 执行
-/// → `{sessionId}`（预生成 id 立即返回，实际创建宿主异步执行）。
+/// 注入子进程环境的业务会话标识环境变量（与宿主 `system/constants.rs` 同值；
+/// agent 集成 hook 靠它把任务状态回投到对应会话）
+#[cfg(target_arch = "wasm32")]
+const ENV_BEDCODE_SESSION_ID: &str = "BEDCODE_SESSION_ID";
+
+/// `session-create` 编排：读配置真源（插件私有库）→ 命名唯一化（读本域会话真源）
+/// → config→launch spec 映射 → 会话 id 由本插件自产 → `host-pty.spawn` 执行
+/// → 登记（含 `pty_id`）→ 广播 `SessionCreated` → `{sessionId}`。
+///
+/// P1-b 起**同步可见**：`host-pty.spawn` 同步执行（旧 create-with-spec 是宿主
+/// 异步 fire-and-forget，回执语义因此变强——spawn 失败直接 Err，不产生幽灵会话）。
 #[cfg(target_arch = "wasm32")]
 pub fn create_via_host(draft_json: &serde_json::Value) -> Result<serde_json::Value, String> {
     let request = CreateSessionRequest::parse(draft_json)?;
     // 读配置真源（票 08 起配置真源在本插件私有库；找不到显性报错）
     let config = WasmHost
         .get(&request.config_id)
-        .map_err(|e| format!("config read failed: {}", e))
-        .and_then(|c| c.ok_or_else(|| format!("会话配置不存在：{}", request.config_id)))?;
-    // 现有会话列表 → 命名唯一化（同配置活跃会话递增，Stopped 不计数）
-    let sessions_json = WasmHost
-        .session_list()
-        .map_err(|e| format!("session list failed: {}", e.message))?;
-    let sessions = parse_sessions(sessions_json.as_ref().unwrap_or(&serde_json::Value::Null));
+        .map_err(|e| format!("config read failed: {e}"))?
+        .ok_or_else(|| format!("会话配置不存在：{}", request.config_id))?;
+    // 现有会话列表 → 命名唯一化（同配置活跃会话递增，Stopped 不计数）；
+    // 真源已在本域（宿主不再持会话登记）
+    let sessions_json = crate::session::internal_records_json()?;
+    let sessions = parse_sessions(&sessions_json);
     let unique_name = generate_unique_name(&request.config_id, &config.name, &sessions);
-    // config→launch spec 映射 + 两阶段启动决策
-    let mut spec = build_launch_spec(&config, request.cols, request.rows, request.start)?;
-    spec.name = unique_name;
-    // 启动端事实透传（移动端启动 → 正统端初始归属该端；桌面本地启动为 None）
-    spec.source_device = request.source_device.clone();
-    // 宿主 create-with-spec 执行（argv 原样 exec / 尺寸缺省 / ID 预生成）
-    let spec_json =
-        serde_json::to_value(&spec).map_err(|e| format!("launch spec serialize failed: {}", e))?;
-    let session_id = WasmHost
-        .session_create_with_spec(&spec_json)
-        .map_err(|e| format!("host create-with-spec failed: {}", e.message))?;
-    // P1 双写：会话登记域镜像（宿主仍是权威；失败只 warn 留痕，不影响创建路径）
-    crate::session::note_created_via_host(
-        &session_id,
-        &request.config_id,
-        &spec.name,
-        request.start,
-        request.source_device.as_deref(),
-    );
+    // config→launch spec 映射 + 两阶段启动决策（P1-b 起恒即起，start 保留为
+    // wire 兼容字段，不再有「只建不启」的双态——host-pty 无 create-without-spawn）
+    let spec = build_launch_spec(&config, request.cols, request.rows, true)?;
+    // 会话 id 由插件自产（宿主不再预生成，`BEDCODE_SESSION_ID` 随 env 注入）
+    let session_id = crate::session::ops::new_session_id()?;
+    spawn_session(&request.config_id, &spec, &session_id, &unique_name, &request.source_device)
+        .map_err(|e| format!("会话创建失败：{e}"))?;
     Ok(serde_json::json!({ "sessionId": session_id }))
+}
+
+/// 共用的「spawn → 登记 → Created 逻辑 → 广播」核心（普通创建与重启共走）
+///
+/// 顺序：
+/// 1. **Creating（agent 集成）先于 spawn**（与内核旧时序一致：hook 就位后 shell
+///    才启动，集成脚本在子进程首帧就绪）；
+/// 2. `host-pty.spawn`（env 注入 `BEDCODE_SESSION_ID`；working_dir 仅
+///    Windows/Linux 原生环境显式设置——WSL 路径已内嵌进 argv 脚本）；
+/// 3. 登记（真源写入含 `pty_id`；失败 → kill 已 spawn 的 pty 再报错，不留孤儿
+///    进程）；
+/// 4. Created 逻辑（重启补发 `session-restarted` + 定时任务域就绪信号）；
+/// 5. 广播 `SessionCreated`（概要自本域视图，宿主不回查内核）。
+#[cfg(target_arch = "wasm32")]
+pub fn spawn_session(
+    config_id: &str,
+    spec: &LaunchSpec,
+    session_id: &str,
+    name: &str,
+    source_device: &Option<String>,
+) -> Result<(), String> {
+    // 1. Creating：agent 集成（hook 就位先于 spawn；取不到资源目录 → 跳过注入）
+    run_creating_integration(spec.command.as_str(), spec.cwd.as_str());
+
+    // 2. host-pty.spawn（裸 argv / env 追加 / 尺寸）
+    let argv = spec
+        .command_args
+        .as_deref()
+        .ok_or_else(|| "launch spec missing commandArgs".to_string())?;
+    let Some((head, rest)) = argv.split_first() else {
+        return Err("launch spec commandArgs is empty".to_string());
+    };
+    let mut env = spec.env.clone();
+    env.insert(ENV_BEDCODE_SESSION_ID.to_string(), session_id.to_string());
+    let mut builder = bedcode_plugin_api::host::PtySpawnConfig::new(head);
+    if !rest.is_empty() {
+        builder = builder.args(rest.iter());
+    }
+    if !env.is_empty() {
+        builder = builder.env(env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+    }
+    // working_dir 仅原生环境显式设置（WSL 路径在 build_argv 的脚本里 cd）
+    if spec.environment.get("type").and_then(|v| v.as_str()) != Some("Wsl2") {
+        if !spec.cwd.is_empty() {
+            builder = builder.working_dir(&spec.cwd);
+        }
+    }
+    if let Some(cols) = spec.cols {
+        builder = builder.cols(cols);
+    }
+    if let Some(rows) = spec.rows {
+        builder = builder.rows(rows);
+    }
+    let pty_id = WasmHost
+        .pty_spawn(&builder.to_json())
+        .map_err(|e| format!("host-pty.spawn failed: {}", e.message))?;
+
+    // 3. 登记（真源写入含 pty_id；失败 → 回收已 spawn 的 pty，不留孤儿进程）
+    if let Err(e) = crate::session::note_created(
+        session_id,
+        &pty_id,
+        config_id,
+        name,
+        true,
+        source_device.as_deref(),
+    ) {
+        let _ = WasmHost.pty_kill(&pty_id);
+        return Err(format!("session record failed: {e}"));
+    }
+
+    // 4. Created 逻辑（与宿主旧生命周期回调逐字一致：重启补发 + 定时任务就绪）
+    crate::actions::flush_pending_restart(&WasmHost, session_id);
+    crate::task::scheduled::handle_session_created(&WasmHost, session_id, config_id);
+
+    // 5. 广播 SessionCreated（概要自本域视图；宿主不回查内核）
+    let summary = crate::session::summary_json_for(session_id);
+    let _ = WasmHost.broadcast_sync(&bedcode_plugin_api::events::SyncEvent::SessionCreated {
+        session: summary,
+        source_device: source_device.clone().unwrap_or_default(),
+    });
+    WasmHost.log_info(&format!(
+        "session created via host-pty (session_id={session_id}, pty_id={pty_id}, config_id={config_id})"
+    ));
+    Ok(())
+}
+
+/// Creating 语义的 agent 集成注入（hook 就位先于 spawn，与内核旧生命周期时序一致）
+///
+/// 原 `on_session_lifecycle(Creating)` 分支迁入：detect_agent → 无集成则跳过 →
+/// 资源目录经 `host-app.plugin-resource-dir` 自取（v25 原语）→ hooks 安装。
+/// 失败只记日志（集成缺失不阻断会话创建，与旧行为一致）。
+#[cfg(target_arch = "wasm32")]
+fn run_creating_integration(command: &str, working_dir: &str) {
+    use bedcode_plugin_api::host::ConfigKey;
+    let host = WasmHost;
+    let agent_name = crate::task::agent::detect_agent(command);
+    if crate::task::agent::session_integration_for(agent_name)
+        == crate::task::agent::SessionIntegration::None
+    {
+        host.log_debug(&format!(
+            "create: agent '{}' has no session integration, skip setup",
+            agent_name
+        ));
+        return;
+    }
+    let resource_dir = match host.plugin_resource_dir() {
+        Ok(dir) => dir,
+        Err(e) => {
+            host.log_warn(&format!(
+                "create: plugin resource dir unavailable, skip agent integration: {}",
+                e.message
+            ));
+            return;
+        }
+    };
+    // 集成脚本经 HTTP 推送任务状态，端点由网关中间件本地放行，无需 token；
+    // 端口读不到时与旧插件同退化为 8765（行为等价，不因配置缺失停摆）
+    let port = host
+        .config_get(ConfigKey::NetworkPort)
+        .ok()
+        .flatten()
+        .and_then(|s| s.parse::<u16>().ok())
+        .unwrap_or(8765);
+    let result = crate::task::hooks::ensure_agent_integration(&host, agent_name, working_dir, port, &resource_dir);
+    if result.success {
+        host.log_info(&format!(
+            "create: integration setup for agent '{}' in {}",
+            agent_name, working_dir
+        ));
+    } else if result.skipped {
+        host.log_debug(&format!(
+            "create: integration skipped for agent '{}' in {}",
+            agent_name, working_dir
+        ));
+    } else {
+        host.log_warn(&format!(
+            "create: integration setup failed for agent '{}' in {}: {}",
+            agent_name, working_dir, result.message
+        ));
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]

@@ -68,7 +68,7 @@ mod trust;
 
 use bedcode_plugin_api::events::{InputSubmittedEvent, SessionLifecycleEvent};
 use bedcode_plugin_api::host::{
-    ConfigKey, HostApp, HostBus, HostConfig, HostLog, HostSession, HostStorage, HostTimer,
+    HostBus, HostEvents, HostLog, HostSession, HostStorage, HostTimer,
 };
 use bedcode_plugin_api::types::PluginManifest;
 use bedcode_plugin_api::wasm::WasmPlugin;
@@ -253,16 +253,27 @@ pub trait SessionApi {
     // ==================== 会话引擎下沉 P1：会话登记域读取面 ====================
 
     /// 全部会话的对外视图 → `{sessions: SessionInfoView[]}`（按 `createdAt, id` 稳定序）。
-    ///
     /// 形状与宿主 `SessionInfoView` 逐字段一致（产出口在 `session::view`，有形状锁）。
-    /// 双写期本域是宿主的镜像，故此面**尚不被宿主窄转发层消费**——P1-b 真源切换时
-    /// 只改转发层内部实现，消费面零改动。
     #[api("session-list")]
     fn session_list() -> Result<serde_json::Value, String>;
 
     /// 单个会话的对外视图；入参 `{sessionId}` → `SessionInfoView` | `null`（不在册）
     #[api("session-get")]
     fn session_get(draft: serde_json::Value) -> Result<Option<serde_json::Value>, String>;
+
+    // ==================== 会话引擎下沉 P1-b：停止 / 输入写入（真源切换新增） ====================
+
+    /// 停止会话：登记 `Stopping` + 发起 `host-pty.kill`（终态由 `pty:exit` 事件
+    /// 收尾并广播 `SessionStopped`）。入参 `{sessionId}` → `{sessionId, stopped}`；
+    /// 已终态 / 并发停止在途 → 幂等成功。
+    #[api("session-close")]
+    fn session_close(draft: serde_json::Value) -> Result<serde_json::Value, String>;
+
+    /// 写入输入：`{sessionId, data, special?}`；`special = true` 时绕过提交行重建
+    /// 直接写字节（对齐内核 `send_special_key` 的不对称），默认走提交行重建 +
+    /// 任务域观察。
+    #[api("session-input")]
+    fn session_input(draft: serde_json::Value) -> Result<serde_json::Value, String>;
 }
 
 /// 终端会话中心插件 — 生命周期 + 状态命令 + pairing 互调 api
@@ -428,6 +439,30 @@ impl SessionApi for SessionPlugin {
             .ok_or_else(|| "session-get: sessionId required".to_string())?;
         session::view_via_host(session_id)
     }
+
+    // ==================== 会话引擎下沉 P1-b：停止 / 输入写入 ====================
+
+    fn session_close(draft: serde_json::Value) -> Result<serde_json::Value, String> {
+        actions::close_via_host(&draft)
+    }
+
+    fn session_input(draft: serde_json::Value) -> Result<serde_json::Value, String> {
+        let session_id = draft
+            .get("sessionId")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| "session-input: sessionId required".to_string())?;
+        let data = draft
+            .get("data")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| "session-input: data required".to_string())?;
+        let special = draft
+            .get("special")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        session::input_via_pty(session_id, data, special)?;
+        Ok(serde_json::json!({ "sessionId": session_id }))
+    }
 }
 
 // ==================== pairing 域核心（api 面与后续命令面共享同一状态源） ====================
@@ -564,22 +599,17 @@ impl WasmPlugin for SessionPlugin {
                 e
             )),
         }
-        // 会话引擎整体下沉 P1（`.scratch/2026-09-23-session-engine-downsink`）：
+        // 会话引擎整体下沉 P1-b（`.scratch/2026-09-23-session-engine-downsink`）：
         // 会话登记域建表（幂等）+ 进程启动对账（清空上一进程遗留的会话行——会话与
-        // PTY 同生命周期，宿主真源同为进程内存）。
+        // PTY 同生命周期，同为进程内存）。
         //
-        // **失败不阻断激活**（与配置面同口径，D7 故障隔离）：P1 阶段宿主仍是会话
-        // 权威、用户路径不依赖本域，失败只降级镜像；P1-b 起本域转真源，该失败必须
-        // 改判为「会话面不可用」的显性错误（此处是本批次唯一的语义待收口点）。
-        match session::ensure_schema_via_host() {
-            Ok(()) => host.log_info(
-                "session registry store ready (private tables sessions / session_annotations)",
-            ),
-            Err(e) => host.log_warn(&format!(
-                "session registry schema init failed at activate (session registry mirror degraded): {}",
-                e
-            )),
-        }
+        // **P1-b 起失败必须阻断激活**：本域已是会话真源，建表失败 = 会话面不可用，
+        // 继续激活只会让创建 / 停止 / 输入全线报「存储不可用」的半生不熟状态——
+        // 显性失败让宿主把插件标记为不可用，用户路径立刻可见（不再降级镜像）。
+        session::ensure_schema_via_host().map_err(|e| {
+            anyhow::anyhow!("session registry schema init failed at activate (session face unavailable): {e}")
+        })?;
+        host.log_info("session registry store ready (private tables sessions / session_annotations)");
         // 票 02：快捷指令域（第 4 域）建表（幂等）。与配置面同口径——失败只降级
         // 快捷指令面：配对 / 信任 / 会话 / 任务必须照常工作。迁移数据由宿主侧
         // handoff（quick_actions_migration）经互调 api 推送，不在此拉取。
@@ -653,6 +683,19 @@ impl WasmPlugin for SessionPlugin {
             )),
         }
 
+        // 会话引擎下沉 P1-b：订阅本属主私有 PTY 退出事件（`<owner>::pty:exit`）——
+        // 会话终态（自然退出 / kill）由该事件驱动（见 `session::on_pty_exit`）。
+        // **失败必须阻断激活**：订阅不到 = 会话终态收尾失效（会话永久卡 Running
+        // / Stopping，任务域同步卡 in_progress）——这是真源能力，不是可降级面。
+        host.bus_subscribe(&bedcode_plugin_api::host::pty_event_topic(
+            bedcode_plugin_api::host::PTY_EXIT,
+            Self::ID,
+        ))
+        .map_err(|e| {
+            anyhow::anyhow!("pty exit subscription failed (session lifecycle driver): {e}")
+        })?;
+        host.log_info("pty exit event subscribed (session lifecycle driver)");
+
         // 任务域定时器（清单第 4 项：定时器属本域能力面）：驱动队列「延迟 clear
         // 到点发送」与「执行中静默超时」两个周期步骤。回调按命令名分域计数失败，
         // 单域失败只降级本域（D7）——票 16 把定时任务域并入同一 tick 的分发表。
@@ -689,85 +732,53 @@ impl WasmPlugin for SessionPlugin {
         policy::verify_device_token(token)
     }
 
-    /// 总线消息入口：互调请求先经宏生成的分派器（命中 api topic 则处理并回复）
+    /// 总线消息入口：互调请求先经宏生成的分派器（命中 api topic 则处理并回复）；
+    /// 本属主私有 `pty:exit` 事件（会话终态驱动）在此分流处理。
     fn on_message(msg: &BusMessage) -> anyhow::Result<()> {
+        // pty:exit（引擎按属主投递；topic = `<owner>::pty:exit`，payload
+        // `{ ptyId, reason, exitCode? }` camelCase）→ 会话终态收尾
+        if msg.topic
+            == bedcode_plugin_api::host::pty_event_topic(bedcode_plugin_api::host::PTY_EXIT, Self::ID)
+        {
+            let pty_id = msg
+                .payload
+                .get("ptyId")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let reason = msg
+                .payload
+                .get("reason")
+                .and_then(|v| v.as_str())
+                .unwrap_or("stopped")
+                .to_string();
+            let exit_code = msg
+                .payload
+                .get("exitCode")
+                .and_then(|v| v.as_i64())
+                .map(|c| c as i32);
+            if !pty_id.is_empty() {
+                session::on_pty_exit(&pty_id, &reason, exit_code);
+            }
+            return Ok(());
+        }
         SessionApiDispatcher::dispatch::<Self>(msg)?;
         Ok(())
     }
 
-    /// 会话生命周期回调（票 15 编排反转的**执行面**）
+    /// 会话生命周期回调（票 15 编排反转；**P1-b 起为兼容面**）
     ///
-    /// `Creating` 是本插件注入 Agent 集成的触发面：对自己经 `create-with-spec`
-    /// 创建的会话同样会收到该事件（宿主对已注册 listener 全量分发），故「主动推进」
-    /// 与「回调兼容面」共用同一实现，无第二条注入路径。
-    ///
-    /// 资源目录**不再**取自本事件 payload 的 `resource_dir` 字段，改经
-    /// `host-app.plugin-resource-dir` 原语自取（v25 函数级追加）——P1-b 起宿主不再
-    /// 产生 `Creating` 事件，取目录的路径必须先独立于事件存在。
+    /// 宿主 `SessionManager` 不再产生会话生命周期事件（创建/停止/退出全部由本
+    /// 插件自驱：Creating 在 `launch::spawn_session` 内先行、Created 随后、终态
+    /// 由 `<owner>::pty:exit` 事件驱动）。本回调只剩**内核直连路径**（测试）与
+    /// 旧通道的观察面：各分支只做登记域对账（会话不在册则跳过），不驱动主流程。
     fn on_session_lifecycle(event: &SessionLifecycleEvent) -> anyhow::Result<()> {
         match event {
-            SessionLifecycleEvent::Creating {
-                command, working_dir, ..
-            } => {
-                let host = WasmHost;
-                let agent_name = task::agent::detect_agent(command);
-                if task::agent::session_integration_for(agent_name)
-                    == task::agent::SessionIntegration::None
-                {
-                    host.log_debug(&format!(
-                        "on_session_lifecycle: agent '{}' has no session integration, skip setup",
-                        agent_name
-                    ));
-                    return Ok(());
-                }
-
-                // 资源目录经 `host-app.plugin-resource-dir` 自取（v25 原语）：不再依赖
-                // `Creating` 事件 payload 的 `resource_dir` 字段——P1-b 起宿主不再产生该
-                // 事件（创建编排已整体在插件侧），插件必须能自行取到（Agent 集成 hook
-                // 脚本源即在此目录下）。取不到 → 显性告警并跳过注入，不用空串拼路径去
-                // 读一个不存在的文件。
-                let resource_dir = match host.plugin_resource_dir() {
-                    Ok(dir) => dir,
-                    Err(e) => {
-                        host.log_warn(&format!(
-                            "on_session_lifecycle: plugin resource dir unavailable, skip agent integration: {}",
-                            e.message
-                        ));
-                        return Ok(());
-                    }
-                };
-
-                // 集成脚本经 HTTP 推送任务状态，端点由网关中间件本地放行，无需 token；
-                // 端口读不到时与旧插件同退化为 8765（行为等价，不因配置缺失停摆）
-                let port = host
-                    .config_get(ConfigKey::NetworkPort)
-                    .ok()
-                    .flatten()
-                    .and_then(|s| s.parse::<u16>().ok())
-                    .unwrap_or(8765);
-
-                let result =
-                    task::hooks::ensure_agent_integration(&host, agent_name, working_dir, port, &resource_dir);
-                if result.success {
-                    host.log_info(&format!(
-                        "Session lifecycle: integration setup for agent '{}' in {}",
-                        agent_name, working_dir
-                    ));
-                } else if result.skipped {
-                    host.log_debug(&format!(
-                        "Session lifecycle: integration skipped for agent '{}' in {}",
-                        agent_name, working_dir
-                    ));
-                } else {
-                    host.log_warn(&format!(
-                        "Session lifecycle: integration setup failed for agent '{}' in {}: {}",
-                        agent_name, working_dir, result.message
-                    ));
-                }
-            }
-            // Created：定时任务域的会话就绪信号——按 session_id 精确匹配 creating 态
-            // 的 job，把 prompts 注入新会话队列并开启自动执行（票 16）。
-            // 非定时创建的会话在该查询里落空，直接返回。
+            // Creating：agent 集成已由本插件自驱（launch::spawn_session 先于
+            // spawn），此处无需处理——保留匹配以免误判未知变体
+            SessionLifecycleEvent::Creating { .. } => Ok(()),
+            // Created：定时任务域的会话就绪信号（按 session_id 精确匹配 creating
+            // 态的 job）；兼容面里同时补发待处理的重启前端事件与登记对账
             SessionLifecycleEvent::Created {
                 session_id,
                 config_id,
@@ -778,16 +789,13 @@ impl WasmPlugin for SessionPlugin {
                     "on_session_lifecycle: Created event session_id={} config_id={}",
                     session_id, config_id
                 ));
-                // 重启编排（remove + 同 id create-with-spec）的完成信号：会话就绪后
-                // 才补发前端 `session-restarted`（与内核执行器旧序一致）
                 actions::flush_pending_restart(&host, session_id);
                 task::scheduled::handle_session_created(&host, session_id, config_id);
-                // P1 双写：会话登记域镜像进入 Running（两阶段启动的第二阶段也经此）
-                session::note_status_via_host(session_id, SessionStatus::Running);
+                let _ = session::note_status(session_id, SessionStatus::Running);
+                Ok(())
             }
-            // Stopped：会话意外退出兜底——agent 的 Stop hook 没机会推送终态时，
-            // in_progress / asking 的任务行与队列项会永久卡在运行中。
-            // 不用 Stopping：PTY 尚未终止，agent 可能仍在推送最终状态。
+            // Stopped：任务域意外退出兜底（agent 的 Stop hook 没机会推送终态时，
+            // in_progress / asking 的任务行与队列项会永久卡在运行中）
             SessionLifecycleEvent::Stopped { session_id, .. } => {
                 let host = WasmHost;
                 host.log_debug(&format!(
@@ -795,66 +803,31 @@ impl WasmPlugin for SessionPlugin {
                     session_id
                 ));
                 task::state::interrupt_running_tasks_on_session_end(&host, session_id);
-                // P1 双写：会话登记域镜像进入 Stopped（自然退出与 kill 同语义）
-                session::note_status_via_host(session_id, SessionStatus::Stopped);
+                let _ = session::note_status(session_id, SessionStatus::Stopped);
+                Ok(())
             }
-            // 其余变体：`Stopping`（宿主 kill 已发起、PTY 尚未终止）时把登记域镜像
-            // 推到过渡态；本域不关心的变体保持忽略（不做模式穷举，避免与 SDK 枚举
-            // 的可扩展性约定耦合）
+            // 其余变体：`Stopping` 时把登记域记录推到过渡态；本域不关心的变体保持忽略
             other => {
                 if let SessionLifecycleEvent::Stopping { session_id, .. } = other {
-                    session::note_status_via_host(session_id, SessionStatus::Stopping);
+                    let _ = session::note_status(session_id, SessionStatus::Stopping);
                 }
+                Ok(())
             }
         }
-        Ok(())
     }
 
     /// 提交输入行回调（票 15）：把用户提交的输入当作任务记录写入本域真源
     ///
     /// 作为**纯观察通知**，任何一步失败都只降级本域（记日志返回，不向上抛错——
     /// 回调出错不影响输入本身，D7）。
+    /// 提交输入行回调（票 15；P1-b 起为兼容面）：把用户提交的输入当作任务记录
+    ///
+    /// 生产路径已改走本插件 `session-input` 互调 api（提交行重建在插件侧完成，
+    /// 直接调 [`task::state::handle_submitted_input`]）；本回调只剩宿主内核创建
+    /// 路径（测试）与旧输入通道的观察面，与 `session-input` 共享同一过滤链。
+    /// **纯观察通知**：失败只降级任务域（记日志返回，不向上抛错，D7）。
     fn on_input_submitted(event: &InputSubmittedEvent) -> anyhow::Result<()> {
-        let host = WasmHost;
-
-        // 业务侧过滤：宿主不做语义过滤（空提交同样通知），空行回车直接忽略
-        if event.text.trim().is_empty() {
-            return Ok(());
-        }
-
-        // 命令过滤（ADR-0004）：以 / 开头的提交行是 CLI 命令（/clear、/model），
-        // 不产生任务记录
-        if task::agent::is_command_input(&event.text) {
-            host.log_debug(&format!(
-                "InputSubmitted: session={} input is a command, skip task creation",
-                event.session_id
-            ));
-            return Ok(());
-        }
-
-        // 仅在完整支持自动任务的 agent 会话中把输入当作任务
-        let session_agent_name = task::state::session_agent(&host, &event.session_id);
-        if !task::agent::is_supported(session_agent_name) {
-            host.log_debug(&format!(
-                "InputSubmitted: session={} agent '{}' is not supported, skip task creation",
-                event.session_id, session_agent_name
-            ));
-            return Ok(());
-        }
-
-        // 会话已有进行中的任务则不再创建：队列调度由本插件自己 terminal_send 投递输入，
-        // 此时最新记录已置为 in_progress，依赖此检查避免自触发循环（ADR 0001）。
-        // 执行中用户的手动输入同样被忽略（单终端同时只能跑一个 prompt），但不能
-        // 静默：记日志便于排查「输入了但任务日志没有记录」类反馈
-        if task::state::has_active_task(&host, &event.session_id) {
-            host.log_info(&format!(
-                "InputSubmitted: session={} has active task, input not tracked as new task",
-                event.session_id
-            ));
-            return Ok(());
-        }
-
-        task::state::create_task_from_input(&host, &event.session_id, &event.text);
+        task::state::handle_submitted_input(&WasmHost, &event.session_id, &event.text);
         Ok(())
     }
 
@@ -1730,8 +1703,11 @@ mod tests {
                 "auth".to_string(),
                 // 票 15 任务域按 D2 能力映射补的权限位：
                 // `fs:read` / `fs:write`（Agent 集成写项目 hook）、
-                // `terminal:input`（队列下发 terminal_send）+ `terminal:observe`
-                // （输入行监听，ADR 0001）、`broadcast`（任务/模式/队列状态广播）、
+                // `terminal:input`（终端窗口键盘输入经宿主命令面
+                // `plugin_terminal_send_input` 转入本插件 `session-input`）
+                // + `terminal:observe`（输入行监听，ADR 0001；P1-b 起提交行观察
+                // 已在 `session::input_via_pty` 内自驱，宿主注册面降为兼容通道）、
+                // `broadcast`（任务/模式/队列状态广播）、
                 // `timer:schedule`（队列延迟 clear 与静默超时的周期驱动）
                 "broadcast".to_string(),
                 "fs:read".to_string(),
@@ -1743,6 +1719,11 @@ mod tests {
                 // 票 08：`session:read`（config-list 精简列表 + get 全量行）——
                 // v22 起配置面只读，`session:config` 权限已随写原语退役；
                 // 读取面是迁移读 legacy 主库的唯一通道
+                // 会话引擎下沉 P1-b：业务会话改走 host-pty 原语——
+                // `pty:spawn`（spawn/kill，高风险面）+ `pty:io`（write/resize/
+                // ring_fetch/is_running 数据面），会话真源切换的必要能力
+                "pty:spawn".to_string(),
+                "pty:io".to_string(),
                 "session:read".to_string(),
                 // 票 09/10：host-session.create-with-spec 与四项会话动作原语
                 "session:write".to_string(),
@@ -1756,6 +1737,8 @@ mod tests {
                 "timer:schedule".to_string(),
                 // 票 17：任务队列弹窗的终端工具栏入口（`ui.registerTerminalToolbarItem`
                 // 与 `ui.registerInputExtension` 同权限门），纯前端贡献面
+                // 会话引擎下沉 P1-b：`pty:spawn`/`pty:io` 按词汇表 apiMap 归位
+                // （manifest-gen RUST_PERMISSION_RULES 与 apiMap 逐字对应）
                 // 清单顺序 = manifest-gen 的 ASCII 升序口径（release 构建会重排）
                 "ui:input".to_string(),
                 "ui:settings".to_string(),
@@ -1774,13 +1757,13 @@ mod tests {
         assert_eq!(actual, expected, "manifest api 必须与 trait 声明一致");
         assert_eq!(
             manifest.api.len(),
-            29,
+            31,
             "pairing 八项 + trust 两项（list/revoke）+ consent 一项（decide）+ config 三项 + \
              session-create 一项（票 09）+ 会话动作四项（票 10 restart/remove/rename/resize）\
              + 票 11 annotate + devices-connect-list 两项 + 票 02 quick-actions-import 一项 + \
              2026-09-22 认证记录下沉五项（auth-records-import / devices-list / history-list / \
              connection-touch / connection-close）+ 会话引擎下沉 P1 登记域读取面两项 \
-             （session-list / session-get）"
+             （session-list / session-get）+ P1-b 停止/输入两项（session-close / session-input）"
         );
     }
 
