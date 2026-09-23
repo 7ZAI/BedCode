@@ -217,6 +217,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **i18n tables pruned**: 149 unused keys removed from both `zh-CN` and `en` (the error-code block, the retired `common.nav.*` / `common.status.*` / `common.time.*` pools, the device/session/peer notification block, `settings.session.*` and the old connection/notification/actions/shortcuts settings groups)
 - **Host shell polish**: the default landing route is `/plugins` (the server page it pointed at has no sidebar entry and, per the "server is always on" decision, offers start/stop controls users should not need); the `toolProviders` / `fileHandlers` contribution chips are removed because the host never implemented a consumer for them; and the `plugins/scheduler` vitest include path for a plugin that no longer exists is dropped
 
+#### Host-PTY output broadcast declaration — `hostBroadcastSessionId` opt-in read-side mapping (desktop, session engine downsink ticket 05)
+- **插件 PTY 输出默认私有，宿主广播需按 spawn 声明 opt-in**：`host-pty.spawn` 的 config-json 新增可选字段 `hostBroadcastSessionId`（= 本句柄服务的会话 id；字段级追加，不 bump ABI）。给出即声明「宿主可只读订阅本句柄输出」；缺省 = **任何宿主广播面都读不到**（反向锁是行为用例，不是注释）。宿主据此在**既有句柄注册表**内维护只读的「会话 id → pty 句柄」映射（不新增第二份表；登记随 spawn、摘除随终态，复用句柄生命周期单点），内部访问器 `broadcast_handle_for_session` 是唯一读出口
+- **失败可见**：空串 / 他属主撞 id 在 spawn 显性拒绝（不静默当作未声明）；同属主「同 id 重建」（重启路径）允许并存、映射取最新句柄
+- **多消费者并发拉取语义写进契约（票 07 的输入）**：同一句柄的环可被属主插件 `ring-fetch` 与宿主广播面（直读同进程 `PtyRing`）同时拉取——游标各调用方自持、拉取是纯读，淘汰由产出量全局驱动；宿主直读不受 `PLUGIN_PTY_RING_FETCH_MAX_BYTES`（WASM 边界拷贝限额）约束
+- `com.bedcode.terminal-session` 与本票同批声明（`launch.rs::spawn_session` 每次 spawn 带本字段）——移动端输出面（票 06）据此直读恢复。ADR 0022 v15（含 host-pty 第 2 条措辞修订「不注册业务输出总线 → 不默认注册；按 spawn 声明 opt-in 只读订阅」）
+
 ### Fixes
 
 #### Desktop

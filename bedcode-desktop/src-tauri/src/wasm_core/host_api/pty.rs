@@ -19,6 +19,24 @@
 //! 以 `truncated` 上报缺口），背压绝不回传到读线程；**没有 push 回调**（wasmtime
 //! Store 不可重入，异步唤醒插件在语义上不成立）。
 //!
+//! **宿主广播声明（会话语义下沉票 05，P3 形态 B）**：业务会话也是插件 PTY，
+//! 「输出能不能被宿主 server 读走」必须是插件自己的决定——**默认私有**。spawn 的
+//! config-json 可选字段 `hostBroadcastSessionId`（= 本句柄服务的会话 id）是 opt-in
+//! 声明，宿主据此在**同一张注册表**（[`PTYS`]）内维护只读的「会话 id → pty 句柄」
+//! 映射（不新增第二份表；登记随 spawn、摘除随终态，复用句柄生命周期单点）。
+//! 宿主 server 直读同进程 `PtyRing`，零跨 WASM 边界；映射访问器
+//! [`broadcast_handle_for_session`] 是**本模块唯一**读出口——未声明的句柄任何宿主
+//! 广播面都得不到（反向锁：这是行为用例，不是注释）。同属主「同 id 重建」（重启）
+//! 允许并存并取最新句柄（`registered_seq`）；与他属主撞 id 在 spawn 显性拒绝。
+//!
+//! **多消费者并发拉取语义（票 07 的输入，写死在契约里）**：同一句柄的环可被属主
+//! 插件（`ring-fetch`）与宿主广播面（直读）**同时**拉取。游标由各调用方自持，
+//! [`PtyRing::fetch`] 是纯读（不消费、不推进全局状态）——两个消费的游标互不知晓、
+//! 互不影响；淘汰由**产出量**驱动（环满即淘汰最旧），任一消费者的读取都不释放空间，
+//! 各自落后于驻留起点都会 `truncated`。环容量必须覆盖最慢消费者的滞后（07 实测），
+//! 宿主广播面的读取**不受** [`PLUGIN_PTY_RING_FETCH_MAX_BYTES`] 约束（那是 WASM
+//! 边界拷贝限额；宿主直读无此成本）。
+//!
 //! 票 02 定稿契约并贯通 `spawn` / `ring-fetch`，票 03 补齐数据面 `write` /
 //! `resize` / `is-running`，票 04 补齐生命面：`kill` + `pty:exit` 事件（属主私有 topic）+
 //! 停用回收，票 05 落地限额与背压：每插件在册条数配额、插件声明的环容量
@@ -33,18 +51,19 @@
 use bedcode_plugin_api::host::bus::owned_topic;
 
 use crate::enums::PtySessionStatus;
-use crate::wasm_core::bus::MessageBus;
-use crate::wasm_core::manager::runtime::{block_on_async, WasmHostContext};
-use crate::wasm_core::permission::{PERMISSION_PTY_IO, PERMISSION_PTY_SPAWN};
 use crate::pty::{PtyRing, PtyRingFetch, PtyRingSink, PtySession, PtyTerminated};
 use crate::system::config::AppConfig;
 use crate::system::constants::{
     PLUGIN_PTY_MAX_SESSIONS_PER_PLUGIN, PLUGIN_PTY_MAX_WRITE_BYTES, PLUGIN_PTY_RING_BYTES,
     PLUGIN_PTY_RING_FETCH_MAX_BYTES, PLUGIN_PTY_RING_MAX_BYTES,
 };
+use crate::wasm_core::bus::MessageBus;
+use crate::wasm_core::manager::runtime::{block_on_async, WasmHostContext};
+use crate::wasm_core::permission::{PERMISSION_PTY_IO, PERMISSION_PTY_SPAWN};
 use portable_pty::CommandBuilder;
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 
 /// 非属主操作的统一拒绝文案（属主仲裁，同 mdns / ws 先例）
@@ -72,7 +91,15 @@ struct PtyEntry {
     /// 进程存活性的持有者：`PtySession` 最后一次引用被 drop 即杀子进程
     session: PtySession,
     ring: Arc<Mutex<PtyRing>>,
+    /// 宿主广播声明（spawn config 的 `hostBroadcastSessionId`）：`None` = 未声明，
+    /// 任何宿主广播面都读不到（安全边界在缺省侧，会话语义下沉票 05）
+    broadcast_session_id: Option<String>,
+    /// 登记序（全局单调递增）：同属主「同 id 重建」时映射取**最新**一条
+    registered_seq: u64,
 }
+
+/// 在册登记序计数器（`registered_seq` 的唯一来源，全局单调）
+static REGISTER_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// 全局插件 PTY 注册表（句柄 → 条目；跨插件按 owner 隔离）
 static PTYS: LazyLock<Mutex<HashMap<String, PtyEntry>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -137,6 +164,11 @@ struct SpawnConfig {
     /// 超 [`PLUGIN_PTY_RING_MAX_BYTES`] 直接拒绝（宿主仲裁，见 `resolve_ring_bytes`）
     #[serde(default)]
     ring_bytes: Option<u64>,
+    /// 宿主广播声明（会话语义下沉票 05）：本句柄服务的会话 id（opt-in——宿主可只读
+    /// 订阅本句柄输出）。缺省 = 默认私有，任何宿主广播面都读不到；空串拒绝。
+    /// 同属主重建允许并存（取最新），他属主撞 id 拒绝。
+    #[serde(default)]
+    host_broadcast_session_id: Option<String>,
 }
 
 /// 仲裁插件声明的输出环容量：`None` → 默认值；`Some(0)` 或超上限 → `Err`
@@ -155,6 +187,18 @@ fn resolve_ring_bytes(declared: Option<u64>) -> Result<u64, String> {
         Some(bytes) => bytes,
     };
     Ok(capacity)
+}
+
+/// 当前在册声明了该会话 id 的属主（`hostBroadcastSessionId` 跨属主唯一性的判据）
+///
+/// 只做查表；冲突仲裁分两层：本函数是「副作用之前」的早失败（顺序路径），
+/// 登记处同一把锁内的复查是并发竞态下的权威判据。
+fn declared_session_owner(session_id: &str) -> Option<String> {
+    PTYS.lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .find(|(_, entry)| entry.broadcast_session_id.as_deref() == Some(session_id))
+        .map(|(_, entry)| entry.owner.clone())
 }
 
 // ==================== 创建域（pty:spawn） ====================
@@ -181,6 +225,24 @@ pub(crate) fn pty_spawn(host_ctx: &WasmHostContext, plugin_id: &str, config_json
             "pty spawn: too many ptys for this plugin ({in_use} in use, limit {quota})"
         ));
     }
+
+    // 宿主广播声明（票 05）——空串显性拒绝（不静默当作未声明）；跨属主撞 id 在此
+    // 早失败（副作用之前判定，不给冲突场景留下开好的 fd / 起动的进程；并发竞态下的
+    // 权威判据在登记处的同一把锁内，见下）
+    let raw_broadcast = config.host_broadcast_session_id.as_deref().map(str::trim);
+    if let Some(id) = raw_broadcast {
+        if id.is_empty() {
+            return Err("pty spawn: hostBroadcastSessionId must not be empty".to_string());
+        }
+        if let Some(owner) = declared_session_owner(id) {
+            if owner != *plugin_id {
+                return Err(format!(
+                    "pty spawn: session id {id} already declared by another plugin ({owner})"
+                ));
+            }
+        }
+    }
+    let broadcast_session_id = raw_broadcast.map(str::to_string);
 
     // 裸 argv：宿主不做 shell 解析、不做危险字符校验（参数数组 exec 天然免注入）
     let mut builder = CommandBuilder::new(command);
@@ -222,6 +284,8 @@ pub(crate) fn pty_spawn(host_ctx: &WasmHostContext, plugin_id: &str, config_json
             owner: plugin_id.to_string(),
             session,
             ring,
+            broadcast_session_id,
+            registered_seq: REGISTER_SEQ.fetch_add(1, Ordering::Relaxed),
         },
     );
     // 退出监听在登记之后起动：保证「摘除 + 发布」时句柄必已在册
@@ -491,6 +555,48 @@ pub(crate) fn kill_all_registered(bus: &MessageBus) -> usize {
 /// 「引擎事实：存活 PTY 计数 > 0」（开放点 4 / spec 验收项）。
 pub(crate) fn live_count() -> usize {
     PTYS.lock().unwrap_or_else(|e| e.into_inner()).len()
+}
+
+// ==================== 宿主广播面访问器（会话语义下沉票 05） ====================
+
+/// 宿主广播面可读句柄（「会话 id → pty 句柄」只读映射的访问结果）
+///
+/// **只读边界**：宿主的 WS/HTTP 广播面经本结构直读同进程 [`PtyRing`]（按游标拉取）
+/// 与存活快照 / 终态订阅——只用于**读输出 / 观察生命周期**；写输入、改尺寸、终止仍走
+/// 属主插件（`host-pty` 原语 / 会话网关），不经本句柄（那些操作的权限判据挂在插件侧）。
+pub(crate) struct BroadcastHandle {
+    /// 引擎句柄（日志 / `pty:exit` 事件关联）
+    pub pty_id: String,
+    /// 属主插件（审计 / 事件 topic 关联）
+    pub owner: String,
+    /// 输出环（唯一读出口；[`PtyRing::fetch`] 纯读，游标调用方自持）
+    pub ring: Arc<Mutex<PtyRing>>,
+    /// 引擎会话（存活快照 [`PtySession::is_running`] / 终态订阅
+    /// [`PtySession::subscribe_lifecycle`] 用）
+    pub session: PtySession,
+}
+
+/// 按会话 id 取宿主广播句柄（只读映射访问器；**未声明 / 未在册 → `None`**）
+///
+/// - **反向锁**：`hostBroadcastSessionId` 未声明的句柄**任何**宿主广播面都得不到
+///   （行为用例锁定，见 tests）——这是安全边界，不是注释；
+/// - **生命周期单点**：登记随 spawn、摘除随终态，复用 [`PTYS`] 同一条生命周期，
+///   不新增第二份登记表（结构锁见 tests）；
+/// - **同属主「同 id 重建」（重启路径）**：在册可能同存新旧两条，取**最新**
+///   （登记序最大）一条；重启前的旧句柄随其终态从映射消失；
+/// - **跨属主撞 id 在 spawn 已拒绝**，故此处无需再做归属过滤。
+pub(crate) fn broadcast_handle_for_session(session_id: &str) -> Option<BroadcastHandle> {
+    let table = PTYS.lock().unwrap_or_else(|e| e.into_inner());
+    table
+        .iter()
+        .filter(|(_, entry)| entry.broadcast_session_id.as_deref() == Some(session_id))
+        .max_by_key(|(_, entry)| entry.registered_seq)
+        .map(|(pty_id, entry)| BroadcastHandle {
+            pty_id: pty_id.clone(),
+            owner: entry.owner.clone(),
+            ring: Arc::clone(&entry.ring),
+            session: entry.session.clone(),
+        })
 }
 
 /// 按游标拉取输出历史（spec D3）

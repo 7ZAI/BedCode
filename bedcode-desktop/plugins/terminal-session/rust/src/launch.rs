@@ -776,6 +776,10 @@ pub fn spawn_session(
     if let Some(rows) = spec.rows {
         builder = builder.rows(rows);
     }
+    // 宿主广播声明（会话语义下沉票 05）：本会话输出允许宿主 server 只读订阅——
+    // 「业务会话也是插件 PTY，能不能被宿主读走由插件决定」的落地。宿主据此登记
+    // 「会话 id → pty 句柄」只读映射；移动端输出面（票 06）经它直读同进程环。
+    builder = builder.host_broadcast_session_id(session_id);
     let pty_id = WasmHost
         .pty_spawn(&builder.to_json())
         .map_err(|e| format!("host-pty.spawn failed: {}", e.message))?;

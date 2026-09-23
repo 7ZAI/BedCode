@@ -595,7 +595,7 @@ P0–P5 是**阶段划分与裁决记录**，保留作为理由；开工请以�
 | 02 | prefactor：对外 wire 类型与终端转义表迁出内核会话目录 | — | done（2026-09-24） |
 | 03 | 终端输入修饰/提交行观察面退役裁定（P2 残段） | 01 | ready-for-agent |
 | 04 | 连接清单迁独立原语（不随会话 interface 一起死） | — | done（2026-09-24 落成 `host-connection` + `connection:read`） |
-| 05 | PTY 引擎级宿主广播声明 + 会话→句柄只读映射 | — | ready-for-agent |
+| 05 | PTY 引擎级宿主广播声明 + 会话→句柄只读映射 | — | done（2026-09-24 landed，字段定名 `hostBroadcastSessionId`） |
 | 06 | 移动端输出通道与历史直读引擎游标环（M6/M7 收口） | 05 | ready-for-agent |
 | 07 | 多端并发输出实测与环限额裁决（不许估算） | 06 | ready-for-human |
 | 08 | 宿主会话命令面与前端会话 API 注销 | 02 | ready-for-agent |
@@ -671,11 +671,16 @@ P0–P5 是**阶段划分与裁决记录**，保留作为理由；开工请以�
 
 `spawn` / `write` / `resize` / `kill` / `ring-fetch` / `is-running`（6 函数）+ `ring-fetch-result` record。
 
-**形态 B 追加的引擎级声明（子票）**：`spawn` 的 config-json 增加可选字段（暂名 `hostBroadcast`，实施时定名），
-表示「本句柄的输出允许宿主 server 只读订阅」（插件私有 PTY 的 opt-in，非默认）。宿主据此在**引擎侧**维护
-`session-id → pty 句柄`的只读映射，供 WS 终端通道直读 `PtyRing`（零跨 WASM 边界）。
-该映射纯引擎事实（无产品语义），符合裁剪线；但需同步修订 ADR 0022 host-pty 第 2 条「不注册业务输出总线」的措辞
-（改为「不默认注册；按 spawn 声明 opt-in 只读订阅」）。**追加字段不 bump ABI**（函数级/字段级追加惯例，v19 先例）。
+**形态 B 追加的引擎级声明（子票，已 landed 2026-09-24 / 票 05）**：`spawn` 的
+config-json 增加可选字段（实施定名 **`hostBroadcastSessionId`** = 本句柄服务的会话
+id；spec 暂名 `hostBroadcast` 弃用——布尔名配字符串值会误导，字段同时承担
+「opt-in 声明」与「映射键」两个角色），表示「本句柄的输出允许宿主 server 只读订阅」
+（插件私有 PTY 的 opt-in，非默认）。宿主据此在**既有句柄注册表**内维护
+`session-id → pty 句柄`的只读映射（**不新增第二份表**：登记随 spawn、摘除随终态，
+复用生命周期单点），供 WS 终端通道直读 `PtyRing`（零跨 WASM 边界）。
+该映射纯引擎事实（无产品语义），符合裁剪线；ADR 0022 host-pty 第 2 条措辞已随
+同批修订（「不注册业务输出总线 → 不默认注册；按 spawn 声明 opt-in 只读订阅」）。
+**追加字段不 bump ABI**（函数级/字段级追加惯例，v19 先例）。
 
 ### 4.3 移动端受损面（**用户说不用管 → 记账，不改移动端**）
 

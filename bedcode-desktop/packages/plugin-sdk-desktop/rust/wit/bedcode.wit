@@ -627,7 +627,9 @@ interface host-auth {
 /// **与宿主业务会话线的边界（写死，互不交叉）**：`host-terminal` / `host-session` /
 /// `terminal-hooks` 服务宿主业务终端会话（会话配置、SessionManager 生命周期、前端
 /// UI）；本接口只服务**插件私有 PTY**——不挂 SessionManager、不进业务会话注册表、
-/// 不注册业务输出总线、不参与业务会话事件链。共享同一宿主 PTY 引擎，互不可见。
+/// **不默认注册业务输出总线**（插件 PTY 的字节默认私有；宿主 server 能否只读订阅由
+/// spawn 声明 opt-in，见 `spawn` 的 `hostBroadcastSessionId`）、不参与业务会话事件链。
+/// 共享同一宿主 PTY 引擎，互不可见。
 ///
 /// 约定与红线：
 /// - **属主隔离**：句柄 `pty-<uuid>` 仅创建者插件可调，他人 → `not owner of pty handle`；
@@ -635,6 +637,19 @@ interface host-auth {
 /// - **输出纯拉取**（无 push 回调，spec D3）：宿主为每个 PTY 维护有界环形缓冲，插件按
 ///   自己的节奏以游标拉取；慢插件只损失自己的历史（淘汰最旧 + `truncated`），
 ///   背压绝不回传到 PTY 读取端
+/// - **宿主广播声明（票 05，会话语义下沉 P3 形态 B）**：业务会话也是插件 PTY，
+///   「输出能不能被宿主 server 读走」必须是插件自己的决定——**默认私有**，未声明的
+///   句柄任何宿主广播面都读不到（这是安全边界，不是默认开）。需要移动端输出面时在
+///   `spawn` 的 config-json 里给出 `hostBroadcastSessionId`（= 本句柄服务的会话 id，
+///   camelCase），宿主据此在引擎侧维护只读的「会话 id → pty 句柄」映射，宿主 server
+///   直读同进程 `PtyRing`（零跨 WASM 边界）；映射随句柄生命周期登记与摘除（在册即
+///   可读、终态即不可读），同属主「同 id 重建」（重启）取最新句柄，与他属主撞 id 在
+///   spawn 显性拒绝
+/// - **多消费者并发拉取（07 的输入）**：同一句柄的环可被属主插件（`ring-fetch`）与
+///   宿主广播面（直读）**同时**拉取——游标由各调用方自持，拉取本身是纯读
+///   （不消费、不推进全局状态），互不干扰；淘汰由**产出量**驱动（环满即淘汰最旧），
+///   任一消费者的读取都不释放空间，慢消费者落后于驻留起点即 `truncated`（环容量需
+///   覆盖最慢消费者的滞后）
 /// - **生命周期事件**：仅 `<owner>::pty:exit` 一条（host-bus 订阅，属主私有命名空间，
 ///   票 05：跨属主订阅被宿主拒绝）。payload `{ ptyId, reason, exitCode? }`（camelCase），
 ///   `reason = "stopped" | "killed" | "error"`。**须在 activate 期订阅**：宿主不缓冲、
@@ -659,11 +674,16 @@ interface host-pty {
     /// 创建裸 PTY：成功返回句柄 `pty-<uuid>` 并登记属主；失败只回错误且
     /// **不发布任何事件**（无句柄可寻址）。
     /// config-json（camelCase，纯引擎参数，宿主不做 shell 解析）：
-    /// `{ command, args?, env?, workingDir?, cols?, rows?, ringBytes? }`（参数数组 exec
-    /// 天然免注入；`env` 为追加进继承环境的键值；尺寸缺省取宿主终端配置
+    /// `{ command, args?, env?, workingDir?, cols?, rows?, ringBytes?, hostBroadcastSessionId? }`
+    /// （参数数组 exec 天然免注入；`env` 为追加进继承环境的键值；尺寸缺省取宿主终端配置
     /// `terminal.default_cols` / `default_rows`，与业务线同源；`ringBytes` 是本条 PTY
     /// 的输出环容量，缺省取宿主默认，超宿主上限或超出每插件在册条数上限一律 `Err`
-    /// ——配额类失败可见，不静默降级也不静默淘汰既有句柄）
+    /// ——配额类失败可见，不静默降级也不静默淘汰既有句柄）。
+    /// `hostBroadcastSessionId`（可选）＝ 本句柄服务的会话 id，给出即表示**宿主可只读
+    /// 订阅本句柄输出**（opt-in；缺省 = 默认私有，任何宿主广播面都读不到）。宿主据此
+    /// 在引擎侧登记「会话 id → pty 句柄」只读映射：同属主重建取最新句柄，他属主撞 id
+    /// 显性拒绝；映射随句柄终态摘除（无第二份登记表介入生命周期）。空串或非唯一声明
+    /// 一律 `Err`（失败可见，不静默当作未声明）
     spawn: func(config-json: string) -> result<string, string>;
     /// 写入输入字节（分块语义宿主内建；超单次上限 → Err）
     write: func(pty-id: string, data: list<u8>) -> result<_, string>;
@@ -676,6 +696,10 @@ interface host-pty {
     /// - `Ok(Some)`：自游标起的字节（单次不超 `max-bytes`），`next-offset` 续拉不重复
     /// - `truncated = true`：`from-offset` 落后于环驻留起点，返回的是现存最早段
     /// - `Err`：句柄不存在 / 非属主 / 权限缺失
+    ///
+    /// **多消费者**：属主插件与宿主广播面可同时对本句柄拉取——游标各自持有、互不干扰
+    /// （`from-offset` 只描述本次拉取的窗口，拉取不消费不改变全局偏移）；淘汰按产出量
+    /// 全局计，任一消费者的读取都不为他人保留历史，各自落后于驻留起点都会 `truncated`。
     ring-fetch: func(pty-id: string, from-offset: u64, max-bytes: u32) -> result<option<ring-fetch-result>, string>;
     /// 进程是否仍在运行（丢失 `pty:exit` 事件后的自愈快照查询）
     is-running: func(pty-id: string) -> result<bool, string>;
@@ -859,7 +883,8 @@ interface manifest {
 ///   持久化），纯增量，v14 插件不受影响
 /// - v16：host-pty 插件私有伪终端原语（spawn/write/resize/kill/ring-fetch/
 ///   is-running 六函数 + `<owner>::pty:exit` 事件），纯增量新接口，
-///   v15 及更早插件不受影响
+///   v15 及更早插件不受影响。**2026-09-24 票 05**：spawn config-json 追加可选字段
+///   `hostBroadcastSessionId`（宿主只读订阅声明，字段级追加不 bump——同 v19 惯例）
 /// - v17：认证策略导出 auth-policy（verify-device-token，desktop 独有——认证中心
 ///   能力，宿主 server 中间件验签后取策略），纯增量新接口，v16 及更早插件不受影响
 /// - v18：host-auth 认证记录面（trusted-devices-list / trusted-device-revoke /

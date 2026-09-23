@@ -105,7 +105,7 @@ WS 传输是「离开宿主就无法实现」的能力（移动端链接、TLS/�
 裁决要点：
 
 1. **裁剪线判定（D1）**：`spawn` 只收裸引擎参数 `{command, args?, env?, workingDir?, cols?, rows?, ringBytes?}`，参数数组 exec 天然免注入。**明确不做**：`bash -lic` / PowerShell `-Command` / CMD `/K` 包装、WSL 路径转换、危险字符校验、默认 shell 探测、`name` 标识、特殊键/组合键 API——全部是宿主业务会话线或插件产品的语义（插件要 shell 包装，自己把 `sh -c` 放进 `args`）。
-2. **与三条既有边界的划界**：`host-process`（非交互一次性 run/kill，无 TTY 行为）是它的补集；`host-terminal` + `terminal-hooks` 与 `host-session` 服务**宿主业务会话线**（会话配置、SessionManager 生命周期、前端 UI）。三者与本接口互不转发。插件 PTY 不进 `SessionComponents`、不注册 `GlobalOutputManager`、不参与业务会话事件链——共享同一 PTY 引擎（`PtySession`），但两张注册表、两套生命周期。
+2. **与三条既有边界的划界**：`host-process`（非交互一次性 run/kill，无 TTY 行为）是它的补集；`host-terminal` + `terminal-hooks` 与 `host-session` 服务**宿主业务会话线**（会话配置、SessionManager 生命周期、前端 UI）。三者与本接口互不转发。插件 PTY 不进 `SessionComponents`、**不默认注册 `GlobalOutputManager`**（业务会话迁插件后，宿主对插件 PTY 输出的广播按 spawn 的 `hostBroadcastSessionId` 声明 **opt-in 只读订阅**，见 v15——未声明的句柄任何宿主广播面都读不到，安全边界在缺省侧）、不参与业务会话事件链——共享同一 PTY 引擎（`PtySession`），但两张注册表、两套生命周期。
 3. **输出面是纯拉取，不做 push 回调（D3）**：每句柄一条有界环 `PtyRing`，读线程单生产者写入、插件按自己的游标 `ring-fetch`。**否决 push（events-pty 可选导出）两条理由**：① 2026-09-17 `pty-pull-subscribers` 的教训——推送会把背压踢回生产端，慢消费者只能损失自己；② wasmtime Store 不可重入，宿主无法异步唤醒插件，push 在语义上等于「多一层回调的轮询」。故 `truncated + next-offset` 的 resync 语义即契约本体，缺口如实上报、不静默补洞。
 4. **属主隔离 + 停用回收（D2）**：全部函数先查属主（`not owner of pty handle`，同 mdns / ws 先例）；插件 deactivate 时宿主 `purge_for_plugin` kill 并摘除其全部 PTY、逐条补发 `pty:exit.<owner>`（reason=killed），只碰本人。
 5. **终止与摘除的单一发布者不变量（D4）**：`kill()` 只发起终止；句柄摘除与事件发布统一由 spawn 时起动的退出监听在「读线程 EOF + 子进程回收」齐备（`PtyTerminationGate`）时完成，且只有从注册表 `remove` 成功的一方发布 → 自然退出 / 主动 kill / 停用回收三条路径交汇时每条 PTY 恰好一条 `pty:exit`。事件面只有这一条（spawn 成败在返回值、错误直接上抛）。
@@ -181,13 +181,14 @@ spec：`.scratch/2026-09-19-terminal-session-plugin/spec.md`（D2–D7），实�
    宿主留的只有物理上不可下沉的部分（PTY 引擎 + `host-pty` 六原语）。这比 v19 批次的
    「映射决策归插件、执行留内核」更进一格——**执行也归插件**，因为执行所需的原语
    （`host-pty.spawn/write/kill/resize/ring-fetch`）本身已是引擎级。
-2. **`host-pty` 第 2 条的划界现状更正（重要，非措辞修订）**：该条写的「两张注册表、两套生命周期」
+2. **`host-pty` 第 2 条的划界现状更正（重要）**：该条写的「两张注册表、两套生命周期」
    在业务会话侧已经**合并为一张**——业务会话就是一个 `host-pty` 句柄，内核 `SessionComponents`
    与 `GlobalOutputManager` 对插件会话不再有内容（这正是移动端 M6/M7 受损的根因，P3 形态 B
-   改由宿主 server 直读 `PtyRing` 恢复）。该条里"`host-session` 服务宿主业务会话线"的三方划界
-   随之失效：`host-session` 已进入退役通道。注意**这不等于**该条第 2 点预留的措辞修订
-   （「不注册业务输出总线 → 不默认注册；按 spawn 声明 opt-in 只读订阅」）——那句要等
-   `host-pty` 的宿主广播声明（P3 子票）真的落地才改，本批不预支。
+   改由宿主 server 直读 `PtyRing` 恢复）。**措辞修订已随 v15 落地**（本条第 2 点「不注册
+   GlobalOutputManager」已改为「不默认注册；按 spawn 声明 opt-in 只读订阅」）——P1-b 批次
+   只做事实更正不预支措辞，票 05 把声明字段 `hostBroadcastSessionId` 落到 WIT/SDK/宿主/
+   插件四端时同步完成。该条里"`host-session` 服务宿主业务会话线"的三方划界随之失效：
+   `host-session` 已进入退役通道。
 3. **配额是自我声明的静态事实**（`ptyQuota`，前置 B）：`spawn` 判据按属主声明值，加载期区间仲裁
    越界即拒 manifest，运行期不夹取。terminal-session 声明 8 = 退役前内核上限，**不借下沉放大**。
 4. **输入面不做「宿主绕一圈」**：任务队列下发曾在插件内调 `host.terminal_send` → 宿主查内核属主
@@ -404,3 +405,21 @@ host-business-decarriage 收尾批次（`.scratch/2026-09-20-host-business-decar
   ④ 返回字节逐字不变（六字段 camelCase、注册表存储序、连 `session error: …` 错误前缀都保留——
   改文案属线协议变更，另案）。旧别名随 `host-session` interface 退役（票 10）删除。
   实施与验收见 `.scratch/2026-09-23-session-engine-downsink/issues/04-connections-list-own-primitive.md`。
+
+- **2026-09-24 v15（当前）**：**`host-pty` 宿主广播声明 `hostBroadcastSessionId`（票 05，
+  ABI 不变、字段级追加不 bump；移动端零改动）**。会话语义下沉 P3 形态 B 的引擎侧前置。
+  ① **语义 = opt-in 只读订阅**：spawn config-json 可选字段 `hostBroadcastSessionId`（=
+  本句柄服务的会话 id），给出即声明「宿主 server 可只读订阅本句柄输出」，宿主据此在
+  **既有句柄注册表**（`host_api/pty.rs` 的 `PTYS`）内登记只读的「会话 id → pty 句柄」映射
+  （**不新增第二份表**；登记随 spawn、摘除随终态，复用句柄生命周期单点）。未声明的句柄
+  **任何宿主广播面都读不到**（反向锁是行为用例，见票 05 验收）。② **同属主「同 id 重建」
+  （重启路径）取最新句柄**（登记序 `registered_seq` 最大）；他属主撞 id 在 spawn 显性拒绝
+  （失败可见，不静默当作未声明；空串同样拒绝）。③ **多消费者并发拉取语义写进契约为 07
+  的输入**：同一句柄的环可被属主插件（`ring-fetch`）与宿主广播面（直读同进程 `PtyRing`）
+  同时拉取——游标各调用方自持、`fetch` 是纯读（不消费不推进全局状态）、淘汰由**产出量**
+  全局驱动，任一消费者的读取都不释放空间，慢消费者落后即 `truncated`。宿主直读**不受**
+  `PLUGIN_PTY_RING_FETCH_MAX_BYTES` 约束（那是 WASM 边界拷贝限额）。④ 消费方
+  `com.bedcode.terminal-session` 与本票同批声明（`launch.rs::spawn_session` 每次 spawn
+  带 `hostBroadcastSessionId = session_id`）——移动端输出面（票 06）据此直读恢复。
+  ⑤ 本票同时完成「第 2 条措辞修订」的预留项（见上「会话真源下沉」节第 2 条）。实施与
+  验收见 `.scratch/2026-09-23-session-engine-downsink/issues/05-host-pty-broadcast-declaration.md`。

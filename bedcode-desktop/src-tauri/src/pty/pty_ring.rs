@@ -490,4 +490,33 @@ mod tests {
         assert_eq!((min, max), (32, 64), "字节容量 32 生效：只驻留最后两块");
         assert_eq!(ring.chunk_count(), 2, "块数远低于上限，条目维度不参与淘汰");
     }
+
+    /// C-016 多消费者：一个消费者的读取不释放空间、不影响他人游标（票 05 契约，
+    /// 07 的输入）
+    ///
+    /// `fetch` 是纯读（不消费、不推进全局状态），淘汰由**产出量**驱动（环满即淘汰
+    /// 最旧）——快消费者读完不改变慢消费者的驻留窗口：慢消费者（游标未动）落后即
+    /// `truncated`，快消费者按自己游标续拉不受影响。
+    #[test]
+    fn reads_by_one_consumer_do_not_extend_another_consumers_window() {
+        let mut ring = ring_with_capacity(16);
+        ring.push(&payload(b'A', 8));
+        let fast = ring.fetch(0, 1024).next_offset; // 快消费者读走全部，自持游标 = 8
+        assert_eq!(fast, 8);
+
+        // 快消费者的读取不为慢消费者保留空间：继续产出溢过容量，A 被淘汰
+        ring.push(&payload(b'B', 8));
+        ring.push(&payload(b'C', 8)); // 24 > 16 → 淘汰 A；驻留 [8,24)
+
+        let slow = ring.fetch(0, 1024);
+        assert!(slow.truncated, "慢消费者（游标 0 未动）落后即报缺口——读取不共享窗口");
+        assert_eq!(slow.data, [payload(b'B', 8), payload(b'C', 8)].concat());
+        assert_eq!(slow.next_offset, 24);
+
+        // 快消费者以自己游标续拉：不因慢消费者落后而受影响，也不重复
+        let fast_rest = ring.fetch(fast, 1024);
+        assert!(!fast_rest.truncated, "快消费者游标仍在驻留区间内");
+        assert_eq!(fast_rest.data, [payload(b'B', 8), payload(b'C', 8)].concat());
+        assert_eq!(fast_rest.next_offset, 24);
+    }
 }
