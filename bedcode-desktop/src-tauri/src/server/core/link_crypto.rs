@@ -28,11 +28,30 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
+use crate::crypto::provider::{
+    AeadProvider, KdfProvider, KeyAgreementProvider, AEAD_AES_256_GCM, KDF_HKDF_SHA256, KEY_AGREEMENT_X25519,
+};
+use crate::crypto::registry::{resolve_aead, resolve_kdf, resolve_key_agreement};
 use crate::db::Database;
 use crate::server::core::filter::{
     Direction, FilterContext, TrafficChannel, TrafficFilter, TrafficFilterChain, Verdict,
 };
 use crate::system::error::{AppError, Result};
+
+// ==================== 引擎注册表抽象（票 02：WS/HTTP 只留加密抽象层） ====================
+// 生产运行时路径的算法调用一律经 crypto 引擎注册表按名解析，模块不再直接依赖具体
+// 算法实现。先解析为模块级 lazy 引用，避免逐帧重复查表。
+// 数据面固定选 AES-256-GCM / HKDF-SHA256 / X25519（与移动端线协议金样一致）；
+// 协商套件参数化（票 05）将把这里涉及的算法名提升为可注入。
+/// 数据面 AEAD：AES-256-GCM（应用内兔取模块级引用，避免逐帧查注册表）
+static DATA_AEAD: LazyLock<&'static dyn AeadProvider> =
+    LazyLock::new(|| resolve_aead(AEAD_AES_256_GCM).expect("crypto engine 必须注册 aes-256-gcm"));
+/// 数据面 KDF：HKDF-SHA256
+static DATA_KDF: LazyLock<&'static dyn KdfProvider> =
+    LazyLock::new(|| resolve_kdf(KDF_HKDF_SHA256).expect("crypto engine 必须注册 hkdf-sha256"));
+/// 数据面密钥交换：X25519（HTTP 入站 ECDH 共享密钥）
+static DATA_ECDH: LazyLock<&'static dyn KeyAgreementProvider> =
+    LazyLock::new(|| resolve_key_agreement(KEY_AGREEMENT_X25519).expect("crypto engine 必须注册 x25519"));
 
 // ==================== 协议核心再导出（issue 09 共享 crate） ====================
 // 字节级协议面已抽至 packages/link-crypto（桌面 server 与移动端 event WS
@@ -310,8 +329,8 @@ pub struct HttpTrafficKeys {
 /// info 区分方向（request ≠ response，单向泄露不波及另一向）。
 pub fn derive_http_traffic_keys(shared_ikm: &[u8], http_path: &str) -> Result<HttpTrafficKeys> {
     let salt = http_path.as_bytes();
-    let req = crate::utils::crypto::kdf::hkdf_sha256(Some(salt), shared_ikm, HTTP_INFO_REQUEST, 32)?;
-    let resp = crate::utils::crypto::kdf::hkdf_sha256(Some(salt), shared_ikm, HTTP_INFO_RESPONSE, 32)?;
+    let req = DATA_KDF.derive(Some(salt), shared_ikm, HTTP_INFO_REQUEST, 32)?;
+    let resp = DATA_KDF.derive(Some(salt), shared_ikm, HTTP_INFO_RESPONSE, 32)?;
     let to_arr = |v: Vec<u8>| {
         let mut out = [0u8; 32];
         out.copy_from_slice(&v);
@@ -465,7 +484,7 @@ pub(crate) fn ws_decrypt_inbound_text(addr: &str, channel_str: &str, body: &[u8]
             c.c2s_expected_seq, envelope.seq
         )));
     }
-    let plain = crate::utils::crypto::aes_gcm::decrypt(
+    let plain = DATA_AEAD.decrypt(
         &c.client_to_server.key,
         &nonce,
         &ciphertext,
@@ -482,7 +501,7 @@ struct SealedPayload {
 
 fn encrypt_ws_payload(cipher: &WsDirectionCipher, seq: u64, plaintext: &[u8], aad: &[u8]) -> Result<SealedPayload> {
     let nonce = ws_nonce(&cipher.nonce_prefix, seq);
-    let ciphertext = crate::utils::crypto::aes_gcm::encrypt(&cipher.key, &nonce, plaintext, Some(aad))?;
+    let ciphertext = DATA_AEAD.encrypt(&cipher.key, &nonce, plaintext, Some(aad))?;
     Ok(SealedPayload { nonce, ciphertext })
 }
 
@@ -530,7 +549,7 @@ pub(crate) fn ws_decrypt_inbound_binary(addr: &str, channel_str: &str, data: &[u
             c.c2s_expected_seq, seq
         )));
     }
-    let plain = crate::utils::crypto::aes_gcm::decrypt(
+    let plain = DATA_AEAD.decrypt(
         &c.client_to_server.key,
         &ws_nonce(&c.client_to_server.nonce_prefix, seq),
         ciphertext,
@@ -760,12 +779,11 @@ impl LinkEncryptionFilter {
         let had_body = !ctx.data.is_empty();
         let result = (|| -> Result<()> {
             let ek_raw = b64_decode(ek_b64)?;
-            let peer_public: [u8; crate::utils::crypto::x25519::KEY_LEN] =
-                ek_raw.try_into().map_err(|v: Vec<u8>| {
-                    AppError::Internal(format!("negotiation key length mismatch: expected 32, got {}", v.len()))
-                })?;
-            let shared = crate::utils::crypto::x25519::x25519_diffie_hellman(identity.keypair(), &peer_public)?;
-            let keys = derive_http_traffic_keys(shared.as_bytes(), ctx.route)?;
+            let peer_public: [u8; 32] = ek_raw.try_into().map_err(|v: Vec<u8>| {
+                AppError::Internal(format!("negotiation key length mismatch: expected 32, got {}", v.len()))
+            })?;
+            let shared = DATA_ECDH.compute_shared(identity.keypair().private(), &peer_public)?;
+            let keys = derive_http_traffic_keys(&shared, ctx.route)?;
             // GET/HEAD 空 body：无载荷可解，协商仅用于响应加密（密钥派生已足以
             // 证明对端持有临时私钥）——空 body 直接通过，不尝试解信封
             if had_body {

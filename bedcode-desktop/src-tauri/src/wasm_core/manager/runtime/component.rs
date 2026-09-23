@@ -20,15 +20,15 @@
 //!   组件形态暂无传递通道，见 wit/bedcode.wit 的 host-log 注释）
 //! - 内存搬运由绑定层处理，无需 (ptr,len) 配对与 alloc/dealloc
 
-use crate::wasm_core::host_api::{
-    api, app, auth, bus, config, database, events, fs, http, lifecycle, log, mdns, peer, platform, process, pty,
-    session, status, storage, task, terminal, timer, ws,
-};
 #[cfg(test)]
 use super::plugin_debug_mode;
 use super::{block_on_async, StoreSpec, WasmHostContext, WasmPluginState};
 #[cfg(test)]
 use crate::wasm_core::config::StoreLimits;
+use crate::wasm_core::host_api::{
+    api, app, auth, bus, config, crypto, database, events, fs, http, lifecycle, log, mdns, peer, platform, process, pty,
+    session, status, storage, task, terminal, timer, ws,
+};
 use crate::wasm_core::monitor::LifecycleEvent;
 use crate::AppError;
 use bedcode_plugin_api::{abi, WasiPreopenDir};
@@ -191,6 +191,94 @@ impl bedcode::plugin::host_task::Host for WasmPluginState {
 
     fn list_jobs(&mut self) -> Result<String, String> {
         task::list_jobs(&self.host_ctx, &self.plugin_id)
+    }
+}
+
+// v26：宿主加密引擎（host-crypto）—— 权限门 crypto:aead / crypto:asym / crypto:kdf
+// 算法执行在 crypto/registry（中性原语）；此处仅转发 + 参数映射
+impl bedcode::plugin::host_crypto::Host for WasmPluginState {
+    fn aead_encrypt(
+        &mut self,
+        algorithm: String,
+        key: Vec<u8>,
+        nonce: Vec<u8>,
+        plaintext: Vec<u8>,
+        aad: Option<Vec<u8>>,
+    ) -> Result<Vec<u8>, String> {
+        crypto::aead_encrypt(
+            &self.host_ctx,
+            &self.plugin_id,
+            &algorithm,
+            &key,
+            &nonce,
+            &plaintext,
+            aad.as_deref(),
+        )
+    }
+
+    fn aead_decrypt(
+        &mut self,
+        algorithm: String,
+        key: Vec<u8>,
+        nonce: Vec<u8>,
+        ciphertext: Vec<u8>,
+        aad: Option<Vec<u8>>,
+    ) -> Result<Vec<u8>, String> {
+        crypto::aead_decrypt(
+            &self.host_ctx,
+            &self.plugin_id,
+            &algorithm,
+            &key,
+            &nonce,
+            &ciphertext,
+            aad.as_deref(),
+        )
+    }
+
+    fn aead_generate_key(&mut self, algorithm: String) -> Result<Vec<u8>, String> {
+        crypto::aead_generate_key(&self.host_ctx, &self.plugin_id, &algorithm)
+    }
+
+    fn aead_generate_nonce(&mut self, algorithm: String) -> Result<Vec<u8>, String> {
+        crypto::aead_generate_nonce(&self.host_ctx, &self.plugin_id, &algorithm)
+    }
+
+    fn kdf_derive(
+        &mut self,
+        algorithm: String,
+        salt: Option<Vec<u8>>,
+        ikm: Vec<u8>,
+        info: Vec<u8>,
+        length: u32,
+    ) -> Result<Vec<u8>, String> {
+        crypto::kdf_derive(
+            &self.host_ctx,
+            &self.plugin_id,
+            &algorithm,
+            salt.as_deref(),
+            &ikm,
+            &info,
+            length,
+        )
+    }
+
+    fn keyagreement_generate(&mut self, algorithm: String) -> Result<Vec<u8>, String> {
+        crypto::key_agreement_generate(&self.host_ctx, &self.plugin_id, &algorithm)
+    }
+
+    fn keyagreement_shared(
+        &mut self,
+        algorithm: String,
+        local_private: Vec<u8>,
+        peer_public: Vec<u8>,
+    ) -> Result<Vec<u8>, String> {
+        crypto::key_agreement_shared(
+            &self.host_ctx,
+            &self.plugin_id,
+            &algorithm,
+            &local_private,
+            &peer_public,
+        )
     }
 }
 
@@ -689,6 +777,7 @@ pub(crate) fn add_to_linker(linker: &mut Linker<WasmPluginState>) -> crate::Resu
         bedcode::plugin::host_plugin_database::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_process::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_pty::add_to_linker::<WasmPluginState, D>,
+        bedcode::plugin::host_crypto::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_session::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_timer::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_events::add_to_linker::<WasmPluginState, D>,

@@ -3,11 +3,11 @@
 // ==================== Domain Modules ====================
 
 pub mod commands;
+pub mod crypto;
 pub mod db;
 pub mod enums;
 pub mod events;
 pub mod mdns;
-pub mod wasm_core;
 pub mod process;
 pub mod protocol;
 pub mod pty;
@@ -15,6 +15,7 @@ pub mod server;
 pub mod session;
 pub mod system;
 pub mod utils;
+pub mod wasm_core;
 
 // ==================== Re-exports ====================
 
@@ -466,7 +467,8 @@ pub fn run() {
             #[cfg(debug_assertions)]
             {
                 let runtime_handle = tauri::async_runtime::block_on(async { tokio::runtime::Handle::current() });
-                let _dev_watcher = wasm_core::watcher::PluginDevWatcher::start(plugins_dir.to_path_buf(), runtime_handle);
+                let _dev_watcher =
+                    wasm_core::watcher::PluginDevWatcher::start(plugins_dir.to_path_buf(), runtime_handle);
                 // dev_watcher 需要 hold 住生命周期，存入 AppContext 或 leak
                 // 使用 Box::leak 使 watcher 生命周期与进程一致（开发模式可接受）
                 Box::leak(Box::new(_dev_watcher));
@@ -573,7 +575,11 @@ pub fn run() {
                             // 关闭路径不能被插件异步调用阻塞（2026-09-23 用户定案）
                             let ctx = system::app_context::AppContext::global();
                             let host_ctx = ctx.plugin_host().wasm_host_ctx();
-                            let running: Vec<RunningSessionInfo> = match crate::utils::session_gateway::list_views(host_ctx).await {
+                            let running: Vec<RunningSessionInfo> = match crate::utils::session_gateway::list_views(
+                                host_ctx,
+                            )
+                            .await
+                            {
                                 Ok(views) => views
                                     .into_iter()
                                     .filter(|s| {

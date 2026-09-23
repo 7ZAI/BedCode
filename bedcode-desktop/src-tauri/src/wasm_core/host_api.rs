@@ -17,6 +17,7 @@ pub(super) mod app;
 pub(super) mod auth;
 pub(super) mod bus;
 pub(super) mod config;
+pub(crate) mod crypto;
 pub(super) mod database;
 pub(super) mod events;
 pub(crate) mod fs;
@@ -60,11 +61,11 @@ pub(super) fn check_permission(host_ctx: &WasmHostContext, plugin_id: &str, perm
 pub(crate) mod tests {
     use super::*;
     use crate::db::Database;
+    use crate::session::{SessionConfigManager, SessionManager};
     use crate::wasm_core::bus::MessageBus;
     use crate::wasm_core::manager::storage::PluginStorage;
     use crate::wasm_core::permission::PermissionManager;
     use crate::wasm_core::security::fs_auth::FsAuthChecker;
-    use crate::session::{SessionConfigManager, SessionManager};
     use std::collections::HashMap;
     use std::path::Path;
     use std::sync::Arc;
