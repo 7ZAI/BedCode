@@ -432,7 +432,13 @@ interface host-session {
     /// （业务会话身份引擎原语，host-pty 插件私有 PTY 不注入）。引擎只守可 exec 边界：
     /// argv[0] 非空 + 无 NUL 字节；shell 注入防护责任在插件侧 `build_argv`。
     create-with-spec: func(spec-json: string) -> result<string, string>;
+    /// **票 03 起已退役**（本 interface 随票 10 整删）：宿主侧观察注册表、派发点与
+    /// 内核逐帧输入修饰链已移除，本条在票 10 之前退化为**显性失败的遗留占位**
+    /// （返回点明原因的 `Err`，不静默成功）。会话生命周期事实现在由
+    /// `com.bedcode.terminal-session` 自驱，跨插件事件走 `host-events` / `host-bus`。
     lifecycle-register: func() -> result<_, string>;
+    /// **票 03 起已退役**：提交输入行观察面整体移除（不换成总线 topic——无真实消费者）。
+    /// 行重建与任务域分发都在 `com.bedcode.terminal-session` 内完成。
     input-register: func() -> result<_, string>;
     /// 关闭（终止）会话（v7）：停止 PTY 并置 Stopped，会话记录保留
     /// （与用户手动关闭一致）；宿主分发 Stopping/Stopped 生命周期事件。
@@ -832,7 +838,13 @@ interface lifecycle {
 /// 事件回调（原 on_message/on_session_lifecycle/on_input_submitted）
 interface events {
     on-message: func(topic: string, sender: string, payload-json: string) -> result<_, string>;
+    /// **票 03 起失去派发源**（导出本身**只登记不动**，随票 10 与 `host-session`
+    /// interface 同批删除）：宿主侧的生命周期观察注册表与派发点已退役，本导出
+    /// 在生产路径上不再被调用——会话生命周期事实由 `com.bedcode.terminal-session`
+    /// 自驱，跨插件事件走 `host-events` / `host-bus`。SDK 默认实现为 no-op。
     on-session-lifecycle: func(payload-json: string) -> result<_, string>;
+    /// **票 03 起失去派发源**（同 `on-session-lifecycle` 的说明）：提交输入行的
+    /// 观察面整体退役，行重建与任务域分发都在 `com.bedcode.terminal-session` 内完成。
     on-input-submitted: func(payload-json: string) -> result<_, string>;
     /// 进程执行完成回调（v8）：host-process run 的进程结束时触发
     /// （正常退出 / 非零退出 / 超时 kill），payload-json 为

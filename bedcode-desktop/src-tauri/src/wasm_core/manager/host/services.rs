@@ -5,103 +5,24 @@
 //! 会话生命周期/输入事件分发。
 
 use std::pin::Pin;
-use std::sync::Arc;
 
 use tauri::Emitter;
 
-use super::listeners::{PluginInputListener, PluginLifecycleListener};
 use super::PluginHost;
 use crate::wasm_core::manager::runtime::PluginServices;
-use crate::session::SessionManager;
 use bedcode_plugin_api::PluginState;
 
-impl PluginHost {
-    /// 将会话生命周期事件分发给指定插件的 on_session_lifecycle 回调
-    pub fn dispatch_lifecycle_to_plugin(&self, plugin_id: &str, payload: &serde_json::Value) {
-        if !self.is_activated_block(plugin_id) {
-            return;
-        }
+// ==================== 观察面派发（票 03 已退役） ====================
+//
+// 本文件原有 `PluginHost::{dispatch_lifecycle_to_plugin, dispatch_input_to_plugin}`
+// 两个派发点（连同 `is_activated_block` 门禁）——把宿主会话事件序列化后送给插件的
+// `on_session_lifecycle` / `on_input_submitted` 导出。派发源（SessionManager 的
+// 两张监听器注册表）与监听器实现（`manager/host/listeners.rs`）随票 03 一并退役，
+// 派发点因此无消费者，同批删除。插件侧那两个导出仍存在（WIT 面随票 10 收口）。
 
-        let host = self.clone();
-        let plugin_id = plugin_id.to_string();
-        let payload = payload.clone();
-        crate::wasm_core::manager::runtime::block_on_async(async move {
-            if let Err(e) = host
-                .with_wasm_plugin_call(&plugin_id, move |plugin| plugin.on_session_lifecycle(&payload))
-                .await
-            {
-                tracing::error!(plugin_id = %plugin_id, error = %e, "SessionLifecycle: dispatch to plugin failed");
-            }
-        });
-    }
-
-    /// 将提交输入行事件分发给指定插件的 on_input_submitted 回调（见 ADR 0001）
-    ///
-    /// 由 PluginInputListener 在 SessionManager spawn 的错误隔离任务中调用；
-    /// 分发失败仅记录日志，不影响输入本身
-    pub fn dispatch_input_to_plugin(&self, plugin_id: &str, payload: &serde_json::Value) {
-        if !self.is_activated_block(plugin_id) {
-            // 插件未处于 Activated 状态（Loaded/Deactivated/Error）：事件被此门禁静默丢弃，
-            // 是输入分发链路上唯一无日志的断点，记录 debug 便于定位
-            tracing::debug!(
-                plugin_id = %plugin_id,
-                "InputSubmitted: drop event: plugin not in Activated state"
-            );
-            return;
-        }
-
-        tracing::debug!(
-            "InputSubmitted: dispatch to plugin '{}', payload={}",
-            plugin_id,
-            payload
-        );
-
-        let host = self.clone();
-        let plugin_id = plugin_id.to_string();
-        let payload = payload.clone();
-        crate::wasm_core::manager::runtime::block_on_async(async move {
-            if let Err(e) = host
-                .with_wasm_plugin_call(&plugin_id, move |plugin| plugin.on_input_submitted(&payload))
-                .await
-            {
-                tracing::error!(plugin_id = %plugin_id, error = %e, "InputSubmitted: dispatch to plugin failed");
-            }
-        });
-    }
-
-    /// 阻塞式检查插件是否已激活（用于同步分发场景）
-    fn is_activated_block(&self, plugin_id: &str) -> bool {
-        let plugins = self.plugins.clone();
-        crate::wasm_core::manager::runtime::block_on_async(async move {
-            let plugins = plugins.read().await;
-            plugins
-                .get(plugin_id)
-                .map(|p| matches!(p.state, PluginState::Activated))
-                .unwrap_or(false)
-        })
-    }
-}
-
-// ==================== PluginServices Implementation ====================
 // ==================== PluginServices Implementation ====================
 
 impl PluginServices for PluginHost {
-    fn register_session_lifecycle_listener(&self, plugin_id: String, session_manager: Arc<SessionManager>) {
-        // host function 处于同步上下文，通过 block_on_async 完成异步注册
-        let listener = PluginLifecycleListener::new(plugin_id, self.clone());
-        crate::wasm_core::manager::runtime::block_on_async(
-            session_manager.register_lifecycle_listener(Arc::new(listener)),
-        );
-    }
-
-    fn register_session_input_listener(&self, plugin_id: String, session_manager: Arc<SessionManager>) {
-        // host function 处于同步上下文，通过 block_on_async 完成异步注册
-        let listener = PluginInputListener::new(plugin_id, self.clone());
-        crate::wasm_core::manager::runtime::block_on_async(
-            session_manager.register_input_listener(Arc::new(listener)),
-        );
-    }
-
     fn mark_plugin_error(&self, plugin_id: String, error: String) {
         crate::wasm_core::manager::runtime::block_on_async(async move {
             // 仅通知前端弹窗提示：不置 Error、不持久化，插件保持激活，会话照常运行。
@@ -445,8 +366,9 @@ impl crate::wasm_core::bus::MessageDispatcher for PluginHost {
 mod tests {
     use super::*;
     use crate::db::Database;
-    use crate::session::SessionConfigManager;
+    use crate::session::{SessionConfigManager, SessionManager};
     use std::path::Path;
+    use std::sync::Arc;
     use tokio::sync::Mutex;
 
     /// 构造最小 PluginHost（与 commands.rs 测试同模式）
@@ -460,23 +382,6 @@ mod tests {
         let host = PluginHost::new(db, &dir, &dir, sm, cm, None).await;
         host.init_message_bus().await;
         Arc::new(host)
-    }
-
-    /// 未激活插件分发事件：静默丢弃（不 panic，票据 32）
-    #[test]
-    fn dispatch_lifecycle_to_inactive_plugin_is_silent() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let host = rt.block_on(test_plugin_host());
-        // 不 panic 即通过（未激活插件门禁静默丢弃）
-        host.dispatch_lifecycle_to_plugin("com.bedcode.nonexistent", &serde_json::json!({}));
-    }
-
-    /// 未激活插件分发输入：静默丢弃（不 panic，票据 32）
-    #[test]
-    fn dispatch_input_to_inactive_plugin_is_silent() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let host = rt.block_on(test_plugin_host());
-        host.dispatch_input_to_plugin("com.bedcode.nonexistent", &serde_json::json!({}));
     }
 
     /// 在册插件取自身资源目录：等于其 `extension_path`（剥离 verbatim 前缀的形态）

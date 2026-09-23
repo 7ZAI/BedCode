@@ -1,57 +1,48 @@
-//! 会话生命周期域宿主实现（监听器注册）
+//! 会话生命周期域宿主实现（**票 03 起为退役占位**）
+//!
+//! 本模块原有两条注册面——`host-session.lifecycle-register`（会话生命周期回调）
+//! 与 `host-session.input-register`（用户提交输入行回调，需 `terminal:observe`）。
+//! 它们的宿主侧机制（`SessionManager` 的注册表 + 派发点、`manager/host/listeners.rs`
+//! 的插件监听器、内核逐帧输入修饰链）随票 03 **整体退役**：P1-b 会话真源下沉后
+//! 这两条通道的生产流量已归零（创建/终态由 `com.bedcode.terminal-session` 自驱，
+//! 提交行重建在该插件内完成），留着「代码在、永远不触发」正是下一处断链的种子。
+//!
+//! **为什么这里还留着两个函数**：WIT 里 `host-session.lifecycle-register` /
+//! `input-register` 的删除属 interface 级破坏性变更，按契约硬约束与 ABI bump
+//! 统一在票 10 定稿（一次 bump 只给插件作者一次重建）。因此在票 10 之前，这两个
+//! host function 退化为**显性失败的退役占位**：旧产物（≤ ABI v25）调用时拿到
+//! 点明原因的错误（哪个能力没了 / 要按哪个版本重建），而不是静默成功。
+//! 新产物不再调用它们（插件 activate 已摘除两条注册调用）。
 
-use crate::wasm_core::manager::runtime::{block_on_async, WasmHostContext};
-use bedcode_plugin_api::permission::{PERMISSION_SESSION_READ, PERMISSION_TERMINAL_OBSERVE};
+use crate::wasm_core::manager::runtime::WasmHostContext;
 
-/// 注册会话生命周期监听器（权限门禁：session:read；无参数，按调用者 plugin_id 注册）
-///
-/// 生命周期事件通过导出函数回调（组件形态为 `events.on-session-lifecycle`），
-/// 不走消息总线。通过 `PluginServices` trait 对象回调 PluginHost，
-/// 避免 wasm_runtime → host 的模块循环依赖。
-///
-/// 门禁理由（票 04，P0-3）：生命周期事件携带全部会话 id / 名称 / 工作目录，
-/// 此前注册**零权限要求**——任意已激活插件装上监听器就能枚举全场会话，
-/// 再配合 `terminal:input` 即为「向用户正在用的终端注入命令」的攻击前段。
-/// 与输入监听的分档保持：生命周期是元数据（`session:read`），
-/// 提交输入行是明文凭据面（`terminal:observe`，见 ADR 0001）。
-pub(crate) fn session_lifecycle_register(host_ctx: &WasmHostContext, plugin_id: &str) -> Result<(), String> {
-    if !super::check_permission(
-        host_ctx,
-        plugin_id,
-        PERMISSION_SESSION_READ,
-        "host_session_lifecycle_register",
-    ) {
-        return Err("permission denied".to_string());
-    }
-    // 两阶段初始化：PluginHost 构造完成后才注入 services，activate 可能早于注入
-    let services = block_on_async(host_ctx.services())
-        .ok_or_else(|| format!("session error: plugin services not initialized yet for '{}'", plugin_id))?;
-    let session_manager = host_ctx.session_manager_arc();
-    services.register_session_lifecycle_listener(plugin_id.to_string(), session_manager);
-    Ok(())
+/// 会话生命周期注册面（退役占位）——见模块文档
+pub(crate) fn session_lifecycle_register(_host_ctx: &WasmHostContext, plugin_id: &str) -> Result<(), String> {
+    tracing::warn!(
+        plugin_id = %plugin_id,
+        "host-session.lifecycle-register 已退役（票 03）：宿主不再派发会话生命周期回调"
+    );
+    Err(RETIRED_LIFECYCLE_REGISTER.to_string())
 }
 
-/// 注册提交输入行监听器（权限门禁：terminal:observe）
-///
-/// 用户提交输入（回车触发）时，宿主重建完整输入行后经导出函数异步回调
-/// （组件形态为 `events.on-input-submitted`），不走消息总线。
-/// 输入内容可能包含用户在终端键入的密码 / API key / token，
-/// 观察能力需显式授权（见 ADR 0001）。
-pub(crate) fn session_input_register(host_ctx: &WasmHostContext, plugin_id: &str) -> Result<(), String> {
-    if !super::check_permission(
-        host_ctx,
-        plugin_id,
-        PERMISSION_TERMINAL_OBSERVE,
-        "host_session_input_register",
-    ) {
-        return Err("permission denied".to_string());
-    }
-    let services = block_on_async(host_ctx.services())
-        .ok_or_else(|| format!("session error: plugin services not initialized yet for '{}'", plugin_id))?;
-    let session_manager = host_ctx.session_manager_arc();
-    services.register_session_input_listener(plugin_id.to_string(), session_manager);
-    Ok(())
+/// 提交输入行注册面（退役占位）——见模块文档
+pub(crate) fn session_input_register(_host_ctx: &WasmHostContext, plugin_id: &str) -> Result<(), String> {
+    tracing::warn!(
+        plugin_id = %plugin_id,
+        "host-session.input-register 已退役（票 03）：宿主不再派发提交输入行回调"
+    );
+    Err(RETIRED_INPUT_REGISTER.to_string())
 }
+
+/// 生命周期注册面的退役文案（调用方可能直接转述给用户，故写全「原因 + 动作」）
+const RETIRED_LIFECYCLE_REGISTER: &str = "host-session.lifecycle-register is retired (session lifecycle \
+     dispatch moved into the com.bedcode.terminal-session plugin); rebuild the plugin artifact with the \
+     current plugin SDK";
+
+/// 输入注册面的退役文案
+const RETIRED_INPUT_REGISTER: &str = "host-session.input-register is retired (submitted-line observation \
+     moved into the com.bedcode.terminal-session plugin); rebuild the plugin artifact with the current \
+     plugin SDK";
 
 // ==================== Tests ====================
 
@@ -59,41 +50,35 @@ pub(crate) fn session_input_register(host_ctx: &WasmHostContext, plugin_id: &str
 mod tests {
     use super::*;
     use crate::wasm_core::host_api::tests::{build_host_ctx, grant_permissions};
+    use crate::wasm_core::permission::{PERMISSION_SESSION_READ, PERMISSION_TERMINAL_OBSERVE};
 
-    /// 无 terminal:observe 权限：输入监听注册被权限门禁拒绝
-    #[test]
-    fn session_input_register_permission_denied() {
-        let ctx = build_host_ctx();
-        let err = session_input_register(&ctx, "test-plugin").unwrap_err();
-        assert_eq!(err, "permission denied");
-    }
-
-    /// 无 session:read 权限：生命周期监听注册被拒（票 04 补的门）
-    #[test]
-    fn session_lifecycle_register_permission_denied() {
-        let ctx = build_host_ctx();
-        let err = session_lifecycle_register(&ctx, "test-plugin").unwrap_err();
-        assert_eq!(err, "permission denied");
-    }
-
-    /// 权限通过但 services 未注入（两阶段初始化完成前）：生命周期监听注册明确报错
+    /// 退役占位必须显性失败（而不是静默 `Ok`），且文案点明「重建产物」这一动作。
     ///
-    /// 成功路径需要 PluginHost 注入的 PluginServices（真实插件宿主），
-    /// 测试环境无 PluginHost，此处验证两阶段初始化的降级行为
-    #[tokio::test]
-    async fn session_lifecycle_register_services_not_ready() {
+    /// 反向锁：若有人把占位改回 `Ok(())`（「先放个空实现以后再说」），本用例转红。
+    #[test]
+    fn retired_register_surfaces_fail_visibly_with_rebuild_hint() {
         let ctx = build_host_ctx();
-        grant_permissions(&ctx, "test-plugin", &[PERMISSION_SESSION_READ]);
-        let err = session_lifecycle_register(&ctx, "test-plugin").unwrap_err();
-        assert!(err.contains("not initialized yet"), "got: {}", err);
-    }
+        // 即便把历史权限位都授予，也不再有可注册的东西——失败原因不是权限
+        grant_permissions(
+            &ctx,
+            "test-plugin",
+            &[PERMISSION_SESSION_READ, PERMISSION_TERMINAL_OBSERVE],
+        );
 
-    /// 权限通过但 services 未注入：输入监听注册同样报错（非静默忽略）
-    #[tokio::test]
-    async fn session_input_register_services_not_ready() {
-        let ctx = build_host_ctx();
-        grant_permissions(&ctx, "test-plugin", &[PERMISSION_TERMINAL_OBSERVE]);
-        let err = session_input_register(&ctx, "test-plugin").unwrap_err();
-        assert!(err.contains("not initialized yet"), "got: {}", err);
+        let e1 = session_lifecycle_register(&ctx, "test-plugin").unwrap_err();
+        assert!(e1.contains("retired"), "必须点明「已退役」, got: {e1}");
+        assert!(
+            e1.contains("rebuild the plugin artifact"),
+            "必须给出重建产物的动作指引, got: {e1}"
+        );
+
+        let e2 = session_input_register(&ctx, "test-plugin").unwrap_err();
+        assert!(e2.contains("retired"), "必须点明「已退役」, got: {e2}");
+        assert!(
+            e2.contains("rebuild the plugin artifact"),
+            "必须给出重建产物的动作指引, got: {e2}"
+        );
+        // 两条面各自点名，不共用一句兜底文案（否则调用方分不清是哪条没了）
+        assert_ne!(e1, e2, "两条退役面的错误必须各自点名");
     }
 }

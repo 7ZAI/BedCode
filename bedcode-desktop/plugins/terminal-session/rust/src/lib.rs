@@ -664,26 +664,19 @@ impl WasmPlugin for SessionPlugin {
             )),
         }
 
-        // 票 15 编排反转（spec D3）：本插件自己就是会话编排方——自己注册生命周期与
-        // 输入监听，据此主动推进 Agent 集成注入（Creating）与任务状态推进（输入提交 /
-        // 会话结束）。反向回调兼容面（terminal-hooks / on-session-lifecycle /
-        // on-input-submitted）保留给其它创建路径（如移动端 HTTP 创建）承载资源目录，
-        // 但本插件不再依赖它驱动主流程。
-        match host.session_lifecycle_register() {
-            Ok(()) => host.log_info("session lifecycle listener registered (task domain)"),
-            Err(e) => host.log_warn(&format!(
-                "session lifecycle listener registration failed (task face degraded): {}",
-                e
-            )),
-        }
-        // 输入监听需 `terminal:observe` 权限（ADR 0001）；失败只降级输入面
-        match host.session_input_register() {
-            Ok(()) => host.log_info("session input listener registered (task domain)"),
-            Err(e) => host.log_warn(&format!(
-                "session input listener registration failed (task face degraded): {}",
-                e
-            )),
-        }
+        // 票 03（会话引擎下沉）：**不再注册宿主的两条观察面**。
+        //
+        // 历史形态是插件在 activate 里调 `host-session.lifecycle-register` /
+        // `input-register`，宿主把「会话生命周期」与「用户提交的输入行」回调回来。
+        // P1-b 真源下沉后这两条通道的**生产流量已归零**：创建/终态由本插件自驱
+        // （`launch::spawn_session` 先行 Creating/Created、`<owner>::pty:exit` 驱动终态），
+        // 提交行重建在本域 `session::input_via_pty` 内完成——回调只剩宿主内核直连路径
+        // （测试）能触发。宿主侧的注册表 / 派发点 / 内核逐帧输入修饰链随票 03 一并删除，
+        // 留着「代码在、永远不触发」正是下一处断链的种子。
+        //
+        // 导出面（`events.on-session-lifecycle` / `events.on-input-submitted` /
+        // `terminal-hooks`）在 WIT 里**只登记不动**：interface 级删除与 ABI bump
+        // 统一在票 10 定稿（契约硬约束只 bump 一次）。
 
         // 会话引擎下沉 P1-b：订阅本属主私有 PTY 退出事件（`<owner>::pty:exit`）——
         // 会话终态（自然退出 / kill）由该事件驱动（见 `session::on_pty_exit`）。

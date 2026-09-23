@@ -360,11 +360,9 @@ impl ResourceLimiter for WasmPluginState {
 /// 而 PluginHost 持有 WasmHostContext —— 通过 trait 对象 + 两阶段注入打破类型互引：
 /// 本模块只依赖此 trait，`PluginHost` 在 `wasm_core::manager::host` 模块中实现它
 pub trait PluginServices: Send + Sync + 'static {
-    /// 为指定插件创建并注册会话生命周期监听器到 SessionManager
-    fn register_session_lifecycle_listener(&self, plugin_id: String, session_manager: Arc<SessionManager>);
-
-    /// 为指定插件创建并注册提交输入行监听器到 SessionManager（见 ADR 0001）
-    fn register_session_input_listener(&self, plugin_id: String, session_manager: Arc<SessionManager>);
+    // 票 03 删除的两条注册面（`register_session_lifecycle_listener` /
+    // `register_session_input_listener`）：宿主侧观察注册表与派发点一并退役，
+    // 见 `session/session_manager.rs` 的「观察面（票 03 已退役）」节。
 
     /// 标记插件为错误状态
     ///
@@ -1991,8 +1989,6 @@ mod tests {
     }
 
     impl PluginServices for MockTaskServices {
-        fn register_session_lifecycle_listener(&self, _plugin_id: String, _session_manager: Arc<SessionManager>) {}
-        fn register_session_input_listener(&self, _plugin_id: String, _session_manager: Arc<SessionManager>) {}
         fn mark_plugin_error(&self, _plugin_id: String, _error: String) {}
         fn register_plugin_timer(&self, _plugin_id: String, _interval_secs: u64, _command: String) {}
         fn dispatch_process_done(&self, _plugin_id: String, _event: serde_json::Value) {}

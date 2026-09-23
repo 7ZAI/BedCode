@@ -122,22 +122,12 @@ async fn test_list_rust_commands_parses_namespace() {
 
 // ==================== Terminal Handler Pipeline ====================
 
-/// 记录 on_input_submitted 观测并转换输入/输出的 mock 处理器
-struct MockTerminalHandler {
-    submitted: Arc<std::sync::Mutex<Vec<String>>>,
-}
+/// 转换输出的 mock 处理器
+struct MockTerminalHandler;
 
 impl TerminalHandler for MockTerminalHandler {
-    fn on_input(&self, _session_id: &str, text: &str) -> Option<String> {
-        Some(format!("[{}]", text))
-    }
-
     fn on_output(&self, _session_id: &str, data: &str) -> Option<String> {
         Some(data.to_uppercase())
-    }
-
-    fn on_input_submitted(&self, _session_id: &str, text: &str) {
-        self.submitted.lock().unwrap().push(text.to_string());
     }
 }
 
@@ -146,21 +136,22 @@ struct PassthroughHandler;
 
 impl TerminalHandler for PassthroughHandler {}
 
+/// 输出管道：无 handler 原样透传；有 handler 依序生效（后一个的 None 不覆盖前一个结果）。
+///
+/// **票 03 起本用例只覆盖输出侧**：输入侧的逐帧修饰链（`process_terminal_input`）与
+/// 提交行观察分发（`process_input_submitted`）已随宿主观察面退役——用户键入的字节
+/// 现在由 `com.bedcode.terminal-session` 经 `host-pty.write` 原样写入，宿主不再介入。
 #[tokio::test(flavor = "multi_thread")]
-async fn test_terminal_handler_pipeline() {
+async fn test_terminal_output_pipeline() {
     let host = setup_host().await;
-    // 无 handler：输入输出原样透传
+    // 无 handler：输出原样透传
     assert!(!host.has_terminal_handlers().await);
-    assert_eq!(host.process_terminal_input("s1", "echo hi").await, "echo hi");
     assert_eq!(host.process_terminal_output("s1", "Hello").await, "Hello");
 
-    let submitted = Arc::new(std::sync::Mutex::new(Vec::new()));
     host.rust_terminal_handlers
         .write()
         .await
-        .push(Box::new(MockTerminalHandler {
-            submitted: submitted.clone(),
-        }));
+        .push(Box::new(MockTerminalHandler));
     // 第二个 handler 不修改（验证 None 语义透传）
     host.rust_terminal_handlers
         .write()
@@ -168,15 +159,7 @@ async fn test_terminal_handler_pipeline() {
         .push(Box::new(PassthroughHandler));
 
     assert!(host.has_terminal_handlers().await);
-    assert_eq!(host.process_terminal_input("s1", "echo hi").await, "[echo hi]");
     assert_eq!(host.process_terminal_output("s1", "Hello").await, "HELLO");
-    // 观察回调：提交行原样送达
-    host.process_input_submitted("s1", "ls -la").await;
-    host.process_input_submitted("s1", "pwd").await;
-    assert_eq!(
-        *submitted.lock().unwrap(),
-        vec!["ls -la".to_string(), "pwd".to_string()]
-    );
 }
 
 // ==================== MessageDispatcher ====================

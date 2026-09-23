@@ -17,7 +17,6 @@ pub mod session_event;
 pub mod session_lifecycle;
 mod session_manager;
 
-mod input_line;
 mod session_components;
 mod session_output;
 
@@ -39,8 +38,9 @@ pub use session_output::{
 
 pub use session_lifecycle::{SessionLifecycleEvent, SessionLifecycleListener};
 
-// 从 input_line 重导出（提交输入行观察扩展点，见 ADR 0001）
-pub use input_line::{SessionInputListener, SubmittedLineTracker};
+// `input_line`（提交输入行重建 + 观察扩展点，ADR 0001）随票 03 删除：
+// 宿主侧观察面退役，「注册了就能收到提交行」的注册表与派发点同批移除；
+// 行重建真源在 `com.bedcode.terminal-session` 的 `session/input_line.rs`。
 
 // Re-export from enums
 pub use crate::enums::{SessionStatus, SessionType};

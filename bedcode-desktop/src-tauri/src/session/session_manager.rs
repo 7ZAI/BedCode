@@ -6,21 +6,17 @@
 use crate::enums::{ExecutionEnvironment, SessionLaunchConfig, SessionStatus, SessionType};
 use crate::events::DesktopSyncEvent;
 use crate::pty::PtySession;
-use crate::session::session_lifecycle::SessionLifecycleEvent;
 use crate::session::{
-    input_line::{SessionInputListener, SubmittedLineTracker},
     session_components::{
         CanonicalRendererRegistry, DefaultCanonicalRendererRegistry, DefaultPtyRegistry, DefaultSessionInfoRegistry,
         PtyRegistry, SessionInfoRegistry,
     },
-    session_lifecycle::SessionLifecycleListener,
     session_output::{GlobalOutputManager, SessionOutputSink},
 };
 use crate::protocol::{RendererSource, ResizeOutcome, SessionInfo, SessionInfoView};
 use crate::session::SessionStatusEvent;
 use crate::system::config::AppConfig;
 use crate::system::constants::ENV_BEDCODE_SESSION_ID;
-use crate::system::error_boundary::spawn_with_error_boundary;
 use crate::Result;
 use chrono::Utc;
 use portable_pty::CommandBuilder;
@@ -45,12 +41,6 @@ pub struct SessionManager {
     running: Arc<AtomicBool>,
     /// 同步事件发送器（用于向客户端广播增量数据）
     sync_tx: RwLock<Option<broadcast::Sender<DesktopSyncEvent>>>,
-    /// 会话生命周期监听器注册表
-    lifecycle_listeners: Arc<RwLock<Vec<Arc<dyn SessionLifecycleListener>>>>,
-    /// 会话输入监听器注册表（提交输入行观察，见 ADR 0001）
-    input_listeners: Arc<RwLock<Vec<Arc<dyn SessionInputListener>>>>,
-    /// 提交输入行重建器（每会话字节流缓冲区）
-    submitted_line_tracker: SubmittedLineTracker,
     /// 高频输入写日志节流计数：抑制 TUI 高频输入（鼠标移动/焦点序列等）刷屏
     input_log_throttle: std::sync::atomic::AtomicU64,
     /// 会话注解槽（票 11，spec D5）：`session-id → key → value` 不透明键值对。
@@ -137,8 +127,6 @@ impl SessionManager {
         let canonical_renderer = Arc::new(DefaultCanonicalRendererRegistry::new());
         let (status_tx, _) = broadcast::channel(AppConfig::global().channels.status_broadcast_capacity);
         let running = Arc::new(AtomicBool::new(true));
-        let lifecycle_listeners = Arc::new(RwLock::new(Vec::new()));
-        let input_listeners = Arc::new(RwLock::new(Vec::new()));
 
         Self {
             pty_registry,
@@ -147,9 +135,6 @@ impl SessionManager {
             status_tx,
             running,
             sync_tx: RwLock::new(None),
-            lifecycle_listeners,
-            input_listeners,
-            submitted_line_tracker: SubmittedLineTracker::new(),
             input_log_throttle: std::sync::atomic::AtomicU64::new(0),
             annotations: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
             session_owners: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
@@ -164,98 +149,18 @@ impl SessionManager {
         *tx = Some(sync_tx);
     }
 
-    /// 注册会话生命周期监听器
-    ///
-    /// 监听器在会话关键生命周期节点被调用（Creating/Created/Stopping/Stopped）
-    pub async fn register_lifecycle_listener(&self, listener: Arc<dyn SessionLifecycleListener>) {
-        let mut listeners = self.lifecycle_listeners.write().await;
-        tracing::info!("SessionLifecycleListener registered (total: {})", listeners.len() + 1);
-        listeners.push(listener);
-    }
-
-    /// 移除指定插件的生命周期监听器
-    ///
-    /// 插件停用时调用，移除该插件注册的 PluginLifecycleListener
-    pub async fn remove_lifecycle_listener(&self, plugin_id: &str) {
-        let mut listeners = self.lifecycle_listeners.write().await;
-        let before = listeners.len();
-        listeners.retain(|l| l.plugin_id() != Some(plugin_id));
-        let removed = before - listeners.len();
-        if removed > 0 {
-            tracing::info!(plugin_id = %plugin_id, count = removed, "Removed lifecycle listener(s)");
-        }
-    }
-
-    /// 分发会话生命周期事件
-    ///
-    /// 先克隆监听器快照并释放读锁，再逐个同步调用。
-    /// Creating 事件会阻塞直到所有监听器处理完成。
-    ///
-    /// 不能持锁调用：监听器回调（插件生命周期注册/插件 activate 链路）
-    /// 可能反向获取其他锁（如 wasm_plugins），与 activate_plugin 的锁序相反，
-    /// 持读锁调用会形成 ABBA 死锁
-    async fn dispatch_lifecycle_event(&self, event: SessionLifecycleEvent) {
-        let listeners: Vec<Arc<dyn SessionLifecycleListener>> =
-            { self.lifecycle_listeners.read().await.iter().cloned().collect() };
-        for listener in &listeners {
-            listener.on_session_lifecycle(&event);
-        }
-    }
-
-    /// 注册会话输入监听器
-    ///
-    /// 监听器在用户提交输入行（回车触发）时收到异步通知。
-    /// 插件侧注册需 `terminal:observe` 权限（门禁在 host function 层）
-    pub async fn register_input_listener(&self, listener: Arc<dyn SessionInputListener>) {
-        let mut listeners = self.input_listeners.write().await;
-        tracing::info!("SessionInputListener registered (total: {})", listeners.len() + 1);
-        listeners.push(listener);
-    }
-
-    /// 移除指定插件的输入监听器
-    ///
-    /// 插件停用时调用，移除该插件注册的 PluginInputListener
-    pub async fn remove_input_listener(&self, plugin_id: &str) {
-        let mut listeners = self.input_listeners.write().await;
-        let before = listeners.len();
-        listeners.retain(|l| l.plugin_id() != Some(plugin_id));
-        let removed = before - listeners.len();
-        if removed > 0 {
-            tracing::info!(plugin_id = %plugin_id, count = removed, "Removed input listener(s)");
-        }
-    }
-
-    /// 异步分发提交输入行事件
-    ///
-    /// 纯观察语义（见 ADR 0001）：每个监听器独立 spawn 分发，
-    /// fire-and-forget、错误隔离（error boundary 兜底 panic），
-    /// 不 await 回调、不阻塞输入路径、无顺序保证
-    async fn dispatch_input_submitted(&self, session_id: String, text: String) {
-        // 快照后立即释放读锁：回调可能反向获取其他锁，持锁分发有 ABBA 死锁风险
-        // （与 dispatch_lifecycle_event 同理）
-        let listeners: Vec<Arc<dyn SessionInputListener>> =
-            { self.input_listeners.read().await.iter().cloned().collect() };
-        tracing::debug!(
-            "dispatch_input_submitted session_id={}, text_len={}, input_listeners={}",
-            session_id,
-            text.len(),
-            listeners.len()
-        );
-        for listener in listeners {
-            let sid = session_id.clone();
-            let text = text.clone();
-            spawn_with_error_boundary("input_submitted_dispatch", async move {
-                listener.on_input_submitted(&sid, &text);
-            });
-        }
-
-        // 分发到 Rust 静态插件的 TerminalHandler::on_input_submitted（与监听器相同的隔离语义）
-        // WASM 插件经各自的 PluginInputListener 接收，两条路径互不重叠
-        let plugin_host = crate::system::app_context::AppContext::global().plugin_host();
-        spawn_with_error_boundary("input_submitted_terminal_handlers", async move {
-            plugin_host.process_input_submitted(&session_id, &text).await;
-        });
-    }
+    // ==================== 观察面（票 03 已退役） ====================
+    //
+    // 本类曾有两条「注册了就能收到回调」的观察注册表：
+    // `lifecycle_listeners`（会话生命周期）与 `input_listeners`（用户提交的输入行），
+    // 由 `host-session.{lifecycle,input}-register` 装载插件监听器。
+    //
+    // 票 03 裁定**整体退役**（不换成总线 topic）：P1-b 真源下沉后这两条通道的生产
+    // 流量已归零——创建/终态由 `com.bedcode.terminal-session` 自驱，提交行重建在本域
+    // 插件内完成；宿主侧只剩内核直连路径（测试）能触发，且无真实消费者愿意订阅
+    // （「无消费者的抽象不开」）。注册表、派发点、内核逐帧输入修饰链（
+    // `PluginHost::process_terminal_input`）与提交行重建器（`session/input_line.rs`）
+    // 同批删除；WIT 导出面随票 10 整 interface 删除时一并收口。
 
     /// 发布同步事件
     ///
@@ -305,14 +210,9 @@ impl SessionManager {
         session_id: Option<&str>,
         owner: Option<&str>,
     ) -> Result<String> {
-        // 分发 Creating 事件（同步阻塞，确保 hooks 在 PTY 启动前就位）
-        self.dispatch_lifecycle_event(SessionLifecycleEvent::Creating {
-            config_id: config_id.clone(),
-            command: launch_config.command.clone(),
-            working_dir: launch_config.working_dir.clone(),
-            source_device: source_device.clone(),
-        })
-        .await;
+        // 票 03：`Creating` 生命周期分发已退役——「hook 就位后才 spawn」的时序
+        // 现在由会话编排方（`com.bedcode.terminal-session` 的 `launch::spawn_session`）
+        // 在自己串行流程内保证，宿主只保留 spawn 原语的同步边界（H5）。
 
         // 会话 id：调用方指定（重启 = 同一 id 重建）或本次生成
         let session_id = match session_id {
@@ -390,16 +290,7 @@ impl SessionManager {
                 .insert(session_id.clone(), owner.to_string());
         }
 
-        if start {
-            // 分发 Created 事件（异步通知；与 create_session_with_source_and_id 一致）
-            self.dispatch_lifecycle_event(SessionLifecycleEvent::Created {
-                session_id: session_id.clone(),
-                config_id: config_id.clone(),
-                name: launch_config.name.clone(),
-                working_dir: launch_config.working_dir.clone(),
-            })
-            .await;
-        }
+        // 票 03：`Created` 生命周期分发已退役（同上，编排方自驱）。
 
         // 发布同步事件：会话创建（start=false 时与 create_session_no_start 同形状）
         // 内核路径不携带会话概要（`session: None`）→ 处理器回查内核登记；
@@ -476,13 +367,11 @@ impl SessionManager {
         let session_info = self.session_info.clone();
         let status_tx = self.status_tx.clone();
         let pty_registry = self.pty_registry.clone();
-        let line_tracker = self.submitted_line_tracker.clone();
-        // 票 3：自然退出路径与 kill 同语义——同步事件（SessionStopped）与生命周期
-        // Stopped 都分发（任务域「意外退出兜底」依赖生命周期 Stopped，见插件
-        // `task/state.rs`；此前 Hold 压制下自然退出永不触发，任务卡死）
+        // 票 3：自然退出路径与 kill 同语义——同步事件（SessionStopped）分发
+        // （此前 Hold 压制下自然退出永不触发，任务卡死）。票 03 起生命周期
+        // Stopped 的观察面已退役，本处理器只留状态/同步事件。
         // sync_tx 是 tauri RwLock（不可 clone）——预读 sender 副本进闭包
         let sync_tx_sender = self.sync_tx.read().await.clone();
-        let lifecycle_listeners = self.lifecycle_listeners.clone();
         let sid = session_id.to_string();
 
         tokio::spawn(async move {
@@ -499,9 +388,6 @@ impl SessionManager {
                         killed = terminated.killed,
                         "PTY 终态（业务会话线：翻 Stopped + 分发）"
                     );
-
-                    // PTY 已退出：清理该会话的输入行缓冲区（残余内容不补发，见 ADR 0001）
-                    line_tracker.remove_session(&sid);
 
                     session_info.update_status_with_time(&sid, session_status.clone()).await;
 
@@ -524,14 +410,6 @@ impl SessionManager {
                             session_id: sid.clone(),
                             source_device: None,
                             session_name: None,
-                        });
-                    }
-
-                    // 分发生命周期 Stopped（异步通知，插件会话生命周期监听收尾）
-                    for listener in lifecycle_listeners.read().await.iter().cloned().collect::<Vec<_>>() {
-                        listener.on_session_lifecycle(&SessionLifecycleEvent::Stopped {
-                            session_id: sid.clone(),
-                            source_device: None,
                         });
                     }
                 }
@@ -659,31 +537,10 @@ impl SessionManager {
             );
         }
 
-        // 通过插件 TerminalHandler 管道处理输入
-        let processed_data = {
-            let ctx = crate::system::app_context::AppContext::global();
-            let plugin_host = ctx.plugin_host();
-            plugin_host.process_terminal_input(session_id, data).await
-        };
-
-        // 提交输入行重建 + 异步观察分发（见 ADR 0001）：
-        // 观察修改后的最终数据（与 PTY 实际接收一致）；分发为 fire-and-forget，
-        // 监听器故障不影响写入，空提交同样通知（宿主不做语义过滤）
-        let submitted_lines = self.submitted_line_tracker.feed(session_id, &processed_data);
-        if !submitted_lines.is_empty() {
-            // 仅提交行有意义时才打日志（逐键输入 submitted_lines 恒为 0，跳过避免刷屏）
-            tracing::debug!(
-                "[SessionManager] write_input line-rebuild session_id={}, data_len={}, submitted_lines={}",
-                session_id,
-                processed_data.len(),
-                submitted_lines.len()
-            );
-        }
-        for line in submitted_lines {
-            self.dispatch_input_submitted(session_id.to_string(), line).await;
-        }
-
-        self.pty_registry.write_input(session_id, &processed_data).await?;
+        // 票 03：内核侧的逐帧输入修饰链（`PluginHost::process_terminal_input`）与
+        // 提交输入行重建/观察分发已退役——输入字节**原样**写进 PTY，提交行重建
+        // 与任务域分发都归 `com.bedcode.terminal-session`（`session::input_via_pty`）。
+        self.pty_registry.write_input(session_id, data).await?;
 
         // 更新会话状态为 Running
         self.session_info
@@ -783,20 +640,12 @@ impl SessionManager {
     pub async fn kill_session_with_source(&self, session_id: &str, source_device: Option<String>) -> Result<()> {
         tracing::info!(session_id = %session_id, "kill_session called");
 
-        // 分发 Stopping 事件（异步通知）
-        self.dispatch_lifecycle_event(SessionLifecycleEvent::Stopping {
-            session_id: session_id.to_string(),
-            source_device: source_device.clone(),
-        })
-        .await;
+        // 票 03：`Stopping` 生命周期分发已退役。
 
         // 使用 PTY 注册表终止会话
         if let Err(e) = self.pty_registry.kill(session_id).await {
             tracing::warn!(session_id = %session_id, error = %e, "Failed to kill PTY for session");
         }
-
-        // 清理输入行缓冲区（残余内容不补发，见 ADR 0001）
-        self.submitted_line_tracker.remove_session(session_id);
 
         // 更新会话状态
         let session_name = self
@@ -826,12 +675,7 @@ impl SessionManager {
         })
         .await;
 
-        // 分发 Stopped 事件（异步通知）
-        self.dispatch_lifecycle_event(SessionLifecycleEvent::Stopped {
-            session_id: session_id.to_string(),
-            source_device,
-        })
-        .await;
+        // 票 03：`Stopped` 生命周期分发已退役。
 
         tracing::info!(session_id = %session_id, "Session killed");
         Ok(())
@@ -865,9 +709,6 @@ impl SessionManager {
         let _ = self.session_info.remove(session_id).await;
         // 正统渲染端归属随会话销毁清除
         self.canonical_renderer.clear(session_id).await;
-
-        // 清理输入行缓冲区（restart 经此路径重建同 ID 会话，从干净状态开始）
-        self.submitted_line_tracker.remove_session(session_id);
 
         // 清理会话注解槽（票 11）：会话销毁即连带移除其注解，不残留孤儿键
         self.annotations.write().await.remove(session_id);
@@ -1299,34 +1140,20 @@ mod tests {
             .expect("seed idle session")
     }
 
-    /// 生命周期监听器记录 mock（与 session_e2e 的 LifecycleCapture 同形）
-    #[derive(Default)]
-    struct RecordingLifecycleListener {
-        events: std::sync::Arc<tokio::sync::RwLock<Vec<SessionLifecycleEvent>>>,
-    }
-
-    impl SessionLifecycleListener for RecordingLifecycleListener {
-        fn on_session_lifecycle(&self, event: &SessionLifecycleEvent) {
-            let events = std::sync::Arc::clone(&self.events);
-            let event = event.clone();
-            tokio::task::spawn(async move {
-                events.write().await.push(event);
-            });
-        }
-    }
-
     /// 票 3：业务会话**自然退出**（统一 ReleaseOnSpawn）→ 既有终态处理链解锁——
-    /// 状态翻 Stopped + SessionStatusEvent + 生命周期 Stopped + SessionStopped 同步
-    /// 事件。此前 Hold 压制下自然退出不可观测（状态滞留 Running、任务域「意外退出
-    /// 兜底」永不触发而卡死，见插件 task/state.rs 注释）。
+    /// 状态翻 Stopped + SessionStatusEvent。此前 Hold 压制下自然退出不可观测
+    /// （状态滞留 Running、任务域「意外退出」永不触发而卡死，见插件 task/state.rs）。
+    ///
+    /// 票 03 起生命周期 Stopped 的**宿主观察面已退役**（原断言「生命周期 Stopped
+    /// 必须分发」随之删除）：该动作现在由插件侧 `<owner>::pty:exit` 事件驱动
+    /// （`session::on_pty_exit` → `interrupt_running_tasks_on_session_end`），
+    /// 覆盖在 `plugins/terminal-session` 的 native 用例里。
     #[tokio::test]
-    async fn test_natural_exit_marks_stopped_and_dispatches_lifecycle() {
+    async fn test_natural_exit_marks_stopped() {
         use crate::enums::ExecutionEnvironment;
         use std::collections::HashMap;
 
         let manager = SessionManager::default();
-        let listener = std::sync::Arc::new(RecordingLifecycleListener::default());
-        manager.register_lifecycle_listener(listener.clone()).await;
         // spawn 前订阅状态事件（避免错过 Stopped）
         let mut status_rx = manager.subscribe_status();
 
@@ -1362,15 +1189,6 @@ mod tests {
             "自然退出必须翻 Stopped（不再滞留 Running）"
         );
         assert_eq!(status.session_id, sid);
-
-        // 生命周期 Stopped 必须分发（任务域意外退出兜底依赖）
-        let events = listener.events.read().await.clone();
-        assert!(
-            events
-                .iter()
-                .any(|e| matches!(e, SessionLifecycleEvent::Stopped { session_id, .. } if session_id == &sid)),
-            "生命周期 Stopped 必须分发, got: {events:?}"
-        );
 
         // 状态落库
         let info = manager.get_session(&sid).await.expect("session info");

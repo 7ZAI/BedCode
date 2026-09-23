@@ -718,12 +718,8 @@ impl PluginHost {
         // 清理消息总线订阅
         self.message_bus.remove_all_subscriptions(plugin_id).await;
 
-        // 移除该插件的会话生命周期监听器与输入监听器
-        {
-            let session_manager = self.wasm_host_ctx().session_manager_arc();
-            session_manager.remove_lifecycle_listener(plugin_id).await;
-            session_manager.remove_input_listener(plugin_id).await;
-        }
+        // 票 03：会话生命周期 / 输入监听器的注册表已退役，停用时无需再按 plugin_id
+        // 摘除（原 `remove_lifecycle_listener` / `remove_input_listener` 调用点）。
 
         let mut plugins = self.plugins.write().await;
         let loaded = plugins

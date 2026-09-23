@@ -306,24 +306,6 @@ impl PluginHost {
         !self.rust_terminal_handlers.read().await.is_empty()
     }
 
-    /// 通过插件 TerminalHandler 管道处理终端输入
-    pub async fn process_terminal_input(&self, session_id: &str, text: &str) -> String {
-        let handlers = self.rust_terminal_handlers.read().await;
-        let mut result = text.to_string();
-        for handler in handlers.iter() {
-            if let Some(modified) = handler.on_input(session_id, &result) {
-                tracing::debug!(
-                    "Terminal input modified by plugin handler: session_id={}, original_len={}, modified_len={}",
-                    session_id,
-                    result.len(),
-                    modified.len()
-                );
-                result = modified;
-            }
-        }
-        result
-    }
-
     /// 通过插件 TerminalHandler 管道处理终端输出
     pub async fn process_terminal_output(&self, session_id: &str, data: &str) -> String {
         let handlers = self.rust_terminal_handlers.read().await;
@@ -342,22 +324,12 @@ impl PluginHost {
         result
     }
 
-    /// 将提交输入行分发给 Rust 插件的 TerminalHandler 观察回调（见 ADR 0001）
-    ///
-    /// 与 `process_terminal_input`（逐块同步修改）互补：纯观察、不修改、
-    /// 由 SessionManager 在异步错误隔离任务中调用
-    pub async fn process_input_submitted(&self, session_id: &str, text: &str) {
-        let handlers = self.rust_terminal_handlers.read().await;
-        tracing::debug!(
-            "process_input_submitted session_id={}, text_len={}, rust_handlers={}",
-            session_id,
-            text.len(),
-            handlers.len()
-        );
-        for handler in handlers.iter() {
-            handler.on_input_submitted(session_id, text);
-        }
-    }
+    // 票 03 删除的两条输入侧管道：
+    // - `process_terminal_input`（逐帧修饰链）——宿主不再修改用户键入的字节；
+    //   终端输入由 `com.bedcode.terminal-session` 经 `host-pty.write` 原样写入。
+    // - `process_input_submitted`（提交行观察分发）——行重建与任务域分发都在插件内。
+    // 输出侧 `process_terminal_output` / `has_terminal_handlers` 暂留：它服务的是
+    // 业务输出环（`session/session_output.rs`），随内核会话目录在票 11 一并退役。
 }
 
 #[cfg(test)]
@@ -399,14 +371,6 @@ mod tests {
         let host = test_plugin_host().await;
         let commands = host.list_rust_commands().await;
         assert!(commands.iter().all(|c| !c.plugin_id.is_empty()));
-    }
-
-    /// 终端 handler 管道：无 handler 时输入原样透传（不 panic）
-    #[tokio::test]
-    async fn process_terminal_input_without_handlers_passthrough() {
-        let host = test_plugin_host().await;
-        let out = host.process_terminal_input("sess-1", "hello").await;
-        assert_eq!(out, "hello", "无 handler 时应原样返回输入");
     }
 
     /// 终端 handler 管道：输出处理无 handler 时原样返回

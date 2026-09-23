@@ -405,13 +405,13 @@ mod boot;
 mod commands;
 mod errors;
 mod install;
-mod listeners;
 mod preauth;
 mod register;
 mod services;
 mod wasm;
 // 保持原导出路径（crate::wasm_core::manager::host::PluginLifecycleListener 等）
-pub use listeners::{PluginInputListener, PluginLifecycleListener};
+// 票 03：插件侧会话生命周期 / 输入行监听器实现（原 `listeners` 模块）已删除——
+// 宿主不再派发这两类回调，注册面与派发点同批退役。
 // preauth 域（P2 拆分后 re-export 保持 host:: 路径兼容）
 pub use preauth::register_preauth_provider;
 #[allow(unused_imports)] // 兼容 host:: 路径（测试经 super:: 引用；preauth.rs 内部自用）
@@ -422,7 +422,6 @@ mod tests {
     use super::*;
     use crate::wasm_core::bus::{MessageBus, MessageDispatcher};
     use crate::wasm_core::manager::runtime::PluginServices;
-    use crate::session::{SessionInputListener, SessionLifecycleEvent, SessionLifecycleListener};
     use crate::system::config::AppConfig;
     use bedcode_plugin_api::{
         PluginCommand, PluginContributes, PluginManifest, PluginType, RustPluginContext, TerminalHandler,
