@@ -40,6 +40,7 @@ pub mod model;
 pub mod ops;
 pub mod registry;
 pub mod store;
+pub mod view;
 
 use crate::actions::RendererSource;
 use model::SessionStatus;
@@ -210,6 +211,42 @@ pub fn diagnostics_via_host() -> serde_json::Value {
     }
 }
 
+// ==================== 读取面（互调 api `session-list` / `session-get` 的实现） ====================
+
+/// 全部会话的对外视图（`SessionInfoView` 形状，见 [`view`]）→ `{sessions: [...]}`
+///
+/// 与诊断面的区别要说清：`session.status` 的 `sessionRegistry` 是**自省字段**（运维看
+/// 登记规模），本函数是**给消费方的事实**。宿主窄转发层改读本域时走的是这里。
+#[cfg(target_arch = "wasm32")]
+pub fn list_views_via_host() -> Result<serde_json::Value, String> {
+    let records = REGISTRY.all(&WasmHost)?;
+    let mut sessions = Vec::with_capacity(records.len());
+    for record in records {
+        sessions.push(view_of_record(&record)?);
+    }
+    Ok(serde_json::json!({ "sessions": sessions }))
+}
+
+/// 单个会话的对外视图；不在册 → `Ok(None)`（调用方按「无此会话」分类，不产半成品）
+#[cfg(target_arch = "wasm32")]
+pub fn view_via_host(session_id: &str) -> Result<Option<serde_json::Value>, String> {
+    match REGISTRY.get(&WasmHost, session_id)? {
+        None => Ok(None),
+        Some(record) => Ok(Some(view_of_record(&record)?)),
+    }
+}
+
+/// 记录 + 其注解槽 → 视图 JSON（告警在此落日志，视图函数保持纯逻辑）
+#[cfg(target_arch = "wasm32")]
+fn view_of_record(record: &model::SessionRecord) -> Result<serde_json::Value, String> {
+    let annotations = REGISTRY.annotations(&WasmHost, &record.id)?;
+    let (view, warning) = view::view_json(record, &annotations);
+    if let Some(text) = warning {
+        WasmHost.log_warn(&text);
+    }
+    Ok(view)
+}
+
 // ==================== native：无私有库，双写入口为空实现 ====================
 //
 // native（cargo test）下 `WasmHost` 没有 `SessionStore` impl（wasm 专属 import
@@ -245,4 +282,14 @@ pub fn note_annotation_via_host(_session_id: &str, _key: &str, _value: &str) {}
 #[cfg(not(target_arch = "wasm32"))]
 pub fn diagnostics_via_host() -> serde_json::Value {
     serde_json::json!({ "available": false })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn list_views_via_host() -> Result<serde_json::Value, String> {
+    Err("session registry store unavailable outside wasm runtime".to_string())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn view_via_host(_session_id: &str) -> Result<Option<serde_json::Value>, String> {
+    Err("session registry store unavailable outside wasm runtime".to_string())
 }

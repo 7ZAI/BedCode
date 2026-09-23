@@ -133,6 +133,9 @@ describe('C1 插件身份五处一致', () => {
       // 票 11：注解槽写面（expand 期双写） + 设备派生视图（真实会话数替换硬编码 0）
       'com.bedcode.terminal-session.annotate',
       'com.bedcode.terminal-session.devices-connect-list',
+      // 会话引擎下沉 P1：登记域读取面（宿主窄转发层真源切换时的取数口，形状 = SessionInfoView）
+      'com.bedcode.terminal-session.session-list',
+      'com.bedcode.terminal-session.session-get',
     ])
     // 桥接锚点：宿主 auth_center 以 trust-list 探活（配对 / trust / policy 同一桥接门），
     // 改名即两侧失联（永久静默降级）

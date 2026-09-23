@@ -105,13 +105,24 @@ fn test_session_plugin_artifact_lifecycle() {
         .collect();
     assert_eq!(
         declared_api.len(),
-        27,
+        29,
         "pairing 八项 + trust 两项 + consent 一项 + config 三项 + session-create 一项（票 09）+ \
              会话动作四项（票 10）+ annotate + devices-connect-list 两项（票 11）\
              + quick-actions-import 一项（票 02）\
              + v24 认证记录下沉五项（auth-records-import / devices-list / history-list / \
-             connection-touch / connection-close），got: {declared_api:?}"
+             connection-touch / connection-close）\
+             + 会话登记域读取面两项（P1：session-list / session-get），got: {declared_api:?}"
     );
+    // P1 读取面必须成对存在：宿主窄转发层真源切换时按这两条取会话事实
+    for read_face in [
+        "com.bedcode.terminal-session.session-list",
+        "com.bedcode.terminal-session.session-get",
+    ] {
+        assert!(
+            declared_api.iter().any(|a| a == read_face),
+            "manifest 缺会话读取面 api {read_face}"
+        );
+    }
     // 票 08：宿主配置命令面转发依赖这三项（缺一即静默降级到只读投影）
     for consumed in [
         "com.bedcode.terminal-session.config-list",
@@ -1703,6 +1714,121 @@ fn test_session_create_with_spec_closed_loop() {
             status["sessionRegistry"]["active"], 2,
             "start=false 的 Starting 也算活跃（与宿主 filter_active_by_config 同判据）: {status}"
         );
+
+        // ============ 4c. P1 读取面对齐锁：插件 session-list == 内核 SessionInfoView ============
+        // 真源切换（P1-b）时宿主窄转发层的查询实现改指本面，故**逐字段**锁等价——
+        // 漂移一格就是移动端 DTO 与桌面前端静默错位一格。注解槽经插件自己的 annotate api
+        // 写（同一批双写：内核槽 + 插件登记域），因此任务字段两侧都该看得到。
+        let call_api = crate::utils::auth::auth_center::call_api;
+        call_api(
+            &host_ctx,
+            "com.bedcode.terminal-session.annotate",
+            serde_json::json!({ "sessionId": sid1, "key": "taskStatus", "value": "asking" }),
+        )
+        .expect("annotate 互调成功");
+        // taskQuestions 走 JSON 文本槽：解析后以数组形态出现（宿主那份映射的同判据）
+        call_api(
+            &host_ctx,
+            "com.bedcode.terminal-session.annotate",
+            serde_json::json!({
+                "sessionId": sid1,
+                "key": "taskQuestions",
+                "value": r#"[{"question":"继续吗？"}]"#,
+            }),
+        )
+        .expect("annotate questions 互调成功");
+
+        let listed = call_api(
+            &host_ctx,
+            "com.bedcode.terminal-session.session-list",
+            serde_json::json!({}),
+        )
+        .expect("session-list 互调成功");
+        let sessions = listed["sessions"].as_array().expect("sessions 数组");
+        assert_eq!(sessions.len(), 2, "读取面须与内核同为两条会话: {listed}");
+        let by_id: std::collections::HashMap<String, serde_json::Value> = sessions
+            .iter()
+            .map(|v| {
+                (
+                    v["id"].as_str().unwrap_or_default().to_string(),
+                    v.clone(),
+                )
+            })
+            .collect();
+
+        for (sid, kernel_info) in [(&sid1, &info1), (&sid2, &info2)] {
+            let raw = by_id
+                .get(sid)
+                .unwrap_or_else(|| panic!("读取面缺会话 {sid}, got: {listed}"));
+            // 反序列化即证明线形状可被宿主类型吃下（字段名 / 状态 tagged 形态 / 时间格式）
+            let mirrored: crate::session::SessionInfo =
+                serde_json::from_value(raw.clone()).unwrap_or_else(|e| {
+                    panic!("插件视图无法按宿主 SessionInfo 反序列化: {e} / {raw}")
+                });
+            assert_eq!(&mirrored.id, sid, "id 逐字一致");
+            assert_eq!(&mirrored.config_id, &kernel_info.config_id, "configId 一致");
+            assert_eq!(&mirrored.name, &kernel_info.name, "name 一致（唯一化结果）");
+            assert_eq!(
+                &mirrored.status, &kernel_info.status,
+                "status 与内核登记事实同态（含 Error 载荷形态）"
+            );
+            assert_eq!(
+                &mirrored.session_type, &kernel_info.session_type,
+                "sessionType 一致（恒 pty）"
+            );
+            // 时间戳只锁到秒：内核用 chrono（纳秒），插件侧不引 chrono、落秒级 RFC3339
+            let secs = |dt: &chrono::DateTime<chrono::Utc>| {
+                dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+            };
+            assert_eq!(
+                secs(&mirrored.created_at),
+                secs(&kernel_info.created_at),
+                "createdAt 秒级一致"
+            );
+            assert_eq!(
+                mirrored.started_at.map(|dt| secs(&dt)),
+                kernel_info.started_at.map(|dt| secs(&dt)),
+                "startedAt 同为 null / 同值（两阶段第一阶段两侧都未启动）"
+            );
+            assert_eq!(mirrored.stopped_at, kernel_info.stopped_at, "stoppedAt 两侧皆空");
+        }
+
+        // 任务字段：由注解槽机械转发（键名语义归本插件，宿主那份映射随切换退役）
+        let first = &by_id[&sid1];
+        assert_eq!(first["taskStatus"], "asking", "任务字段随槽出现: {first}");
+        assert_eq!(
+            first["taskQuestions"],
+            serde_json::json!([{"question": "继续吗？"}]),
+            "taskQuestions 解析为数组而非字符串"
+        );
+        assert!(
+            by_id[&sid2].get("taskStatus").is_none(),
+            "无槽会话不得出现任务字段（与宿主空槽口径一致）"
+        );
+
+        // 单条读面与列表同源；未知 id → null（不是报错，调用方按「无此会话」分类）
+        let one = call_api(
+            &host_ctx,
+            "com.bedcode.terminal-session.session-get",
+            serde_json::json!({ "sessionId": sid1 }),
+        )
+        .expect("session-get 互调成功");
+        assert_eq!(one["name"], "编排会话", "与列表项同值: {one}");
+        let ghost = call_api(
+            &host_ctx,
+            "com.bedcode.terminal-session.session-get",
+            serde_json::json!({ "sessionId": "no-such-session" }),
+        )
+        .expect("session-get 未知 id 不报错");
+        assert!(ghost.is_null(), "未知会话 → null, got: {ghost}");
+        let bad_get = call_api(
+            &host_ctx,
+            "com.bedcode.terminal-session.session-get",
+            serde_json::json!({}),
+        );
+        assert!(bad_get.is_err(), "缺 sessionId 必须显性报错，不静默当空串");
+
+
 
 
         // ==================== 5. 插件必需：注销互调面 → 显性报错（无宿主降级） ====================

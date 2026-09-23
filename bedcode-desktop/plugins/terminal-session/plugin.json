@@ -52,7 +52,9 @@
     "com.bedcode.terminal-session.session-rename",
     "com.bedcode.terminal-session.session-resize",
     "com.bedcode.terminal-session.annotate",
-    "com.bedcode.terminal-session.devices-connect-list"
+    "com.bedcode.terminal-session.devices-connect-list",
+    "com.bedcode.terminal-session.session-list",
+    "com.bedcode.terminal-session.session-get"
   ],
   "contributes": {
     "commands": [

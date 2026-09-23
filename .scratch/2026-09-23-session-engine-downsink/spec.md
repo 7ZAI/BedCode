@@ -329,6 +329,41 @@ id 形态 / 存储端口行语义 / 注册表读写穿与稳定序 / 注解槽�
 - **未做**：`ptyQuota` 的实际声明方是 P1-b 的 terminal-session 插件（业务会话并发档位，随其接入
   `host-pty.spawn` 同批改 `plugin.json`）；本批只交付内核侧机制与锁。
 
+**P1-b 前置 C ✅ landed（2026-09-23）：插件会话读取面（`session-list` / `session-get`）与 `SessionInfoView` 形状对齐**
+
+新模块 `plugins/terminal-session/rust/src/session/view.rs`（+ `mod.rs` 两个 wasm 门面函数 +
+`lib.rs` 两条互调 api），把 P1-b 真源切换时宿主窄转发层要读的那一面先建出来。**行为零变化**：
+双写期宿主仍读内核登记事实，本面暂时无消费者。
+
+- **形状红线**：`view_json(record, annotations)` 是 `SessionInfoView` 线形状的**唯一产出口**。
+  八个基础字段恒出现（宿主 `SessionInfo` 的两个 `Option` 没有 `skip_serializing_if` →
+  缺值是 `null` 而不是「键不存在」，本面对齐）；`sessionType` 恒 `"pty"`；本域私有事实
+  （`ptyId` / `canonicalRenderer` / `owner` / `updatedAt`）**不外溢**——历史上不曾在协议里，
+  改视图时不得顺手加。
+- **注解槽 → 任务字段的解释随真源同迁**：`taskStatus` / `taskReason` / `taskUpdatedAt` /
+  `taskQuestions` 四键本就是本插件任务域写的，宿主 `task_fields_from_slot` 那份「机械转发」
+  在 P1-b 后退役（同一批键名两处解释本来就是漂移源）。判据逐条对齐：空串 = 缺失、
+  `taskQuestions` 是 JSON 文本（解析成数组）、非法 JSON 按缺失处置但**必须留痕**——
+  `view_json` 保持纯逻辑（告警作第二返回值），日志在 wasm 门面打，native 可全量断言。
+- **时间戳口径差（记账，非缺陷）**：内核 `chrono`（纳秒）vs 本域秒级 RFC3339（插件侧不引
+  chrono）。两侧都能被 `DateTime<Utc>` 反序列化、前端按秒渲染；双写期同一会话尾数不同，
+  切换后只剩一份。对齐锁因此按秒比较。
+- **四处 pin 同步**（api 计数是原子的，漏任一处即漂移锁翻红）：`plugin.json`（27→29）、
+  插件 `lib.rs::declares_only_landed_domain_surface`、插件前端
+  `plugin-contract.test.ts` 的 `manifest.api` 逐字清单、宿主 `session_e2e` 计数断言 +
+  新增读取面两条存在性断言。
+- **测试**：插件 native **259/0**（新增 8 项视图用例：八字段恒在 + `stoppedAt: null`、
+  字段集合精确相等、空槽无字段、原样透传、空串视为缺失、questions 解析、非法 JSON 告警、
+  `Error` 载荷形态）；宿主 lib **1157/0** + 集成 9 target 全绿、`[skip]` = 0；
+  插件前端 contract 21/0；`eslint` 对 `plugin-contract.test.ts` 报「文件被 ignore 规则排除」
+  （插件前端不在根 lint 范围，非 error）。
+  最有价值的一处是 `session_e2e` 的**跨真源对齐锁**：闭环里创建两条会话 → 经插件 `annotate`
+  写槽 → 调 `session-list` → 逐项反序列化进宿主 `SessionInfo` 并与内核 `get_session` 的
+  id/configId/name/status/sessionType/createdAt/startedAt/stoppedAt 逐字段比相等，
+  另锁 `session-get` 未知 id → `null`、缺 `sessionId` → 显性 `Err`。
+  **变异自检 1 处**：插件视图把 `configId` 写成 `cfgId` → 对齐锁转红（diff 直接显示两侧值），
+  还原后产物摘要回到 `5474808…` 同值，证明确已还原。
+
 **P1-b 阻塞链勘察（2026-09-23，开工前必读）**
 
 1. **真源切换不可半翻**：创建改 `host-pty.spawn` 之后宿主 `SessionManager` 不再持有会话，

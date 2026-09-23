@@ -249,6 +249,20 @@ pub trait SessionApi {
     /// → `{connections: DerivedConnection[]}`
     #[api("devices-connect-list")]
     fn devices_connect_list() -> Result<serde_json::Value, String>;
+
+    // ==================== 会话引擎下沉 P1：会话登记域读取面 ====================
+
+    /// 全部会话的对外视图 → `{sessions: SessionInfoView[]}`（按 `createdAt, id` 稳定序）。
+    ///
+    /// 形状与宿主 `SessionInfoView` 逐字段一致（产出口在 `session::view`，有形状锁）。
+    /// 双写期本域是宿主的镜像，故此面**尚不被宿主窄转发层消费**——P1-b 真源切换时
+    /// 只改转发层内部实现，消费面零改动。
+    #[api("session-list")]
+    fn session_list() -> Result<serde_json::Value, String>;
+
+    /// 单个会话的对外视图；入参 `{sessionId}` → `SessionInfoView` | `null`（不在册）
+    #[api("session-get")]
+    fn session_get(draft: serde_json::Value) -> Result<Option<serde_json::Value>, String>;
 }
 
 /// 终端会话中心插件 — 生命周期 + 状态命令 + pairing 互调 api
@@ -398,6 +412,21 @@ impl SessionApi for SessionPlugin {
 
     fn devices_connect_list() -> Result<serde_json::Value, String> {
         devices::connect_list_via_host()
+    }
+
+    // ==================== 会话引擎下沉 P1：会话登记域读取面 ====================
+
+    fn session_list() -> Result<serde_json::Value, String> {
+        session::list_views_via_host()
+    }
+
+    fn session_get(draft: serde_json::Value) -> Result<Option<serde_json::Value>, String> {
+        let session_id = draft
+            .get("sessionId")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| "session-get: sessionId required".to_string())?;
+        session::view_via_host(session_id)
     }
 }
 
@@ -1745,12 +1774,13 @@ mod tests {
         assert_eq!(actual, expected, "manifest api 必须与 trait 声明一致");
         assert_eq!(
             manifest.api.len(),
-            27,
+            29,
             "pairing 八项 + trust 两项（list/revoke）+ consent 一项（decide）+ config 三项 + \
              session-create 一项（票 09）+ 会话动作四项（票 10 restart/remove/rename/resize）\
              + 票 11 annotate + devices-connect-list 两项 + 票 02 quick-actions-import 一项 + \
              2026-09-22 认证记录下沉五项（auth-records-import / devices-list / history-list / \
-             connection-touch / connection-close）"
+             connection-touch / connection-close）+ 会话引擎下沉 P1 登记域读取面两项 \
+             （session-list / session-get）"
         );
     }
 
