@@ -32,7 +32,8 @@ impl WasmPlugin for Wasip3TestPlugin {
             description: "wasip3 编译链测试插件".to_string(),
             author: String::new(),
             main: String::new(),
-            permissions: Vec::new(),
+            // host-crypto 探针需要三权限域（票 04 端到端）
+            permissions: vec!["crypto:aead".to_string(), "crypto:kdf".to_string(), "crypto:asym".to_string()],
             api: Vec::new(),
             contributes: Default::default(),
             plugin_type: PluginType::Rust,
@@ -42,6 +43,7 @@ impl WasmPlugin for Wasip3TestPlugin {
             wasi_preopen_dirs: Vec::new(),
             kind: PluginKind::Application,
             dependencies: Vec::new(),
+            pty_quota: None,
             resource_overrides: None,
         }
     }
@@ -116,6 +118,54 @@ impl WasmPlugin for Wasip3TestPlugin {
                     .map_err(|e| anyhow::anyhow!("getrandom failed: {}", e))?;
                 let hex: String = buf.iter().map(|b| format!("{:02x}", b)).collect();
                 Ok(serde_json::json!({ "ok": true, "hex": hex }))
+            }
+            // host-crypto 探针（host-crypto-business-downsink 票 04 端到端）：
+            // 插件从 wasm 侧按名调用宿主加密引擎原语（AEAD 往返 + X25519 双端共享密钥）
+            
+            // —— 验证「插件真正用起来了」而非仅 SDK 绑定可编译。
+            "host-crypto.roundtrip" => {
+                use bedcode_plugin_api::host::HostCrypto;
+                let host = WasmHost;
+
+                // 1) AEAD：aes-256-gcm 生成 key/nonce → 加密 → 解密往返
+                let key = HostCrypto::aead_generate_key(&host, "aes-256-gcm")
+                    .map_err(|e| anyhow::anyhow!("aead_generate_key: {}", e))?;
+                let nonce = HostCrypto::aead_generate_nonce(&host, "aes-256-gcm")
+                    .map_err(|e| anyhow::anyhow!("aead_generate_nonce: {}", e))?;
+                let ct = HostCrypto::aead_encrypt(&host, "aes-256-gcm", &key, &nonce, b"payload", Some(b"aad"))
+                    .map_err(|e| anyhow::anyhow!("aead_encrypt: {}", e))?;
+                let pt = HostCrypto::aead_decrypt(&host, "aes-256-gcm", &key, &nonce, &ct, Some(b"aad"))
+                    .map_err(|e| anyhow::anyhow!("aead_decrypt: {}", e))?;
+                if pt != b"payload" {
+                    return Err(anyhow::anyhow!("aead roundtrip mismatch"));
+                }
+
+                // 2) 未知算法名必须失败（fail-visible）
+                if HostCrypto::aead_generate_key(&host, "toy-cipher").is_ok() {
+                    return Err(anyhow::anyhow!("unknown algorithm must fail"));
+                }
+
+                // 3) X25519 双端共享密钥一致
+                let alice = HostCrypto::key_agreement_generate(&host, "x25519")
+                    .map_err(|e| anyhow::anyhow!("keygen alice: {}", e))?;
+                let bob = HostCrypto::key_agreement_generate(&host, "x25519")
+                    .map_err(|e| anyhow::anyhow!("keygen bob: {}", e))?;
+                let s_a = HostCrypto::key_agreement_shared(&host, "x25519", &alice.private, &bob.public)
+                    .map_err(|e| anyhow::anyhow!("shared a: {}", e))?;
+                let s_b = HostCrypto::key_agreement_shared(&host, "x25519", &bob.private, &alice.public)
+                    .map_err(|e| anyhow::anyhow!("shared b: {}", e))?;
+                if s_a != s_b || s_a.len() != 32 {
+                    return Err(anyhow::anyhow!("x25519 shared mismatch"));
+                }
+
+                // 4) KDF 派生
+                let dk = HostCrypto::kdf_derive(&host, "hkdf-sha256", Some(b"salt"), b"ikm", b"info", 32)
+                    .map_err(|e| anyhow::anyhow!("kdf: {}", e))?;
+                if dk.len() != 32 {
+                    return Err(anyhow::anyhow!("kdf wrong length"));
+                }
+
+                Ok(serde_json::json!({ "ok": true, "aead": "aes-256-gcm", "kdf": "hkdf-sha256", "x25519": true }))
             }
             _ => Err(anyhow::anyhow!("unknown command: {}", name)),
         }

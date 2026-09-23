@@ -223,6 +223,17 @@ fn test_wasip3_fixture_async_closure() {
     let component = wasm_runtime
         .compile_component(&component_bytes)
         .expect("compile wasip3 test component");
+
+    // host-crypto 探针所需权限（manifest 声明由激活路径授予，无头测试上下文
+    // 显式补授——与管理器测试的 `grant_permissions` 同款，必须在 move 前）
+    host_ctx.permission.grant_permissions(
+        "com.bedcode.wasip3-test",
+        &[
+            "crypto:aead".to_string(),
+            "crypto:kdf".to_string(),
+            "crypto:asym".to_string(),
+        ],
+    );
     let mut plugin = wasm_runtime
         .instantiate_component(&component, "com.bedcode.wasip3-test", host_ctx, &[], None)
         .expect("instantiate wasip3 component (async store)");
@@ -262,4 +273,16 @@ fn test_wasip3_fixture_async_closure() {
         .unwrap_or("")
         .to_string();
     assert_ne!(hex1, hex2, "two get-random calls must differ");
+
+    // host-crypto 端到端（host-crypto-business-downsink 票 04 验收）：
+    // 插件从 wasm 侧按名调用宿主加密引擎原语（AEAD 往返 + X25519 双端共享 +
+    // KDF 派生 + 未知名拒绝），返回 json 断言。权限门若未生效（manifest 声明
+    // 的 crypto:* 未被授权）探针会 fail-visible——本断言即真实的 wasm→宿主
+    // 原语通路验证（不只 SDK 绑定可编译）。
+    let r = plugin
+        .invoke_command("host-crypto.roundtrip", "{}")
+        .expect("host-crypto roundtrip command");
+    let v = serde_json::from_str::<serde_json::Value>(&r).unwrap();
+    assert_eq!(v.get("ok").and_then(|v| v.as_bool()), Some(true), "host-crypto 探针未通过: {r}");
+    assert_eq!(v.get("x25519").and_then(|v| v.as_bool()), Some(true), "x25519 双端共享未通过");
 }
