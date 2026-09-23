@@ -14,7 +14,7 @@
 
       <div class="flex items-center gap-2">
         <select
-          class="wb-select h-7 rounded-[6px] px-2 text-[calc(12px*var(--ui-scale))] bg-[var(--bg-card)] border border-[var(--border)] text-[var(--text-primary)] focus:outline-none"
+          class="h-7 rounded-[6px] px-2 cursor-pointer text-[calc(12px*var(--ui-scale))] bg-[var(--bg-card)] border border-[var(--border)] text-[var(--text-primary)] focus:outline-none focus:border-brand"
           :value="terminalTheme"
           :title="t('session.terminal.theme')"
           @change="terminalTheme = ($event.target as HTMLSelectElement).value"
@@ -24,7 +24,7 @@
           </option>
         </select>
         <select
-          class="wb-select h-7 rounded-[6px] px-2 text-[calc(12px*var(--ui-scale))] bg-[var(--bg-card)] border border-[var(--border)] text-[var(--text-primary)] focus:outline-none"
+          class="h-7 rounded-[6px] px-2 cursor-pointer text-[calc(12px*var(--ui-scale))] bg-[var(--bg-card)] border border-[var(--border)] text-[var(--text-primary)] focus:outline-none focus:border-brand"
           :value="fontSize"
           :title="t('session.terminal.fontSize')"
           @change="fontSize = Number(($event.target as HTMLSelectElement).value)"

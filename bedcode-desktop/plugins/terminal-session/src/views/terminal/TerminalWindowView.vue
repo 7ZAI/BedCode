@@ -293,7 +293,7 @@
               >{{ t('session.terminal.theme') }}</span
             >
             <select
-              class="wb-select w-full h-8 rounded-[6px] px-2 text-[calc(12px*var(--ui-scale))] bg-[var(--bg-card)] border border-[var(--border)] text-[var(--text-primary)] focus:outline-none"
+              class="w-full h-8 rounded-[6px] px-2 cursor-pointer text-[calc(12px*var(--ui-scale))] bg-[var(--bg-card)] border border-[var(--border)] text-[var(--text-primary)] focus:outline-none focus:border-brand"
               :value="settingsTheme"
               @change="settingsTheme = ($event.target as HTMLSelectElement).value"
               @click.stop
@@ -312,7 +312,7 @@
               >{{ t('session.terminal.fontSize') }}</span
             >
             <select
-              class="wb-select w-full h-8 rounded-[6px] px-2 text-[calc(12px*var(--ui-scale))] bg-[var(--bg-card)] border border-[var(--border)] text-[var(--text-primary)] focus:outline-none"
+              class="w-full h-8 rounded-[6px] px-2 cursor-pointer text-[calc(12px*var(--ui-scale))] bg-[var(--bg-card)] border border-[var(--border)] text-[var(--text-primary)] focus:outline-none focus:border-brand"
               :value="settingsFontSize"
               @change="settingsFontSize = Number(($event.target as HTMLSelectElement).value)"
               @click.stop
@@ -333,7 +333,7 @@
               >
               <div class="flex items-center gap-2">
                 <button
-                  class="wb-btn-secondary !h-7 !px-2.5 text-[calc(11px*var(--ui-scale))]"
+                  class="wb-btn-ghost !h-7 !px-2.5 text-[calc(11px*var(--ui-scale))]"
                   @click="pickBgImage"
                   @mousedown.stop
                 >
@@ -855,5 +855,15 @@ onUnmounted(() => {
 .settings-backdrop-leave-active {
   transition: opacity 0.2s ease;
   will-change: opacity;
+}
+
+/* 插件扩展点图标（页面工具栏 / 终端工具栏 / 标题栏项）
+ *
+ * 宿主三个 Plugin*Toolbar 组件各自 scoped 定义 .plugin-icon —— scoped 样式不外泄，
+ * 本视图按宿主原样复刻这三个扩展点，故必须自带同款规则，否则图标丢失字号/行高归一化
+ * （与宿主同位置图标不一致）。取值与 src/plugin/components/PluginPageToolbar.vue 一致。 */
+.plugin-icon {
+  font-size: calc(14px * var(--ui-scale));
+  line-height: 1;
 }
 </style>

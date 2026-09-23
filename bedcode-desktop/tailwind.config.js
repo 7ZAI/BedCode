@@ -11,10 +11,10 @@ export default {
     // （2026-08-23 转圈事故根因，CPU profile 实锤 tailwind→fast-glob sync readdir 占 95%+）
     './plugins/ai-chatbox/src/**/*.{vue,js,ts,jsx,tsx}',
     './plugins/file-transfer/src/**/*.{vue,js,ts,jsx,tsx}',
-    './plugins/scheduler/src/**/*.{vue,js,ts,jsx,tsx}',
-    // session（终端会话中心）：票 13 起贡献会话页——配置卡片网格、弹窗、遮罩
-    // 使用宿主同源 Tailwind 工具类
-    './plugins/session/src/**/*.{vue,js,ts,jsx,tsx}',
+    // terminal-session（终端会话中心；票 06 起由 `session` 改名）：会话页配置卡片网格、
+    // 弹窗、遮罩与终端窗口视图都用宿主同源 Tailwind 工具类——**目录改名/新增插件必须同步
+    // 本清单**，否则该插件独有工具类零产出（护栏见 src/__tests__/plugin/tailwindContentCoverage.test.ts）
+    './plugins/terminal-session/src/**/*.{vue,js,ts,jsx,tsx}',
     // agent-hub：会话日志查询条控件使用宿主 Input/Select 同源 Tailwind 类
     './plugins/agent-hub/src/**/*.{vue,js,ts,jsx,tsx}',
     // 共享 SDK 组件：宿主/插件共用（@binblink/bedcode-plugin-sdk-desktop/ui 的 Select 等），
