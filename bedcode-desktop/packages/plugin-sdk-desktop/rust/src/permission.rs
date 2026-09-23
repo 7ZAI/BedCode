@@ -88,6 +88,13 @@ pub const PERMISSION_PTY_IO: &str = "pty:io";
 /// `fs:write` / `process:run` / `network:http`），仅授本权限不授域权限的插件所有
 /// 单元都会失败——并发能力与数据访问能力解耦授权、解耦审计。
 pub const PERMISSION_TASK_RUN: &str = "task:run";
+/// 宿主加密引擎·AEAD 域（host-crypto，v26，desktop 独有双端偏离）：加解密 / 密钥 / nonce
+pub const PERMISSION_CRYPTO_AEAD: &str = "crypto:aead";
+/// 宿主加密引擎·非对称/密钥交换域（host-crypto，v26）：X25519（rsa 按需扩展）
+pub const PERMISSION_CRYPTO_ASYM: &str = "crypto:asym";
+/// 宿主加密引擎·密钥派生域（host-crypto，v26）：HKDF
+pub const PERMISSION_CRYPTO_KDF: &str = "crypto:kdf";
+
 
 /// 权限词汇反射表：`(常量标识符, 权限串)`
 ///
@@ -126,6 +133,9 @@ pub const PERMISSION_VOCABULARY: &[(&str, &str)] = &[
     (stringify!(PERMISSION_PTY_SPAWN), PERMISSION_PTY_SPAWN),
     (stringify!(PERMISSION_PTY_IO), PERMISSION_PTY_IO),
     (stringify!(PERMISSION_TASK_RUN), PERMISSION_TASK_RUN),
+    (stringify!(PERMISSION_CRYPTO_AEAD), PERMISSION_CRYPTO_AEAD),
+    (stringify!(PERMISSION_CRYPTO_ASYM), PERMISSION_CRYPTO_ASYM),
+    (stringify!(PERMISSION_CRYPTO_KDF), PERMISSION_CRYPTO_KDF),
 ];
 
 /// 合法权限集合 — 桌面端权限词汇的**唯一真源**（由 [`PERMISSION_VOCABULARY`] 派生）
@@ -250,6 +260,9 @@ pub static PERMISSION_API_MAP: &[(&str, &[&str])] = &[
     ]),
     (PERMISSION_PTY_SPAWN, &["pty.spawn", "pty.kill"]),
     (PERMISSION_PTY_IO, &["pty.write", "pty.resize", "pty.ringFetch", "pty.isRunning"]),
+    (PERMISSION_CRYPTO_AEAD, &["crypto.aeadEncrypt", "crypto.aeadDecrypt", "crypto.aeadGenerateKey", "crypto.aeadGenerateNonce"]),
+    (PERMISSION_CRYPTO_ASYM, &["crypto.keyAgreementGenerate", "crypto.keyAgreementShared"]),
+    (PERMISSION_CRYPTO_KDF, &["crypto.kdfDerive"]),
 ];
 
 /// 权限管理器

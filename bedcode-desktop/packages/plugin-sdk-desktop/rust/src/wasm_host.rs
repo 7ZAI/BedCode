@@ -17,12 +17,12 @@
 use crate::host::{
     ConfigKey, FsDirEntry, FsStat, HostApp, HostAuth, HostBus, HostConfig, HostDatabase, HostError,
     HostEvents, HostFs, HostHttp, HostLog, HostMdns, HostPeer, HostPlatform, HostPluginDatabase,
-    HostProcess, HostPty, HostSession, HostStorage, HostTask, HostTerminal, HostWebsocket,
-    ProcessSyncResult, PtyRingFetch, SessionRingFetch,
+    HostCrypto, HostProcess, HostPty, HostSession, HostStorage, HostTask, HostTerminal, HostWebsocket,
+    CryptoKeypair, ProcessSyncResult, PtyRingFetch, SessionRingFetch,
 };
 use crate::wasm::bedcode::plugin::{
     host_app, host_auth, host_bus, host_config, host_database, host_events, host_fs, host_http,
-    host_log, host_mdns, host_peer, host_platform, host_plugin_database, host_process, host_pty,
+    host_crypto, host_log, host_mdns, host_peer, host_platform, host_plugin_database, host_process, host_pty,
     host_session, host_storage, host_task, host_terminal, host_timer, host_websocket,
 };
 
@@ -835,6 +835,80 @@ impl HostPty for WasmHost {
 
     fn pty_is_running(&self, pty_id: &str) -> Result<bool, HostError> {
         host_pty::is_running(pty_id).map_err(|e| host_err("pty_is_running", e))
+    }
+}
+
+// ==================== host-crypto（v26 宿主加密引擎原语面） ====================
+
+impl HostCrypto for WasmHost {
+    fn aead_encrypt(
+        &self,
+        algorithm: &str,
+        key: &[u8],
+        nonce: &[u8],
+        plaintext: &[u8],
+        aad: Option<&[u8]>,
+    ) -> Result<Vec<u8>, HostError> {
+        host_crypto::aead_encrypt(algorithm, key, nonce, plaintext, aad)
+            .map_err(|e| host_err("crypto_aead_encrypt", e))
+    }
+
+    fn aead_decrypt(
+        &self,
+        algorithm: &str,
+        key: &[u8],
+        nonce: &[u8],
+        ciphertext: &[u8],
+        aad: Option<&[u8]>,
+    ) -> Result<Vec<u8>, HostError> {
+        host_crypto::aead_decrypt(algorithm, key, nonce, ciphertext, aad)
+            .map_err(|e| host_err("crypto_aead_decrypt", e))
+    }
+
+    fn aead_generate_key(&self, algorithm: &str) -> Result<Vec<u8>, HostError> {
+        host_crypto::aead_generate_key(algorithm).map_err(|e| host_err("crypto_aead_generate_key", e))
+    }
+
+    fn aead_generate_nonce(&self, algorithm: &str) -> Result<Vec<u8>, HostError> {
+        host_crypto::aead_generate_nonce(algorithm)
+            .map_err(|e| host_err("crypto_aead_generate_nonce", e))
+    }
+
+    fn kdf_derive(
+        &self,
+        algorithm: &str,
+        salt: Option<&[u8]>,
+        ikm: &[u8],
+        info: &[u8],
+        length: u32,
+    ) -> Result<Vec<u8>, HostError> {
+        host_crypto::kdf_derive(algorithm, salt, ikm, info, length)
+            .map_err(|e| host_err("crypto_kdf_derive", e))
+    }
+
+    fn key_agreement_generate(&self, algorithm: &str) -> Result<CryptoKeypair, HostError> {
+        // 宿主返回 private ‖ public 定长字节（x25519 各 32），前 32 私钥、后 32 公钥
+        let bytes = host_crypto::keyagreement_generate(algorithm)
+            .map_err(|e| host_err("crypto_keyagreement_generate", e))?;
+        if bytes.len() != 64 {
+            return Err(HostError::custom(
+                -1,
+                format!("crypto_keyagreement_generate: expected 64 bytes, got {}", bytes.len()),
+            ));
+        }
+        let private = bytes[..32].to_vec();
+        let public = bytes[32..].to_vec();
+        Ok(CryptoKeypair { private, public })
+    }
+
+    fn key_agreement_shared(
+        &self,
+        algorithm: &str,
+        local_private: &[u8],
+        peer_public: &[u8],
+    ) -> Result<Vec<u8>, HostError> {
+        host_crypto::keyagreement_shared(algorithm, local_private, peer_public)
+            .map_err(|e| host_err("crypto_keyagreement_shared", e))
     }
 }
 

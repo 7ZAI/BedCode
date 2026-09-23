@@ -41,6 +41,9 @@ export const GENERATED_VALID_PERMISSIONS: readonly string[] = [
   'pty:spawn',
   'pty:io',
   'task:run',
+  'crypto:aead',
+  'crypto:asym',
+  'crypto:kdf',
 ]
 
 /** 权限 → API 方法名；空数组 = WASM-only 权限（无前端 context 方法可门） */
@@ -75,4 +78,7 @@ export const GENERATED_PERMISSION_API_MAP: Record<string, readonly string[]> = {
   'pty:spawn': ['pty.spawn', 'pty.kill'],
   'pty:io': ['pty.write', 'pty.resize', 'pty.ringFetch', 'pty.isRunning'],
   'task:run': [],
+  'crypto:aead': ['crypto.aeadEncrypt', 'crypto.aeadDecrypt', 'crypto.aeadGenerateKey', 'crypto.aeadGenerateNonce'],
+  'crypto:asym': ['crypto.keyAgreementGenerate', 'crypto.keyAgreementShared'],
+  'crypto:kdf': ['crypto.kdfDerive'],
 }

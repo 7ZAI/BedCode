@@ -130,11 +130,12 @@
 //!   纯增量——v24 及以下插件二进制不受影响，但要用这两个原语须按 v25 SDK 重建。
 //!   桌面独有接口（host-peer 不在 mobile WIT），移动端不跟演（ADR 0022 双端偏离节）。
 //!
-//! 编号口径（AGENTS.md §7 教训）：本号以 `abi.rs` 与 WIT 版本表实读为准，
-//! 规格正文的「17 → 19」是并发线（host-notification v18）尚未落地时的预判；
-//! 本分支实测 v18 已被「host-auth 认证记录面」占用（票 05），故会话语义下沉的
-//! 第二批次取 v19。
-pub const ABI_VERSION: u32 = 25;
+//! - v26: host-crypto 宿主加密引擎原语面（host-crypto-business-downsink 票 03/04，
+//!   desktop 独有，双端偏离同 host-pty）——插件经算法名调用宿主聚合的加密方法大全
+//!   （AEAD aes-256-gcm / chacha20-poly1305 / KDF hkdf-sha256 / X25519 密钥交换；
+//!   中性算法原语零业务语义，rsa / hybrid 按需扩展）。新建 interface → ABI bump
+//!   （同 host-task v20 先例）。权限三域 `crypto:aead` / `crypto:asym` / `crypto:kdf`。
+pub const ABI_VERSION: u32 = 26;
 
 /// 组件形态标识：`abi.form() == FORM_COMPONENT`（WIT `abi` 接口的 form() 声明）
 ///
@@ -148,9 +149,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_abi_version_is_v25() {
+    fn test_abi_version_is_v26() {
         // 版本号序列与历史 core ABI 共用：v25 = host-peer 节点生命周期原语
-        // （start-node / stop-node，审计票 12 裁决 1 = 选项 A；内核侧去产品身份），
+        // （审计票 12 裁决 1 = 选项 A；内核侧去产品身份）、v26 host-crypto 宿主加密引擎原语面，
         // 叠加 v24 认证记录下沉（2026-09-22，host-auth 记录面七函数退役 + host-session
         // config 读取面退役）、v23 host-session
         // 配置面写原语退役（session:config 同步退役）、v22 host-platform.reveal-in-dir
@@ -160,7 +161,7 @@ mod tests {
         // （同批次之一）、v17 认证策略导出（auth-policy）、v16 插件私有伪终端原语
         // （host-pty）、v15 密钥托管（host-auth / secret-store）、v14 host-websocket、
         // v13 host-mdns v2、v12 总线二进制载荷与 v11 host-peer 传输控制三原语
-        assert_eq!(ABI_VERSION, 25);
+        assert_eq!(ABI_VERSION, 26);
     }
 
     #[test]
