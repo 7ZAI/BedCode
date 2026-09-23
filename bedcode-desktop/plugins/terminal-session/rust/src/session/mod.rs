@@ -412,22 +412,34 @@ fn drain_pending_stop(session_id: &str) -> Option<String> {
 /// - 重建为纯观察：失败只降级任务域，输入照写（D7）；
 /// - 写入后的状态恒 `Running`（P1-b 起会话创建即 Running，无需迁移）。
 ///
-/// `special = true` 时**绕过提交行重建**（对齐内核 `send_special_key` 的
-/// 不对称：工具栏停止/复制等特殊键不污染任务域的提交行观察），只写字节。
+/// 特殊键（票 06 下沉）：`special_key` 为按键组合串（如 `"ctrl+c"`）时，
+/// 本插件自译（[`crate::keys`]）成 ANSI/ASCII 转义字节后**直写**——绕过提交行
+/// 重建与任务域观察（用户裁定统一直写语义：Ctrl+C 就是 `\x03` 直接进 pty），
+/// 宿主不再消费按键组合类型。`data` 仅在普通输入时使用。
 #[cfg(target_arch = "wasm32")]
-pub fn input_via_pty(session_id: &str, data: &str, special: bool) -> Result<(), String> {
+pub fn input_via_pty(
+    session_id: &str,
+    data: &str,
+    special_key: Option<&str>,
+) -> Result<(), String> {
     let record = REGISTRY
         .get(&WasmHost, session_id)?
         .ok_or_else(|| format!("会话不存在：{session_id}"))?;
     let Some(pty_id) = record.pty_id.as_deref() else {
         return Err(format!("会话缺少 PTY 句柄，无法写入：{session_id}"));
     };
-    // 特殊键：只写字节（绕过提交行重建与任务域观察，与内核 send_special_key 同语义）
-    if !special {
-        let submitted = line_tracker().feed(session_id, data);
-        for line in submitted {
-            crate::task::state::handle_submitted_input(&WasmHost, session_id, &line);
-        }
+    // 特殊键：本插件自译自写（绕过提交行重建与任务域观察）；未知名/不支持显式报错
+    if let Some(combo) = special_key {
+        let bytes = crate::keys::special_key_to_pty_bytes(combo)
+            .ok_or_else(|| format!("unsupported special key: {combo}"))?;
+        return WasmHost
+            .pty_write(pty_id, &bytes)
+            .map_err(|e| format!("host pty write failed: {}", e.message));
+    }
+    // 普通输入：提交行重建 → 任务域分发 → 直写
+    let submitted = line_tracker().feed(session_id, data);
+    for line in submitted {
+        crate::task::state::handle_submitted_input(&WasmHost, session_id, &line);
     }
     WasmHost
         .pty_write(pty_id, data.as_bytes())
@@ -583,7 +595,11 @@ pub fn close_via_pty(_session_id: &str, _source_device: Option<&str>) -> Result<
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub fn input_via_pty(_session_id: &str, _data: &str, _special: bool) -> Result<(), String> {
+pub fn input_via_pty(
+    _session_id: &str,
+    _data: &str,
+    _special_key: Option<&str>,
+) -> Result<(), String> {
     Err("session input unavailable outside wasm runtime".to_string())
 }
 

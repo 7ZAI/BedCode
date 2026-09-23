@@ -2976,13 +2976,13 @@ fn test_session_input_via_gateway_closed_loop() {
             String::from_utf8_lossy(&acc)
         );
 
-        // ==================== 4. C-04 反例：非法特殊键在宿主翻译期即拒 ====================
+        // ==================== 4. C-04 反例：非法特殊键由插件拒签（fail-visible，票 06 下沉后宿主不再翻译） ============
         let err = crate::utils::session_gateway::special_key(&host_ctx, &sid, "not_a_real_key")
             .await
-            .expect_err("未知键名不得下发到插件");
+            .expect_err("未知键名必须显性失败（帧插件翻译面）");
         assert!(
-            err.to_string().contains("Unknown special key"),
-            "非法键名须报翻译失败，got: {err}"
+            err.to_string().contains("not_a_real_key"),
+            "错误应点名拒绝的键名（插件翻译期），got: {err}"
         );
 
         // ==================== 5. C-03 边界：Ctrl-C 经 special 通道写真字节（bash 打 ^C） ========

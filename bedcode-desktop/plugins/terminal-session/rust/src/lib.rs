@@ -64,12 +64,12 @@ pub mod schema;
 pub mod session;
 /// 任务域（票 15-16）：Agent 集成与会话状态 + 队列/定时后端（见模块文档）
 pub mod task;
+/// 按键组合 → 转义字节翻译（票 06 下沉）：宿主 pty 只收裸字节，本插件自译自写
+mod keys;
 mod trust;
 
 use bedcode_plugin_api::events::{InputSubmittedEvent, SessionLifecycleEvent};
-use bedcode_plugin_api::host::{
-    HostBus, HostEvents, HostLog, HostSession, HostStorage, HostTimer,
-};
+use bedcode_plugin_api::host::{HostBus, HostLog, HostSession, HostStorage, HostTimer};
 use bedcode_plugin_api::types::PluginManifest;
 use bedcode_plugin_api::wasm::WasmPlugin;
 use bedcode_plugin_api::wasm_host::WasmHost;
@@ -455,12 +455,14 @@ impl SessionApi for SessionPlugin {
         let data = draft
             .get("data")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| "session-input: data required".to_string())?;
-        let special = draft
-            .get("special")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        session::input_via_pty(session_id, data, special)?;
+            .unwrap_or("");
+        // 票 06：特殊键以组合串（specialKey）下发，本插件自译自写；
+        // 缺省则按普通输入处理（data 内容）。
+        let special_key = draft
+            .get("specialKey")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty());
+        session::input_via_pty(session_id, data, special_key)?;
         Ok(serde_json::json!({ "sessionId": session_id }))
     }
 }

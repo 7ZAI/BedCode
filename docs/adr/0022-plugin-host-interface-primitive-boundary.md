@@ -104,7 +104,7 @@ WS 传输是「离开宿主就无法实现」的能力（移动端链接、TLS/�
 
 裁决要点：
 
-1. **裁剪线判定（D1）**：`spawn` 只收裸引擎参数 `{command, args?, env?, workingDir?, cols?, rows?, ringBytes?}`，参数数组 exec 天然免注入。**明确不做**：`bash -lic` / PowerShell `-Command` / CMD `/K` 包装、WSL 路径转换、危险字符校验、默认 shell 探测、`name` 标识、特殊键/组合键 API——全部是宿主业务会话线或插件产品的语义（插件要 shell 包装，自己把 `sh -c` 放进 `args`）。
+1. **裁剪线判定（D1）**：`spawn` 只收裸引擎参数 `{command, args?, env?, workingDir?, cols?, rows?, ringBytes?}`，参数数组 exec 天然免注入。**明确不做**：`bash -lic` / PowerShell `-Command` / CMD `/K` 包装、WSL 路径转换、危险字符校验、默认 shell 探测、`name` 标识、特殊键/组合键 API——全部是宿主业务会话线或插件产品的语义（插件要 shell 包装，自己把 `sh -c` 放进 `args`）。**票 06 已落地**：按键组合 → ANSI/ASCII 转义字节的翻译移至 `com.bedcode.terminal-session` 私有域（`keys.rs`），`session-input` 收 `specialKey` 组合串自译自写、统一直写语义；宿主 `session_gateway::special_key`/`terminal_service` 只转发组合串、不再 `to_pty_bytes`。
 2. **与三条既有边界的划界**：`host-process`（非交互一次性 run/kill，无 TTY 行为）是它的补集；`host-terminal` + `terminal-hooks` 与 `host-session` 服务**宿主业务会话线**（会话配置、SessionManager 生命周期、前端 UI）。三者与本接口互不转发。插件 PTY 不进 `SessionComponents`、**不默认注册 `GlobalOutputManager`**（业务会话迁插件后，宿主对插件 PTY 输出的广播按 spawn 的 `hostBroadcastSessionId` 声明 **opt-in 只读订阅**，见 v15——未声明的句柄任何宿主广播面都读不到，安全边界在缺省侧）、不参与业务会话事件链——共享同一 PTY 引擎（`PtySession`），但两张注册表、两套生命周期。
 3. **输出面是纯拉取，不做 push 回调（D3）**：每句柄一条有界环 `PtyRing`，读线程单生产者写入、插件按自己的游标 `ring-fetch`。**否决 push（events-pty 可选导出）两条理由**：① 2026-09-17 `pty-pull-subscribers` 的教训——推送会把背压踢回生产端，慢消费者只能损失自己；② wasmtime Store 不可重入，宿主无法异步唤醒插件，push 在语义上等于「多一层回调的轮询」。故 `truncated + next-offset` 的 resync 语义即契约本体，缺口如实上报、不静默补洞。
 4. **属主隔离 + 停用回收（D2）**：全部函数先查属主（`not owner of pty handle`，同 mdns / ws 先例）；插件 deactivate 时宿主 `purge_for_plugin` kill 并摘除其全部 PTY、逐条补发 `pty:exit.<owner>`（reason=killed），只碰本人。

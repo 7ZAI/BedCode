@@ -693,7 +693,7 @@ fn dispatch_task(
     // prompt 统一去尾部空白后拼提交符，避免重复换行。
     // 行重建（input_line.rs）对 \r 与 \n 均视为提交，插件自身的输入监听跳过逻辑不受影响。
     let input_line = format!("{}{}", prompt.trim_end(), input_submit_char());
-    if let Err(e) = crate::session::input_via_pty(session_id, &input_line, false) {
+    if let Err(e) = crate::session::input_via_pty(session_id, &input_line, None) {
         host.log_error(&format!(
             "dispatch_task: session input failed: task_id={} err={}",
             task_id, e
@@ -835,7 +835,7 @@ pub fn send_due_clears(host: &WasmHost, now_utc: &str) -> Result<(), String> {
         if let Err(e) = crate::session::input_via_pty(
             &session_id,
             &format!("{}{}", clear_command, input_submit_char()),
-            false,
+            None,
         ) {
             host.log_error(&format!(
                 "send_due_clears: session input clear failed: task_id={} err={}",

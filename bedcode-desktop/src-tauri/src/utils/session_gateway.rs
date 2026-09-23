@@ -224,23 +224,19 @@ pub async fn input(host_ctx: &WasmHostContext, session_id: &str, data: &str) -> 
     Ok(())
 }
 
-/// 写入特殊键（工具栏停止/复制等）：宿主 `KeyCombo` 翻译为转义字节（引擎级
-/// 终端转义表，随 pty 引擎留宿主），经插件 `session-input` 的 `special` 标记
-/// 直写——对齐内核 `send_special_key` 的「绕过提交行重建」不对称，否则特殊键
-/// 会污染任务域的提交行观察。
+/// 写入特殊键（工具栏停止/复制等）：**票 06 下沉**——按键组合 → 转义字节的
+/// 翻译已移至插件（`com.bedcode.terminal-session` 读 `specialKey` 自译自写，
+/// 统一直写语义，绕过提交行重建）。宿主此处只转发组合串，不再消费
+/// `KeyCombo`/`to_pty_bytes`（pte 输入路径触点清零）。
 pub async fn special_key(host_ctx: &WasmHostContext, session_id: &str, key: &str) -> Result<()> {
-    let combo = crate::enums::KeyCombo::parse(key)
-        .ok_or_else(|| AppError::InvalidInput(format!("Unknown special key: {key}")))?;
-    let bytes = combo
-        .to_pty_bytes()
-        .ok_or_else(|| AppError::InvalidInput(format!("Unsupported key combo: {key}")))?;
-    let data = String::from_utf8(bytes)
-        .map_err(|_| AppError::InvalidInput(format!("special key '{key}' is not UTF-8")))?;
+    if key.trim().is_empty() {
+        return Err(AppError::InvalidInput("special key 不能为空".to_string()));
+    }
     call_session_api(
         host_ctx,
         API_INPUT,
         "session special key",
-        serde_json::json!({ "sessionId": session_id, "data": data, "special": true }),
+        serde_json::json!({ "sessionId": session_id, "data": "", "specialKey": key }),
     )?;
     Ok(())
 }
