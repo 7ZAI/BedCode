@@ -34,9 +34,10 @@ impl Database {
     fn run_migrations(&self) -> crate::Result<()> {
         // v24（2026-09-22 认证记录下沉 + session_configs 删除）：主库
         // `pairings` / `connection_history` / `session_configs` 三表退役，
-        // 其列级迁移（pairings 列追加 / session_configs CHECK 约束）随之删除——
-        // 旧库存量数据由宿主侧 handoff（auth_records_migration）迁入认证中心
-        // 插件私有库，不在此建表。
+        // 其列级迁移（pairings 列追加 / session_configs CHECK 约束）随之删除。
+        // 2026-09-23 用户裁定不再兼容旧版本存量用户：宿主侧 legacy 迁移链
+        // （auth_records / quick_actions / session_db / task_data）整体退役，
+        // 旧库滞留表不读不迁不清理（无残留迁移代码）。
         Ok(())
     }
 

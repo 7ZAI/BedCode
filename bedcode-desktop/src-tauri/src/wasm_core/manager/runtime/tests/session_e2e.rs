@@ -1185,34 +1185,6 @@ fn test_business_endpoints_dual_track_closed_loop() {
     let _ = std::fs::remove_dir_all(plugin_db_root().join(SESSION_ID));
     let rt = tokio::runtime::Runtime::new().expect("runtime");
 
-    // legacy 主库：quick_actions 表播种（契约退役后仅存量旧库持有该表）
-    let legacy_db = crate::db::Database::new(&std::path::PathBuf::from(":memory:")).expect("legacy db");
-    legacy_db.init_schema().expect("legacy schema");
-    legacy_db
-        .seed_legacy_quick_action_row(&crate::db::LegacyQuickActionRow {
-            id: "qa-1".into(),
-            name: "部署".into(),
-            content: "pnpm run deploy".into(),
-            icon: Some("rocket".into()),
-            color: None,
-            category: Some("dev".into()),
-            sort_order: 2,
-            created_at: "2026-09-20T00:00:00Z".into(),
-        })
-        .expect("seed qa-1");
-    legacy_db
-        .seed_legacy_quick_action_row(&crate::db::LegacyQuickActionRow {
-            id: "qa-2".into(),
-            name: "构建".into(),
-            content: "pnpm run build".into(),
-            icon: None,
-            color: Some("#0f0".into()),
-            category: None,
-            sort_order: 1,
-            created_at: "2026-09-19T00:00:00Z".into(),
-        })
-        .expect("seed qa-2");
-
     // 会话配置播种移到插件激活之后（见下：v21 起配置面插件必需，无宿主降级）
 
     // 权限（manifest 全量）+ api 注册表（含 quick-actions-import 与桥接锚点）
@@ -1265,14 +1237,6 @@ fn test_business_endpoints_dual_track_closed_loop() {
         let seeded_config =
             seed_config_in_plugin_store(&mut *session.lock().await, "工作台", &working_dir, "bash").await;
 
-        // ==================== handoff：legacy 主库 → 插件私有库 ====================
-        let report = crate::wasm_core::legacy::quick_actions_migration::migrate(&host_ctx, &legacy_db)
-            .await
-            .expect("handoff migrate");
-        assert!(report.skipped.is_none(), "插件在位时必须执行迁移");
-        let plugin_report = report.plugin_report.expect("plugin report");
-        assert_eq!(plugin_report["imported"], 2, "两条 legacy 快捷指令必须全部迁入");
-
         // ==================== _http_endpoint 双轨对照 ====================
         async fn http(
             plugin: &Arc<Mutex<LoadedWasmPlugin>>,
@@ -1297,33 +1261,6 @@ fn test_business_endpoints_dual_track_closed_loop() {
         fn data(envelope: serde_json::Value) -> serde_json::Value {
             envelope["body"]["data"].clone()
         }
-
-        // --- GET quick-actions：插件面 == 宿主旧 QuickActionItem 形状（逐字节） ---
-        let quick = http(&session, "GET", "quick-actions", serde_json::Value::Null).await;
-        let golden_quick = serde_json::to_value(crate::server::http::dtos::config_dto::QuickActionListResponseData {
-            actions: vec![
-                crate::server::http::dtos::config_dto::QuickActionItem {
-                    id: "qa-2".into(),
-                    name: "构建".into(),
-                    content: "pnpm run build".into(),
-                    icon: None,
-                    color: Some("#0f0".into()),
-                },
-                crate::server::http::dtos::config_dto::QuickActionItem {
-                    id: "qa-1".into(),
-                    name: "部署".into(),
-                    content: "pnpm run deploy".into(),
-                    icon: Some("rocket".into()),
-                    color: None,
-                },
-            ],
-        })
-        .expect("golden quick");
-        assert_eq!(
-            data(quick),
-            golden_quick,
-            "quick-actions 插件面必须与宿主旧 DTO 逐字节一致（sort_order 升序 + icon/color 显式 null）"
-        );
 
         // --- GET configs：插件面 == 宿主旧 ConfigItem 形状 ---
         let configs = http(&session, "GET", "configs", serde_json::Value::Null).await;
@@ -1563,14 +1500,6 @@ fn test_business_endpoints_dual_track_closed_loop() {
             inject["body"]["message"],
             "Invalid input: Invalid branch name: main;rm -rf /"
         );
-
-        // ==================== handoff 幂等：重推不重复导入 ====================
-        let again = crate::wasm_core::legacy::quick_actions_migration::migrate(&host_ctx, &legacy_db)
-            .await
-            .expect("handoff again");
-        let again_report = again.plugin_report.expect("plugin report");
-        assert_eq!(again_report["alreadyMigrated"], true, "marker 已在 → 重推整体跳过");
-        assert_eq!(again_report["imported"], 0);
 
         session.lock().await.deactivate().expect("final deactivate");
     });
@@ -1827,8 +1756,6 @@ fn test_session_create_with_spec_closed_loop() {
             serde_json::json!({}),
         );
         assert!(bad_get.is_err(), "缺 sessionId 必须显性报错，不静默当空串");
-
-
 
 
         // ==================== 5. 插件必需：注销互调面 → 显性报错（无宿主降级） ====================

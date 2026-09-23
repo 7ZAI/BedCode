@@ -88,8 +88,8 @@ bedcode-desktop/                      # 桌面端项目 (Tauri 2.0 + Vue 3)
         │                             #   只保留宿主页面（外壳 / 终端引擎）直调的命令，业务面一律归插件命令面
         ├── db/                       # SQLite：连接管理、数据模型、CRUD 操作、Schema
         │                             #   v24：settings / plugin_storage / plugin_secrets 三表（业务表
-        │                             #   pairings / connection_history / session_configs 已退役，存量由
-        │                             #   wasm_core/legacy/auth_records_migration.rs 迁入认证中心私有库）
+        │                             #   pairings / connection_history / session_configs 已退役；
+        │                             #   2026-09-23 裁定不再兼容旧版本用户，存量不迁移）
         ├── enums/                    # 枚举类型：认证、控制、插件、PTY 状态、会话、Shell、特殊键、同步
         ├── events/                   # 全局事件系统：AppEvent trait、事件匹配、SessionManager→前端转发、
         │                             #   同步事件定义与处理（→ WebSocket 广播）
@@ -151,12 +151,10 @@ Rust 侧按内核五模块组织（`wasm_core.rs` 为唯一组合点/facade，�
     能力名 → 宿主原语 / WASM 系统组件实例二选一装配；应用插件的 host-* import 由 Linker 经此
     host-side 转发到系统组件同形导出；系统组件内置、默认启用、先于应用插件激活
   - **storage / types / validation / watcher**：插件存储、类型定义、校验、开发模式热重载监听
-- **一次性 handoff 模块（宿主侧迁移）**：`quick_actions_migration`（快捷指令 legacy 主库 → 会话插件
-  私有库，经互调 api 推送）、`auth_records_migration`（2026-09-22 认证记录下沉：legacy `pairings` /
-  `connection_history` 存量行 → 认证中心私有库 `auth_records` 域，经互调 api `auth-records-import`
-  推送，生物公钥寄主 `plugin_secrets` key=`biometric:<fp>`；推送成功即 DROP 两表）、
-  `task_data_migration` / `session_db_migration`（插件私有库路径迁移）——均跑在 `PluginHost::new`
-  之后、插件按持久化状态激活后；幂等（插件侧 marker），失败不阻断启动
+- **（已退役）一次性 handoff 迁移链**：`quick_actions_migration` / `auth_records_migration` /
+  `task_data_migration` / `session_db_migration` 四迁移（宿主 legacy 表 / 插件私有库旧 id 路径 →
+  插件私有库）于 2026-09-23 用户裁定整体退役——不再兼容旧版本存量用户，旧库滞留表不读不迁
+  不清理；`wasm_core/legacy/` 目录与 `db/models.rs` 的 `Legacy*` 只读视图一并删除
 - **security/（core-security）**：资源授权——framework（统一授权框架：ResourceKind × 三段决策管线
   声明/审批/强制，fs / api-call 资源实现）、approval（用户 zip 安装插件的权限审批与内容钉扎，ADR 0020：
   批准记录 + 目录哈希，`PluginHost::activate_plugin` 前置 `approval_gate` 裁决，弹层 UI 为
@@ -212,8 +210,8 @@ WIT 契约 `host-auth`（v15 密钥托管四函数 + v18 记录面四函数，SD
 `wasm_core/host_api/auth.rs`。**v24 认证记录下沉**：记录面四函数
 （trusted-devices-list / revoke、connection-history-list）随 `pairings` / `connection_history`
 表退役——配对设备 / 连接历史真源在认证中心私有库 `auth_records` 域（插件
-`auth_records/`，表 `auth_pairings` / `auth_connection_history`），存量数据由宿主 handoff
-`wasm_core/legacy/auth_records_migration.rs` 一次性迁入（经互调 api `auth-records-import`）；
+`auth_records/`，表 `auth_pairings` / `auth_connection_history`）；存量迁移链
+2026-09-23 用户裁定整体退役（不再兼容旧版本存量用户，旧库滞留表不读不迁不清理）；
 `host-auth` 只保留密钥托管 / 生物凭证原语（bound/verify/bind，公钥在 `plugin_secrets`
 key=`biometric:<fp>`）/ device-token / link-identity / setting。**裁剪线（ADR 0022）**：宿主只给
 引擎级原语，排序、过滤、解读与展示组织全部归插件。

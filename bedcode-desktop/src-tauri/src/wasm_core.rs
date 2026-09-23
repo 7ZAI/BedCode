@@ -9,7 +9,6 @@
 //! - [`bus`]：消息总线模块（core-bus）——插件间 topic 消息
 //! - [`host_api`]：宿主对外接口模块（core-host-api）——宿主向插件（`host-*` 原语）
 //!   与前端（Tauri 命令桥）提供的能力面
-//! - [`legacy`]：一次性的宿主侧数据搬运（迁移模块）
 //!
 //! 模块间协作只经本 facade 再导出或 trait 注入（如 [`bus::MessageDispatcher`]），
 //! 禁止新增横向耦合；[`permission`] 为共享词汇（bedcode-plugin-api 再导出），
@@ -21,8 +20,6 @@ pub mod config;
 /// 由 `manager::runtime::component` 的 Host trait 绑定逐接口调用）+ 前端 Tauri
 /// 命令桥（api_bridge，权限校验后执行操作）
 pub mod host_api;
-/// 一次性数据搬运模块：宿主侧 legacy 表 → 插件私有库（各迁移幂等、失败不阻断启动）
-pub mod legacy;
 pub mod manager;
 pub mod monitor;
 pub mod permission;

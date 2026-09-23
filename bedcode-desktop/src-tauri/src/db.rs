@@ -7,7 +7,4 @@ mod models;
 mod operations;
 
 pub use database::Database;
-pub use models::{
-    connection_method, connection_result, LegacyAuthRows, LegacyConnectionRow, LegacyPairingRow,
-    LegacyQuickActionRow, Setting,
-};
+pub use models::Setting;

@@ -451,27 +451,6 @@ pub fn run() {
             app.manage(mdns_advertiser.clone());
             app.manage(plugin_host.clone());
             app.manage(plugin_host.wasm_runtime().fs_auth().clone());
-            // 旧 auto-task 私有库 → 合并插件私有库的一次性搬运（票 17）：必须跑在
-            // PluginHost::new 之后——合并插件 activate 里的库内改名与建表已完成，
-            // 目标表此刻才存在；幂等（账本已落即整体跳过），失败不阻断启动
-            crate::wasm_core::legacy::task_data_migration::run(&app_handle_arc);
-            // 终端会话中心私有库 id 路径迁移（票 07 B2）：改名后既有用户数据
-            // （会话配置 / 任务历史 / 迁移账本）在旧 id 路径，换名后的插件读新路径
-            // ——同样跑在 PluginHost::new 之后（改名插件已激活、目标库已建表）；
-            // 幂等（账本已落即跳过），失败不阻断启动
-            crate::wasm_core::legacy::session_db_migration::run(&app_handle_arc);
-            // 快捷指令 legacy 主库 → session 插件私有库的一次性搬运（票 02）：同位置
-            // 触发——PluginHost::new 之后插件已按持久化状态自动激活，互调面已登记；
-            // 插件未激活时跳过（数据留主库，双轨期继续服务）；插件侧 marker 幂等
-            crate::wasm_core::legacy::quick_actions_migration::run();
-            // 认证记录 legacy 主库 → 认证中心插件私有库的一次性搬运（2026-09-22
-            // 用户裁定：pairings / connection_history 下沉 terminal-session 私有库，
-            // 生物公钥寄主 plugin_secrets）：同位置触发——PluginHost::new 之后认证
-            // 中心插件已按持久化状态自动激活；插件未激活时跳过（数据留在 legacy
-            // 表不 DROP，下次启动重试）；推送成功（含 already_migrated 回执）后
-            // DROP 两表清理。迁移失败不阻断启动。
-            crate::wasm_core::legacy::auth_records_migration::run();
-            app.manage(system_info.clone());
             // peer-net 节点的启动不再需要 boot 对账（审计票 12）：旧实现要在装配末尾
             // 按硬编码插件 id 补一次状态对账，因为 activate 外壳经
             // `AppContext::try_global()` 取句柄，而 boot 装配期全局尚未注册
