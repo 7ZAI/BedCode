@@ -8,7 +8,40 @@
 
 **Blocked by:** 无（阻塞票 01 的人工基线：起跑即红，宿主进程根本起不来）。
 
-**Status:** ready-for-agent
+**Status:** done（2026-09-24 裁定选 **B**：防漂移按角色分判，消费方改子集校验；判据已写进 ADR 0017 v2）
+
+## 落成形态
+
+- `packages/plugin-sdk-desktop/rust-macros/src/lib.rs`：`check_drift` 加 `DriftRole`。角色由
+  **manifest 是否落在本 crate 的插件包目录内**自动判定（`is_own_package_manifest`：纯词法折叠
+  `.`/`..` 后判祖先关系，不触碰文件系统，故 `plugin.json` 同目录与 `../plugin.json` 包根两种
+  声明方形态都判为声明方，`../../terminal-session/plugin.json` 判为消费方；兄弟包前缀相似不误判）。
+  调用点**零新增属性词汇**，比对失败时错误信息点名判出的角色。
+- `plugins/file-transfer/rust/src/auth_center.rs`：`SessionCenterApi` 从 31 条镜像缩回
+  **2 条真消费**（`consent-decide` / `trust-list`），删掉 29 条「本插件不消费」的载重量。
+- ADR 0017 新增「修订记录 v2」，讲清门禁方向：本票要防的是**契约漂移**，不是「清单条目数守恒」。
+
+**票面问题的答案（「给 terminal-session 再加一条 api，未消费方要不要改」）：不要。**
+消费方只镜像自己调用的条目；对侧改名 / 删除仍会在构建期点名（判据 `trait ⊆ manifest`）。
+
+## 实测证据（2026-09-24）
+
+双向探针：临时给 terminal-session 的 `plugin.json` 追加一条 `__drift_probe_api`，验完逐字节还原
+（md5 与还原后产物 wasmHash `7514caba…` 均与探针前同值）。
+
+| 探针 | 期望 | 实测 |
+| --- | --- | --- |
+| 对侧加 api → 建 `file-transfer`（消费方） | 必须仍然通过 | ✅ `Build complete!`（本票红点消失） |
+| 对侧加 api → 建 `terminal-session`（声明方） | 必须仍然红 | ✅ `api 清单不一致（构建期防漂移检查失败，角色：声明方）：manifest 有但 trait 缺: ["…__drift_probe_api"]` |
+
+- SDK 宏单测 **9/0**（原 6 项补角色参数后语义不变 + 新增：消费方子集通过、消费方调未声明 api 仍红、
+  角色判定五种路径）
+- `pnpm run plugins:build`（桌面）**全绿**，四插件产物已重出并注入 wasmHash
+- `plugins/file-transfer/rust` 原生 `cargo test` **59/0**
+- 遗留（非本票引入）：`transfer_store.rs:109 entry_from_dto` never used 警告，HEAD 即存在
+
+**未做**：`pnpm run tauri:dev` 真机起跑未在本会话复现（无头环境无 GUI）。本票的门禁形态是
+`ensurePluginWasm()` 的「源码比产物新 → 补建」判据，四插件产物已按上述构建链重出即为该判据满足态。
 
 ## 现象（2026-09-24 01:10 实测）
 
@@ -50,6 +83,9 @@ error: plugin_api: trait 与 manifest 'plugins/file-transfer/rust/../../terminal
 - **B**：把防漂移比对源从「跨插件 manifest」改为「本插件 manifest + 依赖声明的 api 子集」，
   只比对**自己真正调用**的方法；对侧清单增项不再连带红。
 - **C**：跨插件 api 清单改为构建链集中校验（一处声明所有 consumer），插件侧 trait 不再镜像。
+
+**裁定（2026-09-24，用户）：选 B。** A 只是把同一处耦合再固化一次（票面上方 worktree 里那 12 行
+就是 A 的形态，已随 B 落地缩回 2 条）；C 要动 JS 构建链且把契约从编译期推到构建期，收益不抵范围。
 
 无论选哪条，验收都要覆盖：`plugins:build` 三插件全绿、`pnpm run tauri:dev` 起跑绿、
 且**给 terminal-session 再加一条 api 时，未消费方插件是否仍需改动**有明确答案（要 / 不要，写进 ADR 0017 或票末）。

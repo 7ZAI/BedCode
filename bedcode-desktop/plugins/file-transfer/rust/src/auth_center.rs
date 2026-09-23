@@ -106,20 +106,18 @@ pub(crate) struct ConsentDecision {
 }
 
 // ==================== 互调 client（ADR 0017：manifest 声明即契约） ====================
-// 以认证中心 manifest 为防漂移比对源：trait 方法推导的 api 清单与其 `api` 字段
-// 精确集合比对（构建期不一致直接编译失败）。client 类型化调用，wire 形状与本
-// 模块类型经 serde 对齐。
+// 以认证中心 manifest 为防漂移比对源。本插件是**消费方**（manifest 属对侧插件包），
+// 判据为 `trait ⊆ manifest`：只镜像本插件真正调用的 api，调对侧未声明的条目仍编译失败，
+// 而对侧新增 api 不再连带本插件红（票 13 裁定——此前精确相等把「改 terminal-session」
+// 变成「同时改一个不消费它的插件」）。
 //
 // 仅 wasm 目标声明：native（cargo test）不消费 client，跳过宏展开避免
 // 死代码告警；防漂移比对由 wasm 构建（CI 插件构建链）强制执行。
 
 #[cfg(target_arch = "wasm32")]
 #[plugin_api(manifest = "../../terminal-session/plugin.json")]
-// 声明即契约（ADR 0017 防漂移）：trait 自身不被运行引用，仅承载构建期比对
-// （宏生成 Dispatcher/Client，Client 由 WasmAuthGateway 使用）。
-// 方法集必须与 `com.bedcode.terminal-session` 的 manifest.api **精确一致**（票 10 后的清单
-// = pairing 八项 + trust 两项 + consent 一项 + config 三项 + session-create 一项
-//   + 会话动作四项）。
+// trait 自身不被运行引用（宏生成 Dispatcher/Client，Client 由 WasmAuthGateway 使用），
+// 方法名与 wire 上的 api 短名一一对应。
 #[allow(dead_code)]
 pub(crate) trait SessionCenterApi {
     /// 首连确认决策（两阶段流：阶段 1 无意向评估信任；阶段 2 回传 userDecision）
@@ -129,77 +127,6 @@ pub(crate) trait SessionCenterApi {
     /// 统一信任视图（pairing + peer 合并；本插件只取 peer 段）
     #[api("trust-list")]
     fn trust_list() -> Result<serde_json::Value, String>;
-
-    /// 撤销统一条目（本插件不消费：撤销仍走 host-peer 原语直通）
-    #[api("trust-revoke")]
-    fn trust_revoke(id: String) -> Result<serde_json::Value, String>;
-
-    // ============ 票 11 命令面桥接新增（宿主命令面消费；本插件不消费） ============
-    // 构建期防漂移要求 trait 方法集与 manifest.api 精确一致，以下方法仅承载
-    // 比对（宿主侧经原始 JSON-RPC 调用，不经本 client）。
-    #[api("pairing-code-generate")]
-    fn pairing_code_generate(ttl: u64) -> Result<serde_json::Value, String>;
-    #[api("pairing-code-status")]
-    fn pairing_code_status() -> Result<Option<serde_json::Value>, String>;
-    #[api("pairing-code-verify")]
-    fn pairing_code_verify(code: String) -> Result<bool, String>;
-    #[api("pairing-code-clear")]
-    fn pairing_code_clear() -> Result<(), String>;
-    #[api("qr-code-generate")]
-    fn qr_code_generate(ttl: u64) -> Result<serde_json::Value, String>;
-    #[api("qr-code-status")]
-    fn qr_code_status() -> Result<Option<serde_json::Value>, String>;
-    #[api("qr-code-verify")]
-    fn qr_code_verify(token: String) -> Result<serde_json::Value, String>;
-    #[api("qr-code-clear")]
-    fn qr_code_clear() -> Result<(), String>;
-
-    // ============ 票 08 配置面（宿主命令面消费；本插件不消费） ============
-    #[api("config-list")]
-    fn config_list() -> Result<serde_json::Value, String>;
-    #[api("config-upsert")]
-    fn config_upsert(draft: serde_json::Value) -> Result<serde_json::Value, String>;
-    #[api("config-delete")]
-    fn config_delete(id: String) -> Result<bool, String>;
-
-    // ============ 票 09 创建编排 + 票 10 会话动作（宿主命令面消费；本插件不消费） ============
-    // 补登票 09 漏项：`session-create` 落 manifest 后本 trait 未同步 → wasm 构建期
-    // 防漂移比对必红（票 09 未重建本插件产物，故直到票 10 重建时才暴露）。
-    #[api("session-create")]
-    fn session_create(draft: serde_json::Value) -> Result<serde_json::Value, String>;
-    #[api("session-restart")]
-    fn session_restart(draft: serde_json::Value) -> Result<serde_json::Value, String>;
-    #[api("session-remove")]
-    fn session_remove(draft: serde_json::Value) -> Result<serde_json::Value, String>;
-    #[api("session-rename")]
-    fn session_rename(draft: serde_json::Value) -> Result<serde_json::Value, String>;
-    #[api("session-resize")]
-    fn session_resize(draft: serde_json::Value) -> Result<serde_json::Value, String>;
-
-    // ============ 票 02/03/07 下沉追加（宿主命令面消费；本插件不消费） ============
-    // session 插件 manifest 新增的 api 条目，仅承载构建期防漂移比对；
-    // 宿主侧经原始 JSON-RPC 调用，不经本 client。
-    #[api("quick-actions-import")]
-    fn quick_actions_import(rows: serde_json::Value) -> Result<serde_json::Value, String>;
-    #[api("annotate")]
-    fn annotate(draft: serde_json::Value) -> Result<serde_json::Value, String>;
-    #[api("devices-connect-list")]
-    fn devices_connect_list() -> Result<serde_json::Value, String>;
-
-    // ============ 2026-09-22 认证记录下沉追加（宿主/其他插件消费；本插件不消费） ============
-    // 认证中心私有库 auth_records 域带来的五个 api，签名与 provider 侧
-    // （`terminal-session/rust/src/lib.rs` 的 `#[plugin_api]` impl）逐字对齐：
-    // 本插件只用 consent/trust 三项，其余全部仅承载构建期防漂移比对。
-    #[api("auth-records-import")]
-    fn auth_records_import(rows: serde_json::Value) -> Result<serde_json::Value, String>;
-    #[api("devices-list")]
-    fn devices_list() -> Result<serde_json::Value, String>;
-    #[api("history-list")]
-    fn history_list(device_id: String) -> Result<serde_json::Value, String>;
-    #[api("connection-touch")]
-    fn connection_touch(fingerprint: String) -> Result<(), String>;
-    #[api("connection-close")]
-    fn connection_close(fingerprint: String) -> Result<(), String>;
 }
 
 // ==================== 可注入面（native 单测驱动编排） ====================

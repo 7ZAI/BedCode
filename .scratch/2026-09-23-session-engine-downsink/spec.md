@@ -603,7 +603,7 @@ P0–P5 是**阶段划分与裁决记录**，保留作为理由；开工请以�
 | 10 | 会话原语整 interface 退役 + ABI 25→26（**唯一**契约破坏点） | 03, 04, 08, 09 | ready-for-agent |
 | 11 | 内核会话目录与装配链删除（宿主零会话对象） | 02, 06, 10 | ready-for-agent |
 | 12 | 文档与路线图收尾 | 11 | ready-for-agent |
-| 13 | 插件 api 防漂移镜像清单落后（file-transfer 编译红，dev 起跑 / CI 双堵） | — | ready-for-agent |
+| 13 | 插件 api 防漂移镜像清单落后（file-transfer 编译红，dev 起跑 / CI 双堵） | — | done（2026-09-24 裁定选 B：`#[plugin_api]` 按声明方/消费方分判，消费方改子集校验；file-transfer trait 31→2，ADR 0017 v2） |
 | 14 | wasip3 测试夹具落后 `pty_quota`（宿主 `--lib` 在 HEAD 即 6 红） | — | ready-for-agent |
 
 **票 13/14 的来源（2026-09-24 补记）**：票 01 人工基线本轮开跑即被挡（宿主 dev 起不来），
