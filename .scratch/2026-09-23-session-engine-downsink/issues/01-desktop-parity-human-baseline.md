@@ -57,11 +57,11 @@
 自动激活了。** P1-b 无降级轨（§8），会话真源插件没激活 → 终端窗口/会话面全部不可用 →
 **清单 10 项一条都观测不了**。这正是「基线看起来挂了，其实是环境没就绪」的形态。
 处置走 UI（插件管理里启用「会话中心」），不改持久化状态文件绕——顺带说一句，
-**「启用会话中心插件」本身就该是基线的一条前置检查**，已补进复跑单 §1a。
+**「启用会话中心插件」本身就该是基线的一条前置检查**，已补进复跑单 §1b。
 
 **本轮的三个附带产出（都已核到源码/实路径，不是推测）：**
 
-1. **落盘日志取证路径的两个坑，会直接造成假绿**（复跑单 §1b 已改）：
+1. **落盘日志取证路径的两个坑，会直接造成假绿**（复跑单 §1c 已改）：
    ① 日志文件名**按 UTC 不按本地日期**——本地 09-24 06:2x 起的一轮落在 `runtime.2026-09-23.log`，
    而票面原先给的 `runtime.$(date +%F).log` **指向不存在的文件**，grep 空文件 = 「无异常」；
    ② 落盘时间戳是 UTC ISO（`2026-09-23T22:25:36Z`），与 dev stdout 的本地时分不同形，
@@ -81,6 +81,40 @@
 
 **当前状态**：dev 进程仍在跑（pid 1793133 系），端口 8767 在听，窗口已渲染完前端
 （PluginLoader 前端装载日志可见）。**等人把「会话中心」启用后**即可从 §3.1 键盘输入开始逐条走。
+
+### 2026-09-24 06:30 · 插件已激活、会话真的建起来了；同时撞出一个凭证问题
+
+接上节 —— 「会话中心」已在 UI 里激活（`Plugin activated successfully
+plugin_id=com.bedcode.terminal-session persist=true`，前端 `activate()` 亦完成），
+并且**核心路径实测可用**：
+
+```
+22:30:26Z host-pty: 插件私有 PTY 已创建 plugin_id=com.bedcode.terminal-session
+22:30:26Z [plugin:com.bedcode.terminal-session] session created via host-pty (session_id=806fad27-…)
+22:30:26Z [SyncEventHandler] Processing event: SessionCreated { session_id: "806fad27-…" }
+22:30:28Z 页面加载，重置前端通道会话 url=http://localhost:1420/terminal-window/806fad27-…
+```
+
+即 **P1-b 的「插件自持 PTY 建会话 → 事件面自足 → 桌面开终端窗」这条链在真机上是通的**。
+这是本票第一条实质结论（此前五轮都是零条）。
+
+**同时撞出一个新问题（复跑单 §3.11 已立条目待人判）**：签发过令牌之后，
+`com.bedcode.terminal-session` 的插件面命令仍被 fail-closed 拒了三次
+（`22:30:40 / :42 / :48`，`缺少有效通道凭证，插件面命令被拒绝`）。
+时序上恰好夹在「终端窗口这个**独立 webview** page-load 重置通道会话（`revoked_tokens=3`）」
+之后 → 两个候选根因：① 独立窗口的 webview 从来没拿到自己的令牌（签发在主窗 loader 路径）；
+② 重置把已签发的作废了。**哪一种要人回答「这三次点对应界面上什么操作、有没有可见报错」**，
+agent 侧只能看到拒绝、看不到界面。归属上这是 P1-b（终端域下沉 + 独立窗口）与
+P0-5（`7825359bd` 通道凭证绑定）的**交界处**，不算任一方的单独回归。
+
+**还纠出我自己配套里的一处错（会造成两头误判，已在复跑单 §1a 换成实测锚点）**：
+复跑单原先给的三个取证锚点
+`session created via plugin` / `session stop requested via plugin` / `session removed via plugin`
+在这轮**全部 0 命中**——它们是 `utils/session_gateway.rs` 的宿主命令面 info，
+而桌前端建会话/输入走插件贡献的命令通道，不经转发层。照它们 grep 会把「路径正常」
+误判成「路径没走」。改用实测锚点：`host-pty: 插件私有 PTY 已创建` +
+`[plugin:…] session created via host-pty` + `[SyncEventHandler] … SessionCreated`。
+另记一条给票 08 的输入：票 08 注销宿主命令面后那组 info 会彻底消失，锚点表届时需再核。
 
 ### 2026-09-24 05:2x · 准备工作完成（agent 侧），本轮仍未开跑——但挡路的原因换了
 

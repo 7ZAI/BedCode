@@ -31,7 +31,38 @@ HEAD 提交        :
 日志起跑前行数   : （用于只读增量：tail -n +<行数+1>）
 ```
 
-### 1a. 起跑后第一件事：确认 `com.bedcode.terminal-session` 已激活
+### 1a. 日志锚点的**实测纠正**（照原锚点 grep 会两头错）
+
+2026-09-24 06:30 真机一轮：插件激活后建了一条真实会话（真 PTY），但三个「转发层」锚点
+**全部 0 命中**——
+
+```
+"session created via plugin"           0
+"session stop requested via plugin"    0
+"session removed via plugin"           0
+```
+
+原因：`utils/session_gateway.rs` 那组 info 只在**宿主命令面**发起的路径上打；
+桌面前端的建会话/输入走**插件贡献的命令通道**（不经转发层），所以生产路径上它们不出现。
+拿它们当判据会得出两种错结论：grep 不到 → 以为「会话没建起来」（假红），
+或以为「这条路径没被走到」而跳过核对（假绿）。
+
+**该用的实测锚点**（真机验证过命中）：
+
+| 用途 | 锚点 |
+| --- | --- |
+| 引擎侧确实起了 PTY | `host-pty: 插件私有 PTY 已创建 plugin_id=com.bedcode.terminal-session` |
+| 插件登记域收了会话 | `[plugin:com.bedcode.terminal-session] session created via host-pty` |
+| 配额声明生效 | `host-pty: 配额已登记 plugin_id=…` |
+| 插件域就绪（激活成功） | `Terminal Session Center plugin activated` / `session registry store ready` / `session lifecycle listener registered` / `session input listener registered` |
+| 事件面被宿主收到 | `[SyncEventHandler] Processing event: SessionCreated { session_id: … }` |
+| **红线（必须 0）** | `session plugin not active` / `failed via plugin` |
+| **通道凭证被拒** | `[PluginChannel] 缺少有效通道凭证，插件面命令被拒绝`（fail-closed，见 §3.11） |
+
+> 顺带一条给票 08 的输入：票 08 注销宿主会话命令面时，那组 `via plugin` info 会随之消失——
+> 本清单的锚点表届时要再核一次，别留成「查不到就等于坏」。
+
+### 1b. 起跑后第一件事：确认 `com.bedcode.terminal-session` 已激活
 
 P1-b 起会话真源在插件，宿主无降级轨（AGENTS §8）。该插件未激活时**清单 10 项一条都观测不了**
 （终端窗口打不开 / 会话面显性报错），而这看起来像「基线挂了」而不是「环境没就绪」。
@@ -45,7 +76,7 @@ P1-b 起会话真源在插件，宿主无降级轨（AGENTS §8）。该插件�
 `state=Loaded` 就是没激活（2026-09-24 首轮即撞上：只有 file-transfer 从持久化状态自动激活）。
 **处置**：在插件管理界面启用「会话中心」后重跑，不要改持久化状态文件去绕。
 
-### 1b. 日志路径与格式的三个坑（2026-09-24 实测，都是会让人误判「无异常」的坑）
+### 1c. 日志路径与格式的三个坑（2026-09-24 实测，都是会让人误判「无异常」的坑）
 
 1. **文件名按 UTC，不按本地日期**。本地 `2026-09-24 06:2x CST` 起的那轮，日志落在
    `runtime.2026-09-23.log`（UTC 仍是 09-23T22:2x）。
@@ -118,8 +149,10 @@ P1-b 起会话真源在插件，宿主无降级轨（AGENTS §8）。该插件�
 
 - **操作**：跑一个前台程序（`sleep 300`）→ Ctrl-C；工具栏「停止」「复制」各点一次
 - **预期**：Ctrl-C 中断并显示 `^C`；「停止」终止会话且状态转 `Stopped`；「复制」把选区送进剪贴板
-- **取证**：`grep 'session stop requested via plugin' "$LOG"` 应命中一次（点「停止」时），
-  且**只**一次（双发 = kill 与 pty:exit 各广播一次的旧缺陷复发）
+- **取证**（锚点见 §1a，原写的 `session stop requested via plugin` 实测 0 命中、已废弃）：
+  停会话看 `[plugin:com.bedcode.terminal-session]` 侧终态行与
+  `[SyncEventHandler] Processing event: SessionStopped`，且**只**一次
+  （双发 = kill 与 `pty:exit` 各广播一次的旧缺陷复发；单点广播是 P1-b 定死的）
 - **结果**：☐ 正常 ☐ 异常 → 记 `issues/__`
 - **备注**：
 
@@ -185,6 +218,32 @@ grep -E 'session plugin not active|failed via plugin|\[plugin:' /tmp/baseline-ru
 - **先排除另一类刷屏**：`peer mDNS search started …` 这类 DEBUG 每 4–8 秒一条
   （实测 5 分钟 250+ 行），`grep -c 'DEBUG'` 的大小不代表健康度——按级别统计只数 ERROR/WARN。
 - **结果**：☐ 无红线 ☐ 有红线 → 记 `issues/__`
+- **备注**：
+
+### 3.11 插件面命令的通道凭证（2026-09-24 真机首轮撞到的新面）
+
+- **背景**：`frontend_channel.rs::authorize` 是 **fail-closed**——凭证解析不出来就拒，
+  绝不回退到「按参数 plugin_id 放行」（`7825359bd` 审计票 06 / P0-5 的裁决）。
+- **首轮实测时序**（UTC 22:30 一轮，会话建成功之后）：
+  ```
+  22:30:26  host-pty: 插件私有 PTY 已创建 …            ← 建会话 OK
+  22:30:28  [PluginChannel] 页面加载，重置前端通道会话  url=…/terminal-window/806fad27-…
+            前端通道会话已重置 reason=page-load revoked_tokens=3
+  22:30:29  loader 会话密钥已签发 / 四插件通道令牌已签发
+  22:30:40  WARN 缺少有效通道凭证，插件面命令被拒绝 plugin_id=com.bedcode.terminal-session
+  22:30:42  WARN 同上
+  22:30:48  WARN 同上                                    ← 三次，均在签发之后
+  ```
+- **要人回答的问题**（agent 只能看到拒绝，看不到界面上是什么）：
+  1. 这三次对应你**点了什么**？（终端窗口里的操作 / 侧栏 / 设置页）
+  2. 界面有没有可见错误提示？还是静默无反应？——**静默无反应要单判**，
+     fail-closed 拒了但没告诉用户 = §8「用户可见错误走 i18n」那条的另一半
+  3. 同一操作再点一次还失败吗？（区分「终端窗口这个独立 webview 从来没拿到令牌」
+     与「page-load 重置把已签发令牌作废了」两种根因）
+- **归属提示**：终端窗口是 `/terminal-window/<id>` 这个**独立 webview**，
+  令牌签发发生在主窗 loader 路径上——若确认是它没凭证，属「P1-b 终端域下沉 + P0-5 凭证绑定」
+  两条线的**交界处**，不是任一方的单独回归；立票时两条都要点名。
+- **结果**：☐ 未复现 ☐ 可复现 → 记 `issues/__`
 - **备注**：
 
 ## 4. 结论模板（跑完填，同步到票末 Comments）
