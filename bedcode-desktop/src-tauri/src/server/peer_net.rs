@@ -19,6 +19,10 @@
 //!   传输任务快照经 `publish_bus_only` 只推 `peer:transfer` / `peer:receive`
 //!   总线 topic，插件按 batchId 归并持久化业务视图。
 
+pub mod peer_engine_receive;
+pub mod peer_engine_remote;
+pub mod peer_engine_transfer;
+
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
@@ -557,8 +561,8 @@ pub async fn set_shared_roots(app: AppHandle, entries: Vec<SharedDirEntry>) -> c
 // These adapters keep the host-peer boundary in the peer-net module. Product
 // state remains owned by the file-transfer plugin; the engine adapters only
 // expose the existing peer-net session controls and wire-compatible DTOs.
-pub(crate) use crate::peer_engine_remote::{PeerSharedRootDto, RemoteBrowseDto, RemotePullFileDto};
-pub(crate) use crate::peer_engine_transfer::PeerTransferDto;
+pub(crate) use self::peer_engine_remote::{PeerSharedRootDto, RemoteBrowseDto, RemotePullFileDto};
+pub(crate) use self::peer_engine_transfer::PeerTransferDto;
 
 pub(crate) async fn send_files_for_plugin(
     app: AppHandle,
@@ -566,17 +570,17 @@ pub(crate) async fn send_files_for_plugin(
     paths: Vec<String>,
     encrypt: Option<bool>,
 ) -> crate::Result<PeerTransferDto> {
-    crate::peer_engine_transfer::send_files_to_peer_with_policy(app, node_id, paths, encrypt).await
+    self::peer_engine_transfer::send_files_to_peer_with_policy(app, node_id, paths, encrypt).await
 }
 
 pub(crate) async fn cancel_transfer_for_plugin(app: AppHandle, batch_id: String) -> crate::Result<bool> {
-    crate::peer_engine_transfer::cancel_peer_transfer(app, batch_id).await
+    self::peer_engine_transfer::cancel_peer_transfer(app, batch_id).await
 }
 
 /// 接收侧取消（host-peer `close` 第 ③ 分支）：与发送侧取消分开，pending 询问
 /// 视同拒绝、在途接收/拉取按会话令牌中止
 pub(crate) async fn cancel_receiving_for_plugin(app: AppHandle, batch_id: String) -> crate::Result<bool> {
-    crate::peer_engine_receive::cancel_peer_receiving(app, batch_id).await
+    self::peer_engine_receive::cancel_peer_receiving(app, batch_id).await
 }
 
 pub(crate) async fn respond_transfer_for_plugin(
@@ -584,7 +588,7 @@ pub(crate) async fn respond_transfer_for_plugin(
     batch_id: String,
     accepted: bool,
 ) -> crate::Result<bool> {
-    crate::peer_engine_receive::respond_peer_transfer(app, batch_id, accepted).await
+    self::peer_engine_receive::respond_peer_transfer(app, batch_id, accepted).await
 }
 
 pub(crate) async fn set_receive_policy_for_plugin(
@@ -592,30 +596,30 @@ pub(crate) async fn set_receive_policy_for_plugin(
     mode: String,
     timeout_secs: u64,
 ) -> crate::Result<()> {
-    crate::peer_engine_receive::set_peer_receive_policy(app, mode, timeout_secs).await
+    self::peer_engine_receive::set_peer_receive_policy(app, mode, timeout_secs).await
 }
 
 pub(crate) async fn set_transfer_concurrency_for_plugin(app: AppHandle, concurrency: u8) -> crate::Result<()> {
-    crate::peer_engine_receive::set_peer_transfer_concurrency(app, concurrency).await
+    self::peer_engine_receive::set_peer_transfer_concurrency(app, concurrency).await
 }
 
 pub(crate) async fn pause_transfer_for_plugin(app: AppHandle, batch_id: String) -> crate::Result<bool> {
-    crate::peer_engine_transfer::pause_peer_transfer(app, batch_id).await
+    self::peer_engine_transfer::pause_peer_transfer(app, batch_id).await
 }
 
 pub(crate) async fn resume_transfer_for_plugin(app: AppHandle, batch_id: String) -> crate::Result<bool> {
-    crate::peer_engine_transfer::resume_peer_transfer(app, batch_id).await
+    self::peer_engine_transfer::resume_peer_transfer(app, batch_id).await
 }
 
 pub(crate) async fn resume_all_transfers_for_plugin(app: AppHandle) -> crate::Result<u32> {
-    Ok(crate::peer_engine_transfer::resume_all_peer_transfers(app).await? as u32)
+    Ok(self::peer_engine_transfer::resume_all_peer_transfers(app).await? as u32)
 }
 
 pub(crate) async fn list_remote_roots_for_plugin(
     app: AppHandle,
     node_id: String,
 ) -> crate::Result<Vec<PeerSharedRootDto>> {
-    crate::peer_engine_remote::list_peer_shared_roots(app, node_id).await
+    self::peer_engine_remote::list_peer_shared_roots(app, node_id).await
 }
 
 pub(crate) async fn browse_remote_for_plugin(
@@ -624,7 +628,7 @@ pub(crate) async fn browse_remote_for_plugin(
     dir_id: String,
     rel_path: String,
 ) -> crate::Result<RemoteBrowseDto> {
-    crate::peer_engine_remote::browse_peer_directory(app, node_id, dir_id, rel_path).await
+    self::peer_engine_remote::browse_peer_directory(app, node_id, dir_id, rel_path).await
 }
 
 pub(crate) async fn pull_files_for_plugin(
@@ -633,11 +637,11 @@ pub(crate) async fn pull_files_for_plugin(
     dir_id: String,
     files: Vec<RemotePullFileDto>,
 ) -> crate::Result<u32> {
-    Ok(crate::peer_engine_remote::pull_peer_files(app, node_id, dir_id, files).await? as u32)
+    Ok(self::peer_engine_remote::pull_peer_files(app, node_id, dir_id, files).await? as u32)
 }
 
 pub(crate) async fn set_download_dir_for_plugin(app: AppHandle, path: Option<String>) -> crate::Result<()> {
-    crate::peer_engine_receive::set_peer_download_dir(app, path).await
+    self::peer_engine_receive::set_peer_download_dir(app, path).await
 }
 
 /// 节点属主记账（审计票 12）：把节点从「未跑」带到「跑」的那个**调用方插件 id**。
@@ -934,20 +938,20 @@ async fn start_locked(
     ));
     // 接收侧登记句柄与配置快照（设置热更新/按批取消入口），并按持久化
     // 设置纠正首份策略与落点；事件消费任务随后启动
-    super::peer_engine_receive::register_handler(app, Arc::clone(&handler), config).await;
+    self::peer_engine_receive::register_handler(app, Arc::clone(&handler), config).await;
     crate::system::error_boundary::spawn_with_error_boundary(
         "peer_net_transfer_events",
-        super::peer_engine_receive::drive_receive_events(app.clone(), transfer_rx),
+        self::peer_engine_receive::drive_receive_events(app.clone(), transfer_rx),
     );
     // 服务侧供流记账（双端记账）：PullServed/Progress/Terminal → 发送侧任务
     // （发送会话事件适配器注册/推进/结算 direction=send 任务，
     // 对端拉取发起方另有自己的 receive 任务，两端各自展示同一次传输）
     crate::system::error_boundary::spawn_with_error_boundary(
         "peer_net_serve_events",
-        super::peer_engine_transfer::drive_serve_events(app.clone(), serve_rx),
+        self::peer_engine_transfer::drive_serve_events(app.clone(), serve_rx),
     );
     // 远端浏览/拉取会话上下文（issue 11）：事件通道发送端快照供拉取入账任务表
-    super::peer_engine_remote::register_session(app, handler.event_sender()).await;
+    self::peer_engine_remote::register_session(app, handler.event_sender()).await;
 
     let running = node
         .start_with_listener(
@@ -1086,8 +1090,8 @@ async fn stop_locked(state: &tauri::State<'_, PeerNetState>, app: &AppHandle) ->
         Some(runtime) => {
             // 接收侧句柄随节点下线摘除（设置命令此后仅改持久化，下次启动生效）；
             // 远端拉取队列同步中止（issue 11）
-            super::peer_engine_receive::clear_handler(app).await;
-            super::peer_engine_remote::clear_state(app).await;
+            self::peer_engine_receive::clear_handler(app).await;
+            self::peer_engine_remote::clear_state(app).await;
             // 引擎 daemon 停：退订浏览 + 注销自身广播（共享守护不 shutdown）
             runtime.daemon.stop().await.map_err(map_peer_net_error)?;
             // 注销宿主身份广播登记（owner=host，MdnsService ADVERTISERS）

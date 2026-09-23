@@ -7,10 +7,6 @@ pub mod db;
 pub mod enums;
 pub mod events;
 pub mod mdns;
-mod peer_engine_receive;
-mod peer_engine_remote;
-mod peer_engine_transfer;
-pub mod peer_net;
 pub mod wasm_core;
 pub mod process;
 pub mod pty;
@@ -21,6 +17,7 @@ pub mod utils;
 
 // ==================== Re-exports ====================
 
+use crate::server::peer_net;
 use commands::RunningSessionInfo;
 use system::constants::SYNC_EVENT_BROADCAST_CAPACITY;
 pub use system::{AppConfig, AppContext, AppError, Result};
@@ -367,18 +364,18 @@ pub fn run() {
             // 注入目录），node_identity.json 与 bedcode.db 并列存放；错误经 ? 上抛
             // 走既有启动失败路径——静默换身份会让对端可信列表全部失效（D3）
             let peer_net_data_dir = app_handle.path().app_data_dir().expect("Failed to get app data dir");
-            crate::peer_net::init_node_identity(&peer_net_data_dir)?;
+            crate::server::peer_net::init_node_identity(&peer_net_data_dir)?;
 
             // 对等网络节点状态容器（ticket 03）：节点生命周期按**属主**随插件启停
             // （审计票 12——插件经 host-peer.start-node / stop-node 自行请求，
             // 内核只记账；见 peer_net::start_node_owned / release_node_for。
             // 旧 setup 无条件自启与旧的按产品 id 开关外壳都已退役）
-            app.manage(crate::peer_net::PeerNetState::default());
+            app.manage(crate::server::peer_net::PeerNetState::default());
             // peer-engine 状态仅保存当前引擎会话控制句柄与事件快照，不是业务持久化真源；
             // 任务、历史、设置均由 file-transfer 插件私有库持有。
-            app.manage(crate::peer_engine_transfer::PeerTransferState::default());
-            app.manage(crate::peer_engine_receive::PeerReceiveState::default());
-            app.manage(crate::peer_engine_remote::PeerRemoteState::default());
+            app.manage(crate::server::peer_net::peer_engine_transfer::PeerTransferState::default());
+            app.manage(crate::server::peer_net::peer_engine_receive::PeerReceiveState::default());
+            app.manage(crate::server::peer_net::peer_engine_remote::PeerRemoteState::default());
 
             let db = Database::new(&db_path)?;
             db.init_schema()?;

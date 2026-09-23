@@ -77,10 +77,8 @@ bedcode-desktop/
 │       ├── system/         # App context (DI), config, error types, lifecycle hooks, grouped constants
 │       ├── utils/          # auth (JWT/pairing/QR token), crypto, parser (ANSI/Markdown)
 │       ├── enums/          # Enum types (auth, control, plugin, PTY state, session, special keys, etc.)
-│       ├── peer_net.rs            # Peer engine integration (identity, trust gate, lifecycle, host-peer bridge)
-│       ├── peer_engine_receive.rs # peer-net inbound adapter; business state lives in file-transfer plugin
-│       ├── peer_engine_remote.rs  # peer-net remote browse/pull adapter
-│       └── peer_engine_transfer.rs# peer-net send-session adapter
+│       ├── server/peer_net.rs      # Peer engine integration (identity, trust gate, lifecycle, host-peer bridge)
+│       └── server/peer_net/        # Engine adapters: peer_engine_receive/remote/transfer (send/receive/remote browse)
 ├── packages/
 │   ├── plugin-sdk-desktop/ # Plugin SDK (TS + Rust, incl. dev-shell, templates, scaffolding CLI)
 │   ├── plugin-test/        # Test WASM plugin covering every host call path

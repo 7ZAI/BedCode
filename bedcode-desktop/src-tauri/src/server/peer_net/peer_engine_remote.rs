@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 use tokio::sync::mpsc;
 
-use super::peer_net::{map_peer_net_error, parse_node_id, runtime_snapshot};
+use super::{map_peer_net_error, parse_node_id, runtime_snapshot};
 
 // ==================== 常量 ====================
 

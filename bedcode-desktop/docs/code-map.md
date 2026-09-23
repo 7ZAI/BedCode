@@ -94,15 +94,13 @@ bedcode-desktop/                      # 桌面端项目 (Tauri 2.0 + Vue 3)
         ├── events/                   # 全局事件系统：AppEvent trait、事件匹配、SessionManager→前端转发、
         │                             #   同步事件定义与处理（→ WebSocket 广播）
         ├── mdns/                     # mDNS 服务广播：将桌面端服务注册到局域网供移动端发现
-        ├── peer_net.rs               # 对等网络引擎接入：节点身份/发现/生命周期、host-peer bridge、事件适配
-        ├── peer_engine_receive.rs    # peer-net 入站连接适配；业务状态由 file-transfer 插件持有
-        ├── peer_engine_remote.rs     # peer-net 远端浏览/拉取适配
-        ├── peer_engine_transfer.rs   # peer-net 发送会话适配
-        │                             #   宿主不持有传输历史、设置或任务真源
         ├── plugin/                   # 插件系统（WASM 组件沙箱架构，核心模块，详见 Core Modules）
         ├── pty/                      # PTY 管理：进程生命周期、输出读取/缓存/监听、命令构建、WSL 支持
         ├── server/                   # 服务器（核心模块，详见 Core Modules）：core/ 传输无关内核 +
-        │                             #   http/ 与 websocket/ 两个传输面，单端口组合物在 core/app.rs
+        │                             #   http/ 与 websocket/ 两个传输面，单端口组合物在 core/app.rs；
+        │                             #   peer_net/ 对等网络引擎域——引擎接入中枢（节点身份/发现/生命周期、
+        │                             #   host-peer bridge、事件适配）+ 三个引擎适配子模块（发送/接收/远端浏览），
+        │                             #   宿主不持有传输历史、设置或任务真源
         ├── session/                  # 会话管理（核心模块，详见 Core Modules）
         ├── system/                   # 系统模块：应用上下文 (DI 容器)、配置、错误类型、生命周期钩子、
         │                             #   日志格式化、休眠阻止；constants.rs 按领域分组的常量（`// ====` 分隔）
@@ -394,10 +392,10 @@ AppEvent trait + 事件匹配处理器；SessionManager 事件双路分发：转
   远端浏览、发送编排等宿主命令已全部注销：设置面由插件经 `set-receive-policy` /
   `set-download-dir` 等原语推送引擎闸门（`peer_net::*_for_plugin`），任务与历史真源在
   file-transfer 插件私有库
-- **数据面**：`peer_engine_remote.rs` 仅做 peer-net 浏览/拉取适配，
+- **数据面（`server/peer_net/`）**：`peer_engine_remote.rs` 仅做 peer-net 浏览/拉取适配，
   `peer_engine_transfer.rs` 仅做发送会话适配，`peer_engine_receive.rs` 仅做入站连接适配；
   宿主不持有任务、设置或历史真源
-- **事件范式**：peer-net 引擎事件经 `peer_net.rs` 适配为 `peer:transfer` / `peer:receive` 全量快照，
+- **事件范式**：peer-net 引擎事件经 `server/peer_net.rs` 适配为 `peer:transfer` / `peer:receive` 全量快照，
   file-transfer 插件按 batchId 合并并持久化业务视图
 - **业务归属**：传输 UI、任务状态、重试、策略、历史与共享根业务在 file-transfer 插件；
   宿主只提供 peer-net 引擎和 host-peer 原语
@@ -423,8 +421,8 @@ Rust 侧以 `abi.rs` 为宿主/插件共同引用的单一事实来源（签名�
 | 数据库 | `src-tauri/src/db/` |
 | 全局事件系统 | `src-tauri/src/events/` |
 | mDNS 广播 | `src-tauri/src/mdns/` |
-| 对等网络（节点/信任/发现） | `src-tauri/src/peer_net.rs` |
-| 对等传输引擎适配（发送/接收/远端浏览） | `src-tauri/src/peer_net.rs`、`peer_engine_transfer.rs`、`peer_engine_receive.rs`、`peer_engine_remote.rs` |
+| 对等网络（节点/信任/发现） | `src-tauri/src/server/peer_net.rs` |
+| 对等传输引擎适配（发送/接收/远端浏览） | `src-tauri/src/server/peer_net/`（peer_engine_transfer / peer_engine_receive / peer_engine_remote） |
 | 对等网络底座 crate | `../packages/peer-net`、`../packages/link-crypto` |
 | 链路加密（HTTP 信封 + WS 帧） | `src-tauri/src/server/core/link_crypto.rs`、`src/composables/`（useLinkCrypto） |
 | 插件系统 (Rust) | `src-tauri/src/wasm_core/` |

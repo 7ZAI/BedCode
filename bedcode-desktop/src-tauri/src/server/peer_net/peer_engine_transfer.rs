@@ -534,14 +534,14 @@ pub(crate) async fn send_files_to_peer_with_policy(
     paths: Vec<String>,
     encrypt_override: Option<bool>,
 ) -> crate::Result<PeerTransferDto> {
-    let parsed = super::peer_net::parse_node_id(&node_id)?;
+    let parsed = super::parse_node_id(&node_id)?;
     if paths.is_empty() || paths.iter().all(|p| p.trim().is_empty()) {
         return Err(crate::AppError::InvalidInput(
             "send_files_to_peer: paths must not be empty".to_string(),
         ));
     }
     // `node` 仅用于确认节点已启动（runtime_snapshot 的可用性即启动判据）
-    let Some((_node, cache)) = super::peer_net::runtime_snapshot(&app).await else {
+    let Some((_node, cache)) = super::runtime_snapshot(&app).await else {
         return Err(crate::AppError::Internal(
             "peer transfer send failed: node not started".to_string(),
         ));
@@ -693,11 +693,11 @@ async fn start_send_session(app: &AppHandle, batch_id: &str) {
         let state = app.state::<PeerTransferState>();
         state.register_session(batch_id)
     };
-    let Some((node, cache)) = super::peer_net::runtime_snapshot(app).await else {
+    let Some((node, cache)) = super::runtime_snapshot(app).await else {
         settle_failed(app, batch_id, "peer transfer start failed: node not started", epoch).await;
         return;
     };
-    let parsed = match super::peer_net::parse_node_id(&node_id) {
+    let parsed = match super::parse_node_id(&node_id) {
         Ok(p) => p,
         Err(e) => {
             settle_failed(app, batch_id, &format!("peer id invalid: {e}"), epoch).await;
@@ -1029,7 +1029,7 @@ async fn set_serve_pause_status(app: &AppHandle, batch_id: &str, paused: bool) {
 
 /// 服务侧任务登记：解析对端展示名后插入 send 任务（服务侧不可重试：sources 空）
 async fn register_serve_task(app: &AppHandle, remote: &NodeId, batch_id: &str, files: Vec<FileMeta>, total_size: u64) {
-    let peer_name = super::peer_net::runtime_snapshot(app)
+    let peer_name = super::runtime_snapshot(app)
         .await
         .and_then(|(_, cache)| cache.get(remote).map(|r| r.device_name.clone()))
         .unwrap_or_default();
@@ -1138,7 +1138,7 @@ fn snapshot(app: &AppHandle) -> Vec<PeerTransferDto> {
 /// 随宿主命令面退役，产品状态由插件经 `peer:transfer` 快照驱动）
 fn publish(app: &AppHandle) {
     let payload = serde_json::to_value(snapshot(app)).unwrap_or_default();
-    super::peer_net::publish_bus_only("peer-transfer-changed", payload);
+    super::publish_bus_only("peer-transfer-changed", payload);
 }
 
 /// 历史封顶淘汰：列表为最新在前，保序保留前 CAP 条终态记录，

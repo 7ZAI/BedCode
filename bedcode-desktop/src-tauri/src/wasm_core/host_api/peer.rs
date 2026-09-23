@@ -119,7 +119,7 @@ fn with_auto_redial<T>(
         Ok(v) => Ok(v),
         Err(e) if e.contains("discovery cache") || e.contains("not in discovery cache") => {
             let app = require_app(host_ctx)?;
-            let endpoint = crate::peer_net::DialEndpoint {
+            let endpoint = crate::server::peer_net::DialEndpoint {
                 node_id: entry.node_id.clone(),
                 addr: entry.addr.clone(),
                 port: entry.port,
@@ -128,7 +128,9 @@ fn with_auto_redial<T>(
                 node_id = %entry.node_id,
                 "peer data-plane auto-redial (handle-remembered endpoint)"
             );
-            sync_result(block_on_async(crate::peer_net::dial_peer_endpoint(app, endpoint)))?;
+            sync_result(block_on_async(crate::server::peer_net::dial_peer_endpoint(
+                app, endpoint,
+            )))?;
             op(&entry.node_id)
         }
         Err(e) => Err(e),
@@ -139,7 +141,7 @@ pub(crate) fn peer_dial(host_ctx: &WasmHostContext, plugin_id: &str, endpoint_js
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_PEER, "host_peer_dial") {
         return Err(denied());
     }
-    let endpoint: crate::peer_net::DialEndpoint =
+    let endpoint: crate::server::peer_net::DialEndpoint =
         serde_json::from_str(endpoint_json).map_err(|e| format!("dial endpoint: invalid json: {e}"))?;
     let app = require_app(host_ctx)?;
     // 注意：node_id 必须 clone 而非 take——take 会把 endpoint.node_id 置空，
@@ -149,7 +151,9 @@ pub(crate) fn peer_dial(host_ctx: &WasmHostContext, plugin_id: &str, endpoint_js
     let node_id = endpoint.node_id.clone();
     let addr = endpoint.addr.clone();
     let port = endpoint.port;
-    let dto = sync_result(block_on_async(crate::peer_net::dial_peer_endpoint(app, endpoint)))?;
+    let dto = sync_result(block_on_async(crate::server::peer_net::dial_peer_endpoint(
+        app, endpoint,
+    )))?;
     match dto.status.as_str() {
         "connected" => Ok(with_handles(|t| {
             t.mint_session(SessionEntry {
@@ -176,11 +180,14 @@ pub(crate) fn peer_close(host_ctx: &WasmHostContext, plugin_id: &str, handle: &s
             return Err(e);
         }
         let app = require_app(host_ctx)?;
-        return sync_result(block_on_async(crate::peer_net::disconnect_peer(app, entry.node_id)));
+        return sync_result(block_on_async(crate::server::peer_net::disconnect_peer(
+            app,
+            entry.node_id,
+        )));
     }
     let app = require_app(host_ctx)?;
     // ② 发送传输句柄（batch-id）→ 取消发送批
-    let cancelled = sync_result(block_on_async(crate::peer_net::cancel_transfer_for_plugin(
+    let cancelled = sync_result(block_on_async(crate::server::peer_net::cancel_transfer_for_plugin(
         app.clone(),
         handle.to_string(),
     )));
@@ -188,7 +195,7 @@ pub(crate) fn peer_close(host_ctx: &WasmHostContext, plugin_id: &str, handle: &s
         return cancelled;
     }
     // ③ 接收侧句柄（batch-id）→ 取消/拒绝接收批（pending 即拒）
-    sync_result(block_on_async(crate::peer_net::cancel_receiving_for_plugin(
+    sync_result(block_on_async(crate::server::peer_net::cancel_receiving_for_plugin(
         app,
         handle.to_string(),
     )))
@@ -205,7 +212,7 @@ pub(crate) fn peer_respond_consent(
     }
     let app = require_app(host_ctx)?;
     let request_id = request_id.to_string();
-    sync_result(block_on_async(crate::peer_net::respond_peer_consent(
+    sync_result(block_on_async(crate::server::peer_net::respond_peer_consent(
         app, request_id, accepted,
     )))
 }
@@ -215,7 +222,7 @@ pub(crate) fn peer_list_trusted(host_ctx: &WasmHostContext, plugin_id: &str) -> 
         return Err(denied());
     }
     let app = require_app(host_ctx)?;
-    let dtos = sync_result(block_on_async(crate::peer_net::list_trusted_peers(app)))?;
+    let dtos = sync_result(block_on_async(crate::server::peer_net::list_trusted_peers(app)))?;
     serde_json::to_string(&dtos).map_err(|e| format!("serialize trusted peers failed: {e}"))
 }
 
@@ -225,7 +232,9 @@ pub(crate) fn peer_revoke_trusted(host_ctx: &WasmHostContext, plugin_id: &str, n
     }
     let app = require_app(host_ctx)?;
     let node_id = node_id.to_string();
-    sync_result(block_on_async(crate::peer_net::revoke_trusted_peer(app, node_id)))
+    sync_result(block_on_async(crate::server::peer_net::revoke_trusted_peer(
+        app, node_id,
+    )))
 }
 
 pub(crate) fn peer_send_files(
@@ -276,16 +285,15 @@ pub(crate) fn peer_send_files(
     let app = require_app(host_ctx)?;
     // 并发上限脉冲：插件设置真源，随发送载荷同步宿主并发闸门（若变化）
     if let Some(n) = concurrency {
-        let _ = sync_result(block_on_async(crate::peer_net::set_transfer_concurrency_for_plugin(
-            app.clone(),
-            n,
-        )));
+        let _ = sync_result(block_on_async(
+            crate::server::peer_net::set_transfer_concurrency_for_plugin(app.clone(), n),
+        ));
     }
     // 返回值已收窄为传输句柄（batch-id）；Phase 3 起插件自持任务视图，宿主
     // 不再回传整份 DTO。断线场景由 with_auto_redial 以记忆 endpoint 重拨
     let dto = with_auto_redial(host_ctx, plugin_id, session, |node_id| {
         let app = require_app(host_ctx)?;
-        sync_result(block_on_async(crate::peer_net::send_files_for_plugin(
+        sync_result(block_on_async(crate::server::peer_net::send_files_for_plugin(
             app,
             node_id.to_string(),
             paths.clone(),
@@ -306,7 +314,7 @@ pub(crate) fn peer_respond_transfer(
     }
     let app = require_app(host_ctx)?;
     let batch_id = batch_id.to_string();
-    let _hit = sync_result(block_on_async(crate::peer_net::respond_transfer_for_plugin(
+    let _hit = sync_result(block_on_async(crate::server::peer_net::respond_transfer_for_plugin(
         app, batch_id, accept,
     )))?;
     Ok(())
@@ -323,7 +331,7 @@ pub(crate) fn peer_set_receive_policy(
     }
     let app = require_app(host_ctx)?;
     let mode = mode.to_string();
-    sync_result(block_on_async(crate::peer_net::set_receive_policy_for_plugin(
+    sync_result(block_on_async(crate::server::peer_net::set_receive_policy_for_plugin(
         app,
         mode,
         timeout_secs,
@@ -338,7 +346,7 @@ pub(crate) fn peer_pause_transfer(host_ctx: &WasmHostContext, plugin_id: &str, b
     }
     let app = require_app(host_ctx)?;
     let batch_id = batch_id.to_string();
-    let hit = sync_result(block_on_async(crate::peer_net::pause_transfer_for_plugin(
+    let hit = sync_result(block_on_async(crate::server::peer_net::pause_transfer_for_plugin(
         app, batch_id,
     )))?;
     if !hit {
@@ -354,7 +362,7 @@ pub(crate) fn peer_resume_transfer(host_ctx: &WasmHostContext, plugin_id: &str, 
     }
     let app = require_app(host_ctx)?;
     let batch_id = batch_id.to_string();
-    let hit = sync_result(block_on_async(crate::peer_net::resume_transfer_for_plugin(
+    let hit = sync_result(block_on_async(crate::server::peer_net::resume_transfer_for_plugin(
         app, batch_id,
     )))?;
     if !hit {
@@ -369,7 +377,9 @@ pub(crate) fn peer_resume_all_transfers(host_ctx: &WasmHostContext, plugin_id: &
         return Err(denied());
     }
     let app = require_app(host_ctx)?;
-    let n = sync_result(block_on_async(crate::peer_net::resume_all_transfers_for_plugin(app)))?;
+    let n = sync_result(block_on_async(
+        crate::server::peer_net::resume_all_transfers_for_plugin(app),
+    ))?;
     Ok(n as u32)
 }
 
@@ -400,7 +410,7 @@ pub(crate) fn peer_set_shared_roots(
         })
         .collect();
     let app = require_app(host_ctx)?;
-    sync_result(block_on_async(crate::peer_net::set_shared_roots(app, entries)))
+    sync_result(block_on_async(crate::server::peer_net::set_shared_roots(app, entries)))
 }
 
 pub(crate) fn peer_list_shared_roots(
@@ -413,7 +423,7 @@ pub(crate) fn peer_list_shared_roots(
     }
     let roots = with_auto_redial(host_ctx, plugin_id, session, |node_id| {
         let app = require_app(host_ctx)?;
-        sync_result(block_on_async(crate::peer_net::list_remote_roots_for_plugin(
+        sync_result(block_on_async(crate::server::peer_net::list_remote_roots_for_plugin(
             app,
             node_id.to_string(),
         )))
@@ -434,7 +444,7 @@ pub(crate) fn peer_browse_directory(
     let (dir_id, rel_path) = (dir_id.to_string(), rel_path.to_string());
     let dto = with_auto_redial(host_ctx, plugin_id, session, |node_id| {
         let app = require_app(host_ctx)?;
-        sync_result(block_on_async(crate::peer_net::browse_remote_for_plugin(
+        sync_result(block_on_async(crate::server::peer_net::browse_remote_for_plugin(
             app,
             node_id.to_string(),
             dir_id.clone(),
@@ -458,10 +468,10 @@ pub(crate) fn peer_pull_files(
     let dir_id = dir_id.to_string();
     let files_json_owned = files_json.to_string();
     with_auto_redial(host_ctx, plugin_id, session, |node_id| {
-        let files: Vec<crate::peer_net::RemotePullFileDto> =
+        let files: Vec<crate::server::peer_net::RemotePullFileDto> =
             serde_json::from_str(&files_json_owned).map_err(|e| format!("pull files: invalid files json: {e}"))?;
         let app = require_app(host_ctx)?;
-        sync_result(block_on_async(crate::peer_net::pull_files_for_plugin(
+        sync_result(block_on_async(crate::server::peer_net::pull_files_for_plugin(
             app,
             node_id.to_string(),
             dir_id.clone(),
@@ -477,7 +487,9 @@ pub(crate) fn peer_set_download_dir(host_ctx: &WasmHostContext, plugin_id: &str,
     }
     let app = require_app(host_ctx)?;
     let path = if path.is_empty() { None } else { Some(path.to_string()) };
-    sync_result(block_on_async(crate::peer_net::set_download_dir_for_plugin(app, path)))
+    sync_result(block_on_async(crate::server::peer_net::set_download_dir_for_plugin(
+        app, path,
+    )))
 }
 
 /// 按需启动本机 peer 节点（审计票 12 引擎级生命周期原语）：幂等，
@@ -491,7 +503,9 @@ pub(crate) fn peer_start_node(host_ctx: &WasmHostContext, plugin_id: &str) -> Re
         return Err(denied());
     }
     let app = require_app(host_ctx)?;
-    sync_result(block_on_async(crate::peer_net::start_node_owned(&app, plugin_id)))
+    sync_result(block_on_async(crate::server::peer_net::start_node_owned(
+        &app, plugin_id,
+    )))
 }
 
 /// 属主插件让本机节点下线（审计票 12）：停广播 / 关监听 / 排水连接与入站记账。
@@ -501,7 +515,9 @@ pub(crate) fn peer_stop_node(host_ctx: &WasmHostContext, plugin_id: &str) -> Res
         return Err(denied());
     }
     let app = require_app(host_ctx)?;
-    sync_result(block_on_async(crate::peer_net::stop_node_owned(&app, plugin_id)))
+    sync_result(block_on_async(crate::server::peer_net::stop_node_owned(
+        &app, plugin_id,
+    )))
 }
 
 // ==================== Tests ====================

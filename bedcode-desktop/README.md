@@ -77,10 +77,8 @@ bedcode-desktop/
 │       ├── system/         # 应用上下文 (DI)、配置、错误类型、生命周期钩子、常量分组
 │       ├── utils/          # auth（JWT/配对/QR Token）、crypto、parser（ANSI/Markdown）
 │       ├── enums/          # 枚举类型（认证、控制、插件、PTY 状态、会话、特殊键等）
-│       ├── peer_net.rs            # 对等网络引擎接入（节点身份、信任闸门、生命周期、host-peer bridge）
-│       ├── peer_engine_receive.rs # peer-net 入站连接适配（业务状态由 file-transfer 插件持有）
-│       ├── peer_engine_remote.rs  # peer-net 远端浏览/拉取适配
-│       └── peer_engine_transfer.rs# peer-net 发送会话适配
+│       ├── server/peer_net.rs      # 对等网络引擎接入（节点身份、信任闸门、生命周期、host-peer bridge）
+│       └── server/peer_net/        # 引擎适配：peer_engine_receive/remote/transfer（发送/接收/远端浏览）
 ├── packages/
 │   ├── plugin-sdk-desktop/ # 插件开发 SDK（TS + Rust，含 dev-shell、模板、脚手架 CLI）
 │   ├── plugin-test/        # 覆盖全部宿主调用路径的测试用 WASM 插件

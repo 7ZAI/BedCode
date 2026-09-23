@@ -101,7 +101,7 @@ impl PluginHost {
         let Some(app) = self.wasm_host_ctx.app_handle() else {
             return;
         };
-        match crate::peer_net::release_node_for(app, plugin_id).await {
+        match crate::server::peer_net::release_node_for(app, plugin_id).await {
             Ok(true) => {
                 tracing::info!(
                     plugin_id = %plugin_id,

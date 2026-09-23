@@ -158,7 +158,7 @@ fn effective_download_dir(app: &AppHandle, settings: &PeerTransferSettings) -> c
     {
         return Ok(PathBuf::from(dir));
     }
-    super::peer_net::resolve_download_dir(app)
+    super::resolve_download_dir(app)
 }
 
 // ==================== 节点装配接缝（peer_net 调用）====================
@@ -243,7 +243,7 @@ pub(crate) async fn drive_receive_events(app: AppHandle, mut rx: mpsc::Receiver<
 /// （"Cannot start a runtime from within a runtime"）。
 async fn resolve_peer_name(app: &AppHandle, remote: &NodeId) -> String {
     let fallback = || short_fingerprint(remote.as_str());
-    match super::peer_net::runtime_snapshot(app).await {
+    match super::runtime_snapshot(app).await {
         Some((_, cache)) => cache
             .get(remote)
             .map(|record| record.device_name)
@@ -552,7 +552,7 @@ fn publish(app: &AppHandle) {
         let mut inner = state.inner.lock().expect("peer receive lock poisoned");
         inner.last_emit = Some(tokio::time::Instant::now());
     }
-    super::peer_net::publish_bus_only("peer-receive-changed", payload);
+    super::publish_bus_only("peer-receive-changed", payload);
 }
 
 /// 进度节流推送：距上次发射不足间隔则跳过（终态路径不经此函数即时推送）

@@ -498,7 +498,7 @@ fn is_self_broadcast(
     let Some(app) = app_handle.as_ref() else {
         return false;
     };
-    let Some(own) = crate::peer_net::current_node_id(app) else {
+    let Some(own) = crate::server::peer_net::current_node_id(app) else {
         return false;
     };
     txt.get("id").map(|v| v.as_str()) == Some(own.as_str())
