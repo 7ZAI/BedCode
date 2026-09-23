@@ -7,7 +7,13 @@
 
 **Blocked by:** 无（可以立即开始；P1-b 已经 landed，基线必须以当前 dev 为准）。
 
-**Status:** ready-for-human
+**Status:** ready-for-human（agent 侧前置与配套已就绪 2026-09-24 05:2x：
+起跑预演绿、`../baseline-preflight.sh` + `../baseline-run-sheet.md` 已交付；
+唯一待定是「等票 06 落地再跑」还是「即刻跑半成品树」，见票末 Comments 最新一节）
+
+**配套**：下面 10 项的**可执行展开**（操作 / 预期 / 取证点 / 结果槽 / 归属三问）在
+[`../baseline-run-sheet.md`](../baseline-run-sheet.md)；起跑前先跑
+[`../baseline-preflight.sh`](../baseline-preflight.sh)。
 
 ## 验收标准
 
@@ -34,7 +40,54 @@
 
 ## Comments
 
+### 2026-09-24 05:2x · 准备工作完成（agent 侧），本轮仍未开跑——但挡路的原因换了
+
+**先说清状态**：这一轮做的是**前置与配套**，不是基线本身；10 项清单依旧零条观测，
+但「为什么没跑成」和上一轮已经不是同一件事了。
+
+**上一轮的两个挡路点，现状：**
+
+1. **构建链红（票 13）→ 已消除。** 票 13 以「防漂移按声明方/消费方分判」落地（`af75919b1`）。
+   预演 `ensurePluginWasm()` 的判据（比 resources 产物 vs「插件 rust ∪ SDK rust」最新 mtime，
+   只看 `PLUGIN_WATCH_CMDS` 那三条）：三条**全 FRESH，起跑不触发补建**。
+   四插件产物已按含票 13/14 的 SDK 重建（file-transfer `b599056d…` / terminal-session
+   `05166504…` / ai-chatbox `f1d55683…`），即起跑不会再被 fail-fast 挡住。
+   - 顺带钉死一个我自己在预演时踩的坑：**staleness 比的是 `resources/` 里的产物**，
+     不是 `plugins/<id>/rust/target/…` 那个源树产物。拿源树路径判会得出「四插件全需补建」的
+     假结论（ai-chatbox 源树那个 wasip2 文件确实是 09-15 的陈迹，但早已不是构建目标）。
+2. **工作区不干净 → 现在仍然不干净，但性质变了。** 本轮脏的是**并发批次票 06 的在途实现**
+   （`server/websocket/{subscription,channel/terminal,terminal_ws/*}.rs` +
+   `utils/session_gateway.rs` + `tests/pty_session_chain.rs`，写盘时间就在 05:15–05:19）：
+   把 `pty_session_chain` 里「受损形态断言」（`auth → error(SESSION_NOT_FOUND)`）
+   改成恢复断言（`auth_ok → subscribe_ok → 输出帧 → HTTP 历史）。
+   - 05:0x 时这棵树**连 lib 都编不过**（`session_gateway.rs::history_snapshot` 调一个还不存在的
+     `broadcast_handle_for_session`）；05:23 复跑 `cargo check --lib` **已通过**。
+   - **也就是说：现在技术上能起跑，但跑的是「票 06 半成品」**——而票 06 改的正是终端输出与
+     历史回放路径，恰与本票第 3.4/3.7 条（滚动、种子化回放）重叠。据「归属三问」，
+     这一轮跑出来的回放类差异会同时有 P1-b 回归 / 票 06 WIP 两个候选解释，**分不清**。
+     建议：等票 06 落地后再跑基线；若用户要求即刻跑，则回放类条目按「对侧 WIP 待判」出记录。
+
+**交付的两个可复跑配套（本票的「配套方式」那一节落地）：**
+
+- [`../baseline-preflight.sh`](../baseline-preflight.sh) —— 起跑前置自检，五段输出：
+  基线锚点（HEAD + 分支）/ 未提交改动**逐文件标归属**（票 06、文档线、未归属）/
+  插件产物补建预演（与 dev-run.js 同形，含上面那个路径坑）/ `--compile` 宿主 lib 可编译性 /
+  当日日志路径与 grep 锚点。`--save` 可把报告落成 `preflight-<date>-<hhmm>.txt`。
+  后续每次内核会话线被削（03/08/09/11）复跑同一清单时，第一件事就是跑它。
+- [`../baseline-run-sheet.md`](../baseline-run-sheet.md) —— 10 项验收展开成
+  「操作 → 预期 → 取证点 → 结果槽」，含**归属三问**、agent/人分工表、日志体检命令，
+  以及结论模板。新立差异票编号纠正：票面写的「`issues/13-` 起」已被 13/14/15 占用，
+  **实际从 `issues/16-` 起**。
+
+**观测锚点已核到源码**（不是凭印象写的）：`session created via plugin`（info，带
+`config_id`/`session_id`）、`session stop requested via plugin`、`session removed via plugin`、
+`refused: session plugin not active`（warn）、`failed via plugin`（error），
+前五条出自 `utils/session_gateway.rs`；插件侧统一 `[plugin:` 前缀（AGENTS §7 日志条）。
+本机工具实测：`xdotool` + `fcitx5` 在，`grim`/`spectacle`/`import`/`wl-copy` **全无**
+—— 印证「目测项必须人眼」，agent 只能替到日志一层。
+
 ### 2026-09-24 01:10 · 本轮未开跑（起跑即被挡），零条清单结论
+
 
 **基线没跑成，不是跑了没问题。** 按票面第一条 `cd bedcode-desktop && pnpm run tauri:dev`
 就停住了，宿主进程根本没起来，所以上面 10 项清单**一条都没有观测**（不是「一条都正常」）。

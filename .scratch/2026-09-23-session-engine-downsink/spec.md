@@ -591,7 +591,7 @@ P0–P5 是**阶段划分与裁决记录**，保留作为理由；开工请以�
 
 | 票 | 一句话 | Blocked by | Status |
 | --- | --- | --- | --- |
-| 01 | 桌面功能等价人工基线（无头测不到的那些） | — | ready-for-human |
+| 01 | 桌面功能等价人工基线（无头测不到的那些） | — | ready-for-human（2026-09-24 agent 侧配套就绪：`baseline-preflight.sh` + `baseline-run-sheet.md`，起跑预演绿；等票 06 落地后由人跑） |
 | 02 | prefactor：对外 wire 类型与终端转义表迁出内核会话目录 | — | done（2026-09-24） |
 | 03 | 终端输入修饰/提交行观察面退役裁定（P2 残段） | 01 | ready-for-agent |
 | 04 | 连接清单迁独立原语（不随会话 interface 一起死） | — | done（2026-09-24 落成 `host-connection` + `connection:read`） |
