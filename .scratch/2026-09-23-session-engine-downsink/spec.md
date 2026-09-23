@@ -392,6 +392,42 @@ id 形态 / 存储端口行语义 / 注册表读写穿与稳定序 / 注解槽�
    的控制帧与输出订阅（依赖 `GlobalOutputManager`，随 P3 直读 `PtyRing` 恢复）、
    `SyncPayload::Session*` 增量推送（随事件下沉恢复）。
 
+**P1-b 开工状态（2026-09-23 收尾记账，下一场会话直接从这里起）**
+
+上面五条阻塞的当前状态：① 真源不可半翻 → **仍是硬约束**（整批做）；② WIT/ABI 增量：
+`host-app.plugin-resource-dir` ✅（前置 A）、插件读面 api ✅（前置 C：`session-list` /
+`session-get` + `SessionInfoView` 跨真源对齐锁）、**「停止（kill）」与「输入写入」两条互调 api
+仍未建**、`host-pty` 宿主广播声明仍属 P3；③ 宿主侧同批必做四项（守卫判据 / 桌面输出切
+`host-pty.ring-fetch` / 桌面输入经插件 / 增量事件经 host-events）均未动；④ 守卫弹窗**已裁决**
+= 判据走引擎 `live_count()`、payload 异步问插件且失败回退空列表（见 §5 定案）；
+⑤ H1 配额机制 ✅（前置 B：`ptyQuota`），但 terminal-session 的**实际声明值**与
+`pty:spawn` / `pty:io` / `dependencies: ["host-pty"]` 尚未写进 `plugin.json`（随创建路径切换同批）。
+
+已核实的实施要点（省一轮考古）：
+
+- **插件已有 argv 全套**（`launch.rs::build_argv`：bash -lic / wsl.exe 前缀 / PowerShell
+  包装 + 单引号转义 + WSL 路径转换），切 `host-pty.spawn` 只是换送口的字段名与 env 注入位置，
+  不需要重写 shell 语义。
+- **两阶段 `start=false` 在生产已不可达**（v21 起唯一生产者恒 `start = true`；余下调用全是测试），
+  但 `create-with-spec` 的线形状仍允许它——切换时按「记录先落、PTY 后起」建模即可，
+  无需为不可达分支保留双态。
+- **`create-with-spec` 是 fire-and-forget**：宿主返回 id 时会话尚未真正建立（异步任务里落库）。
+  插件自持 spawn 后这一步变同步可见，**回执语义因此变强**，不需要补偿等待。
+- **`kill_session` 的 `old_status` 硬编码 `Running`**（`session_manager.rs:807` 区），
+  插件状态机更严（终态不可复活）；迁移时按插件语义走，记账说明差异即可。
+- **`send_special_key` 绕过钩子链与提交行重建**（只写字节、不翻 Running）——迁移输入面时这条
+  不对称要逐字保持，否则特殊键会污染任务域的提交行观察。
+- **`host_api/terminal.rs::terminal_send_input`** 是插件前端今天的输入入口（带
+  `terminal:input` 权限门 + `ensure_session_owner`）。真源切换后宿主不再有会话归属可查，
+  这条要改为转插件 api（或插件前端改走自家命令面）——是本批唯一的前端契约触点。
+
+**门禁与协作事实（本批踩过的坑，下一场照此跑）**：宿主 `cargo test` 与插件 `cargo test`
+**禁止并发**（4 个时序敏感用例连带红，单跑全绿）；跑宿主测试前先
+`node plugins/terminal-session/scripts/build.js` 并核 `[skip]` = 0；`session_e2e.rs` /
+`CHANGELOG.md` / `plugin.json` 此刻有对侧（存量迁移链退役 + peer_net 目录搬迁 + tailwind 收敛）
+在途内容——按 pathspec 提交前必须逐文件核归属，必要时走「HEAD + 仅本票 hunk」的 plumbing 合成
+（本次 776b29816 即为此法），且 plumbing 提交后**必须刷真索引**，新文件还要带 `--add`。
+
 ### P2 — 输入通道转发 + 提交行重建迁插件
 
 - `commands.rs::write_to_session` / `send_special_key` → 直接转发插件命令面 → `host-pty.write`。
