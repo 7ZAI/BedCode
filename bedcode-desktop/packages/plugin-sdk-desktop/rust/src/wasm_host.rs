@@ -407,6 +407,10 @@ impl HostApp for WasmHost {
         let payload = serde_json::json!({ "file_name": file_name, "bin_dir": bin_dir }).to_string();
         host_app::uninstall_cli(&payload).map_err(|e| host_err("cli_uninstall", e))
     }
+
+    fn plugin_resource_dir(&self) -> Result<String, HostError> {
+        host_app::plugin_resource_dir().map_err(|e| host_err("plugin_resource_dir", e))
+    }
 }
 
 // ==================== HostEvents ====================

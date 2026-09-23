@@ -205,13 +205,28 @@ pub const PLUGIN_WS_ENDPOINT_PATH_MAX_LEN: usize = 64;
 
 // ==================== host-pty（ABI v16，spec `.scratch/2026-09-19-pty-base-service/`） ====================
 
-/// 每插件在册私有 PTY 数量上限：超限 `spawn` 直接 `Err`（fail-visible，不排队、
-/// 不静默淘汰自己已有的句柄，spec D9）
+/// 每插件在册私有 PTY 数量的**默认**上限：manifest 未声明 `ptyQuota` 时取本值；
+/// 超限 `spawn` 直接 `Err`（fail-visible，不排队、不静默淘汰自己已有的句柄，spec D9）
 ///
 /// 取值依据：一条私有 PTY 的资源画像 = 一个子进程 + 一对 fd + 一条读线程 + 一块
 /// 输出环，与 `PLUGIN_WS_MAX_CONNS_PER_PLUGIN`（出站连接 8 条）同档；8 条够
 /// 「多 shell 并发」型插件的常态用量，且越界不牵连同宿主其他插件的配额。
+///
+/// 会话引擎下沉 P1（H1）后业务会话也住在本注册表，「用户可开多少终端」随属主插件
+/// 的声明走（见 [`PLUGIN_PTY_SESSIONS_CEILING_PER_PLUGIN`]），本值只服务未声明者。
 pub const PLUGIN_PTY_MAX_SESSIONS_PER_PLUGIN: usize = 8;
+
+/// manifest `ptyQuota` 可声明的硬上限：超过（或声明 0）在**加载期**即拒绝该插件
+///
+/// 判据落在加载期而不是 `spawn`：配额是插件自我声明的静态事实，装载时就能校验，
+/// 没有理由让它在运行期以「第 N+1 条会话创建失败」的形态暴露给用户。
+/// **不夹取到上限**（与 [`PLUGIN_PTY_RING_MAX_BYTES`] 同一口径）：静默降级会让插件按
+/// 自己声明的并发数规划业务、实际却少得多。
+///
+/// 取值 64：一条会话 PTY 的常驻成本主要是输出环（默认 256 KB，可声明至 4 MiB），
+/// 64 条 × 默认档 = 16 MiB 上界；单插件会话产品的实际并发远不到此值，留出的余量
+/// 是给「批量起任务」类用法的，而不是给内核背无限的债。
+pub const PLUGIN_PTY_SESSIONS_CEILING_PER_PLUGIN: usize = 64;
 
 /// 插件私有 PTY 输出环的**默认**容量（字节）：spawn config 未声明 `ringBytes` 时取本值
 ///

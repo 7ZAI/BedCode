@@ -3,19 +3,25 @@
 //! 职责边界（spec D3/D4）——「一个配置如何变成一个可启动的会话」这条决策线：
 //! - **在插件**：命名唯一化策略（重名冲突改写 `base(N)` 递增）、config→launch
 //!   spec 映射（发行版与 shell 分支、空命令兜底）、两阶段启动编排决策（`start`
-//!   布尔）——这些都是产品语义，`host-session.create-with-spec` 不做业务解释
-//! - **留宿主**：`host-session.create-with-spec` 执行（shell 包装 / WSL 转换 /
-//!   尺寸缺省 / ID 预生成）；映射产生的 `environment` 与宿主 `ExecutionEnvironment`
-//!   serde 同形（`{"type":"Wsl2","distro":...}` | `{"type":"Linux"}` |
-//!   `{"type":"Windows","shell":"PowerShell"}`），宿主按它做发行版转换
+//!   布尔）、**shell 包装与 WSL 路径转换**（[`build_argv`]）——这些都是产品语义，
+//!   `host-session.create-with-spec` 不做业务解释
+//! - **留宿主**：`host-session.create-with-spec` 执行（**只做 argv 原样 exec** /
+//!   尺寸缺省 / ID 预生成）。宿主旧 shell 包装路径（`pty/command.rs::build_command`、
+//!   `pty/wsl.rs::windows_to_wsl_path`）已随 2026-09-23 PTY 解耦票退役，故本模块
+//!   必须**始终**送 `commandArgs`（缺省即被宿主显性拒绝，不再有旧路径回退）；
+//!   映射产生的 `environment` 与宿主 `ExecutionEnvironment` serde 同形
+//!   （`{"type":"Wsl2","distro":...}` | `{"type":"Linux"}` |
+//!   `{"type":"Windows","shell":"PowerShell"}`），宿主仅用它决定 cwd 是否显式设置
 //!
 //! 模块构成：
 //! - [`generate_unique_name`]：命名唯一化（复刻宿主 `DefaultNamingService`，
 //!   行为逐字等价——票面「命名唯一化策略搬入插件」）
 //! - [`resolve_environment`] / [`build_launch_spec`]：config→launch spec 映射
 //!   （复刻宿主 `DefaultConfigMapper` 的分支决策）
+//! - [`build_argv`]：<本模块的核心安全面> argv 拼装与转义（`cd '<dir>' && pwd && <cmd>`
+//!   的 Linux/WSL 单引号闭合、PowerShell `''`、WSL 路径转换）
 //! - native 单测覆盖：重名冲突、多配置同名互不干扰、Stopped 不计数、映射分支、
-//!   非法环境取值防御
+//!   非法环境取值防御、三环境 argv 与转义反例
 
 use crate::config::model::{SessionConfig, VALID_ENVIRONMENTS};
 
@@ -121,10 +127,12 @@ pub fn resolve_environment(config: &SessionConfig) -> Result<serde_json::Value, 
 pub struct LaunchSpec {
     /// 唯一化后的会话名（插件决策；宿主不再二次命名）
     pub name: String,
-    /// 原始命令串（宿主嵌入 shell 包装）
+    /// 原始命令串（**仅诊断/日志**：宿主不解释它，实际 exec 的是 `command_args`）
     pub command: String,
-    /// 裸 argv（pty 票 1）：`build_argv` 算好的完整 argv（shell 包装/转义已在插件
-    /// 侧完成），宿主 raw exec 不做二次解释；缺省/空 → 旧路径（command 字符串）。
+    /// 完整 argv（**必填**）：`build_argv` 算好的 argv（shell 包装/转义/WSL 路径
+    /// 转换已在插件侧完成），宿主 raw exec 不做二次解释。宿主旧 shell 包装路径
+    /// 已随 2026-09-23 PTY 解耦票退役——**缺省即被宿主显性拒绝**，故本字段恒为
+    /// `Some`（保留 `Option` 只为省略 `null` 序列化）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command_args: Option<Vec<String>>,
     /// 追加参数（当前配置无 args 概念，恒为空数组）
@@ -172,9 +180,10 @@ pub fn build_launch_spec(
     } else {
         config.command.clone()
     };
-    // pty 票 1：shell 包装下沉——完整 argv 由插件算好（转义/WSL 转换在此层），
-    // 宿主经 `commandArgs` raw exec；command 字符串仍随 spec 透传（旧宿主忽略
-    // commandArgs 走旧路径，新老双向兼容）。先借 command 算 argv，再 move 进 spec。
+    // shell 包装在插件侧：完整 argv 由本层算好（转义/WSL 转换在此），宿主经
+    // `commandArgs` raw exec。2026-09-23 起宿主包装路径已退役 → 本字段必送
+    // （缺省会被宿主 create-with-spec 显性拒绝）；command 字符串仍随 spec 透传，
+    // 但只作诊断字段（宿主不解释）。先借 command 算 argv，再 move 进 spec。
     let command_args = Some(build_argv(
         &config.environment,
         config.wsl_distro.as_deref(),
@@ -248,11 +257,12 @@ pub fn windows_to_wsl_path(path: &str) -> String {
     path.replace('\\', "/")
 }
 
-/// shell 包装 → argv（pty 票 1：宿主 `pty/command.rs::build_command` 的插件侧复刻）
+/// shell 包装 → argv（本模块的核心安全面）
 ///
 /// 由插件计算**完整 argv**（含 bash -lic 包装、wsl.exe 前缀、转义），经
-/// `create-with-spec.commandArgs` 交宿主 raw exec（宿主不再做 shell 解释）。
-/// 分支决策与转义规则与宿主旧实现逐语义等价：
+/// `create-with-spec.commandArgs` 交宿主 raw exec（宿主不做任何 shell 解释——
+/// 宿主 `pty/command.rs::build_command` 已随 2026-09-23 PTY 解耦票删除，本函数
+/// 是 shell 包装的唯一实现）。分支决策与转义规则与宿主旧实现逐语义等价：
 /// - linux：`bash -lic "cd '<esc>' && pwd && <cmd>"`（-i 让 .bashrc 交互守卫通过）
 /// - wsl2：`wsl.exe -d <distro> -- bash -lic <脚本>`（路径先转 WSL 形态）
 /// - windows：PowerShell（config 域三值之一，无 CMD 分支；与 `resolve_environment`
@@ -260,9 +270,9 @@ pub fn windows_to_wsl_path(path: &str) -> String {
 ///
 /// **安全边界（working_dir 来自配置 wire，不可信）**：
 /// - PowerShell：单引号字面量内 `'` → `''`（`&;$"` 在单引号串内为字面，无需转义）
-/// - Linux/WSL：bash 单引号内 `'` → `'\''`（闭合注入防护，与宿主同款）
-/// - CMD 不产生（插件侧无 cmd 环境分支；若宿主旧路径仍被旧产物使用，其危险字符
-///   拒绝逻辑保留在宿主 `build_command` 内直至旧路径退役）
+/// - Linux/WSL：bash 单引号内 `'` → `'\''`（闭合注入防护）
+/// - CMD 不产生：插件侧无 cmd 环境分支（`VALID_ENVIRONMENTS` 三值不含 cmd），
+///   且宿主旧路径（含 CMD 危险字符拒绝）已退役 → CMD 语义在本产品中不可达
 pub fn build_argv(
     environment: &str,
     wsl_distro: Option<&str>,
@@ -535,7 +545,7 @@ mod tests {
         assert!(json.get("cwd").is_some(), "cwd 键名锁定");
     }
 
-    // ==================== build_argv（pty 票 1：shell 包装下沉） ====================
+    // ==================== build_argv（shell 包装唯一实现） ====================
 
     /// linux：bash -lic 包装 + 单引号转义（working_dir 含 `'` → `'\''`，闭合注入防护）
     #[test]
@@ -546,7 +556,7 @@ mod tests {
         assert_eq!(
             argv[2],
             "cd '/home/usr/o'\\''brien' && pwd && pnpm dev",
-            "工作目录含单引号必须闭合转义（与宿主 build_command Linux 分支同款）"
+            "工作目录含单引号必须闭合转义（闭合注入防护）"
         );
     }
 
@@ -565,9 +575,26 @@ mod tests {
         // distro 缺省 → Ubuntu（与 resolve_environment 同款缺省）
         let argv = build_argv("wsl2", None, "/home/u", "bash").expect("argv");
         assert_eq!(argv[2], "Ubuntu", "distro 缺省 Ubuntu");
-        // 正斜杠 WSL 前缀形态与反斜杠等价（复刻宿主 wsl.rs 票据 01 修复）
+        // 正斜杠 WSL 前缀形态与反斜杠等价（宿主 wsl.rs 已随 PTY 解耦票退役，
+        // 本模块自持该语义，故这里保留其票据 01 修复的回归锁）
         assert_eq!(windows_to_wsl_path("//wsl.localhost/Ubuntu/home/user"), "/home/user");
         assert_eq!(windows_to_wsl_path("//wsl$/Ubuntu/home/user"), "/home/user");
+    }
+
+    /// wsl2：路径转换**之后**仍做单引号闭合转义
+    ///
+    /// 回归锁：宿主旧实现曾遗漏 WSL 一路（票据 02 只补了 PowerShell/CMD/Linux），
+    /// 而 WSL 分支同样是 `cd '<path>' && …` 结构——路径含 `'` 会闭合字面量执行
+    /// 任意命令。本函数是 shell 包装的唯一实现，故该防护必须自带用例。
+    #[test]
+    fn build_argv_wsl2_escapes_single_quote_in_working_dir() {
+        let argv = build_argv("wsl2", Some("Ubuntu"), r"C:\work\o'brien", "zsh").expect("argv");
+        assert_eq!(argv[0], "wsl.exe");
+        assert_eq!(
+            argv.last().unwrap(),
+            "cd '/mnt/c/work/o'\\''brien' && pwd && zsh",
+            "WSL 分支必须转义单引号（防 cd 字面量被闭合注入）"
+        );
     }
 
     /// windows：PowerShell 包装（chcp 65001 UTF-8 + Set-Location）+ `'` → `''` 转义
@@ -686,12 +713,20 @@ pub fn create_via_host(draft_json: &serde_json::Value) -> Result<serde_json::Val
     spec.name = unique_name;
     // 启动端事实透传（移动端启动 → 正统端初始归属该端；桌面本地启动为 None）
     spec.source_device = request.source_device.clone();
-    // 宿主 create-with-spec 执行（shell 包装 / WSL 转换 / 尺寸缺省 / ID 预生成）
+    // 宿主 create-with-spec 执行（argv 原样 exec / 尺寸缺省 / ID 预生成）
     let spec_json =
         serde_json::to_value(&spec).map_err(|e| format!("launch spec serialize failed: {}", e))?;
     let session_id = WasmHost
         .session_create_with_spec(&spec_json)
         .map_err(|e| format!("host create-with-spec failed: {}", e.message))?;
+    // P1 双写：会话登记域镜像（宿主仍是权威；失败只 warn 留痕，不影响创建路径）
+    crate::session::note_created_via_host(
+        &session_id,
+        &request.config_id,
+        &spec.name,
+        request.start,
+        request.source_device.as_deref(),
+    );
     Ok(serde_json::json!({ "sessionId": session_id }))
 }
 

@@ -9,3 +9,5 @@ pub mod parser;
 pub mod session_action_bridge;
 /// 会话创建命令桥接（票 09）：创建编排下沉会话中心插件
 pub mod session_create_bridge;
+/// 会话窄转发层（会话引擎下沉 P1）：宿主侧调用会话的唯一收口点，见模块文档
+pub mod session_gateway;

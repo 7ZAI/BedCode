@@ -102,6 +102,19 @@ export function validateManifest(dir) {
     )
   }
 
+  // ptyQuota（会话引擎下沉 P1 / H1）：可选，声明该插件可同时在册的 host-pty 句柄数。
+  // 本处只校**形态**（正整数）——区间上限是内核常量
+  // `PLUGIN_PTY_SESSIONS_CEILING_PER_PLUGIN`，在此复刻一份数字就是把配额判据拆成两处
+  // （改内核常量不会同步到这里）；越界由宿主加载期拒绝（manager/validation.rs），
+  // 构建期误写 0 / 小数 / 字符串则在这里当场拒绝，不必等到装包才暴露。
+  if (manifest.ptyQuota !== undefined && manifest.ptyQuota !== null) {
+    if (!Number.isInteger(manifest.ptyQuota) || manifest.ptyQuota <= 0) {
+      errors.push(
+        `ptyQuota 形态非法（须为正整数；上限由宿主内核常量仲裁）: ${JSON.stringify(manifest.ptyQuota)}`,
+      )
+    }
+  }
+
   // 权限：SDK 词汇真源之外的声明会在授权时被静默过滤，等于装饰词汇 → 直接拒绝
   if (Array.isArray(manifest.permissions)) {
     const { permissions } = permissionVocabulary()

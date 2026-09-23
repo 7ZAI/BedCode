@@ -221,11 +221,16 @@ pub fn connect_list_via_host() -> Result<serde_json::Value, String> {
 }
 
 /// 会话注解槽写入（wasm 运行时）：expand 期双写的「写面」
+///
+/// P1 双写：宿主 `annotate` 原语是本阶段权威，同批判定插件会话登记域镜像
+/// （会话不在册则跳过，见 `session::note_annotation_via_host`）。
 #[cfg(target_arch = "wasm32")]
 pub fn annotate_via_host(session_id: &str, key: &str, value: &str) -> Result<(), String> {
     WasmHost
         .session_annotate(session_id, key, value)
-        .map_err(|e| e.message)
+        .map_err(|e| e.message)?;
+    crate::session::note_annotation_via_host(session_id, key, value);
+    Ok(())
 }
 
 /// 会话注解槽写入（native 无宿主环境）

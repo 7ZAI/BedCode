@@ -278,6 +278,19 @@ interface host-app {
     /// 卸载 CLI（幂等）：删除文件 + 移除仅本插件添加的 PATH 条目
     /// （保留用户原有项）；应用关闭流程中调用时自动跳过（CLI 随下次激活重建）
     uninstall-cli: func(payload-json: string) -> result<_, string>;
+    /// 插件自身资源目录（v25 函数级追加，**不 bump**）：返回本插件安装目录的
+    /// 绝对路径（宿主 `extension_path` 剥离 verbatim 前缀后的形态，插件侧正斜杠
+    /// 拼接可用），与 `on-session-lifecycle` payload 的 `resource_dir` 同值。
+    ///
+    /// 裁剪线判据（ADR 0022）：宿主本来就持有插件加载路径，返回的是**调用方
+    /// 自己的**目录、不含任何跨插件信息，零业务语义。**不设权限门**（同
+    /// `host-platform` 口径）——没有可授予的权力，加门只会造出一个恒过的死门。
+    ///
+    /// 存在理由：会话创建编排整体移交插件后（session-engine-downsink P1-b），
+    /// 宿主不再产生 `Creating` 生命周期事件，插件失去获取自身资源目录的唯一
+    /// 途径（Agent 集成 hook 脚本源在该目录下，见插件 `task/hooks`）。
+    /// 插件未加载 / 宿主服务不可用 → `Err`（不静默返回空串）。
+    plugin-resource-dir: func() -> result<string, string>;
 }
 
 /// WebSocket 基础能力服务（ADR 0022）：宿主 WS 传输原语，插件零业务语义。

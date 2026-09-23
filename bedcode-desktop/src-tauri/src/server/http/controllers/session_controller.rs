@@ -12,7 +12,7 @@
 use crate::server::http::dtos::session_dto::*;
 use crate::server::http::dtos::ApiResponse;
 use crate::server::http::middleware::jwt_auth::get_claims_from_request;
-use crate::session::{GlobalOutputManager, RendererSource};
+use crate::session::RendererSource;
 use crate::system::app_context::AppContext;
 use actix_web::{web, HttpRequest, HttpResponse};
 use tauri::Emitter;
@@ -23,8 +23,7 @@ pub async fn list_sessions(_req: HttpRequest) -> HttpResponse {
     let session_manager = ctx.session_manager();
 
     // 票 12：任务字段取自注解槽（内核记录已无任务语义字段），形状不变
-    let sessions: Vec<SessionItem> = session_manager
-        .session_views()
+    let sessions: Vec<SessionItem> = crate::utils::session_gateway::list_views(session_manager)
         .await
         .into_iter()
         .map(|s| SessionItem {
@@ -62,7 +61,7 @@ pub async fn start_session(req: HttpRequest, body: web::Json<StartSessionRequest
 
     // host-business-decarriage 收尾：移动端 HTTP 启动线同样走插件编排
     // （插件必需，无宿主降级）；响应形状与错误码 1002 保持不变。
-    match crate::utils::session_create_bridge::create_session_via_plugin(
+    match crate::utils::session_gateway::start(
         ctx.plugin_host().wasm_host_ctx(),
         &body.config_id,
         initial_size.map(|(c, _)| c),
@@ -106,7 +105,7 @@ pub async fn stop_session(req: HttpRequest, path: web::Path<String>) -> HttpResp
     let device_name = get_claims_from_request(&req).and_then(|c| c.device_name);
     let source = device_name.clone().unwrap_or_else(|| "mobile".to_string());
 
-    match session_manager.kill_session_with_source(&session_id, device_name).await {
+    match crate::utils::session_gateway::stop(session_manager, &session_id, device_name).await {
         Ok(()) => {
             // 无头/测试上下文无 AppHandle：跳过前端刷新通知
             if let Some(handle) = ctx.app_handle() {
@@ -155,9 +154,15 @@ pub async fn resize_session(
         }
     };
 
-    match session_manager
-        .resize_session(&session_id, body.cols, body.rows, source, body.force)
-        .await
+    match crate::utils::session_gateway::resize_from_signal(
+        session_manager,
+        &session_id,
+        body.cols,
+        body.rows,
+        source,
+        body.force,
+    )
+    .await
     {
         Ok(outcome) => HttpResponse::Ok().json(ApiResponse::ok_with_data(outcome)),
         Err(e) => {
@@ -176,10 +181,7 @@ pub async fn remove_session(req: HttpRequest, path: web::Path<String>) -> HttpRe
     let device_name = get_claims_from_request(&req).and_then(|c| c.device_name);
     let source = device_name.clone().unwrap_or_else(|| "mobile".to_string());
 
-    match session_manager
-        .remove_session_with_source(&session_id, device_name)
-        .await
-    {
+    match crate::utils::session_gateway::remove(session_manager, &session_id, device_name).await {
         Ok(()) => {
             // 无头/测试上下文无 AppHandle：跳过前端刷新通知
             if let Some(handle) = ctx.app_handle() {
@@ -214,7 +216,7 @@ pub async fn send_session_input(path: web::Path<String>, body: web::Json<Session
 
     // 处理普通数据输入
     if !data.is_empty() {
-        if let Err(e) = session_manager.write_input(&session_id, &data).await {
+        if let Err(e) = crate::utils::session_gateway::input(session_manager, &session_id, &data).await {
             tracing::error!(error = %e, session_id = %session_id, "Failed to write input to session");
             return HttpResponse::Ok().json(ApiResponse::<()>::error(1002, &e.to_string()));
         }
@@ -222,7 +224,7 @@ pub async fn send_session_input(path: web::Path<String>, body: web::Json<Session
 
     // 处理特殊键输入
     if let Some(ref key) = special_key {
-        if let Err(e) = session_manager.send_special_key(&session_id, key).await {
+        if let Err(e) = crate::utils::session_gateway::special_key(session_manager, &session_id, key).await {
             tracing::error!(error = %e, session_id = %session_id, "Failed to send special key to session");
             return HttpResponse::Ok().json(ApiResponse::<()>::error(1002, &e.to_string()));
         }
@@ -240,7 +242,7 @@ pub async fn send_session_input(path: web::Path<String>, body: web::Json<Session
 pub async fn get_session_history(path: web::Path<String>, query: web::Query<SessionHistoryQuery>) -> HttpResponse {
     let session_id = path.into_inner();
     let from = query.from.unwrap_or(0);
-    match GlobalOutputManager::global().snapshot_bytes(&session_id, from).await {
+    match crate::utils::session_gateway::history_snapshot(&session_id, from).await {
         Some((data, min_offset, snapshot_offset, history_bytes)) => {
             // 链路调试（终端字节对账）：移动端缓存头被淘汰时经此接口增量补历史，
             // 字节三件套与移动端 terminal_get_history 日志对照

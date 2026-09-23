@@ -244,6 +244,7 @@ host-business-decarriage 收尾批次（`.scratch/2026-09-20-host-business-decar
 ## 抽象提取候选（登记，不在本期实施）
 - **`PtyRing` ↔ 业务会话输出环（`session_output.rs::UnifiedOutputQueue`）的代码级合并**：二者形态同源（单生产者 + 全局偏移 + 游标拉取 + 字节/条目双上限），但生命周期不同（业务环随会话、插件环随 pty 句柄），且 2026-09-17 刚重构完的业务链路不背回归风险 → 本期刻意自持实现（约 130 行）。第二处同类形态出现时（或业务环新增维度需要插件侧同步时）再抽取。
 - **PTY 引擎与业务会话线的进一步解耦边界**：票 01 已把「输出汇可注入」「终态门与退出码」下沉到 `PtySession`，票 02 追加「命令来源可注入」（`PtyCommandSource::Business | Raw`），`PtySlaveFdPolicy`（业务 `Hold` / 插件 `ReleaseOnSpawn`）仍是会话构造器的分支。若第三条消费线（如 AI 工具执行器）出现，应把「策略三元组（sink / command source / slave policy）+ 尺寸与 env」收敛为一个显式的会话装配参数结构，替代构造器家族。
+  **（2026-09-23 后续）**：本候选的前两件已提前落定——`PtyCommandSource` 与 `pty_handler` 已退役、`PtySlaveFdPolicy` 票 3 已统一为 spawn 后释放 slave，`PtySession` 现只收调用方算好的 `CommandBuilder` + sink（见修订记录 v11）；「第三条消费线出现时再收敛策略三元组」的触发条件已不成立。
 - **终态可查询面**：`PtyTerminationGate` 已有 `reader_closed()`（信号 ①），缺「终态事件是否已发出」的访问器。补上它可让 host-pty 对「订阅晚于终态」的竞态彻底免疫（当前靠 `spawn` 内「订阅早于 start」的构造顺序防御，该防御无法被测试确定性锁定，见票 04 变异 M2 存活）。
 - **`is-running` 判据的归属**：`running && !output_terminated` 是 host-pty 的语义组合（引擎的 `running` 故意不随自然退出翻下，业务线依赖这一点），故该纯判定放在 `host_impl/pty.rs::running_verdict` 而非引擎层——若未来业务线也要「如实的存活」，应新增引擎层访问器而不是反向挪用本判定。
 
@@ -308,3 +309,37 @@ host-business-decarriage 收尾批次（`.scratch/2026-09-20-host-business-decar
   主库 `session_configs` 表保留为迁移源，观测信号（启动 `legacy_rows` 计数）归零后作 contract 删除
   （迁移窗口结束再删读面与表）。桌面独有接口，移动端零改动。实施见
   `.scratch/2026-09-22-pty-business-downsink/spec.md`（阶段 1）。
+- **2026-09-23 v11（当前）**：**PTY 引擎去业务化收口（ABI 不变，desktop 仍 v25；移动端零改动）**。
+  ① **宿主 shell 包装退役**：删 `pty/command.rs::build_command`（`bash -lic` / PowerShell `-Command` /
+  CMD `/K` 包装、cwd 兜底、WSL 路径转换）与 `pty/wsl.rs::windows_to_wsl_path` / `execute_command`
+  （`pty/wsl.rs` 只留发行版列举，即 `host-platform.wsl-distros` 原语的实现）。shell 包装的唯一实现
+  是插件 `terminal-session/rust/src/launch.rs::build_argv`（`.scratch/2026-09-22-pty-business-downsink`
+  票 1 已先行落地，本批次删除宿主旧路径）。裁剪线依据同「新增 host-pty」第 1 条 D1——包装 / 路径转换 /
+  cwd 兜底 / 会话身份 env 注入都是产品决策。
+  ② **引擎面收敛为「只收 argv」**：`PtyCommandSource`（`Business` / `Raw` 枚举）与 `pty_handler`
+  工厂 trait 退役（trait 无 `dyn` 消费者）；`pty/` 不再 import `SessionLaunchConfig` /
+  `ExecutionEnvironment` / `BEDCODE_SESSION_ID`，从类型上不可能再包装 / 转换 / 注入。构造入口
+  `PtySession::with_command`（业务线）/ `with_private_command`（host-pty 私有线）。
+  ③ **业务实现归位**：业务翻译单点落在 `session/session_manager.rs::launch_command`（argv / cwd 仅
+  原生环境显式设置 / env 透传 / `BEDCODE_SESSION_ID` 注入）；业务输出汇 `SessionOutputSink` 自
+  `pty/output_sink.rs` 归位 `session/session_output.rs`（引擎只留 `PtyOutputSink` 抽象）。
+  ④ **旧产物不静默断流**：`SessionLaunchConfig.command_args` 由 `Option` 改**必需** `Vec<String>`，
+  `create-with-spec` 对缺省 / 空 `commandArgs` 与旧 `args` 字段**显性拒绝**（报错点名用新 SDK 重建），
+  不保留旧路径回退分支；`command` 字段降级为纯诊断串。接受的能力收窄：CMD 分支不可达（插件
+  environment 词表只映射 PowerShell），其危险字符拒绝随宿主实现退役——该收窄需用户复核。
+  ⑤ **记入既有发现**（非本批次引入）：`pty_reader` 在读线程**入队**尾帧后即 `mark_reader_closed`，
+  `sink.on_bytes` 在独立消费者任务里异步执行 → 终态事件到达 ≠ sink 已收到尾帧；原注释表述相反，已
+  按事实更正，消费方（含测试）须有界轮询。残余风险与后续（会话状态机 / 登记 / 生命周期分发下沉、
+  输出面形态 B）见 `.scratch/2026-09-23-session-engine-downsink/spec.md`。
+- **2026-09-23 v12（当前）**：**`host-app.plugin-resource-dir` 原语（ABI 不变，desktop 仍 v25；
+  同批次函数级追加不 bump；移动端零改动）**。插件取自身资源目录（安装目录绝对路径，含随包资源
+  如 Agent 集成 hook 脚本）的**唯一**原语。裁剪线依据：宿主本来就持有插件加载路径
+  （`extension_path`），返回的是**调用方自己的**目录、不含任何跨插件信息、零业务语义——
+  因此**不设权限门**（同 `host-platform` 与 v22 `reveal-in-dir` 口径：没有可授予的权力，
+  加门只会造出一个恒过的死门）。存在理由（前置性）：会话创建编排整体移交插件后
+  （`.scratch/2026-09-23-session-engine-downsink` P1-b）宿主不再产生 `Creating` 生命周期事件，
+  而事件 payload 的 `resource_dir` 字段**曾是该目录的唯一来源**——不先立原语，创建路径会被
+  自己的下沉卡死（fail-visible 而非 fail-silent：插件取不到即显性告警并跳过集成注入，
+  不用空串拼路径去读一个不存在的文件）。宿主实现与生命周期事件 payload 同源
+  （`strip_verbatim_prefix(extension_path)`），未知插件显性报错。实施见
+  `.scratch/2026-09-23-session-engine-downsink/spec.md`（P1-b 前置 A）。

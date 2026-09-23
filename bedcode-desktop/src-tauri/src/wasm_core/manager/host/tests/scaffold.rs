@@ -108,6 +108,7 @@ pub(super) fn make_plugin(id: &str, source: PluginSource, state: PluginState) ->
             kind: bedcode_plugin_api::PluginKind::Application,
             dependencies: vec![],
             resource_overrides: None,
+            pty_quota: None,
         },
         state,
         extension_path: String::new(),
@@ -143,6 +144,7 @@ fn synthetic_manifest() -> PluginManifest {
         kind: bedcode_plugin_api::PluginKind::Application,
         dependencies: vec![],
         resource_overrides: None,
+        pty_quota: None,
     }
 }
 

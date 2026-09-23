@@ -11,7 +11,7 @@ use crate::db::Database;
 use crate::server::core::link_crypto::{self, LinkCryptoConfig};
 use crate::server::core::metrics::ServerMetrics;
 use crate::server::core::supervisor::{ServerStatusInfo, ServerSupervisor};
-use crate::session::{RendererSource, ResizeOutcome, SessionManager};
+use crate::session::{ResizeOutcome, SessionManager};
 use crate::system::config::{AppConfig, NetworkConfig};
 use crate::system::constants::{TERMINAL_BG_EXTENSIONS, TERMINAL_BG_FILE_PREFIX, TERMINAL_BG_MAX_BYTES};
 use crate::Result;
@@ -45,7 +45,7 @@ use tracing_subscriber::filter::EnvFilter;
 pub async fn list_sessions(
     session_manager: State<'_, Arc<SessionManager>>,
 ) -> Result<Vec<crate::session::SessionInfoView>> {
-    Ok(session_manager.session_views().await)
+    Ok(crate::utils::session_gateway::list_views(&session_manager).await)
 }
 
 /// 获取单个会话（对外视图，同 `list_sessions`）
@@ -54,7 +54,7 @@ pub async fn get_session(
     session_manager: State<'_, Arc<SessionManager>>,
     session_id: String,
 ) -> Result<Option<crate::session::SessionInfoView>> {
-    Ok(session_manager.session_view(&session_id).await)
+    Ok(crate::utils::session_gateway::view(&session_manager, &session_id).await)
 }
 
 /// 调整会话终端大小（桌面本地路径，正统渲染端身份恒为 Desktop）
@@ -75,21 +75,15 @@ pub async fn resize_session(
     force: Option<bool>,
 ) -> Result<ResizeOutcome> {
     let force = force.unwrap_or(false);
-    if let Some(outcome) = crate::utils::session_action_bridge::resize_session_via_plugin(
+    crate::utils::session_gateway::resize_desktop(
         host.wasm_host_ctx(),
+        &session_manager,
         &session_id,
         cols,
         rows,
-        &RendererSource::Desktop,
         force,
     )
-    .await?
-    {
-        return Ok(outcome);
-    }
-    session_manager
-        .resize_session(&session_id, cols, rows, RendererSource::Desktop, force)
-        .await
+    .await
 }
 
 // ==================== PTY Input Commands ====================
@@ -100,7 +94,7 @@ pub async fn write_to_session(
     session_id: String,
     data: String,
 ) -> Result<()> {
-    session_manager.write_input(&session_id, &data).await
+    crate::utils::session_gateway::input(&session_manager, &session_id, &data).await
 }
 
 #[tauri::command]
@@ -109,7 +103,7 @@ pub async fn send_special_key(
     session_id: String,
     key: String,
 ) -> Result<()> {
-    session_manager.send_special_key(&session_id, &key).await
+    crate::utils::session_gateway::special_key(&session_manager, &session_id, &key).await
 }
 
 // ==================== Shared System Commands ====================

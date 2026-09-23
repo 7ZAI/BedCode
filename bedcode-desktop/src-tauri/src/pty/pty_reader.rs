@@ -92,8 +92,13 @@ impl PtyReader {
                 }
             }
 
-            // 终态信号 ①：尾帧已投递完毕；退出码要等子进程回收，事件由门齐备后发出
-            // （发送失败 = 无订阅者，属正常终止路径；门内 warn 保留可观测性）
+            // 终态信号 ①：**尾帧已入队**（不是「已投递」——真正的 `sink.on_bytes`
+            // 在独立消费者任务里按序异步执行，本标记可能先于它完成）。退出码要等
+            // 子进程回收，事件由门齐备后发出（发送失败 = 无订阅者，属正常终止路径；
+            // 门内 warn 保留可观测性）。
+            //
+            // 因此：终态事件到达 ≠ sink 已收到全部尾帧。消费方若在终态事件后立即
+            // 断言 sink 内容，必须容忍这一间隙（有界轮询），不能依赖严格先后。
             gate.mark_reader_closed(exit_status);
         });
 
@@ -119,7 +124,7 @@ mod tests {
     use crate::enums::PtySessionStatus;
     use crate::pty::lifecycle::PtyTerminated;
     use crate::pty::output_sink::test_support::CollectingSink;
-    use crate::pty::output_sink::SessionOutputSink;
+    use crate::session::SessionOutputSink;
     use std::io::Read;
     use std::sync::atomic::AtomicBool;
     use std::sync::Arc;

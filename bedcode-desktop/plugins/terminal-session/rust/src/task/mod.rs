@@ -17,7 +17,8 @@
 //! **编排反转（票 15 硬性验收）**：本插件是会话编排方——会话创建由本插件经
 //! `host-session.create-with-spec` 发起（launch 域），集成注入（写 hooks）由本插件
 //! 自己驱动：activate 注册生命周期监听器，`on-session-lifecycle(Creating)` 即调用
-//! [`hooks::ensure_agent_integration`]（resource_dir 由宿主在事件 payload 注入）。
+//! [`hooks::ensure_agent_integration`]（resource_dir 经 `host-app.plugin-resource-dir`
+//! 原语自取，不再依赖事件 payload）。
 //! 反向回调兼容面（`terminal-hooks` / `on-session-lifecycle` / `on-input-submitted`）
 //! 保留在 SDK，但本插件不再依赖它驱动主流程——创建编排在插件侧，回调只是资源
 //! 目录与其它创建路径（移动端 HTTP）的传输载体。

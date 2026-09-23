@@ -29,7 +29,7 @@ pub use session_components::{
 
 // 从 session_output 重导出
 pub use session_output::{
-    GlobalOutputManager, OutputEvent, PullSubscriber, RingFetchOutput, RingSlice, SessionOutputManager,
+    GlobalOutputManager, OutputEvent, PullSubscriber, RingFetchOutput, RingSlice, SessionOutputManager, SessionOutputSink,
     SubscribeResponse, SubscriberHandle, SubscriberStats, UnifiedOutputQueue, MODE_BATCH, MODE_REALTIME,
 };
 

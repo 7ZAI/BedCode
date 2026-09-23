@@ -206,6 +206,7 @@ mod tests {
                 kind: PluginKind::Application,
                 dependencies: vec![],
                 resource_overrides: None,
+                pty_quota: None,
             }
         }
 

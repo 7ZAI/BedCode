@@ -365,6 +365,10 @@ impl bedcode::plugin::host_app::Host for WasmPluginState {
     fn uninstall_cli(&mut self, payload_json: String) -> Result<(), String> {
         app::uninstall_cli(&self.host_ctx, &self.plugin_id, &payload_json)
     }
+
+    fn plugin_resource_dir(&mut self) -> Result<String, String> {
+        app::plugin_resource_dir(&self.host_ctx, &self.plugin_id)
+    }
 }
 
 impl bedcode::plugin::host_timer::Host for WasmPluginState {

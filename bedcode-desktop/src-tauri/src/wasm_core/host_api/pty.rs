@@ -77,6 +77,38 @@ struct PtyEntry {
 /// 全局插件 PTY 注册表（句柄 → 条目；跨插件按 owner 隔离）
 static PTYS: LazyLock<Mutex<HashMap<String, PtyEntry>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
+/// 每插件在册条数上限（属主 → 生效配额）
+///
+/// 真源是 manifest 的 `ptyQuota` 声明：会话引擎下沉 P1（H1）把业务会话搬进本注册表后，
+/// 「用户可同时开多少个终端」就成了属主插件自己的产品档位，单一内核常量（8）不再是
+/// 合理答案。登记点在插件加载漏斗（与 `PermissionManager::grant_permissions` 同一处，
+/// 见 `manager/loader.rs`），区间合法性在解析期已由
+/// `manager/validation.rs::validate_pty_quota` 把关，故此处只取不判。
+///
+/// 表内无记录 = 未声明（既有插件、无头测试上下文）→ 取内核默认档
+/// [`PLUGIN_PTY_MAX_SESSIONS_PER_PLUGIN`]，与引入声明字段之前的行为逐字一致。
+static QUOTAS: LazyLock<Mutex<HashMap<String, usize>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// 登记某插件的生效配额（加载期调用；`None` = 未声明，落默认档）
+pub(crate) fn register_quota(plugin_id: &str, declared: Option<usize>) {
+    let effective = declared.unwrap_or(PLUGIN_PTY_MAX_SESSIONS_PER_PLUGIN);
+    QUOTAS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(plugin_id.to_string(), effective);
+    tracing::debug!(plugin_id = %plugin_id, quota = effective, "host-pty: 配额已登记");
+}
+
+/// 某插件当前生效配额（`spawn` 的判据）
+fn quota_of(plugin_id: &str) -> usize {
+    QUOTAS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(plugin_id)
+        .copied()
+        .unwrap_or(PLUGIN_PTY_MAX_SESSIONS_PER_PLUGIN)
+}
+
 /// 某插件当前在册 PTY 条数（配额判据与副作用断言共用）
 fn registered_count_for(plugin_id: &str) -> usize {
     PTYS.lock()
@@ -143,9 +175,10 @@ pub(crate) fn pty_spawn(host_ctx: &WasmHostContext, plugin_id: &str, config_json
     // 配额与容量在任何副作用之前判定（不留下开好的 fd / 起动的进程）
     let ring_bytes = resolve_ring_bytes(config.ring_bytes)?;
     let in_use = registered_count_for(plugin_id);
-    if in_use >= PLUGIN_PTY_MAX_SESSIONS_PER_PLUGIN {
+    let quota = quota_of(plugin_id);
+    if in_use >= quota {
         return Err(format!(
-            "pty spawn: too many ptys for this plugin ({in_use} in use, limit {PLUGIN_PTY_MAX_SESSIONS_PER_PLUGIN})"
+            "pty spawn: too many ptys for this plugin ({in_use} in use, limit {quota})"
         ));
     }
 
@@ -386,40 +419,78 @@ async fn reap_and_publish(
     }
 }
 
+/// 在册句柄快照（`owner = None` → 全部属主；注册表锁内只取 id，回收在锁外做）
+fn registered_handles(owner: Option<&str>) -> Vec<String> {
+    let table = PTYS.lock().unwrap_or_else(|e| e.into_inner());
+    table
+        .iter()
+        .filter(|(_, entry)| owner.map_or(true, |o| entry.owner == o))
+        .map(|(pty_id, _)| pty_id.clone())
+        .collect()
+}
+
+/// 回收一批在册句柄：摘除 → kill → 按属主补发 `pty:exit`（reason=killed）
+///
+/// **只有从注册表成功摘除的那一方发布事件**（票 04 单一发布者不变量的半段）：与退出
+/// 监听竞争时，监听任务若先摘除则本函数跳过该句柄（事件已由其发布），不多发也不漏发。
+/// 事件按 `entry.owner` 投递，故本函数不必知道调用来源（按属主回收 / 全量回收同路）。
+fn reclaim_handles(handles: Vec<String>, bus: &MessageBus) -> usize {
+    let mut reclaimed = 0;
+    for pty_id in handles {
+        let entry = PTYS.lock().unwrap_or_else(|e| e.into_inner()).remove(&pty_id);
+        let Some(entry) = entry else {
+            continue; // 监听任务抢先摘除：事件已由其发布
+        };
+        let owner = entry.owner.clone();
+        if let Err(e) = block_on_async(entry.session.kill()) {
+            // 进程此时多已自行结束，kill 失败属可恢复；仍摘除并补发事件（不泄漏句柄）
+            tracing::warn!(plugin_id = %owner, pty_id = %pty_id, error = %e, "PTY 回收 kill 降级");
+        }
+        drop(entry.session);
+        drop(entry.ring);
+        publish_pty_exit(bus, &owner, &pty_id, "killed", None);
+        reclaimed += 1;
+    }
+    reclaimed
+}
+
 /// 插件停用回收：kill 并摘除其全部 PTY，逐条补发 `<owner>::pty:exit`（reason=killed）
 ///
 /// **只碰本人**（同 mdns / ws 的按属主回收）：其他插件在册句柄不受影响。事件由本函数
 /// 发布（先摘除后 kill，停用窗口内不再接受任何针对该句柄的调用）；对应的退出监听任务
 /// 稍后醒来看不到句柄即静默结束（单一发布者不变量的另一半）。
 pub(crate) fn purge_for_plugin(plugin_id: &str, bus: &MessageBus) -> usize {
-    let owned: Vec<String> = {
-        let table = PTYS.lock().unwrap_or_else(|e| e.into_inner());
-        table
-            .iter()
-            .filter(|(_, entry)| entry.owner == plugin_id)
-            .map(|(pty_id, _)| pty_id.clone())
-            .collect()
-    };
-
-    let mut purged = 0;
-    for pty_id in owned {
-        let entry = PTYS.lock().unwrap_or_else(|e| e.into_inner()).remove(&pty_id);
-        let Some(entry) = entry else {
-            continue; // 监听任务抢先摘除：事件已由其发布
-        };
-        if let Err(e) = block_on_async(entry.session.kill()) {
-            // 进程此时多已自行结束，kill 失败属可恢复；仍摘除并补发事件（不泄漏句柄）
-            tracing::warn!(plugin_id = %plugin_id, pty_id = %pty_id, error = %e, "停用回收 kill 降级");
-        }
-        drop(entry.session);
-        drop(entry.ring);
-        publish_pty_exit(bus, plugin_id, &pty_id, "killed", None);
-        purged += 1;
-    }
+    let purged = reclaim_handles(registered_handles(Some(plugin_id)), bus);
     if purged > 0 {
         tracing::info!(plugin_id = %plugin_id, purged, "host-pty: 停用回收完成");
     }
     purged
+}
+
+/// 引擎层**全量**回收（系统关停路径）：跨属主 kill 并摘除全部在册插件 PTY，
+/// 逐条按属主补发 `<owner>::pty:exit`（reason=killed）
+///
+/// 为什么必须由引擎自持（会话引擎下沉 P1 开放点 4：关停走引擎层全局 kill）：关机时
+/// 插件可能已停用 / 超时 / trap，按属主回收依赖「插件停用流程被调到」；引擎自持回收
+/// 保证不留孤儿进程，同时事件仍按属主投递（「谁在册谁收到终态」不因回收来源而变）。
+///
+/// 会话引擎下沉 P1-b 起业务会话也走 `host-pty`，届时关停路径**只需**本函数
+/// （业务线 `SessionManager::shutdown` 随 P4 退役）。
+pub(crate) fn kill_all_registered(bus: &MessageBus) -> usize {
+    let reclaimed = reclaim_handles(registered_handles(None), bus);
+    if reclaimed > 0 {
+        tracing::info!(reclaimed, "host-pty: 引擎层全量回收完成（系统关停）");
+    }
+    reclaimed
+}
+
+/// 在册插件 PTY 条数（引擎事实：关停守卫 / 诊断用；**非 WIT 原语**、不设权限门、不取参数）
+///
+/// 在册即存活：终态（读线程 EOF + 子进程回收齐备）由退出监听摘除句柄，故本计数就是
+/// 「活着的插件私有 PTY 数」。会话引擎下沉 P1 后，关窗守卫的判据将由会话状态改为
+/// 「引擎事实：存活 PTY 计数 > 0」（开放点 4 / spec 验收项）。
+pub(crate) fn live_count() -> usize {
+    PTYS.lock().unwrap_or_else(|e| e.into_inner()).len()
 }
 
 /// 按游标拉取输出历史（spec D3）

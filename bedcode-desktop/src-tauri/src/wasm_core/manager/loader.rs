@@ -209,6 +209,14 @@ impl PluginLoader {
                     // 镜像一份 granted 列表（票 11 第 4 项：镜像字段只写不读）
                     permission_mgr.grant_permissions(&plugin_id, &manifest.permissions);
 
+                    // PTY 配额与权限同点登记（会话引擎下沉 P1 / H1）：manifest
+                    // `ptyQuota` → host-pty 生效上限。放在同一漏斗里是为了让「声明面」
+                    // 只有一个入口——区间合法性已在解析期由 validate_pty_quota 把关，
+                    // 未声明者落默认档（既有插件零迁移）。
+                    // 静态注册（inventory）插件不经本函数、也不经 host-pty 原语（它们
+                    // 直接用 SessionManager），故无需在 host.rs 那处授权点补登记。
+                    crate::wasm_core::host_api::pty::register_quota(&plugin_id, manifest.pty_quota);
+
                     // 根据 rust_library 字段判断来源：有 WASM 模块则为 Wasm，否则为 FileScan；
 
                     // 用户插件目录（zip 安装）显式标 UserInstalled，不参与推断。

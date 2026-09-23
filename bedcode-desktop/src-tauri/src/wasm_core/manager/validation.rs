@@ -15,6 +15,8 @@
 
 use bedcode_plugin_api::PluginManifest;
 
+use crate::system::constants::{PLUGIN_PTY_MAX_SESSIONS_PER_PLUGIN, PLUGIN_PTY_SESSIONS_CEILING_PER_PLUGIN};
+
 /// 校验 manifest 必填字段
 ///
 /// loader 目录扫描（`loader.rs::load_manifest`）与 zip 安装
@@ -33,6 +35,28 @@ pub fn validate_manifest_required(manifest: &PluginManifest) -> crate::Result<()
     }
     if manifest.version.is_empty() {
         return Err(crate::AppError::Plugin("plugin.json missing version field".to_string()));
+    }
+    validate_pty_quota(manifest.pty_quota)?;
+    Ok(())
+}
+
+/// 校验 manifest 声明的 `ptyQuota` 落在内核允许区间
+///
+/// 会话引擎下沉 P1 / H1：业务会话改由插件经 `host-pty.spawn` 自持 PTY 后，每插件在册
+/// 条数上限不能再是单一内核常量（8 条不是「用户可开多少终端」的产品档位），改为
+/// manifest 声明 + 宿主区间仲裁。
+///
+/// 判据之所以落在**加载期**而不是 `spawn`：配额是自我声明的静态事实，装载时就能判定，
+/// 拖到运行期等于把配置错误转嫁成「第 N+1 条会话创建失败」的产品故障。
+/// 越界与 0 一律拒绝、**不夹取到上限**（与 `ringBytes` 同一口径：静默降级会让插件按
+/// 自己声明的并发数规划业务、实际却少得多）。
+pub fn validate_pty_quota(declared: Option<usize>) -> crate::Result<()> {
+    if let Some(quota) = declared {
+        if quota == 0 || quota > PLUGIN_PTY_SESSIONS_CEILING_PER_PLUGIN {
+            return Err(crate::AppError::Plugin(format!(
+                "plugin.json ptyQuota out of range ({quota}); allowed 1..={PLUGIN_PTY_SESSIONS_CEILING_PER_PLUGIN}, omit the field for the default {PLUGIN_PTY_MAX_SESSIONS_PER_PLUGIN}"
+            )));
+        }
     }
     Ok(())
 }
@@ -131,6 +155,58 @@ mod tests {
         ] {
             assert!(!validate_plugin_id(id), "id should be invalid: {}", id);
         }
+    }
+
+    /// `ptyQuota` 区间仲裁（会话引擎下沉 P1 / H1）
+    ///
+    /// 正例：缺省（未声明 = 内核默认档，既有插件零迁移）与区间两端；
+    /// 反例：0 与越上限——两者都必须加载期失败，且不夹取（越界被钳回上限等于
+    /// 让插件按自己声明的并发数规划业务、实际却少得多）。
+    #[test]
+    fn pty_quota_accepts_absent_and_in_range_rejects_out_of_range() {
+        assert!(validate_pty_quota(None).is_ok(), "缺省即默认档，不得拒绝");
+        assert!(validate_pty_quota(Some(1)).is_ok());
+        assert!(validate_pty_quota(Some(PLUGIN_PTY_SESSIONS_CEILING_PER_PLUGIN)).is_ok());
+        for bad in [0, PLUGIN_PTY_SESSIONS_CEILING_PER_PLUGIN + 1, 10_000] {
+            let err = validate_pty_quota(Some(bad))
+                .err()
+                .unwrap_or_else(|| panic!("ptyQuota={bad} 必须被拒绝"));
+            let text = err.to_string();
+            assert!(
+                text.contains(&bad.to_string()) && text.contains("ptyQuota"),
+                "错误必须点名越界值与字段名，got: {text}"
+            );
+        }
+    }
+
+    /// 配额判据经 `validate_manifest_required` 生效（两条装载入口共用该漏斗），
+    /// 且 manifest 的 JSON 键名就是 camelCase 的 `ptyQuota`
+    #[test]
+    fn manifest_required_check_propagates_quota_rejection() {
+        let parse = |quota: &str| -> crate::Result<PluginManifest> {
+            parse_manifest_json(&format!(
+                r#"{{"id":"com.bedcode.quota","name":"quota","version":"1.0.0","ptyQuota":{quota}}}"#
+            ))
+        };
+        let err = parse(&(PLUGIN_PTY_SESSIONS_CEILING_PER_PLUGIN + 1).to_string())
+            .err()
+            .expect("越界声明必拒");
+        assert!(err.to_string().contains("ptyQuota"), "got: {err}");
+        assert_eq!(
+            parse("9").expect("区间内声明可加载").pty_quota,
+            Some(9),
+            "声明值必须原样抵达宿主（键名写错会静默降级为默认档）"
+        );
+        assert_eq!(
+            parse_without_quota().pty_quota,
+            None,
+            "未声明 = 默认档（既有插件零迁移）"
+        );
+    }
+
+    fn parse_without_quota() -> PluginManifest {
+        parse_manifest_json(r#"{"id":"com.bedcode.quota","name":"quota","version":"1.0.0"}"#)
+            .expect("无 ptyQuota 的既有 manifest 必须照常加载")
     }
 
     #[test]

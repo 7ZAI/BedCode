@@ -3,9 +3,9 @@
 //! 会话管理器 - 负责协调会话生命周期、状态管理和事件发布
 //! 重构后只负责流程编排，各职责已拆分到独立模块
 
-use crate::enums::{SessionLaunchConfig, SessionStatus, SessionType};
+use crate::enums::{ExecutionEnvironment, SessionLaunchConfig, SessionStatus, SessionType};
 use crate::events::DesktopSyncEvent;
-use crate::pty::{PtyHandler, PtySessionHandler};
+use crate::pty::PtySession;
 use crate::session::session_lifecycle::SessionLifecycleEvent;
 use crate::session::{
     input_line::{SessionInputListener, SubmittedLineTracker},
@@ -14,13 +14,15 @@ use crate::session::{
         PtyRegistry, RendererSource, ResizeOutcome, SessionInfoRegistry,
     },
     session_lifecycle::SessionLifecycleListener,
-    session_output::GlobalOutputManager,
+    session_output::{GlobalOutputManager, SessionOutputSink},
 };
 use crate::session::{SessionInfo, SessionInfoView, SessionStatusEvent};
 use crate::system::config::AppConfig;
+use crate::system::constants::ENV_BEDCODE_SESSION_ID;
 use crate::system::error_boundary::spawn_with_error_boundary;
 use crate::Result;
 use chrono::Utc;
+use portable_pty::CommandBuilder;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
@@ -38,8 +40,6 @@ pub struct SessionManager {
     canonical_renderer: Arc<DefaultCanonicalRendererRegistry>,
     /// 会话状态变更广播（前端事件转发与 WS 通道经 [`Self::subscribe_status`] 订阅）
     status_tx: broadcast::Sender<SessionStatusEvent>,
-    /// PTY 处理器
-    pty_handler: Arc<PtySessionHandler>,
     /// 运行标志
     running: Arc<AtomicBool>,
     /// 同步事件发送器（用于向客户端广播增量数据）
@@ -73,6 +73,49 @@ pub struct SessionManager {
     session_owners: Arc<tokio::sync::RwLock<std::collections::HashMap<String, String>>>,
 }
 
+// ==================== 业务命令装配（pty 引擎与业务语义的唯一边界） ====================
+
+/// `SessionLaunchConfig` → argv 形态 `CommandBuilder`（业务侧对 pty 引擎的填充）
+///
+/// 2026-09-23 PTY 解耦票：宿主 `pty/` 引擎不再认识业务配置、不做 shell 包装，
+/// 本函数是「业务会话语义 → 引擎原语」的**唯一**翻译点：
+///
+/// - **argv**：直接取插件算好的 `command_args`（`launch.rs::build_argv` 已完成
+///   `bash -lic` / `wsl.exe -d <distro> -- bash -lic` / PowerShell `-Command`
+///   三环境的包装与转义；WSL 路径转换与单引号转义同在插件侧）。本层不做任何
+///   二次解释——`config.command` 仅是诊断用的人类可读串。
+/// - **cwd**：仅 Windows / Linux 显式设置；WSL2 的 cwd 语义由 argv 脚本内的
+///   `cd '<wsl 路径>'` 表达（宿主侧工作目录是 Windows 路径，设了也无意义）。
+/// - **env**：`config.env_vars` 透传。
+/// - **`BEDCODE_SESSION_ID`**：在业务侧注入（Claude Code hooks 靠它关联
+///   BedCode 会话）。注意这是**业务身份**，故不进 pty 引擎；插件私有 PTY
+///   （host-pty）不注入。
+///
+/// 缺 argv / argv0 为空即显性报错：旧 shell 包装路径已退役，不存在静默回退。
+fn launch_command(session_id: &str, config: &SessionLaunchConfig) -> Result<CommandBuilder> {
+    let Some(argv0) = config.command_args.first().filter(|a| !a.trim().is_empty()) else {
+        return Err(crate::AppError::Pty(format!(
+            "会话启动缺少 argv（commandArgs 为空或 argv[0] 为空，session {}）",
+            session_id
+        )));
+    };
+    let mut builder = CommandBuilder::new(argv0);
+    for arg in &config.command_args[1..] {
+        builder.arg(arg);
+    }
+    if matches!(
+        config.environment,
+        ExecutionEnvironment::Windows { .. } | ExecutionEnvironment::Linux
+    ) {
+        builder.cwd(&config.working_dir);
+    }
+    for (key, value) in &config.env_vars {
+        builder.env(key, value);
+    }
+    builder.env(ENV_BEDCODE_SESSION_ID, session_id);
+    Ok(builder)
+}
+
 impl SessionManager {
     /// 获取会话状态变化广播发送器
     pub fn status_tx(&self) -> broadcast::Sender<SessionStatusEvent> {
@@ -83,13 +126,11 @@ impl SessionManager {
     ///
     /// 无库依赖：v21 起内核不再读会话配置表（命名唯一化 / config→launch 映射 /
     /// 重启执行器全部归插件），故不再注入 `SessionStorage`。
+    ///
+    /// 无 PTY 工厂依赖（2026-09-23 PTY 解耦票）：命令装配在 [`launch_command`]，
+    /// 引擎直接经 `PtySession::with_command` 创建——旧 `PtySessionHandler` 注入点
+    /// 随业务 sink / 业务配置类型一并退役。
     pub fn new() -> Self {
-        let pty_handler = Arc::new(PtySessionHandler::new());
-        Self::new_with_handlers(pty_handler)
-    }
-
-    /// 创建新的 Session Manager（使用具体类型注入）
-    pub fn new_with_handlers(pty_handler: Arc<PtySessionHandler>) -> Self {
         let pty_registry = Arc::new(DefaultPtyRegistry::new());
         let session_info = Arc::new(DefaultSessionInfoRegistry::new());
         let canonical_renderer = Arc::new(DefaultCanonicalRendererRegistry::new());
@@ -103,7 +144,6 @@ impl SessionManager {
             session_info,
             canonical_renderer,
             status_tx,
-            pty_handler,
             running,
             sync_tx: RwLock::new(None),
             lifecycle_listeners,
@@ -273,14 +313,22 @@ impl SessionManager {
         })
         .await;
 
-        // 创建 PTY 会话（指定 ID 或由 PTY 层生成）
-        let pty_session = match session_id {
-            Some(sid) => self
-                .pty_handler
-                .create_session_with_id(sid.to_string(), launch_config.clone())?,
-            None => self.pty_handler.create_session(launch_config.clone())?,
+        // 会话 id：调用方指定（重启 = 同一 id 重建）或本次生成
+        let session_id = match session_id {
+            Some(sid) => sid.to_string(),
+            None => uuid::Uuid::new_v4().to_string(),
         };
-        let session_id = pty_session.id().to_string();
+        // 命令与输出汇都在业务层装配（pty 引擎只收算好的 argv）
+        let command = launch_command(&session_id, &launch_config)?;
+        let sink = Arc::new(SessionOutputSink::new(&session_id));
+        let pty_session = PtySession::with_command(
+            session_id.clone(),
+            launch_config.name.clone(),
+            launch_config.cols,
+            launch_config.rows,
+            command,
+            sink,
+        )?;
 
         if start {
             // 注册输出管理器须在 PTY 启动（PtyReader 随 start() 即刻读 PTY 输出）
@@ -560,6 +608,31 @@ impl SessionManager {
     /// 列出所有会话
     pub async fn list_sessions(&self) -> Vec<SessionInfo> {
         self.session_info.list().await
+    }
+
+    /// 业务线 PTY 计数（**引擎事实**：在册 **且** 未终结；供关停守卫 / 诊断）
+    ///
+    /// 判据 = `is_running() && !output_terminated()`，与 `host-pty` 的 `is-running`
+    /// 原语同一组合（`running_verdict`）。语义边界与今日关窗守卫口径**逐格对齐**：
+    ///
+    /// - **含**「已 openpty 但尚未启动」的会话（今日 `Starting`；两阶段第一阶段）
+    /// - **含**运行中的会话（今日 `Running`）
+    /// - **不含**已 kill / 已自然退出的会话（今日 `Stopped`）
+    ///
+    /// 两路合取不可省：业务线的 PTY 注册表**不随自然退出摘除**（只有 kill / remove
+    /// 才摘），而引擎的 `running` 标志**只有 kill / 销毁才翻下**（业务线依赖该语义），
+    /// 故只看任一项都会把已退出的会话算成还在。
+    ///
+    /// 用途（会话引擎下沉 P1 开放点 4）：关窗守卫判据由「会话状态 ∈ {Running,
+    /// Starting}」改为「PTY 计数 > 0」——功能等价，且不引入会话语义与插件调用依赖
+    /// （窗口关闭路径不得被插件阻塞）。
+    pub async fn live_pty_count(&self) -> usize {
+        self.pty_registry
+            .list()
+            .await
+            .iter()
+            .filter(|session| session.is_running() && !session.output_terminated())
+            .count()
     }
 
     /// 向会话写入输入
@@ -963,7 +1036,7 @@ mod tests {
             environment: ExecutionEnvironment::Linux,
             working_dir: "/tmp".to_string(),
             command: "bash".to_string(),
-            command_args: None,
+            command_args: vec!["bash".to_string()],
             env_vars: HashMap::new(),
             cols: 120,
             rows: 40,
@@ -1002,7 +1075,7 @@ mod tests {
             environment: ExecutionEnvironment::Linux,
             working_dir: "/tmp".to_string(),
             command: "bash".to_string(),
-            command_args: None,
+            command_args: vec!["bash".to_string()],
             env_vars: HashMap::new(),
             cols: 100,
             rows: 30,
@@ -1096,6 +1169,95 @@ mod tests {
         assert!(manager.session_annotations(&sid).await.is_empty(), "会话移除即连带清槽");
     }
 
+    // ==================== 业务命令装配（launch_command，2026-09-23 PTY 解耦票） ====================
+
+    /// argv 原样进 builder（宿主零解释）+ `BEDCODE_SESSION_ID` 按会话 id 注入
+    #[test]
+    fn launch_command_passes_argv_and_injects_session_id_env() {
+        use crate::enums::ExecutionEnvironment;
+
+        let mut env_vars = std::collections::HashMap::new();
+        env_vars.insert("FOO".to_string(), "bar".to_string());
+        let config = SessionLaunchConfig {
+            name: "cfg".to_string(),
+            environment: ExecutionEnvironment::Linux,
+            working_dir: "/tmp".to_string(),
+            command: "bash -lic 'ls'（仅诊断，宿主不解释）".to_string(),
+            command_args: vec!["bash".to_string(), "-lic".to_string(), "ls".to_string()],
+            env_vars,
+            cols: 80,
+            rows: 24,
+        };
+
+        let cmd = launch_command("sess-42", &config).expect("argv 必须被接受");
+        let argv: Vec<String> = cmd.get_argv().iter().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert_eq!(argv, ["bash", "-lic", "ls"], "argv 必须原样透传（宿主不做 shell 解释）");
+        assert_eq!(
+            cmd.get_env("FOO").map(|v| v.to_string_lossy().into_owned()),
+            Some("bar".to_string()),
+            "env_vars 透传"
+        );
+        assert_eq!(
+            cmd.get_env(ENV_BEDCODE_SESSION_ID).map(|v| v.to_string_lossy().into_owned()),
+            Some("sess-42".to_string()),
+            "业务会话身份按会话 id 注入（Claude Code hooks 关联用）"
+        );
+    }
+
+    /// cwd 仅原生环境（Windows / Linux）显式设置；WSL2 的 cwd 语义在 argv 脚本的 cd 内
+    #[test]
+    fn launch_command_sets_cwd_only_for_native_environments() {
+        use crate::enums::ExecutionEnvironment;
+
+        let config = |environment| SessionLaunchConfig {
+            name: "cfg".to_string(),
+            environment,
+            working_dir: "/tmp".to_string(),
+            command: "bash".to_string(),
+            command_args: vec!["bash".to_string()],
+            env_vars: std::collections::HashMap::new(),
+            cols: 80,
+            rows: 24,
+        };
+
+        let linux = launch_command("s1", &config(ExecutionEnvironment::Linux)).expect("linux 必须装配成功");
+        assert!(linux.get_cwd().is_some(), "Linux 显式设置 cwd");
+
+        let wsl = launch_command(
+            "s2",
+            &config(ExecutionEnvironment::Wsl2 {
+                distro: "Ubuntu".to_string(),
+            }),
+        )
+        .expect("wsl2 必须装配成功");
+        assert!(wsl.get_cwd().is_none(), "WSL2 不设宿主 cwd（cwd 在 argv 脚本的 cd 内）");
+    }
+
+    /// 缺 argv / argv0 为空 → 显性报错（旧 shell 包装路径已退役，无静默回退）
+    #[test]
+    fn launch_command_rejects_empty_argv() {
+        use crate::enums::ExecutionEnvironment;
+
+        let config = |command_args: Vec<String>| SessionLaunchConfig {
+            name: "cfg".to_string(),
+            environment: ExecutionEnvironment::Linux,
+            working_dir: "/tmp".to_string(),
+            command: "bash".to_string(),
+            command_args,
+            env_vars: std::collections::HashMap::new(),
+            cols: 80,
+            rows: 24,
+        };
+
+        for argv in [Vec::new(), vec!["   ".to_string()]] {
+            let err = launch_command("sess-x", &config(argv.clone())).unwrap_err();
+            assert!(
+                matches!(err, crate::AppError::Pty(_)),
+                "argv 非法必须显性报错，got: {err:?}（argv={argv:?}）"
+            );
+        }
+    }
+
     fn renderer_desktop() -> RendererSource {
         RendererSource::Desktop
     }
@@ -1113,7 +1275,7 @@ mod tests {
                     environment: ExecutionEnvironment::Linux,
                     working_dir: "/tmp".to_string(),
                     command: "bash".to_string(),
-                    command_args: None,
+                    command_args: vec!["bash".to_string()],
                     env_vars: std::collections::HashMap::new(),
                     cols: 120,
                     rows: 40,
@@ -1166,7 +1328,7 @@ mod tests {
                     environment: ExecutionEnvironment::Linux,
                     working_dir: "/tmp".to_string(),
                     command: "exit 7".to_string(),
-                    command_args: None,
+                    command_args: vec!["bash".to_string(), "-c".to_string(), "exit 7".to_string()],
                     env_vars: HashMap::new(),
                     cols: 100,
                     rows: 30,
@@ -1205,6 +1367,68 @@ mod tests {
         let info = manager.get_session(&sid).await.expect("session info");
         assert_eq!(info.status, SessionStatus::Stopped, "会话记录状态必须落 Stopped");
 
+        // 引擎事实（开放点 4 的判据前提）：自然退出后**不计入**活 PTY
+        //
+        // 前提断言不可省：业务线在册句柄不随自然退出摘除（只有 kill / remove 才摘），
+        // 故「活 PTY 计数」必须叠加终结位才如实——若有人把判据简化成「注册表条数」或
+        // 只看 `is_running()`（引擎的 running 标志只有 kill/销毁才翻下），本用例转红。
+        assert!(
+            manager.pty_registry.list_ids().await.contains(&sid),
+            "前提：自然退出不摘除业务线在册句柄"
+        );
+        assert_eq!(
+            manager.live_pty_count().await,
+            0,
+            "自然退出后不计入活 PTY（在册 ≠ 活）"
+        );
+
         manager.remove_session(&sid).await.expect("cleanup");
+    }
+
+    /// 引擎事实：PTY 计数 = 在册且未终结（与今日关窗守卫口径逐格对齐）
+    ///
+    /// 阶梯：只建不启（`Starting`）→ 计；再建一个运行中的 → 计两条；kill 一条 → 剩一条；
+    /// 摘除 → 清零。
+    #[tokio::test]
+    async fn live_pty_count_counts_unterminated_ptys() {
+        use crate::enums::ExecutionEnvironment;
+        use std::collections::HashMap;
+
+        let manager = SessionManager::default();
+        let idle = seed_idle_session(&manager, "cfg-idle").await;
+        assert_eq!(
+            manager.live_pty_count().await,
+            1,
+            "只建不启也占一条 PTY（今日守卫把 Starting 也算运行中）"
+        );
+
+        let running = manager
+            .create_session_from_spec(
+                SessionLaunchConfig {
+                    name: "live".to_string(),
+                    environment: ExecutionEnvironment::Linux,
+                    working_dir: "/tmp".to_string(),
+                    command: "bash".to_string(),
+                    command_args: vec!["bash".to_string()],
+                    env_vars: HashMap::new(),
+                    cols: 100,
+                    rows: 30,
+                },
+                "cfg-live".to_string(),
+                None,
+                true,
+                None,
+                None,
+            )
+            .await
+            .expect("spawn live session");
+        assert_eq!(manager.live_pty_count().await, 2, "运行中的会话同样计入");
+
+        manager.kill_session(&running).await.expect("kill");
+        assert_eq!(manager.live_pty_count().await, 1, "kill 后该条不再计入");
+
+        manager.remove_session(&idle).await.expect("cleanup idle");
+        assert_eq!(manager.live_pty_count().await, 0, "摘除后清零");
+        manager.remove_session(&running).await.expect("cleanup running");
     }
 }

@@ -699,6 +699,7 @@ mod tests {
         let spec = r#"{
             "name": "dev(2)",
             "command": "bash",
+            "commandArgs": ["wsl.exe", "-d", "Ubuntu", "--", "bash", "-lic", "pwd"],
             "cwd": "/home/u",
             "environment": {"type": "Wsl2", "distro": "Ubuntu"},
             "configId": "cfg-1",
@@ -758,17 +759,17 @@ mod tests {
     }
 
     /// 映射决策（resolve_launch_spec）：spec 字段逐一到 SessionLaunchConfig；
-    /// args 追加、尺寸缺省、env 透传、start 缺省 true、configId 透传
+    /// commandArgs 透传、尺寸缺省、env 透传、start 缺省 true、configId 透传
     #[test]
     fn resolve_launch_spec_maps_spec_to_launch_config() {
         use crate::enums::{ExecutionEnvironment, WindowsShell};
 
-        // Wsl2 + distro + 尺寸合法 + env + args
+        // Wsl2 + distro + 尺寸合法 + env + argv
         let (spec, lc) = resolve_launch_spec(
             r#"{
                 "name": "dev(1)",
                 "command": "powershell",
-                "args": ["-NoLogo"],
+                "commandArgs": ["wsl.exe", "-d", "Ubuntu-22.04", "--", "bash", "-lic", "pwd"],
                 "cwd": "/home/u",
                 "cols": 100,
                 "rows": 30,
@@ -781,7 +782,8 @@ mod tests {
         assert_eq!(spec.start, true, "start 缺省 true");
         assert_eq!(spec.config_id.as_deref(), Some("cfg-2"));
         assert_eq!(lc.name, "dev(1)");
-        assert_eq!(lc.command, "powershell -NoLogo", "args 以空格追加到 command");
+        assert_eq!(lc.command, "powershell", "command 仅诊断透传（不做 args 拼接）");
+        assert_eq!(lc.command_args.len(), 7, "argv 整体透传");
         assert_eq!(lc.working_dir, "/home/u");
         assert_eq!(lc.cols, 100);
         assert_eq!(lc.rows, 30);
@@ -794,16 +796,17 @@ mod tests {
         );
 
         // Linux + 尺寸缺省（0 / 缺省 → 默认网格 120x40，与 DefaultConfigMapper 基准一致）
-        let (_, lc) =
-            resolve_launch_spec(r#"{"name":"s","command":"bash","cwd":"/","environment":{"type":"Linux"},"cols":0}"#)
-                .expect("resolve ok");
+        let (_, lc) = resolve_launch_spec(
+            r#"{"name":"s","command":"bash","commandArgs":["bash"],"cwd":"/","environment":{"type":"Linux"},"cols":0}"#,
+        )
+        .expect("resolve ok");
         assert_eq!(lc.environment, ExecutionEnvironment::Linux);
         assert_eq!(lc.cols, 120, "cols=0 视为缺省");
         assert_eq!(lc.rows, 40, "rows 缺省");
 
         // Windows + PowerShell shell
         let (_, lc) = resolve_launch_spec(
-            r#"{"name":"w","command":"echo hi","cwd":"D:\\work","environment":{"type":"Windows","shell":"PowerShell"}}"#,
+            r#"{"name":"w","command":"echo hi","commandArgs":["powershell.exe","-NoExit","-Command","echo hi"],"cwd":"D:\\work","environment":{"type":"Windows","shell":"PowerShell"}}"#,
         )
         .expect("resolve ok");
         assert_eq!(
@@ -818,7 +821,7 @@ mod tests {
     #[test]
     fn resolve_launch_spec_passes_through_start_false() {
         let (spec, _) = resolve_launch_spec(
-            r#"{"name":"p","command":"bash","cwd":"/","environment":{"type":"Linux"},"start":false}"#,
+            r#"{"name":"p","command":"bash","commandArgs":["bash"],"cwd":"/","environment":{"type":"Linux"},"start":false}"#,
         )
         .expect("resolve ok");
         assert!(!spec.start, "start=false 透传");

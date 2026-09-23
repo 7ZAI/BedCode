@@ -58,6 +58,14 @@ export interface PluginManifest {
    */
   resourceOverrides?: ResourceOverrides
   /**
+   * 单插件在册 `host-pty` 句柄数上限声明（会话引擎下沉 P1 / H1）
+   *
+   * 缺省 = 内核默认档（8 条）。业务会话由插件经 `host-pty.spawn` 自持 PTY 后，
+   * 「用户可开多少终端」是属主插件的产品档位，不再是单一内核常量。
+   * 区间上限由宿主内核常量仲裁（越界在**加载期**拒绝、不夹取）；构建期只校形态。
+   */
+  ptyQuota?: number
+  /**
    * WASI 预打开目录声明（manifest `wasiPreopenDirs`，仅 wasm32-wasip2 插件）
    *
    * 条目两形态：裸路径字符串 = 可写挂载（既有形态，零迁移）；

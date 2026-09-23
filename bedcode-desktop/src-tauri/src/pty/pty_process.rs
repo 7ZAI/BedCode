@@ -2,17 +2,21 @@
 //!
 //! 封装 portable-pty，提供跨平台的 PTY 管理功能
 //! 核心职责：PTY 会话的生命周期管理（创建、启动、终止、resize）
+//!
+//! **零业务语义（2026-09-23 PTY 解耦票）**：本引擎只接受**调用方算好的**
+//! `CommandBuilder`（argv 形态）——不做 shell 包装（`bash -lic` / PowerShell
+//! `-Command` / CMD `/K`）、不做 WSL 路径转换、不做危险字符校验、不注入业务环境变量
+//! （含 `BEDCODE_SESSION_ID`）。业务会话的命令构造与注入在业务层
+//! （`session/session_manager.rs::launch_command`）；插件私有 PTY（host-pty）由插件
+//! 构造 argv。两条消费线共用同一套读线程 / 回收 / 终态门语义。
 
-use crate::enums::{ExecutionEnvironment, SessionLaunchConfig};
 // 仅在 Windows 平台使用（kill 的 taskkill 路径），避免 Linux/macOS 编译下 unused 警告
 #[cfg(target_os = "windows")]
 use crate::process::create_command;
-use crate::pty::command::build_command;
 use crate::pty::lifecycle::{PtyTerminated, PtyTerminationGate};
-use crate::pty::output_sink::{PtyOutputSink, SessionOutputSink};
+use crate::pty::output_sink::PtyOutputSink;
 use crate::pty::pty_reader::PtyReader;
 use crate::system::config::AppConfig;
-use crate::system::constants::plugin::ENV_BEDCODE_SESSION_ID;
 use crate::Result;
 
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtyPair, PtySize, SlavePty};
@@ -21,7 +25,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use tokio::sync::{broadcast, Mutex};
-use uuid::Uuid;
 
 /// PTY slave fd 生命周期策略（票 3 已统一为 `ReleaseOnSpawn`，枚举退役）
 ///
@@ -36,21 +39,6 @@ use uuid::Uuid;
 /// `task/state.rs` 注释明证会永久卡在运行中）。票 3 统一为释放：自然退出 → EOF →
 /// 终态事件 → 既有处理链解锁（翻 Stopped + 状态事件 + 生命周期 Stopped）。
 
-/// PTY 子进程命令来源
-///
-/// **为什么要两条命令线**：业务终端会话的命令必须经 [`build_command`]——shell 包装
-/// （`bash -lic` / PowerShell `-Command` / CMD `/K`）、WSL 路径转换、cwd 兜底与
-/// `BEDCODE_SESSION_ID` 注入都是**业务会话语义**。插件私有 PTY 恰恰要避开这些：
-/// 它只需要「exec 我给的 argv」（spec D5 裁剪线，包装归插件层）。
-/// 票 01 把输出汇做成可注入，本类型把命令来源也做成可注入，二者合起来才让
-/// 两条线共用同一个 `PtySession`（同一套读线程 / 回收 / 终态门语义）。
-pub enum PtyCommandSource {
-    /// 业务线：`SessionLaunchConfig` 经 `build_command`，并注入 `BEDCODE_SESSION_ID`
-    Business(SessionLaunchConfig),
-    /// 插件私有线：调用方构造好的 builder 原样 exec，宿主不做任何加工
-    Raw(CommandBuilder),
-}
-
 /// PTY 会话内部状态
 ///
 /// 使用 Arc<Mutex<>> 包装所有非 Send/Sync 的类型，确保线程安全
@@ -63,8 +51,8 @@ pub struct PtySessionState {
     pub running: Arc<AtomicBool>,
     /// 未启动前的完整 PTY pair（`start()` 取 slave 侧 spawn 子进程）
     pub pair: Option<PtyPair>,
-    /// 未启动前的命令来源（`start()` 取走并构造 `CommandBuilder`，一次性）
-    pub command: Option<PtyCommandSource>,
+    /// 未启动前的命令（`start()` 取走并 spawn，一次性；argv 由调用方算好）
+    pub command: Option<CommandBuilder>,
     /// 启动后的 master（resize / 读取端克隆来源）
     pub master: Option<Box<dyn MasterPty + Send>>,
     /// 写入器
@@ -99,41 +87,28 @@ pub struct PtySession {
 // String 是 Send + Sync
 
 impl PtySession {
-    /// 创建新的 PTY 会话（业务终端会话线：默认输出总线 sink）
-    pub fn new(config: SessionLaunchConfig) -> Result<Self> {
-        let id = Uuid::new_v4().to_string();
-        Self::with_id(id, config)
+    /// 引擎唯一构造入口：调用方算好的 argv + 输出汇
+    ///
+    /// `command` 必须已由调用方构造完毕（argv 数组 + cwd + env）——本层不做任何命令
+    /// 加工，只负责 openpty / spawn / 读线程 / 终态门。spawn 后释放 slave fd（票 3
+    /// 统一）：自然退出 → EOF → 终态事件 → 既有处理链翻 Stopped。
+    ///
+    /// 业务会话线（`name` = 会话名、sink = `session::SessionOutputSink`）与插件私有线
+    /// （`name` 取 argv[0]、sink = 插件自备环）共用本入口。
+    pub fn with_command(
+        id: String,
+        name: String,
+        cols: u16,
+        rows: u16,
+        command: CommandBuilder,
+        sink: Arc<dyn PtyOutputSink>,
+    ) -> Result<Self> {
+        Self::build(id, name, cols, rows, command, sink)
     }
 
-    /// 使用指定 ID 创建 PTY 会话（用于重启时复用旧 ID）
+    /// 便捷入口（host-pty 插件私有 PTY 的 spawn 面）：name 取 argv[0]（仅日志/诊断）
     ///
-    /// 输出投递到业务会话输出总线（`SessionOutputSink`）——宿主业务终端会话线。
-    /// spawn 后释放 slave fd（票 3 统一）：自然退出 → EOF → 终态事件 → 既有处理链
-    /// 翻 Stopped（修复会话状态滞留 Running / 任务域意外退出兜底不触发）。
-    pub fn with_id(id: String, config: SessionLaunchConfig) -> Result<Self> {
-        let sink = Arc::new(SessionOutputSink::new(&id));
-        Self::build_from_config(id, config, sink)
-    }
-
-    /// 使用指定 ID 与**自备输出汇**创建插件私有 PTY 会话
-    ///
-    /// 插件私有 PTY（host-pty）走这条入口：输出投递到插件自己的缓冲，
-    /// 不注册 `GlobalOutputManager`、不进业务会话链路（ADR 0022 业务隔离）；
-    /// spawn 后释放 slave fd，使「进程退出」在读线程上以 EOF 形式可观测
-    /// （`pty:exit` 事件与 ring 摘除依赖它）。
-    ///
-    /// 命令仍走业务线 `build_command`（shell 包装）；需要裸 argv exec 的
-    /// host-pty 用 [`PtySession::with_private_command`]。
-    pub fn with_private_sink(id: String, config: SessionLaunchConfig, sink: Arc<dyn PtyOutputSink>) -> Result<Self> {
-        Self::build_from_config(id, config, sink)
-    }
-
-    /// 插件私有 PTY + **裸命令**（host-pty 的 spawn 入口，spec D5）
-    ///
-    /// `command` 由调用方以 `CommandBuilder::new(argv0)` + args/env/cwd 直接构造：
-    /// `start()` 原样 exec，**不经过** `build_command`——无 shell 包装、无 WSL 路径
-    /// 转换、无危险字符校验，也不注入业务 `BEDCODE_SESSION_ID`（插件私有 PTY
-    /// 无业务会话身份）。尺寸等其余语义与业务线共用同一套引擎。
+    /// 与 [`PtySession::with_command`] 同一实现，只是省去调用方传 name。
     pub fn with_private_command(
         id: String,
         cols: u16,
@@ -141,37 +116,12 @@ impl PtySession {
         command: CommandBuilder,
         sink: Arc<dyn PtyOutputSink>,
     ) -> Result<Self> {
-        // 名称仅用于日志/诊断：裸命令取 argv[0]（业务线的 name 是产品语义，不进本线）
         let name = command
             .get_argv()
             .first()
             .map(|arg| arg.to_string_lossy().into_owned())
             .unwrap_or_else(|| id.clone());
-        Self::build(
-            id,
-            name,
-            cols,
-            rows,
-            PtyCommandSource::Raw(command),
-            sink,
-        )
-    }
-
-    /// 由 `SessionLaunchConfig` 构造（业务线命令来源；cols/rows/name 取自配置）
-    fn build_from_config(
-        id: String,
-        config: SessionLaunchConfig,
-        sink: Arc<dyn PtyOutputSink>,
-    ) -> Result<Self> {
-        let (name, cols, rows) = (config.name.clone(), config.cols, config.rows);
-        Self::build(
-            id,
-            name,
-            cols,
-            rows,
-            PtyCommandSource::Business(config),
-            sink,
-        )
+        Self::build(id, name, cols, rows, command, sink)
     }
 
     fn build(
@@ -179,7 +129,7 @@ impl PtySession {
         name: String,
         cols: u16,
         rows: u16,
-        command: PtyCommandSource,
+        command: CommandBuilder,
         sink: Arc<dyn PtyOutputSink>,
     ) -> Result<Self> {
         let pty_system = native_pty_system();
@@ -245,46 +195,11 @@ impl PtySession {
     pub async fn start(&self) -> Result<()> {
         let (cmd, pair) = {
             let mut state = self.state.lock().await;
-            let command_source = state.command.take().ok_or_else(|| {
-                crate::AppError::Pty(format!("PTY 命令来源已消耗，无法重复启动 (session {})", self.id))
-            })?;
-            let cmd = match command_source {
-                PtyCommandSource::Business(config) => {
-                    // pty 票 1：`command_args` 非空 → 裸 argv exec（插件算好的 shell
-                    // 包装/argv 数组），宿主不二次包装、不做 WSL 转换；缺省/空 → 旧路径
-                    // `build_command`（bash -lic 等 shell 包装）。两种路径都注入
-                    // `BEDCODE_SESSION_ID`（业务会话身份，Claude Code hooks 关联用）。
-                    let mut cmd = match &config.command_args {
-                        Some(args) if !args.is_empty() => {
-                            let mut builder = CommandBuilder::new(&args[0]);
-                            for a in &args[1..] {
-                                builder.arg(a);
-                            }
-                            // cwd 设置与旧路径同口径：仅 Windows/Linux 显式设置
-                            // （WSL2 的 cwd 语义在插件算好的 argv 脚本内用 cd 表达）
-                            if matches!(
-                                config.environment,
-                                ExecutionEnvironment::Windows { .. } | ExecutionEnvironment::Linux
-                            ) {
-                                builder.cwd(&config.working_dir);
-                            }
-                            for (k, v) in &config.env_vars {
-                                builder.env(k, v);
-                            }
-                            builder
-                        }
-                        _ => build_command(&config)?,
-                    };
-                    // 注入 BedCode session ID 到进程环境变量，
-                    // 让 Claude Code hooks 能关联到 BedCode 的 PTY 会话
-                    // （业务会话语义，现役行为不变）
-                    cmd.env(ENV_BEDCODE_SESSION_ID, &self.id);
-                    cmd
-                }
-                // 插件私有 PTY：调用方给的 argv 原样 exec，宿主不加任何环境变量
-                // （spec D5——环境变量也是插件自己声明的面）
-                PtyCommandSource::Raw(builder) => builder,
-            };
+            // 命令已在构造期算好（argv 形态）：本层原样 exec，不做包装 / 注入
+            let cmd = state
+                .command
+                .take()
+                .ok_or_else(|| crate::AppError::Pty(format!("PTY 命令已消耗，无法重复启动 (session {})", self.id)))?;
 
             // 从 state 中取出 pair
             let pair = state
@@ -564,31 +479,39 @@ impl Drop for PtySession {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::enums::{ExecutionEnvironment, WindowsShell};
     #[cfg(target_os = "linux")]
     use crate::pty::output_sink::test_support::CollectingSink;
-    use std::collections::HashMap;
 
-    /// 最小启动配置（不 start，仅验证创建/属性/订阅/终止路径）
-    fn config() -> SessionLaunchConfig {
-        SessionLaunchConfig {
-            name: "test-session".to_string(),
-            environment: ExecutionEnvironment::Windows {
-                shell: WindowsShell::PowerShell,
-            },
-            working_dir: std::env::temp_dir().to_string_lossy().into_owned(),
-            command: "echo hello".to_string(),
-            command_args: None,
-            env_vars: HashMap::new(),
-            cols: 80,
-            rows: 24,
-        }
+    /// 丢弃式输出汇（不关心输出的用例）
+    struct NoopSink;
+
+    #[async_trait::async_trait]
+    impl PtyOutputSink for NoopSink {
+        async fn on_bytes(&self, _bytes: Vec<u8>, _timestamp_ms: i64) {}
+    }
+
+    fn noop_sink() -> Arc<dyn PtyOutputSink> {
+        Arc::new(NoopSink)
+    }
+
+    /// 最小引擎命令（不 start，仅验证创建/属性/订阅/终止路径）
+    fn echo_command() -> CommandBuilder {
+        let mut cmd = CommandBuilder::new("echo");
+        cmd.arg("hello");
+        cmd
     }
 
     #[tokio::test]
-    async fn with_id_creates_session_with_properties_and_kill_stops_it() {
-        let session =
-            PtySession::with_id("sess-1".to_string(), config()).expect("openpty should succeed on this platform");
+    async fn with_command_creates_session_with_properties_and_kill_stops_it() {
+        let session = PtySession::with_command(
+            "sess-1".to_string(),
+            "test-session".to_string(),
+            80,
+            24,
+            echo_command(),
+            noop_sink(),
+        )
+        .expect("openpty should succeed on this platform");
 
         assert_eq!(session.id(), "sess-1");
         assert_eq!(session.name().await, "test-session");
@@ -602,34 +525,43 @@ mod tests {
         assert!(!session.is_running());
     }
 
-    #[tokio::test]
-    async fn new_generates_unique_session_ids() {
-        let a = PtySession::new(config()).expect("openpty should succeed");
-        let b = PtySession::new(config()).expect("openpty should succeed");
-        assert_ne!(a.id(), b.id());
-        assert!(a.is_running());
+    /// Linux 命令（真实 PTY spawn 往返，票据 03）：`bash -c <脚本>`
+    ///
+    /// 引擎面已收 argv（宿主不再做 shell 包装）：测试自己给出 `bash -c` 形态，
+    /// 与业务层 `session_manager::launch_command` 的产物同形。
+    #[cfg(target_os = "linux")]
+    fn linux_command(script: &str) -> CommandBuilder {
+        let mut cmd = CommandBuilder::new("bash");
+        cmd.arg("-c");
+        cmd.arg(script);
+        cmd
     }
 
-    /// Linux 环境专用配置（真实 PTY spawn 往返，票据 03）
+    /// 指定 id 的业务线形态会话（argv 已算好 + 丢弃 sink）
     #[cfg(target_os = "linux")]
-    fn linux_config(command: &str) -> SessionLaunchConfig {
-        SessionLaunchConfig {
-            name: "itest-pty".to_string(),
-            environment: ExecutionEnvironment::Linux,
-            working_dir: std::env::temp_dir().to_string_lossy().into_owned(),
-            command: command.to_string(),
-            command_args: None,
-            env_vars: HashMap::new(),
-            cols: 120,
-            rows: 40,
-        }
+    fn new_session_with_id(sid: String, script: &str) -> PtySession {
+        PtySession::with_command(
+            sid,
+            "itest-pty".to_string(),
+            120,
+            40,
+            linux_command(script),
+            noop_sink(),
+        )
+        .expect("openpty")
+    }
+
+    /// 自动 id 的业务线形态会话（不关心 id 的用例）
+    #[cfg(target_os = "linux")]
+    fn new_session(script: &str) -> PtySession {
+        new_session_with_id(unique_sid("itest-pty"), script)
     }
 
     /// 真实 PTY：start 后 is_running + kill 后停止（票据 03）
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn start_spawns_real_process_and_reports_running() {
-        let session = PtySession::new(linux_config("sleep 30")).expect("openpty");
+        let session = new_session("sleep 30");
         session.start().await.expect("start should spawn real process");
         assert!(session.is_running(), "start 后应 running");
         assert_eq!(session.name().await, "itest-pty");
@@ -651,8 +583,16 @@ mod tests {
                 .as_nanos()
         );
         let marker = format!("BEDCODE_PTY_WRITE_{sid}");
-        let session =
-            PtySession::with_id(sid.clone(), linux_config(&format!("echo {marker}; sleep 5"))).expect("openpty");
+        // 业务线形态：输出汇指向业务会话环（`session::SessionOutputSink`）
+        let session = PtySession::with_command(
+            sid.clone(),
+            "itest-pty".to_string(),
+            120,
+            40,
+            linux_command(&format!("echo {marker}; sleep 5")),
+            Arc::new(crate::session::SessionOutputSink::new(&sid)),
+        )
+        .expect("openpty");
 
         let manager = GlobalOutputManager::global();
         manager.register_session(&sid).await;
@@ -683,7 +623,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn resize_after_start_does_not_panic() {
-        let session = PtySession::new(linux_config("sleep 30")).expect("openpty");
+        let session = new_session("sleep 30");
         session.start().await.expect("start");
         session.resize(100, 30).await.expect("resize should succeed");
         session.resize(80, 24).await.expect("resize idempotent");
@@ -695,7 +635,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn send_special_key_invalid_key_errors() {
-        let session = PtySession::new(linux_config("sleep 30")).expect("openpty");
+        let session = new_session("sleep 30");
         session.start().await.expect("start");
         let err = session.send_special_key("not_a_real_key").await.unwrap_err();
         assert!(err.to_string().contains("key"), "非法 key 应报错: {err}");
@@ -706,7 +646,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn write_large_payload_chunks_without_failure() {
-        let session = PtySession::new(linux_config("sleep 30")).expect("openpty");
+        let session = new_session("sleep 30");
         session.start().await.expect("start");
         let big: Vec<u8> = vec![b'x'; 9000];
         session.write(&big).await.expect("8KB 分块写入不应失败");
@@ -727,10 +667,17 @@ mod tests {
 
     /// 插件私有 PTY（自备 sink + 释放 slave fd）
     #[cfg(target_os = "linux")]
-    fn private_session(command: &str) -> (PtySession, Arc<CollectingSink>) {
+    fn private_session(script: &str) -> (PtySession, Arc<CollectingSink>) {
         let sink = CollectingSink::new();
-        let session = PtySession::with_private_sink(unique_sid("itest-private"), linux_config(command), sink.clone())
-            .expect("openpty");
+        let session = PtySession::with_command(
+            unique_sid("itest-private"),
+            "itest-pty".to_string(),
+            120,
+            40,
+            linux_command(script),
+            sink.clone(),
+        )
+        .expect("openpty");
         (session, sink)
     }
 
@@ -780,15 +727,33 @@ mod tests {
         let sid = unique_sid("itest-private-sink-pty");
         let marker = format!("BEDCODE_PTY_PRIVATE_{sid}");
         let sink = CollectingSink::new();
-        let session = PtySession::with_private_sink(sid.clone(), linux_config(&format!("echo {marker}")), sink.clone())
-            .expect("openpty");
+        let session = PtySession::with_command(
+            sid.clone(),
+            "itest-pty".to_string(),
+            120,
+            40,
+            linux_command(&format!("echo {marker}")),
+            sink.clone(),
+        )
+        .expect("openpty");
         let mut lifecycle_rx = session.subscribe_lifecycle();
 
         session.start().await.expect("start");
         let terminated = recv_termination(&mut lifecycle_rx).await;
         assert_eq!(terminated.exit_code, Some(0), "echo 正常退出退出码应为 0");
 
-        let collected = String::from_utf8_lossy(&sink.collected()).into_owned();
+        // 终态事件 ≠ sink 已收到尾帧：读线程只保证「尾帧已入有序队列」
+        // （`gate.mark_reader_closed` 早于独立消费者任务的 `on_bytes`，见
+        // `pty_reader::start` 注释）→ 有界轮询等待投递完成，不依赖严格先后
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut collected = String::new();
+        while std::time::Instant::now() < deadline {
+            collected = String::from_utf8_lossy(&sink.collected()).into_owned();
+            if collected.contains(&marker) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
         assert!(collected.contains(&marker), "自备 sink 应收到进程输出: {collected}");
         assert!(
             !GlobalOutputManager::global().has_session(&sid).await,
@@ -803,7 +768,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn natural_exit_emits_termination_event_without_kill() {
-        let session = PtySession::new(linux_config("exit 7")).expect("openpty");
+        let session = new_session("exit 7");
         let mut lifecycle_rx = session.subscribe_lifecycle();
         session.start().await.expect("start");
 
@@ -821,7 +786,7 @@ mod tests {
     async fn kill_marks_termination_event_as_killed() {
         use crate::enums::PtySessionStatus;
 
-        let session = PtySession::new(linux_config("sleep 30")).expect("openpty");
+        let session = new_session("sleep 30");
         let mut lifecycle_rx = session.subscribe_lifecycle();
         session.start().await.expect("start");
         assert!(session.is_running(), "kill 前应仍在运行");

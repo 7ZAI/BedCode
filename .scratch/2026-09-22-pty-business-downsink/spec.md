@@ -1,6 +1,11 @@
 # PTY 业务语义下沉专项（Business PTY Downsink）
 
 Status: in-progress（2026-09-22 立项；**票 1 已 landed 2026-09-22**；阶段 1 已 landed fc760448e）
+
+> **2026-09-23 状态变更（纠偏）**：本专项的**票 2（收尾退役：删 `command.rs` / `wsl.rs` / `PtyCommandSource::Business`）**
+> 已**并入** `.scratch/2026-09-23-session-engine-downsink/spec.md` 的 **P0** —— 该专项把「会话真源整体下沉」
+> 立项为更大范围（会话登记/状态机/生命周期/输出环/输入直通），票 2 是其第一张票（PTY 与业务解耦）。
+> 本文件票 2 不再单独执行；票 1/3 的结论继续有效。**开放点 1 的结论同时被用户裁决推翻，见文末。**
 Date: 2026-09-22
 范围: **仅桌面端**（`bedcode-desktop/src-tauri/src/pty/`、`src-tauri/src/session/` 的 Business 消费线、
 `plugins/terminal-session/` 的 launch 域、`packages/plugin-sdk-desktop/`）；`bedcode-mobile/` 零改动、
@@ -116,8 +121,15 @@ WSL 单引号转义遗漏补齐（注释：「票据 02 仅补了 PowerShell/CMD
   `BEDCODE_SESSION_ID` 注入双路径保持（开放点 1 暂按引擎原语）。
 - **票 2（收尾退役）**：宿主 build_command/wsl.rs 删除、Business 变体移除、旧路径代码/测试清理；
   command.rs 测试迁移与插件侧契约测试对齐；`PtyCommandSource` 简化
-  
-  **尚未实施**：旧路径仍需覆盖旧插件产物兼容窗口；窗口判定见票 1 landed 后的双轨共存期。
+
+  **✅ 已由接管专项实施（2026-09-23）**：旧的「旧插件产物兼容窗口」判定**不再适用**——接管专项
+  （`.scratch/2026-09-23-session-engine-downsink/` 的 P0）选择**直接切断**（插件产物随仓重建），
+  旧产物送旧 spec 会被 `create-with-spec` **显性拒绝**（缺 `commandArgs`）而非静默回退。
+  实施明细见该 spec 的 P0 「已 landed」小节：`pty/command.rs` + `pty/pty_handler.rs` 整文件删、
+  `pty/wsl.rs` 裁剪至 151 行（只留发行版列举）、`PtyCommandSource` 删、`SessionOutputSink` 归位
+  `session/`、业务翻译收敛为 `session_manager::launch_command`、`command_args` 改必需。
+  转义测试的迁移落点：插件侧 `launch.rs` 原生单测（Linux/WSL/PowerShell 三路 + 正斜杠路径）；
+  **CMD 一路不迁**（插件 environment 词表无 CMD，该分支不可达 → 随宿主实现退役，已在 ADR 0022 v11 记账）。
 - **票 3（独立，行为修正）**：`PtySlaveFdPolicy` 统一 ReleaseOnSpawn（自然退出 → Stopped 事件评估）
   
   **✅ 已 landed（2026-09-22）**：统一 `ReleaseOnSpawn`——`Hold` 变体/`slave_policy`/`slave_hold`
@@ -142,6 +154,11 @@ WSL 单引号转义遗漏补齐（注释：「票据 02 仅补了 PowerShell/CMD
 
 1. ③ BEDCODE_SESSION_ID 注入归属（引擎原语「spawn 注入会话 id env」 vs 插件 env 占位——session_id 宿主
    预生成，插件无注入时机，倾向宿主原语化保留，见票 4）
+
+   > **2026-09-23 用户裁决推翻本开放点（原「倾向宿主原语化保留 / 票 4 暂按引擎原语」作废）**：
+   > 改为 **「插件生成会话 id，经 host-pty.spawn 的 config `env` 注入 `BEDCODE_SESSION_ID`，宿主不再预生成」**。
+   > 依据与连带事项见 `.scratch/2026-09-23-session-engine-downsink/spec.md` §5 裁决 3（会话真源下沉后
+   > 「宿主预生成 id」的前提自行消失：id 归插件，注入时机也就归插件）。
 2. `commandArgs` 下 `environment` 字段的语义收窄：仅剩「WSL2 发行版名」还能起什么作用（实施时按
    session_manager 尺寸/记录字段需要定；候选：收窄为只影响旧路径，新路径忽略）
 3. WSL 路径转换挪插件后，`plugins/terminal-session` 是否要暴露一个「Window 宿主路径 → WSL 路径」的

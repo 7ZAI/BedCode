@@ -449,6 +449,8 @@ pub fn restart_via_host(draft_json: &serde_json::Value) -> Result<serde_json::Va
     WasmHost
         .session_remove(&request.session_id)
         .map_err(|e| format!("host remove failed: {}", e.message))?;
+    // P1 双写：登记域镜像同序摘除（旧记录连带注解槽清理，与宿主 remove 语义一致）
+    crate::session::note_removed_via_host(&request.session_id);
     // 编排职责 4：同 id 重建（宿主异步执行 + id 冲突仲裁；此处已先行摘除故不冲突）
     let spec_json =
         serde_json::to_value(&spec).map_err(|e| format!("launch spec serialize failed: {}", e))?;
@@ -461,6 +463,8 @@ pub fn restart_via_host(draft_json: &serde_json::Value) -> Result<serde_json::Va
             created, request.session_id
         ));
     }
+    // P1 双写：镜像以同 id 重建（重启不重命名；`start = true` → Running + 桌面归属）
+    crate::session::note_created_via_host(&request.session_id, &config_id, &name, true, None);
     // 编排职责 5：登记待补发前端事件（Created 到达即发，与内核执行器同序）
     {
         let mut pending = PENDING_RESTART.lock().unwrap_or_else(|e| e.into_inner());
@@ -484,6 +488,8 @@ pub fn remove_via_host(draft_json: &serde_json::Value) -> Result<serde_json::Val
     WasmHost
         .session_remove(&request.session_id)
         .map_err(|e| format!("host remove failed: {}", e.message))?;
+    // P1 双写：登记域镜像同序摘除（含注解槽）
+    crate::session::note_removed_via_host(&request.session_id);
     Ok(serde_json::json!({ "sessionId": request.session_id, "removed": true }))
 }
 
@@ -519,6 +525,8 @@ pub fn rename_via_host(draft_json: &serde_json::Value) -> Result<serde_json::Val
     let previous = WasmHost
         .session_rename(&request.session_id, &request.name)
         .map_err(|e| format!("host rename failed: {}", e.message))?;
+    // P1 双写：登记域镜像改名（只动展示名，与宿主 rename 语义一致）
+    crate::session::note_renamed_via_host(&request.session_id, &request.name);
     Ok(serde_json::json!({
         "sessionId": request.session_id,
         "name": request.name,
@@ -566,6 +574,8 @@ pub fn resize_via_host(draft_json: &serde_json::Value) -> Result<serde_json::Val
                     serde_json::from_value::<RendererSource>(v)
                         .map_err(|e| format!("invalid canonical in resize reply: {}", e))
                 })?;
+            // P1 双写：正统端归属登记镜像（以宿主原语回执为准，不臆造执行结果）
+            crate::session::note_canonical_via_host(&request.session_id, &canonical);
             Ok(serde_json::to_value(ResizeOutcome::Applied { canonical })
                 .map_err(|e| format!("outcome serialize failed: {}", e))?)
         }

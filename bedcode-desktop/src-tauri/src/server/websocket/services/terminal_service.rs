@@ -25,7 +25,7 @@ pub async fn handle_input(
         if !data.is_empty() {
             // 逐条日志已由 SessionManager::write_input 节流采样（防 TUI 高频输入刷屏），
             // 此处不再重复打，保留错误路径日志
-            if let Err(e) = sm.write_input(session_id, &data).await {
+            if let Err(e) = crate::utils::session_gateway::input(sm, session_id, &data).await {
                 tracing::error!(
                     "[TerminalService] Failed to write input to session {}: {}",
                     session_id,
@@ -53,7 +53,7 @@ pub async fn handle_input(
                             return Ok(None);
                         }
                     };
-                    if let Err(e) = sm.write_input(session_id, &key_text).await {
+                    if let Err(e) = crate::utils::session_gateway::input(sm, session_id, &key_text).await {
                         tracing::error!(
                             "[TerminalService] Failed to write special key to session {}: {}",
                             session_id,

@@ -418,6 +418,15 @@ pub trait PluginServices: Send + Sync + 'static {
         file_name: String,
         bin_dir: String,
     ) -> Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + '_>>;
+
+    /// 插件自身资源目录（host-app，v25 函数级追加，**无权限门**）：返回插件安装
+    /// 目录绝对路径（`extension_path` 剥离 verbatim 前缀，与生命周期事件 payload
+    /// 的 `resource_dir` 同值）。由 host_impl/app.rs 经 block_on_async 驱动。
+    /// 插件未加载 → `Err`（不静默返回空串，调用方据此显性失败）。
+    fn plugin_resource_dir(
+        &self,
+        plugin_id: String,
+    ) -> Pin<Box<dyn std::future::Future<Output = Result<String, String>> + Send + '_>>;
 }
 
 /// 宿主上下文（注入到 WasmPluginState）
@@ -2009,6 +2018,12 @@ mod tests {
             _bin_dir: String,
         ) -> Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + '_>> {
             Box::pin(async { Ok(()) })
+        }
+        fn plugin_resource_dir(
+            &self,
+            _plugin_id: String,
+        ) -> Pin<Box<dyn std::future::Future<Output = Result<String, String>> + Send + '_>> {
+            Box::pin(async { Err("mock: no resource dir".to_string()) })
         }
     }
 

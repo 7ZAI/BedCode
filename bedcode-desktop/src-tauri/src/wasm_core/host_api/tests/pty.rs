@@ -485,6 +485,78 @@ async fn purge_for_plugin_retires_all_owned_handles_and_touches_nobody_else() {
     purge_for_plugin(other, &ctx.message_bus);
 }
 
+/// 引擎层**全量**回收的结构锁（系统关停路径；会话引擎下沉 P1 开放点 4）
+///
+/// **为什么不是行为用例**：`kill_all_registered` 跨属主回收，在本进程内触发会把并行
+/// 兄弟用例的夹具一起收掉（README 级的测试隔离常识：全局破坏性函数不进共享进程的
+/// 并行用例）。它的行为本体（摘除 → kill → 按属主补发、与退出监听竞争时恰好一次、
+/// 不碰无关句柄）已由按属主回收用例
+/// `purge_for_plugin_retires_all_owned_handles_and_touches_nobody_else` 逐条覆盖——
+/// 两者**共用** `reclaim_handles`，故这里只锁「共用同一实现」与「关停确实接上了」。
+///
+/// 锁两件事：
+/// ① 回收实现单点（不得出现第二份「先摘除后发事件」的拷贝——那是单一发布者不变量的
+///    破口，会出现漏发或重发）；
+/// ② 关停钩子确实调用它（插件已停用 / 超时时仍能回收孤儿进程，正是它的立项理由）。
+#[test]
+fn kill_all_reclaim_shares_impl_and_is_wired_into_shutdown() {
+    let source = include_str!("../pty.rs");
+    assert!(source.contains("fn reclaim_handles"), "回收实现必须单点");
+    assert!(
+        source.contains("reclaim_handles(registered_handles(None), bus)"),
+        "全量回收必须复用同一实现（属主过滤 = None）"
+    );
+    assert!(
+        source.contains("reclaim_handles(registered_handles(Some(plugin_id)), bus)"),
+        "按属主回收必须复用同一实现（属主过滤 = Some）"
+    );
+    let lifecycle = include_str!("../../../system/lifecycle.rs");
+    assert!(
+        lifecycle.contains("pty::kill_all_registered"),
+        "关停钩子必须接上引擎层全量回收（否则插件已停用时 PTY 不被回收）"
+    );
+}
+
+/// `live_count` 是「在册即存活」的引擎事实计数
+///
+/// **并行安全（2026-09-23 实测修正）**：本用例原先断言 `live_count() >= before + 2`
+/// （`before` 是本线程读到的全局快照），但兄弟用例随时在按属主 spawn / purge，
+/// `before` 里属于别人的那部分会在两次读之间消失——**判据正确也会红**（本线配额用例
+/// 把在册条数拉到 10 后必现）。`live_count` 是全局量，在 lib 并行调度下唯一可断言的
+/// 是它与「本用例自己控制的在册集合」的包含关系，不是它的差值；守卫的真实判据
+/// （P1-b 起 = 「存活 PTY 计数 > 0」）也只用到这个方向。
+#[cfg(target_os = "linux")]
+#[test]
+fn live_count_includes_newly_registered_handles() {
+    let owner = "com.bedcode.live-count";
+    let ctx = build_host_ctx();
+    grant_permissions(&ctx, owner, &[PERMISSION_PTY_SPAWN, PERMISSION_PTY_IO]);
+    assert_eq!(registered_count_for(owner), 0, "本用例的属主是全新的，不得继承兄弟句柄");
+    let _first = pty_spawn(&ctx, owner, ALIVE).expect("spawn 1");
+    let second = pty_spawn(&ctx, owner, ALIVE).expect("spawn 2");
+    assert_eq!(registered_count_for(owner), 2);
+    assert!(
+        live_count() >= registered_count_for(owner),
+        "本属主的在册句柄必须被全局计数涵盖（in_owner={}, live={}）",
+        registered_count_for(owner),
+        live_count()
+    );
+
+    pty_kill(&ctx, owner, &second).expect("kill 第二条");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while registered_count_for(owner) > 1 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(
+        registered_count_for(owner),
+        1,
+        "摘除后本人只剩一条（终态监听已把句柄移出注册表）"
+    );
+
+    purge_for_plugin(owner, &ctx.message_bus);
+    assert_eq!(registered_count_for(owner), 0, "回收后本人清零");
+}
+
 /// 反例：spawn 失败路径零事件、零句柄（无句柄可寻址，spec D5）
 #[cfg(target_os = "linux")]
 #[tokio::test]
@@ -792,6 +864,107 @@ fn pty_quota_is_per_plugin_and_rejects_overflow_without_side_effects() {
 
     purge_for_plugin(owner, &ctx.message_bus);
     purge_for_plugin(peer, &ctx.message_bus);
+}
+
+/// 结构锁：配额登记必须接在插件加载漏斗上，且与权限同点
+///
+/// 为什么是结构锁而不是行为用例：走到 `pty_spawn` 的真实路径要求完整加载一遍
+/// WASM 插件（`session_e2e` 级成本），而漂移形态恰恰是「改了 manifest 声明却没生效」——
+/// 那只发生在登记线被摘掉/挪走时，与本模块的纯逻辑无关。摘掉接线后所有配额声明会
+/// 静默回落默认档 8，业务会话数被内核常量悄悄封顶，正是 H1 要消除的故障形态。
+#[test]
+fn quota_registration_is_wired_into_the_load_funnel() {
+    let loader = include_str!("../../manager/loader.rs");
+    assert!(
+        loader.contains("pty::register_quota(&plugin_id, manifest.pty_quota)"),
+        "加载漏斗必须把 manifest 声明登记为生效配额（与 grant_permissions 同点）"
+    );
+    // 同点：权限授权在前，配额登记紧随其后——两处漂移即「声明面有两个入口」
+    let grant_at = loader
+        .find("permission_mgr.grant_permissions(&plugin_id, &manifest.permissions)")
+        .expect("权限授权点应在加载漏斗内");
+    let quota_at = loader
+        .find("pty::register_quota(&plugin_id, manifest.pty_quota)")
+        .expect("配额登记点应在加载漏斗内");
+    assert!(
+        quota_at > grant_at && quota_at - grant_at < 1_000,
+        "配额登记必须紧贴权限授权（同一天平的两端，不得各自漂流）"
+    );
+
+    let validation = include_str!("../../manager/validation.rs");
+    assert!(
+        validation.contains("validate_pty_quota(manifest.pty_quota)?"),
+        "区间仲裁必须挂在 manifest 必填校验漏斗上（两条装载入口共用）"
+    );
+}
+
+/// 声明式配额（会话引擎下沉 P1 / H1）：manifest `ptyQuota` 就是 `spawn` 的判据
+///
+/// 取一个**低于默认档**的值，是为了让「读的是声明、不是常量」这一件事在断言里唯一
+/// 可辨：若实现仍钉着 `PLUGIN_PTY_MAX_SESSIONS_PER_PLUGIN`，第 3 条会成功而不是失败。
+/// 反向（高于默认档）由下一例覆盖——两例合起来才排除「巧合相等」。
+#[cfg(target_os = "linux")]
+#[test]
+fn declared_quota_below_default_becomes_the_spawn_ceiling() {
+    let owner = "com.bedcode.quota-low";
+    let ctx = build_host_ctx();
+    grant_permissions(&ctx, owner, &[PERMISSION_PTY_SPAWN, PERMISSION_PTY_IO]);
+    register_quota(owner, Some(2));
+
+    for _ in 0..2 {
+        pty_spawn(&ctx, owner, ALIVE).expect("声明额度之内必须放行");
+    }
+    let err = pty_spawn(&ctx, owner, ALIVE).unwrap_err();
+    assert!(
+        err.contains("limit 2") && err.contains("too many ptys"),
+        "超限文案必须点名**声明值** 2（而非默认档），got: {err}"
+    );
+    assert_eq!(registered_count_for(owner), 2, "拒绝不得留下第 3 条");
+
+    purge_for_plugin(owner, &ctx.message_bus);
+}
+
+/// 验收项「第 9 条会话可创建」：声明高于默认档后，默认档不再是天花板
+///
+/// 会话产品的并发数（用户可开多少终端）今天落在单一内核常量 8 上——业务会话改走
+/// `host-pty` 之后这条天花板会直接变成产品故障，故配额随属主声明走。
+#[cfg(target_os = "linux")]
+#[test]
+fn declared_quota_above_default_allows_the_ninth_session() {
+    let owner = "com.bedcode.quota-high";
+    let declared = PLUGIN_PTY_MAX_SESSIONS_PER_PLUGIN + 1;
+    let ctx = build_host_ctx();
+    grant_permissions(&ctx, owner, &[PERMISSION_PTY_SPAWN, PERMISSION_PTY_IO]);
+    register_quota(owner, Some(declared));
+
+    for i in 0..declared {
+        pty_spawn(&ctx, owner, ALIVE).unwrap_or_else(|e| panic!("第 {} 条应在声明额度内放行，got: {e}", i + 1));
+    }
+    assert_eq!(registered_count_for(owner), declared, "声明值即天花板");
+    let err = pty_spawn(&ctx, owner, ALIVE).unwrap_err();
+    assert!(
+        err.contains(&format!("limit {declared}")),
+        "越界文案应点名声明值 {declared}，got: {err}"
+    );
+
+    purge_for_plugin(owner, &ctx.message_bus);
+}
+
+/// 未声明 = 默认档，且登记 `None` 与不登记同义（既有插件零迁移）
+#[test]
+fn undeclared_plugin_falls_back_to_default_quota() {
+    let declared_then_cleared = "com.bedcode.quota-clear";
+    register_quota(declared_then_cleared, None);
+    assert_eq!(
+        quota_of(declared_then_cleared),
+        PLUGIN_PTY_MAX_SESSIONS_PER_PLUGIN,
+        "显式 None 必须回到默认档（重载时删掉声明的形态）"
+    );
+    assert_eq!(
+        quota_of("com.bedcode.never-loaded"),
+        PLUGIN_PTY_MAX_SESSIONS_PER_PLUGIN,
+        "表内无记录（未走加载漏斗 / 无头测试上下文）同样落默认档"
+    );
 }
 
 /// 反例：`ringBytes` 为 0 或超宿主上限 → `Err`（不夹取、不降级），零副作用

@@ -251,10 +251,24 @@ pub fn register_core_lifecycle_hooks() {
         ctx.plugin_host().notify_startup().await;
     });
 
-    // SessionManager — 优先级 10，最先清理（停止所有 PTY 进程）
+    // SessionManager + 引擎层 PTY 回收 — 优先级 10，最先清理（停止所有 PTY 进程）
+    //
+    // 两条线的 PTY 住在两个注册表，关停必须都收：业务线在 `SessionManager` 的 PTY
+    // 注册表（`shutdown` → `kill_all`），插件私有 PTY 在 `host-pty` 引擎注册表
+    // （会话引擎下沉 P1 起业务会话也走后者，届时只剩引擎层这一条）。
+    //
+    // 插件私有 PTY **不能**依赖插件自己的 `purge_for_plugin`：关机时插件可能已停用 /
+    // 超时 / trap，按属主回收依赖停用流程被调到。引擎自持的全量回收保证不留孤儿进程，
+    // 事件仍逐条按属主补发（见 `wasm_core/host_api/pty.rs::kill_all_registered`）。
     registry.on_shutdown("session-manager", 10, || async {
         let ctx = crate::system::app_context::AppContext::global();
         ctx.session_manager().shutdown().await;
+        let reclaimed = crate::wasm_core::host_api::pty::kill_all_registered(
+            &ctx.plugin_host().wasm_host_ctx().message_bus,
+        );
+        if reclaimed > 0 {
+            tracing::info!(reclaimed, "插件私有 PTY 已在引擎层回收（系统关停）");
+        }
     });
 
     // PluginHost 通知插件关闭 — 优先级 15，在 deactivate 之前

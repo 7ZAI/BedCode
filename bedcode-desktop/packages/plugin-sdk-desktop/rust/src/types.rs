@@ -93,6 +93,17 @@ pub struct PluginManifest {
     /// 缺省 None = 完全继承内核配置（现有插件零迁移）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource_overrides: Option<ResourceOverrides>,
+    /// 单插件在册 `host-pty` 句柄数上限声明（会话引擎下沉 P1 / H1）
+    ///
+    /// 缺省 `None` = 取内核默认 `PLUGIN_PTY_MAX_SESSIONS_PER_PLUGIN`（8 条，迁移前
+    /// 行为）。`Some(n)` 只在 `1..=PLUGIN_PTY_SESSIONS_CEILING_PER_PLUGIN` 内合法，
+    /// 越界与 0 在**加载期**即拒绝（宿主 `manager/validation.rs`），不夹取——静默降级
+    /// 会让插件按自己声明的并发数规划业务、实际却少得多，与 `ringBytes` 同一分级口径。
+    ///
+    /// 存在理由：业务会话改由插件经 `host-pty.spawn` 自持 PTY 后，「用户可开多少终端」
+    /// 变成该插件的配额；默认 8 条是「多 shell 并发」型插件的档位，不是会话产品档位。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pty_quota: Option<usize>,
 }
 
 /// 单插件 Store 资源上限覆盖请求（manifest `resourceOverrides`）

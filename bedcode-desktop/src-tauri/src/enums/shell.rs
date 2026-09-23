@@ -51,14 +51,15 @@ pub struct SessionLaunchConfig {
     pub environment: ExecutionEnvironment,
     /// 工作目录
     pub working_dir: String,
-    /// 启动命令
+    /// 启动命令（**仅诊断/日志用的人类可读命令行**；pty 引擎不解释它——
+    /// 实际 exec 的是 `command_args`）
     pub command: String,
-    /// 裸 argv（可选，pty 票 1 新增路径）：非空时宿主按 argv 数组原样 exec，
-    /// **不做 shell 包装**（无 bash -lic / PowerShell -Command / CMD /K、无 WSL 路径转换）；
-    /// 缺省/空 → 走 `command` 字符串 + 宿主 `build_command` 包装的旧路径。
-    /// 插件经 `create-with-spec` 的 `commandArgs` 字段传入。
-    #[serde(default)]
-    pub command_args: Option<Vec<String>>,
+    /// 完整 argv（**必需**）：`argv[0]` 为主程序，其余为参数。pty 引擎按 argv
+    /// 原样 exec，**不做 shell 包装**（无 bash -lic / PowerShell -Command / CMD /K、
+    /// 无 WSL 路径转换）。业务会话的 argv 由插件 `launch.rs::build_argv` 算好经
+    /// `create-with-spec` 的 `commandArgs` 传入；**宿主旧 shell 包装路径已退役**
+    /// （2026-09-23 PTY 解耦票），缺省即报错、不再有静默回退分支。
+    pub command_args: Vec<String>,
     /// 环境变量
     #[serde(default)]
     pub env_vars: HashMap<String, String>,
@@ -76,36 +77,6 @@ fn default_cols() -> u16 {
 
 fn default_rows() -> u16 {
     AppConfig::global().terminal.default_rows
-}
-
-impl SessionLaunchConfig {
-    /// 创建新的启动配置
-    pub fn new(name: impl Into<String>, command: impl Into<String>) -> Self {
-        Self {
-            name: name.into(),
-            environment: ExecutionEnvironment::default(),
-            working_dir: std::env::current_dir()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|_| ".".to_string()),
-            command: command.into(),
-            command_args: None,
-            env_vars: HashMap::new(),
-            cols: default_cols(),
-            rows: default_rows(),
-        }
-    }
-
-    /// 设置执行环���
-    pub fn with_environment(mut self, env: ExecutionEnvironment) -> Self {
-        self.environment = env;
-        self
-    }
-
-    /// 设置工作目录
-    pub fn with_working_dir(mut self, dir: impl Into<String>) -> Self {
-        self.working_dir = dir.into();
-        self
-    }
 }
 
 #[cfg(test)]
@@ -165,7 +136,7 @@ mod tests {
             environment: ExecutionEnvironment::Linux,
             working_dir: "/home/u".to_string(),
             command: "bash".to_string(),
-            command_args: None,
+            command_args: vec!["bash".to_string(), "-lic".to_string(), "ls".to_string()],
             env_vars: {
                 let mut m = HashMap::new();
                 m.insert("FOO".to_string(), "bar".to_string());
@@ -178,15 +149,33 @@ mod tests {
         let back: SessionLaunchConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(serde_json::to_string(&back).unwrap(), json, "往返不一致: {json}");
         assert_eq!(back.name, "dev");
+        assert_eq!(back.command_args.len(), 3);
         assert_eq!(back.env_vars.get("FOO").map(String::as_str), Some("bar"));
     }
 
+    /// `commandArgs` 必填（PTY 解耦票：宿主 shell 包装旧路径已退役）
+    ///
+    /// 缺该字段的 JSON 必须**反序列化即失败**，而不是落一个「argv 为空」的配置
+    /// 让运行期再炸——旧路径的存在性由类型本身否证。
+    #[test]
+    fn session_launch_config_requires_command_args() {
+        let json = r#"{"name":"x","environment":{"type":"Linux"},"working_dir":"/tmp","command":"ls"}"#;
+        let err = serde_json::from_str::<SessionLaunchConfig>(json).unwrap_err();
+        assert!(
+            err.to_string().contains("command_args"),
+            "缺 commandArgs 必须显性失败: {err}"
+        );
+    }
+
     /// 缺省字段反序列化：env_vars / cols / rows 有 serde default 兜底
+    /// （`command_args` 除外——它必填，缺省即失败，见上一用例）
     #[test]
     fn session_launch_config_missing_fields_default() {
-        let json = r#"{"name":"x","environment":{"type":"Linux"},"working_dir":"/tmp","command":"ls"}"#;
+        let json =
+            r#"{"name":"x","environment":{"type":"Linux"},"working_dir":"/tmp","command":"ls","command_args":["ls"]}"#;
         let cfg: SessionLaunchConfig = serde_json::from_str(json).unwrap();
         assert!(cfg.env_vars.is_empty());
         assert!(cfg.cols > 0 && cfg.rows > 0);
+        assert_eq!(cfg.command_args, vec!["ls".to_string()]);
     }
 }

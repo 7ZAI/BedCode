@@ -406,7 +406,7 @@ mod tests {
                 environment: ExecutionEnvironment::Linux,
                 working_dir: "/tmp".to_string(),
                 command: "bash".to_string(),
-                command_args: None,
+                command_args: vec!["bash".to_string()],
                 env_vars: std::collections::HashMap::new(),
                 cols: 120,
                 rows: 40,

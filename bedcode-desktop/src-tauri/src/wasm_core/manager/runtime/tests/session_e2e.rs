@@ -1684,6 +1684,27 @@ fn test_session_create_with_spec_closed_loop() {
         assert_eq!(info2.name, "编排会话(1)", "重名冲突 → 插件改写为 (1) 后缀");
         assert_eq!(info2.config_id, seeded["id"].as_str().unwrap().to_string());
 
+        // ============ 4b. P1 双写：插件会话登记域镜像（2026-09-23 会话引擎下沉） ============
+        // 宿主仍是会话权威；插件按同一事实记账（登记域读面在 P1-b 才经互调 api 开放，
+        // 此处经 `session.status` 诊断字段观测镜像规模）。两阶段第一阶段
+        // （start=false）落 `Starting`，按宿主 `filter_active_by_config` 判据仍算活跃。
+        let status: serde_json::Value = {
+            let mut plugin = session.lock().await;
+            let raw = plugin
+                .invoke_command("session.status", "{}")
+                .expect("session.status command");
+            serde_json::from_str(&raw).expect("session.status json")
+        };
+        assert_eq!(
+            status["sessionRegistry"]["count"], 2,
+            "两次创建都应进入插件登记域镜像: {status}"
+        );
+        assert_eq!(
+            status["sessionRegistry"]["active"], 2,
+            "start=false 的 Starting 也算活跃（与宿主 filter_active_by_config 同判据）: {status}"
+        );
+
+
         // ==================== 5. 插件必需：注销互调面 → 显性报错（无宿主降级） ====================
         host_ctx.api_registry().unregister(SESSION_ID);
         let err = crate::utils::session_create_bridge::create_session_via_plugin(

@@ -340,6 +340,21 @@ impl PluginServices for PluginHost {
             Ok(())
         })
     }
+
+    fn plugin_resource_dir(
+        &self,
+        plugin_id: String,
+    ) -> Pin<Box<dyn std::future::Future<Output = Result<String, String>> + Send + '_>> {
+        Box::pin(async move {
+            // 与生命周期事件 payload 的 `resource_dir` 同一形态（剥离 verbatim 前缀，
+            // 保证插件侧正斜杠拼接可用，见 loader.rs strip_verbatim_prefix）
+            let plugins = self.plugins.read().await;
+            plugins
+                .get(&plugin_id)
+                .map(|p| crate::wasm_core::manager::loader::strip_verbatim_prefix(&p.extension_path))
+                .ok_or_else(|| format!("plugin_resource_dir: plugin not found: {}", plugin_id))
+        })
+    }
 }
 
 // 通过 Arc 共享内部状态实现 Clone
@@ -462,5 +477,72 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let host = rt.block_on(test_plugin_host());
         host.dispatch_input_to_plugin("com.bedcode.nonexistent", &serde_json::json!({}));
+    }
+
+    /// 在册插件取自身资源目录：等于其 `extension_path`（剥离 verbatim 前缀的形态）
+    ///
+    /// 这是 P1-b 的硬前置：创建编排移交插件后宿主不再产生 `Creating` 事件，
+    /// 插件只能经本原语拿到资源目录（Agent 集成 hook 脚本源在该目录下）。
+    #[test]
+    fn plugin_resource_dir_returns_extension_path_of_registered_plugin() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let dir = std::env::temp_dir().join(format!(
+            "bedcode-resdir-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let plugin_id = "com.bedcode.test-resdir";
+        let plugin_dir = dir.join(plugin_id);
+        std::fs::create_dir_all(&plugin_dir).expect("plugin dir");
+        // 最小 TS-only 插件（无 rust_library → 不需要 wasm 产物，排除无关变量）
+        std::fs::write(
+            plugin_dir.join(crate::system::constants::PLUGIN_MANIFEST_FILE),
+            format!(
+                r#"{{"id": "{}", "name": "ResDir Test", "version": "1.0.0", "main": "index.js", "permissions": ["storage"]}}"#,
+                plugin_id
+            ),
+        )
+        .expect("manifest");
+
+        let host = rt.block_on(async {
+            let db = Arc::new(Mutex::new(Database::new(Path::new(":memory:")).expect("in-memory db")));
+            db.lock().await.init_schema().expect("init schema");
+            let sm = Arc::new(SessionManager::default());
+            let cm = Arc::new(SessionConfigManager::new(db.clone()));
+            let host = PluginHost::new(db, &dir, &dir, sm, cm, None).await;
+            host.init_message_bus().await;
+            Arc::new(host)
+        });
+
+        let got = rt.block_on(host.plugin_resource_dir(plugin_id.to_string()));
+        let got = got.expect("已扫描注册的插件必须能取到资源目录");
+        assert!(
+            !got.trim().is_empty(),
+            "资源目录不得为空串（空串会让插件拼出不存在的路径）"
+        );
+        assert_eq!(
+            std::path::Path::new(&got),
+            plugin_dir.as_path(),
+            "资源目录必须等于插件安装目录（剥离 verbatim 前缀后的形态）"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 未注册插件取资源目录：显性报错（不静默返回空串）
+    #[test]
+    fn plugin_resource_dir_unknown_plugin_errors() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let host = rt.block_on(test_plugin_host());
+        let err = rt
+            .block_on(host.plugin_resource_dir("com.bedcode.nonexistent".to_string()))
+            .unwrap_err();
+        assert!(
+            err.contains("plugin not found"),
+            "未知插件必须显性报错，got: {err}"
+        );
     }
 }

@@ -1,6 +1,10 @@
 //! WSL2 Support
 //!
-//! 提供 WSL2 环境下的命令执行和路径转换功能
+//! **只提供平台事实：已安装发行版列举**（`host-platform.wsl-distros` 原语的实现）。
+//!
+//! 曾同时承载「在 WSL 中执行命令」与「Windows → WSL 路径转换」——两者都是
+//! **业务会话语义**，已随 2026-09-23 PTY 解耦票退役：shell 包装与路径转换归
+//! 消费侧（业务会话 = 插件 `launch.rs::build_argv`，插件私有 PTY = 插件自己）。
 
 use crate::process::create_command;
 use crate::Result;
@@ -93,97 +97,9 @@ pub fn list_distributions() -> Result<Vec<WslDistro>> {
     Ok(parse_wsl_list_output(&decode_wsl_output(&output.stdout)))
 }
 
-/// 在 WSL 中执行命令
-pub fn execute_command(distro: &str, command: &str, working_dir: Option<&str>) -> Result<std::process::Output> {
-    let mut args: Vec<String> = vec!["-d".to_string(), distro.to_string()];
-
-    if let Some(dir) = working_dir {
-        // 将 Windows 路径转换为 WSL 路径
-        let wsl_path = windows_to_wsl_path(dir);
-        args.push("--cd".to_string());
-        args.push(wsl_path);
-    }
-
-    args.push("--".to_string());
-    args.push("bash".to_string());
-    args.push("-c".to_string());
-    args.push(command.to_string());
-
-    let output = create_command("wsl.exe").args(&args).output()?;
-
-    Ok(output)
-}
-
-/// 将 Windows 路径转换为 WSL 路径
-///
-/// C:\Users\test -> /mnt/c/Users/test
-/// \\wsl$\Ubuntu\home -> /home
-/// \\wsl.localhost\Ubuntu\home -> /home (WSL2 新格式)
-pub fn windows_to_wsl_path(path: &str) -> String {
-    // 先把正斜杠统一为反斜杠，使 / 与 \ 两种写法走同一套解析（末尾分支会转回）
-    let path = path.replace('/', "\\");
-
-    // 检查是否是 WSL 路径 (\\wsl$\... 或 \\wsl.localhost\...)
-    if path.starts_with("\\\\wsl.localhost\\") {
-        // 新格式: \\wsl.localhost\Ubuntu\home\user -> /home/user（WSL2 1903+）
-        let rest = path.trim_start_matches('\\').trim_start_matches("wsl.localhost\\");
-        let parts: Vec<&str> = rest.splitn(2, '\\').collect();
-        if parts.len() >= 2 {
-            return format!("/{}", parts[1].replace('\\', "/"));
-        }
-        return rest.replace('\\', "/");
-    }
-
-    if path.starts_with("\\\\wsl$") {
-        // 旧格式: \\wsl$\Ubuntu\home\user -> /home/user
-        let rest = path.trim_start_matches('\\');
-        let parts: Vec<&str> = rest.splitn(3, '\\').collect();
-        if parts.len() >= 3 {
-            return format!("/{}", parts[2].replace('\\', "/"));
-        }
-        return rest.replace('\\', "/");
-    }
-
-    // 检查是否是 Windows 驱动器路径 (C:\...)
-    if path.len() >= 2 && path.chars().nth(1) == Some(':') {
-        let drive = path.chars().next().unwrap().to_ascii_lowercase();
-        let rest = &path[2..].replace('\\', "/");
-        return format!("/mnt/{}{}", drive, rest);
-    }
-
-    // 已经是类 Unix 路径
-    path.replace('\\', "/")
-}
-
-/// 将 WSL 路径转换为 Windows 路径
-///
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_windows_to_wsl_path() {
-        assert_eq!(windows_to_wsl_path("C:\\Users\\test"), "/mnt/c/Users/test");
-        assert_eq!(windows_to_wsl_path("D:\\Projects\\my-app"), "/mnt/d/Projects/my-app");
-        assert_eq!(windows_to_wsl_path("\\\\wsl$\\Ubuntu\\home\\user"), "/home/user");
-        // WSL2 新格式: \\wsl.localhost\Ubuntu\home\user
-        assert_eq!(
-            windows_to_wsl_path("\\\\wsl.localhost\\Ubuntu\\home\\binblink\\project\\blink"),
-            "/home/binblink/project/blink"
-        );
-    }
-
-    #[test]
-    fn test_windows_to_wsl_path_forward_slash_forms() {
-        // 正斜杠形式必须与反斜杠形式等价（票据 01：曾解析出发行版名残留）
-        assert_eq!(windows_to_wsl_path("//wsl.localhost/Ubuntu/home/user"), "/home/user");
-        assert_eq!(windows_to_wsl_path("//wsl$/Ubuntu/home/user"), "/home/user");
-        // 正斜杠磁盘路径同样归一化
-        assert_eq!(windows_to_wsl_path("C:/Users/test"), "/mnt/c/Users/test");
-        // 类 Unix 路径透传不受归一化影响
-        assert_eq!(windows_to_wsl_path("/home/user"), "/home/user");
-    }
 
     #[test]
     fn test_parse_wsl_list_output_default_marker_and_state() {

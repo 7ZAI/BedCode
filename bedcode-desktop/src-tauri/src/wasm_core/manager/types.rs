@@ -172,6 +172,7 @@ mod tests {
             kind: bedcode_plugin_api::PluginKind::Application,
             dependencies: vec![],
             resource_overrides: None,
+            pty_quota: None,
         }
     }
 

@@ -56,6 +56,17 @@ pub(crate) fn uninstall_cli(host_ctx: &WasmHostContext, plugin_id: &str, payload
     block_on_async(services.uninstall_cli(plugin_id.to_string(), file_name, bin_dir))
 }
 
+/// 插件自身资源目录（v25 函数级追加，**无权限门**——只返回调用方自己的安装路径）
+///
+/// 会话创建编排移交插件后（session-engine-downsink P1-b）宿主不再产生 `Creating`
+/// 生命周期事件，本原语成为插件取自身资源目录的唯一途径（Agent 集成 hook 脚本源
+/// 位于该目录）。未加载的插件 / 服务不可用 → `Err`（不静默返回空串）。
+pub(crate) fn plugin_resource_dir(host_ctx: &WasmHostContext, plugin_id: &str) -> Result<String, String> {
+    let services =
+        block_on_async(host_ctx.services()).ok_or_else(|| "app error: host services unavailable".to_string())?;
+    block_on_async(services.plugin_resource_dir(plugin_id.to_string()))
+}
+
 // ==================== Tests ====================
 
 #[cfg(test)]
@@ -90,6 +101,22 @@ mod tests {
         let ctx = build_host_ctx();
         grant_permissions(&ctx, PLUGIN, &[PERMISSION_APP_CLI]);
         let err = install_cli(&ctx, PLUGIN, r#"{"file_name":"bedtask"}"#).unwrap_err();
+        assert!(err.contains("services unavailable"), "got: {}", err);
+    }
+
+    /// 资源目录**无权限门**：未授予任何权限的插件也拿不到「permission denied」
+    ///
+    /// 设计口径（同 `host-platform`）：本原语只返回调用方自己的安装路径、不含跨
+    /// 插件信息，没有可授予的权力——加门只会造出一个恒过的死门。本用例锁住该口径：
+    /// 若日后有人补上权限检查，这里会转红并迫使其回到裁剪线论证。
+    #[tokio::test]
+    async fn plugin_resource_dir_has_no_permission_gate() {
+        let ctx = build_host_ctx();
+        let err = plugin_resource_dir(&ctx, PLUGIN).unwrap_err();
+        assert!(
+            !err.contains("permission denied"),
+            "资源目录不得设权限门，got: {err}"
+        );
         assert!(err.contains("services unavailable"), "got: {}", err);
     }
 }

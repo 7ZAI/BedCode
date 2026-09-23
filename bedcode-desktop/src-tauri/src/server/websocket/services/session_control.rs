@@ -5,7 +5,7 @@
 
 use crate::enums::{SessionControlAction, SessionSummary};
 use crate::server::websocket::message::Message;
-use crate::session::{GlobalOutputManager, RendererSource, SessionManager};
+use crate::session::{RendererSource, SessionManager};
 use crate::Result;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -30,7 +30,7 @@ pub async fn handle_control(
     match action {
         SessionControlAction::ListSessions => {
             // 票 12：任务字段取自注解槽（内核记录已无任务语义字段），形状不变
-            let sessions = session_manager.session_views().await;
+            let sessions = crate::utils::session_gateway::list_views(session_manager).await;
 
             let all_sessions: Vec<SessionSummary> = sessions
                 .into_iter()
@@ -66,7 +66,7 @@ pub async fn handle_control(
             // 走会话中心插件（插件必需，无宿主降级）。响应消息形状不变。
             // WS 控制路径未携带初始尺寸（协议未扩展）：None → 用配置默认值；
             // 移动端 UI 实际走 HTTP start（携带终端组件默认网格）。
-            let session_id = crate::utils::session_create_bridge::create_session_via_plugin(
+            let session_id = crate::utils::session_gateway::start(
                 crate::system::app_context::AppContext::global()
                     .plugin_host()
                     .wasm_host_ctx(),
@@ -90,13 +90,10 @@ pub async fn handle_control(
         }
 
         SessionControlAction::StopSession { session_id } => {
-            session_manager
-                .kill_session_with_source(&session_id, device_name.clone())
-                .await?;
+            crate::utils::session_gateway::stop(session_manager, &session_id, device_name.clone()).await?;
 
             // 取消该客户端对此会话的输出订阅
-            let global_manager = GlobalOutputManager::global();
-            global_manager.unsubscribe(&session_id, &addr.to_string()).await;
+            crate::utils::session_gateway::unsubscribe_output(&session_id, &addr.to_string()).await;
 
             Ok(Some(Message::SessionControl {
                 message_id: request_message_id,
@@ -111,13 +108,10 @@ pub async fn handle_control(
         }
 
         SessionControlAction::RemoveSession { session_id } => {
-            session_manager
-                .remove_session_with_source(&session_id, device_name.clone())
-                .await?;
+            crate::utils::session_gateway::remove(session_manager, &session_id, device_name.clone()).await?;
 
             // 取消该客户端对此会话的输出订阅
-            let global_manager = GlobalOutputManager::global();
-            global_manager.unsubscribe(&session_id, &addr.to_string()).await;
+            crate::utils::session_gateway::unsubscribe_output(&session_id, &addr.to_string()).await;
 
             Ok(Some(Message::SessionControl {
                 message_id: request_message_id,
@@ -153,9 +147,15 @@ pub async fn handle_control(
                     RendererSource::Desktop
                 }
             };
-            if let Err(e) = session_manager
-                .resize_session(&session_id, cols, rows, source, force)
-                .await
+            if let Err(e) = crate::utils::session_gateway::resize_from_signal(
+                session_manager,
+                &session_id,
+                cols,
+                rows,
+                source,
+                force,
+            )
+            .await
             {
                 tracing::warn!(error = %e, session_id = %session_id, "Failed to resize PTY session");
             }

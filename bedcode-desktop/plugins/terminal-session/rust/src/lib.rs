@@ -59,13 +59,16 @@ mod policy;
 pub mod quick_actions;
 /// 私有库表名域前缀统一与幂等重命名迁移（票 16 / spec D5）
 pub mod schema;
+/// 会话登记域（会话引擎整体下沉 P1）：会话真源自宿主 `session/` 迁入本插件，
+/// 当前处于双写阶段（宿主仍是权威，见模块文档）
+pub mod session;
 /// 任务域（票 15-16）：Agent 集成与会话状态 + 队列/定时后端（见模块文档）
 pub mod task;
 mod trust;
 
 use bedcode_plugin_api::events::{InputSubmittedEvent, SessionLifecycleEvent};
 use bedcode_plugin_api::host::{
-    ConfigKey, HostBus, HostConfig, HostLog, HostSession, HostStorage, HostTimer,
+    ConfigKey, HostApp, HostBus, HostConfig, HostLog, HostSession, HostStorage, HostTimer,
 };
 use bedcode_plugin_api::types::PluginManifest;
 use bedcode_plugin_api::wasm::WasmPlugin;
@@ -73,6 +76,7 @@ use bedcode_plugin_api::wasm_host::WasmHost;
 use bedcode_plugin_api::{plugin_api, BusMessage, CommandArgs};
 use pairing::code::PairingCode;
 use pairing::qr::QrTokenManager;
+use session::model::SessionStatus;
 use std::sync::{Mutex, OnceLock};
 
 /// 插件互调 api 声明（ADR 0017）：trait 方法名 ↔ manifest.api 条目
@@ -531,6 +535,22 @@ impl WasmPlugin for SessionPlugin {
                 e
             )),
         }
+        // 会话引擎整体下沉 P1（`.scratch/2026-09-23-session-engine-downsink`）：
+        // 会话登记域建表（幂等）+ 进程启动对账（清空上一进程遗留的会话行——会话与
+        // PTY 同生命周期，宿主真源同为进程内存）。
+        //
+        // **失败不阻断激活**（与配置面同口径，D7 故障隔离）：P1 阶段宿主仍是会话
+        // 权威、用户路径不依赖本域，失败只降级镜像；P1-b 起本域转真源，该失败必须
+        // 改判为「会话面不可用」的显性错误（此处是本批次唯一的语义待收口点）。
+        match session::ensure_schema_via_host() {
+            Ok(()) => host.log_info(
+                "session registry store ready (private tables sessions / session_annotations)",
+            ),
+            Err(e) => host.log_warn(&format!(
+                "session registry schema init failed at activate (session registry mirror degraded): {}",
+                e
+            )),
+        }
         // 票 02：快捷指令域（第 4 域）建表（幂等）。与配置面同口径——失败只降级
         // 快捷指令面：配对 / 信任 / 会话 / 任务必须照常工作。迁移数据由宿主侧
         // handoff（quick_actions_migration）经互调 api 推送，不在此拉取。
@@ -648,18 +668,17 @@ impl WasmPlugin for SessionPlugin {
 
     /// 会话生命周期回调（票 15 编排反转的**执行面**）
     ///
-    /// `Creating` 是插件获得**自身资源目录**的唯一途径（宿主无「插件自取资源目录」
-    /// 原语，payload 的 `resource_dir` 指向本插件安装目录，含 hook 脚本）：本插件
-    /// 据此主动注入 Agent 集成——对自己经 `create-with-spec` 创建的会话同样会收到
-    /// 该事件（宿主对已注册 listener 全量分发），故「主动推进」与「回调兼容面」
-    /// 共用同一实现，无第二条注入路径。
+    /// `Creating` 是本插件注入 Agent 集成的触发面：对自己经 `create-with-spec`
+    /// 创建的会话同样会收到该事件（宿主对已注册 listener 全量分发），故「主动推进」
+    /// 与「回调兼容面」共用同一实现，无第二条注入路径。
+    ///
+    /// 资源目录**不再**取自本事件 payload 的 `resource_dir` 字段，改经
+    /// `host-app.plugin-resource-dir` 原语自取（v25 函数级追加）——P1-b 起宿主不再
+    /// 产生 `Creating` 事件，取目录的路径必须先独立于事件存在。
     fn on_session_lifecycle(event: &SessionLifecycleEvent) -> anyhow::Result<()> {
         match event {
             SessionLifecycleEvent::Creating {
-                command,
-                working_dir,
-                resource_dir,
-                ..
+                command, working_dir, ..
             } => {
                 let host = WasmHost;
                 let agent_name = task::agent::detect_agent(command);
@@ -673,6 +692,22 @@ impl WasmPlugin for SessionPlugin {
                     return Ok(());
                 }
 
+                // 资源目录经 `host-app.plugin-resource-dir` 自取（v25 原语）：不再依赖
+                // `Creating` 事件 payload 的 `resource_dir` 字段——P1-b 起宿主不再产生该
+                // 事件（创建编排已整体在插件侧），插件必须能自行取到（Agent 集成 hook
+                // 脚本源即在此目录下）。取不到 → 显性告警并跳过注入，不用空串拼路径去
+                // 读一个不存在的文件。
+                let resource_dir = match host.plugin_resource_dir() {
+                    Ok(dir) => dir,
+                    Err(e) => {
+                        host.log_warn(&format!(
+                            "on_session_lifecycle: plugin resource dir unavailable, skip agent integration: {}",
+                            e.message
+                        ));
+                        return Ok(());
+                    }
+                };
+
                 // 集成脚本经 HTTP 推送任务状态，端点由网关中间件本地放行，无需 token；
                 // 端口读不到时与旧插件同退化为 8765（行为等价，不因配置缺失停摆）
                 let port = host
@@ -683,7 +718,7 @@ impl WasmPlugin for SessionPlugin {
                     .unwrap_or(8765);
 
                 let result =
-                    task::hooks::ensure_agent_integration(&host, agent_name, working_dir, port, resource_dir);
+                    task::hooks::ensure_agent_integration(&host, agent_name, working_dir, port, &resource_dir);
                 if result.success {
                     host.log_info(&format!(
                         "Session lifecycle: integration setup for agent '{}' in {}",
@@ -718,6 +753,8 @@ impl WasmPlugin for SessionPlugin {
                 // 才补发前端 `session-restarted`（与内核执行器旧序一致）
                 actions::flush_pending_restart(&host, session_id);
                 task::scheduled::handle_session_created(&host, session_id, config_id);
+                // P1 双写：会话登记域镜像进入 Running（两阶段启动的第二阶段也经此）
+                session::note_status_via_host(session_id, SessionStatus::Running);
             }
             // Stopped：会话意外退出兜底——agent 的 Stop hook 没机会推送终态时，
             // in_progress / asking 的任务行与队列项会永久卡在运行中。
@@ -729,8 +766,17 @@ impl WasmPlugin for SessionPlugin {
                     session_id
                 ));
                 task::state::interrupt_running_tasks_on_session_end(&host, session_id);
+                // P1 双写：会话登记域镜像进入 Stopped（自然退出与 kill 同语义）
+                session::note_status_via_host(session_id, SessionStatus::Stopped);
             }
-            _ => {}
+            // 其余变体：`Stopping`（宿主 kill 已发起、PTY 尚未终止）时把登记域镜像
+            // 推到过渡态；本域不关心的变体保持忽略（不做模式穷举，避免与 SDK 枚举
+            // 的可扩展性约定耦合）
+            other => {
+                if let SessionLifecycleEvent::Stopping { session_id, .. } = other {
+                    session::note_status_via_host(session_id, SessionStatus::Stopping);
+                }
+            }
         }
         Ok(())
     }
@@ -794,6 +840,8 @@ impl WasmPlugin for SessionPlugin {
                     "domains": ["pairing", "trust", "consent", "config", "session", "devices", "environment", "task"],
                     "permissions": manifest.permissions,
                     "api": manifest.api,
+                    // P1 双写期诊断：会话登记域镜像规模（读取失败只降级该字段）
+                    "sessionRegistry": session::diagnostics_via_host(),
                 }))
             }
 

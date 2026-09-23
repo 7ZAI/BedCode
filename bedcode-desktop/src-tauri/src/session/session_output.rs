@@ -896,6 +896,37 @@ impl Default for GlobalOutputManager {
     }
 }
 
+// ==================== 业务会话输出汇（2026-09-23 P0 自 pty 引擎归位） ====================
+
+/// 业务会话输出汇：投递到 `GlobalOutputManager` 的会话输出环
+///
+/// **归属**：pty 引擎只保留 `PtyOutputSink` 抽象（引擎不认识会话输出总线）；
+/// 「业务会话的输出落到哪里」是业务语义，故本实现留在业务层（原 `pty/output_sink.rs`，
+/// PTY 解耦票自引擎侧归位）。插件私有 PTY（host-pty）不经过本类型。
+pub struct SessionOutputSink {
+    session_id: String,
+    global: Arc<GlobalOutputManager>,
+}
+
+impl SessionOutputSink {
+    pub fn new(session_id: &str) -> Self {
+        Self {
+            session_id: session_id.to_string(),
+            global: GlobalOutputManager::global(),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::pty::PtyOutputSink for SessionOutputSink {
+    async fn on_bytes(&self, bytes: Vec<u8>, timestamp_ms: i64) {
+        // start_offset 固定传 0：真实偏移由 SessionOutputManager 在串行临界区内
+        // 按环 max_offset 分配（保持「入环序 == offset 序」不变量）
+        let event = OutputEvent::new(self.session_id.clone(), bytes, 0, timestamp_ms, false);
+        self.global.on_output(event).await;
+    }
+}
+
 // ==================== Tests ====================
 
 #[cfg(test)]
@@ -1321,5 +1352,46 @@ mod tests {
         assert_eq!(snapshot, 12);
         assert_eq!(history_bytes, 4);
         assert_eq!(data, b"test");
+    }
+
+    // ==================== SessionOutputSink（P0 自 pty 引擎归位） ====================
+
+    fn unique_id(prefix: &str) -> String {
+        format!(
+            "{prefix}-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        )
+    }
+
+    /// C-001 正例：业务默认实现把字节按序落到会话环（现役链路零变化的基础）
+    #[tokio::test]
+    async fn session_output_sink_delivers_to_session_ring_in_order() {
+        let sid = unique_id("sink-bus");
+        let global = GlobalOutputManager::global();
+        let session_manager = global.register_session(&sid).await;
+
+        let sink = SessionOutputSink::new(&sid);
+        crate::pty::PtyOutputSink::on_bytes(&sink, b"first-".to_vec(), 1000).await;
+        crate::pty::PtyOutputSink::on_bytes(&sink, b"second".to_vec(), 1001).await;
+
+        let ring_arc = session_manager.ring();
+        let ring = ring_arc.read().await;
+        let (min, max) = ring.watermarks();
+        assert_eq!(ring.range(min, max), b"first-second".to_vec());
+        drop(ring);
+
+        global.unregister_session(&sid).await;
+    }
+
+    /// C-001 边界：会话未注册时业务 sink 不 panic（源侧不感知下游缺席）
+    #[tokio::test]
+    async fn session_output_sink_tolerates_unregistered_session() {
+        let sid = unique_id("sink-unregistered");
+        let sink = SessionOutputSink::new(&sid);
+        crate::pty::PtyOutputSink::on_bytes(&sink, b"dropped".to_vec(), 0).await;
+        assert!(!GlobalOutputManager::global().has_session(&sid).await);
     }
 }
