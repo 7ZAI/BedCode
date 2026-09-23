@@ -49,6 +49,13 @@ BedCode：局域网远程终端应用——桌面端作为主机运行终端会�
 cd bedcode-desktop && pnpm run tauri:dev
 cd bedcode-desktop && pnpm run tauri:build
 
+# 关插件前端 watch 的 dev（需要 app 不被反复重启时，如票 01 人工基线连续观察）
+cd bedcode-desktop && node scripts/dev-run.js --no-watch
+#   为什么要有这条：插件 watch 把 vite 产物复制进 src-tauri/resources/plugins/desktop/<id>/，
+#   而 tauri dev 的 file watch 覆盖整个 src-tauri/ → 每次前端重建重启一次宿主、清空一次当日日志。
+#   默认仍开启 watch（不带 flag 行为不变）；关掉后改插件前端需自行
+#   `cd plugins/<id> && node scripts/build.js`
+
 # Mobile Development / Build
 cd bedcode-mobile && pnpm run tauri:android:dev        # 开发
 cd bedcode-mobile && pnpm run tauri:android:dev:log    # 落盘日志（见 logging.md）

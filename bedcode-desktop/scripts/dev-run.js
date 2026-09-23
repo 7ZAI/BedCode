@@ -11,6 +11,13 @@
  * 用法：
  *   node scripts/dev-run.js              # 默认：三个插件 watch + tauri dev
  *   node scripts/dev-run.js --host-cmd "<命令>"   # 覆盖宿主命令（按空格拆分）
+ *   node scripts/dev-run.js --no-watch   # 不起插件前端 watch（默认开启，行为不变）
+ *
+ * `--no-watch` 的存在理由：插件 watch 会把 vite 产物复制进
+ * `src-tauri/resources/plugins/desktop/<id>/`，而 `tauri dev` 的 file watch 覆盖整个
+ * `src-tauri/`——于是**每次插件前端重建都会重启一次宿主 app 并清空当日日志**。
+ * 需要在稳定 app 上连续观察的场景（票 01 桌面功能等价人工基线：十项清单要一口气走完）
+ * 用这条把该重启源关掉；产物已由启动前的一次性预检保证不缺（ensurePluginWasm 仍跑）。
  */
 
 import { spawn, spawnSync, execFileSync } from 'node:child_process'
@@ -332,6 +339,9 @@ const hostOverride = hostIdx !== -1 && process.argv[hostIdx + 1] ? process.argv[
 const [hostBin, ...hostArgs] = hostOverride ? hostOverride.split(' ') : DEFAULT_HOST_CMD[1]
 const hostCmd = hostOverride ? [hostBin, hostArgs] : DEFAULT_HOST_CMD
 
+// 插件前端 watch 开关（默认开启 = 原行为）；见文件头 `--no-watch` 那段的理由
+const noWatch = process.argv.includes('--no-watch')
+
 // 0. 宿主 devUrl 端口预检（被残留 vite 占用时提前报错，避免“执行不动”假象）
 //    + HMR 端口预检（仅 TAURI_DEV_HOST 局域网模式，防“页面正常但热更失效”隐蔽坑）
 await precheckDevPort()
@@ -341,7 +351,10 @@ await precheckHmrPort()
 ensurePluginWasm()
 
 // 2. 插件前端 watch（先行启动，产物在宿主 resources 同步前就绪）
-for (const { dir, args } of PLUGIN_WATCH_CMDS) {
+if (noWatch) {
+  console.warn('[dev-run] 插件前端 watch 已关闭（--no-watch）：resources 产物不会随插件源码改动刷新。')
+  console.warn('[dev-run]   改了插件前端要自己重建：cd plugins/<id> && node scripts/build.js')
+} else for (const { dir, args } of PLUGIN_WATCH_CMDS) {
   // 插件目录可能被临时移除（停用/排查）：缺失时跳过而非 fail-fast 整组回收，
   // 否则单个插件下线会连带杀死宿主 dev 会话
   if (!existsSync(resolve(ROOT, dir))) {

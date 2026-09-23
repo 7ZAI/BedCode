@@ -18,6 +18,29 @@
 **起跑前置**：先跑 `bash .scratch/2026-09-23-session-engine-downsink/baseline-preflight.sh --compile`，
 它的输出直接粘进本文件「## 1 起跑记录」。
 
+**起跑命令（2026-09-24 用户裁定：把 watch 参数化，用参数关，默认仍开启）**：
+
+```bash
+cd bedcode-desktop && node scripts/dev-run.js --no-watch
+```
+
+票面第一条原字面是 `pnpm run tauri:dev`（= `node scripts/dev-run.js`，带插件前端 watch）。
+用 `--no-watch` 属**已记账的偏离**，理由与影响面：
+
+- **为什么偏离**：插件 watch 会把 vite 产物复制进 `src-tauri/resources/plugins/desktop/<id>/`，
+  而 `tauri dev` 的 file watch 覆盖整个 `src-tauri/` → **每次插件前端重建都重启一次宿主 app
+  并 `[logging] dev reset` 清空一次当日日志**。十项清单要一口气走完，不能半程被重启作废
+  （实测首实例十分钟重启 11 次）。
+- **测的东西不变**：同一份宿主二进制 + 同一批 `resources/` 插件产物（起跑前
+  `ensurePluginWasm` 预检仍跑，产物已由构建链重出并注入 wasmHash），
+  关掉的只是「改前端源码自动重建」这条开发便利，与被测行为无关。
+- **代价**：基线期间若真去改插件前端，**不会生效**，要手动
+  `cd plugins/<id> && node scripts/build.js`。基线本来就不该改代码（票 01「不修任何东西」）。
+- ⚠ **`--no-watch` 治不了另一类重启**：并发批次**保存 `src-tauri/src/**` 宿主源**同样会触发
+  `tauri dev` 重启（这才是本轮 11 次里的大头，实测 3 次来自 `channel/event.rs` 存盘）。
+  所以除 `--no-watch` 外，仍要看 preflight 的 **[6] 宿主源近期改动** 与
+  `Running DevCommand` 计数增量——见 §1「重启抖动」。
+
 ## 1. 起跑记录（每次复跑填一次）
 
 ### 本轮：2026-09-24 06:2x–06:4x（首轮实质观测）
