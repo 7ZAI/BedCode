@@ -169,6 +169,36 @@ spec：`.scratch/2026-09-19-terminal-session-plugin/spec.md`（D2–D7），实�
    传输失败时回退放行以防认证中心故障误杀连接）。插件未激活时配对 / QR 相关前端命令面
    显性报错，不存在宿主代签路径。
 
+### 会话真源下沉（P1-b，2026-09-23/24 桌面端）
+
+会话的**事实面**（登记表、状态机、生命周期分发、注解槽、尺寸归属）从宿主
+`session/`（3759 行）迁入 `com.bedcode.terminal-session` 的私有登记域，宿主侧的会话操作
+收口为 `utils/session_gateway.rs` 一条**纯互调 api** 通道。spec：
+`.scratch/2026-09-23-session-engine-downsink/spec.md`（P1 前置 / P1-a / P1-b）。
+
+1. **裁剪线依据**：「哪条记录算一会话、它处在什么状态、谁能覆盖它的尺寸」全是产品语义；
+   宿主留的只有物理上不可下沉的部分（PTY 引擎 + `host-pty` 六原语）。这比 v19 批次的
+   「映射决策归插件、执行留内核」更进一格——**执行也归插件**，因为执行所需的原语
+   （`host-pty.spawn/write/kill/resize/ring-fetch`）本身已是引擎级。
+2. **`host-pty` 第 2 条的划界现状更正（重要，非措辞修订）**：该条写的「两张注册表、两套生命周期」
+   在业务会话侧已经**合并为一张**——业务会话就是一个 `host-pty` 句柄，内核 `SessionComponents`
+   与 `GlobalOutputManager` 对插件会话不再有内容（这正是移动端 M6/M7 受损的根因，P3 形态 B
+   改由宿主 server 直读 `PtyRing` 恢复）。该条里"`host-session` 服务宿主业务会话线"的三方划界
+   随之失效：`host-session` 已进入退役通道。注意**这不等于**该条第 2 点预留的措辞修订
+   （「不注册业务输出总线 → 不默认注册；按 spawn 声明 opt-in 只读订阅」）——那句要等
+   `host-pty` 的宿主广播声明（P3 子票）真的落地才改，本批不预支。
+3. **配额是自我声明的静态事实**（`ptyQuota`，前置 B）：`spawn` 判据按属主声明值，加载期区间仲裁
+   越界即拒 manifest，运行期不夹取。terminal-session 声明 8 = 退役前内核上限，**不借下沉放大**。
+4. **输入面不做「宿主绕一圈」**：任务队列下发曾在插件内调 `host.terminal_send` → 宿主查内核属主
+   → 回同一插件的会话（真源已移出），恒拒且失败静默。定案：**同实例内的输入直接调自家写入管线**
+   （`session::input_via_pty`），跨边界只留给真正的跨插件/跨端消费方（宿主命令面
+   `plugin_terminal_send_input` → 窄转发层 → `session-input` 互调 api）。
+   判据可迁移性：WASM 实例内自调用没有属主问题（属主就是自己），绕宿主一圈只会把
+   「真源换了地方」这件事变成一个静默失败点。
+5. **事件载荷必须自足**：宿主不再持有会话事实后，`SessionCreated` 等事件若仍靠处理器回查内核
+   取会话名 / 概要，就会得到空。故 SDK 的会话变体把 `session` / `sessionName` 随事件携带，
+   宿主只转发；`source_device` 由请求侧透传（广播排除语义）。
+
 ## 终端输出消费插件化 · 性能红线修订（2026-09-21）
 
 roadmap 阶段 3（`.scratch/2026-09-10-plugin-kernel-roadmap/spec.md`）把「终端 UI/渲染
@@ -210,7 +240,7 @@ roadmap 阶段 3（`.scratch/2026-09-10-plugin-kernel-roadmap/spec.md`）把「�
 
 ## 双端偏离（host-websocket / host-pty 等桌面独有接口）
 
-- 移动端是**远程终端控制端**，不承载 PTY / mDNS 广播 / WS 服务端等主机侧引擎，故 `host-websocket`（desktop v14）、`host-auth`（v15 密钥托管；v18 追加认证记录面四函数）、`host-pty`（v16）、`auth-policy` 导出（v17，认证能力——宿主 server 中间件验签后取策略）、**会话语义下沉批次（v18 / v19：`host-session` 配置面 + 创建与动作面 + 注解槽 + 连接清单、`host-platform.wsl-distros`）** 均为**桌面独有接口**：mobile 的 WIT / ABI / SDK 不跟演也不投影（ADR 0018 双端各自演进的文档化偏离，同 wasmtime 桌面 48 / 移动 47 分叉先例）。当前 **desktop v23 / mobile 11**（v23 = host-session 配置面写原语退役，见 v10 登记；desktop 独有接口持续演进不要求移动端跟演）。
+- 移动端是**远程终端控制端**，不承载 PTY / mDNS 广播 / WS 服务端等主机侧引擎，故 `host-websocket`（desktop v14）、`host-auth`（v15 密钥托管；v18 追加认证记录面四函数）、`host-pty`（v16）、`auth-policy` 导出（v17，认证能力——宿主 server 中间件验签后取策略）、**会话语义下沉批次（v18 / v19：`host-session` 配置面 + 创建与动作面 + 注解槽 + 连接清单、`host-platform.wsl-distros`）** 均为**桌面独有接口**：mobile 的 WIT / ABI / SDK 不跟演也不投影（ADR 0018 双端各自演进的文档化偏离，同 wasmtime 桌面 48 / 移动 47 分叉先例）。当前 **desktop v25 / mobile 11**（v23 = host-session 配置面写原语退役，见 v10 登记；v24 认证记录下沉、v25 host-peer 节点生命周期原语；desktop 独有接口持续演进不要求移动端跟演）。
 - **偏离不止 WIT 面**：本批次同时经用户 2026-09-19 授权**豁免 AGENTS.md §9「协议改动必须两端同步部署」**，豁免范围严格限于该 spec（`.scratch/2026-09-19-terminal-session-plugin/spec.md` D1）。自守边界：线协议**形状**（会话 DTO 字段、同步事件、WS 控制帧、认证握手报文）保持不变——保持它并不需要移动端改一行代码，且它是后置适配专项的成本基线。移动端受损面 M1–M5 已挂进路线图（`.scratch/2026-09-10-plugin-kernel-roadmap/spec.md`），桌面端不为其负责（spec Out of Scope）。
 - **恢复条件**：当移动端需要同类能力（例如本地跑交互进程）时，再在该端 WIT 增补对应 interface 并对齐 ABI 计数；在此之前「改 WIT 必须双端同步」这一硬约束的适用范围限于**双端共有的接口**（host-peer / host-fs / host-http 等）。
 - SDK 双端独立包（`plugin-sdk-desktop` / `plugin-sdk-mobile`），互不影响；宿主侧 `version > 当前 → 拒绝` 的兼容语义保证旧插件（≤v16）零迁移仍可加载。
@@ -343,3 +373,18 @@ host-business-decarriage 收尾批次（`.scratch/2026-09-20-host-business-decar
   不用空串拼路径去读一个不存在的文件）。宿主实现与生命周期事件 payload 同源
   （`strip_verbatim_prefix(extension_path)`），未知插件显性报错。实施见
   `.scratch/2026-09-23-session-engine-downsink/spec.md`（P1-b 前置 A）。
+- **2026-09-24 v13（当前）**：**会话真源下沉落地（P1-b，ABI 不变，desktop 仍 v25；移动端零改动，
+  受损清单 M6–M9 记入路线图）**。业务会话的登记 / 状态机 / 生命周期分发 / 创建 / 停止 / 输入 /
+  尺寸裁决整体归 `com.bedcode.terminal-session` 私有登记域，宿主只剩 PTY 引擎与 `host-pty` 原语面。
+  ① **创建走 `host-pty.spawn`**：会话 id 由插件自产、`BEDCODE_SESSION_ID` 由插件注入 spawn `env`
+  （v11「宿主原语化 vs 插件持有」开放点的定案），`ptyQuota: 8` 按声明式配额（前置 B 的加载期区间
+  仲裁首次有真实声明方）。② **`host-session` 12 原语中 9 条转为零消费者**（`list-sessions` / `get` /
+  `create-with-spec` / `close` / `remove` / `rename` / `resize` / `annotate` / `output-ring-fetch`），
+  整 interface 退役与 ABI bump 随 P4；仍活的三条：`connections-list`（宿主 server 连接事实，
+  按 v12 裁决 5 迁独立原语）、`lifecycle-register` / `input-register`（插件 activate 仍订阅，
+  降为兼容面，随 P4 删）。③ **`host-terminal.terminal_send` 转为零生产消费者**——其属主判定与写入
+  都查内核 `SessionManager`，真源切换后对真实会话恒 `not owner of session`；队列下发改在插件实例内
+  直调自家写入管线（见下「会话真源下沉」节第 4 条），本原语随 P4 一并裁定退役。④ **事件面不 bump**：
+  `SyncEvent` 的四个会话变体是 `broadcast_sync` 的 JSON 载荷增量（函数签名零变化、载荷自足），
+  与 v22 的 `host-bus` 命名空间同类「不 bump 的行为变更」口径；旧产物不静默断流（宿主侧处理器
+  保留「回查内核」兜底分支）。实施与验收见 `.scratch/2026-09-23-session-engine-downsink/spec.md`。

@@ -167,14 +167,20 @@ v23 修订——渲染管线是否可迁由 com.bedcode.terminal 立项时按「
 （决策 ⑥「移动端不做任何代码改动、不做桌面适配、不为移动端保留设计余地」），本清单是
 **后置移动端适配专项的输入**——原先只记在 `.scratch/2026-09-19-terminal-session-plugin/spec.md`，
 按票 18 要求挂到本路线图，避免随单个 spec 目录一起沉底。
+M6–M9 由会话引擎下沉 P1-b（`.scratch/2026-09-23-session-engine-downsink/spec.md`）带入，
+授权口径同上（用户 2026-09-23：「移动端不用管」→ 允许损坏 + 如实记账，不设形状冻结承诺）。
 
-| # | 受损项 | 触发条件 | 状态（2026-09-20） | 未来适配动作 |
+| # | 受损项 | 触发条件 | 状态（2026-09-24） | 未来适配动作 |
 | --- | --- | --- | --- | --- |
 | M1 | 移动端任务面板全部 HTTP 调用（task-status / session-mode / session-settings / task-history / supported-agents / task-queue / scheduled-jobs）整体 404 | 桌面端**将来**切断 `com.bedcode.auto-task` 旧前缀 | **未触发**——票 17 判定保留 `LEGACY_HTTP_PLUGIN_ALIASES` 兜底，移动端零改动继续可用 | 改移动端 api 基址常量一处 + 插件重打包，**同批**删宿主别名表与 `resolve_http_owner` |
 | M2 | 会话列表 `taskStatus` 等字段值变空或延迟 | 合并插件未激活 / error 态，注解槽无人写 | 已可能发生（这是 D7 故障半径的移动端侧表现），桌面端不修 | 移动端对空注解做降级显示（不阻塞连接） |
 | M3 | 配对码 / QR 有效期展示与实际 TTL 不一致 | TTL 真源进了插件贡献设置分组，未激活时走宿主兜底默认 | 已可能发生 | 移动端读认证域设置项的取值路径复核一次 |
 | M4 | 移动端插件无法调用 `host-session` v19 批次新函数 | 移动端 SDK 不跟演（WIT 无该接口，ABI 11） | 既定偏离（ADR 0022「双端偏离」节） | 移动端真要接同类能力时补该端 interface + host_impl + 计数对齐 |
 | M5 | 「撤销已配对设备」仍不断开在线连接 | 本批次刻意保持宿主现状语义（只置 `is_active=0` + 删历史） | 未变 | 若要撤销即踢下线，是新协议工作，需双端立项 |
+| M6 | WS 终端通道对**插件会话**报 `error(SESSION_NOT_FOUND)`：移动端连不上任何新建会话的输出 | 会话引擎下沉 P1-b（2026-09-23）：会话真源与 PTY 句柄移到 `com.bedcode.terminal-session` 登记域，`channel/terminal.rs` 仍按内核登记查会话 | **已触发**（桌面端功能等价，移动端按用户 2026-09-23「不用管」授权记账） | P3 形态 B：宿主 server 直读同进程 `PtyRing`（`host-pty` spawn 增引擎级广播声明，ADR 0022 第 2 条措辞随之修订） |
+| M7 | `GET /api/sessions/{id}/history` 对插件会话 404 | 同上：`GlobalOutputManager` 里不再有插件会话的字节（业务输出环只服务内核会话） | 已触发 | 与 M6 同批：改读 `PtyRing` 快照（`session_gateway::history_snapshot` 已是收口点） |
+| M8 | 内核会话（若经测试 / 旧路径产生）与插件会话**两张名单**：移动端列表只见插件登记域 | P1-b 起窄转发层只查插件（无内核合并视图，刻意不留降级轨） | 已触发 | 桌面 P4 删宿主 `session/` 后自然收敛；移动端只需复核列表渲染对空态的处理 |
+| M9 | `SyncPayload::Session*` 增量推送里依赖宿主回查的分支退化（会话名 / 概要为空） | P1-b 事件改由插件经 `host-events` 自携带载荷；宿主 `sync_handler` 的「回查内核」兜底对插件会话拿不到东西 | 已触发（新载荷形状未变，兜底分支只对内核路径生效） | 移动端适配专项里按新载荷字段（`session` / `sessionName`）联调一次即可，无需改协议 |
 
 **不属于受损项**（避免误判）：移动端自身的 fs_auth 内置受信任插件白名单（针对移动端自己
 打包的插件，与桌面 id 无关）、移动端 `pairings` 语义、mDNS 服务类型与链路加密握手——

@@ -104,7 +104,10 @@ pnpm exec eslint .
 **架构红线（强制）：**
 
 - **高内聚、低耦合**：内核只做引擎原语与安全边界，禁止携带产品语义；业务代码内聚到各自插件工程；插件间只经互调 API（ADR 0017）与消息总线通信，**禁止跨插件直接耦合**
-- **新增能力优先评估「放哪个插件」而非「改内核」**；核心业务（会话/终端/设备连接/认证）暂留宿主侧，按上述路线逐步下沉
+- **新增能力优先评估「放哪个插件」而非「改内核」**；产品事实面按上述路线逐步下沉——**会话真源**
+  （登记 / 状态机 / 生命周期分发 / 输入输出编排）已于 2026-09-24（P1-b）迁入
+  `com.bedcode.terminal-session`，宿主侧只剩 PTY 引擎、`host-pty` 原语与 `utils/session_gateway.rs`
+  窄转发层（详见 ADR 0022「会话真源下沉」节）；终端渲染管道、设备连接与认证按同一路线继续下沉
 - **裁剪线（ADR 0022）**：宿主能力只暴露「离宿主无法实现、且无业务语义」的原语；业务编排一律在插件层
 - 技术决策记录在 `docs/adr/`（Multi-Project Monorepo / Async Everywhere / Event-Driven / Graceful Shutdown / Flat Module Structure / Plugin System / 无业务内核 / 插件 Mock 归属），新增决策走 ADR
 
@@ -173,6 +176,19 @@ config-get（`session_configs` 表退役，私有库即真源）；v23 = host-se
 `host-process.run-sync`——文件浏览域下沉所需的引擎级原语，仍保持 v19），别拿批次号当函数号数。**不 bump 的行为变更（审计票 05）**：`host-bus` topic **命名空间**——函数签名零变化故不动版本号，但定向事件串由 `<base>.<owner>` 改为 `<owner>::<base>`（`pty:exit` / `ws:*` / `mdns:found|lost`），且跨属主订阅/伪发布由「无人拦截」改为**宿主显式拒绝**；旧产物不静默断流（按旧形态订阅会在 activate 期拿到点明新形态的错误），须按 v22 SDK（`owned_topic` / `*_event_topic`）重建。移动端 `host-mdns` 仍用旧形态、mobile 总线无门禁 → 该端跟演时需同批补 SDK 原语 + 总线 ACL + mobile file-transfer 迁移，桌面结果不构成移动端的正确性依据
 - [ ] **同实例串行红线（A0-3 宿主 async 化，P3；依据 `.scratch/2026-09-21-a0-3-host-async/spec.md`，探针已证兼容）**：每插件实例同一时刻**仍只允许一个 guest 调用在执行**——async 化只改变「宿主线程在等待时让出」，不引入同实例并发进入 guest；`host.rs` 实例锁（std `Arc<Mutex<LoadedWasmPlugin>>`）async 化时改为 tokio `Mutex`（await 持锁、不因等待释放），串行语义与现在等价；**禁止**改成细粒度「await 点释放锁」（会导致同实例交错：插件静态状态竞态——配对码/QR/挑战注册表/config 缓存/私有库 + wasmtime Store 重入 panic）
 - [ ] 宿主能力经 `host-*` 原语访问（清单见 `plugin/manager/capability.rs::HOST_PRIMITIVE_CAPABILITIES`，现 21 组（清点：进程 3 + 网络 4 + 存储 4 + 宿主面 8 + 互调 2）：进程 = `host-pty`（交互式）/ `host-process`（非交互）/ `host-task`（并发任务域 v20，WASM 插件调度宿主 OS 线程池），网络 = `host-http` / `host-websocket` / `host-mdns` / `host-peer`，存储 = `host-database` / `host-plugin-database` / `host-storage` / `host-fs`，宿主面 = `host-terminal` / `host-session` / `host-events` / `host-config` / `host-log` / `host-timer` / `host-app` / `host-platform`，互调与总线 = `host-bus` / `host-api-call`），能力**不得携带业务语义**（ADR 0022）；**授权无默认位**（票 02：旧形态在 `grant_permissions` 里无条件塞 `storage`，使主库/私有库权限门恒过，现只授予 manifest 声明且在本表内的权限，被过滤项由激活路径 `warn` 留痕），且主库 SQL 面与私有库面分域：主库（`host-database` 的 `db_*`）挂独立高危位 `database:main`——**当前生产插件零消费者，改判为仅第一方按需申请**（票 03 起进逐位人工确认清单），访问还受 SQLite 引擎层表名白名单仲裁（正则 `validate_sql_table_prefix` 只是早失败文案，不是边界）；私有库（`host-plugin-database`）与 KV（`host-storage`）仍走 `storage`；权限按风险域拆分（如 `pty:spawn` / `pty:io`、`ws:client` / `ws:server`、`task:run` + 每单元 kind 既有域权限门双门），拆分后同步点必须同步落：**权限词汇唯一真源是桌面 SDK `packages/plugin-sdk-desktop/rust/src/permission.rs`**（打包 CLI 与前端合法集读的都是它的生成物 `bin/permission-vocabulary.json` / `src/plugin/permission-vocabulary.ts`，加/拆位后跑 SDK `pnpm run gen:permissions` 重出，禁止再手抄清单），随后落宿主能力清单与 host_impl 权限门——漏任一处即词汇漂移锁翻红（锁在 `plugin/permission.rs`，断言集合相等而非包含）；**插件构建链的映射表**（`packages/plugin-sdk-desktop/bin/manifest-gen.js` 的 `RUST_PERMISSION_RULES` / `FRONTEND_PERMISSION_RULES`）同为消费方——退役/改名权限位必须同步改表，表含词汇表外权限时 manifest-gen **加载即抛错**（2026-09-22 加护栏，见 `.scratch/2026-09-21-wasm-core-audit/issues/15-manifest-gen-stale-permission-map.md`；此前 v23 退役 `session:config` 未跟演，导致 `plugins:build` 整链不可用）
+- [ ] **会话真源在插件（P1-b，2026-09-24）**：会话登记 / 状态机 / 生命周期分发 / 输入输出编排归
+  `com.bedcode.terminal-session` 私有登记域（`plugins/terminal-session/rust/src/session/`，
+  `sessions` / `session_annotations` 两表是落盘真源）。宿主侧**读会话事实一律经
+  `utils/session_gateway.rs`**（纯互调 api：`session-list/get/create/close/remove/resize/input`），
+  插件未激活**显性报错**——**禁止**新增「直连 `SessionManager` 取会话」的代码（对插件会话恒
+  `NotFound` / 空，静默降级曾造成终端输入丢键与任务队列假中断）；`host-session` 12 原语中 9 条已零
+  消费者（`list-sessions` / `get` / `create-with-spec` / `close` / `remove` / `rename` / `resize` /
+  `annotate` / `output-ring-fetch`，整 interface 退役 + ABI bump 属 P4；`connections-list` 是宿主
+  server 连接事实，按 ADR 0022 裁决迁独立原语），`host-terminal.terminal_send` 同样零消费者。
+  插件要用 PTY：manifest 声明 `pty:spawn`（创建/终止）+ `pty:io`（数据面）+ `dependencies: ["host-pty"]`，
+  并发条数用 **`ptyQuota`** 自我声明（构建期只校形态=正整数，加载期校区间：0 或 >
+  `PLUGIN_PTY_SESSIONS_CEILING_PER_PLUGIN`(64) 直接拒 manifest，**不夹取**；未声明回落默认档 8）——
+  会话实际声明值 `ptyQuota: 8`，与退役前的内核上限同档，不借下沉放大
 - [ ] 插件导出：`activate`/`deactivate`、`command`、`_http_endpoint`、terminal hooks、生命周期/输入扩展点
 - [ ] 插件 HTTP 面（`_http_endpoint`，审计票 08）：**只认声明**——`contributes.httpEndpoints` 未声明的路径宿主直接 404（「未声明清单 → 前缀内 ANY 放行」的零迁移过渡已退役，未声明清单等于没有 HTTP 面）。每条可写 `{path, auth}` 声明认证档位，档位词汇 `none | jwt`（真源桌面 SDK `rust/src/types.rs::EndpointAuth`，与 `host-websocket` 注册面共用同一枚举；缺省档各面自定：WS = `none`、HTTP = **`jwt` 最严**），非法取值构建期由 `manifest-validate.js` 拒绝、运行期不登记该条（端点不可达）；`auth: "none"` 是免凭证可达的唯一形态，写给「拿不到 JWT 的调用方」（本机 hook 脚本、配对 / QR 这类 token 之前的入口）。宿主转发的入参带 `caller` = `device | localhost | anonymous`（环回按 TCP 对端判），可信设备另带 `device` 对象——**JWT 本体与设备指纹不透传**（§8 凭据红线）。网关别名条目的 `RouteAuth` 与插件声明档位**取较严者**，两方都不得单方面开门
 - [ ] 存储：插件独立库（私有 SQLite）/ 主库前缀隔离（表名强制 `plugin_id_` 前缀，且由 SQLite authorizer 在引擎层仲裁——逗号多表、引号标识符、`main.` 限定、ATTACH/PRAGMA 都绕不过去，见票 02）；**禁止在 dev-shell 写具体业务 mock**——mock 数据/演示种子归各自插件工程（插件入口导出 `devMock`）
@@ -196,6 +212,11 @@ config-get（`session_configs` 表退役，私有库即真源）；v23 = host-se
 整体退役——不再兼容旧版本存量用户，旧库滞留表不读不迁不清理（生物公钥寄主
 `plugin_secrets` key=`biometric:<fp>` 的语义不变）；**宿主只剩 `host-auth` 密钥托管 / 生物凭证原语 / 认证策略 capability**（`auth-policy` 取用，其 capability 传输失败时回退放行，防认证中心故障误杀全部连接，`warn` 留痕，**不算旁路**）。**配对 / QR 的宿主降级实现已整体退役**（2026-09-21，宿主命令面注销同批）：`utils/auth/auth_center.rs` 的配对 / QR 桥接函数、`PairingService`、`QrTokenManager`、`utils/auth/pairing.rs` 与应用上下文装配链全部删除——插件未激活时前端命令面显性报错，不存在宿主代签路径；新代码不得绕过插件自行签发或验签
 - 输入校验与权限仲裁在 Rust 端，前端校验仅是 UX；WebSocket/HTTP 接入必须过认证与过滤链（TrafficFilterChain）
+- **真源换了地方就要 fail-visible**：P1-b 起会话事实只在插件登记域（§7），宿主侧「回查内核拿会话」的
+  路径对插件会话恒返回空 / `NotFound`——禁止当成「无数据」静默吞掉（曾造成桌面终端窗口按键丢失、
+  任务队列被批量标中断而测试全绿）。`pty:spawn` 是**在宿主机执行任意命令**的高风险面：只发确有 PTY
+  需求的第一方插件（会话插件经 `host-pty.spawn` 自产会话、argv 由插件算，宿主不包装），
+  并发上限由 `ptyQuota` 声明 + 加载期区间仲裁，不在运行期放宽
 
 ### 日志红线
 

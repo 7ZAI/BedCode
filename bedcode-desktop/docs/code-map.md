@@ -101,12 +101,14 @@ bedcode-desktop/                      # 桌面端项目 (Tauri 2.0 + Vue 3)
         │                             #   peer_net/ 对等网络引擎域——引擎接入中枢（节点身份/发现/生命周期、
         │                             #   host-peer bridge、事件适配）+ 三个引擎适配子模块（发送/接收/远端浏览），
         │                             #   宿主不持有传输历史、设置或任务真源
-        ├── session/                  # 会话管理（核心模块，详见 Core Modules）
+        ├── session/                  # 会话内核遗留线（真源已迁 terminal-session 插件，P4 删；
+        │                             #   wire 类型 SessionInfo/SessionInfoView/ResizeOutcome 仍在此）
         ├── system/                   # 系统模块：应用上下文 (DI 容器)、配置、错误类型、生命周期钩子、
         │                             #   日志格式化、休眠阻止；constants.rs 按领域分组的常量（`// ====` 分隔）
         ├── utils/                    # 工具：auth/（JWT、配对、QR Token）、parser/（ANSI、Markdown 解析）、
         │                             #   crypto/（对称/非对称/混合加密：AES-GCM、ChaCha20-Poly1305、
-        │                             #   RSA、X25519、KDF，用于 HTTP 报文与文件加密传输）
+        │                             #   RSA、X25519、KDF，用于 HTTP 报文与文件加密传输）、
+        │                             #   session_gateway.rs（宿主调会话的**唯一收口点**，纯插件互调 api）
         ├── process.rs                # 进程工具（create_command）
         ├── lib.rs                    # 库入口（模块声明 + 日志初始化 + Tauri 应用搭建；对等网络模块的
         │                             #   Tauri 命令也直接在此注册，不经 commands.rs）
@@ -230,12 +232,18 @@ WIT 契约 `host-pty`（6 函数，SDK `rust/wit/bedcode.wit`）、**无可选�
 spec D3 否决），ABI desktop 15 → 16（v15 归 `host-auth`；mobile 不跟演，见 ADR 0022「双端偏离」）；
 宿实现 `wasm_core/host_api/pty.rs`，引擎侧 `src-tauri/src/pty/`
 （`pty_process.rs` / `pty_reader.rs` / `output_sink.rs` / `lifecycle.rs` / `pty_ring.rs`）。
-**零业务代码红线（ADR 0022）**：只给裸伪终端原语，业务会话线（`host-terminal` / `host-session` /
-`terminal-hooks`）与本接口互不转发——插件 PTY 不进 `SessionComponents`、不注册 `GlobalOutputManager`。
+**零业务代码红线（ADR 0022）**：只给裸伪终端原语，宿主不做 shell 包装 / 会话语义。
+**P1-b（2026-09-24）后本接口就是业务会话的唯一 PTY 出口**——`com.bedcode.terminal-session` 用
+`spawn` 创建业务会话（会话 id 插件自产、`BEDCODE_SESSION_ID` 由插件写进 `env`）、
+`write`/`kill`/`resize`/`ring-fetch` 驱动输入停止尺寸与输出拉取；ADR 0022 host-pty 第 2 条
+「两张注册表」在业务会话侧已合并为一张（内核 `SessionComponents` / `GlobalOutputManager`
+对插件会话无内容，见路线图 M6/M7）。
 
 - **创建域（`pty:spawn`）**：`spawn` 收 config-json `{command, args?, env?, workingDir?, cols?, rows?, ringBytes?}`
   （裸 argv exec，宿主不做 shell 包装 / WSL 转换 / 危险字符校验）→ 句柄 `pty-<uuid>` 并登记属主；
-  `kill`（优雅 Ctrl-C → 兜底强杀）；每插件在册条数上限 `PLUGIN_PTY_MAX_SESSIONS_PER_PLUGIN`；
+  `kill`（优雅 Ctrl-C → 兜底强杀）；每插件在册条数上限按 **manifest `ptyQuota` 自我声明**
+  （加载期区间仲裁：0 或 > `PLUGIN_PTY_SESSIONS_CEILING_PER_PLUGIN`(64) 即拒 manifest，不夹取；
+  未声明回落默认档 `PLUGIN_PTY_MAX_SESSIONS_PER_PLUGIN`(8)），`spawn` 判据取本属主生效配额；
 - **数据域（`pty:io`）**：`write`（单次准入上限 `PLUGIN_PTY_MAX_WRITE_BYTES`，超限零写入）、
   `resize`（透传 winsize，不承诺同步生效时序）、`ring-fetch`（游标拉取，单次截到
   `PLUGIN_PTY_RING_FETCH_MAX_BYTES`，`truncated` 即 resync 信号）、`is-running`（自愈快照，
@@ -336,45 +344,90 @@ WIT 契约 `host-task`（5 函数：execute-batch / submit / status / cancel / l
   - **services/**（session_control / terminal_service）：会话控制与终端输入**不是 WS 传输原语**
     （ADR 0022 裁剪线视角，归属应为会话业务、后续下沉插件线）——本目录只是临时住处
 
-### 会话管理 — `src-tauri/src/session/`
+### 会话管理 — `src-tauri/src/session/`（**真源已迁插件，本目录是退役中的遗留线**）
 
-- **session_manager**：会话编排与登记（创建执行端 / 启动 / 尺寸裁决登记 / 注解槽 / 移除 /
+> **P1-b（2026-09-24）**：会话登记 / 状态机 / 生命周期分发 / 创建 / 停止 / 输入 / 尺寸裁决
+> 的真源在 `plugins/terminal-session/rust/src/session/`（私有库 `sessions` / `session_annotations`
+> 两表），业务会话就是一个 `host-pty` 句柄。本目录只剩**内核会话线**：`host-session`
+> 遗留原语、测试夹具与宿主自用语义（wire 类型 `SessionInfo` / `SessionInfoView` /
+> `ResizeOutcome` / `RendererSource` 与 `KeyCombo` 转义表仍在这里，是对外协议形状的真源）。
+> **新增代码读会话一律走 `utils/session_gateway.rs`**（纯互调 api），直接查本目录的内核登记
+> 对插件会话恒空（AGENTS §7 / §8）。目录整体删除与 `host-session` interface 退役属 P4。
+
+- **session_manager**：内核会话编排与登记（创建执行端 / 启动 / 尺寸裁决登记 / 注解槽 / 移除 /
   **属主登记**：`session-id → 创建方 plugin_id` 不透明表，票 04——内核只存事实，
   「先权限门后属主」的判定与文案在 `host_api`，与会话销毁一并注销）；
   会话状态变更直接持 `broadcast::Sender<SessionStatusEvent>`（原 `event_bus.rs` 的
-  `SessionEvent`/`SessionEventBus` 只剩单一状态事件、无订阅者，已收缩删除）
+  `SessionEvent`/`SessionEventBus` 只剩单一状态事件、无订阅者，已收缩删除）；
+  **P1-b 后生产零流量**：`create_session_from_spec` 的唯一生产者（`host-session.create-with-spec`）
+  已无插件调用方，`write_input` / `send_special_key` 的原消费者（终端输入命令、
+  `host-terminal.terminal_send`）已改走窄转发层或已停用
 - **session_config**：`SessionConfigManager`——v24 起为装配占位壳（无业务方法）：
   v22 曾收缩为只读迁移通道（读主库 `session_configs` 迁私有库）；2026-09-22 用户裁定
   `session_configs` 表直接退役（不等 legacy 观测归零），host-session 配置面
   （config-list / config-get）随表删除，插件私有库是会话配置唯一真源，无迁移步骤。
   类型保留仅因装配链引用（`WasmHostContext.config_manager` 等），待装配链清空后整体删除；
-- **session_output**：输出管理（缓存/队列/订阅/全局），支撑多端输出回放
+- **session_output**：输出管理（缓存/队列/订阅/全局），支撑多端输出回放；**含
+  `SessionOutputSink`**——业务会话的输出汇实现（2026-09-23 P0 自 `pty/output_sink.rs` 归位：
+  pty 引擎只留 `PtyOutputSink` 抽象，引擎不认识会话输出总线）。
+  **P1-b 影响**：插件会话的输出在 `PtyRing`（`host-pty.ring-fetch`），本管理器对插件会话
+  **无字节** → 移动端 WS 输出通道与 HTTP 历史 404（路线图 M6/M7），P3 形态 B 由宿主 server
+  直读 `PtyRing` 恢复
 - **session_lifecycle**：生命周期事件（Creating/Created/Stopping/Stopped）与监听器机制，插件扩展点
-- **input_line**：会话输入扩展点（SessionInputListener + 提交行重构）
+  （P1-b 起 `Creating` 不再是创建路径的必经输入——插件自己先做 agent 集成再 spawn，
+  资源目录改经 `host-app.plugin-resource-dir`；本机制降为兼容面，随 P4 退役）
+- **input_line**：会话输入扩展点（SessionInputListener + 提交行重构）——提交行重构
+  `SubmittedLineTracker` 的**真实现已迁插件**（`plugins/terminal-session/rust/src/session/input_line.rs`，
+  P2 核心随 P1-b 吸收），此处只剩内核线的同名副本与观察点机制
 - **session_event**：会话记录与状态事件模型（v21 起重启广播通道已退役，只保留状态事件；
-  `session-restarted` 由插件经 `host-events.emit` 补发；任务语义字段经注解槽透传）
+  `session-restarted` 由插件经 `host-events.emit` 补发；任务语义字段经注解槽透传）。
+  P1-b 起 `SessionInfo` / `SessionInfoView` 是**对外 wire 形状的真源**（插件登记域视图与之
+  逐字段对齐，`SessionInfoView` 只 `Serialize` → 网关反序列化拆两半场）
 
 ### PTY 管理 — `src-tauri/src/pty/`
 
-PTY 进程生命周期、输出读取与分发、命令构建、WSL 支持。引擎按两条消费线做参数化（互不可见）：
-业务会话线（默认 sink = `SessionOutputSink` → `GlobalOutputManager`、`PtyCommandSource::Business`
-含 `bash -lic` 包装与 `BEDCODE_SESSION_ID` 注入、`PtySlaveFdPolicy::Hold`）与 host-pty 插件私有
-PTY（`PtyRingSink` → `PtyRing` 游标环、`PtyCommandSource::Raw` 裸 argv、`ReleaseOnSpawn` 使自然
-退出可观测）。终态由 `PtyTerminationGate` 汇聚「读线程 EOF + 子进程回收」两路信号，恰好一条
-`PtyTerminated{status, exit_code, killed}`（回收走专属 OS 线程阻塞 `wait()`，无轮询）。
+PTY 进程生命周期、输出读取与分发、游标环、WSL 发行版列举。**引擎零业务语义**
+（2026-09-23 PTY 解耦票）：只接受调用方算好的 argv（`CommandBuilder`）——不做 shell 包装
+（`bash -lic` / PowerShell `-Command` / CMD `/K`）、不做 WSL 路径转换、不注入业务环境变量。
+旧 `pty/command.rs::build_command` 与 `pty/wsl.rs::windows_to_wsl_path` 已**删除**；shell 包装
+与 WSL 路径转换的唯一实现是插件 `terminal-session/rust/src/launch.rs::build_argv`
+（P1-b 起业务会话 argv 由插件自己算好经 `host-pty.spawn` 送入；内核线的 `create-with-spec.commandArgs`
+**缺省即被显性拒绝**，仅剩测试与 legacy 消费方）。
+`pty/wsl.rs` 只留发行版列举（`host-platform.wsl-distros` 原语）。构造入口两个：
+
+- `PtySession::with_command`（**内核会话线**，P1-b 起生产零流量：sink = `session::SessionOutputSink`
+  → `GlobalOutputManager`，`BEDCODE_SESSION_ID` 由 `session/session_manager.rs::launch_command` 注入——
+  该函数是「业务配置 → 引擎 argv」的宿主侧翻译点，含 cwd 仅原生环境设置的规则）
+- `PtySession::with_private_command`（host-pty 插件私有 PTY：`PtyRingSink` → `PtyRing` 游标环，
+  argv 原样 exec、不注入任何业务环境变量。**P1-b 起业务会话也走这条**——插件在 spawn 的 `env`
+  参数里自行注入 `BEDCODE_SESSION_ID`，配额由 manifest `ptyQuota` 声明）
+
+`PtySlaveFdPolicy`（票 3）已统一为 spawn 后释放 slave（`ReleaseOnSpawn`），枚举退役——自然退出
+在读取线程上以 EOF 可观测。终态由 `PtyTerminationGate` 汇聚「读线程 EOF + 子进程回收」两路信号，
+恰好一条 `PtyTerminated{status, exit_code, killed}`（回收走专属 OS 线程阻塞 `wait()`，无轮询）。
+**投递时序注意**：`mark_reader_closed` 只表示「尾帧已入有序队列」，`sink.on_bytes` 在独立消费者
+任务里按序异步完成 → 终态事件到达 ≠ sink 已收到尾帧（消费方断言需有界轮询）。
 
 ### 全局事件系统 — `src-tauri/src/events/`
 
 AppEvent trait + 事件匹配处理器；SessionManager 事件双路分发：转发 Tauri 前端（forwarder）与转 WebSocket 同步广播（sync_event/sync_handler）。
 
-### 对等网络 — `src-tauri/src/peer_*.rs` + `packages/peer-net`
+**P1-b 起会话事件的载荷自足**：`SessionCreated` / `SessionStatusChanged` / `SessionStopped` /
+`SessionRemoved` 由 `com.bedcode.terminal-session` 经 `host-events.broadcast_sync` 发布
+（SDK `SyncEvent` 的四个会话变体，携带 `session` 概要 / `sessionName` / `source_device`），
+宿主 `DesktopSyncEvent` 经 `From` 转换后由 `sync_handler` 转发 WS；处理器保留
+「事件未携带 → 回查内核登记」的兜底分支（只服务内核线与旧生产者，对插件会话必然为空）。
+Tauri 前端事件 `session-status-changed`（`forwarder` 订阅内核 `subscribe_status()`）对插件会话
+**不再有流量**——前端零生产消费方（`stores/session.ts` 仅测试），随 P4 事件下沉收口。
+
+### 对等网络 — `src-tauri/src/server/peer_net/` + `packages/peer-net`
 
 跨设备可信直连底座，与终端链路（`_bedcode._tcp`）完全独立互不感知：
 
 - **底座 crate**：`packages/peer-net`（节点身份 identity / 自签证书 cert / TLS 1.3 直连 transport /
   信任存储 trust_store / `_bedcode-peer._tcp` 专用 mDNS 发现 discovery / 传输引擎 transfer）与
   `packages/link-crypto`（链路密码学），桌面端与移动端共享
-- **peer_net.rs**：宿主侧薄封装——`NodeIdentity` 首启纯随机生成、与 `DeviceIdentity` 刻意分离
+- **server/peer_net.rs（引擎接入中枢）**：宿主侧薄封装——`NodeIdentity` 首启纯随机生成、与 `DeviceIdentity` 刻意分离
   （重装即新身份，不做设备标识派生）；setup 阶段自动启动节点 + 发现守护；首连确认闸门经
   `peer-consent-requested` 事件桥接前端弹应用内确认框（迁移规则匹配在前端层，见插件 useConsent）
 - **插件入口（真入口）— WIT `host-peer`**：定义于 SDK `rust/wit/bedcode.wit`，宿主实现在
@@ -412,7 +465,9 @@ Rust 侧以 `abi.rs` 为宿主/插件共同引用的单一事实来源（签名�
 |------|------|
 | Tauri 命令 | `src-tauri/src/commands.rs` |
 | PTY 进程与输出 | `src-tauri/src/pty/` |
-| 会话管理与生命周期 | `src-tauri/src/session/` |
+| **会话真源（登记 / 状态机 / 生命周期 / 输入输出编排）** | `plugins/terminal-session/rust/src/session/`（P1-b，2026-09-24） |
+| 宿主会话唯一入口（窄转发层，纯互调 api） | `src-tauri/src/utils/session_gateway.rs` |
+| 会话内核遗留线（生产零流量，P4 删） | `src-tauri/src/session/` |
 | HTTP/WS 服务器（core/http/websocket 三层）、REST 控制器、终端 WS | `src-tauri/src/server/` |
 | 设备认证 / 配对 / QR Token | `src-tauri/src/utils/auth/` |
 | ANSI / Markdown 解析 | `src-tauri/src/utils/parser/` |
@@ -427,7 +482,7 @@ Rust 侧以 `abi.rs` 为宿主/插件共同引用的单一事实来源（签名�
 | 插件系统 (前端) | `src/plugin/`、`src/composables/`（usePluginManager） |
 | 插件开发 SDK | `packages/plugin-sdk-desktop/` |
 | 测试插件 | `packages/plugin-component-test/`、`plugin-sdk-test/`、`plugin-system-test/`、`plugin-wasi-test/` |
-| 插件源码 | `plugins/agent-hub/`、`plugins/ai-chatbox/`、`plugins/file-transfer/`、`plugins/terminal-session/`（终端会话中心：配对与信任 + 会话编排 + Agent 任务域 + 快捷指令域（票 02）+ 文件浏览域（票 03），票 17 起顶替旧 `com.bedcode.auto-task` 插件；HTTP 业务端点经网关别名表接管 /api/configs /api/quick-actions / 文件浏览五端点） |
+| 插件源码 | `plugins/agent-hub/`、`plugins/ai-chatbox/`、`plugins/file-transfer/`、`plugins/terminal-session/`（终端会话中心：**会话真源登记域**（`rust/src/session/`，P1-b 起含状态机 / 生命周期分发 / 提交行重建 / 经 `host-pty` 的创建停止输入尺寸输出）+ 配对与信任 + 会话编排 + Agent 任务域 + 快捷指令域（票 02）+ 文件浏览域（票 03），票 17 起顶替旧 `com.bedcode.auto-task` 插件；HTTP 业务端点经网关别名表接管 /api/configs /api/quick-actions / 文件浏览五端点） |
 | 系统常量 / 错误类型 / 生命周期 | `src-tauri/src/system/`（constants.rs 按领域分组） |
 | 应用上下文 (DI) | `src-tauri/src/system/`（app_context） |
 | 前端页面 / 组件 / 状态 | `src/views/`、`src/components/`、`src/stores/` |

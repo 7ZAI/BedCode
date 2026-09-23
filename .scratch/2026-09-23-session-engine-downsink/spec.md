@@ -428,6 +428,116 @@ id 形态 / 存储端口行语义 / 注册表读写穿与稳定序 / 注解槽�
 在途内容——按 pathspec 提交前必须逐文件核归属，必要时走「HEAD + 仅本票 hunk」的 plumbing 合成
 （本次 776b29816 即为此法），且 plumbing 提交后**必须刷真索引**，新文件还要带 `--add`。
 
+**P1-b ✅ landed（2026-09-23 深夜起，跨两场会话收口）：会话真源切换**
+
+上面「开工状态」的 ②③⑤ 三项已闭合，① 按「整批做」执行（一次性切，无半翻中间态）。
+
+**插件侧（真源 = `session/` 登记域）：**
+
+- **创建改走 `host-pty.spawn`**（`launch.rs`）：会话 id 由插件自产（复用 `config::model::new_config_id`
+  的 UUID 单点）、`BEDCODE_SESSION_ID` 由插件写进 spawn 的 `env`（裁决 ③ 落地；
+  `.scratch/2026-09-22-pty-business-downsink` 开放点 1 的旧结论「倾向宿主原语化」随本批作废）、
+  cwd 规则（仅原生环境设置）随 argv 一起由插件算、ring 走宿主默认容量。共用核心 `spawn_session`：
+  Creating 期的 agent 集成**先于** spawn（H5 的时序由插件自串行保证）→ spawn → 登记 → Created 逻辑 → 广播。
+- **`session/mod.rs` 由「双写镜像」升格为真源**：`note_*` 写失败**显性报错**（D7 故障隔离只保留在
+  「广播」这一环，尽力投递 + `warn`）；`close_via_pty`（登记 Stopping + `host-pty.kill`，终态一律由
+  `pty:exit` 收尾——**SessionStopped 的唯一广播点**是 `on_pty_exit`，避免 kill 与退出双发）；
+  `input_via_pty`（提交行重建 + 任务域分发 + `pty_write`，`special` 标记绕过重建，逐字保持开工要点 5
+  的不对称）；`summary_json_for`（SessionCreated 自携带概要）；`internal_records_json`（插件内部读
+  原始记录含 `ptyId`/`owner`，不经互调面出网）。建表失败随本批**改判为阻断激活**（P1-a 记的「唯一
+  语义待收口点」在此收口）。
+- **P2 核心被本批吸收**：新 `session/input_line.rs`（`SubmittedLineTracker` 自宿主迁入）——输入改走
+  插件后宿主的提交行重建必然断链，不可能留给 P2 单独做。
+- 动作面（`actions.rs`）全部改走登记域 + `host-pty`：`remove` 保持**幂等**（未知会话仍 `Ok` 且仍广播
+  `SessionRemoved`——多客户端刷新依赖该语义），`close` 保持 fail-visible（未知会话显性报错）。
+  输出面（`output.rs`）改 `host-pty.ring-fetch`；设备 / 文件浏览面改 `internal_records_json`；
+  任务域（`task/{state,queue,scheduled}.rs`）改登记域视图。
+- manifest：api 27→31（`session-list` / `session-get` 于前置 C，`session-close` / `session-input` 于本批）、
+  权限 +`pty:spawn` / `pty:io`、`dependencies: ["host-pty"]`、**`ptyQuota: 8`**（开工状态 ⑤ 的实际声明值：
+  与退役前的内核上限同档，不借下沉之机放大）。
+
+**宿主侧：**
+
+- `utils/session_gateway.rs` 重写为**纯插件互调 api**（list / get / start / close / remove / resize /
+  input / special_key），插件未激活一律显性报错；`utils/session_{create,action}_bridge.rs` 删除
+  （含 `Ok(None)` 内核降级轨与内核尺寸裁决副本）。`special_key` 仍在宿主做 `KeyCombo` → 转义字节翻译
+  （引擎级终端转义表，随 pty 留宿主），以 `special: true` 交插件写入。`SessionInfoView` 只 `Serialize`
+  → 反序列化拆两半场（`SessionInfo` + 任务字段手取）。
+- 消费面（`commands.rs` 五项 / HTTP 六端点 / WS `session_control` + `terminal_service`）改注入
+  `PluginHost` 并走新签名；关窗守卫判据改「存活 PTY 计数 > 0」（内核 `live_pty_count` OR 引擎
+  `live_count`），弹窗 payload 异步问插件、失败回退空列表（裁决 ④）。
+- 事件面：SDK `SyncEvent` +4 会话变体（**载荷自足**——宿主不再回查内核）、宿主 `DesktopSyncEvent`
+  增携带字段 + `From` 转换、`sync_handler` 处理器「携带优先、内核回查兜底」（内核路径仍服务测试与
+  旧生产者）。**未 bump ABI**：会话变体是 `broadcast_sync` 的 JSON 载荷增量，函数签名零变化
+  （同 v22 `host-bus` 命名空间那种「不 bump 的行为变更」口径）。
+- **actix 同步互调自锁修复**（`host_api/api.rs`）：`api_call` 的总线发布步骤包进 `block_on_async`
+  ——否则在 actix current_thread worker 上 `tokio::spawn` 的消费任务永不投递，互调 5s 超时。
+  教训入档：**凡 actix handler 里同步等互调 reply 都要走 ambient runtime**。
+
+**输入面收口（本场补，前一场交接文档的漏项——验收红线「桌面端功能等价」的实际断点）：**
+
+真源切换后有两处宿主入口仍打内核 `SessionManager`，编译与既有测试全绿但功能已死：
+
+1. **桌面终端窗口键盘输入**：`TerminalPreview.vue:595` → `context.terminal.sendInput` →
+   `api_bridge.rs::plugin_terminal_send_input` → 内核 `write_input` → 按会话 id 查**内核 PTY 注册表**
+   → `NotFound`；前端 `void ...` 不接 rejection → 按键静默丢失。改走 `session_gateway::input`
+   （→ 插件 `session-input`），门禁三段（身份绑定 / 激活 / `terminal:input`）逐字保留——该命令面
+   迁移前就没有属主判定，此刻加判据反而是本批越界。
+2. **任务队列下发**：`task/queue.rs` 两处 `host.terminal_send` → `host_api/terminal.rs::terminal_send`
+   → `ensure_session_owner` 查内核属主表（唯一写点是 `host-session.create-with-spec`，插件已不调）
+   → 恒 `not owner of session` → 每个出队任务刚投递就被标 `interrupted` 并丢弃。改为同实例内直接
+   调 `session::input_via_pty`（零跨边界、属主天然成立、`handle_submitted_input` 过滤链已就位，
+   与旧「内核写入 → `on_input_submitted` → 同一过滤链」语义等价）。
+   `host-terminal.terminal_send` 就此**零生产消费者**，源码文档标注为 P4 退役候选（本批不删）。
+
+**为什么既有测试没抓到**：`session_e2e` 此前只测创建 / 动作 / 注解 / 输出 / 任务域，**没有任何一条走输入面**；
+`pty_session_chain` 走的是 WS 终端通道（对插件会话按受损记账）。教训：**切真源时必须把「谁还在读旧真源」
+逐条列成消费方清单并对齐到用例**——绿灯只覆盖被断言过的接缝。
+
+**测试（本场新增）：**
+
+- `session_e2e::test_session_input_via_gateway_closed_loop`：真实 bash 会话上锁 5 条契约——
+  C-01 普通输入被执行（探针串出现 ≥2 次：tty 回显 + `echo` 输出；只出现一次即「字节进了 PTY 但没被执行」）、
+  C-02 未知会话显性报「会话不存在」（无降级轨）、C-03 Ctrl-C 经 `special` 通道写 0x03（tty 回显 `^C`）、
+  C-04 非法键名在宿主翻译期即拒、C-05 Ctrl-D 退出 bash → `pty:exit` → 登记域收为 `Stopped`
+  （输入面与终态链之间无断点）。**变异自检 M1**：`input_via_pty` 去掉 `pty_write` → 用例转红
+  （失败信息直接给出环内实际字节流），还原后产物摘要回到同值，证明确已还原。
+- `api_bridge::tests::terminal_send_input_delegates_to_session_gateway_not_kernel`（源码扫描锁）：
+  锁「委托目标是转发层、命令体不再出现 `write_input(`、门禁三段仍在」。写它当场就抓到一次自匹配
+  （整文件扫描命中锁自身的字面量），已收窄为命令体切片。
+- `task::tests::task_sources_never_route_through_dead_host_session_surface`：任务域源码不得出现
+  `host.terminal_send(` / `host.session_{get,close,list,annotate,output_ring_fetch}(`——防「顺手改回宿主绕一圈」。
+- 集成测试 tracing 级别上限（5 处，前一场）：无过滤的 `fmt::layer()` 会把 wasmtime/cranelift 的逐指令
+  TRACE 全落 stdout，cargo 捕获缓冲可撑到 **2.2 GB+ 直至 4 G 分配失败 OOM**（实测）。编译缓存命中时不产
+  TRACE → 「改动前能跑」是缓存假象，插件一重建就炸。
+
+**行尾修复（提交前必查，本场实测 5 个文件被整文件转 LF）**：
+`src-tauri/tests/{broadcast_shutdown,http_auth_biometric,server_integration,ws_session_route}.rs`
+与 `src-tauri/src/server/websocket/services/terminal_service.rs` 在 HEAD 是 100% CRLF，
+上一场的编辑（含 python text 模式读写）把整文件静默转成 LF——`git diff --stat` 直接报
+1443/1316/672/418 行变更，真实改动只有 1–3 行。已按二进制方式统一回 CRLF
+（`d.replace(b'\r\n', b'\n').replace(b'\n', b'\r\n')`），复核后 `--stat` 回到
+3/2/2/2/18 行，四个 target 重跑仍全绿。**自查判据**：
+`git show HEAD:<f> | grep -c $'\r'` == `wc -l` 而工作区 cr=0 → 即被抹平。
+
+**门禁实测（本场，2026-09-24）**：宿主 lib **1135/0**（`[skip]` = 0，产物摘要 `98b67b5e…`）、
+插件 native **287/0**、桌面前端 `vitest --pool=forks --maxWorkers=2` **81 files / 794 tests 全绿**、
+根 `eslint .` **0 error**（120 warning 不计门禁）。集成 8 target 逐个串行全绿
+（`build_manifest_smoke` / `broadcast_shutdown` / `pty_session_chain` / `ws_auth_rules` /
+`ws_session_route` / `server_integration` / `http_auth_biometric` / `link_crypto_http`(4)）——
+**禁并行跑，OOM**。`cargo fmt` 只按文件核：`session_e2e.rs` / `task/mod.rs` 的 HEAD 既有偏离未顺手格式化，
+本场新增行零偏离（`api_bridge.rs` / `terminal.rs` 单文件 `--check` 干净；CRLF 的 `queue.rs` 只经 Edit 改，
+行尾 CR 数与行数一致）。
+
+**未做（P2 剩余 / P3 / P4）**：`host-session.lifecycle-register` / `input-register` 两条注册面仍在
+（插件 activate 仍订阅，降为兼容面，随 P4 删）；宿主 `process_terminal_input` 钩子链与
+`dispatch_input_submitted` 对**插件会话**不再有流量（逐帧输入修饰与跨插件输入观察随 P4 一并收口）；
+`SessionInfoView` 的时间戳口径与 `session-output` 面见 P3。
+
+**移动端受损（P1-b 新增 M6–M9，正文见路线图「移动端受影响清单」）**：WS 终端输出通道对插件会话
+`error(SESSION_NOT_FOUND)`、HTTP 历史 404（`GlobalOutputManager` 里没有插件会话的字节）、
+内核会话对 WS/HTTP 列表面不再可见（内核登记已空）、`SyncPayload::Session*` 依赖宿主回查的分支退化。
+
 ### P2 — 输入通道转发 + 提交行重建迁插件
 
 - `commands.rs::write_to_session` / `send_special_key` → 直接转发插件命令面 → `host-pty.write`。
@@ -545,11 +655,17 @@ id 形态 / 存储端口行语义 / 注册表读写穿与稳定序 / 注解槽�
 - [x] H1（每插件 PTY 上限 8）已有解决方案并有测试（第 9 条会话可创建）——**机制已 land**（P1-b 前置 B：
       `ptyQuota` 声明 + 加载期区间仲裁 + `spawn` 按属主判据，含「第 9 条可创建」行为锁）；
       terminal-session 的**实际声明值**随 P1-b 接入 `host-pty.spawn` 同批写入 `plugin.json`
-- [ ] 会话 id 由插件生成并经 `host-pty.spawn` 的 `env` 注入 `BEDCODE_SESSION_ID`（宿主不再预生成）
+- [x] 会话 id 由插件生成并经 `host-pty.spawn` 的 `env` 注入 `BEDCODE_SESSION_ID`（宿主不再预生成）
+      ——**P1-b landed**（`launch.rs::spawn_session`，闭环锁在 `session_e2e::test_session_create_with_spec_closed_loop`
+      与 `test_session_input_via_gateway_closed_loop`）
 - [ ] 形态 B 落地：宿主 server 直读 `PtyRing`（零跨 WASM 边界）；`host-pty` spawn 声明有测试锁
       （未声明的句柄**不得**被宿主广播面读到）
-- [ ] 关停走引擎层全局 kill（插件已停用时 PTY 仍被回收）；关窗守卫改用「存活 PTY 计数」判据
-- [ ] 生命周期对外事件（`session-status-changed` 等）形状不变，或有记账的破坏性变更清单
+- [x] 关停走引擎层全局 kill（插件已停用时 PTY 仍被回收）；关窗守卫改用「存活 PTY 计数」判据
+      ——引擎层全局 kill 随 P1 前置 landed；守卫判据随 P1-b landed（弹窗 payload 异步问插件、失败回退空列表）
+- [◐] 生命周期对外事件（`session-status-changed` 等）形状不变，或有记账的破坏性变更清单
+      ——**记账**：WS 同步面（`SyncEvent` 会话四变体）载荷自足、形状不变；Tauri 前端事件
+      `session-status-changed` 仍由内核 `subscribe_status()` 驱动，对插件会话**不再有流量**
+      （前端 `stores/session.ts` 无生产调用方 → 影响面为零），随 P4 事件下沉一并收口
 - [ ] `connections-list` 不随 `host-session` 退役（迁独立原语，有测试）
 - [ ] ABI bump 同步四处（WIT / `abi.rs` / CHANGELOG / AGENTS §7）+ ADR 0022 补记（含 host-pty 第 2 条措辞修订）
 - [ ] `cargo test` 全绿、`pnpm run test:run` 全绿、`eslint` 0 error；测试后无残留进程/端口
