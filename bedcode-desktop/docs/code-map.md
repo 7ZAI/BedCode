@@ -95,6 +95,8 @@ bedcode-desktop/                      # 桌面端项目 (Tauri 2.0 + Vue 3)
         │                             #   同步事件定义与处理（→ WebSocket 广播）
         ├── mdns/                     # mDNS 服务广播：将桌面端服务注册到局域网供移动端发现
         ├── plugin/                   # 插件系统（WASM 组件沙箱架构，核心模块，详见 Core Modules）
+        ├── protocol/                 # 跨端线协议形状中立域（票 02）：只放对外 wire 契约，
+        │                             #   当前含会话记录/视图/尺寸裁决回执，形状锁逐类型钉死
         ├── pty/                      # PTY 管理：进程生命周期、输出读取/缓存/监听、命令构建、WSL 支持
         ├── server/                   # 服务器（核心模块，详见 Core Modules）：core/ 传输无关内核 +
         │                             #   http/ 与 websocket/ 两个传输面，单端口组合物在 core/app.rs；
@@ -102,7 +104,7 @@ bedcode-desktop/                      # 桌面端项目 (Tauri 2.0 + Vue 3)
         │                             #   host-peer bridge、事件适配）+ 三个引擎适配子模块（发送/接收/远端浏览），
         │                             #   宿主不持有传输历史、设置或任务真源
         ├── session/                  # 会话内核遗留线（真源已迁 terminal-session 插件，P4 删；
-        │                             #   wire 类型 SessionInfo/SessionInfoView/ResizeOutcome 仍在此）
+        │                             #   对外 wire 类型已于票 02 迁 protocol/，本目录只剩实现）
         ├── system/                   # 系统模块：应用上下文 (DI 容器)、配置、错误类型、生命周期钩子、
         │                             #   日志格式化、休眠阻止；constants.rs 按领域分组的常量（`// ====` 分隔）
         ├── utils/                    # 工具：auth/（JWT、配对、QR Token）、parser/（ANSI、Markdown 解析）、
@@ -344,13 +346,31 @@ WIT 契约 `host-task`（5 函数：execute-batch / submit / status / cancel / l
   - **services/**（session_control / terminal_service）：会话控制与终端输入**不是 WS 传输原语**
     （ADR 0022 裁剪线视角，归属应为会话业务、后续下沉插件线）——本目录只是临时住处
 
+### 线协议形状 — `src-tauri/src/protocol/`（跨端 wire 契约中立域）
+
+> **票 02（2026-09-24）**：会话引擎下沉的删除票（票 11）要整目录削掉 `session/`，而移动端 /
+> 前端仍在读的协议形状不能跟着实现一起消失——故把「其实是对外契约」的类型从内核实现目录
+> 搬进本域。本域**只放**跨端 wire 契约与引擎级转义两类，零业务语义（AGENTS §5）。
+
+- **protocol/session.rs**：`SessionInfo`（会话记录，窄转发层解析插件视图的依据）、
+  `SessionInfoView`（对外视图 = 记录 `flatten` + 四个任务字段）、`task_fields_from_slot`
+  （注解槽 → 对外字段的机械透传，不解释语义）、`RendererSource` / `ResizeOutcome`
+  （尺寸裁决回执）。每个类型各有形状锁用例：状态八个 wire 形态（含 `Error` 的
+  `{"error": …}` 两形态）、记录与视图的**精确字段集合**、裁决四态回执整体 JSON 相等。
+- **分界**：`SessionStatus` / `SessionType` 的定义仍在 `enums/session.rs`（对侧批次
+  `2026-09-24-host-crypto-business-downsink` 票 08 裁决其收窄），本域只锁其 wire 形态、
+  不搬定义；按键组合 → 转义字节的归属由对侧票 06 裁决，本域不预先挪位置。
+- 跨真源对齐锁：插件登记域视图与本域类型逐字段相等，锁在
+  `wasm_core/manager/runtime/tests/session_e2e.rs` 的网关读取面对齐段。
+
 ### 会话管理 — `src-tauri/src/session/`（**真源已迁插件，本目录是退役中的遗留线**）
 
 > **P1-b（2026-09-24）**：会话登记 / 状态机 / 生命周期分发 / 创建 / 停止 / 输入 / 尺寸裁决
 > 的真源在 `plugins/terminal-session/rust/src/session/`（私有库 `sessions` / `session_annotations`
 > 两表），业务会话就是一个 `host-pty` 句柄。本目录只剩**内核会话线**：`host-session`
 > 遗留原语、测试夹具与宿主自用语义（wire 类型 `SessionInfo` / `SessionInfoView` /
-> `ResizeOutcome` / `RendererSource` 与 `KeyCombo` 转义表仍在这里，是对外协议形状的真源）。
+> `ResizeOutcome` / `RendererSource` 已于票 02 迁 `protocol/`；`SessionStatusEvent` 留本目录，
+> 其转接消费面随票 09 退役）。
 > **新增代码读会话一律走 `utils/session_gateway.rs`**（纯互调 api），直接查本目录的内核登记
 > 对插件会话恒空（AGENTS §7 / §8）。目录整体删除与 `host-session` interface 退役属 P4。
 

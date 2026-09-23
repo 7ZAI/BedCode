@@ -1769,13 +1769,13 @@ fn test_session_create_with_spec_closed_loop() {
             .await
             .expect("gateway list");
         assert_eq!(gateway_views.len(), 2, "网关视图条数一致");
-        let gw_by_id: std::collections::HashMap<String, &crate::session::SessionInfoView> =
+        let gw_by_id: std::collections::HashMap<String, &crate::protocol::SessionInfoView> =
             gateway_views.iter().map(|v| (v.info.id.clone(), v)).collect();
         let raw1 = sessions
             .iter()
             .find(|s| s["id"] == sid1)
             .expect("登记域含 sid1");
-        let parsed: crate::session::SessionInfo =
+        let parsed: crate::protocol::SessionInfo =
             serde_json::from_value(raw1.clone()).expect("登记域视图可被宿主 SessionInfo 反序列化");
         assert_eq!(parsed.id, sid1);
         assert_eq!(parsed.name, "编排会话");
@@ -1866,7 +1866,7 @@ fn test_session_create_with_spec_closed_loop() {
 fn test_session_actions_closed_loop() {
     // 会话插件私有库是进程级共享路径：与其它会话闭环用例串行（见锁文档）
     let _serial = session_plugin_db_guard();
-    use crate::session::RendererSource;
+    use crate::protocol::RendererSource;
 
     const SESSION_ID: &str = "com.bedcode.terminal-session";
     let wasm_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1981,7 +1981,7 @@ fn test_session_actions_closed_loop() {
         .await
         .expect("resize");
         assert!(
-            matches!(applied, crate::session::ResizeOutcome::Applied { canonical: RendererSource::Desktop }),
+            matches!(applied, crate::protocol::ResizeOutcome::Applied { canonical: RendererSource::Desktop }),
             "无渲染端 → applied(Desktop), got: {applied:?}"
         );
 
@@ -1992,7 +1992,7 @@ fn test_session_actions_closed_loop() {
         .await
         .expect("resize again");
         assert!(
-            matches!(applied, crate::session::ResizeOutcome::Applied { .. }),
+            matches!(applied, crate::protocol::ResizeOutcome::Applied { .. }),
             "单端 → applied, got: {applied:?}"
         );
 
@@ -2008,7 +2008,7 @@ fn test_session_actions_closed_loop() {
         .expect("resize contended");
         assert_eq!(
             outcome,
-            crate::session::ResizeOutcome::NeedsConfirmation {
+            crate::protocol::ResizeOutcome::NeedsConfirmation {
                 current_canonical: RendererSource::Desktop
             },
             "多端争用 → 需覆盖确认（回执当前正统端）"
@@ -2019,7 +2019,7 @@ fn test_session_actions_closed_loop() {
         .await
         .expect("original owner resize");
         assert!(
-            matches!(still_owner, crate::session::ResizeOutcome::Applied { .. }),
+            matches!(still_owner, crate::protocol::ResizeOutcome::Applied { .. }),
             "需确认路径必须零改动（归属仍是 Desktop，可直通）"
         );
 
@@ -2032,7 +2032,7 @@ fn test_session_actions_closed_loop() {
         .expect("resize takeover");
         assert_eq!(
             outcome,
-            crate::session::ResizeOutcome::Applied {
+            crate::protocol::ResizeOutcome::Applied {
                 canonical: mobile.clone()
             },
             "force → 应用并移交归属"
@@ -2044,7 +2044,7 @@ fn test_session_actions_closed_loop() {
         .expect("displaced resize");
         assert_eq!(
             displaced,
-            crate::session::ResizeOutcome::NeedsConfirmation {
+            crate::protocol::ResizeOutcome::NeedsConfirmation {
                 current_canonical: mobile.clone()
             },
             "归属移交后原归属者被抢占（需确认）"
@@ -2077,7 +2077,7 @@ fn test_session_actions_closed_loop() {
         .await
         .expect("resize after restart");
         assert!(
-            matches!(owner_again, crate::session::ResizeOutcome::Applied { .. }),
+            matches!(owner_again, crate::protocol::ResizeOutcome::Applied { .. }),
             "重启归属回到启动端（Desktop 可直通）"
         );
 

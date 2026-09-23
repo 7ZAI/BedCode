@@ -32,7 +32,7 @@
 //! WS 终端通道的状态订阅属事件面，随 P4 收口（P1-b 起由插件经 `host-events`
 //! 广播 `SyncEvent` 会话变体，宿主只做转发）。
 
-use crate::session::{RendererSource, ResizeOutcome, SessionInfoView};
+use crate::protocol::{RendererSource, ResizeOutcome, SessionInfoView};
 use crate::utils::auth::auth_center::call_api;
 use crate::wasm_core::manager::runtime::WasmHostContext;
 use crate::{AppError, Result};
@@ -76,7 +76,7 @@ fn call_session_api(
 /// 插件视图 JSON（camelCase）→ 宿主 `SessionInfoView`（仅 Serialize 的宿主类型，
 /// 拆两个半场：`SessionInfo`（约定 camelCase，可反序列化）+ 任务字段从 raw 取）
 fn parse_view(raw: serde_json::Value) -> Result<SessionInfoView> {
-    let info = serde_json::from_value::<crate::session::SessionInfo>(raw.clone()).map_err(|e| {
+    let info = serde_json::from_value::<crate::protocol::SessionInfo>(raw.clone()).map_err(|e| {
         AppError::Plugin(format!("session row is not a SessionInfo: {e} (row: {raw})"))
     })?;
     let get = |key: &str| raw.get(key).and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(str::to_string);

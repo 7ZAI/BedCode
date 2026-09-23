@@ -34,4 +34,37 @@
 
 ## Comments
 
-（待填）
+### 2026-09-24 01:10 · 本轮未开跑（起跑即被挡），零条清单结论
+
+**基线没跑成，不是跑了没问题。** 按票面第一条 `cd bedcode-desktop && pnpm run tauri:dev`
+就停住了，宿主进程根本没起来，所以上面 10 项清单**一条都没有观测**（不是「一条都正常」）。
+两个挡路的理由都记在这里，避免下一轮误判：
+
+1. **构建链红：见 [`issues/13-plugin-api-drift-trait-stale.md`](13-plugin-api-drift-trait-stale.md)。**
+   `dev-run.js` 的 `ensurePluginWasm()` 在补建 `file-transfer` WASM 时编译失败——
+   `#[plugin_api(manifest = "../../terminal-session/plugin.json")]` 的跨插件防漂移比对
+   发现 manifest 比 `SessionCenterApi` trait 多四条
+   （`session-list` / `session-get` / `session-close` / `session-input`，由 P1-b `c7b632397`
+   加入），fail-fast 直接退出。**这条要先修，否则票 01 与所有依赖它的票（03/09）都开不了跑。**
+   注意它是**延迟暴露**：资源目录里 file-transfer 的旧产物是 09-23 07:23 的，
+   后续批次 touch SDK rust 目录才把补建触发出来——红属 P1-b landed 的账，不属触发它的那批。
+2. **工作区不是干净 dev**：76 个未提交文件属同日并发的
+   `.scratch/2026-09-24-host-crypto-business-downsink/`（其中真实语义改动约 980 增 / 920 删，
+   其余 5200 行是行尾抖动）。用户 2026-09-24 裁定：**当前工作区照跑，票里记账标明污染**；
+   因此下一轮基线若发现差异，必须逐条判归属（P1-b 回归 / 对侧批次引入 / 与迁移前一致），
+   不得默认算本专项的账。
+   - 另记一条已被排除的路径：「另开 worktree 检出 HEAD 跑干净基线」不可行——
+     `src-tauri/target` 已 20G、磁盘剩 19G，全量重编会写爆，且会撞对侧构建缓存。
+
+### 下一轮开跑的前置与配合方式（用户 2026-09-24 定）
+
+- 前置：票 13 落地（`plugins:build` 与 `tauri:dev` 起跑绿）。
+- 配合：**人跑清单，agent 起环境 + 盯日志 + 记账**。清单里键盘回显、多行粘贴、
+  中文 IME 组合窗口、通知点击、滚动拽底、「回到底部」按钮出现时机——
+  本机无截图工具（无 `grim`/`spectacle`/`import`，只有 `xdotool` + `fcitx5`），
+  agent 无法替人目测，**这几项必须人手**；agent 侧负责 `runtime.<date>.log` 的
+  `warn`/`error` 取证与归属判定。
+- 观测点建议（供下一轮直接抄）：日志
+  `~/.local/share/com.bedcode.app/logs/runtime.$(date +%F).log`，
+  结构化字段按 AGENTS §8 是 `session_id = %… / plugin_id = %…`，
+  会话面异常优先 grep `session_gateway` / `terminal-session` / `pty`。

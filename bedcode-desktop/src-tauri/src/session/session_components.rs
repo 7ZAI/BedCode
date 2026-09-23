@@ -8,8 +8,8 @@
 //! `plugins/terminal-session/rust/src/launch.rs`。
 
 use crate::enums::SessionStatus;
+use crate::protocol::{RendererSource, SessionInfo};
 use crate::pty::PtySession;
-use crate::session::SessionInfo;
 use crate::Result;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -232,42 +232,9 @@ impl SessionInfoRegistry for DefaultSessionInfoRegistry {
 }
 
 // ==================== Canonical Renderer Registry ====================
-
-/// 正统渲染端身份：当前 PTY 网格尺寸的权威归属端
-///
-/// 桌面端与移动端同时查看同一会话时 PTY 只能有一个尺寸，输出格式必须
-/// 匹配实际渲染的那个端。每次 resize 后归属即确立为请求方，其他端再
-/// 调整需先确认覆盖（见 SessionManager::resize_session 裁决）。
-///
-/// serde 注意：容器级 rename_all 只作用于变体名（tag 值），字段名需另用
-/// rename_all_fields（serde ≥1.0.186）转为 camelCase，与两端前端的 TS 类型
-/// （`{ kind: 'mobile'; deviceName }` / `{ status: 'needsConfirmation'; currentCanonical }`）
-/// 对齐——曾因字段保持 snake_case 导致前端读到 undefined 崩溃、确认弹窗不显示。
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
-pub enum RendererSource {
-    /// 桌面端（会话宿主：本地命令 / 本地环回 WS）
-    Desktop,
-    /// 移动端设备（device_name 来自 JWT claims）
-    Mobile { device_name: String },
-}
-
-impl RendererSource {
-    /// 是否为桌面端（桌面本地路径恒为 Desktop）
-    pub fn is_desktop(&self) -> bool {
-        matches!(self, RendererSource::Desktop)
-    }
-}
-
-/// resize 裁决结果（统一输出给所有 entry：桌面命令 / 移动端 HTTP / WS 控制）
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(tag = "status", rename_all = "camelCase", rename_all_fields = "camelCase")]
-pub enum ResizeOutcome {
-    /// 已应用：请求方就是正统端，或强制覆盖已确认
-    Applied { canonical: RendererSource },
-    /// 需要确认：另一个端正在渲染输出，本次未应用；客户端弹窗确认后带 force 重发
-    NeedsConfirmation { current_canonical: RendererSource },
-}
+//
+// `RendererSource` / `ResizeOutcome` 是对外 wire 形状，已迁 `crate::protocol::session`
+// （票 02）；本目录只留「当前归属端」这份登记事实的存取实现。
 
 /// 启动初始网格解析：启动端携带且合法（>0）时覆盖配置默认尺寸
 ///
@@ -325,43 +292,6 @@ impl CanonicalRendererRegistry for DefaultCanonicalRendererRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// serde 形状回归：字段必须输出 camelCase（与两端前端 TS 类型对齐）。
-    /// 曾因容器级 rename_all 只转换变体名、current_canonical/device_name 保持
-    /// snake_case，导致前端读 currentCanonical 为 undefined 崩溃且确认弹窗不显示。
-    #[test]
-    fn test_resize_outcome_and_renderer_source_json_shape_is_camel_case() {
-        let outcome = ResizeOutcome::NeedsConfirmation {
-            current_canonical: RendererSource::Mobile {
-                device_name: "Pixel-9".to_string(),
-            },
-        };
-        let json: serde_json::Value = serde_json::to_value(&outcome).unwrap();
-        assert_eq!(json["status"], "needsConfirmation");
-        assert!(
-            json.get("currentCanonical").is_some(),
-            "field must be camelCase: {json}"
-        );
-        assert!(json.get("current_canonical").is_none());
-        assert_eq!(json["currentCanonical"]["kind"], "mobile");
-        assert_eq!(json["currentCanonical"]["deviceName"], "Pixel-9");
-
-        let applied = ResizeOutcome::Applied {
-            canonical: RendererSource::Desktop,
-        };
-        let json: serde_json::Value = serde_json::to_value(&applied).unwrap();
-        assert_eq!(json["status"], "applied");
-        assert_eq!(json["canonical"]["kind"], "desktop");
-
-        // 反序列化回环（HTTP/命令边界双向兼容）
-        let back: ResizeOutcome = serde_json::from_value(json).unwrap();
-        assert_eq!(
-            back,
-            ResizeOutcome::Applied {
-                canonical: RendererSource::Desktop
-            }
-        );
-    }
 
     /// 启动初始网格解析：合法尺寸覆盖默认值，非法（0）或缺省回退配置默认
     #[test]

@@ -2,6 +2,10 @@
 //!
 //! 提供会话状态管理、持久化和恢复功能
 //!
+//! **对外协议形状不在本目录**（票 02）：`SessionInfo` / `SessionInfoView` /
+//! `ResizeOutcome` / `RendererSource` 已迁 `crate::protocol::session`——本目录是
+//! 退役中的内核会话线，协议形状必须活过它的删除。
+//!
 //! 模块划分:
 //! - session_config.rs: 会话配置管理（CRUD 操作）
 //! - session_manager.rs: SessionManager 主类实现
@@ -18,13 +22,13 @@ mod session_components;
 mod session_output;
 
 pub use session_config::SessionConfigManager;
-pub use session_event::{task_fields_from_slot, SessionInfo, SessionInfoView, SessionStatusEvent};
+pub use session_event::SessionStatusEvent;
 pub use session_manager::SessionManager;
 
 // 从 session_components 重导出
 pub use session_components::{
     resolve_initial_size, CanonicalRendererRegistry, DefaultCanonicalRendererRegistry, DefaultPtyRegistry,
-    DefaultSessionInfoRegistry, PtyRegistry, RendererSource, ResizeOutcome, SessionInfoRegistry,
+    DefaultSessionInfoRegistry, PtyRegistry, SessionInfoRegistry,
 };
 
 // 从 session_output 重导出

@@ -11,12 +11,13 @@ use crate::session::{
     input_line::{SessionInputListener, SubmittedLineTracker},
     session_components::{
         CanonicalRendererRegistry, DefaultCanonicalRendererRegistry, DefaultPtyRegistry, DefaultSessionInfoRegistry,
-        PtyRegistry, RendererSource, ResizeOutcome, SessionInfoRegistry,
+        PtyRegistry, SessionInfoRegistry,
     },
     session_lifecycle::SessionLifecycleListener,
     session_output::{GlobalOutputManager, SessionOutputSink},
 };
-use crate::session::{SessionInfo, SessionInfoView, SessionStatusEvent};
+use crate::protocol::{RendererSource, ResizeOutcome, SessionInfo, SessionInfoView};
+use crate::session::SessionStatusEvent;
 use crate::system::config::AppConfig;
 use crate::system::constants::ENV_BEDCODE_SESSION_ID;
 use crate::system::error_boundary::spawn_with_error_boundary;
@@ -933,7 +934,7 @@ impl Drop for SessionManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::RendererSource;
+    use crate::protocol::RendererSource;
 
     #[tokio::test]
     async fn test_session_manager_default() {

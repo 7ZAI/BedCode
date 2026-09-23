@@ -8,10 +8,10 @@
 //! 的注册顺序解耦——按域就近维护即可。
 
 use crate::db::Database;
+use crate::protocol::ResizeOutcome;
 use crate::server::core::link_crypto::{self, LinkCryptoConfig};
 use crate::server::core::metrics::ServerMetrics;
 use crate::server::core::supervisor::{ServerStatusInfo, ServerSupervisor};
-use crate::session::{ResizeOutcome};
 use crate::system::config::{AppConfig, NetworkConfig};
 use crate::system::constants::{TERMINAL_BG_EXTENSIONS, TERMINAL_BG_FILE_PREFIX, TERMINAL_BG_MAX_BYTES};
 use crate::Result;
@@ -42,7 +42,7 @@ use tracing_subscriber::filter::EnvFilter;
 #[tauri::command]
 pub async fn list_sessions(
     host: State<'_, Arc<crate::wasm_core::PluginHost>>,
-) -> Result<Vec<crate::session::SessionInfoView>> {
+) -> Result<Vec<crate::protocol::SessionInfoView>> {
     Ok(crate::utils::session_gateway::list_views(host.wasm_host_ctx()).await?)
 }
 
@@ -51,7 +51,7 @@ pub async fn list_sessions(
 pub async fn get_session(
     host: State<'_, Arc<crate::wasm_core::PluginHost>>,
     session_id: String,
-) -> Result<Option<crate::session::SessionInfoView>> {
+) -> Result<Option<crate::protocol::SessionInfoView>> {
     Ok(crate::utils::session_gateway::view(host.wasm_host_ctx(), &session_id).await?)
 }
 
@@ -76,7 +76,7 @@ pub async fn resize_session(
         &session_id,
         cols,
         rows,
-        crate::session::RendererSource::Desktop,
+        crate::protocol::RendererSource::Desktop,
         force,
     )
     .await

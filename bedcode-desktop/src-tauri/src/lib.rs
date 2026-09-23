@@ -9,6 +9,7 @@ pub mod events;
 pub mod mdns;
 pub mod wasm_core;
 pub mod process;
+pub mod protocol;
 pub mod pty;
 pub mod server;
 pub mod session;

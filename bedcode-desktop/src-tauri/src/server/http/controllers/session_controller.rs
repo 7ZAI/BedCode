@@ -12,7 +12,7 @@
 use crate::server::http::dtos::session_dto::*;
 use crate::server::http::dtos::ApiResponse;
 use crate::server::http::middleware::jwt_auth::get_claims_from_request;
-use crate::session::RendererSource;
+use crate::protocol::RendererSource;
 use crate::system::app_context::AppContext;
 use actix_web::{web, HttpRequest, HttpResponse};
 use tauri::Emitter;

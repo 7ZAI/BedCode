@@ -468,7 +468,7 @@ pub(crate) fn session_resize(
     if cols == 0 || rows == 0 {
         return Err("session error: invalid size (cols/rows must be > 0)".to_string());
     }
-    let requester: crate::session::RendererSource =
+    let requester: crate::protocol::RendererSource =
         serde_json::from_str(requester_json).map_err(|e| format!("session error: invalid requester: {}", e))?;
     // 参数合法后再查属主（票 04：先权限、再参数、后属主）
     ensure_session_owner(host_ctx, plugin_id, session_id)?;
@@ -478,7 +478,7 @@ pub(crate) fn session_resize(
     let outcome = block_on_async(sm.resize_session(session_id, cols, rows, requester.clone(), true))
         .map_err(|e| format!("session error: resize session failed: {}", e))?;
     // force=true ⇒ 内核不裁决，恒为 Applied；非 Applied 只可能是内核契约变更
-    let crate::session::ResizeOutcome::Applied { canonical } = outcome else {
+    let crate::protocol::ResizeOutcome::Applied { canonical } = outcome else {
         return Err("session error: resize executor returned non-applied outcome".to_string());
     };
     tracing::debug!(
@@ -1116,7 +1116,7 @@ mod tests {
         let sid = seed_running_session(&ctx).await;
         // 预置归属（模拟曾 resize）：移除必须连带清理正统端归属
         let sm = ctx.session_manager.clone();
-        block_on_async(sm.resize_session(&sid, 100, 30, crate::session::RendererSource::Desktop, true))
+        block_on_async(sm.resize_session(&sid, 100, 30, crate::protocol::RendererSource::Desktop, true))
             .expect("claim canonical");
         assert!(block_on_async(sm.canonical_renderer_of(&sid)).is_some());
 
@@ -1154,7 +1154,7 @@ mod tests {
     /// 为 null；他端请求也照旧执行并移交归属（裁决在插件侧，内核不拦）
     #[tokio::test]
     async fn session_resize_registers_and_executes_without_arbitration() {
-        use crate::session::RendererSource;
+        use crate::protocol::RendererSource;
         let ctx = build_host_ctx();
         grant_permissions(&ctx, PLUGIN, &[PERMISSION_SESSION_WRITE]);
         let sid = seed_running_session(&ctx).await;

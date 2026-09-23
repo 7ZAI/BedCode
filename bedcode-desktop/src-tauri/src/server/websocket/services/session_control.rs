@@ -5,7 +5,8 @@
 
 use crate::enums::{SessionControlAction, SessionSummary};
 use crate::server::websocket::message::Message;
-use crate::session::{RendererSource, SessionManager};
+use crate::protocol::RendererSource;
+use crate::session::SessionManager;
 use crate::Result;
 use std::net::SocketAddr;
 use std::sync::Arc;

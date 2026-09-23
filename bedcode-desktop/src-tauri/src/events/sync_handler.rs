@@ -148,7 +148,7 @@ impl SyncEventHandler {
                 // 构建 SessionSummary（票 12：任务字段取自注解槽，不再来自会话记录）
                 let annotations = self.session_manager.session_annotations(session_id).await;
                 let (task_status, task_reason, _, _) =
-                    crate::session::task_fields_from_slot(&annotations);
+                    crate::protocol::task_fields_from_slot(&annotations);
                 SessionSummary {
                     id: session_info.id,
                     name: session_info.name,

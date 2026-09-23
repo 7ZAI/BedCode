@@ -18,7 +18,8 @@ use super::conn::{ConnCtx, TerminateConnection, WsConnBase};
 use super::message::Message;
 use super::terminal_ws::control_frame::{self, ServerFrame};
 use super::terminal_ws::{forward, subscriber};
-use crate::session::{GlobalOutputManager, RendererSource};
+use crate::protocol::RendererSource;
+use crate::session::GlobalOutputManager;
 use crate::system::error_boundary::spawn_with_error_boundary;
 
 /// 转发统计打点帧数（链路调试字节对账；不打逐帧 WS 发送日志，防输出风暴刷屏）
