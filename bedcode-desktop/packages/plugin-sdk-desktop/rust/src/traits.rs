@@ -106,7 +106,7 @@ mod tests {
 
     use super::*;
     use crate::test_utils::{block_on, MockEventEmitter, MockSessionQuery, MockStorage};
-    use crate::types::{PluginContributes, PluginKind, PluginType};
+    use crate::types::PluginType;
     use crate::PermissionManager;
     use std::sync::Arc;
 
@@ -121,21 +121,10 @@ mod tests {
                 id: Self::ID.to_string(),
                 name: "Test Plugin".to_string(),
                 version: "0.1.0".to_string(),
-                description: String::new(),
-                author: String::new(),
-                main: String::new(),
                 permissions: vec!["storage".to_string()],
-                contributes: PluginContributes::default(),
                 plugin_type: PluginType::Rust,
-                rust_library: String::new(),
-                wasm_hash: String::new(),
-                api: vec![],
-                icon: None,
-                wasi_preopen_dirs: vec![],
-                kind: PluginKind::Application,
-                dependencies: vec![],
-                resource_overrides: None,
-                pty_quota: None,
+                // 余下字段取 Default，SDK 追加可选字段时不必回来补格子（票 14）
+                ..Default::default()
             }
         }
 

@@ -604,7 +604,7 @@ P0–P5 是**阶段划分与裁决记录**，保留作为理由；开工请以�
 | 11 | 内核会话目录与装配链删除（宿主零会话对象） | 02, 06, 10 | ready-for-agent |
 | 12 | 文档与路线图收尾 | 11 | ready-for-agent |
 | 13 | 插件 api 防漂移镜像清单落后（file-transfer 编译红，dev 起跑 / CI 双堵） | — | done（2026-09-24 裁定选 B：`#[plugin_api]` 按声明方/消费方分判，消费方改子集校验；file-transfer trait 31→2，ADR 0017 v2） |
-| 14 | wasip3 测试夹具落后 `pty_quota`（宿主 `--lib` 在 HEAD 即 6 红） | — | ready-for-agent |
+| 14 | wasip3 测试夹具落后 `pty_quota`（宿主 `--lib` 在 HEAD 即 6 红） | — | done（2026-09-24 复发面一次清干净：`PluginManifest` 加 `Default` + 六处字面量改 `..Default::default()` + 契约锁；宿主 `--lib` 全绿待对侧 subscription.rs 收敛后复跑） |
 
 **票 13/14 的来源（2026-09-24 补记）**：票 01 人工基线本轮开跑即被挡（宿主 dev 起不来），
 顺带暴露两处 **P1-b landed 时没跟演的周边消费者**——13 是另一个插件里的镜像 api 清单

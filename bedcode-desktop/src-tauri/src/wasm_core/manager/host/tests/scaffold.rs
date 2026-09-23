@@ -94,21 +94,11 @@ pub(super) fn make_plugin(id: &str, source: PluginSource, state: PluginState) ->
             id: id.to_string(),
             name: format!("Test {}", id),
             version: "1.0.0".to_string(),
-            description: String::new(),
-            author: String::new(),
             main: "index.ts".to_string(),
             permissions: vec!["storage".to_string(), "terminal:input".to_string()],
-            api: vec![],
-            contributes: PluginContributes::default(),
             plugin_type: PluginType::TsOnly,
-            rust_library: String::new(),
-            wasm_hash: String::new(),
-            icon: None,
-            wasi_preopen_dirs: vec![],
-            kind: bedcode_plugin_api::PluginKind::Application,
-            dependencies: vec![],
-            resource_overrides: None,
-            pty_quota: None,
+            // 余下字段取 Default，避免 SDK 追加可选字段时本夹具编译红（票 14）
+            ..Default::default()
         },
         state,
         extension_path: String::new(),
@@ -130,21 +120,9 @@ fn synthetic_manifest() -> PluginManifest {
         id: SYNTHETIC_STATIC_ID.to_string(),
         name: "Synthetic Static".to_string(),
         version: "0.1.0".to_string(),
-        description: String::new(),
-        author: String::new(),
-        main: String::new(),
-        permissions: vec![],
-        api: vec![],
-        contributes: PluginContributes::default(),
         plugin_type: PluginType::Rust,
-        rust_library: String::new(),
-        wasm_hash: String::new(),
-        icon: None,
-        wasi_preopen_dirs: vec![],
-        kind: bedcode_plugin_api::PluginKind::Application,
-        dependencies: vec![],
-        resource_overrides: None,
-        pty_quota: None,
+        // 余下字段取 Default，避免 SDK 追加可选字段时本夹具编译红（票 14）
+        ..Default::default()
     }
 }
 

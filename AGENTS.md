@@ -200,6 +200,11 @@ config-get（`session_configs` 表退役，私有库即真源）；v23 = host-se
   这一实现）。源里手写它不会被 `manifest-gen` 刷新 → `manifest-validate` 告警，且发布链
   `scripts/package-plugins.mjs` 出包前逐条复核（缺键/形态非法/字节失配即 exit 1）。
   「产物与源 manifest 逐字一致」的口径自本票起收窄为**除注入的 wasmHash 外一致**；移动端仍无生产者（桌面独有）
+- [ ] 测试内夹具 / 合成 manifest **禁止把 SDK 类型的结构体字面量逐字段列全当契约用**：SDK 追加
+  可选字段即批红，且只在跑到依赖该夹具的用例时才暴露（`pty_quota` 追加时六处字面量手改、漏一处
+  → 宿主 `--lib` 红 6 项，见 `.scratch/2026-09-23-session-engine-downsink/issues/14`）。构造
+  `PluginManifest` 一律只列本用例断言的字段 + `..Default::default()`；「`Default` 与 serde 缺省
+  等价」这条真有意义的不变量由 SDK 锁 `types.rs::default_manifest_equals_minimal_json_manifest` 守住
 - [ ] 日志：target=`bedcode_lib::plugin::plugin_log`，`[plugin:xxx]` 前缀，WASM trap backtrace 不得关闭（详情见 `docs/knowledge/logging.md`）
 
 ---

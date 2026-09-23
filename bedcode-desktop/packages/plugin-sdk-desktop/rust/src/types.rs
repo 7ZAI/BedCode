@@ -6,7 +6,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// 插件描述文件 (plugin.json) 的完整结构
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// `Default` 的用途是**测试夹具与合成 manifest 的构造基线**：除 `id` / `name` / `version`
+/// 三个必填项外，每个字段都带 `#[serde(default)]`，因此 `Default` 与「一份只写了必填项的
+/// plugin.json 解析结果」逐字段等价。调用点写成 `PluginManifest { id, name, version, ..Default::default() }`
+/// 之后，本类型**追加可选字段不再连带测试编译红**——此前六处结构体字面量把「逐字段列全」
+/// 当隐式契约用，`pty_quota` 追加时就漏修了 `plugin-wasip3-test` 一处（会话引擎下沉票 14）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginManifest {
     /// 唯一标识（反向域名格式，如 com.bedcode.quick-snippets）
@@ -143,6 +149,14 @@ pub enum PluginType {
     RustTs,
     /// 纯 TypeScript 插件，仅前端组件
     TsOnly,
+}
+
+/// 缺省产物形态取自 [`default_plugin_type`]，与 manifest `pluginType` 的 serde 缺省共用
+/// 同一真源（不另立 `#[default]` 造成两处漂移）
+impl Default for PluginType {
+    fn default() -> Self {
+        default_plugin_type()
+    }
 }
 
 /// 组件装配角色（manifest `type` 字段，core-plugin-manager）
@@ -560,6 +574,31 @@ mod tests {
     use super::*;
 
     // ==================== PluginManifest ====================
+
+    /// 契约锁（会话引擎下沉票 14）：`PluginManifest::default()` 必须与「只写必填项的
+    /// plugin.json 解析结果」逐字段等价。测试夹具因此可以 `..Default::default()` 构造，
+    /// SDK 追加可选字段不再连带六处结构体字面量编译红。两侧任一失配都会让该锁红：
+    /// 新字段漏了 `#[serde(default)]`，或 Rust 侧默认值与解析缺省不是同一个值。
+    #[test]
+    fn default_manifest_equals_minimal_json_manifest() {
+        let from_json = serde_json::from_value::<PluginManifest>(serde_json::json!({
+            "id": "com.bedcode.lock",
+            "name": "Lock",
+            "version": "0.0.0",
+        }))
+        .expect("只写必填项的 manifest 必须可解析");
+        let from_default = PluginManifest {
+            id: "com.bedcode.lock".to_string(),
+            name: "Lock".to_string(),
+            version: "0.0.0".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            serde_json::to_value(&from_json).unwrap(),
+            serde_json::to_value(&from_default).unwrap(),
+            "Default 与 serde 缺省失配：新字段要么补 #[serde(default)]，要么夹具必须显式列出它"
+        );
+    }
 
     #[test]
     fn test_manifest_parse_with_defaults() {

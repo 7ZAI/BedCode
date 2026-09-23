@@ -14,7 +14,7 @@
 //! 仅供宿主测试套件加载验证，不进 resources/plugins/ 分发。
 
 use bedcode_plugin_api::host::HostLog;
-use bedcode_plugin_api::types::{PluginKind, PluginManifest, PluginType};
+use bedcode_plugin_api::types::{PluginManifest, PluginType};
 use bedcode_plugin_api::wasm::WasmPlugin;
 use bedcode_plugin_api::wasm_entry;
 use bedcode_plugin_api::wasm_host::WasmHost;
@@ -30,21 +30,15 @@ impl WasmPlugin for Wasip3TestPlugin {
             name: "wasip3-test".to_string(),
             version: "0.1.0".to_string(),
             description: "wasip3 编译链测试插件".to_string(),
-            author: String::new(),
-            main: String::new(),
             // host-crypto 探针需要三权限域（票 04 端到端）
-            permissions: vec!["crypto:aead".to_string(), "crypto:kdf".to_string(), "crypto:asym".to_string()],
-            api: Vec::new(),
-            contributes: Default::default(),
+            permissions: vec![
+                "crypto:aead".to_string(),
+                "crypto:kdf".to_string(),
+                "crypto:asym".to_string(),
+            ],
             plugin_type: PluginType::Rust,
-            rust_library: String::new(),
-            wasm_hash: String::new(),
-            icon: None,
-            wasi_preopen_dirs: Vec::new(),
-            kind: PluginKind::Application,
-            dependencies: Vec::new(),
-            pty_quota: None,
-            resource_overrides: None,
+            // 其余字段一律取 Default：SDK 追加可选字段不再连带本夹具编译红（票 14）
+            ..Default::default()
         }
     }
 

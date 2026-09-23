@@ -150,9 +150,12 @@ fn manifest_installed_at(extension_path: &str) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bedcode_plugin_api::{PluginContributes, PluginManifest, PluginState, PluginType};
+    use bedcode_plugin_api::{PluginManifest, PluginState, PluginType};
 
     /// 构造带完整字段的测试 manifest
+    ///
+    /// 只列本用例真正断言的字段，其余走 `Default`——SDK 追加可选字段时不必回来补格子
+    /// （会话引擎下沉票 14：`pty_quota` 追加时六处字面量漏了一处，宿主 `--lib` 红 6 项）。
     fn sample_manifest() -> PluginManifest {
         PluginManifest {
             id: "com.bedcode.test".to_string(),
@@ -162,17 +165,9 @@ mod tests {
             author: "tester".to_string(),
             main: "index.ts".to_string(),
             permissions: vec!["broadcast".to_string(), "storage".to_string()],
-            api: vec![],
-            contributes: PluginContributes::default(),
             plugin_type: PluginType::RustTs,
             rust_library: "bedcode_test.wasm".to_string(),
-            wasm_hash: String::new(),
-            icon: None,
-            wasi_preopen_dirs: vec![],
-            kind: bedcode_plugin_api::PluginKind::Application,
-            dependencies: vec![],
-            resource_overrides: None,
-            pty_quota: None,
+            ..Default::default()
         }
     }
 

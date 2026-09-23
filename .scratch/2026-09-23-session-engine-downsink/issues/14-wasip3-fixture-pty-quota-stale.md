@@ -8,7 +8,47 @@
 
 **Blocked by:** 无。
 
-**Status:** needs-info
+**Status:** done（2026-09-24 裁决走验收标准第 2 条：`..Default::default()` 构造，复发面一次清干净；
+唯宿主 `--lib` 门禁实跑被并发批次在途改动挡住，见「门禁」节）
+
+## 落成形态（第 2 条：默认值 + 定点覆盖）
+
+- **SDK 侧根因修**：`packages/plugin-sdk-desktop/rust/src/types.rs`
+  - `PluginManifest` 加 `Default` derive。这不是「为了方便」——该类型除 `id`/`name`/`version`
+    三个必填项外**每个字段都带 `#[serde(default)]`**，所以 `Default` 与「一份只写必填项的
+    plugin.json 的解析结果」逐字段等价，语义有锚点而非凭空造值。
+  - `PluginType` 手写 `impl Default` **委托给既有的 `default_plugin_type()`**，不另立
+    `#[default]` 属性——避免「serde 缺省」与「Rust 缺省」两处真源漂移。
+- **六处字面量全部转换**（`pty_quota` 当年就是这六处手改、漏了第七处才红的）：
+  `plugin-wasip3-test/src/lib.rs`、`src-tauri/src/wasm_core/manager/types.rs`、
+  `src-tauri/.../host/tests/scaffold.rs`（两处）、SDK `rust/src/traits.rs`、SDK `rust/src/wasm.rs`。
+  每处只保留该用例真正断言的字段（id/name/version/permissions/pluginType/rustLibrary/main…）
+  + `..Default::default()`，并去掉随之失效的 `PluginContributes` / `PluginKind` import。
+- **契约锁**（防「Default 与 serde 缺省悄悄分家」）：
+  `types::tests::default_manifest_equals_minimal_json_manifest` 断言
+  `PluginManifest::default()` 填必填项后的序列化结果 == 只含必填项的 JSON 解析结果的序列化。
+  新字段漏 `#[serde(default)]`、或 Rust 侧默认值与解析缺省不同值，都会让该锁红。
+
+## 门禁
+
+- SDK `cargo test --lib` **118/0**（新增契约锁 1 项）
+- 契约锁变异自检：把 `impl Default for PluginType` 由 `default_plugin_type()` 改成
+  `PluginType::Rust` → 该锁转红（`pluginType: "ts-only"` vs `"rust"`），还原后回到 118/0；
+  改动前后 `types.rs` 行尾 CR 数与行数一致（该文件 100% CRLF，全程只经 Edit 工具改）
+- `bash scripts/wasip3-toolchain.sh fixture` **通过**：fixture 在 pinned
+  `nightly-2026-09-16` + `wasm32-wasip3` 下编译成功且产物为 Component
+  （magic `0061736d0d000100`，320K）——这是本票夹具改动的真实目标形态验证
+- `cargo check --lib --tests`（宿主）：我引入的 unused-import 已清；
+  **剩余 2 项 `E0061` 全在并发批次在途文件 `src/server/websocket/subscription.rs`**
+  （该会话正在给 `cleanup_subscription_state` 加第 4 个参数，两次跑检出行号从
+  195/836/852 漂到 858/874，即仍在写盘中）→ 与本票无关，不代改对侧文件。
+- **未完成项（诚实记账）**：验收标准第 1 条「宿主 `cargo test --lib` 零红」本轮**未出示**，
+  被上述对侧在途编译错误阻塞。判据（表中 6 项转绿）的机制层证据已由 fixture 构建给出，
+  但「`--lib` 全绿」这句要等对侧 subscription.rs 收敛后复跑一次才算。
+  另注：紧急部分（`pty_quota: None` 一格）已由并发批次在 `e8cfb4162` 提交，
+  HEAD 不再因该字段编译红——本票的净贡献是**把复发面一次修干净**。
+
+## 原验收标准
 
 ## 现象（2026-09-24 01:35 实测，`cargo test --lib` = 1145 passed / 8 failed）
 
@@ -43,11 +83,14 @@ error[E0063]: missing field `pty_quota` in initializer of `PluginManifest`
 ## 验收标准
 
 - [ ] `cd bedcode-desktop/src-tauri && cargo test --lib` 零红（用上表 6 项转绿为判据）
-- [ ] 夹具的 `PluginManifest` 构造改为**默认值 + 定点覆盖**（`..Default::default()` 或等价
+      —— **本轮未出示**：被并发批次在途 `subscription.rs` 编译错误挡住（见「门禁」节），非本票改动所致
+- [x] 夹具的 `PluginManifest` 构造改为**默认值 + 定点覆盖**（`..Default::default()` 或等价
       构造），使「SDK 追加可选字段」不再连带红——否则每次字段追加都要再修一次夹具
-- [ ] 若裁决为「夹具必须显式列出每个字段」（把 SDK 字段追加变成强制跟演点），
-      则改为在 ADR / AGENTS §7 插件检查清单里写明该隐式契约，并说明谁负责跟演
-- [ ] 不改 `pty_quota` 的语义与区间仲裁（`PLUGIN_PTY_SESSIONS_CEILING_PER_PLUGIN` 等）
+      （六处字面量全清，含当年漏改的那一处）
+- [ ] ~~若裁决为「夹具必须显式列出每个字段」……~~ —— **未采纳**：选上一条。显式逐字段等于把
+      「六处消费者」永久绑在 SDK 字段表上，正是本票要拆的隐式契约；改为契约锁守
+      「`Default` 与 serde 缺省等价」这条真有意义的不变量
+- [x] 不改 `pty_quota` 的语义与区间仲裁（`PLUGIN_PTY_SESSIONS_CEILING_PER_PLUGIN` 等）
 
 ## 边界与不做
 
