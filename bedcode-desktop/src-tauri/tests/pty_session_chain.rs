@@ -26,7 +26,7 @@
 //! 到达的同一入口），WS 控制通道仍覆盖 ListSessions / StopSession / RemoveSession
 //! 与未认证拒绝；令牌经插件驱动的 HTTP 配对换取（夹具语义与迁移前一致）。
 //!
-//! 串行化：本文件只含一个 `#[tokio::test]`（场景子步骤严格串行）。
+//! 串行化：本文件只含一个 `#[tokio::test(flavor = "multi_thread", worker_threads = 4)]`（场景子步骤严格串行）。
 //! tests/ 下每个文件是独立测试二进制 → 与 01/02 文件进程隔离，
 //! AppContext（OnceLock）/ WsSessionRegistry / GlobalOutputManager 等
 //! 全局单例天然互不冲突。等待异步事件统一 `tokio::time::sleep + yield_now`
@@ -405,6 +405,37 @@ async fn send_control_and_wait(
     .await
 }
 
+/// 宿主 → 插件互调（JSON-RPC，复制 `auth_center::call_api` 的 wire 约定：
+/// topic = `bedcode.api.<api>`、method = 短名、reply topic 由宿主 `call_plugin_api_host`
+/// 内部订阅等待）。集成测试 crate 无法访问 lib 的 `pub(crate)` 桥接，故在此
+/// 用公开面（`WasmHostContext::call_plugin_api_host`）复刻同一约定。
+///
+/// P1-b 用途：播种插件私有库配置（config-upsert）——WS StartSession 需要
+/// 插件登记域的 config_id，而无头集成测试没有前端命令通道，这是唯一种子路径。
+async fn plugin_api_call(api: &str, params: serde_json::Value) -> serde_json::Value {
+    let host_ctx = AppContext::global().plugin_host().wasm_host_ctx().clone();
+    let topic = format!("bedcode.api.{api}");
+    let method = api.rsplit_once('.').map(|(_, m)| m).unwrap_or(api);
+    let id = format!("itest-req-{}", std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos());
+    let payload = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": method,
+        "params": params,
+    });
+    let reply_json = host_ctx
+        .call_plugin_api_host(&topic, &payload.to_string(), 5000)
+        .unwrap_or_else(|e| panic!("plugin api '{api}' failed: {e}"));
+    let reply: serde_json::Value = serde_json::from_str(&reply_json).expect("reply json");
+    if let Some(err) = reply.get("error") {
+        panic!("plugin api '{api}' error: {err}");
+    }
+    reply.get("result").cloned().expect("result")
+}
+
 /// 读取下一条 JSON 控制帧（新路由控制帧协议，跳过二进制输出帧与 Ping/Pong），
 /// 5s 超时后 panic；返回解析后的 JSON
 async fn recv_frame_json(stream: &mut WsRecv) -> serde_json::Value {
@@ -461,10 +492,10 @@ async fn collect_terminal_output_until(stream: &mut WsRecv, marker: &str, timeou
     text
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn pty_session_chain_flow() {
     // 测试日志输出到 harness（失败时可查链路）；重复 init 静默跳过
-    if tracing_subscriber::fmt().with_test_writer().try_init().is_err() {
+    if tracing_subscriber::fmt().with_test_writer().with_max_level(tracing::Level::DEBUG).try_init().is_err() {
         tracing::debug!("tracing subscriber already initialized");
     }
 
@@ -475,32 +506,56 @@ async fn pty_session_chain_flow() {
     let port = pick_free_port();
     let (handle, server_task) = spawn_test_server(port).await.expect("test server must start");
 
-    // ==================== 场景 1：已认证客户端创建会话 ====================
+    // ==================== 场景 1：插件背书的会话创建（P1-b） ====================
 
     // HTTP 配对（插件端点）拿 JWT，/ws/event 控制通道 JWT 首消息认证
     let token = http_pair_and_get_token(port, "pty-001").await;
     let (mut sink_a, mut stream_a, _addr_a) = connect_ws(port, "/ws/event").await;
     authenticate_with_jwt(&mut sink_a, &mut stream_a, &token, "pty-001").await;
 
-    // 1a. 内核执行端创建会话（真实 openpty + 子进程 spawn）：等价于插件
-    // `session-create` 编排后经 host-session `create-with-spec` 到达的同一入口
-    // （插件编排读私有库，无头集成测试不可达，见文件头「票 13 口径」）
-    let manager = AppContext::global().session_manager();
-    let session_id = manager
-        .create_session_from_spec(test_launch_config(), TEST_CONFIG_ID.to_string(), None, true, None, None)
-        .await
-        .unwrap_or_else(|e| {
-            panic!(
-                "内核 create-with-spec 失败：{e}——若为 spawn 失败属测试环境问题 \
-                 （shell 不在 PATH / PTY 不可用），否则为链路缺陷"
-            )
-        });
-    assert!(
-        !session_id.is_empty(),
-        "created session must carry non-empty session_id"
-    );
+    // 1a. 播种插件私有库配置（互调 config-upsert；无头集成测试无前端命令通道，
+    // 这是唯一种子路径——复制宿主桥接 wire 约定，见 plugin_api_call）
+    let config = plugin_api_call(
+        "com.bedcode.terminal-session.config-upsert",
+        serde_json::json!({
+            "name": "itest-chain",
+            "environment": "linux",
+            "workingDir": std::env::temp_dir().to_string_lossy(),
+            "command": "bash",
+        }),
+    )
+    .await;
+    let config_id = config["id"].as_str().expect("config id").to_string();
 
-    // 1b. ListSessions 确认会话已注册且状态 running（会话标识与注册表一致）
+    // 1b. WS StartSession 控制动作 → 宿主窄转发层 → 插件 session-create →
+    // host-pty.spawn（真实 bash）。回执带 session_id（P1-b 创建同步完成）。
+    let resp = send_control_and_wait(
+        &mut sink_a,
+        &mut stream_a,
+        SessionControlAction::StartSession {
+            config_id: config_id.clone(),
+        },
+        None,
+    )
+    .await;
+    let session_id = match resp {
+        Message::SessionControl {
+            session_id: Some(sid),
+            payload:
+                SessionControlPayload {
+                    action: SessionControlAction::StartSession { config_id: act_cfg },
+                },
+            ..
+        } => {
+            assert_eq!(act_cfg, config_id, "start action must carry config_id");
+            sid
+        }
+        Message::Error { code, message, .. } => panic!("StartSession rejected ({code}: {message})"),
+        other => panic!("expected SessionControl(StartSession) response, got: {other:?}"),
+    };
+    assert!(!session_id.is_empty(), "created session must carry non-empty session_id");
+
+    // 1c. ListSessions（插件登记域真源）确认会话已注册且状态 running
     let resp = send_control_and_wait(&mut sink_a, &mut stream_a, SessionControlAction::ListSessions, None).await;
     match resp {
         Message::SessionControl {
@@ -517,62 +572,43 @@ async fn pty_session_chain_flow() {
             assert_eq!(entry.status, "running", "newly created session must be running");
             assert_eq!(
                 entry.config_id.as_deref(),
-                Some(TEST_CONFIG_ID),
-                "config_id 由调用方透传（内核不读配置表）"
+                Some(config_id.as_str()),
+                "config_id 透传（插件登记域会话记录标真源配置）"
             );
         }
         other => panic!("expected SessionControl(SessionList) response, got: {other:?}"),
     }
 
-    // ==================== 场景 2：新路由订阅输出 + 写入 echo → 收到输出 ====================
-    // 终端 I/O 走新路由 /ws/terminal/session/{id}（简化控制帧：auth → subscribe →
-    // input，输出为 TB v2 二进制帧）。旧多会话 /ws/terminal 自订阅通道已删除
+    // ==================== 场景 2：WS 终端输出通道（P1-b 记账受损面，P3 恢复） ====================
+    //
+    // 移动端 `/ws/terminal/session/{id}` 输出订阅读宿主 `GlobalOutputManager`，而
+    // P1-b 起生产会话（插件创建）的输出在宿主 PTY 引擎 `PtyRing`——移动端输出面
+    // 受损（受损清单：M3，P3 形态 B 直读 PtyRing 恢复）。此处锁定受损形态：
+    // JWT 认证通过后会话不存在于输出管理器 → error(SESSION_NOT_FOUND) + 关闭。
     let (mut sink_t, mut stream_t, _addr_t) = connect_ws(port, &format!("/ws/terminal/session/{session_id}")).await;
 
-    // 2a. 首消息 JWT 认证 → auth_ok
+    // 2a. 首消息 JWT 认证 → 会话存在性校验（异步，GlobalOutputManager）失败 →
+    // error(SESSION_NOT_FOUND) + 关闭（P3 形态 B 前移动端终端不可用）
     sink_t
         .send(WsMsg::Text(format!(r#"{{"type":"auth","token":"{token}"}}"#).into()))
         .await
         .expect("send auth frame failed");
-    let auth_ok = recv_frame_json(&mut stream_t).await;
-    assert_eq!(auth_ok["type"], "auth_ok", "session route must auth with JWT");
-
-    // 2b. subscribe → subscribe_ok（订阅即连接：快照回放 + 实时推送）
-    sink_t
-        .send(WsMsg::Text(r#"{"type":"subscribe"}"#.into()))
-        .await
-        .expect("send subscribe frame failed");
-    let sub_ok = recv_frame_json(&mut stream_t).await;
-    assert_eq!(sub_ok["type"], "subscribe_ok", "session route must subscribe");
-
-    // 2c. 写入 echo 命令（input data 为 UTF-8 → base64，与 handle_session_input 编码约定一致）
-    let marker = format!("BEDCODE_PTY_ECHO_{session_id}");
-    let line_end = if cfg!(target_os = "windows") { "\r\n" } else { "\n" };
-    let input_b64 = base64::engine::general_purpose::STANDARD.encode(format!("echo {marker}{line_end}").as_bytes());
-    sink_t
-        .send(WsMsg::Text(
-            format!(r#"{{"type":"input","data":"{input_b64}"}}"#).into(),
-        ))
-        .await
-        .expect("send input frame failed");
-
-    // 2d. 轮询 + 宽容超时：PowerShell 启动与回显时序非确定，断言「最终包含」而非即时到达
-    let collected = collect_terminal_output_until(&mut stream_t, &marker, Duration::from_secs(10)).await;
-    assert!(
-        collected.contains(&marker),
-        "PTY echo output not observed within 10s; collected so far: {collected:?} \
-         （空输出 = 环境问题（powershell 未启动/未读到输出）；有启动输出无 echo = 输入链路缺陷）"
+    let auth_resp = recv_frame_json(&mut stream_t).await;
+    assert_eq!(
+        auth_resp["type"], "error",
+        "P1-b 受损面：插件会话输出订阅应报 error（P3 形态 B 恢复）, got: {auth_resp}"
     );
-
-    // 终端通道使命完成，断开
-    let _ = sink_t.send(WsMsg::Close(None)).await;
-    let _ = tokio::time::timeout(Duration::from_secs(2), stream_t.next()).await;
+    assert_eq!(
+        auth_resp["code"], "SESSION_NOT_FOUND",
+        "受损面错误码应明确, got: {auth_resp}"
+    );
     drop(sink_t);
     drop(stream_t);
 
-    // ==================== 场景 3：关闭会话 → 状态一致 ====================
+    // ==================== 场景 3：停止插件会话 → 状态一致（P1-b 插件背书） ====================
 
-    // 3a. StopSession 响应回显 session_id（kill_session 已 await，响应即状态已落库）
+    // 3a. StopSession 经宿主窄转发层 → 插件 session-close（登记 Stopping +
+    // host-pty.kill，终态由 pty:exit 事件收尾）→ 响应回显 session_id
     let resp = send_control_and_wait(
         &mut sink_a,
         &mut stream_a,
@@ -600,28 +636,34 @@ async fn pty_session_chain_flow() {
         other => panic!("expected SessionControl(StopSession) response, got: {other:?}"),
     }
 
-    // 3b. 后续操作状态一致：ListSessions 中该会话报告 stopped（而非消失或仍 running）
-    let resp = send_control_and_wait(&mut sink_a, &mut stream_a, SessionControlAction::ListSessions, None).await;
-    match resp {
-        Message::SessionControl {
-            payload:
-                SessionControlPayload {
-                    action: SessionControlAction::SessionList { sessions },
-                },
-            ..
-        } => {
-            let entry = sessions
-                .iter()
-                .find(|s| s.id == session_id)
-                .expect("stopped session must still be listed");
-            assert_eq!(
-                entry.status, "stopped",
-                "session must report stopped after StopSession, got: {}",
-                entry.status
-            );
+    // 3b. pty:exit 事件驱动终态（异步收尾）→ 有限轮询重发 ListSessions 直到
+    // 该会话报告 stopped（而非消失或仍 running）
+    let mut entry_seen = false;
+    for _ in 0..20 {
+        let resp = send_control_and_wait(&mut sink_a, &mut stream_a, SessionControlAction::ListSessions, None).await;
+        match resp {
+            Message::SessionControl {
+                payload:
+                    SessionControlPayload {
+                        action: SessionControlAction::SessionList { sessions },
+                    },
+                ..
+            } => {
+                if let Some(entry) = sessions.iter().find(|s| s.id == session_id) {
+                    if entry.status == "stopped" {
+                        entry_seen = true;
+                        break;
+                    }
+                }
+            }
+            other => panic!("expected SessionControl(SessionList) response, got: {other:?}"),
         }
-        other => panic!("expected SessionControl(SessionList) response, got: {other:?}"),
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
+    assert!(
+        entry_seen,
+        "session must report stopped after StopSession (pty:exit 终态异步收尾)"
+    );
 
     // ==================== 场景 4：未认证客户端创建会话被拒 ====================
 
@@ -652,71 +694,14 @@ async fn pty_session_chain_flow() {
         other => panic!("expected Error(AUTH_REQUIRED) response, got: {other:?}"),
     }
 
-    // ==================== 场景 5：restart 后输出链路仍可用（回归：重启丢输出管理器注册） ====================
-    // 前端「输入新任务」→ 重启：`remove_session` 会注销 GlobalOutputManager，
-    // 重建同 id 会话必须重新注册输出管理器，否则订阅返回 error(SESSION_NOT_FOUND)、
-    // PTY 输出被 on_output 以 "session not found" 丢弃（桌面端打开终端窗口空白）。
-    // 票 13：v21 起内核不再提供 `restart_session` 便捷方法——插件侧的 restart 编排就是
-    // 「remove + 同 id 重建」，这里按同一步骤驱动内核执行端，回归断言不变。
-    manager
-        .remove_session_with_source(&session_id, None)
-        .await
-        .expect("remove before restart must succeed");
-    let restarted_id = manager
-        .create_session_from_spec(
-            test_launch_config(),
-            TEST_CONFIG_ID.to_string(),
-            None,
-            true,
-            Some(&session_id),
-            None,
-        )
-        .await
-        .expect("restart (remove + create same id) must succeed");
-    assert_eq!(restarted_id, session_id, "restart must keep same session id");
+    // ==================== 场景 5：重启后输出链路（P1-b 记账） ====================
+//
+// 插件会话的 restart（remove + 同 id 重建 → host-pty.spawn）全链由 lib 侧 e2e
+// （test_session_actions_closed_loop）覆盖；移动端输出通道的重启后恢复随 P3 形态 B
+// （宿主直读 PtyRing）一并恢复，本场景不再重复内核直连回归（内核路径是 P1-b 后
+// 仅测试存在的载体，其 restart 输出管理器注册是内核内部实现细节）。
 
-    // 重启后重新订阅终端通道：auth → subscribe → subscribe_ok
-    let (mut sink_r, mut stream_r, _addr_r) = connect_ws(port, &format!("/ws/terminal/session/{session_id}")).await;
-    sink_r
-        .send(WsMsg::Text(format!(r#"{{"type":"auth","token":"{token}"}}"#).into()))
-        .await
-        .expect("send auth frame failed");
-    let auth_ok = recv_frame_json(&mut stream_r).await;
-    assert_eq!(auth_ok["type"], "auth_ok", "restarted session route must auth with JWT");
-
-    sink_r
-        .send(WsMsg::Text(r#"{"type":"subscribe"}"#.into()))
-        .await
-        .expect("send subscribe frame failed");
-    // subscribe_ok 或 error(SESSION_NOT_FOUND)：修复前必现后者，回归断言不许出现
-    let sub_resp = recv_frame_json(&mut stream_r).await;
-    assert_eq!(
-        sub_resp["type"], "subscribe_ok",
-        "restarted session must subscribe (regression: SESSION_NOT_FOUND = output manager \
-         not re-registered), got: {sub_resp}"
-    );
-
-    // 写入 echo → 轮询收到回显（输出链路真实往返）
-    let marker2 = format!("BEDCODE_PTY_RESTART_ECHO_{session_id}");
-    let input_b64 = base64::engine::general_purpose::STANDARD.encode(format!("echo {marker2}{line_end}").as_bytes());
-    sink_r
-        .send(WsMsg::Text(
-            format!(r#"{{"type":"input","data":"{input_b64}"}}"#).into(),
-        ))
-        .await
-        .expect("send input frame failed");
-    let collected2 = collect_terminal_output_until(&mut stream_r, &marker2, Duration::from_secs(10)).await;
-    assert!(
-        collected2.contains(&marker2),
-        "restarted session PTY echo not observed within 10s; collected: {collected2:?}"
-    );
-
-    let _ = sink_r.send(WsMsg::Close(None)).await;
-    let _ = tokio::time::timeout(Duration::from_secs(2), stream_r.next()).await;
-    drop(sink_r);
-    drop(stream_r);
-
-    // ==================== 收尾：显式关闭连接 + 优雅停机 + 清理 ====================
+// ==================== 收尾：显式关闭连接 + 优雅停机 + 清理 ====================
 
     // 先发 Close 让服务端 actor 走 stopping()（注销注册表 + 取消订阅），再优雅停机，
     // 避免 stop(true) 等待长连接（与 02 相同策略）

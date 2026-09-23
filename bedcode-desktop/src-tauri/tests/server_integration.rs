@@ -72,7 +72,7 @@ async fn body_json(resp: reqwest::Response) -> serde_json::Value {
 #[tokio::test]
 async fn http_contract_and_server_lifecycle() {
     // 测试日志输出到 harness（失败时可查链路）；重复 init 静默跳过
-    if tracing_subscriber::fmt().with_test_writer().try_init().is_err() {
+    if tracing_subscriber::fmt().with_test_writer().with_max_level(tracing::Level::DEBUG).try_init().is_err() {
         tracing::debug!("tracing subscriber already initialized");
     }
 

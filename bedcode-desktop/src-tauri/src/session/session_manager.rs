@@ -401,9 +401,12 @@ impl SessionManager {
         }
 
         // 发布同步事件：会话创建（start=false 时与 create_session_no_start 同形状）
+        // 内核路径不携带会话概要（`session: None`）→ 处理器回查内核登记；
+        // P1-b 起插件真源经 `SyncEvent::SessionCreated` 自携带概要。
         self.publish_sync_event(DesktopSyncEvent::SessionCreated {
             session_id: session_id.clone(),
             source_device,
+            session: None,
         })
         .await;
 
@@ -453,11 +456,13 @@ impl SessionManager {
         updated_info.started_at = Some(Utc::now());
         self.session_info.insert(updated_info).await;
 
-        // 发布同步事件：会话状态变化（通知移动端）
+        // 发布同步事件：会话状态变化（通知移动端）；内核路径不携带会话名 →
+        // 处理器回查内核登记（P1-b 起插件真源经 SyncEvent 自携带）
         self.publish_sync_event(DesktopSyncEvent::SessionStatusChanged {
             session_id: session_id.to_string(),
             old_status,
             new_status: SessionStatus::Running,
+            session_name: None,
         })
         .await;
 
@@ -517,6 +522,7 @@ impl SessionManager {
                         let _ = sender.send(DesktopSyncEvent::SessionStopped {
                             session_id: sid.clone(),
                             source_device: None,
+                            session_name: None,
                         });
                     }
 
@@ -811,10 +817,11 @@ impl SessionManager {
             session_name,
         });
 
-        // 发布同步事件：会话停止
+        // 发布同步事件：会话停止（P1-b 起插件真源经 SyncEvent 自携带会话名）
         self.publish_sync_event(DesktopSyncEvent::SessionStopped {
             session_id: session_id.to_string(),
             source_device: source_device.clone(),
+            session_name: None,
         })
         .await;
 
@@ -867,10 +874,11 @@ impl SessionManager {
         // create-with-spec 重新登记属主
         self.session_owners.write().await.remove(session_id);
 
-        // 发布同步事件：会话删除
+        // 发布同步事件：会话删除（P1-b 起插件真源经 SyncEvent 自携带会话名）
         self.publish_sync_event(DesktopSyncEvent::SessionRemoved {
             session_id: session_id.to_string(),
             source_device,
+            session_name: None,
         })
         .await;
 

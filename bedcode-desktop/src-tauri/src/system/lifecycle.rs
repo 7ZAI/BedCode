@@ -317,24 +317,32 @@ pub fn register_core_lifecycle_hooks() {
 }
 
 /// 注册窗口关闭请求钩子
+/// 检查是否有存活 PTY，阻止意外关闭。
 ///
-/// 检查是否有运行中的会话，阻止意外关闭。
+/// 裁决（2026-09-23 用户定案，会话引擎下沉 P1-b）：判据从「`list_sessions()`
+/// 里有 Running 会话」改为**引擎事实「存活 PTY 计数 > 0」**——功能等价（有会话
+/// 在跑 ⇔ 有活 PTY），且不引入会话语义，避免窗口关闭路径被插件异步调用阻塞
+/// （关闭请求是同步钩子，判据必须在无 await 路径内完成）。
+///
+/// 两路计数合取：业务线 `SessionManager` 注册表（P1-b 后生产为空，仅测试）与
+/// 引擎 `host-pty` 注册表（P1-b 起业务会话也走这——插件已停用 / 超时 / trap 时
+/// 仍在册句柄仍被计数，不依赖插件侧异步回调）。
 pub fn register_window_close_hooks() {
     let registry = lifecycle_registry();
 
     registry.on_window_close_requested("session-guard", 10, || async {
         let ctx = crate::system::app_context::AppContext::global();
         let sm = ctx.session_manager();
-        let sessions = sm.list_sessions().await;
-        let has_running = sessions.iter().any(|s| {
-            matches!(
-                s.status,
-                crate::enums::SessionStatus::Running | crate::enums::SessionStatus::Starting
-            )
-        });
+        let kernel_live = sm.live_pty_count().await > 0;
+        let engine_live = crate::wasm_core::host_api::pty::live_count() > 0;
+        let has_running = kernel_live || engine_live;
 
         if has_running {
-            tracing::warn!("Window close prevented: running sessions exist");
+            tracing::warn!(
+                kernel_live,
+                engine_live,
+                "Window close prevented: live PTYs exist"
+            );
         }
         !has_running
     });

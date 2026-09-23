@@ -182,7 +182,7 @@ fn make_test_token(device_id: &str) -> String {
 /// 4. 会话停止 → session_stopped 帧推送
 #[tokio::test]
 async fn session_terminal_route_full_flow() {
-    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+    let _ = tracing_subscriber::fmt().with_test_writer().with_max_level(tracing::Level::DEBUG).try_init();
     let port = pick_free_port();
     init_test_app_context().await;
     let (_server_handle, _server_task) = spawn_test_server(port).await.expect("start test server failed");

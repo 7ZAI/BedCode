@@ -281,7 +281,7 @@ fn sign_message(signing_key: &SigningKey, message: &str) -> String {
 #[tokio::test]
 async fn http_biometric_auth_contract() {
     // 测试日志输出到 harness；重复 init 静默跳过
-    if tracing_subscriber::fmt().with_test_writer().try_init().is_err() {
+    if tracing_subscriber::fmt().with_test_writer().with_max_level(tracing::Level::DEBUG).try_init().is_err() {
         tracing::debug!("tracing subscriber already initialized");
     }
 

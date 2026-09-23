@@ -59,28 +59,32 @@ impl SyncEventHandler {
             DesktopSyncEvent::SessionCreated {
                 session_id,
                 source_device,
+                session,
             } => {
-                self.handle_session_created(&session_id, source_device).await;
+                self.handle_session_created(&session_id, source_device, session).await;
             }
             DesktopSyncEvent::SessionStatusChanged {
                 session_id,
                 old_status,
                 new_status,
+                session_name,
             } => {
-                self.handle_session_status_changed(&session_id, old_status, new_status)
+                self.handle_session_status_changed(&session_id, old_status, new_status, session_name)
                     .await;
             }
             DesktopSyncEvent::SessionStopped {
                 session_id,
                 source_device,
+                session_name,
             } => {
-                self.handle_session_stopped(&session_id, source_device).await;
+                self.handle_session_stopped(&session_id, source_device, session_name).await;
             }
             DesktopSyncEvent::SessionRemoved {
                 session_id,
                 source_device,
+                session_name,
             } => {
-                self.handle_session_removed(&session_id, source_device).await;
+                self.handle_session_removed(&session_id, source_device, session_name).await;
             }
             DesktopSyncEvent::TaskStatusChanged {
                 session_id,
@@ -125,26 +129,38 @@ impl SyncEventHandler {
     }
 
     /// 处理会话创建事件
-    async fn handle_session_created(&self, session_id: &str, source_device: Option<String>) {
-        // 获取会话信息
-        let Some(session_info) = self.session_manager.get_session(session_id).await else {
-            tracing::warn!(session_id = %session_id, "[SyncEventHandler] Session not found");
-            return;
-        };
+    async fn handle_session_created(
+        &self,
+        session_id: &str,
+        source_device: Option<String>,
+        carried: Option<crate::enums::summary::SessionSummary>,
+    ) {
+        // P1-b 起会话真源在插件：插件事件自携带会话概要，宿主不再回查内核
+        // （内核已无会话可查）。内核路径（测试 / 旧生产者）仍回查内核登记。
+        let session = match carried {
+            Some(s) => s,
+            None => {
+                let Some(session_info) = self.session_manager.get_session(session_id).await else {
+                    tracing::warn!(session_id = %session_id, "[SyncEventHandler] Session not found");
+                    return;
+                };
 
-        // 构建 SessionSummary（票 12：任务字段取自注解槽，不再来自会话记录）
-        let annotations = self.session_manager.session_annotations(session_id).await;
-        let (task_status, task_reason, _, _) = crate::session::task_fields_from_slot(&annotations);
-        let session = SessionSummary {
-            id: session_info.id,
-            name: session_info.name,
-            status: format!("{:?}", session_info.status).to_lowercase(),
-            created_at: session_info.created_at.to_rfc3339(),
-            started_at: session_info.started_at.map(|t| t.to_rfc3339()),
-            session_type: Some(format!("{:?}", session_info.session_type).to_lowercase()),
-            config_id: Some(session_info.config_id),
-            task_status,
-            task_reason,
+                // 构建 SessionSummary（票 12：任务字段取自注解槽，不再来自会话记录）
+                let annotations = self.session_manager.session_annotations(session_id).await;
+                let (task_status, task_reason, _, _) =
+                    crate::session::task_fields_from_slot(&annotations);
+                SessionSummary {
+                    id: session_info.id,
+                    name: session_info.name,
+                    status: format!("{:?}", session_info.status).to_lowercase(),
+                    created_at: session_info.created_at.to_rfc3339(),
+                    started_at: session_info.started_at.map(|t| t.to_rfc3339()),
+                    session_type: Some(format!("{:?}", session_info.session_type).to_lowercase()),
+                    config_id: Some(session_info.config_id),
+                    task_status,
+                    task_reason,
+                }
+            }
         };
 
         // 提取 source_device 值
@@ -166,14 +182,18 @@ impl SyncEventHandler {
         session_id: &str,
         old_status: crate::enums::SessionStatus,
         new_status: crate::enums::SessionStatus,
+        carried_name: Option<String>,
     ) {
-        // 获取会话名称
-        let session_name = self
-            .session_manager
-            .get_session(session_id)
-            .await
-            .map(|s| s.name)
-            .unwrap_or_default();
+        // 会话名真源在插件（P1-b 起事件自携带）；内核路径回查登记
+        let session_name = match carried_name {
+            Some(name) => name,
+            None => self
+                .session_manager
+                .get_session(session_id)
+                .await
+                .map(|s| s.name)
+                .unwrap_or_default(),
+        };
 
         // 构建同步载荷
         let payload = SyncPayload::SessionStatusChanged {
@@ -188,14 +208,22 @@ impl SyncEventHandler {
     }
 
     /// 处理会话停止事件
-    async fn handle_session_stopped(&self, session_id: &str, source_device: Option<String>) {
-        // 获取会话名称
-        let session_name = self
-            .session_manager
-            .get_session(session_id)
-            .await
-            .map(|s| s.name)
-            .unwrap_or_default();
+    async fn handle_session_stopped(
+        &self,
+        session_id: &str,
+        source_device: Option<String>,
+        carried_name: Option<String>,
+    ) {
+        // 会话名真源在插件（P1-b 起事件自携带）；内核路径回查登记
+        let session_name = match carried_name {
+            Some(name) => name,
+            None => self
+                .session_manager
+                .get_session(session_id)
+                .await
+                .map(|s| s.name)
+                .unwrap_or_default(),
+        };
 
         // 构建同步载荷
         let payload = SyncPayload::SessionStopped {
@@ -208,14 +236,20 @@ impl SyncEventHandler {
     }
 
     /// 处理会话删除事件
-    async fn handle_session_removed(&self, session_id: &str, source_device: Option<String>) {
-        // 注意：此时会话可能已从 SessionManager 移除，session_name 可能为空
-        // 调用方应在移除前获取名称
+    async fn handle_session_removed(
+        &self,
+        session_id: &str,
+        source_device: Option<String>,
+        carried_name: Option<String>,
+    ) {
+        // 内核路径此时会话可能已从 SessionManager 移除，session_name 可能为空
+        // （调用方应在移除前获取名称）；P1-b 起插件真源随事件携带名称。
+        let session_name = carried_name.unwrap_or_default();
 
         // 构建同步载荷
         let payload = SyncPayload::SessionRemoved {
             session_id: session_id.to_string(),
-            session_name: String::new(), // 已删除，名称不可用
+            session_name,
         };
 
         // 广播消息
@@ -430,6 +464,7 @@ mod tests {
             .process_event(DesktopSyncEvent::SessionCreated {
                 session_id: sid.clone(),
                 source_device: Some("d1".to_string()),
+                session: None, // 内核路径：处理器回查内核登记
             })
             .await;
         let calls = fake.take_calls();
@@ -451,6 +486,7 @@ mod tests {
             .process_event(DesktopSyncEvent::SessionStopped {
                 session_id: sid.clone(),
                 source_device: Some("d2".to_string()),
+                session_name: None, // 内核路径：处理器回查内核登记
             })
             .await;
         let calls = fake.take_calls();
@@ -471,6 +507,7 @@ mod tests {
             .process_event(DesktopSyncEvent::SessionRemoved {
                 session_id: sid.clone(),
                 source_device: Some("d3".to_string()),
+                session_name: None, // 内核路径：处理器回查内核登记
             })
             .await;
         let calls = fake.take_calls();
@@ -491,6 +528,7 @@ mod tests {
                 session_id: "s-any".to_string(),
                 old_status: crate::enums::SessionStatus::Running,
                 new_status: crate::enums::SessionStatus::Stopped,
+                session_name: None, // 内核路径：处理器回查内核登记
             })
             .await;
         let calls = fake.take_calls();
@@ -559,6 +597,7 @@ mod tests {
             .process_event(DesktopSyncEvent::SessionCreated {
                 session_id: "ghost".to_string(),
                 source_device: None,
+                session: None,
             })
             .await;
         assert!(fake.take_calls().is_empty(), "会话不存在不应广播");
@@ -575,6 +614,7 @@ mod tests {
             .process_event(DesktopSyncEvent::SessionCreated {
                 session_id: sid.clone(),
                 source_device: None,
+                session: None,
             })
             .await;
 
@@ -615,6 +655,7 @@ mod tests {
             .process_event(DesktopSyncEvent::SessionCreated {
                 session_id: sid.clone(),
                 source_device: None,
+                session: None,
             })
             .await;
 

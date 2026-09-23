@@ -136,7 +136,18 @@ pub(crate) fn api_call(
 
     // 4. 发布请求（bus_publish 内含 JSON 校验 + 命名空间/ bedcode.api.* 门禁校验，
     //    未声明目标在此被拒，错误直接透传给调用方；失败须回收刚注册的回复订阅）
-    if let Err(e) = bus::bus_publish(host_ctx, caller_id, request_topic, payload_json) {
+    //
+    //    **必须在 ambient 多线程上下文内执行**（2026-09-23 P1-b 补）：同步互调若
+    //    在 actix current_thread worker 上直接发布，`MessageBus::publish` 的
+    //    `tokio::spawn`（请求消费任务 / 后续回复投递）会落入该 current_thread
+    //    runtime——其唯一调度线程正被本互调同步阻塞 → 消费任务永不执行 → 超时。
+    //    与 `notify_connection_touch`（async fire-and-forget）同根因，此处改为发布也
+    //    经 `block_on_async` 搬到 ambient 多线程上下文：spawn 落在 ambient 线程池，
+    //    回复自由投递。
+    let publish_result = block_on_async(async move {
+        bus::bus_publish(host_ctx, caller_id, request_topic, payload_json)
+    });
+    if let Err(e) = publish_result {
         cleanup_reply_subscription(&bus, caller_id, &reply_topic);
         return Err(e);
     }

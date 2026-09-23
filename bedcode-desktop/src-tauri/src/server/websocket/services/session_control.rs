@@ -27,10 +27,12 @@ pub async fn handle_control(
     addr: SocketAddr,
     device_name: Option<String>,
 ) -> Result<Option<Message>> {
+    // P1-b 起会话真源在插件登记域：所有动作经宿主窄转发层调插件互调 api
+    let host_ctx = || crate::system::app_context::AppContext::global().plugin_host().wasm_host_ctx();
     match action {
         SessionControlAction::ListSessions => {
-            // 票 12：任务字段取自注解槽（内核记录已无任务语义字段），形状不变
-            let sessions = crate::utils::session_gateway::list_views(session_manager).await;
+            // 票 12：任务字段取自注解槽；P1-b 起真源在插件登记域
+            let sessions = crate::utils::session_gateway::list_views(host_ctx()).await?;
 
             let all_sessions: Vec<SessionSummary> = sessions
                 .into_iter()
@@ -90,7 +92,7 @@ pub async fn handle_control(
         }
 
         SessionControlAction::StopSession { session_id } => {
-            crate::utils::session_gateway::stop(session_manager, &session_id, device_name.clone()).await?;
+            crate::utils::session_gateway::stop(host_ctx(), &session_id, device_name.clone()).await?;
 
             // 取消该客户端对此会话的输出订阅
             crate::utils::session_gateway::unsubscribe_output(&session_id, &addr.to_string()).await;
@@ -108,7 +110,7 @@ pub async fn handle_control(
         }
 
         SessionControlAction::RemoveSession { session_id } => {
-            crate::utils::session_gateway::remove(session_manager, &session_id, device_name.clone()).await?;
+            crate::utils::session_gateway::remove(host_ctx(), &session_id, device_name.clone()).await?;
 
             // 取消该客户端对此会话的输出订阅
             crate::utils::session_gateway::unsubscribe_output(&session_id, &addr.to_string()).await;
@@ -147,15 +149,8 @@ pub async fn handle_control(
                     RendererSource::Desktop
                 }
             };
-            if let Err(e) = crate::utils::session_gateway::resize_from_signal(
-                session_manager,
-                &session_id,
-                cols,
-                rows,
-                source,
-                force,
-            )
-            .await
+            if let Err(e) = crate::utils::session_gateway::resize(host_ctx(), &session_id, cols, rows, source, force)
+                .await
             {
                 tracing::warn!(error = %e, session_id = %session_id, "Failed to resize PTY session");
             }

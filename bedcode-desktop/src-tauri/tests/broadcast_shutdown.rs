@@ -481,6 +481,9 @@ async fn broadcast_and_shutdown_flow() {
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
     let subscriber = tracing_subscriber::registry()
+        // 全局级别上限 DEBUG：wasmtime/cranelift 的 TRACE 逐指令编译日志
+        // 会撑爆 stdout 捕获缓冲（2026-09-23 实测 2.2GB+，见交接文档）
+        .with(tracing_subscriber::filter::LevelFilter::DEBUG)
         .with(tracing_subscriber::fmt::layer().with_test_writer())
         .with(ErrorCounter);
     if subscriber.try_init().is_err() {

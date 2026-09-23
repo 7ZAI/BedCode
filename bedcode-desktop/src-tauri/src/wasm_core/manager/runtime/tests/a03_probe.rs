@@ -153,6 +153,30 @@ fn a03_p1b_wasip3_artifact_full_closed_loop() {
         let _ = std::fs::remove_dir_all(&isolate);
         ctx.set_plugin_db_root(Some(isolate));
     }
+    // 会话登记域建表（P1-b 起阻断激活）需要 storage；会话面 host-pty 需要
+    // pty:spawn/pty:io（与 manifest 权限表同源）
+    host_ctx.permission.grant_permissions(
+        "com.bedcode.terminal-session",
+        &[
+            "auth".to_string(),
+            "broadcast".to_string(),
+            "fs:read".to_string(),
+            "fs:write".to_string(),
+            "peer".to_string(),
+            "pty:spawn".to_string(),
+            "pty:io".to_string(),
+            "session:read".to_string(),
+            "session:write".to_string(),
+            "storage".to_string(),
+            "task:run".to_string(),
+            "terminal:input".to_string(),
+            "terminal:observe".to_string(),
+            "timer:schedule".to_string(),
+            "ui:input".to_string(),
+            "ui:settings".to_string(),
+            "ui:sidebar".to_string(),
+        ],
+    );
     let mut plugin = wasm_runtime
         .load_plugin_from_file(
             &wasm_path,

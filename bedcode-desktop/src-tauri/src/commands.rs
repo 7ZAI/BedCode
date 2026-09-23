@@ -11,7 +11,7 @@ use crate::db::Database;
 use crate::server::core::link_crypto::{self, LinkCryptoConfig};
 use crate::server::core::metrics::ServerMetrics;
 use crate::server::core::supervisor::{ServerStatusInfo, ServerSupervisor};
-use crate::session::{ResizeOutcome, SessionManager};
+use crate::session::{ResizeOutcome};
 use crate::system::config::{AppConfig, NetworkConfig};
 use crate::system::constants::{TERMINAL_BG_EXTENSIONS, TERMINAL_BG_FILE_PREFIX, TERMINAL_BG_MAX_BYTES};
 use crate::Result;
@@ -23,38 +23,36 @@ use tracing_subscriber::filter::EnvFilter;
 // ==================== Session Commands ====================
 
 // 宿主命令面**只保留终端渲染管道与引擎事实**（ADR 0022 裁剪线 + 终端红线）：
-// - `list_sessions` / `get_session`：引擎记录（+ 注解槽任务字段），终端窗口与
-//   通知种子化的读取面
-// - `resize_session`：尺寸裁决（插件裁决 + 内核登记/执行，保留宿主降级执行器）
+// - `list_sessions` / `get_session`：会话登记域视图（P1-b 起真源在插件），终端
+//   窗口与通知种子化的读取面
+// - `resize_session`：尺寸裁决 + 执行（P1-b 起插件登记域 + host-pty，无内核副本）
 //
 // 会话**编排**命令（`start_session` / `create_session_no_start` /
 // `start_existing_session` / `kill_session` / `delete_session` / `restart_session`）
 // 已按 2026-09-21 命令面收敛注销（`.scratch/2026-09-21-host-rust-residue/issues/05`）：
 // 创建/停止/移除/重启的业务面归 `com.bedcode.terminal-session` 插件命令面
-// （`session.create` / `session.close` / `session.action.*`），宿主只经
-// `host-session` 原语执行（见 `plugin/manager/wasm_runtime/host_impl/session.rs`）。
-// 两阶段启动（建而不启 + 后续 `start_existing_session`）随之退役——v21 起唯一
-// 生产者（会话中心插件与移动端 HTTP/WS 线）一律 `start = true`。
+// （`session.create` / `session.close` / `session.action.*`），宿主只经插件互调
+// api 转发（见 `utils/session_gateway.rs`）。两阶段启动已退役——生产路径
+// 一律 `start = true`。
 
-/// 列出会话（对外视图：引擎记录 + 注解槽任务字段，票 12）
+/// 列出会话（对外视图：插件登记域记录 + 注解槽任务字段，票 12）
 ///
-/// 返回类型 `SessionInfoView` 的 JSON 形状与迁移前 `SessionInfo` 逐字段一致
-/// （记录字段 + `taskStatus` / `taskReason` / `taskUpdatedAt` / `taskQuestions`，
-/// 缺省不出现）——前端契约不变，变的是取值来源（注解槽）。
+/// P1-b 起会话真源在 `com.bedcode.terminal-session` 插件（宿主无登记），
+/// 插件未激活 → 显性报错。返回 `SessionInfoView` 形状与迁移前逐字段一致。
 #[tauri::command]
 pub async fn list_sessions(
-    session_manager: State<'_, Arc<SessionManager>>,
+    host: State<'_, Arc<crate::wasm_core::PluginHost>>,
 ) -> Result<Vec<crate::session::SessionInfoView>> {
-    Ok(crate::utils::session_gateway::list_views(&session_manager).await)
+    Ok(crate::utils::session_gateway::list_views(host.wasm_host_ctx()).await?)
 }
 
 /// 获取单个会话（对外视图，同 `list_sessions`）
 #[tauri::command]
 pub async fn get_session(
-    session_manager: State<'_, Arc<SessionManager>>,
+    host: State<'_, Arc<crate::wasm_core::PluginHost>>,
     session_id: String,
 ) -> Result<Option<crate::session::SessionInfoView>> {
-    Ok(crate::utils::session_gateway::view(&session_manager, &session_id).await)
+    Ok(crate::utils::session_gateway::view(host.wasm_host_ctx(), &session_id).await?)
 }
 
 /// 调整会话终端大小（桌面本地路径，正统渲染端身份恒为 Desktop）
@@ -62,25 +60,23 @@ pub async fn get_session(
 /// force 置位表示覆盖确认已通过（前端弹窗确认后重发）；返回 ResizeOutcome
 /// 供前端判断是否需要弹窗确认（NeedsConfirmation 时未应用任何改动）。
 ///
-/// 票 10：**裁决规则**下沉会话中心插件（正统端判定 + 覆盖确认策略在插件侧），
-/// 内核只提供登记与执行；插件不可用时降级内核执行器（含内核裁决分支），
-/// 对外行为（返回形状与 NeedsConfirmation 语义）不变。
+/// P1-b：裁决与登记都在插件登记域（宿主无内核裁决副本），不再有插件不可用
+/// 时的内核降级轨——插件必需，失败显性报错。
 #[tauri::command]
 pub async fn resize_session(
     host: State<'_, Arc<crate::wasm_core::PluginHost>>,
-    session_manager: State<'_, Arc<SessionManager>>,
     session_id: String,
     cols: u16,
     rows: u16,
     force: Option<bool>,
 ) -> Result<ResizeOutcome> {
     let force = force.unwrap_or(false);
-    crate::utils::session_gateway::resize_desktop(
+    crate::utils::session_gateway::resize(
         host.wasm_host_ctx(),
-        &session_manager,
         &session_id,
         cols,
         rows,
+        crate::session::RendererSource::Desktop,
         force,
     )
     .await
@@ -90,20 +86,20 @@ pub async fn resize_session(
 
 #[tauri::command]
 pub async fn write_to_session(
-    session_manager: State<'_, Arc<SessionManager>>,
+    host: State<'_, Arc<crate::wasm_core::PluginHost>>,
     session_id: String,
     data: String,
 ) -> Result<()> {
-    crate::utils::session_gateway::input(&session_manager, &session_id, &data).await
+    crate::utils::session_gateway::input(host.wasm_host_ctx(), &session_id, &data).await
 }
 
 #[tauri::command]
 pub async fn send_special_key(
-    session_manager: State<'_, Arc<SessionManager>>,
+    host: State<'_, Arc<crate::wasm_core::PluginHost>>,
     session_id: String,
     key: String,
 ) -> Result<()> {
-    crate::utils::session_gateway::special_key(&session_manager, &session_id, &key).await
+    crate::utils::session_gateway::special_key(host.wasm_host_ctx(), &session_id, &key).await
 }
 
 // ==================== Shared System Commands ====================

@@ -20,26 +20,31 @@ use tauri::Emitter;
 /// GET /api/sessions
 pub async fn list_sessions(_req: HttpRequest) -> HttpResponse {
     let ctx = AppContext::global();
-    let session_manager = ctx.session_manager();
 
-    // 票 12：任务字段取自注解槽（内核记录已无任务语义字段），形状不变
-    let sessions: Vec<SessionItem> = crate::utils::session_gateway::list_views(session_manager)
-        .await
-        .into_iter()
-        .map(|s| SessionItem {
-            id: s.info.id,
-            name: s.info.name,
-            status: serde_json::to_value(&s.info.status)
-                .and_then(|v| serde_json::from_value::<String>(v))
-                .unwrap_or_else(|_| format!("{:?}", s.info.status)),
-            created_at: s.info.created_at.to_rfc3339(),
-            started_at: s.info.started_at.map(|t| t.to_rfc3339()),
-            session_type: Some("pty".to_string()),
-            config_id: Some(s.info.config_id),
-            task_status: s.task_status,
-            task_reason: s.task_reason,
-        })
-        .collect();
+    // P1-b：会话真源在插件登记域（宿主无会话登记）；任务字段随视图透传
+    let sessions: Vec<SessionItem> =
+        match crate::utils::session_gateway::list_views(ctx.plugin_host().wasm_host_ctx()).await {
+            Ok(views) => views
+                .into_iter()
+                .map(|s| SessionItem {
+                    id: s.info.id,
+                    name: s.info.name,
+                    status: serde_json::to_value(&s.info.status)
+                        .and_then(|v| serde_json::from_value::<String>(v))
+                        .unwrap_or_else(|_| format!("{:?}", s.info.status)),
+                    created_at: s.info.created_at.to_rfc3339(),
+                    started_at: s.info.started_at.map(|t| t.to_rfc3339()),
+                    session_type: Some("pty".to_string()),
+                    config_id: Some(s.info.config_id),
+                    task_status: s.task_status,
+                    task_reason: s.task_reason,
+                })
+                .collect(),
+            Err(e) => {
+                tracing::warn!(error = %e, "GET /api/sessions: plugin surface unavailable");
+                return HttpResponse::Ok().json(ApiResponse::<()>::error(1002, &e.to_string()));
+            }
+        };
 
     let data = SessionListResponseData { sessions };
     HttpResponse::Ok().json(ApiResponse::ok_with_data(data))
@@ -100,12 +105,17 @@ pub async fn start_session(req: HttpRequest, body: web::Json<StartSessionRequest
 pub async fn stop_session(req: HttpRequest, path: web::Path<String>) -> HttpResponse {
     let session_id = path.into_inner();
     let ctx = AppContext::global();
-    let session_manager = ctx.session_manager();
 
     let device_name = get_claims_from_request(&req).and_then(|c| c.device_name);
     let source = device_name.clone().unwrap_or_else(|| "mobile".to_string());
 
-    match crate::utils::session_gateway::stop(session_manager, &session_id, device_name).await {
+    match crate::utils::session_gateway::stop(
+        ctx.plugin_host().wasm_host_ctx(),
+        &session_id,
+        device_name,
+    )
+    .await
+    {
         Ok(()) => {
             // 无头/测试上下文无 AppHandle：跳过前端刷新通知
             if let Some(handle) = ctx.app_handle() {
@@ -138,7 +148,6 @@ pub async fn resize_session(
 ) -> HttpResponse {
     let session_id = path.into_inner();
     let ctx = AppContext::global();
-    let session_manager = ctx.session_manager();
 
     // 来源身份：移动端 JWT 携带 device_name；缺失时回退 Desktop（不会静默覆盖，
     // 仍受 NeedConfirmation 门控）
@@ -154,8 +163,8 @@ pub async fn resize_session(
         }
     };
 
-    match crate::utils::session_gateway::resize_from_signal(
-        session_manager,
+    match crate::utils::session_gateway::resize(
+        ctx.plugin_host().wasm_host_ctx(),
         &session_id,
         body.cols,
         body.rows,
@@ -176,12 +185,17 @@ pub async fn resize_session(
 pub async fn remove_session(req: HttpRequest, path: web::Path<String>) -> HttpResponse {
     let session_id = path.into_inner();
     let ctx = AppContext::global();
-    let session_manager = ctx.session_manager();
 
     let device_name = get_claims_from_request(&req).and_then(|c| c.device_name);
     let source = device_name.clone().unwrap_or_else(|| "mobile".to_string());
 
-    match crate::utils::session_gateway::remove(session_manager, &session_id, device_name).await {
+    match crate::utils::session_gateway::remove(
+        ctx.plugin_host().wasm_host_ctx(),
+        &session_id,
+        device_name,
+    )
+    .await
+    {
         Ok(()) => {
             // 无头/测试上下文无 AppHandle：跳过前端刷新通知
             if let Some(handle) = ctx.app_handle() {
@@ -209,14 +223,13 @@ pub async fn remove_session(req: HttpRequest, path: web::Path<String>) -> HttpRe
 pub async fn send_session_input(path: web::Path<String>, body: web::Json<SessionInputRequest>) -> HttpResponse {
     let session_id = path.into_inner();
     let ctx = AppContext::global();
-    let session_manager = ctx.session_manager();
 
     let data = body.data.clone();
     let special_key = body.special_key.clone();
 
     // 处理普通数据输入
     if !data.is_empty() {
-        if let Err(e) = crate::utils::session_gateway::input(session_manager, &session_id, &data).await {
+        if let Err(e) = crate::utils::session_gateway::input(ctx.plugin_host().wasm_host_ctx(), &session_id, &data).await {
             tracing::error!(error = %e, session_id = %session_id, "Failed to write input to session");
             return HttpResponse::Ok().json(ApiResponse::<()>::error(1002, &e.to_string()));
         }
@@ -224,7 +237,13 @@ pub async fn send_session_input(path: web::Path<String>, body: web::Json<Session
 
     // 处理特殊键输入
     if let Some(ref key) = special_key {
-        if let Err(e) = crate::utils::session_gateway::special_key(session_manager, &session_id, key).await {
+        if let Err(e) = crate::utils::session_gateway::special_key(
+            ctx.plugin_host().wasm_host_ctx(),
+            &session_id,
+            key,
+        )
+        .await
+        {
             tracing::error!(error = %e, session_id = %session_id, "Failed to send special key to session");
             return HttpResponse::Ok().json(ApiResponse::<()>::error(1002, &e.to_string()));
         }

@@ -268,6 +268,11 @@ pub async fn plugin_storage_delete(
 // ==================== Plugin Terminal ====================
 
 /// 插件终端：发送输入
+///
+/// P1-b 起会话真源在 `com.bedcode.terminal-session`（宿主内核已无会话登记与 PTY
+/// 句柄），故经会话窄转发层转插件 `session-input` 互调 api——提交行重建与任务域
+/// 观察都在插件写入管线里。门禁口径与迁移前一致（身份绑定 + 激活 + `terminal:input`
+/// 权限位），插件未激活时由转发层显性报错，无内核降级轨。
 #[tauri::command]
 pub async fn plugin_terminal_send_input(
     plugin_id: String,
@@ -289,8 +294,8 @@ pub async fn plugin_terminal_send_input(
             plugin_id
         )));
     }
-    let ctx = crate::system::app_context::AppContext::global();
-    ctx.session_manager().write_input(&session_id, &text).await
+    let host_ctx = plugin_host.wasm_host_ctx();
+    crate::utils::session_gateway::input(host_ctx, &session_id, &text).await
 }
 
 // ==================== Plugin Registry Queries ====================
@@ -451,14 +456,50 @@ mod tests {
     //!    错误字符串断言），桥接层只是透传。
     //!
     //! 结论：不硬造测试；桥接层行为由 host.rs 的宿主测试 + 前端集成测试
-    //! 覆盖。`plugin_terminal_send_input` 的成功路径还依赖
-    //! `AppContext::global()`（未初始化即 panic），同样无法在无头测试构造。
+    //! 覆盖。`plugin_terminal_send_input` 的写入委托目标（会话窄转发层
+    //! `session_gateway::input` → 插件 `session-input`）由 `session_e2e` 闭环用例
+    //! 覆盖，桥接层自身只剩门禁三段。
     //!
     //! 若未来启用 tauri test feature，可在此处为 `plugin_storage_*` /
     //! `plugin_terminal_send_input` 的门禁错误分支补测试。
     //!
     //! 例外：`plugin_frontend_load_report` 不依赖任何 State 参数（纯日志透传），
     //! 可直接调用测试。
+
+    /// P1-b：桌面终端输入入口必须接会话窄转发层，不得再打内核 `SessionManager`
+    ///
+    /// 命令体依赖 `State`（无法构造），故以源码扫描锁接线。判据不是风格：内核登记域
+    /// 自 P1-b 起不持有插件会话与其 PTY 句柄，`write_input` 对真实会话恒 `NotFound`
+    /// ——回到内核轨即「终端窗口敲键盘静默丢键」（前端 `void sendInput(...)` 不接
+    /// rejection）。行为用例在 `session_e2e::test_session_input_via_gateway_closed_loop`，
+    /// 本锁补的是「本模块的入口确实接到转发层」这半段。
+    #[test]
+    fn terminal_send_input_delegates_to_session_gateway_not_kernel() {
+        let src = include_str!("./api_bridge.rs");
+        let body = src
+            .split_once("pub async fn plugin_terminal_send_input")
+            .expect("命令必须存在")
+            .1
+            .split_once("// ==================== Plugin Registry Queries")
+            .expect("命令体结束边界")
+            .0;
+        assert!(
+            body.contains("session_gateway::input("),
+            "终端输入须经会话窄转发层（真源在插件登记域），got: {body}"
+        );
+        assert!(
+            !body.contains("write_input("),
+            "终端输入不得再调内核 SessionManager::write_input（对插件会话恒 NotFound）"
+        );
+        // 门禁三段仍在（身份绑定 + 激活 + 权限位）——改路由不得顺手削弱
+        for gate in [
+            "authorize_plugin_call(&plugin_host, &plugin_id, &credential)",
+            "is_activated(&plugin_id)",
+            "check(&plugin_id, \"terminal:input\")",
+        ] {
+            assert!(body.contains(gate), "输入命令缺门禁 {gate}");
+        }
+    }
 
     /// 诊断上报命令：ok/error 两条路径都只写 tracing，恒返回 Ok（issue 04）
     #[tokio::test]

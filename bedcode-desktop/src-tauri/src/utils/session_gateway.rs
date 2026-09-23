@@ -1,62 +1,128 @@
-//! 会话窄转发层（会话引擎整体下沉 P1，宿主侧单点）
+//! 会话窄转发层（会话引擎整体下沉 P1-b，宿主侧单点）——**纯插件互调 api**
 //!
-//! spec：`.scratch/2026-09-23-session-engine-downsink/spec.md`（P1「宿主侧：新增窄转发层」）。
+//! spec：`.scratch/2026-09-23-session-engine-downsink/spec.md`（P1-b 真源切换）。
 //!
 //! ## 为什么要有这一层
 //!
-//! 会话操作在宿主侧原本散在三条线上各自直连 `SessionManager`：桌面 Tauri 命令
-//! （`commands.rs`）、移动端 HTTP 控制器（`server/http/controllers/session_controller.rs`）、
-//! 移动端 WS 服务（`server/websocket/services/*`）。同一条规则因此被写两遍（尺寸裁决
-//! 的「插件优先、内核降级」只在桌面命令面存在；移动端两线直连内核），改一处必漏一处。
+//! 会话操作在宿主侧原本散在三线各自直连 `SessionManager`（桌面 Tauri 命令 /
+//! 移动端 HTTP 控制器 / 移动端 WS 服务），同一条规则被写多遍。本模块是**宿主侧
+//! 调用会话的唯一收口点**：消费面只调这里的函数，不再直接碰 `SessionManager` /
+//! `session_*_bridge`。P1-b 起会话真源已在 `com.bedcode.terminal-session` 插件
+//! 登记域，本层全部实现 = 插件互调 api 调用（无内核执行器、无内核裁决副本）。
 //!
-//! 本模块是**宿主侧调用会话的唯一收口点**：消费面只调这里的函数，不再直接碰
-//! `SessionManager` / `session_*_bridge`。P1 后续阶段的真源切换（插件经 `host-pty`
-//! 自持 PTY、宿主改调插件互调 api）只改本模块内部的实现，消费面零改动。
+//! ## 今日策略（P1-b：真源切换完成，插件必需）
 //!
-//! ## 今日策略（P1-a/P1-b 之间：行为与迁移前逐字一致）
-//!
-//! | 操作 | 今日实现 | P1-b 后 |
+//! | 操作 | 实现 | 插件互调 api |
 //! | --- | --- | --- |
-//! | 查询（list / get） | 内核 `SessionManager` 登记事实 | 插件互调 api（插件登记域为真源） |
-//! | 创建（start） | `session_create_bridge` → 插件编排 + `host-session.create-with-spec`（**插件必需，无宿主降级**） | 插件 `host-pty.spawn`（插件自产 id） |
-//! | 停止 / 移除 | 内核执行器（插件未参与；移动端两线同路） | 插件互调 api |
-//! | 尺寸（桌面路径） | **插件裁决优先**（`session_action_bridge::resize_session_via_plugin`），不可用时内核执行器含内核裁决分支 | 插件互调 api（无降级） |
-//! | 尺寸（移动端信号路径） | 内核执行器（裁决分支同插件规则） | 同上（统一经插件） |
-//! | 输入（普通 / 特殊键） | 内核 `write_input` / `send_special_key`（P2 起改 `host-pty.write`） | 插件转发 |
-//! | 历史快照 / 输出存在性 | `GlobalOutputManager`（业务输出环，P3 形态 B 改直读 `PtyRing`） | 宿主 server 直读 `PtyRing` |
+//! | 查询（list / get） | 插件登记域视图（`SessionInfoView` 形状） | `session-list` / `session-get` |
+//! | 创建（start） | 插件编排 + `host-pty.spawn`（插件自产 id） | `session-create` |
+//! | 停止 | 插件登记 Stopping + `host-pty.kill`（终态由 pty:exit 收尾） | `session-close` |
+//! | 移除 | 插件摘记录 + kill + 广播 SessionRemoved | `session-remove` |
+//! | 尺寸（桌面 + 移动端信号路径统一） | 插件裁决（正统端判定 / 覆盖确认） + `host-pty.resize` | `session-resize` |
+//! | 输入（普通 / 特殊键） | 插件提交行重建 + `host-pty.write`（特殊键绕过重建） | `session-input` |
+//! | 历史快照 / 输出存在性 | 宿主 `GlobalOutputManager`（P3 形态 B 改直读同进程 `PtyRing`） | —（宿主直读） |
 //!
-//! **移动端零改动的前提**：停止 / 移除 / 尺寸（信号路径）今日仍走内核执行器——
-//! 真源切换（P1-b）会把这些路径一并改为经插件，届时移动端才第一次触到插件面；
-//! 本层保证那次切换是**一处实现变更**，而不是三处散改。
+//! **插件未激活 / 互调失败一律显性报错**（会话真源已不在宿主，无降级轨）——
+//! 双写期的 `session_{create,action}_bridge.rs`（含 `Ok(None)` 降级轨）已随
+//! 真源切换退役。
 //!
 //! ## 不属于本层
 //!
 //! 会话**事件的形状与广播**（`events/sync_handler.rs` / `events/forwarder.rs`）与
-//! WS 终端通道的状态订阅（`channel/terminal.rs` 的 `subscribe_status`）属事件面，
-//! 随 P4（插件经 `host-events` 发布、宿主只做 WS 转发）收口，不在本层。
+//! WS 终端通道的状态订阅属事件面，随 P4 收口（P1-b 起由插件经 `host-events`
+//! 广播 `SyncEvent` 会话变体，宿主只做转发）。
 
-use crate::session::{GlobalOutputManager, RendererSource, ResizeOutcome, SessionInfoView, SessionManager};
+use crate::session::{RendererSource, ResizeOutcome, SessionInfoView};
+use crate::utils::auth::auth_center::call_api;
 use crate::wasm_core::manager::runtime::WasmHostContext;
-use crate::Result;
+use crate::{AppError, Result};
 
-// ==================== 查询（内核登记事实 → P1-b 改插件 api） ====================
+/// 插件互调 api（短名由 `#[plugin_api]` 宏按 manifest.api 比对防漂移）
+const API_LIST: &str = "com.bedcode.terminal-session.session-list";
+const API_GET: &str = "com.bedcode.terminal-session.session-get";
+const API_CREATE: &str = "com.bedcode.terminal-session.session-create";
+const API_CLOSE: &str = "com.bedcode.terminal-session.session-close";
+const API_REMOVE: &str = "com.bedcode.terminal-session.session-remove";
+const API_RESIZE: &str = "com.bedcode.terminal-session.session-resize";
+const API_INPUT: &str = "com.bedcode.terminal-session.session-input";
 
-/// 全部会话的对外视图（记录 + 注解槽任务字段；形状与迁移前逐字段一致）
-pub async fn list_views(sm: &SessionManager) -> Vec<SessionInfoView> {
-    sm.session_views().await
+/// 插件不可用时的显性错误（无降级；会话真源已不在宿主）
+fn plugin_required_error(what: &str) -> AppError {
+    AppError::Plugin(format!(
+        "session plugin not active: {what} requires com.bedcode.terminal-session"
+    ))
 }
 
-/// 单个会话的对外视图
-pub async fn view(sm: &SessionManager, session_id: &str) -> Option<SessionInfoView> {
-    sm.session_view(session_id).await
-}
-
-// ==================== 创建（插件必需，宿主无降级） ====================
-
-/// 经会话中心插件编排创建会话（`start = true` 创建即启动）
+/// 插件互调统一包装：未激活显性报错 + 失败留痕
 ///
-/// 插件未激活 / 互调失败一律显性报错（`host-business-decarriage` 收尾口径：
-/// 创建只有一条编排入口，不存在宿主降级路径）。
+/// `call_api` 是同步阻塞调用（宿主桥接等待插件回复；调用方按 async 约定，
+/// 此处保持同步——与旧 `session_create_bridge` 同构）。
+fn call_session_api(
+    host_ctx: &WasmHostContext,
+    api: &str,
+    what: &str,
+    params: serde_json::Value,
+) -> Result<serde_json::Value> {
+    if !crate::utils::auth::auth_center::session_active(host_ctx) {
+        tracing::warn!(api = %api, "{what} refused: session plugin not active");
+        return Err(plugin_required_error(what));
+    }
+    call_api(host_ctx, api, params).map_err(|e| {
+        tracing::error!(api = %api, error = %e, "{what} failed via plugin");
+        AppError::Plugin(format!("{what} failed (plugin error): {e}"))
+    })
+}
+
+/// 插件视图 JSON（camelCase）→ 宿主 `SessionInfoView`（仅 Serialize 的宿主类型，
+/// 拆两个半场：`SessionInfo`（约定 camelCase，可反序列化）+ 任务字段从 raw 取）
+fn parse_view(raw: serde_json::Value) -> Result<SessionInfoView> {
+    let info = serde_json::from_value::<crate::session::SessionInfo>(raw.clone()).map_err(|e| {
+        AppError::Plugin(format!("session row is not a SessionInfo: {e} (row: {raw})"))
+    })?;
+    let get = |key: &str| raw.get(key).and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(str::to_string);
+    Ok(SessionInfoView {
+        info,
+        task_status: get("taskStatus"),
+        task_reason: get("taskReason"),
+        task_updated_at: get("taskUpdatedAt"),
+        task_questions: raw
+            .get("taskQuestions")
+            .filter(|v| !v.is_null())
+            .cloned(),
+    })
+}
+
+// ==================== 查询（插件登记域真源） ====================
+
+/// 全部会话的对外视图（`SessionInfoView`，记录 + 注解槽任务字段；
+/// 形状与迁移前逐字段一致，取值来源 = 插件登记域）
+pub async fn list_views(host_ctx: &WasmHostContext) -> Result<Vec<SessionInfoView>> {
+    let v = call_session_api(host_ctx, API_LIST, "session list", serde_json::json!({}))?;
+    let sessions = v
+        .get("sessions")
+        .and_then(|s| s.as_array())
+        .ok_or_else(|| AppError::Plugin(format!("session-list reply missing sessions: {v}")))?;
+    sessions.iter().cloned().map(parse_view).collect()
+}
+
+/// 单个会话的对外视图；不在册 → `Ok(None)`（无此会话不是错误）
+pub async fn view(host_ctx: &WasmHostContext, session_id: &str) -> Result<Option<SessionInfoView>> {
+    let v = call_session_api(
+        host_ctx,
+        API_GET,
+        "session get",
+        serde_json::json!({ "sessionId": session_id }),
+    )?;
+    if v.is_null() {
+        return Ok(None);
+    }
+    parse_view(v).map(Some)
+}
+
+// ==================== 创建（插件必需，无宿主降级） ====================
+
+/// 经会话中心插件编排创建会话（插件自产 id + `host-pty.spawn`；
+/// 回执即会话 id，创建已同步完成——旧 create-with-spec 的异步半程不再存在）
 pub async fn start(
     host_ctx: &WasmHostContext,
     config_id: &str,
@@ -65,252 +131,136 @@ pub async fn start(
     start: bool,
     source_device: Option<&str>,
 ) -> Result<String> {
-    crate::utils::session_create_bridge::create_session_via_plugin(
-        host_ctx, config_id, cols, rows, start, source_device,
-    )
-    .await
-}
-
-// ==================== 生命周期动作（内核执行器 → P1-b 改插件 api） ====================
-
-/// 停止会话（终止 PTY + 置 `Stopped`，会话记录保留）
-pub async fn stop(sm: &SessionManager, session_id: &str, source_device: Option<String>) -> Result<()> {
-    sm.kill_session_with_source(session_id, source_device).await
-}
-
-/// 移除会话（摘除记录并清注解槽；PTY 缓存随 PTY 清理）
-pub async fn remove(sm: &SessionManager, session_id: &str, source_device: Option<String>) -> Result<()> {
-    sm.remove_session_with_source(session_id, source_device).await
-}
-
-/// 尺寸调整（桌面本地路径）：**插件裁决优先**，插件不可用时降级内核执行器
-///
-/// 两条路径对外行为等价（同一裁决规则、同一 `ResizeOutcome` 形状）：插件侧规则见
-/// `plugins/terminal-session/rust/src/actions.rs::decide_resize`，内核侧见
-/// `SessionManager::resize_session`——规则两份实现是 P1-b 要消掉的重复（真源切换后
-/// 只剩插件一份）。
-pub async fn resize_desktop(
-    host_ctx: &WasmHostContext,
-    sm: &SessionManager,
-    session_id: &str,
-    cols: u16,
-    rows: u16,
-    force: bool,
-) -> Result<ResizeOutcome> {
-    if let Some(outcome) = crate::utils::session_action_bridge::resize_session_via_plugin(
+    let v = call_session_api(
         host_ctx,
-        session_id,
-        cols,
-        rows,
-        &RendererSource::Desktop,
-        force,
-    )
-    .await?
-    {
-        return Ok(outcome);
-    }
-    sm.resize_session(session_id, cols, rows, RendererSource::Desktop, force)
-        .await
+        API_CREATE,
+        "session create",
+        serde_json::json!({
+            "configId": config_id,
+            "cols": cols,
+            "rows": rows,
+            "start": start,
+            // 启动端事实透传（移动端 HTTP/WS 启动携带设备名 → 正统端初始归属该端）
+            "sourceDevice": source_device,
+        }),
+    )?;
+    let sid = v
+        .get("sessionId")
+        .and_then(|s| s.as_str())
+        .ok_or_else(|| AppError::Plugin(format!("session-create reply missing sessionId: {v}")))?
+        .to_string();
+    tracing::info!(config_id = %config_id, session_id = %sid, start, "session created via plugin");
+    Ok(sid)
 }
 
-/// 尺寸调整（移动端信号路径：HTTP / WS 控制帧）
+// ==================== 生命周期动作 ====================
+
+/// 停止会话（登记 Stopping + `host-pty.kill`；终态由插件 pty:exit 收尾并广播）
+pub async fn stop(host_ctx: &WasmHostContext, session_id: &str, _source_device: Option<String>) -> Result<()> {
+    let v = call_session_api(
+        host_ctx,
+        API_CLOSE,
+        "session stop",
+        serde_json::json!({ "sessionId": session_id }),
+    )?;
+    tracing::info!(session_id = %session_id, "session stop requested via plugin");
+    let _ = v;
+    Ok(())
+}
+
+/// 移除会话（摘记录 + kill + 广播 SessionRemoved；source_device 参与广播排除语义）
+pub async fn remove(host_ctx: &WasmHostContext, session_id: &str, source_device: Option<String>) -> Result<()> {
+    call_session_api(
+        host_ctx,
+        API_REMOVE,
+        "session remove",
+        serde_json::json!({ "sessionId": session_id, "sourceDevice": source_device }),
+    )?;
+    tracing::info!(session_id = %session_id, "session removed via plugin");
+    Ok(())
+}
+
+/// 尺寸调整（**桌面本地与移动端信号路径统一**）：插件裁决（正统端判定 /
+/// 覆盖确认策略，登记事实在本域记录）→ 仅可应用时 `host-pty.resize`。
 ///
-/// 请求方身份由调用方按 JWT claims 决定（无 claims 回退 `Desktop`，仍受
-/// `NeedsConfirmation` 门控）。今日直连内核执行器（移动端零改动），P1-b 统一经插件。
-pub async fn resize_from_signal(
-    sm: &SessionManager,
+/// 请求方身份由调用方决定：桌面本地恒 `Desktop`；移动端按 JWT claims（无
+/// claims 回退 `Desktop`，仍受 `NeedsConfirmation` 门控）。
+pub async fn resize(
+    host_ctx: &WasmHostContext,
     session_id: &str,
     cols: u16,
     rows: u16,
     requester: RendererSource,
     force: bool,
 ) -> Result<ResizeOutcome> {
-    sm.resize_session(session_id, cols, rows, requester, force).await
+    let v = call_session_api(
+        host_ctx,
+        API_RESIZE,
+        "session resize",
+        serde_json::json!({
+            "sessionId": session_id,
+            "cols": cols,
+            "rows": rows,
+            "requester": requester,
+            "force": force,
+        }),
+    )?;
+    serde_json::from_value::<ResizeOutcome>(v).map_err(|e| {
+        AppError::Plugin(format!("session-resize reply is not a ResizeOutcome: {e}"))
+    })
 }
 
-// ==================== 输入（P2 起改 host-pty.write） ====================
+// ==================== 输入 ====================
 
-/// 写入普通输入（提交行重建与插件钩子链仍在内核写入路径内，P2 迁插件）
-pub async fn input(sm: &SessionManager, session_id: &str, data: &str) -> Result<()> {
-    sm.write_input(session_id, data).await
+/// 写入普通输入（插件提交行重建 + 任务域观察 + `host-pty.write`）
+pub async fn input(host_ctx: &WasmHostContext, session_id: &str, data: &str) -> Result<()> {
+    call_session_api(
+        host_ctx,
+        API_INPUT,
+        "session input",
+        serde_json::json!({ "sessionId": session_id, "data": data }),
+    )?;
+    Ok(())
 }
 
-/// 写入特殊键（转义序列）
-pub async fn special_key(sm: &SessionManager, session_id: &str, key: &str) -> Result<()> {
-    sm.send_special_key(session_id, key).await
+/// 写入特殊键（工具栏停止/复制等）：宿主 `KeyCombo` 翻译为转义字节（引擎级
+/// 终端转义表，随 pty 引擎留宿主），经插件 `session-input` 的 `special` 标记
+/// 直写——对齐内核 `send_special_key` 的「绕过提交行重建」不对称，否则特殊键
+/// 会污染任务域的提交行观察。
+pub async fn special_key(host_ctx: &WasmHostContext, session_id: &str, key: &str) -> Result<()> {
+    let combo = crate::enums::KeyCombo::parse(key)
+        .ok_or_else(|| AppError::InvalidInput(format!("Unknown special key: {key}")))?;
+    let bytes = combo
+        .to_pty_bytes()
+        .ok_or_else(|| AppError::InvalidInput(format!("Unsupported key combo: {key}")))?;
+    let data = String::from_utf8(bytes)
+        .map_err(|_| AppError::InvalidInput(format!("special key '{key}' is not UTF-8")))?;
+    call_session_api(
+        host_ctx,
+        API_INPUT,
+        "session special key",
+        serde_json::json!({ "sessionId": session_id, "data": data, "special": true }),
+    )?;
+    Ok(())
 }
 
-// ==================== 输出面（P3 形态 B：改直读同进程 `PtyRing`） ====================
+// ==================== 输出面（P3 形态 B：改直读同进程 `PtyRing`；本批留宿主直读） ====================
 
 /// 一次性历史快照：`(data, min_offset, snapshot_offset, history_bytes)`
 ///
-/// 今日读业务输出环 `GlobalOutputManager`；P3 形态 B 后由宿主 server 直读同进程
-/// `PtyRing`（零跨 WASM 边界），本函数是那时的唯一改动点。
+/// 今日读业务输出环 `GlobalOutputManager`——P1-b 起业务会话输出在 `PtyRing`，
+/// 此函数对插件会话返回 `None`（移动端 HTTP 历史 404，受损清单记账）；
+/// P3 形态 B 后由宿主 server 直读同进程 `PtyRing`（零跨 WASM 边界）恢复。
 pub async fn history_snapshot(session_id: &str, from: u64) -> Option<(Vec<u8>, u64, u64, u64)> {
-    GlobalOutputManager::global().snapshot_bytes(session_id, from).await
+    crate::session::GlobalOutputManager::global()
+        .snapshot_bytes(session_id, from)
+        .await
 }
 
-/// 取消某订阅者对该会话的输出订阅（WS 控制面停止 / 移除动作之后调用）
+/// 取消某订阅者对该会话的输出订阅（WS 控制面停止 / 移除动作之后调用；
+/// 对插件会话为幂等 no-op——输出订阅面随 P3 恢复）
 pub async fn unsubscribe_output(session_id: &str, subscriber: &str) {
-    GlobalOutputManager::global().unsubscribe(session_id, subscriber).await;
-}
-
-// ==================== Tests（本层是行为保持的收口点：锁住今日语义，防真源切换前漂移） ====================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::enums::{ExecutionEnvironment, SessionLaunchConfig, SessionStatus};
-
-    /// 「只创建不启动」的会话夹具（不 spawn 进程；与 `session_manager` 测试夹具同形）
-    async fn seed_idle_session(sm: &SessionManager, config_id: &str) -> String {
-        sm.create_session_from_spec(
-            SessionLaunchConfig {
-                name: config_id.to_string(),
-                environment: ExecutionEnvironment::Linux,
-                working_dir: "/tmp".to_string(),
-                command: "bash".to_string(),
-                command_args: vec!["bash".to_string()],
-                env_vars: std::collections::HashMap::new(),
-                cols: 120,
-                rows: 40,
-            },
-            config_id.to_string(),
-            None,
-            false,
-            None,
-            None,
-        )
-        .await
-        .expect("seed idle session")
-    }
-
-    /// 查询面：内核登记事实 → 对外视图（空管理器为空；播种后可见且字段透传）
-    #[tokio::test]
-    async fn list_and_view_expose_kernel_records() {
-        let sm = SessionManager::default();
-        assert!(list_views(&sm).await.is_empty());
-        assert!(view(&sm, "ghost").await.is_none());
-
-        let sid = seed_idle_session(&sm, "cfg-1").await;
-        let views = list_views(&sm).await;
-        assert_eq!(views.len(), 1);
-        assert_eq!(views[0].info.id, sid);
-        assert_eq!(views[0].info.config_id, "cfg-1");
-        assert_eq!(views[0].info.status, SessionStatus::Starting, "start=false → Starting");
-        assert!(view(&sm, &sid).await.is_some());
-    }
-
-    /// 生命周期动作面：停止 → 记录翻 `Stopped`；移除 → 记录消失且未知 id 幂等成功
-    /// （内核执行器语义，P1-b 换实现后须逐条不变）
-    #[tokio::test]
-    async fn stop_marks_stopped_and_remove_is_idempotent() {
-        let sm = SessionManager::default();
-        let sid = seed_idle_session(&sm, "cfg-1").await;
-        assert_eq!(sm.get_session_status(&sid).await, Some(SessionStatus::Starting));
-
-        stop(&sm, &sid, Some("Pixel-9".to_string())).await.expect("stop");
-        assert_eq!(sm.get_session_status(&sid).await, Some(SessionStatus::Stopped));
-
-        remove(&sm, &sid, None).await.expect("remove");
-        assert!(view(&sm, &sid).await.is_none(), "移除后记录不再可见");
-        assert!(
-            remove(&sm, "ghost", None).await.is_ok(),
-            "未知会话移除幂等成功（内核语义：删不存在的会话不是错误）"
-        );
-    }
-
-    /// 「创建即启动」的会话夹具（正统端初始归属 = Desktop，因为 `source_device` 为空）
-    ///
-    /// 尺寸路径必须真到 PTY 层（未启动的会话 master 不可用、resize 必失败），故这里
-    /// 起一个真实 `bash`；用例末尾显式 `stop` + `remove` 回收，不留后台进程。
-    async fn seed_running_session(sm: &SessionManager, config_id: &str) -> String {
-        sm.create_session_from_spec(
-            SessionLaunchConfig {
-                name: config_id.to_string(),
-                environment: ExecutionEnvironment::Linux,
-                working_dir: "/tmp".to_string(),
-                command: "bash".to_string(),
-                command_args: vec!["bash".to_string()],
-                env_vars: std::collections::HashMap::new(),
-                cols: 120,
-                rows: 40,
-            },
-            config_id.to_string(),
-            None,
-            true,
-            None,
-            None,
-        )
-        .await
-        .expect("seed running session")
-    }
-
-    /// 尺寸两条路径的今日语义（真源切换前后必须逐条不变）
-    ///
-    /// - **信号路径**（移动端 HTTP / WS）：内核裁决——他端未 `force` → `NeedsConfirmation`
-    ///   且零改动；`force` → 应用并迁移归属。该路径的结构性保证写在签名上：本函数
-    ///   **不含宿主上下文**，今日不可能触到插件面（P1-b 统一时改签名即显性可见）。
-    /// - **桌面路径**：插件不可用（空 api 注册表 = 锚点未登记）→ 降级内核执行器并
-    ///   成功应用。若真走了插件分支，`resize_session_via_plugin` 会以
-    ///   `AppError::Plugin("session plugin not active …")` 报错——`expect` 通过即是
-    ///   「确已降级内核」的判据。
-    #[tokio::test]
-    async fn resize_paths_keep_kernel_semantics_on_both_sides() {
-        let ctx = crate::wasm_core::host_api::tests::build_host_ctx();
-        let sm = ctx.session_manager.clone();
-        let sid = seed_running_session(&sm, "cfg-1").await;
-
-        // 信号路径：他端未 force → 需确认 + 零改动
-        let other = RendererSource::Mobile {
-            device_name: "Pixel-9".to_string(),
-        };
-        let pending = resize_from_signal(&sm, &sid, 120, 50, other.clone(), false)
-            .await
-            .expect("signal path");
-        assert_eq!(
-            pending,
-            ResizeOutcome::NeedsConfirmation {
-                current_canonical: RendererSource::Desktop
-            }
-        );
-        assert_eq!(
-            sm.canonical_renderer_of(&sid).await,
-            Some(RendererSource::Desktop),
-            "需确认时零改动（归属不迁移）"
-        );
-
-        // 桌面路径：插件不可用 → 内核执行器兜底并应用
-        let applied = resize_desktop(&ctx, &sm, &sid, 90, 30, false)
-            .await
-            .expect("插件不可用 → 内核执行器兜底");
-        assert_eq!(
-            applied,
-            ResizeOutcome::Applied {
-                canonical: RendererSource::Desktop
-            }
-        );
-
-        // 信号路径 force：应用并迁移归属
-        let claimed = resize_from_signal(&sm, &sid, 110, 40, other.clone(), true)
-            .await
-            .expect("force 接管");
-        assert_eq!(
-            claimed,
-            ResizeOutcome::Applied {
-                canonical: other.clone()
-            }
-        );
-        assert_eq!(sm.canonical_renderer_of(&sid).await, Some(other));
-
-        // 回收：停止（杀 PTY）+ 移除（摘记录）
-        stop(&sm, &sid, None).await.expect("stop");
-        remove(&sm, &sid, None).await.expect("remove");
-    }
-
-    /// 输出面：未注册输出环的会话 → 无历史快照（HTTP 历史接口的 404 判据）
-    #[tokio::test]
-    async fn history_snapshot_is_none_without_output_ring() {
-        assert!(history_snapshot("ghost", 0).await.is_none());
-    }
+    crate::session::GlobalOutputManager::global()
+        .unsubscribe(session_id, subscriber)
+        .await;
 }

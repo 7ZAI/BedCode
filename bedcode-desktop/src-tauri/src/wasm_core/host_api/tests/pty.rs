@@ -1192,6 +1192,12 @@ fn spawn_executes_argv_verbatim_without_shell_interpretation() {
 fn spawn_applies_declared_env_without_business_identity() {
     let owner = "com.bedcode.env";
     let marker = unique_tag("ENV");
+    // 环境隔离：本机若在 BedCode 会话内跑测试（测试进程 env 自带 BEDCODE_SESSION_ID），
+    // 子进程按「继承宿主环境」语义会把它带进 env 输出——断言「不得带业务身份」的
+    // 意图是引擎不**注入**该变量，故先把宿主 env 里的同名变量清掉再 spawn（事后恢复）。
+    let had_session_id = std::env::var("BEDCODE_SESSION_ID").ok();
+    // SAFETY: 单测进程内临时移除环境变量，测试结束恢复；不涉及并发读该变量的线程
+    unsafe { std::env::remove_var("BEDCODE_SESSION_ID") };
     let ctx = ctx_with_pty(
         owner,
         &format!(r#"{{"command":"/bin/sh","args":["-c","env; read go"],"env":{{"BEDCODE_PTY_TEST":"{marker}"}}}}"#),
@@ -1210,6 +1216,11 @@ fn spawn_applies_declared_env_without_business_identity() {
         pty_is_running(&ctx, owner, &pty_id).expect("is-running"),
         "载体进程应仍存活（env 输出后阻塞在 read）"
     );
+    // 恢复宿主 env（若有）
+    if let Some(v) = had_session_id {
+        // SAFETY: 同上，恢复原值
+        unsafe { std::env::set_var("BEDCODE_SESSION_ID", v) };
+    }
 }
 
 /// 引擎参数证据：cols/rows 真的作用到终端尺寸（子进程 `stty size` 反查）

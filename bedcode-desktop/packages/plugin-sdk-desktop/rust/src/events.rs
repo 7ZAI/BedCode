@@ -112,10 +112,64 @@ pub struct ProcessDoneEvent {
 /// 通过 `HostEvents::broadcast_sync` 发布，宿主转发给所有已认证的
 /// WebSocket 客户端（移动端）。
 ///
-/// 线协议：`{ "type": "TaskStatusChanged" | "SessionModeChanged" | "TaskQueueChanged" | "TaskScheduledChanged", ...字段 }`
+/// 线协议：`{ "type": "TaskStatusChanged" | "SessionModeChanged" | "TaskQueueChanged" | "TaskScheduledChanged" | "SessionCreated" | "SessionStatusChanged" | "SessionStopped" | "SessionRemoved", ...字段 }`
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum SyncEvent {
+    // ==================== 会话生命周期（会话引擎下沉 P1-b 起由插件真源发布） ====================
+    //
+    // 宿主不再持有会话事实后，这些事件由 `com.bedcode.terminal-session` 经
+    // `broadcast_sync` 发布；**载荷必须自足**（会话概要 / 会话名随事件携带）——
+    // 宿主转发时不回查内核（内核已无会话可查，回查只会得到空）。
+
+    /// 会话创建：载荷 = 完整会话概要（wire 形状与移动端 `SessionSummary` 同构）
+    ///
+    /// `session` 是插件登记域视图（`session-list` 同源）的子集 JSON：
+    /// `{id, name, status, createdAt, startedAt?, sessionType, configId, taskStatus?, taskReason?}`
+    /// （camelCase；宿主要么原样包进 `SyncPayload::SessionCreated.session`，要么
+    /// 反序列化为宿主 `SessionSummary`——两条路都要求形状与之一致，故插件侧
+    /// 产出口被 `session::view` 的形状锁钉住）。
+    SessionCreated {
+        /// 会话概要（camelCase，见上；宿主不再回查内核，故此字段必填）
+        session: serde_json::Value,
+        /// 触发操作的设备名称（桌面本地操作为空串）
+        #[serde(default)]
+        source_device: String,
+    },
+    /// 会话状态变化（真源在插件：`old/new_status` 是 `SessionStatus` 的
+    /// serde wire 形态——简单变体为字符串 `"running"` 等，`Error` 为
+    /// `{"error": …}` 对象）
+    SessionStatusChanged {
+        /// BedCode PTY 会话 ID
+        session_id: String,
+        /// 变更前状态（wire 形态）
+        old_status: serde_json::Value,
+        /// 变更后状态（wire 形态）
+        new_status: serde_json::Value,
+        /// 会话名（真源在插件；宿主不回查内核）
+        session_name: String,
+    },
+    /// 会话停止（含会话名，宿主不回查内核）
+    SessionStopped {
+        /// BedCode PTY 会话 ID
+        session_id: String,
+        /// 会话名
+        session_name: String,
+        /// 触发操作的设备名称（自然退出为空串）
+        #[serde(default)]
+        source_device: String,
+    },
+    /// 会话移除（含会话名，宿主不回查内核）
+    SessionRemoved {
+        /// BedCode PTY 会话 ID
+        session_id: String,
+        /// 会话名
+        session_name: String,
+        /// 触发操作的设备名称（桌面本地操作为空串）
+        #[serde(default)]
+        source_device: String,
+    },
+
     /// 任务状态变更
     TaskStatusChanged {
         /// BedCode PTY 会话 ID

@@ -64,6 +64,10 @@ const RUST_PERMISSION_RULES = [
   // `plugin_db_execute` / `plugin_db_query` 这类私有库形态（其前置字符是 `_`）。
   { re: /(?<![_\w])db_(execute|query)\w*/, perm: 'database:main' },
   { re: /\bterminal_send\b/, perm: 'terminal:input' },
+  // host-pty 两域（与权限词汇表 apiMap 逐字对应）：spawn/kill 属高风险面，
+  // 数据面（write/resize/ring_fetch/is_running）归 pty:io
+  { re: /\b(pty_spawn|pty_kill)\b/, perm: 'pty:spawn' },
+  { re: /\b(pty_write|pty_resize|pty_ring_fetch|pty_is_running)\b/, perm: 'pty:io' },
   // 会话读取面：`session_list` / `session_get` + v23 起留作**一次性 legacy 迁移通道**的
   // `session_config_list` / `session_config_get`（`config-get` 改挂 `session:read`）。
   // **`session_config_upsert` / `session_config_delete` 已随 v23 从 ABI 删除**，`session:config`

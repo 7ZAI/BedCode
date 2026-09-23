@@ -567,26 +567,36 @@ pub fn run() {
                                 tracing::error!("Failed to destroy window: {}", e);
                             }
                         } else {
-                            // 有运行中会话，通知前端弹窗确认
+                            // 有存活 PTY，通知前端弹窗确认。payload = 运行中会话名
+                            // 列表，探源经插件登记域（P1-b 真源）；**失败回退空列表**——
+                            // 关闭路径不能被插件异步调用阻塞（2026-09-23 用户定案）
                             let ctx = system::app_context::AppContext::global();
-                            let sm = ctx.session_manager();
-                            let sessions = sm.list_sessions().await;
-                            let running: Vec<_> = sessions
-                                .iter()
-                                .filter(|s| {
-                                    matches!(
-                                        s.status,
-                                        enums::SessionStatus::Running
-                                            | enums::SessionStatus::Starting
-                                            | enums::SessionStatus::WaitingInput
-                                    )
-                                })
-                                .map(|s| RunningSessionInfo {
-                                    id: s.id.clone(),
-                                    name: s.name.clone(),
-                                    status: format!("{:?}", s.status),
-                                })
-                                .collect();
+                            let host_ctx = ctx.plugin_host().wasm_host_ctx();
+                            let running: Vec<RunningSessionInfo> = match crate::utils::session_gateway::list_views(host_ctx).await {
+                                Ok(views) => views
+                                    .into_iter()
+                                    .filter(|s| {
+                                        matches!(
+                                            s.info.status,
+                                            enums::SessionStatus::Running
+                                                | enums::SessionStatus::Starting
+                                                | enums::SessionStatus::WaitingInput
+                                        )
+                                    })
+                                    .map(|s| RunningSessionInfo {
+                                        id: s.info.id.clone(),
+                                        name: s.info.name.clone(),
+                                        status: format!("{:?}", s.info.status),
+                                    })
+                                    .collect(),
+                                Err(e) => {
+                                    tracing::warn!(
+                                        error = %e,
+                                        "window close payload: plugin session list unavailable, fallback to empty list"
+                                    );
+                                    Vec::new()
+                                }
+                            };
 
                             tracing::info!(
                                 "Window close requested with {} running session(s), emitting to frontend",

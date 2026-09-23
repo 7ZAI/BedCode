@@ -11,6 +11,11 @@ use crate::wasm_core::permission::PERMISSION_TERMINAL_INPUT;
 /// 属主校验（票 04，P0-3）：`terminal:input` 是「往终端敲键」的能力，只查权限位时
 /// 任意持该位的插件都能向**用户正在使用的**交互终端注入命令。与 pty / ws / mdns
 /// 一致：先权限门，再属主判定（只有创建该会话的插件可注入）。
+///
+/// **P1-b 起本原语对真实会话不可用**：属主判定与写入都查内核 `SessionManager`，
+/// 而会话真源已在 `com.bedcode.terminal-session` 登记域（宿主不再登记会话与 PTY
+/// 句柄）→ 任何实际会话都会拿到 `not owner of session`。零生产消费者（队列下发已
+/// 改走插件写入管线），随 P4 `host-terminal` 输入面收口一并退役。
 pub(crate) fn terminal_send(
     host_ctx: &WasmHostContext,
     plugin_id: &str,
