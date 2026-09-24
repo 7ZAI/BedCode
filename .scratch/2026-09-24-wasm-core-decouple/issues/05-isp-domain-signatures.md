@@ -2,7 +2,16 @@
 
 **Type:** task（contract 半场，wide blast radius）
 **Blocked by:** 04
-**Status:** ready-for-agent
+**Status:** ✅ **done**（commit `833b56ddc`，2026-09-25）
+
+> 完成记录：22 域签名收窄为窄角色接口，随机除本票引入的 over-collection（ws 12 函数
+> 未用 `bus`、pty_kill `bus`、process_run_sync `proc`、fs 单路径 8 函数 `fs_auth`）与随之
+> 产生的未用导入（host_api 各域 + capability.rs WasmHostContext、mdns Arc）。验收全部达标：
+> `rg "&WasmHostContext" host_api/*.rs` 生产源码零命中（仅 mod tests helper + 注释）；
+> cargo check --all-targets 0 error；cargo test --lib 1044/0；ws_auth_rules / broadcast_shutdown /
+> pty_session_chain 三集成 target 全绿。events.rs 与另一会話的 doc/body 在途改动按 hunk 归
+> 属析分（仅提交本线签名/体改动）。曾一脚：RPITIT/async-fn-in-trait 不 dyn compatible
+> 必需 `Pin<Box<dyn Future + Send + 'a>>`；`&Arc<T>` 不自动 coerce 到 `&dyn`，必用 `as_ref()`。
 
 **What to build:** 把 22 个 host_api 能力域的**函数签名**从「人手一个 `&WasmHostContext` 上帝对象」收敛为「各自需要的窄角色接口」（ISP）。这是用户明确要求的「接口隔离彻底化」落地票。
 
@@ -27,7 +36,7 @@
 
 **验收：**
 
-- [ ] `rg "\&WasmHostContext" host_api/*.rs`（生产源码）零命中——域函数签名不再出现上帝对象；只允许 `context.rs` 内定义与 `Arc<WasmHostContext>` 值传递（task 等需 clone 的上下文载体）
-- [ ] 每个角色接口只有一个域用不到的字段即视为「没收窄干净」，接受代码审查逐域核对
-- [ ] 全 host_api 域单测 + `component.rs` 相关 + `manager/task.rs` 相关满绿
-- [ ] `build_host_ctx` 构造不变（仍返回完整 ctx，供测试与需要整体上下文的调用方）
+- [x] `rg "\&WasmHostContext" host_api/*.rs`（生产源码）零命中——域函数签名不再出现上帝对象；只允许 `context.rs` 内定义与 `Arc<WasmHostContext>` 值传递（task 等需 clone 的上下文载体）
+- [x] 每个角色接口只有一个域用不到的字段即视为「没收窄干净」，接受代码审查逐域核对
+- [x] 全 host_api 域单测 + `component.rs` 相关 + `manager/task.rs` 相关满绿
+- [x] `build_host_ctx` 构造不变（仍返回完整 ctx，供测试与需要整体上下文的调用方）
