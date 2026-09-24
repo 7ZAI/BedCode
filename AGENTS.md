@@ -17,8 +17,6 @@
 
 ## 1. 项目速览
 
-BedCode：局域网远程终端应用——桌面端作为主机运行终端会话，移动端作为远程终端控制，WebSocket + HTTP 通信，适配两端同一 WiFi 场景。
-
 **Tech Stack:** Tauri 2.0 + Vue 3 + TypeScript + TailwindCSS + Rust (Tokio) + SQLite + vue-i18n@9 + wasmtimer + WASM（wasmtime Component Model）
 
 **Monorepo 结构：**
@@ -49,16 +47,11 @@ BedCode：局域网远程终端应用——桌面端作为主机运行终端会�
 cd bedcode-desktop && pnpm run tauri:dev
 cd bedcode-desktop && pnpm run tauri:build
 
-# 关插件前端 watch 的 dev（需要 app 不被反复重启时，如票 01 人工基线连续观察）
+# 关插件前端 watch 的 dev（需 app 不被反复重启时；默认仍开 watch，不带 flag 行为不变）
 cd bedcode-desktop && pnpm run tauri:dev -- --no-watch
-#   必须经 pnpm 转发（`pnpm run tauri:dev -- --no-watch`），**不能**直接
-#   `node scripts/dev-run.js --no-watch`：宿主命令入口取 PKG_MGR_CLI = pnpm_execpath，
-#   该环境变量只在 pnpm 跑生命周期脚本时存在；裸 node 调用会落到 Windows 布局的
-#   npm-cli.js 回退路径上，Linux 下直接 ENOENT 崩（2026-09-24 实测踩过）。
-#   为什么要有这条：插件 watch 把 vite 产物复制进 src-tauri/resources/plugins/desktop/<id>/，
-#   而 tauri dev 的 file watch 覆盖整个 src-tauri/ → 每次前端重建重启一次宿主、清空一次当日日志。
-#   默认仍开启 watch（不带 flag 行为不变）；关掉后改插件前端需自行
-#   `cd plugins/<id> && node scripts/build.js`
+#   必须经 pnpm 转发，不能裸 `node scripts/dev-run.js`（无 pnpm_execpath 时 Linux ENOENT，2026-09-24 实测）。
+#   关掉原因：插件 watch 把 vite 产物复制进 src-tauri/ → tauri dev 全量重启宿主并清当日日志。
+#   关掉后改插件前端需自行 `cd plugins/<id> && node scripts/build.js`
 
 # Mobile Development / Build
 cd bedcode-mobile && pnpm run tauri:android:dev        # 开发
@@ -81,6 +74,7 @@ cd bedcode-mobile/src-tauri/gen/android && ./gradlew :app:compileUniversalDebugK
 pnpm exec eslint .
 ```
 
+- **测试两段式（强制）**：开发中每次改动后**只跑针对性单元测试**（下方过滤命令）自验，红了立即修——禁止每步改动跑全量；**集成测试编写 + 全量套件回归统一留到任务收尾**（§10）
 - **前端可单测过滤**：`pnpm exec vitest run <测试文件路径>`（测试文件在 `src/__tests__/`，两端同构）
 - **Rust 可单测过滤**：`cargo test <名称前缀>`
 - **Kotlin 独立工具链**：上述 gradlew 命令是 `gen/android` 下 Kotlin 改动的唯一验证（`cargo test` 与前端测试均不覆盖）
@@ -99,7 +93,7 @@ pnpm exec eslint .
 | 改前端 UI / 样式 / 布局（组件、CSS、token、动画、主题、响应式） | **先加载 `frontend-styles` skill**（`.agents/skills/frontend-styles/SKILL.md`，强制）+ 对应端 code-map |
 | 写 / 改 / 审查单元测试 | **先加载 `unit-test-discipline` skill**（`.agents/skills/unit-test-discipline/SKILL.md`，强制） |
 | 改 Rust 后端（任意模块） | 对应端 code-map → 模块目录 → §6 Rust 规范 + 相关 ADR（docs/adr/） |
-| 改插件 | §7 插件检查清单 + WIT（`packages/plugin-sdk-*/rust/wit/bedcode.wit`）+ ADR 0017/0019/0022 |
+| 改插件 | `docs/knowledge/plugin-development-checklist.md`（全文）+ WIT（`packages/plugin-sdk-*/rust/wit/bedcode.wit`）+ ADR 0017/0019/0022 |
 | 改数据库 / schema | §9 数据规范 + `bedcode-desktop/src-tauri/src/db/` |
 | 改跨端协议（HTTP/WS/QR/认证） | §9 协议规范 + `docs/knowledge/mobile-desktop-auth.md`，两端同步评估 |
 | 排查日志 / 无日志问题 | `docs/knowledge/logging.md` + `.scratch/2026-09-07-adb-fd0-bug/bug-report.md` |
@@ -150,6 +144,7 @@ pnpm exec eslint .
 
 ### 单元测试（Unit Test Discipline）
 
+- **时机**：开发中每次改动后写/跑针对性单元测试自验（过滤命令见 §3）；集成测试编写与全量回归留到任务收尾（§10）
 - **单元测试的开发、编写、审查必须先加载 `unit-test-discipline` skill 并以其规范为准**：行为契约 → 测试矩阵 → 硬性门禁 G1-G6 → 实际运行 → 变异自检
 - 禁止交付无断言 / 恒真断言 / 只测 mock / 快照替代行为断言 / 只为覆盖率（完整反模式清单见 skill）
 
@@ -164,77 +159,9 @@ pnpm exec eslint .
 
 ## 7. 插件开发检查清单
 
-插件位于 `plugins/<plugin-id>/`（独立 package：`plugin.json` + `rust/` WASM 后端 + `src/` TS 前端 + `vite.config.ts`）。开发/修改插件逐项核对：
+**全文外移**：[`docs/knowledge/plugin-development-checklist.md`](docs/knowledge/plugin-development-checklist.md)。
 
-- [ ] manifest 声明 `permissions`（前端快速失败 + Rust 端最终仲裁；文件系统走 fs_auth **三层**校验：
-  第一方具名集成目录预授权 → 已授权路径前缀（持久化「记住」）→ 弹窗授权。票 07 起旧的两条特权已退役：
-  「`.claude/` 路径子串白名单」（对任何插件都免弹窗、任意位置的同名段都算）与「内置插件白名单 = 任意路径放行」；
-  第一方清单在 `plugin/security/fs_auth.rs::FIRST_PARTY_TRUSTED_DIRS`，**逐条注释归属**，新增条目要说得出
-  消费它的函数；任务单元（core-task 池线程）只走 `is_granted` 无弹窗判据，未授权即 fail-visible 拒绝，
-  绝不从池线程触发弹窗）
-- [ ] 对外可调 API 在 manifest `api` 字段声明，经 `#[plugin_api]` 宏 + JSON-RPC 2.0；**未声明不可调**（ADR 0017）
-- [ ] 契约边界单点维护在 WIT（`packages/plugin-sdk-*/rust/wit/bedcode.wit`）；改 WIT 必须双端同步 + ABI bump（wasmtime 桌面 48 / 移动 47 分叉中，见 `.scratch/2026-09-18-wasmtime-48-upgrade/spec.md`；双端对齐后恢复锁死表述）。**双端偏离（已文档化，ADR 0022「双端偏离」节）**：
-桌面独有接口不要求移动端跟演——`host-websocket`（v14）、`host-auth`（v15 密钥托管 /
-v18 认证记录面（v24 已退役，见下））、`host-pty`（v16）、`auth-policy` 导出（v17，认证中心能力，票 12 server
-认证中间件取策略）、`host-session` 会话语义批次与 `host-platform.wsl-distros`（v19）、
-`host-task`（v20 并发任务域 + `events-task` 可选导出）只在 desktop WIT/ABI/SDK 演进；
-当前 desktop **v25**（v25 = `host-peer` 增节点生命周期引擎原语
-（`start-node` / `stop-node`，审计票 12 选项 A）——peer-net 节点从「内核按硬编码产品 id 开关」改为
-「属主插件自行请求、内核只记账」：`FILE_TRANSFER_PLUGIN_ID` 双定义、激活/停用按 id 外壳与 boot
-按 id 对账（`sync_node_with_plugin_state`）全部退役，激活失败改走按属主补偿；函数级追加不破坏
-旧产物，要用须按 v25 SDK 重建；桌面独有（host-peer 不在 mobile WIT，移动端不跟演）；v24 = 认证记录下沉 + 配置面退役：host-auth 删 7 记录面原语
-（trusted-devices-list / revoke、connection-history-list / clear、upsert / touch / record——
-配对设备 / 连接历史真源随 2026-09-22 用户裁定下沉 `com.bedcode.terminal-session`
-私有库 auth_records 域，宿主不再持有；存量迁移链 2026-09-23 用户裁定整体退役——
-不再兼容旧版本存量用户（`wasm_core/legacy/` 四迁移删除，旧库滞留表不读不迁不清理）），host-session 删 config-list /
-config-get（`session_configs` 表退役，私有库即真源）；v23 = host-session 配置面写原语退役：删 `config-upsert` / `config-delete`，读取面 `config-list` / `config-get` 保留为一次性 legacy 迁移通道，权限位 `session:config` 同步退役（config-get 改挂 `session:read`）；v22 = `host-platform.reveal-in-dir` 平台定位原语——函数级追加、**不叠加权限门**，`system:open` 权限与宿主 `plugin_reveal_in_dir` 命令、前端 `context.system` API 随之退役；v21 = host-session 收敛退役：删 `create` / `restart`，创建与重启编排全部归插件——首个**接口函数删除**，旧产物需按 v21 SDK 重建）、mobile 11。移动端要接同类能力时再补该端 interface 并对齐计数（恢复
-条件见同一节）。**同一批次内函数级追加不再 bump**（v19 已含配置面 / 创建与动作面 /
-注解槽 / 连接清单四组；票 02/03 又追加 `host-fs.read-dir / canonicalize / stat` 与
-`host-process.run-sync`——文件浏览域下沉所需的引擎级原语，仍保持 v19），别拿批次号当函数号数。**不 bump 的行为变更（审计票 05）**：`host-bus` topic **命名空间**——函数签名零变化故不动版本号，但定向事件串由 `<base>.<owner>` 改为 `<owner>::<base>`（`pty:exit` / `ws:*` / `mdns:found|lost`），且跨属主订阅/伪发布由「无人拦截」改为**宿主显式拒绝**；旧产物不静默断流（按旧形态订阅会在 activate 期拿到点明新形态的错误），须按 v22 SDK（`owned_topic` / `*_event_topic`）重建。移动端 `host-mdns` 仍用旧形态、mobile 总线无门禁 → 该端跟演时需同批补 SDK 原语 + 总线 ACL + mobile file-transfer 迁移，桌面结果不构成移动端的正确性依据
-- [ ] **同实例串行红线（A0-3 宿主 async 化，P3；依据 `.scratch/2026-09-21-a0-3-host-async/spec.md`，探针已证兼容）**：每插件实例同一时刻**仍只允许一个 guest 调用在执行**——async 化只改变「宿主线程在等待时让出」，不引入同实例并发进入 guest；`host.rs` 实例锁（std `Arc<Mutex<LoadedWasmPlugin>>`）async 化时改为 tokio `Mutex`（await 持锁、不因等待释放），串行语义与现在等价；**禁止**改成细粒度「await 点释放锁」（会导致同实例交错：插件静态状态竞态——配对码/QR/挑战注册表/config 缓存/私有库 + wasmtime Store 重入 panic）
-- [ ] 宿主能力经 `host-*` 原语访问（清单见 `plugin/manager/capability.rs::HOST_PRIMITIVE_CAPABILITIES`，现 **21 组**（清点：进程 3 + 网络 5 + 存储 4 + 宿主面 7 + 互调 2；`host-crypto` 并入后为 23，会话引擎下沉票 10 删 `host-session` / `host-terminal` 两组 → 21）：进程 = `host-pty`（交互式）/ `host-process`（非交互）/ `host-task`（并发任务域 v20，WASM 插件调度宿主 OS 线程池），网络 = `host-http` / `host-websocket` / `host-mdns` / `host-peer` / `host-connection`（宿主 server 在册连接清单，票 04 自 `host-session` 迁出，权限位 `connection:read` 与域名同源），存储 = `host-database` / `host-plugin-database` / `host-storage` / `host-fs`，宿主面 = `host-events` / `host-config` / `host-log` / `host-timer` / `host-app` / `host-platform` / `host-crypto`（v27 起 `host-terminal` / `host-session` 已退役、`host-crypto` 归入本类），互调与总线 = `host-bus` / `host-api-call`），能力**不得携带业务语义**（ADR 0022）；**授权无默认位**（票 02：旧形态在 `grant_permissions` 里无条件塞 `storage`，使主库/私有库权限门恒过，现只授予 manifest 声明且在本表内的权限，被过滤项由激活路径 `warn` 留痕），且主库 SQL 面与私有库面分域：主库（`host-database` 的 `db_*`）挂独立高危位 `database:main`——**当前生产插件零消费者，改判为仅第一方按需申请**（票 03 起进逐位人工确认清单），访问还受 SQLite 引擎层表名白名单仲裁（正则 `validate_sql_table_prefix` 只是早失败文案，不是边界）；私有库（`host-plugin-database`）与 KV（`host-storage`）仍走 `storage`；权限按风险域拆分（如 `pty:spawn` / `pty:io`、`ws:client` / `ws:server`、`task:run` + 每单元 kind 既有域权限门双门），拆分后同步点必须同步落：**权限词汇唯一真源是桌面 SDK `packages/plugin-sdk-desktop/rust/src/permission.rs`**（打包 CLI 与前端合法集读的都是它的生成物 `bin/permission-vocabulary.json` / `src/plugin/permission-vocabulary.ts`，加/拆位后跑 SDK `pnpm run gen:permissions` 重出，禁止再手抄清单），随后落宿主能力清单与 host_impl 权限门——漏任一处即词汇漂移锁翻红（锁在 `plugin/permission.rs`，断言集合相等而非包含）；**插件构建链的映射表**（`packages/plugin-sdk-desktop/bin/manifest-gen.js` 的 `RUST_PERMISSION_RULES` / `FRONTEND_PERMISSION_RULES`）同为消费方——退役/改名权限位必须同步改表，表含词汇表外权限时 manifest-gen **加载即抛错**（2026-09-22 加护栏，见 `.scratch/2026-09-21-wasm-core-audit/issues/15-manifest-gen-stale-permission-map.md`；此前 v23 退役 `session:config` 未跟演，导致 `plugins:build` 整链不可用）
-- [ ] **会话真源在插件（P1-b，2026-09-24）**：会话登记 / 状态机 / 生命周期分发 / 输入输出编排归
-  `com.bedcode.terminal-session` 私有登记域（`plugins/terminal-session/rust/src/session/`，
-  `sessions` / `session_annotations` 两表是落盘真源）。宿主侧**读会话事实一律经
-  `utils/session_gateway.rs`**（纯互调 api：`session-list/get/create/close/remove/resize/input`），
-  插件未激活**显性报错**。**内核会话实现目录 `src-tauri/src/session/` 已于票 11 整目录删除**
-  （`SessionManager` / `SessionConfigManager` / `SessionOutputManager` / `GlobalOutputManager` /
-  `SessionInfoRegistry` / 业务输出环与内核订阅执行体全删，防回接锁
-  `retired_kernel_session_domain_is_not_reintroduced`）——**禁止**再新增任何「宿主内核持有会话」
-  的代码，会话事实只有一处：插件登记域；宿主侧剩下的会话相关能力只有
-  `host-pty`（引擎）+ `host-connection`（连接清单）+ `session_gateway`（互调窄转发层）。
-  连带：移动端 WS 终端通道的「业务输出环」路径（订阅 / 退订 / ack / 历史快照 / 内核
-  status 兜底 watcher / 关停与连接清理里的内核环退订）全部删除，**只剩引擎一条来路**
-  （票 05 广播声明 + 票 06 直读同进程 `PtyRing`；订阅句柄是连接私有的，随连接 actor
-  `SubscriptionState::cleanup` 退休、随引擎终态帧退出）。
-  共享订阅类型（`SubscribeResponse` / `SubscriberHandle` / `SubscriberStats`）与双速模式常量
-  `MODE_REALTIME` / `MODE_BATCH` 迁入 WS 订阅侧（`server/websocket/terminal_ws/`：
-  响应与句柄在 `subscriber.rs`、模式常量在 `forward.rs`）——它们的真实归属就是订阅者，
-  不是会话层。**`host-session` 整 interface 已于
-  ABI v27 退役**（会话引擎下沉票 10：12 条原语全删，`connections-list` 在票 04 先迁成独立原语
-  `host-connection.connections-list`——判据换挂新位 **`connection:read`**，只授 `session:read`
-  不再能读连接清单）；**`host-terminal`（`send`）同批退役**（「宿主替插件往交互终端注入按键」的
-  最后一处业务面入口，零消费者且实现 100% 依赖会话域）。同批删除两个失去派发源的导出
-  （`terminal-hooks` 整 interface + `events` 的 `on-session-lifecycle` / `on-input-submitted`）。
-  插件要用 PTY：manifest 声明 `pty:spawn`（创建/终止）+ `pty:io`（数据面）+ `dependencies: ["host-pty"]`，
-  并发条数用 **`ptyQuota`** 自我声明（构建期只校形态=正整数，加载期校区间：0 或 >
-  `PLUGIN_PTY_SESSIONS_CEILING_PER_PLUGIN`(64) 直接拒 manifest，**不夹取**；未声明回落默认档 8）——
-  会话实际声明值 `ptyQuota: 8`，与退役前的内核上限同档，不借下沉放大
-- [ ] 插件导出：`activate`/`deactivate`、`command`、`_http_endpoint`（v27 起 `terminal-hooks` 与 `events` 的生命周期/输入观察两个回调已随会话观察面退役，不再属导出面）
-- [ ] 插件 HTTP 面（`_http_endpoint`，审计票 08）：**只认声明**——`contributes.httpEndpoints` 未声明的路径宿主直接 404（「未声明清单 → 前缀内 ANY 放行」的零迁移过渡已退役，未声明清单等于没有 HTTP 面）。每条可写 `{path, auth}` 声明认证档位，档位词汇 `none | jwt`（真源桌面 SDK `rust/src/types.rs::EndpointAuth`，与 `host-websocket` 注册面共用同一枚举；缺省档各面自定：WS = `none`、HTTP = **`jwt` 最严**），非法取值构建期由 `manifest-validate.js` 拒绝、运行期不登记该条（端点不可达）；`auth: "none"` 是免凭证可达的唯一形态，写给「拿不到 JWT 的调用方」（本机 hook 脚本、配对 / QR 这类 token 之前的入口）。宿主转发的入参带 `caller` = `device | localhost | anonymous`（环回按 TCP 对端判），可信设备另带 `device` 对象——**JWT 本体与设备指纹不透传**（§8 凭据红线）。网关别名条目的 `RouteAuth` 与插件声明档位**取较严者**，两方都不得单方面开门
-- [ ] 存储：插件独立库（私有 SQLite）/ 主库前缀隔离（表名强制 `plugin_id_` 前缀，且由 SQLite authorizer 在引擎层仲裁——逗号多表、引号标识符、`main.` 限定、ATTACH/PRAGMA 都绕不过去，见票 02）；**禁止在 dev-shell 写具体业务 mock**——mock 数据/演示种子归各自插件工程（插件入口导出 `devMock`）
-- [ ] 产物摘要 `wasmHash`（审计票 14）：**由构建链注入产物目录的 plugin.json，源清单不写该键**
-  （`packages/plugin-sdk-desktop/bin/wasm-hash.js` 按 `<rustLibrary>.wasm` 现算 SHA-256；四插件
-  `scripts/build.js`、dev 复制 `scripts/plugin-watch.js`、SDK CLI `build --resources-dir` 三个装配点共用
-  这一实现）。源里手写它不会被 `manifest-gen` 刷新 → `manifest-validate` 告警，且发布链
-  `scripts/package-plugins.mjs` 出包前逐条复核（缺键/形态非法/字节失配即 exit 1）。
-  「产物与源 manifest 逐字一致」的口径自本票起收窄为**除注入的 wasmHash 外一致**；移动端仍无生产者（桌面独有）
-- [ ] 测试内夹具 / 合成 manifest **禁止把 SDK 类型的结构体字面量逐字段列全当契约用**：SDK 追加
-  可选字段即批红，且只在跑到依赖该夹具的用例时才暴露（`pty_quota` 追加时六处字面量手改、漏一处
-  → 宿主 `--lib` 红 6 项，见 `.scratch/2026-09-23-session-engine-downsink/issues/14`）。构造
-  `PluginManifest` 一律只列本用例断言的字段 + `..Default::default()`；「`Default` 与 serde 缺省
-  等价」这条真有意义的不变量由 SDK 锁 `types.rs::default_manifest_equals_minimal_json_manifest` 守住
-- [ ] 日志：target=`bedcode_lib::plugin::plugin_log`，`[plugin:xxx]` 前缀，WASM trap backtrace 不得关闭（详情见 `docs/knowledge/logging.md`）
+开发 / 修改插件前**必须**通读该文档并逐项核对（permissions / WIT·ABI / `host-*` 能力与权限词汇 / 同实例串行 / 会话真源 / HTTP 面 / 存储隔离 / `wasmHash` / 日志等）。硬约束与本文件同级。
 
 ---
 
@@ -243,10 +170,7 @@ config-get（`session_configs` 表退役，私有库即真源）；v23 = host-se
 ### 安全红线（不可违反）
 
 - **禁止提交密钥/凭据**：仓库内唯一例外是签名真源 `bedcode.keystore`（私有仓库设计，见 §9 Android）；新增的任何密钥、token、密码禁止入库、禁止进日志、禁止写进文档/备注；API token 泄露按仓库规范删除重建
-- 认证链路（JWT / 设备指纹 / 二维码 / 生物凭证）只走既有 auth 模块，禁止旁路；**日志与存储中凭据只记长度不落明文**（`token.length()` 模式）。**分层口径（ADR 0022 会话语义下沉批次）**：配对码 / QR 的**编排、签发与验签执行**全在 `com.bedcode.terminal-session` 插件（`pairing/` / `qr/` / `auth_http`；2026-09-22 票 06 起新 id，旧 id `com.bedcode.session` 的 HTTP/API 名留双投窗口）；**认证记录（配对设备 / 连接历史）真源下沉认证中心私有库**（`auth_records` 域：`auth_pairings` / `auth_connection_history`，2026-09-22 用户裁定，逆转早期「信任表留宿主」结论）——宿主主库 `pairings` / `connection_history` / `session_configs` 三表退役；存量迁移链
-（`auth_records` / `quick_actions` / `session_db` / `task_data` 四迁移）2026-09-23 用户裁定
-整体退役——不再兼容旧版本存量用户，旧库滞留表不读不迁不清理（生物公钥寄主
-`plugin_secrets` key=`biometric:<fp>` 的语义不变）；**宿主只剩 `host-auth` 密钥托管 / 生物凭证原语 / 认证策略 capability**（`auth-policy` 取用，其 capability 传输失败时回退放行，防认证中心故障误杀全部连接，`warn` 留痕，**不算旁路**）。**配对 / QR 的宿主降级实现已整体退役**（2026-09-21，宿主命令面注销同批）：`utils/auth/auth_center.rs` 的配对 / QR 桥接函数、`PairingService`、`QrTokenManager`、`utils/auth/pairing.rs` 与应用上下文装配链全部删除——插件未激活时前端命令面显性报错，不存在宿主代签路径；新代码不得绕过插件自行签发或验签
+- 认证链路（JWT / 设备指纹 / 二维码 / 生物凭证）只走既有 auth 模块，禁止旁路；**日志与存储中凭据只记长度不落明文**（`token.length()` 模式）。**分层口径（ADR 0022）**：配对码 / QR 的编排、签发与验签全在 `com.bedcode.terminal-session` 插件（`pairing/` / `qr/` / `auth_http`）；认证记录（配对设备 / 连接历史）真源在该插件私有库 `auth_records` 域；宿主主库 `pairings` / `connection_history` / `session_configs` 三表与存量迁移链已退役（不兼容旧版本存量用户，旧库滞留表不读不迁不清理；生物公钥寄主 `plugin_secrets` key=`biometric:<fp>` 语义不变）；宿主只剩 `host-auth` 密钥托管 / 生物凭证原语 / 认证策略 capability（`auth-policy` 取用，capability 传输失败时回退放行防误杀全部连接 + `warn` 留痕，**不算旁路**）。**无宿主代签降级路径**——插件未激活时前端命令面显性报错；新代码不得绕过插件自行签发或验签（删除清单与日期见 ADR 0022）
 - 输入校验与权限仲裁在 Rust 端，前端校验仅是 UX；WebSocket/HTTP 接入必须过认证与过滤链（TrafficFilterChain）
 - **真源换了地方就要 fail-visible**（通用判据）：事实真源迁走后，**旧读路径必须显性失败，
   禁止静默降级成「无数据」**——静默降级会让「线还在、数据永远是空」的断链在测试全绿的情况下
@@ -255,12 +179,7 @@ config-get（`session_configs` 表退役，私有库即真源）；v23 = host-se
   变更后旧产物要在**实例化期**拿到点名缺失 interface + 「按哪个版本重建」的错误，不是 trap
   也不是静默降级；③ **退役的权限位 / 命令字眼**：构建链映射表含词汇表外条目时**加载即抛**，
   而不是注入一个永远过不了门的权限。
-  **先例（本判据的来源，2026-09-24 会话下沉专项）**：P1-b 起会话事实只在插件登记域（§7），
-  宿主「回查内核拿会话」曾造成桌面终端窗口按键丢失、任务队列被批量标中断而测试全绿；
-  该专项把上述三形态各落了一处锁与一处文案（防回接锁
-  `retired_kernel_session_domain_is_not_reintroduced`、
-  `LoadedWasmPlugin::stale_artifact_rebuild_hint`、`manifest-gen.js` 加载期词汇自检），
-  详见 `.scratch/2026-09-23-session-engine-downsink/spec.md`
+  **先例（本判据的来源）**：2026-09-24 会话下沉专项——宿主「回查内核拿会话」曾造成桌面终端按键丢失、任务队列被批量标中断而测试全绿；三形态各已落锁（防回接锁 / `LoadedWasmPlugin::stale_artifact_rebuild_hint` / `manifest-gen.js` 加载期词汇自检），详见 `.scratch/2026-09-23-session-engine-downsink/spec.md`
 - **`pty:spawn` 是「在宿主机执行任意命令」的高风险面**：只发确有 PTY
   需求的第一方插件（会话插件经 `host-pty.spawn` 自产会话、argv 由插件算，宿主不包装），
   并发上限由 `ptyQuota` 声明 + 加载期区间仲裁，不在运行期放宽
@@ -286,13 +205,13 @@ config-get（`session_configs` 表退役，私有库即真源）；v23 = host-se
 ### 数据库（SQLite）
 
 - **主库 schema 单一事实源**：`bedcode-desktop/src-tauri/src/db/schema.sql`；列级迁移写在 `database.rs::run_migrations()`，**迁移必须幂等**（可对旧库重跑），禁止手改生产库；改 schema 必须补迁移幂等测试
-- 插件存储隔离见 §7（独立库 / 主库 `plugin_id_` 前缀）
+- 插件存储隔离见 `docs/knowledge/plugin-development-checklist.md`（独立库 / 主库 `plugin_id_` 前缀）
 - 测试数据：Rust 走临时目录 + `with_default`（日志），禁止污染真实数据/日志目录
 
 ### 网络协议 / 跨端兼容
 
 - 协议（HTTP / WS / QR 配对 / 认证）改动**必须两端同步部署**（桌面主机 + 移动端），字段演进遵循「老端忽略未知字段」的增量原则，禁止破坏性替换
-- 认证/配对协议文档：`docs/knowledge/mobile-desktop-auth.md`；宿主/插件契约见 §7 WIT
+- 认证/配对协议文档：`docs/knowledge/mobile-desktop-auth.md`；宿主/插件契约见 `docs/knowledge/plugin-development-checklist.md`（WIT 节）
 - wasmtime 版本升级必须两端同步（ADR 0019）
 
 ### 产物与生成文件
@@ -311,10 +230,13 @@ config-get（`session_configs` 表退役，私有库即真源）；v23 = host-se
 
 ## 10. 完成定义与验证证据
 
-以下命令**必须实际运行并贴出结果**；无法运行（环境缺失 / 平台限制）必须说明原因与风险：
+**测试两段式**：开发中每次改动后只跑针对性单元测试自验（§3 过滤命令），不跑全量套件；**本节是任务最后一环**——先补齐集成测试编写，再跑全量回归。
 
-- 改了 Rust → `cargo test` 通过（两端各自）
-- 改了前端 → `pnpm run test:run` 通过（对应端）
+收尾验证以下命令**必须实际运行并贴出结果**；无法运行（环境缺失 / 平台限制）必须说明原因与风险：
+
+- 集成测试：补齐/更新相关用例（Rust `src-tauri/tests/`、前端 `src/__tests__/integration/`）；与本任务无涉时写明理由跳过
+- 改了 Rust → `cargo test` **全量**通过（两端各自，含集成 target）
+- 改了前端 → `pnpm run test:run` **全量**通过（对应端）
 - 改了 `gen/android` 下 Kotlin → `./gradlew :app:compileUniversalDebugKotlin` 通过
 - 改了前端 → 根目录 `pnpm exec eslint .` 0 error（warning 不计入）；`cargo fmt` / `cargo clippy` 提交前自查（非 CI 门禁）
 - i18n key 同步出现在 zh-CN 和 en
@@ -388,6 +310,7 @@ CI 门禁（合并到 master/uat 时）：`lint.yml`（eslint 0 error）+ `test.
 | Triage 标签 | needs-triage / needs-info / ready-for-agent / ready-for-human / wontfix，见 `docs/agents/triage-labels.md` |
 | 发布流程 | `docs/knowledge/release-workflow.md`（桌面 updater / 移动发布）、`docs/knowledge/sdk-publish.md`（SDK 发布） |
 | 日志 / 排障 | `docs/knowledge/logging.md`、`.scratch/2026-09-07-adb-fd0-bug/bug-report.md` |
+| 插件开发检查清单 | `docs/knowledge/plugin-development-checklist.md`（AGENTS §7 指向的全文） |
 | 插件 WASM 日志 spec | `.scratch/2026-09-09-plugin-wasm-logging/spec.md` |
 | 架构路线 | `.scratch/2026-09-10-plugin-kernel-roadmap/spec.md`、`.scratch/2026-09-10-platform-kernel/spec.md` |
 | pi 工具手册 | `docs/agents/pi-tools.md`（附录） |
