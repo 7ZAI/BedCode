@@ -715,13 +715,20 @@ impl WasmRuntime {
 
         let fs_auth = Arc::new(FsAuthChecker::new(storage.clone(), app_handle));
 
+        // task 段快照源注册（spec 票 02 去环）：monitor 经注册回调取 host-task
+        // 指标，monitor.rs 不再内联引用 manager::task。注册幂等；monitor 仅经本
+        // runtime 暴露，快照必在注册之后——生产路径无「未注册段降级」窗口
+        // （降级仅裸 registry 单测可观测，见 monitor.rs tests）
+        let monitor = Arc::new(MetricsRegistry::new());
+        crate::wasm_core::manager::task::register_task_metrics_source(&monitor);
+
         Ok(Self {
             engine,
             linker,
             fs_auth,
             aot_cache_dir,
             config: Arc::new(std::sync::RwLock::new(core_config)),
-            monitor: Arc::new(MetricsRegistry::new()),
+            monitor,
         })
     }
 

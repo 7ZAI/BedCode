@@ -42,6 +42,7 @@ use tokio::sync::mpsc as tmpsc;
 
 use crate::wasm_core::host_api::{fs, http, process};
 use crate::wasm_core::manager::runtime::{ambient_handle, WasmHostContext};
+use crate::wasm_core::monitor::{MetricsRegistry, MetricsSource};
 use crate::system::constants as C;
 
 // ==================== 数据类型 ====================
@@ -215,6 +216,25 @@ pub(crate) fn task_metrics_snapshot() -> serde_json::Value {
         "eventsDroppedTotal": TASK_METRICS.events_dropped_total.load(Ordering::Relaxed),
         "poolThreads": C::PLUGIN_TASK_POOL_THREADS,
     })
+}
+
+/// host-task 维度快照源（monitor 注册制，spec 票 02）：把 [`task_metrics_snapshot`]
+/// 包装为 [`MetricsSource`] trait 对象。core-monitor 不再内联 import manager::task
+/// （隐藏环 host_api/fs → monitor → manager → host_api 破除），全量快照经
+/// 注册回调取得 `task` 段
+pub(crate) struct TaskMetricsSource;
+
+impl MetricsSource for TaskMetricsSource {
+    fn snapshot(&self) -> serde_json::Value {
+        task_metrics_snapshot()
+    }
+}
+
+/// 向 core-monitor 注册 `task` 段快照源（幂等：同名重复注册覆盖不叠加）。
+/// 注册点 = runtime 初始化 `with_config`——晚于 monitor 创建、早于任何
+/// 快照消费方，无「未注册段降级」时序窗口
+pub(crate) fn register_task_metrics_source(registry: &MetricsRegistry) {
+    registry.register_source("task", Box::new(TaskMetricsSource));
 }
 
 /// 事件条目：属主 + 事件 JSON + 投递目标上下文（消费任务经 host_ctx.services() 取 services）

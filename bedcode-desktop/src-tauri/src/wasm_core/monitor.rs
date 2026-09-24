@@ -10,8 +10,10 @@
 //! 指标标签只用 `plugin_id` 等结构化维度，禁止拼消息字符串。
 //!
 //! 可扩展性：所有写入收敛于 [`MetricsRegistry::plugin`] 返回的 [`PluginMetrics`]
-//! 句柄，未来新增指标只需在 [`PluginMetrics`] 加字段；sink 扩展点（文件/远程
-//! 上报）以消费 [`MetricsRegistry::snapshot`] 的方式接入，不改埋点侧。
+//! 句柄，未来新增指标只需在 [`PluginMetrics`] 加字段；系统维度段经
+//! [`MetricsRegistry::register_source`] 注册 [`MetricsSource`] 自供给（如 host-task
+//! 的 `task` 段），monitor 不内联依赖兄弟模块；sink 扩展点（文件/远程上报）以
+//! 消费 [`MetricsRegistry::snapshot`] 的方式接入，不改埋点侧。
 
 use serde::Serialize;
 use std::collections::HashMap;
@@ -218,6 +220,19 @@ impl Drop for CallTimer {
     }
 }
 
+// ==================== 系统维度快照源（注册制） ====================
+
+/// 系统维度指标快照源（spec 票 02 去环：Observer + Registry 模式）
+///
+/// monitor 不主动 import 兄弟模块——各维度数据属主（如 host-task 的 `task` 段）
+/// 实现本 trait，并在 runtime 初始化时经 [`MetricsRegistry::register_source`]
+/// 自注册；全量快照通过 trait 对象回调合并输出。注册名即快照输出段名，
+/// 重复注册覆盖不叠加（注册点幂等）。
+pub trait MetricsSource: Send + Sync {
+    /// 本维度快照（JSON；键名 camelCase，沿既有 JSON 惯例由属主自定）
+    fn snapshot(&self) -> serde_json::Value;
+}
+
 // ==================== 快照（导出形状） ====================
 
 /// 单插件指标快照（serde 字段名即对外契约，保持稳定）
@@ -295,6 +310,8 @@ impl PluginMetrics {
 pub struct MetricsRegistry {
     /// plugin_id → 指标集
     plugins: RwLock<HashMap<String, Arc<PluginMetrics>>>,
+    /// 系统维度快照源（键 = 快照输出段名，如 `task`；注册制注入，见 [`MetricsSource`]）
+    sources: RwLock<HashMap<String, Box<dyn MetricsSource>>>,
 }
 
 impl Default for MetricsRegistry {
@@ -307,7 +324,16 @@ impl MetricsRegistry {
     pub fn new() -> Self {
         Self {
             plugins: RwLock::new(HashMap::new()),
+            sources: RwLock::new(HashMap::new()),
         }
+    }
+
+    /// 注册系统维度快照源（幂等：同名重复注册覆盖不叠加）
+    pub fn register_source(&self, name: &str, source: Box<dyn MetricsSource>) {
+        self.sources
+            .write()
+            .expect("metrics sources lock poisoned")
+            .insert(name.to_string(), source);
     }
 
     /// 获取（或创建）插件指标句柄
@@ -322,12 +348,14 @@ impl MetricsRegistry {
             .clone()
     }
 
-    /// 全量快照（JSON）：`{ "plugin": { "<plugin_id>": { ... } }, "task": { ... } }`
+    /// 全量快照（JSON）：`{ "plugins": { "<plugin_id>": { ... } }, <source_name>: { ... }, ... }`
     ///
-    /// `task` 段来自 host-task 进程级指标（core-task 埋点源，见
-    /// [`crate::wasm_core::manager::task::task_metrics_snapshot`]）：任务提交/激活/拒绝
-    /// 计数、单元完成累计、并发高水位、回调丢弃计数（spec §5.1）——与插件维度
-    /// 指标并列，均为纯原子记账、快照导出是唯一消费口。
+    /// `plugins` 段为插件维度指标；其余段来自已注册的 [`MetricsSource`]。
+    /// host-task 的 `task` 段由 `manager::task` 经 [`Self::register_source`] 注册，
+    /// 内容见 [`crate::wasm_core::manager::task::task_metrics_snapshot`]：任务提交/拒绝
+    /// 计数、单元完成累计、并发高水位、回调丢弃计数（spec §5.1）——各段均纯原子
+    /// 记账、快照导出是唯一消费口。未注册段在快照中缺失而非 panic（确定性降级，
+    /// fail-visible；生产路径 runtime 初始化即注册，无此窗口）。
     pub fn snapshot(&self) -> serde_json::Value {
         let map = self.plugins.read().expect("metrics lock poisoned");
         let plugins: serde_json::Map<String, serde_json::Value> = map
@@ -339,10 +367,13 @@ impl MetricsRegistry {
                 )
             })
             .collect();
-        serde_json::json!({
-            "plugins": plugins,
-            "task": crate::wasm_core::manager::task::task_metrics_snapshot(),
-        })
+        let mut out = serde_json::Map::new();
+        out.insert("plugins".to_string(), serde_json::Value::Object(plugins));
+        let sources = self.sources.read().expect("metrics sources lock poisoned");
+        for (name, source) in sources.iter() {
+            out.insert(name.clone(), source.snapshot());
+        }
+        serde_json::Value::Object(out)
     }
 }
 
@@ -478,5 +509,81 @@ mod tests {
             assert!(plugin.get(key).is_some(), "快照缺字段 {key}");
         }
         assert_eq!(plugin["lifecycle"]["instantiate"], 1);
+    }
+
+    /// 全量快照顶层结构逐字节对照（spec 票 02 行为零变化锁）：
+    /// `{"plugins":…,"task":…}` 两段与字段形状与旧内联实现一致
+    /// （serde_json Map 无 preserve_order，键字母序 plugins < task）。
+    /// task 段枚举字段沿用 host-task 既有 camelCase 键名。
+    #[test]
+    fn snapshot_byte_shape_matches_legacy_plugins_plus_task_layout() {
+        struct FixedTask;
+        impl MetricsSource for FixedTask {
+            fn snapshot(&self) -> serde_json::Value {
+                serde_json::json!({
+                    "jobsSubmittedTotal": 0,
+                    "jobsRejectedTotal": 0,
+                    "unitsCompletedTotal": 0,
+                    "concurrentUnitsPeak": 0,
+                    "eventsDroppedTotal": 0,
+                })
+            }
+        }
+        let reg = MetricsRegistry::new();
+        reg.register_source("task", Box::new(FixedTask));
+        assert_eq!(
+            reg.snapshot().to_string(),
+            r#"{"plugins":{},"task":{"concurrentUnitsPeak":0,"eventsDroppedTotal":0,"jobsRejectedTotal":0,"jobsSubmittedTotal":0,"unitsCompletedTotal":0}}"#
+        );
+    }
+
+    /// 系统维度快照源并入全量快照：plugins 段与 task 段并存互不影响
+    #[test]
+    fn snapshot_merges_registered_system_sources() {
+        struct FakeTask;
+        impl MetricsSource for FakeTask {
+            fn snapshot(&self) -> serde_json::Value {
+                serde_json::json!({"jobsSubmittedTotal": 7})
+            }
+        }
+        let reg = MetricsRegistry::new();
+        reg.plugin("com.bedcode.a")
+            .record_lifecycle(LifecycleEvent::Instantiate);
+        reg.register_source("task", Box::new(FakeTask));
+        let snap = reg.snapshot();
+        assert_eq!(snap["plugins"]["com.bedcode.a"]["lifecycle"]["instantiate"], 1);
+        assert_eq!(snap["task"]["jobsSubmittedTotal"], 7);
+    }
+
+    /// 注册点幂等：同名重复注册覆盖不叠加（重注册后快照只反映新源）
+    #[test]
+    fn register_source_overwrites_on_duplicate_name() {
+        struct SourceV1;
+        impl MetricsSource for SourceV1 {
+            fn snapshot(&self) -> serde_json::Value {
+                serde_json::json!({"v": 1})
+            }
+        }
+        struct SourceV2;
+        impl MetricsSource for SourceV2 {
+            fn snapshot(&self) -> serde_json::Value {
+                serde_json::json!({"v": 2})
+            }
+        }
+        let reg = MetricsRegistry::new();
+        reg.register_source("task", Box::new(SourceV1));
+        reg.register_source("task", Box::new(SourceV2));
+        assert_eq!(reg.snapshot()["task"]["v"], 2, "重复注册必须覆盖，不得叠加");
+    }
+
+    /// 未注册段确定性降级：快照不 panic、该段缺失（fail-visible）。
+    /// 生产路径 runtime 初始化即注册 task 源，无此窗口；仅裸 registry
+    /// 单测路径可观测。
+    #[test]
+    fn unregistered_source_segment_absent_without_panic() {
+        let reg = MetricsRegistry::new();
+        let snap = reg.snapshot();
+        assert!(snap.get("plugins").is_some());
+        assert!(snap.get("task").is_none(), "未注册段缺失而非 panic");
     }
 }
