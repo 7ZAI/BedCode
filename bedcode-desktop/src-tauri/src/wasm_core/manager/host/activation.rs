@@ -224,6 +224,9 @@ impl PluginHost {
             declared_preopen_dirs: Vec<WasiPreopenDir>,
             kind: PluginKind,
             dependencies: Vec<String>,
+            /// 票 09a：manifest `contributes.wsEndpoints`——在激活成功阶段登记进宿主
+            /// WS 端点注册表（声明驱动的静态路由，expand 阶段与旧硬编码分发并存）
+            ws_endpoints: Vec<WsEndpointContribution>,
         }
         let plan = {
             let mut plugins = self.plugins.write().await;
@@ -312,6 +315,7 @@ impl PluginHost {
                 declared_preopen_dirs: loaded.manifest.wasi_preopen_dirs.clone(),
                 kind: loaded.manifest.kind,
                 dependencies: loaded.manifest.dependencies.clone(),
+                ws_endpoints: loaded.manifest.contributes.ws_endpoints.clone(),
             }
         };
 
@@ -506,6 +510,17 @@ impl PluginHost {
         // 未更新的旧调用方按旧名互调时照常可达
         let api_list = with_api_aliases(plugin_id, &plan.api);
         self.wasm_host_ctx.api_registry().register(plugin_id, &api_list);
+
+        // 票 09a：manifest 声明的 WS 端点登记（expand——声明式静态路由与宿主硬编码
+        // 分发并存）。这里的登记必须以「激活期」为锚点：deactivate 会 `purge_for_plugin`
+        // 回收该插件全部 ws 端点，只有激活期重登记才能让 deactivate→activate 循环后
+        // 声明端点不丢（与 httpEndpoints 的 load 期登记不同——ws 端点生命周期随激活）。
+        // 插件未导出 `events-ws` 的端点帧投递会降级为丢弃（宿主不缓存，spec §2.2），
+        // 声明了但没接事件的插件即时看到的形态是可连但无回包——fail-visible 需按插件端
+        // 是否实现回调判定，宿主只负责「按声明登记、按声明可达」。
+        if !plan.ws_endpoints.is_empty() {
+            self.register_declared_ws_endpoints(plugin_id, &plan.ws_endpoints).await;
+        }
 
         // core-plugin-manager：系统组件激活后装配能力注册表——实例化时探测到的
         // 可路由能力导出（host-* 同形接口）注册为系统组件提供者，应用插件的

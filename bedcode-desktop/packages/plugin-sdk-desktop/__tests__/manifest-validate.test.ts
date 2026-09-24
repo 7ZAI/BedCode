@@ -135,6 +135,102 @@ describe('contributes.httpEndpoints 校验', () => {
   })
 })
 
+// ==================== contributes.wsEndpoints（票 09a）====================
+
+/** 写一份只关心 wsEndpoints 的最小 manifest，返回与 wsEndpoints 相关的错误 */
+function errorsForWsEndpoints(wsEndpoints: unknown): string[] {
+  const contributes =
+    wsEndpoints === undefined ? {} : { wsEndpoints: wsEndpoints as never }
+  writeFileSync(
+    join(cwd, 'plugin.json'),
+    JSON.stringify(
+      {
+        id: 'com.example.test',
+        name: 'Test Plugin',
+        version: '1.0.0',
+        main: 'index.js',
+        pluginType: 'rust-ts',
+        rustLibrary: 'test_plugin',
+        permissions: [],
+        contributes,
+      },
+      null,
+      2,
+    ),
+    'utf-8',
+  )
+  const { errors } = validateManifest(cwd)
+  return errors.filter((e) => e.includes('wsEndpoints'))
+}
+
+describe('contributes.wsEndpoints 校验（票 09a WS 动作词表声明式化）', () => {
+  it('W-V1 纯路径段与带 auth 的对象形态都合法（同 httpEndpoints 两形态）', () => {
+    expect(errorsForWsEndpoints(['echo', 'status'])).toEqual([])
+    expect(
+      errorsForWsEndpoints([
+        { path: 'echo', auth: 'none' },
+        { path: 'chat', auth: 'jwt' },
+        { path: 'session-mode' },
+      ]),
+    ).toEqual([])
+  })
+
+  it('W-V1 缺省与 null 都是「未声明」，不报错（未声明清单 = 插件 WS 面不可达）', () => {
+    expect(errorsForWsEndpoints(undefined)).toEqual([])
+    expect(errorsForWsEndpoints(null)).toEqual([])
+    expect(errorsForWsEndpoints([])).toEqual([])
+  })
+
+  it('W-V2 auth 只认 none | jwt，非法取值点明合法档位与 WS 缺省方向', () => {
+    const errors = errorsForWsEndpoints([{ path: 'echo', auth: 'token' }])
+    expect(errors).toHaveLength(1)
+    expect(errors[0]).toContain('token')
+    expect(errors[0]).toContain('none')
+    expect(errors[0]).toContain('jwt')
+    // 大小写敏感（与 Rust 解析一致）：JWT 不是合法档位
+    expect(errorsForWsEndpoints([{ path: 'a', auth: 'JWT' }])).toHaveLength(1)
+    // 空串不是合法档位——它不是「缺省」，写出来即错
+    expect(errorsForWsEndpoints([{ path: 'a', auth: '' }])).toHaveLength(1)
+  })
+
+  it('W-V3 条目形态非法必须报错，不静默当成未声明条目', () => {
+    for (const bad of [42, null, true, ['echo']]) {
+      expect(errorsForWsEndpoints([bad]), `条目 ${JSON.stringify(bad)} 应被拒`).toHaveLength(1)
+    }
+    // 合法对象但缺 path：一条「path 非法」+ 一条「未知字段」，两条都要报
+    expect(errorsForWsEndpoints([{ notPath: 'x' }])).toHaveLength(2)
+  })
+
+  it('W-V3 对象条目的未知字段被拒（WS 端点只认 path / auth）', () => {
+    const errors = errorsForWsEndpoints([{ path: 'echo', method: 'GET' }])
+    expect(errors).toHaveLength(1)
+    expect(errors[0]).toContain('method')
+  })
+
+  it('W-V4 path 判据：空段与 .. 被拒，且 path 必须是字符串', () => {
+    expect(errorsForWsEndpoints([{ path: '   ' }])).toHaveLength(1)
+    expect(errorsForWsEndpoints([{ path: '../secrets' }])).toHaveLength(1)
+    expect(errorsForWsEndpoints([{ path: 1 }])).toHaveLength(1)
+    expect(errorsForWsEndpoints([''])).toHaveLength(1)
+    expect(errorsForWsEndpoints(['a/../b'])).toHaveLength(1)
+  })
+
+  it('W-V4 前导斜杠归一后参与重复检测（两形态同一路径即重复）', () => {
+    const dupAcrossForms = errorsForWsEndpoints(['echo', { path: '/echo' }])
+    expect(dupAcrossForms).toHaveLength(1)
+    expect(dupAcrossForms[0]).toContain('重复声明')
+    expect(dupAcrossForms[0]).toContain('echo')
+    expect(errorsForWsEndpoints(['echo', { path: 'status', auth: 'none' }])).toEqual([])
+  })
+
+  it('非数组整体被拒且给出两形态的正确写法', () => {
+    const errors = errorsForWsEndpoints('echo')
+    expect(errors).toHaveLength(1)
+    expect(errors[0]).toContain('path')
+    expect(errors[0]).toContain('auth')
+  })
+})
+
 // ==================== wasmHash（票 14）====================
 
 /** 写一份只关心 wasmHash 的最小 manifest，返回与该字段相关的 errors / warnings */

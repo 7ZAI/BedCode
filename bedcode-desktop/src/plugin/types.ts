@@ -71,6 +71,13 @@ export interface PluginContributes {
    * （票据 03 的「前缀内 ANY 放行」过渡策略已随票 08 退役）。
    */
   httpEndpoints?: HttpEndpointContribution[]
+  /**
+   * 插件 WS 端点清单（`contributes.wsEndpoints`，票 09a WS 动作词表声明式化 · expand）：
+   * 与 httpEndpoints 同形态，条目为不含 `/ws/plugin/<插件 id>/` 前缀的相对路径段，
+   * 可写成 `{ path, auth }` 声明档位。宿主按声明静态登记进 WS 注册表并精确匹配，
+   * 未声明路径不可达；缺省档 = WS 面默认档 none。
+   */
+  wsEndpoints?: WsEndpointContribution[]
   /** 配置声明 */
   configuration?: PluginConfiguration
   /** 生命周期钩子声明 */
@@ -82,6 +89,9 @@ export type EndpointAuthTier = 'none' | 'jwt'
 
 /** 一条 HTTP 端点声明：纯路径段（档位 = 宿主最严缺省 jwt）或 `{ path, auth }` 对象 */
 export type HttpEndpointContribution = string | { path: string; auth?: EndpointAuthTier }
+
+/** 一条 WS 端点声明：纯路径段（档位 = WS 面缺省 none）或 `{ path, auth }` 对象（票 09a） */
+export type WsEndpointContribution = string | { path: string; auth?: EndpointAuthTier }
 
 /** 生命周期扩展点声明 */
 export interface LifecycleContribution {

@@ -234,6 +234,16 @@ pub struct PluginContributes {
     /// 档 `jwt`——免凭证必须逐条显式写 `auth: "none"`。
     #[serde(default)]
     pub http_endpoints: Vec<HttpEndpointContribution>,
+    /// 插件 WS 端点清单（`contributes.wsEndpoints`，票 09a WS 动作词表声明式化 · expand）
+    ///
+    /// 与 `httpEndpoints` 同语义：插件在 manifest 声明它要挂到宿主 WS 服务器的端点
+    /// 相对路径段（宿主注入完整路径 `/ws/plugin/<插件 id>/<path>`）。宿主按声明
+    /// 静态登记进 WS 端点注册表，路由侧**只按声明精确匹配**：未声明的路径不可达。
+    /// 每条可同时声明认证档位（[`WsEndpointContribution::Declared`]），缺省按
+    /// WS 面默认档（`none`）处理。声明式路由与既有硬编码分发（终端/会话动作
+    /// switch）**并存**，存量动作走旧路径仍工作（expand–contract 的 expand 阶段）。
+    #[serde(default)]
+    pub ws_endpoints: Vec<WsEndpointContribution>,
     /// 配置声明
     #[serde(default)]
     pub configuration: Option<PluginConfiguration>,
@@ -399,6 +409,49 @@ impl HttpEndpointContribution {
     }
 }
 
+/// 一条 WS 端点声明（票 09a：`contributes.wsEndpoints`，WS 动作词表声明式化 · expand）
+///
+/// - `"echo"` —— 只声明路径段，认证档位取宿主默认
+/// - `{ "path": "echo", "auth": "jwt" }` —— 显式声明档位
+///
+/// 与 [`HttpEndpointContribution`] 同形态（两形态并存 = 零迁移）。`auth` 保留原始
+/// 字符串，档位仲裁在宿主（[`EndpointAuth::parse_with`]）——声明面负责表达，
+/// 判定面负责解释。**缺省档由各传输面自定**：WS 缺省 = `none`（与 `host-websocket`
+/// `register-endpoint` 一致，插件自管首消息认证），HTTP 缺省 = `jwt`（最严，票 08）。
+/// 声明面只负责表达「路径 + 是否显式给档位」，不在此强求任何一面默认。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum WsEndpointContribution {
+    /// 仅路径段（认证档位 = 宿主默认）
+    Path(String),
+    /// 路径段 + 显式认证档位
+    Declared {
+        /// 相对路径段，与插件挂载到 `/ws/plugin/<id>/<path>` 的 `path` 逐字一致
+        path: String,
+        /// `"none"` | `"jwt"`；缺省 = 宿主默认档位
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        auth: Option<String>,
+    },
+}
+
+impl WsEndpointContribution {
+    /// 声明的相对路径段
+    pub fn path(&self) -> &str {
+        match self {
+            Self::Path(p) => p,
+            Self::Declared { path, .. } => path,
+        }
+    }
+
+    /// 声明的认证档位原始值（`None` = 未声明，由宿主按默认档处理）
+    pub fn auth_raw(&self) -> Option<&str> {
+        match self {
+            Self::Path(_) => None,
+            Self::Declared { auth, .. } => auth.as_deref(),
+        }
+    }
+}
+
 /// 一条 WASI 预打开目录声明（manifest `wasiPreopenDirs`，审计票 07 增只读档）
 ///
 /// - `"/data/x"` —— 可写挂载（既有 manifest 的唯一形态，零迁移）
@@ -530,6 +583,18 @@ impl From<&str> for HttpEndpointContribution {
 }
 
 impl From<String> for HttpEndpointContribution {
+    fn from(path: String) -> Self {
+        Self::Path(path)
+    }
+}
+
+impl From<&str> for WsEndpointContribution {
+    fn from(path: &str) -> Self {
+        Self::Path(path.to_string())
+    }
+}
+
+impl From<String> for WsEndpointContribution {
     fn from(path: String) -> Self {
         Self::Path(path)
     }
@@ -994,6 +1059,71 @@ mod tests {
     fn test_http_endpoint_from_str_is_path_form() {
         let e = HttpEndpointContribution::from("task-status");
         assert_eq!(e, HttpEndpointContribution::Path("task-status".to_string()));
+        assert_eq!(e.auth_raw(), None);
+    }
+
+    // ==================== WsEndpointContribution（contributes.wsEndpoints，票 09a） ====================
+
+    /// `wsEndpoints` 缺省即空清单 = 未声明（与 httpEndpoints 同判据）：
+    /// 未声明清单的插件 WS 端点整体不可达，宿主按「未声明即不解释」处理。
+    #[test]
+    fn test_ws_endpoints_default_is_undeclared() {
+        let c: PluginContributes = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(c.ws_endpoints.is_empty(), "未声明 wsEndpoints 必须解析为空清单");
+    }
+
+    /// 票 09a：`wsEndpoints` 两形态并存——`string` 与 `{path, auth}` 都能解析，
+    /// 与 `httpEndpoints` 同构，避免 WS 端点在解析期整表丢掉声明。
+    #[test]
+    fn test_ws_endpoints_parse_both_forms() {
+        let c: PluginContributes = serde_json::from_value(serde_json::json!({
+            "wsEndpoints": [
+                "echo",
+                { "path": "chat", "auth": "jwt" },
+                { "path": "status" }
+            ]
+        }))
+        .unwrap();
+        assert_eq!(c.ws_endpoints.len(), 3);
+        assert_eq!(c.ws_endpoints[0].path(), "echo");
+        assert_eq!(c.ws_endpoints[0].auth_raw(), None, "纯字符串条目 = 未声明档位");
+        assert_eq!(c.ws_endpoints[1].path(), "chat");
+        assert_eq!(c.ws_endpoints[1].auth_raw(), Some("jwt"));
+        // 对象条目缺 auth 键 → 未声明档位（由宿主按 WS 默认档 none 仲裁）
+        assert_eq!(c.ws_endpoints[2].path(), "status");
+        assert_eq!(c.ws_endpoints[2].auth_raw(), None);
+    }
+
+    /// 票 09a：序列化必须原样保持两形态（产物与源逐字一致，票 14 口径），
+    /// 不得把 `"echo"` 改写成对象或反向。
+    #[test]
+    fn test_ws_endpoints_round_trip_preserves_form() {
+        let src = serde_json::json!([
+            "echo",
+            { "path": "chat", "auth": "none" },
+            { "path": "status" }
+        ]);
+        let parsed: Vec<WsEndpointContribution> = serde_json::from_value(src.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&parsed).unwrap(), src);
+    }
+
+    /// 票 09a：形态错误的条目不会「降级成未声明」——整表解析失败（宿主拒绝激活），
+    /// 而不是静默收下少一项的清单。
+    #[test]
+    fn test_ws_endpoints_reject_malformed_entries() {
+        let parse = |raw: serde_json::Value| {
+            serde_json::from_value::<Vec<WsEndpointContribution>>(raw).is_err()
+        };
+        assert!(parse(serde_json::json!([{ "path": 1 }])));
+        assert!(parse(serde_json::json!([42])));
+        assert!(parse(serde_json::json!([["echo"]])));
+    }
+
+    /// `From<&str>` 让老写法 `vec!["x".into()]` 继续可用，产出「未声明档位」条目。
+    #[test]
+    fn test_ws_endpoint_from_str_is_path_form() {
+        let e = WsEndpointContribution::from("echo");
+        assert_eq!(e, WsEndpointContribution::Path("echo".to_string()));
         assert_eq!(e.auth_raw(), None);
     }
 

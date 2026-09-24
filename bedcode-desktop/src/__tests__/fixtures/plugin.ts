@@ -43,6 +43,8 @@ export interface FixturePluginContributes {
   toolProviders: ToolProviderContribution[]
   fileHandlers: FileHandlerContribution[]
   httpEndpoints: string[]
+  /** 票 09a：WS 端点静态声明（wire 镜像 wsEndpoints） */
+  wsEndpoints: string[]
   configuration: PluginConfiguration | null
   lifecycle: LifecycleContribution | null
   provides: string[]
@@ -57,6 +59,7 @@ export const CONTRIBUTES_DTO_FIELDS = [
   'toolProviders',
   'fileHandlers',
   'httpEndpoints',
+  'wsEndpoints',
   'configuration',
   'lifecycle',
   'provides',
@@ -73,6 +76,7 @@ export function makePluginContributes(
     toolProviders: [],
     fileHandlers: [],
     httpEndpoints: [],
+    wsEndpoints: [],
     configuration: null,
     lifecycle: null,
     provides: [],

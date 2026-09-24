@@ -187,6 +187,56 @@ export function validateManifest(dir) {
     }
   }
 
+  // contributes.wsEndpoints（票 09a WS 动作词表声明式化 · expand）
+  // 与 httpEndpoints 同构：纯路径段（档位 = 宿主 WS 默认档 none）或 `{ path, auth }`。
+  // 支持声明式 WS 端点：宿主按声明静态登记进 WS 注册表并精确匹配，未声明路径不可达。
+  // 条目非法会让声明侧「看起来有清单」而实际永远匹配不上，故构建期就判死；`auth` 取值真源
+  // 同样是 rust/src/types.rs 的 EndpointAuth（none|jwt）。
+  const WS_ENDPOINT_AUTH_TIERS = ['none', 'jwt']
+  const wsEndpoints = manifest.contributes?.wsEndpoints
+  if (wsEndpoints !== undefined && wsEndpoints !== null) {
+    if (!Array.isArray(wsEndpoints)) {
+      errors.push('contributes.wsEndpoints 必须是「路径段字符串」或「{path, auth} 对象」的数组')
+    } else {
+      for (const entry of wsEndpoints) {
+        const isString = typeof entry === 'string'
+        const isObject = entry !== null && typeof entry === 'object' && !Array.isArray(entry)
+        if (!isString && !isObject) {
+          errors.push(
+            `contributes.wsEndpoints 条目形态非法（须为字符串或 {path, auth} 对象）: ${JSON.stringify(entry)}`,
+          )
+          continue
+        }
+        const path = isString ? entry : entry.path
+        if (typeof path !== 'string' || path.trim() === '' || path.includes('..')) {
+          errors.push(
+            `contributes.wsEndpoints 条目 path 非法（须为非空相对路径段、不含 ..）: ${JSON.stringify(entry)}`,
+          )
+        }
+        if (isString) continue
+        const extraKeys = Object.keys(entry).filter((k) => k !== 'path' && k !== 'auth')
+        if (extraKeys.length) {
+          errors.push(
+            `contributes.wsEndpoints 条目含未知字段（只允许 path / auth）: ${extraKeys.join(', ')} → ${JSON.stringify(entry)}`,
+          )
+        }
+        if (entry.auth !== undefined && !WS_ENDPOINT_AUTH_TIERS.includes(entry.auth)) {
+          errors.push(
+            `contributes.wsEndpoints 条目 auth 取值非法（须为 ${WS_ENDPOINT_AUTH_TIERS.join(' | ')}，缺省即 WS 默认档 none）: ${JSON.stringify(entry)}`,
+          )
+        }
+      }
+      const normalized = wsEndpoints
+        .map((entry) => (typeof entry === 'string' ? entry : entry?.path))
+        .filter((p) => typeof p === 'string')
+        .map((p) => p.trim().replace(/^\/+/, ''))
+      const dup = normalized.filter((p, i) => normalized.indexOf(p) !== i)
+      if (dup.length) {
+        errors.push(`contributes.wsEndpoints 重复声明: ${[...new Set(dup)].join(', ')}`)
+      }
+    }
+  }
+
   // wasiPreopenDirs（票 07 只读档）：条目两形态——裸路径字符串（可写，既有形态）
   // 或 `{ path, readonly }` 对象。这里管形态，宿主 Rust 端（SDK
   // rust/src/types.rs::WasiPreopenDir::from_json）管仲裁：未知键 / 非布尔 readonly

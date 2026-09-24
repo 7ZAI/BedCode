@@ -216,6 +216,46 @@ async fn registered_http_endpoints_carry_declared_auth_tier() {
     );
 }
 
+/// 票 09a：manifest 声明的 WS 端点经 `register_declared_ws_endpoints` 登记进
+/// 宿主 WS 端点注册表（声明驱动静态路由，expand 阶段接口本身已存在）。
+/// 锁三件事：①合法声明登记成功且路径完整（挂载 `/ws/plugin/<id>/<path>`）；
+/// ②认证档位透传（缺省 = none，显式 jwt 原样）；③非法 path（含 `/`）与未声明
+/// 不登记——渲染侧不可达（fail-visible，不静默）。
+#[tokio::test(flavor = "multi_thread")]
+async fn registered_manifest_declared_ws_endpoints() {
+    use bedcode_plugin_api::{EndpointAuth, WsEndpointContribution};
+
+    let host = setup_host().await;
+    let endpoints = vec![
+        WsEndpointContribution::Path("echo".into()), // 缺省档 = none
+        WsEndpointContribution::Declared {
+            path: "chat".into(),
+            auth: Some("jwt".into()),
+        },
+        WsEndpointContribution::Declared {
+            path: "bad/path".into(), // 含 `/` → 不登记
+            auth: None,
+        },
+    ];
+    host.register_declared_ws_endpoints(TEST_PLUGIN_ID, &endpoints)
+        .await;
+
+    use crate::server::websocket::endpoint;
+    let echo = endpoint::find_by_mount(&endpoint::mount_path(TEST_PLUGIN_ID, "echo"));
+    assert!(echo.is_some(), "declared echo endpoint must be registered");
+    assert_eq!(echo.unwrap().auth, EndpointAuth::None, "缺省档 = none");
+
+    let chat = endpoint::find_by_mount(&endpoint::mount_path(TEST_PLUGIN_ID, "chat"));
+    assert!(chat.is_some(), "declared chat endpoint must be registered");
+    assert_eq!(chat.unwrap().auth, EndpointAuth::Jwt, "显式 jwt 原样登记");
+
+    let bad = endpoint::find_by_mount(&endpoint::mount_path(TEST_PLUGIN_ID, "bad/path"));
+    assert!(bad.is_none(), "含 / 的声明不得登记（fail-visible）");
+
+    // 清理（全局端点表在 test 进程内跨用例共享）
+    endpoint::purge_for_plugin(TEST_PLUGIN_ID);
+}
+
 /// 源码漂移锁：六个 registry 注册调用**只允许出现在 `register_plugin_contributions` 一处**。
 /// 三份手抄的历史成因是「新 contributes 项要同改三处」，漏改即静默不注册。
 #[test]
