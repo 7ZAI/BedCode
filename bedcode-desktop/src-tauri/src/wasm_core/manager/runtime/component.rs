@@ -57,17 +57,17 @@ bindgen!({
 
 impl bedcode::plugin::host_storage::Host for WasmPluginState {
     fn get(&mut self, key: String) -> Result<Option<String>, String> {
-        storage::storage_get(&self.host_ctx, &self.plugin_id, &key).map(|opt| opt.map(|v| v.to_string()))
+        storage::storage_get(self.host_ctx.as_ref(), self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &key).map(|opt| opt.map(|v| v.to_string()))
     }
 
     fn set(&mut self, key: String, value: String) -> Result<(), String> {
         let json_value: serde_json::Value =
             serde_json::from_str(&value).map_err(|e| format!("invalid JSON value: {}", e))?;
-        storage::storage_set(&self.host_ctx, &self.plugin_id, &key, json_value)
+        storage::storage_set(self.host_ctx.as_ref(), self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &key, json_value)
     }
 
     fn delete(&mut self, key: String) -> Result<(), String> {
-        storage::storage_delete(&self.host_ctx, &self.plugin_id, &key)
+        storage::storage_delete(self.host_ctx.as_ref(), self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &key)
     }
 }
 
@@ -79,29 +79,29 @@ impl bedcode::plugin::host_storage::Host for WasmPluginState {
 
 impl bedcode::plugin::host_auth::Host for WasmPluginState {
     fn secret_get(&mut self, key: String) -> Result<Option<String>, String> {
-        auth::auth_secret_get(&self.host_ctx, &self.plugin_id, &key)
+        auth::auth_secret_get(self.host_ctx.as_ref(), self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &key)
     }
 
     fn secret_set(&mut self, key: String, value: String) -> Result<(), String> {
-        auth::auth_secret_set(&self.host_ctx, &self.plugin_id, &key, &value)
+        auth::auth_secret_set(self.host_ctx.as_ref(), self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &key, &value)
     }
 
     fn secret_delete(&mut self, key: String) -> Result<(), String> {
-        auth::auth_secret_delete(&self.host_ctx, &self.plugin_id, &key)
+        auth::auth_secret_delete(self.host_ctx.as_ref(), self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &key)
     }
 
     fn secret_keys(&mut self) -> Result<Vec<String>, String> {
-        auth::auth_secret_keys(&self.host_ctx, &self.plugin_id)
+        auth::auth_secret_keys(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id)
     }
 
     fn auth_setting_set(&mut self, key: String, value: String) -> Result<(), String> {
-        auth::auth_setting_set(&self.host_ctx, &self.plugin_id, &key, &value)
+        auth::auth_setting_set(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &key, &value)
     }
 
     // ==================== v19 保留面（v24 修订语义：公钥托管在 plugin_secrets） ====================
 
     fn biometric_credential_bound(&mut self, fingerprint: String) -> Result<bool, String> {
-        auth::auth_biometric_credential_bound(&self.host_ctx, &self.plugin_id, &fingerprint)
+        auth::auth_biometric_credential_bound(self.host_ctx.as_ref(), self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &fingerprint)
     }
 
     fn biometric_verify_signature(
@@ -110,23 +110,23 @@ impl bedcode::plugin::host_auth::Host for WasmPluginState {
         message: String,
         signature: String,
     ) -> Result<bool, String> {
-        auth::auth_biometric_verify_signature(&self.host_ctx, &self.plugin_id, &fingerprint, &message, &signature)
+        auth::auth_biometric_verify_signature(self.host_ctx.as_ref(), self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &fingerprint, &message, &signature)
     }
 
     fn link_identity_parts(&mut self) -> Result<Option<String>, String> {
-        auth::auth_link_identity_parts(&self.host_ctx, &self.plugin_id)
+        auth::auth_link_identity_parts(self.host_ctx.as_ref(), &self.plugin_id)
     }
 
     fn biometric_credential_bind(&mut self, fingerprint: String, public_key: String) -> Result<bool, String> {
-        auth::auth_biometric_credential_bind(&self.host_ctx, &self.plugin_id, &fingerprint, &public_key)
+        auth::auth_biometric_credential_bind(self.host_ctx.as_ref(), self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &fingerprint, &public_key)
     }
 
     fn device_token_issue(&mut self, sub: String, device_name: String, fingerprint: String) -> Result<String, String> {
-        auth::auth_device_token_issue(&self.host_ctx, &self.plugin_id, &sub, &device_name, &fingerprint)
+        auth::auth_device_token_issue(self.host_ctx.as_ref(), &self.plugin_id, &sub, &device_name, &fingerprint)
     }
 
     fn device_token_verify(&mut self, token: String) -> Result<String, String> {
-        auth::auth_device_token_verify(&self.host_ctx, &self.plugin_id, &token)
+        auth::auth_device_token_verify(self.host_ctx.as_ref(), &self.plugin_id, &token)
     }
 }
 
@@ -136,19 +136,19 @@ impl bedcode::plugin::host_auth::Host for WasmPluginState {
 
 impl bedcode::plugin::host_pty::Host for WasmPluginState {
     fn spawn(&mut self, config_json: String) -> Result<String, String> {
-        pty::pty_spawn(&self.host_ctx, &self.plugin_id, &config_json)
+        pty::pty_spawn(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &config_json)
     }
 
     fn write(&mut self, pty_id: String, data: Vec<u8>) -> Result<(), String> {
-        pty::pty_write(&self.host_ctx, &self.plugin_id, &pty_id, &data)
+        pty::pty_write(self.host_ctx.as_ref(), &self.plugin_id, &pty_id, &data)
     }
 
     fn resize(&mut self, pty_id: String, cols: u16, rows: u16) -> Result<(), String> {
-        pty::pty_resize(&self.host_ctx, &self.plugin_id, &pty_id, cols, rows)
+        pty::pty_resize(self.host_ctx.as_ref(), &self.plugin_id, &pty_id, cols, rows)
     }
 
     fn kill(&mut self, pty_id: String) -> Result<(), String> {
-        pty::pty_kill(&self.host_ctx, &self.plugin_id, &pty_id)
+        pty::pty_kill(self.host_ctx.as_ref(), &self.plugin_id, &pty_id)
     }
 
     fn ring_fetch(
@@ -157,7 +157,7 @@ impl bedcode::plugin::host_pty::Host for WasmPluginState {
         from_offset: u64,
         max_bytes: u32,
     ) -> Result<Option<bedcode::plugin::host_pty::RingFetchResult>, String> {
-        pty::pty_ring_fetch(&self.host_ctx, &self.plugin_id, &pty_id, from_offset, max_bytes).map(|fetched| {
+        pty::pty_ring_fetch(self.host_ctx.as_ref(), &self.plugin_id, &pty_id, from_offset, max_bytes).map(|fetched| {
             fetched.map(|ring| bedcode::plugin::host_pty::RingFetchResult {
                 data: ring.data,
                 next_offset: ring.next_offset,
@@ -167,7 +167,7 @@ impl bedcode::plugin::host_pty::Host for WasmPluginState {
     }
 
     fn is_running(&mut self, pty_id: String) -> Result<bool, String> {
-        pty::pty_is_running(&self.host_ctx, &self.plugin_id, &pty_id)
+        pty::pty_is_running(self.host_ctx.as_ref(), &self.plugin_id, &pty_id)
     }
 }
 
@@ -207,7 +207,7 @@ impl bedcode::plugin::host_crypto::Host for WasmPluginState {
         aad: Option<Vec<u8>>,
     ) -> Result<Vec<u8>, String> {
         crypto::aead_encrypt(
-            &self.host_ctx,
+        self.host_ctx.as_ref(),
             &self.plugin_id,
             &algorithm,
             &key,
@@ -226,7 +226,7 @@ impl bedcode::plugin::host_crypto::Host for WasmPluginState {
         aad: Option<Vec<u8>>,
     ) -> Result<Vec<u8>, String> {
         crypto::aead_decrypt(
-            &self.host_ctx,
+        self.host_ctx.as_ref(),
             &self.plugin_id,
             &algorithm,
             &key,
@@ -237,11 +237,11 @@ impl bedcode::plugin::host_crypto::Host for WasmPluginState {
     }
 
     fn aead_generate_key(&mut self, algorithm: String) -> Result<Vec<u8>, String> {
-        crypto::aead_generate_key(&self.host_ctx, &self.plugin_id, &algorithm)
+        crypto::aead_generate_key(self.host_ctx.as_ref(), &self.plugin_id, &algorithm)
     }
 
     fn aead_generate_nonce(&mut self, algorithm: String) -> Result<Vec<u8>, String> {
-        crypto::aead_generate_nonce(&self.host_ctx, &self.plugin_id, &algorithm)
+        crypto::aead_generate_nonce(self.host_ctx.as_ref(), &self.plugin_id, &algorithm)
     }
 
     fn kdf_derive(
@@ -253,7 +253,7 @@ impl bedcode::plugin::host_crypto::Host for WasmPluginState {
         length: u32,
     ) -> Result<Vec<u8>, String> {
         crypto::kdf_derive(
-            &self.host_ctx,
+        self.host_ctx.as_ref(),
             &self.plugin_id,
             &algorithm,
             salt.as_deref(),
@@ -264,7 +264,7 @@ impl bedcode::plugin::host_crypto::Host for WasmPluginState {
     }
 
     fn keyagreement_generate(&mut self, algorithm: String) -> Result<Vec<u8>, String> {
-        crypto::key_agreement_generate(&self.host_ctx, &self.plugin_id, &algorithm)
+        crypto::key_agreement_generate(self.host_ctx.as_ref(), &self.plugin_id, &algorithm)
     }
 
     fn keyagreement_shared(
@@ -274,7 +274,7 @@ impl bedcode::plugin::host_crypto::Host for WasmPluginState {
         peer_public: Vec<u8>,
     ) -> Result<Vec<u8>, String> {
         crypto::key_agreement_shared(
-            &self.host_ctx,
+        self.host_ctx.as_ref(),
             &self.plugin_id,
             &algorithm,
             &local_private,
@@ -301,13 +301,13 @@ impl bedcode::plugin::host_log::Host for WasmPluginState {
     }
 
     fn mark_plugin_error(&mut self, error: String) {
-        status::mark_plugin_error(&self.host_ctx, self.plugin_id.clone(), error);
+        status::mark_plugin_error(self.host_ctx.as_ref(), self.plugin_id.clone(), error);
     }
 }
 
 impl bedcode::plugin::host_config::Host for WasmPluginState {
     fn get(&mut self, key: String) -> Result<Option<String>, String> {
-        config::config_get(&self.host_ctx, &self.plugin_id, &key)
+        config::config_get(self.host_ctx.as_ref(), &self.plugin_id, &key)
     }
 }
 
@@ -318,45 +318,45 @@ impl bedcode::plugin::host_config::Host for WasmPluginState {
 
 impl bedcode::plugin::host_database::Host for WasmPluginState {
     fn execute(&mut self, sql: String) -> Result<u32, String> {
-        database::db_execute(&self.host_ctx, &self.plugin_id, &sql)
+        database::db_execute(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &sql)
     }
 
     fn query(&mut self, sql: String) -> Result<Option<String>, String> {
-        database::db_query(&self.host_ctx, &self.plugin_id, &sql)
+        database::db_query(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &sql)
     }
 
     fn execute_params(&mut self, sql: String, params_json: String) -> Result<u32, String> {
-        database::db_execute_params(&self.host_ctx, &self.plugin_id, &sql, &params_json)
+        database::db_execute_params(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &sql, &params_json)
     }
 
     fn query_params(&mut self, sql: String, params_json: String) -> Result<Option<String>, String> {
-        database::db_query_params(&self.host_ctx, &self.plugin_id, &sql, &params_json)
+        database::db_query_params(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &sql, &params_json)
     }
 
     fn execute_batch(&mut self, sqls_json: String) -> Result<u32, String> {
-        database::db_execute_batch(&self.host_ctx, &self.plugin_id, &sqls_json)
+        database::db_execute_batch(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &sqls_json)
     }
 }
 
 impl bedcode::plugin::host_plugin_database::Host for WasmPluginState {
     fn execute(&mut self, sql: String) -> Result<u32, String> {
-        database::plugin_db_execute(&self.host_ctx, &self.plugin_id, &sql)
+        database::plugin_db_execute(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &sql)
     }
 
     fn query(&mut self, sql: String) -> Result<Option<String>, String> {
-        database::plugin_db_query(&self.host_ctx, &self.plugin_id, &sql)
+        database::plugin_db_query(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &sql)
     }
 
     fn execute_params(&mut self, sql: String, params_json: String) -> Result<u32, String> {
-        database::plugin_db_execute_params(&self.host_ctx, &self.plugin_id, &sql, &params_json)
+        database::plugin_db_execute_params(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &sql, &params_json)
     }
 
     fn query_params(&mut self, sql: String, params_json: String) -> Result<Option<String>, String> {
-        database::plugin_db_query_params(&self.host_ctx, &self.plugin_id, &sql, &params_json)
+        database::plugin_db_query_params(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &sql, &params_json)
     }
 
     fn execute_batch(&mut self, sqls_json: String) -> Result<u32, String> {
-        database::plugin_db_execute_batch(&self.host_ctx, &self.plugin_id, &sqls_json)
+        database::plugin_db_execute_batch(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &sqls_json)
     }
 }
 
@@ -364,7 +364,7 @@ impl bedcode::plugin::host_plugin_database::Host for WasmPluginState {
 /// **票 10 起是本面唯一入口**——`host-session` 上那条同判据的旧别名随整 interface 删除。
 impl bedcode::plugin::host_connection::Host for WasmPluginState {
     fn connections_list(&mut self) -> Result<String, String> {
-        connection::connection_list(&self.host_ctx, &self.plugin_id)
+        connection::connection_list(self.host_ctx.as_ref(), &self.plugin_id)
     }
 }
 
@@ -376,131 +376,133 @@ impl bedcode::plugin::host_connection::Host for WasmPluginState {
 
 impl bedcode::plugin::host_process::Host for WasmPluginState {
     fn run(&mut self, request_json: String) -> Result<String, String> {
-        process::process_run(&self.host_ctx, &self.plugin_id, &request_json)
+        process::process_run(self.host_ctx.as_ref(), self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &request_json)
     }
 
     fn kill(&mut self, run_id: String) -> Result<(), String> {
-        process::process_kill(&self.host_ctx, &self.plugin_id, &run_id)
+        process::process_kill(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &run_id)
     }
 
     /// v19 追加（票 03/04 工作区 git 域）：同步执行并捕获输出
     fn run_sync(&mut self, request_json: String) -> Result<String, String> {
-        process::process_run_sync(&self.host_ctx, &self.plugin_id, &request_json)
+        process::process_run_sync(self.host_ctx.as_ref(), &self.plugin_id, &request_json)
     }
 }
 
 impl bedcode::plugin::host_app::Host for WasmPluginState {
     fn install_cli(&mut self, payload_json: String) -> Result<String, String> {
-        app::install_cli(&self.host_ctx, &self.plugin_id, &payload_json)
+        app::install_cli(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &payload_json)
     }
 
     fn uninstall_cli(&mut self, payload_json: String) -> Result<(), String> {
-        app::uninstall_cli(&self.host_ctx, &self.plugin_id, &payload_json)
+        app::uninstall_cli(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &payload_json)
     }
 
     fn plugin_resource_dir(&mut self) -> Result<String, String> {
-        app::plugin_resource_dir(&self.host_ctx, &self.plugin_id)
+        app::plugin_resource_dir(self.host_ctx.as_ref(), &self.plugin_id)
     }
 }
 
 impl bedcode::plugin::host_timer::Host for WasmPluginState {
     fn register(&mut self, interval_secs: u64, command: String) -> Result<(), String> {
-        timer::timer_register(&self.host_ctx, &self.plugin_id, interval_secs, &command)
+        timer::timer_register(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, interval_secs, &command)
     }
 }
 
 impl bedcode::plugin::host_events::Host for WasmPluginState {
     // WIT 中 emit/broadcast-sync 无错误返回，宿主侧记录日志（与 core 胶水一致）
     fn emit(&mut self, event_name: String, payload_json: String) {
-        if let Err(e) = events::emit_event(&self.host_ctx, &event_name, &payload_json) {
+        if let Err(e) = events::emit_event(self.host_ctx.as_ref(), &event_name, &payload_json) {
             tracing::error!(error = %e, event = %event_name, "host_events.emit failed");
         }
     }
 
     fn broadcast_sync(&mut self, event_json: String) {
-        if let Err(e) = events::broadcast_sync(&self.host_ctx, &self.plugin_id, &event_json) {
+        if let Err(e) = events::broadcast_sync(self.host_ctx.as_ref(), &self.plugin_id, &event_json) {
             tracing::error!(error = %e, "host_events.broadcast_sync failed");
         }
     }
 
     fn notify(&mut self, title: String, body: String) -> Result<(), String> {
-        events::notify(&self.host_ctx, &self.plugin_id, &title, &body)
+        events::notify(self.host_ctx.as_ref(), &self.plugin_id, &title, &body)
     }
 }
 
 impl bedcode::plugin::host_http::Host for WasmPluginState {
     fn fetch(&mut self, request_json: String) -> Result<Option<String>, String> {
-        http::http_fetch(&self.host_ctx, &self.plugin_id, &request_json)
+        http::http_fetch(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &request_json)
     }
 }
 
 impl bedcode::plugin::host_fs::Host for WasmPluginState {
     fn read(&mut self, path: String) -> Result<Option<String>, String> {
-        fs::fs_read(&self.host_ctx, &self.plugin_id, &path)
+        fs::fs_read(self.host_ctx.as_ref(), &self.plugin_id, &path)
     }
 
     fn write(&mut self, path: String, data: String) -> Result<(), String> {
-        fs::fs_write(&self.host_ctx, &self.plugin_id, &path, &data)
+        fs::fs_write(self.host_ctx.as_ref(), &self.plugin_id, &path, &data)
     }
 
     fn copy(&mut self, src: String, dst: String) -> Result<(), String> {
-        fs::fs_copy(&self.host_ctx, &self.plugin_id, &src, &dst)
+        fs::fs_copy(self.host_ctx.as_ref(), &self.plugin_id, &src, &dst)
     }
 
     fn delete(&mut self, path: String) -> Result<(), String> {
-        fs::fs_delete(&self.host_ctx, &self.plugin_id, &path)
+        fs::fs_delete(self.host_ctx.as_ref(), &self.plugin_id, &path)
     }
 
     fn exists(&mut self, path: String) -> Result<bool, String> {
-        fs::fs_exists(&self.host_ctx, &self.plugin_id, &path)
+        fs::fs_exists(self.host_ctx.as_ref(), &self.plugin_id, &path)
     }
 
     fn request_auth(&mut self, paths_json: String) -> Result<bool, String> {
-        fs::fs_request_auth(&self.host_ctx, &self.plugin_id, &paths_json)
+        fs::fs_request_auth(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &paths_json)
     }
 
     /// v19 追加（票 03 文件浏览域）
     fn read_dir(&mut self, path: String) -> Result<String, String> {
-        fs::fs_read_dir(&self.host_ctx, &self.plugin_id, &path)
+        fs::fs_read_dir(self.host_ctx.as_ref(), &self.plugin_id, &path)
     }
 
     fn canonicalize(&mut self, path: String) -> Result<Option<String>, String> {
-        fs::fs_canonicalize(&self.host_ctx, &self.plugin_id, &path)
+        fs::fs_canonicalize(self.host_ctx.as_ref(), &self.plugin_id, &path)
     }
 
     fn stat(&mut self, path: String) -> Result<Option<String>, String> {
-        fs::fs_stat(&self.host_ctx, &self.plugin_id, &path)
+        fs::fs_stat(self.host_ctx.as_ref(), &self.plugin_id, &path)
     }
 }
 
 impl bedcode::plugin::host_bus::Host for WasmPluginState {
     fn publish(&mut self, topic: String, payload_json: String) -> Result<(), String> {
-        bus::bus_publish(&self.host_ctx, &self.plugin_id, &topic, &payload_json)
+        bus::bus_publish(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &topic, &payload_json)
     }
 
     /// v11：二进制载荷发布（零 JSON 编解码，可传非 UTF-8 与大载荷）
     fn publish_binary(&mut self, topic: String, payload: Vec<u8>) -> Result<(), String> {
-        bus::bus_publish_binary(&self.host_ctx, &self.plugin_id, &topic, payload)
+        bus::bus_publish_binary(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &topic, payload)
     }
 
     fn subscribe(&mut self, topic: String) -> Result<(), String> {
-        bus::bus_subscribe(&self.host_ctx, &self.plugin_id, &topic)
+        bus::bus_subscribe(self.host_ctx.as_ref(), &self.plugin_id, &topic)
     }
 
     /// v11：以二进制格式偏好订阅（只接收 publish-binary 投递）
     fn subscribe_binary(&mut self, topic: String) -> Result<(), String> {
-        bus::bus_subscribe_binary(&self.host_ctx, &self.plugin_id, &topic)
+        bus::bus_subscribe_binary(self.host_ctx.as_ref(), &self.plugin_id, &topic)
     }
 
     fn unsubscribe(&mut self, topic: String) -> Result<(), String> {
-        bus::bus_unsubscribe(&self.host_ctx, &self.plugin_id, &topic)
+        bus::bus_unsubscribe(self.host_ctx.as_ref(), &self.plugin_id, &topic)
     }
 }
 
 impl bedcode::plugin::host_api_call::Host for WasmPluginState {
     fn call(&mut self, request_topic: String, payload_json: String, timeout_ms: u64) -> Result<String, String> {
         api::api_call(
-            &self.host_ctx,
+        self.host_ctx.as_ref(),
+        self.host_ctx.as_ref(),
+        self.host_ctx.as_ref(),
             &self.plugin_id,
             &request_topic,
             &payload_json,
@@ -511,75 +513,75 @@ impl bedcode::plugin::host_api_call::Host for WasmPluginState {
 
 impl bedcode::plugin::host_peer::Host for WasmPluginState {
     fn dial_peer(&mut self, endpoint_json: String) -> Result<String, String> {
-        peer::peer_dial(&self.host_ctx, &self.plugin_id, &endpoint_json)
+        peer::peer_dial(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &endpoint_json)
     }
 
     fn close(&mut self, handle: String) -> Result<bool, String> {
-        peer::peer_close(&self.host_ctx, &self.plugin_id, &handle)
+        peer::peer_close(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &handle)
     }
 
     fn respond_consent(&mut self, request_id: String, accepted: bool) -> Result<bool, String> {
-        peer::peer_respond_consent(&self.host_ctx, &self.plugin_id, &request_id, accepted)
+        peer::peer_respond_consent(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &request_id, accepted)
     }
 
     fn list_trusted(&mut self) -> Result<String, String> {
-        peer::peer_list_trusted(&self.host_ctx, &self.plugin_id)
+        peer::peer_list_trusted(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id)
     }
 
     fn revoke_trusted(&mut self, node_id: String) -> Result<bool, String> {
-        peer::peer_revoke_trusted(&self.host_ctx, &self.plugin_id, &node_id)
+        peer::peer_revoke_trusted(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &node_id)
     }
 
     fn send_files(&mut self, session: String, paths_json: String) -> Result<String, String> {
-        peer::peer_send_files(&self.host_ctx, &self.plugin_id, &session, &paths_json)
+        peer::peer_send_files(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &session, &paths_json)
     }
 
     fn respond_transfer(&mut self, batch_id: String, accept: bool) -> Result<(), String> {
-        peer::peer_respond_transfer(&self.host_ctx, &self.plugin_id, &batch_id, accept)
+        peer::peer_respond_transfer(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &batch_id, accept)
     }
 
     fn set_receive_policy(&mut self, mode: String, timeout_secs: u64) -> Result<(), String> {
-        peer::peer_set_receive_policy(&self.host_ctx, &self.plugin_id, &mode, timeout_secs)
+        peer::peer_set_receive_policy(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &mode, timeout_secs)
     }
 
     fn pause_transfer(&mut self, batch_id: String) -> Result<(), String> {
-        peer::peer_pause_transfer(&self.host_ctx, &self.plugin_id, &batch_id)
+        peer::peer_pause_transfer(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &batch_id)
     }
 
     fn resume_transfer(&mut self, batch_id: String) -> Result<(), String> {
-        peer::peer_resume_transfer(&self.host_ctx, &self.plugin_id, &batch_id)
+        peer::peer_resume_transfer(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &batch_id)
     }
 
     fn resume_all_transfers(&mut self) -> Result<u32, String> {
-        peer::peer_resume_all_transfers(&self.host_ctx, &self.plugin_id)
+        peer::peer_resume_all_transfers(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id)
     }
 
     fn set_shared_roots(&mut self, dirs_json: String) -> Result<(), String> {
-        peer::peer_set_shared_roots(&self.host_ctx, &self.plugin_id, &dirs_json)
+        peer::peer_set_shared_roots(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &dirs_json)
     }
 
     fn list_shared_roots(&mut self, session: String) -> Result<String, String> {
-        peer::peer_list_shared_roots(&self.host_ctx, &self.plugin_id, &session)
+        peer::peer_list_shared_roots(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &session)
     }
 
     fn browse_directory(&mut self, session: String, dir_id: String, rel_path: String) -> Result<String, String> {
-        peer::peer_browse_directory(&self.host_ctx, &self.plugin_id, &session, &dir_id, &rel_path)
+        peer::peer_browse_directory(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &session, &dir_id, &rel_path)
     }
 
     fn pull_files(&mut self, session: String, dir_id: String, files_json: String) -> Result<u32, String> {
-        peer::peer_pull_files(&self.host_ctx, &self.plugin_id, &session, &dir_id, &files_json)
+        peer::peer_pull_files(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &session, &dir_id, &files_json)
     }
 
     fn set_download_dir(&mut self, path: String) -> Result<(), String> {
-        peer::peer_set_download_dir(&self.host_ctx, &self.plugin_id, &path)
+        peer::peer_set_download_dir(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &path)
     }
 
     fn start_node(&mut self) -> Result<bool, String> {
-        peer::peer_start_node(&self.host_ctx, &self.plugin_id)
+        peer::peer_start_node(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id)
     }
 
     fn stop_node(&mut self) -> Result<bool, String> {
-        peer::peer_stop_node(&self.host_ctx, &self.plugin_id)
+        peer::peer_stop_node(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id)
     }
 }
 
@@ -587,37 +589,37 @@ impl bedcode::plugin::host_peer::Host for WasmPluginState {
 
 impl bedcode::plugin::host_mdns::Host for WasmPluginState {
     fn browse(&mut self, service_type: String) -> Result<String, String> {
-        mdns::mdns_browse(&self.host_ctx, &self.plugin_id, &service_type)
+        mdns::mdns_browse(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &service_type)
     }
 
     fn stop_browse(&mut self, browser_id: String) -> Result<bool, String> {
-        mdns::mdns_stop_browse(&self.host_ctx, &self.plugin_id, &browser_id)
+        mdns::mdns_stop_browse(self.host_ctx.as_ref(), &self.plugin_id, &browser_id)
     }
 
     fn advertise(&mut self, config_json: String) -> Result<String, String> {
-        mdns::mdns_advertise(&self.host_ctx, &self.plugin_id, &config_json)
+        mdns::mdns_advertise(self.host_ctx.as_ref(), &self.plugin_id, &config_json)
     }
 
     fn stop_advertise(&mut self, advertise_id: String) -> Result<bool, String> {
-        mdns::mdns_stop_advertise(&self.host_ctx, &self.plugin_id, &advertise_id)
+        mdns::mdns_stop_advertise(self.host_ctx.as_ref(), &self.plugin_id, &advertise_id)
     }
 
     fn is_advertising(&mut self, advertise_id: String) -> Result<bool, String> {
-        mdns::mdns_is_advertising(&self.host_ctx, &self.plugin_id, &advertise_id)
+        mdns::mdns_is_advertising(self.host_ctx.as_ref(), &self.plugin_id, &advertise_id)
     }
 }
 
 impl bedcode::plugin::host_platform::Host for WasmPluginState {
     fn pick_files(&mut self) -> Result<String, String> {
-        platform::platform_pick_files(&self.host_ctx)
+        platform::platform_pick_files(self.host_ctx.as_ref())
     }
 
     fn pick_folder(&mut self) -> Result<String, String> {
-        platform::platform_pick_folder(&self.host_ctx)
+        platform::platform_pick_folder(self.host_ctx.as_ref())
     }
 
     fn pick_folders(&mut self) -> Result<String, String> {
-        platform::platform_pick_folders(&self.host_ctx)
+        platform::platform_pick_folders(self.host_ctx.as_ref())
     }
 
     fn wsl_distros(&mut self) -> Result<String, String> {
@@ -639,33 +641,33 @@ impl bedcode::plugin::host_websocket::Host for WasmPluginState {
     // ==================== 客户端域（出站） ====================
 
     fn connect(&mut self, config_json: String) -> Result<String, String> {
-        ws::ws_connect(&self.host_ctx, &self.plugin_id, &config_json)
+        ws::ws_connect(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &config_json)
     }
 
     fn send_text(&mut self, handle: String, text: String) -> Result<(), String> {
-        ws::ws_send_text(&self.host_ctx, &self.plugin_id, &handle, &text)
+        ws::ws_send_text(self.host_ctx.as_ref(), &self.plugin_id, &handle, &text)
     }
 
     fn send_binary(&mut self, handle: String, payload: Vec<u8>) -> Result<(), String> {
-        ws::ws_send_binary(&self.host_ctx, &self.plugin_id, &handle, &payload)
+        ws::ws_send_binary(self.host_ctx.as_ref(), &self.plugin_id, &handle, &payload)
     }
 
     fn close(&mut self, handle: String, close_json: String) -> Result<bool, String> {
-        ws::ws_close(&self.host_ctx, &self.plugin_id, &handle, &close_json)
+        ws::ws_close(self.host_ctx.as_ref(), &self.plugin_id, &handle, &close_json)
     }
 
     fn is_connected(&mut self, handle: String) -> Result<bool, String> {
-        ws::ws_is_connected(&self.host_ctx, &self.plugin_id, &handle)
+        ws::ws_is_connected(self.host_ctx.as_ref(), &self.plugin_id, &handle)
     }
 
     // ==================== 服务端域（入站；本票只定稿契约，实现见票 05） ====================
 
     fn register_endpoint(&mut self, config_json: String) -> Result<String, String> {
-        ws::ws_register_endpoint(&self.host_ctx, &self.plugin_id, &config_json)
+        ws::ws_register_endpoint(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &config_json)
     }
 
     fn send_text_to_client(&mut self, endpoint_id: String, client_id: String, text: String) -> Result<(), String> {
-        ws::ws_send_text_to_client(&self.host_ctx, &self.plugin_id, &endpoint_id, &client_id, &text)
+        ws::ws_send_text_to_client(self.host_ctx.as_ref(), &self.plugin_id, &endpoint_id, &client_id, &text)
     }
 
     fn send_binary_to_client(
@@ -674,31 +676,31 @@ impl bedcode::plugin::host_websocket::Host for WasmPluginState {
         client_id: String,
         payload: Vec<u8>,
     ) -> Result<(), String> {
-        ws::ws_send_binary_to_client(&self.host_ctx, &self.plugin_id, &endpoint_id, &client_id, &payload)
+        ws::ws_send_binary_to_client(self.host_ctx.as_ref(), &self.plugin_id, &endpoint_id, &client_id, &payload)
     }
 
     fn broadcast_text(&mut self, endpoint_id: String, text: String) -> Result<u32, String> {
-        ws::ws_broadcast_text(&self.host_ctx, &self.plugin_id, &endpoint_id, &text)
+        ws::ws_broadcast_text(self.host_ctx.as_ref(), &self.plugin_id, &endpoint_id, &text)
     }
 
     fn broadcast_binary(&mut self, endpoint_id: String, payload: Vec<u8>) -> Result<u32, String> {
-        ws::ws_broadcast_binary(&self.host_ctx, &self.plugin_id, &endpoint_id, &payload)
+        ws::ws_broadcast_binary(self.host_ctx.as_ref(), &self.plugin_id, &endpoint_id, &payload)
     }
 
     fn close_client(&mut self, endpoint_id: String, client_id: String, close_json: String) -> Result<bool, String> {
-        ws::ws_close_client(&self.host_ctx, &self.plugin_id, &endpoint_id, &client_id, &close_json)
+        ws::ws_close_client(self.host_ctx.as_ref(), &self.plugin_id, &endpoint_id, &client_id, &close_json)
     }
 
     fn unregister_endpoint(&mut self, endpoint_id: String) -> Result<bool, String> {
-        ws::ws_unregister_endpoint(&self.host_ctx, &self.plugin_id, &endpoint_id)
+        ws::ws_unregister_endpoint(self.host_ctx.as_ref(), &self.plugin_id, &endpoint_id)
     }
 
     fn list_clients(&mut self, endpoint_id: String) -> Result<String, String> {
-        ws::ws_list_clients(&self.host_ctx, &self.plugin_id, &endpoint_id)
+        ws::ws_list_clients(self.host_ctx.as_ref(), &self.plugin_id, &endpoint_id)
     }
 
     fn list_endpoints(&mut self) -> Result<String, String> {
-        ws::ws_list_endpoints(&self.host_ctx, &self.plugin_id)
+        ws::ws_list_endpoints(self.host_ctx.as_ref(), &self.plugin_id)
     }
 }
 
@@ -1695,7 +1697,9 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         // 模拟激活时 fs_request_auth 同意后的持久化授权（storage key fs_granted_paths）
         crate::wasm_core::host_api::storage::storage_set(
-            &ctx,
+                        ctx.as_ref(),
+            ctx.as_ref(),
+            ctx.as_ref(),
             plugin_id,
             "fs_granted_paths",
             serde_json::json!([dir.path().to_string_lossy()]),
@@ -1767,7 +1771,9 @@ mod tests {
         let probe = home.join(".bedcode-wasi-preopen-test");
         std::fs::create_dir_all(&probe).unwrap();
         crate::wasm_core::host_api::storage::storage_set(
-            &ctx,
+                        ctx.as_ref(),
+            ctx.as_ref(),
+            ctx.as_ref(),
             pid,
             "fs_granted_paths",
             serde_json::json!([probe.to_string_lossy()]),
@@ -1869,7 +1875,9 @@ mod tests {
         let missing = base.join("ai-chatbox");
         std::fs::create_dir_all(&base).unwrap();
         crate::wasm_core::host_api::storage::storage_set(
-            &ctx,
+                        ctx.as_ref(),
+            ctx.as_ref(),
+            ctx.as_ref(),
             pid,
             "fs_granted_paths",
             serde_json::json!([base.to_string_lossy()]),
@@ -1898,7 +1906,9 @@ mod tests {
         let missing = base.join("ro-child");
         std::fs::create_dir_all(&base).unwrap();
         crate::wasm_core::host_api::storage::storage_set(
-            &ctx,
+                        ctx.as_ref(),
+            ctx.as_ref(),
+            ctx.as_ref(),
             pid,
             "fs_granted_paths",
             serde_json::json!([base.to_string_lossy()]),
@@ -1925,7 +1935,9 @@ mod tests {
         let base = std::env::temp_dir().join(format!("bedcode-wasi-create2-{}", std::process::id()));
         std::fs::create_dir_all(&base).unwrap();
         crate::wasm_core::host_api::storage::storage_set(
-            &ctx,
+                        ctx.as_ref(),
+            ctx.as_ref(),
+            ctx.as_ref(),
             pid,
             "fs_granted_paths",
             serde_json::json!([base.to_string_lossy()]),

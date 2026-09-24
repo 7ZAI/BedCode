@@ -1419,7 +1419,7 @@ mod tests {
             self.events.lock().unwrap_or_else(|e| e.into_inner()).push(event);
         }
         fn install_cli(
-            &self,
+                        &self,
             _plugin_id: String,
             _file_name: String,
             _bin_dir: String,
@@ -1427,7 +1427,7 @@ mod tests {
             Box::pin(async { Err("mock: no cli".to_string()) })
         }
         fn uninstall_cli(
-            &self,
+                        &self,
             _plugin_id: String,
             _file_name: String,
             _bin_dir: String,
@@ -1435,7 +1435,7 @@ mod tests {
             Box::pin(async { Ok(()) })
         }
         fn plugin_resource_dir(
-            &self,
+                        &self,
             _plugin_id: String,
         ) -> Pin<Box<dyn std::future::Future<Output = Result<String, String>> + Send + '_>> {
             Box::pin(async { Err("mock: no resource dir".to_string()) })

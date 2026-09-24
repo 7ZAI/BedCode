@@ -8,27 +8,26 @@
 //! 「peer 命令面复用」时期的错放（ADR 0022 v2 已把 pick-* 判归 host-platform）。
 //! 传输域不再承载平台对话框，插件一律走本域。
 
-use crate::wasm_core::host_api::context::WasmHostContext;
 use crate::wasm_core::runtime_util::block_on_async;
 use tauri_plugin_dialog::DialogExt;
 
 /// 系统多文件选择器 → string[] JSON（用户取消为空数组）
-pub(crate) fn platform_pick_files(host_ctx: &WasmHostContext) -> Result<String, String> {
-    let app = require_app(host_ctx)?;
+pub(crate) fn platform_pick_files(app: &dyn crate::wasm_core::host_api::context::AppHandleScope) -> Result<String, String> {
+    let app = require_app(app)?;
     let paths = sync_result(block_on_async(pick_files(app)))?;
     serde_json::to_string(&paths).map_err(|e| format!("serialize picked files failed: {e}"))
 }
 
 /// 系统文件夹选择器 → 绝对路径；用户取消返回空串
-pub(crate) fn platform_pick_folder(host_ctx: &WasmHostContext) -> Result<String, String> {
-    let app = require_app(host_ctx)?;
+pub(crate) fn platform_pick_folder(app: &dyn crate::wasm_core::host_api::context::AppHandleScope) -> Result<String, String> {
+    let app = require_app(app)?;
     let paths = sync_result(block_on_async(pick_folder(app)))?;
     Ok(paths.into_iter().next().unwrap_or_default())
 }
 
 /// 系统多目录选择器 → string[] JSON（用户取消为空数组）
-pub(crate) fn platform_pick_folders(host_ctx: &WasmHostContext) -> Result<String, String> {
-    let app = require_app(host_ctx)?;
+pub(crate) fn platform_pick_folders(app: &dyn crate::wasm_core::host_api::context::AppHandleScope) -> Result<String, String> {
+    let app = require_app(app)?;
     let paths = sync_result(block_on_async(pick_folders(app)))?;
     serde_json::to_string(&paths).map_err(|e| format!("serialize picked folders failed: {e}"))
 }
@@ -96,11 +95,9 @@ fn path_to_string(file_path: tauri_plugin_dialog::FilePath) -> crate::Result<Str
         .ok_or_else(|| crate::AppError::InvalidInput("platform pick: selected path is not valid UTF-8".to_string()))
 }
 
-fn require_app(host_ctx: &WasmHostContext) -> Result<tauri::AppHandle, String> {
-    host_ctx
-        .app_handle
-        .as_ref()
-        .map(|a| (**a).clone())
+fn require_app(app: &dyn crate::wasm_core::host_api::context::AppHandleScope) -> Result<tauri::AppHandle, String> {
+    app.app_handle()
+        .map(|a| a.clone())
         .ok_or_else(|| "platform unavailable in headless context (no app_handle)".to_string())
 }
 

@@ -78,7 +78,7 @@ pub trait PluginServices: Send + Sync + 'static {
     /// 由 host_impl/app.rs 经 block_on_async 驱动（宿主侧注册表/PATH 实现）。
     /// 返回 Box<dyn Future> 保持 trait dyn 兼容（async fn 会破坏 Arc<dyn>）。
     fn install_cli(
-        &self,
+                &self,
         plugin_id: String,
         file_name: String,
         bin_dir: String,
@@ -89,7 +89,7 @@ pub trait PluginServices: Send + Sync + 'static {
     /// 应用关闭流程（deactivate_all 置位 shutting_down）中调用时自动跳过，
     /// CLI 随下次激活重新安装。
     fn uninstall_cli(
-        &self,
+                &self,
         plugin_id: String,
         file_name: String,
         bin_dir: String,
@@ -100,7 +100,7 @@ pub trait PluginServices: Send + Sync + 'static {
     /// 的 `resource_dir` 同值）。由 host_impl/app.rs 经 block_on_async 驱动。
     /// 插件未加载 → `Err`（不静默返回空串，调用方据此显性失败）。
     fn plugin_resource_dir(
-        &self,
+                &self,
         plugin_id: String,
     ) -> Pin<Box<dyn std::future::Future<Output = Result<String, String>> + Send + '_>>;
 }
@@ -430,6 +430,8 @@ impl WasmHostContext {
     ) -> Result<String, String> {
         crate::wasm_core::host_api::api::api_call(
             self,
+            self,
+            self,
             crate::wasm_core::host_api::api::HOST_API_CALLER_ID,
             request_topic,
             payload_json,
@@ -524,5 +526,180 @@ impl WasmHostContext {
 
         tracing::info!(plugin_id = %plugin_id, path = %db_path.display(), "Plugin database created/opened");
         Ok(db_arc)
+    }
+}
+
+// ==================== 角色接口（ISP，票 05 接口隔离） ====================
+// 域函数签名只收自己消费的窄角色视图（`&dyn XxxScope`），不再人手一个
+// `&WasmHostContext` 上帝对象；`WasmHostContext` 实现全部角色接口，调用点
+// `ctx.as_ref()`（&WasmHostContext）自动 unsize coerce 到任一 `&dyn` 角色。
+// trait upcasting（1.86+）下域内互调满足被调者 scope 需求即可。
+
+/// 主库 / 插件独立库访问视图
+pub trait DbScope: Send + Sync {
+    /// 主库句柄（宿主侧读写内核真源；域函数内访问经权限门 + 属主校验）
+    fn database(&self) -> &Arc<Mutex<Database>>;
+    /// 插件独立库连接池
+    fn plugin_dbs(&self) -> &Arc<Mutex<HashMap<String, Arc<Mutex<Database>>>>>;
+    /// 获取或懒加载插件独立数据库（无头上下文须先注入 plugin_db_root，否则报错）。
+    /// async 方法经 Pin<Box<dyn Future>> 返回（async-fn-in-trait 在 1.98 仍非 dyn
+    /// 兼容，返回 boxed future 保持 trait object 化，票 05）
+    fn get_or_create_plugin_db<'a>(
+        &'a self,
+        plugin_id: &'a str,
+    ) -> Pin<Box<dyn std::future::Future<Output = crate::Result<Arc<Mutex<Database>>>> + Send + 'a>>;
+}
+
+/// 权限仲裁视图（`check_permission` 经此取 PermissionManager）
+pub trait PermissionScope: Send + Sync {
+    /// 权限管理器（SDK VALID_PERMISSIONS 授权面）
+    fn permission(&self) -> &Arc<crate::wasm_core::permission::PermissionManager>;
+}
+
+/// 插件存储视图（StorageScope，票 03 中立层）
+pub trait StorageScope: Send + Sync {
+    /// 插件持久化存储（SQLite plugin_storage 表）
+    fn storage(&self) -> &Arc<crate::wasm_core::storage::PluginStorage>;
+}
+
+/// 文件系统访问校验视图
+pub trait FsAuthScope: Send + Sync {
+    /// 三层 fs 校验器（已授权路径判据，绝不从池线程触发弹窗）
+    fn fs_auth(&self) -> &Arc<crate::wasm_core::security::fs_auth::FsAuthChecker>;
+}
+
+/// 消息总线视图
+pub trait BusScope: Send + Sync {
+    /// 内核消息总线（发布/订阅/事件广播）
+    fn message_bus(&self) -> &Arc<crate::wasm_core::bus::MessageBus>;
+}
+
+/// Tauri AppHandle 视图（无头 / 测试上下文为 None，emit/路径类能力降级）
+pub trait AppHandleScope: Send + Sync {
+    /// 应用句柄；无头上下文 None
+    fn app_handle(&self) -> Option<&tauri::AppHandle>;
+}
+
+/// 插件宿主服务视图（两阶段注入的 PluginServices trait 对象）
+pub trait ServicesScope: Send + Sync {
+    /// 宿主服务引用（两阶段初始化完成前返回 None；async：内部 async RwLock；
+    /// Pin<Box<dyn Future>> 返回保持 dyn 兼容，票 05）
+    fn services<'a>(
+        &'a self,
+    ) -> Pin<Box<dyn std::future::Future<Output = Option<Arc<dyn crate::wasm_core::host_api::context::PluginServices>>> + Send + 'a>>;
+}
+
+/// 进程注册表视图（host-process，v8）
+pub trait ProcessScope: Send + Sync {
+    /// 运行中进程注册表（run_id → 进程句柄）
+    fn process_registry(&self) -> &Arc<crate::wasm_core::host_api::context::ProcessRegistry>;
+}
+
+/// 插件互调 api 注册表视图（ADR-0017 门禁）
+pub trait ApiRegistryScope: Send + Sync {
+    /// 激活登记 / 停用注销的 api 注册表
+    fn api_registry(&self) -> &Arc<crate::wasm_core::security::api_registry::ApiRegistry>;
+}
+
+/// 统一授权框架视图（core-security 三段决策管线）
+pub trait SecurityScope: Send + Sync {
+    /// 授权框架（authorize 决策 + 仲裁器注册表 + monitor 埋点）
+    fn security(&self) -> &crate::wasm_core::security::SecurityFramework;
+}
+
+/// 能力路由视图（票 04 trait 化端口，host_api 只经 &dyn 消费）
+pub trait CapabilityScope: Send + Sync {
+    /// 能力查询/路由端口
+    fn capabilities(&self) -> &Arc<dyn CapabilityProvider>;
+}
+
+/// 密钥托管读缓存视图（v15 host-auth；set/delete 失效对应键）
+pub trait SecretsScope: Send + Sync {
+    /// read-through 缓存（真源为主库 plugin_secrets 表）
+    fn secrets_cache(&self) -> &Arc<std::sync::RwLock<std::collections::HashMap<(String, String), String>>>;
+}
+
+// ==================== WasmHostContext 角色接口实现 ====================
+
+impl DbScope for WasmHostContext {
+    fn database(&self) -> &Arc<Mutex<Database>> {
+        self.database()
+    }
+    fn plugin_dbs(&self) -> &Arc<Mutex<HashMap<String, Arc<Mutex<Database>>>>> {
+        &self.plugin_dbs
+    }
+    fn get_or_create_plugin_db<'a>(
+        &'a self,
+        plugin_id: &'a str,
+    ) -> Pin<Box<dyn std::future::Future<Output = crate::Result<Arc<Mutex<Database>>>> + Send + 'a>> {
+        Box::pin(self.get_or_create_plugin_db(plugin_id))
+    }
+}
+
+impl PermissionScope for WasmHostContext {
+    fn permission(&self) -> &Arc<crate::wasm_core::permission::PermissionManager> {
+        self.permission()
+    }
+}
+
+impl StorageScope for WasmHostContext {
+    fn storage(&self) -> &Arc<crate::wasm_core::storage::PluginStorage> {
+        &self.storage
+    }
+}
+
+impl FsAuthScope for WasmHostContext {
+    fn fs_auth(&self) -> &Arc<crate::wasm_core::security::fs_auth::FsAuthChecker> {
+        self.fs_auth()
+    }
+}
+
+impl BusScope for WasmHostContext {
+    fn message_bus(&self) -> &Arc<crate::wasm_core::bus::MessageBus> {
+        self.message_bus()
+    }
+}
+
+impl AppHandleScope for WasmHostContext {
+    fn app_handle(&self) -> Option<&tauri::AppHandle> {
+        self.app_handle()
+    }
+}
+
+impl ServicesScope for WasmHostContext {
+    fn services<'a>(
+        &'a self,
+    ) -> Pin<Box<dyn std::future::Future<Output = Option<Arc<dyn crate::wasm_core::host_api::context::PluginServices>>> + Send + 'a>> {
+        Box::pin(self.services())
+    }
+}
+
+impl ProcessScope for WasmHostContext {
+    fn process_registry(&self) -> &Arc<crate::wasm_core::host_api::context::ProcessRegistry> {
+        self.process_registry()
+    }
+}
+
+impl ApiRegistryScope for WasmHostContext {
+    fn api_registry(&self) -> &Arc<crate::wasm_core::security::api_registry::ApiRegistry> {
+        self.api_registry()
+    }
+}
+
+impl SecurityScope for WasmHostContext {
+    fn security(&self) -> &crate::wasm_core::security::SecurityFramework {
+        self.security()
+    }
+}
+
+impl CapabilityScope for WasmHostContext {
+    fn capabilities(&self) -> &Arc<dyn CapabilityProvider> {
+        self.capabilities()
+    }
+}
+
+impl SecretsScope for WasmHostContext {
+    fn secrets_cache(&self) -> &Arc<std::sync::RwLock<std::collections::HashMap<(String, String), String>>> {
+        &self.secrets_cache
     }
 }

@@ -24,7 +24,7 @@ fn alive_with_output(text: &str) -> String {
 fn ctx_with_pty(plugin_id: &str, config_json: &str) -> Arc<WasmHostContext> {
     let ctx = build_host_ctx();
     grant_permissions(&ctx, plugin_id, &[PERMISSION_PTY_SPAWN, PERMISSION_PTY_IO]);
-    pty_spawn(&ctx, plugin_id, config_json).expect("spawn 应成功");
+    pty_spawn(ctx.as_ref(), ctx.as_ref(), plugin_id, config_json).expect("spawn 应成功");
     ctx
 }
 
@@ -32,7 +32,7 @@ fn ctx_with_pty(plugin_id: &str, config_json: &str) -> Arc<WasmHostContext> {
 fn spawn_ok(plugin_id: &str, config_json: &str) -> String {
     let ctx = build_host_ctx();
     grant_permissions(&ctx, plugin_id, &[PERMISSION_PTY_SPAWN, PERMISSION_PTY_IO]);
-    pty_spawn(&ctx, plugin_id, config_json).expect("spawn 应成功")
+    pty_spawn(ctx.as_ref(), ctx.as_ref(), plugin_id, config_json).expect("spawn 应成功")
 }
 
 /// 取回某句柄的环（注册表内部视图，仅测试用）
@@ -114,7 +114,7 @@ fn permission_sync_points_all_know_pty_domains() {
 #[test]
 fn spawn_without_permission_is_denied() {
     let ctx = build_host_ctx();
-    let err = pty_spawn(&ctx, "com.bedcode.no-pty", r#"{"command":"/bin/true"}"#).unwrap_err();
+    let err = pty_spawn(ctx.as_ref(), ctx.as_ref(), "com.bedcode.no-pty", r#"{"command":"/bin/true"}"#).unwrap_err();
     assert_eq!(err, "permission denied: pty:spawn");
     assert_eq!(
         registered_count_for("com.bedcode.no-pty"),
@@ -128,7 +128,7 @@ fn spawn_without_permission_is_denied() {
 fn spawn_with_io_permission_only_is_denied() {
     let ctx = build_host_ctx();
     grant_permissions(&ctx, "com.bedcode.io-only", &[PERMISSION_PTY_IO]);
-    let err = pty_spawn(&ctx, "com.bedcode.io-only", r#"{"command":"/bin/true"}"#).unwrap_err();
+    let err = pty_spawn(ctx.as_ref(), ctx.as_ref(), "com.bedcode.io-only", r#"{"command":"/bin/true"}"#).unwrap_err();
     assert_eq!(err, "permission denied: pty:spawn");
     assert_eq!(registered_count_for("com.bedcode.io-only"), 0);
 }
@@ -139,9 +139,9 @@ fn spawn_with_io_permission_only_is_denied() {
 fn ring_fetch_without_io_permission_is_denied() {
     let ctx = build_host_ctx();
     grant_permissions(&ctx, "com.bedcode.spawn-only", &[PERMISSION_PTY_SPAWN]);
-    let pty_id = pty_spawn(&ctx, "com.bedcode.spawn-only", ALIVE).expect("spawn");
+    let pty_id = pty_spawn(ctx.as_ref(), ctx.as_ref(), "com.bedcode.spawn-only", ALIVE).expect("spawn");
 
-    let err = pty_ring_fetch(&ctx, "com.bedcode.spawn-only", &pty_id, 0, 1024).unwrap_err();
+    let err = pty_ring_fetch(ctx.as_ref(), "com.bedcode.spawn-only", &pty_id, 0, 1024).unwrap_err();
     assert_eq!(err, "permission denied: pty:io");
 }
 
@@ -153,7 +153,7 @@ fn spawn_rejects_invalid_config_without_side_effects() {
     let ctx = build_host_ctx();
     grant_permissions(&ctx, "com.bedcode.bad-config", &[PERMISSION_PTY_SPAWN]);
     for bad in [r#"{"command":"   "}"#, r#"{"args":["x"]}"#, "not json"] {
-        let err = pty_spawn(&ctx, "com.bedcode.bad-config", bad).unwrap_err();
+        let err = pty_spawn(ctx.as_ref(), ctx.as_ref(), "com.bedcode.bad-config", bad).unwrap_err();
         assert!(
             err.contains("command") || err.contains("invalid config"),
             "非法配置应回明确错误，got: {err}"
@@ -173,10 +173,10 @@ fn ring_fetch_on_foreign_handle_is_not_owner() {
     grant_permissions(&ctx, "com.bedcode.owner-b", &[PERMISSION_PTY_SPAWN, PERMISSION_PTY_IO]);
 
     assert_eq!(
-        pty_ring_fetch(&ctx, "com.bedcode.owner-b", &pty_id, 0, 1024).unwrap_err(),
+        pty_ring_fetch(ctx.as_ref(), "com.bedcode.owner-b", &pty_id, 0, 1024).unwrap_err(),
         NOT_OWNER
     );
-    let missing = pty_ring_fetch(&ctx, "com.bedcode.owner-b", "pty-does-not-exist", 0, 1024).unwrap_err();
+    let missing = pty_ring_fetch(ctx.as_ref(), "com.bedcode.owner-b", "pty-does-not-exist", 0, 1024).unwrap_err();
     assert!(missing.contains("not found"), "got: {missing}");
 }
 
@@ -188,7 +188,7 @@ fn kill_still_enforces_owner_before_its_own_gate() {
     let ctx = build_host_ctx();
     grant_permissions(&ctx, "com.bedcode.owner-b", &[PERMISSION_PTY_SPAWN, PERMISSION_PTY_IO]);
 
-    assert_eq!(pty_kill(&ctx, "com.bedcode.owner-b", &pty_id).unwrap_err(), NOT_OWNER);
+    assert_eq!(pty_kill(ctx.as_ref(), "com.bedcode.owner-b", &pty_id).unwrap_err(), NOT_OWNER);
 }
 
 /// 反例：数据面同样受属主仲裁（write / resize / is-running 三函数）
@@ -200,15 +200,15 @@ fn io_apis_enforce_owner() {
     grant_permissions(&ctx, "com.bedcode.owner-b", &[PERMISSION_PTY_SPAWN, PERMISSION_PTY_IO]);
 
     assert_eq!(
-        pty_write(&ctx, "com.bedcode.owner-b", &pty_id, b"ls\n").unwrap_err(),
+        pty_write(ctx.as_ref(), "com.bedcode.owner-b", &pty_id, b"ls\n").unwrap_err(),
         NOT_OWNER
     );
     assert_eq!(
-        pty_resize(&ctx, "com.bedcode.owner-b", &pty_id, 100, 30).unwrap_err(),
+        pty_resize(ctx.as_ref(), "com.bedcode.owner-b", &pty_id, 100, 30).unwrap_err(),
         NOT_OWNER
     );
     assert_eq!(
-        pty_is_running(&ctx, "com.bedcode.owner-b", &pty_id).unwrap_err(),
+        pty_is_running(ctx.as_ref(), "com.bedcode.owner-b", &pty_id).unwrap_err(),
         NOT_OWNER
     );
 }
@@ -222,21 +222,21 @@ fn every_api_without_any_permission_is_denied_before_any_lookup() {
     let cases: [(&str, Result<(), String>); 6] = [
         (
             "spawn",
-            pty_spawn(&ctx, "com.bedcode.bare", r#"{"command":"/bin/true"}"#).map(|_| ()),
+            pty_spawn(ctx.as_ref(), ctx.as_ref(), "com.bedcode.bare", r#"{"command":"/bin/true"}"#).map(|_| ()),
         ),
-        ("write", pty_write(&ctx, "com.bedcode.bare", probe, b"x").map(|_| ())),
+        ("write", pty_write(ctx.as_ref(), "com.bedcode.bare", probe, b"x").map(|_| ())),
         (
             "resize",
-            pty_resize(&ctx, "com.bedcode.bare", probe, 80, 24).map(|_| ()),
+            pty_resize(ctx.as_ref(), "com.bedcode.bare", probe, 80, 24).map(|_| ()),
         ),
-        ("kill", pty_kill(&ctx, "com.bedcode.bare", probe).map(|_| ())),
+        ("kill", pty_kill(ctx.as_ref(), "com.bedcode.bare", probe).map(|_| ())),
         (
             "ring-fetch",
-            pty_ring_fetch(&ctx, "com.bedcode.bare", probe, 0, 1024).map(|_| ()),
+            pty_ring_fetch(ctx.as_ref(), "com.bedcode.bare", probe, 0, 1024).map(|_| ()),
         ),
         (
             "is-running",
-            pty_is_running(&ctx, "com.bedcode.bare", probe).map(|_| ()),
+            pty_is_running(ctx.as_ref(), "com.bedcode.bare", probe).map(|_| ()),
         ),
     ];
     for (api, result) in cases {
@@ -320,7 +320,7 @@ async fn wait_event(rx: &std::sync::mpsc::Receiver<serde_json::Value>) -> Option
 async fn wait_handle_retired(ctx: &Arc<WasmHostContext>, plugin_id: &str, pty_id: &str) -> String {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        match pty_is_running(ctx, plugin_id, pty_id) {
+        match pty_is_running(ctx.as_ref(), plugin_id, pty_id) {
             Err(e) if e.contains("not found") => return e,
             _ => {
                 if Instant::now() >= deadline {
@@ -339,10 +339,10 @@ async fn kill_terminates_handle_and_publishes_killed_event() {
     let owner = "com.bedcode.kill";
     let ctx = build_host_ctx();
     grant_permissions(&ctx, owner, &[PERMISSION_PTY_SPAWN, PERMISSION_PTY_IO]);
-    let pty_id = pty_spawn(&ctx, owner, ALIVE).expect("spawn");
+    let pty_id = pty_spawn(ctx.as_ref(), ctx.as_ref(), owner, ALIVE).expect("spawn");
     let events = subscribe(&ctx.message_bus, "sub-kill", &exit_topic(owner)).await;
 
-    pty_kill(&ctx, owner, &pty_id).expect("kill 应成功");
+    pty_kill(ctx.as_ref(), owner, &pty_id).expect("kill 应成功");
     let event = wait_event(&events).await.expect("属主必须收到 pty:exit");
     assert_eq!(
         event["payload"]["ptyId"].as_str(),
@@ -369,7 +369,7 @@ async fn natural_exit_publishes_stopped_event_with_exit_code() {
     // 订阅先于 spawn：宿主不缓冲不重放，短命命令可能在订阅前就终态
     let events = subscribe(&ctx.message_bus, "sub-exit", &exit_topic(owner)).await;
 
-    pty_spawn(&ctx, owner, r#"{"command":"/bin/sh","args":["-c","exit 42"]}"#).expect("spawn");
+    pty_spawn(ctx.as_ref(), ctx.as_ref(), owner, r#"{"command":"/bin/sh","args":["-c","exit 42"]}"#).expect("spawn");
     let event = wait_event(&events).await.expect("自然退出必须发出退出事件");
     assert_eq!(event["payload"]["reason"], "stopped", "非 kill 的退出: {event}");
     assert_eq!(
@@ -387,7 +387,7 @@ async fn zero_exit_code_is_reported_as_value_not_absent_field() {
     grant_permissions(&ctx, owner, &[PERMISSION_PTY_SPAWN, PERMISSION_PTY_IO]);
     let events = subscribe(&ctx.message_bus, "sub-zero", &exit_topic(owner)).await;
 
-    pty_spawn(&ctx, owner, r#"{"command":"/bin/true"}"#).expect("spawn");
+    pty_spawn(ctx.as_ref(), ctx.as_ref(), owner, r#"{"command":"/bin/true"}"#).expect("spawn");
     let event = wait_event(&events).await.expect("须有退出事件");
     assert_eq!(
         event["payload"].get("exitCode"),
@@ -409,10 +409,10 @@ async fn exit_events_are_owner_scoped_and_exactly_once() {
     let owner_events = subscribe(&ctx.message_bus, "sub-owner", &exit_topic(owner)).await;
     let other_events = subscribe(&ctx.message_bus, "sub-other", &exit_topic(other)).await;
 
-    let mine = pty_spawn(&ctx, owner, ALIVE).expect("spawn owner");
-    let theirs = pty_spawn(&ctx, other, ALIVE).expect("spawn other");
+    let mine = pty_spawn(ctx.as_ref(), ctx.as_ref(), owner, ALIVE).expect("spawn owner");
+    let theirs = pty_spawn(ctx.as_ref(), ctx.as_ref(), other, ALIVE).expect("spawn other");
 
-    pty_kill(&ctx, owner, &mine).expect("kill");
+    pty_kill(ctx.as_ref(), owner, &mine).expect("kill");
     let event = wait_event(&owner_events).await.expect("属主收到自己的事件");
     assert_eq!(event["payload"]["ptyId"], mine);
     assert!(
@@ -428,7 +428,7 @@ async fn exit_events_are_owner_scoped_and_exactly_once() {
     );
     // 它插件的句柄不受本次 kill 影响
     assert!(
-        pty_is_running(&ctx, other, &theirs).expect("他人句柄应仍可查询"),
+        pty_is_running(ctx.as_ref(), other, &theirs).expect("他人句柄应仍可查询"),
         "kill 只作用于属主自己的进程"
     );
 }
@@ -443,9 +443,9 @@ async fn purge_for_plugin_retires_all_owned_handles_and_touches_nobody_else() {
     grant_permissions(&ctx, owner, &[PERMISSION_PTY_SPAWN, PERMISSION_PTY_IO]);
     grant_permissions(&ctx, other, &[PERMISSION_PTY_SPAWN, PERMISSION_PTY_IO]);
 
-    let first = pty_spawn(&ctx, owner, ALIVE).expect("spawn 1");
-    let second = pty_spawn(&ctx, owner, r#"{"command":"/bin/cat"}"#).expect("spawn 2");
-    let theirs = pty_spawn(&ctx, other, ALIVE).expect("spawn peer");
+    let first = pty_spawn(ctx.as_ref(), ctx.as_ref(), owner, ALIVE).expect("spawn 1");
+    let second = pty_spawn(ctx.as_ref(), ctx.as_ref(), owner, r#"{"command":"/bin/cat"}"#).expect("spawn 2");
+    let theirs = pty_spawn(ctx.as_ref(), ctx.as_ref(), other, ALIVE).expect("spawn peer");
     let owner_events = subscribe(&ctx.message_bus, "sub-purge", &exit_topic(owner)).await;
     let other_events = subscribe(&ctx.message_bus, "sub-purge-peer", &exit_topic(other)).await;
 
@@ -478,7 +478,7 @@ async fn purge_for_plugin_retires_all_owned_handles_and_touches_nobody_else() {
     // 它插件：句柄在册、可用，且收不到任何补发事件
     assert_eq!(registered_count_for(other), 1, "回收越界碰了他插件的句柄");
     assert!(
-        pty_is_running(&ctx, other, &theirs).expect("他人句柄仍可查"),
+        pty_is_running(ctx.as_ref(), other, &theirs).expect("他人句柄仍可查"),
         "他人进程必须未被 kill"
     );
     assert!(other_events.try_recv().is_err(), "非属主收不到他人的回收事件");
@@ -533,8 +533,8 @@ fn live_count_includes_newly_registered_handles() {
     let ctx = build_host_ctx();
     grant_permissions(&ctx, owner, &[PERMISSION_PTY_SPAWN, PERMISSION_PTY_IO]);
     assert_eq!(registered_count_for(owner), 0, "本用例的属主是全新的，不得继承兄弟句柄");
-    let _first = pty_spawn(&ctx, owner, ALIVE).expect("spawn 1");
-    let second = pty_spawn(&ctx, owner, ALIVE).expect("spawn 2");
+    let _first = pty_spawn(ctx.as_ref(), ctx.as_ref(), owner, ALIVE).expect("spawn 1");
+    let second = pty_spawn(ctx.as_ref(), ctx.as_ref(), owner, ALIVE).expect("spawn 2");
     assert_eq!(registered_count_for(owner), 2);
     assert!(
         live_count() >= registered_count_for(owner),
@@ -543,7 +543,7 @@ fn live_count_includes_newly_registered_handles() {
         live_count()
     );
 
-    pty_kill(&ctx, owner, &second).expect("kill 第二条");
+    pty_kill(ctx.as_ref(), owner, &second).expect("kill 第二条");
     let deadline = Instant::now() + Duration::from_secs(5);
     while registered_count_for(owner) > 1 && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(20));
@@ -567,7 +567,7 @@ async fn failed_spawn_publishes_no_event_and_registers_nothing() {
     grant_permissions(&ctx, owner, &[PERMISSION_PTY_SPAWN, PERMISSION_PTY_IO]);
     let events = subscribe(&ctx.message_bus, "sub-fail", &exit_topic(owner)).await;
 
-    let err = pty_spawn(&ctx, owner, r#"{"command":"/nonexistent/bedcode-pty-command"}"#).unwrap_err();
+    let err = pty_spawn(ctx.as_ref(), ctx.as_ref(), owner, r#"{"command":"/nonexistent/bedcode-pty-command"}"#).unwrap_err();
     assert!(
         err.contains("启动子进程失败") || err.contains("打开伪终端失败"),
         "spawn 失败必须带操作上下文: {err}"
@@ -604,18 +604,18 @@ async fn wait_event_timeout(
 fn io_apis_without_io_permission_are_denied() {
     let ctx = build_host_ctx();
     grant_permissions(&ctx, "com.bedcode.spawn-only", &[PERMISSION_PTY_SPAWN]);
-    let pty_id = pty_spawn(&ctx, "com.bedcode.spawn-only", ALIVE).expect("spawn");
+    let pty_id = pty_spawn(ctx.as_ref(), ctx.as_ref(), "com.bedcode.spawn-only", ALIVE).expect("spawn");
 
     assert_eq!(
-        pty_write(&ctx, "com.bedcode.spawn-only", &pty_id, b"x").unwrap_err(),
+        pty_write(ctx.as_ref(), "com.bedcode.spawn-only", &pty_id, b"x").unwrap_err(),
         "permission denied: pty:io"
     );
     assert_eq!(
-        pty_resize(&ctx, "com.bedcode.spawn-only", &pty_id, 80, 24).unwrap_err(),
+        pty_resize(ctx.as_ref(), "com.bedcode.spawn-only", &pty_id, 80, 24).unwrap_err(),
         "permission denied: pty:io"
     );
     assert_eq!(
-        pty_is_running(&ctx, "com.bedcode.spawn-only", &pty_id).unwrap_err(),
+        pty_is_running(ctx.as_ref(), "com.bedcode.spawn-only", &pty_id).unwrap_err(),
         "permission denied: pty:io"
     );
 }
@@ -628,7 +628,7 @@ fn write_response_comes_from_process_not_tty_echo() {
     let ctx = ctx_with_pty("com.bedcode.sed", r#"{"command":"/bin/sed","args":["s/^/OUT:/"]}"#);
     let pty_id = find_handle_of("com.bedcode.sed");
 
-    pty_write(&ctx, "com.bedcode.sed", &pty_id, format!("body-{marker}\n").as_bytes()).expect("write");
+    pty_write(ctx.as_ref(), "com.bedcode.sed", &pty_id, format!("body-{marker}\n").as_bytes()).expect("write");
     let output = wait_for_output(&ring_of(&pty_id), &format!("OUT:body-{marker}"));
     assert!(
         output.contains(&format!("OUT:body-{marker}")),
@@ -653,7 +653,7 @@ fn write_at_limit_is_accepted_and_delivered_whole() {
     }
     assert_eq!(payload.len(), PLUGIN_PTY_MAX_WRITE_BYTES, "边界载荷必须恰好等于上限");
 
-    pty_write(&ctx, "com.bedcode.at-limit", &pty_id, &payload).expect("等于上限必须放行");
+    pty_write(ctx.as_ref(), "com.bedcode.at-limit", &pty_id, &payload).expect("等于上限必须放行");
 
     // cat 原样回吐：环内驻留字节达到写入量即证明「没被截断成半块」
     let ring = ring_of(&pty_id);
@@ -684,7 +684,7 @@ fn write_over_limit_is_rejected_without_partial_input() {
     let pty_id = find_handle_of("com.bedcode.limit");
     let oversized = vec![b'x'; PLUGIN_PTY_MAX_WRITE_BYTES + 1];
 
-    let err = pty_write(&ctx, "com.bedcode.limit", &pty_id, &oversized).unwrap_err();
+    let err = pty_write(ctx.as_ref(), "com.bedcode.limit", &pty_id, &oversized).unwrap_err();
     assert!(err.contains("too large") && err.contains("limit"), "got: {err}");
     assert!(
         err.contains(&PLUGIN_PTY_MAX_WRITE_BYTES.to_string()),
@@ -693,7 +693,7 @@ fn write_over_limit_is_rejected_without_partial_input() {
 
     // 被拒的负载不得有任何字节进入进程 stdin：随后一行合法写入应能被 `read` 取到
     // （若超限负载被部分写入，`read line` 会先消费残渣，PASSED 就永远不来）
-    pty_write(&ctx, "com.bedcode.limit", &pty_id, b"go\n").expect("等于/低于上限应放行");
+    pty_write(ctx.as_ref(), "com.bedcode.limit", &pty_id, b"go\n").expect("等于/低于上限应放行");
     let output = wait_for_output(&ring_of(&pty_id), "PASSED");
     assert!(output.contains("PASSED"), "超限拒绝必须零副作用: {output}");
 }
@@ -713,8 +713,8 @@ fn resize_changes_kernel_winsize_observed_by_process() {
     let before = wait_for_output(&ring_of(&pty_id), "30 100");
     assert!(before.contains("30 100"), "spawn 尺寸应为 30x100: {before}");
 
-    pty_resize(&ctx, "com.bedcode.resize", &pty_id, 80, 24).expect("resize");
-    pty_write(&ctx, "com.bedcode.resize", &pty_id, b"go\n").expect("write 解锁第二次读取");
+    pty_resize(ctx.as_ref(), "com.bedcode.resize", &pty_id, 80, 24).expect("resize");
+    pty_write(ctx.as_ref(), "com.bedcode.resize", &pty_id, b"go\n").expect("write 解锁第二次读取");
     let after = wait_for_output(&ring_of(&pty_id), "24 80");
     assert!(after.contains("24 80"), "resize 后进程应观察到 24x80: {after}");
 }
@@ -748,12 +748,12 @@ fn is_running_true_while_alive_and_handle_retired_after_natural_exit() {
     let ctx = ctx_with_pty(owner, ALIVE);
     let pty_id = find_handle_of(owner);
     assert!(
-        pty_is_running(&ctx, owner, &pty_id).expect("is-running"),
+        pty_is_running(ctx.as_ref(), owner, &pty_id).expect("is-running"),
         "阻塞在 read 的进程应为 running"
     );
 
     // 解锁 → shell 自然退出 → 终态事件 → 句柄摘除
-    pty_write(&ctx, owner, &pty_id, b"go\n").expect("write");
+    pty_write(ctx.as_ref(), owner, &pty_id, b"go\n").expect("write");
     let deadline = Instant::now() + Duration::from_secs(5);
     while is_registered(&pty_id) {
         if Instant::now() >= deadline {
@@ -761,7 +761,7 @@ fn is_running_true_while_alive_and_handle_retired_after_natural_exit() {
         }
         std::thread::sleep(Duration::from_millis(20));
     }
-    let err = pty_is_running(&ctx, owner, &pty_id).unwrap_err();
+    let err = pty_is_running(ctx.as_ref(), owner, &pty_id).unwrap_err();
     assert!(err.contains("not found"), "摘除后必须不可寻址，got: {err}");
 }
 
@@ -834,11 +834,11 @@ fn pty_quota_is_per_plugin_and_rejects_overflow_without_side_effects() {
     grant_permissions(&ctx, peer, &[PERMISSION_PTY_SPAWN, PERMISSION_PTY_IO]);
 
     for _ in 0..PLUGIN_PTY_MAX_SESSIONS_PER_PLUGIN {
-        pty_spawn(&ctx, owner, ALIVE).expect("上限之内必须放行");
+        pty_spawn(ctx.as_ref(), ctx.as_ref(), owner, ALIVE).expect("上限之内必须放行");
     }
     assert_eq!(registered_count_for(owner), PLUGIN_PTY_MAX_SESSIONS_PER_PLUGIN);
 
-    let err = pty_spawn(&ctx, owner, ALIVE).unwrap_err();
+    let err = pty_spawn(ctx.as_ref(), ctx.as_ref(), owner, ALIVE).unwrap_err();
     assert!(err.contains("too many ptys"), "超限必须明确报错，got: {err}");
     assert!(
         err.contains(&PLUGIN_PTY_MAX_SESSIONS_PER_PLUGIN.to_string()),
@@ -851,17 +851,17 @@ fn pty_quota_is_per_plugin_and_rejects_overflow_without_side_effects() {
     );
 
     // 配额按属主计：同宿主另一插件此刻仍可创建并正常查询
-    let theirs = pty_spawn(&ctx, peer, ALIVE).expect("他插件不受该配额影响");
-    assert!(pty_is_running(&ctx, peer, &theirs).expect("他插件句柄可用"));
+    let theirs = pty_spawn(ctx.as_ref(), ctx.as_ref(), peer, ALIVE).expect("他插件不受该配额影响");
+    assert!(pty_is_running(ctx.as_ref(), peer, &theirs).expect("他插件句柄可用"));
 
     // 回收即归还额度
     let victim = find_handle_of(owner);
-    pty_kill(&ctx, owner, &victim).expect("kill 腾出额度");
+    pty_kill(ctx.as_ref(), owner, &victim).expect("kill 腾出额度");
     let deadline = Instant::now() + Duration::from_secs(5);
     while registered_count_for(owner) >= PLUGIN_PTY_MAX_SESSIONS_PER_PLUGIN && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(20));
     }
-    pty_spawn(&ctx, owner, ALIVE).expect("腾出额度后同一属主必须可再建");
+    pty_spawn(ctx.as_ref(), ctx.as_ref(), owner, ALIVE).expect("腾出额度后同一属主必须可再建");
 
     purge_for_plugin(owner, &ctx.message_bus);
     purge_for_plugin(peer, &ctx.message_bus);
@@ -913,9 +913,9 @@ fn declared_quota_below_default_becomes_the_spawn_ceiling() {
     register_quota(owner, Some(2));
 
     for _ in 0..2 {
-        pty_spawn(&ctx, owner, ALIVE).expect("声明额度之内必须放行");
+        pty_spawn(ctx.as_ref(), ctx.as_ref(), owner, ALIVE).expect("声明额度之内必须放行");
     }
-    let err = pty_spawn(&ctx, owner, ALIVE).unwrap_err();
+    let err = pty_spawn(ctx.as_ref(), ctx.as_ref(), owner, ALIVE).unwrap_err();
     assert!(
         err.contains("limit 2") && err.contains("too many ptys"),
         "超限文案必须点名**声明值** 2（而非默认档），got: {err}"
@@ -939,10 +939,10 @@ fn declared_quota_above_default_allows_the_ninth_session() {
     register_quota(owner, Some(declared));
 
     for i in 0..declared {
-        pty_spawn(&ctx, owner, ALIVE).unwrap_or_else(|e| panic!("第 {} 条应在声明额度内放行，got: {e}", i + 1));
+        pty_spawn(ctx.as_ref(), ctx.as_ref(), owner, ALIVE).unwrap_or_else(|e| panic!("第 {} 条应在声明额度内放行，got: {e}", i + 1));
     }
     assert_eq!(registered_count_for(owner), declared, "声明值即天花板");
-    let err = pty_spawn(&ctx, owner, ALIVE).unwrap_err();
+    let err = pty_spawn(ctx.as_ref(), ctx.as_ref(), owner, ALIVE).unwrap_err();
     assert!(
         err.contains(&format!("limit {declared}")),
         "越界文案应点名声明值 {declared}，got: {err}"
@@ -977,7 +977,7 @@ fn declared_ring_bytes_out_of_range_is_rejected_without_side_effects() {
     grant_permissions(&ctx, owner, &[PERMISSION_PTY_SPAWN, PERMISSION_PTY_IO]);
 
     for bad in [0u64, PLUGIN_PTY_RING_MAX_BYTES + 1] {
-        let err = pty_spawn(&ctx, owner, &format!(r#"{{"command":"/bin/true","ringBytes":{bad}}}"#)).unwrap_err();
+        let err = pty_spawn(ctx.as_ref(), ctx.as_ref(), owner, &format!(r#"{{"command":"/bin/true","ringBytes":{bad}}}"#)).unwrap_err();
         assert!(err.contains("ringBytes"), "错误必须点名被拒的参数，got: {err}");
         assert!(
             err.contains(&bad.to_string()) || err.contains("greater than 0"),
@@ -988,7 +988,8 @@ fn declared_ring_bytes_out_of_range_is_rejected_without_side_effects() {
 
     // 恰等于上限的声明必须放行（off-by-one 的另一侧）
     pty_spawn(
-        &ctx,
+                ctx.as_ref(),
+        ctx.as_ref(),
         owner,
         &format!(r#"{{"command":"/bin/sh","args":["-c","read go"],"ringBytes":{PLUGIN_PTY_RING_MAX_BYTES}}}"#),
     )
@@ -1007,7 +1008,7 @@ fn small_declared_ring_evicts_for_a_never_fetching_consumer_without_stalling_out
     let ctx = build_host_ctx();
     grant_permissions(&ctx, owner, &[PERMISSION_PTY_SPAWN, PERMISSION_PTY_IO]);
     // 环只 512 字节，进程每 ~1ms 产出一行 → 必然远超容量
-    let pty_id = pty_spawn(&ctx, owner, &streaming_config(512)).expect("spawn");
+    let pty_id = pty_spawn(ctx.as_ref(), ctx.as_ref(), owner, &streaming_config(512)).expect("spawn");
     let ring = ring_of(&pty_id);
 
     // 消费者全程不拉取，直到产出远超环容量
@@ -1018,7 +1019,7 @@ fn small_declared_ring_evicts_for_a_never_fetching_consumer_without_stalling_out
     );
 
     // 落后于环起点的游标：得到现存最早段 + truncated + 可续拉游标
-    let stale = pty_ring_fetch(&ctx, owner, &pty_id, 0, 4096)
+    let stale = pty_ring_fetch(ctx.as_ref(), owner, &pty_id, 0, 4096)
         .expect("ring-fetch")
         .expect("驻留非空");
     assert!(stale.truncated, "产出远超容量，游标 0 必然落后于驻留起点");
@@ -1041,12 +1042,12 @@ fn small_declared_ring_evicts_for_a_never_fetching_consumer_without_stalling_out
     );
 
     // 续拉：游标已在驻留区间内，不再报缺口且必须单调前进
-    if let Some(more) = pty_ring_fetch(&ctx, owner, &pty_id, stale.next_offset, 4096).expect("续拉") {
+    if let Some(more) = pty_ring_fetch(ctx.as_ref(), owner, &pty_id, stale.next_offset, 4096).expect("续拉") {
         assert!(!more.truncated, "从 next-offset 起续拉不得再报缺口: {more:?}");
         assert!(more.next_offset > stale.next_offset, "游标必须前进: {more:?}");
     }
 
-    pty_kill(&ctx, owner, &pty_id).expect("kill 清场");
+    pty_kill(ctx.as_ref(), owner, &pty_id).expect("kill 清场");
 }
 
 /// 单次读上限：`max-bytes` 超宿主值即截断（数据面不报错），按游标可拉全量
@@ -1056,7 +1057,7 @@ fn ring_fetch_is_capped_per_call_and_resumes_to_the_end() {
     let owner = "com.bedcode.fetch-cap";
     let ctx = build_host_ctx();
     grant_permissions(&ctx, owner, &[PERMISSION_PTY_SPAWN, PERMISSION_PTY_IO]);
-    let pty_id = pty_spawn(&ctx, owner, quiet_cat_config()).expect("spawn");
+    let pty_id = pty_spawn(ctx.as_ref(), ctx.as_ref(), owner, quiet_cat_config()).expect("spawn");
     let ring = ring_of(&pty_id);
     // 同步点：`stty` 生效后才会打印就绪标记（在此之前写入的载荷会被 tty 驱动回显
     // 一遍并做 `\n → \r\n` 改写，字节级比对就不成立）
@@ -1070,7 +1071,7 @@ fn ring_fetch_is_capped_per_call_and_resumes_to_the_end() {
 
     // 40 KiB 一次性写入（低于 64 KiB 准入上限；默认环 256 KiB 容得下，不触发淘汰）
     let payload = line_payload(40 * 1024);
-    pty_write(&ctx, owner, &pty_id, &payload).expect("write");
+    pty_write(ctx.as_ref(), owner, &pty_id, &payload).expect("write");
     let expected: Vec<u8> = [prefix.as_bytes(), &payload].concat();
     wait_until(
         &ring,
@@ -1082,7 +1083,7 @@ fn ring_fetch_is_capped_per_call_and_resumes_to_the_end() {
     let mut reassembled: Vec<u8> = Vec::new();
     let mut calls = 0usize;
     // `max_bytes: u32::MAX` 即「取宿主允许的一批」，用于验截断常量本身
-    while let Some(fetched) = pty_ring_fetch(&ctx, owner, &pty_id, cursor, u32::MAX).expect("ring-fetch") {
+    while let Some(fetched) = pty_ring_fetch(ctx.as_ref(), owner, &pty_id, cursor, u32::MAX).expect("ring-fetch") {
         calls += 1;
         assert!(!fetched.truncated, "环容量足够，全程不该有缺口（calls={calls}）");
         assert!(
@@ -1113,7 +1114,7 @@ fn ring_fetch_is_capped_per_call_and_resumes_to_the_end() {
         "逐字节重组必须等于进程全部产出（截断不丢不改序）"
     );
 
-    pty_kill(&ctx, owner, &pty_id).expect("kill 清场");
+    pty_kill(ctx.as_ref(), owner, &pty_id).expect("kill 清场");
 }
 
 // ==================== spawn → ring-fetch 主干（真 PTY） ====================
@@ -1130,7 +1131,7 @@ fn spawn_runs_real_command_and_output_reaches_ring_fetch() {
 
     let ctx = build_host_ctx();
     grant_permissions(&ctx, "com.bedcode.ring", &[PERMISSION_PTY_SPAWN, PERMISSION_PTY_IO]);
-    let fetched = pty_ring_fetch(&ctx, "com.bedcode.ring", &pty_id, 0, 4096)
+    let fetched = pty_ring_fetch(ctx.as_ref(), "com.bedcode.ring", &pty_id, 0, 4096)
         .expect("ring-fetch")
         .expect("有产出时不得返回 None");
     assert!(
@@ -1151,10 +1152,10 @@ fn second_fetch_from_next_offset_returns_nothing_new() {
     let pty_id = find_handle_of("com.bedcode.cursor");
     wait_for_output(&ring_of(&pty_id), &marker);
 
-    let first = pty_ring_fetch(&ctx, "com.bedcode.cursor", &pty_id, 0, 4096)
+    let first = pty_ring_fetch(ctx.as_ref(), "com.bedcode.cursor", &pty_id, 0, 4096)
         .unwrap()
         .expect("首批");
-    let second = pty_ring_fetch(&ctx, "com.bedcode.cursor", &pty_id, first.next_offset, 4096).unwrap();
+    let second = pty_ring_fetch(ctx.as_ref(), "com.bedcode.cursor", &pty_id, first.next_offset, 4096).unwrap();
     assert!(
         second.map(|f| f.data).unwrap_or_default().is_empty(),
         "游标已追平时不得重复投递已消费字节"
@@ -1174,7 +1175,7 @@ fn spawn_executes_argv_verbatim_without_shell_interpretation() {
         r#"{"command":"/bin/sed","args":["s/^/literal; echo PWNED/"]}"#,
     );
     let pty_id = find_handle_of("com.bedcode.argv");
-    pty_write(&ctx, "com.bedcode.argv", &pty_id, b"body\n").expect("write");
+    pty_write(ctx.as_ref(), "com.bedcode.argv", &pty_id, b"body\n").expect("write");
 
     let output = wait_for_output(&ring_of(&pty_id), "literal");
     assert!(
@@ -1214,7 +1215,7 @@ fn spawn_applies_declared_env_without_business_identity() {
         "插件私有 PTY 不得带业务会话身份: {env_output}"
     );
     assert!(
-        pty_is_running(&ctx, owner, &pty_id).expect("is-running"),
+        pty_is_running(ctx.as_ref(), owner, &pty_id).expect("is-running"),
         "载体进程应仍存活（env 输出后阻塞在 read）"
     );
     // 恢复宿主 env（若有）
@@ -1302,14 +1303,14 @@ fn broadcast_declaration_is_opt_in_and_undeclared_handles_are_invisible() {
     grant_permissions(&ctx, owner, &[PERMISSION_PTY_SPAWN, PERMISSION_PTY_IO]);
 
     // 声明句柄：opt-in——宿主广播面经映射可读，且带存活快照（06 的状态面要用）
-    let declared_pty = pty_spawn(&ctx, owner, &declared_config("sess-lock-1")).expect("spawn");
+    let declared_pty = pty_spawn(ctx.as_ref(), ctx.as_ref(), owner, &declared_config("sess-lock-1")).expect("spawn");
     let handle = broadcast_handle_for_session("sess-lock-1").expect("已声明的会话 id 必须可读");
     assert_eq!(handle.pty_id, declared_pty, "映射必须指向声明句柄");
     assert_eq!(handle.owner, owner, "映射携带属主（审计 / 事件关联用）");
     assert!(handle.session.is_running(), "广播句柄带引擎会话（存活快照）");
 
     // 反向锁：同会话 id 只进 env 不声明 → 读不到，也不得顶掉已声明者
-    let undeclared_pty = pty_spawn(&ctx, owner, &env_injected_config("sess-lock-1")).expect("spawn");
+    let undeclared_pty = pty_spawn(ctx.as_ref(), ctx.as_ref(), owner, &env_injected_config("sess-lock-1")).expect("spawn");
     assert!(is_registered(&undeclared_pty), "未声明句柄本身在册（进程活着）");
     assert_ne!(undeclared_pty, declared_pty);
     let after = broadcast_handle_for_session("sess-lock-1").expect("声明句柄仍可读");
@@ -1331,10 +1332,10 @@ fn broadcast_mapping_is_retired_with_handle_lifecycle() {
     let owner = "com.bedcode.bc-lifecycle";
     let ctx = build_host_ctx();
     grant_permissions(&ctx, owner, &[PERMISSION_PTY_SPAWN, PERMISSION_PTY_IO]);
-    let pty_id = pty_spawn(&ctx, owner, &declared_config("sess-lock-2")).expect("spawn");
+    let pty_id = pty_spawn(ctx.as_ref(), ctx.as_ref(), owner, &declared_config("sess-lock-2")).expect("spawn");
     assert!(broadcast_handle_for_session("sess-lock-2").is_some(), "在册即映射");
 
-    pty_kill(&ctx, owner, &pty_id).expect("kill");
+    pty_kill(ctx.as_ref(), owner, &pty_id).expect("kill");
     let deadline = Instant::now() + Duration::from_secs(5);
     while broadcast_handle_for_session("sess-lock-2").is_some() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(20));
@@ -1357,19 +1358,19 @@ fn same_owner_redeclaration_maps_to_newest_handle() {
     let ctx = build_host_ctx();
     grant_permissions(&ctx, owner, &[PERMISSION_PTY_SPAWN, PERMISSION_PTY_IO]);
 
-    let first = pty_spawn(&ctx, owner, &declared_config("sess-lock-3")).expect("首次 spawn");
-    let second = pty_spawn(&ctx, owner, &declared_config("sess-lock-3")).expect("同 id 重建不得被拒");
+    let first = pty_spawn(ctx.as_ref(), ctx.as_ref(), owner, &declared_config("sess-lock-3")).expect("首次 spawn");
+    let second = pty_spawn(ctx.as_ref(), ctx.as_ref(), owner, &declared_config("sess-lock-3")).expect("同 id 重建不得被拒");
     let handle = broadcast_handle_for_session("sess-lock-3").expect("映射存在");
     assert_eq!(handle.pty_id, second, "同 id 重建后映射必须取**最新**句柄");
 
     // 旧句柄终态（kill 后退出监听摘除）不影响映射——仍指向新句柄
-    pty_kill(&ctx, owner, &first).expect("kill old");
+    pty_kill(ctx.as_ref(), owner, &first).expect("kill old");
     std::thread::sleep(Duration::from_millis(100));
     let handle = broadcast_handle_for_session("sess-lock-3").expect("新句柄仍可读");
     assert_eq!(handle.pty_id, second, "旧句柄消失不得改变映射目标");
 
     // 新句柄终态 → 映射消失
-    pty_kill(&ctx, owner, &second).expect("kill new");
+    pty_kill(ctx.as_ref(), owner, &second).expect("kill new");
     let deadline = Instant::now() + Duration::from_secs(5);
     while broadcast_handle_for_session("sess-lock-3").is_some() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(20));
@@ -1387,8 +1388,8 @@ fn cross_owner_broadcast_session_id_conflict_is_rejected_without_side_effects() 
     grant_permissions(&ctx, owner_a, &[PERMISSION_PTY_SPAWN, PERMISSION_PTY_IO]);
     grant_permissions(&ctx, owner_b, &[PERMISSION_PTY_SPAWN, PERMISSION_PTY_IO]);
 
-    pty_spawn(&ctx, owner_a, &declared_config("sess-lock-4")).expect("A 声明");
-    let err = pty_spawn(&ctx, owner_b, &declared_config("sess-lock-4")).unwrap_err();
+    pty_spawn(ctx.as_ref(), ctx.as_ref(), owner_a, &declared_config("sess-lock-4")).expect("A 声明");
+    let err = pty_spawn(ctx.as_ref(), ctx.as_ref(), owner_b, &declared_config("sess-lock-4")).unwrap_err();
     assert!(
         err.contains("already declared by another plugin"),
         "跨属主撞 id 必须显性拒绝（fail-visible），got: {err}"
@@ -1407,7 +1408,8 @@ fn empty_host_broadcast_session_id_is_rejected_without_side_effects() {
     grant_permissions(&ctx, owner, &[PERMISSION_PTY_SPAWN, PERMISSION_PTY_IO]);
 
     let err = pty_spawn(
-        &ctx,
+                ctx.as_ref(),
+        ctx.as_ref(),
         owner,
         r#"{"command":"/bin/sh","args":["-c","read go"],"hostBroadcastSessionId":""}"#,
     )

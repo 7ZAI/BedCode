@@ -28,9 +28,6 @@ use wasmtime::component::Instance;
 use wasmtime::Store;
 
 use super::runtime::{LoadedWasmPlugin, WasmPluginState};
-// 注意：本文件已有内部枚举 `CapabilityProvider`（提供者状态），故 host_api trait
-// 只能全路径引用（票 04，无法同名 import）
-use crate::wasm_core::host_api::context::WasmHostContext;
 use crate::wasm_core::runtime_util::block_on_async;
 
 // ==================== 能力名与导出探测表 ====================
@@ -340,11 +337,11 @@ pub(crate) fn probe_exported_capabilities(instance: &Instance, store: &mut Store
 /// `host-storage.get` 路由：系统组件提供时转发并返回结果；宿主原语提供时
 /// 返回 None（调用方走现状路径）
 pub(crate) fn forward_storage_get(
-    host_ctx: &WasmHostContext,
+    cap: &dyn crate::wasm_core::host_api::context::CapabilityScope,
     caller_plugin_id: &str,
     key: &str,
 ) -> Option<Result<Option<String>, String>> {
-    let (provider_id, instance) = host_ctx
+    let (provider_id, instance) = cap
         .capabilities()
         .system_component_instance(CAP_HOST_STORAGE, caller_plugin_id)?;
     let key = key.to_string();
@@ -352,17 +349,17 @@ pub(crate) fn forward_storage_get(
         let mut guard = instance.lock().await;
         guard.call_capability_export::<(String,), (Result<Option<String>, String>,)>(EXPORT_STORAGE_GET, (key,))
     });
-    Some(unwrap_forward_result(CAP_HOST_STORAGE, &provider_id, host_ctx, result))
+    Some(unwrap_forward_result(CAP_HOST_STORAGE, &provider_id, cap, result))
 }
 
 /// `host-storage.set` 路由（语义同 [`forward_storage_get`]）
 pub(crate) fn forward_storage_set(
-    host_ctx: &WasmHostContext,
+    cap: &dyn crate::wasm_core::host_api::context::CapabilityScope,
     caller_plugin_id: &str,
     key: &str,
     value: &str,
 ) -> Option<Result<(), String>> {
-    let (provider_id, instance) = host_ctx
+    let (provider_id, instance) = cap
         .capabilities()
         .system_component_instance(CAP_HOST_STORAGE, caller_plugin_id)?;
     let key = key.to_string();
@@ -371,16 +368,16 @@ pub(crate) fn forward_storage_set(
         let mut guard = instance.lock().await;
         guard.call_capability_export::<(String, String), (Result<(), String>,)>(EXPORT_STORAGE_SET, (key, value))
     });
-    Some(unwrap_forward_result(CAP_HOST_STORAGE, &provider_id, host_ctx, result))
+    Some(unwrap_forward_result(CAP_HOST_STORAGE, &provider_id, cap, result))
 }
 
 /// `host-storage.delete` 路由（语义同 [`forward_storage_get`]）
 pub(crate) fn forward_storage_delete(
-    host_ctx: &WasmHostContext,
+    cap: &dyn crate::wasm_core::host_api::context::CapabilityScope,
     caller_plugin_id: &str,
     key: &str,
 ) -> Option<Result<(), String>> {
-    let (provider_id, instance) = host_ctx
+    let (provider_id, instance) = cap
         .capabilities()
         .system_component_instance(CAP_HOST_STORAGE, caller_plugin_id)?;
     let key = key.to_string();
@@ -388,7 +385,7 @@ pub(crate) fn forward_storage_delete(
         let mut guard = instance.lock().await;
         guard.call_capability_export::<(String,), (Result<(), String>,)>(EXPORT_STORAGE_DELETE, (key,))
     });
-    Some(unwrap_forward_result(CAP_HOST_STORAGE, &provider_id, host_ctx, result))
+    Some(unwrap_forward_result(CAP_HOST_STORAGE, &provider_id, cap, result))
 }
 
 /// 转发结果解包：guest 返回的 `Err(string)`（WIT result 内层）原样透传；
@@ -397,7 +394,7 @@ pub(crate) fn forward_storage_delete(
 fn unwrap_forward_result<T>(
     capability: &str,
     provider_id: &str,
-    host_ctx: &WasmHostContext,
+    cap: &dyn crate::wasm_core::host_api::context::CapabilityScope,
     result: crate::Result<(Result<T, String>,)>,
 ) -> Result<T, String> {
     match result {
@@ -409,7 +406,7 @@ fn unwrap_forward_result<T>(
                 error = %e,
                 "[CapabilityRegistry] 系统组件能力调用失败（trap/传输错误已隔离），能力回落宿主原语"
             );
-            host_ctx.capabilities().revert_to_host(capability, provider_id);
+            cap.capabilities().revert_to_host(capability, provider_id);
             Err(format!("system component capability call failed: {}", e))
         }
     }

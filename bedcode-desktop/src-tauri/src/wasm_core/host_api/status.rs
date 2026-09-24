@@ -10,12 +10,12 @@ use crate::wasm_core::runtime_util::block_on_async;
 ///
 /// 宿主仅 emit `plugin:error` 事件通知前端弹窗提示，不改变插件激活状态。
 pub(crate) fn mark_plugin_error(
-    host_ctx: &crate::wasm_core::host_api::context::WasmHostContext,
+    svc: &dyn crate::wasm_core::host_api::context::ServicesScope,
     plugin_id: String,
     error: String,
 ) {
     block_on_async(async move {
-        match host_ctx.services().await {
+        match svc.services().await {
             Some(services) => services.mark_plugin_error(plugin_id, error),
             None => tracing::error!("[PluginHost] mark_plugin_error: plugin services not initialized"),
         }
@@ -36,6 +36,6 @@ mod tests {
     #[tokio::test]
     async fn mark_plugin_error_services_not_ready_no_panic() {
         let ctx = build_host_ctx();
-        mark_plugin_error(&ctx, "test-plugin".to_string(), "boom".to_string());
+        mark_plugin_error(ctx.as_ref(), "test-plugin".to_string(), "boom".to_string());
     }
 }

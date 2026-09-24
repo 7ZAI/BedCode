@@ -30,6 +30,7 @@
 
 use super::bus;
 use crate::wasm_core::bus::{BusMessageHandler, MessageBus};
+#[cfg(test)]
 use crate::wasm_core::host_api::context::WasmHostContext;
 use crate::wasm_core::runtime_util::block_on_async;
 use bedcode_plugin_api::host::bus::API_TOPIC_PREFIX;
@@ -89,7 +90,9 @@ impl BusMessageHandler for ReplyHandler {
 /// `id` 与请求一致（防错配回复串台）与 `sender` 属主一致（防抢答）。
 /// 超时/门禁拒绝返回 Err。
 pub(crate) fn api_call(
-    host_ctx: &WasmHostContext,
+    bus: &dyn crate::wasm_core::host_api::context::BusScope,
+    reg: &dyn crate::wasm_core::host_api::context::ApiRegistryScope,
+    sec: &dyn crate::wasm_core::host_api::context::SecurityScope,
     caller_id: &str,
     request_topic: &str,
     payload_json: &str,
@@ -107,7 +110,7 @@ pub(crate) fn api_call(
     // 2. 解析目标 api 的声明属主——回复只接受来自它的投递。门禁本身仍由
     //    bus_publish 兜（此处多读一次注册表，同一张表不漂移）；未声明目标在
     //    注册回复订阅**之前**就返回，避免旧顺序下的订阅与消费任务泄漏。
-    let expected_sender = match super::bus::api_gate_target_owner(host_ctx, request_topic) {
+    let expected_sender = match super::bus::api_gate_target_owner(reg, request_topic) {
         Some(owner) => owner,
         None => {
             return Err(format!(
@@ -118,7 +121,6 @@ pub(crate) fn api_call(
     };
 
     let reply_topic = format!("bedcode.api.reply.{}.{}", caller_id, request_id);
-    let bus = host_ctx.message_bus.clone();
     let (tx, rx) = oneshot::channel::<String>();
     let handler = ReplyHandler {
         tx: Arc::new(Mutex::new(Some(tx))),
@@ -127,7 +129,7 @@ pub(crate) fn api_call(
     };
 
     // 3. 注册静态回复订阅（先订阅后发布：oneshot 缓冲保证时序安全）
-    let sub_bus = bus.clone();
+    let sub_bus = bus.message_bus().clone();
     let sub_topic = reply_topic.clone();
     let sub_result = block_on_async(async move {
         sub_bus.subscribe_static(caller_id, &sub_topic, Box::new(handler)).await;
@@ -146,10 +148,10 @@ pub(crate) fn api_call(
     //    经 `block_on_async` 搬到 ambient 多线程上下文：spawn 落在 ambient 线程池，
     //    回复自由投递。
     let publish_result = block_on_async(async move {
-        bus::bus_publish(host_ctx, caller_id, request_topic, payload_json)
+        bus::bus_publish(bus, sec, caller_id, request_topic, payload_json)
     });
     if let Err(e) = publish_result {
-        cleanup_reply_subscription(&bus, caller_id, &reply_topic);
+        cleanup_reply_subscription(bus.message_bus(), caller_id, &reply_topic);
         return Err(e);
     }
 
@@ -166,7 +168,7 @@ pub(crate) fn api_call(
         }
         Err(_) => {
             // 超时路径同样清理订阅（见下方清理），保持回复 topic 无残留
-            cleanup_reply_subscription(&bus, caller_id, &reply_topic);
+            cleanup_reply_subscription(bus.message_bus(), caller_id, &reply_topic);
             return Err(format!(
                 "api_call: timeout after {}ms waiting for reply on '{}'",
                 timeout_ms, reply_topic
@@ -178,7 +180,7 @@ pub(crate) fn api_call(
     let reply: Value = serde_json::from_str(&reply_json).map_err(|e| format!("api_call: invalid reply JSON: {}", e))?;
     let reply_id = reply.get("id").and_then(|v| v.as_str());
     if reply_id != Some(request_id) {
-        cleanup_reply_subscription(&bus, caller_id, &reply_topic);
+        cleanup_reply_subscription(bus.message_bus(), caller_id, &reply_topic);
         return Err(format!(
             "api_call: reply id mismatch (expected '{}', got {:?}) on '{}'",
             request_id, reply_id, reply_topic
@@ -186,7 +188,7 @@ pub(crate) fn api_call(
     }
 
     // 7. 清理回复订阅（幂等）
-    cleanup_reply_subscription(&bus, caller_id, &reply_topic);
+    cleanup_reply_subscription(bus.message_bus(), caller_id, &reply_topic);
     Ok(reply_json)
 }
 
@@ -289,7 +291,9 @@ mod tests {
             let mut rx = setup_responder(&ctx, "bedcode.api.com.bedcode.sdk-test.echo", true, None);
 
             let reply = api_call(
-                &ctx,
+                                ctx.as_ref(),
+                ctx.as_ref(),
+                ctx.as_ref(),
                 "com.bedcode.caller",
                 "bedcode.api.com.bedcode.sdk-test.echo",
                 r#"{"jsonrpc":"2.0","id":"req-1","method":"echo","params":["hi"]}"#,
@@ -314,7 +318,9 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let err = api_call(
-                &ctx,
+                                ctx.as_ref(),
+                ctx.as_ref(),
+                ctx.as_ref(),
                 "com.bedcode.caller",
                 "bedcode.api.com.bedcode.scheduler.remove",
                 r#"{"jsonrpc":"2.0","id":"req-1","method":"remove","params":[]}"#,
@@ -338,7 +344,9 @@ mod tests {
 
             let started = std::time::Instant::now();
             let err = api_call(
-                &ctx,
+                                ctx.as_ref(),
+                ctx.as_ref(),
+                ctx.as_ref(),
                 "com.bedcode.caller",
                 "bedcode.api.com.bedcode.sdk-test.silent",
                 r#"{"jsonrpc":"2.0","id":"req-1","method":"silent","params":[]}"#,
@@ -369,7 +377,9 @@ mod tests {
             );
 
             let err = api_call(
-                &ctx,
+                                ctx.as_ref(),
+                ctx.as_ref(),
+                ctx.as_ref(),
                 "com.bedcode.caller",
                 "bedcode.api.com.bedcode.sdk-test.echo",
                 r#"{"jsonrpc":"2.0","id":"req-1","method":"echo","params":["hi"]}"#,
@@ -387,7 +397,9 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let err = api_call(
-                &ctx,
+                                ctx.as_ref(),
+                ctx.as_ref(),
+                ctx.as_ref(),
                 "com.bedcode.caller",
                 "bedcode.api.com.bedcode.sdk-test.echo",
                 r#"{"jsonrpc":"2.0","method":"echo"}"#,
@@ -440,7 +452,9 @@ mod tests {
                 .await;
 
             let err = api_call(
-                &ctx,
+                                ctx.as_ref(),
+                ctx.as_ref(),
+                ctx.as_ref(),
                 "com.bedcode.caller",
                 "bedcode.api.com.bedcode.sdk-test.echo",
                 r#"{"jsonrpc":"2.0","id":"req-1","method":"echo","params":["hi"]}"#,
@@ -463,7 +477,9 @@ mod tests {
             let mut rx = setup_responder(&ctx, "bedcode.api.com.bedcode.sdk-test.echo", true, None);
 
             let reply = api_call(
-                &ctx,
+                                ctx.as_ref(),
+                ctx.as_ref(),
+                ctx.as_ref(),
                 "com.bedcode.caller",
                 "bedcode.api.com.bedcode.sdk-test.echo",
                 r#"{"jsonrpc":"2.0","id":"req-9","method":"echo","params":["ok"]}"#,
@@ -485,7 +501,9 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let err = api_call(
-                &ctx,
+                                ctx.as_ref(),
+                ctx.as_ref(),
+                ctx.as_ref(),
                 "com.bedcode.caller",
                 "bedcode.api.com.bedcode.ghost.echo",
                 r#"{"jsonrpc":"2.0","id":"req-1","method":"echo","params":[]}"#,
@@ -514,7 +532,9 @@ mod tests {
             setup_responder(&ctx, "bedcode.api.com.bedcode.sdk-test.echo", true, None);
 
             api_call(
-                &ctx,
+                                ctx.as_ref(),
+                ctx.as_ref(),
+                ctx.as_ref(),
                 "com.bedcode.caller",
                 "bedcode.api.com.bedcode.sdk-test.echo",
                 r#"{"jsonrpc":"2.0","id":"req-42","method":"echo","params":["hi"]}"#,

@@ -12,17 +12,14 @@
 //! 记忆 endpoint 自动重拨（信任检查照走引擎握手）——这是退役
 //! DiscoveryCache 的前置条件。
 
-use crate::wasm_core::host_api::context::WasmHostContext;
 use crate::wasm_core::runtime_util::block_on_async;
 use crate::wasm_core::permission::PERMISSION_PEER;
 use std::sync::LazyLock;
 
 /// 取 AppHandle（无头上下文直接报错）
-fn require_app(host_ctx: &WasmHostContext) -> Result<tauri::AppHandle, String> {
-    host_ctx
-        .app_handle
-        .as_ref()
-        .map(|a| (**a).clone())
+fn require_app(app: &dyn crate::wasm_core::host_api::context::AppHandleScope) -> Result<tauri::AppHandle, String> {
+    app.app_handle()
+        .map(|a| a.clone())
         .ok_or_else(|| "peer-net unavailable in headless context (no app_handle)".to_string())
 }
 
@@ -108,7 +105,7 @@ fn sync_result<T>(r: crate::Result<T>) -> Result<T, String> {
 /// 缺失」字样（连接已断/缓存被 TTL 清扫）时，以句柄记忆的 endpoint 重走
 /// 引擎握手后重试一次。denied/unreachable 等其他错误原样上抛。
 fn with_auto_redial<T>(
-    host_ctx: &WasmHostContext,
+    app: &dyn crate::wasm_core::host_api::context::AppHandleScope,
     plugin_id: &str,
     handle: &str,
     op: impl Fn(&str) -> Result<T, String>,
@@ -119,7 +116,7 @@ fn with_auto_redial<T>(
     match op(&entry.node_id) {
         Ok(v) => Ok(v),
         Err(e) if e.contains("discovery cache") || e.contains("not in discovery cache") => {
-            let app = require_app(host_ctx)?;
+            let app_handle = require_app(app)?;
             let endpoint = crate::server::peer_net::DialEndpoint {
                 node_id: entry.node_id.clone(),
                 addr: entry.addr.clone(),
@@ -130,7 +127,7 @@ fn with_auto_redial<T>(
                 "peer data-plane auto-redial (handle-remembered endpoint)"
             );
             sync_result(block_on_async(crate::server::peer_net::dial_peer_endpoint(
-                app, endpoint,
+                app_handle, endpoint,
             )))?;
             op(&entry.node_id)
         }
@@ -138,13 +135,14 @@ fn with_auto_redial<T>(
     }
 }
 
-pub(crate) fn peer_dial(host_ctx: &WasmHostContext, plugin_id: &str, endpoint_json: &str) -> Result<String, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_PEER, "host_peer_dial") {
+pub(crate) fn peer_dial(app: &dyn crate::wasm_core::host_api::context::AppHandleScope,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope, plugin_id: &str, endpoint_json: &str) -> Result<String, String> {
+    if !super::check_permission(perm, plugin_id, PERMISSION_PEER, "host_peer_dial") {
         return Err(denied());
     }
     let endpoint: crate::server::peer_net::DialEndpoint =
         serde_json::from_str(endpoint_json).map_err(|e| format!("dial endpoint: invalid json: {e}"))?;
-    let app = require_app(host_ctx)?;
+    let app = require_app(app)?;
     // 注意：node_id 必须 clone 而非 take——take 会把 endpoint.node_id 置空，
     // dial_peer_endpoint 对空 node_id 报 "invalid node id ''" 静默失败
     // （2026-09-07 实机实证：桌面点连接无拨号、无任何日志）。移动端同函数因
@@ -168,8 +166,9 @@ pub(crate) fn peer_dial(host_ctx: &WasmHostContext, plugin_id: &str, endpoint_js
     }
 }
 
-pub(crate) fn peer_close(host_ctx: &WasmHostContext, plugin_id: &str, handle: &str) -> Result<bool, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_PEER, "host_peer_close") {
+pub(crate) fn peer_close(app: &dyn crate::wasm_core::host_api::context::AppHandleScope,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope, plugin_id: &str, handle: &str) -> Result<bool, String> {
+    if !super::check_permission(perm, plugin_id, PERMISSION_PEER, "host_peer_close") {
         return Err(denied());
     }
     // ① session 句柄 → 先判属主再谈断开：属主判定刻意排在 require_app 之前，
@@ -180,13 +179,13 @@ pub(crate) fn peer_close(host_ctx: &WasmHostContext, plugin_id: &str, handle: &s
             with_handles(|t| t.restore_session(handle, entry));
             return Err(e);
         }
-        let app = require_app(host_ctx)?;
+        let app = require_app(app)?;
         return sync_result(block_on_async(crate::server::peer_net::disconnect_peer(
             app,
             entry.node_id,
         )));
     }
-    let app = require_app(host_ctx)?;
+    let app = require_app(app)?;
     // ② 发送传输句柄（batch-id）→ 取消发送批
     let cancelled = sync_result(block_on_async(crate::server::peer_net::cancel_transfer_for_plugin(
         app.clone(),
@@ -203,35 +202,38 @@ pub(crate) fn peer_close(host_ctx: &WasmHostContext, plugin_id: &str, handle: &s
 }
 
 pub(crate) fn peer_respond_consent(
-    host_ctx: &WasmHostContext,
+    app: &dyn crate::wasm_core::host_api::context::AppHandleScope,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
     plugin_id: &str,
     request_id: &str,
     accepted: bool,
 ) -> Result<bool, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_PEER, "host_peer_respond_consent") {
+    if !super::check_permission(perm, plugin_id, PERMISSION_PEER, "host_peer_respond_consent") {
         return Err(denied());
     }
-    let app = require_app(host_ctx)?;
+    let app = require_app(app)?;
     let request_id = request_id.to_string();
     sync_result(block_on_async(crate::server::peer_net::respond_peer_consent(
         app, request_id, accepted,
     )))
 }
 
-pub(crate) fn peer_list_trusted(host_ctx: &WasmHostContext, plugin_id: &str) -> Result<String, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_PEER, "host_peer_list_trusted") {
+pub(crate) fn peer_list_trusted(app: &dyn crate::wasm_core::host_api::context::AppHandleScope,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope, plugin_id: &str) -> Result<String, String> {
+    if !super::check_permission(perm, plugin_id, PERMISSION_PEER, "host_peer_list_trusted") {
         return Err(denied());
     }
-    let app = require_app(host_ctx)?;
+    let app = require_app(app)?;
     let dtos = sync_result(block_on_async(crate::server::peer_net::list_trusted_peers(app)))?;
     serde_json::to_string(&dtos).map_err(|e| format!("serialize trusted peers failed: {e}"))
 }
 
-pub(crate) fn peer_revoke_trusted(host_ctx: &WasmHostContext, plugin_id: &str, node_id: &str) -> Result<bool, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_PEER, "host_peer_revoke_trusted") {
+pub(crate) fn peer_revoke_trusted(app: &dyn crate::wasm_core::host_api::context::AppHandleScope,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope, plugin_id: &str, node_id: &str) -> Result<bool, String> {
+    if !super::check_permission(perm, plugin_id, PERMISSION_PEER, "host_peer_revoke_trusted") {
         return Err(denied());
     }
-    let app = require_app(host_ctx)?;
+    let app = require_app(app)?;
     let node_id = node_id.to_string();
     sync_result(block_on_async(crate::server::peer_net::revoke_trusted_peer(
         app, node_id,
@@ -239,12 +241,13 @@ pub(crate) fn peer_revoke_trusted(host_ctx: &WasmHostContext, plugin_id: &str, n
 }
 
 pub(crate) fn peer_send_files(
-    host_ctx: &WasmHostContext,
+    app: &dyn crate::wasm_core::host_api::context::AppHandleScope,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
     plugin_id: &str,
     session: &str,
     paths_json: &str,
 ) -> Result<String, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_PEER, "host_peer_send_files") {
+    if !super::check_permission(perm, plugin_id, PERMISSION_PEER, "host_peer_send_files") {
         return Err(denied());
     }
     // 载荷双形态（issue 13 Phase 3 步骤 5）：纯 string 兼容保留；对象元素
@@ -283,19 +286,19 @@ pub(crate) fn peer_send_files(
             }
         }
     }
-    let app = require_app(host_ctx)?;
+    let app_handle = require_app(app)?;
     // 并发上限脉冲：插件设置真源，随发送载荷同步宿主并发闸门（若变化）
     if let Some(n) = concurrency {
         let _ = sync_result(block_on_async(
-            crate::server::peer_net::set_transfer_concurrency_for_plugin(app.clone(), n),
+            crate::server::peer_net::set_transfer_concurrency_for_plugin(app_handle.clone(), n),
         ));
     }
     // 返回值已收窄为传输句柄（batch-id）；Phase 3 起插件自持任务视图，宿主
     // 不再回传整份 DTO。断线场景由 with_auto_redial 以记忆 endpoint 重拨
-    let dto = with_auto_redial(host_ctx, plugin_id, session, |node_id| {
-        let app = require_app(host_ctx)?;
+    let dto = with_auto_redial(app, plugin_id, session, |node_id| {
+        let app_handle = require_app(app)?;
         sync_result(block_on_async(crate::server::peer_net::send_files_for_plugin(
-            app,
+            app_handle,
             node_id.to_string(),
             paths.clone(),
             if force_encrypt { Some(true) } else { None },
@@ -305,15 +308,16 @@ pub(crate) fn peer_send_files(
 }
 
 pub(crate) fn peer_respond_transfer(
-    host_ctx: &WasmHostContext,
+    app: &dyn crate::wasm_core::host_api::context::AppHandleScope,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
     plugin_id: &str,
     batch_id: &str,
     accept: bool,
 ) -> Result<(), String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_PEER, "host_peer_respond_transfer") {
+    if !super::check_permission(perm, plugin_id, PERMISSION_PEER, "host_peer_respond_transfer") {
         return Err(denied());
     }
-    let app = require_app(host_ctx)?;
+    let app = require_app(app)?;
     let batch_id = batch_id.to_string();
     let _hit = sync_result(block_on_async(crate::server::peer_net::respond_transfer_for_plugin(
         app, batch_id, accept,
@@ -322,15 +326,16 @@ pub(crate) fn peer_respond_transfer(
 }
 
 pub(crate) fn peer_set_receive_policy(
-    host_ctx: &WasmHostContext,
+    app: &dyn crate::wasm_core::host_api::context::AppHandleScope,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
     plugin_id: &str,
     mode: &str,
     timeout_secs: u64,
 ) -> Result<(), String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_PEER, "host_peer_set_receive_policy") {
+    if !super::check_permission(perm, plugin_id, PERMISSION_PEER, "host_peer_set_receive_policy") {
         return Err(denied());
     }
-    let app = require_app(host_ctx)?;
+    let app = require_app(app)?;
     let mode = mode.to_string();
     sync_result(block_on_async(crate::server::peer_net::set_receive_policy_for_plugin(
         app,
@@ -341,11 +346,12 @@ pub(crate) fn peer_set_receive_policy(
 
 /// 显式暂停进行中的发送批：中断会话连接，任务保留（含已传字节）不落历史。
 /// 仅本端发起的 running 批可暂停（服务侧供流任务不可暂停）。
-pub(crate) fn peer_pause_transfer(host_ctx: &WasmHostContext, plugin_id: &str, batch_id: &str) -> Result<(), String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_PEER, "host_peer_pause_transfer") {
+pub(crate) fn peer_pause_transfer(app: &dyn crate::wasm_core::host_api::context::AppHandleScope,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope, plugin_id: &str, batch_id: &str) -> Result<(), String> {
+    if !super::check_permission(perm, plugin_id, PERMISSION_PEER, "host_peer_pause_transfer") {
         return Err(denied());
     }
-    let app = require_app(host_ctx)?;
+    let app = require_app(app)?;
     let batch_id = batch_id.to_string();
     let hit = sync_result(block_on_async(crate::server::peer_net::pause_transfer_for_plugin(
         app, batch_id,
@@ -357,11 +363,12 @@ pub(crate) fn peer_pause_transfer(host_ctx: &WasmHostContext, plugin_id: &str, b
 }
 
 /// 恢复暂停的发送批：入队并经并发闸门启动，接收端按已写偏移续传。
-pub(crate) fn peer_resume_transfer(host_ctx: &WasmHostContext, plugin_id: &str, batch_id: &str) -> Result<(), String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_PEER, "host_peer_resume_transfer") {
+pub(crate) fn peer_resume_transfer(app: &dyn crate::wasm_core::host_api::context::AppHandleScope,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope, plugin_id: &str, batch_id: &str) -> Result<(), String> {
+    if !super::check_permission(perm, plugin_id, PERMISSION_PEER, "host_peer_resume_transfer") {
         return Err(denied());
     }
-    let app = require_app(host_ctx)?;
+    let app = require_app(app)?;
     let batch_id = batch_id.to_string();
     let hit = sync_result(block_on_async(crate::server::peer_net::resume_transfer_for_plugin(
         app, batch_id,
@@ -373,11 +380,12 @@ pub(crate) fn peer_resume_transfer(host_ctx: &WasmHostContext, plugin_id: &str, 
 }
 
 /// 恢复全部暂停的发送批，返回入队数。
-pub(crate) fn peer_resume_all_transfers(host_ctx: &WasmHostContext, plugin_id: &str) -> Result<u32, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_PEER, "host_peer_resume_all_transfers") {
+pub(crate) fn peer_resume_all_transfers(app: &dyn crate::wasm_core::host_api::context::AppHandleScope,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope, plugin_id: &str) -> Result<u32, String> {
+    if !super::check_permission(perm, plugin_id, PERMISSION_PEER, "host_peer_resume_all_transfers") {
         return Err(denied());
     }
-    let app = require_app(host_ctx)?;
+    let app = require_app(app)?;
     let n = sync_result(block_on_async(
         crate::server::peer_net::resume_all_transfers_for_plugin(app),
     ))?;
@@ -385,11 +393,12 @@ pub(crate) fn peer_resume_all_transfers(host_ctx: &WasmHostContext, plugin_id: &
 }
 
 pub(crate) fn peer_set_shared_roots(
-    host_ctx: &WasmHostContext,
+    app: &dyn crate::wasm_core::host_api::context::AppHandleScope,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
     plugin_id: &str,
     dirs_json: &str,
 ) -> Result<(), String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_PEER, "host_peer_set_shared_roots") {
+    if !super::check_permission(perm, plugin_id, PERMISSION_PEER, "host_peer_set_shared_roots") {
         return Err(denied());
     }
     #[derive(serde::Deserialize)]
@@ -410,20 +419,21 @@ pub(crate) fn peer_set_shared_roots(
             },
         })
         .collect();
-    let app = require_app(host_ctx)?;
+    let app = require_app(app)?;
     sync_result(block_on_async(crate::server::peer_net::set_shared_roots(app, entries)))
 }
 
 pub(crate) fn peer_list_shared_roots(
-    host_ctx: &WasmHostContext,
+    app: &dyn crate::wasm_core::host_api::context::AppHandleScope,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
     plugin_id: &str,
     session: &str,
 ) -> Result<String, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_PEER, "host_peer_list_shared_roots") {
+    if !super::check_permission(perm, plugin_id, PERMISSION_PEER, "host_peer_list_shared_roots") {
         return Err(denied());
     }
-    let roots = with_auto_redial(host_ctx, plugin_id, session, |node_id| {
-        let app = require_app(host_ctx)?;
+    let roots = with_auto_redial(app, plugin_id, session, |node_id| {
+        let app = require_app(app)?;
         sync_result(block_on_async(crate::server::peer_net::list_remote_roots_for_plugin(
             app,
             node_id.to_string(),
@@ -433,18 +443,19 @@ pub(crate) fn peer_list_shared_roots(
 }
 
 pub(crate) fn peer_browse_directory(
-    host_ctx: &WasmHostContext,
+    app: &dyn crate::wasm_core::host_api::context::AppHandleScope,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
     plugin_id: &str,
     session: &str,
     dir_id: &str,
     rel_path: &str,
 ) -> Result<String, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_PEER, "host_peer_browse_directory") {
+    if !super::check_permission(perm, plugin_id, PERMISSION_PEER, "host_peer_browse_directory") {
         return Err(denied());
     }
     let (dir_id, rel_path) = (dir_id.to_string(), rel_path.to_string());
-    let dto = with_auto_redial(host_ctx, plugin_id, session, |node_id| {
-        let app = require_app(host_ctx)?;
+    let dto = with_auto_redial(app, plugin_id, session, |node_id| {
+        let app = require_app(app)?;
         sync_result(block_on_async(crate::server::peer_net::browse_remote_for_plugin(
             app,
             node_id.to_string(),
@@ -456,22 +467,23 @@ pub(crate) fn peer_browse_directory(
 }
 
 pub(crate) fn peer_pull_files(
-    host_ctx: &WasmHostContext,
+    app: &dyn crate::wasm_core::host_api::context::AppHandleScope,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
     plugin_id: &str,
     session: &str,
     dir_id: &str,
     files_json: &str,
 ) -> Result<u32, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_PEER, "host_peer_pull_files") {
+    if !super::check_permission(perm, plugin_id, PERMISSION_PEER, "host_peer_pull_files") {
         return Err(denied());
     }
     // RemotePullFileDto 未实现 Clone：闭包内按 JSON 串重复解析（重拨场景才二次执行）
     let dir_id = dir_id.to_string();
     let files_json_owned = files_json.to_string();
-    with_auto_redial(host_ctx, plugin_id, session, |node_id| {
+    with_auto_redial(app, plugin_id, session, |node_id| {
         let files: Vec<crate::server::peer_net::RemotePullFileDto> =
             serde_json::from_str(&files_json_owned).map_err(|e| format!("pull files: invalid files json: {e}"))?;
-        let app = require_app(host_ctx)?;
+        let app = require_app(app)?;
         sync_result(block_on_async(crate::server::peer_net::pull_files_for_plugin(
             app,
             node_id.to_string(),
@@ -482,11 +494,12 @@ pub(crate) fn peer_pull_files(
     .map(|n| n as u32)
 }
 
-pub(crate) fn peer_set_download_dir(host_ctx: &WasmHostContext, plugin_id: &str, path: &str) -> Result<(), String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_PEER, "host_peer_set_download_dir") {
+pub(crate) fn peer_set_download_dir(app: &dyn crate::wasm_core::host_api::context::AppHandleScope,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope, plugin_id: &str, path: &str) -> Result<(), String> {
+    if !super::check_permission(perm, plugin_id, PERMISSION_PEER, "host_peer_set_download_dir") {
         return Err(denied());
     }
-    let app = require_app(host_ctx)?;
+    let app = require_app(app)?;
     let path = if path.is_empty() { None } else { Some(path.to_string()) };
     sync_result(block_on_async(crate::server::peer_net::set_download_dir_for_plugin(
         app, path,
@@ -499,11 +512,12 @@ pub(crate) fn peer_set_download_dir(host_ctx: &WasmHostContext, plugin_id: &str,
 /// 内核侧不再持有产品 id 常量——旧 `activation.rs` 的「插件 id == file-transfer 就起节点」
 /// 外壳由本原语 + `peer_net` 的属主记账替代。他主占用时以错误上抛，
 /// 且**文案不回带对方 id**（与 `ensure_handle_owner` 同口径，票 05）
-pub(crate) fn peer_start_node(host_ctx: &WasmHostContext, plugin_id: &str) -> Result<bool, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_PEER, "host_peer_start_node") {
+pub(crate) fn peer_start_node(app: &dyn crate::wasm_core::host_api::context::AppHandleScope,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope, plugin_id: &str) -> Result<bool, String> {
+    if !super::check_permission(perm, plugin_id, PERMISSION_PEER, "host_peer_start_node") {
         return Err(denied());
     }
-    let app = require_app(host_ctx)?;
+    let app = require_app(app)?;
     sync_result(block_on_async(crate::server::peer_net::start_node_owned(
         &app, plugin_id,
     )))
@@ -511,11 +525,12 @@ pub(crate) fn peer_start_node(host_ctx: &WasmHostContext, plugin_id: &str) -> Re
 
 /// 属主插件让本机节点下线（审计票 12）：停广播 / 关监听 / 排水连接与入站记账。
 /// 非属主拒绝（不猜测「谁该停」，也不提供强制关停的后门）
-pub(crate) fn peer_stop_node(host_ctx: &WasmHostContext, plugin_id: &str) -> Result<bool, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_PEER, "host_peer_stop_node") {
+pub(crate) fn peer_stop_node(app: &dyn crate::wasm_core::host_api::context::AppHandleScope,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope, plugin_id: &str) -> Result<bool, String> {
+    if !super::check_permission(perm, plugin_id, PERMISSION_PEER, "host_peer_stop_node") {
         return Err(denied());
     }
-    let app = require_app(host_ctx)?;
+    let app = require_app(app)?;
     sync_result(block_on_async(crate::server::peer_net::stop_node_owned(
         &app, plugin_id,
     )))
@@ -534,11 +549,11 @@ mod tests {
     fn peer_denied_without_permission() {
         let ctx = build_host_ctx();
         assert_eq!(
-            super::peer_dial(&ctx, "com.bedcode.no-peer", "{}").unwrap_err(),
+            super::peer_dial(ctx.as_ref(), ctx.as_ref(), "com.bedcode.no-peer", "{}").unwrap_err(),
             denied()
         );
         assert_eq!(
-            super::peer_close(&ctx, "com.bedcode.no-peer", "sess-nonexistent").unwrap_err(),
+            super::peer_close(ctx.as_ref(), ctx.as_ref(), "com.bedcode.no-peer", "sess-nonexistent").unwrap_err(),
             denied()
         );
     }
@@ -548,7 +563,7 @@ mod tests {
     fn peer_granted_passes_permission_gate() {
         let ctx = build_host_ctx();
         grant_permissions(&ctx, "com.bedcode.peer-ok", &[PERMISSION_PEER]);
-        let err = super::peer_close(&ctx, "com.bedcode.peer-ok", "sess-nonexistent").expect_err("无头上下文不应可断开");
+        let err = super::peer_close(ctx.as_ref(), ctx.as_ref(), "com.bedcode.peer-ok", "sess-nonexistent").expect_err("无头上下文不应可断开");
         assert!(!err.contains("permission denied"), "已授予 peer 仍被权限门拒绝: {err}");
         assert!(err.contains("headless"), "预期无头上下文错误: {err}");
     }
@@ -594,7 +609,7 @@ mod tests {
         let ctx = build_host_ctx();
         grant_permissions(&ctx, "com.bedcode.intruder-b", &[PERMISSION_PEER]);
         let h = with_handles(|t| t.mint_session(entry("victim-session")));
-        let err = peer_close(&ctx, "com.bedcode.intruder-b", &h).unwrap_err();
+        let err = peer_close(ctx.as_ref(), ctx.as_ref(), "com.bedcode.intruder-b", &h).unwrap_err();
         assert_eq!(err, format!("{NOT_OWNER}: {h}"), "got: {err}");
         // 句柄未被摘走，属主仍可解析
         assert_eq!(

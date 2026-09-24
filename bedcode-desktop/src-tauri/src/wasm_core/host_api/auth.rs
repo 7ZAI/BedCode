@@ -10,6 +10,7 @@
 //! 明文不落日志红线（AGENTS.md §8）：本模块日志只记 `value.len()`，禁止打印
 //! 值本身；错误消息不含值内容。
 
+#[cfg(test)]
 use crate::wasm_core::host_api::context::WasmHostContext;
 use crate::wasm_core::runtime_util::block_on_async;
 use crate::wasm_core::permission::PERMISSION_AUTH;
@@ -24,15 +25,17 @@ pub(crate) const AUTH_SETTING_KEYS: &[&str] = &["pairing_code_ttl", "qr_token_tt
 
 /// 读取属主密钥（权限门 + 内存缓存 read-through + 主库真源）
 pub(crate) fn auth_secret_get(
-    host_ctx: &WasmHostContext,
+    db: &dyn crate::wasm_core::host_api::context::DbScope,
+    secrets: &dyn crate::wasm_core::host_api::context::SecretsScope,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
     plugin_id: &str,
     key: &str,
 ) -> Result<Option<String>, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_AUTH, "host_auth_secret_get") {
+    if !super::check_permission(perm, plugin_id, PERMISSION_AUTH, "host_auth_secret_get") {
         return Err("permission denied".to_string());
     }
     // 缓存读
-    let cache = host_ctx.secrets_cache.clone();
+    let cache = secrets.secrets_cache().clone();
     {
         let guard = cache.read().map_err(|e| format!("secret cache poisoned: {}", e))?;
         if let Some(v) = guard.get(&(plugin_id.to_string(), key.to_string())) {
@@ -40,7 +43,7 @@ pub(crate) fn auth_secret_get(
         }
     }
     // 主库读
-    let db = host_ctx.db.clone();
+    let db = db.database().clone();
     let pid = plugin_id.to_string();
     let k = key.to_string();
     let value: Option<String> = block_on_async(async move {
@@ -64,12 +67,14 @@ pub(crate) fn auth_secret_get(
 
 /// 写入/覆盖属主密钥（覆盖写；缓存失效后由下次 get 回填）
 pub(crate) fn auth_secret_set(
-    host_ctx: &WasmHostContext,
+    db: &dyn crate::wasm_core::host_api::context::DbScope,
+    secrets: &dyn crate::wasm_core::host_api::context::SecretsScope,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
     plugin_id: &str,
     key: &str,
     value: &str,
 ) -> Result<(), String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_AUTH, "host_auth_secret_set") {
+    if !super::check_permission(perm, plugin_id, PERMISSION_AUTH, "host_auth_secret_set") {
         return Err("permission denied".to_string());
     }
     // 明文不落日志：只记长度
@@ -79,7 +84,7 @@ pub(crate) fn auth_secret_set(
         value_len = value.len(),
         "host_auth_secret_set: secret stored (length only)"
     );
-    let db = host_ctx.db.clone();
+    let db = db.database().clone();
     let pid = plugin_id.to_string();
     let k = key.to_string();
     let v = value.to_string();
@@ -97,8 +102,8 @@ pub(crate) fn auth_secret_set(
         Ok::<(), String>(())
     })?;
     // 缓存失效
-    host_ctx
-        .secrets_cache
+    secrets
+        .secrets_cache()
         .write()
         .map_err(|e| format!("secret cache poisoned: {}", e))?
         .remove(&(plugin_id.to_string(), key.to_string()));
@@ -106,11 +111,13 @@ pub(crate) fn auth_secret_set(
 }
 
 /// 删除属主密钥（键不存在也视为成功；缓存同步移除）
-pub(crate) fn auth_secret_delete(host_ctx: &WasmHostContext, plugin_id: &str, key: &str) -> Result<(), String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_AUTH, "host_auth_secret_delete") {
+pub(crate) fn auth_secret_delete(db: &dyn crate::wasm_core::host_api::context::DbScope,
+    secrets: &dyn crate::wasm_core::host_api::context::SecretsScope,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope, plugin_id: &str, key: &str) -> Result<(), String> {
+    if !super::check_permission(perm, plugin_id, PERMISSION_AUTH, "host_auth_secret_delete") {
         return Err("permission denied".to_string());
     }
-    let db = host_ctx.db.clone();
+    let db = db.database().clone();
     let pid = plugin_id.to_string();
     let k = key.to_string();
     block_on_async(async move {
@@ -123,8 +130,8 @@ pub(crate) fn auth_secret_delete(host_ctx: &WasmHostContext, plugin_id: &str, ke
             .map_err(|e| format!("database error: {}", e))?;
         Ok::<(), String>(())
     })?;
-    host_ctx
-        .secrets_cache
+    secrets
+        .secrets_cache()
         .write()
         .map_err(|e| format!("secret cache poisoned: {}", e))?
         .remove(&(plugin_id.to_string(), key.to_string()));
@@ -132,11 +139,11 @@ pub(crate) fn auth_secret_delete(host_ctx: &WasmHostContext, plugin_id: &str, ke
 }
 
 /// 列举属主密钥名（不返回值本身，供诊断/清理）
-pub(crate) fn auth_secret_keys(host_ctx: &WasmHostContext, plugin_id: &str) -> Result<Vec<String>, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_AUTH, "host_auth_secret_keys") {
+pub(crate) fn auth_secret_keys(db: &dyn crate::wasm_core::host_api::context::DbScope, perm: &dyn crate::wasm_core::host_api::context::PermissionScope, plugin_id: &str) -> Result<Vec<String>, String> {
+    if !super::check_permission(perm, plugin_id, PERMISSION_AUTH, "host_auth_secret_keys") {
         return Err("permission denied".to_string());
     }
-    let db = host_ctx.db.clone();
+    let db = db.database().clone();
     let pid = plugin_id.to_string();
     block_on_async(async move {
         let db = db.lock().await;
@@ -166,12 +173,13 @@ pub(crate) fn auth_secret_keys(host_ctx: &WasmHostContext, plugin_id: &str) -> R
 /// 校验在 Rust 端（最终仲裁）：键必须落在 [`AUTH_SETTING_KEYS`]，值必须是正整数
 /// 十进制秒数——非法值显性报错，不写入半合法数据。
 pub(crate) fn auth_setting_set(
-    host_ctx: &WasmHostContext,
+    db: &dyn crate::wasm_core::host_api::context::DbScope,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
     plugin_id: &str,
     key: &str,
     value: &str,
 ) -> Result<(), String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_AUTH, "host_auth_setting_set") {
+    if !super::check_permission(perm, plugin_id, PERMISSION_AUTH, "host_auth_setting_set") {
         return Err("permission denied".to_string());
     }
     if !AUTH_SETTING_KEYS.contains(&key) {
@@ -183,7 +191,7 @@ pub(crate) fn auth_setting_set(
             key, value
         ));
     }
-    let db = host_ctx.db.clone();
+    let db = db.database().clone();
     let k = key.to_string();
     let v = value.to_string();
     block_on_async(async move {
@@ -212,12 +220,14 @@ pub(crate) fn auth_setting_set(
 /// （`plugin_secrets` 中该指纹键非空）——配对状态由认证中心私有库判定（插件侧先
 /// 查自己库）。公钥不出口（凭据红线）
 pub(crate) fn auth_biometric_credential_bound(
-    host_ctx: &WasmHostContext,
+    db: &dyn crate::wasm_core::host_api::context::DbScope,
+    secrets: &dyn crate::wasm_core::host_api::context::SecretsScope,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
     plugin_id: &str,
     fingerprint: &str,
 ) -> Result<bool, String> {
     if !super::check_permission(
-        host_ctx,
+        perm,
         plugin_id,
         PERMISSION_AUTH,
         "host_auth_biometric_credential_bound",
@@ -225,7 +235,7 @@ pub(crate) fn auth_biometric_credential_bound(
         return Err("permission denied".to_string());
     }
     let secret_key = biometric_secret_key(fingerprint);
-    auth_secret_get(host_ctx, plugin_id, &secret_key)
+    auth_secret_get(db, secrets, perm, plugin_id, &secret_key)
         .map(|v| v.map(|s| !s.is_empty()).unwrap_or(false))
 }
 
@@ -245,14 +255,16 @@ fn biometric_secret_key(fingerprint: &str) -> String {
 /// 用宿主托管的绑定公钥（`plugin_secrets`）验 `message`；未绑定 → `Ok(false)`。
 /// 验签执行点在宿主，密钥与公钥不出宿主（凭据红线）。
 pub(crate) fn auth_biometric_verify_signature(
-    host_ctx: &WasmHostContext,
+    db: &dyn crate::wasm_core::host_api::context::DbScope,
+    secrets: &dyn crate::wasm_core::host_api::context::SecretsScope,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
     plugin_id: &str,
     fingerprint: &str,
     message: &str,
     signature: &str,
 ) -> Result<bool, String> {
     if !super::check_permission(
-        host_ctx,
+        perm,
         plugin_id,
         PERMISSION_AUTH,
         "host_auth_biometric_verify_signature",
@@ -260,7 +272,7 @@ pub(crate) fn auth_biometric_verify_signature(
         return Err("permission denied".to_string());
     }
     let secret_key = biometric_secret_key(fingerprint);
-    let Some(public_key) = auth_secret_get(host_ctx, plugin_id, &secret_key)? else {
+    let Some(public_key) = auth_secret_get(db, secrets, perm, plugin_id, &secret_key)? else {
         return Ok(false); // 未绑定公钥
     };
     let verified = crate::utils::auth::biometric::verify_biometric_signature(
@@ -276,13 +288,15 @@ pub(crate) fn auth_biometric_verify_signature(
 /// 未找到配对记录返回 `Ok(false)`；成功 `Ok(true)`（配对状态由认证中心私有库
 /// 判定，本原语不再触碰配对记录）。
 pub(crate) fn auth_biometric_credential_bind(
-    host_ctx: &WasmHostContext,
+    db: &dyn crate::wasm_core::host_api::context::DbScope,
+    secrets: &dyn crate::wasm_core::host_api::context::SecretsScope,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
     plugin_id: &str,
     fingerprint: &str,
     public_key: &str,
 ) -> Result<bool, String> {
     if !super::check_permission(
-        host_ctx,
+        perm,
         plugin_id,
         PERMISSION_AUTH,
         "host_auth_biometric_credential_bind",
@@ -292,10 +306,10 @@ pub(crate) fn auth_biometric_credential_bind(
     let secret_key = biometric_secret_key(fingerprint);
     if public_key.is_empty() {
         // 解绑：删除托管公钥（键不存在也视为成功，与 secret-delete 同语义）
-        auth_secret_delete(host_ctx, plugin_id, &secret_key)?;
+        auth_secret_delete(db, secrets, perm, plugin_id, &secret_key)?;
         return Ok(true);
     }
-    auth_secret_set(host_ctx, plugin_id, &secret_key, public_key)?;
+    auth_secret_set(db, secrets, perm, plugin_id, &secret_key, public_key)?;
     tracing::info!(
         plugin_id = %plugin_id,
         public_key_len = public_key.len(),
@@ -307,13 +321,13 @@ pub(crate) fn auth_biometric_credential_bind(
 /// 设备认证 JWT 签发（宿主 `JwtService` 同一代码路径：密钥托管在 secret-store，
 /// 签发执行点留宿主——插件编排、宿主签发，密钥不出宿主）
 pub(crate) fn auth_device_token_issue(
-    host_ctx: &WasmHostContext,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
     plugin_id: &str,
     sub: &str,
     device_name: &str,
     fingerprint: &str,
 ) -> Result<String, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_AUTH, "host_auth_device_token_issue") {
+    if !super::check_permission(perm, plugin_id, PERMISSION_AUTH, "host_auth_device_token_issue") {
         return Err("permission denied".to_string());
     }
     if sub.is_empty() {
@@ -331,12 +345,12 @@ pub(crate) fn auth_device_token_issue(
 /// 设备认证 JWT 验签（`verify_token_with_expiry` 语义）。错误归类：
 /// `JwtError::TokenExpired` → "expired"；其余 → "invalid"（用户文案映射归插件）。
 pub(crate) fn auth_device_token_verify(
-    host_ctx: &WasmHostContext,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
     plugin_id: &str,
     token: &str,
 ) -> Result<String, String> {
     use crate::utils::auth::jwt::JwtError;
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_AUTH, "host_auth_device_token_verify") {
+    if !super::check_permission(perm, plugin_id, PERMISSION_AUTH, "host_auth_device_token_verify") {
         return Err("permission denied".to_string());
     }
     let jwt = crate::utils::auth::jwt::JwtService::new();
@@ -350,8 +364,8 @@ pub(crate) fn auth_device_token_verify(
 }
 
 /// 链路身份 Kd 公钥材料读取（`link_crypto::identity_parts` 语义）；未就绪 → None
-pub(crate) fn auth_link_identity_parts(host_ctx: &WasmHostContext, plugin_id: &str) -> Result<Option<String>, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_AUTH, "host_auth_link_identity_parts") {
+pub(crate) fn auth_link_identity_parts(perm: &dyn crate::wasm_core::host_api::context::PermissionScope, plugin_id: &str) -> Result<Option<String>, String> {
+    if !super::check_permission(perm, plugin_id, PERMISSION_AUTH, "host_auth_link_identity_parts") {
         return Err("permission denied".to_string());
     }
     match crate::server::core::link_crypto::identity_parts() {
@@ -403,20 +417,20 @@ mod tests {
             &[crate::wasm_core::permission::PERMISSION_AUTH],
         );
         assert_eq!(
-            auth_secret_get(&host_ctx, "com.bedcode.test-a", "jwt.key").unwrap(),
+            auth_secret_get(host_ctx.as_ref(), host_ctx.as_ref(), host_ctx.as_ref(), "com.bedcode.test-a", "jwt.key").unwrap(),
             None
         );
-        auth_secret_set(&host_ctx, "com.bedcode.test-a", "jwt.key", "secret-v1").unwrap();
+        auth_secret_set(host_ctx.as_ref(), host_ctx.as_ref(), host_ctx.as_ref(), "com.bedcode.test-a", "jwt.key", "secret-v1").unwrap();
         assert_eq!(
-            auth_secret_get(&host_ctx, "com.bedcode.test-a", "jwt.key")
+            auth_secret_get(host_ctx.as_ref(), host_ctx.as_ref(), host_ctx.as_ref(), "com.bedcode.test-a", "jwt.key")
                 .unwrap()
                 .as_deref(),
             Some("secret-v1")
         );
         // 覆盖写
-        auth_secret_set(&host_ctx, "com.bedcode.test-a", "jwt.key", "secret-v2").unwrap();
+        auth_secret_set(host_ctx.as_ref(), host_ctx.as_ref(), host_ctx.as_ref(), "com.bedcode.test-a", "jwt.key", "secret-v2").unwrap();
         assert_eq!(
-            auth_secret_get(&host_ctx, "com.bedcode.test-a", "jwt.key")
+            auth_secret_get(host_ctx.as_ref(), host_ctx.as_ref(), host_ctx.as_ref(), "com.bedcode.test-a", "jwt.key")
                 .unwrap()
                 .as_deref(),
             Some("secret-v2")
@@ -436,27 +450,27 @@ mod tests {
             "com.bedcode.test-b",
             &[crate::wasm_core::permission::PERMISSION_AUTH],
         );
-        auth_secret_set(&host_ctx, "com.bedcode.test-a", "seed", "a-secret").unwrap();
+        auth_secret_set(host_ctx.as_ref(), host_ctx.as_ref(), host_ctx.as_ref(), "com.bedcode.test-a", "seed", "a-secret").unwrap();
         // B 同名 key 读不到 A 的值（命名空间隔离）
-        assert_eq!(auth_secret_get(&host_ctx, "com.bedcode.test-b", "seed").unwrap(), None);
+        assert_eq!(auth_secret_get(host_ctx.as_ref(), host_ctx.as_ref(), host_ctx.as_ref(), "com.bedcode.test-b", "seed").unwrap(), None);
         // B 删不掉 A 的密钥
-        auth_secret_delete(&host_ctx, "com.bedcode.test-b", "seed").unwrap();
+        auth_secret_delete(host_ctx.as_ref(), host_ctx.as_ref(), host_ctx.as_ref(), "com.bedcode.test-b", "seed").unwrap();
         assert_eq!(
-            auth_secret_get(&host_ctx, "com.bedcode.test-a", "seed")
+            auth_secret_get(host_ctx.as_ref(), host_ctx.as_ref(), host_ctx.as_ref(), "com.bedcode.test-a", "seed")
                 .unwrap()
                 .as_deref(),
             Some("a-secret")
         );
         // B 写同名 key 不覆盖 A
-        auth_secret_set(&host_ctx, "com.bedcode.test-b", "seed", "b-secret").unwrap();
+        auth_secret_set(host_ctx.as_ref(), host_ctx.as_ref(), host_ctx.as_ref(), "com.bedcode.test-b", "seed", "b-secret").unwrap();
         assert_eq!(
-            auth_secret_get(&host_ctx, "com.bedcode.test-a", "seed")
+            auth_secret_get(host_ctx.as_ref(), host_ctx.as_ref(), host_ctx.as_ref(), "com.bedcode.test-a", "seed")
                 .unwrap()
                 .as_deref(),
             Some("a-secret")
         );
         assert_eq!(
-            auth_secret_get(&host_ctx, "com.bedcode.test-b", "seed")
+            auth_secret_get(host_ctx.as_ref(), host_ctx.as_ref(), host_ctx.as_ref(), "com.bedcode.test-b", "seed")
                 .unwrap()
                 .as_deref(),
             Some("b-secret")
@@ -471,16 +485,16 @@ mod tests {
             "com.bedcode.test-a",
             &[crate::wasm_core::permission::PERMISSION_AUTH],
         );
-        auth_secret_set(&host_ctx, "com.bedcode.test-a", "k1", "v1").unwrap();
-        auth_secret_set(&host_ctx, "com.bedcode.test-a", "k2", "v2").unwrap();
-        let keys = auth_secret_keys(&host_ctx, "com.bedcode.test-a").unwrap();
+        auth_secret_set(host_ctx.as_ref(), host_ctx.as_ref(), host_ctx.as_ref(), "com.bedcode.test-a", "k1", "v1").unwrap();
+        auth_secret_set(host_ctx.as_ref(), host_ctx.as_ref(), host_ctx.as_ref(), "com.bedcode.test-a", "k2", "v2").unwrap();
+        let keys = auth_secret_keys(host_ctx.as_ref(), host_ctx.as_ref(), "com.bedcode.test-a").unwrap();
         assert_eq!(keys, vec!["k1".to_string(), "k2".to_string()]);
-        auth_secret_delete(&host_ctx, "com.bedcode.test-a", "k1").unwrap();
+        auth_secret_delete(host_ctx.as_ref(), host_ctx.as_ref(), host_ctx.as_ref(), "com.bedcode.test-a", "k1").unwrap();
         // 幂等删除
-        auth_secret_delete(&host_ctx, "com.bedcode.test-a", "k1").unwrap();
-        assert_eq!(auth_secret_get(&host_ctx, "com.bedcode.test-a", "k1").unwrap(), None);
+        auth_secret_delete(host_ctx.as_ref(), host_ctx.as_ref(), host_ctx.as_ref(), "com.bedcode.test-a", "k1").unwrap();
+        assert_eq!(auth_secret_get(host_ctx.as_ref(), host_ctx.as_ref(), host_ctx.as_ref(), "com.bedcode.test-a", "k1").unwrap(), None);
         assert_eq!(
-            auth_secret_keys(&host_ctx, "com.bedcode.test-a").unwrap(),
+            auth_secret_keys(host_ctx.as_ref(), host_ctx.as_ref(), "com.bedcode.test-a").unwrap(),
             vec!["k2".to_string()]
         );
     }
@@ -490,19 +504,19 @@ mod tests {
         let host_ctx = build_host_ctx();
         // 未授权 auth 权限的插件 → 全部四函数拒绝（Rust 端最终仲裁）
         assert_eq!(
-            auth_secret_get(&host_ctx, "com.bedcode.no-auth", "k").unwrap_err(),
+            auth_secret_get(host_ctx.as_ref(), host_ctx.as_ref(), host_ctx.as_ref(), "com.bedcode.no-auth", "k").unwrap_err(),
             "permission denied"
         );
         assert_eq!(
-            auth_secret_set(&host_ctx, "com.bedcode.no-auth", "k", "v").unwrap_err(),
+            auth_secret_set(host_ctx.as_ref(), host_ctx.as_ref(), host_ctx.as_ref(), "com.bedcode.no-auth", "k", "v").unwrap_err(),
             "permission denied"
         );
         assert_eq!(
-            auth_secret_delete(&host_ctx, "com.bedcode.no-auth", "k").unwrap_err(),
+            auth_secret_delete(host_ctx.as_ref(), host_ctx.as_ref(), host_ctx.as_ref(), "com.bedcode.no-auth", "k").unwrap_err(),
             "permission denied"
         );
         assert_eq!(
-            auth_secret_keys(&host_ctx, "com.bedcode.no-auth").unwrap_err(),
+            auth_secret_keys(host_ctx.as_ref(), host_ctx.as_ref(), "com.bedcode.no-auth").unwrap_err(),
             "permission denied"
         );
     }
@@ -519,7 +533,7 @@ mod tests {
                 "com.bedcode.test-a",
                 &[crate::wasm_core::permission::PERMISSION_AUTH],
             );
-            auth_secret_set(&host_ctx, "com.bedcode.test-a", "jwt.key", "persisted-secret").unwrap();
+            auth_secret_set(host_ctx.as_ref(), host_ctx.as_ref(), host_ctx.as_ref(), "com.bedcode.test-a", "jwt.key", "persisted-secret").unwrap();
         }
         // 第二代上下文（全新内存缓存 + 全新连接）：重启后密钥稳定
         {
@@ -530,7 +544,7 @@ mod tests {
                 &[crate::wasm_core::permission::PERMISSION_AUTH],
             );
             assert_eq!(
-                auth_secret_get(&host_ctx, "com.bedcode.test-a", "jwt.key")
+                auth_secret_get(host_ctx.as_ref(), host_ctx.as_ref(), host_ctx.as_ref(), "com.bedcode.test-a", "jwt.key")
                     .unwrap()
                     .as_deref(),
                 Some("persisted-secret")
@@ -553,16 +567,16 @@ mod tests {
 
         // 未绑定：bound = false
         assert!(
-            !auth_biometric_credential_bound(&host_ctx, "com.bedcode.terminal-session", "fp-1").unwrap()
+            !auth_biometric_credential_bound(host_ctx.as_ref(), host_ctx.as_ref(), host_ctx.as_ref(), "com.bedcode.terminal-session", "fp-1").unwrap()
         );
 
         // 绑定：落 plugin_secrets（属主键 + biometric:<fp>），值可读回
         assert!(
-            auth_biometric_credential_bind(&host_ctx, "com.bedcode.terminal-session", "fp-1", "SPKI-BASE64")
+            auth_biometric_credential_bind(host_ctx.as_ref(), host_ctx.as_ref(), host_ctx.as_ref(), "com.bedcode.terminal-session", "fp-1", "SPKI-BASE64")
                 .unwrap()
         );
         assert!(
-            auth_biometric_credential_bound(&host_ctx, "com.bedcode.terminal-session", "fp-1").unwrap(),
+            auth_biometric_credential_bound(host_ctx.as_ref(), host_ctx.as_ref(), host_ctx.as_ref(), "com.bedcode.terminal-session", "fp-1").unwrap(),
             "绑定后 bound = true（公钥托管存在性）"
         );
         // 锁经 block_on_async 获取（普通测试线程无 runtime 上下文，tokio
@@ -583,10 +597,10 @@ mod tests {
 
         // 解绑（空串）：删除键
         assert!(
-            auth_biometric_credential_bind(&host_ctx, "com.bedcode.terminal-session", "fp-1", "").unwrap()
+            auth_biometric_credential_bind(host_ctx.as_ref(), host_ctx.as_ref(), host_ctx.as_ref(), "com.bedcode.terminal-session", "fp-1", "").unwrap()
         );
         assert!(
-            !auth_biometric_credential_bound(&host_ctx, "com.bedcode.terminal-session", "fp-1").unwrap(),
+            !auth_biometric_credential_bound(host_ctx.as_ref(), host_ctx.as_ref(), host_ctx.as_ref(), "com.bedcode.terminal-session", "fp-1").unwrap(),
             "解绑后 bound = false"
         );
     }
@@ -603,7 +617,7 @@ mod tests {
 
         // 未绑定：直接 false（不触碰验签）
         assert!(
-            !auth_biometric_verify_signature(&host_ctx, "com.bedcode.terminal-session", "fp-1", "msg", "sig")
+            !auth_biometric_verify_signature(host_ctx.as_ref(), host_ctx.as_ref(), host_ctx.as_ref(), "com.bedcode.terminal-session", "fp-1", "msg", "sig")
                 .unwrap()
         );
 
@@ -628,7 +642,9 @@ mod tests {
         let sig_b64 = base64::engine::general_purpose::STANDARD.encode(&raw);
 
         auth_biometric_credential_bind(
-            &host_ctx,
+                        host_ctx.as_ref(),
+            host_ctx.as_ref(),
+            host_ctx.as_ref(),
             "com.bedcode.terminal-session",
             "fp-1",
             &spki_b64,
@@ -636,7 +652,9 @@ mod tests {
         .unwrap();
         assert!(
             auth_biometric_verify_signature(
-                &host_ctx,
+                                host_ctx.as_ref(),
+                host_ctx.as_ref(),
+                host_ctx.as_ref(),
                 "com.bedcode.terminal-session",
                 "fp-1",
                 message,
@@ -647,7 +665,9 @@ mod tests {
         );
         assert!(
             !auth_biometric_verify_signature(
-                &host_ctx,
+                                host_ctx.as_ref(),
+                host_ctx.as_ref(),
+                host_ctx.as_ref(),
                 "com.bedcode.terminal-session",
                 "fp-1",
                 "tampered",
@@ -669,16 +689,16 @@ mod tests {
         );
 
         // 白名单外键拒绝（settings 表是宿主真源，不接受任意键写入）
-        let err = auth_setting_set(&host_ctx, "com.bedcode.terminal-session", "network.port", "1").unwrap_err();
+        let err = auth_setting_set(host_ctx.as_ref(), host_ctx.as_ref(), "com.bedcode.terminal-session", "network.port", "1").unwrap_err();
         assert!(err.contains("not in auth domain whitelist"), "got: {err}");
         // 非正整数拒绝（0 / 负数 / 非数字均不写入）
         for bad in ["0", "-1", "abc", ""] {
-            let err = auth_setting_set(&host_ctx, "com.bedcode.terminal-session", "pairing_code_ttl", bad).unwrap_err();
+            let err = auth_setting_set(host_ctx.as_ref(), host_ctx.as_ref(), "com.bedcode.terminal-session", "pairing_code_ttl", bad).unwrap_err();
             assert!(err.contains("positive integer"), "值 {bad:?} 必须拒绝, got: {err}");
         }
 
-        auth_setting_set(&host_ctx, "com.bedcode.terminal-session", "pairing_code_ttl", "600").unwrap();
-        auth_setting_set(&host_ctx, "com.bedcode.terminal-session", "qr_token_ttl", "120").unwrap();
+        auth_setting_set(host_ctx.as_ref(), host_ctx.as_ref(), "com.bedcode.terminal-session", "pairing_code_ttl", "600").unwrap();
+        auth_setting_set(host_ctx.as_ref(), host_ctx.as_ref(), "com.bedcode.terminal-session", "qr_token_ttl", "120").unwrap();
         // 锁经 block_on_async（普通测试线程 blocking_lock 不可靠，见 biometric roundtrip）
         block_on_async(async {
             let db = host_ctx.db.lock().await;
@@ -699,7 +719,7 @@ mod tests {
                 "com.bedcode.terminal-session",
                 &[crate::wasm_core::permission::PERMISSION_AUTH],
             );
-            auth_setting_set(&host_ctx, "com.bedcode.terminal-session", "pairing_code_ttl", "900").unwrap();
+            auth_setting_set(host_ctx.as_ref(), host_ctx.as_ref(), "com.bedcode.terminal-session", "pairing_code_ttl", "900").unwrap();
         }
         {
             let host_ctx = file_host_ctx(&db_path);

@@ -9,53 +9,59 @@
 //!（WIT `result<option<string>, string>` 载荷为 JSON 文本）。
 
 use crate::wasm_core::manager::capability;
-use crate::wasm_core::host_api::context::WasmHostContext;
 use crate::wasm_core::runtime_util::block_on_async;
 use crate::wasm_core::permission::PERMISSION_STORAGE;
 
 /// 获取值（权限校验 + 服务调用）
 pub(crate) fn storage_get(
-    host_ctx: &WasmHostContext,
+    storage: &dyn crate::wasm_core::host_api::context::StorageScope,
+    cap: &dyn crate::wasm_core::host_api::context::CapabilityScope,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
     plugin_id: &str,
     key: &str,
 ) -> Result<Option<serde_json::Value>, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_STORAGE, "host_storage_get") {
+    if !super::check_permission(perm, plugin_id, PERMISSION_STORAGE, "host_storage_get") {
         return Err("permission denied".to_string());
     }
     // 能力路由：系统组件提供者命中时转发（组件间不共享内存，WIT 边界序列化）
-    if let Some(result) = capability::forward_storage_get(host_ctx, plugin_id, key) {
+    if let Some(result) = capability::forward_storage_get(cap, plugin_id, key) {
         return result.map(|opt| opt.map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::String(s))));
     }
-    let storage = host_ctx.storage.clone();
+    let storage = storage.storage().clone();
     block_on_async(storage.get(plugin_id, key)).map_err(|e| format!("storage error: {}", e))
 }
 
 /// 设置值（权限校验 + 服务调用）
 pub(crate) fn storage_set(
-    host_ctx: &WasmHostContext,
+    storage: &dyn crate::wasm_core::host_api::context::StorageScope,
+    cap: &dyn crate::wasm_core::host_api::context::CapabilityScope,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
     plugin_id: &str,
     key: &str,
     value: serde_json::Value,
 ) -> Result<(), String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_STORAGE, "host_storage_set") {
+    if !super::check_permission(perm, plugin_id, PERMISSION_STORAGE, "host_storage_set") {
         return Err("permission denied".to_string());
     }
-    if let Some(result) = capability::forward_storage_set(host_ctx, plugin_id, key, &value.to_string()) {
+    if let Some(result) = capability::forward_storage_set(cap, plugin_id, key, &value.to_string()) {
         return result;
     }
-    let storage = host_ctx.storage.clone();
+    let storage = storage.storage().clone();
     block_on_async(storage.set(plugin_id, key, value)).map_err(|e| format!("storage error: {}", e))
 }
 
 /// 删除值（权限校验 + 服务调用）
-pub(crate) fn storage_delete(host_ctx: &WasmHostContext, plugin_id: &str, key: &str) -> Result<(), String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_STORAGE, "host_storage_delete") {
+pub(crate) fn storage_delete(
+    storage: &dyn crate::wasm_core::host_api::context::StorageScope,
+    cap: &dyn crate::wasm_core::host_api::context::CapabilityScope,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope, plugin_id: &str, key: &str) -> Result<(), String> {
+    if !super::check_permission(perm, plugin_id, PERMISSION_STORAGE, "host_storage_delete") {
         return Err("permission denied".to_string());
     }
-    if let Some(result) = capability::forward_storage_delete(host_ctx, plugin_id, key) {
+    if let Some(result) = capability::forward_storage_delete(cap, plugin_id, key) {
         return result;
     }
-    let storage = host_ctx.storage.clone();
+    let storage = storage.storage().clone();
     block_on_async(storage.delete(plugin_id, key)).map_err(|e| format!("storage error: {}", e))
 }
 
@@ -72,12 +78,12 @@ mod tests {
     #[test]
     fn storage_ops_permission_denied() {
         let ctx = build_host_ctx();
-        assert_eq!(storage_get(&ctx, PLUGIN, "k").unwrap_err(), "permission denied");
+        assert_eq!(storage_get(ctx.as_ref(), ctx.as_ref(), ctx.as_ref(), PLUGIN, "k").unwrap_err(), "permission denied");
         assert_eq!(
-            storage_set(&ctx, PLUGIN, "k", serde_json::json!(1)).unwrap_err(),
+            storage_set(ctx.as_ref(), ctx.as_ref(), ctx.as_ref(), PLUGIN, "k", serde_json::json!(1)).unwrap_err(),
             "permission denied"
         );
-        assert_eq!(storage_delete(&ctx, PLUGIN, "k").unwrap_err(), "permission denied");
+        assert_eq!(storage_delete(ctx.as_ref(), ctx.as_ref(), ctx.as_ref(), PLUGIN, "k").unwrap_err(), "permission denied");
     }
 
     /// 授权后 set/get/delete 往返 + 插件间隔离 + 缺失 key 返回 None
@@ -87,18 +93,18 @@ mod tests {
         grant_permissions(&ctx, PLUGIN, &[PERMISSION_STORAGE]);
         let value = serde_json::json!({ "count": 3, "tags": ["a", "b"] });
 
-        storage_set(&ctx, PLUGIN, "cfg", value.clone()).expect("set ok");
-        assert_eq!(storage_get(&ctx, PLUGIN, "cfg").expect("get ok").expect("value"), value);
+        storage_set(ctx.as_ref(), ctx.as_ref(), ctx.as_ref(), PLUGIN, "cfg", value.clone()).expect("set ok");
+        assert_eq!(storage_get(ctx.as_ref(), ctx.as_ref(), ctx.as_ref(), PLUGIN, "cfg").expect("get ok").expect("value"), value);
         // 插件间隔离：另一个插件读不到（key 按 plugin_id 分区）——
         // 需先授权该插件，否则在权限门禁处就被拒绝，无法触达存储层语义
         grant_permissions(&ctx, "other-plugin", &[PERMISSION_STORAGE]);
-        assert!(storage_get(&ctx, "other-plugin", "cfg").expect("get ok").is_none());
+        assert!(storage_get(ctx.as_ref(), ctx.as_ref(), ctx.as_ref(), "other-plugin", "cfg").expect("get ok").is_none());
         // 未设置的 key 返回 None
-        assert!(storage_get(&ctx, PLUGIN, "missing").expect("get ok").is_none());
+        assert!(storage_get(ctx.as_ref(), ctx.as_ref(), ctx.as_ref(), PLUGIN, "missing").expect("get ok").is_none());
 
-        storage_delete(&ctx, PLUGIN, "cfg").expect("delete ok");
-        assert!(storage_get(&ctx, PLUGIN, "cfg").expect("get ok").is_none());
+        storage_delete(ctx.as_ref(), ctx.as_ref(), ctx.as_ref(), PLUGIN, "cfg").expect("delete ok");
+        assert!(storage_get(ctx.as_ref(), ctx.as_ref(), ctx.as_ref(), PLUGIN, "cfg").expect("get ok").is_none());
         // 删除不存在的 key 幂等
-        storage_delete(&ctx, PLUGIN, "cfg").expect("delete again ok");
+        storage_delete(ctx.as_ref(), ctx.as_ref(), ctx.as_ref(), PLUGIN, "cfg").expect("delete again ok");
     }
 }

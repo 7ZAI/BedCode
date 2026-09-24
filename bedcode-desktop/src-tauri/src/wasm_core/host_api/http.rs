@@ -1,6 +1,5 @@
 //! HTTP 代理域宿主实现（宿主代发请求，支持 SSE 流式推流）
 
-use crate::wasm_core::host_api::context::WasmHostContext;
 use crate::wasm_core::runtime_util::block_on_async;
 use crate::wasm_core::permission::PERMISSION_NETWORK_HTTP;
 use crate::system::constants::{
@@ -131,13 +130,14 @@ fn stream_client_for(url: &str) -> &'static reqwest::Client {
 /// http_fetch 立即返回 stream_id
 /// 非流式模式：block_on 执行，返回完整响应
 pub(crate) fn http_fetch(
-    host_ctx: &WasmHostContext,
+    app: &dyn crate::wasm_core::host_api::context::AppHandleScope,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
     plugin_id: &str,
     request_json: &str,
 ) -> Result<Option<String>, String> {
     // 权限仲裁：未声明 network:http 的插件（WASM 路径）在宿主侧直接拒绝。
     // 前端 TS 路径已 fast-fail，此处是 Rust 端最终仲裁（安全边界，AGENTS.md §8）。
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_NETWORK_HTTP, "host_http_fetch") {
+    if !super::check_permission(perm, plugin_id, PERMISSION_NETWORK_HTTP, "host_http_fetch") {
         return Err(format!(
             "http error: permission denied: plugin '{}' does not declare network:http",
             plugin_id
@@ -158,7 +158,7 @@ pub(crate) fn http_fetch(
             .to_string();
 
         // 流式推送依赖前端事件通道，无头上下文不可用
-        let Some(app_handle) = host_ctx.app_handle.clone() else {
+        let Some(app_handle) = app.app_handle().cloned() else {
             return Err("http error: streaming requires app_handle".to_string());
         };
 
@@ -494,7 +494,7 @@ mod tests {
     fn http_fetch_permission_denied_rejected() {
         let ctx = super::super::tests::build_host_ctx();
         // 未授予任何权限（含 network:http）
-        let err = http_fetch(&ctx, "p1", r#"{"url":"http://127.0.0.1:1/x"}"#)
+        let err = http_fetch(ctx.as_ref(), ctx.as_ref(), "p1", r#"{"url":"http://127.0.0.1:1/x"}"#)
             .expect_err("unpermissioned fetch must be rejected");
         assert!(
             err.contains("permission denied") && err.contains("network:http"),
@@ -510,7 +510,7 @@ mod tests {
         let ctx = super::super::tests::build_host_ctx();
         super::super::tests::grant_permissions(&ctx, "p1", &[PERMISSION_NETWORK_HTTP]);
         // 权限已放行 → 错误是请求解析/执行类，不再是 permission denied
-        let err = http_fetch(&ctx, "p1", r#"{"method":"GET"}"#).expect_err("missing url is a request error");
+        let err = http_fetch(ctx.as_ref(), ctx.as_ref(), "p1", r#"{"method":"GET"}"#).expect_err("missing url is a request error");
         assert!(
             err.contains("Missing 'url'") || err.contains("http error"),
             "after permission, error should be request-level, got: {}",
@@ -528,7 +528,7 @@ mod tests {
     fn http_fetch_invalid_json_is_request_error_not_permission() {
         let ctx = super::super::tests::build_host_ctx();
         super::super::tests::grant_permissions(&ctx, "p1", &[PERMISSION_NETWORK_HTTP]);
-        let err = http_fetch(&ctx, "p1", "not-json").expect_err("invalid JSON is a request error");
+        let err = http_fetch(ctx.as_ref(), ctx.as_ref(), "p1", "not-json").expect_err("invalid JSON is a request error");
         assert!(
             err.contains("invalid request JSON"),
             "error should be parse-level, got: {}",

@@ -175,7 +175,7 @@ impl PluginServices for PluginHost {
     }
 
     fn install_cli(
-        &self,
+                &self,
         plugin_id: String,
         file_name: String,
         bin_dir: String,
@@ -222,7 +222,7 @@ impl PluginServices for PluginHost {
     }
 
     fn uninstall_cli(
-        &self,
+                &self,
         plugin_id: String,
         file_name: String,
         bin_dir: String,
@@ -263,7 +263,7 @@ impl PluginServices for PluginHost {
     }
 
     fn plugin_resource_dir(
-        &self,
+                &self,
         plugin_id: String,
     ) -> Pin<Box<dyn std::future::Future<Output = Result<String, String>> + Send + '_>> {
         Box::pin(async move {

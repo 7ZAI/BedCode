@@ -1,13 +1,12 @@
 //! 事件域宿主实现（前端事件 / 移动端同步广播 / 通知）
 
-use crate::wasm_core::host_api::context::WasmHostContext;
 use crate::wasm_core::permission::PERMISSION_BROADCAST;
 use tauri::Emitter;
 
 /// 发送 Tauri 事件到前端
 ///
 /// 无头上下文（测试）没有 AppHandle，事件无处投递，返回 Ok 保持幂等
-pub(crate) fn emit_event(host_ctx: &WasmHostContext, event_name: &str, payload_json: &str) -> Result<(), String> {
+pub(crate) fn emit_event(app: &dyn crate::wasm_core::host_api::context::AppHandleScope, event_name: &str, payload_json: &str) -> Result<(), String> {
     let json_payload: serde_json::Value = match serde_json::from_str(payload_json) {
         Ok(v) => v,
         Err(e) => {
@@ -15,7 +14,7 @@ pub(crate) fn emit_event(host_ctx: &WasmHostContext, event_name: &str, payload_j
             serde_json::Value::String(payload_json.to_string())
         }
     };
-    let Some(app_handle) = host_ctx.app_handle.as_ref() else {
+    let Some(app_handle) = app.app_handle() else {
         tracing::warn!(event = %event_name, "emit_event: app_handle not available in headless context");
         return Ok(());
     };
@@ -34,9 +33,9 @@ pub(crate) fn emit_event(host_ctx: &WasmHostContext, event_name: &str, payload_j
 /// 载荷折不成出站形状（`validate`）、事件源未注册（装配缺失）都走 `Err`。
 /// 注意 WIT `host-events.broadcast-sync` 无返回值（D5 不动 ABI），所以 `Err` 的
 /// 可观测点是 `runtime/component.rs` 导入壳打的 `error!`，不是插件侧的异常。
-pub(crate) fn broadcast_sync(host_ctx: &WasmHostContext, plugin_id: &str, event_json: &str) -> Result<(), String> {
+pub(crate) fn broadcast_sync(perm: &dyn crate::wasm_core::host_api::context::PermissionScope, plugin_id: &str, event_json: &str) -> Result<(), String> {
     // 权限校验：broadcast 权限门控移动端同步通道
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_BROADCAST, "host_broadcast_sync") {
+    if !super::check_permission(perm, plugin_id, PERMISSION_BROADCAST, "host_broadcast_sync") {
         return Err("permission denied".to_string());
     }
     // 未知/畸形事件在此被拒绝（含票 02 之前的旧内部标签格式）：静默收下就是
@@ -50,8 +49,8 @@ pub(crate) fn broadcast_sync(host_ctx: &WasmHostContext, plugin_id: &str, event_
 }
 
 /// 通过 Tauri 事件发送到前端 toast
-pub(crate) fn notify(host_ctx: &WasmHostContext, plugin_id: &str, title: &str, body: &str) -> Result<(), String> {
-    let Some(app_handle) = host_ctx.app_handle.as_ref() else {
+pub(crate) fn notify(app: &dyn crate::wasm_core::host_api::context::AppHandleScope, plugin_id: &str, title: &str, body: &str) -> Result<(), String> {
+    let Some(app_handle) = app.app_handle() else {
         return Err("notify error: app_handle not available in headless context".to_string());
     };
     app_handle
@@ -77,21 +76,21 @@ mod tests {
     #[test]
     fn emit_event_headless_returns_ok() {
         let ctx = build_host_ctx();
-        assert!(emit_event(&ctx, "plugin:event", r#"{"ok":true}"#).is_ok());
+        assert!(emit_event(ctx.as_ref(), "plugin:event", r#"{"ok":true}"#).is_ok());
     }
 
     /// 非法 JSON 载荷降级为原始字符串；无头上下文同样 Ok（不因载荷失败）
     #[test]
     fn emit_event_headless_invalid_json_ok() {
         let ctx = build_host_ctx();
-        assert!(emit_event(&ctx, "plugin:event", "not-json").is_ok());
+        assert!(emit_event(ctx.as_ref(), "plugin:event", "not-json").is_ok());
     }
 
     /// notify 与 emit 的降级约定不同：无头上下文明确报错（弹窗是强需求能力）
     #[test]
     fn notify_headless_rejected() {
         let ctx = build_host_ctx();
-        let err = notify(&ctx, "test-plugin", "title", "body").unwrap_err();
+        let err = notify(ctx.as_ref(), "test-plugin", "title", "body").unwrap_err();
         assert!(err.contains("app_handle not available"), "got: {}", err);
     }
 
@@ -99,7 +98,7 @@ mod tests {
     #[test]
     fn broadcast_sync_permission_denied() {
         let ctx = build_host_ctx();
-        let err = broadcast_sync(&ctx, "test-plugin", "{}").unwrap_err();
+        let err = broadcast_sync(ctx.as_ref(), "test-plugin", "{}").unwrap_err();
         assert_eq!(err, "permission denied");
     }
 
@@ -108,7 +107,7 @@ mod tests {
     fn broadcast_sync_malformed_payload_rejected() {
         let ctx = build_host_ctx();
         grant_permissions(&ctx, "test-plugin", &[PERMISSION_BROADCAST]);
-        let err = broadcast_sync(&ctx, "test-plugin", "not-json").unwrap_err();
+        let err = broadcast_sync(ctx.as_ref(), "test-plugin", "not-json").unwrap_err();
         assert!(err.contains("unknown or malformed sync event"), "got: {}", err);
     }
 
@@ -120,7 +119,7 @@ mod tests {
         let ctx = build_host_ctx();
         grant_permissions(&ctx, "test-plugin", &[PERMISSION_BROADCAST]);
         let legacy = r#"{"type":"TaskQueueChanged","session_id":"s1","queue_count":1,"action":"add"}"#;
-        let err = broadcast_sync(&ctx, "test-plugin", legacy).unwrap_err();
+        let err = broadcast_sync(ctx.as_ref(), "test-plugin", legacy).unwrap_err();
         assert!(
             err.contains("unknown or malformed sync event"),
             "旧格式应被显性拒绝，实际: {err}"
@@ -128,7 +127,7 @@ mod tests {
         // 反控：新格式（adjacently tagged）必须能过解析这一关
         let current =
             r#"{"type":"task_queue_changed","data":{"session_id":"s1","queue_count":1,"action":"add"}}"#;
-        match broadcast_sync(&ctx, "test-plugin", current) {
+        match broadcast_sync(ctx.as_ref(), "test-plugin", current) {
             // 无头 harness 里事件源未注册（publish 的 NoSource）是唯一允许的下游错误，
             // 解析本身必须已通过——否则就是新格式也被拒了
             Err(e) => assert!(

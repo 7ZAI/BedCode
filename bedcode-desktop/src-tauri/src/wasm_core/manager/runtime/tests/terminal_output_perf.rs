@@ -366,7 +366,7 @@ fn perf_p2b_host_side_primitive_call() {
             let mut calls = 0usize;
             while cursor < PROBE_BYTES {
                 calls += 1;
-                let fetched = primitive(&host_ctx, TERM_PERF_PLUGIN, &pty_id, cursor, HOST_FETCH_MAX_BYTES)
+                let fetched = primitive(host_ctx.as_ref(), TERM_PERF_PLUGIN, &pty_id, cursor, HOST_FETCH_MAX_BYTES)
                     .expect("pty_ring_fetch")
                     .expect("数据已 settle 必有返回");
                 cursor = fetched.next_offset;

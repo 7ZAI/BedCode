@@ -25,6 +25,7 @@ use bedcode_plugin_api::host::bus::owned_topic;
 use bedcode_plugin_api::host::ws::{WS_CLOSE, WS_ERROR, WS_OPEN};
 
 use crate::wasm_core::bus::{MessageBus, WsFrameDispatch};
+#[cfg(test)]
 use crate::wasm_core::host_api::context::WasmHostContext;
 use crate::wasm_core::permission::{PERMISSION_WS_CLIENT, PERMISSION_WS_SERVER};
 use crate::server::websocket::endpoint::EndpointAuth;
@@ -149,8 +150,9 @@ struct EndpointConfig {
 ///
 /// 成功 → 返回句柄 `wsc-<uuid>` 并发布 `<owner>::ws:open`；
 /// 失败 → 错误上抛且**不发布任何事件**（无句柄可寻址）
-pub(crate) fn ws_connect(host_ctx: &WasmHostContext, plugin_id: &str, config_json: &str) -> Result<String, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_WS_CLIENT, "host_websocket_connect") {
+pub(crate) fn ws_connect(bus: &dyn crate::wasm_core::host_api::context::BusScope,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope, plugin_id: &str, config_json: &str) -> Result<String, String> {
+    if !super::check_permission(perm, plugin_id, PERMISSION_WS_CLIENT, "host_websocket_connect") {
         return Err(denied_client());
     }
     let config: ConnectConfig =
@@ -235,7 +237,7 @@ pub(crate) fn ws_connect(host_ctx: &WasmHostContext, plugin_id: &str, config_jso
     let handle = format!("wsc-{}", uuid::Uuid::new_v4());
     let owner = plugin_id.to_string();
     let state = Arc::new(AtomicU8::new(STATE_OPEN));
-    let bus = host_ctx.message_bus.clone();
+    let bus = bus.message_bus().clone();
     let (tx, rx) = mpsc::channel(PLUGIN_WS_SEND_QUEUE_CAPACITY);
     let (write, read) = stream.split();
     let writer = crate::system::error_boundary::spawn_with_error_boundary("ws_client_writer", run_writer(write, rx));
@@ -278,12 +280,12 @@ pub(crate) fn ws_connect(host_ctx: &WasmHostContext, plugin_id: &str, config_jso
 
 /// 发送文本帧（UTF-8）
 pub(crate) fn ws_send_text(
-    host_ctx: &WasmHostContext,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
     plugin_id: &str,
     handle: &str,
     text: &str,
 ) -> Result<(), String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_WS_CLIENT, "host_websocket_send_text") {
+    if !super::check_permission(perm, plugin_id, PERMISSION_WS_CLIENT, "host_websocket_send_text") {
         return Err(denied_client());
     }
     enqueue(plugin_id, handle, OutboundFrame::Text(text.to_string()))
@@ -291,12 +293,12 @@ pub(crate) fn ws_send_text(
 
 /// 发送二进制帧
 pub(crate) fn ws_send_binary(
-    host_ctx: &WasmHostContext,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
     plugin_id: &str,
     handle: &str,
     payload: &[u8],
 ) -> Result<(), String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_WS_CLIENT, "host_websocket_send_binary") {
+    if !super::check_permission(perm, plugin_id, PERMISSION_WS_CLIENT, "host_websocket_send_binary") {
         return Err(denied_client());
     }
     enqueue(plugin_id, handle, OutboundFrame::Binary(payload.to_vec()))
@@ -307,12 +309,12 @@ pub(crate) fn ws_send_binary(
 /// 关闭命令入队后由写任务发出 Close 帧并结束；对端回 Close → 读任务上报
 /// `<owner>::ws:close`（`wasClean` 按对端回帧 code 判定，spec D11）
 pub(crate) fn ws_close(
-    host_ctx: &WasmHostContext,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
     plugin_id: &str,
     handle: &str,
     close_json: &str,
 ) -> Result<bool, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_WS_CLIENT, "host_websocket_close") {
+    if !super::check_permission(perm, plugin_id, PERMISSION_WS_CLIENT, "host_websocket_close") {
         return Err(denied_client());
     }
     let close: CloseConfig =
@@ -339,8 +341,9 @@ pub(crate) fn ws_close(
 }
 
 /// 查询连接是否处于 open 态（握手完成且未关闭）；仅属主可查
-pub(crate) fn ws_is_connected(host_ctx: &WasmHostContext, plugin_id: &str, handle: &str) -> Result<bool, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_WS_CLIENT, "host_websocket_is_connected") {
+pub(crate) fn ws_is_connected(
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope, plugin_id: &str, handle: &str) -> Result<bool, String> {
+    if !super::check_permission(perm, plugin_id, PERMISSION_WS_CLIENT, "host_websocket_is_connected") {
         return Err(denied_client());
     }
     let table = CLIENTS.lock().unwrap_or_else(|e| e.into_inner());
@@ -387,12 +390,13 @@ fn owned_endpoint(endpoint_id: &str, plugin_id: &str) -> Result<crate::server::w
 /// → 端点数上限与同插件冲突（失败零副作用）。返回端点句柄 `wse-<uuid>`；
 /// 完整挂载路径 = [`crate::server::websocket::endpoint::mount_path`]（插件侧可推导）。
 pub(crate) fn ws_register_endpoint(
-    host_ctx: &WasmHostContext,
+    bus: &dyn crate::wasm_core::host_api::context::BusScope,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
     plugin_id: &str,
     config_json: &str,
 ) -> Result<String, String> {
     if !super::check_permission(
-        host_ctx,
+        perm,
         plugin_id,
         PERMISSION_WS_SERVER,
         "host_websocket_register_endpoint",
@@ -424,7 +428,7 @@ pub(crate) fn ws_register_endpoint(
         auth,
         config.max_clients,
         config.max_message_bytes,
-        host_ctx.message_bus.clone(),
+        bus.message_bus().clone(),
     )?;
     Ok(entry.endpoint_id)
 }
@@ -434,14 +438,14 @@ pub(crate) fn ws_register_endpoint(
 /// 客户端不在该端点名下 → `Err`（错配寻址 fail-visible，不静默丢弃）；
 /// 出站帧由接收连接的通道过滤链处理（`TrafficChannel::WsPlugin`）
 pub(crate) fn ws_send_text_to_client(
-    host_ctx: &WasmHostContext,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
     plugin_id: &str,
     endpoint_id: &str,
     client_id: &str,
     text: &str,
 ) -> Result<(), String> {
     if !super::check_permission(
-        host_ctx,
+        perm,
         plugin_id,
         PERMISSION_WS_SERVER,
         "host_websocket_send_text_to_client",
@@ -461,14 +465,14 @@ pub(crate) fn ws_send_text_to_client(
 
 /// 向端点指定客户端发二进制帧
 pub(crate) fn ws_send_binary_to_client(
-    host_ctx: &WasmHostContext,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
     plugin_id: &str,
     endpoint_id: &str,
     client_id: &str,
     payload: &[u8],
 ) -> Result<(), String> {
     if !super::check_permission(
-        host_ctx,
+        perm,
         plugin_id,
         PERMISSION_WS_SERVER,
         "host_websocket_send_binary_to_client",
@@ -490,13 +494,13 @@ pub(crate) fn ws_send_binary_to_client(
 ///
 /// 部分失败不回滚（失败明细记 debug，成功数供调用方判定，spec D10）
 pub(crate) fn ws_broadcast_text(
-    host_ctx: &WasmHostContext,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
     plugin_id: &str,
     endpoint_id: &str,
     text: &str,
 ) -> Result<u32, String> {
     if !super::check_permission(
-        host_ctx,
+        perm,
         plugin_id,
         PERMISSION_WS_SERVER,
         "host_websocket_broadcast_text",
@@ -514,13 +518,13 @@ pub(crate) fn ws_broadcast_text(
 
 /// 向端点全部客户端广播二进制帧 → 成功入队客户端数
 pub(crate) fn ws_broadcast_binary(
-    host_ctx: &WasmHostContext,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
     plugin_id: &str,
     endpoint_id: &str,
     payload: &[u8],
 ) -> Result<u32, String> {
     if !super::check_permission(
-        host_ctx,
+        perm,
         plugin_id,
         PERMISSION_WS_SERVER,
         "host_websocket_broadcast_binary",
@@ -543,13 +547,13 @@ pub(crate) fn ws_broadcast_binary(
 /// 返回是否命中（客户端不在该端点名下 → `false`，幂等不 panic）；
 /// 对端随后收到 `client-disconnect` 事件（宿主主动断开，`wasClean = false`）
 pub(crate) fn ws_close_client(
-    host_ctx: &WasmHostContext,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
     plugin_id: &str,
     endpoint_id: &str,
     client_id: &str,
     close_json: &str,
 ) -> Result<bool, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_WS_SERVER, "host_websocket_close_client") {
+    if !super::check_permission(perm, plugin_id, PERMISSION_WS_SERVER, "host_websocket_close_client") {
         return Err(denied_server());
     }
     owned_endpoint(endpoint_id, plugin_id)?;
@@ -572,12 +576,12 @@ pub(crate) fn ws_close_client(
 /// 返回是否存在该端点（未知句柄 → `Ok(false)`；他人端点 → `Err` 属主仲裁）。
 /// 先摘端点再下线客户端：摘除后台的握手立即 404，不再有新客户端接入
 pub(crate) fn ws_unregister_endpoint(
-    host_ctx: &WasmHostContext,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
     plugin_id: &str,
     endpoint_id: &str,
 ) -> Result<bool, String> {
     if !super::check_permission(
-        host_ctx,
+        perm,
         plugin_id,
         PERMISSION_WS_SERVER,
         "host_websocket_unregister_endpoint",
@@ -611,11 +615,11 @@ pub(crate) fn ws_unregister_endpoint(
 /// `[{ clientId, addr, authenticated, connectedAt }]`（camelCase）——丢弃
 /// `client-connect` 事件后的自愈入口（spec D3）；仅属主可查
 pub(crate) fn ws_list_clients(
-    host_ctx: &WasmHostContext,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
     plugin_id: &str,
     endpoint_id: &str,
 ) -> Result<String, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_WS_SERVER, "host_websocket_list_clients") {
+    if !super::check_permission(perm, plugin_id, PERMISSION_WS_SERVER, "host_websocket_list_clients") {
         return Err(denied_server());
     }
     owned_endpoint(endpoint_id, plugin_id)?;
@@ -640,9 +644,10 @@ pub(crate) fn ws_list_clients(
 /// 本插件已注册端点清单 → JSON 数组
 ///
 /// `[{ endpointId, path, clientCount }]`（camelCase，按挂载路径升序稳定输出）
-pub(crate) fn ws_list_endpoints(host_ctx: &WasmHostContext, plugin_id: &str) -> Result<String, String> {
+pub(crate) fn ws_list_endpoints(
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope, plugin_id: &str) -> Result<String, String> {
     if !super::check_permission(
-        host_ctx,
+        perm,
         plugin_id,
         PERMISSION_WS_SERVER,
         "host_websocket_list_endpoints",
@@ -1029,12 +1034,12 @@ mod tests {
         let ctx = build_host_ctx();
         let plugin = test_plugin("perm-client");
         // 未授权：客户端域一律拒绝
-        let err = ws_connect(&ctx, &plugin, r#"{"url":"ws://127.0.0.1:1/"}"#).expect_err("denied");
+        let err = ws_connect(ctx.as_ref(), ctx.as_ref(), &plugin, r#"{"url":"ws://127.0.0.1:1/"}"#).expect_err("denied");
         assert_eq!(err, denied_client());
 
         // 只有服务端域权限也不得放行客户端域（分域隔离，spec D6）
         grant_permissions(&ctx, &plugin, &[PERMISSION_WS_SERVER]);
-        let err = ws_connect(&ctx, &plugin, r#"{"url":"ws://127.0.0.1:1/"}"#).expect_err("denied");
+        let err = ws_connect(ctx.as_ref(), ctx.as_ref(), &plugin, r#"{"url":"ws://127.0.0.1:1/"}"#).expect_err("denied");
         assert_eq!(err, denied_client());
     }
 
@@ -1042,12 +1047,12 @@ mod tests {
     async fn server_domain_denied_without_ws_server_permission() {
         let ctx = build_host_ctx();
         let plugin = test_plugin("perm-server");
-        let err = ws_register_endpoint(&ctx, &plugin, r#"{"path":"chat"}"#).expect_err("denied");
+        let err = ws_register_endpoint(ctx.as_ref(), ctx.as_ref(), &plugin, r#"{"path":"chat"}"#).expect_err("denied");
         assert_eq!(err, denied_server());
 
         // 只有客户端域权限也不得放行服务端域
         grant_permissions(&ctx, &plugin, &[PERMISSION_WS_CLIENT]);
-        let err = ws_register_endpoint(&ctx, &plugin, r#"{"path":"chat"}"#).expect_err("denied");
+        let err = ws_register_endpoint(ctx.as_ref(), ctx.as_ref(), &plugin, r#"{"path":"chat"}"#).expect_err("denied");
         assert_eq!(err, denied_server());
     }
 
@@ -1060,14 +1065,15 @@ mod tests {
         grant_permissions(&ctx, &plugin, &[PERMISSION_WS_CLIENT]);
 
         // D7：wss:// 显式拒绝（不启用 TLS），且错误文案指明未支持
-        let err = ws_connect(&ctx, &plugin, r#"{"url":"wss://example.com/socket"}"#).expect_err("wss rejected");
+        let err = ws_connect(ctx.as_ref(), ctx.as_ref(), &plugin, r#"{"url":"wss://example.com/socket"}"#).expect_err("wss rejected");
         assert!(err.contains("only ws://"), "wss 拒绝文案应指明仅支持 ws://：{err}");
 
         // 空 url / 非法 JSON / 非法 header 名：都在握手前失败
-        assert!(ws_connect(&ctx, &plugin, r#"{"url":"  "}"#).is_err());
-        assert!(ws_connect(&ctx, &plugin, "not json").is_err());
+        assert!(ws_connect(ctx.as_ref(), ctx.as_ref(), &plugin, r#"{"url":"  "}"#).is_err());
+        assert!(ws_connect(ctx.as_ref(), ctx.as_ref(), &plugin, "not json").is_err());
         assert!(ws_connect(
-            &ctx,
+                        ctx.as_ref(),
+            ctx.as_ref(),
             &plugin,
             r#"{"url":"ws://127.0.0.1:1/","headers":{"bad header":"x"}}"#
         )
@@ -1087,7 +1093,7 @@ mod tests {
         for i in 0..PLUGIN_WS_MAX_CONNS_PER_PLUGIN {
             fake_client(&plugin, &format!("wsc-{plugin}-{i}"), "ws://127.0.0.1:1/");
         }
-        let err = ws_connect(&ctx, &plugin, r#"{"url":"ws://127.0.0.1:1/"}"#).expect_err("limit");
+        let err = ws_connect(ctx.as_ref(), ctx.as_ref(), &plugin, r#"{"url":"ws://127.0.0.1:1/"}"#).expect_err("limit");
         assert!(err.contains("connection limit reached"), "got: {err}");
         for i in 0..PLUGIN_WS_MAX_CONNS_PER_PLUGIN {
             drop_client(&format!("wsc-{plugin}-{i}"));
@@ -1102,11 +1108,11 @@ mod tests {
         let plugin = test_plugin("unknown");
         grant_permissions(&ctx, &plugin, &[PERMISSION_WS_CLIENT]);
 
-        assert!(ws_send_text(&ctx, &plugin, "wsc-missing", "hi").is_err());
-        assert!(ws_send_binary(&ctx, &plugin, "wsc-missing", b"hi").is_err());
+        assert!(ws_send_text(ctx.as_ref(), &plugin, "wsc-missing", "hi").is_err());
+        assert!(ws_send_binary(ctx.as_ref(), &plugin, "wsc-missing", b"hi").is_err());
         // 未知句柄：close 幂等 false；is-connected false
-        assert!(!ws_close(&ctx, &plugin, "wsc-missing", "{}").unwrap());
-        assert!(!ws_is_connected(&ctx, &plugin, "wsc-missing").unwrap());
+        assert!(!ws_close(ctx.as_ref(), &plugin, "wsc-missing", "{}").unwrap());
+        assert!(!ws_is_connected(ctx.as_ref(), &plugin, "wsc-missing").unwrap());
     }
 
     #[tokio::test]
@@ -1119,13 +1125,13 @@ mod tests {
         let handle = format!("wsc-{}", uuid::Uuid::new_v4());
         fake_client(&owner, &handle, "ws://127.0.0.1:1/");
 
-        assert_eq!(ws_send_text(&ctx, &intruder, &handle, "hi").unwrap_err(), NOT_OWNER);
-        assert_eq!(ws_is_connected(&ctx, &intruder, &handle).unwrap_err(), NOT_OWNER);
-        assert_eq!(ws_close(&ctx, &intruder, &handle, "{}").unwrap_err(), NOT_OWNER);
+        assert_eq!(ws_send_text(ctx.as_ref(), &intruder, &handle, "hi").unwrap_err(), NOT_OWNER);
+        assert_eq!(ws_is_connected(ctx.as_ref(), &intruder, &handle).unwrap_err(), NOT_OWNER);
+        assert_eq!(ws_close(ctx.as_ref(), &intruder, &handle, "{}").unwrap_err(), NOT_OWNER);
         // 拒绝不得消费句柄
-        assert!(ws_is_connected(&ctx, &owner, &handle).unwrap());
+        assert!(ws_is_connected(ctx.as_ref(), &owner, &handle).unwrap());
         // 属主本人可用
-        assert!(ws_send_text(&ctx, &owner, &handle, "hi").is_ok());
+        assert!(ws_send_text(ctx.as_ref(), &owner, &handle, "hi").is_ok());
 
         drop_client(&handle);
     }
@@ -1151,7 +1157,7 @@ mod tests {
                 writer: crate::system::error_boundary::spawn_with_error_boundary("ws_test_writer", async {}),
             },
         );
-        let err = ws_send_text(&ctx, &plugin, &handle, "hi").expect_err("closed queue");
+        let err = ws_send_text(ctx.as_ref(), &plugin, &handle, "hi").expect_err("closed queue");
         assert_eq!(err, "ws connection is closed");
         drop_client(&handle);
     }
@@ -1165,21 +1171,21 @@ mod tests {
         fake_client(&plugin, &handle, "ws://127.0.0.1:1/");
 
         // 缺省 code = 1000（spec §4.4 close 语义）
-        assert!(ws_close(&ctx, &plugin, &handle, "{}").unwrap());
+        assert!(ws_close(ctx.as_ref(), &plugin, &handle, "{}").unwrap());
         // 句柄已摘除 → 幂等 false
-        assert!(!ws_close(&ctx, &plugin, &handle, "{}").unwrap());
-        assert!(!ws_is_connected(&ctx, &plugin, &handle).unwrap());
+        assert!(!ws_close(ctx.as_ref(), &plugin, &handle, "{}").unwrap());
+        assert!(!ws_is_connected(ctx.as_ref(), &plugin, &handle).unwrap());
         // 显式 code/reason 解析成功路径
         let handle2 = format!("wsc-{}", uuid::Uuid::new_v4());
         fake_client(&plugin, &handle2, "ws://127.0.0.1:1/");
-        assert!(ws_close(&ctx, &plugin, &handle2, r#"{"code":4004,"reason":"kicked"}"#).unwrap());
+        assert!(ws_close(ctx.as_ref(), &plugin, &handle2, r#"{"code":4004,"reason":"kicked"}"#).unwrap());
         drop_client(&handle2);
         // 非法 close-json 拒绝
         let handle3 = format!("wsc-{}", uuid::Uuid::new_v4());
         fake_client(&plugin, &handle3, "ws://127.0.0.1:1/");
-        assert!(ws_close(&ctx, &plugin, &handle3, "not json").is_err());
+        assert!(ws_close(ctx.as_ref(), &plugin, &handle3, "not json").is_err());
         assert!(
-            ws_is_connected(&ctx, &plugin, &handle3).unwrap(),
+            ws_is_connected(ctx.as_ref(), &plugin, &handle3).unwrap(),
             "解析失败不得摘除句柄"
         );
         drop_client(&handle3);
@@ -1244,7 +1250,7 @@ mod tests {
 
     /// 注册端点并返回句柄（形状合法时的成功路径 = 句柄 `wse-<uuid>`）
     fn register_endpoint(ctx: &WasmHostContext, plugin: &str, path: &str) -> String {
-        ws_register_endpoint(ctx, plugin, &format!(r#"{{"path":"{path}"}}"#)).expect("register endpoint")
+        ws_register_endpoint(ctx, ctx, plugin, &format!(r#"{{"path":"{path}"}}"#)).expect("register endpoint")
     }
 
     /// 摘除端点（全局表跨用例共享，用例结束必须清理）
@@ -1259,24 +1265,24 @@ mod tests {
         grant_permissions(&ctx, &plugin, &[PERMISSION_WS_SERVER]);
 
         // path 校验先行（契约形状尽早暴露拼装错误）
-        assert!(ws_register_endpoint(&ctx, &plugin, r#"{"path":""}"#)
+        assert!(ws_register_endpoint(ctx.as_ref(), ctx.as_ref(), &plugin, r#"{"path":""}"#)
             .unwrap_err()
             .contains("must not be empty"));
-        assert!(ws_register_endpoint(&ctx, &plugin, r#"{"path":"a/b"}"#)
+        assert!(ws_register_endpoint(ctx.as_ref(), ctx.as_ref(), &plugin, r#"{"path":"a/b"}"#)
             .unwrap_err()
             .contains("must not contain"));
-        assert!(ws_register_endpoint(&ctx, &plugin, r#"{"path":".."}"#)
+        assert!(ws_register_endpoint(ctx.as_ref(), ctx.as_ref(), &plugin, r#"{"path":".."}"#)
             .unwrap_err()
             .contains("must not contain"));
         let too_long = "x".repeat(crate::system::constants::PLUGIN_WS_ENDPOINT_PATH_MAX_LEN + 1);
         assert!(
-            ws_register_endpoint(&ctx, &plugin, &format!(r#"{{"path":"{too_long}"}}"#))
+            ws_register_endpoint(ctx.as_ref(), ctx.as_ref(), &plugin, &format!(r#"{{"path":"{too_long}"}}"#))
                 .unwrap_err()
                 .contains("too long")
         );
         // 非法 JSON / 未定义 auth 取值 → 报错（认证策略绝不静默降级为 none）
-        assert!(ws_register_endpoint(&ctx, &plugin, "not json").is_err());
-        assert!(ws_register_endpoint(&ctx, &plugin, r#"{"path":"chat","auth":"token"}"#)
+        assert!(ws_register_endpoint(ctx.as_ref(), ctx.as_ref(), &plugin, "not json").is_err());
+        assert!(ws_register_endpoint(ctx.as_ref(), ctx.as_ref(), &plugin, r#"{"path":"chat","auth":"token"}"#)
             .unwrap_err()
             .contains("unknown auth"));
         assert_eq!(
@@ -1287,7 +1293,7 @@ mod tests {
 
         // 两种合法策略都能注册（缺省 = none）
         let open = register_endpoint(&ctx, &plugin, "open");
-        let guarded = ws_register_endpoint(&ctx, &plugin, r#"{"path":"guarded","auth":"jwt"}"#).expect("jwt endpoint");
+        let guarded = ws_register_endpoint(ctx.as_ref(), ctx.as_ref(), &plugin, r#"{"path":"guarded","auth":"jwt"}"#).expect("jwt endpoint");
         assert_eq!(
             crate::server::websocket::endpoint::get(&open).unwrap().auth,
             EndpointAuth::None,
@@ -1317,16 +1323,16 @@ mod tests {
         assert_eq!(entry.mount_path, format!("/ws/plugin/{plugin}/chat"));
 
         // list-endpoints：`[{ endpointId, path, clientCount }]`
-        let listed: Vec<serde_json::Value> = serde_json::from_str(&ws_list_endpoints(&ctx, &plugin).unwrap()).unwrap();
+        let listed: Vec<serde_json::Value> = serde_json::from_str(&ws_list_endpoints(ctx.as_ref(), &plugin).unwrap()).unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0]["endpointId"], endpoint);
         assert_eq!(listed[0]["path"], "chat");
         assert_eq!(listed[0]["clientCount"], 0);
 
         // 注销：命中 true → 清单清空 → 幂等 false
-        assert!(ws_unregister_endpoint(&ctx, &plugin, &endpoint).unwrap());
-        assert_eq!(ws_list_endpoints(&ctx, &plugin).unwrap(), "[]");
-        assert!(!ws_unregister_endpoint(&ctx, &plugin, &endpoint).unwrap());
+        assert!(ws_unregister_endpoint(ctx.as_ref(), &plugin, &endpoint).unwrap());
+        assert_eq!(ws_list_endpoints(ctx.as_ref(), &plugin).unwrap(), "[]");
+        assert!(!ws_unregister_endpoint(ctx.as_ref(), &plugin, &endpoint).unwrap());
     }
 
     #[tokio::test]
@@ -1338,7 +1344,7 @@ mod tests {
 
         let mut ids = vec![register_endpoint(&ctx, &plugin, "chat")];
         // 同插件同后缀 → 冲突拒绝（端点表按完整挂载路径判定）
-        assert!(ws_register_endpoint(&ctx, &plugin, r#"{"path":"chat"}"#)
+        assert!(ws_register_endpoint(ctx.as_ref(), ctx.as_ref(), &plugin, r#"{"path":"chat"}"#)
             .unwrap_err()
             .contains("already registered"));
         // 同插件不同后缀可用
@@ -1350,7 +1356,7 @@ mod tests {
             i += 1;
         }
         // 超限 → Err 且无副作用
-        assert!(ws_register_endpoint(&ctx, &plugin, &format!(r#"{{"path":"p{i}"}}"#))
+        assert!(ws_register_endpoint(ctx.as_ref(), ctx.as_ref(), &plugin, &format!(r#"{{"path":"p{i}"}}"#))
             .unwrap_err()
             .contains("endpoint limit reached"));
         assert_eq!(
@@ -1375,19 +1381,19 @@ mod tests {
 
         // 属主仲裁：他人端点上的一切操作一律拒绝（跨插件不可互操作）
         let results = [
-            ws_send_text_to_client(&ctx, &intruder, &endpoint, "c-1", "hi").map(|_| ()),
-            ws_send_binary_to_client(&ctx, &intruder, &endpoint, "c-1", b"hi").map(|_| ()),
-            ws_broadcast_text(&ctx, &intruder, &endpoint, "hi").map(|_| ()),
-            ws_broadcast_binary(&ctx, &intruder, &endpoint, b"hi").map(|_| ()),
-            ws_close_client(&ctx, &intruder, &endpoint, "c-1", "{}").map(|_| ()),
-            ws_list_clients(&ctx, &intruder, &endpoint).map(|_| ()),
+            ws_send_text_to_client(ctx.as_ref(), &intruder, &endpoint, "c-1", "hi").map(|_| ()),
+            ws_send_binary_to_client(ctx.as_ref(), &intruder, &endpoint, "c-1", b"hi").map(|_| ()),
+            ws_broadcast_text(ctx.as_ref(), &intruder, &endpoint, "hi").map(|_| ()),
+            ws_broadcast_binary(ctx.as_ref(), &intruder, &endpoint, b"hi").map(|_| ()),
+            ws_close_client(ctx.as_ref(), &intruder, &endpoint, "c-1", "{}").map(|_| ()),
+            ws_list_clients(ctx.as_ref(), &intruder, &endpoint).map(|_| ()),
         ];
         for result in results {
             assert_eq!(result.unwrap_err(), NOT_ENDPOINT_OWNER, "跨属主必须拒绝");
         }
         // 注销同样仲裁，且拒绝不得摘除端点
         assert_eq!(
-            ws_unregister_endpoint(&ctx, &intruder, &endpoint).unwrap_err(),
+            ws_unregister_endpoint(ctx.as_ref(), &intruder, &endpoint).unwrap_err(),
             NOT_ENDPOINT_OWNER
         );
         assert!(
@@ -1395,8 +1401,8 @@ mod tests {
             "拒绝不得消费端点"
         );
         // 属主本人可用（无在线客户端 → 清单空数组，计数 0）
-        assert_eq!(ws_list_clients(&ctx, &owner, &endpoint).unwrap(), "[]");
-        assert_eq!(ws_broadcast_text(&ctx, &owner, &endpoint, "hi").unwrap(), 0);
+        assert_eq!(ws_list_clients(ctx.as_ref(), &owner, &endpoint).unwrap(), "[]");
+        assert_eq!(ws_broadcast_text(ctx.as_ref(), &owner, &endpoint, "hi").unwrap(), 0);
 
         drop_endpoint(&endpoint);
     }
@@ -1408,27 +1414,27 @@ mod tests {
         grant_permissions(&ctx, &plugin, &[PERMISSION_WS_SERVER]);
 
         // 未注册端点：单发 / 广播 / 清单 → Err（fail-visible，不静默成功）
-        assert!(ws_send_text_to_client(&ctx, &plugin, "wse-none", "c-1", "hi")
+        assert!(ws_send_text_to_client(ctx.as_ref(), &plugin, "wse-none", "c-1", "hi")
             .unwrap_err()
             .contains("not found"));
-        assert!(ws_send_binary_to_client(&ctx, &plugin, "wse-none", "c-1", b"hi")
+        assert!(ws_send_binary_to_client(ctx.as_ref(), &plugin, "wse-none", "c-1", b"hi")
             .unwrap_err()
             .contains("not found"));
-        assert!(ws_broadcast_text(&ctx, &plugin, "wse-none", "hi")
+        assert!(ws_broadcast_text(ctx.as_ref(), &plugin, "wse-none", "hi")
             .unwrap_err()
             .contains("not found"));
-        assert!(ws_list_clients(&ctx, &plugin, "wse-none")
+        assert!(ws_list_clients(ctx.as_ref(), &plugin, "wse-none")
             .unwrap_err()
             .contains("not found"));
         // 注销是幂等查询：未知端点 → false（不 panic）
-        assert!(!ws_unregister_endpoint(&ctx, &plugin, "wse-none").unwrap());
+        assert!(!ws_unregister_endpoint(ctx.as_ref(), &plugin, "wse-none").unwrap());
 
         // 端点存在但客户端不在其名下 → 踢出 Ok(false)（寻址错配不消费端点）
         let endpoint = register_endpoint(&ctx, &plugin, "chat");
-        assert!(!ws_close_client(&ctx, &plugin, &endpoint, "c-missing", "{}").unwrap());
+        assert!(!ws_close_client(ctx.as_ref(), &plugin, &endpoint, "c-missing", "{}").unwrap());
         // 非法 close-json → Err（不静默用缺省码）
-        assert!(ws_close_client(&ctx, &plugin, &endpoint, "c-missing", "not json").is_err());
-        assert_eq!(ws_broadcast_binary(&ctx, &plugin, &endpoint, b"hi").unwrap(), 0);
+        assert!(ws_close_client(ctx.as_ref(), &plugin, &endpoint, "c-missing", "not json").is_err());
+        assert_eq!(ws_broadcast_binary(ctx.as_ref(), &plugin, &endpoint, b"hi").unwrap(), 0);
 
         drop_endpoint(&endpoint);
     }
@@ -1538,23 +1544,23 @@ mod tests {
 
         // 客户端域（4 个带句柄的函数）
         let client_results = [
-            ws_send_text(&ctx, &intruder, &handle, "hi").map(|_| ()),
-            ws_send_binary(&ctx, &intruder, &handle, b"hi").map(|_| ()),
-            ws_close(&ctx, &intruder, &handle, "{}").map(|_| ()),
-            ws_is_connected(&ctx, &intruder, &handle).map(|_| ()),
+            ws_send_text(ctx.as_ref(), &intruder, &handle, "hi").map(|_| ()),
+            ws_send_binary(ctx.as_ref(), &intruder, &handle, b"hi").map(|_| ()),
+            ws_close(ctx.as_ref(), &intruder, &handle, "{}").map(|_| ()),
+            ws_is_connected(ctx.as_ref(), &intruder, &handle).map(|_| ()),
         ];
         for result in client_results {
             assert_eq!(result.unwrap_err(), NOT_OWNER, "客户端域跨属主必须拒绝");
         }
         // 服务端域（7 个带端点/对端标识的函数）
         let server_results = [
-            ws_send_text_to_client(&ctx, &intruder, &endpoint, peer_client, "hi").map(|_| ()),
-            ws_send_binary_to_client(&ctx, &intruder, &endpoint, peer_client, b"hi").map(|_| ()),
-            ws_broadcast_text(&ctx, &intruder, &endpoint, "hi").map(|_| ()),
-            ws_broadcast_binary(&ctx, &intruder, &endpoint, b"hi").map(|_| ()),
-            ws_close_client(&ctx, &intruder, &endpoint, peer_client, "{}").map(|_| ()),
-            ws_unregister_endpoint(&ctx, &intruder, &endpoint).map(|_| ()),
-            ws_list_clients(&ctx, &intruder, &endpoint).map(|_| ()),
+            ws_send_text_to_client(ctx.as_ref(), &intruder, &endpoint, peer_client, "hi").map(|_| ()),
+            ws_send_binary_to_client(ctx.as_ref(), &intruder, &endpoint, peer_client, b"hi").map(|_| ()),
+            ws_broadcast_text(ctx.as_ref(), &intruder, &endpoint, "hi").map(|_| ()),
+            ws_broadcast_binary(ctx.as_ref(), &intruder, &endpoint, b"hi").map(|_| ()),
+            ws_close_client(ctx.as_ref(), &intruder, &endpoint, peer_client, "{}").map(|_| ()),
+            ws_unregister_endpoint(ctx.as_ref(), &intruder, &endpoint).map(|_| ()),
+            ws_list_clients(ctx.as_ref(), &intruder, &endpoint).map(|_| ()),
         ];
         for result in server_results {
             assert_eq!(result.unwrap_err(), NOT_ENDPOINT_OWNER, "服务端域跨属主必须拒绝");
@@ -1563,7 +1569,7 @@ mod tests {
         // connect 受本人连接数上限约束、register-endpoint 挂在本人命名空间、
         // list-endpoints 只列本人端点 —— 冲突与上限已由其它用例覆盖，此处断言
         // 「他人的东西不出现在本人视图里」= 零可见
-        assert_eq!(ws_list_endpoints(&ctx, &intruder).unwrap(), "[]", "他人端点零可见");
+        assert_eq!(ws_list_endpoints(ctx.as_ref(), &intruder).unwrap(), "[]", "他人端点零可见");
         assert_eq!(
             crate::server::websocket::endpoint::list_by_owner(&intruder).len(),
             0,
@@ -1572,9 +1578,9 @@ mod tests {
 
         // 零副作用：拒绝不得消费句柄 / 注销端点 / 断开连接
         assert!(crate::server::websocket::endpoint::get(&endpoint).is_some(), "端点未被注销");
-        assert!(ws_is_connected(&ctx, &owner, &handle).unwrap(), "本人连接未被关闭");
-        assert_eq!(ws_list_clients(&ctx, &owner, &endpoint).unwrap(), "[]");
-        assert_eq!(ws_list_endpoints(&ctx, &owner).unwrap().contains("iso"), true);
+        assert!(ws_is_connected(ctx.as_ref(), &owner, &handle).unwrap(), "本人连接未被关闭");
+        assert_eq!(ws_list_clients(ctx.as_ref(), &owner, &endpoint).unwrap(), "[]");
+        assert_eq!(ws_list_endpoints(ctx.as_ref(), &owner).unwrap().contains("iso"), true);
 
         drop_client(&handle);
         drop_endpoint(&endpoint);

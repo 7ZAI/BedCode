@@ -41,6 +41,7 @@ pub(super) mod timer;
 pub(crate) mod ws;
 mod wsl_fs;
 
+#[cfg(test)]
 use crate::wasm_core::host_api::context::WasmHostContext;
 
 // ==================== Shared Guards ====================
@@ -49,8 +50,14 @@ use crate::wasm_core::host_api::context::WasmHostContext;
 ///
 /// 校验通过返回 true；拒绝时记录结构化错误日志并返回 false，
 /// 调用方据此返回 Err。替换原先约 30 处重复的 check/log 三连。
-pub(super) fn check_permission(host_ctx: &WasmHostContext, plugin_id: &str, permission: &str, api: &str) -> bool {
-    if host_ctx.permission.check(plugin_id, permission) {
+/// 签名收 `&dyn PermissionScope`（票 05 ISP）：域函数不再依赖上帝对象。
+pub(super) fn check_permission(
+    scope: &dyn crate::wasm_core::host_api::context::PermissionScope,
+    plugin_id: &str,
+    permission: &str,
+    api: &str,
+) -> bool {
+    if scope.permission().check(plugin_id, permission) {
         true
     } else {
         tracing::error!(plugin_id = %plugin_id, permission = %permission, api = %api, "permission denied");
@@ -132,14 +139,14 @@ pub(crate) mod tests {
     fn check_permission_granted_returns_true() {
         let ctx = build_host_ctx();
         grant_permissions(&ctx, "p1", &[crate::wasm_core::permission::PERMISSION_STORAGE]);
-        assert!(check_permission(&ctx, "p1", "storage", "host_test"));
+        assert!(check_permission(ctx.as_ref(), "p1", "storage", "host_test"));
     }
 
     /// 从未授权的插件：一律拒绝（grant 前 storage 也拿不到）
     #[test]
     fn check_permission_ungranted_plugin_rejected() {
         let ctx = build_host_ctx();
-        assert!(!check_permission(&ctx, "p1", "storage", "host_test"));
+        assert!(!check_permission(ctx.as_ref(), "p1", "storage", "host_test"));
     }
 
     /// 授权了 A 权限但请求 B 权限：拒绝（权限粒度隔离）
@@ -147,6 +154,6 @@ pub(crate) mod tests {
     fn check_permission_wrong_permission_rejected() {
         let ctx = build_host_ctx();
         grant_permissions(&ctx, "p1", &[crate::wasm_core::permission::PERMISSION_STORAGE]);
-        assert!(!check_permission(&ctx, "p1", "fs:read", "host_test"));
+        assert!(!check_permission(ctx.as_ref(), "p1", "fs:read", "host_test"));
     }
 }

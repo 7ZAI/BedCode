@@ -8,7 +8,6 @@
 //! 入口**：`host_api::session` 里那条同判据的旧别名已随 `host-session` interface
 //! 删除（`session:read` 这把第二钥匙彻底不存在）。
 
-use crate::wasm_core::host_api::context::WasmHostContext;
 use crate::wasm_core::runtime_util::block_on_async;
 use crate::wasm_core::permission::PERMISSION_CONNECTION_READ;
 
@@ -20,8 +19,9 @@ use crate::wasm_core::permission::PERMISSION_CONNECTION_READ;
 /// 字段（camelCase）：`{clientId, deviceName?, fingerprint?, addr, authenticated,
 /// connectedAt}`。排序 / 在线判定 / 会话数 / 任务状态合并是插件侧派生视图的职责
 /// （spec D3「派生视图（在线判定 + 会话数 + 任务状态合并）」）。
-pub(crate) fn connection_list(host_ctx: &WasmHostContext, plugin_id: &str) -> Result<String, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_CONNECTION_READ, "host_connection_list") {
+pub(crate) fn connection_list(
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope, plugin_id: &str) -> Result<String, String> {
+    if !super::check_permission(perm, plugin_id, PERMISSION_CONNECTION_READ, "host_connection_list") {
         return Err("permission denied".to_string());
     }
     let manager = crate::server::websocket::WebSocketManager::global();
@@ -57,11 +57,11 @@ mod tests {
     #[tokio::test]
     async fn connection_list_permission_and_empty_shape() {
         let ctx = build_host_ctx();
-        let err = connection_list(&ctx, PLUGIN).unwrap_err();
+        let err = connection_list(ctx.as_ref(), PLUGIN).unwrap_err();
         assert_eq!(err, "permission denied");
 
         grant_permissions(&ctx, PLUGIN, &[PERMISSION_CONNECTION_READ]);
-        let raw = connection_list(&ctx, PLUGIN).expect("connections list");
+        let raw = connection_list(ctx.as_ref(), PLUGIN).expect("connections list");
         let parsed: serde_json::Value = serde_json::from_str(&raw).expect("json array");
         assert!(parsed.is_array(), "必须为 JSON 数组（无头注册表为空）");
         assert_eq!(parsed, serde_json::json!([]));
@@ -76,7 +76,7 @@ mod tests {
     async fn session_read_alone_no_longer_reads_connections() {
         let ctx = build_host_ctx();
         grant_permissions(&ctx, PLUGIN, &[PERMISSION_SESSION_READ]);
-        let err = connection_list(&ctx, PLUGIN).unwrap_err();
+        let err = connection_list(ctx.as_ref(), PLUGIN).unwrap_err();
         assert_eq!(err, "permission denied", "本面只认 connection:read");
 
         // 旧别名（`host_api::session::session_connections_list`）已随 interface 删除：

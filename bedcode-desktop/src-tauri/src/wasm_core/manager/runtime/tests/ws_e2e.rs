@@ -800,18 +800,18 @@ fn test_ws_two_plugin_isolation() {
 
         // ==================== 零可见 ====================
         assert_eq!(
-            crate::wasm_core::host_api::ws::ws_list_endpoints(&ctx_b, PLUGIN_B).unwrap(),
+            crate::wasm_core::host_api::ws::ws_list_endpoints(ctx_b.as_ref(), PLUGIN_B).unwrap(),
             "[]",
             "B 看不到 A 的端点"
         );
         assert_eq!(
-            crate::wasm_core::host_api::ws::ws_list_clients(&ctx_b, PLUGIN_B, &endpoint_a)
+            crate::wasm_core::host_api::ws::ws_list_clients(ctx_b.as_ref(), PLUGIN_B, &endpoint_a)
                 .unwrap_err(),
             "not owner of ws endpoint",
             "B 不得查询 A 的端点客户端"
         );
         assert_eq!(
-            crate::wasm_core::host_api::ws::ws_is_connected(&ctx_a, PLUGIN_A, &handle_b)
+            crate::wasm_core::host_api::ws::ws_is_connected(ctx_a.as_ref(), PLUGIN_A, &handle_b)
                 .unwrap_err(),
             "not owner of ws handle",
             "A 不得操作 B 的出站句柄"
@@ -830,14 +830,14 @@ fn test_ws_two_plugin_isolation() {
             "A 的端点随停用回收"
         );
         assert!(
-            crate::wasm_core::host_api::ws::ws_is_connected(&ctx_b, PLUGIN_B, &handle_b)
+            crate::wasm_core::host_api::ws::ws_is_connected(ctx_b.as_ref(), PLUGIN_B, &handle_b)
                 .expect("B 句柄仍可查询"),
             "A 停用不得影响 B 的外部连接"
         );
         // B 的对端仍在线：可继续发送（fail-visible 之外的正向断言）
         assert!(
             crate::wasm_core::host_api::ws::ws_send_text(
-                &ctx_b,
+                ctx_b.as_ref(),
                 PLUGIN_B,
                 &handle_b,
                 "still-alive"

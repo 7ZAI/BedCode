@@ -4,7 +4,6 @@
 //! （`PluginServices::install_cli/uninstall_cli` 经 PluginHost 实现，
 //! 见 plugin/host/app_cli.rs）。插件只声明权限并传 file_name/bin_dir。
 
-use crate::wasm_core::host_api::context::WasmHostContext;
 use crate::wasm_core::runtime_util::block_on_async;
 use crate::wasm_core::permission::PERMISSION_APP_CLI;
 
@@ -12,8 +11,10 @@ use crate::wasm_core::permission::PERMISSION_APP_CLI;
 ///
 /// payload: `{ "file_name": "bedtask", "bin_dir": "" }` —— file_name 缺省
 /// "bedtask"（Windows 自动补 .exe）；bin_dir 为空用平台默认。
-pub(crate) fn install_cli(host_ctx: &WasmHostContext, plugin_id: &str, payload_json: &str) -> Result<String, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_APP_CLI, "host_app_install_cli") {
+pub(crate) fn install_cli(
+    svc: &dyn crate::wasm_core::host_api::context::ServicesScope,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope, plugin_id: &str, payload_json: &str) -> Result<String, String> {
+    if !super::check_permission(perm, plugin_id, PERMISSION_APP_CLI, "host_app_install_cli") {
         return Err("permission denied".to_string());
     }
     let payload: serde_json::Value =
@@ -30,13 +31,15 @@ pub(crate) fn install_cli(host_ctx: &WasmHostContext, plugin_id: &str, payload_j
         .to_string();
 
     let services =
-        block_on_async(host_ctx.services()).ok_or_else(|| "app error: host services unavailable".to_string())?;
+        block_on_async(svc.services()).ok_or_else(|| "app error: host services unavailable".to_string())?;
     block_on_async(services.install_cli(plugin_id.to_string(), file_name, bin_dir))
 }
 
 /// 卸载 CLI（权限 + 载荷解析 + 宿主服务执行）
-pub(crate) fn uninstall_cli(host_ctx: &WasmHostContext, plugin_id: &str, payload_json: &str) -> Result<(), String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_APP_CLI, "host_app_uninstall_cli") {
+pub(crate) fn uninstall_cli(
+    svc: &dyn crate::wasm_core::host_api::context::ServicesScope,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope, plugin_id: &str, payload_json: &str) -> Result<(), String> {
+    if !super::check_permission(perm, plugin_id, PERMISSION_APP_CLI, "host_app_uninstall_cli") {
         return Err("permission denied".to_string());
     }
     let payload: serde_json::Value =
@@ -53,7 +56,7 @@ pub(crate) fn uninstall_cli(host_ctx: &WasmHostContext, plugin_id: &str, payload
         .to_string();
 
     let services =
-        block_on_async(host_ctx.services()).ok_or_else(|| "app error: host services unavailable".to_string())?;
+        block_on_async(svc.services()).ok_or_else(|| "app error: host services unavailable".to_string())?;
     block_on_async(services.uninstall_cli(plugin_id.to_string(), file_name, bin_dir))
 }
 
@@ -62,9 +65,9 @@ pub(crate) fn uninstall_cli(host_ctx: &WasmHostContext, plugin_id: &str, payload
 /// 会话创建编排移交插件后（session-engine-downsink P1-b）宿主不再产生 `Creating`
 /// 生命周期事件，本原语成为插件取自身资源目录的唯一途径（Agent 集成 hook 脚本源
 /// 位于该目录）。未加载的插件 / 服务不可用 → `Err`（不静默返回空串）。
-pub(crate) fn plugin_resource_dir(host_ctx: &WasmHostContext, plugin_id: &str) -> Result<String, String> {
+pub(crate) fn plugin_resource_dir(svc: &dyn crate::wasm_core::host_api::context::ServicesScope, plugin_id: &str) -> Result<String, String> {
     let services =
-        block_on_async(host_ctx.services()).ok_or_else(|| "app error: host services unavailable".to_string())?;
+        block_on_async(svc.services()).ok_or_else(|| "app error: host services unavailable".to_string())?;
     block_on_async(services.plugin_resource_dir(plugin_id.to_string()))
 }
 
@@ -81,9 +84,9 @@ mod tests {
     #[test]
     fn cli_permission_denied() {
         let ctx = build_host_ctx();
-        let err = install_cli(&ctx, PLUGIN, "{}").unwrap_err();
+        let err = install_cli(ctx.as_ref(), ctx.as_ref(), PLUGIN, "{}").unwrap_err();
         assert_eq!(err, "permission denied");
-        let err = uninstall_cli(&ctx, PLUGIN, "{}").unwrap_err();
+        let err = uninstall_cli(ctx.as_ref(), ctx.as_ref(), PLUGIN, "{}").unwrap_err();
         assert_eq!(err, "permission denied");
     }
 
@@ -92,7 +95,7 @@ mod tests {
     fn cli_invalid_payload_rejected() {
         let ctx = build_host_ctx();
         grant_permissions(&ctx, PLUGIN, &[PERMISSION_APP_CLI]);
-        let err = install_cli(&ctx, PLUGIN, "not-json").unwrap_err();
+        let err = install_cli(ctx.as_ref(), ctx.as_ref(), PLUGIN, "not-json").unwrap_err();
         assert!(err.contains("invalid payload"), "got: {}", err);
     }
 
@@ -101,7 +104,7 @@ mod tests {
     async fn cli_services_unavailable_in_test_ctx() {
         let ctx = build_host_ctx();
         grant_permissions(&ctx, PLUGIN, &[PERMISSION_APP_CLI]);
-        let err = install_cli(&ctx, PLUGIN, r#"{"file_name":"bedtask"}"#).unwrap_err();
+        let err = install_cli(ctx.as_ref(), ctx.as_ref(), PLUGIN, r#"{"file_name":"bedtask"}"#).unwrap_err();
         assert!(err.contains("services unavailable"), "got: {}", err);
     }
 
@@ -113,7 +116,7 @@ mod tests {
     #[tokio::test]
     async fn plugin_resource_dir_has_no_permission_gate() {
         let ctx = build_host_ctx();
-        let err = plugin_resource_dir(&ctx, PLUGIN).unwrap_err();
+        let err = plugin_resource_dir(ctx.as_ref(), PLUGIN).unwrap_err();
         assert!(
             !err.contains("permission denied"),
             "资源目录不得设权限门，got: {err}"

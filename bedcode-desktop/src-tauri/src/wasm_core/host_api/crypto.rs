@@ -14,7 +14,6 @@
 //! 认证链路；密钥材料由调用方传入，宿主身份密钥（Kd / JWT keystore）不外泄。
 
 use crate::crypto::registry::{resolve_aead, resolve_kdf, resolve_key_agreement};
-use crate::wasm_core::host_api::context::WasmHostContext;
 use crate::wasm_core::permission::{PERMISSION_CRYPTO_AEAD, PERMISSION_CRYPTO_ASYM, PERMISSION_CRYPTO_KDF};
 
 /// 加密原语成功调用审计（AGENTS §8 / 票 04）：只记算法名，不落任何密钥/明文
@@ -24,7 +23,7 @@ fn audit(plugin_id: &str, api: &str, algorithm: &str) {
 
 /// AEAD 加密（`crypto:aead`）
 pub(crate) fn aead_encrypt(
-    host_ctx: &WasmHostContext,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
     plugin_id: &str,
     algorithm: &str,
     key: &[u8],
@@ -32,7 +31,7 @@ pub(crate) fn aead_encrypt(
     plaintext: &[u8],
     aad: Option<&[u8]>,
 ) -> Result<Vec<u8>, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_CRYPTO_AEAD, "host_crypto_aead_encrypt") {
+    if !super::check_permission(perm, plugin_id, PERMISSION_CRYPTO_AEAD, "host_crypto_aead_encrypt") {
         return Err("permission denied: crypto:aead".to_string());
     }
     let provider = resolve_aead(algorithm).map_err(|e| e.to_string())?;
@@ -45,7 +44,7 @@ pub(crate) fn aead_encrypt(
 
 /// AEAD 解密（`crypto:aead`）
 pub(crate) fn aead_decrypt(
-    host_ctx: &WasmHostContext,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
     plugin_id: &str,
     algorithm: &str,
     key: &[u8],
@@ -53,7 +52,7 @@ pub(crate) fn aead_decrypt(
     ciphertext: &[u8],
     aad: Option<&[u8]>,
 ) -> Result<Vec<u8>, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_CRYPTO_AEAD, "host_crypto_aead_decrypt") {
+    if !super::check_permission(perm, plugin_id, PERMISSION_CRYPTO_AEAD, "host_crypto_aead_decrypt") {
         return Err("permission denied: crypto:aead".to_string());
     }
     let provider = resolve_aead(algorithm).map_err(|e| e.to_string())?;
@@ -66,12 +65,12 @@ pub(crate) fn aead_decrypt(
 
 /// AEAD 密钥生成（`crypto:aead`）
 pub(crate) fn aead_generate_key(
-    host_ctx: &WasmHostContext,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
     plugin_id: &str,
     algorithm: &str,
 ) -> Result<Vec<u8>, String> {
     if !super::check_permission(
-        host_ctx,
+        perm,
         plugin_id,
         PERMISSION_CRYPTO_AEAD,
         "host_crypto_aead_generate_key",
@@ -85,12 +84,12 @@ pub(crate) fn aead_generate_key(
 
 /// AEAD nonce 生成（`crypto:aead`）
 pub(crate) fn aead_generate_nonce(
-    host_ctx: &WasmHostContext,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
     plugin_id: &str,
     algorithm: &str,
 ) -> Result<Vec<u8>, String> {
     if !super::check_permission(
-        host_ctx,
+        perm,
         plugin_id,
         PERMISSION_CRYPTO_AEAD,
         "host_crypto_aead_generate_nonce",
@@ -104,7 +103,7 @@ pub(crate) fn aead_generate_nonce(
 
 /// KDF 密钥派生（`crypto:kdf`）
 pub(crate) fn kdf_derive(
-    host_ctx: &WasmHostContext,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
     plugin_id: &str,
     algorithm: &str,
     salt: Option<&[u8]>,
@@ -112,7 +111,7 @@ pub(crate) fn kdf_derive(
     info: &[u8],
     length: u32,
 ) -> Result<Vec<u8>, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_CRYPTO_KDF, "host_crypto_kdf_derive") {
+    if !super::check_permission(perm, plugin_id, PERMISSION_CRYPTO_KDF, "host_crypto_kdf_derive") {
         return Err("permission denied: crypto:kdf".to_string());
     }
     let provider = resolve_kdf(algorithm).map_err(|e| e.to_string())?;
@@ -123,12 +122,12 @@ pub(crate) fn kdf_derive(
 
 /// 密钥交换临时密钥对（`crypto:asym`）——返回 `private ‖ public` 定长字节
 pub(crate) fn key_agreement_generate(
-    host_ctx: &WasmHostContext,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
     plugin_id: &str,
     algorithm: &str,
 ) -> Result<Vec<u8>, String> {
     if !super::check_permission(
-        host_ctx,
+        perm,
         plugin_id,
         PERMISSION_CRYPTO_ASYM,
         "host_crypto_keyagreement_generate",
@@ -146,14 +145,14 @@ pub(crate) fn key_agreement_generate(
 
 /// 密钥交换共享密钥（`crypto:asym`）
 pub(crate) fn key_agreement_shared(
-    host_ctx: &WasmHostContext,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
     plugin_id: &str,
     algorithm: &str,
     local_private: &[u8],
     peer_public: &[u8],
 ) -> Result<Vec<u8>, String> {
     if !super::check_permission(
-        host_ctx,
+        perm,
         plugin_id,
         PERMISSION_CRYPTO_ASYM,
         "host_crypto_keyagreement_shared",

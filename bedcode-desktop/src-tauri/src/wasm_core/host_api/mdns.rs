@@ -21,12 +21,11 @@
 use bedcode_plugin_api::host::bus::owned_topic;
 use bedcode_plugin_api::host::mdns::{MDNS_FOUND, MDNS_LOST};
 
-use crate::wasm_core::host_api::context::WasmHostContext;
 use crate::wasm_core::permission::PERMISSION_MDNS;
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::sync::{Arc, LazyLock, Mutex, OnceLock};
+use std::sync::{LazyLock, Mutex, OnceLock};
 
 /// 全局唯一 mDNS 守护（本进程共享同一实例；mdns-sd 设计即为单守护多服务共享，
 /// browse / register 各自独立订阅，互不干扰）。
@@ -101,8 +100,10 @@ pub(crate) fn shared_daemon() -> ServiceDaemon {
 // ==================== 浏览原语 ====================
 
 /// 浏览某服务类型：铸造 browser-id（`mdnsbr-<uuid>`）并启动事件定向投递循环
-pub(crate) fn mdns_browse(host_ctx: &WasmHostContext, plugin_id: &str, service_type: &str) -> Result<String, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_MDNS, "host_mdns_browse") {
+pub(crate) fn mdns_browse(
+    app: &dyn crate::wasm_core::host_api::context::AppHandleScope,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope, plugin_id: &str, service_type: &str) -> Result<String, String> {
+    if !super::check_permission(perm, plugin_id, PERMISSION_MDNS, "host_mdns_browse") {
         return Err(denied());
     }
     let service_type = service_type.trim().to_string();
@@ -119,7 +120,7 @@ pub(crate) fn mdns_browse(host_ctx: &WasmHostContext, plugin_id: &str, service_t
     let event_service_type = service_type.clone();
     // 自播回显过滤用：捕获宿主 AppHandle，事件循环内按需读取本机节点 ID
     // （节点可能晚于 browse 启动，须在事件时刻实时比对而非 browse 时刻）
-    let app_handle = host_ctx.app_handle.clone();
+    let app_handle = app.app_handle().cloned();
     let task = tauri::async_runtime::spawn(async move {
         let browser_id = task_browser_id;
         // found/lost 定向投递；SearchStarted/Resolved 之外的编排事件忽略
@@ -199,8 +200,9 @@ pub(crate) fn mdns_browse(host_ctx: &WasmHostContext, plugin_id: &str, service_t
 
 /// 停止浏览并回收句柄：权限门 + 属主校验后退订；事件循环随 channel 断开退出。
 /// 返回是否存在该句柄（幂等：未知句柄 false）
-pub(crate) fn mdns_stop_browse(host_ctx: &WasmHostContext, plugin_id: &str, browser_id: &str) -> Result<bool, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_MDNS, "host_mdns_stop_browse") {
+pub(crate) fn mdns_stop_browse(
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope, plugin_id: &str, browser_id: &str) -> Result<bool, String> {
+    if !super::check_permission(perm, plugin_id, PERMISSION_MDNS, "host_mdns_stop_browse") {
         return Err(denied());
     }
     stop_browser(plugin_id, browser_id)
@@ -246,8 +248,9 @@ struct AdvertiseConfig {
 
 /// 广播某服务类型（v2 新增）：铸造 advertise 句柄（`mdnsad-<uuid>`），
 /// 共享守护注册 + 周期续期 + 句柄登记（owner = 调用插件）
-pub(crate) fn mdns_advertise(host_ctx: &WasmHostContext, plugin_id: &str, config_json: &str) -> Result<String, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_MDNS, "host_mdns_advertise") {
+pub(crate) fn mdns_advertise(
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope, plugin_id: &str, config_json: &str) -> Result<String, String> {
+    if !super::check_permission(perm, plugin_id, PERMISSION_MDNS, "host_mdns_advertise") {
         return Err(denied());
     }
     let config: AdvertiseConfig =
@@ -335,11 +338,11 @@ async fn run_reannounce_loop(daemon: ServiceDaemon, service_info: ServiceInfo) {
 /// 停止广播并回收句柄：权限门 + 属主校验 → 注销 → 回收续期任务。
 /// 返回是否存在该句柄（幂等：未知句柄 false）
 pub(crate) fn mdns_stop_advertise(
-    host_ctx: &WasmHostContext,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
     plugin_id: &str,
     advertise_id: &str,
 ) -> Result<bool, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_MDNS, "host_mdns_stop_advertise") {
+    if !super::check_permission(perm, plugin_id, PERMISSION_MDNS, "host_mdns_stop_advertise") {
         return Err(denied());
     }
     stop_advertise(plugin_id, advertise_id)
@@ -381,11 +384,11 @@ fn stop_advertise(owner: &str, advertise_id: &str) -> Result<bool, String> {
 
 /// 查询广播状态（返回是否存在该句柄）：权限门 + 属主校验（跨插件拒绝）
 pub(crate) fn mdns_is_advertising(
-    host_ctx: &WasmHostContext,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
     plugin_id: &str,
     advertise_id: &str,
 ) -> Result<bool, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_MDNS, "host_mdns_is_advertising") {
+    if !super::check_permission(perm, plugin_id, PERMISSION_MDNS, "host_mdns_is_advertising") {
         return Err(denied());
     }
     let table = ADVERTISERS.lock().expect("mdns advertiser table lock poisoned");
@@ -492,7 +495,7 @@ fn publish_mdns(topic: &str, payload: serde_json::Value) {
 /// 无 app 句柄（无头/测试）或节点未启动时返回 false——无法比对即不拦截，
 /// 与现状一致（引擎 handle_browse_event 的同口径过滤在独立浏览缺失，此处补齐）
 fn is_self_broadcast(
-    app_handle: &Option<Arc<tauri::AppHandle>>,
+    app_handle: &Option<tauri::AppHandle>,
     txt: &std::collections::BTreeMap<String, String>,
 ) -> bool {
     let Some(app) = app_handle.as_ref() else {
@@ -516,11 +519,11 @@ mod tests {
     fn mdns_denied_without_permission() {
         let ctx = build_host_ctx();
         assert_eq!(
-            mdns_browse(&ctx, "com.bedcode.no-mdns", "_bedcode._tcp").unwrap_err(),
+            mdns_browse(ctx.as_ref(), ctx.as_ref(), "com.bedcode.no-mdns", "_bedcode._tcp").unwrap_err(),
             denied()
         );
         assert_eq!(
-            mdns_stop_browse(&ctx, "com.bedcode.no-mdns", "mdnsbr-nonexistent").unwrap_err(),
+            mdns_stop_browse(ctx.as_ref(), "com.bedcode.no-mdns", "mdnsbr-nonexistent").unwrap_err(),
             denied()
         );
     }
@@ -531,7 +534,7 @@ mod tests {
     fn mdns_granted_passes_permission_gate() {
         let ctx = build_host_ctx();
         grant_permissions(&ctx, "com.bedcode.mdns-ok", &[PERMISSION_MDNS]);
-        let err = mdns_advertise(&ctx, "com.bedcode.mdns-ok", "not-a-json").expect_err("坏配置应报错");
+        let err = mdns_advertise(ctx.as_ref(), "com.bedcode.mdns-ok", "not-a-json").expect_err("坏配置应报错");
         assert!(!err.contains("permission denied"), "已授予 mdns 仍被权限门拒绝: {err}");
         assert!(err.contains("invalid config"), "预期参数校验错误: {err}");
     }

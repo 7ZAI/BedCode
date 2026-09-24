@@ -367,28 +367,28 @@ fn execute_unit(host_ctx: &Arc<WasmHostContext>, owner: &str, unit: &PlanUnit) -
             "fs.read" => {
                 let path = unit.params.get("path").and_then(|v| v.as_str());
                 match path {
-                    Some(p) => fs::fs_read(host_ctx, owner, p).map(|v| v.map(|c| serde_json::json!(c).to_string())),
+                    Some(p) => fs::fs_read(host_ctx.as_ref(), owner, p).map(|v| v.map(|c| serde_json::json!(c).to_string())),
                     None => Err("fs.read: missing path".to_string()),
                 }
             }
             "fs.read-dir" => {
                 let path = unit.params.get("path").and_then(|v| v.as_str());
                 match path {
-                    Some(p) => fs::fs_read_dir(host_ctx, owner, p).map(Some),
+                    Some(p) => fs::fs_read_dir(host_ctx.as_ref(), owner, p).map(Some),
                     None => Err("fs.read-dir: missing path".to_string()),
                 }
             }
             "fs.stat" => {
                 let path = unit.params.get("path").and_then(|v| v.as_str());
                 match path {
-                    Some(p) => fs::fs_stat(host_ctx, owner, p),
+                    Some(p) => fs::fs_stat(host_ctx.as_ref(), owner, p),
                     None => Err("fs.stat: missing path".to_string()),
                 }
             }
             "fs.exists" => {
                 let path = unit.params.get("path").and_then(|v| v.as_str());
                 match path {
-                    Some(p) => fs::fs_exists(host_ctx, owner, p).map(|b| Some(serde_json::json!(b).to_string())),
+                    Some(p) => fs::fs_exists(host_ctx.as_ref(), owner, p).map(|b| Some(serde_json::json!(b).to_string())),
                     None => Err("fs.exists: missing path".to_string()),
                 }
             }
@@ -396,13 +396,13 @@ fn execute_unit(host_ctx: &Arc<WasmHostContext>, owner: &str, unit: &PlanUnit) -
                 let path = unit.params.get("path").and_then(|v| v.as_str());
                 let data = unit.params.get("data").and_then(|v| v.as_str());
                 match (path, data) {
-                    (Some(p), Some(d)) => fs::fs_write(host_ctx, owner, p, d).map(|_| Some("null".to_string())),
+                    (Some(p), Some(d)) => fs::fs_write(host_ctx.as_ref(), owner, p, d).map(|_| Some("null".to_string())),
                     (Some(_), None) => Err("fs.write: missing data".to_string()),
                     _ => Err("fs.write: missing path".to_string()),
                 }
             }
-            "process.run-sync" => process::process_run_sync(host_ctx, owner, &unit.params.to_string()).map(Some),
-            "http.fetch" => match http::http_fetch(host_ctx, owner, &unit.params.to_string()) {
+            "process.run-sync" => process::process_run_sync(host_ctx.as_ref(), owner, &unit.params.to_string()).map(Some),
+            "http.fetch" => match http::http_fetch(host_ctx.as_ref(), host_ctx.as_ref(), owner, &unit.params.to_string()) {
                 Ok(opt) => Ok(opt.map(|v| serde_json::json!(v).to_string())),
                 Err(e) => Err(e),
             },

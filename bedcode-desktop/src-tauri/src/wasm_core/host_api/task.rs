@@ -28,7 +28,7 @@ pub(crate) fn execute_batch(
     plugin_id: &str,
     plan_json: &str,
 ) -> Result<String, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_TASK_RUN, "host_task_execute_batch") {
+    if !super::check_permission(host_ctx.as_ref(), plugin_id, PERMISSION_TASK_RUN, "host_task_execute_batch") {
         return Err("permission denied".to_string());
     }
     core_task::execute_batch(host_ctx.clone(), plugin_id, plan_json)
@@ -37,7 +37,7 @@ pub(crate) fn execute_batch(
 /// `submit`：异步任务，登记后立即返回 `task-<hex>` 句柄；进度/终态经
 /// `events-task#on-task-event` 回调；`cancel` 协作式取消。
 pub(crate) fn submit(host_ctx: &Arc<WasmHostContext>, plugin_id: &str, plan_json: &str) -> Result<String, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_TASK_RUN, "host_task_submit") {
+    if !super::check_permission(host_ctx.as_ref(), plugin_id, PERMISSION_TASK_RUN, "host_task_submit") {
         return Err("permission denied".to_string());
     }
     core_task::submit(host_ctx.clone(), plugin_id, plan_json)
@@ -45,7 +45,7 @@ pub(crate) fn submit(host_ctx: &Arc<WasmHostContext>, plugin_id: &str, plan_json
 
 /// `status`：任务状态自愈快照（事件丢失后查询）。`Ok(None)` = 不存在 / 非属主。
 pub(crate) fn status(host_ctx: &Arc<WasmHostContext>, plugin_id: &str, job_id: &str) -> Result<Option<String>, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_TASK_RUN, "host_task_status") {
+    if !super::check_permission(host_ctx.as_ref(), plugin_id, PERMISSION_TASK_RUN, "host_task_status") {
         return Err("permission denied".to_string());
     }
     core_task::status(plugin_id, job_id)
@@ -53,7 +53,7 @@ pub(crate) fn status(host_ctx: &Arc<WasmHostContext>, plugin_id: &str, job_id: &
 
 /// `cancel`：协作式取消（正在执行的单元跑完或超时，未开始单元 skipped）；幂等。
 pub(crate) fn cancel(host_ctx: &Arc<WasmHostContext>, plugin_id: &str, job_id: &str) -> Result<bool, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_TASK_RUN, "host_task_cancel") {
+    if !super::check_permission(host_ctx.as_ref(), plugin_id, PERMISSION_TASK_RUN, "host_task_cancel") {
         return Err("permission denied".to_string());
     }
     core_task::cancel(plugin_id, job_id)
@@ -61,7 +61,7 @@ pub(crate) fn cancel(host_ctx: &Arc<WasmHostContext>, plugin_id: &str, job_id: &
 
 /// `list-jobs`：本插件在册任务清单（自愈快照）
 pub(crate) fn list_jobs(host_ctx: &Arc<WasmHostContext>, plugin_id: &str) -> Result<String, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_TASK_RUN, "host_task_list_jobs") {
+    if !super::check_permission(host_ctx.as_ref(), plugin_id, PERMISSION_TASK_RUN, "host_task_list_jobs") {
         return Err("permission denied".to_string());
     }
     core_task::list_jobs(plugin_id)

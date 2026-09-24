@@ -2,7 +2,6 @@
 //!
 //! 宿主侧只负责"到点调用插件 command"，具体到点做什么、幂等与否归插件。
 
-use crate::wasm_core::host_api::context::WasmHostContext;
 use crate::wasm_core::runtime_util::block_on_async;
 use crate::wasm_core::permission::PERMISSION_TIMER;
 
@@ -15,12 +14,13 @@ const MIN_TIMER_INTERVAL_SECS: u64 = 1;
 /// 参数附带 `now_ms`（Unix 毫秒）与 `now_utc`（UTC "YYYY-MM-DD HH:MM:SS"，
 /// 与 SQLite datetime('now') 同格式）。重复注册替换已有定时器。
 pub(crate) fn timer_register(
-    host_ctx: &WasmHostContext,
+    svc: &dyn crate::wasm_core::host_api::context::ServicesScope,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
     plugin_id: &str,
     interval_secs: u64,
     command: &str,
 ) -> Result<(), String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_TIMER, "host_timer_register") {
+    if !super::check_permission(perm, plugin_id, PERMISSION_TIMER, "host_timer_register") {
         return Err("permission denied".to_string());
     }
     if command.is_empty() {
@@ -28,7 +28,7 @@ pub(crate) fn timer_register(
     }
     let interval = interval_secs.max(MIN_TIMER_INTERVAL_SECS);
     // 两阶段初始化：PluginHost 构造完成后才注入 services
-    let services = block_on_async(host_ctx.services())
+    let services = block_on_async(svc.services())
         .ok_or_else(|| format!("timer error: plugin services not initialized yet for '{}'", plugin_id))?;
     services.register_plugin_timer(plugin_id.to_string(), interval, command.to_string());
     tracing::info!(
@@ -51,7 +51,7 @@ mod tests {
     #[test]
     fn timer_register_permission_denied() {
         let ctx = build_host_ctx();
-        let err = timer_register(&ctx, "test-plugin", 5, "my.command").unwrap_err();
+        let err = timer_register(ctx.as_ref(), ctx.as_ref(), "test-plugin", 5, "my.command").unwrap_err();
         assert_eq!(err, "permission denied");
     }
 
@@ -60,7 +60,7 @@ mod tests {
     fn timer_register_empty_command_rejected() {
         let ctx = build_host_ctx();
         grant_permissions(&ctx, "test-plugin", &[PERMISSION_TIMER]);
-        let err = timer_register(&ctx, "test-plugin", 5, "").unwrap_err();
+        let err = timer_register(ctx.as_ref(), ctx.as_ref(), "test-plugin", 5, "").unwrap_err();
         assert_eq!(err, "timer error: empty command name");
     }
 
@@ -69,7 +69,7 @@ mod tests {
     async fn timer_register_services_not_ready() {
         let ctx = build_host_ctx();
         grant_permissions(&ctx, "test-plugin", &[PERMISSION_TIMER]);
-        let err = timer_register(&ctx, "test-plugin", 5, "my.command").unwrap_err();
+        let err = timer_register(ctx.as_ref(), ctx.as_ref(), "test-plugin", 5, "my.command").unwrap_err();
         assert!(err.contains("not initialized yet"), "got: {}", err);
     }
 

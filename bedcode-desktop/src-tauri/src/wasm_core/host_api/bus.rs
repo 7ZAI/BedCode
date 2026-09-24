@@ -4,7 +4,6 @@ use bedcode_plugin_api::host::bus::{
     is_legacy_owner_suffix, is_reply_topic, owned_topic, topic_owner, API_TOPIC_PREFIX,
 };
 
-use crate::wasm_core::host_api::context::WasmHostContext;
 
 // ==================== Topic 命名空间门禁（审计票 05，P0-4） ====================
 
@@ -70,7 +69,7 @@ fn check_subscribe_access(plugin_id: &str, topic: &str) -> Result<(), String> {
 /// topic 的目标 api 必须命中某已激活插件的声明清单（注册表只在激活态登记）；
 /// `bedcode.api.reply.` 是响应通道（回复 topic 的调用方即为目标），免校验；
 /// 普通广播 topic 不校验，保持向后兼容。
-fn check_api_gate(host_ctx: &WasmHostContext, plugin_id: &str, topic: &str) -> Result<(), String> {
+fn check_api_gate(sec: &dyn crate::wasm_core::host_api::context::SecurityScope, plugin_id: &str, topic: &str) -> Result<(), String> {
     if let Some(api) = topic.strip_prefix(API_TOPIC_PREFIX) {
         if !api.starts_with("reply.") {
             // 互调门经 core-security 授权框架路由（三段管线；行为与直查注册表等价）
@@ -80,7 +79,7 @@ fn check_api_gate(host_ctx: &WasmHostContext, plugin_id: &str, topic: &str) -> R
                 operation: "invoke",
                 target: api,
             };
-            if host_ctx.security().authorize(&req) != crate::wasm_core::security::AuthDecision::Allow {
+            if sec.security().authorize(&req) != crate::wasm_core::security::AuthDecision::Allow {
                 tracing::warn!(
                     plugin_id = %plugin_id,
                     topic = %topic,
@@ -102,17 +101,18 @@ fn check_api_gate(host_ctx: &WasmHostContext, plugin_id: &str, topic: &str) -> R
 /// 与 [`check_api_gate`] 读同一张注册表（`ApiCallAuthorizer` 的命中判定即
 /// `registry.contains`），故「门禁放行」与「取到属主」不会漂移。
 /// 回复道 / 公开 topic → `None`（无属主可校验）。
-pub(crate) fn api_gate_target_owner(host_ctx: &WasmHostContext, request_topic: &str) -> Option<String> {
+pub(crate) fn api_gate_target_owner(reg: &dyn crate::wasm_core::host_api::context::ApiRegistryScope, request_topic: &str) -> Option<String> {
     let api = request_topic.strip_prefix(API_TOPIC_PREFIX)?;
     if api.starts_with("reply.") {
         return None;
     }
-    host_ctx.api_registry().owner_of(api)
+    reg.api_registry().owner_of(api)
 }
 
 /// 发布 JSON 消息到 Topic（同步投递，总线内部异步派发）
 pub(crate) fn bus_publish(
-    host_ctx: &WasmHostContext,
+    bus: &dyn crate::wasm_core::host_api::context::BusScope,
+    sec: &dyn crate::wasm_core::host_api::context::SecurityScope,
     plugin_id: &str,
     topic: &str,
     payload_json: &str,
@@ -121,9 +121,9 @@ pub(crate) fn bus_publish(
         serde_json::from_str(payload_json).map_err(|e| format!("bus error: invalid JSON payload: {}", e))?;
 
     check_namespace(plugin_id, topic, "publish", "that plugin (and the host)")?;
-    check_api_gate(host_ctx, plugin_id, topic)?;
+    check_api_gate(sec, plugin_id, topic)?;
 
-    let bus = host_ctx.message_bus.clone();
+    let bus = bus.message_bus().clone();
     bus.publish(topic, plugin_id, payload);
     Ok(())
 }
@@ -131,15 +131,16 @@ pub(crate) fn bus_publish(
 /// 发布二进制消息到 Topic（v11）：字节列原样透传（零 JSON 编解码，
 /// 可传非 UTF-8 与大载荷）；互调门禁语义与 JSON 发布一致（防绕过）
 pub(crate) fn bus_publish_binary(
-    host_ctx: &WasmHostContext,
+    bus: &dyn crate::wasm_core::host_api::context::BusScope,
+    sec: &dyn crate::wasm_core::host_api::context::SecurityScope,
     plugin_id: &str,
     topic: &str,
     payload: Vec<u8>,
 ) -> Result<(), String> {
     check_namespace(plugin_id, topic, "publish", "that plugin (and the host)")?;
-    check_api_gate(host_ctx, plugin_id, topic)?;
+    check_api_gate(sec, plugin_id, topic)?;
 
-    let bus = host_ctx.message_bus.clone();
+    let bus = bus.message_bus().clone();
     bus.publish_binary(topic, plugin_id, payload);
     Ok(())
 }
@@ -152,9 +153,9 @@ pub(crate) fn bus_publish_binary(
 ///
 /// 命名空间/回复道/legacy 门禁在 spawn **之前**同步判定：错误必须回给 guest，
 /// 不能退化成「返回 Ok 但没订阅上」。
-pub(crate) fn bus_subscribe(host_ctx: &WasmHostContext, plugin_id: &str, topic: &str) -> Result<(), String> {
+pub(crate) fn bus_subscribe(bus: &dyn crate::wasm_core::host_api::context::BusScope, plugin_id: &str, topic: &str) -> Result<(), String> {
     check_subscribe_access(plugin_id, topic)?;
-    let bus = host_ctx.message_bus.clone();
+    let bus = bus.message_bus().clone();
     let Ok(handle) = tokio::runtime::Handle::try_current() else {
         tracing::warn!(plugin_id = %plugin_id, topic = %topic, "bus_subscribe: no runtime context, subscription dropped");
         return Err("bus error: no runtime context".to_string());
@@ -169,9 +170,9 @@ pub(crate) fn bus_subscribe(host_ctx: &WasmHostContext, plugin_id: &str, topic: 
 
 /// 以二进制格式偏好订阅（v11）：只接收 publish-binary 投递，
 /// JSON 消息对其按格式不匹配拒绝（与 subscribe 同因异步投递）
-pub(crate) fn bus_subscribe_binary(host_ctx: &WasmHostContext, plugin_id: &str, topic: &str) -> Result<(), String> {
+pub(crate) fn bus_subscribe_binary(bus: &dyn crate::wasm_core::host_api::context::BusScope, plugin_id: &str, topic: &str) -> Result<(), String> {
     check_subscribe_access(plugin_id, topic)?;
-    let bus = host_ctx.message_bus.clone();
+    let bus = bus.message_bus().clone();
     let Ok(handle) = tokio::runtime::Handle::try_current() else {
         tracing::warn!(plugin_id = %plugin_id, topic = %topic, "bus_subscribe_binary: no runtime context, subscription dropped");
         return Err("bus error: no runtime context".to_string());
@@ -188,9 +189,9 @@ pub(crate) fn bus_subscribe_binary(host_ctx: &WasmHostContext, plugin_id: &str, 
 ///
 /// 只过命名空间门：legacy/回复道形态在此不拦——退订是清理动作，必须幂等可用
 /// （旧产物退订它曾订阅过的串不应被新规则噎住）
-pub(crate) fn bus_unsubscribe(host_ctx: &WasmHostContext, plugin_id: &str, topic: &str) -> Result<(), String> {
+pub(crate) fn bus_unsubscribe(bus: &dyn crate::wasm_core::host_api::context::BusScope, plugin_id: &str, topic: &str) -> Result<(), String> {
     check_namespace(plugin_id, topic, "unsubscribe", "that plugin (and the host)")?;
-    let bus = host_ctx.message_bus.clone();
+    let bus = bus.message_bus().clone();
     let Ok(handle) = tokio::runtime::Handle::try_current() else {
         tracing::warn!(plugin_id = %plugin_id, topic = %topic, "bus_unsubscribe: no runtime context, unsubscribe dropped");
         return Err("bus error: no runtime context".to_string());
@@ -241,7 +242,7 @@ mod tests {
     #[test]
     fn bus_publish_invalid_json_rejected() {
         let ctx = build_host_ctx();
-        let err = bus_publish(&ctx, "plugin-a", "topic", "not-json").unwrap_err();
+        let err = bus_publish(ctx.as_ref(), ctx.as_ref(), "plugin-a", "topic", "not-json").unwrap_err();
         assert!(err.contains("invalid JSON payload"), "got: {}", err);
     }
 
@@ -255,7 +256,7 @@ mod tests {
             .subscribe_static("plugin-b", "greeting", Box::new(ChannelHandler(tx)))
             .await;
 
-        bus_publish(&ctx, "plugin-a", "greeting", r#"{"hello":"world"}"#).expect("publish ok");
+        bus_publish(ctx.as_ref(), ctx.as_ref(), "plugin-a", "greeting", r#"{"hello":"world"}"#).expect("publish ok");
 
         let msg = rx.recv().await.expect("subscriber must receive message");
         assert_eq!(msg.topic, "greeting");
@@ -272,7 +273,8 @@ mod tests {
         ctx.api_registry()
             .register("com.bedcode.scheduler", &["com.bedcode.scheduler.add".to_string()]);
         bus_publish(
-            &ctx,
+                        ctx.as_ref(),
+            ctx.as_ref(),
             "plugin-a",
             "bedcode.api.com.bedcode.scheduler.add",
             r#"{"jsonrpc":"2.0"}"#,
@@ -284,7 +286,7 @@ mod tests {
     #[test]
     fn gate_rejects_undeclared_api() {
         let ctx = build_host_ctx();
-        let err = bus_publish(&ctx, "plugin-a", "bedcode.api.com.bedcode.scheduler.remove", "{}").unwrap_err();
+        let err = bus_publish(ctx.as_ref(), ctx.as_ref(), "plugin-a", "bedcode.api.com.bedcode.scheduler.remove", "{}").unwrap_err();
         assert!(err.contains("not declared"), "got: {}", err);
         assert!(err.contains("com.bedcode.scheduler.remove"), "got: {}", err);
     }
@@ -296,7 +298,7 @@ mod tests {
         ctx.api_registry()
             .register("com.bedcode.scheduler", &["com.bedcode.scheduler.add".to_string()]);
         ctx.api_registry().unregister("com.bedcode.scheduler");
-        let err = bus_publish(&ctx, "plugin-a", "bedcode.api.com.bedcode.scheduler.add", "{}").unwrap_err();
+        let err = bus_publish(ctx.as_ref(), ctx.as_ref(), "plugin-a", "bedcode.api.com.bedcode.scheduler.add", "{}").unwrap_err();
         assert!(err.contains("not declared"), "got: {}", err);
     }
 
@@ -305,7 +307,8 @@ mod tests {
     fn gate_allows_reply_topic() {
         let ctx = build_host_ctx();
         bus_publish(
-            &ctx,
+                        ctx.as_ref(),
+            ctx.as_ref(),
             "com.bedcode.scheduler",
             "bedcode.api.reply.com.bedcode.caller.req-1",
             r#"{"jsonrpc":"2.0","result":1}"#,
@@ -317,7 +320,7 @@ mod tests {
     #[test]
     fn gate_ignores_regular_topics() {
         let ctx = build_host_ctx();
-        bus_publish(&ctx, "plugin-a", "filesrv:peer_changed", "{}").expect("regular topics must bypass gate");
+        bus_publish(ctx.as_ref(), ctx.as_ref(), "plugin-a", "filesrv:peer_changed", "{}").expect("regular topics must bypass gate");
     }
 
     /// 门禁只校验目标（层 1）：任意已激活插件声明的 api 均可调，不校验调用方身份
@@ -326,7 +329,7 @@ mod tests {
         let ctx = build_host_ctx();
         ctx.api_registry()
             .register("com.bedcode.scheduler", &["com.bedcode.scheduler.list".to_string()]);
-        bus_publish(&ctx, "any-plugin", "bedcode.api.com.bedcode.scheduler.list", "{}")
+        bus_publish(ctx.as_ref(), ctx.as_ref(), "any-plugin", "bedcode.api.com.bedcode.scheduler.list", "{}")
             .expect("layer 1 gate checks target declaration only");
     }
 
@@ -340,7 +343,7 @@ mod tests {
             .subscribe_static("plugin-a", "echo", Box::new(ChannelHandler(tx)))
             .await;
 
-        bus_publish(&ctx, "plugin-a", "echo", "{}").expect("publish ok");
+        bus_publish(ctx.as_ref(), ctx.as_ref(), "plugin-a", "echo", "{}").expect("publish ok");
 
         // 短等待后通道应仍为空：同 sender 订阅不投递
         match tokio::time::timeout(std::time::Duration::from_millis(300), rx.recv()).await {
@@ -354,7 +357,7 @@ mod tests {
     #[test]
     fn bus_subscribe_no_runtime_context_rejected() {
         let ctx = build_host_ctx();
-        let err = bus_subscribe(&ctx, "plugin-a", "topic").unwrap_err();
+        let err = bus_subscribe(ctx.as_ref(), "plugin-a", "topic").unwrap_err();
         assert_eq!(err, "bus error: no runtime context");
     }
 
@@ -362,7 +365,7 @@ mod tests {
     #[test]
     fn bus_unsubscribe_no_runtime_context_rejected() {
         let ctx = build_host_ctx();
-        let err = bus_unsubscribe(&ctx, "plugin-a", "topic").unwrap_err();
+        let err = bus_unsubscribe(ctx.as_ref(), "plugin-a", "topic").unwrap_err();
         assert_eq!(err, "bus error: no runtime context");
     }
 
@@ -370,8 +373,8 @@ mod tests {
     #[tokio::test]
     async fn bus_subscribe_unsubscribe_inside_runtime_ok() {
         let ctx = build_host_ctx();
-        bus_subscribe(&ctx, "plugin-a", "topic").expect("subscribe ok");
-        bus_unsubscribe(&ctx, "plugin-a", "topic").expect("unsubscribe ok");
+        bus_subscribe(ctx.as_ref(), "plugin-a", "topic").expect("subscribe ok");
+        bus_unsubscribe(ctx.as_ref(), "plugin-a", "topic").expect("unsubscribe ok");
     }
 
     // ==================== topic 命名空间门禁（审计票 05，P0-4） ====================
@@ -380,7 +383,7 @@ mod tests {
     #[tokio::test]
     async fn subscribe_rejects_other_namespace() {
         let ctx = build_host_ctx();
-        let err = bus_subscribe(&ctx, "com.evil", "com.victim::pty:exit").unwrap_err();
+        let err = bus_subscribe(ctx.as_ref(), "com.evil", "com.victim::pty:exit").unwrap_err();
         assert!(err.contains("namespace"), "got: {}", err);
         assert!(err.contains("com.victim"), "错误须点出属主: got: {}", err);
     }
@@ -389,7 +392,7 @@ mod tests {
     #[tokio::test]
     async fn subscribe_binary_rejects_other_namespace() {
         let ctx = build_host_ctx();
-        let err = bus_subscribe_binary(&ctx, "com.evil", "com.victim::blob:chunk").unwrap_err();
+        let err = bus_subscribe_binary(ctx.as_ref(), "com.evil", "com.victim::blob:chunk").unwrap_err();
         assert!(err.contains("namespace"), "got: {}", err);
     }
 
@@ -397,14 +400,14 @@ mod tests {
     #[tokio::test]
     async fn subscribe_allows_own_namespace() {
         let ctx = build_host_ctx();
-        bus_subscribe(&ctx, "com.victim", "com.victim::pty:exit").expect("own namespace must pass");
+        bus_subscribe(ctx.as_ref(), "com.victim", "com.victim::pty:exit").expect("own namespace must pass");
     }
 
     /// 跨命名空间伪发布（他人收件箱投毒）：拒绝
     #[tokio::test]
     async fn publish_rejects_other_namespace() {
         let ctx = build_host_ctx();
-        let err = bus_publish(&ctx, "com.evil", "com.victim::pty:exit", "{}").unwrap_err();
+        let err = bus_publish(ctx.as_ref(), ctx.as_ref(), "com.evil", "com.victim::pty:exit", "{}").unwrap_err();
         assert!(err.contains("namespace"), "got: {}", err);
     }
 
@@ -412,7 +415,7 @@ mod tests {
     #[tokio::test]
     async fn publish_binary_rejects_other_namespace() {
         let ctx = build_host_ctx();
-        let err = bus_publish_binary(&ctx, "com.evil", "com.victim::blob:chunk", vec![1, 2]).unwrap_err();
+        let err = bus_publish_binary(ctx.as_ref(), ctx.as_ref(), "com.evil", "com.victim::blob:chunk", vec![1, 2]).unwrap_err();
         assert!(err.contains("namespace"), "got: {}", err);
     }
 
@@ -420,8 +423,8 @@ mod tests {
     #[tokio::test]
     async fn publish_public_topic_unaffected_by_namespace_gate() {
         let ctx = build_host_ctx();
-        bus_publish(&ctx, "com.evil", "task:status-changed", "{}").expect("public topic must pass");
-        bus_subscribe(&ctx, "com.evil", "peer:consent").expect("public subscribe must pass");
+        bus_publish(ctx.as_ref(), ctx.as_ref(), "com.evil", "task:status-changed", "{}").expect("public topic must pass");
+        bus_subscribe(ctx.as_ref(), "com.evil", "peer:consent").expect("public subscribe must pass");
     }
 
     /// legacy 定向形态（`<base>.<自身 id>`，SDK 旧助手产出的串）：显式拒绝并回带新形态，
@@ -429,7 +432,7 @@ mod tests {
     #[tokio::test]
     async fn subscribe_rejects_legacy_owner_suffix() {
         let ctx = build_host_ctx();
-        let err = bus_subscribe(&ctx, "com.victim", "pty:exit.com.victim").unwrap_err();
+        let err = bus_subscribe(ctx.as_ref(), "com.victim", "pty:exit.com.victim").unwrap_err();
         assert!(err.contains("legacy"), "got: {}", err);
         assert!(err.contains("com.victim::pty:exit"), "错误须给出新形态: got: {}", err);
     }
@@ -438,7 +441,7 @@ mod tests {
     #[tokio::test]
     async fn unsubscribe_rejects_other_namespace() {
         let ctx = build_host_ctx();
-        let err = bus_unsubscribe(&ctx, "com.evil", "com.victim::pty:exit").unwrap_err();
+        let err = bus_unsubscribe(ctx.as_ref(), "com.evil", "com.victim::pty:exit").unwrap_err();
         assert!(err.contains("namespace"), "got: {}", err);
     }
 
@@ -448,7 +451,7 @@ mod tests {
     #[tokio::test]
     async fn subscribe_rejects_reply_lane() {
         let ctx = build_host_ctx();
-        let err = bus_subscribe(&ctx, "com.evil", "bedcode.api.reply.com.victim.req-1").unwrap_err();
+        let err = bus_subscribe(ctx.as_ref(), "com.evil", "bedcode.api.reply.com.victim.req-1").unwrap_err();
         assert!(err.contains("reply"), "got: {}", err);
     }
 
@@ -456,7 +459,7 @@ mod tests {
     #[tokio::test]
     async fn subscribe_rejects_own_reply_lane() {
         let ctx = build_host_ctx();
-        let err = bus_subscribe(&ctx, "com.victim", "bedcode.api.reply.com.victim.req-1").unwrap_err();
+        let err = bus_subscribe(ctx.as_ref(), "com.victim", "bedcode.api.reply.com.victim.req-1").unwrap_err();
         assert!(err.contains("reply"), "got: {}", err);
     }
 
@@ -464,7 +467,7 @@ mod tests {
     #[tokio::test]
     async fn subscribe_binary_rejects_reply_lane() {
         let ctx = build_host_ctx();
-        let err = bus_subscribe_binary(&ctx, "com.evil", "bedcode.api.reply.com.victim.req-1").unwrap_err();
+        let err = bus_subscribe_binary(ctx.as_ref(), "com.evil", "bedcode.api.reply.com.victim.req-1").unwrap_err();
         assert!(err.contains("reply"), "got: {}", err);
     }
 
@@ -472,7 +475,7 @@ mod tests {
     #[tokio::test]
     async fn subscribe_allows_api_request_lane() {
         let ctx = build_host_ctx();
-        bus_subscribe(&ctx, "com.victim", "bedcode.api.com.victim.echo").expect("request lane must pass");
+        bus_subscribe(ctx.as_ref(), "com.victim", "bedcode.api.com.victim.echo").expect("request lane must pass");
     }
 
     /// 端到端：B 订阅不到 A 的定向事件流，也就收不到宿主投给 A 的事件
@@ -480,7 +483,7 @@ mod tests {
     async fn cross_namespace_subscriber_never_receives_directed_event() {
         let ctx = build_host_ctx();
         ctx.message_bus.set_dispatcher(Arc::new(NoopDispatcher)).await;
-        assert!(bus_subscribe(&ctx, "com.evil", "com.victim::pty:exit").is_err());
+        assert!(bus_subscribe(ctx.as_ref(), "com.evil", "com.victim::pty:exit").is_err());
 
         // 宿主按新形态定向投递给 victim：evil 无订阅者条目，收不到任何投递
         ctx.message_bus

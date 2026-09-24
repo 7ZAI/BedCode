@@ -58,7 +58,8 @@ use crate::system::constants::{
     PLUGIN_PTY_RING_FETCH_MAX_BYTES, PLUGIN_PTY_RING_MAX_BYTES,
 };
 use crate::wasm_core::bus::MessageBus;
-use crate::wasm_core::manager::runtime::WasmHostContext;
+#[cfg(test)]
+use crate::wasm_core::host_api::context::WasmHostContext;
 use crate::wasm_core::runtime_util::block_on_async;
 use crate::wasm_core::permission::{PERMISSION_PTY_IO, PERMISSION_PTY_SPAWN};
 use portable_pty::CommandBuilder;
@@ -207,8 +208,9 @@ fn declared_session_owner(session_id: &str) -> Option<String> {
 /// 创建插件私有裸 PTY：成功返回 `pty-<uuid>` 句柄并登记属主
 ///
 /// 失败只回错误、不发布任何事件（无句柄可寻址），且不留注册表项与进程。
-pub(crate) fn pty_spawn(host_ctx: &WasmHostContext, plugin_id: &str, config_json: &str) -> Result<String, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_PTY_SPAWN, "host_pty_spawn") {
+pub(crate) fn pty_spawn(bus: &dyn crate::wasm_core::host_api::context::BusScope,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope, plugin_id: &str, config_json: &str) -> Result<String, String> {
+    if !super::check_permission(perm, plugin_id, PERMISSION_PTY_SPAWN, "host_pty_spawn") {
         return Err(denied_spawn());
     }
     let config: SpawnConfig =
@@ -294,7 +296,7 @@ pub(crate) fn pty_spawn(host_ctx: &WasmHostContext, plugin_id: &str, config_json
         pty_id.clone(),
         plugin_id.to_string(),
         lifecycle_rx,
-        Arc::clone(&host_ctx.message_bus),
+        Arc::clone(bus.message_bus()),
     );
     tracing::info!(
         plugin_id = %plugin_id,
@@ -314,8 +316,8 @@ pub(crate) fn pty_spawn(host_ctx: &WasmHostContext, plugin_id: &str, config_json
 /// 分块与让出节奏在引擎侧（`PtySession::write`：4000 字节分块 + 逐块 yield，避免打满
 /// PTY 内核缓冲）；本层的 [`PLUGIN_PTY_MAX_WRITE_BYTES`] 是**一次调用的准入上限**，
 /// 超限直接 `Err`——静默截断会让插件把「半条命令」喂进交互进程，比失败更糟。
-pub(crate) fn pty_write(host_ctx: &WasmHostContext, plugin_id: &str, pty_id: &str, data: &[u8]) -> Result<(), String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_PTY_IO, "host_pty_write") {
+pub(crate) fn pty_write(perm: &dyn crate::wasm_core::host_api::context::PermissionScope, plugin_id: &str, pty_id: &str, data: &[u8]) -> Result<(), String> {
+    if !super::check_permission(perm, plugin_id, PERMISSION_PTY_IO, "host_pty_write") {
         return Err(denied_io());
     }
     if data.len() > PLUGIN_PTY_MAX_WRITE_BYTES {
@@ -333,13 +335,13 @@ pub(crate) fn pty_write(host_ctx: &WasmHostContext, plugin_id: &str, pty_id: &st
 /// 透传到 PTY 尺寸即视为成功；**不承诺同步生效时序**（内核把 winsize 变更以 SIGWINCH
 /// 通知前台进程组，全屏程序在下一帧重绘才对齐），插件按输出形态验证。
 pub(crate) fn pty_resize(
-    host_ctx: &WasmHostContext,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
     plugin_id: &str,
     pty_id: &str,
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_PTY_IO, "host_pty_resize") {
+    if !super::check_permission(perm, plugin_id, PERMISSION_PTY_IO, "host_pty_resize") {
         return Err(denied_io());
     }
     let session = session_of(plugin_id, pty_id)?;
@@ -353,8 +355,8 @@ pub(crate) fn pty_resize(
 /// 不会翻下（只有 kill/销毁会，业务线依赖这一语义），而插件私有 PTY 释放了 slave
 /// fd，EOF 即退出信号，故两路合一才如实。定位是「bus 不缓冲不重放」下丢失
 /// `pty:exit` 后的自愈快照，不是事件替代品。
-pub(crate) fn pty_is_running(host_ctx: &WasmHostContext, plugin_id: &str, pty_id: &str) -> Result<bool, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_PTY_IO, "host_pty_is_running") {
+pub(crate) fn pty_is_running(perm: &dyn crate::wasm_core::host_api::context::PermissionScope, plugin_id: &str, pty_id: &str) -> Result<bool, String> {
+    if !super::check_permission(perm, plugin_id, PERMISSION_PTY_IO, "host_pty_is_running") {
         return Err(denied_io());
     }
     let session = session_of(plugin_id, pty_id)?;
@@ -375,8 +377,9 @@ fn running_verdict(running: bool, output_terminated: bool) -> bool {
 /// `Ok(())` 表示**终止已发起**；句柄摘除与 `<owner>::pty:exit`（reason=killed）由退出
 /// 监听在「EOF + 子进程回收」齐备时完成（见模块头的单一发布者不变量）。因此 kill 后
 /// 立刻 `ring-fetch` 仍可能取到尾帧，而后再取即 `pty handle not found`。
-pub(crate) fn pty_kill(host_ctx: &WasmHostContext, plugin_id: &str, pty_id: &str) -> Result<(), String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_PTY_SPAWN, "host_pty_kill") {
+pub(crate) fn pty_kill(
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope, plugin_id: &str, pty_id: &str) -> Result<(), String> {
+    if !super::check_permission(perm, plugin_id, PERMISSION_PTY_SPAWN, "host_pty_kill") {
         return Err(denied_spawn());
     }
     let session = session_of(plugin_id, pty_id)?;
@@ -606,13 +609,13 @@ pub(crate) fn broadcast_handle_for_session(session_id: &str) -> Option<Broadcast
 /// 游标，游标落后于环驻留起点时 `truncated = true`（缺口如实上报，不静默补洞）。
 /// 单次返回不超过 [`PLUGIN_PTY_RING_FETCH_MAX_BYTES`]（约束一次 wasm 边界拷贝量）。
 pub(crate) fn pty_ring_fetch(
-    host_ctx: &WasmHostContext,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
     plugin_id: &str,
     pty_id: &str,
     from_offset: u64,
     max_bytes: u32,
 ) -> Result<Option<PtyRingFetch>, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_PTY_IO, "host_pty_ring_fetch") {
+    if !super::check_permission(perm, plugin_id, PERMISSION_PTY_IO, "host_pty_ring_fetch") {
         return Err(denied_io());
     }
     // 注册表锁内只取环句柄，应答在锁外完成——两把锁不交叉持有

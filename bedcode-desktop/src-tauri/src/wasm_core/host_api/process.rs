@@ -13,7 +13,7 @@
 //! - **权限门禁**：`process:run`（高危：执行任意命令），manifest 声明即信任，
 //!   每次执行由宿主全量审计日志（命令/参数/cwd/env/结果）。
 
-use crate::wasm_core::host_api::context::{WasmHostContext, kill_process_group};
+use crate::wasm_core::host_api::context::kill_process_group;
 use crate::wasm_core::runtime_util::block_on_async;
 use crate::wasm_core::permission::PERMISSION_PROCESS;
 use crate::system::error_boundary::spawn_with_error_boundary;
@@ -53,8 +53,11 @@ fn default_timeout_ms() -> u64 {
 ///
 /// 异步执行模式与 `session_create` 相同：wasm 调用栈内同步等待子进程会
 /// 阻塞 Store；此处 spawn 后台任务执行，wasm 调用立即返回。
-pub(crate) fn process_run(host_ctx: &WasmHostContext, plugin_id: &str, request_json: &str) -> Result<String, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_PROCESS, "host_process_run") {
+pub(crate) fn process_run(
+    proc: &dyn crate::wasm_core::host_api::context::ProcessScope,
+    svc: &dyn crate::wasm_core::host_api::context::ServicesScope,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope, plugin_id: &str, request_json: &str) -> Result<String, String> {
+    if !super::check_permission(perm, plugin_id, PERMISSION_PROCESS, "host_process_run") {
         return Err("permission denied".to_string());
     }
     let request: ProcessRequest =
@@ -117,7 +120,7 @@ pub(crate) fn process_run(host_ctx: &WasmHostContext, plugin_id: &str, request_j
     let pid = child.id().unwrap_or(0);
     let run_id = Uuid::new_v4().to_string();
 
-    let registry = host_ctx.process_registry().clone();
+    let registry = proc.process_registry().clone();
     registry.register(run_id.clone(), plugin_id.to_string(), pid);
 
     let pid_str = plugin_id.to_string();
@@ -125,7 +128,7 @@ pub(crate) fn process_run(host_ctx: &WasmHostContext, plugin_id: &str, request_j
     let timeout_ms = request.timeout_ms.max(1);
     // 提前捕获 services（进程运行时宿主必然已完成注入；测试/无头为 None）：
     // 避免把 &WasmHostContext 引用送入 'static 任务（无法克隆 Arc）
-    let services = block_on_async(host_ctx.services());
+    let services = block_on_async(svc.services());
     spawn_with_error_boundary("host_process_run", async move {
         let timeout = std::time::Duration::from_millis(timeout_ms);
         let (exit_code, timed_out) = match tokio::time::timeout(timeout, child.wait()).await {
@@ -208,11 +211,11 @@ struct SyncProcessRequest {
 /// 阻塞说明：wasm 调用栈内同步等待子进程会阻塞 Store 的执行线程，对 git
 /// 这类百毫秒级命令可接受；若未来出现长时命令需求，应改用异步 `run`。
 pub(crate) fn process_run_sync(
-    host_ctx: &WasmHostContext,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
     plugin_id: &str,
     request_json: &str,
 ) -> Result<String, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_PROCESS, "host_process_run_sync") {
+    if !super::check_permission(perm, plugin_id, PERMISSION_PROCESS, "host_process_run_sync") {
         return Err("permission denied".to_string());
     }
     let request: SyncProcessRequest =
@@ -278,14 +281,16 @@ pub(crate) fn process_run_sync(
 ///
 /// 尽力而为：进程可能已结束/未被找到（SDK 契约约定此时返回 Ok）。
 /// kill 成功后执行任务侧的 `wait` 随即返回，完成事件照常分发。
-pub(crate) fn process_kill(host_ctx: &WasmHostContext, plugin_id: &str, run_id: &str) -> Result<(), String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_PROCESS, "host_process_kill") {
+pub(crate) fn process_kill(
+    proc: &dyn crate::wasm_core::host_api::context::ProcessScope,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope, plugin_id: &str, run_id: &str) -> Result<(), String> {
+    if !super::check_permission(perm, plugin_id, PERMISSION_PROCESS, "host_process_kill") {
         return Err("permission denied".to_string());
     }
     if run_id.is_empty() {
         return Err("process error: empty run_id".to_string());
     }
-    let registry = host_ctx.process_registry().clone();
+    let registry = proc.process_registry().clone();
     let rid = run_id.to_string();
     let found = block_on_async(registry.kill(&rid));
     if !found {
@@ -334,7 +339,7 @@ mod tests {
     #[test]
     fn process_run_permission_denied() {
         let ctx = build_host_ctx();
-        let err = process_run(&ctx, PLUGIN, "{}").unwrap_err();
+        let err = process_run(ctx.as_ref(), ctx.as_ref(), ctx.as_ref(), PLUGIN, "{}").unwrap_err();
         assert_eq!(err, "permission denied");
     }
 
@@ -343,7 +348,7 @@ mod tests {
     fn process_run_empty_command_rejected() {
         let ctx = build_host_ctx();
         grant_permissions(&ctx, PLUGIN, &[PERMISSION_PROCESS]);
-        let err = process_run(&ctx, PLUGIN, &request("", vec![], "/tmp/x.log")).unwrap_err();
+        let err = process_run(ctx.as_ref(), ctx.as_ref(), ctx.as_ref(), PLUGIN, &request("", vec![], "/tmp/x.log")).unwrap_err();
         assert!(err.contains("empty command"), "got: {}", err);
     }
 
@@ -352,7 +357,7 @@ mod tests {
     fn process_run_empty_output_path_rejected() {
         let ctx = build_host_ctx();
         grant_permissions(&ctx, PLUGIN, &[PERMISSION_PROCESS]);
-        let err = process_run(&ctx, PLUGIN, &request("echo", vec!["hi"], "")).unwrap_err();
+        let err = process_run(ctx.as_ref(), ctx.as_ref(), ctx.as_ref(), PLUGIN, &request("echo", vec!["hi"], "")).unwrap_err();
         assert!(err.contains("empty output_path"), "got: {}", err);
     }
 
@@ -361,7 +366,7 @@ mod tests {
     fn process_run_invalid_json_rejected() {
         let ctx = build_host_ctx();
         grant_permissions(&ctx, PLUGIN, &[PERMISSION_PROCESS]);
-        let err = process_run(&ctx, PLUGIN, "not-json").unwrap_err();
+        let err = process_run(ctx.as_ref(), ctx.as_ref(), ctx.as_ref(), PLUGIN, "not-json").unwrap_err();
         assert!(err.contains("invalid request JSON"), "got: {}", err);
     }
 
@@ -369,7 +374,7 @@ mod tests {
     #[test]
     fn process_kill_permission_denied() {
         let ctx = build_host_ctx();
-        let err = process_kill(&ctx, PLUGIN, "r1").unwrap_err();
+        let err = process_kill(ctx.as_ref(), ctx.as_ref(), PLUGIN, "r1").unwrap_err();
         assert_eq!(err, "permission denied");
     }
 
@@ -378,7 +383,7 @@ mod tests {
     fn process_kill_empty_run_id_rejected() {
         let ctx = build_host_ctx();
         grant_permissions(&ctx, PLUGIN, &[PERMISSION_PROCESS]);
-        let err = process_kill(&ctx, PLUGIN, "").unwrap_err();
+        let err = process_kill(ctx.as_ref(), ctx.as_ref(), PLUGIN, "").unwrap_err();
         assert!(err.contains("empty run_id"), "got: {}", err);
     }
 
@@ -400,7 +405,7 @@ mod tests {
                 } else {
                     ("sh", vec!["-c", "echo hello-from-process"])
                 };
-                let run_id = process_run(&ctx, PLUGIN, &request(cmd, args, out.to_str().unwrap())).expect("run ok");
+                let run_id = process_run(ctx.as_ref(), ctx.as_ref(), ctx.as_ref(), PLUGIN, &request(cmd, args, out.to_str().unwrap())).expect("run ok");
                 assert_eq!(run_id.len(), 36);
 
                 // 等待后台任务完成（输出落盘 + 注册表移除）
@@ -442,7 +447,7 @@ mod tests {
                     // sh 拉起 sleep（进程组：sh → sleep），kill 组须连带终止
                     ("sh", vec!["-c", "sleep 60"])
                 };
-                let run_id = process_run(&ctx, PLUGIN, &request(cmd, args, out.to_str().unwrap())).expect("run ok");
+                let run_id = process_run(ctx.as_ref(), ctx.as_ref(), ctx.as_ref(), PLUGIN, &request(cmd, args, out.to_str().unwrap())).expect("run ok");
 
                 // 等待注册完成，确认进程在跑
                 let registry = ctx.process_registry().clone();
@@ -454,7 +459,7 @@ mod tests {
                 }
                 assert_eq!(registry.running_count(), 1, "process not registered");
 
-                process_kill(&ctx, PLUGIN, &run_id).expect("kill ok");
+                process_kill(ctx.as_ref(), ctx.as_ref(), PLUGIN, &run_id).expect("kill ok");
 
                 // 进程组被终止 → 执行任务 wait 返回并移除注册表项
                 for _ in 0..200 {

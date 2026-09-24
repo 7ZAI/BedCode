@@ -4,6 +4,7 @@
 //! 发行版 Stopped 时 UNC 路径不可达，自动改用 wsl.exe 桥接访问。
 
 use super::wsl_fs;
+#[cfg(test)]
 use crate::wasm_core::host_api::context::WasmHostContext;
 use crate::wasm_core::runtime_util::block_on_async;
 use crate::wasm_core::permission::PERMISSION_FS_READ;
@@ -39,14 +40,16 @@ fn write_text_file(path: &str, content: &str) -> std::io::Result<()> {
 /// 差异仅在可观测性：决策进 core-monitor `authz` 埋点——fs 是插件最活跃的
 /// 资源路径，改造前不进监控（框架的唯一生产接入点是总线互调门）。
 /// 授权拒绝属「可恢复异常/过滤拒绝」，按日志红线走 warn + 结构化字段。
-fn authorize_fs(host_ctx: &WasmHostContext, plugin_id: &str, path: &str, operation: &str) -> Result<(), String> {
+fn authorize_fs(
+    sec: &dyn crate::wasm_core::host_api::context::SecurityScope,
+    plugin_id: &str, path: &str, operation: &str) -> Result<(), String> {
     let req = crate::wasm_core::security::AuthRequest {
         plugin_id,
         resource: crate::wasm_core::security::ResourceKind::Fs,
         operation,
         target: path,
     };
-    if host_ctx.security().authorize(&req) != crate::wasm_core::security::AuthDecision::Allow {
+    if sec.security().authorize(&req) != crate::wasm_core::security::AuthDecision::Allow {
         tracing::warn!(
             plugin_id = %plugin_id,
             path = %path,
@@ -65,8 +68,8 @@ fn authorize_fs(host_ctx: &WasmHostContext, plugin_id: &str, path: &str, operati
 /// 强行合并会改变弹窗次数与用户交互，故保留原手工链（见票据 08）。
 ///
 /// paths-json 为 JSON 字符串数组；返回是否全部同意（拒绝/超时均为 false）
-pub(crate) fn fs_request_auth(host_ctx: &WasmHostContext, plugin_id: &str, paths_json: &str) -> Result<bool, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_FS_READ, "host_fs_request_auth") {
+pub(crate) fn fs_request_auth(fs_auth: &dyn crate::wasm_core::host_api::context::FsAuthScope, perm: &dyn crate::wasm_core::host_api::context::PermissionScope, plugin_id: &str, paths_json: &str) -> Result<bool, String> {
+    if !super::check_permission(perm, plugin_id, PERMISSION_FS_READ, "host_fs_request_auth") {
         return Err("permission denied".to_string());
     }
     let paths: Vec<String> =
@@ -74,7 +77,7 @@ pub(crate) fn fs_request_auth(host_ctx: &WasmHostContext, plugin_id: &str, paths
     if paths.is_empty() {
         return Ok(true);
     }
-    let fs_auth = host_ctx.fs_auth.clone();
+    let fs_auth = fs_auth.fs_auth().clone();
     let allowed = block_on_async(fs_auth.check_batch(plugin_id, &paths, FsOp::Read));
     if !allowed {
         tracing::warn!(
@@ -135,8 +138,9 @@ fn delete_file(path: &str) -> std::io::Result<()> {
 }
 
 /// 读取文本文件（权限 + 三层访问校验）
-pub(crate) fn fs_read(host_ctx: &WasmHostContext, plugin_id: &str, path: &str) -> Result<Option<String>, String> {
-    authorize_fs(host_ctx, plugin_id, path, "read")?;
+pub(crate) fn fs_read(
+    sec: &dyn crate::wasm_core::host_api::context::SecurityScope, plugin_id: &str, path: &str) -> Result<Option<String>, String> {
+    authorize_fs(sec, plugin_id, path, "read")?;
     read_text_file(path).map(Some).or_else(|e| {
         // SDK HostFs 契约：文件不存在返回 Ok(None)（store.rs 等插件依赖此语义处理新建文件）
         if e.kind() == std::io::ErrorKind::NotFound {
@@ -148,28 +152,32 @@ pub(crate) fn fs_read(host_ctx: &WasmHostContext, plugin_id: &str, path: &str) -
 }
 
 /// 写入文本文件（权限 + 三层访问校验）
-pub(crate) fn fs_write(host_ctx: &WasmHostContext, plugin_id: &str, path: &str, data: &str) -> Result<(), String> {
-    authorize_fs(host_ctx, plugin_id, path, "write")?;
+pub(crate) fn fs_write(
+    sec: &dyn crate::wasm_core::host_api::context::SecurityScope, plugin_id: &str, path: &str, data: &str) -> Result<(), String> {
+    authorize_fs(sec, plugin_id, path, "write")?;
     write_text_file(path, data).map_err(|e| format!("fs error: file write failed: {}", e))
 }
 
 /// 复制文件（读源 + 写目标双授权）
-pub(crate) fn fs_copy(host_ctx: &WasmHostContext, plugin_id: &str, src: &str, dst: &str) -> Result<(), String> {
+pub(crate) fn fs_copy(
+    sec: &dyn crate::wasm_core::host_api::context::SecurityScope, plugin_id: &str, src: &str, dst: &str) -> Result<(), String> {
     // 双授权：源读 + 目标写（与改造前一致，逐路径经授权管线）
-    authorize_fs(host_ctx, plugin_id, src, "read")?;
-    authorize_fs(host_ctx, plugin_id, dst, "write")?;
+    authorize_fs(sec, plugin_id, src, "read")?;
+    authorize_fs(sec, plugin_id, dst, "write")?;
     copy_file(src, dst).map_err(|e| format!("fs error: file copy failed: {}", e))
 }
 
 /// 删除文件（权限 + 三层访问校验；文件不存在视为成功，幂等）
-pub(crate) fn fs_delete(host_ctx: &WasmHostContext, plugin_id: &str, path: &str) -> Result<(), String> {
-    authorize_fs(host_ctx, plugin_id, path, "write")?;
+pub(crate) fn fs_delete(
+    sec: &dyn crate::wasm_core::host_api::context::SecurityScope, plugin_id: &str, path: &str) -> Result<(), String> {
+    authorize_fs(sec, plugin_id, path, "write")?;
     delete_file(path).map_err(|e| format!("fs error: file delete failed: {}", e))
 }
 
 /// 检查文件是否存在（权限 + 三层访问校验，支持 WSL UNC 路径）
-pub(crate) fn fs_exists(host_ctx: &WasmHostContext, plugin_id: &str, path: &str) -> Result<bool, String> {
-    authorize_fs(host_ctx, plugin_id, path, "read")?;
+pub(crate) fn fs_exists(
+    sec: &dyn crate::wasm_core::host_api::context::SecurityScope, plugin_id: &str, path: &str) -> Result<bool, String> {
+    authorize_fs(sec, plugin_id, path, "read")?;
     // 支持 WSL UNC 路径
     if let Some((distro, wsl_path)) = wsl_fs::parse_wsl_unc_path(path) {
         return wsl_fs::exists_via_wsl(&distro, &wsl_path).map_err(|e| format!("fs error: WSL check failed: {}", e));
@@ -186,8 +194,9 @@ pub(crate) fn fs_exists(host_ctx: &WasmHostContext, plugin_id: &str, path: &str)
 /// 「跳过非目录非文件条目」的语义对齐（symlink 不进文件树）。
 /// 权限 `fs:read` + fs_auth 三层校验；不支持 WSL UNC（与宿主 file_controller
 /// 的 std::fs 语义一致，working_dir 是宿主路径）。
-pub(crate) fn fs_read_dir(host_ctx: &WasmHostContext, plugin_id: &str, path: &str) -> Result<String, String> {
-    authorize_fs(host_ctx, plugin_id, path, "read")?;
+pub(crate) fn fs_read_dir(
+    sec: &dyn crate::wasm_core::host_api::context::SecurityScope, plugin_id: &str, path: &str) -> Result<String, String> {
+    authorize_fs(sec, plugin_id, path, "read")?;
     let read_dir = std::fs::read_dir(path).map_err(|e| format!("fs error: read dir '{}' failed: {}", path, e))?;
     let mut entries = Vec::new();
     for entry in read_dir {
@@ -213,11 +222,11 @@ pub(crate) fn fs_read_dir(host_ctx: &WasmHostContext, plugin_id: &str, path: &st
 /// 供 `../` 穿越与 symlink 逃逸的 containment 判定（宿主 file_controller
 /// 的 `is_within_root` 同语义：canonicalize 后 `starts_with`）。
 pub(crate) fn fs_canonicalize(
-    host_ctx: &WasmHostContext,
+    sec: &dyn crate::wasm_core::host_api::context::SecurityScope,
     plugin_id: &str,
     path: &str,
 ) -> Result<Option<String>, String> {
-    authorize_fs(host_ctx, plugin_id, path, "read")?;
+    authorize_fs(sec, plugin_id, path, "read")?;
     match std::fs::canonicalize(path) {
         Ok(canonical) => Ok(Some(canonical.to_string_lossy().to_string())),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -228,8 +237,9 @@ pub(crate) fn fs_canonicalize(
 /// 文件元数据（v19 追加）：`{size, isFile, isDir}`；路径不存在返回 `Ok(None)`
 ///
 /// 供文件大小上限判定（与宿主 file-content 的 `MAX_FILE_SIZE` 语义一致）。
-pub(crate) fn fs_stat(host_ctx: &WasmHostContext, plugin_id: &str, path: &str) -> Result<Option<String>, String> {
-    authorize_fs(host_ctx, plugin_id, path, "read")?;
+pub(crate) fn fs_stat(
+    sec: &dyn crate::wasm_core::host_api::context::SecurityScope, plugin_id: &str, path: &str) -> Result<Option<String>, String> {
+    authorize_fs(sec, plugin_id, path, "read")?;
     match std::fs::metadata(path) {
         Ok(meta) => Ok(Some(
             serde_json::json!({
@@ -334,7 +344,7 @@ mod tests {
     #[test]
     fn fs_read_permission_denied() {
         let ctx = build_host_ctx();
-        let err = fs_read(&ctx, PLUGIN, "/tmp/x").unwrap_err();
+        let err = fs_read(ctx.as_ref(), PLUGIN, "/tmp/x").unwrap_err();
         assert_eq!(err, "permission denied");
     }
 
@@ -342,7 +352,7 @@ mod tests {
     #[test]
     fn fs_write_permission_denied() {
         let ctx = build_host_ctx();
-        let err = fs_write(&ctx, PLUGIN, "/tmp/x", "data").unwrap_err();
+        let err = fs_write(ctx.as_ref(), PLUGIN, "/tmp/x", "data").unwrap_err();
         assert_eq!(err, "permission denied");
     }
 
@@ -350,7 +360,7 @@ mod tests {
     #[test]
     fn fs_delete_permission_denied() {
         let ctx = build_host_ctx();
-        let err = fs_delete(&ctx, PLUGIN, "/tmp/x").unwrap_err();
+        let err = fs_delete(ctx.as_ref(), PLUGIN, "/tmp/x").unwrap_err();
         assert_eq!(err, "permission denied");
     }
 
@@ -358,7 +368,7 @@ mod tests {
     #[test]
     fn fs_exists_permission_denied() {
         let ctx = build_host_ctx();
-        let err = fs_exists(&ctx, PLUGIN, "/tmp/x").unwrap_err();
+        let err = fs_exists(ctx.as_ref(), PLUGIN, "/tmp/x").unwrap_err();
         assert_eq!(err, "permission denied");
     }
 
@@ -367,7 +377,7 @@ mod tests {
     fn fs_copy_requires_both_permissions() {
         let ctx = build_host_ctx();
         grant_permissions(&ctx, PLUGIN, &[PERMISSION_FS_READ]);
-        let err = fs_copy(&ctx, PLUGIN, "/tmp/a", "/tmp/b").unwrap_err();
+        let err = fs_copy(ctx.as_ref(), PLUGIN, "/tmp/a", "/tmp/b").unwrap_err();
         assert_eq!(err, "permission denied");
     }
 
@@ -376,7 +386,7 @@ mod tests {
     fn fs_request_auth_empty_paths_ok() {
         let ctx = build_host_ctx();
         grant_permissions(&ctx, PLUGIN, &[PERMISSION_FS_READ]);
-        assert!(fs_request_auth(&ctx, PLUGIN, "[]").expect("empty paths ok"));
+        assert!(fs_request_auth(ctx.as_ref(), ctx.as_ref(), PLUGIN, "[]").expect("empty paths ok"));
     }
 
     /// fs_request_auth 非法 JSON：解析失败
@@ -384,7 +394,7 @@ mod tests {
     fn fs_request_auth_invalid_json_rejected() {
         let ctx = build_host_ctx();
         grant_permissions(&ctx, PLUGIN, &[PERMISSION_FS_READ]);
-        let err = fs_request_auth(&ctx, PLUGIN, "not-json").unwrap_err();
+        let err = fs_request_auth(ctx.as_ref(), ctx.as_ref(), PLUGIN, "not-json").unwrap_err();
         assert!(err.contains("invalid paths json"), "got: {}", err);
     }
 
@@ -392,7 +402,7 @@ mod tests {
     #[test]
     fn fs_request_auth_permission_denied() {
         let ctx = build_host_ctx();
-        let err = fs_request_auth(&ctx, PLUGIN, "[]").unwrap_err();
+        let err = fs_request_auth(ctx.as_ref(), ctx.as_ref(), PLUGIN, "[]").unwrap_err();
         assert_eq!(err, "permission denied");
     }
 
@@ -406,8 +416,8 @@ mod tests {
         let (_dir, root) = granted_temp_root("e2e-roundtrip", &ctx);
         let path = root.join("roundtrip.txt");
 
-        fs_write(&ctx, PLUGIN, path.to_str().unwrap(), "hello wasm").expect("write ok");
-        let content = fs_read(&ctx, PLUGIN, path.to_str().unwrap())
+        fs_write(ctx.as_ref(), PLUGIN, path.to_str().unwrap(), "hello wasm").expect("write ok");
+        let content = fs_read(ctx.as_ref(), PLUGIN, path.to_str().unwrap())
             .expect("read ok")
             .expect("value");
         assert_eq!(content, "hello wasm");
@@ -420,7 +430,7 @@ mod tests {
         grant_permissions(&ctx, PLUGIN, &[PERMISSION_FS_READ]);
         let (_dir, root) = granted_temp_root("e2e-missing", &ctx);
         let path = root.join("missing.txt");
-        assert!(fs_read(&ctx, PLUGIN, path.to_str().unwrap())
+        assert!(fs_read(ctx.as_ref(), PLUGIN, path.to_str().unwrap())
             .expect("read ok")
             .is_none());
     }
@@ -432,11 +442,11 @@ mod tests {
         grant_permissions(&ctx, PLUGIN, &[PERMISSION_FS_READ, PERMISSION_FS_WRITE]);
         let (_dir, root) = granted_temp_root("e2e-exists", &ctx);
         let path = root.join("exists.txt");
-        assert!(!fs_exists(&ctx, PLUGIN, path.to_str().unwrap()).expect("missing false"));
-        fs_write(&ctx, PLUGIN, path.to_str().unwrap(), "x").unwrap();
-        assert!(fs_exists(&ctx, PLUGIN, path.to_str().unwrap()).expect("exists true"));
-        fs_delete(&ctx, PLUGIN, path.to_str().unwrap()).expect("delete ok");
-        assert!(!fs_exists(&ctx, PLUGIN, path.to_str().unwrap()).expect("deleted false"));
+        assert!(!fs_exists(ctx.as_ref(), PLUGIN, path.to_str().unwrap()).expect("missing false"));
+        fs_write(ctx.as_ref(), PLUGIN, path.to_str().unwrap(), "x").unwrap();
+        assert!(fs_exists(ctx.as_ref(), PLUGIN, path.to_str().unwrap()).expect("exists true"));
+        fs_delete(ctx.as_ref(), PLUGIN, path.to_str().unwrap()).expect("delete ok");
+        assert!(!fs_exists(ctx.as_ref(), PLUGIN, path.to_str().unwrap()).expect("deleted false"));
     }
 
     /// fs_delete 幂等：删除不存在的文件同样 Ok
@@ -446,7 +456,7 @@ mod tests {
         grant_permissions(&ctx, PLUGIN, &[PERMISSION_FS_READ, PERMISSION_FS_WRITE]);
         let (_dir, root) = granted_temp_root("e2e-delete", &ctx);
         let path = root.join("delete-missing.txt");
-        fs_delete(&ctx, PLUGIN, path.to_str().unwrap()).expect("delete missing ok");
+        fs_delete(ctx.as_ref(), PLUGIN, path.to_str().unwrap()).expect("delete missing ok");
     }
 
     /// fs_copy 端到端：源读授权 + 目标写授权 + 自动创建父目录
@@ -457,9 +467,9 @@ mod tests {
         let (_dir, root) = granted_temp_root("e2e-copy", &ctx);
         let src = root.join("copy-src.txt");
         let dst = root.join("nested/copy-dst.txt");
-        fs_write(&ctx, PLUGIN, src.to_str().unwrap(), "payload").unwrap();
-        fs_copy(&ctx, PLUGIN, src.to_str().unwrap(), dst.to_str().unwrap()).expect("copy ok");
-        let content = fs_read(&ctx, PLUGIN, dst.to_str().unwrap())
+        fs_write(ctx.as_ref(), PLUGIN, src.to_str().unwrap(), "payload").unwrap();
+        fs_copy(ctx.as_ref(), PLUGIN, src.to_str().unwrap(), dst.to_str().unwrap()).expect("copy ok");
+        let content = fs_read(ctx.as_ref(), PLUGIN, dst.to_str().unwrap())
             .expect("read ok")
             .expect("value");
         assert_eq!(content, "payload");
@@ -475,7 +485,7 @@ mod tests {
         let monitor = Arc::new(MetricsRegistry::new());
         ctx.security().set_monitor(monitor.clone());
 
-        let err = fs_read(&ctx, PLUGIN, "/tmp/denied").unwrap_err();
+        let err = fs_read(ctx.as_ref(), PLUGIN, "/tmp/denied").unwrap_err();
         assert_eq!(err, "permission denied", "对外错误文案须保持不变");
 
         let authz = &monitor.snapshot()["plugins"][PLUGIN]["authz"];
@@ -494,7 +504,7 @@ mod tests {
         let (_dir, root) = granted_temp_root("fs-monitor-allow", &ctx);
         let path = root.join("f.txt");
         // 已授权路径放行（文件不存在按 SDK 契约返回 Ok(None)）
-        assert!(fs_read(&ctx, PLUGIN, path.to_str().unwrap())
+        assert!(fs_read(ctx.as_ref(), PLUGIN, path.to_str().unwrap())
             .expect("read ok")
             .is_none());
 
@@ -513,7 +523,7 @@ mod tests {
         let path = root.join("f.txt");
 
         assert_eq!(
-            fs_write(&ctx, PLUGIN, path.to_str().unwrap(), "x").unwrap_err(),
+            fs_write(ctx.as_ref(), PLUGIN, path.to_str().unwrap(), "x").unwrap_err(),
             "permission denied",
             "read 权限不得用于写操作"
         );
@@ -529,7 +539,7 @@ mod tests {
         let dst = root.join("b.txt");
 
         assert_eq!(
-            fs_copy(&ctx, PLUGIN, src.to_str().unwrap(), dst.to_str().unwrap()).unwrap_err(),
+            fs_copy(ctx.as_ref(), PLUGIN, src.to_str().unwrap(), dst.to_str().unwrap()).unwrap_err(),
             "permission denied",
             "copy 须同时具备源读与目标写授权"
         );
@@ -550,7 +560,7 @@ mod tests {
         std::fs::write(&path, "x").unwrap();
 
         assert_eq!(
-            fs_read(&ctx, PLUGIN, path.to_str().unwrap()).unwrap_err(),
+            fs_read(ctx.as_ref(), PLUGIN, path.to_str().unwrap()).unwrap_err(),
             "permission denied",
             "非白名单且无授权的路径必须被拒绝"
         );

@@ -50,6 +50,7 @@ pub(super) async fn setup_host() -> PluginHost {
         permission.clone(),
         wasm_runtime.fs_auth().clone(),
         message_bus.clone(),
+        Arc::new(crate::wasm_core::manager::capability::CapabilityRegistry::new()),
     ));
 
     wasm_host_ctx.security().set_monitor(wasm_runtime.monitor());
