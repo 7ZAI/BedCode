@@ -369,7 +369,6 @@ pub(crate) fn auth_link_identity_parts(host_ctx: &WasmHostContext, plugin_id: &s
 mod tests {
     use super::*;
     use crate::wasm_core::host_api::tests::{build_host_ctx, grant_permissions};
-    use crate::session::{SessionConfigManager, SessionManager};
     use std::sync::Arc;
 
     /// 文件后备库宿主上下文（重启持久化测试用；构造路径与 host_impl::tests::build_host_ctx 同构）
@@ -382,18 +381,10 @@ mod tests {
             storage.clone(),
             None,
         ));
-        let session_manager = Arc::new(SessionManager::default());
-        let config_manager = Arc::new(SessionConfigManager::new(Arc::new(tokio::sync::Mutex::new({
-            let db = crate::db::Database::new(&db_path.with_extension("config.db")).expect("config db");
-            db.init_schema().expect("init schema");
-            db
-        }))));
         Arc::new(WasmHostContext::new(
             db,
             Arc::new(tokio::sync::Mutex::new(Default::default())),
             storage,
-            session_manager,
-            config_manager,
             None,
             Arc::new(crate::wasm_core::permission::PermissionManager::new()),
             fs_auth,

@@ -336,20 +336,16 @@ impl PluginHost {
 mod tests {
     use super::*;
     use crate::db::Database;
-    use crate::session::SessionConfigManager;
     use std::path::Path;
-
     /// 构造最小 PluginHost（票据 32：路由错误分支测试）
     ///
     /// 空插件目录 + 内存 DB；wasmtime 初始化一次。auth_service 测试同模式。
     async fn test_plugin_host() -> Arc<PluginHost> {
         let db = Arc::new(Mutex::new(Database::new(Path::new(":memory:")).expect("in-memory db")));
         db.lock().await.init_schema().expect("init schema");
-        let sm = Arc::new(crate::session::SessionManager::default());
-        let cm = Arc::new(SessionConfigManager::new(db.clone()));
         let dir = std::env::temp_dir().join(format!("bedcode-cmd-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("temp dir");
-        let host = PluginHost::new(db, &dir, &dir, sm, cm, None).await;
+        let host = PluginHost::new(db, &dir, &dir, None).await;
         host.init_message_bus().await;
         Arc::new(host)
     }

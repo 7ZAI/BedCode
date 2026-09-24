@@ -28,7 +28,6 @@ use crate::server::core::link_crypto;
 use crate::server::websocket::registry::{ChannelKind, WsRegistration, WsSessionRegistry};
 use crate::server::websocket::session::WsSession;
 use crate::server::websocket::subscription::SubscriptionState;
-use crate::session::GlobalOutputManager;
 use crate::system::app_context::AppContext;
 use crate::system::constants::DEVICE_CONNECTED;
 use crate::system::constants::{HEARTBEAT_INTERVAL_SECS, REMOTE_CLIENT_TIMEOUT_SECS, WS_AUTH_TIMEOUT_SECS};
@@ -721,14 +720,11 @@ impl Actor for WsConnBase {
             // 断连清理：链路加密密码表（issue 04）——必须在连接标识失效前移除
             link_crypto::ws_remove_ciphers(&client_id);
 
-            // 取消所有订阅
-            let global_manager = GlobalOutputManager::global();
-            for session_id in sessions {
-                global_manager.unsubscribe(&session_id, &client_id).await;
-            }
-            if bound_session {
-                global_manager.unsubscribe_all_for_client(&client_id).await;
-            }
+            // 票 11：订阅清理**只剩引擎句柄一条来路**——本连接登记的
+            // `engine_subscribers` 已在上方 `subscriptions.cleanup()`（退休 + 摘除，
+            // 执行体在下一次唤醒检查点退出）里收口；原「取消所有订阅」的业务环
+            // 清理块随 `session/` 目录删除。
+            let _ = (sessions, bound_session, client_id);
         });
 
         Running::Stop

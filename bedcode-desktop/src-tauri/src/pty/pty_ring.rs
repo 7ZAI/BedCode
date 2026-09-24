@@ -217,7 +217,6 @@ impl PtyOutputSink for PtyRingSink {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::GlobalOutputManager;
 
     /// 可辨识负载：`tag` 重复 `len` 次，便于断言字节来自哪一次投递
     fn payload(tag: u8, len: usize) -> Vec<u8> {
@@ -399,35 +398,20 @@ mod tests {
         assert_eq!(ring.chunks.len(), 1);
     }
 
-    /// C-012 副作用：sink 投递落自备环，业务会话环零留痕（ADR 0022 业务隔离）
+    /// C-012 副作用：sink 投递**只**落自备环（ADR 0022 业务隔离）
+    ///
+    /// 票 11：原用例还断言「业务会话环零留痕」——那个环随 `session/` 目录删除，
+    /// 「隔离」现在是结构事实（引擎环是唯一的输出环，sink 只持有它自己的那段）。
+    /// 保留的部分断言了 sink ↔ ring 的配对契约与字节完整性。
     #[tokio::test]
-    async fn ring_sink_delivers_to_own_ring_without_touching_session_bus() {
-        let session_id = format!(
-            "pty-ring-itest-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        );
-        let global = GlobalOutputManager::global();
-        let session_manager = global.register_session(&session_id).await;
-
+    async fn ring_sink_delivers_only_to_its_own_ring() {
         let (sink, ring) = PtyRingSink::paired(1024);
         sink.on_bytes(payload(b'A', 3), 1000).await;
         sink.on_bytes(payload(b'B', 3), 1001).await;
 
-        {
-            let ring = ring.lock().unwrap();
-            assert_eq!(ring.fetch(0, 1024).data, [payload(b'A', 3), payload(b'B', 3)].concat());
-        }
-
-        let business_ring_arc = session_manager.ring();
-        let business_ring = business_ring_arc.read().await;
-        let (min, max) = business_ring.watermarks();
-        assert_eq!(max - min, 0, "插件私有输出不得进入业务会话环");
-        drop(business_ring);
-
-        global.unregister_session(&session_id).await;
+        let guard = ring.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(guard.fetch(0, 1024).data, [payload(b'A', 3), payload(b'B', 3)].concat());
+        assert_eq!(guard.watermarks(), (0, 6), "自备环是这 6 字节的唯一去处");
     }
 
     /// C-013 并发：读线程写、宿主函数读，跨线程可见且总量守恒

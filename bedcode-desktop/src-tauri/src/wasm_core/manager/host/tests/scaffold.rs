@@ -36,11 +36,6 @@ pub(super) async fn setup_host() -> PluginHost {
     let db = Arc::new(Mutex::new(Database::new(&PathBuf::from(":memory:")).unwrap()));
     db.lock().await.init_schema().unwrap();
     let storage = Arc::new(PluginStorage::new(db.clone()));
-    let session_manager = Arc::new(SessionManager::default());
-    let config_manager = Arc::new(SessionConfigManager::new(Arc::new(Mutex::new(
-        Database::new(&PathBuf::from(":memory:")).unwrap(),
-    ))));
-
     let permission = Arc::new(PermissionManager::new());
     let registry = Arc::new(PluginRegistry::new());
     let message_bus = Arc::new(MessageBus::new());
@@ -51,8 +46,6 @@ pub(super) async fn setup_host() -> PluginHost {
         db,
         Arc::new(Mutex::new(HashMap::new())),
         storage.clone(),
-        session_manager,
-        config_manager,
         None,
         permission.clone(),
         wasm_runtime.fs_auth().clone(),

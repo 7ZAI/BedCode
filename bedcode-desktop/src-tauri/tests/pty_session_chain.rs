@@ -2,7 +2,8 @@
 //!
 //! 原理：进程内真实启动 Actix HTTP+WS 服务器（OS 分配端口）→ 真实
 //! tokio-tungstenite 客户端模拟移动端 → 已认证客户端驱动**内核执行端**
-//! `SessionManager::create_session_from_spec` 创建真实 PTY
+//! 真实 PTY 链：`host-pty.spawn` → 写输入 → 输出环 → 终态（票 11 起宿主
+//! 内核会话域已删除，业务会话同样经 `host-pty` 引擎）
 //! 会话（portable-pty 原生实现，Windows 走 ConPTY）→ 写入 echo 命令 →
 //! 经「PtyReader 线程 → GlobalOutputManager → 订阅者通道 → forward_loop →
 //! WS 帧」真实链路收到输出 → 关闭会话并核对状态一致，未认证客户端创建
@@ -49,7 +50,6 @@ use bedcode_lib::wasm_core::PluginHost;
 use bedcode_lib::server::core::app::start_http_server;
 use bedcode_lib::enums::{AuthPayload, AuthStage, SessionControlAction, SessionControlPayload};
 use bedcode_lib::server::websocket::message::Message;
-use bedcode_lib::session::{SessionConfigManager, SessionManager};
 use bedcode_lib::system::app_context::AppContext;
 use bedcode_lib::system::app_context::AppContextBuilder;
 use bedcode_lib::system::constants::SYNC_EVENT_BROADCAST_CAPACITY;
@@ -189,16 +189,11 @@ async fn init_test_app_context() {
         let user_plugins_dir = std::env::temp_dir().join(format!("bedcode-itest-userplugins-{}", std::process::id()));
         std::fs::create_dir_all(&user_plugins_dir).expect("create temp user plugins dir failed");
 
-        // v21 起 SessionManager 无库依赖（会话配置真源归插件私有库，内核只按 spec 执行）
-        let session_manager = Arc::new(SessionManager::new());
-        let config_manager = Arc::new(SessionConfigManager::new(db.clone()));
         let plugin_host = Arc::new(
             PluginHost::new(
                 db.clone(),
                 &plugins_dir,
                 &user_plugins_dir, // 用户插件目录：独立空目录（见上方来源标注说明）
-                session_manager.clone(),
-                config_manager.clone(),
                 None, // 无头/测试上下文无 AppHandle
             )
             .await,
@@ -223,8 +218,6 @@ async fn init_test_app_context() {
 
         AppContextBuilder::new()
             .db(db.clone())
-            .session_manager(session_manager.clone())
-            .config_manager(config_manager.clone())
             .plugin_host(plugin_host.clone())
             .mdns_advertiser(mdns_advertiser.clone())
             .app_handle(None)

@@ -7,7 +7,7 @@
 //!
 //! 原理：进程内真实启动 Actix HTTP+WS 服务器（OS 分配端口）→ 两个真实
 //! tokio-tungstenite 客户端完成配对认证 → 一端发 WS 会话控制消息触发
-//! 服务端广播（SessionControl → SessionManager → sync_tx 事件总线 →
+//! 服务端广播（会话控制动作 → 插件互调 → sync_tx 事件总线 →
 //! SyncEventHandler → WsSessionRegistry 广播，与生产 lib.rs 同一组装路径）
 //! → 另一端收到、发送端被排除；断开后注册表清理生效；停机后端口释放。
 //!
@@ -44,7 +44,6 @@ use bedcode_lib::enums::{AuthPayload, AuthStage, SessionControlAction};
 use bedcode_lib::server::websocket::message::Message;
 use bedcode_lib::server::websocket::registry::WsSessionRegistry;
 use bedcode_lib::server::websocket::WebSocketManager;
-use bedcode_lib::session::{SessionConfigManager, SessionManager};
 use bedcode_lib::system::app_context::AppContextBuilder;
 use bedcode_lib::system::constants::SYNC_EVENT_BROADCAST_CAPACITY;
 use bedcode_lib::system::info::SystemInfo;
@@ -133,7 +132,8 @@ async fn spawn_test_server(port: u16) -> std::io::Result<(ServerHandle, tokio::t
 ///
 /// 与 02 的差异：额外完成 sync_tx 接线 + SyncEventHandler 注册——这是本票
 /// 广播链路的必要半程，严格复刻生产 lib.rs 的组装顺序：
-/// 1. session_manager set_sync_tx（事件发布侧；v22 起 SessionConfigManager 只读、不发配置事件）
+/// 1. sync_tx 接线（事件发布侧；票 11 起内核 SessionManager 不再存在，
+///    同步事件由插件经 `host-events` 广播、宿主 `sync_handler` 只做转发）
 /// 2. global_matcher register_source + register SyncEventHandler（消费侧）
 async fn init_test_app_context() {
     // OnceLock 守卫：本二进制只有一个 #[tokio::test]，但防未来新增测试重复组装
@@ -157,15 +157,11 @@ async fn init_test_app_context() {
         std::fs::create_dir_all(&user_plugins_dir).expect("create temp user plugins dir failed");
 
         // 会话管理器（v21 无库依赖：会话配置/launch 映射归插件，内核不再注入存储）
-        let session_manager = Arc::new(SessionManager::new());
-        let config_manager = Arc::new(SessionConfigManager::new(db.clone()));
         let plugin_host = Arc::new(
             PluginHost::new(
                 db.clone(),
                 &plugins_dir,
                 &user_plugins_dir, // 用户插件目录：独立空目录（见上方来源标注说明）
-                session_manager.clone(),
-                config_manager.clone(),
                 None, // 无头/测试上下文无 AppHandle
             )
             .await,
@@ -190,8 +186,6 @@ async fn init_test_app_context() {
 
         AppContextBuilder::new()
             .db(db.clone())
-            .session_manager(session_manager.clone())
-            .config_manager(config_manager.clone())
             .plugin_host(plugin_host.clone())
             .mdns_advertiser(mdns_advertiser.clone())
             .app_handle(None)
@@ -201,7 +195,6 @@ async fn init_test_app_context() {
             .build_and_init();
 
         // 与生产 lib.rs 同款：会话管理器/配置管理器接入事件总线
-        session_manager.set_sync_tx(sync_tx.clone()).await;
 
         // 与生产同款：注册同步事件处理器（broadcast 消费侧）
         let ws_manager = WebSocketManager::global();

@@ -6,7 +6,6 @@
 use crate::db::Database;
 use crate::mdns::advertiser::MdnsAdvertiser;
 use crate::wasm_core::PluginHost;
-use crate::session::{SessionConfigManager, SessionManager};
 use crate::system::info::SystemInfo;
 use crate::utils::auth::biometric::BiometricChallengeManager;
 use std::path::PathBuf;
@@ -21,10 +20,9 @@ use tokio::sync::{broadcast, Mutex};
 pub struct AppContext {
     /// 数据库实例
     db: Arc<Mutex<Database>>,
-    /// 会话管理器
-    session_manager: Arc<SessionManager>,
-    /// 会话配置管理器
-    config_manager: Arc<SessionConfigManager>,
+    // 票 11：`session_manager` / `config_manager` 两个内核会话域字段已删除——
+    // 会话真源在 `com.bedcode.terminal-session` 登记域，宿主经 `session_gateway`
+    // 窄转发层互调，不再持有内核会话对象。
     /// 插件宿主（生命周期管理）
     plugin_host: Arc<PluginHost>,
     /// 生物认证挑战值管理器
@@ -77,14 +75,6 @@ impl AppContext {
         &self.db
     }
 
-    pub fn session_manager(&self) -> &Arc<SessionManager> {
-        &self.session_manager
-    }
-
-    pub fn config_manager(&self) -> &Arc<SessionConfigManager> {
-        &self.config_manager
-    }
-
     pub fn plugin_host(&self) -> &Arc<PluginHost> {
         &self.plugin_host
     }
@@ -117,8 +107,6 @@ impl AppContext {
 /// 构建器，用于分步组装 AppContext
 pub struct AppContextBuilder {
     db: Option<Arc<Mutex<Database>>>,
-    session_manager: Option<Arc<SessionManager>>,
-    config_manager: Option<Arc<SessionConfigManager>>,
     plugin_host: Option<Arc<PluginHost>>,
     biometric_challenges: Option<Arc<BiometricChallengeManager>>,
     mdns_advertiser: Option<Arc<tokio::sync::RwLock<MdnsAdvertiser>>>,
@@ -132,8 +120,6 @@ impl AppContextBuilder {
     pub fn new() -> Self {
         Self {
             db: None,
-            session_manager: None,
-            config_manager: None,
             plugin_host: None,
             biometric_challenges: None,
             mdns_advertiser: None,
@@ -146,16 +132,6 @@ impl AppContextBuilder {
 
     pub fn db(mut self, db: Arc<Mutex<Database>>) -> Self {
         self.db = Some(db);
-        self
-    }
-
-    pub fn session_manager(mut self, sm: Arc<SessionManager>) -> Self {
-        self.session_manager = Some(sm);
-        self
-    }
-
-    pub fn config_manager(mut self, cm: Arc<SessionConfigManager>) -> Self {
-        self.config_manager = Some(cm);
         self
     }
 
@@ -193,8 +169,6 @@ impl AppContextBuilder {
     pub fn build_and_init(self) -> &'static AppContext {
         let ctx = AppContext {
             db: self.db.expect("AppContext: db is required"),
-            session_manager: self.session_manager.expect("AppContext: session_manager is required"),
-            config_manager: self.config_manager.expect("AppContext: config_manager is required"),
             plugin_host: self.plugin_host.expect("AppContext: plugin_host is required"),
             biometric_challenges: self
                 .biometric_challenges

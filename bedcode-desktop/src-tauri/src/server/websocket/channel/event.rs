@@ -241,15 +241,12 @@ impl EventChannel {
     ) {
         match payload.action {
             crate::enums::TerminalAction::Input { data, special_key } => {
-                let app_ctx = AppContext::global();
-                let sm = app_ctx.session_manager().clone();
                 actix::spawn(async move {
                     if let Err(e) = crate::server::websocket::services::terminal_service::handle_input(
                         &session_id,
                         TerminalPayload {
                             action: crate::enums::TerminalAction::Input { data, special_key },
                         },
-                        &Some(sm),
                     )
                     .await
                     {
@@ -293,15 +290,11 @@ impl EventChannel {
         let app_handle = AppContext::global().app_handle().clone();
 
         actix::spawn(async move {
-            let app_ctx = AppContext::global();
-            let session_manager = Some(app_ctx.session_manager().clone());
-
             let result = crate::server::websocket::services::session_control::handle_control_message(
                 message_id.clone(),
                 None, // session_id
                 chrono::Utc::now().timestamp_millis(),
                 payload.action,
-                &session_manager,
                 addr,
                 device_name,
                 app_handle,

@@ -3,10 +3,12 @@
 //! PTY 输出读取线程（`pty_reader`）只负责「read → 有序队列 → 单消费者顺序投递」，
 //! **投递到哪里由调用方注入**：
 //!
-//! - 业务终端会话 → `session::SessionOutputSink`（全局输出总线；**业务实现在业务层**
-//!   `session/session_output.rs`，本引擎模块只保留 [`PtyOutputSink`] 抽象——
-//!   pty 引擎不认识会话输出总线，这是「pty 只提供基础服务接口」的边界）
-//! - 插件私有 PTY（host-pty）→ 插件自备的环形缓冲，绝不灌进业务会话链路
+//! - **引擎环（票 11 起唯一形态）→ `PtyRingSink`**（`pty_ring` 的配对输出汇）：
+//!   输出落进本句柄的 `PtyRing`，宿主按游标应答 `host-pty.output-ring-fetch`；
+//!   插件私有 PTY 与业务会话共用同一实现（业务会话也是引擎句柄，区别只在
+//!   是否声明 `hostBroadcastSessionId` 供宿主直读）
+//! - 调用方自备（测试 / 特殊用途）→ 任意 `PtyOutputSink` 实现（测试替身
+//!   `CollectingSink` 即这一形态）
 //!
 //! **源零等待契约**：实现方只允许做「写入自己的缓冲 + 通告水位」这类 O(1) 均摊
 //! 操作，不得等待任何下游消费者——慢消费者只能节流自己，背压不得回传到读取线程
@@ -64,7 +66,6 @@ pub(crate) mod test_support {
 mod tests {
     use super::test_support::CollectingSink;
     use super::*;
-    use crate::session::GlobalOutputManager;
 
     fn unique_id(prefix: &str) -> String {
         format!(
@@ -76,26 +77,17 @@ mod tests {
         )
     }
 
-    /// C-002 正例：自备 sink 只收自己的字节，业务总线不留痕
+    /// C-002 正例：自备 sink 只收自己的字节（按序、不合并、不改写）
+    ///
+    /// 票 11：原用例还断言「业务总线不留痕」——业务输出环随 `session/` 目录删除，
+    /// 「sink 只影响自己」现在由类型契约保证（`PtyOutputSink` 只被引擎持有）。
     #[tokio::test]
-    async fn collecting_sink_receives_bytes_without_touching_session_bus() {
-        let sid = unique_id("sink-private");
-        let global = GlobalOutputManager::global();
-        let session_manager = global.register_session(&sid).await;
-
+    async fn collecting_sink_receives_bytes_in_order() {
         let sink = CollectingSink::new();
         sink.on_bytes(b"alpha".to_vec(), 1).await;
         sink.on_bytes(b"beta".to_vec(), 2).await;
 
         assert_eq!(sink.collected(), b"alphabeta".to_vec());
         assert_eq!(sink.chunks(), vec![b"alpha".to_vec(), b"beta".to_vec()]);
-
-        let ring_arc = session_manager.ring();
-        let ring = ring_arc.read().await;
-        let (min, max) = ring.watermarks();
-        assert_eq!(max - min, 0, "自备 sink 不得把字节写进业务会话环");
-        drop(ring);
-
-        global.unregister_session(&sid).await;
     }
 }

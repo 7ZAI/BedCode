@@ -55,7 +55,17 @@ const V3_FRAME_FLAG_WAITING: u8 = 0x01;
 
 /// 订阅者传播模式常量定义在 session 层（订阅者状态的一部分），此处重导出
 /// 以保持既有引用点（control_frame / terminal_ws）不变
-pub(crate) use crate::session::{MODE_BATCH, MODE_REALTIME};
+// ==================== 订阅者传播模式（双速） ====================
+//
+// 票 11：两个常量原先住在内核会话层 `session/session_output.rs`，由本模块重导出
+// （当时是为了「内核订阅者状态的一部分」的归属）。会话目录删除后归属回到**唯一
+// 消费者身边**：模式是合帧策略的输入（`should_flush` 直接读它），本模块就是它的
+// 语义主场。
+//
+// realtime = 读即传（时间窗 + 字节窗合并）；batch = 累计满 `batch_bytes` 才转发
+// 一帧（无时间窗）。
+pub(crate) const MODE_REALTIME: u8 = 0;
+pub(crate) const MODE_BATCH: u8 = 1;
 
 /// 编码 TB v3 输出帧（spec §5.3 字节化：`magic "TB" + version=3 + flags + start_offset(8 LE) + len(4 LE) + data`）
 ///
@@ -102,13 +112,7 @@ impl OutputBuffer {
         }
     }
 
-    /// 按事件并入（生产路径走 `append_slice`；此处供单测构造区间语义一致的批次）
-    #[cfg(test)]
-    pub(crate) fn append(&mut self, event: &crate::session::OutputEvent) {
-        self.append_slice(event.start_offset, &event.data, event.is_waiting);
-    }
-
-    /// 按字节区间并入一段负载（环上 `read_at` 返回的单块视图直接可用）
+    /// 按字节区间并入一段负载（环上 `read_at` 返回的单块视图直接可用；单测同用）
     pub(crate) fn append_slice(&mut self, start_offset: u64, data: &[u8], end_is_waiting: bool) {
         if self.data.is_empty() {
             self.start_offset = start_offset;
@@ -188,22 +192,13 @@ impl OutputBuffer {
 mod tests {
     use super::*;
 
-    fn event(session_id: &str, data: &[u8], start_offset: u64) -> crate::session::OutputEvent {
-        crate::session::OutputEvent {
-            session_id: session_id.to_string(),
-            data: data.to_vec(),
-            start_offset,
-            timestamp: 0,
-            is_waiting: false,
-        }
-    }
 
     /// TB v3 二进制帧形态：帧头 start_offset 随事件并入批，字节区间自洽
     #[test]
     fn test_output_buffer_binary_flush_carries_offset_and_data() {
         let mut buf = OutputBuffer::new();
-        buf.append(&event("s", b"ab", 100));
-        buf.append(&event("s", b"cd", 102));
+        buf.append_slice(100, b"ab", false);
+        buf.append_slice(102, b"cd", false);
 
         let out = buf.flush();
         let ForwardOutput::Binary(frame) = out else {
@@ -226,7 +221,7 @@ mod tests {
     #[test]
     fn test_output_buffer_single_event_flush() {
         let mut buf = OutputBuffer::new();
-        buf.append(&event("s", b"single", 7));
+        buf.append_slice(7, b"single", false);
 
         let out = buf.flush();
         let ForwardOutput::Binary(frame) = out else {
@@ -249,7 +244,7 @@ mod tests {
     fn output_buffer_contiguity_check() {
         let mut buf = OutputBuffer::new();
         assert!(buf.is_contiguous_with(100), "空缓冲恒可并入");
-        buf.append(&event("s", b"ab", 100)); // [100,102)
+        buf.append_slice(100, b"ab", false); // [100,102)
         assert!(buf.is_contiguous_with(102), "区间首 == 缓冲尾：连续");
         assert!(!buf.is_contiguous_with(104), "越过缓冲尾（带洞）：不得并入");
         assert!(!buf.is_contiguous_with(101), "早于缓冲尾（重叠）：不得并入");
@@ -304,9 +299,9 @@ mod tests {
     #[test]
     fn test_output_buffer_v3_flush_merges_with_offsets() {
         let mut buf = OutputBuffer::new();
-        buf.append(&event("s", b"ab", 7));
-        buf.append(&event("s", b"cd", 9));
-        buf.append(&event("s", b"ef", 11));
+        buf.append_slice(7, b"ab", false);
+        buf.append_slice(9, b"cd", false);
+        buf.append_slice(11, b"ef", false);
 
         let out = buf.flush();
         let ForwardOutput::Binary(frame) = out else {
@@ -324,7 +319,7 @@ mod tests {
     #[test]
     fn test_output_buffer_v3_single_event_flush() {
         let mut buf = OutputBuffer::new();
-        buf.append(&event("s", b"single", 3));
+        buf.append_slice(3, b"single", false);
 
         let out = buf.flush();
         let ForwardOutput::Binary(frame) = out else {

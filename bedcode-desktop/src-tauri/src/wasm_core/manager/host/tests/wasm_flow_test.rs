@@ -271,6 +271,72 @@ async fn test_schedule_plugin_reload_throttle() {
 // `PluginServices` 的两条注册面（生命周期 / 输入）已随宿主观察面退役，
 // 注册表与派发点不复存在，本用例无对象可测。
 
+// ==================== 内核会话域防回接锁（票 11） ====================
+
+/// 源码扫描锁：宿主侧不得再出现内核会话域的任何符号。
+///
+/// 票 11 删除了 `src/session/` 整个目录（`SessionManager` / `SessionConfigManager` /
+/// `SessionOutputManager` / `GlobalOutputManager` / `SessionInfoRegistry` / 环与
+/// 订阅者实现）。这不是「换了个位置放」——会话真源在 `com.bedcode.terminal-session`
+/// 登记域，宿主只剩 `host-pty`（引擎）+ `host-connection`（连接清单）+ `session_gateway`
+/// （互调窄转发层）。谁把内核会话对象加回来，谁就要先推翻票 11 的裁定。
+///
+/// 与票 03 的锁同理：只扫**非注释行**（各模块里「为什么删」的说明段落是记账），
+/// 且跳过两张锁自身（`sync_handler.rs` 与本文件——它们把标识符当字符串去匹配）。
+#[test]
+fn retired_kernel_session_domain_is_not_reintroduced() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut violations: Vec<String> = Vec::new();
+
+    let forbidden: [&str; 8] = [
+        "crate::session::",
+        "SessionManager",
+        "SessionConfigManager",
+        "SessionOutputManager",
+        "GlobalOutputManager",
+        "SessionInfoRegistry",
+        "SessionOutputSink",
+        "UnifiedOutputQueue",
+    ];
+
+    let mut stack = vec![root];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            // 两张锁自身：它们以字符串形式携带这些标识符去匹配
+            if path.ends_with("wasm_flow_test.rs") || path.ends_with("sync_handler.rs") {
+                continue;
+            }
+            let Ok(content) = std::fs::read_to_string(&path) else { continue };
+            for (idx, raw_line) in content.lines().enumerate() {
+                let line = raw_line.trim_start();
+                if line.starts_with("//") || line.starts_with("///") {
+                    continue;
+                }
+                for needle in forbidden {
+                    if line.contains(needle) {
+                        violations.push(format!("{}:{}: {}", path.display(), idx + 1, line.trim()));
+                    }
+                }
+            }
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "内核会话域（票 11 已整目录删除）出现回接痕迹：\n{}",
+        violations.join("\n")
+    );
+}
+
 // ==================== 退役面防回接锁（票 03） ====================
 
 /// 源码扫描锁：宿主侧不得再把「注册了就能收到会话回调」的观察面接回来。

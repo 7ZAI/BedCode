@@ -45,10 +45,6 @@ async fn user_copy_must_not_shadow_builtin_scan_plugin() {
         db,
         &builtin_dir,
         &user_dir,
-        Arc::new(SessionManager::default()),
-        Arc::new(SessionConfigManager::new(Arc::new(Mutex::new(
-            Database::new(&std::path::PathBuf::from(":memory:")).unwrap(),
-        )))),
         None,
     )
     .await;

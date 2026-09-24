@@ -124,7 +124,7 @@ mod tests {
     use crate::enums::PtySessionStatus;
     use crate::pty::lifecycle::PtyTerminated;
     use crate::pty::output_sink::test_support::CollectingSink;
-    use crate::session::SessionOutputSink;
+    use crate::pty::pty_ring::PtyRingSink;
     use std::io::Read;
     use std::sync::atomic::AtomicBool;
     use std::sync::Arc;
@@ -172,17 +172,19 @@ mod tests {
         )
     }
 
-    /// 轮询会话环直至累计字节达到期望值（消费者任务是异步的）
-    async fn drain_ring_until(session: &Arc<crate::session::SessionOutputManager>, want: usize) -> Vec<u8> {
+    /// 轮询**引擎环**直至累计字节达到期望值（读线程是独立 OS 线程，投递异步）
+    ///
+    /// 票 11：参数从业务会话环改为引擎 `PtyRing`（`PtyRingSink::paired` 的另一半）。
+    async fn drain_engine_ring_until(ring: &Arc<std::sync::Mutex<crate::pty::PtyRing>>, want: usize) -> Vec<u8> {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
-            let ring_arc = session.ring();
-            let ring = ring_arc.read().await;
-            let (min, max) = ring.watermarks();
-            if max.saturating_sub(min) as usize >= want {
-                return ring.range(min, max);
+            {
+                let guard = ring.lock().unwrap_or_else(|e| e.into_inner());
+                let (min, max) = guard.watermarks();
+                if max.saturating_sub(min) as usize >= want {
+                    return guard.fetch(min, want).data;
+                }
             }
-            drop(ring);
             if std::time::Instant::now() >= deadline {
                 return Vec::new();
             }
@@ -281,58 +283,39 @@ mod tests {
         assert_eq!(terminated.exit_code, None, "无退出码时事件仍须发出且缺省");
     }
 
-    /// 业务总线投递（票据 04 + 拉取模型）：产出字节必须完整按序落入会话输出环
+    /// 引擎环投递（票据 04 + 拉取模型）：产出字节必须完整按序落入**引擎环**
     /// （订阅者随后按游标从环上拉取）。
     ///
     /// 零订阅者场景同时是「源不依赖消费者」的回归护栏：没有任何订阅者时
-    /// 产出照常全量入环。
+    /// 产出照常全量入环（引擎环是纯缓冲，没有推送面）。
+    ///
+    /// 票 11：读源从业务会话环改为引擎 `PtyRingSink::paired`——引擎环现在是
+    /// 唯一输出环。
     #[test]
-    fn output_bytes_reach_session_ring_complete_and_in_order_without_subscribers() {
-        use crate::session::GlobalOutputManager;
-
+    fn output_bytes_reach_engine_ring_complete_and_in_order() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let sid = unique_session_id("itest-delivery");
-            let manager = GlobalOutputManager::global();
-            manager.register_session(&sid).await;
 
             let (gate, _rx) = test_gate(&sid);
             let running = Arc::new(AtomicBool::new(true));
             let payload = oversized_payload();
-            let pty_reader = PtyReader::start(
-                memory_reader(payload.clone()),
-                Arc::new(SessionOutputSink::new(&sid)),
-                gate,
-                sid.clone(),
-                running,
-            );
+            let (sink, ring) = PtyRingSink::paired(1024 * 1024);
+            let pty_reader = PtyReader::start(memory_reader(payload.clone()), sink, gate, sid.clone(), running);
             pty_reader.wait();
 
-            // 无任何订阅者：产出仍须完整按序入环
-            let session = manager.session(&sid).await.expect("会话管理器");
-            assert_eq!(
-                session.pull_subscriber_count().await,
-                0,
-                "本用例刻意零订阅者（源产出不得依赖消费者）"
-            );
-            let collected = drain_ring_until(&session, payload.len()).await;
-            assert_eq!(collected, payload, "PTY 输出必须完整按序落入会话环（票据 04）");
-
-            manager.unregister_session(&sid).await;
+            let collected = drain_engine_ring_until(&ring, payload.len()).await;
+            assert_eq!(collected, payload, "PTY 输出必须完整按序落入引擎环（票据 04）");
         });
     }
 
-    /// 自备 sink 投递（票据 01 输出汇可注入）：同一条读线程把字节投递到业务总线
-    /// 之外的目标——内容、分块与顺序均不得变化，业务会话环不得留痕
+    /// 自备 sink 投递（票据 01 输出汇可注入）：同一条读线程把字节投递到引擎环
+    /// 之外的目标——内容、分块与顺序均不得变化
     #[test]
-    fn output_bytes_reach_private_sink_in_order_without_touching_session_bus() {
-        use crate::session::GlobalOutputManager;
-
+    fn output_bytes_reach_private_sink_in_order() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let sid = unique_session_id("itest-private-sink");
-            let manager = GlobalOutputManager::global();
-            manager.register_session(&sid).await;
 
             let (gate, _rx) = test_gate(&sid);
             let running = Arc::new(AtomicBool::new(true));
@@ -348,15 +331,6 @@ mod tests {
                 "负载应经多次 read 分块投递（否则未验证顺序契约）: {:?}",
                 sink.chunks().len()
             );
-
-            let session = manager.session(&sid).await.expect("会话管理器");
-            let ring_arc = session.ring();
-            let ring = ring_arc.read().await;
-            let (min, max) = ring.watermarks();
-            assert_eq!(max - min, 0, "插件私有输出不得进入业务会话环（业务线零感知）");
-            drop(ring);
-
-            manager.unregister_session(&sid).await;
         });
     }
 

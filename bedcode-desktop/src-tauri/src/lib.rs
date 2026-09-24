@@ -12,7 +12,6 @@ pub mod process;
 pub mod protocol;
 pub mod pty;
 pub mod server;
-pub mod session;
 pub mod system;
 pub mod utils;
 pub mod wasm_core;
@@ -399,8 +398,9 @@ pub fn run() {
             let system_info = Arc::new(system::info::SystemInfo::collect());
 
             let resource_dir_arc = Arc::new(resource_dir);
-            let session_manager = Arc::new(session::SessionManager::new());
-            let config_manager = Arc::new(session::SessionConfigManager::new(db.clone()));
+            // 票 11：内核会话管理器 / 配置管理器不再装配——会话真源在
+            // `com.bedcode.terminal-session` 登记域，宿主只保留 `session_gateway`
+            // 窄转发层（互调 api + `host-pty` 引擎）。
             // app_handle_arc 需在 plugin_host 之前创建，因为 PluginHost::new() 需要它构建 HostContextFns
             let app_handle_arc = Arc::new(app_handle.clone());
             // 用户插件目录（app_data_dir/plugins）：zip 安装的插件所在地（可卸载），
@@ -414,8 +414,6 @@ pub fn run() {
                 db.clone(),
                 &plugins_dir,
                 &user_plugins_dir,
-                session_manager.clone(),
-                config_manager.clone(),
                 Some(app_handle_arc.clone()),
             )));
             // 注入消息总线 dispatcher（两阶段初始化）
@@ -426,18 +424,10 @@ pub fn run() {
             let (sync_tx, _) =
                 tokio::sync::broadcast::channel::<events::DesktopSyncEvent>(SYNC_EVENT_BROADCAST_CAPACITY);
 
-            // 设置 SessionManager 的同步事件发送器（v22 起 SessionConfigManager 为只读
-            // 迁移通道，不发配置事件——写面与 Config* 广播已随 host-session 写原语退役）
-            tauri::async_runtime::block_on(async {
-                session_manager.set_sync_tx(sync_tx.clone()).await;
-            });
-
             // ==================== 注册到 AppContext 全局容器 ====================
 
             let ctx = system::app_context::AppContextBuilder::new()
                 .db(db.clone())
-                .session_manager(session_manager.clone())
-                .config_manager(config_manager.clone())
                 .plugin_host(plugin_host.clone())
                 .mdns_advertiser(mdns_advertiser.clone())
                 .app_handle(Some(app_handle_arc.clone()))
@@ -448,8 +438,6 @@ pub fn run() {
 
             // 同时注册到 Tauri State（前端 invoke 可用）
             app.manage(db.clone());
-            app.manage(config_manager.clone());
-            app.manage(session_manager.clone());
             app.manage(mdns_advertiser.clone());
             app.manage(plugin_host.clone());
             app.manage(plugin_host.wasm_runtime().fs_auth().clone());

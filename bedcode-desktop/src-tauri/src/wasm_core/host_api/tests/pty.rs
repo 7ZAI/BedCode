@@ -1240,29 +1240,21 @@ fn spawn_applies_requested_terminal_size() {
 
 // ==================== 业务线零感知 ====================
 
-/// 正例：插件 PTY 既不进业务输出注册表，也不进业务会话表（业务线零感知）
+/// 正例：插件私有 PTY 只活在引擎注册表（业务线的两条注册表都不存在了）
+///
+/// 票 11：原断言查的是「业务输出总线有没有它 / 业务会话表有没有它」——这两个对象
+/// 随 `session/` 目录删除，**类型层面已不可能被登记**。保留的是这个用例仍然有效的
+/// 那一半：句柄确实在引擎注册表里在册、输出确实只落引擎环（`ring_of` / `is_registered`
+/// 的正向断言），业务线零感知由「没有业务线」这件事本身保证。
 #[cfg(target_os = "linux")]
 #[tokio::test]
-async fn spawned_pty_is_absent_from_business_session_lines() {
-    use crate::session::GlobalOutputManager;
-
+async fn spawned_pty_lives_only_in_engine_registry() {
     let marker = unique_tag("ISOLATE");
-    let ctx = ctx_with_pty("com.bedcode.isolate", &alive_with_output(&marker));
+    let _ctx = ctx_with_pty("com.bedcode.isolate", &alive_with_output(&marker));
     let pty_id = find_handle_of("com.bedcode.isolate");
     wait_for_output(&ring_of(&pty_id), &marker);
 
-    assert!(
-        !GlobalOutputManager::global().has_session(&pty_id).await,
-        "插件私有 PTY 不得注册进业务输出总线"
-    );
-    assert!(
-        ctx.session_manager.get_session(&pty_id).await.is_none(),
-        "插件私有 PTY 不得出现在业务会话表"
-    );
-    assert!(
-        ctx.session_manager.list_sessions().await.is_empty(),
-        "业务会话列表必须零感知"
-    );
+    assert!(is_registered(&pty_id), "插件私有 PTY 必须在引擎注册表在册");
 }
 
 /// 句柄是否仍在册（测试断言副作用用）

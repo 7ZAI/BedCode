@@ -366,7 +366,6 @@ impl crate::wasm_core::bus::MessageDispatcher for PluginHost {
 mod tests {
     use super::*;
     use crate::db::Database;
-    use crate::session::{SessionConfigManager, SessionManager};
     use std::path::Path;
     use std::sync::Arc;
     use tokio::sync::Mutex;
@@ -375,11 +374,9 @@ mod tests {
     async fn test_plugin_host() -> Arc<PluginHost> {
         let db = Arc::new(Mutex::new(Database::new(Path::new(":memory:")).expect("in-memory db")));
         db.lock().await.init_schema().expect("init schema");
-        let sm = Arc::new(crate::session::SessionManager::default());
-        let cm = Arc::new(SessionConfigManager::new(db.clone()));
         let dir = std::env::temp_dir().join(format!("bedcode-svc-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("temp dir");
-        let host = PluginHost::new(db, &dir, &dir, sm, cm, None).await;
+        let host = PluginHost::new(db, &dir, &dir, None).await;
         host.init_message_bus().await;
         Arc::new(host)
     }
@@ -415,9 +412,7 @@ mod tests {
         let host = rt.block_on(async {
             let db = Arc::new(Mutex::new(Database::new(Path::new(":memory:")).expect("in-memory db")));
             db.lock().await.init_schema().expect("init schema");
-            let sm = Arc::new(SessionManager::default());
-            let cm = Arc::new(SessionConfigManager::new(db.clone()));
-            let host = PluginHost::new(db, &dir, &dir, sm, cm, None).await;
+            let host = PluginHost::new(db, &dir, &dir, None).await;
             host.init_message_bus().await;
             Arc::new(host)
         });

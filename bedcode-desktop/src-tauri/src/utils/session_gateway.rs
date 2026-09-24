@@ -246,33 +246,26 @@ pub async fn special_key(host_ctx: &WasmHostContext, session_id: &str, key: &str
 
 /// 一次性历史快照：`(data, min_offset, snapshot_offset, history_bytes)`
 ///
-/// **引擎优先（票 06，M7 恢复）**：插件会话的输出环在宿主 PTY 引擎（票 05 广播
-/// 声明），经 [`broadcast_handle_for_session`] 直读同进程 `PtyRing`（零跨 WASM
-/// 边界）——`from` 旧于 `min_offset` 时如实返回驻留起点（缺口由 `min_offset`
-/// 显式上报，客户端据此判定截断，不假装连续）。旧内核会话（无广播声明）保持
-/// `GlobalOutputManager::snapshot_bytes` 兑底。
+/// **引擎唯一（票 11）**：会话输出环在宿主 PTY 引擎（票 05 广播声明），经
+/// [`broadcast_handle_for_session`] 直读同进程 `PtyRing`（零跨 WASM 边界）——
+/// `from` 旧于 `min_offset` 时如实返回驻留起点（缺口由 `min_offset` 显式上报，
+/// 客户端据此判定截断，不假装连续）。无广播句柄 = 该会话不存在或不供广播 →
+/// 返回 `None`（原「回落内核输出管理器」的兑底腿随 `session/` 目录删除）。
 pub async fn history_snapshot(session_id: &str, from: u64) -> Option<(Vec<u8>, u64, u64, u64)> {
-    if let Some(handle) = broadcast_handle_for_session(session_id) {
-        let (data, min_offset, snapshot_offset, history_bytes) = {
-            let ring = handle.ring.lock().unwrap_or_else(|e| e.into_inner());
-            let (min, max) = ring.watermarks();
-            // 宿主直读不受 `PLUGIN_PTY_RING_FETCH_MAX_BYTES`（那是 WASM 边界限额）；
-            // 从 `from.max(min)` 起拉取到产出端，一次取净驻留历史
-            let start = from.max(min);
-            let fetched = ring.fetch(start, max.saturating_sub(start) as usize);
-            (fetched.data, min, max, max.saturating_sub(min))
-        };
-        return Some((data, min_offset, snapshot_offset, history_bytes));
-    }
-    crate::session::GlobalOutputManager::global()
-        .snapshot_bytes(session_id, from)
-        .await
+    let handle = broadcast_handle_for_session(session_id)?;
+    let (data, min_offset, snapshot_offset, history_bytes) = {
+        let ring = handle.ring.lock().unwrap_or_else(|e| e.into_inner());
+        let (min, max) = ring.watermarks();
+        // 宿主直读不受 `PLUGIN_PTY_RING_FETCH_MAX_BYTES`（那是 WASM 边界限额）；
+        // 从 `from.max(min)` 起拉取到产出端，一次取净驻留历史
+        let start = from.max(min);
+        let fetched = ring.fetch(start, max.saturating_sub(start) as usize);
+        (fetched.data, min, max, max.saturating_sub(min))
+    };
+    Some((data, min_offset, snapshot_offset, history_bytes))
 }
 
-/// 取消某订阅者对该会话的输出订阅（WS 控制面停止 / 移除动作之后调用；
-/// 对插件会话为幂等 no-op——输出订阅面随 P3 恢复）
-pub async fn unsubscribe_output(session_id: &str, subscriber: &str) {
-    crate::session::GlobalOutputManager::global()
-        .unsubscribe(session_id, subscriber)
-        .await;
-}
+// 票 11：`unsubscribe_output`（向内核输出环退订）随 `session/` 目录删除。
+// WS 控制面停止 / 移除动作之后**不需要**宿主替连接退订：输出订阅句柄是连接私有的，
+// 会话终态由引擎订阅者发 `SessionStopped` 帧、连接侧据此退休自己的句柄（见
+// `terminal_ws::subscriber::engine_subscriber_loop` 的终态分支）。

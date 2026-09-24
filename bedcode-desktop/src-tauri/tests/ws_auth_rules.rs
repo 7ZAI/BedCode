@@ -30,7 +30,6 @@ use bedcode_lib::server::core::app::start_http_server;
 use bedcode_lib::enums::{AuthPayload, AuthStage, SessionControlAction};
 use bedcode_lib::server::websocket::message::Message;
 use bedcode_lib::server::websocket::WebSocketManager;
-use bedcode_lib::session::{SessionConfigManager, SessionManager};
 use bedcode_lib::system::app_context::AppContextBuilder;
 use bedcode_lib::system::constants::SYNC_EVENT_BROADCAST_CAPACITY;
 use bedcode_lib::system::info::SystemInfo;
@@ -116,16 +115,11 @@ async fn init_test_app_context() {
         let user_plugins_dir = std::env::temp_dir().join(format!("bedcode-itest-userplugins-{}", std::process::id()));
         std::fs::create_dir_all(&user_plugins_dir).expect("create temp user plugins dir failed");
 
-        // v21 起 SessionManager 无库依赖（会话配置真源归插件私有库）
-        let session_manager = Arc::new(SessionManager::new());
-        let config_manager = Arc::new(SessionConfigManager::new(db.clone()));
         let plugin_host = Arc::new(
             PluginHost::new(
                 db.clone(),
                 &plugins_dir,
                 &user_plugins_dir, // 用户插件目录：独立空目录（见上方来源标注说明）
-                session_manager.clone(),
-                config_manager.clone(),
                 None,
             )
             .await,
@@ -150,8 +144,6 @@ async fn init_test_app_context() {
 
         AppContextBuilder::new()
             .db(db.clone())
-            .session_manager(session_manager.clone())
-            .config_manager(config_manager.clone())
             .plugin_host(plugin_host.clone())
             .mdns_advertiser(mdns_advertiser.clone())
             .app_handle(None)
@@ -160,7 +152,6 @@ async fn init_test_app_context() {
             .system_info(system_info)
             .build_and_init();
 
-        session_manager.set_sync_tx(sync_tx.clone()).await;
 
         let ws_manager = WebSocketManager::global();
         ws_manager.init().await.expect("init WebSocketManager failed");

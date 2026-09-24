@@ -64,7 +64,6 @@ pub(super) fn check_permission(host_ctx: &WasmHostContext, plugin_id: &str, perm
 pub(crate) mod tests {
     use super::*;
     use crate::db::Database;
-    use crate::session::{SessionConfigManager, SessionManager};
     use crate::wasm_core::bus::MessageBus;
     use crate::wasm_core::manager::storage::PluginStorage;
     use crate::wasm_core::permission::PermissionManager;
@@ -83,12 +82,6 @@ pub(crate) mod tests {
         db.init_schema().expect("init schema");
         let db = Arc::new(Mutex::new(db));
         let storage = Arc::new(PluginStorage::new(db.clone()));
-        let session_manager = Arc::new(SessionManager::default());
-        let config_manager = Arc::new(SessionConfigManager::new(Arc::new(Mutex::new({
-            let db = Database::new(&Path::new(":memory:")).expect("in-memory db");
-            db.init_schema().expect("init schema");
-            db
-        }))));
         let permission = Arc::new(PermissionManager::new());
         let fs_auth = Arc::new(FsAuthChecker::new(storage.clone(), None));
         let message_bus = Arc::new(MessageBus::new());
@@ -96,8 +89,6 @@ pub(crate) mod tests {
             db,
             Arc::new(Mutex::new(HashMap::new())),
             storage,
-            session_manager,
-            config_manager,
             None,
             permission,
             fs_auth,

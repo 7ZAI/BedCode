@@ -191,8 +191,20 @@ config-get（`session_configs` 表退役，私有库即真源）；v23 = host-se
   `com.bedcode.terminal-session` 私有登记域（`plugins/terminal-session/rust/src/session/`，
   `sessions` / `session_annotations` 两表是落盘真源）。宿主侧**读会话事实一律经
   `utils/session_gateway.rs`**（纯互调 api：`session-list/get/create/close/remove/resize/input`），
-  插件未激活**显性报错**——**禁止**新增「直连 `SessionManager` 取会话」的代码（对插件会话恒
-  `NotFound` / 空，静默降级曾造成终端输入丢键与任务队列假中断）；**`host-session` 整 interface 已于
+  插件未激活**显性报错**。**内核会话实现目录 `src-tauri/src/session/` 已于票 11 整目录删除**
+  （`SessionManager` / `SessionConfigManager` / `SessionOutputManager` / `GlobalOutputManager` /
+  `SessionInfoRegistry` / 业务输出环与内核订阅执行体全删，防回接锁
+  `retired_kernel_session_domain_is_not_reintroduced`）——**禁止**再新增任何「宿主内核持有会话」
+  的代码，会话事实只有一处：插件登记域；宿主侧剩下的会话相关能力只有
+  `host-pty`（引擎）+ `host-connection`（连接清单）+ `session_gateway`（互调窄转发层）。
+  连带：移动端 WS 终端通道的「业务输出环」路径（订阅 / 退订 / ack / 历史快照 / 内核
+  status 兜底 watcher / 关停与连接清理里的内核环退订）全部删除，**只剩引擎一条来路**
+  （票 05 广播声明 + 票 06 直读同进程 `PtyRing`；订阅句柄是连接私有的，随连接 actor
+  `SubscriptionState::cleanup` 退休、随引擎终态帧退出）。
+  共享订阅类型（`SubscribeResponse` / `SubscriberHandle` / `SubscriberStats`）与双速模式常量
+  `MODE_REALTIME` / `MODE_BATCH` 迁入 WS 订阅侧（`server/websocket/terminal_ws/`：
+  响应与句柄在 `subscriber.rs`、模式常量在 `forward.rs`）——它们的真实归属就是订阅者，
+  不是会话层。**`host-session` 整 interface 已于
   ABI v27 退役**（会话引擎下沉票 10：12 条原语全删，`connections-list` 在票 04 先迁成独立原语
   `host-connection.connections-list`——判据换挂新位 **`connection:read`**，只授 `session:read`
   不再能读连接清单）；**`host-terminal`（`send`）同批退役**（「宿主替插件往交互终端注入按键」的

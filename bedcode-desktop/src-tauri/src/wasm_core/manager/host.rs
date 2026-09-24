@@ -11,7 +11,6 @@ use crate::wasm_core::manager::storage::PluginStorage;
 use crate::wasm_core::manager::types::{DesktopPluginInfo, LoadedPlugin, PluginSource};
 use crate::wasm_core::manager::runtime::{LoadedWasmPlugin, WasmHostContext, WasmRuntime};
 use crate::wasm_core::permission::PermissionManager;
-use crate::session::{SessionConfigManager, SessionManager};
 use crate::system::constants::{
     LIFECYCLE_SHUTDOWN, LIFECYCLE_STARTUP, PLUGIN_CALLBACK_TIMEOUT_SECS, PLUGIN_MANIFEST_FILE,
 };
@@ -102,8 +101,6 @@ impl PluginHost {
         plugins_dir: &Path,
         // 用户插件目录（app_data_dir/plugins，zip 安装目标，可卸载；dev 合入）
         user_plugins_dir: &Path,
-        session_manager: Arc<SessionManager>,
-        config_manager: Arc<SessionConfigManager>,
         // Option 化：无头/测试上下文无 AppHandle（与 WasmRuntime/WasmHostContext 同策略），
         // 依赖前端事件的宿主能力在调用处降级
         app_handle: Option<Arc<tauri::AppHandle>>,
@@ -125,8 +122,6 @@ impl PluginHost {
             db.clone(),
             Arc::new(Mutex::new(HashMap::new())),
             storage.clone(),
-            session_manager,
-            config_manager,
             app_handle,
             permission.clone(),
             wasm_runtime.fs_auth().clone(),

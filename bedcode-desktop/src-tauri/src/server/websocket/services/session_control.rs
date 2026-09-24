@@ -6,7 +6,6 @@
 use crate::enums::{SessionControlAction, SessionSummary};
 use crate::server::websocket::message::Message;
 use crate::protocol::RendererSource;
-use crate::session::SessionManager;
 use crate::Result;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -24,8 +23,7 @@ pub struct RefreshEvent {
 pub async fn handle_control(
     action: SessionControlAction,
     request_message_id: String,
-    session_manager: &Arc<SessionManager>,
-    addr: SocketAddr,
+    // 票 11：`addr` 参数随内核会话面一并删除（它只被内核分支用于按客户端退订）
     device_name: Option<String>,
 ) -> Result<Option<Message>> {
     // P1-b 起会话真源在插件登记域：所有动作经宿主窄转发层调插件互调 api
@@ -96,7 +94,7 @@ pub async fn handle_control(
             crate::utils::session_gateway::stop(host_ctx(), &session_id, device_name.clone()).await?;
 
             // 取消该客户端对此会话的输出订阅
-            crate::utils::session_gateway::unsubscribe_output(&session_id, &addr.to_string()).await;
+            // 票 11：退订由连接侧随引擎终态帧自理（见 `session_gateway` 同处注释）
 
             Ok(Some(Message::SessionControl {
                 message_id: request_message_id,
@@ -114,7 +112,7 @@ pub async fn handle_control(
             crate::utils::session_gateway::remove(host_ctx(), &session_id, device_name.clone()).await?;
 
             // 取消该客户端对此会话的输出订阅
-            crate::utils::session_gateway::unsubscribe_output(&session_id, &addr.to_string()).await;
+            // 票 11：退订由连接侧随引擎终态帧自理（见 `session_gateway` 同处注释）
 
             Ok(Some(Message::SessionControl {
                 message_id: request_message_id,
@@ -164,12 +162,15 @@ pub async fn handle_control(
 }
 
 /// 处理完整的 Control 消息（路由层）
+///
+/// 票 11：`session_manager` 参数删除——它此前只作「宿主会话内核是否可用」的存在性门
+/// （内层 `handle_control` 一律走插件互调 api，从不读它）。会话真源在插件登记域，
+/// 宿主这一侧没有「不可用」态：不可用表现为插件未激活 → 内层返回显性错误。
 pub async fn handle_control_message(
     message_id: String,
     _session_id: Option<String>,
     _timestamp: i64,
     action: SessionControlAction,
-    session_manager: &Option<Arc<SessionManager>>,
     addr: SocketAddr,
     device_name: Option<String>,
     app_handle: Option<Arc<AppHandle>>,
@@ -180,46 +181,41 @@ pub async fn handle_control_message(
         | SessionControlAction::StopSession { .. }
         | SessionControlAction::ResizeSession { .. }
         | SessionControlAction::RemoveSession { .. } => {
-            if let Some(sm) = session_manager {
-                let result = handle_control(action.clone(), message_id, sm, addr, device_name.clone()).await?;
+            let result = handle_control(action.clone(), message_id, device_name.clone()).await?;
 
-                // 移动端操作成功后，发送刷新事件通知桌面端前端
-                if let Some(handle) = app_handle {
-                    let source = device_name.unwrap_or_else(|| "mobile".to_string());
-                    match &action {
-                        SessionControlAction::StopSession { .. } | SessionControlAction::RemoveSession { .. } => {
-                            if let Err(e) = handle.emit(
-                                "sessions-refresh",
-                                RefreshEvent {
-                                    refresh_type: "sessions".to_string(),
-                                    source: source.clone(),
-                                },
-                            ) {
-                                tracing::error!(error = %e, "Failed to emit sessions-refresh event");
-                            }
-                            tracing::info!(source = %source, "[SessionControl] Emitted sessions-refresh event");
+            // 移动端操作成功后，发送刷新事件通知桌面端前端
+            if let Some(handle) = app_handle {
+                let source = device_name.unwrap_or_else(|| "mobile".to_string());
+                match &action {
+                    SessionControlAction::StopSession { .. } | SessionControlAction::RemoveSession { .. } => {
+                        if let Err(e) = handle.emit(
+                            "sessions-refresh",
+                            RefreshEvent {
+                                refresh_type: "sessions".to_string(),
+                                source: source.clone(),
+                            },
+                        ) {
+                            tracing::error!(error = %e, "Failed to emit sessions-refresh event");
                         }
-                        SessionControlAction::StartSession { .. } => {
-                            if let Err(e) = handle.emit(
-                                "sessions-refresh",
-                                RefreshEvent {
-                                    refresh_type: "sessions".to_string(),
-                                    source: source.clone(),
-                                },
-                            ) {
-                                tracing::error!(error = %e, "Failed to emit sessions-refresh event");
-                            }
-                            tracing::info!("[SessionControl] Emitted sessions-refresh event from {}", source);
-                        }
-                        _ => {}
+                        tracing::info!(source = %source, "[SessionControl] Emitted sessions-refresh event");
                     }
+                    SessionControlAction::StartSession { .. } => {
+                        if let Err(e) = handle.emit(
+                            "sessions-refresh",
+                            RefreshEvent {
+                                refresh_type: "sessions".to_string(),
+                                source: source.clone(),
+                            },
+                        ) {
+                            tracing::error!(error = %e, "Failed to emit sessions-refresh event");
+                        }
+                        tracing::info!("[SessionControl] Emitted sessions-refresh event from {}", source);
+                    }
+                    _ => {}
                 }
-
-                Ok(result)
-            } else {
-                tracing::warn!("Session manager not available");
-                Ok(None)
             }
+
+            Ok(result)
         }
         _ => {
             tracing::debug!("Unhandled control action: {:?}", action);

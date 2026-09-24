@@ -8,7 +8,6 @@
 
 use crate::server::websocket::message::Message as BusinessMessage;
 use crate::server::websocket::registry::WsSessionRegistry;
-use crate::session::GlobalOutputManager;
 use crate::system::constants::WS_EVENT_BROADCAST_CAPACITY;
 use crate::system::error::AppError;
 use crate::Result;
@@ -202,17 +201,15 @@ impl WebSocketManager {
             }
         }
 
-        // 防御性清理：actor stopping() 应已清理，此处处理异常残留
+        // 防御性清理：actor stopping() 应已清理，此处处理异常残留。
+        // 票 11：订阅侧无需再逐客户端退订——引擎订阅句柄是**连接私有**的
+        // （`SubscriptionState::cleanup` 在连接 actor 内退休），此处只清注册表
         let clients = registry.list_clients().await;
         if !clients.is_empty() {
             tracing::warn!(
                 "[WebSocketManager] {} orphaned clients found after server stop, cleaning up",
                 clients.len()
             );
-            for client in &clients {
-                let global_manager = GlobalOutputManager::global();
-                global_manager.unsubscribe_all_for_client(&client.client_id).await;
-            }
             registry.clear_all().await;
         }
 
@@ -412,10 +409,9 @@ impl WebSocketManager {
         let registry = WsSessionRegistry::global();
 
         if let Some(client_id) = registry.unregister_by_addr(&addr).await {
-            let global_manager = GlobalOutputManager::global();
-            global_manager.unsubscribe_all_for_client(&client_id).await;
+            // 票 11：订阅随连接 actor 自身退休（引擎句柄连接私有），此处只摘注册表
             tracing::info!(
-                "[WebSocketManager] Cleaned up all subscriptions for client {}",
+                "[WebSocketManager] Cleaned up client registration and its subscriptions: {}",
                 client_id
             );
         }

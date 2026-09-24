@@ -161,7 +161,6 @@ fn a03_p1b_wasip3_artifact_full_closed_loop() {
             "pty:spawn".to_string(),
             "pty:io".to_string(),
             "session:read".to_string(),
-            "session:write".to_string(),
             "storage".to_string(),
             "task:run".to_string(),
             "terminal:input".to_string(),

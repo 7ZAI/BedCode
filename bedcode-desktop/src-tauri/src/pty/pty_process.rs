@@ -573,7 +573,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn write_str_reaches_process_output() {
-        use crate::session::GlobalOutputManager;
+        use crate::pty::pty_ring::PtyRingSink;
 
         let sid = format!(
             "itest-pty-write-{}",
@@ -583,40 +583,37 @@ mod tests {
                 .as_nanos()
         );
         let marker = format!("BEDCODE_PTY_WRITE_{sid}");
-        // 业务线形态：输出汇指向业务会话环（`session::SessionOutputSink`）
+        // 票 11：输出汇 = **引擎环**（`PtyRingSink` 的配对环）——业务会话环随
+        // `session/` 目录删除，引擎环是唯一输出环
+        let (sink, ring) = PtyRingSink::paired(1024 * 1024);
         let session = PtySession::with_command(
             sid.clone(),
             "itest-pty".to_string(),
             120,
             40,
             linux_command(&format!("echo {marker}; sleep 5")),
-            Arc::new(crate::session::SessionOutputSink::new(&sid)),
+            sink,
         )
         .expect("openpty");
-
-        let manager = GlobalOutputManager::global();
-        manager.register_session(&sid).await;
 
         session.start().await.expect("start");
         session.write_str(&format!("echo {marker}\n")).await.expect("write_str");
 
-        let session_output = manager.session(&sid).await.expect("会话管理器");
         let mut collected = String::new();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while !collected.contains(&marker) && std::time::Instant::now() < deadline {
-            let ring_arc = session_output.ring();
-            let ring = ring_arc.read().await;
-            let (min, max) = ring.watermarks();
-            collected = String::from_utf8_lossy(&ring.range(min, max)).into_owned();
-            drop(ring);
+            {
+                let guard = ring.lock().unwrap_or_else(|e| e.into_inner());
+                let (min, max) = guard.watermarks();
+                collected = String::from_utf8_lossy(&guard.fetch(min, (max - min) as usize).data).into_owned();
+            }
             if !collected.contains(&marker) {
                 tokio::time::sleep(std::time::Duration::from_millis(20)).await;
             }
         }
-        assert!(collected.contains(&marker), "write_str 的输出应落入会话环: {collected}");
+        assert!(collected.contains(&marker), "write_str 的输出应落入引擎环: {collected}");
 
         session.kill().await.expect("kill");
-        manager.unregister_session(&sid).await;
     }
 
     /// resize 不 panic 且写入后仍可 kill（票据 03）
@@ -717,13 +714,14 @@ mod tests {
         assert_eq!(recv_termination(&mut lifecycle_rx).await.exit_code, Some(0));
     }
 
-    /// 真 PTY + 自备 sink（票据 01 地基能力 ②）：输出投递到调用方给的缓冲，
-    /// 业务会话总线完全不参与（宿主业务线零感知）
+    /// 真 PTY + 自备 sink（票据 01 地基能力 ②）：输出投递到调用方给的缓冲
+    ///
+    /// 票 11：原用例还断言「业务会话总线未注册」——该总线随 `session/` 目录删除，
+    /// 「宿主业务线零感知」现在是结构事实（输出面只有引擎环，且它只由
+    /// `PtyRingSink` 持有者看到）。
     #[cfg(target_os = "linux")]
     #[tokio::test]
-    async fn session_with_private_sink_bypasses_business_output_bus() {
-        use crate::session::GlobalOutputManager;
-
+    async fn session_with_private_sink_receives_output() {
         let sid = unique_sid("itest-private-sink-pty");
         let marker = format!("BEDCODE_PTY_PRIVATE_{sid}");
         let sink = CollectingSink::new();
@@ -755,10 +753,6 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
         assert!(collected.contains(&marker), "自备 sink 应收到进程输出: {collected}");
-        assert!(
-            !GlobalOutputManager::global().has_session(&sid).await,
-            "自备 sink 路径不得注册业务会话总线"
-        );
     }
 
     /// 业务会话线（`Hold`）现役语义回归锁：子进程自然退出**不产生**终态事件

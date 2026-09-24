@@ -15,9 +15,6 @@ use crate::enums::special_key::KeyCombo;
 use crate::enums::{TerminalAction, TerminalPayload};
 use crate::server::core::link_crypto;
 use crate::server::websocket::terminal_ws::control_frame::{self, ServerFrame};
-use crate::session::{GlobalOutputManager, SessionStatus};
-use crate::system::app_context::AppContext;
-use crate::system::error_boundary::spawn_with_error_boundary;
 use crate::wasm_core::host_api::pty::broadcast_handle_for_session;
 
 /// 新路由认证结果：认证通过后校验绑定会话是否存在（spec §5.1：
@@ -147,15 +144,14 @@ impl TerminalChannel {
 
         match conn.authenticate_jwt(&token) {
             Ok(_) => {
-                // 会话存在性校验放异步块：引擎优先（票 06，插件会话的环在宿主 PTY
-                // 引擎，经票 05 广播声明可直读；M6 受损面的恢复点），内核 `has_session`
-                // 保留为旧内核会话/测试夹具的兜底。加密协商回执与密码表注册延后到
-                // SessionAuthOutcome（auth_ok 发出后生效）
+                // 会话存在性校验放异步块（同步上下文不可 await）。票 11：**唯一真源
+                // 是宿主 PTY 引擎的广播句柄**（会话输出环在引擎，票 05 声明 + 票 06
+                // 直读）——内核 `has_session` 兜底腿随 `session/` 目录删除。
+                // 加密协商回执与密码表注册延后到 SessionAuthOutcome（auth_ok 后生效）
                 let session_id = conn.bound_session.clone().unwrap();
                 let actor_addr = ctx.address();
                 actix::spawn(async move {
-                    let exists = broadcast_handle_for_session(&session_id).is_some()
-                        || GlobalOutputManager::global().has_session(&session_id).await;
+                    let exists = broadcast_handle_for_session(&session_id).is_some();
                     let _ = actor_addr
                         .send(ChannelMessage(Box::new(SessionAuthOutcome { session_id, exists })))
                         .await;
@@ -217,8 +213,6 @@ impl TerminalChannel {
             );
             return;
         };
-        let app_ctx = AppContext::global();
-        let sm = app_ctx.session_manager().clone();
         actix::spawn(async move {
             // wire 协议：新路由 input 的 data 为 Base64（UTF-8 → Standard，移动端
             // btoa/TextEncoder 编码）。handle_input → write_input 全链路按明文透传，
@@ -238,7 +232,7 @@ impl TerminalChannel {
                 action: TerminalAction::Input { data, special_key },
             };
             if let Err(e) =
-                crate::server::websocket::services::terminal_service::handle_input(&session_id, payload, &Some(sm)).await
+                crate::server::websocket::services::terminal_service::handle_input(&session_id, payload).await
             {
                 tracing::error!(session_id = %session_id, error = %e, "Terminal input error");
             }
@@ -317,36 +311,12 @@ impl ChannelHandler for TerminalChannel {
     fn on_started(&mut self, conn: &mut WsConnBase, ctx: &mut ConnCtx) {
         // 终端路由：监听绑定会话的停止事件，主动推送 session_stopped 帧
         // （会话停止后不再有输出，前端据此提示并断开，避免悬挂等待）
-        if let Some(session_id) = conn.bound_session.clone() {
-            // 引擎优先（票 06）：插件会话的停止通知由引擎订阅者**宽限排空后**发出
-            // （`engine_subscriber_loop` 发 `ForwardOutput::SessionStopped`，尾帧先行、
-            // 顺序保证），此处不再起 watcher 双发；旧内核会话（无广播声明）保持
-            // 内核 status 兜底 watcher（`ws_session_route` 夹具依赖此路径）。
-            if broadcast_handle_for_session(&session_id).is_some() {
-                return;
-            }
-            let addr = ctx.address();
-            let handle = spawn_with_error_boundary("ws_session_stopped_monitor", async move {
-                let app_ctx = AppContext::global();
-                let session_manager = app_ctx.session_manager();
-                let mut rx = session_manager.subscribe_status();
-                while let Ok(event) = rx.recv().await {
-                    if event.session_id == session_id && matches!(event.new_status, SessionStatus::Stopped) {
-                        let frame = ServerFrame::SessionStopped {
-                            session_id: session_id.clone(),
-                        };
-                        // 经骨架的通用文本出口写帧（与旧路由同一路径）
-                        if addr
-                            .send(super::super::conn::SendTextMessage { text: frame.to_json() })
-                            .await
-                            .is_err()
-                        {
-                            break;
-                        }
-                    }
-                }
-            });
-            self.session_stopped_watcher = Some(handle);
+        if conn.bound_session.is_some() {
+            // 票 11：会话停止通知**只有一条来路**——引擎订阅者在宽限排空后发
+            // `ForwardOutput::SessionStopped`（尾帧先行、顺序保证）。原先「无广播声明的
+            // 旧内核会话」走内核 status 兜底 watcher 的分支随 `session/` 目录删除：
+            // 该分支的前提（宿主内核还能创建会话）已不存在，会话一律由插件经
+            // `host-pty` 创建并声明广播。
         }
     }
 

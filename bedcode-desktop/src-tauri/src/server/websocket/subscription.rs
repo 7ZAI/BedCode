@@ -19,7 +19,7 @@ use super::message::Message;
 use super::terminal_ws::control_frame::{self, ServerFrame};
 use super::terminal_ws::{forward, subscriber};
 use crate::protocol::RendererSource;
-use crate::session::{GlobalOutputManager, SubscriberHandle};
+use crate::server::websocket::terminal_ws::subscriber::{SubscribeResponse, SubscriberHandle};
 use crate::system::error_boundary::spawn_with_error_boundary;
 use crate::wasm_core::host_api::pty::broadcast_handle_for_session;
 
@@ -49,7 +49,7 @@ pub(crate) struct PullSubscriberReady {
 
 /// 订阅链路装配产物
 struct PullReadyParts {
-    response: crate::session::SubscribeResponse,
+    response: SubscribeResponse,
     subscriber_task: tokio::task::JoinHandle<()>,
     out_rx: tokio::sync::mpsc::Receiver<forward::ForwardOutput>,
     /// 引擎环订阅句柄（票 06）：引擎订阅者自持（未在内核管理器登记），
@@ -303,8 +303,10 @@ impl WsConnBase {
         let session_for_task = session_id.clone();
         let client_id_for_task = client_id.clone();
         tokio::spawn(async move {
-            // 引擎优先（票 06）：插件会话的输出环在宿主 PTY 引擎（票 05 广播声明），
-            // 直读同进程 `PtyRing` 零跨 WASM 边界；内核环订阅保留为旧内核会话的兜底。
+            // 票 11：**只有引擎一条来路**——会话输出环在宿主 PTY 引擎（票 05 广播
+            // 声明 + 票 06 直读同进程 `PtyRing`，零跨 WASM 边界）。原「无引擎句柄时
+            // 回落内核输出管理器」的兜底腿随 `session/` 目录删除：本进程已没有第二种
+            // 会话能生产输出，回落分支只会产出「永不就绪」的订阅。
             let ready = match broadcast_handle_for_session(&session_for_task) {
                 Some(handle) => {
                     let spawned = subscriber::spawn_engine_subscriber(
@@ -323,19 +325,7 @@ impl WsConnBase {
                         engine_handle: spawned.engine_handle,
                     })
                 }
-                None => match GlobalOutputManager::global().session(&session_for_task).await {
-                    Some(manager) => {
-                        let spawned =
-                            subscriber::spawn_subscriber(&manager, &client_id_for_task, from_offset, mode, cfg).await;
-                        Some(PullReadyParts {
-                            response: spawned.response,
-                            subscriber_task: spawned.task,
-                            out_rx: spawned.out_rx,
-                            engine_handle: None,
-                        })
-                    }
-                    None => None,
-                },
+                None => None,
             };
             let _ = addr
                 .send(PullSubscriberReady {
@@ -362,11 +352,15 @@ impl WsConnBase {
     /// 取消订阅指定会话（旧 Message 路由）：代数递增 + 中止本链路任务组，
     /// 结果经 [`UnsubscribeResult`] 回 actor
     pub(crate) fn unsubscribe_output(&mut self, session_id: String, message_id: String, ctx: &mut ConnCtx) {
-        let global_manager = GlobalOutputManager::global();
         let client_id = self.session.addr.to_string();
         let key = format!("{}:{}", client_id, session_id);
         let addr = ctx.address();
         let request_id = message_id;
+
+        // 票 11：退订 = **退休本连接的引擎句柄**（唯一订阅形态）。成功判据取「退订前
+        // 本连接是否真的订着这条会话」——原实现从内核管理器取返回值，业务环删除后
+        // 由本地登记回答（语义等价：有订阅才有得退）。
+        let had_subscription = self.subscriptions.engine_subscriber(&key).is_some();
 
         // 代数递增 + 中止本链路任务组 + 引擎句柄退休：旧流残留帧被代数校验丢弃，
         // 不会与后续新订阅的流交错（其余订阅者不受影响）
@@ -374,12 +368,11 @@ impl WsConnBase {
         self.subscriptions.remove_mode(&key);
 
         actix::spawn(async move {
-            let success = global_manager.unsubscribe(&session_id, &client_id).await;
             let _ = addr
                 .send(UnsubscribeResult {
                     session_id,
                     request_id,
-                    success,
+                    success: had_subscription,
                 })
                 .await;
         });
@@ -397,8 +390,10 @@ impl WsConnBase {
         match Self::ack_frame_outcome(bytes, source) {
             Some((acked_offset, session_id, source)) => {
                 let key = format!("{client_id}:{session_id}");
-                // 引擎优先（票 06）：引擎环订阅句柄在连接侧登记（未在内核管理器），
-                // ack 直写其私有水位并唤醒驻留中的执行体；无引擎句柄 → 内核兜底
+                // 票 11：ack **只有引擎一种去处**——引擎环订阅句柄登记在连接侧
+                // （从未在内核管理器），ack 直写其私有水位并唤醒驻留中的执行体；
+                // 无句柄（未订阅 / 已退订）时 ack 是对已退休流的迟到帧，丢弃即可
+                // （原「回落内核 ack 水位」的分支随 `session/` 目录删除）。
                 if let Some(handle) = self.subscriptions.engine_subscriber(&key) {
                     handle.on_ack(acked_offset);
                     tracing::trace!(
@@ -408,22 +403,14 @@ impl WsConnBase {
                         source = ?source,
                         "engine subscriber ack applied"
                     );
-                    return;
+                } else {
+                    tracing::trace!(
+                        session_id = %session_id,
+                        client_id = %client_id,
+                        acked_offset,
+                        "ack for non-subscribed session dropped"
+                    );
                 }
-                actix::spawn(async move {
-                    let applied = GlobalOutputManager::global()
-                        .ack_subscriber(&session_id, &client_id, acked_offset)
-                        .await;
-                    if applied {
-                        tracing::trace!(
-                            session_id = %session_id,
-                            client_id = %client_id,
-                            acked_offset,
-                            source = ?source,
-                            "subscriber ack applied"
-                        );
-                    }
-                });
             }
             None => {
                 tracing::debug!(

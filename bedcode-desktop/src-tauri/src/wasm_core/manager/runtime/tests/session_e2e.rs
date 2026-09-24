@@ -58,7 +58,6 @@ fn test_session_plugin_artifact_lifecycle() {
             "pty:spawn".to_string(),
             "pty:io".to_string(),
             "session:read".to_string(),
-            "session:write".to_string(),
             "storage".to_string(),
             "task:run".to_string(),
             "terminal:input".to_string(),
@@ -1353,7 +1352,6 @@ fn test_business_endpoints_dual_track_closed_loop() {
             "auth".to_string(),
             "peer".to_string(), "storage".to_string(),
             "session:read".to_string(),
-            "session:write".to_string(),
             "storage".to_string(),
             "fs:read".to_string(),
             "fs:write".to_string(),
@@ -1711,7 +1709,6 @@ fn test_session_create_with_spec_closed_loop() {
             "peer".to_string(), "storage".to_string(),
             "session:read".to_string(),
             // 票 09：host-session.create-with-spec（创建编排执行端）
-            "session:write".to_string(),
             // 会话引擎下沉 P1-b：业务会话改走 host-pty 原语
             "pty:spawn".to_string(),
             "pty:io".to_string(),
@@ -1772,11 +1769,9 @@ fn test_session_create_with_spec_closed_loop() {
             true,
             "创建即启动 → startedAt 已填"
         );
-        // 无内核登记（真源切换验收：宿主 SessionManager 不再持有会话）
-        assert!(
-            host_ctx.session_manager.get_session(&sid1).await.is_none(),
-            "宿主 SessionManager 不得再持有会话（真源在插件登记域）"
-        );
+        // 真源切换验收：**宿主内核会话表已不存在**（票 11 随 `session/` 目录删除），
+        // 故此处不再有「查一下宿主有没有登记」的运行时断言——该事实现在由结构性锁
+        // `retired_kernel_session_domain_is_not_reintroduced`（wasm_flow_test）保证。
 
         // ==================== 4. 命名唯一化：同配置第二次 → 原名(1) ====================
         let sid2 = crate::utils::session_gateway::start(
@@ -1976,7 +1971,6 @@ fn test_session_actions_closed_loop() {
             "auth".to_string(),
             "peer".to_string(), "storage".to_string(),
             "session:read".to_string(),
-            "session:write".to_string(),
             // 会话引擎下沉 P1-b：业务会话改走 host-pty 原语
             "pty:spawn".to_string(),
             "pty:io".to_string(),
@@ -2234,7 +2228,6 @@ fn test_session_annotate_and_devices_closed_loop() {
             "peer".to_string(),
             "storage".to_string(),
             "session:read".to_string(),
-            "session:write".to_string(),
             // 票 04：devices.connect-list 读连接清单走 `host-connection`，判据
             // `connection:read`（缺它即 permission denied —— fail-visible，不静默降级）
             "connection:read".to_string(),
@@ -2251,8 +2244,6 @@ fn test_session_annotate_and_devices_closed_loop() {
 
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
-        let sm = host_ctx.session_manager.clone();
-
         let instances = Arc::new(RwLock::new(HashMap::new()));
         let session = Arc::new(Mutex::new(
             wasm_runtime
@@ -2330,11 +2321,8 @@ fn test_session_annotate_and_devices_closed_loop() {
             "asking",
             "wire 字段名不变（前端 / 移动端契约）"
         );
-        // 宿主 SessionManager 不持有会话也没有注解（真源切换验收）
-        assert!(
-            host_ctx.session_manager.session_annotations(&sid).await.is_empty(),
-            "宿主无注解（真源在插件登记域）"
-        );
+        // 宿主内核会话表（含其注解槽）已不存在（票 11），真源切换由结构性锁保证
+        // （`retired_kernel_session_domain_is_not_reintroduced`）
 
         // 未知会话跨 wasm 边界显性报错：登记域存在性校验（插件侧同步可见）
         let ghost = session
@@ -2752,7 +2740,6 @@ fn test_session_output_ring_fetch_closed_loop() {
             "auth".to_string(),
             "peer".to_string(), "storage".to_string(),
             "session:read".to_string(),
-            "session:write".to_string(),
             // 票 04：输出消费二进制原语（terminal:output）
             "terminal:output".to_string(),
             // 会话引擎下沉 P1-b：业务会话改走 host-pty 原语（含输出环拉取）
@@ -2948,7 +2935,6 @@ fn test_session_input_via_gateway_closed_loop() {
             "peer".to_string(),
             "storage".to_string(),
             "session:read".to_string(),
-            "session:write".to_string(),
             // 会话引擎下沉 P1-b：业务会话走 host-pty（写输入 + 拉输出环）
             "pty:spawn".to_string(),
             "pty:io".to_string(),

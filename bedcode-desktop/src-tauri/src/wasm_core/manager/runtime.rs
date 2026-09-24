@@ -19,7 +19,6 @@ use crate::db::Database;
 use crate::wasm_core::manager::storage::PluginStorage;
 use crate::wasm_core::permission::PermissionManager;
 use crate::wasm_core::security::fs_auth::FsAuthChecker;
-use crate::session::{SessionConfigManager, SessionManager};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -440,9 +439,6 @@ pub struct WasmHostContext {
     /// 密钥托管读缓存（v15 host-auth）：read-through（get 命中直接返回，
     /// set/delete 失效对应键）；真源为主库 plugin_secrets 表（重启后一致）
     pub(crate) secrets_cache: Arc<std::sync::RwLock<std::collections::HashMap<(String, String), String>>>,
-    pub(crate) session_manager: Arc<SessionManager>,
-    /// 会话配置管理器 — 用于获取所有会话配置（working_dir 等）
-    config_manager: Arc<SessionConfigManager>,
     /// Tauri AppHandle（无头/测试上下文为 None，emit/路径类宿主能力降级）
     pub(crate) app_handle: Option<Arc<tauri::AppHandle>>,
     /// 插件私有库根目录覆盖（布局 `<root>/<plugin_id>/plugin.db`）
@@ -927,8 +923,6 @@ impl WasmHostContext {
         db: Arc<Mutex<Database>>,
         plugin_dbs: Arc<Mutex<HashMap<String, Arc<Mutex<Database>>>>>,
         storage: Arc<PluginStorage>,
-        session_manager: Arc<SessionManager>,
-        config_manager: Arc<SessionConfigManager>,
         app_handle: Option<Arc<tauri::AppHandle>>,
         permission: Arc<PermissionManager>,
         fs_auth: Arc<FsAuthChecker>,
@@ -949,8 +943,6 @@ impl WasmHostContext {
             plugin_dbs,
             storage,
             secrets_cache: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
-            session_manager,
-            config_manager,
             app_handle,
             permission,
             fs_auth,
@@ -1072,11 +1064,6 @@ impl WasmHostContext {
         if dropped {
             tracing::debug!(plugin_id = %plugin_id, "Plugin database connection dropped");
         }
-    }
-
-    /// 获取 SessionManager 的 Arc 引用
-    pub fn session_manager_arc(&self) -> Arc<SessionManager> {
-        self.session_manager.clone()
     }
 
     /// 应用句柄引用；无头 / 测试上下文为 None
@@ -1201,7 +1188,6 @@ mod tests {
         use crate::wasm_core::bus::MessageBus;
         use crate::wasm_core::manager::storage::PluginStorage;
         use crate::wasm_core::permission::PermissionManager;
-        use crate::session::{SessionConfigManager, SessionManager};
         use crate::system::config::AppConfig;
 
         // AppConfig 初始化
@@ -1241,10 +1227,6 @@ mod tests {
                 db.init_schema().unwrap();
                 db
             }));
-            let session_manager = Arc::new(SessionManager::new());
-
-            let config_manager = Arc::new(SessionConfigManager::new(kernel_db));
-
             let permission = Arc::new(PermissionManager::new());
             permission.grant_permissions(
                 TEST_PLUGIN_ID,
@@ -1262,8 +1244,6 @@ mod tests {
                 db,
                 Arc::new(Mutex::new(std::collections::HashMap::new())),
                 storage,
-                session_manager,
-                config_manager,
                 None,
                 permission,
                 wasm_runtime.fs_auth().clone(),

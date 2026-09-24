@@ -23,7 +23,6 @@ use bedcode_lib::events::DesktopSyncEvent;
 use bedcode_lib::mdns::advertiser::MdnsAdvertiser;
 use bedcode_lib::wasm_core::PluginHost;
 use bedcode_lib::server::core::app::start_http_server;
-use bedcode_lib::session::{SessionConfigManager, SessionManager};
 use bedcode_lib::system::app_context::AppContext;
 use bedcode_lib::system::app_context::AppContextBuilder;
 use bedcode_lib::system::constants::SYNC_EVENT_BROADCAST_CAPACITY;
@@ -193,16 +192,11 @@ async fn init_test_app_context() {
             std::env::temp_dir().join(format!("bedcode-bioitest-userplugins-{}", std::process::id()));
         std::fs::create_dir_all(&user_plugins_dir).expect("create temp user plugins dir failed");
 
-        // v21 起 SessionManager 无库依赖（会话配置真源归插件私有库）
-        let session_manager = Arc::new(SessionManager::new());
-        let config_manager = Arc::new(SessionConfigManager::new(db.clone()));
         let plugin_host = Arc::new(
             PluginHost::new(
                 db.clone(),
                 &plugins_dir,
                 &user_plugins_dir, // 用户插件目录：独立空目录（见上方来源标注说明）
-                session_manager.clone(),
-                config_manager.clone(),
                 None,
             )
             .await,
@@ -224,8 +218,6 @@ async fn init_test_app_context() {
 
         AppContextBuilder::new()
             .db(db.clone())
-            .session_manager(session_manager.clone())
-            .config_manager(config_manager.clone())
             .plugin_host(plugin_host.clone())
             .mdns_advertiser(mdns_advertiser.clone())
             .app_handle(None)

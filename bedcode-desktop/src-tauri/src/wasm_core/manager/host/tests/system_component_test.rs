@@ -519,19 +519,12 @@ async fn test_boot_activates_system_components_before_app_plugins() {
         .await
         .expect("seed persisted activation state");
 
-    let session_manager = Arc::new(SessionManager::default());
-    let config_manager = Arc::new(SessionConfigManager::new(Arc::new(Mutex::new(
-        Database::new(&std::path::PathBuf::from(":memory:")).unwrap(),
-    ))));
-
     // 用户插件目录（dev 合入的第 3 参）：本用例无用户安装插件，指向空临时目录
     let user_plugins_dir = tmp_dir.path().join("user-plugins");
     let host = PluginHost::new(
         db,
         &plugins_dir,
         &user_plugins_dir,
-        session_manager,
-        config_manager,
         None,
     )
     .await;

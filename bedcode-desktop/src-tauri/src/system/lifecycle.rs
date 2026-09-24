@@ -251,23 +251,21 @@ pub fn register_core_lifecycle_hooks() {
         ctx.plugin_host().notify_startup().await;
     });
 
-    // SessionManager + 引擎层 PTY 回收 — 优先级 10，最先清理（停止所有 PTY 进程）
+    // 引擎层 PTY 回收 — 优先级 10，最先清理（停止所有 PTY 进程）
     //
-    // 两条线的 PTY 住在两个注册表，关停必须都收：业务线在 `SessionManager` 的 PTY
-    // 注册表（`shutdown` → `kill_all`），插件私有 PTY 在 `host-pty` 引擎注册表
-    // （会话引擎下沉 P1 起业务会话也走后者，届时只剩引擎层这一条）。
+    // 票 11 起**只剩引擎一条线**：所有会话（业务 + 插件私有）的 PTY 都住在
+    // `host-pty` 引擎注册表，内核 `SessionManager` 的 PTY 注册表随会话目录删除。
     //
-    // 插件私有 PTY **不能**依赖插件自己的 `purge_for_plugin`：关机时插件可能已停用 /
+    // 会话 PTY **不能**依赖插件自己的 `purge_for_plugin`：关机时插件可能已停用 /
     // 超时 / trap，按属主回收依赖停用流程被调到。引擎自持的全量回收保证不留孤儿进程，
     // 事件仍逐条按属主补发（见 `wasm_core/host_api/pty.rs::kill_all_registered`）。
-    registry.on_shutdown("session-manager", 10, || async {
+    registry.on_shutdown("pty-engine-reclaim", 10, || async {
         let ctx = crate::system::app_context::AppContext::global();
-        ctx.session_manager().shutdown().await;
         let reclaimed = crate::wasm_core::host_api::pty::kill_all_registered(
             &ctx.plugin_host().wasm_host_ctx().message_bus,
         );
         if reclaimed > 0 {
-            tracing::info!(reclaimed, "插件私有 PTY 已在引擎层回收（系统关停）");
+            tracing::info!(reclaimed, "PTY 已在引擎层回收（系统关停）");
         }
     });
 
@@ -324,27 +322,19 @@ pub fn register_core_lifecycle_hooks() {
 /// 在跑 ⇔ 有活 PTY），且不引入会话语义，避免窗口关闭路径被插件异步调用阻塞
 /// （关闭请求是同步钩子，判据必须在无 await 路径内完成）。
 ///
-/// 两路计数合取：业务线 `SessionManager` 注册表（P1-b 后生产为空，仅测试）与
-/// 引擎 `host-pty` 注册表（P1-b 起业务会话也走这——插件已停用 / 超时 / trap 时
-/// 仍在册句柄仍被计数，不依赖插件侧异步回调）。
+/// 判据 = 引擎 `host-pty` 注册表（P1-b 起业务会话也走这——插件已停用 / 超时 /
+/// trap 时仍在册句柄仍被计数，不依赖插件侧异步回调）。票 11 起内核注册表那条
+/// 计数腿随 `session/` 目录删除（它此前已被记为「生产为空，仅测试」）。
 pub fn register_window_close_hooks() {
     let registry = lifecycle_registry();
 
     registry.on_window_close_requested("session-guard", 10, || async {
-        let ctx = crate::system::app_context::AppContext::global();
-        let sm = ctx.session_manager();
-        let kernel_live = sm.live_pty_count().await > 0;
         let engine_live = crate::wasm_core::host_api::pty::live_count() > 0;
-        let has_running = kernel_live || engine_live;
 
-        if has_running {
-            tracing::warn!(
-                kernel_live,
-                engine_live,
-                "Window close prevented: live PTYs exist"
-            );
+        if engine_live {
+            tracing::warn!(engine_live, "Window close prevented: live PTYs exist");
         }
-        !has_running
+        !engine_live
     });
 }
 
