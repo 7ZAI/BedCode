@@ -417,7 +417,9 @@ mod tests {
     fn test_check_api() {
         let pm = PermissionManager::new();
         pm.grant_permissions("test-plugin", &["terminal:input".to_string()]);
-        assert!(pm.check_api("test-plugin", "terminal.sendInput"));
+        // 票 08（session-engine 线）：`terminal.sendInput` 已随宿主输入通道退役，
+        // 词汇表 apiMap 现挂 `terminal.onInput`——断言跟演，否则 SDK 门禁恒红
+        assert!(pm.check_api("test-plugin", "terminal.onInput"));
         assert!(!pm.check_api("test-plugin", "terminal.onOutput"));
     }
 
