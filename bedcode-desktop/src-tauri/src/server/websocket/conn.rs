@@ -518,11 +518,12 @@ impl WsConnBase {
 
         // 注册认证状态到 WsSessionRegistry
         let client_id = self.session.addr.to_string();
+        let subject = claims.sub.clone();
         let device_name = claims.device_name.clone();
         let fp = claims.fingerprint.clone();
         actix::spawn(async move {
             let registry = WsSessionRegistry::global();
-            registry.set_authenticated(&client_id, device_name, fp).await;
+            registry.set_authenticated(&client_id, Some(subject), device_name, fp).await;
         });
 
         // v24 认证记录下沉：配对记录真源 = 认证中心插件私有库，宿主不再直写主库。

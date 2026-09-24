@@ -23,9 +23,10 @@
 /// ## ABI 版本协商（阶段 A）
 ///
 /// `abi` 接口承载原 `__bedcode_abi_version` 的职责，并新增 `form` 形态字段：
-/// - `version()`：与 `abi::ABI_VERSION`（当前 v27）比对，语义不变
-///   （v27 = 会话原语域整 interface 退役：`host-session` / `host-terminal` 两个
-///   import 与 `terminal-hooks` 导出删除，旧产物需按新 SDK 重建）
+/// - `version()`：与 `abi::ABI_VERSION`（当前 v28）比对，语义不变
+///   （v27 = 会话原语域整 interface 退役；v28 = websocket 业务下沉：新增
+///   `host-websocket.connection-context` + 退役 `host-events.broadcast-sync` /
+///   `host-pty.spawn` 的 `hostBroadcastSessionId` 字段，详见下方 abi 接口版本说明）
 /// - `form()`：0 = core module（自研 ABI），1 = component。宿主据此区分产物形态，
 ///   不 bump ABI 大版本
 package bedcode:plugin;
@@ -362,6 +363,38 @@ interface host-websocket {
     /// 本插件已注册端点清单 → JSON 数组 `[{ endpointId, path, clientCount }]`；
     /// 仅属主可查
     list-endpoints: func() -> result<string, string>;
+
+    // ==================== v28：连接上下文（安全/连接事实，零业务派生） ====================
+
+    /// 查询端点指定客户端的**已脱敏**连接/认证上下文（websocket 业务下沉专项票 02）。
+    ///
+    /// 返回值只含连接/认证**事实**，不包含会话、设备在线判定、配对记录或任何业务
+    /// 派生字段（spec §3.1）：
+    ///
+    /// ```json
+    /// {
+    ///   "clientId": "c-123",
+    ///   "endpointId": "wse-456",
+    ///   "owner": "com.example.plugin",
+    ///   "addr": "192.168.1.10:54321",
+    ///   "authenticated": true,
+    ///   "connectedAt": 1730000000000,
+    ///   "authContext": {
+    ///     "subject": "device-or-client-subject",
+    ///     "deviceName": "optional-name",
+    ///     "fingerprint": "optional-fingerprint"
+    ///   }
+    /// }
+    /// ```
+    ///
+    /// 约束：
+    /// - 仅**端点属主**可调（权限 `ws:server` + 属主仲裁，跨插件查询显式拒绝）；
+    /// - 客户端不存在/不在该端点名下 → `Err`（`client not found in endpoint`）；
+    /// - **永不返回 JWT、token、公钥、私钥或配对记录**（凭据红线，AGENTS §8）；
+    /// - `auth: "none"` 时 `authenticated=false`，`authContext` 省略（不伪造身份）；
+    /// - 该原语是安全上下文查询，**不是**设备列表/在线判定/会话查询接口——
+    ///   设备派生视图由插件自 `list-clients` 与本原语组合建立。
+    connection-context: func(endpoint-id: string, client-id: string) -> result<string, string>;
 }
 
 /// 文件系统访问（原 fs.rs：fs_read/write/copy/delete/exists）
@@ -808,6 +841,16 @@ interface manifest {
 ///   `host-pty`（引擎）与 `host-connection`（连接清单）。旧产物在**实例化**阶段
 ///   即可诊断失败（点明缺失 interface + 重建指引，见宿主
 ///   `stale_artifact_rebuild_hint`），须按 v27 SDK 重建
+/// - **v28（websocket 业务下沉专项，2026-09-25）**：
+///   ① `host-websocket` 新增 `connection-context`（已脱敏连接/认证上下文查询，
+///   仅属主可调，权限 `ws:server`）；
+///   ② 破坏性删除：`host-events.broadcast-sync` 退役（宿主不再持同步产品
+///   载荷与 WS 广播策略，插件事件走 bus/emit）、`host-pty.spawn` 的
+///   `hostBroadcastSessionId` 字段退役（PTY 引擎不再知道 session id，插件
+///   经 `ring-fetch` 自持）、宿主 `Message`/SyncPayload 等旧 WS 业务类型退出
+///   生产路径。旧产物（v27 SDK 构建）在**实例化**阶段即可诊断失败
+///   （stale_artifact_rebuild_hint 点明 v28 重建）。
+///   随包插件产物同步重建（旧产物不兼容、不迁移、不提供 fallback）。
 ///
 /// **不 bump 版本号的语义变更（审计票 05，落在 v22 批次内）**：host-bus topic 命名空间。
 /// 函数签名零变化，故不动版本号；但**定向事件的 topic 串**由 `<base>.<owner>` 改为

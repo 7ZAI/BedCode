@@ -391,11 +391,11 @@ impl WebSocketManager {
     /// 更新客户端认证状态
     pub async fn set_authenticated(&self, _addr: &SocketAddr, client_id: Option<String>, fingerprint: Option<String>) {
         // WsConnBase（WS 连接骨架）认证时已通过 WsSessionRegistry 更新
-        // 此方法保留用于 auth_service 等外部调用者的兼容性
+        // 此方法保留用于 auth_service 等外部调用者的兼容性（无 subject 上下文）
         if let Some(cid) = client_id {
             let registry = WsSessionRegistry::global();
             let current_name = registry.get_device_name(&cid).await;
-            registry.set_authenticated(&cid, current_name, fingerprint).await;
+            registry.set_authenticated(&cid, None, current_name, fingerprint).await;
         }
     }
 

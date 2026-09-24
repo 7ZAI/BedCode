@@ -142,7 +142,7 @@ impl PluginChannel {
         }
 
         match verify_endpoint_jwt(conn, &frame.token) {
-            Ok(()) => {
+            Ok(subject) => {
                 // 注册表认证态同步（异步态：list-clients 的 authenticated 字段来源）。
                 // 不经 `authenticate_jwt`：插件端点的第三方客户端**不参与配对设备
                 // 在线语义**（不快照 last_seen、不向前端发 DEVICE_CONNECTED）
@@ -151,7 +151,7 @@ impl PluginChannel {
                 let fingerprint = conn.session.fingerprint.clone();
                 actix::spawn(async move {
                     WsSessionRegistry::global()
-                        .set_authenticated(&client_id, device_name, fingerprint)
+                        .set_authenticated(&client_id, Some(subject), device_name, fingerprint)
                         .await;
                 });
                 tracing::info!(
@@ -208,7 +208,9 @@ impl PluginChannel {
 }
 
 /// 插件端点 JWT 校验（只置会话认证态，不触达配对设备在线语义）
-fn verify_endpoint_jwt(conn: &mut WsConnBase, token: &str) -> Result<(), (String, String)> {
+///
+/// 成功返回 `claims.sub`（连接上下文的脱敏身份来源）
+fn verify_endpoint_jwt(conn: &mut WsConnBase, token: &str) -> Result<String, (String, String)> {
     let claims = JwtService::new()
         .verify_token_with_expiry(token)
         .map_err(|e| ("AUTH_FAILED".to_string(), jwt_error_message(&e).to_string()))?;
@@ -216,7 +218,7 @@ fn verify_endpoint_jwt(conn: &mut WsConnBase, token: &str) -> Result<(), (String
     conn.session.device_id = Some(claims.sub.clone());
     conn.session.device_name = claims.device_name.clone();
     conn.session.fingerprint = claims.fingerprint.clone();
-    Ok(())
+    Ok(claims.sub)
 }
 
 /// 帧投递任务：串行消费队列并投给属主插件（同连接内保序，spec §2.2 D2）

@@ -147,7 +147,17 @@
 //!   （函数级追加与 JSON 载荷增量都不 bump），故旧产物需按 v27 SDK 重建一次。
 //!   连带退役的权限位：`session:write`（`session:read` 保留——前端四个终端窗口原语
 //!   仍挂它）。
-pub const ABI_VERSION: u32 = 27;
+//!
+//! - **v28: websocket 业务下沉专项（2026-09-25）**——宿主 WS 面只留通用传输：
+//!   ① 新增 `host-websocket.connection-context`（已脱敏连接/认证上下文查询，
+//!   仅属主可调、权限 `ws:server`，零业务派生字段），函数级追加；
+//!   ② 破坏性删除：`host-events.broadcast-sync` **退役**（宿主不再持有同步产品
+//!   载荷与 WS 广播策略——会话/任务/设备事件由插件经 bus/emit 自发布），
+//!   `host-pty.spawn` 的 `hostBroadcastSessionId` 字段 **退役**（PTY 引擎不再
+//!   知道 session id，插件经 `ring-fetch` 自持输出游标），旧 `Message`/`SyncPayload`
+//!   等宿主 WS 业务类型退出生产路径。旧产物（v27 SDK 构建）实例化期经
+//!   `stale_artifact_rebuild_hint` 点名 v28 重建，不迁移不兼容。
+pub const ABI_VERSION: u32 = 28;
 
 /// 组件形态标识：`abi.form() == FORM_COMPONENT`（WIT `abi` 接口的 form() 声明）
 ///
@@ -161,10 +171,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_abi_version_is_v27() {
+    fn test_abi_version_is_v28() {
         // 版本号序列与历史 core ABI 共用：v26 = host-crypto 宿主加密引擎原语面
         // （并发批次先落地，占 26）；**v27 = 会话原语域整 interface 退役**
         // （会话引擎下沉票 10：host-session 12 函数 + terminal-hooks + events 两个导出）；
+        // **v28 = websocket 业务下沉专项**（2026-09-25：新增
+        // host-websocket.connection-context + 退役 host-events.broadcast-sync /
+        // host-pty.spawn 的 hostBroadcastSessionId 字段，旧产物点名 v28 重建）；
         // 再往前叠加 v25 host-peer 节点生命周期原语（审计票 12 裁决 1 = 选项 A）、
         // v24 认证记录下沉（2026-09-22，host-auth 记录面七函数退役 + host-session
         // config 读取面退役）、v23 host-session
@@ -175,7 +188,7 @@ mod tests {
         // （同批次之一）、v17 认证策略导出（auth-policy）、v16 插件私有伪终端原语
         // （host-pty）、v15 密钥托管（host-auth / secret-store）、v14 host-websocket、
         // v13 host-mdns v2、v12 总线二进制载荷与 v11 host-peer 传输控制三原语
-        assert_eq!(ABI_VERSION, 27);
+        assert_eq!(ABI_VERSION, 28);
     }
 
     #[test]

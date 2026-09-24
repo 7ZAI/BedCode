@@ -43,6 +43,8 @@ pub struct WsRegistration {
 struct WsSessionEntry {
     actor_addr: Addr<WsConnBase>,
     socket_addr: SocketAddr,
+    /// JWT 主体（`claims.sub`；认证时设置，连接上下文的脱敏身份来源）
+    subject: Option<String>,
     device_name: Option<String>,
     /// 设备指纹，认证时设置，用于与数据库 pairings 记录关联
     fingerprint: Option<String>,
@@ -106,6 +108,7 @@ impl WsSessionRegistry {
                 WsSessionEntry {
                     actor_addr,
                     socket_addr,
+                    subject: None,
                     device_name: None,
                     fingerprint: None,
                     authenticated: false,
@@ -160,11 +163,18 @@ impl WsSessionRegistry {
         client_id
     }
 
-    /// 设置客户端认证状态
-    pub async fn set_authenticated(&self, client_id: &str, device_name: Option<String>, fingerprint: Option<String>) {
+    /// 设置客户端认证状态（`subject` = JWT `claims.sub`，连接上下文的脱敏身份来源）
+    pub async fn set_authenticated(
+        &self,
+        client_id: &str,
+        subject: Option<String>,
+        device_name: Option<String>,
+        fingerprint: Option<String>,
+    ) {
         let mut sessions = self.sessions.write().await;
         if let Some(entry) = sessions.get_mut(client_id) {
             entry.authenticated = true;
+            entry.subject = subject;
             entry.device_name = device_name;
             entry.fingerprint = fingerprint;
         }
@@ -257,6 +267,7 @@ impl WsSessionRegistry {
             .filter(|(_, entry)| entry.endpoint_id.as_deref() == Some(endpoint_id))
             .map(|(client_id, entry)| ClientSummary {
                 client_id: client_id.clone(),
+                subject: entry.subject.clone(),
                 device_name: entry.device_name.clone(),
                 fingerprint: entry.fingerprint.clone(),
                 addr: entry.socket_addr.to_string(),
@@ -518,6 +529,7 @@ impl WsSessionRegistry {
             .iter()
             .map(|(client_id, entry)| ClientSummary {
                 client_id: client_id.clone(),
+                subject: entry.subject.clone(),
                 device_name: entry.device_name.clone(),
                 fingerprint: entry.fingerprint.clone(),
                 addr: entry.socket_addr.to_string(),
@@ -532,6 +544,7 @@ impl WsSessionRegistry {
         let sessions = self.sessions.read().await;
         sessions.get(client_id).map(|entry| ClientSummary {
             client_id: client_id.to_string(),
+            subject: entry.subject.clone(),
             device_name: entry.device_name.clone(),
             fingerprint: entry.fingerprint.clone(),
             addr: entry.socket_addr.to_string(),
@@ -683,6 +696,8 @@ fn broadcast_targets(entries: &HashMap<String, WsSessionEntry>, exclude_device_n
 #[derive(Debug, Clone)]
 pub struct ClientSummary {
     pub client_id: String,
+    /// JWT 主体（`claims.sub`；认证前为 None）——连接上下文的脱敏身份来源
+    pub subject: Option<String>,
     pub device_name: Option<String>,
     /// 设备指纹，用于与数据库 pairings 记录关联
     pub fingerprint: Option<String>,
@@ -777,6 +792,7 @@ mod tests {
             WsSessionEntry {
                 actor_addr,
                 socket_addr: addr,
+                subject: None,
                 device_name: device_name.map(|s| s.to_string()),
                 fingerprint: fingerprint.map(|s| s.to_string()),
                 authenticated,

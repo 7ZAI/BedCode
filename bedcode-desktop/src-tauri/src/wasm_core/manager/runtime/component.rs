@@ -702,6 +702,10 @@ impl bedcode::plugin::host_websocket::Host for WasmPluginState {
     fn list_endpoints(&mut self) -> Result<String, String> {
         ws::ws_list_endpoints(self.host_ctx.as_ref(), &self.plugin_id)
     }
+
+    fn connection_context(&mut self, endpoint_id: String, client_id: String) -> Result<String, String> {
+        ws::ws_connection_context(self.host_ctx.as_ref(), &self.plugin_id, &endpoint_id, &client_id)
+    }
 }
 
 // ==================== Component Linker 组装 ====================

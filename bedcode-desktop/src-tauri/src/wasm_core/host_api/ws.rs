@@ -670,6 +670,69 @@ pub(crate) fn ws_list_endpoints(
     serde_json::to_string(&list).map_err(|e| format!("ws list-endpoints: serialization failed: {e}"))
 }
 
+/// 查询端点指定客户端的**已脱敏**连接/认证上下文（websocket 业务下沉专项票 02）
+///
+/// 只返回连接/认证**事实**（spec §3.1）：`clientId` / `endpointId` / `owner` /
+/// `addr` / `authenticated` / `connectedAt` / `authContext?{subject, deviceName,
+/// fingerprint}`。约束：
+/// - 仅**端点属主**可调（权限 `ws:server` + 属主仲裁，跨插件查询显式拒绝）；
+/// - 客户端不存在/不在该端点名下 → `Err`（fail-visible，不返回「成功但无数据」）；
+/// - **永不返回 JWT、token、公钥、私钥或配对记录**（凭据红线，AGENTS §8——
+///   本函数只组装注册表内已脱敏字段，不触碰任何凭据存储）；
+/// - `auth: "none"` 连接 `authenticated=false`，`authContext` 省略（不伪造身份）。
+pub(crate) fn ws_connection_context(
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
+    plugin_id: &str,
+    endpoint_id: &str,
+    client_id: &str,
+) -> Result<String, String> {
+    if !super::check_permission(
+        perm,
+        plugin_id,
+        PERMISSION_WS_SERVER,
+        "host_websocket_connection_context",
+    ) {
+        return Err(denied_server());
+    }
+    let entry = owned_endpoint(endpoint_id, plugin_id)?;
+    let owner = entry.owner.clone();
+    let endpoint = entry.endpoint_id.clone();
+    let client = client_id.to_string();
+    let endpoint_ctx = endpoint.clone();
+    // 先验端点域寻址（跨端点错配 → 显性 Err），再取脱敏条目
+    let summary = crate::wasm_core::runtime_util::block_on_async(async move {
+        if !WsSessionRegistry::global().is_endpoint_client(&endpoint_ctx, &client).await {
+            return None;
+        }
+        WsSessionRegistry::global().get_client(&client).await
+    });
+    let Some(c) = summary else {
+        return Err(format!("client {client_id} not found in endpoint {endpoint_id}"));
+    };
+    let mut value = serde_json::json!({
+        "clientId": c.client_id,
+        "endpointId": endpoint,
+        "owner": owner,
+        "addr": c.addr,
+        "authenticated": c.authenticated,
+        "connectedAt": c.connected_at,
+    });
+    if c.authenticated {
+        let mut auth = serde_json::Map::new();
+        if let Some(subject) = c.subject {
+            auth.insert("subject".to_string(), serde_json::Value::String(subject));
+        }
+        if let Some(device_name) = c.device_name {
+            auth.insert("deviceName".to_string(), serde_json::Value::String(device_name));
+        }
+        if let Some(fingerprint) = c.fingerprint {
+            auth.insert("fingerprint".to_string(), serde_json::Value::String(fingerprint));
+        }
+        value["authContext"] = serde_json::Value::Object(auth);
+    }
+    serde_json::to_string(&value).map_err(|e| format!("ws connection-context: serialization failed: {e}"))
+}
+
 // ==================== 回收 ====================
 
 /// 回收指定插件的全部 WS 资源（插件停用/卸载时由 PluginHost 调用）
@@ -989,6 +1052,8 @@ fn max_message_bytes() -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::server::websocket::conn::WsConnBase;
+    use crate::server::websocket::registry::{ChannelKind, WsRegistration};
     use crate::wasm_core::host_api::tests::{build_host_ctx, grant_permissions};
 
     /// 唯一插件 id（静态表按 id 隔离，并行用例互不干扰）
@@ -1552,7 +1617,7 @@ mod tests {
         for result in client_results {
             assert_eq!(result.unwrap_err(), NOT_OWNER, "客户端域跨属主必须拒绝");
         }
-        // 服务端域（7 个带端点/对端标识的函数）
+        // 服务端域（8 个带端点/对端标识的函数）
         let server_results = [
             ws_send_text_to_client(ctx.as_ref(), &intruder, &endpoint, peer_client, "hi").map(|_| ()),
             ws_send_binary_to_client(ctx.as_ref(), &intruder, &endpoint, peer_client, b"hi").map(|_| ()),
@@ -1561,6 +1626,7 @@ mod tests {
             ws_close_client(ctx.as_ref(), &intruder, &endpoint, peer_client, "{}").map(|_| ()),
             ws_unregister_endpoint(ctx.as_ref(), &intruder, &endpoint).map(|_| ()),
             ws_list_clients(ctx.as_ref(), &intruder, &endpoint).map(|_| ()),
+            ws_connection_context(ctx.as_ref(), &intruder, &endpoint, peer_client).map(|_| ()),
         ];
         for result in server_results {
             assert_eq!(result.unwrap_err(), NOT_ENDPOINT_OWNER, "服务端域跨属主必须拒绝");
@@ -1583,6 +1649,193 @@ mod tests {
         assert_eq!(ws_list_endpoints(ctx.as_ref(), &owner).unwrap().contains("iso"), true);
 
         drop_client(&handle);
+        drop_endpoint(&endpoint);
+    }
+
+    // ==================== v28 票 02：connection-context（脱敏上下文） ====================
+
+    /// 测试用空通道处理器（与 registry 测试同款：仅满足骨架构造约束，不被驱动）
+    struct StubWsChannel;
+
+    impl crate::server::websocket::conn::ChannelHandler for StubWsChannel {
+        fn auth_mode(&self) -> crate::server::websocket::conn::AuthMode {
+            crate::server::websocket::conn::AuthMode::None
+        }
+
+        fn on_text(&mut self, _conn: &mut WsConnBase, _text: String, _ctx: &mut crate::server::websocket::conn::ConnCtx) {}
+
+        fn on_binary(&mut self, _conn: &mut WsConnBase, _data: Vec<u8>, _ctx: &mut crate::server::websocket::conn::ConnCtx) {}
+    }
+
+    /// 在**全局**注册表登记一条插件端点连接（伪 WS 握手取得 Addr；独立 seed
+    /// 互不干扰，可并行）——注册表键 = 派生 socket addr 串（镜像生产：client_id
+    /// 即对端地址串），返回该 client_id 供查询/清理；`authenticated` 时同步
+    /// subject/deviceName/fingerprint
+    async fn register_endpoint_client(
+        seed: &str,
+        owner: &str,
+        endpoint_id: &str,
+        authenticated: bool,
+        subject: Option<&str>,
+        device_name: Option<&str>,
+        fingerprint: Option<&str>,
+    ) -> String {
+        let port = 30000u16
+            + (seed.bytes().fold(0usize, |acc, b| acc.wrapping_add(b as usize)) % 10000) as u16;
+        let addr: std::net::SocketAddr = format!("127.0.0.1:{}", port).parse().unwrap();
+        let client_id = addr.to_string();
+        let actor_ctx_addr = addr;
+        let req = actix_web::test::TestRequest::default()
+            .insert_header(("Connection", "Upgrade"))
+            .insert_header(("Upgrade", "websocket"))
+            .insert_header(("Sec-WebSocket-Version", "13"))
+            .insert_header(("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ=="))
+            .to_http_request();
+        let payload: actix_web::dev::Payload = actix_web::dev::Payload::None;
+        let actor = WsConnBase::new(
+            crate::server::websocket::conn::ConnSpec {
+                owner: Some(owner.to_string()),
+                endpoint_id: Some(endpoint_id.to_string()),
+                ..crate::server::websocket::conn::ConnSpec::new(actor_ctx_addr, ChannelKind::Plugin)
+            },
+            Box::new(StubWsChannel),
+        );
+        let (actor_addr, _resp) =
+            actix_web_actors::ws::WsResponseBuilder::new(actor, &req, payload)
+                .start_with_addr()
+                .expect("fake ws handshake must succeed");
+        WsSessionRegistry::global()
+            .register(WsRegistration {
+                client_id: client_id.clone(),
+                socket_addr: addr,
+                actor_addr,
+                channel_kind: ChannelKind::Plugin,
+                owner: Some(owner.to_string()),
+                endpoint_id: Some(endpoint_id.to_string()),
+            })
+            .await;
+        if authenticated {
+            WsSessionRegistry::global()
+                .set_authenticated(
+                    &client_id,
+                    subject.map(str::to_string),
+                    device_name.map(str::to_string),
+                    fingerprint.map(str::to_string),
+                )
+                .await;
+        }
+        client_id
+    }
+
+    /// 摘除全局注册表测试条目（用例结束清理）
+    async fn drop_registry_client(client_id: &str) {
+        WsSessionRegistry::global().unregister(client_id).await;
+    }
+
+    /// 权限门：无 `ws:server` —— connection-context 拒绝
+    #[actix_rt::test]
+    async fn connection_context_denied_without_ws_server_permission() {
+        let ctx = build_host_ctx();
+        let plugin = test_plugin("ctx-perm");
+        let err = ws_connection_context(ctx.as_ref(), &plugin, "wse-x", "127.0.0.1:1")
+            .expect_err("denied");
+        assert_eq!(err, denied_server());
+    }
+
+    /// 属主可查已认证客户端：完整脱敏上下文（含 authContext 三字段）
+    #[actix_rt::test]
+    async fn connection_context_authenticated_owner_query() {
+        let ctx = build_host_ctx();
+        let plugin = test_plugin("ctx-auth");
+        grant_permissions(&ctx, &plugin, &[PERMISSION_WS_SERVER]);
+        let endpoint = register_endpoint(&ctx, &plugin, "ctx");
+        let client = register_endpoint_client(
+            "ctx-auth-c1",
+            &plugin,
+            &endpoint,
+            true,
+            Some("device-9"),
+            Some("Phone"),
+            Some("fp-9"),
+        )
+        .await;
+
+        let json = ws_connection_context(ctx.as_ref(), &plugin, &endpoint, &client).expect("owner query");
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["clientId"], client);
+        assert_eq!(value["addr"], client, "addr 即注册表键（= 对端地址串）");
+        assert_eq!(value["endpointId"], endpoint);
+        assert_eq!(value["owner"], plugin);
+        assert_eq!(value["addr"], client);
+        assert_eq!(value["authenticated"], true);
+        assert!(value["connectedAt"].is_number(), "connectedAt 为 epoch 毫秒");
+        assert_eq!(value["authContext"]["subject"], "device-9");
+        assert_eq!(value["authContext"]["deviceName"], "Phone");
+        assert_eq!(value["authContext"]["fingerprint"], "fp-9");
+        // 凭据红线：token / 密钥 / 公钥绝不出现
+        let flat = json.to_string();
+        for forbidden in ["token", "secret", "publicKey", "private", "jwt"] {
+            assert!(
+                !flat.to_lowercase().contains(forbidden),
+                "上下文不得泄漏凭据字段: {forbidden}"
+            );
+        }
+
+        drop_registry_client(&client).await;
+        drop_endpoint(&endpoint);
+    }
+
+    /// `auth: none` / 未认证连接：authenticated=false 且 authContext 省略（不伪造身份）
+    #[actix_rt::test]
+    async fn connection_context_unauthenticated_omits_auth_context() {
+        let ctx = build_host_ctx();
+        let plugin = test_plugin("ctx-none");
+        grant_permissions(&ctx, &plugin, &[PERMISSION_WS_SERVER]);
+        let endpoint = register_endpoint(&ctx, &plugin, "open");
+        let client =
+            register_endpoint_client("ctx-none-c1", &plugin, &endpoint, false, None, None, None).await;
+
+        let json = ws_connection_context(ctx.as_ref(), &plugin, &endpoint, &client).expect("owner query");
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["authenticated"], false);
+        assert!(value.get("authContext").is_none(), "未认证不得出现 authContext");
+
+        drop_registry_client(&client).await;
+        drop_endpoint(&endpoint);
+    }
+
+    /// 跨属主 / 跨端点 / 未知客户端：显性拒绝，不返回「成功但无数据」
+    #[actix_rt::test]
+    async fn connection_context_rejects_cross_owner_and_unknown() {
+        let ctx = build_host_ctx();
+        let owner = test_plugin("ctx-owner");
+        let intruder = test_plugin("ctx-intruder");
+        grant_permissions(&ctx, &owner, &[PERMISSION_WS_SERVER]);
+        grant_permissions(&ctx, &intruder, &[PERMISSION_WS_SERVER]);
+        let endpoint = register_endpoint(&ctx, &owner, "mine");
+        let client =
+            register_endpoint_client("ctx-own-c1", &owner, &endpoint, true, Some("d"), Some("N"), Some("f")).await;
+
+        // 跨属主：他人查询本人端点里的客户端 → 属主仲裁拒绝
+        let err = ws_connection_context(ctx.as_ref(), &intruder, &endpoint, &client)
+            .expect_err("cross-owner must reject");
+        assert_eq!(err, NOT_ENDPOINT_OWNER);
+        // 跨端点：未注册的端点句柄 → 显性报错（不返回「成功但无数据」）
+        let err = ws_connection_context(ctx.as_ref(), &owner, "wse-ghost", &client)
+            .expect_err("unknown endpoint must reject");
+        assert!(err.contains("not found"), "未知端点必须点名，got: {err}");
+        // 未知客户端：端点存在且属主合法，但客户端不在端点名下 → fail-visible
+        let err = ws_connection_context(ctx.as_ref(), &owner, &endpoint, "127.0.0.1:9")
+            .expect_err("unknown client must reject");
+        assert!(err.contains("not found in endpoint"), "got: {err}");
+        // 客户端不属于该端点（属于另一端点，但注册表里不在本人名下）→ 同错
+        let err = ws_connection_context(ctx.as_ref(), &owner, &endpoint, client.as_str())
+            .expect("本人端点的本人客户端应可查——先验正例");
+        assert!(err.contains("\"authenticated\":true"));
+        // 拒绝路径零副作用：连接仍在线（未被断开）
+        assert_eq!(ws_list_clients(ctx.as_ref(), &owner, &endpoint).unwrap().len() > 0, true);
+
+        drop_registry_client(&client).await;
         drop_endpoint(&endpoint);
     }
 }

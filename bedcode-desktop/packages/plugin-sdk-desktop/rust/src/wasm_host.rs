@@ -730,6 +730,11 @@ impl HostWebsocket for WasmHost {
     fn ws_list_endpoints(&self) -> Result<String, HostError> {
         host_websocket::list_endpoints().map_err(|e| host_err("ws_list_endpoints", e))
     }
+
+    fn ws_connection_context(&self, endpoint_id: &str, client_id: &str) -> Result<String, HostError> {
+        host_websocket::connection_context(endpoint_id, client_id)
+            .map_err(|e| host_err("ws_connection_context", e))
+    }
 }
 
 // ==================== host-pty（ABI v16 插件私有伪终端）====================

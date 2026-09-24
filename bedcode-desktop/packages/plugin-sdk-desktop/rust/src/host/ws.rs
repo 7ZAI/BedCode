@@ -111,6 +111,14 @@ pub trait HostWebsocket {
     fn ws_list_clients(&self, endpoint_id: &str) -> Result<String, HostError>;
     /// 本插件已注册端点清单（JSON 数组字符串）
     fn ws_list_endpoints(&self) -> Result<String, HostError>;
+    /// v28：查询端点指定客户端的**已脱敏**连接/认证上下文（JSON 字符串）。
+    ///
+    /// 仅属主可调（权限 `ws:server` + 属主仲裁）；返回 `{ clientId, endpointId,
+    /// owner, addr, authenticated, connectedAt, authContext? }`——只含连接/认证
+    /// **事实**，不含 JWT/token/公钥/配对记录或会话派生字段（websocket 业务下沉
+    /// 专项票 02，spec §3.1）。`auth: none` 连接 `authenticated=false` 且
+    /// `authContext` 省略。客户端不在端点名下 → `Err`。
+    fn ws_connection_context(&self, endpoint_id: &str, client_id: &str) -> Result<String, HostError>;
 }
 
 #[cfg(test)]
