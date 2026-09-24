@@ -1,6 +1,6 @@
 # 执行记录：websocket 业务下沉专项（票 02–09，跳过票 01）
 
-Status: **in-progress**（2026-09-25 起由本 agent 执行）
+Status: **in-progress**（2026-09-25 起由本 agent 执行；票 08 已完成，剩票 09 收尾门禁）
 承接：用户指令「执行 issues/ 除票 01 外所有 ready-for-agent 票据」；票 01（通用插件端点骨架）
 在前置专项 `.scratch/2026-09-18-ws-base-service/spec.md`（done）与现有代码（`channel/plugin.rs`、
 manifest wsEndpoints、`ws_control.rs`）中已就绪，跳过。
@@ -15,7 +15,7 @@ manifest wsEndpoints、`ws_control.rs`）中已就绪，跳过。
 | 4 | 03 | 会话控制直连端点闭环（connection-context 身份接线 + e2e） | 02 | done（cb894d90a） |
 | 5 | 04 | 终端输入输出流端点（ws_terminal.rs + 真实 PTY 闭环） | 02 | done（5e72b4de8） |
 | 6 | 07 | 设备派生与认证记录归插件（宿主删 Device 事件/DTO/session_count） | 02 | done（450ca7c17） |
-| 7 | 08 | 宿主业务硬切（删旧路由/枚举/服务/订阅器/PTY 广播映射/同步桥） | 03-07 | todo |
+| 7 | 08 | 宿主业务硬切（删旧路由/枚举/服务/订阅器/PTY 广播映射/同步桥） | 03-07 | done（本会话，见 issues/08） |
 | 8 | 09 | 终态性能与全量门禁（全量测试 + eslint + 文档 + lens） | 08 | todo |
 
 ## 关键现状（已核实）

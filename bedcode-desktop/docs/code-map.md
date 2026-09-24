@@ -95,10 +95,10 @@ bedcode-desktop/                      # 桌面端项目 (Tauri 2.0 + Vue 3)
         │                             #   引擎级能力——link_crypto 与 host-crypto 原语只依赖其抽象接口，
         │                             #   不再内联具体算法（WS/HTTP 过滤层 = 纯抽象层）
         ├── enums/                    # 枚举类型（终态 = 引擎级 + 传输面契约形状）：本目录只定义认证 wire
-        │                             #   与 PTY 引擎枚举；同步 / 概要 / 控制 / 特殊键四个文件是 SDK
-        │                             #   `bedcode-plugin-api::wire` 的 re-export 垫片（专项票 01）
-        ├── events/                   # 全局事件系统：AppEvent trait + 统一 publish 入口、事件匹配、
-        │                             #   HostSyncEvent 薄适配、同步事件 → WebSocket 广播
+        │                             #   与 PTY 引擎枚举；特殊键 / 插件共享类型两个文件是 SDK 的 re-export
+        │                             #   垫片（专项票 01；同步/概要/控制垫片已随 websocket 业务下沉票 08 删）
+        ├── events/                   # （websocket 业务下沉票 08 已删除：AppEvent/publish/matcher 只服务
+        │                             #   宿主 SyncEvent 同步桥，随 broadcast-sync 退役整体移除）
         ├── mdns/                     # mDNS 服务广播：将桌面端服务注册到局域网供移动端发现
         ├── plugin/                   # 插件系统（WASM 组件沙箱架构，核心模块，详见 Core Modules）
         ├── protocol/                 # 跨端线协议形状中立域（票 02）：只放对外 wire 契约，
@@ -263,8 +263,9 @@ spec D3 否决），ABI desktop 15 → 16（v15 归 `host-auth`；mobile 不跟�
 `write`/`kill`/`resize`/`ring-fetch` 驱动输入停止尺寸与输出拉取。
 **票 11（2026-09-24）后只剩这一张注册表**：内核 `SessionComponents` 的 PTY 注册表与
 `GlobalOutputManager`（业务输出环）随 `src-tauri/src/session/` 整目录删除，业务会话与插件私有
-PTY **同为引擎句柄**，唯一区别是是否声明 `hostBroadcastSessionId` 供宿主广播面直读
-（移动端输出面据此经宿主 server 直读 `PtyRing` 恢复，见路线图 M6/M7）。
+PTY **同为引擎句柄**——输出读取一律归插件 `ring-fetch`（websocket 业务下沉票 08 起
+宿主不再持有「会话 id → pty 句柄」广播映射，`hostBroadcastSessionId` 已删除；会话输出环
+只有经插件互调 / 插件 WS 端点可达）。
 
 - **创建域（`pty:spawn`）**：`spawn` 收 config-json `{command, args?, env?, workingDir?, cols?, rows?, ringBytes?}`
   （裸 argv exec，宿主不做 shell 包装 / WSL 转换 / 危险字符校验）→ 句柄 `pty-<uuid>` 并登记属主；
@@ -353,34 +354,23 @@ WIT 契约 `host-task`（5 函数：execute-batch / submit / status / cancel / l
   - **middleware/**：`jwt_auth` JWT 网关（公开路径/插件路径放行规则；具名中间件 `jwt_gateway`，
     协议网关必须挂在它**之后**——`Scope::wrap` 后注册者先执行，故 `http/routes.rs` 里网关写在验签之前）、
     `http_filter` HTTP 流量过滤器中间件
-- **websocket/**（WS 传输面）：
-  - **routes.rs**：三条握手端点（`/ws/terminal/session/{id}`、`/ws/event`、`/ws/plugin/{plugin_id}/{path}`，
-    未注册 / 属主未激活 404、连接数超限**升级前** 503）+ `ws_frame_limit` + 属主激活闸门
-    `endpoint_owner_activated`
+- **websocket/**（WS 传输面，websocket 业务下沉票 08 终态 = 通用 transport）：
+  - **routes.rs**：只有一个握手端点 `/ws/plugin/{plugin_id}/{path}`（未注册 / 属主未激活 404、
+    连接数超限**升级前** 503）+ `ws_frame_limit` + 属主激活闸门 `endpoint_owner_activated`。
+    旧 `/ws/event` 与 `/ws/terminal/session/{id}` 已删除（请求得到通用 404，无 alias/fallback）
   - **conn.rs**：**通用连接骨架**（零业务语义）——心跳（5s ping / 45s 超时）、首消息认证策略
     `AuthMode{Required,None}` 与认证窗口、帧级流量过滤链（inbound / outbound）、注册表登记与
-    离线判定、连接终止原因（`CloseOutcome`）透出、优雅关闭；`ChannelHandler` trait 是通道协议
-    的唯一切口（`auth_mode` / `auth_timeout_close_code` / 各生命周期回调）；
-  - **channel/{terminal,event,plugin}.rs**：三个通道实现——`/ws/terminal/session/{id}`（控制帧协议）、
-    `/ws/event`（旧 `Message` 兼容面）、`/ws/plugin/{plugin_id}/{path}`（插件端点：认证策略由端点
-    声明、帧转投属主插件、接入/断开事件上报）。**新增通道 = 新增一个实现 + 路由构造点，不改骨架**；
-  - **registry.rs / endpoint.rs**：连接注册表（`ChannelKind{Terminal,Event,Plugin}` + owner/endpoint_id，
-    广播过滤、在线判定、端点域寻址与属主回收）；插件端点注册表（属主 + 挂载路径 + 认证策略 + 上限 +
-    总线；只碰本人的回收）；
-  - **subscription.rs**：输出订阅原语（订阅/退订/传播模式 + 背压 ack + 桥接任务；票 06 起引擎环订阅句柄登记与 ack 路由）；
-  - **terminal_ws/**（control_frame / forward / subscriber）与 **message.rs**（移动端兼容红线）、
-    **websocket_manager.rs**（生命周期与优雅停机；停机前对插件端点客户端下发 1001）、**session.rs**
-    （WsSession 连接态）、**connection_types.rs**（连接事件）；
-  - **terminal_ws/subscriber.rs**：票 06 起含引擎环订阅者（`spawn_engine_subscriber` /
-    `engine_subscriber_loop`）——经票 05 广播声明直读同进程 `PtyRing`（轮询 + 终态宽限排空 +
-    SessionStopped 帧，帧语义与内核环订阅者逐字一致；`pty_session_chain` 场景 2 为恢复断言）；
-  - **services/session_control.rs**：WS 会话控制**传输面转发层**（票 09b/09c）——会话控制动作的
-    词表解释已迁插件（`terminal-session` 的 `ws_control` 域），本层只做三件事：声明闸门（端点
-    `session-control` 已声明且插件激活，否则显性报错）、原始动作 JSON 转发插件互调 api
-    `session-ws-control`（宿主不解动作名语义）、响应动作 JSON 套回 `Message::SessionControl` 信封
-    （原 message_id；信封 session_id 取自响应动作的 session_id 字段）。旧 `handle_control` 业务
-    switch 已删（宿主 WS 层无业务词表 switch）；`terminal_service.rs` 终端输入仍是引擎操作
-    （H1 数据面不迁插件）
+    认证态同步、连接终止原因（`CloseOutcome`）透出、优雅关闭；`ChannelHandler` trait 是通道协议
+    的唯一切口（`auth_mode` / `auth_timeout_close_code` / 各生命周期回调）；连接级状态只剩
+    地址 + JWT 主体身份（sub/deviceName/fingerprint），无订阅集合
+  - **channel/plugin.rs**：唯一通道实现——插件端点（认证策略由端点声明、帧转投属主插件、
+    接入/断开事件上报）；旧 terminal/event 通道已随业务硬切删除。**新增通道 = 新增一个实现 + 路由构造点，不改骨架**
+  - **registry.rs / endpoint.rs**：连接注册表（owner/endpoint_id、端点域寻址与按属主回收；
+    旧 `ChannelKind` / Event/Terminal 广播过滤已删除——只剩插件端点一类连接）；插件端点
+    注册表（属主 + 挂载路径 + 认证策略 + 上限 + 总线；只碰本人的回收）
+  - **websocket_manager.rs**：服务器生命周期与优雅停机（停机前对插件端点客户端下发 1001）+
+    连接事实清单（`list_clients`/`client_count`，host-connection 原语入口）；宿主业务
+    `Message` 发送/广播 API 已删除
 
 ### 线协议形状 — `src-tauri/src/protocol/`（跨端 wire 契约中立域）
 
@@ -449,41 +439,22 @@ PTY 进程生命周期、输出读取与分发、游标环、WSL 发行版列举
 **投递时序注意**：`mark_reader_closed` 只表示「尾帧已入有序队列」，`sink.on_bytes` 在独立消费者
 任务里按序异步完成 → 终态事件到达 ≠ sink 已收到尾帧（消费方断言需有界轮询）。
 
-### 全局事件系统 — `src-tauri/src/events/`
+### 全局事件系统 — `src-tauri/src/events/`（websocket 业务下沉票 08 已退役删除）
 
-`AppEvent` trait + 统一发布入口 + 泛型事件匹配处理器；宿主事件面**不持有任何业务事件类型**。
+宿主 `AppEvent` trait + 统一 publish 入口 + 事件匹配处理器只服务一个消费者：插件
+`host-events.broadcast-sync` → `HostSyncEvent` → `sync_handler` → WS `Message::SyncData` 广播。
+websocket 业务下沉票 08 起宿主同步广播面整体删除（插件事件改 `host-bus.publish` +
+`host-events.emit`，载荷插件自定义 JSON），`src/events/` 目录（app_event / matcher /
+host_sync_event / sync_handler）随之移除；`AppContext.sync_tx` 与 `SYNC_EVENT_BROADCAST_CAPACITY`
+同步清理。
 
-- **`app_event.rs`**：`AppEvent`（`Clone + Send + Sync + Debug` + 三个协议方法
-  `source_device()` / `validate()` / `to_sync_payload()`）与 `publish()` / `PublishError`。
-  `publish` 顺序固定为**校验 → 查源 → 投递**：校验失败或该事件类型没注册事件源都返回 `Err`
-  （静默 `Ok` = 「线还在、数据永远是空」的断链，AGENTS §8 判据）。`to_sync_payload`
-  **故意不给默认实现**——新增事件类型必须显式回答走不走 WS 同步通道。
-- **`matcher.rs`**：按 `TypeId` 的泛型分发（`register_source` / `register` / `on_filter` /
-  `subscribe`），机制与迁移前一致；`EventMatcher::publish` 保留底层语义（无源即丢弃），
-  显性失败由 `events::publish` 补。
-- **`host_sync_event.rs`**：插件事件进入宿主广播面的**唯一薄适配**——
-  `HostSyncEvent(pub bedcode_plugin_api::events::SyncEvent)` newtype（orphan rule 所需，
-  同时标出「已进入宿主面」这条边界）。`to_sync_payload` 是同一 wire 的机械 JSON 折算
-  （专项票 02 起 `SyncEvent` 与 `SyncPayload` 同形），**没有逐变体 match**；
-  `source_device` 只取信封字段。折不成形状即 `validate` 失败 → 发布侧显性 `Err`。
-- **`sync_handler.rs`**：`EventHandler<HostSyncEvent>` 只剩传输面三件事——折载荷、按源设备
-  排除（空串 = 桌面本地操作 → 全量广播）、`Message::SyncData` 广播；广播器抽成
-  `SyncBroadcaster` trait 供测试注入 Fake。
+**防回接锁**（随目录删除一并移除）：`retired_session_event_mirror_is_not_reintroduced` 等
+三条锁锁的是「宿主事件面不解释产品事件」——真源清空后命名空间本就不存在，不再需要锁。
 
-**插件事件的一条路**：插件 `host-events.broadcast_sync(event-json)` → 宿主反序列化 SDK
-`SyncEvent`（未知/畸形/旧格式即点名拒绝）→ `HostSyncEvent` → `events::publish` → 本处理器
-→ WS 广播。WIT `broadcast-sync` **无返回值**（ABI 不变），所以宿主侧失败的可观测点是
-`runtime/component.rs` 导入壳的 `error!`，插件收不到异常——**载荷必填自足一律在生产者侧
-保证**（`com.bedcode.terminal-session` 的 `session::summary_for` 取不到概要就 warn + 跳过广播）。
-
-**防回接锁**（三条，都在宿主 `cargo test` 门禁内）：`retired_session_event_mirror_is_not_reintroduced`
-（`src/events/**` + `src/enums/**` 实现段不得再现镜像枚举 / `SyncPayload::` 逐变体构造 /
-`SessionStatus` 解读）、`sync_handler_does_not_interpret_session_variants`（处理器实现段零变体分支）、
-`events_module_does_not_depend_on_kernel_session_registry`（票 09：事件面不依赖内核会话登记）。
-
-Tauri 前端事件 `session-status-changed` 与内核状态订阅转接通道（`events/forwarder.rs`）**已随
-票 09 退役**；会话事实的前端可见性由插件经 `host-events` / `host-bus` 自己发布，宿主不再替它转接。
-
+_历史（2026-09-24 专项票 01–04）_：插件 `host-events.broadcast_sync(event-json)` → 宿主反序列化
+SDK `SyncEvent`（未知/畸形/旧格式即点名拒绝）→ `HostSyncEvent` 薄适配 → `events::publish`
+（校验 → 查源 → 投递）→ `sync_handler`（折载荷 + 按源设备排除 + 广播）。WIT `broadcast-sync`
+无返回值（ABI 稳定），宿主侧失败只落 `error!`。
 ### 对等网络 — `src-tauri/src/server/peer_net/` + `packages/peer-net`
 
 跨设备可信直连底座，与终端链路（`_bedcode._tcp`）完全独立互不感知：
@@ -563,8 +534,8 @@ BedCode 通过 `com.bedcode.terminal-session` 插件的任务域（WASM）+ HTTP
 Claude Code Hook (Python/TS, plugins/terminal-session/scripts/ 随包)
     ↓ HTTP POST /api/plugin/com.bedcode.terminal-session/...（旧 auto-task 前缀由宿主别名表应答）
 com.bedcode.terminal-session WASM 任务域（任务状态/队列/模式，经 plugin_controller.rs 声明式端点路由）
-    ↓ SDK SyncEvent → host-events.broadcast_sync(event-json)
-    ↓ 宿主解析 → HostSyncEvent 薄适配 → events::publish → sync_handler → WebSocket broadcast
+    ↓ host-bus.publish（属主私有 topic）+ host-events.emit（插件自定义 JSON 载荷；
+    websocket 业务下沉票 08 起宿主同步广播面已删——消息经 WS 插件端点原始帧直达移动端）
 Mobile Tauri Event → useAutoExecutor 状态机（移动端）
     ↓ sendInput / HTTP API
 Claude Code (PTY)
@@ -589,7 +560,7 @@ Claude Code (PTY)
 | 系统常量 | `src-tauri/src/system/constants.rs`（单一文件，`// ====` 按领域分组） |
 | 数据库 | `src-tauri/src/db/*.rs` |
 | 枚举类型 | `src-tauri/src/enums/*.rs` |
-| WS 会话控制 / 终端服务 | `src-tauri/src/server/websocket/services/*.rs` |
+| WS 通用传输（server/websocket） | `src-tauri/src/server/websocket/`（插件端点 / 连接骨架 / 注册表） |
 | DTO | `src-tauri/src/server/http/dtos/*.rs` |
 | 前端插件系统 | `src/plugin/` |
 | 插件源码 | `plugins/*/` |

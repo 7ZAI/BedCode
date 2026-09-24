@@ -1,6 +1,6 @@
 # WebSocket 业务下沉与宿主通用传输面收敛
 
-Status: **ready-for-agent**（2026-09-25 立项；待实施）
+Status: **done**（2026-09-25；P0–P5 全部落地——connection-context/通用连接核心为票 02，插件端点与终端数据面为票 03/04，事件与连接事实迁移为票 05/06/07，宿主硬切为票 08，见 `.scratch/.../issues/` 与 handoff 执行表；终态全量门禁与文档复核留待票 09）
 Date: 2026-09-25
 范围: **仅桌面端**（`bedcode-desktop/`）；`bedcode-mobile/` 不修改、不测试、不承诺兼容
 决策依据: 用户 2026-09-25 当前指令（宿主剥离业务代码；不提供移动端兼容；不兼容旧版本）、AGENTS §5（无业务内核）、ADR 0022（宿主只暴露“离宿主无法实现且无业务语义”的原语）、`.scratch/2026-09-18-ws-base-service/spec.md`、`.scratch/2026-09-23-session-engine-downsink/spec.md`
