@@ -175,11 +175,29 @@ pub fn handle_command(args: &serde_json::Value) -> Result<serde_json::Value, Str
     handle_action(&action, source_device.as_deref())
 }
 
+/// 从连接上下文 JSON 提取发起者设备名（websocket 业务下沉票 03：直连端点的
+/// 「请求关联」——动作帧的发起者身份由插件自 `connection-context` 解析，
+/// 宿主不再透传 claims 设备名）
+///
+/// 只取 `authContext.deviceName`（已脱敏）；`auth: none` 连接无 authContext →
+/// `None`（桌面本地）；上下文查询失败 / 非法 JSON → `None`（不伪造身份）。
+fn source_device_from_context(context_json: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(context_json).ok()?;
+    value["authContext"]["deviceName"]
+        .as_str()
+        .map(str::to_string)
+        .filter(|s| !s.is_empty())
+}
+
 /// events-ws 服务端域回调（声明端点 `session-control` 的入站帧）
 ///
 /// 文本帧 = 动作 JSON（旧 `Message::SessionControl.payload.action` 同形）；
 /// 处理后经 `host-websocket.send-text-to-client` 回包（响应动作 JSON；
 /// 无回包动作不回帧）。二进制帧非本端点协议 → 忽略 + debug 留痕。
+///
+/// 发起者身份（票 03）：经 `connection-context` 自取已脱敏 `deviceName`，
+/// 作为 `source_device` 透传进创建/移除编排（正统端初始归属/广播排除语义），
+/// 宿主不再解释请求关联。
 #[cfg(target_arch = "wasm32")]
 pub fn on_client_message(endpoint_id: &str, client_id: &str, kind: &str, payload: &[u8]) -> anyhow::Result<()> {
     if kind != "text" {
@@ -189,8 +207,12 @@ pub fn on_client_message(endpoint_id: &str, client_id: &str, kind: &str, payload
         return Ok(());
     }
     let text = String::from_utf8_lossy(payload);
+    let source_device = WasmHost
+        .ws_connection_context(endpoint_id, client_id)
+        .ok()
+        .and_then(|ctx| source_device_from_context(&ctx));
     let reply = match serde_json::from_str::<serde_json::Value>(&text) {
-        Ok(action) => match handle_action(&action, None) {
+        Ok(action) => match handle_action(&action, source_device.as_deref()) {
             Ok(reply) if reply.is_null() => None, // 无回包动作（resize）
             Ok(reply) => Some(reply),
             Err(e) => Some(serde_json::json!({ "type": "error", "message": e })),
@@ -271,5 +293,52 @@ mod tests {
     fn handle_command_requires_action_arg() {
         let args = serde_json::json!({});
         assert!(handle_command(&args).is_err());
+    }
+
+    // ==================== 票 03：连接上下文 → 发起者身份（请求关联） ====================
+
+    /// 已认证连接：authContext.deviceName → 发起者设备名
+    #[test]
+    fn source_device_from_authenticated_context() {
+        let ctx = r#"{
+            "clientId": "127.0.0.1:1",
+            "authenticated": true,
+            "authContext": {"subject": "dev-1", "deviceName": "Phone", "fingerprint": "fp-1"}
+        }"#;
+        assert_eq!(source_device_from_context(ctx), Some("Phone".to_string()));
+    }
+
+    /// auth:none 连接：无 authContext → None（桌面本地，不伪造身份）
+    #[test]
+    fn source_device_omitted_for_unauthenticated() {
+        let ctx = r#"{"clientId": "127.0.0.1:1", "authenticated": false}"#;
+        assert_eq!(source_device_from_context(ctx), None);
+    }
+
+    /// 上下文异常（非法 JSON / 缺 authContext / deviceName 空串）→ None
+    #[test]
+    fn source_device_fails_open_to_none_on_bad_context() {
+        assert_eq!(source_device_from_context("not json"), None);
+        assert_eq!(source_device_from_context(r#"{"clientId":"c"}"#), None);
+        assert_eq!(
+            source_device_from_context(r#"{"authContext":{"deviceName":""}}"#),
+            None,
+            "空设备名不算发起者"
+        );
+    }
+
+    /// 票 03 结构锁：直连端点的入站帧处理必须经 `connection-context` 自取发起者
+    /// 身份（宿主不再透传 claims 设备名）——`on_client_message` 实现段不得缺少
+    /// `ws_connection_context(` 调用（改动即红：请求关联回归宿主 = 红线）。
+    #[test]
+    fn endpoint_message_handler_resolves_identity_via_connection_context() {
+        let root = env!("CARGO_MANIFEST_DIR");
+        let src = std::fs::read_to_string(format!("{root}/src/ws_control.rs")).expect("read ws_control.rs");
+        let handler = src.split("pub fn on_client_message").nth(1).expect("on_client_message 段");
+        let calls = handler
+            .lines()
+            .filter(|l| l.contains("ws_connection_context(") && !l.trim_start().starts_with("//"))
+            .count();
+        assert_eq!(calls, 1, "on_client_message 必须调用一次 connection-context 解析发起者");
     }
 }

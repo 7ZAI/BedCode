@@ -263,6 +263,7 @@ fn test_ws_endpoint_server_domain_roundtrip() {
     rt.block_on(ws_e2e_guard("ws 服务端域 e2e", async {
         use futures_util::SinkExt;
         use tokio_tungstenite::tungstenite::Message;
+        use crate::utils::auth::jwt::JwtService;
 
         const PLUGIN_ID: &str = "com.bedcode.ws-test";
         let connect_topic = ws_event_topic(WS_CLIENT_CONNECT, PLUGIN_ID);
@@ -346,15 +347,49 @@ fn test_ws_endpoint_server_domain_roundtrip() {
         );
         assert!(clients[0]["addr"].as_str().is_some_and(|a| !a.is_empty()));
 
+        client_a
+            .send(Message::Text("ordering-frame".to_string()))
+            .await
+            .expect("send ordering frame");
         let state = ws_poll_state(
             &plugin,
-            |s| ws_event_payload(s, &connect_topic).is_some(),
+            |s| {
+                let has_event = s["events"].as_array().is_some_and(|events| {
+                    events.iter().any(|event| {
+                        event["topic"] == connect_topic.as_str()
+                            && event["payload"]["endpointId"] == endpoint_id
+                            && event["payload"]["clientId"] == client_a_id
+                    })
+                });
+                let has_frame = s["frames"].as_array().is_some_and(|frames| {
+                    frames.iter().any(|frame| {
+                        frame["kind"] == "text"
+                            && frame["text"] == "ordering-frame"
+                            && frame["target"] == format!("{endpoint_id}/{client_a_id}")
+                    })
+                });
+                has_event && has_frame
+            },
             std::time::Duration::from_secs(5),
         )
         .await;
         let connect = ws_event_payload(&state, &connect_topic).expect("ws:client-connect 事件");
         assert_eq!(connect["endpointId"], endpoint_id);
         assert_eq!(connect["clientId"], client_a_id, "事件标识与 list-clients 同源");
+        let trace = state["trace"].as_array().expect("fixture trace");
+        let event_index = trace
+            .iter()
+            .position(|entry| entry == &format!("event:{}", connect_topic))
+            .expect("connect event trace");
+        let frame_index = trace
+            .iter()
+            .position(|entry| entry == &format!("frame:text:{endpoint_id}/{client_a_id}"))
+            .expect("first frame trace");
+        assert!(event_index < frame_index, "client-connect 必须先于首帧回调: {trace:?}");
+        match ws_client_recv(&mut client_a, std::time::Duration::from_secs(5)).await {
+            Some(Message::Text(text)) => assert_eq!(text, "ordering-frame"),
+            other => panic!("期望 ordering-frame 回显，got: {other:?}"),
+        }
 
         // ==================== 3. 入站帧 → 插件回显（文本 + 二进制） ====================
         client_a
@@ -591,15 +626,13 @@ fn test_ws_endpoint_server_domain_roundtrip() {
             "宿主主动断开恒 wasClean=false（spec §4.5）"
         );
 
-        // ==================== 8. auth:"jwt"：未认证帧丢弃 + 认证失败 4001 ====================
-        // `none` 路径已在上文贯通；本段补 jwt 策略的失败分支与「未认证连接不产生
-        // 接入事件」契约（jwt 成功分支需真实签发 token，属遗留项，见票 05 Comments）
+        // ==================== 8. auth:"jwt"：成功、丢弃与失败 ====================
         let secure_endpoint = {
             let mut guard = plugin.lock().await;
             let raw = guard
                 .invoke_command(
                     "ws-register-endpoint",
-                    r#"{"path":"secure","auth":"jwt","maxClients":1}"#,
+                    r#"{"path":"secure","auth":"jwt","maxClients":2}"#,
                 )
                 .expect("register jwt endpoint");
             serde_json::from_str::<serde_json::Value>(&raw).expect("register json")["endpointId"]
@@ -608,38 +641,100 @@ fn test_ws_endpoint_server_domain_roundtrip() {
                 .to_string()
         };
         let secure_url = format!("ws://127.0.0.1:{port}/ws/plugin/{PLUGIN_ID}/secure");
+        let token = JwtService::new()
+            .generate_token("ws-test-device".to_string(), Some("Phone".to_string()), Some("fp-ws".to_string()))
+            .expect("mint jwt");
         let (mut client_d, _) = tokio_tungstenite::connect_async(&secure_url)
             .await
             .expect("jwt endpoint connect");
         let clients = ws_wait_clients(&plugin, &secure_endpoint, 1).await;
-        assert_eq!(clients.len(), 1, "jwt 端点连接已登记");
+        let client_d_id = clients[0]["clientId"].as_str().expect("clientId").to_string();
         assert_eq!(clients[0]["authenticated"], false, "未认证期注册表认证态为 false");
 
-        // 未认证期业务帧：丢弃 + warn（不缓存，spec §4.3）→ 插件不得收到
         client_d
+            .send(Message::Text(format!(r#"{{"type":"auth","token":"{token}"}}"#)))
+            .await
+            .expect("send valid auth frame");
+        let state = ws_poll_state(
+            &plugin,
+            |s| {
+                s["events"].as_array().is_some_and(|events| {
+                    events.iter().any(|event| {
+                        event["topic"] == connect_topic.as_str()
+                            && event["payload"]["endpointId"] == secure_endpoint
+                            && event["payload"]["clientId"] == client_d_id
+                            && event["payload"]["authenticated"] == true
+                    })
+                })
+            },
+            std::time::Duration::from_secs(5),
+        )
+        .await;
+        assert!(ws_event_payload(&state, &connect_topic).is_some(), "JWT 成功必须产生接入事件");
+        let clients = ws_wait_clients(&plugin, &secure_endpoint, 1).await;
+        assert_eq!(clients[0]["authenticated"], true, "认证成功后注册表必须可见");
+        client_d
+            .send(Message::Text("jwt-ok".to_string()))
+            .await
+            .expect("send authenticated frame");
+        let state = ws_poll_state(
+            &plugin,
+            |s| ws_has_frame(s, "text", Some("jwt-ok")),
+            std::time::Duration::from_secs(5),
+        )
+        .await;
+        assert!(ws_has_frame(&state, "text", Some("jwt-ok")), "认证后帧必须可达");
+        match ws_client_recv(&mut client_d, std::time::Duration::from_secs(5)).await {
+            Some(Message::Text(text)) => assert_eq!(text, "jwt-ok"),
+            other => panic!("期望 JWT 成功回显，got: {other:?}"),
+        }
+
+        let close_args = serde_json::json!({ "endpointId": secure_endpoint, "clientId": client_d_id }).to_string();
+        let raw = plugin
+            .lock()
+            .await
+            .invoke_command("ws-close-client", &close_args)
+            .expect("close authenticated client");
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&raw).unwrap()["hit"], true);
+        assert!(matches!(
+            ws_client_recv(&mut client_d, std::time::Duration::from_secs(5)).await,
+            Some(Message::Close(Some(frame))) if u16::from(frame.code) == 4004
+        ));
+        let _ = ws_poll_state(
+            &plugin,
+            |s| s["events"].as_array().is_some_and(|events| events.iter().any(|event| {
+                event["topic"] == disconnect_topic.as_str()
+                    && event["payload"]["clientId"] == client_d_id
+            })),
+            std::time::Duration::from_secs(5),
+        )
+        .await;
+        assert!(ws_wait_clients(&plugin, &secure_endpoint, 0).await.is_empty());
+
+        let (mut client_e, _) = tokio_tungstenite::connect_async(&secure_url)
+            .await
+            .expect("invalid jwt endpoint connect");
+        let clients = ws_wait_clients(&plugin, &secure_endpoint, 1).await;
+        let client_e_id = clients[0]["clientId"].as_str().expect("clientId").to_string();
+        assert_eq!(clients[0]["authenticated"], false);
+        client_e
             .send(Message::Text("before-auth".to_string()))
             .await
             .expect("send pre-auth frame");
         tokio::time::sleep(std::time::Duration::from_millis(150)).await;
         let state = ws_fixture_state(&plugin).await;
-        assert!(
-            !ws_has_frame(&state, "text", Some("before-auth")),
-            "未认证期业务帧必须丢弃（不缓存），got: {state}"
-        );
+        assert!(!ws_has_frame(&state, "text", Some("before-auth")));
 
-        // 非法 token → 认证失败 → close 4001
-        client_d
+        client_e
             .send(Message::Text(r#"{"type":"auth","token":"not-a-jwt"}"#.to_string()))
             .await
             .expect("send bad auth frame");
-        match ws_client_recv(&mut client_d, std::time::Duration::from_secs(5)).await {
+        match ws_client_recv(&mut client_e, std::time::Duration::from_secs(5)).await {
             Some(Message::Close(Some(frame))) => {
-                assert_eq!(u16::from(frame.code), 4001, "认证失败关闭码 4001（spec D8）");
+                assert_eq!(u16::from(frame.code), 4001, "认证失败关闭码 4001");
             }
             other => panic!("期望 Close(4001)，got: {other:?}"),
         }
-
-        // 认证失败的连接从未「接入」→ 不得产生 client-connect 事件
         tokio::time::sleep(std::time::Duration::from_millis(150)).await;
         let state = ws_fixture_state(&plugin).await;
         let secure_connect_events = state["events"]
@@ -648,15 +743,14 @@ fn test_ws_endpoint_server_domain_roundtrip() {
                 events
                     .iter()
                     .filter(|e| {
-                        e["topic"] == connect_topic.as_str() && e["payload"]["endpointId"] == secure_endpoint.as_str()
+                        e["topic"] == connect_topic.as_str()
+                            && e["payload"]["endpointId"] == secure_endpoint
+                            && e["payload"]["clientId"] == client_e_id
                     })
                     .count()
             })
             .unwrap_or(0);
-        assert_eq!(
-            secure_connect_events, 0,
-            "认证失败连接不得产生 client-connect 事件，got: {state}"
-        );
+        assert_eq!(secure_connect_events, 0, "认证失败连接不得产生接入事件");
 
         // ==================== 收尾：优雅停机 + 实例停用 ====================
         server_handle.stop(true).await;
@@ -1048,6 +1142,134 @@ fn test_session_control_endpoint_direct_roundtrip() {
             Some(Message::Text(text)) => {
                 let reply: serde_json::Value = serde_json::from_str(&text).expect("reply json");
                 assert_eq!(reply["type"], "session_list", "二进制帧后链路仍活, got: {reply}");
+            }
+            other => panic!("期望 list_sessions 响应帧，got: {other:?}"),
+        }
+
+        // ==================== 5. 真实 start/stop/remove 闭环（票 03） ====================
+        // 种子配置 → start_session 经端点直发（真实 PTY spawn）→ list 可见 →
+        // stop_session → pty:exit 终态 → remove_session → 列表清空。
+        // 发起者身份经 connection-context 解析（JWT deviceName=Phone），
+        // 会话登记域的正统端初始归属因此固定为移动端。
+        let config_out = plugin
+            .lock()
+            .await
+            .invoke_command(
+                "session.config.upsert",
+                &serde_json::json!({
+                    "name": "wsctl-e2e",
+                    "environment": "linux",
+                    "workingDir": std::env::temp_dir().to_string_lossy().as_ref(),
+                    "command": "bash",
+                })
+                .to_string(),
+            )
+            .expect("seed config via plugin command");
+        let config_id = serde_json::from_str::<serde_json::Value>(&config_out)
+            .expect("config json")
+            .get("id")
+            .and_then(|v| v.as_str())
+            .expect("config id")
+            .to_string();
+
+        client
+            .send(Message::Text(format!(
+                r#"{{"type":"start_session","config_id":"{config_id}"}}"#
+            )))
+            .await
+            .expect("send start action");
+        let started_id = match ws_client_recv(&mut client, std::time::Duration::from_secs(5)).await {
+            Some(Message::Text(text)) => {
+                let reply: serde_json::Value =
+                    serde_json::from_str(&text).unwrap_or_else(|e| panic!("start 回包非 JSON: {text}: {e}"));
+                assert_eq!(reply["type"], "start_session", "start 回显动作标签, got: {reply}");
+                reply["session_id"].as_str().expect("start 回包 session_id").to_string()
+            }
+            other => panic!("期望 start_session 回包，got: {other:?}"),
+        };
+        assert!(
+            !started_id.is_empty() && started_id.len() >= 8,
+            "插件自产会话 id（UUID v4 形态）, got: {started_id}"
+        );
+
+        // list 应能看到新会话（真实 PTY 已 spawn，状态 running）
+        client
+            .send(Message::Text(r#"{"type":"list_sessions"}"#.to_string()))
+            .await
+            .expect("send list action");
+        match ws_client_recv(&mut client, std::time::Duration::from_secs(5)).await {
+            Some(Message::Text(text)) => {
+                let reply: serde_json::Value = serde_json::from_str(&text).expect("reply json");
+                assert_eq!(reply["type"], "session_list", "got: {reply}");
+                let sessions = reply["sessions"].as_array().expect("sessions array");
+                assert_eq!(sessions.len(), 1, "start 后列表应有 1 条, got: {reply}");
+                assert_eq!(sessions[0]["id"], started_id, "列表命中新会话, got: {reply}");
+                assert_eq!(sessions[0]["status"], "running", "spawn 即 running, got: {reply}");
+            }
+            other => panic!("期望 list_sessions 响应帧，got: {other:?}"),
+        }
+
+        // stop_session → pty kill → pty:exit 终态（轮询至 stopped）
+        client
+            .send(Message::Text(format!(
+                r#"{{"type":"stop_session","session_id":"{started_id}"}}"#
+            )))
+            .await
+            .expect("send stop action");
+        match ws_client_recv(&mut client, std::time::Duration::from_secs(5)).await {
+            Some(Message::Text(text)) => {
+                let reply: serde_json::Value = serde_json::from_str(&text).expect("reply json");
+                assert_eq!(reply["type"], "stop_session", "stop 回显动作标签, got: {reply}");
+            }
+            other => panic!("期望 stop_session 回包，got: {other:?}"),
+        }
+        // pty:exit 终态收尾是异步的（退出事件驱动）；轮询 list 直到 stopped
+        let mut stopped = false;
+        for _ in 0..40 {
+            client
+                .send(Message::Text(r#"{"type":"list_sessions"}"#.to_string()))
+                .await
+                .expect("send list");
+            if let Some(Message::Text(text)) = ws_client_recv(&mut client, std::time::Duration::from_secs(3)).await {
+                let reply: serde_json::Value = serde_json::from_str(&text).expect("reply json");
+                if reply["type"] == "session_list" {
+                    if let Some(status) = reply["sessions"].as_array()
+                        .and_then(|a| a.first())
+                        .and_then(|s| s["status"].as_str())
+                    {
+                        if status == "stopped" {
+                            stopped = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        assert!(stopped, "stop 后会话应进入 stopped 终态（pty:exit 驱动）");
+
+        // remove_session → 摘记录 → 列表清空
+        client
+            .send(Message::Text(format!(
+                r#"{{"type":"remove_session","session_id":"{started_id}"}}"#
+            )))
+            .await
+            .expect("send remove action");
+        match ws_client_recv(&mut client, std::time::Duration::from_secs(5)).await {
+            Some(Message::Text(text)) => {
+                let reply: serde_json::Value = serde_json::from_str(&text).expect("reply json");
+                assert_eq!(reply["type"], "remove_session", "remove 回显动作标签, got: {reply}");
+            }
+            other => panic!("期望 remove_session 回包，got: {other:?}"),
+        }
+        client
+            .send(Message::Text(r#"{"type":"list_sessions"}"#.to_string()))
+            .await
+            .expect("send list action");
+        match ws_client_recv(&mut client, std::time::Duration::from_secs(5)).await {
+            Some(Message::Text(text)) => {
+                let reply: serde_json::Value = serde_json::from_str(&text).expect("reply json");
+                let sessions = reply["sessions"].as_array().expect("sessions array");
+                assert_eq!(sessions.len(), 0, "remove 后列表应清空, got: {reply}");
             }
             other => panic!("期望 list_sessions 响应帧，got: {other:?}"),
         }
