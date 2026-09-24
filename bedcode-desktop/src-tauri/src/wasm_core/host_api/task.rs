@@ -12,14 +12,22 @@
 //! 直接 `Err`，**绝不从池线程触发用户弹窗**（弹窗会长时间占用池槽位并困惑用户）；
 //! 需要新授权的路径，插件须在普通调用栈里先 `host-fs.request-auth`。
 //!
-//! 执行与事件管道见 [`crate::wasm_core::manager::task`]（core-task）：本模块只做
-//! 权限 / 配额 / 解析 / 凭据红线（全量审计日志记 plan 摘要——kind / 单元数 /
-//! 属主，不记 params 全文）。
+//! 本模块只做权限 / 配额 / 解析 / 凭据红线（全量审计日志记 plan 摘要——kind /
+//! 单元数 / 属主，不记 params 全文）；执行与事件管道经 [`TaskEngine`] 接口
+//! 两阶段注入（PluginHost 构造时 [`WasmHostContext::set_task_engine`]，见
+//! `manager::host`）——core-task 实现该接口，host_api 不再依赖 `manager::task`
+//! （依赖单向化 C3）。
 
-use crate::wasm_core::manager::task as core_task;
-use crate::wasm_core::host_api::context::WasmHostContext;
+use crate::wasm_core::host_api::context::{TaskEngine, WasmHostContext};
 use crate::wasm_core::permission::PERMISSION_TASK_RUN;
+use crate::wasm_core::runtime_util::block_on_async;
 use std::sync::Arc;
+
+/// 取注入的执行引擎（PluginHost 构造后两阶段注入；未注入 fail-visible，不静默降级）
+fn engine(host_ctx: &Arc<WasmHostContext>) -> Result<Arc<dyn TaskEngine>, String> {
+    block_on_async(host_ctx.task_engine())
+        .ok_or_else(|| "task: engine not available (host-task 执行引擎未注入)".to_string())
+}
 
 /// `execute-batch`：同步批（扇出 → join → 一次性返回全部单元结果）。
 /// 阻塞 Store 至全部单元终态（或超时）——同 `run-sync` 语义，仅限快操作。
@@ -31,7 +39,7 @@ pub(crate) fn execute_batch(
     if !super::check_permission(host_ctx.as_ref(), plugin_id, PERMISSION_TASK_RUN, "host_task_execute_batch") {
         return Err("permission denied".to_string());
     }
-    core_task::execute_batch(host_ctx.clone(), plugin_id, plan_json)
+    engine(host_ctx)?.execute_batch(host_ctx, plugin_id, plan_json)
 }
 
 /// `submit`：异步任务，登记后立即返回 `task-<hex>` 句柄；进度/终态经
@@ -40,7 +48,7 @@ pub(crate) fn submit(host_ctx: &Arc<WasmHostContext>, plugin_id: &str, plan_json
     if !super::check_permission(host_ctx.as_ref(), plugin_id, PERMISSION_TASK_RUN, "host_task_submit") {
         return Err("permission denied".to_string());
     }
-    core_task::submit(host_ctx.clone(), plugin_id, plan_json)
+    engine(host_ctx)?.submit(host_ctx, plugin_id, plan_json)
 }
 
 /// `status`：任务状态自愈快照（事件丢失后查询）。`Ok(None)` = 不存在 / 非属主。
@@ -48,7 +56,7 @@ pub(crate) fn status(host_ctx: &Arc<WasmHostContext>, plugin_id: &str, job_id: &
     if !super::check_permission(host_ctx.as_ref(), plugin_id, PERMISSION_TASK_RUN, "host_task_status") {
         return Err("permission denied".to_string());
     }
-    core_task::status(plugin_id, job_id)
+    engine(host_ctx)?.status(plugin_id, job_id)
 }
 
 /// `cancel`：协作式取消（正在执行的单元跑完或超时，未开始单元 skipped）；幂等。
@@ -56,7 +64,7 @@ pub(crate) fn cancel(host_ctx: &Arc<WasmHostContext>, plugin_id: &str, job_id: &
     if !super::check_permission(host_ctx.as_ref(), plugin_id, PERMISSION_TASK_RUN, "host_task_cancel") {
         return Err("permission denied".to_string());
     }
-    core_task::cancel(plugin_id, job_id)
+    engine(host_ctx)?.cancel(plugin_id, job_id)
 }
 
 /// `list-jobs`：本插件在册任务清单（自愈快照）
@@ -64,7 +72,7 @@ pub(crate) fn list_jobs(host_ctx: &Arc<WasmHostContext>, plugin_id: &str) -> Res
     if !super::check_permission(host_ctx.as_ref(), plugin_id, PERMISSION_TASK_RUN, "host_task_list_jobs") {
         return Err("permission denied".to_string());
     }
-    core_task::list_jobs(plugin_id)
+    engine(host_ctx)?.list_jobs(plugin_id)
 }
 
 #[cfg(test)]
@@ -79,7 +87,7 @@ mod tests {
 
     #[test]
     fn task_requires_permission() {
-        // 无 task:run：全部入口拒绝（五同步点之一：host_impl 权限门）
+        // 无 task:run：全部入口拒绝（五同步点之一：host_impl 权限门，先于引擎）
         let ctx = ctx();
         let p = "com.bedcode.task-test";
         assert_eq!(
@@ -93,32 +101,20 @@ mod tests {
     }
 
     #[test]
-    fn plan_validation_failures_are_visible() {
+    fn task_engine_missing_fails_visible() {
+        // 无头上下文未注入引擎（build_host_ctx 无 set_task_engine）：
+        // 过权限门后必须显性报错，不得静默降级成空/成功
         let ctx = ctx();
         grant_permissions(&ctx, "com.bedcode.task-test", &[PERMISSION_TASK_RUN]);
-        // 空 units：plan 校验失败（可见的错误，不静默）
         let err = execute_batch(&ctx, "com.bedcode.task-test", r#"{"units":[]}"#).unwrap_err();
-        assert!(err.contains("no units"), "got: {}", err);
+        assert!(err.contains("engine not available"), "got: {err}");
+        assert!(submit(&ctx, "com.bedcode.task-test", r#"{"units":[]}"#).is_err());
+        assert!(status(&ctx, "com.bedcode.task-test", "task-x").is_err());
+        assert!(cancel(&ctx, "com.bedcode.task-test", "task-x").is_err());
+        assert!(list_jobs(&ctx, "com.bedcode.task-test").is_err());
     }
 
-    #[test]
-    fn unknown_unit_kind_fails_in_that_unit_only() {
-        let ctx = ctx();
-        grant_permissions(&ctx, "com.bedcode.task-test", &[PERMISSION_TASK_RUN]);
-        // fail-collect：未知 kind 只让该单元 ok=false，不拖垮同批其他单元
-        let plan = r#"{"units":[{"id":"bad","kind":"no.such.kind","params":{}},{"id":"ok","kind":"fs.exists","params":{"path":"/nonexistent-xyz"}}]}"#;
-        let json = execute_batch(&ctx, "com.bedcode.task-test", plan).unwrap();
-        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
-        let results = v["results"].as_array().unwrap();
-        assert_eq!(results.len(), 2);
-        assert_eq!(results[0]["id"], "bad");
-        assert_eq!(results[0]["ok"], false);
-        assert!(
-            results[0]["error"].as_str().unwrap().contains("unknown unit kind"),
-            "got: {}",
-            results[0]["error"]
-        );
-        // 第二个单元（fs.exists 缺路径/权限会失败或恒 false——此处只断言批次继续执行）
-        assert_eq!(results[1]["id"], "ok");
-    }
+    // 真实执行语义（空 units 校验 / 未知 kind fail-collect / 执行器分发）由
+    // manager 侧集成测试覆盖（runtime/tests/task_e2e.rs，经 setup_wasm_runtime
+    // 注入真实引擎 + 注册执行器）——host_api 单测只守门禁与注入契约。
 }

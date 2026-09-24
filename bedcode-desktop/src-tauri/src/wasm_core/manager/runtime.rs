@@ -693,6 +693,22 @@ mod tests {
             host_ctx.set_plugin_db_root(Some(plugin_db_root()));
             let host_ctx = Arc::new(host_ctx);
 
+            // 注入 host-task 执行引擎 + 单元执行器注册表（与 PluginHost 生产装配同构）：
+            // host_api/task.rs 经 TaskEngine 接口调用 core-task；execute_unit 经
+            // UnitExecutor 注册表分发域执行器（幂等去重，多测试共用进程级注册表）
+            host_ctx
+                .set_task_engine(Arc::new(crate::wasm_core::manager::task::CoreTaskEngine))
+                .await;
+            crate::wasm_core::manager::task::register_unit_executor(Arc::new(
+                crate::wasm_core::host_api::fs::FsUnitExecutor,
+            ));
+            crate::wasm_core::manager::task::register_unit_executor(Arc::new(
+                crate::wasm_core::host_api::process::ProcessUnitExecutor,
+            ));
+            crate::wasm_core::manager::task::register_unit_executor(Arc::new(
+                crate::wasm_core::host_api::http::HttpUnitExecutor,
+            ));
+
             (wasm_runtime, host_ctx)
         })
     }

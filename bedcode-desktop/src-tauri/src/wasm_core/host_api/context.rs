@@ -141,6 +141,38 @@ pub trait CapabilityProvider: Send + Sync {
     fn provider_kind(&self, name: &str) -> String;
 }
 
+/// host-task 执行引擎接口（消费方定义，两阶段注入，PluginServices 先例）
+///
+/// core-task（`manager::task`）实现本 trait；`WasmHostContext` 在 PluginHost
+/// 构造完成后经 [`WasmHostContext::set_task_engine`] 注入。`host_api/task.rs`
+/// 只依赖本接口做「权限门 + 解析/配额」，不再 import `manager::task`（依赖单向化 C3）。
+pub trait TaskEngine: Send + Sync + 'static {
+    /// 同步批（`execute-batch`）：扇出 → join → 一次性返回全部单元结果
+    fn execute_batch(
+        &self,
+        host_ctx: &Arc<WasmHostContext>,
+        owner: &str,
+        plan_json: &str,
+    ) -> Result<String, String>;
+
+    /// 异步任务（`submit`）：登记后立即返回 `task-<hex>` 句柄；终态经回调
+    fn submit(
+        &self,
+        host_ctx: &Arc<WasmHostContext>,
+        owner: &str,
+        plan_json: &str,
+    ) -> Result<String, String>;
+
+    /// 任务状态自愈快照（事件丢失后查询）；`Ok(None)` = 不存在 / 非属主
+    fn status(&self, owner: &str, job_id: &str) -> Result<Option<String>, String>;
+
+    /// 协作式取消（正在执行的单元跑完或超时，未开始单元 skipped）；幂等
+    fn cancel(&self, owner: &str, job_id: &str) -> Result<bool, String>;
+
+    /// 本插件在册任务清单（自愈快照）
+    fn list_jobs(&self, owner: &str) -> Result<String, String>;
+}
+
 /// 宿主上下文（注入到 WasmPluginState）
 ///
 /// 持有宿主子系统引用，Host Functions 通过此上下文访问宿主能力
@@ -168,6 +200,9 @@ pub struct WasmHostContext {
     pub(crate) message_bus: Arc<crate::wasm_core::bus::MessageBus>,
     /// 插件宿主服务（两阶段初始化，避免 PluginHost 与 WasmHostContext 类型互引）
     plugin_services: Arc<RwLock<Option<Arc<dyn PluginServices>>>>,
+    /// host-task 执行引擎（两阶段注入：PluginHost 构造后经 [`Self::set_task_engine`] 注入；
+    /// host_api/task.rs 只依赖 [`TaskEngine`] 接口，不依赖 manager::task 具体实现）
+    task_engine: Arc<RwLock<Option<Arc<dyn TaskEngine>>>>,
     /// 运行中进程注册表（host-process，v8）：run_id → 进程句柄
     ///
     /// host_impl/process.rs 注册/移除；kill（超时/取消）经此查找句柄。
@@ -335,6 +370,7 @@ impl WasmHostContext {
             fs_auth,
             message_bus,
             plugin_services: Arc::new(RwLock::new(None)),
+            task_engine: Arc::new(RwLock::new(None)),
             process_registry: Arc::new(ProcessRegistry::new()),
             api_registry,
             security,
@@ -398,6 +434,19 @@ impl WasmHostContext {
     /// 在两阶段初始化完成前返回 None
     pub async fn services(&self) -> Option<Arc<dyn PluginServices>> {
         self.plugin_services.read().await.clone()
+    }
+
+    /// 两阶段初始化：PluginHost 构造完成后注入 host-task 执行引擎（core-task）
+    ///
+    /// 与 [`Self::set_services`] 同构：必须在任何插件 activate 之前调用，
+    /// 否则 `host-task` 入口报「engine not available」fail-visible
+    pub async fn set_task_engine(&self, engine: Arc<dyn TaskEngine>) {
+        *self.task_engine.write().await = Some(engine);
+    }
+
+    /// 获取 host-task 执行引擎引用（注入完成前返回 None）
+    pub async fn task_engine(&self) -> Option<Arc<dyn TaskEngine>> {
+        self.task_engine.read().await.clone()
     }
 
     /// 获取消息总线引用

@@ -13,11 +13,37 @@
 //! - **权限门禁**：`process:run`（高危：执行任意命令），manifest 声明即信任，
 //!   每次执行由宿主全量审计日志（命令/参数/cwd/env/结果）。
 
-use crate::wasm_core::host_api::context::kill_process_group;
+use crate::wasm_core::host_api::context::{WasmHostContext, kill_process_group};
+use crate::wasm_core::host_api::unit_executor::UnitExecutor;
 use crate::wasm_core::runtime_util::block_on_async;
 use crate::wasm_core::permission::PERMISSION_PROCESS;
 use crate::system::error_boundary::spawn_with_error_boundary;
+use std::sync::Arc;
 use uuid::Uuid;
+
+// ==================== 任务单元执行器（C4：core-task 经注册表分发到域实现） ====================
+
+/// process 单元执行器（kind `process.run-sync`）
+///
+/// 直调 `process_run_sync`（域权限门在函数内部再把守；阻塞型单元的超时由
+/// 被调用方自带参数负责——spec §6，与既有同步语义一致）。
+pub(crate) struct ProcessUnitExecutor;
+
+impl UnitExecutor for ProcessUnitExecutor {
+    fn matches(&self, kind: &str) -> bool {
+        kind == "process.run-sync"
+    }
+
+    fn execute(
+        &self,
+        host_ctx: &Arc<WasmHostContext>,
+        owner: &str,
+        _kind: &str,
+        params: &serde_json::Value,
+    ) -> Result<Option<String>, String> {
+        process_run_sync(host_ctx.as_ref(), owner, &params.to_string()).map(Some)
+    }
+}
 
 /// 默认超时：10 分钟（SDK 契约与插件侧默认值一致）
 const DEFAULT_TIMEOUT_MS: u64 = 600_000;

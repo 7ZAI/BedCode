@@ -348,3 +348,60 @@ fn test_ai_chatbox_wasip3_artifact_loads() {
     let manifest: serde_json::Value = serde_json::from_str(&plugin.get_manifest().expect("manifest")).unwrap();
     assert_eq!(manifest["id"], "com.bedcode.ai-chatbox");
 }
+
+/// execute-batch 空 units：plan 校验失败（可见错误，不静默）——原 host_api/task.rs
+/// 单测迁入（setup_wasm_runtime 已注入真实引擎 + 注册执行器，走 core-task 的
+/// parse_plan 校验；host_api 侧只留门禁与注入契约测试）
+#[test]
+
+fn test_task_execute_batch_empty_units_rejected() {
+    let (_, host_ctx) = setup_wasm_runtime();
+    let plugin = task_fixture_plugin_id();
+    crate::wasm_core::host_api::tests::grant_permissions(&host_ctx, &plugin, &["task:run"]);
+    let err =
+        crate::wasm_core::host_api::task::execute_batch(&host_ctx, &plugin, r#"{"units":[]}"#).unwrap_err();
+    assert!(err.contains("no units"), "got: {err}");
+}
+
+/// execute-batch 未知 kind fail-collect：bad 单元报 unknown unit kind，同批其他单元
+/// 正常执行（不拖垮批次）——原 host_api/task.rs 单测迁入，改走真实引擎 + 执行器
+/// 注册表分发（fs.exists 需 fs:read + fs_auth 预置授权才真成功）
+#[test]
+
+fn test_task_execute_batch_unknown_kind_fails_in_that_unit_only() {
+    let (_, host_ctx) = setup_wasm_runtime();
+    let plugin = task_fixture_plugin_id();
+    crate::wasm_core::host_api::tests::grant_permissions(
+        &host_ctx,
+        &plugin,
+        &["task:run", "fs:read"],
+    );
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("task-unknown-kind");
+    std::fs::create_dir_all(&root).expect("create root");
+    seed_fs_grant(&host_ctx, &plugin, &root);
+    let tmp = root.join("a.txt");
+    std::fs::write(&tmp, b"x").expect("write temp file");
+    let plan = serde_json::json!({
+        "units": [
+            { "id": "bad", "kind": "no.such.kind", "params": {} },
+            { "id": "ok", "kind": "fs.exists", "params": { "path": tmp.to_str().unwrap() } }
+        ],
+        "jobTimeoutMs": 60000,
+    })
+    .to_string();
+    let raw = crate::wasm_core::host_api::task::execute_batch(&host_ctx, &plugin, &plan).expect("batch runs");
+    let v: serde_json::Value = serde_json::from_str(&raw).expect("results json");
+    let results = v["results"].as_array().expect("results array");
+    assert_eq!(results.len(), 2, "fail-collect：所有单元都有结果条目");
+    assert_eq!(results[0]["id"], "bad");
+    assert_eq!(results[0]["ok"], false);
+    assert!(
+        results[0]["error"].as_str().unwrap().contains("unknown unit kind"),
+        "got: {}",
+        results[0]["error"]
+    );
+    assert_eq!(results[1]["id"], "ok");
+    assert_eq!(results[1]["ok"], true, "已授权 fs.exists 单元应成功: {:?}", results[1]["error"]);
+    std::fs::remove_file(&tmp).ok();
+}

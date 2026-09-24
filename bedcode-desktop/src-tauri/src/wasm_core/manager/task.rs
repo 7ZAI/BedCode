@@ -40,7 +40,8 @@ use std::time::{Duration, Instant};
 use serde::Deserialize;
 use tokio::sync::mpsc as tmpsc;
 
-use crate::wasm_core::host_api::{fs, http, process};
+use crate::wasm_core::host_api::context::TaskEngine;
+use crate::wasm_core::host_api::unit_executor::UnitExecutor;
 use crate::wasm_core::manager::runtime::WasmHostContext;
 use crate::wasm_core::monitor::{MetricsRegistry, MetricsSource};
 use crate::wasm_core::runtime_util::ambient_handle;
@@ -316,98 +317,40 @@ fn unit_started() {
 
 // ==================== 单元执行 ====================
 
-/// fs.* 单元的授权预检（票 07 把 spec §6 的契约补成真实现）
-///
-/// 单元直调 `host_impl::fs::*`，那条链走完管线后会落到 `fs_auth.check` 的**弹窗层**：
-/// 池槽位最长被占 30s，而且用户在错误的时机被问一个问题（任务已经开始了才问）。
-/// 这里按管线的**同一顺序**预判两件事：
-/// 1. 声明闸门（`fs:read` / `fs:write`）——缺声明时返回与内层链逐字相同的
-///    `"permission denied"`，否则单元错误会从「你没声明这个权限」变成「去申请目录」，
-///    把插件指向完全无关的出路；
-/// 2. 目录授权（[`FsAuthChecker::is_granted`]，与弹窗路径同一判据）——未授权就
-///    fail-visible 拒绝并指名 `host-fs.request-auth` 这条出路。
-/// 判据同源很关键：两条通道对同一路径给出不同答案，插件就会看到「同步调用能读、
-/// 并发单元说没授权」。
-fn ensure_unit_path_granted(host_ctx: &Arc<WasmHostContext>, owner: &str, unit: &PlanUnit) -> Result<(), String> {
-    if !unit.kind.starts_with("fs.") {
-        return Ok(());
-    }
-    let needs_write = unit.kind == "fs.write";
-    let permission = if needs_write {
-        crate::wasm_core::permission::PERMISSION_FS_WRITE
-    } else {
-        crate::wasm_core::permission::PERMISSION_FS_READ
-    };
-    if !host_ctx.permission().check(owner, permission) {
-        return Err("permission denied".to_string());
-    }
-    let Some(path) = unit.params.get("path").and_then(|v| v.as_str()) else {
-        // 缺路径的单元由各 kind 自己报错（那才是它契约里的事），这里不替它判
-        return Ok(());
-    };
-    if crate::wasm_core::runtime_util::block_on_async(host_ctx.fs_auth().is_granted(owner, path)) {
-        return Ok(());
-    }
-    Err(format!(
-        "fs unit path not authorized: {} — request it via host-fs.request-auth before submitting units",
-        path
-    ))
+// ==================== 单元执行器注册表（C4：core-task 经接口分发，零 host_api 具体域引用） ====================
+
+/// 已注册执行器条目（`type_id` 用于幂等去重：组合根与测试装配都可能注册同一执行器）
+struct RegisteredExecutor {
+    executor: Arc<dyn UnitExecutor>,
+    type_id: std::any::TypeId,
 }
 
-/// kind → 既有 host_impl 直调（零新 DTO；域权限门 + fs_auth 在目标函数内部，
-/// fs_auth 只做已授权校验、绝不从池线程触发用户弹窗——spec §6，判据见
-/// [`ensure_unit_path_granted`]）。
+/// 进程级执行器注册表（组合根/测试装配经 [`Self::register_unit_executor`] 注入；
+/// 本模块零 host_api 具体域函数引用）
+static UNIT_EXECUTORS: LazyLock<Mutex<Vec<RegisteredExecutor>>> = LazyLock::new(|| Mutex::new(Vec::new()));
+
+/// 注册单元执行器（幂等：同具体类型只注册一次）
+pub(crate) fn register_unit_executor(executor: Arc<dyn UnitExecutor>) {
+    let type_id = (executor.as_ref() as &dyn std::any::Any).type_id();
+    let mut executors = UNIT_EXECUTORS.lock().unwrap_or_else(|e| e.into_inner());
+    if !executors.iter().any(|re| re.type_id == type_id) {
+        executors.push(RegisteredExecutor { executor, type_id });
+    }
+}
+
+/// kind → 执行器分发（域权限门 + fs_auth 已授权校验在各执行器内部，绝不从池线程
+/// 触发用户弹窗——spec §6；fs 单元的授权预判按管线顺序预检，判据同源）。
+/// 未注册的 kind 显性报 unknown（fail-visible，不静默）。
 /// 返回 `value` 的 JSON 编码：字符串返回型（read-dir / stat / run-sync）直接透传
 /// 原 JSON 文本；其他类型按原生值 JSON 编码；`value.len()` 超上限截断 + truncated。
 fn execute_unit(host_ctx: &Arc<WasmHostContext>, owner: &str, unit: &PlanUnit) -> UnitDone {
     let started = Instant::now();
-    let result: Result<Option<String>, String> = match ensure_unit_path_granted(host_ctx, owner, unit) {
-        Err(e) => Err(e),
-        Ok(()) => match unit.kind.as_str() {
-            "fs.read" => {
-                let path = unit.params.get("path").and_then(|v| v.as_str());
-                match path {
-                    Some(p) => fs::fs_read(host_ctx.as_ref(), owner, p).map(|v| v.map(|c| serde_json::json!(c).to_string())),
-                    None => Err("fs.read: missing path".to_string()),
-                }
-            }
-            "fs.read-dir" => {
-                let path = unit.params.get("path").and_then(|v| v.as_str());
-                match path {
-                    Some(p) => fs::fs_read_dir(host_ctx.as_ref(), owner, p).map(Some),
-                    None => Err("fs.read-dir: missing path".to_string()),
-                }
-            }
-            "fs.stat" => {
-                let path = unit.params.get("path").and_then(|v| v.as_str());
-                match path {
-                    Some(p) => fs::fs_stat(host_ctx.as_ref(), owner, p),
-                    None => Err("fs.stat: missing path".to_string()),
-                }
-            }
-            "fs.exists" => {
-                let path = unit.params.get("path").and_then(|v| v.as_str());
-                match path {
-                    Some(p) => fs::fs_exists(host_ctx.as_ref(), owner, p).map(|b| Some(serde_json::json!(b).to_string())),
-                    None => Err("fs.exists: missing path".to_string()),
-                }
-            }
-            "fs.write" => {
-                let path = unit.params.get("path").and_then(|v| v.as_str());
-                let data = unit.params.get("data").and_then(|v| v.as_str());
-                match (path, data) {
-                    (Some(p), Some(d)) => fs::fs_write(host_ctx.as_ref(), owner, p, d).map(|_| Some("null".to_string())),
-                    (Some(_), None) => Err("fs.write: missing data".to_string()),
-                    _ => Err("fs.write: missing path".to_string()),
-                }
-            }
-            "process.run-sync" => process::process_run_sync(host_ctx.as_ref(), owner, &unit.params.to_string()).map(Some),
-            "http.fetch" => match http::http_fetch(host_ctx.as_ref(), host_ctx.as_ref(), owner, &unit.params.to_string()) {
-                Ok(opt) => Ok(opt.map(|v| serde_json::json!(v).to_string())),
-                Err(e) => Err(e),
-            },
-            other => Err(format!("task: unknown unit kind '{}'", other)),
-        },
+    let result: Result<Option<String>, String> = {
+        let executors = UNIT_EXECUTORS.lock().unwrap_or_else(|e| e.into_inner());
+        match executors.iter().find(|re| re.executor.matches(unit.kind.as_str())) {
+            Some(re) => re.executor.execute(host_ctx, owner, unit.kind.as_str(), &unit.params),
+            None => Err(format!("task: unknown unit kind '{}'", unit.kind)),
+        }
     };
 
     let (ok, value, error, truncated) = match result {
@@ -436,6 +379,47 @@ fn truncate_json(v: String) -> (String, bool) {
         (format!("{}…[truncated]", cut), true)
     } else {
         (v, false)
+    }
+}
+
+// ==================== 执行引擎 trait 实现（C3：host_api/task.rs 经接口调用） ====================
+
+/// core-task 执行引擎（[`TaskEngine`] 接口的实现）
+///
+/// host_api/task.rs 做权限门（本质是门禁不是引擎），执行走本引擎；两者经两阶段注入
+/// （PluginHost 构造时 [`WasmHostContext::set_task_engine`]，PluginServices 先例）解耦——
+/// host_api 不再 import `manager::task`（spec C3「消费方定义接口」）。
+pub(crate) struct CoreTaskEngine;
+
+impl TaskEngine for CoreTaskEngine {
+    fn execute_batch(
+        &self,
+        host_ctx: &Arc<WasmHostContext>,
+        owner: &str,
+        plan_json: &str,
+    ) -> Result<String, String> {
+        execute_batch(host_ctx.clone(), owner, plan_json)
+    }
+
+    fn submit(
+        &self,
+        host_ctx: &Arc<WasmHostContext>,
+        owner: &str,
+        plan_json: &str,
+    ) -> Result<String, String> {
+        submit(host_ctx.clone(), owner, plan_json)
+    }
+
+    fn status(&self, owner: &str, job_id: &str) -> Result<Option<String>, String> {
+        status(owner, job_id)
+    }
+
+    fn cancel(&self, owner: &str, job_id: &str) -> Result<bool, String> {
+        cancel(owner, job_id)
+    }
+
+    fn list_jobs(&self, owner: &str) -> Result<String, String> {
+        list_jobs(owner)
     }
 }
 
@@ -1023,77 +1007,6 @@ mod tests {
 
     /// 票 07：fs.* 单元的预检按管线顺序判两件事，且**不弹窗**
     ///
-    /// 无头 `build_host_ctx()` 的弹窗层本来就返回 false——如果预检被写成 `check`，
-    /// 这条用例仍会红（区别在生产：那边占住池槽位等 30 秒用户点框）。断言的是
-    /// 「错误方向对得上真实缺口」：缺声明说 permission denied，缺授权说去 request-auth。
-    #[test]
-    fn fs_unit_gate_follows_pipeline_order_and_never_prompts() {
-        use crate::wasm_core::host_api::tests::build_host_ctx;
-        use crate::wasm_core::permission::{PERMISSION_FS_READ, PERMISSION_FS_WRITE};
-
-        let ctx = build_host_ctx();
-        let dir = tempfile::tempdir().expect("tempdir");
-        let file = dir.path().join("f.txt");
-        std::fs::write(&file, b"x").expect("write fixture");
-        let path = file.to_string_lossy().to_string();
-        let read_unit = PlanUnit {
-            id: "u1".to_string(),
-            kind: "fs.read".to_string(),
-            params: serde_json::json!({ "path": path.clone() }),
-        };
-
-        // ① 未声明 fs:read：文案必须与内层链逐字相同（否则把插件指向无关出路）
-        assert_eq!(
-            ensure_unit_path_granted(&ctx, "com.test.p", &read_unit).unwrap_err(),
-            "permission denied",
-            "缺声明时不得先报目录未授权"
-        );
-
-        // ② 声明了但目录未授权：给出可行动出路
-        ctx.permission()
-            .grant_permissions("com.test.p", &[PERMISSION_FS_READ.to_string()]);
-        let err = ensure_unit_path_granted(&ctx, "com.test.p", &read_unit).expect_err("未授权路径必须被拒");
-        assert!(err.contains(&path), "错误文案须点明是哪条路径: {err}");
-        assert!(err.contains("request-auth"), "错误文案须给出出路: {err}");
-
-        // ③ 预置持久化授权（= 用户在弹窗里点过「记住」）→ 放行
-        crate::wasm_core::runtime_util::block_on_async(ctx.fs_auth().save_granted_path("com.test.p", &path))
-            .expect("seed grant");
-        ensure_unit_path_granted(&ctx, "com.test.p", &read_unit).expect("已授权路径须放行");
-
-        // ④ 授权不跨插件共享；写单元要的是 fs:write（读了授权也不许写）
-        ensure_unit_path_granted(&ctx, "com.test.other", &read_unit).expect_err("授权不得跨插件共享");
-        let write_unit = PlanUnit {
-            id: "u2".to_string(),
-            kind: "fs.write".to_string(),
-            params: serde_json::json!({ "path": path.clone(), "data": "x" }),
-        };
-        assert_eq!(
-            ensure_unit_path_granted(&ctx, "com.test.p", &write_unit).unwrap_err(),
-            "permission denied",
-            "只授 fs:read 不得让写单元过闸"
-        );
-        ctx.permission().grant_permissions(
-            "com.test.p",
-            &[PERMISSION_FS_READ.to_string(), PERMISSION_FS_WRITE.to_string()],
-        );
-        ensure_unit_path_granted(&ctx, "com.test.p", &write_unit).expect("声明 fs:write 后写单元须过预检");
-
-        // ⑤ 非 fs 单元与缺 path 的单元由各自 kind 分支处理，预检不插手
-        let other = PlanUnit {
-            id: "u3".to_string(),
-            kind: "process.run-sync".to_string(),
-            params: serde_json::json!({ "path": "/nonexistent" }),
-        };
-        assert!(ensure_unit_path_granted(&ctx, "com.test.p", &other).is_ok());
-        let nopath = PlanUnit {
-            id: "u4".to_string(),
-            kind: "fs.read".to_string(),
-            params: serde_json::json!({}),
-        };
-        assert!(ensure_unit_path_granted(&ctx, "com.test.p", &nopath).is_ok());
-    }
-
     #[test]
     fn truncate_json_marks_truncated() {
         // 超过 PLUGIN_TASK_UNIT_RESULT_MAX_BYTES（1 MiB）才截断

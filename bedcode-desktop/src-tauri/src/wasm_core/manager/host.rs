@@ -222,6 +222,22 @@ impl PluginHost {
         // 必须在 auto_activate 之前完成，否则 host_session_lifecycle_register 无法获取宿主服务
         host.wasm_host_ctx().set_services(Arc::new(host.clone())).await;
 
+        // 两阶段注入：host-task 执行引擎（core-task）+ 单元执行器注册表（C3/C4）
+        // host_api/task.rs 经 TaskEngine 接口调用 core-task；execute_unit 经 UnitExecutor
+        // 注册表分发——manager::task 不再直调 host_api 域函数，host_api 不再依赖 manager
+        host.wasm_host_ctx()
+            .set_task_engine(Arc::new(crate::wasm_core::manager::task::CoreTaskEngine))
+            .await;
+        crate::wasm_core::manager::task::register_unit_executor(Arc::new(
+            crate::wasm_core::host_api::fs::FsUnitExecutor,
+        ));
+        crate::wasm_core::manager::task::register_unit_executor(Arc::new(
+            crate::wasm_core::host_api::process::ProcessUnitExecutor,
+        ));
+        crate::wasm_core::manager::task::register_unit_executor(Arc::new(
+            crate::wasm_core::host_api::http::HttpUnitExecutor,
+        ));
+
         // 注册所有已加载插件的 manifest contributes 到 registry
         host.register_manifest_contributions().await;
 

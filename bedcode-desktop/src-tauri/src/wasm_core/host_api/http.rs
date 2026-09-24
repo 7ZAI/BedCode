@@ -1,14 +1,43 @@
 //! HTTP 代理域宿主实现（宿主代发请求，支持 SSE 流式推流）
 
+use crate::wasm_core::host_api::context::WasmHostContext;
+use crate::wasm_core::host_api::unit_executor::UnitExecutor;
 use crate::wasm_core::runtime_util::block_on_async;
 use crate::wasm_core::permission::PERMISSION_NETWORK_HTTP;
 use crate::system::constants::{
     PLUGIN_HTTP_CONNECT_TIMEOUT_SECS, PLUGIN_HTTP_RESPONSE_BODY_LIMIT_BYTES, PLUGIN_HTTP_TIMEOUT_SECS,
 };
 use futures_util::StreamExt;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 use tauri::Emitter;
+
+// ==================== 任务单元执行器（C4：core-task 经注册表分发到域实现） ====================
+
+/// http 单元执行器（kind `http.fetch`）
+///
+/// 直调 `http_fetch`（域权限门在函数内部再把守）；返回体与既有 `execute_unit`
+/// 语义一致：`value` 按原生值 JSON 编码。
+pub(crate) struct HttpUnitExecutor;
+
+impl UnitExecutor for HttpUnitExecutor {
+    fn matches(&self, kind: &str) -> bool {
+        kind == "http.fetch"
+    }
+
+    fn execute(
+        &self,
+        host_ctx: &Arc<WasmHostContext>,
+        owner: &str,
+        _kind: &str,
+        params: &serde_json::Value,
+    ) -> Result<Option<String>, String> {
+        match http_fetch(host_ctx.as_ref(), host_ctx.as_ref(), owner, &params.to_string()) {
+            Ok(opt) => Ok(opt.map(|v| serde_json::json!(v).to_string())),
+            Err(e) => Err(e),
+        }
+    }
+}
 
 /// 非流式 HTTP 客户端（连接超时 + 总超时，全宿主复用连接池）
 static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {

@@ -38,6 +38,7 @@ pub(super) mod status;
 pub(super) mod storage;
 pub(crate) mod task;
 pub(super) mod timer;
+pub(crate) mod unit_executor;
 pub(crate) mod ws;
 mod wsl_fs;
 
