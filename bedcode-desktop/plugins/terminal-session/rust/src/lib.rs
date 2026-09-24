@@ -66,6 +66,8 @@ pub mod session;
 pub mod task;
 /// 按键组合 → 转义字节翻译（票 06 下沉）：宿主 pty 只收裸字节，本插件自译自写
 mod keys;
+/// WS 会话控制域（票 09b/09c）：动作词表分派 + 声明端点帧协议
+mod ws_control;
 mod trust;
 
 use bedcode_plugin_api::host::{HostBus, HostLog, HostStorage, HostTimer};
@@ -273,6 +275,17 @@ pub trait SessionApi {
     /// 任务域观察。
     #[api("session-input")]
     fn session_input(draft: serde_json::Value) -> Result<serde_json::Value, String>;
+
+    // ==================== 票 09b/09c：WS 会话控制词表分派 ====================
+
+    /// WS 会话控制动作转发（宿主 `/ws/event` 旧 `Message::SessionControl` 协议的
+    /// 声明式路由接线；动作词表解释在本插件 [`crate::ws_control`]）。
+    ///
+    /// 入参 `{action: <动作 JSON>, sourceDevice?}`（动作 JSON 与旧 wire 逐字同形，
+    /// 如 `{"type":"start_session","config_id":"c1"}`）→ 响应动作 JSON
+    /// （`null` = 无回包动作）。宿主不解动作语义：只做声明闸门 + 转发 + 回包信封。
+    #[api("session-ws-control")]
+    fn session_ws_control(params: serde_json::Value) -> Result<serde_json::Value, String>;
 }
 
 /// 终端会话中心插件 — 生命周期 + 状态命令 + pairing 互调 api
@@ -443,6 +456,21 @@ impl SessionApi for SessionPlugin {
     fn session_input(draft: serde_json::Value) -> Result<serde_json::Value, String> {
         session_input_write(&draft)
     }
+
+    // ==================== 票 09b/09c：WS 会话控制词表分派 ====================
+
+    fn session_ws_control(params: serde_json::Value) -> Result<serde_json::Value, String> {
+        let action = params
+            .get("action")
+            .cloned()
+            .ok_or_else(|| "session-ws-control: missing action".to_string())?;
+        let source_device = params
+            .get("sourceDevice")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        ws_control::handle_action(&action, source_device.as_deref())
+    }
 }
 
 // ==================== 命令面与互调 api 共享的入参解析（票 08） ====================
@@ -558,6 +586,17 @@ impl WasmPlugin for SessionPlugin {
         // ADR-0005 单一真源：plugin.json（与 `#[plugin_api]` 防漂移比对同一份）
         serde_json::from_str(include_str!("../../plugin.json"))
             .expect("plugin.json must be valid PluginManifest")
+    }
+
+    /// 票 09b：声明端点 `session/control` 的入站帧（events-ws 服务端域回调）
+    /// → 动作词表分派 + 回包（见 [`crate::ws_control`]）。宿主仅转发帧。
+    fn on_ws_client_message(
+        endpoint_id: &str,
+        client_id: &str,
+        kind: &str,
+        payload: &[u8],
+    ) -> anyhow::Result<()> {
+        ws_control::on_client_message(endpoint_id, client_id, kind, payload)
     }
 
     fn activate() -> anyhow::Result<()> {
@@ -899,6 +938,12 @@ impl WasmPlugin for SessionPlugin {
                 .unwrap_or(serde_json::Value::Null)),
 
             "session.input" => session_input_write(&args).map_err(anyhow::Error::msg),
+
+            // ==================== 票 09b/09c：WS 会话控制词表分派（命令面入口） ====================
+            // 入参 {action: <动作 JSON>, sourceDevice?} → 响应动作 JSON（null = 无回包）；
+            // 与互调 api `session-ws-control` 共用同一实现（ws_control 域），
+            // 命令面保留供宿主闭环测试直调（不经总线）。
+            "session.ws.control" => ws_control::handle_command(&args).map_err(anyhow::Error::msg),
 
             // ==================== 票 04 命令面（终端输出数据面） ====================
             // 输出环拉取 {sessionId, fromOffset, maxBytes?} → null | {data, nextOffset,
@@ -1719,9 +1764,13 @@ mod tests {
                 "ui:input".to_string(),
                 "ui:settings".to_string(),
                 "ui:sidebar".to_string(),
+                // 票 09b：`ws:server` ——声明端点 `session-control` 的 events-ws
+                // 回包经 host-websocket send-text-to-client（服务端域判据位）
+                "ws:server".to_string(),
             ],
             "spec D2 权限表：认证 auth/peer + 进程 process:run（票 03 git）+ 会话 \
-             session:read/session:config/session:write + storage + ui:input/ui:sidebar/ui:settings"
+             session:read/session:config/session:write + storage + ui:input/ui:sidebar/ui:settings\
+             + ws:server（票 09b）"
         );
         let mut expected = SessionApiDispatcher::API_NAMES
             .iter()
@@ -1733,13 +1782,14 @@ mod tests {
         assert_eq!(actual, expected, "manifest api 必须与 trait 声明一致");
         assert_eq!(
             manifest.api.len(),
-            31,
+            32,
             "pairing 八项 + trust 两项（list/revoke）+ consent 一项（decide）+ config 三项 + \
              session-create 一项（票 09）+ 会话动作四项（票 10 restart/remove/rename/resize）\
              + 票 11 annotate + devices-connect-list 两项 + 票 02 quick-actions-import 一项 + \
              2026-09-22 认证记录下沉五项（auth-records-import / devices-list / history-list / \
              connection-touch / connection-close）+ 会话引擎下沉 P1 登记域读取面两项 \
-             （session-list / session-get）+ P1-b 停止/输入两项（session-close / session-input）"
+             （session-list / session-get）+ P1-b 停止/输入两项（session-close / session-input）\
+             + 票 09b WS 会话控制词表分派一项（session-ws-control）"
         );
     }
 

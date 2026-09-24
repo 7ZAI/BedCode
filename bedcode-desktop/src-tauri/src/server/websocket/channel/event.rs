@@ -15,6 +15,7 @@
 //! [`crate::server::websocket::conn`] 承担，本文件只实现通道协议。
 
 use actix::prelude::*;
+use std::sync::Arc;
 
 use super::super::conn::{AuthMode, ChannelHandler, ConnCtx, WsConnBase};
 use crate::enums::{SessionControlPayload, TerminalPayload};
@@ -288,9 +289,13 @@ impl EventChannel {
         let actor_addr = ctx.address();
         // 无头/测试上下文可能无 AppHandle：handle_control_message 签名本身就是 Option，直接透传
         let app_handle = AppContext::global().app_handle().clone();
+        // 宿主插件上下文（转发目标插件实例的宿主侧入口；AppContext 全局单例，
+        // 此处随调用一并传给转发层，便于无 AppContext 的测试直调）
+        let host_ctx = Arc::clone(AppContext::global().plugin_host().wasm_host_ctx());
 
         actix::spawn(async move {
             let result = crate::server::websocket::services::session_control::handle_control_message(
+                &host_ctx,
                 message_id.clone(),
                 None, // session_id
                 chrono::Utc::now().timestamp_millis(),

@@ -11,11 +11,10 @@
 //!
 //! 环境依赖（PTY 断言失败时先区分测试环境问题与链路缺陷）：
 //! - Windows：真实 PTY 需 spawn powershell.exe（`-NoExit -Command`，UTF-8 输出编码
-//!   由 `test_launch_config` 的 argv 决定——2026-09-23 PTY 解耦后宿主不再包装）。
+//!   由插件 launch 域的 argv 决定——2026-09-23 PTY 解耦后宿主不再包装）。
 //!   PATH 缺 powershell / 系统禁 ConPTY 属环境问题；
-//! - Linux/macOS：走 ExecutionEnvironment::Linux 原生 bash（`bash -lic`，尾部
-//!   `exec bash` 保驻留）。两种环境下 StartSession 失败都会回
-//!   SESSION_CONTROL_ERROR，panic 消息带原始错误
+//! - Linux/macOS：原生 bash（`bash -lic`，尾部 `exec bash` 保驻留）。两种环境下
+//!   StartSession 失败都会回 SESSION_CONTROL_ERROR，panic 消息带原始错误
 //! - 输出编码：启动脚本已强制 UTF-8，断言用 ASCII marker，失败时断言消息
 //!   附带已收集的原始文本（可见是否收到启动横幅等半程输出）辅助判别
 //!
@@ -35,7 +34,6 @@
 //! timeout 防 CI 卡死；PTY 输出时序非确定 → 轮询 + 宽容超时断言
 //! （真实往返断言：WS → 会话管理器 → openpty → 子进程 → 输出回传，非恒真）。
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -43,7 +41,6 @@ use std::time::{Duration, Instant};
 use actix_web::dev::ServerHandle;
 use base64::Engine as _;
 use bedcode_lib::db::Database;
-use bedcode_lib::enums::{ExecutionEnvironment, SessionLaunchConfig, WindowsShell};
 use bedcode_lib::events::DesktopSyncEvent;
 use bedcode_lib::mdns::advertiser::MdnsAdvertiser;
 use bedcode_lib::wasm_core::PluginHost;
@@ -67,7 +64,6 @@ type WsSend = futures_util::stream::SplitSink<WebSocketStream<TcpStream>, WsMsg>
 
 /// 会话中心插件 id（认证端点编排的权威实现方）
 const SESSION_PLUGIN_ID: &str = "com.bedcode.terminal-session";
-
 /// 随包插件产物目录（`cargo test` 前须重建产物，见 AGENTS §3）
 ///
 /// 产物缺失时**显性失败**而非跳过：本 target 的令牌换取链没有别的驱动方式，
@@ -117,52 +113,7 @@ async fn spawn_test_server(port: u16) -> std::io::Result<(ServerHandle, tokio::t
 const TEST_CONFIG_ID: &str = "itest-pty";
 
 /// 内核执行端入参（= 插件 `session-create` 算出的 launch spec 形状）
-///
-/// 2026-09-23 PTY 解耦票：宿主不再做 shell 包装，命令以 **argv 形态**给出——这里
-/// 手写与插件 `launch.rs::build_argv` 同形的产物（Linux `bash -lic` / Windows
-/// PowerShell `-NoExit -Command`）。shell 必须**驻留**：场景 2/5 要往会话里写
-/// `echo` 并观察回显，而 `bash -lic "<只跑一次的脚本>"` 会在脚本结束后立即退出
-/// （实测退出码 0，slave 关闭后续输入无回显），故在脚本尾部 `exec bash` 换成交互
-/// shell（产物内 `cd … && pwd && <用户命令>` 的用户命令通常本身就是常驻 shell）。
-fn test_launch_config() -> SessionLaunchConfig {
-    let workdir = std::env::temp_dir().to_string_lossy().into_owned();
-    let startup_marker_cmd = "echo BEDCODE_PTY_STARTUP_MARKER";
-    let (environment, command_args) = if cfg!(target_os = "windows") {
-        (
-            ExecutionEnvironment::Windows {
-                shell: WindowsShell::PowerShell,
-            },
-            vec![
-                "powershell.exe".to_string(),
-                "-NoLogo".to_string(),
-                "-NoExit".to_string(),
-                "-Command".to_string(),
-                startup_marker_cmd.to_string(),
-            ],
-        )
-    } else {
-        (
-            ExecutionEnvironment::Linux,
-            vec![
-                "bash".to_string(),
-                "-lic".to_string(),
-                format!("cd '{}' && pwd && {}; exec bash", workdir, startup_marker_cmd),
-            ],
-        )
-    };
-    SessionLaunchConfig {
-        name: "itest-pty".to_string(),
-        environment,
-        working_dir: workdir,
-        // 启动命令输出固定 marker（区分「环境就绪但输入链路断」与「PTY 起不来」）；
-        // 诊断字段，宿主不解释（实际 exec 的是 command_args）
-        command: startup_marker_cmd.to_string(),
-        command_args,
-        env_vars: HashMap::new(),
-        cols: 120,
-        rows: 40,
-    }
-}
+
 
 /// 组装真实服务 AppContext（app_handle=None 无头模式），每个测试进程只 init 一次
 ///

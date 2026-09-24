@@ -858,3 +858,204 @@ fn test_ws_two_plugin_isolation() {
         peer.abort();
     }));
 }
+
+/// 票 09b：会话控制声明端点的直连往返（真实 terminal-session 插件产物）
+///
+/// 旧 `/ws/event` `Message::SessionControl` 协议之外的声明式路由：客户端直连
+/// `/ws/plugin/com.bedcode.terminal-session/session-control`（manifest
+/// `contributes.wsEndpoints` 声明 + 激活期登记，auth=jwt）→ 首消息 JWT 认证 →
+/// 文本动作帧 → 插件 `ws_control` 域分派 → 响应动作帧回包。宿主只做认证与
+/// 帧转发（PluginChannel），动作「是什么业务」的解释在插件。
+///
+/// 覆盖：jwt 认证成功（fixture 用例遗留的「需真实签发 token」分支在此补上）、
+/// list_sessions 空登记域回包形状、未知动作 fail-visible 错误帧。
+#[test]
+fn test_session_control_endpoint_direct_roundtrip() {
+    use crate::server::websocket::services::session_control as sc;
+    use crate::utils::auth::jwt::JwtService;
+    use bedcode_plugin_api::EndpointAuth;
+    use futures_util::SinkExt;
+    use tokio_tungstenite::tungstenite::Message;
+
+    // `setup_wasm_runtime` 内部自建 runtime 并 block_on（建库/建上下文），
+    // 必须在 `rt.block_on` **之外**调用：嵌套 block_on 会 panic
+    let (wasm_runtime, host_ctx) = setup_wasm_runtime();
+    let _ws_guard = lock_ws_fixture_e2e();
+    // 会话插件私有库进程级共享：与会话闭环用例串行（见锁文档）
+    let _serial = session_plugin_db_guard();
+    // 声明闸门用例（services/session_control.rs）与本用例共用全局端点表：
+    // 同一把锁串行化
+    let _endpoint_guard = sc::SESSION_CONTROL_ENDPOINT_TEST_LOCK.lock().unwrap();
+
+    const PLUGIN_ID: &str = "com.bedcode.terminal-session";
+    let wasm_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../resources/plugins/desktop/com.bedcode.terminal-session/bedcode_plugin_terminal_session.wasm");
+    if !wasm_path.exists() {
+        eprintln!("[skip] session wasip3 artifact not built");
+        return;
+    }
+
+    let rt = tokio::runtime::Runtime::new().expect("tokio multi-thread runtime");
+    rt.block_on(ws_e2e_guard("session/control 直连 e2e", async {
+        // 独立私有库根目录（进程级共享根被并行测试写同一 SQLite 文件 → BUSY）
+        let mut host_ctx = host_ctx;
+        if let Some(ctx) = Arc::get_mut(&mut host_ctx) {
+            ctx.set_plugin_db_root(Some(std::env::temp_dir().join(format!(
+                "bedcode_plugin_dbs_wsctl_e2e_{}_{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos()
+            ))));
+        }
+        let _ = std::fs::remove_dir_all(plugin_db_root().join(PLUGIN_ID));
+
+        // ==================== 宿主服务器 + 插件装载 ====================
+        let (server_handle, server_task, port) = {
+            let config = crate::system::config::AppConfig::default().network;
+            let port = ws_pick_free_port();
+            let (handle, server) = crate::server::core::app::start_http_server(port, &config)
+                .await
+                .expect("start host http+ws server");
+            (handle, tokio::spawn(server), port)
+        };
+
+        host_ctx.permission.grant_permissions(
+            PLUGIN_ID,
+            &[
+                "auth".to_string(),
+                "broadcast".to_string(),
+                "connection:read".to_string(),
+                "fs:read".to_string(),
+                "fs:write".to_string(),
+                "peer".to_string(),
+                "process:run".to_string(),
+                "pty:io".to_string(),
+                "pty:spawn".to_string(),
+                "session:read".to_string(),
+                "storage".to_string(),
+                "task:run".to_string(),
+                "terminal:input".to_string(),
+                "timer:schedule".to_string(),
+                "ui:input".to_string(),
+                "ui:settings".to_string(),
+                "ui:sidebar".to_string(),
+                "ws:server".to_string(),
+            ],
+        );
+        host_ctx.api_registry().register(
+            PLUGIN_ID,
+            &session_apis().iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+        );
+        let component = wasm_runtime
+            .compile_component(&std::fs::read(&wasm_path).expect("read session artifact"))
+            .expect("compile session artifact");
+        let plugin = Arc::new(Mutex::new(
+            wasm_runtime
+                .instantiate_component(&component, PLUGIN_ID, host_ctx.clone(), &[], None)
+                .expect("instantiate session"),
+        ));
+        host_ctx
+            .message_bus
+            .set_dispatcher(Arc::new(TestInstanceDispatcher {
+                instances: Arc::new(RwLock::new(HashMap::from([(PLUGIN_ID.to_string(), plugin.clone())]))),
+            }))
+            .await;
+        plugin.lock().await.activate().expect("activate session");
+
+        // 激活期等价登记（PluginHost::activate_plugin 激活成功分支的对应物）：
+        // 声明端点在端点表落地后，插件端点路由才可达
+        let entry = crate::server::websocket::endpoint::register(
+            PLUGIN_ID,
+            "session-control",
+            EndpointAuth::Jwt,
+            None,
+            None,
+            host_ctx.message_bus.clone(),
+        )
+        .expect("register declared session/control endpoint");
+        assert_eq!(entry.mount_path, "/ws/plugin/com.bedcode.terminal-session/session-control");
+
+        // 真实 JWT（同一进程 secret-store：generate/verify 同密钥）
+        let token = JwtService::new()
+            .generate_token("dev-direct-1".to_string(), Some("Phone".to_string()), Some("fp-1".to_string()))
+            .expect("mint jwt");
+
+        let url = format!("ws://127.0.0.1:{port}/ws/plugin/{PLUGIN_ID}/session-control");
+        let (mut client, _) = tokio_tungstenite::connect_async(&url)
+            .await
+            .expect("client connect via host route");
+
+        // ==================== 1. 首消息 JWT 认证（auth=jwt 成功分支） ====================
+        client
+            .send(Message::Text(format!(r#"{{"type":"auth","token":"{token}"}}"#)))
+            .await
+            .expect("send auth frame");
+        // 认证通过 → 接入事件发布；无显式 auth_ok 回帧（端点协议不定义回执），
+        // 用「认证后业务帧可达」作为可达性判据：直接发动作帧
+
+        // ==================== 2. list_sessions → 响应动作帧 ====================
+        client
+            .send(Message::Text(r#"{"type":"list_sessions"}"#.to_string()))
+            .await
+            .expect("send list action");
+        match ws_client_recv(&mut client, std::time::Duration::from_secs(5)).await {
+            Some(Message::Text(text)) => {
+                let reply: serde_json::Value =
+                    serde_json::from_str(&text).unwrap_or_else(|e| panic!("reply 非 JSON: {text}: {e}"));
+                assert_eq!(reply["type"], "session_list", "响应动作标签, got: {reply}");
+                assert_eq!(
+                    reply["sessions"],
+                    serde_json::json!([]),
+                    "空登记域 → 空列表（SessionSummary 形状, got: {reply}"
+                );
+            }
+            other => panic!("期望 list_sessions 响应帧，got: {other:?}"),
+        }
+
+        // ==================== 3. 未知动作 fail-visible：错误帧 ====================
+        client
+            .send(Message::Text(r#"{"type":"launch_missiles"}"#.to_string()))
+            .await
+            .expect("send unknown action");
+        match ws_client_recv(&mut client, std::time::Duration::from_secs(5)).await {
+            Some(Message::Text(text)) => {
+                let reply: serde_json::Value =
+                    serde_json::from_str(&text).unwrap_or_else(|e| panic!("reply 非 JSON: {text}: {e}"));
+                assert_eq!(reply["type"], "error", "未知动作 → error 帧, got: {reply}");
+                assert!(
+                    reply["message"]
+                        .as_str()
+                        .is_some_and(|m| m.contains("unknown session control action")),
+                    "错误文案点明未知动作, got: {reply}"
+                );
+            }
+            other => panic!("期望 error 帧，got: {other:?}"),
+        }
+
+        // ==================== 4. 二进制帧非本端点协议：忽略 + 连接保持 ====================
+        client
+            .send(Message::Binary(vec![1, 2, 3]))
+            .await
+            .expect("send binary frame");
+        // 连接不应被关闭：再发一个合法动作确认链路仍活
+        client
+            .send(Message::Text(r#"{"type":"list_sessions"}"#.to_string()))
+            .await
+            .expect("send list action again");
+        match ws_client_recv(&mut client, std::time::Duration::from_secs(5)).await {
+            Some(Message::Text(text)) => {
+                let reply: serde_json::Value = serde_json::from_str(&text).expect("reply json");
+                assert_eq!(reply["type"], "session_list", "二进制帧后链路仍活, got: {reply}");
+            }
+            other => panic!("期望 list_sessions 响应帧，got: {other:?}"),
+        }
+
+        // ==================== 收尾：优雅停机 + 清理 ====================
+        server_handle.stop(true).await;
+        server_task.abort();
+        crate::server::websocket::endpoint::purge_for_plugin(PLUGIN_ID);
+        plugin.lock().await.deactivate().expect("deactivate = 0");
+    }));
+}

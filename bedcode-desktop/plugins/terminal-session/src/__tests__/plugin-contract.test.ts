@@ -109,6 +109,9 @@ describe('C1 插件身份五处一致', () => {
       'ui:input',
       'ui:settings',
       'ui:sidebar',
+      // 票 09b：声明端点 session-control 的 events-ws 回包经 host-websocket
+      // send-text-to-client（服务端域判据位）
+      'ws:server',
     ])
     expect(manifest.api).toEqual([
       'com.bedcode.terminal-session.pairing-code-generate',
@@ -150,6 +153,8 @@ describe('C1 插件身份五处一致', () => {
       // （提交行重建 + host-pty.write；special 标记直写绕过重建）
       'com.bedcode.terminal-session.session-close',
       'com.bedcode.terminal-session.session-input',
+      // 票 09b：WS 会话控制词表分派（宿主 /ws/event SessionControl 的声明式路由接线）
+      'com.bedcode.terminal-session.session-ws-control',
     ])
     // 桥接锚点：宿主 auth_center 以 trust-list 探活（配对 / trust / policy 同一桥接门），
     // 改名即两侧失联（永久静默降级）

@@ -285,6 +285,20 @@ pub fn list_views_via_host() -> Result<serde_json::Value, String> {
     Ok(serde_json::json!({ "sessions": sessions }))
 }
 
+/// 全部会话的 SessionSummary 形状（snake_case wire，票 09b/09c WS 控制面
+/// `session_list` 载荷）→ `{sessions: [...]}`；逐条形状与 [`summary_json`]
+/// 同源（id/name/status/created_at/started_at/session_type/config_id/
+/// task_status/task_reason），供 [`crate::ws_control`] 直接回包。
+#[cfg(target_arch = "wasm32")]
+pub fn summaries_json() -> Result<serde_json::Value, String> {
+    let records = REGISTRY.all(&WasmHost)?;
+    let mut sessions = Vec::with_capacity(records.len());
+    for record in records {
+        sessions.push(summary_json(&record));
+    }
+    Ok(serde_json::json!({ "sessions": sessions }))
+}
+
 /// 单个会话的对外视图；不在册 → `Ok(None)`（调用方按「无此会话」分类，不产半成品）
 #[cfg(target_arch = "wasm32")]
 pub fn view_via_host(session_id: &str) -> Result<Option<serde_json::Value>, String> {
@@ -571,6 +585,11 @@ pub fn diagnostics_via_host() -> serde_json::Value {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn list_views_via_host() -> Result<serde_json::Value, String> {
+    Err("session registry store unavailable outside wasm runtime".to_string())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn summaries_json() -> Result<serde_json::Value, String> {
     Err("session registry store unavailable outside wasm runtime".to_string())
 }
 

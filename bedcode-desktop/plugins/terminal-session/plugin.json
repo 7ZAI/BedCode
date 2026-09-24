@@ -24,7 +24,8 @@
     "timer:schedule",
     "ui:input",
     "ui:settings",
-    "ui:sidebar"
+    "ui:sidebar",
+    "ws:server"
   ],
   "dependencies": [
     "host-pty"
@@ -61,7 +62,8 @@
     "com.bedcode.terminal-session.session-list",
     "com.bedcode.terminal-session.session-get",
     "com.bedcode.terminal-session.session-close",
-    "com.bedcode.terminal-session.session-input"
+    "com.bedcode.terminal-session.session-input",
+    "com.bedcode.terminal-session.session-ws-control"
   ],
   "contributes": {
     "commands": [
@@ -176,6 +178,12 @@
       {
         "id": "session.task.scheduled-reset",
         "title": "Reset scheduled job"
+      }
+    ],
+    "wsEndpoints": [
+      {
+        "path": "session-control",
+        "auth": "jwt"
       }
     ],
     "httpEndpoints": [
