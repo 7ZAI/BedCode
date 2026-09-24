@@ -203,6 +203,64 @@ spec：`.scratch/2026-09-19-terminal-session-plugin/spec.md`（D2–D7），实�
    取会话名 / 概要，就会得到空。故 SDK 的会话变体把 `session` / `sessionName` 随事件携带，
    宿主只转发；`source_device` 由请求侧透传（广播排除语义）。
 
+## WS 动作词表声明式化（票 09a/09b/09c，2026-09-24 桌面端）
+
+WS 会话/终端控制动作的**词表来源**从「宿主硬编码 switch」改为「插件 manifest 声明 +
+插件侧分派」，对齐 `_http_endpoint` 模式。spec：
+`.scratch/2026-09-24-host-crypto-business-downsink/issues/09a/09b/09c`。
+
+1. **expand（09a）：声明面 + 激活期登记**。SDK `PluginContributes` 增 `ws_endpoints`
+   （两形态同 httpEndpoints），宿主激活成功时经 `register_declared_ws_endpoints` 登记进
+   WS 端点表（挂载 `/ws/plugin/<id>/<path>`，端点路径**单段约束**——与 host-websocket
+   `register-endpoint` 同口径，路由是两段式 `{plugin_id}/{suffix}`）。登记锚定**激活期**：
+   deactivate 会 `purge_for_plugin` 回收 ws 端点，激活期重登记才让 deactivate→activate
+   循环不丢。此前的运行时 `ws_register-endpoint` 原语不变（插件仍可自管理端点）。
+2. **migrate（09b）：词表解释平移插件**。`com.bedcode.terminal-session` 声明端点
+   `session-control`（auth=jwt），新模块 `ws_control` 承接动作分派：list / start / stop /
+   remove / resize 五域的**词表解释**（参数校验、编排调用、回包形状）唯一在插件；
+   插件实现 `events-ws` 的 `on-client-message` 响应该端点的直连帧，宿主只做认证与转发。
+3. **contract（09c）：宿主硬编码 switch 删除**。宿主 `services/session_control.rs` 的
+   `match action { ListSessions => … }` 逐臂翻译表删除，`/ws/event` 旧 `Message::SessionControl`
+   协议改走**声明式转发**：声明闸门（端点已声明且插件激活，否则显性报错）→ 原始动作 JSON
+   转发插件互调 api `session-ws-control`（宿主不解动作名语义）→ 响应动作 JSON 套回
+   `Message::SessionControl` 信封（原 `message_id`；信封 `session_id` 取自响应动作的
+   `session_id` 字段——start = 新建会话 id，与旧宿主路径逐字一致）。
+4. **传输面契约仍在宿主（H2）**：`Message` / `SessionControlAction` / `SessionSummary` 等
+   wire 形状类型与编解码继续宿主持有（移动端线协议需要）；迁走的是**词表解释与业务编排**。
+   `SessionControlAction` 请求分派不再在宿主出现——grep 断言宿主 WS 层无业务词表 switch。
+5. **数据面不动（H1）**：终端输出订阅 / 输入 / 双速模式（`/ws/terminal/session/{id}` 控制帧）
+   是引擎原语（PtyRing + 订阅者执行体），不迁插件；`Message::Terminal` 的 Input/Subscribe/
+   Unsubscribe 分支保持宿主侧引擎操作。
+6. **移动端零改动**：旧 `/ws/event` 协议 wire（`Message::SessionControl` 请求/响应形状）逐字
+   不变（翻天覆地测试：`pty_session_chain` 经转发层全绿）；声明端点是新路由，老客户端不受影响。
+
+## 加密引擎化（crypto 能力面与协商参数化，票 01-05，2026-09-24 桌面端）
+
+用户 2026-09-24 方向指令第一部分：「WS 层面只留加密抽象层；加密具体实现在宿主侧，通过聚合全局
+加密方法大全实现具体加密；插件通过指定加密方法调用宿主加密」。落地为 `crypto/` 引擎模块 + `host-crypto`
+原语 + 协商套件参数化，spec：`.scratch/2026-09-24-host-crypto-business-downsink`。
+
+1. **crypto/ 引擎（票 01）**：`src-tauri/src/crypto/` 算法注册表（名称 → 实现 + 白名单 +
+abstract trait `AeadProvider` / `KdfProvider` / `KeyAgreementProvider`）。最小子集 aes-256-gcm /
+chacha20-poly1305 / hkdf-sha256 / x25519（rsa/hybrid 留待扩展）。裁剪线 = **引擎级**：算法是
+应用无关的 POSIX 级能力，宿主按其名持有与调度；`link_crypto` 不再内联任何具体算法调用（票 02，
+grep 断言）——WS/HTTP 过滤层只依赖注册表抽象接口。
+2. **host-crypto 契约面（票 03/04，ABI 25 → 26，desktop 独有）**：WIT interface `host-crypto`
+（aead 加解/密钥/随机数 + key-agreement 生成/共享 + kdf 派生），权限按风险域拆三位
+`crypto:aead` / `crypto:asym` / `crypto:kdf`（对齐 ws:client/ws:server 先例），宿主实现带权限门
++ 审计。**非旁路红线（H3）**：原语只给中性算法、不给编排；算法名白名单（引擎级词汇表）；宿主
+密钥（Kd / JWT keystore）**不**经原语暴露，只服务内部 filter 链——认证链路只走既有 auth 模块。
+3. **协商套件参数化（票 05）**：WS 链路加密协商（`conn.rs` 的挑战-应答）改按名选套件，
+expand–contract 增量演进：`CryptoProposal.suite` 可选字段缺省 → 默认套件（x25519 + aes-256-gcm +
+hkdf-sha256），未知名套件 fail-visible 拒绝（不静默降级到默认）；移动端旧端零改动（只读 {v,ek}）。
+4. **enums 三分类处置（票 06-09，本专项附录 §4.2 表的落地）**：`special_key` 按键→转义字节翻译
+迁插件（票 06，宿主 pty 只收裸字节）；`shell.rs`（ExecutionEnvironment / WindowsShell /
+SessionLaunchConfig）整文件删除（票 07，宿主零业务消费）；`SessionStatus` / `SessionType` 收窄为
+线协议形状并归位 `protocol/session.rs`（票 08，enums.rs 留兼容 re-export）；动作词表 switch 声明式化
+（票 09a/09b/09c，见上节）。`enums/` 终态 = 只剩引擎级类型（pty_status）与传输面契约形状。
+5. **双端偏离**：host-crypto 是桌面独有 interface（移动端插件生态薄、加密线协议已有共享 crate），
+纳入 ADR 0018 偏离登记（双端偏离节 v26 条目）；协商参数化对移动端 old 端零破坏（增量演进）。
+
 ## 终端输出消费插件化 · 性能红线修订（2026-09-21）
 
 roadmap 阶段 3（`.scratch/2026-09-10-plugin-kernel-roadmap/spec.md`）把「终端 UI/渲染
@@ -449,3 +507,26 @@ host-business-decarriage 收尾批次（`.scratch/2026-09-20-host-business-decar
   `retired_kernel_session_domain_is_not_reintroduced` 禁止把内核会话对象加回来。
   实施与验收见 `.scratch/2026-09-23-session-engine-downsink/issues/10-host-session-interface-abi-26.md`
   与 `.../11-kernel-session-dir-deletion.md`。
+
+- **2026-09-24 v17（当前）**：**WS 动作词表声明式化（票 09a/09b/09c，ABI 不变；
+  移动端零改动，wire 逐字不变）**。WS 会话控制动作的词表来源从「宿主硬编码 switch」
+  （`services/session_control.rs::handle_control` 的 `match action { ... }` 逐臂调
+  `session_gateway`）改为「插件 manifest 声明端点 + 插件侧分派」，见上
+  「WS 动作词表声明式化」节。① **expand（09a）**：SDK `contributes.wsEndpoints`
+  声明面 + 宿主激活期登记（端点表挂载 `/ws/plugin/<id>/<path>`，单段路径约束，
+  与 host-websocket `register-endpoint` 同口径；deactivate 回收、激活期重登记）。
+  ② **migrate（09b）**：`com.bedcode.terminal-session` 声明 `session-control` 端点
+  （auth=jwt），插件新模块 `ws_control` 承接列表/创建/停止/移除/尺寸五域动作解释
+  （互调 api `session-ws-control` + `events-ws.on-client-message` 直连帧协议），
+  插件补 `ws:server` 权限位（端点的 events-ws 回包判据位，五同步点只有一个新位
+  声明、无新词表条目）。③ **contract（09c）**：宿主 `services/session_control.rs`
+  重写为**传输面转发层**——声明闸门（端点已声明且插件激活，否则显性报错）→ 原始
+  动作 JSON 转发插件互调 api → 响应动作 JSON 套回 `Message::SessionControl` 信封
+  （原 `message_id`；信封 `session_id` 取自响应动作的 `session_id` 字段 = 新建会话 id，
+  与旧宿主路径逐字一致）。旧 `handle_control` 业务 switch 删除；`SessionControlAction`
+  等 wire 形状类型保留为传输面契约（**宿主 WS 层不再内联任何业务动作名语义**，
+  grep 断言）。终端输出订阅/输入等数据面（H1）不迁插件。移动端旧 `/ws/event` 协议
+  wire 逐字不变（`pty_session_chain` 集成测试经转发层全绿）。实施与验收见
+  `.scratch/2026-09-24-host-crypto-business-downsink/issues/09a/09b/09c`。
+
+- **2026-09-24 v18（当前）**：**加密引擎化 + enums 三分类处置收口（票 01-09c，ABI 25 → 26\n  只发生在 host-crypto 契约面；移动端零改动）**。见上「加密引擎化」节与「WS 动作词表声明式化」节。\n  ① **crypto/ 引擎（票 01/02）**：算法注册表（名称→实现 + 白名单 + abstract trait），`link_crypto`\n  不再内联具体算法（WS/HTTP 过滤层只依赖注册表抽象接口）。② **host-crypto 契约面（票 03/04）**：\n  WIT interface + 三权限位 `crypto:aead` / `crypto:asym` / `crypto:kdf` + ABI 25 → **26**（desktop\n  独有，双端偏离）；原语只给中性算法、不给编排，宿主密钥不经原语暴露（非旁路红线）。③ **协商套件\n  参数化（票 05）**：`CryptoProposal.suite` 可选字段，缺省 → 默认套件，未知名 fail-visible 拒绝；\n  移动端旧端零改动。④ **enums 三分类处置（票 06-09）**：special_key 下沉插件、shell.rs 整文件删除、\n  SessionStatus/Type 归位 protocol/session.rs（线协议形状）、动作词表 switch 声明式化（v17 详情）；\n  `enums/` 终态 = 引擎级类型 + 传输面契约形状，业务语义零残留。实施与验收见\n  `.scratch/2026-09-24-host-crypto-business-downsink/issues/01..09c`。

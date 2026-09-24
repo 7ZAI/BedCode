@@ -65,11 +65,11 @@ bedcode-desktop/                      # 桌面端项目 (Tauri 2.0 + Vue 3)
 │   │                                 #   已随域下沉 com.bedcode.terminal-session 插件，设备连接通知亦在其内）；
 │   │                                 #   terminal/ 已无：终端渲染/写入/IME 随票 01-05 整体下沉
 │   │                                 #   plugins/terminal-session（宿主只剩窗口编排原语
-│   │                                 #   useSessionWindows 与 view 壳 TerminalWindowHostView）；
+│   │                                 #   useSessionWindows 与 view 壳 PluginWindowHostView）；
 │   │                                 #   commands.rs 为 Rust 命令封装聚合（九域：会话引擎事实/设置等），
 │   │                                 #   useDesktopCommands 为聚合层 re-export
 │   ├── stores/                       # Pinia 全局状态：会话（引擎事实 + 插件动作）、设置、i18n
-│   ├── views/                        # 页面：插件、插件详情、插件配置、设置（编排层）、终端窗口、服务器
+│   ├── views/                        # 页面：插件、插件详情、插件配置、设置（编排层）、通用插件窗口、服务器
 │   │                                 #   （设备 / 会话 / 会话配置页已随票 13/14 下沉 com.bedcode.terminal-session
 │   │                                 #   插件；/server 为无侧边栏入口的诊断页，落地页为 /plugins）
 │   ├── plugin/                       # 前端插件系统：加载器、注册表、权限、上下文、事件、命令、
@@ -90,7 +90,12 @@ bedcode-desktop/                      # 桌面端项目 (Tauri 2.0 + Vue 3)
         │                             #   v24：settings / plugin_storage / plugin_secrets 三表（业务表
         │                             #   pairings / connection_history / session_configs 已退役；
         │                             #   2026-09-23 裁定不再兼容旧版本用户，存量不迁移）
-        ├── enums/                    # 枚举类型：认证、控制、插件、PTY 状态、会话、Shell、特殊键、同步
+        ├── cloud_loopback.rs          # 云端回环节点（fabric dock）
+        ├── crypto/                   # 加密引擎（票 01）：算法注册表（名称→实现+白名单）+ abstract trait，
+        │                             #   引擎级能力——link_crypto 与 host-crypto 原语只依赖其抽象接口，
+        │                             #   不再内联具体算法（WS/HTTP 过滤层 = 纯抽象层）
+        ├── enums/                    # 枚举类型（终态 = 引擎级 + 传输面契约形状）：认证、控制、插件、
+        │                             #   PTY 状态、同步（会话/Shell/特殊键已分别归位 protocol 域 / 删文件）
         ├── events/                   # 全局事件系统：AppEvent trait、事件匹配、SessionManager→前端转发、
         │                             #   同步事件定义与处理（→ WebSocket 广播）
         ├── mdns/                     # mDNS 服务广播：将桌面端服务注册到局域网供移动端发现
@@ -349,8 +354,13 @@ WIT 契约 `host-task`（5 函数：execute-batch / submit / status / cancel / l
   - **terminal_ws/subscriber.rs**：票 06 起含引擎环订阅者（`spawn_engine_subscriber` /
     `engine_subscriber_loop`）——经票 05 广播声明直读同进程 `PtyRing`（轮询 + 终态宽限排空 +
     SessionStopped 帧，帧语义与内核环订阅者逐字一致；`pty_session_chain` 场景 2 为恢复断言）；
-  - **services/**（session_control / terminal_service）：会话控制与终端输入**不是 WS 传输原语**
-    （ADR 0022 裁剪线视角，归属应为会话业务、后续下沉插件线）——本目录只是临时住处
+  - **services/session_control.rs**：WS 会话控制**传输面转发层**（票 09b/09c）——会话控制动作的
+    词表解释已迁插件（`terminal-session` 的 `ws_control` 域），本层只做三件事：声明闸门（端点
+    `session-control` 已声明且插件激活，否则显性报错）、原始动作 JSON 转发插件互调 api
+    `session-ws-control`（宿主不解动作名语义）、响应动作 JSON 套回 `Message::SessionControl` 信封
+    （原 message_id；信封 session_id 取自响应动作的 session_id 字段）。旧 `handle_control` 业务
+    switch 已删（宿主 WS 层无业务词表 switch）；`terminal_service.rs` 终端输入仍是引擎操作
+    （H1 数据面不迁插件）
 
 ### 线协议形状 — `src-tauri/src/protocol/`（跨端 wire 契约中立域）
 
@@ -363,9 +373,10 @@ WIT 契约 `host-task`（5 函数：execute-batch / submit / status / cancel / l
   （注解槽 → 对外字段的机械透传，不解释语义）、`RendererSource` / `ResizeOutcome`
   （尺寸裁决回执）。每个类型各有形状锁用例：状态八个 wire 形态（含 `Error` 的
   `{"error": …}` 两形态）、记录与视图的**精确字段集合**、裁决四态回执整体 JSON 相等。
-- **分界**：`SessionStatus` / `SessionType` 的定义仍在 `enums/session.rs`（对侧批次
-  `2026-09-24-host-crypto-business-downsink` 票 08 裁决其收窄），本域只锁其 wire 形态、
-  不搬定义；按键组合 → 转义字节的归属由对侧票 06 裁决，本域不预先挪位置。
+- **分界（票 08 已收口）**：`SessionStatus` / `SessionType` 的定义随 `enums/session.rs` 删除并
+  **归位本域**（`protocol/session.rs` 线协议中立域）；`enums.rs` 保留 `pub use` 兼容
+  re-export（既有 import 零改动）。按键组合 → 转义字节的翻译已迁插件（票 06），宿主 pty 只收
+  裸字节。`enums/` 终态 = 引擎级类型（`pty_status`）与传输面契约形状，业务语义零残留。
 - 跨真源对齐锁：插件登记域视图与本域类型逐字段相等，锁在
   `wasm_core/manager/runtime/tests/session_e2e.rs` 的网关读取面对齐段。
 
@@ -488,7 +499,7 @@ Rust 侧以 `abi.rs` 为宿主/插件共同引用的单一事实来源（签名�
 | 插件系统 (前端) | `src/plugin/`、`src/composables/`（usePluginManager） |
 | 插件开发 SDK | `packages/plugin-sdk-desktop/` |
 | 测试插件 | `packages/plugin-component-test/`、`plugin-sdk-test/`、`plugin-system-test/`、`plugin-wasi-test/` |
-| 插件源码 | `plugins/agent-hub/`、`plugins/ai-chatbox/`、`plugins/file-transfer/`、`plugins/terminal-session/`（终端会话中心：**会话真源登记域**（`rust/src/session/`，P1-b 起含状态机 / 生命周期分发 / 提交行重建 / 经 `host-pty` 的创建停止输入尺寸输出）+ 配对与信任 + 会话编排 + Agent 任务域 + 快捷指令域（票 02）+ 文件浏览域（票 03），票 17 起顶替旧 `com.bedcode.auto-task` 插件；HTTP 业务端点经网关别名表接管 /api/configs /api/quick-actions / 文件浏览五端点） |
+| 插件源码 | `plugins/agent-hub/`、`plugins/ai-chatbox/`、`plugins/file-transfer/`、`plugins/terminal-session/`（终端会话中心：**会话真源登记域**（`rust/src/session/`，P1-b 起含状态机 / 生命周期分发 / 提交行重建 / 经 `host-pty` 的创建停止输入尺寸输出）+ 配对与信任 + 会话编排 + Agent 任务域 + 快捷指令域（票 02）+ 文件浏览域（票 03）+ **WS 会话控制词表分派**（`rust/src/ws_control.rs`，票 09b：声明端点 `session-control` 的动作解释 + `events-ws` 直连帧协议 + 互调 api `session-ws-control`），票 17 起顶替旧 `com.bedcode.auto-task` 插件；HTTP 业务端点经网关别名表接管 /api/configs /api/quick-actions / 文件浏览五端点） |
 | 系统常量 / 错误类型 / 生命周期 | `src-tauri/src/system/`（constants.rs 按领域分组） |
 | 应用上下文 (DI) | `src-tauri/src/system/`（app_context） |
 | 前端页面 / 组件 / 状态 | `src/views/`、`src/components/`、`src/stores/` |

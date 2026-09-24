@@ -14,6 +14,23 @@
 
 ### 功能
 
+#### WS 动作词表声明式化 — `contributes.wsEndpoints` + 插件侧分派（桌面端）
+- expand–contract（票 09a/09b/09c）：会话/终端 WS 动作词表从「宿主硬编码 match 表」改为「插件声明端点 +
+  插件侧分派」。SDK `PluginContributes.wsEndpoints`（形态同 httpEndpoints 两式）在**激活期**登记到
+  `/ws/plugin/<id>/<path>`（端点路径**单段约束**，与 `host-websocket.register-endpoint` 同口径；deactivate
+  回收、激活期重登记）
+- `com.bedcode.terminal-session` 声明 `session-control`（auth=jwt）；新 `ws_control` 域承接动作词表解释
+  （list / start / stop / remove / resize）——互调 api `session-ws-control`（宿主 `/ws/event` 转发路径）与
+  `events-ws.on-client-message` 直连帧协议共用同一实现（插件为此补 `ws:server` 权限位，回包判据位）
+- 宿主 `services/session_control.rs` 重写为**传输面转发层**：声明闸门（端点已声明且插件激活，否则显性报错）
+  → 原始动作 JSON 转发插件互调 api（宿主不解动作名语义）→ 响应动作 JSON 套回 `Message::SessionControl`
+  信封（原 message_id；信封 `session_id` 取自响应动作的 `session_id` 字段 = 新建会话 id，与旧宿主路径逐字一致）
+- 旧 `handle_control` 业务 switch 删除——宿主 WS 层不再内联任何业务动作名语义（grep 断言）；
+  `Message` / `SessionControlAction` / `SessionSummary` 保留为宿主传输面契约。终端输出订阅/输入
+  （数据面，H1）留在宿主引擎
+- 移动端 wire 逐字不变：旧 `/ws/event` `Message::SessionControl` 请求/响应形状零改动
+  （`pty_session_chain` 集成测试经转发层全绿）；声明端点是新路由，供未来客户端直连
+
 #### 终端会话中心插件 — 设备 / 会话 / 任务合并为单一内置插件（桌面端）
 - 新内置插件 `com.bedcode.terminal-session`（Application 形态、`rust-ts`、wasip3 组件）承接原先散在 内核、`com.bedcode.devices`、`com.bedcode.auto-task` 三处的产品域：配对与信任与首连确认编排、会话配置 CRUD 与生命周期编排、Agent 任务域（队列状态机、定时任务、agent hook 安装）。插件 id 由 `com.bedcode.session` 改名（票 06）；旧 HTTP 前缀与旧互调 api 名在过渡期经双投窗口别名仍可达（票 07）
 - `com.bedcode.devices` 与 `com.bedcode.auto-task` 退役；其模块、侧边栏视图、终端工具栏按钮、任务弹窗、文案表与随包 hook 脚本并入合并插件，按域重组而非逐文件平移

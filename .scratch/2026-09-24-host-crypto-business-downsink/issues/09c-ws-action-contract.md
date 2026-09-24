@@ -4,9 +4,9 @@
 
 **Blocked by:** 09b
 
-**Status:** ready-for-agent
+**Status: ✅ done（2026-09-24）**
 
-- [ ] 删除宿主硬编码业务词表 switch，只保留通用声明式路由；grep 断言宿主无业务词表分发
-- [ ] 业务动作词表不再作为宿主枚举强制持有（改由 manifest/声明驱动或插件侧形状）
-- [ ] 全量集成测试通过（会话/终端的 WS 全动作经声明式路由等值）
-- [ ] 相关线协议形状类型按「传输面契约」登记，业务语义不落宿主
+- [x] `services/session_control.rs` 旧 `handle_control` 业务 switch 删除，重写为传输面转发层（声明闸门 + 转发 + 回包信封）；grep 断言宿主 WS 层无业务词表分发
+- [x] 业务动作词表不再由宿主 switch 持有：词表解释唯一在插件 `ws_control`（manifest 声明端点驱动宿主可达性）
+- [x] 全量门禁：宿主 lib 1062/0 + 集成 8 target 全绿（`pty_session_chain` 经转发层等值）+ 插件 303/0 + SDK 117/0
+- [x] 传输面契约类型（`Message` / `SessionControlAction` / `SessionSummary`）保留宿主持有（H2），业务语义零残留

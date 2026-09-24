@@ -1,6 +1,6 @@
 # 宿主加密引擎化 + 业务残留下沉（Host Crypto Engine & Business Downsink）
 
-Status: **ready-for-agent**（2026-09-24 立项；用户同日批准分票方案并裁决全部开放点，见 §5；12 张票见本目录 `issues/`）
+Status: **✅ 全部 12 票完成（2026-09-24）**——票 01-04（crypto 引擎 + host-crypto 契约面，ABI v26）早批 land；票 05（协商套件参数化）/06（special_key 下沉）/07（shell 下沉）/08（session 线协议归位）同日 land；票 09a/09b/09c（WS 动作词表声明式化）user 裁决冻结前做完，宿主硬编码词表 switch 删除，`enums/` 终态 = 引擎级 + 传输面契约；票 10 文档记账落地（ADR 0022 v17/v18、CHANGELOG 双语、code-map、路线图阶段 4 状态；AGENTS §5/§7/§8 记账因并发 agent 在途大改暂缓，待其落地后合并时补）
 Date: 2026-09-24
 范围: **桌面端为主**（`bedcode-desktop/src-tauri/src/{utils/crypto, server/core/link_crypto.rs, enums/, server/websocket/,
 wasm_core/host_api/, session/, plugins/terminal-session/}`、WIT/SDK）；移动端按 ADR 0018「双端偏离」登记（不强制跟演，见 §5 O1）
