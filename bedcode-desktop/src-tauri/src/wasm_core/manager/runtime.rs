@@ -16,7 +16,7 @@ pub(crate) use component::resolve_preopen_dirs;
 pub use component::LoadedWasmPlugin;
 
 use crate::db::Database;
-use crate::wasm_core::manager::storage::PluginStorage;
+use crate::wasm_core::storage::PluginStorage;
 use crate::wasm_core::permission::PermissionManager;
 // 异步桥（`block_on_async`）已中立化到 core-runtime-util：本模块与它的消费者
 // （host_api / security / task 等）同为其使用方，不再由本模块定义（票 01）；
@@ -1059,7 +1059,7 @@ mod tests {
     fn setup_wasm_runtime_with_config(core_config: CoreConfig) -> (WasmRuntime, Arc<WasmHostContext>) {
         use crate::db::Database;
         use crate::wasm_core::bus::MessageBus;
-        use crate::wasm_core::manager::storage::PluginStorage;
+        use crate::wasm_core::storage::PluginStorage;
         use crate::wasm_core::permission::PermissionManager;
         use crate::system::config::AppConfig;
 

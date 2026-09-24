@@ -25,7 +25,7 @@
 //! 任务单元（core-task 池线程）**不得触发弹窗**——判据由调用侧走 [`FsAuthChecker::is_granted`]，
 //! 未授权直接 fail-visible 拒绝（见 `host_impl::task`）。
 
-use crate::wasm_core::manager::storage::PluginStorage;
+use crate::wasm_core::storage::PluginStorage;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::Emitter;
@@ -541,7 +541,7 @@ fn path_has_named_segment(canonical: &Path, seg: &str) -> bool {
 mod tests {
     use super::*;
     use crate::db::Database;
-    use crate::wasm_core::manager::storage::PluginStorage;
+    use crate::wasm_core::storage::PluginStorage;
     use std::sync::Arc;
 
     /// 内存数据库 + 无头 AppHandle（None）的校验器：无法弹窗，未授权路径应保守拒绝

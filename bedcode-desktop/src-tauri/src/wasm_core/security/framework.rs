@@ -468,13 +468,13 @@ mod tests {
 
     fn fs_environment() -> (
         Arc<PermissionManager>,
-        Arc<crate::wasm_core::manager::storage::PluginStorage>,
+        Arc<crate::wasm_core::storage::PluginStorage>,
         Arc<FsAuthorizer>,
         SecurityFramework,
     ) {
         let db = crate::db::Database::new(&std::path::Path::new(":memory:")).expect("in-memory db");
         db.init_schema().expect("init schema");
-        let storage = Arc::new(crate::wasm_core::manager::storage::PluginStorage::new(Arc::new(
+        let storage = Arc::new(crate::wasm_core::storage::PluginStorage::new(Arc::new(
             tokio::sync::Mutex::new(db),
         )));
         let permission = Arc::new(PermissionManager::new());

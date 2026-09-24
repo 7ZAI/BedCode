@@ -377,7 +377,7 @@ mod tests {
         let db = crate::db::Database::new(db_path).expect("open db");
         db.init_schema().expect("init schema（含 plugin_secrets）");
         let db = Arc::new(tokio::sync::Mutex::new(db));
-        let storage = Arc::new(crate::wasm_core::manager::storage::PluginStorage::new(db.clone()));
+        let storage = Arc::new(crate::wasm_core::storage::PluginStorage::new(db.clone()));
         let fs_auth = Arc::new(crate::wasm_core::security::fs_auth::FsAuthChecker::new(
             storage.clone(),
             None,

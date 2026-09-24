@@ -15,7 +15,7 @@
 //! 持久化：`plugin_storage` 表 `__system__` 空间 `plugin_approvals` key，
 //! 与激活状态持久化（storage.rs ACTIVATION_STATE_KEY）同一模式。
 
-use crate::wasm_core::manager::storage::PluginStorage;
+use crate::wasm_core::storage::PluginStorage;
 use crate::AppError;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};

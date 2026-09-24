@@ -1,8 +1,14 @@
-//! Plugin Storage
+//! Plugin Storage（中立层）
 //!
 //! 插件持久化存储 — SQLite plugin_storage 表
 //! 按 plugin_id 隔离，插件只能读写自己的空间
 //! 同时存储系统级数据（如插件激活状态）
+//!
+//! **位置纪律（票 03：wasm_core 依赖单向化）**：原定义在
+//! `crate::wasm_core::manager::storage`，使 `security` / `host_api` 只为用它就
+//! 反向依赖 manager（见 `.scratch/2026-09-24-wasm-core-decouple/spec.md` C6）。
+//! 归位到本中立层后只依赖 `crate::db`，可被 `manager` / `host_api` / `security`
+//! 任意引用，自身不依赖任何 wasm_core 兄弟模块。
 
 use crate::db::Database;
 use chrono::Utc;

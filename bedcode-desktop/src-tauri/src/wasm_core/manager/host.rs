@@ -7,7 +7,7 @@
 use crate::db::Database;
 use crate::wasm_core::manager::loader::PluginLoader;
 use crate::wasm_core::manager::registry::PluginRegistry;
-use crate::wasm_core::manager::storage::PluginStorage;
+use crate::wasm_core::storage::PluginStorage;
 use crate::wasm_core::manager::types::{DesktopPluginInfo, LoadedPlugin, PluginSource};
 use crate::wasm_core::manager::runtime::{LoadedWasmPlugin, WasmHostContext, WasmRuntime};
 use crate::wasm_core::permission::PermissionManager;

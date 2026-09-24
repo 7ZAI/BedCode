@@ -28,6 +28,9 @@ pub mod permission;
 /// 异步桥基础设施：`manager` / `host_api` / `security` 共用的中立层，
 /// 自身不依赖任何 wasm_core 兄弟模块（票 01）
 pub(crate) mod runtime_util;
+/// 插件存储中立层（原 manager/storage.rs 下沉，票 03）：`security` / `host_api` /
+/// `manager` 皆可引用，自身只依赖 `crate::db`
+pub mod storage;
 pub mod security;
 
 // ==================== Facade 再导出 ====================
@@ -38,7 +41,7 @@ pub use bus::{BusMessageHandler, MessageBus};
 pub use host_api::api_bridge;
 pub use manager::host;
 pub use manager::host::PluginHost;
-pub use manager::storage::PluginStorage;
+pub use storage::PluginStorage;
 #[cfg(debug_assertions)]
 pub use manager::watcher;
 pub use security::fs_auth::FsAuthChecker;

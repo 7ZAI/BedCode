@@ -6,10 +6,11 @@
 //! - [`runtime`]：wasmtime Engine/Linker/Store/Instance 生命周期
 //! - [`capability`]：能力注册表与系统组件装配（manifest type/dependencies、
 //!   host-* 能力路由与 host-side 转发，票据 06）
-//! - [`storage`]：插件存储；[`types`] / [`validation`]：类型与校验；
+//! - [`types`] / [`validation`]：类型与校验；
 //! - [`task`]：host-task 执行引擎（core-task：专用 OS 线程池 + 任务注册表 + 事件管道）
 //!
-//! 宿主对外接口（host-* 原语实现与前端命令桥）已归位到 `crate::wasm_core::host_api`。
+//! 宿主对外接口（host-* 原语实现与前端命令桥）已归位到 `crate::wasm_core::host_api`；
+//! 插件存储（`PluginStorage`）中立化到 `crate::wasm_core::storage`（票 03）。
 
 pub(crate) mod capability;
 // 插件 zip 分发包解压安装：core-plugin-manager 的安装职责，已自 `plugin/downloader`
@@ -19,7 +20,6 @@ pub mod host;
 pub mod loader;
 pub mod registry;
 pub mod runtime;
-pub mod storage;
 pub(crate) mod task;
 pub mod types;
 pub mod validation;
