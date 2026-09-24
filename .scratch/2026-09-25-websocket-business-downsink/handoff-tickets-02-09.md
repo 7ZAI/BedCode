@@ -9,12 +9,12 @@ manifest wsEndpoints、`ws_control.rs`）中已就绪，跳过。
 
 | 序 | 票 | 内容 | 依赖 | 状态 |
 | --- | --- | --- | --- | --- |
-| 1 | 02 | connection-context（WIT/SDK/宿主实现 + ABI v28 + 测试） | 01（已就绪） | in-progress |
-| 2 | 05 | 会话事件归插件（bus/emit，撤 broadcast_sync 会话路径） | 无 | todo |
-| 3 | 06 | 任务事件归插件（bus/emit，撤 broadcast_sync 任务路径） | 05 | todo |
-| 4 | 03 | 会话控制直连端点闭环（connection-context 身份接线 + e2e） | 02 | todo |
-| 5 | 04 | 终端输入输出流端点（ws_terminal.rs + 真实 PTY 闭环） | 02 | todo |
-| 6 | 07 | 设备派生与认证记录归插件（宿主删 Device 事件/DTO/session_count） | 02 | todo |
+| 1 | 02 | connection-context（WIT/SDK/宿主实现 + ABI v28 + 测试） | 01（已就绪） | done（4c5186377） |
+| 2 | 05 | 会话事件归插件（bus/emit，撤 broadcast_sync 会话路径） | 无 | done（e3796630a） |
+| 3 | 06 | 任务事件归插件（bus/emit，撤 broadcast_sync 任务路径） | 05 | done（7460dd941） |
+| 4 | 03 | 会话控制直连端点闭环（connection-context 身份接线 + e2e） | 02 | done（cb894d90a） |
+| 5 | 04 | 终端输入输出流端点（ws_terminal.rs + 真实 PTY 闭环） | 02 | done（5e72b4de8） |
+| 6 | 07 | 设备派生与认证记录归插件（宿主删 Device 事件/DTO/session_count） | 02 | done（450ca7c17） |
 | 7 | 08 | 宿主业务硬切（删旧路由/枚举/服务/订阅器/PTY 广播映射/同步桥） | 03-07 | todo |
 | 8 | 09 | 终态性能与全量门禁（全量测试 + eslint + 文档 + lens） | 08 | todo |
 
