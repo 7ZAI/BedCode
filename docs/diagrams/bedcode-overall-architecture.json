@@ -2,195 +2,285 @@
   "schema_version": 1,
   "diagram_type": "architecture",
   "meta": {
-    "title": "BedCode",
+    "title": "BedCode 微内核 · 业务插件真源架构",
     "locale": "zh-CN",
     "output": "docs/diagrams/bedcode-overall-architecture.html",
     "quality_profile": "showcase",
     "repository": {
       "url": "https://github.com/7ZAI/BedCode",
-      "revision": "2289b441898ede9ae39d3c39a3f6d7c414cd307b"
+      "revision": "22069511dcaba5b90ecad0fba34396f98ae51305"
     },
-    "viewBox": [900, 430]
+    "viewBox": [1080, 800]
   },
   "components": [
     {
       "id": "d_ui",
       "type": "frontend",
       "label": "Desktop UI",
-      "sublabel": "Vue 3 · Tauri 2.0",
-      "pos": [60, 60],
-      "size": [200, 60],
+      "sublabel": "Vue 3 · Tauri 2 · 终端窗口 + 插件 UI 宿主",
+      "pos": [40, 56],
+      "size": [440, 76],
       "sources": [
-        { "path": "bedcode-desktop/src/App.vue", "label": "Vue 3 frontend" }
+        { "path": "bedcode-desktop/src/App.vue", "label": "Vue 3 frontend" },
+        { "path": "bedcode-desktop/src/plugin/loader.ts", "label": "插件 UI 宿主" }
       ]
     },
     {
-      "id": "d_rust",
+      "id": "d_api",
       "type": "backend",
-      "label": "Desktop Rust Host",
-      "sublabel": "PTY · Session · Events · SQLite",
-      "pos": [60, 150],
-      "size": [200, 60],
+      "label": "宿主接入面",
+      "sublabel": "commands.rs 命令面 + server 三层（core / http / websocket）",
+      "tag": "只服务宿主页面与传输面",
+      "pos": [40, 176],
+      "size": [440, 76],
       "sources": [
-        { "path": "bedcode-desktop/src-tauri/src/lib.rs", "label": "Rust backend" }
+        { "path": "bedcode-desktop/src-tauri/src/commands.rs", "label": "Tauri 命令面" },
+        { "path": "bedcode-desktop/src-tauri/src/server/core/app.rs", "label": "server 组合物" },
+        { "path": "bedcode-desktop/src-tauri/src/server/websocket/routes.rs", "label": "HTTP + WS 路由" }
       ]
     },
     {
-      "id": "d_web",
+      "id": "gateway",
       "type": "backend",
-      "label": "Actix Web Server",
-      "sublabel": "HTTP + WS · link_crypto",
-      "pos": [60, 240],
-      "size": [200, 60],
+      "label": "session_gateway",
+      "sublabel": "会话窄转发层 · 纯插件互调 api 7 条 · 无降级轨",
+      "tag": "宿主调会话唯一收口点",
+      "pos": [40, 296],
+      "size": [440, 76],
       "sources": [
-        { "path": "bedcode-desktop/src-tauri/src/server/app.rs", "label": "Actix Web" }
+        { "path": "bedcode-desktop/src-tauri/src/utils/session_gateway.rs", "label": "窄转发层" }
       ]
     },
     {
-      "id": "mdns",
-      "type": "messagebus",
-      "label": "mDNS Discovery",
-      "sublabel": "LAN service discovery",
-      "pos": [370, 60],
-      "size": [180, 60],
-      "sources": [
-        { "path": "bedcode-desktop/src-tauri/src/mdns.rs", "label": "Broadcast" }
-      ]
-    },
-    {
-      "id": "ws",
-      "type": "messagebus",
-      "label": "WebSocket",
-      "sublabel": "terminal bidirectional",
-      "pos": [370, 150],
-      "size": [180, 60],
-      "sources": [
-        { "path": "bedcode-desktop/src-tauri/src/server/ws.rs", "label": "Server" },
-        { "path": "bedcode-mobile/src-tauri/src/connection/ws_client.rs", "label": "Client" }
-      ]
-    },
-    {
-      "id": "http",
+      "id": "wc_runtime",
       "type": "backend",
-      "label": "HTTP REST",
-      "sublabel": "plugin hooks · files",
-      "pos": [370, 240],
-      "size": [180, 60],
+      "label": "core-plugin-manager",
+      "sublabel": "加载 · 注册 · 生命周期 · 能力装配 · 互调路由",
+      "pos": [40, 416],
+      "size": [440, 76],
       "sources": [
-        { "path": "bedcode-desktop/src-tauri/src/server/controllers.rs", "label": "Controllers" }
+        { "path": "bedcode-desktop/src-tauri/src/wasm_core/manager/host.rs", "label": "插件宿主" },
+        { "path": "bedcode-desktop/src-tauri/src/wasm_core/manager/runtime.rs", "label": "wasmtime 运行时" },
+        { "path": "bedcode-desktop/src-tauri/src/wasm_core/manager/capability.rs", "label": "能力装配" }
       ]
     },
     {
-      "id": "m_ui",
+      "id": "wc_api",
+      "type": "backend",
+      "label": "host_api · security · bus",
+      "sublabel": "21 组 host-* 原语 · 权限仲裁 · 总线 · monitor",
+      "tag": "WIT 契约 · ABI desktop v25",
+      "pos": [40, 536],
+      "size": [440, 76],
+      "sources": [
+        { "path": "bedcode-desktop/src-tauri/src/wasm_core/host_api.rs", "label": "宿主能力实现域" },
+        { "path": "bedcode-desktop/src-tauri/src/wasm_core/security/framework.rs", "label": "授权框架" },
+        { "path": "bedcode-desktop/packages/plugin-sdk-desktop/rust/src/abi.rs", "label": "ABI v25" }
+      ]
+    },
+    {
+      "id": "engines",
+      "type": "backend",
+      "label": "内核引擎服务",
+      "sublabel": "pty/ · mdns/ · peer_net · db/ · crypto",
+      "tag": "引擎级 · 无产品语义",
+      "pos": [620, 296],
+      "size": [420, 76],
+      "sources": [
+        { "path": "bedcode-desktop/src-tauri/src/pty/pty_process.rs", "label": "PTY 引擎" },
+        { "path": "bedcode-desktop/src-tauri/src/pty/pty_ring.rs", "label": "PtyRing 输出环" },
+        { "path": "bedcode-desktop/src-tauri/src/db/schema.sql", "label": "SQLite 主库" }
+      ]
+    },
+    {
+      "id": "m_remote",
       "type": "frontend",
-      "label": "Mobile UI",
-      "sublabel": "Vue 3 · Tauri / Android",
-      "pos": [640, 60],
-      "size": [200, 60],
+      "label": "Mobile remote",
+      "sublabel": "Vue 3 / Android · WS · HTTP · Kotlin 原生 · 移动插件 ABI 11",
+      "pos": [620, 56],
+      "size": [420, 76],
       "sources": [
-        { "path": "bedcode-mobile/src/App.vue", "label": "Vue 3 frontend" }
+        { "path": "bedcode-mobile/src/App.vue", "label": "Vue 3 frontend" },
+        { "path": "bedcode-mobile/src-tauri/src/connection/ws_client.rs", "label": "WS 客户端" },
+        { "path": "bedcode-mobile/src-tauri/gen/android/app/src/main/java/com/bedcode/mobile/SafTransferPlugin.kt", "label": "Kotlin 原生插件" }
       ]
     },
     {
-      "id": "m_rust",
-      "type": "backend",
-      "label": "Mobile Rust Host",
-      "sublabel": "Connection · mDNS · Auth · SAF · OCR",
-      "pos": [640, 150],
-      "size": [200, 60],
+      "id": "links",
+      "type": "messagebus",
+      "label": "跨设备链路",
+      "sublabel": "mDNS 发现 · WebSocket TB v3 · HTTP JWT · 链路加密",
+      "pos": [620, 176],
+      "size": [420, 76],
       "sources": [
-        { "path": "bedcode-mobile/src-tauri/src/lib.rs", "label": "Rust backend" }
+        { "path": "bedcode-desktop/src-tauri/src/mdns.rs", "label": "mDNS 广播" },
+        { "path": "bedcode-desktop/src-tauri/src/server/websocket/terminal_ws.rs", "label": "终端通道" },
+        { "path": "bedcode-desktop/src-tauri/src/server/http/middleware.rs", "label": "认证中间件" }
       ]
     },
     {
-      "id": "m_native",
-      "type": "backend",
-      "label": "Android Native",
-      "sublabel": "SAF · Camera · Biometric · Kotlin",
-      "pos": [640, 240],
-      "size": [200, 60],
-      "sources": [
-        { "path": "bedcode-mobile/src-tauri/gen/android/app/src/main/java/com/bedcode/mobile/SafTransferPlugin.kt", "label": "Kotlin plugins" }
-      ]
-    },
-    {
-      "id": "wasm",
+      "id": "plug_session",
       "type": "cloud",
-      "label": "WASM Plugin Sandbox",
-      "sublabel": "wasmtime · wit ABI",
-      "pos": [60, 340],
-      "size": [350, 70],
-      "tag": "dual-side",
+      "label": "com.bedcode.terminal-session",
+      "sublabel": "会话 · 设备 · 配对 · 任务真源（私有 SQLite 库）",
+      "tag": "31 互调 api · 34 HTTP · ptyQuota 8",
+      "pos": [40, 656],
+      "size": [490, 96],
       "sources": [
-        { "path": "bedcode-desktop/src-tauri/src/plugin.rs", "label": "Desktop runtime" },
-        { "path": "bedcode-mobile/src-tauri/src/plugin.rs", "label": "Mobile runtime" }
+        { "path": "bedcode-desktop/plugins/terminal-session/plugin.json", "label": "插件清单" },
+        { "path": "bedcode-desktop/plugins/terminal-session/rust/src/session/mod.rs", "label": "会话登记域" },
+        { "path": "bedcode-desktop/plugins/terminal-session/rust/src/launch.rs", "label": "argv 编排" }
       ]
     },
     {
-      "id": "plugins",
+      "id": "plug_apps",
       "type": "external",
-      "label": "Built-in Plugins",
-      "sublabel": "ai-chatbox · auto-task · file-transfer · scheduler · ocr",
-      "pos": [500, 340],
-      "size": [370, 70],
+      "label": "桌面业务插件",
+      "sublabel": "ai-chatbox · file-transfer · agent-hub",
+      "pos": [550, 656],
+      "size": [490, 96],
       "sources": [
-        { "path": "bedcode-desktop/plugins/ai-chatbox/plugin.json", "label": "Desktop plugins" },
-        { "path": "bedcode-mobile/plugins/ocr/plugin.json", "label": "Mobile plugins" }
+        { "path": "bedcode-desktop/plugins/ai-chatbox/plugin.json", "label": "AI Chatbox" },
+        { "path": "bedcode-desktop/plugins/file-transfer/plugin.json", "label": "文件传输" },
+        { "path": "bedcode-desktop/plugins/agent-hub/plugin.json", "label": "Agent Hub" }
       ]
     }
   ],
   "boundaries": [
-    { "kind": "region", "label": "Desktop host", "wraps": ["d_ui", "d_rust", "d_web"] },
-    { "kind": "region", "label": "Mobile remote", "wraps": ["m_ui", "m_rust", "m_native"] }
+    {
+      "kind": "region",
+      "label": "Desktop host",
+      "wraps": ["d_ui", "d_api", "gateway", "wc_runtime", "wc_api", "engines", "plug_session", "plug_apps"]
+    },
+    {
+      "kind": "region",
+      "label": "wasm_core 微内核（应用无关引擎）",
+      "wraps": ["wc_runtime", "wc_api"]
+    },
+    {
+      "kind": "region",
+      "label": "WASM plugin sandbox（wasmtime · Component Model）",
+      "wraps": ["plug_session", "plug_apps"]
+    }
   ],
   "connections": [
-    { "from": "d_ui", "to": "d_rust", "label": "Tauri commands", "variant": "emphasis", "labelAt": [160, 135] },
-    { "from": "d_rust", "to": "d_web", "label": "sessions", "variant": "emphasis", "labelAt": [160, 225] },
-    { "from": "d_web", "to": "mdns", "label": "advertise", "variant": "dashed" },
-    { "from": "mdns", "to": "m_rust", "label": "discover", "variant": "dashed" },
-    { "from": "d_web", "to": "ws", "label": "serve", "variant": "emphasis", "labelDx": -30 },
-    { "from": "ws", "to": "m_rust", "label": "terminal", "variant": "emphasis", "labelDy": 15 },
-    { "from": "d_web", "to": "http", "label": "serve", "variant": "emphasis", "labelDy": 15 },
-    { "from": "http", "to": "m_rust", "label": "REST", "variant": "emphasis" },
-    { "from": "m_ui", "to": "m_rust", "label": "Tauri commands", "variant": "emphasis", "labelAt": [740, 135] },
-    { "from": "m_rust", "to": "m_native", "label": "Android calls", "variant": "emphasis", "labelAt": [740, 225] },
-    { "from": "plugins", "to": "wasm", "label": "loaded", "variant": "emphasis" }
+    {
+      "id": "d-ui-cmd",
+      "from": "d_ui",
+      "to": "d_api",
+      "label": "Tauri invoke",
+      "variant": "emphasis",
+      "labelAt": [260, 154]
+    },
+    {
+      "id": "api-gateway",
+      "from": "d_api",
+      "to": "gateway",
+      "label": "会话操作收口",
+      "variant": "emphasis",
+      "labelAt": [260, 274]
+    },
+    {
+      "id": "gateway-runtime",
+      "from": "gateway",
+      "to": "wc_runtime",
+      "label": "插件互调 api（call_api）",
+      "variant": "emphasis",
+      "labelAt": [260, 394]
+    },
+    {
+      "id": "runtime-api",
+      "from": "wc_runtime",
+      "to": "wc_api",
+      "label": "Linker 装配 · 能力仲裁",
+      "variant": "dashed",
+      "labelAt": [260, 514]
+    },
+    {
+      "id": "api-session",
+      "from": "wc_api",
+      "to": "plug_session",
+      "label": "host-pty · host-session · host-auth",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [152, 620]
+    },
+    {
+      "id": "api-apps",
+      "from": "wc_api",
+      "to": "plug_apps",
+      "label": "host-fs · host-http · host-peer",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [610, 646]
+    },
+    {
+      "id": "api-engines",
+      "from": "wc_api",
+      "to": "engines",
+      "label": "引擎原语转发",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left",
+      "labelAt": [550, 454]
+    },
+    {
+      "id": "api-links",
+      "from": "d_api",
+      "to": "links",
+      "label": "advertise · serve",
+      "fromSide": "right",
+      "toSide": "left",
+      "labelAt": [550, 214]
+    },
+    {
+      "id": "links-remote",
+      "from": "links",
+      "to": "m_remote",
+      "label": "discover · TB v3 · REST",
+      "variant": "emphasis",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "labelAt": [830, 154]
+    }
   ],
   "cards": [
     {
-      "dot": "cyan",
-      "title": "Desktop host",
+      "dot": "rose",
+      "title": "微内核裁剪线",
       "items": [
-        "Tauri 2.0 + Vue 3 + Rust (Tokio)",
-        "PTY · Session · Events · SQLite 持久化",
-        "Actix Web：HTTP + WS + link_crypto 链路加密"
+        "wasm_core 五模块只承载应用无关引擎：进程、网络、存储、安全、通信总线 + wasmtime 运行时",
+        "host_api 21 组原语一律无产品语义——shell 包装、会话身份、命名与任务队列全部归插件（ADR 0022）",
+        "内核引擎服务 pty/ 与 mdns/ 不 import 任何业务类型；host_api 是引擎与沙箱之间唯一的适配层"
       ]
     },
     {
       "dot": "emerald",
-      "title": "Mobile remote",
+      "title": "业务真源在插件",
       "items": [
-        "Tauri 2.0 / Android + Vue 3",
-        "Connection · Router · mDNS · Auth · SAF · OCR",
-        "Android Native Layer（Kotlin 插件）"
+        "com.bedcode.terminal-session 私有库持有会话 / 设备 / 配对 / 连接历史 / 任务真源（sessions · auth_pairings · auth_connection_history）",
+        "宿主调会话一律经 session_gateway 纯互调 api 7 条（list / get / create / close / remove / resize / input），插件未激活显性报错、无降级轨",
+        "宿主 session/ 目录退为 wire 类型与遗留线（P4 删）；主库 pairings / connection_history / session_configs 三表已退役"
       ]
     },
     {
-      "dot": "rose",
-      "title": "WASM plugin sandbox",
+      "dot": "cyan",
+      "title": "WASM 沙箱与 ABI",
       "items": [
-        "wasmtime 组件运行时 · 权限模型 · wit ABI 桥接",
-        "双端一致：ai-chatbox / auto-task / file-transfer / scheduler / ocr",
-        "崩溃隔离 · 热插拔 · 即启即用"
+        "wasmtime Component Model；桌面 ABI v25、移动 ABI 11——桌面独有接口（host-pty / host-websocket / host-auth）移动端不跟演",
+        "会话创建经 host-pty.spawn 自产 id 并注入 BEDCODE_SESSION_ID；ptyQuota: 8 由插件声明，加载期区间仲裁不夹取",
+        "每插件实例同刻仅一个 guest 调用在执行（tokio Mutex 跨 await 持锁）；跨实例经 core-bus 属主命名空间隔离"
       ]
     },
     {
       "dot": "amber",
-      "title": "Cross-device links",
+      "title": "跨设备链路与遗留面",
       "items": [
-        "WebSocket：终端双向流（xterm.js 模拟）",
-        "HTTP REST：插件 hooks + 文件传输",
-        "mDNS：局域网设备发现（二维码 / 手动配对）"
+        "mDNS 单守护 ServiceDaemon，插件经 host-mdns browse/advertise，事件定向投递 <owner>::mdns:found",
+        "WebSocket 终端 TB v3 二进制帧已改订阅拉取模型（旧 forward_loop 推模型下线）；插件端点 /ws/plugin/<id>/<path> 走 host-websocket",
+        "HTTP REST 走 JWT + auth-policy capability 取用（策略传输失败回退放行，防认证中心故障误杀连接）"
       ]
     }
   ]

@@ -21,9 +21,17 @@
 
 | 图 | 类型 | 主题 | IR 源 |
 | --- | --- | --- | --- |
-| [bedcode-overall-architecture.html](./bedcode-overall-architecture.html) | architecture | 桌面主机 · 移动端远程 · WASM 插件沙箱 · 内核边界 | [bedcode-overall-architecture.json](./bedcode-overall-architecture.json) |
+| [bedcode-overall-architecture.html](./bedcode-overall-architecture.html) | architecture | 桌面主机 · 移动端远程 · WASM 插件沙箱 · 内核边界（P1-b 后 `wasm_core` 五模块 + `host-*` 能力域 + 会话真源下沉） | [bedcode-overall-architecture.json](./bedcode-overall-architecture.json) |
 
 静态预览：[bedcode-overall-architecture.png](./bedcode-overall-architecture.png)
+
+### 会话真源下沉（ADR 0022）
+
+会话登记 / 状态机 / 生命周期分发 / 输入输出编排从宿主迁入 `com.bedcode.terminal-session` 私有登记域，宿主侧只剩 PTY 引擎、`host-pty` 原语与 `utils/session_gateway.rs` 窄转发层：
+
+| 图 | 类型 | 覆盖范围 | IR 源 |
+| --- | --- | --- | --- |
+| [session-source-flow-desktop.html](./session-source-flow-desktop.html) | sequence | 桌面端：创建 / 输入 / 关闭 / 生命周期四条调用链的插件背书与 fail-visible 判据 | [session-source-flow-desktop.json](./session-source-flow-desktop.json) |
 
 ### 插件架构（桌面 / 移动双端）
 
@@ -37,14 +45,14 @@
 
 ### PTY 输出数据流
 
-终端 PTY 输出的端到端链路与背压反馈环：
+终端 PTY 输出的端到端链路。桌面本地路径自 2026-09-17 起为**拉取模型**（PtyRing + 游标续拉），旧推模型三件套（`SessionOutputManager` / `UnifiedOutputQueue` / `SubscriberState` + `forward_loop`）与前端 Tauri Channel 桥、ack 反馈环均已整体下线：
 
 | 图 | 类型 | 覆盖范围 | IR 源 |
 | --- | --- | --- | --- |
-| [pty-output-flow-desktop.html](./pty-output-flow-desktop.html) | dataflow | 桌面端：`pty_reader.rs` 读 PTY fd → `SessionOutputManager`（unacked 64KB→pause / 8KB→resume）→ `OutputBuffer`/`forward_loop` → `TerminalWs` actor（TB v3 二进制帧） | [pty-output-flow-desktop.json](./pty-output-flow-desktop.json) |
+| [pty-output-flow-desktop.html](./pty-output-flow-desktop.html) | dataflow | 桌面端：shell → `PtySession` master fd → `PtyReader`（独立读线程）→ `PtyRing`（有界环形 · `min_offset`）→ `host-pty` 原语（16 KiB 钳位 · 属主仲裁）→ `terminal-session` 输出域 → 前端拉取循环（100 ms / 500 ms 双档）→ `xterm.js` | [pty-output-flow-desktop.json](./pty-output-flow-desktop.json) |
 | [pty-output-flow-mobile.html](./pty-output-flow-mobile.html) | dataflow | 移动端：`TerminalLink`（TB v3 解析 + ack 节流）→ `SessionCache`（16MB LRU）→ `terminalBuffer` → `writeCoalescer` → `xterm.js`，含 ack 反馈环 | [pty-output-flow-mobile.json](./pty-output-flow-mobile.json) |
 
-关键代码锚点：`bedcode-desktop/src-tauri/src/pty/pty_reader.rs`、`bedcode-desktop/src-tauri/src/session/session_output.rs`、`bedcode-desktop/src-tauri/src/server/websocket/terminal_ws/`（control_frame / forward / subscriber 三子模块）+ `websocket/conn.rs`（连接骨架，原 `ws/terminal_ws.rs` 已无承载）、`bedcode-mobile/src-tauri/src/terminal_link.rs`、`bedcode-mobile/src/composables/useTerminalBuffer.ts`、`bedcode-mobile/src/composables/writeCoalescer.ts`、`bedcode-mobile/src/stores/terminalBuffer.ts`
+关键代码锚点：`bedcode-desktop/src-tauri/src/pty/pty_reader.rs` + `pty/pty_ring.rs`（输出环）、`bedcode-desktop/src-tauri/src/plugin/` 下 `host-pty` 原语实现、`bedcode-desktop/plugins/terminal-session/rust/src/output.rs`（拉取接口 `session.output.pull`）、`bedcode-desktop/plugins/terminal-session/src/components/terminal/TerminalPreview.vue`（轮询档位）、`bedcode-desktop/src-tauri/src/server/websocket/subscription.rs` + `terminal_ws/`（远程订阅，同为拉取模型执行体 + 流代数门控）、`bedcode-desktop/src-tauri/src/utils/session_gateway.rs`（宿主↔插件窄转发层）、`bedcode-mobile/src-tauri/src/terminal_link.rs`、`bedcode-mobile/src/composables/useTerminalBuffer.ts`、`bedcode-mobile/src/composables/writeCoalescer.ts`、`bedcode-mobile/src/stores/terminalBuffer.ts`
 
 ## 相关
 

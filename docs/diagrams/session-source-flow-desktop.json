@@ -1,0 +1,415 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "会话真源下沉 · 宿主调用链",
+    "locale": "zh-CN",
+    "output": "docs/diagrams/session-source-flow-desktop.html",
+    "quality_profile": "showcase",
+    "column_fit": "spread",
+    "viewBox": [
+      1000,
+      1400
+    ]
+  },
+  "participants": [
+    {
+      "id": "client",
+      "type": "external",
+      "label": "客户端",
+      "sublabel": "终端窗口 · 移动端"
+    },
+    {
+      "id": "dapi",
+      "type": "backend",
+      "label": "宿主接入面",
+      "sublabel": "session_gateway"
+    },
+    {
+      "id": "router",
+      "type": "backend",
+      "label": "插件互调路由",
+      "sublabel": "core-plugin-manager"
+    },
+    {
+      "id": "plugin",
+      "type": "cloud",
+      "label": "terminal-session",
+      "sublabel": "会话登记域"
+    },
+    {
+      "id": "db",
+      "type": "database",
+      "label": "插件私有库",
+      "sublabel": "会话真源"
+    },
+    {
+      "id": "pty",
+      "type": "backend",
+      "label": "host-pty",
+      "sublabel": "PTY 引擎"
+    }
+  ],
+  "segments": [
+    {
+      "from": 150,
+      "to": 566,
+      "label": "创建会话（真源切换点）"
+    },
+    {
+      "from": 596,
+      "to": 960,
+      "label": "查询与动作"
+    },
+    {
+      "from": 996,
+      "to": 1104,
+      "label": "输出数据面"
+    },
+    {
+      "from": 1136,
+      "to": 1286,
+      "label": "插件缺失（fail-visible）"
+    }
+  ],
+  "messages": [
+    {
+      "id": "create-req",
+      "from": "client",
+      "to": "dapi",
+      "y": 176,
+      "label": "create_session(config)",
+      "variant": "emphasis"
+    },
+    {
+      "id": "create-gateway",
+      "from": "dapi",
+      "to": "router",
+      "y": 218,
+      "label": "call_api(\"session.create\")",
+      "variant": "emphasis"
+    },
+    {
+      "id": "create-rpc",
+      "from": "router",
+      "to": "plugin",
+      "y": 260,
+      "label": "JSON-RPC 2.0（权限位 + 能力仲裁通过）",
+      "variant": "default"
+    },
+    {
+      "id": "create-insert",
+      "from": "plugin",
+      "to": "db",
+      "y": 302,
+      "label": "INSERT sessions（插件自产 session id）",
+      "variant": "emphasis"
+    },
+    {
+      "id": "create-spawn",
+      "from": "plugin",
+      "to": "pty",
+      "y": 344,
+      "label": "host-pty.spawn(argv, env, cols, rows, ringBytes)",
+      "variant": "emphasis"
+    },
+    {
+      "id": "create-spawn-ok",
+      "from": "pty",
+      "to": "plugin",
+      "y": 386,
+      "label": "pty_id + PtyRing（ptyQuota 8 占用 1）",
+      "variant": "return"
+    },
+    {
+      "id": "create-register",
+      "from": "plugin",
+      "to": "db",
+      "y": 428,
+      "label": "登记 session↔pty 映射 · 状态 Running",
+      "variant": "emphasis"
+    },
+    {
+      "id": "create-result",
+      "from": "plugin",
+      "to": "router",
+      "y": 470,
+      "label": "CreateResult(session_id, name)",
+      "variant": "return"
+    },
+    {
+      "id": "create-wire",
+      "from": "router",
+      "to": "dapi",
+      "y": 512,
+      "label": "wire SessionInfoView",
+      "variant": "return"
+    },
+    {
+      "id": "create-resp",
+      "from": "dapi",
+      "to": "client",
+      "y": 554,
+      "label": "200 会话已创建",
+      "variant": "return"
+    },
+    {
+      "id": "action-req",
+      "from": "client",
+      "to": "dapi",
+      "y": 616,
+      "label": "list_sessions · resize · input",
+      "variant": "default"
+    },
+    {
+      "id": "action-gateway",
+      "from": "dapi",
+      "to": "router",
+      "y": 658,
+      "label": "call_api（7 条 api 之一）",
+      "variant": "default"
+    },
+    {
+      "id": "action-rpc",
+      "from": "router",
+      "to": "plugin",
+      "y": 700,
+      "label": "session.list / resize / input",
+      "variant": "default"
+    },
+    {
+      "id": "action-read",
+      "from": "plugin",
+      "to": "db",
+      "y": 742,
+      "label": "读会话登记域",
+      "variant": "default"
+    },
+    {
+      "id": "action-rows",
+      "from": "db",
+      "to": "plugin",
+      "y": 784,
+      "label": "rows",
+      "variant": "return"
+    },
+    {
+      "id": "action-pty",
+      "from": "plugin",
+      "to": "pty",
+      "y": 826,
+      "label": "host-pty.resize / write（命令字节）",
+      "variant": "default"
+    },
+    {
+      "id": "action-result",
+      "from": "plugin",
+      "to": "router",
+      "y": 868,
+      "label": "动作结果",
+      "variant": "return"
+    },
+    {
+      "id": "action-wire",
+      "from": "router",
+      "to": "dapi",
+      "y": 910,
+      "label": "wire DTO",
+      "variant": "return"
+    },
+    {
+      "id": "action-resp",
+      "from": "dapi",
+      "to": "client",
+      "y": 952,
+      "label": "response",
+      "variant": "return"
+    },
+    {
+      "id": "out-pull",
+      "from": "plugin",
+      "to": "pty",
+      "y": 1012,
+      "label": "host-pty.ring-fetch(pty_id, from_offset)",
+      "variant": "emphasis"
+    },
+    {
+      "id": "out-bytes",
+      "from": "pty",
+      "to": "plugin",
+      "y": 1054,
+      "label": "list<u8> 二进制直传 · truncated/resync",
+      "variant": "return"
+    },
+    {
+      "id": "out-render",
+      "from": "plugin",
+      "to": "client",
+      "y": 1096,
+      "label": "终端输出帧（xterm 渲染）",
+      "variant": "return"
+    },
+    {
+      "id": "miss-req",
+      "from": "client",
+      "to": "dapi",
+      "y": 1152,
+      "label": "session.*（插件未激活）",
+      "variant": "default"
+    },
+    {
+      "id": "miss-gateway",
+      "from": "dapi",
+      "to": "router",
+      "y": 1194,
+      "label": "call_api",
+      "variant": "default"
+    },
+    {
+      "id": "miss-denied",
+      "from": "router",
+      "to": "dapi",
+      "y": 1236,
+      "label": "SessionPluginRequired",
+      "variant": "return"
+    },
+    {
+      "id": "miss-resp",
+      "from": "dapi",
+      "to": "client",
+      "y": 1278,
+      "label": "error · 无宿主降级代办",
+      "variant": "return"
+    }
+  ],
+  "activations": [
+    {
+      "participant": "client",
+      "from": 170,
+      "to": 554,
+      "type": "external"
+    },
+    {
+      "participant": "dapi",
+      "from": 170,
+      "to": 554,
+      "type": "backend"
+    },
+    {
+      "participant": "router",
+      "from": 212,
+      "to": 512,
+      "type": "backend"
+    },
+    {
+      "participant": "plugin",
+      "from": 254,
+      "to": 470,
+      "type": "cloud"
+    },
+    {
+      "participant": "db",
+      "from": 296,
+      "to": 432,
+      "type": "database"
+    },
+    {
+      "participant": "pty",
+      "from": 338,
+      "to": 386,
+      "type": "backend"
+    },
+    {
+      "participant": "dapi",
+      "from": 610,
+      "to": 952,
+      "type": "backend"
+    },
+    {
+      "participant": "router",
+      "from": 652,
+      "to": 910,
+      "type": "backend"
+    },
+    {
+      "participant": "plugin",
+      "from": 694,
+      "to": 868,
+      "type": "cloud"
+    },
+    {
+      "participant": "db",
+      "from": 736,
+      "to": 784,
+      "type": "database"
+    },
+    {
+      "participant": "pty",
+      "from": 820,
+      "to": 830,
+      "type": "backend"
+    },
+    {
+      "participant": "plugin",
+      "from": 1006,
+      "to": 1096,
+      "type": "cloud"
+    },
+    {
+      "participant": "pty",
+      "from": 1006,
+      "to": 1054,
+      "type": "backend"
+    },
+    {
+      "participant": "dapi",
+      "from": 1146,
+      "to": 1278,
+      "type": "backend"
+    },
+    {
+      "participant": "router",
+      "from": 1188,
+      "to": 1236,
+      "type": "backend"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "真源在插件私有库",
+      "items": [
+        "会话登记 / 状态机 / 生命周期 / 输入输出编排 / 尺寸裁决整体迁入 com.bedcode.terminal-session 私有登记域（ADR 0022 P1-b，2026-09-24）",
+        "session id 由插件自产并经 host-pty.spawn 的 env 注入 BEDCODE_SESSION_ID；宿主不再预分配",
+        "sessions · session_annotations · auth_pairings · auth_connection_history 等表是落盘真源；宿主主库 pairings / connection_history / session_configs 三表已退役"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "宿主侧唯一收口",
+      "items": [
+        "桌面 Tauri 命令 / 移动端 HTTP 控制器 / 移动端 WS 服务三条消费线收敛到 utils/session_gateway.rs 一个纯互调 api 层",
+        "7 条 api：session-list / get / create / close / remove / resize / input；无内核执行器、无内核裁决副本",
+        "host-session 12 原语中 9 条转为零消费者，整 interface 退役随 P4；host-terminal.terminal_send 同批裁定退役"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "输出面二进制直传",
+      "items": [
+        "性能红线修订：输出字节禁止经 JSON-RPC 命令通道搬运（~75 ms/MB），经 WIT 二进制原语 list<u8> 直传可进 WASM（~2.6 ms/MB）",
+        "PtyRing 每句柄一条有界环（单生产者 PtyReader 写入，插件按游标 ring-fetch），容量是 spawn 的插件声明参数",
+        "truncated + resync 语义即契约本体：游标落后于环驻留起点时如实上报，不静默补洞"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "无降级轨",
+      "items": [
+        "插件未激活 / 互调失败一律显性报错 SessionPluginRequired，前端命令面显性可见",
+        "旧宿主降级实现已整体删除：PairingService · QrTokenManager · pairing.rs · session_{create,action}_bridge（含 Ok(None) 降级轨）· 双写期 bridge",
+        "存量迁移链 wasm_core/legacy/ 四迁移同批退役——不再兼容旧版本存量用户"
+      ]
+    }
+  ]
+}
