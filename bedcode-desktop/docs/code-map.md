@@ -94,10 +94,11 @@ bedcode-desktop/                      # 桌面端项目 (Tauri 2.0 + Vue 3)
         ├── crypto/                   # 加密引擎（票 01）：算法注册表（名称→实现+白名单）+ abstract trait，
         │                             #   引擎级能力——link_crypto 与 host-crypto 原语只依赖其抽象接口，
         │                             #   不再内联具体算法（WS/HTTP 过滤层 = 纯抽象层）
-        ├── enums/                    # 枚举类型（终态 = 引擎级 + 传输面契约形状）：认证、控制、插件、
-        │                             #   PTY 状态、同步（会话/Shell/特殊键已分别归位 protocol 域 / 删文件）
-        ├── events/                   # 全局事件系统：AppEvent trait、事件匹配、SessionManager→前端转发、
-        │                             #   同步事件定义与处理（→ WebSocket 广播）
+        ├── enums/                    # 枚举类型（终态 = 引擎级 + 传输面契约形状）：本目录只定义认证 wire
+        │                             #   与 PTY 引擎枚举；同步 / 概要 / 控制 / 特殊键四个文件是 SDK
+        │                             #   `bedcode-plugin-api::wire` 的 re-export 垫片（专项票 01）
+        ├── events/                   # 全局事件系统：AppEvent trait + 统一 publish 入口、事件匹配、
+        │                             #   HostSyncEvent 薄适配、同步事件 → WebSocket 广播
         ├── mdns/                     # mDNS 服务广播：将桌面端服务注册到局域网供移动端发现
         ├── plugin/                   # 插件系统（WASM 组件沙箱架构，核心模块，详见 Core Modules）
         ├── protocol/                 # 跨端线协议形状中立域（票 02）：只放对外 wire 契约，
@@ -377,6 +378,11 @@ WIT 契约 `host-task`（5 函数：execute-batch / submit / status / cancel / l
   **归位本域**（`protocol/session.rs` 线协议中立域）；`enums.rs` 保留 `pub use` 兼容
   re-export（既有 import 零改动）。按键组合 → 转义字节的翻译已迁插件（票 06），宿主 pty 只收
   裸字节。`enums/` 终态 = 引擎级类型（`pty_status`）与传输面契约形状，业务语义零残留。
+- **跨端 wire 真源（会话事件下沉专项票 01）**：同步载荷 / 会话概要 / WS 控制与终端帧 / 按键组合
+  四类形状定义在 SDK `bedcode-plugin-api::wire`（`wire/{sync,summary,control,key}.rs`），宿主
+  `enums/` 对应四个文件只剩 `pub use` 垫片；锁在 `src/enums.rs::tests`：类型身份锁（宿主路径与
+  SDK 真源必须是同一类型，编译期）+ 垫片文件零定义（源层面）。移动端仍持平行副本，与真源的一致性
+  由 SDK 的 `mobile_parallel_copy_shape_lock` 逐变体钉住。
 - 跨真源对齐锁：插件登记域视图与本域类型逐字段相等，锁在
   `wasm_core/manager/runtime/tests/session_e2e.rs` 的网关读取面对齐段。
 
@@ -426,16 +432,38 @@ PTY 进程生命周期、输出读取与分发、游标环、WSL 发行版列举
 
 ### 全局事件系统 — `src-tauri/src/events/`
 
-AppEvent trait + 事件匹配处理器；SessionManager 事件双路分发：转发 Tauri 前端（forwarder）与转 WebSocket 同步广播（sync_event/sync_handler）。
+`AppEvent` trait + 统一发布入口 + 泛型事件匹配处理器；宿主事件面**不持有任何业务事件类型**。
 
-**P1-b 起会话事件的载荷自足**：`SessionCreated` / `SessionStatusChanged` / `SessionStopped` /
-`SessionRemoved` 由 `com.bedcode.terminal-session` 经 `host-events.broadcast_sync` 发布
-（SDK `SyncEvent` 的四个会话变体，携带 `session` 概要 / `sessionName` / `source_device`），
-宿主 `DesktopSyncEvent` 经 `From` 转换后由 `sync_handler` 转发 WS；处理器保留
-「事件未携带 → 回查内核登记」的兜底分支（只服务内核线与旧生产者，对插件会话必然为空）。
+- **`app_event.rs`**：`AppEvent`（`Clone + Send + Sync + Debug` + 三个协议方法
+  `source_device()` / `validate()` / `to_sync_payload()`）与 `publish()` / `PublishError`。
+  `publish` 顺序固定为**校验 → 查源 → 投递**：校验失败或该事件类型没注册事件源都返回 `Err`
+  （静默 `Ok` = 「线还在、数据永远是空」的断链，AGENTS §8 判据）。`to_sync_payload`
+  **故意不给默认实现**——新增事件类型必须显式回答走不走 WS 同步通道。
+- **`matcher.rs`**：按 `TypeId` 的泛型分发（`register_source` / `register` / `on_filter` /
+  `subscribe`），机制与迁移前一致；`EventMatcher::publish` 保留底层语义（无源即丢弃），
+  显性失败由 `events::publish` 补。
+- **`host_sync_event.rs`**：插件事件进入宿主广播面的**唯一薄适配**——
+  `HostSyncEvent(pub bedcode_plugin_api::events::SyncEvent)` newtype（orphan rule 所需，
+  同时标出「已进入宿主面」这条边界）。`to_sync_payload` 是同一 wire 的机械 JSON 折算
+  （专项票 02 起 `SyncEvent` 与 `SyncPayload` 同形），**没有逐变体 match**；
+  `source_device` 只取信封字段。折不成形状即 `validate` 失败 → 发布侧显性 `Err`。
+- **`sync_handler.rs`**：`EventHandler<HostSyncEvent>` 只剩传输面三件事——折载荷、按源设备
+  排除（空串 = 桌面本地操作 → 全量广播）、`Message::SyncData` 广播；广播器抽成
+  `SyncBroadcaster` trait 供测试注入 Fake。
+
+**插件事件的一条路**：插件 `host-events.broadcast_sync(event-json)` → 宿主反序列化 SDK
+`SyncEvent`（未知/畸形/旧格式即点名拒绝）→ `HostSyncEvent` → `events::publish` → 本处理器
+→ WS 广播。WIT `broadcast-sync` **无返回值**（ABI 不变），所以宿主侧失败的可观测点是
+`runtime/component.rs` 导入壳的 `error!`，插件收不到异常——**载荷必填自足一律在生产者侧
+保证**（`com.bedcode.terminal-session` 的 `session::summary_for` 取不到概要就 warn + 跳过广播）。
+
+**防回接锁**（三条，都在宿主 `cargo test` 门禁内）：`retired_session_event_mirror_is_not_reintroduced`
+（`src/events/**` + `src/enums/**` 实现段不得再现镜像枚举 / `SyncPayload::` 逐变体构造 /
+`SessionStatus` 解读）、`sync_handler_does_not_interpret_session_variants`（处理器实现段零变体分支）、
+`events_module_does_not_depend_on_kernel_session_registry`（票 09：事件面不依赖内核会话登记）。
+
 Tauri 前端事件 `session-status-changed` 与内核状态订阅转接通道（`events/forwarder.rs`）**已随
-票 09 一并退役**：`subscribe_status()` 的内核状态通道随 `session/` 目录删除（票 11），
-事件面只剩插件经 `host-events` 广播的 `SyncEvent` 会话四变体（载荷自足，宿主只转发）。
+票 09 退役**；会话事实的前端可见性由插件经 `host-events` / `host-bus` 自己发布，宿主不再替它转接。
 
 ### 对等网络 — `src-tauri/src/server/peer_net/` + `packages/peer-net`
 
@@ -516,7 +544,8 @@ BedCode 通过 `com.bedcode.terminal-session` 插件的任务域（WASM）+ HTTP
 Claude Code Hook (Python/TS, plugins/terminal-session/scripts/ 随包)
     ↓ HTTP POST /api/plugin/com.bedcode.terminal-session/...（旧 auto-task 前缀由宿主别名表应答）
 com.bedcode.terminal-session WASM 任务域（任务状态/队列/模式，经 plugin_controller.rs 声明式端点路由）
-    ↓ DesktopSyncEvent → sync_handler → WebSocket broadcast
+    ↓ SDK SyncEvent → host-events.broadcast_sync(event-json)
+    ↓ 宿主解析 → HostSyncEvent 薄适配 → events::publish → sync_handler → WebSocket broadcast
 Mobile Tauri Event → useAutoExecutor 状态机（移动端）
     ↓ sendInput / HTTP API
 Claude Code (PTY)
@@ -526,10 +555,11 @@ Claude Code (PTY)
 
 - **会话 ID 绑定**：PTY 启动时注入 `BEDCODE_SESSION_ID` 环境变量，Claude Code 子进程继承，hook 脚本读取后上报，插件维护 Claude session ↔ BedCode session 映射
 - **模式切换**：移动端 HTTP 设置自动/手动模式 → 插件持久化 + 广播 → Python PreToolUse hook 查询模式决定 auto-approve
-- **生命周期扩展**：插件经 `SessionLifecycleListener` 在 Creating 阶段注入 hooks、Stopped 阶段清理
-- **输入扩展点**：插件经 `SessionInputListener` 观察提交的输入行
+- **生命周期与输入观察**：v27 起 `terminal-hooks` 导出（`on_session_lifecycle` / `on_input_submitted`）
+  已随会话原语域退役——agent 集成注入与提交行观察都在 `com.bedcode.terminal-session` 自己的
+  编排路径里（`launch::run_creating_integration` / `session::input_line`），宿主不再回调插件
 
-涉及目录：`plugins/terminal-session/`（`rust/src/task/` + `src/components/TaskHistoryView.vue` / `TaskQueueModal.vue`）、`src-tauri/src/wasm_core/`、`src-tauri/src/server/http/controllers/`（plugin_controller）、`src-tauri/src/events/`、`src-tauri/src/session/`（lifecycle/input_line）、`src-tauri/src/pty/`。
+涉及目录：`plugins/terminal-session/`（`rust/src/task/` + `rust/src/session/` + `src/components/TaskHistoryView.vue` / `TaskQueueModal.vue`）、`src-tauri/src/wasm_core/`、`src-tauri/src/server/http/controllers/`（plugin_controller）、`src-tauri/src/events/`、`src-tauri/src/pty/`。
 
 ### 按类型查找
 

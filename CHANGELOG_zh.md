@@ -42,6 +42,12 @@
 
 ### 基础建设
 
+#### 插件→宿主的同步事件 wire 就是出站 wire —— 一份格式，ABI 不 bump（桌面端；移动端 wire 逐字节不变，但第三方插件须重建）
+- `bedcode_plugin_api::events::SyncEvent` 此前走「内部标签 PascalCase + 字段平铺」，宿主转发给移动端时再改写成出站 `SyncPayload` 的形状（adjacently tagged snake_case + `data`）——同一个事件两份格式、三段转换。现在两跳**合成一份**：`SyncEvent` 直接携带 `{"type":"<snake_case 变体>","data":{…}}`，`session` 字段是类型化 `wire::SessionSummary`、状态是 wire 字符串，宿主不再用另一种形状复述会话事件。唯一不对称是 `session_stopped` / `session_removed` 的 `source_device`：给宿主做「排除发起设备」的信封字段，**不出站**
+- **WIT `host-events.broadcast-sync` 签名不变（仍是 `event-json: string`），因此插件 ABI 不动**——变的是插件产出的 JSON 形状与字段类型。随包四个插件产物已重建；**第三方插件必须按当前 `plugin-sdk-desktop` 重建**。未重建的旧产物在解析期被点名拒绝，而不是被当成「没有事件」——AGENTS §8 的 fail-visible 判据这次落在格式变更上而非 interface 删除上
+- 跨端 wire 形状自此有单一事实源：SDK `bedcode-plugin-api::wire` 定义 `SyncPayload` / `SessionSummary` / `SessionControl*` / `Terminal*` / `KeyCombo`，宿主 `enums/{sync,summary,control,special_key}.rs` 缩为 re-export 垫片（导入路径零改动、运行行为零变化），移动端保留平行副本并由 `mobile_parallel_copy_shape_lock` 逐变体钉住与真源一致
+- 补掉门禁空档：形状锁主战场迁进 SDK 后，`test.yml` 只在两端 `src-tauri` 跑 `cargo test`（`sdk-publish.yml` 对 Rust 侧只 `cargo check`），迁过去的锁等于没人执行——桌面 job 现新增 SDK crate 的 `cargo test` 一步
+
 #### 破坏性插件 ABI v27 —— 旧产物必须按新 SDK 重建（仅桌面端；移动端零改动）
 - ABI **26 → 27**，本项目迄今第一次破坏性契约变更：WIT 删除 import 两个 interface（`host-session` 12 函数、`host-terminal` 的 `send`）与 export 两个（`terminal-hooks` 整 interface、`events` 的 `on-session-lifecycle` / `on-input-submitted`）；权限位 `session:write` / `terminal:observe` 退役（词汇 34 → 32），`session:read` 判据面收缩为宿主终端窗口事实。四个随包插件产物均已按新 SDK 重建
 - **旧 SDK 产物在实例化期即失败**（早于 ABI 版本协商），宿主在报错后附加「缺失 interface 名 + 需按当前 SDK 重建」的指引（`LoadedWasmPlugin::stale_artifact_rebuild_hint`）——是可诊断的失败，不是 trap 也不是静默降级。若分发第三方插件，升级前须用当前 `plugin-sdk-desktop` 重建
@@ -56,6 +62,7 @@
 ### 改进
 
 #### 桌面端
+- **`AppEvent` 成为发送协议，宿主不再镜像会话事件（桌面端，会话事件下沉专项票 01–04）**：`AppEvent` 原本是个空 marker trait，事件发送靠专用 `sync_tx` 与处理器内的业务 match。现在它带三个方法——`source_device()` / `validate()` / `to_sync_payload()`——并只经统一入口 `events::publish()`（校验 → 查源 → 投递）：载荷被拒、或该事件类型没注册事件源，都返回 `Err`，不再静报成功；`to_sync_payload` **故意不给默认实现**，新增事件类型必须显式回答走不走同步通道。插件事件只经一个薄适配 `HostSyncEvent` 进入，其载荷折算是同一 wire 的机械转换而非逐变体 match——机械 match 落在宿主就是解释权重回宿主的第一块跳板，变体面一致性改由 SDK 的锁钉住。`SyncEventHandler` 只剩传输面三件事（折载荷、排除发起设备、广播），八个 `handle_*` 方法与 `format!("{:?}").to_lowercase()` 的状态重格式化随镜像枚举 `DesktopSyncEvent` 及其穷尽 `From` 一并删除。`Message::SessionEvent` 同批退役：两端零生产调用方、历史上也从未有生产发送点，会话变更通知自此只有一个面——由插件发布的 `SyncPayload::session_created / session_stopped / session_removed / session_status_changed`。防回接锁两把（`retired_session_event_mirror_is_not_reintroduced`：`src/events/**` 实现段不得再现镜像枚举 / 逐变体构造 `SyncPayload::` / 解读 `SessionStatus`；`sync_handler_does_not_interpret_session_variants`：处理器实现段零变体分支），均做变异自检
 - **会话引擎下沉收官：宿主已「零会话对象」（桌面端，2026-09-24）**：内核会话目录 `src-tauri/src/session/` 整目录删除（登记 / 状态机 / 属主表 / 注解槽 / 业务输出环 / 配置管理器，约 5.0k 行）。会话真源只有一处——`com.bedcode.terminal-session` 的登记域（私有库 `sessions` / `session_annotations` 两表）；宿主侧与会话相关的只剩三样且都无业务语义：PTY 引擎（`host-pty`）、宿主 server 在册连接清单（`host-connection`，票 04 已迁独立原语、判据 `connection:read`）、互调窄转发层（`utils/session_gateway.rs`，插件未激活即显性报错）。移动端线路上输出面随之收敛为唯一一条：订阅 / 退订 / ack / 历史快照 / 会话停止通知全部直读引擎 `PtyRing`（票 06 形态 B），内核兜底分支删除；关停回收与关窗守卫也只引用引擎事实。源码扫描锁 `retired_kernel_session_domain_is_not_reintroduced` 会在任何内核会话符号回接时让构建失败
 - **每插件 PTY 配额改为 manifest 声明（`ptyQuota`），取代单一内核常量（桌面端，会话引擎下沉 P1-b 前置 / H1）**：宿主此前对一切插件统一封顶「在册 `host-pty` 句柄 8 条」。业务会话改走 `host-pty` 之后，这个数字会静默变成「用户能开几个终端」——那是产品档位，不是内核该定的。现在由插件自己声明并发额度，宿主分两层仲裁：构建链只校形态（正整数，避免把内核常量复刻进 JS），加载期拒绝越界声明（`0` 或超 `PLUGIN_PTY_SESSIONS_CEILING_PER_PLUGIN` = 64）且**不夹取**（静默降级等于让插件按拿不到的深度规划业务）。未声明者沿用默认 8 条，既有插件零迁移；配额登记与权限授权同漏斗（声明面只有一个入口），`spawn` 越界文案点名的是**该插件的声明值**
 - **`host-app.plugin-resource-dir` 原语 —— 插件不经生命周期事件即可取自身资源目录（桌面端，会话引擎下沉 P1-b 前置；ABI 仍 v25）**：插件安装目录此前只能经 `on-session-lifecycle(Creating)` 的 `resource_dir` 字段拿到，而创建编排整体移交插件后该事件不再产生，Agent 集成 hook 脚本源会失去输入。新原语返回**调用方自己**的安装目录（与旧事件 payload 同值：`extension_path` 剥离 verbatim 前缀），**不设权限门**（无可授予的权力：不含跨插件信息、零业务语义，同 `host-platform` 口径），未知插件显性报错而非返回空串。`com.bedcode.terminal-session` 改为自取该目录，取不到时显性告警并跳过集成注入

@@ -250,7 +250,7 @@ bedcode-mobile/                       # 移动端项目 (Tauri 2.0 + Vue 3)
 通过 WebSocket 事件接收桌面端推送的任务状态变更，驱动任务执行与通知：
 
 ```
-Desktop PluginManager → DesktopSyncEvent → WebSocket broadcast
+Desktop 插件任务域 → SDK SyncEvent → 宿主 HostSyncEvent 薄适配 → WebSocket broadcast (sync_data)
     ↓ ws_sync_task_status_changed / ws_sync_session_mode_changed
 Mobile Tauri Event → useMobileCommands 监听 → useMobileConnection 更新会话状态
     ↓ useNotification 系统通知
@@ -259,7 +259,7 @@ Mobile UI（会话卡片 / AutoTaskPanelHost 任务队列）
 Desktop PTY → Claude Code
 ```
 
-模式切换走 HTTP（不经过 PTY）：`POST /api/plugin/com.bedcode.auto-task/session-mode`（JWT 认证）→ 广播回同步 UI。
+模式切换走 HTTP（不经过 PTY）：`POST /api/plugin/com.bedcode.terminal-session/session-mode`（JWT 认证）→ 广播回同步 UI。
 
 涉及目录：`src/composables/`（useMobileConnection/useNotification/useHttpApi/usePresetTasks）、
 `src/components/`（TaskPickerModal/TaskEditDialog）、`src/plugin/auto-task/`。

@@ -225,8 +225,10 @@ WS 会话/终端控制动作的**词表来源**从「宿主硬编码 switch」�
    转发插件互调 api `session-ws-control`（宿主不解动作名语义）→ 响应动作 JSON 套回
    `Message::SessionControl` 信封（原 `message_id`；信封 `session_id` 取自响应动作的
    `session_id` 字段——start = 新建会话 id，与旧宿主路径逐字一致）。
-4. **传输面契约仍在宿主（H2）**：`Message` / `SessionControlAction` / `SessionSummary` 等
-   wire 形状类型与编解码继续宿主持有（移动端线协议需要）；迁走的是**词表解释与业务编排**。
+4. **传输面契约仍在宿主（H2）**：`Message` 枚举与编解码继续宿主持有（移动端线协议需要）；
+   迁走的是**词表解释与业务编排**。`SessionControlAction` / `SessionSummary` 等 wire **形状**
+   自会话事件下沉专项票 01 起不在宿主定义——收编进 SDK `bedcode-plugin-api::wire`，宿主
+   `enums/` 只剩 re-export 垫片（修订口径见下「会话事件面与线协议真源」节 H2′）。
    `SessionControlAction` 请求分派不再在宿主出现——grep 断言宿主 WS 层无业务词表 switch。
 5. **数据面不动（H1）**：终端输出订阅 / 输入 / 双速模式（`/ws/terminal/session/{id}` 控制帧）
    是引擎原语（PtyRing + 订阅者执行体），不迁插件；`Message::Terminal` 的 Input/Subscribe/
@@ -234,7 +236,59 @@ WS 会话/终端控制动作的**词表来源**从「宿主硬编码 switch」�
 6. **移动端零改动**：旧 `/ws/event` 协议 wire（`Message::SessionControl` 请求/响应形状）逐字
    不变（翻天覆地测试：`pty_session_chain` 经转发层全绿）；声明端点是新路由，老客户端不受影响。
 
-## 加密引擎化（crypto 能力面与协商参数化，票 01-05，2026-09-24 桌面端）
+## 会话事件面与线协议真源（专项票 01–04，2026-09-24 桌面端，ABI 不变）
+
+P1-b 之后会话真源已在 `com.bedcode.terminal-session`，但宿主的**事件路径**仍是三段重复转换：
+SDK `SyncEvent`（内部标签 PascalCase、字段平铺）→ `DesktopSyncEvent` 穷尽 `From` 镜像 →
+`SyncEventHandler` 按 11 个变体业务 match 重建 `SyncPayload`（顺带把线格式改写成
+adjacently tagged snake_case、把状态 `format!("{:?}").to_lowercase()`）。宿主因此继续持有一份
+**会话业务事件枚举与其解释权**，与本文件的裁剪线冲突。落地为四票 expand–contract，
+实施与实测见 `.scratch/2026-09-24-session-events-app-event-poly/`。
+
+1. **线协议真源进 SDK（票 01）**：`SyncPayload` / `SessionSummary` / `SessionControl*` /
+   `Terminal*` / `KeyCombo` 五类跨端形状收编 `bedcode-plugin-api::wire`（宿主 `enums/` 对应
+   四文件缩为 `pub use` 垫片，导入路径零改动，运行行为零变化）。锁分两层：SDK 侧全变体
+   wire 形状锁 + 移动端平行副本逐变体对照锁（`mobile_parallel_copy_shape_lock`）；宿主侧
+   **类型身份锁**（`crate::enums::*` 与 SDK 路径必须是同一类型，编译期）+ **垫片零定义**
+   （源层面扫 `pub enum` / `struct` / `impl`，变异自检对 HEAD 旧内容命中 4/2/14/64 处）。
+2. **`AppEvent` 从空 marker 变成发送协议（票 02）**：`source_device()` / `validate()` /
+   `to_sync_payload()` 三方法 + 统一入口 `events::publish()`（校验 → 查源 → 投递）。
+   `to_sync_payload` **无默认实现**——新增事件类型必须显式回答走不走同步通道，否则「事件发了、
+   没人广播、测试全绿」就是默认形态。`publish` 在无事件源时 `Err(NoSource)`：底层
+   `EventMatcher::publish` 的「无源即丢弃返回 Ok」原语义保留，显性失败补在统一入口。
+3. **两跳合一 wire（票 02，D1）**：`SyncEvent` 改 `tag="type", content="data",
+   rename_all="snake_case"`，字段类型与 `SyncPayload` 对齐（`session` 用类型化
+   `wire::SessionSummary`，状态用 wire 字符串）。唯一例外：`session_stopped` / `session_removed`
+   的 `source_device` 是信封字段，**不出站**（移动端形状逐字节不变）。插件→宿主这一跳的 JSON
+   不进 WIT 类型（仍 `event-json: string`），**故不 bump ABI**（`host-events.broadcast-sync`
+   签名不变）；换格式后未随包重建的旧产物在**解析期**被点名拒绝，不降级成「无事件」——
+   §8「真源换了地方就要 fail-visible」的第 ① 形态。
+4. **宿主只剩薄适配 + 瘦处理器（票 03）**：`broadcast_sync` = 解析 → `HostSyncEvent` newtype
+   （orphan rule 所需，同时标出「已进入宿主面」这条边界）→ `publish`；处理器只剩折载荷 +
+   排除源设备 + `Message::SyncData` 广播，11 个 `handle_*` 与状态 Debug 重格式化删除。
+   `to_sync_payload` 是同一 wire 的**机械折算**而非逐变体 match——机械 match 落在宿主就是
+   解释权重回宿主的第一块跳板，改由 SDK 侧三条同构锁保证「新增变体漏配即红」。
+5. **镜像与遗留面退役（票 04）**：`DesktopSyncEvent` 与其 `From` 整文件删除；宿主本地 wire
+   定义无残留；`Message::SessionEvent`（`session_event` 构造器）两端**零生产调用方**
+   （历史 `git log -S` 亦无生产发送点）→ 变体与构造器一并退役，会话变更通知的唯一面是
+   `SyncPayload::session_created/stopped/removed/status_changed`（由插件发布）。防回接锁：
+   `retired_session_event_mirror_is_not_reintroduced`（`src/events/**` + `src/enums/**` 实现段
+   不得再现镜像枚举 / `SyncPayload::` 逐变体构造 / `SessionStatus` 解读）+
+   `sync_handler_does_not_interpret_session_variants`（处理器实现段零变体分支），
+   两条都做了变异自检。
+6. **口径边界（H2′，修订上文第 4 点）**：宿主仍**持有** `Message::{SyncData, SessionControl,
+   Terminal}` 枚举与编解码（传输面），但**形状定义与解释权在 SDK / 插件**——宿主不解动作语义、
+   不按事件变体决定推送内容。裁剪线判据不变：宿主能力只暴露「离宿主无法实现、且无业务语义」
+   的原语；**事件的形状不算原语**。
+7. **移动端零改动**：移动端 `SyncPayload` 保留平行副本（ADR 0018/0019 双端分叉口径），
+   与真源的一致性由 SDK 的逐变体对照锁钉住；出站 JSON 逐字节不变（票 02 双轨对照用例
+   在切换前实测：9 条样本新旧路径 `SyncPayload` 序列化结果全等，唯一已知分叉是旧路径
+   对 `SessionStatusChanged` 的 Debug 重格式化，而该变体零生产者）。
+8. **门禁补口**：形状锁主战场迁进 SDK 后，`test.yml`（只在两端 `src-tauri` 跑 `cargo test`）
+   不再执行它们 → 桌面 job 新增 `cargo test --manifest-path
+   bedcode-desktop/packages/plugin-sdk-desktop/rust/Cargo.toml`。移动端 SDK 的同一空档
+   登记为后续对称项。
+
 
 用户 2026-09-24 方向指令第一部分：「WS 层面只留加密抽象层；加密具体实现在宿主侧，通过聚合全局
 加密方法大全实现具体加密；插件通过指定加密方法调用宿主加密」。落地为 `crypto/` 引擎模块 + `host-crypto`
