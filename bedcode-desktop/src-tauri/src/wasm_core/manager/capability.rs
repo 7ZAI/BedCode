@@ -27,7 +27,8 @@ use tokio::sync::Mutex;
 use wasmtime::component::Instance;
 use wasmtime::Store;
 
-use super::runtime::{block_on_async, LoadedWasmPlugin, WasmHostContext, WasmPluginState};
+use super::runtime::{LoadedWasmPlugin, WasmHostContext, WasmPluginState};
+use crate::wasm_core::runtime_util::block_on_async;
 
 // ==================== 能力名与导出探测表 ====================
 

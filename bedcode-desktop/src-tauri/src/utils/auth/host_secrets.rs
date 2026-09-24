@@ -82,7 +82,7 @@ impl HostSecretStore {
         let db = self.db.clone();
         let owner = HOST_SECRET_OWNER.to_string();
         let k = key.to_string();
-        crate::wasm_core::manager::runtime::block_on_async(async move {
+        crate::wasm_core::runtime_util::block_on_async(async move {
             let db = db.lock().await;
             db.conn()
                 .query_row(
@@ -102,7 +102,7 @@ impl HostSecretStore {
         let k = key.to_string();
         let v = hexed.to_string();
         let now = chrono::Utc::now().to_rfc3339();
-        crate::wasm_core::manager::runtime::block_on_async(async move {
+        crate::wasm_core::runtime_util::block_on_async(async move {
             let db = db.lock().await;
             db.conn()
                 .execute(

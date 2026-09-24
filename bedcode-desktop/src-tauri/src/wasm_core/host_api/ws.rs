@@ -215,7 +215,7 @@ pub(crate) fn ws_connect(host_ctx: &WasmHostContext, plugin_id: &str, config_jso
     };
 
     // 同步阻塞至握手完成（与 host-http 非流式模式同一 block_on 桥）
-    let (stream, response) = crate::wasm_core::manager::runtime::block_on_async(async move {
+    let (stream, response) = crate::wasm_core::runtime_util::block_on_async(async move {
         tokio::time::timeout(
             Duration::from_secs(timeout_secs),
             tokio_tungstenite::connect_async_with_config(request, Some(ws_config), false),
@@ -452,7 +452,7 @@ pub(crate) fn ws_send_text_to_client(
     let endpoint = endpoint_id.to_string();
     let client = client_id.to_string();
     let text = text.to_string();
-    crate::wasm_core::manager::runtime::block_on_async(async move {
+    crate::wasm_core::runtime_util::block_on_async(async move {
         WsSessionRegistry::global()
             .send_to_endpoint_client(&endpoint, &client, text)
             .await
@@ -479,7 +479,7 @@ pub(crate) fn ws_send_binary_to_client(
     let endpoint = endpoint_id.to_string();
     let client = client_id.to_string();
     let payload = payload.to_vec();
-    crate::wasm_core::manager::runtime::block_on_async(async move {
+    crate::wasm_core::runtime_util::block_on_async(async move {
         WsSessionRegistry::global()
             .send_binary_to_endpoint_client(&endpoint, &client, payload)
             .await
@@ -506,7 +506,7 @@ pub(crate) fn ws_broadcast_text(
     owned_endpoint(endpoint_id, plugin_id)?;
     let endpoint = endpoint_id.to_string();
     let text = text.to_string();
-    let sent = crate::wasm_core::manager::runtime::block_on_async(async move {
+    let sent = crate::wasm_core::runtime_util::block_on_async(async move {
         WsSessionRegistry::global().broadcast_to_endpoint(&endpoint, text).await
     });
     Ok(sent as u32)
@@ -530,7 +530,7 @@ pub(crate) fn ws_broadcast_binary(
     owned_endpoint(endpoint_id, plugin_id)?;
     let endpoint = endpoint_id.to_string();
     let payload = payload.to_vec();
-    let sent = crate::wasm_core::manager::runtime::block_on_async(async move {
+    let sent = crate::wasm_core::runtime_util::block_on_async(async move {
         WsSessionRegistry::global()
             .broadcast_binary_to_endpoint(&endpoint, payload)
             .await
@@ -560,7 +560,7 @@ pub(crate) fn ws_close_client(
     let reason = close.reason.unwrap_or_else(|| "kicked by plugin".to_string());
     let endpoint = endpoint_id.to_string();
     let client = client_id.to_string();
-    Ok(crate::wasm_core::manager::runtime::block_on_async(async move {
+    Ok(crate::wasm_core::runtime_util::block_on_async(async move {
         WsSessionRegistry::global()
             .disconnect_endpoint_client(&endpoint, &client, code, &reason)
             .await
@@ -592,7 +592,7 @@ pub(crate) fn ws_unregister_endpoint(
     }
     crate::server::websocket::endpoint::remove(endpoint_id);
     let endpoint = entry.endpoint_id.clone();
-    let closed = crate::wasm_core::manager::runtime::block_on_async(async move {
+    let closed = crate::wasm_core::runtime_util::block_on_async(async move {
         WsSessionRegistry::global()
             .disconnect_by_endpoint(&endpoint, 4005, "endpoint unregistered")
             .await
@@ -620,7 +620,7 @@ pub(crate) fn ws_list_clients(
     }
     owned_endpoint(endpoint_id, plugin_id)?;
     let endpoint = endpoint_id.to_string();
-    let clients = crate::wasm_core::manager::runtime::block_on_async(async move {
+    let clients = crate::wasm_core::runtime_util::block_on_async(async move {
         WsSessionRegistry::global().list_by_endpoint(&endpoint).await
     });
     let list: Vec<serde_json::Value> = clients
@@ -653,7 +653,7 @@ pub(crate) fn ws_list_endpoints(host_ctx: &WasmHostContext, plugin_id: &str) -> 
     let mut list: Vec<serde_json::Value> = Vec::with_capacity(entries.len());
     for entry in entries {
         let endpoint = entry.endpoint_id.clone();
-        let client_count = crate::wasm_core::manager::runtime::block_on_async(async move {
+        let client_count = crate::wasm_core::runtime_util::block_on_async(async move {
             WsSessionRegistry::global().endpoint_client_count(&endpoint).await
         });
         list.push(serde_json::json!({
@@ -695,7 +695,7 @@ pub(crate) fn purge_for_plugin(plugin_id: &str) -> usize {
     let endpoints = crate::server::websocket::endpoint::purge_for_plugin(plugin_id);
     for entry in endpoints {
         let endpoint = entry.endpoint_id.clone();
-        let closed = crate::wasm_core::manager::runtime::block_on_async(async move {
+        let closed = crate::wasm_core::runtime_util::block_on_async(async move {
             WsSessionRegistry::global()
                 .disconnect_by_endpoint(&endpoint, 4005, "plugin deactivated")
                 .await

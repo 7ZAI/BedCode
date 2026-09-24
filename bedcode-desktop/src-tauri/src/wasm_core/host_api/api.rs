@@ -30,7 +30,8 @@
 
 use super::bus;
 use crate::wasm_core::bus::{BusMessageHandler, MessageBus};
-use crate::wasm_core::manager::runtime::{block_on_async, WasmHostContext};
+use crate::wasm_core::manager::runtime::WasmHostContext;
+use crate::wasm_core::runtime_util::block_on_async;
 use bedcode_plugin_api::host::bus::API_TOPIC_PREFIX;
 use serde_json::Value;
 use std::sync::Arc;

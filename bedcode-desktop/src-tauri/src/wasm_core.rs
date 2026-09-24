@@ -9,6 +9,8 @@
 //! - [`bus`]：消息总线模块（core-bus）——插件间 topic 消息
 //! - [`host_api`]：宿主对外接口模块（core-host-api）——宿主向插件（`host-*` 原语）
 //!   与前端（Tauri 命令桥）提供的能力面
+//! - [`runtime_util`]：异步桥基础设施（core-runtime-util）——同步↔异步桥与 ambient
+//!   runtime，中立层（`manager` / `host_api` / `security` 皆可依赖，其自身零兄弟依赖）
 //!
 //! 模块间协作只经本 facade 再导出或 trait 注入（如 [`bus::MessageDispatcher`]），
 //! 禁止新增横向耦合；[`permission`] 为共享词汇（bedcode-plugin-api 再导出），
@@ -23,6 +25,9 @@ pub mod host_api;
 pub mod manager;
 pub mod monitor;
 pub mod permission;
+/// 异步桥基础设施：`manager` / `host_api` / `security` 共用的中立层，
+/// 自身不依赖任何 wasm_core 兄弟模块（票 01）
+pub(crate) mod runtime_util;
 pub mod security;
 
 // ==================== Facade 再导出 ====================

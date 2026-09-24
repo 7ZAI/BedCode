@@ -8,7 +8,8 @@
 //! 「peer 命令面复用」时期的错放（ADR 0022 v2 已把 pick-* 判归 host-platform）。
 //! 传输域不再承载平台对话框，插件一律走本域。
 
-use crate::wasm_core::manager::runtime::{block_on_async, WasmHostContext};
+use crate::wasm_core::manager::runtime::WasmHostContext;
+use crate::wasm_core::runtime_util::block_on_async;
 use tauri_plugin_dialog::DialogExt;
 
 /// 系统多文件选择器 → string[] JSON（用户取消为空数组）

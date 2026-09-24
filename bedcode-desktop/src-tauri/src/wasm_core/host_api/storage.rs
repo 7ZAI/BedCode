@@ -9,7 +9,8 @@
 //!（WIT `result<option<string>, string>` 载荷为 JSON 文本）。
 
 use crate::wasm_core::manager::capability;
-use crate::wasm_core::manager::runtime::{block_on_async, WasmHostContext};
+use crate::wasm_core::manager::runtime::WasmHostContext;
+use crate::wasm_core::runtime_util::block_on_async;
 use crate::wasm_core::permission::PERMISSION_STORAGE;
 
 /// 获取值（权限校验 + 服务调用）

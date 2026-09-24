@@ -2,7 +2,8 @@
 //!
 //! 含 SQL 表名前缀校验与 rusqlite 列 → JSON 转换辅助
 
-use crate::wasm_core::manager::runtime::{block_on_async, WasmHostContext};
+use crate::wasm_core::manager::runtime::WasmHostContext;
+use crate::wasm_core::runtime_util::block_on_async;
 use crate::wasm_core::permission::{PERMISSION_DATABASE_MAIN, PERMISSION_STORAGE};
 use crate::system::constants::{
     PLUGIN_DB_EXECUTE_BATCH_MAX_STATEMENTS, PLUGIN_DB_QUERY_MAX_BYTES, PLUGIN_DB_QUERY_MAX_ROWS,
@@ -912,7 +913,7 @@ mod tests {
     /// 直接在宿主主库上播种（模拟「别的插件/宿主自己的数据本来就在这张库里」）
     fn seed_main(ctx: &WasmHostContext, sql: &str) {
         let db = Arc::clone(&ctx.db);
-        crate::wasm_core::manager::runtime::block_on_async(async move {
+        crate::wasm_core::runtime_util::block_on_async(async move {
             let db = db.lock().await;
             db.conn().execute_batch(sql).expect("宿主侧播种语句应成功");
         });
@@ -921,7 +922,7 @@ mod tests {
     /// 主库里某张表当前的行数（用于断言「拒绝不留副作用」）
     fn main_row_count(ctx: &WasmHostContext, table: &str) -> i64 {
         let db = Arc::clone(&ctx.db);
-        crate::wasm_core::manager::runtime::block_on_async(async move {
+        crate::wasm_core::runtime_util::block_on_async(async move {
             let db = db.lock().await;
             db.conn()
                 .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get::<_, i64>(0))

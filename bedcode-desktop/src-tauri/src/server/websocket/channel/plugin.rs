@@ -265,7 +265,7 @@ impl ChannelHandler for PluginChannel {
             let endpoint_id = self.endpoint_id.clone();
             let client_id = self.client_id.clone();
             crate::system::error_boundary::spawn_with_error_boundary_on(
-                &crate::wasm_core::manager::runtime::ambient_handle(),
+                &crate::wasm_core::runtime_util::ambient_handle(),
                 "ws_endpoint_delivery",
                 run_endpoint_delivery(rx, bus, owner, endpoint_id, client_id),
             );

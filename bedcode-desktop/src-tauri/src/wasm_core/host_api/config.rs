@@ -3,7 +3,8 @@
 //! `config_get`（权限/白名单校验 + 读取）供 Component Model 绑定
 //! （`wasm_runtime::component`）调用。
 
-use crate::wasm_core::manager::runtime::{block_on_async, WasmHostContext};
+use crate::wasm_core::manager::runtime::WasmHostContext;
+use crate::wasm_core::runtime_util::block_on_async;
 use crate::system::config::AppConfig;
 use bedcode_plugin_api::host::ConfigKey;
 

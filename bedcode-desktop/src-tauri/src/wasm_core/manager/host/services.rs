@@ -24,7 +24,7 @@ use bedcode_plugin_api::PluginState;
 
 impl PluginServices for PluginHost {
     fn mark_plugin_error(&self, plugin_id: String, error: String) {
-        crate::wasm_core::manager::runtime::block_on_async(async move {
+        crate::wasm_core::runtime_util::block_on_async(async move {
             // 仅通知前端弹窗提示：不置 Error、不持久化，插件保持激活，会话照常运行。
             // hooks 安装失败等自检错误属可恢复/局部问题，不应因此禁用整个插件。
             tracing::error!(plugin_id = %plugin_id, error = %error, "[PluginHost] Plugin self-check failed");
@@ -115,7 +115,7 @@ impl PluginServices for PluginHost {
         };
         let host = self.clone();
         let pid = plugin_id.clone();
-        crate::wasm_core::manager::runtime::block_on_async(async move {
+        crate::wasm_core::runtime_util::block_on_async(async move {
             match host
                 .with_wasm_plugin_call(&pid, move |plugin| plugin.on_process_done(&event_str))
                 .await
@@ -150,7 +150,7 @@ impl PluginServices for PluginHost {
         };
         let host = self.clone();
         let pid = plugin_id.clone();
-        crate::wasm_core::manager::runtime::block_on_async(async move {
+        crate::wasm_core::runtime_util::block_on_async(async move {
             match host
                 .with_wasm_plugin_call(&pid, move |plugin| plugin.on_task_event(&event_str))
                 .await
@@ -309,7 +309,7 @@ impl crate::wasm_core::bus::MessageDispatcher for PluginHost {
         let host = self.clone();
         let plugin_id = plugin_id.to_string();
         let msg = msg.clone();
-        crate::wasm_core::manager::runtime::block_on_async(async move {
+        crate::wasm_core::runtime_util::block_on_async(async move {
             // 调用失败（trap/store 中毒）时自动重载恢复，见 with_wasm_plugin_call
             let msg = msg.clone();
             host.with_wasm_plugin_call(&plugin_id, move |plugin| {
@@ -334,7 +334,7 @@ impl crate::wasm_core::bus::MessageDispatcher for PluginHost {
         let host = self.clone();
         let plugin_id = plugin_id.to_string();
         let frame = frame.clone();
-        crate::wasm_core::manager::runtime::block_on_async(async move {
+        crate::wasm_core::runtime_util::block_on_async(async move {
             let delivered = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
             let flag = delivered.clone();
             host.with_wasm_plugin_call(&plugin_id, move |plugin| {
@@ -350,7 +350,7 @@ impl crate::wasm_core::bus::MessageDispatcher for PluginHost {
 
     fn is_activated(&self, plugin_id: &str) -> bool {
         let plugins = self.plugins.clone();
-        crate::wasm_core::manager::runtime::block_on_async(async move {
+        crate::wasm_core::runtime_util::block_on_async(async move {
             let plugins = plugins.read().await;
             plugins
                 .get(plugin_id)

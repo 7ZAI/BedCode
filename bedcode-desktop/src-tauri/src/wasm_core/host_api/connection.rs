@@ -8,7 +8,8 @@
 //! 入口**：`host_api::session` 里那条同判据的旧别名已随 `host-session` interface
 //! 删除（`session:read` 这把第二钥匙彻底不存在）。
 
-use crate::wasm_core::manager::runtime::{block_on_async, WasmHostContext};
+use crate::wasm_core::manager::runtime::WasmHostContext;
+use crate::wasm_core::runtime_util::block_on_async;
 use crate::wasm_core::permission::PERMISSION_CONNECTION_READ;
 
 /// 连接注册表原始记录清单（票 04，权限 `connection:read`）

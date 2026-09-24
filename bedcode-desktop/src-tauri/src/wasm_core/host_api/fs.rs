@@ -4,7 +4,8 @@
 //! 发行版 Stopped 时 UNC 路径不可达，自动改用 wsl.exe 桥接访问。
 
 use super::wsl_fs;
-use crate::wasm_core::manager::runtime::{block_on_async, WasmHostContext};
+use crate::wasm_core::manager::runtime::WasmHostContext;
+use crate::wasm_core::runtime_util::block_on_async;
 use crate::wasm_core::permission::PERMISSION_FS_READ;
 use crate::wasm_core::security::fs_auth::FsOp;
 

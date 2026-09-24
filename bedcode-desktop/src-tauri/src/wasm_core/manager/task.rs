@@ -41,8 +41,9 @@ use serde::Deserialize;
 use tokio::sync::mpsc as tmpsc;
 
 use crate::wasm_core::host_api::{fs, http, process};
-use crate::wasm_core::manager::runtime::{ambient_handle, WasmHostContext};
+use crate::wasm_core::manager::runtime::WasmHostContext;
 use crate::wasm_core::monitor::{MetricsRegistry, MetricsSource};
+use crate::wasm_core::runtime_util::ambient_handle;
 use crate::system::constants as C;
 
 // ==================== 数据类型 ====================
@@ -344,7 +345,7 @@ fn ensure_unit_path_granted(host_ctx: &Arc<WasmHostContext>, owner: &str, unit: 
         // 缺路径的单元由各 kind 自己报错（那才是它契约里的事），这里不替它判
         return Ok(());
     };
-    if crate::wasm_core::manager::runtime::block_on_async(host_ctx.fs_auth().is_granted(owner, path)) {
+    if crate::wasm_core::runtime_util::block_on_async(host_ctx.fs_auth().is_granted(owner, path)) {
         return Ok(());
     }
     Err(format!(
@@ -1056,7 +1057,7 @@ mod tests {
         assert!(err.contains("request-auth"), "错误文案须给出出路: {err}");
 
         // ③ 预置持久化授权（= 用户在弹窗里点过「记住」）→ 放行
-        crate::wasm_core::manager::runtime::block_on_async(ctx.fs_auth().save_granted_path("com.test.p", &path))
+        crate::wasm_core::runtime_util::block_on_async(ctx.fs_auth().save_granted_path("com.test.p", &path))
             .expect("seed grant");
         ensure_unit_path_granted(&ctx, "com.test.p", &read_unit).expect("已授权路径须放行");
 

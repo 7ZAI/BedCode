@@ -22,7 +22,8 @@
 
 #[cfg(test)]
 use super::plugin_debug_mode;
-use super::{block_on_async, StoreSpec, WasmHostContext, WasmPluginState};
+use super::{StoreSpec, WasmHostContext, WasmPluginState};
+use crate::wasm_core::runtime_util::block_on_async;
 #[cfg(test)]
 use crate::wasm_core::config::StoreLimits;
 use crate::wasm_core::host_api::{

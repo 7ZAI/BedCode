@@ -58,7 +58,8 @@ use crate::system::constants::{
     PLUGIN_PTY_RING_FETCH_MAX_BYTES, PLUGIN_PTY_RING_MAX_BYTES,
 };
 use crate::wasm_core::bus::MessageBus;
-use crate::wasm_core::manager::runtime::{block_on_async, WasmHostContext};
+use crate::wasm_core::manager::runtime::WasmHostContext;
+use crate::wasm_core::runtime_util::block_on_async;
 use crate::wasm_core::permission::{PERMISSION_PTY_IO, PERMISSION_PTY_SPAWN};
 use portable_pty::CommandBuilder;
 use serde::Deserialize;
@@ -436,7 +437,7 @@ fn spawn_exit_monitor(
     bus: Arc<MessageBus>,
 ) {
     crate::system::error_boundary::spawn_with_error_boundary_on(
-        &crate::wasm_core::manager::runtime::ambient_handle(),
+        &crate::wasm_core::runtime_util::ambient_handle(),
         "pty_exit_monitor",
         reap_and_publish(pty_id, owner, lifecycle_rx, bus),
     );

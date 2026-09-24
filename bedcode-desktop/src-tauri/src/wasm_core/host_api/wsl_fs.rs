@@ -11,7 +11,7 @@
 //! wsl.exe 可能长时间无响应，无超时的阻塞等待会悬挂调用方（如插件停用路径的
 //! hooks 清理会逐项目 spawn wsl.exe）。超时后返回错误并终止子进程。
 
-use crate::wasm_core::manager::runtime::block_on_async;
+use crate::wasm_core::runtime_util::block_on_async;
 
 /// wsl.exe 子进程超时：发行版冷启动（数秒）加桥接命令余量；超时即失败，避免调用方悬挂
 const WSL_CMD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);

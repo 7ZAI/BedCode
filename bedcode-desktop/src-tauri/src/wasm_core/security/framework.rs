@@ -204,7 +204,7 @@ impl ResourceAuthorizer for FsAuthorizer {
 
     fn check_approved(&self, req: &AuthRequest) -> AuthDecision {
         let granted =
-            crate::wasm_core::manager::runtime::block_on_async(self.fs_auth.is_granted(req.plugin_id, req.target));
+            crate::wasm_core::runtime_util::block_on_async(self.fs_auth.is_granted(req.plugin_id, req.target));
         if granted {
             AuthDecision::Allow
         } else {
@@ -219,7 +219,7 @@ impl ResourceAuthorizer for FsAuthorizer {
             other => return AuthDecision::Deny(format!("未知 fs 操作 '{other}'")),
         };
         let allowed =
-            crate::wasm_core::manager::runtime::block_on_async(self.fs_auth.check(req.plugin_id, req.target, op));
+            crate::wasm_core::runtime_util::block_on_async(self.fs_auth.check(req.plugin_id, req.target, op));
         if allowed {
             AuthDecision::Allow
         } else {

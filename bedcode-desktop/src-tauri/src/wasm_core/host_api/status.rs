@@ -4,7 +4,7 @@
 //! 插件检测到配置失败（如 hooks 脚本拷贝失败、settings.json 写入失败）时，
 //! 通知宿主，宿主仅弹窗提示前端，不改插件状态。
 
-use crate::wasm_core::manager::runtime::block_on_async;
+use crate::wasm_core::runtime_util::block_on_async;
 
 /// 标记插件为错误状态
 ///

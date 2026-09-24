@@ -128,7 +128,7 @@ impl PluginHost {
     /// 任何 tokio runtime——否则其内部 `handle.block_on` 会 panic
     /// （"Cannot start a runtime from within a runtime"）。故所有 guest 调用
     /// 统一搬到 `spawn_blocking` 阻塞线程执行：该线程无当前 handle，wasi 走
-    /// 其自身 ambient runtime；宿主函数经 [`block_on_async`] 的 ambient 兜底
+    /// 其自身 ambient runtime；宿主函数经 [`crate::wasm_core::runtime_util::block_on_async`] 的 ambient 兜底
     /// 同样可阻塞执行。非 WASI 插件不受影响（未见 wasi 导入就不触发）。
     ///
     /// 返回 `Result<crate::Result<T>, panic 载荷>`：guest 的 `crate::Result<T>`
@@ -146,7 +146,7 @@ impl PluginHost {
             // 阻塞线程无当前 tokio handle，符合 wasi 同步绑定（in_tokio）要求；
             // 在 ambient runtime 上驱动 tokio 锁（借用闭包内 Arc，见 block_on_ambient），
             // guest 调用在无 handle 线程执行，锁在 catch_unwind 后由 drop 释放
-            let mut guard = crate::wasm_core::manager::runtime::block_on_ambient(wasm_plugin.lock());
+            let mut guard = crate::wasm_core::runtime_util::block_on_ambient(wasm_plugin.lock());
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| call(&mut guard)))
         })
         .await
