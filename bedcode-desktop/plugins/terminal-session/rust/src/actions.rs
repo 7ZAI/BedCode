@@ -444,14 +444,10 @@ pub fn restart_via_host(draft_json: &serde_json::Value) -> Result<serde_json::Va
         .ok_or_else(|| format!("会话配置不存在：{}", config_id))?;
     let spec = crate::launch::build_launch_spec(&config, None, None, true)?;
 
-    // 编排职责 3：先摘记录 + 广播 SessionRemoved，再杀旧 PTY（退出事件按已无
-    // 记录 no-op，见函数文档）
+    // 编排职责 3：先摘记录 + 发布 SessionRemoved，再杀旧 PTY（退出事件按已无
+    // 记录 no-op，见函数文档）。websocket 业务下沉票 05：会话事件由本插件自发布
     crate::session::note_removed(&request.session_id)?;
-    let _ = WasmHost.broadcast_sync(&bedcode_plugin_api::events::SyncEvent::SessionRemoved {
-        session_id: request.session_id.clone(),
-        session_name: name.clone(),
-        source_device: String::new(),
-    });
+    crate::session::events::publish_removed(&request.session_id, &name, "");
     if let Some(old_pty) = record.pty_id.as_deref() {
         if let Err(e) = WasmHost.pty_kill(old_pty) {
             // 句柄已摘除 = 旧进程已自然退出，重启不受影响（重建会开新 PTY）
@@ -497,13 +493,10 @@ pub fn remove_via_host(draft_json: &serde_json::Value) -> Result<serde_json::Val
         .to_string();
     // 存在性宽容（对齐内核 `remove_session_with_source` 的幂等语义）：删不存在的
     // 会话不是错误（移动端移除已消失会话、WS 控制面 ghost 回显都不应报错），
-    // 且仍广播 SessionRemoved（多客户端一致性：其他端需刷新列表——内核同口径）。
+    // 且仍发布 SessionRemoved（多客户端一致性：其他端需刷新列表；websocket
+    // 业务下沉票 05 起由本插件自发布，session_name 显式空串=缺失）。
     let Some(record) = crate::session::record_via_host(&request.session_id)? else {
-        let _ = WasmHost.broadcast_sync(&bedcode_plugin_api::events::SyncEvent::SessionRemoved {
-            session_id: request.session_id.clone(),
-            session_name: String::new(),
-            source_device: source_device.clone(),
-        });
+        crate::session::events::publish_removed(&request.session_id, "", &source_device);
         return Ok(serde_json::json!({
             "sessionId": request.session_id,
             "removed": true,
@@ -519,11 +512,7 @@ pub fn remove_via_host(draft_json: &serde_json::Value) -> Result<serde_json::Val
             ));
         }
     }
-    let _ = WasmHost.broadcast_sync(&bedcode_plugin_api::events::SyncEvent::SessionRemoved {
-        session_id: request.session_id.clone(),
-        session_name: record.name,
-        source_device: source_device.clone(),
-    });
+    crate::session::events::publish_removed(&request.session_id, &record.name, &source_device);
     Ok(serde_json::json!({ "sessionId": request.session_id, "removed": true }))
 }
 

@@ -48,6 +48,17 @@ pub const EVENT_TASK_STATUS_CHANGED: &str = "task:status-changed";
 /// 插件 UI 事件：会话自动授权模式变更
 pub const EVENT_SESSION_MODE_CHANGED: &str = "session:mode-changed";
 
+/// 插件 UI 事件：会话创建（websocket 业务下沉票 05：会话生命周期事件归插件，
+/// 宿主不再解释/广播同步载荷；载荷自足，emit 与 bus 同形）
+pub const EVENT_SESSION_CREATED: &str = "session:created";
+
+/// 插件 UI 事件：会话停止（终态，含自然退出与 kill——唯一发布点在
+/// `session::on_pty_exit`）
+pub const EVENT_SESSION_STOPPED: &str = "session:stopped";
+
+/// 插件 UI 事件：会话移除（含重启编排的旧会话摘除）
+pub const EVENT_SESSION_REMOVED: &str = "session:removed";
+
 /// 插件 UI 事件：任务队列变更
 pub const EVENT_TASK_QUEUE_CHANGED: &str = "task:queue-changed";
 
@@ -84,6 +95,9 @@ mod tests {
         // 事件名即消息总线 topic / 前端 events.on 的 key，改动会造成两端失配
         assert_eq!(EVENT_TASK_STATUS_CHANGED, "task:status-changed");
         assert_eq!(EVENT_SESSION_MODE_CHANGED, "session:mode-changed");
+        assert_eq!(EVENT_SESSION_CREATED, "session:created");
+        assert_eq!(EVENT_SESSION_STOPPED, "session:stopped");
+        assert_eq!(EVENT_SESSION_REMOVED, "session:removed");
         assert_eq!(EVENT_TASK_QUEUE_CHANGED, "task:queue-changed");
         assert_eq!(EVENT_TASK_SCHEDULED_CHANGED, "task:scheduled-changed");
         assert_eq!(EVENT_TASK_PRESET_CHANGED, "task:preset-changed");

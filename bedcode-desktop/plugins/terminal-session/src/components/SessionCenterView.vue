@@ -627,6 +627,9 @@ import { formatDateTime } from '../utils/format'
 const context = inject<PluginContext>('pluginContext')!
 const t = (key: string, params?: Record<string, any>) => context.i18n.t(key, params)
 
+/** 会话生命周期事件订阅（票 05：onMounted 注册 / onUnmounted 释放） */
+let sessionEventDisposables: { dispose(): void }[] | null = null
+
 const {
   configs,
   sessions,
@@ -979,11 +982,26 @@ onMounted(async () => {
   isLoading.value = false
   startTicker()
   document.addEventListener('keydown', handleKeydown)
+
+  // websocket 业务下沉票 05：会话生命周期事件归插件（emit 通道）——会话列表
+  // 随创建/停止/移除事件静默刷新（载荷自足：事件携带完整会话数据；列表行
+  // 仍以 session.list 全量视图为准，事件只作刷新触发与消费证明）
+  const refreshOnSessionEvent = (name: string) => (data: any) => {
+    console.log(`[Session Center] ${name} 事件 → 刷新会话列表`, data)
+    void load()
+  }
+  sessionEventDisposables = [
+    context.events.on('session:created', refreshOnSessionEvent('session:created')),
+    context.events.on('session:stopped', refreshOnSessionEvent('session:stopped')),
+    context.events.on('session:removed', refreshOnSessionEvent('session:removed')),
+  ]
 })
 
 onUnmounted(() => {
   stopTicker()
   document.removeEventListener('keydown', handleKeydown)
+  for (const d of sessionEventDisposables ?? []) d.dispose()
+  sessionEventDisposables = null
 })
 </script>
 

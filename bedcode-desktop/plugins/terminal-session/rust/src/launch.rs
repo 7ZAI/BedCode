@@ -801,17 +801,23 @@ pub fn spawn_session(
     crate::actions::flush_pending_restart(&WasmHost, session_id);
     crate::task::scheduled::handle_session_created(&WasmHost, session_id, config_id);
 
-    // 5. 广播 SessionCreated（概要自本域视图；票 02 起载荷是类型化 SessionSummary，
-    //    取不到概要就跳过广播并留痕——发一条只有 id 的空概比对移动端不发的后果更坏）
+    // 5. 发布 SessionCreated（概要自本域视图；载荷自足——取不到概要就跳过并
+    //    留痕，不伪造半成品通知）。websocket 业务下沉票 05：会话生命周期事件
+    //    由本插件定义载荷并经 emit+bus 发布，不再走宿主 broadcast-sync。
     match crate::session::summary_for(session_id) {
         Ok(session) => {
-            WasmHost.broadcast_sync(&bedcode_plugin_api::events::SyncEvent::SessionCreated {
-                session,
-                source_device: source_device.clone().unwrap_or_default(),
-            });
+            match serde_json::to_value(&session) {
+                Ok(summary_json) => crate::session::events::publish_created(
+                    &summary_json,
+                    source_device.as_deref().unwrap_or_default(),
+                ),
+                Err(e) => WasmHost.log_warn(&format!(
+                    "session created 概要序列化失败，跳过发布（不伪造半成品通知）: {e}"
+                )),
+            }
         }
         Err(e) => WasmHost.log_warn(&format!(
-            "session created 广播跳过（载荷不自足，生产者侧兜底）: {e}"
+            "session created 发布跳过（载荷不自足，生产者侧兜底）: {e}"
         )),
     }
     WasmHost.log_info(&format!(

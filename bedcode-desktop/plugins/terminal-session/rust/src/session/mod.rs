@@ -38,6 +38,7 @@
 //! 创建 / 停止 / 输入都应报错回给调用方；读取失败同样显性。只有**广播**是
 //! 尽力投递（移动端同步通道故障不阻断会话面，warn 留痕）。
 
+pub mod events;
 pub mod input_line;
 pub mod model;
 pub mod ops;
@@ -51,8 +52,6 @@ use model::{SessionRecord, SessionStatus};
 #[cfg(target_arch = "wasm32")]
 use std::sync::Mutex;
 
-#[cfg(target_arch = "wasm32")]
-use bedcode_plugin_api::events::SyncEvent;
 #[cfg(target_arch = "wasm32")]
 use bedcode_plugin_api::host::bus::owned_topic;
 #[cfg(target_arch = "wasm32")]
@@ -171,13 +170,6 @@ pub fn summary_for(
         Ok(None) => Err(format!("会话不在册（session_id={session_id}）")),
         Err(e) => Err(format!("session summary read failed (session_id={session_id}): {e}")),
     }
-}
-
-/// 广播会话生命周期同步事件（宿主 fire-and-forget：失败由宿主日志留痕，
-/// 不阻断会话面——host-events.broadcast-sync 是尽力投递）
-#[cfg(target_arch = "wasm32")]
-fn broadcast_session_event(event: SyncEvent) {
-    WasmHost.broadcast_sync(&event);
 }
 
 /// 会话创建登记（`launch::create_via_host` 调用；**真源写入**）
@@ -513,11 +505,7 @@ pub fn on_pty_exit(pty_id: &str, reason: &str, exit_code: Option<i32>) {
     }
     // 广播 SessionStopped（kill 请求携带的来源设备名；自然退出为空串）
     let source_device = drain_pending_stop(&session_id).unwrap_or_default();
-    broadcast_session_event(SyncEvent::SessionStopped {
-        session_id: session_id.clone(),
-        session_name: record.name.clone(),
-        source_device: source_device.clone(),
-    });
+    events::publish_stopped(&session_id, &record.name, &source_device);
     // 任务域会话结束收尾（agent Stop hook 没机会推送终态时兜底）
     crate::task::state::interrupt_running_tasks_on_session_end(&WasmHost, &session_id);
     // 提交行缓冲清理（残余内容不补发，见 ADR 0001）
