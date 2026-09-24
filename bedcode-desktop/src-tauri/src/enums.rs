@@ -7,7 +7,6 @@ pub mod control;
 pub mod plugin;
 pub mod pty_status;
 pub mod session;
-pub mod shell;
 pub mod special_key;
 pub mod summary;
 pub mod sync;
@@ -18,7 +17,6 @@ pub use control::{SessionControlAction, SessionControlPayload, TerminalAction, T
 pub use plugin::{PluginQuestion, PluginQuestionOption};
 pub use pty_status::PtySessionStatus;
 pub use session::{SessionStatus, SessionType};
-pub use shell::{ExecutionEnvironment, SessionLaunchConfig, WindowsShell};
 pub use special_key::{KeyCode, KeyCombo};
 pub use summary::SessionSummary;
 pub use sync::SyncPayload;

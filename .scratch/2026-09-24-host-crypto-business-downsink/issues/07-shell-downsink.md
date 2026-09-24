@@ -4,9 +4,21 @@
 
 **Blocked by:** P1-b land + host-session 退役（`session-engine-downsink` ABI 批次先落地）
 
-**Status:** ready-for-agent
+**Status:** ✅ 完成（2026-09-24）
 
-- [ ] `host-session` 退役完成后，环境选择类型宿主消费方清零（grep 断言）
-- [ ] 宿主 pty 启动只需裸 exec 参数（argv / env / cwd / 行列 / 环），无环境/发行版枚举；发行版 argv 由插件算
-- [ ] 曾消费环境选择类型的宿主调用点全部改经插件互调或移除
-- [ ] 线协议/前端受影响面（若有移动端形状）按增量原则复查
+## 落地
+
+- 移除宿主 `enums/shell.rs` 三大类型：`ExecutionEnvironment` / `WindowsShell` / `SessionLaunchConfig`
+- 宿主侧零业务消费（票 11 删内核会话目录后）：PTY 引擎用裸 `CommandBuilder`，业务 argv 由
+  插件 `launch.rs::build_argv` 算好经 `host-pty.spawn` 传入；仅 `enums.rs`/`pty.rs` 的 re-export 残留
+- 移除面：`enums.rs`（删 `pub mod shell` + re-export 行）、`pty.rs`（删 WindowsShell re-export）、
+  `enums/shell.rs` 整文件删除
+- 插件 terminal-session 自持 `resolve_environment`（config→launch spec 映射，宿主已解 environment）；
+  移动端零引用
+- `config.rs::session.default_environment` 是配置字符串（wire 面供插件读，非 shell 枚举），保留
+- 门禁：宿主 lib 全量 1055/0
+
+- [x] `host-session` 退役完成后，环境选择类型宿主消费方清零（grep 断言）
+- [x] 宿主 pty 启动只需裸 exec 参数（argv / env / cwd / 行列 / 环），无环境/发行版枚举；发行版 argv 由插件算
+- [x] 曾消费环境选择类型的宿主调用点全部改经插件互调或移除
+- [x] 线协议/前端受影响面（若有移动端形状）按增量原则复查

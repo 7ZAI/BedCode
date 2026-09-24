@@ -22,7 +22,7 @@ pub use pty_process::PtySession;
 pub use pty_ring::{PtyRing, PtyRingFetch, PtyRingSink};
 
 // Re-export from enums
-pub use crate::enums::{PtySessionStatus, WindowsShell};
+pub use crate::enums::PtySessionStatus;
 
 // Re-export from submodules
 pub use pty_reader::PtyReader;
