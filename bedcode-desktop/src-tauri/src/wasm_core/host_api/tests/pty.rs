@@ -99,9 +99,10 @@ fn permission_sync_points_all_know_pty_domains() {
         crate::wasm_core::host_api::tests::generated_vocabulary_know(domain);
     }
 
-    // ④ 宿主能力清单（manifest dependencies 可达性）
-    let registry = crate::wasm_core::manager::capability::CapabilityRegistry::new();
-    assert!(registry.is_available("host-pty"), "能力清单缺 host-pty");
+    // ④ 宿主能力清单（manifest dependencies 可达性）：host_api 只经 &dyn
+    //   CapabilityProvider 消费（票 04），经构建的宿主上下文查询，不命名具体类型
+    let ctx = crate::wasm_core::host_api::tests::build_host_ctx();
+    assert!(ctx.capabilities().is_available("host-pty"), "能力清单缺 host-pty");
 
     // ⑤ host_impl 权限门：本模块全部函数都以 check_permission 打头（见 pty_spawn），
     //    上面的权限三态用例即为该同步点的行为证据。

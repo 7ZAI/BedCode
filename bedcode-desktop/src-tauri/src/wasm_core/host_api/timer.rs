@@ -2,7 +2,7 @@
 //!
 //! 宿主侧只负责"到点调用插件 command"，具体到点做什么、幂等与否归插件。
 
-use crate::wasm_core::manager::runtime::WasmHostContext;
+use crate::wasm_core::host_api::context::WasmHostContext;
 use crate::wasm_core::runtime_util::block_on_async;
 use crate::wasm_core::permission::PERMISSION_TIMER;
 

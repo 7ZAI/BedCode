@@ -27,7 +27,10 @@ use tokio::sync::Mutex;
 use wasmtime::component::Instance;
 use wasmtime::Store;
 
-use super::runtime::{LoadedWasmPlugin, WasmHostContext, WasmPluginState};
+use super::runtime::{LoadedWasmPlugin, WasmPluginState};
+// 注意：本文件已有内部枚举 `CapabilityProvider`（提供者状态），故 host_api trait
+// 只能全路径引用（票 04，无法同名 import）
+use crate::wasm_core::host_api::context::WasmHostContext;
 use crate::wasm_core::runtime_util::block_on_async;
 
 // ==================== 能力名与导出探测表 ====================
@@ -252,7 +255,8 @@ impl CapabilityRegistry {
     }
 
     /// 提供者形态（测试断言用）："host" / "system:<plugin_id>" / "none"
-    #[cfg(test)]
+    // 无 cfg(test)：host_api::context::CapabilityProvider trait impl（非 test 构建
+    // 编译）委托它，不能随测试门控（票 04）
     pub(crate) fn provider_kind(&self, name: &str) -> String {
         let providers = self.providers.read().unwrap_or_else(|e| e.into_inner());
         match providers.get(name) {
@@ -260,6 +264,49 @@ impl CapabilityRegistry {
             Some(CapabilityProvider::SystemComponent { plugin_id, .. }) => format!("system:{}", plugin_id),
             None => "none".to_string(),
         }
+    }
+}
+
+/// 测试用能力注册表（host_api 测试构造宿主上下文用；host_api 不命名具体类型，票 04）
+#[cfg(test)]
+pub(crate) fn test_registry() -> Arc<CapabilityRegistry> {
+    Arc::new(CapabilityRegistry::new())
+}
+
+/// host_api 侧能力消费端口实现（票 04 ISP 化）：`host_api::context::CapabilityProvider`
+/// 由本注册表实现——宿主上下文持有 `Arc<dyn CapabilityProvider>`，host_api 只经 trait
+/// 消费能力路由（`forward_*` 与访问器），不接触具体类型；manager 侧直连具体类型
+/// （方向合法）。
+impl crate::wasm_core::host_api::context::CapabilityProvider for CapabilityRegistry {
+    fn is_available(&self, name: &str) -> bool {
+        CapabilityRegistry::is_available(self, name)
+    }
+    fn missing(&self, dependencies: &[String]) -> Vec<String> {
+        CapabilityRegistry::missing(self, dependencies)
+    }
+    fn register_system_component(
+        &self,
+        name: &str,
+        plugin_id: &str,
+        instance: Arc<Mutex<LoadedWasmPlugin>>,
+    ) -> crate::Result<()> {
+        CapabilityRegistry::register_system_component(self, name, plugin_id, instance)
+    }
+    fn revert_to_host(&self, name: &str, plugin_id: &str) {
+        CapabilityRegistry::revert_to_host(self, name, plugin_id)
+    }
+    fn revert_all_from(&self, plugin_id: &str) {
+        CapabilityRegistry::revert_all_from(self, plugin_id)
+    }
+    fn system_component_instance(
+        &self,
+        name: &str,
+        caller_plugin_id: &str,
+    ) -> Option<(String, Arc<Mutex<LoadedWasmPlugin>>)> {
+        CapabilityRegistry::system_component_instance(self, name, caller_plugin_id)
+    }
+    fn provider_kind(&self, name: &str) -> String {
+        CapabilityRegistry::provider_kind(self, name)
     }
 }
 

@@ -25,7 +25,7 @@ use bedcode_plugin_api::host::bus::owned_topic;
 use bedcode_plugin_api::host::ws::{WS_CLOSE, WS_ERROR, WS_OPEN};
 
 use crate::wasm_core::bus::{MessageBus, WsFrameDispatch};
-use crate::wasm_core::manager::runtime::WasmHostContext;
+use crate::wasm_core::host_api::context::WasmHostContext;
 use crate::wasm_core::permission::{PERMISSION_WS_CLIENT, PERMISSION_WS_SERVER};
 use crate::server::websocket::endpoint::EndpointAuth;
 use crate::server::websocket::registry::WsSessionRegistry;

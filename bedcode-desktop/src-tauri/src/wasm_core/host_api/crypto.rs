@@ -14,7 +14,7 @@
 //! 认证链路；密钥材料由调用方传入，宿主身份密钥（Kd / JWT keystore）不外泄。
 
 use crate::crypto::registry::{resolve_aead, resolve_kdf, resolve_key_agreement};
-use crate::wasm_core::manager::runtime::WasmHostContext;
+use crate::wasm_core::host_api::context::WasmHostContext;
 use crate::wasm_core::permission::{PERMISSION_CRYPTO_AEAD, PERMISSION_CRYPTO_ASYM, PERMISSION_CRYPTO_KDF};
 
 /// 加密原语成功调用审计（AGENTS §8 / 票 04）：只记算法名，不落任何密钥/明文

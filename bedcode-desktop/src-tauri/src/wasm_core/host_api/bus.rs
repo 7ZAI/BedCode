@@ -4,7 +4,7 @@ use bedcode_plugin_api::host::bus::{
     is_legacy_owner_suffix, is_reply_topic, owned_topic, topic_owner, API_TOPIC_PREFIX,
 };
 
-use crate::wasm_core::manager::runtime::WasmHostContext;
+use crate::wasm_core::host_api::context::WasmHostContext;
 
 // ==================== Topic 命名空间门禁（审计票 05，P0-4） ====================
 

@@ -21,7 +21,7 @@
 use bedcode_plugin_api::host::bus::owned_topic;
 use bedcode_plugin_api::host::mdns::{MDNS_FOUND, MDNS_LOST};
 
-use crate::wasm_core::manager::runtime::WasmHostContext;
+use crate::wasm_core::host_api::context::WasmHostContext;
 use crate::wasm_core::permission::PERMISSION_MDNS;
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
 use serde::Deserialize;

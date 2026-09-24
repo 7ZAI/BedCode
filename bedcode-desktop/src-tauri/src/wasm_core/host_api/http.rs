@@ -1,6 +1,6 @@
 //! HTTP 代理域宿主实现（宿主代发请求，支持 SSE 流式推流）
 
-use crate::wasm_core::manager::runtime::WasmHostContext;
+use crate::wasm_core::host_api::context::WasmHostContext;
 use crate::wasm_core::runtime_util::block_on_async;
 use crate::wasm_core::permission::PERMISSION_NETWORK_HTTP;
 use crate::system::constants::{

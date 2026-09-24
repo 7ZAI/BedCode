@@ -10,7 +10,7 @@ use crate::wasm_core::runtime_util::block_on_async;
 ///
 /// 宿主仅 emit `plugin:error` 事件通知前端弹窗提示，不改变插件激活状态。
 pub(crate) fn mark_plugin_error(
-    host_ctx: &crate::wasm_core::manager::runtime::WasmHostContext,
+    host_ctx: &crate::wasm_core::host_api::context::WasmHostContext,
     plugin_id: String,
     error: String,
 ) {

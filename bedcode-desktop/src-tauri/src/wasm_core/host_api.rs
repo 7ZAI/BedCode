@@ -23,6 +23,7 @@ pub(super) mod auth;
 pub(super) mod bus;
 pub(super) mod config;
 pub(super) mod connection;
+pub mod context;
 pub(crate) mod crypto;
 pub(super) mod database;
 pub(super) mod events;
@@ -41,7 +42,7 @@ pub(super) mod timer;
 pub(crate) mod ws;
 mod wsl_fs;
 
-use crate::wasm_core::manager::runtime::WasmHostContext;
+use crate::wasm_core::host_api::context::WasmHostContext;
 
 // ==================== Shared Guards ====================
 
@@ -93,6 +94,7 @@ pub(crate) mod tests {
             permission,
             fs_auth,
             message_bus,
+            crate::wasm_core::manager::capability::test_registry(),
         ))
     }
 

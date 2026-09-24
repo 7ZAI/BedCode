@@ -10,7 +10,7 @@
 //! 明文不落日志红线（AGENTS.md §8）：本模块日志只记 `value.len()`，禁止打印
 //! 值本身；错误消息不含值内容。
 
-use crate::wasm_core::manager::runtime::WasmHostContext;
+use crate::wasm_core::host_api::context::WasmHostContext;
 use crate::wasm_core::runtime_util::block_on_async;
 use crate::wasm_core::permission::PERMISSION_AUTH;
 use chrono::Utc;
@@ -390,6 +390,7 @@ mod tests {
             Arc::new(crate::wasm_core::permission::PermissionManager::new()),
             fs_auth,
             Arc::new(crate::wasm_core::bus::MessageBus::new()),
+            crate::wasm_core::manager::capability::test_registry(),
         ))
     }
 

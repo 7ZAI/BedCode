@@ -2,7 +2,7 @@
 //!
 //! 含 SQL 表名前缀校验与 rusqlite 列 → JSON 转换辅助
 
-use crate::wasm_core::manager::runtime::WasmHostContext;
+use crate::wasm_core::host_api::context::WasmHostContext;
 use crate::wasm_core::runtime_util::block_on_async;
 use crate::wasm_core::permission::{PERMISSION_DATABASE_MAIN, PERMISSION_STORAGE};
 use crate::system::constants::{

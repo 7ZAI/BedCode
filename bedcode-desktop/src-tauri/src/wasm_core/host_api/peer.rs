@@ -12,7 +12,7 @@
 //! 记忆 endpoint 自动重拨（信任检查照走引擎握手）——这是退役
 //! DiscoveryCache 的前置条件。
 
-use crate::wasm_core::manager::runtime::WasmHostContext;
+use crate::wasm_core::host_api::context::WasmHostContext;
 use crate::wasm_core::runtime_util::block_on_async;
 use crate::wasm_core::permission::PERMISSION_PEER;
 use std::sync::LazyLock;

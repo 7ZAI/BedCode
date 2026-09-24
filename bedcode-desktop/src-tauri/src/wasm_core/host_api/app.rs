@@ -4,7 +4,7 @@
 //! （`PluginServices::install_cli/uninstall_cli` 经 PluginHost 实现，
 //! 见 plugin/host/app_cli.rs）。插件只声明权限并传 file_name/bin_dir。
 
-use crate::wasm_core::manager::runtime::WasmHostContext;
+use crate::wasm_core::host_api::context::WasmHostContext;
 use crate::wasm_core::runtime_util::block_on_async;
 use crate::wasm_core::permission::PERMISSION_APP_CLI;
 

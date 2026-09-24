@@ -17,7 +17,7 @@
 //! 属主，不记 params 全文）。
 
 use crate::wasm_core::manager::task as core_task;
-use crate::wasm_core::manager::runtime::WasmHostContext;
+use crate::wasm_core::host_api::context::WasmHostContext;
 use crate::wasm_core::permission::PERMISSION_TASK_RUN;
 use std::sync::Arc;
 
