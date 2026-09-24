@@ -184,6 +184,10 @@
       {
         "path": "session-control",
         "auth": "jwt"
+      },
+      {
+        "path": "terminal",
+        "auth": "jwt"
       }
     ],
     "httpEndpoints": [

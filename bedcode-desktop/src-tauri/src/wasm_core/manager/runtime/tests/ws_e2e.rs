@@ -1281,3 +1281,286 @@ fn test_session_control_endpoint_direct_roundtrip() {
         plugin.lock().await.deactivate().expect("deactivate = 0");
     }));
 }
+
+/// 票 04：WS 终端流端点闭环（真实 PTY 输入 → 二进制输出帧 → 停止帧）
+///
+/// 客户端经 `/ws/plugin/com.bedcode.terminal-session/terminal` 直连（auth=jwt）：
+/// 订阅 → binary 输入直写 PTY → ring-fetch 游标拉取 → 二进制帧输出 →
+/// 未订阅输入显性 error → 会话停止 → 尾帧后 `session_stopped` 停止帧 →
+/// 退订/断连清理。宿主只转原始帧（不解析终端帧、不读 session id、不维护订阅表）。
+#[test]
+fn test_terminal_stream_endpoint_closed_loop() {
+    use crate::utils::auth::jwt::JwtService;
+    use bedcode_plugin_api::EndpointAuth;
+    use futures_util::SinkExt;
+    use tokio_tungstenite::tungstenite::Message;
+
+    let (wasm_runtime, host_ctx) = setup_wasm_runtime();
+    let _ws_guard = lock_ws_fixture_e2e();
+    let _serial = session_plugin_db_guard();
+
+    const PLUGIN_ID: &str = "com.bedcode.terminal-session";
+    let wasm_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../resources/plugins/desktop/com.bedcode.terminal-session/bedcode_plugin_terminal_session.wasm");
+    if !wasm_path.exists() {
+        eprintln!("[skip] session wasip3 artifact not built");
+        return;
+    }
+
+    let rt = tokio::runtime::Runtime::new().expect("tokio multi-thread runtime");
+    rt.block_on(ws_e2e_guard("ws terminal 流 e2e", async {
+        // 独立私有库根目录（避免并行测试写同一 SQLite → BUSY）
+        let mut host_ctx = host_ctx;
+        if let Some(ctx) = Arc::get_mut(&mut host_ctx) {
+            ctx.set_plugin_db_root(Some(std::env::temp_dir().join(format!(
+                "bedcode_plugin_dbs_wsterm_e2e_{}_{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos()
+            ))));
+        }
+        let _ = std::fs::remove_dir_all(plugin_db_root().join(PLUGIN_ID));
+
+        // ==================== 宿主服务器 + 插件装载 ====================
+        let (server_handle, server_task, port) = {
+            let config = crate::system::config::AppConfig::default().network;
+            let port = ws_pick_free_port();
+            let (handle, server) = crate::server::core::app::start_http_server(port, &config)
+                .await
+                .expect("start host http+ws server");
+            (handle, tokio::spawn(server), port)
+        };
+
+        host_ctx.permission.grant_permissions(
+            PLUGIN_ID,
+            &[
+                "auth".to_string(),
+                "connection:read".to_string(),
+                "fs:read".to_string(),
+                "fs:write".to_string(),
+                "peer".to_string(),
+                "process:run".to_string(),
+                "pty:io".to_string(),
+                "pty:spawn".to_string(),
+                "session:read".to_string(),
+                "storage".to_string(),
+                "task:run".to_string(),
+                "terminal:input".to_string(),
+                "timer:schedule".to_string(),
+                "ui:input".to_string(),
+                "ui:settings".to_string(),
+                "ui:sidebar".to_string(),
+                "ws:server".to_string(),
+            ],
+        );
+        host_ctx.api_registry().register(
+            PLUGIN_ID,
+            &session_apis().iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+        );
+        let component = wasm_runtime
+            .compile_component(&std::fs::read(&wasm_path).expect("read session artifact"))
+            .expect("compile session artifact");
+        let plugin = Arc::new(Mutex::new(
+            wasm_runtime
+                .instantiate_component(&component, PLUGIN_ID, host_ctx.clone(), &[], None)
+                .expect("instantiate session"),
+        ));
+        host_ctx
+            .message_bus
+            .set_dispatcher(Arc::new(TestInstanceDispatcher {
+                instances: Arc::new(RwLock::new(HashMap::from([(PLUGIN_ID.to_string(), plugin.clone())]))),
+            }))
+            .await;
+        plugin.lock().await.activate().expect("activate session");
+
+        // 声明端点等价登记（票 04：terminal 端点，auth=jwt）
+        let entry = crate::server::websocket::endpoint::register(
+            PLUGIN_ID,
+            "terminal",
+            EndpointAuth::Jwt,
+            None,
+            None,
+            host_ctx.message_bus.clone(),
+        )
+        .expect("register declared terminal endpoint");
+        assert_eq!(entry.mount_path, "/ws/plugin/com.bedcode.terminal-session/terminal");
+
+        // 种子配置 + 创建真实会话（bash PTY）
+        let config_out = plugin
+            .lock()
+            .await
+            .invoke_command(
+                "session.config.upsert",
+                &serde_json::json!({
+                    "name": "wsterm-e2e",
+                    "environment": "linux",
+                    "workingDir": std::env::temp_dir().to_string_lossy().as_ref(),
+                    "command": "bash",
+                })
+                .to_string(),
+            )
+            .expect("seed config via plugin command");
+        let config_id = serde_json::from_str::<serde_json::Value>(&config_out)
+            .expect("config json")
+            .get("id")
+            .and_then(|v| v.as_str())
+            .expect("config id")
+            .to_string();
+        let create_out = plugin
+            .lock()
+            .await
+            .invoke_command("session.create", &serde_json::json!({ "configId": config_id }).to_string())
+            .expect("create session via plugin command");
+        let session_id = serde_json::from_str::<serde_json::Value>(&create_out)
+            .expect("create json")
+            .get("sessionId")
+            .and_then(|v| v.as_str())
+            .expect("session id")
+            .to_string();
+
+        // 真实 JWT + 直连 terminal 端点 + 首消息认证
+        let token = JwtService::new()
+            .generate_token("dev-term-1".to_string(), Some("Pad".to_string()), Some("fp-2".to_string()))
+            .expect("mint jwt");
+        let url = format!("ws://127.0.0.1:{port}/ws/plugin/{PLUGIN_ID}/terminal");
+        let (mut client, _) = tokio_tungstenite::connect_async(&url)
+            .await
+            .expect("client connect via host route");
+        client
+            .send(Message::Text(format!(r#"{{"type":"auth","token":"{token}"}}"#)))
+            .await
+            .expect("send auth frame");
+
+        // ==================== 1. 订阅 → subscribed 回帧 ====================
+        client
+            .send(Message::Text(format!(
+                r#"{{"type":"subscribe","sessionId":"{session_id}"}}"#
+            )))
+            .await
+            .expect("send subscribe");
+        match ws_client_recv(&mut client, std::time::Duration::from_secs(5)).await {
+            Some(Message::Text(text)) => {
+                let reply: serde_json::Value = serde_json::from_str(&text).expect("reply json");
+                assert_eq!(reply["type"], "subscribed", "订阅回帧, got: {reply}");
+                assert_eq!(reply["sessionId"], session_id);
+                assert_eq!(reply["mode"], "live", "mode 缺省 live");
+            }
+            other => panic!("期望 subscribed 回帧，got: {other:?}"),
+        }
+        // 订阅触发首轮 drain：可能已推送历史输出（prompt 等）——吞掉，留作后续断言
+
+        // ==================== 2. binary 输入直写 PTY → 输出二进制帧 ====================
+        client
+            .send(Message::Binary(b"echo ws-terminal-e2e\n".to_vec()))
+            .await
+            .expect("send binary input");
+        // 输出泵 = 客户端帧驱动 drain + 1s tick 兜底：输入后周期发 poll 帧触发
+        // drain（tick 在直连实例不自动跑，poll 即协议规定的拉取触发）
+        let mut got_marker = false;
+        for i in 0..60 {
+            // 每轮先触发一次 drain（poll 帧），再收帧
+            let _ = client.send(Message::Text(r#"{"type":"poll"}"#.to_string())).await;
+            match ws_client_recv(&mut client, std::time::Duration::from_secs(1)).await {
+                Some(Message::Binary(bytes)) => {
+                    if bytes.windows(b"ws-terminal-e2e".len()).any(|w| w == b"ws-terminal-e2e") {
+                        got_marker = true;
+                        break;
+                    }
+                }
+                Some(Message::Text(text)) => {
+                    // poll 期间只应有输出（binary）与可能的 ring_resync；error 即异常
+                    let v: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+                    assert!(
+                        v["type"] != "error",
+                        "输出过程中不得出现 error 帧: {text}"
+                    );
+                }
+                None => {}
+                _ => {}
+            }
+            let _ = i;
+        }
+        assert!(got_marker, "binary 输入经 PTY 执行后输出必须回显标记");
+
+        // ==================== 3. 未订阅输入 → 显性 error 帧 ====================
+        client
+            .send(Message::Text(r#"{"type":"unsubscribe"}"#.to_string()))
+            .await
+            .expect("send unsubscribe");
+        match ws_client_recv(&mut client, std::time::Duration::from_secs(5)).await {
+            Some(Message::Text(text)) => {
+                let reply: serde_json::Value = serde_json::from_str(&text).expect("reply json");
+                assert_eq!(reply["type"], "unsubscribed", "退订回帧, got: {reply}");
+            }
+            other => panic!("期望 unsubscribed 回帧，got: {other:?}"),
+        }
+        client
+            .send(Message::Text(r#"{"type":"input","data":"x"}"#.to_string()))
+            .await
+            .expect("send input without subscription");
+        match ws_client_recv(&mut client, std::time::Duration::from_secs(5)).await {
+            Some(Message::Text(text)) => {
+                let reply: serde_json::Value = serde_json::from_str(&text).expect("reply json");
+                assert_eq!(reply["type"], "error", "未订阅输入必须显性报错, got: {reply}");
+                assert!(
+                    reply["message"].as_str().is_some_and(|m| m.contains("未订阅会话")),
+                    "错误文案点名未订阅, got: {reply}"
+                );
+            }
+            other => panic!("期望 error 回帧，got: {other:?}"),
+        }
+
+        // ==================== 4. 重订阅 → 停止会话 → 停止帧（尾帧后） ====================
+        client
+            .send(Message::Text(format!(
+                r#"{{"type":"subscribe","sessionId":"{session_id}"}}"#
+            )))
+            .await
+            .expect("resend subscribe");
+        match ws_client_recv(&mut client, std::time::Duration::from_secs(5)).await {
+            Some(Message::Text(text)) => {
+                let reply: serde_json::Value = serde_json::from_str(&text).expect("reply json");
+                assert_eq!(reply["type"], "subscribed", "重订阅回帧, got: {reply}");
+            }
+            other => panic!("期望 subscribed 回帧，got: {other:?}"),
+        }
+        // 停止会话（pty:exit 驱动终态 → 插件收尾：尽力尾帧 + session_stopped）
+        plugin
+            .lock()
+            .await
+            .invoke_command("session.close", &serde_json::json!({ "sessionId": session_id }).to_string())
+            .expect("close session via plugin command");
+        let mut got_stop = false;
+        for _ in 0..60 {
+            match ws_client_recv(&mut client, std::time::Duration::from_secs(3)).await {
+                Some(Message::Text(text)) => {
+                    let v: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+                    if v["type"] == "session_stopped" {
+                        assert_eq!(v["sessionId"], session_id, "停止帧会话 id, got: {text}");
+                        assert_eq!(v["reason"], "killed", "close → kill 原因, got: {text}");
+                        got_stop = true;
+                        break;
+                    }
+                }
+                Some(Message::Binary(_)) => {} // 尾帧（尽力排空）
+                None => break,
+                _ => {}
+            }
+        }
+        assert!(got_stop, "会话停止后必须收到 session_stopped 停止帧");
+
+        // ==================== 5. 断开清理：连接摘除后不再产生帧 ====================
+        let _ = client.close(None).await;
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        // 退订/断开后的插件状态由断开事件清理（无宿主订阅表可断言；以
+        // 「连接关闭无残留任务」为通过判据——宿主侧无新帧产生即可）
+
+        // ==================== 收尾：优雅停机 + 清理 ====================
+        server_handle.stop(true).await;
+        server_task.abort();
+        crate::server::websocket::endpoint::purge_for_plugin(PLUGIN_ID);
+        plugin.lock().await.deactivate().expect("deactivate = 0");
+    }));
+}

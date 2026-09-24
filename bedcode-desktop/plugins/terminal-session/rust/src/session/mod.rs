@@ -525,6 +525,21 @@ fn find_by_pty(pty_id: &str) -> Result<Option<SessionRecord>, String> {
         .find(|r| r.pty_id.as_deref() == Some(pty_id)))
 }
 
+/// 按 pty_id 取会话 id（票 04：WS 终端连接在 pty:exit 后按会话收尾停止帧；
+/// 读失败 / 不在册 → `None`，调用方跳过终端收尾不阻断终态处理）
+#[cfg(target_arch = "wasm32")]
+pub fn session_id_by_pty(pty_id: &str) -> Option<String> {
+    match find_by_pty(pty_id) {
+        Ok(Some(record)) => Some(record.id),
+        _ => None,
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn session_id_by_pty(_pty_id: &str) -> Option<String> {
+    None
+}
+
 // ==================== native：无私有库，编排入口为空实现 ====================
 //
 // native（cargo test）下 `WasmHost` 没有 `SessionStore` / `HostPty` impl

@@ -68,9 +68,10 @@ pub mod task;
 mod keys;
 /// WS 会话控制域（票 09b/09c）：动作词表分派 + 声明端点帧协议
 mod ws_control;
+mod ws_terminal;
 mod trust;
 
-use bedcode_plugin_api::host::{HostBus, HostLog, HostStorage, HostTimer};
+use bedcode_plugin_api::host::{HostBus, HostLog, HostStorage, HostTimer, HostWebsocket};
 use bedcode_plugin_api::types::PluginManifest;
 use bedcode_plugin_api::wasm::WasmPlugin;
 use bedcode_plugin_api::wasm_host::WasmHost;
@@ -579,6 +580,29 @@ fn qr_verify(input: &str) -> Result<serde_json::Value, String> {
     }
 }
 
+/// 端点句柄 → 路径（list-endpoints 缓存；句柄为宿主登记值，插件侧不可预测）
+///
+/// 缓存命中零宿主调用（每帧仅 HashMap 查询）；miss 时刷新一次缓存再查
+/// （端点注册/注销后首次帧自动收敛）。解析失败 → `None`（调用方回退
+/// session-control 分派，不丢帧）。
+fn resolve_endpoint_path(endpoint_id: &str) -> Option<String> {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, String>>> =
+        std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    if let Some(path) = cache.lock().unwrap_or_else(|e| e.into_inner()).get(endpoint_id) {
+        return Some(path.clone());
+    }
+    let listed = WasmHost.ws_list_endpoints().ok()?;
+    let entries: serde_json::Value = serde_json::from_str(&listed).ok()?;
+    let mut guard = cache.lock().unwrap_or_else(|e| e.into_inner());
+    for entry in entries.as_array()?.iter() {
+        let id = entry.get("endpointId")?.as_str()?.to_string();
+        let path = entry.get("path")?.as_str()?.to_string();
+        guard.insert(id, path);
+    }
+    guard.get(endpoint_id).cloned()
+}
+
 impl WasmPlugin for SessionPlugin {
     const ID: &'static str = "com.bedcode.terminal-session";
 
@@ -588,15 +612,24 @@ impl WasmPlugin for SessionPlugin {
             .expect("plugin.json must be valid PluginManifest")
     }
 
-    /// 票 09b：声明端点 `session/control` 的入站帧（events-ws 服务端域回调）
-    /// → 动作词表分派 + 回包（见 [`crate::ws_control`]）。宿主仅转发帧。
+    /// 声明端点的入站帧（events-ws 服务端域回调）——宿主仅转发原始帧，按端点
+    /// 路径分派给对应协议域：`terminal` → [`crate::ws_terminal`]（终端流，票 04），
+    /// `session-control` → [`crate::ws_control`]（动作词表）。
+    /// 端点句柄 → 路径经 [`resolve_endpoint_path`] 解析（句柄由宿主登记，
+    /// 插件自 list-endpoints 缓存）。
     fn on_ws_client_message(
         endpoint_id: &str,
         client_id: &str,
         kind: &str,
         payload: &[u8],
     ) -> anyhow::Result<()> {
-        ws_control::on_client_message(endpoint_id, client_id, kind, payload)
+        match resolve_endpoint_path(endpoint_id).as_deref() {
+            Some(crate::ws_terminal::ENDPOINT_PATH) => {
+                crate::ws_terminal::on_client_message(endpoint_id, client_id, kind, payload)
+            }
+            // 未知路径回退 session-control（既有端点；路径解析失败不应丢帧）
+            _ => ws_control::on_client_message(endpoint_id, client_id, kind, payload),
+        }
     }
 
     fn activate() -> anyhow::Result<()> {
@@ -745,6 +778,18 @@ impl WasmPlugin for SessionPlugin {
         })?;
         host.log_info("pty exit event subscribed (session lifecycle driver)");
 
+        // 票 04：订阅 WS 终端连接的断开事件（`<owner>::ws:client-disconnect`）——
+        // 摘除该连接的终端订阅态。**失败必须阻断激活**：订不到 = 断开后订阅
+        // 状态残留（幽灵订阅继续 drain 已断开的客户端，发送失败刷屏）。
+        host.bus_subscribe(&bedcode_plugin_api::host::ws::ws_event_topic(
+            bedcode_plugin_api::host::ws::WS_CLIENT_DISCONNECT,
+            Self::ID,
+        ))
+        .map_err(|e| {
+            anyhow::anyhow!("ws client-disconnect subscription failed (ws terminal cleanup): {e}")
+        })?;
+        host.log_info("ws client-disconnect event subscribed (ws terminal cleanup)");
+
         // 任务域定时器（清单第 4 项：定时器属本域能力面）：驱动队列「延迟 clear
         // 到点发送」与「执行中静默超时」两个周期步骤。回调按命令名分域计数失败，
         // 单域失败只降级本域（D7）——票 16 把定时任务域并入同一 tick 的分发表。
@@ -771,6 +816,9 @@ impl WasmPlugin for SessionPlugin {
             "Agent integration cleanup on deactivate: cleaned={}, skipped={}, failed={}",
             result.cleaned, result.skipped, result.failed
         ));
+        // 票 04：清空 WS 终端订阅态（插件停用不残留连接级状态；连接由宿主
+        // 按属主回收关闭）
+        ws_terminal::purge_all();
         Ok(())
     }
 
@@ -808,6 +856,24 @@ impl WasmPlugin for SessionPlugin {
                 .map(|c| c as i32);
             if !pty_id.is_empty() {
                 session::on_pty_exit(&pty_id, &reason, exit_code);
+                // 票 04：WS 终端连接收尾（尽力尾帧 + session_stopped 停止帧）
+                // 在会话终态收尾之后驱动（停止帧必须在尾帧之后）
+                if let Some(session_id) = session::session_id_by_pty(&pty_id) {
+                    ws_terminal::on_session_terminated(&session_id, &reason, exit_code);
+                }
+            }
+            return Ok(());
+        }
+        // ws:client-disconnect（属主私有 topic，票 04）：WS 终端连接断开 →
+        // 摘除订阅态（不残留连接级任务/状态）。连接 id 在 payload `clientId`。
+        if msg.topic
+            == bedcode_plugin_api::host::ws::ws_event_topic(
+                bedcode_plugin_api::host::ws::WS_CLIENT_DISCONNECT,
+                Self::ID,
+            )
+        {
+            if let Some(client_id) = msg.payload.get("clientId").and_then(|v| v.as_str()) {
+                ws_terminal::on_client_disconnect(client_id);
             }
             return Ok(());
         }
@@ -1083,7 +1149,11 @@ impl WasmPlugin for SessionPlugin {
                 if now_utc.is_empty() {
                     return Err(anyhow::anyhow!("session.task.scheduler-tick: missing now_utc"));
                 }
-                Ok(task::tick_via_host(&WasmHost, &now_utc))
+                let ticked = task::tick_via_host(&WasmHost, &now_utc);
+                // 票 04：终端输出兜底 drain（live 模式订阅连接拉一轮新输出，
+                // 延迟 ≤ tick 档位；客户端帧驱动为主、tick 为兜底）
+                ws_terminal::drain_all_on_tick();
+                Ok(ticked)
             }
 
             // 清理单个项目的全部 Agent 集成 {working_dir} → {success, message}
