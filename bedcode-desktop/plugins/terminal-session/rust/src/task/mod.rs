@@ -649,10 +649,13 @@ mod tests {
     /// 再经**穷尽 `From`** 转成 `DesktopSyncEvent`——改字段名、漏字段、写成 camelCase
     /// 要么在此撞成显性 broadcast error，要么编译期就过不去。
     ///
-    /// 闸门盖不住的是「触发时机」：某条推进路径被删掉时载荷类型仍然自洽。故此处按
-    /// 点数钉死（无头 harness 里 AppContext 未 init，broadcast 只能显性报错，
-    /// S1 闭环观测不到同步通道出口，只能静态计点）。点数写死=回归护栏，
-    /// 少一个点即红，多一个点也必须来交代为什么。
+    /// 票 06（websocket 业务下沉）改写：宿主 `broadcast-sync` 已从任务域生产路径
+    /// 退役（任务事件由本插件经 bus + emit 双通道自发布，载荷自足），本锁从
+    /// 「钉四类广播点数」收敛为「钉零残留 + 双通道成对」：
+    /// - `SyncEvent::` / `broadcast_sync(` 在四个任务模块的**实现段**必须为零
+    ///   （文档注释里的历史提及不算；测试段引用类型构造也排除）；
+    /// - bus_publish / emit_event 发布点仍逐点数钉死且必须成对（漏一侧 =
+    ///   总线或前端事件单边失声）。
     #[test]
     fn broadcast_trigger_points_are_pinned() {
         let sources = [
@@ -661,36 +664,33 @@ mod tests {
             ("scheduled.rs", include_str!("scheduled.rs")),
             ("preset.rs", include_str!("preset.rs")),
         ];
-        let count = |marker: &str| -> usize {
+        let count_impl = |marker: &str| -> usize {
             sources
                 .iter()
                 .map(|(file, src)| {
-                    // 只数真实发布点：跳过文档注释里的同名提及
-                    src.lines()
-                        .filter(|l| l.contains(marker) && !l.trim_start().starts_with("///"))
+                    // 只数实现段真实调用：跳过注释（含文档注释）与测试段
+                    let implementation = src.split("#[cfg(test)]").next().unwrap_or(src);
+                    implementation
+                        .lines()
+                        .filter(|l| l.contains(marker) && !l.trim_start().starts_with("//"))
                         .count()
                 })
                 .sum()
         };
-        let expected: [(&str, usize); 6] = [
-            // 任务状态推进四点：调度建行 / 输入建行 / hook 推送 / 会话结束兜底
-            ("SyncEvent::TaskStatusChanged", 4),
-            // 模式变更两点：状态域写入 + 定时任务入队时开启自动执行
-            ("SyncEvent::SessionModeChanged", 2),
-            ("SyncEvent::TaskQueueChanged", 1),
-            ("SyncEvent::TaskScheduledChanged", 1),
-            // 前端两通道成对发布（每个广播点既发消息总线、又发插件事件），
-            // 故两者数量必须相等且等于四类广播的发布点总数
-            ("bus_publish(", 9),
-            ("emit_event(", 9),
-        ];
-        for (marker, want) in expected {
-            let got = count(marker);
-            assert_eq!(got, want, "`{marker}` 发布点数应为 {want}，实际 {got}");
+        // 零残留：任务域不再调用宿主同步广播产品接口（票 06）
+        for marker in ["SyncEvent::", "broadcast_sync("] {
+            assert_eq!(
+                count_impl(marker),
+                0,
+                "任务域实现段不得出现 `{marker}`（票 06：任务事件归插件 bus+emit）"
+            );
         }
+        // 双通道发布点成对钉死：bus 9 = emit 9（状态五点 + 队列一 + 定时两 + 预设一）
+        assert_eq!(count_impl("bus_publish("), 9, "bus 发布点总数");
+        assert_eq!(count_impl("emit_event("), 9, "emit 发布点总数");
         assert_eq!(
-            count("bus_publish("),
-            count("emit_event("),
+            count_impl("bus_publish("),
+            count_impl("emit_event("),
             "两通道发布点必须成对（漏一侧 = 总线或前端事件单边失声）"
         );
     }

@@ -18,7 +18,6 @@
 //! SQL 一律使用参数绑定（`*_params` + `?N` 占位符），无手写转义。
 
 use bedcode_plugin_api::constants::EVENT_TASK_QUEUE_CHANGED;
-use bedcode_plugin_api::events::SyncEvent;
 use bedcode_plugin_api::host::{
     HostBus, HostEvents, HostLog, HostPluginDatabase,
 };
@@ -1305,14 +1304,7 @@ pub fn broadcast_queue_changed(
 ) {
     let task_id = task_id.map(|s| s.to_string());
     let status = status.map(|s| s.to_string());
-    host.broadcast_sync(&SyncEvent::TaskQueueChanged {
-        session_id: session_id.to_string(),
-        queue_count,
-        action: action.to_string(),
-        task_id: task_id.clone(),
-        status: status.clone(),
-    });
-
+    // 队列变更经 bus + emit 发布（票 06 起不经宿主 broadcast_sync）
     let _ = host.bus_publish(
         EVENT_TASK_QUEUE_CHANGED,
         &serde_json::json!({

@@ -4,6 +4,21 @@
 //! 经 `use super::*` 可见）；fixture 互斥与产物构建语义不变。
 
 use super::*;
+
+/// task_e2e 全局任务注册表串行锁
+///
+/// 共享 `TaskRegistry`（进程级单例）+ 固定 owner `com.bedcode.task-test`：
+/// `register_job` 的**惰性 GC**（`retain(终态 → 摘除)`，同属主下一任务登记时
+/// 触发）会把并行测试刚完成的 submit 任务摘出注册表 → 该测试的 `status` 自愈
+/// 快照查询返回 `Ok(None)`（作业不存在）→ `snap["state"]` 为 null 假红
+/// （2026-09-25 实测：提交测试与其它宿主任务测试并行即偶发，单跑恒绿）。
+/// 持锁把同一注册表上的登记/GC 排成一条序列（与 SESSION_PLUGIN_DB_LOCK 同模式）。
+static TASK_E2E_REGISTRY_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// 取任务注册表串行锁（各用例入口第一行调用；不可重入——用例内不得再取）
+fn task_e2e_registry_guard() -> std::sync::MutexGuard<'static, ()> {
+    TASK_E2E_REGISTRY_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
 /// 预置「用户已记住」的 fs 授权记录（票 07 后测试侧唯一的无弹窗放行方式）
 ///
 /// 旧写法把测试目录塞进 `.claude` 段借路径白名单蒙过校验；那条白名单对任何插件都
@@ -18,6 +33,7 @@ fn seed_fs_grant(ctx: &crate::wasm_core::manager::runtime::WasmHostContext, plug
 #[test]
 
 fn test_task_execute_batch_fixture_parallel_results() {
+    let _task_e2e_guard = task_e2e_registry_guard();
     let Some(bytes) = Some(build_task_test_component()) else {
         eprintln!("[skip] task fixture build failed");
         return;
@@ -88,6 +104,7 @@ fn test_task_execute_batch_fixture_parallel_results() {
 #[test]
 
 fn test_task_submit_events_dispatched_and_status() {
+    let _task_e2e_guard = task_e2e_registry_guard();
     let Some(bytes) = Some(build_task_test_component()) else {
         return;
     };
@@ -177,6 +194,7 @@ fn test_task_submit_events_dispatched_and_status() {
 #[test]
 
 fn test_task_cancel_semantics() {
+    let _task_e2e_guard = task_e2e_registry_guard();
     let Some(bytes) = Some(build_task_test_component()) else {
         return;
     };
@@ -261,6 +279,7 @@ fn test_task_cancel_semantics() {
 #[test]
 
 fn test_task_legacy_component_event_export_degrades() {
+    let _task_e2e_guard = task_e2e_registry_guard();
     let (wasm_runtime, host_ctx) = setup_wasm_runtime();
     let component = wasm_runtime
         .compile_component(&build_test_component())
@@ -282,6 +301,7 @@ fn test_task_legacy_component_event_export_degrades() {
 #[test]
 
 fn test_task_dual_gate_domain_permission_denied() {
+    let _task_e2e_guard = task_e2e_registry_guard();
     let Some(bytes) = Some(build_task_test_component()) else {
         return;
     };
@@ -334,6 +354,7 @@ fn test_task_dual_gate_domain_permission_denied() {
 #[test]
 
 fn test_ai_chatbox_wasip3_artifact_loads() {
+    let _task_e2e_guard = task_e2e_registry_guard();
     let wasm_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../resources/plugins/desktop/com.bedcode.ai-chatbox/bedcode_plugin_ai_chatbox.wasm");
     if !wasm_path.exists() {
@@ -355,6 +376,7 @@ fn test_ai_chatbox_wasip3_artifact_loads() {
 #[test]
 
 fn test_task_execute_batch_empty_units_rejected() {
+    let _task_e2e_guard = task_e2e_registry_guard();
     let (_, host_ctx) = setup_wasm_runtime();
     let plugin = task_fixture_plugin_id();
     crate::wasm_core::host_api::tests::grant_permissions(&host_ctx, &plugin, &["task:run"]);
@@ -369,6 +391,7 @@ fn test_task_execute_batch_empty_units_rejected() {
 #[test]
 
 fn test_task_execute_batch_unknown_kind_fails_in_that_unit_only() {
+    let _task_e2e_guard = task_e2e_registry_guard();
     let (_, host_ctx) = setup_wasm_runtime();
     let plugin = task_fixture_plugin_id();
     crate::wasm_core::host_api::tests::grant_permissions(

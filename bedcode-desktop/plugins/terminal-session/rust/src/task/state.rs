@@ -6,7 +6,6 @@
 //! SQL 一律使用参数绑定（`*_params` + `?N` 占位符），无手写转义。
 
 use bedcode_plugin_api::constants::{EVENT_SESSION_MODE_CHANGED, EVENT_TASK_STATUS_CHANGED};
-use bedcode_plugin_api::events::{PluginQuestion, SyncEvent};
 use bedcode_plugin_api::host::{
     ConfigKey, HostBus, HostConfig, HostEvents, HostLog, HostPluginDatabase,
 };
@@ -325,13 +324,9 @@ pub fn interrupt_running_tasks_on_session_end(host: &WasmHost, session_id: &str)
         affected, session_id
     ));
 
-    // 广播状态变更到移动端 + 消息总线 + 前端 UI，保证全局状态一致
-    host.broadcast_sync(&SyncEvent::TaskStatusChanged {
-        session_id: session_id.to_string(),
-        task_status: "interrupted".to_string(),
-        task_reason: Some(REASON.to_string()),
-        task_questions: None,
-    });
+    // 广播状态变更到消息总线 + 前端 UI，保证全局状态一致
+    // （websocket 业务下沉票 06：移除宿主 broadcast_sync，任务事件由本插件
+    // 经 bus + emit 双通道发布，载荷自足）
     let _ = host.bus_publish(
         EVENT_TASK_STATUS_CHANGED,
         &serde_json::json!({
@@ -366,13 +361,7 @@ pub fn create_task_from_dispatch(
 ) {
     insert_task_row(host, session_id, prompt, agent, source);
 
-    // 调度触发的任务同样广播状态变更（移动端/UI 需要感知任务开始）
-    host.broadcast_sync(&SyncEvent::TaskStatusChanged {
-        session_id: session_id.to_string(),
-        task_status: "in_progress".to_string(),
-        task_reason: Some(format!("Dispatched from {}", source)),
-        task_questions: None,
-    });
+    // 调度触发的任务同样发布状态变更（bus + emit，票 06 起不经宿主 broadcast_sync）
     let _ = host.bus_publish(
         EVENT_TASK_STATUS_CHANGED,
         &serde_json::json!({
@@ -508,13 +497,7 @@ pub fn create_task_from_input(host: &WasmHost, session_id: &str, input: &str) {
     let agent_name = session_agent(host, session_id);
     insert_task_row(host, session_id, input, agent_name, "user");
 
-    // 广播状态变更到移动端 + 消息总线通知其他插件
-    host.broadcast_sync(&SyncEvent::TaskStatusChanged {
-        session_id: session_id.to_string(),
-        task_status: "in_progress".to_string(),
-        task_reason: Some("User submitted input".to_string()),
-        task_questions: None,
-    });
+    // 广播状态变更到消息总线 + 前端 UI（票 06 起不经宿主 broadcast_sync）
     let _ = host.bus_publish(
         EVENT_TASK_STATUS_CHANGED,
         &serde_json::json!({
@@ -920,17 +903,8 @@ fn handle_update_task_status(host: &WasmHost, body: &Value) -> Value {
         ));
     }
 
-    // 广播状态变更到移动端（类型化 SyncEvent，serde 表示即线协议）
-    host.broadcast_sync(&SyncEvent::TaskStatusChanged {
-        session_id: resolved_session_id.to_string(),
-        task_status: status.to_string(),
-        task_reason: reason.map(|s| s.to_string()),
-        // hook 脚本推送的 questions 载荷反序列化为类型化 PluginQuestion
-        task_questions: questions
-            .and_then(|q| serde_json::from_value::<Vec<PluginQuestion>>(q.clone()).ok()),
-    });
-
-    // 通过消息总线通知其他插件任务状态变更
+    // 广播状态变更到消息总线 + 前端 UI（票 06 起不经宿主 broadcast_sync；
+    // hook 推送的 questions 仍随注解槽投影透传给前端）
     let _ = host.bus_publish(
         EVENT_TASK_STATUS_CHANGED,
         &serde_json::json!({
@@ -1659,13 +1633,7 @@ pub fn set_auto_mode(
         session_id, new_execute, new_answer
     ));
 
-    // 广播到移动端（类型化事件仅含 auto_approve 字段，保持线协议兼容）
-    host.broadcast_sync(&SyncEvent::SessionModeChanged {
-        session_id: session_id.to_string(),
-        auto_approve: new_answer,
-    });
-
-    // 通过消息总线通知其他插件会话模式变更
+    // 广播模式变更到消息总线 + 前端 UI（票 06 起不经宿主 broadcast_sync）
     let _ = host.bus_publish(
         EVENT_SESSION_MODE_CHANGED,
         &serde_json::json!({

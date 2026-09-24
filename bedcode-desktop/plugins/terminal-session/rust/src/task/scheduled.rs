@@ -40,7 +40,6 @@
 
 use bedcode_plugin_api::constants::EVENT_SESSION_MODE_CHANGED;
 use bedcode_plugin_api::constants::EVENT_TASK_SCHEDULED_CHANGED;
-use bedcode_plugin_api::events::SyncEvent;
 use bedcode_plugin_api::host::{HostBus, HostEvents, HostLog, HostPluginDatabase};
 use bedcode_plugin_api::http_response;
 use bedcode_plugin_api::sql_params;
@@ -516,10 +515,7 @@ pub fn handle_session_created(host: &WasmHost, session_id: &str, config_id: &str
     // auto_answer 保持用户设置（默认关，可在会话弹窗手动开启自动应答权限请求）。
     let (_, auto_answer) = crate::task::state::session_flags(host, session_id);
     crate::task::state::set_session_flags(host, session_id, Some(true), None);
-    host.broadcast_sync(&SyncEvent::SessionModeChanged {
-        session_id: session_id.to_string(),
-        auto_approve: auto_answer,
-    });
+    // 模式变更经 bus + emit 发布（票 06 起不经宿主 broadcast_sync）
     let _ = host.bus_publish(
         EVENT_SESSION_MODE_CHANGED,
         &serde_json::json!({
@@ -696,14 +692,8 @@ fn handle_reset(host: &WasmHost, body: &Value) -> Value {
 
 // ==================== 事件广播 ====================
 
-/// 广播定时任务变更（三通道：broadcast_sync + bus + emit_event，仿现有模式）
+/// 发布定时任务变更（bus + emit 双通道，票 06 起不经宿主 broadcast_sync）
 fn broadcast_scheduled_changed(host: &WasmHost, job_id: &str, status: &str, action: &str) {
-    host.broadcast_sync(&SyncEvent::TaskScheduledChanged {
-        job_id: job_id.to_string(),
-        status: status.to_string(),
-        action: action.to_string(),
-    });
-
     let _ = host.bus_publish(
         EVENT_TASK_SCHEDULED_CHANGED,
         &serde_json::json!({
