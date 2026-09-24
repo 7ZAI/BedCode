@@ -187,9 +187,9 @@ pub static PERMISSION_API_MAP: &[(&str, &[&str])] = &[
         &[
             // 票 08：`session.list` / `session.get` 随宿主会话数据命令面注销
             // （插件读会话走自有命令通道 `session.list` / `session.get`）。
+            // 票 09：`session.onStatusChange` 随内核状态订阅转接通道注销。
             // 本表剩下的全是**宿主窗口事实**（窗口本体 / 字体测量在宿主，
             // spec D3）：预测初始网格 / 打开 / 关闭宿主终端窗口 / 窗口在场查询。
-            "session.onStatusChange",
             "session.predictTerminalSize",
             "session.openTerminal",
             "session.closeTerminal",

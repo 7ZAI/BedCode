@@ -123,10 +123,10 @@ function makeContext(): TestContext {
   })
   return {
     commands: { execute },
-    // 票 08：`terminal.sendInput` 与 `session.list/get` 已退役（宿主会话数据 /
-    // 输入命令面注销），只留观察面与窗口原语
+    // 票 08/09：`terminal.sendInput` 与 `session.list/get/onStatusChange` 已退役
+    // （宿主会话数据 / 输入命令面与内核状态订阅转接通道注销），只留观察面与窗口原语
     terminal: { onOutput: vi.fn(() => () => {}), onInput: vi.fn(() => () => {}) },
-    session: { onStatusChange: vi.fn(() => () => {}) },
+    session: { predictTerminalSize: vi.fn(async () => null) },
     ui: {} as never,
     events: { on: vi.fn(() => () => {}), emit: vi.fn() },
     storage: {} as never,

@@ -28,9 +28,10 @@
 //!
 //! ## 不属于本层
 //!
-//! 会话**事件的形状与广播**（`events/sync_handler.rs` / `events/forwarder.rs`）与
-//! WS 终端通道的状态订阅属事件面，随 P4 收口（P1-b 起由插件经 `host-events`
-//! 广播 `SyncEvent` 会话变体，宿主只做转发）。
+//! 会话**事件的形状与广播**（`events/sync_handler.rs`）与 WS 终端通道的状态订阅
+//! 属事件面：P1-b 起由插件经 `host-events` 广播 `SyncEvent` 会话变体、宿主只做
+//! 转发；票 09 已把处理器的内核回查兜底与状态订阅转接通道（`events/forwarder.rs`）
+//! 一并删除（载荷必须自携带，缺失即 `warn` + 不广播）。
 
 use crate::protocol::{RendererSource, ResizeOutcome, SessionInfoView};
 use crate::utils::auth::auth_center::call_api;

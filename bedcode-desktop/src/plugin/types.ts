@@ -364,11 +364,11 @@ export interface TerminalAPI {
 /**
  * 会话 API（需 `session:read` 权限）
  *
- * 票 08 起只剩**宿主窗口事实**：数据面（`list` / `get`）已退役，插件读会话
- * 走自家命令通道（`session.list` / `session.get`）。
+ * 票 08 / 09 起只剩**宿主窗口事实**：数据面（`list` / `get`）与事件面
+ * （`onStatusChange`）已退役——插件读会话走自家命令通道
+ * （`session.list` / `session.get`），会话状态由插件自己发布。
  */
 export interface SessionAPI {
-  onStatusChange(handler: (event: any) => void): Disposable
   /**
    * 预测宿主终端窗口的初始网格（宿主窗口几何 + 字体测量 + 整体缩放）。
    *

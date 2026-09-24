@@ -52,7 +52,7 @@ export const GENERATED_PERMISSION_API_MAP: Record<string, readonly string[]> = {
   'terminal:input': ['terminal.onInput'],
   'terminal:output': ['terminal.onOutput'],
   'terminal:observe': ['terminal.onInputSubmitted'],
-  'session:read': ['session.onStatusChange', 'session.predictTerminalSize', 'session.openTerminal', 'session.closeTerminal', 'session.isTerminalOpen'],
+  'session:read': ['session.predictTerminalSize', 'session.openTerminal', 'session.closeTerminal', 'session.isTerminalOpen'],
   'session:write': ['session.create', 'session.stop'],
   'connection:read': [],
   'ui:sidebar': ['ui.registerSidebarPanel', 'ui.registerPage'],

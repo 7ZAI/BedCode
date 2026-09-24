@@ -18,8 +18,11 @@ pub const PAIRING_CODE_TTL_SECS: u64 = 60;
 // ==================== Tauri 事件名称 ====================
 
 /// 统一管理所有 emit/listen 的事件字符串，避免拼写错误和重复定义
-/// 会话状态变更事件
-pub const SESSION_STATUS_CHANGED: &str = "session-status-changed";
+///
+/// 票 09 删除 `SESSION_STATUS_CHANGED`（`"session-status-changed"`）：它的唯一
+/// 发布者是内核状态订阅转接通道（`events/forwarder.rs`，同批退役），前端那条
+/// 注册名（`session:statusChange`）与它本就不一致、且零生产消费方。会话状态的前端
+/// 可见性由插件自己经 `host-events` / `host-bus` 发布。
 
 /// 设备连接/认证事件
 pub const DEVICE_CONNECTED: &str = "device-connected";

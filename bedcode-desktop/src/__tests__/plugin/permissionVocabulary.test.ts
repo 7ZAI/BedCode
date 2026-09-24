@@ -38,10 +38,11 @@ describe('权限词汇前端锁', () => {
   it('L1 context.ts 的每个 requirePermission 调用点都有唯一权限位门住', () => {
     const apiNames = requiredApiNames('src/plugin/context.ts')
     // 防「扫描空转 = 全绿」：前端上下文的门禁点数量有基线。
-    // 票 08 起基线 20 → 19（`session.list` / `session.get` / `terminal.sendInput`
-    // 三条随宿主命令面注销，不再有 requirePermission 调用点）——下降是**已记账的
-    // 退役**，不是扫描失效：下界仍卡在 19，再掉一条即红。
-    expect(apiNames.length).toBeGreaterThanOrEqual(19)
+    // 票 08 起 20 → 19（`session.list` / `session.get` / `terminal.sendInput`
+    // 三条随宿主命令面注销）；票 09 再 19 → 18（`session.onStatusChange`
+    // 随内核状态订阅转接通道注销）——下降是**已记账的退役**，不是扫描失效：
+    // 下界卡在 18，再掉一条即红。
+    expect(apiNames.length).toBeGreaterThanOrEqual(18)
 
     for (const api of apiNames) {
       const owners = permissionsForApi(api)

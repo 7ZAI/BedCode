@@ -209,8 +209,9 @@ async fn init_test_app_context() {
         global_matcher()
             .register_source::<DesktopSyncEvent>(sync_tx.clone())
             .await;
+        // 票 09：处理器不再持有内核会话登记（构造只收广播器）
         let sync_handler: Arc<dyn bedcode_lib::events::EventHandler<DesktopSyncEvent>> =
-            Arc::new(SyncEventHandler::new(session_manager.clone(), ws_manager));
+            Arc::new(SyncEventHandler::new(ws_manager));
         global_matcher().register::<DesktopSyncEvent>(sync_handler).await;
         let _ = INIT.set(());
     }

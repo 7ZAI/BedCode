@@ -3,18 +3,21 @@
 //! 同步事件处理器，将 DesktopSyncEvent 转换为 SyncData WebSocket 消息并广播
 
 use super::matcher::EventHandler;
-use crate::enums::{SessionSummary, SyncPayload};
+use crate::enums::SyncPayload;
 use crate::events::DesktopSyncEvent;
 use crate::server::websocket::message::Message;
 use crate::server::websocket::WebSocketManager;
-use crate::session::SessionManager;
-use std::sync::Arc;
 
 /// 同步事件处理器
 ///
-/// 将 DesktopSyncEvent 转换为 SyncData WebSocket 消息并广播给客户端
+/// 将 DesktopSyncEvent 转换为 SyncData WebSocket 消息并广播给客户端。
+///
+/// **票 09：本处理器不再持有内核会话登记**。P1-b 之前，会话四类事件的载荷可以
+/// 缺字段，处理器就回查 `SessionManager` 补上；真源下沉后内核里已无插件会话，
+/// 那条回查恒返回空 → 补出来的是空值（**假兜底**：绿的是代码路径，不是行为）。
+/// 现在载荷必须自足（插件经 `SyncEvent` 携带），缺失即 `warn` + **不广播**——
+/// 宁可少发一条，也不发一条字段是编出来的推送。
 pub struct SyncEventHandler {
-    session_manager: Arc<SessionManager>,
     ws_manager: &'static (dyn SyncBroadcaster + Send + Sync),
 }
 
@@ -44,12 +47,9 @@ impl SyncBroadcaster for crate::server::websocket::WebSocketManager {
 
 impl SyncEventHandler {
     /// 创建新的同步事件处理器
-    pub fn new(session_manager: Arc<SessionManager>, ws_manager: &'static WebSocketManager) -> Self {
+    pub fn new(ws_manager: &'static WebSocketManager) -> Self {
         let ws_manager: &'static (dyn SyncBroadcaster + Send + Sync) = ws_manager;
-        Self {
-            session_manager,
-            ws_manager,
-        }
+        Self { ws_manager }
     }
 
     /// 异步处理事件
@@ -135,32 +135,15 @@ impl SyncEventHandler {
         source_device: Option<String>,
         carried: Option<crate::enums::summary::SessionSummary>,
     ) {
-        // P1-b 起会话真源在插件：插件事件自携带会话概要，宿主不再回查内核
-        // （内核已无会话可查）。内核路径（测试 / 旧生产者）仍回查内核登记。
-        let session = match carried {
-            Some(s) => s,
-            None => {
-                let Some(session_info) = self.session_manager.get_session(session_id).await else {
-                    tracing::warn!(session_id = %session_id, "[SyncEventHandler] Session not found");
-                    return;
-                };
-
-                // 构建 SessionSummary（票 12：任务字段取自注解槽，不再来自会话记录）
-                let annotations = self.session_manager.session_annotations(session_id).await;
-                let (task_status, task_reason, _, _) =
-                    crate::protocol::task_fields_from_slot(&annotations);
-                SessionSummary {
-                    id: session_info.id,
-                    name: session_info.name,
-                    status: format!("{:?}", session_info.status).to_lowercase(),
-                    created_at: session_info.created_at.to_rfc3339(),
-                    started_at: session_info.started_at.map(|t| t.to_rfc3339()),
-                    session_type: Some(format!("{:?}", session_info.session_type).to_lowercase()),
-                    config_id: Some(session_info.config_id),
-                    task_status,
-                    task_reason,
-                }
-            }
+        // 票 09：会话概要必须随事件携带（真源在 `com.bedcode.terminal-session`，
+        // 宿主已无可回查的登记）。缺失即显性留痕 + 不广播——回查空值补出来的
+        // 「无名字会话」推送比不推送更坏（前端按它渲染出空条目）。
+        let Some(session) = carried else {
+            tracing::warn!(
+                session_id = %session_id,
+                "[SyncEventHandler] SessionCreated 载荷缺会话概要，拒绝广播（生产者为旧版插件 / 内核路径）"
+            );
+            return;
         };
 
         // 提取 source_device 值
@@ -184,15 +167,13 @@ impl SyncEventHandler {
         new_status: crate::enums::SessionStatus,
         carried_name: Option<String>,
     ) {
-        // 会话名真源在插件（P1-b 起事件自携带）；内核路径回查登记
-        let session_name = match carried_name {
-            Some(name) => name,
-            None => self
-                .session_manager
-                .get_session(session_id)
-                .await
-                .map(|s| s.name)
-                .unwrap_or_default(),
+        // 票 09：会话名必须随事件携带（同 `handle_session_created` 的理由）
+        let Some(session_name) = carried_name else {
+            tracing::warn!(
+                session_id = %session_id,
+                "[SyncEventHandler] SessionStatusChanged 载荷缺会话名，拒绝广播"
+            );
+            return;
         };
 
         // 构建同步载荷
@@ -214,15 +195,13 @@ impl SyncEventHandler {
         source_device: Option<String>,
         carried_name: Option<String>,
     ) {
-        // 会话名真源在插件（P1-b 起事件自携带）；内核路径回查登记
-        let session_name = match carried_name {
-            Some(name) => name,
-            None => self
-                .session_manager
-                .get_session(session_id)
-                .await
-                .map(|s| s.name)
-                .unwrap_or_default(),
+        // 票 09：会话名必须随事件携带（同 `handle_session_created` 的理由）
+        let Some(session_name) = carried_name else {
+            tracing::warn!(
+                session_id = %session_id,
+                "[SyncEventHandler] SessionStopped 载荷缺会话名，拒绝广播"
+            );
+            return;
         };
 
         // 构建同步载荷
@@ -242,8 +221,9 @@ impl SyncEventHandler {
         source_device: Option<String>,
         carried_name: Option<String>,
     ) {
-        // 内核路径此时会话可能已从 SessionManager 移除，session_name 可能为空
-        // （调用方应在移除前获取名称）；P1-b 起插件真源随事件携带名称。
+        // 票 09：本分支**不做**「缺名即不广播」——它是四类里唯一没有内核回查的分支
+        // （历史上就允许空名），且 P1-b 的行为锁要求「未知会话仍广播移除」（多客户端
+        // 靠这条刷新列表，幂等删除不得静默）。名字缺失只降级为无名推送。
         let session_name = carried_name.unwrap_or_default();
 
         // 构建同步载荷
@@ -350,14 +330,10 @@ impl SyncEventHandler {
 impl EventHandler<DesktopSyncEvent> for SyncEventHandler {
     fn handle(&self, event: DesktopSyncEvent) {
         // 克隆必要的数据用于异步任务
-        let session_manager = self.session_manager.clone();
         let ws_manager = self.ws_manager;
 
         tokio::spawn(async move {
-            let handler = SyncEventHandler {
-                session_manager,
-                ws_manager,
-            };
+            let handler = SyncEventHandler { ws_manager };
             handler.process_event(event).await;
         });
     }
@@ -368,7 +344,7 @@ mod tests {
     use super::*;
     use crate::events::DesktopSyncEvent;
     use crate::server::websocket::message::Message;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     /// Fake 广播器：记录所有广播调用（票据 22）
     struct FakeBroadcaster {
@@ -416,55 +392,40 @@ mod tests {
         }
     }
 
-    /// 构造 handler：cm 与 sm 共用同一 db（config 落库后两处可见）；Fake 泄漏为 &'static
+    /// 构造 handler：Fake 泄漏为 &'static（处理器本体已不持有会话登记，票 09）
     async fn test_handler() -> (Arc<SyncEventHandler>, &'static FakeBroadcaster) {
-        let sm = Arc::new(SessionManager::new());
         let fake_static: &'static FakeBroadcaster = Box::leak(Box::new(FakeBroadcaster::new()));
         let ws: &'static (dyn SyncBroadcaster + Send + Sync) = fake_static;
-        let handler = Arc::new(SyncEventHandler {
-            session_manager: sm,
-            ws_manager: ws,
-        });
+        let handler = Arc::new(SyncEventHandler { ws_manager: ws });
         (handler, fake_static)
     }
 
-    /// 预置一个会话（经执行端 `create_session_from_spec(start=false)`，不 spawn PTY）
-    ///
-    /// 宿主侧创建编排已随 host-business-decarriage 收尾下沉插件，测试直接注入
-    /// 插件会算好的 launch spec（命名 / config→launch 映射属插件决策）。
-    async fn seed_session(sm: &SessionManager) -> String {
-        use crate::enums::ExecutionEnvironment;
-        sm.create_session_from_spec(
-            crate::enums::SessionLaunchConfig {
-                name: "itest-sync".to_string(),
-                environment: ExecutionEnvironment::Linux,
-                working_dir: "/tmp".to_string(),
-                command: "bash".to_string(),
-                command_args: vec!["bash".to_string()],
-                env_vars: std::collections::HashMap::new(),
-                cols: 120,
-                rows: 40,
-            },
-            "itest-sync".to_string(),
-            None,
-            false,
-            None,
-            None,
-        )
-        .await
-        .expect("create session")
+    /// 会话概要构造（插件事件自携带的载荷形态）
+    fn summary(sid: &str) -> crate::enums::SessionSummary {
+        crate::enums::SessionSummary {
+            id: sid.to_string(),
+            name: "itest-sync".to_string(),
+            status: "running".to_string(),
+            created_at: "2026-09-24T00:00:00Z".to_string(),
+            started_at: Some("2026-09-24T00:00:00Z".to_string()),
+            session_type: Some("pty".to_string()),
+            config_id: Some("itest-sync".to_string()),
+            task_status: None,
+            task_reason: None,
+        }
     }
 
     /// SessionCreated → 广播 SyncPayload::SessionCreated（票据 22）
+    ///
+    /// 票 09：载荷**自携带**会话概要（插件真源），不再依赖处理器回查内核。
     #[tokio::test]
     async fn session_created_event_broadcasts_session_created() {
         let (handler, fake) = test_handler().await;
-        let sid = seed_session(&handler.session_manager).await;
         handler
             .process_event(DesktopSyncEvent::SessionCreated {
-                session_id: sid.clone(),
+                session_id: "s-1".to_string(),
                 source_device: Some("d1".to_string()),
-                session: None, // 内核路径：处理器回查内核登记
+                session: Some(summary("s-1")),
             })
             .await;
         let calls = fake.take_calls();
@@ -481,12 +442,11 @@ mod tests {
     #[tokio::test]
     async fn session_stopped_event_broadcasts_session_stopped() {
         let (handler, fake) = test_handler().await;
-        let sid = seed_session(&handler.session_manager).await;
         handler
             .process_event(DesktopSyncEvent::SessionStopped {
-                session_id: sid.clone(),
+                session_id: "s-2".to_string(),
                 source_device: Some("d2".to_string()),
-                session_name: None, // 内核路径：处理器回查内核登记
+                session_name: Some("itest-sync".to_string()),
             })
             .await;
         let calls = fake.take_calls();
@@ -499,15 +459,16 @@ mod tests {
     }
 
     /// SessionRemoved → 广播 SessionRemoved（排除来源设备）
+    ///
+    /// 空名也照广播：P1-b 的「未知会话仍广播移除」锁（多客户端刷新依赖它）。
     #[tokio::test]
     async fn session_removed_event_broadcasts_session_removed() {
         let (handler, fake) = test_handler().await;
-        let sid = seed_session(&handler.session_manager).await;
         handler
             .process_event(DesktopSyncEvent::SessionRemoved {
-                session_id: sid.clone(),
+                session_id: "s-3".to_string(),
                 source_device: Some("d3".to_string()),
-                session_name: None, // 内核路径：处理器回查内核登记
+                session_name: None, // 本分支不做「缺名即不广播」（见实现注释）
             })
             .await;
         let calls = fake.take_calls();
@@ -528,12 +489,94 @@ mod tests {
                 session_id: "s-any".to_string(),
                 old_status: crate::enums::SessionStatus::Running,
                 new_status: crate::enums::SessionStatus::Stopped,
-                session_name: None, // 内核路径：处理器回查内核登记
+                session_name: Some("itest-sync".to_string()),
             })
             .await;
         let calls = fake.take_calls();
         assert!(matches!(calls[0].payload, SyncPayload::SessionStatusChanged { .. }));
         assert!(calls[0].exclude_device.is_none(), "状态变更应全量广播");
+    }
+
+    /// 票 09：三类事件载荷缺字段时**不广播**（旧行为是回查内核补空值）
+    ///
+    /// 反向锁：谁把内核回查（或 `.unwrap_or_default()`）加回来，本用例转红——
+    /// 判据不是「有没有回查代码」，而是**行为**：缺载荷时广播数必须为 0。
+    #[tokio::test]
+    async fn incomplete_session_payloads_are_not_broadcast() {
+        let (handler, fake) = test_handler().await;
+
+        handler
+            .process_event(DesktopSyncEvent::SessionCreated {
+                session_id: "s-c".to_string(),
+                source_device: None,
+                session: None,
+            })
+            .await;
+        handler
+            .process_event(DesktopSyncEvent::SessionStatusChanged {
+                session_id: "s-s".to_string(),
+                old_status: crate::enums::SessionStatus::Running,
+                new_status: crate::enums::SessionStatus::Stopped,
+                session_name: None,
+            })
+            .await;
+        handler
+            .process_event(DesktopSyncEvent::SessionStopped {
+                session_id: "s-t".to_string(),
+                source_device: None,
+                session_name: None,
+            })
+            .await;
+
+        let calls = fake.take_calls();
+        assert!(
+            calls.is_empty(),
+            "载荷缺失必须 warn + 不广播（不得回查内核补空值），实际广播: {calls:?}"
+        );
+    }
+
+    /// 票 09 防回接锁：宿主事件模块**不得再依赖内核会话登记**。
+    ///
+    /// 这是「`src/session/` 整目录可删（票 11）」的最后一道前置：事件面若还读
+    /// `crate::session::*`，删目录就会把它带塌。判据扫 `src/events/**` 全部
+    /// Rust 源的非注释行——注释里出现是记账（说清为什么不再依赖）。
+    #[test]
+    fn events_module_does_not_depend_on_kernel_session_registry() {
+        let events_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/events");
+        let mut violations: Vec<String> = Vec::new();
+        let mut stack = vec![events_dir];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                    continue;
+                }
+                // 本文件是锁自身，跳过（避免自匹配）
+                if path.ends_with("sync_handler.rs") {
+                    continue;
+                }
+                let Ok(content) = std::fs::read_to_string(&path) else { continue };
+                for (idx, raw_line) in content.lines().enumerate() {
+                    let line = raw_line.trim_start();
+                    if line.starts_with("//") {
+                        continue;
+                    }
+                    if line.contains("crate::session") || line.contains("SessionManager") {
+                        violations.push(format!("{}:{}: {}", path.display(), idx + 1, line.trim()));
+                    }
+                }
+            }
+        }
+        assert!(
+            violations.is_empty(),
+            "宿主事件模块不得依赖内核会话登记（票 09）：\n{}",
+            violations.join("\n")
+        );
     }
 
     /// SessionModeChanged → 广播 SessionModeChanged
@@ -589,32 +632,19 @@ mod tests {
         assert!(matches!(&calls[0].payload, SyncPayload::TaskScheduledChanged { job_id, .. } if job_id == "job-1"));
     }
 
-    /// 未知会话的 SessionCreated：不广播（会话不存在 → 直接返回）
-    #[tokio::test]
-    async fn session_created_for_unknown_session_skips_broadcast() {
-        let (handler, fake) = test_handler().await;
-        handler
-            .process_event(DesktopSyncEvent::SessionCreated {
-                session_id: "ghost".to_string(),
-                source_device: None,
-                session: None,
-            })
-            .await;
-        assert!(fake.take_calls().is_empty(), "会话不存在不应广播");
-    }
-
-    /// 票 12 降级口径（移动端受影响清单 M2）：注解槽无人写（插件未激活 / 未写槽）→
+    /// 票 12 降级口径（移动端受影响清单 M2）：插件未写任务字段 →
     /// 会话摘要的任务字段缺失，**wire 上不出现该键**（与迁移前恒 `None` 的形状等价）
+    ///
+    /// 票 09：任务字段随事件自携带（`summary()` 不带任务字段即此场景），
+    /// 不再经内核注解槽取值——本用例守的是 **wire 形状**，与取值来源无关。
     #[tokio::test]
-    async fn session_created_without_slot_omits_task_fields() {
+    async fn session_created_without_task_fields_omits_them_on_wire() {
         let (handler, fake) = test_handler().await;
-        let sid = seed_session(&handler.session_manager).await;
-
         handler
             .process_event(DesktopSyncEvent::SessionCreated {
-                session_id: sid.clone(),
+                session_id: "s-noslot".to_string(),
                 source_device: None,
-                session: None,
+                session: Some(summary("s-noslot")),
             })
             .await;
 
@@ -622,7 +652,7 @@ mod tests {
         let SyncPayload::SessionCreated { session, .. } = &calls[0].payload else {
             panic!("期望 SessionCreated，实际: {:?}", calls[0].payload);
         };
-        assert!(session.task_status.is_none(), "空槽 → taskStatus 缺失（M2 降级）");
+        assert!(session.task_status.is_none(), "无任务字段 → taskStatus 缺失（M2 降级）");
         assert!(session.task_reason.is_none());
         let json = serde_json::to_value(&calls[0].payload).expect("serialize");
         let summary = &json["data"]["session"];
@@ -632,30 +662,20 @@ mod tests {
         );
     }
 
-    /// 票 12 取值口径：槽有值 → 会话摘要逐字段透出（同步事件构造点改从槽取值，
+    /// 票 12 取值口径：任务字段有值 → 会话摘要逐字段透出（来源=插件载荷，
     /// 字段名与形状不变）
     #[tokio::test]
-    async fn session_created_carries_task_fields_from_slot() {
+    async fn session_created_carries_task_fields() {
         let (handler, fake) = test_handler().await;
-        let sid = seed_session(&handler.session_manager).await;
-        assert!(
-            handler
-                .session_manager
-                .annotate_session(&sid, "taskStatus", "in_progress")
-                .await
-        );
-        assert!(
-            handler
-                .session_manager
-                .annotate_session(&sid, "taskReason", "AI 会话")
-                .await
-        );
+        let mut carried = summary("s-slot");
+        carried.task_status = Some("in_progress".to_string());
+        carried.task_reason = Some("AI 会话".to_string());
 
         handler
             .process_event(DesktopSyncEvent::SessionCreated {
-                session_id: sid.clone(),
+                session_id: "s-slot".to_string(),
                 source_device: None,
-                session: None,
+                session: Some(carried),
             })
             .await;
 

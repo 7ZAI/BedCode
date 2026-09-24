@@ -150,13 +150,12 @@ export async function createPluginContext(info: PluginInfo): Promise<PluginConte
   //
   // 留下的是**宿主窗口事实**（终端窗口的开关 / 存在性 / 初始网格）：窗口本体
   // 与字体测量都在宿主（spec D3），插件无法自行实现，属裁剪线允许的原语。
+  //
+  // 票 09：**`onStatusChange` 已退役**。它监听的是内核状态订阅驱动的 Tauri 事件
+  // （宿主注册名与前端注册名历史上就不一致，从未真正触发），且零生产消费方；
+  // 转接通道随票 09 一并删除。会话状态的前端可见性由插件自己经 `host-events` /
+  // `host-bus` 发布（本插件已是 `SessionCreated` / `SessionStopped` 的发布方）。
   const session: SessionAPI = {
-    onStatusChange(handler: (event: any) => void): Disposable {
-      requirePermission('session.onStatusChange')
-      const disposable = pluginEvents.on(info.id, 'session:statusChange', handler)
-      disposables.push(disposable)
-      return disposable
-    },
     async predictTerminalSize(): Promise<{ cols: number; rows: number } | null> {
       requirePermission('session.predictTerminalSize')
       // 窗口几何与字体测量都在宿主（终端窗口本体留宿主，spec D3）：字体大小取自

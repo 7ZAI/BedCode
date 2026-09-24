@@ -503,8 +503,8 @@ pub fn run() {
                     .register_source::<DesktopSyncEvent>(ctx.sync_tx().clone())
                     .await;
 
-                // 注册处理器
-                let sync_handler = Arc::new(SyncEventHandler::new(ctx.session_manager().clone(), ws_manager));
+                // 注册处理器（票 09：处理器不再持有内核会话登记，构造只收广播器）
+                let sync_handler = Arc::new(SyncEventHandler::new(ws_manager));
                 global_matcher().register::<DesktopSyncEvent>(sync_handler).await;
                 tracing::info!("[BedCode] SyncEventHandler registered");
 
@@ -541,9 +541,9 @@ pub fn run() {
                 }
             });
 
-            // 启动事件转发器：将 SessionManager 的事件转发到前端
-            let event_forwarder = events::EventForwarder::new(app_handle.clone(), session_manager.clone());
-            event_forwarder.start();
+            // 票 09：原先在这里启动的「SessionManager 状态事件 → 前端
+            // `session-status-changed`」转发器已退役（订阅源对插件会话无流量、
+            // 前端零消费方），见 `events.rs` 模块头。
 
             setup_tray(app_handle)?;
 
