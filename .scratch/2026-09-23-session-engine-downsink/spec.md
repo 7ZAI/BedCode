@@ -2,7 +2,7 @@
 
 Status: **ready-for-agent**（2026-09-23 立项；同日用户裁决开放点 1/2/3 并给出开放点 4 定案，见 §5）
 Date: 2026-09-23
-范围: **桌面端为主**（`bedcode-desktop/src-tauri/src/session/`、`pty/`、`plugin/manager/wasm_runtime/host_impl/{session,terminal,lifecycle}.rs`、
+范围: **桌面端为主**（`bedcode-desktop/src-tauri/src/session/`（**票 11 已删，此处保留仅为范围留痕**）、`pty/`、`wasm_core/host_api/{session,terminal,lifecycle}.rs`（前两者随票 10 删除）、
 `server/`、`commands.rs`、`events/`、`utils/session_*_bridge.rs`、`plugins/terminal-session/`、WIT/SDK）；
 移动端按用户 2026-09-23 明确指令「不用管」→ **不设双端同步豁免的收窄承诺，改出「移动端受损清单」如实记账**
 决策依据: 用户 2026-09-23 方向指令（四点 + 总原则「向微内核靠拢，只有 io / 文件 / 线程等 WASM 无法实现的才留宿主」）、
@@ -593,19 +593,20 @@ P0–P5 是**阶段划分与裁决记录**，保留作为理由；开工请以�
 | --- | --- | --- | --- |
 | 01 | 桌面功能等价人工基线（无头测不到的那些） | — | ready-for-human（2026-09-24 agent 侧配套就绪：`baseline-preflight.sh` + `baseline-run-sheet.md`，起跑预演绿；等票 06 落地后由人跑） |
 | 02 | prefactor：对外 wire 类型与终端转义表迁出内核会话目录 | — | done（2026-09-24） |
-| 03 | 终端输入修饰/提交行观察面退役裁定（P2 残段） | 01 | ready-for-agent |
+| 03 | 终端输入修饰/提交行观察面退役裁定（P2 残段） | 01 | **done**（2026-09-24，裁定 = 退役；人工核验待 01） |
 | 04 | 连接清单迁独立原语（不随会话 interface 一起死） | — | done（2026-09-24 落成 `host-connection` + `connection:read`） |
 | 05 | PTY 引擎级宿主广播声明 + 会话→句柄只读映射 | — | done（2026-09-24 landed，字段定名 `hostBroadcastSessionId`） |
 | 06 | 移动端输出通道与历史直读引擎游标环（M6/M7 收口） | 05 | done（2026-09-24，见票文件） |
 | 07 | 多端并发输出实测与环限额裁决（不许估算） | 06 | ready-for-human |
-| 08 | 宿主会话命令面与前端会话 API 注销 | 02 | ready-for-agent |
-| 09 | 事件面收口：删宿主回查兜底与内核状态订阅转接 | 01, 08 | ready-for-agent |
-| 10 | 会话原语整 interface 退役 + ABI 25→26（**唯一**契约破坏点） | 03, 04, 08, 09 | ready-for-agent |
-| 11 | 内核会话目录与装配链删除（宿主零会话对象） | 02, 06, 10 | ready-for-agent |
-| 12 | 文档与路线图收尾 | 11 | ready-for-agent |
+| 08 | 宿主会话命令面与前端会话 API 注销 | 02 | **done**（2026-09-24；人工核验待 01） |
+| 09 | 事件面收口：删宿主回查兜底与内核状态订阅转接 | 01, 08 | **done**（2026-09-24；人工核验待 01） |
+| 10 | 会话原语整 interface 退役 + ABI 25→26（**唯一**契约破坏点） | 03, 04, 08, 09 | **done**（2026-09-24；实落 **26 → 27**——26 被并发 host-crypto 批次占走；人工核验待 01） |
+| 11 | 内核会话目录与装配链删除（宿主零会话对象） | 02, 06, 10 | **done**（2026-09-24；人工核验待 01） |
+| 12 | 文档与路线图收尾 | 11 | **done**（2026-09-24） |
 | 13 | 插件 api 防漂移镜像清单落后（file-transfer 编译红，dev 起跑 / CI 双堵） | — | done（2026-09-24 裁定选 B：`#[plugin_api]` 按声明方/消费方分判，消费方改子集校验；file-transfer trait 31→2，ADR 0017 v2） |
 | 14 | wasip3 测试夹具落后 `pty_quota`（宿主 `--lib` 在 HEAD 即 6 红） | — | done（2026-09-24 复发面一次清干净：`PluginManifest` 加 `Default` + 六处字面量改 `..Default::default()` + 契约锁；宿主 `--lib` 全绿待对侧 subscription.rs 收敛后复跑） |
-| 16 | dev 插件 watch 复制漏注入 `wasmHash`（`injectWasmHash` 未 import，产物摘要被源清单冲掉） | — | ready-for-agent（发现于票 01 起跑 2026-09-24 06:2x；**非 P1-b 回归**，归 `7d036a3cd` 装配点统一的漏改） |
+| 16 | dev 插件 watch 复制漏注入 `wasmHash`（`injectWasmHash` 未 import，产物摘要被源清单冲掉） | — | **done**（2026-09-24；「真起一轮 tauri:dev」未跑，见票末） |
+| 15 | crypto 三权限位缺展示文案（HEAD 上前端 1 红） | — | **已闭环**（2026-09-24 复核：文案已在 `contributionKinds` / 两份 i18n / 生成物，前端全量 80 files / 787 tests 全绿；原归属并发批次，其侧已补） |
 
 **票 13/14 的来源（2026-09-24 补记）**：票 01 人工基线本轮开跑即被挡（宿主 dev 起不来），
 顺带暴露两处 **P1-b landed 时没跟演的周边消费者**——13 是另一个插件里的镜像 api 清单
@@ -727,8 +728,8 @@ id；spec 暂名 `hostBroadcast` 弃用——布尔名配字符串值会误导�
 
 ## 6. 验收标准
 
-- [ ] 宿主 `bedcode-desktop/src-tauri/src/session/` 目录**整体不存在**；`utils/session_{create,action,config}_bridge.rs` 无降级分支
-- [ ] `pty/` 无 shell 包装 / WSL 转换 / `PtyCommandSource::Business`；`host-session` 不在 WIT
+- [x] 宿主 `bedcode-desktop/src-tauri/src/session/` 目录**整体不存在**（票 11 整目录删除，含聚合模块 `session.rs`；防回接锁 `retired_kernel_session_domain_is_not_reintroduced`）；`utils/session_{create,action}_bridge.rs` 早已删除、`session_config` 桥接随配置面退役（无降级分支）
+- [x] `pty/` 无 shell 包装 / WSL 转换 / `PtyCommandSource::Business`（P0 已删）；**`host-session` 与 `host-terminal` 均不在 WIT**（票 10，ABI v27）
 - [ ] 桌面端功能等价：创建 / 两阶段启动 / 停止 / 移除 / 重启 / 改名 / resize 裁决 / 输入（含特殊键）/ 输出 /
       滚动 / IME / 终端窗口 / 通知种子化 —— 逐项与迁移前一致（前端集成测试接缝不变）
       ——**部分核**：创建 / 停止 / 移除 / 重启 / 改名 / resize 裁决 / 输入（含特殊键与
@@ -742,16 +743,19 @@ id；spec 暂名 `hostBroadcast` 弃用——布尔名配字符串值会误导�
 - [x] 会话 id 由插件生成并经 `host-pty.spawn` 的 `env` 注入 `BEDCODE_SESSION_ID`（宿主不再预生成）
       ——**P1-b landed**（`launch.rs::spawn_session`，闭环锁在 `session_e2e::test_session_create_with_spec_closed_loop`
       与 `test_session_input_via_gateway_closed_loop`）
-- [ ] 形态 B 落地：宿主 server 直读 `PtyRing`（零跨 WASM 边界）；`host-pty` spawn 声明有测试锁
-      （未声明的句柄**不得**被宿主广播面读到）
+- [x] 形态 B 落地：宿主 server 直读 `PtyRing`（零跨 WASM 边界）——票 05 广播声明 + 票 06 移动端输出面恢复（M6/M7 翻正为恢复断言）；`host-pty` spawn 声明有测试锁（未声明的句柄**不得**被宿主广播面读到）。**票 11 进一步收敛为唯一来路**：WS 终端通道的订阅 / 退订 / ack / 历史快照 / 停止通知与 `session_gateway::history_snapshot` 的内核兜底腿全部删除
 - [x] 关停走引擎层全局 kill（插件已停用时 PTY 仍被回收）；关窗守卫改用「存活 PTY 计数」判据
       ——引擎层全局 kill 随 P1 前置 landed；守卫判据随 P1-b landed（弹窗 payload 异步问插件、失败回退空列表）
-- [◐] 生命周期对外事件（`session-status-changed` 等）形状不变，或有记账的破坏性变更清单
-      ——**记账**：WS 同步面（`SyncEvent` 会话四变体）载荷自足、形状不变；Tauri 前端事件
-      `session-status-changed` 仍由内核 `subscribe_status()` 驱动，对插件会话**不再有流量**
-      （前端 `stores/session.ts` 无生产调用方 → 影响面为零），随 P4 事件下沉一并收口
+- [x] 生命周期对外事件（`session-status-changed` 等）形状不变，或有记账的破坏性变更清单
+      ——**已收口（票 09 + 票 11）**：WS 同步面（`SyncEvent` 会话四变体）载荷自足、形状不变；
+      Tauri 前端事件 `session-status-changed` 与状态订阅转接通道（`events/forwarder.rs`）
+      **随票 09 退役**，内核 `subscribe_status()` 通道随票 11 删除。破坏性变更清单见
+      ADR 0022 v16 与 CHANGELOG「破坏性插件 ABI v27」条目
 - [x] `connections-list` 不随 `host-session` 退役（票 04 落成 `host-connection` + `connection:read`；宿主侧有单钥匙锁 / 字节一致锁 / 生成物词汇锁三条用例，插件侧派生视图回归用例零改动通过）
-- [ ] ABI bump 同步四处（WIT / `abi.rs` / CHANGELOG / AGENTS §7）+ ADR 0022 补记（含 host-pty 第 2 条措辞修订）
+- [x] ABI bump 同步四处（WIT / `abi.rs` / CHANGELOG / AGENTS §7）+ ADR 0022 补记——
+      **票 10 落 ABI 26 → 27**（WIT 版本演进段 + `abi.rs` + CHANGELOG 双语 + AGENTS §7 能力清单
+      23 → 21）；**票 12 补 ADR 0022 v16**（会话原语域退役 + host-pty 划界终态 + 双端偏离段
+      desktop v27 / mobile 11）
 - [x] `cargo test` 全绿、`pnpm run test:run` 全绿、`eslint` 0 error；测试后无残留进程/端口
       ——**P1-b 批次实测（2026-09-24）**：宿主 lib 1135/0（`[skip]` = 0）、集成 8 target 逐个串行全绿、
       插件 native 287/0、桌面前端 81 files / 794 tests、根 `eslint .` 0 error、`ps`/`ss` 无残留。
@@ -759,9 +763,10 @@ id；spec 暂名 `hostBroadcast` 弃用——布尔名配字符串值会误导�
 - [x] 移动端受损清单如实写入 `plugin-kernel-roadmap/spec.md`（M 系列格式）
       ——M6–M9 已写入（2026-09-24），含触发条件、状态与 P3/P4 恢复动作；本 spec §4.3 的
       测绘清单保持原样作为输入来源
-- [ ] 权限词汇零漂移（本专项预期**删权限位** `session:read` / `session:write` / `session:config` /
-      `terminal:observe` 中的一部分 → 必须跑 `gen:permissions` + 五同步点：SDK 词汇表 / 宿主能力清单 /
-      host_impl 权限门 / `manifest-gen.js` 映射表 / 前端合法集）
+- [x] 权限词汇零漂移——**实退两位**（票 10）：`session:write` / `terminal:observe`
+      （词汇 34 → 32；`session:config` 早在 v23 退役、`session:read` **保留**，判据面收缩为
+      宿主终端窗口事实）。五同步点同批落地：SDK 真源 / 双生成物（`gen:permissions` 重出）/
+      manifest 断言三处 / 前端锁与 i18n / `manifest-gen.js` 映射表（表含词汇表外权限时加载即抛）
 
 ---
 

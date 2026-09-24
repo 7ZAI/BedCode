@@ -127,7 +127,8 @@ spec：`.scratch/2026-09-19-terminal-session-plugin/spec.md`（D2–D7），实�
 |
 | → 配置面写原语 `config-upsert` / `config-delete` **已随 v23 退役**（真源在插件私有库，宿主写原语无调用者即死接口）；读取面 `config-list` / `config-get` 保留为一次性 legacy 迁移通道（迁移窗口结束随主库表退役），权限收编 `session:read` |
 | `host-session` 创建与动作面 | `create-with-spec` / `remove` / `rename` / `resize`（原表的 `restart` 已于 v21 退役，见下「v21 收敛退役」） | v19（函数级追加不 bump） | `session:write` |
-| `host-session` 事实面 | `annotate`（注解槽）/ ~~`connections-list`~~（**v14 起迁 `host-connection`**，此处只留同判据别名，随票 10 删） | v19 | `session:write` / `connection:read`（原 `session:read`） |
+| ~~`host-session` 事实面~~ | ~~`annotate`（注解槽）~~ / ~~`connections-list`~~ | v19 | ~~`session:write`~~ / `connection:read`（原 `session:read`） |
+| → **整 interface 已随 v27 退役**（票 10）：`annotate` / 输出环 / 列表 / 查询 / 创建 / 关闭 / 移除 / 改名 / resize / 两条观察注册面**全部删除**；`connections-list` 早在 v14 迁 `host-connection`，此处旧别名同批删除。会话事实只在 `com.bedcode.terminal-session` 登记域 |
 | `host-connection`（v14 新增 interface） | `connections-list`（宿主 server 在册连接原始记录） | v14（函数级搬迁，不 bump） | `connection:read`（新增位） |
 | `host-platform` | `wsl-distros` | v19 | `platform` 现状 |
 | `auth-policy` 导出 | `verify-device-token`（宿主中间件验签后取策略） | v17 | 能力导出，非宿主原语 |
@@ -181,14 +182,15 @@ spec：`.scratch/2026-09-19-terminal-session-plugin/spec.md`（D2–D7），实�
    宿主留的只有物理上不可下沉的部分（PTY 引擎 + `host-pty` 六原语）。这比 v19 批次的
    「映射决策归插件、执行留内核」更进一格——**执行也归插件**，因为执行所需的原语
    （`host-pty.spawn/write/kill/resize/ring-fetch`）本身已是引擎级。
-2. **`host-pty` 第 2 条的划界现状更正（重要）**：该条写的「两张注册表、两套生命周期」
-   在业务会话侧已经**合并为一张**——业务会话就是一个 `host-pty` 句柄，内核 `SessionComponents`
-   与 `GlobalOutputManager` 对插件会话不再有内容（这正是移动端 M6/M7 受损的根因，P3 形态 B
-   改由宿主 server 直读 `PtyRing` 恢复）。**措辞修订已随 v15 落地**（本条第 2 点「不注册
-   GlobalOutputManager」已改为「不默认注册；按 spawn 声明 opt-in 只读订阅」）——P1-b 批次
-   只做事实更正不预支措辞，票 05 把声明字段 `hostBroadcastSessionId` 落到 WIT/SDK/宿主/
-   插件四端时同步完成。该条里"`host-session` 服务宿主业务会话线"的三方划界随之失效：
-   `host-session` 已进入退役通道。
+2. **`host-pty` 第 2 条的划界现状更正（终态，v27）**：该条原写「两张注册表、两套生命周期」。
+   演进两步到位——P1-b 起业务会话本身就是一个 `host-pty` 句柄（**合并为一张**）；**v27（票 11）
+   起只剩引擎这一张**：内核会话目录整目录删除，`SessionComponents` 的 PTY 注册表与
+   `GlobalOutputManager`（业务输出环）都不复存在，业务会话与插件私有 PTY **同为引擎句柄**，
+   唯一区别是是否声明 `hostBroadcastSessionId` 供宿主广播面直读（v15 的 opt-in 只读订阅，
+   未声明的句柄任何宿主广播面都读不到，安全边界在缺省侧）。移动端 M6/M7 受损的根因即这张表的
+   切换，P3 形态 B 改由宿主 server 直读 `PtyRing` 恢复（票 06）。该条里
+   「`host-session` 服务宿主业务会话线」的三方划界**已终结**：`host-session` 与 `host-terminal`
+   两个 interface 均已删除。
 3. **配额是自我声明的静态事实**（`ptyQuota`，前置 B）：`spawn` 判据按属主声明值，加载期区间仲裁
    越界即拒 manifest，运行期不夹取。terminal-session 声明 8 = 退役前内核上限，**不借下沉放大**。
 4. **输入面不做「宿主绕一圈」**：任务队列下发曾在插件内调 `host.terminal_send` → 宿主查内核属主
@@ -242,7 +244,7 @@ roadmap 阶段 3（`.scratch/2026-09-10-plugin-kernel-roadmap/spec.md`）把「�
 
 ## 双端偏离（host-websocket / host-pty 等桌面独有接口）
 
-- 移动端是**远程终端控制端**，不承载 PTY / mDNS 广播 / WS 服务端等主机侧引擎，故 `host-websocket`（desktop v14）、`host-auth`（v15 密钥托管；v18 追加认证记录面四函数）、`host-pty`（v16）、`auth-policy` 导出（v17，认证能力——宿主 server 中间件验签后取策略）、**会话语义下沉批次（v18 / v19：`host-session` 配置面 + 创建与动作面 + 注解槽 + 连接清单、`host-platform.wsl-distros`）** 均为**桌面独有接口**：mobile 的 WIT / ABI / SDK 不跟演也不投影（ADR 0018 双端各自演进的文档化偏离，同 wasmtime 桌面 48 / 移动 47 分叉先例）。当前 **desktop v25 / mobile 11**（v23 = host-session 配置面写原语退役，见 v10 登记；v24 认证记录下沉、v25 host-peer 节点生命周期原语；desktop 独有接口持续演进不要求移动端跟演）。
+- 移动端是**远程终端控制端**，不承载 PTY / mDNS 广播 / WS 服务端等主机侧引擎，故 `host-websocket`（desktop v14）、`host-auth`（v15 密钥托管；v18 追加认证记录面四函数）、`host-pty`（v16）、`auth-policy` 导出（v17，认证能力——宿主 server 中间件验签后取策略）、**会话语义下沉批次（v18 / v19：`host-session` 配置面 + 创建与动作面 + 注解槽 + 连接清单、`host-platform.wsl-distros`）** 均为**桌面独有接口**：mobile 的 WIT / ABI / SDK 不跟演也不投影（ADR 0018 双端各自演进的文档化偏离，同 wasmtime 桌面 48 / 移动 47 分叉先例）。当前 **desktop v27 / mobile 11**（v23 = host-session 配置面写原语退役，见 v10 登记；v24 认证记录下沉、v25 host-peer 节点生命周期原语、v26 host-crypto 契约面、**v27 = 会话原语域整 interface 退役——本项目迄今唯一一次破坏性契约变更**；desktop 独有接口持续演进不要求移动端跟演，但 v27 是**删 import / 删 export**，旧产物在实例化期即失败，须按 v27 SDK 重建）。
 - **偏离不止 WIT 面**：本批次同时经用户 2026-09-19 授权**豁免 AGENTS.md §9「协议改动必须两端同步部署」**，豁免范围严格限于该 spec（`.scratch/2026-09-19-terminal-session-plugin/spec.md` D1）。自守边界：线协议**形状**（会话 DTO 字段、同步事件、WS 控制帧、认证握手报文）保持不变——保持它并不需要移动端改一行代码，且它是后置适配专项的成本基线。移动端受损面 M1–M5 已挂进路线图（`.scratch/2026-09-10-plugin-kernel-roadmap/spec.md`），桌面端不为其负责（spec Out of Scope）。
 - **恢复条件**：当移动端需要同类能力（例如本地跑交互进程）时，再在该端 WIT 增补对应 interface 并对齐 ABI 计数；在此之前「改 WIT 必须双端同步」这一硬约束的适用范围限于**双端共有的接口**（host-peer / host-fs / host-http 等）。
 - SDK 双端独立包（`plugin-sdk-desktop` / `plugin-sdk-mobile`），互不影响；宿主侧 `version > 当前 → 拒绝` 的兼容语义保证旧插件（≤v16）零迁移仍可加载。
@@ -423,3 +425,27 @@ host-business-decarriage 收尾批次（`.scratch/2026-09-20-host-business-decar
   带 `hostBroadcastSessionId = session_id`）——移动端输出面（票 06）据此直读恢复。
   ⑤ 本票同时完成「第 2 条措辞修订」的预留项（见上「会话真源下沉」节第 2 条）。实施与
   验收见 `.scratch/2026-09-23-session-engine-downsink/issues/05-host-pty-broadcast-declaration.md`。
+
+- **2026-09-24 v16（当前）**：**会话原语域退役完成 + 内核会话目录删除（票 10 / 票 11，
+  ABI 26 → **27**；移动端零改动）**。本专项（`.scratch/2026-09-23-session-engine-downsink/`）
+  的收口裁决，也是本项目迄今**唯一一次破坏性契约变更**：
+
+  ① **删 import 两个 interface**：`host-session`（12 函数全删，含 v14 的
+  `connections-list` 旧别名）与 `host-terminal`（`send`——「宿主替插件往交互终端注入按键」的
+  最后一处业务面入口，零消费者且实现 100% 依赖会话域）。② **删 export 两个**：
+  `terminal-hooks` 整 interface 与 `events` 的 `on-session-lifecycle` / `on-input-submitted`
+  （派发源已于票 03 消失，本批收口 WIT 面）。③ **权限位退役两位**：`session:write` /
+  `terminal:observe`（词汇 34 → 32）；`session:read` 保留但判据面收缩为宿主终端窗口事实
+  （初始网格 / 窗口开关 / 在场查询）。④ **宿主侧零会话对象**：内核会话目录
+  `src-tauri/src/session/` 整目录删除（登记 / 状态机 / 属主表 / 注解槽 / 业务输出环 /
+  配置管理器），`AppContext` 的会话字段、`PluginHost::new` / `WasmHostContext::new` 的
+  会话形参一并删除；关停只走引擎 `kill_all_registered`、关窗守卫只走引擎 `live_count()`。
+  ⑤ **共享订阅类型迁出而非删**：`SubscribeResponse` / `SubscriberHandle` / `SubscriberStats`
+  迁 `server/websocket/terminal_ws/subscriber.rs`、`MODE_REALTIME` / `MODE_BATCH` 迁同目录
+  `forward.rs`——它们的真实归属是订阅者，不是会话层。⑥ **旧产物 fail-visible**：v27 后旧产物
+  在**实例化期**即失败，宿主在其报错后追加「缺失 interface 名 + 按当前 SDK 重建」的指引
+  （`LoadedWasmPlugin::stale_artifact_rebuild_hint`），不是 trap 也不是静默降级——本条同时是
+  §8「真源换了地方就要 fail-visible」判据的第 ② 形态的落地先例。⑦ 防回接：宿主源码扫描锁
+  `retired_kernel_session_domain_is_not_reintroduced` 禁止把内核会话对象加回来。
+  实施与验收见 `.scratch/2026-09-23-session-engine-downsink/issues/10-host-session-interface-abi-26.md`
+  与 `.../11-kernel-session-dir-deletion.md`。

@@ -115,10 +115,16 @@ pnpm exec eslint .
 **架构红线（强制）：**
 
 - **高内聚、低耦合**：内核只做引擎原语与安全边界，禁止携带产品语义；业务代码内聚到各自插件工程；插件间只经互调 API（ADR 0017）与消息总线通信，**禁止跨插件直接耦合**
-- **新增能力优先评估「放哪个插件」而非「改内核」**；产品事实面按上述路线逐步下沉——**会话真源**
-  （登记 / 状态机 / 生命周期分发 / 输入输出编排）已于 2026-09-24（P1-b）迁入
-  `com.bedcode.terminal-session`，宿主侧只剩 PTY 引擎、`host-pty` 原语与 `utils/session_gateway.rs`
-  窄转发层（详见 ADR 0022「会话真源下沉」节）；终端渲染管道、设备连接与认证按同一路线继续下沉
+- **新增能力优先评估「放哪个插件」而非「改内核」**；产品事实面按上述路线逐步下沉。**「会话」
+  已从「暂留宿主侧」清单里摘除并到达终态（2026-09-24，P4）**：会话真源（登记 / 状态机 /
+  生命周期分发 / 输入输出编排）在 `com.bedcode.terminal-session`；宿主侧**不再有任何会话对象**
+  ——内核会话目录 `src-tauri/src/session/` 整目录删除、`host-session` 与 `host-terminal` 两个
+  interface 退役（ABI v27）、内核输出环与会话状态机消失。宿主与会话相关的只剩三样**都无业务
+  语义**：PTY 引擎（`host-pty`）、宿主 server 在册连接清单（`host-connection`）、
+  互调窄转发层（`utils/session_gateway.rs`）。边界裁决见 ADR 0022「会话原语域退役」节，
+  实施与实测见 `.scratch/2026-09-23-session-engine-downsink/`；防回接锁
+  `retired_kernel_session_domain_is_not_reintroduced`
+  （终端渲染管道、设备连接与认证按同一路线继续下沉）
 - **裁剪线（ADR 0022）**：宿主能力只暴露「离宿主无法实现、且无业务语义」的原语；业务编排一律在插件层
 - 技术决策记录在 `docs/adr/`（Multi-Project Monorepo / Async Everywhere / Event-Driven / Graceful Shutdown / Flat Module Structure / Plugin System / 无业务内核 / 插件 Mock 归属），新增决策走 ADR
 
@@ -242,9 +248,20 @@ config-get（`session_configs` 表退役，私有库即真源）；v23 = host-se
 整体退役——不再兼容旧版本存量用户，旧库滞留表不读不迁不清理（生物公钥寄主
 `plugin_secrets` key=`biometric:<fp>` 的语义不变）；**宿主只剩 `host-auth` 密钥托管 / 生物凭证原语 / 认证策略 capability**（`auth-policy` 取用，其 capability 传输失败时回退放行，防认证中心故障误杀全部连接，`warn` 留痕，**不算旁路**）。**配对 / QR 的宿主降级实现已整体退役**（2026-09-21，宿主命令面注销同批）：`utils/auth/auth_center.rs` 的配对 / QR 桥接函数、`PairingService`、`QrTokenManager`、`utils/auth/pairing.rs` 与应用上下文装配链全部删除——插件未激活时前端命令面显性报错，不存在宿主代签路径；新代码不得绕过插件自行签发或验签
 - 输入校验与权限仲裁在 Rust 端，前端校验仅是 UX；WebSocket/HTTP 接入必须过认证与过滤链（TrafficFilterChain）
-- **真源换了地方就要 fail-visible**：P1-b 起会话事实只在插件登记域（§7），宿主侧「回查内核拿会话」的
-  路径对插件会话恒返回空 / `NotFound`——禁止当成「无数据」静默吞掉（曾造成桌面终端窗口按键丢失、
-  任务队列被批量标中断而测试全绿）。`pty:spawn` 是**在宿主机执行任意命令**的高风险面：只发确有 PTY
+- **真源换了地方就要 fail-visible**（通用判据）：事实真源迁走后，**旧读路径必须显性失败，
+  禁止静默降级成「无数据」**——静默降级会让「线还在、数据永远是空」的断链在测试全绿的情况下
+  长期存活。三种具体形态，缺一不可：① **宿主侧回查**：旧读路径要么删掉、要么对真源外的对象
+  显性报错，不得返回空 / `NotFound` 让调用方当「无数据」吞掉；② **旧 ABI 产物**：破坏性契约
+  变更后旧产物要在**实例化期**拿到点名缺失 interface + 「按哪个版本重建」的错误，不是 trap
+  也不是静默降级；③ **退役的权限位 / 命令字眼**：构建链映射表含词汇表外条目时**加载即抛**，
+  而不是注入一个永远过不了门的权限。
+  **先例（本判据的来源，2026-09-24 会话下沉专项）**：P1-b 起会话事实只在插件登记域（§7），
+  宿主「回查内核拿会话」曾造成桌面终端窗口按键丢失、任务队列被批量标中断而测试全绿；
+  该专项把上述三形态各落了一处锁与一处文案（防回接锁
+  `retired_kernel_session_domain_is_not_reintroduced`、
+  `LoadedWasmPlugin::stale_artifact_rebuild_hint`、`manifest-gen.js` 加载期词汇自检），
+  详见 `.scratch/2026-09-23-session-engine-downsink/spec.md`
+- **`pty:spawn` 是「在宿主机执行任意命令」的高风险面**：只发确有 PTY
   需求的第一方插件（会话插件经 `host-pty.spawn` 自产会话、argv 由插件算，宿主不包装），
   并发上限由 `ptyQuota` 声明 + 加载期区间仲裁，不在运行期放宽
 
