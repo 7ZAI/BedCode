@@ -92,7 +92,7 @@ pub const IP_LINK_LOCAL_PREFIX: &str = "169.254.";
 
 /// 同步事件广播容量
 ///
-/// 用于 DesktopSyncEvent 的 broadcast channel
+/// 用于 HostSyncEvent 的 broadcast channel
 pub const SYNC_EVENT_BROADCAST_CAPACITY: usize = 64;
 
 // ==================== 插件系统 ====================

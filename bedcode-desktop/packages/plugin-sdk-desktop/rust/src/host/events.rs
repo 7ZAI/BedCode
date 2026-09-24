@@ -9,8 +9,10 @@ pub trait HostEvents {
 
     /// 广播同步事件到所有客户端（移动端同步通道）
     ///
-    /// 事件为类型化 [`SyncEvent`] 枚举，宿主侧穷尽 match 转换，
-    /// 未知事件类型在编译期即不可能出现。需要 `broadcast` 权限。
+    /// 事件为类型化 [`SyncEvent`]，其 serde 表示与出站 `SyncPayload` 同构：
+    /// 宿主反序列化后只做「信封 + 源设备排除 + 广播」，不再按会话变体改写格式
+    /// 或解释语义（会话事件下沉专项票 02/03）。未知/畸形 type 在宿主反序列化期
+    /// 即显性报错，不静默丢弃。需要 `broadcast` 权限。
     fn broadcast_sync(&self, event: &SyncEvent);
 
     /// 发送系统通知（前端 toast；移动端语义由平台决定）

@@ -109,15 +109,19 @@ pub fn ensure_schema_via_host() -> Result<(), String> {
 
 // ==================== 真源写入（P1-b 起：本域即权威，失败显性） ====================
 
-/// 会话概要（`SyncEvent::SessionCreated.session` 载荷，与宿主 `SessionSummary`
-/// 的 snake_case wire 形状逐字段一致——宿主 `From` 直接反序列化）
+/// 会话概要（**类型化真源**）
 ///
-/// - `status` 取 serde wire 形态（简单变体 `"running"` 等，`Error` 为
-///   `{"error":…}`——比旧内核 `format!("{:?}").to_lowercase()` 对 Error 的
-///   垃圾输出是**严格改进**，简单变体逐字相同，记账于 spec）
-/// - `taskStatus` / `taskReason` 取自注解槽（空串 = 缺失，与视图同判据）
+/// 专项票 02 起 SDK `SyncEvent::SessionCreated.session` 就是这个类型本身
+/// （`SyncEvent` 与宿主 `SyncPayload` 同 wire），不再有「宿主拿 Value 试着解析
+/// 一下」的中间态——字段名与本域视图的对齐由编译期保证。
+///
+/// - `status` 是**展示字符串**（[`SessionStatus::wire_name`]）：状态机在本域，
+///   折算成移动端要看的字符串是生产者的活，宿主不解读、也不兜底成空值。
+///   `Error` 的描述文本不进 `status`（该字段形状是 String，塞对象会让整条载荷
+///   解析失败）；错误详情留在本域记录与 `session-get` 视图。
+/// - `task_status` / `task_reason` 取自注解槽（空串 = 缺失，与视图同判据）
 #[cfg(target_arch = "wasm32")]
-fn summary_json(record: &SessionRecord) -> serde_json::Value {
+fn summary_view(record: &SessionRecord) -> bedcode_plugin_api::wire::SessionSummary {
     let annotations = REGISTRY
         .annotations(&WasmHost, &record.id)
         .unwrap_or_default();
@@ -127,46 +131,45 @@ fn summary_json(record: &SessionRecord) -> serde_json::Value {
             .filter(|v| !v.is_empty())
             .cloned()
     };
-    let mut summary = serde_json::Map::new();
-    summary.insert("id".to_string(), serde_json::json!(record.id));
-    summary.insert("name".to_string(), serde_json::json!(record.name));
-    summary.insert(
-        "status".to_string(),
-        serde_json::to_value(&record.status).expect("SessionStatus 可序列化"),
-    );
-    summary.insert(
-        "created_at".to_string(),
-        serde_json::json!(record.created_at),
-    );
-    if let Some(started_at) = &record.started_at {
-        summary.insert("started_at".to_string(), serde_json::json!(started_at));
+    bedcode_plugin_api::wire::SessionSummary {
+        id: record.id.clone(),
+        name: record.name.clone(),
+        status: record.status.wire_name(),
+        created_at: record.created_at.clone(),
+        started_at: record.started_at.clone(),
+        session_type: Some("pty".to_string()),
+        config_id: (!record.config_id.is_empty()).then(|| record.config_id.clone()),
+        task_status: slot("taskStatus"),
+        task_reason: slot("taskReason"),
     }
-    summary.insert("session_type".to_string(), serde_json::json!("pty"));
-    if !record.config_id.is_empty() {
-        summary.insert("config_id".to_string(), serde_json::json!(record.config_id));
-    }
-    if let Some(status) = slot("taskStatus") {
-        summary.insert("task_status".to_string(), serde_json::json!(status));
-    }
-    if let Some(reason) = slot("taskReason") {
-        summary.insert("task_reason".to_string(), serde_json::json!(reason));
-    }
-    serde_json::Value::Object(summary)
 }
 
-/// 供编排方（launch）取某会话的创建广播概要；不在册 → 显性报错（创建已登记，
-/// 读取失败不该静默发空概要）
+/// 互调 api / WS 控制面 `session_list` 的逐条形状
+///
+/// = [`summary_view`] 的 JSON 投影**去掉 null 键**：「缺值不出现键」是这一路的
+/// 历史形状（同步载荷那一路走类型化形状，`started_at` 会出 null），两条路的差异
+/// 是既存的，本票按字节保持不变。
 #[cfg(target_arch = "wasm32")]
-pub fn summary_json_for(session_id: &str) -> serde_json::Value {
+fn summary_json(record: &SessionRecord) -> serde_json::Value {
+    let mut value = serde_json::to_value(summary_view(record)).expect("SessionSummary 可序列化");
+    if let Some(obj) = value.as_object_mut() {
+        obj.retain(|_, v| !v.is_null());
+    }
+    value
+}
+
+/// 供编排方（launch）取某会话的创建广播概要
+///
+/// 不在册 / 读失败 → 显性 `Err`：创建刚刚登记过却读不到概要属真源断链，
+/// 发一条只有 id 的空概比对移动端不发的后果更坏（前端按它渲染出无名会话条目）。
+#[cfg(target_arch = "wasm32")]
+pub fn summary_for(
+    session_id: &str,
+) -> Result<bedcode_plugin_api::wire::SessionSummary, String> {
     match REGISTRY.get(&WasmHost, session_id) {
-        Ok(Some(record)) => summary_json(&record),
-        Ok(None) => serde_json::json!({ "id": session_id }),
-        Err(e) => {
-            WasmHost.log_warn(&format!(
-                "session summary read failed (session_id={session_id}): {e}"
-            ));
-            serde_json::json!({ "id": session_id })
-        }
+        Ok(Some(record)) => Ok(summary_view(&record)),
+        Ok(None) => Err(format!("会话不在册（session_id={session_id}）")),
+        Err(e) => Err(format!("session summary read failed (session_id={session_id}): {e}")),
     }
 }
 

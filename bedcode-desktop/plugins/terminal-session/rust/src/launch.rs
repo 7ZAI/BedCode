@@ -801,12 +801,19 @@ pub fn spawn_session(
     crate::actions::flush_pending_restart(&WasmHost, session_id);
     crate::task::scheduled::handle_session_created(&WasmHost, session_id, config_id);
 
-    // 5. 广播 SessionCreated（概要自本域视图；宿主不回查内核）
-    let summary = crate::session::summary_json_for(session_id);
-    let _ = WasmHost.broadcast_sync(&bedcode_plugin_api::events::SyncEvent::SessionCreated {
-        session: summary,
-        source_device: source_device.clone().unwrap_or_default(),
-    });
+    // 5. 广播 SessionCreated（概要自本域视图；票 02 起载荷是类型化 SessionSummary，
+    //    取不到概要就跳过广播并留痕——发一条只有 id 的空概比对移动端不发的后果更坏）
+    match crate::session::summary_for(session_id) {
+        Ok(session) => {
+            WasmHost.broadcast_sync(&bedcode_plugin_api::events::SyncEvent::SessionCreated {
+                session,
+                source_device: source_device.clone().unwrap_or_default(),
+            });
+        }
+        Err(e) => WasmHost.log_warn(&format!(
+            "session created 广播跳过（载荷不自足，生产者侧兜底）: {e}"
+        )),
+    }
     WasmHost.log_info(&format!(
         "session created via host-pty (session_id={session_id}, pty_id={pty_id}, config_id={config_id})"
     ));

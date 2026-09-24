@@ -356,7 +356,8 @@ impl HostEvents for WasmHost {
     }
 
     fn broadcast_sync(&self, event: &crate::events::SyncEvent) {
-        // SyncEvent serde 表示即线协议（tag = "type"），宿主侧反序列化为同一类型
+        // SyncEvent 的 serde 表示即线协议（`{"type": <snake_case>, "data": {…}}`，
+        // 与出站 SyncPayload 同构），宿主反序列化为同一类型后不再改写格式
         let payload_str = serde_json::to_string(event).unwrap_or_default();
         host_events::broadcast_sync(&payload_str);
     }

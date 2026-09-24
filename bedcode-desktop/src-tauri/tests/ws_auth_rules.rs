@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 
 use actix_web::dev::ServerHandle;
 use bedcode_lib::db::Database;
-use bedcode_lib::events::DesktopSyncEvent;
+use bedcode_lib::events::HostSyncEvent;
 use bedcode_lib::mdns::advertiser::MdnsAdvertiser;
 use bedcode_lib::wasm_core::PluginHost;
 use bedcode_lib::server::core::app::start_http_server;
@@ -139,7 +139,7 @@ async fn init_test_app_context() {
             .expect("activate com.bedcode.terminal-session (bundled artifact)");
 
         let mdns_advertiser = Arc::new(tokio::sync::RwLock::new(MdnsAdvertiser::new()));
-        let (sync_tx, _) = tokio::sync::broadcast::channel::<DesktopSyncEvent>(SYNC_EVENT_BROADCAST_CAPACITY);
+        let (sync_tx, _) = tokio::sync::broadcast::channel::<HostSyncEvent>(SYNC_EVENT_BROADCAST_CAPACITY);
         let system_info = Arc::new(SystemInfo::collect());
 
         AppContextBuilder::new()
@@ -156,7 +156,7 @@ async fn init_test_app_context() {
         let ws_manager = WebSocketManager::global();
         ws_manager.init().await.expect("init WebSocketManager failed");
         bedcode_lib::events::global_matcher()
-            .register_source::<DesktopSyncEvent>(sync_tx.clone())
+            .register_source::<HostSyncEvent>(sync_tx.clone())
             .await;
         let _ = INIT.set(());
     }

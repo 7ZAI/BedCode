@@ -89,6 +89,17 @@ jobs:
         working-directory: bedcode-desktop
         run: pnpm run plugins:build
 
+      # 跨端 wire 形状锁（SyncPayload / SessionSummary / 控制与终端帧 / KeyCombo）的
+      # 真源在 SDK bedcode-plugin-api::wire（会话事件下沉专项票 01），其用例只在
+      # SDK crate 里跑；src-tauri 的 cargo test 通过 re-export 依赖这些类型但不会
+      # 执行 SDK 自身测试 → 不补这一步，改 wire 形状的 PR 在合并门禁上是无人看守的。
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bedcode-desktop/packages/plugin-sdk-desktop/rust
+
+      - name: Cargo test (desktop plugin SDK)
+        run: cargo test --manifest-path bedcode-desktop/packages/plugin-sdk-desktop/rust/Cargo.toml
+
       - name: Cargo test (desktop)
         working-directory: bedcode-desktop/src-tauri
         run: cargo test

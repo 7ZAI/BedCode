@@ -9,7 +9,6 @@ use uuid::Uuid;
 use crate::enums::auth::AuthPayload;
 use crate::enums::control::{SessionControlAction, SessionControlPayload, TerminalAction, TerminalPayload};
 use crate::enums::special_key::KeyCombo;
-use crate::enums::summary::SessionSummary;
 use crate::enums::SyncPayload;
 
 // ==================== Ack 响应代码常量 ====================
@@ -124,21 +123,6 @@ pub enum Message {
         device_name: String,
         /// 断开原因
         reason: String,
-        /// 认证令牌
-        #[serde(default = "default_token")]
-        token: String,
-    },
-
-    /// 客户端会话变更通知 (服务端 → 客户端)
-    /// 移动端创建/停止会话时通知所有客户端
-    #[serde(rename = "session_event")]
-    SessionEvent {
-        /// 事件类型: created, stopped, removed
-        event_type: String,
-        /// 会话信息
-        session: SessionSummary,
-        /// 触发设备名称
-        device_name: String,
         /// 认证令牌
         #[serde(default = "default_token")]
         token: String,
@@ -398,16 +382,6 @@ impl Message {
         }
     }
 
-    /// 创建会话事件通知
-    pub fn session_event(event_type: &str, session: SessionSummary, device_name: &str) -> Self {
-        Message::SessionEvent {
-            event_type: event_type.to_string(),
-            session,
-            device_name: device_name.to_string(),
-            token: String::new(),
-        }
-    }
-
     /// 创建确认响应消息（成功）
     /// 当 expect_response=true 但 handler 无具体返回值时使用
     pub fn ack(request_id: &str) -> Self {
@@ -449,7 +423,6 @@ impl Message {
             Message::Error { message_id, .. } => message_id.as_deref(),
             Message::ServerClosed { .. } => None,
             Message::ClientDisconnected { .. } => None,
-            Message::SessionEvent { .. } => None,
             Message::Ack { .. } => None,
             Message::SyncData { .. } => None,
         }
@@ -464,7 +437,6 @@ impl Message {
             Message::Error { .. } => Some("error"),
             Message::ServerClosed { .. } => Some("server_closed"),
             Message::ClientDisconnected { .. } => Some("client_disconnected"),
-            Message::SessionEvent { .. } => Some("session_event"),
             Message::Ack { .. } => Some("ack"),
             Message::SyncData { .. } => Some("sync_data"),
         }
@@ -479,7 +451,6 @@ impl Message {
             Message::Error { expect_response, .. } => *expect_response,
             Message::ServerClosed { .. } => false,
             Message::ClientDisconnected { .. } => false,
-            Message::SessionEvent { .. } => false,
             Message::Ack { .. } => false,
             Message::SyncData { .. } => false,
         }
@@ -494,7 +465,6 @@ impl Message {
             Message::Error { token, .. } => token,
             Message::ServerClosed { token, .. } => token,
             Message::ClientDisconnected { token, .. } => token,
-            Message::SessionEvent { token, .. } => token,
             Message::Ack { token, .. } => token,
             Message::SyncData { token, .. } => token,
         }
@@ -646,17 +616,6 @@ impl Message {
                 reason,
                 token: token.to_string(),
             },
-            Message::SessionEvent {
-                event_type,
-                session,
-                device_name,
-                ..
-            } => Message::SessionEvent {
-                event_type,
-                session,
-                device_name,
-                token: token.to_string(),
-            },
             Message::Ack {
                 request_id,
                 timestamp,
@@ -724,6 +683,8 @@ mod tests {
     use super::*;
     use crate::enums::auth::AuthStage;
     use crate::enums::special_key::KeyCode;
+    // `Message::SessionEvent` 退役后会话摘要形状只剩测试样本在用，故收进测试模块
+    use crate::enums::summary::SessionSummary;
     use serde_json::Value;
     // CloseCode 在 tungstenite 0.24 中不公开导出，需从 frame::coding 引入
     use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
@@ -994,26 +955,6 @@ mod tests {
     }
 
     #[test]
-    fn session_event_constructor_embeds_summary() {
-        let m = Message::session_event("created", sample_session(), "pixel-9");
-        assert_eq!(m.message_type(), Some("session_event"));
-        assert_eq!(m.message_id(), None);
-        match &m {
-            Message::SessionEvent {
-                event_type,
-                session,
-                device_name,
-                ..
-            } => {
-                assert_eq!(event_type, "created");
-                assert_eq!(session.id, "sess-1");
-                assert_eq!(device_name, "pixel-9");
-            }
-            _ => panic!("期望 session_event 消息"),
-        }
-    }
-
-    #[test]
     fn ack_constructors_use_success_code_and_optional_message() {
         let ok = Message::ack("req-1");
         assert_eq!(ok.message_type(), Some("ack"));
@@ -1086,10 +1027,6 @@ mod tests {
             (Message::error("E", "m"), "error"),
             (Message::server_closed("r", false), "server_closed"),
             (Message::client_disconnected("d", "r"), "client_disconnected"),
-            (
-                Message::session_event("created", sample_session(), "d"),
-                "session_event",
-            ),
             (Message::ack("req"), "ack"),
             (Message::input("s", "x", None), "terminal"),
             (
@@ -1107,10 +1044,9 @@ mod tests {
 
     #[test]
     fn message_id_accessor_is_none_for_notifications_only() {
-        // 仅请求/响应类消息携带 ID，通知类（server_closed/client_disconnected/session_event/ack/sync_data）为 None
+        // 仅请求/响应类消息携带 ID，通知类（server_closed/client_disconnected/ack/sync_data）为 None
         assert_eq!(Message::server_closed("r", false).message_id(), None);
         assert_eq!(Message::client_disconnected("d", "r").message_id(), None);
-        assert_eq!(Message::session_event("c", sample_session(), "d").message_id(), None);
         assert_eq!(Message::ack("req").message_id(), None);
         // error 的消息 ID 可选：无关联请求时为 None，error_with_id 时为 Some
         assert!(Message::error("E", "m").message_id().is_none());
@@ -1142,7 +1078,6 @@ mod tests {
             Message::error("E", "m"),
             Message::server_closed("r", true),
             Message::client_disconnected("d", "r"),
-            Message::session_event("c", sample_session(), "d"),
             Message::ack("req"),
             Message::sync_data(SyncPayload::SessionModeChanged {
                 session_id: "s".to_string(),
@@ -1265,7 +1200,6 @@ mod tests {
             Message::error_with_id("req-3", "E", "m"),
             Message::server_closed("bye", false),
             Message::client_disconnected("pixel", "bye"),
-            Message::session_event("stopped", sample_session(), "pixel"),
             Message::ack("req-4"),
             Message::ack_failure("req-4", 42, "nope"),
             Message::sync_data(SyncPayload::TaskQueueChanged {
@@ -1370,7 +1304,6 @@ mod tests {
                 task_reason: Some("needs approval".to_string()),
                 task_questions: None,
             }),
-            Message::session_event("created", sample_session(), "pixel"),
         ];
         for m in cases {
             let value = serde_json::to_value(&m).unwrap();

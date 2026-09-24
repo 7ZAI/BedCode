@@ -1,27 +1,9 @@
 //! Summary Types
 //!
-//! 摘要类型定义
+//! 摘要类型定义 — 已迁移到 SDK `bedcode-plugin-api::wire::summary`（线协议单一
+//! 事实来源），此处 re-export 保持宿主侧导入路径不变。
+//!
+//! 注意：会话**状态/类型**的 wire 形状在宿主 `protocol/session.rs`（票 08 归位），
+//! 本文件的 `SessionSummary.status` 是对外**字符串**字段，由插件产出口自行折算。
 
-use serde::{Deserialize, Serialize};
-
-/// 会话摘要
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionSummary {
-    pub id: String,
-    pub name: String,
-    pub status: String,
-    pub created_at: String,
-    pub started_at: Option<String>,
-    /// 会话类型：pty 或 plugin
-    #[serde(default)]
-    pub session_type: Option<String>,
-    /// 对应的会话配置 ID
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub config_id: Option<String>,
-    /// 任务执行状态（Plugin 会话使用）
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub task_status: Option<String>,
-    /// 任务状态原因
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub task_reason: Option<String>,
-}
+pub use bedcode_plugin_api::wire::summary::SessionSummary;

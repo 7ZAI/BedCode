@@ -40,6 +40,25 @@ impl SessionStatus {
     pub fn is_terminal(&self) -> bool {
         matches!(self, SessionStatus::Stopped | SessionStatus::Error(_))
     }
+
+    /// 对外展示字符串（`SessionSummary.status` / 同步事件状态的 wire 取值）
+    ///
+    /// 与 serde 标签同源，穷尽 match 保证新增变体不会漏。**`Error` 只出标签
+    /// `error`**：`SessionSummary.status` 是 String 形状，把 `{"error": "…"}`
+    /// 塞进去会让整条同步载荷在宿主侧解析失败；错误描述属于本域记录与
+    /// `session-get` 视图，不经概要透出。
+    pub fn wire_name(&self) -> String {
+        let name = match self {
+            SessionStatus::Idle => "idle",
+            SessionStatus::Starting => "starting",
+            SessionStatus::Running => "running",
+            SessionStatus::WaitingInput => "waitingInput",
+            SessionStatus::Stopping => "stopping",
+            SessionStatus::Stopped => "stopped",
+            SessionStatus::Error(_) => "error",
+        };
+        name.to_string()
+    }
 }
 
 /// 会话记录（本插件私有库 `sessions` 表的一行）
@@ -107,6 +126,43 @@ mod tests {
             let back: SessionStatus = serde_json::from_value(json).expect("deserialize status");
             assert_eq!(back, status, "状态可往返");
         }
+    }
+
+    /// `wire_name()` 与 serde 标签同源：会话概要的 `status` 字段用的是标签字符串，
+    /// 手写表与 `rename_all = "camelCase"` 一旦漂移，本用例即红
+    #[test]
+    fn wire_name_matches_serde_tag() {
+        let cases = [
+            SessionStatus::Idle,
+            SessionStatus::Starting,
+            SessionStatus::Running,
+            SessionStatus::WaitingInput,
+            SessionStatus::Stopping,
+            SessionStatus::Stopped,
+            SessionStatus::Error(Some("pty closed".to_string())),
+            SessionStatus::Error(None),
+        ];
+        for status in cases {
+            let json = serde_json::to_value(&status).expect("serialize status");
+            let tag = match &json {
+                serde_json::Value::String(s) => s.clone(),
+                serde_json::Value::Object(map) => {
+                    assert_eq!(map.len(), 1, "Error 是 externally tagged，键即标签");
+                    map.keys().next().expect("Error 载荷应有标签键").clone()
+                }
+                other => panic!("意外的状态 wire 形状: {other}"),
+            };
+            assert_eq!(
+                status.wire_name(),
+                tag,
+                "{status:?} 的概要字符串应等于 serde 标签"
+            );
+        }
+        // 记账：Error 的描述文本不进概要字符串（SessionSummary.status 是 String 形状）
+        assert_eq!(
+            SessionStatus::Error(Some("boom".to_string())).wire_name(),
+            "error"
+        );
     }
 
     /// 存储文本形态同样是无损往返的（写库存 JSON 文本的理由）

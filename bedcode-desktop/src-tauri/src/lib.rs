@@ -420,9 +420,9 @@ pub fn run() {
             tauri::async_runtime::block_on(plugin_host.init_message_bus());
             let mdns_advertiser = Arc::new(tokio::sync::RwLock::new(mdns::advertiser::MdnsAdvertiser::new()));
 
-            // 创建同步事件通道
+            // 创建同步事件通道（插件事件经 HostSyncEvent 薄适配进入统一 publish 入口）
             let (sync_tx, _) =
-                tokio::sync::broadcast::channel::<events::DesktopSyncEvent>(SYNC_EVENT_BROADCAST_CAPACITY);
+                tokio::sync::broadcast::channel::<events::HostSyncEvent>(SYNC_EVENT_BROADCAST_CAPACITY);
 
             // ==================== 注册到 AppContext 全局容器 ====================
 
@@ -481,19 +481,19 @@ pub fn run() {
 
                 // 注册同步事件处理器
                 use crate::events::global_matcher;
-                use crate::events::{DesktopSyncEvent, SyncEventHandler};
+                use crate::events::{HostSyncEvent, SyncEventHandler};
 
                 let ws_manager = crate::server::websocket::WebSocketManager::global();
                 ws_manager.init().await.expect("Failed to initialize WebSocketManager");
 
-                // 注册事件源
+                // 注册事件源（`events::publish` 的统一入口按类型查这张表）
                 global_matcher()
-                    .register_source::<DesktopSyncEvent>(ctx.sync_tx().clone())
+                    .register_source::<HostSyncEvent>(ctx.sync_tx().clone())
                     .await;
 
-                // 注册处理器（票 09：处理器不再持有内核会话登记，构造只收广播器）
+                // 注册处理器（票 03：处理器只剩折载荷 + 排除源设备 + 广播，无会话变体分支）
                 let sync_handler = Arc::new(SyncEventHandler::new(ws_manager));
-                global_matcher().register::<DesktopSyncEvent>(sync_handler).await;
+                global_matcher().register::<HostSyncEvent>(sync_handler).await;
                 tracing::info!("[BedCode] SyncEventHandler registered");
 
                 if auto_start {

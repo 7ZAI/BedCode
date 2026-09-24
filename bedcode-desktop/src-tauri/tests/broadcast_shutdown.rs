@@ -14,10 +14,10 @@
 //! 广播触发路径选择（ticket 验收要求"优先 WS 消息驱动"）：
 //! `RemoveSession` 是纯 WS 可触发的广播语义操作——认证客户端发送
 //! `SessionControl::RemoveSession`，服务端经 `remove_session_with_source`
-//! 发布 `DesktopSyncEvent::SessionRemoved { source_device: Some(设备名) }`，
-//! SyncEventHandler 以发送者设备名为 exclude 广播（exclude 语义正是
-//! "发送端不收到"）。对不存在的会话该操作无副作用（各注册表 remove 均
-//! 容忍缺项）且仍发布广播事件，故无需预建会话/PTY，链路最短且确定。
+//! 驱动会话插件发布 `SyncEvent::SessionRemoved { source_device: 设备名 }`，
+//! 宿主 `events::publish(HostSyncEvent)` → SyncEventHandler 以发送者设备名为
+//! exclude 广播（exclude 语义正是 "发送端不收到"）。对不存在的会话该操作无副作用
+//! （各注册表 remove 均容忍缺项）且仍发布广播事件，故无需预建会话/PTY，链路最短且确定。
 //! 场景 2 的对照组（断开后广播仍可达在线端）使用 WebSocketManager 广播
 //! API——断开方已无法从外部观察，断言改为注册表层（send_to_client 报
 //! not found + 全员广播只达在线端）。
@@ -36,7 +36,7 @@ use std::time::{Duration, Instant};
 use actix_web::dev::ServerHandle;
 use bedcode_lib::db::Database;
 use bedcode_lib::enums::SyncPayload;
-use bedcode_lib::events::{global_matcher, DesktopSyncEvent, SyncEventHandler};
+use bedcode_lib::events::{global_matcher, HostSyncEvent, SyncEventHandler};
 use bedcode_lib::mdns::advertiser::MdnsAdvertiser;
 use bedcode_lib::wasm_core::PluginHost;
 use bedcode_lib::server::core::app::start_http_server;
@@ -181,7 +181,7 @@ async fn init_test_app_context() {
             .expect("activate com.bedcode.terminal-session (bundled artifact)");
 
         let mdns_advertiser = Arc::new(tokio::sync::RwLock::new(MdnsAdvertiser::new()));
-        let (sync_tx, _) = tokio::sync::broadcast::channel::<DesktopSyncEvent>(SYNC_EVENT_BROADCAST_CAPACITY);
+        let (sync_tx, _) = tokio::sync::broadcast::channel::<HostSyncEvent>(SYNC_EVENT_BROADCAST_CAPACITY);
         let system_info = Arc::new(SystemInfo::collect());
 
         AppContextBuilder::new()
@@ -200,12 +200,12 @@ async fn init_test_app_context() {
         let ws_manager = WebSocketManager::global();
         ws_manager.init().await.expect("init WebSocketManager failed");
         global_matcher()
-            .register_source::<DesktopSyncEvent>(sync_tx.clone())
+            .register_source::<HostSyncEvent>(sync_tx.clone())
             .await;
         // 票 09：处理器不再持有内核会话登记（构造只收广播器）
-        let sync_handler: Arc<dyn bedcode_lib::events::EventHandler<DesktopSyncEvent>> =
+        let sync_handler: Arc<dyn bedcode_lib::events::EventHandler<HostSyncEvent>> =
             Arc::new(SyncEventHandler::new(ws_manager));
-        global_matcher().register::<DesktopSyncEvent>(sync_handler).await;
+        global_matcher().register::<HostSyncEvent>(sync_handler).await;
         let _ = INIT.set(());
     }
 }

@@ -20,6 +20,7 @@ pub mod sql;
 pub mod terminal;
 pub mod traits;
 pub mod types;
+pub mod wire;
 
 /// 消息总线消息
 ///

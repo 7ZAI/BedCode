@@ -26,29 +26,27 @@ pub(crate) fn emit_event(host_ctx: &WasmHostContext, event_name: &str, payload_j
 
 /// 广播同步事件到所有客户端（移动端同步通道）
 ///
-/// 载荷为 SDK 类型化 `SyncEvent`（serde 表示即线协议），
-/// 宿主反序列化后经 `From` 穷尽转换为内部事件 —— 未知类型在编译期即不可能出现
+/// 载荷为 SDK 类型化 `SyncEvent`（专项票 02 起其 serde 表示与出站 `SyncPayload`
+/// 同 wire）：宿主反序列化 → 包成 `HostSyncEvent` → 经统一 `events::publish` 入口
+/// 进入广播面。这里**没有**按会话变体的转换分支，宿主只剩「解析 + 投递」两件事。
+///
+/// 失败一律显性留痕，禁止静默丢弃：解析失败（含票 02 换格式后未重建的旧产物）、
+/// 载荷折不成出站形状（`validate`）、事件源未注册（装配缺失）都走 `Err`。
+/// 注意 WIT `host-events.broadcast-sync` 无返回值（D5 不动 ABI），所以 `Err` 的
+/// 可观测点是 `runtime/component.rs` 导入壳打的 `error!`，不是插件侧的异常。
 pub(crate) fn broadcast_sync(host_ctx: &WasmHostContext, plugin_id: &str, event_json: &str) -> Result<(), String> {
     // 权限校验：broadcast 权限门控移动端同步通道
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_BROADCAST, "host_broadcast_sync") {
         return Err("permission denied".to_string());
     }
-    // 载荷直接反序列化为 SDK 类型化 SyncEvent（与插件侧同一类型，serde 表示即线协议）
-    // 未知/畸形事件在此被拒绝，不再静默丢弃：类型化后插件侧也无法构造未知变体
+    // 未知/畸形事件在此被拒绝（含票 02 之前的旧内部标签格式）：静默收下就是
+    // 「线还在、推送永远是空」的断链
     let sdk_event: bedcode_plugin_api::events::SyncEvent = serde_json::from_str(event_json)
         .map_err(|e| format!("broadcast error: unknown or malformed sync event: {}", e))?;
-    // 穷尽转换：SyncEvent 新增变体时 From 实现编译失败，强制同步
-    let sync_event = crate::events::DesktopSyncEvent::from(sdk_event);
-    // 启动早期（AppContext::init 完成前，auto-activate 的插件可能已广播）
-    // 无同步通道可用：静默丢弃（与 MessageBus 无订阅者同语义），不 panic
-    let Some(ctx) = crate::system::app_context::AppContext::try_global() else {
-        return Err("broadcast error: AppContext not initialized yet".to_string());
-    };
-    let sync_tx = ctx.sync_tx();
-    sync_tx
-        .send(sync_event)
-        .map(|_| ())
-        .map_err(|e| format!("broadcast error: {}", e))
+    let event = crate::events::HostSyncEvent::from(sdk_event);
+    // 统一发布入口（校验 + 投递）：host function 是同步的，经既有桥驱动 async matcher
+    crate::wasm_core::runtime_util::block_on_async(crate::events::publish(event))
+        .map_err(|e| format!("broadcast error: {e}"))
 }
 
 /// 通过 Tauri 事件发送到前端 toast
@@ -114,7 +112,35 @@ mod tests {
         assert!(err.contains("unknown or malformed sync event"), "got: {}", err);
     }
 
-    // 成功路径（反序列化 → AppContext::global().sync_tx 广播）依赖应用启动时初始化的
-    // AppContext 全局单例：测试环境未初始化会 panic，交由集成/手动测试覆盖，
+    /// 票 02 换格式后的**旧产物**拒绝锁：内部标签 PascalCase + 字段平铺的载荷
+    /// （专项前插件 `broadcast_sync` 出的形状）必须是点名可见的解析错误，
+    /// 不能被判成「没有事件」——静默收下就是「线还在、推送永远是空」的断链。
+    #[test]
+    fn broadcast_sync_rejects_pre_alignment_internal_tag_format() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, "test-plugin", &[PERMISSION_BROADCAST]);
+        let legacy = r#"{"type":"TaskQueueChanged","session_id":"s1","queue_count":1,"action":"add"}"#;
+        let err = broadcast_sync(&ctx, "test-plugin", legacy).unwrap_err();
+        assert!(
+            err.contains("unknown or malformed sync event"),
+            "旧格式应被显性拒绝，实际: {err}"
+        );
+        // 反控：新格式（adjacently tagged）必须能过解析这一关
+        let current =
+            r#"{"type":"task_queue_changed","data":{"session_id":"s1","queue_count":1,"action":"add"}}"#;
+        match broadcast_sync(&ctx, "test-plugin", current) {
+            // 无头 harness 里事件源未注册（publish 的 NoSource）是唯一允许的下游错误，
+            // 解析本身必须已通过——否则就是新格式也被拒了
+            Err(e) => assert!(
+                !e.contains("malformed sync event"),
+                "新格式不该被判成畸形: {e}"
+            ),
+            Ok(()) => {}
+        }
+    }
+
+    // 成功路径（解析 → HostSyncEvent → events::publish → 全局事件源）依赖启动期
+    // 注册的 HostSyncEvent 事件源：无头 harness 里 `publish` 显性报 NoSource，
+    // 端到端投递由集成测试（broadcast_shutdown / pty_session_chain）覆盖，
     // 此处只测可独立验证的权限门禁与载荷校验
 }

@@ -486,7 +486,13 @@ mod tests {
         Data { id: u32, payload: String },
     }
 
-    impl AppEvent for SessionEvent {}
+    // 测试假事件都不走 WS 同步广播通道。`to_sync_payload` 故意没有默认实现
+    // （新增事件必须显式回答走不走同步通道，见 AppEvent 注释），故逐个显式作答。
+    impl AppEvent for SessionEvent {
+        fn to_sync_payload(&self) -> Option<bedcode_plugin_api::wire::SyncPayload> {
+            None
+        }
+    }
 
     /// 事件类型 B：模拟连接事件（与 SessionEvent 完全不同的类型）
     #[derive(Debug, Clone, PartialEq)]
@@ -496,7 +502,11 @@ mod tests {
         Heartbeat { addr: String },
     }
 
-    impl AppEvent for ConnectionEvent {}
+    impl AppEvent for ConnectionEvent {
+        fn to_sync_payload(&self) -> Option<bedcode_plugin_api::wire::SyncPayload> {
+            None
+        }
+    }
 
     /// 事件类型 C：简单结构体事件（验证非 enum 类型也能工作）
     #[derive(Debug, Clone, PartialEq)]
@@ -505,7 +515,11 @@ mod tests {
         message: String,
     }
 
-    impl AppEvent for NotificationEvent {}
+    impl AppEvent for NotificationEvent {
+        fn to_sync_payload(&self) -> Option<bedcode_plugin_api::wire::SyncPayload> {
+            None
+        }
+    }
 
     // ==================== 辅助：结构化 EventHandler 实现 ====================
 
