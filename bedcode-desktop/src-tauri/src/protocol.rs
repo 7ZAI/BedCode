@@ -22,4 +22,7 @@
 
 pub mod session;
 
-pub use session::{task_fields_from_slot, RendererSource, ResizeOutcome, SessionInfo, SessionInfoView};
+pub use session::{
+    task_fields_from_slot, RendererSource, ResizeOutcome, SessionInfo, SessionInfoView, SessionStatus,
+    SessionType,
+};

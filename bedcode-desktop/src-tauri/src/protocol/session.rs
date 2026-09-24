@@ -13,7 +13,53 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
 
-use crate::enums::{SessionStatus, SessionType};
+// ==================== 会话状态 / 类型（线协议真源，票 08 自 enums/session.rs 归位） ====================
+
+/// 会话状态（**线协议形状**，票 08 归位 self.protocol 线协议域）
+///
+/// 会话事实真源在 `com.bedcode.terminal-session` 登记域；宿主侧本类型是它的**对外
+/// 透传形状**——宿主业务上**不构造不推进**（PTY 存活用独立的引擎枚举
+/// [`crate::enums::PtySessionStatus`]），只做三件事：从插件视图读出状态名做存活过滤
+/// （关窗守卫）、在事件广播 / WS 消息里透传、复化串行化 wire。取值的完整形状锁见
+/// 本文件底部 `shape_lock_session_status_wire_forms`。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SessionStatus {
+    /// 空闲（移动端使用）
+    Idle,
+    /// 正在启动
+    Starting,
+    /// 运行中
+    Running,
+    /// 等待输入
+    WaitingInput,
+    /// 正在停止
+    Stopping,
+    /// 已停止
+    Stopped,
+    /// 出错（可选错误信息）
+    Error(Option<String>),
+}
+
+impl Default for SessionStatus {
+    fn default() -> Self {
+        Self::Starting
+    }
+}
+
+/// 会话类型（**线协议形状**，票 08 归位）：只有 `Pty` 一个变体，是
+/// `SessionInfo.session_type` 字段的 wire 取值（`"pty"`）；宿主只透传不解释。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SessionType {
+    Pty,
+}
+
+impl Default for SessionType {
+    fn default() -> Self {
+        Self::Pty
+    }
+}
 
 // ==================== 会话记录与对外视图 ====================
 
