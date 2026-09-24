@@ -2,7 +2,7 @@
  * 终端视图的宿主能力注入契约（票 03a）
  *
  * 插件终端视图（TerminalPreview / TerminalWindowView）经 inject 取用宿主能力。
- * 宿主侧实现：`src/views/TerminalWindowHostView.vue`（provide 同结构对象；
+ * 宿主侧实现：`src/plugin/terminal-host-capabilities.ts`（provide 同结构对象；
  * 契约类型宿主侧不 import 插件，就地定义同构结构——双份定义的脆弱点，
  * 以本文件的导出为真源）。
  *

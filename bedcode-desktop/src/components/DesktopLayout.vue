@@ -1,6 +1,6 @@
 <template>
-  <!-- 终端窗口路由：不显示任何布局元素 -->
-  <template v-if="isTerminalWindow">
+  <!-- 插件独立窗口路由（终端窗口 / 通用插件窗口）：不显示任何布局元素 -->
+  <template v-if="isPluginWindow">
     <router-view />
   </template>
 
@@ -49,7 +49,7 @@ import PluginGlobalDialog from '@binblink/bedcode-plugin-sdk-desktop/ui/plugin-g
 
 const route = useRoute()
 
-const isTerminalWindow = computed(() => {
-  return route.path.startsWith('/terminal-window')
-})
+// 判据取路由 meta 而非路径前缀：新增的插件独立窗口路由自动获得「裸窗口」语义，
+// 不必在每个宿主布局文件里再同步一遍路径清单
+const isPluginWindow = computed(() => route.meta.bareWindow === true)
 </script>

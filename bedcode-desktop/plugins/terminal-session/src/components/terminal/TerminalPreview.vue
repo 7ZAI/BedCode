@@ -222,7 +222,7 @@ const { t } = useI18n()
 
 // 插件上下文（PluginViewHost / dev-shell 注入；插件组件既有模式）
 const context = inject<PluginContext>('pluginContext')!
-// 终端宿主能力（TerminalWindowHostView 注入；dev-shell/vitest 回退内存版）
+// 终端宿主能力（宿主插件窗口注入；dev-shell/vitest 回退内存版）
 const caps = useTerminalHostCapabilities() ?? createFallbackHostCapabilities()
 
 const terminalHostRef = ref<HTMLElement | null>(null)

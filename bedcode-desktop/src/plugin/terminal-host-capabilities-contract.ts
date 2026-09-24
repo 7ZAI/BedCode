@@ -3,10 +3,11 @@
  *
  * 与插件侧真源 `plugins/terminal-session/src/components/terminal/
  * terminalHostCapabilities.ts` 结构镜像（宿主不 import 插件包，双份定义的
- * 脆弱点以插件侧为真源）。TerminalWindowHostView 按此契约 provide，
+ * 脆弱点以插件侧为真源）。插件窗口宿主 `views/PluginWindowHostView.vue`
+ * 经 `plugin/terminal-host-capabilities.ts` 按此契约 provide，
  * 插件终端视图（TerminalPreview / TerminalWindowView）inject。
  *
- * 仅类型与注入键（值在 TerminalWindowHostView.vue 内实现）；输出面已不属
+ * 仅类型与注入键（实现在同目录 `terminal-host-capabilities.ts`）；输出面已不属
  * 契约（票 05）：输出改经插件 WASM 命令面 `session.output.pull` 轮询拉取
  * `host-session.output-ring-fetch` 原语，宿主 Channel 桥随前端 composable 摘除。
  */

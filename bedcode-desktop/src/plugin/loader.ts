@@ -23,6 +23,32 @@ interface ActivePlugin {
 class PluginLoaderClass {
   private plugins: Map<string, ActivePlugin> = new Map()
 
+  /**
+   * 启动加载的幂等句柄（见 `ensureLoaded`）
+   *
+   * 为什么需要：`loadAll` 在 `main.ts` 里非阻塞发起，独立窗口的深链路由
+   * （`/terminal-window/:id`、`/plugin/window/:pluginId/:viewId`）随即挂载视图
+   * 宿主。宿主必须能「等到插件注册完」再渲染，而重跑一次 loadAll 会把插件模块
+   * 二次 import + 二次 activate（重复副作用），故只能共用同一个句柄。
+   */
+  private startupLoad: Promise<void> | null = null
+
+  /**
+   * 等待启动期插件加载完成（幂等）——首次调用即发起 loadAll，后续调用共用同一句柄。
+   *
+   * 供视图宿主在渲染插件视图前等待「插件已注册贡献面」。rejection 在此收口：
+   * 单个插件的加载失败已在 loadAll 内各自登记 Error 态，整批 reject 只是凭证获取
+   * 之类的致命故障——调用方拿到的是「加载已结束」而非再次抛出。
+   */
+  async ensureLoaded(): Promise<void> {
+    if (!this.startupLoad) {
+      this.startupLoad = this.loadAll().catch((e) => {
+        logger.error('[PluginLoader] Startup load failed:', e)
+      })
+    }
+    await this.startupLoad
+  }
+
   /** 加载所有插件（应用启动时调用）
    *
    * 根据 Rust 后端返回的插件状态决定前端加载策略：

@@ -103,6 +103,8 @@ export default {
     },
     plugin: {
       viewNotFound: '插件视图未找到',
+      windowLoading: '正在加载插件窗口…',
+      windowTargetMissing: '插件窗口视图不可用：{pluginId} / {viewId}',
       searchCommands: '搜索插件命令...',
       noCommands: '没有找到匹配的命令',
       title: '插件',

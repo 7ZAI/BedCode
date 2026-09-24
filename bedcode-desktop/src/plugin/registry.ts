@@ -5,7 +5,7 @@
  */
 
 import type { Disposable, PluginContext, PluginState } from './types'
-import { ref, shallowRef, type Ref } from 'vue'
+import { ref, shallowRef, type Ref, type ShallowRef } from 'vue'
 
 /** 插件视图默认排序值 — 插件未指定 order 时使用。
  * 600 位于全部内置菜单项（设备 100 / 会话 200 / 服务器 300 保留 / 插件 9998 / 设置 9999）之后，
@@ -123,6 +123,15 @@ interface RegisteredHttpEndpoint {
 /** 前端插件注册表 */
 class PluginRegistryClass {
   private views = new Map<string, RegisteredView>()
+  /**
+   * 全量视图（含 `page` 型，未经菜单投影）的响应式副本 —— `getViewComponent` 的依赖源。
+   *
+   * 为什么必须有：`views` Map 本身不是响应式数据，若 `getViewComponent` 直接按键读 Map，
+   * 消费方的 `computed` 建立不了任何依赖——「组件挂载时视图尚未注册」得到的 undefined
+   * 会被永久缓存，插件随后注册也不可见。独立窗口（如终端窗口）的深链路由正是在
+   * `loadAll` 完成前就挂载了视图宿主，表现即白屏 + 「插件视图未找到」（2026-09-24）。
+   */
+  private readonly viewsIndex: ShallowRef<RegisteredView[]> = shallowRef([])
   private statusBarItem = new Map<string, RegisteredStatusBarItem>()
   private inputExtensions = new Map<string, RegisteredInputExtension>()
   private terminalToolbarItemsMap = new Map<string, RegisteredTerminalToolbarItem>()
@@ -176,9 +185,15 @@ class PluginRegistryClass {
     }
   }
 
-  /** 获取视图组件 */
+  /**
+   * 获取视图组件 —— 带响应式语义
+   *
+   * 读 `viewsIndex` 而非裸 Map：注册 / 注销 / 清插件都会替换该投影，
+   * 使消费方（PluginViewHost 的 computed）在「晚注册」与「插件停用」时重算。
+   */
   getViewComponent(pluginId: string, viewId: string): any {
-    return this.views.get(`${pluginId}:${viewId}`)?.component
+    const hit = this.viewsIndex.value.find((v) => v.pluginId === pluginId && v.viewId === viewId)
+    return hit?.component
   }
 
   /** 注册状态栏项 */
@@ -473,6 +488,8 @@ class PluginRegistryClass {
 
   private updateReactiveViews() {
     const views = [...this.views.values()]
+    // 先替换全量投影：getViewComponent 的响应式依赖源（见 viewsIndex 注释）
+    this.viewsIndex.value = views
     // 按 order 升序排序（sort 为稳定排序，同 order 保持注册先后）
     views.sort((a, b) => a.order - b.order)
     this.sidebarViews.value = views.filter((v) => v.viewType === 'sidebar')

@@ -28,7 +28,7 @@ import SessionSettingsSection from './components/SessionSettingsSection.vue'
 import TaskHistoryView from './components/TaskHistoryView.vue'
 import TaskQueueModal from './components/TaskQueueModal.vue'
 // 终端窗口视图（票 03a 壳迁入；type='page' 不进侧边栏菜单，宿主 /terminal-window/:id
-// 路由经 TerminalWindowHostView → PluginViewHost 渲染本视图）
+// 路由经 PluginWindowHostView → PluginViewHost 渲染本视图）
 import TerminalWindowView from './views/terminal/TerminalWindowView.vue'
 import taskModalCss from './components/task-queue-modal.css?inline'
 // 开源 Vue3 日期/时间选择组件（替代原生 datetime-local 控件，样式可随主题定制）

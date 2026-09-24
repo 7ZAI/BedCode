@@ -79,8 +79,8 @@ Promise.all([initPlatform(), settingsStore.loadSettings()]).then(
 
 app.mount('#app')
 
-// 初始化插件系统（非阻塞，失败不影响主应用）
+// 初始化插件系统（非阻塞，失败不影响主应用）。
+// 走 ensureLoaded（幂等句柄）：视图宿主等同一句柄即可知道「插件注册完没有」，
+// 且不会把插件模块重复 import / activate
 import { pluginLoader } from '@/plugin/loader'
-pluginLoader.loadAll().catch((e) => {
-  logger.error('[PluginSystem] Failed to initialize:', e)
-})
+pluginLoader.ensureLoaded()

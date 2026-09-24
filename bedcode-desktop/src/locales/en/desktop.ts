@@ -106,6 +106,8 @@ export default {
     },
     plugin: {
       viewNotFound: 'Plugin view not found',
+      windowLoading: 'Loading plugin window…',
+      windowTargetMissing: 'Plugin window view unavailable: {pluginId} / {viewId}',
       searchCommands: 'Search plugin commands...',
       noCommands: 'No matching commands found',
       title: 'Plugins',

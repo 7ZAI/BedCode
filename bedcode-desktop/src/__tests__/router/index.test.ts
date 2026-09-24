@@ -68,12 +68,36 @@ describe('Router Configuration', () => {
       expect(route?.path).toBe('/plugin/toolbox/:pluginId/:viewId')
     })
 
+    it('should have generic plugin window route with pluginId/viewId params', () => {
+      const route = router.getRoutes().find((r) => r.name === 'plugin-window-view')
+
+      expect(route).toBeDefined()
+      expect(route?.path).toBe('/plugin/window/:pluginId/:viewId')
+    })
+
     it('should have terminal window route with id param', () => {
       const route = router.getRoutes().find((r) => r.path === '/terminal-window/:id')
 
       expect(route).toBeDefined()
       expect(route?.name).toBe('terminal-window')
       expect(route?.path).toContain(':id')
+    })
+  })
+
+  describe('bare window routes', () => {
+    // 独立窗口（终端窗口 / 通用插件窗口）不套宿主桌面外壳：判据取 meta 而非路径前缀
+    it('should mark both plugin-facing window routes as bareWindow', () => {
+      for (const name of ['terminal-window', 'plugin-window-view']) {
+        const route = router.getRoutes().find((r) => r.name === name)
+        expect(route?.meta.bareWindow, name).toBe(true)
+      }
+    })
+
+    it('should not mark layout routes as bareWindow', () => {
+      for (const name of ['plugins', 'settings', 'plugin-sidebar-view']) {
+        const route = router.getRoutes().find((r) => r.name === name)
+        expect(route?.meta.bareWindow, name).toBeUndefined()
+      }
     })
   })
 
@@ -86,6 +110,7 @@ describe('Router Configuration', () => {
         'plugin-config',
         'plugin-sidebar-view',
         'plugin-toolbox-view',
+        'plugin-window-view',
         'terminal-window',
       ]
 

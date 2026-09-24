@@ -46,12 +46,20 @@ const router = createRouter({
       props: true,
     },
     {
+      // 通用插件窗口：任何插件注册的 `kind: 'page'` 视图都能独占一个独立窗口。
+      // `bareWindow` = 宿主不套桌面外壳（侧边栏 / 标题栏），内容全部由插件视图给
+      path: '/plugin/window/:pluginId/:viewId',
+      name: 'plugin-window-view',
+      component: () => import('@/views/PluginWindowHostView.vue'),
+      meta: { bareWindow: true },
+    },
+    {
       path: '/terminal-window/:id',
       name: 'terminal-window',
-      // 票 03a / 票 05：终端窗口内容整体下沉 session 插件——路由直指插件视图宿主
-      // （能力注入 + PluginViewHost 渲染插件 `session.terminal-window` 视图）；
-      // 旧宿主 TerminalWindowView 已随票 05 摘除，不留降级实现
-      component: () => import('@/views/TerminalWindowHostView.vue'),
+      // 票 03a / 票 05：终端窗口内容整体下沉会话插件——本路由走通用插件窗口宿主，
+      // 缺省目标即会话插件的 `session.terminal-window` 视图；宿主不留终端兜底实现
+      component: () => import('@/views/PluginWindowHostView.vue'),
+      meta: { bareWindow: true },
     },
   ],
 })

@@ -56,6 +56,11 @@ function markErrorCount(pluginId: string): number {
   ).length
 }
 
+/** 取宿主对某命令的调用次数 */
+function invokeCount(cmd: string): number {
+  return mockInvoke.mock.calls.filter(([c]) => c === cmd).length
+}
+
 /** 取某插件的 plugin_frontend_load_report 上报参数列表（issue 04 诊断通道） */
 function frontendReports(pluginId: string): Array<Record<string, unknown>> {
   return mockInvoke.mock.calls
@@ -189,5 +194,21 @@ describe('pluginLoader.loadAll 启动加载门禁', () => {
     // 加载流程未被阻塞：失败恢复路径（mark_error）仍执行，且诊断仍尝试过一次
     expect(markErrorCount('com.bedcode.diag-fail')).toBe(1)
     expect(frontendReports('com.bedcode.diag-fail')).toHaveLength(1)
+  })
+
+  it('ensureLoaded 幂等：多次（含并发）等待共用同一次启动加载', async () => {
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === 'plugin_list_loaded') {
+        return Promise.resolve([makePluginInfo({ id: 'com.bedcode.ensure-fed', name: 'Ensure' })])
+      }
+      return Promise.resolve(undefined)
+    })
+
+    await Promise.all([pluginLoader.ensureLoaded(), pluginLoader.ensureLoaded()])
+    await pluginLoader.ensureLoaded()
+
+    // 只拉取一次插件清单：重复等待不得把插件模块二次 import / activate
+    expect(invokeCount('plugin_list_loaded')).toBe(1)
+    expect(markErrorCount('com.bedcode.ensure-fed')).toBe(1)
   })
 })

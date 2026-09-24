@@ -42,7 +42,7 @@ import { useSessionWindows } from '@/composables/useSessionWindows'
 
 /**
  * 会话中心插件 ID（终端窗口视图由该插件贡献；票 05 起宿主不留终端兜底）。
- * 改名票 06 将集中化宿主侧插件常量，此处与 TerminalWindowHostView 同值先行。
+ * 改名票 06 将集中化宿主侧插件常量，此处与 PluginWindowHostView 缺省目标同值先行。
  */
 const SESSION_PLUGIN_ID = 'com.bedcode.terminal-session'
 
