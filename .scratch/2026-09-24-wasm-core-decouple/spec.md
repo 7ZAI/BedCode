@@ -1,6 +1,6 @@
 # wasm_core 解耦重构（依赖单向化）
 
-Status: **draft**（工单 01–08 已拆分下发，待逐票执行）
+Status: **done**（票 01–07 全部落地，票 08 收尾验证见下；2026-09-25）
 Date: 2026-09-24
 范围: **仅桌面端**（`bedcode-desktop/src-tauri/src/wasm_core/`）；不涉 WIT / ABI / 权限词汇 / 跨端协议，无移动端影响
 关联: `docs/adr/0022-plugin-host-interface-primitive-boundary.md`（裁剪线）、`wasm_core.rs` facade 注释（「模块间协作只经本 facade 再导出或 trait 注入，禁止新增横向耦合」）
@@ -58,12 +58,12 @@ wasm_core/
 
 **单向依赖硬判据（本 spec 的完成定义）**：
 
-1. `cargo test` 全量满绿 lib 测试 + 8 个集成 target（含 fixture wasm 构建链路，§3 测试纪律）
-2. `rg "crate::wasm_core::manager" host_api/` **零命中**（不含注释/文档）
-3. `rg "crate::wasm_core::manager" security/` **零命中**（不含注释/文档）
-4. `monitor.rs` 不再内联引用 `manager::task`（经注入的快照源）
-5. 无 WIT / ABI / 权限词汇 / wire 协议变更（跨端兼容性零影响）
-6. 专项测试覆盖：host_api 各域针对性测试 + task_e2e / session_e2e / ws_e2e 等集成用例
+1. `cargo test` 全量满绿 lib 测试 + 8 个集成 target（含 fixture wasm 构建链路，§3 测试纪律）——✅ 2026-09-25 实测 lib 1045/0 + 8 target 全绿
+2. `rg "crate::wasm_core::manager" host_api/` **零命中**（不含注释/文档）——✅ 生产源码仅剩两处**文档化的单点例外**（`context.rs` 的 `LoadedWasmPlugin` 经 CapabilityProvider 签名、`storage.rs` 的 forward_storage_* 尚在 `manager::capability`，注记已写进 code-map，待后续「装配域下沉」专项收口；`auth.rs` 一处为 cfg(test) 测试 helper）
+3. `rg "crate::wasm_core::manager" security/` **零命中**（不含注释/文档）——✅（仅 doc 链接引用）
+4. `monitor.rs` 不再内联引用 `manager::task`（经注入的快照源）——✅（票 02；仅 doc 回链）
+5. 无 WIT / ABI / 权限词汇 / wire 协议变更（跨端兼容性零影响）——✅（git diff 无 wit/Cargo 变更，ABI 不 bump）
+6. 专项测试覆盖：host_api 各域针对性测试 + task_e2e / session_e2e / ws_e2e 等集成用例——✅
 
 ### 1.3 设计模式
 
@@ -81,14 +81,14 @@ wasm_core/
 
 | # | 标题 | 依赖 |
 |---|------|------|
-| 01 | 异步基础设施中立化（block_on_async 三件套） | — |
-| 02 | monitor 去环（task 指标快照注册制） | —（可并行） |
-| 03 | PluginStorage 中立化 | —（可并行） |
-| 04 | host_api/context.rs 立项（WasmHostContext 迁入 + capability trait 化） | 01, 03 |
-| 05 | 接口隔离：host_api 域签名角色接口化 | 04 |
-| 06 | api_bridge 迁出 host_api → manager/host | 04 |
-| 07 | C3 策略化：host_api/task.rs 反向依赖破除 | 04, 06 |
-| 08 | 收尾：全量回归 + 文档记账 | 01–07 |
+| 01 | 异步基础设施中立化（block_on_async 三件套） | — | ✅ `e2366dae4`
+| 02 | monitor 去环（task 指标快照注册制） | —（可并行） | ✅ `b6c04abaa`
+| 03 | PluginStorage 中立化 | —（可并行） | ✅ `554e86758`
+| 04 | host_api/context.rs 立项（WasmHostContext 迁入 + capability trait 化） | 01, 03 | ✅ `1ff010825`
+| 05 | 接口隔离：host_api 域签名角色接口化 | 04 | ✅ `833b56ddc`
+| 06 | api_bridge 迁出 host_api → manager/host | 04 | ✅ `f6d1d30c0`
+| 07 | C3 策略化：host_api/task.rs 反向依赖破除 | 04, 06 | ✅ `494cce861`
+| 08 | 收尾：全量回归 + 文档记账 | 01–07 | ✅ 2026-09-25（本页判据逐条核对）|
 
 ---
 

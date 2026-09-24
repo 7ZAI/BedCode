@@ -2,7 +2,7 @@
 
 **Type:** task
 **Blocked by:** 04
-**Status:** ready-for-agent
+**Status:** ✅ **done**（commit `f6d1d30c0`，2026-09-24；issue 文档此前漏标，补记于 2026-09-25）
 
 **What to build:** 把 `host_api/api_bridge.rs`（前端命令桥）整体迁到 `manager/host/api_bridge.rs`（或 manager 下等价命令面位置）。它是 Tauri invoke 命令入口，依赖 `PluginHost` 生命周期与 `manager::registry` 数据结构——属 command 面而非宿主能力实现面，留在 host_api 会让「host_api 零 manager」硬判据无法达成。
 

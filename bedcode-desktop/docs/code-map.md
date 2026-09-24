@@ -151,13 +151,29 @@ Rust 侧按内核五模块组织（`wasm_core.rs` 为唯一组合点/facade，�
     审计票 11 第 2 项）；contributes 注册的唯一实现是 `host/register.rs::register_plugin_contributions`
     （启动期全量 / 安装 / 热重载三入口共用，票 11 第 3 项）
   - **runtime（`manager/runtime/`，原 wasm_runtime）**：wasmtime Engine/Store/Instance 生命周期管理（含 component.rs
-    WASI preview2 接线）；实例互调（JSON-RPC 路由）与宿主上下文（WasmHostContext）定义
+    WASI preview2 接线）；实例互调（JSON-RPC 路由）。**WasmHostContext 本体已迁 `host_api/context.rs`**
+    （票 04），runtime 只保留 `pub use` 兼容再导出；component.rs Host 绑定经 `self.host_ctx.as_ref()`
+    coerce 到各域所需角色接口（票 05）
 - **host_api（`wasm_core/host_api/`，原 wasm_runtime/host_impl，宿主对外接口模块）**：宿主能力实现
     按功能域拆分（api/app/storage/database/events/http/mdns/ws/pty/log/fs/
-    config/bus/lifecycle/process/timer/peer/status/platform/wsl_fs + api_bridge 前端命令桥），统一注册到 Linker。
+    config/bus/lifecycle/process/timer/peer/status/platform/wsl_fs；
+    **api_bridge 前端命令桥已随票 06 归位 `manager/host/`**），统一注册到 Linker。
     **票 10 起无会话域**（`terminal.rs` / `session.rs` 随 `host-terminal` / `host-session` 两个
     interface 一并删除）；`connection.rs`（票 04）= 宿主 server 在册连接清单原语
     `host-connection`，判据 `connection:read`——它是唯一幸存的「会话域出身」原语，且已与会话解耦
+  - **context.rs（票 04/05/07 后的装配面）**：`WasmHostContext` 本体（原定义于
+    `manager::runtime`）、`PluginServices` / `CapabilityProvider` / `TaskEngine` 三个消费方定义
+    trait（均两阶段注入：PluginHost 构造后 `set_services` / `set_task_engine`）、角色接口
+    （DbScope / PermissionScope / StorageScope / FsAuthScope / BusScope / AppHandleScope /
+    ServicesScope / ProcessScope / ApiRegistryScope / SecurityScope / CapabilityScope /
+    SecretsScope——22 个能力域函数签名只取各自需要的 `&dyn` 窄接口，不再传上帝对象，
+    `host_api/` 生产源码零 `&WasmHostContext` 参数）。**host_api → manager 依赖单向化**：
+    除两处文档化的单点例外（`LoadedWasmPlugin` 装配域类型经 CapabilityProvider 签名、
+    storage 能力转发 forward_storage_* 尚在 manager::capability）外，host_api 不依赖 manager
+  - **unit_executor.rs（票 07）**：任务单元执行器策略接口 `UnitExecutor`（matches + execute）——
+    fs/process/http 各自的域执行器（fs 执行器内置声明闸门 + fs_auth 已授权预检，绝不弹窗）
+    经 `manager::task::register_unit_executor` 注册；core-task 执行单元时查注册表分发，
+    不再直调 host_api 域函数
   - **capability**：能力注册表与系统组件装配（manifest `type: system|application` + `dependencies`）——
     能力名 → 宿主原语 / WASM 系统组件实例二选一装配；应用插件的 host-* import 由 Linker 经此
     host-side 转发到系统组件同形导出；系统组件内置、默认启用、先于应用插件激活
@@ -281,7 +297,10 @@ WIT 契约 `host-task`（5 函数：execute-batch / submit / status / cancel / l
 零新 DTO）。
 
 - **执行引擎（core-task）**：`wasm_core/manager/task.rs`（TaskRegistry + 专用线程池 + 每任务
-  并发窗口 + condvar 终态通知 + 每插件有界回调 channel/消费派发任务）；入口 `wasm_core/host_api/task.rs`
+  并发窗口 + condvar 终态通知 + 每插件有界回调 channel/消费派发任务）。入口 `wasm_core/host_api/task.rs`
+  做权限门（`task:run`）后经 **`TaskEngine` 接口**（两阶段注入，票 07）调用；单元执行经
+  **`UnitExecutor` 注册表**分发（fs/process/http 执行器各自注入；`ensure_unit_path_granted`
+  已随 fs 执行器归位 host_api/fs.rs）——host_api 与 manager 的双向依赖环在任务域收束
   （`task:run` 权限门 + plan 解析 + 配额仲裁；单元执行时另过 kind 对应域权限门——双门结构）；
 - **两档 API**：`execute-batch` 同步扇出→join（阻塞 Store，同 run-sync 语义，仅限快操作）；
   `submit` 异步登记返句柄 `task-<hex>`，进度/终态经 `dispatch_task_event` → `events-task`

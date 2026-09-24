@@ -2,7 +2,21 @@
 
 **Type:** task
 **Blocked by:** 04, 06
-**Status:** ready-for-agent
+**Status:** ✅ **done**（commit `494cce861`，2026-09-25）
+
+> 完成记录：C3/C4 两边均收束，行为零变化。C3：host_api/context.rs 新增 `TaskEngine`
+> trait（消费方定义，镜像 core-task 五入口）+ WasmHostContext 两阶段注入槽位
+> （set_task_engine / task_engine，PluginServices 先例）；manager/task.rs 经
+> `CoreTaskEngine` 实现；host_api/task.rs 过权限门后经接口调用，无 manager import；
+> 引擎未注入 fail-visible。C4：新 host_api/unit_executor.rs 定义 `UnitExecutor` 策略
+> trait（Any 超接口供注册表按具体类型幂等去重）；fs/process/http 各自实现执行器，
+> fs 执行器把 `ensure_unit_path_granted`（声明闸门 + fs_auth 已授权预检、绝不弹窗）
+> 随注册逻辑归位；manager/task.rs execute_unit 改查进程级 `UNIT_EXECUTORS` 注册表
+> 分发（register_unit_executor 注入；unknown 文案不变）。DTO 决策：PlanUnit/Plan
+> 留在 manager，UnitExecutor::execute 经 `&serde_json::Value` 透传（wire 不变）。
+> 真实执行语义测试迁至行为归属层（空 units / unknown kind fail-collect → task_e2e，
+> fs 授权预检 → host_api/fs.rs 的 FsUnitExecutor 测试，host_api/task.rs 收缩为门禁 +
+> 引擎缺失契约）。验证：cargo test --lib 1045/0 + 8 集成 target 全绿。
 
 **What to build:** 解除 `host_api/task.rs` 对 `manager::task`（core_task）的双向依赖，并用「消费方定义接口」把 core-task 改为只依赖接口不依赖具体域函数。
 
@@ -20,8 +34,8 @@
 
 **验收：**
 
-- [ ] `rg "use crate::wasm_core::manager::task" host_api/` 零命中（host_api/task.rs 不再 import core_task）
-- [ ] `rg "host_api::fs|host_api::http|host_api::process" manager/task.rs` 零命中（execute_unit 经 UnitExecutor 注册表分发）
-- [ ] host_api/task.rs 的权限门/解析/配额逻辑不变（diff 审查应只见调用方与 trait 接线）
-- [ ] `cargo test` 的 task_e2e / session_e2e（若涉 task 链）/ host_api/task 单测满绿
-- [ ] 无 wire / 权限词汇变更
+- [x] `rg "use crate::wasm_core::manager::task" host_api/` 零命中（host_api/task.rs 不再 import core_task）
+- [x] `rg "host_api::fs|host_api::http|host_api::process" manager/task.rs` 零命中（execute_unit 经 UnitExecutor 注册表分发）
+- [x] host_api/task.rs 的权限门/解析/配额逻辑不变（diff 审查应只见调用方与 trait 接线）
+- [x] `cargo test` 的 task_e2e / session_e2e（若涉 task 链）/ host_api/task 单测满绿
+- [x] 无 wire / 权限词汇变更
