@@ -188,12 +188,13 @@ export default {
           risk: 'Can inject arbitrary input (including Enter) into your terminal sessions',
         },
         'terminal:output': { title: 'Terminal Output', desc: 'Listen to terminal output' },
-        'terminal:observe': {
-          title: 'Terminal Observe',
-          desc: 'Observe terminal input submissions',
+        // v27 (ticket 10): `terminal:observe` / `session:write` removed with the retired
+        // surfaces; `session:read` copy rewritten to match what it actually gates after
+        // tickets 08/09/10 (host terminal-window facts only)
+        'session:read': {
+          title: 'Session Read',
+          desc: 'Read host terminal-window facts (initial grid / open-close / presence)',
         },
-        'session:read': { title: 'Session Read', desc: 'Read session list and status' },
-        'session:write': { title: 'Session Write', desc: 'Create, stop or modify sessions' },
         'connection:read': { title: 'Connection List', desc: 'Read the host server\'s registered connections (device identifiers, including unauthenticated)' },
         'session:config': {
           title: 'Session Config',

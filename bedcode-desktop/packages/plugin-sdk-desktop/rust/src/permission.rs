@@ -14,10 +14,12 @@ use std::collections::{HashMap, HashSet};
 /// 所有合法权限常量
 pub const PERMISSION_TERMINAL_INPUT: &str = "terminal:input";
 pub const PERMISSION_TERMINAL_OUTPUT: &str = "terminal:output";
-/// 终端输入观察：注册提交输入行监听器（输入内容可能含密码等敏感信息，需显式授权，见 ADR 0001）
-pub const PERMISSION_TERMINAL_OBSERVE: &str = "terminal:observe";
+// v27 退役（会话引擎下沉票 10）：`terminal:observe`（提交输入行观察面，票 03 删派发点）
+// 与 `session:write`（宿主会话写原语，随 `host-session` 整 interface 删除）。
+/// 会话读取（前端 `session.*` 窗口原语面）：**票 10 起只剩宿主终端窗口事实**
+/// （预测初始网格 / 打开 / 关闭窗口 / 窗口在场查询）——会话数据面与事件面已分别
+/// 随票 08 / 09 退役（插件读会话走自家命令通道）。
 pub const PERMISSION_SESSION_READ: &str = "session:read";
-pub const PERMISSION_SESSION_WRITE: &str = "session:write";
 /// 宿主 server 在册连接清单读取（WIT `host-connection`，票 04，desktop 独有）：枚举宿主
 /// WS 连接注册表的原始条目（含 `fingerprint` 设备标识、未认证连接也在册）。
 ///
@@ -112,9 +114,7 @@ pub const PERMISSION_CRYPTO_KDF: &str = "crypto:kdf";
 pub const PERMISSION_VOCABULARY: &[(&str, &str)] = &[
     (stringify!(PERMISSION_TERMINAL_INPUT), PERMISSION_TERMINAL_INPUT),
     (stringify!(PERMISSION_TERMINAL_OUTPUT), PERMISSION_TERMINAL_OUTPUT),
-    (stringify!(PERMISSION_TERMINAL_OBSERVE), PERMISSION_TERMINAL_OBSERVE),
     (stringify!(PERMISSION_SESSION_READ), PERMISSION_SESSION_READ),
-    (stringify!(PERMISSION_SESSION_WRITE), PERMISSION_SESSION_WRITE),
     (stringify!(PERMISSION_CONNECTION_READ), PERMISSION_CONNECTION_READ),
     (stringify!(PERMISSION_UI_SIDEBAR), PERMISSION_UI_SIDEBAR),
     (stringify!(PERMISSION_UI_TOOLBOX), PERMISSION_UI_TOOLBOX),
@@ -181,7 +181,6 @@ pub static PERMISSION_API_MAP: &[(&str, &[&str])] = &[
     // 注销——插件写自家会话输入走自有命令通道（不受本表管辖）。
     (PERMISSION_TERMINAL_INPUT, &["terminal.onInput"]),
     (PERMISSION_TERMINAL_OUTPUT, &["terminal.onOutput"]),
-    (PERMISSION_TERMINAL_OBSERVE, &["terminal.onInputSubmitted"]),
     (
         PERMISSION_SESSION_READ,
         &[
@@ -196,7 +195,6 @@ pub static PERMISSION_API_MAP: &[(&str, &[&str])] = &[
             "session.isTerminalOpen",
         ],
     ),
-    (PERMISSION_SESSION_WRITE, &["session.create", "session.stop"]),
     (PERMISSION_UI_SIDEBAR, &["ui.registerSidebarPanel", "ui.registerPage"]),
     (PERMISSION_UI_TOOLBOX, &["ui.registerToolboxPage"]),
     (PERMISSION_UI_STATUSBAR, &["ui.registerStatusBarItem", "ui.registerTitleBarItem"]),

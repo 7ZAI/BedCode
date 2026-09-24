@@ -118,11 +118,6 @@ const PERMISSION_META: Record<string, PermissionMeta> = {
     titleKey: 'desktop.plugin.perm.terminal:output.title',
     descKey: 'desktop.plugin.perm.terminal:output.desc',
   },
-  'terminal:observe': {
-    emoji: '👁️',
-    titleKey: 'desktop.plugin.perm.terminal:observe.title',
-    descKey: 'desktop.plugin.perm.terminal:observe.desc',
-  },
   'session:read': {
     emoji: '📄',
     titleKey: 'desktop.plugin.perm.session:read.title',
@@ -133,11 +128,6 @@ const PERMISSION_META: Record<string, PermissionMeta> = {
     emoji: '🔌',
     titleKey: 'desktop.plugin.perm.connection:read.title',
     descKey: 'desktop.plugin.perm.connection:read.desc',
-  },
-  'session:write': {
-    emoji: '✏️',
-    titleKey: 'desktop.plugin.perm.session:write.title',
-    descKey: 'desktop.plugin.perm.session:write.desc',
   },
   'session:config': {
     emoji: '🛠️',

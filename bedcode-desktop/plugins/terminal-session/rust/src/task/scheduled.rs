@@ -41,7 +41,7 @@
 use bedcode_plugin_api::constants::EVENT_SESSION_MODE_CHANGED;
 use bedcode_plugin_api::constants::EVENT_TASK_SCHEDULED_CHANGED;
 use bedcode_plugin_api::events::SyncEvent;
-use bedcode_plugin_api::host::{HostBus, HostEvents, HostLog, HostPluginDatabase, HostSession};
+use bedcode_plugin_api::host::{HostBus, HostEvents, HostLog, HostPluginDatabase};
 use bedcode_plugin_api::http_response;
 use bedcode_plugin_api::sql_params;
 use bedcode_plugin_api::wasm_host::WasmHost;

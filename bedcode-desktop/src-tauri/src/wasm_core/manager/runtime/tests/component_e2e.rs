@@ -81,32 +81,16 @@ fn test_component_roundtrip() {
             result_json["pdbRows"]
         );
 
-        // 会话列表（权限 session:read，空列表）
-        assert_eq!(result_json["sessions"], serde_json::json!([]));
+        // v27（票 10）：`sessions` 断言（原 `test_session_list`）与终端钩子断言
+        // 随 host-session / terminal-hooks 两个 interface 退役一并删除。
 
         // 消息总线发布（同步投递）
         assert_eq!(result_json["busPublished"], serde_json::json!(true));
 
-        // 终端钩子（与 core 形态 plugin-test 同语义：大写转换）
-        assert_eq!(
-            plugin.on_terminal_input("session-1", "hello input").unwrap(),
-            Some("HELLO INPUT".to_string())
-        );
-        assert_eq!(
-            plugin.on_terminal_output("session-1", "hello output").unwrap(),
-            Some("HELLO OUTPUT".to_string())
-        );
-
-        // 事件回调 + 启动/关闭
+        // 事件回调 + 启动/关闭（`on_message` / `on_process_done` 仍是必选导出）
         plugin
             .on_message("topic", "sender", &serde_json::json!({"a": 1}))
             .expect("on_message");
-        plugin
-            .on_session_lifecycle(&serde_json::json!({"type": "created"}))
-            .expect("on_session_lifecycle");
-        plugin
-            .on_input_submitted(&serde_json::json!({"sessionId": "s1"}))
-            .expect("on_input_submitted");
         plugin
             .on_startup()
             .expect("on_startup")

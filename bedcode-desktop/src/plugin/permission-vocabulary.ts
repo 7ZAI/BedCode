@@ -13,9 +13,7 @@
 export const GENERATED_VALID_PERMISSIONS: readonly string[] = [
   'terminal:input',
   'terminal:output',
-  'terminal:observe',
   'session:read',
-  'session:write',
   'connection:read',
   'ui:sidebar',
   'ui:toolbox',
@@ -51,9 +49,7 @@ export const GENERATED_VALID_PERMISSIONS: readonly string[] = [
 export const GENERATED_PERMISSION_API_MAP: Record<string, readonly string[]> = {
   'terminal:input': ['terminal.onInput'],
   'terminal:output': ['terminal.onOutput'],
-  'terminal:observe': ['terminal.onInputSubmitted'],
   'session:read': ['session.predictTerminalSize', 'session.openTerminal', 'session.closeTerminal', 'session.isTerminalOpen'],
-  'session:write': ['session.create', 'session.stop'],
   'connection:read': [],
   'ui:sidebar': ['ui.registerSidebarPanel', 'ui.registerPage'],
   'ui:toolbox': ['ui.registerToolboxPage'],

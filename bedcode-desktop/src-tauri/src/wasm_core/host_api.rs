@@ -1,12 +1,17 @@
 //! WASM 宿主能力实现层（Component Model 绑定调用）
 //!
 //! 迁移阶段 C 后宿主能力只剩 Component Model 一种形态：
-//! 本模块提供 15 组宿主能力的功能域实现（权限校验 + 宿主服务调用），
+//! 本模块提供宿主能力的功能域实现（权限校验 + 宿主服务调用），
 //! 由 `wasm_runtime::component` 的 Host trait 绑定逐接口调用。
 //!
 //! 各功能域与 SDK `host/*` trait 一一对应：
-//! storage / database / terminal / session / events / http / log / fs / config /
-//! bus / lifecycle / peer / process / app
+//! storage / database / terminal / events / http / log / fs / config /
+//! bus / peer / process / app
+//!
+//! v27（票 10）：**`session` 域整体退役**（`host-session` 整 interface 删除），
+//! 同域内的 `lifecycle` 子模块（两条观察面注册入口）在票 03 已降级为退役占位、
+//! 本票随 interface 一并删除。会话事实的宿主侧出口只剩 `host-pty`（PTY 引擎）
+//! 与 `host-connection`（宿主 WS 连接清单）。
 //!
 //! 历史：阶段 A/B 时本目录名为 `host_functions`，包含 core module 胶水层
 //! （(ptr,len) 内存搬运 + Linker 注册）；阶段 C 已删除胶水层，仅保留实现层。
@@ -23,18 +28,15 @@ pub(super) mod database;
 pub(super) mod events;
 pub(crate) mod fs;
 pub(crate) mod http;
-pub(super) mod lifecycle;
 pub(super) mod log;
 pub(crate) mod mdns;
 pub(super) mod peer;
 pub(super) mod platform;
 pub(crate) mod process;
 pub(crate) mod pty;
-pub(super) mod session;
 pub(super) mod status;
 pub(super) mod storage;
 pub(crate) mod task;
-pub(super) mod terminal;
 pub(super) mod timer;
 pub(crate) mod ws;
 mod wsl_fs;

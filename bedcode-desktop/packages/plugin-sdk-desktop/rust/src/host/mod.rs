@@ -28,10 +28,8 @@ pub mod peer;
 pub mod platform;
 pub mod process;
 pub mod pty;
-pub mod session;
 pub mod storage;
 pub mod task;
-pub mod terminal;
 pub mod timer;
 pub mod ws;
 
@@ -53,11 +51,8 @@ pub use peer::HostPeer;
 pub use platform::HostPlatform;
 pub use process::{HostProcess, ProcessSyncResult};
 pub use pty::{pty_event_topic, HostPty, PtyRingFetch, PtySpawnConfig, PTY_EXIT};
-pub use session::HostSession;
-pub use session::SessionRingFetch;
 pub use storage::HostStorage;
 pub use task::{HostTask, TaskPlan, TaskProgress, TaskUnit};
-pub use terminal::HostTerminal;
 pub use timer::HostTimer;
 pub use ws::{ws_event_topic, HostWebsocket, WS_CLIENT_CONNECT, WS_CLIENT_DISCONNECT, WS_CLOSE, WS_ERROR, WS_OPEN};
 
@@ -167,8 +162,6 @@ pub trait HostApi:
     HostStorage
     + HostDatabase
     + HostPluginDatabase
-    + HostTerminal
-    + HostSession
     + HostEvents
     + HostHttp
     + HostFs
@@ -189,8 +182,6 @@ impl<T> HostApi for T where
     T: HostStorage
         + HostDatabase
         + HostPluginDatabase
-        + HostTerminal
-        + HostSession
         + HostEvents
         + HostHttp
         + HostFs

@@ -110,18 +110,13 @@ fn a03_p1a_sync_host_impl_under_async_store() {
         println!("[a03][P1-a] ③ 无 handle 线程（ambient 直接驱动）OK");
     }
 
-    // 同实例其余导出在 async store 下可用：终端 hooks / 事件回调 / manifest
+    // 同实例其余导出在 async store 下可用：事件回调 / manifest
+    // （v27/票 10：终端 hooks 导出已删，不再断言）
     {
         let rt = tokio::runtime::Runtime::new().expect("multi-thread rt");
         let plugin = Arc::clone(&plugin);
         rt.block_on(async move {
             let mut g = plugin.lock().await;
-            assert_eq!(
-                g.on_terminal_input("s1", "hi").expect("hook"),
-                None,
-                "未注册 hook 应透传 None"
-            );
-            assert_eq!(g.on_terminal_output("s1", "out").expect("hook"), None);
             g.on_message("a03.topic", "host", &serde_json::json!({ "n": 1 }))
                 .expect("on_message 在 async store 下可用");
             let m: serde_json::Value = serde_json::from_str(&g.get_manifest().expect("manifest")).unwrap();
@@ -198,13 +193,7 @@ fn a03_p1b_wasip3_artifact_full_closed_loop() {
         v["domains"].is_array() && !v["domains"].as_array().unwrap().is_empty(),
         "domains 非空: {v}"
     );
-    // 终端 hooks 在 async store 下可调用（本插件未注册输入 hook → 透传 None）
-    assert_eq!(
-        plugin.on_terminal_input("p1b", "x").expect("hook"),
-        None,
-        "未注册输入 hook 应透传 None"
-    );
-    assert_eq!(plugin.on_terminal_output("p1b", "y").expect("hook"), None);
+    // v27（票 10）：终端 hooks 导出已删，不再断言透传语义。
     // manifest 往返
     let m: serde_json::Value = serde_json::from_str(&plugin.get_manifest().expect("manifest")).unwrap();
     assert_eq!(m["id"], "com.bedcode.terminal-session");

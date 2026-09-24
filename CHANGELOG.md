@@ -13,6 +13,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Features
 
+#### Session primitives leave the host entirely — `host-session` / `host-terminal` interfaces and the `terminal-hooks` export retired (desktop, **v27**)
+- The session engine sink batch's ticket 10, and the **only breaking contract change in this batch**: `host-session` (12 functions) and `host-terminal` (`send`, the host injecting keystrokes into an interactive terminal) are deleted from the WIT, together with the `terminal-hooks` export interface and `events.on-session-lifecycle` / `on-input-submitted` (whose dispatch source died in ticket 03)
+- Session truth has lived in the `com.bedcode.terminal-session` registry domain since P1-b; the host keeps only `host-pty` (engine) and `host-connection` (host WS connection list, migrated to its own primitive back in ticket 04 under `connection:read`)
+- Permission bits `session:write` and `terminal:observe` retired (vocabulary 34 → 32) — `session:read` stays, now gating only the host terminal-window facts (initial grid / open-close / presence)
+- The host session command face (`list_sessions` / `get_session` / `resize_session` / `write_to_session` / `send_special_key` / `plugin_terminal_send_input`) is retired with it: plugins read their own session facts and write input through their own command channel (`session.list` / `session.get` / `session.action.resize` / `session.input`)
+- Old (pre-v27) artifacts fail **at instantiation**, before ABI negotiation — the host appends a rebuild hint naming the missing interface and the required SDK version, so the failure is diagnosable instead of looking like a trap
+- All four bundled plugin artifacts were rebuilt against the new SDK
+
 #### Peer-net node lifecycle becomes an owned engine primitive — `host-peer.start-node` / `stop-node` (desktop, v25)
 - Audit ticket 12 (option A): the kernel no longer hard-codes any product id to drive the peer node — `FILE_TRANSFER_PLUGIN_ID` (both copies), the activation/deactivation shells keyed by plugin id, and the boot-time `sync_node_with_plugin_state` reconciliation are retired
 - `com.bedcode.file-transfer` now requests the node itself via the new primitives (who-starts-owns; errors never leak the other owner's identity); the kernel keeps ownership bookkeeping only (`start_node_owned` / `stop_node_owned` / `release_node_for`), plus an ownership-based compensation hook on activation failure / deactivation

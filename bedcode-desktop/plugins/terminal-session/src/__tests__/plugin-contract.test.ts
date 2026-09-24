@@ -66,15 +66,15 @@ describe('C1 插件身份五处一致', () => {
     // peer = host-peer（consent 取可信集 / trust 的 peer 段）、
     // storage = host-plugin-database（票 08 配置真源私有库）、
     // session:read = host-session 配置读取面（v22 起只读：config-list/get 是迁移读 legacy
-    //   的一次性通道；`session:config` 权限已随写原语退役——真源 CRUD 全走插件私有库）、
-    // session:write = host-session 创建与动作原语（票 09 create-with-spec、
-    //   票 10 restart / remove / rename / resize）
+    //   的一次性通道；`session:config` 权限已随写原语退役——真源 CRUD 全走插件私有库）
     // ui:sidebar（票 13 起实际需要——侧边栏目录注册经前端权限门快速失败）、
     // ui:settings（票 14：设置页配对分组贡献面）、ui:input（票 17：任务队列弹窗的
     // 终端工具栏入口 `registerTerminalToolbarItem`）同为纯前端贡献面权限
-    // 票 15 任务域补五位：broadcast（任务/模式/队列广播）、fs:read + fs:write
-    // （写项目级 Agent 集成）、terminal:input（队列下发输入）+ terminal:observe
-    // （提交输入行监听）、timer:schedule（队列周期 tick）
+    // 票 15 任务域补四位：broadcast（任务/模式/队列广播）、fs:read + fs:write
+    // （写项目级 Agent 集成）、terminal:input（键盘输入经本插件命令通道
+    // `session.input` 写入）、timer:schedule（队列周期 tick）
+    // **v27（票 10）退役两位**：`session:write`（host-session 整 interface 删除）与
+    // `terminal:observe`（提交输入行观察面，派发点票 03 已删）
     // 清单按 manifest-gen 的排序口径（ASCII 升序）落定：release 构建路径会重排，
     // 人工写成别的顺序即「构建一次即 git dirty」的漂移。
     // 刻意不声明 spec D2 表里的 terminal:output / ui:dialog（票 17 裁决：合并插件
@@ -101,12 +101,10 @@ describe('C1 插件身份五处一致', () => {
       'pty:io',
       'pty:spawn',
       'session:read',
-      'session:write',
       'storage',
       // 票 21（v20 host-task）：git 域 diff_file_tree 三路只读走 host-task 池
       'task:run',
       'terminal:input',
-      'terminal:observe',
       'timer:schedule',
       'ui:input',
       'ui:settings',

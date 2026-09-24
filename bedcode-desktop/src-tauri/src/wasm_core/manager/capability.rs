@@ -51,16 +51,23 @@ const EXPORT_STORAGE_DELETE: &str = "bedcode:plugin/host-storage.delete";
 /// 认证策略导出函数名（`auth-policy` 接口实例形态）
 pub(crate) const EXPORT_AUTH_VERIFY_DEVICE_TOKEN: &str = "bedcode:plugin/auth-policy.verify-device-token";
 
-/// 宿主原语能力清单（22 组 host-* WIT 接口，与 Linker 接线一一对应）
+/// 宿主原语能力清单（**21 组** host-* WIT 接口，与 Linker 接线一一对应）
 ///
 /// 注册表启动即全量登记为宿主原语提供者：能力对依赖检查恒可用，
 /// 系统组件激活时可按名替换为 WASM 提供者。
+///
+/// 计数口径（票 10 复核）：v26 清单为 23 组，本票删 **2 组**——`host-session`
+/// （会话原语域整 interface 退役）与 `host-terminal`（「宿主替插件往交互终端注入
+/// 按键」的最后一处业务面入口：零消费者，且实现 100% 依赖会话域）——故为 **21 组**：
+/// 进程 3（host-pty / host-process / host-task）+ 网络 5（host-http / host-websocket /
+/// host-mdns / host-peer / host-connection）+ 存储 4（host-database / host-plugin-database /
+/// host-storage / host-fs）+ 宿主面 7（host-events / host-config / host-log /
+/// host-timer / host-app / host-platform / host-crypto）+ 互调 2
+/// （host-bus / host-api-call）。**只减不加**：本票不新增任何组。
 const HOST_PRIMITIVE_CAPABILITIES: &[&str] = &[
     "host-storage",
     "host-database",
     "host-plugin-database",
-    "host-terminal",
-    "host-session",
     "host-connection",
     "host-events",
     "host-http",

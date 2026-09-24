@@ -22,7 +22,7 @@ wit_bindgen::generate!({
 });
 
 use crate::exports::bedcode::plugin::{
-    abi, command, events, host_storage, lifecycle, manifest, terminal_hooks,
+    abi, command, events, host_storage, lifecycle, manifest,
 };
 use std::collections::HashMap;
 
@@ -86,28 +86,14 @@ impl events::Guest for Guest {
         Ok(())
     }
 
-    fn on_session_lifecycle(_payload: String) -> Result<(), String> {
-        Ok(())
-    }
-
-    fn on_input_submitted(_payload: String) -> Result<(), String> {
-        Ok(())
-    }
+    // v27（票 10）：`on_session_lifecycle` / `on_input_submitted` 已从 WIT 删除
 
     fn on_process_done(_payload: String) -> Result<(), String> {
         Ok(())
     }
 }
 
-impl terminal_hooks::Guest for Guest {
-    fn on_terminal_input(_session_id: String, _text: String) -> Option<String> {
-        None
-    }
-
-    fn on_terminal_output(_session_id: String, _data: String) -> Option<String> {
-        None
-    }
-}
+// v27（票 10）：`terminal_hooks::Guest` 实现已删（interface 退役）
 
 impl manifest::Guest for Guest {
     fn get() -> String {

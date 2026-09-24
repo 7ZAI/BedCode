@@ -26,8 +26,8 @@ use super::{block_on_async, StoreSpec, WasmHostContext, WasmPluginState};
 #[cfg(test)]
 use crate::wasm_core::config::StoreLimits;
 use crate::wasm_core::host_api::{
-    api, app, auth, bus, config, connection, crypto, database, events, fs, http, lifecycle, log, mdns, peer, platform,
-    process, pty, session, status, storage, task, terminal, timer, ws,
+    api, app, auth, bus, config, connection, crypto, database, events, fs, http, log, mdns, peer, platform, process, pty,
+    status, storage, task, timer, ws,
 };
 use crate::wasm_core::monitor::LifecycleEvent;
 use crate::AppError;
@@ -310,11 +310,10 @@ impl bedcode::plugin::host_config::Host for WasmPluginState {
     }
 }
 
-impl bedcode::plugin::host_terminal::Host for WasmPluginState {
-    fn send(&mut self, session_id: String, data: String) -> Result<(), String> {
-        terminal::terminal_send(&self.host_ctx, &self.plugin_id, &session_id, &data)
-    }
-}
+// v27（票 10 删除的 `impl bedcode::plugin::host_terminal::Host`）：
+// `host-terminal.send` 是「宿主替插件往交互终端注入按键」的最后一处业务面入口，
+// 零生产消费者（P1-b 起属主判定查已清空的内核登记，对真实会话恒拒），随
+// `host-session` 同批删除。
 
 impl bedcode::plugin::host_database::Host for WasmPluginState {
     fn execute(&mut self, sql: String) -> Result<u32, String> {
@@ -360,83 +359,19 @@ impl bedcode::plugin::host_plugin_database::Host for WasmPluginState {
     }
 }
 
-/// 在册连接清单（票 04）：独立 interface，不随 `host-session` 退役。
-/// 实现与 `host-session` 的旧别名入口共用同一函数与同一判据（`connection:read`）。
+/// 在册连接清单（票 04）：独立 interface。
+/// **票 10 起是本面唯一入口**——`host-session` 上那条同判据的旧别名随整 interface 删除。
 impl bedcode::plugin::host_connection::Host for WasmPluginState {
     fn connections_list(&mut self) -> Result<String, String> {
         connection::connection_list(&self.host_ctx, &self.plugin_id)
     }
 }
 
-impl bedcode::plugin::host_session::Host for WasmPluginState {
-    fn list_sessions(&mut self) -> Result<Option<String>, String> {
-        session::session_list(&self.host_ctx, &self.plugin_id)
-    }
-
-    fn get(&mut self, session_id: String) -> Result<Option<String>, String> {
-        session::session_get(&self.host_ctx, &self.plugin_id, &session_id)
-    }
-
-    fn lifecycle_register(&mut self) -> Result<(), String> {
-        lifecycle::session_lifecycle_register(&self.host_ctx, &self.plugin_id)
-    }
-
-    fn input_register(&mut self) -> Result<(), String> {
-        lifecycle::session_input_register(&self.host_ctx, &self.plugin_id)
-    }
-
-    fn create_with_spec(&mut self, spec_json: String) -> Result<String, String> {
-        session::session_create_with_spec(&self.host_ctx, &self.plugin_id, &spec_json)
-    }
-
-    fn close(&mut self, session_id: String) -> Result<(), String> {
-        session::session_close(&self.host_ctx, &self.plugin_id, &session_id)
-    }
-
-    fn remove(&mut self, session_id: String) -> Result<(), String> {
-        session::session_remove(&self.host_ctx, &self.plugin_id, &session_id)
-    }
-
-    fn rename(&mut self, session_id: String, name: String) -> Result<String, String> {
-        session::session_rename(&self.host_ctx, &self.plugin_id, &session_id, &name)
-    }
-
-    fn resize(&mut self, session_id: String, cols: u16, rows: u16, requester_json: String) -> Result<String, String> {
-        session::session_resize(
-            &self.host_ctx,
-            &self.plugin_id,
-            &session_id,
-            cols,
-            rows,
-            &requester_json,
-        )
-    }
-
-    fn annotate(&mut self, session_id: String, key: String, value: String) -> Result<(), String> {
-        session::session_annotate(&self.host_ctx, &self.plugin_id, &session_id, &key, &value)
-    }
-
-    fn connections_list(&mut self) -> Result<String, String> {
-        session::session_connections_list(&self.host_ctx, &self.plugin_id)
-    }
-
-    fn output_ring_fetch(
-        &mut self,
-        session_id: String,
-        from_offset: u64,
-        max_bytes: u32,
-    ) -> Result<Option<bedcode::plugin::host_session::RingFetchResult>, String> {
-        session::session_output_ring_fetch(&self.host_ctx, &self.plugin_id, &session_id, from_offset, max_bytes).map(
-            |fetched| {
-                fetched.map(|ring| bedcode::plugin::host_session::RingFetchResult {
-                    data: ring.data,
-                    next_offset: ring.next_offset,
-                    truncated: ring.truncated,
-                })
-            },
-        )
-    }
-}
+// v27（票 10 删除的 `impl bedcode::plugin::host_session::Host`）：
+// 12 条原语（list-sessions / get / create-with-spec / lifecycle-register /
+// input-register / close / remove / rename / resize / annotate / connections-list
+// 别名 / output-ring-fetch）整块退役。会话真源在 `com.bedcode.terminal-session`
+// 登记域，宿主侧不再有「会话」这一原语域的对外能力面。
 
 impl bedcode::plugin::host_process::Host for WasmPluginState {
     fn run(&mut self, request_json: String) -> Result<String, String> {
@@ -780,14 +715,13 @@ pub(crate) fn add_to_linker(linker: &mut Linker<WasmPluginState>) -> crate::Resu
         bedcode::plugin::host_storage::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_log::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_config::add_to_linker::<WasmPluginState, D>,
-        bedcode::plugin::host_terminal::add_to_linker::<WasmPluginState, D>,
+
         bedcode::plugin::host_database::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_plugin_database::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_process::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_pty::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_crypto::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_connection::add_to_linker::<WasmPluginState, D>,
-        bedcode::plugin::host_session::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_timer::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_events::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_http::add_to_linker::<WasmPluginState, D>,
@@ -897,9 +831,17 @@ impl LoadedWasmPlugin {
         // current_thread/无 runtime 三路径重入安全，见 wasm_runtime.rs）。
         let instance = block_on_async(async { component_linker.instantiate_async(&mut store, component).await })
             .map_err(|e| {
+                // v27（票 10）：**旧 SDK 产物的失败形态必须可诊断**。ABI 破坏性变更
+                // （删 `host-session` / `host-terminal` 两个 import、删 `terminal-hooks`
+                // 导出）后，旧产物在**实例化**阶段就会失败（找不到 import 的实现），
+                // 早于 `verify_abi` 的版本协商——wasmtime 的报错本身点名了缺失的
+                // interface，这里补一句「按哪个版本重建」，避免运维把它当成 trap 或
+                // 插件损坏。
                 AppError::Plugin(format!(
-                    "Failed to instantiate WASM component for plugin '{}': {}",
-                    plugin_id, e
+                    "Failed to instantiate WASM component for plugin '{}': {}{}",
+                    plugin_id,
+                    e,
+                    Self::stale_artifact_rebuild_hint(&e.to_string())
                 ))
             })?;
 
@@ -936,6 +878,30 @@ impl LoadedWasmPlugin {
     /// 时若当前实例未覆盖新授权目录则需重建，/data 挂载才能与授权一致。
     pub(crate) fn preopened_dirs(&self) -> &[String] {
         &self.preopened_dirs
+    }
+
+    /// 旧 SDK 产物的实例化失败判据 → 重建指引（空串 = 不是这个原因，不加噪音）
+    ///
+    /// v27 是**唯一一次破坏性契约变更**（删了两个 import interface 与一个 export
+    /// interface），旧产物会**在实例化阶段**失败——比 `verify_abi` 的版本协商更早。
+    /// 组件模型不提供「向后兼容的缺省 import」，故失败本身不可避免；能做的是让失败
+    /// **可诊断**：wasmtime 的原文点名缺失的 interface，本条补一句「按哪个版本重建」。
+    ///
+    /// 抽成自由函数是为了可单测：判据是「错误文本 → 是否附指引」，与 Store 无关。
+    pub(super) fn stale_artifact_rebuild_hint(instantiate_error: &str) -> String {
+        let is_stale_contract = instantiate_error.contains("host-session")
+            || instantiate_error.contains("host-terminal")
+            || instantiate_error.contains("terminal-hooks")
+            || instantiate_error.contains("not found in the linker")
+            || instantiate_error.contains("matching implementation");
+        if !is_stale_contract {
+            return String::new();
+        }
+        format!(
+            "（该产物按旧版插件 SDK 构建：ABI v{} 起 host-session / host-terminal 两个 import \
+             与 terminal-hooks 导出已删除，请用当前 SDK 重建插件产物）",
+            abi::ABI_VERSION
+        )
     }
 
     /// ABI 版本协商（对应 core 路径的 `__bedcode_abi_version` 校验）
@@ -1174,38 +1140,10 @@ impl LoadedWasmPlugin {
         }
     }
 
-    /// 调用插件的 on_terminal_input 导出
-    #[allow(dead_code)] // 终端 hook 桥接：测试覆盖,生产侧调度尚未接入
-    pub(crate) fn on_terminal_input(&mut self, session_id: &str, text: &str) -> crate::Result<Option<String>> {
-        let _timer = self.track_call();
-        let exports = self.exports()?;
-        let hooks = exports.bedcode_plugin_terminal_hooks();
-        match block_on_async(async { hooks.call_on_terminal_input(&mut self.store, session_id, text).await }) {
-            Ok(v) => Ok(v),
-            Err(e) => {
-                self.log_trap("on_terminal_input", &e);
-                Err(AppError::Plugin(format!("WASM on_terminal_input() call failed: {}", e)))
-            }
-        }
-    }
-
-    /// 调用插件的 on_terminal_output 导出
-    #[allow(dead_code)] // 终端 hook 桥接：测试覆盖,生产侧调度尚未接入
-    pub(crate) fn on_terminal_output(&mut self, session_id: &str, data: &str) -> crate::Result<Option<String>> {
-        let _timer = self.track_call();
-        let exports = self.exports()?;
-        let hooks = exports.bedcode_plugin_terminal_hooks();
-        match block_on_async(async { hooks.call_on_terminal_output(&mut self.store, session_id, data).await }) {
-            Ok(v) => Ok(v),
-            Err(e) => {
-                self.log_trap("on_terminal_output", &e);
-                Err(AppError::Plugin(format!(
-                    "WASM on_terminal_output() call failed: {}",
-                    e
-                )))
-            }
-        }
-    }
+    // v27（票 10 删除的 `on_terminal_input` / `on_terminal_output`）：
+    // 对应的 `terminal-hooks` interface 已从 WIT world 删除（票 03 起它已无派发源：
+    // 逐帧输入修饰链与终端输出修饰链都不再由宿主调用）。宿主要求的导出集因此少一个
+    // interface，SDK 侧对应绑定与缺口说明见 `packages/plugin-sdk-desktop/rust`。
 
     /// 调用插件的 on_startup 导出
     ///
@@ -1359,49 +1297,11 @@ impl LoadedWasmPlugin {
         Ok(true)
     }
 
-    /// 调用插件的会话生命周期事件导出
-    pub(crate) fn on_session_lifecycle(&mut self, payload: &serde_json::Value) -> crate::Result<()> {
-        let _timer = self.track_call();
-        let payload_str = serde_json::to_string(payload).unwrap_or_default();
-        let exports = self.exports()?;
-        let events = exports.bedcode_plugin_events();
-        match block_on_async(async { events.call_on_session_lifecycle(&mut self.store, &payload_str).await }) {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(msg)) => {
-                tracing::warn!("WASM on_session_lifecycle() failed: {}", msg);
-                Ok(())
-            }
-            Err(e) => {
-                self.log_trap("on_session_lifecycle", &e);
-                Err(AppError::Plugin(format!(
-                    "WASM on_session_lifecycle() call failed: {}",
-                    e
-                )))
-            }
-        }
-    }
-
-    /// 调用插件的提交输入行事件导出（纯观察通知，失败仅记录日志）
-    pub(crate) fn on_input_submitted(&mut self, payload: &serde_json::Value) -> crate::Result<()> {
-        let _timer = self.track_call();
-        let payload_str = serde_json::to_string(payload).unwrap_or_default();
-        let exports = self.exports()?;
-        let events = exports.bedcode_plugin_events();
-        match block_on_async(async { events.call_on_input_submitted(&mut self.store, &payload_str).await }) {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(msg)) => {
-                tracing::warn!("WASM on_input_submitted() failed: {}", msg);
-                Ok(())
-            }
-            Err(e) => {
-                self.log_trap("on_input_submitted", &e);
-                Err(AppError::Plugin(format!(
-                    "WASM on_input_submitted() call failed: {}",
-                    e
-                )))
-            }
-        }
-    }
+    // v27（票 10 删除的 `on_session_lifecycle` / `on_input_submitted`）：
+    // `events` interface 里的这两个导出已从 WIT world 删除。派发源在票 03 就没了
+    // （宿主侧观察注册表 + 派发点退役），留着「实现了但永不触发」的导出正是票 03
+    // 明确禁止的状态。会话生命周期事实由插件自驱、跨插件事件走 `host-events` /
+    // `host-bus`。`on-message` / `on-process-done` 仍是必选导出，保留。
 
     /// 调用插件的进程执行完成事件导出（host-process，v8）
     pub(crate) fn on_process_done(&mut self, payload_json: &str) -> crate::Result<()> {
@@ -1776,11 +1676,8 @@ mod tests {
             assert_eq!(result_json["name"], "test.echo");
             assert_eq!(result_json["stored"]["k"], "v");
 
-            // 终端钩子（与 core 形态 plugin-test 同语义：大写转换）
-            assert_eq!(
-                plugin.on_terminal_input("session-1", "hello component").unwrap(),
-                Some("HELLO COMPONENT".to_string())
-            );
+            // 票 10：终端钩子导出的调用断言已删（`terminal-hooks` interface 退役）——
+            // 本用例仍覆盖「加载 → 命令调用 → 跨边界 storage 往返 → 停用」全链路
 
             assert_eq!(plugin.deactivate().expect("deactivate"), 0);
         });
@@ -1911,6 +1808,35 @@ mod tests {
         // 展开只换路径，档位逐条跟着自己的声明走（不得被相邻条目串档）
         assert!(out[1].path().ends_with("/readonly-trailing"), "实际: {:?}", out);
         assert!(out[2].path().ends_with("/trailing"), "实际: {:?}", out);
+    }
+
+    /// v27（票 10）：旧 SDK 产物的实例化失败必须**可诊断**——报错要点名缺失的
+    /// interface，并给出「按哪个版本重建」的指引，而不是让运维把它当 trap。
+    ///
+    /// 端到端那一半（真拿一个 ABI v26 产物加载）**无法在本环境复现**：插件产物
+    /// 不入库、旧 SDK 与旧 WIT 都已不在工作区。故本用例锁的是**判据本身**——
+    /// wasmtime 的缺失 import 文案（含 interface 名的几种形态）→ 必须附指引；
+    /// 与之无关的实例化失败（如 WASI 缺目录）→ 不得附（噪音会掩盖真因）。
+    #[test]
+    fn stale_artifact_instantiation_hint_is_selective() {
+        // 形态 1：组件模型缺失 import 的标准文案（点名字符串形式的 interface 名）
+        let msg = "component imports instance `bedcode:plugin/host-session`, but a matching \
+                   implementation was not found in the linker";
+        let hint = LoadedWasmPlugin::stale_artifact_rebuild_hint(msg);
+        assert!(hint.contains("重建"), "必须给重建指引: {hint}");
+        assert!(hint.contains(&format!("v{}", abi::ABI_VERSION)), "必须点明 ABI 版本: {hint}");
+        assert!(hint.contains("host-session"), "必须点名缺失的 interface: {hint}");
+
+        // 形态 2：另一个被删的 import interface
+        assert!(LoadedWasmPlugin::stale_artifact_rebuild_hint("missing import bedcode:plugin/host-terminal")
+            .contains("host-terminal"));
+
+        // 形态 3：被删的 export interface（宿主按必选导出实例化，缺导出同样失败）
+        assert!(!LoadedWasmPlugin::stale_artifact_rebuild_hint("component does not export terminal-hooks").is_empty());
+
+        // 反向：与契约变更无关的实例化失败不得附指引（避免掩盖真因）
+        assert!(LoadedWasmPlugin::stale_artifact_rebuild_hint("failed to find a pre-opened directory").is_empty());
+        assert!(LoadedWasmPlugin::stale_artifact_rebuild_hint("wasm trap: out of bounds memory access").is_empty());
     }
 
     /// 展开后仍保留只读档（with_path 的档位粘性）——反例：展开实现自己重建条目、

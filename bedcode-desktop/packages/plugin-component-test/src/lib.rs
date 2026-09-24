@@ -5,8 +5,9 @@
 //! - export：全部 7 个接口（command / lifecycle / events / terminal-hooks /
 //!   upload-hook / manifest / abi）
 //! - import：host-storage（命令调用内做读往返）、host-log（生命周期激活打日志）、
-//!   host-database / host-plugin-database（SQL 往返）、host-session（列表）、
+//!   host-database / host-plugin-database（SQL 往返）、
 //!   host-bus（发布）、host-events（emit）—— 覆盖阶段 A 收尾接线的各组
+//!   （v27：`host-session` 组已随会话原语域退役，不在此列）
 //!
 //! 构建产物是 core module（wit-bindgen 绑定），宿主测试用
 //! `wit_component::ComponentEncoder` 编码为组件后加载（等价于
@@ -18,10 +19,9 @@ wit_bindgen::generate!({
 });
 
 use crate::bedcode::plugin::{
-    host_bus, host_database, host_events, host_log, host_plugin_database, host_session,
-    host_storage,
+    host_bus, host_database, host_events, host_log, host_plugin_database, host_storage,
 };
-use crate::exports::bedcode::plugin::{abi, command, events, lifecycle, manifest, terminal_hooks};
+use crate::exports::bedcode::plugin::{abi, command, events, lifecycle, manifest};
 
 struct Guest;
 
@@ -104,16 +104,8 @@ impl command::Guest for Guest {
             }
         }
 
-        // 会话列表（权限 session:read）
-        match host_session::list_sessions() {
-            Ok(Some(list)) => {
-                out["sessions"] = serde_json::from_str(&list).unwrap_or(serde_json::Value::Null);
-            }
-            Ok(None) => out["sessions"] = serde_json::Value::Null,
-            Err(e) => {
-                out["sessionError"] = serde_json::json!(e);
-            }
-        }
+        // v27（票 10）：原「会话列表（session:read）」往返随 `host-session` 整
+        // interface 删除——本夹具不再有会话原语可测。
 
         // 消息总线发布（同步投递，总线内部异步派发）
         match host_bus::publish("component-test-topic", r#"{"from":"component-test"}"#) {
@@ -160,29 +152,14 @@ impl events::Guest for Guest {
         Ok(())
     }
 
-    fn on_session_lifecycle(_payload: String) -> Result<(), String> {
-        Ok(())
-    }
-
-    fn on_input_submitted(_payload: String) -> Result<(), String> {
-        Ok(())
-    }
+    // v27（票 10）：`on_session_lifecycle` / `on_input_submitted` 已从 WIT 删除
 
     fn on_process_done(_payload: String) -> Result<(), String> {
         Ok(())
     }
 }
 
-impl terminal_hooks::Guest for Guest {
-    // 与 core 形态 plugin-test 行为对齐（大写转换），宿主测试断言同一语义
-    fn on_terminal_input(_session_id: String, text: String) -> Option<String> {
-        Some(text.to_uppercase())
-    }
-
-    fn on_terminal_output(_session_id: String, data: String) -> Option<String> {
-        Some(data.to_uppercase())
-    }
-}
+// v27（票 10）：`terminal_hooks::Guest` 实现已删（interface 退役）。
 
 impl manifest::Guest for Guest {
     fn get() -> String {

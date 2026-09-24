@@ -182,9 +182,10 @@ export default {
           risk: '可向你的终端会话注入任意输入（含回车执行）',
         },
         'terminal:output': { title: '终端输出', desc: '监听终端输出内容' },
-        'terminal:observe': { title: '终端观察', desc: '观察终端输入提交事件' },
-        'session:read': { title: '会话读取', desc: '读取会话列表与状态' },
-        'session:write': { title: '会话写入', desc: '创建、停止或修改会话' },
+        // v27（票 10）：`terminal:observe` / `session:write` 随面退役删除；
+        // `session:read` 的描述按票 08/09/10 后的实际判据面重写——会话数据面与事件面
+        // 已退役，本位现在只门住宿主终端窗口事实
+        'session:read': { title: '会话读取', desc: '读取宿主终端窗口事实（初始网格 / 窗口开关 / 在场查询）' },
         'connection:read': { title: '连接清单读取', desc: '读取宿主服务的在册连接（含设备标识与未认证连接）' },
         'session:config': { title: '会话配置', desc: '增删改会话配置（工作目录、启动命令等）' },
         'ui:sidebar': { title: '侧边栏面板', desc: '在侧边栏注册面板' },

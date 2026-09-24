@@ -20,7 +20,7 @@
 //!   指向本 SDK 的 `wasm` 模块（`$crate::wasm`），导出函数内的类型引用
 //!   （`exports::bedcode::plugin::<iface>::Guest`）随宏体解析到 SDK
 
-use crate::events::{InputSubmittedEvent, ProcessDoneEvent, SessionLifecycleEvent};
+use crate::events::ProcessDoneEvent;
 use crate::types::PluginManifest;
 use crate::BusMessage;
 
@@ -53,15 +53,8 @@ pub trait WasmPlugin: Send + Sync + 'static {
     /// `args` 为类型化 JSON（宏已从 ABI 字符串解析，解析失败时为 `Value::Null`）
     fn invoke_command(name: &str, args: serde_json::Value) -> anyhow::Result<serde_json::Value>;
 
-    /// 终端输入处理（可选，默认不做修改）
-    fn on_terminal_input(_session_id: &str, _text: &str) -> Option<String> {
-        None
-    }
-
-    /// 终端输出处理（可选，默认不做修改）
-    fn on_terminal_output(_session_id: &str, _data: &str) -> Option<String> {
-        None
-    }
+    // v27（票 10 删除的 `on_terminal_input` / `on_terminal_output`）：
+    // `terminal-hooks` interface 退役，宿主不再调用这两条修饰钩子。
 
     /// 应用启动完成回调（可选）
     ///
@@ -119,23 +112,8 @@ pub trait WasmPlugin: Send + Sync + 'static {
         Ok(())
     }
 
-    /// 接收会话生命周期事件（可选，默认忽略）
-    ///
-    /// 由宿主 SessionManager 直接分发，不走消息总线。
-    /// 事件为类型化枚举（宏已从 JSON 载荷解析）
-    fn on_session_lifecycle(_event: &SessionLifecycleEvent) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    /// 接收提交输入行事件（可选，默认忽略）
-    ///
-    /// 由宿主 SessionManager 异步分发（需先调用 `session_input_register()`
-    /// 注册并获得 `terminal:observe` 授权），不走消息总线。
-    /// 纯观察通知：回调出错不影响输入本身。
-    /// 事件为类型化结构体（宏已从 JSON 载荷解析）
-    fn on_input_submitted(_event: &InputSubmittedEvent) -> anyhow::Result<()> {
-        Ok(())
-    }
+    // v27（票 10 删除的 `on_session_lifecycle` / `on_input_submitted`）：
+    // 宿主侧派发源与 WIT 导出同批退役（票 03 + 票 10），SDK 不再留空实现。
 
     /// 接收进程执行完成事件（可选，默认忽略）
     ///
@@ -212,15 +190,9 @@ mod tests {
     }
 
     #[test]
-    fn test_default_terminal_hooks_are_pass_through() {
-        // 默认行为 = 不修改管道（None），宿主按原样放行
-        assert_eq!(TestWasmPlugin::on_terminal_input("s1", "ls"), None);
-        assert_eq!(TestWasmPlugin::on_terminal_output("s1", "out"), None);
-    }
-
-    #[test]
     fn test_default_lifecycle_and_observer_hooks_succeed() {
-        // 未覆盖的启动/关闭/总线/生命周期/输入观察回调默认成功，不干扰宿主流程
+        // 未覆盖的启动/关闭/总线回调默认成功，不干扰宿主流程。
+        // v27：终端钩子与两个会话观察回调已随 WIT 面退役，不再有对应默认实现可断言。
         assert!(TestWasmPlugin::on_startup().is_ok());
         assert!(TestWasmPlugin::on_shutdown().is_ok());
         let msg = BusMessage {
@@ -231,23 +203,17 @@ mod tests {
             timestamp: 0,
         };
         assert!(TestWasmPlugin::on_message(&msg).is_ok());
-        let lifecycle = SessionLifecycleEvent::Stopped {
-            session_id: "s1".into(),
-            source_device: None,
-            resource_dir: String::new(),
-        };
-        assert!(TestWasmPlugin::on_session_lifecycle(&lifecycle).is_ok());
-        let input = InputSubmittedEvent { session_id: "s1".into(), text: "x".into() };
-        assert!(TestWasmPlugin::on_input_submitted(&input).is_ok());
     }
 }
 
 
 /// 生成组件 world（`bedcode:plugin`）的全部导出实现
 ///
-/// 展开为 wit-bindgen 生成的 5 组 `Guest` trait 实现（command / lifecycle /
-/// events / terminal-hooks / manifest / abi）并调用 `export!`
+/// 展开为 wit-bindgen 生成的 4 组 `Guest` trait 实现（command / lifecycle /
+/// events / manifest / abi）并调用 `export!`
 /// 导出。语义与旧 `__bedcode_*` 导出 1:1 对应（见各 impl 注释）。
+///
+/// v27：`terminal-hooks` 组已随 interface 删除（票 10）。
 ///
 /// # 用法
 /// ```ignore
@@ -351,7 +317,11 @@ macro_rules! wasm_entry {
             }
         }
 
-        // ==================== events（原 __bedcode_on_message/on_session_lifecycle/on_input_submitted） ====================
+        // ==================== events（原 __bedcode_on_message + on_process_done） ====================
+        //
+        // v27：`on_session_lifecycle` / `on_input_submitted` 两个导出已随派发源退役
+        // （票 03 删宿主注册表与派发点，票 10 删 WIT 函数）。会话生命周期事实由插件
+        // 自驱、跨插件事件走 `host-events` / `host-bus`。
 
         impl $crate::wasm::exports::bedcode::plugin::events::Guest for $plugin_type {
             fn on_message(topic: String, sender: String, payload: String) -> Result<(), String> {
@@ -372,40 +342,6 @@ macro_rules! wasm_entry {
                         $crate::host::HostLog::log_error(
                             &host,
                             &format!("on_message failed: {}", e),
-                        );
-                        Err(e.to_string())
-                    }
-                }
-            }
-
-            fn on_session_lifecycle(payload: String) -> Result<(), String> {
-                // JSON 字符串 → 类型化 SessionLifecycleEvent（解析失败视为协议错误）
-                let event: $crate::events::SessionLifecycleEvent = serde_json::from_str(&payload)
-                    .map_err(|e| format!("on_session_lifecycle: invalid event payload: {}", e))?;
-                match <$plugin_type as $crate::wasm::WasmPlugin>::on_session_lifecycle(&event) {
-                    Ok(()) => Ok(()),
-                    Err(e) => {
-                        let host = $crate::wasm_host::WasmHost;
-                        $crate::host::HostLog::log_error(
-                            &host,
-                            &format!("on_session_lifecycle failed: {}", e),
-                        );
-                        Err(e.to_string())
-                    }
-                }
-            }
-
-            fn on_input_submitted(payload: String) -> Result<(), String> {
-                // JSON 字符串 → 类型化 InputSubmittedEvent（解析失败视为协议错误）
-                let event: $crate::events::InputSubmittedEvent = serde_json::from_str(&payload)
-                    .map_err(|e| format!("on_input_submitted: invalid event payload: {}", e))?;
-                match <$plugin_type as $crate::wasm::WasmPlugin>::on_input_submitted(&event) {
-                    Ok(()) => Ok(()),
-                    Err(e) => {
-                        let host = $crate::wasm_host::WasmHost;
-                        $crate::host::HostLog::log_error(
-                            &host,
-                            &format!("on_input_submitted failed: {}", e),
                         );
                         Err(e.to_string())
                     }
@@ -453,17 +389,8 @@ macro_rules! wasm_entry {
             }
         }
 
-        // ==================== terminal-hooks（原 __bedcode_on_terminal_input/output） ====================
-
-        impl $crate::wasm::exports::bedcode::plugin::terminal_hooks::Guest for $plugin_type {
-            fn on_terminal_input(_session_id: String, text: String) -> Option<String> {
-                <$plugin_type as $crate::wasm::WasmPlugin>::on_terminal_input(&_session_id, &text)
-            }
-
-            fn on_terminal_output(_session_id: String, data: String) -> Option<String> {
-                <$plugin_type as $crate::wasm::WasmPlugin>::on_terminal_output(&_session_id, &data)
-            }
-        }
+        // v27：`terminal-hooks` interface 已从 WIT world 删除（票 03 起逐帧输入修饰链
+        // 与终端输出修饰链都不再由宿主调用），故不再生成该导出实现。
 
         // ==================== manifest（原 __bedcode_manifest） ====================
 

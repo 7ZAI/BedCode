@@ -14,7 +14,7 @@
 //! （magic \0asm 0d，免 ComponentEncoder/componentize，见票 03）。
 
 use bedcode_plugin_api::host::{
-    ConfigKey, HostBus, HostConfig, HostDatabase, HostEvents, HostLog, HostSession, HostStorage,
+    ConfigKey, HostBus, HostConfig, HostDatabase, HostEvents, HostLog, HostStorage,
 };
 use bedcode_plugin_api::types::PluginManifest;
 use bedcode_plugin_api::wasm::WasmPlugin;
@@ -133,10 +133,8 @@ impl WasmPlugin for SdkTestPlugin {
                 host.emit_event("sdk-test-event", &serde_json::json!({ "source": "sdk_test" }));
                 Ok(serde_json::json!({ "emitted": true }))
             }
-            "test_session_list" => {
-                let sessions = host.session_list()?.unwrap_or(serde_json::Value::Null);
-                Ok(serde_json::json!({ "sessions": sessions }))
-            }
+            // v27：`test_session_list` 随 host-session 整 interface 删除（票 10）——
+            // 本夹具不再有会话原语可测；会话事实由插件登记域持有。
             "test_bus" => {
                 host.bus_publish("sdk:topic", &serde_json::json!({ "msg": "sdk-hello" }))?;
                 Ok(serde_json::json!({ "published": true }))
@@ -296,13 +294,8 @@ impl WasmPlugin for SdkTestPlugin {
         }
     }
 
-    fn on_terminal_input(_session_id: &str, text: &str) -> Option<String> {
-        Some(text.to_uppercase())
-    }
-
-    fn on_terminal_output(_session_id: &str, data: &str) -> Option<String> {
-        Some(data.to_uppercase())
-    }
+    // v27：`on_terminal_input` / `on_terminal_output` 已随 `terminal-hooks` interface
+    // 删除（票 10）——本夹具不再覆盖它们。
 }
 
 bedcode_plugin_api::wasm_entry!(SdkTestPlugin);

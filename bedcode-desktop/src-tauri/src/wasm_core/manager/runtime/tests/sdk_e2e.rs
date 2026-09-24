@@ -47,12 +47,8 @@ fn test_sdk_plugin_component_roundtrip() {
         let r: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(r["port"], "8765");
 
-        // 会话列表（权限 session:read，空列表）
-        let result = plugin
-            .invoke_command("test_session_list", "{}")
-            .expect("test_session_list");
-        let r: serde_json::Value = serde_json::from_str(&result).unwrap();
-        assert_eq!(r["sessions"], serde_json::json!([]));
+        // v27（票 10）：原先这里的 `test_session_list` 断言已随 host-session 整
+        // interface 删除——夹具不再有会话原语可测。
 
         // 事件 emit（无头上下文幂等 Ok）
         let result = plugin.invoke_command("test_emit", "{}").expect("test_emit");
@@ -83,11 +79,7 @@ fn test_sdk_plugin_component_roundtrip() {
             .on_message_binary("binary-topic", "com.test.sender", b"\x00\xff\x01binary")
             .expect("SDK component must expose events-binary on_message_binary export");
 
-        // 终端钩子（宏生成的 terminal_hooks::Guest，大写转换语义）
-        assert_eq!(
-            plugin.on_terminal_input("session-1", "sdk input").unwrap(),
-            Some("SDK INPUT".to_string())
-        );
+        // v27（票 10）：terminal-hooks 导出已删，终端钩子断言随 interface 退役。
     });
 }
 

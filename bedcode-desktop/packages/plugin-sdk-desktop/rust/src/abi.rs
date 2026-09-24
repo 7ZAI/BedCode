@@ -135,7 +135,19 @@
 //!   （AEAD aes-256-gcm / chacha20-poly1305 / KDF hkdf-sha256 / X25519 密钥交换；
 //!   中性算法原语零业务语义，rsa / hybrid 按需扩展）。新建 interface → ABI bump
 //!   （同 host-task v20 先例）。权限三域 `crypto:aead` / `crypto:asym` / `crypto:kdf`。
-pub const ABI_VERSION: u32 = 26;
+//!
+//! - **v27: 会话原语域整 interface 退役**（会话引擎下沉专项票 10，desktop 独有，
+//!   双端偏离同 host-pty）——`host-session` 12 函数整删（`list-sessions` / `get` /
+//!   `create-with-spec` / `lifecycle-register` / `input-register` / `close` / `remove` /
+//!   `rename` / `resize` / `annotate` / `connections-list` 别名 / `output-ring-fetch`）。
+//!   会话真源已在 `com.bedcode.terminal-session` 插件登记域（P1-b 起），宿主侧读会话
+//!   一律经该插件互调 api；PTY 引擎面留 `host-pty`、宿主连接清单留 `host-connection`。
+//!   同批删除两个失去派发源的导出：`terminal-hooks`（整 interface）与 `events` 的
+//!   `on-session-lifecycle` / `on-input-submitted`。**这是本专项唯一一次破坏性契约变更**
+//!   （函数级追加与 JSON 载荷增量都不 bump），故旧产物需按 v27 SDK 重建一次。
+//!   连带退役的权限位：`session:write`（`session:read` 保留——前端四个终端窗口原语
+//!   仍挂它）。
+pub const ABI_VERSION: u32 = 27;
 
 /// 组件形态标识：`abi.form() == FORM_COMPONENT`（WIT `abi` 接口的 form() 声明）
 ///
@@ -149,10 +161,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_abi_version_is_v26() {
-        // 版本号序列与历史 core ABI 共用：v25 = host-peer 节点生命周期原语
-        // （审计票 12 裁决 1 = 选项 A；内核侧去产品身份）、v26 host-crypto 宿主加密引擎原语面，
-        // 叠加 v24 认证记录下沉（2026-09-22，host-auth 记录面七函数退役 + host-session
+    fn test_abi_version_is_v27() {
+        // 版本号序列与历史 core ABI 共用：v26 = host-crypto 宿主加密引擎原语面
+        // （并发批次先落地，占 26）；**v27 = 会话原语域整 interface 退役**
+        // （会话引擎下沉票 10：host-session 12 函数 + terminal-hooks + events 两个导出）；
+        // 再往前叠加 v25 host-peer 节点生命周期原语（审计票 12 裁决 1 = 选项 A）、
+        // v24 认证记录下沉（2026-09-22，host-auth 记录面七函数退役 + host-session
         // config 读取面退役）、v23 host-session
         // 配置面写原语退役（session:config 同步退役）、v22 host-platform.reveal-in-dir
         // （平台定位原语，无权限门；`system:open` 退役）、v21 host-session 收敛退役
@@ -161,7 +175,7 @@ mod tests {
         // （同批次之一）、v17 认证策略导出（auth-policy）、v16 插件私有伪终端原语
         // （host-pty）、v15 密钥托管（host-auth / secret-store）、v14 host-websocket、
         // v13 host-mdns v2、v12 总线二进制载荷与 v11 host-peer 传输控制三原语
-        assert_eq!(ABI_VERSION, 26);
+        assert_eq!(ABI_VERSION, 27);
     }
 
     #[test]

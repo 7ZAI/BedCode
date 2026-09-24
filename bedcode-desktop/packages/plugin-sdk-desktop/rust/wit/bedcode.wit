@@ -16,13 +16,16 @@
 ///
 /// 宿主能力 import 接口前缀 `host-`，插件导出接口为普通名字：
 /// - import：`host-storage` / `host-database` / ... （对应 host_functions/*）
-/// - export：`command` / `lifecycle` / `events` / `terminal-hooks` /
-///   `manifest` / `abi`
+/// - export：`command` / `lifecycle` / `events` / `manifest` / `abi`
+///   （v27 删 `terminal-hooks` 与 `events` 的 `on-session-lifecycle` /
+///   `on-input-submitted`：派发源随会话观察面退役，见下方 v27 版本说明）
 ///
 /// ## ABI 版本协商（阶段 A）
 ///
 /// `abi` 接口承载原 `__bedcode_abi_version` 的职责，并新增 `form` 形态字段：
-/// - `version()`：与 `abi::ABI_VERSION`（当前 v6）比对，语义不变
+/// - `version()`：与 `abi::ABI_VERSION`（当前 v27）比对，语义不变
+///   （v27 = 会话原语域整 interface 退役：`host-session` / `host-terminal` 两个
+///   import 与 `terminal-hooks` 导出删除，旧产物需按新 SDK 重建）
 /// - `form()`：0 = core module（自研 ABI），1 = component。宿主据此区分产物形态，
 ///   不 bump ABI 大版本
 package bedcode:plugin;
@@ -34,11 +37,6 @@ interface host-storage {
     get: func(key: string) -> result<option<string>, string>;
     set: func(key: string, value: string) -> result<_, string>;
     delete: func(key: string) -> result<_, string>;
-}
-
-/// 终端发送（原 terminal.rs：terminal_send）
-interface host-terminal {
-    send: func(session-id: string, data: string) -> result<_, string>;
 }
 
 /// 事件 / 广播 / 通知（原 events.rs：emit_event/broadcast_sync/notify）
@@ -404,121 +402,18 @@ interface host-config {
     get: func(key: string) -> result<option<string>, string>;
 }
 
-/// 会话能力（原 session.rs：session_list/get/config_list/create + lifecycle.rs 注册）
-///
-/// 注：WIT 中 `list` 是类型关键字，列表函数命名为 `list-sessions`
-interface host-session {
-    list-sessions: func() -> result<option<string>, string>;
-    get: func(session-id: string) -> result<option<string>, string>;
-    /// 会话启动规格创建（v19，权限 `session:write`）：接收插件算好的 launch
-    /// spec-json——
-    /// `{name, command, commandArgs?, args?, cwd, cols?, rows?, env?, environment?, configId?, start?}`
-    /// （`environment` = `{"type":"Wsl2","distro":...}` | `{"type":"Linux"}` |
-    /// `{"type":"Windows","shell":"PowerShell"}`，与宿主 `ExecutionEnvironment`
-    /// serde 同形）。宿主只做执行：shell 包装 / 发行版转换（按 environment）/ 尺寸
-    /// 缺省（spec 缺省或非法时用宿主默认网格）/ ID 预生成（返回预生成 session_id，
-    /// 实际创建**异步执行**——事件回灌同一插件实例需重新获取 wasm_plugins 写锁，
-    /// wasmtime Store 不可重入）。`session-id` 可显式指定（重启编排：先 `remove`
-    /// 旧会话再以同一 id 重建），已被在册会话占用时显性拒绝。
-    /// `start = false` 时只创建会话与 PTY（状态 `Starting`，不启动进程，也不注册
-    /// 输出管理器），供「两阶段启动」编排的第一阶段使用。映射决策（命名唯一化 /
-    /// config→launch / 是否启动）全部在插件侧完成，本原语不做任何业务解释。
-    ///
-    /// **裸 argv 路径（pty 票 1，字段追加不 bump）**：`commandArgs` 非空时宿主按
-    /// argv 数组原样 exec——**不做 shell 包装 / WSL 路径转换**（完整 argv 由插件
-    /// `launch.rs::build_argv` 算好，含 bash -lic 包装、wsl.exe 前缀与转义），
-    /// `environment` 仅冗余透传；缺省/空 → 旧路径（`command` 字符串 + 宿主
-    /// `build_command` 包装）。`BEDCODE_SESSION_ID` 会话身份注入在两种路径下都保持
-    /// （业务会话身份引擎原语，host-pty 插件私有 PTY 不注入）。引擎只守可 exec 边界：
-    /// argv[0] 非空 + 无 NUL 字节；shell 注入防护责任在插件侧 `build_argv`。
-    create-with-spec: func(spec-json: string) -> result<string, string>;
-    /// **票 03 起已退役**（本 interface 随票 10 整删）：宿主侧观察注册表、派发点与
-    /// 内核逐帧输入修饰链已移除，本条在票 10 之前退化为**显性失败的遗留占位**
-    /// （返回点明原因的 `Err`，不静默成功）。会话生命周期事实现在由
-    /// `com.bedcode.terminal-session` 自驱，跨插件事件走 `host-events` / `host-bus`。
-    lifecycle-register: func() -> result<_, string>;
-    /// **票 03 起已退役**：提交输入行观察面整体移除（不换成总线 topic——无真实消费者）。
-    /// 行重建与任务域分发都在 `com.bedcode.terminal-session` 内完成。
-    input-register: func() -> result<_, string>;
-    /// 关闭（终止）会话（v7）：停止 PTY 并置 Stopped，会话记录保留
-    /// （与用户手动关闭一致）；宿主分发 Stopping/Stopped 生命周期事件。
-    /// 供插件在定时自动任务执行完后清理自己创建的会话。
-    close: func(session-id: string) -> result<_, string>;
-    /// 移除会话（v19，权限 `session:write`）：注册表清理（输出管理器 / PTY 注册表
-    /// / 会话记录 / 正统端归属）+ 会话删除同步事件，进程随句柄释放终止。
-    /// 未知 id 幂等成功（与宿主 `remove_session` 语义一致）。
-    remove: func(session-id: string) -> result<_, string>;
-    /// 改名（v19，权限 `session:write`）：返回改名前的名字（调用方据此回执）。
-    /// 未知 id / 空名显性报错（不静默）。
-    rename: func(session-id: string, name: string) -> result<string, string>;
-    /// 带请求端标识的尺寸调整（v19，权限 `session:write`）：**只登记与执行**，
-    /// 不做任何裁决（正统端判定与覆盖确认策略归插件，spec D3）。执行 = 透传
-    /// PTY winsize；登记 = 把该会话的正统端归属置为请求方。
-    /// `requester-json` 形如 `{"kind":"desktop"}` 或
-    /// `{"kind":"mobile","deviceName":"Pixel"}`（宿主 `RendererSource` serde 同形）。
-    /// 返回 `{previousCanonical, canonical}`（前一归属，无归属为 null）。
-    resize: func(session-id: string, cols: u16, rows: u16, requester-json: string) -> result<string, string>;
-    /// 会话注解槽写入（v19，权限 `session:write`，票 11）：`session-id → key → value`
-    /// 不透明键值对写入。**内核只搬运透传、绝不解释键名**（spec D5）：槽的形状是
-    /// 扁平 map，键名/取值语义归写入方插件（本插件的任务域键如 `taskStatus`）；
-    /// 宿主校验三件事后原样落槽——权限门（`session:write`，属主边界）→ 会话存在性
-    /// （未知会话显性报错，不写孤儿键）→ 参数形状（`session-id` / `key` 非空；
-    /// `value` 可为任意字符串含空串）。写入按调用方插件记录归属（属主 = 权限门 +
-    /// 调用方 plugin_id，guest 无法伪造/旁路）；重复写同键 = 覆盖（后写赢）。
-    /// 读取面是 `list-sessions` / `get` 回执的 `annotations` 字段（同槽透传）。
-    annotate: func(session-id: string, key: string, value: string) -> result<_, string>;
-    /// 连接注册表原始记录清单（v19，权限 `session:read`，票 11）：**无排序无解读**
-    /// ——返回内核 WS 连接注册表（`WsSessionRegistry`）的全部原始条目，按注册表
-    /// 存储序（HashMap 迭代序，不保证稳定），不做过滤（含未认证连接）、不做合并
-    /// （不关联配对记录）、不加派生字段（无会话数 / 在线判定——那些是插件侧的
-    /// 派生视图职责，spec D3/D4）。JSON 数组，元素（原始字段名，camelCase）：
-    /// `{ clientId, deviceName?, fingerprint?, addr, authenticated, connectedAt }`
-    /// （`clientId` = 注册表键 = 连接地址串；`deviceName` / `fingerprint` 来自
-    /// JWT claims，认证前为 null；`connectedAt` 为 epoch 毫秒）。
-    ///
-    /// **票 04 起本函数是别名**：真源面已迁 `host-connection.connections-list`（同一宿主
-    /// 实现），权限判据同步改挂 `connection:read`；本条随 `host-session` interface
-    /// 的 P4 退役一并删除（票 10）。
-    connections-list: func() -> result<string, string>;
-
-    /// 一次拉取的返回（游标语义见 `output-ring-fetch`；与 host-pty `ring-fetch-result`
-    /// 同形——会话输出环与插件私有 PTY 环共享同一字节偏移语义，spec D3）
-    record ring-fetch-result {
-        /// `[实际起点, next-offset)` 区间的原始字节（未解码，可能是非 UTF-8）
-        data: list<u8>,
-        /// 下一次拉取应传的游标
-        next-offset: u64,
-        /// `from-offset` 落后于环驻留起点（中间字节已被淘汰）→ 调用方按 resync 重建上下文
-        truncated: bool,
-    }
-
-    /// 会话输出环拉取（票 04，权限 `terminal:output` + 属主校验）：按游标拉取
-    /// 会话输出原始字节（`list<u8>` 直传，不 JSON 化）。
-    ///
-    /// 数据面语义与 host-pty `ring-fetch` 完全一致：
-    /// - `Ok(None)`：游标已追平产出端，无新字节
-    /// - `Ok(Some)`：自游标起的字节（单次不超 `max-bytes`，宿主钳位上限），
-    ///   `next-offset` 续拉不重复
-    /// - `truncated = true`：`from-offset` 落后于环驻留起点（中间字节已被淘汰），
-    ///   返回的是现存最早段——调用方按 resync 清屏重锚，慢消费只损失自己的历史
-    /// - `Err`：会话不存在 / 非属主 / 权限缺失
-    ///
-    /// 宿主 GlobalOutputManager 保有环本体；游标由调用方（插件）自持——插件注册
-    /// 游标 + 自有水位，宿主不做任何投递（背压语义沿用 2026-09-17 pull 模型）。
-    output-ring-fetch: func(session-id: string, from-offset: u64, max-bytes: u32) -> result<option<ring-fetch-result>, string>;
-}
-
 /// 宿主 server 的在册连接清单（票 04，自 `host-session.connections-list` 迁出）
 ///
 /// **为什么单独成 interface**：这份事实的主语是宿主 WS 服务的连接注册表
 /// （`WsSessionRegistry`），不是插件自己开的 socket（那是 `host-websocket` 的
 /// `ws:client` / `ws:server`），也不是会话（会话真源已在 `com.bedcode.terminal-session`
 /// 登记域）。它历史上住进 `host-session` 只是当时顺手——而 `host-session` 整 interface
-/// 随 P4 退役，这份**只有宿主机进程知道、且零会话语义**的事实必须换个家活下来
-/// （ADR 0022 v12 裁决 5「迁独立原语」）。
+/// 已在 v27 退役（票 10），这份**只有宿主机进程知道、且零会话语义**的事实因此必须
+/// 换个家活下来（ADR 0022 v12 裁决 5「迁独立原语」）；**迁出后唯一的调用入口就是本
+/// interface**（旧别名随 `host-session` 一起删除，不留第二把钥匙）。
 ///
-/// 权限 `connection:read`（票 04 新位，替代原 `session:read`；`host-session` 上的
-/// 同名旧函数在删除前**共用这一判据**，不留第二把钥匙）。
+/// 权限 `connection:read`（票 04 新位，替代原 `session:read`；迁移期两条入口共用
+/// 这一判据，`host-session` 侧那一条已随 v27 删除）。
 ///
 /// **无排序无解读**：返回内核 WS 连接注册表的全部原始条目，按注册表存储序
 /// （HashMap 迭代序，不保证稳定），不做过滤（含未认证连接）、不做合并（不关联配对记录）、
@@ -630,8 +525,8 @@ interface host-auth {
 
 /// 插件私有伪终端（host-pty，v16）：裸 PTY 引擎原语，零业务语义（ADR 0022）
 ///
-/// **与宿主业务会话线的边界（写死，互不交叉）**：`host-terminal` / `host-session` /
-/// `terminal-hooks` 服务宿主业务终端会话（会话配置、SessionManager 生命周期、前端
+/// **与宿主业务会话线的边界（写死，互不交叉）**：`host-terminal` 服务宿主业务终端
+/// 会话线（会话配置、前端
 /// UI）；本接口只服务**插件私有 PTY**——不挂 SessionManager、不进业务会话注册表、
 /// **不默认注册业务输出总线**（插件 PTY 的字节默认私有；宿主 server 能否只读订阅由
 /// spawn 声明 opt-in，见 `spawn` 的 `hostBroadcastSessionId`）、不参与业务会话事件链。
@@ -838,14 +733,6 @@ interface lifecycle {
 /// 事件回调（原 on_message/on_session_lifecycle/on_input_submitted）
 interface events {
     on-message: func(topic: string, sender: string, payload-json: string) -> result<_, string>;
-    /// **票 03 起失去派发源**（导出本身**只登记不动**，随票 10 与 `host-session`
-    /// interface 同批删除）：宿主侧的生命周期观察注册表与派发点已退役，本导出
-    /// 在生产路径上不再被调用——会话生命周期事实由 `com.bedcode.terminal-session`
-    /// 自驱，跨插件事件走 `host-events` / `host-bus`。SDK 默认实现为 no-op。
-    on-session-lifecycle: func(payload-json: string) -> result<_, string>;
-    /// **票 03 起失去派发源**（同 `on-session-lifecycle` 的说明）：提交输入行的
-    /// 观察面整体退役，行重建与任务域分发都在 `com.bedcode.terminal-session` 内完成。
-    on-input-submitted: func(payload-json: string) -> result<_, string>;
     /// 进程执行完成回调（v8）：host-process run 的进程结束时触发
     /// （正常退出 / 非零退出 / 超时 kill），payload-json 为
     /// `{ run_id, exit_code, timed_out }`
@@ -864,11 +751,6 @@ interface events {
 /// host-log 记录，不打断宿主投递链；host 侧仅 trap 会上抛
 interface events-binary {
     on-message-binary: func(topic: string, sender: string, payload: list<u8>);
-}
-/// 终端输入/输出钩子（原 on_terminal_input/on_terminal_output）
-interface terminal-hooks {
-    on-terminal-input: func(session-id: string, text: string) -> option<string>;
-    on-terminal-output: func(session-id: string, data: string) -> option<string>;
 }
 
 /// 插件 manifest（原 __bedcode_manifest，JSON 字符串）
@@ -913,6 +795,19 @@ interface manifest {
 ///   操作计划，权限 `task:run` + 每单元既有域权限门双门） + 可选导出
 ///   events-task#on-task-event（宿主动态探测，同 events-ws 模式，旧产物零回归），
 ///   纯增量新接口，v19 及更早插件不受影响
+/// - v21…v26：函数级追加与新增 interface（host-session 收敛、host-platform、
+///   host-auth 记录面、host-pty、auth-policy、host-websocket、host-mdns v2、
+///   host-crypto 等）——**逐条权威记账在 SDK `rust/src/abi.rs`**，本段不复制
+///   （复制即漂移源）
+/// - **v27：唯一一次破坏性契约变更**——会话原语域整 interface 退役：
+///   ① import 删 `host-session`（12 函数）与 `host-terminal`（`send`）；
+///   ② export 删 `terminal-hooks` 整 interface 与 `events` 的
+///   `on-session-lifecycle` / `on-input-submitted`；
+///   ③ 权限位退役 `session:write` / `terminal:observe`。
+///   会话真源在 `com.bedcode.terminal-session` 登记域（P1-b 起），宿主侧只留
+///   `host-pty`（引擎）与 `host-connection`（连接清单）。旧产物在**实例化**阶段
+///   即可诊断失败（点明缺失 interface + 重建指引，见宿主
+///   `stale_artifact_rebuild_hint`），须按 v27 SDK 重建
 ///
 /// **不 bump 版本号的语义变更（审计票 05，落在 v22 批次内）**：host-bus topic 命名空间。
 /// 函数签名零变化，故不动版本号；但**定向事件的 topic 串**由 `<base>.<owner>` 改为
@@ -930,14 +825,16 @@ interface abi {
 
 /// 插件世界：宿主能力全部为 import，插件行为全部为 export
 ///
-/// 阶段 A 收尾后宿主已全部接线（13 组 import），完整 world 可直接实例化；
+/// 阶段 A 收尾后宿主已全部接线，完整 world 可直接实例化；
 /// 阶段 B SDK 构建脚本以本 world 生成 guest 绑定。
+///
+/// v27：import 少两组（`host-session` 与 `host-terminal` 整 interface 退役）、
+/// export 少一个（`terminal-hooks`），`events` 少两个函数
+/// （`on-session-lifecycle` / `on-input-submitted`）。
 world plugin {
     import host-storage;
     import host-database;
     import host-plugin-database;
-    import host-terminal;
-    import host-session;
     import host-connection;
     import host-events;
     import host-http;
@@ -961,7 +858,6 @@ world plugin {
     export command;
     export lifecycle;
     export events;
-    export terminal-hooks;
     export manifest;
     export abi;
 }
@@ -1086,7 +982,6 @@ world plugin-system {
     export command;
     export lifecycle;
     export events;
-    export terminal-hooks;
     export manifest;
     export abi;
 

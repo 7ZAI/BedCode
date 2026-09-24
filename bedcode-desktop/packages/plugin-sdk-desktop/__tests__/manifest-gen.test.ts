@@ -111,16 +111,19 @@ export async function activate(context: PluginContext): Promise<void> {
 
 describe('前端权限推断', () => {
   it('storage / terminal / session / http / broadcast', () => {
+    // v27（票 10）：样例改用**仍存在的** context API——`terminal.sendInput` /
+    // `terminal.onInputSubmitted` / `session.list` / `session.stop` 已随宿主会话
+    // 命令面与观察面退役（生成器的 apiMap 同步收缩），继续用它们会得到「推断不出
+    // 权限」的假红。本用例的意图是「按实际调用的 API 推断权限」，故换成同一批域的
+    // 存活 API（输入/输出/会话窗口原语）。
     scaffoldPlugin({
       'plugin.json': BASE_MANIFEST,
       'src/index.ts': `import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 export async function activate(context: PluginContext): Promise<void> {
   await context.storage.get('k')
-  await context.terminal.sendInput('s', 'x')
+  context.terminal.onInput((s, d) => d)
   context.terminal.onOutput((s, d) => {})
-  context.terminal.onInputSubmitted((s, d) => {})
-  await context.session.list()
-  await context.session.stop('s')
+  await context.session.predictTerminalSize()
   context.http.registerEndpoint('/x', async () => ({ status: 200, body: {} }))
   context.events.on('evt', () => {})
 }`,
@@ -131,9 +134,7 @@ export async function activate(context: PluginContext): Promise<void> {
     expect(perms).toContain('storage')
     expect(perms).toContain('terminal:input')
     expect(perms).toContain('terminal:output')
-    expect(perms).toContain('terminal:observe')
     expect(perms).toContain('session:read')
-    expect(perms).toContain('session:write')
     expect(perms).toContain('network:http')
     expect(perms).toContain('broadcast')
   })

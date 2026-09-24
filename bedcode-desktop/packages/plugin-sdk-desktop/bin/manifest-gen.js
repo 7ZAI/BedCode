@@ -8,7 +8,8 @@
  * 与移动端 manifest-gen 的区别（桌面端扩展点/权限体系不同）：
  * - 扩展点：sidebar/toolbox/statusbar（views）+ fileHandlers（无 navTab/settings/toolbarItems）
  * - 权限：ui:sidebar / ui:toolbox / ui:statusbar / ui:pageToolbar / ui:settings / ui:input
- *   / ui:fileHandler / terminal:observe / session:write / broadcast 等桌面端权限
+ *   / ui:fileHandler / terminal:input / session:read / broadcast 等桌面端权限
+ *   （v27 起 `terminal:observe` / `session:write` 已退役，不在其列）
  *
  * 合并策略（保守，避免误删导致运行时拒绝）：
  * - permissions：派生结果与手工声明取并集
@@ -44,12 +45,14 @@ const REGISTER_PERMISSIONS = Object.fromEntries(
 /** 前端 context API 使用 → 权限（正则按合并后的前端源码匹配） */
 const FRONTEND_PERMISSION_RULES = [
   { re: /\.storage\s*\.\s*(get|set|delete|flush)\b/, perm: 'storage' },
-  { re: /\.terminal\s*\.\s*sendInput\b/, perm: 'terminal:input' },
+  // v27（票 10）：`terminal.sendInput`（宿主导流输入）与
+  // `terminal.onInputSubmitted`（提交行观察）随宿主会话面退役——对应规则删除；
+  // `terminal:input` 仍由 `.terminal.onInput` 推断，`terminal:observe` 位已不存在
   { re: /\.terminal\s*\.\s*onInput\b/, perm: 'terminal:input' },
   { re: /\.terminal\s*\.\s*onOutput\b/, perm: 'terminal:output' },
-  { re: /\.terminal\s*\.\s*onInputSubmitted\b/, perm: 'terminal:observe' },
-  { re: /\.session\s*\.\s*(list|get|onStatusChange)\b/, perm: 'session:read' },
-  { re: /\.session\s*\.\s*(create|stop)\b/, perm: 'session:write' },
+  // v27（票 10）：`session:read` 现在只剩宿主终端窗口事实（数据面 `list` / `get`
+  // 与事件面 `onStatusChange` 已退役）；`session:write` 位已不存在
+  { re: /\.session\s*\.\s*(predictTerminalSize|openTerminal|closeTerminal|isTerminalOpen)\b/, perm: 'session:read' },
   { re: /\.http\s*\.\s*registerEndpoint\b/, perm: 'network:http' },
   { re: /\.events\s*\.\s*(on|emit)\b/, perm: 'broadcast' },
 ]

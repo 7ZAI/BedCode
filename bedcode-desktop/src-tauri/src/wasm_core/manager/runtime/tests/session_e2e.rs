@@ -92,8 +92,10 @@ fn test_session_plugin_artifact_lifecycle() {
         serde_json::json!([
             "auth",
             // 票 15 任务域：broadcast（任务 / 模式 / 队列广播）、fs:read + fs:write
-            // （写项目级 Agent 集成）、terminal:input（队列下发）+ terminal:observe
-            // （提交输入行监听）、timer:schedule（队列周期 tick）
+            // （写项目级 Agent 集成）、terminal:input（键盘输入，v27 起经本插件命令
+            // 通道 `session.input` 写入）、timer:schedule（队列周期 tick）。
+            // **v27（票 10）退役两位**：`session:write`（host-session 整 interface
+            // 删除）与 `terminal:observe`（提交输入行观察面，派发点票 03 已删）
             "broadcast",
             // 票 04：`host-connection` 独立原语的判据位
             "connection:read",
@@ -110,14 +112,12 @@ fn test_session_plugin_artifact_lifecycle() {
             "pty:io",
             "pty:spawn",
             "session:read",
-            "session:write",
             "storage",
             // 票 21（v20 host-task）：`task:run` ——git 域 diff_file_tree 三路只读
             // 命令改走 execute-batch 并行（池线程真并发，替代 run-sync 串行）。
             // 注意顺序：wasm 产物经 manifest-gen **ASCII 升序**重排（task < terminal）
             "task:run",
             "terminal:input",
-            "terminal:observe",
             "timer:schedule",
             // 票 17：`ui:input`（任务队列弹窗的终端工具栏入口，纯前端贡献面）
             // 清单顺序 = manifest-gen 的 ASCII 升序口径（release 构建会重排）
@@ -129,9 +129,9 @@ fn test_session_plugin_artifact_lifecycle() {
         ]),
         "票 05：host-auth + host-peer；票 08：session:read（config-list 精简列表）+\
              session:read（config-get 全量行，迁移读 legacy 用）+ storage（配置私有库）；\
-             票 14：ui:sidebar + ui:settings（两个纯前端贡献面）；票 15：任务域五位；\
+             票 14：ui:sidebar + ui:settings（两个纯前端贡献面）；票 15：任务域四位（v27 起）；\
              票 17：ui:input（任务弹窗工具栏入口）；票 21：task:run（git 域 execute-batch 并行）"
-    );
+             );
     let declared_api: Vec<String> = manifest["api"]
         .as_array()
         .expect("api 数组")
@@ -288,6 +288,7 @@ fn test_session_task_domain_closed_loop() {
     }
     let (wasm_runtime, host_ctx) = setup_wasm_runtime();
     // 本测试不经 PluginHost 激活，权限门所需的 grant 需显式下发（与 manifest 同表）
+    // v27（票 10）：`session:write` / `terminal:observe` 已退役，不再授予
     host_ctx.permission.grant_permissions(
         "com.bedcode.terminal-session",
         &[
@@ -295,7 +296,6 @@ fn test_session_task_domain_closed_loop() {
             "peer",
             "storage",
             "session:read",
-            "session:write",
             "storage",
             "broadcast",
             "fs:read",
@@ -304,7 +304,6 @@ fn test_session_task_domain_closed_loop() {
             "pty:spawn",
             "pty:io",
             "terminal:input",
-            "terminal:observe",
             "timer:schedule",
             "ui:sidebar",
             "ui:settings",
@@ -426,21 +425,33 @@ fn test_session_task_domain_closed_loop() {
             "tick 无失败域, got: {out}"
         );
 
-        // 5. Creating + 未适配 agent（`bash`）→ 不写入任何 agent 集成
+        // 5. 未适配 agent（`bash`）→ 不写入任何 agent 集成
+        //
+        // **v27（票 10）改走生产路径**：原先这里直接喂合成 `Creating` 事件；
+        // 回调随 WIT 面退役后，agent 集成注入只发生在 `launch::spawn_session` 内，
+        // 故本断言必须经真实 `session.create`（比原形态更贴近生产）。
         let probe_dir = std::env::temp_dir().join(format!("bedcode-task-probe-{}", std::process::id()));
         std::fs::create_dir_all(&probe_dir).expect("create probe dir");
-        plugin
+        let unsupported = seed_config_in_plugin_store(
+            &mut *plugin.lock().await,
+            "未适配探针",
+            &probe_dir.to_string_lossy(),
+            "bash",
+        )
+        .await;
+        let unsupported_out = plugin
             .lock()
             .await
-            .on_session_lifecycle(&serde_json::json!({
-                "event_type": "creating",
-                "config_id": "probe-config",
-                "command": "bash",
-                "working_dir": probe_dir.to_string_lossy(),
-                "source_device": null,
-                "resource_dir": ""
-            }))
-            .expect("creating 事件不得报错");
+            .invoke_command(
+                "session.create",
+                &serde_json::json!({ "configId": unsupported["id"].as_str().unwrap() }).to_string(),
+            )
+            .expect("session.create（未适配 agent）");
+        let unsupported_created: serde_json::Value = serde_json::from_str(&unsupported_out).unwrap();
+        let unsupported_sid = unsupported_created["sessionId"]
+            .as_str()
+            .expect("未适配会话回执 sessionId")
+            .to_string();
         let entries: Vec<String> = std::fs::read_dir(&probe_dir)
             .expect("read probe dir")
             .filter_map(|e| e.ok().map(|e| e.file_name().to_string_lossy().to_string()))
@@ -450,16 +461,28 @@ fn test_session_task_domain_closed_loop() {
             "未适配 agent 的会话不得写入任何集成文件, got: {entries:?}"
         );
         let _ = std::fs::remove_dir_all(&probe_dir);
+        crate::utils::session_gateway::remove(&host_ctx, &unsupported_sid, None)
+            .await
+            .expect("remove unsupported session");
 
         // 6. 状态推进序列（票 15 的对照核心）：受支持 agent 会话收到提交输入 →
-        //    任务行 in_progress → 注解槽投影；会话 Stopped → 兜底中断 interrupted
+        //    任务行 in_progress → 注解槽投影；会话终止 → 兜底中断 interrupted
         //
-        // **P1-b**：会话经插件真实 `session.create` 创建（登记域真源 + host-pty spawn，
-        // 真实 bash，cwd=/tmp）；注解槽写入登记域（`host-session.annotate` 的一切
-        // 对插件会话已是死端）。回调（on_input_submitted / on_session_lifecycle）仍
-        // 直接驱动，语义与本插件自驱路径一致。
-        // agent 判定读配置真源的 command（claude → 受支持 agent → 建任务行）
-        let config = seed_config_in_plugin_store(&mut *plugin.lock().await, "任务域探针", "/tmp", "claude").await;
+        // **v27 起本步全程走生产路径**（不再直接调已删除的两个回调）：
+        // - 输入经 `session.input`（写 PTY + 提交行重建 + 任务域分发，与本插件
+        //   前端键盘输入同一入口）；
+        // - 终态经 `session.close`（登记 Stopping + `host-pty.kill` → `pty:exit`
+        //   事件 → `session::on_pty_exit` 收尾并兜底中断任务行）。
+        // agent 判定读配置真源的 command（含 `claude` 关键词 → 受支持 agent → 建任务行）；
+        // 尾部 `exec bash` 让 shell 驻留（命令不存在时 `bash -lic` 会立刻退出，
+        // 而本步要经真实 PTY 写入输入——会话必须先活着）
+        let config = seed_config_in_plugin_store(
+            &mut *plugin.lock().await,
+            "任务域探针",
+            "/tmp",
+            "echo claude && exec bash",
+        )
+        .await;
 
         // 经插件命令面创建（launch 编排 → host-pty.spawn → 登记域真源写入）
         let create_out = plugin
@@ -477,35 +500,56 @@ fn test_session_task_domain_closed_loop() {
             .to_string();
 
         // 提交输入（非命令、非空行、受支持 agent、无在途任务）→ 建任务行
-        plugin
+        let input_out = plugin
             .lock()
             .await
-            .on_input_submitted(&serde_json::json!({
-                "session_id": sid,
-                "text": "probe task input"
-            }))
-            .expect("on_input_submitted");
+            .invoke_command(
+                "session.input",
+                &serde_json::json!({ "sessionId": sid, "data": "probe task input\n" }).to_string(),
+            )
+            .expect("session.input");
+        let input_reply: serde_json::Value = serde_json::from_str(&input_out).unwrap();
+        assert!(
+            input_reply["error"].is_null(),
+            "session.input 不得报错, got: {input_out}"
+        );
 
         // 注解槽在登记域（读插件视图的任务字段）
         let after_input = crate::utils::session_gateway::view(&host_ctx, &sid)
             .await
             .expect("view")
             .expect("在册");
-        // 会话结束兜底：运行中任务行与注解槽一并收敛到 interrupted
-        plugin
+
+        // 会话结束兜底：运行中任务行与注解槽一并收敛到 interrupted。
+        // 终态由 `pty:exit` 异步收尾（kill → 退出监听 → 事件总线 → 插件），
+        // 故按**有界轮询**等待（终态事件到达 ≠ 收尾帧已消费，见 P0 记的时序间隙）。
+        let close_out = plugin
             .lock()
             .await
-            .on_session_lifecycle(&serde_json::json!({
-                "event_type": "stopped",
-                "session_id": sid,
-                "source_device": null,
-                "resource_dir": ""
-            }))
-            .expect("stopped 事件不得报错");
-        let after_stopped = crate::utils::session_gateway::view(&host_ctx, &sid)
-            .await
-            .expect("view")
-            .expect("在册");
+            .invoke_command(
+                "session.close",
+                &serde_json::json!({ "sessionId": sid }).to_string(),
+            )
+            .expect("session.close");
+        let close_reply: serde_json::Value = serde_json::from_str(&close_out).unwrap();
+        assert!(
+            close_reply["error"].is_null(),
+            "session.close 不得报错, got: {close_out}"
+        );
+
+        let mut converged: Option<crate::protocol::SessionInfoView> = None;
+        for _ in 0..100 {
+            let v = crate::utils::session_gateway::view(&host_ctx, &sid)
+                .await
+                .expect("view")
+                .expect("在册");
+            if v.task_status.as_deref() == Some("interrupted") {
+                converged = Some(v);
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        let after_stopped = converged.expect("会话终止后任务状态必须在 5s 内收敛为 interrupted");
 
         let out = plugin
             .lock()
@@ -600,6 +644,9 @@ fn test_session_task_http_and_scheduled_closed_loop() {
         return;
     }
     let (wasm_runtime, host_ctx) = setup_wasm_runtime();
+    // v27（票 10）：清单与真源同步——`session:write` / `terminal:observe` 已退役，
+    // 新增 `pty:spawn` / `pty:io`（本用例的 Created 腿改走生产路径 `session.create`，
+    // 真实 spawn 一条会话，需要这两位的门禁）。
     host_ctx.permission.grant_permissions(
         "com.bedcode.terminal-session",
         &[
@@ -607,16 +654,16 @@ fn test_session_task_http_and_scheduled_closed_loop() {
             "peer",
             "storage",
             "session:read",
-            "session:write",
             "storage",
             "broadcast",
             "fs:read",
             "fs:write",
             "terminal:input",
-            "terminal:observe",
             "timer:schedule",
             "ui:sidebar",
             "ui:settings",
+            "pty:spawn",
+            "pty:io",
         ]
         .iter()
         .map(|s| s.to_string())
@@ -795,16 +842,34 @@ fn test_session_task_http_and_scheduled_closed_loop() {
     assert_eq!(job["status"], "pending", "新建定时任务必须是 pending, got: {job}");
     assert_eq!(job["config_id"], config_id.as_str(), "config_id 原样落库, got: {job}");
 
-    // 5. creating → executed（Created 事件驱动的入队腿）
+    // 5. creating → executed（Created 逻辑驱动的入队腿）
     //
-    // **为什么直接播种私有库**：`creating` 的正常来源是 tick 调
-    // `host-session.create`，而该原语在宿主侧要经 `AppContext::global()` 回灌
-    // 会话生命周期事件——无头 harness 没有全局 AppContext（unit 测试进程里
-    // 是否已 init 取决于用例顺序），把创建腿塞进本用例只会得到跨用例竞态。
-    // 播种与「内核 pairings 表播种」同法：外部可见状态真源在库里，插件读的
-    // 就是那一行，事件推进路径与生产完全同形。
-    // （pending →creating 这一腿由生产路径与票 18 的手工回归清单覆盖。）
+    // **v27（票 10）改走生产路径**：原形态直接喂合成 `Created` 事件（理由是宿主
+    // `host-session.create-with-spec` 在无头 harness 里要经全局 AppContext 回灌）。
+    // 回调随 WIT 面退役后，Created 逻辑只存在于 `launch::spawn_session`
+    // （`session.create` 与 `session.action.restart` 都走它），故本步改为：
+    //   ① 真实创建一条会话拿 sid；
+    //   ② 把 creating 态 job 的 `session_id` 播成该 sid（真源同一行，不造第二份事实）；
+    //   ③ `session.action.restart` 触发同 id 重建 → 跑 Created 逻辑 → job 归档 executed。
+    // 「pending → creating」这一腿仍由生产路径与人工回归清单覆盖（tick 的创建腿需要
+    // 真实会话创建，理由同上）。
     let scheduled_session_id = format!("probe-scheduled-{}", std::process::id());
+    let create_out = plugin
+        .invoke_command(
+            "session.create",
+            &serde_json::json!({ "configId": config_id }).to_string(),
+        )
+        .expect("session.create（定时探针会话）");
+    let created: serde_json::Value = serde_json::from_str(&create_out).unwrap();
+    assert!(
+        created["error"].is_null(),
+        "session.create 不得报错, got: {create_out}"
+    );
+    let scheduled_session_id = created["sessionId"]
+        .as_str()
+        .expect("session.create 回执 sessionId")
+        .to_string();
+
     seed_scheduled_job(
         "creating",
         &job_id,
@@ -816,21 +881,23 @@ fn test_session_task_http_and_scheduled_closed_loop() {
     let job = job_row(&mut plugin, &job_id);
     assert_eq!(job["status"], "creating", "播种的 creating 行必须可读, got: {job}");
 
-    plugin
-        .on_session_lifecycle(&serde_json::json!({
-            "event_type": "created",
-            "session_id": scheduled_session_id,
-            "config_id": config_id,
-            // Created 变体的 name / working_dir 无 serde default（events.rs）：
-            // 缺字段会让整个事件反序列化失败并被宿主当作未知事件丢弃，
-            // 插件侧表现为「job 永久停在 creating」而不是报错
-            "name": "定时探针会话",
-            "working_dir": "/tmp",
-            "resource_dir": ""
-        }))
-        .expect("created 事件不得报错");
+    // 同 id 重启：`spawn_session` 的 Created 逻辑即本步要走的路径
+    let restart_out = plugin
+        .invoke_command(
+            "session.action.restart",
+            &serde_json::json!({ "sessionId": scheduled_session_id }).to_string(),
+        )
+        .expect("session.action.restart");
+    let restart: serde_json::Value = serde_json::from_str(&restart_out).unwrap();
+    assert!(
+        restart["error"].is_null(),
+        "session.action.restart 不得报错, got: {restart_out}"
+    );
     let job = job_row(&mut plugin, &job_id);
-    assert_eq!(job["status"], "executed", "Created 事件后必须归档 executed, got: {job}");
+    assert_eq!(
+        job["status"], "executed",
+        "Created 逻辑跑完后必须归档 executed, got: {job}"
+    );
 
     let r = http_call(
         &mut plugin,

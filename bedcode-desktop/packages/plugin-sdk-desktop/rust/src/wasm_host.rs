@@ -17,13 +17,13 @@
 use crate::host::{
     ConfigKey, FsDirEntry, FsStat, HostApp, HostAuth, HostBus, HostConfig, HostConnection, HostDatabase, HostError,
     HostEvents, HostFs, HostHttp, HostLog, HostMdns, HostPeer, HostPlatform, HostPluginDatabase,
-    HostCrypto, HostProcess, HostPty, HostSession, HostStorage, HostTask, HostTerminal, HostWebsocket,
-    CryptoKeypair, ProcessSyncResult, PtyRingFetch, SessionRingFetch,
+    HostCrypto, HostProcess, HostPty, HostStorage, HostTask, HostWebsocket,
+    CryptoKeypair, ProcessSyncResult, PtyRingFetch,
 };
 use crate::wasm::bedcode::plugin::{
     host_app, host_auth, host_bus, host_config, host_database, host_events, host_fs, host_http,
     host_crypto, host_log, host_mdns, host_peer, host_platform, host_plugin_database, host_process, host_pty,
-    host_connection, host_session, host_storage, host_task, host_terminal, host_timer, host_websocket,
+    host_connection, host_storage, host_task, host_timer, host_websocket,
 };
 
 /// 宿主 API 绑定（WASM 插件侧）
@@ -256,95 +256,23 @@ impl HostPluginDatabase for WasmHost {
     }
 }
 
-// ==================== HostTerminal ====================
+// ==================== HostTerminal（v27 已退役） ====================
 
-impl HostTerminal for WasmHost {
-    fn terminal_send(&self, session_id: &str, data: &str) -> Result<(), HostError> {
-        host_terminal::send(session_id, data).map_err(|e| host_err("terminal_send", e))
-    }
-}
+// `host-terminal` 整 interface 在 ABI v27 删除（票 10）：`send` 是「宿主替插件往
+// 交互终端注入按键」的业务面入口，零生产消费者（属主判定查已清空的内核登记）。
+// 插件写自家会话输入走自有命令通道（`session.input` → `session::input_via_pty`）。
 
-// ==================== HostSession ====================
+// ==================== HostSession（v27 已退役） ====================
 
-impl HostSession for WasmHost {
-    fn session_list(&self) -> Result<Option<serde_json::Value>, HostError> {
-        match host_session::list_sessions().map_err(|e| host_err("session_list", e))? {
-            Some(s) => parse_json("session_list", s).map(Some),
-            None => Ok(None),
-        }
-    }
-
-    fn session_get(&self, session_id: &str) -> Result<Option<serde_json::Value>, HostError> {
-        match host_session::get(session_id).map_err(|e| host_err("session_get", e))? {
-            Some(s) => parse_json("session_get", s).map(Some),
-            None => Ok(None),
-        }
-    }
-
-    fn session_lifecycle_register(&self) -> Result<(), HostError> {
-        host_session::lifecycle_register().map_err(|e| host_err("session_lifecycle_register", e))
-    }
-
-    fn session_input_register(&self) -> Result<(), HostError> {
-        host_session::input_register().map_err(|e| host_err("session_input_register", e))
-    }
-
-    fn session_create_with_spec(&self, spec: &serde_json::Value) -> Result<String, HostError> {
-        host_session::create_with_spec(&spec.to_string())
-            .map_err(|e| host_err("session_create_with_spec", e))
-    }
-
-    fn session_close(&self, session_id: &str) -> Result<(), HostError> {
-        host_session::close(session_id).map_err(|e| host_err("session_close", e))
-    }
-
-    fn session_remove(&self, session_id: &str) -> Result<(), HostError> {
-        host_session::remove(session_id).map_err(|e| host_err("session_remove", e))
-    }
-
-    fn session_rename(&self, session_id: &str, name: &str) -> Result<String, HostError> {
-        host_session::rename(session_id, name).map_err(|e| host_err("session_rename", e))
-    }
-
-    fn session_resize(
-        &self,
-        session_id: &str,
-        cols: u16,
-        rows: u16,
-        requester: &serde_json::Value,
-    ) -> Result<serde_json::Value, HostError> {
-        let written = host_session::resize(session_id, cols, rows, &requester.to_string())
-            .map_err(|e| host_err("session_resize", e))?;
-        parse_json("session_resize", written)
-    }
-
-    fn session_annotate(&self, session_id: &str, key: &str, value: &str) -> Result<(), HostError> {
-        host_session::annotate(session_id, key, value).map_err(|e| host_err("session_annotate", e))
-    }
-
-    fn session_output_ring_fetch(
-        &self,
-        session_id: &str,
-        from_offset: u64,
-        max_bytes: u32,
-    ) -> Result<Option<SessionRingFetch>, HostError> {
-        host_session::output_ring_fetch(session_id, from_offset, max_bytes)
-            .map(|result| {
-                result.map(|r| SessionRingFetch {
-                    data: r.data,
-                    next_offset: r.next_offset,
-                    truncated: r.truncated,
-                })
-            })
-            .map_err(|e| host_err("session_output_ring_fetch", e))
-    }
-}
+// `host-session` 整 interface 在 ABI v27 删除（票 10）：会话真源在
+// `com.bedcode.terminal-session` 登记域，宿主侧不再有「会话」原语域。
+// 插件要用会话能力一律经 `host-pty`（PTY 引擎）与自家登记域。
 
 // ==================== HostConnection ====================
 
 impl HostConnection for WasmHost {
-    /// 走 `host-connection` 而非 `host-session`（票 04）：这份宿主 server 的连接事实
-    /// 不随会话 interface 退役；权限判据是 `connection:read`。
+    /// 走 `host-connection`（票 04）：这份宿主 server 的连接事实
+    /// 不随会话原语域退役；权限判据是 `connection:read`。
     fn connections_list(&self) -> Result<serde_json::Value, HostError> {
         let raw = host_connection::connections_list().map_err(|e| host_err("connections_list", e))?;
         parse_json("connections_list", raw)

@@ -2,11 +2,11 @@
 //!
 //! **为什么不属于会话域**：返回的是宿主 WS 服务的连接注册表原始条目
 //! （`WsSessionRegistry`），与会话真源（`com.bedcode.terminal-session` 登记域）无关，
-//! 也不随 `host-session` interface 退役（ADR 0022 v12 裁决 5「迁独立原语」）。
+//! 也不随会话原语域退役（ADR 0022 v12 裁决 5「迁独立原语」）。
 //!
-//! 权限判据 `connection:read`（票 04 起替代 `session:read`）；`host_api::session` 里
-//! 的旧入口 `session_connections_list` 保留为**同判据的别名转发**，直到票 10 随
-//! interface 一并删除——不留「`session:read` 也能读连接清单」这把第二钥匙。
+//! 权限判据 `connection:read`（票 04 起替代 `session:read`）。**票 10 起本面是唯一
+//! 入口**：`host_api::session` 里那条同判据的旧别名已随 `host-session` interface
+//! 删除（`session:read` 这把第二钥匙彻底不存在）。
 
 use crate::wasm_core::manager::runtime::{block_on_async, WasmHostContext};
 use crate::wasm_core::permission::PERMISSION_CONNECTION_READ;
@@ -46,7 +46,6 @@ pub(crate) fn connection_list(host_ctx: &WasmHostContext, plugin_id: &str) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::wasm_core::host_api::session::session_connections_list;
     use crate::wasm_core::host_api::tests::{build_host_ctx, generated_vocabulary_know, grant_permissions};
     use crate::wasm_core::permission::{PERMISSION_CONNECTION_READ, PERMISSION_SESSION_READ};
 
@@ -67,27 +66,54 @@ mod tests {
         assert_eq!(parsed, serde_json::json!([]));
     }
 
-    /// **单钥匙锁**：只授 `session:read` 不再能读连接清单（两条路径同一判据）——
-    /// 票 04 换判据的审计落点，旧别名不得留后门
+    /// **单钥匙锁**：只授 `session:read` 读不到连接清单。
+    ///
+    /// 票 04 换判据时的判据是「新面只认 `connection:read`，旧别名同判据不留后门」；
+    /// 票 10 起旧别名随 `host-session` interface 删除，本锁的**更强形态**成立：
+    /// 那条入口已经不存在（`session:read` 这把钥匙连门都没有了）。
     #[tokio::test]
     async fn session_read_alone_no_longer_reads_connections() {
         let ctx = build_host_ctx();
         grant_permissions(&ctx, PLUGIN, &[PERMISSION_SESSION_READ]);
         let err = connection_list(&ctx, PLUGIN).unwrap_err();
-        assert_eq!(err, "permission denied", "新面只认 connection:read");
-        let err = session_connections_list(&ctx, PLUGIN).unwrap_err();
-        assert_eq!(err, "permission denied", "旧别名同判据（不留第二把钥匙）");
-    }
+        assert_eq!(err, "permission denied", "本面只认 connection:read");
 
-    /// **字节一致锁**：旧别名与新面返回逐字相同（票 04 验收「返回字节不变」的
-    /// 宿主侧证据；插件侧证据是 `devices.rs` 的派生视图用例零改动通过）
-    #[tokio::test]
-    async fn alias_returns_identical_bytes() {
-        let ctx = build_host_ctx();
-        grant_permissions(&ctx, PLUGIN, &[PERMISSION_CONNECTION_READ]);
-        let new = connection_list(&ctx, PLUGIN).expect("new face");
-        let old = session_connections_list(&ctx, PLUGIN).expect("alias");
-        assert_eq!(old, new, "迁出不得改变返回字节");
+        // 旧别名（`host_api::session::session_connections_list`）已随 interface 删除：
+        // 宿主源码里不得再有该标识符（本文件是锁自身，跳过避免自匹配）
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut hits: Vec<String> = Vec::new();
+        let mut stack = vec![root];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                    continue;
+                }
+                if path.ends_with("connection.rs") {
+                    continue;
+                }
+                let Ok(content) = std::fs::read_to_string(&path) else { continue };
+                for (idx, raw_line) in content.lines().enumerate() {
+                    let line = raw_line.trim_start();
+                    if line.starts_with("//") {
+                        continue;
+                    }
+                    if line.contains("session_connections_list") {
+                        hits.push(format!("{}:{}: {}", path.display(), idx + 1, line.trim()));
+                    }
+                }
+            }
+        }
+        assert!(
+            hits.is_empty(),
+            "旧别名入口不得复活（票 10 已随 host-session 删除）：\n{}",
+            hits.join("\n")
+        );
     }
 
     /// 权限五同步点：新位确实进了 CLI 与前端两份**生成物**（漏跑 gen:permissions 即红）

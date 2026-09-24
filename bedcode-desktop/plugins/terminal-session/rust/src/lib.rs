@@ -68,8 +68,7 @@ pub mod task;
 mod keys;
 mod trust;
 
-use bedcode_plugin_api::events::{InputSubmittedEvent, SessionLifecycleEvent};
-use bedcode_plugin_api::host::{HostBus, HostLog, HostSession, HostStorage, HostTimer};
+use bedcode_plugin_api::host::{HostBus, HostLog, HostStorage, HostTimer};
 use bedcode_plugin_api::types::PluginManifest;
 use bedcode_plugin_api::wasm::WasmPlugin;
 use bedcode_plugin_api::wasm_host::WasmHost;
@@ -777,70 +776,15 @@ impl WasmPlugin for SessionPlugin {
         Ok(())
     }
 
-    /// 会话生命周期回调（票 15 编排反转；**P1-b 起为兼容面**）
-    ///
-    /// 宿主 `SessionManager` 不再产生会话生命周期事件（创建/停止/退出全部由本
-    /// 插件自驱：Creating 在 `launch::spawn_session` 内先行、Created 随后、终态
-    /// 由 `<owner>::pty:exit` 事件驱动）。本回调只剩**内核直连路径**（测试）与
-    /// 旧通道的观察面：各分支只做登记域对账（会话不在册则跳过），不驱动主流程。
-    fn on_session_lifecycle(event: &SessionLifecycleEvent) -> anyhow::Result<()> {
-        match event {
-            // Creating：agent 集成已由本插件自驱（launch::spawn_session 先于
-            // spawn），此处无需处理——保留匹配以免误判未知变体
-            SessionLifecycleEvent::Creating { .. } => Ok(()),
-            // Created：定时任务域的会话就绪信号（按 session_id 精确匹配 creating
-            // 态的 job）；兼容面里同时补发待处理的重启前端事件与登记对账
-            SessionLifecycleEvent::Created {
-                session_id,
-                config_id,
-                ..
-            } => {
-                let host = WasmHost;
-                host.log_debug(&format!(
-                    "on_session_lifecycle: Created event session_id={} config_id={}",
-                    session_id, config_id
-                ));
-                actions::flush_pending_restart(&host, session_id);
-                task::scheduled::handle_session_created(&host, session_id, config_id);
-                let _ = session::note_status(session_id, SessionStatus::Running);
-                Ok(())
-            }
-            // Stopped：任务域意外退出兜底（agent 的 Stop hook 没机会推送终态时，
-            // in_progress / asking 的任务行与队列项会永久卡在运行中）
-            SessionLifecycleEvent::Stopped { session_id, .. } => {
-                let host = WasmHost;
-                host.log_debug(&format!(
-                    "on_session_lifecycle: Stopped event session_id={}",
-                    session_id
-                ));
-                task::state::interrupt_running_tasks_on_session_end(&host, session_id);
-                let _ = session::note_status(session_id, SessionStatus::Stopped);
-                Ok(())
-            }
-            // 其余变体：`Stopping` 时把登记域记录推到过渡态；本域不关心的变体保持忽略
-            other => {
-                if let SessionLifecycleEvent::Stopping { session_id, .. } = other {
-                    let _ = session::note_status(session_id, SessionStatus::Stopping);
-                }
-                Ok(())
-            }
-        }
-    }
-
-    /// 提交输入行回调（票 15）：把用户提交的输入当作任务记录写入本域真源
-    ///
-    /// 作为**纯观察通知**，任何一步失败都只降级本域（记日志返回，不向上抛错——
-    /// 回调出错不影响输入本身，D7）。
-    /// 提交输入行回调（票 15；P1-b 起为兼容面）：把用户提交的输入当作任务记录
-    ///
-    /// 生产路径已改走本插件 `session-input` 互调 api（提交行重建在插件侧完成，
-    /// 直接调 [`task::state::handle_submitted_input`]）；本回调只剩宿主内核创建
-    /// 路径（测试）与旧输入通道的观察面，与 `session-input` 共享同一过滤链。
-    /// **纯观察通知**：失败只降级任务域（记日志返回，不向上抛错，D7）。
-    fn on_input_submitted(event: &InputSubmittedEvent) -> anyhow::Result<()> {
-        task::state::handle_submitted_input(&WasmHost, &event.session_id, &event.text);
-        Ok(())
-    }
+    // v27（票 10）：`on_session_lifecycle` / `on_input_submitted` 两个导出已随
+    // WIT 面退役（宿主派发源在票 03 就没了）。原先两条回调上的动作在**生产路径**
+    // 上早已由本插件自驱覆盖，逐条对应关系：
+    //   Created  → `launch::spawn_session`（`flush_pending_restart` +
+    //              `task::scheduled::handle_session_created`）；
+    //   Stopped  → `session::on_pty_exit`（`interrupt_running_tasks_on_session_end`）；
+    //   提交行    → `session::input_via_pty`（`task::state::handle_submitted_input`）；
+    //   状态对账  → `session::note_status`（本地登记域内部调用）。
+    // 因此删除不是能力收窄：等价逻辑仍在，只是不再经宿主回调绕一圈。
 
     fn invoke_command(name: &str, args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
         match name {
@@ -1731,12 +1675,13 @@ mod tests {
                 "auth".to_string(),
                 // 票 15 任务域按 D2 能力映射补的权限位：
                 // `fs:read` / `fs:write`（Agent 集成写项目 hook）、
-                // `terminal:input`（终端窗口键盘输入经宿主命令面
-                // `plugin_terminal_send_input` 转入本插件 `session-input`）
-                // + `terminal:observe`（输入行监听，ADR 0001；P1-b 起提交行观察
-                // 已在 `session::input_via_pty` 内自驱，宿主注册面降为兼容通道）、
+                // `terminal:input`（终端窗口键盘输入；v27 起经本插件自有命令通道
+                // `session.input` 写入，宿主那条导流命令已注销）、
                 // `broadcast`（任务/模式/队列状态广播）、
                 // `timer:schedule`（队列延迟 clear 与静默超时的周期驱动）
+                // **v27（票 10）退役两位**：`session:write`（宿主会话写原语随
+                // `host-session` 整 interface 删除）与 `terminal:observe`
+                // （提交输入行观察面，注册表/派发点在票 03 已删）。
                 "broadcast".to_string(),
                 // 票 04：在册连接清单从 `host-session.connections-list` 迁独立原语
                 // `host-connection.connections-list`，权限判据同步换挂 `connection:read`
@@ -1759,15 +1704,12 @@ mod tests {
                 "pty:io".to_string(),
                 "pty:spawn".to_string(),
                 "session:read".to_string(),
-                // 票 09/10：host-session.create-with-spec 与四项会话动作原语
-                "session:write".to_string(),
                 // 票 08：host-plugin-database（配置真源私有库）
                 "storage".to_string(),
                 // 票 21（v20 host-task）：`task:run` ——git 域 diff_file_tree 三路只读
                 // 命令改走 execute-batch 并行（池线程真并发，替代 run-sync 串行）
                 "task:run".to_string(),
                 "terminal:input".to_string(),
-                "terminal:observe".to_string(),
                 "timer:schedule".to_string(),
                 // 票 17：任务队列弹窗的终端工具栏入口（`ui.registerTerminalToolbarItem`
                 // 与 `ui.registerInputExtension` 同权限门），纯前端贡献面

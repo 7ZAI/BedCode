@@ -20,7 +20,7 @@
 use bedcode_plugin_api::constants::EVENT_TASK_QUEUE_CHANGED;
 use bedcode_plugin_api::events::SyncEvent;
 use bedcode_plugin_api::host::{
-    HostBus, HostEvents, HostLog, HostPluginDatabase, HostSession, HostTerminal,
+    HostBus, HostEvents, HostLog, HostPluginDatabase,
 };
 use bedcode_plugin_api::http_response;
 use bedcode_plugin_api::sql_params;
