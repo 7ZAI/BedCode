@@ -653,7 +653,6 @@ pub fn run() {
             // Dev Console Relay（仅 dev：前端 console 日志转发，写 runtime.*.log + frontend.*.log 单独文件，见 commands.rs Dev Console Log Relay 节）
             #[cfg(debug_assertions)]
             commands::report_frontend_log,
-            commands::get_connected_devices,
             // Plugin
             commands::plugin_list_loaded,
             commands::plugin_get_info,

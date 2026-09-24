@@ -3,7 +3,7 @@
 //! 连接骨架（`conn`）、三通道实现（`channel`）、连接/端点注册表（`registry` /
 //! `endpoint`）、输出订阅原语（`subscription`）、移动端兼容 wire 协议（`message`）、
 //! WsSession 连接态（`session`）、生命周期与优雅停机（`websocket_manager`）、
-//! 终端输出端子面（`terminal_ws`）、连接事件类型（`connection_types`）与路由装配
+//! 终端输出端子面（`terminal_ws`）与路由装配
 //! （`routes`：三条握手端点 + 帧上限）。
 //!
 //! `services` 承载的会话控制与终端输入**不是 WS 传输原语**（ADR 0022 裁剪线视角，
@@ -14,7 +14,6 @@
 
 pub mod channel;
 pub mod conn;
-pub mod connection_types;
 pub mod endpoint;
 pub mod message;
 pub mod registry;

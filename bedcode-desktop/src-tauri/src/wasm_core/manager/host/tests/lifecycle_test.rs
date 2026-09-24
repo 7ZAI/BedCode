@@ -213,3 +213,26 @@ async fn test_repeat_activation_during_activating_is_idempotent() {
         "Activating 期间的重复激活必须原样返回，不得推进状态机"
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn declared_ws_endpoint_follows_activation_lifecycle() {
+    let host = setup_host().await;
+    let plugin_id = "com.test.ws-endpoint-lifecycle";
+    let mut plugin = make_plugin(plugin_id, PluginSource::FileScan, PluginState::Loaded);
+    plugin.manifest.permissions.push("ws:server".to_string());
+    plugin.manifest.contributes.ws_endpoints = vec![bedcode_plugin_api::WsEndpointContribution::Path(
+        "echo".to_string(),
+    )];
+    host.plugins.write().await.insert(plugin_id.to_string(), plugin);
+
+    let mount = crate::server::websocket::endpoint::mount_path(plugin_id, "echo");
+    host.activate_plugin(plugin_id, false).await.unwrap();
+    assert!(crate::server::websocket::endpoint::find_by_mount(&mount).is_some());
+
+    host.deactivate_plugin(plugin_id, false).await.unwrap();
+    assert!(crate::server::websocket::endpoint::find_by_mount(&mount).is_none());
+
+    host.activate_plugin(plugin_id, false).await.unwrap();
+    assert!(crate::server::websocket::endpoint::find_by_mount(&mount).is_some());
+    crate::server::websocket::endpoint::purge_for_plugin(plugin_id);
+}

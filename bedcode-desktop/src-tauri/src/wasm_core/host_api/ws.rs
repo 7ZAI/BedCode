@@ -1207,9 +1207,7 @@ mod tests {
         let plugin = test_plugin("queuefull");
         grant_permissions(&ctx, &plugin, &[PERMISSION_WS_CLIENT]);
         let handle = format!("wsc-{}", uuid::Uuid::new_v4());
-        // 构造一条无消费者的连接（写任务立刻结束 → 队列 Closed）
         let (tx, rx) = mpsc::channel(1);
-        drop(rx);
         CLIENTS.lock().unwrap().insert(
             handle.to_string(),
             ClientEntry {
@@ -1222,8 +1220,16 @@ mod tests {
                 writer: crate::system::error_boundary::spawn_with_error_boundary("ws_test_writer", async {}),
             },
         );
-        let err = ws_send_text(ctx.as_ref(), &plugin, &handle, "hi").expect_err("closed queue");
-        assert_eq!(err, "ws connection is closed");
+        assert!(ws_send_text(ctx.as_ref(), &plugin, &handle, "first").is_ok());
+        assert_eq!(
+            ws_send_text(ctx.as_ref(), &plugin, &handle, "second").unwrap_err(),
+            "ws send queue full"
+        );
+        drop(rx);
+        assert_eq!(
+            ws_send_text(ctx.as_ref(), &plugin, &handle, "closed").unwrap_err(),
+            "ws connection is closed"
+        );
         drop_client(&handle);
     }
 

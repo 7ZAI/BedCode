@@ -26,11 +26,9 @@ import {
   makeSessionInfo,
   makeSessionConfig,
   makeWslDistro,
-  makeDeviceConnectionInfo,
   SESSION_INFO_DTO_FIELDS,
   SESSION_CONFIG_DTO_FIELDS,
   WSL_DISTRO_DTO_FIELDS,
-  DEVICE_CONNECTION_INFO_DTO_FIELDS,
 } from './session'
 import {
   makePluginInfo,
@@ -52,11 +50,6 @@ const DTO_REGISTRY = [
   { label: 'SessionInfo', fields: SESSION_INFO_DTO_FIELDS, build: () => makeSessionInfo() },
   { label: 'SessionConfig', fields: SESSION_CONFIG_DTO_FIELDS, build: () => makeSessionConfig() },
   { label: 'WslDistro', fields: WSL_DISTRO_DTO_FIELDS, build: () => makeWslDistro() },
-  {
-    label: 'DeviceConnectionInfo',
-    fields: DEVICE_CONNECTION_INFO_DTO_FIELDS,
-    build: () => makeDeviceConnectionInfo(),
-  },
   { label: 'PluginInfo', fields: PLUGIN_INFO_DTO_FIELDS, build: () => makePluginInfo() },
   {
     label: 'PluginContributes',

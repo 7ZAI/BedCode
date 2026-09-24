@@ -193,6 +193,7 @@ export function validateManifest(dir) {
   // 条目非法会让声明侧「看起来有清单」而实际永远匹配不上，故构建期就判死；`auth` 取值真源
   // 同样是 rust/src/types.rs 的 EndpointAuth（none|jwt）。
   const WS_ENDPOINT_AUTH_TIERS = ['none', 'jwt']
+  const WS_ENDPOINT_PATH_MAX_LEN = 64
   const wsEndpoints = manifest.contributes?.wsEndpoints
   if (wsEndpoints !== undefined && wsEndpoints !== null) {
     if (!Array.isArray(wsEndpoints)) {
@@ -208,9 +209,15 @@ export function validateManifest(dir) {
           continue
         }
         const path = isString ? entry : entry.path
-        if (typeof path !== 'string' || path.trim() === '' || path.includes('..')) {
+        if (
+          typeof path !== 'string' ||
+          path.trim() === '' ||
+          path.includes('/') ||
+          path.includes('.') ||
+          [...path].length > WS_ENDPOINT_PATH_MAX_LEN
+        ) {
           errors.push(
-            `contributes.wsEndpoints 条目 path 非法（须为非空相对路径段、不含 ..）: ${JSON.stringify(entry)}`,
+            `contributes.wsEndpoints 条目 path 非法（须为非空单段相对路径、不含 / 或 .、长度不超过 ${WS_ENDPOINT_PATH_MAX_LEN}）: ${JSON.stringify(entry)}`,
           )
         }
         if (isString) continue
@@ -220,7 +227,13 @@ export function validateManifest(dir) {
             `contributes.wsEndpoints 条目含未知字段（只允许 path / auth）: ${extraKeys.join(', ')} → ${JSON.stringify(entry)}`,
           )
         }
-        if (entry.auth !== undefined && !WS_ENDPOINT_AUTH_TIERS.includes(entry.auth)) {
+        const auth = typeof entry.auth === 'string' ? entry.auth.trim() : entry.auth
+        if (
+          entry.auth !== undefined &&
+          entry.auth !== null &&
+          entry.auth !== '' &&
+          (typeof auth !== 'string' || !WS_ENDPOINT_AUTH_TIERS.includes(auth))
+        ) {
           errors.push(
             `contributes.wsEndpoints 条目 auth 取值非法（须为 ${WS_ENDPOINT_AUTH_TIERS.join(' | ')}，缺省即 WS 默认档 none）: ${JSON.stringify(entry)}`,
           )
@@ -229,7 +242,7 @@ export function validateManifest(dir) {
       const normalized = wsEndpoints
         .map((entry) => (typeof entry === 'string' ? entry : entry?.path))
         .filter((p) => typeof p === 'string')
-        .map((p) => p.trim().replace(/^\/+/, ''))
+        .map((p) => p.trim())
       const dup = normalized.filter((p, i) => normalized.indexOf(p) !== i)
       if (dup.length) {
         errors.push(`contributes.wsEndpoints 重复声明: ${[...new Set(dup)].join(', ')}`)

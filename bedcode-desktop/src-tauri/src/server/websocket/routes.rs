@@ -96,24 +96,24 @@ async fn plugin_endpoint_ws(
         return Ok(HttpResponse::NotFound().finish());
     }
 
-    // 入站连接数上限：升级前拒绝（503，不产生连接事件）
-    let online = WsSessionRegistry::global()
-        .endpoint_client_count(&entry.endpoint_id)
-        .await;
-    if online >= entry.max_clients {
+    let addr = req
+        .peer_addr()
+        .unwrap_or_else(|| PLACEHOLDER_PEER_ADDR.parse().unwrap());
+    let client_id = addr.to_string();
+    if !WsSessionRegistry::global().reserve_endpoint_client(
+        &entry.endpoint_id,
+        &client_id,
+        entry.max_clients,
+    ) {
         tracing::warn!(
             plugin_id = %plugin_id,
             endpoint_id = %entry.endpoint_id,
-            online,
             limit = entry.max_clients,
             "plugin ws endpoint client limit reached, rejecting before upgrade (503)"
         );
         return Ok(HttpResponse::ServiceUnavailable().finish());
     }
 
-    let addr = req
-        .peer_addr()
-        .unwrap_or_else(|| PLACEHOLDER_PEER_ADDR.parse().unwrap());
     let channel = PluginChannel::new(&entry, addr);
     let ws_actor = WsConnBase::new(
         ConnSpec {
@@ -123,9 +123,16 @@ async fn plugin_endpoint_ws(
         },
         Box::new(channel),
     );
-    actix_ws::WsResponseBuilder::new(ws_actor, &req, stream)
+    match actix_ws::WsResponseBuilder::new(ws_actor, &req, stream)
         .frame_size(entry.max_message_bytes)
         .start()
+    {
+        Ok(response) => Ok(response),
+        Err(error) => {
+            WsSessionRegistry::global().release_endpoint_reservation(&entry.endpoint_id, &client_id);
+            Err(error)
+        }
+    }
 }
 
 /// 属主插件是否处于激活态

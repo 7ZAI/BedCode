@@ -20,7 +20,6 @@ use actix_web_actors::ws::{Message as WsMessage, ProtocolError};
 use std::any::Any;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
-use tauri::Emitter;
 
 use crate::enums::auth::CryptoProposal;
 use crate::server::core::filter::{Direction, FilterContext, TrafficChannel, TrafficFilterChain};
@@ -29,7 +28,6 @@ use crate::server::websocket::registry::{ChannelKind, WsRegistration, WsSessionR
 use crate::server::websocket::session::WsSession;
 use crate::server::websocket::subscription::SubscriptionState;
 use crate::system::app_context::AppContext;
-use crate::system::constants::DEVICE_CONNECTED;
 use crate::system::constants::{HEARTBEAT_INTERVAL_SECS, REMOTE_CLIENT_TIMEOUT_SECS, WS_AUTH_TIMEOUT_SECS};
 use crate::utils::auth::jwt::JwtService;
 
@@ -206,6 +204,7 @@ pub struct WsConnBase {
     close_outcome: Option<CloseOutcome>,
     /// 通道处理器（构造时注入，连接存续期恒定存在）
     handler: Option<Box<dyn ChannelHandler>>,
+    register_on_start: bool,
 }
 
 impl WsConnBase {
@@ -226,7 +225,13 @@ impl WsConnBase {
             subscriptions: SubscriptionState::new(),
             close_outcome: None,
             handler: Some(handler),
+            register_on_start: true,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn disable_registry_for_test(&mut self) {
+        self.register_on_start = false;
     }
 
     /// 连接终止原因（`on_close` 中读取；`None` = 异常断开，无 Close 交换）
@@ -521,36 +526,11 @@ impl WsConnBase {
         let subject = claims.sub.clone();
         let device_name = claims.device_name.clone();
         let fp = claims.fingerprint.clone();
-        actix::spawn(async move {
-            let registry = WsSessionRegistry::global();
-            registry.set_authenticated(&client_id, Some(subject), device_name, fp).await;
-        });
+        WsSessionRegistry::global().set_authenticated_now(&client_id, Some(subject), device_name, fp);
 
-        // v24 认证记录下沉：配对记录真源 = 认证中心插件私有库，宿主不再直写主库。
-        // 认证成功经互调 api 通知认证中心刷新 last_seen / connect_count。
-        // 插件未激活 → 跳过（记录缺失不阻断认证，沿用旧 update_pairing_last_seen
-        // 失败的 warn 降级语义）。display_name 不出现在 touch 原语（名称刷新由
-        // reauth / 配对路径携带，见 auth_http 域）。
-        if let Some(fp) = claims.fingerprint.clone() {
-            if let Some(ctx) = AppContext::try_global() {
-                crate::utils::auth::auth_center::notify_connection_touch(ctx.plugin_host(), &fp);
-            }
-        }
-
-        // 通知桌面端（无头/测试上下文无 AppHandle：跳过前端事件）
-        let app_ctx = AppContext::global();
-        if let Some(handle) = app_ctx.app_handle() {
-            let _ = handle.emit(
-                DEVICE_CONNECTED,
-                &crate::server::websocket::connection_types::DeviceConnectionEvent {
-                    addr: self.session.addr.to_string(),
-                    device_id: claims.sub.clone(),
-                    device_name: self.session.device_name.clone(),
-                    fingerprint: self.session.fingerprint.clone(),
-                    event: "authenticated".to_string(),
-                },
-            );
-        }
+        // 票 07：认证记录 touch / 设备事件由插件自驱（`<owner>::ws:client-connect`
+        // → 插件经 connection-context 取已脱敏指纹 → 私有库 touch + emit
+        // `device:connected`）。宿主不再代做——此处只完成注册表认证态同步。
 
         Ok(claims)
     }
@@ -560,8 +540,10 @@ impl Actor for WsConnBase {
     type Context = ConnCtx;
 
     fn started(&mut self, ctx: &mut Self::Context) {
-        // 链路追踪（05）：WS 连接生命周期 span，client 地址 + 绑定会话（若有）；
-        // 后续帧级事件不再各自开 span（热点路径），连接级 span 保持调用链锚点
+        if !self.register_on_start {
+            return;
+        }
+        ctx.set_mailbox_capacity(crate::system::constants::PLUGIN_WS_SEND_QUEUE_CAPACITY);
         let _span = tracing::info_span!(
             "terminal_ws",
             client = %self.session.addr,
@@ -571,15 +553,9 @@ impl Actor for WsConnBase {
         tracing::info!(client = %self.session.addr, "Terminal WS connected");
         self.start_heartbeat(ctx);
 
-        // 首消息认证超时：连接建立后 10s 内未完成认证（JWT 或配对流程）→
-        // 服务端主动关闭（spec §4.3「10s 未完成首消息认证」）；已认证
-        // 连接（如事件通道首消息即认证）此闭包自动 no-op。
-        // AuthMode::None（插件端点 auth:"none"）不设认证窗口（spec §4.3）
         let auth_mode = self.handler_auth_mode();
         if auth_mode == AuthMode::Required {
             let auth_timeout = Duration::from_secs(WS_AUTH_TIMEOUT_SECS);
-            // 通道声明的关闭码：终端 / 事件通道为 None（既有行为：不发 Close 帧），
-            // 插件端点 auth:"jwt" 声明 4001（spec D8）
             let close_code = self.handler_auth_timeout_close_code();
             ctx.run_later(auth_timeout, move |act, ctx| {
                 if !act.session.authenticated {
@@ -599,39 +575,36 @@ impl Actor for WsConnBase {
             });
         }
 
-        // 注册到 WsSessionRegistry（携带通道种类 / 属主 / 端点标识：
-        // 广播过滤、在线判定与属主回收依据）
         let client_id = self.session.addr.to_string();
-        let addr = ctx.address();
-        let socket_addr = self.session.addr;
-        let channel_kind = self.channel_kind;
-        let owner = self.owner.clone();
-        let endpoint_id = self.endpoint_id.clone();
-        actix::spawn(async move {
-            let registry = WsSessionRegistry::global();
-            registry
-                .register(WsRegistration {
-                    client_id,
-                    socket_addr,
-                    actor_addr: addr,
-                    channel_kind,
-                    owner,
-                    endpoint_id,
-                })
-                .await;
+        let registration = WsSessionRegistry::global().register_now(WsRegistration {
+            client_id,
+            socket_addr: self.session.addr,
+            actor_addr: ctx.address(),
+            channel_kind: self.channel_kind,
+            owner: self.owner.clone(),
+            endpoint_id: self.endpoint_id.clone(),
         });
+        if let Err(error) = registration {
+            tracing::error!(client_id = %self.session.addr, error = %error, "WS connection registration failed");
+            ctx.close(Some(ws::CloseReason {
+                code: ws::CloseCode::Other(1011),
+                description: Some("connection registration failed".to_string()),
+            }));
+            ctx.stop();
+            return;
+        }
 
-        // 通道侧建立钩子（终端通道：监听绑定会话的停止事件）
         self.dispatch_on_started(ctx);
 
-        // 无需认证的通道：连接建立即视为可用，立即回调一次（语义 = 连接可用，
-        // 不是「已认证」——注册表 authenticated 保持 false，spec §4.3）
         if auth_mode == AuthMode::None {
             self.dispatch_on_auth_ok(ctx);
         }
     }
 
     fn stopping(&mut self, _ctx: &mut Self::Context) -> Running {
+        if !self.register_on_start {
+            return Running::Stop;
+        }
         tracing::info!(client = %self.session.addr, "Terminal WS disconnected");
 
         // 通道侧清理（终端通道：中止会话停止监听任务）
@@ -640,77 +613,18 @@ impl Actor for WsConnBase {
         // 中止所有订阅链路任务 + 流代数全部失效 + 清空订阅者模式表
         self.subscriptions.cleanup();
 
-        // 注销 WsSessionRegistry + 取消所有订阅 + 清理对端文件服务记录。
-        // 离线判定（DEVICE_DISCONNECTED + 连接历史回填）迁入 async 块：
-        // 需要先 unregister 再按「断开后剩余连接数」判定，见注入逻辑
+        // 注销 WsSessionRegistry + 断连清理。
+        // 票 07：设备离线判定 / 认证记录 close / device 事件全部归插件
+        // （`<owner>::ws:client-disconnect` → 插件自驱 touch/close + emit），
+        // 宿主不再代做；本块只剩引擎事实清理（注册表摘除 + 生物挑战 + 链路加密密码表）。
         let client_id = self.session.addr.to_string();
-        let sessions: Vec<String> = self.session.subscribed_sessions.iter().cloned().collect();
-        // 终端路由：绑定单会话、无 subscribed_sessions 集合，但 subscribe 时
-        // 已按 client_id 注册占位订阅者——断连必须整体清理，否则泄漏
-        let bound_session = self.bound_session.is_some();
-        let device_id = self.session.device_id.clone();
         let fingerprint = self.session.fingerprint.clone();
-        let channel_kind = self.channel_kind;
-        let addr = self.session.addr.to_string();
-        let device_name = self.session.device_name.clone();
         actix::spawn(async move {
-            // 无头上下文（库级测试 / 独立 WS 服务器）无 AppContext 单例：设备离线
-            // 语义（DB 回填 + 前端 emit）与生物认证清理按「无」处理——插件端点连接的
-            // 客户端本就不参与配对设备在线语义。生产路径（AppContext 必已初始化）
-            // 与拆分前逐字一致
+            // 无头上下文（库级测试 / 独立 WS 服务器）无 AppContext 单例：生物认证
+            // 挑战清理按「无」处理（生产路径 AppContext 必已初始化）
             let app_ctx = AppContext::try_global();
             let registry = WsSessionRegistry::global();
-            // 先注销本连接：后续计数判定基于「断开后」的剩余连接，本连接不再计入
             registry.unregister(&client_id).await;
-
-            // spec §4.2 在线语义（指纹键控）：设备在线 ⇔ 至少一条已认证事件 WS 存活。
-            // 最后一条事件通道断开 → DEVICE_DISCONNECTED + 连接历史回填。
-            // R1 回退（旧 v2.0.0 客户端无事件通道）：终端通道断开时，仅当该设备
-            // 「事件连接与终端连接均为零」才判定离线——纯终端形态的设备也正确下线
-            let is_offline = match (app_ctx, &device_id, fingerprint.as_deref()) {
-                (Some(app_ctx), Some(device_id), Some(fp)) => {
-                    let event_count = registry.event_connection_count(fp).await;
-                    let terminal_count = registry.terminal_connection_count(fp).await;
-                    let offline = match channel_kind {
-                        ChannelKind::Event => event_count == 0,
-                        ChannelKind::Terminal => event_count == 0 && terminal_count == 0,
-                        // 插件端点连接不参与设备在线判定（其身份与配对设备无关）
-                        ChannelKind::Plugin => false,
-                    };
-                    if offline {
-                        // 通知前端设备下线（与 DEVICE_CONNECTED 对称）；无头/测试
-                        // 上下文无 AppHandle：跳过（保持 let _ 丢弃错误语义）
-                        if let Some(handle) = app_ctx.app_handle() {
-                            let _ = handle.emit(
-                                crate::system::constants::DEVICE_DISCONNECTED,
-                                &crate::server::websocket::connection_types::DeviceConnectionEvent {
-                                    addr: addr.clone(),
-                                    device_id: device_id.clone(),
-                                    device_name,
-                                    fingerprint: Some(fp.to_string()),
-                                    event: "disconnected".to_string(),
-                                },
-                            );
-                        }
-                        // v24 认证记录下沉：连接历史真源 = 认证中心私有库，宿主不再
-                        // 直写主库。断开回填经互调 api 通知认证中心（认证中心按指纹
-                        // 解析 device_id 并回填最近 open 连接；重点同旧路径——
-                        // claims.sub 是移动端自身 ID，直接传会匹配不到 open 行，
-                        // 必须按指纹解析）。插件未激活 → 跳过（历史缺失不阻断断连）。
-                        crate::utils::auth::auth_center::notify_connection_close(
-                            app_ctx.plugin_host(),
-                            fp,
-                        );
-                    }
-                    offline
-                }
-                // 未认证连接（如被拒后关闭）从未在线：不触发离线语义
-                _ => false,
-            };
-            tracing::debug!(
-                addr = %addr, channel = ?channel_kind, offline = is_offline,
-                "WS disconnect online-state decision"
-            );
 
             // 断连清理：清除该连接的生物认证挑战值（ticket 01 起按键为
             // fingerprint；addr 键已是空操作，改用指纹键精确清理）
@@ -720,12 +634,6 @@ impl Actor for WsConnBase {
 
             // 断连清理：链路加密密码表（issue 04）——必须在连接标识失效前移除
             link_crypto::ws_remove_ciphers(&client_id);
-
-            // 票 11：订阅清理**只剩引擎句柄一条来路**——本连接登记的
-            // `engine_subscribers` 已在上方 `subscriptions.cleanup()`（退休 + 摘除，
-            // 执行体在下一次唤醒检查点退出）里收口；原「取消所有订阅」的业务环
-            // 清理块随 `session/` 目录删除。
-            let _ = (sessions, bound_session, client_id);
         });
 
         Running::Stop

@@ -144,6 +144,7 @@ export interface PluginContributes {
    * 条目可写成对象以声明档位；缺 `auth` 即最严档 `jwt`，免凭证必须逐条显式写 `none`。
    */
   httpEndpoints?: HttpEndpointContribution[]
+  wsEndpoints?: WsEndpointContribution[]
   configuration?: PluginConfiguration
   lifecycle?: LifecycleContribution
 }
@@ -156,6 +157,7 @@ export type EndpointAuthTier = 'none' | 'jwt'
  * 与 Rust 侧 `HttpEndpointContribution`（serde untagged）逐形对应。
  */
 export type HttpEndpointContribution = string | { path: string; auth?: EndpointAuthTier }
+export type WsEndpointContribution = string | { path: string; auth?: EndpointAuthTier }
 
 /** 生命周期扩展点声明 */
 export interface LifecycleContribution {

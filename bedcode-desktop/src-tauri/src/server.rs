@@ -9,5 +9,3 @@ pub mod core;
 pub mod http;
 pub mod peer_net;
 pub mod websocket;
-
-pub use websocket::connection_types::DeviceConnectionInfo;

@@ -226,6 +226,8 @@ async fn registered_manifest_declared_ws_endpoints() {
     use bedcode_plugin_api::{EndpointAuth, WsEndpointContribution};
 
     let host = setup_host().await;
+    let plugin_id = "com.test.ws-declared-positive";
+    host.permission.grant_permissions(plugin_id, &["ws:server".to_string()]);
     let endpoints = vec![
         WsEndpointContribution::Path("echo".into()), // 缺省档 = none
         WsEndpointContribution::Declared {
@@ -237,23 +239,43 @@ async fn registered_manifest_declared_ws_endpoints() {
             auth: None,
         },
     ];
-    host.register_declared_ws_endpoints(TEST_PLUGIN_ID, &endpoints)
+    host.register_declared_ws_endpoints(plugin_id, &endpoints)
         .await;
 
     use crate::server::websocket::endpoint;
-    let echo = endpoint::find_by_mount(&endpoint::mount_path(TEST_PLUGIN_ID, "echo"));
+    let echo = endpoint::find_by_mount(&endpoint::mount_path(plugin_id, "echo"));
     assert!(echo.is_some(), "declared echo endpoint must be registered");
     assert_eq!(echo.unwrap().auth, EndpointAuth::None, "缺省档 = none");
 
-    let chat = endpoint::find_by_mount(&endpoint::mount_path(TEST_PLUGIN_ID, "chat"));
+    let chat = endpoint::find_by_mount(&endpoint::mount_path(plugin_id, "chat"));
     assert!(chat.is_some(), "declared chat endpoint must be registered");
     assert_eq!(chat.unwrap().auth, EndpointAuth::Jwt, "显式 jwt 原样登记");
 
-    let bad = endpoint::find_by_mount(&endpoint::mount_path(TEST_PLUGIN_ID, "bad/path"));
+    let bad = endpoint::find_by_mount(&endpoint::mount_path(plugin_id, "bad/path"));
     assert!(bad.is_none(), "含 / 的声明不得登记（fail-visible）");
 
     // 清理（全局端点表在 test 进程内跨用例共享）
-    endpoint::purge_for_plugin(TEST_PLUGIN_ID);
+    endpoint::purge_for_plugin(plugin_id);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn declared_ws_endpoints_require_ws_server_permission() {
+    let host = setup_host().await;
+    let plugin_id = "com.test.ws-declared-permission";
+    let endpoints = vec![bedcode_plugin_api::WsEndpointContribution::Path("guarded".into())];
+    host.register_declared_ws_endpoints(plugin_id, &endpoints).await;
+    assert!(crate::server::websocket::endpoint::find_by_mount(
+        &crate::server::websocket::endpoint::mount_path(plugin_id, "guarded")
+    )
+    .is_none());
+
+    host.permission.grant_permissions(plugin_id, &["ws:server".to_string()]);
+    host.register_declared_ws_endpoints(plugin_id, &endpoints).await;
+    assert!(crate::server::websocket::endpoint::find_by_mount(
+        &crate::server::websocket::endpoint::mount_path(plugin_id, "guarded")
+    )
+    .is_some());
+    crate::server::websocket::endpoint::purge_for_plugin(plugin_id);
 }
 
 /// 源码漂移锁：六个 registry 注册调用**只允许出现在 `register_plugin_contributions` 一处**。

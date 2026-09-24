@@ -189,8 +189,9 @@ describe('contributes.wsEndpoints 校验（票 09a WS 动作词表声明式化�
     expect(errors[0]).toContain('jwt')
     // 大小写敏感（与 Rust 解析一致）：JWT 不是合法档位
     expect(errorsForWsEndpoints([{ path: 'a', auth: 'JWT' }])).toHaveLength(1)
-    // 空串不是合法档位——它不是「缺省」，写出来即错
-    expect(errorsForWsEndpoints([{ path: 'a', auth: '' }])).toHaveLength(1)
+    expect(errorsForWsEndpoints([{ path: 'a', auth: '' }])).toEqual([])
+    expect(errorsForWsEndpoints([{ path: 'b', auth: null }])).toEqual([])
+    expect(errorsForWsEndpoints([{ path: 'c', auth: ' none ' }])).toEqual([])
   })
 
   it('W-V3 条目形态非法必须报错，不静默当成未声明条目', () => {
@@ -207,19 +208,21 @@ describe('contributes.wsEndpoints 校验（票 09a WS 动作词表声明式化�
     expect(errors[0]).toContain('method')
   })
 
-  it('W-V4 path 判据：空段与 .. 被拒，且 path 必须是字符串', () => {
+  it('W-V4 path 判据：空段、分隔符、点段与超长路径被拒，且 path 必须是字符串', () => {
     expect(errorsForWsEndpoints([{ path: '   ' }])).toHaveLength(1)
     expect(errorsForWsEndpoints([{ path: '../secrets' }])).toHaveLength(1)
+    expect(errorsForWsEndpoints([{ path: 'a/b' }])).toHaveLength(1)
+    expect(errorsForWsEndpoints([{ path: 'a.b' }])).toHaveLength(1)
+    expect(errorsForWsEndpoints([{ path: 'x'.repeat(65) }])).toHaveLength(1)
     expect(errorsForWsEndpoints([{ path: 1 }])).toHaveLength(1)
     expect(errorsForWsEndpoints([''])).toHaveLength(1)
-    expect(errorsForWsEndpoints(['a/../b'])).toHaveLength(1)
   })
 
-  it('W-V4 前导斜杠归一后参与重复检测（两形态同一路径即重复）', () => {
-    const dupAcrossForms = errorsForWsEndpoints(['echo', { path: '/echo' }])
-    expect(dupAcrossForms).toHaveLength(1)
-    expect(dupAcrossForms[0]).toContain('重复声明')
-    expect(dupAcrossForms[0]).toContain('echo')
+  it('W-V4 两形态逐字同路径才参与重复检测，分隔路径直接拒绝', () => {
+    const duplicate = errorsForWsEndpoints(['echo', { path: 'echo' }])
+    expect(duplicate).toHaveLength(1)
+    expect(duplicate[0]).toContain('重复声明')
+    expect(errorsForWsEndpoints(['echo', { path: '/echo' }])).toHaveLength(1)
     expect(errorsForWsEndpoints(['echo', { path: 'status', auth: 'none' }])).toEqual([])
   })
 

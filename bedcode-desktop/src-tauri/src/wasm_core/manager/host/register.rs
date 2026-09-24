@@ -112,6 +112,13 @@ impl PluginHost {
         plugin_id: &str,
         endpoints: &[bedcode_plugin_api::WsEndpointContribution],
     ) {
+        if !self.permission.check(plugin_id, bedcode_plugin_api::permission::PERMISSION_WS_SERVER) {
+            tracing::warn!(
+                plugin_id = %plugin_id,
+                "manifest declared ws endpoints skipped: missing ws:server permission"
+            );
+            return;
+        }
         use bedcode_plugin_api::EndpointAuth;
         for endpoint in endpoints {
             let path = endpoint.path().trim();

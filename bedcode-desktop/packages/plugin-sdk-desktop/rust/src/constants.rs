@@ -59,6 +59,13 @@ pub const EVENT_SESSION_STOPPED: &str = "session:stopped";
 /// 插件 UI 事件：会话移除（含重启编排的旧会话摘除）
 pub const EVENT_SESSION_REMOVED: &str = "session:removed";
 
+/// 插件 UI 事件：设备上线（websocket 业务下沉票 07：宿主不再 emit
+/// `device-connected`，设备派生事件由本插件经 ws:client-connect 驱动自发布）
+pub const EVENT_DEVICE_CONNECTED: &str = "device:connected";
+
+/// 插件 UI 事件：设备下线（宿主不再 emit `device-disconnected`）
+pub const EVENT_DEVICE_DISCONNECTED: &str = "device:disconnected";
+
 /// 插件 UI 事件：任务队列变更
 pub const EVENT_TASK_QUEUE_CHANGED: &str = "task:queue-changed";
 
@@ -98,6 +105,8 @@ mod tests {
         assert_eq!(EVENT_SESSION_CREATED, "session:created");
         assert_eq!(EVENT_SESSION_STOPPED, "session:stopped");
         assert_eq!(EVENT_SESSION_REMOVED, "session:removed");
+        assert_eq!(EVENT_DEVICE_CONNECTED, "device:connected");
+        assert_eq!(EVENT_DEVICE_DISCONNECTED, "device:disconnected");
         assert_eq!(EVENT_TASK_QUEUE_CHANGED, "task:queue-changed");
         assert_eq!(EVENT_TASK_SCHEDULED_CHANGED, "task:scheduled-changed");
         assert_eq!(EVENT_TASK_PRESET_CHANGED, "task:preset-changed");

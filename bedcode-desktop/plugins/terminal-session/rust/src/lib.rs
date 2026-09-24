@@ -43,6 +43,9 @@ mod consent;
 /// 设备与配对域命令面（票 14）：设备页前端的配对码 / QR / 网络信息 / 设备列表 /
 /// 连接历史 / 有效期设置入口（非互调 api，不进 manifest.api）
 mod device_face;
+/// 设备连接事件域（票 07）：WS 生命周期事件驱动设备派生事件 + 认证记录
+/// touch/close（宿主不再代做，见模块文档）
+mod devices_events;
 /// 设备派生视图（票 11）：在线判定 + 真实会话数 + 任务状态合并且注解槽写面
 mod devices;
 /// 执行环境平台事实（票 13）：WSL 发行版枚举（host-platform 原语）
@@ -78,7 +81,6 @@ use bedcode_plugin_api::wasm_host::WasmHost;
 use bedcode_plugin_api::{plugin_api, BusMessage, CommandArgs};
 use pairing::code::PairingCode;
 use pairing::qr::QrTokenManager;
-use session::model::SessionStatus;
 use std::sync::{Mutex, OnceLock};
 
 /// 插件互调 api 声明（ADR 0017）：trait 方法名 ↔ manifest.api 条目
@@ -790,6 +792,20 @@ impl WasmPlugin for SessionPlugin {
         })?;
         host.log_info("ws client-disconnect event subscribed (ws terminal cleanup)");
 
+        // 票 07：订阅 WS 端点连接接入事件（`<owner>::ws:client-connect`）——
+        // 设备派生事件（emit `device:connected`）与认证记录 touch 由本插件自驱
+        // （连接身份经 `connection-context` 脱敏解析，凭据不出宿主）。
+        // **失败必须阻断激活**：订不到 = 设备事件缺失（前端在线提示与认证记录
+        // last_seen / connect_count 停滞）——这是真源能力，不是可降级面。
+        host.bus_subscribe(&bedcode_plugin_api::host::ws::ws_event_topic(
+            bedcode_plugin_api::host::ws::WS_CLIENT_CONNECT,
+            Self::ID,
+        ))
+        .map_err(|e| {
+            anyhow::anyhow!("ws client-connect subscription failed (device derivation): {e}")
+        })?;
+        host.log_info("ws client-connect event subscribed (device derivation & auth records)");
+
         // 任务域定时器（清单第 4 项：定时器属本域能力面）：驱动队列「延迟 clear
         // 到点发送」与「执行中静默超时」两个周期步骤。回调按命令名分域计数失败，
         // 单域失败只降级本域（D7）——票 16 把定时任务域并入同一 tick 的分发表。
@@ -819,6 +835,9 @@ impl WasmPlugin for SessionPlugin {
         // 票 04：清空 WS 终端订阅态（插件停用不残留连接级状态；连接由宿主
         // 按属主回收关闭）
         ws_terminal::purge_all();
+        // 票 07：清空设备接入期记忆（连接由宿主按属主回收关闭，断开事件可能
+        // 不再投递；记忆不跨生命周期，避免重启后误关旧连接）
+        devices_events::clear_connected();
         Ok(())
     }
 
@@ -864,8 +883,35 @@ impl WasmPlugin for SessionPlugin {
             }
             return Ok(());
         }
-        // ws:client-disconnect（属主私有 topic，票 04）：WS 终端连接断开 →
-        // 摘除订阅态（不残留连接级任务/状态）。连接 id 在 payload `clientId`。
+        // ws:client-connect（属主私有 topic，票 07）：设备派生事件与认证记录 touch
+        // 由本插件自驱（连接身份经 connection-context 脱敏解析，凭据不出宿主）。
+        // payload `{ endpointId, clientId, addr, authenticated }` camelCase。
+        if msg.topic
+            == bedcode_plugin_api::host::ws::ws_event_topic(
+                bedcode_plugin_api::host::ws::WS_CLIENT_CONNECT,
+                Self::ID,
+            )
+        {
+            let endpoint_id = msg
+                .payload
+                .get("endpointId")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let client_id = msg
+                .payload
+                .get("clientId")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            if !endpoint_id.is_empty() && !client_id.is_empty() {
+                devices_events::on_client_connected(&endpoint_id, &client_id);
+            }
+            return Ok(());
+        }
+        // ws:client-disconnect（属主私有 topic，票 04/07）：摘除该连接的终端订阅态
+        // （不残留连接级任务/状态）+ 设备派生事件与认证记录 close（票 07 自驱）。
+        // 连接 id 在 payload `clientId`。
         if msg.topic
             == bedcode_plugin_api::host::ws::ws_event_topic(
                 bedcode_plugin_api::host::ws::WS_CLIENT_DISCONNECT,
@@ -874,6 +920,15 @@ impl WasmPlugin for SessionPlugin {
         {
             if let Some(client_id) = msg.payload.get("clientId").and_then(|v| v.as_str()) {
                 ws_terminal::on_client_disconnect(client_id);
+                let endpoint_id = msg
+                    .payload
+                    .get("endpointId")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                if !endpoint_id.is_empty() {
+                    devices_events::on_client_disconnected(&endpoint_id, client_id);
+                }
             }
             return Ok(());
         }

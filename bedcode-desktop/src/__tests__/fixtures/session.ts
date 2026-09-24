@@ -12,7 +12,9 @@
  *   前端 model.ts 同时声明 snake_case 别名（wsl_distro/working_dir/...）为遗留双写，线协议以 camelCase 为准）
  * - WslDistro            ← src-tauri/src/pty/wsl.rs（name/is_default/state/version；
  *   前端 model.ts 仅声明 name/state 子集视图，is_default/version 已同步补齐）
- * - DeviceConnectionInfo ← src-tauri/src/server/connection_types.rs（addr/device_id/fingerprint/session_count）
+ *
+ * 2026-09-25 票 07：DeviceConnectionInfo fixture 随宿主 `connection_types.rs` 删除
+ * （设备派生视图归插件，宿主不再持产品 DTO）。
  *
  * 命名规则：默认 snake_case，SessionConfig 例外为 camelCase（Rust rename_all）。
  * 对齐机制：DTO_FIELDS 清单 + 工厂内 assertDtoFields 运行时断言；
@@ -150,34 +152,10 @@ export function makeWslDistro(overrides: Partial<WslDistroFixture> = {}): WslDis
   return fixture
 }
 
-// ==================== DeviceConnectionInfo ====================
-
-export interface DeviceConnectionInfoFixture {
-  addr: string
-  device_id: string
-  /** 设备指纹（与 db pairings 记录关联）；None 序列化为 null */
-  fingerprint: string | null
-  session_count: number
-}
-
-/** 与 connection_types.rs DeviceConnectionInfo 字段一一对应 */
-export const DEVICE_CONNECTION_INFO_DTO_FIELDS = [
-  'addr',
-  'device_id',
-  'fingerprint',
-  'session_count',
-] as const
-
-export function makeDeviceConnectionInfo(
-  overrides: Partial<DeviceConnectionInfoFixture> = {},
-): DeviceConnectionInfoFixture {
-  const fixture: DeviceConnectionInfoFixture = {
-    addr: '192.168.1.50',
-    device_id: 'device-1',
-    fingerprint: null,
-    session_count: 1,
-    ...overrides,
-  }
-  assertDtoFields(fixture, DEVICE_CONNECTION_INFO_DTO_FIELDS, 'DeviceConnectionInfo')
-  return fixture
-}
+// ==================== 设备连接信息（票 07 已随宿主 DTO 删除） ====================
+//
+// `DeviceConnectionInfo` / `DeviceConnectionEvent` 宿主 DTO 已随 websocket 业务下沉
+// 票 07 删除：设备派生视图（在线判定 + 连接历史 + 事件）由
+// `com.bedcode.terminal-session` 插件自驱（`devices-connect-list` api / 命令面
+// `session.devices.connect-list`，事件 `device:connected|disconnected`），
+// 前端不再依赖宿主设备 DTO 线协议。

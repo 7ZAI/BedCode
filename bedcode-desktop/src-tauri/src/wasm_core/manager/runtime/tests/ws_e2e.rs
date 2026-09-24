@@ -1564,3 +1564,259 @@ fn test_terminal_stream_endpoint_closed_loop() {
         plugin.lock().await.deactivate().expect("deactivate = 0");
     }));
 }
+
+/// 票 07 e2e：设备派生事件与认证记录 touch/close 归插件闭环
+///
+/// 真 Actix server + 真实 terminal-session WASM 插件 + 真实 WS 客户端：
+///
+/// - 正例：带 JWT（fingerprint）的客户端连入 `session-control` 端点 → 宿主发布
+///   `<owner>::ws:client-connect` → 插件经 `connection-context` 取已脱敏指纹 →
+///   私有库 touch（lastSeen 刷新 + connectCount 0→1）；断开 →
+///   `<owner>::ws:client-disconnect` → 插件 close_open（open 历史行回填
+///   disconnectedAt）。宿主不再代做（device 事件 / 认证记录宿主侧零调用）。
+/// - 反例：未配对指纹连接 → touch 为零行更新（connectCount 不变、派生视图无行）；
+///   close 同为 no-op。
+#[test]
+fn test_ws_device_events_and_auth_records_closed_loop() {
+    use crate::server::websocket::services::session_control as sc;
+    use crate::utils::auth::auth_center::call_api;
+    use crate::utils::auth::jwt::JwtService;
+    use bedcode_plugin_api::EndpointAuth;
+    use futures_util::SinkExt;
+    use tokio_tungstenite::tungstenite::Message;
+
+    let (wasm_runtime, host_ctx) = setup_wasm_runtime();
+    let _ws_guard = lock_ws_fixture_e2e();
+    // 会话插件私有库进程级共享：与会话闭环用例串行（见锁文档）
+    let _serial = session_plugin_db_guard();
+    // 本用例注册 `session-control` 端点：与声明闸门用例共用全局端点表，同一把锁串行化
+    let _endpoint_guard = sc::SESSION_CONTROL_ENDPOINT_TEST_LOCK.lock().unwrap();
+
+    const PLUGIN_ID: &str = "com.bedcode.terminal-session";
+    let wasm_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../resources/plugins/desktop/com.bedcode.terminal-session/bedcode_plugin_terminal_session.wasm");
+    if !wasm_path.exists() {
+        eprintln!("[skip] session wasip3 artifact not built");
+        return;
+    }
+
+    let rt = tokio::runtime::Runtime::new().expect("tokio multi-thread runtime");
+    rt.block_on(ws_e2e_guard("device events & auth records e2e", async {
+        // 独立私有库根目录（避免并行测试写同一 SQLite → BUSY）
+        let mut host_ctx = host_ctx;
+        if let Some(ctx) = Arc::get_mut(&mut host_ctx) {
+            ctx.set_plugin_db_root(Some(std::env::temp_dir().join(format!(
+                "bedcode_plugin_dbs_device_e2e_{}_{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos()
+            ))));
+        }
+        let _ = std::fs::remove_dir_all(plugin_db_root().join(PLUGIN_ID));
+
+        // ==================== 宿主服务器 + 插件装载 ====================
+        let (server_handle, server_task, port) = {
+            let config = crate::system::config::AppConfig::default().network;
+            let port = ws_pick_free_port();
+            let (handle, server) = crate::server::core::app::start_http_server(port, &config)
+                .await
+                .expect("start host http+ws server");
+            (handle, tokio::spawn(server), port)
+        };
+
+        host_ctx.permission.grant_permissions(
+            PLUGIN_ID,
+            &[
+                "auth".to_string(),
+                "broadcast".to_string(),
+                "connection:read".to_string(),
+                "fs:read".to_string(),
+                "fs:write".to_string(),
+                "peer".to_string(),
+                "process:run".to_string(),
+                "pty:io".to_string(),
+                "pty:spawn".to_string(),
+                "session:read".to_string(),
+                "storage".to_string(),
+                "task:run".to_string(),
+                "terminal:input".to_string(),
+                "timer:schedule".to_string(),
+                "ui:input".to_string(),
+                "ui:settings".to_string(),
+                "ui:sidebar".to_string(),
+                "ws:server".to_string(),
+            ],
+        );
+        host_ctx.api_registry().register(
+            PLUGIN_ID,
+            &session_apis().iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+        );
+        let component = wasm_runtime
+            .compile_component(&std::fs::read(&wasm_path).expect("read session artifact"))
+            .expect("compile session artifact");
+        let plugin = Arc::new(Mutex::new(
+            wasm_runtime
+                .instantiate_component(&component, PLUGIN_ID, host_ctx.clone(), &[], None)
+                .expect("instantiate session"),
+        ));
+        host_ctx
+            .message_bus
+            .set_dispatcher(Arc::new(TestInstanceDispatcher {
+                instances: Arc::new(RwLock::new(HashMap::from([(PLUGIN_ID.to_string(), plugin.clone())]))),
+            }))
+            .await;
+        plugin.lock().await.activate().expect("activate session");
+
+        // 声明端点等价登记（票 09b：session-control 端点，auth=jwt）
+        let entry = crate::server::websocket::endpoint::register(
+            PLUGIN_ID,
+            "session-control",
+            EndpointAuth::Jwt,
+            None,
+            None,
+            host_ctx.message_bus.clone(),
+        )
+        .expect("register declared session/control endpoint");
+        assert_eq!(entry.mount_path, "/ws/plugin/com.bedcode.terminal-session/session-control");
+
+        // ==================== 播种认证记录（私有库真源，auth-records-import） ====================
+        // 配对行（fp-dev-1，活跃，connectCount=0）+ 一条 open 连接历史行
+        // （close_open 的关闭对象；真实路径 = HTTP 认证成功后 record_event 追加）
+        call_api(
+            &host_ctx,
+            "com.bedcode.terminal-session.auth-records-import",
+            serde_json::json!({
+                "pairings": [{
+                    "id": "p-dev-1",
+                    "deviceName": "Pixel 9",
+                    "deviceFingerprint": "fp-dev-1",
+                    "pairedAt": "2026-09-19T00:00:00Z",
+                    "connectCount": 0,
+                    "isActive": true
+                }],
+                "history": [{
+                    "deviceId": "p-dev-1",
+                    "authMethod": "jwt",
+                    "result": "success",
+                    "connectedAt": "2026-09-19T00:00:00Z"
+                }]
+            }),
+        )
+        .expect("seed auth records via import api");
+
+        // 反例 1：未配对指纹（fp-ghost）连接 → touch 零行更新（无派生行、count 不变）
+        let ghost_token = JwtService::new()
+            .generate_token("ghost-dev".to_string(), Some("Ghost".to_string()), Some("fp-ghost".to_string()))
+            .expect("mint ghost jwt");
+        let ghost_url = format!("ws://127.0.0.1:{port}/ws/plugin/{PLUGIN_ID}/session-control");
+        let (mut ghost, _) = tokio_tungstenite::connect_async(&ghost_url)
+            .await
+            .expect("ghost client connect via host route");
+        ghost
+            .send(Message::Text(format!(r#"{{"type":"auth","token":"{ghost_token}"}}"#)))
+            .await
+            .expect("ghost auth frame");
+        // 等 client-connect 事件投递 + 插件 touch 路径执行完
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        let devices_after_ghost = call_api(
+            &host_ctx,
+            "com.bedcode.terminal-session.devices-list",
+            serde_json::json!({}),
+        )
+        .expect("devices-list after ghost");
+        let rows = devices_after_ghost.as_array().expect("devices array");
+        assert!(
+            !rows.iter().any(|d| d["deviceFingerprint"] == "fp-ghost"),
+            "未配对连接不得派生设备视图行: {devices_after_ghost}"
+        );
+        let dev1 = rows
+            .iter()
+            .find(|d| d["deviceFingerprint"] == "fp-dev-1")
+            .expect("已配对行仍在");
+        assert_eq!(
+            dev1["connectCount"].as_u64(),
+            Some(0),
+            "未配对连接 touch 必须零行更新（connectCount 保持 0）: {devices_after_ghost}"
+        );
+        let _ = ghost.close(None).await;
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+        // 正例：已配对指纹（fp-dev-1）连接 → touch（lastSeen + connectCount 0→1）
+        let token = JwtService::new()
+            .generate_token("dev-1".to_string(), Some("Pixel 9".to_string()), Some("fp-dev-1".to_string()))
+            .expect("mint jwt");
+        let url = format!("ws://127.0.0.1:{port}/ws/plugin/{PLUGIN_ID}/session-control");
+        let (mut client, _) = tokio_tungstenite::connect_async(&url)
+            .await
+            .expect("client connect via host route");
+        client
+            .send(Message::Text(format!(r#"{{"type":"auth","token":"{token}"}}"#)))
+            .await
+            .expect("send auth frame");
+
+        let touched = async {
+            for _ in 0..40 {
+                let devices = call_api(
+                    &host_ctx,
+                    "com.bedcode.terminal-session.devices-list",
+                    serde_json::json!({}),
+                )
+                .expect("devices-list poll");
+                if let Some(row) = {
+                    let rows: &[serde_json::Value] = match devices.as_array() {
+                        Some(a) => a.as_slice(),
+                        None => &[],
+                    };
+                    rows.iter().find(|d| d["deviceFingerprint"] == "fp-dev-1")
+                } {
+                    if row["connectCount"].as_u64() == Some(1) {
+                        return row.clone();
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+            panic!("已配对连接必须 touch 认证记录（connectCount 0→1），devices-list 未观察到");
+        }
+        .await;
+        assert!(
+            touched["lastSeen"].is_string(),
+            "touch 必须刷新 lastSeen: {touched}"
+        );
+
+        // 断开 → client-disconnect → 插件 close_open：open 历史行回填 disconnectedAt
+        let _ = client.close(None).await;
+        let closed = async {
+            for _ in 0..40 {
+                let history = call_api(
+                    &host_ctx,
+                    "com.bedcode.terminal-session.history-list",
+                    serde_json::json!("p-dev-1"),
+                )
+                .expect("history-list poll");
+                if let Some(row) = {
+                    let rows: &[serde_json::Value] = match history.as_array() {
+                        Some(a) => a.as_slice(),
+                        None => &[],
+                    };
+                    rows.iter().find(|r| r["connectedAt"] == "2026-09-19T00:00:00Z")
+                } {
+                    if row["disconnectedAt"].is_string() {
+                        return row.clone();
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+            panic!("断开后插件必须 close_open 回填 disconnectedAt，history-list 未观察到");
+        }
+        .await;
+        assert_eq!(closed["authMethod"], "jwt", "历史行保留原认证方式: {closed}");
+
+        // ==================== 收尾：优雅停机 + 清理 ====================
+        server_handle.stop(true).await;
+        server_task.abort();
+        crate::server::websocket::endpoint::purge_for_plugin(PLUGIN_ID);
+        plugin.lock().await.deactivate().expect("deactivate = 0");
+    }));
+}

@@ -35,6 +35,7 @@ use bedcode_plugin_api::BusMessage;
 static FRAMES: std::sync::Mutex<Vec<(String, String, Vec<u8>)>> = std::sync::Mutex::new(Vec::new());
 /// 收到的总线状态事件 payload（属主私有 topic 的投递内容）
 static EVENTS: std::sync::Mutex<Vec<serde_json::Value>> = std::sync::Mutex::new(Vec::new());
+static TRACE: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 /// 端点回显开关（`ws-endpoint-echo` 命令控制；false = 只收集不回显）
 static ECHO_ENABLED: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
 
@@ -234,12 +235,14 @@ impl WasmPlugin for WsTestPlugin {
                     })
                     .collect();
                 let events = EVENTS.lock().unwrap().clone();
-                Ok(serde_json::json!({ "frames": frames, "events": events }))
+                let trace = TRACE.lock().unwrap().clone();
+                Ok(serde_json::json!({ "frames": frames, "events": events, "trace": trace }))
             }
             // 清空收集缓冲（多次断言之间隔离）
             "ws-reset" => {
                 FRAMES.lock().unwrap().clear();
                 EVENTS.lock().unwrap().clear();
+                TRACE.lock().unwrap().clear();
                 Ok(serde_json::json!({ "ok": true }))
             }
             other => Err(anyhow::anyhow!("Unknown command: {other}")),
@@ -248,6 +251,7 @@ impl WasmPlugin for WsTestPlugin {
 
     /// 总线消息入口：记录状态事件（本插件只订阅 `ws:*.<owner>` 三个 topic）
     fn on_message(msg: &BusMessage) -> anyhow::Result<()> {
+        TRACE.lock().unwrap().push(format!("event:{}", msg.topic));
         EVENTS.lock().unwrap().push(serde_json::json!({
             "topic": msg.topic,
             "sender": msg.sender,
@@ -270,6 +274,10 @@ impl WasmPlugin for WsTestPlugin {
     /// 回显开关打开时把收到的帧原样回给该客户端（端点回显闭环；宿主零业务语义，
     /// 回不回、怎么回完全由插件决定）
     fn on_ws_client_message(endpoint_id: &str, client_id: &str, kind: &str, payload: &[u8]) -> anyhow::Result<()> {
+        TRACE
+            .lock()
+            .unwrap()
+            .push(format!("frame:{kind}:{endpoint_id}/{client_id}"));
         FRAMES.lock().unwrap().push((
             format!("{endpoint_id}/{client_id}"),
             kind.to_string(),

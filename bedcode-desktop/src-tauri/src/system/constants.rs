@@ -23,13 +23,11 @@ pub const PAIRING_CODE_TTL_SECS: u64 = 60;
 /// 发布者是内核状态订阅转接通道（`events/forwarder.rs`，同批退役），前端那条
 /// 注册名（`session:statusChange`）与它本就不一致、且零生产消费方。会话状态的前端
 /// 可见性由插件自己经 `host-events` / `host-bus` 发布。
-
-/// 设备连接/认证事件
-pub const DEVICE_CONNECTED: &str = "device-connected";
-
-/// 设备断开事件（WS 连接关闭时发出，与 `DEVICE_CONNECTED` 对称）
-pub const DEVICE_DISCONNECTED: &str = "device-disconnected";
-
+///
+/// 票 07（websocket 业务下沉）删除 `DEVICE_CONNECTED` / `DEVICE_DISCONNECTED`：
+/// 设备在线事件由 `com.bedcode.terminal-session` 插件自发布（SDK
+/// `EVENT_DEVICE_CONNECTED` = `device:connected`，经 host-events.emit），
+/// 宿主不再持有设备业务事件名。
 /// 生命周期：应用启动完成
 pub const LIFECYCLE_STARTUP: &str = "lifecycle:startup";
 

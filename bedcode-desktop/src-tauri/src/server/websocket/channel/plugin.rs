@@ -37,9 +37,11 @@ use crate::wasm_core::bus::MessageBus;
 use crate::wasm_core::host_api::ws::deliver_endpoint_frame;
 use crate::server::websocket::registry::WsSessionRegistry;
 use crate::utils::auth::jwt::{jwt_error_message, JwtService};
+use crate::system::constants::PLUGIN_WS_SEND_QUEUE_CAPACITY;
 
 /// 插件端点认证失败 / 超时的关闭码（spec D8；4000 段为应用自定义码）
 const CLOSE_AUTH_FAILED: u16 = 4001;
+const CLOSE_BACKPRESSURE: u16 = 1013;
 
 /// 插件端点首消息认证帧（D8：宿主自有的极小契约，不引入 `message.rs` 类型）
 #[derive(Debug, serde::Deserialize)]
@@ -53,6 +55,11 @@ struct AuthFrame {
 struct FrameJob {
     kind: &'static str,
     payload: Vec<u8>,
+}
+
+enum FrameEnqueueError {
+    Full,
+    Closed,
 }
 
 /// 插件端点通道处理器
@@ -75,15 +82,15 @@ pub struct PluginChannel {
     /// 断开事件已发布（守卫保证每连接恰好一次）
     disconnect_reported: bool,
     /// 帧投递队列发送端（投递任务串行消费 → 同连接保序）
-    frames: mpsc::UnboundedSender<FrameJob>,
+    frames: mpsc::Sender<FrameJob>,
     /// 帧投递队列接收端（`on_started` 时移交给投递任务）
-    frames_rx: Option<mpsc::UnboundedReceiver<FrameJob>>,
+    frames_rx: Option<mpsc::Receiver<FrameJob>>,
 }
 
 impl PluginChannel {
     /// 以已注册端点构造通道（`addr` 为对端地址，即会话注册键）
     pub fn new(entry: &EndpointEntry, addr: std::net::SocketAddr) -> Self {
-        let (frames, frames_rx) = mpsc::unbounded_channel();
+        let (frames, frames_rx) = mpsc::channel(PLUGIN_WS_SEND_QUEUE_CAPACITY);
         Self {
             owner: entry.owner.clone(),
             endpoint_id: entry.endpoint_id.clone(),
@@ -97,24 +104,26 @@ impl PluginChannel {
         }
     }
 
-    /// 入队待投递帧（投递任务已退出 → fail-visible warn，不静默丢）
-    fn enqueue_frame(&self, kind: &'static str, payload: Vec<u8>) {
-        if self
-            .frames
-            .send(FrameJob {
-                kind,
-                payload: payload.clone(),
-            })
-            .is_err()
-        {
-            tracing::warn!(
-                plugin_id = %self.owner,
-                endpoint_id = %self.endpoint_id,
-                client_id = %self.client_id,
-                bytes = payload.len(),
-                "plugin endpoint frame dropped: delivery task is gone"
-            );
+    fn enqueue_frame(&self, kind: &'static str, payload: Vec<u8>) -> Result<(), FrameEnqueueError> {
+        match self.frames.try_send(FrameJob { kind, payload }) {
+            Ok(()) => Ok(()),
+            Err(mpsc::error::TrySendError::Full(_)) => Err(FrameEnqueueError::Full),
+            Err(mpsc::error::TrySendError::Closed(_)) => Err(FrameEnqueueError::Closed),
         }
+    }
+
+    fn reject_frame_queue(&mut self, ctx: &mut ConnCtx) {
+        tracing::warn!(
+            plugin_id = %self.owner,
+            endpoint_id = %self.endpoint_id,
+            client_id = %self.client_id,
+            "plugin endpoint frame queue unavailable, closing 1013"
+        );
+        ctx.close(Some(CloseReason {
+            code: CloseCode::Other(CLOSE_BACKPRESSURE),
+            description: Some("endpoint frame queue unavailable".to_string()),
+        }));
+        ctx.stop();
     }
 
     /// 未认证期的帧处理（`auth:"jwt"` 专属）
@@ -123,15 +132,31 @@ impl PluginChannel {
     /// 认证失败 → close 4001 并断开（不做重试协商，重连编排归插件）。
     fn handle_unauthenticated_frame(&mut self, conn: &mut WsConnBase, text: String, ctx: &mut ConnCtx) {
         let addr = conn.session.addr;
-        let frame = match serde_json::from_str::<AuthFrame>(&text) {
-            Ok(frame) if frame.frame_type == "auth" => frame,
-            _ => {
+        let value = match serde_json::from_str::<serde_json::Value>(&text) {
+            Ok(value) => value,
+            Err(_) => {
                 tracing::warn!(
                     plugin_id = %self.owner,
                     endpoint_id = %self.endpoint_id,
                     peer = %addr,
                     "plugin endpoint frame dropped: not authenticated (expecting first-message auth frame)"
                 );
+                return;
+            }
+        };
+        if value.get("type").and_then(serde_json::Value::as_str) != Some("auth") {
+            tracing::warn!(
+                plugin_id = %self.owner,
+                endpoint_id = %self.endpoint_id,
+                peer = %addr,
+                "plugin endpoint frame dropped: not authenticated (expecting first-message auth frame)"
+            );
+            return;
+        }
+        let frame = match serde_json::from_value::<AuthFrame>(value) {
+            Ok(frame) => frame,
+            Err(_) => {
+                self.reject_auth(conn, "malformed authentication frame", ctx);
                 return;
             }
         };
@@ -149,11 +174,15 @@ impl PluginChannel {
                 let client_id = self.client_id.clone();
                 let device_name = conn.session.device_name.clone();
                 let fingerprint = conn.session.fingerprint.clone();
-                actix::spawn(async move {
-                    WsSessionRegistry::global()
-                        .set_authenticated(&client_id, Some(subject), device_name, fingerprint)
-                        .await;
-                });
+                if !WsSessionRegistry::global().set_authenticated_now(
+                    &client_id,
+                    Some(subject),
+                    device_name,
+                    fingerprint,
+                ) {
+                    self.reject_auth(conn, "connection registration unavailable", ctx);
+                    return;
+                }
                 tracing::info!(
                     plugin_id = %self.owner,
                     endpoint_id = %self.endpoint_id,
@@ -225,7 +254,7 @@ fn verify_endpoint_jwt(conn: &mut WsConnBase, token: &str) -> Result<String, (St
 ///
 /// 通道随连接销毁时发送端被 drop → 队列排空后任务自然结束。
 async fn run_endpoint_delivery(
-    mut rx: mpsc::UnboundedReceiver<FrameJob>,
+    mut rx: mpsc::Receiver<FrameJob>,
     bus: Arc<MessageBus>,
     owner: String,
     endpoint_id: String,
@@ -286,7 +315,9 @@ impl ChannelHandler for PluginChannel {
             self.handle_unauthenticated_frame(conn, text, ctx);
             return;
         }
-        self.enqueue_frame("text", text.into_bytes());
+        if self.enqueue_frame("text", text.into_bytes()).is_err() {
+            self.reject_frame_queue(ctx);
+        }
     }
 
     fn on_binary(&mut self, conn: &mut WsConnBase, data: Vec<u8>, ctx: &mut ConnCtx) {
@@ -302,7 +333,9 @@ impl ChannelHandler for PluginChannel {
             let _ = ctx;
             return;
         }
-        self.enqueue_frame("binary", data);
+        if self.enqueue_frame("binary", data).is_err() {
+            self.reject_frame_queue(ctx);
+        }
     }
 
     /// 断开上报（骨架停止前回调，恰好一次）
@@ -414,5 +447,27 @@ mod tests {
         // 缺 token / 非 JSON：形状不匹配 → 走「丢弃 + warn」分支（不 panic）
         assert!(serde_json::from_str::<AuthFrame>(r#"{"type":"auth"}"#).is_err());
         assert!(serde_json::from_str::<AuthFrame>("not json").is_err());
+    }
+
+    #[test]
+    fn frame_queue_is_bounded_and_preserves_order() {
+        let entry = test_endpoint("queue", EndpointAuth::None);
+        let mut channel = PluginChannel::new(&entry, addr(41005));
+        let mut receiver = channel.frames_rx.take().expect("frame receiver");
+
+        for index in 0..PLUGIN_WS_SEND_QUEUE_CAPACITY {
+            assert!(channel.enqueue_frame("text", format!("frame-{index}").into_bytes()).is_ok());
+        }
+        assert!(matches!(channel.enqueue_frame("binary", vec![0xff]), Err(FrameEnqueueError::Full)));
+
+        let first = receiver.try_recv().expect("first frame");
+        assert_eq!(first.kind, "text");
+        assert_eq!(first.payload, b"frame-0");
+        let second = receiver.try_recv().expect("second frame");
+        assert_eq!(second.payload, b"frame-1");
+
+        drop(receiver);
+        assert!(matches!(channel.enqueue_frame("text", b"closed".to_vec()), Err(FrameEnqueueError::Closed)));
+        crate::server::websocket::endpoint::remove(&entry.endpoint_id);
     }
 }
