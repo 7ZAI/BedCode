@@ -122,11 +122,17 @@ impl PluginLoader {
                 if path.file_name().and_then(|n| n.to_str()) == Some(temp_container) {
                     tracing::debug!("[PluginLoader] Skipping download temp container: {:?}", path);
                 } else {
-                    tracing::warn!(
+                    // 票 16：孤儿目录（历史安装遗留 / 插件 id 改名后的空壳）**不影响内置
+                    // 插件加载**（内置插件来自 resources 目录，与本扫描路径无关），
+                    // 每次启动刷 warn 是把排查噪音当信号。它唯一的实际影响——「安装查重
+                    // 误判已安装、卡住同 id 重装」——在**安装路径**上已有专职处理与留痕
+                    // （`downloader.rs` / `host/install.rs` 安装前主动删除孤儿目录），
+                    // 故此处降级为 debug，并把「由谁处理」写进文案。
+                    tracing::debug!(
 
                         dir = %path.display(),
 
-                        "[PluginLoader] Skipping dir without plugin.json (orphan residue; may block reinstall of same plugin id)"
+                        "[PluginLoader] Skipping dir without plugin.json (orphan residue; does not affect built-in plugins; cleaned up on install)"
 
                     );
                 }

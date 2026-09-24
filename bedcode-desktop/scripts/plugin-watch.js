@@ -17,6 +17,10 @@
 import { spawn } from 'node:child_process'
 import { cpSync, existsSync, mkdirSync, watch } from 'node:fs'
 import { basename, resolve } from 'node:path'
+// 票 16：与另两个装配点（`plugins/*/scripts/build.js`、`sdk/bin/cli.js`）共用同一份
+// 摘要注入实现——此前本文件漏了这一行 import，dev 期每次前端重建都在复制链最后一步
+// 抛 `ReferenceError: injectWasmHash is not defined`，把已注入的 wasmHash 又抹掉。
+import { injectWasmHash } from '../packages/plugin-sdk-desktop/bin/wasm-hash.js'
 
 /** dist 写入事件防抖间隔（vite 重建会连续触发多次文件事件） */
 const COPY_DEBOUNCE_MS = 500
@@ -142,20 +146,38 @@ export function startPluginWatch({ root, resourcesDir, extraFiles = [], wasmFile
 
   // 复制产物到宿主资源目录（覆盖式，不删目录：宿主运行时可能正持有文件句柄）
   const copy = () => {
+    // 票 16：复制链是**多步有副作用**的序列——前几步落地后仍可能在最后一步失败。
+    // 原来只打一句「复制失败」，会让人误以为什么都没复制，实际留下的是**半份产物**
+    // （index.js / plugin.json 已覆盖、摘要未重算）。按步记账，失败时点名哪一步 +
+    // 前半是否已落地（§8 fail-visible 口径）。
+    const done = []
+    let current = null
+    const step = (name, fn) => {
+      current = name
+      fn()
+      done.push(name)
+      current = null
+    }
+
     try {
       if (!existsSync(distMain)) return
-      mkdirSync(resourcesDir, { recursive: true })
-      cpSync(distMain, resolve(resourcesDir, 'index.js'))
-      cpSync(resolve(root, 'plugin.json'), resolve(resourcesDir, 'plugin.json'))
+      step('创建产物目录', () => mkdirSync(resourcesDir, { recursive: true }))
+      step('复制 index.js', () => cpSync(distMain, resolve(resourcesDir, 'index.js')))
+      step('复制 plugin.json', () => cpSync(resolve(root, 'plugin.json'), resolve(resourcesDir, 'plugin.json')))
       for (const f of extraFiles) {
         const src = resolve(root, f)
-        if (existsSync(src)) cpSync(src, resolve(resourcesDir, basename(f)))
+        if (existsSync(src)) step(`复制 ${f}`, () => cpSync(src, resolve(resourcesDir, basename(f))))
       }
       // 源清单被覆盖后重算摘要（票 14：wasmHash 只存在于产物，dev 刷新不能把它抹掉）
-      injectWasmHash(resourcesDir, { log: () => {} })
+      step('注入 wasmHash', () => injectWasmHash(resourcesDir, { log: () => {} }))
       console.log(`[watch] ${new Date().toLocaleTimeString()} 产物已复制 → ${resourcesDir}`)
     } catch (e) {
-      console.error(`[watch] 复制失败: ${e.message}`)
+      console.error(`[watch] 复制失败：${current ? `步骤「${current}」` : '未知步骤'} —— ${e.message}`)
+      console.error(
+        done.length
+          ? `[watch]   已完成步骤：${done.join(' → ')}（产物目录已是**半份**状态，不要按「没复制过」处理）`
+          : '[watch]   尚无步骤落地（产物目录未被本次复制触碰）',
+      )
     }
   }
 

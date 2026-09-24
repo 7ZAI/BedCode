@@ -8,7 +8,7 @@
 
 **Blocked by:** 无。发现于票 01 人工基线起跑（2026-09-24 06:2x），本票只记账不代修。
 
-**Status:** ready-for-agent
+**Status:** done（2026-09-24 落地；「真起一轮 tauri:dev」未跑，见票末记账）
 
 ## 现象（2026-09-24 06:2x 实测，`pnpm run tauri:dev` 起跑期）
 
@@ -87,3 +87,48 @@ com.bedcode.file-transfer        wasmHash=ABSENT
 ## Comments
 
 （发现于票 01 人工基线 2026-09-24 起跑轮；票 01 只出基线不修东西，故单立本票。）
+
+### 2026-09-24 · 落地
+
+#### 一、补 import（验收第 1 条）
+
+`scripts/plugin-watch.js` 的 import 区补一行，与另两个装配点同源
+（`'../packages/plugin-sdk-desktop/bin/wasm-hash.js'`），**不手抄实现**。
+修复后 `node -e "import('./scripts/plugin-watch.js')"` 解析成功（此前会在调用时才抛，
+模块加载期不报——这也是它一直没被 CI 抓到的原因：没有任何测试/构建步骤会加载本模块的
+复制链，只有真跑 `tauri:dev` 才触发）。
+
+#### 二、失败可见性（验收第 4 条）
+
+复制链改成**按步记账**：`step(name, fn)` 逐步推进并记录已完成步骤；catch 时打两行——
+第一行点名**失败步骤**，第二行说明**前半是否已落地**（`已完成步骤：… → …（产物目录
+已是半份状态，不要按「没复制过」处理）`）。原实现只有一句「复制失败」，会把半份产物
+伪装成「什么都没发生」。
+
+#### 三、孤儿目录噪音（验收第 5 条）——选「降级 + 说明」而非「写进升级说明」
+
+`loader.rs:125` 的 `warn!` 降为 `debug!`，文案改为
+`orphan residue; does not affect built-in plugins; cleaned up on install`。
+
+选第二条的判据：该目录唯一的实际影响是「安装查重误判已安装、卡住同 id 重装」，而这个
+影响在**安装路径上已有专职处理与留痕**（`downloader.rs:176` / `host/install.rs:211`
+安装前主动删除孤儿目录）。扫描期的 warn 与此重复，却每次启动都刷——把噪声当信号会让
+真正的加载问题被淹没。降级后仍留 debug，排查时可开。
+
+（未选「清理路径写进升级说明」：那条要动用户数据目录的删除动作，属发布/运维决策，
+不该由一张 dev 期修复票带。）
+
+#### 四、门禁实测
+
+- **复现脚本**（按 `plugin-watch.js` 的真实步骤序列跑，未跑 vite 子进程）：
+  产物目录整体复制 → `index.js` + **源** `plugin.json` 覆盖 →
+  `覆盖后 wasmHash: ABSENT`（复现出票面描述的半份状态）→ 注入 →
+  `注入后 wasmHash: 2eed7810…`；
+  `verifyWasmHash()` = `ok: true`，且与独立 `sha256sum` 一致、与产物原值一致。
+- `node --check scripts/plugin-watch.js` 通过；模块解析通过；eslint 0 error
+- 宿主 `cargo test --lib loader`：**23 passed / 0 failed**
+
+**诚实记账**：验收第 2 条的字面形态（真起一轮 `pnpm run tauri:dev`、改一次插件前端源码、
+看控制台出现「产物已复制」）**未跑**——那需要拉起 vite 与 tauri 全套。本票验证的是
+同一段复制链代码在**完全相同的步骤序列**下的行为（含「覆盖后 ABSENT」这一前置状态），
+缺的只是 vite 子进程那一层触发。
