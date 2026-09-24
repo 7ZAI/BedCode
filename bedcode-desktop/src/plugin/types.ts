@@ -355,15 +355,19 @@ export interface CommandRegistry {
 
 /** 终端 API（需 terminal:* 权限） */
 export interface TerminalAPI {
-  sendInput(sessionId: string, text: string): Promise<void>
+  // 票 08：`sendInput` 已退役（宿主不再替插件导流输入）；
+  // 插件写自家会话输入走命令通道 `session.input`。
   onOutput(handler: (sessionId: string, data: string) => void): Disposable
   onInput(handler: (sessionId: string, text: string) => string | null): Disposable
 }
 
-/** 会话 API（需 session:* 权限） */
+/**
+ * 会话 API（需 `session:read` 权限）
+ *
+ * 票 08 起只剩**宿主窗口事实**：数据面（`list` / `get`）已退役，插件读会话
+ * 走自家命令通道（`session.list` / `session.get`）。
+ */
 export interface SessionAPI {
-  list(): Promise<any[]>
-  get(sessionId: string): Promise<any>
   onStatusChange(handler: (event: any) => void): Disposable
   /**
    * 预测宿主终端窗口的初始网格（宿主窗口几何 + 字体测量 + 整体缩放）。

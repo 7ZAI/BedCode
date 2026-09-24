@@ -432,12 +432,7 @@ impl SessionApi for SessionPlugin {
     }
 
     fn session_get(draft: serde_json::Value) -> Result<Option<serde_json::Value>, String> {
-        let session_id = draft
-            .get("sessionId")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| "session-get: sessionId required".to_string())?;
-        session::view_via_host(session_id)
+        session_get_view(&draft)
     }
 
     // ==================== 会话引擎下沉 P1-b：停止 / 输入写入 ====================
@@ -447,24 +442,45 @@ impl SessionApi for SessionPlugin {
     }
 
     fn session_input(draft: serde_json::Value) -> Result<serde_json::Value, String> {
-        let session_id = draft
-            .get("sessionId")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| "session-input: sessionId required".to_string())?;
-        let data = draft
-            .get("data")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        // 票 06：特殊键以组合串（specialKey）下发，本插件自译自写；
-        // 缺省则按普通输入处理（data 内容）。
-        let special_key = draft
-            .get("specialKey")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty());
-        session::input_via_pty(session_id, data, special_key)?;
-        Ok(serde_json::json!({ "sessionId": session_id }))
+        session_input_write(&draft)
     }
+}
+
+// ==================== 命令面与互调 api 共享的入参解析（票 08） ====================
+
+/// `{sessionId}` → 单会话对外视图（不在册 → `Ok(None)`）。
+///
+/// 互调 api（`session-get`）与插件命令面（`session.get`）**共用同一实现**：
+/// 票 08 起插件前端不再经宿主 context API 取会话数据，改走自家命令通道，
+/// 两条入口必须逐字同判据（缺 `sessionId` 显性报错，不静默返回空值）。
+fn session_get_view(draft: &serde_json::Value) -> Result<Option<serde_json::Value>, String> {
+    let session_id = draft
+        .get("sessionId")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "session-get: sessionId required".to_string())?;
+    session::view_via_host(session_id)
+}
+
+/// `{sessionId, data?, specialKey?}` → 写输入回执（`{sessionId}`）。
+///
+/// 互调 api（`session-input`）与插件命令面（`session.input`）共用同一实现：
+/// 缺 `sessionId` 显性报错；`data` 缺省为空串；票 06 起特殊键以组合串
+/// （`specialKey`）下发、由本插件 `keys.rs` 自译自写并**绕过提交行重建**，
+/// 缺省则按普通输入处理（走提交行重建 + 任务域观察）。
+fn session_input_write(draft: &serde_json::Value) -> Result<serde_json::Value, String> {
+    let session_id = draft
+        .get("sessionId")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "session-input: sessionId required".to_string())?;
+    let data = draft.get("data").and_then(|v| v.as_str()).unwrap_or("");
+    let special_key = draft
+        .get("specialKey")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty());
+    session::input_via_pty(session_id, data, special_key)?;
+    Ok(serde_json::json!({ "sessionId": session_id }))
 }
 
 // ==================== pairing 域核心（api 面与后续命令面共享同一状态源） ====================
@@ -923,6 +939,22 @@ impl WasmPlugin for SessionPlugin {
 
             // 尺寸裁决 {sessionId, cols, rows, requester, force?} → ResizeOutcome
             "session.action.resize" => actions::resize_via_host(&args).map_err(anyhow::Error::msg),
+
+            // ==================== 票 08 命令面（会话数据面 + 输入：宿主命令面注销后） ====================
+            // 宿主侧五个会话命令（list / get / resize / write / special_key）本票注销，
+            // 插件前端不再有「借宿主通道读写会话」的路径：
+            // - 列表 / 单查 → 本插件登记域视图（与互调 api `session-list` / `session-get` 同实现）
+            // - 键盘输入 → 本插件写入管线（提交行重建 + 任务域 + `host-pty.write`，
+            //   与互调 api `session-input` 同实现；特殊键走 `specialKey` 直写）
+            // 身份令牌 + 激活门由 `plugin_invoke` 通道保证（迁移路由不放宽门禁）。
+            "session.list" => session::list_views_via_host().map_err(anyhow::Error::msg),
+
+            // 单会话视图：不在册 → `null`（命令面恒回 JSON 值，不区分「空」与「无」）
+            "session.get" => Ok(session_get_view(&args)
+                .map_err(anyhow::Error::msg)?
+                .unwrap_or(serde_json::Value::Null)),
+
+            "session.input" => session_input_write(&args).map_err(anyhow::Error::msg),
 
             // ==================== 票 04 命令面（终端输出数据面） ====================
             // 输出环拉取 {sessionId, fromOffset, maxBytes?} → null | {data, nextOffset,

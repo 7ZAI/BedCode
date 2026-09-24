@@ -198,15 +198,8 @@ export async function pluginStorageDelete(
   return await invoke('plugin_storage_delete', { pluginId, key, credential })
 }
 
-/** 插件终端：发送输入 */
-export async function pluginTerminalSendInput(
-  pluginId: string,
-  sessionId: string,
-  text: string,
-  credential: string,
-): Promise<void> {
-  return await invoke('plugin_terminal_send_input', { pluginId, sessionId, text, credential })
-}
+// 票 08：`pluginTerminalSendInput`（宿主替插件导流终端输入）已注销——
+// 插件写自家会话的输入走自有命令通道（`context.commands.execute('session.input', …)`）。
 
 /**
  * 回复文件系统授权请求（宿主面命令：需宿主凭证）

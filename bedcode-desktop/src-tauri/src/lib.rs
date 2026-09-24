@@ -637,14 +637,10 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            // Session（只留引擎事实 + 终端渲染管道：列表 / 单查 / 尺寸裁决；
-            // 会话编排与配置 CRUD 命令面已注销，见 commands.rs 会话命令节头部注释）
-            commands::list_sessions,
-            commands::get_session,
-            commands::resize_session,
-            // PTY Input
-            commands::write_to_session,
-            commands::send_special_key,
+            // Session / PTY Input：**会话命令面已整体注销**（票 08）——
+            // 列表 / 单查 / 尺寸 / 写入 / 特殊键五条连壳删除，消费方改指插件
+            // 命令面（`session.list` / `session.get` / `session.action.resize` /
+            // `session.input`），见 commands.rs 会话命令节头部注释
             // 终端输出面（票 05 摘除）：旧 Channel 传输命令
             // （subscribe_terminal_channel / unsubscribe_terminal_channel /
             // terminal_channel_ack，commands/terminal_stream.rs）已随宿主前端
@@ -687,7 +683,8 @@ pub fn run() {
             commands::plugin_storage_get,
             commands::plugin_storage_set,
             commands::plugin_storage_delete,
-            commands::plugin_terminal_send_input,
+            // `plugin_terminal_send_input` 随票 08 注销：终端输入改走插件
+            // 命令通道 `session.input`（宿主不再替插件导流输入）
             commands::plugin_list_commands,
             commands::plugin_list_views,
             commands::plugin_find_file_handler,

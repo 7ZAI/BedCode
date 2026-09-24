@@ -164,7 +164,8 @@
  *   无注入环境用内存版 fallback，dev-shell/vitest 可独立渲染）；
  * - resize 请求经插件 WASM 命令面 `session.action.resize`（host-session
  *   原语 + 服务端裁决）；
- * - 输入经 `context.terminal.sendInput`（SDK 终端 API，宿主导流到 PTY）；
+ * - 输入经插件命令通道 `session.input`（票 08 起宿主不再有会话输入命令面，
+ *   写 PTY / 提交行重建 / 任务域观察全在本插件 WASM 内完成）；
  * - AI 插件输入追踪（宿主 plugin/events `ai-chatbox:getCurrentInput` 协议）暂
  *   不迁移（宿主插件事件总线非插件可见面，票 05 摘除宿主时按互调协议另议）；
  * - rendererOverride 弹窗用插件内联覆盖层（宿主 Modal 组件不迁入插件）。
@@ -590,9 +591,15 @@ function initTerminal() {
       return
     }
 
-    // 输入经 SDK 终端 API 导流到 PTY（宿主命令面 write_to_session 由宿主
-    // context 桥接，插件不自建输入通道）
-    void context.terminal.sendInput(props.session.id, data)
+    // 票 08：输入经**本插件命令通道**写入（宿主不再有会话输入命令面）。
+    // 提交行重建 + 任务域观察 + `host-pty.write` 全在本插件 WASM 内完成
+    // （与互调 api `session-input` 同一实现）；身份令牌 + 激活门由
+    // `plugin_invoke` 通道保证。保持迁移前的「尽力投递」语义（不 await、
+    // 不阻塞 xterm 渲染管线）。
+    void context.commands.execute('session.input', {
+      sessionId: props.session.id,
+      data,
+    })
   })
 }
 

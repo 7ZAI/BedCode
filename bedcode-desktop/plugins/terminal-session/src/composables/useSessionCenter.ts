@@ -2,7 +2,8 @@
  * 会话中心数据与编排（票 13）
  *
  * 取数红线（spec D2）：只经 PluginContext 与插件命令通道——
- * - 会话运行时状态：`context.session.list()`（宿主面向插件的会话 API）
+ * - 会话运行时状态：命令通道 `session.list`（本插件登记域视图；票 08 起宿主
+ *   不再有会话数据命令面，**不**经 `context.session.list()`）
  * - 会话配置 CRUD：插件命令通道 `session.config.*`（真源在本插件私有库）
  * - 创建 / 停止：`session.create` / `session.close`（插件 WASM 编排 → host-session 原语）
  * - 终端窗口：`context.session.openTerminal / closeTerminal / isTerminalOpen /
@@ -80,10 +81,12 @@ export function useSessionCenter(context: PluginContext) {
     configs.value = Array.isArray(raw) ? (raw as SessionConfigDto[]) : []
   }
 
-  /** 会话列表：宿主面向插件的会话 API（`session:read` 权限） */
+  /** 会话列表：本插件登记域真源（命令通道 → `session-list` 视图面） */
   async function loadSessions(): Promise<void> {
-    const raw = await context.session.list()
-    sessions.value = Array.isArray(raw) ? (raw as SessionDto[]) : []
+    const raw = (await context.commands.execute('session.list', {})) as
+      | { sessions?: SessionDto[] }
+      | null
+    sessions.value = Array.isArray(raw?.sessions) ? raw!.sessions! : []
   }
 
   /** 全量加载（配置 + 会话）：任一失败上抛，由调用方提示 */

@@ -9,7 +9,8 @@
  * 演示数据同源。
  *
  * 契约清单：
- * - C1 加载：配置经 `session.config.list`、会话经 `context.session.list()`，
+ * - C1 加载：配置经 `session.config.list`、会话经 `session.list`（都是插件自有
+ *   命令通道；票 08 起宿主 `context.session.list()` 已退役），
  *   会话按 configId 归入对应配置卡片
  * - C2 启动：先预测宿主终端网格再 `session.create`（cols/rows 随预测值传递）
  * - C3 查看终端：运行中会话触发 `context.session.openTerminal`；已停止会话
@@ -41,6 +42,9 @@ async function defaultExecute(command: string, args?: unknown) {
   switch (command) {
     case 'session.config.list':
       return seed.configs
+    // 票 08：会话列表改走插件自有命令通道（宿主 context.session.list 已退役）
+    case 'session.list':
+      return { sessions: seed.sessions }
     case 'session.config.upsert':
       return args
     case 'session.config.delete':
@@ -62,7 +66,6 @@ async function defaultExecute(command: string, args?: unknown) {
 
 const execute = vi.fn(defaultExecute)
 
-const sessionList = vi.fn(async () => seed.sessions)
 const openTerminal = vi.fn(async () => true)
 const closeTerminal = vi.fn(async () => {})
 const isTerminalOpen = vi.fn(() => false)
@@ -75,7 +78,7 @@ function makeContext(): PluginContext {
   return {
     i18n: { t: (key: string) => key },
     commands: { execute },
-    session: { list: sessionList, openTerminal, closeTerminal, isTerminalOpen, predictTerminalSize },
+    session: { openTerminal, closeTerminal, isTerminalOpen, predictTerminalSize },
     storage: { get: storageGet, set: storageSet },
   } as unknown as PluginContext
 }
@@ -106,18 +109,18 @@ describe('SessionCenterView（会话中心页面）', () => {
     // clearAllMocks 只清调用记录、不清 mockImplementation：逐用例复位命令面路由，
     // 避免失败注入类用例（C9/C10）污染后续用例（独立、确定性）
     execute.mockImplementation(defaultExecute)
-    sessionList.mockResolvedValue(seed.sessions)
     storageGet.mockResolvedValue(seed.formDefaults)
     isTerminalOpen.mockReturnValue(false)
     openTerminal.mockResolvedValue(true)
   })
 
-  it('C1 加载：配置与会话分别经插件命令通道与插件会话 API 取得并按 configId 归组', async () => {
+  it('C1 加载：配置与会话都经插件命令通道取得并按 configId 归组', async () => {
     const wrapper = mountView()
     await flushPromises()
 
     expect(commandsTo('session.config.list')).toHaveLength(1)
-    expect(sessionList).toHaveBeenCalledTimes(1)
+    // 票 08：会话列表也走命令通道（宿主 context.session.list 已退役）
+    expect(commandsTo('session.list')).toHaveLength(1)
 
     const text = wrapper.text()
     // 两张配置卡片：名称 + 环境徽标 + 命令

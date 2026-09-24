@@ -177,17 +177,19 @@ pub static VALID_PERMISSIONS: &[&str] = &valid_permissions();
 /// 表内每个权限都必有一条门禁落点（前端 `requirePermission` 或 host_impl
 /// `check_permission`）——无落点的权限位由宿主词汇漂移锁拒绝。
 pub static PERMISSION_API_MAP: &[(&str, &[&str])] = &[
-    (PERMISSION_TERMINAL_INPUT, &["terminal.sendInput", "terminal.onInput"]),
+    // 票 08：`terminal.sendInput` 随宿主输入通道（`plugin_terminal_send_input`）
+    // 注销——插件写自家会话输入走自有命令通道（不受本表管辖）。
+    (PERMISSION_TERMINAL_INPUT, &["terminal.onInput"]),
     (PERMISSION_TERMINAL_OUTPUT, &["terminal.onOutput"]),
     (PERMISSION_TERMINAL_OBSERVE, &["terminal.onInputSubmitted"]),
     (
         PERMISSION_SESSION_READ,
         &[
-            "session.list",
-            "session.get",
+            // 票 08：`session.list` / `session.get` 随宿主会话数据命令面注销
+            // （插件读会话走自有命令通道 `session.list` / `session.get`）。
+            // 本表剩下的全是**宿主窗口事实**（窗口本体 / 字体测量在宿主，
+            // spec D3）：预测初始网格 / 打开 / 关闭宿主终端窗口 / 窗口在场查询。
             "session.onStatusChange",
-            // 终端窗口原语（票 13，前端上下文面）：预测初始网格 / 打开 / 关闭
-            // 宿主终端窗口 / 窗口在场查询
             "session.predictTerminalSize",
             "session.openTerminal",
             "session.closeTerminal",

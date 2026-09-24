@@ -25,9 +25,9 @@
  *   （platform → windows，isLinux=false 走 WebGL→回退 DOM 路径）；
  * - 容器显式尺寸（happy-dom 无布局引擎，clientWidth/Height 取 style 值）。
  *
- * 输入链路（onData → context.terminal.sendInput）不在本文件覆盖：参数构造
- * 已由宿主 terminal-flow.test.ts 锁定（write_to_session 同形），插件版是同构
- * 替换（sendInput），接线风险低；真实键盘事件链在 happy-dom 不可靠。
+ * 输入链路（onData → 命令通道 `session.input`）不在本文件覆盖：参数构造由本文件
+ * 的 mock 命令路由可见（票 08 起宿主 `context.terminal.sendInput` 已退役，
+ * 插件写自家会话输入走自有命令通道）；真实键盘事件链在 happy-dom 不可靠。
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -123,8 +123,10 @@ function makeContext(): TestContext {
   })
   return {
     commands: { execute },
-    terminal: { sendInput: vi.fn(), onOutput: vi.fn(() => () => {}), onInput: vi.fn(() => () => {}) },
-    session: { list: vi.fn(), get: vi.fn(), onStatusChange: vi.fn(() => () => {}) },
+    // 票 08：`terminal.sendInput` 与 `session.list/get` 已退役（宿主会话数据 /
+    // 输入命令面注销），只留观察面与窗口原语
+    terminal: { onOutput: vi.fn(() => () => {}), onInput: vi.fn(() => () => {}) },
+    session: { onStatusChange: vi.fn(() => () => {}) },
     ui: {} as never,
     events: { on: vi.fn(() => () => {}), emit: vi.fn() },
     storage: {} as never,

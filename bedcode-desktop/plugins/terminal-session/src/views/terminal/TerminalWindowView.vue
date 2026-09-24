@@ -387,7 +387,7 @@
  * 保留贴靠/显示动画/设置面板与插件扩展点。
  *
  * 与宿主版本差异（方案 1 迁入适配）：
- * - 会话数据经 `context.session.get()`（宿主面向插件会话 API）+ 插件命令通道
+ * - 会话数据经插件命令通道 `session.get`（票 08 起宿主会话数据命令面已注销）
  *   `session.config.list`（插件私有库真源）——不直调宿主领域命令；
  * - 终端设置/背景图经宿主能力注入（`terminalHostCapabilities`：settings accessor +
  *   bg image 命令桥；无注入环境回退内存版）；
@@ -583,7 +583,11 @@ async function removeBgImage() {
 async function loadSessionInfo() {
   isLoading.value = true
   try {
-    const result = await context.session.get(sessionId)
+    // 票 08：宿主不再有会话数据命令面，单会话读取走本插件命令通道
+    // （`session.get` → 登记域视图，与互调 api `session-get` 同实现）
+    const result = (await context.commands.execute('session.get', { sessionId })) as
+      | SessionInfo
+      | null
     session.value = result as SessionInfo
     sessionName.value = (result as SessionInfo).name
 

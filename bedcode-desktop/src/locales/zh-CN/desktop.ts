@@ -16,9 +16,9 @@ export default {
     // 会话域文案（票 13）：富交互文案随会话页迁入 com.bedcode.terminal-session 插件
     // （插件侧 `session.*` 命名空间）；宿主仅保留终端窗口与退出确认所需项
     // （会话兜底壳已删除，票 13/14 收尾）
+    // 票 08：`sessionStopped` / `stopFailed` 随宿主会话命令面与 store 注销删除
+    // （宿主侧已无调用方；会话停止的失败提示归插件 `session.*` 命名空间）
     session: {
-      sessionStopped: '会话已停止',
-      stopFailed: '停止会话失败: {error}',
       confirmExitTitle: '确认退出',
       confirmExitMsg: '以下 {count} 个会话仍在运行，退出后将终止所有运行中的进程。',
       confirmExitForce: '强制退出',

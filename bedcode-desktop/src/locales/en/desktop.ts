@@ -16,9 +16,10 @@ export default {
     // Session domain copy (ticket 13): rich-interaction strings moved into the
     // com.bedcode.terminal-session plugin (`session.*` namespace); only terminal-window
     // and exit-confirmation entries remain here (fallback shell removed, 13/14)
+    // Ticket 08: `sessionStopped` / `stopFailed` removed together with the host
+    // session command face and store (no host-side consumer left; stop-failure
+    // copy belongs to the plugin `session.*` namespace)
     session: {
-      sessionStopped: 'Session stopped',
-      stopFailed: 'Failed to stop session: {error}',
       confirmExitTitle: 'Confirm Exit',
       confirmExitMsg:
         '{count} session(s) are still running. All running processes will be terminated if you exit.',

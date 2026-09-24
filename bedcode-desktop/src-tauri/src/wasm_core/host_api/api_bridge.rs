@@ -265,38 +265,15 @@ pub async fn plugin_storage_delete(
     plugin_host.storage().delete(&plugin_id, &key).await
 }
 
-// ==================== Plugin Terminal ====================
+// ==================== Plugin Terminal（票 08 已注销） ====================
 
-/// 插件终端：发送输入
-///
-/// P1-b 起会话真源在 `com.bedcode.terminal-session`（宿主内核已无会话登记与 PTY
-/// 句柄），故经会话窄转发层转插件 `session-input` 互调 api——提交行重建与任务域
-/// 观察都在插件写入管线里。门禁口径与迁移前一致（身份绑定 + 激活 + `terminal:input`
-/// 权限位），插件未激活时由转发层显性报错，无内核降级轨。
-#[tauri::command]
-pub async fn plugin_terminal_send_input(
-    plugin_id: String,
-    session_id: String,
-    text: String,
-    credential: String,
-    plugin_host: State<'_, Arc<PluginHost>>,
-) -> crate::Result<()> {
-    authorize_plugin_call(&plugin_host, &plugin_id, &credential)?;
-    if !plugin_host.is_activated(&plugin_id).await {
-        return Err(crate::AppError::Plugin(format!(
-            "Plugin {} is not activated",
-            plugin_id
-        )));
-    }
-    if !plugin_host.permission().check(&plugin_id, "terminal:input") {
-        return Err(crate::AppError::Plugin(format!(
-            "Plugin {} has no terminal:input permission",
-            plugin_id
-        )));
-    }
-    let host_ctx = plugin_host.wasm_host_ctx();
-    crate::utils::session_gateway::input(host_ctx, &session_id, &text).await
-}
+// `plugin_terminal_send_input` 随票 08 删除：它是「宿主替插件把终端输入导流到 PTY」
+// 的桥，会话命令面注销后插件前端改走自家命令通道（`session.input` → 本插件
+// `session::input_via_pty`），宿主不再有这条替插件写输入的路径。
+//
+// 门禁不是被放宽而是被**换掉载体**：插件命令通道（`plugin_invoke`）自带
+// 「身份令牌 + 激活」两段，写入侧 `host-pty.write` 的 `pty:io` 权限门仍在
+// WIT 层仲裁（插件的 manifest 声明面）。故本条删除不影响输入权限的有效性。
 
 // ==================== Plugin Registry Queries ====================
 
@@ -466,39 +443,100 @@ mod tests {
     //! 例外：`plugin_frontend_load_report` 不依赖任何 State 参数（纯日志透传），
     //! 可直接调用测试。
 
-    /// P1-b：桌面终端输入入口必须接会话窄转发层，不得再打内核 `SessionManager`
+    /// 票 08 防回接锁：宿主会话命令面与插件终端输入通道**不得再出现**。
     ///
-    /// 命令体依赖 `State`（无法构造），故以源码扫描锁接线。判据不是风格：内核登记域
-    /// 自 P1-b 起不持有插件会话与其 PTY 句柄，`write_input` 对真实会话恒 `NotFound`
-    /// ——回到内核轨即「终端窗口敲键盘静默丢键」（前端 `void sendInput(...)` 不接
-    /// rejection）。行为用例在 `session_e2e::test_session_input_via_gateway_closed_loop`，
-    /// 本锁补的是「本模块的入口确实接到转发层」这半段。
+    /// 注销的是「宿主-会话」这一族命令（`list_sessions` / `get_session` /
+    /// `resize_session` / `write_to_session` / `send_special_key`）与
+    /// `plugin_terminal_send_input`。判据是**两侧同时干净**（票 08 验收原文）：
+    ///
+    /// - Rust 侧：`generate_handler!` 注册表与 `commands::` 路径都不再出现；
+    /// - 前端侧：没有任何 `invoke('…')` 还能调到已注销的命令名。
+    ///
+    /// 只扫非注释行——各模块的「为什么删」说明段落里出现这些名字是**记账**。
+    /// 注释豁免的代价是「把回接写进注释不算违规」，这是有意的：注释不参与运行。
     #[test]
-    fn terminal_send_input_delegates_to_session_gateway_not_kernel() {
-        let src = include_str!("./api_bridge.rs");
-        let body = src
-            .split_once("pub async fn plugin_terminal_send_input")
-            .expect("命令必须存在")
-            .1
-            .split_once("// ==================== Plugin Registry Queries")
-            .expect("命令体结束边界")
-            .0;
-        assert!(
-            body.contains("session_gateway::input("),
-            "终端输入须经会话窄转发层（真源在插件登记域），got: {body}"
-        );
-        assert!(
-            !body.contains("write_input("),
-            "终端输入不得再调内核 SessionManager::write_input（对插件会话恒 NotFound）"
-        );
-        // 门禁三段仍在（身份绑定 + 激活 + 权限位）——改路由不得顺手削弱
-        for gate in [
-            "authorize_plugin_call(&plugin_host, &plugin_id, &credential)",
-            "is_activated(&plugin_id)",
-            "check(&plugin_id, \"terminal:input\")",
-        ] {
-            assert!(body.contains(gate), "输入命令缺门禁 {gate}");
+    fn retired_session_command_surface_is_not_reintroduced() {
+        let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+
+        // 三个源码面：宿主 Rust、宿主前端（含 .vue）、插件前端
+        let scan_roots: Vec<std::path::PathBuf> = vec![
+            manifest_dir.join("src"),
+            manifest_dir.join("../src"),
+            manifest_dir.join("../plugins"),
+        ];
+
+        let rust_needles = [
+            "commands::list_sessions",
+            "commands::get_session",
+            "commands::resize_session",
+            "commands::write_to_session",
+            "commands::send_special_key",
+            "plugin_terminal_send_input",
+        ];
+        // 前端**不带引号**匹配：`invoke('list_sessions')` / `invoke("list_sessions")` /
+        // 模板串三种写法都要拦。这些是 snake_case 命令名，前端源码里除 invoke 串之外
+        // 不该出现（首轮写成带单引号的针，变异自检用双引号接回时**漏判**，故收窄到名字）。
+        let frontend_needles = [
+            "list_sessions",
+            "get_session",
+            "resize_session",
+            "write_to_session",
+            "send_special_key",
+            "plugin_terminal_send_input",
+        ];
+
+        let mut violations: Vec<String> = Vec::new();
+        for root in &scan_roots {
+            let mut stack = vec![root.clone()];
+            while let Some(dir) = stack.pop() {
+                let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        // node_modules / dist / target 不进扫描（构建产物不是源码面）
+                        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                        if matches!(name, "node_modules" | "dist" | "target" | ".git") {
+                            continue;
+                        }
+                        stack.push(path);
+                        continue;
+                    }
+                    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                    let needles: &[&str] = match ext {
+                        "rs" => &rust_needles,
+                        "ts" | "vue" => &frontend_needles,
+                        _ => continue,
+                    };
+                    // 本文件是锁自身，跳过（避免自匹配）
+                    if path.ends_with("api_bridge.rs") {
+                        continue;
+                    }
+                    let Ok(content) = std::fs::read_to_string(&path) else { continue };
+                    for (idx, raw_line) in content.lines().enumerate() {
+                        let line = raw_line.trim_start();
+                        if line.starts_with("//") || line.starts_with('*') || line.starts_with("/*") {
+                            continue;
+                        }
+                        for needle in needles {
+                            if line.contains(needle) {
+                                violations.push(format!(
+                                    "{}:{}: {}",
+                                    path.display(),
+                                    idx + 1,
+                                    line.trim()
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
         }
+
+        assert!(
+            violations.is_empty(),
+            "已注销的会话命令面出现回接痕迹（票 08）：\n{}",
+            violations.join("\n")
+        );
     }
 
     /// 诊断上报命令：ok/error 两条路径都只写 tracing，恒返回 Ok（issue 04）

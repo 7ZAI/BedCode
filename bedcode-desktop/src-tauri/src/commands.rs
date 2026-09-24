@@ -8,7 +8,6 @@
 //! 的注册顺序解耦——按域就近维护即可。
 
 use crate::db::Database;
-use crate::protocol::ResizeOutcome;
 use crate::server::core::link_crypto::{self, LinkCryptoConfig};
 use crate::server::core::metrics::ServerMetrics;
 use crate::server::core::supervisor::{ServerStatusInfo, ServerSupervisor};
@@ -20,87 +19,29 @@ use std::sync::Arc;
 use tauri::{Manager, State};
 use tracing_subscriber::filter::EnvFilter;
 
-// ==================== Session Commands ====================
+// ==================== 会话命令面（票 08 已整体注销） ====================
 
-// 宿主命令面**只保留终端渲染管道与引擎事实**（ADR 0022 裁剪线 + 终端红线）：
-// - `list_sessions` / `get_session`：会话登记域视图（P1-b 起真源在插件），终端
-//   窗口与通知种子化的读取面
-// - `resize_session`：尺寸裁决 + 执行（P1-b 起插件登记域 + host-pty，无内核副本）
+// 宿主**不再有「会话」命令面**（票 08）。注销的五个命令：`list_sessions` /
+// `get_session` / `resize_session` / `write_to_session` / `send_special_key`
+// （连同插件前端的终端输入通道 `plugin_terminal_send_input`）。
 //
-// 会话**编排**命令（`start_session` / `create_session_no_start` /
-// `start_existing_session` / `kill_session` / `delete_session` / `restart_session`）
-// 已按 2026-09-21 命令面收敛注销（`.scratch/2026-09-21-host-rust-residue/issues/05`）：
-// 创建/停止/移除/重启的业务面归 `com.bedcode.terminal-session` 插件命令面
-// （`session.create` / `session.close` / `session.action.*`），宿主只经插件互调
-// api 转发（见 `utils/session_gateway.rs`）。两阶段启动已退役——生产路径
-// 一律 `start = true`。
-
-/// 列出会话（对外视图：插件登记域记录 + 注解槽任务字段，票 12）
-///
-/// P1-b 起会话真源在 `com.bedcode.terminal-session` 插件（宿主无登记），
-/// 插件未激活 → 显性报错。返回 `SessionInfoView` 形状与迁移前逐字段一致。
-#[tauri::command]
-pub async fn list_sessions(
-    host: State<'_, Arc<crate::wasm_core::PluginHost>>,
-) -> Result<Vec<crate::protocol::SessionInfoView>> {
-    Ok(crate::utils::session_gateway::list_views(host.wasm_host_ctx()).await?)
-}
-
-/// 获取单个会话（对外视图，同 `list_sessions`）
-#[tauri::command]
-pub async fn get_session(
-    host: State<'_, Arc<crate::wasm_core::PluginHost>>,
-    session_id: String,
-) -> Result<Option<crate::protocol::SessionInfoView>> {
-    Ok(crate::utils::session_gateway::view(host.wasm_host_ctx(), &session_id).await?)
-}
-
-/// 调整会话终端大小（桌面本地路径，正统渲染端身份恒为 Desktop）
-///
-/// force 置位表示覆盖确认已通过（前端弹窗确认后重发）；返回 ResizeOutcome
-/// 供前端判断是否需要弹窗确认（NeedsConfirmation 时未应用任何改动）。
-///
-/// P1-b：裁决与登记都在插件登记域（宿主无内核裁决副本），不再有插件不可用
-/// 时的内核降级轨——插件必需，失败显性报错。
-#[tauri::command]
-pub async fn resize_session(
-    host: State<'_, Arc<crate::wasm_core::PluginHost>>,
-    session_id: String,
-    cols: u16,
-    rows: u16,
-    force: Option<bool>,
-) -> Result<ResizeOutcome> {
-    let force = force.unwrap_or(false);
-    crate::utils::session_gateway::resize(
-        host.wasm_host_ctx(),
-        &session_id,
-        cols,
-        rows,
-        crate::protocol::RendererSource::Desktop,
-        force,
-    )
-    .await
-}
-
-// ==================== PTY Input Commands ====================
-
-#[tauri::command]
-pub async fn write_to_session(
-    host: State<'_, Arc<crate::wasm_core::PluginHost>>,
-    session_id: String,
-    data: String,
-) -> Result<()> {
-    crate::utils::session_gateway::input(host.wasm_host_ctx(), &session_id, &data).await
-}
-
-#[tauri::command]
-pub async fn send_special_key(
-    host: State<'_, Arc<crate::wasm_core::PluginHost>>,
-    session_id: String,
-    key: String,
-) -> Result<()> {
-    crate::utils::session_gateway::special_key(host.wasm_host_ctx(), &session_id, &key).await
-}
+// 为什么能整族删：会话真源自 P1-b 起在 `com.bedcode.terminal-session` 插件，
+// 这五条当时就已经只是「宿主命令名 → 窄转发层 → 插件互调 api」的薄壳；插件前端
+// 改走自家命令通道后壳里再无消费者（宿主前端 `stores/session.ts` 与
+// `composables/commands/sessionCommands.ts` 均无生产调用方，同批退役）。
+//
+// 现在「谁还能问内核要会话」在宿主侧只剩两处，都在后续票里收口：
+// - 事件面（`events/sync_handler.rs` 的宿主回查兜底）→ 票 09
+// - 待删的内核实现目录 `src/session/` → 票 11
+//
+// 消费方改指（迁移不放宽门禁）：
+// - 列表 / 单查：插件命令 `session.list` / `session.get`（登记域视图）
+// - 尺寸裁决：插件命令 `session.action.resize`
+// - 键盘输入 / 特殊键：插件命令 `session.input`（`specialKey` 直写）
+// 上述四条命令与插件互调 api 共享同一实现，身份令牌 + 激活门由 `plugin_invoke`
+// 通道保证。
+//
+// `RunningSessionInfo` 仍是宿主事实（关窗守卫的弹窗 payload），保留。
 
 // ==================== Shared System Commands ====================
 

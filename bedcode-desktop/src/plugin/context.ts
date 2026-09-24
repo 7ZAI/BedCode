@@ -119,11 +119,13 @@ export async function createPluginContext(info: PluginInfo): Promise<PluginConte
   }
 
   // ==================== TerminalAPI ====================
+  //
+  // 票 08：`sendInput` **已退役**——宿主不再有「替插件把输入导流到 PTY」的桥
+  // （`plugin_terminal_send_input` 注销）。插件写自己会话的输入走自家命令通道
+  // （`context.commands.execute('session.input', {sessionId, data})`），提交行重建
+  // 与任务域观察都在插件 WASM 内完成。留下的 `onOutput` / `onInput` 是**观察面**
+  // （宿主终端渲染管道的输出投递与输入修饰链观察点），与写入面分属两侧。
   const terminal: TerminalAPI = {
-    async sendInput(sessionId: string, text: string): Promise<void> {
-      requirePermission('terminal.sendInput')
-      return pluginCmds.pluginTerminalSendInput(info.id, sessionId, text, channelToken)
-    },
     onOutput(handler: (sessionId: string, data: string) => void): Disposable {
       requirePermission('terminal.onOutput')
       const disposable = pluginEvents.on(info.id, 'terminal:output', handler as any)
@@ -139,17 +141,16 @@ export async function createPluginContext(info: PluginInfo): Promise<PluginConte
   }
 
   // ==================== SessionAPI ====================
+  //
+  // 票 08：**数据面（`list` / `get`）已退役**。宿主不再有会话数据命令面
+  // （`list_sessions` / `get_session` 连壳删除）；插件读自己的会话事实走自家
+  // 命令通道（`context.commands.execute('session.list' | 'session.get')`，
+  // 与互调 api 同实现）——比经宿主 context 转一手少一跳，也不再需要
+  // 「宿主替插件读会话」这条通道。
+  //
+  // 留下的是**宿主窗口事实**（终端窗口的开关 / 存在性 / 初始网格）：窗口本体
+  // 与字体测量都在宿主（spec D3），插件无法自行实现，属裁剪线允许的原语。
   const session: SessionAPI = {
-    async list(): Promise<any[]> {
-      requirePermission('session.list')
-      const { listSessions } = await import('@/composables/useDesktopCommands')
-      return listSessions()
-    },
-    async get(sessionId: string): Promise<any> {
-      requirePermission('session.get')
-      const { getSession } = await import('@/composables/useDesktopCommands')
-      return getSession(sessionId)
-    },
     onStatusChange(handler: (event: any) => void): Disposable {
       requirePermission('session.onStatusChange')
       const disposable = pluginEvents.on(info.id, 'session:statusChange', handler)

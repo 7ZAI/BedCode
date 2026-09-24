@@ -49,10 +49,10 @@ export const GENERATED_VALID_PERMISSIONS: readonly string[] = [
 
 /** 权限 → API 方法名；空数组 = WASM-only 权限（无前端 context 方法可门） */
 export const GENERATED_PERMISSION_API_MAP: Record<string, readonly string[]> = {
-  'terminal:input': ['terminal.sendInput', 'terminal.onInput'],
+  'terminal:input': ['terminal.onInput'],
   'terminal:output': ['terminal.onOutput'],
   'terminal:observe': ['terminal.onInputSubmitted'],
-  'session:read': ['session.list', 'session.get', 'session.onStatusChange', 'session.predictTerminalSize', 'session.openTerminal', 'session.closeTerminal', 'session.isTerminalOpen'],
+  'session:read': ['session.onStatusChange', 'session.predictTerminalSize', 'session.openTerminal', 'session.closeTerminal', 'session.isTerminalOpen'],
   'session:write': ['session.create', 'session.stop'],
   'connection:read': [],
   'ui:sidebar': ['ui.registerSidebarPanel', 'ui.registerPage'],

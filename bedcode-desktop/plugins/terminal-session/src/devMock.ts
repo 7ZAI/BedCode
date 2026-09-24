@@ -8,10 +8,10 @@
  * 1. dev-shell 领域接线（浏览器中 WASM 后端不可用）——接线本身归 dev-shell
  *    的 mock 模块，本文件只提供数据；
  * 2. 插件视图测试用它驱动 mock PluginContext（`session.config.list` /
- *    `context.session.list()` 的返回值），保证测试数据与演示数据同源。
+ *    `session.list` 的返回值），保证测试数据与演示数据同源。
  *
  * 种子形状与本插件命令面回执一致：配置 = `session.config.list` 的 camelCase
- * 数组；会话 = 宿主 `SessionInfo` 视图子集（camelCase）。
+ * 数组；会话 = `session.list` 回执里 `sessions` 的元素（登记域视图，camelCase）。
  */
 import type { SessionConfigDto, SessionDto } from './composables/useSessionCenter'
 import type { ConnectionHistoryEntry } from './composables/useConnectionHistory'
@@ -26,7 +26,7 @@ import type {
 export interface SessionDevSeed {
   /** 配置列表演示数据（`session.config.list` 回执形状） */
   configs: SessionConfigDto[]
-  /** 会话列表演示数据（`context.session.list()` 回执形状） */
+  /** 会话列表演示数据（`session.list` 回执的 `sessions` 元素形状） */
   sessions: SessionDto[]
   /** 新建配置默认值演示数据（插件存储 `session.formDefaults`） */
   formDefaults: {

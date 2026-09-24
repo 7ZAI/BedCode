@@ -87,24 +87,24 @@ describe('前端插件通道身份', () => {
     await ctx.storage.set('k', 1)
     await ctx.storage.get('k')
     await ctx.storage.delete('k')
-    await ctx.terminal.sendInput('session-1', 'ls\n')
     await ctx.commands.execute('demo.cmd', { a: 1 })
 
     // 每一类插件面命令都带令牌（credential 是身份，pluginId 只是目标）
     expect(argsOf('plugin_storage_set').credential).toBe(token)
     expect(argsOf('plugin_storage_get').credential).toBe(token)
     expect(argsOf('plugin_storage_delete').credential).toBe(token)
-    expect(argsOf('plugin_terminal_send_input').credential).toBe(token)
     expect(argsOf('plugin_invoke').credential).toBe(token)
     // 目标仍是本插件自己，不是自选身份
     expect(argsOf('plugin_invoke').pluginId).toBe(PLUGIN_ID)
     // 插件面无凭证的调用一律不存在
+    // 票 08：`plugin_terminal_send_input` 已注销（输入改走插件命令通道 `plugin_invoke`），
+    // 故这里只剩存储三条 + 互调一条
     const pluginFaceCalls = invokeMock.mock.calls.filter(([c]) =>
-      ['plugin_storage_get', 'plugin_storage_set', 'plugin_storage_delete', 'plugin_terminal_send_input', 'plugin_invoke'].includes(
+      ['plugin_storage_get', 'plugin_storage_set', 'plugin_storage_delete', 'plugin_invoke'].includes(
         c,
       ),
     )
-    expect(pluginFaceCalls).toHaveLength(5)
+    expect(pluginFaceCalls).toHaveLength(4)
     for (const [, args] of pluginFaceCalls) {
       expect(typeof (args as Record<string, unknown>).credential).toBe('string')
     }

@@ -4,7 +4,7 @@ import i18n from '@/locales'
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { getCurrentWindow, PhysicalPosition } from '@tauri-apps/api/window'
 import { emit, listen, emitTo, type UnlistenFn } from '@tauri-apps/api/event'
-import type { SessionInfo } from '@/composables/useDesktopCommands'
+import type { SessionInfo } from '@/composables/model'
 
 // Re-export from model
 import type { TerminalWindowState } from './model'
