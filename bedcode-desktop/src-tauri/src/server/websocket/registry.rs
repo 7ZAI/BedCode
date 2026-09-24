@@ -11,32 +11,18 @@ use std::sync::RwLock;
 
 use super::conn::{CloseConnection, SendBinaryMessage, SendTextMessage, WsConnBase};
 
-/// WS 会话通道种类
-///
-/// 种类在注册时定死、不可变：路由创建 actor 时决定（`/ws/terminal/session/{id}`
-/// → Terminal；`/ws/event` → Event；`/ws/plugin/{plugin_id}/{path}` → Plugin）。
-/// 保持 `Copy` 的轻量枚举，属主与端点标识另挂条目字段（spec §3.2 A2）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ChannelKind {
-    /// 常驻事件通道：只接收同步/通知类消息（SyncData、对端公告），
-    /// 「设备在线」的判定基准
-    Event,
-    /// 终端 I/O 通道：接收终端输出/输入/会话控制
-    Terminal,
-    /// 插件端点通道（阶段 B）：帧由插件通道处理器接管，不参与设备在线判定与事件广播
-    Plugin,
-}
-
 /// 连接注册参数（注册表唯一入口）
+///
+/// 终态（websocket 业务下沉票 08）只剩插件端点一类连接：属主 + 端点标识
+/// 是广播过滤与按属主回收的全部依据（旧 `ChannelKind` 与 Event/Terminal
+/// 通道已随业务路由删除）。
 pub struct WsRegistration {
     pub client_id: String,
     pub socket_addr: SocketAddr,
     pub actor_addr: Addr<WsConnBase>,
-    /// 通道种类（广播过滤与在线判定的依据）
-    pub channel_kind: ChannelKind,
-    /// 属主插件 id（插件端点通道）；终端/事件通道为 `None`
+    /// 属主插件 id（按属主回收与跨属主隔离的依据）
     pub owner: Option<String>,
-    /// 端点标识（插件端点通道）；终端/事件通道为 `None`
+    /// 端点标识（端点域寻址：列表 / 单发 / 广播 / 批量断开）
     pub endpoint_id: Option<String>,
 }
 
@@ -47,17 +33,15 @@ struct WsSessionEntry {
     /// JWT 主体（`claims.sub`；认证时设置，连接上下文的脱敏身份来源）
     subject: Option<String>,
     device_name: Option<String>,
-    /// 设备指纹，认证时设置，用于与数据库 pairings 记录关联
+    /// 设备指纹，认证时设置（连接上下文的脱敏字段）
     fingerprint: Option<String>,
     authenticated: bool,
     connected_at: i64,
-    /// 通道种类（注册时定死，广播过滤与在线判定的依据）
-    channel_kind: ChannelKind,
-    /// 属主插件 id（插件端点通道；终端/事件通道为 `None`）
+    /// 属主插件 id（插件端点通道；按属主批量回收只命中本人条目）
     ///
     /// 属主隔离的依据：按属主批量回收只命中本人条目，跨属主不可互操作
     owner: Option<String>,
-    /// 端点标识（插件端点通道；终端/事件通道为 `None`）
+    /// 端点标识（插件端点通道）
     ///
     /// 端点域寻址（列表 / 单发 / 广播 / 批量断开）的依据
     endpoint_id: Option<String>,
@@ -134,7 +118,6 @@ impl WsSessionRegistry {
             client_id,
             socket_addr,
             actor_addr,
-            channel_kind,
             owner,
             endpoint_id,
         } = reg;
@@ -175,7 +158,6 @@ impl WsSessionRegistry {
                 fingerprint: None,
                 authenticated: false,
                 connected_at,
-                channel_kind,
                 owner,
                 endpoint_id,
                 closing: false,
@@ -257,14 +239,6 @@ impl WsSessionRegistry {
         self.set_authenticated_now(client_id, subject, device_name, fingerprint);
     }
 
-    /// 设置设备名称
-    pub async fn set_device_name(&self, client_id: &str, device_name: Option<String>) {
-        let mut sessions = self.sessions.write().unwrap_or_else(|e| e.into_inner());
-        if let Some(entry) = sessions.get_mut(client_id) {
-            entry.device_name = device_name;
-        }
-    }
-
     pub async fn send_to_client(&self, client_id: &str, text: String) -> Result<(), String> {
         let sessions = self.sessions.read().unwrap_or_else(|e| e.into_inner());
         let Some(entry) = sessions.get(client_id) else {
@@ -305,41 +279,6 @@ impl WsSessionRegistry {
         match client_id {
             Some(cid) => self.send_to_client(&cid, text).await,
             None => Err(format!("No client at addr {}", addr)),
-        }
-    }
-
-    /// 向所有已认证 Event 通道客户端广播文本
-    ///
-    /// 广播承载同步/通知语义（SyncData、对端公告），只投递到事件通道，
-    /// 终端通道不接收（产品决策：常驻事件 WS = 在线语义，见 ChannelKind）
-    ///
-    /// exclude_device_name: 排除指定设备名称的客户端（用于同步事件排除操作者）
-    pub async fn broadcast(&self, text: String, exclude_device_name: Option<&str>) {
-        let sessions = self.sessions.read().unwrap_or_else(|e| e.into_inner());
-        let targets = broadcast_targets(&sessions, exclude_device_name);
-        let mut sent_count = 0usize;
-
-        for client_id in targets {
-            let Some(entry) = sessions.get(&client_id) else {
-                continue;
-            };
-
-            if entry.closing {
-                continue;
-            }
-            match entry.actor_addr.try_send(SendTextMessage { text: text.clone() }) {
-                Ok(()) => sent_count += 1,
-                Err(SendError::Full(_)) => {
-                    tracing::warn!(client_id = %client_id, "WS broadcast queue full");
-                }
-                Err(SendError::Closed(_)) => {
-                    tracing::debug!(client_id = %client_id, "WS broadcast target closed");
-                }
-            }
-        }
-
-        if sent_count > 0 {
-            tracing::debug!("[WsSessionRegistry] Broadcast to {} clients", sent_count);
         }
     }
 
@@ -475,11 +414,9 @@ impl WsSessionRegistry {
         hit
     }
 
-    /// 服务器停机：向全部插件端点客户端下发 Close
+    /// 服务器停机：向全部连接下发 Close（终态只剩插件端点连接）
     pub async fn disconnect_all_endpoint_clients(&self, close_code: u16, reason: &str) -> usize {
-        let closing = self
-            .mark_closing(|_, entry| entry.channel_kind == ChannelKind::Plugin)
-            .await;
+        let closing = self.mark_closing(|_, _| true).await;
         let count = closing.len();
         self.close_marked(closing, close_code, reason);
         if count > 0 {
@@ -631,23 +568,6 @@ impl WsSessionRegistry {
         sessions.get(client_id).map(|e| e.authenticated).unwrap_or(false)
     }
 
-    /// 获取设备名称
-    pub async fn get_device_name(&self, client_id: &str) -> Option<String> {
-        let sessions = self.sessions.read().unwrap_or_else(|e| e.into_inner());
-        sessions.get(client_id).and_then(|e| e.device_name.clone())
-    }
-
-    /// 通过 SocketAddr 获取 device_name
-    /// 通过 SocketAddr 获取 device_name
-    pub async fn get_device_name_by_addr(&self, addr: &SocketAddr) -> Option<String> {
-        let client_id = {
-            let addr_map = self.addr_to_client_id.read().unwrap_or_else(|e| e.into_inner());
-            addr_map.get(addr).cloned()
-        }?;
-
-        self.get_device_name(&client_id).await
-    }
-
     /// 清空所有注册信息（服务器停机时调用）
     pub async fn clear_all(&self) {
         self.pending_endpoint_reservations
@@ -670,50 +590,14 @@ impl WsSessionRegistry {
     }
 }
 
-/// 计算广播目标 client_id 列表（纯函数，供单测矩阵直接验证）
-///
-/// 过滤条件：
-/// - 已认证且通道类型为 Event（广播是同步/通知语义，只达事件通道）
-/// - exclude_device_name 命中的设备跳过（保留既有排除语义）
-/// - 同 fingerprint 的多条 Event 连接只保留一条（防重复通知）；fingerprint
-///   为 None 的匿名条目不去重、逐条保留（避免丢失匿名连接）
-fn broadcast_targets(entries: &HashMap<String, WsSessionEntry>, exclude_device_name: Option<&str>) -> Vec<String> {
-    let mut seen_fingerprints = std::collections::HashSet::new();
-    let mut targets = Vec::new();
-
-    for (client_id, entry) in entries {
-        if entry.closing || !entry.authenticated || entry.channel_kind != ChannelKind::Event {
-            continue;
-        }
-
-        // 排除指定设备
-        if let Some(exclude) = exclude_device_name {
-            if entry.device_name.as_deref() == Some(exclude) {
-                continue;
-            }
-        }
-
-        // 同设备（fingerprint）多条事件连接只发第一条
-        if let Some(fp) = entry.fingerprint.as_deref() {
-            if !seen_fingerprints.insert(fp) {
-                continue;
-            }
-        }
-
-        targets.push(client_id.clone());
-    }
-
-    targets
-}
-
-/// 客户端摘要（与 websocket_manager 中的定义对齐）
+/// 客户端摘要（连接注册表原始连接事实，无业务派生字段）
 #[derive(Debug, Clone)]
 pub struct ClientSummary {
     pub client_id: String,
     /// JWT 主体（`claims.sub`；认证前为 None）——连接上下文的脱敏身份来源
     pub subject: Option<String>,
     pub device_name: Option<String>,
-    /// 设备指纹，用于与数据库 pairings 记录关联
+    /// 设备指纹（JWT claims 透传，连接上下文的脱敏字段）
     pub fingerprint: Option<String>,
     pub addr: String,
     pub authenticated: bool,
@@ -724,49 +608,14 @@ pub struct ClientSummary {
 mod tests {
     use super::*;
 
-    /// 构造一条注册条目：经伪 WS 握手取得真实 `Addr<WsConnBase>`（无需网络连接）。
-    ///
-    /// WebsocketContext 无法用 `Actor::start()` 启动（类型要求普通 Context），
-    /// 走 `WsResponseBuilder::start_with_addr` 升级路径：伪造持有 Upgrade 头的
-    /// 请求 + 空 Payload，握手成功即返回有效 Addr；actor future 不驱动，仅作
-    /// 注册表条目占位（测试不向其发消息）。请求地址由 client_id 哈希派生，
-    /// 避免同长度前缀的 client_id 撞同一端口
-    fn entry(
-        client_id: &str,
-        channel_kind: ChannelKind,
-        authenticated: bool,
-        device_name: Option<&str>,
-        fingerprint: Option<&str>,
-    ) -> (String, WsSessionEntry) {
-        entry_with(
-            client_id,
-            channel_kind,
-            None,
-            None,
-            authenticated,
-            device_name,
-            fingerprint,
-        )
-    }
-
     /// 构造带属主 / 端点标识的注册条目（插件端点通道域测试用）
     fn entry_owned(client_id: &str, owner: &str, endpoint_id: &str, authenticated: bool) -> (String, WsSessionEntry) {
-        entry_with(
-            client_id,
-            ChannelKind::Plugin,
-            Some(owner),
-            Some(endpoint_id),
-            authenticated,
-            None,
-            None,
-        )
+        entry_with(client_id, Some(owner), Some(endpoint_id), authenticated, None, None)
     }
 
-    /// 构造条目共用体：经伪 WS 握手取得真实 Addr，按通道种类装配骨架与处理器
-    #[allow(clippy::too_many_arguments)]
+    /// 构造条目共用体：经伪 WS 握手取得真实 Addr，按插件端点通道装配骨架与处理器
     fn entry_with(
         client_id: &str,
-        channel_kind: ChannelKind,
         owner: Option<&str>,
         endpoint_id: Option<&str>,
         authenticated: bool,
@@ -784,19 +633,14 @@ mod tests {
             .to_http_request();
         // 空 payload 流：握手需要流参数，测试不驱动 actor future，空流即可
         let payload: actix_web::dev::Payload = actix_web::dev::Payload::None;
-        // 按条目通道种类构造骨架 + 对应通道处理器（handler 不被驱动，仅作占位）
-        let mut actor = match channel_kind {
-            ChannelKind::Terminal => WsConnBase::new_for_session(addr, "test-session".to_string()),
-            ChannelKind::Event => WsConnBase::new_event(addr),
-            ChannelKind::Plugin => WsConnBase::new(
-                crate::server::websocket::conn::ConnSpec {
-                    owner: owner.map(|s| s.to_string()),
-                    endpoint_id: endpoint_id.map(|s| s.to_string()),
-                    ..crate::server::websocket::conn::ConnSpec::new(addr, ChannelKind::Plugin)
-                },
-                Box::new(StubChannel),
-            ),
-        };
+        let mut actor = WsConnBase::new(
+            crate::server::websocket::conn::ConnSpec {
+                owner: owner.map(|s| s.to_string()),
+                endpoint_id: endpoint_id.map(|s| s.to_string()),
+                ..crate::server::websocket::conn::ConnSpec::new(addr)
+            },
+            Box::new(StubChannel),
+        );
         actor.disable_registry_for_test();
         let (actor_addr, _resp) = actix_web_actors::ws::WsResponseBuilder::new(actor, &req, payload)
             .start_with_addr()
@@ -812,7 +656,6 @@ mod tests {
                 fingerprint: fingerprint.map(|s| s.to_string()),
                 authenticated,
                 connected_at: 0,
-                channel_kind,
                 owner: owner.map(|s| s.to_string()),
                 endpoint_id: endpoint_id.map(|s| s.to_string()),
                 closing: false,
@@ -864,65 +707,10 @@ mod tests {
         ids
     }
 
-    // ==================== broadcast_targets 矩阵 ====================
-    //
-    // 用 #[actix_rt::test]：入口 helper 持有 WsResponseBuilder 的响应流（内含
-    // actor future），drop 时触发 started()（心跳 IntervalFunc 需要 Tokio reactor、
-    // actix::spawn 需要 LocalSet），必须运行在 actix System 上下文
-
-    #[actix_rt::test]
-    async fn broadcast_targets_only_event_authenticated() {
-        let map = entries_map(vec![
-            entry("ev-auth", ChannelKind::Event, true, Some("Phone"), Some("fp-1")),
-            entry("term-auth", ChannelKind::Terminal, true, Some("Phone"), Some("fp-1")),
-            entry("ev-anon", ChannelKind::Event, false, None, None),
-        ]);
-        let targets = broadcast_targets(&map, None);
-        assert_eq!(targets, vec!["ev-auth"], "仅已认证 Event 通道是广播目标");
-    }
-
-    #[actix_rt::test]
-    async fn broadcast_targets_dedup_by_fingerprint() {
-        // 同一设备两条 Event 通道 → 只发一条（去重）；匿名（fingerprint=None）不去重
-        let map = entries_map(vec![
-            entry("ev-1", ChannelKind::Event, true, Some("Phone"), Some("fp-same")),
-            entry("ev-2", ChannelKind::Event, true, Some("Phone"), Some("fp-same")),
-            entry("ev-3", ChannelKind::Event, true, Some("Phone 2"), None),
-            entry("ev-4", ChannelKind::Event, true, Some("Phone 3"), None),
-        ]);
-        let targets = broadcast_targets(&map, None);
-        assert_eq!(targets.len(), 3, "同指纹去重到 1 条，匿名 2 条全保留");
-        assert!(
-            targets.iter().any(|t| t == "ev-1") ^ targets.iter().any(|t| t == "ev-2"),
-            "两条同指纹事件连接只保留其中一条"
-        );
-    }
-
-    #[actix_rt::test]
-    async fn broadcast_targets_excludes_device_name() {
-        let map = entries_map(vec![
-            entry("ev-1", ChannelKind::Event, true, Some("operator"), Some("fp-op")),
-            entry("ev-2", ChannelKind::Event, true, Some("peer"), Some("fp-peer")),
-        ]);
-        let targets = broadcast_targets(&map, Some("operator"));
-        assert_eq!(targets, vec!["ev-2"], "exclude_device_name 命中设备必须被排除");
-    }
-
     // ==================== 端点域寻址 / 属主回收 / 按端点断开 ====================
     //
     // 一律用 `local_registry()`：这些用例只验证注册表自身语义，写全局单例会在
     // 并行执行时干扰同居用例
-
-    #[actix_rt::test]
-    async fn broadcast_targets_exclude_plugin_channel() {
-        // 插件端点通道即便已认证且指纹相同，也不得被卷入同步广播
-        let map = entries_map(vec![
-            entry_owned("plug-1", "plugin-a", "wse-a", true),
-            entry("ev-1", ChannelKind::Event, true, Some("Phone"), Some("fp-1")),
-        ]);
-        let targets = broadcast_targets(&map, None);
-        assert_eq!(targets, vec!["ev-1"], "插件端点通道不得卷入同步广播");
-    }
 
     #[actix_rt::test]
     async fn purge_for_plugin_only_hits_owner() {
@@ -934,8 +722,6 @@ mod tests {
                 entry_owned("p-a1", "plugin-a", "wse-a", true),
                 entry_owned("p-a2", "plugin-a", "wse-a", true),
                 entry_owned("p-b1", "plugin-b", "wse-b", true),
-                entry("ev-host", ChannelKind::Event, true, Some("Phone"), Some("fp-host")),
-                entry("term-host", ChannelKind::Terminal, true, Some("Phone"), Some("fp-host")),
             ],
         )
         .await;
@@ -945,7 +731,7 @@ mod tests {
         assert_eq!(purged, vec!["p-a1", "p-a2"], "只回收本人属主条目");
         assert_eq!(
             client_ids(&registry).await,
-            vec!["ev-host", "p-a1", "p-a2", "p-b1", "term-host"],
+            vec!["p-a1", "p-a2", "p-b1"],
             "关闭标记期间条目仍由 actor 持有，最终摘除由 stopping 完成"
         );
         for client_id in ["p-a1", "p-a2"] {
@@ -957,7 +743,7 @@ mod tests {
             registry.purge_for_plugin("plugin-none", 4005, "gone").await.is_empty(),
             "未知属主无命中"
         );
-        assert_eq!(client_ids(&registry).await.len(), 3, "未知属主回收不得误伤条目");
+        assert_eq!(client_ids(&registry).await.len(), 1, "未知属主回收不得误伤条目");
     }
 
     #[actix_rt::test]
@@ -1060,13 +846,11 @@ mod tests {
             vec![
                 entry_owned("p-a1", "plugin-a", "wse-a", true),
                 entry_owned("p-a2", "plugin-b", "wse-b", true),
-                entry("ev-host", ChannelKind::Event, true, Some("Phone"), Some("fp-host")),
-                entry("term-host", ChannelKind::Terminal, true, Some("Phone"), Some("fp-host")),
             ],
         )
         .await;
 
-        // 停机只下线插件端点客户端（宿主通道由 Actix 优雅停机收敛）
+        // 停机只下线插件端点客户端（终态只剩该类连接）
         assert_eq!(
             registry
                 .disconnect_all_endpoint_clients(1001, "server shutting down")
@@ -1075,7 +859,7 @@ mod tests {
         );
         assert_eq!(
             client_ids(&registry).await,
-            vec!["ev-host", "p-a1", "p-a2", "term-host"],
+            vec!["p-a1", "p-a2"],
             "插件端点先标记关闭，最终摘除由 actor stopping 完成"
         );
         for client_id in ["p-a1", "p-a2"] {
@@ -1087,5 +871,23 @@ mod tests {
                 .await,
             0
         );
+    }
+
+    /// 远程属主不可见另一属主连接的端点域条目（跨属主隔离，属主回收用例的补充）
+    #[actix_rt::test]
+    async fn cross_owner_endpoint_domain_is_isolated() {
+        let registry = local_registry();
+        seed(
+            &registry,
+            vec![
+                entry_owned("p-a1", "plugin-a", "wse-a", true),
+                entry_owned("p-b1", "plugin-b", "wse-b", true),
+            ],
+        )
+        .await;
+
+        // 属主 B 的端点/客户端键不命中 A 的端点域
+        assert!(!registry.is_endpoint_client("wse-b", "p-a1").await);
+        assert_eq!(registry.list_by_endpoint("wse-a").await.len(), 1);
     }
 }

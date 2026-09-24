@@ -11,7 +11,7 @@ use crate::utils::auth::biometric::BiometricChallengeManager;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::AppHandle;
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::Mutex;
 
 /// 桌面端全局服务容器
 ///
@@ -35,8 +35,6 @@ pub struct AppContext {
     /// MockRuntime 句柄，与 Wry 类型不兼容）允许 None，依赖前端事件的
     /// 能力在调用处降级（emit 跳过），业务链路不受影响
     app_handle: Option<Arc<AppHandle>>,
-    /// 同步事件发送器
-    sync_tx: broadcast::Sender<crate::events::HostSyncEvent>,
     /// 资源目录路径（用于项目级 hooks 脚本复制）
     resource_dir: Arc<PathBuf>,
     /// 系统基本信息（OS / 设备名称 / IP，启动时采集）
@@ -91,10 +89,6 @@ impl AppContext {
         &self.app_handle
     }
 
-    pub fn sync_tx(&self) -> &broadcast::Sender<crate::events::HostSyncEvent> {
-        &self.sync_tx
-    }
-
     pub fn resource_dir(&self) -> &Arc<PathBuf> {
         &self.resource_dir
     }
@@ -111,7 +105,6 @@ pub struct AppContextBuilder {
     biometric_challenges: Option<Arc<BiometricChallengeManager>>,
     mdns_advertiser: Option<Arc<tokio::sync::RwLock<MdnsAdvertiser>>>,
     app_handle: Option<Arc<AppHandle>>,
-    sync_tx: Option<broadcast::Sender<crate::events::HostSyncEvent>>,
     resource_dir: Option<Arc<PathBuf>>,
     system_info: Option<Arc<SystemInfo>>,
 }
@@ -124,7 +117,6 @@ impl AppContextBuilder {
             biometric_challenges: None,
             mdns_advertiser: None,
             app_handle: None,
-            sync_tx: None,
             resource_dir: None,
             system_info: None,
         }
@@ -150,11 +142,6 @@ impl AppContextBuilder {
         self
     }
 
-    pub fn sync_tx(mut self, tx: broadcast::Sender<crate::events::HostSyncEvent>) -> Self {
-        self.sync_tx = Some(tx);
-        self
-    }
-
     pub fn resource_dir(mut self, rd: Arc<PathBuf>) -> Self {
         self.resource_dir = Some(rd);
         self
@@ -176,7 +163,6 @@ impl AppContextBuilder {
             mdns_advertiser: self.mdns_advertiser.expect("AppContext: mdns_advertiser is required"),
             // app_handle 允许 None（无头/测试上下文），其余字段仍必填
             app_handle: self.app_handle,
-            sync_tx: self.sync_tx.expect("AppContext: sync_tx is required"),
             resource_dir: self.resource_dir.expect("AppContext: resource_dir is required"),
             system_info: self.system_info.expect("AppContext: system_info is required"),
         };

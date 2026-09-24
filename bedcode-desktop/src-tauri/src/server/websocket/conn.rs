@@ -7,12 +7,10 @@
 //!   会话注册（`WsSessionRegistry`）与离线判定、优雅关闭（链路加密失败 4003）；
 //! - **通道级（[`ChannelHandler`]）**：收帧解析、关闭回调、认证通过回调、认证策略声明。
 //!
-//! 终端通道（`/ws/terminal/session/{id}` 控制帧协议）与事件通道（`/ws/event` 旧
-//! `Message` 兼容面）是该 trait 的两个实现（`server::websocket::channel`）。往宿主 WS 服务器
-//! 挂新通道 = 新增一个实现 + 路由构造点，不再改本文件（spec §3.2 A1）。
-//!
-//! wire 协议零变更：帧大小上限仍由路由侧 `frame_size` 生效，心跳间隔 / 认证超时 /
-//! 首消息认证回执与错误帧形状均与拆分前逐字一致（终端与事件通道行为等价基线）。
+//! 终态（websocket 业务下沉票 08）唯一通道实现是插件端点
+//! （`server::websocket::channel::plugin`，`/ws/plugin/{plugin_id}/{path}`）；旧终端/
+//! 事件通道（`/ws/terminal/session/{id}`、`/ws/event`）已随业务硬切删除。往宿主 WS
+//! 服务器挂新通道 = 新增一个实现 + 路由构造点，不再改本文件（spec §3.2 A1）。
 
 use actix::prelude::*;
 use actix_web_actors::ws;
@@ -21,15 +19,11 @@ use std::any::Any;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
-use crate::enums::auth::CryptoProposal;
 use crate::server::core::filter::{Direction, FilterContext, TrafficChannel, TrafficFilterChain};
 use crate::server::core::link_crypto;
-use crate::server::websocket::registry::{ChannelKind, WsRegistration, WsSessionRegistry};
-use crate::server::websocket::session::WsSession;
-use crate::server::websocket::subscription::SubscriptionState;
+use crate::server::websocket::registry::{WsRegistration, WsSessionRegistry};
 use crate::system::app_context::AppContext;
 use crate::system::constants::{HEARTBEAT_INTERVAL_SECS, REMOTE_CLIENT_TIMEOUT_SECS, WS_AUTH_TIMEOUT_SECS};
-use crate::utils::auth::jwt::JwtService;
 
 /// 心跳间隔
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(HEARTBEAT_INTERVAL_SECS);
@@ -146,27 +140,52 @@ pub(crate) struct CloseOutcome {
 
 // ==================== 连接骨架 ====================
 
-/// 连接构造参数（路由侧声明通道种类 / 绑定会话 / 属主与端点标识）
+/// 连接级认证/身份状态（引擎事实，零业务派生字段）
+///
+/// 终态（websocket 业务下沉票 08）只保留连接事实：对端地址 + JWT 验签后的主体身份
+/// （sub / deviceName / fingerprint，连接上下文的脱敏来源）。旧 `subscribed_sessions`
+/// 多路订阅与产品会话关联已随会话/终端通道删除（订阅语义归插件）。
+#[derive(Debug, Clone)]
+pub(crate) struct WsSession {
+    /// 客户端地址
+    pub addr: SocketAddr,
+    /// 设备 ID（JWT 认证后设置）
+    pub device_id: Option<String>,
+    /// 设备名称（JWT claims 透传，连接上下文脱敏字段）
+    pub device_name: Option<String>,
+    /// 设备指纹（JWT claims 透传，连接上下文脱敏字段）
+    pub fingerprint: Option<String>,
+    /// 是否已认证
+    pub authenticated: bool,
+}
+
+impl WsSession {
+    pub fn new(addr: SocketAddr) -> Self {
+        Self {
+            addr,
+            device_id: None,
+            device_name: None,
+            fingerprint: None,
+            authenticated: false,
+        }
+    }
+}
+
+/// 连接构造参数（路由侧声明属主 / 端点标识）
 pub struct ConnSpec {
     /// 连接地址（对端）
     pub addr: SocketAddr,
-    /// 通道种类（注册时定死）
-    pub channel_kind: ChannelKind,
-    /// 绑定会话（终端路由 `/ws/terminal/session/{id}`）；其余通道为 `None`
-    pub bound_session: Option<String>,
-    /// 属主插件 id（插件端点通道）；其余通道为 `None`
+    /// 属主插件 id（端点注册表域寻址与按属主回收）
     pub owner: Option<String>,
-    /// 端点标识（插件端点通道）；其余通道为 `None`
+    /// 端点标识（端点域寻址：列表 / 单发 / 广播 / 批量断开）
     pub endpoint_id: Option<String>,
 }
 
 impl ConnSpec {
-    /// 最小构造：仅通道种类与地址，绑定会话 / 属主 / 端点标识留空
-    pub fn new(addr: SocketAddr, channel_kind: ChannelKind) -> Self {
+    /// 最小构造：仅地址，属主 / 端点标识留空
+    pub fn new(addr: SocketAddr) -> Self {
         Self {
             addr,
-            channel_kind,
-            bound_session: None,
             owner: None,
             endpoint_id: None,
         }
@@ -177,26 +196,15 @@ impl ConnSpec {
 ///
 /// 一个实例 = 一条 WS 连接。通道协议由 `handler` 决定，连接级状态由本结构持有。
 pub struct WsConnBase {
-    /// 连接会话状态（认证态 / 设备身份 / 订阅集合）
+    /// 连接级认证/身份状态（认证态 / 设备身份）
     pub(crate) session: WsSession,
     /// 最近一次收到 Pong / Ping 的时刻（心跳超时判定）
     hb: Instant,
-    /// 绑定会话（终端路由 `/ws/terminal/session/{id}`）：连接创建即绑定；
-    /// `None` = 事件通道（`/ws/event`）。断连时的订阅清理依据
-    pub(crate) bound_session: Option<String>,
-    /// 通道种类（注册时定死）：广播过滤、在线判定与过滤链通道映射的依据
-    pub(crate) channel_kind: ChannelKind,
-    /// 属主插件 id（插件端点通道）；终端 / 事件通道为 `None`。
-    /// 注册表按此字段做属主回收与跨属主隔离
+    /// 属主插件 id（插件端点通道）；注册表按此字段做属主回收与跨属主隔离
     pub(crate) owner: Option<String>,
-    /// 端点标识（插件端点通道）；终端 / 事件通道为 `None`。
-    /// 注册表按此字段做端点域寻址（列表 / 单发 / 广播 / 批量断开）
+    /// 端点标识（插件端点通道）；注册表按此字段做端点域寻址
+    /// （列表 / 单发 / 广播 / 批量断开）
     pub(crate) endpoint_id: Option<String>,
-    /// 链路加密待处理协商（issue 04）：auth 帧携带的客户端临时公钥，
-    /// 认证成功后派生并回执（终端路由在 SessionAuthOutcome 消费，旧路由同步消费）
-    pub(crate) pending_ws_crypto: Option<CryptoProposal>,
-    /// 输出订阅链路状态（任务表 / 流代数 / 传播模式）
-    pub(crate) subscriptions: SubscriptionState,
     /// 连接终止原因（对端 Close 帧或宿主主动关闭时置位；异常断开保持 `None`）
     ///
     /// 在 `stopping()` 之前写入，供通道在 `on_close` 中读取以上报断开事件
@@ -210,19 +218,13 @@ pub struct WsConnBase {
 impl WsConnBase {
     /// 以通道处理器构造连接骨架
     ///
-    /// `spec.channel_kind` 由路由决定（终端 / 事件 / 插件端点），注册表据此过滤
-    /// 广播、判定在线与选择过滤链通道；`owner` / `endpoint_id` 供注册表做属主
-    /// 隔离与端点域寻址
+    /// `owner` / `endpoint_id` 供注册表做属主隔离与端点域寻址
     pub fn new(spec: ConnSpec, handler: Box<dyn ChannelHandler>) -> Self {
         Self {
             session: WsSession::new(spec.addr),
             hb: Instant::now(),
-            bound_session: spec.bound_session,
-            channel_kind: spec.channel_kind,
             owner: spec.owner,
             endpoint_id: spec.endpoint_id,
-            pending_ws_crypto: None,
-            subscriptions: SubscriptionState::new(),
             close_outcome: None,
             handler: Some(handler),
             register_on_start: true,
@@ -237,30 +239,6 @@ impl WsConnBase {
     /// 连接终止原因（`on_close` 中读取；`None` = 异常断开，无 Close 交换）
     pub(crate) fn close_outcome(&self) -> Option<&CloseOutcome> {
         self.close_outcome.as_ref()
-    }
-
-    /// 每会话终端路由构造（spec §5.1）：连接创建即绑定 session_id，
-    /// 订阅即连接（无 subscribed_sessions 多路复用），控制帧走简化
-    /// JSON 协议（无 message_id/expect_response），输出帧为 TB v3 二进制
-    pub fn new_for_session(addr: SocketAddr, session_id: String) -> Self {
-        Self::new(
-            ConnSpec {
-                bound_session: Some(session_id),
-                ..ConnSpec::new(addr, ChannelKind::Terminal)
-            },
-            Box::new(crate::server::websocket::channel::terminal::TerminalChannel::new()),
-        )
-    }
-
-    /// 事件通道构造：设备在线判定基准 + 同步广播接收方
-    ///
-    /// 通道种类在注册时定死（Event），广播过滤与 stopping() 的离线
-    /// 判定都依赖它；事件通道不承载终端输出流，构造体保持默认
-    pub fn new_event(addr: SocketAddr) -> Self {
-        Self::new(
-            ConnSpec::new(addr, ChannelKind::Event),
-            Box::new(crate::server::websocket::channel::event::EventChannel::new()),
-        )
     }
 
     /// 心跳检测
@@ -351,12 +329,12 @@ impl WsConnBase {
     // ==================== Traffic Filter Hooks（流量过滤责任链接线） ====================
 
     /// 本连接对应的流量通道类型
+    ///
+    /// 终态（票 08）只有插件端点一类连接，恒为 `WsPlugin`；方法保留为
+    /// 过滤链通道标签的事实来源（`TrafficChannel` 仍是传输面分类词汇，
+    /// 链路加密配置按通道取档）
     fn traffic_channel(&self) -> TrafficChannel {
-        match self.channel_kind {
-            ChannelKind::Terminal => TrafficChannel::WsTerminal,
-            ChannelKind::Event => TrafficChannel::WsEvent,
-            ChannelKind::Plugin => TrafficChannel::WsPlugin,
-        }
+        TrafficChannel::WsPlugin
     }
 
     /// 链路加密失败收尾：Close(4003) 并停止 actor（spec：WS 解密失败不丢帧，
@@ -479,61 +457,6 @@ impl WsConnBase {
             }
         }
     }
-
-    // ==================== 认证核心（两通道共享） ====================
-
-    /// JWT 认证共享核心
-    ///
-    /// 验证 token → 设置会话认证状态 → 注册到 WsSessionRegistry + 更新
-    /// 配对 last_seen + 通知前端设备上线。成功返回 claims（调用方各自
-    /// 构造响应帧：终端路由 auth_ok 控制帧，旧路由 Message::Auth JSON）
-    pub(crate) fn authenticate_jwt(
-        &mut self,
-        token: &str,
-    ) -> Result<crate::utils::auth::jwt::JwtClaims, (String, String)> {
-        let jwt_service = JwtService::new();
-        let claims = match jwt_service.verify_token_with_expiry(token) {
-            Ok(c) => c,
-            Err(e) => {
-                let msg = crate::utils::auth::jwt::jwt_error_message(&e);
-                return Err(("AUTH_FAILED".to_string(), msg.to_string()));
-            }
-        };
-
-        // 票 12 C3：验签后取认证中心策略（验签执行留宿主中间件——密码学引擎
-        // 不移动；策略 = claims 结构/时效 + 信任撤销检查，经 auth-policy 能力
-        // 导出取认证中心）。认证中心未激活/调用失败 → 宿主策略回退（验签通过
-        // 即放行），无单点。无 AppContext（无头/单测）→ 宿主策略。
-        if let Some(ctx) = crate::system::app_context::AppContext::try_global() {
-            if let Err(reason) = crate::utils::auth::auth_center::enforce_connection_policy(ctx.plugin_host(), token) {
-                tracing::warn!(
-                    addr = %self.session.addr.to_string(),
-                    device_id = %claims.sub,
-                    %reason,
-                    "WS connection denied by auth center policy"
-                );
-                return Err(("POLICY_DENIED".to_string(), reason));
-            }
-        }
-
-        self.session.authenticated = true;
-        self.session.device_id = Some(claims.sub.clone());
-        self.session.device_name = claims.device_name.clone();
-        self.session.fingerprint = claims.fingerprint.clone();
-
-        // 注册认证状态到 WsSessionRegistry
-        let client_id = self.session.addr.to_string();
-        let subject = claims.sub.clone();
-        let device_name = claims.device_name.clone();
-        let fp = claims.fingerprint.clone();
-        WsSessionRegistry::global().set_authenticated_now(&client_id, Some(subject), device_name, fp);
-
-        // 票 07：认证记录 touch / 设备事件由插件自驱（`<owner>::ws:client-connect`
-        // → 插件经 connection-context 取已脱敏指纹 → 私有库 touch + emit
-        // `device:connected`）。宿主不再代做——此处只完成注册表认证态同步。
-
-        Ok(claims)
-    }
 }
 
 impl Actor for WsConnBase {
@@ -544,13 +467,7 @@ impl Actor for WsConnBase {
             return;
         }
         ctx.set_mailbox_capacity(crate::system::constants::PLUGIN_WS_SEND_QUEUE_CAPACITY);
-        let _span = tracing::info_span!(
-            "terminal_ws",
-            client = %self.session.addr,
-            session_id = %self.bound_session.as_deref().unwrap_or("-"),
-        )
-        .entered();
-        tracing::info!(client = %self.session.addr, "Terminal WS connected");
+        tracing::info!(client = %self.session.addr, "WS connected");
         self.start_heartbeat(ctx);
 
         let auth_mode = self.handler_auth_mode();
@@ -580,7 +497,6 @@ impl Actor for WsConnBase {
             client_id,
             socket_addr: self.session.addr,
             actor_addr: ctx.address(),
-            channel_kind: self.channel_kind,
             owner: self.owner.clone(),
             endpoint_id: self.endpoint_id.clone(),
         });
@@ -605,13 +521,10 @@ impl Actor for WsConnBase {
         if !self.register_on_start {
             return Running::Stop;
         }
-        tracing::info!(client = %self.session.addr, "Terminal WS disconnected");
+        tracing::info!(client = %self.session.addr, "WS disconnected");
 
-        // 通道侧清理（终端通道：中止会话停止监听任务）
+        // 通道侧清理（插件端点：断开事件上报等）
         self.dispatch_on_close();
-
-        // 中止所有订阅链路任务 + 流代数全部失效 + 清空订阅者模式表
-        self.subscriptions.cleanup();
 
         // 注销 WsSessionRegistry + 断连清理。
         // 票 07：设备离线判定 / 认证记录 close / device 事件全部归插件

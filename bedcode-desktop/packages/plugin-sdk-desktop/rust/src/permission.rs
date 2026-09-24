@@ -205,7 +205,10 @@ pub static PERMISSION_API_MAP: &[(&str, &[&str])] = &[
     (PERMISSION_UI_FILE_HANDLER, &["ui.registerFileHandler"]),
     (PERMISSION_NETWORK_HTTP, &["http.registerEndpoint"]),
     (PERMISSION_STORAGE, &["storage.get", "storage.set", "storage.delete", "storage.flush"]),
-    (PERMISSION_BROADCAST, &["broadcast.sync"]),
+    // 票 08（websocket 业务下沉）：`broadcast.sync` 随 host-events.broadcast-sync
+    // 退役（插件事件走 bus/emit）——PERMISSION_BROADCAST 不再映射任何宿主方法。
+    // `broadcast` 位保留：前端 events.on/emit 仍经 manifest-gen FRONTEND_PERMISSION_RULES
+    // 声明它（apiMap 空清单按 api_map_keys_must_be_known_permissions 约定省略条目）。
     (PERMISSION_FS_READ, &["fs.read", "fs.copy"]),
     (PERMISSION_FS_WRITE, &["fs.write", "fs.copy"]),
     (PERMISSION_TIMER, &["timer.register"]),

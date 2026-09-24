@@ -1,32 +1,18 @@
-//! 多客户端广播与停机集成测试（spec L1 场景 7–8，ticket 04）
+//! 连接清理与停机鲁棒性集成测试（ticket 04；websocket 业务下沉票 08 改造为插件端点）
 //!
-//! 广播送达语义：`WsSessionRegistry::broadcast` 只投递到 Event 通道（见
-//! registry.rs ChannelType）。ticket 02 的 /ws/event 已落地，发送方 A 与接收方 B
-//! 均走事件通道（旧 /ws/terminal 终端通道已随兼容路由删除），发送端由来源地址排除，
-//! 排除语义与 channel 过滤在此处全链路验证。
+//! websocket 业务下沉票 08 起宿主不再有事件通道与 `SyncData` 广播面（插件事件走
+//! bus/emit，宿主 WS 只转原始帧）——旧「多客户端同步广播 + 排除发送者」链路已随
+//! `/ws/event` 与 `Message::SyncData` 退役。本 target 保留的验收面是**通用
+//! transport 的连接清理与优雅停机**（spec §9.1 / §2.3 生命周期）：
 //!
-//! 原理：进程内真实启动 Actix HTTP+WS 服务器（OS 分配端口）→ 两个真实
-//! tokio-tungstenite 客户端完成配对认证 → 一端发 WS 会话控制消息触发
-//! 服务端广播（会话控制动作 → 插件互调 → sync_tx 事件总线 →
-//! SyncEventHandler → WsSessionRegistry 广播，与生产 lib.rs 同一组装路径）
-//! → 另一端收到、发送端被排除；断开后注册表清理生效；停机后端口释放。
+//! - 多客户端经插件端点接入（真实 JWT 认证）→ 注册表就位；
+//! - 断开一方 → 注册表摘除（stopping 清理），对已摘除 client_id 的定向发送显性失败；
+//! - 停机（`ServerHandle::stop(true)`）→ 新连接被拒（ConnectionRefused）、端口释放
+//!   可重绑、注册表无孤儿残留、全程无 ERROR 级日志。
 //!
-//! 广播触发路径选择（ticket 验收要求"优先 WS 消息驱动"）：
-//! `RemoveSession` 是纯 WS 可触发的广播语义操作——认证客户端发送
-//! `SessionControl::RemoveSession`，服务端经 `remove_session_with_source`
-//! 驱动会话插件发布 `SyncEvent::SessionRemoved { source_device: 设备名 }`，
-//! 宿主 `events::publish(HostSyncEvent)` → SyncEventHandler 以发送者设备名为
-//! exclude 广播（exclude 语义正是 "发送端不收到"）。对不存在的会话该操作无副作用
-//! （各注册表 remove 均容忍缺项）且仍发布广播事件，故无需预建会话/PTY，链路最短且确定。
-//! 场景 2 的对照组（断开后广播仍可达在线端）使用 WebSocketManager 广播
-//! API——断开方已无法从外部观察，断言改为注册表层（send_to_client 报
-//! not found + 全员广播只达在线端）。
-//!
-//! 串行化：本文件只含一个 `#[tokio::test]`（场景子步骤严格串行）。
-//! tests/ 下每个文件是独立测试二进制 → 与 01/02 文件进程隔离，
-//! AppContext（OnceLock）/ WsSessionRegistry / global_matcher 等全局单例
-//! 天然互不冲突。等待异步事件统一 `tokio::time::sleep + yield_now`
-//! （current_thread runtime 禁止 std::thread::sleep），每处 await 有 timeout。
+//! 串行化：本文件只含一个 `#[tokio::test]`（场景子步骤严格串行）。tests/ 下每个
+//! 文件是独立测试二进制 → 与其它文件进程隔离，AppContext（OnceLock）/
+//! WsSessionRegistry 等全局单例天然互不冲突。
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -35,18 +21,13 @@ use std::time::{Duration, Instant};
 
 use actix_web::dev::ServerHandle;
 use bedcode_lib::db::Database;
-use bedcode_lib::enums::SyncPayload;
-use bedcode_lib::events::{global_matcher, HostSyncEvent, SyncEventHandler};
 use bedcode_lib::mdns::advertiser::MdnsAdvertiser;
-use bedcode_lib::wasm_core::PluginHost;
 use bedcode_lib::server::core::app::start_http_server;
-use bedcode_lib::enums::{AuthPayload, AuthStage, SessionControlAction};
-use bedcode_lib::server::websocket::message::Message;
 use bedcode_lib::server::websocket::registry::WsSessionRegistry;
 use bedcode_lib::server::websocket::WebSocketManager;
 use bedcode_lib::system::app_context::AppContextBuilder;
-use bedcode_lib::system::constants::SYNC_EVENT_BROADCAST_CAPACITY;
 use bedcode_lib::system::info::SystemInfo;
+use bedcode_lib::wasm_core::PluginHost;
 use bedcode_lib::AppConfig;
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
@@ -58,14 +39,11 @@ type WsRecv = futures_util::stream::SplitStream<WebSocketStream<TcpStream>>;
 /// WS 发送流（split 后的写半部）
 type WsSend = futures_util::stream::SplitSink<WebSocketStream<TcpStream>, WsMsg>;
 
-// ==================== ERROR 级日志计数（场景 4 验收：停机无 error） ====================
+// ==================== ERROR 级日志计数（停机无 error 验收） ====================
 
 static ERROR_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 /// 统计 ERROR 级日志事件数的 tracing layer
-///
-/// 停机/清理路径的异常（孤儿客户端清理失败、广播失败等）都以 error! 输出，
-/// 计数为 0 是"无异常"的可观测判据，比仅断言注册表为空更贴近 ticket 验收
 struct ErrorCounter;
 
 impl<S> tracing_subscriber::Layer<S> for ErrorCounter
@@ -79,15 +57,14 @@ where
     }
 }
 
-// ==================== 基建（与 02 ws_pairing_auth 同款模式） ====================
+// ==================== 基建 ====================
 
-/// 会话中心插件 id（认证端点编排的权威实现方）
+/// 会话中心插件 id
 const SESSION_PLUGIN_ID: &str = "com.bedcode.terminal-session";
+/// 插件端点挂载路径（manifest `contributes.wsEndpoints` 声明 + 激活期登记）
+const SESSION_CONTROL_PATH: &str = "/ws/plugin/com.bedcode.terminal-session/session-control";
 
 /// 随包插件产物目录（`cargo test` 前须重建产物，见 AGENTS §3）
-///
-/// 产物缺失时**显性失败**而非跳过：本 target 的令牌换取链没有别的驱动方式，
-/// 静默 `[skip]` 会把「未验证」伪装成「通过」。
 fn bundled_plugins_dir() -> PathBuf {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/plugins/desktop");
     assert!(
@@ -99,13 +76,11 @@ fn bundled_plugins_dir() -> PathBuf {
     dir
 }
 
-/// 无头集成测试的会话中心插件私有库根（认证记录下沉 v24 后配对/历史真源在
-/// 私有库；无头上下文无 AppHandle，经 `set_plugin_db_root` 注入，activate 前设置）
+/// 无头集成测试的会话中心插件私有库根（配对/历史真源在私有库）
 fn session_plugin_db_root() -> &'static PathBuf {
     static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     ROOT.get_or_init(|| {
-        let dir =
-            std::env::temp_dir().join(format!("bedcode-bsdrop-pluginroot-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("bedcode-bsdrop-pluginroot-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir
     })
@@ -118,9 +93,6 @@ fn pick_free_port() -> u16 {
 }
 
 /// 启动测试服务器：真实 `start_http_server` + 默认网络配置（端口显式传入）
-///
-/// 服务器 future 必须保活（drop 会触发停机），spawn 到测试 runtime 上持续轮询；
-/// actix worker 运行在各自线程的独立 runtime，不受 current_thread 测试 runtime 限制
 async fn spawn_test_server(port: u16) -> std::io::Result<(ServerHandle, tokio::task::JoinHandle<std::io::Result<()>>)> {
     let config = AppConfig::default().network;
     let (handle, server) = start_http_server(port, &config).await?;
@@ -130,58 +102,37 @@ async fn spawn_test_server(port: u16) -> std::io::Result<(ServerHandle, tokio::t
 
 /// 组装真实服务 AppContext（app_handle=None 无头模式），每个测试进程只 init 一次
 ///
-/// 与 02 的差异：额外完成 sync_tx 接线 + SyncEventHandler 注册——这是本票
-/// 广播链路的必要半程，严格复刻生产 lib.rs 的组装顺序：
-/// 1. sync_tx 接线（事件发布侧；票 11 起内核 SessionManager 不再存在，
-///    同步事件由插件经 `host-events` 广播、宿主 `sync_handler` 只做转发）
-/// 2. global_matcher register_source + register SyncEventHandler（消费侧）
+/// websocket 业务下沉票 08 起无 `sync_tx`/SyncEventHandler 装配（宿主导流事件
+/// 通道已删，插件事件走 bus/emit）。
 async fn init_test_app_context() {
-    // OnceLock 守卫：本二进制只有一个 #[tokio::test]，但防未来新增测试重复组装
     static INIT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     if INIT.get().is_some() {
         return;
     }
     {
-        // AppContext.db：配对记录/连接历史落库
         let db = Arc::new(tokio::sync::Mutex::new(
             Database::new(Path::new(":memory:")).expect("create in-memory db failed"),
         ));
         db.lock().await.init_schema().expect("init db schema failed");
 
-        // 票 13：/api/auth/*（配对码换取 JWT）的编排已整体下沉会话中心插件——宿主
-        // 无实现、网关按 PluginRequired 拒转发，故测试改用**真实插件产物**驱动配对。
         let plugins_dir = bundled_plugins_dir();
         // 用户插件目录：独立空目录（复用 plugins_dir 会让随包插件被标成
         // UserInstalled 来源，激活时撞审批门禁）
         let user_plugins_dir = std::env::temp_dir().join(format!("bedcode-itest-userplugins-{}", std::process::id()));
         std::fs::create_dir_all(&user_plugins_dir).expect("create temp user plugins dir failed");
 
-        // 会话管理器（v21 无库依赖：会话配置/launch 映射归插件，内核不再注入存储）
-        let plugin_host = Arc::new(
-            PluginHost::new(
-                db.clone(),
-                &plugins_dir,
-                &user_plugins_dir, // 用户插件目录：独立空目录（见上方来源标注说明）
-                None, // 无头/测试上下文无 AppHandle
-            )
-            .await,
-        );
-        // 两阶段初始化：注入消息总线 dispatcher（与 lib.rs 生产路径一致）
+        let plugin_host = Arc::new(PluginHost::new(db.clone(), &plugins_dir, &user_plugins_dir, None).await);
         plugin_host.init_message_bus().await;
-        // v24 认证记录下沉：配对/历史真源 = 认证中心私有库。无头上下文无
-        // AppHandle，必须在 activation 前注入私有库根（activate 建表走
-        // host-plugin-database；配对/信任链路无私有库即不可用）
         plugin_host
             .wasm_host_ctx()
             .set_plugin_db_root(Some(session_plugin_db_root().clone()));
-        // 激活会话中心（随包 FileScan 来源 → 免审批门禁）：/api/auth/* 转发的前置
+        // 激活会话中心：/api/auth/* 编排与 ws 端点登记在插件
         plugin_host
             .activate_plugin(SESSION_PLUGIN_ID, false)
             .await
             .expect("activate com.bedcode.terminal-session (bundled artifact)");
 
         let mdns_advertiser = Arc::new(tokio::sync::RwLock::new(MdnsAdvertiser::new()));
-        let (sync_tx, _) = tokio::sync::broadcast::channel::<HostSyncEvent>(SYNC_EVENT_BROADCAST_CAPACITY);
         let system_info = Arc::new(SystemInfo::collect());
 
         AppContextBuilder::new()
@@ -189,31 +140,17 @@ async fn init_test_app_context() {
             .plugin_host(plugin_host.clone())
             .mdns_advertiser(mdns_advertiser.clone())
             .app_handle(None)
-            .sync_tx(sync_tx.clone())
             .resource_dir(Arc::new(PathBuf::from(".")))
             .system_info(system_info)
             .build_and_init();
 
-        // 与生产 lib.rs 同款：会话管理器/配置管理器接入事件总线
-
-        // 与生产同款：注册同步事件处理器（broadcast 消费侧）
         let ws_manager = WebSocketManager::global();
         ws_manager.init().await.expect("init WebSocketManager failed");
-        global_matcher()
-            .register_source::<HostSyncEvent>(sync_tx.clone())
-            .await;
-        // 票 09：处理器不再持有内核会话登记（构造只收广播器）
-        let sync_handler: Arc<dyn bedcode_lib::events::EventHandler<HostSyncEvent>> =
-            Arc::new(SyncEventHandler::new(ws_manager));
-        global_matcher().register::<HostSyncEvent>(sync_handler).await;
         let _ = INIT.set(());
     }
 }
 
-/// 建立 WS 连接：先建 TCP（记录本地地址 = 服务端看到的 peer addr，即
-/// registry 的 client_id），再升级为 WebSocket
-///
-/// `path` 指定路由：/ws/event（事件通道，广播接收方）。旧终端通道 /ws/terminal 已删除
+/// 建立 WS 连接：先建 TCP（记录本地地址 = 服务端看到的 peer addr），再升级为 WebSocket
 async fn connect_ws(port: u16, path: &str) -> (WsSend, WsRecv, std::net::SocketAddr) {
     let tcp = TcpStream::connect(("127.0.0.1", port))
         .await
@@ -225,26 +162,6 @@ async fn connect_ws(port: u16, path: &str) -> (WsSend, WsRecv, std::net::SocketA
         .expect("ws handshake failed");
     let (sink, stream) = ws.split();
     (sink, stream, local_addr)
-}
-
-/// 读取下一条业务消息（跳过 Ping/Pong），解析为协议 Message
-///
-/// 服务端心跳帧与业务帧可交错，必须跳过而非误判为响应
-async fn recv_message(stream: &mut WsRecv) -> Message {
-    loop {
-        let frame = tokio::time::timeout(Duration::from_secs(5), stream.next())
-            .await
-            .expect("timed out waiting for WS message")
-            .expect("WS stream closed unexpectedly")
-            .expect("WS frame error");
-        match frame {
-            WsMsg::Text(text) => {
-                return Message::from_json(&text).expect("server message must be valid protocol JSON");
-            }
-            WsMsg::Ping(_) | WsMsg::Pong(_) => continue,
-            _ => continue,
-        }
-    }
 }
 
 /// 轮询等待条件成立（25ms 间隔 + yield_now，5s 超时）
@@ -266,29 +183,14 @@ where
     }
 }
 
-/// 从注册表查找客户端条目
-async fn registry_entry(client_id: &str) -> Option<bedcode_lib::server::websocket::registry::ClientSummary> {
-    WsSessionRegistry::global()
-        .list_clients()
-        .await
-        .into_iter()
-        .find(|c| c.client_id == client_id)
-}
-
 /// HTTP 配对换取 JWT session_token（POST /api/auth/pairing → verify）
-///
-/// 旧 WS 配对（RequestPairing/VerifyCode）已随 /ws/terminal 兼容路由删除，
-/// 配对统一走 HTTP /api/auth/*；WS 首消息仅接受 JWT（Authenticated/Reauthenticate）
 async fn http_pair_and_get_token(port: u16, device_id: &str, device_name: &str, fingerprint: &str) -> String {
     let base = format!("http://127.0.0.1:{port}");
-    // 禁用连接池复用：Windows 环回下复用刚响应完的 keep-alive 连接偶发被
-    // 服务端提前关闭（10053 ConnectionAborted），导致后续请求随机夭折
     let client = reqwest::Client::builder()
         .pool_max_idle_per_host(0)
         .build()
         .expect("reqwest client build failed");
 
-    // 1) 请求配对码（HTTP DTO 为 camelCase，见认证中心插件 auth_http 域 `rename_all`）
     let resp: serde_json::Value = client
         .post(format!("{base}/api/auth/pairing"))
         .json(&serde_json::json!({
@@ -308,7 +210,6 @@ async fn http_pair_and_get_token(port: u16, device_id: &str, device_name: &str, 
         .to_string();
     assert!(!pairing_code.is_empty(), "pairing code must be non-empty");
 
-    // 2) 验证配对码 → JWT session_token
     let resp: serde_json::Value = client
         .post(format!("{base}/api/auth/verify"))
         .json(&serde_json::json!({
@@ -329,137 +230,16 @@ async fn http_pair_and_get_token(port: u16, device_id: &str, device_name: &str, 
         .expect("token missing in response")
         .to_string();
     assert!(!token.is_empty(), "session_token must be non-empty");
-
-    // 注意：JWT 重连路径从 token claims 恢复 device_name（HTTP verify 签发），
-    // 与移动端重连行为一致；广播排除语义依赖 device_name 正确携带
     token
 }
 
-/// 完整认证一个客户端（HTTP 配对 + JWT）：返回 session_token 供 WS 首消息认证
-///
-/// 客户端串行认证（每次请求配对都会轮换当前码，两个客户端必须先后完成）
-async fn pair_and_get_token(
-    port: u16,
-    device_id: &str,
-    device_name: &str,
-    fingerprint: &str,
-    _message_tag: &str,
-) -> String {
-    http_pair_and_get_token(port, device_id, device_name, fingerprint).await
-}
-
-/// 以 JWT session_token 重连认证（AuthStage::Authenticated 快速路径）
-///
-/// 服务端从 token claims 恢复 device_name/fingerprint 并写入 registry，
-/// 这是移动端持会话令牌重连的标准行为，也是广播排除语义的前提
-async fn authenticate_with_jwt(
-    sink: &mut WsSend,
-    stream: &mut WsRecv,
-    session_token: &str,
-    device_name: &str,
-    fingerprint: &str,
-    message_tag: &str,
-) {
-    let request = Message::Auth {
-        message_id: format!("itest-jwt-{message_tag}"),
-        expect_response: false,
-        timestamp: 0,
-        session_id: None,
-        token: String::new(),
-        payload: AuthPayload {
-            stage: AuthStage::Authenticated,
-            device_id: None,
-            device_name: Some(device_name.to_string()),
-            device_fingerprint: Some(fingerprint.to_string()),
-            session_token: Some(session_token.to_string()),
-            ..Default::default()
-        },
-    };
-    sink.send(WsMsg::Text(
-        request.to_json().expect("serialize jwt auth failed").into(),
-    ))
-    .await
-    .expect("send jwt auth failed");
-
-    let resp = recv_message(stream).await;
-    match resp {
-        Message::Auth { payload, .. } => {
-            assert_eq!(payload.stage, AuthStage::Authenticated, "JWT re-auth must succeed");
-            assert_eq!(
-                payload.device_name.as_deref(),
-                Some(device_name),
-                "JWT re-auth response must carry device_name from claims"
-            );
-        }
-        other => panic!("expected Auth(Authenticated) from JWT re-auth, got: {other:?}"),
-    }
-}
-
-/// 轮询等待流中出现满足条件的业务消息（5s 超时）
-///
-/// 服务端可能先于响应推送无关业务帧，等待目标消息时必须跳过，
-/// 不能假设下一帧就是响应
-async fn wait_for_message(stream: &mut WsRecv, is_match: impl FnMut(&Message) -> bool) -> Message {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let mut is_match = is_match;
-    loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        assert!(!remaining.is_zero(), "timed out waiting for matching WS message");
-        let frame = tokio::time::timeout(remaining, stream.next()).await;
-        match frame {
-            Ok(Some(Ok(WsMsg::Text(text)))) => {
-                let msg = Message::from_json(&text).expect("server message must be valid protocol JSON");
-                if is_match(&msg) {
-                    return msg;
-                }
-            }
-            Ok(Some(Ok(WsMsg::Ping(_))) | Some(Ok(WsMsg::Pong(_)))) => continue,
-            Ok(Some(Ok(_))) => continue,
-            Ok(Some(Err(e))) => panic!("WS error while waiting for message: {e}"),
-            Ok(None) => panic!("WS stream closed while waiting for message"),
-            Err(_) => panic!("timed out waiting for matching WS message"),
-        }
-    }
-}
-
-/// 轮询等待流中出现满足条件的 SyncData 消息（5s 超时，心跳帧自动跳过）
-///
-/// 广播经 SyncEventHandler 的 tokio::spawn 异步执行，必须轮询而非假定时序；
-/// 期间可能出现其他业务帧（认证响应已被消费，此处只关注 SyncData）
-/// 断言时间窗内不出现任何 SyncData 消息
-///
-/// 用于"发送端不收到"排除语义验证：广播若错误送达会以 Text 帧出现，
-/// 心跳控制帧不算；窗口内无帧或仅控制帧即通过
-async fn assert_no_sync_data(stream: &mut WsRecv, window: Duration, ctx: &str) {
-    let deadline = Instant::now() + window;
-    loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return;
-        }
-        let frame = tokio::time::timeout(remaining, stream.next()).await;
-        match frame {
-            Ok(Some(Ok(WsMsg::Text(text)))) => {
-                if let Ok(Message::SyncData { .. }) = Message::from_json(&text) {
-                    panic!("{ctx}: client must NOT receive sync broadcast, got: {text}");
-                }
-            }
-            Ok(Some(Ok(WsMsg::Ping(_))) | Some(Ok(WsMsg::Pong(_)))) => continue,
-            Ok(Some(Ok(_))) => continue,
-            Ok(Some(Err(e))) => panic!("WS error while asserting no sync data: {e}"),
-            Ok(None) => panic!("{ctx}: stream closed unexpectedly"),
-            Err(_) => return,
-        }
-    }
-}
-
-/// 轮询等待流中出现 SyncData 广播（5s 超时）
-///
-/// 广播经 SyncEventHandler 的 tokio::spawn 异步执行，必须轮询而非假定时序
-async fn wait_for_sync_data(stream: &mut WsRecv, ctx: &str) -> Message {
-    let msg = wait_for_message(stream, |m| matches!(m, Message::SyncData { .. })).await;
-    assert!(matches!(msg, Message::SyncData { .. }), "{ctx}: expected SyncData");
-    msg
+/// 插件端点首消息 JWT 认证（`{"type":"auth","token":...}`）
+async fn authenticate_endpoint(sink: &mut WsSend, stream: &mut WsRecv, token: &str) {
+    sink.send(WsMsg::Text(format!(r#"{{"type":"auth","token":"{token}"}}"#).into()))
+        .await
+        .expect("send auth frame failed");
+    // 端点协议不定义 auth_ok 回帧：调用方随后直接发业务帧即可验证认证生效
+    let _ = stream;
 }
 
 /// 显式关闭 WS 连接（Close 帧让服务端 actor 走 stopping() 注销注册表）
@@ -470,13 +250,10 @@ async fn close_ws(sink: &mut WsSend, stream: &mut WsRecv) {
 }
 
 #[tokio::test]
-async fn broadcast_and_shutdown_flow() {
-    // 测试日志输出到 harness（失败时可查链路）+ ERROR 级计数（场景 4 判据）
+async fn connection_cleanup_and_shutdown_flow() {
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
     let subscriber = tracing_subscriber::registry()
-        // 全局级别上限 DEBUG：wasmtime/cranelift 的 TRACE 逐指令编译日志
-        // 会撑爆 stdout 捕获缓冲（2026-09-23 实测 2.2GB+，见交接文档）
         .with(tracing_subscriber::filter::LevelFilter::DEBUG)
         .with(tracing_subscriber::fmt::layer().with_test_writer())
         .with(ErrorCounter);
@@ -484,47 +261,21 @@ async fn broadcast_and_shutdown_flow() {
         tracing::debug!("tracing subscriber already initialized");
     }
 
-    // AppContext 必须先于任何 WS 连接初始化：actor 的 stopping()/认证 handler
-    // 都会调用 AppContext::global()（未初始化即 panic）；sync 事件链路同步就位
     init_test_app_context().await;
 
     let port = pick_free_port();
     let (handle, server_task) = spawn_test_server(port).await.expect("test server must start");
 
-    // ==================== 场景 1：两客户端认证 + WS 驱动广播 + 排除发送者 ====================
-    // A（发送端）与 B（接收端）先配对拿 token，再 JWT 重连认证（重连路径
-    // 正确携带 device_name，广播排除语义才生效，见 pair_and_get_token 注释）；
-    // A 发 SessionControl::RemoveSession 触发服务端广播：B 收到
-    // SyncData(SessionRemoved)，A 只收 echo 不收广播
-
-    let token_a = pair_and_get_token(port, "itest-device-a-04", "ITest A-04", "fp-itest-a-04", "a-04").await;
-    // A 现也走事件通道（旧 /ws/terminal 终端通道已删除）；发送端排除语义
-    // 由源地址判定，与通道类型无关
-    let (mut sink_a, mut stream_a, addr_a) = connect_ws(port, "/ws/event").await;
+    // ==================== 场景 1：两客户端接入插件端点并认证 ====================
+    let token_a = http_pair_and_get_token(port, "itest-device-a-04", "ITest A-04", "fp-itest-a-04").await;
+    let (mut sink_a, mut stream_a, addr_a) = connect_ws(port, SESSION_CONTROL_PATH).await;
     let client_id_a = addr_a.to_string();
-    authenticate_with_jwt(
-        &mut sink_a,
-        &mut stream_a,
-        &token_a,
-        "ITest A-04",
-        "fp-itest-a-04",
-        "a-04",
-    )
-    .await;
+    authenticate_endpoint(&mut sink_a, &mut stream_a, &token_a).await;
 
-    let token_b = pair_and_get_token(port, "itest-device-b-04", "ITest B-04", "fp-itest-b-04", "b-04").await;
-    // B 连接事件通道（/ws/event）：广播接收方必须是 Event 通道（ticket 02 语义）
-    let (mut sink_b, mut stream_b, addr_b) = connect_ws(port, "/ws/event").await;
+    let token_b = http_pair_and_get_token(port, "itest-device-b-04", "ITest B-04", "fp-itest-b-04").await;
+    let (mut sink_b, mut stream_b, addr_b) = connect_ws(port, SESSION_CONTROL_PATH).await;
     let client_id_b = addr_b.to_string();
-    authenticate_with_jwt(
-        &mut sink_b,
-        &mut stream_b,
-        &token_b,
-        "ITest B-04",
-        "fp-itest-b-04",
-        "b-04",
-    )
-    .await;
+    authenticate_endpoint(&mut sink_b, &mut stream_b, &token_b).await;
 
     // registry 更新经 actix::spawn 异步落地，轮询等待两个客户端都就位
     assert!(
@@ -542,55 +293,30 @@ async fn broadcast_and_shutdown_flow() {
         "both authenticated clients must appear in WsSessionRegistry"
     );
 
-    // 1a. A 发送 RemoveSession（对不存在会话无副作用，仅触发广播链路）
-    let ghost_session_1 = "itest-ghost-04-1";
-    let control = Message::session_control_with_response(
-        SessionControlAction::RemoveSession {
-            session_id: ghost_session_1.to_string(),
-        },
-        None,
-    );
-    let control_id = control.message_id().expect("control message must carry id").to_string();
+    // 认证后业务帧可达（JWT 认证即凭证，免 token 复验）
     sink_a
-        .send(WsMsg::Text(control.to_json().expect("serialize control failed").into()))
+        .send(WsMsg::Text(r#"{"type":"list_sessions"}"#.into()))
         .await
-        .expect("send session_control failed");
-
-    // 1b. A 收到 echo 响应（message_id 回显 + 会话 ID 回显）；
-    // 跳过认证后补发的文件服务快照等无关推送
-    let resp = wait_for_message(&mut stream_a, |m| matches!(m, Message::SessionControl { .. })).await;
-    match resp {
-        Message::SessionControl {
-            message_id, payload, ..
-        } => {
-            assert_eq!(message_id, control_id, "echo must carry original message_id");
-            match payload.action {
-                SessionControlAction::RemoveSession { session_id } => {
-                    assert_eq!(session_id, ghost_session_1, "echo must carry removed session id");
+        .expect("send list_sessions failed");
+    let reply = loop {
+        let frame = tokio::time::timeout(Duration::from_secs(5), stream_a.next())
+            .await
+            .expect("timed out waiting for reply")
+            .expect("ws stream closed")
+            .expect("ws frame error");
+        match frame {
+            WsMsg::Text(text) => {
+                let v: serde_json::Value = serde_json::from_str(&text).expect("reply json");
+                if v["type"] == "session_list" {
+                    break v;
                 }
-                other => panic!("expected RemoveSession echo, got: {other:?}"),
             }
+            WsMsg::Ping(_) | WsMsg::Pong(_) | WsMsg::Binary(_) | _ => continue,
         }
-        other => panic!("expected SessionControl echo, got: {other:?}"),
-    }
+    };
+    assert_eq!(reply["sessions"], serde_json::json!([]), "空登记域回包形状");
 
-    // 1c. B 经事件通道收到 SyncData 广播（ticket 02 正式语义：广播只投递
-    // Event 通道；接收方 B 连接 /ws/event，与过渡期断言反转的对应恢复）
-    let sync = wait_for_sync_data(&mut stream_b, "event channel must receive sync broadcast").await;
-    match sync {
-        Message::SyncData { payload, .. } => match payload {
-            SyncPayload::SessionRemoved { session_id, .. } => {
-                assert_eq!(session_id, ghost_session_1, "broadcast must carry removed session id");
-            }
-            other => panic!("expected SessionRemoved sync payload, got: {other:?}"),
-        },
-        other => panic!("expected SyncData, got: {other:?}"),
-    }
-
-    // 1d. 排除语义：A（发送端）在广播发出后不应收到 SyncData
-    assert_no_sync_data(&mut stream_a, Duration::from_millis(500), "sender exclusion").await;
-
-    // ==================== 场景 2：断开 B 后广播不再送达 B（注册表清理生效） ====================
+    // ==================== 场景 2：断开 B → 注册表摘除 + 定向发送显性失败 ====================
 
     close_ws(&mut sink_b, &mut stream_b).await;
     drop(sink_b);
@@ -598,57 +324,24 @@ async fn broadcast_and_shutdown_flow() {
 
     // 注销经 actor stopping() 异步落地，轮询等待注册表移除 B
     assert!(
-        wait_until(|| async { registry_entry(&client_id_b).await.is_none() }).await,
+        wait_until(|| async {
+            WsSessionRegistry::global()
+                .list_clients()
+                .await
+                .into_iter()
+                .all(|c| c.client_id != client_id_b)
+        })
+        .await,
         "disconnected client must be unregistered from WsSessionRegistry"
     );
 
-    // 2a. 注册表层断言：直接向 B 的 client_id 发送必须失败（条目已清理）
+    // 注册表层断言：向已摘除 client_id 的定向发送必须失败（条目已清理，fail-visible）
     let direct_send = WsSessionRegistry::global()
         .send_to_client(&client_id_b, "probe-after-disconnect".to_string())
         .await;
     assert!(
         direct_send.is_err(),
         "send to disconnected client must fail after registry cleanup, got: {direct_send:?}"
-    );
-
-    // 2b. A 再次触发排除语义广播（此时除 A 外无其他已认证客户端 → 无送达目标）
-    let ghost_session_2 = "itest-ghost-04-2";
-    let control = Message::session_control_with_response(
-        SessionControlAction::RemoveSession {
-            session_id: ghost_session_2.to_string(),
-        },
-        None,
-    );
-    let control_id = control.message_id().expect("control message must carry id").to_string();
-    sink_a
-        .send(WsMsg::Text(control.to_json().expect("serialize control failed").into()))
-        .await
-        .expect("send session_control failed");
-    let resp = wait_for_message(&mut stream_a, |m| matches!(m, Message::SessionControl { .. })).await;
-    assert!(
-        matches!(resp, Message::SessionControl { message_id, .. } if message_id == control_id),
-        "A must still get echo after B disconnected"
-    );
-    assert_no_sync_data(&mut stream_a, Duration::from_millis(500), "no broadcast target").await;
-
-    // 2c. 全员广播（WebSocketManager::broadcast）到达全部事件通道：A 现为
-    // /ws/event 通道（旧 /ws/terminal 已删除，终端通道不再存在）→ A 应收到。
-    // 旧“终端通道对广播不设投递”语义随兼容路由下线而废弃
-    let ctrl = Message::sync_data(SyncPayload::SessionModeChanged {
-        session_id: "itest-ctrl-04".to_string(),
-        auto_approve: true,
-    });
-    WebSocketManager::global()
-        .broadcast(&ctrl)
-        .await
-        .expect("full broadcast must succeed");
-    let sync = wait_for_sync_data(&mut stream_a, "event channel must receive full broadcast").await;
-    assert!(
-        matches!(
-            sync,
-            Message::SyncData { payload: SyncPayload::SessionModeChanged { session_id, .. }, .. } if session_id == "itest-ctrl-04"
-        ),
-        "full broadcast must reach the remaining event client (A)"
     );
 
     // ==================== 场景 3：停机后新连接被拒 + 端口释放 ====================
@@ -667,9 +360,8 @@ async fn broadcast_and_shutdown_flow() {
         .expect("server must exit Ok after graceful stop");
 
     // 3a. 新连接被拒：connect 最终失败且错误为 ConnectionRefused。
-    // Windows TCP 栈对刚关闭的监听端口需要约 2s 才返回 RST（SYN 重传行为，
-    // 实测普通 Python socket 关闭后 connect 同样挂 2s 才拒绝），故超时放宽到
-    // 10s——断言核心是连接最终被拒而非无限挂起，"立即失败"在 Windows 不成立
+    // Windows TCP 栈对刚关闭的监听端口需要约 2s 才返回 RST（SYN 重传行为），
+    // 故超时放宽到 10s——断言核心是连接最终被拒而非无限挂起
     let refused = tokio::time::timeout(Duration::from_secs(10), TcpStream::connect(("127.0.0.1", port))).await;
     match refused {
         Ok(Err(e)) => assert_eq!(
@@ -697,8 +389,7 @@ async fn broadcast_and_shutdown_flow() {
     );
     assert_eq!(WsSessionRegistry::global().client_count().await, 0);
 
-    // 4b. 防御性清理路径：模拟生产 WebSocketManager::stop 的防御分支
-    // （残留时 warn + unsubscribe + clear_all），验证幂等不报错
+    // 4b. 防御性清理路径：模拟生产 WebSocketManager::stop 的防御分支，验证幂等不报错
     WsSessionRegistry::global().clear_all().await;
     assert_eq!(WsSessionRegistry::global().client_count().await, 0);
 
@@ -706,7 +397,7 @@ async fn broadcast_and_shutdown_flow() {
     assert_eq!(
         ERROR_COUNT.load(Ordering::SeqCst),
         0,
-        "no error-level logs are allowed during broadcast & shutdown flow"
+        "no error-level logs are allowed during cleanup & shutdown flow"
     );
 
     // 清理临时用户插件目录（随包产物目录 resources/plugins/desktop 不得触碰）

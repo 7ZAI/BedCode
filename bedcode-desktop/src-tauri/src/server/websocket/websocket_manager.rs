@@ -2,29 +2,22 @@
 //!
 //! 单例模式的服务器管理器
 //! 使用 Actix Web 提供 HTTP REST API + WebSocket 终端
-//! 客户端跟踪和消息广播通过 WsSessionRegistry 实现
+//! 连接跟踪和按端点消息转发通过 WsSessionRegistry 实现
+//!
+//! 终态（websocket 业务下沉票 08）：宿主业务 `Message` 发送/广播 API 已随
+//! `/ws/event` 与 `/ws/terminal/session/{id}` 删除——本类只负责服务器生命周期
+//! （启动 / 优雅停机 / 事件订阅）与连接事实清单（`list_clients` / `client_count`，
+//! 供 host-connection 原语与停机守卫使用）。插件的帧收发走
+//! `host-websocket` 原语直连 `WsSessionRegistry`，不经本类。
 //!
 //! 服务依赖通过 AppContext::global() 获取，不再重复存储
 
-use crate::server::websocket::message::Message as BusinessMessage;
-use crate::server::websocket::registry::WsSessionRegistry;
+use crate::server::websocket::registry::{ClientSummary, WsSessionRegistry};
 use crate::system::constants::WS_EVENT_BROADCAST_CAPACITY;
 use crate::system::error::AppError;
 use crate::Result;
-use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-
-/// 客户端摘要（对外暴露的信息）
-#[derive(Debug, Clone)]
-pub struct ClientSummary {
-    pub client_id: String,
-    pub device_name: Option<String>,
-    pub fingerprint: Option<String>,
-    pub addr: String,
-    pub authenticated: bool,
-    pub connected_at: i64,
-}
 
 /// WebSocket 管理器内部状态
 struct WsManagerInner {
@@ -176,7 +169,7 @@ impl WebSocketManager {
     /// 停止服务器
     ///
     /// 调用 `ServerHandle::stop(true)` 优雅停机，等待所有 WS actor 的 stopping() 回调完成
-    /// actor stopping() 中已负责 unregister + unsubscribe，此处仅做防御性清理残留
+    /// actor stopping() 中已负责 unregister，此处仅做防御性清理残留
     pub async fn stop(&self) -> Result<()> {
         // 插件端点客户端：优雅停机前统一下发 Close(1001)（spec §4.5 停机关闭码）。
         // 此刻 actor 仍在运行 → 消息送达 → 通道层照常上报 client-disconnect
@@ -201,9 +194,7 @@ impl WebSocketManager {
             }
         }
 
-        // 防御性清理：actor stopping() 应已清理，此处处理异常残留。
-        // 票 11：订阅侧无需再逐客户端退订——引擎订阅句柄是**连接私有**的
-        // （`SubscriptionState::cleanup` 在连接 actor 内退休），此处只清注册表
+        // 防御性清理：actor stopping() 应已清理，此处处理异常残留
         let clients = registry.list_clients().await;
         if !clients.is_empty() {
             tracing::warn!(
@@ -231,137 +222,19 @@ impl WebSocketManager {
     }
 
     pub fn port(&self) -> Option<u16> {
-        self.inner.port.blocking_read().clone()
+        *self.inner.port.blocking_read()
     }
 
-    // ==================== Client Management APIs ====================
+    // ==================== Client Facts（连接注册表原始连接事实） ====================
 
-    /// 获取所有已连接客户端列表
+    /// 获取所有已连接客户端摘要（host-connection 原语的宿主入口）
     pub async fn list_clients(&self) -> Vec<ClientSummary> {
-        let registry = WsSessionRegistry::global();
-        let summaries = registry.list_clients().await;
-        summaries
-            .into_iter()
-            .map(|s| ClientSummary {
-                client_id: s.client_id,
-                device_name: s.device_name,
-                fingerprint: s.fingerprint,
-                addr: s.addr,
-                authenticated: s.authenticated,
-                connected_at: s.connected_at,
-            })
-            .collect()
+        WsSessionRegistry::global().list_clients().await
     }
 
-    /// 获取已认证客户端列表
-    pub async fn list_authenticated_clients(&self) -> Vec<ClientSummary> {
-        self.list_clients()
-            .await
-            .into_iter()
-            .filter(|c| c.authenticated)
-            .collect()
-    }
-
-    /// 获取指定客户端信息（通过 client_id）
-    pub async fn get_client(&self, client_id: &str) -> Option<ClientSummary> {
-        let registry = WsSessionRegistry::global();
-        registry.get_client(client_id).await.map(|s| ClientSummary {
-            client_id: s.client_id,
-            device_name: s.device_name,
-            fingerprint: s.fingerprint,
-            addr: s.addr,
-            authenticated: s.authenticated,
-            connected_at: s.connected_at,
-        })
-    }
-
-    /// 获取指定客户端信息（通过 SocketAddr）
-    pub async fn get_client_by_addr(&self, addr: &SocketAddr) -> Option<ClientSummary> {
-        let registry = WsSessionRegistry::global();
-        registry.get_client_by_addr(addr).await.map(|s| ClientSummary {
-            client_id: s.client_id,
-            device_name: s.device_name,
-            fingerprint: s.fingerprint,
-            addr: s.addr,
-            authenticated: s.authenticated,
-            connected_at: s.connected_at,
-        })
-    }
-
-    /// 获取客户端数量
+    /// 获取客户端数量（关窗守卫 / 诊断）
     pub async fn client_count(&self) -> usize {
         WsSessionRegistry::global().client_count().await
-    }
-
-    /// 获取已认证客户端数量
-    pub async fn authenticated_count(&self) -> usize {
-        WsSessionRegistry::global().authenticated_count().await
-    }
-
-    // ==================== Message Sending APIs ====================
-
-    /// 向指定客户端发送消息（通过 client_id）
-    pub async fn send_to_client(&self, client_id: &str, message: &BusinessMessage) -> Result<()> {
-        let json = message.to_json()?;
-        WsSessionRegistry::global()
-            .send_to_client(client_id, json)
-            .await
-            .map_err(AppError::WebSocket)
-    }
-
-    /// 向指定客户端发送文本（通过 client_id）
-    pub async fn send_text_to_client(&self, client_id: &str, text: &str) -> Result<()> {
-        WsSessionRegistry::global()
-            .send_to_client(client_id, text.to_string())
-            .await
-            .map_err(AppError::WebSocket)
-    }
-
-    /// 向指定客户端发送消息（通过 SocketAddr）
-    pub async fn send_to_addr(&self, addr: &SocketAddr, message: &BusinessMessage) -> Result<()> {
-        let json = message.to_json()?;
-        WsSessionRegistry::global()
-            .send_to_addr(addr, json)
-            .await
-            .map_err(AppError::WebSocket)
-    }
-
-    /// 向多个指定客户端发送消息
-    pub async fn send_to_clients(&self, client_ids: &[&str], message: &BusinessMessage) -> Result<()> {
-        for client_id in client_ids {
-            let _ = self.send_to_client(client_id, message).await;
-        }
-        Ok(())
-    }
-
-    /// 向除指定客户端外的所有客户端广播
-    pub async fn broadcast_to_others(&self, exclude_client_id: &str, message: &BusinessMessage) -> Result<()> {
-        let json = message.to_json()?;
-        let registry = WsSessionRegistry::global();
-        let device_name = registry.get_device_name(exclude_client_id).await;
-        registry.broadcast(json, device_name.as_deref()).await;
-        Ok(())
-    }
-
-    /// 向所有已认证客户端广播
-    pub async fn broadcast(&self, message: &BusinessMessage) -> Result<()> {
-        let json = message.to_json()?;
-        WsSessionRegistry::global().broadcast(json, None).await;
-        Ok(())
-    }
-
-    /// 向所有客户端广播（包含未认证）
-    pub async fn broadcast_all(&self, message: &BusinessMessage) -> Result<()> {
-        self.broadcast(message).await
-    }
-
-    /// 向除指定设备外的所有已认证客户端广播（基于设备名称）
-    pub async fn broadcast_sync_to_others(&self, exclude_device_name: &str, message: &BusinessMessage) -> Result<()> {
-        let json = message.to_json()?;
-        WsSessionRegistry::global()
-            .broadcast(json, Some(exclude_device_name))
-            .await;
-        Ok(())
     }
 
     // ==================== Event Subscription ====================
@@ -369,52 +242,6 @@ impl WebSocketManager {
     /// 订阅服务器事件
     pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<ServerEvent> {
         self.inner.event_tx.subscribe()
-    }
-
-    // ==================== Helper Methods ====================
-
-    /// 设置设备名称
-    pub async fn set_device_name(&self, addr: &SocketAddr, device_name: Option<String>) {
-        if let Some(name) = device_name {
-            let registry = WsSessionRegistry::global();
-            if let Some(summary) = registry.get_client_by_addr(addr).await {
-                registry.set_device_name(&summary.client_id, Some(name)).await;
-            }
-        }
-    }
-
-    /// 获取设备名称（通过地址）
-    pub async fn get_device_name_by_addr(&self, addr: &SocketAddr) -> Option<String> {
-        WsSessionRegistry::global().get_device_name_by_addr(addr).await
-    }
-
-    /// 更新客户端认证状态
-    pub async fn set_authenticated(&self, _addr: &SocketAddr, client_id: Option<String>, fingerprint: Option<String>) {
-        // WsConnBase（WS 连接骨架）认证时已通过 WsSessionRegistry 更新
-        // 此方法保留用于 auth_service 等外部调用者的兼容性（无 subject 上下文）
-        if let Some(cid) = client_id {
-            let registry = WsSessionRegistry::global();
-            let current_name = registry.get_device_name(&cid).await;
-            registry.set_authenticated(&cid, None, current_name, fingerprint).await;
-        }
-    }
-
-    /// 客户端是否已认证
-    pub async fn is_client_authenticated(&self, client_id: &str) -> bool {
-        WsSessionRegistry::global().is_authenticated(client_id).await
-    }
-
-    /// 清理客户端连接数据
-    pub async fn cleanup_client_by_addr(&self, addr: SocketAddr) {
-        let registry = WsSessionRegistry::global();
-
-        if let Some(client_id) = registry.unregister_by_addr(&addr).await {
-            // 票 11：订阅随连接 actor 自身退休（引擎句柄连接私有），此处只摘注册表
-            tracing::info!(
-                "[WebSocketManager] Cleaned up client registration and its subscriptions: {}",
-                client_id
-            );
-        }
     }
 }
 

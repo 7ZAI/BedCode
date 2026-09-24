@@ -61,7 +61,7 @@ describe('C1 插件身份五处一致', () => {
     expect(cargoToml).toContain('crate-type = ["cdylib"]')
   })
 
-  it('票 05/08/09/10/11 + 票 15/16/17 + 票 02 + 认证记录下沉：八域廿七项 api + auth/peer/storage/session:*/terminal:*/ui:* 权限', () => {
+  it('票 05/08/09/10/11 + 票 15/16/17 + 票 02 + 认证记录下沉：八域廿八项 api + auth/peer/storage/session:*/terminal:*/ui:* 权限', () => {
     // 权限清单与 D2 能力映射一一对应：auth = host-auth（密钥托管 + 认证记录面）、
     // peer = host-peer（consent 取可信集 / trust 的 peer 段）、
     // storage = host-plugin-database（票 08 配置真源私有库）、
@@ -153,6 +153,9 @@ describe('C1 插件身份五处一致', () => {
       // （提交行重建 + host-pty.write；special 标记直写绕过重建）
       'com.bedcode.terminal-session.session-close',
       'com.bedcode.terminal-session.session-input',
+      // 票 08（websocket 业务下沉）：一次性历史快照（宿主不再直读会话输出环，
+      // HTTP /api/sessions/{id}/history 改经本互调——插件用自己的 pty_id 调 ring-fetch）
+      'com.bedcode.terminal-session.session-history',
       // 票 09b：WS 会话控制词表分派（宿主 /ws/event SessionControl 的声明式路由接线）
       'com.bedcode.terminal-session.session-ws-control',
     ])

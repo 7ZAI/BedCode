@@ -88,10 +88,8 @@ pub const IP_LOOPBACK_PREFIX: &str = "127.";
 /// IPv4 链路本地地址前缀（用于过滤非外部 IP）
 pub const IP_LINK_LOCAL_PREFIX: &str = "169.254.";
 
-/// 同步事件广播容量
-///
-/// 用于 HostSyncEvent 的 broadcast channel
-pub const SYNC_EVENT_BROADCAST_CAPACITY: usize = 64;
+// 同步事件广播容量 `SYNC_EVENT_BROADCAST_CAPACITY` 常量已随 websocket 业务下沉票 08 删除：
+// 宿主不再持有 `HostSyncEvent` 同步广播通道（插件事件改 bus+emit，见票 05/06）
 
 // ==================== 插件系统 ====================
 
@@ -306,8 +304,8 @@ pub const PLUGIN_TASK_STATUS_RESULTS_MAX: usize = 64;
 /// 默认服务器端口
 pub const DEFAULT_SERVER_PORT: u16 = 8765;
 
-/// WebSocket 事件通道路径（常驻，设备在线判定基准 + 同步广播接收方）
-pub const WS_EVENT_PATH: &str = "/ws/event";
+// WebSocket 事件通道路径 `WS_EVENT_PATH` 常量已随 websocket 业务下沉票 08 删除：
+// `/ws/event` 业务路由退役，宿主只留 `/ws/plugin/{plugin_id}/{path}` 通用插件端点（routes.rs 内联）
 
 /// 健康检查 API 路径
 pub const API_HEALTH_PATH: &str = "/api/health";

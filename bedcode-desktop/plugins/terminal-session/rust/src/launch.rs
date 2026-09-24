@@ -776,10 +776,9 @@ pub fn spawn_session(
     if let Some(rows) = spec.rows {
         builder = builder.rows(rows);
     }
-    // 宿主广播声明（会话语义下沉票 05）：本会话输出允许宿主 server 只读订阅——
-    // 「业务会话也是插件 PTY，能不能被宿主读走由插件决定」的落地。宿主据此登记
-    // 「会话 id → pty 句柄」只读映射；移动端输出面（票 06）经它直读同进程环。
-    builder = builder.host_broadcast_session_id(session_id);
+    // 宿主广播声明已随 websocket 业务下沉票 08 退役（`hostBroadcastSessionId` 删除）：
+    // PTY 引擎不再知道 session id，会话输出只经本插件 `ring-fetch` 自持游标拉取
+    // （含 WS terminal 端点与 HTTP history 互调），宿主不再直读会话输出环
     let pty_id = WasmHost
         .pty_spawn(&builder.to_json())
         .map_err(|e| format!("host-pty.spawn failed: {}", e.message))?;

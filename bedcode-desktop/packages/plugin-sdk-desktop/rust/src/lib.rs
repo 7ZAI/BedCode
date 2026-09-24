@@ -66,7 +66,7 @@ pub use wasm::bedcode;
 pub use args::CommandArgs;
 pub use command::{PluginCommand, PluginCommandEntry};
 pub use context::RustPluginContext;
-pub use events::{PluginQuestion, PluginQuestionOption, SyncEvent};
+pub use events::{PluginQuestion, PluginQuestionOption};
 pub use host::{ConfigKey, HostApi, HostError};
 pub use permission::PermissionManager;
 pub use terminal::TerminalHandler;

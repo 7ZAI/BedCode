@@ -1053,7 +1053,7 @@ fn max_message_bytes() -> usize {
 mod tests {
     use super::*;
     use crate::server::websocket::conn::WsConnBase;
-    use crate::server::websocket::registry::{ChannelKind, WsRegistration};
+    use crate::server::websocket::registry::WsRegistration;
     use crate::wasm_core::host_api::tests::{build_host_ctx, grant_permissions};
 
     /// 唯一插件 id（静态表按 id 隔离，并行用例互不干扰）
@@ -1702,7 +1702,7 @@ mod tests {
             crate::server::websocket::conn::ConnSpec {
                 owner: Some(owner.to_string()),
                 endpoint_id: Some(endpoint_id.to_string()),
-                ..crate::server::websocket::conn::ConnSpec::new(actor_ctx_addr, ChannelKind::Plugin)
+                ..crate::server::websocket::conn::ConnSpec::new(actor_ctx_addr)
             },
             Box::new(StubWsChannel),
         );
@@ -1715,7 +1715,6 @@ mod tests {
                 client_id: client_id.clone(),
                 socket_addr: addr,
                 actor_addr,
-                channel_kind: ChannelKind::Plugin,
                 owner: Some(owner.to_string()),
                 endpoint_id: Some(endpoint_id.to_string()),
             })

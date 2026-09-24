@@ -261,8 +261,11 @@ pub async fn send_session_input(path: web::Path<String>, body: web::Json<Session
 pub async fn get_session_history(path: web::Path<String>, query: web::Query<SessionHistoryQuery>) -> HttpResponse {
     let session_id = path.into_inner();
     let from = query.from.unwrap_or(0);
-    match crate::utils::session_gateway::history_snapshot(&session_id, from).await {
-        Some((data, min_offset, snapshot_offset, history_bytes)) => {
+    let ctx = AppContext::global();
+    // websocket 业务下沉票 08：历史快照经插件 `session-history` 互调（宿主不再
+    // 直读会话输出环）；插件未激活 / 会话不存在显性报错，不静默当「无数据」
+    match crate::utils::session_gateway::history_snapshot(ctx.plugin_host().wasm_host_ctx(), &session_id, from).await {
+        Ok((data, min_offset, snapshot_offset, history_bytes)) => {
             // 链路调试（终端字节对账）：移动端缓存头被淘汰时经此接口增量补历史，
             // 字节三件套与移动端 terminal_get_history 日志对照
             tracing::debug!(
@@ -282,9 +285,9 @@ pub async fn get_session_history(path: web::Path<String>, query: web::Query<Sess
             };
             HttpResponse::Ok().json(ApiResponse::ok_with_data(response))
         }
-        None => {
-            tracing::debug!(session_id = %session_id, "history fetch for unknown session");
-            HttpResponse::Ok().json(ApiResponse::<()>::error(1002, "Session not found"))
+        Err(e) => {
+            tracing::debug!(session_id = %session_id, error = %e, "history fetch failed (plugin surface)");
+            HttpResponse::Ok().json(ApiResponse::<()>::error(1002, &e.to_string()))
         }
     }
 }

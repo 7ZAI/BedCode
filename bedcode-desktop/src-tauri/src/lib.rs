@@ -6,7 +6,6 @@ pub mod commands;
 pub mod crypto;
 pub mod db;
 pub mod enums;
-pub mod events;
 pub mod mdns;
 pub mod process;
 pub mod protocol;
@@ -20,7 +19,6 @@ pub mod wasm_core;
 
 use crate::server::peer_net;
 use commands::RunningSessionInfo;
-use system::constants::SYNC_EVENT_BROADCAST_CAPACITY;
 pub use system::{AppConfig, AppContext, AppError, Result};
 
 // ==================== Application Setup ====================
@@ -420,18 +418,16 @@ pub fn run() {
             tauri::async_runtime::block_on(plugin_host.init_message_bus());
             let mdns_advertiser = Arc::new(tokio::sync::RwLock::new(mdns::advertiser::MdnsAdvertiser::new()));
 
-            // 创建同步事件通道（插件事件经 HostSyncEvent 薄适配进入统一 publish 入口）
-            let (sync_tx, _) =
-                tokio::sync::broadcast::channel::<events::HostSyncEvent>(SYNC_EVENT_BROADCAST_CAPACITY);
+            // 终端同步事件通道已随 websocket 业务下沉票 08 删除（插件事件改 bus+emit，
+            // 宿主不再持有 HostSyncEvent / broadcast-sync 广播面）
 
             // ==================== 注册到 AppContext 全局容器 ====================
 
-            let ctx = system::app_context::AppContextBuilder::new()
+            let _ctx = system::app_context::AppContextBuilder::new()
                 .db(db.clone())
                 .plugin_host(plugin_host.clone())
                 .mdns_advertiser(mdns_advertiser.clone())
                 .app_handle(Some(app_handle_arc.clone()))
-                .sync_tx(sync_tx.clone())
                 .resource_dir(resource_dir_arc.clone())
                 .system_info(system_info.clone())
                 .build_and_init();
@@ -479,22 +475,8 @@ pub fn run() {
 
                 supervisor.init_config(ws_port_for_spawn, auto_start).await;
 
-                // 注册同步事件处理器
-                use crate::events::global_matcher;
-                use crate::events::{HostSyncEvent, SyncEventHandler};
-
                 let ws_manager = crate::server::websocket::WebSocketManager::global();
                 ws_manager.init().await.expect("Failed to initialize WebSocketManager");
-
-                // 注册事件源（`events::publish` 的统一入口按类型查这张表）
-                global_matcher()
-                    .register_source::<HostSyncEvent>(ctx.sync_tx().clone())
-                    .await;
-
-                // 注册处理器（票 03：处理器只剩折载荷 + 排除源设备 + 广播，无会话变体分支）
-                let sync_handler = Arc::new(SyncEventHandler::new(ws_manager));
-                global_matcher().register::<HostSyncEvent>(sync_handler).await;
-                tracing::info!("[BedCode] SyncEventHandler registered");
 
                 if auto_start {
                     tracing::info!("[BedCode] Auto-starting server on port {}", ws_port_for_spawn);

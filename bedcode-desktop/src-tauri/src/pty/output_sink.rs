@@ -4,9 +4,9 @@
 //! **投递到哪里由调用方注入**：
 //!
 //! - **引擎环（票 11 起唯一形态）→ `PtyRingSink`**（`pty_ring` 的配对输出汇）：
-//!   输出落进本句柄的 `PtyRing`，宿主按游标应答 `host-pty.output-ring-fetch`；
-//!   插件私有 PTY 与业务会话共用同一实现（业务会话也是引擎句柄，区别只在
-//!   是否声明 `hostBroadcastSessionId` 供宿主直读）
+//!   输出落进本句柄的 `PtyRing`，宿主按游标应答 `host-pty.ring-fetch`；
+//!   插件私有 PTY 与业务会话共用同一实现（业务会话也是引擎句柄，输出读取归插件
+//!   `ring-fetch`，websocket 业务下沉票 08 起宿主不再直读会话输出环）
 //! - 调用方自备（测试 / 特殊用途）→ 任意 `PtyOutputSink` 实现（测试替身
 //!   `CollectingSink` 即这一形态）
 //!

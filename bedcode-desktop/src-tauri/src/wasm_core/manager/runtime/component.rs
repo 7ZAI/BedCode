@@ -410,16 +410,10 @@ impl bedcode::plugin::host_timer::Host for WasmPluginState {
 }
 
 impl bedcode::plugin::host_events::Host for WasmPluginState {
-    // WIT 中 emit/broadcast-sync 无错误返回，宿主侧记录日志（与 core 胶水一致）
+    // WIT 中 emit 无错误返回，宿主侧记录日志（与 core 胶水一致）
     fn emit(&mut self, event_name: String, payload_json: String) {
         if let Err(e) = events::emit_event(self.host_ctx.as_ref(), &event_name, &payload_json) {
             tracing::error!(error = %e, event = %event_name, "host_events.emit failed");
-        }
-    }
-
-    fn broadcast_sync(&mut self, event_json: String) {
-        if let Err(e) = events::broadcast_sync(self.host_ctx.as_ref(), &self.plugin_id, &event_json) {
-            tracing::error!(error = %e, "host_events.broadcast_sync failed");
         }
     }
 

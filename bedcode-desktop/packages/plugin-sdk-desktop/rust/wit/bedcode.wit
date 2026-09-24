@@ -40,10 +40,10 @@ interface host-storage {
     delete: func(key: string) -> result<_, string>;
 }
 
-/// 事件 / 广播 / 通知（原 events.rs：emit_event/broadcast_sync/notify）
+/// 事件 / 通知（原 events.rs：emit_event/notify；broadcast-sync 随 websocket
+/// 业务下沉 v28 退役——插件事件走 bus/emit，宿主不再持同步广播面）
 interface host-events {
     emit: func(event-name: string, payload-json: string);
-    broadcast-sync: func(event-json: string);
     notify: func(title: string, body: string) -> result<_, string>;
 }
 
@@ -608,16 +608,13 @@ interface host-pty {
     /// 创建裸 PTY：成功返回句柄 `pty-<uuid>` 并登记属主；失败只回错误且
     /// **不发布任何事件**（无句柄可寻址）。
     /// config-json（camelCase，纯引擎参数，宿主不做 shell 解析）：
-    /// `{ command, args?, env?, workingDir?, cols?, rows?, ringBytes?, hostBroadcastSessionId? }`
+    /// `{ command, args?, env?, workingDir?, cols?, rows?, ringBytes? }`
     /// （参数数组 exec 天然免注入；`env` 为追加进继承环境的键值；尺寸缺省取宿主终端配置
     /// `terminal.default_cols` / `default_rows`，与业务线同源；`ringBytes` 是本条 PTY
     /// 的输出环容量，缺省取宿主默认，超宿主上限或超出每插件在册条数上限一律 `Err`
     /// ——配额类失败可见，不静默降级也不静默淘汰既有句柄）。
-    /// `hostBroadcastSessionId`（可选）＝ 本句柄服务的会话 id，给出即表示**宿主可只读
-    /// 订阅本句柄输出**（opt-in；缺省 = 默认私有，任何宿主广播面都读不到）。宿主据此
-    /// 在引擎侧登记「会话 id → pty 句柄」只读映射：同属主重建取最新句柄，他属主撞 id
-    /// 显性拒绝；映射随句柄终态摘除（无第二份登记表介入生命周期）。空串或非唯一声明
-    /// 一律 `Err`（失败可见，不静默当作未声明）
+    /// v28（websocket 业务下沉）：`hostBroadcastSessionId` 字段已退役——PTY 引擎不再
+    /// 知道 session id，插件经 `ring-fetch` 自持输出游标（会话语义在插件登记域）。
     spawn: func(config-json: string) -> result<string, string>;
     /// 写入输入字节（分块语义宿主内建；超单次上限 → Err）
     write: func(pty-id: string, data: list<u8>) -> result<_, string>;

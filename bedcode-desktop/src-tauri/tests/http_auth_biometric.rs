@@ -19,13 +19,11 @@ use std::time::{Duration, Instant};
 use actix_web::dev::ServerHandle;
 use base64::Engine;
 use bedcode_lib::db::Database;
-use bedcode_lib::events::HostSyncEvent;
 use bedcode_lib::mdns::advertiser::MdnsAdvertiser;
 use bedcode_lib::wasm_core::PluginHost;
 use bedcode_lib::server::core::app::start_http_server;
 use bedcode_lib::system::app_context::AppContext;
 use bedcode_lib::system::app_context::AppContextBuilder;
-use bedcode_lib::system::constants::SYNC_EVENT_BROADCAST_CAPACITY;
 use bedcode_lib::system::info::SystemInfo;
 use bedcode_lib::utils::auth::jwt::JwtService;
 use bedcode_lib::AppConfig;
@@ -213,7 +211,6 @@ async fn init_test_app_context() {
             .expect("activate com.bedcode.terminal-session (bundled artifact)");
 
         let mdns_advertiser = Arc::new(tokio::sync::RwLock::new(MdnsAdvertiser::new()));
-        let (sync_tx, _) = tokio::sync::broadcast::channel::<HostSyncEvent>(SYNC_EVENT_BROADCAST_CAPACITY);
         let system_info = Arc::new(SystemInfo::collect());
 
         AppContextBuilder::new()
@@ -221,7 +218,6 @@ async fn init_test_app_context() {
             .plugin_host(plugin_host.clone())
             .mdns_advertiser(mdns_advertiser.clone())
             .app_handle(None)
-            .sync_tx(sync_tx)
             .resource_dir(Arc::new(PathBuf::from(".")))
             .system_info(system_info)
             .build_and_init();

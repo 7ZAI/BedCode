@@ -64,7 +64,7 @@ export const GENERATED_PERMISSION_API_MAP: Record<string, readonly string[]> = {
   'database:main': [],
   'fs:read': ['fs.read', 'fs.copy'],
   'fs:write': ['fs.write', 'fs.copy'],
-  'broadcast': ['broadcast.sync'],
+  'broadcast': [],
   'timer:schedule': ['timer.register'],
   'process:run': ['process.run', 'process.kill'],
   'app:cli': ['app.cliInstall', 'app.cliUninstall'],

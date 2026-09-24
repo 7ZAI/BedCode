@@ -32,22 +32,17 @@
 //! 淘汰你已有的句柄（每插件在册条数另有上限）。单次拉取字节数另受宿主上限截断
 //! （`max_bytes` 传大值即「取到宿主允许的一批」），余下按 `next_offset` 续拉。
 //!
-//! # 宿主广播声明与多消费者（票 05，会话引擎下沉 P3 形态 B）
+//! # 多消费者并发拉取语义（票 07 的输入）
 //!
-//! 业务会话也是插件 PTY，「输出能不能被宿主 server 读走」**必须是插件自己的决定**：
-//! 默认**私有**——未声明的句柄任何宿主广播面都读不到（这是安全边界，不是默认开）。
-//! 需要宿主 server 只读订阅（移动端输出面）时，spawn 时用
-//! [`PtySpawnConfig::host_broadcast_session_id`] 显式声明本句柄服务的会话 id，宿主据此
-//! 在**引擎侧**维护一份只读的「会话 id → pty 句柄」映射（零跨 WASM 边界）。映射随句柄
-//! 生命周期登记与摘除（在册即可被读到、终态即不可读），同属主的「同 id 重建」
-//! （重启）取最新句柄；与他属主撞 id 在 spawn 时显性拒绝。
+//! 同一句柄的环可被属主插件（`ring-fetch`）与宿主广播面（直读同进程环）**同时**
+//! 拉取。[`PtyRingFetch`] 的游标由**调用方自持**，`ring-fetch` 本身是纯读（不消费、
+//! 不推进全局状态）——两个消费者的游标互不知晓、互不影响；淘汰由**产出量**驱动
+//! （环满即淘汰最旧），任一消费者的读取都不释放空间，因此任一消费者落后于驻留起点
+//! 都会得到 `truncated`（环容量必须覆盖最慢消费者的滞后，见票 07 实测）。
 //!
-//! **多消费者并发拉取语义（07 的输入）**：同一句柄的环可被属主插件（`ring-fetch`）与
-//! 宿主广播面（直读同进程环）**同时**拉取。[`PtyRingFetch`] 的游标由**调用方自持**，
-//! `ring-fetch` 本身是纯读（不消费、不推进全局状态）——两个消费者的游标互不知晓、
-//! 互不影响；淘汰由**产出量**驱动（环满即淘汰最旧），任一消费者的读取都不释放空间，
-//! 因此任一消费者落后于驻留起点都会得到 `truncated`（环容量必须覆盖最慢消费者的滞后，
-//! 见票 07 实测）。
+//! **websocket 业务下沉票 08**：`hostBroadcastSessionId` 广播声明与「会话 id → pty
+//! 句柄」映射已删除（PTY 引擎不再知道 session id，会话语义在插件登记域）；宿主
+//! 不再直读会话输出环，输出读取归插件 `ring-fetch`（历史快照走插件互调）。
 //!
 //! # 退出事件与订阅时序（硬约束）
 //!
@@ -102,7 +97,6 @@ pub struct PtySpawnConfig {
     cols: Option<u16>,
     rows: Option<u16>,
     ring_bytes: Option<u64>,
-    host_broadcast_session_id: Option<String>,
 }
 
 impl PtySpawnConfig {
@@ -116,7 +110,6 @@ impl PtySpawnConfig {
             cols: None,
             rows: None,
             ring_bytes: None,
-            host_broadcast_session_id: None,
         }
     }
 
@@ -172,18 +165,6 @@ impl PtySpawnConfig {
         self
     }
 
-    /// 宿主广播声明（票 05）：**opt-in** 允许宿主 server 只读订阅本句柄输出
-    ///
-    /// 参数 = 本句柄服务的**会话 id**（宿主据此在引擎侧登记「会话 id → pty 句柄」
-    /// 只读映射，供移动端输出面直读同进程环）。缺省**不声明**——插件私有 PTY 的字节
-    /// 默认是插件私有数据，任何宿主广播面都读不到；业务会话「能不能被宿主读走」由
-    /// 本插件自行决定（ADR 0022 host-pty 第 2 条：不默认注册，按声明 opt-in）。
-    /// 同属主「同 id 重建」（重启）取最新句柄；与他属主撞 id 时宿主在 spawn 显性拒绝。
-    pub fn host_broadcast_session_id(mut self, session_id: &str) -> Self {
-        self.host_broadcast_session_id = Some(session_id.to_string());
-        self
-    }
-
     /// 序列化为 `pty_spawn` 的 config-json
     pub fn to_json(&self) -> String {
         let mut root = serde_json::Map::new();
@@ -209,9 +190,6 @@ impl PtySpawnConfig {
         }
         if let Some(ring_bytes) = self.ring_bytes {
             root.insert("ringBytes".to_string(), serde_json::json!(ring_bytes));
-        }
-        if let Some(session_id) = &self.host_broadcast_session_id {
-            root.insert("hostBroadcastSessionId".to_string(), serde_json::json!(session_id));
         }
         serde_json::Value::Object(root).to_string()
     }
@@ -303,27 +281,6 @@ mod tests {
         );
         // 宿主按 camelCase 反序列化：snake_case 键不得出现
         assert!(parsed.get("working_dir").is_none());
-    }
-
-    #[test]
-    #[test]
-    fn spawn_config_json_serializes_host_broadcast_session_id_in_camel_case() {
-        // 票 05：宿主广播声明是 spawn 配置的字段级追加（不 bump ABI），键名 camelCase
-        let parsed: serde_json::Value = serde_json::from_str(
-            &PtySpawnConfig::new("sh")
-                .host_broadcast_session_id("sess-01")
-                .to_json(),
-        )
-        .expect("valid json");
-        assert_eq!(parsed["hostBroadcastSessionId"], "sess-01");
-        assert!(
-            parsed.get("host_broadcast_session_id").is_none(),
-            "snake_case 键宿主读不到"
-        );
-        // 未声明时省略字段：默认私有，任何宿主广播面都读不到（安全边界在缺省侧）
-        let unset: serde_json::Value =
-            serde_json::from_str(&PtySpawnConfig::new("sh").to_json()).expect("valid json");
-        assert!(unset.get("hostBroadcastSessionId").is_none(), "省略即默认私有");
     }
 
     #[test]

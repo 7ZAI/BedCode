@@ -279,6 +279,12 @@ pub trait SessionApi {
     #[api("session-input")]
     fn session_input(draft: serde_json::Value) -> Result<serde_json::Value, String>;
 
+    /// 一次性历史快照：`{sessionId, from}` → `{data, minOffset, snapshotOffset,
+    /// historyBytes}`（websocket 业务下沉票 08 起宿主历史接口经本互调，宿主不再
+    /// 直读会话输出环——插件用自己的 `session record.pty_id` 调 `ring-fetch`）。
+    #[api("session-history")]
+    fn session_history(draft: serde_json::Value) -> Result<serde_json::Value, String>;
+
     // ==================== 票 09b/09c：WS 会话控制词表分派 ====================
 
     /// WS 会话控制动作转发（宿主 `/ws/event` 旧 `Message::SessionControl` 协议的
@@ -458,6 +464,10 @@ impl SessionApi for SessionPlugin {
 
     fn session_input(draft: serde_json::Value) -> Result<serde_json::Value, String> {
         session_input_write(&draft)
+    }
+
+    fn session_history(draft: serde_json::Value) -> Result<serde_json::Value, String> {
+        output::history_via_host(&draft)
     }
 
     // ==================== 票 09b/09c：WS 会话控制词表分派 ====================
@@ -1907,13 +1917,14 @@ mod tests {
         assert_eq!(actual, expected, "manifest api 必须与 trait 声明一致");
         assert_eq!(
             manifest.api.len(),
-            32,
+            33,
             "pairing 八项 + trust 两项（list/revoke）+ consent 一项（decide）+ config 三项 + \
              session-create 一项（票 09）+ 会话动作四项（票 10 restart/remove/rename/resize）\
              + 票 11 annotate + devices-connect-list 两项 + 票 02 quick-actions-import 一项 + \
              2026-09-22 认证记录下沉五项（auth-records-import / devices-list / history-list / \
              connection-touch / connection-close）+ 会话引擎下沉 P1 登记域读取面两项 \
              （session-list / session-get）+ P1-b 停止/输入两项（session-close / session-input）\
+             + 票 08 历史快照一项（session-history，websocket 业务下沉）\
              + 票 09b WS 会话控制词表分派一项（session-ws-control）"
         );
     }

@@ -21,6 +21,12 @@ use bedcode_plugin_api::wasm_host::WasmHost;
 /// 宿主侧仍会钳位截断，此值只做前端缺省声明——本模块不重复持有宿主常量）
 const MAX_BYTES: u32 = 16 * 1024;
 
+/// 一次历史快照互调的最大拉取次数（≈1 MiB 预算）：宿主直读时代是单次水源
+/// 快照（min/max 一次取净），改为插件互调后按 16 KiB 分片续拉，高速产出下
+/// 若超过预算（output 比拉得快），以当前已收集区间的上沿为 mock 快照——
+/// 历史是尽力快照，`snapshotOffset` 如实上报实际停点（不为拉满无限循环）
+const MAX_FETCHES_FOR_HISTORY: u32 = 64;
+
 /// 输出环拉取：`{sessionId, fromOffset, maxBytes?}` →
 /// `null`（游标已追平产出端）| `{data: number[], nextOffset, truncated}`
 ///
@@ -65,4 +71,70 @@ pub fn pull_via_host(args: &serde_json::Value) -> Result<serde_json::Value, Stri
 #[cfg(not(target_arch = "wasm32"))]
 pub fn pull_via_host(_args: &serde_json::Value) -> Result<serde_json::Value, String> {
     Err("session output pull unavailable outside wasm runtime".to_string())
+}
+
+/// 一次性历史快照互调 api（`session-history`）：`{sessionId, from}` →
+/// `{data: number[], minOffset, snapshotOffset, historyBytes}`
+///
+/// **websocket 业务下沉票 08**：宿主不再持有「会话 id → pty 句柄」广播映射
+/// （`hostBroadcastSessionId` / `broadcast_handle_for_session` 已退役）——HTTP
+/// 历史快照改经本互调：插件用自己的 `session record.pty_id` 调 `host-pty.ring-fetch`
+/// 拉净驻留历史（spec §4.3「插件直接使用自己的 session record.pty_id 调
+/// ring-fetch」）。分片续拉直到追平产出端（`Ok(None)`）或预算用尽；
+/// `truncated` 时的实际返回起点即环驻留起点（`minOffset`——from 旧于驻留起点
+/// 时如实上报缺口，客户端据此判定截断，不假装连续）。
+#[cfg(target_arch = "wasm32")]
+pub fn history_via_host(args: &serde_json::Value) -> Result<serde_json::Value, String> {
+    let session_id = args
+        .get("sessionId")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "sessionId required".to_string())?;
+    let from = args.get("from").and_then(|v| v.as_u64()).unwrap_or(0);
+
+    // 会话登记域 → pty_id（环本体在宿主 PTY 引擎，按句柄拉取）
+    let pty_id = crate::session::record_via_host(session_id)?
+        .and_then(|r| r.pty_id)
+        .ok_or_else(|| format!("会话不存在或缺少 PTY 句柄：{session_id}"))?;
+
+    let mut cursor = from;
+    let mut data: Vec<u8> = Vec::new();
+    let mut min_offset: Option<u64> = None;
+    let mut fetches = 0u32;
+    loop {
+        if fetches >= MAX_FETCHES_FOR_HISTORY {
+            // 预算用尽（高速产出）：如实上报当前停点，不无限续拉
+            break;
+        }
+        fetches += 1;
+        match WasmHost
+            .pty_ring_fetch(&pty_id, cursor, MAX_BYTES)
+            .map_err(|e| format!("pty ring fetch failed: {}", e.message))?
+        {
+            None => break, // 追平产出端
+            Some(fetched) => {
+                if fetched.truncated {
+                    // 环已淘汰 from 之前字节：实际返回起点 = 环驻留起点
+                    min_offset = Some(fetched.next_offset.saturating_sub(fetched.data.len() as u64));
+                }
+                if fetched.data.is_empty() {
+                    break;
+                }
+                cursor = fetched.next_offset;
+                data.extend_from_slice(&fetched.data);
+            }
+        }
+    }
+    let min = min_offset.unwrap_or(from);
+    Ok(serde_json::json!({
+        "data": data,
+        "minOffset": min,
+        "snapshotOffset": cursor,
+        "historyBytes": cursor.saturating_sub(min),
+    }))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn history_via_host(_args: &serde_json::Value) -> Result<serde_json::Value, String> {
+    Err("session history unavailable outside wasm runtime".to_string())
 }

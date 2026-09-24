@@ -1,13 +1,15 @@
 //! WebSocket 传输面
 //!
-//! 连接骨架（`conn`）、三通道实现（`channel`）、连接/端点注册表（`registry` /
-//! `endpoint`）、输出订阅原语（`subscription`）、移动端兼容 wire 协议（`message`）、
-//! WsSession 连接态（`session`）、生命周期与优雅停机（`websocket_manager`）、
-//! 终端输出端子面（`terminal_ws`）与路由装配
-//! （`routes`：三条握手端点 + 帧上限）。
+//! 连接骨架（`conn`）、插件端点通道（`channel`）、连接/端点注册表（`registry` /
+//! `endpoint`）、生命周期与优雅停机（`websocket_manager`）与路由装配
+//! （`routes`：`/ws/plugin/{plugin_id}/{path}` 通用插件端点 + 帧上限）。
 //!
-//! `services` 承载的会话控制与终端输入**不是 WS 传输原语**（ADR 0022 裁剪线视角，
-//! 归属应为会话业务、后续下沉插件线）——本目录只是它的临时住处，见该模块注释。
+//! **终态（websocket 业务下沉票 08）**：本目录只剩通用传输能力——连接生命周期、
+//! 认证策略、帧过滤、限流、端点/连接注册表与按属主回收；旧 `/ws/event` 与
+//! `/ws/terminal/session/{id}` 业务路由、宿主 `Message` 业务枚举、会话/终端服务、
+//! 输出订阅器与终端协议模块已整体删除（协议归 `com.bedcode.terminal-session` 插件，
+//! 宿主只转原始 text/binary 帧）。
+//!
 //! 依赖方向（不变量 I2）：只**向下**依赖 [`crate::server::core`]，与 `http` 面零横向
 //! import（I1，票 08 加锁）。认证档位词汇 `EndpointAuth` 直连桌面 SDK
 //! （`bedcode_plugin_api`），不建共享词汇模块。
@@ -15,17 +17,12 @@
 pub mod channel;
 pub mod conn;
 pub mod endpoint;
-pub mod message;
 pub mod registry;
 pub mod routes;
-pub mod services;
-pub mod session;
-pub mod subscription;
-pub mod terminal_ws;
 pub mod websocket_manager;
 
 pub use routes::configure_routes;
-pub use websocket_manager::{ClientSummary, ServerEvent, WebSocketManager};
+pub use websocket_manager::{ServerEvent, WebSocketManager};
 
 // ==================== 依赖方向结构锁（票 08） ====================
 
@@ -114,15 +111,16 @@ mod dependency_direction_lock {
     const FACE_SENTINELS: &[(&str, &str)] = &[
         ("http", "http/gateway.rs"),
         ("http", "http/routes.rs"),
-        ("websocket", "websocket/message.rs"),
+        ("websocket", "websocket/channel/plugin.rs"),
         ("websocket", "websocket/routes.rs"),
         ("core", "core/app.rs"),
         ("core", "core/supervisor.rs"),
     ];
 
-    /// 各面 `.rs` 文件数下限（2026-09-23 实测 14 / 20 / 6，取整下调留余量）
+    /// 各面 `.rs` 文件数下限（2026-09-23 实测 14 / 20 / 6，取整下调留余量；
+    /// websocket 面票 08 硬切后业务文件全删，只剩 8 个通用传输文件）
     const MIN_HTTP_FILES: usize = 10;
-    const MIN_WEBSOCKET_FILES: usize = 10;
+    const MIN_WEBSOCKET_FILES: usize = 6;
     const MIN_CORE_FILES: usize = 5;
 
     fn is_ident_byte(b: u8) -> bool {

@@ -63,6 +63,7 @@
     "com.bedcode.terminal-session.session-get",
     "com.bedcode.terminal-session.session-close",
     "com.bedcode.terminal-session.session-input",
+    "com.bedcode.terminal-session.session-history",
     "com.bedcode.terminal-session.session-ws-control"
   ],
   "contributes": {

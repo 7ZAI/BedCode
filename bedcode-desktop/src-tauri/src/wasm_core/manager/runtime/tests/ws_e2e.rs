@@ -965,7 +965,6 @@ fn test_ws_two_plugin_isolation() {
 /// list_sessions 空登记域回包形状、未知动作 fail-visible 错误帧。
 #[test]
 fn test_session_control_endpoint_direct_roundtrip() {
-    use crate::server::websocket::services::session_control as sc;
     use crate::utils::auth::jwt::JwtService;
     use bedcode_plugin_api::EndpointAuth;
     use futures_util::SinkExt;
@@ -977,9 +976,6 @@ fn test_session_control_endpoint_direct_roundtrip() {
     let _ws_guard = lock_ws_fixture_e2e();
     // 会话插件私有库进程级共享：与会话闭环用例串行（见锁文档）
     let _serial = session_plugin_db_guard();
-    // 声明闸门用例（services/session_control.rs）与本用例共用全局端点表：
-    // 同一把锁串行化
-    let _endpoint_guard = sc::SESSION_CONTROL_ENDPOINT_TEST_LOCK.lock().unwrap();
 
     const PLUGIN_ID: &str = "com.bedcode.terminal-session";
     let wasm_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1578,7 +1574,6 @@ fn test_terminal_stream_endpoint_closed_loop() {
 ///   close 同为 no-op。
 #[test]
 fn test_ws_device_events_and_auth_records_closed_loop() {
-    use crate::server::websocket::services::session_control as sc;
     use crate::utils::auth::auth_center::call_api;
     use crate::utils::auth::jwt::JwtService;
     use bedcode_plugin_api::EndpointAuth;
@@ -1589,8 +1584,6 @@ fn test_ws_device_events_and_auth_records_closed_loop() {
     let _ws_guard = lock_ws_fixture_e2e();
     // 会话插件私有库进程级共享：与会话闭环用例串行（见锁文档）
     let _serial = session_plugin_db_guard();
-    // 本用例注册 `session-control` 端点：与声明闸门用例共用全局端点表，同一把锁串行化
-    let _endpoint_guard = sc::SESSION_CONTROL_ENDPOINT_TEST_LOCK.lock().unwrap();
 
     const PLUGIN_ID: &str = "com.bedcode.terminal-session";
     let wasm_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))

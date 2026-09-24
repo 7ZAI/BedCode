@@ -1,12 +1,13 @@
-//! WebSocket 传输面路由装配：三条握手端点 + 帧上限
+//! WebSocket 传输面路由装配：通用插件端点 + 帧上限
 //!
-//! 从 `core/app.rs` 拆出（票 07）：三个 WS 握手 handler（`session_terminal_ws` /
-//! `event_ws` / `plugin_endpoint_ws`）、属主激活闸门（`endpoint_owner_activated`）
-//! 与帧上限（`ws_frame_limit`）都是纯 WS 面语义，寄居单端口组合物是历史错位——
-//! 此后 WS 面的路由改动只落在本文件。
+//! 从 `core/app.rs` 拆出（票 07）：WS 握手 handler（`plugin_endpoint_ws`）、
+//! 属主激活闸门（`endpoint_owner_activated`）与帧上限（`ws_frame_limit`）都是
+//! 纯 WS 面语义，寄居单端口组合物是历史错位——此后 WS 面的路由改动只落在本文件。
 //!
-//! 常量语义分工：`WS_EVENT_PATH` 归本面（`/ws/event` 事件通道路由）；`API_HEALTH_PATH`
-//! 归 HTTP 面（`http/routes.rs`）——端点常量不留在组合物里，避免「core 知道具体路由」的错觉。
+//! **终态（websocket 业务下沉票 08）**：业务路由 `/ws/event` 与
+//! `/ws/terminal/session/{id}` 已删除，宿主只留 `/ws/plugin/{plugin_id}/{path}`
+//! 一个握手端点；旧路径请求得到宿主通用 404，不提供 alias 或 fallback
+//! （spec §2.1 / §8.2 结构锁：路由字符串只允许出现在迁移说明/测试反例）。
 //!
 //! 依赖方向（不变量 I2 / I1）：本文件只**向下**依赖 `crate::server::core` 与系统常量，
 //! 与 `http` 面零横向 import（I1，票 08 加锁）。
@@ -16,16 +17,14 @@ use actix_web_actors::ws as actix_ws;
 
 use crate::server::websocket::channel::plugin::PluginChannel;
 use crate::server::websocket::conn::{ConnSpec, WsConnBase};
-use crate::server::websocket::registry::{ChannelKind, WsSessionRegistry};
-use crate::system::constants::{PLACEHOLDER_PEER_ADDR, WS_EVENT_PATH};
+use crate::server::websocket::registry::WsSessionRegistry;
+use crate::system::constants::PLACEHOLDER_PEER_ADDR;
 
 /// WS 帧/消息大小上限（字节）
 ///
 /// max_size 同时限制 frame 和 message 大小，取两者中较大的值；
-/// 两条 WS 路由（session / event）共用同一计算
-///
-/// `pub(crate)`：host-websocket（ABI v14）客户端域/服务端域的帧上限
-/// 与终端链路取同一事实源（spec §4.4）
+/// host-websocket（ABI v14）客户端域/服务端域的帧上限与插件端点共用同一计算
+/// （spec §4.4）
 pub(crate) fn ws_frame_limit() -> usize {
     let config = crate::system::config::AppConfig::global();
     std::cmp::max(
@@ -34,46 +33,11 @@ pub(crate) fn ws_frame_limit() -> usize {
     )
 }
 
-/// 每会话终端 WS 握手端点 — 连接创建即绑定 session_id（spec §5.1）
-///
-/// 移动端前端直连（P2）：首消息 JWT 认证（§4.3 规则），输出帧为 TB v3
-/// 二进制（§5.3），订阅即连接（无多路复用）。会话不存在 → 认证通过后
-/// error(SESSION_NOT_FOUND) 并关闭。旧 /ws/terminal 兼容路由已随旧 v2.0.0
-/// 客户端下线删除（§7 D2）
-async fn session_terminal_ws(
-    path: web::Path<String>,
-    req: HttpRequest,
-    stream: web::Payload,
-) -> Result<HttpResponse, Error> {
-    let addr = req
-        .peer_addr()
-        .unwrap_or_else(|| PLACEHOLDER_PEER_ADDR.parse().unwrap());
-    let ws_actor = WsConnBase::new_for_session(addr, path.into_inner());
-    actix_ws::WsResponseBuilder::new(ws_actor, &req, stream)
-        .frame_size(ws_frame_limit())
-        .start()
-}
-
-/// WS 事件通道握手端点 — 常驻事件通道（设备在线判定基准 + 同步广播接收方）
-///
-/// 认证同样在 WS 首消息完成（JWT 重连或配对流程），与 /ws/terminal 一致；
-/// 路由在 /api scope 外，不经 HTTP JWT 中间件
-async fn event_ws(req: HttpRequest, stream: web::Payload) -> Result<HttpResponse, Error> {
-    let addr = req
-        .peer_addr()
-        .unwrap_or_else(|| PLACEHOLDER_PEER_ADDR.parse().unwrap());
-    let ws_actor = WsConnBase::new_event(addr);
-    actix_ws::WsResponseBuilder::new(ws_actor, &req, stream)
-        .frame_size(ws_frame_limit())
-        .start()
-}
-
 /// 插件端点 WS 握手端点 — `/ws/plugin/{plugin_id}/{path}`（spec D5）
 ///
 /// 通配单点分发（不依赖 actix 动态加路由）：路径 → 端点表反查 → 未注册端点 /
 /// 属主未激活 → 404；入站客户端数超上限 → 503（**协议升级前**拒绝，不产生
-/// 连接事件，spec §4.4）。与 `/ws/event` 一样落在 `/api` scope 之外，
-/// 不经 HTTP JWT 中间件——认证策略由端点声明（`auth: none | jwt`，spec D8）。
+/// 连接事件，spec §4.4）。认证策略由端点声明（`auth: none | jwt`，spec D8）。
 async fn plugin_endpoint_ws(
     path: web::Path<(String, String)>,
     req: HttpRequest,
@@ -119,7 +83,7 @@ async fn plugin_endpoint_ws(
         ConnSpec {
             owner: Some(entry.owner.clone()),
             endpoint_id: Some(entry.endpoint_id.clone()),
-            ..ConnSpec::new(addr, ChannelKind::Plugin)
+            ..ConnSpec::new(addr)
         },
         Box::new(channel),
     );
@@ -156,15 +120,9 @@ async fn endpoint_owner_activated(plugin_id: &str) -> bool {
 
 /// 构建 WS 路由配置
 pub fn configure_routes(cfg: &mut web::ServiceConfig) {
-    // WebSocket 每会话终端端点（spec §5.1）：连接创建即绑定 session_id，订阅即连接。
-    // 旧 /ws/terminal 兼容路由（多会话订阅 + base64 JSON 文本帧 + 旧 WS 配对认证）
-    // 已随旧 v2.0.0 客户端下线删除
-    cfg.route("/ws/terminal/session/{session_id}", web::get().to(session_terminal_ws));
-
-    // WebSocket 事件通道端点（常驻，在线判定 + 广播接收，认证在 WS 首消息完成）
-    cfg.route(WS_EVENT_PATH, web::get().to(event_ws));
-
     // 插件端点通配路由（spec D5）：命名空间段 `{plugin_id}` 由宿主注入，
-    // 插件只给后缀；未注册 / 属主未激活 → 404，连接数超限 → 503
+    // 插件只给后缀；未注册 / 属主未激活 → 404，连接数超限 → 503。
+    // 旧 `/ws/event` 与 `/ws/terminal/session/{id}` 已随 websocket 业务下沉
+    // 票 08 删除——旧客户端不在兼容范围（spec §0.4）。
     cfg.route("/ws/plugin/{plugin_id}/{path:.*}", web::get().to(plugin_endpoint_ws));
 }

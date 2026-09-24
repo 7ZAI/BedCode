@@ -2,33 +2,28 @@
 //!
 //! 公共枚举类型定义
 //!
-//! **终态 = 引擎级类型 + 传输面契约形状**：会话同步（`sync` / `summary`）、WS 控制
-//! 与终端帧（`control`）、按键组合（`special_key`）的 wire 定义已收编 SDK
-//! `bedcode-plugin-api::wire`（会话事件下沉专项票 01），本目录对应文件只 re-export，
-//! 保持 `crate::enums::*` 导入路径不变。`auth`（认证 wire）与 `pty_status`（PTY 引擎
-//! 枚举）仍在宿主定义。**新增跨端 wire 形状一律进 SDK，不再落在本目录。**
+//! **终态 = 引擎级类型 + 传输面契约形状**：按键组合（`special_key`）的 wire 定义
+//! 已收编 SDK `bedcode-plugin-api::wire`（会话事件下沉专项票 01），本目录对应文件只
+//! re-export，保持 `crate::enums::*` 导入路径不变。`auth`（认证 wire）与
+//! `pty_status`（PTY 引擎枚举）仍在宿主定义。**websocket 业务下沉票 08**：会话同步
+//! （`sync`/`summary`）与 WS 控制/终端帧（`control`）re-export 已随宿主 `Message`
+//! 业务协议退役删除（wire 定义在 SDK 不再被宿主消费；插件 wire 面只剩 `summary`/
+//! `key`）。**新增跨端 wire 形状一律进 SDK，不再落在本目录。**
 
 pub mod auth;
-pub mod control;
 pub mod plugin;
 pub mod pty_status;
 pub mod special_key;
-pub mod summary;
-pub mod sync;
 
 // Re-export all public types
 pub use auth::{AuthPayload, AuthStage};
-pub use control::{SessionControlAction, SessionControlPayload, TerminalAction, TerminalPayload};
 pub use plugin::{PluginQuestion, PluginQuestionOption};
 pub use pty_status::PtySessionStatus;
 // 会话状态/类型已归位 `protocol::session`（票 08 线协议域）；此处为兼容 re-export
 // 保留 `enums::SessionStatus` / `enums::SessionType` 路径，避免破坏既有 import。
-// 新增会话 wire 形状一律放 `protocol/`，不再落在本目录；跨端（宿主 ↔ 插件 /
-// 移动端）同步与控制 wire 一律放 SDK `bedcode-plugin-api::wire`（专项票 01）。
+// 新增会话 wire 形状一律放 `protocol/`，不再落在本目录。
 pub use crate::protocol::session::{SessionStatus, SessionType};
 pub use special_key::{KeyCode, KeyCombo};
-pub use summary::SessionSummary;
-pub use sync::SyncPayload;
 
 // ==================== Tests ====================
 
@@ -42,12 +37,6 @@ mod tests {
     /// 强制转换即编译失败——形状锁因此不可能在「两份定义各自绿」的情况下静默漂移。
     #[test]
     fn host_paths_are_the_same_types_as_sdk_source_of_truth() {
-        let _: fn(bedcode_plugin_api::wire::SyncPayload) -> SyncPayload = |s| s;
-        let _: fn(bedcode_plugin_api::wire::SessionSummary) -> SessionSummary = |s| s;
-        let _: fn(bedcode_plugin_api::wire::SessionControlPayload) -> SessionControlPayload = |s| s;
-        let _: fn(bedcode_plugin_api::wire::SessionControlAction) -> SessionControlAction = |s| s;
-        let _: fn(bedcode_plugin_api::wire::TerminalPayload) -> TerminalPayload = |s| s;
-        let _: fn(bedcode_plugin_api::wire::TerminalAction) -> TerminalAction = |s| s;
         let _: fn(bedcode_plugin_api::wire::KeyCombo) -> KeyCombo = |s| s;
         let _: fn(bedcode_plugin_api::wire::KeyCode) -> KeyCode = |s| s;
         let _: fn(bedcode_plugin_api::events::PluginQuestion) -> PluginQuestion = |s| s;
@@ -77,7 +66,9 @@ mod tests {
         ];
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/enums");
         let mut violations: Vec<String> = Vec::new();
-        for name in ["sync.rs", "summary.rs", "control.rs", "special_key.rs", "plugin.rs"] {
+        // 票 08：sync/summary/control 三个垫片随宿主 Message 业务协议退役删除；
+        // special_key（宿主 PTY 写入面）与 plugin（共享类型）仍在
+        for name in ["special_key.rs", "plugin.rs"] {
             let path = dir.join(name);
             let Ok(content) = std::fs::read_to_string(&path) else {
                 violations.push(format!("{name}: 读取失败（re-export 垫片被删除？）"));

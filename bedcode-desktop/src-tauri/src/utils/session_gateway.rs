@@ -35,7 +35,6 @@
 
 use crate::protocol::{RendererSource, ResizeOutcome, SessionInfoView};
 use crate::utils::auth::auth_center::call_api;
-use crate::wasm_core::host_api::pty::broadcast_handle_for_session;
 use crate::wasm_core::manager::runtime::WasmHostContext;
 use crate::{AppError, Result};
 
@@ -47,6 +46,7 @@ const API_CLOSE: &str = "com.bedcode.terminal-session.session-close";
 const API_REMOVE: &str = "com.bedcode.terminal-session.session-remove";
 const API_RESIZE: &str = "com.bedcode.terminal-session.session-resize";
 const API_INPUT: &str = "com.bedcode.terminal-session.session-input";
+const API_HISTORY: &str = "com.bedcode.terminal-session.session-history";
 
 /// 插件不可用时的显性错误（无降级；会话真源已不在宿主）
 fn plugin_required_error(what: &str) -> AppError {
@@ -242,30 +242,45 @@ pub async fn special_key(host_ctx: &WasmHostContext, session_id: &str, key: &str
     Ok(())
 }
 
-// ==================== 输出面（P3 形态 B：直读同进程 `PtyRing`） ====================
+// ==================== 输出面（websocket 业务下沉票 08：插件互调，宿主不再直读环） ====================
 
 /// 一次性历史快照：`(data, min_offset, snapshot_offset, history_bytes)`
 ///
-/// **引擎唯一（票 11）**：会话输出环在宿主 PTY 引擎（票 05 广播声明），经
-/// [`broadcast_handle_for_session`] 直读同进程 `PtyRing`（零跨 WASM 边界）——
-/// `from` 旧于 `min_offset` 时如实返回驻留起点（缺口由 `min_offset` 显式上报，
-/// 客户端据此判定截断，不假装连续）。无广播句柄 = 该会话不存在或不供广播 →
-/// 返回 `None`（原「回落内核输出管理器」的兑底腿随 `session/` 目录删除）。
-pub async fn history_snapshot(session_id: &str, from: u64) -> Option<(Vec<u8>, u64, u64, u64)> {
-    let handle = broadcast_handle_for_session(session_id)?;
-    let (data, min_offset, snapshot_offset, history_bytes) = {
-        let ring = handle.ring.lock().unwrap_or_else(|e| e.into_inner());
-        let (min, max) = ring.watermarks();
-        // 宿主直读不受 `PLUGIN_PTY_RING_FETCH_MAX_BYTES`（那是 WASM 边界限额）；
-        // 从 `from.max(min)` 起拉取到产出端，一次取净驻留历史
-        let start = from.max(min);
-        let fetched = ring.fetch(start, max.saturating_sub(start) as usize);
-        (fetched.data, min, max, max.saturating_sub(min))
-    };
-    Some((data, min_offset, snapshot_offset, history_bytes))
+/// **插件必需（websocket 业务下沉票 08）**：宿主不再持有「会话 id → pty 句柄」的
+/// 广播映射（`hostBroadcastSessionId` / `broadcast_handle_for_session` 已退役，PTY
+/// 引擎不再知道 session id）；历史快照改经插件互调 api——插件用自己的
+/// `session record.pty_id` 调 `host-pty.ring-fetch` 拉净驻留历史
+/// （spec §4.3，形状与迁移前直读 `PtyRing` 逐字一致：from 旧于环驻留起点时
+/// minOffset 如实上报缺口，客户端据此判定截断，不假装连续）。
+///
+/// 会话不存在 / 插件未激活 → 显性 `Err`（fail-visible，不静默当「无数据」）。
+pub async fn history_snapshot(host_ctx: &WasmHostContext, session_id: &str, from: u64) -> Result<(Vec<u8>, u64, u64, u64)> {
+    let v = call_session_api(
+        host_ctx,
+        API_HISTORY,
+        "session history",
+        serde_json::json!({ "sessionId": session_id, "from": from }),
+    )?;
+    let data: Vec<u8> = v
+        .get("data")
+        .and_then(|d| d.as_array())
+        .map(|arr| arr.iter().filter_map(|b| b.as_u64().map(|b| b as u8)).collect())
+        .ok_or_else(|| AppError::Plugin(format!("session-history reply missing data: {v}")))?;
+    let min_offset = v
+        .get("minOffset")
+        .and_then(|n| n.as_u64())
+        .ok_or_else(|| AppError::Plugin(format!("session-history reply missing minOffset: {v}")))?;
+    let snapshot_offset = v
+        .get("snapshotOffset")
+        .and_then(|n| n.as_u64())
+        .ok_or_else(|| AppError::Plugin(format!("session-history reply missing snapshotOffset: {v}")))?;
+    let history_bytes = v
+        .get("historyBytes")
+        .and_then(|n| n.as_u64())
+        .ok_or_else(|| AppError::Plugin(format!("session-history reply missing historyBytes: {v}")))?;
+    Ok((data, min_offset, snapshot_offset, history_bytes))
 }
 
 // 票 11：`unsubscribe_output`（向内核输出环退订）随 `session/` 目录删除。
-// WS 控制面停止 / 移除动作之后**不需要**宿主替连接退订：输出订阅句柄是连接私有的，
-// 会话终态由引擎订阅者发 `SessionStopped` 帧、连接侧据此退休自己的句柄（见
-// `terminal_ws::subscriber::engine_subscriber_loop` 的终态分支）。
+// 票 08：`history_snapshot` 不再直读宿主 `PtyRing`——会话输出环读取归插件
+// （`session-history` 互调 api），宿主不再持有会话级环句柄。
