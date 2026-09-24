@@ -126,6 +126,7 @@ impl PluginHost {
             permission.clone(),
             wasm_runtime.fs_auth().clone(),
             message_bus.clone(),
+            Arc::new(crate::wasm_core::manager::capability::CapabilityRegistry::new()),
         ));
 
         // core-security × core-monitor：决策计数埋点两阶段注入
@@ -395,6 +396,7 @@ impl PluginHost {
 // ==================== 子模块（自本文件拆分） ====================
 // 职责面拆分（P2）：激活/停用、启动通知、注册、安装卸载、预授权、wasm 实例、错误上报
 mod activation;
+pub mod api_bridge;
 mod app_cli;
 mod boot;
 mod commands;

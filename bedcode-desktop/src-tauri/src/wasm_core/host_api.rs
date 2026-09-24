@@ -17,7 +17,6 @@
 //! （(ptr,len) 内存搬运 + Linker 注册）；阶段 C 已删除胶水层，仅保留实现层。
 
 pub(super) mod api;
-pub mod api_bridge;
 pub(super) mod app;
 pub(super) mod auth;
 pub(super) mod bus;

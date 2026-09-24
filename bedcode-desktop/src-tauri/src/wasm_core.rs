@@ -38,7 +38,7 @@ pub mod security;
 // 不感知模块内部结构
 
 pub use bus::{BusMessageHandler, MessageBus};
-pub use host_api::api_bridge;
+pub use manager::host::api_bridge;
 pub use manager::host;
 pub use manager::host::PluginHost;
 pub use storage::PluginStorage;

@@ -3,7 +3,7 @@
 //! Tauri commands — 前端 PluginContext 的每个 API 调用通过 Tauri invoke 到达此桥接层
 //! Rust 端做权限校验后执行操作
 
-use crate::wasm_core::manager::host::PluginHost;
+use super::PluginHost;
 use crate::wasm_core::manager::types::DesktopPluginInfo;
 use crate::wasm_core::security::fs_auth::FsAuthChecker;
 use std::sync::Arc;
