@@ -71,7 +71,7 @@ pub struct PtyRing {
     capacity_bytes: u64,
     /// 驻留条目上限（防御极小块风暴：字节没超容量但块数失控时同样淘汰最旧）
     ///
-    /// 与业务会话环 `channels.global_queue_max_chunks` 同惯例；正常读块量级（KB 级）
+    /// 沿用会话输出环的块级惯例（旧 `channels.global_queue_max_chunks` 已随会话下沉退役）；正常读块量级（KB 级）
     /// 下字节上限先触发，本值只在碎块场景兜底。
     max_chunks: usize,
 }
@@ -79,7 +79,7 @@ pub struct PtyRing {
 impl PtyRing {
     /// 默认条目上限（碎块防御）
     ///
-    /// 与业务会话环 `channels.global_queue_max_chunks` 同惯例，本环量级下取 4096：
+    /// 沿用会话输出环块级惯例，本环量级下取 4096：
     /// 正常读块（KB 级）时字节容量先触发淘汰，本值只挡「一次 read 只回几字节」的病态
     /// 碎块场景——否则块数可堆到容量值，元数据开销反超数据本身。
     pub const DEFAULT_MAX_CHUNKS: usize = 4096;

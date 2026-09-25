@@ -2,6 +2,13 @@
 //!
 //! 提供桌面端应用的参数化配置，配置文件位于应用数据目录下的 config.properties
 //! 使用 properties 格式支持注释，方便用户理解和修改配置
+//!
+//! **宿主只存引擎级配置**（网络 / UI 偏好 / PTY 引擎 / channel 容量 / 日志）。
+//! 业务配置不落本目录：会话默认值（默认环境/工作目录/命令/超时）真源在
+//! `com.bedcode.terminal-session` 插件存储（`session.formDefaults`，前端
+//! 2026-09-21 已收敛删除）；内核输出环 / 会话状态广播 / 终端输出通道
+//! （合并/批次/订阅者水位/history_start_mode）随会话下沉退役，相应键已删
+//! （2026-09-25）。新增业务配置一律进对应插件域，禁止回到宿主。
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -23,52 +30,21 @@ static PROPERTY_COMMENTS: &[(&str, &str)] = &[
     ("network.shutdown_timeout_secs", "优雅停机超时秒数"),
     ("network.ws_max_frame_size_kb", "WebSocket 单帧最大大小（KB）"),
     ("network.ws_max_message_size_mb", "WebSocket 单消息最大大小（MB，可跨多帧）"),
-    ("session.default_environment", "默认执行环境（windows / wsl2 / linux）"),
-    ("session.default_wsl_distro", "默认 WSL 发行版（仅 wsl2 环境有效，留空则使用默认发行版）"),
-    ("session.default_working_dir", "默认工作目录（留空则使用用户主目录）"),
-    ("session.default_command", "默认启动命令"),
-    ("session.session_timeout", "会话超时时间（秒）- 无活动自动关闭"),
+    ("network.metrics_enabled", "服务器性能监控采集总开关（默认关闭；开启时采集 CPU/内存/WS 速率指标）"),
     ("ui.theme", "主题（light / dark / system）"),
     ("ui.theme_palette", "主题色板（warm 暖调 / cool 冷调 / forest / ocean / sunset / violet）"),
     ("ui.font_size", "全局界面字体大小（终端字体在终端设置中独立配置）"),
     ("ui.terminal_font_size", "终端字体大小"),
     ("ui.terminal_font_family", "终端字体名称"),
     ("ui.terminal_theme", "终端配色主题名"),
-    ("ui.show_preview", "是否显示终端预览"),
     ("ui.language", "语言偏好（zh-CN / en）"),
     ("ui.terminal_bg_image", "终端背景图片文件名（位于应用数据目录，留空表示不启用）"),
     ("ui.terminal_bg_opacity", "终端背景图片不透明度（0-100，越小图片越淡）"),
     ("ui.animations_enabled", "全局动画效果总开关（true/false，关闭后禁用所有页面过渡/动画，默认开启）"),
-    ("channels.status_broadcast_capacity", "会话状态变更广播容量 - 用于通知状态更新"),
-    ("channels.event_broadcast_capacity", "统一事件广播容量 - 整合所有事件类型"),
-    ("channels.global_queue_max_bytes", "全局输出队列最大字节数 - 限制总内存占用，超出后丢弃最旧字节块（TB v3，默认 50MB）"),
-    ("channels.global_queue_max_chunks", "全局输出队列最大字节块数 - 防御性条目上限，抗极小块风暴（默认 65536）"),
-    ("channels.history_start_mode", "历史回放起点模式（min=严格从队首 / snapshot=最近清屏快照点，默认 min；snapshot 模式待实现）"),
-    ("channels.ws_event_capacity", "WebSocket 事件广播容量 - 业务层事件分发"),
     ("channels.lifecycle_capacity", "生命周期事件广播容量 - PTY 进程状态变更"),
     ("terminal.default_cols", "默认终端列数"),
     ("terminal.default_rows", "默认终端行数"),
-    ("terminal.flush_interval_ms", "远程通道输出缓冲刷新间隔（毫秒）- 合并开关开启时生效；桌面本地通道零缓冲直通"),
-    ("terminal.merge_output", "服务端输出合并开关（true/false）- 开启后远程通道按 flush_interval_ms 合并输出减少 WS 消息数；默认开启（移动端弱网/高频输出防消息风暴），桌面本地通道恒为零缓冲直通"),
-    ("terminal.max_buffer_size", "最大输出缓冲大小（字节）- 合并开关开启时达到此大小立即刷新"),
-    ("terminal.batch_bytes", "采集批次传输阈值（字节）- 订阅者处于 batch（退出终端页）模式时满该值才转发一帧（默认 64KB）"),
     ("terminal.read_buffer_size", "PTY 读取缓冲区大小（字节）- 单次读取的最大字节数"),
-    (
-        "terminal.subscriber_high_water_bytes",
-        "拉取订阅者窗口高位水（字节）- 已发游标 − 客户端 ack 达该值则该订阅者驻留等待（只停自己）；须满足 客户端 ack 阈值 ≤ 低位水 < 高位水 且 高位水 − ack 阈值 ≤ 低位水",
-    ),
-    (
-        "terminal.subscriber_low_water_bytes",
-        "拉取订阅者窗口低位水（字节，滞回下沿）- 驻留后窗口降到该值以下解除",
-    ),
-    (
-        "terminal.subscriber_park_poll_ms",
-        "拉取订阅者驻留兜底轮询间隔（毫秒）- 与 ack 唤醒配合，防丢失唤醒/僵尸永久驻留",
-    ),
-    (
-        "terminal.subscriber_zombie_timeout_ms",
-        "僵尸订阅者判定（毫秒）- 窗口持续不降超过该时长则回收连接（只影响该订阅者）",
-    ),
     ("log.file_level", "运行时日志文件级别（trace / debug / info / warn / error）"),
     ("log.console_filter", "控制台日志过滤器（支持 EnvFilter 语法，如 bedcode_lib=debug,actix_web=info）"),
     ("log.rotation", "日志文件轮转策略（daily / hourly / never）"),
@@ -96,16 +72,7 @@ static PROPERTY_GROUPS: &[(&str, &[&str])] = &[
             "network.shutdown_timeout_secs",
             "network.ws_max_frame_size_kb",
             "network.ws_max_message_size_mb",
-        ],
-    ),
-    (
-        "会话默认配置",
-        &[
-            "session.default_environment",
-            "session.default_wsl_distro",
-            "session.default_working_dir",
-            "session.default_command",
-            "session.session_timeout",
+            "network.metrics_enabled",
         ],
     ),
     (
@@ -117,7 +84,6 @@ static PROPERTY_GROUPS: &[(&str, &[&str])] = &[
             "ui.terminal_font_size",
             "ui.terminal_font_family",
             "ui.terminal_theme",
-            "ui.show_preview",
             "ui.language",
             "ui.terminal_bg_image",
             "ui.terminal_bg_opacity",
@@ -126,30 +92,14 @@ static PROPERTY_GROUPS: &[(&str, &[&str])] = &[
     ),
     (
         "Channel 容量配置",
-        &[
-            "channels.status_broadcast_capacity",
-            "channels.event_broadcast_capacity",
-            "channels.global_queue_max_bytes",
-            "channels.global_queue_max_chunks",
-            "channels.history_start_mode",
-            "channels.ws_event_capacity",
-            "channels.lifecycle_capacity",
-        ],
+        &["channels.lifecycle_capacity"],
     ),
     (
         "终端配置",
         &[
             "terminal.default_cols",
             "terminal.default_rows",
-            "terminal.flush_interval_ms",
-            "terminal.merge_output",
-            "terminal.max_buffer_size",
-            "terminal.batch_bytes",
             "terminal.read_buffer_size",
-            "terminal.subscriber_high_water_bytes",
-            "terminal.subscriber_low_water_bytes",
-            "terminal.subscriber_park_poll_ms",
-            "terminal.subscriber_zombie_timeout_ms",
         ],
     ),
     (
@@ -171,9 +121,6 @@ static PROPERTY_GROUPS: &[(&str, &[&str])] = &[
 pub struct AppConfig {
     /// 网络配置
     pub network: NetworkConfig,
-    /// 会话默认配置
-    #[serde(default)]
-    pub session: SessionConfig,
     /// UI 界面配置
     #[serde(default)]
     pub ui: UiConfig,
@@ -233,19 +180,6 @@ pub struct NetworkConfig {
     pub metrics_enabled: bool,
 }
 
-/// 默认执行环境：按宿主平台选择（Windows → windows / 其余 → linux）
-///
-/// 前端 useAvailableEnvironments 已按平台过滤并在会话创建时 normalize，
-/// 此处保证后端无 config.properties（首跑失败回退 / 无头上下文）时
-/// 也不会把 powershell 环境发到 Linux PTY（spawn powershell.exe 必然失败）
-fn default_environment() -> String {
-    if cfg!(target_os = "windows") {
-        "windows".to_string()
-    } else {
-        "linux".to_string()
-    }
-}
-
 fn default_prevent_sleep() -> bool {
     true
 }
@@ -302,33 +236,6 @@ impl Default for NetworkConfig {
     }
 }
 
-/// 会话默认配置
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct SessionConfig {
-    /// 默认执行环境（windows/wsl2/linux；运行时自动按宿主机平台过滤）
-    pub default_environment: String,
-    /// 默认 WSL 发行版（仅 wsl2 环境有效）
-    pub default_wsl_distro: Option<String>,
-    /// 默认工作目录
-    pub default_working_dir: Option<String>,
-    /// 默认启动命令
-    pub default_command: Option<String>,
-    /// 会话超时时间（秒）
-    pub session_timeout: u64,
-}
-
-impl Default for SessionConfig {
-    fn default() -> Self {
-        Self {
-            default_environment: default_environment(),
-            default_wsl_distro: None,
-            default_working_dir: None,
-            default_command: Some("claude".to_string()),
-            session_timeout: 3600,
-        }
-    }
-}
-
 /// UI 界面配置
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct UiConfig {
@@ -347,8 +254,6 @@ pub struct UiConfig {
     /// 终端配色主题名
     #[serde(default = "default_terminal_theme")]
     pub terminal_theme: String,
-    /// 是否显示终端预览
-    pub show_preview: bool,
     /// 语言偏好（zh-CN / en）
     #[serde(default = "default_language")]
     pub language: String,
@@ -396,7 +301,6 @@ impl Default for UiConfig {
             terminal_font_size: 12,
             terminal_font_family: "Consolas".to_string(),
             terminal_theme: default_terminal_theme(),
-            show_preview: true,
             language: default_language(),
             terminal_bg_image: None,
             terminal_bg_opacity: default_terminal_bg_opacity(),
@@ -405,37 +309,13 @@ impl Default for UiConfig {
     }
 }
 
-/// 历史回放起点模式
-///
-/// 控制新订阅者订阅时刻的历史回放起点：
-/// - `Min`：严格从队首（min_offset）起播全部保留字节（默认，行为确定）
-/// - `Snapshot`：从最近一次清屏快照点起播（减少全屏 TUI 清屏前的重复重绘）
-///   该模式尚未实现，配置后回退为 Min 行为（见 subscribe 内 warn 日志）
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum HistoryStartMode {
-    Min,
-    Snapshot,
-}
-
 /// Channel 容量配置
 ///
-/// 控制 Tokio broadcast/mpsc channel 的缓冲区大小，
-/// 影响高负载场景下的消息处理能力和内存占用
+/// Tokio broadcast 容量（仅 PTY 生命周期广播仍在用）。内核输出环 / 会话状态
+/// 广播 / 统一事件广播 / WS 事件分发随会话下沉退役（2026-09-24 会话下沉后
+/// 宿主不再消费），对应容量键已删（2026-09-25）。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ChannelsConfig {
-    /// 会话状态变更广播容量 - 用于通知状态更新
-    pub status_broadcast_capacity: usize,
-    /// 统一事件广播容量 - 整合所有事件类型
-    pub event_broadcast_capacity: usize,
-    /// 全局输出队列最大字节数 - 限制总内存占用，超出后丢弃最旧字节块（TB v3）
-    pub global_queue_max_bytes: u64,
-    /// 全局输出队列最大字节块数 - 防御性条目上限，抗极小块风暴（TB v3）
-    pub global_queue_max_chunks: usize,
-    /// 历史回放起点模式（min = 严格从队首；snapshot = 最近清屏快照点，待实现）
-    pub history_start_mode: HistoryStartMode,
-    /// WebSocket 事件广播容量 - 业务层事件分发
-    pub ws_event_capacity: usize,
     /// 生命周期事件广播容量 - PTY 进程状态变更
     pub lifecycle_capacity: usize,
 }
@@ -443,12 +323,6 @@ pub struct ChannelsConfig {
 impl Default for ChannelsConfig {
     fn default() -> Self {
         Self {
-            status_broadcast_capacity: 64,
-            event_broadcast_capacity: 256,
-            global_queue_max_bytes: 50 * 1024 * 1024, // 50MB（TB v3 字节块队列软上限）
-            global_queue_max_chunks: 65_536,
-            history_start_mode: HistoryStartMode::Min,
-            ws_event_capacity: 1024,
             lifecycle_capacity: 16,
         }
     }
@@ -456,74 +330,17 @@ impl Default for ChannelsConfig {
 
 /// 终端配置
 ///
-/// 控制 PTY 终端的默认参数和输出处理行为
+/// PTY 终端的引擎级默认参数。远程输出通道参数（合并/批次/订阅者水位）随会话
+/// 下沉退役——输出通道已不在宿主（WS 终端输出端子在插件侧），对应键已删
+/// （2026-09-25）。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TerminalConfig {
     /// 默认终端列数
     pub default_cols: u16,
     /// 默认终端行数
     pub default_rows: u16,
-    /// 远程通道输出缓冲刷新间隔（毫秒）- 仅 merge_output 开启时生效；
-    /// 桌面本地（环回）通道零缓冲直通，不受此值影响
-    pub flush_interval_ms: u64,
-    /// 服务端输出合并开关：开启后远程通道按 flush_interval_ms 合并输出
-    /// 减少 WS 消息数；**默认开启**（移动端弱网/高频输出防消息风暴）。
-    /// 关闭后远程订阅者零缓冲直通（每块即发）
-    pub merge_output: bool,
-    /// 最大输出缓冲大小（字节）- 合并开关开启时达到此大小立即刷新
-    pub max_buffer_size: usize,
-    /// 采集批次传输阈值（字节）- 订阅者处于 batch（退出终端页）模式时，累计
-    /// 满该值才转发一帧（双速传播；默认 64KB，可配置）
-    pub batch_bytes: usize,
     /// PTY 读取缓冲区大小（字节）- 单次读取的最大字节数
     pub read_buffer_size: usize,
-    /// 拉取订阅者窗口高位水（字节）：`已发游标 − 客户端 ack ≥ 该值` → 该订阅者
-    /// 驻留等待 ack（只停自己，不影响源产出与其他订阅者）
-    pub subscriber_high_water_bytes: u64,
-    /// 拉取订阅者窗口低位水（字节，滞回下沿）：驻留后窗口降到该值以下解除
-    pub subscriber_low_water_bytes: u64,
-    /// 拉取订阅者驻留兜底轮询间隔（毫秒）：与 ack 唤醒配合，防丢失唤醒/僵尸永久驻留
-    pub subscriber_park_poll_ms: u64,
-    /// 僵尸订阅者判定（毫秒）：窗口持续不降超过该时长 → 回收该订阅者连接
-    pub subscriber_zombie_timeout_ms: u64,
-}
-
-/// 客户端 ack 节流阈值（字节）——桌面 `useTerminalOutputStreamChannel` 与移动端
-/// `terminal_link` 的 ACK_BYTES_THRESHOLD 必须一致；订阅者水位预算的输入之一
-/// （见 `TerminalConfig::subscriber_budget_violation`）
-pub const CLIENT_ACK_BYTES_THRESHOLD: u64 = 64 * 1024;
-
-impl TerminalConfig {
-    /// 订阅者水位预算关系校验（ticket 06），返回违反的约束描述（None = 合法）
-    ///
-    /// 三段缓冲的解锁前提（禁止单独抬高/压低任一阈值）：
-    /// 1. `ack 阈值 ≤ 低位水 < 高位水`，且 `高位水 − ack 阈值 ≤ 低位水`：
-    ///    驻留后**一次 ack** 必须能把窗口压到低位水以下解锁；若 ack 阈值 ≥ 高位水，
-    ///    订阅者永远等不到能解锁的 ack → 驻留到僵尸回收
-    /// 2. `高位水 < 会话环驻留上限`：上游缓存必须大于下游窗口，否则下游还没驻留
-    ///    就已被上游淘汰（无谓截断 → 用户看到清屏重播）
-    pub fn subscriber_budget_violation(&self, ring_max_bytes: u64) -> Option<String> {
-        let high = self.subscriber_high_water_bytes;
-        let low = self.subscriber_low_water_bytes;
-        let ack = CLIENT_ACK_BYTES_THRESHOLD;
-        if high == 0 || low == 0 {
-            return Some("subscriber watermarks 必须非零".to_string());
-        }
-        if ack > low || low >= high {
-            return Some(format!("需满足 ack({ack}) ≤ low({low}) < high({high})"));
-        }
-        if high.saturating_sub(ack) > low {
-            return Some(format!(
-                "需满足 high({high}) − ack({ack}) ≤ low({low})（否则一次 ack 无法解除驻留）"
-            ));
-        }
-        if high >= ring_max_bytes {
-            return Some(format!(
-                "需满足 high({high}) < ring({ring_max_bytes})（上游缓存须大于下游窗口）"
-            ));
-        }
-        None
-    }
 }
 
 impl Default for TerminalConfig {
@@ -531,17 +348,7 @@ impl Default for TerminalConfig {
         Self {
             default_cols: 120,
             default_rows: 40,
-            flush_interval_ms: 30,
-            merge_output: true,
-            max_buffer_size: 64 * 1024,
-            batch_bytes: 64 * 1024,
             read_buffer_size: 4096,
-            // 窗口 128KB / 64KB：客户端 ack 阈值 64KB → 一次 ack 即 128→64 ≤ low，
-            // 立刻解锁；高位水远小于会话环 50MB（上游缓存大于下游）
-            subscriber_high_water_bytes: 128 * 1024,
-            subscriber_low_water_bytes: 64 * 1024,
-            subscriber_park_poll_ms: 200,
-            subscriber_zombie_timeout_ms: 30_000,
         }
     }
 }
@@ -616,7 +423,6 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             network: NetworkConfig::default(),
-            session: SessionConfig::default(),
             ui: UiConfig::default(),
             channels: ChannelsConfig::default(),
             terminal: TerminalConfig::default(),
@@ -709,13 +515,6 @@ impl AppConfig {
                 ),
                 metrics_enabled: parse_value(props, "network.metrics_enabled", default_metrics_enabled()),
             },
-            session: SessionConfig {
-                default_environment: parse_value(props, "session.default_environment", default_environment()),
-                default_wsl_distro: parse_optional(props, "session.default_wsl_distro"),
-                default_working_dir: parse_optional(props, "session.default_working_dir"),
-                default_command: parse_optional(props, "session.default_command"),
-                session_timeout: parse_value(props, "session.session_timeout", 3600),
-            },
             ui: UiConfig {
                 theme: parse_value(props, "ui.theme", "system".to_string()),
                 theme_palette: parse_value(props, "ui.theme_palette", default_theme_palette()),
@@ -727,40 +526,18 @@ impl AppConfig {
                 terminal_font_size: parse_value(props, "ui.terminal_font_size", 12),
                 terminal_font_family: parse_value(props, "ui.terminal_font_family", "Consolas".to_string()),
                 terminal_theme: parse_value(props, "ui.terminal_theme", default_terminal_theme()),
-                show_preview: parse_value(props, "ui.show_preview", true),
                 language: parse_value(props, "ui.language", default_language()),
                 terminal_bg_image: parse_optional(props, "ui.terminal_bg_image"),
                 terminal_bg_opacity: parse_value(props, "ui.terminal_bg_opacity", default_terminal_bg_opacity()),
                 animations_enabled: parse_value(props, "ui.animations_enabled", default_animations_enabled()),
             },
             channels: ChannelsConfig {
-                status_broadcast_capacity: parse_value(props, "channels.status_broadcast_capacity", 64),
-                event_broadcast_capacity: parse_value(props, "channels.event_broadcast_capacity", 256),
-                global_queue_max_bytes: parse_value(props, "channels.global_queue_max_bytes", 50 * 1024 * 1024),
-                global_queue_max_chunks: parse_value(props, "channels.global_queue_max_chunks", 65_536),
-                // 快照模式尚未实现，此处先解析字符串枚举，行为回退见 subscribe 内 warn
-                history_start_mode: match parse_value::<String>(props, "channels.history_start_mode", "min".to_string())
-                    .as_str()
-                {
-                    "snapshot" => HistoryStartMode::Snapshot,
-                    _ => HistoryStartMode::Min,
-                },
-                ws_event_capacity: parse_value(props, "channels.ws_event_capacity", 1024),
                 lifecycle_capacity: parse_value(props, "channels.lifecycle_capacity", 16),
             },
             terminal: TerminalConfig {
                 default_cols: parse_value(props, "terminal.default_cols", 120),
                 default_rows: parse_value(props, "terminal.default_rows", 40),
-                // 兜底默认与 TerminalConfig::default 的 30ms 保持一致（两处曾不一致：20/30）
-                flush_interval_ms: parse_value(props, "terminal.flush_interval_ms", 30),
-                merge_output: parse_value(props, "terminal.merge_output", true),
-                max_buffer_size: parse_value(props, "terminal.max_buffer_size", 65536),
-                batch_bytes: parse_value(props, "terminal.batch_bytes", 64 * 1024),
                 read_buffer_size: parse_value(props, "terminal.read_buffer_size", 4096),
-                subscriber_high_water_bytes: parse_value(props, "terminal.subscriber_high_water_bytes", 128 * 1024),
-                subscriber_low_water_bytes: parse_value(props, "terminal.subscriber_low_water_bytes", 64 * 1024),
-                subscriber_park_poll_ms: parse_value(props, "terminal.subscriber_park_poll_ms", 200),
-                subscriber_zombie_timeout_ms: parse_value(props, "terminal.subscriber_zombie_timeout_ms", 30_000),
             },
             log: LogConfig {
                 file_level: parse_value(props, "log.file_level", default_log_file_level()),
@@ -840,26 +617,6 @@ impl AppConfig {
             "network.metrics_enabled".to_string(),
             self.network.metrics_enabled.to_string(),
         );
-        map.insert(
-            "session.default_environment".to_string(),
-            self.session.default_environment.clone(),
-        );
-        map.insert(
-            "session.default_wsl_distro".to_string(),
-            self.session.default_wsl_distro.clone().unwrap_or_default(),
-        );
-        map.insert(
-            "session.default_working_dir".to_string(),
-            self.session.default_working_dir.clone().unwrap_or_default(),
-        );
-        map.insert(
-            "session.default_command".to_string(),
-            self.session.default_command.clone().unwrap_or_default(),
-        );
-        map.insert(
-            "session.session_timeout".to_string(),
-            self.session.session_timeout.to_string(),
-        );
         map.insert("ui.theme".to_string(), self.ui.theme.clone());
         map.insert("ui.theme_palette".to_string(), self.ui.theme_palette.clone());
         map.insert("ui.font_size".to_string(), self.ui.font_size.to_string());
@@ -872,7 +629,6 @@ impl AppConfig {
             self.ui.terminal_font_family.clone(),
         );
         map.insert("ui.terminal_theme".to_string(), self.ui.terminal_theme.clone());
-        map.insert("ui.show_preview".to_string(), self.ui.show_preview.to_string());
         map.insert("ui.language".to_string(), self.ui.language.clone());
         map.insert(
             "ui.terminal_bg_image".to_string(),
@@ -887,33 +643,6 @@ impl AppConfig {
             self.ui.animations_enabled.to_string(),
         );
         map.insert(
-            "channels.status_broadcast_capacity".to_string(),
-            self.channels.status_broadcast_capacity.to_string(),
-        );
-        map.insert(
-            "channels.event_broadcast_capacity".to_string(),
-            self.channels.event_broadcast_capacity.to_string(),
-        );
-        map.insert(
-            "channels.global_queue_max_bytes".to_string(),
-            self.channels.global_queue_max_bytes.to_string(),
-        );
-        map.insert(
-            "channels.global_queue_max_chunks".to_string(),
-            self.channels.global_queue_max_chunks.to_string(),
-        );
-        map.insert(
-            "channels.history_start_mode".to_string(),
-            match self.channels.history_start_mode {
-                HistoryStartMode::Min => "min".to_string(),
-                HistoryStartMode::Snapshot => "snapshot".to_string(),
-            },
-        );
-        map.insert(
-            "channels.ws_event_capacity".to_string(),
-            self.channels.ws_event_capacity.to_string(),
-        );
-        map.insert(
             "channels.lifecycle_capacity".to_string(),
             self.channels.lifecycle_capacity.to_string(),
         );
@@ -926,40 +655,8 @@ impl AppConfig {
             self.terminal.default_rows.to_string(),
         );
         map.insert(
-            "terminal.flush_interval_ms".to_string(),
-            self.terminal.flush_interval_ms.to_string(),
-        );
-        map.insert(
-            "terminal.merge_output".to_string(),
-            self.terminal.merge_output.to_string(),
-        );
-        map.insert(
-            "terminal.max_buffer_size".to_string(),
-            self.terminal.max_buffer_size.to_string(),
-        );
-        map.insert(
-            "terminal.batch_bytes".to_string(),
-            self.terminal.batch_bytes.to_string(),
-        );
-        map.insert(
             "terminal.read_buffer_size".to_string(),
             self.terminal.read_buffer_size.to_string(),
-        );
-        map.insert(
-            "terminal.subscriber_high_water_bytes".to_string(),
-            self.terminal.subscriber_high_water_bytes.to_string(),
-        );
-        map.insert(
-            "terminal.subscriber_low_water_bytes".to_string(),
-            self.terminal.subscriber_low_water_bytes.to_string(),
-        );
-        map.insert(
-            "terminal.subscriber_park_poll_ms".to_string(),
-            self.terminal.subscriber_park_poll_ms.to_string(),
-        );
-        map.insert(
-            "terminal.subscriber_zombie_timeout_ms".to_string(),
-            self.terminal.subscriber_zombie_timeout_ms.to_string(),
         );
         map.insert("log.file_level".to_string(), self.log.file_level.clone());
         map.insert("log.console_filter".to_string(), self.log.console_filter.clone());
@@ -1022,11 +719,11 @@ mod tests {
 network.port=8765
 
 # 另一个注释
-channels.status_broadcast_capacity=64
+channels.lifecycle_capacity=16
 "#;
         let props = parse_properties(content);
         assert_eq!(props.get("network.port").unwrap(), "8765");
-        assert_eq!(props.get("channels.status_broadcast_capacity").unwrap(), "64");
+        assert_eq!(props.get("channels.lifecycle_capacity").unwrap(), "16");
     }
 
     #[test]
@@ -1050,10 +747,6 @@ channels.status_broadcast_capacity=64
         let config = AppConfig::from_properties(&props);
         assert_eq!(config.network.port, 8765);
         assert_eq!(config.network.auto_start, true);
-        #[cfg(windows)]
-        assert_eq!(config.session.default_environment, "windows");
-        #[cfg(not(windows))]
-        assert_eq!(config.session.default_environment, "linux");
         assert_eq!(config.ui.theme, "system");
         assert_eq!(config.ui.terminal_theme, "dracula");
         assert_eq!(config.ui.terminal_bg_image, None);
@@ -1065,12 +758,10 @@ channels.status_broadcast_capacity=64
         let mut props = HashMap::new();
         props.insert("network.port".to_string(), "9999".to_string());
         props.insert("network.auto_start".to_string(), "false".to_string());
-        props.insert("session.default_environment".to_string(), "wsl2".to_string());
         props.insert("ui.theme".to_string(), "dark".to_string());
         let config = AppConfig::from_properties(&props);
         assert_eq!(config.network.port, 9999);
         assert_eq!(config.network.auto_start, false);
-        assert_eq!(config.session.default_environment, "wsl2");
         assert_eq!(config.ui.theme, "dark");
     }
 
@@ -1083,15 +774,10 @@ channels.status_broadcast_capacity=64
 
         assert_eq!(config.network.port, config2.network.port);
         assert_eq!(config.network.auto_start, config2.network.auto_start);
-        assert_eq!(config.session.default_environment, config2.session.default_environment);
         assert_eq!(config.ui.theme, config2.ui.theme);
         assert_eq!(config.ui.terminal_theme, config2.ui.terminal_theme);
         assert_eq!(config.ui.terminal_bg_image, config2.ui.terminal_bg_image);
         assert_eq!(config.ui.terminal_bg_opacity, config2.ui.terminal_bg_opacity);
-        assert_eq!(
-            config.channels.status_broadcast_capacity,
-            config2.channels.status_broadcast_capacity
-        );
         assert_eq!(config.terminal.default_cols, config2.terminal.default_cols);
     }
 
@@ -1106,19 +792,11 @@ channels.status_broadcast_capacity=64
         let loaded = AppConfig::load(&path).unwrap();
         assert_eq!(config.network.port, loaded.network.port);
         assert_eq!(config.network.auto_start, loaded.network.auto_start);
-        assert_eq!(
-            config.channels.status_broadcast_capacity,
-            loaded.channels.status_broadcast_capacity
-        );
-        // 色板与输出合并开关必须写入 properties 文件并能往返（曾遗漏导致重启后色板重置 / merge_output 写空）
+        // 色板必须写入 properties 文件并能往返（曾遗漏导致重启后色板重置）
         assert_eq!(config.ui.theme_palette, loaded.ui.theme_palette);
-        assert_eq!(config.terminal.merge_output, loaded.terminal.merge_output);
         assert!(std::fs::read_to_string(&path)
             .unwrap()
             .contains("ui.theme_palette=warm"));
-        assert!(std::fs::read_to_string(&path)
-            .unwrap()
-            .contains("terminal.merge_output=true"));
     }
 
     #[test]
@@ -1126,32 +804,6 @@ channels.status_broadcast_capacity=64
         let path = PathBuf::from("/nonexistent/config.properties");
         let config = AppConfig::load(&path).unwrap();
         assert_eq!(config.network.port, 8765);
-    }
-
-    /// history_start_mode 默认值、解析与 properties 往返
-    #[test]
-    fn test_history_start_mode_roundtrip() {
-        // 默认 min
-        let config = AppConfig::default();
-        assert_eq!(config.channels.history_start_mode, HistoryStartMode::Min);
-
-        // 解析 snapshot
-        let mut props = HashMap::new();
-        props.insert("channels.history_start_mode".to_string(), "snapshot".to_string());
-        let config2 = AppConfig::from_properties(&props);
-        assert_eq!(config2.channels.history_start_mode, HistoryStartMode::Snapshot);
-
-        // 非法值回退 min（不 panic）
-        let mut props = HashMap::new();
-        props.insert("channels.history_start_mode".to_string(), "bogus".to_string());
-        let config3 = AppConfig::from_properties(&props);
-        assert_eq!(config3.channels.history_start_mode, HistoryStartMode::Min);
-
-        // 写入 properties 文件并能往返（默认 min 写入、snapshot 还原）
-        let content = config.to_properties_string();
-        assert!(content.contains("channels.history_start_mode=min"));
-        let config4 = AppConfig::from_properties(&parse_properties(&content));
-        assert_eq!(config4.channels.history_start_mode, HistoryStartMode::Min);
     }
 
     #[test]
@@ -1164,16 +816,6 @@ channels.status_broadcast_capacity=64
         assert!(content.contains("# WebSocket 服务器端口"));
         // 验证包含 key=value
         assert!(content.contains("network.port=8765"));
-    }
-
-    #[test]
-    fn test_optional_fields_empty() {
-        let mut props = HashMap::new();
-        props.insert("session.default_wsl_distro".to_string(), String::new());
-        props.insert("session.default_command".to_string(), "claude".to_string());
-        let config = AppConfig::from_properties(&props);
-        assert_eq!(config.session.default_wsl_distro, None);
-        assert_eq!(config.session.default_command, Some("claude".to_string()));
     }
 
     #[test]

@@ -7,8 +7,8 @@
  *  不影响序列化，故 fixture 取「全部小节都在」的最大线协议形态）。
  *
  * 消费方差异：前端 stores/settings.ts 的 Settings 类型是 AppConfig 的子集视图
- * （只取 network/ui 两个小节；session 段的默认值已归 `com.bedcode.terminal-session` 插件
- *  存储，前端不再持有——本 fixture 仍按 Rust DTO 全量建模防漂移）。
+ * （只取 network/ui 两个小节；session 段已从 Rust DTO 整体退役——默认值真源在
+ *  `com.bedcode.terminal-session` 插件存储，2026-09-25 随宿主业务配置下沉删除）。
  *  channels/terminal/log 前端不消费，fixture 一并建模防漂移。
  *
  * 命名规则：serde 默认 snake_case。
@@ -54,23 +54,6 @@ export const APP_CONFIG_NETWORK_DTO_FIELDS = [
   'metrics_enabled',
 ] as const
 
-export interface AppConfigSessionFixture {
-  default_environment: string
-  default_wsl_distro: string | null
-  default_working_dir: string | null
-  default_command: string | null
-  session_timeout: number
-}
-
-/** 与 config.rs SessionConfig 字段一一对应 */
-export const APP_CONFIG_SESSION_DTO_FIELDS = [
-  'default_environment',
-  'default_wsl_distro',
-  'default_working_dir',
-  'default_command',
-  'session_timeout',
-] as const
-
 export interface AppConfigUiFixture {
   theme: string
   theme_palette: string
@@ -78,11 +61,11 @@ export interface AppConfigUiFixture {
   terminal_font_size: number
   terminal_font_family: string
   terminal_theme: string
-  show_preview: boolean
   language: string
   /** None 序列化为 null（不启用背景图片） */
   terminal_bg_image: string | null
   terminal_bg_opacity: number
+  animations_enabled: boolean
 }
 
 /** 与 config.rs UiConfig 字段一一对应 */
@@ -93,41 +76,22 @@ export const APP_CONFIG_UI_DTO_FIELDS = [
   'terminal_font_size',
   'terminal_font_family',
   'terminal_theme',
-  'show_preview',
   'language',
   'terminal_bg_image',
   'terminal_bg_opacity',
+  'animations_enabled',
 ] as const
 
 export interface AppConfigChannelsFixture {
-  status_broadcast_capacity: number
-  restart_broadcast_capacity: number
-  event_broadcast_capacity: number
-  pty_subscription_capacity: number
-  global_queue_capacity: number
-  global_queue_max_bytes: number
-  ws_event_capacity: number
   lifecycle_capacity: number
 }
 
 /** 与 config.rs ChannelsConfig 字段一一对应 */
-export const APP_CONFIG_CHANNELS_DTO_FIELDS = [
-  'status_broadcast_capacity',
-  'restart_broadcast_capacity',
-  'event_broadcast_capacity',
-  'pty_subscription_capacity',
-  'global_queue_capacity',
-  'global_queue_max_bytes',
-  'ws_event_capacity',
-  'lifecycle_capacity',
-] as const
+export const APP_CONFIG_CHANNELS_DTO_FIELDS = ['lifecycle_capacity'] as const
 
 export interface AppConfigTerminalFixture {
   default_cols: number
   default_rows: number
-  flush_interval_ms: number
-  merge_output: boolean
-  max_buffer_size: number
   read_buffer_size: number
 }
 
@@ -135,9 +99,6 @@ export interface AppConfigTerminalFixture {
 export const APP_CONFIG_TERMINAL_DTO_FIELDS = [
   'default_cols',
   'default_rows',
-  'flush_interval_ms',
-  'merge_output',
-  'max_buffer_size',
   'read_buffer_size',
 ] as const
 
@@ -146,6 +107,8 @@ export interface AppConfigLogFixture {
   console_filter: string
   rotation: string
   max_files: number
+  capacity_bytes: number
+  format: string
   console_in_release: boolean
 }
 
@@ -155,27 +118,21 @@ export const APP_CONFIG_LOG_DTO_FIELDS = [
   'console_filter',
   'rotation',
   'max_files',
+  'capacity_bytes',
+  'format',
   'console_in_release',
 ] as const
 
 export interface AppConfigFixture {
   network: AppConfigNetworkFixture
-  session: AppConfigSessionFixture
   ui: AppConfigUiFixture
   channels: AppConfigChannelsFixture
   terminal: AppConfigTerminalFixture
   log: AppConfigLogFixture
 }
 
-/** 与 config.rs AppConfig 顶层六小节一一对应 */
-export const APP_CONFIG_DTO_FIELDS = [
-  'network',
-  'session',
-  'ui',
-  'channels',
-  'terminal',
-  'log',
-] as const
+/** 与 config.rs AppConfig 顶层五小节一一对应 */
+export const APP_CONFIG_DTO_FIELDS = ['network', 'ui', 'channels', 'terminal', 'log'] as const
 
 export function makeAppConfig(overrides: Partial<AppConfigFixture> = {}): AppConfigFixture {
   const fixture: AppConfigFixture = {
@@ -195,13 +152,6 @@ export function makeAppConfig(overrides: Partial<AppConfigFixture> = {}): AppCon
       ws_max_message_size_mb: 16,
       metrics_enabled: false,
     },
-    session: {
-      default_environment: 'windows',
-      default_wsl_distro: null,
-      default_working_dir: null,
-      default_command: 'claude',
-      session_timeout: 3600,
-    },
     ui: {
       theme: 'system',
       theme_palette: 'warm',
@@ -209,27 +159,17 @@ export function makeAppConfig(overrides: Partial<AppConfigFixture> = {}): AppCon
       terminal_font_size: 12,
       terminal_font_family: 'Consolas',
       terminal_theme: 'dracula',
-      show_preview: true,
       language: 'zh-CN',
       terminal_bg_image: null,
       terminal_bg_opacity: 30,
+      animations_enabled: true,
     },
     channels: {
-      status_broadcast_capacity: 64,
-      restart_broadcast_capacity: 64,
-      event_broadcast_capacity: 256,
-      pty_subscription_capacity: 1024,
-      global_queue_capacity: 25000,
-      global_queue_max_bytes: 128 * 1024 * 1024,
-      ws_event_capacity: 1024,
       lifecycle_capacity: 16,
     },
     terminal: {
       default_cols: 120,
       default_rows: 40,
-      flush_interval_ms: 30,
-      merge_output: true,
-      max_buffer_size: 64 * 1024,
       read_buffer_size: 4096,
     },
     log: {
@@ -237,6 +177,8 @@ export function makeAppConfig(overrides: Partial<AppConfigFixture> = {}): AppCon
       console_filter: 'bedcode_lib=debug,actix_web=info,actix_http=info',
       rotation: 'daily',
       max_files: 7,
+      capacity_bytes: 512 * 1024 * 1024,
+      format: 'text',
       console_in_release: false,
     },
     ...overrides,
@@ -244,7 +186,6 @@ export function makeAppConfig(overrides: Partial<AppConfigFixture> = {}): AppCon
   // 顶层与各嵌套小节键集合分别断言：任一节漂移即失败
   assertDtoFields(fixture, APP_CONFIG_DTO_FIELDS, 'AppConfig')
   assertDtoFields(fixture.network, APP_CONFIG_NETWORK_DTO_FIELDS, 'AppConfig.network')
-  assertDtoFields(fixture.session, APP_CONFIG_SESSION_DTO_FIELDS, 'AppConfig.session')
   assertDtoFields(fixture.ui, APP_CONFIG_UI_DTO_FIELDS, 'AppConfig.ui')
   assertDtoFields(fixture.channels, APP_CONFIG_CHANNELS_DTO_FIELDS, 'AppConfig.channels')
   assertDtoFields(fixture.terminal, APP_CONFIG_TERMINAL_DTO_FIELDS, 'AppConfig.terminal')

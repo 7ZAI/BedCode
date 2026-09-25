@@ -151,7 +151,9 @@ enum AuthStage {
 }
 ```
 
-源码: `bedcode-desktop/src-tauri/src/enums/auth.rs`、`bedcode-mobile/src-tauri/src/enums/auth.rs`
+源码: `bedcode-mobile/src-tauri/src/enums/auth.rs`（桌面端副本已随认证编排下沉
+session 插件删除，2026-09-25——宿主 WS 面不再解析 AuthStage/AuthPayload，只认
+`{"type":"auth","token":"<jwt>"}` 极简帧，见 `server/websocket/channel/plugin.rs`）
 
 ### 4.2 AuthPayload 结构
 
@@ -207,7 +209,7 @@ Mobile                              Desktop
 - **一次性**: 验证成功后立即消耗，不可复用
 - **每次请求生成新码**: 不复用现有配对码，确保用户有足够时间输入
 
-源码: `bedcode-desktop/plugins/terminal-session/rust/src/pairing/`（配对码生成 / 验证编排已随认证记录下沉认证中心插件；宿主 `utils/auth/pairing.rs` 已删）
+源码: `bedcode-desktop/wasm-apps/terminal-session/rust/src/pairing/`（配对码生成 / 验证编排已随认证记录下沉认证中心插件；宿主 `utils/auth/pairing.rs` 已删）
 
 ### 5.3 桌面端处理
 
@@ -217,7 +219,7 @@ Mobile                              Desktop
 4. 收到 `VerifyCode` + 配对码 → 调用 `PairingService::verify_and_consume_code()`
 5. 验证通过 → 生成 JWT Token，记录配对到数据库，回复 `Authenticated`
 
-源码: `bedcode-desktop/plugins/terminal-session/rust/src/pairing/`（`RequestPairing` → 配对码编排在认证中心插件；宿主侧 WS 首消息认证窗口在 `bedcode-desktop/src-tauri/src/server/websocket/conn.rs`，`PairingService` 已退役）
+源码: `bedcode-desktop/wasm-apps/terminal-session/rust/src/pairing/`（`RequestPairing` → 配对码编排在认证中心插件；宿主侧 WS 首消息认证窗口在 `bedcode-desktop/src-tauri/src/server/websocket/conn.rs`，`PairingService` 已退役）
 
 ### 5.4 移动端处理
 
@@ -460,7 +462,7 @@ Disconnected ──connect()──► Connecting ──WS握手──► Connect
 | `/api/auth/reauth` | POST | JWT 重认证 |
 | `/api/health` | GET | 健康检查（连接探测用） |
 
-源码: `bedcode-desktop/plugins/terminal-session/rust/src/auth_http/`（`/api/auth/*` 端点编排已下沉认证中心插件，宿主不再注册认证业务路由——JWT 之前的入口经网关免验签转发）
+源码: `bedcode-desktop/wasm-apps/terminal-session/rust/src/auth_http/`（`/api/auth/*` 端点编排已下沉认证中心插件，宿主不再注册认证业务路由——JWT 之前的入口经网关免验签转发）
 
 ---
 
@@ -471,15 +473,15 @@ Disconnected ──connect()──► Connecting ──WS握手──► Connect
 | 文件 | 职责 |
 |------|------|
 | `src-tauri/src/utils/auth/jwt.rs` | JWT 生成/验证（HS256，7 天有效期；宿主 `host-auth` 密钥托管） |
-| `plugins/terminal-session/rust/src/pairing/code.rs` | 配对码生成/验证（6 位数字，60 秒有效期；编排已下沉认证中心插件） |
-| `plugins/terminal-session/rust/src/pairing/qr.rs` | QR 配对 Token（一次性；编排已下沉认证中心插件） |
+| `wasm-apps/terminal-session/rust/src/pairing/code.rs` | 配对码生成/验证（6 位数字，60 秒有效期；编排已下沉认证中心插件） |
+| `wasm-apps/terminal-session/rust/src/pairing/qr.rs` | QR 配对 Token（一次性；编排已下沉认证中心插件） |
 | `src-tauri/src/server/websocket/conn.rs` | WS 连接骨架：首消息认证窗口（JWT 重连 / 配对流程） |
-| `plugins/terminal-session/rust/src/pairing/` | 配对码业务逻辑（认证中心插件，宿主 `PairingService` 已退役） |
-| `plugins/terminal-session/rust/src/auth_http/` | HTTP 认证 API（认证中心插件，宿主经网关免验签转发） |
+| `wasm-apps/terminal-session/rust/src/pairing/` | 配对码业务逻辑（认证中心插件，宿主 `PairingService` 已退役） |
+| `wasm-apps/terminal-session/rust/src/auth_http/` | HTTP 认证 API（认证中心插件，宿主经网关免验签转发） |
 | `src-tauri/src/server/websocket/terminal_ws/` + `websocket/conn.rs` | WS 终端输出端子面（control_frame / forward / subscriber）+ 连接骨架 |
 | `src-tauri/src/server/websocket/websocket_manager.rs` | WS 连接管理器（单例） |
 | `src-tauri/src/mdns/advertiser.rs` | mDNS 服务广播 |
-| `src-tauri/src/enums/auth.rs` | AuthStage / AuthPayload 定义 |
+| ~~`src-tauri/src/enums/auth.rs`~~（已删 2026-09-25） | AuthStage / AuthPayload 定义曾在此；wire 真源现仅移动端 |
 
 ### 移动端（Mobile）
 

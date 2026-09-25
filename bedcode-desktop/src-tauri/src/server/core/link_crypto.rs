@@ -372,7 +372,9 @@ pub struct LinkSuite {
 }
 
 /// 默认套件：X25519 + AES-256-GCM + HKDF-SHA256（与移动端线协议金样一致；
-/// 也是 `CryptoProposal.suite` 缺省时的选择）。
+/// 也是协商套件字段缺省时的选择——原 `CryptoProposal.suite` 缺省语义，该
+/// wire 定义已随宿主认证 wire 退役删除（enums/auth.rs，2026-09-25），协商方
+/// 形状归移动端线协议文档）。
 pub const DEFAULT_LINK_SUITE: LinkSuite = LinkSuite {
     name: "x25519+aes-256-gcm+hkdf-sha256",
     key_agreement: KEY_AGREEMENT_X25519,

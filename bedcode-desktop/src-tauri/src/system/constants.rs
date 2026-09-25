@@ -235,8 +235,8 @@ pub const PLUGIN_PTY_SESSIONS_CEILING_PER_PLUGIN: usize = 64;
 /// 插件私有 PTY 输出环的**默认**容量（字节）：spawn config 未声明 `ringBytes` 时取本值
 ///
 /// 满则淘汰最旧字节（消费者以 `truncated` 感知缺口）——**淘汰只发生在插件自己的
-/// 历史上，绝不把背压踢回 PTY 读取端**（spec D3）。刻意不与业务会话环
-/// （`channels.global_queue_max_bytes`，每会话 50 MB 档）同档：插件环随 pty 句柄
+/// 历史上，绝不把背压踢回 PTY 读取端**（spec D3）。刻意不与原业务会话环
+/// （旧 `channels.global_queue_max_bytes` 50 MB 档，已随会话下沉退役）同档：插件环随 pty 句柄
 /// 存活、每插件可有多条，256 KB 已够一个 TUI 全屏重绘数十帧。需要更深历史的插件
 /// 在 spawn 时自行声明 `ringBytes`（上限见 [`PLUGIN_PTY_RING_MAX_BYTES`]）。
 pub const PLUGIN_PTY_RING_BYTES: u64 = 256 * 1024;
