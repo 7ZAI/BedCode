@@ -111,7 +111,7 @@ bedcode-desktop/                      # 桌面端项目 (Tauri 2.0 + Vue 3)
         │                             #   宿主不持有传输历史、设置或任务真源
         ├── system/                   # 系统模块：应用上下文 (DI 容器)、配置、错误类型、生命周期钩子、
         │                             #   日志格式化、休眠阻止；constants.rs 按领域分组的常量（`// ====` 分隔）
-        ├── utils/                    # 工具：auth/（JWT、配对、QR Token）、parser/（ANSI、Markdown 解析）、
+        ├── utils/                    # 工具：auth/（JWT、配对、QR Token）、
         │                             #   crypto/（对称/非对称/混合加密：AES-GCM、ChaCha20-Poly1305、
         │                             #   RSA、X25519、KDF，用于 HTTP 报文与文件加密传输）、
         │                             #   session_gateway.rs（宿主调会话的**唯一收口点**，纯插件互调 api）
@@ -506,7 +506,6 @@ Rust 侧以 `abi.rs` 为宿主/插件共同引用的单一事实来源（签名�
 | 会话引擎（PTY）与宿主直读输出环 | `src-tauri/src/pty/`、`wasm_core/host_api/pty.rs`（票 11 起唯一的 PTY 注册表与输出环） |
 | HTTP/WS 服务器（core/http/websocket 三层）、REST 控制器、终端 WS | `src-tauri/src/server/` |
 | 设备认证 / 配对 / QR Token | `src-tauri/src/utils/auth/` |
-| ANSI / Markdown 解析 | `src-tauri/src/utils/parser/` |
 | 数据库 | `src-tauri/src/db/` |
 | 全局事件系统 | `src-tauri/src/events/` |
 | mDNS 广播 | `src-tauri/src/mdns/` |
@@ -572,5 +571,4 @@ Claude Code (PTY)
 | 链路加密 | `src-tauri/src/server/core/link_crypto.rs` |
 | 加密工具（报文/文件传输加密） | `src-tauri/src/utils/crypto/` |
 | 认证工具 | `src-tauri/src/utils/auth/*.rs` |
-| 解析器 | `src-tauri/src/utils/parser/*.rs` |
 | 前端测试 | `src/__tests__/**/*.test.ts` |
