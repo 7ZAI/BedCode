@@ -7,7 +7,6 @@ pub mod crypto;
 pub mod db;
 pub mod enums;
 pub mod mdns;
-pub mod process;
 pub mod pty;
 pub mod server;
 pub mod system;

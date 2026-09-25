@@ -13,6 +13,7 @@ pub mod logging;
 pub mod opener;
 pub mod power;
 pub mod power_wake;
+pub mod process;
 
 pub use app_context::AppContext;
 pub use config::AppConfig;

@@ -6,7 +6,7 @@
 //! **业务会话语义**，已随 2026-09-23 PTY 解耦票退役：shell 包装与路径转换归
 //! 消费侧（业务会话 = 插件 `launch.rs::build_argv`，插件私有 PTY = 插件自己）。
 
-use crate::process::create_command;
+use crate::system::process::create_command;
 use crate::Result;
 use encoding_rs::UTF_16LE;
 

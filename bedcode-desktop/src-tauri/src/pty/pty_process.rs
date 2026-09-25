@@ -12,7 +12,7 @@
 
 // 仅在 Windows 平台使用（kill 的 taskkill 路径），避免 Linux/macOS 编译下 unused 警告
 #[cfg(target_os = "windows")]
-use crate::process::create_command;
+use crate::system::process::create_command;
 use crate::pty::lifecycle::{PtyTerminated, PtyTerminationGate};
 use crate::pty::output_sink::PtyOutputSink;
 use crate::pty::pty_reader::PtyReader;
