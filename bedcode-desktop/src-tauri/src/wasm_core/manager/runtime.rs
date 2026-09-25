@@ -590,6 +590,8 @@ mod tests {
     mod a03_probe;
     // 终端输出消费插件化性能前置验证（P1-P3，只读探针；文档 .scratch/2026-09-21-terminal-output-consumer-perf/）
     mod terminal_output_perf;
+    // WS 终端输出路径吞吐探针（票 09 性能门禁 §9.3：插件 ring-fetch + WIT binary + WS send）
+    mod ws_output_perf;
     // 域拆分（P0）：测试函数自本文件拆至 wasm_runtime/tests/，共享脚手架留在下方；
     // 各域文件 `use super::*` 复用，fixture 互斥与产物构建语义不变
     mod component_e2e;

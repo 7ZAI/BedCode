@@ -883,16 +883,23 @@ impl LoadedWasmPlugin {
 
     /// 旧 SDK 产物的实例化失败判据 → 重建指引（空串 = 不是这个原因，不加噪音）
     ///
-    /// v27 是**唯一一次破坏性契约变更**（删了两个 import interface 与一个 export
-    /// interface），旧产物会**在实例化阶段**失败——比 `verify_abi` 的版本协商更早。
+    /// 本项目迄今的破坏性契约变更有两次（均在**实例化阶段**失败——比 `verify_abi`
+    /// 的版本协商更早）：
+    /// - **v27**：删了两个 import interface（`host-session` / `host-terminal`）与一个
+    ///   export interface（`terminal-hooks`）；
+    /// - **v28**：`host-events.broadcast-sync` 函数退役（websocket 业务下沉票 08——
+    ///   插件事件改 bus/emit，宿主不再持同步广播面），旧产物 import 该函数 → wasmtime
+    ///   报「找不到 import 实现」点名 `broadcast-sync`。
+    ///
     /// 组件模型不提供「向后兼容的缺省 import」，故失败本身不可避免；能做的是让失败
-    /// **可诊断**：wasmtime 的原文点名缺失的 interface，本条补一句「按哪个版本重建」。
+    /// **可诊断**：wasmtime 的原文点名缺失的 interface/函数，本条补一句「按哪个版本重建」。
     ///
     /// 抽成自由函数是为了可单测：判据是「错误文本 → 是否附指引」，与 Store 无关。
     pub(super) fn stale_artifact_rebuild_hint(instantiate_error: &str) -> String {
         let is_stale_contract = instantiate_error.contains("host-session")
             || instantiate_error.contains("host-terminal")
             || instantiate_error.contains("terminal-hooks")
+            || instantiate_error.contains("broadcast-sync")
             || instantiate_error.contains("not found in the linker")
             || instantiate_error.contains("matching implementation");
         if !is_stale_contract {
@@ -900,7 +907,7 @@ impl LoadedWasmPlugin {
         }
         format!(
             "（该产物按旧版插件 SDK 构建：ABI v{} 起 host-session / host-terminal 两个 import \
-             与 terminal-hooks 导出已删除，请用当前 SDK 重建插件产物）",
+             与 terminal-hooks 导出已删除、host-events.broadcast-sync 已退役，请用当前 SDK 重建插件产物）",
             abi::ABI_VERSION
         )
     }
@@ -1838,6 +1845,14 @@ mod tests {
 
         // 形态 3：被删的 export interface（宿主按必选导出实例化，缺导出同样失败）
         assert!(!LoadedWasmPlugin::stale_artifact_rebuild_hint("component does not export terminal-hooks").is_empty());
+
+        // v28（websocket 业务下沉票 08）：host-events.broadcast-sync 退役——旧产物
+        // import 该函数，wasmtime 原文点名 `broadcast-sync`，必须同样附 v28 重建指引
+        let msg_v28 = "unknown import `bedcode:plugin/host-events.broadcast-sync` has not been defined";
+        let hint_v28 = LoadedWasmPlugin::stale_artifact_rebuild_hint(msg_v28);
+        assert!(hint_v28.contains("重建"), "v28 删项必须给重建指引: {hint_v28}");
+        assert!(hint_v28.contains(&format!("v{}", abi::ABI_VERSION)), "v28 删项必须点明 ABI 版本: {hint_v28}");
+        assert!(hint_v28.contains("broadcast-sync"), "v28 删项必须点名缺失的函数: {hint_v28}");
 
         // 反向：与契约变更无关的实例化失败不得附指引（避免掩盖真因）
         assert!(LoadedWasmPlugin::stale_artifact_rebuild_hint("failed to find a pre-opened directory").is_empty());

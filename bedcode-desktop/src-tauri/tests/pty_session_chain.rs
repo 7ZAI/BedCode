@@ -495,6 +495,20 @@ async fn pty_session_chain_flow() {
     assert_eq!(stopped_frame["sessionId"], session_id, "session_stopped 应携带会话 id");
 
     // ==================== 场景 4：未注册端点路径 → 404（旧路由不存在，无 fallback） ====================
+    // 旧路由 `/ws/event` 与 `/ws/terminal/session/{id}` 已在票 08 硬切删除，宿主不再
+    // 提供任何旧协议业务入口：请求得到通用 404，不提供 alias 或 fallback
+    // （spec §2.1 / §8.2 结构锁：旧路由串只允许出现在迁移说明/测试反例）。
+    for legacy in [
+        format!("ws://127.0.0.1:{port}/ws/event"),
+        format!("ws://127.0.0.1:{port}/ws/terminal/session/{session_id}"),
+    ] {
+        let err = tokio_tungstenite::connect_async(&legacy).await;
+        assert!(
+            err.is_err(),
+            "旧路由必须拒绝（404 无升级），不得静默放行: {legacy:?}: {err:?}"
+        );
+    }
+    // 未注册插件端点路径同样 404（同口径）
     let unregistered = format!("ws://127.0.0.1:{port}/ws/plugin/{SESSION_PLUGIN_ID}/no-such-endpoint");
     let err = tokio_tungstenite::connect_async(&unregistered).await;
     assert!(err.is_err(), "未注册端点必须拒绝（404 无升级），不得静默放行: {err:?}");

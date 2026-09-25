@@ -356,7 +356,7 @@ roadmap 阶段 3（`.scratch/2026-09-10-plugin-kernel-roadmap/spec.md`）把「�
 
 ## 双端偏离（host-websocket / host-pty 等桌面独有接口）
 
-- 移动端是**远程终端控制端**，不承载 PTY / mDNS 广播 / WS 服务端等主机侧引擎，故 `host-websocket`（desktop v14）、`host-auth`（v15 密钥托管；v18 追加认证记录面四函数）、`host-pty`（v16）、`auth-policy` 导出（v17，认证能力——宿主 server 中间件验签后取策略）、**会话语义下沉批次（v18 / v19：`host-session` 配置面 + 创建与动作面 + 注解槽 + 连接清单、`host-platform.wsl-distros`）** 均为**桌面独有接口**：mobile 的 WIT / ABI / SDK 不跟演也不投影（ADR 0018 双端各自演进的文档化偏离，同 wasmtime 桌面 48 / 移动 47 分叉先例）。当前 **desktop v27 / mobile 11**（v23 = host-session 配置面写原语退役，见 v10 登记；v24 认证记录下沉、v25 host-peer 节点生命周期原语、v26 host-crypto 契约面、**v27 = 会话原语域整 interface 退役——本项目迄今唯一一次破坏性契约变更**；desktop 独有接口持续演进不要求移动端跟演，但 v27 是**删 import / 删 export**，旧产物在实例化期即失败，须按 v27 SDK 重建）。
+- 移动端是**远程终端控制端**，不承载 PTY / mDNS 广播 / WS 服务端等主机侧引擎，故 `host-websocket`（desktop v14）、`host-auth`（v15 密钥托管；v18 追加认证记录面四函数）、`host-pty`（v16）、`auth-policy` 导出（v17，认证能力——宿主 server 中间件验签后取策略）、**会话语义下沉批次（v18 / v19：`host-session` 配置面 + 创建与动作面 + 注解槽 + 连接清单、`host-platform.wsl-distros`）** 均为**桌面独有接口**：mobile 的 WIT / ABI / SDK 不跟演也不投影（ADR 0018 双端各自演进的文档化偏离，同 wasmtime 桌面 48 / 移动 47 分叉先例）。当前 **desktop v28 / mobile 11**（v23 = host-session 配置面写原语退役，见 v10 登记；v24 认证记录下沉、v25 host-peer 节点生命周期原语、v26 host-crypto 契约面、**v27 = 会话原语域整 interface 退役**、**v28 = websocket 业务下沉：新增 `host-websocket.connection-context` + 破坏性退役 `host-events.broadcast-sync` / `host-pty.spawn` 的 `hostBroadcastSessionId`**；desktop 独有接口持续演进不要求移动端跟演，但 v27 / v28 都是**删 import / 删 export / 删函数**的破坏性变更，旧产物在实例化期即失败，须按对应版本 SDK 重建）。**移动端不在 v28 兼容范围**：websocket 业务下沉专项只改桌面端，移动端旧 WS 客户端 / 路由 / wire 形状不动、不承诺兼容（见 `.scratch/2026-09-25-websocket-business-downsink/spec.md`）。
 - **偏离不止 WIT 面**：本批次同时经用户 2026-09-19 授权**豁免 AGENTS.md §9「协议改动必须两端同步部署」**，豁免范围严格限于该 spec（`.scratch/2026-09-19-terminal-session-plugin/spec.md` D1）。自守边界：线协议**形状**（会话 DTO 字段、同步事件、WS 控制帧、认证握手报文）保持不变——保持它并不需要移动端改一行代码，且它是后置适配专项的成本基线。移动端受损面 M1–M5 已挂进路线图（`.scratch/2026-09-10-plugin-kernel-roadmap/spec.md`），桌面端不为其负责（spec Out of Scope）。
 - **恢复条件**：当移动端需要同类能力（例如本地跑交互进程）时，再在该端 WIT 增补对应 interface 并对齐 ABI 计数；在此之前「改 WIT 必须双端同步」这一硬约束的适用范围限于**双端共有的接口**（host-peer / host-fs / host-http 等）。
 - SDK 双端独立包（`plugin-sdk-desktop` / `plugin-sdk-mobile`），互不影响；宿主侧 `version > 当前 → 拒绝` 的兼容语义保证旧插件（≤v16）零迁移仍可加载。
@@ -583,4 +583,33 @@ host-business-decarriage 收尾批次（`.scratch/2026-09-20-host-business-decar
   wire 逐字不变（`pty_session_chain` 集成测试经转发层全绿）。实施与验收见
   `.scratch/2026-09-24-host-crypto-business-downsink/issues/09a/09b/09c`。
 
-- **2026-09-24 v18（当前）**：**加密引擎化 + enums 三分类处置收口（票 01-09c，ABI 25 → 26\n  只发生在 host-crypto 契约面；移动端零改动）**。见上「加密引擎化」节与「WS 动作词表声明式化」节。\n  ① **crypto/ 引擎（票 01/02）**：算法注册表（名称→实现 + 白名单 + abstract trait），`link_crypto`\n  不再内联具体算法（WS/HTTP 过滤层只依赖注册表抽象接口）。② **host-crypto 契约面（票 03/04）**：\n  WIT interface + 三权限位 `crypto:aead` / `crypto:asym` / `crypto:kdf` + ABI 25 → **26**（desktop\n  独有，双端偏离）；原语只给中性算法、不给编排，宿主密钥不经原语暴露（非旁路红线）。③ **协商套件\n  参数化（票 05）**：`CryptoProposal.suite` 可选字段，缺省 → 默认套件，未知名 fail-visible 拒绝；\n  移动端旧端零改动。④ **enums 三分类处置（票 06-09）**：special_key 下沉插件、shell.rs 整文件删除、\n  SessionStatus/Type 归位 protocol/session.rs（线协议形状）、动作词表 switch 声明式化（v17 详情）；\n  `enums/` 终态 = 引擎级类型 + 传输面契约形状，业务语义零残留。实施与验收见\n  `.scratch/2026-09-24-host-crypto-business-downsink/issues/01..09c`。
+- **2026-09-24 v18（当前）**：**加密引擎化 + enums 三分类处置收口（票 01-09c，ABI 25 → 26
+  只发生在 host-crypto 契约面；移动端零改动）**。见上「加密引擎化」节与「WS 动作词表声明式化」节。
+  ① **crypto/ 引擎（票 01/02）**：算法注册表（名称→实现 + 白名单 + abstract trait），`link_crypto`
+  不再内联具体算法（WS/HTTP 过滤层只依赖注册表抽象接口）。② **host-crypto 契约面（票 03/04）**：
+  WIT interface + 三权限位 `crypto:aead` / `crypto:asym` / `crypto:kdf` + ABI 25 → **26**（desktop
+  独有，双端偏离）；原语只给中性算法、不给编排，宿主密钥不经原语暴露（非旁路红线）。③ **协商套件
+  参数化（票 05）**：`CryptoProposal.suite` 可选字段，缺省 → 默认套件，未知名 fail-visible 拒绝；
+  移动端旧端零改动。④ **enums 三分类处置（票 06-09）**：special_key 下沉插件、shell.rs 整文件删除、
+  SessionStatus/Type 归位 protocol/session.rs（线协议形状）、动作词表 switch 声明式化（v17 详情）；
+  `enums/` 终态 = 引擎级类型 + 传输面契约形状，业务语义零残留。实施与验收见
+  `.scratch/2026-09-24-host-crypto-business-downsink/issues/01..09c`。
+
+- **2026-09-25 v19（当前）**：**websocket 业务下沉（ABI 27 → **28**，破坏性；移动端明确不在
+  兼容范围、零改动）**。宿主 WS 面收为**通用 transport**（无业务内核红线 §5 / 裁剪线 ADR 0022）：
+  旧 `/ws/event` 与 `/ws/terminal/session/{id}` 路由删除（只剩 `/ws/plugin/<id>/<path>`，旧路径
+  通用 404 无 fallback）；`Message` 业务枚举 / `services/` / `subscription.rs` / `terminal_ws/` /
+  `channel/{event,terminal}.rs` / `session.rs` / `src/events/`（AppEvent+publish+matcher+
+  `HostSyncEvent`+`sync_handler`）整删，`WsSession` 收缩为连接认证态；宿主不再 import
+  `SessionControlAction` / `TerminalAction` / `SyncPayload` / `DeviceConnectionEvent` 等产品概念。
+  ① **新增 `host-websocket.connection-context` 原语**（返回脱敏连接事实：clientId / endpointId /
+  owner / addr / authenticated / connectedAt / authContext{subject,deviceName,fingerprint}；
+  永不返回 token；仅端点属主可调、权限 `ws:server`）。② **破坏性退役**：`host-events.broadcast-sync`
+  （插件事件改 `host-bus.publish` + `host-events.emit`，`broadcast` 权限位保留但 `broadcast.sync`
+  子项退役）、`host-pty.spawn` 的 `hostBroadcastSessionId` 字段（PTY 引擎不再知道 session id，
+  插件经 `ring-fetch` 自持游标）。③ **旧产物 fail-visible**：v28 后旧产物（import `broadcast-sync`
+  的 v27 产物）在实例化期失败，`stale_artifact_rebuild_hint` 判据扩展点名 `broadcast-sync`。
+  ④ **SDK wire 收敛**：`wire/{sync,control}.rs` 删除、`SyncEvent`/`SyncPayload` 退役；HTTP 历史
+  改经插件互调 `session-history`（插件自持 pty_id 调 `ring-fetch`）。实施与验收见
+  `.scratch/2026-09-25-websocket-business-downsink/`（票 02-09；性能门禁含 WS 输出路径
+  `ws_output_perf.rs` 探针：常态 196 KiB 全量到达 0 截断 / 压力 10 MiB 节流产出边产边拉 ≥ 4 MiB）。

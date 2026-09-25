@@ -74,12 +74,25 @@ const predictTerminalSize = vi.fn(async () => ({ cols: 120, rows: 32 }))
 const storageGet = vi.fn(async () => seed.formDefaults)
 const storageSet = vi.fn(async () => {})
 
+/** 事件订阅桩（票 05 起 SessionCenterView 订阅 session:created/stopped/removed
+ *  自动刷新列表——mock 缺 events 会让订阅调用抛未处理拒绝，vitest 记 10 个 error） */
+const eventHandlers: Record<string, Array<(payload: unknown) => void>> = {}
+const eventDispose = vi.fn()
+
 function makeContext(): PluginContext {
   return {
     i18n: { t: (key: string) => key },
     commands: { execute },
     session: { openTerminal, closeTerminal, isTerminalOpen, predictTerminalSize },
     storage: { get: storageGet, set: storageSet },
+    events: {
+      on: (event: string, handler: (payload: unknown) => void) => {
+        eventHandlers[event] = eventHandlers[event] ?? []
+        eventHandlers[event].push(handler)
+        return { dispose: eventDispose }
+      },
+      emit: vi.fn(),
+    },
   } as unknown as PluginContext
 }
 
