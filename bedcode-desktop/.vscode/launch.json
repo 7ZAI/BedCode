@@ -1,18 +1,101 @@
 {
-  "version": "0.2.0",
-  "configurations": [
-    {
-      "type": "lldb", // 1. 调试器类型设为 lldb
-      "request": "launch",
-      "name": "Tauri Debug",
-      "cargo": {
-        // 2. 使用 cargo 管理构建
-        "args": [
-          "build",
-          "--manifest-path=./src-tauri/Cargo.toml",
-          "--no-default-features" // 跳过默认 features，按需调整
-        ]
-      }
-    }
-  ]
+    // 使用 IntelliSense 了解相关属性。
+    // 悬停以查看现有属性的描述。
+    // 欲了解更多信息，请访问: https://go.microsoft.com/fwlink/?linkid=830387
+    //
+    // 调试插件: vadimcn.vscode-lldb (CodeLLDB)
+    // 参考文档: https://v2.tauri.app/develop/debug/vscode/
+    //
+    // 本文件随 BedCode.code-workspace 多根工作区使用（也可单独打开本文件夹时生效），
+    // 是仓库根 .vscode/launch.json 桌面端配置的等价物，${workspaceFolder} = 本文件夹
+    // （bedcode-desktop）。官方方案：不经过 tauri CLI —— CodeLLDB 直接 cargo build 并以
+    // 调试器启动二进制；beforeDevCommand / beforeBuildCommand 由本文件夹 .vscode/tasks.json
+    // 的任务补齐（preLaunchTask）。桌面端无自定义 [features]，无需官方示例中的 --no-default-features。
+    //
+    // 注意：
+    // 1. ui:dev 是后台常驻任务，调试退出后 vite 仍在运行；vite strictPort=true（1420），
+    //    再次 F5 时若上次 ui:dev 未结束，任务会因端口占用失败——先在终端面板结束它，或改用 Attach
+    "version": "0.2.0",
+    "configurations": [
+        {
+            // 桌面端开发模式调试：先等 vite dev server 就绪（preLaunchTask），
+            // 再 cargo build（debug profile）并启动二进制，webview 连接 http://localhost:1420
+            "name": "Tauri Development Debug",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--manifest-path=${workspaceFolder}/src-tauri/Cargo.toml"
+                ]
+            },
+            "filter": {
+                "name": "bedcode-desktop",
+                "kind": "bin"
+            },
+            // 让 LLDB 按 Rust 方式展示源码/变量（String、Vec、Option 等 pretty printer）
+            "sourceLanguages": ["rust"],
+            "preLaunchTask": "ui:dev",
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "RUST_LOG": "debug"
+            },
+            "console": "integratedTerminal"
+        },
+        {
+            // 桌面端生产模式调试：release 构建 + 前端产物内嵌（frontendDist ../dist）
+            // 注意：release 全量编译耗时较长，仅在需要复现 release 行为时使用
+            "name": "Tauri Production Debug",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--release",
+                    "--manifest-path=${workspaceFolder}/src-tauri/Cargo.toml"
+                ]
+            },
+            "filter": {
+                "name": "bedcode-desktop",
+                "kind": "bin"
+            },
+            "sourceLanguages": ["rust"],
+            "preLaunchTask": "ui:build",
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            // 桌面端单元测试断点调试（构建测试二进制后启动）
+            // 启动后在 Debug Console 输入: r <test_name>  只跑指定用例；直接 continue 跑全部
+            "name": "Debug Unit Tests (Desktop)",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--package=bedcode-desktop",
+                    "--lib",
+                    "--manifest-path=${workspaceFolder}/src-tauri/Cargo.toml"
+                ]
+            },
+            "filter": {
+                "name": "bedcode_lib",
+                "kind": "lib"
+            },
+            "sourceLanguages": ["rust"],
+            "args": [],
+            "cwd": "${workspaceFolder}/src-tauri"
+        },
+        {
+            // 附加到已在运行的进程（如 tauri:dev 已启动的实例）
+            "name": "Attach to bedcode-desktop",
+            "type": "lldb",
+            "request": "attach",
+            "program": "${command:pickProcess}",
+            // 可改为指定 pid: "pid": 12345
+            "sourceLanguages": ["rust"]
+        }
+    ]
 }

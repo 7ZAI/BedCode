@@ -1,0 +1,41 @@
+{
+    // 使用 IntelliSense 了解相关属性。
+    // 悬停以查看现有属性的描述。
+    // 欲了解更多信息，请访问: https://go.microsoft.com/fwlink/?linkid=830387
+    //
+    // 调试插件: vadimcn.vscode-lldb (CodeLLDB)
+    // 参考文档: https://v2.tauri.app/develop/debug/vscode/
+    //
+    // 本文件随 BedCode.code-workspace 多根工作区使用（也可单独打开本文件夹时生效），
+    // 是仓库根 .vscode/launch.json 移动端配置的等价物，${workspaceFolder} = 本文件夹
+    // （bedcode-mobile）。Android 真机调试需 NDK lldb 远程附加，不适用本文件；
+    // 本配置仅限 Windows/桌面宿主壳调共享 Rust 逻辑（devUrl :1423）。
+    "version": "0.2.0",
+    "configurations": [
+        {
+            // 移动端 Rust 宿主调试：跑 bedcode-mobile 二进制（devUrl :1423），
+            // 用于调试与移动端共享的 Rust 逻辑；Android 真机不适用
+            "name": "Tauri Mobile Host Debug",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--manifest-path=${workspaceFolder}/src-tauri/Cargo.toml"
+                ]
+            },
+            "filter": {
+                "name": "bedcode-mobile",
+                "kind": "bin"
+            },
+            "sourceLanguages": ["rust"],
+            "preLaunchTask": "ui:dev",
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "RUST_LOG": "debug"
+            },
+            "console": "integratedTerminal"
+        }
+    ]
+}

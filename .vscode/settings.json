@@ -2,11 +2,22 @@
     "i18n-ally.localesPaths": [
         "src/locales"
     ],
-    // ==================== rust-analyzer 内存优化 ====================
-    // 背景：2026-09-04 打开工作区根同时索引 desktop+mobile 两个 Tauri 项目（根目录无
-    // Cargo workspace），RA RSS 冲到 3.2GB 被 systemd-oomd 杀进程。当时使用的
+    // ==================== rust-analyzer 项目声明与内存优化 ====================
+    // linkedProjects：RA 1.98 起不再递归发现子目录工程——仓库根无 Cargo.toml 时若
+    // 不声明，直接报 "failed to find any projects"。这里显式声明两端宿主工程（各自的
+    // path 依赖 peer-net / link-crypto / plugin-sdk-* 自动随工程加载）；插件/SDK/测试
+    // 组件的独立工程不加载（见 .vscode/README.md）。
+    // 声明多个工程 = 单 RA 实例加载两端宿主，内存高于多根工作区的双实例拆分；
+    // 需要更低的单实例内存时改用 BedCode.code-workspace（每文件夹独立实例）。
+    "rust-analyzer.linkedProjects": [
+        "bedcode-desktop/src-tauri/Cargo.toml",
+        "bedcode-mobile/src-tauri/Cargo.toml"
+    ],
+    // 背景：2026-09-04 打开工作区根同时索引两端多个 Tauri 工程（当时 RA 递归发现全部
+    // ~28 个 Cargo.toml），RSS 冲到 3.2GB 被 systemd-oomd 杀进程；linkedProjects 显式
+    // 声明后禁用递归发现，加载集合大幅缩小。当时使用的
     // memoryUsage.*Limit 与 rust-analyzer.files.watcherExclude 键在 rust-analyzer
-    // 0.3.3033 已移除（`--print-config-schema` 确认），本段以当前版本有效键重新收紧。
+    // 0.3.3033 已移除（`--print-config-schema` 确认），本段以当前版本（1.98.1）有效键重新收紧。
     //
     // VSCode 原生文件监听排除（支持 glob，替代已移除的 rust-analyzer.files.watcherExclude；
     // 两个 target 合计约 43G，必须排除，否则启动遍历即吃爆内存）
