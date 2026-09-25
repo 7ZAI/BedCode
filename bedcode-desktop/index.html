@@ -13,6 +13,14 @@
   </head>
   <body class="bg-dark-900 text-dark-100">
     <div id="app">
+      <!--
+        静态首屏：Vue 挂载前（含 SplashLoading 之前）的过渡帧，随 #app 内容一起被替换掉。
+        此刻 style.css 的 token 与应用内主题设置（SQLite AppConfig）都还没加载，
+        只能跟随系统深浅色（与移动端 index.html 静态首屏同源的做法）；
+        应用内手动选的主题从 SplashLoading.vue 起才生效。
+        下面的浅色字面值是 style.css 浅色 token 的手工镜像（改 token 需同步这里），
+        深色分支保持既有 slate 配色不动（与品牌开屏深色的差异属既有状态）。
+      -->
       <style>
         .splash {
           display: flex;
@@ -28,6 +36,17 @@
           border: 3px solid #1e293b;
           border-top-color: #6366f1;
           animation: spin 0.8s linear infinite;
+        }
+        /* 浅色系统：镜像 style.css 浅色 token —— 底 #f5f4f0→#efede7（--bg-page→--bg-sidebar），
+           环身 #e4e1d8（--border），前进端 #26231b（--text-primary） */
+        @media (prefers-color-scheme: light) {
+          .splash {
+            background: linear-gradient(135deg, #f5f4f0, #efede7);
+          }
+          .spinner {
+            border-color: #e4e1d8;
+            border-top-color: #26231b;
+          }
         }
         @keyframes spin {
           to {

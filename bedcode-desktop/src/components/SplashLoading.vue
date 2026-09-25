@@ -114,8 +114,11 @@
 /**
  * SplashLoading - 桌面端启动画面（终端 Boot 风格）
  *
- * 固定深色品牌渐变背景（镜像 src-tauri/icons/icon.svg，不随主题切换，
- * 避免启动期主题闪烁），内容为品牌 glyph + 打字机启动行 + boot log 阶段栈 + 可选进度条。
+ * 背景随主题切换：浅色为纸面墨色（跟随当前色板 token），深色沿用固定品牌暖白渐变
+ * （镜像 src-tauri/icons/icon.svg）。主题 class 由 App.vue onMounted 的 setupTheme()
+ * 落定，早于开屏最短 900ms 展示窗口；Vue 挂载前的静态首屏只能跟随系统深浅色，
+ * 见 index.html 内的 prefers-color-scheme 分支。
+ * 内容为品牌 glyph + 打字机启动行 + boot log 阶段栈 + 可选进度条。
  * 通过 visible 控制显隐；宿主在初始化完成后置 false 触发淡出。
  */
 import { computed, onMounted, ref } from 'vue'
@@ -175,28 +178,66 @@ const footerText = computed(() =>
 </script>
 
 <style scoped>
-/* ==================== 品牌常量 ==================== */
-/* 启动画面固定深色，颜色为品牌资产常量而非主题 token：
-   渐变两端镜像 src-tauri/icons/icon.svg 背景，文字取深色主题 --text-primary 同值。
-   仅在本组件内定义一次，避免污染全局 token 命名空间。 */
+/* ==================== 开屏色板 ==================== */
+/* 开屏专属变量，仅在本组件内定义一次，避免污染全局 token 命名空间。
+   两套主题的色值全部收敛在这两个变量块，下方规则一律引用变量，不再出现字面色值。
+
+   浅色（默认，即 :root 非 dark）：纸面底 + 墨色字，端点直接取当前色板 token，
+   故 warm/cool/forest/… 色板切换时开屏一起跟随。环境高光用卡片白而非暗色光晕，
+   霓虹类发光（text-shadow / drop-shadow）整体置 transparent——纸面上低透明度墨色
+   既脏又糊，层次改由边框与投影承担（同移动端 SplashScreen 的浅色处理思路）。
+   文字透明度按小字号 AA 反推：墨色 78% 在 #f5f4f0 上约 7:1、65% 约 4.8:1，
+   比深色的 55% / 35% 各提一档（深色底 #15130f 上同样透明度对比度天然更高）。
+
+   深色（html.dark）：固定品牌渐变常量，镜像 src-tauri/icons/icon.svg 两端色值，
+   不随色板切换——保持该主题既有观感不变（暖白文字 #ece8dc = 深色 --text-primary）。
+   注：祖先选择器必须裸写 `html.dark`，不能用 `:global(html.dark) .splash-root`——
+   scoped 编译器会丢掉 :global() 之后的后代选择器（移动端 SplashScreen 踩过，整页罩层）。 */
 .splash-root {
+  --splash-bg-from: var(--bg-page);
+  --splash-bg-to: var(--bg-sidebar);
+  --splash-tile-from: var(--bg-card);
+  --splash-tile-to: var(--bg-page);
+  --splash-text: var(--text-primary);
+  --splash-text-dim: color-mix(in srgb, var(--text-primary) 78%, transparent);
+  --splash-text-faint: color-mix(in srgb, var(--text-primary) 65%, transparent);
+  --splash-border: color-mix(in srgb, var(--text-primary) 14%, transparent);
+  --splash-track: color-mix(in srgb, var(--text-primary) 16%, transparent);
+  --splash-success: color-mix(in srgb, var(--color-success) 65%, black);
+  --splash-bloom: var(--color-primary-contrast);
+  --splash-ambient: var(--text-primary);
+  --splash-vignette: color-mix(in srgb, var(--text-primary) 8%, transparent);
+  --splash-shadow: 0 12px 40px color-mix(in srgb, var(--text-primary) 14%, transparent);
+  --splash-glow: transparent;
+
+  /* 三层背景：中央高光 + 底部 vignette + 主渐变 */
+  background:
+    radial-gradient(ellipse 68% 46% at 50% 40%, color-mix(in srgb, var(--splash-bloom) 6%, transparent), transparent 70%),
+    radial-gradient(ellipse 100% 60% at 50% 110%, var(--splash-vignette), transparent 60%),
+    linear-gradient(135deg, var(--splash-bg-from), var(--splash-bg-to));
+}
+
+html.dark .splash-root {
   --splash-bg-from: #2e2a22;
   --splash-bg-to: #0a0907;
+  --splash-tile-from: #2e2a22;
+  --splash-tile-to: #0a0907;
   --splash-text: #ece8dc;
   --splash-text-dim: rgba(236, 232, 220, 0.55);
   --splash-text-faint: rgba(236, 232, 220, 0.35);
   --splash-border: rgba(236, 232, 220, 0.09);
   --splash-track: rgba(236, 232, 220, 0.12);
   --splash-success: rgba(140, 212, 138, 0.92);
-
-  /* 三层背景：中央辉光 + 底部 vignette + 品牌渐变 */
-  background:
-    radial-gradient(ellipse 68% 46% at 50% 40%, rgba(236, 232, 220, 0.06), transparent 70%),
-    radial-gradient(ellipse 100% 60% at 50% 110%, rgba(0, 0, 0, 0.6), transparent 60%),
-    linear-gradient(135deg, var(--splash-bg-from), var(--splash-bg-to));
+  --splash-bloom: #ece8dc;
+  --splash-ambient: #ece8dc;
+  --splash-vignette: rgba(0, 0, 0, 0.6);
+  --splash-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+  /* 深色下的发光色：暖白霓虹，呼应终端荧光（深色文字阴影的唯一来源） */
+  --splash-glow: rgba(236, 232, 220, 0.22);
 }
 
-/* 呼吸辉光层：极克制（opacity 0.4 → 0.55，周期 8s），仅烘托 logo 周围 */
+/* 呼吸辉光层：极克制（opacity 0.4 → 0.55，周期 8s），仅烘托 logo 周围；
+   浅色下 ambient 为墨色，读作 logo 周围的柔和环境阴影而非光晕 */
 .splash-halo {
   position: absolute;
   left: 50%;
@@ -205,7 +246,7 @@ const footerText = computed(() =>
   width: 520px;
   height: 520px;
   border-radius: 50%;
-  background: radial-gradient(circle at 50% 50%, rgba(236, 232, 220, 0.09), rgba(236, 232, 220, 0.02) 40%, transparent 65%);
+  background: radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--splash-ambient) 9%, transparent), color-mix(in srgb, var(--splash-ambient) 2%, transparent) 40%, transparent 65%);
   filter: blur(36px);
   opacity: 0.4;
   animation: splash-halo-breath 8s ease-in-out infinite;
@@ -220,28 +261,28 @@ const footerText = computed(() =>
 .splash-logo {
   position: relative;
   background:
-    linear-gradient(145deg, rgba(236, 232, 220, 0.08), transparent 55%),
-    linear-gradient(135deg, var(--splash-bg-from), var(--splash-bg-to));
+    linear-gradient(145deg, color-mix(in srgb, var(--splash-bloom) 8%, transparent), transparent 55%),
+    linear-gradient(135deg, var(--splash-tile-from), var(--splash-tile-to));
   border: 1px solid var(--splash-border);
   box-shadow:
-    0 12px 40px rgba(0, 0, 0, 0.55),
-    inset 0 1px 0 rgba(236, 232, 220, 0.06);
+    var(--splash-shadow),
+    inset 0 1px 0 color-mix(in srgb, var(--splash-bloom) 6%, transparent);
 }
 
-/* Logo 外发光 */
+/* Logo 外围氛围层：深色读作外发光，浅色下 ambient 为墨色 → 柔影 */
 .splash-logo::before {
   content: "";
   position: absolute;
   inset: -12px;
   border-radius: 1.3rem;
-  background: radial-gradient(circle at 50% 50%, rgba(236, 232, 220, 0.13), transparent 70%);
+  background: radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--splash-ambient) 13%, transparent), transparent 70%);
   filter: blur(16px);
   z-index: -1;
   pointer-events: none;
 }
 
 .splash-logo svg {
-  filter: drop-shadow(0 0 6px rgba(236, 232, 220, 0.22));
+  filter: drop-shadow(0 0 6px var(--splash-glow));
 }
 
 /* ==================== 入场编排 ==================== */
@@ -291,12 +332,12 @@ const footerText = computed(() =>
   white-space: nowrap;
   vertical-align: bottom;
   animation: splash-typing 0.6s steps(7, end) 0.45s both;
-  text-shadow: 0 0 10px rgba(236, 232, 220, 0.22);
+  text-shadow: 0 0 10px var(--splash-glow);
 }
 
-/* 提示符 $ 微微发光 */
+/* 提示符 $ 微微发光（浅色下 glow 为 transparent，即不做霓虹处理） */
 .splash-root .text-\[var\(--splash-text-faint\)\] {
-  text-shadow: 0 0 6px rgba(236, 232, 220, 0.2);
+  text-shadow: 0 0 6px var(--splash-glow);
 }
 
 @keyframes splash-caret-blink {
@@ -342,7 +383,7 @@ const footerText = computed(() =>
   align-items: center;
   font-weight: 500;
   color: var(--splash-success);
-  text-shadow: 0 0 6px rgba(140, 212, 138, 0.4);
+  text-shadow: 0 0 6px color-mix(in srgb, var(--splash-success) 44%, transparent);
   padding-right: 0.55rem;
 }
 
@@ -382,7 +423,7 @@ const footerText = computed(() =>
 
 .splash-progress-track .seg.done {
   background: var(--splash-text);
-  box-shadow: 0 0 4px rgba(236, 232, 220, 0.35);
+  box-shadow: 0 0 4px color-mix(in srgb, var(--splash-text) 35%, transparent);
 }
 
 /* 段与 boot log 同步入场 */
