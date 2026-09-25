@@ -61,7 +61,7 @@ file-transfer/
 ## 构建
 
 ```bash
-cd bedcode-desktop/plugins/file-transfer
+cd bedcode-desktop/wasm-apps/file-transfer
 node scripts/build.js              # 完整构建（前端 + Rust + Component Model + 复制）
 node scripts/build.js --watch      # 前端 watch（配合宿主 PluginDevWatcher 热重载）
 node scripts/build.js --frontend-only

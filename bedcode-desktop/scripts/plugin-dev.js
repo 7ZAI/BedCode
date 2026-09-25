@@ -19,16 +19,16 @@ const __dirname = dirname(__filename)
 const ROOT = resolve(__dirname, '..')
 const IS_WIN = platform() === 'win32'
 
-// 插件配置 — 指向合并后的插件工程目录
+// 插件配置 — 指向合并后的插件工程目录（wasm 应用源码目录 wasm-apps/）
 const PLUGINS = {
   'com.bedcode.ai-chatbox': {
-    pluginDir: 'plugins/ai-chatbox',
+    pluginDir: 'wasm-apps/ai-chatbox',
   },
   'com.bedcode.file-transfer': {
-    pluginDir: 'plugins/file-transfer',
+    pluginDir: 'wasm-apps/file-transfer',
   },
   'com.bedcode.terminal-session': {
-    pluginDir: 'plugins/terminal-session',
+    pluginDir: 'wasm-apps/terminal-session',
   },
 }
 

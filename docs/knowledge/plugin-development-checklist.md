@@ -4,7 +4,7 @@
 > 硬约束与 AGENTS.md 同级——冲突时按 AGENTS.md §0 优先级裁决。
 > 相关：ADR 0017（互调）/ 0019（wasmtime 双端）/ 0022（裁剪线与双端偏离）、`docs/knowledge/logging.md`。
 
-插件位于 `plugins/<plugin-id>/`（独立 package：`plugin.json` + `rust/` WASM 后端 + `src/` TS 前端 + `vite.config.ts`）。
+插件位于 `wasm-apps/<plugin-id>/`（桌面端；移动端仍为 `plugins/`）（独立 package：`plugin.json` + `rust/` WASM 后端 + `src/` TS 前端 + `vite.config.ts`）。
 
 ## 检查清单
 

@@ -10,7 +10,7 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
-import { useSettings } from '../../../../plugins/file-transfer/src/composables/useSettings'
+import { useSettings } from '../../../../wasm-apps/file-transfer/src/composables/useSettings'
 
 function makeContext() {
   const calls: Array<{ id: string; args: any }> = []

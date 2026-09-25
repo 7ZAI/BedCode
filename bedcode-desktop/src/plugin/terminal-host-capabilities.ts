@@ -10,7 +10,7 @@
  * 注入键 `terminalHostCapabilities`：未被渲染插件消费时无副作用（插件侧
  * `useTerminalHostCapabilities()` 取不到会回落内存版）。
  *
- * 注入契约类型真源：`plugins/terminal-session/src/components/terminal/
+ * 注入契约类型真源：`wasm-apps/terminal-session/src/components/terminal/
  * terminalHostCapabilities.ts`（宿主不 import 插件，就地定义同构结构）。
  */
 import { provide, reactive, computed } from 'vue'

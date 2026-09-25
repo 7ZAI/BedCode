@@ -1,6 +1,6 @@
 {
-  "name": "@bedcode/plugin-agent-hub",
-  "version": "0.1.0",
+  "name": "@bedcode/wasm-app-file-transfer",
+  "version": "1.0.0-beta",
   "private": true,
   "type": "module",
   "scripts": {
@@ -10,16 +10,15 @@
     "dev": "node scripts/build.js --watch"
   },
   "dependencies": {
-    "@binblink/bedcode-plugin-sdk-desktop": "file:../../packages/plugin-sdk-desktop",
-    "@vuepic/vue-datepicker": "^9.0.3"
+    "@binblink/bedcode-plugin-sdk-desktop": "file:../../packages/plugin-sdk-desktop"
   },
   "devDependencies": {
+    "@tauri-apps/plugin-notification": "^2.0.0",
     "@vitejs/plugin-vue": "^6.0.0",
-    "terser": "^5.0.0",
-    "typescript": "^5.0.0",
     "vite": "^8.0.0",
-    "vite-plugin-css-injected-by-js": "^5.0.2",
     "vue": "^3.4.0",
-    "vue-i18n": "^9.0.0"
+    "vue-i18n": "^9.0.0",
+    "typescript": "^5.0.0",
+    "terser": "^5.0.0"
   }
 }

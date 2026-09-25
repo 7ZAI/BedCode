@@ -1,5 +1,5 @@
 {
-  "name": "@bedcode/plugin-session",
+  "name": "@bedcode/wasm-app-session",
   "version": "1.0.0-beta",
   "private": true,
   "type": "module",

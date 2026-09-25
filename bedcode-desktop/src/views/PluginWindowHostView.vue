@@ -48,7 +48,7 @@ import { getPluginRegistry } from '@/plugin/registry'
 import { provideTerminalHostCapabilities } from '@/plugin/terminal-host-capabilities'
 import { logger } from '@/utils/frontendLogger'
 
-/** 会话插件常量（与 plugins/terminal-session/plugin.json 一致；同 src/plugin/context.ts） */
+/** 会话插件常量（与 wasm-apps/terminal-session/plugin.json 一致；同 src/plugin/context.ts） */
 const DEFAULT_WINDOW_PLUGIN_ID = 'com.bedcode.terminal-session'
 /** 终端窗口视图 id（会话插件 `kind: 'page'` 贡献面，不进侧边栏菜单） */
 const DEFAULT_WINDOW_VIEW_ID = 'session.terminal-window'

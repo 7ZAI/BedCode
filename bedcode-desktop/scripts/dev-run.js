@@ -122,24 +122,25 @@ const PKG_MGR_CLI =
 
 // ==================== 平台配置 ====================
 
-/** 插件 watch 启动项（dir 相对仓库根，args 在插件目录内执行；wasmFile 为插件内 WASM 产物相对路径） */
+/** 插件 watch 启动项（dir 相对仓库根，args 在插件目录内执行；wasmFile 为插件内 WASM 产物相对路径；
+ *  桌面端 wasm 应用源码目录 = wasm-apps/） */
 const PLUGIN_WATCH_CMDS = [
   {
-    dir: 'plugins/ai-chatbox',
+    dir: 'wasm-apps/ai-chatbox',
     id: 'com.bedcode.ai-chatbox',
     args: ['scripts/build.js', '--watch'],
     // ai-chatbox 已迁移 wasm32-wasip2（WASI 预打开文件访问），与另两插件的 unknown-unknown 不同
     wasmFile: 'rust/target/wasm32-wasip2/release/bedcode_plugin_ai_chatbox.wasm',
   },
   {
-    dir: 'plugins/terminal-session',
+    dir: 'wasm-apps/terminal-session',
     id: 'com.bedcode.terminal-session',
     args: ['scripts/build.js', '--watch'],
     // 票 03 起本插件走仓库共享 wasip3 构建链（cdylib 直出 Component）
     wasmFile: 'rust/target/wasm32-wasip3/release/bedcode_plugin_terminal_session.wasm',
   },
   {
-    dir: 'plugins/file-transfer',
+    dir: 'wasm-apps/file-transfer',
     id: 'com.bedcode.file-transfer',
     args: ['scripts/build.js', '--watch'],
     wasmFile: 'rust/target/wasm32-unknown-unknown/release/bedcode_plugin_file_transfer.wasm',
@@ -353,7 +354,7 @@ ensurePluginWasm()
 // 2. 插件前端 watch（先行启动，产物在宿主 resources 同步前就绪）
 if (noWatch) {
   console.warn('[dev-run] 插件前端 watch 已关闭（--no-watch）：resources 产物不会随插件源码改动刷新。')
-  console.warn('[dev-run]   改了插件前端要自己重建：cd plugins/<id> && node scripts/build.js')
+  console.warn('[dev-run]   改了插件前端要自己重建：cd wasm-apps/<id> && node scripts/build.js')
 } else for (const { dir, args } of PLUGIN_WATCH_CMDS) {
   // 插件目录可能被临时移除（停用/排查）：缺失时跳过而非 fail-fast 整组回收，
   // 否则单个插件下线会连带杀死宿主 dev 会话

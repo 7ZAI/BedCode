@@ -13,7 +13,7 @@ import {
   formatTrustedDate,
   normalizeTrustedPeers,
   useTrustedPeers,
-} from '../../../../plugins/file-transfer/src/composables/useTrustedPeers'
+} from '../../../../wasm-apps/file-transfer/src/composables/useTrustedPeers'
 
 const NODE_A = 'a'.repeat(32)
 const NODE_B = 'b'.repeat(32)

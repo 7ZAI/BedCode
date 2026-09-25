@@ -5,18 +5,19 @@ export default {
     './src/**/*.{vue,js,ts,jsx,tsx}',
     // 内置插件前端源码：插件 SFC 使用宿主 Tailwind 工具类，运行时注入宿主 CSS，
     // 需纳入扫描否则类缺失（插件 dist 不携带编译后的 Tailwind）。
-    // 勿合并回 './plugins/**/src/**' 动态中段通配：fast-glob 无法剪枝该模式，
+    // 勿合并回 './wasm-apps/**/src/**' 动态中段通配：fast-glob 无法剪枝该模式，
     // 会把各插件 rust/target、node_modules 等巨型目录（合计约 1.4GB / 数十万文件）
     // 全量同步遍历，阻塞事件循环数秒——表现为 dev server HTTP 周期性无响应
     // （2026-08-23 转圈事故根因，CPU profile 实锤 tailwind→fast-glob sync readdir 占 95%+）
-    './plugins/ai-chatbox/src/**/*.{vue,js,ts,jsx,tsx}',
-    './plugins/file-transfer/src/**/*.{vue,js,ts,jsx,tsx}',
+    // 桌面端语义（2026-09-25）：wasm 插件对外称 wasm 应用，源码目录 wasm-apps/
+    './wasm-apps/ai-chatbox/src/**/*.{vue,js,ts,jsx,tsx}',
+    './wasm-apps/file-transfer/src/**/*.{vue,js,ts,jsx,tsx}',
     // terminal-session（终端会话中心；票 06 起由 `session` 改名）：会话页配置卡片网格、
     // 弹窗、遮罩与终端窗口视图都用宿主同源 Tailwind 工具类——**目录改名/新增插件必须同步
     // 本清单**，否则该插件独有工具类零产出（护栏见 src/__tests__/plugin/tailwindContentCoverage.test.ts）
-    './plugins/terminal-session/src/**/*.{vue,js,ts,jsx,tsx}',
+    './wasm-apps/terminal-session/src/**/*.{vue,js,ts,jsx,tsx}',
     // agent-hub：会话日志查询条控件使用宿主 Input/Select 同源 Tailwind 类
-    './plugins/agent-hub/src/**/*.{vue,js,ts,jsx,tsx}',
+    './wasm-apps/agent-hub/src/**/*.{vue,js,ts,jsx,tsx}',
     // 共享 SDK 组件：宿主/插件共用（@binblink/bedcode-plugin-sdk-desktop/ui 的 Select 等），
     // 不含此路径则组件的 fixed/max-h 等布局类缺失，面板定位异常
     './packages/plugin-sdk-desktop/src/**/*.{vue,js,ts,jsx,tsx}',

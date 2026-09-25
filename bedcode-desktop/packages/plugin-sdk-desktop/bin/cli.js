@@ -180,7 +180,9 @@ function cmdCreate(positional, flags) {
     .filter(Boolean)
     .map((seg) => seg.charAt(0).toUpperCase() + seg.slice(1))
     .join('')}Plugin`
-  const pkgName = `@bedcode/plugin-${last}`
+  // 桌面端语义（2026-09-25）：wasm 插件对外称 wasm 应用，npm 包名用 wasm-app- 前缀；
+  // crate 名 / 结构体名是内部实现标识符，保持 bedcode_plugin_* / *Plugin 不变
+  const pkgName = `@bedcode/wasm-app-${last}`
 
   // 插件类型：默认 ts-only；--rust 附带 WASM 后端
   const withRust = flags.rust === true

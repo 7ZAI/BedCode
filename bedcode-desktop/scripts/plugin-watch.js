@@ -17,7 +17,7 @@
 import { spawn } from 'node:child_process'
 import { cpSync, existsSync, mkdirSync, watch } from 'node:fs'
 import { basename, resolve } from 'node:path'
-// 票 16：与另两个装配点（`plugins/*/scripts/build.js`、`sdk/bin/cli.js`）共用同一份
+// 票 16：与另两个装配点（`wasm-apps/*/scripts/build.js`、`sdk/bin/cli.js`）共用同一份
 // 摘要注入实现——此前本文件漏了这一行 import，dev 期每次前端重建都在复制链最后一步
 // 抛 `ReferenceError: injectWasmHash is not defined`，把已注入的 wasmHash 又抹掉。
 import { injectWasmHash } from '../packages/plugin-sdk-desktop/bin/wasm-hash.js'

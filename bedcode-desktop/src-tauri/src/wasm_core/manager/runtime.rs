@@ -1581,7 +1581,7 @@ mod tests {
     /// 第二真源，桥接锚点漂移会退化成「本来就该被测出来的静默降级」。
     fn session_apis() -> Vec<String> {
         let manifest_path =
-            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../plugins/terminal-session/plugin.json");
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm-apps/terminal-session/plugin.json");
         let raw = std::fs::read_to_string(&manifest_path).expect("session plugin.json 可读");
         let manifest: serde_json::Value = serde_json::from_str(&raw).expect("session manifest JSON");
         manifest["api"]

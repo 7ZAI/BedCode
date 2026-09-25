@@ -1,7 +1,7 @@
 /**
  * 终端宿主能力注入契约（宿主侧，票 03a；票 05 收口）
  *
- * 与插件侧真源 `plugins/terminal-session/src/components/terminal/
+ * 与插件侧真源 `wasm-apps/terminal-session/src/components/terminal/
  * terminalHostCapabilities.ts` 结构镜像（宿主不 import 插件包，双份定义的
  * 脆弱点以插件侧为真源）。插件窗口宿主 `views/PluginWindowHostView.vue`
  * 经 `plugin/terminal-host-capabilities.ts` 按此契约 provide，

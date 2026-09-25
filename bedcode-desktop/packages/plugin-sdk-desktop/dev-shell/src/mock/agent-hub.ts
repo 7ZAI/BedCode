@@ -843,7 +843,7 @@ function registerCommands(context: PluginContext): void {
   }
 }
 
-/** devMock 种子容器（插件 AgentHubDevMock 的本地镜像，见 plugins/agent-hub/src/devMockTypes.ts） */
+/** devMock 种子容器（插件 AgentHubDevMock 的本地镜像，见 wasm-apps/agent-hub/src/devMockTypes.ts） */
 interface AgentHubSeed {
   detection?: DetectionSeed
   install?: InstallSeed

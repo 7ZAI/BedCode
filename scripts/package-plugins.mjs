@@ -62,7 +62,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(__dirname, '..')
 const DESKTOP_ROOT = resolve(ROOT, 'bedcode-desktop')
 const MOBILE_ROOT = resolve(ROOT, 'bedcode-mobile')
-const DESKTOP_PLUGINS = resolve(DESKTOP_ROOT, 'plugins')
+const DESKTOP_PLUGINS = resolve(DESKTOP_ROOT, 'wasm-apps')  // 桌面端语义（2026-09-25）：wasm 应用源码目录
 const MOBILE_PLUGINS = resolve(MOBILE_ROOT, 'plugins')
 const DEFAULT_CONFIG = resolve(__dirname, 'plugin-package-list.json')
 const IS_WIN = platform() === 'win32'
@@ -288,7 +288,7 @@ if (plugins.length === 0) {
 if (args.list) {
   console.log('[package-plugins] 打包插件清单：')
   for (const p of plugins) {
-    console.log(`  ${p.target.padEnd(8)} ${p.id}  (dir: plugins/${p.dir})`)
+    console.log(`  ${p.target.padEnd(8)} ${p.id}  (dir: ${p.dir})`)
   }
   process.exit(0)
 }

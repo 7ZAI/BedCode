@@ -31,7 +31,7 @@ import {
   peerDisplayName,
   peerOnlineKey,
   startPeerNotifications,
-} from '../../../../plugins/file-transfer/src/notifications'
+} from '../../../../wasm-apps/file-transfer/src/notifications'
 
 type Handler = (payload: any) => void
 

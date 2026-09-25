@@ -75,14 +75,14 @@ describe('PluginApprovalDialog', () => {
     expect(text).toContain('可在你的机器上执行任意命令与脚本')
     expect(text).toContain('可创建伪终端并在你的机器上启动任意 shell')
     // 非高危位（storage）不得出现后果文案
-    expect(text).not.toContain('读写插件本地存储（高危）')
+    expect(text).not.toContain('读写应用本地存储（高危）')
     // 未知权限回退原文，不得显示成占位符
     expect(text).not.toContain('未知权限')
   })
 
   it('未请求任何权限时显示空态文案', () => {
     const wrapper = mountDialog(makePlugin({ permissions: [] }))
-    expect(wrapper.text()).toContain('该插件未请求任何权限')
+    expect(wrapper.text()).toContain('该应用未请求任何权限')
   })
 
   it('确认后调用宿主审批命令并通知调用方', async () => {
@@ -110,7 +110,7 @@ describe('PluginApprovalDialog', () => {
     expect(toastMock.error).toHaveBeenCalledTimes(1)
     expect(String(toastMock.error.mock.calls[0][0])).toContain('requires user approval')
     // 弹层仍在（plugin prop 未变）→ 用户可重试
-    expect(wrapper.text()).toContain('批准插件权限')
+    expect(wrapper.text()).toContain('批准应用权限')
   })
 
   it('取消不调用宿主，仅通知关闭', async () => {

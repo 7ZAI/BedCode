@@ -226,7 +226,7 @@ git commit -m "refactor(ocr): 移除移动端 OCR 插件至 feature/ocr-plugin"
 **删除清单：**
 
 ```bash
-git rm -r bedcode-desktop/plugins/scheduler
+git rm -r bedcode-desktop/wasm-apps/scheduler
 git rm -r .scratch/task-scheduler-plugin     # 设计文档随分支（§3.3 决策）
 ```
 

@@ -111,7 +111,7 @@ cmd_health() {
   )
   local pass=0 fail=0
   for p in "${plugins[@]}"; do
-    local dir="$ROOT/bedcode-desktop/plugins/$p/rust"
+    local dir="$ROOT/bedcode-desktop/wasm-apps/$p/rust"
     [ -f "$dir/Cargo.toml" ] || { log "跳过（无 rust/Cargo.toml）: $p"; continue; }
     log "编译（零代码改动）: ${p} → wasm32-wasip3"
     if RUSTUP_TOOLCHAIN="${WASIP3_NIGHTLY}" cargo build \

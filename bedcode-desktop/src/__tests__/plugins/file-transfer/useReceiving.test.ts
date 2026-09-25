@@ -9,7 +9,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
-import { useReceiving } from '../../../../plugins/file-transfer/src/composables/useReceiving'
+import { useReceiving } from '../../../../wasm-apps/file-transfer/src/composables/useReceiving'
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification'
 
 // 系统通知模块整体 mock：编排测试只验证是否/何时触发，不触碰真实 Tauri 桥

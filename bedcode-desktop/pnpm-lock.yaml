@@ -322,7 +322,7 @@ importers:
         specifier: ^3.2.7
         version: 3.2.7(@types/node@20.19.43)(@vitest/browser@3.2.7)(@vitest/ui@3.2.7)(happy-dom@13.10.1)(lightningcss@1.33.0)(supports-color@10.2.2)(terser@5.51.2)
 
-  plugins/agent-hub:
+  wasm-apps/agent-hub:
     dependencies:
       '@binblink/bedcode-plugin-sdk-desktop':
         specifier: file:../../packages/plugin-sdk-desktop
@@ -353,7 +353,7 @@ importers:
         specifier: ^9.0.0
         version: 9.14.5(vue@3.5.42(typescript@5.9.3))
 
-  plugins/ai-chatbox:
+  wasm-apps/ai-chatbox:
     dependencies:
       '@binblink/bedcode-plugin-sdk-desktop':
         specifier: file:../../packages/plugin-sdk-desktop
@@ -390,7 +390,7 @@ importers:
         specifier: ^9.0.0
         version: 9.14.5(vue@3.5.42(typescript@5.9.3))
 
-  plugins/file-transfer:
+  wasm-apps/file-transfer:
     dependencies:
       '@binblink/bedcode-plugin-sdk-desktop':
         specifier: file:../../packages/plugin-sdk-desktop
@@ -418,7 +418,7 @@ importers:
         specifier: ^9.0.0
         version: 9.14.5(vue@3.5.42(typescript@5.9.3))
 
-  plugins/terminal-session:
+  wasm-apps/terminal-session:
     dependencies:
       '@binblink/bedcode-plugin-sdk-desktop':
         specifier: file:../../packages/plugin-sdk-desktop

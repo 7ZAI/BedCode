@@ -264,7 +264,8 @@ mod tests {
     fn production_manifests_declare_only_known_vocabulary() {
         let root = desktop_root();
         let mut checked = 0usize;
-        for dir in ["plugins", "packages"] {
+        // 桌面 wasm 应用源码目录 2026-09-25 起为 `wasm-apps/`（旧 `plugins/` rename）
+        for dir in ["wasm-apps", "packages"] {
             let base = root.join(dir);
             for entry in fs::read_dir(&base).expect("插件目录可读") {
                 let manifest = entry.expect("目录条目可读").path().join("plugin.json");

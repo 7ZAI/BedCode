@@ -9,7 +9,7 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
-import { useRemoteFs } from '../../../../plugins/file-transfer/src/composables/useRemoteFs'
+import { useRemoteFs } from '../../../../wasm-apps/file-transfer/src/composables/useRemoteFs'
 
 type EventHandler = (payload: any) => void
 

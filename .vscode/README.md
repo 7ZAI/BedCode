@@ -11,7 +11,7 @@
 
 单实例 RSS 若超过 ~2 GB，改用多根工作区拆分。
 
-**插件 / SDK / 测试组件的 Rust 工程**在两种入口下都不随宿主加载；需要单独开发时直接打开对应目录（如 `code bedcode-desktop/plugins/terminal-session/rust`）——该目录是单 Cargo 工程，无需 linkedProjects。
+**插件 / SDK / 测试组件的 Rust 工程**在两种入口下都不随宿主加载；需要单独开发时直接打开对应目录（如 `code bedcode-desktop/wasm-apps/terminal-session/rust`）——该目录是单 Cargo 工程，无需 linkedProjects。
 
 **调试与任务**：
 

@@ -5,7 +5,7 @@
  * 空白剥除与空串/余数边界——长指纹对比场景的展示基础。
  */
 import { describe, it, expect } from 'vitest'
-import { groupFingerprint } from '../../../../plugins/file-transfer/src/utils/format'
+import { groupFingerprint } from '../../../../wasm-apps/file-transfer/src/utils/format'
 
 describe('groupFingerprint', () => {
   it('64 位 hex 按 4 字符一组切成 16 组', () => {

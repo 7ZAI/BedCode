@@ -653,7 +653,7 @@ description: 本地导入演示技能（dev-shell 种子）
           {
             ts: NOW - 5_392_000,
             role: 'tool',
-            text: 'Read bedcode-desktop/plugins/agent-hub/src/composables/useUsage.ts (L112-130)',
+            text: 'Read bedcode-desktop/wasm-apps/agent-hub/src/composables/useUsage.ts (L112-130)',
             model: null,
             tokens: null,
           },

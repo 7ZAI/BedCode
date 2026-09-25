@@ -70,7 +70,7 @@ pnpm run build -- --frontend-only / --rust-only   # 只构建一半（rust-ts �
 | `context.system` | `revealInDir(path)` 在系统文件管理器中打开目录并选中文件（Shell COM 直调，中文路径原生支持） |
 | `context.i18n` | `getI18n()` 取宿主 i18n 实例；`registerMessages` / `t` 自动加插件 ID 前缀 |
 
-内置插件示例：`plugins/ai-chatbox`（侧边栏 AI 面板 + 终端工具栏项）、`plugins/auto-task`（Claude Code 任务队列 + 定时任务）、`plugins/file-transfer`（局域网文件传输）、`plugins/scheduler`（计划任务）。
+内置插件示例：`wasm-apps/ai-chatbox`（侧边栏 AI 面板 + 终端工具栏项）、`wasm-apps/auto-task`（Claude Code 任务队列 + 定时任务）、`wasm-apps/file-transfer`（局域网文件传输）、`wasm-apps/scheduler`（计划任务）。
 
 ## 4. 浏览器开发环境（Dev Shell）
 
@@ -126,4 +126,4 @@ Rust 后端逻辑、真实 HTTP 端点、系统文件选择需在真实宿主验
 | SDK 浏览器开发环境 | `bedcode-desktop/packages/plugin-sdk-desktop/dev-shell/` |
 | 插件宿主（Rust） | `bedcode-desktop/src-tauri/src/plugin/`（host / loader / registry / api_bridge / wasm_runtime / file_service / storage / permission / validation / message_bus / fs_auth / approval / watcher） |
 | 前端插件运行时 | `bedcode-desktop/src/plugin/`（context / registry / loader / commands / events / permission / shared-runtime / contributionKinds） |
-| 内置插件 | `bedcode-desktop/plugins/ai-chatbox`、`auto-task`、`file-transfer`、`scheduler` |
+| 内置插件 | `bedcode-desktop/wasm-apps/ai-chatbox`、`auto-task`、`file-transfer`、`scheduler` |

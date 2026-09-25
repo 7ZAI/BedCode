@@ -64,7 +64,7 @@ scripts/wasip3-toolchain.sh health
 # 手动构建任意桌面插件到 wasip3：
 RUSTUP_TOOLCHAIN=nightly-2026-09-16 cargo build \
   --target wasm32-wasip3 --release --no-default-features --features wasm \
-  --manifest-path bedcode-desktop/plugins/<id>/rust/Cargo.toml
+  --manifest-path bedcode-desktop/wasm-apps/<id>/rust/Cargo.toml
 ```
 
 fixture 工程：`bedcode-desktop/packages/plugin-wasip3-test/`（`com.bedcode.wasip3-test`，

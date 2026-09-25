@@ -22,7 +22,10 @@
 **Monorepo 结构：**
 
 - `bedcode-desktop/`（桌面主机）、`bedcode-mobile/`（移动远程终端）——各自独立 `src/`（前端）与 `src-tauri/`（Rust 后端），各自维护 `pnpm-lock.yaml`
-- `plugins/<plugin-id>/` 插件工程、`packages/plugin-sdk-*/` 插件 SDK（WIT 契约）
+- 端内插件工程：桌面 `wasm-apps/<app-id>/`（**wasm 应用**；2026-09-25 语义变更：桌面端
+  wasm 插件对外称 wasm 应用，源码目录 `wasm-apps/`；内部代码实现、插件 ID 契约与运行时
+  `app_data_dir/plugins` 不变）、移动 `plugins/<plugin-id>/`；
+  `packages/plugin-sdk-*/` 插件 SDK（WIT 契约）
 
 ---
 
@@ -51,7 +54,7 @@ cd bedcode-desktop && pnpm run tauri:build
 cd bedcode-desktop && pnpm run tauri:dev -- --no-watch
 #   必须经 pnpm 转发，不能裸 `node scripts/dev-run.js`（无 pnpm_execpath 时 Linux ENOENT，2026-09-24 实测）。
 #   关掉原因：插件 watch 把 vite 产物复制进 src-tauri/ → tauri dev 全量重启宿主并清当日日志。
-#   关掉后改插件前端需自行 `cd plugins/<id> && node scripts/build.js`
+#   关掉后改插件前端需自行 `cd wasm-apps/<id> && node scripts/build.js`
 
 # Mobile Development / Build
 cd bedcode-mobile && pnpm run tauri:android:dev        # 开发

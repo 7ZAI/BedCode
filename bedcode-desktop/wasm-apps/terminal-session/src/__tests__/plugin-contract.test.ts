@@ -24,7 +24,7 @@ vi.mock('@tauri-apps/plugin-os', () => ({ platform: () => 'linux' }))
 
 // happy-dom 下 import.meta.url 不是 file: 协议，无法 fileURLToPath；
 // vitest 以宿主工作区根为 cwd 启动（bedcode-desktop/），据此定位插件工程根
-const PLUGIN_ROOT = resolve(process.cwd(), 'plugins/terminal-session')
+const PLUGIN_ROOT = resolve(process.cwd(), 'wasm-apps/terminal-session')
 const manifest = JSON.parse(readFileSync(resolve(PLUGIN_ROOT, 'plugin.json'), 'utf-8'))
 const buildScript = readFileSync(resolve(PLUGIN_ROOT, 'scripts/build.js'), 'utf-8')
 const cargoToml = readFileSync(resolve(PLUGIN_ROOT, 'rust/Cargo.toml'), 'utf-8')

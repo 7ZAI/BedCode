@@ -69,7 +69,7 @@ enum TrustedDir {
 const FIRST_PARTY_TRUSTED_DIRS: &[(&str, &[TrustedDir])] = &[
     (
         // agent-hub 技能库：规范库在 `~/.agents/skills`，分发目标由
-        // `plugins/agent-hub/rust/src/skills.rs::TARGET_SEGS` 决定（claude / pi 家级私有目录）。
+        // `wasm-apps/agent-hub/rust/src/skills.rs::TARGET_SEGS` 决定（claude / pi 家级私有目录）。
         // 分发与落后检测逐文件读写这些目录，弹窗会把一次「同步技能」拆成 N 次点击。
         "com.bedcode.agent-hub",
         &[

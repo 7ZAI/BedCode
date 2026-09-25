@@ -14,8 +14,8 @@
 import { describe, it, expect } from 'vitest'
 import { mount } from '@vue/test-utils'
 import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
-import TaskPanel from '../../../../plugins/file-transfer/src/components/TaskPanel.vue'
-import type { ReceivingTask } from '../../../../plugins/file-transfer/src/types'
+import TaskPanel from '../../../../wasm-apps/file-transfer/src/components/TaskPanel.vue'
+import type { ReceivingTask } from '../../../../wasm-apps/file-transfer/src/types'
 
 /** 上下文桩：t 直返 key（断言时用 key 定位元素，不依赖真实文案） */
 function makeContext(): PluginContext {

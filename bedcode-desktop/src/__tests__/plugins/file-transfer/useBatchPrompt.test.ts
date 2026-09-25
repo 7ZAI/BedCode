@@ -8,8 +8,8 @@
  */
 import { describe, it, expect } from 'vitest'
 import { nextTick, ref } from 'vue'
-import type { PendingBatch } from '../../../../plugins/file-transfer/src/types'
-import { useBatchPrompt } from '../../../../plugins/file-transfer/src/composables/useBatchPrompt'
+import type { PendingBatch } from '../../../../wasm-apps/file-transfer/src/types'
+import { useBatchPrompt } from '../../../../wasm-apps/file-transfer/src/composables/useBatchPrompt'
 
 function makeBatch(id: string, createdAt: number): PendingBatch {
   return {

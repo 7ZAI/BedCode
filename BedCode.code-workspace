@@ -16,7 +16,7 @@
     //   - bedcode-mobile  → 只编译 bedcode-mobile/src-tauri（+ path 依赖同上）
     //
     // 插件 / SDK / 测试组件的 Rust 工程不在本工作区内加载（避免单实例多项目内存爆炸）；
-    // 需要单独开发时直接打开对应目录（如 `code bedcode-desktop/plugins/terminal-session/rust`），
+    // 需要单独开发时直接打开对应目录（如 `code bedcode-desktop/wasm-apps/terminal-session/rust`），
     // 该目录是单 Cargo 工程，RA 递归发现只命中一个 Cargo.toml。
     //
     // 调试（F5）与任务：各文件夹自带 .vscode/tasks.json + .vscode/launch.json，

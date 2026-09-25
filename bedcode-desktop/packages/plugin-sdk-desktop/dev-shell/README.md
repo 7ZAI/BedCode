@@ -18,7 +18,7 @@
 在插件工程目录运行（bin 来自插件的 SDK 依赖，勿省略 `npx`）：
 
 ```bash
-cd bedcode-desktop/plugins/<your-plugin>
+cd bedcode-desktop/wasm-apps/<your-plugin>
 pnpm exec bedcode-plugin-desktop dev            # 使用当前目录作为插件
 pnpm exec bedcode-plugin-desktop dev --entry src/custom-entry.ts
 pnpm exec bedcode-plugin-desktop dev ../my-plugin --port 5180 --open
@@ -28,7 +28,7 @@ pnpm exec bedcode-plugin-desktop dev --host     # 监听局域网（平板/其�
 也可在仓库任意位置指定插件目录：
 
 ```bash
-pnpm exec bedcode-plugin-desktop dev bedcode-desktop/plugins/file-transfer
+pnpm exec bedcode-plugin-desktop dev bedcode-desktop/wasm-apps/file-transfer
 ```
 
 浏览器打开 `http://localhost:5173`（`--open` 自动打开）。首次运行会自动安装

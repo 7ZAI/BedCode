@@ -3,7 +3,7 @@
  *
  * 背景：插件前端的 Tailwind 工具类**只在宿主编译一次**（`tailwind.config.js` 的
  * `content` 逐插件列路径；宿主 vite / postcss 没有第二处注入点，插件产物也不携带
- * 编译后的 Tailwind）。因此 `content` 与 `plugins/` 目录必须一一对应：
+ * 编译后的 Tailwind）。因此 `content` 与 `wasm-apps/` 目录必须一一对应：
  * - 漏一条 → 该插件**独有**的工具类零产出（与宿主/其它插件重叠的类侥幸还在，
  *   表现为间距、固定宽高、栅格、状态色局部塌陷，不会整页崩，极易漏检）；
  * - 留一条死路径 → 指向已改名/已退役的目录，同样静默失效。
@@ -19,14 +19,15 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 
 const TAILWIND_CONFIG = 'tailwind.config.js'
-const PLUGINS_DIR = 'plugins'
+// 桌面端语义（2026-09-25）：wasm 插件对外称 wasm 应用，源码目录 wasm-apps/
+const PLUGINS_DIR = 'wasm-apps'
 
-/** 从 `tailwind.config.js` 文本抓出 `./plugins/<id>/src/...` 形态的 content 条目（保序去重） */
+/** 从 `tailwind.config.js` 文本抓出 `./wasm-apps/<id>/src/...` 形态的 content 条目（保序去重） */
 function parseContentPluginDirs(configText: string): string[] {
   const dirs: string[] = []
-  // id 段不允许出现 `*`：配置注释里引用了被否决的 `'./plugins/**/src/**'` 通配写法，
+  // id 段不允许出现 `*`：配置注释里引用了被否决的 `'./wasm-apps/**/src/**'` 通配写法，
   // 若把通配符当插件 id 会误报一条死路径（本用例首跑即由此转红）
-  for (const match of configText.matchAll(/'(\.\/plugins\/([^/'*]+)\/src\/[^']*)'/g)) {
+  for (const match of configText.matchAll(/'(\.\/wasm-apps\/([^/'*]+)\/src\/[^']*)'/g)) {
     if (!dirs.includes(match[2])) dirs.push(match[2])
   }
   return dirs

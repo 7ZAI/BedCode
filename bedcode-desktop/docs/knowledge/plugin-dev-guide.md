@@ -478,7 +478,7 @@ bedcode_plugin_api::wasm_entry!(MyPlugin);
 | 配置 | `config_get` |
 | 事件 | `emit_event` / `broadcast_sync` / 消息总线 |
 
-> 完整示例参考官方插件：`plugins/terminal-session`、`plugins/ai-chatbox`、`plugins/file-transfer`（`rust/src/`）。
+> 完整示例参考内置应用：`wasm-apps/terminal-session`、`wasm-apps/ai-chatbox`、`wasm-apps/file-transfer`（`rust/src/`）。
 
 ## 8. PluginContext API 参考
 

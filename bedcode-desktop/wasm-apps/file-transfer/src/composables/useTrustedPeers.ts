@@ -8,7 +8,7 @@
  *
  * 本文件只做编排；条目归一化与时间格式化为纯函数独立直测。测试以 mock
  * PluginContext（commands.execute 记录调用）驱动，见宿主测试套件
- * plugins/file-transfer 子目录。
+ * wasm-apps/file-transfer 子目录。
  */
 import { ref, type Ref } from 'vue'
 import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
