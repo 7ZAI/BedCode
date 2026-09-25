@@ -23,9 +23,6 @@ tauri-plugin-process = "2"
 
 # Async runtime
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util", "process", "test-util"] }
-# 字节缓冲（输出历史 chunk 共享零拷贝 + 快照半块 slice；tokio 传递依赖，显式声明）
-bytes = "1"
-
 # 进程组信号（kill_process_group unix 分支：直接系统调用，避免外部 kill 命令引入的 SIGCHLD reaper 竞争）
 libc = "0.2"
 
@@ -123,8 +120,6 @@ async-trait = "0.1"
 # WebSocket
 tokio-tungstenite = "0.24"
 futures-util = "0.3"
-# 传输引擎：CancellationToken 取消语义 + ReaderStream 文件流式上传
-tokio-util = { version = "0.7", features = ["io"] }
 dirs = "6.0.0"
 
 # Actix Web (HTTP + WS server)
@@ -133,8 +128,6 @@ actix = "0.13"
 actix-web-actors = "4"
 actix-rt = "2"
 actix-cors = "0.7"
-# 插件文件服务下载端点（NamedFile 提供原生 Range/206/HEAD 支持）
-actix-files = "0.6"
 
 # PTY management
 portable-pty = "0.8"
@@ -166,9 +159,6 @@ reqwest = { version = "0.12", features = ["json"] }
 serde_json = "1"
 # 集成测试直连插件私有库（认证记录下沉后 pairing/历史真源在私有库，白盒断言用）
 rusqlite = { version = "0.32", features = ["bundled"] }
-# 测试组件编码：将 wit-bindgen 产出的 core module 编码为组件
-# （等价于 `wasm-tools component new`；=0.256.0 与移动端 componentize 工具对齐，2025-08）
-wit-component = "=0.256.0"
 # mDNS 测试 Fake 构造 flume channel（与 mdns-sd 0.20 内部使用的 flume 同源，仅测试用）
 flume = "0.12"
 
