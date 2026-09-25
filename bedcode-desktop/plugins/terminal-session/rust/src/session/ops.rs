@@ -25,6 +25,18 @@ pub fn is_active(status: &SessionStatus) -> bool {
     !matches!(status, SessionStatus::Stopped)
 }
 
+/// 关窗确认判据：会话是否处于「运行中、直接关窗会丢现场」的状态
+///
+/// 唯一消费方是宿主窗口关闭守卫（问「要不要弹确认弹窗」）。判据集合
+/// （Running / Starting / WaitingInput）是本域会话语义——2026-09-25 清理
+/// 时从宿主 `lib.rs` 守卫下沉至此，宿主不再持有任何会话状态集合判断。
+pub fn needs_close_confirmation(status: &SessionStatus) -> bool {
+    matches!(
+        status,
+        SessionStatus::Running | SessionStatus::Starting | SessionStatus::WaitingInput
+    )
+}
+
 /// 状态迁移合法性
 ///
 /// - 同态 → 合法（幂等写：重复的 `Stopped` 迁移不报错）
@@ -258,6 +270,36 @@ mod tests {
         assert!(is_active(&SessionStatus::Stopping));
         assert!(is_active(&SessionStatus::Error(None)), "Error 仍算活跃（宿主判据）");
         assert!(!is_active(&SessionStatus::Stopped));
+    }
+
+    // ==================== 关窗确认判据（自宿主 lib.rs 守卫下沉） ====================
+
+    /// 运行中三态（Running / Starting / WaitingInput）→ 需要确认；
+    /// 其余（Idle / Stopping / Stopped / Error）→ 直接关窗不需打扰用户。
+    /// 判定矩阵钉死：与宿主旧守卫的 filter 集合逐字一致（2026-09-25 下沉）。
+    #[test]
+    fn close_confirmation_matrix() {
+        for needs in [
+            SessionStatus::Running,
+            SessionStatus::Starting,
+            SessionStatus::WaitingInput,
+        ] {
+            assert!(
+                needs_close_confirmation(&needs),
+                "{needs:?} 必须需要关窗确认"
+            );
+        }
+        for not_needs in [
+            SessionStatus::Idle,
+            SessionStatus::Stopping,
+            SessionStatus::Stopped,
+            SessionStatus::Error(None),
+        ] {
+            assert!(
+                !needs_close_confirmation(&not_needs),
+                "{not_needs:?} 不得需要关窗确认"
+            );
+        }
     }
 
     // ==================== 记录构造 ====================

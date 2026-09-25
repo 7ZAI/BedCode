@@ -78,7 +78,7 @@ fn list_sessions(host: &WasmHost, method: &str) -> Value {
     if method != "GET" {
         return http_response::error(405, &format!("Method not allowed: {method}"));
     }
-    let views = match SessionPlugin::session_list() {
+    let views = match SessionPlugin::session_list(serde_json::json!({})) {
         Ok(v) => v
             .get("sessions")
             .and_then(|s| s.as_array())

@@ -270,11 +270,20 @@ pub fn diagnostics_via_host() -> serde_json::Value {
 // ==================== 读取面（互调 api `session-list` / `session-get` 的实现） ====================
 
 /// 全部会话的对外视图（`SessionInfoView` 形状，见 [`view`]）→ `{sessions: [...]}`
+///
+/// 可选入参 `{filter: "running"}`：只返回需要关窗确认的会话
+/// （[`ops::needs_close_confirmation`]，Running / Starting / WaitingInput）——
+/// 宿主窗口关闭守卫的专用过滤，判据语义在本域（2026-09-25 自宿主下沉）。
+/// 缺省 / 其他值 = 全量（向后兼容，老调用方无感知）。
 #[cfg(target_arch = "wasm32")]
-pub fn list_views_via_host() -> Result<serde_json::Value, String> {
+pub fn list_views_via_host(draft: &serde_json::Value) -> Result<serde_json::Value, String> {
     let records = REGISTRY.all(&WasmHost)?;
+    let filter_running = draft.get("filter").and_then(|v| v.as_str()) == Some("running");
     let mut sessions = Vec::with_capacity(records.len());
     for record in records {
+        if filter_running && !ops::needs_close_confirmation(&record.status) {
+            continue;
+        }
         sessions.push(view_of_record(&record)?);
     }
     Ok(serde_json::json!({ "sessions": sessions }))
@@ -590,7 +599,7 @@ pub fn diagnostics_via_host() -> serde_json::Value {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub fn list_views_via_host() -> Result<serde_json::Value, String> {
+pub fn list_views_via_host(_draft: &serde_json::Value) -> Result<serde_json::Value, String> {
     Err("session registry store unavailable outside wasm runtime".to_string())
 }
 

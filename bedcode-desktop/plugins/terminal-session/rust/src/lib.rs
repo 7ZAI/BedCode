@@ -262,8 +262,9 @@ pub trait SessionApi {
 
     /// 全部会话的对外视图 → `{sessions: SessionInfoView[]}`（按 `createdAt, id` 稳定序）。
     /// 形状与宿主 `SessionInfoView` 逐字段一致（产出口在 `session::view`，有形状锁）。
+    /// 入参 `{filter: "running"}` 可选：只返回需要关窗确认的会话（判据见 `session/ops`）。
     #[api("session-list")]
-    fn session_list() -> Result<serde_json::Value, String>;
+    fn session_list(draft: serde_json::Value) -> Result<serde_json::Value, String>;
 
     /// 单个会话的对外视图；入参 `{sessionId}` → `SessionInfoView` | `null`（不在册）
     #[api("session-get")]
@@ -452,8 +453,8 @@ impl SessionApi for SessionPlugin {
 
     // ==================== 会话引擎下沉 P1：会话登记域读取面 ====================
 
-    fn session_list() -> Result<serde_json::Value, String> {
-        session::list_views_via_host()
+    fn session_list(draft: serde_json::Value) -> Result<serde_json::Value, String> {
+        session::list_views_via_host(&draft)
     }
 
     fn session_get(draft: serde_json::Value) -> Result<Option<serde_json::Value>, String> {
@@ -1073,7 +1074,7 @@ impl WasmPlugin for SessionPlugin {
             // - 键盘输入 → 本插件写入管线（提交行重建 + 任务域 + `host-pty.write`，
             //   与互调 api `session-input` 同实现；特殊键走 `specialKey` 直写）
             // 身份令牌 + 激活门由 `plugin_invoke` 通道保证（迁移路由不放宽门禁）。
-            "session.list" => session::list_views_via_host().map_err(anyhow::Error::msg),
+            "session.list" => session::list_views_via_host(&serde_json::json!({})).map_err(anyhow::Error::msg),
 
             // 单会话视图：不在册 → `null`（命令面恒回 JSON 值，不区分「空」与「无」）
             "session.get" => Ok(session_get_view(&args)
