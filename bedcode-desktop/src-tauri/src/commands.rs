@@ -14,7 +14,7 @@ use crate::server::core::supervisor::{ServerStatusInfo, ServerSupervisor};
 use crate::system::config::{AppConfig, NetworkConfig};
 use crate::system::constants::{TERMINAL_BG_EXTENSIONS, TERMINAL_BG_FILE_PREFIX, TERMINAL_BG_MAX_BYTES};
 use crate::Result;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::sync::Arc;
 use tauri::{Manager, State};
 use tracing_subscriber::filter::EnvFilter;
@@ -41,20 +41,10 @@ use tracing_subscriber::filter::EnvFilter;
 // 上述四条命令与插件互调 api 共享同一实现，身份令牌 + 激活门由 `plugin_invoke`
 // 通道保证。
 //
-// `RunningSessionInfo` 仍是宿主事实（关窗守卫的弹窗 payload），保留。
+// 关窗守卫的 `RunningSessionInfo`（弹窗 payload）2026-09-25 迁至 `lib.rs` 守卫域
+// （它不是命令，命令面不再持有任何会话类型）。
 
 // ==================== Shared System Commands ====================
-
-/// 运行中会话摘要信息，用于窗口关闭确认弹窗
-#[derive(Debug, Clone, Serialize)]
-pub struct RunningSessionInfo {
-    /// 会话 ID
-    pub id: String,
-    /// 会话名称
-    pub name: String,
-    /// 会话状态（Running / Starting / WaitingInput）
-    pub status: String,
-}
 
 // ==================== Settings Commands ====================
 

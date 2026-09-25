@@ -4,25 +4,24 @@
 //!
 //! **终态 = 引擎级类型 + 传输面契约形状**：按键组合（`special_key`）的 wire 定义
 //! 已收编 SDK `bedcode-plugin-api::wire`（会话事件下沉专项票 01），本目录对应文件只
-//! re-export，保持 `crate::enums::*` 导入路径不变。`auth`（认证 wire）与
-//! `pty_status`（PTY 引擎枚举）仍在宿主定义。**websocket 业务下沉票 08**：会话同步
+//! re-export，保持 `crate::enums::*` 导入路径不变。`auth`（认证 wire）已随认证
+//! 编排下沉 session 插件退役删除（配对/QR/生物挑战-应答 wire 无宿主消费者，
+//! 2026-09-25）；`pty_status`（PTY 引擎枚举）仍在宿主定义（`pty` 引擎消费）。
+//! **websocket 业务下沉票 08**：会话同步
 //! （`sync`/`summary`）与 WS 控制/终端帧（`control`）re-export 已随宿主 `Message`
 //! 业务协议退役删除（wire 定义在 SDK 不再被宿主消费；插件 wire 面只剩 `summary`/
-//! `key`）。**新增跨端 wire 形状一律进 SDK，不再落在本目录。**
+//! `key`）。会话业务 wire 形状（`SessionStatus`/`SessionType` 等）2026-09-25
+//! 随 `protocol/` 会话域整体退役——形状契约归插件产出口
+//! （`com.bedcode.terminal-session` `session/view.rs` 锁），宿主不再持有
+//! 任何会话业务类型。**新增跨端 wire 形状一律进 SDK，不再落在本目录。**
 
-pub mod auth;
 pub mod plugin;
 pub mod pty_status;
 pub mod special_key;
 
 // Re-export all public types
-pub use auth::{AuthPayload, AuthStage};
 pub use plugin::{PluginQuestion, PluginQuestionOption};
 pub use pty_status::PtySessionStatus;
-// 会话状态/类型已归位 `protocol::session`（票 08 线协议域）；此处为兼容 re-export
-// 保留 `enums::SessionStatus` / `enums::SessionType` 路径，避免破坏既有 import。
-// 新增会话 wire 形状一律放 `protocol/`，不再落在本目录。
-pub use crate::protocol::session::{SessionStatus, SessionType};
 pub use special_key::{KeyCode, KeyCombo};
 
 // ==================== Tests ====================

@@ -8,7 +8,6 @@ pub mod db;
 pub mod enums;
 pub mod mdns;
 pub mod process;
-pub mod protocol;
 pub mod pty;
 pub mod server;
 pub mod system;
@@ -18,7 +17,6 @@ pub mod wasm_core;
 // ==================== Re-exports ====================
 
 use crate::server::peer_net;
-use commands::RunningSessionInfo;
 pub use system::{AppConfig, AppContext, AppError, Result};
 
 // ==================== Application Setup ====================
@@ -540,48 +538,36 @@ pub fn run() {
                                 tracing::error!("Failed to destroy window: {}", e);
                             }
                         } else {
-                            // 有存活 PTY，通知前端弹窗确认。payload = 运行中会话名
-                            // 列表，探源经插件登记域（P1-b 真源）；**失败回退空列表**——
-                            // 关闭路径不能被插件异步调用阻塞（2026-09-23 用户定案）
+                            // 有运行中会话，通知前端弹窗确认。payload = 插件登记域视图
+                            // 数组原样透传（`session-list {filter:"running"}`）——「哪些状态
+                            // 算运行中需要确认」的判据在插件会话域（`ops::needs_close_confirmation`，
+                            // 2026-09-25 下沉），宿主零字段读取只取 `sessions` 数组做 emit；
+                            // **失败回退空列表**——关闭路径不能被插件异步调用阻塞
+                            // （2026-09-23 用户定案）
                             let ctx = system::app_context::AppContext::global();
                             let host_ctx = ctx.plugin_host().wasm_host_ctx();
-                            let running: Vec<RunningSessionInfo> = match crate::utils::session_gateway::list_views(
-                                host_ctx,
-                            )
-                            .await
-                            {
-                                Ok(views) => views
-                                    .into_iter()
-                                    .filter(|s| {
-                                        matches!(
-                                            s.info.status,
-                                            enums::SessionStatus::Running
-                                                | enums::SessionStatus::Starting
-                                                | enums::SessionStatus::WaitingInput
-                                        )
-                                    })
-                                    .map(|s| RunningSessionInfo {
-                                        id: s.info.id.clone(),
-                                        name: s.info.name.clone(),
-                                        status: format!("{:?}", s.info.status),
-                                    })
-                                    .collect(),
+                            let running = match crate::utils::session_gateway::running_views(host_ctx).await {
+                                Ok(reply) => reply.get("sessions").and_then(|s| s.as_array()).cloned().unwrap_or_else(|| {
+                                    tracing::warn!(error = %reply, "window close payload: reply missing sessions array, fallback to empty list");
+                                    Vec::new()
+                                }),
                                 Err(e) => {
                                     tracing::warn!(
                                         error = %e,
-                                        "window close payload: plugin session list unavailable, fallback to empty list"
+                                        "window close payload: plugin running list unavailable, fallback to empty list"
                                     );
                                     Vec::new()
                                 }
                             };
 
                             tracing::info!(
+                                count = running.len(),
                                 "Window close requested with {} running session(s), emitting to frontend",
                                 running.len()
                             );
 
                             if let Err(e) = ah.emit(system::constants::WINDOW_CLOSE_REQUESTED, &running) {
-                                tracing::error!("Failed to emit window-close-requested: {}", e);
+                                tracing::error!(error = %e, "Failed to emit window-close-requested");
                             }
                         }
                     });

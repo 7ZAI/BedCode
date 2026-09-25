@@ -101,8 +101,6 @@ bedcode-desktop/                      # 桌面端项目 (Tauri 2.0 + Vue 3)
         │                             #   宿主 SyncEvent 同步桥，随 broadcast-sync 退役整体移除）
         ├── mdns/                     # mDNS 服务广播：将桌面端服务注册到局域网供移动端发现
         ├── plugin/                   # 插件系统（WASM 组件沙箱架构，核心模块，详见 Core Modules）
-        ├── protocol/                 # 跨端线协议形状中立域（票 02）：只放对外 wire 契约，
-        │                             #   当前含会话记录/视图/尺寸裁决回执，形状锁逐类型钉死
         ├── pty/                      # PTY 管理：进程生命周期、输出读取/缓存/监听、命令构建、WSL 支持
         ├── server/                   # 服务器（核心模块，详见 Core Modules）：core/ 传输无关内核 +
         │                             #   http/ 与 websocket/ 两个传输面，单端口组合物在 core/app.rs；
@@ -373,36 +371,31 @@ WIT 契约 `host-task`（5 函数：execute-batch / submit / status / cancel / l
     连接事实清单（`list_clients`/`client_count`，host-connection 原语入口）；宿主业务
     `Message` 发送/广播 API 已删除
 
-### 线协议形状 — `src-tauri/src/protocol/`（跨端 wire 契约中立域）
+### 会话 wire 形状（已退役 2026-09-25：形状契约归插件产出口）
 
-> **票 02（2026-09-24）**：会话引擎下沉的删除票（票 11）要整目录削掉 `session/`，而移动端 /
-> 前端仍在读的协议形状不能跟着实现一起消失——故把「其实是对外契约」的类型从内核实现目录
-> 搬进本域。本域**只放**跨端 wire 契约与引擎级转义两类，零业务语义（AGENTS §5）。
-
-- **protocol/session.rs**：`SessionInfo`（会话记录，窄转发层解析插件视图的依据）、
-  `SessionInfoView`（对外视图 = 记录 `flatten` + 四个任务字段）、`task_fields_from_slot`
-  （注解槽 → 对外字段的机械透传，不解释语义）、`RendererSource` / `ResizeOutcome`
-  （尺寸裁决回执）。每个类型各有形状锁用例：状态八个 wire 形态（含 `Error` 的
-  `{"error": …}` 两形态）、记录与视图的**精确字段集合**、裁决四态回执整体 JSON 相等。
-- **分界（票 08 已收口）**：`SessionStatus` / `SessionType` 的定义随 `enums/session.rs` 删除并
-  **归位本域**（`protocol/session.rs` 线协议中立域）；`enums.rs` 保留 `pub use` 兼容
-  re-export（既有 import 零改动）。按键组合 → 转义字节的翻译已迁插件（票 06），宿主 pty 只收
-  裸字节。`enums/` 终态 = 引擎级类型（`pty_status`）与传输面契约形状，业务语义零残留。
-- **跨端 wire 真源（会话事件下沉专项票 01）**：同步载荷 / 会话概要 / WS 控制与终端帧 / 按键组合
-  四类形状定义在 SDK `bedcode-plugin-api::wire`（`wire/{sync,summary,control,key}.rs`），宿主
-  `enums/` 对应四个文件只剩 `pub use` 垫片；锁在 `src/enums.rs::tests`：类型身份锁（宿主路径与
-  SDK 真源必须是同一类型，编译期）+ 垫片文件零定义（源层面）。移动端仍持平行副本，与真源的一致性
-  由 SDK 的 `mobile_parallel_copy_shape_lock` 逐变体钉住。
-- 跨真源对齐锁：插件登记域视图与本域类型逐字段相等，锁在
-  `wasm_core/manager/runtime/tests/session_e2e.rs` 的网关读取面对齐段。
+> **零业务类型的收口**：`src-tauri/src/protocol/`（含 `session.rs` 的 `SessionInfo` /
+> `SessionInfoView` / `SessionStatus` / `RendererSource` / `ResizeOutcome` 与会话形状锁）已
+> **整目录删除**——宿主不再持有任何会话业务类型，窄转发层
+> `utils/session_gateway.rs` 全部接口 `serde_json::Value` 原样透传插件 reply（
+> 零解析零解释）。会话视图的形状契约（含错误 payload 形态与字段集合）锁在插件产出口
+> `plugins/terminal-session/rust/src/session/view.rs` 的形状锁测试 + 插件集成测试；
+> 宿主 e2e 只做行为断言（创建/命名/裁决/filter 透传终态），不再复锁形状。
+> `enums.rs` 的 `SessionStatus` / `SessionType` re-export 同批删除（引擎枚举
+> `pty_status` 保留）。
+> 按键组合 → 转义字节的翻译已迁插件（票 06），宿主 pty 只收裸字节。
+> **SDK wire 真源不受影响**（会话事件下沉专项票 01）：同步载荷 / 会话概要 / WS 控制
+> 与终端帧 / 按键组合四类形状仍在 `bedcode-plugin-api::wire`，宿主 `enums/` 对应四个
+> 文件仍是 `pub use` 垫片 + 身份锁，移动端平行副本由
+> `mobile_parallel_copy_shape_lock` 钉住。
 
 ### 会话 —— 真源在插件，宿主零会话对象（终态，票 11 / 2026-09-24）
 
 > **`src-tauri/src/session/` 目录已整体删除**。会话登记 / 状态机 / 生命周期分发 / 创建 /
 > 停止 / 输入 / 尺寸裁决 / 注解槽 / 业务输出环，全部只在
 > `plugins/terminal-session/rust/src/session/`（私有库 `sessions` / `session_annotations` 两表）。
-> 对外 wire 形状（`SessionInfo` / `SessionInfoView` / `ResizeOutcome` / `RendererSource`）在
-> `src-tauri/src/protocol/`——形状活过目录的删除（票 02 已迁出）。
+> 对外 wire 形状契约（`SessionInfo` / `SessionInfoView` / `ResizeOutcome` /
+> `RendererSource` 的 JSON 形态）2026-09-25 起已不驻宿主：`protocol/` 整目录删除，
+> 形状锁归插件产出口 `session/view.rs`（宿主 `session_gateway` 零类型透传）。
 >
 > 宿主侧与会话相关的只剩三样，**都无业务语义**：
 > ① **PTY 引擎** `src-tauri/src/pty/` + `host-pty` 原语（业务会话就是一个引擎句柄）；

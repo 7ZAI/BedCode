@@ -10,21 +10,29 @@
 //! `session_*_bridge`。P1-b 起会话真源已在 `com.bedcode.terminal-session` 插件
 //! 登记域，本层全部实现 = 插件互调 api 调用（无内核执行器、无内核裁决副本）。
 //!
-//! ## 今日策略（P1-b：真源切换完成，插件必需）
+//! ## 今日策略（P1-b 真源切换完成 + 2026-09-25 零业务类型收口）
 //!
 //! | 操作 | 实现 | 插件互调 api |
 //! | --- | --- | --- |
-//! | 查询（list / get） | 插件登记域视图（`SessionInfoView` 形状） | `session-list` / `session-get` |
+//! | 查询（list / get） | 插件登记域视图 | `session-list` / `session-get` |
 //! | 创建（start） | 插件编排 + `host-pty.spawn`（插件自产 id） | `session-create` |
 //! | 停止 | 插件登记 Stopping + `host-pty.kill`（终态由 pty:exit 收尾） | `session-close` |
 //! | 移除 | 插件摘记录 + kill + 广播 SessionRemoved | `session-remove` |
-//! | 尺寸（桌面 + 移动端信号路径统一） | 插件裁决（正统端判定 / 覆盖确认） + `host-pty.resize` | `session-resize` |
+//! | 尺寸（桌面 + 移动端信号路径统一） | 插件裁决（正统端判定 / 覆盖确认）+ `host-pty.resize` | `session-resize` |
 //! | 输入（普通 / 特殊键） | 插件提交行重建 + `host-pty.write`（特殊键绕过重建） | `session-input` |
-//! | 历史快照 / 输出存在性 | 宿主 `GlobalOutputManager`（P3 形态 B 改直读同进程 `PtyRing`） | —（宿主直读） |
+//! | 历史快照 | 插件经 `host-pty.ring-fetch` 拉净驻留历史 | `session-history` |
 //!
 //! **插件未激活 / 互调失败一律显性报错**（会话真源已不在宿主，无降级轨）——
 //! 双写期的 `session_{create,action}_bridge.rs`（含 `Ok(None)` 降级轨）已随
 //! 真源切换退役。
+//!
+//! ## 零业务类型（2026-09-25）
+//!
+//! 本层接口**不再持有任何会话业务类型**（`SessionInfo/View/Status/ResizeOutcome/...`
+//! 已随 `protocol/` 会话域整体退役）：查询/创建/尺寸/历史一律 `serde_json::Value`
+//! 原样透传插件 reply，宿主不解析、不解释、不校验业务字段——字段形状契约归插件
+//! 产出口（`com.bedcode.terminal-session` 的 `session/view.rs` 形状锁 + 插件集成
+//! 测试），宿主只是互调 api 的机械转发面。
 //!
 //! ## 不属于本层
 //!
@@ -33,7 +41,6 @@
 //! 转发；票 09 已把处理器的内核回查兜底与状态订阅转接通道（`events/forwarder.rs`）
 //! 一并删除（载荷必须自携带，缺失即 `warn` + 不广播）。
 
-use crate::protocol::{RendererSource, ResizeOutcome, SessionInfoView};
 use crate::utils::auth::auth_center::call_api;
 use crate::wasm_core::manager::runtime::WasmHostContext;
 use crate::{AppError, Result};
@@ -75,56 +82,42 @@ fn call_session_api(
     })
 }
 
-/// 插件视图 JSON（camelCase）→ 宿主 `SessionInfoView`（仅 Serialize 的宿主类型，
-/// 拆两个半场：`SessionInfo`（约定 camelCase，可反序列化）+ 任务字段从 raw 取）
-fn parse_view(raw: serde_json::Value) -> Result<SessionInfoView> {
-    let info = serde_json::from_value::<crate::protocol::SessionInfo>(raw.clone()).map_err(|e| {
-        AppError::Plugin(format!("session row is not a SessionInfo: {e} (row: {raw})"))
-    })?;
-    let get = |key: &str| raw.get(key).and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(str::to_string);
-    Ok(SessionInfoView {
-        info,
-        task_status: get("taskStatus"),
-        task_reason: get("taskReason"),
-        task_updated_at: get("taskUpdatedAt"),
-        task_questions: raw
-            .get("taskQuestions")
-            .filter(|v| !v.is_null())
-            .cloned(),
-    })
-}
-
 // ==================== 查询（插件登记域真源） ====================
 
-/// 全部会话的对外视图（`SessionInfoView`，记录 + 注解槽任务字段；
-/// 形状与迁移前逐字段一致，取值来源 = 插件登记域）
-pub async fn list_views(host_ctx: &WasmHostContext) -> Result<Vec<SessionInfoView>> {
-    let v = call_session_api(host_ctx, API_LIST, "session list", serde_json::json!({}))?;
-    let sessions = v
-        .get("sessions")
-        .and_then(|s| s.as_array())
-        .ok_or_else(|| AppError::Plugin(format!("session-list reply missing sessions: {v}")))?;
-    sessions.iter().cloned().map(parse_view).collect()
+/// 全部会话视图（插件 reply 原样透传：`{sessions: [...]}`）。
+/// 宿主不解析任何字段（形状契约归插件产出口，2026-09-25）。
+pub async fn list_views(host_ctx: &WasmHostContext) -> Result<serde_json::Value> {
+    call_session_api(host_ctx, API_LIST, "session list", serde_json::json!({}))
 }
 
-/// 单个会话的对外视图；不在册 → `Ok(None)`（无此会话不是错误）
-pub async fn view(host_ctx: &WasmHostContext, session_id: &str) -> Result<Option<SessionInfoView>> {
-    let v = call_session_api(
+/// 运行中会话视图（**关窗守卫专用**）：插件按会话语义过滤
+/// （`ops::needs_close_confirmation`：Running / Starting / WaitingInput）——
+/// 「哪些状态算运行中需要确认」的判据在插件会话域（2026-09-25 下沉），
+/// 宿主不持有状态集合判断、不解析 return 字段。
+pub async fn running_views(host_ctx: &WasmHostContext) -> Result<serde_json::Value> {
+    call_session_api(
+        host_ctx,
+        API_LIST,
+        "session list (running)",
+        serde_json::json!({ "filter": "running" }),
+    )
+}
+
+/// 单个会话视图（插件 reply 原样透传；不在册 → `null`）。
+pub async fn view(host_ctx: &WasmHostContext, session_id: &str) -> Result<serde_json::Value> {
+    call_session_api(
         host_ctx,
         API_GET,
         "session get",
         serde_json::json!({ "sessionId": session_id }),
-    )?;
-    if v.is_null() {
-        return Ok(None);
-    }
-    parse_view(v).map(Some)
+    )
 }
 
 // ==================== 创建（插件必需，无宿主降级） ====================
 
 /// 经会话中心插件编排创建会话（插件自产 id + `host-pty.spawn`；
-/// 回执即会话 id，创建已同步完成——旧 create-with-spec 的异步半程不再存在）
+/// 回执 `{sessionId: ...}` 原样透传，创建已同步完成——
+/// 旧 create-with-spec 的异步半程不再存在）。宿主不解析回执字段。
 pub async fn start(
     host_ctx: &WasmHostContext,
     config_id: &str,
@@ -132,8 +125,8 @@ pub async fn start(
     rows: Option<u16>,
     start: bool,
     source_device: Option<&str>,
-) -> Result<String> {
-    let v = call_session_api(
+) -> Result<serde_json::Value> {
+    call_session_api(
         host_ctx,
         API_CREATE,
         "session create",
@@ -145,14 +138,7 @@ pub async fn start(
             // 启动端事实透传（移动端 HTTP/WS 启动携带设备名 → 正统端初始归属该端）
             "sourceDevice": source_device,
         }),
-    )?;
-    let sid = v
-        .get("sessionId")
-        .and_then(|s| s.as_str())
-        .ok_or_else(|| AppError::Plugin(format!("session-create reply missing sessionId: {v}")))?
-        .to_string();
-    tracing::info!(config_id = %config_id, session_id = %sid, start, "session created via plugin");
-    Ok(sid)
+    )
 }
 
 // ==================== 生命周期动作 ====================
@@ -185,17 +171,17 @@ pub async fn remove(host_ctx: &WasmHostContext, session_id: &str, source_device:
 /// 尺寸调整（**桌面本地与移动端信号路径统一**）：插件裁决（正统端判定 /
 /// 覆盖确认策略，登记事实在本域记录）→ 仅可应用时 `host-pty.resize`。
 ///
-/// 请求方身份由调用方决定：桌面本地恒 `Desktop`；移动端按 JWT claims（无
-/// claims 回退 `Desktop`，仍受 `NeedsConfirmation` 门控）。
+/// `requester` 为调用方构造的 JSON（桌面恒 `{"kind":"desktop"}`；移动端按
+/// JWT claims 构造），宿主原样透传不解释——请求方身份形状属插件契约。
 pub async fn resize(
     host_ctx: &WasmHostContext,
     session_id: &str,
     cols: u16,
     rows: u16,
-    requester: RendererSource,
+    requester: serde_json::Value,
     force: bool,
-) -> Result<ResizeOutcome> {
-    let v = call_session_api(
+) -> Result<serde_json::Value> {
+    call_session_api(
         host_ctx,
         API_RESIZE,
         "session resize",
@@ -206,10 +192,7 @@ pub async fn resize(
             "requester": requester,
             "force": force,
         }),
-    )?;
-    serde_json::from_value::<ResizeOutcome>(v).map_err(|e| {
-        AppError::Plugin(format!("session-resize reply is not a ResizeOutcome: {e}"))
-    })
+    )
 }
 
 // ==================== 输入 ====================
@@ -244,41 +227,24 @@ pub async fn special_key(host_ctx: &WasmHostContext, session_id: &str, key: &str
 
 // ==================== 输出面（websocket 业务下沉票 08：插件互调，宿主不再直读环） ====================
 
-/// 一次性历史快照：`(data, min_offset, snapshot_offset, history_bytes)`
+/// 一次性历史快照（插件 reply 原样透传：`{data, minOffset, snapshotOffset,
+/// historyBytes}`）。
 ///
 /// **插件必需（websocket 业务下沉票 08）**：宿主不再持有「会话 id → pty 句柄」的
 /// 广播映射（`hostBroadcastSessionId` / `broadcast_handle_for_session` 已退役，PTY
 /// 引擎不再知道 session id）；历史快照改经插件互调 api——插件用自己的
 /// `session record.pty_id` 调 `host-pty.ring-fetch` 拉净驻留历史
-/// （spec §4.3，形状与迁移前直读 `PtyRing` 逐字一致：from 旧于环驻留起点时
-/// minOffset 如实上报缺口，客户端据此判定截断，不假装连续）。
+/// （spec §4.3：from 旧于环驻留起点时 minOffset 如实上报缺口，客户端据此判定
+/// 截断，不假装连续）。
 ///
 /// 会话不存在 / 插件未激活 → 显性 `Err`（fail-visible，不静默当「无数据」）。
-pub async fn history_snapshot(host_ctx: &WasmHostContext, session_id: &str, from: u64) -> Result<(Vec<u8>, u64, u64, u64)> {
-    let v = call_session_api(
+pub async fn history_snapshot(host_ctx: &WasmHostContext, session_id: &str, from: u64) -> Result<serde_json::Value> {
+    call_session_api(
         host_ctx,
         API_HISTORY,
         "session history",
         serde_json::json!({ "sessionId": session_id, "from": from }),
-    )?;
-    let data: Vec<u8> = v
-        .get("data")
-        .and_then(|d| d.as_array())
-        .map(|arr| arr.iter().filter_map(|b| b.as_u64().map(|b| b as u8)).collect())
-        .ok_or_else(|| AppError::Plugin(format!("session-history reply missing data: {v}")))?;
-    let min_offset = v
-        .get("minOffset")
-        .and_then(|n| n.as_u64())
-        .ok_or_else(|| AppError::Plugin(format!("session-history reply missing minOffset: {v}")))?;
-    let snapshot_offset = v
-        .get("snapshotOffset")
-        .and_then(|n| n.as_u64())
-        .ok_or_else(|| AppError::Plugin(format!("session-history reply missing snapshotOffset: {v}")))?;
-    let history_bytes = v
-        .get("historyBytes")
-        .and_then(|n| n.as_u64())
-        .ok_or_else(|| AppError::Plugin(format!("session-history reply missing historyBytes: {v}")))?;
-    Ok((data, min_offset, snapshot_offset, history_bytes))
+    )
 }
 
 // 票 11：`unsubscribe_output`（向内核输出环退订）随 `session/` 目录删除。

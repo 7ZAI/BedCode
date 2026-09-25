@@ -54,10 +54,14 @@ import { useKeyboardShortcuts } from '@/composables/useKeyboardShortcuts'
 import { useSettingsStore } from '@/stores/settings'
 import { usePlatform } from '@/composables/usePlatform'
 
+// 关窗守卫经 `window-close-requested` 事件透传的会话视图数组
+// （插件登记域 SessionInfoView 超集，宿主零解析 2026-09-25）；弹窗只消费 id/name/status，
+// 其余字段（configId/taskStatus 等）随透传存在。
 interface RunningSession {
   id: string
   name: string
   status: string
+  [key: string]: unknown
 }
 
 const router = useRouter()

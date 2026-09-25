@@ -31,6 +31,17 @@ async fn seed_config_in_plugin_store(
     serde_json::from_str(&out).expect("seeded config json")
 }
 
+/// 会话创建回执 → session id（`sessionId` 字段契约在插件产出口）。
+///
+/// e2e 作为插件集成测试的一部分解析回执驱动后续网关调用；宿主生产代码零解析
+/// （2026-09-25 网关 Value 化）。
+fn session_id_of(reply: serde_json::Value, what: &str) -> String {
+    reply["sessionId"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{what}: session-create reply missing sessionId: {reply}"))
+        .to_string()
+}
+
 #[test]
 
 fn test_session_plugin_artifact_lifecycle() {
@@ -521,8 +532,8 @@ fn test_session_task_domain_closed_loop() {
         // 注解槽在登记域（读插件视图的任务字段）
         let after_input = crate::utils::session_gateway::view(&host_ctx, &sid)
             .await
-            .expect("view")
-            .expect("在册");
+            .expect("view");
+        assert!(!after_input.is_null(), "会话应在册");
 
         // 会话结束兜底：运行中任务行与注解槽一并收敛到 interrupted。
         // 终态由 `pty:exit` 异步收尾（kill → 退出监听 → 事件总线 → 插件），
@@ -541,13 +552,13 @@ fn test_session_task_domain_closed_loop() {
             "session.close 不得报错, got: {close_out}"
         );
 
-        let mut converged: Option<crate::protocol::SessionInfoView> = None;
+        let mut converged: Option<serde_json::Value> = None;
         for _ in 0..100 {
             let v = crate::utils::session_gateway::view(&host_ctx, &sid)
                 .await
-                .expect("view")
-                .expect("在册");
-            if v.task_status.as_deref() == Some("interrupted") {
+                .expect("view");
+            assert!(!v.is_null(), "会话应在册（不在册 → 轮询终止条件假）");
+            if v.get("taskStatus").and_then(|x| x.as_str()) == Some("interrupted") {
                 converged = Some(v);
                 break;
             }
@@ -566,25 +577,24 @@ fn test_session_task_domain_closed_loop() {
         let r: serde_json::Value = serde_json::from_str(&out).unwrap();
 
         assert_eq!(
-            after_input.task_status.as_deref(),
+            after_input["taskStatus"].as_str(),
             Some("in_progress"),
             "提交输入必须把任务状态推进为 in_progress（真源 + 注解槽）, got: {after_input:?}"
         );
         assert_eq!(
-            after_input.task_reason.as_deref(),
+            after_input["taskReason"].as_str(),
             Some("User submitted input"),
             "注解槽键名 contract（票 12）：taskReason 由本域写入, got: {after_input:?}"
         );
         assert!(
-            after_input
-                .task_updated_at
-                .as_deref()
+            after_input["taskUpdatedAt"]
+                .as_str()
                 .map(|v| !v.is_empty())
                 .unwrap_or(false),
             "taskUpdatedAt 必须是非空时间戳, got: {after_input:?}"
         );
         assert_eq!(
-            after_stopped.task_status.as_deref(),
+            after_stopped["taskStatus"].as_str(),
             Some("interrupted"),
             "会话停止兜底必须把运行中任务收敛为 interrupted, got: {after_stopped:?}"
         );
@@ -1749,29 +1759,30 @@ fn test_session_create_with_spec_closed_loop() {
         // ==================== 3. 编排创建（P1-b：插件自产 id + host-pty.spawn，同步完成） ====================
         // 不再有 start=false 双态：host-pty 无 create-without-spawn，创建即启动真实进程
         //（bash，cwd=/tmp 存在）；回执即会话 id，无需轮询宿主落库。
-        let sid1 = crate::utils::session_gateway::start(
-            &host_ctx, &seeded["id"].as_str().unwrap(), None, None, true, None,
-        )
-        .await
-        .expect("plugin active → 必须编排成功");
+        let sid1 = session_id_of(
+            crate::utils::session_gateway::start(
+                &host_ctx, &seeded["id"].as_str().unwrap(), None, None, true, None,
+            )
+            .await
+            .expect("plugin active → 必须编排成功"),
+            "创建 sid1",
+        );
         assert_eq!(sid1.len(), 36, "插件自产 UUID; got: {sid1}");
         let v1 = crate::utils::session_gateway::view(&host_ctx, &sid1)
             .await
-            .expect("view")
-            .expect("在册");
+            .expect("view");
+        assert!(!v1.is_null(), "会话应在册");
         assert_eq!(
-            v1.info.status,
-            crate::enums::SessionStatus::Running,
+            v1["status"], serde_json::json!("running"),
             "P1-b 创建即启动 → Running"
         );
-        assert_eq!(v1.info.name, "编排会话", "命名唯一化首见 = 原名（插件决策）");
+        assert_eq!(v1["name"], serde_json::json!("编排会话"), "命名唯一化首见 = 原名（插件决策）");
         assert_eq!(
-            v1.info.config_id, seeded["id"].as_str().unwrap().to_string(),
+            v1["configId"], serde_json::json!(seeded["id"].as_str().unwrap()),
             "configId 透传（会话记录标真源配置）"
         );
-        assert_eq!(
-            v1.info.started_at.is_some(),
-            true,
+        assert!(
+            v1.get("startedAt").is_some(),
             "创建即启动 → startedAt 已填"
         );
         // 真源切换验收：**宿主内核会话表已不存在**（票 11 随 `session/` 目录删除），
@@ -1779,17 +1790,20 @@ fn test_session_create_with_spec_closed_loop() {
         // `retired_kernel_session_domain_is_not_reintroduced`（wasm_flow_test）保证。
 
         // ==================== 4. 命名唯一化：同配置第二次 → 原名(1) ====================
-        let sid2 = crate::utils::session_gateway::start(
-            &host_ctx, &seeded["id"].as_str().unwrap(), None, None, true, None,
-        )
-        .await
-        .expect("plugin active → 必须编排成功");
+        let sid2 = session_id_of(
+            crate::utils::session_gateway::start(
+                &host_ctx, &seeded["id"].as_str().unwrap(), None, None, true, None,
+            )
+            .await
+            .expect("plugin active → 必须编排成功"),
+            "创建 sid2",
+        );
         let v2 = crate::utils::session_gateway::view(&host_ctx, &sid2)
             .await
-            .expect("view")
-            .expect("在册");
-        assert_eq!(v2.info.name, "编排会话(1)", "重名冲突 → 插件改写为 (1) 后缀");
-        assert_eq!(v2.info.config_id, seeded["id"].as_str().unwrap().to_string());
+            .expect("view");
+        assert!(!v2.is_null(), "会话应在册");
+        assert_eq!(v2["name"], serde_json::json!("编排会话(1)"), "重名冲突 → 插件改写为 (1) 后缀");
+        assert_eq!(v2["configId"], serde_json::json!(seeded["id"].as_str().unwrap()));
 
         // ============ 4b. P1-b 真源：插件会话登记域（宿主窄转发层改读本域） ============
         // 经 `session.status` 诊断字段观测登记规模
@@ -1838,35 +1852,57 @@ fn test_session_create_with_spec_closed_loop() {
         let sessions = listed["sessions"].as_array().expect("sessions 数组");
         assert_eq!(sessions.len(), 2, "登记域两条会话: {listed}");
 
-        // 网关列表（宿主窄转发层消费面）与登记域视图逐字段一致
-        let gateway_views = crate::utils::session_gateway::list_views(&host_ctx)
+        // 网关列表（宿主窄转发层消费面）与登记域视图逐字段一致：宿主零解析，
+        // 网关 reply 原样透传 → 与插件登记域视图 JSON 逐字节同值（忠实投影）
+        let gateway_reply = crate::utils::session_gateway::list_views(&host_ctx)
             .await
             .expect("gateway list");
-        assert_eq!(gateway_views.len(), 2, "网关视图条数一致");
-        let gw_by_id: std::collections::HashMap<String, &crate::protocol::SessionInfoView> =
-            gateway_views.iter().map(|v| (v.info.id.clone(), v)).collect();
+        let gateway_sessions = gateway_reply["sessions"]
+            .as_array()
+            .expect("网关 reply sessions 数组");
+        assert_eq!(gateway_sessions, sessions, "网关透传 = 登记域视图（忠实投影）");
+
+        // 关窗守卫专用查询（`session-list {filter:"running"}`，2026-09-25 下沉）：
+        // 「哪些状态算运行中需确认」判据在插件会话域，宿主无状态集合;
+        // 当前两会话均为 Running → 全量返回，与全量列表同源同位。
+        let running_reply = crate::utils::session_gateway::running_views(&host_ctx)
+            .await
+            .expect("gateway running list");
+        let running_arr = running_reply["sessions"]
+            .as_array()
+            .expect("running reply sessions 数组");
+        let mut running_ids: Vec<&str> = running_arr.iter().filter_map(|v| v["id"].as_str()).collect();
+        running_ids.sort_unstable();
+        let mut expected_running = vec![sid1.as_str(), sid2.as_str()];
+        expected_running.sort_unstable();
+        assert_eq!(
+            running_ids, expected_running,
+            "Running 两会话都应出现在 running_views（filter=running 透传判据）"
+        );
+
+        let gw_by_id: std::collections::HashMap<String, &serde_json::Value> = gateway_sessions
+            .iter()
+            .map(|v| (v["id"].as_str().expect("视图含 id").to_string(), v))
+            .collect();
         let raw1 = sessions
             .iter()
             .find(|s| s["id"] == sid1)
             .expect("登记域含 sid1");
-        let parsed: crate::protocol::SessionInfo =
-            serde_json::from_value(raw1.clone()).expect("登记域视图可被宿主 SessionInfo 反序列化");
-        assert_eq!(parsed.id, sid1);
-        assert_eq!(parsed.name, "编排会话");
-        assert_eq!(parsed.config_id, seeded["id"].as_str().unwrap().to_string());
+        assert_eq!(raw1["id"], serde_json::json!(sid1));
+        assert_eq!(raw1["name"], serde_json::json!("编排会话"));
+        assert_eq!(raw1["configId"], serde_json::json!(seeded["id"].as_str().unwrap()));
         assert_eq!(
-            parsed.status,
-            crate::enums::SessionStatus::Running,
-            "serde wire 形态与宿主枚举一致"
+            raw1["status"], serde_json::json!("running"),
+            "wire 形态与插件视图一致"
         );
         // 网关视图行与登记域视图同值（宿主窄转发层 = 插件登记域的忠实投影）
         let gw1 = gw_by_id.get(&sid1).expect("网关视图含 sid1");
-        assert_eq!(gw1.info.name, "编排会话");
-        assert_eq!(gw1.task_status.as_deref(), Some("asking"), "任务字段随网关视图透传");
+        assert_eq!(gw1["name"], serde_json::json!("编排会话"));
+        assert_eq!(gw1["taskStatus"].as_str(), Some("asking"), "任务字段随网关视图透传");
         assert_eq!(
-            gw1.task_questions,
-            Some(serde_json::json!([{"question": "继续吗？"}])),
-            "taskQuestions 解析为数组"
+            gw1["taskQuestions"],
+            serde_json::json!([{"question": "继续吗？"}]),
+            "taskQuestions 透传为数组"
         );
 
         // 单条读面与列表同源；未知 id → null（不是报错，调用方按「无此会话」分类）
@@ -1902,8 +1938,17 @@ fn test_session_create_with_spec_closed_loop() {
             crate::utils::session_gateway::view(&host_ctx, &sid1)
                 .await
                 .expect("view")
-                .is_none(),
+                .is_null(),
             "移除后视图为空"
+        );
+        // filter=running 不残留幽灵：移除后 running_views 必须为空
+        let running_after = crate::utils::session_gateway::running_views(&host_ctx)
+            .await
+            .expect("running list post-removal");
+        assert_eq!(
+            running_after["sessions"].as_array().map(|a| a.len()),
+            Some(0),
+            "移除后无运行中会话（filter=running 不残留已移除记录）: {running_after:?}"
         );
 
         // ==================== 5. 插件必需：注销互调面 → 显性报错（无宿主降级） ====================
@@ -1940,7 +1985,9 @@ fn test_session_create_with_spec_closed_loop() {
 fn test_session_actions_closed_loop() {
     // 会话插件私有库是进程级共享路径：与其它会话闭环用例串行（见锁文档）
     let _serial = session_plugin_db_guard();
-    use crate::protocol::RendererSource;
+    // 请求方身份 JSON（形状契约在插件 `session-resize` 入参；宿主零解释，2026-09-25）
+    let desktop = || serde_json::json!({ "kind": "desktop" });
+    let mobile = || serde_json::json!({ "kind": "mobile", "deviceName": "Pixel-9" });
 
     const SESSION_ID: &str = "com.bedcode.terminal-session";
     let wasm_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -2007,20 +2054,22 @@ fn test_session_actions_closed_loop() {
         // ==================== 1. 播种配置 + 创建会话（P1-b 创建即启动真实 bash） ====================
         // working_dir /tmp 必须存在（真实 spawn）；无正统端归属 = 裁决态 1 起点
         let seeded = seed_config_in_plugin_store(&mut *session.lock().await, "动作会话", "/tmp", "bash").await;
-        let sid = crate::utils::session_gateway::start(
-            &host_ctx, &seeded["id"].as_str().unwrap(), None, None, true, None,
-        )
-        .await
-        .expect("plugin active → 必须编排成功");
+        let sid = session_id_of(
+            crate::utils::session_gateway::start(
+                &host_ctx, &seeded["id"].as_str().unwrap(), None, None, true, None,
+            )
+            .await
+            .expect("plugin active → 必须编排成功"),
+            "创建",
+        );
         let v = crate::utils::session_gateway::view(&host_ctx, &sid)
             .await
-            .expect("view")
-            .expect("在册");
-        assert_eq!(v.info.name, "动作会话");
-        assert_eq!(v.info.id, sid);
+            .expect("view");
+        assert!(!v.is_null(), "会话应在册");
+        assert_eq!(v["name"], serde_json::json!("动作会话"));
+        assert_eq!(v["id"], serde_json::json!(sid));
         assert_eq!(
-            v.info.status,
-            crate::enums::SessionStatus::Running,
+            v["status"], serde_json::json!("running"),
             "创建即启动 → Running"
         );
 
@@ -2034,9 +2083,9 @@ fn test_session_actions_closed_loop() {
         assert_eq!(renamed["previousName"], "动作会话", "回执改名前的名字");
         let v = crate::utils::session_gateway::view(&host_ctx, &sid)
             .await
-            .expect("view")
-            .expect("在册");
-        assert_eq!(v.info.name, "重命名后");
+            .expect("view");
+        assert!(!v.is_null(), "会话应在册");
+        assert_eq!(v["name"], serde_json::json!("重命名后"));
 
         // 未知会话：显性失败（插件侧存在性预检同步可见）
         let missing = crate::utils::auth::auth_center::call_api(
@@ -2049,77 +2098,78 @@ fn test_session_actions_closed_loop() {
         // ==================== 3. 尺寸裁决四态（规则与登记事实都在插件登记域） ====================
         // 态 1 无渲染端 → 首个请求方即位正统（Desktop）
         let applied = crate::utils::session_gateway::resize(
-            &host_ctx, &sid, 100, 30, RendererSource::Desktop, false,
+            &host_ctx, &sid, 100, 30, desktop(), false,
         )
         .await
         .expect("resize");
-        assert!(
-            matches!(applied, crate::protocol::ResizeOutcome::Applied { canonical: RendererSource::Desktop }),
+        assert_eq!(
+            applied,
+            serde_json::json!({ "status": "applied", "canonical": { "kind": "desktop" } }),
             "无渲染端 → applied(Desktop), got: {applied:?}"
         );
 
         // 态 2 单端（归属 = 请求方）→ 直接应用，无确认
         let applied = crate::utils::session_gateway::resize(
-            &host_ctx, &sid, 110, 32, RendererSource::Desktop, false,
+            &host_ctx, &sid, 110, 32, desktop(), false,
         )
         .await
         .expect("resize again");
-        assert!(
-            matches!(applied, crate::protocol::ResizeOutcome::Applied { .. }),
+        assert_eq!(
+            applied["status"], serde_json::json!("applied"),
             "单端 → applied, got: {applied:?}"
         );
 
         // 态 3 多端争用（归属 Desktop；移动端未 force）→ needsConfirmation 且零改动
         // （零改动的行为断言：随后 Desktop resize 依然直通——归属未被抢占）
-        let mobile = RendererSource::Mobile {
-            device_name: "Pixel-9".to_string(),
-        };
         let outcome = crate::utils::session_gateway::resize(
-            &host_ctx, &sid, 80, 24, mobile.clone(), false,
+            &host_ctx, &sid, 80, 24, mobile(), false,
         )
         .await
         .expect("resize contended");
         assert_eq!(
             outcome,
-            crate::protocol::ResizeOutcome::NeedsConfirmation {
-                current_canonical: RendererSource::Desktop
-            },
+            serde_json::json!({
+                "status": "needsConfirmation",
+                "currentCanonical": { "kind": "desktop" }
+            }),
             "多端争用 → 需覆盖确认（回执当前正统端）"
         );
         let still_owner = crate::utils::session_gateway::resize(
-            &host_ctx, &sid, 90, 30, RendererSource::Desktop, false,
+            &host_ctx, &sid, 90, 30, desktop(), false,
         )
         .await
         .expect("original owner resize");
-        assert!(
-            matches!(still_owner, crate::protocol::ResizeOutcome::Applied { .. }),
+        assert_eq!(
+            still_owner["status"], serde_json::json!("applied"),
             "需确认路径必须零改动（归属仍是 Desktop，可直通）"
         );
 
         // 态 4 端接管（force = 覆盖确认通过）→ 应用并移交归属；
         // 移交后原归属者（Desktop）成为被抢占方 → 未 force 需确认
         let outcome = crate::utils::session_gateway::resize(
-            &host_ctx, &sid, 80, 24, mobile.clone(), true,
+            &host_ctx, &sid, 80, 24, mobile(), true,
         )
         .await
         .expect("resize takeover");
         assert_eq!(
             outcome,
-            crate::protocol::ResizeOutcome::Applied {
-                canonical: mobile.clone()
-            },
+            serde_json::json!({
+                "status": "applied",
+                "canonical": { "kind": "mobile", "deviceName": "Pixel-9" }
+            }),
             "force → 应用并移交归属"
         );
         let displaced = crate::utils::session_gateway::resize(
-            &host_ctx, &sid, 90, 30, RendererSource::Desktop, false,
+            &host_ctx, &sid, 90, 30, desktop(), false,
         )
         .await
         .expect("displaced resize");
         assert_eq!(
             displaced,
-            crate::protocol::ResizeOutcome::NeedsConfirmation {
-                current_canonical: mobile.clone()
-            },
+            serde_json::json!({
+                "status": "needsConfirmation",
+                "currentCanonical": { "kind": "mobile", "deviceName": "Pixel-9" }
+            }),
             "归属移交后原归属者被抢占（需确认）"
         );
 
@@ -2135,22 +2185,22 @@ fn test_session_actions_closed_loop() {
         assert_eq!(restarted["sessionId"], sid, "重启保持同一 session id");
         let v = crate::utils::session_gateway::view(&host_ctx, &sid)
             .await
-            .expect("view")
-            .expect("重启后在册");
-        assert_eq!(v.info.status, crate::enums::SessionStatus::Running, "重启后 Running");
-        assert_eq!(v.info.name, "重命名后", "重启保持名字（不做二次命名）");
+            .expect("view");
+        assert!(!v.is_null(), "重启后在册");
+        assert_eq!(v["status"], serde_json::json!("running"), "重启后 Running");
+        assert_eq!(v["name"], serde_json::json!("重命名后"), "重启保持名字（不做二次命名）");
         assert_eq!(
-            v.info.config_id, seeded["id"].as_str().unwrap().to_string(),
+            v["configId"], serde_json::json!(seeded["id"].as_str().unwrap()),
             "重启保持 configId"
         );
         // 正统端回到启动端（Desktop）：重启后 Desktop resize 直通
         let owner_again = crate::utils::session_gateway::resize(
-            &host_ctx, &sid, 95, 35, RendererSource::Desktop, false,
+            &host_ctx, &sid, 95, 35, desktop(), false,
         )
         .await
         .expect("resize after restart");
-        assert!(
-            matches!(owner_again, crate::protocol::ResizeOutcome::Applied { .. }),
+        assert_eq!(
+            owner_again["status"], serde_json::json!("applied"),
             "重启归属回到启动端（Desktop 可直通）"
         );
 
@@ -2162,7 +2212,7 @@ fn test_session_actions_closed_loop() {
             crate::utils::session_gateway::view(&host_ctx, &sid)
                 .await
                 .expect("view")
-                .is_none(),
+                .is_null(),
             "会话记录必须消失"
         );
 
@@ -2270,17 +2320,20 @@ fn test_session_annotate_and_devices_closed_loop() {
         // ==================== 1. 播种配置 + 创建会话（P1-b 创建即启动真实 bash） ====================
         let seeded = seed_config_in_plugin_store(&mut *session.lock().await, "注解会话", "/tmp", "bash").await;
 
-        let sid = crate::utils::session_gateway::start(
-            &host_ctx, &seeded["id"].as_str().unwrap(), None, None, true, None,
-        )
-        .await
-        .expect("plugin active → 必须编排成功");
+        let sid = session_id_of(
+            crate::utils::session_gateway::start(
+                &host_ctx, &seeded["id"].as_str().unwrap(), None, None, true, None,
+            )
+            .await
+            .expect("plugin active → 必须编排成功"),
+            "创建",
+        );
         // P1-b 创建同步完成：回执即已登记（无需轮询宿主落库）
         assert!(
-            crate::utils::session_gateway::view(&host_ctx, &sid)
+            !crate::utils::session_gateway::view(&host_ctx, &sid)
                 .await
                 .expect("view")
-                .is_some(),
+                .is_null(),
             "session {sid} 创建回执后即在册"
         );
 
@@ -2317,13 +2370,12 @@ fn test_session_annotate_and_devices_closed_loop() {
         // 透传断言：guest 写入 → 登记域槽原样（键名语义归本插件，视图随槽透出）
         let v = crate::utils::session_gateway::view(&host_ctx, &sid)
             .await
-            .expect("view")
-            .expect("在册");
-        assert_eq!(v.task_status.as_deref(), Some("asking"), "槽值经对外视图透出");
-        assert_eq!(v.task_reason.as_deref(), Some("等待用户答复"));
+            .expect("view");
+        assert!(!v.is_null(), "会话应在册");
+        assert_eq!(v["taskStatus"].as_str(), Some("asking"), "槽值经对外视图透出");
+        assert_eq!(v["taskReason"].as_str(), Some("等待用户答复"));
         assert_eq!(
-            serde_json::to_value(&v).expect("serialize")["taskStatus"],
-            "asking",
+            v["taskStatus"], serde_json::json!("asking"),
             "wire 字段名不变（前端 / 移动端契约）"
         );
         // 宿主内核会话表（含其注解槽）已不存在（票 11），真源切换由结构性锁保证
@@ -2786,19 +2838,21 @@ fn test_session_output_ring_fetch_closed_loop() {
             &format!("echo {probe}; sleep 60"),
         )
         .await;
-        let sid = crate::utils::session_gateway::start(
-            &host_ctx, &seeded["id"].as_str().unwrap(), None, None, true, None,
-        )
-        .await
-        .expect("plugin active → 必须编排成功");
+        let sid = session_id_of(
+            crate::utils::session_gateway::start(
+                &host_ctx, &seeded["id"].as_str().unwrap(), None, None, true, None,
+            )
+            .await
+            .expect("plugin active → 必须编排成功"),
+            "创建",
+        );
         // P1-b 创建同步完成：回执即已登记并已启动（无需轮询 / start_existing_session）
         let v = crate::utils::session_gateway::view(&host_ctx, &sid)
             .await
-            .expect("view")
-            .expect("在册");
+            .expect("view");
+        assert!(!v.is_null(), "会话应在册");
         assert_eq!(
-            v.info.status,
-            crate::enums::SessionStatus::Running,
+            v["status"], serde_json::json!("running"),
             "创建即启动 → Running"
         );
 
@@ -2970,18 +3024,17 @@ fn test_session_input_via_gateway_closed_loop() {
 
         // ==================== 1. 真实 bash 会话（嵌套交互 shell，可接收输入） ====================
         let seeded = seed_config_in_plugin_store(&mut *session.lock().await, "输入会话", "/tmp", "bash").await;
-        let sid =
+        let sid = session_id_of(
             crate::utils::session_gateway::start(&host_ctx, &seeded["id"].as_str().unwrap(), None, None, true, None)
                 .await
-                .expect("plugin active → 创建必须成功");
+                .expect("plugin active → 创建必须成功"),
+            "创建",
+        );
         assert_eq!(
             crate::utils::session_gateway::view(&host_ctx, &sid)
                 .await
-                .expect("view")
-                .expect("在册")
-                .info
-                .status,
-            crate::enums::SessionStatus::Running,
+                .expect("view")["status"],
+            serde_json::json!("running"),
             "创建即启动 → Running（输入面前提）"
         );
 
@@ -3089,7 +3142,7 @@ fn test_session_input_via_gateway_closed_loop() {
             let v = crate::utils::session_gateway::view(&host_ctx, &sid)
                 .await
                 .expect("view after ctrl_d");
-            if v.map(|v| v.info.status) == Some(crate::enums::SessionStatus::Stopped) {
+            if v.get("status").and_then(|s| s.as_str()) == Some("stopped") {
                 stopped = true;
                 break;
             }
