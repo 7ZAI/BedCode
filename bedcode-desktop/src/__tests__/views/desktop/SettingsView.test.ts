@@ -5,6 +5,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import i18n from '@/locales'
 import SettingsView from '@/views/SettingsView.vue'
 import { getPluginRegistry } from '@/plugin/registry'
+import type { PluginContext } from '@/plugin/types'
 
 // Mock Tauri APIs（设置 store / 更新检查均经 invoke）
 vi.mock('@tauri-apps/api/core', () => ({
@@ -80,6 +81,11 @@ describe('SettingsView 分组渲染', () => {
     registry.clearPlugin('com.bedcode.terminal-session')
   })
 
+  /** 最小 context 桩（新契约：贡献分组只在插件有前端 context 时渲染卡片正文） */
+  function makeContext(): PluginContext {
+    return { id: 'com.bedcode.terminal-session', _disposables: [] } as unknown as PluginContext
+  }
+
   it('未注册贡献时渲染 5 个内置分组，标题序列与内置分组定义一致', async () => {
     const wrapper = await mountView()
     expect(titles(wrapper)).toEqual(BUILTIN_TITLES)
@@ -87,6 +93,9 @@ describe('SettingsView 分组渲染', () => {
 
   it('贡献分组按 order 落到内置分组之间，标题取插件命名空间文案', async () => {
     registry.setPluginState('com.bedcode.terminal-session', { state: 'Activated' })
+    /* 真实时序：loader 在 activate 前把 context 预登记进注册表（两次都在贡献面渲染前），
+       测试需同步补齐，否则 keyed Provider 判「无 context」不渲染卡片正文 */
+    registry.setContext('com.bedcode.terminal-session', makeContext())
     // 插件文案按「插件 id + 扁平点号 key」合并（与 context.i18n.registerMessages 同一形态）；
     // 覆盖 zh-CN / zh / en 三种 locale 取值，避免受设置 store 的语言默认值影响
     for (const locale of ['zh-CN', 'zh', 'en']) {
@@ -112,6 +121,7 @@ describe('SettingsView 分组渲染', () => {
 
   it('插件进入 error 态后贡献分组被摘除，设置页回落到纯内置形态', async () => {
     registry.setPluginState('com.bedcode.terminal-session', { state: 'Activated' })
+    registry.setContext('com.bedcode.terminal-session', makeContext())
     registry.registerSettingsSection('com.bedcode.terminal-session', {
       id: 'session-settings',
       titleKey: 'pairing.settings.title',

@@ -128,13 +128,16 @@ class PluginLoaderClass {
 
       stage = 'activate'
       const context = await createPluginContext(manifest)
+      // 二次激活时序：context 必须先于 module.activate 入注册表——activate 期间会重新
+      // 注册贡献面（注册表响应式投影变化 → 视图宿主重挂载），子树注入的 context 若仍是
+      // 停用前旧对象（通道令牌已回收）则插件面命令全员被拒（「会话数据加载失败」根因）；
+      // 先入表保证宿主在 activate 期间/之后重挂载时取到最新 context（同对象重设幂等）。
+      getPluginRegistry().setContext(manifest.id, context)
       await this.activateWithTimeout(module, context, ACTIVATE_TIMEOUT)
       logger.log(`[PluginLoader] Frontend activate() called: ${manifest.id}`)
       await this.reportLoadDiagnostic(manifest.id, 'activate', true)
 
       this.plugins.set(manifest.id, { manifest, module, context })
-      // 将 context 存入 registry，供 PluginViewHost provide 给组件树
-      getPluginRegistry().setContext(manifest.id, context)
       // 运行态登记：贡献面（侧边栏/设置分组）是否生效由 registry 仲裁，见 isContributionActive
       getPluginRegistry().setPluginState(manifest.id, manifest.state)
       logger.log(`[PluginLoader] Rust+TS plugin frontend loaded: ${manifest.id}`)
@@ -145,6 +148,8 @@ class PluginLoaderClass {
         state: 'Error',
         error: e.message || 'Frontend load failed',
       })
+      // 已预登记的 context 随失败撤下：Provider 不再渲染，避免残留半激活插件子树
+      getPluginRegistry().clearContext(manifest.id)
       await this.reportLoadDiagnostic(
         manifest.id,
         stage,
@@ -175,12 +180,13 @@ class PluginLoaderClass {
 
       stage = 'activate'
       const context = await createPluginContext(manifest)
+      // context 先入注册表（二次激活换新对象时宿主重挂载立即取新值，见 loadFrontendOnly 注释）
+      getPluginRegistry().setContext(manifest.id, context)
       await this.activateWithTimeout(module, context, ACTIVATE_TIMEOUT)
       logger.log(`[PluginLoader] Frontend activate() called: ${manifest.id}`)
       await this.reportLoadDiagnostic(manifest.id, 'activate', true)
 
       this.plugins.set(manifest.id, { manifest, module, context })
-      getPluginRegistry().setContext(manifest.id, context)
       getPluginRegistry().setPluginState(manifest.id, manifest.state)
       logger.log(`[PluginLoader] Plugin frontend loaded (already activated): ${manifest.id}`)
     } catch (e: any) {
@@ -189,6 +195,7 @@ class PluginLoaderClass {
         state: 'Error',
         error: e.message || 'Frontend load failed',
       })
+      getPluginRegistry().clearContext(manifest.id)
       await this.reportLoadDiagnostic(
         manifest.id,
         stage,
@@ -348,11 +355,12 @@ class PluginLoaderClass {
 
       stage = 'activate'
       const context = await createPluginContext(info)
+      // context 先入注册表（二次激活换新对象时宿主重挂载立即取新值，见 loadFrontendOnly 注释）
+      getPluginRegistry().setContext(pluginId, context)
       await this.activateWithTimeout(module, context, ACTIVATE_TIMEOUT)
       await this.reportLoadDiagnostic(pluginId, 'activate', true)
 
       this.plugins.set(pluginId, { manifest: info, module, context })
-      getPluginRegistry().setContext(pluginId, context)
       getPluginRegistry().setPluginState(pluginId, info.state)
       logger.log(`[PluginLoader] Plugin hot-reloaded: ${pluginId}`)
     } catch (e: any) {
@@ -361,6 +369,7 @@ class PluginLoaderClass {
         state: 'Error',
         error: e.message || 'Hot reload failed',
       })
+      getPluginRegistry().clearContext(pluginId)
       await this.reportLoadDiagnostic(
         pluginId,
         stage,
@@ -395,6 +404,8 @@ class PluginLoaderClass {
       stage = 'activate'
       // 创建 PluginContext（异步：先换本插件的前端通道令牌，见 createPluginContext）
       const context = await createPluginContext(manifest)
+      // context 先入注册表（二次激活换新对象时宿主重挂载立即取新值，见 loadFrontendOnly 注释）
+      getPluginRegistry().setContext(manifest.id, context)
 
       // 调用 activate
       await this.activateWithTimeout(module, context, ACTIVATE_TIMEOUT)
@@ -402,8 +413,6 @@ class PluginLoaderClass {
       await this.reportLoadDiagnostic(manifest.id, 'activate', true)
 
       this.plugins.set(manifest.id, { manifest, module, context })
-      // 将 context 存入 registry，供 PluginViewHost provide 给组件树
-      getPluginRegistry().setContext(manifest.id, context)
       // manifest 是 activate() 前取的快照，其 state 仍是激活前的形态（Loaded / Inactive）；
       // 贡献面生效判据读的是 registry 状态，此处必须记激活后的真实运行态
       getPluginRegistry().setPluginState(manifest.id, { state: 'Activated' })
@@ -414,6 +423,8 @@ class PluginLoaderClass {
         state: 'Error',
         error: e.message || 'Activation failed',
       })
+      // 已预登记的 context 随失败撤下（同 loadFrontendOnly 失败分支）
+      getPluginRegistry().clearContext(manifest.id)
       await this.reportLoadDiagnostic(
         manifest.id,
         stage,

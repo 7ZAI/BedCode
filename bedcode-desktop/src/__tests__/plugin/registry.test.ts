@@ -13,11 +13,17 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import { nextTick, watchEffect } from 'vue'
 import { getPluginRegistry } from '@/plugin/registry'
+import type { PluginContext } from '@/plugin/types'
 
 const PLUGIN_A = 'com.bedcode.registry-test-a'
 const PLUGIN_B = 'com.bedcode.registry-test-b'
 const WINDOW_VIEW = 'test.window'
 const OTHER_VIEW = 'test.other'
+
+/** 最小 context 桩（id 字段区分对象身份） */
+function makeContext(id: string): PluginContext {
+  return { id, _disposables: [] } as unknown as PluginContext
+}
 
 /** 记录消费方每一次求值结果（等价于 PluginViewHost 的 computed 求值序列） */
 function trackResolution(pluginId: string, viewId: string) {
@@ -104,5 +110,65 @@ describe('插件视图注册表的响应式解析', () => {
 
     expect(seen[2]).toBeUndefined()
     stop()
+  })
+})
+
+describe('插件上下文身份（contextIdentity）的响应式契约', () => {
+  const registry = getPluginRegistry()
+
+  afterEach(() => {
+    registry.clearPlugin(PLUGIN_A)
+    registry.clearPlugin(PLUGIN_B)
+  })
+
+  it('setContext 后返回稳定身份；同对象幂等；clearPlugin 后归 null；换新对象身份变化', async () => {
+    const tracked: (string | null)[] = []
+    const stop = watchEffect(() => {
+      tracked.push(registry.contextIdentity(PLUGIN_A))
+    })
+    expect(tracked[0]).toBeNull()
+
+    const ctxA = makeContext('ctx-a')
+    registry.setContext(PLUGIN_A, ctxA)
+    await nextTick()
+    const idA = tracked[tracked.length - 1]
+    expect(idA).toMatch(/^ctx:\d+$/)
+
+    // 幂等重设同一对象：身份不变（keyed Provider 不重挂载）
+    registry.setContext(PLUGIN_A, ctxA)
+    await nextTick()
+    expect(tracked[tracked.length - 1]).toBe(idA)
+
+    // 二次激活换新对象：身份变化（keyed Provider 据此重挂载重新 provide）
+    registry.setContext(PLUGIN_A, makeContext('ctx-b'))
+    await nextTick()
+    expect(tracked[tracked.length - 1]).not.toBe(idA)
+
+    // clearPlugin：归 null
+    registry.clearPlugin(PLUGIN_A)
+    await nextTick()
+    expect(tracked[tracked.length - 1]).toBeNull()
+    stop()
+  })
+
+  it('不同插件互不串台：各持各自身份', async () => {
+    registry.setContext(PLUGIN_A, makeContext('a'))
+    registry.setContext(PLUGIN_B, makeContext('b'))
+    await nextTick()
+    const idA = registry.contextIdentity(PLUGIN_A)
+    const idB = registry.contextIdentity(PLUGIN_B)
+    expect(idA).not.toBeNull()
+    expect(idB).not.toBeNull()
+    expect(idA).not.toBe(idB)
+  })
+
+  it('clearContext 摘除后归 null（激活失败回滚路径）', async () => {
+    registry.setContext(PLUGIN_A, makeContext('a'))
+    await nextTick()
+    expect(registry.contextIdentity(PLUGIN_A)).not.toBeNull()
+
+    registry.clearContext(PLUGIN_A)
+    await nextTick()
+    expect(registry.contextIdentity(PLUGIN_A)).toBeNull()
   })
 })

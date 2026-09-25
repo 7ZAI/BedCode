@@ -121,6 +121,25 @@ interface RegisteredHttpEndpoint {
 }
 
 /** 前端插件注册表 */
+
+/**
+ * PluginContext 对象的稳定递增 id（WeakMap，不碰 context 自身）。
+ *
+ * keyed Provider 用 `contextIdentity()` 的返回值作重挂载 key：插件二次激活换新对象 →
+ * id 变化 → Provider 在 setup 里重新 provide（provide 只能在 setup 同步执行，
+ * watch 回调里 provide 在 Vue 3.5 实测不生效，见 PluginViewHost 旧实现的历史债）。
+ */
+const contextSeq = new WeakMap<PluginContext, number>()
+let contextSeqCounter = 0
+function contextSeqOf(context: PluginContext): number {
+  let id = contextSeq.get(context)
+  if (id === undefined) {
+    id = ++contextSeqCounter
+    contextSeq.set(context, id)
+  }
+  return id
+}
+
 class PluginRegistryClass {
   private views = new Map<string, RegisteredView>()
   /**
@@ -142,6 +161,13 @@ class PluginRegistryClass {
   private settingsSections = new Map<string, RegisteredSettingsSection>()
   /** 插件上下文映射，供 PluginViewHost provide 给组件树 */
   private contexts = new Map<string, PluginContext>()
+  /**
+   * 插件上下文响应式投影（keyed Provider 的依赖源，与 viewsIndex 同模式）——
+   * `contexts` Map 本身不是响应式数据：直接读 Map 建不了依赖，插件二次激活换新
+   * context 时 Provider 不重挂载，子树注入的仍是停用前（通道令牌已回收）的旧 context。
+   */
+  private readonly contextsIndex: ShallowRef<Array<{ pluginId: string; context: PluginContext }>> =
+    shallowRef([])
   /** 插件运行态映射 — 贡献面「是否生效」的唯一事实源（宿主摘除/恢复判据，见 isContributionActive） */
   private pluginStates = new Map<string, PluginState>()
 
@@ -389,11 +415,38 @@ class PluginRegistryClass {
   /** 存储插件上下文（激活时调用） */
   setContext(pluginId: string, context: PluginContext): void {
     this.contexts.set(pluginId, context)
+    this.rebuildContextsIndex()
   }
 
-  /** 获取插件上下文（PluginViewHost 使用） */
+  /** 摘除插件上下文（仅激活失败回滚用；正常停用走 clearPlugin） */
+  clearContext(pluginId: string): void {
+    this.contexts.delete(pluginId)
+    this.rebuildContextsIndex()
+  }
+
+  /** 获取插件上下文（PluginViewHost / PluginSettingsSection 使用） */
   getContext(pluginId: string): PluginContext | undefined {
     return this.contexts.get(pluginId)
+  }
+
+  /**
+   * 插件上下文的稳定对象身份（响应式依赖源，keyed Provider 用它触发重挂载）。
+   *
+   * 返回值：`ctx:<seq>`（该 context 对象独占递增 id）或 `null`（插件无上下文）。
+   * 插件停用 / 二次激活后 context 对象被替换 → id 变化 → Provider 重挂载并在 setup
+   * 里重新 provide —— 修复「二次启用后子树拿旧 context（令牌已回收）全员命令被拒」
+   * 的关键一行（同因：provide 不能在 watch 回调里生效，旧 watch-provide 是死代码）。
+   */
+  contextIdentity(pluginId: string): string | null {
+    const hit = this.contextsIndex.value.find((e) => e.pluginId === pluginId)
+    return hit ? `ctx:${contextSeqOf(hit.context)}` : null
+  }
+
+  private rebuildContextsIndex(): void {
+    this.contextsIndex.value = [...this.contexts].map(([pluginId, context]) => ({
+      pluginId,
+      context,
+    }))
   }
 
   /** 记录插件运行态（由 loader 在加载成功 / 标记错误时写入，停用时随 clearPlugin 摘除） */
@@ -421,6 +474,7 @@ class PluginRegistryClass {
   /** 清理插件的所有注册 */
   clearPlugin(pluginId: string): void {
     this.contexts.delete(pluginId)
+    this.rebuildContextsIndex()
     this.pluginStates.delete(pluginId)
     this.updateReactivePluginStates()
 
