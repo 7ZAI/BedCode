@@ -14,6 +14,37 @@
 
 ### 功能
 
+#### 对等传输编排整体下沉插件 — 宿主 `peer_engine_*` 收敛为句柄表 + 引擎事件桥（桌面端，**v30 + v31**）
+- 传输任务编排此前仍留宿主（活跃任务状态机、发送并发闸门 1..=8 默认 3、历史封顶 200/100、
+  serve 供流双端记账、`peer_name` 展示名解析、取消原因码映射、pull 任务行预登记 + 并发信号量）
+  ——与「宿主回查内核拿会话」漂移同型，整体下沉 `com.bedcode.file-transfer` 插件**事件归约
+  状态机**（`transfer_store.rs`：建行 / 进度 / 终态按方向映射原因码 / 封顶 / 重试回放——
+  唯一任务真源在插件私有库）
+- **票 1（v30，纯增量）**：`host-peer.active-transfers`（活跃批投影，首屏兜底查询）+
+  `collect-outgoing`（目录递归源枚举 + 批内同名去重）；引擎原始事件直推
+  `peer:transfer-event` / `peer:receive-event`（载荷带 `tsMs`——wasm32 无时钟），过渡期与
+  旧快照 topic 双写
+- **票 2（插件侧）**：事件归约消费原始流（快照 merge 退化为校正 + 对账——偏差经
+  `reconcile_diff` warn 留痕）；插件侧**发送并发闸门**（`PENDING_SENDS` 队列，终态空出
+  槽位后放行）；`peer_name` 从插件自持设备快照解析（短指纹兜底）；activate 期经
+  `peer_active_transfers` 首屏重建
+- **票 3（v31，破坏性）**：`host-peer.resume-all-transfers` **退役删除**（「全部恢复」编排归
+  插件遍历自身暂停批逐个调用；`file-transfer.resume-all` 命令保留、实现改为逐批恢复）；
+  `send-files` 收窄为「一次调用 = 一个会话立即发起」——宿主并发闸门删除，旧载荷
+  `concurrency` 字段**调用期显性报错**（点名重建）；旧快照 topic `peer:transfer` /
+  `peer:receive` 从总线映射退役；`pull-files` 删并发信号量与任务行预登记（逐文件会话立即
+  发起，`pull-started` 引擎事实事件喂给插件归约）；`active-transfers` 实现改三处句柄面投影
+  （wire 形状不变）；宿主残面删除——`peer_engine_transfer.rs` 以 `SendSessionHandle`
+  （CancelToken / PauseSlot / epoch / sources，sources 为 redial 续传必需）重写、源收集剥离
+  `source_collect.rs`、`peer_engine_receive.rs` 只留询问回执表 + 事件桥 + 策略闸门
+  （concurrency 设置字段删除）；15 符号防回接锁
+  `retired_peer_transfer_orchestration_is_not_reintroduced` 变异自检通过（注入 → 转红 →
+  还原 → 回绿）
+- 旧 v31 前产物**实例化期**失败并附点名 `resume-all-transfers` 的重建指引；仍发送
+  `concurrency` 字段的旧产物在 `send-files` 调用期拿到同一指针（fail-visible 双层）
+- 移动端零改动且明确不在兼容范围（`host-peer` 为桌面独有；wire 数据面协议不变）——受损清单：
+  `.scratch/2026-09-25-peer-transfer-orchestration-downsink/mobile-impact.md`
+
 #### WS 动作词表声明式化 — `contributes.wsEndpoints` + 插件侧分派（桌面端）
 - expand–contract（票 09a/09b/09c）：会话/终端 WS 动作词表从「宿主硬编码 match 表」改为「插件声明端点 +
   插件侧分派」。SDK `PluginContributes.wsEndpoints`（形态同 httpEndpoints 两式）在**激活期**登记到
