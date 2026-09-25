@@ -164,7 +164,23 @@
 //!   认证档位，宿主只留通用注册表 / 通用判定 / 通用转发 / 验签引擎），路由以插件名
 //!   为命名空间隔离（激活期同名拒绝，fail-visible）。函数级追加：旧产物（v28 SDK
 //!   构建）仍可实例化（import 面不变），但不能注册路由——按新 SDK 重建以获得服务端域。
-pub const ABI_VERSION: u32 = 29;
+//!
+//! - **v30: 传输编排下沉专项票 1（2026-09-25，纯增量）**——`host-peer` 追加
+//!   `active-transfers`（宿主会话表投影查询，首屏兜底）与 `collect-outgoing`
+//!   （发送源枚举，目录递归 + 批内同名去重）两原语；引擎原始事件桥
+//!   `peer:transfer-event` / `peer:receive-event` 双写直推（快照 topic 过渡期并存）。
+//!
+//! - **v31: 传输编排下沉专项票 3（2026-09-25，破坏性）**——发送编排真源移交
+//!   插件：① `host-peer.resume-all-transfers` **退役删除**（「全部恢复」编排归
+//!   插件遍历自身暂停批逐个调 `resume-transfer`，宿主句柄表不再承担批量调度），
+//!   旧产物实例化期被拒（fail-visible 三形态②，点名 v31 重建）；
+//!   ② `send-files` 语义收窄为「一次调用 = 一个会话立即发起」——宿主并发闸门
+//!   删除，载荷 `concurrency` 并发脉冲字段退役（出现即显性报错）；
+//!   ③ 旧快照 topic `peer:transfer` / `peer:receive` 退役，引擎原始事件
+//!   （peer:*-event）成为唯一回流；④ `active-transfers` 实现改会话句柄表投影
+//!   （接口形状不变）；⑤ `pull-files` 逐文件会话立即发起（宿主并发信号量删除），
+//!   会话发起经 `pull-started` 引擎事件直推。
+pub const ABI_VERSION: u32 = 31;
 
 /// 组件形态标识：`abi.form() == FORM_COMPONENT`（WIT `abi` 接口的 form() 声明）
 ///
@@ -178,7 +194,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_abi_version_is_v29() {
+    fn test_abi_version_is_v31() {
         // 版本号序列与历史 core ABI 共用：v26 = host-crypto 宿主加密引擎原语面
         // （并发批次先落地，占 26）；**v27 = 会话原语域整 interface 退役**
         // （会话引擎下沉票 10：host-session 12 函数 + terminal-hooks + events 两个导出）；
@@ -187,6 +203,11 @@ mod tests {
         // host-pty.spawn 的 hostBroadcastSessionId 字段，旧产物点名 v28 重建）；
         // **v29 = HTTP 路由代码注册下沉专项**（2026-09-25：host-http 服务端域
         // register-endpoint / unregister-endpoint，插件动态路由注册，函数级追加）；
+        // **v30 = 传输编排下沉专项票 1**（2026-09-25：host-peer 函数级追加
+        // active-transfers 会话表投影查询 + collect-outgoing 发送源枚举，纯增量）；
+        // **v31 = 传输编排下沉专项票 3**（2026-09-25，破坏性：退役
+        // resume-all-transfers——「全部恢复」编排归插件；send-files 语义收窄为
+        // 即发即会话 + concurrency 脉冲字段退役；旧快照 topic 退役）；
         // 再往前叠加 v25 host-peer 节点生命周期原语（审计票 12 裁决 1 = 选项 A）、
         // v24 认证记录下沉（2026-09-22，host-auth 记录面七函数退役 + host-session
         // config 读取面退役）、v23 host-session
@@ -197,7 +218,7 @@ mod tests {
         // （同批次之一）、v17 认证策略导出（auth-policy）、v16 插件私有伪终端原语
         // （host-pty）、v15 密钥托管（host-auth / secret-store）、v14 host-websocket、
         // v13 host-mdns v2、v12 总线二进制载荷与 v11 host-peer 传输控制三原语
-        assert_eq!(ABI_VERSION, 29);
+        assert_eq!(ABI_VERSION, 31);
     }
 
     #[test]

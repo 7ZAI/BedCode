@@ -22,6 +22,7 @@
 pub mod peer_engine_receive;
 pub mod peer_engine_remote;
 pub mod peer_engine_transfer;
+pub mod source_collect;
 
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr, TcpListener};
@@ -31,10 +32,10 @@ use std::time::Instant;
 use tokio::io::AsyncReadExt;
 
 use bedcode_peer_net::{
-    Connection, ConnectionHandler, DiscoveredPeerRecord, DiscoveryCache, DiscoveryConfig, DiscoveryDaemon,
+    Connection, ConnectionHandler, DiscoveredPeerRecord, DiscoveryCache, DiscoveryConfig, DiscoveryDaemon, FileMeta,
     HandlerFuture, NodeId, NodeIdentity, PeerNetError, PeerNetNode, PeerNetNodeConfig, RunningNode, SharedDirEntry,
-    SharedDirHandler, SharedDirRoot, SharedDirStore, StaticPeerRecord, TransferConfig, TransferEvent, TrustEvent,
-    TrustStore, TrustedPeerEntry, CAP_FILE_TRANSFER,
+    SharedDirHandler, SharedDirRoot, SharedDirStore, StaticPeerRecord, TerminalState, TransferConfig, TransferEvent,
+    TrustEvent, TrustStore, TrustedPeerEntry, CAP_FILE_TRANSFER,
 };
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
@@ -560,17 +561,17 @@ pub async fn set_shared_roots(app: AppHandle, entries: Vec<SharedDirEntry>) -> c
 //
 // These adapters keep the host-peer boundary in the peer-net module. Product
 // state remains owned by the file-transfer plugin; the engine adapters only
-// expose the existing peer-net session controls and wire-compatible DTOs.
+// expose the existing peer-net session controls (传输编排下沉票 3：宿主残面
+// 已收敛为句柄表 + 引擎事件桥).
 pub(crate) use self::peer_engine_remote::{PeerSharedRootDto, RemoteBrowseDto, RemotePullFileDto};
-pub(crate) use self::peer_engine_transfer::PeerTransferDto;
 
 pub(crate) async fn send_files_for_plugin(
     app: AppHandle,
     node_id: String,
     paths: Vec<String>,
     encrypt: Option<bool>,
-) -> crate::Result<PeerTransferDto> {
-    self::peer_engine_transfer::send_files_to_peer_with_policy(app, node_id, paths, encrypt).await
+) -> crate::Result<String> {
+    self::peer_engine_transfer::send_files_to_peer(app, node_id, paths, encrypt).await
 }
 
 pub(crate) async fn cancel_transfer_for_plugin(app: AppHandle, batch_id: String) -> crate::Result<bool> {
@@ -599,20 +600,12 @@ pub(crate) async fn set_receive_policy_for_plugin(
     self::peer_engine_receive::set_peer_receive_policy(app, mode, timeout_secs).await
 }
 
-pub(crate) async fn set_transfer_concurrency_for_plugin(app: AppHandle, concurrency: u8) -> crate::Result<()> {
-    self::peer_engine_receive::set_peer_transfer_concurrency(app, concurrency).await
-}
-
 pub(crate) async fn pause_transfer_for_plugin(app: AppHandle, batch_id: String) -> crate::Result<bool> {
     self::peer_engine_transfer::pause_peer_transfer(app, batch_id).await
 }
 
 pub(crate) async fn resume_transfer_for_plugin(app: AppHandle, batch_id: String) -> crate::Result<bool> {
     self::peer_engine_transfer::resume_peer_transfer(app, batch_id).await
-}
-
-pub(crate) async fn resume_all_transfers_for_plugin(app: AppHandle) -> crate::Result<u32> {
-    Ok(self::peer_engine_transfer::resume_all_peer_transfers(app).await? as u32)
 }
 
 pub(crate) async fn list_remote_roots_for_plugin(
@@ -642,6 +635,22 @@ pub(crate) async fn pull_files_for_plugin(
 
 pub(crate) async fn set_download_dir_for_plugin(app: AppHandle, path: Option<String>) -> crate::Result<()> {
     self::peer_engine_receive::set_peer_download_dir(app, path).await
+}
+
+/// 活跃传输批清单（host-peer `active-transfers` 原语的引擎入口，票 1 引入 /
+/// 票 3 改句柄表投影——接口形状锁定不变）：send 会话句柄表 + receive pending
+/// 询问表 + pull 会话表三处引擎控制面的聚合投影（仅引擎会话事实，无业务字段）
+pub(crate) async fn active_transfers_for_plugin(app: AppHandle) -> crate::Result<String> {
+    let mut rows = self::peer_engine_transfer::active_send_transfer_rows(&app);
+    rows.extend(self::peer_engine_receive::active_receive_rows(&app));
+    rows.extend(self::peer_engine_remote::active_pull_rows(&app));
+    serde_json::to_string(&rows)
+        .map_err(|e| crate::AppError::Internal(format!("serialize active transfers failed: {e}")))
+}
+
+/// 发送源收集（host-peer `collect-outgoing` 原语的引擎入口，票 1）：转发引擎适配层
+pub(crate) async fn collect_outgoing_for_plugin(paths: Vec<String>) -> crate::Result<String> {
+    self::peer_engine_transfer::collect_outgoing_for_plugin(paths).await
 }
 
 /// 节点属主记账（审计票 12）：把节点从「未跑」带到「跑」的那个**调用方插件 id**。
@@ -1233,6 +1242,136 @@ pub(crate) fn publish_mdns_bus(topic: &str, payload: serde_json::Value) {
     }
 }
 
+// ==================== 引擎原始事件流（传输编排下沉票 1）====================
+
+/// 引擎原始事件 topic（双写期）：编排下沉 P3 退役快照 topic（`peer:transfer` /
+/// `peer:receive`）后成为唯一回流。topic 形态即 ACL——新增 topic 不复用旧名，
+/// 旧插件的快照订阅在过渡期不受影响
+pub(crate) const TOPIC_TRANSFER_EVENT: &str = "peer:transfer-event";
+/// 接收方向引擎原始事件 topic（票 1，见 [`TOPIC_TRANSFER_EVENT`]）
+pub(crate) const TOPIC_RECEIVE_EVENT: &str = "peer:receive-event";
+
+/// 事件到达时刻（Unix 毫秒）：插件 wasm32 无时钟，归约状态机的
+/// createdAtMs/updatedAtMs 以本字段为准（票 2）
+pub(crate) fn event_now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// 引擎 Progress 事件载荷（camelCase；字段即引擎事实，宿主零加工）
+pub(crate) fn engine_progress_payload(
+    batch_id: &str,
+    transferred: u64,
+    total: u64,
+    rate_bps: f64,
+) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "progress",
+        "batchId": batch_id,
+        "transferred": transferred,
+        "total": total,
+        "rateBps": rate_bps,
+        "tsMs": event_now_ms(),
+    })
+}
+
+/// 引擎 Terminal 事件载荷：终态形状随 TerminalState 直译（type + 变体字段），
+/// 不做「cancelled-by-*」等产品原因码映射（前端 i18n 约定归插件）
+pub(crate) fn engine_terminal_payload(batch_id: &str, state: &TerminalState) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "terminal",
+        "batchId": batch_id,
+        "state": terminal_state_payload(state),
+        "tsMs": event_now_ms(),
+    })
+}
+
+/// TerminalState → wire 形状（纯函数，单测锚点）
+fn terminal_state_payload(state: &TerminalState) -> serde_json::Value {
+    match state {
+        TerminalState::Completed => serde_json::json!({ "type": "completed" }),
+        TerminalState::Rejected { reason } => serde_json::json!({ "type": "rejected", "reason": reason.as_str() }),
+        TerminalState::Cancelled { by_peer } => serde_json::json!({ "type": "cancelled", "byPeer": by_peer }),
+        TerminalState::Failed { detail } => serde_json::json!({ "type": "failed", "detail": detail }),
+    }
+}
+
+/// 引擎暂停/恢复事件载荷（kind = "paused" | "resumed"）
+pub(crate) fn engine_pause_payload(kind: &str, batch_id: &str) -> serde_json::Value {
+    serde_json::json!({ "kind": kind, "batchId": batch_id, "tsMs": event_now_ms() })
+}
+
+/// 引擎接收询问事件载荷（offer-pending）：oneshot 回执通道不可序列化，刻意
+/// 剥离——仅落询问事实，应答经 respond-transfer 原语回流（宿主 pending 表保留）
+pub(crate) fn engine_offer_payload(
+    remote: &NodeId,
+    batch_id: &str,
+    files: &[FileMeta],
+    total_size: u64,
+) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "offer-pending",
+        "batchId": batch_id,
+        "nodeId": remote.as_str(),
+        "files": files.iter().map(|f| serde_json::json!({ "path": f.path, "size": f.size })).collect::<Vec<_>>(),
+        "totalSize": total_size,
+        "tsMs": event_now_ms(),
+    })
+}
+
+/// 引擎供流记账事件载荷（pull-served）：本端为对端拉取供流的事实——
+/// 插件据此自建 direction=send 记账视图（编排下沉票 3 后宿主不再代记）
+pub(crate) fn engine_pull_served_payload(
+    remote: &NodeId,
+    batch_id: &str,
+    files: &[FileMeta],
+    total_size: u64,
+) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "pull-served",
+        "batchId": batch_id,
+        "nodeId": remote.as_str(),
+        "files": files.iter().map(|f| serde_json::json!({ "path": f.path, "size": f.size })).collect::<Vec<_>>(),
+        "totalSize": total_size,
+        "tsMs": event_now_ms(),
+    })
+}
+
+/// 引擎拉取会话发起事件载荷（pull-started，票 3）：本端向对端发起的单文件
+/// 拉取会话事实——插件据此自建 receive 任务行（编排下沉后宿主不再预登记
+/// 任务行）。形状与 offer-pended 同形（batchId/nodeId/relPath/size/tsMs）
+pub(crate) fn engine_pull_started_payload(
+    remote: &NodeId,
+    batch_id: &str,
+    rel_path: &str,
+    size: u64,
+) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "pull-started",
+        "batchId": batch_id,
+        "nodeId": remote.as_str(),
+        "relPath": rel_path,
+        "size": size,
+        "tsMs": event_now_ms(),
+    })
+}
+
+/// 引擎原始事件直推插件总线（票 1）：不经宿主状态机加工，Progress 节流由
+/// 调用方复用快照节流窗口；事件流为高频通道，统一 debug 级（日志红线：
+/// 热路径 info 噪音禁止）。无总线上下文（测试/无头）静默跳过
+pub(crate) fn publish_engine_event(topic: &str, payload: serde_json::Value) {
+    tracing::debug!(
+        topic,
+        kind = %payload["kind"].as_str().unwrap_or("?"),
+        "peer engine event pushed to plugin bus"
+    );
+    if let Some(ctx) = crate::system::app_context::AppContext::try_global() {
+        ctx.plugin_host().message_bus().publish(topic, "host", payload);
+    }
+}
+
 // ==================== 插件「探索发现」直达路径 ====================
 
 /// 插件刷新请求 topic：插件 rust 经 `bus_publish` 发布，宿主静态订阅消费
@@ -1346,8 +1485,9 @@ fn bus_topic_for(event: &str) -> Option<&'static str> {
         // （issue 13 Phase 4：设备列表由插件经 host-mdns 自建）
         "peer-connected" | "peer-disconnected" => Some("peer:connection"),
         "peer-consent-requested" => Some("peer:consent"),
-        "peer-transfer-changed" => Some("peer:transfer"),
-        "peer-receive-changed" => Some("peer:receive"),
+        // "peer-transfer-changed" / "peer-receive-changed" → 旧快照 topic
+        // peer:transfer / peer:receive 已随传输编排下沉票 3 退役（状态机
+        // 删除后无快照可推；插件消费 peer:transfer-event / peer:receive-event）
         _ => None,
     }
 }
@@ -1485,14 +1625,106 @@ mod peer_net_tests {
         assert_eq!(bus_topic_for("peer-connected"), Some("peer:connection"));
         assert_eq!(bus_topic_for("peer-disconnected"), Some("peer:connection"));
         assert_eq!(bus_topic_for("peer-consent-requested"), Some("peer:consent"));
-        assert_eq!(bus_topic_for("peer-transfer-changed"), Some("peer:transfer"));
-        assert_eq!(bus_topic_for("peer-receive-changed"), Some("peer:receive"));
     }
 
     #[test]
     fn bus_topic_for_unknown_event_is_none() {
         assert_eq!(bus_topic_for("peer-devices-changed"), None, "设备列表已随缓存守护退役");
+        // 旧快照 topic（peer:transfer / peer:receive）随传输编排下沉票 3 退役：
+        // 状态机删除后无快照可推，映射必须摘除（防止误回接）
+        assert_eq!(bus_topic_for("peer-transfer-changed"), None);
+        assert_eq!(bus_topic_for("peer-receive-changed"), None);
         assert_eq!(bus_topic_for(""), None);
+    }
+
+    // ==================== 引擎原始事件载荷（传输编排下沉票 1） ====================
+
+    /// Progress 载荷：字段即引擎事实（camelCase 直译），无业务加工
+    #[test]
+    fn engine_progress_payload_carries_engine_facts() {
+        let p = engine_progress_payload("b-1", 42, 100, 3.5);
+        assert_eq!(p["kind"], "progress");
+        assert_eq!(p["batchId"], "b-1");
+        assert_eq!(p["transferred"], 42);
+        assert_eq!(p["total"], 100);
+        assert_eq!(p["rateBps"], 3.5);
+    }
+
+    /// Terminal 载荷：终态形状随 TerminalState 直译——reason 是 wire 枚举串
+    /// 而非产品文案；「cancelled-by-*」等 i18n 约定不得在宿主出现
+    #[test]
+    fn engine_terminal_payload_translates_state_variants() {
+        let cases = [
+            (TerminalState::Completed, "completed"),
+            (
+                TerminalState::Rejected {
+                    reason: bedcode_peer_net::transfer::RejectReason::PolicyDenied,
+                },
+                "rejected",
+            ),
+            (TerminalState::Cancelled { by_peer: true }, "cancelled"),
+            (TerminalState::Failed { detail: "io".into() }, "failed"),
+        ];
+        for (state, expect_type) in cases {
+            let p = engine_terminal_payload("b-2", &state);
+            assert_eq!(p["kind"], "terminal");
+            assert_eq!(p["batchId"], "b-2");
+            assert_eq!(p["state"]["type"], expect_type);
+        }
+        let p = engine_terminal_payload("b-2", &TerminalState::Cancelled { by_peer: true });
+        assert_eq!(
+            p["state"]["byPeer"], true,
+            "byPeer 原样直译，不做 -by-sender/-by-receiver 映射"
+        );
+        let p = engine_terminal_payload("b-2", &TerminalState::Failed { detail: "disk".into() });
+        assert_eq!(p["state"]["detail"], "disk");
+    }
+
+    /// offer-pending 载荷：询问事实齐全（files/totalSize/nodeId），oneshot 回执
+    /// 通道不可序列化故不存在于载荷——应答走 respond-transfer 原语
+    #[test]
+    fn engine_offer_payload_lists_files_without_reply_channel() {
+        let files = vec![
+            FileMeta {
+                path: "a.bin".to_string(),
+                size: 5,
+            },
+            FileMeta {
+                path: "sub/b.bin".to_string(),
+                size: 7,
+            },
+        ];
+        let p = engine_offer_payload(&node_id(9), "b-3", &files, 12);
+        assert_eq!(p["kind"], "offer-pending");
+        assert_eq!(p["batchId"], "b-3");
+        assert_eq!(p["totalSize"], 12);
+        assert_eq!(p["files"][0]["path"], "a.bin");
+        assert_eq!(p["files"][1]["size"], 7);
+        assert!(p.get("reply").is_none(), "oneshot 回执通道不得进 wire");
+    }
+
+    /// pull-served 载荷：供流记账事实（插件自建 send 视图的输入）
+    #[test]
+    fn engine_pull_served_payload_carries_serve_facts() {
+        let files = vec![FileMeta {
+            path: "x.bin".to_string(),
+            size: 9,
+        }];
+        let p = engine_pull_served_payload(&node_id(3), "b-4", &files, 9);
+        assert_eq!(p["kind"], "pull-served");
+        assert_eq!(p["batchId"], "b-4");
+        assert_eq!(p["totalSize"], 9);
+        assert_eq!(p["files"][0]["path"], "x.bin");
+    }
+
+    /// paused/resumed 载荷：kind + batchId 最小事实
+    #[test]
+    fn engine_pause_payload_carries_kind_and_batch() {
+        let p = engine_pause_payload("paused", "b-5");
+        assert_eq!(p["kind"], "paused");
+        assert_eq!(p["batchId"], "b-5");
+        let p = engine_pause_payload("resumed", "b-6");
+        assert_eq!(p["kind"], "resumed");
     }
 
     // ==================== 可信列表 CRUD（TrustStore，tempdir 隔离） ====================

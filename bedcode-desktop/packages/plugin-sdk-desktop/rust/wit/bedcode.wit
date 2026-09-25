@@ -92,8 +92,9 @@ interface host-bus {
 /// - `peer:devices`    发现缓存全量列表变化
 /// - `peer:connection` 节点连上/断开
 /// - `peer:consent`    首次连接确认请求
-/// - `peer:transfer`   发送任务列表变化（含进度与终态）
-/// - `peer:receive`    接收侧变化（待应答批/进行中接收）
+/// - `peer:transfer-event` / `peer:receive-event` 引擎原始事件流（v30 引入；
+///   **v31 起唯一回流**——旧快照 topic `peer:transfer` / `peer:receive`
+///   随编排下沉票 3 退役，任务状态真源在插件事件归约状态机）
 interface host-peer {
     /// 按 endpoint 拨号连接（ADR 0022 v2 终态，原 dial-peer-endpoint 转正）：
     /// endpoint = `{ nodeId, addr, port }`（camelCase JSON，插件从自身设备缓存/
@@ -114,8 +115,12 @@ interface host-peer {
     /// 向单个对端发送一批文件（目录递归展开、同名去重由宿主完成；
     /// 扇出 = 对多个对端各调一次，各批相互独立）→ 传输句柄（batch-id 字符串）
     ///
-    /// 仅接受 session 句柄寻址；paths 元素双形态：纯 string 或 `{ path, encrypt? }`
-    /// 对象（任一元素 encrypt=true → 本批强制加密）。连接已断时以句柄记忆的
+    /// **v31 语义收窄（传输编排下沉票 3）**：一次调用 = 一个会话立即发起，
+    /// 不再有宿主并发闸门排队（旧 pending 态删除）——发送方向并发节流由
+    /// 调用方在调用前自控（插件侧并发闸门）。paths 元素双形态：纯 string 或
+    /// `{ path, encrypt? }` 对象（任一元素 encrypt=true → 本批强制加密）；
+    /// 旧产物载荷携带的 `concurrency` 并发脉冲字段已退役，出现即**显性报错**
+    /// （fail-visible：旧产物按当前 SDK 重建）。连接已断时以句柄记忆的
     /// endpoint 自动重拨（信任检查照走引擎握手）
     send-files: func(session-handle: string, paths-json: string) -> result<string, string>;
     /// 接收批应答：accept=false 或超时视为拒绝
@@ -123,15 +128,18 @@ interface host-peer {
     /// 设置接收策略（引擎安全闸门配置原语，ADR 0022 v3）：mode = "ask" |
     /// "always_accept" | "always_deny"；产品真源在插件侧，经本原语推送宿主闸门
     set-receive-policy: func(mode: string, timeout-secs: u64) -> result<_, string>;
-    /// 显式暂停进行中的发送批（batch-id 寻址）：中断会话连接，任务保留
-    /// （含已传字节）不落历史，接收端按已写偏移保留待续传；仅本端发起的
-    /// running 批可暂停，暂停释放一个并发槽位。无命中返回错误
+    /// 显式暂停进行中的发送批（batch-id 寻址）：会话数据面门控（wire Pause 帧
+    /// + 供方停推流，连接保持），任务保留（含已传字节）不落历史；本端发起的
+    /// 活跃会话查句柄表、serve 供流批查 handler 注册表。无命中返回错误
     pause-transfer: func(batch-id: string) -> result<_, string>;
-    /// 恢复暂停的发送批：入队并经并发闸门启动，接收端按已写偏移续传
-    /// （断点真源在落盘侧）；无命中返回错误
+    /// 恢复暂停的发送批（batch-id 寻址）：活跃会话写 Resume 帧续流；会话已
+    /// 中断的以句柄表记忆的源清单重新拨号续传（断点真源在接收端落盘侧）。
+    /// 无命中返回错误
     resume-transfer: func(batch-id: string) -> result<_, string>;
-    /// 恢复全部暂停的发送批，返回入队数（0 = 无暂停批）
-    resume-all-transfers: func() -> result<u32, string>;
+    /// （v31 退役，传输编排下沉票 3）恢复全部暂停的发送批：「全部」编排归
+    /// 插件——遍历自己的暂停批逐个调 resume-transfer（并发节流由插件侧
+    /// 闸门自控），宿主句柄表不再承担批量调度。旧产物 import 本函数在
+    /// 实例化期被拒（fail-visible 三形态②，点名 v31 重建）
     /// 全量幂等替换引擎广播源（ADR 0022 v2）：条目 `[{ id, name, path }]`
     /// （camelCase JSON；移动端 SAF 树以 `safTreeUri` 字段替代 `path`）。
     /// 注册表 CRUD 真源在插件侧，本函数只同步暴露面镜像；任一条目非法整批拒绝
@@ -142,7 +150,10 @@ interface host-peer {
     /// 目录下钻 → RemoteBrowseDto JSON（仅 session 句柄寻址；重拨语义同上）
     browse-directory: func(session-handle: string, dir-id: string, rel-path: string) -> result<string, string>;
     /// 拉取对端文件（files = RemotePullFileDto JSON 数组）→ 入队文件数
-    /// （仅 session 句柄寻址；重拨语义同上）
+    /// （仅 session 句柄寻址；重拨语义同上）。**v31 起逐文件会话立即发起、
+    /// 无宿主并发信号量**——并发节流由调用方分批调用自控；每个拉取会话
+    /// 发起时经 `peer:receive-event` 直推 `pull-started` 引擎事实事件
+    /// （batchId/nodeId/files/totalSize/tsMs），任务行由插件事件归约自建
     pull-files: func(session-handle: string, dir-id: string, files-json: string) -> result<u32, string>;
     /// 设置接收落点目录（空串 = 恢复默认 Downloads\BedCode\；引擎落盘配置原语，
     /// ADR 0022 v3）
@@ -158,6 +169,17 @@ interface host-peer {
     /// 让本机节点下线（幂等；节点未跑为 no-op）：停广播 / 关监听 / 排水连接与
     /// 入站记账。仅节点属主可关停——非属主报错，文案不回带属主身份
     stop-node: func() -> result<bool, string>;
+    /// 活跃传输批清单（v30 引入；**v31 起实现 = 会话句柄表投影**，接口形状
+    /// 不变）：`[{ batchId, direction, status, totalBytes, transferredBytes,
+    /// rateBps, updatedAtMs }]`（camelCase JSON 数组）。仅引擎会话事实——不含
+    /// peerName / 文件清单 / 原因码等业务字段（展示名与业务视图由插件自持）；
+    /// 供插件事件归约状态机首屏重建（激活晚于事件时的兜底查询）
+    active-transfers: func() -> result<string, string>;
+    /// 收集发送源（v30）：paths = string[] JSON，目录递归展开 + 批内同名去重
+    /// （「名称 (2).ext」编号——批内 remote 路径唯一性属 wire 协议正确性）
+    /// → `[{ path, size }]` JSON（path 为相对落位形状，size 为字节）。
+    /// 仅读元数据不读内容；路径应来自 host-platform pick-* 用户选择（选择即授权）
+    collect-outgoing: func(paths-json: string) -> result<string, string>;
 }
 
 /// mDNS 浏览纯能力（ADR 0022 v2）：browse-only，发现/离开事件原样透传
@@ -877,6 +899,10 @@ interface manifest {
 ///   生产路径。旧产物（v27 SDK 构建）在**实例化**阶段即可诊断失败
 ///   （stale_artifact_rebuild_hint 点明 v28 重建）。
 ///   随包插件产物同步重建（旧产物不兼容、不迁移、不提供 fallback）。
+/// - **v30（传输编排下沉专项票 1，2026-09-25）**：host-peer 函数级追加
+///   `active-transfers`（会话表投影查询，事件归约首屏兜底）+ `collect-outgoing`
+///   （发送源枚举：目录递归 + 批内同名去重，仅元数据）。纯增量，v29 及更早
+///   插件不受影响。权威记账在 SDK `rust/src/abi.rs`
 ///
 /// **不 bump 版本号的语义变更（审计票 05，落在 v22 批次内）**：host-bus topic 命名空间。
 /// 函数签名零变化，故不动版本号；但**定向事件的 topic 串**由 `<base>.<owner>` 改为

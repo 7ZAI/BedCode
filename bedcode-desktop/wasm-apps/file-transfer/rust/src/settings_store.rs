@@ -163,7 +163,6 @@ mod tests {
         }
         fn peer_pause_transfer(&self, _batch_id: &str) -> Result<(), bedcode_plugin_api::host::HostError> { unimplemented!() }
         fn peer_resume_transfer(&self, _batch_id: &str) -> Result<(), bedcode_plugin_api::host::HostError> { unimplemented!() }
-        fn peer_resume_all_transfers(&self) -> Result<u32, bedcode_plugin_api::host::HostError> { unimplemented!() }
         fn peer_set_shared_roots(&self, _dirs: &[serde_json::Value]) -> Result<(), bedcode_plugin_api::host::HostError> { unimplemented!() }
         fn peer_list_shared_roots(&self, _session: &str) -> Result<serde_json::Value, bedcode_plugin_api::host::HostError> { unimplemented!() }
         fn peer_browse_directory(&self, _session: &str, _dir_id: &str, _rel_path: &str) -> Result<serde_json::Value, bedcode_plugin_api::host::HostError> { unimplemented!() }
@@ -174,6 +173,8 @@ mod tests {
         }
         fn peer_start_node(&self) -> Result<bool, bedcode_plugin_api::host::HostError> { unimplemented!() }
         fn peer_stop_node(&self) -> Result<bool, bedcode_plugin_api::host::HostError> { unimplemented!() }
+        fn peer_active_transfers(&self) -> Result<serde_json::Value, bedcode_plugin_api::host::HostError> { unimplemented!() }
+        fn peer_collect_outgoing(&self, _paths: &[serde_json::Value]) -> Result<serde_json::Value, bedcode_plugin_api::host::HostError> { unimplemented!() }
     }
 
     #[test]

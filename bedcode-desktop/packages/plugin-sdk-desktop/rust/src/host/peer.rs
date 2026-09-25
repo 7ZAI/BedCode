@@ -27,7 +27,9 @@ pub trait HostPeer {
     /// 向单个对端发送一批文件（扇出 = 对多个对端各调一次）。paths 元素双形态：
     /// 纯 string 或 `{ path, encrypt? }` 对象（任一元素 encrypt=true → 本批强制
     /// 加密）。返回传输句柄（batch-id 字符串）；仅接受 session 句柄寻址，
-    /// 连接已断时以句柄记忆的 endpoint 自动重拨
+    /// 连接已断时以句柄记忆的 endpoint 自动重拨。**v31 收窄**：一次调用 =
+    /// 一个会话立即发起（宿主并发闸门删除，节流由调用方自控）；载荷
+    /// `concurrency` 字段退役，出现即显性报错
     fn peer_send_files(
         &self,
         session: &str,
@@ -37,13 +39,13 @@ pub trait HostPeer {
     fn peer_respond_transfer(&self, batch_id: &str, accept: bool) -> Result<(), HostError>;
     /// 设置接收策略（引擎安全闸门配置原语）：mode = "ask" | "always_accept" | "always_deny"
     fn peer_set_receive_policy(&self, mode: &str, timeout_secs: u64) -> Result<(), HostError>;
-    /// 显式暂停进行中的发送批（batch-id 寻址）：中断会话，任务保留（含已传
-    /// 字节）不落历史；无命中报错。暂停释放一个并发槽位
+    /// 显式暂停进行中的发送批（batch-id 寻址）：会话数据面门控（wire Pause 帧 +
+    /// 供方停推流，连接保持），任务保留（含已传字节）不落历史；无命中报错
     fn peer_pause_transfer(&self, batch_id: &str) -> Result<(), HostError>;
-    /// 恢复暂停的发送批：入队经并发闸门启动，接收端按已写偏移续传
+    /// 恢复暂停的发送批：活跃会话写 Resume 帧续流；会话已中断的以句柄表记忆
+    /// 的源清单重新拨号续传（断点真源在接收端落盘侧）。v31 起「全部恢复」
+    /// 编排归插件（遍历自身暂停批逐个调本原语），resume-all-transfers 退役
     fn peer_resume_transfer(&self, batch_id: &str) -> Result<(), HostError>;
-    /// 恢复全部暂停的发送批，返回入队数（0 = 无暂停批）
-    fn peer_resume_all_transfers(&self) -> Result<u32, HostError>;
     /// 全量幂等替换引擎广播源：条目 `[{ id, name, path }]`（移动端 safTreeUri）
     fn peer_set_shared_roots(&self, dirs: &[serde_json::Value]) -> Result<(), HostError>;
     /// 浏览对端共享根清单（仅 session 句柄寻址；断线自动重拨）
@@ -73,4 +75,11 @@ pub trait HostPeer {
     /// 让本机节点下线（幂等；未跑为 no-op）：停广播 / 关监听 / 排水连接与入站记账。
     /// 仅节点属主可关停，非属主报错（文案不回带属主身份）
     fn peer_stop_node(&self) -> Result<bool, HostError>;
+    /// 活跃传输批清单（v30）：宿主会话表投影 `[{ batchId, direction, status,
+    /// totalBytes, transferredBytes, rateBps, updatedAtMs }]`（仅引擎会话事实，
+    /// 无 peerName 等业务字段）；供插件事件归约状态机首屏重建
+    fn peer_active_transfers(&self) -> Result<serde_json::Value, HostError>;
+    /// 收集发送源（v30）：paths = string[]，目录递归展开 + 批内同名去重
+    /// → `[{ path, size }]`（仅元数据；路径应来自 pick-* 用户选择）
+    fn peer_collect_outgoing(&self, paths: &[serde_json::Value]) -> Result<serde_json::Value, HostError>;
 }

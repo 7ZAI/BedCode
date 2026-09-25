@@ -754,10 +754,6 @@ impl bedcode::plugin::host_peer::Host for WasmPluginState {
         )
     }
 
-    fn resume_all_transfers(&mut self) -> Result<u32, String> {
-        peer::peer_resume_all_transfers(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id)
-    }
-
     fn set_shared_roots(&mut self, dirs_json: String) -> Result<(), String> {
         peer::peer_set_shared_roots(
             self.host_ctx.as_ref(),
@@ -808,6 +804,19 @@ impl bedcode::plugin::host_peer::Host for WasmPluginState {
 
     fn stop_node(&mut self) -> Result<bool, String> {
         peer::peer_stop_node(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id)
+    }
+
+    fn active_transfers(&mut self) -> Result<String, String> {
+        peer::peer_active_transfers(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id)
+    }
+
+    fn collect_outgoing(&mut self, paths_json: String) -> Result<String, String> {
+        peer::peer_collect_outgoing(
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            &self.plugin_id,
+            &paths_json,
+        )
     }
 }
 
@@ -1141,7 +1150,7 @@ impl LoadedWasmPlugin {
 
     /// 旧 SDK 产物的实例化失败判据 → 重建指引（空串 = 不是这个原因，不加噪音）
     ///
-    /// 本项目迄今的破坏性契约变更有两次（均在**实例化阶段**失败——比 `verify_abi`
+    /// 本项目迄今的破坏性契约变更（均在**实例化阶段**失败——比 `verify_abi`
     /// 的版本协商更早）：
     /// - **v27**：删了两个 import interface（`host-session` / `host-terminal`）与一个
     ///   export interface（`terminal-hooks`）；
@@ -1152,6 +1161,9 @@ impl LoadedWasmPlugin {
     ///   为**新增**函数——v29+ 产物在 v28 及更旧宿主上实例化会报「找不到 import 实现」
     ///   点名 `host-http.register-endpoint`；此时问题在宿主太旧（升级 BedCode），
     ///   不是产物要重建，故单独一条指引不混入旧产物文案。
+    /// - **v31**：`host-peer.resume-all-transfers` 退役删除（传输编排下沉票 3——
+    ///   批量恢复编排归插件，逐批调 `resume-transfer`），旧产物 import 该函数 →
+    ///   wasmtime 报「找不到 import 实现」点名 `resume-all-transfers`。
     ///
     /// 组件模型不提供「向后兼容的缺省 import」，故失败本身不可避免；能做的是让失败
     /// **可诊断**：wasmtime 的原文点名缺失的 interface/函数，本条补一句「按哪个版本重建」。
@@ -1165,6 +1177,15 @@ impl LoadedWasmPlugin {
             return format!(
                 "（该产物使用了 ABI v29 的 host-http 服务端域（register-endpoint / \
                  unregister-endpoint），当前宿主仅支持 ABI v{}，请升级 BedCode）",
+                abi::ABI_VERSION
+            );
+        }
+        // v31（传输编排下沉票 3）：host-peer.resume-all-transfers 退役删除——
+        // 旧产物实例化被拒，点名 v31 重建（fail-visible 三形态②）
+        if instantiate_error.contains("resume-all-transfers") {
+            return format!(
+                "（该产物按旧版插件 SDK 构建：ABI v{} 起 host-peer.resume-all-transfers 已退役 \
+                 （批量恢复编排归插件，逐批调 resume-transfer），请用当前 SDK 重建插件产物）",
                 abi::ABI_VERSION
             );
         }

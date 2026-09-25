@@ -188,9 +188,6 @@ mod tests {
         fn peer_resume_transfer(&self, _batch_id: &str) -> Result<(), HostError> {
             unimplemented_peer!()
         }
-        fn peer_resume_all_transfers(&self) -> Result<u32, HostError> {
-            unimplemented_peer!()
-        }
         fn peer_set_shared_roots(&self, _dirs: &[serde_json::Value]) -> Result<(), HostError> {
             unimplemented_peer!()
         }
@@ -220,6 +217,12 @@ mod tests {
             unimplemented_peer!()
         }
         fn peer_stop_node(&self) -> Result<bool, HostError> {
+            unimplemented_peer!()
+        }
+        fn peer_active_transfers(&self) -> Result<serde_json::Value, HostError> {
+            unimplemented_peer!()
+        }
+        fn peer_collect_outgoing(&self, _paths: &[serde_json::Value]) -> Result<serde_json::Value, HostError> {
             unimplemented_peer!()
         }
     }
@@ -339,9 +342,6 @@ mod tests {
             fn peer_resume_transfer(&self, _b: &str) -> Result<(), HostError> {
                 unimplemented_peer!()
             }
-            fn peer_resume_all_transfers(&self) -> Result<u32, HostError> {
-                unimplemented_peer!()
-            }
             fn peer_set_shared_roots(&self, _d: &[serde_json::Value]) -> Result<(), HostError> {
                 unimplemented_peer!()
             }
@@ -371,6 +371,12 @@ mod tests {
                 unimplemented_peer!()
             }
             fn peer_stop_node(&self) -> Result<bool, HostError> {
+                unimplemented_peer!()
+            }
+            fn peer_active_transfers(&self) -> Result<serde_json::Value, HostError> {
+                unimplemented_peer!()
+            }
+            fn peer_collect_outgoing(&self, _paths: &[serde_json::Value]) -> Result<serde_json::Value, HostError> {
                 unimplemented_peer!()
             }
         }

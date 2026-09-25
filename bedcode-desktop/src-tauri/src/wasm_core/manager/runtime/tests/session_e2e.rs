@@ -111,6 +111,9 @@ fn test_session_plugin_artifact_lifecycle() {
             "connection:read",
             "fs:read",
             "fs:write",
+            // v29（HTTP 路由代码注册下沉）：本插件 activate 期经 host-http
+            // register-endpoint 注册全部业务路由，需要客户端/服务端同权限位
+            "network:http",
             "peer",
             // 票 03：文件浏览域 git diff 经 host-process run-sync
             "process:run",

@@ -106,6 +106,8 @@ impl WasmPlugin for FileTransferPlugin {
             "peer:devices",
             "peer:transfer",
             "peer:receive",
+            "peer:transfer-event",
+            "peer:receive-event",
             "peer:consent",
             "peer:connection",
         ] {
@@ -133,6 +135,10 @@ impl WasmPlugin for FileTransferPlugin {
             )),
             Err(e) => h.log_error(&format!("peer-net node start failed (plugin stays active): {e}")),
         }
+        // 首屏兜底（传输编排下沉票 2 开放点 4）：激活晚于事件时经
+        // active-transfers 原语查询宿主在册活跃批补占位行；节点未起等场景
+        // 内部降级日志，不阻断激活
+        peer::rebuild_from_active_transfers(&h);
         Ok(())
     }
 
@@ -158,6 +164,8 @@ impl WasmPlugin for FileTransferPlugin {
             "peer:devices",
             "peer:transfer",
             "peer:receive",
+            "peer:transfer-event",
+            "peer:receive-event",
             "peer:consent",
             "peer:connection",
         ] {
@@ -359,6 +367,21 @@ impl WasmPlugin for FileTransferPlugin {
                 peer::auto_answer_pending(&h, arr);
                 peer::merge_and_emit(&h, arr, "receive");
             }
+            return Ok(());
+        }
+
+        // 引擎原始事件归约（传输编排下沉票 2）：peer:transfer-event = send 方向
+        // （本端发起批 + 供流记账批）、peer:receive-event = receive 方向。
+        // 事件归约是 store 主写，快照 merge 退化为校正 + 对账（票 3 退役快照）
+        if msg.topic == "peer:transfer-event" {
+            peer::reduce_and_emit(&h, "send", &msg.payload);
+            return Ok(());
+        }
+
+        if msg.topic == "peer:receive-event" {
+            // auto 分支先应答（offer-pending 幂等，快照路径对已应答批不命中）
+            peer::auto_answer_event(&h, &msg.payload);
+            peer::reduce_and_emit(&h, "receive", &msg.payload);
             return Ok(());
         }
 

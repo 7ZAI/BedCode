@@ -259,43 +259,39 @@ pub(crate) fn peer_send_files(
         Detailed {
             path: String,
             encrypt: Option<bool>,
-            /// 发送方向并发上限脉冲（插件设置真源，批级一致；首元素取值）
-            concurrency: Option<u8>,
         },
     }
-    let entries: Vec<SendPathEntry> =
+    // v31 fail-visible（传输编排下沉票 3）：旧产物载荷携带的 `concurrency`
+    // 并发脉冲字段已随宿主并发闸门退役——serde 未知字段默认忽略，必须
+    // 显式检测并显性报错（点名 v31 重建），否则旧产物静默超并发
+    let raw: serde_json::Value =
         serde_json::from_str(paths_json).map_err(|e| format!("send files: invalid paths json: {e}"))?;
+    if raw.as_array().is_some_and(|arr| {
+        arr.iter().any(|e| e.as_object().is_some_and(|o| o.contains_key("concurrency")))
+    }) {
+        return Err(format!(
+            "send files: payload field 'concurrency' retired in ABI v31 (host-side concurrency gate removed; \
+             concurrency is caller-controlled): rebuild plugin artifact with current SDK"
+        ));
+    }
+    let entries: Vec<SendPathEntry> =
+        serde_json::from_value(raw).map_err(|e| format!("send files: invalid paths json: {e}"))?;
     let mut paths = Vec::with_capacity(entries.len());
     let mut force_encrypt = false;
-    let mut concurrency: Option<u8> = None;
     for entry in entries {
         match entry {
             SendPathEntry::Plain(path) => paths.push(path),
-            SendPathEntry::Detailed {
-                path,
-                encrypt,
-                concurrency: c,
-            } => {
+            SendPathEntry::Detailed { path, encrypt } => {
                 if encrypt == Some(true) {
                     force_encrypt = true;
-                }
-                if concurrency.is_none() {
-                    concurrency = c;
                 }
                 paths.push(path);
             }
         }
     }
-    let app_handle = require_app(app)?;
-    // 并发上限脉冲：插件设置真源，随发送载荷同步宿主并发闸门（若变化）
-    if let Some(n) = concurrency {
-        let _ = sync_result(block_on_async(
-            crate::server::peer_net::set_transfer_concurrency_for_plugin(app_handle.clone(), n),
-        ));
-    }
-    // 返回值已收窄为传输句柄（batch-id）；Phase 3 起插件自持任务视图，宿主
-    // 不再回传整份 DTO。断线场景由 with_auto_redial 以记忆 endpoint 重拨
-    let dto = with_auto_redial(app, plugin_id, session, |node_id| {
+    // 返回值已收窄为传输句柄（batch-id）；v31 起一次调用 = 一个会话立即发起
+    // （宿主并发闸门删除）。断线场景由 with_auto_redial 以记忆 endpoint 重拨
+    let batch_id = with_auto_redial(app, plugin_id, session, |node_id| {
         let app_handle = require_app(app)?;
         sync_result(block_on_async(crate::server::peer_net::send_files_for_plugin(
             app_handle,
@@ -304,7 +300,7 @@ pub(crate) fn peer_send_files(
             if force_encrypt { Some(true) } else { None },
         )))
     })?;
-    Ok(dto.batch_id)
+    Ok(batch_id)
 }
 
 pub(crate) fn peer_respond_transfer(
@@ -344,8 +340,9 @@ pub(crate) fn peer_set_receive_policy(
     )))
 }
 
-/// 显式暂停进行中的发送批：中断会话连接，任务保留（含已传字节）不落历史。
-/// 仅本端发起的 running 批可暂停（服务侧供流任务不可暂停）。
+/// 显式暂停进行中的发送批：会话数据面门控（wire Pause 帧 + 供方停推流），
+/// 任务保留（含已传字节）不落历史。本端发起的活跃会话查句柄表、serve 供流
+/// 批查 handler 注册表。
 pub(crate) fn peer_pause_transfer(app: &dyn crate::wasm_core::host_api::context::AppHandleScope,
     perm: &dyn crate::wasm_core::host_api::context::PermissionScope, plugin_id: &str, batch_id: &str) -> Result<(), String> {
     if !super::check_permission(perm, plugin_id, PERMISSION_PEER, "host_peer_pause_transfer") {
@@ -362,7 +359,9 @@ pub(crate) fn peer_pause_transfer(app: &dyn crate::wasm_core::host_api::context:
     Ok(())
 }
 
-/// 恢复暂停的发送批：入队并经并发闸门启动，接收端按已写偏移续传。
+/// 恢复暂停的发送批：活跃会话写 Resume 帧续流；会话已中断的以句柄表记忆
+/// 的源清单重新拨号续传（v31：批量恢复编排归插件，resume-all-transfers
+/// 已退役）。
 pub(crate) fn peer_resume_transfer(app: &dyn crate::wasm_core::host_api::context::AppHandleScope,
     perm: &dyn crate::wasm_core::host_api::context::PermissionScope, plugin_id: &str, batch_id: &str) -> Result<(), String> {
     if !super::check_permission(perm, plugin_id, PERMISSION_PEER, "host_peer_resume_transfer") {
@@ -370,26 +369,10 @@ pub(crate) fn peer_resume_transfer(app: &dyn crate::wasm_core::host_api::context
     }
     let app = require_app(app)?;
     let batch_id = batch_id.to_string();
-    let hit = sync_result(block_on_async(crate::server::peer_net::resume_transfer_for_plugin(
+    sync_result(block_on_async(crate::server::peer_net::resume_transfer_for_plugin(
         app, batch_id,
     )))?;
-    if !hit {
-        return Err("resume transfer: no paused send batch with that id".to_string());
-    }
     Ok(())
-}
-
-/// 恢复全部暂停的发送批，返回入队数。
-pub(crate) fn peer_resume_all_transfers(app: &dyn crate::wasm_core::host_api::context::AppHandleScope,
-    perm: &dyn crate::wasm_core::host_api::context::PermissionScope, plugin_id: &str) -> Result<u32, String> {
-    if !super::check_permission(perm, plugin_id, PERMISSION_PEER, "host_peer_resume_all_transfers") {
-        return Err(denied());
-    }
-    let app = require_app(app)?;
-    let n = sync_result(block_on_async(
-        crate::server::peer_net::resume_all_transfers_for_plugin(app),
-    ))?;
-    Ok(n as u32)
 }
 
 pub(crate) fn peer_set_shared_roots(
@@ -534,6 +517,31 @@ pub(crate) fn peer_stop_node(app: &dyn crate::wasm_core::host_api::context::AppH
     sync_result(block_on_async(crate::server::peer_net::stop_node_owned(
         &app, plugin_id,
     )))
+}
+
+/// 活跃传输批清单（传输编排下沉票 1）：宿主会话表投影（仅引擎会话事实），
+/// 供插件事件归约状态机首屏重建。依赖节点运行时状态表——无头上下文报错
+/// （与既有 peer 原语同口径，不静默降级为空列表假象）
+pub(crate) fn peer_active_transfers(app: &dyn crate::wasm_core::host_api::context::AppHandleScope,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope, plugin_id: &str) -> Result<String, String> {
+    if !super::check_permission(perm, plugin_id, PERMISSION_PEER, "host_peer_active_transfers") {
+        return Err(denied());
+    }
+    let app = require_app(app)?;
+    sync_result(block_on_async(crate::server::peer_net::active_transfers_for_plugin(app)))
+}
+
+/// 发送源收集（传输编排下沉票 1）：目录递归 + 批内同名去重（仅元数据）。
+/// 纯文件系统枚举，不依赖节点运行时——无头上下文亦可用（require_app 口径
+/// 差异见 WIT 注释：不存在「看似成功实则空」的假成功风险面）
+pub(crate) fn peer_collect_outgoing(_app: &dyn crate::wasm_core::host_api::context::AppHandleScope,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope, plugin_id: &str, paths_json: &str) -> Result<String, String> {
+    if !super::check_permission(perm, plugin_id, PERMISSION_PEER, "host_peer_collect_outgoing") {
+        return Err(denied());
+    }
+    let paths: Vec<String> = serde_json::from_str(paths_json)
+        .map_err(|e| format!("collect outgoing: invalid paths json: {e}"))?;
+    sync_result(block_on_async(crate::server::peer_net::collect_outgoing_for_plugin(paths)))
 }
 
 // ==================== Tests ====================

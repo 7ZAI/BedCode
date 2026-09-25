@@ -337,6 +337,85 @@ fn retired_kernel_session_domain_is_not_reintroduced() {
     );
 }
 
+// ==================== 对等传输编排域防回接锁（传输编排下沉票 3） ====================
+
+/// 源码扫描锁：宿主 peer 域不得再把传输任务编排状态机接回来。
+///
+/// 票 3 把发送/接收任务编排整体下沉 `file-transfer` 插件（事件归约状态机，
+/// 真源在其私有库）：宿主 `peer_engine_*` 收敛为「会话句柄表 + 引擎事件桥」——
+/// 旧版所持的任务 DTO 形状（`PeerTransferDto`）、并发闸门（`pick_pending_to_start`
+/// / `pump_send_queue`）、历史封顶（`HISTORY_CAP` / `RECEIVE_TERMINAL_CAP`）、
+/// serve 供流记账（`register_serve_task` / `settle_serve_terminal`）、pull 任务行
+/// 预登记（`register_remote_pull`）、peer_name 解析（`resolve_peer_name`）、
+/// 批量恢复编排（`peer_resume_all_transfers` / `resume_all_transfers_for_plugin`）
+/// 与并发脉冲（`set_transfer_concurrency_for_plugin`）一并退役。谁把这些加回来，
+/// 谁就要先推翻票 3 裁决。
+///
+/// 与票 11 的锁同理：只扫**非注释行**（模块头「为什么删」的说明段落是记账），
+/// 且跳过锁自身。fail-visible 双保险之一——另一保险是 `send-files` 载荷
+/// `concurrency` 字段检测（host_api/peer.rs，行为级）。
+#[test]
+fn retired_peer_transfer_orchestration_is_not_reintroduced() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut violations: Vec<String> = Vec::new();
+
+    let forbidden: [&str; 15] = [
+        "PeerTransferDto",
+        "PeerTransferFileDto",
+        "register_remote_pull",
+        // 带冒号精确匹配常量名（避免误中 server 指标的 METRICS_HISTORY_CAPACITY）
+        "HISTORY_CAP:",
+        "RECEIVE_TERMINAL_CAP",
+        "pick_pending_to_start",
+        "pump_send_queue",
+        "running_send_count_locked",
+        "register_serve_task",
+        "settle_serve_terminal",
+        "set_serve_pause_status",
+        "evict_history_cap_locked",
+        "evict_terminal_cap_locked",
+        "resume_all_transfers_for_plugin",
+        "set_transfer_concurrency_for_plugin",
+    ];
+
+    let mut stack = vec![root];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            // 锁自身：以字符串形式携带这些标识符去匹配
+            if path.ends_with("wasm_flow_test.rs") {
+                continue;
+            }
+            let Ok(content) = std::fs::read_to_string(&path) else { continue };
+            for (idx, raw_line) in content.lines().enumerate() {
+                let line = raw_line.trim_start();
+                if line.starts_with("//") || line.starts_with("///") {
+                    continue;
+                }
+                for needle in forbidden {
+                    if line.contains(needle) {
+                        violations.push(format!("{}:{}: {}", path.display(), idx + 1, line.trim()));
+                    }
+                }
+            }
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "对等传输编排域（票 3 已整体下沉插件）出现回接痕迹：\n{}",
+        violations.join("\n")
+    );
+}
+
 // ==================== 退役面防回接锁（票 03） ====================
 
 /// 源码扫描锁：宿主侧不得再把「注册了就能收到会话回调」的观察面接回来。

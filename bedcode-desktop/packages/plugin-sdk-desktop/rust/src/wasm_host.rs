@@ -571,10 +571,6 @@ impl HostPeer for WasmHost {
         host_peer::resume_transfer(batch_id).map_err(|e| host_err("peer_resume_transfer", e))
     }
 
-    fn peer_resume_all_transfers(&self) -> Result<u32, HostError> {
-        host_peer::resume_all_transfers().map_err(|e| host_err("peer_resume_all_transfers", e))
-    }
-
     fn peer_set_shared_roots(&self, dirs: &[serde_json::Value]) -> Result<(), HostError> {
         let dirs_json = to_json_string(
             "peer_set_shared_roots",
@@ -628,6 +624,24 @@ impl HostPeer for WasmHost {
 
     fn peer_stop_node(&self) -> Result<bool, HostError> {
         host_peer::stop_node().map_err(|e| host_err("peer_stop_node", e))
+    }
+
+    fn peer_active_transfers(&self) -> Result<serde_json::Value, HostError> {
+        peer_json(
+            "peer_active_transfers",
+            host_peer::active_transfers().map_err(|e| host_err("peer_active_transfers", e))?,
+        )
+    }
+
+    fn peer_collect_outgoing(&self, paths: &[serde_json::Value]) -> Result<serde_json::Value, HostError> {
+        let paths_json = to_json_string(
+            "peer_collect_outgoing",
+            &serde_json::to_value(paths).unwrap_or_default(),
+        )?;
+        peer_json(
+            "peer_collect_outgoing",
+            host_peer::collect_outgoing(&paths_json).map_err(|e| host_err("peer_collect_outgoing", e))?,
+        )
     }
 }
 

@@ -1,11 +1,18 @@
-//! 对等网络远端浏览/拉取（issue 11）：浏览可信对端共享目录 + 多文件拉取编排。
+//! 对等网络远端浏览/拉取（issue 11）：浏览可信对端共享目录 + 多文件拉取。
 //!
 //! 浏览为单请求会话——每次操作对对端新拨号（线协议「单连接单请求」契约），
 //! 返回引擎排好序的条目与「可能被权限过滤」提示位；拉取按文件逐条独立会话
-//! （免协商、断点续传复用 issue 05/06 数据面），任务行在会话发起前预登记进
-//! 接收表（[`super::peer_receive`]），进度/终态/取消因此完全复用任务体系。
+//! （免协商、断点续传复用 issue 05/06 数据面）。
 //!
-//! 只读约束：本模块命令面只有列目录与拉取，无任何指向暴露端的写语义。
+//! **口径（传输编排下沉票 3 修正）**：拉取的并发信号量（读设置并发上限）与
+//! 任务行预登记（register_remote_pull / fail_task）属产品编排，已随编排整体
+//! 下沉 `file-transfer` 插件——`pull-files` 收窄为「逐文件会话立即发起，
+//! 并发节流归调用方分批调用自控」；每个拉取会话发起时直推 `pull-started`
+//! 引擎事实事件（batchId/nodeId/relPath/size/tsMs），任务行由插件事件归约
+//! 自建。宿主只保留拉取会话句柄表（batch_id → CancelToken/PauseSlot）——
+//! 按批取消与 wire 暂停/恢复的引擎控制面。
+//!
+//! 只读约束：本模块只有列目录与拉取，无任何指向暴露端的写语义。
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -19,11 +26,6 @@ use tauri::{AppHandle, Manager};
 use tokio::sync::mpsc;
 
 use super::{map_peer_net_error, parse_node_id, runtime_snapshot};
-
-// ==================== 常量 ====================
-
-/// 单次拉取批内文件数上限（前端递归枚举的兜底闸；防误选超大目录拖垮会话）
-const PULL_FILES_CAP: usize = 512;
 
 // ==================== 数据模型 ====================
 
@@ -63,13 +65,14 @@ pub struct RemotePullFileDto {
 
 /// 单个节点代际的拉取会话上下文（装配时建立，停止时取消）
 struct SessionCtx {
-    /// 接收侧事件通道发送端快照（拉取会话经它入账任务表）
+    /// 接收侧事件通道发送端快照（拉取会话经它上报进度/终态）
     events: mpsc::Sender<TransferEvent>,
     /// 本代全部拉取令牌的父源：节点停止时 cancel 即中止所有在途/后续会话
     cancel_root: CancelToken,
 }
 
-/// 拉取会话登记条目：取消令牌 + 暂停句柄（wire Pause/Resume 门控数据供方）
+/// 拉取会话句柄条目：取消令牌 + 暂停句柄（wire Pause/Resume 门控数据供方）
+/// ——纯引擎控制面（票 3：并发编排归插件）
 struct PullSession {
     /// 按批取消令牌（cancel_pull / 节点停止共用）
     token: CancelToken,
@@ -268,11 +271,12 @@ pub async fn browse_peer_directory(
     })
 }
 
-/// 从可信对端拉取多个文件到本机下载目录（逐文件独立会话，顺序执行）
+/// 从可信对端拉取多个文件到本机下载目录（逐文件独立会话）
 ///
-/// 免协商直取（用户主动获取即放行）；每个文件预登记一条接收任务行，
-/// 进度/终态/取消复用 issue 10 任务体系；中断后重试同一文件自动断点续传。
-/// 返回成功入队的文件数。
+/// 免协商直取（用户主动获取即放行）。**票 3 收窄**：所有文件会话立即发起、
+/// 无宿主并发信号量——并发节流由调用方分批调用自控（「多选下载逐条呈现」
+/// 等编排语义归插件，经 `pull-started` 引擎事件自建任务行）；中断后重试
+/// 同一文件自动断点续传。返回入队文件数。
 pub async fn pull_peer_files(
     app: AppHandle,
     node_id: String,
@@ -283,12 +287,6 @@ pub async fn pull_peer_files(
         return Err(crate::AppError::InvalidInput(
             "pull peer files: file list must not be empty".to_string(),
         ));
-    }
-    if files.len() > PULL_FILES_CAP {
-        return Err(crate::AppError::InvalidInput(format!(
-            "pull peer files: {} files exceed cap {PULL_FILES_CAP}",
-            files.len()
-        )));
     }
     // 诊断插桩：拉取编排入口（逐文件会话另有 dial/serve 日志）
     tracing::info!(
@@ -349,13 +347,12 @@ pub async fn pull_peer_files(
     Ok(count)
 }
 
-/// 并发执行拉取队列：每文件独立 batch_id + 独立连接 + 预登记任务行；
-/// 全部任务行先于会话登记（多选下载时 UI 同时呈现所有任务），并发度受
-/// 设置 concurrency（默认 3，1..=8，与发送方向共用）约束；单文件失败
-/// 不阻断其余（任务行如实落 failed，重试即断点续传）
+/// 逐文件立即发起拉取会话：每文件独立 batch_id + 独立连接；会话发起即
+/// 直推 `pull-started` 引擎事实事件（插件归约自建任务行）；单文件失败
+/// 直推 failed 终态事件（任务行落态归插件归约），不阻断其余。
 ///
 /// 取消令牌为本代会话根令牌的 child——节点停止（clear_state）时全部
-/// 未启动与在途拉取一并中止。
+/// 在途拉取一并中止。
 #[allow(clippy::too_many_arguments)]
 async fn run_pull_queue(
     app: AppHandle,
@@ -369,12 +366,6 @@ async fn run_pull_queue(
     events: mpsc::Sender<TransferEvent>,
 ) {
     let state = app.state::<PeerRemoteState>();
-    // 并发上限：拉取方向与发送方向共用设置（默认 3，1..=8）
-    let concurrency = super::peer_engine_receive::ensure_settings_loaded(&app)
-        .await
-        .concurrency as usize;
-    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(concurrency.max(1)));
-    let mut set = tokio::task::JoinSet::new();
     for (index, file) in files.into_iter().enumerate() {
         if cancel_root.is_cancelled() {
             tracing::info!("remote pull queue aborted by node stop");
@@ -395,31 +386,22 @@ async fn run_pull_queue(
             },
         );
 
-        // 任务行先于会话登记：全部任务行同步呈现，首个 Progress 到达前
-        // UI 即显示进行中（并发编排下不再随传输逐条出现）
-        super::peer_engine_receive::register_remote_pull(
-            &app,
-            peer.clone(),
-            batch_id.clone(),
-            file.rel_path.clone(),
-            file.size,
-        )
-        .await;
+        // pull-started 引擎事实事件直推（票 3）：任务行由插件归约自建
+        super::publish_engine_event(
+            super::TOPIC_RECEIVE_EVENT,
+            super::engine_pull_started_payload(&peer, &batch_id, &file.rel_path, file.size),
+        );
 
-        let sem = std::sync::Arc::clone(&semaphore);
         let node = node.clone();
         let record = record.clone();
         let dir_id = dir_id.clone();
         let config = config.clone();
         let events = events.clone();
         let app = app.clone();
+        let batch_id_spawn = batch_id.clone();
+        let rel_path = file.rel_path.clone();
         let cancel_root = cancel_root.clone();
-        set.spawn(async move {
-            // 并发槽：槽位空出前不拨号（与发送方向并发闸门同语义）
-            let _permit = match sem.acquire_owned().await {
-                Ok(permit) => permit,
-                Err(_) => return,
-            };
+        tauri::async_runtime::spawn(async move {
             if cancel_root.is_cancelled() {
                 return;
             }
@@ -428,8 +410,8 @@ async fn run_pull_queue(
                     let _ = pull_shared_file(
                         conn,
                         &dir_id,
-                        &file.rel_path,
-                        &batch_id,
+                        &rel_path,
+                        &batch_id_spawn,
                         config,
                         events,
                         token,
@@ -438,17 +420,48 @@ async fn run_pull_queue(
                     .await;
                 }
                 Err(e) => {
-                    tracing::warn!(batch_id = %batch_id, rel = %file.rel_path, "pull dial failed: {e}");
-                    super::peer_engine_receive::fail_task(&app, &batch_id, format!("dial failed: {e}"));
+                    tracing::warn!(batch_id = %batch_id_spawn, rel = %rel_path, "pull dial failed: {e}");
+                    // 会话前置失败直推 failed 终态事件（插件归约结算任务行）
+                    super::publish_engine_event(
+                        super::TOPIC_RECEIVE_EVENT,
+                        super::engine_terminal_payload(
+                            &batch_id_spawn,
+                            &bedcode_peer_net::TerminalState::Failed {
+                                detail: format!("dial failed: {e}"),
+                            },
+                        ),
+                    );
                 }
             }
             app.state::<PeerRemoteState>()
                 .pulls
                 .lock()
                 .expect("peer remote pulls lock poisoned")
-                .remove(&batch_id);
+                .remove(&batch_id_spawn);
         });
     }
-    // 收敛全部并发会话：JoinSet 消费保证任务不悬挂后台
-    while set.join_next().await.is_some() {}
+}
+
+// ==================== 活跃批投影（active-transfers） ====================
+
+/// pull 会话投影（active-transfers 原语数据源）：句柄表在册条目即活跃会话
+/// （纯引擎控制面事实；字节未知记 0——进度以 pull-started / progress 事件
+/// 直推，归约态由插件自持）
+pub(crate) fn active_pull_rows(app: &AppHandle) -> Vec<serde_json::Value> {
+    let state = app.state::<PeerRemoteState>();
+    let guard = state.pulls.lock().expect("peer remote pulls lock poisoned");
+    guard
+        .keys()
+        .map(|batch_id| {
+            serde_json::json!({
+                "batchId": batch_id,
+                "direction": "receive",
+                "status": "running",
+                "totalBytes": 0,
+                "transferredBytes": 0,
+                "rateBps": 0.0,
+                "updatedAtMs": super::event_now_ms(),
+            })
+        })
+        .collect()
 }
