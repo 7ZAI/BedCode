@@ -15,7 +15,8 @@
 use actix_web::{web, HttpResponse};
 use serde_json::json;
 
-use crate::server::http::controllers::{plugin_controller, session_controller};
+use crate::server::http::controllers::plugin_controller;
+use crate::system::app_context::AppContext;
 use crate::system::constants::API_HEALTH_PATH;
 
 /// 健康检查端点 — 移动端 WS 连接前探测桌面端是否可达
@@ -45,6 +46,12 @@ fn terminal_bg_content_type(ext: &str) -> &'static str {
 
 /// 终端背景图片静态端点 — 公开，无需 JWT（CSS background-image 无法携带认证头）
 ///
+/// **ABI v29 下沉（HTTP 路由代码注册）**：URL 归属由插件注册声明（`/static/terminal-bg`，
+/// auth:none），本路由按动态注册表门控——插件未注册 / 属主未激活 → 404（URL 生命周期
+/// 归插件）。文件读取保留宿主（spec §7 待决已决）：背景图在宿主应用数据目录，而
+/// host-fs 只有文本读取（`fs:read` 返回 String，图像二进制不可经插件读），故「宿主读
+/// 文件」是二进制通道缺口下的引擎残留，渲染逻辑（URL 声明 / 档位 / 生命周期）归插件。
+///
 /// 返回应用数据目录中的 `terminal_bg.<ext>`；未设置时返回 404。
 /// 仅扫描白名单扩展名的固定前缀文件，不接受任意路径参数，无目录穿越风险。
 /// 图片为用户自选的壁纸，不含敏感信息，局域网可见可接受。
@@ -52,7 +59,20 @@ async fn terminal_bg_image() -> HttpResponse {
     use crate::system::constants::{TERMINAL_BG_EXTENSIONS, TERMINAL_BG_FILE_PREFIX};
     use tauri::Manager;
 
-    let data_dir = match crate::system::app_context::AppContext::global().app_handle() {
+    // 注册表门控（ABI v29）：URL 由插件注册归属；未注册 / 属主未激活 → 404
+    let Some(host_match) = crate::server::http::registry::find_by_host("/static/terminal-bg", "GET") else {
+        return HttpResponse::NotFound().finish();
+    };
+    let activated = match AppContext::try_global() {
+        Some(ctx) => ctx.plugin_host().is_activated(&host_match.entry.owner).await,
+        // 无头/测试上下文：插件面不可判定 → 保守 404
+        None => false,
+    };
+    if !activated {
+        return HttpResponse::NotFound().finish();
+    }
+
+    let data_dir = match AppContext::global().app_handle() {
         // 无头/测试上下文无 AppHandle：没有应用数据目录，视为未设置背景图
         Some(handle) => match handle.path().app_data_dir() {
             Ok(dir) => dir,
@@ -111,7 +131,8 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     // 健康检查（公开，无需 JWT，供移动端探测连通性）
     cfg.route(API_HEALTH_PATH, web::get().to(health_check));
 
-    // 终端背景图片（公开，无需 JWT；CSS background-image 无法携带认证头）
+    // 终端背景图片（公开，无需 JWT；CSS background-image 无法携带认证头）——
+    // ABI v29 起按动态注册表门控（URL 由插件注册归属）
     cfg.route("/static/terminal-bg", web::get().to(terminal_bg_image));
 
     // /api scope — 中间件顺序即请求顺序：JWT 验签 → HTTP 协议网关 → 路由
@@ -122,35 +143,15 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             // 注册顺序 = 由内到外（`Scope::wrap` 后注册者先执行），故网关在前、验签在后。
             // 顺序语义由 server/gateway.rs 的中间件用例钉死；即便写反，网关的「已验签」
             // 前置也会把未验签的业务请求挡在插件之外（降级宿主，由验签中间件 401）。
-            .wrap(actix_web::middleware::from_fn(crate::server::http::gateway::business_gateway))
+            .wrap(actix_web::middleware::from_fn(
+                crate::server::http::gateway::business_gateway,
+            ))
             .wrap(actix_web::middleware::from_fn(
                 crate::server::http::middleware::jwt_auth::jwt_gateway,
             ))
-            // 票 07 contract：/api/auth/* 七端点编排已下沉 session 插件（公开路由——
-            // JWT 之前的入口经网关免验签转发），宿主不再注册认证业务路由
-            // 受 JWT 保护的业务路由
-            .route("/sessions", web::get().to(session_controller::list_sessions))
-            .route("/sessions/start", web::post().to(session_controller::start_session))
-            .route("/sessions/{id}/stop", web::post().to(session_controller::stop_session))
-            .route(
-                "/sessions/{id}/resize",
-                web::post().to(session_controller::resize_session),
-            )
-            .route(
-                "/sessions/{id}/input",
-                web::post().to(session_controller::send_session_input),
-            )
-            .route(
-                "/sessions/{id}/history",
-                web::get().to(session_controller::get_session_history),
-            )
-            .route(
-                "/sessions/{id}/remove",
-                web::delete().to(session_controller::remove_session),
-            )
-            // 票 02/03/04 contract：/api/configs / /api/quick-actions / 文件浏览五端点 /
-            // /api/git/* 三端点真源已全部下沉 session 插件，宿主不再注册任何业务路由
-            // （网关别名表接管：插件激活即转发，未激活返回明确错误而非假数据）
+            // ABI v29（HTTP 路由代码注册下沉）：/api/sessions* 七条与 /api/auth/* 七条
+            // 已随终端插件 activate 期代码注册接管（host-http.register-endpoint 模板别名），
+            // 宿主不再注册任何业务路由——网关查动态注册表转发；未注册 → 404
             // 插件动态 HTTP 端点代理 — 中间件允许 JWT 或 plugin token
             .route(
                 "/plugin/{plugin_id}/{path:.*}",

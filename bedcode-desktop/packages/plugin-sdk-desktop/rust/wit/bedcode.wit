@@ -238,8 +238,37 @@ interface host-api-call {
 }
 
 /// HTTP 代理（原 http.rs：http_fetch）
+///
+/// v29 服务端域（HTTP 路由代码注册下沉专项）：插件在宿主 HTTP 服务器动态注册
+/// 自身路由（含对外 URL 别名 / 方法 / 认证档位），宿主只保留通用注册表 / 通用判定 /
+/// 通用转发 / 验签引擎（ADR 0022 裁剪线——路由登记权整体移交插件）。
+///
+/// 属主隔离（spec §3.1/3.2）：**全部服务端域函数仅属主可调**；注册表按调用方插件
+/// 注入 `plugin_id`（插件不能注册他人名下路由）；插件停用时宿主自动清空其全部注册
+/// 路由（同 host-websocket `purge_for_plugin` 先例）。
+///
+/// 权限：客户端域（fetch）与服务端域均需 `network:http`（与前端面 `http.registerEndpoint`
+/// 同权限位）。
 interface host-http {
     fetch: func(request-json: string) -> result<option<string>, string>;
+
+    // ==================== 服务端域（入站路由注册，ABI v29） ====================
+    /// 在宿主 HTTP 服务器注册插件端点。config-json（camelCase）：
+    /// `{ path, host?, methods?, auth? }`
+    /// - `path`：插件内相对端点段，宿主拼出内部可达路径 `/api/plugin/<plugin-id>/<path>`
+    ///   （命名空间段由宿主注入，插件只提供后缀）；
+    /// - `host`：可选对外 URL 别名（如 `/api/configs`；支持 `{id}` 模板段如
+    ///   `/api/sessions/{id}/stop`——模板捕获值经 `_http_endpoint` 的 `params` 字段
+    ///   传给插件，宿主不拿捕获值构造路径）；
+    /// - `methods`：host 别名的允许方法（缺省 `["GET"]`）；
+    /// - `auth` = "jwt"（缺省，最严：要求宿主已验签）| "none"（免凭证转发）。
+    ///
+    /// 冲突仲裁（fail-visible）：同一 `host+method` 已被其他插件注册 → `Err`（不覆盖
+    /// 在位者）；本插件内部 path 重复注册 → `Err`。成功 → 返回端点句柄 `http-<uuid>`。
+    register-endpoint: func(config-json: string) -> result<string, string>;
+    /// 注销本插件注册的端点（未知句柄 → `Ok(false)`，他人句柄 → `Err` 属主仲裁）；
+    /// 宿主侧插件停用回收同样会清空其全部注册路由（幂等）。
+    unregister-endpoint: func(endpoint-id: string) -> result<bool, string>;
 }
 
 /// 宿主周期定时器（原 timer.rs：timer_register，ABI v6）

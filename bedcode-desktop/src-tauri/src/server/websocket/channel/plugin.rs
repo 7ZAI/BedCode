@@ -33,11 +33,11 @@ use tokio::sync::mpsc;
 
 use super::super::conn::{AuthMode, ChannelHandler, ConnCtx, WsConnBase};
 use super::super::endpoint::{EndpointAuth, EndpointEntry};
+use crate::server::websocket::registry::WsSessionRegistry;
+use crate::system::constants::PLUGIN_WS_SEND_QUEUE_CAPACITY;
+use crate::utils::auth::jwt::{jwt_error_message, JwtService};
 use crate::wasm_core::bus::MessageBus;
 use crate::wasm_core::host_api::ws::deliver_endpoint_frame;
-use crate::server::websocket::registry::WsSessionRegistry;
-use crate::utils::auth::jwt::{jwt_error_message, JwtService};
-use crate::system::constants::PLUGIN_WS_SEND_QUEUE_CAPACITY;
 
 /// 插件端点认证失败 / 超时的关闭码（spec D8；4000 段为应用自定义码）
 const CLOSE_AUTH_FAILED: u16 = 4001;
@@ -243,6 +243,17 @@ fn verify_endpoint_jwt(conn: &mut WsConnBase, token: &str) -> Result<String, (St
     let claims = JwtService::new()
         .verify_token_with_expiry(token)
         .map_err(|e| ("AUTH_FAILED".to_string(), jwt_error_message(&e).to_string()))?;
+
+    // 认证对齐（HTTP 路由代码注册下沉专项阶段 3，用户裁定 ⑥）：验签后经认证中心
+    // 策略，与 HTTP 中间件（`jwt_auth::extract_and_verify_jwt`）**同判据**——
+    // 认证中心拒绝 / 撤销 → 拒绝连接；无 AppContext / 无认证中心候选 → 宿主策略
+    // 回退放行（无单点）。
+    if let Some(ctx) = crate::system::app_context::AppContext::try_global() {
+        if let Err(reason) = crate::utils::auth::auth_center::enforce_connection_policy(ctx.plugin_host(), token) {
+            return Err(("AUTH_FAILED".to_string(), reason));
+        }
+    }
+
     conn.session.authenticated = true;
     conn.session.device_id = Some(claims.sub.clone());
     conn.session.device_name = claims.device_name.clone();
@@ -456,9 +467,14 @@ mod tests {
         let mut receiver = channel.frames_rx.take().expect("frame receiver");
 
         for index in 0..PLUGIN_WS_SEND_QUEUE_CAPACITY {
-            assert!(channel.enqueue_frame("text", format!("frame-{index}").into_bytes()).is_ok());
+            assert!(channel
+                .enqueue_frame("text", format!("frame-{index}").into_bytes())
+                .is_ok());
         }
-        assert!(matches!(channel.enqueue_frame("binary", vec![0xff]), Err(FrameEnqueueError::Full)));
+        assert!(matches!(
+            channel.enqueue_frame("binary", vec![0xff]),
+            Err(FrameEnqueueError::Full)
+        ));
 
         let first = receiver.try_recv().expect("first frame");
         assert_eq!(first.kind, "text");
@@ -467,7 +483,10 @@ mod tests {
         assert_eq!(second.payload, b"frame-1");
 
         drop(receiver);
-        assert!(matches!(channel.enqueue_frame("text", b"closed".to_vec()), Err(FrameEnqueueError::Closed)));
+        assert!(matches!(
+            channel.enqueue_frame("text", b"closed".to_vec()),
+            Err(FrameEnqueueError::Closed)
+        ));
         crate::server::websocket::endpoint::remove(&entry.endpoint_id);
     }
 }

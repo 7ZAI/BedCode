@@ -130,25 +130,38 @@ fn log_fallback(api: &str, err: &AppError) {
 /// capability 导出（`auth-policy.verify-device-token`）取策略裁决（claims 结构/
 /// 时效 + 信任撤销检查，见会话中心插件 `policy` 模块）。
 ///
+/// **认证中心角色发现（HTTP 路由代码注册下沉专项阶段 3）**：不再硬编码插件 id——
+/// 扫描激活插件中导出 `auth-policy` 能力者，动态确定认证中心；无导出 → 宿主策略
+/// 回退（语义不变）。
+///
 /// 降级语义（无单点）：
-/// - 认证中心未激活（api 注册表无标记）→ 宿主策略（迁移前行为：验签通过即放行）
+/// - 认证中心未激活（无候选）→ 宿主策略（迁移前行为：验签通过即放行）
 /// - 认证中心策略放行 → `Ok(())`（调用方保留自身验签 claims 作为连接身份）
 /// - 认证中心策略拒绝（guest 自报 Err）→ 上抛拒绝原因（调用方拒绝连接）
 /// - 能力调用传输失败（实例缺失/trap）→ 宿主策略回退（防认证中心故障误杀全部连接）
 ///
 /// 调用方：`server/websocket/conn.rs::authenticate_jwt`（WS 终端/事件通道首消息认证）+
-/// `server/middleware/jwt_auth.rs::extract_and_verify_jwt`（HTTP /api 网关）。
+/// `server/websocket/channel/plugin.rs::verify_endpoint_jwt`（WS 插件端点首消息认证，
+/// HTTP 路由代码注册下沉专项阶段 3 对齐）+ `server/middleware/jwt_auth.rs::extract_and_verify_jwt`
+/// （HTTP /api 网关）。
 pub fn enforce_connection_policy(plugin_host: &PluginHost, token: &str) -> std::result::Result<(), String> {
-    let host_ctx = plugin_host.wasm_host_ctx();
-    if !session_active(host_ctx) {
-        // 会话中心未激活：宿主策略回退（迁移前行为），无单点
+    // 角色发现：扫描导出 auth-policy 能力的运行中插件；无 → 宿主策略回退（无单点）
+    let candidates = block_on_async(async move { plugin_host.auth_center_candidates().await });
+    let Some(center_id) = candidates.first().cloned() else {
         return Ok(());
+    };
+    if candidates.len() > 1 {
+        tracing::warn!(
+            candidates = ?candidates,
+            center = %center_id,
+            "多个插件导出 auth-policy capability，取第一个作为认证中心"
+        );
     }
     let token = token.to_string();
     let result = block_on_async(async move {
         plugin_host
             .call_plugin_capability_export::<(String,), (std::result::Result<String, String>,)>(
-                SESSION_PLUGIN_ID,
+                &center_id,
                 CAP_AUTH_POLICY,
                 EXPORT_AUTH_VERIFY_DEVICE_TOKEN,
                 (token,),

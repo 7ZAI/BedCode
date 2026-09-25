@@ -1,0 +1,24 @@
+{
+  "id": "com.bedcode.http-test",
+  "name": "HTTP Route Registration Test",
+  "version": "0.1.0",
+  "description": "host-http 服务端域（ABI v29）fixture：动态路由注册 + 模板捕获 + _http_endpoint 回显",
+  "author": "BedCode",
+  "main": "index.js",
+  "sandbox": "inline",
+  "pluginType": "rust-ts",
+  "rustLibrary": "bedcode_plugin_http_test",
+  "permissions": [
+    "network:http"
+  ],
+  "api": [],
+  "contributes": {
+    "commands": [],
+    "views": [],
+    "lifecycle": {
+      "onStartup": false,
+      "onShutdown": false
+    },
+    "provides": []
+  }
+}

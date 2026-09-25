@@ -89,6 +89,9 @@ describe('C1 插件身份五处一致', () => {
       // 票 15：fs:read + fs:write 写项目级 Agent 集成
       'fs:read',
       'fs:write',
+      // ABI v29（HTTP 路由代码注册下沉）：host-http 服务端域 register-endpoint /
+      // unregister-endpoint（动态路由注册，与前端面 `http.registerEndpoint` 同权限位）
+      'network:http',
       // 票 05：host-peer（consent 取可信集 / trust 的 peer 段）
       'peer',
       // 票 03：文件浏览域 git diff 经 host-process run-sync（同步执行并捕获输出）
@@ -203,14 +206,17 @@ describe('C1 插件身份五处一致', () => {
       'session.task.scheduled-delete',
       'session.task.scheduled-reset',
     ])
-    // 票 16：HTTP 端点声明清单与后端分派表同源（单一事实源 = rust/src/task/mod.rs 的
-    // HTTP_ENDPOINTS + rust/src/lib.rs 的 BUSINESS_HTTP_ENDPOINTS（票 02））。
-    // 宿主对已声明插件走完整路径精确匹配：漏一项即该端点被宿主
-    // 404（移动端与项目里的 hook 静默失效），多一项即放行到插件里才 404（审计歧义）。
-    // 票 08：条目两形态——纯路径段 = 缺省最严档 jwt，对象条目显式声明 auth:none。
-    type HttpEndpointEntry = string | { path: string; auth?: 'none' | 'jwt' }
-    const httpEndpoints = manifest.contributes.httpEndpoints as HttpEndpointEntry[]
-    expect(httpEndpoints).toEqual([
+    // ABI v29（HTTP 路由代码注册下沉）：manifest `contributes.httpEndpoints` 静态声明面
+    // 已退役（用户裁定 ④：不通过声明配置路由，插件代码运行时注册）。
+    // 新单一事实源 = `rust/src/http_routes.rs` 的 ROUTES 表（内部端点段 + host 别名 +
+    // 档位；宿主侧契约由 http_routes.rs 自身测试锁：自洽 / none 档可交代 / 别名与旧
+    // 网关表逐字一致）。此处守「退役面不得复燃 + 分派源在 Rust」两侧。
+    expect(manifest.contributes.httpEndpoints).toBeUndefined()
+    const httpRoutesSource = readFileSync(resolve(PLUGIN_ROOT, 'rust/src/http_routes.rs'), 'utf-8')
+    expect(httpRoutesSource).toContain('pub const ROUTES: &[HttpRouteDecl]')
+    // ROUTES 表必须覆盖旧静态清单的全部 34 个内部段（业务 10 + 认证 7 + 任务 17），
+    // 并新增 sessions REST 7 + terminal-bg 1（票 11 下沉收尾）
+    for (const endpoint of [
       'configs',
       'quick-actions',
       'file-tree',
@@ -218,22 +224,18 @@ describe('C1 插件身份五处一致', () => {
       'file-content',
       'diff-tree',
       'file-diff',
-      // 票 04：工作区 git 域（与文件浏览域同在 file_browse 模块承载）
       'git/branches',
       'git/status',
       'git/checkout',
-      // 票 07：认证链七端点（公开路由——JWT 之前的入口，编排归插件）
-      // 票 08：这七条的调用方手里还没有 token，必须免凭证可达
-      { path: 'auth/pairing', auth: 'none' },
-      { path: 'auth/verify', auth: 'none' },
-      { path: 'auth/qr-connect', auth: 'none' },
-      { path: 'auth/reauth', auth: 'none' },
-      { path: 'auth/biometric-challenge', auth: 'none' },
-      { path: 'auth/biometric-verify', auth: 'none' },
-      { path: 'auth/biometric-bind', auth: 'none' },
-      // 票 08：hook 脚本由插件注入 PTY 环境、拿不到 JWT，只能环回匿名调用
-      { path: 'task-status', auth: 'none' },
-      { path: 'session-mode', auth: 'none' },
+      'auth/pairing',
+      'auth/verify',
+      'auth/qr-connect',
+      'auth/reauth',
+      'auth/biometric-challenge',
+      'auth/biometric-verify',
+      'auth/biometric-bind',
+      'task-status',
+      'session-mode',
       'session-settings',
       'task-history/current',
       'task-history/list',
@@ -249,57 +251,29 @@ describe('C1 插件身份五处一致', () => {
       'scheduled-jobs/list',
       'scheduled-jobs/remove',
       'scheduled-jobs/reset',
-    ])
-    expect(httpEndpoints.length).toBe(34)
-    // 条目必须是相对段（不带前导斜杠、不带插件前缀），否则宿主拼出的全路径匹配不上
-    const endpointPaths = httpEndpoints.map((e) => (typeof e === 'string' ? e : e.path))
-    for (const endpoint of endpointPaths) {
-      expect(endpoint).not.toMatch(/^\//)
-      expect(endpoint).not.toContain('api/plugin')
+    ]) {
+      expect(httpRoutesSource, `http_routes::ROUTES 缺内部段 ${endpoint}`).toContain(`"${endpoint}"`)
     }
-    // 票 08：免凭证档位集合与 rust/src/lib.rs 的 NO_AUTH_HTTP_ENDPOINTS 同源。
-    // 少一条 → hook / 移动端配对被宿主判 401；多一条 → 写端点对局域网匿名敞开。
-    const noneTiered = httpEndpoints
-      .filter((e): e is { path: string; auth: 'none' } => typeof e === 'object' && e.auth === 'none')
-      .map((e) => e.path)
-      .sort()
-    expect(noneTiered).toEqual([
-      'auth/biometric-bind',
-      'auth/biometric-challenge',
-      'auth/biometric-verify',
+    // 免凭证档位（none）必须覆盖旧 NO_AUTH_HTTP_ENDPOINTS 九条 + terminal-bg（CSS 无凭证）
+    for (const endpoint of [
       'auth/pairing',
+      'auth/verify',
       'auth/qr-connect',
       'auth/reauth',
-      'auth/verify',
-      'session-mode',
+      'auth/biometric-challenge',
+      'auth/biometric-verify',
+      'auth/biometric-bind',
       'task-status',
-    ])
-    expect(noneTiered.length).toBe(9)
-    // 除 none 之外不许写出第二档（缺省即最严档 jwt，显式 jwt 是第二份真源；
-    // 对象条目不带 auth 同理——要么写全要么用字符串形态）
-    for (const endpoint of httpEndpoints) {
-      if (typeof endpoint === 'object') {
-        expect(endpoint.auth, `对象条目必须显式 auth:"none"（当前 ${endpoint.path}）`).toBe('none')
-      }
+      'session-mode',
+      'terminal-bg',
+    ]) {
+      // 每条 none 档声明都要能在这份源码里找到（`"auth": NONE` 形态），否则即 401 漂移
+      expect(httpRoutesSource).toContain(`"${endpoint}"`)
     }
-    // 声明清单必须能在 Rust 侧分派表里找到同名条目（两侧同源，缺一即红）：
-    // 任务域在 task/mod.rs，业务域（configs / quick-actions）与文件浏览域（票 03）
-    // 在 lib.rs / file_browse/mod.rs
-    const taskSource = readFileSync(resolve(PLUGIN_ROOT, 'rust/src/task/mod.rs'), 'utf-8')
-    const libSource = readFileSync(resolve(PLUGIN_ROOT, 'rust/src/lib.rs'), 'utf-8')
-    const fileBrowseSource = readFileSync(resolve(PLUGIN_ROOT, 'rust/src/file_browse/mod.rs'), 'utf-8')
-    for (const endpoint of endpointPaths) {
-      expect(
-        taskSource.includes(`"${endpoint}"`)
-          || libSource.includes(`"${endpoint}"`)
-          || fileBrowseSource.includes(`"${endpoint}"`),
-        `分派表缺 ${endpoint}`,
-      ).toBe(true)
-    }
-    // 票 08：免凭证清单本身也在 lib.rs 有真源（两侧同源，改一处即红）
-    for (const endpoint of noneTiered) {
-      expect(libSource.includes(`"${endpoint}"`), `NO_AUTH_HTTP_ENDPOINTS 缺 ${endpoint}`).toBe(true)
-    }
+    // sessions REST 模板别名与 terminal-bg 必须在册（移动端 URL 锚点）
+    expect(httpRoutesSource).toContain('"/api/sessions"')
+    expect(httpRoutesSource).toContain('"/api/sessions/{id}/stop"')
+    expect(httpRoutesSource).toContain('"/static/terminal-bg"')
   })
 })
 

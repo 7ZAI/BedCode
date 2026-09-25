@@ -374,6 +374,18 @@ impl HostHttp for WasmHost {
             None => Ok(None),
         }
     }
+
+    /// v29 服务端域：注册插件 HTTP 端点（config-json 原样透传宿主）
+    fn http_register_endpoint(&self, config_json: &str) -> Result<String, HostError> {
+        host_http::register_endpoint(config_json)
+            .map_err(|e| host_err("http_register_endpoint", e))
+    }
+
+    /// v29 服务端域：注销本插件 HTTP 端点
+    fn http_unregister_endpoint(&self, endpoint_id: &str) -> Result<bool, HostError> {
+        host_http::unregister_endpoint(endpoint_id)
+            .map_err(|e| host_err("http_unregister_endpoint", e))
+    }
 }
 
 // ==================== HostFs ====================

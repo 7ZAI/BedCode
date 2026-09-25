@@ -332,26 +332,27 @@ WIT 契约 `host-task`（5 函数：execute-batch / submit / status / cancel / l
   `link_crypto.rs` 链路加密（HTTP 信封 + WS 帧两分支共享身份与配置，不可拆）
 - **http/**（HTTP 传输面）：
   - **routes.rs**：两个公开端点（`/api/health` 健康检查、`/static/terminal-bg` 背景图，均不经 JWT——
-    理由见各自注释）+ `/api` scope 与其 wrap 链（JWT 验签 → 业务网关，顺序硬约束）；
-  - **gateway.rs**：**HTTP 协议网关**（平台基础服务，宿主业务清零票 01）——一张业务 URL 别名路由表
-    （`/api/configs`、`/api/quick-actions`、`/api/file-tree|file-tree-children|file-content|diff-tree|file-diff`、
-    `/api/git/*` → 目标插件端点，条目带归属插件 + 业务域 + 方法声明）+ 中间件 `business_gateway`。
-    判定是纯函数 `decide(verified, activated, declared, endpoint_auth)`：**宿主已验签 + 目标插件已激活 +
-    该端点在插件 manifest `contributes.httpEndpoints` 逐字声明**三者齐备才切插件，否则原样落宿主旧实现
-    （双轨期）；认证要求取「条目 `RouteAuth` 与插件声明档位**较严者**」（票 08），两者任一要验签而未验签
-    即 `AuthRequired` → 401（不再报成「插件未激活」）。
-    转发复用 `controllers/plugin_controller.rs::forward_to_plugin` 同一内核与同一声明治理（不另发明传输机制），
-    调用方身份也同一出处（`caller_identity` → `caller` = device/localhost/anonymous + `device` 上下文）；
-    宿主业务实现退役后条目 `FallbackPolicy` 翻 `PluginRequired` → 明确报「插件未激活」而不给假数据
-    （票 02：configs / quick-actions；票 03：五个文件浏览端点；票 04：git 三端点——十条业务别名已全部
-    PluginRequired，宿主业务路由清零）。
-    载荷纪律：降级分支不 `into_parts`，payload 原样留给宿主 handler
+    理由见各自注释；terminal-bg 按动态注册表门控）+ `/api` scope 与其 wrap 链（JWT 验签 → 业务网关，顺序硬约束）。
+    ABI v29（HTTP 路由代码注册下沉）起宿主不再注册任何业务路由（`/api/sessions*` 七条与 `/api/auth/*` 归插件）
+  - **registry.rs（ABI v29 新增）**：**插件 HTTP 端点动态注册表**——key = `(owner, host_path, method)`，
+    命名空间由插件名承载（激活期同名拒绝）；内部端点路径 `/api/plugin/<owner>/<path>` 单独索引；
+    对外 URL 空间唯一仲裁（同 `host+method` 冲突 → 后注册者 `Err`，不覆盖在位者）；host 路径支持
+    `{id}` 模板段（捕获值经 `params` 注入插件，宿主不拿捕获值构造路径）；停用回收
+    （`purge_for_plugin` 只碰本人）；宿主自有面（`/api/health`、`/api/plugin/*`）不可被插件别名占用
+  - **gateway.rs**：**HTTP 协议网关**（平台基础服务）——查动态注册表（精确 + 模板）命中对外 URL 别名 →
+    判定（纯函数 `decide(entry_auth, verified, activated)`：已验签 × 属主激活 × 档位）→ 转发；未命中 →
+    原样放行交路由表。静态 `BUSINESS_ROUTES` / `BusinessDomain` / `SESSION_PLUGIN` / `FallbackPolicy`
+    （双轨期）已随 ABI v29 删除——网关零业务路由常量。
+    转发复用 `controllers/plugin_controller.rs::forward_to_plugin` 同一内核（不另发明传输机制），
+    调用方身份同一出处（`caller_identity` → `caller` = device/localhost/anonymous + `device` 上下文）；
+    载荷纪律：非转发分支不 `into_parts`，payload 原样留给宿主 handler
   - **controllers/**：`plugin_controller.rs` `ANY /api/plugin/{id}/{path}` 代理——属主解析（旧前缀别名）→
-    **只认 manifest 声明**的精确匹配（票 08 起未声明清单不再换来「前缀内 ANY 放行」）→ 端点级认证档位
-    （`auth: "none"` 之外一律要求已验签）→ 同一 `forward_to_plugin` 内核；`session_controller.rs`
-    会话 REST 控制器；**dtos/** 请求/响应 DTO（票 02/03/04 contract 后 config / file / git 控制器已全部
-    退役，config_dto / file_dto / git_dto 保留为形状契约锚点）
-  - **middleware/**：`jwt_auth` JWT 网关（公开路径/插件路径放行规则；具名中间件 `jwt_gateway`，
+    **只认动态注册表登记**的内部路径（ABI v29 起，manifest 静态声明面已退役）→ 端点级认证档位
+    （`auth: "none"` 之外一律要求已验签）→ 同一 `forward_to_plugin` 内核；`session_controller.rs` 已随
+    sessions REST 下沉插件删除；**dtos/** 请求/响应 DTO（config / file / git / session 四组保留为形状
+    契约锚点——插件面必须逐字节复刻）
+  - **middleware/**：`jwt_auth` JWT 网关（宿主自持公开端点 `/api/health` 白名单 + 插件公开别名
+    走注册表档位判定（`auth: "none"` 即公开，精确匹配非前缀）；具名中间件 `jwt_gateway`，
     协议网关必须挂在它**之后**——`Scope::wrap` 后注册者先执行，故 `http/routes.rs` 里网关写在验签之前）、
     `http_filter` HTTP 流量过滤器中间件
 - **websocket/**（WS 传输面，websocket 业务下沉票 08 终态 = 通用 transport）：
@@ -517,7 +518,7 @@ Rust 侧以 `abi.rs` 为宿主/插件共同引用的单一事实来源（签名�
 | 插件系统 (前端) | `src/plugin/`、`src/composables/`（usePluginManager） |
 | 插件开发 SDK | `packages/plugin-sdk-desktop/` |
 | 测试插件 | `packages/plugin-component-test/`、`plugin-sdk-test/`、`plugin-system-test/`、`plugin-wasi-test/` |
-| 插件源码 | `plugins/agent-hub/`、`plugins/ai-chatbox/`、`plugins/file-transfer/`、`plugins/terminal-session/`（终端会话中心：**会话真源登记域**（`rust/src/session/`，P1-b 起含状态机 / 生命周期分发 / 提交行重建 / 经 `host-pty` 的创建停止输入尺寸输出）+ 配对与信任 + 会话编排 + Agent 任务域 + 快捷指令域（票 02）+ 文件浏览域（票 03）+ **WS 会话控制词表分派**（`rust/src/ws_control.rs`，票 09b：声明端点 `session-control` 的动作解释 + `events-ws` 直连帧协议 + 互调 api `session-ws-control`），票 17 起顶替旧 `com.bedcode.auto-task` 插件；HTTP 业务端点经网关别名表接管 /api/configs /api/quick-actions / 文件浏览五端点） |
+| 插件源码 | `plugins/agent-hub/`、`plugins/ai-chatbox/`、`plugins/file-transfer/`、`plugins/terminal-session/`（终端会话中心：**会话真源登记域**（`rust/src/session/`，P1-b 起含状态机 / 生命周期分发 / 提交行重建 / 经 `host-pty` 的创建停止输入尺寸输出）+ 配对与信任 + 会话编排 + Agent 任务域 + 快捷指令域（票 02）+ 文件浏览域（票 03）+ **WS 会话控制词表分派**（`rust/src/ws_control.rs`，票 09b）+ **HTTP 路由代码注册**（`rust/src/http_routes.rs`，ABI v29：activate 期经 `host-http.register-endpoint` 注册全部路由）+ **sessions REST 域**（`rust/src/sessions_http.rs`：/api/sessions* 七条），票 17 起顶替旧 `com.bedcode.auto-task` 插件；HTTP 业务端点经动态注册表接管 /api/configs /api/quick-actions / 文件浏览五端点 / /api/auth/* / /api/sessions* / /static/terminal-bg） |
 | 系统常量 / 错误类型 / 生命周期 | `src-tauri/src/system/`（constants.rs 按领域分组） |
 | 应用上下文 (DI) | `src-tauri/src/system/`（app_context） |
 | 前端页面 / 组件 / 状态 | `src/views/`、`src/components/`、`src/stores/` |

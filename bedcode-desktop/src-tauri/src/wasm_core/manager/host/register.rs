@@ -63,10 +63,14 @@ impl PluginHost {
 
     /// 注册单个插件的 manifest contributes 扩展点（唯一实现：启动期 / 安装 / 热重载共用）
     ///
-    /// 覆盖六项：commands / views / terminal handlers / tool providers / http endpoints /
-    /// file handlers。**刻意不覆盖** `configuration` / `lifecycle`（boot 期装配）与
-    /// `provides` / `subscribes`（激活期走总线订阅，见 `host/activation.rs`）——在未激活时
-    /// 注册这两项会造成「未激活即订阅」。
+    /// 覆盖四项：commands / views / terminal handlers / file handlers。**刻意不覆盖**
+    /// `configuration` / `lifecycle`（boot 期装配）与 `provides` / `subscribes`（激活期走
+    /// 总线订阅，见 `host/activation.rs`）——在未激活时注册这两项会造成「未激活即订阅」。
+    ///
+    /// **ABI v29（HTTP 路由代码注册下沉）**：`httpEndpoints` 静态声明面退役（用户裁定 ④：
+    /// 不通过声明配置路由，插件代码运行时经 `host-http.register-endpoint` 注册）——
+    /// HTTP 路由的登记权整体移交插件，宿主不再从 manifest 读路由；`toolProviders` 声明面
+    /// 从未落地消费实现（前端注释明示），随 http 端点面一并退役。
     ///
     /// 幂等：registry 侧按 plugin_id 存放，重复注册结果一致（[`Self::register_manifest_contributions`]
     /// 与热重载都会重复走到这里）。插件不在表中时静默返回（卸载竞态）。
@@ -83,12 +87,6 @@ impl PluginHost {
                 .register_terminal_handlers(&m.id, &term.input_handlers, &term.output_parsers)
                 .await;
         }
-        self.registry
-            .register_tool_providers(&m.id, &m.contributes.tool_providers)
-            .await;
-        self.registry
-            .register_http_endpoints(&m.id, &m.contributes.http_endpoints)
-            .await;
         self.registry
             .register_file_handlers(&m.id, &m.contributes.file_handlers)
             .await;
@@ -112,7 +110,10 @@ impl PluginHost {
         plugin_id: &str,
         endpoints: &[bedcode_plugin_api::WsEndpointContribution],
     ) {
-        if !self.permission.check(plugin_id, bedcode_plugin_api::permission::PERMISSION_WS_SERVER) {
+        if !self
+            .permission
+            .check(plugin_id, bedcode_plugin_api::permission::PERMISSION_WS_SERVER)
+        {
             tracing::warn!(
                 plugin_id = %plugin_id,
                 "manifest declared ws endpoints skipped: missing ws:server permission"

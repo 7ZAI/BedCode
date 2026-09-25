@@ -230,6 +230,27 @@ impl PluginHost {
         }
         let plan = {
             let mut plugins = self.plugins.write().await;
+
+            // 插件名唯一性（用户裁定 ⑨：激活为最终闸门）：路由注册表按 plugin_id
+            // 分组（命名空间隔离），同名插件共存会破坏「插件名唯一 → 路由命名空间
+            // 不冲突」的硬约束。plugins map 以 id 为键，正常情形不存在第二条同名
+            // 记录（扫描面先到先得 / 安装面同 id 拒绝已有基础）；本校验是显式闸门——
+            // 若因竞态/异常插入出现了「另一条记录声明同一 manifest.id」（键不一致
+            // 的插入），激活必须失败（fail-visible），不得静默共存或覆盖。
+            if let Some(other_key) = find_duplicate_id_claim(&plugins, plugin_id) {
+                let msg = format!(
+                    "Plugin id '{}' is already claimed by another plugin record (map key '{}'); \
+                     duplicate plugin id rejected at activation (route namespace isolation)",
+                    plugin_id, other_key
+                );
+                tracing::error!(
+                    plugin_id = %plugin_id,
+                    conflicting_key = %other_key,
+                    "[PluginHost] 同名插件拒绝激活（命名空间隔离）"
+                );
+                return Err(crate::AppError::Plugin(msg));
+            }
+
             let loaded = plugins.get_mut(plugin_id).ok_or_else(|| {
                 tracing::error!(plugin_id = %plugin_id, "[PluginHost] activate_plugin: plugin not found in plugins map");
                 crate::AppError::Plugin(format!("Plugin not found: {}", plugin_id))
@@ -636,6 +657,11 @@ impl PluginHost {
         // （只碰本人；服务端端点双表回收随票 05 一并接入）
         crate::wasm_core::host_api::ws::purge_for_plugin(plugin_id);
 
+        // HTTP 动态路由（ABI v29 服务端域）：插件停用即清空其全部注册路由（含对外
+        // URL 别名与内部路径，只碰本人）——别名随属主消失，未激活插件的 host 别名
+        // 不再可达（404，fail-visible，不静默占用对外 URL 空间）
+        crate::wasm_core::host_api::http::purge_for_plugin(plugin_id);
+
         // PTY 基础能力服务（ABI v16，spec D2）：插件停用即 kill 并摘除其全部私有
         // PTY，逐条补发 `<owner>::pty:exit`（reason=killed）——孤儿进程不随插件消失
         // 而悬挂。必须在下方 `remove_all_subscriptions` 之前，否则补发的事件无人可投。
@@ -833,6 +859,27 @@ impl PluginHost {
     }
 }
 
+// ==================== 插件名唯一性（用户裁定 ⑨，激活期最终闸门） ====================
+
+/// 查找「键不一致但 manifest.id 相同」的重复插件记录
+///
+/// `plugins` 以 id 为键，正常情形下同名记录不可能共存（扫描面先到先得 / 安装面
+/// 同 id 拒绝）；本函数是激活闸门的判据——若某条记录被以**其他键**插入（竞态 /
+/// 异常路径），且其 manifest.id 与目标插件一致，返回该键（激活必须失败，否则
+/// 两条同名记录会同时拥有路由命名空间，破坏隔离）。
+///
+/// 纯函数（供单测）：`key == manifest.id` 的正常记录不算冲突。
+fn find_duplicate_id_claim(
+    plugins: &std::collections::HashMap<String, LoadedPlugin>,
+    plugin_id: &str,
+) -> Option<String> {
+    plugins
+        .iter()
+        .filter(|(key, loaded)| loaded.manifest.id == plugin_id && **key != plugin_id)
+        .map(|(key, _)| key.clone())
+        .next()
+}
+
 // ==================== 旧 api 名双投窗口（票 07 B2） ====================
 
 /// 改名插件的 api 名别名：`(新插件 id, 旧插件 id)`。
@@ -870,6 +917,68 @@ fn with_api_aliases(plugin_id: &str, apis: &[String]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ==================== 插件名唯一性（用户裁定 ⑨，激活期最终闸门） ====================
+
+    fn loaded_plugin(id: &str) -> LoadedPlugin {
+        LoadedPlugin {
+            manifest: bedcode_plugin_api::PluginManifest {
+                id: id.to_string(),
+                name: id.to_string(),
+                version: "1.0.0".to_string(),
+                ..Default::default()
+            },
+            state: PluginState::Activated,
+            extension_path: String::new(),
+            activated_at: None,
+            source: PluginSource::Wasm,
+        }
+    }
+
+    fn map_of(entries: Vec<(&str, &str)>) -> std::collections::HashMap<String, LoadedPlugin> {
+        // (键, manifest.id)
+        entries
+            .into_iter()
+            .map(|(key, id)| (key.to_string(), loaded_plugin(id)))
+            .collect()
+    }
+
+    /// 正常注册表：目标 id 的记录以自身为键 → 无冲突
+    #[test]
+    fn duplicate_claim_absent_in_normal_registry() {
+        let map = map_of(vec![("com.a.plugin", "com.a.plugin"), ("com.b.plugin", "com.b.plugin")]);
+        assert!(find_duplicate_id_claim(&map, "com.a.plugin").is_none());
+        assert!(find_duplicate_id_claim(&map, "com.b.plugin").is_none());
+    }
+
+    /// 竞态/异常插入：另一条记录以**其他键**声明了同一 manifest.id → 点名冲突键
+    #[test]
+    fn duplicate_claim_detected_on_rogue_insert() {
+        let map = map_of(vec![
+            ("com.a.plugin", "com.a.plugin"),
+            ("rogue-key", "com.a.plugin"), // 冒名记录插在别的键下
+        ]);
+        assert_eq!(
+            find_duplicate_id_claim(&map, "com.a.plugin").as_deref(),
+            Some("rogue-key")
+        );
+        // 目标插件自身（正常键）不构成冲突
+        assert!(find_duplicate_id_claim(&map, "rogue-key").is_none());
+    }
+
+    /// 同名不同插件（manifest.id 不同）互不干扰
+    #[test]
+    fn duplicate_claim_ignores_distinct_ids() {
+        let map = map_of(vec![("com.a.plugin", "com.a.plugin"), ("com.b.plugin", "com.b.plugin")]);
+        assert!(find_duplicate_id_claim(&map, "com.nonexistent").is_none());
+    }
+
+    /// 空表：无冲突
+    #[test]
+    fn duplicate_claim_absent_in_empty_registry() {
+        let map: std::collections::HashMap<String, LoadedPlugin> = std::collections::HashMap::new();
+        assert!(find_duplicate_id_claim(&map, "anything").is_none());
+    }
 
     fn apis(items: &[&str]) -> Vec<String> {
         items.iter().map(|s| s.to_string()).collect()

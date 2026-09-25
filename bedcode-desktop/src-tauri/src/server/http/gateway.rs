@@ -1,37 +1,38 @@
-//! HTTP 协议网关 — 平台基础服务（宿主业务清零票 01）
+//! HTTP 协议网关 — 平台基础服务（HTTP 路由代码注册下沉专项，ABI v29）
 //!
 //! ## 它是什么
 //!
-//! 宿主 HTTP 面混着两类端点：**引擎端点**（auth / sessions / health / 插件代理 / static）
-//! 与**业务端点**（配置、快捷指令、文件浏览、git——产品概念，按 ADR 0022 裁剪线该归插件）。
-//! 本模块只处理后者：一张「业务 URL → 目标插件端点」的别名路由表，命中后把请求交给插件的
-//! `_http_endpoint`，让业务实现整块搬进插件工程而移动端一行不改。
+//! 宿主 HTTP 传输面的路由**登记权**已整体移交插件（用户裁定 ④）：插件经
+//! `host-http.register-endpoint` 在运行时注册自身路由（含对外 URL 别名、方法、
+//! 认证档位），宿主只保留四件事——通用注册表（`server/http/registry`）、通用判定
+//! （本文件 [`decide`]）、通用转发（复用 `plugin_controller::forward_to_plugin`）、
+//! 验签引擎（`middleware/jwt_auth`）。本模块**零业务路由常量**：不再持有任何
+//! 业务 URL 别名表 / 业务域枚举 / 硬编码插件 id。
 //!
 //! ## 三条不变量
 //!
-//! 1. **形状不变**：URL、方法、响应 JSON 与今天逐字节一致。落表即锁契约——[`BUSINESS_ROUTES`]
-//!    每条带归属插件与业务域，形状 golden 见 [`business_endpoint_shapes_are_locked_for_dual_track`]。
-//! 2. **验签不移动**：移动端 JWT 仍在宿主 `/api` scope 的中间件里统一校验（AGENTS.md §8 认证
-//!    红线），网关只挂在它**之后**（[`unverified_requests_never_reach_gateway`]）；转发只透传
-//!    claims 派生的设备标识与 [`caller`] 三档调用方身份（票 08），**JWT 本体与指纹不出宿主**。
-//!    别名条目自带的 [`RouteAuth`] 与插件端点声明的档位**取较严者**（见 [`decide`]）——
-//!    两个声明面都不得单方面把宿主要求验签的业务端点放开。
+//! 1. **形状不变**：对外 URL、方法、响应 JSON 与迁移前逐字节一致。URL 别名由
+//!    插件注册声明（含 `{id}` 模板段），网关按注册表精确/模板匹配，模板捕获值
+//!    经 `params` 字段传给插件；响应形状契约锁在本文件测试段。
+//! 2. **验签不移动**：移动端 JWT 仍在宿主 `/api` scope 的中间件里统一校验
+//!    （AGENTS.md §8 认证红线），网关只挂在它**之后**；转发只透传 claims 派生的
+//!    设备标识与 `caller` 三档调用方身份，**JWT 本体与指纹不出宿主**。档位判定
+//!    统一在网关（只有网关看得见注册表档位）：`jwt` 档要求宿主已验签，`none` 档
+//!    免验签转发。
 //! 3. **不发明传输机制**：转发复用 `http/controllers/plugin_controller` 的同一内核
-//!    （[`forward_to_plugin`]）与同一端点声明治理（manifest `contributes.httpEndpoints`）。
+//!    （[`forward_to_plugin`]）与同一请求构造（headers 白名单 / status/contentType
+//!    解析口径）。
 //!
-//! ## 双轨与降级
+//! ## 未命中与降级
 //!
-//! 别名目标**未激活**或**未声明该端点** → 请求原样落到宿主旧实现（响应字节不变）；两条都满足
-//! 才切插件路径。判定 [`decide`] 是纯函数，切换条件与两种降级路径全部可单测。宿主旧实现退役后
-//! （票 02/03/04 的 contract 步骤）条目 [`FallbackPolicy`] 翻到 [`FallbackPolicy::PluginRequired`]：
-//! 业务数据真源已在插件，宿主不留副本，插件不在时返回明确的「插件未激活」错误而非假数据。
+//! - 未命中注册别名 → 原样放行交路由表（404 / 宿主自持端点照旧）；
+//! - 命中但属主插件未激活（注册在册与停用之间的竞态）→ 明确报「插件未激活」
+//!   （HTTP 200 + 业务码 1007，与 `/api/plugin/*` 面同口径）；
+//! - 命中但档位 `jwt` 而本次未验签 → 401 + 业务码 1007（报「要认证」而非
+//!   「插件未激活」，方向不能指错）。
 //!
-//! ## 为什么是中间件而不是新路由
-//!
-//! 降级分支必须让 actix 继续按原路由表分发：宿主 handler 的类型化提取器（`web::Json<T>` /
-//! `web::Query<T>`）连同 400/405 语义一字都不能改。在 handler 层做回落就得手工复现这些提取器
-//! 行为，那正是形状漂移的源头。中间件形态下「决定回落」时连 payload 都不碰——只有 Forward
-//! 分支才 [`ServiceRequest::into_parts`] 消费载荷。
+//! 停用回收：插件停用 → 宿主清空其全部注册路由（`registry::purge_for_plugin`），
+//! 未激活插件的别名不再可达（404，fail-visible，不静默占用对外 URL 空间）。
 
 use actix_web::body::MessageBody;
 use actix_web::dev::{Payload, ServiceRequest, ServiceResponse};
@@ -43,332 +44,56 @@ use crate::server::http::controllers::plugin_controller::{
     caller_identity, filter_plugin_request_headers, forward_to_plugin, HttpCaller, PluginHttpRequest,
 };
 use crate::server::http::dtos::{ApiResponse, CODE_INVALID_REQUEST, CODE_PLUGIN_AUTH_FAILED};
+use crate::server::http::registry;
 use crate::system::app_context::AppContext;
 use bedcode_plugin_api::EndpointAuth;
 
-/// session 插件 id（配置 / 快捷指令 / 文件浏览 / git 四域的接管方）
-const SESSION_PLUGIN: &str = "com.bedcode.terminal-session";
+// ==================== 网关判定 ====================
 
-// ==================== 业务 URL 别名路由表 ====================
-
-/// 业务域归属（审计面：网关条目必须说清这是哪块业务、归哪个插件）
+/// 网关对一次请求的处置
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BusinessDomain {
-    /// 会话配置查询面（与桌面命令面同真源，消除双轨数据源）
-    SessionConfig,
-    /// 快捷指令
-    QuickAction,
-    /// 本地文件浏览（文件树 / 内容 / diff）
-    FileBrowse,
-    /// 工作区 git
-    Git,
-    /// 认证链（票 07：公开路由，编排归插件）
-    Auth,
-}
-
-impl BusinessDomain {
-    pub const fn as_str(&self) -> &'static str {
-        match self {
-            BusinessDomain::SessionConfig => "session-config",
-            BusinessDomain::QuickAction => "quick-action",
-            BusinessDomain::FileBrowse => "file-browse",
-            BusinessDomain::Git => "git",
-            BusinessDomain::Auth => "auth",
-        }
-    }
-}
-
-/// 别名目标不可用时的处置
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FallbackPolicy {
-    /// 双轨期：请求原样落到宿主旧实现
-    HostImplementation,
-    /// contract 后：宿主实现与宿主数据面已退役，明确报「插件未激活」
+pub enum GatewayDecision {
+    /// 命中注册别名且判定通过 → 切插件路径
+    Forward,
+    /// 属主插件未激活（注册在册与停用之间的竞态）→ 明确报「插件未激活」
     PluginRequired,
-}
-
-/// 别名的认证前置（票 07）：大多数业务端点要求宿主已验签（JWT 中间件先行），
-/// `/api/auth/*` 是**公开路由**——它们本身在 JWT 之前（移动端拿 token 的入口），
-/// 必须免验签转发给插件（验签执行点在插件 auth 域 + host-auth 原语）
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RouteAuth {
-    /// 宿主 JWT 中间件验签通过后才可转发（默认；claims 派生设备上下文随转发注入）
-    Authenticated,
-    /// 公开路由：无 JWT 前置，直接按别名判定转发（`/api/auth/*` 专用）
-    Public,
-}
-
-/// 一条业务 URL 别名
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BusinessRoute {
-    /// 宿主对外路径（逐字等于今天注册的路由，移动端零改动的锚点）
-    pub path: &'static str,
-    /// 归属插件 id
-    pub plugin_id: &'static str,
-    /// 目标端点段（插件 `contributes.httpEndpoints` 里的相对段）
-    pub endpoint: &'static str,
-    /// 该别名对外暴露的方法（与今天的宿主路由一致）
-    pub methods: &'static [&'static str],
-    pub domain: BusinessDomain,
-    pub fallback: FallbackPolicy,
-    /// 认证前置（票 07）：Authenticated = 需宿主验签；Public = 免验签转发
-    pub auth: RouteAuth,
-}
-
-impl BusinessRoute {
-    /// 端点声明全路径：按属主插件的声明清单做精确匹配时用的键
-    ///
-    /// 与 `/api/plugin/{id}/{path}` 那条路由同一形态——声明面只有一张表，网关不为自己的
-    /// 别名开第二条判定口径。
-    pub fn declared_path(&self) -> String {
-        format!("/api/plugin/{}/{}", self.plugin_id, self.endpoint)
-    }
-}
-
-/// 业务 URL 别名路由表
-///
-/// 新增条目 = 新增平台编排，必须同时补归属插件声明与该业务的形状契约测试
-/// （[`route_table_golden`] + [`business_endpoint_shapes_are_locked_for_dual_track`]）。
-/// 引擎端点（`/api/auth/*`、`/api/sessions*`、`/api/health`、`/api/plugin/*`、`/static/*`）
-/// **永不入表**：它们是协议面不是业务面（spec 决策 2）。
-pub const BUSINESS_ROUTES: &[BusinessRoute] = &[
-    BusinessRoute {
-        path: "/api/configs",
-        plugin_id: SESSION_PLUGIN,
-        endpoint: "configs",
-        methods: &["GET"],
-        domain: BusinessDomain::SessionConfig,
-        // 票 02 contract：会话配置查询面真源已下沉插件，宿主不再持有业务副本
-        fallback: FallbackPolicy::PluginRequired,
-        auth: RouteAuth::Authenticated,
-    },
-    BusinessRoute {
-        path: "/api/quick-actions",
-        plugin_id: SESSION_PLUGIN,
-        endpoint: "quick-actions",
-        methods: &["GET"],
-        domain: BusinessDomain::QuickAction,
-        // 票 02 contract：快捷指令真源已下沉插件（私有库），宿主旧表契约退役
-        fallback: FallbackPolicy::PluginRequired,
-        auth: RouteAuth::Authenticated,
-    },
-    BusinessRoute {
-        path: "/api/file-tree",
-        plugin_id: SESSION_PLUGIN,
-        endpoint: "file-tree",
-        methods: &["POST"],
-        domain: BusinessDomain::FileBrowse,
-        // 票 03 contract：文件浏览真源已下沉插件（host-fs + host-process）
-        fallback: FallbackPolicy::PluginRequired,
-        auth: RouteAuth::Authenticated,
-    },
-    BusinessRoute {
-        path: "/api/file-tree-children",
-        plugin_id: SESSION_PLUGIN,
-        endpoint: "file-tree-children",
-        methods: &["GET"],
-        domain: BusinessDomain::FileBrowse,
-        // 票 03 contract
-        fallback: FallbackPolicy::PluginRequired,
-        auth: RouteAuth::Authenticated,
-    },
-    BusinessRoute {
-        path: "/api/file-content",
-        plugin_id: SESSION_PLUGIN,
-        endpoint: "file-content",
-        methods: &["POST"],
-        domain: BusinessDomain::FileBrowse,
-        // 票 03 contract
-        fallback: FallbackPolicy::PluginRequired,
-        auth: RouteAuth::Authenticated,
-    },
-    BusinessRoute {
-        path: "/api/diff-tree",
-        plugin_id: SESSION_PLUGIN,
-        endpoint: "diff-tree",
-        methods: &["POST"],
-        domain: BusinessDomain::FileBrowse,
-        // 票 03 contract
-        fallback: FallbackPolicy::PluginRequired,
-        auth: RouteAuth::Authenticated,
-    },
-    BusinessRoute {
-        path: "/api/file-diff",
-        plugin_id: SESSION_PLUGIN,
-        endpoint: "file-diff",
-        methods: &["POST"],
-        domain: BusinessDomain::FileBrowse,
-        // 票 03 contract
-        fallback: FallbackPolicy::PluginRequired,
-        auth: RouteAuth::Authenticated,
-    },
-    BusinessRoute {
-        path: "/api/git/branches",
-        plugin_id: SESSION_PLUGIN,
-        endpoint: "git/branches",
-        methods: &["GET"],
-        domain: BusinessDomain::Git,
-        // 票 04 contract：git 分支查询面真源下沉插件（host-process run-sync 执行），
-        // 宿主 git_controller 已退役
-        fallback: FallbackPolicy::PluginRequired,
-        auth: RouteAuth::Authenticated,
-    },
-    BusinessRoute {
-        path: "/api/git/status",
-        plugin_id: SESSION_PLUGIN,
-        endpoint: "git/status",
-        methods: &["GET"],
-        domain: BusinessDomain::Git,
-        // 票 04 contract：工作区状态面同上退役
-        fallback: FallbackPolicy::PluginRequired,
-        auth: RouteAuth::Authenticated,
-    },
-    BusinessRoute {
-        path: "/api/git/checkout",
-        plugin_id: SESSION_PLUGIN,
-        endpoint: "git/checkout",
-        methods: &["POST"],
-        domain: BusinessDomain::Git,
-        // 票 04 contract：checkout 编排（含分支名白名单）随插件走
-        fallback: FallbackPolicy::PluginRequired,
-        auth: RouteAuth::Authenticated,
-    },
-    // ==================== 票 07：认证链（公开路由——JWT 之前的入口） ====================
-    BusinessRoute {
-        path: "/api/auth/pairing",
-        plugin_id: SESSION_PLUGIN,
-        endpoint: "auth/pairing",
-        methods: &["POST"],
-        domain: BusinessDomain::Auth,
-        fallback: FallbackPolicy::PluginRequired,
-        auth: RouteAuth::Public,
-    },
-    BusinessRoute {
-        path: "/api/auth/verify",
-        plugin_id: SESSION_PLUGIN,
-        endpoint: "auth/verify",
-        methods: &["POST"],
-        domain: BusinessDomain::Auth,
-        fallback: FallbackPolicy::PluginRequired,
-        auth: RouteAuth::Public,
-    },
-    BusinessRoute {
-        path: "/api/auth/qr-connect",
-        plugin_id: SESSION_PLUGIN,
-        endpoint: "auth/qr-connect",
-        methods: &["POST"],
-        domain: BusinessDomain::Auth,
-        fallback: FallbackPolicy::PluginRequired,
-        auth: RouteAuth::Public,
-    },
-    BusinessRoute {
-        path: "/api/auth/reauth",
-        plugin_id: SESSION_PLUGIN,
-        endpoint: "auth/reauth",
-        methods: &["POST"],
-        domain: BusinessDomain::Auth,
-        fallback: FallbackPolicy::PluginRequired,
-        auth: RouteAuth::Public,
-    },
-    BusinessRoute {
-        path: "/api/auth/biometric-challenge",
-        plugin_id: SESSION_PLUGIN,
-        endpoint: "auth/biometric-challenge",
-        methods: &["POST"],
-        domain: BusinessDomain::Auth,
-        fallback: FallbackPolicy::PluginRequired,
-        auth: RouteAuth::Public,
-    },
-    BusinessRoute {
-        path: "/api/auth/biometric-verify",
-        plugin_id: SESSION_PLUGIN,
-        endpoint: "auth/biometric-verify",
-        methods: &["POST"],
-        domain: BusinessDomain::Auth,
-        fallback: FallbackPolicy::PluginRequired,
-        auth: RouteAuth::Public,
-    },
-    BusinessRoute {
-        path: "/api/auth/biometric-bind",
-        plugin_id: SESSION_PLUGIN,
-        endpoint: "auth/biometric-bind",
-        methods: &["POST"],
-        domain: BusinessDomain::Auth,
-        fallback: FallbackPolicy::PluginRequired,
-        auth: RouteAuth::Public,
-    },
-];
-
-/// 按「路径 + 方法」查别名条目（纯函数）
-///
-/// 路径**全等**匹配，绝不做前缀匹配（`/api/configsx` 不得命中 `/api/configs`）。
-/// 路径命中而方法不命中时不命中别名：那是调用方打错了方法，属宿主路由面的 405 语义，
-/// 交给旧路由表原样应答。
-pub fn route_for_request(path: &str, method: &str) -> Option<&'static BusinessRoute> {
-    BUSINESS_ROUTES
-        .iter()
-        .find(|r| r.path == path && r.methods.contains(&method))
-}
-
-/// 网关对一次业务请求的处置
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GatewayDecision<'a> {
-    /// 目标插件在位且已声明该端点、认证前置齐备 → 切插件路径
-    Forward(&'a BusinessRoute),
-    /// 未激活 / 未声明 → 原样落宿主旧实现
-    HostFallback,
-    /// 宿主实现已退役且插件不可用 → 明确报错（不给假数据）
-    PluginRequired(&'a BusinessRoute),
-    /// 端点要求已验签（宿主条目或插件声明任一）而本次请求没有 → 401
+    /// 端点档位要求已验签而本次请求没有 → 401
     ///
     /// 单独一档而不是回 [`GatewayDecision::PluginRequired`]：那会把「你没登录」报成
     /// 「插件未激活」，指错方向。
-    AuthRequired(&'a BusinessRoute),
+    AuthRequired,
+    /// 未命中注册别名 / 插件面不可判定 → 原样放行交路由表
+    PassThrough,
 }
 
-/// 降级判定（纯函数，双轨语义的单一事实源）
+/// 降级判定（纯函数，转发条件的单一事实源）
 ///
-/// - `verified`：宿主 JWT 中间件是否已验签并注入 claims（[`caller_identity`] 的 device 档）。
-///   **需要验签时绝不转发**——这道守卫是网关自身的性质，不依赖中间件注册顺序
-///   （顺序错乱时最多多拒一次，不会漏验签）。
-/// - `declared`：属主插件 manifest 声明的端点全路径清单。**空清单按「未声明」处理**——与
-///   `/api/plugin/*` 那条路由同一判据（票 08 起两处都不再放行未声明）：网关交出去的
-///   是**宿主自有业务**，插件没显式声明这个业务端点就绝不交出去。
-/// - `endpoint_auth`：属主插件对该端点声明的认证档位（票 08）。与别名条目自带的
-///   [`RouteAuth`] **取较严者**——`Public` 条目不因插件声明 `jwt` 而被放宽，
-///   `Authenticated` 条目也不因插件声明 `none` 而放松：两个声明面谁都不能单方面开门。
-pub fn decide<'a>(
-    route: &'a BusinessRoute,
-    verified: bool,
-    activated: bool,
-    declared: &[String],
-    endpoint_auth: EndpointAuth,
-) -> GatewayDecision<'a> {
-    let target = route.declared_path();
-    if !(activated && declared.contains(&target)) {
-        return match route.fallback {
-            FallbackPolicy::HostImplementation => GatewayDecision::HostFallback,
-            FallbackPolicy::PluginRequired => GatewayDecision::PluginRequired(route),
-        };
+/// - `entry_auth`：注册档位（`jwt` 要求宿主已验签；`none` 免验签转发）。
+/// - `verified`：宿主 JWT 中间件是否已验签并注入 claims（[`caller_identity`] 的
+///   device 档）。**需要验签时绝不转发**——这道守卫是网关自身的性质，不依赖
+///   中间件注册顺序（顺序错乱时最多多拒一次，不会漏验签）。
+/// - `activated`：属主插件是否激活。注册在册而属主停用（竞态）→ 明确报
+///   「插件未激活」而非把请求交给不存在的插件。
+pub fn decide(entry_auth: EndpointAuth, verified: bool, activated: bool) -> GatewayDecision {
+    if !activated {
+        return GatewayDecision::PluginRequired;
     }
-    let requires_verification = route.auth == RouteAuth::Authenticated || endpoint_auth == EndpointAuth::Jwt;
-    if requires_verification && !verified {
-        return GatewayDecision::AuthRequired(route);
+    if entry_auth == EndpointAuth::Jwt && !verified {
+        return GatewayDecision::AuthRequired;
     }
-    GatewayDecision::Forward(route)
+    GatewayDecision::Forward
 }
 
 /// 「插件未激活」响应：与 `/api/plugin/*` 路由的未激活响应同口径（HTTP 200 + 业务码 1007）
-fn plugin_unavailable_response(route: &BusinessRoute) -> HttpResponse {
+fn plugin_unavailable_response(entry: &registry::HttpRouteEntry) -> HttpResponse {
     tracing::warn!(
-        plugin_id = %route.plugin_id,
-        path = %route.path,
-        domain = route.domain.as_str(),
-        "业务端点不可用（宿主实现已退役且目标插件未激活）"
+        plugin_id = %entry.owner,
+        host_path = %entry.host_path.as_deref().unwrap_or("(internal)"),
+        "业务端点不可用（属主插件未激活）"
     );
     HttpResponse::Ok().json(ApiResponse::<()>::error(
         CODE_PLUGIN_AUTH_FAILED,
-        &format!("Plugin {} is not activated", route.plugin_id),
+        &format!("Plugin {} is not activated", entry.owner),
     ))
 }
 
@@ -379,13 +104,12 @@ fn bad_request(message: &str) -> HttpResponse {
 
 /// 「调用方未验签」响应：HTTP 401 + 业务码 1007，与 JWT 中间件的 401 同一码
 ///
-/// 这条分支生产链路正常走不到（中间件在网关之外已把无 JWT 的业务请求 401），
-/// 它是「中间件顺序被改错 / 插件把 `Authenticated` 条目的端点声明成 `none` 之外的档」
-/// 时的兜底，所以回 401 而不是回「插件未激活」。
-fn unauthorized_response(route: &BusinessRoute) -> HttpResponse {
+/// 这条分支生产链路正常走不到（中间件在网关之外已把无 JWT 的 `jwt` 档请求 401），
+/// 它是「中间件顺序被改错」时的兜底，所以回 401 而不是回「插件未激活」。
+fn unauthorized_response(path: &str) -> HttpResponse {
     HttpResponse::Unauthorized().json(ApiResponse::<()>::error(
         CODE_PLUGIN_AUTH_FAILED,
-        &format!("Authentication required for {}", route.path),
+        &format!("Authentication required for {}", path),
     ))
 }
 
@@ -413,9 +137,6 @@ fn query_object(query_string: &str) -> Result<Value, String> {
 /// - 无载荷 → `Null`（与 `_http_endpoint` 的 `Option<Json>` 同口径，GET 端点即此分支）；
 /// - 合法 JSON → 原样交给插件（不重新序列化宿主 DTO，避免未知字段被丢弃）；
 /// - 有载荷但非 JSON → 显式失败（业务端点今天的宿主行为是拒绝，不许静默当空请求）。
-///
-/// 判据取「字节是不是 JSON」而非 content-type：比宿主宽松一档，但绝不丢数据；移动端
-/// 这些端点一律 `application/json`，差异面只在畸形请求上。
 async fn body_value(req: &actix_web::HttpRequest, payload: &mut Payload) -> Result<Value, String> {
     let bytes = match web::Bytes::from_request(req, payload).await {
         Ok(b) => b,
@@ -430,7 +151,7 @@ async fn body_value(req: &actix_web::HttpRequest, payload: &mut Payload) -> Resu
     serde_json::from_slice::<Value>(&bytes).map_err(|e| format!("Invalid JSON body: {e}"))
 }
 
-/// 网关中间件：业务 URL 别名 → 插件，其余请求原样放行
+/// 网关中间件：注册别名（精确 + 模板）→ 插件，其余请求原样放行
 ///
 /// 挂在 `/api` scope 的 JWT 中间件**之后**（`Scope::wrap` 后注册者先执行，故本中间件注册在
 /// 验签之前；顺序语义见 [`scope_wrap_registration_puts_jwt_outermost`]）。即便接线顺序被改错，
@@ -441,59 +162,51 @@ where
 {
     let path = req.path().to_string();
     let method = req.method().as_str().to_string();
-    let Some(route) = route_for_request(&path, &method) else {
+    // 未命中注册别名（精确匹配 + `{id}` 模板匹配）→ 原样放行交路由表
+    let Some(host_match) = registry::find_by_host(&path, &method) else {
         return next.call(req).await.map(|res| res.map_into_boxed_body());
     };
+    let entry = host_match.entry.clone();
 
     // 调用方身份（票 08）：device 档 = 宿主 JWT 中间件已验签并注入 claims。
-    // 环回 / 匿名两档只在插件把该端点显式声明成 `auth: "none"` 时才可能走到转发。
+    // 环回 / 匿名两档只在插件把该端点显式注册成 `auth: "none"` 时才可能走到转发。
     let (caller, device) = caller_identity(req.request());
     let verified = matches!(caller, HttpCaller::Device);
     // 无 AppContext（无头 / 库级测试 / 初始化中间态）= 插件面不可判定 → 交回链条，
-    // 绝不凭别名表就把请求递给不存在的插件。
+    // 绝不凭注册表就把请求递给不存在的插件
     let decision = match AppContext::try_global() {
-        None => GatewayDecision::HostFallback,
+        None => GatewayDecision::PassThrough,
         Some(ctx) => {
-            let host = ctx.plugin_host();
-            let activated = host.is_activated(route.plugin_id).await;
-            let registry = host.registry();
-            let declared = registry.list_http_endpoint_paths(route.plugin_id).await;
-            // 档位按属主声明查；查不到条目（未声明）时给最严档——那种情形下面
-            // `declared` 判定先落，档位取值不影响结果，只是不许有「查不到=免凭证」的形状
-            let endpoint_auth = registry
-                .find_http_endpoint(&route.declared_path())
-                .await
-                .map(|e| e.auth)
-                .unwrap_or(EndpointAuth::Jwt);
-            decide(route, verified, activated, &declared, endpoint_auth)
+            let activated = ctx.plugin_host().is_activated(&entry.owner).await;
+            decide(entry.auth, verified, activated)
         }
     };
     tracing::debug!(
         path = %path,
-        plugin_id = %route.plugin_id,
-        domain = route.domain.as_str(),
+        plugin_id = %entry.owner,
+        endpoint = %entry.path,
         caller = %caller.as_str(),
-        forward = matches!(decision, GatewayDecision::Forward(_)),
+        forward = matches!(decision, GatewayDecision::Forward),
         "HTTP 协议网关判定"
     );
 
     match decision {
-        GatewayDecision::HostFallback => next.call(req).await.map(|res| res.map_into_boxed_body()),
-        GatewayDecision::PluginRequired(_) => {
+        GatewayDecision::PassThrough => next.call(req).await.map(|res| res.map_into_boxed_body()),
+        GatewayDecision::PluginRequired => {
             let (http_req, _payload) = req.into_parts();
-            Ok(ServiceResponse::new(http_req, plugin_unavailable_response(route)))
+            Ok(ServiceResponse::new(http_req, plugin_unavailable_response(&entry)))
         }
-        GatewayDecision::AuthRequired(_) => {
+        GatewayDecision::AuthRequired => {
             tracing::warn!(
                 path = %path,
-                plugin_id = %route.plugin_id,
+                plugin_id = %entry.owner,
                 caller = %caller.as_str(),
                 "业务端点要求已验签调用方，本次请求未通过宿主 JWT 验签"
             );
             let (http_req, _payload) = req.into_parts();
-            Ok(ServiceResponse::new(http_req, unauthorized_response(route)))
+            Ok(ServiceResponse::new(http_req, unauthorized_response(&path)))
         }
-        GatewayDecision::Forward(_) => {
+        GatewayDecision::Forward => {
             // 判定完成才开始消费载荷：query / headers / claims 只读，body 走 payload
             let headers = filter_plugin_request_headers(req.headers());
             let query = match query_object(req.query_string()) {
@@ -508,16 +221,23 @@ where
                 Ok(v) => v,
                 Err(msg) => return Ok(ServiceResponse::new(http_req, bad_request(&msg))),
             };
+            // 模板捕获参数（`{id}` 段）随请求注入插件；精确命中时为空对象
+            let params = host_match
+                .params
+                .into_iter()
+                .map(|(k, v)| (k, Value::String(v)))
+                .collect();
             let request = PluginHttpRequest {
-                endpoint_path: route.endpoint,
+                endpoint_path: &entry.path,
                 method: &method,
                 headers,
                 body,
                 query,
+                params,
                 caller,
                 device,
             };
-            let resp = forward_to_plugin(route.plugin_id, &request).await;
+            let resp = forward_to_plugin(&entry.owner, &request).await;
             Ok(ServiceResponse::new(http_req, resp))
         }
     }
@@ -532,641 +252,45 @@ mod tests {
     use crate::server::http::middleware::jwt_auth::jwt_gateway;
     use crate::utils::auth::jwt::JwtService;
 
-    fn route(path: &str, method: &str) -> &'static BusinessRoute {
-        route_for_request(path, method).expect("已登记的别名条目")
+    /// 注册一条测试别名（全局注册表跨用例共享：路径带用例唯一段）
+    fn register_test_alias(owner: &str, path: &str, host: &str, methods: &[&str], auth: EndpointAuth) {
+        let methods: Vec<String> = methods.iter().map(|s| s.to_string()).collect();
+        registry::register(owner, path, Some(host), &methods, auth).expect("register test alias");
     }
 
-    // ==================== 路由表 ====================
-
-    /// 别名表 golden 清单：路径 / 归属插件 / 端点段 / 方法 / 业务域逐项钉死
-    ///
-    /// 这张表是「宿主 HTTP 面 = 引擎端点 + 网关」这条审计线上唯一的业务清单，条目增减
-    /// 必须交代为什么（票 01 的初始集合 = 领域审计判为业务滞留的四域全部端点）。
-    #[test]
-    fn route_table_golden() {
-        let rows: Vec<(&str, &str, &str, &[&str], &str)> = BUSINESS_ROUTES
-            .iter()
-            .map(|r| (r.path, r.plugin_id, r.endpoint, r.methods, r.domain.as_str()))
-            .collect();
-        assert_eq!(
-            rows,
-            vec![
-                (
-                    "/api/configs",
-                    SESSION_PLUGIN,
-                    "configs",
-                    &["GET"][..],
-                    "session-config"
-                ),
-                (
-                    "/api/quick-actions",
-                    SESSION_PLUGIN,
-                    "quick-actions",
-                    &["GET"][..],
-                    "quick-action"
-                ),
-                (
-                    "/api/file-tree",
-                    SESSION_PLUGIN,
-                    "file-tree",
-                    &["POST"][..],
-                    "file-browse"
-                ),
-                (
-                    "/api/file-tree-children",
-                    SESSION_PLUGIN,
-                    "file-tree-children",
-                    &["GET"][..],
-                    "file-browse"
-                ),
-                (
-                    "/api/file-content",
-                    SESSION_PLUGIN,
-                    "file-content",
-                    &["POST"][..],
-                    "file-browse"
-                ),
-                (
-                    "/api/diff-tree",
-                    SESSION_PLUGIN,
-                    "diff-tree",
-                    &["POST"][..],
-                    "file-browse"
-                ),
-                (
-                    "/api/file-diff",
-                    SESSION_PLUGIN,
-                    "file-diff",
-                    &["POST"][..],
-                    "file-browse"
-                ),
-                ("/api/git/branches", SESSION_PLUGIN, "git/branches", &["GET"][..], "git"),
-                ("/api/git/status", SESSION_PLUGIN, "git/status", &["GET"][..], "git"),
-                (
-                    "/api/git/checkout",
-                    SESSION_PLUGIN,
-                    "git/checkout",
-                    &["POST"][..],
-                    "git"
-                ),
-                (
-                    "/api/auth/pairing",
-                    SESSION_PLUGIN,
-                    "auth/pairing",
-                    &["POST"][..],
-                    "auth"
-                ),
-                ("/api/auth/verify", SESSION_PLUGIN, "auth/verify", &["POST"][..], "auth"),
-                (
-                    "/api/auth/qr-connect",
-                    SESSION_PLUGIN,
-                    "auth/qr-connect",
-                    &["POST"][..],
-                    "auth"
-                ),
-                ("/api/auth/reauth", SESSION_PLUGIN, "auth/reauth", &["POST"][..], "auth"),
-                (
-                    "/api/auth/biometric-challenge",
-                    SESSION_PLUGIN,
-                    "auth/biometric-challenge",
-                    &["POST"][..],
-                    "auth"
-                ),
-                (
-                    "/api/auth/biometric-verify",
-                    SESSION_PLUGIN,
-                    "auth/biometric-verify",
-                    &["POST"][..],
-                    "auth"
-                ),
-                (
-                    "/api/auth/biometric-bind",
-                    SESSION_PLUGIN,
-                    "auth/biometric-bind",
-                    &["POST"][..],
-                    "auth"
-                ),
-            ]
-        );
-    }
-
-    /// 表自身一致性：路径唯一、方法非空、端点段与路径的对应关系成立
-    #[test]
-    fn route_table_is_self_consistent() {
-        let mut seen = std::collections::HashSet::new();
-        for r in BUSINESS_ROUTES {
-            assert!(seen.insert(r.path), "业务路径重复登记: {}", r.path);
-            assert!(!r.methods.is_empty(), "{} 必须声明方法", r.path);
-            assert!(
-                r.path.starts_with("/api/"),
-                "业务端点必须挂在 /api 下（JWT 中间件作用域）: {}",
-                r.path
-            );
-            assert_eq!(
-                r.endpoint,
-                r.path.strip_prefix("/api/").expect("/api/ 前缀"),
-                "端点段 = 路径去 /api/ 前缀是约定，网关条目不得自造端点名, got: {}",
-                r.endpoint
-            );
-            assert_eq!(r.declared_path(), format!("/api/plugin/{}/{}", r.plugin_id, r.endpoint));
-        }
-    }
-
-    /// 引擎端点绝不被收编（spec 决策 2：`/api/sessions` 保持宿主壳形态）
-    #[test]
-    fn engine_endpoints_are_never_aliased() {
-        // /api/auth/* 自票 07 起随用户裁定进业务别名表（认证编排归插件）：
-        // 免验签的「公开路由」语义由 `RouteAuth::Public` 显式声明，不再是引擎面
-        for prefix in ["/api/sessions", "/api/health", "/api/plugin/", "/static/"] {
-            for r in BUSINESS_ROUTES {
-                assert!(!r.path.starts_with(prefix), "引擎端点不得进业务别名表, got: {}", r.path);
-            }
-        }
-    }
-
-    /// 别名的归属插件必须是「无业务内核」路线上的业务插件，且与业务域一一对应
-    ///
-    /// 别名的意义是把业务交给插件；`plugin_id` 写成宿主自身或写错命名空间，就是
-    /// 把业务路由指向不存在/不该存在的实现（用户故事 12：一条别名 = 一个归属声明）。
-    #[test]
-    fn every_alias_declares_a_business_plugin_owner() {
-        const BUSINESS_PLUGINS: &[&str] = &["com.bedcode.terminal-session", "com.bedcode.file-transfer"];
-        for r in BUSINESS_ROUTES {
-            assert!(
-                BUSINESS_PLUGINS.contains(&r.plugin_id),
-                "{} 的归属插件必须是业务插件, got: {}",
-                r.path,
-                r.plugin_id
-            );
-            let domain_plugin = match r.domain {
-                BusinessDomain::SessionConfig
-                | BusinessDomain::QuickAction
-                | BusinessDomain::FileBrowse
-                | BusinessDomain::Git
-                | BusinessDomain::Auth => SESSION_PLUGIN,
-            };
-            assert_eq!(
-                r.plugin_id,
-                domain_plugin,
-                "{} 的业务域 {} 与归属插件不符",
-                r.path,
-                r.domain.as_str()
-            );
-        }
-    }
-
-    // ==================== 别名锁自校准前置 ====================
-
-    /// 两条别名锁共同的扫描目标：宿主路由装配源码
-    ///
-    /// 单一取源点：`server/` 三层化把路由搬走后（票 04/05/06/07），只需重指下面的
-    /// `include_str!` 与 `APP_RS_LABEL` **两行**（漏改 LABEL 只影响失败消息点名，
-    /// 2026-09-23 票 04 变异验证实测过这个漂移），前置会当场验证新目标仍是「活的宿主路由面」。
-    /// 票 07 已把路由装配一拆为三：`/api` 面与两个公开端点在 `http/routes.rs`（与本文件
-    /// **同目录**，故用 `routes.rs`），三条 WS 握手在 `websocket/routes.rs`——别名表只管
-    /// `/api` 面，扫描目标收窄为 HTTP 侧，基线随之改钉 11（判据见下）。
-    const APP_RS: &str = include_str!("routes.rs");
-
-    /// 失败消息里显示的目标名（`include_str!` 的相对路径无法自报，故单独记一份）
-    const APP_RS_LABEL: &str = "server/http/routes.rs";
-
-    /// 扫描目标 `configure_routes` 函数体的路由标识符基线数
-    ///
-    /// 现值 **11** = 10 条路径字面量 + `API_HEALTH_PATH` 常量标识符（`WS_EVENT_PATH` 已随
-    /// 三条 WS 握手路由归 `websocket/routes.rs`，本锁只扫 HTTP 侧，不再计入）。
-    /// **常量必须纳入计数**：只匹配 `"/…"` 字面量的话，`/api/health` 整行删掉照样绿。
-    ///
-    /// 历史沿革：拆前 14 = 12 条路径字面量 + `API_HEALTH_PATH` + `WS_EVENT_PATH`；
-    /// 票 07 拆分后 HTTP 侧实测 11（判据清单：`/api`、`/plugin/{plugin_id}/{path:.*}`、
-    /// `/sessions`、`/sessions/start`、`/sessions/{id}/{stop,resize,input,history,remove}`、
-    /// `/static/terminal-bg`、`API_HEALTH_PATH`）。这是实测钉出来的数，禁止当魔法数放宽成「>= 1」。
-    const HOST_ROUTE_IDENTIFIERS_BASELINE: usize = 11;
-
-    /// 取 `configure_routes` 函数体：签名行之后到首个顶格 `}`
-    ///
-    /// 计数必须限定在函数体：整文件会把 `use` 行与文档注释里的路径字面量算进来，
-    /// 基线被撑虚高之后，「指错文件即红」的判别力就没了。
-    fn configure_routes_body(src: &str) -> Option<&str> {
-        let head = src.find("fn configure_routes")?;
-        let open = src[head..].find('{').map(|i| head + i + 1)?;
-        let close = src[open..].find("\n}").map(|i| open + i)?;
-        Some(&src[open..close])
-    }
-
-    /// 数函数体里的路由标识符，与 spec §7 的门禁命令
-    /// `grep -oE '"/[^"]*"|API_HEALTH_PATH|WS_EVENT_PATH'` 同形
-    fn route_identifier_count(body: &str) -> usize {
-        let mut count = body.matches("API_HEALTH_PATH").count() + body.matches("WS_EVENT_PATH").count();
-        let mut rest = body;
-        while let Some(open) = rest.find("\"/") {
-            let after = &rest[open + 1..];
-            let Some(close) = after.find('"') else { break };
-            count += 1;
-            rest = &after[close + 1..];
-        }
-        count
-    }
-
-    /// 取扫描目标里的 `configure_routes` 函数体；取不到即目标已不含宿主路由装配
-    fn configure_routes_body_or_panic<'a>(label: &str, src: &'a str) -> &'a str {
-        configure_routes_body(src)
-            .unwrap_or_else(|| panic!("锁已空转：扫描目标 {label} 里没有 configure_routes 函数体"))
-    }
-
-    /// 前置（第一条锁）：扫描目标必须命中基线数量的路由标识符
-    ///
-    /// 别名表现有 17 条**全部** `PluginRequired`，而那条锁对每条断言的是
-    /// `!APP_RS.contains(path)`——只做 17 次否定断言。`include_str!` 指到一个「存在但没有
-    /// 路由字面量」的文件时，17 条全部恒真、全绿；路径**不存在**编译器会抓，指错文件只有
-    /// 这条前置能抓。
-    fn assert_host_route_surface_is_live(label: &str, src: &str) {
-        let hit = route_identifier_count(configure_routes_body_or_panic(label, src));
-        assert!(
-            hit >= HOST_ROUTE_IDENTIFIERS_BASELINE,
-            "锁已空转：扫描目标 {label} 的 configure_routes 只命中 {hit} 条路由标识符，\
-             低于基线 {HOST_ROUTE_IDENTIFIERS_BASELINE}（10 条路径字面量 + API_HEALTH_PATH）",
-        );
-    }
-
-    /// 前置（第二条锁）：扫描目标非空，且确实执行「挂路由」这个动作
-    ///
-    /// 那条锁扫的 `git_controller::` / `auth_controller::` 两个 handler 名已随业务下沉退役，
-    /// 零命中是**合法现状**、不能拿它当判据；能判的只有「被扫文件仍是宿主路由装配处」。
-    fn assert_host_route_surface_not_empty(label: &str, src: &str) {
-        let body = configure_routes_body_or_panic(label, src);
-        assert!(
-            !body.trim().is_empty() && body.contains(".route("),
-            "锁已空转：扫描目标 {label} 的 configure_routes 函数体内没有任何 .route( 绑定",
-        );
-    }
-
-    /// 计数式自身：路径字面量与两个路由常量都算一项，非路径文本不算
-    ///
-    /// 与 spec §7 的门禁命令同形（含其「注释里的引号路径也算一项」的口径——只会虚高不会漏，
-    /// 放宽方向与门禁一致）。这条锁的全部判别力来自「常量纳入计数」，
-    /// 故把该行为永久钉成用例，而不只靠一次变异验证。
-    #[test]
-    fn calibration_counts_path_literals_and_route_constants() {
-        let live = "\
-    cfg.route(\"/sessions\", web::get().to(h));
-    cfg.route(\"/static/terminal-bg\", web::get().to(h));
-    cfg.route(WS_EVENT_PATH, web::get().to(event_ws));
-    cfg.route(API_HEALTH_PATH, web::get().to(health_check));
-";
-        assert_eq!(route_identifier_count(live), 4);
-        assert_eq!(route_identifier_count("use crate::server::http::controllers;"), 0);
-    }
-
-    /// 目标取函数体而不是整文件：`use` 行与函数体外的常量不得混进计数
-    #[test]
-    fn calibration_scans_only_the_configure_routes_body() {
-        let src = "\
-use crate::server::http::routes::API_HEALTH_PATH;
-/// 文档注释里的 \"/api/doc-comment\" 不是路由
-pub fn configure_routes(cfg: &mut web::ServiceConfig) {
-    cfg.route(\"/sessions\", web::get().to(h));
-}
-const ELSEWHERE: &str = \"/api/elsewhere\";
-";
-        let body = configure_routes_body(src).expect("函数体");
-        assert_eq!(
-            route_identifier_count(body),
-            1,
-            "整文件计数会把 use 行的两个常量、文档注释与函数体后的字面量都算进来"
-        );
-        assert!(
-            body.contains("/sessions")
-                && !body.contains("API_HEALTH_PATH")
-                && !body.contains("doc-comment")
-                && !body.contains("elsewhere"),
-            "计数范围越界，实际取到: {body}"
-        );
-        assert!(configure_routes_body("pub fn nothing() {}").is_none());
-    }
-
-    /// 前置必须咬得动：死目标（有 `configure_routes` 但函数体是空的）上跑第一条锁的前置 → 红
-    #[test]
-    #[should_panic(expected = "锁已空转")]
-    fn calibration_panics_when_route_surface_is_dead() {
-        assert_host_route_surface_is_live(
-            "server/_dead_target.rs",
-            "pub fn configure_routes(cfg: &mut web::ServiceConfig) {}\n",
-        );
-    }
-
-    /// 前置必须咬得动：死目标上跑第二条锁的前置 → 红
-    #[test]
-    #[should_panic(expected = "锁已空转")]
-    fn calibration_panics_when_route_surface_mounts_nothing() {
-        assert_host_route_surface_not_empty(
-            "server/_dead_target.rs",
-            "pub fn configure_routes(cfg: &mut web::ServiceConfig) {\n    // 空\n}\n",
-        );
-    }
-
-    /// 别名表与宿主路由面同源：每条业务路径都必须仍注册在 `app.rs` 的 `/api` scope 里
-    ///
-    /// 网关是「加一层」而不是「换路由」——降级分支依赖旧路由原样存在。这条静态扫描把依赖
-    /// 关系钉死：删宿主路由而没同时删别名表条目，立刻红。
-    ///
-    /// 双轨期（HostImplementation）条目必须有宿主路由——降级分支才有落点；
-    /// contract（PluginRequired）条目必须**没有**宿主路由——真源已在插件，
-    /// 宿主再挂同路径 handler 就是死业务面（票 02/03/04 contract 的反向守护）。
-    #[test]
-    fn every_alias_still_has_a_host_route() {
-        assert_host_route_surface_is_live(APP_RS_LABEL, APP_RS);
-        for r in BUSINESS_ROUTES {
-            let literal = format!("\"{}\"", r.path.strip_prefix("/api").expect("/api/ 前缀"));
-            match r.fallback {
-                FallbackPolicy::HostImplementation => {
-                    assert!(
-                        APP_RS.contains(&literal),
-                        "{} 的宿主路由（{}）必须存在，降级分支才有落点",
-                        r.path,
-                        literal
-                    );
-                }
-                FallbackPolicy::PluginRequired => {
-                    assert!(
-                        !APP_RS.contains(&literal),
-                        "{} 已 contract（PluginRequired），宿主路由必须注销（真源在插件，宿主不该再挂同路径 handler）",
-                        r.path
-                    );
-                }
-            }
-        }
-    }
-
-    /// 业务 controller 的 handler 只能挂在网关已收编的路径上（防「宿主长回业务路由」）
-    ///
-    /// 扫描口径选「handler 绑定处」而不是「路由字面量全集」：别名表的职责就是把业务出口
-    /// 收在一处，只要业务 handler 没被挂上未登记的 path，宿主业务面就不会重新长出来。
-    /// 新增业务端点的正路只有两条：下沉插件 + 上表，或论证它确属引擎协议面（不碰业务 handler）。
-    #[test]
-    fn business_handlers_are_only_mounted_on_aliased_paths() {
-        assert_host_route_surface_not_empty(APP_RS_LABEL, APP_RS);
-        const BUSINESS_HANDLERS: &[&str] = &["git_controller::", "auth_controller::"];
-        let mut offenders = Vec::new();
-        for marker in BUSINESS_HANDLERS {
-            for (idx, _) in find_all(APP_RS, marker) {
-                // handler 名前最近的字符串字面量即其挂载路径（多行 .route( 排版同样成立）
-                let Some(path) = nearest_string_literal(&APP_RS[..idx]) else {
-                    offenders.push(format!("{marker}@{idx} 找不到路径字面量"));
-                    continue;
-                };
-                let full = if path.starts_with("/api/") {
-                    path
-                } else {
-                    format!("/api{path}")
-                };
-                if !BUSINESS_ROUTES.iter().any(|r| r.path == full) {
-                    offenders.push(full);
-                }
-            }
-        }
-        assert!(
-            offenders.is_empty(),
-            "业务 handler 挂到了别名表之外的路径（应先下沉插件再上表）: {offenders:?}"
-        );
-    }
-
-    fn find_all(haystack: &str, needle: &str) -> Vec<(usize, String)> {
-        haystack
-            .match_indices(needle)
-            .map(|(i, s)| (i, s.to_string()))
-            .collect()
-    }
-
-    /// 取 `src` 末尾往前最近的一个字符串字面量内容（跳过注释行，避免文档里的示例路径误命中）
-    fn nearest_string_literal(src: &str) -> Option<String> {
-        let close = src.rfind('"')?;
-        let open = src[..close].rfind('"')?;
-        let literal = &src[open + 1..close];
-        // 字面量必须与 marker 同行/同段（跨行的注释文字不算路径）
-        if literal.contains('\n') || !literal.starts_with('/') {
-            return None;
-        }
-        Some(literal.to_string())
+    fn purge(owner: &str) {
+        registry::purge_for_plugin(owner);
     }
 
     // ==================== 判定 ====================
 
-    /// 路径全等匹配：前缀相似、多一段、方法不符都不得命中
+    /// 转发条件：已验签 × 属主激活 × 档位齐备
     #[test]
-    fn route_matching_is_exact_on_path_and_method() {
-        assert!(route_for_request("/api/configs", "GET").is_some());
-        assert!(route_for_request("/api/configsx", "GET").is_none());
-        assert!(route_for_request("/api/configs/", "GET").is_none());
-        assert!(route_for_request("/api/configs/1", "GET").is_none());
-        assert!(route_for_request("/api/git/branches", "POST").is_none());
-        assert!(route_for_request("/api/git/checkout", "GET").is_none());
-        assert!(route_for_request("/api/file-tree", "GET").is_none());
-        assert!(route_for_request("", "GET").is_none());
-    }
-
-    /// 双轨判定：只有「认证前置齐备 + 在位 + 已声明」才切插件
-    ///
-    /// 判定语义与具体条目的 contract 状态无关，故用**合成的** HostImplementation
-    /// 条目验证降级分支（表内条目已全部随票 02/03/04 contract 翻 PluginRequired，
-    /// 由 [`retired_host_implementation_reports_plugin_required`] 覆盖该形态）。
-    #[test]
-    fn decide_forwards_only_when_verified_activated_and_declared() {
-        const DUAL_TRACK: BusinessRoute = BusinessRoute {
-            path: "/api/git/branches",
-            plugin_id: SESSION_PLUGIN,
-            endpoint: "git/branches",
-            methods: &["GET"],
-            domain: BusinessDomain::Git,
-            fallback: FallbackPolicy::HostImplementation,
-            auth: RouteAuth::Authenticated,
-        };
-        let r = &DUAL_TRACK;
-        let declared = vec![r.declared_path()];
-
+    fn decide_forwards_only_when_verified_activated_and_tier_ok() {
+        assert_eq!(decide(EndpointAuth::Jwt, true, true), GatewayDecision::Forward);
         assert_eq!(
-            decide(r, true, true, &declared, EndpointAuth::Jwt),
-            GatewayDecision::Forward(r)
+            decide(EndpointAuth::None, false, true),
+            GatewayDecision::Forward,
+            "none 档免验签转发"
         );
-        // 未验签 → 绝不转发（即使命令齐备）：验签执行点在宿主，网关不替插件放行陌生请求
+        // 未验签 + jwt 档 → 要认证（报「要认证」而非「插件未激活」）
+        assert_eq!(decide(EndpointAuth::Jwt, false, true), GatewayDecision::AuthRequired);
+        // 属主未激活（注册在册与停用竞态）→ 明确报「插件未激活」
+        assert_eq!(decide(EndpointAuth::Jwt, true, false), GatewayDecision::PluginRequired);
         assert_eq!(
-            decide(r, false, true, &declared, EndpointAuth::Jwt),
-            GatewayDecision::AuthRequired(r),
-            "未验签要报「要认证」，不得静默回落宿主实现"
-        );
-        // 未激活 → 降级宿主
-        assert_eq!(
-            decide(r, true, false, &declared, EndpointAuth::Jwt),
-            GatewayDecision::HostFallback
-        );
-        // 激活但未声明该业务端点 → 仍走宿主。票 01 落地时 session 插件正落在这一格
-        // （已激活、只声明了任务域端点），所以业务端点不会提前切过去。
-        assert_eq!(
-            decide(r, true, true, &[], EndpointAuth::Jwt),
-            GatewayDecision::HostFallback
-        );
-        assert_eq!(
-            decide(
-                r,
-                true,
-                true,
-                &["/api/plugin/com.bedcode.terminal-session/task-status".to_string()],
-                EndpointAuth::Jwt
-            ),
-            GatewayDecision::HostFallback
-        );
-        // 声明面禁止前缀匹配：更深的子路径不得借父声明命中
-        assert_eq!(
-            decide(
-                r,
-                true,
-                true,
-                &[format!("{}/extra", r.declared_path())],
-                EndpointAuth::Jwt
-            ),
-            GatewayDecision::HostFallback
-        );
-    }
-
-    /// 票 08：宿主条目档位与插件声明档位**取较严者**，两向都不许单方面开门
-    #[test]
-    fn decide_takes_the_stricter_of_route_and_endpoint_auth() {
-        // Authenticated 条目 + 插件声明 none：仍要求验签（插件不能放开宿主要求）
-        const GUARDED: BusinessRoute = BusinessRoute {
-            path: "/api/configs",
-            plugin_id: SESSION_PLUGIN,
-            endpoint: "configs",
-            methods: &["GET"],
-            domain: BusinessDomain::SessionConfig,
-            fallback: FallbackPolicy::PluginRequired,
-            auth: RouteAuth::Authenticated,
-        };
-        // Public 条目（/api/auth/* 在 JWT 之前）+ 插件声明 jwt：仍要求验签
-        const PUBLIC: BusinessRoute = BusinessRoute {
-            path: "/api/auth/pairing",
-            plugin_id: SESSION_PLUGIN,
-            endpoint: "auth/pairing",
-            methods: &["POST"],
-            domain: BusinessDomain::Auth,
-            fallback: FallbackPolicy::PluginRequired,
-            auth: RouteAuth::Public,
-        };
-        let guarded_declared = vec![GUARDED.declared_path()];
-        let public_declared = vec![PUBLIC.declared_path()];
-
-        assert_eq!(
-            decide(&GUARDED, false, true, &guarded_declared, EndpointAuth::None),
-            GatewayDecision::AuthRequired(&GUARDED),
-            "插件声明 none 不得放开宿主 Authenticated 条目的验签前置"
-        );
-        assert_eq!(
-            decide(&PUBLIC, false, true, &public_declared, EndpointAuth::Jwt),
-            GatewayDecision::AuthRequired(&PUBLIC),
-            "公开别名遇到插件的 jwt 声明必须改判为要验签"
-        );
-        // 两档都为 none 时才免验签转发（配对入口的真实形态）
-        assert_eq!(
-            decide(&PUBLIC, false, true, &public_declared, EndpointAuth::None),
-            GatewayDecision::Forward(&PUBLIC)
-        );
-        // 未声明条目优先按 fallback 处置，档位判定不参与（否则未声明变成 401 而非「未激活」）
-        assert_eq!(
-            decide(&PUBLIC, false, true, &[], EndpointAuth::Jwt),
-            GatewayDecision::PluginRequired(&PUBLIC)
-        );
-    }
-
-    /// contract 阶段（宿主实现退役）后插件不可用必须明确报错，不给假数据
-    #[test]
-    fn retired_host_implementation_reports_plugin_required() {
-        const RETIRED: BusinessRoute = BusinessRoute {
-            path: "/api/configs",
-            plugin_id: SESSION_PLUGIN,
-            endpoint: "configs",
-            methods: &["GET"],
-            domain: BusinessDomain::SessionConfig,
-            fallback: FallbackPolicy::PluginRequired,
-            auth: RouteAuth::Authenticated,
-        };
-        assert_eq!(
-            decide(&RETIRED, true, false, &[], EndpointAuth::Jwt),
-            GatewayDecision::PluginRequired(&RETIRED)
-        );
-        assert_eq!(
-            decide(&RETIRED, true, true, &[], EndpointAuth::Jwt),
-            GatewayDecision::PluginRequired(&RETIRED),
-            "在位但未声明同样算不可用：真源已不在宿主"
-        );
-        // 未验签：条目已声明也要认证，报 401 而不是「插件未激活」（方向不能指错）。
-        // 生产链路里这一格由 JWT 中间件先 401（见 unverified_requests_never_reach_gateway），
-        // 本条锁的是中间件顺序错乱时网关自己的兜底。
-        assert_eq!(
-            decide(&RETIRED, false, true, &[RETIRED.declared_path()], EndpointAuth::Jwt),
-            GatewayDecision::AuthRequired(&RETIRED)
-        );
-        // 在位且已声明后照旧切换：翻策略只改「不可用时怎么答」，不改切换条件
-        let declared = vec![RETIRED.declared_path()];
-        assert_eq!(
-            decide(&RETIRED, true, true, &declared, EndpointAuth::Jwt),
-            GatewayDecision::Forward(&RETIRED)
-        );
-    }
-
-    /// 「插件未激活」响应形状：HTTP 200 + `{code:1007,message}`，与既有未激活响应同口径
-    #[actix_web::test]
-    async fn plugin_required_response_keeps_existing_error_shape() {
-        let r = route("/api/configs", "GET");
-        let resp = plugin_unavailable_response(r);
-        assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
-        let ct = resp
-            .headers()
-            .get(actix_web::http::header::CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or_default()
-            .to_string();
-        assert!(
-            ct.starts_with("application/json"),
-            "错误响应必须是 JSON 信封, got: {ct}"
-        );
-        let body = actix_web::body::to_bytes(resp.into_body()).await.unwrap();
-        let json: Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(
-            json,
-            serde_json::json!({
-                "code": CODE_PLUGIN_AUTH_FAILED,
-                "message": "Plugin com.bedcode.terminal-session is not activated",
-            })
-        );
-    }
-
-    /// 票 08：「要验签而未验签」的响应形状是 401 + 1007 + 点名对外路径，
-    /// 与「插件未激活」（200 + 1007）分得开——方向不能指错
-    #[actix_web::test]
-    async fn auth_required_response_says_authentication_not_activation() {
-        let r = route("/api/configs", "GET");
-        let resp = unauthorized_response(r);
-        assert_eq!(resp.status(), actix_web::http::StatusCode::UNAUTHORIZED);
-        let body = actix_web::body::to_bytes(resp.into_body()).await.unwrap();
-        let json: Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["code"], CODE_PLUGIN_AUTH_FAILED as u64);
-        assert_eq!(
-            json["message"],
-            serde_json::json!("Authentication required for /api/configs"),
-            "文案按对外别名路径说，不暴露插件端点段"
-        );
-        assert!(
-            !json["message"].as_str().unwrap_or_default().contains("not activated"),
-            "不得把未登录报成插件未激活"
+            decide(EndpointAuth::None, false, false),
+            GatewayDecision::PluginRequired
         );
     }
 
     // ==================== 转发入参 ====================
 
-    /// 转发入参形状：与 `/api/plugin/*` 共用同一构造器，故两条路径不可能各答一版
+    /// 转发入参形状：与 `/api/plugin/*` 共用同一构造器，故两条路径不可能各答一版。
     ///
-    /// `device` 只在已验签时出现；未验签的调用方不得凭空多出设备上下文，但仍必须带
-    /// `caller`（票 08）——插件据此区分环回 hook 与局域网匿名。
+    /// `params`（ABI v29 模板捕获）恒存在：精确命中时为 `{}`，模板命中时携带捕获值；
+    /// `device` 只在已验签时出现。
     #[test]
-    fn forwarded_request_shape_locks_device_and_headers() {
+    fn forwarded_request_shape_locks_device_headers_and_params() {
         let mut headers = serde_json::Map::new();
         headers.insert("content-type".to_string(), Value::String("application/json".into()));
         let args = build_plugin_http_args(&PluginHttpRequest {
@@ -1178,6 +302,7 @@ const ELSEWHERE: &str = \"/api/elsewhere\";
                 "session_id".to_string(),
                 Value::String("s-1".to_string()),
             )])),
+            params: serde_json::Map::new(),
             caller: HttpCaller::Device,
             device: Some(serde_json::json!({ "deviceId": "device-1" })),
         });
@@ -1189,16 +314,32 @@ const ELSEWHERE: &str = \"/api/elsewhere\";
                 "headers": { "content-type": "application/json" },
                 "body": null,
                 "query": { "session_id": "s-1" },
+                "params": {},
                 "caller": "device",
                 "device": { "deviceId": "device-1" },
             })
         );
+
+        // 模板捕获参数：`{id}` 捕获值随 `params` 注入插件
+        let with_params = build_plugin_http_args(&PluginHttpRequest {
+            endpoint_path: "sessions/stop",
+            method: "POST",
+            headers: serde_json::Map::new(),
+            body: Value::Null,
+            query: Value::Object(serde_json::Map::new()),
+            params: serde_json::Map::from_iter([("id".to_string(), Value::String("s-1".to_string()))]),
+            caller: HttpCaller::Localhost,
+            device: None,
+        });
+        assert_eq!(with_params["params"], serde_json::json!({ "id": "s-1" }));
+
         let no_device = build_plugin_http_args(&PluginHttpRequest {
             endpoint_path: "configs",
             method: "GET",
             headers: serde_json::Map::new(),
             body: Value::Null,
             query: Value::Object(serde_json::Map::new()),
+            params: serde_json::Map::new(),
             caller: HttpCaller::Localhost,
             device: None,
         });
@@ -1232,9 +373,6 @@ const ELSEWHERE: &str = \"/api/elsewhere\";
     }
 
     /// 请求体提取：无载荷 → Null；合法 JSON → 原样；畸形 JSON → 显式失败
-    ///
-    /// 边界必须分清：把畸形 body 当空 body 转给插件，等于把「客户端发了错东西」
-    /// 伪装成「客户端什么都没发」。
     #[actix_web::test]
     async fn body_extraction_distinguishes_empty_from_malformed() {
         let (http_req, mut payload) = actix_web::test::TestRequest::get()
@@ -1269,11 +407,7 @@ const ELSEWHERE: &str = \"/api/elsewhere\";
     /// 组装「JWT 中间件（外）→ 网关中间件（内）→ 哨兵宿主 handler」的最小 `/api` scope
     ///
     /// 两个中间件都取生产实现（`jwt_gateway` / `business_gateway`），所以这里验的是真实
-    /// 链路顺序，不是测试自己搭的近似物。哨兵 handler 复刻 `/api/configs` 今天的宿主回包
-    /// 形状，用来断言降级分支确实原样落到宿主。
-    ///
-    /// `Scope::wrap_fn` 是**后注册者在外**（见 [`scope_wrap_registration_puts_jwt_outermost`]），
-    /// 所以网关在前、验签在后——与 `app.rs` 的挂载顺序保持一致。
+    /// 链路顺序，不是测试自己搭的近似物。哨兵 handler 复刻宿主自持端点的回包形状。
     fn test_scope() -> impl actix_web::dev::HttpServiceFactory + 'static {
         use actix_web::middleware::from_fn;
         web::scope("/api")
@@ -1284,9 +418,6 @@ const ELSEWHERE: &str = \"/api/elsewhere\";
     }
 
     /// `Scope::wrap` 的注册顺序语义（app.rs 挂载顺序的依据，第三方 API 的承重假设）
-    ///
-    /// 生产接线依赖「最后注册 = 最外层 = 先执行」。这条不是给自己补覆盖率，而是把 actix
-    /// 的这条语义钉住：哪天升级把它翻过来，app.rs 的「先验签后网关」会静默失效，本用例先红。
     #[actix_web::test]
     async fn scope_wrap_registration_puts_jwt_outermost() {
         use actix_web::body::MessageBody;
@@ -1337,8 +468,6 @@ const ELSEWHERE: &str = \"/api/elsewhere\";
     }
 
     /// 未验签请求绝不进网关转发：`/api/configs` 无 token → 401（今天的形状）
-    ///
-    /// 这条同时锁中间件顺序：若网关挂在 JWT 之前，本用例拿到的会是宿主哨兵响应而不是 401。
     #[actix_web::test]
     async fn unverified_requests_never_reach_gateway() {
         let app = actix_web::test::init_service(actix_web::App::new().service(test_scope())).await;
@@ -1352,34 +481,13 @@ const ELSEWHERE: &str = \"/api/elsewhere\";
         assert_eq!(body["code"], CODE_PLUGIN_AUTH_FAILED as u64);
     }
 
-    /// 降级分支：验签通过 + 无 AppContext（插件面不可判定）→ 宿主旧实现原样应答
-    #[actix_web::test]
-    async fn verified_request_falls_through_to_host_when_plugin_unavailable() {
-        let app = actix_web::test::init_service(actix_web::App::new().service(test_scope())).await;
-        let resp = actix_web::test::call_service(
-            &app,
-            actix_web::test::TestRequest::get()
-                .uri("/api/configs")
-                .insert_header(("Authorization", format!("Bearer {}", bearer_token())))
-                .to_request(),
-        )
-        .await;
-        assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
-        let body: Value = actix_web::test::read_body_json(resp).await;
-        assert_eq!(
-            body,
-            serde_json::json!({ "code": 0, "message": "ok", "data": { "configs": [] } }),
-            "降级分支的响应必须与今天逐字段一致"
-        );
-    }
-
-    /// 方法不匹配 / 未登记路径：网关不介入，状态码与「同一 scope 不挂网关」完全一致
+    /// 未登记路径 / 方法不符：网关不介入，状态码与「同一 scope 不挂网关」完全一致
     ///
     /// 用对照组而不是写死 405：`Scope` 挂了中间件之后，actix 对「路径在、方法不在」的
     /// 应答并不是教科书上的 405（今天宿主面就是这一格行为）。对照组把标准钉在「与不挂
     /// 网关时相同」，比钉一个记错的数字更诚实。
     #[actix_web::test]
-    async fn engine_and_wrong_method_requests_are_not_touched() {
+    async fn unregistered_and_wrong_method_requests_are_not_touched() {
         use std::str::FromStr;
 
         let gateway_only = actix_web::test::init_service(
@@ -1422,15 +530,93 @@ const ELSEWHERE: &str = \"/api/elsewhere\";
         }
     }
 
-    /// 降级分支不消费 payload：宿主 handler 仍能读到完整 JSON body
-    ///
-    /// 网关若在判定阶段读body，宿主 handler 就会拿到空载荷并 400——那是最隐蔽的
-    /// 「实现搬走、行为变味」形态，故单列一条。
+    /// 已登记别名 + 无 AppContext（无头/测试：插件面不可判定）→ 原样放行（哨兵应答）
+    #[actix_web::test]
+    async fn registered_alias_falls_through_when_plugin_surface_unavailable() {
+        let owner = "test-gw-fallthrough";
+        register_test_alias(owner, "configs", "/api/configs", &["GET"], EndpointAuth::Jwt);
+        let app = actix_web::test::init_service(actix_web::App::new().service(test_scope())).await;
+        let resp = actix_web::test::call_service(
+            &app,
+            actix_web::test::TestRequest::get()
+                .uri("/api/configs")
+                .insert_header(("Authorization", format!("Bearer {}", bearer_token())))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
+        let body: Value = actix_web::test::read_body_json(resp).await;
+        assert_eq!(
+            body,
+            serde_json::json!({ "code": 0, "message": "ok", "data": { "configs": [] } }),
+            "无 AppContext 时不得把请求交给不存在的插件（原样放行）"
+        );
+        purge(owner);
+    }
+
+    /// 「插件未激活」响应形状：HTTP 200 + `{code:1007,message}`，与既有未激活响应同口径
+    #[actix_web::test]
+    async fn plugin_required_response_keeps_existing_error_shape() {
+        let entry = registry::register(
+            "test-gw-shape",
+            "configs",
+            Some("/api/configs-shape"),
+            &["GET".to_string()],
+            EndpointAuth::Jwt,
+        )
+        .expect("register");
+        let resp = plugin_unavailable_response(&entry);
+        assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
+        let ct = resp
+            .headers()
+            .get(actix_web::http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        assert!(
+            ct.starts_with("application/json"),
+            "错误响应必须是 JSON 信封, got: {ct}"
+        );
+        let body = actix_web::body::to_bytes(resp.into_body()).await.unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "code": CODE_PLUGIN_AUTH_FAILED,
+                "message": "Plugin test-gw-shape is not activated",
+            })
+        );
+        purge("test-gw-shape");
+    }
+
+    /// 票 08：「要验签而未验签」的响应形状是 401 + 1007 + 点名对外路径
+    #[actix_web::test]
+    async fn auth_required_response_says_authentication_not_activation() {
+        let resp = unauthorized_response("/api/configs");
+        assert_eq!(resp.status(), actix_web::http::StatusCode::UNAUTHORIZED);
+        let body = actix_web::body::to_bytes(resp.into_body()).await.unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["code"], CODE_PLUGIN_AUTH_FAILED as u64);
+        assert_eq!(
+            json["message"],
+            serde_json::json!("Authentication required for /api/configs"),
+            "文案按对外别名路径说，不暴露插件端点段"
+        );
+        assert!(
+            !json["message"].as_str().unwrap_or_default().contains("not activated"),
+            "不得把未登录报成插件未激活"
+        );
+    }
+
+    /// 降级分支不消费 payload：网关若在判定阶段读 body，宿主 handler 就会拿到空载荷并
+    /// 400——那是最隐蔽的「实现搬走、行为变味」形态，故单列一条。
     #[actix_web::test]
     async fn fallback_branch_leaves_the_payload_intact() {
         async fn echo(body: web::Json<Value>) -> HttpResponse {
             HttpResponse::Ok().json(serde_json::json!({ "echo": body.0 }))
         }
+        let owner = "test-gw-payload";
+        register_test_alias(owner, "file-tree", "/api/file-tree", &["POST"], EndpointAuth::Jwt);
         let app = actix_web::test::init_service(
             actix_web::App::new().service(
                 web::scope("/api")
@@ -1452,23 +638,26 @@ const ELSEWHERE: &str = \"/api/elsewhere\";
         let body: Value = actix_web::test::read_body_json(resp).await;
         assert_eq!(body["echo"]["session_id"], "s-9");
         assert_eq!(body["echo"]["depth"], 3);
+        purge(owner);
     }
 
-    // ==================== 形状契约锁（网关切换前后逐字节一致） ====================
+    // ==================== 形状契约锁（对外响应逐字节一致） ====================
 
-    /// 业务端点响应形状 golden：宿主侧当前输出即契约，插件面必须逐字段复刻
+    /// 业务端点响应形状 golden：宿主侧当前输出即契约，插件面必须逐字段复刻。
     ///
     /// 锁的是「JSON 形状」而不是「实现在哪」：DTO 的 serde 表示就是移动端看到的字节。
     /// 票 02/03/04 的插件端点回包必须与本用例逐字段相同（含可选字段的缺席形态）。
     #[test]
-    fn business_endpoint_shapes_are_locked_for_dual_track() {
+    fn business_endpoint_shapes_are_locked() {
         use crate::server::http::dtos::config_dto::{
             ConfigItem, ConfigListResponseData, QuickActionItem, QuickActionListResponseData,
         };
         use crate::server::http::dtos::file_dto::{
             FileContentResponseData, FileDiffLine, FileDiffResponseData, FileTreeNode, FileTreeResponseData,
         };
-        use crate::server::http::dtos::git_dto::{GitBranchesResponseData, GitCheckoutResponseData, GitStatusResponseData};
+        use crate::server::http::dtos::git_dto::{
+            GitBranchesResponseData, GitCheckoutResponseData, GitStatusResponseData,
+        };
 
         // GET /api/configs
         assert_shape(
@@ -1490,8 +679,7 @@ const ELSEWHERE: &str = \"/api/elsewhere\";
                 }] }
             }),
         );
-        // wslDistro 为 None 时是 **显式 null**（ConfigItem 没有 skip_serializing_if）——
-        // 移动端 `?? 空串` 依赖这一格，插件面若改成省略字段就是形状漂移
+        // wslDistro 为 None 时是 **显式 null**（ConfigItem 没有 skip_serializing_if）
         assert_shape(
             ApiResponse::ok_with_data(ConfigListResponseData {
                 configs: vec![ConfigItem {
@@ -1665,11 +853,65 @@ const ELSEWHERE: &str = \"/api/elsewhere\";
             serde_json::json!({ "code": 0, "message": "ok", "data": { "branch": "dev" } }),
         );
 
-        // 错误信封：这些端点今天全部是 HTTP 200 + 业务码。插件面必须同口径——
-        // 直接套 SDK 的 http_response::error(404, …) 会把 HTTP 状态码一起改掉，即形状漂移。
+        // 错误信封：这些端点今天全部是 HTTP 200 + 业务码。插件面必须同口径
         assert_shape(
             ApiResponse::<()>::error(404, "Session not found"),
             serde_json::json!({ "code": 404, "message": "Session not found" }),
+        );
+
+        // ABI v29（sessions REST 下沉）：/api/sessions* 七条由插件 sessions_http 域
+        // 复刻旧宿主控制器形状——SessionItem / StartSessionResponseData /
+        // SessionHistoryData 的 serde 表示即移动端看到的字节，插件面必须逐字段同形
+        use crate::server::http::dtos::session_dto::{
+            SessionHistoryData, SessionItem, SessionListResponseData, StartSessionResponseData,
+        };
+        assert_shape(
+            ApiResponse::ok_with_data(SessionListResponseData {
+                sessions: vec![SessionItem {
+                    id: "s-1".into(),
+                    name: "工作台".into(),
+                    status: "Running".into(),
+                    created_at: "2026-09-25T00:00:00Z".into(),
+                    started_at: Some("2026-09-25T00:00:01Z".into()),
+                    session_type: Some("pty".into()),
+                    config_id: Some("c1".into()),
+                    task_status: Some("idle".into()),
+                    task_reason: None,
+                }],
+            }),
+            serde_json::json!({
+                "code": 0, "message": "ok",
+                "data": { "sessions": [{
+                    "id": "s-1", "name": "工作台", "status": "Running",
+                    "createdAt": "2026-09-25T00:00:00Z", "startedAt": "2026-09-25T00:00:01Z",
+                    "sessionType": "pty", "configId": "c1", "taskStatus": "idle"
+                }] }
+            }),
+        );
+        assert_shape(
+            ApiResponse::ok_with_data(StartSessionResponseData {
+                session_id: "s-2".into(),
+                status: "running".into(),
+            }),
+            serde_json::json!({
+                "code": 0, "message": "ok",
+                "data": { "sessionId": "s-2", "status": "running" }
+            }),
+        );
+        assert_shape(
+            ApiResponse::ok_with_data(SessionHistoryData {
+                min_offset: 0,
+                snapshot_offset: 1024,
+                history_bytes: 2048,
+                data_base64: "aGVsbG8=".into(),
+            }),
+            serde_json::json!({
+                "code": 0, "message": "ok",
+                "data": {
+                    "minOffset": 0, "snapshotOffset": 1024, "historyBytes": 2048,
+                    "dataBase64": "aGVsbG8="
+                }
+            }),
         );
     }
 

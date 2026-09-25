@@ -80,6 +80,10 @@ const RUST_PERMISSION_RULES = [
   // 权限位与域名同源 `connection:read`——不再由 `session:read` 代答「谁能读连接清单」。
   { re: /\bconnections_list\b/, perm: 'connection:read' },
   { re: /\bhttp_fetch\b/, perm: 'network:http' },
+  // ABI v29 服务端域（动态路由注册）：register/unregister 同挂 network:http
+  // （与前端面 `http.registerEndpoint` 同权限位）
+  { re: /\bhttp_register_endpoint\b/, perm: 'network:http' },
+  { re: /\bhttp_unregister_endpoint\b/, perm: 'network:http' },
   { re: /\b(fs_read|fs_copy)\b/, perm: 'fs:read' },
   { re: /\bfs_write\b/, perm: 'fs:write' },
   // 插件私有库（host-plugin-database）与私有 KV 同挂 storage

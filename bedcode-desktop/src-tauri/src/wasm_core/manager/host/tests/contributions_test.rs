@@ -72,10 +72,11 @@ fn all_contributions() -> PluginContributes {
     }
 }
 
-/// 注册面快照（六类 contributes 的对外可见投影；tool providers 与 http endpoints 共享注册表）
+/// 注册面快照（manifest contributes 的对外可见投影；ABI v29 起 HTTP 路由面
+/// 已退役出 manager 注册表——动态注册表在 `server/http/registry`）
 async fn contributions_snapshot(
     host: &PluginHost,
-) -> (Vec<String>, Vec<String>, Vec<String>, Vec<String>, Vec<String>) {
+) -> (Vec<String>, Vec<String>, Vec<String>, Vec<String>) {
     let mut commands: Vec<String> = host
         .registry()
         .list_commands()
@@ -97,7 +98,6 @@ async fn contributions_snapshot(
         .iter()
         .map(|t| format!("{}::{:?}::{:?}", t.plugin_id, t.input_handlers, t.output_parsers))
         .collect();
-    let mut endpoints = host.registry().list_http_endpoint_paths(TEST_PLUGIN_ID).await;
     let mut files: Vec<String> = host
         .registry()
         .list_file_handlers()
@@ -108,9 +108,8 @@ async fn contributions_snapshot(
     commands.sort();
     views.sort();
     terminals.sort();
-    endpoints.sort();
     files.sort();
-    (commands, views, terminals, endpoints, files)
+    (commands, views, terminals, files)
 }
 
 /// 行为等价锁：启动期全量注册与安装/热重载走的单条注册必须产出**同一份注册面**，
@@ -142,14 +141,15 @@ async fn contributions_identical_across_entry_points() {
     let snapshot_one = contributions_snapshot(&host_one).await;
     assert_eq!(
         snapshot_all, snapshot_one,
-        "两条注册入口产出必须逐项一致（含 commands/views/terminal/tool+http/file）"
+        "两条注册入口产出必须逐项一致（含 commands/views/terminal/file）"
     );
     // 断言注册面非空——否则「两条都空」也会相等，等价锁退化为恒真
     assert_eq!(snapshot_all.0.len(), 1, "commands 必须注册");
     assert_eq!(snapshot_all.1.len(), 1, "views 必须注册");
     assert_eq!(snapshot_all.2.len(), 1, "terminal handlers 必须注册");
-    assert_eq!(snapshot_all.3.len(), 2, "http endpoints + tool provider 各一条");
-    assert_eq!(snapshot_all.4.len(), 1, "file handlers 必须注册");
+    assert_eq!(snapshot_all.3.len(), 1, "file handlers 必须注册");
+    // ABI v29：manifest httpEndpoints / toolProviders 静态声明面已退役（用户裁定 ④）——
+    // 清单里即使还带这两类字段（老 manifest 解析容差），也不会产生 manager 注册面
 
     // 幂等：重复注册（全量与单条都会重复走到）不改变注册面
     host_one.register_plugin_contributions(TEST_PLUGIN_ID).await;
@@ -164,56 +164,6 @@ async fn contributions_identical_across_entry_points() {
     host_one
         .register_plugin_contributions("com.bedcode.not-installed")
         .await;
-}
-
-/// 票 08：manifest 声明的认证档位必须**穿过注册委派链**到达路由可查的形状。
-/// registry 自己有用例锁解析与登记，这里锁的是 `register_plugin_contributions`
-/// 这一跳没把档位丢掉——丢了就等于插件声明的 `auth: "none"` 静默变成要验签
-/// （或反向：缺省档被填成 none，局域网免凭证可达）。
-#[tokio::test(flavor = "multi_thread")]
-async fn registered_http_endpoints_carry_declared_auth_tier() {
-    use bedcode_plugin_api::{EndpointAuth, HttpEndpointContribution};
-
-    let mut plugin = make_plugin(TEST_PLUGIN_ID, PluginSource::FileScan, PluginState::Loaded);
-    let mut contributes = all_contributions();
-    // 追加一条显式免凭证声明（既有 "test/hello" 是纯路径条目 = 缺省档）
-    contributes.http_endpoints.push(HttpEndpointContribution::Declared {
-        path: "test/public".into(),
-        auth: Some("none".into()),
-    });
-    plugin.manifest.contributes = contributes;
-
-    let host = setup_host().await;
-    host.plugins.write().await.insert(TEST_PLUGIN_ID.to_string(), plugin);
-    host.register_plugin_contributions(TEST_PLUGIN_ID).await;
-
-    async fn tier(host: &PluginHost, endpoint: &str) -> Option<EndpointAuth> {
-        host.registry()
-            .find_http_endpoint(&format!("/api/plugin/{}/{}", TEST_PLUGIN_ID, endpoint))
-            .await
-            .map(|e| e.auth)
-    }
-
-    assert_eq!(
-        tier(&host, "test/hello").await,
-        Some(EndpointAuth::Jwt),
-        "纯路径条目必须落最严档（票 08 裁决 1「未声明即最严」）"
-    );
-    assert_eq!(
-        tier(&host, "test/public").await,
-        Some(EndpointAuth::None),
-        "显式 auth:none 必须原样登记，供本机 hook 免凭证调用"
-    );
-    assert_eq!(
-        tier(&host, "test/tool").await,
-        Some(EndpointAuth::Jwt),
-        "toolProviders 声明面无 auth 字段 → 一律最严档"
-    );
-    assert_eq!(
-        tier(&host, "test/not-declared").await,
-        None,
-        "未声明的相对段不得出现在注册表里（路由侧即 404）"
-    );
 }
 
 /// 票 09a：manifest 声明的 WS 端点经 `register_declared_ws_endpoints` 登记进
@@ -278,8 +228,11 @@ async fn declared_ws_endpoints_require_ws_server_permission() {
     crate::server::websocket::endpoint::purge_for_plugin(plugin_id);
 }
 
-/// 源码漂移锁：六个 registry 注册调用**只允许出现在 `register_plugin_contributions` 一处**。
+/// 源码漂移锁：registry 注册调用**只允许出现在 `register_plugin_contributions` 一处**。
 /// 三份手抄的历史成因是「新 contributes 项要同改三处」，漏改即静默不注册。
+///
+/// ABI v29（HTTP 路由代码注册下沉）：`register_http_endpoints` / `register_tool_providers`
+/// 已随静态声明面退役（用户裁定 ④：不通过声明配置路由），不在本锁清单内。
 #[test]
 fn registry_registration_has_single_call_site() {
     let sources = [
@@ -293,8 +246,6 @@ fn registry_registration_has_single_call_site() {
         "register_commands(",
         "register_views(",
         "register_terminal_handlers(",
-        "register_tool_providers(",
-        "register_http_endpoints(",
         "register_file_handlers(",
     ] {
         assert_eq!(
@@ -303,6 +254,9 @@ fn registry_registration_has_single_call_site() {
             "`{call}` 必须只在 register_plugin_contributions 内出现一次（票 11 第 3 项）"
         );
     }
+    // 退役面不得复燃：静态 HTTP 路由登记调用在源码中必须为零
+    assert!(!joined.contains("register_http_endpoints("), "httpEndpoints 静态登记已退役");
+    assert!(!joined.contains("register_tool_providers("), "toolProviders 登记从未落地消费，已随退役");
 }
 
 // ==================== 实例化入口收敛（票 11 第 2 项） ====================

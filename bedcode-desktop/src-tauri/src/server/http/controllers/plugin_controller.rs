@@ -73,24 +73,14 @@ pub(crate) fn plugin_http_headers(response: &serde_json::Value) -> Vec<(String, 
 
 // ==================== 路由判定（纯函数，供测试固化） ====================
 
-/// 声明式路径匹配（票 16 立、票 08 收口）
-///
-/// **只认声明**：`declared` 是属主插件 manifest 声明（`contributes.httpEndpoints` /
-/// `toolProviders`）登记出的全路径清单，未命中即 404——请求不到达插件，未声明路径
-/// 不可被枚举。
-///
-/// 票据 03 时代的 `declared.is_empty() → 前缀内放行`（既有插件零迁移）已于票 08 退役：
-/// 核实清单（见 `.scratch/2026-09-21-wasm-core-audit/issues/08`）确认桌面四个生产插件
-/// 里只有 `com.bedcode.terminal-session` 实现 `_http_endpoint` 且已声明清单，其余三个
-/// 既无实现也无声明 → 短路在生产面无消费者。未声明清单的插件自此**没有 HTTP 面**。
-pub(crate) fn plugin_http_path_allowed(declared: &[String], full_path: &str) -> bool {
-    declared.iter().any(|p| p == full_path)
-}
-
-/// 端点认证判定（纯函数，票 08）：声明档位 + 本次请求是否已过宿主验签 → 是否放行
+/// 端点认证判定（纯函数，票 08 / ABI v29）：登记档位 + 本次请求是否已过宿主验签 → 是否放行
 ///
 /// `Jwt` 档要求 `verified`（宿主 JWT 中间件已注入 claims）；`None` 档免凭证，但仍
 /// 携带 [`HttpCaller`] 身份，让插件自己按身份收紧（裁决 3）。
+///
+/// 路径声明判定（「只认登记、精确匹配」）已随 ABI v29 移交动态注册表
+/// （`server/http/registry::find_by_internal`）——插件经 `host-http.register-endpoint`
+/// 登记的内部路径即唯一可达面，未登记路径 404。
 pub(crate) fn plugin_http_auth_allowed(auth: EndpointAuth, verified: bool) -> bool {
     match auth {
         EndpointAuth::Jwt => verified,
@@ -212,6 +202,9 @@ pub(crate) struct PluginHttpRequest<'a> {
     pub headers: serde_json::Map<String, serde_json::Value>,
     pub body: serde_json::Value,
     pub query: serde_json::Value,
+    /// 模板段捕获参数（ABI v29 动态路由：host 别名 `{id}` 模板的捕获值；
+    /// 精确命中 / 无模板时为空）
+    pub params: serde_json::Map<String, serde_json::Value>,
     /// 宿主判定的调用方身份（票 08 裁决 3：`device` / `localhost` / `anonymous`）
     pub caller: HttpCaller,
     /// 宿主验签后的可信设备上下文（仅 [`HttpCaller::Device`] 时有值）
@@ -234,6 +227,9 @@ pub(crate) fn build_plugin_http_args(req: &PluginHttpRequest) -> serde_json::Val
         // 免凭证调用方不再「没有身份」：三档固定取值让插件能区分本机 hook 与局域网匿名
         "caller": req.caller.as_str(),
     });
+    // 模板捕获参数（ABI v29 动态路由）：命中 `{id}` 模板的 host 别名请求才携带；
+    // 无模板的请求给空对象（老插件忽略未知字段，字段演进增量原则）
+    args["params"] = serde_json::Value::Object(req.params.clone());
     if let Some(device) = &req.device {
         args["device"] = device.clone();
     }
@@ -242,8 +238,8 @@ pub(crate) fn build_plugin_http_args(req: &PluginHttpRequest) -> serde_json::Val
 
 /// 转发内核：调插件 `_http_endpoint` 并把 `{ status, body, contentType }` 映射为 HTTP 响应
 ///
-/// 调用方必须先完成属主解析与端点声明判定（`plugin_http_path_allowed`）——本函数
-/// 只做「送进去 + 把回包翻译成 HTTP」，不掺任何路由策略。
+/// 调用方必须先完成属主解析与端点登记判定（`server/http/registry::find_by_internal`）——
+/// 本函数只做「送进去 + 把回包翻译成 HTTP」，不掺任何路由策略。
 pub(crate) async fn forward_to_plugin(owner: &str, req: &PluginHttpRequest<'_>) -> HttpResponse {
     let request_args = build_plugin_http_args(req);
     let plugin_host = AppContext::global().plugin_host();
@@ -345,14 +341,13 @@ pub async fn plugin_http_endpoint(
         }
     };
 
-    // 端点注册治理（票据 03 判据、票 16 固化、票 08 收口）：只认 manifest 声明
-    // （contributes.httpEndpoints / toolProviders），未声明路径 404——「未声明清单
-    // → 前缀内 ANY 放行」的过渡策略已退役，未声明清单的插件没有 HTTP 面。
-    // 声明清单按**属主插件**查（旧前缀兜底时按接管方的清单判定），full_path 同样
-    // 按属主拼——插件侧收到的 `path` 字段保持请求原样，双轨期两实现共用同一分派表。
-    let declared = plugin_host.registry().list_http_endpoint_paths(owner).await;
+    // 端点注册治理（ABI v29 动态路由）：只认插件经 host-http.register-endpoint 登记
+    // 的内部路径（含 manifest 声明面退役后由插件激活期代码注册的全部端点），未注册
+    // 路径 404——「未声明清单 → 前缀内 ANY 放行」的过渡策略已退役，未登记的插件
+    // 没有 HTTP 面。声明按**属主插件**查（旧前缀兜底时按接管方的登记判定），
+    // full_path 同样按属主拼——插件侧收到的 `path` 字段保持请求原样。
     let full_path = format!("/api/plugin/{}/{}", owner, endpoint_path);
-    if !plugin_http_path_allowed(&declared, &full_path) {
+    let Some(entry) = crate::server::http::registry::find_by_internal(&full_path) else {
         tracing::warn!(
             plugin_id = %owner,
             requested_plugin_id = %plugin_id,
@@ -363,24 +358,16 @@ pub async fn plugin_http_endpoint(
             CODE_INVALID_REQUEST,
             &format!("Plugin endpoint '{}' is not registered", full_path),
         ));
-    }
+    };
 
-    // 认证档位（票 08）：按属主声明判定，未声明 auth 即要求宿主已验签
+    // 认证档位（票 08 / ABI v29）：按属主登记档位判定，未声明 auth 即要求宿主已验签
     let (caller, device) = caller_identity(&req);
-    let auth = plugin_host
-        .registry()
-        .find_http_endpoint(&full_path)
-        .await
-        // 上一步刚按同一张表放行；取不到条目只可能是两次 await 之间插件被停用，
-        // 此时按最严档处理而非放行（fail-closed）
-        .map(|e| e.auth)
-        .unwrap_or(EndpointAuth::Jwt);
-    if !plugin_http_auth_allowed(auth, matches!(caller, HttpCaller::Device)) {
+    if !plugin_http_auth_allowed(entry.auth, matches!(caller, HttpCaller::Device)) {
         tracing::warn!(
             plugin_id = %owner,
             path = %full_path,
             caller = %caller.as_str(),
-            auth = %auth.as_str(),
+            auth = %entry.auth.as_str(),
             "plugin http endpoint requires an authenticated caller"
         );
         return plugin_http_unauthenticated_response(&full_path);
@@ -411,6 +398,8 @@ pub async fn plugin_http_endpoint(
                 .map(|(k, v)| (k, serde_json::Value::String(v)))
                 .collect(),
         ),
+        // 内部路径精确命中：无模板捕获（模板只存在于 host 别名面）
+        params: serde_json::Map::new(),
         caller,
         device,
     };
@@ -498,54 +487,6 @@ mod tests {
         );
         // 非字符串 contentType → None（保持默认）
         assert_eq!(plugin_http_content_type(&serde_json::json!({"contentType": 123})), None);
-    }
-
-    /// 票 16 立、票 08 收口：声明式匹配只剩「精确命中」一格
-    ///
-    /// 票据 03 的「未声明 → 前缀内放行」（既有插件零迁移）已退役——核实清单
-    /// （`.scratch/2026-09-21-wasm-core-audit/issues/08`）确认桌面四个生产插件里只有
-    /// `com.bedcode.terminal-session` 实现 `_http_endpoint` 且早已声明清单，短路在生产面
-    /// 没有消费者；留着它，未声明清单的插件（含仓外 zip 装的第三方）就等于 HTTP 面全开。
-    ///
-    /// 已声明侧禁止前缀匹配（那会让 `/task-status` 声明放行
-    /// `/task-status/../../admin`）。
-    #[test]
-    fn declared_paths_match_exactly_and_undeclared_grant_nothing() {
-        let declared: Vec<String> = vec![
-            "/api/plugin/com.bedcode.terminal-session/task-status".to_string(),
-            "/api/plugin/com.bedcode.terminal-session/task-queue/add".to_string(),
-        ];
-        // 已声明：精确命中放行
-        assert!(plugin_http_path_allowed(
-            &declared,
-            "/api/plugin/com.bedcode.terminal-session/task-status"
-        ));
-        assert!(plugin_http_path_allowed(
-            &declared,
-            "/api/plugin/com.bedcode.terminal-session/task-queue/add"
-        ));
-        // 已声明：未命中一律拒绝（含前缀相近、大小写不同、缺段、多段）
-        assert!(!plugin_http_path_allowed(
-            &declared,
-            "/api/plugin/com.bedcode.terminal-session/task-history"
-        ));
-        assert!(
-            !plugin_http_path_allowed(&declared, "/api/plugin/com.bedcode.terminal-session/task-status/extra"),
-            "声明路径不得前缀匹配"
-        );
-        assert!(!plugin_http_path_allowed(
-            &declared,
-            "/api/plugin/com.bedcode.terminal-session/TASK-STATUS"
-        ));
-        // 未声明（空清单）：前缀内一律拒绝——未声明 = 没有 HTTP 面
-        assert!(
-            !plugin_http_path_allowed(&[], "/api/plugin/com.bedcode.auto-task/anything"),
-            "票 08：未声明清单不得再换来前缀内放行"
-        );
-        assert!(!plugin_http_path_allowed(
-            &[],
-            "/api/plugin/com.bedcode.terminal-session/task-status"
-        ));
     }
 
     /// 票 08：端点级认证判定只有「档位 × 是否已验签」两个输入，四格全覆盖

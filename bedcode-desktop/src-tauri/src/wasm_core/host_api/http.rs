@@ -1,13 +1,15 @@
 //! HTTP 代理域宿主实现（宿主代发请求，支持 SSE 流式推流）
 
-use crate::wasm_core::host_api::context::WasmHostContext;
-use crate::wasm_core::host_api::unit_executor::UnitExecutor;
-use crate::wasm_core::runtime_util::block_on_async;
-use crate::wasm_core::permission::PERMISSION_NETWORK_HTTP;
 use crate::system::constants::{
     PLUGIN_HTTP_CONNECT_TIMEOUT_SECS, PLUGIN_HTTP_RESPONSE_BODY_LIMIT_BYTES, PLUGIN_HTTP_TIMEOUT_SECS,
 };
+use crate::wasm_core::host_api::context::WasmHostContext;
+use crate::wasm_core::host_api::unit_executor::UnitExecutor;
+use crate::wasm_core::permission::PERMISSION_NETWORK_HTTP;
+use crate::wasm_core::runtime_util::block_on_async;
+use bedcode_plugin_api::EndpointAuth;
 use futures_util::StreamExt;
+use serde::Deserialize;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 use tauri::Emitter;
@@ -223,6 +225,80 @@ pub(crate) fn http_fetch(
             .map(Some)
             .map_err(|e| format!("http error: response serialization failed: {}", e))
     }
+}
+
+// ==================== 服务端域（ABI v29：插件动态路由注册） ====================
+
+/// `register-endpoint` 的 config-json 契约（服务端域，camelCase）
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EndpointRegistrationConfig {
+    /// 插件内相对端点段（宿主拼出 `/api/plugin/<plugin-id>/<path>`）
+    path: String,
+    /// 可选对外 URL 别名（支持 `{id}` 模板段）
+    #[serde(default)]
+    host: Option<String>,
+    /// host 别名的允许方法（缺省 `["GET"]`）
+    #[serde(default)]
+    methods: Vec<String>,
+    /// 认证档位："jwt"（缺省，最严）| "none"（免凭证）
+    #[serde(default)]
+    auth: Option<String>,
+}
+
+/// 注册插件 HTTP 端点（WIT `host-http.register-endpoint`，ABI v29 服务端域）
+///
+/// 权限门 `network:http`（与前端面 `http.registerEndpoint` 同权限位）；config 解析
+/// 失败 / 形状非法 / 冲突仲裁 → `Err`（fail-visible，不覆盖在位者）。
+/// 成功 → 返回端点句柄 `http-<uuid>`。
+pub(crate) fn http_register_endpoint(
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
+    plugin_id: &str,
+    config_json: &str,
+) -> Result<String, String> {
+    if !super::check_permission(perm, plugin_id, PERMISSION_NETWORK_HTTP, "host_http_register_endpoint") {
+        return Err("permission denied: network:http".to_string());
+    }
+    let config: EndpointRegistrationConfig =
+        serde_json::from_str(config_json).map_err(|e| format!("http register-endpoint: invalid config: {e}"))?;
+    // HTTP 面缺省档 = jwt（未声明即最严，与 manifest 声明面同一裁决）；
+    // 未定义取值报错，绝不静默降级为较宽档位
+    let auth = EndpointAuth::parse_with(config.auth.as_deref(), EndpointAuth::Jwt)
+        .map_err(|e| format!("http register-endpoint: {e}"))?;
+    let entry = crate::server::http::registry::register(
+        plugin_id,
+        &config.path,
+        config.host.as_deref(),
+        &config.methods,
+        auth,
+    )?;
+    Ok(entry.endpoint_id)
+}
+
+/// 注销插件 HTTP 端点（WIT `host-http.unregister-endpoint`，ABI v29 服务端域）
+///
+/// 属主仲裁：未知句柄 → `Ok(false)`（幂等）；他人句柄 → `Err`。
+/// 插件停用时的自动回收另见 [`crate::server::http::registry::purge_for_plugin`]。
+pub(crate) fn http_unregister_endpoint(
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
+    plugin_id: &str,
+    endpoint_id: &str,
+) -> Result<bool, String> {
+    if !super::check_permission(
+        perm,
+        plugin_id,
+        PERMISSION_NETWORK_HTTP,
+        "host_http_unregister_endpoint",
+    ) {
+        return Err("permission denied: network:http".to_string());
+    }
+    crate::server::http::registry::remove_if_owner(endpoint_id, plugin_id)
+}
+
+/// 回收指定插件的全部 HTTP 端点（插件停用/卸载时由 PluginHost 调用；只碰本人）
+pub(crate) fn purge_for_plugin(plugin_id: &str) -> usize {
+    let entries = crate::server::http::registry::purge_for_plugin(plugin_id);
+    entries.len()
 }
 
 // ==================== Streaming Execution ====================
@@ -539,7 +615,8 @@ mod tests {
         let ctx = super::super::tests::build_host_ctx();
         super::super::tests::grant_permissions(&ctx, "p1", &[PERMISSION_NETWORK_HTTP]);
         // 权限已放行 → 错误是请求解析/执行类，不再是 permission denied
-        let err = http_fetch(ctx.as_ref(), ctx.as_ref(), "p1", r#"{"method":"GET"}"#).expect_err("missing url is a request error");
+        let err = http_fetch(ctx.as_ref(), ctx.as_ref(), "p1", r#"{"method":"GET"}"#)
+            .expect_err("missing url is a request error");
         assert!(
             err.contains("Missing 'url'") || err.contains("http error"),
             "after permission, error should be request-level, got: {}",
@@ -557,7 +634,8 @@ mod tests {
     fn http_fetch_invalid_json_is_request_error_not_permission() {
         let ctx = super::super::tests::build_host_ctx();
         super::super::tests::grant_permissions(&ctx, "p1", &[PERMISSION_NETWORK_HTTP]);
-        let err = http_fetch(ctx.as_ref(), ctx.as_ref(), "p1", "not-json").expect_err("invalid JSON is a request error");
+        let err =
+            http_fetch(ctx.as_ref(), ctx.as_ref(), "p1", "not-json").expect_err("invalid JSON is a request error");
         assert!(
             err.contains("invalid request JSON"),
             "error should be parse-level, got: {}",
@@ -586,6 +664,89 @@ mod tests {
             err.to_string().contains("stream:true"),
             "error should guide to streaming mode, got: {}",
             err
+        );
+    }
+
+    /// 服务端域权限门（ABI v29）：未声明 network:http 的插件 register/unregister 一律拒绝
+    #[test]
+    fn http_register_endpoint_requires_network_http_permission() {
+        let ctx = super::super::tests::build_host_ctx();
+        let err = http_register_endpoint(ctx.as_ref(), "p1", r#"{"path":"configs"}"#)
+            .expect_err("unpermissioned register must be rejected");
+        assert!(
+            err.contains("permission denied") && err.contains("network:http"),
+            "error should state permission reason, got: {err}"
+        );
+        let err = http_unregister_endpoint(ctx.as_ref(), "p1", "http-x")
+            .expect_err("unpermissioned unregister must be rejected");
+        assert!(err.contains("permission denied"), "got: {err}");
+    }
+
+    /// 服务端域注册闭环：授权后 register 成功返回句柄，注销属主命中、他人拒绝
+    #[test]
+    fn http_register_endpoint_roundtrip_with_owner_arbitration() {
+        let ctx = super::super::tests::build_host_ctx();
+        super::super::tests::grant_permissions(&ctx, "p1", &[PERMISSION_NETWORK_HTTP]);
+        let plugin = format!("test-httpapi-{}", uuid::Uuid::new_v4());
+        super::super::tests::grant_permissions(&ctx, &plugin, &[PERMISSION_NETWORK_HTTP]);
+
+        // 缺省档 = jwt（HTTP 面未声明即最严），内部路径注册成功
+        let id = http_register_endpoint(ctx.as_ref(), &plugin, r#"{"path":"configs"}"#).expect("register");
+        assert!(id.starts_with("http-"), "句柄前缀: {id}");
+        let internal = format!("/api/plugin/{plugin}/configs");
+        let entry = crate::server::http::registry::find_by_internal(&internal).expect("registered");
+        assert_eq!(entry.owner, plugin);
+        assert_eq!(entry.auth, EndpointAuth::Jwt, "未声明 auth 落最严档");
+
+        // 显式 none + host 别名 + 模板
+        let id2 = http_register_endpoint(
+            ctx.as_ref(),
+            &plugin,
+            &format!(
+                r#"{{"path":"sessions/stop","host":"/api/sessions-{0}/{{id}}/stop","methods":["POST"],"auth":"none"}}"#,
+                uuid::Uuid::new_v4().simple()
+            ),
+        )
+        .expect("register alias");
+        assert!(crate::server::http::registry::is_owner(&id2, &plugin));
+
+        // 注销：属主命中；他人句柄 → Err 且不消费
+        let other = format!("test-httpapi-other-{}", uuid::Uuid::new_v4());
+        assert!(http_unregister_endpoint(ctx.as_ref(), &other, &id).is_err());
+        assert!(
+            crate::server::http::registry::is_owner(&id, &plugin),
+            "他人注销不得消费句柄"
+        );
+        assert!(http_unregister_endpoint(ctx.as_ref(), &plugin, &id).unwrap());
+        assert!(
+            !http_unregister_endpoint(ctx.as_ref(), &plugin, &id).unwrap(),
+            "重复注销幂等 false"
+        );
+        assert!(crate::server::http::registry::find_by_internal(&internal).is_none());
+
+        crate::server::http::registry::purge_for_plugin(&plugin);
+        crate::server::http::registry::purge_for_plugin(&other);
+    }
+
+    /// 非法 config：畸形 JSON / 空 path / 非法 auth 档位 → Err（fail-visible，零副作用）
+    #[test]
+    fn http_register_endpoint_rejects_bad_config() {
+        let ctx = super::super::tests::build_host_ctx();
+        let plugin = format!("test-httpapi-bad-{}", uuid::Uuid::new_v4());
+        super::super::tests::grant_permissions(&ctx, &plugin, &[PERMISSION_NETWORK_HTTP]);
+
+        assert!(http_register_endpoint(ctx.as_ref(), &plugin, "not json").is_err());
+        assert!(http_register_endpoint(ctx.as_ref(), &plugin, r#"{"path":""}"#).is_err());
+        let err = http_register_endpoint(ctx.as_ref(), &plugin, r#"{"path":"x","auth":"local-only"}"#)
+            .expect_err("unknown auth tier must be rejected");
+        assert!(
+            err.contains("local-only") && err.contains("jwt"),
+            "文案须点明非法取值与合法档位: {err}"
+        );
+        assert_eq!(
+            crate::server::http::registry::count_by_owner(&plugin),
+            0,
+            "失败零副作用"
         );
     }
 

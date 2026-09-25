@@ -23,14 +23,14 @@
 #[cfg(test)]
 use super::plugin_debug_mode;
 use super::{StoreSpec, WasmHostContext, WasmPluginState};
-use crate::wasm_core::runtime_util::block_on_async;
 #[cfg(test)]
 use crate::wasm_core::config::StoreLimits;
 use crate::wasm_core::host_api::{
-    api, app, auth, bus, config, connection, crypto, database, events, fs, http, log, mdns, peer, platform, process, pty,
-    status, storage, task, timer, ws,
+    api, app, auth, bus, config, connection, crypto, database, events, fs, http, log, mdns, peer, platform, process,
+    pty, status, storage, task, timer, ws,
 };
 use crate::wasm_core::monitor::LifecycleEvent;
+use crate::wasm_core::runtime_util::block_on_async;
 use crate::AppError;
 use bedcode_plugin_api::{abi, WasiPreopenDir};
 use std::sync::Arc;
@@ -57,17 +57,37 @@ bindgen!({
 
 impl bedcode::plugin::host_storage::Host for WasmPluginState {
     fn get(&mut self, key: String) -> Result<Option<String>, String> {
-        storage::storage_get(self.host_ctx.as_ref(), self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &key).map(|opt| opt.map(|v| v.to_string()))
+        storage::storage_get(
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            &self.plugin_id,
+            &key,
+        )
+        .map(|opt| opt.map(|v| v.to_string()))
     }
 
     fn set(&mut self, key: String, value: String) -> Result<(), String> {
         let json_value: serde_json::Value =
             serde_json::from_str(&value).map_err(|e| format!("invalid JSON value: {}", e))?;
-        storage::storage_set(self.host_ctx.as_ref(), self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &key, json_value)
+        storage::storage_set(
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            &self.plugin_id,
+            &key,
+            json_value,
+        )
     }
 
     fn delete(&mut self, key: String) -> Result<(), String> {
-        storage::storage_delete(self.host_ctx.as_ref(), self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &key)
+        storage::storage_delete(
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            &self.plugin_id,
+            &key,
+        )
     }
 }
 
@@ -79,15 +99,34 @@ impl bedcode::plugin::host_storage::Host for WasmPluginState {
 
 impl bedcode::plugin::host_auth::Host for WasmPluginState {
     fn secret_get(&mut self, key: String) -> Result<Option<String>, String> {
-        auth::auth_secret_get(self.host_ctx.as_ref(), self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &key)
+        auth::auth_secret_get(
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            &self.plugin_id,
+            &key,
+        )
     }
 
     fn secret_set(&mut self, key: String, value: String) -> Result<(), String> {
-        auth::auth_secret_set(self.host_ctx.as_ref(), self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &key, &value)
+        auth::auth_secret_set(
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            &self.plugin_id,
+            &key,
+            &value,
+        )
     }
 
     fn secret_delete(&mut self, key: String) -> Result<(), String> {
-        auth::auth_secret_delete(self.host_ctx.as_ref(), self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &key)
+        auth::auth_secret_delete(
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            &self.plugin_id,
+            &key,
+        )
     }
 
     fn secret_keys(&mut self) -> Result<Vec<String>, String> {
@@ -95,13 +134,25 @@ impl bedcode::plugin::host_auth::Host for WasmPluginState {
     }
 
     fn auth_setting_set(&mut self, key: String, value: String) -> Result<(), String> {
-        auth::auth_setting_set(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &key, &value)
+        auth::auth_setting_set(
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            &self.plugin_id,
+            &key,
+            &value,
+        )
     }
 
     // ==================== v19 保留面（v24 修订语义：公钥托管在 plugin_secrets） ====================
 
     fn biometric_credential_bound(&mut self, fingerprint: String) -> Result<bool, String> {
-        auth::auth_biometric_credential_bound(self.host_ctx.as_ref(), self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &fingerprint)
+        auth::auth_biometric_credential_bound(
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            &self.plugin_id,
+            &fingerprint,
+        )
     }
 
     fn biometric_verify_signature(
@@ -110,7 +161,15 @@ impl bedcode::plugin::host_auth::Host for WasmPluginState {
         message: String,
         signature: String,
     ) -> Result<bool, String> {
-        auth::auth_biometric_verify_signature(self.host_ctx.as_ref(), self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &fingerprint, &message, &signature)
+        auth::auth_biometric_verify_signature(
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            &self.plugin_id,
+            &fingerprint,
+            &message,
+            &signature,
+        )
     }
 
     fn link_identity_parts(&mut self) -> Result<Option<String>, String> {
@@ -118,11 +177,24 @@ impl bedcode::plugin::host_auth::Host for WasmPluginState {
     }
 
     fn biometric_credential_bind(&mut self, fingerprint: String, public_key: String) -> Result<bool, String> {
-        auth::auth_biometric_credential_bind(self.host_ctx.as_ref(), self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &fingerprint, &public_key)
+        auth::auth_biometric_credential_bind(
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            &self.plugin_id,
+            &fingerprint,
+            &public_key,
+        )
     }
 
     fn device_token_issue(&mut self, sub: String, device_name: String, fingerprint: String) -> Result<String, String> {
-        auth::auth_device_token_issue(self.host_ctx.as_ref(), &self.plugin_id, &sub, &device_name, &fingerprint)
+        auth::auth_device_token_issue(
+            self.host_ctx.as_ref(),
+            &self.plugin_id,
+            &sub,
+            &device_name,
+            &fingerprint,
+        )
     }
 
     fn device_token_verify(&mut self, token: String) -> Result<String, String> {
@@ -136,7 +208,12 @@ impl bedcode::plugin::host_auth::Host for WasmPluginState {
 
 impl bedcode::plugin::host_pty::Host for WasmPluginState {
     fn spawn(&mut self, config_json: String) -> Result<String, String> {
-        pty::pty_spawn(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &config_json)
+        pty::pty_spawn(
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            &self.plugin_id,
+            &config_json,
+        )
     }
 
     fn write(&mut self, pty_id: String, data: Vec<u8>) -> Result<(), String> {
@@ -207,7 +284,7 @@ impl bedcode::plugin::host_crypto::Host for WasmPluginState {
         aad: Option<Vec<u8>>,
     ) -> Result<Vec<u8>, String> {
         crypto::aead_encrypt(
-        self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
             &self.plugin_id,
             &algorithm,
             &key,
@@ -226,7 +303,7 @@ impl bedcode::plugin::host_crypto::Host for WasmPluginState {
         aad: Option<Vec<u8>>,
     ) -> Result<Vec<u8>, String> {
         crypto::aead_decrypt(
-        self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
             &self.plugin_id,
             &algorithm,
             &key,
@@ -253,7 +330,7 @@ impl bedcode::plugin::host_crypto::Host for WasmPluginState {
         length: u32,
     ) -> Result<Vec<u8>, String> {
         crypto::kdf_derive(
-        self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
             &self.plugin_id,
             &algorithm,
             salt.as_deref(),
@@ -274,7 +351,7 @@ impl bedcode::plugin::host_crypto::Host for WasmPluginState {
         peer_public: Vec<u8>,
     ) -> Result<Vec<u8>, String> {
         crypto::key_agreement_shared(
-        self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
             &self.plugin_id,
             &algorithm,
             &local_private,
@@ -326,15 +403,32 @@ impl bedcode::plugin::host_database::Host for WasmPluginState {
     }
 
     fn execute_params(&mut self, sql: String, params_json: String) -> Result<u32, String> {
-        database::db_execute_params(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &sql, &params_json)
+        database::db_execute_params(
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            &self.plugin_id,
+            &sql,
+            &params_json,
+        )
     }
 
     fn query_params(&mut self, sql: String, params_json: String) -> Result<Option<String>, String> {
-        database::db_query_params(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &sql, &params_json)
+        database::db_query_params(
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            &self.plugin_id,
+            &sql,
+            &params_json,
+        )
     }
 
     fn execute_batch(&mut self, sqls_json: String) -> Result<u32, String> {
-        database::db_execute_batch(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &sqls_json)
+        database::db_execute_batch(
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            &self.plugin_id,
+            &sqls_json,
+        )
     }
 }
 
@@ -348,15 +442,32 @@ impl bedcode::plugin::host_plugin_database::Host for WasmPluginState {
     }
 
     fn execute_params(&mut self, sql: String, params_json: String) -> Result<u32, String> {
-        database::plugin_db_execute_params(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &sql, &params_json)
+        database::plugin_db_execute_params(
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            &self.plugin_id,
+            &sql,
+            &params_json,
+        )
     }
 
     fn query_params(&mut self, sql: String, params_json: String) -> Result<Option<String>, String> {
-        database::plugin_db_query_params(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &sql, &params_json)
+        database::plugin_db_query_params(
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            &self.plugin_id,
+            &sql,
+            &params_json,
+        )
     }
 
     fn execute_batch(&mut self, sqls_json: String) -> Result<u32, String> {
-        database::plugin_db_execute_batch(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &sqls_json)
+        database::plugin_db_execute_batch(
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            &self.plugin_id,
+            &sqls_json,
+        )
     }
 }
 
@@ -376,7 +487,13 @@ impl bedcode::plugin::host_connection::Host for WasmPluginState {
 
 impl bedcode::plugin::host_process::Host for WasmPluginState {
     fn run(&mut self, request_json: String) -> Result<String, String> {
-        process::process_run(self.host_ctx.as_ref(), self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &request_json)
+        process::process_run(
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            &self.plugin_id,
+            &request_json,
+        )
     }
 
     fn kill(&mut self, run_id: String) -> Result<(), String> {
@@ -391,11 +508,21 @@ impl bedcode::plugin::host_process::Host for WasmPluginState {
 
 impl bedcode::plugin::host_app::Host for WasmPluginState {
     fn install_cli(&mut self, payload_json: String) -> Result<String, String> {
-        app::install_cli(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &payload_json)
+        app::install_cli(
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            &self.plugin_id,
+            &payload_json,
+        )
     }
 
     fn uninstall_cli(&mut self, payload_json: String) -> Result<(), String> {
-        app::uninstall_cli(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &payload_json)
+        app::uninstall_cli(
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            &self.plugin_id,
+            &payload_json,
+        )
     }
 
     fn plugin_resource_dir(&mut self) -> Result<String, String> {
@@ -405,7 +532,13 @@ impl bedcode::plugin::host_app::Host for WasmPluginState {
 
 impl bedcode::plugin::host_timer::Host for WasmPluginState {
     fn register(&mut self, interval_secs: u64, command: String) -> Result<(), String> {
-        timer::timer_register(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, interval_secs, &command)
+        timer::timer_register(
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            &self.plugin_id,
+            interval_secs,
+            &command,
+        )
     }
 }
 
@@ -424,7 +557,21 @@ impl bedcode::plugin::host_events::Host for WasmPluginState {
 
 impl bedcode::plugin::host_http::Host for WasmPluginState {
     fn fetch(&mut self, request_json: String) -> Result<Option<String>, String> {
-        http::http_fetch(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &request_json)
+        http::http_fetch(
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            &self.plugin_id,
+            &request_json,
+        )
+    }
+
+    // v29 服务端域：插件动态 HTTP 路由注册（权限门 + 注册表仲裁在 host_api 层）
+    fn register_endpoint(&mut self, config_json: String) -> Result<String, String> {
+        http::http_register_endpoint(self.host_ctx.as_ref(), &self.plugin_id, &config_json)
+    }
+
+    fn unregister_endpoint(&mut self, endpoint_id: String) -> Result<bool, String> {
+        http::http_unregister_endpoint(self.host_ctx.as_ref(), &self.plugin_id, &endpoint_id)
     }
 }
 
@@ -450,7 +597,12 @@ impl bedcode::plugin::host_fs::Host for WasmPluginState {
     }
 
     fn request_auth(&mut self, paths_json: String) -> Result<bool, String> {
-        fs::fs_request_auth(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &paths_json)
+        fs::fs_request_auth(
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            &self.plugin_id,
+            &paths_json,
+        )
     }
 
     /// v19 追加（票 03 文件浏览域）
@@ -469,12 +621,24 @@ impl bedcode::plugin::host_fs::Host for WasmPluginState {
 
 impl bedcode::plugin::host_bus::Host for WasmPluginState {
     fn publish(&mut self, topic: String, payload_json: String) -> Result<(), String> {
-        bus::bus_publish(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &topic, &payload_json)
+        bus::bus_publish(
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            &self.plugin_id,
+            &topic,
+            &payload_json,
+        )
     }
 
     /// v11：二进制载荷发布（零 JSON 编解码，可传非 UTF-8 与大载荷）
     fn publish_binary(&mut self, topic: String, payload: Vec<u8>) -> Result<(), String> {
-        bus::bus_publish_binary(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &topic, payload)
+        bus::bus_publish_binary(
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            &self.plugin_id,
+            &topic,
+            payload,
+        )
     }
 
     fn subscribe(&mut self, topic: String) -> Result<(), String> {
@@ -494,9 +658,9 @@ impl bedcode::plugin::host_bus::Host for WasmPluginState {
 impl bedcode::plugin::host_api_call::Host for WasmPluginState {
     fn call(&mut self, request_topic: String, payload_json: String, timeout_ms: u64) -> Result<String, String> {
         api::api_call(
-        self.host_ctx.as_ref(),
-        self.host_ctx.as_ref(),
-        self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
             &self.plugin_id,
             &request_topic,
             &payload_json,
@@ -507,7 +671,12 @@ impl bedcode::plugin::host_api_call::Host for WasmPluginState {
 
 impl bedcode::plugin::host_peer::Host for WasmPluginState {
     fn dial_peer(&mut self, endpoint_json: String) -> Result<String, String> {
-        peer::peer_dial(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &endpoint_json)
+        peer::peer_dial(
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            &self.plugin_id,
+            &endpoint_json,
+        )
     }
 
     fn close(&mut self, handle: String) -> Result<bool, String> {
@@ -515,7 +684,13 @@ impl bedcode::plugin::host_peer::Host for WasmPluginState {
     }
 
     fn respond_consent(&mut self, request_id: String, accepted: bool) -> Result<bool, String> {
-        peer::peer_respond_consent(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &request_id, accepted)
+        peer::peer_respond_consent(
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            &self.plugin_id,
+            &request_id,
+            accepted,
+        )
     }
 
     fn list_trusted(&mut self) -> Result<String, String> {
@@ -523,27 +698,60 @@ impl bedcode::plugin::host_peer::Host for WasmPluginState {
     }
 
     fn revoke_trusted(&mut self, node_id: String) -> Result<bool, String> {
-        peer::peer_revoke_trusted(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &node_id)
+        peer::peer_revoke_trusted(
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            &self.plugin_id,
+            &node_id,
+        )
     }
 
     fn send_files(&mut self, session: String, paths_json: String) -> Result<String, String> {
-        peer::peer_send_files(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &session, &paths_json)
+        peer::peer_send_files(
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            &self.plugin_id,
+            &session,
+            &paths_json,
+        )
     }
 
     fn respond_transfer(&mut self, batch_id: String, accept: bool) -> Result<(), String> {
-        peer::peer_respond_transfer(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &batch_id, accept)
+        peer::peer_respond_transfer(
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            &self.plugin_id,
+            &batch_id,
+            accept,
+        )
     }
 
     fn set_receive_policy(&mut self, mode: String, timeout_secs: u64) -> Result<(), String> {
-        peer::peer_set_receive_policy(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &mode, timeout_secs)
+        peer::peer_set_receive_policy(
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            &self.plugin_id,
+            &mode,
+            timeout_secs,
+        )
     }
 
     fn pause_transfer(&mut self, batch_id: String) -> Result<(), String> {
-        peer::peer_pause_transfer(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &batch_id)
+        peer::peer_pause_transfer(
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            &self.plugin_id,
+            &batch_id,
+        )
     }
 
     fn resume_transfer(&mut self, batch_id: String) -> Result<(), String> {
-        peer::peer_resume_transfer(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &batch_id)
+        peer::peer_resume_transfer(
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            &self.plugin_id,
+            &batch_id,
+        )
     }
 
     fn resume_all_transfers(&mut self) -> Result<u32, String> {
@@ -551,19 +759,43 @@ impl bedcode::plugin::host_peer::Host for WasmPluginState {
     }
 
     fn set_shared_roots(&mut self, dirs_json: String) -> Result<(), String> {
-        peer::peer_set_shared_roots(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &dirs_json)
+        peer::peer_set_shared_roots(
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            &self.plugin_id,
+            &dirs_json,
+        )
     }
 
     fn list_shared_roots(&mut self, session: String) -> Result<String, String> {
-        peer::peer_list_shared_roots(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &session)
+        peer::peer_list_shared_roots(
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            &self.plugin_id,
+            &session,
+        )
     }
 
     fn browse_directory(&mut self, session: String, dir_id: String, rel_path: String) -> Result<String, String> {
-        peer::peer_browse_directory(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &session, &dir_id, &rel_path)
+        peer::peer_browse_directory(
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            &self.plugin_id,
+            &session,
+            &dir_id,
+            &rel_path,
+        )
     }
 
     fn pull_files(&mut self, session: String, dir_id: String, files_json: String) -> Result<u32, String> {
-        peer::peer_pull_files(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &session, &dir_id, &files_json)
+        peer::peer_pull_files(
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            &self.plugin_id,
+            &session,
+            &dir_id,
+            &files_json,
+        )
     }
 
     fn set_download_dir(&mut self, path: String) -> Result<(), String> {
@@ -583,7 +815,12 @@ impl bedcode::plugin::host_peer::Host for WasmPluginState {
 
 impl bedcode::plugin::host_mdns::Host for WasmPluginState {
     fn browse(&mut self, service_type: String) -> Result<String, String> {
-        mdns::mdns_browse(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &service_type)
+        mdns::mdns_browse(
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            &self.plugin_id,
+            &service_type,
+        )
     }
 
     fn stop_browse(&mut self, browser_id: String) -> Result<bool, String> {
@@ -635,7 +872,12 @@ impl bedcode::plugin::host_websocket::Host for WasmPluginState {
     // ==================== 客户端域（出站） ====================
 
     fn connect(&mut self, config_json: String) -> Result<String, String> {
-        ws::ws_connect(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &config_json)
+        ws::ws_connect(
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            &self.plugin_id,
+            &config_json,
+        )
     }
 
     fn send_text(&mut self, handle: String, text: String) -> Result<(), String> {
@@ -657,7 +899,12 @@ impl bedcode::plugin::host_websocket::Host for WasmPluginState {
     // ==================== 服务端域（入站；本票只定稿契约，实现见票 05） ====================
 
     fn register_endpoint(&mut self, config_json: String) -> Result<String, String> {
-        ws::ws_register_endpoint(self.host_ctx.as_ref(), self.host_ctx.as_ref(), &self.plugin_id, &config_json)
+        ws::ws_register_endpoint(
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            &self.plugin_id,
+            &config_json,
+        )
     }
 
     fn send_text_to_client(&mut self, endpoint_id: String, client_id: String, text: String) -> Result<(), String> {
@@ -670,7 +917,13 @@ impl bedcode::plugin::host_websocket::Host for WasmPluginState {
         client_id: String,
         payload: Vec<u8>,
     ) -> Result<(), String> {
-        ws::ws_send_binary_to_client(self.host_ctx.as_ref(), &self.plugin_id, &endpoint_id, &client_id, &payload)
+        ws::ws_send_binary_to_client(
+            self.host_ctx.as_ref(),
+            &self.plugin_id,
+            &endpoint_id,
+            &client_id,
+            &payload,
+        )
     }
 
     fn broadcast_text(&mut self, endpoint_id: String, text: String) -> Result<u32, String> {
@@ -682,7 +935,13 @@ impl bedcode::plugin::host_websocket::Host for WasmPluginState {
     }
 
     fn close_client(&mut self, endpoint_id: String, client_id: String, close_json: String) -> Result<bool, String> {
-        ws::ws_close_client(self.host_ctx.as_ref(), &self.plugin_id, &endpoint_id, &client_id, &close_json)
+        ws::ws_close_client(
+            self.host_ctx.as_ref(),
+            &self.plugin_id,
+            &endpoint_id,
+            &client_id,
+            &close_json,
+        )
     }
 
     fn unregister_endpoint(&mut self, endpoint_id: String) -> Result<bool, String> {
@@ -716,7 +975,6 @@ pub(crate) fn add_to_linker(linker: &mut Linker<WasmPluginState>) -> crate::Resu
         bedcode::plugin::host_storage::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_log::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_config::add_to_linker::<WasmPluginState, D>,
-
         bedcode::plugin::host_database::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_plugin_database::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_process::add_to_linker::<WasmPluginState, D>,
@@ -890,12 +1148,26 @@ impl LoadedWasmPlugin {
     /// - **v28**：`host-events.broadcast-sync` 函数退役（websocket 业务下沉票 08——
     ///   插件事件改 bus/emit，宿主不再持同步广播面），旧产物 import 该函数 → wasmtime
     ///   报「找不到 import 实现」点名 `broadcast-sync`。
+    /// - **v29 反向**：`host-http` 服务端域（`register-endpoint` / `unregister-endpoint`）
+    ///   为**新增**函数——v29+ 产物在 v28 及更旧宿主上实例化会报「找不到 import 实现」
+    ///   点名 `host-http.register-endpoint`；此时问题在宿主太旧（升级 BedCode），
+    ///   不是产物要重建，故单独一条指引不混入旧产物文案。
     ///
     /// 组件模型不提供「向后兼容的缺省 import」，故失败本身不可避免；能做的是让失败
     /// **可诊断**：wasmtime 的原文点名缺失的 interface/函数，本条补一句「按哪个版本重建」。
     ///
     /// 抽成自由函数是为了可单测：判据是「错误文本 → 是否附指引」，与 Store 无关。
     pub(super) fn stale_artifact_rebuild_hint(instantiate_error: &str) -> String {
+        // v29 反向（产物新于宿主）：host-http 服务端域 import 缺失 → 宿主太旧
+        if instantiate_error.contains("host-http.register-endpoint")
+            || instantiate_error.contains("host-http.unregister-endpoint")
+        {
+            return format!(
+                "（该产物使用了 ABI v29 的 host-http 服务端域（register-endpoint / \
+                 unregister-endpoint），当前宿主仅支持 ABI v{}，请升级 BedCode）",
+                abi::ABI_VERSION
+            );
+        }
         let is_stale_contract = instantiate_error.contains("host-session")
             || instantiate_error.contains("host-terminal")
             || instantiate_error.contains("terminal-hooks")
@@ -1702,7 +1974,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         // 模拟激活时 fs_request_auth 同意后的持久化授权（storage key fs_granted_paths）
         crate::wasm_core::host_api::storage::storage_set(
-                        ctx.as_ref(),
+            ctx.as_ref(),
             ctx.as_ref(),
             ctx.as_ref(),
             plugin_id,
@@ -1776,7 +2048,7 @@ mod tests {
         let probe = home.join(".bedcode-wasi-preopen-test");
         std::fs::create_dir_all(&probe).unwrap();
         crate::wasm_core::host_api::storage::storage_set(
-                        ctx.as_ref(),
+            ctx.as_ref(),
             ctx.as_ref(),
             ctx.as_ref(),
             pid,
@@ -1836,12 +2108,17 @@ mod tests {
                    implementation was not found in the linker";
         let hint = LoadedWasmPlugin::stale_artifact_rebuild_hint(msg);
         assert!(hint.contains("重建"), "必须给重建指引: {hint}");
-        assert!(hint.contains(&format!("v{}", abi::ABI_VERSION)), "必须点明 ABI 版本: {hint}");
+        assert!(
+            hint.contains(&format!("v{}", abi::ABI_VERSION)),
+            "必须点明 ABI 版本: {hint}"
+        );
         assert!(hint.contains("host-session"), "必须点名缺失的 interface: {hint}");
 
         // 形态 2：另一个被删的 import interface
-        assert!(LoadedWasmPlugin::stale_artifact_rebuild_hint("missing import bedcode:plugin/host-terminal")
-            .contains("host-terminal"));
+        assert!(
+            LoadedWasmPlugin::stale_artifact_rebuild_hint("missing import bedcode:plugin/host-terminal")
+                .contains("host-terminal")
+        );
 
         // 形态 3：被删的 export interface（宿主按必选导出实例化，缺导出同样失败）
         assert!(!LoadedWasmPlugin::stale_artifact_rebuild_hint("component does not export terminal-hooks").is_empty());
@@ -1851,8 +2128,31 @@ mod tests {
         let msg_v28 = "unknown import `bedcode:plugin/host-events.broadcast-sync` has not been defined";
         let hint_v28 = LoadedWasmPlugin::stale_artifact_rebuild_hint(msg_v28);
         assert!(hint_v28.contains("重建"), "v28 删项必须给重建指引: {hint_v28}");
-        assert!(hint_v28.contains(&format!("v{}", abi::ABI_VERSION)), "v28 删项必须点明 ABI 版本: {hint_v28}");
-        assert!(hint_v28.contains("broadcast-sync"), "v28 删项必须点名缺失的函数: {hint_v28}");
+        assert!(
+            hint_v28.contains(&format!("v{}", abi::ABI_VERSION)),
+            "v28 删项必须点明 ABI 版本: {hint_v28}"
+        );
+        assert!(
+            hint_v28.contains("broadcast-sync"),
+            "v28 删项必须点名缺失的函数: {hint_v28}"
+        );
+
+        // v29 反向（HTTP 路由代码注册下沉专项）：host-http 服务端域是**新增**函数——
+        // v29+ 产物在旧宿主上实例化失败点名 `host-http.register-endpoint`，问题在宿主
+        // 太旧（升级 BedCode），不是产物要重建，指引必须与旧产物文案区分
+        let msg_v29 = "unknown import `bedcode:plugin/host-http.register-endpoint` has not been defined";
+        let hint_v29 = LoadedWasmPlugin::stale_artifact_rebuild_hint(msg_v29);
+        assert!(hint_v29.contains("升级 BedCode"), "v29 反向必须指宿主升级: {hint_v29}");
+        assert!(
+            hint_v29.contains("register-endpoint"),
+            "v29 反向必须点名缺失函数: {hint_v29}"
+        );
+        assert!(
+            !hint_v29.contains("重建插件产物"),
+            "v29 反向不得误导为重建产物: {hint_v29}"
+        );
+        let msg_v29b = "unknown import `bedcode:plugin/host-http.unregister-endpoint` has not been defined";
+        assert!(LoadedWasmPlugin::stale_artifact_rebuild_hint(msg_v29b).contains("升级 BedCode"));
 
         // 反向：与契约变更无关的实例化失败不得附指引（避免掩盖真因）
         assert!(LoadedWasmPlugin::stale_artifact_rebuild_hint("failed to find a pre-opened directory").is_empty());
@@ -1888,7 +2188,7 @@ mod tests {
         let missing = base.join("ai-chatbox");
         std::fs::create_dir_all(&base).unwrap();
         crate::wasm_core::host_api::storage::storage_set(
-                        ctx.as_ref(),
+            ctx.as_ref(),
             ctx.as_ref(),
             ctx.as_ref(),
             pid,
@@ -1919,7 +2219,7 @@ mod tests {
         let missing = base.join("ro-child");
         std::fs::create_dir_all(&base).unwrap();
         crate::wasm_core::host_api::storage::storage_set(
-                        ctx.as_ref(),
+            ctx.as_ref(),
             ctx.as_ref(),
             ctx.as_ref(),
             pid,
@@ -1948,7 +2248,7 @@ mod tests {
         let base = std::env::temp_dir().join(format!("bedcode-wasi-create2-{}", std::process::id()));
         std::fs::create_dir_all(&base).unwrap();
         crate::wasm_core::host_api::storage::storage_set(
-                        ctx.as_ref(),
+            ctx.as_ref(),
             ctx.as_ref(),
             ctx.as_ref(),
             pid,

@@ -333,6 +333,37 @@ impl PluginHost {
         guard.call_capability_export::<Params, Results>(export_name, params)
     }
 
+    /// 扫描导出 `auth-policy` 能力的激活插件（认证中心角色发现，HTTP 路由代码注册
+    /// 下沉专项阶段 3）：返回运行中（Activated / Degraded）且实例化时探测到
+    /// `auth-policy` 能力导出的插件 id 清单（按 id 升序，确定性）。
+    ///
+    /// 取代认证中心角色的硬编码插件 id：任何导出该能力的激活插件都可能是认证中心；
+    /// 空清单 = 无认证中心（宿主策略回退）。
+    pub async fn auth_center_candidates(&self) -> Vec<String> {
+        let plugins = self.plugins.read().await;
+        let wasm_plugins = self.wasm_plugins.read().await;
+        let mut out = Vec::new();
+        for (id, instance) in wasm_plugins.iter() {
+            // 仅运行中的实例可作为认证中心（停用/未激活的实例不参与策略裁决）
+            let running = plugins
+                .get(id)
+                .is_some_and(|p| matches!(p.state, PluginState::Activated | PluginState::Degraded(_)));
+            if !running {
+                continue;
+            }
+            let exported = {
+                let guard = instance.lock().await;
+                guard.exported_capabilities().to_vec()
+            };
+            if exported.iter().any(|c| c == crate::wasm_core::manager::capability::CAP_AUTH_POLICY) {
+                out.push(id.clone());
+            }
+        }
+        out.sort();
+        tracing::debug!(candidates = ?out, "auth-policy capability candidates");
+        out
+    }
+
     pub fn registry(&self) -> &Arc<PluginRegistry> {
         &self.registry
     }

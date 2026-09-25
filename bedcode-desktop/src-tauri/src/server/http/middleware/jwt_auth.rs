@@ -58,9 +58,13 @@ pub fn extract_and_verify_jwt(req: &actix_web::dev::ServiceRequest) -> Option<Jw
     Some(claims)
 }
 
-/// 判断请求路径是否属于公开路由（无需认证）
+/// 判断请求路径是否属于宿主自持公开端点（无需认证）
+///
+/// 只含**宿主自有**公开面：`/api/health`（健康检查）与 `/health`（历史别名）。
+/// 插件注册的公开别名（`auth: "none"`）**不走本函数**——公开判定统一走动态
+/// 注册表档位（ABI v29 路由下沉，见 [`jwt_gateway`] 的注册表查询），精确匹配非前缀。
 pub fn is_public_path(path: &str) -> bool {
-    path.starts_with("/api/auth/") || path == "/api/health" || path == "/health"
+    path == "/api/health" || path == "/health"
 }
 
 /// 判断请求路径是否属于插件端点
@@ -82,10 +86,21 @@ where
     B: MessageBody + 'static,
 {
     let path = req.path().to_string();
+    let method = req.method().as_str().to_string();
 
-    // 公开路由（/api/auth/* 与 /api/health）直接放行
+    // 宿主自持公开端点（/api/health）直接放行
     if is_public_path(&path) {
         return next.call(req).await.map(|res| res.map_into_boxed_body());
+    }
+
+    // 插件注册别名（ABI v29 动态路由）：公开判定走注册表档位——`auth: "none"` 即公开
+    // （免验签放行到网关转发，精确/模板匹配非前缀），`jwt` 档与未登记路径一律要求验签。
+    // 与网关的档位判定同表同源：这里放行的只是「免凭证可达」的公开档，网关仍会做
+    // 属主激活与转发判定（双保险）。
+    if let Some(host_match) = crate::server::http::registry::find_by_host(&path, &method) {
+        if host_match.entry.auth == bedcode_plugin_api::EndpointAuth::None {
+            return next.call(req).await.map(|res| res.map_into_boxed_body());
+        }
     }
 
     // 有效 JWT → 注入 claims 并放行
@@ -95,7 +110,7 @@ where
     }
 
     // 插件端点：无 JWT 时放行到 handler（票 08）——真正的「这个端点要不要凭证」由
-    // handler 按属主插件 manifest 声明的档位判定，环回 hook 才能免 JWT 命中显式声明
+    // handler 按属主插件登记的档位判定，环回 hook 才能免 JWT 命中显式登记
     // `auth: "none"` 的那几条
     if is_plugin_path(&path) {
         return next.call(req).await.map(|res| res.map_into_boxed_body());
@@ -113,18 +128,21 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use actix_web::web;
 
+    /// 宿主自持公开端点只剩 `/api/health` 与 `/health`（历史别名）。
+    /// `/api/auth/*` 的前缀放行规则已随 ABI v29 路由下沉退役——公开判定走动态
+    /// 注册表档位（`auth: "none"` 精确匹配），不再是宿主中间件的前缀规则。
     #[test]
-    fn public_paths_do_not_require_auth() {
-        assert!(is_public_path("/api/auth/pairing"));
-        assert!(is_public_path("/api/auth/verify"));
-        // ticket 01 新增的生物认证端点同样落在 /api/auth/ 前缀下
-        assert!(is_public_path("/api/auth/biometric-challenge"));
-        assert!(is_public_path("/api/auth/biometric-verify"));
-        // biometric-bind 落在 /api/auth/ 前缀下（中间件放行，handler 内验 JWT）
-        assert!(is_public_path("/api/auth/biometric-bind"));
+    fn host_public_paths_are_only_health() {
         assert!(is_public_path("/api/health"));
         assert!(is_public_path("/health"));
+        // 票 07 起 /api/auth/* 编排归插件：公开性由插件注册档位声明（none），
+        // 不再由宿主前缀规则放行
+        assert!(!is_public_path("/api/auth/pairing"));
+        assert!(!is_public_path("/api/auth/verify"));
+        assert!(!is_public_path("/api/auth/biometric-challenge"));
+        assert!(!is_public_path("/api/auth/biometric-bind"));
     }
 
     #[test]
@@ -134,10 +152,91 @@ mod tests {
         assert!(!is_public_path("/"));
         // 前缀相似但路径不同，不应误放行
         assert!(!is_public_path("/api/authx"));
-        // 生物认证端点前缀以下仍受保护：/api/auth/biometric 本身是公开前缀的
-        // 成员（starts_with 语义正确），但拼写错误/其他路径不能钻前缀漏洞
         assert!(!is_public_path("/api/authbiometric"));
         assert!(!is_public_path("/api/healthz"));
+    }
+
+    /// ABI v29：公开判定走注册表档位——插件登记 `auth: "none"` 的别名免验签放行
+    /// （真实中间件栈：注册公开别名 → 无 token 请求通过 jwt_gateway 到哨兵）
+    #[actix_web::test]
+    async fn registered_none_tier_alias_passes_without_token() {
+        use actix_web::middleware::from_fn;
+
+        async fn sentinel() -> HttpResponse {
+            HttpResponse::Ok().json(json!({ "ok": true }))
+        }
+
+        let owner = "test-jwt-public";
+        let methods: Vec<String> = vec!["POST".to_string()];
+        crate::server::http::registry::register(
+            owner,
+            "pairing",
+            Some("/api/auth/pairing"),
+            &methods,
+            bedcode_plugin_api::EndpointAuth::None,
+        )
+        .expect("register public alias");
+
+        let app = actix_web::test::init_service(
+            actix_web::App::new().service(
+                web::scope("/api")
+                    .wrap(from_fn(jwt_gateway))
+                    .route("/auth/pairing", web::post().to(sentinel)),
+            ),
+        )
+        .await;
+        let resp = actix_web::test::call_service(
+            &app,
+            actix_web::test::TestRequest::post()
+                .uri("/api/auth/pairing")
+                .to_request(),
+        )
+        .await;
+        assert_eq!(
+            resp.status(),
+            actix_web::http::StatusCode::OK,
+            "注册为 none 档的公开别名必须免验签放行"
+        );
+
+        crate::server::http::registry::purge_for_plugin(owner);
+    }
+
+    /// ABI v29：`jwt` 档别名 / 未登记路径无 token → 401（受保护默认，不静默放行）
+    #[actix_web::test]
+    async fn jwt_tier_alias_without_token_is_401() {
+        use actix_web::middleware::from_fn;
+
+        async fn sentinel() -> HttpResponse {
+            HttpResponse::Ok().json(json!({ "ok": true }))
+        }
+
+        let owner = "test-jwt-guarded";
+        let methods: Vec<String> = vec!["GET".to_string()];
+        crate::server::http::registry::register(
+            owner,
+            "configs",
+            Some("/api/configs"),
+            &methods,
+            bedcode_plugin_api::EndpointAuth::Jwt,
+        )
+        .expect("register jwt alias");
+
+        let app = actix_web::test::init_service(
+            actix_web::App::new().service(
+                web::scope("/api")
+                    .wrap(from_fn(jwt_gateway))
+                    .route("/configs", web::get().to(sentinel)),
+            ),
+        )
+        .await;
+        let resp = actix_web::test::call_service(
+            &app,
+            actix_web::test::TestRequest::get().uri("/api/configs").to_request(),
+        )
+        .await;
+        assert_eq!(resp.status(), actix_web::http::StatusCode::UNAUTHORIZED);
+
+        crate::server::http::registry::purge_for_plugin(owner);
     }
 
     #[test]

@@ -596,6 +596,8 @@ mod tests {
     // 各域文件 `use super::*` 复用，fixture 互斥与产物构建语义不变
     mod component_e2e;
     mod engine_limits;
+    mod http_e2e;
+    mod p3_async_host_import;
     mod pty_e2e;
     mod sdk_e2e;
     mod session_e2e;
@@ -983,6 +985,61 @@ mod tests {
 
         // wasm32-wasip3（同 wasip2）已内嵌 wasm-component-ld：产物直接是组件，无需 encode
         std::fs::read(&module_path).expect("Failed to read ws fixture component after build")
+    }
+
+    // ==================== host-http 服务端域端到端（ABI v29，路由注册下沉） ====================
+
+    /// 构建 host-http fixture 插件（packages/plugin-http-test）并编码为组件
+    fn build_http_test_component() -> Vec<u8> {
+        let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let packages_dir = manifest_dir.join("../packages");
+        let plugin_dir = packages_dir.join("plugin-http-test");
+
+        let output_dir = plugin_dir.join("target/wasm32-wasip3/release");
+        let module_path = output_dir.join("bedcode_plugin_http_test.wasm");
+
+        if module_path.exists() {
+            let src_files = [
+                plugin_dir.join("src/lib.rs"),
+                plugin_dir.join("plugin.json"),
+                packages_dir.join("plugin-sdk-desktop/rust/src/wasm.rs"),
+                packages_dir.join("plugin-sdk-desktop/rust/src/wasm_host.rs"),
+                packages_dir.join("plugin-sdk-desktop/rust/src/host/http.rs"),
+                packages_dir.join("plugin-sdk-desktop/rust/wit/bedcode.wit"),
+            ];
+            let module_modified = std::fs::metadata(&module_path)
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+
+            let needs_rebuild = src_files.iter().any(|f| {
+                std::fs::metadata(f)
+                    .and_then(|m| m.modified())
+                    .map(|t| t > module_modified)
+                    .unwrap_or(true)
+            });
+
+            if !needs_rebuild {
+                return std::fs::read(&module_path).expect("Failed to read http fixture component module");
+            }
+        }
+
+        let manifest_path = plugin_dir.join("Cargo.toml");
+        let status = std::process::Command::new("cargo")
+            .env("RUSTUP_TOOLCHAIN", crate::wasm_core::manager::runtime::WASIP3_NIGHTLY)
+            .args([
+                "build",
+                "--target",
+                "wasm32-wasip3",
+                "--release",
+                "--manifest-path",
+                manifest_path.to_str().unwrap(),
+            ])
+            .status()
+            .expect("Failed to run cargo build for http fixture component");
+        assert!(status.success(), "http fixture component WASM build failed");
+
+        // wasm32-wasip3（同 wasip2）已内嵌 wasm-component-ld：产物直接是组件，无需 encode
+        std::fs::read(&module_path).expect("Failed to read http fixture component after build")
     }
 
     // ==================== host-pty 创建→拉取端到端（ABI v16，票 02） ====================

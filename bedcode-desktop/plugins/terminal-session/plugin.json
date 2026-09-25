@@ -13,6 +13,7 @@
     "connection:read",
     "fs:read",
     "fs:write",
+    "network:http",
     "peer",
     "process:run",
     "pty:io",
@@ -190,69 +191,6 @@
         "path": "terminal",
         "auth": "jwt"
       }
-    ],
-    "httpEndpoints": [
-      "configs",
-      "quick-actions",
-      "file-tree",
-      "file-tree-children",
-      "file-content",
-      "diff-tree",
-      "file-diff",
-      "git/branches",
-      "git/status",
-      "git/checkout",
-      {
-        "path": "auth/pairing",
-        "auth": "none"
-      },
-      {
-        "path": "auth/verify",
-        "auth": "none"
-      },
-      {
-        "path": "auth/qr-connect",
-        "auth": "none"
-      },
-      {
-        "path": "auth/reauth",
-        "auth": "none"
-      },
-      {
-        "path": "auth/biometric-challenge",
-        "auth": "none"
-      },
-      {
-        "path": "auth/biometric-verify",
-        "auth": "none"
-      },
-      {
-        "path": "auth/biometric-bind",
-        "auth": "none"
-      },
-      {
-        "path": "task-status",
-        "auth": "none"
-      },
-      {
-        "path": "session-mode",
-        "auth": "none"
-      },
-      "session-settings",
-      "task-history/current",
-      "task-history/list",
-      "supported-agents",
-      "task-queue/add",
-      "task-queue/remove",
-      "task-queue/list",
-      "task-queue/clear",
-      "task-queue/update",
-      "task-queue/reorder",
-      "task-queue/cancel",
-      "scheduled-jobs/create",
-      "scheduled-jobs/list",
-      "scheduled-jobs/remove",
-      "scheduled-jobs/reset"
     ],
     "views": [
       {

@@ -50,6 +50,8 @@ mod devices_events;
 mod devices;
 /// 执行环境平台事实（票 13）：WSL 发行版枚举（host-platform 原语）
 mod environment;
+/// HTTP 路由代码注册（ABI v29 服务端域）：activate 期注册自身全部路由，单一事实源
+mod http_routes;
 /// 会话创建编排（票 09）：命名唯一化 / config→launch spec 映射 / 两阶段启动决策
 mod launch;
 /// 文件浏览域（票 03）：文件树 / 内容 / diff（host-fs + host-process，见模块文档）
@@ -65,6 +67,8 @@ pub mod schema;
 /// 会话登记域（会话引擎整体下沉 P1）：会话真源自宿主 `session/` 迁入本插件，
 /// 当前处于双写阶段（宿主仍是权威，见模块文档）
 pub mod session;
+/// sessions REST HTTP 域（ABI v29）：/api/sessions* 七条模板别名下沉
+pub mod sessions_http;
 /// 任务域（票 15-16）：Agent 集成与会话状态 + 队列/定时后端（见模块文档）
 pub mod task;
 /// 按键组合 → 转义字节翻译（票 06 下沉）：宿主 pty 只收裸字节，本插件自译自写
@@ -829,12 +833,20 @@ impl WasmPlugin for SessionPlugin {
                 e
             )),
         }
+
+        // ABI v29（HTTP 路由代码注册下沉）：activate 期注册自身全部 HTTP 路由
+        // （业务/认证别名 + 任务域内部路径 + sessions REST + terminal-bg）。
+        // 单条失败只 warn（该路由 404 可见，不把整个插件打成 Error——D7 故障隔离）。
+        http_routes::register_all(&host);
         Ok(())
     }
 
     fn deactivate() -> anyhow::Result<()> {
         let host = WasmHost;
         host.log_info("Terminal Session Center plugin deactivated");
+        // ABI v29：路由回收依赖宿主停用 purge（同 host-websocket 先例）；
+        // 此处留痕 + 状态自清（双保险）
+        http_routes::unregister_all(&host);
         // 票 15：插件停用时撤离所有项目的 Agent 集成（与旧插件同语义）——残留集成
         // 在插件停用后仍会被 agent 调用，指向已停止的端点。
         let result = task::hooks::cleanup_all_agent_integrations(&host);
@@ -1588,17 +1600,20 @@ impl WasmPlugin for SessionPlugin {
 
             // ==================== 票 16：HTTP 端点入口（path 段与旧插件逐字一致） ====
             // 宿主 `ANY /api/plugin/com.bedcode.terminal-session/{path}` 命中后调本命令，
-            // `path` 即去掉前缀的相对段。分派表与 manifest `contributes.httpEndpoints`
-            // 声明清单同源（task::HTTP_ENDPOINTS + [BUSINESS_HTTP_ENDPOINTS]，契约
-            // 用例锁死）。
+            // `path` 即去掉前缀的相对段。分派表与 [`http_routes::ROUTES`]（ABI v29 单一
+            // 事实源）同源（task::HTTP_ENDPOINTS + [BUSINESS_HTTP_ENDPOINTS] 等分派常量，
+            // 契约用例锁死）。
             "_http_endpoint" => {
                 let a = CommandArgs::new(args);
                 let method = a.str_or("method", "");
                 let path = a.str_or("path", "");
                 let body = a.value_owned("body").unwrap_or(serde_json::Value::Null);
                 let query = a.value_owned("query").unwrap_or_else(|| serde_json::json!({}));
+                // ABI v29：模板捕获参数（host 别名 `{id}` 段）与验签派生的设备上下文
+                let params = a.value_owned("params").unwrap_or_else(|| serde_json::json!({}));
+                let device = a.value_owned("device").unwrap_or_else(|| serde_json::json!({}));
                 Ok(handle_http_endpoint(
-                    &WasmHost, &method, &path, &body, &query,
+                    &WasmHost, &method, &path, &body, &query, &params, &device,
                 ))
             }
 
@@ -1672,11 +1687,10 @@ fn broadcast_queue_after(
 // ==================== 票 02：业务域 HTTP 端点（configs / quick-actions） ====================
 
 /// 业务域 HTTP 端点清单（票 02）：`configs`（会话配置查询面）与 `quick-actions`
-/// （快捷指令查询面）的插件侧实现。宿主网关别名表（`server/gateway.rs`
-/// `BUSINESS_ROUTES`）按 manifest `contributes.httpEndpoints` 逐字声明才转发，
-/// 因此本清单 = 网关 /api/configs 与 /api/quick-actions 的接管声明。
-/// 与 [`task::HTTP_ENDPOINTS`] 一起构成 plugin.json `httpEndpoints` 的单一事实源
-/// （契约用例锁死）。
+/// （快捷指令查询面）的插件侧实现。ABI v29 起宿主网关查动态注册表
+/// （`server/http/registry`）转发——插件 activate 期经 `http_routes::ROUTES` 注册
+/// 别名，本清单是分派常量（`_http_endpoint` 分派表与 ROUTES 的契约锚点）。
+/// 与 [`task::HTTP_ENDPOINTS`] 一起构成 ROUTES 内部段的并集（契约用例锁死）。
 pub const BUSINESS_HTTP_ENDPOINTS: &[&str] = &["configs", "quick-actions"];
 
 /// 文件浏览域 + 工作区 git 域 HTTP 端点（票 03/04）：网关别名表
@@ -1691,7 +1705,8 @@ pub const GIT_HTTP_ENDPOINTS: &[&str] = &["git/branches", "git/status", "git/che
 /// 认证链 HTTP 端点（票 07）：网关 /api/auth/* 七条公开路由的插件接管声明
 pub const AUTH_HTTP_ENDPOINTS: &[&str] = auth_http::AUTH_HTTP_ENDPOINTS;
 
-/// 免凭证（`auth: "none"`）端点清单——plugin.json `httpEndpoints` 里对象条目的唯一真源
+/// 免凭证（`auth: "none"`）端点清单——ABI v29 起是 `http_routes::ROUTES` 档位的
+/// 分派常量（契约锚点）
 ///
 /// 票 08 裁决 1：宿主对 HTTP 端点的缺省档已翻成最严档 `jwt`（未声明 auth 即要求
 /// 移动端 JWT 验签）。本清单是**仅有的两批**必须免凭证可达的端点，逐条理由：
@@ -1723,6 +1738,8 @@ fn handle_http_endpoint(
     path: &str,
     body: &serde_json::Value,
     query: &serde_json::Value,
+    params: &serde_json::Value,
+    device: &serde_json::Value,
 ) -> serde_json::Value {
     match path {
         // GET /api/configs（网关别名）→ 配置真源列表，wire 与宿主 ConfigItem 同形
@@ -1745,6 +1762,12 @@ fn handle_http_endpoint(
         | "auth/biometric-challenge"
         | "auth/biometric-verify"
         | "auth/biometric-bind" => auth_http::handle_http_endpoint(host, method, path, body, query),
+        // 票 11 下沉收尾（ABI v29）：sessions REST 七条（host 模板别名 /api/sessions*）
+        // ——内部段 + params（`{id}` 捕获）+ device（JWT claims 派生的设备名）
+        "sessions" | "sessions/start" | "sessions/stop" | "sessions/resize"
+        | "sessions/input" | "sessions/history" | "sessions/remove" => {
+            sessions_http::handle_sessions_http(host, method, path, body, query, params, device)
+        }
         _ => task::handle_http_via_host(host, method, path, body, query),
     }
 }
@@ -1869,6 +1892,10 @@ mod tests {
                 "connection:read".to_string(),
                 "fs:read".to_string(),
                 "fs:write".to_string(),
+                // ABI v29（HTTP 路由代码注册下沉）：host-http 服务端域
+                // register-endpoint / unregister-endpoint（动态路由注册，与前端面
+                // `http.registerEndpoint` 同权限位）
+                "network:http".to_string(),
                 "peer".to_string(),
                 // 票 03：文件浏览域 git diff 经 host-process run-sync（同步执行并
                 // 捕获输出；与 process:run 同信任域——执行任意命令，声明即信任）
@@ -1905,7 +1932,7 @@ mod tests {
             ],
             "spec D2 权限表：认证 auth/peer + 进程 process:run（票 03 git）+ 会话 \
              session:read/session:config/session:write + storage + ui:input/ui:sidebar/ui:settings\
-             + ws:server（票 09b）"
+             + ws:server（票 09b）+ network:http（ABI v29 动态路由注册）"
         );
         let mut expected = SessionApiDispatcher::API_NAMES
             .iter()

@@ -157,7 +157,14 @@
 //!   知道 session id，插件经 `ring-fetch` 自持输出游标），旧 `Message`/`SyncPayload`
 //!   等宿主 WS 业务类型退出生产路径。旧产物（v27 SDK 构建）实例化期经
 //!   `stale_artifact_rebuild_hint` 点名 v28 重建，不迁移不兼容。
-pub const ABI_VERSION: u32 = 28;
+//!
+//! - **v29: HTTP 路由代码注册下沉专项（2026-09-25）**——宿主 HTTP 传输面路由
+//!   登记权移交插件：新增 `host-http` 服务端域（`register-endpoint` /
+//!   `unregister-endpoint`，插件代码运行时注册自身路由，含对外 URL 别名 / 方法 /
+//!   认证档位，宿主只留通用注册表 / 通用判定 / 通用转发 / 验签引擎），路由以插件名
+//!   为命名空间隔离（激活期同名拒绝，fail-visible）。函数级追加：旧产物（v28 SDK
+//!   构建）仍可实例化（import 面不变），但不能注册路由——按新 SDK 重建以获得服务端域。
+pub const ABI_VERSION: u32 = 29;
 
 /// 组件形态标识：`abi.form() == FORM_COMPONENT`（WIT `abi` 接口的 form() 声明）
 ///
@@ -171,13 +178,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_abi_version_is_v28() {
+    fn test_abi_version_is_v29() {
         // 版本号序列与历史 core ABI 共用：v26 = host-crypto 宿主加密引擎原语面
         // （并发批次先落地，占 26）；**v27 = 会话原语域整 interface 退役**
         // （会话引擎下沉票 10：host-session 12 函数 + terminal-hooks + events 两个导出）；
         // **v28 = websocket 业务下沉专项**（2026-09-25：新增
         // host-websocket.connection-context + 退役 host-events.broadcast-sync /
         // host-pty.spawn 的 hostBroadcastSessionId 字段，旧产物点名 v28 重建）；
+        // **v29 = HTTP 路由代码注册下沉专项**（2026-09-25：host-http 服务端域
+        // register-endpoint / unregister-endpoint，插件动态路由注册，函数级追加）；
         // 再往前叠加 v25 host-peer 节点生命周期原语（审计票 12 裁决 1 = 选项 A）、
         // v24 认证记录下沉（2026-09-22，host-auth 记录面七函数退役 + host-session
         // config 读取面退役）、v23 host-session
@@ -188,7 +197,7 @@ mod tests {
         // （同批次之一）、v17 认证策略导出（auth-policy）、v16 插件私有伪终端原语
         // （host-pty）、v15 密钥托管（host-auth / secret-store）、v14 host-websocket、
         // v13 host-mdns v2、v12 总线二进制载荷与 v11 host-peer 传输控制三原语
-        assert_eq!(ABI_VERSION, 28);
+        assert_eq!(ABI_VERSION, 29);
     }
 
     #[test]

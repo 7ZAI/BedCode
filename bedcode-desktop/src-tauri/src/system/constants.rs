@@ -142,6 +142,11 @@ pub const PLUGIN_HTTP_TIMEOUT_SECS: u64 = 120;
 /// 32MB 对目录列举/元数据绰绰有余（guest 解析约几 G 指令，远低于 FUEL_PER_CALL 64G）。
 pub const PLUGIN_HTTP_RESPONSE_BODY_LIMIT_BYTES: usize = 32 * 1024 * 1024;
 
+/// 单插件可注册 HTTP 端点数量上限（ABI v29 服务端域）：超限 `register-endpoint`
+/// 返回 `Err`，无副作用。terminal-session 迁移后约 41 条（业务域 17 + 任务域 16 +
+/// sessions REST 7 + terminal-bg 1），64 为安全上限；插件不能放宽宿主边界。
+pub const PLUGIN_HTTP_MAX_ENDPOINTS_PER_PLUGIN: usize = 64;
+
 // ==================== host-database 执行护栏（票据 05，spec `.scratch/2026-09-18-db-http-base-service/`） ====================
 
 /// 插件 SQL 语句执行超时（秒）：
