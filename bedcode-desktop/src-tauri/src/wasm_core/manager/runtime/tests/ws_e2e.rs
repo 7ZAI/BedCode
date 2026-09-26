@@ -5,6 +5,40 @@
 
 use super::*;
 use bedcode_plugin_api::host::{ws_event_topic, WS_CLIENT_CONNECT, WS_CLIENT_DISCONNECT, WS_CLOSE, WS_OPEN};
+
+/// 读下一条**非事件广播**帧（2026-09-26：session-control 端点现承载 WS 事件广播
+/// ——session:created / stopped / removed 事件帧会抢在动作回显前到达，收动作回包
+/// 必须跳过 `{"type":"event",...}` 广播帧；心跳帧照旧跳过），超时返回 `None`
+async fn ws_client_recv_action(
+    client: &mut WsTestClient,
+    timeout: std::time::Duration,
+) -> Option<tokio_tungstenite::tungstenite::Message> {
+    use futures_util::StreamExt;
+    use tokio_tungstenite::tungstenite::Message;
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return None;
+        }
+        match tokio::time::timeout(remaining, client.next()).await {
+            Ok(Some(Ok(msg))) => match msg {
+                Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => continue,
+                Message::Text(text) => {
+                    // 事件广播帧：跳过（动作回显/响应帧的 `type` 是动作名，非 event）
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                        if v.get("type").and_then(|t| t.as_str()) == Some("event") {
+                            continue;
+                        }
+                    }
+                    return Some(Message::Text(text));
+                }
+                other => return Some(other),
+            },
+            _ => return None,
+        }
+    }
+}
 /// host-websocket 客户端域端到端（ABI v14）
 ///
 /// fixture 插件（`packages/plugin-ws-test`）→ 宿主 `connect`（**真握手**）→
@@ -1174,7 +1208,7 @@ fn test_session_control_endpoint_direct_roundtrip() {
             )))
             .await
             .expect("send start action");
-        let started_id = match ws_client_recv(&mut client, std::time::Duration::from_secs(5)).await {
+        let started_id = match ws_client_recv_action(&mut client, std::time::Duration::from_secs(5)).await {
             Some(Message::Text(text)) => {
                 let reply: serde_json::Value =
                     serde_json::from_str(&text).unwrap_or_else(|e| panic!("start 回包非 JSON: {text}: {e}"));
@@ -1193,7 +1227,7 @@ fn test_session_control_endpoint_direct_roundtrip() {
             .send(Message::Text(r#"{"type":"list_sessions"}"#.to_string()))
             .await
             .expect("send list action");
-        match ws_client_recv(&mut client, std::time::Duration::from_secs(5)).await {
+        match ws_client_recv_action(&mut client, std::time::Duration::from_secs(5)).await {
             Some(Message::Text(text)) => {
                 let reply: serde_json::Value = serde_json::from_str(&text).expect("reply json");
                 assert_eq!(reply["type"], "session_list", "got: {reply}");
@@ -1212,7 +1246,7 @@ fn test_session_control_endpoint_direct_roundtrip() {
             )))
             .await
             .expect("send stop action");
-        match ws_client_recv(&mut client, std::time::Duration::from_secs(5)).await {
+        match ws_client_recv_action(&mut client, std::time::Duration::from_secs(5)).await {
             Some(Message::Text(text)) => {
                 let reply: serde_json::Value = serde_json::from_str(&text).expect("reply json");
                 assert_eq!(reply["type"], "stop_session", "stop 回显动作标签, got: {reply}");
@@ -1226,7 +1260,9 @@ fn test_session_control_endpoint_direct_roundtrip() {
                 .send(Message::Text(r#"{"type":"list_sessions"}"#.to_string()))
                 .await
                 .expect("send list");
-            if let Some(Message::Text(text)) = ws_client_recv(&mut client, std::time::Duration::from_secs(3)).await {
+            if let Some(Message::Text(text)) =
+                ws_client_recv_action(&mut client, std::time::Duration::from_secs(3)).await
+            {
                 let reply: serde_json::Value = serde_json::from_str(&text).expect("reply json");
                 if reply["type"] == "session_list" {
                     if let Some(status) = reply["sessions"].as_array()
@@ -1250,7 +1286,7 @@ fn test_session_control_endpoint_direct_roundtrip() {
             )))
             .await
             .expect("send remove action");
-        match ws_client_recv(&mut client, std::time::Duration::from_secs(5)).await {
+        match ws_client_recv_action(&mut client, std::time::Duration::from_secs(5)).await {
             Some(Message::Text(text)) => {
                 let reply: serde_json::Value = serde_json::from_str(&text).expect("reply json");
                 assert_eq!(reply["type"], "remove_session", "remove 回显动作标签, got: {reply}");
@@ -1261,7 +1297,7 @@ fn test_session_control_endpoint_direct_roundtrip() {
             .send(Message::Text(r#"{"type":"list_sessions"}"#.to_string()))
             .await
             .expect("send list action");
-        match ws_client_recv(&mut client, std::time::Duration::from_secs(5)).await {
+        match ws_client_recv_action(&mut client, std::time::Duration::from_secs(5)).await {
             Some(Message::Text(text)) => {
                 let reply: serde_json::Value = serde_json::from_str(&text).expect("reply json");
                 let sessions = reply["sessions"].as_array().expect("sessions array");
