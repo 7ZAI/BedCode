@@ -648,6 +648,43 @@ pnpm run target:clean   # 手动清理宿主 target（cd src-tauri && cargo clea
 
 **构建前自动检查**：`pnpm run build` 会自动执行检查。
 
+### Target 治理方案决策记录（2026-09-26）
+
+> 整理自 2026-09-26 target 目录治理专项 spec（2026-09-27 迁入 docs）。
+
+**为什么宿主侧不能共享**（先排除的方案）：两端 wasmtime 版本分叉（桌面 48 / 移动 48，cargo 按
+版本分产物）、目标三元组不同（移动端 `aarch64-linux-android`）、feature 集不同（tauri /
+tauri-plugin-*）——宿主侧 14G 是**活产物**（`deps/` 里几乎每个 crate 只有 1 个哈希版本，陈旧残留仅
+~10M），不是垃圾，是必要成本。真正的浪费在 12~15 个小独立 target 上。
+
+**方案评估（采纳 / 否决）**：
+
+| 方案 | 预计回收 | 决策 |
+| --- | --- | --- |
+| A 夹具共享 target | 6.0G → ~1G | **采纳** |
+| B 桌面 wasm 应用共享 target | 5.8G → ~4G | **采纳** |
+| C 移动端夹具共享 target | ~0.35G → ~0.2G | **采纳**（低成本，同构） |
+| D 两端宿主共享 target | 估 2~3G | **不做**：编译期独占锁使并发构建串行化；`cargo clean` 爆炸半径覆盖全端；且去重空间有限（见上） |
+| E 单一根 workspace | 增量有限 | **不做**：单一 `Cargo.lock` 耦合 wasmtime 分叉；stable vs nightly 工具链冲突；workspace feature 统一污染 wasm 产物；`cargo build --workspace` 会按宿主三元组编译 wasm 应用 |
+| F sccache | 不省空间 | **不做**：sccache 不缓存增量编译单元（需 `CARGO_INCREMENTAL=0`），dev 迭代更慢；仅 CI 适用 |
+| G btrfs + compress=zstd | 14G → 5~7G | **不做**：需独立分区，loop 挂载性能损失不可接受 |
+| H 定期回收 | 立即 ~4G | **采纳**（Step 0 + 监控脚本扩展） |
+
+**实施中发现的关键事实**：clippy / rust-analyzer 之类的工具链探针会在应用 crate 目录内跑
+`cargo check`，绕过 `build.js` 显式传的 `--target-dir`，静默重建 per-crate 目录——因此
+`packages/.cargo/config.toml` 与 `wasm-apps/.cargo/config.toml` 也是真源（cargo 按 cwd 祖先链
+发现配置，与 `--manifest-path` 无关）；两份 config 均**不影响宿主构建**（`packages/` /
+`wasm-apps/` 不是 `src-tauri/` 的祖先）。
+
+**已知遗留**：移动端发布态 SDK CLI（`packages/plugin-sdk-mobile/bin/cli.js`）三处硬编码
+`rust/target/...` 产物路径未共享（约 500M 量级，改动需连带 SDK 评估）；`[profile.release.build-override]`
+（宿主导 proc-macro 降优化，理论可再省数百 M）未做——留作后续评估项。
+
+**验证结果（2026-09-26）**：夹具共享（桌面 9→1 目录 417M、移动 2→1 目录 334M）、wasm 应用共享
+（4→1 目录 150M）后过滤测试全绿；桌面 `cargo test --no-fail-fast` 890 + 集成 9 项（2 项失败均非
+本任务）；前端桌面 844 / 移动 467 passed；`pnpm exec eslint .` 0 errors；Step 0 即时回收 3.9G
+（15.3G → 11.4G）。
+
 **增量目录可随时删**（代价：本地 crate 下次全量重编，依赖产物不受影响）：
 
 ```bash

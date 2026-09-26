@@ -29,14 +29,14 @@
 - per-plugin 级别：`BEDCODE_PLUGIN_LOG=id=level`（filter 不能按字段过滤，per-plugin 级别需在 emit_plugin_log 入口做宿主侧阈值映射）
 - WASM trap 必须带 backtrace：`Config::wasm_backtrace_max_frames(Some(32))` **不得关闭**（wasmtime 48.0.3 `default` features 已含 backtrace，零编译成本）
 - 插件 wasm 恒 `--release` 构建（保留 names section 函数名、无 DWARF 行号）
-- 调试模式（dev）：`BEDCODE_PLUGIN_DEBUG=1` → debug profile wasm + `wasm_backtrace_details Environment` + 燃料联动放大，见 `.scratch/plugin-wasm-logging/spec.md`
+- 调试模式（dev）：`BEDCODE_PLUGIN_DEBUG=1` → debug profile wasm + `wasm_backtrace_details Environment` + 燃料联动放大，完整设计见 `docs/knowledge/plugin-wasm-logging.md`
 
 ---
 
 ## 4. 移动端无 dev 日志排查
 
 - 现象：落盘停在 `Starting: Intent` 后无 logcat 行
-- 首查 tauri CLI 是否卡 `adb shell pidof` 轮询（adb client 37.0.1 fd0 bug，见 `.scratch/adb-fd0-bug/bug-report.md`；`dev-run.js` 预检自愈）
+- 首查 tauri CLI 是否卡 `adb shell pidof` 轮询（adb client 37.0.1 fd0 bug，见 `docs/knowledge/adb-fd0-bug.md`；`dev-run.js` 预检自愈）
 - 链路问题优先 grep 两端 `runtime.*.log` 关键 tag：`file_service` / `peer_changed` / `MessageBus` / `reqwest::connect`
 - 排查参考：`docs/knowledge/mobile-desktop-auth.md`（认证链路）、`docs/knowledge/sdk-publish.md`
 

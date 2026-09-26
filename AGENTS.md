@@ -37,7 +37,7 @@
 | Node | LTS（CI 用 `lts/*`；无 `.nvmrc`，本地对齐 LTS） | CI workflows |
 | Rust | stable + edition 2021（无 `rust-toolchain.toml`，与 CI `dtolnay/rust-toolchain@stable` 对齐） | CI workflows |
 | Tauri | 2（两端） | src-tauri/Cargo.toml |
-| wasmtime | **双端 48（LTS）**：升级必须双端同步（ADR 0019）。桌面 2026-09-18 先行升 48（临时分叉），移动 2026-09-26 补齐 → 分叉关闭、两端重新对齐 48.0.x（wasip3 构建链仍仅桌面，移动端待评估，见 `.scratch/2026-09-26-mobile-wasmtime-48-wasip3/spec.md`） | src-tauri/Cargo.toml |
+| wasmtime | **双端 48（LTS）**：升级必须双端同步（ADR 0019）。桌面 2026-09-18 先行升 48（临时分叉），移动 2026-09-26 补齐 → 分叉关闭、两端重新对齐 48.0.x（wasip3 构建链仍仅桌面，移动端评估与待决策项见 `docs/knowledge/wasip3-toolchain.md` §7） | src-tauri/Cargo.toml |
 | 版本号 | 桌面/移动 package.json 与 Cargo.toml **同步维护**；变更记录根 `CHANGELOG.md` | 仓库现状 |
 | Android | JDK/Gradle 由 `gen/android` 分发包维护；SDK/NDK 随其管理 | — |
 
@@ -83,7 +83,7 @@ pnpm exec eslint .
 - **Kotlin 独立工具链**：上述 gradlew 命令是 `gen/android` 下 Kotlin 改动的唯一验证（`cargo test` 与前端测试均不覆盖）
 - **文档命令字眼必须随工具链迁移**：spec / issue / scratch / 知识库文档里提及测试/构建/安装命令，**必须**用本节字眼（`pnpm run test:run`、`pnpm run tauri:dev`、`cargo test` 等），禁止旧 `npm` / `npm run test` 字眼；审计文档时若发现不一致，先改文档再继续
 - 构建前检查 `src-tauri/target` 大小，超 15GB 执行 `cargo clean`（`pnpm run target:size` 额外列出共享 / 遗留 target 目录大小）
-- **构建产物落点：无根 workspace 的 target 目录治理**（2026-09-26 起，`.scratch/2026-09-26-cargo-target-space/`）——本仓库两端 30+ 个独立 `Cargo.toml`，per-crate target 会把相同依赖图重复编译 N 遍。夹具落 `bedcode-desktop/target/fixtures`（真源 `src-tauri/.../runtime/fixture_target.rs` + `packages/.cargo/config.toml`），wasm 应用落 `bedcode-desktop/target/wasm-apps`（真源 `scripts/plugin-wasm-config.mjs` 的 `WASM_TARGET_DIR` + `wasm-apps/.cargo/config.toml`），移动端夹具落 `bedcode-mobile/target/fixtures`。**新增 crate / 脚手架时不得写死 `<crate>/target/`**，沿用对应共享目录；`fixtures` 与 `wasm-apps` 不得合并（profile 不同会产出两份依赖产物）
+- **构建产物落点：无根 workspace 的 target 目录治理**（2026-09-26 起，方案与决策见 `docs/knowledge/build-process.md`「Target 目录管理」节）——本仓库两端 30+ 个独立 `Cargo.toml`，per-crate target 会把相同依赖图重复编译 N 遍。夹具落 `bedcode-desktop/target/fixtures`（真源 `src-tauri/.../runtime/fixture_target.rs` + `packages/.cargo/config.toml`），wasm 应用落 `bedcode-desktop/target/wasm-apps`（真源 `scripts/plugin-wasm-config.mjs` 的 `WASM_TARGET_DIR` + `wasm-apps/.cargo/config.toml`），移动端夹具落 `bedcode-mobile/target/fixtures`。**新增 crate / 脚手架时不得写死 `<crate>/target/`**，沿用对应共享目录；`fixtures` 与 `wasm-apps` 不得合并（profile 不同会产出两份依赖产物）
 - **测试内 fixture 构建依赖 rustup shim**：宿主 wasm 闭环用例会在测试内 `cargo build --target wasm32-wasip3` 构建 fixture（component/sdk/pty/ws/wasip3-test），并显式注入 `RUSTUP_TOOLCHAIN=nightly-2026-09-16`（单一事实来源 `scripts/wasip3-toolchain.sh`）。因此**必须用 rustup shim 的 `cargo`（`~/.cargo/bin/cargo`）跑测试**，禁止把 `~/.rustup/toolchains/*/bin` 前置进 PATH——绕过 shim 会让注入的 `RUSTUP_TOOLCHAIN` 失效（raw toolchain cargo 忽略该变量）→ 依赖 fixture 的用例成批失败（现象：`Test component WASM build failed` / `WASI test component WASM build failed`，一次红约 39 项，与代码无关）
 - **测试后清理进程**：每次跑完测试（`cargo test` / `pnpm run test:run` / `gradlew` 等）后，必须检查并关闭测试开启的后台进程/监听端口（如 cargo 测试 spawn 的 mock server、vitest worker 残留、gradle daemon 等），避免残留进程占用端口或 CPU
 - 桌面 `tauri:build` 自动解析 updater 签名密钥（`TAURI_SIGNING_PRIVATE_KEY(_FILE)` / `.env`），未配置时自动禁用升级包，本地构建无需私钥；正式发布由 GitHub Actions Secrets 签名（`docs/knowledge/release-workflow.md`）
@@ -101,7 +101,7 @@ pnpm exec eslint .
 | 改插件 | `docs/knowledge/plugin-development-checklist.md`（全文）+ WIT（`packages/plugin-sdk-*/rust/wit/bedcode.wit`）+ ADR 0017/0019/0022 |
 | 改数据库 / schema | §9 数据规范 + `bedcode-desktop/src-tauri/src/db/` |
 | 改跨端协议（HTTP/WS/QR/认证） | §9 协议规范 + `docs/knowledge/mobile-desktop-auth.md`，两端同步评估 |
-| 排查日志 / 无日志问题 | `docs/knowledge/logging.md` + `.scratch/2026-09-07-adb-fd0-bug/bug-report.md` |
+| 排查日志 / 无日志问题 | `docs/knowledge/logging.md` + `docs/knowledge/adb-fd0-bug.md`（adb fd0 根因与 shim 维护要点） |
 | 启动多任务 / 需要规划 | `.scratch/<task>/` 记录（项目未设计 GitHub PR 流程，开发过程文档走这里） |
 | 定位代码 | §12 代码查找纪律 |
 
@@ -109,7 +109,7 @@ pnpm exec eslint .
 
 ## 5. 架构硬约束
 
-**目标：无业务内核（Businessless Kernel）**——底座内核只含「应用无关的通用引擎」：进程（PTY）、网络（HTTP/WS/mDNS）、存储（SQLite/文件）、安全（JWT/密钥/TLS/信任）、通信（消息总线/插件互调）+ wasmtime 运行时。一切产品概念（会话、终端、设备连接、文件传输、AI……）都是插件。演进路线的阶段划分见 `.scratch/2026-09-10-plugin-kernel-roadmap/spec.md`；终态愿景见 `.scratch/2026-09-10-platform-kernel/spec.md`。
+**目标：无业务内核（Businessless Kernel）**——底座内核只含「应用无关的通用引擎」：进程（PTY）、网络（HTTP/WS/mDNS）、存储（SQLite/文件）、安全（JWT/密钥/TLS/信任）、通信（消息总线/插件互调）+ wasmtime 运行时。一切产品概念（会话、终端、设备连接、文件传输、AI……）都是插件。演进路线的阶段划分见 `docs/knowledge/plugin-kernel-roadmap.md`；终态愿景见 `docs/knowledge/businessless-kernel-vision.md`。
 
 边界裁决的单一事实源是 **ADR 0022**（`docs/adr/0022-plugin-host-interface-primitive-boundary.md`）；
 本节是它的**可执行摘要 + 门禁**，两者冲突以 ADR 为准，ADR 未覆盖处以本节为准。
@@ -192,7 +192,7 @@ pnpm exec eslint .
   `protocol/` 整目录删除、内核输出环与会话状态机消失。宿主与会话相关的只剩三样**都无业务语义**：
   ① PTY 引擎（`host-pty` + `src-tauri/src/pty/`）② 宿主 server 在册连接清单（`host-connection`）
   ③ 互调窄转发层（`utils/session_gateway.rs`）。实施与实测见
-  `.scratch/2026-09-23-session-engine-downsink/`（终端渲染管道、设备连接与认证按同一路线继续下沉）
+  `docs/knowledge/session-engine-downsink.md`（终端渲染管道、设备连接与认证按同一路线继续下沉）
 - **裁剪线（ADR 0022）**：宿主能力只暴露「离宿主无法实现、且无业务语义」的原语；业务编排一律在插件层
 - 技术决策记录在 `docs/adr/`（Multi-Project Monorepo / Async Everywhere / Event-Driven / Graceful
   Shutdown / Flat Module Structure / Plugin System / 无业务内核 / 插件 Mock 归属 / 0022 边界），
@@ -226,7 +226,7 @@ pnpm exec eslint .
 - **调用模型**：实例装配条目 `WasmInstanceEntry`（宿主侧**唯一**入口：`PluginHost::call_guest`）；
   `CoreConfig.call_model` 灰度 = `mutex`（每实例一把锁，回退窗口）| `event-loop`（每实例一个常驻
   事件循环属主任务）。**异步化按需、不全量**——判据与白名单见
-  `.scratch/2026-09-26-plugin-concurrency-model/spec.md` §4（宿主实现侧 async，不改 WIT）
+  `docs/adr/0029-plugin-concurrency-owner-and-on-demand-async.md`（含 C1–C4 判据、白名单、实例级门结论；宿主实现侧 async，不改 WIT）
 - **宿主直调命令面只保留外壳**：`src-tauri/src/commands.rs` 只服务宿主页面（外壳 / 诊断 / 引擎事实），
   业务面一律走插件命令面；`src/composables/` 同理
 - **域 → 原语接口 → 业务真源**（当前形态，细节见 `bedcode-desktop/docs/code-map.md`）：
@@ -317,7 +317,7 @@ manifest 静态声明面 `contributes.httpEndpoints` / `toolProviders` · 宿主
   变更后旧产物要在**实例化期**拿到点名缺失 interface + 「按哪个版本重建」的错误，不是 trap
   也不是静默降级；③ **退役的权限位 / 命令字眼**：构建链映射表含词汇表外条目时**加载即抛**，
   而不是注入一个永远过不了门的权限。
-  **先例（本判据的来源）**：2026-09-24 会话下沉专项——宿主「回查内核拿会话」曾造成桌面终端按键丢失、任务队列被批量标中断而测试全绿；三形态各已落锁（防回接锁 / `LoadedWasmPlugin::stale_artifact_rebuild_hint` / `manifest-gen.js` 加载期词汇自检），详见 `.scratch/2026-09-23-session-engine-downsink/spec.md`
+  **先例（本判据的来源）**：2026-09-24 会话下沉专项——宿主「回查内核拿会话」曾造成桌面终端按键丢失、任务队列被批量标中断而测试全绿；三形态各已落锁（防回接锁 / `LoadedWasmPlugin::stale_artifact_rebuild_hint` / `manifest-gen.js` 加载期词汇自检），详见 `docs/knowledge/session-engine-downsink.md` §4
 - **`pty:spawn` 是「在宿主机执行任意命令」的高风险面**：只发确有 PTY
   需求的第一方插件（会话插件经 `host-pty.spawn` 自产会话、argv 由插件算，宿主不包装），
   并发上限由 `ptyQuota` 声明 + 加载期区间仲裁，不在运行期放宽
@@ -457,10 +457,11 @@ CI 门禁（合并到 master/uat 时）：`lint.yml`（eslint 0 error）+ `test.
 | Issue tracker | issues 为 `.scratch/` 下的 markdown，见 `docs/agents/issue-tracker.md` |
 | Triage 标签 | needs-triage / needs-info / ready-for-agent / ready-for-human / wontfix，见 `docs/agents/triage-labels.md` |
 | 发布流程 | `docs/knowledge/release-workflow.md`（桌面 updater / 移动发布）、`docs/knowledge/sdk-publish.md`（SDK 发布） |
-| 日志 / 排障 | `docs/knowledge/logging.md`、`.scratch/2026-09-07-adb-fd0-bug/bug-report.md` |
+| 日志 / 排障 | `docs/knowledge/logging.md`、`docs/knowledge/adb-fd0-bug.md` |
 | 插件开发检查清单 | `docs/knowledge/plugin-development-checklist.md`（AGENTS §7 指向的全文） |
-| 插件 WASM 日志 spec | `.scratch/2026-09-09-plugin-wasm-logging/spec.md` |
-| 架构路线 | `.scratch/2026-09-10-plugin-kernel-roadmap/spec.md`、`.scratch/2026-09-10-platform-kernel/spec.md` |
+| 插件 WASM 日志 | `docs/knowledge/plugin-wasm-logging.md`（dev 调试模式 + trap backtrace + per-plugin 级别） |
+| 会话/终端下沉 | `docs/knowledge/session-engine-downsink.md`（会话真源终态、fail-visible 三形态落锁） |
+| 架构路线 | `docs/knowledge/plugin-kernel-roadmap.md`、`docs/knowledge/businessless-kernel-vision.md` |
 | **宿主/插件边界裁决（§5 红线的单一事实源）** | `docs/adr/0022-plugin-host-interface-primitive-boundary.md`（+ ADR 0017 互调 / 0018 移动独立契约 / 0019 双端锁版） |
 | pi 工具手册 | `docs/agents/pi-tools.md`（附录） |
 
