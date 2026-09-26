@@ -40,3 +40,4 @@
   `PluginManifest` 一律只列本用例断言的字段 + `..Default::default()`；「`Default` 与 serde 缺省
   等价」这条真有意义的不变量由 SDK 锁 `types.rs::default_manifest_equals_minimal_json_manifest` 守住
 - [ ] 日志：target=`bedcode_lib::plugin::plugin_log`，`[plugin:xxx]` 前缀，WASM trap backtrace 不得关闭（详情见 `docs/knowledge/logging.md`）
+- [ ] **错误推送约定（ADR 0030）**：跨边界失败一律走错误信封 `{code, request_id, params?}`（宿主域 `host.*` / 插件域 `<plugin_id>.*` / 前端域 `frontend.*`，**code 即前端 i18n key**，用户提示文案在插件自己的 `src/locales/`）；**技术详情（错误原文 / 调用堆栈）不出产生方进程**，UI 只显示友好文案（固定模板 + 已消毒具名参数），不显示任何错误码；业务错误用 SDK `bail_with_code(code, params)`（标记信封，宿主只透传不解释语义，畸形/未标记错误宿主按普遍兜底处理）；`plugin:notify` 与错误推送不得携带技术详情；`params` 只收用户安全值（显示名 / 端口 / 秒数 / 文件名），**禁止技术文案 / 堆栈 / 凭据**进参数或文案
