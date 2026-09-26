@@ -93,6 +93,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Terminal window domain sunk entirely into the plugin (tickets 01–05)**: xterm rendering, write pipeline, scroll/resize and IME guard now live in `plugins/terminal-session`; the host keeps only engine primitives (window orchestration `useSessionWindows`, settings/bg-image bridges, PTY engine). The host fallback terminal implementation (`TerminalPreview.vue`, `composables/terminal/*`, `utils/terminal*`, Tauri Channel output transport) is removed; the plugin consumes session output through the WIT binary primitive `host-session.output-ring-fetch` (`session.output.pull` command, adaptive polling, no Channel bridge). Disabling the plugin now fails loudly — the host terminal-window API gates on the session plugin being active instead of silently opening a broken window
 - **Private database follows the renamed id (ticket 07)**: an idempotent host-side migration (`plugin/session_db_migration.rs`) moves the plugin's private DB from `plugins/com.bedcode.session/plugin.db` to `plugins/com.bedcode.terminal-session/plugin.db` — copying every user table by column-name intersection (the task-domain renamed tables aligned via the shared dictionary), or doing a pure file move when the new-id plugin was never activated; a ledger stamp in `plugin_meta` makes it run exactly once
 
+### Bug Fixes
+
+#### Terminal resize contract fixed — the frontend now sends `requester`, so the PTY size actually follows the grid (desktop)
+- Since the session downsink (P1-b / ticket 08) the desktop frontend called `session.action.resize` with `{sessionId, cols, rows, force}` only, while the plugin WASM `ResizeRequest` **requires** `requester` (deliberate identity rule — no silent default to desktop). Every desktop-initiated resize therefore failed with `invalid request: missing field 'requester'` and was silently downgraded to `applied`: the PTY stayed at its spawn size (observed `115x84`) while the xterm grid ran at `93x51` (with a transient degenerate `38x1` fit), so lines wrapped at the wrong width and TUI output looked scrambled
+- Fix: `TerminalPreview.vue::invokeResize` now honestly declares `requester: { kind: 'desktop' }` (same wire shape the mobile HTTP/WS paths build); regression guard added in `terminalPreview.test.ts` asserting every resize payload carries `requester`. Frontend-only change — plugin WASM / `wasmHash` untouched
+
 ### Platform & Infrastructure
 
 #### Wasmtime 47 → 48 on mobile — the two-end version lock is restored (mobile; zero code adaptation)
