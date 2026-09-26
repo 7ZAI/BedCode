@@ -1,23 +1,39 @@
-//! AI Chatbox Plugin (WASM, wasm32-wasip2)
+//! AI Chatbox Plugin (WASM, wasm32-wasip3)
 //!
 //! 纯 AI 对话插件：JSONL 对话日志落盘 + 多方言供应商协议（请求构建与 SSE 解析
 //! 在前端适配层 src/adapters/，Rust 仅透传 http_fetch 载荷）。
-//! 文件访问全部经 WASI：宿主实例化时按 manifest `wasiPreopenDirs` 声明
-//! （${home} 展开 + 授权校验）预打开数据目录到 `/data`，本插件 std::fs 直连，
-//! 不经宿主 fs_* 转发。激活时集中目录授权（fs_auth 弹窗）：同意 → 持久化授权
-//! 记录（下次实例化据此建立预打开）→ 初始化数据目录；拒绝/超时 → 激活失败
-//! （Error 状态），重新启用可重试。首次启用需停用再启用一次完成预打开挂载。
+//!
+//! **文件访问经宿主 `host-fs` 原语**（`store.rs` 全部 IO 走它，不经 WASI）：
+//! WASI 0.3 的 filesystem 方法是 `async func`，而插件导出（`activate` /
+//! `invoke_command`…）是 sync-lifted——wasmtime 进入 sync 导出时会清掉 task 的
+//! `may_block` 标志，guest 一旦等待 async import 即 trap
+//! `wasm trap: cannot block a synchronous task before returning`
+//! （CannotBlockSyncTask），故 wasip3 目标下必须走宿主 fs 原语。
+//!
+//! 数据根 = `{HomeDir}/.bedcode/ai-chatbox`；激活时经 `fs_request_auth` 集中申请
+//! 一次目录授权（同意后宿主持久化记住，后续逐调用免弹窗），拒绝/超时 → 激活失败
+//! （Error 状态），重新启用可重试。
 
 mod client;
 mod commands;
 mod store;
 
-use bedcode_plugin_api::host::{HostConfig, HostFs, HostLog};
+use std::sync::OnceLock;
+
+use bedcode_plugin_api::host::{ConfigKey, HostConfig, HostFs, HostLog};
 use bedcode_plugin_api::types::PluginManifest;
 use bedcode_plugin_api::{WasmHost, WasmPlugin};
 
-/// WASI 预打开根路径（guest 视角）：宿主按 manifest wasiPreopenDirs 首项挂载
-const DATA_ROOT: &str = "/data";
+/// 插件数据根（宿主绝对路径）：`activate` 解析成功后缓存，命令面复用。
+///
+/// 单一事实来源：路径只在 activate 里算一次；命令面读缓存，未激活时显性报错
+/// （宿主只在激活成功后才派发插件命令，该分支属防御性 fail-visible）。
+static DATA_ROOT: OnceLock<String> = OnceLock::new();
+
+/// 数据根访问（activate 未完成 → `None`）
+pub(crate) fn data_root() -> Option<&'static str> {
+    DATA_ROOT.get().map(|s| s.as_str())
+}
 
 struct AiChatboxPlugin;
 
@@ -32,18 +48,14 @@ impl WasmPlugin for AiChatboxPlugin {
     fn activate() -> anyhow::Result<()> {
         let host = WasmHost;
 
-        // 数据目录固定：{HomeDir}/.bedcode/ai-chatbox/（与 manifest wasiPreopenDirs
-        // 声明一致；此处仅用于授权弹窗展示与持久化授权记录）
+        // 数据目录固定：{HomeDir}/.bedcode/ai-chatbox/
         let home = host
-            .config_get(bedcode_plugin_api::host::ConfigKey::HomeDir)?
+            .config_get(ConfigKey::HomeDir)?
             .ok_or_else(|| anyhow::anyhow!("activate: home_dir config unavailable"))?;
-        let data_dir = format!(
-            "{}/.bedcode/ai-chatbox",
-            home.trim_end_matches(['/', '\\'])
-        );
+        let data_dir = format!("{}/.bedcode/ai-chatbox", home.trim_end_matches(['/', '\\']));
 
-        // 集中目录授权：同意 → 授权记录持久化（宿主下次实例化据此建立 WASI 预打开）；
-        // 未同意（拒绝/30s 超时）→ 激活失败，重新启用可再次弹窗
+        // 集中目录授权（host-fs 三层校验的「记住」层）：同意一次 → 宿主持久化，
+        // 后续逐调用免弹窗；拒绝/超时 → 激活失败，重新启用可再次弹窗
         let allowed = host
             .fs_request_auth(&[data_dir.clone()])
             .map_err(|e| anyhow::anyhow!("activate: fs_request_auth failed: {}", e))?;
@@ -54,18 +66,11 @@ impl WasmPlugin for AiChatboxPlugin {
             ));
         }
 
-        // WASI 预打开自检：若本次实例化时该目录尚未授权（首次启用），
-        // /data 未挂载——授权已随上方弹窗落库，停用再启用即生效
-        if std::fs::metadata(DATA_ROOT).is_err() {
-            return Err(anyhow::anyhow!(
-                "WASI 预打开目录未就绪：{} 的授权已保存，请停用后重新启用插件完成初始化",
-                data_dir
-            ));
-        }
+        store::init(&host, &data_dir)?;
+        // 缓存供命令面复用（重复 set 只可能是同值重入，幂等，保留首次值）
+        let _ = DATA_ROOT.set(data_dir);
 
-        store::init(&host, DATA_ROOT)?;
-
-        host.log_info("Plugin activated (wasm, wasi file access)");
+        host.log_info("Plugin activated (wasm, host-fs access)");
         Ok(())
     }
 

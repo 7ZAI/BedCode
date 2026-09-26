@@ -6,7 +6,6 @@
 
 use crate::client;
 use crate::store::{self, ChatMessageRecord, ConversationMeta};
-use crate::DATA_ROOT;
 use bedcode_plugin_api::{CommandArgs, WasmHost};
 
 fn host() -> WasmHost {
@@ -45,7 +44,7 @@ pub fn fetch_models(args: serde_json::Value) -> anyhow::Result<serde_json::Value
 
 /// 列出所有对话（index.jsonl，按 updatedAt DESC）
 pub fn list_conversations(_args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
-    let conversations = store::list_conversations(&host(), DATA_ROOT)?;
+    let conversations = store::list_conversations(&host(), &data_dir()?)?;
     Ok(serde_json::json!({ "conversations": conversations }))
 }
 
@@ -56,7 +55,7 @@ pub fn get_messages(args: serde_json::Value) -> anyhow::Result<serde_json::Value
         .str("conversationId")
         .ok_or_else(|| anyhow::anyhow!("get_messages: missing conversationId"))?;
 
-    let messages = store::get_messages(&host(), &data_dir(), &conversation_id)?;
+    let messages = store::get_messages(&host(), &data_dir()?, &conversation_id)?;
     Ok(serde_json::json!({ "messages": messages }))
 }
 
@@ -69,7 +68,7 @@ pub fn save_conversation(args: serde_json::Value) -> anyhow::Result<serde_json::
     )
     .map_err(|e| anyhow::anyhow!("save_conversation: invalid conversation: {}", e))?;
 
-    store::save_conversation(&host(), &data_dir(), &conv)?;
+    store::save_conversation(&host(), &data_dir()?, &conv)?;
     Ok(serde_json::json!({ "success": true }))
 }
 
@@ -99,7 +98,7 @@ pub fn save_message(args: serde_json::Value) -> anyhow::Result<serde_json::Value
 
     store::save_message(
         &host(),
-        &data_dir(),
+        &data_dir()?,
         &conversation_id,
         &msg,
         args.bool_or("replaceLastAssistant", false),
@@ -114,11 +113,17 @@ pub fn delete_conversation(args: serde_json::Value) -> anyhow::Result<serde_json
         .str("conversationId")
         .ok_or_else(|| anyhow::anyhow!("delete_conversation: missing conversationId"))?;
 
-    store::delete_conversation(&host(), &data_dir(), &conversation_id)?;
+    store::delete_conversation(&host(), &data_dir()?, &conversation_id)?;
     Ok(serde_json::json!({ "success": true }))
 }
 
-/// 数据目录（WASI 预打开根，activate 时宿主已挂载）
-fn data_dir() -> String {
-    DATA_ROOT.to_string()
+/// 数据目录（宿主绝对路径，activate 时解析并缓存）
+///
+/// 未激活（缓存为空）时显性报错：宿主只在插件激活成功后派发命令，该分支属
+/// 防御性 fail-visible —— 不静默返回空路径（空路径会被宿主 fs_auth 拒绝，
+/// 报错点会漂移到宿主侧，掩盖真实原因）。
+fn data_dir() -> anyhow::Result<String> {
+    crate::data_root()
+        .map(|s| s.to_string())
+        .ok_or_else(|| anyhow::anyhow!("plugin not activated: data dir unavailable"))
 }

@@ -1377,12 +1377,19 @@ impl LoadedWasmPlugin {
     /// `wasm_backtrace_max_frames` 配置）。即使调用方静默忽略返回错误，此处
     /// error 级日志保证崩溃证据落盘；AI agent grep error 日志即可定位
     /// 「哪个插件在哪个导出上崩了」。guest 自报失败（内层 Err）不经过此入口
-    fn log_trap(&self, export: &str, err: &dyn std::fmt::Display) {
+    ///
+    /// `trap_detail` 打 `wasmtime::Error` 的 **Debug 全链**：Display 只有顶层
+    /// context（`error while executing at wasm backtrace:`），真正的原因
+    /// （`wasm trap: wasm `unreachable` instruction executed` / 燃料耗尽 /
+    /// host 调用错误）在 `Caused by:` 里——只打 Display 会丢原因，排障时只能
+    /// 看到 backtrace 帧而无法判定失败类型（2026-09-25 ai-chatbox 启用失败实证）
+    fn log_trap(&self, export: &str, err: &wasmtime::Error) {
         self.store.data().metrics.record_lifecycle(LifecycleEvent::Trap);
         tracing::error!(
             plugin_id = %self.plugin_id,
             export = export,
             trap = %err,
+            trap_detail = ?err,
             "WASM plugin export call trapped"
         );
     }
@@ -1833,8 +1840,11 @@ mod tests {
         let plugin_dir = packages_dir.join("plugin-component-test");
 
         let profile = if plugin_debug_mode() { "debug" } else { "release" };
-        let output_dir = plugin_dir.join(format!("target/wasm32-wasip3/{}", profile));
-        let module_path = output_dir.join("bedcode_plugin_component_test.wasm");
+        let module_path = crate::wasm_core::manager::runtime::fixture_target::artifact(
+            "wasm32-wasip3",
+            profile,
+            "bedcode_plugin_component_test",
+        );
 
         if module_path.exists() {
             let src_files = [

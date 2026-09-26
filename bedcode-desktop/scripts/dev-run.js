@@ -129,8 +129,8 @@ const PLUGIN_WATCH_CMDS = [
     dir: 'wasm-apps/ai-chatbox',
     id: 'com.bedcode.ai-chatbox',
     args: ['scripts/build.js', '--watch'],
-    // ai-chatbox 已迁移 wasm32-wasip2（WASI 预打开文件访问），与另两插件的 unknown-unknown 不同
-    wasmFile: 'rust/target/wasm32-wasip2/release/bedcode_plugin_ai_chatbox.wasm',
+    // 票 03 起桌面插件统一 wasm32-wasip3（cdylib 直出 Component，免 componentize）
+    wasmFile: 'rust/target/wasm32-wasip3/release/bedcode_plugin_ai_chatbox.wasm',
   },
   {
     dir: 'wasm-apps/terminal-session',
@@ -143,7 +143,8 @@ const PLUGIN_WATCH_CMDS = [
     dir: 'wasm-apps/file-transfer',
     id: 'com.bedcode.file-transfer',
     args: ['scripts/build.js', '--watch'],
-    wasmFile: 'rust/target/wasm32-unknown-unknown/release/bedcode_plugin_file_transfer.wasm',
+    // 票 03 起桌面插件统一 wasm32-wasip3（cdylib 直出 Component，免 componentize）
+    wasmFile: 'rust/target/wasm32-wasip3/release/bedcode_plugin_file_transfer.wasm',
   },
 ]
 

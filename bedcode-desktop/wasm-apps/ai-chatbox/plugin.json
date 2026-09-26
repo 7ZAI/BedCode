@@ -7,9 +7,6 @@
   "main": "index.js",
   "pluginType": "rust-ts",
   "rustLibrary": "bedcode_plugin_ai_chatbox",
-  "wasiPreopenDirs": [
-    "${home}/.bedcode/ai-chatbox"
-  ],
   "icon": "icon.svg",
   "permissions": [
     "broadcast",
