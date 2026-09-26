@@ -6,7 +6,9 @@
   **P2 已实施完成**（2026-09-27，限频**唤醒**形态：宿主主动 publish 提示，数据面仍拉取，见 §9；
   阻塞条件「等插件并发模型升级」已由 ADR 0029 关闭）
 - **决策来源**：用户指令「使用迁移前的机制适配当前的架构」+「不要改动宿主 / 不在宿主加业务代码」+「写成 spec 文档再开工」+「评审这几点请参考迁移前的实现」
-- **范围**：`bedcode-desktop/wasm-apps/terminal-session`（插件 Rust + 插件前端）。**宿主零改动**。
+- **范围**：`bedcode-desktop/wasm-apps/terminal-session`（插件 Rust + 插件前端）。P1/P1.5 **宿主零改动**；
+  P2 起宿主新增**限频通知**（`host_api/pty_output.rs` 写侧装饰器 + `<owner>::pty:output` 总线 topic），
+  **不改 WIT / 不改 ABI**（ADR 0029 §7 定案路线）。
 
 ---
 
@@ -34,7 +36,9 @@
 
 **目标**：G1 恢复未确认窗口背压（**双水位迟滞**，对齐旧实现）；G2 水位可观测（P1：进出驻留日志 → **P1.5：诊断读面 + 驻留统计**）；G3 输入后即时拉取（体感补偿）；G4 语义不退化（`truncated`/resync、游标单调、慢消费自担）；**G5 节奏对齐**（P1.5：轮询 50/250 ms、单 tick 预算 64 KiB = 旧引擎）。
 
-**非目标**：N1 宿主侧订阅者窗口（ADR 0022 红线）；N2 宿主 `pty:output` 事件（P2，待放行）；N3 毫秒 `host-timer`；N4 移动端行为变更。
+**非目标**：N1 宿主侧订阅者窗口（ADR 0022 红线）；N2 ~~宿主 `pty:output` 事件~~（**P2 已实施**：限频
+  通知而非真 push，数据面仍游标拉取，见 §9/§11.2）；N3 毫秒 `host-timer`（仍秒级，P2 通知把感知
+  延迟压到毫秒级）；N4 移动端行为变更（桌面宿主 + terminal-session 应用独有，移动端零影响）。
 
 ---
 
@@ -181,7 +185,8 @@ decide_pull_gate(unacked, from_offset, acked, was_parked) ->
 - 单测：Rust 12 例（C1–C9 gate 契约 / W1–W3 水位单调·驻留态·forget 回收）；前端 7 例。
 - `useTerminalWritePipeline.ts` **零改动**（如 §12.3 所料）。
 
-**未落地（后续）**：P2 真 push（需改宿主 + WIT/ABI 流程）；P3b per-consumer 水位（无第二个消费者，见 §9）。
+**未落地（后续）**：~~P2~~（已实施，见 §11.2）；**真 push（宿主推字节）不在本票内**（需宿主持
+  per-subscriber 窗口，ADR 0022 红线 N1）；P3b per-consumer 水位（无第二个消费者，见 §9）。
 
 ## 11.1 P1.5 实施现状（2026-09-26 续）
 
@@ -216,6 +221,33 @@ decide_pull_gate(unacked, from_offset, acked, was_parked) ->
   真实消费水位」，与 §12.2 ③ 定案的「交付即账」不符）。
 
 ---
+
+## 11.2 P2 实施现状（2026-09-27，限频唤醒）
+
+**形态定案出处**：ADR 0029 §7——并发模型专项结论「guest 侧 async 出局、宿主实现侧 async 无收益」
+后，output-ack P2 只剩原方案「宿主主动 publish / 限频唤醒，不改 WIT/ABI」一条路。
+
+- 宿主 `host_api/pty_output.rs`（新）：写侧装饰器 `OutputNotifySink` 包住 `PtyRingSink`
+  （**先落环再通知**），环有新字节时向属主私有 topic `<owner>::pty:output` 限频发布
+  `{ ptyId }`（同句柄 ≥50 ms，`OUTPUT_NOTIFY_MIN_INTERVAL_MS`；限频裁决 `allow_notify`
+  为纯函数，native 可测）；`pty/` 引擎保持零总线依赖（装饰器装配在 `pty_spawn`）。
+  **三条不可越过性质**：数据面仍是拉取 / 零背压（总线内部 spawn + 有界队列满则丢）/ 限频合并。
+- SDK `PTY_OUTPUT` 常量与 `PTY_EXIT` 并列导出（`pty_event_topic` 复用同一命名空间）。
+- 插件 `rust/src/lib.rs`：activate 期订阅（**失败只降级为纯轮询，不阻断激活**——与
+  `pty:exit` 强门相反）；`on_message` 路由 `pty:output` → `output::on_pty_output`
+  （`ptyId` → `sessionId` 反查，反查不到只 debug——正常竞态）。
+- 插件 `rust/src/output.rs`：`EVENT_OUTPUT_AVAILABLE` = `session:output-available` +
+  `output_available_payload` / `notify_pty_id`（纯函数）。
+- `TerminalPreview.vue`：`subscribeOutputNotify`（命中本会话立即拉一轮）/ `unsubscribeOutputNotify`
+  （卸载释放，不残留回调）；**轮询 + resync 仍是唯一正确性兜底**，事件只买延迟
+  （空闲后首个字节：慢档 250 ms → ≈0）。
+- 单测：宿主 `pty_output` 8 例（限频裁决 5 边界 + 装饰器 3 集成：限频生效且字节全转发 /
+  topic 形状 = SDK 助手 / 空投递不通知）；宿主 `pty::tests::output_*` 3 例（事件名漂移锁 +
+  真 PTY 突发限频 `chunks≥8 → notified 远少于 chunks` / 无订阅者环照常收满）；插件 Rust 3 例
+  （载荷解析 + 事件名/载荷形状锁 + `lib.rs` 两处 `PTY_OUTPUT` 结构锁）；前端 1 例
+  （命中拉一轮 / 非本会话忽略 / 脏载荷不炸 / 卸载后不再触发）。
+- 变异自检：M1（去掉限频逐次发布）→ `notify_is_rate_limited_while_bytes_are_forwarded` 变红
+  → 还原 → 绿（§15.2）。
 
 ## 12. 评审定案（逐点对照迁移前实现）
 
@@ -353,4 +385,38 @@ decide_pull_gate(unacked, from_offset, acked, was_parked) ->
 2. **F5 的 invoke 频率翻倍**（活跃输出期 20 次/秒）未做实机负载测量；P1.5 只保证
    吞吐上限不变（预算/间隔等值），未证明高频 invoke 对宿主 IPC 无感。
 3. **背压仍以「交付即账」记账**（§13.2 ③）：128 KiB 上沿在拉取模型里主要是安全上限。
-   真正的主流量控制需 P2（改宿主）。
+   P2 已实施（限频通知，§11.2），但主流量控制仍是水位——P2 只买延迟不推字节
+   （真 push 需 per-subscriber 窗口，N1 红线，不在本票）。
+
+---
+
+## 15. P2 验收证据（2026-09-27 续）
+
+### 15.1 验收对照
+
+| 验收项 | 结果 | 证据 |
+| --- | --- | --- |
+| 宿主限频通知 | ✅ | `pty_output` 8 例（5 裁决边界 + 3 装饰器集成）；真 PTY 突发用例 `chunks≥8` 下 `notified 远少于 chunks`（限频生效，未退化成逐块推送） |
+| 定向投递 / 形状 | ✅ | topic = `<owner>::pty:output`（SDK 助手两端一致，漂移锁）；payload 只带 `ptyId`；他人命名空间收不到 |
+| 可丢性 | ✅ | 无订阅者用例：环照常收满、句柄在册；空投递不通知 |
+| 插件消费 | ✅ | activate 订阅（失败降级不阻断）；路由 → 反查会话 → 前端事件；脏载荷静默丢弃 |
+| 前端接线 | ✅ | 命中本会话立即拉一轮；非本会话忽略；卸载释放订阅（测试断言拉取计数不增） |
+| A5' 宿主改动边界 | ✅ | 宿主仅新增通知面（`pty_output.rs` + `pty_spawn` 装饰器装配 + 模块声明），**不改 WIT / 不改 ABI**；`pty/` 引擎零总线依赖；无业务语义（ADR 0022 D3 拉取语义保持） |
+| 移动端影响 | ✅ 零 | 移动端宿主无 `host-pty` 事件面、无 terminal-session 应用；桌面独有总线 topic 不跨端 |
+| A6 回归 | ✅ | 宿主 `cargo test` **927 passed / 0 failed**（lib + 集成 + doc）；插件 Rust native **367 passed**（+3）；插件前端 **21 files / 231 passed**（+1）；SDK **146 passed**；`eslint .` 0 error；插件产物重建（wasm32-wasip3 release + vite）并重投（wasmHash 已注入） |
+| 真机复验 | ⏳ 待用户 | 空闲期输出到达无感（毫秒级）；慢消费/驻留仍按 P1.5 观测（进出驻留日志） |
+
+### 15.2 变异自检（P2）
+
+| # | 变异 | 捕获 |
+| --- | --- | --- |
+| M1 | 去掉限频（`notify_if_due` 逐次发布）——上一轮变异测试遗留，本轮还原 | 宿主 `notify_is_rate_limited_while_bytes_are_forwarded` 变红 → 还原 → 绿 |
+
+### 15.3 残余风险
+
+1. **插件 `on_pty_output` 的 emit 路径只有编译期覆盖**（wasm32 cfg，native 不可达）；
+   运行时行为由组件测试（命中拉一轮）+ A7 真机复验覆盖。
+2. **通知被限频合并的极端形态**：连续产出期通知密度不超过快档轮询（50 ms 同量级），
+   不额外放大 invoke 频率；空闲后首个字节立即发布——本机制要买的延迟就在这里。
+3. **真 push（宿主推字节）仍未做**：需宿主持 per-subscriber 窗口（N1 红线），不在本票范围；
+   唤醒与拉取的数据面语义保持（ADR 0022 D3）。
