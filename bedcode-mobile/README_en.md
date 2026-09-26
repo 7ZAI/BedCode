@@ -7,7 +7,7 @@
 [![Version](https://img.shields.io/badge/version-2.1.0-blue.svg)](https://github.com/7ZAI/BedCode)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](../LICENSE)
 [![Tauri](https://img.shields.io/badge/Tauri-2.0-orange.svg)](https://v2.tauri.app/)
-[![Wasmtime](https://img.shields.io/badge/wasmtime-47-%232F6FED.svg)](https://wasmtime.dev/)
+[![Wasmtime](https://img.shields.io/badge/wasmtime-48-%232F6FED.svg)](https://wasmtime.dev/)
 [![Platform](https://img.shields.io/badge/platform-Android-lightgrey.svg)](https://github.com/7ZAI/BedCode)
 
 English | [简体中文](README.md)
@@ -44,7 +44,7 @@ This repository is the mobile project of the BedCode monorepo (Tauri 2.0 + Vue 3
 | Auth      | JWT (HS256), ECDSA biometric credential (p256), device fingerprint |
 | Crypto    | X25519 ECDH + AES-256-GCM (HKDF), ChaCha20-Poly1305                |
 | Files     | SAF (Storage Access Framework) tree traversal & relay copy         |
-| Plugins   | wasmtime 47 (WASM component runtime)                               |
+| Plugins   | wasmtime 48 (WASM component runtime, LTS)                               |
 | Other     | shiki, html5-qrcode, marked, vue-i18n@9, tracing logging (logcat)  |
 
 ## Directory Structure
@@ -97,7 +97,7 @@ bedcode-mobile/
 
 ### Prerequisites
 
-- [Node.js](https://nodejs.org/) ≥ 18, [Rust](https://www.rust-lang.org/tools/install) ≥ 1.94 (wasmtime 47 MSRV)
+- [Node.js](https://nodejs.org/) ≥ 18, [Rust](https://www.rust-lang.org/tools/install) ≥ 1.95 (wasmtime 48 MSRV)
 - [Tauri 2.0 CLI](https://v2.tauri.app/start/prerequisites/) with Android SDK / NDK
 - A computer running [BedCode Desktop](../bedcode-desktop/) as the host
 
@@ -147,7 +147,7 @@ cd src-tauri && cargo test         # Rust tests
 
 ## Plugin System
 
-Mobile plugins share the same architecture as the desktop (wasmtime 47, WASM Component Model + permission control), with mobile-only capabilities added: **SAF storage access**, dialogs / system notifications, **dynamic routing**, lifecycle hooks, Android system back-key interception, and a dev-shell mock protocol (browser HMR dev environment). Host capability implementations are split by capability domain under `host_impl/` (storage/db/fs/http/terminal/event/bus/config/notify/peer/support). Built-in plugins are extracted from APK assets into the app data directory and scanned there; remote download with SHA256 verification is also supported.
+Mobile plugins share the same architecture as the desktop (wasmtime 48, WASM Component Model + permission control), with mobile-only capabilities added: **SAF storage access**, dialogs / system notifications, **dynamic routing**, lifecycle hooks, Android system back-key interception, and a dev-shell mock protocol (browser HMR dev environment). Host capability implementations are split by capability domain under `host_impl/` (storage/db/fs/http/terminal/event/bus/config/notify/peer/support). Built-in plugins are extracted from APK assets into the app data directory and scanned there; remote download with SHA256 verification is also supported.
 
 To build your own plugin, use [`@binblink/bedcode-plugin-sdk-mobile`](packages/plugin-sdk-mobile/README_en.md) (TS SDK + Rust `bedcode-plugin-api-mobile` crate); full guide in [plugin-dev-mobile.md](plugin-dev-mobile.md).
 

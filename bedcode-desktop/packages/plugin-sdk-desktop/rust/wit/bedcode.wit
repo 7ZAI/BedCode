@@ -23,10 +23,11 @@
 /// ## ABI 版本协商（阶段 A）
 ///
 /// `abi` 接口承载原 `__bedcode_abi_version` 的职责，并新增 `form` 形态字段：
-/// - `version()`：与 `abi::ABI_VERSION`（当前 v28）比对，语义不变
-///   （v27 = 会话原语域整 interface 退役；v28 = websocket 业务下沉：新增
-///   `host-websocket.connection-context` + 退役 `host-events.broadcast-sync` /
-///   `host-pty.spawn` 的 `hostBroadcastSessionId` 字段，详见下方 abi 接口版本说明）
+/// - `version()`：与 `abi::ABI_VERSION`（**当前 v31**，mobile 停在 11）比对，语义不变
+///   （逐版权威记账在 SDK `rust/src/abi.rs`；破坏性断点：v27 会话原语域整 interface
+///   退役、v28 websocket 业务下沉（新增 `host-websocket.connection-context` + 退役
+///   `host-events.broadcast-sync` / `host-pty.spawn` 的 `hostBroadcastSessionId`）、
+///   v31 传输编排下沉票 3，详见下方 abi 接口版本说明）
 /// - `form()`：0 = core module（自研 ABI），1 = component。宿主据此区分产物形态，
 ///   不 bump ABI 大版本
 package bedcode:plugin;
@@ -609,12 +610,14 @@ interface host-auth {
 
 /// 插件私有伪终端（host-pty，v16）：裸 PTY 引擎原语，零业务语义（ADR 0022）
 ///
-/// **与宿主业务会话线的边界（写死，互不交叉）**：`host-terminal` 服务宿主业务终端
-/// 会话线（会话配置、前端
-/// UI）；本接口只服务**插件私有 PTY**——不挂 SessionManager、不进业务会话注册表、
-/// **不默认注册业务输出总线**（插件 PTY 的字节默认私有；宿主 server 能否只读订阅由
-/// spawn 声明 opt-in，见 `spawn` 的 `hostBroadcastSessionId`）、不参与业务会话事件链。
-/// 共享同一宿主 PTY 引擎，互不可见。
+/// **与宿主业务会话线的边界（终态，v27 + v28 后）**：本接口是**宿主侧唯一的 PTY 出口**，
+/// 而业务会话本身就是一个本接口的句柄（会话 id 由插件自产，登记 / 状态机 / 输入输出编排
+/// 全在 `com.bedcode.terminal-session` 私有域）。宿主**不再持有任何会话对象**：内核会话目录
+/// `src-tauri/src/session/` 整目录删除，`host-session` 与 `host-terminal` 两个 interface
+/// 随 v27 退役，PTY 引擎只有本接口这一张注册表（无 SessionManager、无业务输出总线、
+/// 引擎不注入 `BEDCODE_SESSION_ID`）。**v28 起宿主也不再直读任何插件 PTY 的输出环**
+/// （`hostBroadcastSessionId` 只读订阅声明已删除，详见下方版本说明）——输出只经属主
+/// 插件的 `ring-fetch` 游标拉取。
 ///
 /// 约定与红线：
 /// - **属主隔离**：句柄 `pty-<uuid>` 仅创建者插件可调，他人 → `not owner of pty handle`；
@@ -622,19 +625,13 @@ interface host-auth {
 /// - **输出纯拉取**（无 push 回调，spec D3）：宿主为每个 PTY 维护有界环形缓冲，插件按
 ///   自己的节奏以游标拉取；慢插件只损失自己的历史（淘汰最旧 + `truncated`），
 ///   背压绝不回传到 PTY 读取端
-/// - **宿主广播声明（票 05，会话语义下沉 P3 形态 B）**：业务会话也是插件 PTY，
-///   「输出能不能被宿主 server 读走」必须是插件自己的决定——**默认私有**，未声明的
-///   句柄任何宿主广播面都读不到（这是安全边界，不是默认开）。需要移动端输出面时在
-///   `spawn` 的 config-json 里给出 `hostBroadcastSessionId`（= 本句柄服务的会话 id，
-///   camelCase），宿主据此在引擎侧维护只读的「会话 id → pty 句柄」映射，宿主 server
-///   直读同进程 `PtyRing`（零跨 WASM 边界）；映射随句柄生命周期登记与摘除（在册即
-///   可读、终态即不可读），同属主「同 id 重建」（重启）取最新句柄，与他属主撞 id 在
-///   spawn 显性拒绝
-/// - **多消费者并发拉取（07 的输入）**：同一句柄的环可被属主插件（`ring-fetch`）与
-///   宿主广播面（直读）**同时**拉取——游标由各调用方自持，拉取本身是纯读
-///   （不消费、不推进全局状态），互不干扰；淘汰由**产出量**驱动（环满即淘汰最旧），
-///   任一消费者的读取都不释放空间，慢消费者落后于驻留起点即 `truncated`（环容量需
-///   覆盖最慢消费者的滞后）
+/// - **~~宿主广播声明（票 05，会话语义下沉 P3 形态 B）~~ 已随 v28 退役**：曾允许
+///   `spawn` 声明 `hostBroadcastSessionId` 把本句柄挂进宿主侧的「会话 id → pty 句柄」
+///   只读映射、供宿主 server 直读同进程 `PtyRing`。v28 起该字段与宿主直读路径**均已删除**
+///   （PTY 引擎不再知道 session id），故本环**只有属主插件一个消费者**
+/// - **多消费者并发拉取（07 的输入，v28 后退化为单消费者）**：游标由调用方自持、
+///   拉取本身是纯读（不消费、不推进全局状态）；淘汰由**产出量**驱动（环满即淘汰最旧），
+///   读取不释放空间，慢消费者落后于驻留起点即 `truncated`（环容量需覆盖最慢消费者的滞后）
 /// - **生命周期事件**：仅 `<owner>::pty:exit` 一条（host-bus 订阅，属主私有命名空间，
 ///   票 05：跨属主订阅被宿主拒绝）。payload `{ ptyId, reason, exitCode? }`（camelCase），
 ///   `reason = "stopped" | "killed" | "error"`。**须在 activate 期订阅**：宿主不缓冲、
@@ -679,16 +676,16 @@ interface host-pty {
     /// - `truncated = true`：`from-offset` 落后于环驻留起点，返回的是现存最早段
     /// - `Err`：句柄不存在 / 非属主 / 权限缺失
     ///
-    /// **多消费者**：属主插件与宿主广播面可同时对本句柄拉取——游标各自持有、互不干扰
-    /// （`from-offset` 只描述本次拉取的窗口，拉取不消费不改变全局偏移）；淘汰按产出量
-    /// 全局计，任一消费者的读取都不为他人保留历史，各自落后于驻留起点都会 `truncated`。
+    /// **多消费者**：游标由调用方自持、互不干扰（`from-offset` 只描述本次拉取的窗口，
+    /// 拉取不消费不改变全局偏移）；淘汰按产出量全局计，任一读取都不为他人保留历史，
+    /// 落后于驻留起点即 `truncated`。（v28 起宿主不再是第二个消费者。）
     ring-fetch: func(pty-id: string, from-offset: u64, max-bytes: u32) -> result<option<ring-fetch-result>, string>;
     /// 进程是否仍在运行（丢失 `pty:exit` 事件后的自愈快照查询）
     is-running: func(pty-id: string) -> result<bool, string>;
 }
 
 /// 宿主并发任务域（v20，**desktop 独有，双端偏离**——同 host-pty / host-auth 先例，
-/// ADR 0022「双端偏离」节：桌面独有接口不要求移动端跟演；当前 desktop ABI v20、
+/// ADR 0022「双端偏离」节：桌面独有接口不要求移动端跟演；当前 desktop ABI v31、
 /// mobile 11；移动端要接同类能力时再补该端 interface 并对齐计数）。
 ///
 /// 问题域：WASM 插件（wasm32-wasip3 组件）无法创建 OS 线程；其全部宿主调用在
@@ -859,7 +856,8 @@ interface manifest {
 /// - v16：host-pty 插件私有伪终端原语（spawn/write/resize/kill/ring-fetch/
 ///   is-running 六函数 + `<owner>::pty:exit` 事件），纯增量新接口，
 ///   v15 及更早插件不受影响。**2026-09-24 票 05**：spawn config-json 追加可选字段
-///   `hostBroadcastSessionId`（宿主只读订阅声明，字段级追加不 bump——同 v19 惯例）
+///   `hostBroadcastSessionId`（宿主只读订阅声明，字段级追加不 bump——同 v19 惯例；
+///   **该字段已于 v28 退役**，见下方 v28 条目）
 /// - v17：认证策略导出 auth-policy（verify-device-token，desktop 独有——认证中心
 ///   能力，宿主 server 中间件验签后取策略），纯增量新接口，v16 及更早插件不受影响
 /// - v18：host-auth 认证记录面（trusted-devices-list / trusted-device-revoke /
@@ -899,10 +897,21 @@ interface manifest {
 ///   生产路径。旧产物（v27 SDK 构建）在**实例化**阶段即可诊断失败
 ///   （stale_artifact_rebuild_hint 点明 v28 重建）。
 ///   随包插件产物同步重建（旧产物不兼容、不迁移、不提供 fallback）。
+/// - **v29（HTTP 路由代码注册下沉专项，2026-09-25）**：host-http 新增服务端域
+///   `register-endpoint` / `unregister-endpoint`（插件在 activate 期以代码注册自身
+///   路由：内部端点段 + 可选对外 URL 别名 + 方法 + `jwt`/`none` 认证档位；
+///   命名空间由插件名承载，激活期同名拒绝 fail-visible）。函数级追加，旧产物仍可
+///   实例化但不具备注册能力。权威记账在 SDK `rust/src/abi.rs`
 /// - **v30（传输编排下沉专项票 1，2026-09-25）**：host-peer 函数级追加
 ///   `active-transfers`（会话表投影查询，事件归约首屏兜底）+ `collect-outgoing`
 ///   （发送源枚举：目录递归 + 批内同名去重，仅元数据）。纯增量，v29 及更早
 ///   插件不受影响。权威记账在 SDK `rust/src/abi.rs`
+/// - **v31（传输编排下沉专项票 3，2026-09-25，破坏性）**：host-peer 删
+///   `resume-all-transfers`（“全部恢复”编排归插件逐批调 `resume-transfer`）、
+///   `send-files` 语义收窄为“一次调用 = 一个会话立即发起”（载荷 `concurrency` 字段
+///   退役，运行期显性报错），旧快照 topic `peer:transfer` / `peer:receive` 退役。
+///   旧产物在**实例化**阶段即被点名拒绝（stale_artifact_rebuild_hint 点明 v31 重建）。
+///   权威记账在 SDK `rust/src/abi.rs`
 ///
 /// **不 bump 版本号的语义变更（审计票 05，落在 v22 批次内）**：host-bus topic 命名空间。
 /// 函数签名零变化，故不动版本号；但**定向事件的 topic 串**由 `<base>.<owner>` 改为

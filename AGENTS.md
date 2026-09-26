@@ -5,7 +5,7 @@
 当文档/规则冲突时，按下述优先级裁决：
 
 1. **用户当前明确指令**（最新指令优先于一切文档规则）
-2. **安全与架构红线**（§8 安全红线、§5 高内聚低耦合等）——不可被普通任务越过；确实需要越线时停下向用户确认，禁止自行放松
+2. **安全与架构红线**（§8 安全红线、§5.1 宿主侧无业务代码）——不可被普通任务越过；确实需要越线时停下向用户确认，禁止自行放松
 3. **本文档硬约束**（"必须/禁止"字眼，下同）
 4. **skill 规范**（`frontend-styles` 等在对应场景强制）
 5. **code-map / 领域文档**（含 docs/、docs/adr/）
@@ -37,7 +37,7 @@
 | Node | LTS（CI 用 `lts/*`；无 `.nvmrc`，本地对齐 LTS） | CI workflows |
 | Rust | stable + edition 2021（无 `rust-toolchain.toml`，与 CI `dtolnay/rust-toolchain@stable` 对齐） | CI workflows |
 | Tauri | 2（两端） | src-tauri/Cargo.toml |
-| wasmtime | **桌面 48（LTS）/ 移动 47（临时分叉）**：升级必须双端同步（ADR 0019），当前桌面 48.0.x 先行、移动端暂留 47（2026-09-18 分叉，见 `.scratch/2026-09-18-wasmtime-48-upgrade/spec.md`） | src-tauri/Cargo.toml |
+| wasmtime | **双端 48（LTS）**：升级必须双端同步（ADR 0019）。桌面 2026-09-18 先行升 48（临时分叉），移动 2026-09-26 补齐 → 分叉关闭、两端重新对齐 48.0.x（wasip3 构建链仍仅桌面，移动端待评估，见 `.scratch/2026-09-26-mobile-wasmtime-48-wasip3/spec.md`） | src-tauri/Cargo.toml |
 | 版本号 | 桌面/移动 package.json 与 Cargo.toml **同步维护**；变更记录根 `CHANGELOG.md` | 仓库现状 |
 | Android | JDK/Gradle 由 `gen/android` 分发包维护；SDK/NDK 随其管理 | — |
 
@@ -82,7 +82,8 @@ pnpm exec eslint .
 - **Rust 可单测过滤**：`cargo test <名称前缀>`
 - **Kotlin 独立工具链**：上述 gradlew 命令是 `gen/android` 下 Kotlin 改动的唯一验证（`cargo test` 与前端测试均不覆盖）
 - **文档命令字眼必须随工具链迁移**：spec / issue / scratch / 知识库文档里提及测试/构建/安装命令，**必须**用本节字眼（`pnpm run test:run`、`pnpm run tauri:dev`、`cargo test` 等），禁止旧 `npm` / `npm run test` 字眼；审计文档时若发现不一致，先改文档再继续
-- 构建前检查 `src-tauri/target` 大小，超 15GB 执行 `cargo clean`
+- 构建前检查 `src-tauri/target` 大小，超 15GB 执行 `cargo clean`（`pnpm run target:size` 额外列出共享 / 遗留 target 目录大小）
+- **构建产物落点：无根 workspace 的 target 目录治理**（2026-09-26 起，`.scratch/2026-09-26-cargo-target-space/`）——本仓库两端 30+ 个独立 `Cargo.toml`，per-crate target 会把相同依赖图重复编译 N 遍。夹具落 `bedcode-desktop/target/fixtures`（真源 `src-tauri/.../runtime/fixture_target.rs` + `packages/.cargo/config.toml`），wasm 应用落 `bedcode-desktop/target/wasm-apps`（真源 `scripts/plugin-wasm-config.mjs` 的 `WASM_TARGET_DIR` + `wasm-apps/.cargo/config.toml`），移动端夹具落 `bedcode-mobile/target/fixtures`。**新增 crate / 脚手架时不得写死 `<crate>/target/`**，沿用对应共享目录；`fixtures` 与 `wasm-apps` 不得合并（profile 不同会产出两份依赖产物）
 - **测试内 fixture 构建依赖 rustup shim**：宿主 wasm 闭环用例会在测试内 `cargo build --target wasm32-wasip3` 构建 fixture（component/sdk/pty/ws/wasip3-test），并显式注入 `RUSTUP_TOOLCHAIN=nightly-2026-09-16`（单一事实来源 `scripts/wasip3-toolchain.sh`）。因此**必须用 rustup shim 的 `cargo`（`~/.cargo/bin/cargo`）跑测试**，禁止把 `~/.rustup/toolchains/*/bin` 前置进 PATH——绕过 shim 会让注入的 `RUSTUP_TOOLCHAIN` 失效（raw toolchain cargo 忽略该变量）→ 依赖 fixture 的用例成批失败（现象：`Test component WASM build failed` / `WASI test component WASM build failed`，一次红约 39 项，与代码无关）
 - **测试后清理进程**：每次跑完测试（`cargo test` / `pnpm run test:run` / `gradlew` 等）后，必须检查并关闭测试开启的后台进程/监听端口（如 cargo 测试 spawn 的 mock server、vitest worker 残留、gradle daemon 等），避免残留进程占用端口或 CPU
 - 桌面 `tauri:build` 自动解析 updater 签名密钥（`TAURI_SIGNING_PRIVATE_KEY(_FILE)` / `.env`），未配置时自动禁用升级包，本地构建无需私钥；正式发布由 GitHub Actions Secrets 签名（`docs/knowledge/release-workflow.md`）
@@ -96,6 +97,7 @@ pnpm exec eslint .
 | 改前端 UI / 样式 / 布局（组件、CSS、token、动画、主题、响应式） | **先加载 `frontend-styles` skill**（`.agents/skills/frontend-styles/SKILL.md`，强制）+ 对应端 code-map |
 | 写 / 改 / 审查单元测试 | **先加载 `unit-test-discipline` skill**（`.agents/skills/unit-test-discipline/SKILL.md`，强制） |
 | 改 Rust 后端（任意模块） | 对应端 code-map → 模块目录 → §6 Rust 规范 + 相关 ADR（docs/adr/） |
+| 在宿主侧新增/修改任何能力、类型、状态、存储、路由 | **§5.1 宿主侧无业务代码（六条判据 B1-B6 + 三问裁决 + 提交前自检 6 问）+ §5.2 桌面端架构 + ADR 0022**——先判归属再动手；越线必须停下向用户确认 |
 | 改插件 | `docs/knowledge/plugin-development-checklist.md`（全文）+ WIT（`packages/plugin-sdk-*/rust/wit/bedcode.wit`）+ ADR 0017/0019/0022 |
 | 改数据库 / schema | §9 数据规范 + `bedcode-desktop/src-tauri/src/db/` |
 | 改跨端协议（HTTP/WS/QR/认证） | §9 协议规范 + `docs/knowledge/mobile-desktop-auth.md`，两端同步评估 |
@@ -109,21 +111,150 @@ pnpm exec eslint .
 
 **目标：无业务内核（Businessless Kernel）**——底座内核只含「应用无关的通用引擎」：进程（PTY）、网络（HTTP/WS/mDNS）、存储（SQLite/文件）、安全（JWT/密钥/TLS/信任）、通信（消息总线/插件互调）+ wasmtime 运行时。一切产品概念（会话、终端、设备连接、文件传输、AI……）都是插件。演进路线的阶段划分见 `.scratch/2026-09-10-plugin-kernel-roadmap/spec.md`；终态愿景见 `.scratch/2026-09-10-platform-kernel/spec.md`。
 
-**架构红线（强制）：**
+边界裁决的单一事实源是 **ADR 0022**（`docs/adr/0022-plugin-host-interface-primitive-boundary.md`）；
+本节是它的**可执行摘要 + 门禁**，两者冲突以 ADR 为准，ADR 未覆盖处以本节为准。
 
-- **高内聚、低耦合**：内核只做引擎原语与安全边界，禁止携带产品语义；业务代码内聚到各自插件工程；插件间只经互调 API（ADR 0017）与消息总线通信，**禁止跨插件直接耦合**
-- **新增能力优先评估「放哪个插件」而非「改内核」**；产品事实面按上述路线逐步下沉。**「会话」
-  已从「暂留宿主侧」清单里摘除并到达终态（2026-09-24，P4）**：会话真源（登记 / 状态机 /
-  生命周期分发 / 输入输出编排）在 `com.bedcode.terminal-session`；宿主侧**不再有任何会话对象**
-  ——内核会话目录 `src-tauri/src/session/` 整目录删除、`host-session` 与 `host-terminal` 两个
-  interface 退役（ABI v27）、内核输出环与会话状态机消失。宿主与会话相关的只剩三样**都无业务
-  语义**：PTY 引擎（`host-pty`）、宿主 server 在册连接清单（`host-connection`）、
-  互调窄转发层（`utils/session_gateway.rs`）。边界裁决见 ADR 0022「会话原语域退役」节，
-  实施与实测见 `.scratch/2026-09-23-session-engine-downsink/`；防回接锁
-  `retired_kernel_session_domain_is_not_reintroduced`
-  （终端渲染管道、设备连接与认证按同一路线继续下沉）
+### 5.1 宿主侧无业务代码（强制红线）
+
+**一句话判定：宿主只回答「机制怎么做」，不回答「这件事是什么、给谁用、怎么组织」。**
+
+本红线对**桌面端 `bedcode-desktop/src-tauri/src/` 与 `bedcode-desktop/src/`（宿主前端）**同时生效；
+两端形态不同（移动端仍是自持业务 App），但**同一判据**适用，见 §5.4。
+
+#### 5.1.1 口径：六条判据（命中任一即业务代码，禁止进宿主）
+
+| # | 判据 | 典型形态（正例：应归插件） |
+| --- | --- | --- |
+| **B1** | **产品类型 / 字段**：宿主以业务名词定义数据结构、枚举、状态、常量 | `SessionInfo` / `SessionStatus` / 传输任务 / 配对记录 / 供应商配置；`protocol/` 整目录已因此删除 |
+| **B2** | **业务编排 / 状态机**：按产品语义推进的多步流程、队列、重试、封顶、状态迁移表 | 会话状态机、任务队列归约、传输历史封顶与重试编排 |
+| **B3** | **业务真源**：宿主持有产品事实的权威存储（表 / 注册表 / 缓存）并对外读写 | 业务表、任务表、设置项真源、断点位置（业务表 `pairings` / `connection_history` / `session_configs` 已退役） |
+| **B4** | **业务投影 / DTO 翻译**：把原语结果翻译成产品 wire 形状再对外供业务消费 | `server/http/dtos/` 业务组、会话视图 DTO、peer 快照 DTO |
+| **B5** | **业务默认值 / 策略**：宿主替插件决定「业务上该怎样」 | 命名唯一化、默认重试次数、默认接收策略、排序与保留条数 |
+| **B6** | **业务生命周期挂钩**：宿主解释产品事件并主动回调插件 | 已退役的 `on-session-lifecycle` / `on-input-submitted` / `terminal-hooks` |
+
+**合法（引擎原语）判据**：与产品概念无关、任意第三方可按同一形状复用、返回**句柄 / 字节 / 计数 / 原始 JSON**而不返回业务判断。
+判不准时按 B 系列从严判，并停下向用户确认（§0 优先级 2：红线不可被普通任务越过）。
+
+#### 5.1.2 归属裁决：新增能力放宿主还是放插件（三问）
+
+1. **离宿主能实现吗？** 能（插件已有 `host-storage` / `host-plugin-database` / `host-bus` / `host-events` / `host-task` 自建）→ **放插件**。
+2. **携带产品语义吗？** 命中 B1-B6 任一 → **放插件**。
+3. 都不命中 → **放宿主**，但必须满足：WIT `host-*` 纯增量（或走 ABI bump 流程）、权限位有门禁落点、停用可回收。
+
+**顺序不可颠倒**：先答 1/2 再动手。「宿主已经能拿到这些数据」**不是**留在宿主的理由——
+真源搬迁必须走「插件自持 + 宿主原语化」，禁止宿主做兼容回查（这正是 2026-09-24 会话下沉踩过的坑，
+见 §8 fail-visible 三形态）。
+
+#### 5.1.3 宿主允许存在的四类薄壳
+
+引擎实现（`pty` / `server` / `peer_net` 引擎控制面 / `db` / `crypto` / `mdns`）、安全闸门
+（权限判定、fail-safe 默认如「无应答/超时即拒」、配额仲裁）、**通用**注册表与寻址
+（`server/http/registry.rs` 端点表、`server/websocket/registry.rs` 连接表）、零解析窄转发
+（`utils/session_gateway.rs`：全接口 `serde_json::Value` 原样透传插件 reply，**零解析零解释**，
+插件未激活显性报错）。这四类之外的任何「顺手加的」业务逻辑都是越线。
+
+#### 5.1.4 强制执行机制（不是口号）
+
+- **防回接锁（已有，随回归运行）**——越线回接会直接测红：
+
+  | 锁 | 锁住的事 | 位置 |
+  | --- | --- | --- |
+  | `retired_kernel_session_domain_is_not_reintroduced` | 内核会话域（`src-tauri/src/session/`、`host-session` / `host-terminal`、权限位 `session:write` / `terminal:observe`） | `wasm_core/manager/host/tests/wasm_flow_test.rs` |
+  | `retired_session_command_surface_is_not_reintroduced` | 宿主侧会话命令面回流 | `wasm_core/manager/host/api_bridge.rs` |
+  | `retired_session_observation_surface_is_not_reintroduced` | 宿主侧会话观察面回流 | `wasm_core/manager/host/tests/wasm_flow_test.rs` |
+  | `retired_peer_transfer_orchestration_is_not_reintroduced` | 宿主持有传输任务 / 设置 / 历史真源 | `server/peer_net/peer_engine_transfer.rs` |
+  | `retired_tables_are_not_created` | 已退役业务表不在宿主主库重建 | `db/database.rs` |
+  | `stale_artifact_rebuild_hint` | 破坏性契约变更后旧产物**实例化期**点名重建（fail-visible 形态 ②） | `wasm_core/manager/runtime/component.rs` |
+  | 权限词汇表自检 | 映射表含词汇表外条目即**加载即抛**（fail-visible 形态 ③） | `packages/plugin-sdk-desktop/bin/manifest-gen.js` |
+
+- **真源搬迁必配 fail-visible**（§8 三形态缺一不可）：旧读路径删除或显性报错 / 旧产物实例化期点名 /
+  退役权限位与命令字眼加载即抛。**禁止**把旧读路径改成「查不到就返回空」——静默降级会让
+  「线还在、数据永远是空」的断链在测试全绿下长期存活。
+- **提交前自检（改动落在宿主侧时逐条回答，答不出就停下问用户）**：
+  1. 新增的每个类型 / 常量 / 表 / 状态变量，宿主**没有**第二个消费者会用？
+  2. 删掉它，任意第三方插件能否用**同一形状**的既有原语自建？
+  3. 它是否只在**一个** wasm 应用内有意义？（是 → 必须放插件）
+  4. 它是否含产品名词（session / task / transfer / pairing / agent / chat / provider / device 列表）？
+  5. 它是否需要为「业务上该怎样」做决定（排序 / 默认 / 命名 / 封顶 / 策略）？
+  6. 是否新增了宿主对产品事件的解释或回调？
+- **越线处理**：确实需要越线（例如平台层缺乏逃生口）时，**停下向用户确认并记 ADR**，禁止自行放松红线。
+- **落地顺序硬约束**：`ABI` bump + 双端 WIT 副本同步（ADR 0019 / 0022 双端偏离条款）+ 移动端影响评估
+  + `CHANGELOG.md` 条目，缺一不可。
+
+#### 5.1.5 高内聚低耦合（配套红线）
+
+- 内核只做引擎原语与安全边界，禁止携带产品语义；业务代码内聚到各自 wasm 应用工程
+- 插件间**只经**互调 API（ADR 0017 `api_registry`）与消息总线（`host-bus`）通信，**禁止跨插件直接耦合**
+- 新增能力**优先评估「放哪个 wasm 应用」而非「改内核」**；产品事实面按路线逐步下沉
+- **「会话」已到达终态（2026-09-24，P4）**：会话真源（登记 / 状态机 / 生命周期分发 / 输入输出编排）在
+  `com.bedcode.terminal-session`（`wasm-apps/terminal-session/rust/src/session/`）；宿主侧**不再有任何会话对象**
+  ——`src-tauri/src/session/` 整目录删除、`host-session` 与 `host-terminal` 两 interface 退役（ABI v27）、
+  `protocol/` 整目录删除、内核输出环与会话状态机消失。宿主与会话相关的只剩三样**都无业务语义**：
+  ① PTY 引擎（`host-pty` + `src-tauri/src/pty/`）② 宿主 server 在册连接清单（`host-connection`）
+  ③ 互调窄转发层（`utils/session_gateway.rs`）。实施与实测见
+  `.scratch/2026-09-23-session-engine-downsink/`（终端渲染管道、设备连接与认证按同一路线继续下沉）
 - **裁剪线（ADR 0022）**：宿主能力只暴露「离宿主无法实现、且无业务语义」的原语；业务编排一律在插件层
-- 技术决策记录在 `docs/adr/`（Multi-Project Monorepo / Async Everywhere / Event-Driven / Graceful Shutdown / Flat Module Structure / Plugin System / 无业务内核 / 插件 Mock 归属），新增决策走 ADR
+- 技术决策记录在 `docs/adr/`（Multi-Project Monorepo / Async Everywhere / Event-Driven / Graceful
+  Shutdown / Flat Module Structure / Plugin System / 无业务内核 / 插件 Mock 归属 / 0022 边界），
+  新增决策走 ADR
+
+### 5.2 桌面端架构（两层 · 四闸门 · 四通道）
+
+```text
+┌─ wasm 应用层（业务事实面，4 个应用，源码在 bedcode-desktop/wasm-apps/<app-id>/）────┐
+│ terminal-session  会话/配对/认证/任务编排/REST    file-transfer  传输任务/历史/策略   │
+│ ai-chatbox        多供应商 AI 聊天                agent-hub      Agent CLI / Skills  │
+│ 真源：各自私有 SQLite 库 + 各自前端状态 + 自身命令面（互不直连，只经互调/总线）      │
+└───────────────────────────────┬──────────────────────────────────────────────────┘
+                                │ 下行只经四种通道（WIT host-* / bus / events / 互调）
+┌───────────────────────────────▼──────────────────────────────────────────────────┐
+│ 宿主内核层（bedcode-desktop/src-tauri/src/ + src/）：应用无关引擎                   │
+│ wasmtime 运行时 · wasm_core 五模块（manager/host_api/security/bus/config+monitor）  │
+│ pty 引擎 · server（core/ + http/ + websocket/）· peer_net 引擎控制面                │
+│ db · crypto · mdns · system · utils（auth/crypto/session_gateway）                   │
+└──────────────────────────────────────────────────────────────────────────────────┘
+```
+
+- **四个闸门（宿主 → 插件）**：能力闸门（WIT `host-*` 22 个原语接口 + 权限位判定，
+  `wasm_core/security/framework.rs`）· 身份闸门（通道凭证绑定身份，`security/frontend_channel.rs`，
+  参数自报 `plugin_id` 无效）· 隔离闸门（bus 具名 topic `<plugin-id>::<name>`、
+  `/api/plugin/<owner>/` 与 `/ws/plugin/<owner>/` 路径命名空间、属主判定）·
+  生命周期闸门（`approval_gate` 前置审批 + 停用 `purge_for_plugin` 回收 pty/ws/task/peer/http 全部资源）
+- **四种通道（插件 → 宿主）**：`host-*` WIT import（`packages/plugin-sdk-desktop/rust/wit/bedcode.wit`
+  单一事实源）· `host-bus`（topic 命名空间仲裁）· `host-events.emit`（插件自定义 JSON 载荷）·
+  互调 API（ADR 0017 `api_registry`）
+- **宿主直调命令面只保留外壳**：`src-tauri/src/commands.rs` 只服务宿主页面（外壳 / 诊断 / 引擎事实），
+  业务面一律走插件命令面；`src/composables/` 同理
+- **域 → 原语接口 → 业务真源**（当前形态，细节见 `bedcode-desktop/docs/code-map.md`）：
+
+| 引擎域 | 宿主模块 | 原语接口（ABI desktop 31） | 业务真源（插件侧） |
+| --- | --- | --- | --- |
+| 伪终端 | `src-tauri/src/pty/` | `host-pty` | terminal-session 的 `sessions` / `session_annotations` 库 |
+| 传输 | `server/http/` + `server/websocket/` | `host-http` / `host-websocket` | terminal-session 的 REST 域、file-transfer 的 WS 域 |
+| 对等网络 | `server/peer_net/` + `packages/peer-net` | `host-peer`（v31） | file-transfer 事件归约状态机 |
+| 认证 / 密钥 | `utils/auth/` + `host_api/auth.rs` | `host-auth`（v18） | terminal-session `auth_records/` 私有库 |
+| 存储 / 库 | `db/` | `host-storage` / `host-database` / `host-plugin-database` | 各应用私有库（`plugin_id_` 前缀或独立库） |
+| 通信 | `wasm_core/bus` + `api_registry` | `host-bus` / `host-api-call` | —（通道本身无真源） |
+| 运行时 | `wasm_core/` | `host-app` / `host-config` / `host-log` / `host-process` / `host-fs` / `host-timer` / `host-platform` / `host-mdns` / `host-crypto` / `host-task` | 各应用自持 |
+| 连接清单 | `server/websocket/registry.rs` | `host-connection` | —（仅在册连接事实） |
+
+### 5.3 已退役 · 不得回接（桌面端）
+
+`src-tauri/src/session/`（整目录）· `src-tauri/src/protocol/`（整目录）· `src-tauri/src/events/`
+（宿主同步广播面）· `host-session` / `host-terminal` interface · `terminal-hooks` 导出 ·
+权限位 `session:write` / `terminal:observe` · 内核输出环 `GlobalOutputManager` ·
+manifest 静态声明面 `contributes.httpEndpoints` / `toolProviders` · 宿主主库业务表
+`pairings` / `connection_history` / `session_configs`（不兼容旧版本存量用户，旧库滞留表**不读不迁不清理**）·
+`host-peer::resume-all-transfers` 与 `concurrency` 字段 · peer 旧快照 topic `peer:transfer` / `peer:receive` ·
+`wasm_core/legacy/` 一次性迁移链。回接任一项 = 越 §5.1 红线。
+
+### 5.4 双端差异（勿把桌面结论套到移动端）
+
+- **桌面**：宿主 = 无业务内核 + 4 个 wasm 应用承载业务（§5.2）
+- **移动**：仍是自持业务 App（远端终端客户端），插件契约独立（ADR 0018），移动**不跟演**桌面部分 ABI 破坏性变更
+  （`host-pty` / `host-task` / `host-peer` v31 等），移动端相关判断以 `docs/knowledge/mobile-desktop-auth.md` 与
+  ADR 0018/0019 为准
+- 但**判据同源**：移动端宿主同样禁止出现「内核解释产品语义」的代码；跨端协议改动必须两端同步部署（§9）
 
 ---
 
@@ -216,6 +347,14 @@ pnpm exec eslint .
 - 协议（HTTP / WS / QR 配对 / 认证）改动**必须两端同步部署**（桌面主机 + 移动端），字段演进遵循「老端忽略未知字段」的增量原则，禁止破坏性替换
 - 认证/配对协议文档：`docs/knowledge/mobile-desktop-auth.md`；宿主/插件契约见 `docs/knowledge/plugin-development-checklist.md`（WIT 节）
 - wasmtime 版本升级必须两端同步（ADR 0019）
+- **移动端 WS 面硬切后的调用口径（2026-09-26）**：移动端 WS 只承载两条**插件端点**连接且帧永不加解密
+  （桌面 `TrafficChannel::WsPlugin => false`，WS 帧级链路加密已退役）——事件通道
+  `/ws/plugin/com.bedcode.terminal-session/session-control`（极简认证 `{"type":"auth","token":"<jwt>"}`
+  + `{"type":"event",…}` 事件帧；事件不重放，连接重建后前端经 `ws_event_channel_ready` 触发 HTTP 对账）；
+  终端流 `/ws/plugin/com.bedcode.terminal-session/terminal`（订阅回放 + 裸字节 + `ring_resync` 重锚 + `session_stopped`）。
+  会话控制 / 会话与配置加载 / 终端输入 / 插件 API（`session.list`、`terminal.sendInput`）一律走 HTTP
+  （`/api/sessions/*`、`/api/configs`）。认证走 HTTP `/api/auth/*`。旧 `Message` 信封在 WS 生产路径零使用
+  （裁剪为 5 变体仅服务 WS legacy 认证集成场景）；HTTP 信封加密保留，WS 帧级加密不得回接。
 
 ### 产物与生成文件
 
@@ -245,6 +384,8 @@ pnpm exec eslint .
 - i18n key 同步出现在 zh-CN 和 en
 - 公开项有文档注释；错误处理用 `AppError` 而非裸字符串
 - 前端 UI 改动通过 `frontend-styles` 自查（token-bound、无原生控件外观、无反模式）
+- 改动落在宿主侧时通过 §5.1 自检（三问裁决 + 自检 6 问有答案）、B1-B6 判据零命中；未在宿主新增业务类型 / 状态 / 存储 / 路由 / 业务默认值；新引入的退役面回接被防回接锁覆盖
+- 真源搬迁类改动附 fail-visible 三形态证据（§8）：旧读路径显性失败 / 旧产物实例化期点名 / 退役词汇加载即抛
 - 单元测试改动通过 `unit-test-discipline` 自查（契约 / 正反例 / 变异）
 - pi agent：收尾 `lens_diagnostics mode=all` 无 blocker（🔴 blocker 未清前不算 done）
 
@@ -316,6 +457,7 @@ CI 门禁（合并到 master/uat 时）：`lint.yml`（eslint 0 error）+ `test.
 | 插件开发检查清单 | `docs/knowledge/plugin-development-checklist.md`（AGENTS §7 指向的全文） |
 | 插件 WASM 日志 spec | `.scratch/2026-09-09-plugin-wasm-logging/spec.md` |
 | 架构路线 | `.scratch/2026-09-10-plugin-kernel-roadmap/spec.md`、`.scratch/2026-09-10-platform-kernel/spec.md` |
+| **宿主/插件边界裁决（§5 红线的单一事实源）** | `docs/adr/0022-plugin-host-interface-primitive-boundary.md`（+ ADR 0017 互调 / 0018 移动独立契约 / 0019 双端锁版） |
 | pi 工具手册 | `docs/agents/pi-tools.md`（附录） |
 
 ---

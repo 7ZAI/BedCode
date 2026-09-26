@@ -8,7 +8,7 @@ Date: 2026-09-19
 ## 1. 背景与决策
 
 认证中心插件（auth-center）与后续所有**桌面端**插件使用 **wasm32-wasip3（WASI 0.3）**
-编译路径；移动端不变（wasmtime 47 + p2 sync + wasm32-unknown-unknown，另行评估）。
+编译路径；移动端 2026-09-26 起同样运行 wasmtime 48，但构建链**仍为 `wasm32-unknown-unknown` + componentize**（wasip3 评估中，见 `.scratch/2026-09-26-mobile-wasmtime-48-wasip3/spec.md` §4）。
 
 **为什么固定 nightly（决策）**：stable 1.98.1 无 wasm32-wasip3 预编译产物
 （tier 2 low-tier，需 LLVM 23 + rustup 更新或源码构建）。自 2026-09-12 起的
@@ -66,6 +66,23 @@ RUSTUP_TOOLCHAIN=nightly-2026-09-16 cargo build \
   --target wasm32-wasip3 --release --no-default-features --features wasm \
   --manifest-path bedcode-desktop/wasm-apps/<id>/rust/Cargo.toml
 ```
+
+**产物落点（2026-09-26 起）**：夹具与 wasm 应用各自收敛到**单一共享 target 目录**，
+不再写各自 crate 根的 `target/`（本仓库无根 workspace，per-crate target 会把相同的
+依赖图重复编译 N 遍；实测 11 个夹具 6.0G + 4 个应用 5.8G）：
+
+| 类别 | 共享目录 | 路径真源 |
+| --- | --- | --- |
+| 测试夹具（9 个 crate） | `bedcode-desktop/target/fixtures/` | `src-tauri/.../runtime/fixture_target.rs`（宿主测试经 `CARGO_TARGET_DIR` 注入）+ `packages/.cargo/config.toml`（手工 / 工具链探针） |
+| wasm 应用（4 个） | `bedcode-desktop/target/wasm-apps/` | `scripts/plugin-wasm-config.mjs` 的 `WASM_TARGET_DIR`（`build.js` 显式传 `--target-dir`）+ `wasm-apps/.cargo/config.toml` |
+
+因此上面两条手动命令的产物分别落在
+`bedcode-desktop/target/fixtures/wasm32-wasip3/release/…` 与
+`bedcode-desktop/target/wasm-apps/wasm32-wasip3/release/…`；
+`wasip3-toolchain.sh fixture` / `health` 两个子命令也已指向共享目录（脚本内注释与上表互相指认）。
+两个目录**刻意不合并**：夹具有 `[profile.release] opt-level="s"/lto=true` 而应用无
+`[profile.*]`，profile 参与产物指纹，同目录会产出两份依赖产物。
+决策记录：`.scratch/2026-09-26-cargo-target-space/spec.md`。
 
 fixture 工程：`bedcode-desktop/packages/plugin-wasip3-test/`（`com.bedcode.wasip3-test`，
 `wasip3-test.read-clock` 命令走 `wasi:clocks` import 作为时钟可读性静态证明；

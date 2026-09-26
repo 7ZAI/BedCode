@@ -604,26 +604,60 @@ opt-level = 2        # 依赖项优化（提升 dev 下测试/插件运行速度
 
 ### Target 目录管理
 
-Rust 增量编译会导致 `target` 目录持续增长。
+Rust 增量编译会导致 `target` 目录持续增长。**本仓库无根 workspace**（两端 30+ 个独立
+`Cargo.toml`），所以「哪个 crate 的 target」会直接影响磁盘占用：per-crate target 会把
+**相同的依赖图重复编译 N 遍**。2026-09-26 治理后，产物收敛为 4 个落点：
 
-**自动清理脚本**：`scripts/check-target-size.js`
+| 落点 | 内容 | 路径真源 |
+| --- | --- | --- |
+| `bedcode-desktop/src-tauri/target/` | 桌面宿主（含 15G 阈值治理） | Tauri / cargo 默认 |
+| `bedcode-mobile/src-tauri/target/` | 移动端宿主（含 15G 阈值治理） | Tauri / cargo 默认 |
+| `bedcode-desktop/target/fixtures/` | 桌面 9 个测试夹具共享 | `src-tauri/.../runtime/fixture_target.rs` + `packages/.cargo/config.toml` |
+| `bedcode-desktop/target/wasm-apps/` | 桌面 4 个 wasm 应用共享 | `scripts/plugin-wasm-config.mjs`（`WASM_TARGET_DIR`）+ `wasm-apps/.cargo/config.toml` |
+| `bedcode-mobile/target/fixtures/` | 移动 2 个夹具 / 插件共享 | `bedcode-mobile/src-tauri/.../component.rs` 的 `fixture_target_dir()` |
+
+`fixtures` 与 `wasm-apps` **刻意不合并**：夹具 crate 有
+`[profile.release] opt-level="s"/lto=true`，wasm 应用无 `[profile.*]`（cargo 默认）；
+profile 参与 cargo 产物指纹，同一目录会为同一份依赖图产出两份产物。
+两个目录也**不并入**各自宿主 `src-tauri/target`：那里有 15G 阈值与自动 `cargo clean`，
+混在一起会统计失真且清宿主缓存时连带清掉夹具缓存。
+
+治理前后实测（2026-09-26，本机 157G ext4）：
+
+| 状态 | 整仓 Rust 产物 | 备注 |
+| --- | --- | --- |
+| 治理前峰值 | **15.3 GiB**（11 夹具 6.0G + 4 应用 5.8G + 两端宿主 15G） | 跑一次全量测试会多出十余个 per-crate 目录 |
+| 治理后稳态 | 夹具 417M（9 个）+ 应用 150M（4 个）合入 2 个目录 | 依赖图各只编译一份 |
+
+**自动检查脚本**：`bedcode-{desktop,mobile}/scripts/check-target-size.js`
 
 ```javascript
 const CONFIG = {
-  maxSizeGB: 15,        // 最大允许 15GB
-  targetDir: 'src-tauri/target',
-  autoClean: true,      // 超过阈值自动清理
+  maxSizeGB: 15,        // 仅约束宿主 src-tauri/target，超阈值执行 cargo clean
+  sharedTargetDirs: [...],    // 共享目录：只报告，不自动删（删=丢共享编译缓存）
+  legacyTargetParents: [...], // 遗留 per-crate 目录：报告为「可安全删除」
 }
 ```
 
 **pnpm scripts**：
 
 ```bash
-pnpm run target:size    # 检查 target 目录大小
-pnpm run target:clean   # 手动清理 target 目录
+pnpm run target:size    # 检查：宿主走阈值判定，其余 target 目录逐个列出大小
+pnpm run target:clean   # 手动清理宿主 target（cd src-tauri && cargo clean）
 ```
 
 **构建前自动检查**：`pnpm run build` 会自动执行检查。
+
+**增量目录可随时删**（代价：本地 crate 下次全量重编，依赖产物不受影响）：
+
+```bash
+rm -rf bedcode-desktop/src-tauri/target/debug/incremental
+rm -rf bedcode-mobile/src-tauri/target/debug/incremental
+```
+
+> 提醒：`cargo test` 会把 `test` profile 的依赖产物（`debug_assertions` 开启）与 `dev`
+> profile 的并排存一份，宿主 target 因此会在「构建 + 跑测试」后明显增长（实测
+> `incremental` 单项可达 2.5G）。这是正常成本，不是泄漏。
 
 ---
 

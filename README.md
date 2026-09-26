@@ -7,7 +7,7 @@
 [![Version](https://img.shields.io/badge/version-2.1.1-blue.svg)](https://github.com/7ZAI/BedCode)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Tauri](https://img.shields.io/badge/Tauri-2.0-orange.svg)](https://v2.tauri.app/)
-[![Wasmtime](https://img.shields.io/badge/wasmtime-47-%232F6FED.svg)](https://wasmtime.dev/)
+[![Wasmtime](https://img.shields.io/badge/wasmtime-48-%232F6FED.svg)](https://wasmtime.dev/)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20Android-lightgrey.svg)](https://github.com/7ZAI/BedCode)
 
 [English](README_en.md) | 简体中文
@@ -151,7 +151,7 @@ Monorepo 双独立项目，各自包含 `src/`（前端）+ `src-tauri/`（Rust 
 
 ### 环境要求
 
-- [Node.js](https://nodejs.org/) ≥ 18、[Rust](https://www.rust-lang.org/tools/install) ≥ 1.94（wasmtime 47 MSRV）
+- [Node.js](https://nodejs.org/) ≥ 18、[Rust](https://www.rust-lang.org/tools/install) ≥ 1.95（wasmtime 48 MSRV）
 - [Tauri 2.0 CLI](https://v2.tauri.app/start/prerequisites/) 及平台相关依赖
 - 已安装并配置 Agent CLI（如 [Claude Code](https://claude.ai/code)）
 

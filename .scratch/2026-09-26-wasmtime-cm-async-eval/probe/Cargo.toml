@@ -1,0 +1,15 @@
+[package]
+name = "cm-async-probe"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+# 与桌面端同版本同 default features（F5：component-model-async 已在默认集内，
+# concurrency_support 默认为 true）——改这里会强制重编 wasmtime，勿动。
+wasmtime = "48"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros"] }
+futures = "0.3"
+anyhow = "1"

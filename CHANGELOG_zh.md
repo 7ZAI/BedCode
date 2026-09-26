@@ -9,10 +9,36 @@
 
 ## [未发布]
 
-> 仅桌面端（路线图阶段 2 + 阶段 3 会话部分合并为一个批次执行）。**移动端代码零改动、
-> 版本号不动**——范围豁免与移动端受损清单见「文档」节。
+> 以桌面端为主（路线图阶段 2 + 阶段 3 会话部分合并为一个批次执行），外加一项移动端
+> 基础建设变更（wasmtime 47 → 48，见「基础建设」节）——**两端版本号均不动**；桌面批次的
+> 范围豁免与移动端受损清单见「文档」节。
 
 ### 功能
+
+#### 移动端 WS 面重新锚定插件端点 —— 控制面迁 HTTP、session-control 事件通道、终端流重写、WS 帧级加密退役（移动端；桌面 wasm 应用仅补最小事件广播）
+- 移动端 WS 面对齐桌面插件端点（旧 `/ws/event` 与 `/ws/terminal/session/{id}` 现已 404）：**事件通道**
+  （`/ws/plugin/com.bedcode.terminal-session/session-control`）改极简认证帧 `{"type":"auth","token":"<jwt>"}`
+  + 事件帧 `{"type":"event",…}`，经插件广播恢复 `ws_sync_*` 事件面；事件**不重放**——重连后前端经
+  `ws_event_channel_ready` 触发 HTTP 对账（`loadActiveSessions` + 活动会话队列按需拉取）。**终端流**
+  （`/ws/plugin/.../terminal`）重写为插件新协议（fresh-subscribe 回放 + 裸字节 + 本地字节计数 +
+  `ring_resync` 唯一重锚 + `session_stopped`）；TB v3 解析退役
+- 会话控制 / 会话与配置加载 / 终端输入 / 插件 API（`session.list`、`terminal.sendInput`）全部迁 HTTP
+  （`/api/sessions/*`、`/api/configs`）；旧 `Message` 信封裁剪为 5 变体仅服务 WS legacy 认证集成场景；
+  任务面旧前缀 `com.bedcode.auto-task` → `com.bedcode.terminal-session`
+- **WS 帧级链路加密退役**（桌面 `TrafficChannel::WsPlugin => false`）：`ws-terminal` / `ws-event`
+  设置开关、`useLinkEncryption` 的 WS 字段、`install_event_crypto` 与 `WsClient` 加解密管道全部删除；
+  HTTP 信封加密保留（开关 / strict / pinning 语义不变）
+- 收敛：配置增删改推送与设备上下线事件**不再推送**（移动端改按需 / 对账）；会话状态字面量统一到桌面
+  wire 值 `waitingInput`（原漂移为 `waiting_input`）并加用例锁
+- 每条退役面均落结构锁（事件通道零信封、生产零 WS 加密残留、会话状态比较零 `waiting_input`），变异自检通过
+
+#### 终端输出背压回归 — 交付即账 ack + 双水位迟滞（桌面端，插件侧；宿主零改动）
+- 下沉前的机制（宿主 per-subscriber 窗口：私有 `acked_offset`、双水位、park 等待、30 s 僵尸回收）回归到 `com.bedcode.terminal-session` 应用内部——宿主 PTY 环不感知消费者：`session.output.ack`（`{sessionId, offset}`）推进会话单调水位；`session.output.pull` 在未确认窗口达上沿（128 KiB）时抑制，降到下沿（64 KiB）以下才放行——取值与迁移前一致，含编译期自检的不变量 `ack ≤ low < high`
+- 前端按**交付进写入管线**（而非「渲染完成」）记账，按累计 64 KiB 或空闲 250 ms 节流回发，与迁移前 `useTerminalOutputStreamChannel` 同款；被抑制的响应让拉取循环不推进游标、不写入，退避 200 ms（= 旧 `park_poll_ms`）后重试；`truncated`/resync 同时重锚游标与水位
+- 驻留超 30 s 打一次告警（旧语义是回收僵尸连接；拉取模型无连接可回收）并继续拉取，不静默卡死
+- 新增只读诊断命令 `session.output.watermarks`（`{sessionId?}` → pushed/acked/unacked/parked + 驻留/截断计数，对齐旧 `SubscriberStats`）；前端在驻留退出时取一次快照打日志，真机复验无需翻引擎日志即可判定「背压是否真发生过」。计数**刻意无时钟**（wasm32 无系统时钟，驻留时长由前端计时）
+- **拉取节奏对齐旧引擎**（spec F5）：快/慢档 100/500 ms → 50/250 ms，单 tick 预算 4 × 16 KiB = 64 KiB（= 旧 `FETCH_BUDGET`）——吞吐上限不变、输出可见延迟减半；节奏裁决抽成可单测的纯函数 `terminalPullPolicy`，并修正了一处行为不一致（驻留若发生在慢档期会滞留在慢档，现驻留恒定快档）
+- **宿主零改动**——不动 WIT/ABI；真正的 push 引擎事件（毫秒唤醒）仍是已登记的后续项（P2）
 
 #### 对等传输编排整体下沉插件 — 宿主 `peer_engine_*` 收敛为句柄表 + 引擎事件桥（桌面端，**v30 + v31**）
 - 传输任务编排此前仍留宿主（活跃任务状态机、发送并发闸门 1..=8 默认 3、历史封顶 200/100、
@@ -72,6 +98,32 @@
 - **私有库随 id 迁移（票 07）**：宿主一次性幂等迁移（`plugin/session_db_migration.rs`）把插件私有库从 `plugins/com.bedcode.session/plugin.db` 搬到 `plugins/com.bedcode.terminal-session/plugin.db`——逐表按列名交集拷贝（task 域改名表经共享字典对齐），改名后插件从未激活过时走纯文件重命名；`plugin_meta` 账本戳保证只跑一次
 
 ### 基础建设
+
+#### 移动端 wasmtime 47 → 48 —— ADR 0019 双端锁死恢复（移动端；零代码适配）
+- 2026-09-18 桌面端升 48 时为规避 47 线 EOL 风险**故意分叉**（桌面 48.0.2 / 移动 47.0.3）；
+  移动端本次补齐 `wasmtime = "48"`（lock 解析 48.0.3，MSRV 1.94 → 1.95），关闭 ADR 0019
+  偏离。方法完全复用桌面端 spec：把 48.0.0 的每条变更逐项过一遍移动端宿主，再由
+  `cargo check` / `cargo test` 驱动适配
+- **零代码适配**——且原因与桌面端不同（桌面改了 2 处：宿主依赖 `wasmtime-wasi`，48 把
+  `DirPerms`/`FilePerms` 收敛为二态 `FsPerms`，wasi-filesystem #14010）；移动端宿主**根本没有
+  WASI 面**（无 `wasmtime-wasi` 依赖、无 preopen、三个插件零 wasi import），48.0.0 里与 wasi
+  相关的半边（socket 默认 deny #13936、文件系统权限、wasip2/p3 统一）在移动端没有对应面。
+  燃料看门狗语义、`ResourceLimiter` 上限、AOT `.cwasm` 缓存在 48 下均不变
+- `cargo check --lib` 干净；移动端 `cargo test` 全量全绿（lib 347 + 集成 target），其中
+  `wasm_runtime` 29 项真编译真加载组件（往返、燃料 trap、limiter 拒绝、AOT 缓存命中、
+  abi 协商、SDK 宏产物加载并 activate）
+- ADR 0019 重写：补版本沿革表（47 → 桌面先行 48 → 重新对齐），并显式写清「锁」到底锁什么——
+  **声明范围**必须一致，**lock 解析出的 patch 不必**（两端 `Cargo.lock` 相互独立，`.cwasm`
+  写在各自设备的宿主 cache 目录、从不跨端复用）；构建链 target（`wasm32-wasip3` vs
+  `wasm32-unknown-unknown`）明确不受本 ADR 约束
+- **移动端 wasip3 不在本次范围**：探针 crate 实证桌面 A0-3 的接线形态（CM_ASYNC +
+  `p3::add_to_linker` + 同步 `Store` + `instantiate_async`）在 48 上编译通过，且**不需要 p2
+  兼容垫片**（既有 unknown-unknown 组件零 wasi import）。但当前三个移动插件对 wasi 零需求，
+  收益主要是构建链简化，而代价是**破坏已发布的 `@binblink/bedcode-plugin-sdk-mobile` CLI 构建链**
+  + 把 `wasmtime-wasi` 拉进 APK。票拆分 B-1..B-4 与代价评估见
+  `.scratch/2026-09-26-mobile-wasmtime-48-wasip3/spec.md` §4，**待决策**
+- 文档同步：AGENTS §2 版本表、`docs/knowledge/wasip3-toolchain.md`、ADR 0019、四个 README
+  的 wasmtime 徽标与 MSRV 行（桌面端 README 仍写 47，是桌面单端升级遗留的文档债，本次一并纠正）
 
 #### 插件→宿主的同步事件 wire 就是出站 wire —— 一份格式，ABI 不 bump（桌面端；移动端 wire 逐字节不变，但第三方插件须重建）
 - `bedcode_plugin_api::events::SyncEvent` 此前走「内部标签 PascalCase + 字段平铺」，宿主转发给移动端时再改写成出站 `SyncPayload` 的形状（adjacently tagged snake_case + `data`）——同一个事件两份格式、三段转换。现在两跳**合成一份**：`SyncEvent` 直接携带 `{"type":"<snake_case 变体>","data":{…}}`，`session` 字段是类型化 `wire::SessionSummary`、状态是 wire 字符串，宿主不再用另一种形状复述会话事件。唯一不对称是 `session_stopped` / `session_removed` 的 `source_device`：给宿主做「排除发起设备」的信封字段，**不出站**

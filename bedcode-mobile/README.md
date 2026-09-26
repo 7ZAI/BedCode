@@ -7,7 +7,7 @@
 [![Version](https://img.shields.io/badge/version-2.1.1-blue.svg)](https://github.com/7ZAI/BedCode)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](../LICENSE)
 [![Tauri](https://img.shields.io/badge/Tauri-2.0-orange.svg)](https://v2.tauri.app/)
-[![Wasmtime](https://img.shields.io/badge/wasmtime-47-%232F6FED.svg)](https://wasmtime.dev/)
+[![Wasmtime](https://img.shields.io/badge/wasmtime-48-%232F6FED.svg)](https://wasmtime.dev/)
 [![Platform](https://img.shields.io/badge/platform-Android-lightgrey.svg)](https://github.com/7ZAI/BedCode)
 
 [English](README_en.md) | 简体中文
@@ -44,7 +44,7 @@
 | 认证 | JWT（HS256）、ECDSA 生物凭证（p256）、设备指纹                  |
 | 加密 | X25519 ECDH + AES-256-GCM（HKDF）、ChaCha20-Poly1305            |
 | 文件 | SAF（Storage Access Framework）目录树遍历与中转复制             |
-| 插件 | wasmtime 47（WASM 组件运行时）                                  |
+| 插件 | wasmtime 48（WASM 组件运行时，LTS）                                  |
 | 其他 | shiki、html5-qrcode、marked、vue-i18n@9、tracing 日志（logcat） |
 
 ## 目录结构
@@ -97,7 +97,7 @@ bedcode-mobile/
 
 ### 环境要求
 
-- [Node.js](https://nodejs.org/) ≥ 18、[Rust](https://www.rust-lang.org/tools/install) ≥ 1.94（wasmtime 47 MSRV）
+- [Node.js](https://nodejs.org/) ≥ 18、[Rust](https://www.rust-lang.org/tools/install) ≥ 1.95（wasmtime 48 MSRV）
 - [Tauri 2.0 CLI](https://v2.tauri.app/start/prerequisites/) 及 Android SDK / NDK 环境
 - 一台电脑运行 [BedCode Desktop](../bedcode-desktop/) 作为主机
 
@@ -147,7 +147,7 @@ cd src-tauri && cargo test         # Rust 测试
 
 ## 插件系统
 
-移动端插件与桌面端共享同一套插件架构（wasmtime 47、WASM Component Model、权限控制），并额外封装移动端专属能力：**SAF 存储访问**、对话框 / 系统通知、**动态路由**、生命周期钩子、Android 系统返回键接管，以及 dev-shell 演示数据协议（浏览器 HMR 开发环境）。宿主能力实现按功能域拆分于 `host_impl/`（storage/db/fs/http/terminal/event/bus/config/notify/peer/support），内置插件从 APK assets 解压到 app_data_dir 后扫描加载，支持远程下载 + SHA256 校验安装。
+移动端插件与桌面端共享同一套插件架构（wasmtime 48、WASM Component Model、权限控制），并额外封装移动端专属能力：**SAF 存储访问**、对话框 / 系统通知、**动态路由**、生命周期钩子、Android 系统返回键接管，以及 dev-shell 演示数据协议（浏览器 HMR 开发环境）。宿主能力实现按功能域拆分于 `host_impl/`（storage/db/fs/http/terminal/event/bus/config/notify/peer/support），内置插件从 APK assets 解压到 app_data_dir 后扫描加载，支持远程下载 + SHA256 校验安装。
 
 开发自己的插件：使用 [`@binblink/bedcode-plugin-sdk-mobile`](packages/plugin-sdk-mobile/README.md)（TS SDK + Rust `bedcode-plugin-api-mobile` crate），完整指南见 [plugin-dev-mobile.md](plugin-dev-mobile.md)。
 

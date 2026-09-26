@@ -9,7 +9,7 @@
 [![Version](https://img.shields.io/badge/version-2.1.1-blue.svg)](https://github.com/7ZAI/BedCode)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](../LICENSE)
 [![Tauri](https://img.shields.io/badge/Tauri-2.0-orange.svg)](https://v2.tauri.app/)
-[![Wasmtime](https://img.shields.io/badge/wasmtime-47-%232F6FED.svg)](https://wasmtime.dev/)
+[![Wasmtime](https://img.shields.io/badge/wasmtime-48-%232F6FED.svg)](https://wasmtime.dev/)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey.svg)](https://github.com/7ZAI/BedCode)
 
 [English](README_en.md) | 简体中文
@@ -43,7 +43,7 @@
 | 终端   | @xterm/xterm + addon-fit / unicode11 / web-links / webgl    |
 | 认证   | JWT（HS256）、ECDSA 生物凭证（p256）、设备指纹、6 位配对码 |
 | 加密   | X25519 ECDH + AES-256-GCM（HKDF）、ChaCha20-Poly1305、RSA-OAEP/PSS |
-| 插件   | wasmtime 47（WASM 组件运行时）+ cdylib 动态加载             |
+| 插件   | wasmtime 48（WASM 组件运行时，LTS）+ cdylib 动态加载             |
 | 其他   | shiki、ECharts、qrcode、vue-i18n@9、tracing 日志            |
 
 ## 目录结构
@@ -94,7 +94,7 @@ bedcode-desktop/
 
 ### 环境要求
 
-- [Node.js](https://nodejs.org/) ≥ 18、[Rust](https://www.rust-lang.org/tools/install) ≥ 1.94（wasmtime 47 MSRV）
+- [Node.js](https://nodejs.org/) ≥ 18、[Rust](https://www.rust-lang.org/tools/install) ≥ 1.95（wasmtime 48 MSRV）
 - [Tauri 2.0 CLI](https://v2.tauri.app/start/prerequisites/) 及平台依赖
   （Linux 系统依赖见 [docs/linux-build.md](docs/linux-build.md)）
 - 已安装并配置 Agent CLI（如 [Claude Code](https://claude.ai/code)、pi、opencode、Codex）
@@ -132,7 +132,7 @@ cd src-tauri && cargo test         # Rust 测试
 
 ## 插件系统
 
-桌面端插件基于 **wasmtime 47 运行时（WASM Component Model）**：插件由 Rust / TypeScript 编译为 WASM 组件，在宿主内沙箱加载运行，同时兼容 cdylib 动态库插件。插件可观察和扩展宿主会话行为：
+桌面端插件基于 **wasmtime 48 运行时（WASM Component Model）**：插件由 Rust / TypeScript 编译为 WASM 组件，在宿主内沙箱加载运行，同时兼容 cdylib 动态库插件。插件可观察和扩展宿主会话行为：
 
 - **WASM 沙箱运行时** — 资源受限、内存隔离，插件崩溃不影响宿主
 - **动态加载** — 运行时扫描 `plugins/{plugin-id}/plugin.json` 加载，无需重编译宿主

@@ -27,7 +27,7 @@
 
 - target 固定 `bedcode_lib::plugin::plugin_log`，`[plugin:xxx]` 前缀
 - per-plugin 级别：`BEDCODE_PLUGIN_LOG=id=level`（filter 不能按字段过滤，per-plugin 级别需在 emit_plugin_log 入口做宿主侧阈值映射）
-- WASM trap 必须带 backtrace：`Config::wasm_backtrace_max_frames(Some(32))` **不得关闭**（wasmtime 47.0.3 `default` features 已含 backtrace，零编译成本）
+- WASM trap 必须带 backtrace：`Config::wasm_backtrace_max_frames(Some(32))` **不得关闭**（wasmtime 48.0.3 `default` features 已含 backtrace，零编译成本）
 - 插件 wasm 恒 `--release` 构建（保留 names section 函数名、无 DWARF 行号）
 - 调试模式（dev）：`BEDCODE_PLUGIN_DEBUG=1` → debug profile wasm + `wasm_backtrace_details Environment` + 燃料联动放大，见 `.scratch/plugin-wasm-logging/spec.md`
 

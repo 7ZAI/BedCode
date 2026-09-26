@@ -17,10 +17,17 @@ WIT 契约中各宿主能力接口的函数数对比悬殊：`host-storage` 3 �
 
 以 `host-peer` 为首个适用对象。初版裁决保留约 15 个函数；同日复审发现其中仍有状态 CRUD、领域错放与业务投影残留，按同一把尺子二次收紧为最终形态（host-peer 收缩至 11 个 + 新增 host-mdns / host-platform）。
 
-### host-peer 最终原语面（11 个）
+> **阅读约定**：本文按**决策批次**累积，多数小节记录的是当时的中间态。已被后续修订取代的结论
+> 均在原地加「现状 / 终态更正」标注，**当前形态以各小节的更正标注 + 末节「修订记录」首条
+> （desktop ABI v31 / mobile 11）为准**。文中出现的旧路径 `host_impl/` = 现
+> `wasm_core/host_api/`；`SessionComponents` / `GlobalOutputManager` / `src/session/` /
+> `protocol/` / `src/events/` / `server/websocket/{message.rs,services/,terminal_ws/,subscription.rs}`
+> 均已删除（v27 / v28）。
+
+### host-peer 原语面（v2 裁决 11 个 → **终态 19 个**）
 
 | 类别 | 函数 | 留在宿主的理由 |
-|------|------|----------------|
+| --- | --- | --- |
 | 连接 | `dial-peer(endpoint)` | TLS 引擎句柄持有方；endpoint（地址/端口/期望节点身份）由插件从发现事件解析后显式传入，宿主不再内藏 node-id → 地址解析表 |
 | 连接 | `close(handle)` | 统一资源关闭：dial 返回会话句柄、send/pull 返回传输句柄，一律经 close 关闭（合并原 disconnect-peer 与 cancel）；「pending 接收批被关闭即拒绝」是闸门 fail-safe 默认的自然结果，不是独立业务函数 |
 | 安全闸门 | `respond-consent` / `respond-transfer` | 两道闸门的应答通道：首连确认（ADR 0028）与接收批放行；fail-safe 默认（无应答/超时即拒）必须在宿主侧——应答原语是闸门的输入口而非业务流，没有它 ask 模式无法放行任何单个接收批（v1 曾误判 respond-transfer 可下沉，此处纠正） |
@@ -31,13 +38,24 @@ WIT 契约中各宿主能力接口的函数数对比悬殊：`host-storage` 3 �
 
 所有对端寻址统一为**显式句柄**。读对端/写对端的形状确实带「文件」语义，但它们是线协议动词的镜像——协议本身就是文件浏览/传输协议；ABI 跟随稳定的协议动词而非易变的 UI，正是最不容易破 ABI 的切法。
 
+**下表是 v2 裁决的 11 个基线，不是现状。** 终态 19 个（WIT 真源：`packages/plugin-sdk-desktop/rust/wit/bedcode.wit` 的 `host-peer`，2026-09-26 核对），后续 8 个追加均属**引擎控制面**而非业务编排，未破裁剪线：
+
+| 追加函数 | 批次 | 判据 |
+| --- | --- | --- |
+| `set-receive-policy` / `set-download-dir` | v3 纠错 | 引擎安全闸门参数与落盘位置，不是策略「设置项」 |
+| `pause-transfer` / `resume-transfer` | 会话语义下沉批次 | 句柄面上的传输控制（redial 续传的断点真源在接收端落盘侧） |
+| `start-node` / `stop-node` | v25（审计票 12） | peer-net 节点生命周期，属主原语 |
+| `active-transfers` / `collect-outgoing` | v30（纯增量） | 句柄面自愈快照 + 发送源枚举（引擎事实投影） |
+
+`list-devices` / `get-receive-settings` / `retry-transfer` / `clear-*-history` / `list-transfers` / `list-receiving` / `set-transfer-encryption` 等业务面**未回归**（后者已从 WIT 整体消失）。
+
 ### 新增 host-mdns（browse-only 纯能力）
 
 ```wit
 interface host-mdns {
     /// 浏览某服务类型，返回 browser 句柄；发现/离开经消息总线推送
     browse: func(service-type: string) -> result<string, string>;
-    stop-browse: func(browser-id: string) -> result<_, string>;
+    stop-browse: func(browser-id: string) -> result<_, string>;  // v2 统一为 result<bool, string>（见下节）
 }
 ```
 
@@ -61,7 +79,7 @@ interface host-mdns {
 ```
 
 - **单守护收敛**：全局唯一 `ServiceDaemon`（LazyLock 单例，init 一次性 `disable_virtual_interfaces`），peer-net 引擎与全部插件浏览/广播共享同一实例——消灭「双 daemon 同绑 5353 互抢多播包」的历史结构性病灶（真机实证：只发现自己、发现不了对端）；
-- **事件定向投递**：browse 事件按属主发布 `mdns:found.<owner>` / `mdns:lost.<owner>`（owner = 发起 browse 的插件 id），payload 增量追加 `serviceType` / `browserId`（既有 4 字段不变）；消息总线按精确 topic 分发（bus.rs），非属主插件物理上订阅不到——业务隔离（需求①）；
+- **事件定向投递**：browse 事件按属主发布 `<owner>::mdns:found` / `<owner>::mdns:lost`（owner = 发起 browse 的插件 id，**属主私有 topic**；早期草案写作 `mdns:found.<owner>`，票 05 命名空间门禁后统一为 `<plugin-id>::<name>` 形状，构造与 SDK 共用 `host::bus::owned_topic`），payload 增量追加 `serviceType` / `browserId`（既有 4 字段不变）；消息总线按精确 topic 分发（bus.rs），非属主插件物理上订阅不到——业务隔离（需求①）；
 - **广播原语（需求②扩展性核心）**：`advertise(config-json)` 的 serviceType / instanceName / port / txtRecords 全部由调用方构造传入，宿主只校验 serviceType 非空、零业务拼装；实例名缺省时宿主按 `{plugin}-{短指纹}` 默认（D4）；句柄带周期 re-announce 续期；**属主仲裁**——stop-browse / stop-advertise / is-advertising 先权限门（PERMISSION_MDNS）再属主校验，跨插件操作一律拒绝；
 - **双表回收**：`purge_for_plugin` 回收某插件全部浏览 + 广播句柄，只碰本人，宿主（owner=host）与它插件登记不受影响；
 - **零业务代码红线（D3）**：节点身份广播的 TXT / ServiceInfo 由 peer-net 引擎构造（节点身份/证书/能力位是引擎语义），MdnsService 只做注册 + 句柄登记（owner=host）——「自我广播不进插件 ABI」结论不变，仅登记路径收敛到基础服务，作为「host 与插件 advertise 共存于单守护、互不注销对方」的可验证凭据；
@@ -72,26 +90,27 @@ interface host-mdns {
 
 `pick-files` / `pick-folder` 是系统对话框能力，与 peer 领域无关，属错放——移入新的 `host-platform` 接口（与 `host-fs.request-auth` 的授权/平台域同级），供所有插件复用，不再绑定单一插件的流程。
 
-事件总线 topic 调整：`peer:connection/consent/transfer/receive` 保持不变；`peer:devices` 随 `list-devices` 一并退役，职责由 `mdns:found`/`mdns:lost` 接管——事件推送本就是基础能力形态。
+事件总线 topic 调整（本节为 v2 时点记录）：`peer:devices` 随 `list-devices` 一并退役，职责由 `<owner>::mdns:found` / `<owner>::mdns:lost` 接管——事件推送本就是基础能力形态。**当时的 `peer:connection/consent/transfer/receive` 也已全部改形**：首连确认现为 `peer:consent`，传输与接收的编排事件在 v30/v31 后为公开 topic `peer:transfer-event` / `peer:receive-event`（引擎原始事件直推，旧快照 topic `peer:transfer` / `peer:receive` 退役）。
 
 ### 下沉插件（10 个）
 
 | 泄漏项 | 去向 |
-|--------|------|
-| `list-devices` | 设备列表 = mDNS 发现事件的派生视图 → 插件订阅 `mdns:found`/`mdns:lost` 自建设备缓存（去重/TTL/展示名）；宿主侧 DiscoveryCache 守护与全量快照比对链路随之退役 |
+| --- | --- |
+| `list-devices` | 设备列表 = mDNS 发现事件的派生视图 → 插件订阅 `<owner>::mdns:found` / `<owner>::mdns:lost` 自建设备缓存（去重/TTL/展示名）；宿主侧 DiscoveryCache 守护与全量快照比对链路随之退役 |
 | `list-transfers` / `clear-transfer-history` / `clear-receiving-history` / `list-receiving` | 任务队列与历史 = UI 编排概念 → host-plugin-database 自管；状态由 bus 事件驱动维护 |
 | `retry-transfer` | UX 动作 → 插件记录批元数据后重调 send/pull 原语（带续传偏移） |
 | `get-receive-settings` / `set-receive-policy` / `set-download-dir` / `set-transfer-encryption` | 产品设置项 → host-storage 持久化；涉及落盘路径与加密的部分经原语参数传入 |
+| → **纠错（v3）**：`set-receive-policy` / `set-download-dir` | 改判为**引擎闸门参数**（fail-safe 闸门 + 落盘位置）而保留为原语，只有读侧 `get-receive-settings` 维持下沉；`set-transfer-encryption` 已从 WIT 整体消失（无回归） |
 
 ### 新增 host-websocket（WS 基础能力服务，2026-09-18）
 
 WS 传输是「离开宿主就无法实现」的能力（移动端链接、TLS/握手、帧编解码、连接生命周期），但**消息语义不是**：谁跟谁连、消息怎么拼、房间/重连/心跳策略都是插件的活。据此新增 `host-websocket`
-（14 函数：客户端域 5 + 服务端域 9）+ 可选导出 `events-ws`，ABI desktop 13 → **14**（mobile 保持 11，ADR 0019 双端各自演进）。
+（v14 = 14 函数：客户端域 5 + 服务端域 9；**v28 起 15 函数**——服务端域追加 `connection-context`，即下面「websocket 业务下沉」后的脱敏连接事实原语，见修订记录 v19）+ 可选导出 `events-ws`，ABI desktop 13 → **14**（mobile 保持 11，ADR 0019 双端各自演进）。
 
 裁决要点（spec：`.scratch/2026-09-18-ws-base-service/spec.md`）：
 
 1. **零业务代码红线（D1）**：宿主只做引擎原语——连接生命周期、帧收发、句柄登记、属主仲裁、按属主回收、事件定向投递。宿主不拼装、不解读任何业务字段（同 host-mdns v2 的尺子）；
-2. **属主作用域事件 topic（D3）**：状态事件 topic 内嵌属主——客户端域 `ws:open|error|close.<owner>`、服务端域 `ws:client-connect|client-disconnect.<owner>`，连接/对端标识放 payload。**理由**：消息总线是精确匹配、无重放无缓冲的，若按宿主生成句柄做 topic，插件必须先拿到句柄才能订阅 → 必然丢「连接已建立」事件；属主作用域 topic 让插件在 activate 期即可订阅（丢失时的自愈靠 `is-connected` / `list-clients` / `list-endpoints` 快照查询）；
+2. **属主作用域事件 topic（D3）**：状态事件走**属主私有 topic**——客户端域 `<owner>::ws:open|error|close`、服务端域 `<owner>::ws:client-connect|client-disconnect`（早期草案写作 `ws:open|error|close.<owner>`，票 05 命名空间门禁后统一为 `<plugin-id>::<name>` 形状，构造与 SDK 共用 `host::bus::owned_topic`），连接/对端标识放 payload。**理由**：消息总线是精确匹配、无重放无缓冲的，若按宿主生成句柄做 topic，插件必须先拿到句柄才能订阅 → 必然丢「连接已建立」事件；属主作用域 topic 让插件在 activate 期即可订阅（丢失时的自愈靠 `is-connected` / `list-clients` / `list-endpoints` 快照查询）；
 3. **端点命名空间由宿主注入（D5）**：插件只提供路径后缀，完整挂载路径为 `/ws/plugin/<plugin-id>/<path>`。**理由**：属主段进路径后，插件之间物理上不存在路径抢占，宿主也不需要维护跨插件冲突表；
 4. **权限按域拆分（D6）**：`ws:client`（出站，SSRF 暴露面）与 `ws:server`（入站，对外暴露面）互相独立，按最小必要授予。**理由**：两域的风险方向不同，合并成一个 `ws` 权限会使「只想连外部服务的插件」被迫获得「在局域网开端口」的能力；
 5. **过滤链参与、链路加密排除（D9）**：插件端点帧走 `TrafficChannel::WsPlugin` 进入 `TrafficFilterChain`（inbound / outbound 均执行），但 `LinkEncryptionFilter::should_process` 对该通道恒 `false`。**理由**：链路加密是移动端配对设备的专用协商协议（双 ECDH + 密钥表按连接标识键控），插件端点的第三方客户端不参与该握手，且过滤链是宿主的统一审计/改写入口，能力不应绕过；
@@ -104,12 +123,13 @@ WS 传输是「离开宿主就无法实现」的能力（移动端链接、TLS/�
 
 裁决要点：
 
-1. **裁剪线判定（D1）**：`spawn` 只收裸引擎参数 `{command, args?, env?, workingDir?, cols?, rows?, ringBytes?}`，参数数组 exec 天然免注入。**明确不做**：`bash -lic` / PowerShell `-Command` / CMD `/K` 包装、WSL 路径转换、危险字符校验、默认 shell 探测、`name` 标识、特殊键/组合键 API——全部是宿主业务会话线或插件产品的语义（插件要 shell 包装，自己把 `sh -c` 放进 `args`）。**票 06 已落地**：按键组合 → ANSI/ASCII 转义字节的翻译移至 `com.bedcode.terminal-session` 私有域（`keys.rs`），`session-input` 收 `specialKey` 组合串自译自写、统一直写语义；宿主 `session_gateway::special_key`/`terminal_service` 只转发组合串、不再 `to_pty_bytes`。
-2. **与三条既有边界的划界**：`host-process`（非交互一次性 run/kill，无 TTY 行为）是它的补集；`host-terminal` + `terminal-hooks` 与 `host-session` 服务**宿主业务会话线**（会话配置、SessionManager 生命周期、前端 UI）。三者与本接口互不转发。插件 PTY 不进 `SessionComponents`、**不默认注册 `GlobalOutputManager`**（业务会话迁插件后，宿主对插件 PTY 输出的广播按 spawn 的 `hostBroadcastSessionId` 声明 **opt-in 只读订阅**，见 v15——未声明的句柄任何宿主广播面都读不到，安全边界在缺省侧）、不参与业务会话事件链——共享同一 PTY 引擎（`PtySession`），但两张注册表、两套生命周期。
+1. **裁剪线判定（D1）**：`spawn` 只收裸引擎参数 `{command, args?, env?, workingDir?, cols?, rows?, ringBytes?}`，参数数组 exec 天然免注入。**明确不做**：`bash -lic` / PowerShell `-Command` / CMD `/K` 包装、WSL 路径转换、危险字符校验、默认 shell 探测、`name` 标识、特殊键/组合键 API——全部是宿主业务会话线或插件产品的语义（插件要 shell 包装，自己把 `sh -c` 放进 `args`）。**票 06 已落地**：按键组合 → ANSI/ASCII 转义字节的翻译移至 `com.bedcode.terminal-session` 私有域（`keys.rs`），`session-input` 收 `specialKey` 组合串自译自写、统一直写语义；宿主 `session_gateway::special_key` 只转发组合串、不再 `to_pty_bytes`（同批的 `terminal_service` 宿主 WS 侧转发层已于 v28 随业务面整删，见修订记录 v19）。
+2. **与三条既有边界的划界**：`host-process`（非交互一次性 run/kill，无 TTY 行为）是它的补集；`host-terminal` + `terminal-hooks` 与 `host-session` 服务**宿主业务会话线**（会话配置、SessionManager 生命周期、前端 UI）。三者与本接口互不转发。插件 PTY 不进 `SessionComponents`、**不默认注册 `GlobalOutputManager`**（业务会话迁插件后，宿主对插件 PTY 输出的广播按 spawn 的 `hostBroadcastSessionId` 声明 **opt-in 只读订阅**，见修订记录 v15——未声明的句柄任何宿主广播面都读不到，安全边界在缺省侧）、不参与业务会话事件链——共享同一 PTY 引擎（`PtySession`），但两张注册表、两套生命周期。
+   **（终态更正，v27 + v28）**：三方划界已全部作废——`host-session` / `host-terminal` / `terminal-hooks` 于 v27 整删（修订记录 v16），内核 `SessionComponents` 与 `GlobalOutputManager` 于票 11 随 `src-tauri/src/session/` 整目录删除，`hostBroadcastSessionId` 声明与 `broadcast_handle_for_session` 于 v28 删除（修订记录 v19）。**现状 = 一张引擎注册表**：业务会话与插件私有 PTY 同为 `host-pty` 句柄，PTY 引擎不再知道 session id，输出只经 `ring-fetch` 拉取（见下方「会话真源下沉」第 2 条）。
 3. **输出面是纯拉取，不做 push 回调（D3）**：每句柄一条有界环 `PtyRing`，读线程单生产者写入、插件按自己的游标 `ring-fetch`。**否决 push（events-pty 可选导出）两条理由**：① 2026-09-17 `pty-pull-subscribers` 的教训——推送会把背压踢回生产端，慢消费者只能损失自己；② wasmtime Store 不可重入，宿主无法异步唤醒插件，push 在语义上等于「多一层回调的轮询」。故 `truncated + next-offset` 的 resync 语义即契约本体，缺口如实上报、不静默补洞。
-4. **属主隔离 + 停用回收（D2）**：全部函数先查属主（`not owner of pty handle`，同 mdns / ws 先例）；插件 deactivate 时宿主 `purge_for_plugin` kill 并摘除其全部 PTY、逐条补发 `pty:exit.<owner>`（reason=killed），只碰本人。
+4. **属主隔离 + 停用回收（D2）**：全部函数先查属主（`not owner of pty handle`，同 mdns / ws 先例）；插件 deactivate 时宿主 `purge_for_plugin` kill 并摘除其全部 PTY、逐条补发 `<owner>::pty:exit`（reason=killed），只碰本人。
 5. **终止与摘除的单一发布者不变量（D4）**：`kill()` 只发起终止；句柄摘除与事件发布统一由 spawn 时起动的退出监听在「读线程 EOF + 子进程回收」齐备（`PtyTerminationGate`）时完成，且只有从注册表 `remove` 成功的一方发布 → 自然退出 / 主动 kill / 停用回收三条路径交汇时每条 PTY 恰好一条 `pty:exit`。事件面只有这一条（spawn 成败在返回值、错误直接上抛）。
-6. **权限两域（D8）**：`pty:spawn`（创建/终止，任意命令执行的高风险面）与 `pty:io`（数据面）独立授予与审计——合并成一个 `pty` 会迫使「只想观测的插件」获得在宿主机执行任意命令的能力。五同步点（SDK 常量与 API 映射 / 打包 CLI / 前端合法集合 / 宿主能力清单 / host_impl 权限门）由漂移锁 `permission_sync_points_all_know_pty_domains` 钉住。
+6. **权限两域（D8）**：`pty:spawn`（创建/终止，任意命令执行的高风险面）与 `pty:io`（数据面）独立授予与审计——合并成一个 `pty` 会迫使「只想观测的插件」获得在宿主机执行任意命令的能力。五同步点（SDK 常量与 API 映射 / 打包 CLI / 前端合法集合 / 宿主能力清单 / 宿主权限门 `wasm_core/host_api/pty.rs`，锁在 `host_api/tests/pty.rs::permission_sync_points_all_know_pty_domains`）由该漂移锁钉住。
 7. **限额分级与声明式环容量（D9）**：创建类失败一律 `Err`（每插件在册条数超上限、`ringBytes` 为 0 或超宿主上限），不排队、不静默夹取、不淘汰插件自己已有的句柄；数据面只有**读侧截断**（单次 `ring-fetch` 截到 `PLUGIN_PTY_RING_FETCH_MAX_BYTES`，余下续拉），写侧是拒绝（超 `PLUGIN_PTY_MAX_WRITE_BYTES` 一个字节都不写入——半条命令喂进交互进程比失败更糟）。环容量不做全局档位之争：它是 spawn 的**插件声明参数**（宿主默认 256 KiB，上限 4 MiB），因为业务侧 `channels.global_queue_max_bytes` 的 50 MB 是「每条会话队列」的量级，插件环随句柄存活、每插件可到 8 条，字面对齐即单插件最坏 400 MB 常驻；常驻上界改由「条数 × 容量上限」表达。
 
 ### 会话语义下沉批次（v18 + v19，2026-09-20 桌面端）
@@ -123,16 +143,31 @@ spec：`.scratch/2026-09-19-terminal-session-plugin/spec.md`（D2–D7），实�
 | 面 | 追加 | 批次 | 权限位 |
 | --- | --- | --- | --- |
 | `host-auth` 记录面 | `trusted-devices-list` / `trusted-device-revoke` / `connection-history-list` / `auth-setting-set` | v18 | `auth` |
-| `host-session` 配置面 | `config-upsert` / `config-get` / `config-delete` | v19 | `session:config`（新增位）
-|
-| → 配置面写原语 `config-upsert` / `config-delete` **已随 v23 退役**（真源在插件私有库，宿主写原语无调用者即死接口）；读取面 `config-list` / `config-get` 保留为一次性 legacy 迁移通道（迁移窗口结束随主库表退役），权限收编 `session:read` |
+| `host-session` 配置面 | `config-upsert` / `config-get` / `config-delete` | v19 | `session:config`（新增位） |
 | `host-session` 创建与动作面 | `create-with-spec` / `remove` / `rename` / `resize`（原表的 `restart` 已于 v21 退役，见下「v21 收敛退役」） | v19（函数级追加不 bump） | `session:write` |
 | ~~`host-session` 事实面~~ | ~~`annotate`（注解槽）~~ / ~~`connections-list`~~ | v19 | ~~`session:write`~~ / `connection:read`（原 `session:read`） |
-| → **整 interface 已随 v27 退役**（票 10）：`annotate` / 输出环 / 列表 / 查询 / 创建 / 关闭 / 移除 / 改名 / resize / 两条观察注册面**全部删除**；`connections-list` 早在 v14 迁 `host-connection`，此处旧别名同批删除。会话事实只在 `com.bedcode.terminal-session` 登记域 |
 | `host-connection`（v14 新增 interface） | `connections-list`（宿主 server 在册连接原始记录） | v14（函数级搬迁，不 bump） | `connection:read`（新增位） |
 | `host-platform` | `wsl-distros` | v19 | `platform` 现状 |
 | `auth-policy` 导出 | `verify-device-token`（宿主中间件验签后取策略） | v17 | 能力导出，非宿主原语 |
 | 前端贡献面 | `ui.registerSettingsSection`（设置分组扩展点） | 无 WIT（纯前端） | `ui:settings`（新增位） |
+
+**本表各行的终态（2026-09-26 核对，下沉后无一例外留在宿主）**：
+
+- **`host-auth` 记录面 → v24 退役三函数**：`trusted-devices-list` / `trusted-device-revoke` /
+  `connection-history-list` 随主库 `pairings` / `connection_history` 删表退役，真源迁到认证中心私有库
+  `auth_records/`（表 `auth_pairings` / `auth_connection_history`）；`auth-setting-set` **保留**（白名单键写
+  内核 `settings`）。`host-auth` 终态 = 密钥托管 + 生物凭证 bound/verify/bind + device-token +
+  link-identity + setting。
+- **`host-session` 配置面 → v23 删写原语、v27 全删**：`config-upsert` / `config-delete` 无调用者即死接口，
+  v23 删除；读取面 `config-list` / `config-get` 曾作一次性 legacy 迁移通道（权限收编 `session:read`），
+  v24 迁移窗口关闭（主库表删）→ **v27 随整 interface 退役一并消失**。终态无任何会话配置读原语。
+- **`host-session` 创建与动作面 / 事实面 → v27 整 interface 退役**（票 10）：`create-with-spec` /
+  `remove` / `rename` / `resize` / `annotate` / 输出环 / 列表 / 查询 / 关闭 / 两条观察注册面**全部删除**；
+  `connections-list` 早在 v14 迁 `host-connection`，此处旧别名同批删除。会话事实只在
+  `com.bedcode.terminal-session` 登记域（防回接锁 `retired_kernel_session_domain_is_not_reintroduced`）。
+- **仍在（WIT 与代码核对无变更）**：`host-platform.wsl-distros`（6 函数面其余为 picker/reveal）、
+  `auth-policy#verify-device-token` 导出、`host-connection.connections-list`、前端
+  `ui.registerSettingsSection` 贡献面。
 
 裁决要点：
 
@@ -140,11 +175,18 @@ spec：`.scratch/2026-09-19-terminal-session-plugin/spec.md`（D2–D7），实�
    `{command, args, cwd, cols, rows, env, name}` 交给宿主，宿主只做 shell 包装 / WSL
    转换 / 尺寸缺省 / ID 预生成。会话配置真源同时从主库表迁入**插件私有库**
    （`host-plugin-database`），主库旧表保留一版只读退役，走一次性幂等迁移。
+   **（终态更正，v11 / v27）**：`create-with-spec` 这条「执行端留内核」的切口已被 v11 收口
+   （宿主 shell 包装 / WSL 转换 / cwd 兜底 / 会话身份 env 注入全退役，argv 由插件算好经
+   `host-pty.spawn` 送入）与 v27 废止（`create-with-spec` 随 `host-session` 整 interface 删除）
+   两步作废；`annotate` 注解槽亦随之退役。**终态：会话创建完全在插件侧，宿主只提供 PTY 原语。**
 2. **注解槽取代内核任务字段（D5）**：内核只按 `session-id → map<string,string>` 搬运
    与透传，**绝不解释键名**；线协议里 `taskStatus` 等字段形状不变，值由插件经 `annotate`
    写入后由内核透传 → 移动端零改动。这是「内核去业务化」与「线协议不破」的唯一共存形态。
 3. **`resize` 裁决分家**：谁是当前渲染端（正统端）的**事实登记**在内核，**裁决规则**
    （谁覆盖谁、何时提示）在插件。与 host-pty 第 2 条的「两张注册表」同一划界思路。
+   **（终态更正，v27）**：正端归属这一「事实」本身是产品语义，已随内核会话域删除整体迁到
+   `com.bedcode.terminal-session`（插件 `session/resize` 裁决 + 私有登记表），宿主 `resize`
+   退化为裸 `winsize` 透传、不承诺同步生效时序。
 4. **设置分组扩展点是本批次内核唯一多做的 UI 事**：宿主从「7 个写死分组」改为
    「内置分组 + 注册表分组按 `order` 合并渲染」，共享状态由父级持有下传。它换来
    宿主配对分组整体退役 + 界面归属换人而**像素不变**（D6「界面维持，贡献方换人」）。
@@ -182,14 +224,16 @@ spec：`.scratch/2026-09-19-terminal-session-plugin/spec.md`（D2–D7），实�
    宿主留的只有物理上不可下沉的部分（PTY 引擎 + `host-pty` 六原语）。这比 v19 批次的
    「映射决策归插件、执行留内核」更进一格——**执行也归插件**，因为执行所需的原语
    （`host-pty.spawn/write/kill/resize/ring-fetch`）本身已是引擎级。
-2. **`host-pty` 第 2 条的划界现状更正（终态，v27）**：该条原写「两张注册表、两套生命周期」。
+2. **`host-pty` 第 2 条的划界现状更正（终态，v27 + v28）**：该条原写「两张注册表、两套生命周期」。
    演进两步到位——P1-b 起业务会话本身就是一个 `host-pty` 句柄（**合并为一张**）；**v27（票 11）
    起只剩引擎这一张**：内核会话目录整目录删除，`SessionComponents` 的 PTY 注册表与
-   `GlobalOutputManager`（业务输出环）都不复存在，业务会话与插件私有 PTY **同为引擎句柄**，
-   唯一区别是是否声明 `hostBroadcastSessionId` 供宿主广播面直读（v15 的 opt-in 只读订阅，
-   未声明的句柄任何宿主广播面都读不到，安全边界在缺省侧）。移动端 M6/M7 受损的根因即这张表的
-   切换，P3 形态 B 改由宿主 server 直读 `PtyRing` 恢复（票 06）。该条里
-   「`host-session` 服务宿主业务会话线」的三方划界**已终结**：`host-session` 与 `host-terminal`
+   `GlobalOutputManager`（业务输出环）都不复存在，业务会话与插件私有 PTY **同为引擎句柄**。
+   **v28 补最后一刀**：v15 引入的 `hostBroadcastSessionId` opt-in 只读订阅声明与
+   `broadcast_handle_for_session` 一并删除（PTY 引擎不再知道 session id，P3 形态 B 失去宿主侧
+   载体）——因此「业务线与插件线的唯一区别」这一表述**已失效**：两条线现在**完全同形**，
+   输出只经插件自己的 `ring-fetch` 游标拉取（宿主 server 不再直读任何 PTY 环）。移动端 M6/M7
+   受损的根因即这张表的切换，形态 B 的恢复改由插件自持（历史决策链见修订记录 v15 / v19）。该条里
+   「`host-session` 服务宿主业务会话线」的三方划界**同样已终结**：`host-session` 与 `host-terminal`
    两个 interface 均已删除。
 3. **配额是自我声明的静态事实**（`ptyQuota`，前置 B）：`spawn` 判据按属主声明值，加载期区间仲裁
    越界即拒 manifest，运行期不夹取。terminal-session 声明 8 = 退役前内核上限，**不借下沉放大**。
@@ -204,6 +248,15 @@ spec：`.scratch/2026-09-19-terminal-session-plugin/spec.md`（D2–D7），实�
    宿主只转发；`source_device` 由请求侧透传（广播排除语义）。
 
 ## WS 动作词表声明式化（票 09a/09b/09c，2026-09-24 桌面端）
+
+> **现状标注（2026-09-25 v28 硬切后）**：本节描述的是 v17 时期的一次中间态，**其中宿主侧的三个
+> 载体已全部删除**——`services/session_control.rs` 转发层、`/ws/event` 路由与
+> `Message::SessionControl` 信封（ticket 08 整删，宿主 WS 面收为通用 transport）、
+> `/ws/terminal/session/{id}` 数据面与订阅引擎（同批删除）。**仍然成立的两条**：① manifest
+> 声明面 `contributes.wsEndpoints` **仍在**（`com.bedcode.terminal-session` 现声明 `session-control`
+> 与 `terminal` 两个端点，激活期经 `register_declared_ws_endpoints` 登记，路径约束不变）；②
+> 「动作词表的解释权归插件」这一裁决本身反而被 v28 强化——宿主不再有任何业务动作名语义。
+> 详见修订记录 v19。
 
 WS 会话/终端控制动作的**词表来源**从「宿主硬编码 switch」改为「插件 manifest 声明 +
 插件侧分派」，对齐 `_http_endpoint` 模式。spec：
@@ -238,6 +291,17 @@ WS 会话/终端控制动作的**词表来源**从「宿主硬编码 switch」�
 
 ## 会话事件面与线协议真源（专项票 01–04，2026-09-24 桌面端，ABI 不变）
 
+> **现状标注（2026-09-25 v28 硬切后）**：本节建立的宿主事件三层转换（`SyncEvent` →
+> `DesktopSyncEvent` → `SyncEventHandler`）**已随 websocket 业务下沉整体退役**，不再需要逐项维护：
+> `src-tauri/src/events/` 整目录删除（`AppEvent` / `publish` / `EventMatcher` / `HostSyncEvent` /
+> `sync_handler`）、`host-events.broadcast-sync` 破坏性退役、SDK `wire::{sync, control}.rs` 子模块
+> 删除（`SyncEvent` / `SyncPayload` / `SessionControlAction` / `TerminalAction`）、宿主
+> `Message` 业务枚举与 `terminal_ws/` 订阅类型一并消失；**下文提到的两条防回接锁
+> （`retired_session_event_mirror_is_not_reintroduced` / `sync_handler_does_not_interpret_session_variants`）
+> 随目录删除一并移除**——真源清空后该命名空间本就不存在。**仍然成立的是本节的边界结论**：
+> 事件的**形状不算原语**、解释权归 SDK/插件；插件事件面现为 `host-bus.publish` + `host-events.emit`。
+> 本节保留为决策历史（它证明了「同一 wire 不在两侧各持一份」这条口径的来源）。
+
 P1-b 之后会话真源已在 `com.bedcode.terminal-session`，但宿主的**事件路径**仍是三段重复转换：
 SDK `SyncEvent`（内部标签 PascalCase、字段平铺）→ `DesktopSyncEvent` 穷尽 `From` 镜像 →
 `SyncEventHandler` 按 11 个变体业务 match 重建 `SyncPayload`（顺带把线格式改写成
@@ -247,7 +311,10 @@ adjacently tagged snake_case、把状态 `format!("{:?}").to_lowercase()`）。�
 
 1. **线协议真源进 SDK（票 01）**：`SyncPayload` / `SessionSummary` / `SessionControl*` /
    `Terminal*` / `KeyCombo` 五类跨端形状收编 `bedcode-plugin-api::wire`（宿主 `enums/` 对应
-   四文件缩为 `pub use` 垫片，导入路径零改动，运行行为零变化）。锁分两层：SDK 侧全变体
+   四文件缩为 `pub use` 垫片，导入路径零改动，运行行为零变化）。
+   **（v28 终态更正）**：`sync` / `control` 两子模块与对应垫片已随事件面退役删除，SDK `wire`
+   只剩 `summary` + `key`；宿主 `enums/` 只保留 `special_key.rs`（`KeyCode` / `KeyCombo` 垫片）
+   与 `plugin.rs`（`PluginQuestion` 垫片）两个真源再导出，`pty_status.rs` 是引擎类型。锁分两层：SDK 侧全变体
    wire 形状锁 + 移动端平行副本逐变体对照锁（`mobile_parallel_copy_shape_lock`）；宿主侧
    **类型身份锁**（`crate::enums::*` 与 SDK 路径必须是同一类型，编译期）+ **垫片零定义**
    （源层面扫 `pub enum` / `struct` / `impl`，变异自检对 HEAD 旧内容命中 4/2/14/64 处）。
@@ -289,6 +356,7 @@ adjacently tagged snake_case、把状态 `format!("{:?}").to_lowercase()`）。�
    bedcode-desktop/packages/plugin-sdk-desktop/rust/Cargo.toml`。移动端 SDK 的同一空档
    登记为后续对称项。
 
+## 加密引擎化与 enums 三分类处置（票 01–09c，2026-09-24 桌面端，ABI 25 → 26）
 
 用户 2026-09-24 方向指令第一部分：「WS 层面只留加密抽象层；加密具体实现在宿主侧，通过聚合全局
 加密方法大全实现具体加密；插件通过指定加密方法调用宿主加密」。落地为 `crypto/` 引擎模块 + `host-crypto`
@@ -301,12 +369,15 @@ chacha20-poly1305 / hkdf-sha256 / x25519（rsa/hybrid 留待扩展）。裁剪�
 grep 断言）——WS/HTTP 过滤层只依赖注册表抽象接口。
 2. **host-crypto 契约面（票 03/04，ABI 25 → 26，desktop 独有）**：WIT interface `host-crypto`
 （aead 加解/密钥/随机数 + key-agreement 生成/共享 + kdf 派生），权限按风险域拆三位
-`crypto:aead` / `crypto:asym` / `crypto:kdf`（对齐 ws:client/ws:server 先例），宿主实现带权限门
-+ 审计。**非旁路红线（H3）**：原语只给中性算法、不给编排；算法名白名单（引擎级词汇表）；宿主
+`crypto:aead` / `crypto:asym` / `crypto:kdf`（对齐 ws:client/ws:server 先例），宿主实现带权限门与审计。
+**非旁路红线（H3）**：原语只给中性算法、不给编排；算法名白名单（引擎级词汇表）；宿主
 密钥（Kd / JWT keystore）**不**经原语暴露，只服务内部 filter 链——认证链路只走既有 auth 模块。
-3. **协商套件参数化（票 05）**：WS 链路加密协商（`conn.rs` 的挑战-应答）改按名选套件，
-expand–contract 增量演进：`CryptoProposal.suite` 可选字段缺省 → 默认套件（x25519 + aes-256-gcm +
+3. **协商套件参数化（票 05）**：WS 链路加密协商（`server/websocket/conn.rs` 的挑战-应答）改按名选套件，
+expand–contract 增量演进：suite 可选字段缺省 → 默认套件（x25519 + aes-256-gcm +
 hkdf-sha256），未知名套件 fail-visible 拒绝（不静默降级到默认）；移动端旧端零改动（只读 {v,ek}）。
+   **（结构更正）**：`CryptoProposal` 结构体已不存在，套件判定现落在
+   `server/core/link_crypto.rs::resolve_link_suite`（未知名返回 `Err` → conn.rs close 4003，
+   fail-visible 不静默降级），默认套件与算法注册表的一致性由该文件内测试守住。
 4. **enums 三分类处置（票 06-09，本专项附录 §4.2 表的落地）**：`special_key` 按键→转义字节翻译
 迁插件（票 06，宿主 pty 只收裸字节）；`shell.rs`（ExecutionEnvironment / WindowsShell /
 SessionLaunchConfig）整文件删除（票 07，宿主零业务消费）；`SessionStatus` / `SessionType` 收窄为
@@ -356,10 +427,10 @@ roadmap 阶段 3（`.scratch/2026-09-10-plugin-kernel-roadmap/spec.md`）把「�
 
 ## 双端偏离（host-websocket / host-pty 等桌面独有接口）
 
-- 移动端是**远程终端控制端**，不承载 PTY / mDNS 广播 / WS 服务端等主机侧引擎，故 `host-websocket`（desktop v14）、`host-auth`（v15 密钥托管；v18 追加认证记录面四函数）、`host-pty`（v16）、`auth-policy` 导出（v17，认证能力——宿主 server 中间件验签后取策略）、**会话语义下沉批次（v18 / v19：`host-session` 配置面 + 创建与动作面 + 注解槽 + 连接清单、`host-platform.wsl-distros`）** 均为**桌面独有接口**：mobile 的 WIT / ABI / SDK 不跟演也不投影（ADR 0018 双端各自演进的文档化偏离，同 wasmtime 桌面 48 / 移动 47 分叉先例）。当前 **desktop v31 / mobile 11**（v23 = host-session 配置面写原语退役，见 v10 登记；v24 认证记录下沉、v25 host-peer 节点生命周期原语、v26 host-crypto 契约面、**v27 = 会话原语域整 interface 退役**、**v28 = websocket 业务下沉：新增 `host-websocket.connection-context` + 破坏性退役 `host-events.broadcast-sync` / `host-pty.spawn` 的 `hostBroadcastSessionId`**、**v29 = HTTP 路由代码注册下沉：新增 `host-http` 服务端域（register-endpoint / unregister-endpoint，函数级追加，旧产物仍可实例化但不具备注册能力）**、**v30 = 传输编排下沉票 1：host-peer 追加 `active-transfers` / `collect-outgoing`（纯增量）+ 引擎原始事件桥双写**、**v31 = 传输编排下沉票 3：破坏性删除 `resume-all-transfers` + `send-files` 语义收窄「即发即会话」（`concurrency` 载荷字段退役）+ 旧快照 topic 退役**；desktop 独有接口持续演进不要求移动端跟演，但 v27 / v28 / v31 都是**删 import / 删 export / 删函数**的破坏性变更，旧产物在实例化期即失败，须按对应版本 SDK 重建）。**移动端不在 v28/v29 兼容范围**：websocket 业务下沉与 HTTP 路由代码注册两个专项只改桌面端，移动端旧 WS 客户端 / 路由 / wire 形状不动、不承诺兼容（见 `.scratch/2026-09-25-websocket-business-downsink/spec.md` 与 `.scratch/2026-09-25-http-route-registration-downsink/spec.md`）。
+- 移动端是**远程终端控制端**，不承载 PTY / mDNS 广播 / WS 服务端等主机侧引擎，故 `host-websocket`（desktop v14）、`host-auth`（v15 密钥托管；v18 追加认证记录面四函数，其中三函数已于 v24 随删表退役、`auth-setting-set` 保留）、`host-pty`（v16）、`auth-policy` 导出（v17，认证能力——宿主 server 中间件验签后取策略）、**会话语义下沉批次（v18 / v19：`host-session` 配置面 + 创建与动作面 + 注解槽 + 连接清单、`host-platform.wsl-distros`）** 均为**桌面独有接口**：mobile 的 WIT / ABI / SDK 不跟演也不投影（ADR 0018 双端各自演进的文档化偏离，同 wasmtime 桌面先行 48 / 移动暂留 47 的分叉先例——该分叉已于 2026-09-26 关闭，双端均为 48，见 ADR 0019）。当前 **desktop v31 / mobile 11**（v23 = host-session 配置面写原语退役，见 v10 登记；v24 认证记录下沉、v25 host-peer 节点生命周期原语、v26 host-crypto 契约面、**v27 = 会话原语域整 interface 退役**、**v28 = websocket 业务下沉：新增 `host-websocket.connection-context` + 破坏性退役 `host-events.broadcast-sync` / `host-pty.spawn` 的 `hostBroadcastSessionId`**、**v29 = HTTP 路由代码注册下沉：新增 `host-http` 服务端域（register-endpoint / unregister-endpoint，函数级追加，旧产物仍可实例化但不具备注册能力）**、**v30 = 传输编排下沉票 1：host-peer 追加 `active-transfers` / `collect-outgoing`（纯增量）+ 引擎原始事件桥双写**、**v31 = 传输编排下沉票 3：破坏性删除 `resume-all-transfers` + `send-files` 语义收窄「即发即会话」（`concurrency` 载荷字段退役）+ 旧快照 topic 退役**；desktop 独有接口持续演进不要求移动端跟演，但 v27 / v28 / v31 都是**删 import / 删 export / 删函数**的破坏性变更，旧产物在实例化期即失败，须按对应版本 SDK 重建）。**移动端不在 v28/v29 兼容范围**：websocket 业务下沉与 HTTP 路由代码注册两个专项只改桌面端，移动端旧 WS 客户端 / 路由 / wire 形状不动、不承诺兼容（见 `.scratch/2026-09-25-websocket-business-downsink/spec.md` 与 `.scratch/2026-09-25-http-route-registration-downsink/spec.md`）。
 - **偏离不止 WIT 面**：本批次同时经用户 2026-09-19 授权**豁免 AGENTS.md §9「协议改动必须两端同步部署」**，豁免范围严格限于该 spec（`.scratch/2026-09-19-terminal-session-plugin/spec.md` D1）。自守边界：线协议**形状**（会话 DTO 字段、同步事件、WS 控制帧、认证握手报文）保持不变——保持它并不需要移动端改一行代码，且它是后置适配专项的成本基线。移动端受损面 M1–M5 已挂进路线图（`.scratch/2026-09-10-plugin-kernel-roadmap/spec.md`），桌面端不为其负责（spec Out of Scope）。
 - **恢复条件**：当移动端需要同类能力（例如本地跑交互进程）时，再在该端 WIT 增补对应 interface 并对齐 ABI 计数；在此之前「改 WIT 必须双端同步」这一硬约束的适用范围限于**双端共有的接口**（host-peer / host-fs / host-http 等）。
-- SDK 双端独立包（`plugin-sdk-desktop` / `plugin-sdk-mobile`），互不影响；宿主侧 `version > 当前 → 拒绝` 的兼容语义保证旧插件（≤v16）零迁移仍可加载。
+- SDK 双端独立包（`plugin-sdk-desktop` / `plugin-sdk-mobile`），互不影响；宿主侧 `version > 当前 → 拒绝` 的兼容语义只保证「不高于当前 ABI」的产物不被版本门拦下；**「旧插件（≤v16）零迁移仍可加载」的口径已被 v27 / v28 / v31 三次破坏性变更取代**——这三种产物在**实例化期**即被点名拒绝并要求按对应 SDK 重建（`LoadedWasmPlugin::stale_artifact_rebuild_hint`），见上段与修订记录 v16 / v19 / v20。
 
 ### v21 收敛退役：`host-session.create` / `restart` 删除（首个接口函数删除）
 
@@ -424,11 +495,12 @@ serve 供流记账 / peer_name 解析 / 取消原因码映射 / pull 任务行�
    物理隔离），唯一可观测差异是桌面 UI 展示名兜底路径变化。
 
 ## 抽象提取候选（登记，不在本期实施）
-- **`PtyRing` ↔ 业务会话输出环（`session_output.rs::UnifiedOutputQueue`）的代码级合并**：二者形态同源（单生产者 + 全局偏移 + 游标拉取 + 字节/条目双上限），但生命周期不同（业务环随会话、插件环随 pty 句柄），且 2026-09-17 刚重构完的业务链路不背回归风险 → 本期刻意自持实现（约 130 行）。第二处同类形态出现时（或业务环新增维度需要插件侧同步时）再抽取。
+
+- ~~**`PtyRing` ↔ 业务会话输出环（`session_output.rs::UnifiedOutputQueue`）的代码级合并**~~：**已消解（v27）**——业务会话输出环已随内核 `src-tauri/src/session/` 整目录删除，`PtyRing` 成为唯一输出环形态，无需抽取（ADR 0022「会话真源下沉」第 2 条）。原登记理由（形态同源、生命周期不同、暂不自持）随被比较的一侧消失。
 - **PTY 引擎与业务会话线的进一步解耦边界**：票 01 已把「输出汇可注入」「终态门与退出码」下沉到 `PtySession`，票 02 追加「命令来源可注入」（`PtyCommandSource::Business | Raw`），`PtySlaveFdPolicy`（业务 `Hold` / 插件 `ReleaseOnSpawn`）仍是会话构造器的分支。若第三条消费线（如 AI 工具执行器）出现，应把「策略三元组（sink / command source / slave policy）+ 尺寸与 env」收敛为一个显式的会话装配参数结构，替代构造器家族。
   **（2026-09-23 后续）**：本候选的前两件已提前落定——`PtyCommandSource` 与 `pty_handler` 已退役、`PtySlaveFdPolicy` 票 3 已统一为 spawn 后释放 slave，`PtySession` 现只收调用方算好的 `CommandBuilder` + sink（见修订记录 v11）；「第三条消费线出现时再收敛策略三元组」的触发条件已不成立。
-- **终态可查询面**：`PtyTerminationGate` 已有 `reader_closed()`（信号 ①），缺「终态事件是否已发出」的访问器。补上它可让 host-pty 对「订阅晚于终态」的竞态彻底免疫（当前靠 `spawn` 内「订阅早于 start」的构造顺序防御，该防御无法被测试确定性锁定，见票 04 变异 M2 存活）。
-- **`is-running` 判据的归属**：`running && !output_terminated` 是 host-pty 的语义组合（引擎的 `running` 故意不随自然退出翻下，业务线依赖这一点），故该纯判定放在 `host_impl/pty.rs::running_verdict` 而非引擎层——若未来业务线也要「如实的存活」，应新增引擎层访问器而不是反向挪用本判定。
+- **终态可查询面（登记仍有效）**：`PtyTerminationGate`（现居 `src-tauri/src/pty/lifecycle.rs`）已有 `reader_closed()`（信号 ①），缺「终态事件是否已发出」的访问器。补上它可让 host-pty 对「订阅晚于终态」的竞态彻底免疫（当前靠 `spawn` 内「订阅早于 start」的构造顺序防御，该防御无法被测试确定性锁定，见票 04 变异 M2 存活）。
+- **`is-running` 判据的归属**：`running && !output_terminated` 是 host-pty 的语义组合（引擎的 `running` 故意不随自然退出翻下，业务线依赖这一点），故该纯判定放在宿主能力实现 `wasm_core/host_api/pty.rs::running_verdict`（旧路径 `host_impl/pty.rs` 已随 wasm_core 重构更名）而非引擎层——若未来业务线也要「如实的存活」，应新增引擎层访问器而不是反向挪用本判定。
 
 ## Considered Options
 
@@ -441,8 +513,8 @@ serve 供流记账 / peer_name 解析 / 取消原因码映射 / pull 任务行�
 
 ## Consequences
 
-- WIT 变更需 bump ABI 版本并同步两份副本（desktop / mobile SDK 各一份），双端同版发布。
-- 对端寻址全面句柄化、`dial-peer` 改 endpoint 入参：Tauri 命令面本身不动，host_impl 投影翻译层负责适配差异；双端迁移完成后，宿主侧 `DiscoveryCache` / 全量快照指纹比对链路可退役。
+- WIT 变更需 bump ABI 版本并同步两份副本（desktop / mobile SDK 各一份），双端同版发布。**（已被「双端偏离」节修正）**：桌面独有接口不再要求移动端跟演，mobile ABI 停在 11；「双端同版」只适用于双端共有的 interface。
+- 对端寻址全面句柄化、`dial-peer` 改 endpoint 入参：Tauri 命令面本身不动，host_impl 投影翻译层负责适配差异；双端迁移完成后，宿主侧 `DiscoveryCache` / 全量快照指纹比对链路可退役。**（已完成）**：`list-devices` 退役后两者均已删除，设备列表由插件订阅 mDNS 事件自建。
 - 设备列表失去「插件未激活也常热」特性（browse 随插件激活才开始）：file-transfer 以 activate 即 browse + 自持久化 last-seen 缓存缓解首屏空窗。
 - 断点续传的真源仍在接收端落盘侧：`pull-files` 需增加 resume 语义（或独立的已写偏移查询原语），插件的重试编排依赖它。
 - 接收策略的「超时自动拒绝」默认行为保留在宿主闸门侧（fail-safe），插件的策略设置只是预配置该闸门的参数；ask 模式的逐批应答经保留的 `respond-transfer` 进入闸门，弹窗编排在插件——安全语义不下沉。
@@ -451,10 +523,13 @@ serve 供流记账 / peer_name 解析 / 取消原因码映射 / pull 任务行�
 
 ## 修订记录
 
-- **2026-09-25 v20（当前）**：**传输编排整体下沉（ABI 29 → **30**（纯增量：`active-transfers` /
+本节按**写入批次**而非时间序排列；**「当前」= 首条 v20**（对应 desktop ABI v31 / mobile 11）。其余条目标记的「（当前）」是写入当时的时点表述，已按本节实际状态移除——被后续修订取代的结论以本节对应条目为准，
+正文中被取代的时点表述均已就地加「现状 / 终态更正」标注。
+
+- **2026-09-25 v20（当前 · desktop v31 / mobile 11）**：传输编排整体下沉（ABI 29 → 30（纯增量：`active-transfers` /
   `collect-outgoing` + 引擎原始事件桥 `peer:transfer-event` / `peer:receive-event` 双写）→
-  **31**（破坏性：`resume-all-transfers` 删除 + `send-files` 语义收窄「即发即会话」+
-  `concurrency` 载荷字段运行期拒绝 + 旧快照 topic 退役）；移动端明确不在兼容范围、零改动）**。
+  31（破坏性：`resume-all-transfers` 删除 + `send-files` 语义收窄「即发即会话」+
+  `concurrency` 载荷字段运行期拒绝 + 旧快照 topic 退役）；移动端明确不在兼容范围、零改动）。
   宿主 `peer_engine_*` 收敛为「会话句柄表（`SendSessionHandle`）+ 引擎事件桥（150ms 节流）+
   询问回执表 + 策略闸门」——任务状态机 / 并发闸门 / 历史封顶 / serve 供流记账 / peer_name 解析 /
   原因码映射 / pull 任务行预登记全部下沉 `file-transfer` 插件事件归约状态机（真源在插件私有库）。
@@ -466,7 +541,7 @@ serve 供流记账 / peer_name 解析 / 取消原因码映射 / pull 任务行�
 
 - **2026-08-26 v1**：初版裁决——host-peer 27 → 约 15（任务/历史/设置等业务面下沉）。
 - **2026-08-26 v2**：同一裁剪线二次收紧——① 共享目录 CRUD 三函数 → `set-shared-roots` 全量推送；② `disconnect-peer` + `cancel` 合并为统一 `close(handle)`，对端寻址全面句柄化；③ `pick-files`/`pick-folder` 移交新 `host-platform`；④ `list-devices` 拆分为 `host-mdns` browse-only 纯能力（自我广播留宿主自动生命周期）；⑤ 纠错：`respond-transfer` 从下沉清单改判安全闸门应答原语（无它则 ask 模式无法放行单个接收批）。最终 host-peer = 11 个函数。本修订仅定契约，代码尚未实施（WIT 现状仍为 27 函数全量投影）。
-- **2026-08-26 v3**：Phase 1–2 已实施（新原语并存、ABI desktop v9 / mobile v7），Phase 3–4 规格落成时发现本 ADR 内部张力：Consequences 段「插件的策略设置只是预配置该闸门的参数」暗示存在配置通道，v2 退役表却将 `set-receive-policy` / `set-download-dir` 列入下沉。经裁决修正：二者是「引擎安全闸门/落盘配置」而非业务编排，符合本文裁剪线，保留为终态原语；`get-receive-settings`（读接口）维持下沉。**host-peer 终态 = 13 个函数**（11 + 二配置原语）；上文「最终 host-peer = 11 个函数」为 v2 时点表述，以本修订为准。实施规划见 `.scratch/peer-network/spec-plugin-self-hosting.md`。
+- **2026-08-26 v3**：Phase 1–2 已实施（新原语并存、ABI desktop v9 / mobile v7），Phase 3–4 规格落成时发现本 ADR 内部张力：Consequences 段「插件的策略设置只是预配置该闸门的参数」暗示存在配置通道，v2 退役表却将 `set-receive-policy` / `set-download-dir` 列入下沉。经裁决修正：二者是「引擎安全闸门/落盘配置」而非业务编排，符合本文裁剪线，保留为终态原语；`get-receive-settings`（读接口）维持下沉。**host-peer 终态 = 13 个函数**（11 + 二配置原语）；上文「最终 host-peer = 11 个函数」为 v2 时点表述，以本修订为准。实施规划见 `.scratch/peer-network/spec-plugin-self-hosting.md`（**该 scratch 目录已不在仓库中**，2026-09-26 核对；本条裁决本身以本节表格与 WIT 为准）。
 - **2026-09-21 v21**：**首次删除接口函数**——`host-session.create` / `restart` 退役（ABI desktop v20 → v21），宿主侧创建与重启执行器、命名/配置映射服务、`SessionStorage` 与主库配置投影写一并删除，内核不再读会话配置表。裁剪线依据：创建/重启的**映射决策**（命名唯一化 / config→launch / 何时启动 / 先 remove 再重建）全部是产品语义，宿主只保留 `create-with-spec` 执行端（shell 包装 / 发行版转换 / 尺寸缺省 / id 仲裁）与 `remove` 注册表清理。详见上方「v21 收敛退役」节与 `CHANGELOG.md`。
 - **2026-09-21 v23**：**性能红线修订（roadmap 阶段 3 前置验证通过）**——「逐帧输出不进
   WASM」放宽为「输出字节禁止经 JSON 命令通道搬运，经 WIT 二进制原语（`list<u8>` 直传）
@@ -475,12 +550,12 @@ serve 供流记账 / peer_name 解析 / 取消原因码映射 / pull 任务行�
   JSON 反例路径 ~75 ms/MB）。host-pty 纯拉取形态不变；`host-session-output` 若开设必须
   二进制直传。详见「终端输出消费插件化 · 性能红线修订」节。
 - **2026-09-21 v22**：`host-platform.reveal-in-dir` 原语化（ABI desktop v21 → v22；desktop 独有，双端偏离同 `host-platform`）：把「在系统文件管理器中定位并选中文件/目录」从「宿主 Tauri 命令 `plugin_reveal_in_dir` + `system:open` 权限 + 前端 `context.system.revealInDir` 桥」改为内核原语。裁剪线依据：定位是**平台交互动作、不读取任何数据**（路径本就由调用方提供），与 `pick-files` / `pick-folder` 同口径——因此**不叠加权限门**（宿主 `host-platform` 域保持「无权限门」的一致性）。`system:open` 权限随宿主命令面与前端插件 API 一并退役，五同步点全落：SDK 常量与 API 映射 / 前端合法集合 / 宿主命令面（`require_system_open` 门） / 唯一消费方 file-transfer 的 manifest 与调用点（改经自身命令 `file-transfer.reveal-in-dir` 走 SDK 原语） / 打包侧校验。实现本体（Windows Shell COM / macOS `open -R` / Linux `xdg-open`）归引擎模块 `system/opener.rs`，宿主 `open_log_dir` 与插件原语共用一份。实施记录见 `.scratch/2026-09-21-host-rust-residue/issues/04`。
-- **2026-09-15 v4**：host-mdns 升级为 mDNS 基础能力服务（见「host-mdns v2」节）：新增 advertise / stop-advertise / is-advertising 三原语（config-json 纯引擎参数）、浏览事件定向投递 `mdns:found.<owner>` / `mdns:lost.<owner>`（payload 增 serviceType/browserId）、单守护收敛（全局唯一 ServiceDaemon，peer-net 与插件共享）、双表属主仲裁与按属主回收、宿主身份广播登记（owner=host，零业务代码红线 D3）、Android 多播锁随单守护常驻获取；全局发现桥接与缓存重发通道退役（D1），file-transfer 双端一期迁移（D2）。ABI desktop 12→13 / mobile 10→11（ADR 0019 双端同版）。实施验收后落 ADR（D5 定案）。
-- **2026-09-18 v5**：新增 host-websocket（见「新增 host-websocket」节）：客户端域（connect / send-text / send-binary / close / is-connected）+ 服务端域（register-endpoint / 收发 / 广播 / 踢出 / 注销 / 清单）共 14 函数 + 可选导出 `events-ws`（宿主动态探测，未导出则帧丢弃 + 首次 warn + 计数）；状态事件改 **owner 作用域 topic**（`ws:<event>.<owner>`，标识在 payload，D3）；插件端点挂载 `/ws/plugin/<plugin-id>/<path>`（命名空间由宿主注入，D5）；权限按域拆 `ws:client` / `ws:server`（D6）；插件端点帧过流量过滤链但不参与链路加密（`TrafficChannel::WsPlugin`，D9）；本期仅 `ws://`（D7）。ABI desktop 13→**14**（mobile 11 不变，ADR 0019 双端各自演进）。
-- **2026-09-19 v6**：新增 host-pty（见「新增 host-pty」节）：6 函数（spawn / write / resize / kill / ring-fetch / is-running）+ 唯一生命周期事件 `pty:exit.<owner>`；输出面定为**纯拉取**（否决 push 回调），限额四项按「创建类失败可见 / 数据面读侧截断」分级，环容量改为 spawn 的插件声明参数（宿主上下限仲裁）。同时首次把**桌面独有接口的双端偏离**成文（「双端偏离」节：host-websocket v14 / host-auth v15 / host-pty v16，mobile 不跟演 + 恢复条件），并登记两条抽象提取候选（「抽象提取候选」节）。ABI desktop 15→**16**（v15 由认证中心线 `host-auth` 占用；mobile 不跟演）。实施与验收见 `.scratch/2026-09-19-pty-base-service/`（票 01-07）。
+- **2026-09-15 v4**：host-mdns 升级为 mDNS 基础能力服务（见「host-mdns v2」节）：新增 advertise / stop-advertise / is-advertising 三原语（config-json 纯引擎参数）、浏览事件定向投递 `<owner>::mdns:found` / `<owner>::mdns:lost`（payload 增 serviceType/browserId）、单守护收敛（全局唯一 ServiceDaemon，peer-net 与插件共享）、双表属主仲裁与按属主回收、宿主身份广播登记（owner=host，零业务代码红线 D3）、Android 多播锁随单守护常驻获取；全局发现桥接与缓存重发通道退役（D1），file-transfer 双端一期迁移（D2）。ABI desktop 12→13 / mobile 10→11（ADR 0019 双端同版）。实施验收后落 ADR（D5 定案）。
+- **2026-09-18 v5**：新增 host-websocket（见「新增 host-websocket」节）：客户端域（connect / send-text / send-binary / close / is-connected）+ 服务端域（register-endpoint / 收发 / 广播 / 踢出 / 注销 / 清单）共 14 函数 + 可选导出 `events-ws`（宿主动态探测，未导出则帧丢弃 + 首次 warn + 计数）；状态事件改 **owner 作用域 topic**（``<owner>::ws:<event>`，标识在 payload，D3）；插件端点挂载 `/ws/plugin/<plugin-id>/<path>`（命名空间由宿主注入，D5）；权限按域拆 `ws:client` / `ws:server`（D6）；插件端点帧过流量过滤链但不参与链路加密（`TrafficChannel::WsPlugin`，D9）；本期仅 `ws://`（D7）。ABI desktop 13→**14**（mobile 11 不变，ADR 0019 双端各自演进）。
+- **2026-09-19 v6**：新增 host-pty（见「新增 host-pty」节）：6 函数（spawn / write / resize / kill / ring-fetch / is-running）+ 唯一生命周期事件 `<owner>::pty:exit`；输出面定为**纯拉取**（否决 push 回调），限额四项按「创建类失败可见 / 数据面读侧截断」分级，环容量改为 spawn 的插件声明参数（宿主上下限仲裁）。同时首次把**桌面独有接口的双端偏离**成文（「双端偏离」节：host-websocket v14 / host-auth v15 / host-pty v16，mobile 不跟演 + 恢复条件），并登记两条抽象提取候选（「抽象提取候选」节）。ABI desktop 15→**16**（v15 由认证中心线 `host-auth` 占用；mobile 不跟演）。实施与验收见 `.scratch/2026-09-19-pty-base-service/`（票 01-07）。
 - **2026-09-19 v7**：`host-auth` 追加**认证记录面**四函数（`trusted-devices-list` / `trusted-device-revoke` / `connection-history-list` / `auth-setting-set`）：读**内核原始记录**（`pairings` 全表含软删行、`connection_history`、`settings` 白名单键），排序 / `is-active` 过滤 / 展示组织与派生视图一律归插件（裁剪线：宿主不解释「什么算已连接设备」）；`pairings` 的凭据列（session token / public key）不出内核；属主说明——记录是宿主全局数据、无句柄表，故无属主段校验，权限门 `auth` 即授权边界。ABI desktop 17→**18**（mobile 不跟演，同「双端偏离」节）。实施与验收见 `.scratch/2026-09-19-terminal-session-plugin/`（票 05）。
-- **2026-09-20 v8（当前）**：会话语义下沉批次落成（见「会话语义下沉批次」节）：ABI desktop 18→**19**（`host-session` 配置面 + `create-with-spec` + 动作四项 + `annotate` / `connections-list` + `host-platform.wsl-distros`，同批次函数级追加不再 bump），新增两个权限位 `session:config` / `ui:settings`，设置分组扩展点与「内置入口按贡献插件运行态让位」两条内核 UI 改动落地，`com.bedcode.devices` 与 `com.bedcode.auto-task` 两个桌面插件退役并合并进 `com.bedcode.session`（旧 HTTP 前缀由宿主别名表兜底、切断时机并入移动端专项）。移动端零改动，其受损清单与 §9 同步豁免一并记入「双端偏离」节与路线图。实施与验收见 `.scratch/2026-09-19-terminal-session-plugin/`（票 01–18）。
-- **2026-09-22 v9（当前）**：**插件 id 变更登记 + 终端窗口域下沉收口 + 输出原语落地**。① **id 变更**：
+- **2026-09-20 v8**：会话语义下沉批次落成（见「会话语义下沉批次」节）：ABI desktop 18→**19**（`host-session` 配置面 + `create-with-spec` + 动作四项 + `annotate` / `connections-list` + `host-platform.wsl-distros`，同批次函数级追加不再 bump），新增两个权限位 `session:config` / `ui:settings`，设置分组扩展点与「内置入口按贡献插件运行态让位」两条内核 UI 改动落地，`com.bedcode.devices` 与 `com.bedcode.auto-task` 两个桌面插件退役并合并进 `com.bedcode.session`（旧 HTTP 前缀由宿主别名表兜底、切断时机并入移动端专项）。移动端零改动，其受损清单与 §9 同步豁免一并记入「双端偏离」节与路线图。实施与验收见 `.scratch/2026-09-19-terminal-session-plugin/`（票 01–18）。
+- **2026-09-22 v9**：**插件 id 变更登记 + 终端窗口域下沉收口 + 输出原语落地**。① **id 变更**：
   `com.bedcode.session` → `com.bedcode.terminal-session`（票 06，全链改名；ABI/接口面零变化——plugin id
   不入 WIT/线协议）；旧 HTTP 前缀 `/api/plugin/com.bedcode.session/*` 与旧互调 api 名在**双投窗口**内由
   宿主别名兜底到新插件（HTTP 走 `LEGACY_HTTP_PLUGIN_ALIASES`、互调走 `activation::with_api_aliases`，
@@ -494,7 +569,7 @@ serve 供流记账 / peer_name 解析 / 取消原因码映射 / pull 任务行�
   校验），宿主 Channel 输出传输（`terminal_stream` 命令面）随前端消费方一并摘除。④ **终端窗口域下沉收口**
   （票 05）：宿主 `TerminalPreview` / `composables/terminal` / `utils/terminal` 与 attachSink 契约摘除，
   宿主终端窗口 API 过激活门禁（session 插件停用 → 显性报错，不留降级代办）。移动端零改动，双端偏离表不变。
-- **2026-09-22 v10（当前）**：**host-session 配置面写原语退役（ABI desktop 22→23）**：
+- **2026-09-22 v10**：**host-session 配置面写原语退役（ABI desktop 22→23）**：
   删 `config-upsert` / `config-delete`（业务配置真源自票 08 起在插件私有库，宿主写原语无调用者——
   死接口删除，行为零变化）；读取面 `config-list` / `config-get` 保留为**一次性 legacy 迁移通道**
   （`terminal-session` 激活时读主库 `session_configs` 迁入私有库，marker 幂等；/api/sessions/start 已
@@ -504,7 +579,7 @@ serve 供流记账 / peer_name 解析 / 取消原因码映射 / pull 任务行�
   主库 `session_configs` 表保留为迁移源，观测信号（启动 `legacy_rows` 计数）归零后作 contract 删除
   （迁移窗口结束再删读面与表）。桌面独有接口，移动端零改动。实施见
   `.scratch/2026-09-22-pty-business-downsink/spec.md`（阶段 1）。
-- **2026-09-23 v11（当前）**：**PTY 引擎去业务化收口（ABI 不变，desktop 仍 v25；移动端零改动）**。
+- **2026-09-23 v11**：**PTY 引擎去业务化收口（ABI 不变，desktop 仍 v25；移动端零改动）**。
   ① **宿主 shell 包装退役**：删 `pty/command.rs::build_command`（`bash -lic` / PowerShell `-Command` /
   CMD `/K` 包装、cwd 兜底、WSL 路径转换）与 `pty/wsl.rs::windows_to_wsl_path` / `execute_command`
   （`pty/wsl.rs` 只留发行版列举，即 `host-platform.wsl-distros` 原语的实现）。shell 包装的唯一实现
@@ -526,7 +601,7 @@ serve 供流记账 / peer_name 解析 / 取消原因码映射 / pull 任务行�
   `sink.on_bytes` 在独立消费者任务里异步执行 → 终态事件到达 ≠ sink 已收到尾帧；原注释表述相反，已
   按事实更正，消费方（含测试）须有界轮询。残余风险与后续（会话状态机 / 登记 / 生命周期分发下沉、
   输出面形态 B）见 `.scratch/2026-09-23-session-engine-downsink/spec.md`。
-- **2026-09-23 v12（当前）**：**`host-app.plugin-resource-dir` 原语（ABI 不变，desktop 仍 v25；
+- **2026-09-23 v12**：**`host-app.plugin-resource-dir` 原语（ABI 不变，desktop 仍 v25；
   同批次函数级追加不 bump；移动端零改动）**。插件取自身资源目录（安装目录绝对路径，含随包资源
   如 Agent 集成 hook 脚本）的**唯一**原语。裁剪线依据：宿主本来就持有插件加载路径
   （`extension_path`），返回的是**调用方自己的**目录、不含任何跨插件信息、零业务语义——
@@ -554,7 +629,7 @@ serve 供流记账 / peer_name 解析 / 取消原因码映射 / pull 任务行�
   与 v22 的 `host-bus` 命名空间同类「不 bump 的行为变更」口径；旧产物不静默断流（宿主侧处理器
   保留「回查内核」兜底分支）。实施与验收见 `.scratch/2026-09-23-session-engine-downsink/spec.md`。
 
-- **2026-09-24 v14（当前）**：**`host-connection` 独立原语落成（票 04，ABI 不变；移动端零改动）**。
+- **2026-09-24 v14**：**`host-connection` 独立原语落成（票 04，ABI 不变；移动端零改动）**。
   v12 裁决 5「连接清单迁独立原语」实施：WIT 新 interface `host-connection` + `world plugin`
   追加 import + 宿主实现落 `wasm_core/host_api/connection.rs`。函数名**沿用
   `connections-list`**（WIT 里 `list` 是关键字，故迁出零改名——插件调用点与派生视图回归用例
@@ -569,7 +644,7 @@ serve 供流记账 / peer_name 解析 / 取消原因码映射 / pull 任务行�
   改文案属线协议变更，另案）。旧别名随 `host-session` interface 退役（票 10）删除。
   实施与验收见 `.scratch/2026-09-23-session-engine-downsink/issues/04-connections-list-own-primitive.md`。
 
-- **2026-09-24 v15（当前）**：**`host-pty` 宿主广播声明 `hostBroadcastSessionId`（票 05，
+- **2026-09-24 v15**：**`host-pty` 宿主广播声明 `hostBroadcastSessionId`（票 05，
   ABI 不变、字段级追加不 bump；移动端零改动）**。会话语义下沉 P3 形态 B 的引擎侧前置。
   ① **语义 = opt-in 只读订阅**：spawn config-json 可选字段 `hostBroadcastSessionId`（=
   本句柄服务的会话 id），给出即声明「宿主 server 可只读订阅本句柄输出」，宿主据此在
@@ -587,7 +662,7 @@ serve 供流记账 / peer_name 解析 / 取消原因码映射 / pull 任务行�
   ⑤ 本票同时完成「第 2 条措辞修订」的预留项（见上「会话真源下沉」节第 2 条）。实施与
   验收见 `.scratch/2026-09-23-session-engine-downsink/issues/05-host-pty-broadcast-declaration.md`。
 
-- **2026-09-24 v16（当前）**：**会话原语域退役完成 + 内核会话目录删除（票 10 / 票 11，
+- **2026-09-24 v16**：**会话原语域退役完成 + 内核会话目录删除（票 10 / 票 11，
   ABI 26 → **27**；移动端零改动）**。本专项（`.scratch/2026-09-23-session-engine-downsink/`）
   的收口裁决，也是本项目迄今**唯一一次破坏性契约变更**：
 
@@ -611,7 +686,7 @@ serve 供流记账 / peer_name 解析 / 取消原因码映射 / pull 任务行�
   实施与验收见 `.scratch/2026-09-23-session-engine-downsink/issues/10-host-session-interface-abi-26.md`
   与 `.../11-kernel-session-dir-deletion.md`。
 
-- **2026-09-24 v17（当前）**：**WS 动作词表声明式化（票 09a/09b/09c，ABI 不变；
+- **2026-09-24 v17**：**WS 动作词表声明式化（票 09a/09b/09c，ABI 不变；
   移动端零改动，wire 逐字不变）**。WS 会话控制动作的词表来源从「宿主硬编码 switch」
   （`services/session_control.rs::handle_control` 的 `match action { ... }` 逐臂调
   `session_gateway`）改为「插件 manifest 声明端点 + 插件侧分派」，见上
@@ -632,20 +707,20 @@ serve 供流记账 / peer_name 解析 / 取消原因码映射 / pull 任务行�
   wire 逐字不变（`pty_session_chain` 集成测试经转发层全绿）。实施与验收见
   `.scratch/2026-09-24-host-crypto-business-downsink/issues/09a/09b/09c`。
 
-- **2026-09-24 v18（当前）**：**加密引擎化 + enums 三分类处置收口（票 01-09c，ABI 25 → 26
+- **2026-09-24 v18**：**加密引擎化 + enums 三分类处置收口（票 01-09c，ABI 25 → 26
   只发生在 host-crypto 契约面；移动端零改动）**。见上「加密引擎化」节与「WS 动作词表声明式化」节。
   ① **crypto/ 引擎（票 01/02）**：算法注册表（名称→实现 + 白名单 + abstract trait），`link_crypto`
   不再内联具体算法（WS/HTTP 过滤层只依赖注册表抽象接口）。② **host-crypto 契约面（票 03/04）**：
   WIT interface + 三权限位 `crypto:aead` / `crypto:asym` / `crypto:kdf` + ABI 25 → **26**（desktop
   独有，双端偏离）；原语只给中性算法、不给编排，宿主密钥不经原语暴露（非旁路红线）。③ **协商套件
-  参数化（票 05）**：`CryptoProposal.suite` 可选字段，缺省 → 默认套件，未知名 fail-visible 拒绝；
+  参数化（票 05）**：suite 可选字段，缺省 → 默认套件，未知名 fail-visible 拒绝；
   移动端旧端零改动。④ **enums 三分类处置（票 06-09）**：special_key 下沉插件、shell.rs 整文件删除、
   SessionStatus/Type 归位 protocol/session.rs（线协议形状）、动作词表 switch 声明式化（v17 详情）；
   `enums/` 终态 = 引擎级类型 + 传输面契约形状，业务语义零残留。实施与验收见
   `.scratch/2026-09-24-host-crypto-business-downsink/issues/01..09c`。
 
-- **2026-09-25 v19（当前）**：**websocket 业务下沉（ABI 27 → **28**，破坏性；移动端明确不在
-  兼容范围、零改动）**。宿主 WS 面收为**通用 transport**（无业务内核红线 §5 / 裁剪线 ADR 0022）：
+- **2026-09-25 v19**：websocket 业务下沉（ABI 27 → 28，破坏性；移动端明确不在
+  兼容范围、零改动）。宿主 WS 面收为**通用 transport**（无业务内核红线 §5 / 裁剪线 ADR 0022）：
   旧 `/ws/event` 与 `/ws/terminal/session/{id}` 路由删除（只剩 `/ws/plugin/<id>/<path>`，旧路径
   通用 404 无 fallback）；`Message` 业务枚举 / `services/` / `subscription.rs` / `terminal_ws/` /
   `channel/{event,terminal}.rs` / `session.rs` / `src/events/`（AppEvent+publish+matcher+

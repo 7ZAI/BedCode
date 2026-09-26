@@ -9,7 +9,7 @@
 [![Version](https://img.shields.io/badge/version-2.1.0-blue.svg)](https://github.com/7ZAI/BedCode)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](../LICENSE)
 [![Tauri](https://img.shields.io/badge/Tauri-2.0-orange.svg)](https://v2.tauri.app/)
-[![Wasmtime](https://img.shields.io/badge/wasmtime-47-%232F6FED.svg)](https://wasmtime.dev/)
+[![Wasmtime](https://img.shields.io/badge/wasmtime-48-%232F6FED.svg)](https://wasmtime.dev/)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey.svg)](https://github.com/7ZAI/BedCode)
 
 English | [简体中文](README.md)
@@ -43,7 +43,7 @@ This repository is the desktop project of the BedCode monorepo (Tauri 2.0 + Vue 
 | Terminal  | @xterm/xterm + addon-fit / unicode11 / web-links / webgl         |
 | Auth      | JWT (HS256), ECDSA biometric credential (p256), device fingerprint |
 | Crypto    | X25519 ECDH + AES-256-GCM (HKDF), ChaCha20-Poly1305, RSA-OAEP/PSS |
-| Plugins   | wasmtime 47 (WASM component runtime) + cdylib dynamic loading    |
+| Plugins   | wasmtime 48 (WASM component runtime, LTS) + cdylib dynamic loading    |
 | Other     | shiki, ECharts, qrcode, vue-i18n@9, tracing logging              |
 
 ## Directory Structure
@@ -94,7 +94,7 @@ bedcode-desktop/
 
 ### Prerequisites
 
-- [Node.js](https://nodejs.org/) ≥ 18, [Rust](https://www.rust-lang.org/tools/install) ≥ 1.94 (wasmtime 47 MSRV)
+- [Node.js](https://nodejs.org/) ≥ 18, [Rust](https://www.rust-lang.org/tools/install) ≥ 1.95 (wasmtime 48 MSRV)
 - [Tauri 2.0 CLI](https://v2.tauri.app/start/prerequisites/) and platform dependencies
   (Linux system dependencies: [docs/linux-build.md](docs/linux-build.md))
 - An installed & configured Agent CLI (e.g. [Claude Code](https://claude.ai/code), pi, opencode, Codex)
@@ -133,7 +133,7 @@ cd src-tauri && cargo test         # Rust tests
 
 ## Plugin System
 
-Desktop plugins are built on the **wasmtime 47 runtime (WASM Component Model)**: plugins compile from Rust / TypeScript into WASM components loaded in a host sandbox, with cdylib dynamic-library plugins also supported. Plugins can observe and extend host session behavior:
+Desktop plugins are built on the **wasmtime 48 runtime (WASM Component Model)**: plugins compile from Rust / TypeScript into WASM components loaded in a host sandbox, with cdylib dynamic-library plugins also supported. Plugins can observe and extend host session behavior:
 
 - **WASM sandbox runtime** — resource-bounded, memory-isolated; a crashing plugin never takes down the host
 - **Dynamic loading** — scanned from `plugins/{plugin-id}/plugin.json` at runtime, no host recompile needed
