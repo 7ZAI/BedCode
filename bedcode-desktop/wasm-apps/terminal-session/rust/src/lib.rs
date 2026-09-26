@@ -76,6 +76,9 @@ mod keys;
 /// WS 会话控制域（票 09b/09c）：动作词表分派 + 声明端点帧协议
 mod ws_control;
 mod ws_terminal;
+/// WS 业务事件广播出口（移动端适配专项票 02）：`session-control` 端点广播的
+/// 唯一出口 + 载荷形状真源，见模块文档
+pub mod ws_events;
 mod trust;
 
 use bedcode_plugin_api::host::{HostBus, HostLog, HostStorage, HostTimer, HostWebsocket};
@@ -927,6 +930,9 @@ impl WasmPlugin for SessionPlugin {
                 .and_then(|v| v.as_str())
                 .unwrap_or_default()
                 .to_string();
+            // 广播端点缓存的 clientCount 是快照：客户端接入后必须失效，否则
+            // 「缓存记 0 但客户端已连上」会让后续事件永久静默（不可自愈）
+            ws_events::invalidate_endpoint_cache();
             if !endpoint_id.is_empty() && !client_id.is_empty() {
                 devices_events::on_client_connected(&endpoint_id, &client_id);
             }
@@ -942,6 +948,8 @@ impl WasmPlugin for SessionPlugin {
             )
         {
             if let Some(client_id) = msg.payload.get("clientId").and_then(|v| v.as_str()) {
+                // 同 client-connect：客户端数变化后广播缓存失效（归零即静默）
+                ws_events::invalidate_endpoint_cache();
                 ws_terminal::on_client_disconnect(client_id);
                 let endpoint_id = msg
                     .payload
