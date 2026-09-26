@@ -1,9 +1,10 @@
 <script setup lang="ts">
 /**
- * AppShell（桌面端）— 桌面页面骨架
+ * AppShell（桌面端）— 桌面页面骨架（与宿主 DesktopLayout / TitleBar / Sidebar 同构）
  *
- * 标题栏（+ 插件 titleBar 项）→ 侧边栏（内置导航 + 插件 sidebar 面板，按 order 排序）
- * → 主内容区（activeView 或当前 Tab）→ 状态栏（连接状态 + 插件 statusBar 项）。
+ * 标题栏（40px + BedCode logo + 插件 titleBar 项）→ 侧边栏（内置导航分组 + 插件
+ * sidebar 面板，按 order 排序；可折叠）→ 主内容区（activeView 或当前 Tab）→
+ * 状态栏（连接状态 + 插件 statusBar 项）。
  */
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -20,6 +21,7 @@ import { deactivateAll } from './loader'
 import { connected } from './mock/session'
 import { isSvgIcon } from './utils/icon'
 import { saveLocale, type DevLocale } from './locale'
+import { useHostUi } from './theme'
 import PanelView from './views/PanelView.vue'
 import ToolboxView from './views/ToolboxView.vue'
 import PluginsView from './views/PluginsView.vue'
@@ -35,14 +37,24 @@ type BaseTab = 'terminal' | 'toolbox' | 'plugins' | 'settings' | 'rail'
 const activeTab = ref<BaseTab>('toolbox')
 const logOpen = ref(false)
 
-const { t, locale } = useI18n()
+// 侧边栏折叠状态（与宿主 useSidebar 同宽口径：展开 240px / 折叠 56px）
+const collapsed = ref(false)
+const COLLAPSED_WIDTH = 56
 
-// Toaster 配置与宿主 App.vue 保持一致（expand 防重叠、visible-toasts 放宽批量通知）
-const toasterTheme = computed(() => 'light' as ToasterProps['theme'])
+function toggleCollapsed() {
+  collapsed.value = !collapsed.value
+}
+
+const { t, locale } = useI18n()
+const { theme } = useHostUi()
+
+// Toaster 配置与宿主 App.vue 保持一致（expand 防重叠、visible-toasts 放宽批量通知）；
+// 主题跟随 dev-shell 的宿主界面设置（浅色/深色/跟随系统，与宿主 useSettings 同语义）
+const toasterTheme = computed(() => theme.value as ToasterProps['theme'])
 const toastOptions: ToasterProps['toastOptions'] = {
   classes: {
     toast: '!rounded-[10px] !shadow-lg',
-    title: '!text-[13px] !font-medium',
+    title: '!text-[calc(13px*var(--ui-scale))] !font-medium',
     description: '!text-[var(--text-secondary)]',
     closeButton:
       '!bg-transparent !border-transparent !text-[var(--text-secondary)] hover:!text-[var(--text-primary)]',
@@ -72,20 +84,29 @@ const pluginSummary = computed(() =>
   plugins.value.map((p) => p.name).join(locale.value === 'en' ? ', ' : '，'),
 )
 
-const baseTabs = computed(() => [
-  { key: 'terminal' as const, label: t('devshell.nav.terminal'), icon: '⌨️' },
-  { key: 'toolbox' as const, label: t('devshell.nav.toolbox'), icon: '🧰' },
-  { key: 'plugins' as const, label: t('devshell.nav.plugins'), icon: '🧩' },
-  { key: 'settings' as const, label: t('devshell.nav.settings'), icon: '⚙️' },
+// 内置导航图标：Heroicons outline（viewBox 0 0 24 24，与宿主 Sidebar 菜单同一图标体系）
+const TERMINAL_ICON =
+  'M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z'
+const TOOLBOX_ICON =
+  'M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z'
+// 与宿主 useSidebarMenu 内置项同源的图标（plugins / settings）
+const PLUGINS_ICON =
+  'M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z'
+const SETTINGS_ICON =
+  'M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z M15 12a3 3 0 11-6 0 3 3 0 016 0z'
+const RAIL_ICON = 'M4 6h16M4 12h16M4 18h16'
+
+const baseTabs = computed<{ key: BaseTab; label: string; icon: string; order: number }[]>(() => [
+  { key: 'terminal' as const, label: t('devshell.nav.terminal'), icon: TERMINAL_ICON, order: 100 },
+  { key: 'toolbox' as const, label: t('devshell.nav.toolbox'), icon: TOOLBOX_ICON, order: 200 },
+  { key: 'plugins' as const, label: t('devshell.nav.plugins'), icon: PLUGINS_ICON, order: 300 },
+  { key: 'settings' as const, label: t('devshell.nav.settings'), icon: SETTINGS_ICON, order: 400 },
   // 调试专用：TerminalInputRail 组件测试页
-  { key: 'rail' as const, label: t('devshell.nav.rail'), icon: '📌' },
+  { key: 'rail' as const, label: t('devshell.nav.rail'), icon: RAIL_ICON, order: 500 },
 ])
 
 const sidebarItems = computed(() => {
-  const builtin = baseTabs.value.map((tab) => ({
-    ...tab,
-    order: 100 + baseTabs.value.indexOf(tab),
-  }))
+  const builtin = baseTabs.value.map((tab) => ({ ...tab }))
   const panels = sidebarPanels.value.map((entry) => ({
     key: `panel:${entry.pluginId}:${entry.panel.id}`,
     label: entry.panel.title,
@@ -138,14 +159,30 @@ window.addEventListener('beforeunload', () => {
 
 <template>
   <div class="desktop-ui flex flex-col bg-page text-[var(--text-primary)]">
-    <!-- 标题栏 -->
+    <!-- 标题栏（与宿主 TitleBar 同构：40px、logo SVG 随主题切换、bg-card） -->
     <header
-      class="h-12 flex-shrink-0 flex items-center gap-3 px-4 border-b border-[var(--border)] bg-sidebar"
+      class="h-10 flex-shrink-0 flex items-center gap-3 px-4 border-b border-[var(--border)] bg-[var(--bg-card)] select-none"
     >
-      <span class="w-3 h-3 rounded-full bg-brand flex-shrink-0" />
-      <span class="text-sm font-semibold text-[var(--text-primary)] whitespace-nowrap">{{
-        t('devshell.brand')
-      }}</span>
+      <!-- 品牌图标：与宿主 TitleBar 同一份 logo SVG，填充色随 light/dark 主题切换 -->
+      <svg
+        class="w-5 h-5 flex-shrink-0 [--logo-bg-start:#2E2A22] [--logo-bg-end:#0A0907] [--logo-fg:#FFFFFF] dark:[--logo-bg-start:#FAF9F7] dark:[--logo-bg-end:#E7E4DC] dark:[--logo-fg:#1C1917]"
+        viewBox="0 0 100 100"
+        aria-hidden="true"
+      >
+        <defs>
+          <linearGradient id="titlebar-logo-bg" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="var(--logo-bg-start)" />
+            <stop offset="100%" stop-color="var(--logo-bg-end)" />
+          </linearGradient>
+        </defs>
+        <rect width="100" height="100" rx="18" fill="url(#titlebar-logo-bg)" />
+        <path d="M 24 18 L 59 50 L 24 82 L 32 74 L 51 50 L 32 26 Z" fill="var(--logo-fg)" />
+        <path d="M 51 60 L 84 62 L 53 65 Z" fill="var(--logo-fg)" />
+      </svg>
+      <span
+        class="text-[calc(13px*var(--ui-scale))] font-semibold tracking-tight text-[var(--text-primary)] whitespace-nowrap"
+        >{{ t('devshell.brand') }}</span
+      >
       <span v-if="plugins.length" class="text-xs text-[var(--text-tertiary)] truncate min-w-0">
         {{ pluginSummary }}
       </span>
@@ -153,10 +190,12 @@ window.addEventListener('beforeunload', () => {
       <button
         v-for="entry in titleBarItems"
         :key="entry.pluginId + entry.item.id"
-        class="px-2.5 py-1 rounded-btn text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-colors duration-200 whitespace-nowrap"
+        class="flex items-center gap-1 h-6 px-2 shrink-0 whitespace-nowrap rounded-[6px] text-[calc(11px*var(--ui-scale))] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors"
+        :title="entry.item.label"
         @click="entry.item.onClick?.()"
       >
-        {{ entry.item.icon ? entry.item.icon + ' ' : '' }}{{ entry.item.label }}
+        <span v-if="entry.item.icon" class="flex-shrink-0">{{ entry.item.icon }}</span>
+        {{ entry.item.label }}
       </button>
       <!-- 语言切换（中 / EN 分段按钮） -->
       <div class="flex items-center rounded-btn bg-[var(--bg-hover)] p-0.5">
@@ -189,35 +228,88 @@ window.addEventListener('beforeunload', () => {
     </header>
 
     <div class="flex flex-1 min-h-0">
-      <!-- 侧边栏 -->
+      <!-- 侧边栏（与宿主 Sidebar 同构：导航分组 + 折叠/展开；240px ↔ 56px） -->
       <aside
-        class="w-[var(--sidebar-width)] flex-shrink-0 bg-sidebar border-r border-[var(--border)] overflow-y-auto p-2"
+        class="bg-[var(--bg-sidebar)] flex flex-col border-r border-[var(--border)] flex-shrink-0 relative"
+        :style="{ width: collapsed ? `${COLLAPSED_WIDTH}px` : 'var(--sidebar-width)' }"
+        :class="!collapsed && 'transition-[width] duration-200 ease'"
       >
-        <button
-          v-for="item in sidebarItems"
-          :key="item.key"
-          class="w-full flex items-center gap-2.5 px-3 py-2 rounded-nav text-sm text-left transition-colors duration-200"
-          :class="
-            isActive(item)
-              ? 'bg-[var(--color-primary)]/10 text-[var(--color-primary)] font-medium'
-              : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]'
-          "
-          @click="selectSidebar(item)"
-        >
-          <span v-if="isSvgIcon(item.icon)" class="w-4 h-4 flex-shrink-0">
-            <svg
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              class="w-4 h-4"
+        <nav class="flex-1 py-4 overflow-y-auto overflow-x-hidden px-3">
+          <h4 v-if="!collapsed" class="wb-sidebar-section px-2 mb-2">
+            {{ t('devshell.nav.navigation') }}
+          </h4>
+          <ul class="space-y-0.5">
+            <li v-for="item in sidebarItems" :key="item.key">
+              <button
+                class="w-full flex items-center gap-2.5 h-9 rounded-md transition-colors duration-200"
+                :class="[
+                  isActive(item)
+                    ? 'bg-[var(--bg-card)] font-medium text-[var(--text-primary)] shadow-sm'
+                    : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]',
+                  collapsed ? 'justify-center px-0' : 'px-2.5',
+                ]"
+                :title="collapsed ? item.label : undefined"
+                @click="selectSidebar(item)"
+              >
+                <span v-if="isSvgIcon(item.icon)" class="w-4 h-4 flex-shrink-0">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.75"
+                    class="w-4 h-4"
+                  >
+                    <path :d="item.icon" />
+                  </svg>
+                </span>
+                <span v-else class="text-base leading-none flex-shrink-0">
+                  {{ item.icon || '▫️' }}
+                </span>
+                <span
+                  v-if="!collapsed"
+                  class="text-[calc(13px*var(--ui-scale))] whitespace-nowrap truncate min-w-0"
+                  >{{ item.label }}</span
+                >
+              </button>
+            </li>
+          </ul>
+        </nav>
+
+        <!-- 底部折叠/展开按钮（与宿主 Sidebar 同构） -->
+        <div class="p-2 border-t border-[var(--border)]">
+          <div v-if="!collapsed" class="flex justify-end">
+            <button
+              class="w-7 h-7 flex items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-colors"
+              :title="t('devshell.sidebar.collapse')"
+              @click="toggleCollapsed"
             >
-              <path :d="item.icon" />
-            </svg>
-          </span>
-          <span v-else class="text-base leading-none flex-shrink-0">{{ item.icon || '▫️' }}</span>
-          <span class="truncate min-w-0">{{ item.label }}</span>
-        </button>
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="1.75"
+                  d="M15 19l-7-7 7-7"
+                />
+              </svg>
+            </button>
+          </div>
+          <div v-else class="flex justify-center">
+            <button
+              class="w-7 h-7 flex items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-colors"
+              :title="t('devshell.sidebar.expand')"
+              @click="toggleCollapsed"
+            >
+              <svg class="w-3.5 h-3.5 rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="1.75"
+                  d="M15 19l-7-7 7-7"
+                />
+              </svg>
+            </button>
+          </div>
+        </div>
       </aside>
 
       <!-- 主内容 -->
