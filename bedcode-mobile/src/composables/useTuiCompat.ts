@@ -10,7 +10,8 @@
  *   且应用启用了 SGR 鼠标上报（输出流嗅探 DECSET 1006 + 上报模式
  *   9/1000/1001/1002/1003，支持多参数合并序列 `ESC[?1000;1006h`）才视为 TUI 模式
  * - TUI 模式下触摸拖动/惯性翻译成 SGR 滚轮序列（ESC[<64/65;col;rowM），
- *   经既有 WS 通道（ws_send_input_async）原样写入主机 PTY，由应用自行滚动
+ *   经桌面 HTTP 输入面（httpSendSessionInput → POST /api/sessions/{id}/input，
+ *   票 04：控制面迁 HTTP）原样写入主机 PTY，由应用自行滚动
  * - 灵敏度折算：主流 TUI 把单个滚轮事件放大为 ~3 行滚动（终端惯例），
  *   手势行数按 WHEEL_SENSITIVITY_NUM/DEN 折算后再入队，否则 TUI 内滚动比
  *   非 TUI 的 1:1 行滚动快约 3 倍；缩放余量保留在积压中，慢速拖动不丢意图
@@ -24,7 +25,7 @@
 
 import { ref, type Ref } from 'vue'
 import type { Terminal } from '@xterm/xterm'
-import { wsSendInput } from '@/composables/useMobileCommands'
+import { httpSendSessionInput } from '@/composables/useHttpApi'
 
 // ==================== 常量 ====================
 
@@ -256,7 +257,7 @@ export function useTuiCompat(sessionId: string) {
       if (!seq) return
 
       inflight = true
-      wsSendInput(sessionId, seq)
+      httpSendSessionInput(sessionId, seq)
         .catch(() => {
           // 发送失败静默降级：下个窗口/下一次手势自然重试
         })

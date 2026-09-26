@@ -224,15 +224,10 @@ async function init() {
       }
       autoStartForegroundService()
 
-      // 认证成功后恢复所有后台会话的终端订阅（订阅由 Rust 管理；断开期间
-      // Rust 链路已随 markAllUnsubscribed 关闭，此处全部重建）
-      const bufferStore = useTerminalBufferStore()
-      for (const [sid, buffer] of bufferStore.buffers.entries()) {
-        if (buffer.sessionStopped) continue
-        bufferStore.subscribeSession(sid).catch((e) => {
-          logger.warn(`[useMobileConnection] Resubscribe ${sid} failed:`, e)
-        })
-      }
+      // 终端订阅由页面驱动（进入终端页 / 会话恢复运行时 fresh subscribe）：
+      // 后台会话不建连、不常拉（票 05 生命周期策略）；断开期间的输出由桌面
+      // 环窗口保留，重进终端页时重订阅回放补齐（投递由 TerminalView 的
+      // isConnected watch 承担）
     },
     onAuthSuccess: () => {
       logger.log('[MobileConnection] Auth success')
@@ -318,7 +313,7 @@ async function init() {
       logger.log('[MobileConnection] SyncSessionCreated:', data.session.id, 'source:', data.source_device)
       // 数量限制：运行中会话已达上限时，增量同步的新运行会话直接丢弃（占位槽位不增加）
       const session = data.session
-      const isRunning = session.status === 'running' || session.status === 'waiting_input'
+      const isRunning = session.status === 'running' || session.status === 'waitingInput'
       if (isRunning && runningSessionCount() >= maxOpenTerminalsLimit()) {
         logger.warn(`[MobileConnection] Session limit (${maxOpenTerminalsLimit()}) reached, drop synced session ${session.id}`)
         return
@@ -494,6 +489,16 @@ async function init() {
       connectionStatus.value = 'disconnected'
       connectionError.value = 'mobile.connection.noCredentials'
     }
+  })
+
+  // 监听事件通道就绪（票 03）：session-control 极简认证首帧发出后 Rust 发射
+  // 事件不重放：重连/自愈重建期间的变化只能靠这一次 HTTP 全量拉取补齐；
+  // 消费端按 id 去重 / 状态收敛（如 onSyncSessionCreated 的 `!find` 守卫），无需额外去重
+  await listen('ws_event_channel_ready', () => {
+    logger.log('[MobileConnection] Event channel ready, reconciling active sessions')
+    loadActiveSessions().catch((e) => {
+      logger.error('[MobileConnection] Reconcile on event channel ready failed:', e)
+    })
   })
 
   // 监听重连失败事件
@@ -881,9 +886,9 @@ export async function loadSessionConfigs(): Promise<any[]> {
 
 // ==================== 终端数量限制（外观设置 maxOpenTerminals） ====================
 
-/** 当前占用槽位的运行中会话数（running / waiting_input 计入，stopped 为历史记录不占槽位） */
+/** 当前占用槽位的运行中会话数（running / waitingInput 计入，stopped 为历史记录不占槽位） */
 function runningSessionCount(): number {
-  return activeSessions.value.filter(s => s.status === 'running' || s.status === 'waiting_input').length
+  return activeSessions.value.filter(s => s.status === 'running' || s.status === 'waitingInput').length
 }
 
 /** 读取「最大可打开终端数量」设置（1-20，非法值回退默认） */
@@ -911,7 +916,7 @@ export async function loadActiveSessions(): Promise<any[]> {
     const kept: any[] = []
     let runningKept = 0
     for (const s of sessions) {
-      const isRunning = s.status === 'running' || s.status === 'waiting_input'
+      const isRunning = s.status === 'running' || s.status === 'waitingInput'
       if (isRunning && runningKept >= limit) continue
       if (isRunning) runningKept++
       kept.push(s)
@@ -950,11 +955,8 @@ export async function startSession(
   const result = await httpStartSession(configId, size)
   if (result.code === 0 && result.data) {
     const sessionId = result.data.sessionId
-    // 会话启动即订阅（用户需求 1：不再等进入终端页才订阅；订阅由 Rust 管理）
-    const bufferStore = useTerminalBufferStore()
-    bufferStore.subscribeSession(sessionId).catch((e) => {
-      logger.warn(`[MobileConnection] Subscribe on start ${sessionId} failed:`, e)
-    })
+    // 终端订阅由页面驱动（进入终端页时 fresh subscribe 回放环窗口）：
+    // 不在会话启动时建连（后台常拉违例；输出由桌面环窗口保留，重播覆盖历史）
     return { sessionId, session: undefined }
   }
   throw new Error(result.message || 'Failed to start session')

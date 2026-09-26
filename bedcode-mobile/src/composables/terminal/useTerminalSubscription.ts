@@ -5,12 +5,14 @@
  *
  * 1. **订阅重试**：订阅失败（弱网/桌面端重启/超时）时终端会静默空白且无重试路径，
  *    这里做 toast 提示 + 3s 定时重试，成功或页面卸载/断连后停止。
- * 2. **历史渲染就绪门控**：加载遮罩放行门控——等「历史输出渲染完成」再撤遮罩，
- *    避免用户看到内容逐批蹦出的闪烁过程。三条件 AND（全部满足才放行）：
- *      ① 本地缓存分片回放完成（registerRealtimeHandler 的 replayDone）
- *      ② 服务端历史段结束：phase 到达 'live'（history_end 帧落地）。
- *         'connecting'/'auth'/'history' 为中间态继续等待——防止首次订阅失败重试
- *         期间遮罩提前撤除、历史随后才逐批蹦出
+ * 2. **渲染就绪门控**：加载遮罩放行门控——等「订阅 + 回放就绪」再撤遮罩，
+ *    避免用户看到内容逐批蹦出的闪烁过程。两条件（票 05：无独立历史拼接，
+ *    回放随订阅流直达）：
+ *      ① 本地回放完成（registerRealtimeHandler 的 replayDone，新协议立即触发）
+ *      ② 服务端就绪：phase 到达 'live'（**收到 subscribed**，票 05 门控信号——
+ *         回放环窗口与实时同一条流，无 history_end 边界）。
+ *         'connecting'/'auth' 为中间态继续等待——防止首次订阅失败重试期间遮罩
+ *         提前撤除、回放随后才逐批蹦出
  *      ③ 首次 fit 校准生效（tryInitialFit 成功或重试放弃）
  *    任一环节卡死（订阅失败/会话停止/极端慢）由 HISTORY_SETTLE_TIMEOUT_MS 兜底。
  */
@@ -20,7 +22,7 @@ import { logger } from '@/utils/frontendLogger'
 import { isMockSession } from '@/composables/useMockTerminal'
 import { useToast } from '@/composables/useToast'
 import i18n from '@/locales'
-import { useTerminalBufferStore, type SubscribeResultInfo } from '@/stores/terminalBuffer'
+import { useTerminalBufferStore } from '@/stores/terminalBuffer'
 
 /** 历史渲染门控整体超时兜底（订阅失败/会话停止/无输出会话时不悬挂遮罩） */
 export const HISTORY_SETTLE_TIMEOUT_MS = 8000
@@ -33,8 +35,8 @@ export type HistoryGateResult = 'settled' | 'timeout'
 export interface TerminalSubscriptionDeps {
   /** 终端缓冲 store（Pinia 单例，由组件经 useTerminalBuffer 注入） */
   bufferStore: ReturnType<typeof useTerminalBufferStore>
-  /** 会话订阅入口（幂等，失败返回 null） */
-  subscribeSession: (sessionId: string) => Promise<SubscribeResultInfo | null>
+  /** 会话订阅入口（fresh subscribe 语义；订阅确认经事件异步到达） */
+  subscribeSession: (sessionId: string) => Promise<null>
 }
 
 export function useTerminalSubscription(ctx: TerminalKernelContext, deps: TerminalSubscriptionDeps) {
@@ -78,9 +80,9 @@ export function useTerminalSubscription(ctx: TerminalKernelContext, deps: Termin
   }
 
   /**
-   * 服务端历史段监听：phase 到达 'live' 即放行；中间态继续等待；
-   * 连续 HISTORY_SETTLE_TIMEOUT_MS 未到 live（订阅失败重试中/会话停止/
-   * 无输出会话）强制放行，避免遮罩悬挂。watch 随组件作用域自动清理，
+   * 订阅就绪监听：phase 到达 'live'（收 subscribed，票 05 门控信号）即放行；
+   * 中间态继续等待；连续 HISTORY_SETTLE_TIMEOUT_MS 未到 live（订阅失败重试中/
+   * 会话停止/无输出会话）强制放行，避免遮罩悬挂。watch 随组件作用域自动清理，
    * 兜底定时器由 dispose 清理
    */
   function armServerHistoryWatcher() {
@@ -106,8 +108,8 @@ export function useTerminalSubscription(ctx: TerminalKernelContext, deps: Termin
   }
 
   /**
-   * 立即放行「服务端历史段」条件：mock 会话无服务端历史段、非活跃/未连接时本次
-   * 挂载不会发起订阅，都不存在待等的 history_end，须立即放行（否则只能等超时兜底）
+   * 立即放行「订阅就绪」条件：mock 会话无服务端就绪信号、非活跃/未连接时本次
+   * 挂载不会发起订阅，都不存在待等的 subscribed，须立即放行（否则只能等超时兜底）
    */
   function settleServerHistoryNow() {
     settleServerHistory?.()
@@ -167,18 +169,19 @@ export function useTerminalSubscription(ctx: TerminalKernelContext, deps: Termin
   async function subscribeWithRetry() {
     const sid = ctx.getSessionId()
     if (!sid || isMockSession(sid)) return
-    const result = await subscribeSession(sid)
+    // fresh subscribe（重播回放）：无论信念如何都触发一次；已订阅时 Rust
+    // 重播后事件/对账收敛，未订阅时可立即建立链路
+    await subscribeSession(sid)
     const buffer = bufferStore.getBuffer(sid)
 
     // 已订阅（成功或此前已订阅）：复位重试状态
-    if (result || buffer?.subscribed) {
+    if (buffer?.subscribed) {
       subscribeRetryToasted = false
       return
     }
     // 订阅请求仍在途（防重早退）：不提示，稍后重试
     if (buffer?.subscribing) {
-      clearSubscribeRetry()
-      subscribeRetryTimer = setTimeout(subscribeWithRetry, SUBSCRIBE_RETRY_INTERVAL_MS)
+      scheduleSubscribeRetry(sid)
       return
     }
 
@@ -187,11 +190,21 @@ export function useTerminalSubscription(ctx: TerminalKernelContext, deps: Termin
       subscribeRetryToasted = true
       toast.error(i18n.global.t('mobile.terminal.subscribeFailed'))
     }
+    scheduleSubscribeRetry(sid)
+  }
+
+  /**
+   * 定时重试（失败 / 订阅在途两路径共用）：到期重试前先过订阅收敛守卫——
+   * 一旦 subscribed 事件/对账已到达（信念置真），不再重播（fresh subscribe
+   * 会触发环窗口重播 + 清屏重刷，页面已渲染后再刷一次即闪烁）
+   */
+  function scheduleSubscribeRetry(sid: string) {
     clearSubscribeRetry()
     subscribeRetryTimer = setTimeout(async () => {
       subscribeRetryTimer = null
       if (disposed) return
       if (!ctx.isConnected() || !ctx.isSessionActive()) return
+      if (bufferStore.getBuffer(sid)?.subscribed) return
       await subscribeWithRetry()
     }, SUBSCRIBE_RETRY_INTERVAL_MS)
   }

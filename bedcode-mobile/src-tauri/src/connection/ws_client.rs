@@ -6,8 +6,8 @@
 use crate::connection::MessageHandler;
 use crate::connection::{
     heartbeat::HeartbeatManager, io::IoManager, lifecycle::LifecycleManager, reconnect::ReconnectManager,
-    ws_connection::WsConnectionManager, ConnectionStatus, IoEvent, RequestResponseManager, WsClientConfig,
-    WsClientEvent,
+    ws_connection::WsConnectionManager, ConnectionStatus, IoEvent, MatchOutcome, RequestResponseManager,
+    WsClientConfig, WsClientEvent,
 };
 use crate::model::message::Message;
 use crate::Result;
@@ -19,8 +19,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::system::constants::connection::{
     BROADCAST_CHANNEL_CAPACITY, DISCONNECT_TASK_TIMEOUT_SECS, EVENT_FORWARDER_POLL_INTERVAL_MS,
-    LINK_CRYPTO_CHANNEL_EVENT, LOG_PREVIEW_MAX_LEN, PLACEHOLDER_CLIENT_ADDR,
-    RECEIVER_POLL_INTERVAL_MS, SENDER_POLL_INTERVAL_MS,
+    LOG_PREVIEW_MAX_LEN, PLACEHOLDER_CLIENT_ADDR, RECEIVER_POLL_INTERVAL_MS, SENDER_POLL_INTERVAL_MS,
 };
 
 /// WebSocket 客户端
@@ -43,9 +42,6 @@ pub struct WsClient {
     tasks: RwLock<ClientTasks>,
     /// 事件广播器（推送消息、连接状态等）
     event_tx: broadcast::Sender<WsClientEvent>,
-    /// 链路加密会话密码（issue 09）：None = 明文连接；协商成功后安装，
-    /// 收发双向帧经此加解密（心跳 Ping/Pong 控制帧除外）
-    link_crypto: Arc<RwLock<Option<bedcode_link_crypto::ClientWsCrypto>>>,
 }
 
 #[derive(Debug, Default)]
@@ -80,7 +76,6 @@ impl WsClient {
             running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             tasks: RwLock::new(ClientTasks::default()),
             event_tx,
-            link_crypto: Arc::new(RwLock::new(None)),
         })
     }
 
@@ -132,20 +127,6 @@ impl WsClient {
         self.request_manager.clone()
     }
 
-    /// 安装链路加密会话密码（issue 09：认证回执派生成功后调用）
-    ///
-    /// 安装后收发双向帧立即进入加密模式；桌面端在发出 auth 回执后同样注册
-    /// 密码表，两端切换点对齐。解密失败按 fail-closed 处理（断连）。
-    pub async fn install_link_crypto(&self, crypto: bedcode_link_crypto::ClientWsCrypto) {
-        *self.link_crypto.write().await = Some(crypto);
-        info!("[WsClient] Link encryption installed, frames encrypted from now on");
-    }
-
-    /// 是否已处于加密模式
-    pub async fn is_link_encrypted(&self) -> bool {
-        self.link_crypto.read().await.is_some()
-    }
-
     pub async fn connect(self: &Arc<Self>) -> Result<()> {
         info!("[WsClient] Starting connection to {}", self.config.url());
 
@@ -180,7 +161,6 @@ impl WsClient {
         let request_manager = self.request_manager.clone();
         let event_tx = self.event_tx.clone();
         let heartbeat = self.heartbeat.clone();
-        let link_crypto = self.link_crypto.clone();
 
         let (write, read) = stream.split();
         // write（SplitSink）仅由 sender 任务独占访问：receiver 的 Ping/Pong 回复
@@ -208,31 +188,20 @@ impl WsClient {
                         msg = rx.next() => {
                             match msg {
                                 Some(Ok(WsMsg::Text(text))) => {
-                                    // 链路加密（issue 09）：已安装密码表则先解密。
-                                    // 解密失败按 fail-closed 处理（断连）——明文续跑
-                                    // 会把信封 JSON 泄漏给上层且破坏序号纪律
-                                    let text = {
-                                        let mut guard = link_crypto.write().await;
-                                        if let Some(crypto) = guard.as_mut() {
-                                            match crypto.open_text(LINK_CRYPTO_CHANNEL_EVENT, &text) {
-                                                Ok(plain) => plain,
-                                                Err(e) => {
-                                                    error!("[WsClient] Link decrypt failed, closing: {}", e);
-                                                    let _ = event_tx.send(WsClientEvent::Error {
-                                                        message: format!("LINK_CRYPTO_DECRYPT_FAILED: {e}"),
-                                                    });
-                                                    break;
-                                                }
-                                            }
-                                        } else {
-                                            text
-                                        }
-                                    };
                                     debug!("[WsClient] <<< RECV: {}...", &text[..text.len().min(LOG_PREVIEW_MAX_LEN)]);
 
-                                    // 1. 尝试匹配 pending 请求
+                                    // 1. 尝试匹配 pending 请求：三态裁决（见 request_response.rs）
+                                    //    · Matched = 响应已按 id 投递，无需处理
+                                    //    · Push = 可解析的业务推送帧 → 广播 + 交给 handler
+                                    //    · Unroutable = 无法解析为业务 Message 的帧（插件端点事件帧/
+                                    //      畸形帧）→ **同样交 handler**——handler 内 PluginEventRouter
+                                    //      正是在此闭环；匹配层吞掉 = 事件帧到不了路由（票 03 必红）
                                     match request_manager.try_match(WsMsg::Text(text.clone())).await {
-                                        Some(_) => {
+                                        MatchOutcome::Matched => {
+                                            // 已匹配 pending 请求，无需处理
+                                            debug!("[WsClient] Matched pending request");
+                                        }
+                                        MatchOutcome::Push(_) => {
                                             // 未匹配，是推送消息，交给 handler 处理
                                             debug!("[WsClient] Push message, handler is_some: {}", handler.is_some());
                                             if let Err(e) = event_tx.send(WsClientEvent::PushMessage {
@@ -260,32 +229,29 @@ impl WsClient {
                                                 warn!("[WsClient] No handler for push message!");
                                             }
                                         }
-                                        None => {
-                                            // 已匹配 pending 请求，无需处理
-                                            debug!("[WsClient] Matched pending request");
+                                        MatchOutcome::Unroutable => {
+                                            // 无法解析为业务 Message 的帧（插件端点事件帧 / 畸形帧）：
+                                            // 经 handler 侦察路由（PluginEventRouter 事件帧在此闭环；
+                                            // 其余按原样留痕丢弃）。不发 PushMessage——插件帧不进旧广播面
+                                            debug!(
+                                                "[WsClient] Undecodable frame (plugin event?), handler is_some: {}",
+                                                handler.is_some()
+                                            );
+                                            if let Some(h) = &handler {
+                                                h.handle(
+                                                    WsMsg::Text(text),
+                                                    PLACEHOLDER_CLIENT_ADDR.parse().unwrap(),
+                                                    None,
+                                                    None,
+                                                );
+                                            } else {
+                                                warn!("[WsClient] No handler for undecodable frame!");
+                                            }
                                         }
                                     }
                                 }
                                 Some(Ok(WsMsg::Binary(data))) => {
                                     debug!("[WsClient] <<< RECV Binary: {} bytes", data.len());
-                                    // 链路加密（issue 09）：同文本帧，fail-closed
-                                    let data = {
-                                        let mut guard = link_crypto.write().await;
-                                        if let Some(crypto) = guard.as_mut() {
-                                            match crypto.open_binary(LINK_CRYPTO_CHANNEL_EVENT, &data) {
-                                                Ok(frame) => frame,
-                                                Err(e) => {
-                                                    error!("[WsClient] Link decrypt(binary) failed, closing: {}", e);
-                                                    let _ = event_tx.send(WsClientEvent::Error {
-                                                        message: format!("LINK_CRYPTO_DECRYPT_FAILED: {e}"),
-                                                    });
-                                                    break;
-                                                }
-                                            }
-                                        } else {
-                                            data
-                                        }
-                                    };
                                     // Binary 消息交给 handler 处理
                                     if let Some(h) = &handler {
                                         h.handle(
@@ -341,7 +307,6 @@ impl WsClient {
         let write_for_sender = write.clone();
         let sender_handle = {
             let running = running.clone();
-            let link_crypto = self.link_crypto.clone();
 
             tokio::spawn(async move {
                 let mut rx = rx;
@@ -351,21 +316,6 @@ impl WsClient {
                         msg = rx.recv() => {
                             match msg {
                                 Some(WsMsg::Text(text)) => {
-                                    // 链路加密（issue 09）：已安装密码表则先加密再写 socket
-                                    let text = {
-                                        let mut guard = link_crypto.write().await;
-                                        if let Some(crypto) = guard.as_mut() {
-                                            match crypto.seal_text(LINK_CRYPTO_CHANNEL_EVENT, &text) {
-                                                Ok(sealed) => sealed,
-                                                Err(e) => {
-                                                    error!("[WsClient] Link encrypt failed, dropping frame: {}", e);
-                                                    continue;
-                                                }
-                                            }
-                                        } else {
-                                            text
-                                        }
-                                    };
                                     debug!("[WsClient] >>> SEND: {}...", &text[..text.len().min(LOG_PREVIEW_MAX_LEN)]);
                                     let mut write = write_for_sender.lock().await;
                                     if let Err(e) = write.send(WsMsg::Text(text)).await {
@@ -374,21 +324,6 @@ impl WsClient {
                                     }
                                 }
                                 Some(WsMsg::Binary(data)) => {
-                                    // 链路加密（issue 09）：同文本帧
-                                    let data = {
-                                        let mut guard = link_crypto.write().await;
-                                        if let Some(crypto) = guard.as_mut() {
-                                            match crypto.seal_binary(LINK_CRYPTO_CHANNEL_EVENT, &data) {
-                                                Ok(frame) => frame,
-                                                Err(e) => {
-                                                    error!("[WsClient] Link encrypt(binary) failed, dropping frame: {}", e);
-                                                    continue;
-                                                }
-                                            }
-                                        } else {
-                                            data
-                                        }
-                                    };
                                     let mut write = write_for_sender.lock().await;
                                     if let Err(e) = write.send(WsMsg::Binary(data)).await {
                                         error!("[WsClient] Send binary error: {}", e);

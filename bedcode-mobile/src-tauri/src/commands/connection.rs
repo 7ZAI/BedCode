@@ -144,9 +144,9 @@ pub async fn get_ws_token() -> Result<String> {
     Ok(get_global_token())
 }
 
-/// 获取常驻事件 WS 的完整 URL（`ws://{address}:{port}/ws/event`）
+/// 获取常驻事件 WS 的完整 URL（`ws://{address}:{port}/ws/plugin/com.bedcode.terminal-session/session-control`）
 ///
-/// 04 事件 WS 建连地址：目标设备未保存（未 connect）时报错。
+/// 事件通道建连地址（票 03 自 `/ws/event` 迁往桌面插件端点）：目标设备未保存（未 connect）时报错。
 #[tauri::command]
 pub async fn get_ws_url() -> Result<String> {
     let conn = get_connection_manager();
@@ -158,7 +158,7 @@ pub async fn get_ws_url() -> Result<String> {
         "ws://{}:{}{}",
         target.address,
         target.port,
-        crate::system::constants::connection::WS_EVENT_PATH
+        crate::system::constants::connection::WS_PLUGIN_SESSION_CONTROL_PATH
     ))
 }
 
@@ -175,22 +175,21 @@ pub fn ws_set_token(token: String) -> Result<()> {
 
 /// 推送链路加密运行期状态到 Rust 侧（前端设置变更/配对刷新/启动时调用）
 ///
-/// 常驻事件 WS 建连在 Rust 侧，而开关与 pin 存于 WebView localStorage——
-/// 本命令是两侧的桥。缺省全关：未推送前事件 WS 保持明文。
+/// HTTP 信封加密裁决在 Rust 侧（http_proxy），而开关与 pin 存于 WebView
+/// localStorage——本命令是两侧的桥。缺省全关：未推送前 HTTP 载荷保持明文。
 /// `encrypt_http` 为可选参数：旧前端（HTTP 代理收束前）不推送，默认 true
-/// （与事件通道一致，主开关关着时无效）；新前端显式推送。
+/// （主开关关着时无效）；新前端显式推送。WS 通道加密已随桌面端插件端点
+/// 帧加密退役，命令不再接收 ws 开关。
 #[tauri::command]
 pub fn set_link_crypto_context(
     enabled: bool,
     strict_mode: bool,
-    encrypt_ws_event: bool,
     encrypt_http: Option<bool>,
     kd_public_b64: Option<String>,
 ) -> Result<()> {
     crate::state::set_link_crypto_context(crate::state::LinkCryptoContext {
         enabled,
         strict_mode,
-        encrypt_ws_event,
         encrypt_http: encrypt_http.unwrap_or(true),
         kd_public_b64,
     });

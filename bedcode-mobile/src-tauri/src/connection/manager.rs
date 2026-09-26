@@ -12,18 +12,18 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::{broadcast, RwLock};
 use tracing;
 
-use crate::connection::request::AuthRequest;
 use crate::connection::{ClientDefaultMessageHandler, WsClient, WsClientConfig, WsClientEvent};
 use crate::model::message::Message;
 use crate::state::get_global_token;
 use crate::system::error_boundary::spawn_with_error_boundary;
 use crate::Result;
 
-use crate::router::{AuthHandler, SyncHandler, SystemHandler};
+use crate::handler::PluginEventRouter;
+use crate::router::{AuthHandler, SystemHandler};
 use crate::router::{ClientBusinessRouter, ClientRouteContext, MobileEvent};
 
 use crate::system::constants::connection::{
-    BROADCAST_CHANNEL_CAPACITY, CONNECTION_STABILIZE_DELAY_MS, LOG_PREVIEW_MAX_LEN, WS_EVENT_PATH,
+    BROADCAST_CHANNEL_CAPACITY, CONNECTION_STABILIZE_DELAY_MS, LOG_PREVIEW_MAX_LEN, WS_PLUGIN_SESSION_CONTROL_PATH,
 };
 use crate::system::constants::reconnect::{DEFAULT_MAX_RETRIES, DEFAULT_RETRY_DELAYS_MS};
 
@@ -51,13 +51,39 @@ fn is_disconnect_error(error: &crate::AppError) -> bool {
     }
 }
 
+/// 插件端点认证首帧 `type`（票 03：极简认证 `{"type":"auth","token":"<jwt>"}`，
+/// **不是** `Message::Auth` 信封——插件端点只认这一个形状）
+pub const EVENT_CHANNEL_AUTH_TYPE: &str = "auth";
+
+/// 事件通道就绪（前端事件名）：认证首帧发出后发射，前端据此触发一次对账
+/// （事件不重放，重连期间的变化只能靠 HTTP 全量拉取补齐）
+pub const EVENT_CHANNEL_READY_EVENT: &str = "ws_event_channel_ready";
+
+/// 取事件通道的 JWT：全局 token 优先，回落认证凭据的 session_token
+///
+/// 两处同源（HTTP 认证成功时一并写入，见 `auth::manager::apply_auth_success`）；
+/// 全局 token 可能在前端冷启动时先落地，故按「全局优先 + 凭据兜底」取值。
+async fn event_channel_token() -> String {
+    let global = get_global_token();
+    if !global.is_empty() {
+        return global;
+    }
+    crate::state::get_auth_manager()
+        .get_credentials()
+        .await
+        .map(|c| c.session_token)
+        .unwrap_or_default()
+}
+
 /// 构建业务路由器（connect / reconnect 共用）
 fn build_router(event_tx: broadcast::Sender<MobileEvent>) -> Result<ClientBusinessRouter> {
     let ctx = ClientRouteContext::new(event_tx);
     ClientBusinessRouter::builder()
         .context(ctx)
         .route("Auth", Arc::new(AuthHandler))
-        .route("SyncData", Arc::new(SyncHandler))
+        // 票 03/04：`SyncData` 路由随 `handler/sync.rs` 退役（事件改走插件事件帧，
+        // 见 `handler::PluginEventRouter`）；信封面退役（票 04）后保留的变体仅服务
+        // `ws_protocol_integration` 的 legacy 场景（WS 首消息 JWT 认证 / 请求-响应）
         .route("ServerClosed", Arc::new(SystemHandler))
         .route("Error", Arc::new(SystemHandler))
         .route("Ack", Arc::new(SystemHandler))
@@ -227,8 +253,9 @@ impl ConnectionManager {
         self.set_target(address.clone(), port, name).await;
 
         *self.status.write().await = ConnectionStatus::Connecting;
-        // 旧 WS 配对/终端路由已下线，测试辅助路径指向事件 WS（mock 不按 path 分发）
-        self.establish_ws_client(&address, port, WS_EVENT_PATH, None).await?;
+        // 旧 WS 配对/终端路由已下线，测试辅助路径指向事件 WS（插件端点，mock 不按 path 分发）
+        self.establish_ws_client(&address, port, WS_PLUGIN_SESSION_CONTROL_PATH, None, None)
+            .await?;
         *self.status.write().await = ConnectionStatus::Connected;
 
         // 短暂等待连接稳定
@@ -237,17 +264,18 @@ impl ConnectionManager {
         Ok(())
     }
 
-    /// 建立 WS 客户端（测试路径与 04 事件 WS 共用）
+    /// 建立 WS 客户端（测试路径与事件 WS 共用）
     ///
-    /// 归拢 client 构建 + build_router + 断连监控三件事：04 复用同一 helper
-    /// 建常驻事件 WS（`WS_EVENT_PATH`），WS 首消息 JWT 认证语义由桌面端
-    /// 02 保证（裸连 10s 被关，故生产路径 04 前不建无认证 WS）。
+    /// 归拢 client 构建 + 事件路由 + build_router + 断连监控四件事：事件 WS
+    /// 复用同一 helper 建 `session-control` 常驻连接（`plugin_event = Some`），
+    /// 插件事件帧经 [`PluginEventRouter`] 闭环，其余帧走既有信封路由。
     async fn establish_ws_client(
         &self,
         address: &str,
         port: u16,
         path: &str,
         app_handle: Option<AppHandle>,
+        plugin_event: Option<Arc<PluginEventRouter>>,
     ) -> Result<Arc<WsClient>> {
         let config = WsClientConfig::new(address, port).with_path(path);
         let client = WsClient::new(config);
@@ -255,11 +283,12 @@ impl ConnectionManager {
         // 构建路由器
         let router = build_router(self.event_tx.clone())?;
 
-        client
-            .set_handler(Arc::new(
-                ClientDefaultMessageHandler::new().with_router(Arc::new(router)),
-            ))
-            .await;
+        let handler = ClientDefaultMessageHandler::new().with_router(Arc::new(router));
+        let handler = match plugin_event {
+            Some(events) => handler.with_plugin_event(events),
+            None => handler,
+        };
+        client.set_handler(Arc::new(handler)).await;
 
         // 直接 await 连接
         client.connect().await?;
@@ -274,12 +303,11 @@ impl ConnectionManager {
         Ok(client)
     }
 
-    /// 建立常驻事件 WS（04 契口③）：事件路径建连 + WS 首消息 JWT 认证
+    /// 建立常驻事件 WS：`session-control` 插件端点建连 + WS 首帧极简 JWT 认证
     ///
-    /// 返回的 client 已存入 `self.client`——认证成功后该连接天然成为
-    /// SyncData 收信道，且会话/配置/文件请求的 send/send_and_wait 恢复可用
-    /// （消除 03 过渡期「Not connected」回归）。`app_handle=Some` 时自动挂
-    /// 断连监控（意外断开 → ws_unexpected_disconnect + 桌面 peer 清理）。
+    /// 返回的 client 已存入 `self.client`——认证首帧发出即标记通道就绪并发射
+    /// `ws_event_channel_ready`（前端触发对账，事件不重放）。`app_handle=Some`
+    /// 时自动挂断连监控（意外断开 → ws_unexpected_disconnect + 桌面 peer 清理）。
     /// 目标未保存（未 connect）时拒绝建连。
     pub async fn establish_event_ws(&self, app_handle: Option<AppHandle>) -> Result<Arc<WsClient>> {
         // 目标不存在说明尚未 connect，无建连地址
@@ -290,91 +318,50 @@ impl ConnectionManager {
             .clone()
             .ok_or_else(|| crate::AppError::WebSocket("No target device".to_string()))?;
 
+        let plugin_event = PluginEventRouter::new(self.event_tx.clone());
         let client = self
-            .establish_ws_client(&target.address, target.port, WS_EVENT_PATH, app_handle)
+            .establish_ws_client(
+                &target.address,
+                target.port,
+                WS_PLUGIN_SESSION_CONTROL_PATH,
+                app_handle.clone(),
+                Some(plugin_event.clone()),
+            )
             .await?;
 
-        // WS 首消息 JWT 认证：凭据对（pairing_id/fingerprint/session_token）
-        // 由 HTTP 认证写入；缺失时以空串发送，让桌面端拒绝（可观测而非静默）
-        let creds = crate::state::get_auth_manager()
-            .get_credentials()
-            .await
-            .unwrap_or(crate::auth::AuthCredentials {
-                pairing_id: String::new(),
-                fingerprint: String::new(),
-                session_token: String::new(),
-            });
-
-        // 链路加密协商（issue 09）：已 pin 且主开关+事件子开关开 → 首消息附带
-        // 临时公钥提案，并等待认证响应完成派生；严格模式下失败即断连报错，
-        // 非 strict 回退明文（与 TS 侧语义一致）
-        let ctx = crate::state::get_link_crypto_context();
-        let negotiate = ctx.enabled && ctx.encrypt_ws_event && ctx.kd_public_b64.is_some();
-        let (message, ephemeral) = if negotiate {
-            use base64::Engine as _;
-            let (m_priv, m_pub) = bedcode_link_crypto::generate_ephemeral();
-            let proposal = crate::enums::auth::CryptoProposal {
-                v: 1,
-                ek: base64::engine::general_purpose::STANDARD.encode(m_pub),
-            };
-            (
-                AuthRequest::reauthenticate_with_crypto(
-                    &creds.pairing_id,
-                    &creds.fingerprint,
-                    &creds.session_token,
-                    Some(proposal.clone()),
-                ),
-                Some((m_priv, proposal.ek)),
-            )
-        } else {
-            (
-                AuthRequest::reauthenticate(&creds.pairing_id, &creds.fingerprint, &creds.session_token),
-                None,
-            )
-        };
-
-        match ephemeral {
-            Some((m_priv, m_ek_b64)) => {
-                // 提案路径：等认证响应拿服务端临时公钥回执（明文），随后装密码表。
-                // 语义分层：
-                // · 桌面未回执（拒绝/旧版）→ 服务端仍明文：非 strict 明文续跑，
-                //   strict 断连报错（spec：strict 不允许明文旁路）
-                // · 回执存在但派生/安装失败 → 必须断连：桌面端已注册密码表，
-                //   两端加密意愿不一致的半协商状态比纯明文更危险
-                let timeout = std::time::Duration::from_millis(EVENT_WS_AUTH_TIMEOUT_MS);
-                let response = client.send_and_wait(&message, timeout).await?;
-
-                match extract_crypto_echo(&response) {
-                    Some(echo_ek) => {
-                        if let Err(e) =
-                            install_event_crypto(&client, ctx.clone(), m_priv, m_ek_b64, echo_ek).await
-                        {
-                            client.disconnect().await;
-                            return Err(e);
-                        }
-                        Ok(client)
-                    }
-                    None => {
-                        if ctx.strict_mode {
-                            client.disconnect().await;
-                            Err(crate::AppError::WebSocket(
-                                "link crypto strict mode: desktop refused negotiation".to_string(),
-                            ))
-                        } else {
-                            tracing::warn!(
-                                "[EventWs] desktop refused link crypto, staying plaintext (non-strict)"
-                            );
-                            Ok(client)
-                        }
-                    }
-                }
-            }
-            None => {
-                // 无提案：现状路径（fire-and-forget，默认关时与旧行为一致）
-                client.send(&message).await?;
-                Ok(client)
-            }
+        // 极简认证首帧（票 03）：`{"type":"auth","token":"<jwt>"}`——
+        // 不再发 `Message::Auth` 信封、不携带链路加密提案、**不等待回执**
+        // （插件端点无认证回包；认证失败由宿主 close 4001 显性表达）。
+        let token = event_channel_token().await;
+        if token.is_empty() {
+            // 无 JWT 的裸连必被宿主拒绝（4001）：显性失败优于建一条注定被关的
+            // 连接——监督任务据此 warn 并等下一次认证成功再重建。
+            let _ = client.disconnect().await;
+            return Err(crate::AppError::Auth(
+                "event channel: no JWT available (authenticate first)".to_string(),
+            ));
         }
+        let frame = serde_json::json!({ "type": EVENT_CHANNEL_AUTH_TYPE, "token": token });
+        client.send_text(&frame.to_string()).await?;
+        // 认证门置位后事件帧才被路由（认证前帧丢弃，防御畸形服务端）
+        plugin_event.mark_authenticated();
+
+        // 通道就绪 → 前端对账：事件**不重放**，重连期间的变化只能靠这一次
+        // HTTP 全量拉取补齐（spec §6.2 强制）
+        if let Some(ah) = &app_handle {
+            let _ = ah.emit(
+                EVENT_CHANNEL_READY_EVENT,
+                serde_json::json!({ "endpoint": "session-control" }),
+            );
+        }
+
+        tracing::info!(
+            "[EventWs] session-control channel ready at {}:{} (jwt auth sent, len {})",
+            target.address,
+            target.port,
+            token.len()
+        );
+        Ok(client)
     }
 
     /// 创建连接断开监控任务（WS client 建连后调用）
@@ -736,47 +723,4 @@ impl Clone for ConnectionManager {
             is_reconnecting: self.is_reconnecting.clone(),
         }
     }
-}
-
-// ==================== 事件 WS 链路加密（issue 09） ====================
-
-/// 认证响应等待上限：桌面端 JWT 验签为同步路径，毫秒级返回；10s 已覆盖
-/// 极端弱网 RTT，超时按协商失败处理（strict 断连 / 非 strict 明文）
-pub const EVENT_WS_AUTH_TIMEOUT_MS: u64 = 10_000;
-
-/// 从认证响应中提取服务端临时公钥回执（auth 响应 payload.crypto.ek）
-fn extract_crypto_echo(response: &Message) -> Option<String> {
-    if let Message::Auth { payload, .. } = response {
-        return payload.crypto.as_ref().map(|c| c.ek.clone());
-    }
-    None
-}
-
-/// 用回执完成客户端派生并安装到连接上
-///
-/// 仅做派生与安装；失败语义（断连）由调用方处理——桌面端此时已注册密码表，
-/// 本地装表失败必须断连（半协商状态比纯明文更危险）。
-async fn install_event_crypto(
-    client: &Arc<WsClient>,
-    ctx: crate::state::LinkCryptoContext,
-    m_priv: [u8; 32],
-    m_ek_b64: String,
-    echo_ek: String,
-) -> Result<()> {
-    use base64::Engine as _;
-
-    let kd_public_b64 = ctx.kd_public_b64.ok_or_else(|| {
-        crate::AppError::WebSocket("link crypto context missing pin".to_string())
-    })?;
-    let kd_public: [u8; 32] = base64::engine::general_purpose::STANDARD
-        .decode(&kd_public_b64)
-        .map_err(|e| crate::AppError::WebSocket(format!("pin b64 decode failed: {e}")))?
-        .try_into()
-        .map_err(|v: Vec<u8>| {
-            crate::AppError::WebSocket(format!("pin length mismatch: expected 32, got {}", v.len()))
-        })?;
-    let crypto = bedcode_link_crypto::ClientWsCrypto::derive(&m_priv, &m_ek_b64, &echo_ek, &kd_public)
-        .map_err(|e| crate::AppError::WebSocket(format!("link crypto derive failed: {e}")))?;
-    client.install_link_crypto(crypto).await;
-    Ok(())
 }

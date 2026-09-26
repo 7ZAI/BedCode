@@ -22,7 +22,7 @@
 //! 与桌面端差异：
 //! - WasmHostContext 无 session_manager 和 permission
 //! - 新增 host_notify（移动端系统通知）
-//! - host_terminal_send 通过 WebSocket 转发到桌面端
+//! - host_terminal_send 经 HTTP 直达桌面端（票 04：控制面迁 HTTP，旧 WS 信封退役）
 //! - 无 session/plugin-database/params/api-call/timer/process 接口
 //! - 新增 host_mark_plugin_error（插件生命周期失败上报，置 Error + 持久化未启用）
 

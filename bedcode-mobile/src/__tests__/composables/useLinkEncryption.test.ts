@@ -1,11 +1,13 @@
 /**
  * useLinkEncryption 单元测试（issue 08）
  *
- * 覆盖配置持久化往返、通道子开关粒度判定与 pin 依赖：
- * isChannelEncryptionActive = 主开关 ∧ 对应通道子开关 ∧ 已 pin。
+ * 覆盖配置持久化往返、HTTP 通道子开关粒度判定与 pin 依赖：
+ * isChannelEncryptionActive = 主开关 ∧ HTTP 子开关 ∧ 已 pin。
+ * WS 通道子开关已随桌面端插件端点帧加密退役（票 06），本测试不再覆盖。
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { readFile } from 'node:fs/promises'
 import {
   isChannelEncryptionActive,
   getPinnedKey,
@@ -38,32 +40,28 @@ beforeEach(() => {
   s.value.enabled = false
   s.value.strictMode = false
   s.value.encryptHttp = true
-  s.value.encryptWsTerminal = true
-  s.value.encryptWsEvent = true
 })
 
 describe('useLinkEncryptionSettings', () => {
-  it('默认值：功能整体关，通道子开关全开', () => {
+  it('默认值：功能整体关，HTTP 载荷加密默认开', () => {
     const { settings } = useLinkEncryptionSettings()
 
     expect(settings.value.enabled).toBe(false)
     expect(settings.value.encryptHttp).toBe(true)
-    expect(settings.value.encryptWsTerminal).toBe(true)
-    expect(settings.value.encryptWsEvent).toBe(true)
   })
 
-  it('setEnabled / setChannel / setStrictMode 变更并落盘，重载后保留', () => {
+  it('setEnabled / setChannel(http) / setStrictMode 变更并落盘，重载后保留', () => {
     const s1 = useLinkEncryptionSettings()
     s1.setEnabled(true)
     s1.setStrictMode(true)
-    s1.setChannel('ws-terminal', false)
+    s1.setChannel('http', false)
 
     // 新读取方应看到同一单例的持久化状态
     const s2 = useLinkEncryptionSettings()
     expect(s2.settings.value.enabled).toBe(true)
     expect(s2.settings.value.strictMode).toBe(true)
-    expect(s2.settings.value.encryptWsTerminal).toBe(false)
-    expect(JSON.parse(localStorage.getItem('link-encryption')!).encryptWsTerminal).toBe(false)
+    expect(s2.settings.value.encryptHttp).toBe(false)
+    expect(JSON.parse(localStorage.getItem('link-encryption')!).encryptHttp).toBe(false)
   })
 
   it('isChannelEncryptionActive：主开关关时一律 false（即使已 pin）', () => {
@@ -71,26 +69,19 @@ describe('useLinkEncryptionSettings', () => {
     const { setEnabled } = useLinkEncryptionSettings()
     setEnabled(false)
     expect(isChannelEncryptionActive('http')).toBe(false)
-    expect(isChannelEncryptionActive('ws-terminal')).toBe(false)
     expect(getPinnedKey()).not.toBeNull()
   })
 
-  it('isChannelEncryptionActive：主开+pin 下按通道子开关独立判定', () => {
+  it('isChannelEncryptionActive：主开+pin 下按 HTTP 子开关独立判定', () => {
     localStorage.setItem('link_kd_public_b64', 'cHVibGljLWtleQ==')
     const { setEnabled, setChannel } = useLinkEncryptionSettings()
     setEnabled(true)
 
     setChannel('http', false)
     expect(isChannelEncryptionActive('http')).toBe(false)
-    expect(isChannelEncryptionActive('ws-terminal')).toBe(true)
-    expect(isChannelEncryptionActive('ws-event')).toBe(true)
 
     setChannel('http', true)
-    setChannel('ws-terminal', false)
-    setChannel('ws-event', false)
     expect(isChannelEncryptionActive('http')).toBe(true)
-    expect(isChannelEncryptionActive('ws-terminal')).toBe(false)
-    expect(isChannelEncryptionActive('ws-event')).toBe(false)
   })
 
   it('未 pin 时即使全开也不参与加密（协商无信任锚）', () => {
@@ -102,7 +93,7 @@ describe('useLinkEncryptionSettings', () => {
 })
 
 describe('syncLinkCryptoContextToNative（set_link_crypto_context 推送）', () => {
-  it('推送参数含全部字段（enabled/strictMode/encryptWsEvent/encryptHttp/kdPublicB64）', async () => {
+  it('推送参数含全部字段（enabled/strictMode/encryptHttp/kdPublicB64）；不含已退役的 ws 开关', async () => {
     localStorage.setItem('link_kd_public_b64', 'cHVibGljLWtleQ==')
     const { setEnabled, setStrictMode, setChannel } = useLinkEncryptionSettings()
     setEnabled(true)
@@ -115,10 +106,10 @@ describe('syncLinkCryptoContextToNative（set_link_crypto_context 推送）', ()
     expect(mockInvoke).toHaveBeenCalledWith('set_link_crypto_context', {
       enabled: true,
       strictMode: true,
-      encryptWsEvent: true,
       encryptHttp: false,
       kdPublicB64: 'cHVibGljLWtleQ==',
     })
+    expect(mockInvoke.mock.calls[0][1]).not.toHaveProperty('encryptWsEvent')
   })
 })
 
@@ -160,5 +151,45 @@ describe('pin 落地（ws_link_crypto_pin 事件驱动 applyPin；HTTP 通道 pi
     await emitPin({})
     expect(getPinnedKey()).toBe(VALID_KID_B64)
     expect(getPinnedFingerprint()).toBe('aabbccdd')
+  })
+})
+
+describe('结构锁：WS 帧级加密与 waiting_input 漂移零残留（票 06）', () => {
+  it('上层生产面不再有 WS 加密开关字段/通道名/设置页行/i18n key（linkCrypto 库自身除外）', async () => {
+    const [enc, view, zh, en] = await Promise.all([
+      readFile('src/composables/useLinkEncryption.ts', 'utf-8'),
+      readFile('src/views/settings/ConnectionSettingsView.vue', 'utf-8'),
+      readFile('src/locales/zh-CN/settings.ts', 'utf-8'),
+      readFile('src/locales/en/settings.ts', 'utf-8'),
+    ])
+    // useLinkEncryption：无 ws 字段、无 ws 通道字面量（带引号的字面量；文件头注释的
+    // 「ws-terminal / ws-event」说辞是退役说明，不带引号故不匹配）
+    expect(enc).not.toContain('encryptWsTerminal')
+    expect(enc).not.toContain('encryptWsEvent')
+    expect(enc).not.toContain("'ws-terminal'")
+    expect(enc).not.toContain("'ws-event'")
+    expect(enc).not.toMatch(/LinkCryptoChannel = '[^']*\|/)
+    // 设置页：不再渲染 WS 子开关行 / 引用退役 i18n key
+    expect(view).not.toContain('ws-terminal')
+    expect(view).not.toContain('ws-event')
+    expect(view).not.toContain('linkEncryptWsTerminal')
+    expect(view).not.toContain('linkEncryptWsEvent')
+    // i18n 双文件：退役 key 同步删除
+    for (const locales of [zh, en]) {
+      expect(locales).not.toContain('linkEncryptWsTerminal')
+      expect(locales).not.toContain('linkEncryptWsEvent')
+    }
+  })
+
+  it('会话状态比较统一到桌面 wire 字面量 waitingInput（snake_case 漂移零残留）', async () => {
+    const [mc, sv, card] = await Promise.all([
+      readFile('src/composables/useMobileConnection.ts', 'utf-8'),
+      readFile('src/views/SessionsView.vue', 'utf-8'),
+      readFile('src/components/SessionCard.vue', 'utf-8'),
+    ])
+    for (const src of [mc, sv, card]) {
+      expect(src).not.toContain("'waiting_input'")
+      expect(src).toContain('waitingInput')
+    }
   })
 })

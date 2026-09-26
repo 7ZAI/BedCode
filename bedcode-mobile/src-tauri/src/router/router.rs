@@ -102,6 +102,7 @@ impl Default for ClientBusinessRouterBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::enums::control::SessionControlAction;
     use tokio::sync::broadcast;
 
     /// 测试用处理器：按名字记录调用，并可返回固定响应消息
@@ -166,16 +167,19 @@ mod tests {
         // 返回固定响应，验证 route 结果透传 handler 返回值
         let response = Message::ack("req-1");
         let router = ClientBusinessRouter::builder()
-            .route("Terminal", handler("terminal", &calls, Some(response.clone())))
+            .route(
+                "SessionControl",
+                handler("session-control", &calls, Some(response.clone())),
+            )
             .context(context())
             .build()
             .unwrap();
 
         let result = router
-            .route(Message::output("s", b"hello", false, 0))
+            .route(Message::session_control(SessionControlAction::ListSessions, None))
             .await
             .expect("route 不应失败");
-        assert_eq!(calls.lock().unwrap().as_slice(), &["Terminal"]);
+        assert_eq!(calls.lock().unwrap().as_slice(), &["SessionControl"]);
         assert!(matches!(result, Some(Message::Ack { .. })));
     }
 
@@ -183,7 +187,7 @@ mod tests {
     async fn route_unknown_type_without_fallback_returns_none() {
         let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
         let router = ClientBusinessRouter::builder()
-            .route("Terminal", handler("terminal", &calls, None))
+            .route("SessionControl", handler("session-control", &calls, None))
             .context(context())
             .build()
             .unwrap();
@@ -201,19 +205,22 @@ mod tests {
     async fn fallback_handles_unregistered_types() {
         let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
         let router = ClientBusinessRouter::builder()
-            .route("Terminal", handler("terminal", &calls, None))
+            .route("SessionControl", handler("session-control", &calls, None))
             .fallback(handler("fallback", &calls, None))
             .context(context())
             .build()
             .unwrap();
 
         // 已注册类型不落入 fallback
-        router.route(Message::output("s", b"hi", false, 0)).await.unwrap();
-        assert_eq!(calls.lock().unwrap().as_slice(), &["Terminal"]);
+        router
+            .route(Message::session_control(SessionControlAction::ListSessions, None))
+            .await
+            .unwrap();
+        assert_eq!(calls.lock().unwrap().as_slice(), &["SessionControl"]);
 
         // 未注册类型落入 fallback
         router.route(Message::ack("r")).await.unwrap();
-        assert_eq!(calls.lock().unwrap().as_slice(), &["Terminal", "Ack"]);
+        assert_eq!(calls.lock().unwrap().as_slice(), &["SessionControl", "Ack"]);
     }
 
     #[test]

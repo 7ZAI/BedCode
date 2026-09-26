@@ -373,7 +373,6 @@ async fn crypto_envelope_roundtrip() {
     bedcode_lib::state::set_link_crypto_context(bedcode_lib::state::LinkCryptoContext {
         enabled: true,
         strict_mode: true,
-        encrypt_ws_event: true,
         encrypt_http: true,
         kd_public_b64: Some(base64::engine::general_purpose::STANDARD.encode(kd_pub())),
     });

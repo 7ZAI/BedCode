@@ -65,8 +65,6 @@ export default {
       linkCryptoSection: '链路加密',
       linkCryptoMaster: '启用链路加密',
       linkEncryptHttp: '加密 HTTP 载荷',
-      linkEncryptWsTerminal: '加密终端通道',
-      linkEncryptWsEvent: '加密事件通道',
       linkStrictMode: '严格模式（拒绝明文降级）',
       linkPeerFingerprint: '对端指纹',
       linkNotPaired: '未配对',

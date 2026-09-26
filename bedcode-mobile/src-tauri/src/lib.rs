@@ -3,11 +3,11 @@
 pub mod auth;
 pub mod commands;
 pub mod connection;
+pub mod egress;
 pub mod enums;
 pub mod file_service;
 pub mod handler;
 pub mod mdns;
-pub mod egress;
 pub mod model;
 pub mod peer_migration;
 pub mod peer_net;
@@ -20,6 +20,15 @@ pub mod session;
 pub mod state;
 pub mod system;
 pub mod terminal_link;
+
+/// 假插件端点夹具（票 01 基线与夹具）：本地 WS server 模拟桌面插件
+/// `com.bedcode.terminal-session` 的 session-control / terminal 端点。
+/// 单测（`#[cfg(test)]`）经此路径复用 `tests/support/mock_plugin_ws.rs`；
+/// 集成测试在 `tests/` 内经 `#[path = "support/mock_plugin_ws.rs"]` 自行引入。
+/// 仅测试构建生效（生产构建零影响）。
+#[cfg(test)]
+#[path = "../tests/support/mock_plugin_ws.rs"]
+pub(crate) mod mock_plugin_ws;
 
 // Re-export core types
 pub use system::config;
@@ -224,8 +233,9 @@ pub fn run() {
             commands::connection::ws_reconnect,
             commands::connection::get_ws_token,
             commands::connection::get_ws_url,
-            // Terminal Link（会话级终端 WS，Rust 后端持有）
-            // 段1：Rust ↔ 桌面端（会话级）
+            // Terminal Link（会话级终端 WS，Rust 后端持有；票 05 新插件端点协议）
+            // 订阅/退订：进入终端页建连订阅（fresh subscribe 回放环窗口），
+            // 离开终端页关闭连接（不得后台常拉）
             terminal_link::terminal_subscribe,
             terminal_link::terminal_unsubscribe,
             // 段2：前端 ↔ Rust（页面级）
@@ -234,7 +244,6 @@ pub fn run() {
             terminal_link::terminal_unsubscribe_all,
             terminal_link::terminal_remove,
             terminal_link::terminal_send_input,
-            terminal_link::terminal_set_mode,
             terminal_link::terminal_ack_rendered,
             terminal_link::terminal_get_history,
             terminal_link::terminal_get_state,
@@ -248,19 +257,10 @@ pub fn run() {
             commands::auth::ws_bind_biometric_credential,
             commands::auth::ws_unbind_biometric_credential,
             commands::auth::ws_get_biometric_key_status,
-            // Session Commands
-            commands::session::ws_load_sessions,
-            commands::session::ws_join_session,
-            commands::session::get_terminal_ws_info,
+            // Session Commands（票 04：控制面迁 HTTP；WS 信封命令随协议退役删除）
             commands::session::ws_start_session,
             commands::session::ws_stop_session,
             commands::session::ws_remove_session,
-            commands::session::ws_load_session_configs,
-            // Terminal Commands
-            commands::terminal::ws_send_input_async,
-            commands::terminal::ws_send_message,
-            commands::terminal::ws_send_and_wait,
-            commands::terminal::ws_resize_terminal,
             // Pairing
             system::commands::generate_pairing_code,
             system::commands::get_current_pairing_code,

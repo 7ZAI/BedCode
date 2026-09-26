@@ -87,8 +87,6 @@ export interface TerminalDisplayDeps {
   feedTuiOutput: (data: Uint8Array) => void
   disposeTuiCompat: () => void
   disposeScroll: () => void
-  /** 数据层续传重拼接（forceReplay，from = 当前游标） */
-  forceReplay: (sessionId: string) => void | Promise<void>
   /** 滚动域当前行号（清屏后复位） */
   currentLine: Ref<number>
   /** 滚动域「用户已上翻」标记（清屏后复位，恢复自动跟随） */
@@ -225,18 +223,11 @@ export function useTerminalDisplay(ctx: TerminalKernelContext, deps: TerminalDis
     // WebGL 激活后隐藏 DOM 层光标（保留 WebGL 层光标，避免双光标）
     await deps.renderer.initRenderer(term)
 
-    // 注册实时 handler — 历史分片回放（高水位节流，见 useTerminalBuffer）与
-    // 实时推送同通道写入；背压 ack 由 useTerminalBuffer 无条件回发（onWriteParsed
-    // 即证明本端在消费，不依赖正统归属，见 composable 注释）
-    // 回放完成信号接入加载遮罩门控：末批解析完成后才允许撤遮罩
+    // 注册实时 handler — 回放（历史）与实时同一条流，裸字节经 Channel 按序写入；
+    // 背压 ack 由 useTerminalBuffer 无条件回发（onWriteParsed 即证明本端在消费）
+    // 回放完成信号接入加载遮罩门控：新协议回放随订阅流直达，立即放行
     const { replayDone } = deps.registerRealtimeHandler(ctx.getSessionId(), term, deps.feedTuiOutput)
     void replayDone.then(() => deps.subscription.markReplayDone())
-
-    // 本地历史缓存曾被头部 LRU 裁剪（超 16MB）：本次回放起点非流首，可能切断
-    // 转义序列，提示历史不完整（渲染残留由 composable 的回放静止全量重绘兜底）
-    if (deps.bufferStore.getBuffer(ctx.getSessionId())?.headTrimmed) {
-      toast.warning(t('mobile.terminal.historyTruncated'))
-    }
 
     // TUI 兼容：挂接 onWriteParsed 检测备用屏幕（与嗅探器构成双条件门控）
     deps.attachTuiCompat(term)
@@ -409,12 +400,11 @@ export function useTerminalDisplay(ctx: TerminalKernelContext, deps: TerminalDis
       // 统一走串行队列（过滤未校准默认值 + 单通道保序），失败仅 console.warn
       deps.resize.queueResize(term.cols, term.rows)
       // 数据层兜底：渲染层恢复后内容仍缺失（violation 风暴期间帧被拒）时
-      // 续传重拼接（forceReplay from=游标——同实例 scrollback 仍在，无需全量）
+      // fresh subscribe 重播（Rust 重锚事件清屏 + 插件回放环窗口——无续传语义）
       if (!isMockSession(sid)) {
         // 订阅信念对账：Rust 幂等订阅不发状态事件，长时间未收事件的会话需主动
         // 拉状态收敛（否则刷新后输入仍可能被 subscribed 门控拒绝）
         await deps.bufferStore.reconcileState(sid)
-        await deps.forceReplay(sid)
         await deps.subscription.subscribeWithRetry()
       }
     }

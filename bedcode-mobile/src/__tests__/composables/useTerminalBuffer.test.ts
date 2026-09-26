@@ -1,11 +1,10 @@
 /**
- * useTerminalBuffer 单元测试（Rust 后端持有终端 WS 后的重写）
+ * useTerminalBuffer 单元测试（票 05：终端流新协议）
  *
- * 覆盖：subscribeSession（terminalSubscribe 触发 + terminal-state 事件确认）、
- * unsubscribeSession（退出页面 = 注销 handler + 切 batch，订阅保持）、
- * prepareSession 轮询、handleDisconnect/handleSessionStopped/markSessionRunning/
- * handleSessionRemoved、registerRealtimeHandler 写队列（onClear / onRawOutput /
- * writeParsed 历史拼接）。
+ * 覆盖：subscribeSession（fresh subscribe：已订阅也重播）、unsubscribeSession
+ * （退出页面 = 注销 handler + 关闭链路）、prepareSession 轮询、
+ * handleDisconnect/handleSessionStopped/markSessionRunning/handleSessionRemoved、
+ * registerRealtimeHandler 写队列（onClear / onRawOutput）。
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -27,32 +26,21 @@ const cmd = vi.hoisted(() => ({
   terminalRemove: vi.fn(async () => {}),
   terminalSendInput: vi.fn(async () => {}),
   terminalAckRendered: vi.fn(async () => {}),
-  terminalSetMode: vi.fn(async () => {}),
   terminalPageSubscribe: vi.fn(async () => {}),
   terminalPageUnsubscribe: vi.fn(async () => {}),
-  terminalGetHistory: vi.fn(async (_s: string, _f: number) => ({
-    from: 0,
-    minOffset: 0,
-    snapshotOffset: 0,
-    historyBytes: 0,
-    dataBase64: '',
-  })),
   // Rust 链路状态对账（订阅幂等无事件路径的收敛兜底）：默认未订阅
   terminalGetState: vi.fn(async (sessionId: string) => ({
     sessionId,
     phase: 'idle',
     cursor: 0,
-    snapshotOffset: 0,
-    minOffset: 0,
     acked: 0,
-    mode: 'realtime',
     stopped: false,
-    historyBytes: 0,
+    subscribed: false,
   })),
 }))
 vi.mock('@/composables/useMobileCommands', () => cmd)
 
-// 用户可见提示（历史截断/跨洞通知）与 i18n 与本用例断言的链路行为无关，按项目惯例替身化
+// 用户可见提示（历史截断通知）与 i18n 与本用例断言的链路行为无关，按项目惯例替身化
 vi.mock('@/composables/useToast', () => ({
   useToast: () => ({ success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() }),
 }))
@@ -70,7 +58,7 @@ async function flushAsync(n = 3) {
   for (let i = 0; i < n; i++) await new Promise((r) => setTimeout(r, 0))
 }
 
-describe('useTerminalBuffer（Rust 驱动）', () => {
+describe('useTerminalBuffer（票 05：新协议）', () => {
   let store: ReturnType<typeof useTerminalBufferStore>
   let terminalBuffer: ReturnType<typeof useTerminalBuffer>
 
@@ -86,28 +74,29 @@ describe('useTerminalBuffer（Rust 驱动）', () => {
     })
   })
 
-  it('首次订阅：触发 terminalSubscribe；terminal-state 事件确认已订阅', async () => {
+  it('首次订阅：触发 terminalSubscribe；收 subscribed（phase=live）确认已订阅', async () => {
     await terminalBuffer.subscribeSession('s1')
     await flushAsync()
 
     expect(cmd.terminalSubscribe).toHaveBeenCalledWith('s1')
     expect(store.getBuffer('s1')!.subscribed).toBe(false)
 
-    emitState('s1', 'history')
+    // 新协议无独立 history 阶段：收 subscribed 即 live
+    emitState('s1', 'live', 'subscribed')
     expect(store.getBuffer('s1')!.subscribed).toBe(true)
-    expect(store.getBuffer('s1')!.phase).toBe('history')
+    expect(store.getBuffer('s1')!.phase).toBe('live')
   })
 
-  it('已订阅会话重复订阅：直接返回快照，不重复触发', async () => {
+  it('已订阅会话再次订阅：仍触发 terminalSubscribe（fresh subscribe 重播）', async () => {
     await terminalBuffer.subscribeSession('s1')
     emitState('s1', 'live')
     cmd.terminalSubscribe.mockClear()
     const result = await terminalBuffer.subscribeSession('s1')
-    expect(result).toBeTruthy()
-    expect(cmd.terminalSubscribe).not.toHaveBeenCalled()
+    expect(result).toBeNull()
+    expect(cmd.terminalSubscribe).toHaveBeenCalledWith('s1')
   })
 
-  it('unsubscribeSession：注销 handler + 切 batch；Rust 订阅保持（页面退出语义）', async () => {
+  it('unsubscribeSession：注销 handler + 关闭链路（页面退出语义：不得后台常拉）', async () => {
     await terminalBuffer.subscribeSession('s1')
     emitState('s1', 'live')
     store.registerRealtimeHandler('s1', { onOutput: vi.fn() })
@@ -116,11 +105,9 @@ describe('useTerminalBuffer（Rust 驱动）', () => {
     await terminalBuffer.unsubscribeSession('s1')
     await flushAsync()
 
-    // 页面退出：注销 handler + batch 模式；不取消 Rust 链路
+    // 页面退出：注销 handler + 关闭链路；重进时重订阅回放补齐
     expect(store.realtimeHandlers.has('s1')).toBe(false)
-    expect(cmd.terminalSetMode).toHaveBeenCalledWith('s1', 'batch')
-    expect(cmd.terminalUnsubscribe).not.toHaveBeenCalled()
-    expect(store.getBuffer('s1')!.subscribed).toBe(true)
+    expect(cmd.terminalUnsubscribe).toHaveBeenCalledWith('s1')
   })
 
   it('handleDisconnect：标记所有 buffer 未订阅 + 全量取消 Rust 链路', async () => {
@@ -148,7 +135,7 @@ describe('useTerminalBuffer（Rust 驱动）', () => {
     expect(store.realtimeHandlers.has('s1')).toBe(true)
   })
 
-  it('markSessionRunning：复位 sessionStopped + 重新订阅', async () => {
+  it('markSessionRunning：仅复位 sessionStopped，不订阅（订阅由页面驱动）', async () => {
     await terminalBuffer.subscribeSession('s1')
     store.markSessionStopped('s1')
     const buf = store.getBuffer('s1')!
@@ -157,7 +144,9 @@ describe('useTerminalBuffer（Rust 驱动）', () => {
     await flushAsync()
 
     expect(buf.sessionStopped).toBe(false)
-    expect(cmd.terminalSubscribe).toHaveBeenCalledWith('s1')
+    // 页面驱动的订阅路径（TerminalView watch → subscribeWithRetry）负责重新订阅
+    cmd.terminalSubscribe.mockClear()
+    expect(cmd.terminalSubscribe).not.toHaveBeenCalled()
   })
 
   it('handleSessionRemoved：清理 buffer 与 handler + terminalRemove', async () => {
@@ -188,7 +177,7 @@ describe('useTerminalBuffer（Rust 驱动）', () => {
     expect(terminal.clear).toHaveBeenCalledTimes(1)
   })
 
-  it('prepareSession：订阅确认到达 → 标记就绪（终端页 consumePrepared 消费）', async () => {
+  it('prepareSession：订阅确认到达 → 返回就绪（终端页挂载时重新订阅触发回放）', async () => {
     const readyPromise = terminalBuffer.prepareSession('s1')
     // 轮询期间 Rust 链路状态到 live
     setTimeout(() => {
@@ -197,34 +186,24 @@ describe('useTerminalBuffer（Rust 驱动）', () => {
 
     const ready = await readyPromise
     expect(ready).toBe(true)
-    expect(store.consumePrepared()).toBe('s1')
+    expect(store.getBuffer('s1')!.subscribed).toBe(true)
   })
 
-  it('prepareSession：超时未确认 → 返回 false、不标记就绪（终端页自行重试）', async () => {
+  it('prepareSession：超时未确认 → 返回 false（终端页自行重试）', async () => {
     vi.useFakeTimers()
     try {
       const pending = terminalBuffer.prepareSession('s1')
       await vi.advanceTimersByTimeAsync(9000)
       const ready = await pending
       expect(ready).toBe(false)
-      expect(store.consumePrepared()).toBeNull()
     } finally {
       vi.useRealTimers()
     }
   })
 
-  it('registerRealtimeHandler：历史拼接路径同样喂 onRawOutput（TUI 嗅探不丢历史中的 DECSET 1006h）', async () => {
-    // 场景：进入终端页前 opencode 已启用 SGR 鼠标上报，1006h 只存在于历史中
+  it('registerRealtimeHandler：输出字节喂 onRawOutput（TUI 嗅探不丢任何内容）', async () => {
     await terminalBuffer.subscribeSession('s1')
     emitState('s1', 'live')
-    // 历史承载 TUI 状态字节（含 1006h）
-    cmd.terminalGetHistory.mockImplementationOnce(async () => ({
-      from: 0,
-      minOffset: 0,
-      snapshotOffset: 20,
-      historyBytes: 20,
-      dataBase64: btoa('prompt\x1b[?1049h\x1b[?1006h'),
-    }))
 
     const rawFed: Uint8Array[] = []
     const written: Uint8Array[] = []
@@ -239,10 +218,15 @@ describe('useTerminalBuffer（Rust 驱动）', () => {
       onWriteParsed: vi.fn(() => ({ dispose: vi.fn() })),
     } as unknown as Terminal
 
-    const { replayDone } = terminalBuffer.registerRealtimeHandler('s1', terminal, (d) => rawFed.push(d))
-    await replayDone
+    terminalBuffer.registerRealtimeHandler('s1', terminal, (d) => rawFed.push(d))
+    // 经段2 通道投递裸字节（含转义序列）：写队列 + 原始字节钩子都收到
+    const channelCall = cmd.terminalPageSubscribe.mock.calls.filter((c) => c[0] === 's1').pop()
+    const channel = channelCall?.[1] as { onmessage: ((m: ArrayBuffer) => void) | null } | undefined
+    const bytes = new TextEncoder().encode('prompt\x1b[?1049h\x1b[?1006h')
+    const buf = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
+    channel!.onmessage?.(buf)
+    await flushAsync()
 
-    // 原始字节钩子与 xterm 写入收到相同字节：嗅探器可从回放恢复 1006h 状态
     expect(written.length).toBeGreaterThan(0)
     const fedText = rawFed.map((d) => new TextDecoder().decode(d)).join('')
     expect(fedText).toContain('\x1b[?1006h')

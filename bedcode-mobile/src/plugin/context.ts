@@ -123,8 +123,13 @@ export function createPluginContext(info: PluginInfo): PluginContext {
   const terminal: TerminalAPI = {
     async sendInput(sessionId: string, text: string): Promise<void> {
       requirePermission('terminal.sendInput')
-      const { wsSendInput } = await import('@/composables/useMobileCommands')
-      return wsSendInput(sessionId, text)
+      // 票 04：输入迁桌面 HTTP（`POST /api/sessions/{id}/input`，桌面端翻译
+      // specialKey）；权限判定不变，旧 WS `Message` 信封链路已退役
+      const { httpSendSessionInput } = await import('@/composables/useHttpApi')
+      const result = await httpSendSessionInput(sessionId, text)
+      if (result.code !== 0) {
+        throw new Error(result.message || 'Send input failed')
+      }
     },
     onOutput(handler: (sessionId: string, data: string) => void): Disposable {
       requirePermission('terminal.onOutput')
@@ -138,8 +143,13 @@ export function createPluginContext(info: PluginInfo): PluginContext {
   const session: SessionAPI = {
     async list(): Promise<any[]> {
       requirePermission('session.list')
-      const { wsLoadSessions } = await import('@/composables/useMobileCommands')
-      return wsLoadSessions()
+      // 票 04：会话列表迁桌面 HTTP（`GET /api/sessions`）；权限判定不变
+      const { httpListSessions } = await import('@/composables/useHttpApi')
+      const result = await httpListSessions()
+      if (result.code === 0 && result.data) {
+        return result.data.sessions || []
+      }
+      throw new Error(result.message || 'Failed to load sessions')
     },
     async get(sessionId: string): Promise<any> {
       requirePermission('session.get')

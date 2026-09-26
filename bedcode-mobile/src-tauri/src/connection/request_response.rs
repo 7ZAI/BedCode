@@ -18,6 +18,18 @@ struct PendingRequest {
     tx: oneshot::Sender<Result<Message>>,
 }
 
+/// 一次入站文本帧经请求-响应匹配后的裁决
+#[derive(Debug)]
+pub enum MatchOutcome {
+    /// 已匹配 pending 请求（响应已按 message_id/request_id 投递）：调用方勿再处理
+    Matched,
+    /// 未匹配的推送帧（可解析为移动端业务 `Message`）：调用方交给 handler 路由
+    Push(Message),
+    /// 无法解析为业务 `Message` 的帧（插件端点帧 / 畸形帧 / 非 JSON）：调用方仍应
+    /// 交给 handler——handler 内部有 `PluginEventRouter` 侦查路由，或自行丢弃留痕
+    Unroutable,
+}
+
 /// 请求-响应管理器
 ///
 /// 使用 `Map<message_id, oneshot::Sender>` 实现精准投递：
@@ -50,22 +62,28 @@ impl RequestResponseManager {
 
     /// 尝试匹配原始 WebSocket 消息
     ///
-    /// 解码消息，根据 message_id 查找并通知等待者
-    /// 返回 Some(Message) 表示未匹配（是推送消息），返回 None 表示已匹配处理
-    pub async fn try_match(&self, raw_message: WsMsg) -> Option<Message> {
+    /// 解码消息，根据 message_id 查找并通知等待者，返回三态裁决：
+    /// - `Matched`：已匹配 pending 请求（响应已投递），调用方**勿**再处理
+    /// - `Push`：可解析为业务 `Message` 的推送帧，调用方交给 handler
+    /// - `Unroutable`：解析失败的帧（如插件端点事件帧 `{"type":"event",...}`——
+    ///   这些帧不是移动端 `Message` 信封）。**必须交还调用方给 handler 侦察路由**（handler
+    ///   内有 `PluginEventRouter` 或自行丢弃）：在匹配层吞掉 = 事件帧永远到不了
+    ///   handler（票 03 集成必红），畸形帧也无从留痕。
+    pub async fn try_match(&self, raw_message: WsMsg) -> MatchOutcome {
         // 只处理 Text 消息
         let text = match raw_message {
             WsMsg::Text(t) => t,
-            _ => return None,
+            _ => return MatchOutcome::Unroutable,
         };
 
         // 解码消息
         let message = match self.codec.decode(WsMsg::Text(text)) {
             Ok(Some(msg)) => msg,
-            Ok(None) => return None, // 协议消息
+            // 解析失败（含插件事件帧）：交还调用方让 handler 侦察（debug 留痕，不刷屏）
+            Ok(None) => return MatchOutcome::Unroutable,
             Err(e) => {
-                tracing::warn!("[RequestResponseManager] Failed to decode: {}", e);
-                return None;
+                tracing::debug!("[RequestResponseManager] Undecodable frame handed to handler: {}", e);
+                return MatchOutcome::Unroutable;
             }
         };
 
@@ -88,7 +106,7 @@ impl RequestResponseManager {
             if let Some(pending) = self.pending.lock().await.remove(&id) {
                 tracing::debug!("[RequestResponseManager] ✓ Matched pending request for id={}", id);
                 let _ = pending.tx.send(Ok(message));
-                return None; // 已匹配，不返回消息
+                return MatchOutcome::Matched; // 已匹配，响应已投递
             }
             // 调试终端组件订阅偏移量时使用：推送消息（含终端输出广播）每帧都会命中
             // 此分支（带 message_id 但无 pending 请求），逐帧 WARN 刷屏，已注释；
@@ -103,7 +121,7 @@ impl RequestResponseManager {
         }
 
         // 未匹配，返回消息给调用方处理
-        Some(message)
+        MatchOutcome::Push(message)
     }
 
     /// 发送错误响应（连接断开、超时等场景）
@@ -148,11 +166,12 @@ impl Default for RequestResponseManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::enums::SessionControlAction;
 
-    /// 构造指定 message_id 的终端输入消息（测试辅助）
+    /// 构造指定 message_id 的会话控制消息（测试辅助）
     /// with_request_id 会把 message_id 回填为给定值，模拟服务端响应携带请求 ID
-    fn terminal_with_id(id: &str) -> Message {
-        Message::input_with_response("sess-1", "ls -la", None).with_request_id(id)
+    fn control_with_id(id: &str) -> Message {
+        Message::session_control_with_response(SessionControlAction::ListSessions, None).with_request_id(id)
     }
 
     /// 将消息编码为 Text 帧（测试辅助）
@@ -176,12 +195,12 @@ mod tests {
         // 普通响应：message_id 命中 pending，等待者收到消息且 pending 被移除
         let mgr = RequestResponseManager::new();
         let rx = mgr.register("m-1".to_string()).await;
-        let matched = mgr.try_match(text_frame(&terminal_with_id("m-1"))).await;
-        assert!(matched.is_none(), "匹配成功时不应作为推送消息返回");
+        let matched = mgr.try_match(text_frame(&control_with_id("m-1"))).await;
+        assert!(matches!(matched, MatchOutcome::Matched), "匹配成功时应裁决为 Matched");
         assert_eq!(mgr.pending_count().await, 0);
         let msg = rx.await.unwrap().unwrap();
         assert_eq!(msg.message_id(), Some("m-1"));
-        assert_eq!(msg.message_type(), Some("terminal"));
+        assert_eq!(msg.message_type(), Some("session_control"));
     }
 
     #[tokio::test]
@@ -191,7 +210,7 @@ mod tests {
         let rx = mgr.register("req-9".to_string()).await;
         let ack = Message::ack("req-9");
         let matched = mgr.try_match(text_frame(&ack)).await;
-        assert!(matched.is_none());
+        assert!(matches!(matched, MatchOutcome::Matched));
         let msg = rx.await.unwrap().unwrap();
         assert_eq!(msg.message_type(), Some("ack"));
         match msg {
@@ -207,11 +226,11 @@ mod tests {
     async fn test_try_match_unknown_id_returns_as_push() {
         // 未注册的 message_id：无法匹配，消息应原样返回给调用方（推送消息语义）
         let mgr = RequestResponseManager::new();
-        let result = mgr.try_match(text_frame(&terminal_with_id("ghost"))).await;
-        assert_eq!(
-            result.map(|m| m.message_id().map(|s| s.to_string())),
-            Some(Some("ghost".to_string()))
-        );
+        let result = mgr.try_match(text_frame(&control_with_id("ghost"))).await;
+        match result {
+            MatchOutcome::Push(m) => assert_eq!(m.message_id().map(|s| s.to_string()), Some("ghost".to_string())),
+            other => panic!("expected Push(ghost), got {:?}", other),
+        }
         assert_eq!(mgr.pending_count().await, 0);
     }
 
@@ -220,8 +239,10 @@ mod tests {
         // 服务端发来无人等待的 ACK（如超时后才到达的响应）：不吞掉，返回给调用方
         let mgr = RequestResponseManager::new();
         let result = mgr.try_match(text_frame(&Message::ack("stale-1"))).await;
-        assert!(result.is_some());
-        assert_eq!(result.unwrap().message_type(), Some("ack"));
+        match result {
+            MatchOutcome::Push(m) => assert_eq!(m.message_type(), Some("ack")),
+            other => panic!("expected Push(ack), got {:?}", other),
+        }
     }
 
     #[tokio::test]
@@ -229,13 +250,13 @@ mod tests {
         // 重复响应：第一次命中并移除，第二次因 pending 已空转为推送返回
         let mgr = RequestResponseManager::new();
         let _rx = mgr.register("m-1".to_string()).await;
-        let frame = text_frame(&terminal_with_id("m-1"));
-        assert!(mgr.try_match(frame.clone()).await.is_none());
+        let frame = text_frame(&control_with_id("m-1"));
+        assert!(matches!(mgr.try_match(frame.clone()).await, MatchOutcome::Matched));
         let second = mgr.try_match(frame).await;
-        assert_eq!(
-            second.map(|m| m.message_id().map(|s| s.to_string())),
-            Some(Some("m-1".to_string()))
-        );
+        match second {
+            MatchOutcome::Push(m) => assert_eq!(m.message_id().map(|s| s.to_string()), Some("m-1".to_string())),
+            other => panic!("expected Push(m-1), got {:?}", other),
+        }
     }
 
     #[tokio::test]
@@ -245,8 +266,33 @@ mod tests {
         let _rx = mgr.register("m-1".to_string()).await;
         mgr.remove("m-1").await;
         assert_eq!(mgr.pending_count().await, 0);
-        let result = mgr.try_match(text_frame(&terminal_with_id("m-1"))).await;
-        assert!(result.is_some());
+        let result = mgr.try_match(text_frame(&control_with_id("m-1"))).await;
+        assert!(matches!(result, MatchOutcome::Push(_)));
+    }
+
+    /// 票 03 关键：插件端点事件帧（`{"type":"event",...}`）不是移动端 `Message`
+    /// 信封，**必须裁决为 `Unroutable` 交还调用方给 handler 侦察路由**——若在此层
+    /// 吞掉，事件帧永远到不了 PluginEventRouter（集成必红）。
+    #[tokio::test]
+    async fn test_try_match_event_frame_is_unroutable_not_swallowed() {
+        let mgr = RequestResponseManager::new();
+        let frame =
+            WsMsg::Text(r#"{"type":"event","event":"session:created","payload":{"session":{"id":"s1"}}}"#.to_string());
+        match mgr.try_match(frame).await {
+            MatchOutcome::Unroutable => {}
+            other => panic!("事件帧应裁决为 Unroutable（交 handler），实际 {:?}", other),
+        }
+        // 未注册该帧对应的 pending：pending 不应被污染
+        assert_eq!(mgr.pending_count().await, 0);
+    }
+
+    /// 畸形帧（非 JSON）同样 Unroutable：不 panic、不留 pending、交调用方留痕。
+    #[tokio::test]
+    async fn test_try_match_garbage_frame_is_unroutable() {
+        let mgr = RequestResponseManager::new();
+        let frame = WsMsg::Text("not json at all".to_string());
+        assert!(matches!(mgr.try_match(frame).await, MatchOutcome::Unroutable));
+        assert_eq!(mgr.pending_count().await, 0);
     }
 
     #[tokio::test]
@@ -276,21 +322,29 @@ mod tests {
 
     #[tokio::test]
     async fn test_try_match_ping_keeps_pending_intact() {
-        // 协议控制帧（Ping/Pong）不参与匹配，pending 必须保持原样
+        // 协议控制帧（Ping/Pong）不参与匹配，pending 必须保持原样（非 Text 帧裁决
+        // 为 Unroutable；实际生产路径 receiver 不把 Ping/Pong 送进 try_match）
         let mgr = RequestResponseManager::new();
         let _rx = mgr.register("m-1".to_string()).await;
-        assert!(mgr.try_match(WsMsg::Ping(vec![].into())).await.is_none());
-        assert!(mgr.try_match(WsMsg::Pong(vec![].into())).await.is_none());
+        assert!(matches!(
+            mgr.try_match(WsMsg::Ping(vec![].into())).await,
+            MatchOutcome::Unroutable
+        ));
+        assert!(matches!(
+            mgr.try_match(WsMsg::Pong(vec![].into())).await,
+            MatchOutcome::Unroutable
+        ));
         assert_eq!(mgr.pending_count().await, 1);
     }
 
     #[tokio::test]
     async fn test_try_match_invalid_json_keeps_pending() {
-        // 非法 JSON：解码失败应记日志并跳过，不消耗 pending（等待者可继续等后续响应）
+        // 非法 JSON：解码失败裁决为 Unroutable（交还调用方留痕丢弃——票 03 关键：
+        // 插件事件帧也走此路径，吞掉即事件到不了 handler），pending 保持原样
         let mgr = RequestResponseManager::new();
         let _rx = mgr.register("m-1".to_string()).await;
         let result = mgr.try_match(WsMsg::Text("{not valid json".into())).await;
-        assert!(result.is_none());
+        assert!(matches!(result, MatchOutcome::Unroutable));
         assert_eq!(mgr.pending_count().await, 1);
     }
 
@@ -301,9 +355,9 @@ mod tests {
         // Binary 解码能力由 codec::decode 独立提供（见 codec 测试）
         let mgr = RequestResponseManager::new();
         let _rx = mgr.register("m-1".to_string()).await;
-        let json = terminal_with_id("m-1").to_json().unwrap();
+        let json = control_with_id("m-1").to_json().unwrap();
         let matched = mgr.try_match(WsMsg::Binary(json.into_bytes().into())).await;
-        assert!(matched.is_none());
+        assert!(matches!(matched, MatchOutcome::Unroutable));
         assert_eq!(mgr.pending_count().await, 1);
     }
 }

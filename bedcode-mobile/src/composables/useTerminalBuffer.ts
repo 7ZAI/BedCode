@@ -2,13 +2,14 @@
  * Terminal Buffer Composable
  *
  * TerminalView 用的 composable — 管理会话终端输出订阅与实时输出写入。
- * 订阅由 Rust 链路持有（src-tauri/src/terminal_link.rs），前端消费 TB v3 字节帧
- * （start_offset/end_offset 区间语义）；数据真源 = Rust 会话级字节缓存；前端维护
- * lastRenderedOffset 字节游标（去重/缺口/截断基准）+ 一次性历史拼接（spliceHistory：
- * 拼完历史才消费实时帧）。详见 docs/knowledge/pty-output-pipeline.md
+ * 订阅由 Rust 链路持有（src-tauri/src/terminal_link.rs，票 05 新插件端点协议）：
+ * 进入终端页 fresh subscribe → 插件回放环窗口（历史与实时同一条流，裸字节）；
+ * 离开关闭连接。前端只消费段2 Channel 的裸字节并按本地计数回发 ack；
+ * `ring_resync`（terminal-resync 事件）是唯一重锚信号（清屏 + 基准重置）。
+ * 详见 .scratch/2026-09-26-mobile-desktop-adaptation/spec.md §3.3
  */
 
-import { useTerminalBufferStore, type SubscribeResultInfo } from '@/stores/terminalBuffer'
+import { useTerminalBufferStore } from '@/stores/terminalBuffer'
 import { logger } from '@/utils/frontendLogger'
 import { createWriteCoalescer } from '@/composables/writeCoalescer'
 import { useToast } from '@/composables/useToast'
@@ -66,15 +67,11 @@ function yieldNextFrame(): Promise<void> {
 
 // ==================== Types ====================
 
-export type { SubscribeResultInfo } from '@/stores/terminalBuffer'
-
-/** registerRealtimeHandler 返回值：供视图做「历史渲染完成后再撤加载遮罩」的门控 */
+/** registerRealtimeHandler 返回值：供视图做「渲染完成后再撤加载遮罩」的门控 */
 export interface RealtimeHandlerRegistration {
   /**
-   * 本地历史缓存分片回放完成的信号：
-   * - 有缓存：末批解析完成（onReplayDone）时 resolve
-   * - 无缓存（mock 会话 / 首次进入尚未订阅）：立即 resolve，
-   *   服务端历史段结束由视图按 buffer.phase 离开 'history' 推导
+   * 回放完成信号：新协议无独立历史拼接（回放随订阅流直达），立即 resolve；
+   * 门控以 `subscribed`（terminal-state phase=live）为准
    */
   replayDone: Promise<void>
 }
@@ -138,29 +135,7 @@ export function useTerminalBuffer() {
       store.ackRendered(sessionId)
     }))
 
-    // 分片回放高水位写入（store 回放循环的背压信号）：合并批经 terminal.write
-    // 的回调确认「已解析完成」，再让出一帧渲染才 resolve——回放节奏由本端
-    // xterm 实际消费速度决定，历史回放期间渲染/触摸可插入，不再长冻结。
-    // xterm 内部写队列 FIFO 保序：回放批与实时帧交错入队不破坏输出顺序
-    const writeParsed = (data: Uint8Array): Promise<void> => {
-      // 链路调试（字节对账）：历史批写入负载（payloadBytes 对应 store 侧日志）
-      logger.debug(`[useTerminalBuffer] history batch write (${sessionId}): ${data.byteLength}B`)
-      return new Promise<void>((resolve) => {
-        // terminal 可能已 dispose（页面切换/会话关闭）：与 writeCoalescer 守卫一致
-        if (!terminal.element) {
-          resolve()
-          return
-        }
-        // 回放路径同样必须喂原始字节钩子（TUI 嗅探）：DECSET 1006h 若只出现在
-        // 历史缓存中（进入会话前 TUI 应用已启用鼠标上报），不喂则嗅探器状态
-        // 丢失 → isTuiMode 误判关闭 → 触摸滚动落在无 scrollback 的备用屏幕上
-        // 完全失效（opencode 等进入后无法滚动查看的根因）
-        onRawOutput?.(data)
-        terminal.write(data, () => resolve())
-      }).then(() => yieldNextFrame())
-    }
-
-    // 回放静止全量重绘兜底：历史起点若落在被 LRU 裁剪的转义序列中段，
+    // 回放静止全量重绘兜底：回放起点若落在被 LRU 裁剪的转义序列中段，
     // 增量解析会残留脏屏（光标/属性错位）；连续静止窗口无新数据时补一次整屏
     // refresh（等价用户点击刷新，幂等无副作用）
     let replayIdleTimer: ReturnType<typeof setTimeout> | null = null
@@ -180,9 +155,8 @@ export function useTerminalBuffer() {
       replayIdleTimers.set(sessionId, timer)
     }
 
-    // 回放就绪信号：历史拼接完成（store.onReplayDone）时 resolve。
-    // store 层 onReplayDone 最早也在 writeParsed 的异步链之后触发，
-    // 此处同步赋值 resolver 不会与拼接收尾竞态
+    // 回放就绪信号：store 无独立历史拼接（回放随订阅流直达），onReplayDone 立即
+    // 触发；此处同步赋值 resolver 不与事件竞态
     let resolveReplayDone: (() => void) | null = null
     const replayDone = new Promise<void>((resolve) => {
       resolveReplayDone = resolve
@@ -193,9 +167,9 @@ export function useTerminalBuffer() {
       resolveReplayDone = null
     }
 
-    // 历史拼接（store 内启动：一次性历史 + FLUSH 缓冲实时帧——拼完才消费）
-    // 完成后经 onReplayDone 收尾：服务端已就序（Rust 链路订阅在先），
-    // 空历史也会立即触发（无需本地缓存快照预判）
+    // 回放（历史）与实时同一条流：registerRealtimeHandler 登记通道与渲染入口，
+    // 订阅（fresh subscribe → 回放）由 subscribeWithRetry 触发；输出裸字节
+    // 按到达序写入。无独立历史拼接（旧 spliceHistory 语义退役）
     store.registerRealtimeHandler(sessionId, {
       onOutput: (data: Uint8Array) => {
         onRawOutput?.(data)
@@ -203,18 +177,17 @@ export function useTerminalBuffer() {
         // 输出到达即重置静止窗口：持续输出期间不触发补刷
         if (replayIdleTimer) armReplayIdleRefresh()
       },
-      writeParsed,
       onClear: () => {
-        // 链路调试：清屏仅发生在截断重播路径（低频，出现即链路异常信号）
-        logger.debug(`[useTerminalBuffer] terminal clear for truncated replay (${sessionId})`)
+        // 链路调试：清屏仅发生在重锚重播路径（低频，出现即链路异常信号）
+        logger.debug(`[useTerminalBuffer] terminal clear for re-anchored replay (${sessionId})`)
         writeCoalescer.dispose()
         if (terminal) {
           terminal.clear()
         }
       },
-      onTruncated: (minOffset: number) => {
-        logger.warn(`[useTerminalBuffer] history truncated at min_offset=${minOffset}`)
-        // 用户可见后果是「画面被清空 + 重播」（截断或检出字节洞时）：必须给出
+      onTruncated: (offset: number) => {
+        logger.warn(`[useTerminalBuffer] history truncated at offset=${offset}`)
+        // 用户可见后果是「画面被清空 + 重播」（环淘汰/重连重订阅）：必须给出
         // 原因提示，否则看起来像凭空丢内容
         toast.warning(i18n.global.t('mobile.terminal.historyTruncated'))
       },
@@ -240,19 +213,19 @@ export function useTerminalBuffer() {
   }
 
   /**
-   * 订阅会话 — 确保 Rust 链路订阅（会话启动时已触发，此处幂等兜底）；
+   * 订阅会话 — fresh subscribe（链路已在运行时重播环窗口）；
    * 逻辑收敛到 store（Rust 命令驱动 + terminal-state 事件同步）
    *
    * @param sessionId - 会话 ID
-   * @returns 已订阅时的快照元数据；订阅建立中时返回 null
+   * @returns 始终 null（订阅确认经事件/对账异步到达）
    */
-  async function subscribeSession(sessionId: string): Promise<SubscribeResultInfo | null> {
+  async function subscribeSession(sessionId: string): Promise<null> {
     return store.subscribeSession(sessionId)
   }
 
   /**
-   * 退出终端页（页面卸载时调用）— 停止前端消费、切 batch 传播；
-   * Rust 订阅保持（会话未停），重进时 registerRealtimeHandler 重新拼接历史
+   * 退出终端页（页面卸载时调用）— 停止前端消费并**关闭链路**；
+   * 重进时 registerRealtimeHandler + fresh subscribe 重播回放
    *
    * @param sessionId - 会话 ID
    */
@@ -263,19 +236,9 @@ export function useTerminalBuffer() {
   }
 
   /**
-   * 强制全量重播 — 页面重进时 xterm 为全新实例。历史缓存由
-   * registerRealtimeHandler 回放；连接存活时重发订阅（快照重播按 seq 跳过）
-   *
-   * @param sessionId - 会话 ID
-   */
-  function forceReplay(sessionId: string) {
-    store.forceReplay(sessionId)
-  }
-
-  /**
-   * 预加载会话输出 — 会话页点击进入终端前的准备：订阅 + 连接。
-   * 回放帧在 handler 注册前由 store 历史缓存缓冲，终端页挂载时统一回放，
-   * 实现「终端准备好后才跳转」：进入终端页即渲染历史，无需二次等待。
+   * 预加载会话输出 — 会话页点击进入终端前的准备：订阅 + 连接（预热）。
+   * 终端页挂载时会再次 fresh subscribe 触发回放；本函数只保证「连接已就绪」，
+   * 减少首次挂载的握手等待。
    *
    * 返回是否已就绪；失败/超时返回 false，终端页走原有重试路径。
    *
@@ -285,11 +248,10 @@ export function useTerminalBuffer() {
     try {
       // 触发连接（socket 回调异步置 subscribed）
       await store.subscribeSession(sessionId)
-      // 轮询等待 subscribe_ok（连接 + 认证 + 订阅往返，通常 <1s）
+      // 轮询等待 subscribed（连接 + 认证 + 订阅往返，通常 <1s）
       const deadline = Date.now() + PREPARE_TIMEOUT_MS
       while (Date.now() < deadline) {
         if (store.getBuffer(sessionId)?.subscribed) {
-          store.markPrepared(sessionId)
           return true
         }
         await new Promise((resolve) => setTimeout(resolve, 100))
@@ -349,7 +311,6 @@ export function useTerminalBuffer() {
     unregisterRealtimeHandler,
     subscribeSession,
     unsubscribeSession,
-    forceReplay,
     prepareSession,
     handleDisconnect,
     handleSessionStopped,

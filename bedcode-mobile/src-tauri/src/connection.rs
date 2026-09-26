@@ -28,7 +28,7 @@ pub use heartbeat::{HeartbeatConfig, HeartbeatEvent, HeartbeatManager};
 pub use io::{IoEvent, IoManager};
 pub use lifecycle::{ConnectionStatus, LifecycleEvent, LifecycleManager};
 pub use reconnect::{ReconnectConfig, ReconnectEvent, ReconnectManager, ReconnectState};
-pub use request_response::RequestResponseManager;
+pub use request_response::{MatchOutcome, RequestResponseManager};
 pub use traits::{
     ClientInfoTrait, DefaultResponseHandler, DefaultSendStrategy, ResponseHandler, RetrySendStrategy, SendStrategy,
 };
@@ -39,7 +39,7 @@ pub use ws_connection::{WsClientConfig, WsConnectionManager};
 // Re-export from business layer
 pub use manager::ConnectionManager;
 pub use pairing_service::PairingService;
-pub use request::{AuthRequest, ConfigRequest, ResponseParser, SessionRequest, TerminalRequest};
+pub use request::AuthRequest;
 
 /// WebSocket 客户端事件（对外暴露的事件）
 #[derive(Debug, Clone, Serialize, Deserialize)]

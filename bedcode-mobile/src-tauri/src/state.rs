@@ -127,19 +127,18 @@ pub fn try_get_plugin_manager() -> Option<Arc<PluginManager>> {
 
 // ==================== Link Crypto Context（issue 09） ====================
 
-/// 链路加密运行期上下文
+/// 链路加密运行期上下文（HTTP 信封加密；WS 帧级加密已随桌面端插件端点
+/// 帧加密退役——`TrafficChannel::WsPlugin => false`，本结构不再含 WS 通道）
 ///
-/// 设置开关与 pin 存于 WebView localStorage（issue 05/06 的 TS 侧），而常驻
-/// 事件 WS 建连在 Rust 侧——前端经 `set_link_crypto_context` 命令把当前态
-/// 推送到此，建连时读取。缺省全关：未推送前事件 WS 保持明文（与现状一致）。
+/// 设置开关与 pin 存于 WebView localStorage（issue 05/06 的 TS 侧），而 HTTP
+/// 加密裁决在 Rust 侧（http_proxy）——前端经 `set_link_crypto_context` 命令把
+/// 当前态推送到此。缺省全关：未推送前 HTTP 载荷保持明文（与现状一致）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinkCryptoContext {
     /// 主开关（对应移动端 trafficEncryption.enabled）
     pub enabled: bool,
-    /// 严格模式：协商被拒/失败时断连报错而非明文续跑
+    /// 严格模式：加密被拒/失败时断连报错而非明文续跑
     pub strict_mode: bool,
-    /// 事件通道子开关（对应桌面 encryptWsEvent）
-    pub encrypt_ws_event: bool,
     /// HTTP 通道子开关（对应桌面 encryptHttp；HTTP 代理收束后由 Rust 裁决）
     pub encrypt_http: bool,
     /// 已 pin 的桌面端身份公钥（base64）；None = 未配对/未下发
@@ -151,7 +150,6 @@ impl Default for LinkCryptoContext {
         Self {
             enabled: false,
             strict_mode: false,
-            encrypt_ws_event: true,
             encrypt_http: true,
             kd_public_b64: None,
         }
@@ -161,7 +159,6 @@ impl Default for LinkCryptoContext {
 static LINK_CRYPTO_CONTEXT: std::sync::RwLock<LinkCryptoContext> = std::sync::RwLock::new(LinkCryptoContext {
     enabled: false,
     strict_mode: false,
-    encrypt_ws_event: true,
     encrypt_http: true,
     kd_public_b64: None,
 });
@@ -186,15 +183,9 @@ pub fn update_link_crypto_pin(kd_public_b64: Option<String>) {
     }
 }
 
-/// 事件 WS 是否应发起加密协商：主开关 ∧ 事件子开关 ∧ 已持有 pin。
-/// 协商依赖配对期下发的桌面端身份公钥作信任锚，三者缺一即明文。
-pub fn is_event_encryption_active() -> bool {
-    let ctx = get_link_crypto_context();
-    ctx.enabled && ctx.encrypt_ws_event && ctx.kd_public_b64.is_some()
-}
-
 /// HTTP 通道是否应加密（HTTP 代理收束后由 Rust 裁决）：主开关 ∧ HTTP 子开关
 /// ∧ 已持有 pin——对齐前端 `isChannelEncryptionActive('http')` 的判定。
+/// （WS 通道加密已随桌面端插件端点帧加密退役，无对应判定函数）
 pub fn is_http_encryption_active() -> bool {
     let ctx = get_link_crypto_context();
     ctx.enabled && ctx.encrypt_http && ctx.kd_public_b64.is_some()

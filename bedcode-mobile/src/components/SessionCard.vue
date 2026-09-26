@@ -66,7 +66,7 @@ defineEmits<{
 }>()
 
 const isRunning = computed(() => {
-  return props.session.status === 'running' || props.session.status === 'waiting_input'
+  return props.session.status === 'running' || props.session.status === 'waitingInput'
 })
 
 const { runTime: elapsed } = useRunTime(
@@ -77,7 +77,7 @@ const { runTime: elapsed } = useRunTime(
 const statusChipClass = computed(() => {
   switch (props.session.status) {
     case 'running': return 'chip-emerald'
-    case 'waiting_input': return 'chip-amber'
+    case 'waitingInput': return 'chip-amber'
     default: return 'chip-zinc'
   }
 })
@@ -88,7 +88,7 @@ const statusIcon = computed(() => {
       return () => h('svg', { fill: 'none', stroke: 'currentColor', viewBox: '0 0 24 24' }, [
         h('path', { 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'stroke-width': '2', d: 'M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z' }),
       ])
-    case 'waiting_input':
+    case 'waitingInput':
       return () => h('svg', { fill: 'none', stroke: 'currentColor', viewBox: '0 0 24 24' }, [
         h('path', { 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'stroke-width': '2', d: 'M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z' }),
       ])
@@ -102,7 +102,7 @@ const statusIcon = computed(() => {
 const statusBadgeClass = computed(() => {
   switch (props.session.status) {
     case 'running': return 'badge-emerald'
-    case 'waiting_input': return 'badge-amber'
+    case 'waitingInput': return 'badge-amber'
     default: return 'badge-zinc'
   }
 })
@@ -110,7 +110,7 @@ const statusBadgeClass = computed(() => {
 const statusLabel = computed(() => {
   switch (props.session.status) {
     case 'running': return t('mobile.sessionCard.running')
-    case 'waiting_input': return t('mobile.sessionCard.waitingInput')
+    case 'waitingInput': return t('mobile.sessionCard.waitingInput')
     default: return t('mobile.sessionCard.stopped')
   }
 })

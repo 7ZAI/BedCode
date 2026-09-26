@@ -273,10 +273,9 @@ async function handleSessionClick(session: any) {
   isNavigating.value = true
   connection.activeSessionId.value = session.id
 
-  // 终端准备：订阅输出（回放帧缓冲在 store），就绪后才跳转 —— loading 以
-  // 弹窗形式展示在本页，终端页挂载即渲染历史；失败/超时不阻塞跳转，由
-  // 终端页走原有 forceReplay + 订阅重试路径
-  if (session.status === 'running' || session.status === 'waiting_input') {
+  // 终端准备：预热连接（订阅 = fresh subscribe，回放随流；终端页挂载时
+  // 再次订阅触发完整回放）；失败/超时不阻塞跳转，由终端页走订阅重试路径
+  if (session.status === 'running' || session.status === 'waitingInput') {
     await prepareSession(session.id)
   }
 

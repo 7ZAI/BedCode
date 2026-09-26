@@ -160,22 +160,12 @@ function refreshPinnedFingerprint(): void {
   pinnedFingerprint.value = getPinnedFingerprint()
 }
 
-/** 通道子开关行元数据（与桌面端三子开关一一对应） */
+/** HTTP 载荷加密子开关行元数据（WS 通道已随桌面端插件端点加密退役，仅剩 http） */
 const linkChannelRows = computed(() => [
   {
     channel: 'http' as const,
     labelKey: 'settings.connection.linkEncryptHttp',
     value: linkSettings.settings.value.encryptHttp,
-  },
-  {
-    channel: 'ws-terminal' as const,
-    labelKey: 'settings.connection.linkEncryptWsTerminal',
-    value: linkSettings.settings.value.encryptWsTerminal,
-  },
-  {
-    channel: 'ws-event' as const,
-    labelKey: 'settings.connection.linkEncryptWsEvent',
-    value: linkSettings.settings.value.encryptWsEvent,
   },
 ])
 

@@ -324,9 +324,9 @@ pub fn interrupt_running_tasks_on_session_end(host: &WasmHost, session_id: &str)
         affected, session_id
     ));
 
-    // 广播状态变更到消息总线 + 前端 UI，保证全局状态一致
+    // 广播状态变更到消息总线 + 前端 UI + 移动端 WS，保证全局状态一致
     // （websocket 业务下沉票 06：移除宿主 broadcast_sync，任务事件由本插件
-    // 经 bus + emit 双通道发布，载荷自足）
+    // 经 bus + emit 双通道发布，载荷自足；票 02：WS 广播第三通道）
     let _ = host.bus_publish(
         EVENT_TASK_STATUS_CHANGED,
         &serde_json::json!({
@@ -342,9 +342,32 @@ pub fn interrupt_running_tasks_on_session_end(host: &WasmHost, session_id: &str)
             "taskReason": REASON,
         }),
     );
+    broadcast_task_status(host, session_id, "interrupted", Some(REASON), None);
     // 注解槽投影：会话列表上的任务字段同步收敛到 interrupted
     // （缺这一步，移动端会一直把已终止会话显示成运行中）
     publish_task_slots(host, session_id, "interrupted", Some(REASON), None);
+}
+
+/// `task:status-changed` 的移动端广播（票 02：单点收口）
+///
+/// 三个发布点（会话终态 interrupted / 调度下发 dispatched / hook 状态推送）
+/// **只经此处**广播——bus 形载荷不带 reason / questions，emit 是 camelCase，
+/// 若各点自行拼载荷就会出现第三套键名；此处统一取 bus 形（snake_case）
+/// 并挂上本点局部的 reason / questions（缺席即不出现键）。
+///
+/// 广播是旁路：失败只留痕，不影响任务状态推进。
+fn broadcast_task_status(
+    host: &WasmHost,
+    session_id: &str,
+    status: &str,
+    reason: Option<&str>,
+    questions: Option<&Value>,
+) {
+    crate::ws_events::broadcast_event(
+        host,
+        EVENT_TASK_STATUS_CHANGED,
+        &crate::ws_events::task_status_payload(session_id, status, reason, questions),
+    );
 }
 
 /// 写入任务行（队列出队 / 定时触发调度共用）
@@ -361,7 +384,8 @@ pub fn create_task_from_dispatch(
 ) {
     insert_task_row(host, session_id, prompt, agent, source);
 
-    // 调度触发的任务同样发布状态变更（bus + emit，票 06 起不经宿主 broadcast_sync）
+    // 调度触发的任务同样发布状态变更（bus + emit + WS，票 06 起不经宿主
+    // broadcast_sync；票 02 补 WS 第三通道）
     let _ = host.bus_publish(
         EVENT_TASK_STATUS_CHANGED,
         &serde_json::json!({
@@ -376,6 +400,13 @@ pub fn create_task_from_dispatch(
             "taskStatus": "in_progress",
             "taskReason": format!("Dispatched from {}", source),
         }),
+    );
+    broadcast_task_status(
+        host,
+        session_id,
+        "in_progress",
+        Some(&format!("Dispatched from {}", source)),
+        None,
     );
     publish_task_slots(
         host,
@@ -921,6 +952,9 @@ fn handle_update_task_status(host: &WasmHost, body: &Value) -> Value {
             "taskReason": reason,
         }),
     );
+    // 移动端事件源（票 02）：bus 形载荷 + 本点独有的 reason / questions
+    // （bus 无这两个字段、emit 是 camelCase，故在此单点合并）
+    broadcast_task_status(host, &resolved_session_id, status, reason, questions);
     // 注解槽投影：hook 推送的每个状态都同步到会话记录（含 questions 的 JSON 文本）
     publish_task_slots(host, &resolved_session_id, status, reason, questions);
 
@@ -1633,15 +1667,11 @@ pub fn set_auto_mode(
         session_id, new_execute, new_answer
     ));
 
-    // 广播模式变更到消息总线 + 前端 UI（票 06 起不经宿主 broadcast_sync）
-    let _ = host.bus_publish(
-        EVENT_SESSION_MODE_CHANGED,
-        &serde_json::json!({
-            "session_id": session_id,
-            "auto_approve": new_answer,
-            "auto_execute": new_execute,
-        }),
-    );
+    // 广播模式变更到消息总线 + 前端 UI + 移动端 WS（票 06 起不经宿主
+    // broadcast_sync；票 02 补 WS 第三通道，移动端据此同步两个开关）
+    let bus_payload = crate::ws_events::session_mode_payload(session_id, new_answer, new_execute);
+    let _ = host.bus_publish(EVENT_SESSION_MODE_CHANGED, &bus_payload);
+    crate::ws_events::broadcast_event(host, EVENT_SESSION_MODE_CHANGED, &bus_payload);
 
     // 自动执行刚开启且会话空闲 → 立即调度队列中已积累的任务。
     // 双重空闲判定：任务历史（has_active_task）+ 队列在途项

@@ -1,9 +1,9 @@
-//! Event WS Supervisor（04：认证成功后自动建连 + 意外断开自动自愈）
+//! Event WS Supervisor（票 03：认证成功后自动建连 + 意外断开自动自愈）
 //!
-//! HTTP 认证成功后（`MobileEvent::AuthSuccess` 广播契口）由单例监督任务
-//! 自动建立 `/ws/event` 常驻连接并首消息 JWT 认证；意外断开按既有
-//! `DEFAULT_RETRY_DELAYS_MS` 退避经 HTTP reauth 自愈后重建，全程常驻、
-//! 不主动断开、不干扰未来 P2 前端终端 WS。
+//! HTTP 认证成功后（`MobileEvent::AuthSuccess` 广播契口）由单例监督任务自动建立
+//! `session-control` 插件端点常驻连接并发极简认证首帧（`establish_event_ws` 内部
+//! 完成，见 `connection/manager.rs`）；意外断开按既有 `DEFAULT_RETRY_DELAYS_MS`
+//! 退避经 HTTP reauth 自愈后重建，全程常驻、不主动断开、不干扰未来 P2 前端终端 WS。
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;

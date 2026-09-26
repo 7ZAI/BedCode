@@ -8,16 +8,11 @@ pub mod plugin;
 pub mod session;
 pub mod special_key;
 pub mod sumary;
-pub mod sync;
 
 // Re-export all public types
 pub use auth::{AuthPayload, AuthStage};
-pub use control::{
-    SessionConfigAction, SessionConfigPayload, SessionControlAction, SessionControlPayload, SubscribeMode,
-    TerminalAction, TerminalPayload,
-};
+pub use control::{SessionControlAction, SessionControlPayload};
 pub use plugin::{PluginQuestion, PluginQuestionOption};
 pub use session::{SessionStatus, TaskStatus};
 pub use special_key::{KeyCode, KeyCombo};
-pub use sumary::{QuickActionSummary, SessionConfigSummary, SessionSummary};
-pub use sync::SyncPayload;
+pub use sumary::{SessionConfigSummary, SessionSummary};

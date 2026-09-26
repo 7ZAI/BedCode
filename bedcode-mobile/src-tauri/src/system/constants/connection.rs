@@ -48,12 +48,20 @@ pub const PLACEHOLDER_CLIENT_ADDR: &str = "0.0.0.0:0";
 /// WebSocket 默认路径（WsClientConfig 默认值）
 pub const WS_DEFAULT_PATH: &str = "/";
 
-/// 终端会话直连路径前缀（09 前端直连；桌面端新路由，路径为 /ws/terminal/session/{session_id}）
-pub const WS_TERMINAL_SESSION_PATH: &str = "/ws/terminal/session";
+/// 终端流端点（票 05：新协议 `/ws/plugin/{plugin-id}/terminal`，对齐桌面插件
+/// `ws_terminal.rs` 的订阅/输入/流控/重锚/停止帧；旧 `/ws/terminal/session/{id}`
+/// 直连路径已随桌面 WS 硬切退役 → 404）
+pub const WS_PLUGIN_TERMINAL_PATH: &str = "/ws/plugin/com.bedcode.terminal-session/terminal";
 
-/// 常驻事件 WebSocket 路径（04 事件 WS 建连地址；桌面端 02 已建路由）
-pub const WS_EVENT_PATH: &str = "/ws/event";
+/// 桌面 wasm 应用 `com.bedcode.terminal-session` 的 WS 端点基础路径
+///
+/// 宿主路由形如 `/ws/plugin/{plugin-id}/{path}`（桌面 WS 业务硬切后的唯一形态，
+/// 旧 `/ws/event` 与 `/ws/terminal/session/{id}` 已删除 → 404）。
+/// **WS 路径字面量唯一出处**：新增端点在此追加，各调用点只引常量。
+pub const WS_PLUGIN_BASE_PATH: &str = "/ws/plugin/com.bedcode.terminal-session";
 
-/// 链路加密事件通道名（issue 09；与桌面端 TrafficChannel::WsEvent.as_str 一致，
-/// 参与 WS AAD 绑定，两端必须逐字节一致）
-pub const LINK_CRYPTO_CHANNEL_EVENT: &str = "ws-event";
+/// 常驻事件通道端点（票 03：`session-control`，替代已删除的 `/ws/event`）
+///
+/// 认证首帧 `{"type":"auth","token":"<jwt>"}`；入站只有事件帧
+/// `{"type":"event","event":"<name>","payload":{...}}`（票 02 定稿帧壳）。
+pub const WS_PLUGIN_SESSION_CONTROL_PATH: &str = "/ws/plugin/com.bedcode.terminal-session/session-control";

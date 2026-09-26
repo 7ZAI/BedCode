@@ -254,7 +254,7 @@ const { t } = useI18n()
 const connection = useMobileConnection()
 const mockTerminal = useMockTerminal()
 const { isLandscape } = useOrientation()
-const { store: bufferStore, registerRealtimeHandler, unregisterRealtimeHandler, subscribeSession, unsubscribeSession, forceReplay, handleDisconnect, handleSessionStopped, markSessionRunning, sendInput } = useTerminalBuffer()
+const { store: bufferStore, registerRealtimeHandler, unregisterRealtimeHandler, subscribeSession, unsubscribeSession, handleDisconnect, handleSessionStopped, markSessionRunning, sendInput } = useTerminalBuffer()
 const assistStore = useInputAssistantStore()
 const sessionId = computed(() => route.params.id as string)
 // 挂载时固定会话 ID：卸载时路由导航已完成、route.params 已失效（undefined），
@@ -406,7 +406,6 @@ const {
   feedTuiOutput,
   disposeTuiCompat,
   disposeScroll,
-  forceReplay,
   currentLine,
   isUserScrolling,
   cellHeight,
@@ -551,8 +550,8 @@ watch(isSessionActive, async (active, prevActive) => {
     // 监听器会永久丢弃新流帧（事件路径 SyncSessionStatusChanged 已复位，
     // 此处兜底防事件丢失场景）
     markSessionRunning(sessionId.value)
-    // 会话停止/重启后偏移空间从 0 重建，游标已被 markSessionStopped 重置，
-    // 此处订阅即全量重播；页面存活场景走增量续传
+    // 会话停止/重启后重新订阅：fresh subscribe → 回放环窗口（重播在屏内容
+    // 前先经 Rust 重锚事件清屏，旧内容不与新流重叠）
     await subscription.subscribeWithRetry()
     // 会话激活（含重连后）时 PTY 可能仍是默认尺寸，主动同步一次
     resize.syncTerminalSizeToHost()
@@ -606,10 +605,9 @@ onMounted(async () => {
   // 即接线）与订阅路径（phase 监听需捕获 subscribe_ok 后 history 段全程）
   subscription.armGate()
 
-  // 进入终端页 = 全量重播：xterm 每次进入都是全新实例，旧游标续传会丢失历史
-  // （含后台期间已推进但从未渲染过的字节）。重置游标必须早于 initTerminal——
-  // 其内部 registerRealtimeHandler 的 spliceHistory 会立即读取游标作为 from；
-  // gap 自愈路径的 forceReplay 不重置游标（续传补缺口语义保持不变）
+  // 进入终端页 = 全量重播：xterm 每次进入都是全新实例；本地计数基准归零
+  // 必须早于 initTerminal——其内部 registerRealtimeHandler 只登记通道与渲染入口，
+  // 重播由挂载后的 fresh subscribe 提供（无独立历史拼接；缺口号不再误报）
   bufferStore.resetCursor(sessionId.value)
 
   await initTerminal()
@@ -622,18 +620,12 @@ onMounted(async () => {
       mockTerminal.startOutput(terminalRef.value)
     }
   } else if (isSessionActive.value && isConnected.value) {
-    // 会话页预加载已就绪（全量回放已在订阅期间缓冲，registerRealtimeHandler
-    // 挂载时已写入 xterm）：跳过 forceReplay，避免清空已缓冲历史再次全量回放
-    const prepared = bufferStore.consumePrepared() === sessionId.value
-    if (!prepared) {
-      // 全量重播已由上方 resetCursor（spliceHistory from=0）+ 下方重订阅承担；
-      // forceReplay 在此仅为兜底（幂等：from=游标，若 spliceHistory 未及完成则再跑一次）
-      forceReplay(sessionId.value)
-    }
+    // 进入终端页 = fresh subscribe（回放环窗口：历史与实时同一条流）——
+    // 无论会话页是否预加载过都重新订阅一次，确保渲染入口挂好后的完整回放
     await subscription.subscribeWithRetry()
   } else {
-    // 非活跃/未连接：本次挂载不会发起订阅，无服务端历史段可等，立即放行；
-    // 本地缓存仍由 replayDone 门控（重进展示最后已知内容）
+    // 非活跃/未连接：本次挂载不会发起订阅，无回放可等，立即放行；
+    // 重试/恢复由订阅监听（isSessionActive / isConnected watch）承担
     subscription.settleServerHistoryNow()
   }
 
@@ -642,8 +634,9 @@ onMounted(async () => {
   // 宽度 → 移动端行尾截断；活跃时也由此处统一发送（避免重复调用）
   resize.syncTerminalSizeToHost()
 
-  // 等历史输出渲染完成再撤遮罩：缓存回放 + 服务端历史段 + 首次 fit 三条件
-  // 全部满足；任一环节卡死由 HISTORY_SETTLE_TIMEOUT_MS 超时兜底。
+  // 等渲染就绪再撤遮罩：subscribed（回放已到达） + 首次 fit 三条件中的两项
+  // 全部满足（回放随流即时渲染，无独立拼接信号）；任一环节卡死由
+  // HISTORY_SETTLE_TIMEOUT_MS 超时兜底。
   // 放行后再让出一帧渲染，末批内容 commit 上屏后才淡出遮罩，
   // 避免遮罩半透明期间透出逐批写入的闪烁过程
   const gateResult = await subscription.waitForHistoryGate()

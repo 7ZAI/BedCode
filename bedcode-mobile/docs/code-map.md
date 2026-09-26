@@ -73,9 +73,9 @@ bedcode-mobile/                       # 移动端项目 (Tauri 2.0 + Vue 3)
         ├── commands/                 # Tauri 命令层：Android 特定、认证、连接、mDNS、
         │                             #   移动端特有（Quick Actions/Settings/Session Config）、会话、终端
         ├── connection/               # 远程连接模块（核心模块，详见 Core Modules）
-        ├── enums/                    # 枚举类型：认证、控制、插件、会话、特殊键、总结、同步
+        ├── enums/                    # 枚举类型：认证、控制、插件、会话、特殊键、总结
         ├── file_service/             # 文件服务：SAF 目录树读取（saf_tree.rs）
-        ├── handler/                  # WS 消息处理器：认证、同步、系统、终端
+        ├── handler/                  # WS 消息处理器：认证、系统、插件事件路由（plugin_event）、默认
         ├── mdns/                     # mDNS 服务发现与广播（局域网设备互发现）
         ├── model/                    # 数据模型：API DTO、WebSocket 消息
         ├── peer_net.rs               # 对等网络接入：节点身份初始化（与 DeviceIdentity 分离）、
@@ -113,34 +113,43 @@ bedcode-mobile/                       # 移动端项目 (Tauri 2.0 + Vue 3)
 
 移动端作为远程终端与桌面端通信的核心：
 
-- **ws_client / ws_connection**：WebSocket 客户端主实现与连接管理
+- **ws_client / ws_connection**：WebSocket 客户端主实现与连接管理（WS 帧级链路加密已随桌面端
+  插件端点帧加密退役——`TrafficChannel::WsPlugin => false`，帧永不加解密；HTTP 信封加密保留）
+- **event_ws**：`session-control` 插件端点常驻事件通道（票 03：极简认证帧 `{"type":"auth","token"}` +
+  事件帧 `{"type":"event",…}` → `MobileEvent` → 前端 `ws_sync_*`；就绪发射 `ws_event_channel_ready`，
+  前端据此 HTTP 对账补齐重连期间事件缺口——事件不重放）
 - **heartbeat / reconnect**：心跳保活、断线重连
 - **codec / request / request_response**：消息编解码、请求发送与请求-响应关联
 - **manager / lifecycle**：连接管理器、生命周期管理
 - **pairing_service**：配对服务（与 `auth/pairing.rs` 协作）
 - **client_router / default_handler / traits**：客户端消息路由与处理 trait
 
-### 终端链路（TB v3 字节连续 + 两段订阅）— `src-tauri/src/terminal_link.rs` + `stores/terminalBuffer.ts`
+### 终端链路（插件端点新协议：订阅回放 + 裸字节 + 本地计数）— `src-tauri/src/terminal_link.rs` + `stores/terminalBuffer.ts`
 
-桌面端 PTY 输出的移动端消费链路（2026-09-12 迁入 Rust 取代前端直连 WS；2026-09-17 拆两段订阅 + 两段背压）：
+桌面端 PTY 输出的移动端消费链路（2026-09-12 迁入 Rust 取代前端直连 WS；2026-09-17 两段订阅；
+**2026-09-26 票 05 对齐桌面插件 `ws_terminal.rs` 新协议**——TB v3 / 16MB 缓存 / from_offset 续传全部退役）：
 
-- **两段订阅（生命周期彼此独立）**：
-  - **段1 会话级**（Rust ↔ 桌面端）：会话 WS 连接成功后 `terminal_subscribe`，会话停止/设备断开
-    `terminal_unsubscribe`；背压水位 `acked` 锚定 Rust 缓存游标（收帧即消化）
-  - **段2 页面级**（前端 ↔ Rust）：进入终端页 `terminal_page_subscribe(sessionId, channel)`、退出
-    `terminal_page_unsubscribe`（与 `set_mode realtime/batch` 配对）；帧经**页面级 Tauri Channel**
-    投递（TB v3 二进制 Raw，一条消息可含多帧；状态/重锚仍走事件），背压水位 `frontend_rendered`
-    锚定前端渲染游标——未渲染窗口越高位水停推，**ack 推进即补投**一批（≤256KB，节奏由消费端掌控）
-- **terminal_link.rs（Rust 后端持有，真源 = Rust 缓存）**：每会话一个 tokio-tungstenite WS、JWT 认证、
-  TB v3 帧解析（start_offset 8LE + len 4LE）、会话级字节缓存（16MB LRU + `contiguous_runs` 按洞切分）、
-  ack 水位 + 节流回发（含空闲轮询兜底）、退避重连（保留游标 from_offset 重订阅）、双速 mode、一次性历史
-  （缓存优先，HTTP `/api/sessions/{id}/history` 回退增量拉取）；帧出口 = 页面 Channel（`encode_data_frame`），
-  状态事件 `terminal-state`/`terminal-resync`；
-  命令 `terminal_subscribe/unsubscribe` · `terminal_page_subscribe/unsubscribe` ·
-  `remove/send_input/set_mode/ack_rendered/get_history/get_state`
-- **前端**：`stores/terminalBuffer.ts`（Rust 命令驱动 + 事件消费 + lastRenderedOffset 游标/去重/缺口
-  重拼接/截断清屏/跨帧裁剪；历史拼接完成后才消费实时帧）+ `useTerminalBuffer.ts`（写队列 rAF 合并 + 背压 ack）
-- 协议与架构细节：`docs/knowledge/pty-output-pipeline.md`、`.scratch/mobile-ws-rust/spec.md`
+- **生命周期（进入订阅 / 离开关闭）**：进入终端页/预加载 `terminal_subscribe`（**fresh subscribe** =
+  插件回放环窗口，历史与实时同一条流；链路已运行时重发 subscribe 帧重播）；离开终端页
+  `terminal_unsubscribe`（**关闭连接**，不得后台常拉）；意外断开退避重连后**重新订阅**（无续传语义；
+  环淘汰由 `ring_resync` 如实告知）。段2 `terminal_page_subscribe(sessionId, channel)` / 退出
+  `terminal_page_unsubscribe` 与管理器共享 `Arc` 订阅态/通道槽（链路重建沿用）
+- **协议（`terminal_link.rs`）**：`/ws/plugin/com.bedcode.terminal-session/terminal` 端点；握手
+  `auth{token}`；订阅 `subscribe{sessionId,mode:live}`；输入可打印文本 `input{data:UTF-8}`、控制字符/
+  特殊键 binary（`KeyCombo::to_pty_bytes`）；流控 ack `ack{offset=<本地已渲染字节数>}`（64KB 阈值 +
+  250ms 空闲兜底 + 半空闲轮询）；输出 = **裸字节**（无帧头、无 per-frame offset）；重锚 `ring_resync`
+  （唯一重锚信号：清屏 + 本地计数基准重置，发 `terminal-resync` 事件）；停止 `session_stopped`（尾帧
+  在前）；`error{message}` 分类——含「会话不存在」按退避重连，超 3 次停止
+- **状态/事件**：`terminal-state`（phase idle/connecting/auth/live，无独立 history——收 subscribed 即
+  live；detail 含 unsubscribed/stopped/session_missing/retry/resync 等）、`terminal-resync`；
+  命令 `terminal_subscribe/unsubscribe` · `terminal_page_subscribe/unsubscribe` · `unsubscribe_all` ·
+  `remove` · `send_input` · `ack_rendered` · `get_history`（HTTP 直取，前端未接线）· `get_state`
+- **前端**：`stores/terminalBuffer.ts`（裸字节按到达序渲染 + 本地渲染字节计数 `lastRenderedOffset`
+  （仅 ack 水位）+ `hasRenderedContent` resync 清屏/提示门控；停止后字节丢弃；无缺口判定/去重/
+  裁剪——缺口号不再误报）+ `useTerminalBuffer.ts`（写队列 rAF 合并 + 背压 ack）；`ring_resync`
+  唯一重锚（清屏 + 归零）
+- 协议与架构细节：`.scratch/2026-09-26-mobile-desktop-adaptation/spec.md` §3.3；旧文档
+  `docs/knowledge/pty-output-pipeline.md` 描述 TB v3 协议已退役（移动端段落过时，桌面端段落仍有效）
 
 ### 插件核心模块引导
 
@@ -229,10 +238,11 @@ bedcode-mobile/                       # 移动端项目 (Tauri 2.0 + Vue 3)
   - **useTerminalKeyboardAvoidance**：visualViewport + 插件 safeAreaChanged 双通道键盘检测、
     根容器高度收缩避让、页面 pan 守卫
   - **useTerminalSubscription**：订阅失败重试 + 历史渲染就绪门控（加载遮罩放行三信号）
-- **terminalBuffer store + useTerminalBuffer**：Rust 命令驱动（订阅/模式/输入/ack/历史），帧消费 =
-  页面 Channel（`onChannelMessage` 按 16B 头逐帧解析 TB v3，与 `handleFrame` 共用投递路径）+ 状态事件
-  `terminal-state`/`terminal-resync`；lastRenderedOffset 字节游标 + 跨帧裁剪 + 缺口重拼接 + 截断清屏；
-  历史拼接（terminalGetHistory）完成才消费实时帧；双速模式（进页 realtime / 离页 batch）
+- **terminalBuffer store + useTerminalBuffer**：Rust 命令驱动（订阅/输入/ack），帧消费 =
+  页面 Channel **裸字节**按序渲染 + 本地计数（lastRenderedOffset，仅 ack 水位）；
+  重锚 `terminal-resync` 清屏归零（`hasRenderedContent` 门控提示一次）；停止帧后字节丢弃；
+  无缺口判定/去重/裁剪（缺口号不再误报）；`subscribed`（phase=live）为渲染与输入门控
+  （无独立 history 阶段）
 - **useTerminalScroll**：触摸滚动（含惯性）、自定义滚动条、长按选择模式
 - **utils/terminal***：resize 触发策略（`resolveGridResize` 列漂移钳制）、分层防抖、网格测量、滚动历史行数
 - **useMobileConnection / useMobileCommands / useHttpApi**：连接初始化与事件同步、Tauri 命令封装（含
@@ -273,7 +283,7 @@ Desktop PTY → Claude Code
 | 功能 | 目录 |
 |------|------|
 | WebSocket 客户端 / 心跳 / 重连 | `src-tauri/src/connection/` |
-| 终端链路（Rust 持有：TB v3 / 缓存 / ack / 重连） | `src-tauri/src/terminal_link.rs` |
+| 终端链路（Rust 持有：插件端点协议 / 裸字节 / 本地计数 / 重连） | `src-tauri/src/terminal_link.rs` |
 | 消息路由 | `src-tauri/src/router/` |
 | WS 消息处理器 | `src-tauri/src/handler/` |
 | 认证 / 配对 | `src-tauri/src/auth/` |
@@ -291,7 +301,7 @@ Desktop PTY → Claude Code
 | 对等网络（节点/信任/发现） | `src-tauri/src/peer_net.rs` |
 | 对等传输（发送/接收/远端浏览） | `src-tauri/src/peer_transfer.rs`、`peer_receive.rs`、`peer_remote.rs` |
 | 对等网络底座 crate | `../packages/peer-net`、`../packages/link-crypto` |
-| 链路加密（HTTP 信封 + WS 帧） | `src/services/linkCrypto.ts`、`src/composables/`（useLinkEncryption） |
+| 链路加密（HTTP 信封；**WS 帧级已随桌面端插件端点加密退役**） | `src/services/linkCrypto.ts`、`src/composables/`（useLinkEncryption） |
 | 多播锁（mDNS 前置） | `src-tauri/src/plugin/android_plugins/multicast_lock.rs` + Kotlin `MulticastLockPlugin` |
 | SAF Uri → 路径解析 / SAF 读写抽象 | `src-tauri/src/plugin/saf_path.rs`、`saf_io.rs`（主 seam） |
 | 插件审批 / 身份校验 | `src-tauri/src/plugin/approval.rs`、`validation.rs` |

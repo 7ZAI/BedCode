@@ -12,6 +12,9 @@
 //! - **插件内部 / 跨插件消费者**：`host-bus.publish` **属主私有 topic**
 //!   `com.bedcode.terminal-session::session:<kind>`（跨属主订阅被宿主总线门禁拒绝，
 //!   他人既订不到也伪投递不进）；
+//! - **移动端（WS）**：[`crate::ws_events::broadcast_event`]（向声明端点
+//!   `session-control` 的全体客户端广播，帧壳 `{"type":"event",...}`，载荷同形
+//!   ——票 02 补回桌面 WS 硬切后失源的移动端事件面）；
 //! - **来源设备**：`source_device` 随载荷发布（不再由宿主排除）——需要「排除发起端」
 //!   语义的消费者自行按该字段过滤（原宿主 `broadcast_sync_to_others` 的职责下沉）。
 //!
@@ -92,9 +95,10 @@ pub fn removed_payload(
 
 // ==================== wasm 发布（emit + bus 双通道同形） ====================
 
-/// 双通道发布：属主私有 bus topic + 前端 emit（同形载荷）
+/// 三通道发布：属主私有 bus topic + 前端 emit + WS 广播（同形载荷）
 ///
-/// bus 失败显性 `log_warn`（点名 topic）；emit 无返回值（宿主投递）。
+/// bus 失败显性 `log_warn`（点名 topic）；emit 无返回值（宿主投递）；
+/// WS 广播是移动端事件源（票 02），失败只留痕、不影响发布语义。
 #[cfg(target_arch = "wasm32")]
 fn publish(event_name: &str, payload: &serde_json::Value) {
     let topic = owned_topic(PLUGIN_ID, event_name);
@@ -105,6 +109,7 @@ fn publish(event_name: &str, payload: &serde_json::Value) {
         ));
     }
     WasmHost.emit_event(event_name, payload);
+    crate::ws_events::broadcast_event(&WasmHost, event_name, payload);
 }
 
 /// 会话创建事件（创建编排 `launch::spawn_session` 唯一发布点）

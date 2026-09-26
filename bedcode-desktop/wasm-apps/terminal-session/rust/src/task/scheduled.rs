@@ -515,15 +515,12 @@ pub fn handle_session_created(host: &WasmHost, session_id: &str, config_id: &str
     // auto_answer 保持用户设置（默认关，可在会话弹窗手动开启自动应答权限请求）。
     let (_, auto_answer) = crate::task::state::session_flags(host, session_id);
     crate::task::state::set_session_flags(host, session_id, Some(true), None);
-    // 模式变更经 bus + emit 发布（票 06 起不经宿主 broadcast_sync）
-    let _ = host.bus_publish(
-        EVENT_SESSION_MODE_CHANGED,
-        &serde_json::json!({
-            "session_id": session_id,
-            "auto_approve": auto_answer,
-            "auto_execute": true,
-        }),
-    );
+    // 模式变更经 bus + emit + WS 广播发布（票 06 起不经宿主 broadcast_sync）。
+    // bus 与广播取 snake_case 形（移动端按此消费）；emit 保留桌面前端的
+    // camelCase 兼容键，两者形状差只在 emit 一侧。
+    let bus_payload = crate::ws_events::session_mode_payload(session_id, auto_answer, true);
+    let _ = host.bus_publish(EVENT_SESSION_MODE_CHANGED, &bus_payload);
+    crate::ws_events::broadcast_event(host, EVENT_SESSION_MODE_CHANGED, &bus_payload);
     host.emit_event(
         EVENT_SESSION_MODE_CHANGED,
         &serde_json::json!({
@@ -692,22 +689,13 @@ fn handle_reset(host: &WasmHost, body: &Value) -> Value {
 
 // ==================== 事件广播 ====================
 
-/// 发布定时任务变更（bus + emit 双通道，票 06 起不经宿主 broadcast_sync）
+/// 发布定时任务变更（bus + emit + WS 广播三通道，票 06 起不经宿主 broadcast_sync）
+///
+/// 三通道共用 [`crate::ws_events::scheduled_changed_payload`]（形状真源单点）。
 fn broadcast_scheduled_changed(host: &WasmHost, job_id: &str, status: &str, action: &str) {
-    let _ = host.bus_publish(
-        EVENT_TASK_SCHEDULED_CHANGED,
-        &serde_json::json!({
-            "job_id": job_id,
-            "status": status,
-            "action": action,
-        }),
-    );
-    host.emit_event(
-        EVENT_TASK_SCHEDULED_CHANGED,
-        &serde_json::json!({
-            "job_id": job_id,
-            "status": status,
-            "action": action,
-        }),
-    );
+    let payload = crate::ws_events::scheduled_changed_payload(job_id, status, action);
+    let _ = host.bus_publish(EVENT_TASK_SCHEDULED_CHANGED, &payload);
+    host.emit_event(EVENT_TASK_SCHEDULED_CHANGED, &payload);
+    // 移动端事件源（票 02）：失败只留痕，不影响定时任务推进
+    crate::ws_events::broadcast_event(host, EVENT_TASK_SCHEDULED_CHANGED, &payload);
 }

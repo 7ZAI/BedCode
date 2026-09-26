@@ -65,8 +65,6 @@ export default {
       linkCryptoSection: 'Link Encryption',
       linkCryptoMaster: 'Enable Link Encryption',
       linkEncryptHttp: 'Encrypt HTTP Payloads',
-      linkEncryptWsTerminal: 'Encrypt Terminal Channel',
-      linkEncryptWsEvent: 'Encrypt Event Channel',
       linkStrictMode: 'Strict Mode (reject plaintext downgrade)',
       linkPeerFingerprint: 'Peer Fingerprint',
       linkNotPaired: 'Not paired',

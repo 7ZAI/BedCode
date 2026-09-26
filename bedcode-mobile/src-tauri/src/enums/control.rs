@@ -1,11 +1,13 @@
 //! Control Types
 //!
-//! 会话控制、会话配置和终端消息类型定义
+//! 会话控制消息类型（票 04：信封协议退役后仅保留仍有消费者的部分）
+//!
+//! 已退役删除：`SessionConfig*`（配置查询迁 HTTP `GET /api/configs`）、
+//! `Terminal*`（终端流迁票 05 新协议）、`SubscribeMode`（终端订阅随旧协议退役）、
+//! `SessionControlAction` 的 `ResizeSession`（resize 走 HTTP）/ `JoinSession` /
+//! `LeaveSession` / `SessionChanged`（旧会话流控制帧，桌面端点已删）。
 
 use serde::{Deserialize, Serialize};
-
-use super::special_key::KeyCombo;
-use super::sumary::{QuickActionSummary, SessionConfigSummary, SessionSummary};
 
 // ==================== Session Control ====================
 
@@ -17,154 +19,18 @@ pub struct SessionControlPayload {
 }
 
 /// 会话控制动作
+///
+/// 保留变体仅服务 `ws_protocol_integration` 的 legacy 场景（请求-响应匹配 /
+/// token 注入断言）；会话控制生产调用面已迁 HTTP（`session::http`）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SessionControlAction {
     /// 列出会话
     ListSessions,
-    /// 会话列表响应
-    SessionList { sessions: Vec<SessionSummary> },
     /// 启动会话
     StartSession { config_id: String },
     /// 停止会话
     StopSession { session_id: String },
     /// 删除会话
     RemoveSession { session_id: String },
-    /// 调整终端大小（force：覆盖确认后置位，服务端正统渲染端裁决用）
-    ResizeSession {
-        session_id: String,
-        cols: u16,
-        rows: u16,
-        #[serde(default)]
-        force: bool,
-    },
-    /// 加入会话，开始接收输出
-    JoinSession { session_id: String },
-    /// 离开会话，停止接收输出
-    LeaveSession { session_id: String },
-    /// 会话变更通知 (created/stopped/removed)
-    SessionChanged {
-        change_type: String,
-        session: SessionSummary,
-    },
-}
-
-// ==================== Session Config ====================
-
-/// 会话配置载荷
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionConfigPayload {
-    /// 配置动作
-    pub action: SessionConfigAction,
-}
-
-/// 会话配置动作
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum SessionConfigAction {
-    /// 列出会话配置
-    ListSessionConfigs,
-    /// 会话配置列表响应
-    SessionConfigList { configs: Vec<SessionConfigSummary> },
-    /// 列出快捷指令
-    ListQuickActions,
-    /// 快捷指令列表响应
-    QuickActionList { actions: Vec<QuickActionSummary> },
-}
-
-// ==================== Terminal ====================
-
-/// 终端载荷
-///
-/// 统一的终端消息类型，包含输出、输入、订阅/取消订阅等操作
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TerminalPayload {
-    /// 终端动作
-    pub action: TerminalAction,
-}
-
-/// 终端动作
-///
-/// 终端相关的所有操作类型：
-/// - Output: PTY 输出数据推送 (服务端 → 客户端)
-/// - Input: 客户端输入发送 (客户端 → 服务端)
-/// - Subscribe: 订阅会话输出 (客户端 → 服务端)
-/// - SubscribeResponse: 订阅响应 (服务端 → 客户端)
-/// - Unsubscribe: 取消订阅 (客户端 → 服务端)
-/// - UnsubscribeResponse: 取消订阅响应 (服务端 → 客户端)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum TerminalAction {
-    /// 输出消息 (服务端 → 客户端)
-    /// PTY 输出数据推送到客户端
-    Output {
-        /// Base64 编码的输出数据
-        data: String,
-        /// 是否等待输入
-        is_waiting: bool,
-        /// 合并消息的起始索引，用于去重和增量同步起点
-        index: usize,
-        /// 合并消息的结束索引，用于精确去重（合并多条事件时 index..=end_index）
-        #[serde(skip_serializing_if = "Option::is_none")]
-        end_index: Option<usize>,
-        /// 合并消息的起始字节偏移（会话流坐标），供字节级游标续传
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        start_offset: Option<u64>,
-        /// 合并消息的结束字节偏移（会话流坐标）
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        end_offset: Option<u64>,
-    },
-
-    /// 输入消息 (客户端 → 服务端)
-    /// 客户端发送输入到 PTY
-    Input {
-        /// 输入数据
-        data: String,
-        /// 特殊键
-        #[serde(skip_serializing_if = "Option::is_none")]
-        special_key: Option<KeyCombo>,
-    },
-
-    /// 订阅输出 (客户端 → 服务端)
-    /// 客户端订阅会话输出，实现增量同步
-    Subscribe {
-        /// 起始序号，不指定则从头补完
-        #[serde(skip_serializing_if = "Option::is_none")]
-        start_seq: Option<u64>,
-    },
-
-    /// 订阅响应 (服务端 → 客户端)
-    SubscribeResponse {
-        /// 最小可用序号（用于判断数据是否被覆盖）
-        min_seq: u64,
-        /// 当前最大序号
-        max_seq: u64,
-        /// 历史消息数量
-        history_count: usize,
-        /// 订阅裁决：incremental = 从游标续传；reset = 清屏全量重播（旧版服务端不发送）
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        mode: Option<SubscribeMode>,
-        /// 环形保留区间最小字节偏移（旧版服务端不发送）
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        min_offset: Option<u64>,
-        /// 环形保留区间最大字节偏移（旧版服务端不发送）
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        max_offset: Option<u64>,
-    },
-
-    /// 取消订阅 (客户端 → 服务端)
-    Unsubscribe,
-
-    /// 取消订阅响应 (服务端 → 客户端)
-    UnsubscribeResponse,
-}
-
-/// 订阅模式 — 服务端基于真源（输出队列保留区间）裁决，消费者零猜测
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SubscribeMode {
-    /// 游标在保留区间内：从游标字节级裁剪续传
-    Incremental,
-    /// 游标已失效（早于 min_offset / 晚于 max_offset / 首次订阅）：清屏全量重播
-    Reset,
 }

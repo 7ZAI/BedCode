@@ -101,21 +101,33 @@ GET http://{address}:{port}/api/health
 
 源码: `bedcode-mobile/src/composables/useHttpApi.ts` → `httpProbe()`
 
-### 3.2 WebSocket 连接
+### 3.2 WebSocket 连接（WS 面硬切后，插件端点双通道）
 
-探测通过后，建立 WebSocket 连接：
+> 2026-09-26 起移动端 WS 面整体对齐桌面插件端点。旧 `/ws/event` 与 `/ws/terminal/session/{id}`
+> 路径在桌面已 404；WS 只承载两条**插件端点**连接，帧永不加解密（桌面
+> `TrafficChannel::WsPlugin => false`——**WS 帧级链路加密已退役**，仅 HTTP 信封加密保留）。
 
-1. 前端调用 `invoke('ws_connect', { address, port, name })`
-2. Rust 端 `ConnectionManager::connect()` 创建 `WsClient`
-3. `WsClient` 配置:
-   - 路径: `/ws/terminal`
-   - 连接超时: 10 秒
-   - 心跳间隔: 30 秒
-4. 连接成功后状态: `Connected`（WebSocket 已建立，但**未认证**）
+探测通过并完成 HTTP 认证后（§4），Rust 侧经两条 WS 端点与桌面交换数据：
 
-**重要**: `Connected` 仅表示 WebSocket 握手完成，此时还不能发送业务消息。必须完成认证后状态才变为 `Paired`。
+1. **事件通道（常驻，信号面）**——`/ws/plugin/com.bedcode.terminal-session/session-control`：
+   - 首帧极简认证 `{"type":"auth","token":"<jwt>"}`（**不是** `Message::Auth` 信封：无加密提案、
+     不等待回执；认证失败由宿主 close 4001 显性表达）
+   - 入站只有事件帧 `{"type":"event","event":"<name>","payload":{...}}` → `MobileEvent` →
+     前端 `ws_sync_*`（session:created / stopped / removed、task:status-changed / queue-changed /
+     scheduled-changed、session:mode-changed）
+   - 事件**不重放**：连接建立/自愈后发射 `ws_event_channel_ready`，前端触发 HTTP 对账
+     （`loadActiveSessions` + 活动会话任务队列按需拉取）补齐重连期间缺口
+   - 意外断开按退避经 HTTP reauth 自愈后重建（`connection/event_ws.rs` 常驻监督）
+2. **终端流（终端页，按需）**——`/ws/plugin/com.bedcode.terminal-session/terminal`：新协议
+   （订阅回放 + 裸字节 + 本地计数 + `ring_resync` 重锚 + `session_stopped`），详情见
+   `bedcode-mobile/docs/code-map.md`「终端链路」
 
-源码: `bedcode-mobile/src-tauri/src/connection/manager.rs`、`bedcode-mobile/src-tauri/src/connection/ws_connection.rs`
+认证本身走 HTTP `/api/auth/*`（§4），WS 不再承载认证业务；会话控制 / 会话与配置加载 / 终端输入
+也全部走 HTTP（`/api/sessions/*`、`/api/configs`），调用口径见 `bedcode-mobile/docs/code-map.md`
+与根 `AGENTS.md` §9 协议节。
+
+源码: `bedcode-mobile/src-tauri/src/connection/{manager,event_ws}.rs`（事件通道）、
+`bedcode-mobile/src-tauri/src/terminal_link.rs`（终端流）
 
 ---
 

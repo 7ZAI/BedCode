@@ -69,8 +69,7 @@ pub type DefaultCodec = JsonCodec;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::enums::control::{TerminalAction, TerminalPayload};
-    use crate::enums::special_key::KeyCombo;
+    use crate::enums::control::SessionControlAction;
     use std::borrow::Cow;
     use tokio_tungstenite::tungstenite::protocol::frame::coding::{CloseCode, Data, OpCode};
     use tokio_tungstenite::tungstenite::protocol::frame::Frame;
@@ -88,12 +87,11 @@ mod tests {
     #[test]
     fn test_encode_returns_text_frame() {
         // 编码结果必须是 Text 帧，且 JSON 含类型与关键字段
-        let msg = Message::input("sess-1", "ls -la", None);
+        let msg = Message::session_control(SessionControlAction::ListSessions, None);
         match codec().encode(&msg).unwrap() {
             WsMsg::Text(json) => {
                 let text = json.to_string();
-                assert!(text.contains(r#""type":"terminal""#), "实际: {}", text);
-                assert!(text.contains(r#""session_id":"sess-1""#), "实际: {}", text);
+                assert!(text.contains(r#""type":"session_control""#), "实际: {}", text);
             }
             other => panic!("期望 Text 帧，实际: {:?}", other),
         }
@@ -102,7 +100,8 @@ mod tests {
     #[test]
     fn test_text_roundtrip_preserves_message() {
         // Text 帧 round-trip：序列化结果应逐字节一致（时间戳在构造时固定）
-        let msg = Message::input_with_response("s", "pwd", None).with_request_id("req-77");
+        let msg =
+            Message::session_control_with_response(SessionControlAction::ListSessions, None).with_request_id("req-77");
         let ws = codec().encode(&msg).unwrap();
         match codec().decode(ws).unwrap() {
             Some(back) => {
@@ -110,29 +109,6 @@ mod tests {
                 assert_eq!(back.message_id(), Some("req-77"));
             }
             None => panic!("文本消息应解码出业务消息"),
-        }
-    }
-
-    #[test]
-    fn test_roundtrip_preserves_special_key() {
-        // 特殊按键（Ctrl+C）随载荷无损往返
-        let msg = Message::input("s", "", Some(KeyCombo::parse("ctrl+c").unwrap()));
-        let ws = codec().encode(&msg).unwrap();
-        match codec().decode(ws).unwrap().unwrap() {
-            Message::Terminal {
-                session_id,
-                payload:
-                    TerminalPayload {
-                        action: TerminalAction::Input { data, special_key },
-                        ..
-                    },
-                ..
-            } => {
-                assert_eq!(session_id, "s");
-                assert_eq!(data, "");
-                assert_eq!(special_key, Some(KeyCombo::parse("ctrl+c").unwrap()));
-            }
-            other => panic!("期望 terminal input，实际: {:?}", other),
         }
     }
 
@@ -153,7 +129,7 @@ mod tests {
     #[test]
     fn test_decode_binary_json_message() {
         // Binary 帧按 UTF-8 文本解析，合法 JSON 可解码为业务消息
-        let msg = Message::input("s", "echo hi", None);
+        let msg = Message::session_control(SessionControlAction::ListSessions, None);
         let json = msg.to_json().unwrap();
         let ws = WsMsg::Binary(json.into_bytes().into());
         match codec().decode(ws).unwrap() {

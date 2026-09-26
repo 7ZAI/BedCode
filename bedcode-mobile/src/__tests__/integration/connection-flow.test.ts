@@ -22,7 +22,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import type { RemoteDevice } from '@/composables/model'
 import { flushAsync, loadFreshModule, resetLocalStorage, clearEventHandlers } from './helpers'
-import { makeAuthCredentials } from '@/__tests__/fixtures/index'
+import { makeAuthCredentials, makeSessionSummary } from '@/__tests__/fixtures/index'
 
 // ==================== mock Tauri 边界 ====================
 
@@ -352,5 +352,102 @@ describe('连接流：useMobileConnection × useHttpApi × terminalBuffer store'
     expect(conn.connectionStatus.value).toBe('disconnected')
     expect(conn.connectionError.value).toBe('Server shutdown')
     expect(conn.isConnecting.value).toBe(false)
+  })
+
+  it('事件通道就绪：ws_event_channel_ready → 触发一次 HTTP 对账（重连期间变化靠全量拉取补齐，票 03）', async () => {
+    // 通道就绪 = session-control 极简认证首帧发出（Rust 发射）；事件不重放，
+    // 对账 = 拉 /api/sessions 全量 → store 收敛（消费端按 id 去重/状态收敛）
+    const sessions = [
+      makeSessionSummary({ id: 's1', name: 'dev', status: 'running' }),
+      makeSessionSummary({ id: 's2', name: 'itest', status: 'stopped' }),
+    ]
+
+    // 先建立连接：setApiBaseUrl 在 fresh 模块实例上生效（基址是 request() 前置）
+    await conn.connect(DEVICE)
+    await flushAsync()
+
+    // 通道就绪后换装 sessions 响应（默认 mock 只答 /api/health 探测波形）
+    mockInvoke.mockImplementation((cmd: string, args?: any) => {
+      if (cmd === 'http_request') {
+        const url: string = args?.request?.url || ''
+        if (url.endsWith('/api/sessions')) {
+          return Promise.resolve({
+            status: 200,
+            statusText: 'OK',
+            headers: {},
+            bodyText: JSON.stringify({ code: 0, data: { sessions } }),
+          })
+        }
+        return Promise.resolve({ status: 404, statusText: 'Not Found', headers: {}, bodyText: '' })
+      }
+      return Promise.resolve(undefined)
+    })
+
+    await emit('ws_event_channel_ready')
+    await flushAsync()
+
+    // 恰好一次 HTTP 全量拉取 → 列表落入 activeSessions
+    const sessionCalls = invokeCalls('http_request').filter((c) =>
+      String((c[0] as any)?.request?.url ?? '').endsWith('/api/sessions'),
+    )
+    expect(sessionCalls).toHaveLength(1)
+    expect(conn.activeSessions.value.map((s: any) => s.id)).toEqual(['s1', 's2'])
+  })
+
+  it('sendInput 经 HTTP 输入面：成功形状 + 载荷透传（data/specialKey 原样携带）', async () => {
+    // 控制面迁 HTTP 后输入走 POST /api/sessions/{id}/input（票 04）；
+    // specialKey 原样透传（桌面端翻译），本端不解释
+    const { setApiBaseUrl } = await import('@/composables/useHttpApi')
+    setApiBaseUrl(DEVICE.address, DEVICE.port)
+
+    mockInvoke.mockImplementation((cmd: string, args?: any) => {
+      if (cmd === 'http_request') {
+        const url: string = args?.request?.url || ''
+        if (url.endsWith('/api/sessions/s1/input')) {
+          return Promise.resolve({
+            status: 200,
+            statusText: 'OK',
+            headers: {},
+            bodyText: JSON.stringify({ code: 0, message: 'ok' }),
+          })
+        }
+        return Promise.resolve({ status: 404, statusText: 'Not Found', headers: {}, bodyText: '' })
+      }
+      return Promise.resolve(undefined)
+    })
+
+    await conn.sendInput('s1', 'ls -la', 'ctrl+c')
+
+    const calls = invokeCalls('http_request').filter((c) =>
+      String((c[0] as any)?.request?.url ?? '').endsWith('/api/sessions/s1/input'),
+    )
+    expect(calls).toHaveLength(1)
+    const req = (calls[0][0] as any).request
+    expect(req.method).toBe('POST')
+    expect(req.url).toBe('http://192.168.1.100:8765/api/sessions/s1/input')
+    expect(JSON.parse(req.body)).toEqual({ data: 'ls -la', specialKey: 'ctrl+c' })
+  })
+
+  it('sendInput 业务错误：HTTP 200 + {code:1002} → sendInput throw（不静默吞错）', async () => {
+    const { setApiBaseUrl } = await import('@/composables/useHttpApi')
+    setApiBaseUrl(DEVICE.address, DEVICE.port)
+
+    mockInvoke.mockImplementation((cmd: string, args?: any) => {
+      if (cmd === 'http_request') {
+        const url: string = args?.request?.url || ''
+        if (url.endsWith('/api/sessions/s1/input')) {
+          return Promise.resolve({
+            status: 200,
+            statusText: 'OK',
+            headers: {},
+            bodyText: JSON.stringify({ code: 1002, message: 'session not found' }),
+          })
+        }
+        return Promise.resolve({ status: 404, statusText: 'Not Found', headers: {}, bodyText: '' })
+      }
+      return Promise.resolve(undefined)
+    })
+
+    await expect(conn.sendInput('s1', 'x')).rejects.toThrow('session not found')
   })
 })

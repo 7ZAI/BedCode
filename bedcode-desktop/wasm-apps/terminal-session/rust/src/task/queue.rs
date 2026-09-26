@@ -1294,6 +1294,9 @@ fn reorder_positions(host: &WasmHost, session_id: &str) {
 ///
 /// task_id/status 为可选关联信息：done 广播携带（移动端预设任务完成匹配），
 /// 其余动作传 None 保持既有线协议。
+///
+/// 三通道（bus + emit + WS 广播）**共用同一载荷**（形状真源在
+/// [`crate::ws_events::queue_changed_payload`]），避免三处键名漂移。
 pub fn broadcast_queue_changed(
     host: &WasmHost,
     session_id: &str,
@@ -1302,28 +1305,11 @@ pub fn broadcast_queue_changed(
     task_id: Option<&str>,
     status: Option<&str>,
 ) {
-    let task_id = task_id.map(|s| s.to_string());
-    let status = status.map(|s| s.to_string());
+    let payload = crate::ws_events::queue_changed_payload(session_id, queue_count, action, task_id, status);
     // 队列变更经 bus + emit 发布（票 06 起不经宿主 broadcast_sync）
-    let _ = host.bus_publish(
-        EVENT_TASK_QUEUE_CHANGED,
-        &serde_json::json!({
-            "session_id": session_id,
-            "queue_count": queue_count,
-            "action": action,
-            "task_id": task_id,
-            "status": status,
-        }),
-    );
+    let _ = host.bus_publish(EVENT_TASK_QUEUE_CHANGED, &payload);
     // 通知前端 UI 实时刷新（事件名与前端 context.events.on 监听一致）
-    host.emit_event(
-        EVENT_TASK_QUEUE_CHANGED,
-        &serde_json::json!({
-            "session_id": session_id,
-            "queue_count": queue_count,
-            "action": action,
-            "task_id": task_id,
-            "status": status,
-        }),
-    );
+    host.emit_event(EVENT_TASK_QUEUE_CHANGED, &payload);
+    // 移动端事件源（票 02）：`session-control` 端点全体客户端；失败只留痕
+    crate::ws_events::broadcast_event(host, EVENT_TASK_QUEUE_CHANGED, &payload);
 }

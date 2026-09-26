@@ -10,13 +10,13 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-// Mock WS 发送命令：断言调用而不真正 invoke
-const mockWsSendInput = vi.fn(() => Promise.resolve())
-vi.mock('@/composables/useMobileCommands', () => ({
-  wsSendInput: (...args: any[]) => mockWsSendInput(...args),
+// Mock HTTP 输入发送命令：断言调用而不真正发请求（票 04：输入迁 HTTP）
+const mockHttpSendInput = vi.fn(() => Promise.resolve())
+vi.mock('@/composables/useHttpApi', () => ({
+  httpSendSessionInput: (...args: any[]) => mockHttpSendInput(...args),
 }))
 
-// Mock Tauri invoke（useMobileCommands 内部依赖）
+// Mock Tauri invoke（useHttpApi 内部依赖）
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(),
 }))
@@ -149,7 +149,7 @@ describe('createSgrWheelSequence', () => {
 
 describe('useTuiCompat', () => {
   beforeEach(() => {
-    mockWsSendInput.mockClear()
+    mockHttpSendInput.mockClear()
     vi.useFakeTimers()
   })
 
@@ -201,7 +201,7 @@ describe('useTuiCompat', () => {
     term._emitParsed()
     compat.sendWheel(3, 1, 1)
     vi.advanceTimersByTime(100)
-    expect(mockWsSendInput).not.toHaveBeenCalled()
+    expect(mockHttpSendInput).not.toHaveBeenCalled()
     compat.dispose()
   })
 
@@ -217,23 +217,23 @@ describe('useTuiCompat', () => {
     // 灵敏度 1/3：(3+3) 行手指位移 → 2.0 个滚轮事件
     compat.sendWheel(3, 10, 5)
     compat.sendWheel(3, 11, 6)
-    expect(mockWsSendInput).not.toHaveBeenCalled()
+    expect(mockHttpSendInput).not.toHaveBeenCalled()
     await vi.advanceTimersByTimeAsync(17)
-    expect(mockWsSendInput).toHaveBeenCalledTimes(1)
+    expect(mockHttpSendInput).toHaveBeenCalledTimes(1)
     // 窗口上限 2 个事件（坐标取最新）：一次发完，无积压
-    expect(mockWsSendInput.mock.calls[0][0]).toBe('s1')
-    expect(mockWsSendInput.mock.calls[0][1]).toBe('\x1b[<65;11;6M\x1b[<65;11;6M')
+    expect(mockHttpSendInput.mock.calls[0][0]).toBe('s1')
+    expect(mockHttpSendInput.mock.calls[0][1]).toBe('\x1b[<65;11;6M\x1b[<65;11;6M')
 
     // 小数余量：单次 sendWheel(1) 折算 0.33 < 1 个完整事件，窗口到期不发送
     compat.sendWheel(1, 11, 6)
     await vi.advanceTimersByTimeAsync(17)
-    expect(mockWsSendInput).toHaveBeenCalledTimes(1)
+    expect(mockHttpSendInput).toHaveBeenCalledTimes(1)
     // 余量累积到 1.0 后随下一窗口发出
     compat.sendWheel(1, 11, 6)
     compat.sendWheel(1, 11, 6)
     await vi.advanceTimersByTimeAsync(17)
-    expect(mockWsSendInput).toHaveBeenCalledTimes(2)
-    expect(mockWsSendInput.mock.calls[1][1]).toBe('\x1b[<65;11;6M')
+    expect(mockHttpSendInput).toHaveBeenCalledTimes(2)
+    expect(mockHttpSendInput.mock.calls[1][1]).toBe('\x1b[<65;11;6M')
     compat.dispose()
   })
 
@@ -247,16 +247,16 @@ describe('useTuiCompat', () => {
 
     // 第一次发送挂起（可控 deferred）；sendWheel(6) 折算 2 个事件
     let resolveFirst: () => void = () => {}
-    mockWsSendInput.mockReturnValueOnce(new Promise<void>(res => { resolveFirst = res }))
+    mockHttpSendInput.mockReturnValueOnce(new Promise<void>(res => { resolveFirst = res }))
     compat.sendWheel(6, 1, 1)
     await vi.advanceTimersByTimeAsync(17)
-    expect(mockWsSendInput).toHaveBeenCalledTimes(1)
-    expect(mockWsSendInput.mock.calls[0][1]).toBe('\x1b[<65;1;1M\x1b[<65;1;1M')
+    expect(mockHttpSendInput).toHaveBeenCalledTimes(1)
+    expect(mockHttpSendInput.mock.calls[0][1]).toBe('\x1b[<65;1;1M\x1b[<65;1;1M')
 
     // 在途期间再次滚动（9 行 → 3 个事件）：窗口到期不发送，但积压保留（不清零）
     compat.sendWheel(9, 1, 1)
     await vi.advanceTimersByTimeAsync(17)
-    expect(mockWsSendInput).toHaveBeenCalledTimes(1)
+    expect(mockHttpSendInput).toHaveBeenCalledTimes(1)
 
     // 完成在途发送（resolve 后 finally 复位 inflight 并调度补发）
     resolveFirst()
@@ -265,12 +265,12 @@ describe('useTuiCompat', () => {
 
     // 补发窗口：在途期间累积的 3 个事件完整送达（不丢弃），每窗口上限 2 个
     await vi.advanceTimersByTimeAsync(17)
-    expect(mockWsSendInput).toHaveBeenCalledTimes(2)
-    expect(mockWsSendInput.mock.calls[1][1]).toBe('\x1b[<65;1;1M\x1b[<65;1;1M')
+    expect(mockHttpSendInput).toHaveBeenCalledTimes(2)
+    expect(mockHttpSendInput.mock.calls[1][1]).toBe('\x1b[<65;1;1M\x1b[<65;1;1M')
     // 剩余 1 个随下一窗口补发
     await vi.advanceTimersByTimeAsync(17)
-    expect(mockWsSendInput).toHaveBeenCalledTimes(3)
-    expect(mockWsSendInput.mock.calls[2][1]).toBe('\x1b[<65;1;1M')
+    expect(mockHttpSendInput).toHaveBeenCalledTimes(3)
+    expect(mockHttpSendInput.mock.calls[2][1]).toBe('\x1b[<65;1;1M')
     compat.dispose()
   })
 
@@ -284,30 +284,30 @@ describe('useTuiCompat', () => {
 
     // 发送挂起，期间持续滚动制造积压；sendWheel(6) 折算 2 个事件
     let resolveFirst: () => void = () => {}
-    mockWsSendInput.mockReturnValueOnce(new Promise<void>(res => { resolveFirst = res }))
+    mockHttpSendInput.mockReturnValueOnce(new Promise<void>(res => { resolveFirst = res }))
     compat.sendWheel(6, 1, 1)
     await vi.advanceTimersByTimeAsync(17)
-    expect(mockWsSendInput).toHaveBeenCalledTimes(1)
+    expect(mockHttpSendInput).toHaveBeenCalledTimes(1)
     // 每窗口上限 2 个事件：首窗发完，无积压
-    expect(mockWsSendInput.mock.calls[0][1].match(/\x1b\[<65;1;1M/g)?.length).toBe(2)
+    expect(mockHttpSendInput.mock.calls[0][1].match(/\x1b\[<65;1;1M/g)?.length).toBe(2)
 
     // 在途期间累积 130 个事件（13 次 sendWheel(30)，每次折算 10 个）
     // → 超 MAX_PENDING_DELTA=120 → 截断到 120（丢弃最旧 10 个）
     for (let i = 0; i < 13; i++) compat.sendWheel(30, 1, 1)
     await vi.advanceTimersByTimeAsync(1000)
     // 在途期间不发送，积压保留
-    expect(mockWsSendInput).toHaveBeenCalledTimes(1)
+    expect(mockHttpSendInput).toHaveBeenCalledTimes(1)
 
     // 完成后补发：每窗口 2 个事件摊平发送，直至积压排空（120 全部送达）
     resolveFirst()
     await Promise.resolve()
     await Promise.resolve()
     await vi.advanceTimersByTimeAsync(17)
-    expect(mockWsSendInput).toHaveBeenCalledTimes(2)
-    expect(mockWsSendInput.mock.calls[1][1].match(/\x1b\[<65;1;1M/g)?.length).toBe(2)
+    expect(mockHttpSendInput).toHaveBeenCalledTimes(2)
+    expect(mockHttpSendInput.mock.calls[1][1].match(/\x1b\[<65;1;1M/g)?.length).toBe(2)
     // 剩余 118 个：59 个窗口 × 2 个（多推进几帧无副作用，排空后不再调度）
     for (let i = 0; i < 60; i++) await vi.advanceTimersByTimeAsync(17)
-    const totalEvents = mockWsSendInput.mock.calls.reduce(
+    const totalEvents = mockHttpSendInput.mock.calls.reduce(
       (sum, c) => sum + (c[1].match(/\x1b\[<65;1;1M/g)?.length ?? 0), 0)
     expect(totalEvents).toBe(122)
     compat.dispose()
@@ -325,7 +325,7 @@ describe('useTuiCompat', () => {
     compat.sendWheel(2, 1, 1)
     compat.dispose()
     await vi.advanceTimersByTimeAsync(100)
-    expect(mockWsSendInput).not.toHaveBeenCalled()
+    expect(mockHttpSendInput).not.toHaveBeenCalled()
     expect(compat.isTuiMode.value).toBe(false)
   })
 })
