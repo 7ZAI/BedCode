@@ -1051,6 +1051,14 @@ defineExpose({
   /* 保证 xterm 画布位于背景图片层之上 */
   position: relative;
   z-index: 1;
+  /* 左右各留 0.5rem（= Tailwind px-2，与头/底 px-3 同列）呼吸位：终端内容原本
+     左右贴死窗口边框，长行直接顶到边框上。padding 加在 .xterm 而**不是**宿主
+     容器上——addon-fit 0.11 只扣减 .xterm 自身的 padding（对父级只取
+     getComputedStyle 内容宽），加在父级上会少算列数。box-sizing 显式声明：
+     .xterm 是 xterm 自建节点，不依赖宿主的 preflight 生效，content-box 下
+     height:100% + padding 会溢出。 */
+  box-sizing: border-box;
+  padding-inline: 0.5rem;
 }
 
 /* 选择器带 `.xterm` 前缀：编译后为 [data-v-x] .xterm .xterm-viewport（0,3,0），

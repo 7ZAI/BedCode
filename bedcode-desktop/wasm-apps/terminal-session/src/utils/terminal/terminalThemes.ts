@@ -179,6 +179,11 @@ export const DEFAULT_FONT_STACK = 'Cascadia Mono, Consolas, Monaco, Courier New,
 
 /**
  * 构造当前主题：背景图片启用时终端背景设为全透明，让图片层透出
+ *
+ * 滚动条滑块色不要在这里派生：xterm 自身已按前景色派生（默认
+ * `opacity(foreground, 0.2 / 0.4 / 0.5)`，见其 ThemeService），深浅主题各自可辨。
+ * 真机取色核对：solarizedDark 下 rgba(#839496,0.2) 叠 #002b36 = #1a4049，与截图
+ * 里的常显滑块逐通道吻合。改这里前先核对 node_modules/@xterm/xterm 的实际默认。
  */
 export function buildTerminalTheme(theme: string, transparent: boolean): object {
   const base = TERMINAL_THEMES[theme] || TERMINAL_THEMES.default

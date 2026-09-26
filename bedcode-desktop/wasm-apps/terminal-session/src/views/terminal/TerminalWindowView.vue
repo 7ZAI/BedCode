@@ -33,17 +33,24 @@
           </span>
         </div>
 
-        <!-- 会话信息：cwd / 命令（mono 小字） -->
+        <!-- 会话信息：cwd / 命令（mono 小字）
+             为什么 cwd 用 flex-1、命令用 shrink-0（2026-09-27 修复）：两者原本都是
+             truncate，同一行里按**内容宽度**分摊收缩额度，cwd 文本长、额度几乎被它吃光，
+             命令被压成 1 个字符的残字（无省略号，直接被右侧操作区盖住）。改为显式优先级：
+             cwd 吸收全部收缩（truncate 出省略号）、命令保持自身宽度并封顶 8rem，
+             窗口再窄也只是 cwd 变短，不会出现无省略号的残字。 -->
         <div
           v-if="config"
-          class="hidden sm:flex items-center gap-2 min-w-0 wb-mono text-[calc(12.5px*var(--ui-scale))] text-[var(--text-secondary)]"
+          class="hidden sm:flex flex-1 items-center gap-2 min-w-0 wb-mono text-[calc(12.5px*var(--ui-scale))] text-[var(--text-secondary)]"
           data-tauri-drag-region
         >
-          <span v-if="workingDir" class="truncate max-w-64" :title="workingDir">{{
+          <span v-if="workingDir" class="min-w-0 flex-1 truncate" :title="workingDir">{{
             workingDir
           }}</span>
-          <span v-if="workingDir && command" class="text-[var(--text-tertiary)]">·</span>
-          <span v-if="command" class="truncate max-w-48" :title="command">{{ command }}</span>
+          <span v-if="workingDir && command" class="shrink-0 text-[var(--text-tertiary)]">·</span>
+          <span v-if="command" class="shrink-0 max-w-32 truncate" :title="command">{{
+            command
+          }}</span>
         </div>
       </div>
 
@@ -52,7 +59,7 @@
       <div class="flex items-center gap-1.5 shrink-0">
         <!-- 插件页面工具栏项（target=terminal；宿主 registry 响应式数组注入） -->
         <template v-if="pageToolbarItems.length > 0">
-          <div class="w-px h-4 bg-[var(--border)] mx-0.5 shrink-0"></div>
+          <div class="w-px h-4 bg-[var(--border-strong)] mx-0.5 shrink-0"></div>
           <button
             v-for="item in pageToolbarItems"
             :key="`${item.pluginId}:${item.id}`"
@@ -65,9 +72,16 @@
           </button>
         </template>
 
-        <!-- 停止会话 -->
+        <!-- 停止会话：破坏性动作（杀进程）不用主操作实心底——实心黑块曾是工具条上
+             对比度最高、视觉权重最大的元素，抢掉了「会话名 / 路径」的注意力，且语义
+             误导（primary ≠ stop）。改为与同栏图标按钮同族（6px 圆角 / 24px 高 /
+             11px 字）的 danger ghost：常态红色描边 + 红字，悬停实心红底（对齐右侧
+             关闭按钮的 hover 口径）。uppercase 对中文无效且与相邻按钮不一致，去掉。
+             半透明描边必须写成 color-mix 任意值：Tailwind 3.4 **不支持**在 var() 任意值
+             后接 /40 透明度修饰符（不报错、不产出任何规则 → 按钮会没有边框），
+             本仓库既有写法见 ai-chatbox/ChatView.vue 同款。 -->
         <button
-          class="wb-btn-primary shrink-0 whitespace-nowrap !h-6 !px-2.5 !text-[calc(11px*var(--ui-scale))] uppercase"
+          class="shrink-0 whitespace-nowrap inline-flex items-center rounded-[6px] border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] text-[var(--color-danger)] hover:bg-[var(--color-danger)] hover:text-[var(--color-primary-contrast)] transition-colors !h-6 !px-2.5 !text-[calc(11px*var(--ui-scale))]"
           @click="stopSession"
         >
           {{ t('session.button.stop') }}
@@ -133,7 +147,7 @@
              按钮统一 24px 高 / 11px 字号（随 --ui-scale）/ 不收缩不换行：
              旧实现用固定 text-xs 且允许收缩，窗口偏窄时「自动任务」等文字换行溢出工具条 -->
         <template v-if="terminalToolbarItems.length > 0">
-          <div class="w-px h-4 bg-[var(--border)] mx-1 shrink-0"></div>
+          <div class="w-px h-4 bg-[var(--border-strong)] mx-1 shrink-0"></div>
           <button
             v-for="item in terminalToolbarItems"
             :key="`${item.pluginId}:${item.id}`"
@@ -162,8 +176,9 @@
           </button>
         </div>
 
-        <!-- 分隔线 -->
-        <div class="w-px h-4 bg-[var(--border)] mx-0.5 shrink-0"></div>
+        <!-- 分隔线：用 --border-strong（原 --border 与 --bg-card 对比 ≈1.05:1，
+             肉眼不可见，分组形同虚设） -->
+        <div class="w-px h-4 bg-[var(--border-strong)] mx-0.5 shrink-0"></div>
 
         <!-- 窗口控制 -->
         <button
@@ -238,9 +253,10 @@
       />
     </div>
 
-    <!-- 24px 状态条 -->
+    <!-- 24px 状态条（chrome，不可选中：在终端里拖选会把选中高亮打到状态文案上，
+         实机 2026-09-27 截图可见；头栏相反保留可选中——路径/命令需要可复制） -->
     <footer
-      class="h-6 shrink-0 flex items-center justify-between px-3 border-t border-[var(--border)] bg-[var(--bg-card)]"
+      class="h-6 shrink-0 flex items-center justify-between px-3 border-t border-[var(--border)] bg-[var(--bg-card)] select-none"
     >
       <div class="flex items-center gap-2">
         <span :class="['w-1.5 h-1.5 rounded-full', statusColor]"></span>
