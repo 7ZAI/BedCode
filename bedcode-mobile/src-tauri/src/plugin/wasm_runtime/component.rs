@@ -750,6 +750,17 @@ pub(crate) mod tests {
     /// 测试组件字节缓存（按 features key），跨用例复用避免重复 cargo build
     static COMPONENT_CACHE: OnceLock<Mutex<HashMap<String, Vec<u8>>>> = OnceLock::new();
 
+    /// 夹具共享 target 目录（`bedcode-mobile/target/fixtures`）
+    ///
+    /// 与桌面端同构：auto-task 插件与 plugin-component-test 夹具原本各写各自
+    /// `target/`，把 SDK / wit-bindgen / serde 这份相同依赖图编译两遍
+    /// （2026-09-26 实测各 ~170M）。共享后只编译一遍。
+    /// 桌面端对应实现见 `src-tauri/.../runtime/fixture_target.rs`，
+    /// 决策记录见 `.scratch/2026-09-26-cargo-target-space/spec.md`。
+    fn fixture_target_dir() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../target/fixtures")
+    }
+
     /// 构建真实插件组件：SDK `wasm_entry!` 宏产物（迁移 ticket 04 验收用）
     ///
     /// 与 `build_test_component` 同链路：cargo build（wasm32，wasm feature）→
@@ -764,7 +775,7 @@ pub(crate) mod tests {
 
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let plugin_dir = manifest_dir.join("../plugins/auto-task");
-        let target_dir = plugin_dir.join("target").to_str().unwrap().to_string();
+        let target_dir = fixture_target_dir().to_str().unwrap().to_string();
         let manifest_path = plugin_dir.join("rust/Cargo.toml").to_str().unwrap().to_string();
         let status = std::process::Command::new("cargo")
             .args([
@@ -785,7 +796,7 @@ pub(crate) mod tests {
         assert!(status.success(), "auto-task WASM build failed");
 
         let core =
-            std::fs::read(plugin_dir.join("target/wasm32-unknown-unknown/release/bedcode_plugin_auto_task.wasm"))
+            std::fs::read(fixture_target_dir().join("wasm32-unknown-unknown/release/bedcode_plugin_auto_task.wasm"))
                 .expect("Failed to read auto-task module after build");
         // 宏产物必经 componentize（等效本函数内编码）；SDK 构建链已内置该步骤。
         // 此处直接编码 core module（若传入已组件化产物，编码器会拒绝）
@@ -824,7 +835,7 @@ pub(crate) mod tests {
 
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let plugin_dir = manifest_dir.join("../packages/plugin-component-test");
-        let target_dir = plugin_dir.join("target").to_str().unwrap().to_string();
+        let target_dir = fixture_target_dir().to_str().unwrap().to_string();
         let features_arg = features.join(",");
         let manifest_path = plugin_dir.join("Cargo.toml").to_str().unwrap().to_string();
         let mut args = vec![
@@ -848,9 +859,10 @@ pub(crate) mod tests {
             .expect("Failed to run cargo build for test component");
         assert!(status.success(), "Test component WASM build failed");
 
-        let core =
-            std::fs::read(plugin_dir.join("target/wasm32-unknown-unknown/release/bedcode_plugin_component_test.wasm"))
-                .expect("Failed to read test component module after build");
+        let core = std::fs::read(
+            fixture_target_dir().join("wasm32-unknown-unknown/release/bedcode_plugin_component_test.wasm"),
+        )
+        .expect("Failed to read test component module after build");
         let component = wit_component::ComponentEncoder::default()
             .validate(true)
             .module(&core)
