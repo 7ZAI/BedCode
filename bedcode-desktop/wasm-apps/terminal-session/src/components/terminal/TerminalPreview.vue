@@ -607,6 +607,38 @@ function kickOutputPull() {
   void pullOnce()
 }
 
+// ==================== 输出可用通知（P2：宿主限频唤醒） ====================
+//
+// 宿主在环有新字节时向属主私有 topic `<owner>::pty:output` **限频**发布（同一句柄
+// ≥50 ms 一条），插件 Rust 转成前端事件 `session:output-available`（载荷 `{sessionId}`）。
+// 收到即拉一轮：把「空闲期新输出到达」的感知延迟从慢档 250 ms 压到毫秒级。
+//
+// **加速器而非真源**：通知可被合并/丢弃（无订阅、订阅队列满、限频合并），F5 轮询
+// 仍是唯一正确性兜底——这里只做「提前拉一轮」，丢事件不影响功能。
+
+/** P2 事件名（与插件 Rust `output::EVENT_OUTPUT_AVAILABLE` 逐字一致） */
+const EVENT_OUTPUT_AVAILABLE = 'session:output-available'
+
+/** 事件订阅句柄（卸载时释放） */
+let outputNotifyDisposable: (() => void) | null = null
+
+/** 命中本组件会话才拉取（同一插件实例可能同时挂多个终端组件） */
+function onOutputAvailable(payload: unknown): void {
+  const sid = (payload as { sessionId?: string } | null | undefined)?.sessionId
+  if (!sid || sid !== sessionId.value) return
+  kickOutputPull()
+}
+
+function subscribeOutputNotify(): void {
+  if (outputNotifyDisposable) return
+  outputNotifyDisposable = context.events.on(EVENT_OUTPUT_AVAILABLE, onOutputAvailable)
+}
+
+function unsubscribeOutputNotify(): void {
+  outputNotifyDisposable?.()
+  outputNotifyDisposable = null
+}
+
 function stopOutputPull() {
   if (pullTimer) {
     clearInterval(pullTimer)
@@ -919,6 +951,9 @@ onMounted(async () => {
       `isLinux=${kernel.isLinux.value}`,
   )
 
+  // P2：订阅输出可用通知（宿主限频唤醒）→ 命中本会话即提前拉一轮（轮询仍是兜底）
+  subscribeOutputNotify()
+
   // 输出流：会话 running/starting 时接入（历史回放 + 实时推送同通道流式到达）
   if (props.session?.status === 'running' || props.session?.status === 'starting') {
     attachOutputSource()
@@ -930,6 +965,9 @@ onMounted(async () => {
 onUnmounted(() => {
   // 断开输出源轮询（停止拉取与重连）
   detachOutputSource()
+
+  // P2：释放输出可用通知订阅（不残留回调，避免卸载后仍触发拉取）
+  unsubscribeOutputNotify()
 
   // 清理 xterm onScroll 监听与待处理的滚动 rAF
   scroll.disposeScroll()

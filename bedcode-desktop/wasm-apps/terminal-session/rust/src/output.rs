@@ -14,7 +14,7 @@
 
 // wasm32 分支才真正调用宿主原语；native 目标下仅参数仲裁（编译期剪掉未用 import）
 #[cfg(target_arch = "wasm32")]
-use bedcode_plugin_api::host::{HostLog, HostPty};
+use bedcode_plugin_api::host::{HostEvents, HostLog, HostPty};
 #[cfg(target_arch = "wasm32")]
 use bedcode_plugin_api::wasm_host::WasmHost;
 
@@ -426,6 +426,60 @@ pub fn forget_via_host(session_id: &str) {
     pump::forget(session_id);
 }
 
+// ==================== 输出可用通知（P2：宿主限频唤醒） ====================
+//
+// 宿主在环有新字节时向属主私有 topic `<owner>::pty:output` **限频**发布
+// （同一句柄 ≥50 ms 一条，payload `{ ptyId }`）；本域把它转成前端事件，前端据此
+// 立刻拉一轮——感知延迟从慢档 250 ms 降到毫秒级（宿主限频唤醒，ADR 0029 §7 的路线甲）。
+//
+// **提示而非承诺**：事件可被合并 / 丢弃（无订阅、订阅队列满、插件未激活、被限频合并），
+// 正确性兜底仍是前端轮询 + `truncated` resync——数据面没有被改成 push，
+// 环与背压语义（ADR 0022 D3）一字未变。
+
+/// 前端事件名：某会话的输出环有新字节可拉（宿主限频唤醒的转发）
+///
+/// 载荷 `{ sessionId }`；订阅方（终端组件）只在**本组件的会话 id 命中**时拉取。
+pub const EVENT_OUTPUT_AVAILABLE: &str = "session:output-available";
+
+/// 通知载荷（纯函数，native 可测）：`{ sessionId }`
+pub fn output_available_payload(session_id: &str) -> serde_json::Value {
+    serde_json::json!({ "sessionId": session_id })
+}
+
+/// 从宿主通知载荷取句柄（纯函数，native 可测）：缺失 / 空串 / 非字符串 → `None`
+///
+/// 宿主契约是 `{ ptyId }`，但总线载荷是 JSON——形状不对就静默丢弃（不 panic、
+/// 不伪造句柄），一次脏载荷不得打断整条输出链。
+pub fn notify_pty_id(payload: &serde_json::Value) -> Option<&str> {
+    payload
+        .get("ptyId")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+}
+
+/// 处理 `<owner>::pty:output` 通知：`ptyId` → `sessionId` → 前端事件（P2）
+///
+/// 反查不到会话时只留 debug 日志——正常竞态（spawn 之后登记之前、会话刚移除），
+/// 此刻前端也没有接入输出源，丢了不影响正确性。
+#[cfg(target_arch = "wasm32")]
+pub fn on_pty_output(payload: &serde_json::Value) {
+    let Some(pty_id) = notify_pty_id(payload) else {
+        return;
+    };
+    match crate::session::session_id_by_pty(pty_id) {
+        Some(session_id) => WasmHost.emit_event(
+            EVENT_OUTPUT_AVAILABLE,
+            &output_available_payload(&session_id),
+        ),
+        None => WasmHost.log_debug(&format!(
+            "输出可用通知：pty 未登记会话（忽略；pty_id={pty_id}）"
+        )),
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn on_pty_output(_payload: &serde_json::Value) {}
+
 /// 一次性历史快照互调 api（`session-history`）：`{sessionId, from}` →
 /// `{data: number[], minOffset, snapshotOffset, historyBytes}`
 ///
@@ -692,6 +746,51 @@ mod tests {
             .any(|r| r.session_id == unknown));
         pump::forget(a);
         pump::forget(b);
+    }
+
+    // ==================== P2：输出可用通知（宿主限频唤醒） ====================
+
+    /// P2：通知载荷解析——只认形状正确的 `{ ptyId: <非空字符串> }`
+    /// （脏载荷静默丢弃，不 panic、不伪造句柄）
+    #[test]
+    fn notify_pty_id_reads_only_well_formed_payloads() {
+        assert_eq!(
+            notify_pty_id(&serde_json::json!({ "ptyId": "pty-1" })),
+            Some("pty-1")
+        );
+        assert_eq!(notify_pty_id(&serde_json::json!({ "ptyId": "" })), None);
+        assert_eq!(notify_pty_id(&serde_json::json!({ "ptyId": 7 })), None);
+        assert_eq!(notify_pty_id(&serde_json::json!({ "other": "x" })), None);
+        assert_eq!(notify_pty_id(&serde_json::Value::Null), None);
+    }
+
+    /// P2：事件名与载荷形状锁——前端 `context.events.on` 的 key 与本常量逐字一致
+    /// （改名而前端未跟 = 永久收不到，且只在真机可见）
+    #[test]
+    fn output_available_event_name_and_payload_are_stable() {
+        assert_eq!(EVENT_OUTPUT_AVAILABLE, "session:output-available");
+        assert_eq!(
+            output_available_payload("sess-1"),
+            serde_json::json!({ "sessionId": "sess-1" })
+        );
+    }
+
+    /// P2 结构锁：`lib.rs` 必须两处出现 `PTY_OUTPUT` 常量——activate 订阅 + `on_message` 路由
+    ///
+    /// 漏订阅 = **静默退化回纯轮询**（功能不坏，延迟特性丢失，行为测试看不见）；
+    /// 漏路由 = 订阅了也白订。两处都钉死在常量字面量上：少一处即红，多一处要来说明。
+    #[test]
+    fn lib_wires_output_notify_subscription_and_routing() {
+        let path = format!("{}/src/lib.rs", env!("CARGO_MANIFEST_DIR"));
+        let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
+        let hits = src
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//") && line.contains("PTY_OUTPUT"))
+            .count();
+        assert_eq!(
+            hits, 2,
+            "lib.rs 需恰好两处 PTY_OUTPUT：activate 期订阅 + on_message 路由（实测 {hits}）"
+        );
     }
 
     /// D4 报告 JSON 形状：字段名与计数逐项落到线上（诊断面靠它被人读/被脚本抓）

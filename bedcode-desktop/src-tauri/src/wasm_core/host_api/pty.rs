@@ -19,6 +19,13 @@
 //! 以 `truncated` 上报缺口），背压绝不回传到读线程；**没有 push 回调**（wasmtime
 //! Store 不可重入，异步唤醒插件在语义上不成立）。
 //!
+//! **P2 限频唤醒（2026-09-27 补）**：在此之上加一条**通知**而非数据推送——
+//! 写侧装饰器 [`OutputNotifySink`] 在落环之后按限频（≤1 次/50 ms/句柄）向属主私有
+//! topic `<owner>::pty:output` 发布 `{ ptyId }`，插件收到后自行按游标拉取。
+//! 它是**提示而非承诺**：可被合并 / 丢弃（无订阅、队列满、插件未激活），
+//! 数据面与背压语义一字未变（消费者兜底仍是轮询 + `truncated` resync），
+//! 不改 WIT / 不改 ABI（ADR 0022 D3 的拉取语义保持，见 ADR 0029 §7）。
+//!
 //! **宿主广播声明已退役（websocket 业务下沉票 08）**：`hostBroadcastSessionId`
 //! 字段与 [`broadcast_handle_for_session`] 已删除——PTY 引擎不再知道 session id，
 //! 会话 id → pty 句柄的映射只在插件登记域（`session record.pty_id`），插件经
@@ -44,7 +51,7 @@
 use bedcode_plugin_api::host::bus::owned_topic;
 
 use crate::enums::PtySessionStatus;
-use crate::pty::{PtyRing, PtyRingFetch, PtyRingSink, PtySession, PtyTerminated};
+use crate::pty::{PtyOutputSink, PtyRing, PtyRingFetch, PtyRingSink, PtySession, PtyTerminated};
 use crate::system::config::AppConfig;
 use crate::system::constants::{
     PLUGIN_PTY_MAX_SESSIONS_PER_PLUGIN, PLUGIN_PTY_MAX_WRITE_BYTES, PLUGIN_PTY_RING_BYTES,
@@ -53,6 +60,7 @@ use crate::system::constants::{
 use crate::wasm_core::bus::MessageBus;
 #[cfg(test)]
 use crate::wasm_core::host_api::context::WasmHostContext;
+use crate::wasm_core::host_api::pty_output::OutputNotifySink;
 use crate::wasm_core::runtime_util::block_on_async;
 use crate::wasm_core::permission::{PERMISSION_PTY_IO, PERMISSION_PTY_SPAWN};
 use portable_pty::CommandBuilder;
@@ -216,7 +224,15 @@ pub(crate) fn pty_spawn(bus: &dyn crate::wasm_core::host_api::context::BusScope,
     let rows = config.rows.unwrap_or(terminal.default_rows);
 
     let pty_id = format!("{HANDLE_PREFIX}{}", uuid::Uuid::new_v4());
-    let (sink, ring) = PtyRingSink::paired_with_limits(ring_bytes, PtyRing::DEFAULT_MAX_CHUNKS);
+    let (ring_sink, ring) = PtyRingSink::paired_with_limits(ring_bytes, PtyRing::DEFAULT_MAX_CHUNKS);
+    // P2 限频唤醒：写侧装饰器 = 落环 + 按限频发 `<owner>::pty:output` 通知（只带句柄，
+    // 数据仍由插件游标拉取；装配见 `pty_output` 模块文档）
+    let sink: Arc<dyn PtyOutputSink> = Arc::new(OutputNotifySink::new(
+        ring_sink,
+        plugin_id.to_string(),
+        pty_id.clone(),
+        Arc::clone(bus.message_bus()),
+    ));
     let session = PtySession::with_private_command(pty_id.clone(), cols, rows, builder, sink)
         .map_err(|e| format!("pty spawn: 打开伪终端失败 (plugin {plugin_id}): {e}"))?;
     // **start 之前**订阅终态：广播不补发历史，短命命令（`/bin/true`）完全可能在登记

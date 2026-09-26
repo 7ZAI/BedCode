@@ -50,7 +50,7 @@ pub use mdns::{mdns_event_topic, HostMdns, MDNS_FOUND, MDNS_LOST};
 pub use peer::HostPeer;
 pub use platform::HostPlatform;
 pub use process::{HostProcess, ProcessSyncResult};
-pub use pty::{pty_event_topic, HostPty, PtyRingFetch, PtySpawnConfig, PTY_EXIT};
+pub use pty::{pty_event_topic, HostPty, PtyRingFetch, PtySpawnConfig, PTY_EXIT, PTY_OUTPUT};
 pub use storage::HostStorage;
 pub use task::{HostTask, TaskPlan, TaskProgress, TaskUnit};
 pub use timer::HostTimer;

@@ -1,4 +1,5 @@
 use super::*;
+use crate::wasm_core::host_api::pty_output::EVENT_OUTPUT;
 use crate::wasm_core::host_api::tests::{build_host_ctx, grant_permissions};
 use std::time::{Duration, Instant};
 
@@ -594,6 +595,132 @@ async fn wait_event_timeout(
     })
     .await
     .unwrap_or_default()
+}
+
+// ==================== P2：输出可用通知（限频唤醒） ====================
+
+/// 漂移锁（P2）：输出可用通知的事件名与 SDK 常量一致，形状仍共用 `owned_topic`
+///
+/// 与 `exit_event_name_matches_sdk_subscription_helper` 同一口径：宿主发布侧与插件
+/// 订阅侧各自只有一处字面量，本用例把两处钉在一起——任一侧改名而另一侧未跟，
+/// 现象是「订阅成功但永远收不到」（静默退化回纯轮询），单侧测试不可见。
+#[test]
+fn output_event_name_matches_sdk_subscription_helper() {
+    use bedcode_plugin_api::host as sdk;
+    assert_eq!(EVENT_OUTPUT, sdk::PTY_OUTPUT, "宿主事件名与 SDK 常量漂移");
+    assert_eq!(
+        sdk::owned_topic("com.example.plugin", EVENT_OUTPUT),
+        sdk::pty_event_topic(sdk::PTY_OUTPUT, "com.example.plugin"),
+        "SDK 域助手与命名空间原语漂移"
+    );
+}
+
+/// 按 SDK 订阅助手构造输出可用通知 topic（`<owner>::pty:output`，P2）
+fn output_topic(owner: &str) -> String {
+    bedcode_plugin_api::host::pty_event_topic(bedcode_plugin_api::host::PTY_OUTPUT, owner)
+}
+
+/// 收集窗口内的全部投递（限频断言用：窗口内不得逐块推送）
+async fn drain_events(
+    rx: &std::sync::mpsc::Receiver<serde_json::Value>,
+    window: Duration,
+) -> Vec<serde_json::Value> {
+    let deadline = Instant::now() + window;
+    let mut out = Vec::new();
+    while Instant::now() < deadline {
+        match rx.try_recv() {
+            Ok(event) => out.push(event),
+            Err(_) => tokio::time::sleep(Duration::from_millis(10)).await,
+        }
+    }
+    out
+}
+
+/// 正例（P2）：真 PTY 产出 → 属主收到 `pty:output`（只带句柄），且**限频**：
+/// 一次毫秒级突发含二十余次 4 KiB push，通知数必须远少于 push 数——证明写侧装饰器
+/// 确实生效，而不是「每次 push 一条」（那等于把通知退化成逐块 push）。
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn output_notify_is_rate_limited_and_owner_scoped() {
+    let owner = "com.bedcode.out-notify";
+    let other = "com.bedcode.out-notify-other";
+    let ctx = build_host_ctx();
+    grant_permissions(&ctx, owner, &[PERMISSION_PTY_SPAWN, PERMISSION_PTY_IO]);
+    let events = subscribe(&ctx.message_bus, "sub-output", &output_topic(owner)).await;
+    let other_events = subscribe(&ctx.message_bus, "sub-output-other", &output_topic(other)).await;
+
+    // 突发约 100 KiB 文本（`read_buffer_size` = 4096 → 二十余次 push），末尾驻留
+    // （`read go`）保证句柄与环在断言窗口内不被摘除
+    let pty_id = pty_spawn(
+        ctx.as_ref(),
+        ctx.as_ref(),
+        owner,
+        r#"{"command":"/bin/sh","args":["-c","seq 1 20000; read go"]}"#,
+    )
+    .expect("spawn");
+
+    let event = wait_event(&events).await.expect("产出必须通知属主");
+    assert_eq!(event["payload"]["ptyId"].as_str(), Some(pty_id.as_str()));
+    assert_eq!(event["topic"], output_topic(owner), "topic 为属主私有命名空间");
+    assert_eq!(event["sender"], "host", "通知由宿主发布");
+    assert!(
+        other_events.try_recv().is_err(),
+        "他人命名空间收不到（定向投递只到属主）"
+    );
+
+    // 等产出全部落环（推送异步：按内容断言，不断言时序）
+    let ring = ring_of(&pty_id);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let max = ring.lock().unwrap_or_else(|e| e.into_inner()).watermarks().1;
+        if max >= 100_000 || Instant::now() >= deadline {
+            assert!(max >= 100_000, "突发产出未落环（max={max}）");
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let chunks = ring.lock().unwrap_or_else(|e| e.into_inner()).chunk_count();
+    assert!(chunks >= 8, "4 KiB 读块下 100 KiB 产出应有多次 push，实际 {chunks}");
+
+    let extra = drain_events(&events, Duration::from_millis(100)).await;
+    let notified = 1 + extra.len();
+    eprintln!("P2-DEBUG chunks={chunks} notified={notified}");
+    assert!(
+        notified < chunks,
+        "限频窗口内必须合并（push={chunks}, notify={notified}）；逐块通知 = 退化成 push 数据面"
+    );
+}
+
+/// 反例（P2）：没有订阅者时通知静默丢弃，不影响产出链（环照常收满）
+///
+/// 订阅是插件的自愿行为（老插件不订阅即回到纯轮询），宿主不得因此报错或丢字节。
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn output_notify_without_subscribers_keeps_ring_intact() {
+    let owner = "com.bedcode.out-notify-nosub";
+    let ctx = build_host_ctx();
+    grant_permissions(&ctx, owner, &[PERMISSION_PTY_SPAWN, PERMISSION_PTY_IO]);
+
+    let pty_id = pty_spawn(
+        ctx.as_ref(),
+        ctx.as_ref(),
+        owner,
+        r#"{"command":"/bin/sh","args":["-c","seq 1 20000; read go"]}"#,
+    )
+    .expect("spawn");
+
+    let ring = ring_of(&pty_id);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let max = ring.lock().unwrap_or_else(|e| e.into_inner()).watermarks().1;
+        if max >= 100_000 || Instant::now() >= deadline {
+            assert!(max >= 100_000, "无订阅者不得影响产出链（max={max}）");
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // 句柄仍可寻址（通知路径不持有任何生命周期副作用）
+    assert!(pty_is_running(ctx.as_ref(), owner, &pty_id).expect("句柄应在册"));
 }
 
 // ==================== 数据面（票 03：write / resize / is-running） ====================

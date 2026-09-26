@@ -2,7 +2,9 @@
 
 - **日期**：2026-09-26
 - **状态**：**P1 已实施完成**（2026-09-26；按 §12.3 定案落地，验收证据见 §13）；
-  **P1.5 已实施完成**（F5 节奏对齐 + P3a 水位诊断面，证据见 §14）
+  **P1.5 已实施完成**（F5 节奏对齐 + P3a 水位诊断面，证据见 §14）；
+  **P2 已实施完成**（2026-09-27，限频**唤醒**形态：宿主主动 publish 提示，数据面仍拉取，见 §9；
+  阻塞条件「等插件并发模型升级」已由 ADR 0029 关闭）
 - **决策来源**：用户指令「使用迁移前的机制适配当前的架构」+「不要改动宿主 / 不在宿主加业务代码」+「写成 spec 文档再开工」+「评审这几点请参考迁移前的实现」
 - **范围**：`bedcode-desktop/wasm-apps/terminal-session`（插件 Rust + 插件前端）。**宿主零改动**。
 
@@ -128,7 +130,15 @@ decide_pull_gate(unacked, from_offset, acked, was_parked) ->
 - **P1.5（已落地）**：F5 节奏对齐（旧引擎 50/250 ms + 64 KiB tick 预算，抽出可单测的
   `terminalPullPolicy` 纯函数）+ **P3a 水位诊断面**（`session.output.watermarks` 读命令
   + 驻留/抑制/环淘汰计数 + 驻留退出时的一次快照日志）。
-- **P2（待放行，需改宿主）**：`host-pty` 新增 `pty:output` 引擎事件（限频）→ 真 push（延迟 <16 ms），含 WIT/SDK/CHANGELOG/ABI 流程。
+- **P2（已实施完成，2026-09-27）**：`host-pty` 新增 `pty:output` 引擎事件（限频）——**唤醒形态，非真 push**。
+  **形态定案**：按 ADR 0029 §7（原方案，**不改 WIT/ABI**），宿主在输出环出现新字节时向属主私有 topic
+  `<owner>::pty:output` 限频发布 `{ ptyId }`（同句柄 ≥50 ms），插件转成前端事件 `session:output-available`，
+  命中即立刻拉一轮。**数据面仍是游标拉取**，`truncated` resync 与背压语义一字未变；提示**可丢**
+  （无订阅 / 队列满 / 未激活 / 被限频合并，从不重放）⇒ 正确性兜底仍是前端 50/250 ms 节奏 + resync，
+  事件只买延迟（空闲后首个字节：慢档 250 ms → ≈0）。**真 push（宿主推字节）不在本票内**：
+  它需要宿主持 per-subscriber 窗口（ADR 0022 红线 N1），见下「未落地」栏。
+  实现位置：宿主 `host_api/pty_output.rs`（写侧装饰器）+ SDK `PTY_OUTPUT` + 插件 `output.rs` /
+  `TerminalPreview.vue`；落锁见 `host_api/tests/pty.rs`（事件名漂移锁 + 真 PTY 突发限频用例 + 裁决纯函数单测）。
   **2026-09-26 补充**：CM-async（wasmtime 48 的 `func_wrap_concurrent`）已实测可行（见
   `.scratch/2026-09-26-wasmtime-cm-async-eval/spec.md` §5，P1 绿：挂起的 guest task 不再独占
   store）——它也能解本票（guest 自己 await 等输出，宿主那次主动回调可省），但代价是

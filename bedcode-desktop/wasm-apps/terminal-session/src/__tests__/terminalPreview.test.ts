@@ -108,11 +108,15 @@ interface TestContext extends PluginContext {
   __setPullResponses: (items: (unknown | null)[]) => void
   /** 注入 `session.output.watermarks` 诊断响应条目（驻留退出快照用） */
   __setWatermarkReport: (rows: unknown[]) => void
+  /** 触发组件已订阅的插件事件（P2 output-notify 用例：模拟宿主→插件→前端事件到达） */
+  __emitEvent: (name: string, payload: unknown) => void
 }
 
 function makeContext(): TestContext {
   let pullResponses: (unknown | null)[] = []
   let watermarkRows: unknown[] = []
+  /** 插件事件订阅表：`events.on` 登记 / 释放按真实语义走（供 `__emitEvent` 触发） */
+  const eventHandlers = new Map<string, ((payload: unknown) => void)[]>()
   const execute = vi.fn(async (cmd: string) => {
     if (cmd === 'session.output.pull') {
       const next = pullResponses.shift()
@@ -131,7 +135,18 @@ function makeContext(): TestContext {
     terminal: { onOutput: vi.fn(() => () => {}), onInput: vi.fn(() => () => {}) },
     session: { predictTerminalSize: vi.fn(async () => null) },
     ui: {} as never,
-    events: { on: vi.fn(() => () => {}), emit: vi.fn() },
+    events: {
+      on: vi.fn((name: string, handler: (payload: unknown) => void) => {
+        const list = eventHandlers.get(name) ?? []
+        list.push(handler)
+        eventHandlers.set(name, list)
+        return () => {
+          const index = list.indexOf(handler)
+          if (index >= 0) list.splice(index, 1)
+        }
+      }),
+      emit: vi.fn(),
+    },
     storage: {} as never,
     http: {} as never,
     // 插件组件统一经 context.i18n.t 取文案（带插件 ID 前缀）；桩为恒等 t
@@ -145,6 +160,9 @@ function makeContext(): TestContext {
     },
     __setWatermarkReport: (rows: unknown[]) => {
       watermarkRows = rows
+    },
+    __emitEvent: (name: string, payload: unknown) => {
+      for (const handler of eventHandlers.get(name) ?? []) handler(payload)
     },
   } as unknown as TestContext
 }
@@ -701,5 +719,34 @@ describe('TerminalPreview 输出背压（ack 窗口 / 驻留）', () => {
     expect(zombieWarns.length).toBe(1)
     nowSpy.mockRestore()
     warnSpy.mockRestore()
+  })
+
+  it('P2 输出可用通知：命中本会话立即拉一轮，非本会话忽略，卸载后不再触发', async () => {
+    const context = await mountRunning()
+
+    // 订阅已建立（事件名与插件 Rust `output::EVENT_OUTPUT_AVAILABLE` 逐字一致）
+    const subscribed = vi.mocked(context.events.on).mock.calls.map((call) => String(call[0]))
+    expect(subscribed).toContain('session:output-available')
+
+    const before = countCalls(context, 'session.output.pull')
+
+    // 非本会话：不拉（同一插件实例可能同时挂多个终端组件）
+    context.__emitEvent('session:output-available', { sessionId: 'sess-other' })
+    expect(countCalls(context, 'session.output.pull')).toBe(before)
+
+    // 命中：**同步**发起一轮（不等 50 ms 快档轮询）——「空闲期新输出到达」的延迟补偿
+    context.__emitEvent('session:output-available', { sessionId: 'sess-1' })
+    expect(countCalls(context, 'session.output.pull')).toBe(before + 1)
+
+    // 脏载荷不炸（宿主契约是 JSON：形状不对按「无通知」处理）
+    context.__emitEvent('session:output-available', null)
+    context.__emitEvent('session:output-available', {})
+    expect(countCalls(context, 'session.output.pull')).toBe(before + 1)
+
+    // 卸载释放订阅：此后事件不再触发拉取（不残留回调）
+    wrapper!.unmount()
+    wrapper = null
+    context.__emitEvent('session:output-available', { sessionId: 'sess-1' })
+    expect(countCalls(context, 'session.output.pull')).toBe(before + 1)
   })
 })

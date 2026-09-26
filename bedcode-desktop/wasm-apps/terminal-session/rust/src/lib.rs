@@ -798,6 +798,22 @@ impl WasmPlugin for SessionPlugin {
         })?;
         host.log_info("pty exit event subscribed (session lifecycle driver)");
 
+        // P2：订阅输出可用通知（`<owner>::pty:output`，宿主限频唤醒）——把「空闲期
+        // 新输出到达」的感知延迟从轮询档位（250 ms）压到毫秒级。它是**加速器而非真源**
+        // （通知可被限频合并 / 队列满丢弃），前端轮询 + resync 仍是唯一正确性兜底，
+        // 故订阅失败只降级为「退回纯轮询」，不阻断激活（与上方 pty:exit 的强弱档不同）。
+        match host.bus_subscribe(&bedcode_plugin_api::host::pty_event_topic(
+            bedcode_plugin_api::host::PTY_OUTPUT,
+            Self::ID,
+        )) {
+            Ok(()) => host.log_info(
+                "pty output notify subscribed (rate-limited wakeup; polling remains fallback)",
+            ),
+            Err(e) => host.log_warn(&format!(
+                "pty output notify subscription failed (falls back to polling): {e}"
+            )),
+        }
+
         // 票 04：订阅 WS 终端连接的断开事件（`<owner>::ws:client-disconnect`）——
         // 摘除该连接的终端订阅态。**失败必须阻断激活**：订不到 = 断开后订阅
         // 状态残留（幽灵订阅继续 drain 已断开的客户端，发送失败刷屏）。
@@ -907,6 +923,17 @@ impl WasmPlugin for SessionPlugin {
                     ws_terminal::on_session_terminated(&session_id, &reason, exit_code);
                 }
             }
+            return Ok(());
+        }
+        // pty:output（P2 宿主限频唤醒；payload `{ ptyId }`，只提示「环有新字节」）→
+        // 前端事件（终端组件据此立即拉一轮；字节仍走 `session.output.pull` 拉取）
+        if msg.topic
+            == bedcode_plugin_api::host::pty_event_topic(
+                bedcode_plugin_api::host::PTY_OUTPUT,
+                Self::ID,
+            )
+        {
+            output::on_pty_output(&msg.payload);
             return Ok(());
         }
         // ws:client-connect（属主私有 topic，票 07）：设备派生事件与认证记录 touch

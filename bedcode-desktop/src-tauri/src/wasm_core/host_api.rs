@@ -34,6 +34,7 @@ pub(super) mod peer;
 pub(super) mod platform;
 pub(crate) mod process;
 pub(crate) mod pty;
+pub(crate) mod pty_output;
 pub(super) mod status;
 pub(super) mod storage;
 pub(crate) mod task;
