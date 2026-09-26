@@ -162,6 +162,16 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 # mDNS 测试 Fake 构造 flume channel（与 mdns-sd 0.20 内部使用的 flume 同源，仅测试用）
 flume = "0.12"
 
+# ==================== 桥接基准工程（bench/） ====================
+# 自带 main() 的基准驱动（非 libtest harness）：CLI 参数 / 表格报告 / JSON 导出
+# 全部由工程自己控制，故关闭默认 harness。无参数运行 = 冒烟模式（3 个数量级门禁探针），
+# 全量场景需显式 `-- --full`。详见 bench/README.md 与
+# .scratch/2026-09-26-wasm-bridge-bench/spec.md
+[[test]]
+name = "wasm_bridge_bench"
+path = "tests/wasm_bridge_bench/main.rs"
+harness = false
+
 [profile.release]
 # unwind：panic 可被 catch_unwind（错误边界/插件宿主）捕获，插件业务 panic
 # 不再拖垮整个应用（abort 会让一切 panic 处理机制失效，任何 panic 直接闪退）

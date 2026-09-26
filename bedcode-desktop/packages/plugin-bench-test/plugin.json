@@ -1,0 +1,34 @@
+{
+  "id": "com.bedcode.bench",
+  "name": "Bridge Bench Probe",
+  "version": "0.1.0",
+  "description": "桥接基准夹具：wasm↔宿主↔前端 全链路性能探针的被测端（命令面 = bench.* 场景，emit 面 = plugin:bench:* 事件）。仅供 bench 工程加载，不随产品分发。",
+  "author": "BedCode",
+  "main": "index.js",
+  "sandbox": "inline",
+  "pluginType": "rust-ts",
+  "rustLibrary": "bedcode_plugin_bench_test",
+  "permissions": [
+    "broadcast",
+    "crypto:aead",
+    "fs:read",
+    "fs:write",
+    "network:http",
+    "process:run",
+    "pty:io",
+    "pty:spawn",
+    "storage",
+    "task:run",
+    "timer:schedule"
+  ],
+  "api": ["com.bedcode.bench.echo", "com.bedcode.bench.churn"],
+  "contributes": {
+    "commands": [],
+    "views": [],
+    "lifecycle": {
+      "onStartup": false,
+      "onShutdown": false
+    },
+    "provides": []
+  }
+}

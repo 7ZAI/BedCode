@@ -13,6 +13,11 @@ pub mod system;
 pub mod utils;
 pub mod wasm_core;
 
+// 桥接基准工程的 Channel 传输面（**仅 debug 构建**：release 产物不含本命令面，
+// 闸门锁见本模块 tests::bench_channel_surface_stays_debug_only）
+#[cfg(debug_assertions)]
+mod bench_channel;
+
 // ==================== Re-exports ====================
 
 use crate::server::peer_net;
@@ -626,6 +631,14 @@ pub fn run() {
             // Dev Console Relay（仅 dev：前端 console 日志转发，写 runtime.*.log + frontend.*.log 单独文件，见 commands.rs Dev Console Log Relay 节）
             #[cfg(debug_assertions)]
             commands::report_frontend_log,
+            // 桥接基准 · Channel 传输面（仅 debug：AGENTS §5.1 的 debug-only 测试面，
+            // 零业务语义、不碰既有能力；见 src/bench_channel.rs 头注释与 bench/README.md）
+            #[cfg(debug_assertions)]
+            bench_channel::bench_channel_stream_bytes,
+            #[cfg(debug_assertions)]
+            bench_channel::bench_channel_stream_text,
+            #[cfg(debug_assertions)]
+            bench_channel::bench_channel_stream_raw,
             // Plugin
             commands::plugin_list_loaded,
             commands::plugin_get_info,
