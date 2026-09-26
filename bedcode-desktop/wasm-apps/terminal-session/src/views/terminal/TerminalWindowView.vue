@@ -9,8 +9,11 @@
       class="h-10 shrink-0 flex items-center justify-between px-3 border-b border-[var(--border)] bg-[var(--bg-card)]"
       data-tauri-drag-region
     >
-      <div class="flex items-center gap-3 min-w-0" data-tauri-drag-region>
-        <div class="flex items-center gap-2 min-w-0 shrink-0" data-tauri-drag-region>
+      <!-- 为什么左区可收缩（2026-09-26 修复）：会话名/路径须让位给右侧操作区。
+           旧实现给会话名块 shrink-0（不可收缩）→ 窗口偏窄时被压缩的是右侧按钮区，
+           插件扩展点按钮（如「自动任务」）被挤到换行、文字溢出工具条。 -->
+      <div class="flex items-center gap-3 min-w-0 flex-1" data-tauri-drag-region>
+        <div class="flex items-center gap-2 min-w-0" data-tauri-drag-region>
           <span
             :class="['w-2 h-2 rounded-full shrink-0', statusColor]"
             data-tauri-drag-region
@@ -44,25 +47,27 @@
         </div>
       </div>
 
-      <div class="flex items-center gap-1.5">
+      <!-- shrink-0：右侧操作区不参与收缩（收缩交给左侧信息区截断），
+           配合扩展点按钮的 whitespace-nowrap 防文字换行溢出 -->
+      <div class="flex items-center gap-1.5 shrink-0">
         <!-- 插件页面工具栏项（target=terminal；宿主 registry 响应式数组注入） -->
         <template v-if="pageToolbarItems.length > 0">
-          <div class="w-px h-4 bg-[var(--border)] mx-0.5"></div>
+          <div class="w-px h-4 bg-[var(--border)] mx-0.5 shrink-0"></div>
           <button
             v-for="item in pageToolbarItems"
             :key="`${item.pluginId}:${item.id}`"
-            class="wb-btn-ghost"
+            class="wb-btn-ghost shrink-0 whitespace-nowrap !h-6 !px-2 !text-[calc(11px*var(--ui-scale))]"
             :title="item.label"
             @click="item.onClick?.()"
           >
             <span v-if="item.icon" class="w-3.5 h-3.5 plugin-icon">{{ item.icon }}</span>
-            <span v-else class="text-xs">{{ item.label }}</span>
+            <span v-else>{{ item.label }}</span>
           </button>
         </template>
 
         <!-- 停止会话 -->
         <button
-          class="wb-btn-primary !h-6 !px-2.5 !text-[calc(11px*var(--ui-scale))] uppercase"
+          class="wb-btn-primary shrink-0 whitespace-nowrap !h-6 !px-2.5 !text-[calc(11px*var(--ui-scale))] uppercase"
           @click="stopSession"
         >
           {{ t('session.button.stop') }}
@@ -70,7 +75,7 @@
 
         <!-- 设置 -->
         <button
-          class="w-6 h-6 rounded-[6px] flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] transition-colors"
+          class="w-6 h-6 shrink-0 rounded-[6px] flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] transition-colors"
           :class="{ 'bg-[var(--bg-hover)]': isSettingsOpen }"
           :title="t('session.terminal.settings')"
           @click.stop="isSettingsOpen = !isSettingsOpen"
@@ -94,7 +99,7 @@
 
         <!-- 清屏 -->
         <button
-          class="w-6 h-6 rounded-[6px] flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] transition-colors"
+          class="w-6 h-6 shrink-0 rounded-[6px] flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] transition-colors"
           :title="t('session.terminal.clearScreen')"
           @click="terminalPreviewRef?.clearTerminal()"
         >
@@ -110,7 +115,7 @@
 
         <!-- 刷新格式 -->
         <button
-          class="w-6 h-6 rounded-[6px] flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] transition-colors"
+          class="w-6 h-6 shrink-0 rounded-[6px] flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] transition-colors"
           :title="t('session.terminal.refreshFormat')"
           @click="terminalPreviewRef?.refreshTerminal()"
         >
@@ -124,29 +129,31 @@
           </svg>
         </button>
 
-        <!-- 插件扩展点（终端工具条 / 标题栏项；宿主 registry 注入） -->
+        <!-- 插件扩展点（终端工具条 / 标题栏项；宿主 registry 注入）。
+             按钮统一 24px 高 / 11px 字号（随 --ui-scale）/ 不收缩不换行：
+             旧实现用固定 text-xs 且允许收缩，窗口偏窄时「自动任务」等文字换行溢出工具条 -->
         <template v-if="terminalToolbarItems.length > 0">
-          <div class="w-px h-4 bg-slate-200 dark:bg-dark-600 mx-1"></div>
+          <div class="w-px h-4 bg-[var(--border)] mx-1 shrink-0"></div>
           <button
             v-for="item in terminalToolbarItems"
             :key="`${item.pluginId}:${item.id}`"
-            class="wb-btn-ghost !h-6"
+            class="wb-btn-ghost shrink-0 whitespace-nowrap !h-6 !px-2 !text-[calc(11px*var(--ui-scale))]"
             :title="item.label"
             @click="item.onClick?.()"
           >
             <span v-if="item.icon" class="w-4 h-4 plugin-icon">{{ item.icon }}</span>
-            <span v-else class="text-xs">{{ item.label }}</span>
+            <span v-else>{{ item.label }}</span>
           </button>
         </template>
         <div
           v-if="titleBarItems.length > 0"
-          class="flex items-center gap-2 px-2"
+          class="flex items-center gap-1 px-2 shrink-0"
           style="-webkit-app-region: no-drag"
         >
           <button
             v-for="item in titleBarItems"
             :key="`${item.pluginId}:${item.id}`"
-            class="flex items-center gap-1 px-1.5 py-0.5 text-xs text-slate-500 dark:text-dark-400 hover:text-slate-700 dark:hover:text-dark-200 hover:bg-slate-100 dark:hover:bg-dark-700 rounded transition-colors"
+            class="flex items-center gap-1 h-6 px-2 shrink-0 whitespace-nowrap rounded-[6px] text-[calc(11px*var(--ui-scale))] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors"
             :title="item.label"
             @click="item.onClick?.()"
           >
@@ -156,11 +163,11 @@
         </div>
 
         <!-- 分隔线 -->
-        <div class="w-px h-4 bg-[var(--border)] mx-0.5"></div>
+        <div class="w-px h-4 bg-[var(--border)] mx-0.5 shrink-0"></div>
 
         <!-- 窗口控制 -->
         <button
-          class="w-6 h-6 rounded-[6px] flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] transition-colors"
+          class="w-6 h-6 shrink-0 rounded-[6px] flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] transition-colors"
           :title="t('session.terminal.minimize')"
           @click="minimizeWindow"
         >
@@ -169,7 +176,7 @@
           </svg>
         </button>
         <button
-          class="w-6 h-6 rounded-[6px] flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] transition-colors"
+          class="w-6 h-6 shrink-0 rounded-[6px] flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] transition-colors"
           :title="t('session.terminal.maximize')"
           @click="toggleMaximize"
         >
@@ -191,7 +198,7 @@
           </svg>
         </button>
         <button
-          class="w-6 h-6 rounded-[6px] flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--color-danger)] hover:text-white transition-colors"
+          class="w-6 h-6 shrink-0 rounded-[6px] flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--color-danger)] hover:text-[var(--color-primary-contrast)] transition-colors"
           :title="t('session.terminal.close')"
           @click="closeWindow"
         >
@@ -214,15 +221,22 @@
       </p>
     </div>
 
-    <!-- 终端区：flex-1 占据剩余空间，min-h-0 防止内容撑开容器 -->
-    <TerminalPreview
-      v-else
-      ref="terminalPreviewRef"
-      class="flex-1 min-h-0"
-      :session="session"
-      :show-input="true"
-      :show-header="false"
-    />
+    <!-- 终端区：外层 flex-1 定高容器（min-h-0 防内容撑开）+ 内层 h-full。
+         为什么包一层（2026-09-26 修复）：TerminalPreview 组件根自带 h-full，
+         外部再传 flex-1 即「同一元素双高度声明」——WebKit 下可能让终端区取
+         100vh（整窗高）而非「100vh − 40px 工具条 − 24px 状态条」的剩余高度，
+         xterm 按偏大容器算出偏多行数 → 内容高于可视区、视口保持滚动到底 →
+         第一行被顶部工具条裁掉（终端内容侵占窗体标题栏）。外层定高后内层
+         h-full 的参照系恒为「剩余高度」，两类根因（容器高 / 字体指标）都收敛。 -->
+    <div v-else class="flex-1 min-h-0 relative">
+      <TerminalPreview
+        ref="terminalPreviewRef"
+        class="h-full"
+        :session="session"
+        :show-input="true"
+        :show-header="false"
+      />
+    </div>
 
     <!-- 24px 状态条 -->
     <footer
@@ -270,7 +284,7 @@
             >{{ t('session.terminal.settings') }}</span
           >
           <button
-            class="w-6 h-6 rounded-[6px] flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] transition-colors"
+            class="w-6 h-6 shrink-0 rounded-[6px] flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] transition-colors"
             :title="t('session.terminal.close')"
             @click="isSettingsOpen = false"
           >
@@ -397,7 +411,6 @@
  *   本视图只做窗口内交互（贴靠跟随/最小化/最大化/关闭）——逻辑逐字迁入。
  */
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
-import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import { getCurrentWindow, PhysicalPosition } from '@tauri-apps/api/window'
 import { emit, listen, type UnlistenFn } from '@tauri-apps/api/event'
@@ -414,11 +427,19 @@ import type { SessionInfo } from '../../composables/terminal/model'
 import type { SessionConfigDto } from '../../composables/useSessionCenter'
 import { TERMINAL_THEME_NAMES } from '../../utils/terminal/terminalThemes'
 
-const { t } = useI18n()
 const appWindow = getCurrentWindow()
 
 // 插件上下文（PluginViewHost / dev-shell 注入）
 const context = inject<PluginContext>('pluginContext')!
+
+/**
+ * 翻译：经 `context.i18n.t` 自动补插件 ID 前缀（与插件其余组件同一模式）。
+ *
+ * 禁止改用 vue-i18n 的 `useI18n()`：插件文案注册时带 `com.bedcode.terminal-session.`
+ * 前缀，无前缀查询在宿主命名空间下查无此 key → 标题栏 tooltip / 状态文案直接显示
+ * key 原文（2026-09-26 修复）。
+ */
+const t = (key: string, params?: Record<string, unknown>) => context.i18n.t(key, params)
 // 终端宿主能力（宿主插件窗口注入；dev-shell/vitest 回退内存版）
 const caps = useTerminalHostCapabilities() ?? createFallbackHostCapabilities()
 

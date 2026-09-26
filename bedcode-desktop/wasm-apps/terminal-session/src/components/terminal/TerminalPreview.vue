@@ -229,25 +229,71 @@ const terminalHostRef = ref<HTMLElement | null>(null)
 
 // ==================== 内核与域实例化 ====================
 
+/** resize 首次失败后的重试延迟（ms）：窗口挂载与插件侧会话登记/PTY 句柄落库
+ *  存在竞态，首次命令可能报「会话不存在 / 缺少 PTY 句柄」——短延迟重试即可命中 */
+const RESIZE_RETRY_DELAY_MS = 300
+
+/** 错误描述：命令通道异常可能抛非 Error 对象，直接透传会打印成 `{}`（无法定位） */
+function describeCommandError(e: unknown): string {
+  if (e instanceof Error) return e.message
+  if (typeof e === 'string') return e
+  if (e && typeof e === 'object') {
+    const message = (e as { message?: unknown }).message
+    if (typeof message === 'string' && message) return message
+    try {
+      return JSON.stringify(e)
+    } catch {
+      // 循环引用等不可序列化对象 → 退回 String
+    }
+  }
+  return String(e)
+}
+
+/** 单次 resize 调用：命令面返回异常形状（dev-shell / 命令未接）时回退 applied 不阻塞链路 */
+async function invokeResize(
+  sessionId: string,
+  cols: number,
+  rows: number,
+  force: boolean,
+): Promise<ResizeOutcome> {
+  const result = await context.commands.execute('session.action.resize', {
+    sessionId,
+    cols,
+    rows,
+    force,
+  })
+  if (result && typeof result === 'object' && 'status' in result) {
+    return result as ResizeOutcome
+  }
+  return { status: 'applied', canonical: { kind: 'desktop' } }
+}
+
 /** resize 请求实现：经插件 WASM 命令面 `session.action.resize`（服务端正统
  *  渲染端裁决；dev-shell 无后端时回退 applied 保持不阻塞）。
- *  必须先于 useTerminalResize 定义（setup 同步执行，const 提升 TDZ） */
+ *
+ *  **首次失败自动重试一次**（2026-09-26 加固）：若首次失败即回退 applied，PTY
+ *  会永久停留在初始预测尺寸，前端网格与 PTY 不一致（现象：内容底部多出空白
+ *  行 / 首行被裁）——实测日志出现过「resize 命令失败，回退 applied: {}」。
+ *
+ *  必须先于 useTerminalResize 定义（setup 同步执行，const 提升 TDZ）
+ */
 const requestResizeImpl: ResizeRequester = async (sessionId, cols, rows, force) => {
   try {
-    const result = await context.commands.execute('session.action.resize', {
-      sessionId,
-      cols,
-      rows,
-      force,
-    })
-    // 防御：后端返回形状异常（dev-shell / 命令未接）时回退 applied，不阻塞 resize 链路
-    if (result && typeof result === 'object' && 'status' in result) {
-      return result as ResizeOutcome
-    }
-    return { status: 'applied', canonical: { kind: 'desktop' } }
+    return await invokeResize(sessionId, cols, rows, force)
   } catch (e) {
-    console.warn('[terminal-session] resize 命令失败，回退 applied:', e)
-    return { status: 'applied', canonical: { kind: 'desktop' } }
+    try {
+      await new Promise((resolve) => setTimeout(resolve, RESIZE_RETRY_DELAY_MS))
+      const outcome = await invokeResize(sessionId, cols, rows, force)
+      console.warn(
+        `[terminal-session] resize 首次失败、重试成功 session=${sessionId} ${cols}x${rows}: ${describeCommandError(e)}`,
+      )
+      return outcome
+    } catch (e2) {
+      console.warn(
+        `[terminal-session] resize 命令失败（已重试），回退 applied session=${sessionId} ${cols}x${rows}: ${describeCommandError(e2)}`,
+      )
+      return { status: 'applied', canonical: { kind: 'desktop' } }
+    }
   }
 }
 
@@ -504,6 +550,12 @@ function initTerminal() {
     if (props.session) {
       resize.requestResize(cols, rows)
     }
+  })
+
+  // 输出写入解析完成后做一次视口一致性检查（节流在渲染域内）：持续输出会把滚动
+  // 位置反复推回「非整行残留」态——只在 fit 时校正不够（首行被裁/底部黑缝复现）
+  terminal.onWriteParsed(() => {
+    kernel.callbacks.settleViewport()
   })
 
   // ResizeObserver — 分层防抖（垂直立即 / 水平 100ms 合并，flush 保证最终尺寸必达），

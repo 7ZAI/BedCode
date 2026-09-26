@@ -67,6 +67,7 @@ function makeCtx(overrides?: Partial<TerminalKernelContext>) {
       applyDprFit: vi.fn() as () => void,
       fitAndRefresh: vi.fn() as () => void,
       rebuildRenderer: vi.fn() as () => void,
+      settleViewport: vi.fn() as () => void,
       scrollToBottom: vi.fn() as () => void,
     },
     ...overrides,

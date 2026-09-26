@@ -1,13 +1,15 @@
 <template>
+  <!-- shrink-0 + whitespace-nowrap：标题栏按钮不收缩不换行（旧实现允许收缩，
+       窗口偏窄时多字标签会被挤成两行、溢出 40px 工具条）；字号随 --ui-scale -->
   <div
     v-if="items.length > 0"
-    class="flex items-center gap-2 px-2"
+    class="flex items-center gap-1 px-2 shrink-0"
     style="-webkit-app-region: no-drag"
   >
     <button
       v-for="item in items"
       :key="`${item.pluginId}:${item.id}`"
-      class="flex items-center gap-1 px-1.5 py-0.5 text-xs text-slate-500 dark:text-dark-400 hover:text-slate-700 dark:hover:text-dark-200 hover:bg-slate-100 dark:hover:bg-dark-700 rounded transition-colors"
+      class="flex items-center gap-1 h-6 px-2 shrink-0 whitespace-nowrap rounded-[6px] text-[calc(11px*var(--ui-scale))] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors"
       :title="item.label"
       @click="item.onClick?.()"
     >

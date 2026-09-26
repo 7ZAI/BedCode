@@ -32,6 +32,8 @@ export interface TerminalKernelCallbacks {
   fitAndRefresh: () => void
   /** 透明度切换时重建渲染器（渲染器域） */
   rebuildRenderer: () => void
+  /** 视口一致性稳定（渲染器域；输出写入后节流调用，修像素级滚动残留） */
+  settleViewport: () => void
   /** rAF 合并的滚动到底（滚动域） */
   scrollToBottom: () => void
 }
@@ -83,6 +85,7 @@ export function createTerminalKernel(
       applyDprFit: noop,
       fitAndRefresh: noop,
       rebuildRenderer: noop,
+      settleViewport: noop,
       scrollToBottom: noop,
     },
   }

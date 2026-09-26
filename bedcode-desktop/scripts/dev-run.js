@@ -21,7 +21,7 @@
  */
 
 import { spawn, spawnSync, execFileSync } from 'node:child_process'
-import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs'
+import { readFileSync, existsSync, readdirSync, statSync, createWriteStream, mkdirSync } from 'node:fs'
 import net from 'node:net'
 import { resolve, basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -166,12 +166,45 @@ const DEFAULT_HOST_CMD = [PKG_MGR_CLI, ['run', 'tauri', 'dev']]
 const children = []
 let shuttingDown = false
 
+/**
+ * dev 会话输出落盘（tee）：宿主/webview console（Tauri dev 转发到 stdout）不写入
+ * 其他日志文件——插件前端裸 `console.*` 排障时只在这里可见。统一追加写入
+ * `.dev-logs/dev-run.YYYY-MM-DD.log`（已被 .gitignore 忽略），控制台输出行为不变。
+ */
+function openDevLog() {
+  try {
+    const dir = resolve(ROOT, '.dev-logs')
+    mkdirSync(dir, { recursive: true })
+    const d = new Date()
+    const stamp = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
+      d.getDate(),
+    ).padStart(2, '0')}`
+    return createWriteStream(resolve(dir, `dev-run.${stamp}.log`), { flags: 'a' })
+  } catch {
+    // 落盘失败不影响 dev 启动（仅失去可回读能力）
+    return null
+  }
+}
+
+const devLog = openDevLog()
+
 function start(cmd, args, cwd) {
   // POSIX：detached 让子进程自成进程组长（pgid = 自己的 pid），shutdown 时可用
   // 负 pgid 一次杀整棵子树（已实测：孙进程自动继承该 pgid，无需各自 detached）。
   // Windows 必须排除：detached 会传 CREATE_NEW_CONSOLE 弹出额外控制台窗口，
   // Windows 侧走下方 taskkill /T /F 分支
-  const child = spawn(cmd, args, { cwd, stdio: 'inherit', detached: !IS_WIN })
+  //
+  // stdio 用管道而非 inherit：既保持控制台输出（手动转发），又同时落盘排障日志
+  const child = spawn(cmd, args, { cwd, stdio: ['inherit', 'pipe', 'pipe'], detached: !IS_WIN })
+  for (const [stream, target] of [
+    [child.stdout, process.stdout],
+    [child.stderr, process.stderr],
+  ]) {
+    stream?.on('data', (chunk) => {
+      target.write(chunk)
+      devLog?.write(chunk)
+    })
+  }
   children.push(child)
   return child
 }

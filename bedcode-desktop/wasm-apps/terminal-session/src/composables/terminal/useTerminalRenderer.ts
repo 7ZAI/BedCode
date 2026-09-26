@@ -28,6 +28,11 @@ import { shouldApplyGridResize } from '../../utils/terminal/terminalResizePolicy
 // 边缘更清晰（对齐 VS Code Linux 默认关 GPU 加速的做法）。置 false 可切回 WebGL 对比。
 const LINUX_USE_DOM_RENDERER = true
 
+/** 视口画布溢出容差（px）：亚像素渲染误差不计入，避免无谓减行 */
+export const VIEWPORT_OVERFLOW_TOLERANCE_PX = 1
+/** 单次收敛最多削减的行数（防抖 + 防死循环） */
+export const VIEWPORT_CONVERGE_MAX_STEPS = 2
+
 /** 渲染器日志接口（调用方注入：宿主 logger 或 console） */
 export interface TerminalRendererLogger {
   warn: (...args: unknown[]) => void
@@ -215,6 +220,7 @@ export function useTerminalRenderer(ctx: TerminalKernelContext, logger: Terminal
     const cell = measureCellSize()
     if (!host || host.clientWidth <= 0 || host.clientHeight <= 0 || !cell) {
       fitAddon.fit()
+      convergeViewportOverflow()
       return
     }
     const { cols, rows } = getXtermScaledDimensions({
@@ -227,11 +233,129 @@ export function useTerminalRenderer(ctx: TerminalKernelContext, logger: Terminal
     // 与 FitAddon.fit() 一致：尺寸不变不动（避免无谓 resize 事件），
     // 变化时经 ±1 漂移抑制，仅在真实变化时 resize
     if (terminal.cols !== cols || terminal.rows !== rows) {
-      if (!shouldApplyGridResize(terminal.cols, terminal.rows, cols, rows)) {
-        return
+      if (shouldApplyGridResize(terminal.cols, terminal.rows, cols, rows)) {
+        terminal.resize(cols, rows)
+        scheduleAtlasPreheat()
       }
-      terminal.resize(cols, rows)
-      scheduleAtlasPreheat()
+    }
+    // 收敛检查不能短路：±1 漂移被抑制、或网格恰好等于目标值时，
+    // 实测画布仍可能高于容器（见 convergeViewportOverflow 说明）
+    convergeViewportOverflow()
+  }
+
+  /** 视口稳定节流间隔（ms）：输出写入期间按此节奏做一次廉价一致性检查 */
+  const VIEWPORT_SETTLE_INTERVAL_MS = 250
+  /** 上次 settle 时间戳（节流；force 时不受限） */
+  let lastSettleAt = 0
+
+  /** 读取 xterm 滚动容器当前 scrollTop（诊断用；结构缺失时给 'n/a'） */
+  function readScrollTop(): string {
+    const element = ctx.terminalRef.value?.element as HTMLElement | undefined
+    if (!element || typeof element.querySelector !== 'function') return 'n/a'
+    const scroller = element.querySelector('.xterm-scrollable-element') as HTMLElement | null
+    const viewport = element.querySelector('.xterm-viewport') as HTMLElement | null
+    const value = scroller?.scrollTop ?? viewport?.scrollTop
+    return typeof value === 'number' ? String(value) : 'n/a'
+  }
+
+  /** 一致性快照日志（仅在实际修正时输出；数值供真机复验定位残余偏差） */
+  function logViewportSnapshot(
+    reason: string,
+    m: { offsetTop: number; overflowHeight: number },
+  ) {
+    const terminal = ctx.terminalRef.value
+    const host = ctx.terminalHostRef.value
+    if (!terminal || !host) return
+    const buffer = terminal.buffer?.active
+    logger.warn(
+      `[TerminalPreview] 视口收敛(${reason}) offsetTop=${m.offsetTop.toFixed(1)} ` +
+        `overflowHeight=${m.overflowHeight.toFixed(1)} scrollTop=${readScrollTop()} ` +
+        `host=${host.clientHeight}x${host.clientWidth} rows=${terminal.rows} cols=${terminal.cols} ` +
+        `dpr=${window.devicePixelRatio} bufferLen=${buffer ? buffer.length : 'n/a'} ` +
+        `viewportY=${buffer ? buffer.viewportY : 'n/a'} baseY=${buffer ? buffer.baseY : 'n/a'}`,
+    )
+  }
+
+  /**
+   * 视口稳定（层 1，软修正）：像素级滚动残留 → 钉回整行底部，**不改变行数**。
+   *
+   * xterm 6 的滚动容器是像素级 ScrollableElement（`smoothScrollDuration` 即其证据），
+   * 清屏（scrollOnEraseInDisplay）/ resize / 输出滚动组合下会残留非整行 scrollTop
+   * （真机实测 ≈6px ≈0.27 行）→ 画布整体上移：首行被容器上沿裁掉、底部空出同宽
+   * 空隙。`scrollToBottom()` 让 xterm 按「行号 × cellH」重设 scrollTop，即为整行值。
+   *
+   * 输出写入期间也会被调用（onWriteParsed，节流 {@link VIEWPORT_SETTLE_INTERVAL_MS}）：
+   * 持续输出会把滚动位置反复推回残留态，只在 fit 时校正不够。
+   *
+   * @returns 是否发生了校正
+   */
+  function settleViewport(force = false): boolean {
+    const terminal = ctx.terminalRef.value
+    const host = ctx.terminalHostRef.value
+    const now = Date.now()
+    if (!force && now - lastSettleAt < VIEWPORT_SETTLE_INTERVAL_MS) return false
+    lastSettleAt = now
+    if (!terminal || !host || host.clientHeight <= 0) return false
+    const element = terminal.element as HTMLElement | undefined
+    // querySelector 存在性防御：测试桩 / 非真实 DOM 环境下 element 无该方法
+    if (!element || !element.isConnected || typeof element.querySelector !== 'function') return false
+    if (typeof host.getBoundingClientRect !== 'function') return false
+    const screen = element.querySelector('.xterm-screen') as HTMLElement | null
+    if (!screen || typeof screen.getBoundingClientRect !== 'function') return false
+
+    // 视口不在底部 = 用户主动查看历史，不干预
+    const buffer = terminal.buffer?.active
+    if (buffer && buffer.viewportY < buffer.baseY) return false
+
+    const hostRect = host.getBoundingClientRect()
+    const rect = screen.getBoundingClientRect()
+    // >0 = 内容上沿超出容器上沿（首行被裁）
+    const offsetTop = hostRect.top - rect.top
+    if (offsetTop <= VIEWPORT_OVERFLOW_TOLERANCE_PX) return false
+    logViewportSnapshot('滚动残留', { offsetTop, overflowHeight: rect.height - host.clientHeight })
+    terminal.scrollToBottom()
+    return true
+  }
+
+  /**
+   * 视口—容器一致性收敛（fit 后调用；层 1 + 层 2）
+   *
+   * - 层 1（软）：像素级滚动残留 → 钉回整行底部（见 {@link settleViewport}，不削行）；
+   * - 层 2（硬）：实测画布（.xterm-screen）高于容器超过容差（rows × cellH 亚像素
+   *   累积超容，视口滚到底时末行被裁）→ 逐行削减 rows（≤
+   *   {@link VIEWPORT_CONVERGE_MAX_STEPS} 行），每轮后重新钉底。
+   *
+   * **教训**：层 1 绝不能用「削行」实现——削行不修滚动偏移，只会把「首行被裁」
+   * 变成「底部多一整行空白（黑缝）」，且每轮 fit 可能继续削（2026-09-26 三轮实况）。
+   *
+   * 视口不在底部（用户在看历史）一律不干预。
+   */
+  function convergeViewportOverflow() {
+    const terminal = ctx.terminalRef.value
+    const host = ctx.terminalHostRef.value
+    if (!terminal || !host || host.clientHeight <= 0) return
+    const element = terminal.element as HTMLElement | undefined
+    if (!element || !element.isConnected || typeof element.querySelector !== 'function') return
+
+    // 层 1：滚动残留校正（force 绕过节流：fit 是明确的收敛时机）
+    settleViewport(true)
+
+    // 层 2：画布高于容器 → 逐行削减 + 重新钉底
+    const screen = element.querySelector('.xterm-screen') as HTMLElement | null
+    if (!screen || typeof screen.getBoundingClientRect !== 'function') return
+    const bufferAtBottom = () => {
+      const buffer = terminal.buffer?.active
+      return !buffer || buffer.viewportY >= buffer.baseY
+    }
+    for (let step = 0; step < VIEWPORT_CONVERGE_MAX_STEPS; step++) {
+      if (!bufferAtBottom()) return
+      const rect = screen.getBoundingClientRect()
+      const overflowHeight = rect.height - host.clientHeight
+      if (overflowHeight <= VIEWPORT_OVERFLOW_TOLERANCE_PX) return
+      if (terminal.rows <= 1) return
+      logViewportSnapshot('画布超容', { offsetTop: 0, overflowHeight })
+      terminal.resize(terminal.cols, terminal.rows - 1)
+      terminal.scrollToBottom()
     }
   }
 
@@ -273,6 +397,12 @@ export function useTerminalRenderer(ctx: TerminalKernelContext, logger: Terminal
    * 旧指标，导致字符尺寸按错指标光栅化 → 整屏文字发蒙。挂载并跑完首帧后延迟重测
    * + 全量重绘一次，消除首帧模糊残留。DOM 渲染器重绘即重建行；WebGL 渲染器还会
    * 重建字形图集（clearTextureAtlas 在 DOM 渲染器下为 no-op）。
+   *
+   * **重测后必须重算网格**（2026-09-26 修复）：cell 指标修正会改变「容器可容纳的
+   * 行列数」。旧实现只 `measure()` + `refresh()`，网格仍停留在按**错误（偏小）**
+   * 指标算出的偏多行数上——xterm 内容高于容器、视口保持「滚动到底」→ 终端第一行
+   * 被顶部 40px 工具条裁掉（用户现象：终端内容侵占窗体标题栏）。`fitAndRefresh`
+   * 内含 applyDprFit（行列重算 + PTY resize 同步）与整屏重绘，覆盖原 refresh 语义。
    */
   function scheduleInitialFontRemeasure() {
     if (!ctx.isLinux.value) return
@@ -289,7 +419,7 @@ export function useTerminalRenderer(ctx: TerminalKernelContext, logger: Terminal
       if (ctx.webglAddonRef.value) {
         terminal.clearTextureAtlas()
       }
-      terminal.refresh(0, terminal.rows - 1)
+      ctx.callbacks.fitAndRefresh()
     }, 300)
   }
 
@@ -341,6 +471,9 @@ export function useTerminalRenderer(ctx: TerminalKernelContext, logger: Terminal
   ctx.callbacks.applyDprFit = applyDprFit
   ctx.callbacks.fitAndRefresh = fitAndRefresh
   ctx.callbacks.rebuildRenderer = rebuildRenderer
+  ctx.callbacks.settleViewport = () => {
+    settleViewport()
+  }
 
   return {
     rendererDecision,
@@ -348,6 +481,7 @@ export function useTerminalRenderer(ctx: TerminalKernelContext, logger: Terminal
     rebuildRenderer,
     applyDprFit,
     fitAndRefresh,
+    settleViewport,
     scheduleInitialFontRemeasure,
     watchDprChanges,
     disposeRenderer,
