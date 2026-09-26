@@ -59,7 +59,37 @@ pub fn parse_sessions(json: &serde_json::Value) -> Vec<SessionRef> {
         .collect()
 }
 
-// ==================== 命名唯一化（复刻宿主 DefaultNamingService） ====================
+// ==================== 命名（基名派生 + 唯一化） ====================
+
+/// 配置名与工作目录都空时的兑底名（不依赖 i18n：WASM 侧无 i18n 运行时，
+/// 且该值只在真源缺名时出现；前端另有 `session.terminal.defaultName` 兑底）
+const FALLBACK_SESSION_BASE_NAME: &str = "Terminal";
+
+/// 会话基名（进入唯一化之前）
+///
+/// 配置名允许为空（配置表单的 name 非必填），而会话名原样取配置名且**无兑底**
+/// → 空名会话在终端窗口标题栏里只剩状态标签、没有身份（真机 2026-09-27 截图：
+/// `● 运行中`，会话名槽位零字形）。故：配置名空白 → 退工作目录 basename
+/// （`/home/x/BedCode` → `BedCode`，与 tmux / VS Code 的窗口名惯例一致；斜杠与
+/// 反斜杠都认，兼容 Windows 路径）；两者都空 → `fallback`。
+///
+/// **绝不返回空串**：空名会一路传到 PTY 登记、会话中心列表与窗口标题。
+pub fn resolve_session_base_name(config_name: &str, working_dir: &str, fallback: &str) -> String {
+    let name = config_name.trim();
+    if !name.is_empty() {
+        return name.to_string();
+    }
+    // 只取最后一段；末段是 `.` / `..`（退化路径）就**不猜**——回兑底名，
+    // 宁可给通用名也不给一个看着错的目录名（如 `/home/x/..` 报成 `x`）
+    match working_dir
+        .rsplit(['/', '\\'])
+        .map(str::trim)
+        .find(|segment| !segment.is_empty())
+    {
+        Some(last) if last != "." && last != ".." => last.to_string(),
+        _ => fallback.to_string(),
+    }
+}
 
 /// 唯一的会话名（重名冲突改写）：同配置的活跃会话名里提取最大编号，避免删除后
 /// 编号回退导致重名——与宿主 `DefaultNamingService::generate_unique_name` 逐字等价：
@@ -385,6 +415,53 @@ mod tests {
             created_at: "2026-09-20T00:00:00Z".to_string(),
             updated_at: "2026-09-20T00:00:00Z".to_string(),
         }
+    }
+
+    // ==================== 会话基名派生 ====================
+
+    /// 正例：配置名非空 → 原样（去首尾空白），不碰工作目录
+    #[test]
+    fn base_name_prefers_config_name() {
+        assert_eq!(resolve_session_base_name("dev", "/home/x/BedCode", "T"), "dev");
+        assert_eq!(resolve_session_base_name("  dev  ", "/home/x/BedCode", "T"), "dev");
+    }
+
+    /// 反例：配置名为空/纯空白（表单 name 非必填）→ 退工作目录 basename
+    /// （真机 2026-09-27：空名会话的窗口标题栏只剩「● 运行中」）
+    #[test]
+    fn base_name_falls_back_to_working_dir_basename() {
+        assert_eq!(resolve_session_base_name("", "/home/binblink/BedCode", "T"), "BedCode");
+        assert_eq!(resolve_session_base_name("   ", "/home/binblink/BedCode", "T"), "BedCode");
+    }
+
+    /// 边界：尾斜杠 / 空格目录 / Windows 路径 / 退化路径（末段 `.` `..`）
+    #[test]
+    fn base_name_basename_edge_cases() {
+        assert_eq!(resolve_session_base_name("", "/home/x/BedCode/", "T"), "BedCode");
+        assert_eq!(resolve_session_base_name("", "/home/x/ My Project ", "T"), "My Project");
+        assert_eq!(resolve_session_base_name("", r"C:\Users\bin\BedCode", "T"), "BedCode");
+        // 退化路径不猜：宁可给兑底名也不报 `x`（`/home/x/..` 的真 basename 是 home）
+        assert_eq!(resolve_session_base_name("", "/home/x/..", "T"), "T");
+        assert_eq!(resolve_session_base_name("", "/home/x/.", "T"), "T");
+        assert_eq!(resolve_session_base_name("", "/", "T"), "T");
+    }
+
+    /// 边界：配置名与工作目录都空 → 兑底名，**绝不返回空串**
+    /// （空名会一路传到 PTY 登记 / 会话中心列表 / 窗口标题）
+    #[test]
+    fn base_name_never_empty() {
+        assert_eq!(resolve_session_base_name("", "", "Terminal"), "Terminal");
+        assert_eq!(resolve_session_base_name("", "   ", "Terminal"), "Terminal");
+        assert!(!resolve_session_base_name("", "", FALLBACK_SESSION_BASE_NAME).is_empty());
+    }
+
+    /// 端到端：空配置名 → basename 参与唯一化（两个同名会话 → BedCode / BedCode(1)）
+    #[test]
+    fn base_name_then_unique_name() {
+        let base = resolve_session_base_name("", "/home/binblink/BedCode", FALLBACK_SESSION_BASE_NAME);
+        assert_eq!(base, "BedCode");
+        let sessions = vec![session("c1", "BedCode", "Running")];
+        assert_eq!(generate_unique_name("c1", &base, &sessions), "BedCode(1)");
     }
 
     // ==================== 命名唯一化 ====================
@@ -714,7 +791,11 @@ pub fn create_via_host(draft_json: &serde_json::Value) -> Result<serde_json::Val
     // 真源已在本域（宿主不再持会话登记）
     let sessions_json = crate::session::internal_records_json()?;
     let sessions = parse_sessions(&sessions_json);
-    let unique_name = generate_unique_name(&request.config_id, &config.name, &sessions);
+    let unique_name = generate_unique_name(
+        &request.config_id,
+        &resolve_session_base_name(&config.name, &config.working_dir, FALLBACK_SESSION_BASE_NAME),
+        &sessions,
+    );
     // config→launch spec 映射 + 两阶段启动决策（P1-b 起恒即起，start 保留为
     // wire 兼容字段，不再有「只建不启」的双态——host-pty 无 create-without-spawn）
     let spec = build_launch_spec(&config, request.cols, request.rows, true)?;

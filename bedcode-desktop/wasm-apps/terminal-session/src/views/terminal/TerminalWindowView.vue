@@ -4,54 +4,32 @@
     :class="isShown ? (revealDone ? 'opacity-100' : 'animate-fade-slide-up') : 'opacity-0'"
     @animationend="onRevealEnd"
   >
-    <!-- ==================== 40px 工具条：左信息，右操作 ==================== -->
+    <!-- ==================== 40px 工具条：左信息，右操作 ====================
+         左侧只保留「会话名 + 状态标签」（2026-09-27 按用户要求移除 cwd / 命令：
+         那串 `~/…/BedCode · pi` 是会话配置的 argv，贴在标题栏上读起来像 TUI
+         泄进宿主 chrome；数据链路 `session.config.list` 一并删除，无剩余消费者）。
+         左区可收缩（2026-09-26 修复）：旧实现给会话名块 shrink-0（不可收缩）→
+         窗口偏窄时被压缩的是右侧按钮区，插件扩展点按钮（如「自动任务」）被挤到
+         换行、文字溢出工具条。 -->
     <header
       class="h-10 shrink-0 flex items-center justify-between px-3 border-b border-[var(--border)] bg-[var(--bg-card)]"
       data-tauri-drag-region
     >
-      <!-- 为什么左区可收缩（2026-09-26 修复）：会话名/路径须让位给右侧操作区。
-           旧实现给会话名块 shrink-0（不可收缩）→ 窗口偏窄时被压缩的是右侧按钮区，
-           插件扩展点按钮（如「自动任务」）被挤到换行、文字溢出工具条。 -->
-      <div class="flex items-center gap-3 min-w-0 flex-1" data-tauri-drag-region>
-        <div class="flex items-center gap-2 min-w-0" data-tauri-drag-region>
-          <span
-            :class="['w-2 h-2 rounded-full shrink-0', statusColor]"
-            data-tauri-drag-region
-          ></span>
-          <span
-            class="wb-mono text-[calc(13px*var(--ui-scale))] font-semibold text-[var(--text-primary)] truncate"
-            data-tauri-drag-region
-          >
-            {{ sessionName }}
-          </span>
-          <span
-            class="text-[calc(10.5px*var(--ui-scale))] font-semibold tracking-[0.08em] uppercase shrink-0"
-            :class="statusLabelClass"
-            data-tauri-drag-region
-          >
-            {{ statusText }}
-          </span>
-        </div>
-
-        <!-- 会话信息：cwd / 命令（mono 小字）
-             为什么 cwd 用 flex-1、命令用 shrink-0（2026-09-27 修复）：两者原本都是
-             truncate，同一行里按**内容宽度**分摊收缩额度，cwd 文本长、额度几乎被它吃光，
-             命令被压成 1 个字符的残字（无省略号，直接被右侧操作区盖住）。改为显式优先级：
-             cwd 吸收全部收缩（truncate 出省略号）、命令保持自身宽度并封顶 8rem，
-             窗口再窄也只是 cwd 变短，不会出现无省略号的残字。 -->
-        <div
-          v-if="config"
-          class="hidden sm:flex flex-1 items-center gap-2 min-w-0 wb-mono text-[calc(12.5px*var(--ui-scale))] text-[var(--text-secondary)]"
+      <div class="flex items-center gap-2 min-w-0" data-tauri-drag-region>
+        <span :class="['w-2 h-2 rounded-full shrink-0', statusColor]" data-tauri-drag-region></span>
+        <span
+          class="wb-mono text-[calc(13px*var(--ui-scale))] font-semibold text-[var(--text-primary)] truncate"
           data-tauri-drag-region
         >
-          <span v-if="workingDir" class="min-w-0 flex-1 truncate" :title="workingDir">{{
-            workingDir
-          }}</span>
-          <span v-if="workingDir && command" class="shrink-0 text-[var(--text-tertiary)]">·</span>
-          <span v-if="command" class="shrink-0 max-w-32 truncate" :title="command">{{
-            command
-          }}</span>
-        </div>
+          {{ sessionName }}
+        </span>
+        <span
+          class="text-[calc(10.5px*var(--ui-scale))] font-semibold tracking-[0.08em] uppercase shrink-0"
+          :class="statusLabelClass"
+          data-tauri-drag-region
+        >
+          {{ statusText }}
+        </span>
       </div>
 
       <!-- shrink-0：右侧操作区不参与收缩（收缩交给左侧信息区截断），
@@ -413,12 +391,12 @@
  * 终端窗口视图（插件版，票 03a）— 独立终端窗口壳
  *
  * 自宿主 `TerminalWindowView.vue` 迁入：40px 工具条（mono 会话名 + 状态标签 +
- * cwd/命令 + 插件扩展点 + 窗口控制）+ 24px 状态条 + 设置面板（含背景图片）；
+ * 插件扩展点 + 窗口控制）+ 24px 状态条 + 设置面板（含背景图片）；
  * 保留贴靠/显示动画/设置面板与插件扩展点。
  *
  * 与宿主版本差异（方案 1 迁入适配）：
- * - 会话数据经插件命令通道 `session.get`（票 08 起宿主会话数据命令面已注销）
- *   `session.config.list`（插件私有库真源）——不直调宿主领域命令；
+ * - 会话数据经插件命令通道 `session.get`（票 08 起宿主会话数据命令面已注销）——
+ *   不直调宿主领域命令；
  * - 终端设置/背景图经宿主能力注入（`terminalHostCapabilities`：settings accessor +
  *   bg image 命令桥；无注入环境回退内存版）；
  * - 插件扩展点（页面工具栏/终端工具栏/标题栏项）经宿主注入的 registry 响应式
@@ -440,7 +418,6 @@ import {
   TERMINAL_PAGE_TOOLBAR_TARGET,
 } from '../../components/terminal/terminalHostCapabilities'
 import type { SessionInfo } from '../../composables/terminal/model'
-import type { SessionConfigDto } from '../../composables/useSessionCenter'
 import { TERMINAL_THEME_NAMES } from '../../utils/terminal/terminalThemes'
 
 const appWindow = getCurrentWindow()
@@ -464,7 +441,6 @@ const SNAP_THRESHOLD = 15 // 贴靠阈值（像素）
 const sessionId = currentSessionId()
 const sessionName = ref('')
 const session = ref<SessionInfo | null>(null)
-const config = ref<SessionConfigDto | null>(null)
 const isMaximized = ref(false)
 const isLoading = ref(true)
 const isShown = ref(false) // 是否已允许显示（由主窗口在内容就绪后通知）
@@ -479,9 +455,6 @@ const terminalPreviewRef = ref<InstanceType<typeof TerminalPreview> | null>(null
 
 // 设置面板是否打开
 const isSettingsOpen = ref(false)
-
-const workingDir = computed(() => config.value?.workingDir || '')
-const command = computed(() => config.value?.command || '')
 
 // 设置面板绑定的主题/字体大小（读写 TerminalPreview 暴露的 ref，与终端实时同步）
 const settingsTheme = computed({
@@ -626,19 +599,10 @@ async function loadSessionInfo() {
       | SessionInfo
       | null
     session.value = result as SessionInfo
-    sessionName.value = (result as SessionInfo).name
-
-    // 只读拉取会话配置（插件私有库真源，经 session.config.list），用于工具条展示 cwd / 命令
-    const configId = (result as SessionInfo).configId ?? (result as SessionInfo).config_id
-    if (configId) {
-      try {
-        const raw = await context.commands.execute('session.config.list', {})
-        const configs = Array.isArray(raw) ? (raw as SessionConfigDto[]) : []
-        config.value = configs.find((c) => c.id === configId) ?? null
-      } catch (e) {
-        console.warn('[terminal-session] Failed to load session config:', e)
-      }
-    }
+    // 名为空 → 通用名（2026-09-27）：配置表单的 name 非必填，历史遗留行也可能为空，
+    // 空名会让窗口标题栏只剩状态标签、没有身份（插件侧已在创建时用 cwd basename
+    // 兑底，这里再兜一层读时路径，覆盖已存在的空名行）
+    sessionName.value = (result as SessionInfo).name?.trim() || t('session.terminal.defaultName')
 
     // 加载完成后初始化位置
     await initWindowPosition()

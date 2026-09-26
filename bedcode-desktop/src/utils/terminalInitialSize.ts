@@ -3,9 +3,14 @@
  *
  * 为什么能精确：桌面终端是独立窗口，创建尺寸确定（见 useSessionWindows.
  * openTerminalWindow）：宽 = 主窗口内容区宽 × 60%、高 = 主窗口内容区高；
- * 窗口内 chrome 固定 —— 工具条 h-10(40px) + 状态条 h-6(24px)，xterm 宿主
- * 无水平内边距。故在启动时刻即可由主窗口尺寸推出终端网格，PTY openpty
- * 直接以正确行列创建；挂载后 FitAddon 校准仅剩 ±0 行列的测量残差。
+ * 窗口内 chrome 固定 —— 工具条 h-10(40px) + 状态条 h-6(24px)。故在启动时刻即可
+ * 由主窗口尺寸推出终端网格，PTY openpty 直接以正确行列创建；挂载后 FitAddon 校准
+ * 仅剩 ±0 行列的测量残差。
+ *
+ * **宿主左右内边距必须计入**（2026-09-27）：终端内容不再贴死窗口边框，插件
+ * `TerminalPreview.vue` 给 `:deep(.xterm)` 加了 `padding-inline: 0.5rem`（呼吸位）。
+ * 本预测原先只扣滚动条宽度，漏掉这 1rem → 预测列数比 xterm 实际网格多约 2 列
+ * （首帧起 PTY 与网格列数不一致，依赖挂载后的 fit 上报纠正）。锁定见测试 C5/C6。
  *
  * **字体口径必须与插件渲染端一致**（2026-09-26 修复）：插件
  * `TerminalPreview.initTerminal` 的字号是 `terminal_font_size × PLATFORM_UI_SCALE`
@@ -19,6 +24,13 @@ import { PLATFORM_UI_SCALE } from '@/composables/useFontSize'
 
 /** 终端窗口内固定 chrome：顶部工具条（h-10）+ 底部状态条（h-6） */
 export const TERMINAL_WINDOW_CHROME_PX = 40 + 24
+
+/**
+ * xterm 宿主左右内边距（rem）——与插件 `TerminalPreview.vue` 的
+ * `:deep(.xterm) { padding-inline: 0.5rem }` **同源，两处必须同步**（测试 C5 锁）。
+ * 插件源文件：`wasm-apps/terminal-session/src/components/terminal/TerminalPreview.vue`。
+ */
+export const TERMINAL_HOST_GUTTER_REM = 1
 
 /** 滚动条宽度（FitAddon 在 scrollback > 0 时扣除 14px） */
 const SCROLLBAR_PX = 14
@@ -36,6 +48,36 @@ const DEFAULT_FONT_STACK = 'Cascadia Mono, Consolas, Monaco, Courier New, monosp
  */
 const LINUX_FONT_STACK =
   "'DejaVu Sans Mono', 'Liberation Mono', 'Ubuntu Mono', 'Noto Sans Mono', 'Noto Mono', 'Cascadia Mono', 'Consolas', 'Courier New', monospace"
+
+/**
+ * 宿主内边距像素值：rem × 根字号（根字号随 `--ui-scale` 变化，故不能写死 px）。
+ * 取不到根字号时按 Tailwind 默认 16px 兜底。
+ */
+export function resolveGutterPx(rootFontSize: number): number {
+  const base = Number.isFinite(rootFontSize) && rootFontSize > 0 ? rootFontSize : 16
+  return Math.round(TERMINAL_HOST_GUTTER_REM * base)
+}
+
+/**
+ * 网格换算（纯函数，供预测与单测共用）
+ *
+ * 宽扣项 = 宿主左右内边距 + 滚动条（与 FitAddon 0.11 的 `proposeDimensions` 口径
+ * 一致：它扣 `.xterm` 自身 padding，滚动条固定 14px）；高扣项 = 窗口 chrome。
+ * 任一输入退化 → null（调用方回退服务端默认值，不传半成品尺寸）。
+ */
+export function resolveTerminalGrid(
+  termW: number,
+  termH: number,
+  cellW: number,
+  cellH: number,
+  gutterPx: number,
+): { cols: number; rows: number } | null {
+  if (!(termW > 0) || !(termH > 0) || !(cellW > 0) || !(cellH > 0) || !(gutterPx >= 0)) return null
+  return {
+    cols: Math.max(2, Math.floor((termW - gutterPx - SCROLLBAR_PX) / cellW)),
+    rows: Math.max(1, Math.floor((termH - TERMINAL_WINDOW_CHROME_PX) / cellH)),
+  }
+}
 
 /**
  * 解析预测用的字体口径（纯函数，供预测与单测共用）
@@ -103,11 +145,9 @@ export async function computeDesktopInitialTerminalSize(
     // 字号与字体栈按平台取渲染端同款口径（Linux 1.15 因子 + 系统等宽栈）
     const cellFont = resolveTerminalCellFont(fontSize, platform() === 'linux')
     const cell = measureCellSize(cellFont.fontSize, cellFont.fontFamily)
-    if (cell.width <= 0 || cell.height <= 0) return null
-    return {
-      cols: Math.max(2, Math.floor((termW - SCROLLBAR_PX) / cell.width)),
-      rows: Math.max(1, Math.floor((termH - TERMINAL_WINDOW_CHROME_PX) / cell.height)),
-    }
+    // 宿主左右内边距按 rem × 根字号换算（随 --ui-scale 变化，不可写死 px）
+    const rootFontSize = parseFloat(getComputedStyle(document.documentElement).fontSize)
+    return resolveTerminalGrid(termW, termH, cell.width, cell.height, resolveGutterPx(rootFontSize))
   } catch {
     return null
   }
