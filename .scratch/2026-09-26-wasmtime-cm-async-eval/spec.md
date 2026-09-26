@@ -128,6 +128,38 @@ cd .scratch/2026-09-26-wasmtime-cm-async-eval/probe
 
 `cargo test`：5 passed。
 
+### 5.1.1 A2 批次输出（2026-09-26 增补，`probe/src/a2.rs`）
+
+```text
+-- A2 取消 / trap 语义 --
+[A2.1] 作用域退出后任务仍在表内（size=5，停滞未取消）✓
+[A2.1] drop store：进程存活、挂起宿主 future 被 drop ✓
+[A2.1] guest 等待之后的代码未执行（取消不做 guest 侧清理）✓
+[A2.1] 丢 store 后新 store 可正常调用（重载恢复成立）✓
+[A2.2] 作用域内放行 → 脱离句柄的任务继续推进（宿主 future 完成 + guest 等待后代码执行）✓
+[A2.2] 任务跑完后 concurrent state 归空 ✓
+[A2.3] trap 观测：[run_concurrent 自身返回 Err] error while executing at wasm backtrace:
+    0:    0x196 - m!<wasm function 10>: wasm trap: wasm `unreachable` instruction executed
+[A2.3] trap 后同 store 调用被拒：wasm trap: cannot enter component instance ⇒ 仍按经典模型污染整实例
+[A2.3] trap 后状态表 size=6
+[A2.4] 挂起任务阻塞了同实例的新调用（do_not_enter 推迟）⇒ I2 在同实例内不成立 ⚠
+[A2.4] 放行后被推迟的调用补上完成（v=9）⇒ 是「推迟」不是「死锁」
+```
+
+`cargo test`：9 passed（P0.1 / P0.2 / P0.4 / P1 / P3 + A2.1 / A2.2 / A2.3 / A2.4）。
+
+**探针开发记录（三条真实的坑，写下来免得重踩）**：
+
+1. **`env_logger` + `RUST_LOG=trace` 是定位事件循环行为的唯一手段**（wasmtime 内部走 `log`，
+   不接 logger 就只能黑盒猜）。看 `GuestCall::is_ready` / `enter_instance` / `partition_pending`
+   三条 trace 就能判定「调用为什么没跑」。
+2. **linker 闭包与 store 必须共用同一份宿主状态**（`Host` 里是 `Arc` 计数器）。分开建两份时，
+   断言读到的是另一份计数器，表现为「宿主函数明明被调了，计数却是 0」——A2 首版踩了一次。
+3. **等待必须写在 `run_concurrent` 作用域内**。A2.2 首版把等待写到作用域外（只为了简化写法），
+   任务永不推进，看起来像 wasmtime 的 bug；实际就是 F9。同时注意
+   `assert_concurrent_state_empty()` 是上游**自测专用**（`#[doc(hidden)]` + `assert!`），
+   任务尚在飞行中调用它会 panic，不能当中途探针用。
+
 ### 5.2 P1（决定性）到底证明了什么
 
 探针的 P1 不是「两个 future 择先完成」这种弱断言，而是**构造上**保证了交错：
@@ -142,10 +174,25 @@ cd .scratch/2026-09-26-wasmtime-cm-async-eval/probe
 
 | ID | 现象 | 现状处置 |
 | --- | --- | --- |
-| **A1** | 手写的 **stackless** async 组件里，**async-lifted 导出**的 task 体会重入一次（guest 的一处同步 import 被调 **2** 次）；同样形状改为**同步导出**则只调 1 次（探针 D5 判别实验） | **未判定**是手写组件构造问题（未配 `thread.resume-later` / stackful）还是 wasmtime 缺陷。**不得当作 wasmtime bug 结论**；但落地前必须用上游官方 async 测试程序复测 |
-| A2 | 取消语义（F8）未实测：探针没有「丢弃 store 取消 task」「重载中挂着 task」场景 | 落地前必须补测（本项目 trap→重载、停用 purge、会话销毁都依赖「中止一次进行中调用」） |
+| **A1** | 手写的 **stackless** async 组件里，**async-lifted 导出**的 task 体会重入一次（guest 的一处同步 import 被调 **2** 次）；同样形状改为**同步导出**则只调 1 次（探针 D5 判别实验） | **已判定（2026-09-26，票 01）：不可复现**。判别矩阵 D1-D8 全不重入（含 async import + waitable 等待的现场完整形状，slow 进入 1 次 / mark 固有 2 次）；官方产物（`async_round_trip_stackless_sync_import`）断言精确匹配亦不重入；原始记录最可能把「函数体固有 2 处同步 import 调用」误判为重入。非 wasmtime 缺陷、非构造问题，无 P2/P3 影响。探针 `probe/src/a1.rs` |
+| **A2** | 取消语义（F8） | ✅ **已实测**（2026-09-26，`probe/src/a2.rs`，A2.1-A2.4）：① 退出 `run_concurrent` 作用域不取消任务（任务留在表内停滞）；② **丢 store 是唯一取消手段**，干净无 panic，挂起中的**宿主 future 会被 drop**；③ 但 **guest 等待之后的代码不执行**（无 guest 取消清理）；④ **task trap 仍污染整 store**（之后所有调用 `cannot enter component instance`）⇒ 与经典模型一致，无「只丢一个 task」的可能。结论与 I3 定义见 `../2026-09-26-plugin-concurrency-model/issues/02-p0-a2-cancellation-semantics.md` |
+| **A2'**（新，2026-09-26） | **一个 task 真停在 Pending 的宿主 future 上时，所在 component 实例保持 `do_not_enter`，同实例后续调用被无限期推迟**（放行挂起任务后才补上完成）。机制：`GuestCall::is_ready` 的 `do_not_enter` 分支 + 挂起时 `exit_instance` 尚未执行 | ⚠ **直接威胁「挂起 task 不独占 store」的结论**。见下方「§5.4 P1 证据更正」与 A2' 处置 |
 | A3 | 宿主调用架构改造量未评估：探针只证明运行时能力，不证明 `run_guest_call`（锁 + `spawn_blocking` + `block_on_async`）能无痛改成「每 store 事件循环属主」 | 属立项阶段的工作量估计，本文不做结论 |
 | A4 | guest 侧只验证了手写组件；`wit-bindgen` 的 `async: true` 路径（F7）未实测 | 立项时需用真实 SDK 验证（需 nightly + `build-std`） |
+
+### 5.4 P1 证据更正（2026-09-26，票 02 复核）
+
+P1 当时的断言是「挂起 task 不独占 store：poke 先完成、slow 后完成」。复核发现该证据**不成立**：
+
+- `select(fut_poke, fut_slow)` 里 poke 先被 poll 并完成；放行 permit 的 spin 发生在 poke 完成**之后**，
+  此时事件循环在同几轮里就把 slow 跑完了（trace：`handle work item PushFuture` → `set event …
+  Subtask { status: Returned }` 紧跟其后）——**slow 从未跨轮停在 Pending 上**。
+- 真正的停车场景（A2.1/A2.4）实测结论相反：**停车会阻塞同实例新调用**（A2'）。
+- 仍然成立的部分：挂起 task **不独占 `&mut Store`**（多个 task 能同时存在于同一 store，
+  事件循环能驱动它们），这与 `call`/`call_async` 的「全程独占」不同；但**同实例新调用会被推迟**，
+  而不是「并发通过」。因此「guest 挂起等输出 + 同期处理输入」在 wasmtime 48 上**尚未被证明**。
+- 处置：P0 阶段必须用**上游官方 `async_*` 测试程序**（F11）复核 A2'（是否 stackless 产物同样如此），
+  复核前不得按「单次调用不阻塞该实例」写实现；结果并入 A1 的复测票。
 
 ---
 
@@ -188,8 +235,8 @@ cd .scratch/2026-09-26-wasmtime-cm-async-eval/probe
 
 | # | 事项 | 归属 |
 | --- | --- | --- |
-| 1 | **A1 复测**：用上游 `crates/test-programs/src/bin/async_*` 官方测试程序验证 async-lifted task 是否会重入（排除手写组件构造因素） | 立项前 |
-| 2 | **A2 取消语义**：`call_concurrent` 的 task 只能靠丢 store 取消（#11833 未实现）——评估对本项目 trap→重载 / 停用 purge / 会话销毁的影响 | 立项前 |
+| 1 | ~~**A1 复测**~~ | ✅ 已结（票 01）：重入不可复现（探针 a1.rs 判别矩阵 D1-D8 + 官方产物静态对照），原始记录疑为「函数体固有 2 处调用」误读；A2' 复核结论：挂起任务阻塞同实例新调用是 wasmtime 事件循环性质 |
+| 2 | ~~**A2 取消语义**~~ | ✅ 已结（票 02）；产出：I3 定稿 + 一条待复核的 A2' 风险（挂起任务阻塞同实例新调用） |
 | 3 | **A3 架构量**：`run_guest_call` → 事件循环属主的改造面与回退策略 | 立项前 |
 | 4 | **A4 guest 工具链**：`wit-bindgen` `async: true` 在本仓库 nightly 下能否出组件 | 立项前 |
 | 5 | 小提案：非流式 `host-http.fetch` 独占 store 的修法（async WIT import + `func_wrap_concurrent`） | 可独立立项 |

@@ -1,0 +1,31 @@
+package bedcode:async-export-probe;
+
+// 票 04 探针（测试专用 world，生产 `plugin` world 零变更）：
+// 复现并判定 `.scratch/2026-09-25-wasip3-host-api-optimization/issues/01` §5 第 2 条
+// 的 abort（async-lifted 导出 + async import，wit-bindgen 0.60 `start_task` 断言）。
+//
+// 形状对齐上游官方 `round-trip` world（wasmtime `crates/misc/component-async-tests/wit/test.wit`）：
+// 导入与导出都是 `async func`，guest 在 async 导出里 await async import。
+
+interface host-probe {
+  /// async import：宿主 future 挂起，直到探针侧放行
+  wait: async func(v: u32) -> u32;
+}
+
+interface guest-probe {
+  /// 诊断用**同步**导出：读组件 context slot 0 的当前值（**全程不碰 WASI**）。
+  /// 它是「槽何时被写脏」的判据：入口前后各读一次即可定位污染点。
+  ctx-read: func() -> u32;
+  /// 诊断用**同步**导出：安装 guest 侧 panic 钩子（打印 context slot 实值）。
+  /// 注意它自身会写 stderr（= 触发 async WASI host 调用），因此必须与 ctx-read 配对对比。
+  install-hook: func();
+  /// async 导出：await 上面的 async import 后返回
+  run: async func(v: u32) -> u32;
+  /// 不含等待的短调用（判据：async-lift 入口本身是否可进入）
+  poke: async func(v: u32) -> u32;
+}
+
+world async-export-probe {
+  import host-probe;
+  export guest-probe;
+}

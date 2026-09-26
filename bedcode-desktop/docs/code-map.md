@@ -146,7 +146,18 @@ Rust 侧按内核五模块组织（`wasm_core.rs` 为唯一组合点/facade，�
     只作目标；`plugin_frontend_loader_session`（宿主前端 bootstrap，首个调用者生效，页面加载重置）
     与 `plugin_channel_token`（用 loader 密钥为运行中插件换令牌，停用即回收）是两枚凭证的来源
   - **host / host/**：插件生命周期管理（加载/激活/停用）；host/ 子模块负责插件随包 CLI 的安装/卸载
-    （bin 解析、PATH 条目维护、平台注册）及 commands/listeners/services 拆分
+    （bin 解析、PATH 条目维护、平台注册）及 commands/services 拆分
+  - **调用模型（票 06 P1，`host/owner.rs` + `host.rs`）**：每个 WASM 实例是一个**装配条目**
+    `WasmInstanceEntry { meta, call_model, slot }`，`slot` 二选一——`Mutex(Arc<Mutex<LoadedWasmPlugin>>)`
+    （现状：每实例一把锁，调用跑在无 handle 阻塞线程）或 `Owner(OwnerHandle)`（每实例一个**常驻事件循环
+    属主任务**，唯一持 `&mut Store`，调用入队 + oneshot 结算）。**宿主侧实例的唯一入口**是
+    `PluginHost::call_guest` / `call_guest_blocking`（op 闭集 `GuestOp` → `GuestReply`），
+    元数据（能力导出 / 预打开目录 / 创建时刻）走 `InstanceMeta` 只读投影，不进实例。
+    灰度开关 = `CoreConfig.call_model`（`mutex`（默认）/ `event-loop`，实例级快照，reload 即切换；
+    见 `.scratch/2026-09-26-plugin-concurrency-model/`）。不变式：trap/panic = 整实例不可用（属主退出 ⇒
+    后续调用显性失败）、停用/卸载/重建**先停属主丢 store 再做资源回收**（`event-loop` 实例的 guest
+    `on_shutdown`/`deactivate` 因此显性跳过 + `owner_cleanup_skipped` 计数——与 mutex 模型唯一的实质差异）、
+    能力转发带 5 s 超时兜底（环依赖从永久死锁降级为有界失败）
   - **loader / registry**：文件扫描与 `plugin.json` 解析、插件注册表。**loader 不做 WASM 实例化**——
     启动扫描与 zip 安装两条入口共用 `host/wasm.rs::instantiate_wasm_plugin`（唯一的实例化实现，
     审计票 11 第 2 项）；contributes 注册的唯一实现是 `host/register.rs::register_plugin_contributions`
@@ -163,14 +174,14 @@ Rust 侧按内核五模块组织（`wasm_core.rs` 为唯一组合点/facade，�
     interface 一并删除）；`connection.rs`（票 04）= 宿主 server 在册连接清单原语
     `host-connection`，判据 `connection:read`——它是唯一幸存的「会话域出身」原语，且已与会话解耦
   - **context.rs（票 04/05/07 后的装配面）**：`WasmHostContext` 本体（原定义于
-    `manager::runtime`）、`PluginServices` / `CapabilityProvider` / `TaskEngine` 三个消费方定义
-    trait（均两阶段注入：PluginHost 构造后 `set_services` / `set_task_engine`）、角色接口
+    `manager::runtime`）、`PluginServices` / `CapabilityProvider` / `CapabilityTarget` / `TaskEngine`
+    四个消费方定义 trait（均两阶段注入：PluginHost 构造后 `set_services` / `set_task_engine`）、角色接口
     （DbScope / PermissionScope / StorageScope / FsAuthScope / BusScope / AppHandleScope /
     ServicesScope / ProcessScope / ApiRegistryScope / SecurityScope / CapabilityScope /
     SecretsScope——22 个能力域函数签名只取各自需要的 `&dyn` 窄接口，不再传上帝对象，
-    `host_api/` 生产源码零 `&WasmHostContext` 参数）。**host_api → manager 依赖单向化**：
-    除两处文档化的单点例外（`LoadedWasmPlugin` 装配域类型经 CapabilityProvider 签名、
-    storage 能力转发 forward_storage_* 尚在 manager::capability）外，host_api 不依赖 manager
+    `host_api/` 生产源码零 `&WasmHostContext` 参数）。**host_api → manager 依赖已清零**：
+    能力转发经窄端口 `CapabilityTarget`（`storage_get/set/delete`，实现在 manager 侧装配条目内，
+    转发方不知道调用模型），票 06 起 host_api 不再引用任何 manager 类型
   - **unit_executor.rs（票 07）**：任务单元执行器策略接口 `UnitExecutor`（matches + execute）——
     fs/process/http 各自的域执行器（fs 执行器内置声明闸门 + fs_auth 已授权预检，绝不弹窗）
     经 `manager::task::register_unit_executor` 注册；core-task 执行单元时查注册表分发，

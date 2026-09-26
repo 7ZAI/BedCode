@@ -104,10 +104,15 @@ guest/SDK**。spec §4 D4 描述的是「WIT 函数改成 `async func`」这一�
    `wit-bindgen 0.60.0/src/rt/async_support.rs:560` 断言
    `assert!(context_get().is_null())` 失败（`[context-get-0]` 返回非 0）。
    与 guest 是否真的 await 无关（把 `run` 改成立即返回同样 abort）。
-   可疑根因（未证实，不下结论）：wasmtime 48 在 `set_thread` 里当 `debug_assertions` 打开时
-   会把 context slot 写成 `[u32::MAX; N]` 哨兵（`runtime/component/concurrent.rs`），与
-   wit-bindgen 0.60「导出入口 slot 为 0」的假设冲突；验证方式是 `cargo test --release`
-   或给 wasmtime 关 debug-assertions 后复跑（本票未做，成本：整棵依赖树 release 重编）。
+
+   > **根因更正（2026-09-26，并发模型票 04 实测）**：上述「可疑根因（debug_assertions 哨兵）」**已证伪**——
+   > 用 `cargo build --config 'profile.dev.package.wasmtime.debug-assertions=false'` 单独重编 wasmtime
+   > （两条不同产物）后仍原样 abort；且本仓库 `src-tauri/Cargo.toml` 自本票起就有
+   > `[profile.test.package.wasmtime] debug-assertions = false`，`cargo test` 现场本来就没有哨兵。
+   > 新取证（`ctx-read` 同步导出直读槽值）：**全新实例、零导出调用时槽已为 `0x100000`**，async-lift 入口
+   > 线程看到的槽为 `0xffcf0`——都是「指针状非零脏值」而非标记位；guest 侧仅 async-lift 入口与 `callback`
+   > 会写槽（WAT 实证），故不是 guest 提前写脏。结论与复现命令见
+   > `.scratch/2026-09-26-plugin-concurrency-model/issues/04-p0-a4-wit-bindgen-async-guest.md`。
 
 裁决：**不把探针接口塞进生产 WIT 兜底**（issue 明文禁止）。公共契约扩面前必须先解除上面
 第 2 条；在此之前 P1 走第 2 节的宿主实现侧路径。

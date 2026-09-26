@@ -223,6 +223,10 @@ pnpm exec eslint .
 - **四种通道（插件 → 宿主）**：`host-*` WIT import（`packages/plugin-sdk-desktop/rust/wit/bedcode.wit`
   单一事实源）· `host-bus`（topic 命名空间仲裁）· `host-events.emit`（插件自定义 JSON 载荷）·
   互调 API（ADR 0017 `api_registry`）
+- **调用模型**：实例装配条目 `WasmInstanceEntry`（宿主侧**唯一**入口：`PluginHost::call_guest`）；
+  `CoreConfig.call_model` 灰度 = `mutex`（每实例一把锁，回退窗口）| `event-loop`（每实例一个常驻
+  事件循环属主任务）。**异步化按需、不全量**——判据与白名单见
+  `.scratch/2026-09-26-plugin-concurrency-model/spec.md` §4（宿主实现侧 async，不改 WIT）
 - **宿主直调命令面只保留外壳**：`src-tauri/src/commands.rs` 只服务宿主页面（外壳 / 诊断 / 引擎事实），
   业务面一律走插件命令面；`src/composables/` 同理
 - **域 → 原语接口 → 业务真源**（当前形态，细节见 `bedcode-desktop/docs/code-map.md`）：

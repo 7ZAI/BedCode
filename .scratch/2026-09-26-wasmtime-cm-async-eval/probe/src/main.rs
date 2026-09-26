@@ -17,6 +17,9 @@
 //! `tests/misc_testsuite/component-model/async/cancel-host.wast`），无额外工具链。
 //! 运行：`cargo run`（打印结论）或 `cargo test`（逐阶段断言）。
 
+mod a1;
+mod a2;
+
 use anyhow::Result as AnyResult;
 use futures::future::{select, Either};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -187,9 +190,14 @@ async fn probe_p0_1_concurrency_support_gate() -> AnyResult<()> {
     let mut linker = Linker::<Host>::new(&engine_off);
     let refused = linker
         .root()
-        .func_wrap_concurrent("slow", |_: &Accessor<Host>, (): ()| Box::pin(async { Ok(()) }))
+        .func_wrap_concurrent("slow", |_: &Accessor<Host>, (): ()| {
+            Box::pin(async { Ok(()) })
+        })
         .is_err();
-    assert!(refused, "concurrency_support=false 时 func_wrap_concurrent 应被拒");
+    assert!(
+        refused,
+        "concurrency_support=false 时 func_wrap_concurrent 应被拒"
+    );
     println!("[P0.1] concurrency_support=true 可用；=false 时注册被拒 ✓");
     Ok(())
 }
@@ -202,16 +210,19 @@ async fn probe_p0_2_concurrent_requires_async_import() -> AnyResult<()> {
 
     let host_slow = host.clone();
     let mut linker = Linker::new(&engine);
-    linker.root().func_wrap_concurrent(
-        "slow",
-        move |_acc: &Accessor<Host>, (_v,): (u32,)| {
+    linker
+        .root()
+        .func_wrap_concurrent("slow", move |_acc: &Accessor<Host>, (_v,): (u32,)| {
             let host = host_slow.clone();
             Box::pin(async move {
-                let _permit = host.pty_notify.acquire().await.map_err(|e| wasmtime::Error::msg(e.to_string()))?;
+                let _permit = host
+                    .pty_notify
+                    .acquire()
+                    .await
+                    .map_err(|e| wasmtime::Error::msg(e.to_string()))?;
                 Ok(())
             })
-        },
-    )?;
+        })?;
     linker.root().func_wrap("mark", mark_host())?;
 
     let mut store = Store::new(&engine, host);
@@ -244,13 +255,20 @@ async fn probe_p0_4_async_import_requires_concurrent_host() -> AnyResult<()> {
 
     let host_slow = host.clone();
     let mut linker = Linker::new(&engine);
-    linker.root().func_wrap_async("slow", move |_store: StoreContextMut<Host>, (_v,): (u32,)| {
-        let host = host_slow.clone();
-        Box::new(async move {
-            let _permit = host.pty_notify.acquire().await.map_err(|e| wasmtime::Error::msg(e.to_string()))?;
-            Ok((0u32,))
-        })
-    })?;
+    linker.root().func_wrap_async(
+        "slow",
+        move |_store: StoreContextMut<Host>, (_v,): (u32,)| {
+            let host = host_slow.clone();
+            Box::new(async move {
+                let _permit = host
+                    .pty_notify
+                    .acquire()
+                    .await
+                    .map_err(|e| wasmtime::Error::msg(e.to_string()))?;
+                Ok((0u32,))
+            })
+        },
+    )?;
     linker.root().func_wrap("mark", mark_host())?;
 
     let mut store = Store::new(&engine, host);
@@ -276,17 +294,20 @@ async fn probe_p1_concurrent_tasks_interleave() -> AnyResult<()> {
 
     let host_slow = host.clone();
     let mut linker = Linker::new(&engine);
-    linker.root().func_wrap_concurrent(
-        "slow",
-        move |_acc: &Accessor<Host>, (v,): (u32,)| {
+    linker
+        .root()
+        .func_wrap_concurrent("slow", move |_acc: &Accessor<Host>, (v,): (u32,)| {
             let host = host_slow.clone();
             Box::pin(async move {
                 host.slow_calls.fetch_add(1, Ordering::SeqCst);
-                let _permit = host.pty_notify.acquire().await.map_err(|e| wasmtime::Error::msg(e.to_string()))?;
+                let _permit = host
+                    .pty_notify
+                    .acquire()
+                    .await
+                    .map_err(|e| wasmtime::Error::msg(e.to_string()))?;
                 Ok((v + 1,))
             })
-        },
-    )?;
+        })?;
     linker.root().func_wrap("mark", mark_host())?;
 
     let mut store = Store::new(&engine, host.clone());
@@ -335,12 +356,13 @@ async fn probe_p1_concurrent_tasks_interleave() -> AnyResult<()> {
     );
     assert_eq!(slow_value, Some(1007), "run-slow 被叫醒后应返回 v+1000");
     // 至少被调过一次：guest 的 run-poke 确实推进到了同步 import。
-    // 注：不锁死「恰好一次」——手写 stackless async 组件的 async-lifted 导出在本探针里
-    // 出现过 task 体重入一次（spec §5 异常 A1；同步导出的对照组不重现，见 A1 判别实验）
+    // 注：run_poke 函数体**本身写了 2 处** `call $mark`（yield 前后各一次），
+    // 因此正常执行 = 2 次；若 task 体重入一次 = 4 次。精确打印实测值：
+    let mark_total = host.mark_calls.load(Ordering::SeqCst);
+    println!("  [P1] mark 实测 {mark_total} 次（run_poke 函数体固有 2 处调用；>2 即重入）");
     assert!(
-        host.mark_calls.load(Ordering::SeqCst) >= 1,
-        "run-poke 应至少调用一次 mark（实际 {}）",
-        host.mark_calls.load(Ordering::SeqCst)
+        mark_total >= 1,
+        "run-poke 应至少调用一次 mark（实际 {mark_total}）"
     );
     assert_eq!(
         host.slow_calls.load(Ordering::SeqCst),
@@ -370,16 +392,19 @@ async fn probe_p3_fuel_still_works_with_tasks() -> AnyResult<()> {
 
     let host_slow = host.clone();
     let mut linker = Linker::new(&engine);
-    linker.root().func_wrap_concurrent(
-        "slow",
-        move |_acc: &Accessor<Host>, (v,): (u32,)| {
+    linker
+        .root()
+        .func_wrap_concurrent("slow", move |_acc: &Accessor<Host>, (v,): (u32,)| {
             let host = host_slow.clone();
             Box::pin(async move {
-                let _permit = host.pty_notify.acquire().await.map_err(|e| wasmtime::Error::msg(e.to_string()))?;
+                let _permit = host
+                    .pty_notify
+                    .acquire()
+                    .await
+                    .map_err(|e| wasmtime::Error::msg(e.to_string()))?;
                 Ok((v + 1,))
             })
-        },
-    )?;
+        })?;
     linker.root().func_wrap("mark", mark_host())?;
 
     let mut store = Store::new(&engine, host.clone());
@@ -412,7 +437,10 @@ async fn probe_p3_fuel_still_works_with_tasks() -> AnyResult<()> {
     let after: Option<u64> = store.get_fuel().ok();
     assert_eq!(poke_value, 9);
     match (before, after) {
-        (Some(b), Some(a)) => println!("[P3] 多 task 下 fuel 可观测：{b} → {a}（消耗 {}）", b.saturating_sub(a)),
+        (Some(b), Some(a)) => println!(
+            "[P3] 多 task 下 fuel 可观测：{b} → {a}（消耗 {}）",
+            b.saturating_sub(a)
+        ),
         _ => println!("[P3] fuel 读取不可用（get_fuel 报错），跳过"),
     }
     store.assert_concurrent_state_empty();
@@ -423,12 +451,17 @@ async fn probe_p3_fuel_still_works_with_tasks() -> AnyResult<()> {
 
 #[tokio::main]
 async fn main() -> AnyResult<()> {
+    // A2 诊断用：RUST_LOG=trace 打开 wasmtime 内部事件循环日志
+    let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn"))
+        .try_init();
     println!("== wasmtime CM-async 探针（48）==");
     probe_p0_1_concurrency_support_gate().await?;
     probe_p0_2_concurrent_requires_async_import().await?;
     probe_p0_4_async_import_requires_concurrent_host().await?;
     probe_p1_concurrent_tasks_interleave().await?;
     probe_p3_fuel_still_works_with_tasks().await?;
+    a1::run_all().await?;
+    a2::run_all().await?;
     println!("\n=== 全部通过：CM-async 在本项目 wasmtime 48 上可用（P1 为决定性指标） ===");
     Ok(())
 }
@@ -447,7 +480,9 @@ async fn p0_2_concurrent_requires_async_import() {
 
 #[tokio::test]
 async fn p0_4_async_import_requires_concurrent_host() {
-    probe_p0_4_async_import_requires_concurrent_host().await.unwrap();
+    probe_p0_4_async_import_requires_concurrent_host()
+        .await
+        .unwrap();
 }
 
 #[tokio::test]

@@ -15,6 +15,12 @@
 
 ### 功能
 
+#### 插件调用模型升级 —— 事件循环属主（可灰度）+ 按需 async 化评估退役（桌面端；**默认值不变，ABI 不变**）
+- 宿主侧插件调用从「每次调用抢一把实例锁 + `spawn_blocking` + `block_on_async`」收敛为**装配条目**形态：`WasmInstanceEntry { meta, call_model, slot }` 是 Store 的**唯一**宿主，调用一律经门面 `PluginHost::call_guest`（异步）/ `call_guest_blocking`（同步桥）；`mutex` 分支**逐字保留原实现**（存量插件返回值、错误串、trap 恢复逐字节等价），`event-loop` 分支为每实例一个常驻 `run_concurrent` 属主循环（`start_call_concurrent` + oneshot 结算 + `select! { biased }` 保「启动顺序 = 入队顺序」）
+- 灰度开关 `CoreConfig.call_model`（`mutex`（默认，回退窗口）/ `event-loop`，`wasm-core.json` 可按名覆盖，非法值加载即报错）；实例级快照，**reload 即切换**；**默认值不变**，回退窗口保留（切默认待真机复验）
+- 停机语义（fail-visible）：停用 / 卸载 / 重载**先停属主丢 store 再回收资源**；`event-loop` 实例的 guest `on_shutdown` / `deactivate` 显性跳过并计数（`owner_cleanup_skipped` + warn，不静默）；trap = 整实例不可用（与既有语义逐字等价），在等请求逐条显式失败；能力转发加 5 s 超时兜底（环依赖从「永久死锁」降级为「有界失败」）
+- **按需 async 化评估结论：退役**（ADR 0029 / `.scratch/2026-09-26-plugin-concurrency-model/`）——WIT 层 `async func` 在当前锁定工具链不可用（async-lifted 导出入口即 abort）；改走「宿主实现侧 async（`func_wrap_async`）」后实测证明**收益不成立**：async import 挂起期间，同实例第二条显式调用**零进展**（实例级门，与 import 是否 async 无关），且该期间**属主闭包完全不被调度**（属主停摆）⇒ 「慢调用堵死同插件交互」无法用异步化解决；两条结论已固化为边界锁（`runtime/tests/p3_async_host_import.rs`，转红即重评）。可行替代方向为**非等待形态**（立即返回句柄 + 事件回调，参考 `host-process.run` / 流式 `fetch`），待单独立项
+
 #### 移动端 WS 面重新锚定插件端点 —— 控制面迁 HTTP、session-control 事件通道、终端流重写、WS 帧级加密退役（移动端；桌面 wasm 应用仅补最小事件广播）
 - 移动端 WS 面对齐桌面插件端点（旧 `/ws/event` 与 `/ws/terminal/session/{id}` 现已 404）：**事件通道**
   （`/ws/plugin/com.bedcode.terminal-session/session-control`）改极简认证帧 `{"type":"auth","token":"<jwt>"}`
@@ -39,6 +45,23 @@
 - 新增只读诊断命令 `session.output.watermarks`（`{sessionId?}` → pushed/acked/unacked/parked + 驻留/截断计数，对齐旧 `SubscriberStats`）；前端在驻留退出时取一次快照打日志，真机复验无需翻引擎日志即可判定「背压是否真发生过」。计数**刻意无时钟**（wasm32 无系统时钟，驻留时长由前端计时）
 - **拉取节奏对齐旧引擎**（spec F5）：快/慢档 100/500 ms → 50/250 ms，单 tick 预算 4 × 16 KiB = 64 KiB（= 旧 `FETCH_BUDGET`）——吞吐上限不变、输出可见延迟减半；节奏裁决抽成可单测的纯函数 `terminalPullPolicy`，并修正了一处行为不一致（驻留若发生在慢档期会滞留在慢档，现驻留恒定快档）
 - **宿主零改动**——不动 WIT/ABI；真正的 push 引擎事件（毫秒唤醒）仍是已登记的后续项（P2）
+
+#### PTY 输出可用通知 —— 宿主限频唤醒（桌面端；**不改 WIT/ABI，只加一条总线 topic**）
+- 拉取模型留了一个延迟洞：会话停在慢档（250 ms）时，首个新字节要等下一轮轮询才发现。宿主现在在输出环
+  出现新字节时，向属主私有总线 topic `<owner>::pty:output` **限频**发布提示（同一句柄 ≥50 ms 一条，
+  载荷只有 `{ ptyId }`，不带字节）——形态是下沉前 `OutputNotifySink` 写侧装饰器包住 `PtyRingSink`，
+  因此 `pty/` 引擎保持**零**总线依赖
+- **数据面一字未改**：字节仍按游标拉取（`ring-fetch`），`truncated` resync 语义逐字不变，提示**按设计
+  可丢**（无订阅者 / 队列满 / 插件未激活 / 被限频合并，且从不重放）。正确性因此**仍然完全**落在前端
+  节奏 + resync 上，事件只买延迟（空闲后首个字节：慢档 250 ms → ≈0）
+- 插件侧只当加速器：`terminal-session` 在 `activate` 期订阅（失败**降级**为纯轮询、绝不阻断激活
+  ——与 `pty:exit` 的强门相反），并把 `ptyId → sessionId` 转发成前端事件 `session:output-available`；
+  命中即立刻拉一轮，非本会话 id 与脏载荷一律忽略，卸载释放订阅。SDK 侧与 `PTY_EXIT` 并列导出常量
+  `PTY_OUTPUT`
+- 落锁：漂移锁把宿主事件名钉在 SDK 常量上（`output_event_name_matches_sdk_subscription_helper`）——单侧
+  改名会静默退化成「订阅成功但永远收不到」；限频本身用真 PTY 突发验证（毫秒内二十余次 push ⇒ 通知数
+  远少于 push 数，即装饰器确实生效、通知没退化成逐块推送），限频裁决纯函数另设单测（首次必放行 /
+  恰好等于间隔放行 / 窗口内丢弃 / 时钟回拨按未到处理）
 
 #### 对等传输编排整体下沉插件 — 宿主 `peer_engine_*` 收敛为句柄表 + 引擎事件桥（桌面端，**v30 + v31**）
 - 传输任务编排此前仍留宿主（活跃任务状态机、发送并发闸门 1..=8 默认 3、历史封顶 200/100、
@@ -181,6 +204,11 @@
 ### 测试与质量
 
 #### 桌面端
+- **新增 `bench/` 桥接基准工程，量化 wasm ↔ 宿主 ↔ 前端 的成本分布（21 场景 / 7 组，不动任何产品代码）** —— 既有性能探针各测一条链路的一段（`terminal_output_perf.rs` 测 PTY 输出消费、`ws_output_perf.rs` 测 WS 帧吞吐），且全部无头运行，「一次完整往返」的成本分布此前没有数据支撑。新工程含：一个自带 `main()` 的 `cargo test` target（`harness = false`，`src-tauri/tests/wasm_bridge_bench/`）、一个仅供测试的 guest 夹具（`packages/plugin-bench-test`，wasm32-wasip3，不进打包链）、一层真 webview e2e（`e2e/specs/bench.spec.ts`）。宿主层走**生产同形**路径（`PluginHost::new` → `activate_plugin` → `invoke_rust_command`，即 `plugin_invoke` 的内核），并把同一夹具实例化为两个属主，使总线与互调流量端到端可观测；每个测点都带行为断言（收讫字节 / 调用次数 / 计数增量），门禁只取数量级——机器差异不该让基准变红，慢了 10 倍必须变红。首轮基线（宿主 debug，每测点 5 次取中位数）：`nop` 往返 **56 µs**（16 ms 帧预算的 0.3% —— 命令面不是瓶颈）、1 MiB 同步回传 **1.77 ms**（~1.7 ns/B）、单次 `api_call` **359 µs**（64 KiB reply 638 µs）、1 MiB `ring-fetch` 拉取 **19 ms**（guest 内仅占 31%）、`execute-batch` 64 条 343 µs。两条发现另立项而非默默吸收：**512 条突发总线消息只送达 20.7%**（订阅队列容量 64，丢弃只有 warn，发布方与订阅方都不可见）；**`host-storage` 1 MiB 往返 26 ms**（~25 ns/B，比跨越 WASM 边界还慢一个量级 —— 不能当大对象缓存用）。完整表格与推导见 `.scratch/2026-09-26-wasm-bridge-bench/report.md`
+- webview 层顺带补上一个既有 e2e 缺口：`wdio.conf.ts` 声明了 `runner: 'local'`，但 devDependencies 里从未装 `@wdio/local-runner`，e2e 此前根本起不来；现已补装（tauri-driver 本就由既有 `autoInstallTauriDriver` 自动装）
+- **同工程后续实测：贵的是 Tauri IPC 那一段，不是 WASM 边界；慢调用会堵死整个插件实例** —— webview 层（`e2e/specs/bench.spec.ts`，已全绿：真应用窗口内 2 场景）用**应用自己的**前端封装（`src/plugin/commands.ts` / `src/plugin/events.ts`）测同一批命令。结果：`nop` 往返在宿主内 54 µs、从**真前端**看是 **560 µs**（IPC + 前端桥接 ≈ 0.5 ms）；1 MiB 命令返回 1.87 ms → **27.7 ms**（≈ +24.6 ns/B）——**载荷走 webview↔宿主一趟，比穿一次 WASM 边界贵一个数量级**，任何「大对象经命令面回前端」的设计要按 25 ms/MiB 算预算。事件侧，分块在前端**也没有**优势：1 MiB 单帧 37 ms、16 KiB×64 27 ms、4 KiB×256 33 ms —— 分块的理由应是平滑渲染 / 可 ack，不是吞吐（补上 output-ack 议题缺的那块数据）。新增场景 **G2** 把并发模型专项的动机量化：一条 26 ms 的 `storage` 调用在途时，同实例一条 50 µs 的 `nop` 要 **26.1 ms（167×）**；4 路并发慢调用 = 单次的 4.04×（完全串行）。建议把 G2 作为该专项的**验收基准**（事件循环属主落地后应降到 ~1×）。webview 层能跑起来需三处修正（已写进 spec）：debug 二进制走 `devUrl` 故必须起 vite dev server；`browser.tauri.execute` 只带走函数源码，Node 侧取值必须插值进脚本体；loader 凭证首调用者生效，只能借应用自己已缓存的那份
+- **新增 `bench_channel.rs`（仅 debug 的宿主命令）测第三条 Tauri 传输面 `tauri::ipc::Channel` —— raw 快 4×，但「顺手写法」有 6× 的坑** —— 产品当前只用两条传输面（命令返回值、`app_handle.emit`），**Channel 零使用**；而桌面端曾经有过 Channel 传输的终端输出流（`commands/terminal_stream.rs`，2026-09-22 随会话下沉退役，退役原因是**架构**不是性能）。既然 output-ack 的 P2「宿主侧 push」落地时要在 emit 与 Channel 之间选，基准把三条面在同一批 1 MiB 上并测：**Channel `Response`/raw 7.0 ms**（JS 侧 `ArrayBuffer`；≥1024 B 的 body 走 tauri 2.11 的 `ChannelDataIpcQueue` + webview `fetch` 通路）vs 事件 emit 33 ms vs 命令返回 28 ms。**坑**：`Channel<Vec<u8>>` 是 **100 ms** —— `IpcResponse` 有泛型 blanket impl（`ipc/mod.rs:181`），`Vec<u8>` 被序列化成**JSON 数字数组**，webview 收到的是 `[object Array]` 而不是字节；要真字节必须 `Channel<Response>` + `InvokeResponseBody::Raw`。第二个数据点：**块大小有下限** —— 同为 1 MiB，4 KiB×256（52 ms）比 16 KiB×64（17 ms）慢 3×，流式推送的块不应低于 16 KiB。该命令在**声明处与 `generate_handler!` 注册处**双 `#[cfg(debug_assertions)]` 门，并有源码级闸门锁测试（删门即红，已做变异自检），参数契约有单测；它是本基准**唯一新增的产品代码面**，零业务语义
+
 - 端到端等价回归**零改动断言**通过：`pty_session_chain`、`ws_session_route`、`ws_auth_rules`、`http_auth_biometric`、`server_integration`、`link_crypto_http`、`broadcast_shutdown`、`build_manifest_smoke`（S2 接缝文件与本批次前基线零 diff）
 - 五个集成测试 target 恢复为可编译可跑绿（审计票 13）：它们此前引用已退役符号（`pairing_service` / `QrTokenManager` / `SessionManager::from_database` / `restart_session`）。现改为真实驱动插件侧路径——`/api/auth/*` 已无宿主实现，故各套件在测试内激活随包 `com.bedcode.terminal-session` 产物（产物缺失显性失败，不静默跳过）；会话创建的编排读插件私有库（无头集成二进制不可达），改驱动内核执行端 `create_session_from_spec`（= 插件经 `host-session.create-with-spec` 到达的同一入口）。`cargo test` 重新成为全 target 门禁：lib 1134 + 八个集成 target 全绿，`[skip]` 计数 0
 - 恢复后的生物认证套件当场抓出一条真实回归（同票）：插件把连接历史的 `auth_method` / `result` 写成大写（`BIOMETRIC` / `SUCCESS`），而内核规范取值与连接历史页（i18n key 映射 + `result === 'success'` 计数）都是小写——设备历史页会把认证方式显示成「未知」且成功计数错误。已在插件侧以 `history_value` 常量模块修正，测试断言一字未改
