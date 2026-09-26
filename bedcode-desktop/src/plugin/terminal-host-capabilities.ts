@@ -13,7 +13,7 @@
  * 注入契约类型真源：`wasm-apps/terminal-session/src/components/terminal/
  * terminalHostCapabilities.ts`（宿主不 import 插件，就地定义同构结构）。
  */
-import { provide, reactive, computed } from 'vue'
+import { provide, reactive, computed, ref } from 'vue'
 import { open } from '@tauri-apps/plugin-dialog'
 import { invoke } from '@tauri-apps/api/core'
 import { getPluginRegistry } from './registry'
@@ -25,6 +25,9 @@ import type { TerminalSettingsAccessor } from './terminal-host-capabilities-cont
 /** 背景图片选择允许的图片扩展名（与宿主旧 TerminalWindowView 一致） */
 const BG_IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'ico']
 
+/** 端口预取失败时的兜底值（服务器永久自启动；正常路径由 `get_server_status` 覆盖） */
+const FALLBACK_SERVER_PORT = 8080
+
 /**
  * 向当前组件树注入终端宿主能力（必须在 setup 期调用）
  */
@@ -32,23 +35,43 @@ export function provideTerminalHostCapabilities(): void {
   const settingsStore = useSettingsStore()
   const registry = getPluginRegistry()
 
+  // 背景图 URL 端口：`/static/terminal-bg` 挂在宿主主服务器上（端口由 supervisor 持有，
+  // 用户可改），插件侧的 `getServerPort()` 是**同步**接口 → 打开窗口时预取一次写入 ref。
+  // 旧实现硬编码 8080：与默认端口不符时背景图预加载必然失败
+  // （`Failed to resolve background image URL`，2026-09-26 修复）。
+  const serverPort = ref(FALLBACK_SERVER_PORT)
+  async function refreshServerPort(): Promise<void> {
+    try {
+      const info = await invoke<{ port?: number }>('get_server_status')
+      if (info?.port) serverPort.value = info.port
+    } catch (e) {
+      logger.warn('[TerminalHostCapabilities] Failed to resolve server port, keep fallback:', e)
+    }
+  }
+  void refreshServerPort()
+
   // ==================== 终端设置桥（TerminalSettingsAccessor） ====================
   const settings: TerminalSettingsAccessor = {
     getFontSize: () => settingsStore.settings.ui.terminal_font_size ?? 12,
     getTheme: () => settingsStore.settings.ui.terminal_theme || 'dracula',
     getBgImage: () => settingsStore.settings.ui.terminal_bg_image || '',
     getBgOpacity: () => settingsStore.settings.ui.terminal_bg_opacity ?? 30,
-    getServerPort: () => 8080, // 背景图 URL 端口：宿主本地服务器静态端点（插件侧不感知实际端口）
+    getServerPort: () => serverPort.value,
     save: (patch) => {
-      void settingsStore.saveSettings({
-        ui: {
-          ...settingsStore.settings.ui,
-          ...(patch.fontSize != null ? { terminal_font_size: patch.fontSize } : {}),
-          ...(patch.theme != null ? { terminal_theme: patch.theme } : {}),
-          ...(patch.bgImage != null ? { terminal_bg_image: patch.bgImage } : {}),
-          ...(patch.bgOpacity != null ? { terminal_bg_opacity: patch.bgOpacity } : {}),
-        },
-      })
+      // 背景图变化：先刷新端口再落盘——插件侧 watch(落盘后读到的新设置值) 会**同步**
+      // 解析一次背景图 URL，端口必须先就位（否则用陈旧端口解析出不可达 URL）
+      const pending = patch.bgImage != null ? refreshServerPort() : Promise.resolve()
+      void pending.then(() =>
+        settingsStore.saveSettings({
+          ui: {
+            ...settingsStore.settings.ui,
+            ...(patch.fontSize != null ? { terminal_font_size: patch.fontSize } : {}),
+            ...(patch.theme != null ? { terminal_theme: patch.theme } : {}),
+            ...(patch.bgImage != null ? { terminal_bg_image: patch.bgImage } : {}),
+            ...(patch.bgOpacity != null ? { terminal_bg_opacity: patch.bgOpacity } : {}),
+          },
+        }),
+      )
     },
     onChange: () => () => {}, // 终端设置只由终端窗口设置面板读写（单写者），无外部变化源
   }
@@ -65,6 +88,8 @@ export function provideTerminalHostCapabilities(): void {
       if (!selected || typeof selected !== 'string') return false
       const fileName = await invoke<string | null>('set_terminal_bg_image', { sourcePath: selected })
       if (fileName) {
+        // 端口先于设置落盘就位（同 accessor.save 的时序理由），再写入文件名
+        await refreshServerPort()
         // 设置中存原始文件名用于回显，实际复制文件由后端统一命名为 terminal_bg.<ext>
         const displayName = selected.split(/[\\/]/).pop() || fileName
         await settingsStore.saveSettings({

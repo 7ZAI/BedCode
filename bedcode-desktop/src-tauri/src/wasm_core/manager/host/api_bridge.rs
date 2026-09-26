@@ -14,29 +14,44 @@ use tauri::State;
 // 本桥的插件面命令**不再信任参数里的 plugin_id**：调用方必须带 `credential`，
 // 身份由宿主解析（宿主面 loader 密钥 → 可操作任意目标；插件面令牌 → 目标必须是自己）。
 // 机制与威胁模型见 `plugin/security/frontend_channel.rs`。
+//
+// **凭证域按 webview 分区**（2026-09-26）：每个 `plugin_*` 命令注入 `tauri::Webview`
+// 参数（Tauri 保证是调用发起方所在窗口），label 决定用哪个凭证域解析——主窗口与终端
+// 窗口互不干扰，跨窗口的凭证不可解析（比单一全局表更严）。
 
-/// 宿主前端 bootstrap：取得本次页面加载的 loader 会话密钥（**首个调用者生效**）
+/// 宿主前端 bootstrap：取得**本窗口**本次页面加载的 loader 会话密钥（**域内首个调用者生效**）
 ///
 /// 宿主前端在导入任何插件模块之前调用（`pluginLoader.loadAll()` 首行），插件代码开始运行时
-/// 密钥已被占位。页面加载时由 `on_page_load` 钩子重置，dev 下刷新可重新取得。
+/// 密钥已被占位。该窗口页面加载时由 `on_page_load` 钩子重置，dev 下刷新可重新取得。
 #[tauri::command]
-pub async fn plugin_frontend_loader_session(plugin_host: State<'_, Arc<PluginHost>>) -> crate::Result<String> {
-    let session = plugin_host.frontend_channel().issue_loader_session()?;
-    tracing::info!("[API] plugin_frontend_loader_session: 宿主面凭证已签发");
+pub async fn plugin_frontend_loader_session(
+    webview: tauri::Webview,
+    plugin_host: State<'_, Arc<PluginHost>>,
+) -> crate::Result<String> {
+    let session = plugin_host.frontend_channel().issue_loader_session(webview.label())?;
+    tracing::info!(webview = %webview.label(), "[API] plugin_frontend_loader_session: 宿主面凭证已签发");
     Ok(session)
 }
 
-/// 插件前端：为指定插件签发通道令牌（需 loader 会话密钥 + 插件处于运行态）
+/// 插件前端：为指定插件签发通道令牌（需同窗口的 loader 会话密钥 + 插件处于运行态）
 ///
-/// 令牌随停用回收；同一插件重新签发会作废旧令牌。
+/// 令牌随停用回收；同一窗口内重新签发会作废旧令牌。
 #[tauri::command]
 pub async fn plugin_channel_token(
+    webview: tauri::Webview,
     plugin_id: String,
     loader_session: String,
     plugin_host: State<'_, Arc<PluginHost>>,
 ) -> crate::Result<String> {
-    if !plugin_host.frontend_channel().verify_loader_session(&loader_session) {
-        tracing::warn!(plugin_id = %plugin_id, "[API] plugin_channel_token: loader 会话凭证无效");
+    if !plugin_host
+        .frontend_channel()
+        .verify_loader_session(webview.label(), &loader_session)
+    {
+        tracing::warn!(
+            webview = %webview.label(),
+            plugin_id = %plugin_id,
+            "[API] plugin_channel_token: loader 会话凭证无效"
+        );
         return Err(crate::AppError::Plugin(
             "invalid frontend loader session credential".to_string(),
         ));
@@ -51,14 +66,25 @@ pub async fn plugin_channel_token(
     }
     let token = plugin_host
         .frontend_channel()
-        .issue_token(&loader_session, &plugin_id)?;
-    tracing::info!(plugin_id = %plugin_id, "[API] plugin_channel_token: 插件面令牌已签发");
+        .issue_token(webview.label(), &loader_session, &plugin_id)?;
+    tracing::info!(
+        webview = %webview.label(),
+        plugin_id = %plugin_id,
+        "[API] plugin_channel_token: 插件面令牌已签发"
+    );
     Ok(token)
 }
 
 /// 插件面命令的统一身份校验（fail-closed 语义与裁决规则见 `frontend_channel::authorize`）
-fn authorize_plugin_call(plugin_host: &PluginHost, plugin_id: &str, credential: &str) -> crate::Result<()> {
-    plugin_host.frontend_channel().authorize(plugin_id, credential)
+fn authorize_plugin_call(
+    plugin_host: &PluginHost,
+    webview_label: &str,
+    plugin_id: &str,
+    credential: &str,
+) -> crate::Result<()> {
+    plugin_host
+        .frontend_channel()
+        .authorize(webview_label, plugin_id, credential)
 }
 
 // ==================== Plugin Lifecycle ====================
@@ -195,12 +221,13 @@ pub async fn plugin_frontend_load_report(
 /// 校验通过后再查激活态与 `storage` 权限（查的是**目标插件**的 granted 集）。
 #[tauri::command]
 pub async fn plugin_storage_get(
+    webview: tauri::Webview,
     plugin_id: String,
     key: String,
     credential: String,
     plugin_host: State<'_, Arc<PluginHost>>,
 ) -> crate::Result<Option<serde_json::Value>> {
-    authorize_plugin_call(&plugin_host, &plugin_id, &credential)?;
+    authorize_plugin_call(&plugin_host, webview.label(), &plugin_id, &credential)?;
     if !plugin_host.is_activated(&plugin_id).await {
         return Err(crate::AppError::Plugin(format!(
             "Plugin {} is not activated",
@@ -219,13 +246,14 @@ pub async fn plugin_storage_get(
 /// 插件存储：设置值
 #[tauri::command]
 pub async fn plugin_storage_set(
+    webview: tauri::Webview,
     plugin_id: String,
     key: String,
     value: serde_json::Value,
     credential: String,
     plugin_host: State<'_, Arc<PluginHost>>,
 ) -> crate::Result<()> {
-    authorize_plugin_call(&plugin_host, &plugin_id, &credential)?;
+    authorize_plugin_call(&plugin_host, webview.label(), &plugin_id, &credential)?;
     if !plugin_host.is_activated(&plugin_id).await {
         return Err(crate::AppError::Plugin(format!(
             "Plugin {} is not activated",
@@ -244,12 +272,13 @@ pub async fn plugin_storage_set(
 /// 插件存储：删除值
 #[tauri::command]
 pub async fn plugin_storage_delete(
+    webview: tauri::Webview,
     plugin_id: String,
     key: String,
     credential: String,
     plugin_host: State<'_, Arc<PluginHost>>,
 ) -> crate::Result<()> {
-    authorize_plugin_call(&plugin_host, &plugin_id, &credential)?;
+    authorize_plugin_call(&plugin_host, webview.label(), &plugin_id, &credential)?;
     if !plugin_host.is_activated(&plugin_id).await {
         return Err(crate::AppError::Plugin(format!(
             "Plugin {} is not activated",
@@ -313,13 +342,14 @@ pub async fn plugin_find_file_handler(
 /// 此前该命令只查 `is_activated`，任何插件前端都能以他人 plugin_id 触发其命令副作用。
 #[tauri::command]
 pub async fn plugin_invoke(
+    webview: tauri::Webview,
     plugin_id: String,
     command: String,
     args: serde_json::Value,
     credential: String,
     plugin_host: State<'_, Arc<PluginHost>>,
 ) -> crate::Result<serde_json::Value> {
-    authorize_plugin_call(&plugin_host, &plugin_id, &credential)?;
+    authorize_plugin_call(&plugin_host, webview.label(), &plugin_id, &credential)?;
     plugin_host.invoke_rust_command(&plugin_id, &command, args).await
 }
 
@@ -361,6 +391,7 @@ pub async fn plugin_dev_reload(plugin_id: String, plugin_host: State<'_, Arc<Plu
 /// 那是把授权弹窗变成摆设。宿主弹窗 `FsAuthDialog.vue` 持宿主面凭证，插件拿不到。
 #[tauri::command]
 pub async fn plugin_fs_auth_respond(
+    webview: tauri::Webview,
     request_id: String,
     allowed: bool,
     remember: bool,
@@ -369,8 +400,13 @@ pub async fn plugin_fs_auth_respond(
     fs_auth: State<'_, Arc<FsAuthChecker>>,
 ) -> crate::Result<()> {
     use crate::wasm_core::security::frontend_channel::ChannelIdentity;
-    if plugin_host.frontend_channel().resolve(&credential) != Some(ChannelIdentity::Host) {
+    if plugin_host
+        .frontend_channel()
+        .resolve(webview.label(), &credential)
+        != Some(ChannelIdentity::Host)
+    {
         tracing::warn!(
+            webview = %webview.label(),
             request_id = %request_id,
             "[API] plugin_fs_auth_respond: 非宿主面凭证，拒绝替代用户决策"
         );

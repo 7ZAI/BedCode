@@ -12,10 +12,11 @@
  * 变化时重挂载 Provider 并在 setup 里重新 provide；本测试锁定该契约。
  */
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { defineComponent, inject, nextTick } from 'vue'
+import { Transition, defineComponent, h, inject, nextTick } from 'vue'
 import { mount } from '@vue/test-utils'
 import { getPluginRegistry } from '@/plugin/registry'
 import PluginViewHost from '@/plugin/components/PluginViewHost.vue'
+import PluginContextProvider from '@/plugin/components/PluginContextProvider.vue'
 import i18n from '@/locales'
 import type { PluginContext } from '@/plugin/types'
 
@@ -136,6 +137,75 @@ describe('PluginViewHost：插件二次激活换新 context 后子树必须拿�
 
     expect(seen.length).toBe(mountCount)
     expect(wrapper.text()).toContain('probe')
+    wrapper.unmount()
+  })
+})
+
+// ==================== 白屏回归锁（2026-09-25） ====================
+
+/**
+ * 故障（用户实测）：插件视图上下切换侧边栏菜单后主区域**永久白屏**；日志中
+ * `[Vue warn] Component inside <Transition> renders non-element root node that cannot be animated`
+ * 栈顶正是 `<PluginContextProvider>`。
+ *
+ * 根因：宿主路由出口是 `<Transition name="page" mode="out-in">`，Transition 要求子组件
+ * 渲染**元素根**。上一版 PluginContextProvider 的模板只有裸 `<slot />`（Fragment 根）
+ * → out-in 的 leave 拿不到可等待的元素 → afterLeave 不可靠触发 → 新页面永不挂载。
+ *
+ * 契约：PluginContextProvider 必须有真实元素根（禁止退化成裸 slot 透传）。
+ */
+describe('PluginContextProvider 渲染根契约：必须是元素节点（out-in 过渡的前提）', () => {
+  /** 组件渲染根 vnode（Vue 的 Transition 判据 isElementRoot 正是看它的 type） */
+  function rootVNodeType(instance: unknown): unknown {
+    return (instance as { $: { subTree: { type: unknown } } }).$.subTree.type
+  }
+
+  it('Provider 渲染根是元素 vnode（type 为标签字符串）', () => {
+    registry.setContext(PLUGIN_ID, makeContext('ctx-a'))
+
+    const wrapper = mount(PluginContextProvider, {
+      props: { pluginId: PLUGIN_ID },
+      slots: { default: () => h('span', 'probe') },
+    })
+
+    // 修复前（裸 `<slot />`，或模板根级注释与 div 构成多根）：根是 Fragment（type 为 Symbol）
+    expect(typeof rootVNodeType(wrapper.vm)).toBe('string')
+    wrapper.unmount()
+  })
+
+  it('对照：裸 slot 透传组件的渲染根不是元素 vnode（证明上面的断言有区分度）', () => {
+    const PassThrough = defineComponent({ setup: (_, { slots }) => () => slots.default?.() })
+
+    const wrapper = mount(PassThrough, { slots: { default: () => h('span', 'x') } })
+
+    expect(typeof rootVNodeType(wrapper.vm)).not.toBe('string')
+    wrapper.unmount()
+  })
+
+  it('挂载在真实 Transition(mode=out-in) 下不产生 non-element root 警告且内容可见', async () => {
+    const { Probe } = makeProbe()
+    registry.setContext(PLUGIN_ID, makeContext('ctx-a'))
+    registry.registerView(PLUGIN_ID, 'sidebar', { id: 'view', title: 'view', component: Probe })
+    await nextTick()
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const Root = defineComponent({
+      setup: () => () =>
+        h(Transition, { name: 'page', mode: 'out-in' }, () =>
+          h(PluginViewHost, { pluginId: PLUGIN_ID, viewId: 'view' }),
+        ),
+    })
+
+    const wrapper = mount(Root, {
+      global: { plugins: [i18n], stubs: { transition: false } },
+    })
+
+    expect(wrapper.text()).toContain('probe')
+    // 反例（修复前）：Vue 报 `Component inside <Transition> renders non-element root
+    // node that cannot be animated` → out-in 的 leave 永不完成 → 切走即白屏
+    const warnings = warnSpy.mock.calls.map((call) => String(call[0]))
+    expect(warnings.some((msg) => msg.includes('non-element root node'))).toBe(false)
     wrapper.unmount()
   })
 })

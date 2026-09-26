@@ -1,12 +1,26 @@
+<!--
+  PluginContextProvider — 插件上下文注入壳（keyed Provider）
+
+  必须有真实元素根，禁止退化成裸 `<slot />`：宿主 DesktopLayout 的路由出口是
+  `<Transition name="page" mode="out-in">`，Transition 要求子组件渲染**元素根**。
+  裸 slot 透传会让 Vue 报 `Component inside <Transition> renders non-element root
+  node that cannot be animated`，且 out-in 的 leave 钩子挂在不会被 unmount 处理的
+  Fragment vnode 上 → afterLeave 永不触发 → 切走插件视图时主区域**永久白屏**
+  （2026-09-25 实测）。同理，本文件顶部的说明必须是模板**外**注释——模板根级注释
+  在 dev 编译下会被保留，与 div 一起构成多根（Fragment），把根重新变成非元素节点。
+
+  rootClass 默认 `contents`（display: contents，不生成布局盒子）：设置分组等纯内容
+  场景零布局影响；需要参与页面过渡动画与高度链路的宿主（PluginViewHost）传 `h-full`。
+-->
 <template>
-  <slot />
+  <div :class="props.rootClass">
+    <slot />
+  </div>
 </template>
 
 <script setup lang="ts">
 /**
- * PluginContextProvider — 插件上下文注入壳（keyed Provider）
- *
- * 用法：`<PluginContextProvider :key="registry.contextIdentity(pluginId)" :plugin-id="pluginId">`
+ * 用法：`<PluginContextProvider :key="registry.contextIdentity(pluginId)" :plugin-id="pluginId" root-class="h-full">`
  * 由宿主视图外壳（PluginViewHost / PluginSettingsSection）在「插件上下文身份变化」时
  * 重挂载本组件，使 `provide('pluginContext')` 在 **setup 同步执行** 里重新注入最新 context。
  *
@@ -19,7 +33,17 @@
 import { provide } from 'vue'
 import { getPluginRegistry } from '../registry'
 
-const props = defineProps<{ pluginId: string }>()
+const props = withDefaults(
+  defineProps<{
+    pluginId: string
+    /**
+     * 根元素 class —— 决定本组件是「零布局影响的内容透传层」（`contents`，默认）
+     * 还是「参与过渡动画/高度链路的包装层」（`h-full`，PluginViewHost 用）。
+     */
+    rootClass?: string
+  }>(),
+  { rootClass: 'contents' },
+)
 
 const context = getPluginRegistry().getContext(props.pluginId)
 if (context) {

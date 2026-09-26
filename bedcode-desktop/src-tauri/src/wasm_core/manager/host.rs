@@ -381,13 +381,17 @@ impl PluginHost {
         &self.frontend_channel
     }
 
-    /// 重置前端通道会话（新的一次页面加载）：旧 loader 密钥与全部插件令牌失效
+    /// 重置**某个 webview** 的前端通道会话（该窗口新的一次页面加载）：其旧 loader 密钥
+    /// 与全部插件令牌失效
     ///
-    /// 由 Tauri `on_page_load` 钩子调用（dev 下页面刷新需能重新取得宿主面凭证），
-    /// 也可在测试中显式调用以模拟前端重启。
-    pub fn reset_frontend_loader_session(&self, reason: &str) -> usize {
-        let revoked = self.frontend_channel.reset();
+    /// 由 Tauri `on_page_load` 钩子按发起加载的 webview label 调用（dev 下页面刷新需能重新
+    /// 取得宿主面凭证）；也可在测试中显式调用以模拟某窗口前端重启。
+    /// **只作用于该 label 的凭证域**——多窗口（主窗口 / 终端窗口）互不干扰：终端窗口加载
+    /// 不再回收主窗口凭证（2026-09-26 修复，见 `security::frontend_channel` 模块注释）。
+    pub fn reset_frontend_loader_session(&self, webview_label: &str, reason: &str) -> usize {
+        let revoked = self.frontend_channel.reset(webview_label);
         tracing::info!(
+            webview = %webview_label,
             reason = %reason,
             revoked_tokens = revoked,
             "[PluginChannel] 前端通道会话已重置"

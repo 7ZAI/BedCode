@@ -135,9 +135,13 @@ pub struct AppStartTime(std::time::Instant);
 
 /// 前端插件通道会话的生命周期钩子（审计票 06）
 ///
-/// 每次页面加载重置 loader 会话密钥与全部插件令牌：宿主前端 bootstrap 会在导入任何插件模块
-/// 之前重新取得密钥，而插件代码只在模块被导入后才开始运行——「首个调用者生效」因此恒由宿主
-/// 前端赢得；dev 下页面刷新也能重新取得（否则刷新后插件前端全部拿不到凭证）。
+/// 页面加载重置**该 webview** 的 loader 会话密钥与全部插件令牌：宿主前端 bootstrap 会在导入
+/// 任何插件模块之前重新取得密钥，而插件代码只在模块被导入后才开始运行——「首个调用者生效」
+/// 因此恒由宿主前端赢得；dev 下页面刷新也能重新取得（否则刷新后插件前端全部拿不到凭证）。
+///
+/// **按 webview 分区**（2026-09-26）：本钩子对每个 webview（主窗口 / 终端窗口 / 未来任何
+/// 独立窗口）都触发，凭证表按 label 分域——否则终端窗口加载会回收主窗口凭证，使主窗口插件面
+/// 命令全数被拒（`缺少有效通道凭证`）。详见 `security::frontend_channel` 模块注释。
 fn frontend_channel_session_hook() -> tauri::plugin::TauriPlugin<tauri::Wry> {
     tauri::plugin::Builder::<tauri::Wry>::new("bedcode-frontend-channel")
         .on_page_load(|webview, payload| {
@@ -150,10 +154,11 @@ fn frontend_channel_session_hook() -> tauri::plugin::TauriPlugin<tauri::Wry> {
                 return;
             };
             tracing::debug!(
+                webview = %webview.label(),
                 url = %payload.url(),
-                "[PluginChannel] 页面加载，重置前端通道会话"
+                "[PluginChannel] 页面加载，重置该窗口的前端通道会话"
             );
-            plugin_host.reset_frontend_loader_session("page-load");
+            plugin_host.reset_frontend_loader_session(webview.label(), "page-load");
         })
         .build()
 }

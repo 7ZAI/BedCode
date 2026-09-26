@@ -3,6 +3,7 @@
     v-if="resolvedComponent && contextKey"
     :key="contextKey"
     :plugin-id="pluginId"
+    root-class="h-full"
   >
     <component :is="resolvedComponent" />
   </PluginContextProvider>
@@ -22,6 +23,12 @@
  *   `provide('pluginContext')` 在 setup 里重新注入最新 context，子树（重新注入后）
  *   不再持有停用前（通道令牌已回收）的旧 context，插件面命令不再全员被拒。
  * - 插件无 context（停用清理后 / 未激活）时 Provider 不渲染，视图保持「未找到」。
+ *
+ * `root-class="h-full"`：本视图挂在 DesktopLayout 的 `<Transition mode="out-in">` 下，
+ * Transition 要求渲染**元素根**（Provider 自带元素根，不能是裸 slot 透传）；同时这层
+ * 包装元素要撑满 main，插件视图根节点的 `h-full` 才有高度可依。缺省 `contents`
+ * （display: contents，无盒子）只适用设置分组那种纯内容场景——用在这里会导致过渡
+ * 动画作用于无盒子元素而失效。
  *
  * 旧实现（历史债）：曾在 props 变化 watch 里 re-provide —— Vue 的 `provide()`
  * 只能在 setup 同步调用，watch 回调里调用实测（Vue 3.5）不生效，属死代码；
