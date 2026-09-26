@@ -149,7 +149,11 @@ async fn connect_ws(port: u16, path: &str) -> (WsSend, WsRecv, std::net::SocketA
     (sink, stream, local_addr)
 }
 
-/// 监听响应帧（跳过二进制输出帧与 Ping/Pong），5s 超时后 panic；返回解析后的 JSON
+/// 监听响应帧（跳过二进制输出帧、Ping/Pong 与 **WS 事件广播帧**），5s 超时后
+/// panic；返回解析后的 JSON。
+///
+/// 2026-09-26：session-control 端点承载 WS 事件广播（session:created / stopped /
+/// removed）——动作回显前可能先到 `{"type":"event",...}` 帧，收动作回包必须跳过。
 async fn recv_frame_json(stream: &mut WsRecv) -> serde_json::Value {
     loop {
         let frame = tokio::time::timeout(Duration::from_secs(5), stream.next())
@@ -159,7 +163,13 @@ async fn recv_frame_json(stream: &mut WsRecv) -> serde_json::Value {
             .expect("WS frame error");
         match frame {
             WsMsg::Text(text) => {
-                return serde_json::from_str(&text).expect("control frame must be valid JSON");
+                let json: serde_json::Value =
+                    serde_json::from_str(&text).expect("control frame must be valid JSON");
+                // 事件广播帧：跳过（动作回显/响应帧的 `type` 是动作名，非 event）
+                if json.get("type").and_then(|t| t.as_str()) == Some("event") {
+                    continue;
+                }
+                return json;
             }
             WsMsg::Ping(_) | WsMsg::Pong(_) | WsMsg::Binary(_) | _ => continue,
         }
