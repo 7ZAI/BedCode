@@ -213,10 +213,13 @@ pub fn note_status(session_id: &str, to: SessionStatus) -> Result<(), String> {
         .map(|_| ())
 }
 
-/// 会话移除（连带清注解槽）
+/// 会话移除（连带清注解槽 + 回收未确认窗口水位）
 #[cfg(target_arch = "wasm32")]
 pub fn note_removed(session_id: &str) -> Result<bool, String> {
-    REGISTRY.remove(&WasmHost, session_id)
+    let removed = REGISTRY.remove(&WasmHost, session_id)?;
+    // 会话销毁 → 输出背压水位/驻留态回收（重启换新 PTY，残留水位会误判为永久驻留）
+    crate::output::forget_via_host(session_id);
+    Ok(removed)
 }
 
 /// 改名
@@ -373,6 +376,9 @@ pub fn close_via_pty(session_id: &str, source_device: Option<&str>) -> Result<()
     let record = REGISTRY
         .get(&WasmHost, session_id)?
         .ok_or_else(|| format!("会话不存在：{session_id}"))?;
+    // 停止即回收输出背压水位/驻留态：进程终止后环不再产出，残留水位无意义
+    // （重启会走 `note_removed` → 新 PTY 环偏移从 0 起，需与旧水位彻底解耦）
+    crate::output::forget_via_host(session_id);
     match &record.status {
         SessionStatus::Stopped | SessionStatus::Error(_) | SessionStatus::Stopping => {
             return Ok(());

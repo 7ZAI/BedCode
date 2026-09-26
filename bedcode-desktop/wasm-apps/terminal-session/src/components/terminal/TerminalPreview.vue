@@ -200,6 +200,12 @@ import {
 } from '../../utils/terminal/terminalThemes'
 import { TERMINAL_SCROLLBACK } from '../../utils/terminal/terminalScrollback'
 import {
+  OUTPUT_PULL_INTERVAL_MS,
+  OUTPUT_PULL_MAX_BATCHES,
+  decidePollIntervalMs,
+  nextIdleStreak,
+} from '../../utils/terminal/terminalPullPolicy'
+import {
   useTerminalHostCapabilities,
   createFallbackHostCapabilities,
 } from './terminalHostCapabilities'
@@ -360,51 +366,219 @@ let wheelHandler: ((e: WheelEvent) => void) | null = null
 // WIT `list<u8>` 二进制直传不 JSON 化）。游标（nextOffset）前端自持——慢消费只损失
 // 自己的 ring 历史（`truncated` 时清屏重锚），宿主环绝不回传背压。
 
-/** 快档轮询间隔（ms）：活跃输出期经此节奏拉取 */
-const OUTPUT_PULL_INTERVAL_MS = 100
-/** 单 tick 最多连续拉批数（每批 ≤16 KiB）：输出风暴时一次拿净积压，避免每 tick 只挪
- *  16 KiB 的拖尾；批数封顶防单 tick 长占主线程 */
-const OUTPUT_PULL_MAX_BATCHES = 8
-/** 连续空闲（追平）次数达到该值后降为慢档轮询 */
-const OUTPUT_IDLE_THRESHOLD = 5
-/** 慢档轮询间隔（ms）：空闲期省 invoke 往返；有数据立即回到快档 */
-const OUTPUT_IDLE_INTERVAL_MS = 500
+/** 快档 / 慢档间隔、单 tick 批数与空闲阈值：全部在 `terminalPullPolicy`（对齐迁移前引擎常量） */
 
 /** 写入管线 sink（attachSource 返回值；轮询回调写入目标） */
 let outputSink: TerminalOutputSink | null = null
 /** 拉取游标（= 下一批的 fromOffset；追平后停在产出端） */
 let outputCursor = 0
 let pullTimer: ReturnType<typeof setInterval> | null = null
+/** 当前生效的轮询间隔（ms）：决策变化时重建 interval（快档 ↔ 慢档） */
+let pollIntervalMs = 0
 let pullInFlight = false
 /** 连续追平计数（空闲退避依据） */
 let idleStreak = 0
+
+// ==================== 背压 ack（对齐迁移前 useTerminalOutputStreamChannel） ====================
+//
+// 插件侧未确认窗口（`session.output.pull` 的 `throttled`）靠前端按**交付水位**
+// ack 回落。记账与回发节流逐条对齐迁移前实现：
+// - 交付即账：`onData` 入队后推进 `deliveredOffset`（非"渲染完成"）；
+// - 回发节流：累计待确认 ≥ 64 KiB 或距上次回发 ≥ 250 ms 且水位有推进 → 回发一次。
+// 未确认窗口是**安全上限**（拉取模型下 `pushed` 随前端拉取前进，常态窗口 = ack
+// 节流滞后）；宿主侧 push 推进（P2）落地后才会成为主流量控制。
+
+/** ack 回发阈值（字节）：累计待确认达到即回发（与插件侧 HIGH−ack ≤ LOW 约束同源） */
+const ACK_BYTES_THRESHOLD = 64 * 1024
+/** ack 空闲兜底（ms）：距上次回发超过它且水位有推进 → 回发 */
+const ACK_MAX_IDLE_MS = 250
+/** 抑制退避（ms）：`throttled` 空响应后的重试等待（对齐迁移前 park_poll_ms = 200） */
+const OUTPUT_THROTTLE_BACKOFF_MS = 200
+/** 驻留告警（ms）：持续抑制超过它打一次 warn（对齐迁移前 zombie_timeout = 30 s；
+ *  新架构无连接可回收，仅告警并继续拉取等待 ack） */
+const OUTPUT_PARK_ZOMBIE_MS = 30_000
+
+/** 已交付写入管线的最大偏移（`onData` 入队即推进；ack 上报的就是它） */
+let deliveredOffset = 0
+/** 已回发 ack 的最大偏移（与 `deliveredOffset` 相等时无需重复回发） */
+let ackedThroughOffset = 0
+/** 自上次回发以来累计交付字节（节流依据） */
+let pendingAckBytes = 0
+/** 上次 ack 回发时间（ms）；0 = 本次接入尚未回发过（首次回发不受空闲条件限制） */
+let lastAckSentAt = 0
+/** ack 空闲兜底定时器（未达阈值时挂起，到点再回发一次） */
+let ackIdleTimer: ReturnType<typeof setTimeout> | null = null
+/** 抑制退避截止（ms）：此前不发新 pull（F2） */
+let throttleBackoffUntil = 0
+/** 本次驻留开始时间（ms）；0 = 未驻留（F6 zombie 计时） */
+let parkedSince = 0
+/** zombie 告警是否已打（每次驻留只打一次） */
+let zombieWarned = false
+
+/** 回发一次 ack（水位单调；失败仅留痕，下轮节流会重试） */
+function sendAck(sessionId: string): void {
+  const offset = deliveredOffset
+  ackedThroughOffset = offset
+  pendingAckBytes = 0
+  lastAckSentAt = Date.now()
+  void Promise.resolve(
+    context.commands.execute('session.output.ack', { sessionId, offset }),
+  ).catch((e) => {
+    console.warn(
+      `[terminal-session] output ack failed session=${sessionId} offset=${offset}: ${describeCommandError(e)}`,
+    )
+  })
+}
+
+/** ack 节流回发（F1）：阈值达标 / 空闲兜底 / 首次 → 回发；否则挂定时器等兜底 */
+function maybeSendAck(): void {
+  const sessionId = props.session?.id
+  if (!sessionId || !outputSink) return
+  if (deliveredOffset === ackedThroughOffset) return // 无新进展
+  const now = Date.now()
+  const belowThreshold = pendingAckBytes < ACK_BYTES_THRESHOLD
+  const withinIdleWindow = lastAckSentAt !== 0 && now - lastAckSentAt < ACK_MAX_IDLE_MS
+  if (belowThreshold && withinIdleWindow) {
+    if (!ackIdleTimer) {
+      ackIdleTimer = setTimeout(() => {
+        ackIdleTimer = null
+        maybeSendAck()
+      }, ACK_MAX_IDLE_MS)
+    }
+    return
+  }
+  if (ackIdleTimer) {
+    clearTimeout(ackIdleTimer)
+    ackIdleTimer = null
+  }
+  sendAck(sessionId)
+}
+
+/** 进入驻留（F2/F6）：记起点、日志一次；重复调用只做 zombie 超时检查 */
+function noteParked(sessionId: string, unacked: number): void {
+  const now = Date.now()
+  if (parkedSince === 0) {
+    parkedSince = now
+    zombieWarned = false
+    console.warn(
+      `[terminal-session] 输出背压：进入驻留 session=${sessionId} unacked=${unacked}`,
+    )
+    return
+  }
+  if (!zombieWarned && now - parkedSince >= OUTPUT_PARK_ZOMBIE_MS) {
+    zombieWarned = true
+    // 新架构无订阅连接可回收：按旧语义继续拉取，仅告警暴露"长期不 ack"
+    console.warn(
+      `[terminal-session] 输出背压超时（驻留 ${OUTPUT_PARK_ZOMBIE_MS}ms 未解除）session=${sessionId}，继续拉取等待 ack`,
+    )
+  }
+}
+
+/** 退出驻留：清计时并打一次 info 日志（含 G2 水位快照，罕见路径的一次诊断读取） */
+function clearParked(sessionId: string): void {
+  if (parkedSince === 0) return
+  const parkedMs = Date.now() - parkedSince
+  parkedSince = 0
+  zombieWarned = false
+  logUnparkWatermarks(sessionId, parkedMs)
+}
+
+/**
+ * 驻留退出的水位快照日志（G2 水位可观测 / 对齐迁移前 `SubscriberStats`）：
+ * 取一次 `session.output.watermarks` 纯读快照，把驻留时长、退出后的未确认量与
+ * 累计驻留/抑制/环淘汰次数打进 info——真机复验（A7）据此判断“背压是否真的发生过”，
+ * 无需翻插件日志。**纯诊断**：失败仅留痕，绝不影响拉取链路。
+ */
+function logUnparkWatermarks(sessionId: string, parkedMs: number): void {
+  void Promise.resolve(
+    context.commands.execute('session.output.watermarks', { sessionId }),
+  )
+    .then((res: unknown) => {
+      const entries = (res as { entries?: unknown })?.entries
+      const row = Array.isArray(entries)
+        ? (entries as { sessionId?: string }[]).find((e) => e?.sessionId === sessionId)
+        : undefined
+      if (!row) {
+        console.info(
+          `[terminal-session] 输出背压：退出驻留 session=${sessionId} 驻留=${parkedMs}ms（无水位快照）`,
+        )
+        return
+      }
+      const r = row as {
+        pushed?: number
+        acked?: number
+        unacked?: number
+        parked?: boolean
+        parkCount?: number
+        unparkCount?: number
+        throttledPulls?: number
+        truncatedCount?: number
+      }
+      console.info(
+        `[terminal-session] 输出背压：退出驻留 session=${sessionId} 驻留=${parkedMs}ms ` +
+          `unacked=${r.unacked ?? 0} pushed=${r.pushed ?? 0} acked=${r.acked ?? 0} ` +
+          `驻留次数=${r.parkCount ?? 0} 抑制次数=${r.throttledPulls ?? 0} ` +
+          `环淘汰=${r.truncatedCount ?? 0}`,
+      )
+    })
+    .catch((e) => {
+      console.warn(
+        `[terminal-session] output watermarks failed session=${sessionId}: ${describeCommandError(e)}`,
+      )
+    })
+}
 
 /** 拉一轮：单 tick 内最多连续拉 OUTPUT_PULL_MAX_BATCHES 批，返回是否仍有余量 */
 async function pullOnce(): Promise<boolean> {
   if (pullInFlight || !props.session?.id || !outputSink) return false
   pullInFlight = true
+  const sessionId = props.session.id
   try {
     for (let i = 0; i < OUTPUT_PULL_MAX_BATCHES; i++) {
       const res: unknown = await context.commands.execute('session.output.pull', {
-        sessionId: props.session.id,
+        sessionId,
         fromOffset: outputCursor,
       })
       // null = 游标已追平产出端（宿主 output-ring-fetch Ok(None)）
       if (res === null || res === undefined) return false
-      const r = res as { data?: number[]; nextOffset?: number; truncated?: boolean }
+      const r = res as {
+        data?: number[]
+        nextOffset?: number
+        truncated?: boolean
+        throttled?: boolean
+        unacked?: number
+      }
+      // 背压抑制（F2）：不推进游标、不写入；退避 200 ms 后重试（数据留宿主环）
+      if (r.throttled) {
+        noteParked(sessionId, typeof r.unacked === 'number' ? r.unacked : 0)
+        throttleBackoffUntil = Date.now() + OUTPUT_THROTTLE_BACKOFF_MS
+        return false
+      }
+      clearParked(sessionId)
       const next = typeof r.nextOffset === 'number' ? r.nextOffset : outputCursor
+      const bytes = Array.isArray(r.data) ? r.data.length : 0
       if (r.truncated) {
-        // resync：游标落后于环驻留起点（中间字节已被淘汰）→ 清屏重锚后从现存段起播
+        // resync（F3）：游标落后于环驻留起点（中间字节已被淘汰）→ 清屏重锚到现存
+        // 段起点；被淘汰字节不再需要 ack，已交付/已确认水位重锚（本响应已含
+        // [minOffset, next) 段，交付后由下方推进到 next）
+        const minOffset = next - bytes
         outputSink.onReset()
-        outputSink.onTruncated(outputCursor)
+        outputSink.onTruncated(minOffset)
+        deliveredOffset = minOffset
+        ackedThroughOffset = minOffset
+        pendingAckBytes = 0
       }
       outputCursor = next
-      if (Array.isArray(r.data) && r.data.length > 0) {
-        outputSink.onData({ data: new Uint8Array(r.data) })
+      if (bytes > 0) {
+        outputSink.onData({ data: new Uint8Array(r.data as number[]) })
+        // 交付即账：入队后推进水位，ack 上报的就是交付水位（非渲染完成）
+        deliveredOffset = next
+        pendingAckBytes += bytes
+        maybeSendAck()
       }
       // 空段（含 truncated 但无驻留字节）= 追平；有数据但不满批 → 下批大概率追平，
       // 提前让出（少一次 invoke 往返）
-      if (!r.data || r.data.length === 0) return false
+      if (bytes === 0) return false
     }
     return true
   } finally {
@@ -413,13 +587,24 @@ async function pullOnce(): Promise<boolean> {
 }
 
 async function pullTick() {
+  // F2 退避期：不发新 pull（throttled 空响应后的 park_poll 等待）
+  if (Date.now() < throttleBackoffUntil) return
   const hadMore = await pullOnce()
-  idleStreak = hadMore ? 0 : idleStreak + 1
-  // 自适应间隔：连续空闲后降为慢档（省 invoke），任一 tick 有数据立即回快档
-  if (idleStreak === OUTPUT_IDLE_THRESHOLD && pullTimer) {
+  idleStreak = nextIdleStreak(idleStreak, hadMore)
+  // 节奏决策（驻留 > 有余量 > 空闲阈值）：间隔变化才重建 interval
+  const next = decidePollIntervalMs({ idleStreak, hasMore: hadMore, parked: parkedSince !== 0 })
+  if (pullTimer && next !== pollIntervalMs) {
     clearInterval(pullTimer)
-    pullTimer = setInterval(() => void pullTick(), OUTPUT_IDLE_INTERVAL_MS)
+    pullTimer = setInterval(() => void pullTick(), next)
+    pollIntervalMs = next
   }
+}
+
+/** F4 输入即时拉取：写入后立刻拉一轮（补偿旧 push 语义，回显必达） */
+function kickOutputPull() {
+  if (!props.session?.id || !outputSink) return
+  throttleBackoffUntil = 0
+  void pullOnce()
 }
 
 function stopOutputPull() {
@@ -427,8 +612,16 @@ function stopOutputPull() {
     clearInterval(pullTimer)
     pullTimer = null
   }
+  pollIntervalMs = 0
+  if (ackIdleTimer) {
+    clearTimeout(ackIdleTimer)
+    ackIdleTimer = null
+  }
   pullInFlight = false
   idleStreak = 0
+  throttleBackoffUntil = 0
+  parkedSince = 0
+  zombieWarned = false
 }
 
 /** 接入输出源（票 04：插件 WASM 原语轮询拉取 → 写入管线）；会话停止/卸载时断开 */
@@ -437,11 +630,16 @@ function attachOutputSource() {
   stopOutputPull()
   pipeline.resetTruncatedNotified()
   outputCursor = 0
+  deliveredOffset = 0
+  ackedThroughOffset = 0
+  pendingAckBytes = 0
+  lastAckSentAt = 0
   outputSink = pipeline.attachSource()
   pipeline.armReplayRefresh()
-  // 先立即拉一轮（历史回放），再进入自适应轮询
+  // 先立即拉一轮（历史回放），再进入快档轮询（节奏常量见 terminalPullPolicy）
   void pullOnce()
   pullTimer = setInterval(() => void pullTick(), OUTPUT_PULL_INTERVAL_MS)
+  pollIntervalMs = OUTPUT_PULL_INTERVAL_MS
 }
 
 function detachOutputSource() {
@@ -658,6 +856,8 @@ function initTerminal() {
       sessionId: props.session.id,
       data,
     })
+    // F4 输入即时拉取：写入后立刻拉一轮，补偿旧 push 语义（回显必达）
+    kickOutputPull()
   })
 }
 

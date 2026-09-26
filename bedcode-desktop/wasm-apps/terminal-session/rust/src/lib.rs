@@ -1098,10 +1098,24 @@ impl WasmPlugin for SessionPlugin {
             "session.ws.control" => ws_control::handle_command(&args).map_err(anyhow::Error::msg),
 
             // ==================== 票 04 命令面（终端输出数据面） ====================
-            // 输出环拉取 {sessionId, fromOffset, maxBytes?} → null | {data, nextOffset,
-            // truncated}。经 host-session.output-ring-fetch 原语（WIT list<u8> 直传）
-            // 拉会话输出原始字节；游标由前端自持（slow consumer 只损失自己的历史）。
+            // 输出环拉取 {sessionId, fromOffset, maxBytes?} → null（追平）| {data,
+            // nextOffset, truncated, throttled, unacked}。经 host-pty.ring-fetch 原语
+            // （WIT list<u8> 直传）拉会话输出原始字节；游标由前端自持（slow consumer
+            // 只损失自己的历史）。`throttled: true` = 未确认窗口达上沿被抑制（背压，
+            // 前端退避 200 ms 重试；`unacked` 为已推送未确认字节数）。
             "session.output.pull" => output::pull_via_host(&args).map_err(anyhow::Error::msg),
+
+            // 输出消费确认（ack）{sessionId, offset} → {ok, offset}：前端按**交付
+            // 水位**（`onData` 入队后推进，对齐迁移前 `useTerminalOutputStreamChannel`
+            // 的 ack 时点）节流回发，供未确认窗口（背压）裁决推进；水位单调不回退。
+            "session.output.ack" => output::ack_via_host(&args).map_err(anyhow::Error::msg),
+
+            // 水位诊断读面 {sessionId?} → {entries: [...], count}：输出背压的可观测
+            // 快照（pushed/acked/unacked/parked + 驻留进出/抑制/环淘汰计数，对齐迁移前
+            // `SubscriberStats`）；纯读不建条目。
+            "session.output.watermarks" => {
+                output::watermarks_via_host(&args).map_err(anyhow::Error::msg)
+            }
 
             // ==================== 票 11 命令面（注解槽写面 + 设备派生视图） ====================
             // 与互调 api 面共享同一实现（`*_via_host`）；命令面保留供宿主闭环测试直调。

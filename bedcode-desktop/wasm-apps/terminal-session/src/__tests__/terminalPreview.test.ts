@@ -106,14 +106,20 @@ function makeCaps(overrides?: Partial<TerminalHostCapabilities>): TerminalHostCa
 interface TestContext extends PluginContext {
   /** 注入输出拉取响应队列（依次出队；队空后返回 null 追平） */
   __setPullResponses: (items: (unknown | null)[]) => void
+  /** 注入 `session.output.watermarks` 诊断响应条目（驻留退出快照用） */
+  __setWatermarkReport: (rows: unknown[]) => void
 }
 
 function makeContext(): TestContext {
   let pullResponses: (unknown | null)[] = []
+  let watermarkRows: unknown[] = []
   const execute = vi.fn(async (cmd: string) => {
     if (cmd === 'session.output.pull') {
       const next = pullResponses.shift()
       return next === undefined ? null : next
+    }
+    if (cmd === 'session.output.watermarks') {
+      return { entries: watermarkRows, count: watermarkRows.length }
     }
     if (cmd === 'session.action.resize') return { status: 'applied', canonical: { kind: 'desktop' } }
     return null
@@ -136,6 +142,9 @@ function makeContext(): TestContext {
     // 返回对象带注入器：测试用例设置拉取响应队列
     __setPullResponses: (items: (unknown | null)[]) => {
       pullResponses = items
+    },
+    __setWatermarkReport: (rows: unknown[]) => {
+      watermarkRows = rows
     },
   } as unknown as TestContext
 }
@@ -200,6 +209,35 @@ async function mountRunning() {
   })
   await flushAsync()
   return context
+}
+
+/** 派发一次按键到 xterm 隐藏 textarea（happy-dom 需显式补 keyCode/which） */
+function pressKey(target: VueWrapper, keyCode: number, key = 'a'): void {
+  const textarea = target.element.querySelector('.xterm-helper-textarea')
+  if (!textarea) throw new Error('xterm helper textarea not found')
+  const ev = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })
+  Object.defineProperty(ev, 'keyCode', { get: () => keyCode })
+  Object.defineProperty(ev, 'which', { get: () => keyCode })
+  textarea.dispatchEvent(ev)
+}
+
+/** 某命令的调用次数 */
+function countCalls(context: TestContext, cmd: string): number {
+  return vi.mocked(context.commands.execute).mock.calls.filter(([c]) => c === cmd).length
+}
+
+/** 全部 ack 调用的参数（按调用顺序） */
+function ackCalls(context: TestContext): { sessionId: string; offset: number }[] {
+  return vi
+    .mocked(context.commands.execute)
+    .mock.calls.filter(([c]) => c === 'session.output.ack')
+    .map(([, args]) => args as { sessionId: string; offset: number })
+}
+
+/** 文本输出帧（wire 形状：字节数组 + 末偏移）；`startOffset` 为帧内首字节偏移 */
+function textFrame(text: string, startOffset: number) {
+  const data = Array.from(new TextEncoder().encode(text))
+  return { data, nextOffset: startOffset + data.length, truncated: false }
 }
 
 beforeEach(() => {
@@ -365,5 +403,303 @@ describe('TerminalPreview（插件版组装）', () => {
     await flushAsync()
     await new Promise((r) => setTimeout(r, 500))
     expect(vi.mocked(caps.settings.save).mock.calls.length).toBe(saveCalls)
+  })
+
+  it('resize 命令首次失败自动重试（竞态加固）：重试结果进入裁决链路 → 覆盖确认弹窗', async () => {
+    const context = makeContext()
+    const execute = vi.mocked(context.commands.execute)
+    let resizeCalls = 0
+    execute.mockImplementation(async (cmd: string) => {
+      if (cmd === 'session.output.pull') return null
+      if (cmd === 'session.action.resize') {
+        resizeCalls += 1
+        if (resizeCalls === 1) {
+          // 真实形状：命令通道抛非 Error 对象（旧实现日志里显示成 `{}`，无法定位）
+          throw { message: '会话不存在：sess-1' }
+        }
+        // 重试（或后续 onResize）成功：返回需要确认覆盖 → 应走通裁决链路弹窗
+        return { status: 'needsConfirmation', currentCanonical: { kind: 'mobile', deviceName: 'Pixel' } }
+      }
+      return null
+    })
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    wrapper = mount(TerminalPreview, {
+      props: { session: makeRunningSession() },
+      global: {
+        provide: {
+          pluginContext: context,
+          [TERMINAL_HOST_CAPABILITIES_KEY]: caps,
+        },
+      },
+      attachTo: document.body,
+    })
+
+    // 重试延迟（300ms）后裁决结果生效：弹窗出现即证明「失败 → 重试成功」链路走通
+    await vi.waitFor(
+      () => expect(wrapper!.text()).toContain('session.terminal.rendererOverrideTitle'),
+      { timeout: 3000 },
+    )
+    // 首次失败后必然有后续成功调用（onResize 也可能追加，故断下界）
+    expect(resizeCalls).toBeGreaterThanOrEqual(2)
+    // 诊断日志带可读原因（非 `{}`）
+    expect(
+      warnSpy.mock.calls.some((args) => String(args[0]).includes('重试成功')),
+    ).toBe(true)
+    warnSpy.mockRestore()
+  })
+})
+
+// ==================== 输出背压（ack 未确认窗口 / 驻留） ====================
+
+describe('TerminalPreview 输出背压（ack 窗口 / 驻留）', () => {
+  it('F1 交付即账：数据交付后按交付水位回发 ack（首次立即回发）', async () => {
+    const context = makeContext()
+    context.__setPullResponses([textFrame('hello', 0)])
+    wrapper = mount(TerminalPreview, {
+      props: { session: makeRunningSession() },
+      global: {
+        provide: {
+          pluginContext: context,
+          [TERMINAL_HOST_CAPABILITIES_KEY]: caps,
+        },
+      },
+      attachTo: document.body,
+    })
+
+    await vi.waitFor(() => expect(ackCalls(context).length).toBeGreaterThan(0), { timeout: 2000 })
+    // ack 偏移 = 交付帧的末偏移（5），会话 id 正确
+    expect(ackCalls(context)[0]).toEqual({ sessionId: 'sess-1', offset: 5 })
+  })
+
+  it('F1 节流：累计交付达 64 KiB 阈值 → 立即回发新水位', async () => {
+    const context = makeContext()
+    const big = 'x'.repeat(64 * 1024)
+    // 首帧小（首次 ack 立即回发 offset=2），次帧 64 KiB → 阈值达标立即回发
+    context.__setPullResponses([textFrame('hi', 0), textFrame(big, 2)])
+    wrapper = mount(TerminalPreview, {
+      props: { session: makeRunningSession() },
+      global: {
+        provide: {
+          pluginContext: context,
+          [TERMINAL_HOST_CAPABILITIES_KEY]: caps,
+        },
+      },
+      attachTo: document.body,
+    })
+
+    await vi.waitFor(
+      () => expect(ackCalls(context).some((a) => a.offset === 2 + 64 * 1024)).toBe(true),
+      { timeout: 3000 },
+    )
+  })
+
+  it('F1 节流：未达阈值时由 250 ms 空闲兜底回发', async () => {
+    const context = makeContext()
+    context.__setPullResponses([textFrame('ab', 0), textFrame('cd', 2)])
+    wrapper = mount(TerminalPreview, {
+      props: { session: makeRunningSession() },
+      global: {
+        provide: {
+          pluginContext: context,
+          [TERMINAL_HOST_CAPABILITIES_KEY]: caps,
+        },
+      },
+      attachTo: document.body,
+    })
+
+    // 首帧立即回发 offset=2
+    await vi.waitFor(() => expect(ackCalls(context).some((a) => a.offset === 2)).toBe(true), {
+      timeout: 2000,
+    })
+    // 次帧仅 +2 字节（未达 64 KiB）→ 由空闲兜底（250 ms）回发 offset=4
+    await vi.waitFor(() => expect(ackCalls(context).some((a) => a.offset === 4)).toBe(true), {
+      timeout: 2000,
+    })
+  })
+
+  it('F2 驻留退避：throttled 不写入、不推进游标，退避 200 ms 后再拉', async () => {
+    const context = makeContext()
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    context.__setPullResponses([
+      { data: [], nextOffset: 0, truncated: false, throttled: true, unacked: 200 * 1024 },
+      textFrame('after', 0),
+    ])
+    wrapper = mount(TerminalPreview, {
+      props: { session: makeRunningSession() },
+      global: {
+        provide: {
+          pluginContext: context,
+          [TERMINAL_HOST_CAPABILITIES_KEY]: caps,
+        },
+      },
+      attachTo: document.body,
+    })
+
+    // 进入驻留（抑制态）
+    await vi.waitFor(
+      () => expect(warnSpy.mock.calls.some((a) => String(a[0]).includes('进入驻留'))).toBe(true),
+      { timeout: 2000 },
+    )
+    // 退避窗口内：第二帧未被消费（无写入、无 ack）
+    await new Promise((r) => setTimeout(r, 80))
+    expect(renderedRowsText(wrapper!)).not.toContain('after')
+    expect(ackCalls(context)).toEqual([])
+    // 退避结束（200 ms）后恢复拉取并渲染
+    await vi.waitFor(() => expect(renderedRowsText(wrapper!)).toContain('after'), { timeout: 2000 })
+    warnSpy.mockRestore()
+  })
+
+  it('F3 resync：截断重锚后游标前进到现存段末（不回到 minOffset）+ ack 水位重锚', async () => {
+    const context = makeContext()
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // 首帧正常交付（游标/ack 前进到 3）→ 次帧截断：现存段 [8,12) = "tail"（minOffset=8）
+    context.__setPullResponses([
+      textFrame('abc', 0),
+      { data: Array.from(new TextEncoder().encode('tail')), nextOffset: 12, truncated: true },
+    ])
+    wrapper = mount(TerminalPreview, {
+      props: { session: makeRunningSession() },
+      global: {
+        provide: {
+          pluginContext: context,
+          [TERMINAL_HOST_CAPABILITIES_KEY]: caps,
+        },
+      },
+      attachTo: document.body,
+    })
+
+    // 被淘汰前缀不可恢复：ack 最终上报现存段末偏移 12（非旧游标 3 / 非 minOffset 8）
+    // （本帧仅 4 字节未达 64 KiB 阈值，故由 250 ms 空闲兜底回发——等它而非只等“有 ack”）
+    await vi.waitFor(() => expect(ackCalls(context).some((a) => a.offset === 12)).toBe(true), {
+      timeout: 2000,
+    })
+    // 游标同样前进到现存段末 12——回到 minOffset 会重复渲染同一段
+    await vi.waitFor(
+      () => {
+        const pullArgs = vi
+          .mocked(context.commands.execute)
+          .mock.calls.filter(([cmd]) => cmd === 'session.output.pull')
+          .map(([, args]) => args as { fromOffset?: number })
+        expect(pullArgs.some((args) => args.fromOffset === 12)).toBe(true)
+        expect(pullArgs.some((args) => args.fromOffset === 8)).toBe(false)
+      },
+      { timeout: 3000 },
+    )
+    warnSpy.mockRestore()
+  })
+
+  it('F4 输入即时拉取：按键写入后立即触发一轮 pull（不等 50 ms 轮询）', async () => {
+    const context = await mountRunning()
+    const pullsBefore = countCalls(context, 'session.output.pull')
+    pressKey(wrapper!, 65)
+    await new Promise((r) => setTimeout(r, 30))
+    // 输入已投递
+    expect(countCalls(context, 'session.input')).toBeGreaterThan(0)
+    // 30 ms < 50 ms 轮询间隔：新增 pull 只可能来自输入即时拉取
+    expect(countCalls(context, 'session.output.pull')).toBeGreaterThan(pullsBefore)
+  })
+
+  it('F5 接线：快档 50 ms 轮询在接线处生效（260 ms 内至少 3 轮新 pull）', async () => {
+    const context = await mountRunning()
+    const before = countCalls(context, 'session.output.pull')
+    // 50 ms 快档 → 260 ms 内约 5 tick；旧 100 ms/500 ms 节奏只能拿到 0-2
+    await new Promise((r) => setTimeout(r, 260))
+    expect(countCalls(context, 'session.output.pull') - before).toBeGreaterThanOrEqual(3)
+  })
+
+  it('G2 驻留退出：取一次水位快照并把观测计数打进 info 日志', async () => {
+    const context = makeContext()
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {})
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // 注入水位快照（诊断读面是插件真源；此处按 wire 形状喂前端解析分支）
+    context.__setWatermarkReport([
+      {
+        sessionId: 'sess-1',
+        pushed: 200_000,
+        acked: 1024,
+        unacked: 198_976,
+        parked: false,
+        parkCount: 1,
+        unparkCount: 1,
+        throttledPulls: 3,
+        truncatedCount: 2,
+      },
+    ])
+    context.__setPullResponses([
+      { data: [], nextOffset: 0, truncated: false, throttled: true, unacked: 200 * 1024 },
+      textFrame('after', 0),
+    ])
+    wrapper = mount(TerminalPreview, {
+      props: { session: makeRunningSession() },
+      global: {
+        provide: {
+          pluginContext: context,
+          [TERMINAL_HOST_CAPABILITIES_KEY]: caps,
+        },
+      },
+      attachTo: document.body,
+    })
+
+    // 驻留退出（抑制后拉到数据）→ 拉一次水位诊断快照，且仅一次
+    await vi.waitFor(() => expect(countCalls(context, 'session.output.watermarks')).toBe(1), {
+      timeout: 2000,
+    })
+    // 快照内容进日志：驻留时长 + 退出后未确认量 + 累计驻留/抑制/环淘汰计数
+    await vi.waitFor(
+      () =>
+        expect(
+          infoSpy.mock.calls.some(
+            (a) =>
+              String(a[0]).includes('退出驻留') &&
+              String(a[0]).includes('驻留次数=1') &&
+              String(a[0]).includes('抑制次数=3') &&
+              String(a[0]).includes('环淘汰=2') &&
+              String(a[0]).includes('unacked=198976'),
+          ),
+        ).toBe(true),
+      { timeout: 2000 },
+    )
+    warnSpy.mockRestore()
+    infoSpy.mockRestore()
+  })
+
+  it('F6 驻留超时：持续抑制超 30 s 打一次 warn 并继续拉取', async () => {
+    const context = makeContext()
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // 以 Date.now 快进模拟 30 s 驻留（每次读取 +16 s），避免真实等待
+    let now = 1_000_000
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => {
+      now += 16_000
+      return now
+    })
+    const throttled = () => ({
+      data: [],
+      nextOffset: 0,
+      truncated: false,
+      throttled: true,
+      unacked: 200 * 1024,
+    })
+    context.__setPullResponses([throttled(), throttled(), throttled(), throttled(), throttled()])
+    wrapper = mount(TerminalPreview, {
+      props: { session: makeRunningSession() },
+      global: {
+        provide: {
+          pluginContext: context,
+          [TERMINAL_HOST_CAPABILITIES_KEY]: caps,
+        },
+      },
+      attachTo: document.body,
+    })
+
+    await vi.waitFor(
+      () =>
+        expect(warnSpy.mock.calls.some((a) => String(a[0]).includes('输出背压超时'))).toBe(true),
+      { timeout: 3000 },
+    )
+    // 每次驻留只告警一次（zombieWarned 抑制重复）
+    const zombieWarns = warnSpy.mock.calls.filter((a) => String(a[0]).includes('输出背压超时'))
+    expect(zombieWarns.length).toBe(1)
+    nowSpy.mockRestore()
+    warnSpy.mockRestore()
   })
 })
