@@ -2,7 +2,7 @@
 //!
 //! 基于 wasmtime 组件模型（Component Model）的 WASM 插件加载、实例化、调用：
 //! - 契约单一事实来源：SDK `packages/plugin-sdk-mobile/rust/wit/bedcode.wit`
-//!   （移动端独立 WIT，11 import / 8 export，wasmtime 47 自带 bindgen! 宏）
+//!   （移动端独立 WIT，11 import / 8 export，wasmtime 48 自带 bindgen! 宏）
 //! - 加载/实例化/调用实现在子模块 component（wasm_runtime/component.rs）：
 //!   Host trait 接线（11 组）、LoadedComponentPlugin 业务方法
 //! - 本文件管理 Engine/Linker/Store 生命周期、资源限制与 AOT 缓存
@@ -35,7 +35,7 @@ use wasmtime::{Cache, CacheConfig, Config, Engine, ResourceLimiter};
 // ==================== Component Model 路径 ====================
 //
 // 组件形态加载/校验/调用全部在子模块 component（wasm_runtime/component.rs）：
-// - bindgen! 绑定（wasmtime 47 自带宏）、11 组 Host trait 接线（ticket 02/03）
+// - bindgen! 绑定（wasmtime 48 自带宏）、11 组 Host trait 接线（ticket 02/03）
 // - LoadedComponentPlugin 业务方法（ticket 03）
 // - 自研 ABI core 路径（`__bedcode_*` 导出、(ptr,len) 内存搬运、签名表校验）
 //   已在 ticket 09 删除，本文件为组件单路径
@@ -405,13 +405,10 @@ mod blocking_helper_tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             tokio::spawn(async move {
-                let v = block_on_async(
-                    &tokio::runtime::Handle::current(),
-                    async {
-                        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-                        7u32
-                    },
-                );
+                let v = block_on_async(&tokio::runtime::Handle::current(), async {
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                    7u32
+                });
                 assert_eq!(v, 7);
             })
             .await
@@ -447,13 +444,10 @@ mod blocking_helper_tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let handle = rt.handle().clone();
         let got = std::thread::spawn(move || {
-            block_on_async(
-                &handle,
-                async {
-                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-                    String::from("ok")
-                },
-            )
+            block_on_async(&handle, async {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                String::from("ok")
+            })
         })
         .join()
         .expect("plain thread must not panic");

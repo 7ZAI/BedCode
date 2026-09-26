@@ -2,8 +2,8 @@
 //!
 //! 对应 docs/implementation-plans/mobile-wasmtime-component-migration.md：
 //! - 契约定义在 `packages/plugin-sdk-mobile/rust/wit/bedcode.wit`（单一事实来源），
-//!   本模块用 wasmtime 47 自带的 `bindgen!`（wasmtime-internal-wit-bindgen 47.0.3 /
-//!   wit-parser 0.252，spike 已实证可与 0.60 产物互通）生成绑定：
+//!   本模块用 wasmtime 48 自带的 `bindgen!`（wasmtime-internal-wit-bindgen 48.0.3 /
+//!   wit-parser 0.254，spike 已实证可与 0.60 产物互通）生成绑定：
 //!   - import 接口 → `Host` trait（11 组全量接线，ticket 02/03）
 //!   - export 接口 → `Plugin` world struct，宿主侧调用组件
 //! - 安全机制：燃料看门狗（每次调用重置）、ResourceLimiter（256MB/1M）、

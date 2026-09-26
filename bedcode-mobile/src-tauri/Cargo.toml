@@ -74,8 +74,13 @@ hostname = "0.4"
 futures-util = "0.3"
 
 # WASM runtime for plugin system
-# 47：Android aarch64 平台 JIT/缓存稳定性修复（46 曾现 SIGILL 崩溃）
-wasmtime = "47"
+# 48（LTS，2026-08-24）：47 非 LTS，48 发布后支持期至 ~2026-10；48 为 12 倍数 LTS（支持 24 个月）。
+# 47 的 Android aarch64 JIT/缓存稳定性修复（46 曾现 SIGILL 崩溃）在 48 线上延续。
+# 与桌面端同版本（ADR 0019 两端锁死）：桌面 2026-09-18 先行升 48 并显式偏离分叉，
+# 移动端 2026-09-26 补齐 → 双端重新对齐 48.0.x，分叉关闭。
+# 桌面端升级规格与 48.0.0 变更影响评估：.scratch/2026-09-18-wasmtime-48-upgrade/spec.md
+# （移动端评估：.scratch/2026-09-26-mobile-wasmtime-48-wasip3/spec.md）
+wasmtime = "48"
 
 # HTTP client (WASM plugin HTTP proxy + remote download + 认证端点 .json() 解析)
 reqwest = { version = "0.12", default-features = false, features = ["stream", "rustls-tls", "json"] }
