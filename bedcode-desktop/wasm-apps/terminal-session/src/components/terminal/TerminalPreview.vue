@@ -64,12 +64,18 @@
       </div>
     </header>
 
-    <!-- 终端主体：xterm 挂载点（唯一渲染宿主） + 背景图片层 + 滚动到底指示器 -->
+    <!-- 终端主体：xterm 挂载点（唯一渲染宿主） + 背景图片层 + 滚动到底指示器。
+         --term-bg：把主题底色下发给 scoped CSS 覆盖层（.xterm-viewport 底色），
+         与容器 backgroundColor 同源。xterm 的行网格只铺 rows×行高，容器高不是
+         行高整数倍时底部余量不画任何 cell，露出的是覆盖层底色——覆盖层若沿用
+         xterm.css 硬编码的 #000，非黑主题（solarizedDark 等）下就会在「显示区与
+         窗口底边之间」露出一条黑带（真机 2560×1440 截图实测 ~14 CSS px）。
+         详见 <style> 里 .xterm-viewport 规则处的注释。 -->
     <div
       ref="terminalHostRef"
       class="relative flex-1 min-h-0 overflow-hidden"
       :class="{ 'terminal-transparent': rendererDecision.allowTransparency }"
-      :style="{ backgroundColor: containerBgColor }"
+      :style="{ backgroundColor: containerBgColor, '--term-bg': containerBgColor }"
     >
       <!-- 终端背景图片层：渲染在 xterm 画布下方，不透明度由设置控制；
            铺满容器（cover + center），窗口调整大小时背景自适应缩放 -->
@@ -273,6 +279,13 @@ async function invokeResize(
     cols,
     rows,
     force,
+    // 请求方身份必须如实自报（插件 WASM `ResizeRequest` 强制要求，缺省即报错）：
+    // 本前端是桌面终端窗口本体，恒为 desktop；形状与移动端 HTTP/WS 路径
+    // （sessions_http / ws_control 构造的 `{kind:"desktop"|mobile,...}`）一致。
+    // 2026-09-27 修复：此前缺 requester 导致每次 resize 报
+    // `missing field 'requester'` 并静默回退 applied——PTY 尺寸从不跟随网格
+    // （现象：PTY 115x84 停驻、前端网格 93x51，输出换行错位格式混乱）。
+    requester: { kind: 'desktop' },
   })
   if (result && typeof result === 'object' && 'status' in result) {
     return result as ResizeOutcome
@@ -1040,9 +1053,19 @@ defineExpose({
   z-index: 1;
 }
 
-:deep(.xterm-viewport) {
+/* 选择器带 `.xterm` 前缀：编译后为 [data-v-x] .xterm .xterm-viewport（0,3,0），
+   严格高于 xterm.css 的 `.xterm .xterm-viewport`（0,2,0），底色覆盖不依赖样式表
+   加载顺序（`.xterm-viewport` 单类版本与 xterm.css 同为 (0,2,0)，靠顺序取胜不可靠）。 */
+:deep(.xterm .xterm-viewport) {
   border-radius: 0;
   overflow-x: hidden;
+  /* 底色 = 当前主题 background（--term-bg 由宿主容器下发，与容器 backgroundColor
+     同源；取值来自终端主题表，非设计 token）。为什么必须覆盖：xterm 的行网格只铺
+     rows×行高，容器高不是行高整数倍时底部余量（实测 ~14 CSS px）不画任何 cell，
+     露出的是本覆盖层底色——沿用 xterm.css 的 #000 会在非黑主题下形成一条黑带
+     （default 主题本身就是 #000000，所以该缺陷只在非黑主题暴露）。保持不透明，
+     只换颜色，不引入新的透明洞。 */
+  background-color: var(--term-bg, #000);
 }
 
 /* xterm.css 默认为 .xterm-viewport 设置 background-color:#000（不透明黑）。
@@ -1051,11 +1074,11 @@ defineExpose({
 
    透明仅随 terminal-transparent 类生效（镜像 xterm 6.1 的 allow-transparency
    类机制在 6.0 结构上的实现，spec D-3）：背景图开启（allowTransparency=true，
-   类绑定于模板容器）时置透明让图片透出；非透明时**不覆盖**，继承 xterm.css 的
-   #000——不再像旧版那样把"透明模式才该透明"变成"永远透明"（无条件透明是第二条
-   残影通路的放大器）。选择器带 .xterm 前缀，优先级高于 xterm.css 的
-   `.xterm .xterm-viewport`，不依赖样式表加载顺序。 */
-:deep(.terminal-transparent .xterm-viewport) {
+   类绑定于模板容器）时置透明让图片透出；非透明时**不覆盖为透明**，底色覆盖为
+   主题 background（见上条）——不再像旧版那样把"透明模式才该透明"变成"永远透明"
+   （无条件透明是第二条残影通路的放大器）。选择器带 .xterm 前缀，优先级
+   （0,4,0）高于上面的非透明规则（0,3,0）与 xterm.css，不依赖样式表加载顺序。 */
+:deep(.terminal-transparent .xterm .xterm-viewport) {
   background-color: transparent;
 }
 

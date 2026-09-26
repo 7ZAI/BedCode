@@ -194,6 +194,19 @@ function renderedRowsText(wrapper: VueWrapper): string {
   return wrapper.element.querySelector('.xterm-rows')?.textContent ?? ''
 }
 
+/**
+ * 终端挂载宿主元素（xterm.open() 直接挂载其下）。
+ *
+ * 取 xterm 根元素的父节点而非测试专用选择器/属性：该元素就是 scoped CSS 覆盖层
+ * （`:deep(.xterm .xterm-viewport)`）的祖先，CSS 变量 `--term-bg` 在此下发、
+ * 由 `.xterm-viewport` 继承——变量挂错层或漏挂，断言即红。
+ */
+function terminalHost(wrapper: VueWrapper): HTMLElement {
+  const xtermRoot = wrapper.element.querySelector('.xterm')
+  expect(xtermRoot, 'xterm 根元素未挂载，无法定位终端宿主').toBeTruthy()
+  return xtermRoot!.parentElement as HTMLElement
+}
+
 let wrapper: VueWrapper | null = null
 let caps: TerminalHostCapabilities
 
@@ -384,6 +397,51 @@ describe('TerminalPreview（插件版组装）', () => {
     })
   })
 
+  // ==================== 终端底色同源下发（黑带回归线） ====================
+  // 契约：xterm 行网格只铺 rows×行高，容器高不是行高整数倍时底部余量不画任何
+  // cell，露出的是覆盖层 .xterm-viewport 的底色。覆盖层底色若沿用 xterm.css 硬编码
+  // 的 #000，非黑主题（default 本身即 #000000，故缺陷只在非黑主题暴露）就会在
+  // 「显示区与窗口底边之间」留一条黑带（真机截图实测 ~14 CSS px）。因此主题底色
+  // 必须同时下发到两个消费点：宿主容器 background-color + 覆盖层读取的 --term-bg。
+
+  it('正例：底色同源 —— 容器 background-color 与 --term-bg 同为当前主题底色（非 #000）', async () => {
+    await mountRunning()
+
+    const host = terminalHost(wrapper!)
+    // dracula 主题底色 = #1e1e2e（字面量钉住契约，不从主题表反查）
+    expect(host.style.getPropertyValue('--term-bg').trim()).toBe('#1e1e2e')
+    // 容器自身底色同步（接受 hex / rgb() 两种序列化形式）
+    expect(host.style.backgroundColor).toMatch(/30,\s*30,\s*46|#1e1e2e/i)
+    // 非黑主题下不得落回 xterm.css 的 #000（落回即黑带复现）
+    expect(host.style.getPropertyValue('--term-bg').trim()).not.toBe('#000000')
+    // 不得绑成背景图模式的透明主题底色 rgba(0,0,0,0)（否则覆盖层永远透明 → 残影）
+    expect(host.style.getPropertyValue('--term-bg')).not.toMatch(/rgba|transparent/i)
+  })
+
+  it('正例：切换到 solarizedDark（真机截图所用主题）→ --term-bg 跟随为 #002b36', async () => {
+    await mountRunning()
+    // 前置：dracula 底色
+    expect(terminalHost(wrapper!).style.getPropertyValue('--term-bg').trim()).toBe('#1e1e2e')
+
+    vm(wrapper!).terminalTheme = 'solarizedDark'
+
+    await vi.waitFor(
+      () => expect(terminalHost(wrapper!).style.getPropertyValue('--term-bg').trim()).toBe('#002b36'),
+      { timeout: 1000 },
+    )
+  })
+
+  it('反例：未知主题键 → --term-bg 取 default 回退底色（非空串，否则覆盖层回退到 #000）', async () => {
+    await mountRunning()
+
+    vm(wrapper!).terminalTheme = 'no-such-theme'
+
+    await vi.waitFor(
+      () => expect(terminalHost(wrapper!).style.getPropertyValue('--term-bg').trim()).toBe('#000000'),
+      { timeout: 1000 },
+    )
+  })
+
   it('外部设置变化同步（accessor save 写回 → 外部 watch 捕获）', async () => {
     await mountRunning()
 
@@ -459,6 +517,17 @@ describe('TerminalPreview（插件版组装）', () => {
     )
     // 首次失败后必然有后续成功调用（onResize 也可能追加，故断下界）
     expect(resizeCalls).toBeGreaterThanOrEqual(2)
+    // 契约守卫（2026-09-27）：resize 载荷必须携带请求方身份 `requester`——插件
+    // WASM `ResizeRequest` 强制要求，缺省即报 `missing field 'requester'` 并静默回退
+    // applied（PTY 尺寸从不跟随网格 → 输出换行错位格式混乱，实测日志 3× WARN）。
+    // 真实形状：{ sessionId, cols, rows, force, requester: { kind: 'desktop' } }
+    const resizePayloads = execute.mock.calls
+      .filter(([cmd]) => cmd === 'session.action.resize')
+      .map(([, arg]) => arg)
+    expect(resizePayloads.length).toBeGreaterThan(0)
+    for (const payload of resizePayloads) {
+      expect(payload).toMatchObject({ requester: { kind: 'desktop' } })
+    }
     // 诊断日志带可读原因（非 `{}`）
     expect(
       warnSpy.mock.calls.some((args) => String(args[0]).includes('重试成功')),
