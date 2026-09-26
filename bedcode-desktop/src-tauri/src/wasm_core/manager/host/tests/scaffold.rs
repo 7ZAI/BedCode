@@ -70,6 +70,8 @@ pub(super) async fn setup_host() -> PluginHost {
         rust_terminal_handlers: Arc::new(RwLock::new(Vec::new())),
         wasm_runtime,
         wasm_plugins: Arc::new(RwLock::new(HashMap::new())),
+        owner_sink: HostOwnerFailureSink::new(),
+        owner_cleanup_skipped: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         wasm_host_ctx,
         message_bus,
         plugin_timers: Arc::new(std::sync::Mutex::new(HashMap::new())),
@@ -79,6 +81,14 @@ pub(super) async fn setup_host() -> PluginHost {
         user_plugins_dir: std::env::temp_dir().join("bedcode-test-user-plugins"),
         frontend_channel: Arc::new(crate::wasm_core::security::frontend_channel::FrontendChannelRegistry::new()),
     }
+}
+
+/// 构造无头测试宿主并包装为 `Arc`（生产 `PluginHost::new` 的装配顺序：
+/// 宿主就绪后立即绑定属主失败端口——`event-loop` 实例的 trap 恢复路径依赖它）
+pub(super) async fn setup_host_shared() -> Arc<PluginHost> {
+    let host = Arc::new(setup_host().await);
+    host.owner_sink.bind(&host);
+    host
 }
 
 /// 构造一个最小 LoadedPlugin（manifest 含 storage + terminal:input 权限）

@@ -5,11 +5,13 @@
 //! 支持静态注册（Rust 插件 via inventory）、文件扫描（TS-only 插件）和 WASM 模块（Rust+TS 插件）
 
 use crate::db::Database;
+use crate::wasm_core::config::CallModel;
+use crate::wasm_core::host_api::context::CapabilityTarget;
 use crate::wasm_core::manager::loader::PluginLoader;
 use crate::wasm_core::manager::registry::PluginRegistry;
 use crate::wasm_core::storage::PluginStorage;
 use crate::wasm_core::manager::types::{DesktopPluginInfo, LoadedPlugin, PluginSource};
-use crate::wasm_core::manager::runtime::{LoadedWasmPlugin, WasmHostContext, WasmRuntime};
+use crate::wasm_core::manager::runtime::{InstanceMeta, LoadedWasmPlugin, WasmHostContext, WasmRuntime};
 use crate::wasm_core::permission::PermissionManager;
 use crate::system::constants::{
     LIFECYCLE_SHUTDOWN, LIFECYCLE_STARTUP, PLUGIN_CALLBACK_TIMEOUT_SECS, PLUGIN_MANIFEST_FILE,
@@ -19,9 +21,16 @@ use chrono::Utc;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 use tauri::Emitter;
 use tokio::sync::{Mutex, RwLock};
+
+use self::owner::{
+    dispatch_mutex_op, spawn_owner, GuestCallFailure, GuestOp, GuestReply, OwnerFailureSink, OwnerHandle,
+    OwnerStatsSnapshot, ShutdownReport,
+};
 
 /// WASM 插件 trap 自动重载最小间隔（秒）
 ///
@@ -36,6 +45,241 @@ const PLUGIN_AUTO_RELOAD_MIN_INTERVAL_SECS: u64 = 30;
 /// 统一异常通道（`PLUGIN_RUNTIME_ERROR`）按插件合并提示：重载循环等
 /// 连发异常场景下只弹一次 toast，日志始终记录全量错误。
 const PLUGIN_RUNTIME_ERROR_NOTIFY_INTERVAL_SECS: u64 = 15;
+
+// ==================== 装配条目（票 06 §5.1） ====================
+
+/// 能力转发超时（票 03 §5.4 ③）
+///
+/// 能力转发 / 互调是「guest 栈内嵌套调另一实例」：目标实例若是环依赖的一端，
+/// 嵌套等待**今天就会死锁**（双方各自占住自己的实例）。P1 给转发加超时兜底，
+/// 把「永久死锁」降级为「有界失败」（根治 = 按需 async 化，P4 候选 ⑤）。
+pub(crate) const CAPABILITY_FORWARD_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// 装配条目：宿主侧持有插件实例的**唯一入口**（I1）
+///
+/// - `meta`：实例元数据（宿主侧只读投影；`event-loop` 模型下宿主不允许
+///   「锁实例读元数据」——那就是第二个 Store 入口）
+/// - `slot`：调用模型（`mutex` 现状 / `event-loop` 新）；两模型出口同构
+///   （[`GuestReply`] / [`GuestCallFailure`]），调用方不需要知道模型
+pub(crate) struct WasmInstanceEntry {
+    meta: InstanceMeta,
+    call_model: CallModel,
+    slot: InstanceSlot,
+}
+
+/// 实例调用槽（唯一存放 Store 的地方）
+pub(crate) enum InstanceSlot {
+    /// 现状：每实例一把互斥锁（`Arc` 便于调用方在锁外共享句柄）
+    Mutex(Arc<Mutex<LoadedWasmPlugin>>),
+    /// 新：事件循环属主任务句柄（唯一持 `&mut Store`）
+    Owner(OwnerHandle),
+}
+
+impl WasmInstanceEntry {
+    /// 按调用模型装配（实例化期唯一入口：启动扫描 / zip 安装 / 重建共用）
+    ///
+    /// `event-loop` 分支把整个 `LoadedWasmPlugin`（Store + Instance）移进属主任务：
+    /// 宿主侧此后只剩 [`InstanceMeta`] 副本与属主句柄（I1 by construction）。
+    pub(crate) fn new(plugin: LoadedWasmPlugin, call_model: CallModel, sink: Arc<dyn OwnerFailureSink>) -> Self {
+        let meta = plugin.meta().clone();
+        let slot = match call_model {
+            CallModel::Mutex => InstanceSlot::Mutex(Arc::new(Mutex::new(plugin))),
+            CallModel::EventLoop => InstanceSlot::Owner(spawn_owner(plugin, sink)),
+        };
+        Self {
+            meta,
+            call_model,
+            slot,
+        }
+    }
+
+    /// 实例元数据（宿主侧只读投影，不进实例）
+    pub(crate) fn meta(&self) -> &InstanceMeta {
+        &self.meta
+    }
+
+    /// 调用模型（诊断 / 分派用）
+    pub(crate) fn call_model(&self) -> CallModel {
+        self.call_model
+    }
+
+    /// 属主是否已停（仅 `event-loop` 模型可能为 true；`mutex` 模型恒 false）
+    ///
+    /// 语义 = 「该实例的 Store 已不可用」：停用后重新激活必须先重建实例。
+    pub(crate) fn owner_stopped(&self) -> bool {
+        match &self.slot {
+            InstanceSlot::Mutex(_) => false,
+            InstanceSlot::Owner(owner) => !owner.is_alive(),
+        }
+    }
+
+    /// 调用一次 guest 导出（**不含**宿主级失败恢复——那是 `PluginHost` 门面的职责）
+    pub(crate) async fn call_guest(&self, op: GuestOp) -> std::result::Result<GuestReply, GuestCallFailure> {
+        match &self.slot {
+            InstanceSlot::Mutex(instance) => {
+                call_mutex_blocking(self.meta.plugin_id.clone(), instance.clone(), op).await
+            }
+            // 属主模型：投递 + oneshot；实例级失败（trap/panic）由属主经
+            // `OwnerFailureSink` 收敛，本处只透传单次调用结果
+            InstanceSlot::Owner(owner) => owner.call(op).await.map_err(GuestCallFailure::new),
+        }
+    }
+
+    /// 带超时兜底的 op 调用（能力转发专用；超时 = 有界失败，见
+    /// [`CAPABILITY_FORWARD_TIMEOUT`]）
+    fn call_op_with_timeout(&self, op: GuestOp) -> std::result::Result<GuestReply, String> {
+        let entry = self;
+        crate::wasm_core::runtime_util::block_on_async(async move {
+            match tokio::time::timeout(CAPABILITY_FORWARD_TIMEOUT, entry.call_guest(op)).await {
+                Ok(Ok(reply)) => Ok(reply),
+                Ok(Err(failure)) => Err(failure.error.to_string()),
+                Err(_elapsed) => Err(format!(
+                    "capability forward timed out after {}ms (nested call did not finish; \
+                     check for a circular capability dependency)",
+                    CAPABILITY_FORWARD_TIMEOUT.as_millis()
+                )),
+            }
+        })
+    }
+
+    /// 停止属主（`mutex` 模型 no-op 返回 `None`）：返回即 store 已不可达
+    ///
+    /// I3③/I6：停用、卸载、重建、进程退出前调用；此后做资源回收不会与在飞
+    /// guest task 竞争。
+    pub(crate) async fn shutdown(&self) -> Option<ShutdownReport> {
+        match &self.slot {
+            InstanceSlot::Mutex(_) => None,
+            InstanceSlot::Owner(owner) => Some(owner.stop().await),
+        }
+    }
+
+    /// 属主计数快照（诊断 / 测试；`mutex` 模型返回 `None`）
+    pub(crate) fn owner_stats(&self) -> Option<OwnerStatsSnapshot> {
+        match &self.slot {
+            InstanceSlot::Mutex(_) => None,
+            InstanceSlot::Owner(owner) => Some(owner.stats()),
+        }
+    }
+}
+
+/// 能力转发窄端口实现（host_api 只消费 trait，不接触装配类型）
+///
+/// `mutex` / `event-loop` 两模型同构：转发方不需要知道调用模型——差异全在
+/// [`WasmInstanceEntry::call_guest`] 内部。
+impl CapabilityTarget for WasmInstanceEntry {
+    fn storage_get(&self, key: &str) -> std::result::Result<std::result::Result<Option<String>, String>, String> {
+        match self.call_op_with_timeout(GuestOp::CapStorageGet { key: key.to_string() }) {
+            Ok(GuestReply::GuestOptional(inner)) => Ok(inner),
+            Ok(other) => Err(format!("capability provider returned unexpected reply: {:?}", other)),
+            Err(e) => Err(e),
+        }
+    }
+
+    fn storage_set(&self, key: &str, value: &str) -> std::result::Result<std::result::Result<(), String>, String> {
+        match self.call_op_with_timeout(GuestOp::CapStorageSet {
+            key: key.to_string(),
+            value: value.to_string(),
+        }) {
+            Ok(GuestReply::GuestUnit(inner)) => Ok(inner),
+            Ok(other) => Err(format!("capability provider returned unexpected reply: {:?}", other)),
+            Err(e) => Err(e),
+        }
+    }
+
+    fn storage_delete(&self, key: &str) -> std::result::Result<std::result::Result<(), String>, String> {
+        match self.call_op_with_timeout(GuestOp::CapStorageDelete { key: key.to_string() }) {
+            Ok(GuestReply::GuestUnit(inner)) => Ok(inner),
+            Ok(other) => Err(format!("capability provider returned unexpected reply: {:?}", other)),
+            Err(e) => Err(e),
+        }
+    }
+}
+
+/// `mutex` 模型的一次 guest 调用（原 `PluginHost::run_guest_call` 的搬移，
+/// 语义逐字不变）
+///
+/// WASI 预打开模式下，wasi 同步绑定（`in_tokio`）要求调用线程没有进入任何
+/// tokio runtime——否则其内部 `handle.block_on` 会 panic（"Cannot start a
+/// runtime from within a runtime"）。故 guest 调用统一搬到 `spawn_blocking`
+/// 阻塞线程执行：该线程走 ambient runtime，宿主函数经
+/// [`crate::wasm_core::runtime_util::block_on_async`] 的 ambient 兜底同样可阻塞执行。
+async fn call_mutex_blocking(
+    plugin_id: String,
+    instance: Arc<Mutex<LoadedWasmPlugin>>,
+    op: GuestOp,
+) -> std::result::Result<GuestReply, GuestCallFailure> {
+    let joined = tokio::task::spawn_blocking(move || {
+        // 阻塞线程无 tokio handle：符合 wasi 同步绑定（in_tokio）要求；锁在
+        // catch_unwind 后由 drop 释放（panic 不跨线程传播）
+        let mut guard = crate::wasm_core::runtime_util::block_on_ambient(instance.lock());
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| dispatch_mutex_op(&mut guard, op)))
+    })
+    .await;
+
+    match joined {
+        Ok(Ok(Ok(reply))) => Ok(reply),
+        Ok(Ok(Err(app_error))) => Err(GuestCallFailure::new(app_error)),
+        // dispatch 内 panic（catch_unwind 捕获的载荷）：与改造前同路径
+        Ok(Err(payload)) => Err(GuestCallFailure::panicked(
+            &plugin_id,
+            crate::wasm_core::manager::runtime::panic_payload_to_string(&payload),
+        )),
+        // spawn_blocking 任务自身 panic（catch_unwind 未覆盖的极端路径）：
+        // 与既有 `run_guest_call` 同路径（join 错误文本作为 panic 载荷）
+        Err(join) => {
+            let payload: Box<dyn std::any::Any + Send> = Box::new(join.to_string());
+            Err(GuestCallFailure::panicked(
+                &plugin_id,
+                crate::wasm_core::manager::runtime::panic_payload_to_string(&payload),
+            ))
+        }
+    }
+}
+
+/// 属主实例级失败回报端口（`event-loop` 模型，票 06 §5.5）
+///
+/// 持 `Weak<PluginHost>`（装配完成后经 [`HostOwnerFailureSink::bind`] 注入）：
+/// 避免「PluginHost 持 `Arc<dyn OwnerFailureSink>`」构成自引用强环（宿主永不释放）。
+/// 宿主已析构（进程退出路径）时只记日志——此时没有可通知的前端与可重载的宿主。
+pub(crate) struct HostOwnerFailureSink {
+    host: OnceLock<std::sync::Weak<PluginHost>>,
+}
+
+impl HostOwnerFailureSink {
+    pub(crate) fn new() -> Arc<Self> {
+        Arc::new(Self { host: OnceLock::new() })
+    }
+
+    /// 宿主装配完成后注入弱引用（`PluginHost::new` 中，先于任何实例化）
+    fn bind(&self, host: &Arc<PluginHost>) {
+        if self.host.set(Arc::downgrade(host)).is_err() {
+            tracing::warn!("[PluginHost] owner failure sink bound twice; keeping the first binding");
+        }
+    }
+}
+
+impl OwnerFailureSink for HostOwnerFailureSink {
+    fn on_owner_failed<'a>(
+        &'a self,
+        plugin_id: &'a str,
+        kind: &'static str,
+        detail: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move {
+            let Some(host) = self.host.get().and_then(|weak| weak.upgrade()) else {
+                tracing::warn!(
+                    plugin_id = %plugin_id,
+                    kind = %kind,
+                    "plugin instance owner failed after host teardown; recovery skipped"
+                );
+                return;
+            };
+            // 与 mutex 模型同口径：统一异常通道通知前端（节流合并）+ 限频调度重载
+            host.notify_plugin_runtime_error(plugin_id, kind, detail).await;
+            host.schedule_plugin_reload_after_trap(plugin_id);
+        })
+    }
+}
 
 /// 插件宿主
 pub struct PluginHost {
@@ -53,11 +297,20 @@ pub struct PluginHost {
     rust_terminal_handlers: Arc<RwLock<Vec<Box<dyn bedcode_plugin_api::TerminalHandler>>>>,
     /// WASM 运行时（全局共享）
     wasm_runtime: Arc<WasmRuntime>,
-    /// WASM 插件实例（plugin_id → LoadedWasmPlugin）
-    /// WASM 插件实例表：每插件一把互斥锁（实例的 Store 要求独占访问，
-    /// 见 wasm_runtime 模块说明）。map 锁只保护索引结构本身，
-    /// 取到实例 Arc 后立即释放，插件间互不阻塞
-    wasm_plugins: Arc<RwLock<HashMap<String, Arc<Mutex<LoadedWasmPlugin>>>>>,
+    /// WASM 插件实例装配表（plugin_id → 装配条目）
+    ///
+    /// 条目是宿主侧持有实例的**唯一入口**（I1）：`mutex` 模型条目内是实例锁，
+    /// `event-loop` 模型条目内是属主任务句柄——两种形态都只能经
+    /// [`PluginHost::call_guest`] 门面触达。map 锁只保护索引结构本身，取到
+    /// 条目 Arc 后立即释放，插件间互不阻塞
+    wasm_plugins: Arc<RwLock<HashMap<String, Arc<WasmInstanceEntry>>>>,
+    /// 属主实例级失败回报端口（`event-loop` 模型；见 [`HostOwnerFailureSink`]）
+    owner_sink: Arc<HostOwnerFailureSink>,
+    /// 因属主先停而跳过的 guest 清理（`on_shutdown` / `deactivate`）计数
+    ///
+    /// I3③ 的 fail-visible 观测量：`event-loop` 实例停用即丢 store（不赌挂起
+    /// task 放行），guest 清理无法执行——必须可见，不得静默跳过
+    owner_cleanup_skipped: Arc<AtomicU64>,
     /// 宿主上下文工厂（供 WASM 插件激活时使用）
     wasm_host_ctx: Arc<WasmHostContext>,
     /// 消息总线
@@ -96,6 +349,9 @@ impl PluginHost {
     /// * `session_manager` - 会话管理器
     /// * `config_manager` - 会话配置管理器
     /// * `app_handle` - Tauri AppHandle
+    /// 返回 `Arc<Self>`：宿主需要自身的弱引用注入属主失败回报端口
+    /// （`event-loop` 模型的实例级失败收敛，见 [`HostOwnerFailureSink`]），
+    /// 也便于调用方共享（原先由调用方各自 `Arc::new`）
     pub async fn new(
         db: Arc<Mutex<Database>>,
         plugins_dir: &Path,
@@ -104,7 +360,7 @@ impl PluginHost {
         // Option 化：无头/测试上下文无 AppHandle（与 WasmRuntime/WasmHostContext 同策略），
         // 依赖前端事件的宿主能力在调用处降级
         app_handle: Option<Arc<tauri::AppHandle>>,
-    ) -> Self {
+    ) -> Arc<Self> {
         tracing::info!("[PluginHost] Initializing with plugins_dir: {:?}", plugins_dir);
 
         let permission = Arc::new(PermissionManager::new());
@@ -185,21 +441,14 @@ impl PluginHost {
             all_plugins.insert(plugin_id, loaded);
         }
 
-        // 添加文件扫描的插件（包含 TS-only 和 WASM 来源判定）
-        let mut wasm_plugins_map: HashMap<String, Arc<Mutex<LoadedWasmPlugin>>> = HashMap::new();
-
+        // 添加文件扫描的插件（包含 TS-only 和 WASM 来源判定）：**记录**先入表；
+        // WASM 实例化推迟到 `Arc<Self>` 构造之后——`event-loop` 模型的属主任务
+        // 需要失败回报端口（`Weak<PluginHost>`），宿主必须先存在
         for (id, loaded) in file_plugins.into_iter().chain(user_plugins) {
-            // WASM 实例化收为一条路径（票 11 第 2 项）：声明了 `rust_library` 的插件
-            // 按同一函数实例化，未声明的纯前端插件走它的空分支（无实例、原记录入表）；
-            // 文件缺失 / 加载失败 → Error 态入表（manifest 仍注册，列表可见可诊断）
-            let (entry, wasm_instance) = Self::instantiate_wasm_plugin(&wasm_runtime, &wasm_host_ctx, &loaded);
-            if let Some(instance) = wasm_instance {
-                wasm_plugins_map.insert(id.clone(), instance);
-            }
-            all_plugins.insert(id, entry);
+            all_plugins.insert(id, loaded);
         }
 
-        let host = Self {
+        let host = Arc::new(Self {
             plugins: Arc::new(RwLock::new(all_plugins)),
             registry,
             permission,
@@ -207,7 +456,9 @@ impl PluginHost {
             rust_command_handlers: Arc::new(RwLock::new(HashMap::new())),
             rust_terminal_handlers: Arc::new(RwLock::new(Vec::new())),
             wasm_runtime,
-            wasm_plugins: Arc::new(RwLock::new(wasm_plugins_map)),
+            wasm_plugins: Arc::new(RwLock::new(HashMap::new())),
+            owner_sink: HostOwnerFailureSink::new(),
+            owner_cleanup_skipped: Arc::new(AtomicU64::new(0)),
             wasm_host_ctx,
             message_bus,
             plugin_timers: Arc::new(std::sync::Mutex::new(HashMap::new())),
@@ -216,11 +467,19 @@ impl PluginHost {
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             user_plugins_dir: user_plugins_dir.to_path_buf(),
             frontend_channel: Arc::new(crate::wasm_core::security::frontend_channel::FrontendChannelRegistry::new()),
-        };
+        });
+
+        // 属主失败回报端口绑定：必须早于任何实例化（属主任务在 trap 时回用它）
+        host.owner_sink.bind(&host);
+
+        // WASM 实例化收为一条路径（票 11 第 2 项）：声明了 `rust_library` 的插件
+        // 按同一函数实例化，未声明的纯前端插件走它的空分支（无实例、原记录入表）；
+        // 文件缺失 / 加载失败 → Error 态入表（manifest 仍注册，列表可见可诊断）
+        host.instantiate_scanned_wasm_plugins().await;
 
         // 两阶段初始化：将 PluginHost（作为 PluginServices 实现）注入 WasmHostContext
         // 必须在 auto_activate 之前完成，否则 host_session_lifecycle_register 无法获取宿主服务
-        host.wasm_host_ctx().set_services(Arc::new(host.clone())).await;
+        host.wasm_host_ctx().set_services(host.clone()).await;
 
         // 两阶段注入：host-task 执行引擎（core-task）+ 单元执行器注册表（C3/C4）
         // host_api/task.rs 经 TaskEngine 接口调用 core-task；execute_unit 经 UnitExecutor
@@ -293,44 +552,148 @@ impl PluginHost {
         &self.wasm_host_ctx
     }
 
-    /// 调用指定插件实例的能力导出（票 12 C3：宿主 server 中间件取认证中心策略）
+    // ==================== 统一 guest 调用门面（票 06 §5.4） ====================
+
+    /// 取插件实例装配条目（宿主侧实例的唯一入口）
+    pub(crate) async fn get_instance(&self, plugin_id: &str) -> Option<Arc<WasmInstanceEntry>> {
+        self.wasm_plugins.read().await.get(plugin_id).cloned()
+    }
+
+    /// 统一 guest 调用门面：条目按调用模型分派，两模型出口同构
     ///
-    /// 直接按插件 ID 直查实例并调用（不经能力注册表路由——`auth-policy` 仅探测
-    /// 不路由，消费方是宿主中间件而非插件 import）。前置校验：实例已加载（未
-    /// 加载/未激活 → 无实例）且实例化时探测到该能力导出；任一项缺失 → 外层
-    /// Err（调用方降级）。
+    /// - `mutex`：现状路径（实例锁 + 无 handle 阻塞线程）；失败时按
+    ///   `OpKind::recovers_after_failure` 与改造前的 `with_wasm_plugin_call`
+    ///   一致地通知前端 + 限频调度重载（I5）
+    /// - `event-loop`：投递属主队列 + oneshot 等待；实例级失败（trap / panic）
+    ///   由属主任务经 [`OwnerFailureSink`] 收敛，本处只透传单次调用结果
     ///
-    /// 外层 Err = 实例缺失/能力缺失/传输错误（trap 等）；内层 `Results` 元组
-    /// 含 WIT `result<T, string>` 本体（guest 自报错误），两层语义分离。
-    pub async fn call_plugin_capability_export<Params, Results>(
+    /// 实例缺失 → 立即显性 Err（不静默挂起；与改造前
+    /// `with_wasm_plugin_call` 文案一致）。
+    pub(crate) async fn call_guest(
         &self,
         plugin_id: &str,
-        capability: &str,
-        export_name: &str,
-        params: Params,
-    ) -> crate::Result<Results>
-    where
-        Params: wasmtime::component::ComponentNamedList + wasmtime::component::Lower + Send,
-        Results: wasmtime::component::ComponentNamedList + wasmtime::component::Lift + Send + 'static,
-    {
-        let instance = {
-            let wasm_plugins = self.wasm_plugins.read().await;
-            wasm_plugins.get(plugin_id).cloned()
+        op: GuestOp,
+    ) -> std::result::Result<GuestReply, GuestCallFailure> {
+        let Some(entry) = self.get_instance(plugin_id).await else {
+            return Err(GuestCallFailure::new(crate::AppError::Plugin(format!(
+                "WASM plugin {} not found in loaded instances",
+                plugin_id
+            ))));
         };
-        let Some(instance) = instance else {
+        let kind = op.kind();
+        match entry.call_guest(op).await {
+            Ok(reply) => Ok(reply),
+            Err(failure) => {
+                // `event-loop` 的实例级失败已由属主 sink 通知 + 调度重载，不重复；
+                // `mutex` 模型补齐既有 `with_wasm_plugin_call` 的恢复动作
+                if entry.call_model() == CallModel::Mutex && kind.recovers_after_failure() {
+                    let (kind_str, detail) = match &failure.panic_message {
+                        Some(msg) => ("panic", msg.clone()),
+                        None => ("trap", failure.error.to_string()),
+                    };
+                    self.notify_plugin_runtime_error(plugin_id, kind_str, &detail).await;
+                    self.schedule_plugin_reload_after_trap(plugin_id);
+                }
+                Err(failure)
+            }
+        }
+    }
+
+    /// 同步门面（bus 投递 / process done / task event / 能力转发四处同步调用源）
+    pub(crate) fn call_guest_blocking(
+        &self,
+        plugin_id: &str,
+        op: GuestOp,
+    ) -> std::result::Result<GuestReply, GuestCallFailure> {
+        let host = self.clone();
+        let plugin_id = plugin_id.to_string();
+        crate::wasm_core::runtime_util::block_on_async(async move { host.call_guest(&plugin_id, op).await })
+    }
+
+    /// 停止某插件实例的属主（`event-loop` 模型；`mutex` / 不存在返回 `None`）
+    ///
+    /// 返回即该实例的 Store 已不可达（I3③ 的接线点：停用 / 卸载 / 重建 / 退出）。
+    pub(crate) async fn stop_instance_owner(&self, plugin_id: &str) -> Option<ShutdownReport> {
+        let entry = self.get_instance(plugin_id).await?;
+        // 停机观测面：属主计数快照（启动/结算/放弃/队列满/在飞）落 debug 日志，
+        // 排障时能看到「停用前还有多少在飞」而无需复现
+        if let Some(stats) = entry.owner_stats() {
+            tracing::debug!(
+                plugin_id = %plugin_id,
+                started = stats.started,
+                settled = stats.settled,
+                detached = stats.detached,
+                queue_full = stats.queue_full,
+                in_flight = stats.in_flight,
+                traps = stats.traps,
+                "plugin instance owner stats at stop"
+            );
+        }
+        entry.shutdown().await
+    }
+
+    /// 停机兜底：停止全部残留属主（I6：进程退出前不留孤儿任务 / 持锁线程）
+    pub(crate) async fn shutdown_all_owners(&self) {
+        let entries: Vec<Arc<WasmInstanceEntry>> = self.wasm_plugins.read().await.values().cloned().collect();
+        for entry in entries {
+            if let Some(report) = entry.shutdown().await {
+                if report.forced_abort || report.abandoned_requests > 0 {
+                    tracing::warn!(
+                        plugin_id = %entry.meta().plugin_id,
+                        abandoned_requests = report.abandoned_requests,
+                        forced_abort = report.forced_abort,
+                        "plugin instance owner stopped during shutdown sweep"
+                    );
+                }
+            }
+        }
+    }
+
+    /// 因属主先停而跳过的 guest 清理次数（I3③ 的观测量）
+    ///
+    /// 当前消费者是两模型对照用例（生产侧无读点）。保留访问器而不删：它是
+    /// 「停用即丢 store ⇒ guest 清理被跳过」这条语义差异唯一的可断言面
+    /// （spec §8 A1 的 I3③ 证据）；写入点见 `deactivate_plugin_inner`。
+    #[allow(dead_code)]
+    pub(crate) fn owner_cleanup_skipped(&self) -> u64 {
+        self.owner_cleanup_skipped.load(Ordering::Relaxed)
+    }
+
+    /// 调用认证中心插件的 `auth-policy.verify-device-token`（票 12 C3：宿主
+    /// server 中间件取策略）
+    ///
+    /// 取代改造前的 `call_plugin_capability_export`（泛型直锁实例）：属主化后
+    /// 实例只能经统一门面触达（I1）。前置校验：实例已加载且实例化时探测到该
+    /// 能力导出；任一项缺失 → 外层 Err（调用方降级）。
+    ///
+    /// 外层 Err = 实例缺失 / 能力缺失 / 传输错误（trap 等）；内层 `Result` 含
+    /// WIT `result<string, string>` 本体（guest 自报策略结果），两层语义分离。
+    pub async fn call_auth_policy(
+        &self,
+        plugin_id: &str,
+        token: String,
+    ) -> crate::Result<std::result::Result<String, String>> {
+        let Some(entry) = self.get_instance(plugin_id).await else {
             return Err(crate::AppError::Plugin(format!(
                 "plugin '{}' not loaded (no wasm instance)",
                 plugin_id
             )));
         };
-        let mut guard = instance.lock().await;
-        if !guard.exported_capabilities().iter().any(|c| c == capability) {
+        let capability = crate::wasm_core::manager::capability::CAP_AUTH_POLICY;
+        if !entry.meta().exported_capabilities.iter().any(|c| c == capability) {
             return Err(crate::AppError::Plugin(format!(
                 "plugin '{}' does not export capability '{}'",
                 plugin_id, capability
             )));
         }
-        guard.call_capability_export::<Params, Results>(export_name, params)
+        match self.call_guest(plugin_id, GuestOp::CapAuthVerifyDeviceToken { token }).await {
+            Ok(GuestReply::GuestStr(inner)) => Ok(inner),
+            Ok(other) => Err(crate::AppError::Plugin(format!(
+                "plugin '{}' auth-policy returned unexpected reply: {:?}",
+                plugin_id, other
+            ))),
+            Err(failure) => Err(failure.error),
+        }
     }
 
     /// 扫描导出 `auth-policy` 能力的激活插件（认证中心角色发现，HTTP 路由代码注册
@@ -343,7 +706,7 @@ impl PluginHost {
         let plugins = self.plugins.read().await;
         let wasm_plugins = self.wasm_plugins.read().await;
         let mut out = Vec::new();
-        for (id, instance) in wasm_plugins.iter() {
+        for (id, entry) in wasm_plugins.iter() {
             // 仅运行中的实例可作为认证中心（停用/未激活的实例不参与策略裁决）
             let running = plugins
                 .get(id)
@@ -351,11 +714,13 @@ impl PluginHost {
             if !running {
                 continue;
             }
-            let exported = {
-                let guard = instance.lock().await;
-                guard.exported_capabilities().to_vec()
-            };
-            if exported.iter().any(|c| c == crate::wasm_core::manager::capability::CAP_AUTH_POLICY) {
+            // 元数据外提（I1）：能力探测结果在实例元数据里，不必锁实例
+            if entry
+                .meta()
+                .exported_capabilities
+                .iter()
+                .any(|c| c == crate::wasm_core::manager::capability::CAP_AUTH_POLICY)
+            {
                 out.push(id.clone());
             }
         }
@@ -453,6 +818,10 @@ mod boot;
 mod commands;
 mod errors;
 mod install;
+// 票 06 P1：插件实例属主任务（`event-loop` 调用模型）——装配条目
+// （`WasmInstanceEntry`）在 `event-loop` 分支消费它
+// （`pub(crate)`：属主测试在 `manager::runtime::tests::owner_e2e` 直接驱动句柄）
+pub(crate) mod owner;
 mod preauth;
 mod register;
 mod services;
@@ -492,6 +861,7 @@ mod tests {
     mod commands_test;
     mod contributions_test;
     mod host_api_test;
+    mod instance_call_model_test;
     mod lifecycle_test;
     mod runtime_preauth_test;
     mod scaffold;

@@ -54,6 +54,10 @@ impl PluginHost {
             }
         }
 
+        // 残留属主清扫（I6）：Error 态 / 未走 deactivate 的实例不得留孤儿属主任务
+        // （属主任务持着 Store，进程退出前必须收敛；已在 deactivate 中停过的是幂等 no-op）
+        self.shutdown_all_owners().await;
+
         tracing::info!("PluginHost deactivate_all completed");
         Ok(())
     }
@@ -370,50 +374,54 @@ impl PluginHost {
         // on_startup 的 guest 自报失败记录于此，phase 3 据此写 Degraded 终态
         let mut startup_failure: Option<String> = None;
         if plan.source == PluginSource::Wasm {
-            // WASI 预打开目录漂移检测：声明了预打开目录的插件，激活前先核对当前
-            // 实例是否已覆盖「现在已授权」的目录。首次启用时授权经 activate() 内
-            // fs_request_auth 弹窗才落库（早于实例化），实例预打开为空；重试激活
-            // （停用再启用）时授权已持久化，若实例未覆盖则重建——否则 /data 永远
-            // 挂不上，激活自检必失败（Bug B 死循环）。无声明的插件跳过重建（零开销）。
-            if !plan.declared_preopen_dirs.is_empty() {
-                let resolved = crate::wasm_core::manager::runtime::resolve_preopen_dirs(
-                    &self.wasm_host_ctx,
-                    plugin_id,
-                    &plan.declared_preopen_dirs,
-                );
-                let missing = {
-                    let wasm_plugins = self.wasm_plugins.read().await;
-                    match wasm_plugins.get(plugin_id).cloned() {
-                        Some(inst) => {
-                            // 锁序纪律：先释放 map 读锁再锁实例（与 deactivate 一致），
-                            // 避免「持 map 锁 + 实例锁」的组合与未来热重载写锁交叉
-                            drop(wasm_plugins);
-                            let preopened = inst.lock().await.preopened_dirs().to_vec();
-                            // 只比路径不比挂载档：档位由 manifest 决定，而 manifest 变更
-                            // （重装 / dev-reload）必然走 load_plugin_from_file 重新实例化，
-                            // 不存在「路径相同档位陈旧」的实例存活窗口
-                            !resolved.iter().all(|d| preopened.iter().any(|p| p == d.path()))
-                        }
-                        // 实例缺失：走重建路径补建（与 reload 语义一致）
-                        None => true,
+            // 实例就绪性 + WASI 预打开目录漂移检测（合并为一次判定，避免连续重建）：
+            // ① `event-loop` 实例在上次停用后属主已停（store 已丢）⇒ 必须重建才能
+            //    再入（停用即丢 store 是 I3③ 的语义）；
+            // ② 声明了预打开目录且当前实例未覆盖「现在已授权」的目录 ⇒ 重建。
+            //    首次启用时授权经 activate() 内 fs_request_auth 弹窗才落库（早于
+            //    实例化），实例预打开为空；重试激活（停用再启用）时授权已持久化，
+            //    若实例未覆盖则重建——否则 /data 永远挂不上，激活自检必失败
+            //    （Bug B 死循环）。未声明目录的 `mutex` 实例跳过（零开销）。
+            let rebuild_reason: Option<String> = {
+                let entry = self.get_instance(plugin_id).await;
+                match &entry {
+                    Some(entry) if entry.owner_stopped() => {
+                        Some("instance owner stopped (previous deactivation dropped the store)".to_string())
                     }
-                };
-                if missing {
-                    tracing::info!(
-                        plugin_id = %plugin_id,
-                        declared = ?plan.declared_preopen_dirs,
-                        resolved = ?resolved,
-                        "Rebuilding WASM instance before activation: preopen dirs changed after instance creation"
-                    );
-                    self.rebuild_wasm_instance(plugin_id).await?;
+                    Some(entry) if !plan.declared_preopen_dirs.is_empty() => {
+                        let resolved = crate::wasm_core::manager::runtime::resolve_preopen_dirs(
+                            &self.wasm_host_ctx,
+                            plugin_id,
+                            &plan.declared_preopen_dirs,
+                        );
+                        // 只比路径不比挂载档：档位由 manifest 决定，而 manifest 变更
+                        // （重装 / dev-reload）必然走 load_plugin_from_file 重新实例化，
+                        // 不存在「路径相同档位陈旧」的实例存活窗口
+                        let preopened = entry.meta().preopened_dirs.clone();
+                        (!resolved.iter().all(|d| preopened.iter().any(|p| p == d.path()))).then(|| {
+                            format!(
+                                "preopen dirs changed after instance creation (declared {:?}, resolved {:?})",
+                                plan.declared_preopen_dirs, resolved
+                            )
+                        })
+                    }
+                    // 实例缺失：走重建路径补建（与 reload 语义一致）
+                    None if !plan.declared_preopen_dirs.is_empty() => {
+                        Some("no wasm instance".to_string())
+                    }
+                    _ => None,
                 }
+            };
+            if let Some(reason) = rebuild_reason {
+                tracing::info!(
+                    plugin_id = %plugin_id,
+                    reason = %reason,
+                    "Rebuilding WASM instance before activation"
+                );
+                self.rebuild_wasm_instance(plugin_id).await?;
             }
 
-            let wasm_plugin = {
-                let wasm_plugins = self.wasm_plugins.read().await;
-                wasm_plugins.get(plugin_id).cloned()
-            };
-            let Some(wasm_plugin) = wasm_plugin else {
+            if self.get_instance(plugin_id).await.is_none() {
                 tracing::error!(plugin_id = %plugin_id, "WASM plugin not found in wasm_plugins map");
                 // phase 1 已置 Activating 中间态：失败路径必须落终态，不留悬挂
                 self.mark_error(plugin_id, "WASM module not loaded".to_string()).await;
@@ -421,14 +429,13 @@ impl PluginHost {
                     "Plugin {} WASM module not loaded",
                     plugin_id
                 )));
-            };
+            }
 
-            // WASI 需要无 handle 线程执行 guest 导出（见 run_guest_call）
-            match self.run_guest_call(wasm_plugin.clone(), |p| p.activate()).await {
-                Ok(Ok(0)) => {
+            match self.call_guest(plugin_id, GuestOp::Activate).await {
+                Ok(GuestReply::Code(0)) => {
                     tracing::info!(plugin_id = %plugin_id, "[PluginHost] Plugin activated");
                 }
-                Ok(Ok(code)) => {
+                Ok(GuestReply::Code(code)) => {
                     tracing::error!(
                         plugin_id = %plugin_id,
                         code = %code,
@@ -441,34 +448,43 @@ impl PluginHost {
                         plugin_id, code
                     )));
                 }
-                Ok(Err(e)) => {
-                    tracing::error!(plugin_id = %plugin_id, error = %e, "[PluginHost] Plugin activate() failed");
-                    self.mark_error(plugin_id, format!("activate() failed: {}", e)).await;
-                    return Err(crate::AppError::Plugin(format!(
-                        "Plugin {} activate() failed: {}",
-                        plugin_id, e
-                    )));
+                Ok(other) => {
+                    let msg = format!("activate() returned unexpected guest reply: {:?}", other);
+                    tracing::error!(plugin_id = %plugin_id, reply = ?other, "[PluginHost] Plugin activate() reply unexpected");
+                    self.mark_error(plugin_id, msg.clone()).await;
+                    return Err(crate::AppError::Plugin(format!("Plugin {} {}", plugin_id, msg)));
                 }
-                Err(panic) => {
-                    let msg = crate::wasm_core::manager::runtime::panic_payload_to_string(&panic);
-                    self.mark_error(plugin_id, format!("activate() panicked: {}", msg))
-                        .await;
-                    return Err(crate::AppError::Plugin(format!(
-                        "Plugin {} activate() panicked: {}",
-                        plugin_id, msg
-                    )));
-                }
+                Err(failure) => match failure.panic_message {
+                    // panic：与改造前同文案分支（Store 已污染，恢复依赖 trap 自动重载）
+                    Some(msg) => {
+                        self.mark_error(plugin_id, format!("activate() panicked: {}", msg))
+                            .await;
+                        return Err(crate::AppError::Plugin(format!(
+                            "Plugin {} activate() panicked: {}",
+                            plugin_id, msg
+                        )));
+                    }
+                    None => {
+                        tracing::error!(plugin_id = %plugin_id, error = %failure.error, "[PluginHost] Plugin activate() failed");
+                        self.mark_error(plugin_id, format!("activate() failed: {}", failure.error))
+                            .await;
+                        return Err(crate::AppError::Plugin(format!(
+                            "Plugin {} activate() failed: {}",
+                            plugin_id, failure.error
+                        )));
+                    }
+                },
             }
 
             // 激活成功后自动调用 on_startup（启动初始化；结果决定 Activated / Degraded）
             // v8 契约：guest 自报失败不再静默吞掉——Degraded 终态如实反映
             // 「实例可用、扩展点已注册，但启动初始化未完成」
             tracing::info!(plugin_id = %plugin_id, "[PluginHost] Calling on_startup");
-            match self.run_guest_call(wasm_plugin, |p| p.on_startup()).await {
-                Ok(Ok(Ok(()))) => {
+            match self.call_guest(plugin_id, GuestOp::OnStartup).await {
+                Ok(GuestReply::Lifecycle(Ok(()))) => {
                     tracing::info!(plugin_id = %plugin_id, "[PluginHost] Plugin on_startup completed");
                 }
-                Ok(Ok(Err(e))) => {
+                Ok(GuestReply::Lifecycle(Err(e))) => {
                     tracing::error!(
                         plugin_id = %plugin_id,
                         error = %e,
@@ -476,31 +492,37 @@ impl PluginHost {
                     );
                     startup_failure = Some(e);
                 }
-                Ok(Err(e)) => {
-                    // 调用层错误（非 trap）：导出不可达 / 燃料异常等，启动初始化同样未完成
-                    tracing::error!(
-                        plugin_id = %plugin_id,
-                        error = %e,
-                        "[PluginHost] Plugin on_startup call failed"
-                    );
-                    startup_failure = Some(e.to_string());
+                Ok(other) => {
+                    let msg = format!("on_startup returned unexpected guest reply: {:?}", other);
+                    tracing::error!(plugin_id = %plugin_id, reply = ?other, "[PluginHost] Plugin on_startup reply unexpected");
+                    startup_failure = Some(msg);
                 }
-                Err(panic) => {
-                    let msg = crate::wasm_core::manager::runtime::panic_payload_to_string(&panic);
-                    tracing::error!(
-                        plugin_id = %plugin_id,
-                        error = %msg,
-                        "[PluginHost] Plugin on_startup panicked"
-                    );
-                    // panic 已污染 Store，后续调用必然失败：按故障态处理（区别于可用的
-                    // 降级），恢复依赖既有 trap 自动重载机制
-                    self.mark_error(plugin_id, format!("on_startup panicked: {}", msg))
-                        .await;
-                    return Err(crate::AppError::Plugin(format!(
-                        "Plugin {} on_startup panicked: {}",
-                        plugin_id, msg
-                    )));
-                }
+                Err(failure) => match failure.panic_message {
+                    Some(msg) => {
+                        tracing::error!(
+                            plugin_id = %plugin_id,
+                            error = %msg,
+                            "[PluginHost] Plugin on_startup panicked"
+                        );
+                        // panic 已污染 Store，后续调用必然失败：按故障态处理（区别于可用的
+                        // 降级），恢复依赖既有 trap 自动重载机制
+                        self.mark_error(plugin_id, format!("on_startup panicked: {}", msg))
+                            .await;
+                        return Err(crate::AppError::Plugin(format!(
+                            "Plugin {} on_startup panicked: {}",
+                            plugin_id, msg
+                        )));
+                    }
+                    None => {
+                        // 调用层错误（非 trap）：导出不可达 / 燃料异常等，启动初始化同样未完成
+                        tracing::error!(
+                            plugin_id = %plugin_id,
+                            error = %failure.error,
+                            "[PluginHost] Plugin on_startup call failed"
+                        );
+                        startup_failure = Some(failure.error.to_string());
+                    }
+                },
             }
         }
 
@@ -592,29 +614,29 @@ impl PluginHost {
     /// 导出缺失/不可路由的能力跳过并告警（不阻断激活——组件仍可提供
     /// 其余能力，缺失能力由依赖检查在消费方激活时报错）。
     pub(crate) async fn register_system_capabilities(&self, plugin_id: &str) {
-        let instance = {
-            let wasm_plugins = self.wasm_plugins.read().await;
-            wasm_plugins.get(plugin_id).cloned()
-        };
-        let Some(instance) = instance else {
+        let entry = self.get_instance(plugin_id).await;
+        let Some(entry) = entry else {
             tracing::warn!(
                 plugin_id = %plugin_id,
                 "[PluginHost] 系统组件无 WASM 实例，跳过能力注册（非 WASM 来源？）"
             );
             return;
         };
-        let exported = instance.lock().await.exported_capabilities().to_vec();
+        // 元数据外提（I1）：能力探测结果在实例元数据里，不锁实例
+        let exported = entry.meta().exported_capabilities.clone();
         if exported.is_empty() {
             tracing::warn!(
                 plugin_id = %plugin_id,
                 "[PluginHost] 系统组件未导出任何可路由能力接口（manifest type=system 但无能力导出）"
             );
         }
+        // 提供者句柄 = 装配条目（经窄端口 `CapabilityTarget` 转发，两种调用模型同构）
+        let target: Arc<dyn crate::wasm_core::host_api::context::CapabilityTarget> = entry;
         for capability in exported {
-            if let Err(e) =
-                self.wasm_host_ctx
-                    .capabilities()
-                    .register_system_component(&capability, plugin_id, instance.clone())
+            if let Err(e) = self
+                .wasm_host_ctx
+                .capabilities()
+                .register_system_component(&capability, plugin_id, target.clone())
             {
                 tracing::error!(
                     plugin_id = %plugin_id,
@@ -649,6 +671,23 @@ impl PluginHost {
     pub(crate) async fn deactivate_plugin_inner(&self, plugin_id: &str, persist: bool) -> crate::Result<()> {
         tracing::info!(plugin_id = %plugin_id, persist, "[PluginHost] deactivate_plugin");
 
+        // 步骤 ①（票 06 §5.6 / I3③）：先停属主 + 丢 store，再做资源回收。
+        // `event-loop` 实例的属主是先于任何宿主资源回收被停止的唯一在飞 guest
+        // 执行者——不这样做，回收（pty/ws/http/mdns/task）会与挂起的 guest task
+        // 竞争。代价：guest `on_shutdown` / `deactivate` 无法执行（见下方针数），
+        // 这是与改造前**唯一的实质语义差异**（spec I3③ 已定稿：宁可显性跳过，
+        // 也不赌一个挂起 task 永不放行）。`mutex` 实例无属主，此处 no-op。
+        if let Some(report) = self.stop_instance_owner(plugin_id).await {
+            if report.forced_abort || report.abandoned_requests > 0 {
+                tracing::warn!(
+                    plugin_id = %plugin_id,
+                    abandoned_requests = report.abandoned_requests,
+                    forced_abort = report.forced_abort,
+                    "plugin instance owner stopped on deactivate with unresolved requests"
+                );
+            }
+        }
+
         // mDNS 基础能力服务（spec v2 §5.1）：插件停用即回收其全部浏览 + 广播
         // 句柄（host-mdns v2 生命周期随属主；只碰本人，宿主/它插件登记不受影响）
         crate::wasm_core::host_api::mdns::purge_for_plugin(plugin_id);
@@ -672,66 +711,81 @@ impl PluginHost {
         crate::wasm_core::manager::task::purge_for_plugin(plugin_id);
 
         // WASM 插件：调用 on_shutdown + __bedcode_deactivate
-        {
+        //
+        // 步骤 ① 已停属主：`event-loop` 实例的 store 已丢，guest 清理**无法执行**
+        // ——按 spec I3③ 显性告警 + 计数（fail-visible），不静默跳过；`mutex`
+        // 实例仍走原路径（行为与改造前逐字一致）。
+        let wasm_source = {
             let plugins = self.plugins.read().await;
-            if let Some(loaded) = plugins.get(plugin_id) {
-                if loaded.source == PluginSource::Wasm {
-                    let wasm_plugins = self.wasm_plugins.read().await;
-                    if let Some(wasm_plugin) = wasm_plugins.get(plugin_id).cloned() {
-                        drop(wasm_plugins);
-                        // 停用前先调用 on_shutdown（WASI 需无 handle 线程，见 run_guest_call）
-                        tracing::info!(plugin_id = %plugin_id, "[PluginHost] Calling on_shutdown");
-                        // v8 契约：guest 自报的清理失败单独记录，不与调用故障混淆；
-                        // 停用流程继续，不影响状态机
-                        match self.run_guest_call(wasm_plugin.clone(), |p| p.on_shutdown()).await {
-                            Ok(Ok(Ok(()))) => {
-                                tracing::info!(plugin_id = %plugin_id, "[PluginHost] Plugin on_shutdown completed");
-                            }
-                            Ok(Ok(Err(e))) => {
-                                tracing::warn!(
-                                    plugin_id = %plugin_id,
-                                    error = %e,
-                                    "[PluginHost] Plugin on_shutdown reported failure"
-                                );
-                            }
-                            Ok(Err(e)) => {
-                                tracing::warn!(
-                                    plugin_id = %plugin_id,
-                                    error = %e,
-                                    "[PluginHost] Plugin on_shutdown call failed"
-                                );
-                            }
-                            Err(panic) => {
-                                let msg = crate::wasm_core::manager::runtime::panic_payload_to_string(&panic);
-                                tracing::warn!(
-                                    plugin_id = %plugin_id,
-                                    error = %msg,
-                                    "[PluginHost] Plugin on_shutdown panicked"
-                                );
-                            }
+            plugins.get(plugin_id).map(|p| p.source.clone())
+        };
+        if wasm_source == Some(PluginSource::Wasm) {
+            match self.get_instance(plugin_id).await {
+                Some(entry) if entry.call_model() == CallModel::EventLoop => {
+                    let skipped_total = self.owner_cleanup_skipped.fetch_add(1, Ordering::Relaxed) + 1;
+                    tracing::warn!(
+                        plugin_id = %plugin_id,
+                        skipped = "on_shutdown+deactivate",
+                        skipped_total = skipped_total,
+                        "guest cleanup skipped: instance owner already stopped (store dropped per I3③)"
+                    );
+                }
+                Some(_) => {
+                    tracing::info!(plugin_id = %plugin_id, "[PluginHost] Calling on_shutdown");
+                    // v8 契约：guest 自报的清理失败单独记录，不与调用故障混淆；
+                    // 停用流程继续，不影响状态机
+                    match self.call_guest(plugin_id, GuestOp::OnShutdown).await {
+                        Ok(GuestReply::Lifecycle(Ok(()))) => {
+                            tracing::info!(plugin_id = %plugin_id, "[PluginHost] Plugin on_shutdown completed");
                         }
+                        Ok(GuestReply::Lifecycle(Err(e))) => {
+                            tracing::warn!(
+                                plugin_id = %plugin_id,
+                                error = %e,
+                                "[PluginHost] Plugin on_shutdown reported failure"
+                            );
+                        }
+                        Ok(other) => {
+                            tracing::warn!(
+                                plugin_id = %plugin_id,
+                                reply = ?other,
+                                "[PluginHost] Plugin on_shutdown returned unexpected guest reply"
+                            );
+                        }
+                        Err(failure) => {
+                            tracing::warn!(
+                                plugin_id = %plugin_id,
+                                error = %failure.error,
+                                "[PluginHost] Plugin on_shutdown call failed"
+                            );
+                        }
+                    }
 
-                        match self.run_guest_call(wasm_plugin, |p| p.deactivate()).await {
-                            Ok(Ok(0)) => {
-                                tracing::info!(plugin_id = %plugin_id, "[PluginHost] Plugin deactivated");
-                            }
-                            Ok(Ok(code)) => {
-                                tracing::warn!(
-                                    plugin_id = %plugin_id,
-                                    code = %code,
-                                    "[PluginHost] Plugin deactivate() returned error code"
-                                );
-                            }
-                            Ok(Err(e)) => {
-                                tracing::error!(plugin_id = %plugin_id, error = %e, "[PluginHost] Plugin deactivate() failed");
-                            }
-                            Err(panic) => {
-                                let msg = crate::wasm_core::manager::runtime::panic_payload_to_string(&panic);
-                                tracing::error!(plugin_id = %plugin_id, error = %msg, "[PluginHost] Plugin deactivate() panicked");
-                            }
+                    match self.call_guest(plugin_id, GuestOp::Deactivate).await {
+                        Ok(GuestReply::Code(0)) => {
+                            tracing::info!(plugin_id = %plugin_id, "[PluginHost] Plugin deactivated");
+                        }
+                        Ok(GuestReply::Code(code)) => {
+                            tracing::warn!(
+                                plugin_id = %plugin_id,
+                                code = %code,
+                                "[PluginHost] Plugin deactivate() returned error code"
+                            );
+                        }
+                        Ok(other) => {
+                            tracing::warn!(
+                                plugin_id = %plugin_id,
+                                reply = ?other,
+                                "[PluginHost] Plugin deactivate() returned unexpected guest reply"
+                            );
+                        }
+                        Err(failure) => {
+                            tracing::error!(plugin_id = %plugin_id, error = %failure.error, "[PluginHost] Plugin deactivate() failed");
                         }
                     }
                 }
+                // 实例缺失（纯前端插件 / 加载失败）：无可调用，静默跳过（与改造前一致）
+                None => {}
             }
         }
 

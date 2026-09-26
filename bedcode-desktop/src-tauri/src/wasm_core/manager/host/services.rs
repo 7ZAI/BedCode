@@ -8,6 +8,7 @@ use std::pin::Pin;
 
 use tauri::Emitter;
 
+use super::owner::{GuestOp, GuestReply};
 use super::PluginHost;
 use crate::wasm_core::manager::runtime::PluginServices;
 use bedcode_plugin_api::PluginState;
@@ -100,8 +101,8 @@ impl PluginServices for PluginHost {
     }
 
     fn dispatch_process_done(&self, plugin_id: String, event: serde_json::Value) {
-        // 与 dispatch_to_wasm 同模式：block_on_async + with_wasm_plugin_call
-        // （调用失败自动重载恢复；插件未激活/已卸载时仅记日志，尽力而为）
+        // 与 dispatch_to_wasm 同模式：同步门面（两模型同构；调用失败自动重载
+        // 恢复；插件未激活/已卸载时仅记日志，尽力而为）
         let event_str = match serde_json::to_string(&event) {
             Ok(s) => s,
             Err(e) => {
@@ -113,28 +114,21 @@ impl PluginServices for PluginHost {
                 return;
             }
         };
-        let host = self.clone();
-        let pid = plugin_id.clone();
-        crate::wasm_core::runtime_util::block_on_async(async move {
-            match host
-                .with_wasm_plugin_call(&pid, move |plugin| plugin.on_process_done(&event_str))
-                .await
-            {
-                Ok(_) => {}
-                Err(e) => {
-                    tracing::error!(
-                        plugin_id = %pid,
-                        error = %e,
-                        "[PluginHost] dispatch_process_done failed"
-                    );
-                }
+        match self.call_guest_blocking(&plugin_id, GuestOp::OnProcessDone { payload_json: event_str }) {
+            Ok(_) => {}
+            Err(e) => {
+                tracing::error!(
+                    plugin_id = %plugin_id,
+                    error = %e,
+                    "[PluginHost] dispatch_process_done failed"
+                );
             }
-        });
+        }
     }
 
     fn dispatch_task_event(&self, plugin_id: String, event: serde_json::Value) {
-        // 同 dispatch_process_done 模式：block_on_async + with_wasm_plugin_call
-        // （调用失败自动重载恢复；插件未激活/已卸载时仅记日志，尽力而为）。
+        // 同 dispatch_process_done 模式：同步门面（两模型同构；调用失败自动重载
+        // 恢复；插件未激活/已卸载时仅记日志，尽力而为）。
         // 未导出 events-task 的旧产物：on_task_event 返回 Ok(false) → 事件丢弃 +
         // 首次 warn + 计数（宿主不缓存；status/log-jobs 自愈，spec §5.3）
         let event_str = match serde_json::to_string(&event) {
@@ -148,30 +142,30 @@ impl PluginServices for PluginHost {
                 return;
             }
         };
-        let host = self.clone();
-        let pid = plugin_id.clone();
-        crate::wasm_core::runtime_util::block_on_async(async move {
-            match host
-                .with_wasm_plugin_call(&pid, move |plugin| plugin.on_task_event(&event_str))
-                .await
-            {
-                Ok(true) => {}
-                Ok(false) => {
-                    // 旧 SDK 产物（未导出 events-task）：事件丢弃 + 计数
-                    tracing::warn!(
-                        plugin_id = %pid,
-                        "[PluginHost] task event dropped (plugin lacks events-task export)"
-                    );
-                }
-                Err(e) => {
-                    tracing::error!(
-                        plugin_id = %pid,
-                        error = %e,
-                        "[PluginHost] dispatch_task_event failed"
-                    );
-                }
+        match self.call_guest_blocking(&plugin_id, GuestOp::OnTaskEvent { event_json: event_str }) {
+            Ok(GuestReply::Bool(true)) => {}
+            Ok(GuestReply::Bool(false)) => {
+                // 旧 SDK 产物（未导出 events-task）：事件丢弃 + 计数
+                tracing::warn!(
+                    plugin_id = %plugin_id,
+                    "[PluginHost] task event dropped (plugin lacks events-task export)"
+                );
             }
-        });
+            Ok(other) => {
+                tracing::error!(
+                    plugin_id = %plugin_id,
+                    reply = ?other,
+                    "[PluginHost] dispatch_task_event: unexpected guest reply"
+                );
+            }
+            Err(e) => {
+                tracing::error!(
+                    plugin_id = %plugin_id,
+                    error = %e,
+                    "[PluginHost] dispatch_task_event failed"
+                );
+            }
+        }
     }
 
     fn install_cli(
@@ -290,6 +284,8 @@ impl Clone for PluginHost {
             rust_terminal_handlers: self.rust_terminal_handlers.clone(),
             wasm_runtime: self.wasm_runtime.clone(),
             wasm_plugins: self.wasm_plugins.clone(),
+            owner_sink: self.owner_sink.clone(),
+            owner_cleanup_skipped: self.owner_cleanup_skipped.clone(),
             wasm_host_ctx: self.wasm_host_ctx.clone(),
             message_bus: self.message_bus.clone(),
             plugin_timers: self.plugin_timers.clone(),
@@ -306,46 +302,61 @@ impl Clone for PluginHost {
 
 impl crate::wasm_core::bus::MessageDispatcher for PluginHost {
     fn dispatch_to_wasm(&self, plugin_id: &str, msg: &bedcode_plugin_api::BusMessage) -> anyhow::Result<()> {
-        let host = self.clone();
-        let plugin_id = plugin_id.to_string();
-        let msg = msg.clone();
-        crate::wasm_core::runtime_util::block_on_async(async move {
-            // 调用失败（trap/store 中毒）时自动重载恢复，见 with_wasm_plugin_call
-            let msg = msg.clone();
-            host.with_wasm_plugin_call(&plugin_id, move |plugin| {
-                // v11：按载荷格式路由——二进制消息走可选导出 on_message_binary
-                // （总线已按订阅者格式偏好过滤，不会对无导出的旧插件发二进制消息）
-                if let Some(bytes) = &msg.payload_binary {
-                    plugin.on_message_binary(&msg.topic, &msg.sender, bytes)
-                } else {
-                    plugin.on_message(&msg.topic, &msg.sender, &msg.payload)
-                }
-            })
-            .await
-            .map_err(|e| anyhow::Error::from(e))
-        })
+        // v11：按载荷格式路由——二进制消息走可选导出 on_message_binary
+        // （总线已按订阅者格式偏好过滤，不会对无导出的旧插件发二进制消息）
+        let op = if let Some(bytes) = &msg.payload_binary {
+            GuestOp::OnMessageBinary {
+                topic: msg.topic.clone(),
+                sender: msg.sender.clone(),
+                payload: bytes.clone(),
+            }
+        } else {
+            GuestOp::OnMessage {
+                topic: msg.topic.clone(),
+                sender: msg.sender.clone(),
+                // 与改造前一致：JSON 文本由宿主序列化（`Value` 序列化确定性）
+                payload_json: serde_json::to_string(&msg.payload).unwrap_or_default(),
+            }
+        };
+        // 调用失败（trap/store 中毒）时自动重载恢复，见 PluginHost::call_guest
+        self.call_guest_blocking(plugin_id, op)
+            .map(|_reply| ())
+            .map_err(anyhow::Error::from)
     }
 
     /// 投递 WS 帧给插件的 `events-ws` 可选导出（ABI v14）
     ///
-    /// 与 `dispatch_to_wasm` 同桥（block_on_async + with_wasm_plugin_call）：
-    /// trap 走自动重载恢复。返回 `Ok(false)` = 插件未导出该接口（调用方降级）
+    /// 与 `dispatch_to_wasm` 同桥（同步门面 + `call_guest`）：trap 走自动重载恢复。
+    /// 返回 `Ok(false)` = 插件未导出该接口（调用方降级）
     fn dispatch_ws_frame(&self, plugin_id: &str, frame: &crate::wasm_core::bus::WsFrameDispatch) -> anyhow::Result<bool> {
-        let host = self.clone();
-        let plugin_id = plugin_id.to_string();
-        let frame = frame.clone();
-        crate::wasm_core::runtime_util::block_on_async(async move {
-            let delivered = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let flag = delivered.clone();
-            host.with_wasm_plugin_call(&plugin_id, move |plugin| {
-                let ok = plugin.on_ws_frame(&frame)?;
-                flag.store(ok, std::sync::atomic::Ordering::SeqCst);
-                Ok(())
-            })
-            .await
-            .map_err(anyhow::Error::from)?;
-            Ok(delivered.load(std::sync::atomic::Ordering::SeqCst))
-        })
+        use crate::wasm_core::bus::WsFrameDispatch;
+        let op = match frame {
+            WsFrameDispatch::Client { handle, kind, payload } => GuestOp::WsClientMessage {
+                handle: handle.clone(),
+                kind: kind.clone(),
+                payload: payload.clone(),
+            },
+            WsFrameDispatch::EndpointClient {
+                endpoint_id,
+                client_id,
+                kind,
+                payload,
+            } => GuestOp::WsEndpointMessage {
+                endpoint_id: endpoint_id.clone(),
+                client_id: client_id.clone(),
+                kind: kind.clone(),
+                payload: payload.clone(),
+            },
+        };
+        match self.call_guest_blocking(plugin_id, op) {
+            Ok(GuestReply::Bool(delivered)) => Ok(delivered),
+            Ok(other) => Err(anyhow::anyhow!(
+                "plugin {} ws frame dispatch returned unexpected guest reply: {:?}",
+                plugin_id,
+                other
+            )),
+            Err(e) => Err(anyhow::anyhow!("{}", e)),
+        }
     }
 
     fn is_activated(&self, plugin_id: &str) -> bool {
@@ -378,7 +389,7 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("temp dir");
         let host = PluginHost::new(db, &dir, &dir, None).await;
         host.init_message_bus().await;
-        Arc::new(host)
+        host
     }
 
     /// 在册插件取自身资源目录：等于其 `extension_path`（剥离 verbatim 前缀的形态）

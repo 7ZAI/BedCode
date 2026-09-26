@@ -410,12 +410,13 @@ pub fn run() {
                 .app_data_dir()
                 .expect("Failed to get app data dir")
                 .join("plugins");
-            let plugin_host = Arc::new(tauri::async_runtime::block_on(wasm_core::PluginHost::new(
+            // PluginHost::new 返回 Arc<Self>（属主失败回报端口需要宿主弱引用）
+            let plugin_host = tauri::async_runtime::block_on(wasm_core::PluginHost::new(
                 db.clone(),
                 &plugins_dir,
                 &user_plugins_dir,
                 Some(app_handle_arc.clone()),
-            )));
+            ));
             // 注入消息总线 dispatcher（两阶段初始化）
             tauri::async_runtime::block_on(plugin_host.init_message_bus());
             let mdns_advertiser = Arc::new(tokio::sync::RwLock::new(mdns::advertiser::MdnsAdvertiser::new()));

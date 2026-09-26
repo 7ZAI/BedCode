@@ -277,7 +277,7 @@ async fn instantiate_wasm_plugin_covers_both_entries() {
 
     // 分支 1：未声明 rust_library（纯前端插件）→ 原记录入表、无实例
     let ts_only = plugin_with_wasm("", "/nonexistent/dir");
-    let (entry, instance) = PluginHost::instantiate_wasm_plugin(&host.wasm_runtime, &host.wasm_host_ctx, &ts_only);
+    let (entry, instance) = host.instantiate_wasm_plugin(&ts_only);
     assert!(instance.is_none(), "未声明 rust_library 不应产生 WASM 实例");
     assert!(
         matches!(entry.state, PluginState::Loaded),
@@ -286,7 +286,7 @@ async fn instantiate_wasm_plugin_covers_both_entries() {
 
     // 分支 2：声明了 rust_library 但 wasm 产物缺失 → Error 态入表（列表可见可诊断）
     let missing = plugin_with_wasm("missing_module", "/nonexistent/plugin-dir");
-    let (entry, instance) = PluginHost::instantiate_wasm_plugin(&host.wasm_runtime, &host.wasm_host_ctx, &missing);
+    let (entry, instance) = host.instantiate_wasm_plugin(&missing);
     assert!(instance.is_none(), "产物缺失时没有可运行的实例");
     assert!(
         matches!(entry.state, PluginState::Error(_)),

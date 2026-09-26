@@ -63,12 +63,21 @@ pub(super) fn build_test_component() -> Vec<u8> {
     std::fs::read(&module_path).expect("Failed to read test component after build")
 }
 
-/// 将组件形态测试插件实例化并注入宿主（plugins + wasm_plugins 双表）
+/// 将组件形态测试插件实例化并注入宿主（plugins + 装配条目双表）
 ///
 /// 返回插件 ID；组件 invoke 内 host_storage 读回的 key 预写入
 /// `component-test-key`。extension_path 指向临时目录（invoke 的
 /// resource_dir 注入断言用）。
 pub(super) async fn setup_wasm_plugin(host: &PluginHost, tmp_dir: &tempfile::TempDir) -> String {
+    setup_wasm_plugin_with_model(host, tmp_dir, CallModel::Mutex).await
+}
+
+/// 同上，但显式指定调用模型（两模型对照用例：不必改全局配置，可并行跑）
+pub(super) async fn setup_wasm_plugin_with_model(
+    host: &PluginHost,
+    tmp_dir: &tempfile::TempDir,
+    call_model: CallModel,
+) -> String {
     let component = host
         .wasm_runtime()
         .compile_component(&build_test_component())
@@ -84,10 +93,7 @@ pub(super) async fn setup_wasm_plugin(host: &PluginHost, tmp_dir: &tempfile::Tem
         .expect("preset storage key");
 
     let extension_path = tmp_dir.path().to_string_lossy().to_string();
-    host.wasm_plugins
-        .write()
-        .await
-        .insert(TEST_WASM_PLUGIN_ID.to_string(), Arc::new(Mutex::new(plugin)));
+    host.install_instance(TEST_WASM_PLUGIN_ID, plugin, call_model).await;
 
     let mut loaded = make_plugin(TEST_WASM_PLUGIN_ID, PluginSource::Wasm, PluginState::Loaded);
     loaded.manifest.rust_library = "bedcode_plugin_component_test".to_string();

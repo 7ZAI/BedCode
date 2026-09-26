@@ -1026,28 +1026,56 @@ pub(crate) fn add_to_linker(linker: &mut Linker<WasmPluginState>) -> crate::Resu
 
 // ==================== 组件插件实例 ====================
 
-/// 已加载的组件形态 WASM 插件（阶段 C 后唯一形态）
+/// 实例元数据：宿主侧只读投影（票 06 §5.1，与 Store/Instance 的所有权分离）
 ///
-/// 持有 component Instance + Store，全部调用走 bindgen 生成的类型化接口
-/// （无 (ptr,len) 内存搬运）。Store 必须与 Instance 一起持有，
-/// 否则导出函数无法调用。
-pub struct LoadedWasmPlugin {
-    plugin_id: String,
-    instance: Instance,
-    store: Store<WasmPluginState>,
+/// 拆分动机（调用模型无关）：`mutex` 与 `event-loop` 两种模型下宿主侧都需要
+/// **不进实例**就能读到这些量——导出能力探测结果、WASI 预打开目录、创建时刻
+/// 都在实例化期一次确定后不再变化。`event-loop` 模型的 Store 归属主任务独占，
+/// 宿主侧若还要「锁实例读元数据」就等于开出第二个 Store 入口（破坏 I1）。
+#[derive(Clone)]
+pub(crate) struct InstanceMeta {
+    /// 插件 ID
+    pub(crate) plugin_id: String,
     /// 实例化时实际预打开成功的主机目录（manifest 声明 ∩ 当时已授权 ∩ 创建成功）
     ///
     /// 激活时宿主据此判断「新授权目录是否已纳入本次实例」：声明了 WASI 预打开
     /// 目录的插件首次启用时授权发生在 activate() 内部（fs_request_auth 弹窗），
     /// 早于实例化；重试激活时若当前实例未覆盖新授权目录则需重建（见 host.rs
     /// `rebuild_wasm_instance`），使 /data 挂载与授权状态一致。
-    preopened_dirs: Vec<String>,
+    pub(crate) preopened_dirs: Vec<String>,
     /// 实例化时探测到的可路由能力接口导出（core-plugin-manager，如
     /// `host-storage`）；空 = 纯应用插件（不提供能力），非空者激活时由
     /// PluginHost 注册进能力注册表（系统组件装配）
-    exported_capabilities: Vec<String>,
+    pub(crate) exported_capabilities: Vec<String>,
     /// 实例创建时刻（Drop 日志计算存活时长）
-    created_at: std::time::Instant,
+    pub(crate) created_at: std::time::Instant,
+}
+
+/// 可选导出句柄快照（实例化期动态探测结果，Copy；属主任务取用）
+///
+/// 与 store 内同一批句柄同源：`mutex` 模型在调用栈内直接读 store 数据，
+/// `event-loop` 模型在进入属主作用域前一次性取出（作用域内只能拿到 `&Accessor`）。
+#[derive(Clone, Copy)]
+pub(crate) struct OptionalExports {
+    pub(crate) on_message_binary: Option<wasmtime::component::TypedFunc<(String, String, Vec<u8>), ()>>,
+    pub(crate) on_ws_message: Option<wasmtime::component::TypedFunc<(String, String, Vec<u8>), ()>>,
+    pub(crate) on_ws_client_message: Option<wasmtime::component::TypedFunc<(String, String, String, Vec<u8>), ()>>,
+    pub(crate) on_task_event: Option<wasmtime::component::TypedFunc<(String,), ()>>,
+}
+
+/// 已加载的组件形态 WASM 插件（阶段 C 后唯一形态）
+///
+/// 持有 component Instance + Store，全部调用走 bindgen 生成的类型化接口
+/// （无 (ptr,len) 内存搬运）。Store 必须与 Instance 一起持有，
+/// 否则导出函数无法调用。
+///
+/// 调用模型（票 06）：本结构是 `mutex` 模型下的实例锁内容物；`event-loop`
+/// 模型下整个结构被移动进属主任务（持有 `&mut Store` 的唯一位置），宿主侧
+/// 只保留 [`InstanceMeta`] 副本。
+pub struct LoadedWasmPlugin {
+    meta: InstanceMeta,
+    instance: Instance,
+    store: Store<WasmPluginState>,
 }
 
 impl Drop for LoadedWasmPlugin {
@@ -1056,8 +1084,8 @@ impl Drop for LoadedWasmPlugin {
     /// Drop 内无锁操作，tracing 安全。
     fn drop(&mut self) {
         tracing::info!(
-            plugin_id = %self.plugin_id,
-            lifetime_ms = self.created_at.elapsed().as_millis() as u64,
+            plugin_id = %self.meta.plugin_id,
+            lifetime_ms = self.meta.created_at.elapsed().as_millis() as u64,
             "WASM plugin instance dropped"
         );
     }
@@ -1129,23 +1157,68 @@ impl LoadedWasmPlugin {
         }
 
         Ok(Self {
-            plugin_id: plugin_id.to_string(),
+            meta: InstanceMeta {
+                plugin_id: plugin_id.to_string(),
+                preopened_dirs,
+                exported_capabilities,
+                created_at: std::time::Instant::now(),
+            },
             instance,
             store,
-            preopened_dirs,
-            exported_capabilities,
-            created_at: std::time::Instant::now(),
         })
+    }
+
+    /// 实例元数据引用（宿主侧只读投影；调用模型两侧共用）
+    pub(crate) fn meta(&self) -> &InstanceMeta {
+        &self.meta
+    }
+
+    // ==================== 属主化访问器（票 06，`event-loop` 模型用） ====================
+    //
+    // 属主任务在 `run_concurrent` 之外需要预先取出这些量（进入作用域后只能经
+    // `&Accessor` 触达 store，无法再 `&mut self`）：Instance 句柄（Copy）、指标句柄、
+    // 燃料规格、可选导出句柄（Copy）。
+
+    /// 组件实例句柄（Copy；`get_typed_func` / `start_call_concurrent` 用）
+    pub(crate) fn instance_handle(&self) -> Instance {
+        self.instance
+    }
+
+    /// Store 可变引用（属主任务以 `&mut store` 调 `run_concurrent`，常驻作用域）
+    pub(crate) fn store_mut(&mut self) -> &mut Store<WasmPluginState> {
+        &mut self.store
+    }
+
+    /// 插件指标句柄（调用计时 / 生命周期记账 / 燃料记账入口）
+    pub(crate) fn metrics(&self) -> Arc<crate::wasm_core::monitor::PluginMetrics> {
+        self.store.data().metrics.clone()
+    }
+
+    /// 燃料规格快照 `(enabled, budget)`（Store 内已固化，实例生命周期内不变）
+    pub(crate) fn fuel_spec(&self) -> (bool, u64) {
+        let state = self.store.data();
+        (state.fuel_enabled, state.limits.fuel_budget())
+    }
+
+    /// 可选导出句柄快照（v11 / v14 / v20 动态探测结果；未导出 → None）
+    pub(crate) fn optional_exports(&self) -> OptionalExports {
+        let state = self.store.data();
+        OptionalExports {
+            on_message_binary: state.on_message_binary,
+            on_ws_message: state.on_ws_message,
+            on_ws_client_message: state.on_ws_client_message,
+            on_task_event: state.on_task_event,
+        }
     }
 
     /// 本次实例实际预打开成功的主机目录（空 = 无声明 / 未授权 / 创建失败）
     ///
-    /// 供宿主激活时判定是否需要重建实例以纳入新授权目录（见 host.rs
-    /// `rebuild_wasm_instance`）：声明了 WASI 预打开目录的插件首次启用时，
-    /// 授权经 activate() 内 fs_request_auth 弹窗才落库，早于实例化；重试激活
-    /// 时若当前实例未覆盖新授权目录则需重建，/data 挂载才能与授权一致。
+    /// 宿主激活时的预打开目录漂移判定自票 06 起直接读装配条目的
+    /// [`InstanceMeta::preopened_dirs`]（属主模型下不允许「锁实例读元数据」——
+    /// 那是第二个 Store 入口）；本访问器保留给直接持有实例的测试。
+    #[allow(dead_code)]
     pub(crate) fn preopened_dirs(&self) -> &[String] {
-        &self.preopened_dirs
+        &self.meta.preopened_dirs
     }
 
     /// 旧 SDK 产物的实例化失败判据 → 重建指引（空串 = 不是这个原因，不加噪音）
@@ -1360,8 +1433,12 @@ impl LoadedWasmPlugin {
 
     /// 实例化时探测到的可路由能力接口导出（core-plugin-manager）；
     /// 空 = 纯应用插件（不提供能力）
+    ///
+    /// 宿主侧（认证中心候选 / 系统组件装配）自票 06 起直接读装配条目的
+    /// [`InstanceMeta::exported_capabilities`]，本访问器保留给测试。
+    #[allow(dead_code)]
     pub(crate) fn exported_capabilities(&self) -> &[String] {
-        &self.exported_capabilities
+        &self.meta.exported_capabilities
     }
 
     /// 导出调用计时起点（core-monitor 埋点）：返回的 RAII 计时器在
@@ -1386,7 +1463,7 @@ impl LoadedWasmPlugin {
     fn log_trap(&self, export: &str, err: &wasmtime::Error) {
         self.store.data().metrics.record_lifecycle(LifecycleEvent::Trap);
         tracing::error!(
-            plugin_id = %self.plugin_id,
+            plugin_id = %self.meta.plugin_id,
             export = export,
             trap = %err,
             trap_detail = ?err,

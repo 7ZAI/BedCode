@@ -82,10 +82,8 @@ async fn setup_system_component(host: &PluginHost, tmp_dir: &tempfile::TempDir) 
         "system component must export host-storage capability"
     );
 
-    host.wasm_plugins
-        .write()
-        .await
-        .insert(TEST_SYSTEM_PLUGIN_ID.to_string(), Arc::new(Mutex::new(plugin)));
+    host.install_instance(TEST_SYSTEM_PLUGIN_ID, plugin, CallModel::Mutex)
+        .await;
 
     let mut loaded = make_plugin(TEST_SYSTEM_PLUGIN_ID, PluginSource::Wasm, PluginState::Loaded);
     loaded.manifest.rust_library = "bedcode_plugin_system_test".to_string();
@@ -136,17 +134,19 @@ async fn test_system_component_capability_routing_end_to_end() {
     // 应用插件后激活：依赖检查命中系统组件提供者
     host.activate_plugin(&app_id, false).await.expect("activate app plugin");
 
-    // 预置系统组件实例的私有 KV（host-side 直接调用其能力导出）
-    let sys_inst = host.get_wasm_plugin(&sys_id).await.unwrap();
-    let set_result = sys_inst
-        .lock()
+    // 预置系统组件实例的私有 KV（经装配条目统一门面直接调用其能力导出）
+    let sys_entry = host.get_instance(&sys_id).await.expect("system component entry");
+    let set_result = sys_entry
+        .call_guest(GuestOp::CapStorageSet {
+            key: "component-test-key".to_string(),
+            value: r#"{"sys":"routed"}"#.to_string(),
+        })
         .await
-        .call_capability_export::<(String, String), (Result<(), String>,)>(
-            "bedcode:plugin/host-storage.set",
-            ("component-test-key".to_string(), r#"{"sys":"routed"}"#.to_string()),
-        )
         .expect("capability set transport");
-    assert!(set_result.0.is_ok(), "capability set guest result: {:?}", set_result);
+    match set_result {
+        GuestReply::GuestUnit(Ok(())) => {}
+        other => panic!("capability set guest result: {:?}", other),
+    }
 
     // 应用插件消费：invoke 内 host_storage::get("component-test-key") 应经
     // Linker 路由转发到系统组件实例（读到系统组件私有值，而非宿主 SQLite）
@@ -210,10 +210,7 @@ async fn test_server_auth_policy_closed_loop() {
         eprintln!("[skip] session artifact lacks auth-policy export (rebuild with current SDK)");
         return;
     }
-    host.wasm_plugins
-        .write()
-        .await
-        .insert(session_id.to_string(), Arc::new(Mutex::new(plugin)));
+    host.install_instance(session_id, plugin, CallModel::Mutex).await;
     let mut loaded = make_plugin(session_id, PluginSource::Wasm, PluginState::Loaded);
     loaded.manifest.rust_library = "bedcode_plugin_terminal_session".to_string();
     // 权限经 manifest 声明在 activate 时授予（生产装配路径；手工 grant 会被

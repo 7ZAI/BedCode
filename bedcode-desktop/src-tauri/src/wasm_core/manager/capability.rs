@@ -23,12 +23,11 @@
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-use tokio::sync::Mutex;
 use wasmtime::component::Instance;
 use wasmtime::Store;
 
-use super::runtime::{LoadedWasmPlugin, WasmPluginState};
-use crate::wasm_core::runtime_util::block_on_async;
+use super::runtime::WasmPluginState;
+use crate::wasm_core::host_api::context::CapabilityTarget;
 
 // ==================== 能力名与导出探测表 ====================
 
@@ -39,15 +38,15 @@ pub(crate) const CAP_HOST_STORAGE: &str = "host-storage";
 /// 认证中心导出 `verify-device-token` 策略，宿主 server 中间件验签后取策略。
 /// 与其他路由能力不同，本能力**不进注册表路由**（消费方是宿主中间件而非
 /// 插件 import）——中间件按插件 ID 直查认证中心实例，见
-/// `PluginHost::call_plugin_capability_export`。
+/// `PluginHost::call_auth_policy`（票 06：并入统一 guest 门面，不再直锁实例）。
 pub(crate) const CAP_AUTH_POLICY: &str = "auth-policy";
 
 /// 能力接口导出函数名（`ItemName` 路径语法 `pkg:ns/iface.func`——组件的接口
 /// 导出是「接口实例」嵌套形态，平名字符串 `iface#func` 无法被
 /// `Instance::get_func` 的 str 查找命中，wasmtime 47 实证）
-const EXPORT_STORAGE_GET: &str = "bedcode:plugin/host-storage.get";
-const EXPORT_STORAGE_SET: &str = "bedcode:plugin/host-storage.set";
-const EXPORT_STORAGE_DELETE: &str = "bedcode:plugin/host-storage.delete";
+pub(crate) const EXPORT_STORAGE_GET: &str = "bedcode:plugin/host-storage.get";
+pub(crate) const EXPORT_STORAGE_SET: &str = "bedcode:plugin/host-storage.set";
+pub(crate) const EXPORT_STORAGE_DELETE: &str = "bedcode:plugin/host-storage.delete";
 
 /// 认证策略导出函数名（`auth-policy` 接口实例形态）
 pub(crate) const EXPORT_AUTH_VERIFY_DEVICE_TOKEN: &str = "bedcode:plugin/auth-policy.verify-device-token";
@@ -103,7 +102,7 @@ const ROUTABLE_CAPABILITIES: &[(&str, &[&str])] = &[(
 ///
 /// `probe_exported_capabilities` 以本表探测实例导出存在性——认证中心实例化时
 /// `exported_capabilities()` 含 `auth-policy`，宿主 server 中间件据此确认策略
-/// 导出就绪（`call_capability_export` 前探测）。仅探测不路由：SDK 默认实现使
+/// 导出就绪（宿主中间件取策略前先探测）。仅探测不路由：SDK 默认实现使
 /// 所有新 SDK 插件都导出该接口（默认拒绝），且消费方是宿主中间件而非插件
 /// import——注册为路由提供者会让任意插件接管认证策略，语义错误。
 const PROBE_CAPABILITIES: &[(&str, &[&str])] = &[
@@ -120,10 +119,10 @@ const PROBE_CAPABILITIES: &[(&str, &[&str])] = &[
 enum CapabilityProvider {
     /// 宿主 Rust 原语（host_impl/* 现状直连实现）
     HostPrimitive,
-    /// WASM 系统组件实例（host-side 转发目标）
+    /// WASM 系统组件实例（host-side 转发目标；窄端口，不知道调用模型）
     SystemComponent {
         plugin_id: String,
-        instance: Arc<Mutex<LoadedWasmPlugin>>,
+        target: Arc<dyn CapabilityTarget>,
     },
 }
 
@@ -171,7 +170,7 @@ impl CapabilityRegistry {
         &self,
         name: &str,
         plugin_id: &str,
-        instance: Arc<Mutex<LoadedWasmPlugin>>,
+        target: Arc<dyn CapabilityTarget>,
     ) -> crate::Result<()> {
         if !is_routable(name) {
             return Err(crate::AppError::Plugin(format!(
@@ -189,7 +188,7 @@ impl CapabilityRegistry {
             name.to_string(),
             CapabilityProvider::SystemComponent {
                 plugin_id: plugin_id.to_string(),
-                instance,
+                target,
             },
         );
         Ok(())
@@ -234,18 +233,18 @@ impl CapabilityRegistry {
     }
 
     /// 查询路由目标：能力当前由系统组件提供且调用方非提供者自身时，
-    /// 返回（提供者插件 ID, 实例句柄）
+    /// 返回（提供者插件 ID, 转发目标）
     ///
-    /// 自调用返回 None（走宿主原语，避免实例互斥锁重入死锁）。
+    /// 自调用返回 None（走宿主原语，避免实例重入自锁）。
     fn system_component_instance(
         &self,
         name: &str,
         caller_plugin_id: &str,
-    ) -> Option<(String, Arc<Mutex<LoadedWasmPlugin>>)> {
+    ) -> Option<(String, Arc<dyn CapabilityTarget>)> {
         let providers = self.providers.read().unwrap_or_else(|e| e.into_inner());
         match providers.get(name) {
-            Some(CapabilityProvider::SystemComponent { plugin_id, instance }) if plugin_id != caller_plugin_id => {
-                Some((plugin_id.clone(), instance.clone()))
+            Some(CapabilityProvider::SystemComponent { plugin_id, target }) if plugin_id != caller_plugin_id => {
+                Some((plugin_id.clone(), target.clone()))
             }
             _ => None,
         }
@@ -285,9 +284,9 @@ impl crate::wasm_core::host_api::context::CapabilityProvider for CapabilityRegis
         &self,
         name: &str,
         plugin_id: &str,
-        instance: Arc<Mutex<LoadedWasmPlugin>>,
+        target: Arc<dyn CapabilityTarget>,
     ) -> crate::Result<()> {
-        CapabilityRegistry::register_system_component(self, name, plugin_id, instance)
+        CapabilityRegistry::register_system_component(self, name, plugin_id, target)
     }
     fn revert_to_host(&self, name: &str, plugin_id: &str) {
         CapabilityRegistry::revert_to_host(self, name, plugin_id)
@@ -299,7 +298,7 @@ impl crate::wasm_core::host_api::context::CapabilityProvider for CapabilityRegis
         &self,
         name: &str,
         caller_plugin_id: &str,
-    ) -> Option<(String, Arc<Mutex<LoadedWasmPlugin>>)> {
+    ) -> Option<(String, Arc<dyn CapabilityTarget>)> {
         CapabilityRegistry::system_component_instance(self, name, caller_plugin_id)
     }
     fn provider_kind(&self, name: &str) -> String {
@@ -341,14 +340,10 @@ pub(crate) fn forward_storage_get(
     caller_plugin_id: &str,
     key: &str,
 ) -> Option<Result<Option<String>, String>> {
-    let (provider_id, instance) = cap
+    let (provider_id, target) = cap
         .capabilities()
         .system_component_instance(CAP_HOST_STORAGE, caller_plugin_id)?;
-    let key = key.to_string();
-    let result = block_on_async(async move {
-        let mut guard = instance.lock().await;
-        guard.call_capability_export::<(String,), (Result<Option<String>, String>,)>(EXPORT_STORAGE_GET, (key,))
-    });
+    let result = target.storage_get(key);
     Some(unwrap_forward_result(CAP_HOST_STORAGE, &provider_id, cap, result))
 }
 
@@ -359,15 +354,10 @@ pub(crate) fn forward_storage_set(
     key: &str,
     value: &str,
 ) -> Option<Result<(), String>> {
-    let (provider_id, instance) = cap
+    let (provider_id, target) = cap
         .capabilities()
         .system_component_instance(CAP_HOST_STORAGE, caller_plugin_id)?;
-    let key = key.to_string();
-    let value = value.to_string();
-    let result = block_on_async(async move {
-        let mut guard = instance.lock().await;
-        guard.call_capability_export::<(String, String), (Result<(), String>,)>(EXPORT_STORAGE_SET, (key, value))
-    });
+    let result = target.storage_set(key, value);
     Some(unwrap_forward_result(CAP_HOST_STORAGE, &provider_id, cap, result))
 }
 
@@ -377,34 +367,30 @@ pub(crate) fn forward_storage_delete(
     caller_plugin_id: &str,
     key: &str,
 ) -> Option<Result<(), String>> {
-    let (provider_id, instance) = cap
+    let (provider_id, target) = cap
         .capabilities()
         .system_component_instance(CAP_HOST_STORAGE, caller_plugin_id)?;
-    let key = key.to_string();
-    let result = block_on_async(async move {
-        let mut guard = instance.lock().await;
-        guard.call_capability_export::<(String,), (Result<(), String>,)>(EXPORT_STORAGE_DELETE, (key,))
-    });
+    let result = target.storage_delete(key);
     Some(unwrap_forward_result(CAP_HOST_STORAGE, &provider_id, cap, result))
 }
 
 /// 转发结果解包：guest 返回的 `Err(string)`（WIT result 内层）原样透传；
-/// trap/传输出错（外层 Err）隔离为调用方错误结果 + 能力回落宿主原语
-///（trap 隔离不扩散 + 自愈）
+/// **传输层失败**（trap / 超时 / 属主已停 / 应答形态不符）隔离为调用方错误结果 +
+/// 能力回落宿主原语（trap 隔离不扩散 + 自愈 + 环依赖有界失败）
 fn unwrap_forward_result<T>(
     capability: &str,
     provider_id: &str,
     cap: &dyn crate::wasm_core::host_api::context::CapabilityScope,
-    result: crate::Result<(Result<T, String>,)>,
+    result: Result<Result<T, String>, String>,
 ) -> Result<T, String> {
     match result {
-        Ok((r,)) => r,
+        Ok(inner) => inner,
         Err(e) => {
             tracing::error!(
                 capability = %capability,
                 plugin_id = %provider_id,
                 error = %e,
-                "[CapabilityRegistry] 系统组件能力调用失败（trap/传输错误已隔离），能力回落宿主原语"
+                "[CapabilityRegistry] 系统组件能力调用失败（传输错误已隔离，含超时兜底），能力回落宿主原语"
             );
             cap.capabilities().revert_to_host(capability, provider_id);
             Err(format!("system component capability call failed: {}", e))

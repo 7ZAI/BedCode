@@ -3,13 +3,10 @@
 //! 从 `host.rs` 拆出的 `impl PluginHost` 块：Rust command 路由（WASM /
 //! 静态注册）、trap 自动重载、TerminalHandler 输入/输出管道。
 
-use std::sync::Arc;
-
-use tokio::sync::Mutex;
-
 use bedcode_plugin_api::PluginCommandEntry;
 
-use super::{LoadedWasmPlugin, PluginHost, PLUGIN_AUTO_RELOAD_MIN_INTERVAL_SECS};
+use super::owner::{GuestOp, GuestReply};
+use super::{PluginHost, PLUGIN_AUTO_RELOAD_MIN_INTERVAL_SECS};
 use crate::wasm_core::manager::types::PluginSource;
 
 impl PluginHost {
@@ -52,13 +49,6 @@ impl PluginHost {
                 plugin_id
             ))),
         }
-    }
-
-    /// 获取 WASM 插件实例句柄（map 读锁仅在取 Arc 期间持有，随即释放，
-    /// 实例串行化由各插件自己的 Mutex 承担，插件间互不阻塞）
-    pub(super) async fn get_wasm_plugin(&self, plugin_id: &str) -> Option<Arc<Mutex<LoadedWasmPlugin>>> {
-        let wasm_plugins = self.wasm_plugins.read().await;
-        wasm_plugins.get(plugin_id).cloned()
     }
 
     /// WASM 插件调用失败（trap / store 中毒）后的自动恢复
@@ -122,94 +112,11 @@ impl PluginHost {
         });
     }
 
-    /// 在无当前 runtime handle 的阻塞线程上执行 guest 导出调用
-    ///
-    /// WASI 预打开模式下，wasi 同步绑定（`in_tokio`）要求调用线程没有进入
-    /// 任何 tokio runtime——否则其内部 `handle.block_on` 会 panic
-    /// （"Cannot start a runtime from within a runtime"）。故所有 guest 调用
-    /// 统一搬到 `spawn_blocking` 阻塞线程执行：该线程无当前 handle，wasi 走
-    /// 其自身 ambient runtime；宿主函数经 [`crate::wasm_core::runtime_util::block_on_async`] 的 ambient 兜底
-    /// 同样可阻塞执行。非 WASI 插件不受影响（未见 wasi 导入就不触发）。
-    ///
-    /// 返回 `Result<crate::Result<T>, panic 载荷>`：guest 的 `crate::Result<T>`
-    /// 保留在内层（`Ok(Ok(v))`=值 / `Ok(Err(e))`=guest 错误），panic 走外层
-    /// `Err(panic)`（不跨 spawn_blocking 传播为 JoinError）。
-    pub(super) async fn run_guest_call<T>(
-        &self,
-        wasm_plugin: Arc<Mutex<LoadedWasmPlugin>>,
-        call: impl FnOnce(&mut LoadedWasmPlugin) -> crate::Result<T> + Send + 'static,
-    ) -> std::result::Result<crate::Result<T>, Box<dyn std::any::Any + Send>>
-    where
-        T: Send + 'static,
-    {
-        tokio::task::spawn_blocking(move || {
-            // 阻塞线程无当前 tokio handle，符合 wasi 同步绑定（in_tokio）要求；
-            // 在 ambient runtime 上驱动 tokio 锁（借用闭包内 Arc，见 block_on_ambient），
-            // guest 调用在无 handle 线程执行，锁在 catch_unwind 后由 drop 释放
-            let mut guard = crate::wasm_core::runtime_util::block_on_ambient(wasm_plugin.lock());
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| call(&mut guard)))
-        })
-        .await
-        // spawn_blocking 任务自身 panic（理论上 guard move 前的一切异常）→
-        // 视为 panic 载荷，与 catch_unwind 语义对齐（外层 Result 的 Err 槽位
-        // = panic 载荷），调用方统一走重载恢复
-        .unwrap_or_else(|join| Err(Box::new(join.to_string()) as Box<dyn std::any::Any + Send>))
-    }
-
-    /// 持锁调用 WASM 插件导出并统一处理失败恢复
-    ///
-    /// 调用失败（trap / 导出绑定失败 / store 中毒）或 panic（宿主函数内
-    /// 嵌套 block_in_place 等）时：先释放实例锁（unwind 自动释放 / 显式释放），
-    /// 再调度自动重载（见 [`schedule_plugin_reload_after_trap`]），最后返回 Err 给调用方。
-    /// panic 不捕获会穿透污染 wasmtime Store 且不触发重载——插件永久不可用
-    /// （任务卡 transferring、hook 全部超时），故必须 catch_unwind。
-    pub(super) async fn with_wasm_plugin_call<T>(
-        &self,
-        plugin_id: &str,
-        call: impl FnOnce(&mut LoadedWasmPlugin) -> crate::Result<T> + Send + 'static,
-    ) -> crate::Result<T>
-    where
-        T: Send + 'static,
-    {
-        let Some(wasm_plugin) = self.get_wasm_plugin(plugin_id).await else {
-            return Err(crate::AppError::Plugin(format!(
-                "WASM plugin {} not found in loaded instances",
-                plugin_id
-            )));
-        };
-        // 在无 handle 阻塞线程上执行（WASI 需要），结果 catch_unwind 已在此
-        let result = self.run_guest_call(wasm_plugin, call).await;
-        match result {
-            Ok(Ok(value)) => Ok(value),
-            Ok(Err(e)) => {
-                // 实例已不可用 → 自动重载恢复（锁已释放，无死锁）；
-                // 统一异常通道通知前端（trap 连发由节流合并）
-                self.notify_plugin_runtime_error(plugin_id, "trap", &e.to_string())
-                    .await;
-                self.schedule_plugin_reload_after_trap(plugin_id);
-                Err(e)
-            }
-            Err(panic) => {
-                // panic：unwind 已释放实例锁，但 wasmtime Store 被污染，
-                // 必须重载才能恢复插件
-                let msg = crate::wasm_core::manager::runtime::panic_payload_to_string(&panic);
-                tracing::error!(
-                    plugin_id = %plugin_id,
-                    panic = %msg,
-                    "WASM plugin call panicked, scheduling reload"
-                );
-                // 统一异常通道通知前端：插件发生未知错误（用户可见的业务提示）
-                self.notify_plugin_runtime_error(plugin_id, "panic", &msg).await;
-                self.schedule_plugin_reload_after_trap(plugin_id);
-                Err(crate::AppError::Plugin(format!(
-                    "WASM plugin {} call panicked: {}",
-                    plugin_id, msg
-                )))
-            }
-        }
-    }
-
     /// 调用 WASM 插件的 command
+    ///
+    /// guest 调用经统一门面（[`PluginHost::call_guest`]）：`mutex` 模型逐字保留
+    /// 既有「实例锁 + 无 handle 阻塞线程 + trap/panic 恢复」语义，`event-loop`
+    /// 模型投递属主队列——调用点不需要知道模型。
     pub(super) async fn invoke_wasm_command(
         &self,
         plugin_id: &str,
@@ -236,11 +143,28 @@ impl PluginHost {
         let args_str = serde_json::to_string(&enriched_args)
             .map_err(|e| crate::AppError::Plugin(format!("Failed to serialize command args: {}", e)))?;
 
-        // 调用失败（trap/store 中毒）时自动重载恢复，见 with_wasm_plugin_call
-        let command_name = command_name.to_string();
-        let result_str = self
-            .with_wasm_plugin_call(plugin_id, move |plugin| plugin.invoke_command(&command_name, &args_str))
-            .await?;
+        // 调用失败（trap/store 中毒）时自动重载恢复，见 PluginHost::call_guest
+        let reply = self
+            .call_guest(
+                plugin_id,
+                GuestOp::InvokeCommand {
+                    name: command_name.to_string(),
+                    args_json: args_str,
+                },
+            )
+            .await
+            .map_err(|failure| failure.error)?;
+        let result_str = match reply {
+            GuestReply::Str(value) => value,
+            // 门面出口是与 op 一一对应的闭集：invoke-command 只能回 `Str`，
+            // 其它形态属实现缺陷，显性失败（fail-visible，不静默当成功）
+            other => {
+                return Err(crate::AppError::Plugin(format!(
+                    "WASM plugin {} invoke_command() returned unexpected guest reply: {:?}",
+                    plugin_id, other
+                )))
+            }
+        };
 
         let value: serde_json::Value = serde_json::from_str(&result_str).map_err(|e| {
             crate::AppError::Plugin(format!(
@@ -337,6 +261,8 @@ mod tests {
     use super::*;
     use crate::db::Database;
     use std::path::Path;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
     /// 构造最小 PluginHost（票据 32：路由错误分支测试）
     ///
     /// 空插件目录 + 内存 DB；wasmtime 初始化一次。auth_service 测试同模式。
@@ -347,7 +273,7 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("temp dir");
         let host = PluginHost::new(db, &dir, &dir, None).await;
         host.init_message_bus().await;
-        Arc::new(host)
+        host
     }
 
     /// 未激活插件 → 拒绝（票据 32：路由首道门禁）

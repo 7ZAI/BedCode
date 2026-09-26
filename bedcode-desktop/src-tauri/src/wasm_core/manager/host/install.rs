@@ -40,10 +40,10 @@ impl PluginHost {
 
         // 实例化收为一条路径（票 11 第 2 项）：与 `new()` 扫描路径共用同一函数，
         // 失败态语义也由它裁决（Error 入表、列表可见可诊断）
-        let (entry, wasm_plugin) = Self::instantiate_wasm_plugin(&self.wasm_runtime, &self.wasm_host_ctx, &loaded);
-        self.plugins.write().await.insert(plugin_id.clone(), entry);
-        if let Some(wp) = wasm_plugin {
-            self.wasm_plugins.write().await.insert(plugin_id.clone(), wp);
+        let (record, instance) = self.instantiate_wasm_plugin(&loaded);
+        self.plugins.write().await.insert(plugin_id.clone(), record);
+        if let Some(instance) = instance {
+            self.wasm_plugins.write().await.insert(plugin_id.clone(), instance);
         }
         // 注册 manifest contributes 扩展点（commands/views/fileHandlers 等）
         self.register_plugin_contributions(&plugin_id).await;
@@ -194,8 +194,21 @@ impl PluginHost {
             })?;
         }
 
-        // 移除 WASM 实例与插件记录
-        self.wasm_plugins.write().await.remove(plugin_id);
+        // 移除 WASM 实例与插件记录：**先停属主再动 map**（I3③——条目摘除即
+        // 触发 `OwnerHandle::drop` 兜底，但显式 stop 才能等到 store 真正 drop）
+        let removed_entry = { self.wasm_plugins.write().await.remove(plugin_id) };
+        if let Some(entry) = removed_entry {
+            if let Some(report) = entry.shutdown().await {
+                if report.forced_abort || report.abandoned_requests > 0 {
+                    tracing::warn!(
+                        plugin_id = %plugin_id,
+                        abandoned_requests = report.abandoned_requests,
+                        forced_abort = report.forced_abort,
+                        "plugin instance owner stopped on uninstall with unresolved requests"
+                    );
+                }
+            }
+        }
         self.plugins.write().await.remove(plugin_id);
 
         // 顺带清理用户插件目录下同 id 的孤儿残留（无 plugin.json 的数据目录）：

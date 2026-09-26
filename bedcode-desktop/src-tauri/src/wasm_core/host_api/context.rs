@@ -6,12 +6,12 @@
 //! 迁入本模块使 host_api 消费方不再反向 import manager（见
 //! `.scratch/2026-09-24-wasm-core-decouple/spec.md` C1/C5）。
 //!
-//! **capability 端口（票 04）**：宿主上下文对 manager 的唯一剩余类型依赖（能力
-//! 注册表具体类型）经 [`CapabilityProvider`] trait 消除——WasmHostContext 持有
-//! `Arc<dyn CapabilityProvider>`，host_api 只经 trait 消费能力路由；具体实现
-//! （manager::capability 的注册表）在 manager 侧直连（方向合法）。唯一保留的
-//! manager 引用：trait 签名涉 `LoadedWasmPlugin`（wasmtime 装配域类型，按票 04
-//! 规则「方法签名涉 Runtime 类型时保持对该类型的引入」）。
+//! **capability 端口（票 04）**：宿主上下文对 manager 的类型依赖经
+//! [`CapabilityProvider`] + [`CapabilityTarget`] 两个 trait 消除——WasmHostContext
+//! 持有 `Arc<dyn CapabilityProvider>`，host_api 只经 trait 消费能力路由；具体实现
+//! （manager::capability 的注册表 / manager::host 的装配条目）在 manager 侧直连
+//! （方向合法）。票 06 起本模块**不再引用任何 manager 类型**（原先的
+//! `LoadedWasmPlugin` 引用随转发端口窄化消除）。
 //!
 //! `manager/runtime.rs` 保留 `pub use` 再导出（manager→host_api 合法方向），
 //! 历史路径编译绿直至迭代清理。
@@ -24,7 +24,6 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
 
 use crate::db::Database;
-use crate::wasm_core::manager::runtime::LoadedWasmPlugin;
 use crate::wasm_core::permission::PermissionManager;
 use crate::wasm_core::security::fs_auth::FsAuthChecker;
 use crate::wasm_core::storage::PluginStorage;
@@ -112,9 +111,9 @@ pub trait PluginServices: Send + Sync + 'static {
 /// 系统组件装配（register_system_component 等）仍以具体注册表在 manager
 /// 侧直连（方向合法）。
 ///
-/// 签名涉 `LoadedWasmPlugin`（wasmtime 装配域类型）——按票 04 规则「方法签名涉
-/// Runtime 类型时保持对该类型的引入」保留此单一 manager 依赖，后续随装配域下沉
-/// 一并处置。
+/// **转发目标经窄端口 [`CapabilityTarget`]**（票 06）：trait 签名不再引用任何
+/// manager 类型——host_api 对 manager 的类型依赖至此清零（票 04 遗留的
+/// `LoadedWasmPlugin` 引用随装配域下沉一并消除）。
 pub trait CapabilityProvider: Send + Sync {
     /// 能力是否已有提供者（依赖检查用；未知能力名 = 无提供者）
     fn is_available(&self, name: &str) -> bool;
@@ -125,20 +124,39 @@ pub trait CapabilityProvider: Send + Sync {
         &self,
         name: &str,
         plugin_id: &str,
-        instance: Arc<Mutex<LoadedWasmPlugin>>,
+        target: Arc<dyn CapabilityTarget>,
     ) -> crate::Result<()>;
     /// 能力回落宿主原语（仅当前提供者确为该插件时生效）
     fn revert_to_host(&self, name: &str, plugin_id: &str);
     /// 撤销某系统组件的全部能力提供（停用/重建前清理）
     fn revert_all_from(&self, plugin_id: &str);
-    /// 查询路由目标：系统组件提供且调用方非提供者自身时返回（提供者 ID, 实例句柄）
+    /// 查询路由目标：系统组件提供且调用方非提供者自身时返回（提供者 ID, 转发目标）
     fn system_component_instance(
         &self,
         name: &str,
         caller_plugin_id: &str,
-    ) -> Option<(String, Arc<Mutex<LoadedWasmPlugin>>)>;
+    ) -> Option<(String, Arc<dyn CapabilityTarget>)>;
     /// 当前提供者类别（诊断/测试用）
     fn provider_kind(&self, name: &str) -> String;
+}
+
+/// 能力转发目标（系统组件实例句柄的**窄端口**，票 06）
+///
+/// 转发方（manager::capability）只经本 trait 触达提供者实例，**不知道调用模型**
+/// ——`mutex`（实例锁）与 `event-loop`（属主队列）在实现内部分派。
+/// 实现由 `manager::host::WasmInstanceEntry` 提供（超时兜底也在实现内）。
+///
+/// 新增可路由能力时在此加方法（与 `ROUTABLE_CAPABILITIES` 同步），
+/// 保持「一个能力一组函数」的闭表设计。
+pub trait CapabilityTarget: Send + Sync + 'static {
+    /// `host-storage.get`：外层 Err = 传输层失败（trap / 超时 / 属主已停），
+    /// 内层 `Result` = guest 层 WIT `result<option<string>, string>` 本体
+    fn storage_get(&self, key: &str)
+        -> std::result::Result<std::result::Result<Option<String>, String>, String>;
+    /// `host-storage.set`（层次同 [`CapabilityTarget::storage_get`]）
+    fn storage_set(&self, key: &str, value: &str) -> std::result::Result<std::result::Result<(), String>, String>;
+    /// `host-storage.delete`（层次同 [`CapabilityTarget::storage_get`]）
+    fn storage_delete(&self, key: &str) -> std::result::Result<std::result::Result<(), String>, String>;
 }
 
 /// host-task 执行引擎接口（消费方定义，两阶段注入，PluginServices 先例）

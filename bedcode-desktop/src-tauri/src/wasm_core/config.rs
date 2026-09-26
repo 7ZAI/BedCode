@@ -101,6 +101,39 @@ pub struct CoreConfig {
     pub engine: EngineConfig,
     /// Store 资源上限（每次建立 Store 时读取快照，运行时覆盖即时生效）
     pub store: StoreLimits,
+    /// 插件实例调用模型（票 06 P1 灰度开关；实例级快照——实例创建/重建时读一次，
+    /// 已运行实例不随开关热切，见 [`CallModel`]）
+    pub call_model: CallModel,
+}
+
+/// 插件实例调用模型（`.scratch/2026-09-26-plugin-concurrency-model/` 票 06 P1）
+///
+/// - [`CallModel::Mutex`]：现状——每实例一把 `Arc<Mutex<LoadedWasmPlugin>>`，
+///   调用 = 抢锁 + `spawn_blocking` + `block_on_async`（锁持有到 guest 返回）
+/// - [`CallModel::EventLoop`]：新——每实例一个常驻事件循环属主任务（唯一持
+///   `&mut Store`），调用投递队列 + oneshot 结算
+///
+/// 语义：开关是**实例级快照**（建实例时读一次并存入装配条目）——Store 与实例
+/// 绑定，热切会开出第二个 Store 入口（破坏 I1）。切换只影响此后重建 / 新激活的
+/// 实例；`rebuild_wasm_instance` 按当前配置重建，即「reload 即切换」。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CallModel {
+    /// 每实例一把互斥锁（默认：P1 验收前的回退窗口）
+    #[default]
+    Mutex,
+    /// 每实例一个事件循环属主任务
+    EventLoop,
+}
+
+impl CallModel {
+    /// 诊断/日志用的稳定名字（与配置文件取值一致）
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Mutex => "mutex",
+            Self::EventLoop => "event-loop",
+        }
+    }
 }
 
 /// Engine 构建参数
@@ -230,6 +263,9 @@ impl Default for CoreConfig {
         Self {
             engine: EngineConfig::default(),
             store: StoreLimits::default(),
+            // 默认 mutex：P1（票 06）验收通过前保持现状行为（回退窗口），
+            // 见 spec §6 灰度说明
+            call_model: CallModel::default(),
         }
     }
 }
@@ -304,6 +340,30 @@ mod tests {
         assert_eq!(cfg.engine.memory_reservation_bytes, 256 * 1024 * 1024);
         assert!(cfg.engine.compile_cache);
         cfg.validate().expect("默认配置必须合法");
+    }
+
+    /// 票 06 P1：调用模型开关——默认 mutex（回退窗口）；配置文件按 kebab-case
+    /// 取值覆盖；非法取值必须报错（灰度开关写错不得静默回落）
+    #[test]
+    fn call_model_defaults_to_mutex_and_parses_from_config_file() {
+        assert_eq!(CoreConfig::default().call_model, CallModel::Mutex);
+
+        let dir = std::env::temp_dir().join(format!("wasm-core-cfg-model-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("wasm-core.json");
+
+        std::fs::write(&path, r#"{"call_model":"event-loop"}"#).unwrap();
+        let cfg = CoreConfig::load_from(&path).expect("event-loop 取值应可加载");
+        assert_eq!(cfg.call_model, CallModel::EventLoop);
+        assert_eq!(cfg.call_model.as_str(), "event-loop");
+
+        std::fs::write(&path, r#"{"call_model":"nope"}"#).unwrap();
+        let err = CoreConfig::load_from(&path).expect_err("未知取值必须报错");
+        assert!(
+            format!("{err}").contains("wasm-core.json"),
+            "错误须带文件路径: {err}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

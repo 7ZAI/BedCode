@@ -18,6 +18,19 @@
 //!
 //! 工具链：wasmtime 48 + `wasm32-wasip3`（`WASIP3_NIGHTLY`）+ wit-bindgen 0.60，
 //! 详见 `docs/knowledge/wasip3-toolchain.md` 与 issue 01 `## Findings`。
+//!
+//! ## 第二、三用例：实例级门 + 属主停摆（2026-09-27，插件并发模型 spec §12）
+//!
+//! `test_p3_async_import_pending_second_explicit_call_same_instance`（生产属主形态，无人工锁）：
+//! import 挂起期间同实例第二条显式调用**被推迟**——#2 的宿主实现直到 #1 放行那一刻才被进入
+//! （放行 1200 ms，实测 1200 ms）。
+//!
+//! `test_p3_async_import_suspension_stalls_owner_closure`：fiber 挂起期间**属主闭包完全不被调度**
+//! ——闭包内 `sleep(20ms)` 实测到放行时刻（600 ms）才完成。
+//!
+//! ⇒ 「把 host import 改成宿主实现侧 async」既不能解除同实例串行（实例级门），也不给 event-loop
+//! 属主循环留下服务其它请求的机会（属主停摆），据此退役票 08。两条断言即边界锁：转红 = 运行时
+//! 行为已变，需重评 spec §12 与票 08。写法注意：**释放/唤醒驱动必须放在属主闭包之外**，否则自锁。
 
 use super::{wasip3_toolchain_ready, WASIP3_NIGHTLY};
 use std::fs;
@@ -28,7 +41,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot, Mutex as TokioMutex};
-use wasmtime::component::{Component, Linker};
+use wasmtime::component::{Component, Linker, TypedFunc};
 use wasmtime::{Config, Engine, Store, StoreContextMut};
 use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxView, WasiView};
 
@@ -54,6 +67,8 @@ struct ProbeControl {
     started: AtomicUsize,
     active: AtomicUsize,
     max_active: AtomicUsize,
+    /// 探针起点（诊断用：宿主进入时刻的相对时间，判断同实例调用是否交错）
+    t0: std::time::Instant,
 }
 
 impl ProbeControl {
@@ -70,6 +85,7 @@ impl ProbeControl {
             started: AtomicUsize::new(0),
             active: AtomicUsize::new(0),
             max_active: AtomicUsize::new(0),
+            t0: std::time::Instant::now(),
         }
     }
 
@@ -100,6 +116,11 @@ impl WasiView for ProbeState {
 /// - `fail-once`：首次立即返回结构化错误，之后成功（Store 可回收）；
 /// - `normal`：立即成功。
 async fn invoke_mode(control: Arc<ProbeControl>, mode: String) -> Result<String, String> {
+    eprintln!(
+        "[probe] host invoke 进入: mode={mode} at {}ms (active={})",
+        control.t0.elapsed().as_millis(),
+        control.active.load(Ordering::SeqCst)
+    );
     control.mark_started();
 
     match mode.as_str() {
@@ -460,5 +481,231 @@ async fn test_p3_async_host_import_yields_runtime() {
         "P3 async host import probe passed: heartbeat={}, same_instance_max_active={}, different_instance=true, store_recovered=true",
         heartbeat.load(Ordering::SeqCst),
         control_a.max_active.load(Ordering::SeqCst)
+    );
+}
+
+/// 建探针实例：裸 `Instance` + `guest-probe.run` 句柄（实例级门两条用例共用）
+///
+/// 句柄按 `ComponentExportIndex` 取（与属主循环 `start_typed` 同一形态）：
+/// 经世界访问器取到的句柄会带上对访问器结构的借用，而属主形态的闭包对捕获值有
+/// `'static` 要求（编译期实证），按索引取的 `TypedFunc` 才是自持的。
+async fn setup_gate_probe(
+    control: Arc<ProbeControl>,
+) -> (Store<ProbeState>, TypedFunc<(String,), (Result<String, String>,)>) {
+    let component_bytes = build_p3_async_host_import_component();
+    let mut config = Config::new();
+    config.wasm_component_model_async(true);
+    let engine = Engine::new(&config).expect("create P3 async probe engine");
+    let component =
+        Component::from_binary(&engine, &component_bytes).expect("compile P3 async host import component");
+
+    let mut linker = Linker::<ProbeState>::new(&engine);
+    wasmtime_wasi::p3::add_to_linker(&mut linker).expect("register P3 WASI interfaces");
+    register_async_host_probe(&mut linker);
+
+    let mut store = Store::new(
+        &engine,
+        ProbeState {
+            control,
+            wasi_ctx: WasiCtx::default(),
+            table: ResourceTable::default(),
+        },
+    );
+    let instance = linker
+        .instantiate_async(&mut store, &component)
+        .await
+        .expect("P3 probe component must instantiate");
+    let func_index = {
+        let iface = component
+            .get_export_index(None, "bedcode:p3-async-host-probe/guest-probe@0.1.0")
+            .or_else(|| component.get_export_index(None, "bedcode:p3-async-host-probe/guest-probe"))
+            .expect("guest-probe interface export");
+        component
+            .get_export_index(Some(&iface), "run")
+            .expect("guest-probe.run export")
+    };
+    let func = instance
+        .get_typed_func::<(String,), (Result<String, String>,)>(&mut store, func_index)
+        .expect("typed guest-probe.run export");
+    (store, func)
+}
+
+/// 实测：fiber 挂起在宿主 async import 上时，属主闭包是否还会被调度
+///
+/// 用途（插件并发模型 spec §12）：若挂起期间属主闭包停摆，则「把 host import 改成
+/// 宿主实现侧 async」对 event-loop 模型同样**不产生**「属主继续服务其它请求」的机会
+/// ——这是 P3 收益不成立的第二重证据（第一重 = 实例级门推迟同实例调用）。
+///
+/// 形态：闭包内先启动 #1（挂起），随后 `sleep(20ms)`；释放由**闭包外**任务在
+/// 600ms 后执行。若属主闭包在挂起期间仍被调度，该 sleep 会在 ~20ms 内完成
+/// （断言转红）；实测它在放行后才完成（≈ 放行时刻）。
+#[tokio::test(flavor = "multi_thread")]
+async fn test_p3_async_import_suspension_stalls_owner_closure() {
+    /// 外部释放时刻（ms）
+    const RELEASE_AFTER_MS: u64 = 600;
+
+    let _watchdog = HangWatchdog::start("test_p3_async_import_suspension_stalls_owner_closure", 30);
+    let (entered_tx, _entered_rx) = mpsc::unbounded_channel();
+    let (release_tx, release_rx) = oneshot::channel();
+    let control = Arc::new(ProbeControl::new("stall", release_rx, entered_tx));
+    let (mut store, func) = setup_gate_probe(Arc::clone(&control)).await;
+
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(RELEASE_AFTER_MS)).await;
+        let _ = release_tx.send(());
+    });
+
+    let (first_tick_ms, reply) = store
+        .run_concurrent(async move |accessor| -> (u128, Result<String, String>) {
+            let first = accessor
+                .with(|access| func.start_call_concurrent(access, ("wait".to_string(),)))
+                .expect("start first call");
+            // 闭包内的最小计时步：能否在挂起期间完成，就是「属主是否还在被调度」
+            let tick_start = std::time::Instant::now();
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            let first_tick_ms = tick_start.elapsed().as_millis();
+            let reply = func
+                .finish_call_concurrent(accessor, first)
+                .await
+                .map(|reply| reply.0)
+                .unwrap_or_else(|e| Err(format!("finish error: {e}")));
+            (first_tick_ms, reply)
+        })
+        .await
+        .expect("run_concurrent must not fail");
+
+    println!(
+        "P3 owner-stall probe: first_tick_ms={first_tick_ms}（外部释放 {RELEASE_AFTER_MS}ms）, reply={reply:?}"
+    );
+
+    assert!(
+        first_tick_ms >= RELEASE_AFTER_MS as u128 - 100,
+        "属主闭包在 fiber 挂起期间仍被调度（sleep(20ms) 实测 {first_tick_ms}ms 完成）——\
+         「属主停摆」边界已变，需重评 spec §12 与票 08 的收益口径"
+    );
+    assert_eq!(
+        reply,
+        Ok("wait-complete:stall".to_string()),
+        "放行后 #1 必须拿到等待结果"
+    );
+}
+
+/// 实测：import 挂起期间，同实例第二条**显式调用**是否被实例级门推迟
+///
+/// 与 `test_p3_async_host_import_yields_runtime` 的差别：那里用
+/// `Arc<TokioMutex<ProbeInstance>>` **人工串行**（`max_active == 1` 是那把
+/// Tokio 锁的功劳，测不到 wasmtime 自身的实例门）。本用例按生产属主循环形态
+/// （常驻 `run_concurrent` + 显式 `start_call_concurrent`，见
+/// `manager/host/owner.rs`）启动第二条调用，**不设任何人工锁**。
+///
+/// 结论直接决定「把 `host-http.fetch` 改成宿主实现侧 async」（并发模型 spec §4.3
+/// 候选 ① / 票 08）能否解除「慢 HTTP 堵死同插件其它交互」——若第二条调用在 #1
+/// 挂起期间拿不到执行权，则 async 化只让出宿主线程、不改变同实例串行，收益口径
+/// 必须按后者如实记录。
+#[tokio::test(flavor = "multi_thread")]
+async fn test_p3_async_import_pending_second_explicit_call_same_instance() {
+    /// 本用例的观测结果
+    struct Outcome {
+        /// 第二条调用从 start 到结算的耗时（ms）——外部释放发生在 1200ms
+        second_elapsed_ms: u128,
+        /// 第二条调用结算时的结果
+        second_reply: Result<String, String>,
+        /// 第二条结算瞬间，仍在宿主等待点上的调用数（1 = #1 还挂着）
+        active_at_second_done: usize,
+        first_after_release: Result<String, String>,
+        started: usize,
+    }
+
+    let _watchdog = HangWatchdog::start("test_p3_async_import_pending_second_explicit_call_same_instance", 30);
+    let (entered_tx, _entered_rx) = mpsc::unbounded_channel();
+    let (release_tx, release_rx) = oneshot::channel();
+    let control = Arc::new(ProbeControl::new("solo", release_rx, entered_tx));
+    let (mut store, func) = setup_gate_probe(Arc::clone(&control)).await;
+
+    /// 外部释放时刻（ms）：#2 的结算耗时以此为判据（≥ 该值 ⇒ 被实例门推迟）
+    const RELEASE_AFTER_MS: u64 = 1200;
+
+    // 释放驱动必须在**闭包之外**（独立任务）：fiber 挂起期间属主闭包不会被再调度
+    // （见 `test_p3_async_import_suspension_stalls_owner_closure`），把释放写进闭包
+    // 会自锁成「永久停摆」。
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(RELEASE_AFTER_MS)).await;
+        let _ = release_tx.send(());
+    });
+
+    eprintln!("[probe] 实例化完成，进入 run_concurrent");
+    let outcome = store
+        .run_concurrent(async move |accessor| -> Outcome {
+            // ① 慢调用：进入 import（guest 侧同步调用，宿主实现真 await）
+            let first = accessor
+                .with(|access| func.start_call_concurrent(access, ("wait".to_string(),)))
+                .expect("start first call");
+            eprintln!("[probe] A start#1 已启动（active={}）", control.active.load(Ordering::SeqCst));
+
+            // ② 同实例第二条显式调用：不等待 #1、不设人工锁
+            let second = accessor
+                .with(|access| func.start_call_concurrent(access, ("normal".to_string(),)))
+                .expect("start second call");
+            let started_at = std::time::Instant::now();
+            let second_reply = func
+                .finish_call_concurrent(accessor, second)
+                .await
+                .map(|reply| reply.0)
+                .unwrap_or_else(|e| Err(format!("finish error: {e}")));
+            let second_elapsed_ms = started_at.elapsed().as_millis();
+            let active_at_second_done = control.active.load(Ordering::SeqCst);
+            eprintln!(
+                "[probe] B 第二条结算 {second_elapsed_ms}ms（active={active_at_second_done}）：{second_reply:?}"
+            );
+
+            // ③ 收 #1（此时应已由外部驱动释放）
+            let first_after_release = func
+                .finish_call_concurrent(accessor, first)
+                .await
+                .map(|reply| reply.0)
+                .unwrap_or_else(|e| Err(format!("finish error: {e}")));
+
+            Outcome {
+                second_elapsed_ms,
+                second_reply,
+                active_at_second_done,
+                first_after_release,
+                started: control.started.load(Ordering::SeqCst),
+            }
+        })
+        .await
+        .expect("run_concurrent must not fail");
+
+    println!(
+        "P3 instance-gate probe: second_elapsed_ms={}, second_reply={:?}, active_at_second_done={}, first_after_release={:?}, started={}",
+        outcome.second_elapsed_ms,
+        outcome.second_reply,
+        outcome.active_at_second_done,
+        outcome.first_after_release,
+        outcome.started
+    );
+
+    // 稳健不变式：两次调用都进了宿主实现；#1 释放后拿到等待结果
+    assert_eq!(outcome.started, 2, "两次调用都必须进入宿主 import 实现");
+    assert_eq!(
+        outcome.first_after_release,
+        Ok("wait-complete:solo".to_string()),
+        "#1 在释放后必须拿到等待结果"
+    );
+    // 实例级门（实测口径，2026-09-26）：#1 挂起期间 #2 **零进展**——它的宿主 import
+    // 直到 #1 放行那一刻才被进入（释放 1200ms，实测进入时刻 1202ms、结算同刻）。
+    // ⇒ 同实例串行由 wasmtime 实例级门保证，**不因 host import 变成 async 而放开**；
+    // 「慢 HTTP 堵死同插件其它命令」因此**无法**用宿主实现侧 async 化解决（并发模型
+    // spec 票 08 据此退役）。本断言转红 = 运行时行为已变（实例级并发进入可用），
+    // 届时需重评该票。
+    assert!(
+        outcome.second_elapsed_ms >= RELEASE_AFTER_MS as u128 - 200,
+        "同实例第二条调用在 import 挂起期间**推进了**（{}ms）——wasmtime 行为已变，需重评票 08",
+        outcome.second_elapsed_ms
+    );
+    assert_eq!(
+        outcome.second_reply,
+        Ok("normal-complete:solo".to_string()),
+        "放行后第二条调用必须正常完成"
     );
 }

@@ -190,15 +190,13 @@ async fn init_test_app_context() {
             std::env::temp_dir().join(format!("bedcode-bioitest-userplugins-{}", std::process::id()));
         std::fs::create_dir_all(&user_plugins_dir).expect("create temp user plugins dir failed");
 
-        let plugin_host = Arc::new(
-            PluginHost::new(
-                db.clone(),
-                &plugins_dir,
-                &user_plugins_dir, // 用户插件目录：独立空目录（见上方来源标注说明）
-                None,
-            )
-            .await,
-        );
+        let plugin_host = PluginHost::new(
+            db.clone(),
+            &plugins_dir,
+            &user_plugins_dir, // 用户插件目录：独立空目录（见上方来源标注说明）
+            None,
+        )
+        .await;
         plugin_host.init_message_bus().await;
         // v24 认证记录下沉：配对/历史真源 = 认证中心私有库。无头上下文无 AppHandle，
         // 必须在 activation 前注入私有库根（activate 建表走 host-plugin-database）

@@ -19,6 +19,8 @@ pub(crate) use component::expand_preopen_declarations;
 /// WASI 预打开目录解析（激活时重建实例判定用，见 host.rs `rebuild_wasm_instance`）
 pub(crate) use component::resolve_preopen_dirs;
 pub use component::LoadedWasmPlugin;
+// 票 06：实例元数据与可选导出句柄快照（调用模型两侧共用的只读投影）
+pub(crate) use component::{InstanceMeta, OptionalExports};
 
 use crate::wasm_core::storage::PluginStorage;
 // 异步桥（`block_on_async`）已中立化到 core-runtime-util：本模块与它的消费者
@@ -602,6 +604,8 @@ mod tests {
     mod component_e2e;
     mod engine_limits;
     mod http_e2e;
+    // 票 06 P1：属主任务（event-loop 调用模型）直接驱动测试
+    mod owner_e2e;
     mod p3_async_host_import;
     mod pty_e2e;
     mod sdk_e2e;

@@ -40,8 +40,8 @@
 use crate::wasm_core::manager::runtime::WasmHostContext;
 use crate::{AppError, Result};
 
-// 票 12 C3：认证策略取认证中心 capability 导出（验签执行留宿主中间件）
-use crate::wasm_core::manager::capability::{CAP_AUTH_POLICY, EXPORT_AUTH_VERIFY_DEVICE_TOKEN};
+// 票 12 C3：认证策略取认证中心 capability 导出（验签执行留宿主中间件）；
+// 票 06 起具体导出名与调用模型收口在宿主门面 `PluginHost::call_auth_policy` 内
 use crate::wasm_core::manager::host::PluginHost;
 use crate::wasm_core::runtime_util::block_on_async;
 
@@ -158,19 +158,10 @@ pub fn enforce_connection_policy(plugin_host: &PluginHost, token: &str) -> std::
         );
     }
     let token = token.to_string();
-    let result = block_on_async(async move {
-        plugin_host
-            .call_plugin_capability_export::<(String,), (std::result::Result<String, String>,)>(
-                &center_id,
-                CAP_AUTH_POLICY,
-                EXPORT_AUTH_VERIFY_DEVICE_TOKEN,
-                (token,),
-            )
-            .await
-    });
+    let result = block_on_async(async move { plugin_host.call_auth_policy(&center_id, token).await });
     match result {
-        Ok((Ok(_claims_json),)) => Ok(()), // 认证中心策略放行（claims 以宿主验签结果为准）
-        Ok((Err(reason),)) => Err(reason), // 认证中心策略拒绝 → 上抛原因
+        Ok(Ok(_claims_json)) => Ok(()), // 认证中心策略放行（claims 以宿主验签结果为准）
+        Ok(Err(reason)) => Err(reason), // 认证中心策略拒绝 → 上抛原因
         Err(e) => {
             // 能力调用传输失败（实例缺失/trap）：宿主策略回退，防认证中心故障
             // 误杀全部连接（无单点）
