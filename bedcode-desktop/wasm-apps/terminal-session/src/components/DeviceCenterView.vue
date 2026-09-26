@@ -457,7 +457,7 @@
  * - 宿主 `PluginPageToolbar target="devices"` 不再渲染（宿主原页让位后挂载点消失），
  *   与票 13 会话页同一处置。
  */
-import { computed, inject, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, inject, onActivated, onMounted, onUnmounted, ref, watch } from 'vue'
 import { toast } from 'vue-sonner'
 import QRCode from 'qrcode'
 import Select from '@binblink/bedcode-plugin-sdk-desktop/ui'
@@ -515,19 +515,37 @@ const pendingDeviceId = ref<string | null>(null)
 
 const qrCanvasRef = ref<HTMLCanvasElement | null>(null)
 
-watch(
-  () => qrPayload(),
-  async (payload) => {
-    if (payload && qrCanvasRef.value) {
-      await QRCode.toCanvas(qrCanvasRef.value, payload, {
-        width: 192,
-        margin: 2,
-        color: { dark: '#000000', light: '#ffffff' },
-      })
-    }
-  },
-  { flush: 'post' },
-)
+/**
+ * 把当前 QR 载荷绘制到 canvas（幂等；载荷缺失 / canvas 未挂载时跳过）
+ *
+ * 三个触发点缺一不可（2026-09-26 修复「切走再切回来二维码空白」）：
+ * 1. 载荷变化——生成 / 恢复 / 扫码后自动重生成；
+ * 2. canvas 元素重建——切到「设备列表」Tab 再切回时 `v-if` 会重建 canvas，
+ *    此时载荷未变、仅靠 1 不会重画，画布保持空白（2026-09-26 单测复现）；
+ * 3. KeepAlive 重新激活（路由切回）—— 路由页被保活时不重建组件，canvas 与
+ *    载荷都可能未变，但重新进入页面必须保证图案可见，不依赖 WebView 对
+ *    「移出文档再移回」的 canvas 内容保留行为。
+ */
+async function renderQrCanvas() {
+  const payload = qrPayload()
+  const canvas = qrCanvasRef.value
+  if (!payload || !canvas) return
+  try {
+    await QRCode.toCanvas(canvas, payload, {
+      width: 192,
+      margin: 2,
+      color: { dark: '#000000', light: '#ffffff' },
+    })
+  } catch (e) {
+    console.error('[Device Center] render qr canvas failed:', e)
+  }
+}
+
+watch(() => qrPayload(), () => void renderQrCanvas(), { flush: 'post' })
+// canvas 元素重建（Tab 切换 / 分支重渲染）后补画：载荷不变时上面的 watch 不会触发
+watch(qrCanvasRef, () => void renderQrCanvas(), { flush: 'post' })
+// 路由切回（KeepAlive 激活）时确保图案可见
+onActivated(() => void renderQrCanvas())
 
 // ==================== 交互编排 ====================
 

@@ -15,6 +15,9 @@
  * - C3 生成失败（回执无码）：不静默，提示「未收到有效配对码」
  * - C4 取消配对码：`session.pairing.clear` 且码从页面消失
  * - C5 生成 QR：`session.qr.generate` 带当前选中 host，且二维码画到 canvas
+ * - C5b 已有活跃 QR：进入页面恢复展示（不重新生成 token）
+ * - C5c Tab 切走再切回：canvas 元素重建后按现有载荷重绘（不重绘 → 空白，2026-09-26 修复）
+ * - C5d 路由 KeepAlive 切回（重新激活）时重绘二维码
  * - C6 在线判定：`device-connected` 事件把设备移入在线区
  * - C7 离线判定：`device-disconnected` 事件把设备移回离线区
  * - C8 设备接入即清除已使用配对码（后端事件驱动状态流转）
@@ -22,10 +25,12 @@
  * - C10 撤销失败：提示错误且不重复取列表（不留下「已删除」的假象）
  * - C11 查看历史：跳转同插件的历史目录并带 deviceId
  * - C12 移动端请求配对：后端事件 → 展示码 + 提示
+ * - C13 配对码倒计时归零：自动清除后端状态（防过期码复用）
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
+import { defineComponent, h, KeepAlive, ref } from 'vue'
 import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 import DeviceCenterView from '../components/DeviceCenterView.vue'
 import devMock from '../devMock'
@@ -233,6 +238,68 @@ describe('DeviceCenterView（设备与配对页面）', () => {
     expect(commandsTo('session.qr.info')).toHaveLength(1)
     expect(commandsTo('session.qr.generate')).toHaveLength(0)
     expect(wrapper.find('canvas').exists()).toBe(true)
+  })
+
+  it('C5c Tab 切走再切回：canvas 元素重建后按现有载荷重绘（QR 不空白）', async () => {
+    execute.mockImplementation(async (command: string) => {
+      if (command === 'session.qr.info') return seed.qr
+      return defaultExecute(command)
+    })
+    const wrapper = mountView()
+    await flushPromises()
+
+    const QRCode = (await import('qrcode')).default
+    expect(wrapper.find('canvas').exists()).toBe(true)
+
+    await findButton(wrapper, 'pairing.tab.devices')!.trigger('click')
+    await flushPromises()
+    expect(wrapper.find('canvas').exists()).toBe(false)
+
+    const before = (QRCode.toCanvas as any).mock.calls.length
+    await findButton(wrapper, 'pairing.tab.pairing')!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('canvas').exists()).toBe(true)
+    const calls = (QRCode.toCanvas as any).mock.calls
+    // 重绘发生，且绘制目标是重建后的当前 canvas（旧 canvas 已脱离文档）
+    expect(calls.length).toBeGreaterThan(before)
+    expect(calls[calls.length - 1][0]).toBe(wrapper.find('canvas').element)
+  })
+
+  it('C5d 路由 KeepAlive 切回（重新激活）时重绘二维码', async () => {
+    execute.mockImplementation(async (command: string) => {
+      if (command === 'session.qr.info') return seed.qr
+      return defaultExecute(command)
+    })
+    // 复刻宿主路由出口：KeepAlive 按 key 缓存页面，切走 deactivate、切回 activate（不重建）
+    const view = ref<'pairing' | 'other'>('pairing')
+    const Other = defineComponent({ render: () => h('div', 'other') })
+    const Host = defineComponent({
+      render() {
+        return h(KeepAlive, null, [
+          view.value === 'pairing'
+            ? h(DeviceCenterView, { key: 'pairing' })
+            : h(Other, { key: 'other' }),
+        ])
+      },
+    })
+    const wrapper = mount(Host, {
+      global: { provide: { pluginContext: makeContext() }, stubs: { teleport: true } },
+    })
+    await flushPromises()
+
+    const QRCode = (await import('qrcode')).default
+    expect(wrapper.find('canvas').exists()).toBe(true)
+
+    view.value = 'other'
+    await flushPromises()
+    const before = (QRCode.toCanvas as any).mock.calls.length
+
+    view.value = 'pairing'
+    await flushPromises()
+
+    expect(wrapper.find('canvas').exists()).toBe(true)
+    expect((QRCode.toCanvas as any).mock.calls.length).toBeGreaterThan(before)
   })
 
   it('C6/C7 在线与离线判定由后端事件驱动（同一台设备在两个分区之间迁移）', async () => {
