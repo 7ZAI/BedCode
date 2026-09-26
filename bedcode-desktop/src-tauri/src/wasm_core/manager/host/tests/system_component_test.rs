@@ -14,8 +14,11 @@ fn build_system_test_component() -> Vec<u8> {
     let packages_dir = manifest_dir.join("../packages");
     let plugin_dir = packages_dir.join("plugin-system-test");
 
-    let output_dir = plugin_dir.join("target/wasm32-wasip3/release");
-    let module_path = output_dir.join("bedcode_plugin_system_test.wasm");
+    let module_path = crate::wasm_core::manager::runtime::fixture_target::artifact(
+        "wasm32-wasip3",
+        "release",
+        "bedcode_plugin_system_test",
+    );
 
     if module_path.exists() {
         let src_files = [
@@ -38,6 +41,10 @@ fn build_system_test_component() -> Vec<u8> {
 
     let status = std::process::Command::new("cargo")
         .env("RUSTUP_TOOLCHAIN", crate::wasm_core::manager::runtime::WASIP3_NIGHTLY)
+        .env(
+            "CARGO_TARGET_DIR",
+            crate::wasm_core::manager::runtime::fixture_target::dir(),
+        )
         .args([
             "build",
             "--target",

@@ -1865,6 +1865,10 @@ mod tests {
         args.extend(["--manifest-path", manifest_path.to_str().unwrap()]);
         let status = std::process::Command::new("cargo")
             .env("RUSTUP_TOOLCHAIN", crate::wasm_core::manager::runtime::WASIP3_NIGHTLY)
+            .env(
+                "CARGO_TARGET_DIR",
+                crate::wasm_core::manager::runtime::fixture_target::dir(),
+            )
             .args(&args)
             .status()
             .expect("Failed to run cargo build for test component");

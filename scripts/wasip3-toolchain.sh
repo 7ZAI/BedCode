@@ -85,15 +85,19 @@ check_component_magic() {
 cmd_fixture() {
   cmd_verify
   local crate="$ROOT/bedcode-desktop/packages/plugin-wasip3-test"
-  log "构建 fixture（${WASIP3_NIGHTLY} + wasm32-wasip3）"
-  RUSTUP_TOOLCHAIN="${WASIP3_NIGHTLY}" cargo build \
+  # 夹具共享 target 目录（与宿主测试构建器同一落点）：
+  #   路径真源 = bedcode-desktop/src-tauri/src/wasm_core/manager/runtime/fixture_target.rs
+  #   （fixtures 共享目录；9 个夹具 crate 共用一份依赖图，见 .scratch/2026-09-26-cargo-target-space/）
+  local target_dir="$ROOT/bedcode-desktop/target/fixtures"
+  log "构建 fixture（${WASIP3_NIGHTLY} + wasm32-wasip3，target-dir=${target_dir}）"
+  CARGO_TARGET_DIR="$target_dir" RUSTUP_TOOLCHAIN="${WASIP3_NIGHTLY}" cargo build \
     --target wasm32-wasip3 --release --manifest-path "$crate/Cargo.toml"
-  local out="$crate/target/wasm32-wasip3/release/bedcode_plugin_wasip3_test.wasm"
+  local out="$target_dir/wasm32-wasip3/release/bedcode_plugin_wasip3_test.wasm"
   if check_component_magic "$out"; then
     log "fixture 产物为 Component（magic \\0asm + 0d 00 01 00）✅"
     log "  $out（$(du -h "$out" | cut -f1)）"
   else
-    die "fixture 产物不是 Component（magic 校验失败）"
+    die "fixture 产物不是 Component（magic 校验失败）: $out"
   fi
 }
 
@@ -109,15 +113,19 @@ cmd_health() {
     agent-hub
     session
   )
+  # wasm 应用共享 target 目录：与各应用 scripts/build.js 的 --target-dir 同一落点
+  #   路径真源 = scripts/plugin-wasm-config.mjs 的 WASM_TARGET_DIR（两处注释互相指认）
+  local target_dir="$ROOT/bedcode-desktop/target/wasm-apps"
   local pass=0 fail=0
   for p in "${plugins[@]}"; do
     local dir="$ROOT/bedcode-desktop/wasm-apps/$p/rust"
     [ -f "$dir/Cargo.toml" ] || { log "跳过（无 rust/Cargo.toml）: $p"; continue; }
-    log "编译（零代码改动）: ${p} → wasm32-wasip3"
+    log "编译（零代码改动）: ${p} → wasm32-wasip3（target-dir=${target_dir}）"
     if RUSTUP_TOOLCHAIN="${WASIP3_NIGHTLY}" cargo build \
-        --target wasm32-wasip3 --release --no-default-features --features wasm \
+        --target wasm32-wasip3 --release --target-dir "$target_dir" \
+        --no-default-features --features wasm \
         --manifest-path "$dir/Cargo.toml"; then
-      local out="$dir/target/wasm32-wasip3/release/bedcode_plugin_$(echo "$p" | tr '-' '_').wasm"
+      local out="$target_dir/wasm32-wasip3/release/bedcode_plugin_$(echo "$p" | tr '-' '_').wasm"
       if check_component_magic "$out" 2>/dev/null; then
         log "  ✅ ${p}  产物 Component（$(du -h "$out" | cut -f1)）"
         pass=$((pass + 1))

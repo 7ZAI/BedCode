@@ -235,8 +235,10 @@ fn build_p3_async_host_import_component() -> Vec<u8> {
 
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let fixture_dir = manifest_dir.join("../packages/plugin-p3-async-host-import-test");
-    let module_path = fixture_dir.join(
-        "target/wasm32-wasip3/release/bedcode_plugin_p3_async_host_import_test.wasm",
+    let module_path = crate::wasm_core::manager::runtime::fixture_target::artifact(
+        "wasm32-wasip3",
+        "release",
+        "bedcode_plugin_p3_async_host_import_test",
     );
 
     if module_path.exists() {
@@ -261,6 +263,10 @@ fn build_p3_async_host_import_component() -> Vec<u8> {
 
     let status = Command::new(cargo_shim())
         .env("RUSTUP_TOOLCHAIN", WASIP3_NIGHTLY)
+        .env(
+            "CARGO_TARGET_DIR",
+            crate::wasm_core::manager::runtime::fixture_target::dir(),
+        )
         .args([
             "build",
             "--target",

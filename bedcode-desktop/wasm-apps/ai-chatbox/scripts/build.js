@@ -9,7 +9,11 @@ import { cpSync, mkdirSync, existsSync, rmSync } from 'fs'
 import { resolve, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { startPluginWatch } from '../../../scripts/plugin-watch.js'
-import { WASM_TARGET, wasip3CargoEnv } from '../../../../scripts/plugin-wasm-config.mjs'
+import {
+  WASM_TARGET,
+  WASM_TARGET_DIR,
+  wasip3CargoEnv,
+} from '../../../../scripts/plugin-wasm-config.mjs'
 import { injectWasmHash } from '../../../packages/plugin-sdk-desktop/bin/wasm-hash.js'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -23,7 +27,7 @@ const RUST_LIB_NAME = 'bedcode_plugin_ai_chatbox'
 // cfg!(debug_assertions) 兜底，见 wasm_runtime.rs plugin_debug_mode）
 const DEBUG_MODE = !!process.env.BEDCODE_PLUGIN_DEBUG
 const WASM_PROFILE = DEBUG_MODE ? 'debug' : 'release'
-const WASM_PROFILE_DIR = `rust/target/${WASM_TARGET}/${WASM_PROFILE}`
+const WASM_PROFILE_DIR = `${WASM_TARGET_DIR}/${WASM_TARGET}/${WASM_PROFILE}`
 
 // 产物目标目录
 const RESOURCES_DIR = resolve(ROOT, '../../src-tauri/resources/plugins/desktop', PLUGIN_ID)
@@ -48,7 +52,7 @@ function buildRust() {
   // 票 03：桌面插件统一 wasm32-wasip3（WASI 0.3；pinned nightly 提供 std，
   // 产物 cdylib 直出 Component，免 componentize）。宿主 async store 实例化（票 02）。
   run(
-    `cargo build --target ${WASM_TARGET} --no-default-features --features wasm --manifest-path rust/Cargo.toml${DEBUG_MODE ? '' : ' --release'}`,
+    `cargo build --target ${WASM_TARGET} --target-dir ${WASM_TARGET_DIR} --no-default-features --features wasm --manifest-path rust/Cargo.toml${DEBUG_MODE ? '' : ' --release'}`,
     { env: wasip3CargoEnv() },
   )
 }
@@ -83,7 +87,11 @@ function copyArtifacts() {
     console.log(`[build] Copied WASM (${WASM_PROFILE}): ${RUST_LIB_NAME}.wasm`)
   } else {
     const fallbackProfile = DEBUG_MODE ? 'release' : 'debug'
-    const fallbackWasmPath = resolve(ROOT, `rust/target/${WASM_TARGET}/${fallbackProfile}`, `${RUST_LIB_NAME}.wasm`)
+    const fallbackWasmPath = resolve(
+      ROOT,
+      `${WASM_TARGET_DIR}/${WASM_TARGET}/${fallbackProfile}`,
+      `${RUST_LIB_NAME}.wasm`,
+    )
     if (!existsSync(fallbackWasmPath)) {
       console.error(`[build] ERROR: WASM file not found at ${wasmPath} or ${fallbackWasmPath}`)
       process.exit(1)
@@ -112,7 +120,7 @@ const rustOnly = args.includes('--rust-only')
 if (watchMode) {
   // 前端 watch 构建：改源码自动重建 + 复制产物（配合宿主 PluginDevWatcher 触发前端热重载）。
   // vite 子进程 + fs.watch 保持事件循环常驻，Ctrl+C 退出
-    startPluginWatch({
+  startPluginWatch({
     root: ROOT,
     resourcesDir: RESOURCES_DIR,
     extraFiles: ['icon.svg'],

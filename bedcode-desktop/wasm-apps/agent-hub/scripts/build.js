@@ -10,7 +10,11 @@ import { cpSync, mkdirSync, existsSync, rmSync } from 'fs'
 import { resolve, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { startPluginWatch } from '../../../scripts/plugin-watch.js'
-import { WASM_TARGET, wasip3CargoEnv } from '../../../../scripts/plugin-wasm-config.mjs'
+import {
+  WASM_TARGET,
+  WASM_TARGET_DIR,
+  wasip3CargoEnv,
+} from '../../../../scripts/plugin-wasm-config.mjs'
 import { injectWasmHash } from '../../../packages/plugin-sdk-desktop/bin/wasm-hash.js'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -23,7 +27,7 @@ const RUST_LIB_NAME = 'bedcode_plugin_agent_hub'
 // DWARF，宿主开启 backtrace 行号栈用）；release 构建忽略
 const DEBUG_MODE = !!process.env.BEDCODE_PLUGIN_DEBUG
 const WASM_PROFILE = DEBUG_MODE ? 'debug' : 'release'
-const WASM_PROFILE_DIR = `rust/target/${WASM_TARGET}/${WASM_PROFILE}`
+const WASM_PROFILE_DIR = `${WASM_TARGET_DIR}/${WASM_TARGET}/${WASM_PROFILE}`
 
 // 产物目标目录
 const RESOURCES_DIR = resolve(ROOT, '../../src-tauri/resources/plugins/desktop', PLUGIN_ID)
@@ -48,7 +52,7 @@ function buildRust() {
   // 票 03：桌面插件统一 wasm32-wasip3（pinned nightly 提供 std；产物 cdylib 直出
   // Component，免 componentize 编码步骤）。wasip3 实例化需宿主 async store（票 02）。
   run(
-    `cargo build --target ${WASM_TARGET} --no-default-features --features wasm --manifest-path rust/Cargo.toml${DEBUG_MODE ? '' : ' --release'}`,
+    `cargo build --target ${WASM_TARGET} --target-dir ${WASM_TARGET_DIR} --no-default-features --features wasm --manifest-path rust/Cargo.toml${DEBUG_MODE ? '' : ' --release'}`,
     { env: wasip3CargoEnv() },
   )
 }
@@ -78,7 +82,7 @@ function copyArtifacts() {
     const fallbackProfile = DEBUG_MODE ? 'release' : 'debug'
     const fallbackWasmPath = resolve(
       ROOT,
-      `rust/target/${WASM_TARGET}/${fallbackProfile}`,
+      `${WASM_TARGET_DIR}/${WASM_TARGET}/${fallbackProfile}`,
       `${RUST_LIB_NAME}.wasm`,
     )
     if (!existsSync(fallbackWasmPath)) {

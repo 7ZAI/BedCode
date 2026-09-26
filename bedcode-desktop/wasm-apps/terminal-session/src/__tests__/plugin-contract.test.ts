@@ -285,8 +285,21 @@ describe('C2 构建链收口到共享配置', () => {
     .join('\n')
 
   it('从仓库共享配置引入 WASM_TARGET / wasip3CargoEnv', () => {
-    expect(buildScript).toMatch(/WASM_TARGET,\s*wasip3CargoEnv\s*}\s*from/)
+    // import 块内允许夹带其他共享配置项（如 WASM_TARGET_DIR），但必需的两个名字与
+    // 「来自仓库单一真源」这两点不能变——2026-09-26 target 目录治理新增
+    // WASM_TARGET_DIR，import 因此变多行且中间多一个名字，原先的相邻断言会误红
+    expect(buildScript).toMatch(
+      /import\s*\{[^}]*\bWASM_TARGET\b[^}]*\bwasip3CargoEnv\b[^}]*\}\s*from\s*'[^']*plugin-wasm-config\.mjs'/,
+    )
     expect(buildCode).toContain('cargo build --target ${WASM_TARGET}')
+  })
+
+  it('产物落点也走共享配置（不写死 per-crate target 路径）', () => {
+    // wasm 应用共享 target 目录：构建参数与产物路径都取自共享配置；脚本内不得出现
+    // crate 根的 `rust/target/...` 字面量（否则绕开共享目录，重复编译依赖图）
+    expect(buildScript).toMatch(/import\s*\{[^}]*\bWASM_TARGET_DIR\b[^}]*\}/)
+    expect(buildCode).toContain('--target-dir ${WASM_TARGET_DIR}')
+    expect(buildCode).not.toContain('rust/target/')
   })
 
   it('插件代码不自带 target 与 toolchain 字面量（漂移即红）', () => {

@@ -9,6 +9,11 @@
 
 mod component;
 
+// 夹具共享 target 目录（测试期编译产物落点，cfg(test) 门控：生产构建不编译本模块）
+// pub(crate)：host/tests/* 下的夹具构建器与 runtime/component.rs 也要用同一落点
+#[cfg(test)]
+pub(crate) mod fixture_target;
+
 /// 声明展开（不过滤授权，preauthorize 收集弹窗候选用，见 host.rs `preauthorize_plugin`）
 pub(crate) use component::expand_preopen_declarations;
 /// WASI 预打开目录解析（激活时重建实例判定用，见 host.rs `rebuild_wasm_instance`）
@@ -739,8 +744,8 @@ mod tests {
         let plugin_dir = packages_dir.join("plugin-component-test");
 
         let profile = if plugin_debug_mode() { "debug" } else { "release" };
-        let output_dir = plugin_dir.join(format!("target/wasm32-wasip3/{}", profile));
-        let module_path = output_dir.join("bedcode_plugin_component_test.wasm");
+        let module_path =
+            fixture_target::artifact("wasm32-wasip3", profile, "bedcode_plugin_component_test");
 
         if module_path.exists() {
             let src_files = [
@@ -775,6 +780,7 @@ mod tests {
         // 「Test component WASM build failed」，与代码无关地一次红几十项
         let status = std::process::Command::new("cargo")
             .env("RUSTUP_TOOLCHAIN", WASIP3_NIGHTLY)
+            .env("CARGO_TARGET_DIR", fixture_target::dir())
             .args(&args)
             .status()
             .expect("Failed to run cargo build for test component");
@@ -939,8 +945,7 @@ mod tests {
         let packages_dir = manifest_dir.join("../packages");
         let plugin_dir = packages_dir.join("plugin-ws-test");
 
-        let output_dir = plugin_dir.join("target/wasm32-wasip3/release");
-        let module_path = output_dir.join("bedcode_plugin_ws_test.wasm");
+        let module_path = fixture_target::artifact("wasm32-wasip3", "release", "bedcode_plugin_ws_test");
 
         if module_path.exists() {
             let src_files = [
@@ -971,6 +976,7 @@ mod tests {
         let manifest_path = plugin_dir.join("Cargo.toml");
         let status = std::process::Command::new("cargo")
             .env("RUSTUP_TOOLCHAIN", crate::wasm_core::manager::runtime::WASIP3_NIGHTLY)
+            .env("CARGO_TARGET_DIR", fixture_target::dir())
             .args([
                 "build",
                 "--target",
@@ -995,8 +1001,8 @@ mod tests {
         let packages_dir = manifest_dir.join("../packages");
         let plugin_dir = packages_dir.join("plugin-http-test");
 
-        let output_dir = plugin_dir.join("target/wasm32-wasip3/release");
-        let module_path = output_dir.join("bedcode_plugin_http_test.wasm");
+        let module_path =
+            fixture_target::artifact("wasm32-wasip3", "release", "bedcode_plugin_http_test");
 
         if module_path.exists() {
             let src_files = [
@@ -1026,6 +1032,7 @@ mod tests {
         let manifest_path = plugin_dir.join("Cargo.toml");
         let status = std::process::Command::new("cargo")
             .env("RUSTUP_TOOLCHAIN", crate::wasm_core::manager::runtime::WASIP3_NIGHTLY)
+            .env("CARGO_TARGET_DIR", fixture_target::dir())
             .args([
                 "build",
                 "--target",
@@ -1061,8 +1068,8 @@ mod tests {
         let packages_dir = manifest_dir.join("../packages");
         let plugin_dir = packages_dir.join("plugin-pty-test");
 
-        let output_dir = plugin_dir.join("target/wasm32-wasip3/release");
-        let module_path = output_dir.join("bedcode_plugin_pty_test.wasm");
+        let module_path =
+            fixture_target::artifact("wasm32-wasip3", "release", "bedcode_plugin_pty_test");
 
         if module_path.exists() {
             let src_files = [
@@ -1092,6 +1099,7 @@ mod tests {
         let manifest_path = plugin_dir.join("Cargo.toml");
         let status = std::process::Command::new("cargo")
             .env("RUSTUP_TOOLCHAIN", crate::wasm_core::manager::runtime::WASIP3_NIGHTLY)
+            .env("CARGO_TARGET_DIR", fixture_target::dir())
             .args([
                 "build",
                 "--target",
@@ -1113,8 +1121,8 @@ mod tests {
         let packages_dir = manifest_dir.join("../packages");
         let plugin_dir = packages_dir.join("plugin-task-test");
 
-        let output_dir = plugin_dir.join("target/wasm32-wasip3/release");
-        let module_path = output_dir.join("bedcode_plugin_task_test.wasm");
+        let module_path =
+            fixture_target::artifact("wasm32-wasip3", "release", "bedcode_plugin_task_test");
 
         if module_path.exists() {
             let src_files = [
@@ -1145,6 +1153,7 @@ mod tests {
         let manifest_path = plugin_dir.join("Cargo.toml");
         let status = std::process::Command::new("cargo")
             .env("RUSTUP_TOOLCHAIN", crate::wasm_core::manager::runtime::WASIP3_NIGHTLY)
+            .env("CARGO_TARGET_DIR", fixture_target::dir())
             .args([
                 "build",
                 "--target",
@@ -1290,8 +1299,8 @@ mod tests {
         let packages_dir = manifest_dir.join("../packages");
         let plugin_dir = packages_dir.join("plugin-sdk-test");
 
-        let output_dir = plugin_dir.join("target/wasm32-wasip3/release");
-        let module_path = output_dir.join("bedcode_plugin_sdk_test.wasm");
+        let module_path =
+            fixture_target::artifact("wasm32-wasip3", "release", "bedcode_plugin_sdk_test");
 
         if module_path.exists() {
             let src_files = [
@@ -1322,6 +1331,7 @@ mod tests {
         let manifest_path = plugin_dir.join("Cargo.toml");
         let status = std::process::Command::new("cargo")
             .env("RUSTUP_TOOLCHAIN", crate::wasm_core::manager::runtime::WASIP3_NIGHTLY)
+            .env("CARGO_TARGET_DIR", fixture_target::dir())
             .args([
                 "build",
                 "--target",
@@ -1347,8 +1357,8 @@ mod tests {
         let packages_dir = manifest_dir.join("../packages");
         let plugin_dir = packages_dir.join("plugin-wasi-test");
 
-        let output_dir = plugin_dir.join("target/wasm32-wasip2/release");
-        let module_path = output_dir.join("bedcode_plugin_wasi_test.wasm");
+        let module_path =
+            fixture_target::artifact("wasm32-wasip2", "release", "bedcode_plugin_wasi_test");
 
         if module_path.exists() {
             let src_files = [
@@ -1374,6 +1384,7 @@ mod tests {
 
         let manifest_path = plugin_dir.join("Cargo.toml");
         let status = std::process::Command::new("cargo")
+            .env("CARGO_TARGET_DIR", fixture_target::dir())
             .args([
                 "build",
                 "--target",
@@ -1430,8 +1441,8 @@ mod tests {
         let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let plugin_dir = manifest_dir.join("../packages/plugin-wasip3-test");
 
-        let output_dir = plugin_dir.join("target/wasm32-wasip3/release");
-        let module_path = output_dir.join("bedcode_plugin_wasip3_test.wasm");
+        let module_path =
+            fixture_target::artifact("wasm32-wasip3", "release", "bedcode_plugin_wasip3_test");
 
         // 复用策略同其它测试组件：产物存在且源码未更新则跳过构建（跑测试不重复编译）
         if module_path.exists() {
@@ -1456,6 +1467,7 @@ mod tests {
 
         let status = std::process::Command::new("cargo")
             .env("RUSTUP_TOOLCHAIN", WASIP3_NIGHTLY)
+            .env("CARGO_TARGET_DIR", fixture_target::dir())
             .args([
                 "build",
                 "--target",

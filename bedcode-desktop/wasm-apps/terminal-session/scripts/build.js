@@ -16,7 +16,11 @@ import { cpSync, mkdirSync, existsSync, rmSync } from 'fs'
 import { resolve, dirname, basename } from 'path'
 import { fileURLToPath } from 'url'
 import { startPluginWatch } from '../../../scripts/plugin-watch.js'
-import { WASM_TARGET, wasip3CargoEnv } from '../../../../scripts/plugin-wasm-config.mjs'
+import {
+  WASM_TARGET,
+  WASM_TARGET_DIR,
+  wasip3CargoEnv,
+} from '../../../../scripts/plugin-wasm-config.mjs'
 import { injectWasmHash } from '../../../packages/plugin-sdk-desktop/bin/wasm-hash.js'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -30,7 +34,7 @@ const RUST_LIB_NAME = 'bedcode_plugin_terminal_session'
 // 兜底，见 wasm_runtime.rs plugin_debug_mode）
 const DEBUG_MODE = !!process.env.BEDCODE_PLUGIN_DEBUG
 const WASM_PROFILE = DEBUG_MODE ? 'debug' : 'release'
-const WASM_PROFILE_DIR = `rust/target/${WASM_TARGET}/${WASM_PROFILE}`
+const WASM_PROFILE_DIR = `${WASM_TARGET_DIR}/${WASM_TARGET}/${WASM_PROFILE}`
 
 // 产物目标目录（内置资源，宿主按 resources/plugins/desktop/<id>/ 扫描加载）
 const RESOURCES_DIR = resolve(ROOT, '../../src-tauri/resources/plugins/desktop', PLUGIN_ID)
@@ -53,7 +57,7 @@ function buildFrontend() {
 function buildRust() {
   console.log('\n[build] ====== Building Rust backend (WASM) ======')
   run(
-    `cargo build --target ${WASM_TARGET} --no-default-features --features wasm --manifest-path rust/Cargo.toml${DEBUG_MODE ? '' : ' --release'}`,
+    `cargo build --target ${WASM_TARGET} --target-dir ${WASM_TARGET_DIR} --no-default-features --features wasm --manifest-path rust/Cargo.toml${DEBUG_MODE ? '' : ' --release'}`,
     { env: wasip3CargoEnv() },
   )
 }
@@ -100,7 +104,10 @@ function copyArtifacts() {
   // 即**安装目录根**（不是 scripts/ 子目录），故复制时压平一级路径。
   // hook 与插件版本同进退（spec D1）：脚本内容改了就必须随包重出，否则项目里部署
   // 的副本指向已不存在的端点。
-  copyOptionalFiles(HOOK_SCRIPTS.map((name) => `scripts/${name}`), true)
+  copyOptionalFiles(
+    HOOK_SCRIPTS.map((name) => `scripts/${name}`),
+    true,
+  )
 
   // WASM 模块（按 profile 取产物；缺失时回退另一 profile）
   const wasmPath = resolve(ROOT, WASM_PROFILE_DIR, `${RUST_LIB_NAME}.wasm`)
@@ -111,7 +118,7 @@ function copyArtifacts() {
     const fallbackProfile = DEBUG_MODE ? 'release' : 'debug'
     const fallbackWasmPath = resolve(
       ROOT,
-      `rust/target/${WASM_TARGET}/${fallbackProfile}`,
+      `${WASM_TARGET_DIR}/${WASM_TARGET}/${fallbackProfile}`,
       `${RUST_LIB_NAME}.wasm`,
     )
     if (!existsSync(fallbackWasmPath)) {
@@ -127,7 +134,9 @@ function copyArtifacts() {
 
   console.log(`[build] Artifacts copied to: ${RESOURCES_DIR}`)
   for (const name of HOOK_SCRIPTS) {
-    console.log(`[build]   - ${name}${existsSync(resolve(RESOURCES_DIR, name)) ? '' : ' (缺失！检查 scripts/)'}`)
+    console.log(
+      `[build]   - ${name}${existsSync(resolve(RESOURCES_DIR, name)) ? '' : ' (缺失！检查 scripts/)'}`,
+    )
   }
 }
 

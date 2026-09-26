@@ -1,0 +1,23 @@
+# ==================== wasm 应用共享 target 目录 ====================
+# 本仓库无根 workspace，4 个 wasm 应用（wasm-apps/*/rust）各自独立 workspace。
+# cargo 默认把产物写进**各自 crate 根的 `rust/target/`**，于是 4 个应用共用的依赖
+# （SDK `bedcode-plugin-api`、proc-macro `bedcode-plugin-api-macros`、wit-bindgen、
+# serde…）被重复编译 4 遍并重复占盘（2026-09-26 实测：4 个应用合计 5.8G）。
+#
+# 本文件让「cwd 在 wasm-apps/ 之下」的一切 cargo 调用（各应用 `scripts/build.js`、
+# 手工 `cd wasm-apps/<app>/rust && cargo build`、以及 clippy / rust-analyzer 之类的
+# 工具链探针）都落到同一目录 `bedcode-desktop/target/wasm-apps`。
+#
+# 路径真源 = `scripts/plugin-wasm-config.mjs` 的 `WASM_TARGET_DIR`（各应用
+# build.js 用它拼产物路径并显式传 `--target-dir`；两处注释互相指认）。这里的值
+# 相对**本 `.cargo` 目录的父目录**（= `bedcode-desktop/wasm-apps/`）解析，
+# 故 `../../target/wasm-apps` 与 build.js 侧拼出的路径是同一个目录。
+#
+# 与测试夹具的共享目录（`bedcode-desktop/target/fixtures`，真源
+# `src-tauri/.../runtime/fixture_target.rs`）**刻意分开**：夹具 crate 定义了
+# `[profile.release] opt-level="s" / lto=true`，而 wasm 应用无 `[profile.*]`
+# （用 cargo 默认）；profile 参与产物指纹，同一目录会为同一份依赖图产出两份产物。
+#
+# 决策记录：.scratch/2026-09-26-cargo-target-space/spec.md
+[build]
+target-dir = "../../target/wasm-apps"

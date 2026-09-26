@@ -1,0 +1,20 @@
+# ==================== 测试夹具共享 target 目录 ====================
+# 移动端的 2 个夹具构建目标（`packages/plugin-component-test` 与 `plugins/auto-task`）
+# 原本各写各自 `target/`，把 SDK / wit-bindgen / serde 这份相同依赖图编译两遍
+# （2026-09-26 实测各 ~170M）。现已收敛到单一共享目录 `bedcode-mobile/target/fixtures`。
+#
+# 路径真源 = `src-tauri/src/plugin/wasm_runtime/component.rs` 的 `fixture_target_dir()`
+# （宿主测试的两个构建器经 `--target-dir` 显式指定；flag 优先级高于本文件，两处
+# 指向同一目录，注释互相指认）。本文件的作用是兜住**非脚本路径**：手工
+# `cd packages/plugin-component-test && cargo build`、以及 clippy / rust-analyzer
+# 之类的工具链探针——它们此前会静默新建一个 per-crate `target/`。
+#
+# 不影响宿主构建：宿主 cargo 以 `bedcode-mobile/src-tauri` 为 cwd 启动，
+# `packages/` 不是它的祖先目录，cargo 配置按 cwd 祖先链发现（故本文件对宿主无效）。
+#
+# 注意：**移动端插件**（`plugins/*/rust`）的 target 仍走各自的 `rust/target/`——
+# 发布态 SDK CLI（`packages/plugin-sdk-mobile/bin/cli.js`）在三处硬编码该产物路径，
+# 改动需连带 SDK 一起评估，暂不在本次范围内。决策记录见
+# `.scratch/2026-09-26-cargo-target-space/spec.md`。
+[build]
+target-dir = "../target/fixtures"
