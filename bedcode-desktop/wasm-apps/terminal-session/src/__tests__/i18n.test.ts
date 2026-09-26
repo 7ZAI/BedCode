@@ -8,6 +8,9 @@
  * 编译期护栏：两份语言文件都实现 `MessageSchema`（漏 key 即 TS 报错）；本测试守住
  * 运行期无法静态证明的两件事：语言表键集逐字相等（含同名 key 不同大小写拼写）、
  * 键全部落在本票的 `session.` 命名空间内（防与宿主文案在同一注册表下互相覆盖）。
+ *
+ * 源码 `t()` 引用的 key 完整性由 `plugin-contract.test.ts` C6 把关（含「引用了
+ * 语言表不存在的 key」判据）；组件取文案的前缀纪律由 `i18nPrefixDiscipline.test.ts` 把关。
  */
 
 import { describe, it, expect } from 'vitest'

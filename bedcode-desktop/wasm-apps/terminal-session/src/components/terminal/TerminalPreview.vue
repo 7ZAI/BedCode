@@ -174,7 +174,6 @@
  * 测试 + 01/02 各域单测为准）。
  */
 import { ref, computed, watch, onMounted, onUnmounted, nextTick, inject } from 'vue'
-import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
@@ -218,10 +217,17 @@ const props = withDefaults(defineProps<Props>(), {
   showHeader: true,
 })
 
-const { t } = useI18n()
-
 // 插件上下文（PluginViewHost / dev-shell 注入；插件组件既有模式）
 const context = inject<PluginContext>('pluginContext')!
+
+/**
+ * 翻译：经 `context.i18n.t` 自动补插件 ID 前缀（与插件其余组件同一模式）。
+ *
+ * 禁止改用 vue-i18n 的 `useI18n()`：插件文案注册时带 `com.bedcode.terminal-session.`
+ * 前缀（宿主 `context.i18n.registerMessages` 隔离机制），无前缀查询在宿主命名空间下
+ * 查无此 key → 界面直接显示 key 原文（2026-09-26 修复）。
+ */
+const t = (key: string, params?: Record<string, unknown>) => context.i18n.t(key, params)
 // 终端宿主能力（宿主插件窗口注入；dev-shell/vitest 回退内存版）
 const caps = useTerminalHostCapabilities() ?? createFallbackHostCapabilities()
 
@@ -305,7 +311,7 @@ const pipeline = useTerminalWritePipeline(kernel, {
 })
 const scroll = useTerminalScroll(kernel)
 const renderer = useTerminalRenderer(kernel, console)
-const resize = useTerminalResize(kernel, requestResizeImpl)
+const resize = useTerminalResize(kernel, requestResizeImpl, t)
 
 // 模板同名绑定（域返回值解构，template 零改动）
 const { terminalTheme, fontSize, themeSelectOptions, fontSizeSelectOptions } = settings

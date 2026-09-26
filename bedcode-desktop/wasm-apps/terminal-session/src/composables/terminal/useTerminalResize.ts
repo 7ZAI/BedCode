@@ -13,7 +13,14 @@
  */
 import type { TerminalKernelContext } from './terminalKernel'
 import { ref } from 'vue'
-import { useI18n } from 'vue-i18n'
+
+/**
+ * 翻译函数（由调用方注入，带插件 ID 前缀的 `context.i18n.t`）
+ *
+ * 不可在本模块内用 vue-i18n 的 `useI18n()`：插件文案带
+ * `com.bedcode.terminal-session.` 前缀，无前缀查询拿不到值（显示 key 原文）。
+ */
+export type TerminalTranslateFn = (key: string, params?: Record<string, unknown>) => string
 
 /** 渲染端来源：桌面端 / 移动端设备（resize 裁决展示用；与宿主 RendererSource 同形） */
 export type RendererSource = { kind: 'desktop' } | { kind: 'mobile'; deviceName: string }
@@ -31,9 +38,11 @@ export type ResizeRequester = (
   force: boolean,
 ) => Promise<ResizeOutcome>
 
-export function useTerminalResize(ctx: TerminalKernelContext, requestResizeImpl: ResizeRequester) {
-  const { t } = useI18n()
-
+export function useTerminalResize(
+  ctx: TerminalKernelContext,
+  requestResizeImpl: ResizeRequester,
+  t: TerminalTranslateFn,
+) {
   /** 用户拒绝覆盖的尺寸（成功后清空；同尺寸不再重发） */
   let rejectedSize: { cols: number; rows: number } | null = null
 

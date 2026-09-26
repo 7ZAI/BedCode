@@ -44,9 +44,6 @@ import type { SessionInfo } from '../composables/terminal/model'
 
 // ==================== mock 边界 ====================
 
-vi.mock('vue-i18n', () => ({
-  useI18n: () => ({ t: (key: string) => key }),
-}))
 vi.mock('vue-sonner', () => ({
   toast: { warning: vi.fn(), error: vi.fn(), info: vi.fn() },
 }))
@@ -131,7 +128,8 @@ function makeContext(): TestContext {
     events: { on: vi.fn(() => () => {}), emit: vi.fn() },
     storage: {} as never,
     http: {} as never,
-    i18n: {} as never,
+    // 插件组件统一经 context.i18n.t 取文案（带插件 ID 前缀）；桩为恒等 t
+    i18n: { t: (key: string) => key, getI18n: () => undefined, registerMessages: vi.fn() },
     _disposables: [],
     id: 'com.bedcode.terminal-session',
     extensionPath: '',
