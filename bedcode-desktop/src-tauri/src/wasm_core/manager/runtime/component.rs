@@ -850,16 +850,33 @@ impl bedcode::plugin::host_mdns::Host for WasmPluginState {
 }
 
 impl bedcode::plugin::host_platform::Host for WasmPluginState {
+    // `pick-*` 需三件 scope：权限门（`fs:pick`）+ AppHandle（弹系统原生对话框）
+    // + fs_auth（选择结果授权校验）
     fn pick_files(&mut self) -> Result<String, String> {
-        platform::platform_pick_files(self.host_ctx.as_ref())
+        platform::platform_pick_files(
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            &self.plugin_id,
+        )
     }
 
     fn pick_folder(&mut self) -> Result<String, String> {
-        platform::platform_pick_folder(self.host_ctx.as_ref())
+        platform::platform_pick_folder(
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            &self.plugin_id,
+        )
     }
 
     fn pick_folders(&mut self) -> Result<String, String> {
-        platform::platform_pick_folders(self.host_ctx.as_ref())
+        platform::platform_pick_folders(
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            &self.plugin_id,
+        )
     }
 
     fn wsl_distros(&mut self) -> Result<String, String> {

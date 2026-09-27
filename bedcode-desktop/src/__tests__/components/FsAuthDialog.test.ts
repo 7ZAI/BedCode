@@ -32,6 +32,8 @@ function createTestI18n() {
           plugin: {
             fsAuthTitle: '文件访问授权',
             fsAuthRequest: '{plugin} 请求{operation}以下路径',
+            fsAuthPickerRequest: '你刚在系统选择框中选中以下路径，{plugin} 请求{operation}',
+            fsAuthGrantScopeDir: '按所在目录授权',
             fsAuthPath: '路径',
             fsAuthPaths: '{count} 个路径',
             fsAuthRemember: '记住此授权',
@@ -65,16 +67,38 @@ function mountMask() {
 
 /** 投递一次批量授权请求（模拟 agent-hub 激活期 fs_request_auth） */
 async function emitFsAuthRequest() {
-  await flushPromises()
-  tauriEvent.lastFsAuthHandler?.({
-    payload: {
-      requestId: 'req-1',
-      pluginId: 'com.bedcode.agent-hub',
-      paths: ['/home/u/.codex', '/home/u/.pi'],
-      path: '/home/u/.codex',
-      operation: 'read',
-    },
+  await emitFsAuthPayload({
+    requestId: 'req-1',
+    pluginId: 'com.bedcode.agent-hub',
+    paths: ['/home/u/.codex', '/home/u/.pi'],
+    path: '/home/u/.codex',
+    operation: 'read',
   })
+}
+
+/**
+ * 投递一次授权请求（系统选择器结果门：origin=picker / grantScope=directory）
+ *
+ * 形状与宿主 `fs_auth::request_user_auth_batch` 发出的事件逐字对齐：
+ * grantScope 决定「记住」按文件还是按目录落账，origin 决定弹窗文案。
+ */
+async function emitFsAuthPayload(payload: Record<string, unknown>) {
+  await flushPromises()
+  tauriEvent.lastFsAuthHandler?.({ payload })
+  await flushPromises()
+}
+
+/** 授权弹窗里的正文文案节点（不含路径列表/按钮，便于精确断言） */
+function dialogBody(): string {
+  return document.querySelector('.max-w-sm')?.textContent ?? ''
+}
+
+/** 点弹窗上的「允许」并等回调落地 */
+async function clickAllow() {
+  const buttons = Array.from(document.querySelectorAll('.max-w-sm button'))
+  const allowBtn = buttons.find((b) => b.textContent?.includes('允许'))
+  expect(allowBtn).toBeTruthy()
+  await allowBtn!.click()
   await flushPromises()
 }
 
@@ -154,5 +178,76 @@ describe('FsAuthDialog Component', () => {
 
     maskWrapper.unmount()
     dialogWrapper.unmount()
+  })
+
+  // ==================== 系统选择器结果门（origin=picker） ====================
+
+  it('选择器来源的请求用「你刚选中」文案，并说明授权按目录落账', async () => {
+    const wrapper = mountDialog()
+    await emitFsAuthPayload({
+      requestId: 'req-pick-1',
+      pluginId: 'com.bedcode.file-transfer',
+      paths: ['/home/u/Downloads/report.pdf'],
+      path: '/home/u/Downloads/report.pdf',
+      operation: 'read',
+      origin: 'picker',
+      grantScope: 'directory',
+    })
+
+    const body = dialogBody()
+    expect(body).toContain('你刚在系统选择框中选中以下路径')
+    expect(body).toContain('com.bedcode.file-transfer')
+    // 授权范围必须让用户看得见：否则「勾了记住」的真实含义只有宿主知道
+    expect(body).toContain('按所在目录授权')
+    wrapper.unmount()
+  })
+
+  it('选择器来源点「允许」照常回调，且默认勾选「记住」（同目录后续免问的前提）', async () => {
+    const wrapper = mountDialog()
+    await emitFsAuthPayload({
+      requestId: 'req-pick-2',
+      pluginId: 'com.bedcode.file-transfer',
+      paths: ['/home/u/Downloads/report.pdf'],
+      path: '/home/u/Downloads/report.pdf',
+      operation: 'read',
+      origin: 'picker',
+      grantScope: 'directory',
+    })
+
+    await clickAllow()
+    expect(vi.mocked(await import('@tauri-apps/api/core')).invoke).toHaveBeenCalledWith(
+      'plugin_fs_auth_respond',
+      { requestId: 'req-pick-2', allowed: true, remember: true },
+    )
+    wrapper.unmount()
+  })
+
+  it('插件直请（旧事件，无 origin）不得被说成「你刚选中」，也不显示目录范围说明', async () => {
+    const wrapper = mountDialog()
+    await emitFsAuthRequest()
+
+    const body = dialogBody()
+    expect(body).toContain('请求读取以下路径')
+    expect(body).not.toContain('你刚在系统选择框中选中以下路径')
+    expect(body).not.toContain('按所在目录授权')
+    wrapper.unmount()
+  })
+
+  it('exact 粒度（插件直请路径）不显示目录授权说明', async () => {
+    const wrapper = mountDialog()
+    await emitFsAuthPayload({
+      requestId: 'req-exact',
+      pluginId: 'com.bedcode.agent-hub',
+      paths: ['/home/u/data'],
+      path: '/home/u/data',
+      operation: 'write',
+      origin: 'fs',
+      grantScope: 'exact',
+    })
+
+    const body = dialogBody()
+    expect(body).toContain('写入')
+    expect(body).not.toContain('按所在目录授权')
+    wrapper.unmount()
   })
 })

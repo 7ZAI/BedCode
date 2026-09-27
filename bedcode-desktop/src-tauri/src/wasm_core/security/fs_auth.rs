@@ -109,6 +109,49 @@ impl std::fmt::Display for FsOp {
     }
 }
 
+/// 「记住授权」时的落账粒度（`respond(remember = true)` 持久化什么）
+///
+/// 两种来源的用户心智不同，落账粒度也就不同：
+/// - [`Exact`](Self::Exact)：插件**直接请求访问**某个路径（`check` /
+///   `check_batch` / WASI 预打开）——用户是对那个路径点头，粒度就等于它；
+/// - [`Directory`](Self::Directory)：**系统文件选择器**的结果（`host-platform`
+///   的 `pick-*`）——用户表达的是「这个目录里的东西可以用」；若只落账到单个文件，
+///   同目录下换个文件再选就会重新弹框（一次选 N 个文件 → N 次弹窗）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GrantScope {
+    /// 精确：目录 → 目录本身；文件 → 文件本身（`save_granted_path` 的既有规则）
+    Exact,
+    /// 目录：目录 → 自身；文件 → 所在父目录
+    Directory,
+}
+
+impl GrantScope {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Exact => "exact",
+            Self::Directory => "directory",
+        }
+    }
+}
+
+/// 弹窗请求的来源（弹窗文案用它说清「谁在要这个目录」）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthOrigin {
+    /// 插件直接请求文件访问（既有全部调用方）
+    Fs,
+    /// 用户刚在**系统文件选择器**里选中这些路径（`host-platform.pick-*`）
+    Picker,
+}
+
+impl AuthOrigin {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Fs => "fs",
+            Self::Picker => "picker",
+        }
+    }
+}
+
 /// 待处理的授权请求
 struct PendingRequest {
     /// 请求 ID（UUID）
@@ -117,6 +160,10 @@ struct PendingRequest {
     plugin_id: String,
     /// 请求授权的文件路径（单路径请求为单元素；批量请求含全部未授权路径）
     paths: Vec<String>,
+    /// 「记住」时的落账粒度
+    grant_scope: GrantScope,
+    /// 请求来源（弹窗文案）
+    origin: AuthOrigin,
     /// 回复通道
     reply_tx: oneshot::Sender<bool>,
 }
@@ -195,26 +242,75 @@ impl FsAuthChecker {
 
     /// 处理用户授权回复（由前端 Tauri command 调用）
     pub async fn respond(&self, request_id: &str, allowed: bool, remember: bool) {
-        let mut pending = self.pending_requests.lock().await;
-        if let Some(idx) = pending.iter().position(|r| r.request_id == request_id) {
-            let request = pending.remove(idx);
-            if allowed && remember {
-                for path in &request.paths {
-                    if let Err(e) = self.save_granted_path(&request.plugin_id, path).await {
-                        tracing::warn!("fs_auth: failed to save granted path: {}", e);
-                    }
+        // 先把请求从队列里取出来（持锁只做定位），再在锁外落账：
+        // 落账要 await 存储层，持锁 await 会把整个弹窗队列堵住
+        let request = {
+            let mut pending = self.pending_requests.lock().await;
+            pending
+                .iter()
+                .position(|r| r.request_id == request_id)
+                .map(|idx| pending.remove(idx))
+        };
+        let Some(request) = request else {
+            tracing::warn!(request_id = %request_id, "fs_auth: respond for unknown request");
+            return;
+        };
+        if allowed && remember {
+            for path in &request.paths {
+                let target = match request.grant_scope {
+                    GrantScope::Exact => path.clone(),
+                    GrantScope::Directory => directory_scope_target(path),
+                };
+                if let Err(e) = self.save_granted_path(&request.plugin_id, &target).await {
+                    tracing::warn!(error = %e, "fs_auth: failed to save granted path");
                 }
             }
-            let _ = request.reply_tx.send(allowed);
+            tracing::info!(
+                plugin_id = %request.plugin_id,
+                origin = request.origin.as_str(),
+                grant_scope = request.grant_scope.as_str(),
+                granted_count = request.paths.len(),
+                "fs_auth: user allowed and remembered the grant"
+            );
         }
+        let _ = request.reply_tx.send(allowed);
     }
 
-    /// 批量请求目录授权
+    /// 批量请求目录授权（`check_batch`：落账粒度 = 精确，来源 = 插件直请）
     ///
     /// 已授权/白名单路径直接放行；未授权路径合并为**一次**弹窗询问，
     /// 全部同意才返回 `true`（任一拒绝或超时即 `false`）。
     /// 供插件 activate 时集中申请数据目录访问权。
     pub async fn check_batch(&self, plugin_id: &str, paths: &[String], operation: FsOp) -> bool {
+        self.check_batch_scoped(plugin_id, paths, operation, GrantScope::Exact, AuthOrigin::Fs)
+            .await
+    }
+
+    /// 系统文件选择器结果的授权校验（`host-platform.pick-*` 专用入口）
+    ///
+    /// 契约（见 WIT `host-platform.pick-files` 注释）：
+    /// - 命中已授权目录前缀 / 第一方归属目录的路径**静默放行**（不弹框）；
+    /// - 只就**未授权部分**弹一次框，落账粒度按所在目录（`GrantScope::Directory`），
+    ///   使同目录后续选择免弹；
+    /// - 拒绝 / 超时 / 无弹窗通道（无头上下文）→ `false`，调用方据此 `Err`，
+    ///   **不得**回传路径（fail-visible：不允许把「被拒」降级成「用户没选」）。
+    ///
+    /// 操作用 [`FsOp::Read`]：选择器交付的是「可访问这些路径」这一层，真实读 /
+    /// 写仍各过 `fs:read` / `fs:write` 权限门（选择器不隐含读写位）。
+    pub async fn authorize_picked(&self, plugin_id: &str, paths: &[String]) -> bool {
+        self.check_batch_scoped(plugin_id, paths, FsOp::Read, GrantScope::Directory, AuthOrigin::Picker)
+            .await
+    }
+
+    /// 批量校验本体（`check_batch` 与 `authorize_picked` 共用）
+    async fn check_batch_scoped(
+        &self,
+        plugin_id: &str,
+        paths: &[String],
+        operation: FsOp,
+        grant_scope: GrantScope,
+        origin: AuthOrigin,
+    ) -> bool {
         let mut ungranted: Vec<String> = Vec::new();
 
         for path in paths {
@@ -237,7 +333,8 @@ impl FsAuthChecker {
             return true;
         }
 
-        self.request_user_auth_batch(plugin_id, &ungranted, operation).await
+        self.request_user_auth_batch(plugin_id, &ungranted, operation, grant_scope, origin)
+            .await
     }
 
     /// 查询路径是否已授权（第一方目录 / 持久化授权），**不弹窗**
@@ -255,7 +352,17 @@ impl FsAuthChecker {
     }
 
     /// 弹窗请求用户授权（批量：一次弹窗展示全部未授权路径）
-    async fn request_user_auth_batch(&self, plugin_id: &str, paths: &[String], operation: FsOp) -> bool {
+    ///
+    /// `grant_scope` / `origin` 只影响「记住」的落账粒度与弹窗文案，**不影响
+    /// 放行判据**——放行只看第一、二层（`matched_layer`）。
+    async fn request_user_auth_batch(
+        &self,
+        plugin_id: &str,
+        paths: &[String],
+        operation: FsOp,
+        grant_scope: GrantScope,
+        origin: AuthOrigin,
+    ) -> bool {
         let request_id = uuid::Uuid::new_v4().to_string();
         let (reply_tx, reply_rx) = oneshot::channel();
 
@@ -265,6 +372,8 @@ impl FsAuthChecker {
                 request_id: request_id.clone(),
                 plugin_id: plugin_id.to_string(),
                 paths: paths.to_vec(),
+                grant_scope,
+                origin,
                 reply_tx,
             });
         }
@@ -276,6 +385,8 @@ impl FsAuthChecker {
             "paths": paths,
             "path": paths.first().cloned().unwrap_or_default(),
             "operation": operation.to_string(),
+            "grantScope": grant_scope.as_str(),
+            "origin": origin.as_str(),
         });
 
         // 无头上下文（测试）没有 AppHandle，无法弹窗：移除已入队请求，保守拒绝
@@ -357,6 +468,8 @@ impl FsAuthChecker {
                 request_id: request_id.clone(),
                 plugin_id: plugin_id.to_string(),
                 paths: vec![path.to_string()],
+                grant_scope: GrantScope::Exact,
+                origin: AuthOrigin::Fs,
                 reply_tx,
             });
         }
@@ -367,6 +480,8 @@ impl FsAuthChecker {
             "pluginId": plugin_id,
             "path": path,
             "operation": operation.to_string(),
+            "grantScope": GrantScope::Exact.as_str(),
+            "origin": AuthOrigin::Fs.as_str(),
         });
 
         // 无头上下文（测试）没有 AppHandle，无法弹窗：移除已入队请求，保守拒绝
@@ -446,7 +561,7 @@ impl FsAuthChecker {
             }
         };
 
-        if !prefix.is_empty() {
+        if !prefix.is_empty() && !granted.iter().any(|v| v.as_str() == Some(prefix.as_str())) {
             granted.push(serde_json::Value::String(prefix));
         }
 
@@ -489,6 +604,23 @@ impl FsAuthChecker {
         };
         result.map(|pb| strip_verbatim_prefix(&pb))
     }
+}
+
+/// 「目录粒度」授权的落账目标：选到目录 → 目录本身；选到文件 → 所在父目录
+///
+/// 与 [`FsAuthChecker::save_granted_path`] 的粒度规则不同：那里面对**文件**落账到
+/// 文件本身（插件直请路径时用户点的就是那个文件）；选择器场景用户点头的是
+/// 「这个目录」，故取父目录。取不到父目录（盘符根 / 相对路径）时退回原路径——
+/// 宁可可判据保守，也不要凭空授权一个更大的前缀。
+pub(crate) fn directory_scope_target(path: &str) -> String {
+    let p = Path::new(path);
+    if p.is_dir() {
+        return path.to_string();
+    }
+    p.parent()
+        .map(|pp| pp.to_string_lossy().to_string())
+        .filter(|parent| !parent.is_empty())
+        .unwrap_or_else(|| path.to_string())
 }
 
 /// 剥掉 Windows canonicalize 的 `\\?\` verbatim 前缀，统一路径格式
@@ -824,6 +956,273 @@ mod tests {
         assert!(!checker.check_batch("com.bedcode.test", &[adjacent], FsOp::Write).await);
 
         std::fs::remove_dir_all(&granted_dir).unwrap();
+    }
+
+    // ==================== 系统选择器授权（`host-platform.pick-*` 的结果门）====================
+
+    /// 在临时目录下建一个夹具目录，返回其 canonical 路径
+    fn fixture_dir(tag: &str) -> PathBuf {
+        let dir = canonical_temp_dir().join(tag);
+        std::fs::create_dir_all(&dir).expect("fixture dir");
+        dir
+    }
+
+    /// C-104 契约本体：选中文件**落在已授权目录下** → 静默放行，不弹授权框
+    ///
+    /// 无头上下文没有弹窗通道：若实现仍去弹窗，这里会因无 AppHandle 被拒——
+    /// 断言为 true 本身就证明了「没有多问一次」。
+    #[tokio::test]
+    async fn picked_file_under_granted_dir_is_silent() {
+        let checker = headless_checker().await;
+        let dir = fixture_dir("fs-auth-pick-granted");
+        let file = dir.join("a.txt");
+        std::fs::write(&file, b"x").expect("write fixture");
+        let file = file.to_string_lossy().to_string();
+
+        // 前置：未授权时同一条路径必须被拒（否则本测试恒真）
+        assert!(
+            !checker.authorize_picked("com.bedcode.test", &[file.clone()]).await,
+            "未授权的选择结果在无弹窗通道下必须拒绝"
+        );
+
+        checker
+            .save_granted_path("com.bedcode.test", &dir.to_string_lossy())
+            .await
+            .unwrap();
+        assert!(
+            checker.authorize_picked("com.bedcode.test", &[file]).await,
+            "已授权目录下的选择不得再弹框"
+        );
+        assert!(
+            checker.pending_requests.lock().await.is_empty(),
+            "静默放行不得残留 pending"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// C-106 落账粒度：选到**文件** → 目录级授权（父目录），同目录兄弟文件随之免弹
+    ///
+    /// 这是「一次选 N 个文件不弹 N 次框」的落点：若落账到文件本身，
+    /// 同目录换文件就会重新弹框。
+    #[tokio::test]
+    async fn picker_grant_scope_is_directory_so_siblings_are_covered() {
+        let checker = headless_checker().await;
+        let dir = fixture_dir("fs-auth-pick-scope");
+        let a = dir.join("a.txt");
+        let b = dir.join("b.txt");
+        std::fs::write(&a, b"x").expect("write a");
+        std::fs::write(&b, b"y").expect("write b");
+
+        assert_eq!(
+            directory_scope_target(&a.to_string_lossy()),
+            dir.to_string_lossy().to_string(),
+            "选到文件 → 落账到所在目录"
+        );
+        assert_eq!(
+            directory_scope_target(&dir.to_string_lossy()),
+            dir.to_string_lossy().to_string(),
+            "选到目录 → 落账到该目录本身（不得上溯到父目录）"
+        );
+
+        // 走真实落账路径（respond 同款 `save_granted_path`）后，兄弟文件必须免弹
+        let granted = directory_scope_target(&a.to_string_lossy());
+        checker.save_granted_path("com.bedcode.test", &granted).await.unwrap();
+        assert!(checker.is_granted("com.bedcode.test", &b.to_string_lossy()).await);
+        assert!(
+            checker
+                .authorize_picked("com.bedcode.test", &[b.to_string_lossy().to_string()])
+                .await,
+            "同目录另一个文件应被目录级授权覆盖"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 反例：相邻目录不因「同一个父目录」而放行（组件边界）
+    #[tokio::test]
+    async fn picker_grant_does_not_leak_to_adjacent_dir() {
+        let checker = headless_checker().await;
+        let base = canonical_temp_dir();
+        let granted = fixture_dir("fs-auth-pick-adj-granted");
+        let sibling = fixture_dir("fs-auth-pick-adj-other");
+        let file = sibling.join("secret.txt");
+        std::fs::write(&file, b"s").expect("write fixture");
+
+        checker
+            .save_granted_path("com.bedcode.test", &directory_scope_target(&granted.to_string_lossy()))
+            .await
+            .unwrap();
+        assert!(
+            !checker
+                .authorize_picked("com.bedcode.test", &[file.to_string_lossy().to_string()])
+                .await,
+            "相邻目录（{}）不在授权范围内",
+            sibling.display()
+        );
+        let _ = base;
+        std::fs::remove_dir_all(&granted).ok();
+        std::fs::remove_dir_all(&sibling).ok();
+    }
+
+    /// C-107 用户取消（空选择）→ 直接放行，且**不产生**授权请求
+    #[tokio::test]
+    async fn empty_pick_is_cancelled_not_denied() {
+        let checker = headless_checker().await;
+        assert!(checker.authorize_picked("com.bedcode.test", &[]).await);
+        assert!(checker.pending_requests.lock().await.is_empty());
+    }
+
+    /// 混合批：已授权目录下的文件静默放行，未授权部分才走弹窗（且无通道 → 整批拒）
+    #[tokio::test]
+    async fn mixed_batch_only_ungranted_part_needs_dialog() {
+        let checker = headless_checker().await;
+        let granted = fixture_dir("fs-auth-pick-mix-granted");
+        let other = fixture_dir("fs-auth-pick-mix-other");
+        let inside = granted.join("in.txt");
+        let outside = other.join("out.txt");
+        std::fs::write(&inside, b"1").expect("write in");
+        std::fs::write(&outside, b"2").expect("write out");
+
+        checker
+            .save_granted_path("com.bedcode.test", &granted.to_string_lossy())
+            .await
+            .unwrap();
+        let batch = vec![
+            inside.to_string_lossy().to_string(),
+            outside.to_string_lossy().to_string(),
+        ];
+        assert!(
+            !checker.authorize_picked("com.bedcode.test", &batch).await,
+            "含未授权路径的批次不能因为部分已授权而整批放行"
+        );
+
+        // 去掉未授权项后，同一批的其余部分静默放行
+        assert!(
+            checker
+                .authorize_picked("com.bedcode.test", &[inside.to_string_lossy().to_string()])
+                .await
+        );
+        std::fs::remove_dir_all(&granted).ok();
+        std::fs::remove_dir_all(&other).ok();
+    }
+
+    /// 落账去重：同一目录重复授权不得堆出重复条目（否则列表无界增长）
+    #[tokio::test]
+    async fn saving_same_grant_twice_does_not_duplicate() {
+        let checker = headless_checker().await;
+        let dir = fixture_dir("fs-auth-pick-dedupe");
+        let path = dir.to_string_lossy().to_string();
+        checker.save_granted_path("com.bedcode.test", &path).await.unwrap();
+        checker.save_granted_path("com.bedcode.test", &path).await.unwrap();
+        let stored = checker
+            .storage
+            .get("com.bedcode.test", "fs_granted_paths")
+            .await
+            .expect("storage read");
+        let entries = match stored {
+            Some(serde_json::Value::Array(arr)) => arr.len(),
+            _ => 0,
+        };
+        assert_eq!(entries, 1, "重复授权不得堆叠条目");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// C-106 落账链本体（驱动真实 `respond` 路径）：`GrantScope::Directory` 的请求
+    /// 在「允许 + 记住」后，授权必须落在**目录**上——同目录兄弟文件随之免弹
+    ///
+    /// 本条是目录粒度的**唯一**行为锁：只断言 `directory_scope_target` 纯函数的话，
+    /// 把 `respond` 里的 `GrantScope::Directory => path.clone()` 改回「文件本身」
+    /// 仍会全绿（上一轮变异自检实测如此）——落账发生在 `respond` 内部，必须从这里断言。
+    #[tokio::test]
+    async fn respond_with_directory_scope_grants_the_whole_directory() {
+        let checker = headless_checker().await;
+        let dir = fixture_dir("fs-auth-pick-respond-dir");
+        let a = dir.join("a.txt");
+        let b = dir.join("b.txt");
+        std::fs::write(&a, b"x").expect("write a");
+        std::fs::write(&b, b"y").expect("write b");
+
+        // 手工入队一个待响应请求（无头上下文没有 AppHandle，弹不出也入不了队，
+        // 故直接构造 pending —— 测的正是 `respond` 里的落账分支）
+        let request_id = "req-directory-scope";
+        let (tx, _rx) = oneshot::channel();
+        checker.pending_requests.lock().await.push(PendingRequest {
+            request_id: request_id.to_string(),
+            plugin_id: "com.bedcode.test".to_string(),
+            paths: vec![a.to_string_lossy().to_string()],
+            grant_scope: GrantScope::Directory,
+            origin: AuthOrigin::Picker,
+            reply_tx: tx,
+        });
+
+        checker.respond(request_id, true, true).await;
+
+        assert!(
+            checker.is_granted("com.bedcode.test", &b.to_string_lossy()).await,
+            "目录粒度授权必须覆盖同目录的其它文件（用户点头的是这个目录）"
+        );
+        assert!(checker.pending_requests.lock().await.is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 反例（同一条链的另一侧）：`GrantScope::Exact` 的请求只授权**那个文件**，
+    /// 同目录兄弟文件仍需重新授权——两个粒度必须真的不同
+    #[tokio::test]
+    async fn respond_with_exact_scope_grants_only_that_path() {
+        let checker = headless_checker().await;
+        let dir = fixture_dir("fs-auth-pick-respond-exact");
+        let a = dir.join("a.txt");
+        let b = dir.join("b.txt");
+        std::fs::write(&a, b"x").expect("write a");
+        std::fs::write(&b, b"y").expect("write b");
+
+        let request_id = "req-exact-scope";
+        let (tx, _rx) = oneshot::channel();
+        checker.pending_requests.lock().await.push(PendingRequest {
+            request_id: request_id.to_string(),
+            plugin_id: "com.bedcode.test".to_string(),
+            paths: vec![a.to_string_lossy().to_string()],
+            grant_scope: GrantScope::Exact,
+            origin: AuthOrigin::Fs,
+            reply_tx: tx,
+        });
+
+        checker.respond(request_id, true, true).await;
+
+        assert!(checker.is_granted("com.bedcode.test", &a.to_string_lossy()).await);
+        assert!(
+            !checker.is_granted("com.bedcode.test", &b.to_string_lossy()).await,
+            "精确粒度不得顺手授权同目录的其它文件"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 反例：拒绝 / 不勾「记住」都不得留下任何授权（否则下次静默放行）
+    #[tokio::test]
+    async fn respond_deny_or_no_remember_leaves_no_grant() {
+        let checker = headless_checker().await;
+        let dir = fixture_dir("fs-auth-pick-respond-deny");
+        let a = dir.join("a.txt");
+        std::fs::write(&a, b"x").expect("write a");
+        let a = a.to_string_lossy().to_string();
+
+        for (id, allowed, remember) in [("req-deny", false, true), ("req-no-remember", true, false)] {
+            let (tx, _rx) = oneshot::channel();
+            checker.pending_requests.lock().await.push(PendingRequest {
+                request_id: id.to_string(),
+                plugin_id: "com.bedcode.test".to_string(),
+                paths: vec![a.clone()],
+                grant_scope: GrantScope::Directory,
+                origin: AuthOrigin::Picker,
+                reply_tx: tx,
+            });
+            checker.respond(id, allowed, remember).await;
+            assert!(
+                !checker.is_granted("com.bedcode.test", &a).await,
+                "{id}（allowed={allowed} remember={remember}）不得落授权"
+            );
+        }
+        assert!(checker.pending_requests.lock().await.is_empty());
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     // ==================== is_granted（WASI 预打开校验，无弹窗） ====================

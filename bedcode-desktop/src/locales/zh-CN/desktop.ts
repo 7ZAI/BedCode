@@ -155,6 +155,8 @@ export default {
       fsAuthRead: '读取',
       fsAuthWrite: '写入',
       fsAuthRequest: '应用 {plugin} 请求{operation}文件',
+      fsAuthPickerRequest: '你刚在系统选择框中选中以下路径，应用 {plugin} 请求{operation}',
+      fsAuthGrantScopeDir: '勾选「记住」将按所在目录授权：该目录下其它文件以后不再询问',
       fsAuthPath: '文件路径',
       fsAuthPaths: '文件路径（{count} 个目录）',
       fsAuthRemember: '记住此路径，下次自动放行',
@@ -211,6 +213,10 @@ export default {
         },
         'fs:read': { title: '文件读取', desc: '读取本地文件系统' },
         'fs:write': { title: '文件写入', desc: '写入本地文件系统' },
+        'fs:pick': {
+          title: '系统文件选择器',
+          desc: '调起系统原生选择框；应用只能看到你在框里选中的路径，并需申请访问该路径所在目录',
+        },
         broadcast: { title: '广播消息', desc: '向其他应用广播事件' },
         'timer:schedule': { title: '定时任务', desc: '注册宿主周期回调' },
         'process:run': {

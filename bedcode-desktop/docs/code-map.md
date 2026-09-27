@@ -201,7 +201,10 @@ Rust 侧按内核五模块组织（`wasm_core.rs` 为唯一组合点/facade，�
   （`FIRST_PARTY_TRUSTED_DIRS`，逐条注释归属）→ 已授权路径前缀（持久化「记住」）→ 弹窗授权，
   弹窗 UI 为 `FsAuthDialog.vue`；票 07 退役了旧的「`.claude/` 子串路径白名单」与
   「内置插件 = 任意路径放行」两条特权，命中层随日志 `layer=` 输出，
-  任务单元只走 `is_granted`（无弹窗、未授权即拒））、
+  任务单元只走 `is_granted`（无弹窗、未授权即拒））。另承接**系统选择器结果门**
+  （`host_api/platform.rs` 的 `pick-*`：权限位 `fs:pick` 通过后，对选中路径调
+  `authorize_picked`——已授权目录前缀静默放行、未授权部分弹一次框，落账粒度按**所在目录**
+  （`GrantScope::Directory`，文件 → 父目录），拒绝 / 超时回 `Err` 不回传路径）、
   frontend_channel（前端通道身份：loader 会话密钥 / 插件通道令牌 → 身份，审计票 06）、
   api_registry（互调门，ADR 0017）
 - **bus（core-bus）**：插件间 Topic 消息总线（发布/订阅，JSON + 二进制双载荷 + 背压），经 MessageDispatcher trait 解耦与 PluginHost 的循环引用。

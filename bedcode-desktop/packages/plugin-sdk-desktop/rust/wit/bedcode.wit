@@ -215,13 +215,34 @@ interface host-mdns {
 
 /// 通用平台能力域（ADR 0022 v2）：系统对话框/授权等与领域无关的平台交互
 interface host-platform {
-    /// 系统多文件选择器 → string[] JSON（用户取消为空数组）；
-    /// 选择即用户授权动作，不叠加权限门
+    /// 系统多文件选择器 → string[] JSON（用户取消为空数组）。
+    ///
+    /// **权限 `fs:pick`（manifest 必须单独声明）**：未声明即 `Err`，且**不弹对话框**
+    /// ——「能调起选择器」与「能读写任意路径」是两种权力，合成一位会让只想让用户
+    /// 挑一个文件的插件被动获得全盘读取面（权限位判据见 SDK `PERMISSION_FS_PICK`）。
+    ///
+    /// **浏览面不设限、结果面设门**：系统原生对话框（Windows IFileDialog /
+    /// Linux xdg-desktop-portal）允许用户浏览**任意**位置——浏览由用户在系统
+    /// 对话框里驱动，宿主不读任何数据；选择结束后宿主才对**选中的路径**做
+    /// `fs_auth` 授权校验（见下）。
+    ///
+    /// **选择后的授权校验**（本原语契约的另一半，缺一不可）：
+    /// - 选中路径命中**已授权目录**前缀（或第一方归属目录）→ 静默放行，不再弹框；
+    /// - 存在未授权路径 → 就未授权部分弹**一次**授权框（多路径合并一次询问）；
+    /// - 用户拒绝 / 超时 / 无弹窗通道（无头上下文）→ `Err`，**不回传任何路径**
+    ///   （fail-visible：不得把「弹了框被拒」降级成空数组）。
+    /// 「记住」按**所在目录**落账（文件 → 父目录，目录 → 自身），使同目录下的
+    /// 后续选择免弹。
+    ///
+    /// 授权只交付「可访问用户亲手选中的路径」这一层；实际读 / 写仍分别要
+    /// `fs:read` / `fs:write`（`pick-*` 不隐含读写位）。
     pick-files: func() -> result<string, string>;
-    /// 系统文件夹选择器 → 绝对路径；用户取消返回空串
-    /// （移动端为 SAF 目录树选择器，返回树 URI）
+    /// 系统文件夹选择器 → 绝对路径；用户取消返回空串。
+    /// 权限 `fs:pick` + 选择后授权校验（授权落账到所选目录本身），口径同
+    /// `pick-files`。（移动端为 SAF 目录树选择器，返回树 URI）
     pick-folder: func() -> result<string, string>;
-    /// 系统多目录选择器 → string[] JSON（用户取消为空数组）
+    /// 系统多目录选择器 → string[] JSON（用户取消为空数组）。
+    /// 权限 `fs:pick` + 选择后授权校验，口径同 `pick-files`
     pick-folders: func() -> result<string, string>;
     /// WSL 发行版名枚举（v19 函数级追加，票 13）：`string[]` JSON，顺序即
     /// `wsl --list --verbose` 输出顺序。宿主无 WSL（非 Windows / 未安装 /
@@ -920,6 +941,19 @@ interface manifest {
 /// 必须按 v22 SDK（`owned_topic` / `*_event_topic`）重建。宿主独有能力面
 /// （host-pty / host-websocket / host-mdns 的定向事件）；移动端 host-mdns 仍用旧形态，
 /// 双端偏离登记见 ADR 0022「双端偏离」口径与 `.scratch/2026-09-21-wasm-core-audit/issues/05-bus-topic-acl.md`
+///
+/// **同样不 bump 的第二例（系统文件选择器权限门，2026-09-27）**：`host-platform` 的
+/// `pick-files` / `pick-folder` / `pick-folders` 由「选择即授权、不设门」改为
+/// **必须 manifest 单独声明 `fs:pick`**，且选择结果要过 `fs_auth` 授权校验。
+/// 判据同 v22 那一例：**WIT 函数签名与 import 面零变化**（`pick-*` 三个 import
+/// 一字未动），变的是 manifest 层准入条件——权限门是运行期机制，不是 ABI 形状，
+/// 与「插件没声明 `fs:read` 就调 `fs.read` 被门」是同一套机制，不构成需要 bump 的
+/// 契约破坏。旧产物（未声明 `fs:pick` 的 v31 SDK 构建）不兼容且**不会静默降级**：
+/// 调用点在弹对话框**之前**就拿到点名缺失权限位的 `Err`，按当前 SDK 在 manifest
+/// 补声明即可重建（宿主不强制 bump，故第三方插件无需为此重编 wasm）。
+/// **双端偏离**：移动端 `host-platform` 的 SAF 选择器（`pick-files` / `pick-folder`）
+/// 维持「选择即授权、不设门」——移动端系统本身按 tree URI 授予访问权（ADR 0018
+/// 移动独立契约），不跟演本条。
 interface abi {
     version: func() -> u32;
     form: func() -> u32;

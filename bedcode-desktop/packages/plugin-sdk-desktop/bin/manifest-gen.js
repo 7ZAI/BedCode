@@ -86,6 +86,11 @@ const RUST_PERMISSION_RULES = [
   { re: /\bhttp_unregister_endpoint\b/, perm: 'network:http' },
   { re: /\b(fs_read|fs_copy)\b/, perm: 'fs:read' },
   { re: /\bfs_write\b/, perm: 'fs:write' },
+  // 系统文件选择器（WIT `host-platform`，SDK 方法名 `platform_pick_files` /
+  // `platform_pick_folder` / `platform_pick_folders`）：宿主要求 manifest **单独**
+  // 声明 `fs:pick` 才能调起系统原生对话框，缺声明即调用显性失败——因此扫描到调用
+  // 就必须把该位补进 manifest（与 fs:read / fs:write 分域，不合并推导）
+  { re: /\bplatform_pick_(files|folder|folders)\b/, perm: 'fs:pick' },
   // 插件私有库（host-plugin-database）与私有 KV 同挂 storage
   { re: /\bplugin_db_\w+\b/, perm: 'storage' },
 ]

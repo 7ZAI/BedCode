@@ -10,6 +10,7 @@
   "icon": "icon.svg",
   "permissions": [
     "broadcast",
+    "fs:pick",
     "fs:read",
     "fs:write",
     "mdns",
@@ -54,11 +55,11 @@
       {
         "id": "file-transfer.pick-files",
         "title": "file-transfer.pick-files"
-        },
-        {
+      },
+      {
         "id": "file-transfer.reveal-in-dir",
         "title": "file-transfer.reveal-in-dir"
-        },
+      },
       {
         "id": "file-transfer.enqueue",
         "title": "Enqueue Transfer"

@@ -14,6 +14,12 @@
   第一方清单在 `plugin/security/fs_auth.rs::FIRST_PARTY_TRUSTED_DIRS`，**逐条注释归属**，新增条目要说得出
   消费它的函数；任务单元（core-task 池线程）只走 `is_granted` 无弹窗判据，未授权即 fail-visible 拒绝，
   绝不从池线程触发弹窗）
+- [ ] **系统文件选择器（`host-platform.pick-files` / `pick-folder` / `pick-folders`）需单独声明 `fs:pick`**（2026-09-27）：
+  系统原生对话框浏览面不设限（用户可在任意位置浏览），但 ① **manifest 不声明 `fs:pick` 即在弹框前显性报错**
+  （错误点名缺失权限位）；② **选择结果在交给插件前过 fs_auth 授权校验**——命中已授权目录前缀则静默放行，未授权的
+  弹一次框且**按所在目录落账**（文件 → 父目录），拒绝 / 超时 → `Err` 且不回传任何路径（不得降级成空数组）。
+  该位**不隐含** `fs:read` / `fs:write`（拿到路径 ≠ 能读内容）；`reveal-in-dir` 仍无门（不交付新路径）。
+  manifest-gen 扫到 `platform_pick_*` 调用会自动补该位（`RUST_PERMISSION_RULES`）
 - [ ] 对外可调 API 在 manifest `api` 字段声明，经 `#[plugin_api]` 宏 + JSON-RPC 2.0；**未声明不可调**（ADR 0017）
 - [ ] 契约边界单点维护在 WIT（`packages/plugin-sdk-*/rust/wit/bedcode.wit`）；改 WIT 必须双端同步 + ABI bump（wasmtime 双端版本见 AGENTS.md §2、ADR 0019）。**双端偏离（ADR 0022「双端偏离」节）**：桌面独有接口不要求移动端跟演——`host-websocket`（v14）、`host-auth`（v15 密钥托管 / v18 认证记录面）、`host-pty`（v16）、`auth-policy` 导出（v17）、`host-session` 会话语义批次与 `host-platform.wsl-distros`（v19）、`host-task`（v20 + `events-task`）、`host-peer`（v25 节点生命周期）只在 desktop WIT/ABI/SDK 演进；当前 **desktop v28 / mobile 11**（v27 = `host-session` / `host-terminal` 整 interface 退役；v28 = websocket 业务下沉：新增 `host-websocket.connection-context` + 破坏性退役 `host-events.broadcast-sync` 与 `host-pty.spawn` 的 `hostBroadcastSessionId`——旧产物须按 v28 SDK 重建，详见 ADR 0022 修订记录）。移动端要接同类能力时再补该端 interface 并对齐计数。**同一批次内函数级追加不再 bump**，别拿批次号当函数号数。**不 bump 的行为变更**：`host-bus` topic 命名空间由 `<base>.<owner>` 改为 `<owner>::<base>`（签名零变化），跨属主订阅/伪发布宿主显式拒绝，旧产物 activate 期拿到点明错误、须按 v22 SDK 重建；移动端 `host-mdns` 仍旧形态、总线无门禁，该端跟演时需同批补 SDK 原语 + 总线 ACL + file-transfer 迁移，桌面结果不构成移动端正确性依据。v21–v27 各版删改明细见 ADR 0022 修订记录
 - [ ] **同实例串行红线（依据 `docs/adr/0029-plugin-concurrency-owner-and-on-demand-async.md`，含实例级门实测）**：每插件实例同一时刻**仍只允许一个 guest 调用在执行**——async 化只改变「宿主线程在等待时让出」，不引入同实例并发进入 guest；`host.rs` 实例锁（std `Arc<Mutex<LoadedWasmPlugin>>`）async 化时改为 tokio `Mutex`（await 持锁、不因等待释放），串行语义与现在等价；**禁止**改成细粒度「await 点释放锁」（会导致同实例交错：插件静态状态竞态——配对码/QR/挑战注册表/config 缓存/私有库 + wasmtime Store 重入 panic）。

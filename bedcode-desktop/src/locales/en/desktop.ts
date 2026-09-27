@@ -162,6 +162,8 @@ export default {
       fsAuthRead: 'read',
       fsAuthWrite: 'write',
       fsAuthRequest: 'App {plugin} requests to {operation} file',
+      fsAuthPickerRequest: 'You just picked these paths in the system picker; {plugin} requests to {operation} them',
+      fsAuthGrantScopeDir: '“Remember” grants the containing folder: other files in it will not be asked again',
       fsAuthPath: 'File path',
       fsAuthPaths: 'File paths ({count} directories)',
       fsAuthRemember: 'Remember this path for future access',
@@ -228,6 +230,10 @@ export default {
         },
         'fs:read': { title: 'File Read', desc: 'Read local file system' },
         'fs:write': { title: 'File Write', desc: 'Write to local file system' },
+        'fs:pick': {
+          title: 'System File Picker',
+          desc: "Open the native system picker; the app only sees the paths you pick and must request access to their folder",
+        },
         broadcast: { title: 'Broadcast', desc: 'Broadcast events to other apps' },
         'timer:schedule': { title: 'Scheduled Task', desc: 'Register periodic host callbacks' },
         'process:run': {

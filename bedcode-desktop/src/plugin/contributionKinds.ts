@@ -195,6 +195,11 @@ const PERMISSION_META: Record<string, PermissionMeta> = {
     titleKey: 'desktop.plugin.perm.fs:write.title',
     descKey: 'desktop.plugin.perm.fs:write.desc',
   },
+  'fs:pick': {
+    emoji: '🗂️',
+    titleKey: 'desktop.plugin.perm.fs:pick.title',
+    descKey: 'desktop.plugin.perm.fs:pick.desc',
+  },
   broadcast: {
     emoji: '📩',
     titleKey: 'desktop.plugin.perm.broadcast.title',

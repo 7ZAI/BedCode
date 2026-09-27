@@ -10,13 +10,14 @@
   "icon": "icon.svg",
   "permissions": [
     "broadcast",
+    "fs:pick",
     "fs:read",
     "fs:write",
     "network:http",
     "process:run",
     "storage",
-    "ui:sidebar",
-    "task:run"
+    "task:run",
+    "ui:sidebar"
   ],
   "contributes": {
     "commands": [

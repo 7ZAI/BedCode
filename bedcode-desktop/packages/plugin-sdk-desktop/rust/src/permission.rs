@@ -51,6 +51,22 @@ pub const PERMISSION_STORAGE: &str = "storage";
 pub const PERMISSION_DATABASE_MAIN: &str = "database:main";
 pub const PERMISSION_FS_READ: &str = "fs:read";
 pub const PERMISSION_FS_WRITE: &str = "fs:write";
+/// 系统文件选择器（WIT `host-platform` 的 `pick-files` / `pick-folder` /
+/// `pick-folders`）：调起**系统原生**对话框（Windows IFileDialog / Linux
+/// xdg-desktop-portal），用户可在**整盘任意位置**浏览与选择。
+///
+/// **为什么单独立位**（与 `fs:read` / `fs:write` 分域）：
+/// - 「能调起选择器」与「能读写任意路径」是两种权力。前者只让插件把用户**已经
+///   亲手选中**的路径拿到手（拿到后仍要过 `fs_auth` 授权校验），后者是任意路径
+///   读写。合成一位会让「只想让用户挑一个文件传出去」的插件被动获得全盘读取面；
+/// - 选择器是**平台交互动作**（系统对话框由用户驱动，宿主不读任何数据），但
+///   选择结果落到具体路径，因此**选择结束后必须做路径授权校验**（宿主
+///   `fs_auth` 三层校验的第二/第三层）：已授权目录下的选择静默放行，未授权的
+///   弹一次授权框；「记住」按**所在目录**落账，使同目录后续选择免弹。
+///
+/// 声明即信任「本插件会调起系统文件选择器」这一行为面；不代表任意路径读写
+/// （那仍是 `fs:read` / `fs:write` 的门）。
+pub const PERMISSION_FS_PICK: &str = "fs:pick";
 pub const PERMISSION_BROADCAST: &str = "broadcast";
 /// 定时器：注册宿主周期回调（到点调用插件 command，见 ADR 0003）
 pub const PERMISSION_TIMER: &str = "timer:schedule";
@@ -129,6 +145,7 @@ pub const PERMISSION_VOCABULARY: &[(&str, &str)] = &[
     (stringify!(PERMISSION_DATABASE_MAIN), PERMISSION_DATABASE_MAIN),
     (stringify!(PERMISSION_FS_READ), PERMISSION_FS_READ),
     (stringify!(PERMISSION_FS_WRITE), PERMISSION_FS_WRITE),
+    (stringify!(PERMISSION_FS_PICK), PERMISSION_FS_PICK),
     (stringify!(PERMISSION_BROADCAST), PERMISSION_BROADCAST),
     (stringify!(PERMISSION_TIMER), PERMISSION_TIMER),
     (stringify!(PERMISSION_PROCESS), PERMISSION_PROCESS),
@@ -211,6 +228,9 @@ pub static PERMISSION_API_MAP: &[(&str, &[&str])] = &[
     // 声明它（apiMap 空清单按 api_map_keys_must_be_known_permissions 约定省略条目）。
     (PERMISSION_FS_READ, &["fs.read", "fs.copy"]),
     (PERMISSION_FS_WRITE, &["fs.write", "fs.copy"]),
+    // 系统文件选择器（WASM-only：宿主 `host-platform.pick-*`，无前端调用点）。
+    // 与权限位同源命名，前缀 `platform.` 区别于 `fs.*`（后者是 host-fs 域）
+    (PERMISSION_FS_PICK, &["platform.pickFiles", "platform.pickFolder", "platform.pickFolders"]),
     (PERMISSION_TIMER, &["timer.register"]),
     (PERMISSION_PROCESS, &["process.run", "process.kill"]),
     (PERMISSION_APP_CLI, &["app.cliInstall", "app.cliUninstall"]),
@@ -476,6 +496,34 @@ mod tests {
             let granted = pm.grant_permissions("com.bedcode.contrib", &[perm.to_string()]);
             assert!(granted.contains(perm), "{perm} 声明后被过滤——SDK 词汇表缺位");
         }
+    }
+
+    /// 选择器位与读写位是**三把独立的钥匙**：调起系统选择器、读、写互不代持。
+    ///
+    /// 判据（选择器单独立位的理由，见常量文档）：选择器只交付「用户亲手选中的
+    /// 路径」，而「任意路径读写」是另一种权力。合成一位会让只想让用户挑文件的
+    /// 插件被动获得全盘读取面。
+    #[test]
+    fn pick_bit_is_independent_from_read_and_write() {
+        let pm = PermissionManager::new();
+        pm.grant_permissions("com.bedcode.pick-only", &[PERMISSION_FS_PICK.to_string()]);
+        assert!(pm.check("com.bedcode.pick-only", PERMISSION_FS_PICK));
+        assert!(
+            !pm.check("com.bedcode.pick-only", PERMISSION_FS_READ),
+            "声明 fs:pick 不得顺带获得任意路径读"
+        );
+        assert!(!pm.check("com.bedcode.pick-only", PERMISSION_FS_WRITE));
+
+        // 不声明就没有：选择器位同样没有默认授予
+        pm.grant_permissions("com.bedcode.no-pick", &[PERMISSION_FS_READ.to_string()]);
+        assert!(!pm.check("com.bedcode.no-pick", PERMISSION_FS_PICK));
+
+        // 持 fs:read 的插件不得因此拿到选择器面
+        assert!(!pm.check_api("com.bedcode.no-pick", "platform.pickFiles"));
+        pm.grant_permissions("com.bedcode.pick-api", &[PERMISSION_FS_PICK.to_string()]);
+        assert!(pm.check_api("com.bedcode.pick-api", "platform.pickFiles"));
+        assert!(pm.check_api("com.bedcode.pick-api", "platform.pickFolder"));
+        assert!(pm.check_api("com.bedcode.pick-api", "platform.pickFolders"));
     }
 
     /// 票 01：每条有 API 映射的权限，其映射键必须与词汇表同名（不认陌生键）

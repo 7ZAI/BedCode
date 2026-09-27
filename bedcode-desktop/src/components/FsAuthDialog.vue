@@ -25,10 +25,15 @@
             <!-- Description -->
             <p class="text-sm text-[var(--text-secondary)]">
               {{
-                t('desktop.plugin.fsAuthRequest', {
-                  plugin: request.pluginId,
-                  operation: operationLabel,
-                })
+                request.origin === 'picker'
+                  ? t('desktop.plugin.fsAuthPickerRequest', {
+                      plugin: request.pluginId,
+                      operation: operationLabel,
+                    })
+                  : t('desktop.plugin.fsAuthRequest', {
+                      plugin: request.pluginId,
+                      operation: operationLabel,
+                    })
               }}
             </p>
 
@@ -56,6 +61,14 @@
                 {{ paths[0] || request.path }}
               </div>
             </div>
+
+            <!-- 授权落账范围（选择器场景按目录落账：说清「记住」到底记住了什么） -->
+            <p
+              v-if="request.grantScope === 'directory'"
+              class="text-xs text-[var(--text-tertiary)]"
+            >
+              {{ t('desktop.plugin.fsAuthGrantScopeDir') }}
+            </p>
 
             <!-- Remember checkbox -->
             <label class="flex items-center gap-2 cursor-pointer select-none">
@@ -100,6 +113,13 @@
  * 监听 plugin:fs-auth-request 事件，显示授权请求弹窗，
  * 用户选择后通过 plugin_fs_auth_respond Tauri command 回调宿主
  *
+ * 两种来源共用本弹窗（宿主同一个事件）：
+ * - `origin: 'fs'`：插件直接请求访问某路径（activate 期的目录授权等）；
+ * - `origin: 'picker'`：宿主系统文件选择器已返回、这些路径是**用户刚亲手选中**的
+ *   （`host-platform.pick-*` 的结果门），文案要说明「为什么突然又问一次」；
+ * `grantScope: 'directory'` 时额外说明「记住」按**所在目录**落账——授权范围必须
+ * 让用户看得见，否则「勾了记住」的实际含义只有宿主知道。
+ *
  * 层级用 safe-stack Emergency 层（z-[9999]）：授权确认必须悬浮于任意
  * overlay 之上可交互——插件启停遮罩 LoadingOverlay（z-50）显示期间，
  * 插件 activate 内的 fs_request_auth（ADR 0007 激活期目录授权）会弹本
@@ -120,6 +140,10 @@ interface FsAuthRequest {
   /** 批量授权：未授权路径数组（桌面 1.0 后新增，优先于 path） */
   paths?: string[]
   operation: string
+  /** 请求来源：fs = 插件直接请求访问；picker = 用户刚在系统选择器里选中 */
+  origin?: 'fs' | 'picker'
+  /** 「记住」的落账粒度：directory = 按所在目录记（同目录其它文件不再询问） */
+  grantScope?: 'exact' | 'directory'
 }
 
 const request = ref<FsAuthRequest | null>(null)
