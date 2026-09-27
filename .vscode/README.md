@@ -18,6 +18,16 @@
 - 打开仓库根：用根 `.vscode/tasks.json` + `.vscode/launch.json`（`${workspaceFolder}` = 仓库根，路径带 `bedcode-desktop/` 前缀）
 - 打开多根工作区：用各文件夹 `.vscode/tasks.json` + `.vscode/launch.json`（`${workspaceFolder}` = 文件夹本身，无需前缀），与根版本等价
 
+## Git / SCM 可见性（与入口选择相关）
+
+仓库的 `.git` 在**根**，而 `BedCode.code-workspace` 只含 `bedcode-desktop` / `bedcode-mobile` 两个子文件夹——即 `.git` 在它们的**父目录**。由此产生两条与入口相关的坑（均在**用户级** `settings.json` 修，仓库内不锁死）：
+
+| 现象 | 根因 | 处理 |
+| --- | --- | --- |
+| 走多根工作区入口时 SCM 视图全空：无改动数量徽标、无文件绿/黄/红装饰 | git 扩展默认会问是否采用父目录仓库；一旦被设成 `git.openRepositoryInParentFolders: "never"`，就静默不开根仓库（`Git.log` 实证：`repositories (0), parent repositories (1)`） | 设为 `"prompt"`，或直接 `code /home/binblink/project/tauriProject/BedCode` 打开仓库根 |
+| 多根工作区下根级文件（`.scratch/**`、`CHANGELOG.md`、`AGENTS.md`）永不上色 | 这些路径不属任何工作区文件夹，git 状态再全也画不到 | 同上：打开仓库根 |
+| 窗口开着不动时颜色/数量不更新 | `git.autorefresh: false` 会把状态冻结在窗口启动那一刻 | 本仓 `git status -z -uall` 实测仅 18~30ms（`.gitignore` 已忽略 `**/target/`），开回 `true` 无性能顾虑；真正要防的 inotify 风暴由 `files.watcherExclude` 挡，与 autorefresh 无关 |
+
 ## `settings.json` 中的 rust-analyzer 内存限制
 
 **背景**：2026-09-04 23:55，`rust-analyzer`（PID 345132）膨胀到 3.2 GB RSS，触发 `systemd-oomd` 约束式杀进程；系统随后被手动 reboot。根因是当时 RA 递归发现全部 ~28 个 Cargo 工程并在单实例内索引。2026-09-07 优化时发现上一轮用的键在 rust-analyzer 0.3.3033 已移除，换成有效键；2026-09-25 以当前版本 **1.98.1**（`rust-analyzer --print-config-schema`）复核全部键仍然有效，并确认 1.98 起需 `linkedProjects` 显式声明工程。
