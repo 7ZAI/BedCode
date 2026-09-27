@@ -34,6 +34,19 @@
 //!    （单元执行体是同步阻塞直调，池线程内无法中断）⇒ 沿用 run-sync 的「百毫秒～
 //!    秒级适用」口径，长任务一律 `submit`，阻塞型单元（`process.run-sync`）的超时
 //!    走被调用方自带参数。
+//! 4. **单 plan 单元数上限（硬拒绝）**：宿主常量 `PLUGIN_TASK_MAX_UNITS_PER_PLAN`
+//!    = 256，`units.len() > 256` 的 plan 整批被拒（报 `task: plan exceeds max units
+//!    per plan (N > 256)`，不逐单元降级）。枚举型批量（如目录下文件数无上限）
+//!    必须自行分片提交，批次级失败只波及该片。
+//! 5. **批量结果驻留插件线性内存（更紧的约束）**：`execute-batch` 一次性返回
+//!    整批全部单元结果，插件解码还会产生副本（raw + 解析树 + 结果数组 +
+//!    解码内容 ≈ 内容 × 3~4）。插件线性内存硬顶 256MB（`MAX_PLUGIN_MEMORY_BYTES`）
+//!    ——**批量大小按内容字节预算定，不只看单元数**：全量内容（如 430MB 日志）
+//!    一次驻留直接 `rust_oom` abort trap（2026-09-28 实机：agent-hub 扫描
+//!    200 单元/批 × ~660KB ≈ 500MB 峰值 → wasm trap）。分片粒度取内容上限 ~1MB
+//!    的 32 文件量级（单片峰值 ≈ 96MB），并逐片「读→处理→释放」。另：单元结果
+//!    超 `PLUGIN_TASK_UNIT_RESULT_MAX_BYTES`（1MB）会被截断成**非完整 JSON**
+//!    （`truncated` 标记），大文件须走无截断的串行 `fs.read` 全量重读。
 
 use serde::Serialize;
 use super::HostError;
