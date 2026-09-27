@@ -9,9 +9,47 @@ use super::owner::{GuestOp, GuestReply};
 use super::{PluginHost, PLUGIN_AUTO_RELOAD_MIN_INTERVAL_SECS};
 use crate::wasm_core::manager::types::PluginSource;
 
+/// ADR 0030 决定 6：插件错误字符串 → 信封 AppError
+///
+/// - 标记 JSON（SDK `bail_with_code!` / `user_facing_string` 产物）→ 校验形状后透传
+///   `UserFacing{code, params}`（宿主**不解释业务语义**）；
+/// - 未标记 / 畸形 → 按兜底码 + 插件标识参数，原文只进日志（detail）。
+fn plugin_command_error(plugin_id: &str, command_name: &str, raw: &str) -> crate::AppError {
+    if let Some((code, params)) = parse_business_marker(raw) {
+        return crate::AppError::user_facing(
+            code,
+            params,
+            format!("plugin {plugin_id} command {command_name} failed: {raw}"),
+        );
+    }
+    crate::AppError::user_facing(
+        crate::system::error::DEFAULT_ERROR_CODE,
+        serde_json::json!({ "plugin": plugin_id }),
+        format!("plugin {plugin_id} command {command_name} failed: {raw}"),
+    )
+}
+
+/// 解析 SDK 标记信封 JSON：`{"__bedcode_error__":true,"code":"<str>","params":…}`
+///
+/// 形状校验（畸形 → `None` → 兜底）：标记必须为布尔 true、code 必须是字符串；
+/// params 缺失 → `Value::Null` 透传。
+fn parse_business_marker(raw: &str) -> Option<(String, serde_json::Value)> {
+    let v: serde_json::Value = serde_json::from_str(raw).ok()?;
+    let obj = v.as_object()?;
+    let marked = obj.get("__bedcode_error__")?;
+    if !marked.as_bool().unwrap_or(false) {
+        return None;
+    }
+    let code = obj.get("code")?.as_str()?;
+    let params = obj
+        .get("params")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    Some((code.to_string(), params))
+}
+
 impl PluginHost {
     // ==================== Rust Command Dispatch ====================
-
     /// 执行 Rust 插件的 command handler
     ///
     /// 路由逻辑：
@@ -24,10 +62,12 @@ impl PluginHost {
         args: serde_json::Value,
     ) -> crate::Result<serde_json::Value> {
         if !self.is_activated(plugin_id).await {
-            return Err(crate::AppError::Plugin(format!(
-                "Plugin {} is not activated",
-                plugin_id
-            )));
+            // 机制失败：显式友好码（ADR 0030 注册表 v0），detail 只进日志
+            return Err(crate::AppError::user_facing(
+                "host.plugin.not-activated",
+                serde_json::json!({ "plugin": plugin_id }),
+                format!("plugin {} is not activated (command {})", plugin_id, command_name),
+            ));
         }
 
         let source = {
@@ -35,7 +75,13 @@ impl PluginHost {
             plugins
                 .get(plugin_id)
                 .map(|p| p.source.clone())
-                .ok_or_else(|| crate::AppError::Plugin(format!("Plugin not found: {}", plugin_id)))?
+                .ok_or_else(|| {
+                    crate::AppError::user_facing(
+                        "host.plugin.not-found",
+                        serde_json::json!({ "plugin": plugin_id }),
+                        format!("plugin not found: {plugin_id} (command {command_name})"),
+                    )
+                })?
         };
 
         match source {
@@ -44,10 +90,11 @@ impl PluginHost {
             // ts-only 用户插件无 Rust 命令，wasm 实例缺失时报错
             PluginSource::UserInstalled => self.invoke_wasm_command(plugin_id, command_name, args).await,
             PluginSource::StaticRegistry => self.invoke_static_command(plugin_id, command_name, args).await,
-            PluginSource::FileScan => Err(crate::AppError::Plugin(format!(
-                "Plugin {} is TS-only, cannot invoke Rust command",
-                plugin_id
-            ))),
+            PluginSource::FileScan => Err(crate::AppError::user_facing(
+                "host.plugin.not-found",
+                serde_json::json!({ "plugin": plugin_id }),
+                format!("plugin {} is TS-only, cannot invoke Rust command {}", plugin_id, command_name),
+            )),
         }
     }
 
@@ -101,10 +148,11 @@ impl PluginHost {
                         error = %e,
                         "plugin auto reload after trap failed"
                     );
-                    // 统一异常通道：自动恢复失败，插件进入 Error 态（前端提示）
+                    // 统一异常通道：自动恢复失败，插件进入 Error 态（前端收信封提示）
                     host.notify_plugin_runtime_error(&plugin_id, "recovery_failed", &e.to_string())
                         .await;
-                    // 置 Error 态：UI 可见原因，且 is_activated 门禁停止后续分发
+                    // 置 Error 态：is_activated 门禁停止后续分发。原因串是宿主侧
+                    // 诊断事实（UI 只出徽标 + 通用文案，不渲染），见 mark_error 文档
                     host.mark_error(&plugin_id, format!("auto reload after trap failed: {}", e))
                         .await;
                 }
@@ -175,10 +223,12 @@ impl PluginHost {
 
         // 插件 invoke_command 的 Err 经 SDK 宏序列化为 {"error": "..."} 的**成功**
         // JSON（非 WIT Err），此处还原为真正错误——否则前端把失败当成功
-        // （真机实证：dial-peer 被拒仍 markConnected，桌面显示「已连接」）
+        // （真机实证：dial-peer 被拒仍 markConnected，桌面显示「已连接」）。
+        // ADR 0030 决定 6：SDK `bail_with_code!` 产标记 JSON 错误字符串，宿主只做
+        // 机制检测 + 形状校验 + 透传，不解释业务语义；未标记/畸形 → 兜底 + 插件标识。
         if let Some(err) = value.get("error").and_then(|v| v.as_str()) {
             if !err.is_empty() {
-                return Err(crate::AppError::Plugin(err.to_string()));
+                return Err(plugin_command_error(plugin_id, command_name, err));
             }
         }
 
@@ -260,6 +310,7 @@ impl PluginHost {
 mod tests {
     use super::*;
     use crate::db::Database;
+    use crate::system::error::AppError;
     use std::path::Path;
     use std::sync::Arc;
     use tokio::sync::Mutex;
@@ -301,5 +352,88 @@ mod tests {
         let host = test_plugin_host().await;
         let out = host.process_terminal_output("sess-1", "out-data").await;
         assert_eq!(out, "out-data", "无 handler 时应原样返回输出");
+    }
+
+    // ==================== 插件错误信封（ADR 0030 决定 6） ====================
+
+    /// 正例：标记 JSON → UserFacing 透传 code + params
+    #[test]
+    fn business_marker_passthrough_code_and_params() {
+        let err = plugin_command_error(
+            "com.bedcode.terminal-session",
+            "session.input",
+            r#"{"__bedcode_error__":true,"code":"com.bedcode.terminal-session.session.error.sessionNotFound","params":{"sessionId":"s-1"}}"#,
+        );
+        let AppError::UserFacing { code, params, detail } = err else {
+            panic!("应为 UserFacing，实际: {err}");
+        };
+        assert_eq!(code, "com.bedcode.terminal-session.session.error.sessionNotFound");
+        assert_eq!(params, serde_json::json!({ "sessionId": "s-1" }));
+        assert!(detail.contains("session.input"), "detail 应带命令上下文: {detail}");
+    }
+
+    /// 正例：标记信封 params 缺失 → Null 透传
+    #[test]
+    fn business_marker_without_params_passthrough_null() {
+        let err = plugin_command_error(
+            "com.bedcode.demo",
+            "cmd",
+            r#"{"__bedcode_error__":true,"code":"com.bedcode.demo.simple"}"#,
+        );
+        let AppError::UserFacing { params, .. } = err else { panic!("应为 UserFacing") };
+        assert_eq!(params, serde_json::Value::Null);
+    }
+
+    /// 反例：普通错误字符串（未标记）→ 兜底码 + plugin 标识参数，原文只进 detail
+    #[test]
+    fn plain_error_falls_back_to_host_internal() {
+        let err = plugin_command_error(
+            "com.bedcode.legacy",
+            "old.cmd",
+            "database locked at path /secret/db",
+        );
+        let AppError::UserFacing { code, params, detail } = err else { panic!("应为 UserFacing") };
+        assert_eq!(code, crate::system::error::DEFAULT_ERROR_CODE);
+        assert_eq!(params, serde_json::json!({ "plugin": "com.bedcode.legacy" }));
+        assert!(detail.contains("database locked"), "detail 只进日志: {detail}");
+    }
+
+    /// 反例：畸形标记（marker 非 true / code 非字符串 / 非法 JSON）→ 兜底
+    #[test]
+    fn malformed_marker_falls_back_to_host_internal() {
+        for raw in [
+            r#"{"__bedcode_error__":false,"code":"x"}"#,
+            r#"{"__bedcode_error__":true,"code":123}"#,
+            r#"{"__bedcode_error__":true}"#,
+            r#"not json at all"#,
+            r#"{"code":"x"}"#,
+        ] {
+            assert!(
+                parse_business_marker(raw).is_none(),
+                "畸形标记应当拒绝: {raw}"
+            );
+        }
+    }
+
+    /// 正例：parse_business_marker 形状矩阵（合法输入全部透传）
+    #[test]
+    fn parse_business_marker_accepts_valid_shapes() {
+        assert_eq!(
+            parse_business_marker(r#"{"__bedcode_error__":true,"code":"a.b.c","params":{}}"#),
+            Some(("a.b.c".to_string(), serde_json::json!({})))
+        );
+        assert!(parse_business_marker(r#"{"__bedcode_error__":true,"code":"a.b","params":null}"#).is_some());
+        assert!(parse_business_marker(r#"{"__bedcode_error__":true,"code":"a.b","extra":1}"#).is_some(), "额外字段应忽略");
+    }
+
+    /// 机制码：未激活 → host.plugin.not-activated；Display 语义保持（既有断言兼容）
+    #[tokio::test]
+    async fn invoke_rust_command_mechanism_codes_are_user_facing() {
+        let host = test_plugin_host().await;
+        let err = host
+            .invoke_rust_command("com.bedcode.nonexistent", "foo", serde_json::json!({}))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("not activated"), "实际: {err}");
     }
 }

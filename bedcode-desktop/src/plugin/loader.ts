@@ -432,6 +432,12 @@ class PluginLoaderClass {
         e.message || 'Activation failed',
       )
       await pluginCmds.pluginMarkError(manifest.id, e.message || 'Activation failed')
+      // 票 05（ADR 0030）：诊断/状态登记后**必须向调用方传播失败**——
+      // 否则 toggle 启停路径会把失败吞成「启用成功」假成功 toast（插件实际未启用）。
+      // 原始错误形状（信封对象 / Error）原样上抛，由调用方统一消费层（showUserError）
+      // 展示友好文案；记录为什么：loadInline 是唯一同时服务 toggle 与路由/窗口宿主的
+      // 激活入口，吞错会让本票集成测试（启用失败→友好提示）与用户观感双双失真。
+      throw e
     }
   }
 

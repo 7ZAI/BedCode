@@ -1,5 +1,9 @@
-//! 运行期错误通知节流 + fs 预授权（preauth）用例。
+//! 运行期错误通知节流 + 事件信封形状 + fs 预授权（preauth）用例。
 
+use super::super::errors::{
+    runtime_error_code, runtime_error_envelope, self_check_envelope, PLUGIN_RECOVERY_FAILED_CODE,
+    PLUGIN_SELF_CHECK_FAILED_CODE, PLUGIN_TRAP_CODE,
+};
 use super::scaffold::*;
 use super::*;
 
@@ -29,6 +33,73 @@ async fn notify_plugin_runtime_error_throttle_and_no_app_context() {
     );
     // 窗口内二次调用不新增/刷新条目（被节流）
     assert_eq!(throttle.len(), 1, "second call within window must be throttled");
+}
+
+// ==================== 运行时异常事件信封（ADR 0030 决定 7） ====================
+//
+// 契约：事件载荷 = `{ code, request_id, params: { name } }`，code 语义稳定（= 前端
+// i18n key 后缀），**永不携带** panic 消息 / 回溯 / 错误链（那些只在宿主日志里）。
+// 反向锁：一旦有人往 payload 塞 `error` 字段、或让 code 随 kind 漂移，本组用例转红。
+
+/// 异常 kind → 语义码映射：panic / trap 合并（用户看到的是同一件事），未知 kind 兜底
+#[test]
+fn runtime_error_kind_maps_to_stable_semantic_code() {
+    assert_eq!(runtime_error_code("panic"), PLUGIN_TRAP_CODE);
+    assert_eq!(runtime_error_code("trap"), PLUGIN_TRAP_CODE);
+    assert_eq!(runtime_error_code("recovery_failed"), PLUGIN_RECOVERY_FAILED_CODE);
+    // 未知 kind 不臆造语义：落通用兜底（前端显示「操作未完成，请稍后重试」）
+    assert_eq!(
+        runtime_error_code("brand-new-kind"),
+        crate::system::error::DEFAULT_ERROR_CODE
+    );
+    assert_eq!(runtime_error_code(""), crate::system::error::DEFAULT_ERROR_CODE);
+}
+
+/// 运行时异常载荷：字段白名单 + 具名参数 + 无详情
+#[test]
+fn runtime_error_payload_is_envelope_with_app_name_only() {
+    for (kind, expect_code) in [
+        ("panic", PLUGIN_TRAP_CODE),
+        ("trap", PLUGIN_TRAP_CODE),
+        ("recovery_failed", PLUGIN_RECOVERY_FAILED_CODE),
+    ] {
+        let payload = runtime_error_envelope("AI Chatbox", kind).payload();
+        assert_eq!(payload["code"], json!(expect_code), "kind={kind} 码必须稳定");
+        assert_eq!(payload["params"], json!({ "name": "AI Chatbox" }), "只带应用显示名");
+        let keys: Vec<&str> = payload.as_object().unwrap().keys().map(|s| s.as_str()).collect();
+        for key in &keys {
+            assert!(
+                matches!(*key, "code" | "request_id" | "params"),
+                "载荷出现白名单外字段 {key}（kind={kind}）"
+            );
+        }
+        let s = payload.to_string();
+        assert!(!s.contains("0x1234"), "载荷携带技术详情: {s}");
+        assert!(!s.contains("unreachable"), "载荷携带技术详情: {s}");
+    }
+}
+
+/// 自检失败载荷：固定 code + `{ plugin }` 参数
+///
+/// 参数名与运行时异常通道的 `name` 不同——两者各自对应 i18n 模板，不允许混用。
+#[test]
+fn self_check_payload_uses_self_check_code_and_plugin_param() {
+    let payload = self_check_envelope("Terminal Session").payload();
+    assert_eq!(payload["code"], json!(PLUGIN_SELF_CHECK_FAILED_CODE));
+    assert_eq!(payload["params"], json!({ "plugin": "Terminal Session" }));
+    assert!(
+        !payload.to_string().contains("hooks"),
+        "载荷不得携带失败原因: {payload}"
+    );
+}
+
+/// 未在册插件（查不到 manifest 名）→ 退回插件 ID 作为显示名，不返回空串
+///
+/// 空串会让用户看到「应用「」运行异常」这种无主语提示。
+#[tokio::test]
+async fn display_name_falls_back_to_plugin_id() {
+    let host = setup_host().await;
+    assert_eq!(host.display_name("com.bedcode.unknown").await, "com.bedcode.unknown");
 }
 
 // ==================== preauthorize_plugin 预授权钩子 ====================

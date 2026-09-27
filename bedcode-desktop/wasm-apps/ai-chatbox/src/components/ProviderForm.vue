@@ -218,7 +218,9 @@ async function onFetchModels(): Promise<void> {
       fetchError.value = t('com.bedcode.ai-chatbox.fetchModelsEmpty')
     }
   } catch (e: any) {
-    fetchError.value = `${t('com.bedcode.ai-chatbox.fetchModelsFailed')}: ${String(e?.message || e)}`
+    // 票 04（ADR 0030）：技术详情只进日志，界面显示友好 i18n 文案
+    console.error('[AI Chatbox] fetch models failed:', e)
+    fetchError.value = t('com.bedcode.ai-chatbox.fetchModelsFailed')
   } finally {
     fetching.value = false
   }
@@ -233,8 +235,9 @@ async function onTestConnection(): Promise<void> {
     testOk.value = true
     testResult.value = reply.slice(0, 120)
   } catch (e: any) {
+    console.error('[AI Chatbox] test connection failed:', e)
     testOk.value = false
-    testResult.value = String(e?.message || e)
+    testResult.value = t('com.bedcode.ai-chatbox.testFailed')
   } finally {
     testing.value = false
   }

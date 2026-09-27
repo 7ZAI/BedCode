@@ -39,6 +39,7 @@ import { openGlobalDialog } from '../../packages/plugin-sdk-desktop/src/global-d
 // 终端窗口管理器（票 13）：`session.isTerminalOpen` 是同步查询，需静态导入；
 // 其余三个方法沿用同一单例（模块级 windows Map，与宿主会话页共享状态）
 import { useSessionWindows } from '@/composables/useSessionWindows'
+import { logger } from '@/utils/frontendLogger'
 
 /**
  * 会话中心插件 ID（终端窗口视图由该插件贡献；票 05 起宿主不留终端兜底）。
@@ -108,12 +109,12 @@ export async function createPluginContext(info: PluginInfo): Promise<PluginConte
           channelToken,
         )
       } catch (e) {
-        // 保留底层错误信息，避免把真实失败原因（如 WASM trap、插件未激活）
-        // 统一掩盖成 "Command not found"，便于定位问题。
-        // 注意：Rust AppError 经 Tauri IPC 以纯字符串 reject（无 .message），需按类型提取
-        const raw = e instanceof Error ? e.message : typeof e === 'string' ? e : ''
-        const detail = raw ? ` (${raw})` : ''
-        throw new Error(`Command not found: ${id}${detail}`)
+        // 票 04（ADR 0030 收口）：机制错误对象只承载控制流语义（命令未找到），
+        // **不再向 message 拼装底层 error 原文**——遗留字符串形状的兼容已随信封化退役；
+        // 技术详情唯一落点是日志（logger.error 带全量原文）。调用方（如插件前端）如
+        // 展示 e.message 也只会得到机制文案，不会泄漏 WASM trap / 宿主详细错误。
+        logger.error(`[PluginContext] command "${id}" failed:`, e)
+        throw new Error(`Command not found: ${id}`)
       }
     },
   }

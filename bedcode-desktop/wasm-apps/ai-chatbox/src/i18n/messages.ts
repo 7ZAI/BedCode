@@ -63,6 +63,7 @@ export interface MessageSchema {
   testConnection: string
   testing: string
   testOk: string
+  testFailed: string
   cancel: string
   contextLimitExceeded: string
   authRevoked: string
@@ -72,4 +73,6 @@ export interface MessageSchema {
   rateLimitStop: string
   rateLimitExhausted: string
   rateLimitAborted: string
+  /** 未分类 / 未知错误码的兜底文案（ADR 0030：界面永不显示错误码原文） */
+  requestFailed: string
 }

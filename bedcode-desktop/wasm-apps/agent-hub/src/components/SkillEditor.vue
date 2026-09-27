@@ -161,7 +161,6 @@ async function reloadFromDisk() {
 
     <div v-if="loading" class="ah-sk-loading">{{ t('hub.card.detecting') }}</div>
     <template v-else-if="detail">
-      <div v-if="detail.error" class="ah-cli-error">{{ detail.error }}</div>
       <div class="ah-sk-meta">
         <span class="ah-env-row"><span class="ah-env-label">name</span><span class="ah-env-value ah-mono">{{ detail.name }}</span></span>
         <span v-if="detail.allowedTools" class="ah-env-row"><span class="ah-env-label">allowed-tools</span><span class="ah-env-value ah-mono">{{ detail.allowedTools }}</span></span>

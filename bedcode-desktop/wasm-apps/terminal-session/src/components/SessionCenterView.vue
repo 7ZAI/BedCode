@@ -799,7 +799,7 @@ async function doStart(configId: string): Promise<void> {
     toast.success(t('session.toast.started'))
   } catch (e: any) {
     console.error('[Session Center] start session failed:', e)
-    toast.error(t('session.error.startFailed', { error: e?.message || e }))
+    toast.error(t('session.error.startFailed'))
   } finally {
     isOperating.value = false
   }
@@ -836,7 +836,8 @@ async function confirmStop(): Promise<void> {
     await stopSession(pendingSession.value.id)
     toast.info(t('session.toast.stopped'))
   } catch (e: any) {
-    toast.error(t('session.error.stopFailed', { error: e?.message || e }))
+    console.error('[Session Center] stop session failed:', e)
+    toast.error(t('session.error.stopFailed'))
   } finally {
     isOperating.value = false
     showStopConfirmDialog.value = false
@@ -851,7 +852,8 @@ async function doRestart(session: SessionDto): Promise<void> {
     await restartSession(session.id)
     toast.success(t('session.toast.restarted'))
   } catch (e: any) {
-    toast.error(t('session.error.restartFailed', { error: e?.message || e }))
+    console.error('[Session Center] restart session failed:', e)
+    toast.error(t('session.error.restartFailed'))
   } finally {
     isOperating.value = false
   }
@@ -883,7 +885,8 @@ async function confirmDeleteSessionNow(): Promise<void> {
     await removeSession(sessionId)
     toast.success(t('session.toast.deleted'))
   } catch (e: any) {
-    toast.error(t('session.error.deleteFailed', { error: e?.message || e }))
+    console.error('[Session Center] delete session failed:', e)
+    toast.error(t('session.error.deleteFailed'))
   } finally {
     isOperating.value = false
     showDeleteSessionConfirmDialog.value = false
@@ -902,7 +905,8 @@ async function confirmDeleteConfigNow(): Promise<void> {
     await removeConfig(pendingDeleteConfigId.value)
     toast.success(t('session.toast.configDeleted'))
   } catch (e: any) {
-    toast.error(t('session.error.saveFailed', { error: e?.message || e }))
+    console.error('[Session Center] delete config failed:', e)
+    toast.error(t('session.error.saveFailed'))
   } finally {
     showDeleteConfirmDialog.value = false
     pendingDeleteConfigId.value = null
@@ -941,7 +945,7 @@ async function handleSaveConfig(form: SessionConfigFormData): Promise<void> {
     void context.storage.set(FORM_DEFAULTS_KEY, formDefaults.value)
   } catch (e: any) {
     console.error('[Session Center] save config failed:', e)
-    toast.error(t('session.error.saveFailed', { error: e?.message || e }))
+    toast.error(t('session.error.saveFailed'))
   }
 }
 

@@ -97,7 +97,7 @@ const zhCN: MessageSchema = {
   'hub.skill.targetStale': '{name} · {n} 个落后',
   'hub.skill.targetIdle': '{name} 未分发',
   'hub.skill.targetNoConvention': 'opencode / codex 无 skills 目录约定',
-  'hub.skill.scanError': '扫描失败：{error}',
+  'hub.skill.scanError': '扫描失败，请稍后重试',
   'hub.skill.empty': '规范库暂无 skill',
   'hub.skill.emptyHint': '可从 GitHub 安装，或导入本地含 SKILL.md 的目录。',
   'hub.skill.edit': '编辑',
@@ -129,7 +129,7 @@ const zhCN: MessageSchema = {
   'hub.skill.import.overwrite': '覆盖导入',
   'hub.skill.import.authDenied': '目录授权被拒绝，无法导入。',
   'hub.skill.import.done': '已导入 {name}（{n} 个文件）',
-  'hub.skill.import.failed': '导入失败：{error}',
+  'hub.skill.import.failed': '导入失败，请稍后重试',
 
   // ==================== Skills · 编辑器（票据 04） ====================
   'hub.skill.editor.title': '编辑 skill',
@@ -153,7 +153,7 @@ const zhCN: MessageSchema = {
   'hub.pv.importDone': '已导入 {n} 个预设',
   'hub.pv.importSkipped': '{names} 已存在，跳过',
   'hub.pv.importNone': '未发现可导入的供应商配置（pi / opencode）',
-  'hub.pv.importFailed': '导入失败：{error}',
+  'hub.pv.importFailed': '导入失败，请稍后重试',
   'hub.pv.keyMask': 'key：{mask}',
   'hub.pv.empty': '暂无预设',
   'hub.pv.emptyHint': '从内置模板新建，或从已配置的 CLI 反向导入。',
@@ -215,7 +215,7 @@ const zhCN: MessageSchema = {
   'hub.pv.apply.conflict':
     '检测到 claude 自建桥接（{files}）。写入仅改写 settings.json 的 env 块，不会触碰桥接文件；确认继续？',
   'hub.pv.apply.conflictConfirm': '确认写入（不覆盖桥接）',
-  'hub.pv.apply.failed': '应用失败：{error}',
+  'hub.pv.apply.failed': '应用失败，请稍后重试',
   // ==================== 使用统计（票据 06） ====================
   'hub.st.syncedTag': '增量水位：已同步 {n} 个文件',
   'hub.st.syncing': '扫描中…',

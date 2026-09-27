@@ -80,9 +80,12 @@ export default {
       startSuccess: 'Server started',
       stopSuccess: 'Server stopped',
       restartSuccess: 'Server restarted',
-      startFailed: 'Start failed: {error}',
-      stopFailed: 'Stop failed: {error}',
-      restartFailed: 'Restart failed: {error}',
+      // Ticket 01 (error envelope): removed the {error} interpolation (technical details must
+      // never reach the user-facing surface, ADR 0030); concrete failures are presented
+      // uniformly via showUserError → errors.host.*, these keys stay as static fallback copy
+      startFailed: 'Start failed, please try again',
+      stopFailed: 'Stop failed, please try again',
+      restartFailed: 'Restart failed, please try again',
       advancedConfig: 'Advanced Configuration',
       workers: 'Worker Threads',
       workersHint: '0 = auto (CPU cores)',
@@ -124,7 +127,8 @@ export default {
       loaded: 'Loaded',
       activating: 'Activating',
       degraded: 'Degraded',
-      degradedReason: 'Startup initialization failed; app running in degraded mode: {error}',
+      // degradedReason retired in ticket 03: the degraded notice now uses
+      // errors.host.plugin.degraded (display-name param); the reason string stays in logs
       needsApproval: 'Pending approval',
       deactivated: 'Deactivated',
       disable: 'Disable',
@@ -136,19 +140,19 @@ export default {
       reset: 'Reset',
       configSaved: 'Configuration saved',
       configReset: 'Configuration reset',
-      activateFailed: 'Activation failed: {error}',
-      deactivateFailed: 'Deactivation failed: {error}',
+      // Ticket 02 (error envelope ADR 0030): these failure keys drop the {error}
+      // interpolation — concrete failures surface uniformly via showUserError →
+      // errors.host.plugin.*; keys stay as static fallback copy
+      activateFailed: 'Failed to activate app, please try again',
+      deactivateFailed: 'Failed to deactivate app, please try again',
       loadFailed: 'Failed to load apps',
       enabledSuccess: 'App {name} enabled',
       disabledSuccess: 'App {name} disabled',
-      selfCheckFailed:
-        'App {plugin} self-check failed: {error}. Check the app configuration.',
-      runtimePanic: 'App "{name}" hit an unknown error and is being auto-recovered: {error}',
-      runtimeTrap: 'App "{name}" crashed unexpectedly; attempting auto-reload',
-      runtimeRecoveryFailed:
-        'App "{name}" failed and auto-recovery did not help: {error}. Check the app center',
+      // selfCheckFailed / runtimePanic / runtimeTrap / runtimeRecoveryFailed retired in
+      // ticket 03: runtime failures ride the error envelope (errors.host.plugin.*) and
+      // the copy no longer interpolates technical detail
       runtimeUnexpected: 'An unexpected error occurred. See logs for details',
-      toggleTimeout: 'Operation timed out (backend not responding)',
+      // ticket 02: toggleTimeout retired with envelope-shaped timeout (host.invoke.timeout)
       copyFailed: 'Failed to copy path',
       pluginNotActivated: 'App not activated, cannot access configuration',
       noConfigAvailable: 'No configuration available',
@@ -263,7 +267,7 @@ export default {
         cancel: 'Cancel',
         approving: 'Approving...',
         success: 'App {name} approved',
-        failed: 'Approval failed: {error}',
+        failed: 'Approval failed, please try again',
       },
       // Stats bar
       stat: {
@@ -302,7 +306,7 @@ export default {
       installFromFileDesc: 'Pick an app zip package (containing plugin.json, index.js, optional wasm)',
       installing: 'Installing app...',
       installSuccess: 'App {name} loaded successfully',
-      installFailed: 'Failed to load app: {error}',
+      installFailed: 'Failed to load app, please try again',
       installCancel: 'Cancel',
       uninstall: 'Uninstall',
       uninstallDisabledHint: 'Deactivate the app before uninstalling',
@@ -311,7 +315,7 @@ export default {
         'This will delete all data of app "{name}" (install directory, storage and enabled state). This cannot be undone. Continue?',
       uninstallCancel: 'Cancel',
       uninstallSuccess: 'App {name} uninstalled',
-      uninstallFailed: 'Uninstall failed: {error}',
+      uninstallFailed: 'Uninstall failed, please try again',
     },
   },
 }

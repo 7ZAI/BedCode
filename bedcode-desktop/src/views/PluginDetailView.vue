@@ -83,16 +83,13 @@
                 ></span>
                 {{ $t(getStateKey(plugin.state)) }}
               </span>
-              <!-- 降级原因：activate 成功但启动初始化失败，实例仍在运行 -->
+              <!-- 降级说明：activate 成功但启动初始化失败，实例仍在运行。
+                   ADR 0030 决定 11：只出带应用名的通用文案，失败原因原文留在日志 -->
               <p
                 v-if="isDegraded(plugin.state)"
                 class="mt-1 text-[calc(11px*var(--ui-scale))] leading-relaxed text-amber-600 dark:text-amber-400"
               >
-                {{
-                  $t('desktop.plugin.degradedReason', {
-                    error: getDegradedMessage(plugin.state),
-                  })
-                }}
+                {{ $t('errors.host.plugin.degraded', { name: plugin.name }) }}
               </p>
               <!-- 待授权：权限清单未经人工确认，启用前必须审批（ADR 0020） -->
               <div v-if="isNeedsApproval(plugin.state)" class="mt-2 flex items-center gap-2">
@@ -426,6 +423,7 @@ import { ref, onMounted, onActivated, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { pluginListLoaded, pluginPreauthorize, pluginUninstall } from '@/plugin/commands'
 import { useToast } from '@/composables/useToast'
+import { IPC_TIMEOUT_CODE, showUserError } from '@/utils/userError'
 import i18n from '@/locales'
 import PluginIcon from '@/components/PluginIcon.vue'
 import CollapseSection from '@/components/CollapseSection.vue'
@@ -437,7 +435,6 @@ import {
   getStateKey,
   isActivated,
   isDegraded,
-  getDegradedMessage,
   isErrorState,
   isNeedsApproval,
   hasConfiguration,
@@ -555,9 +552,10 @@ async function runToggle(id: string, enable: boolean): Promise<void> {
     togglingPluginInfo.value = { id, name, message: t(key, { name }) }
     togglingId.value = id
     const op = enable ? pluginLoader.activate(id) : pluginLoader.deactivate(id)
+    // 票 02（ADR 0030）：超时承载为信封形状（统一超时码），不泄漏命令名/技术详情
     const timeout = new Promise<never>((_, reject) => {
       timer = setTimeout(
-        () => reject(new Error(t('desktop.plugin.toggleTimeout'))),
+        () => reject({ code: IPC_TIMEOUT_CODE, params: { seconds: TOGGLE_TIMEOUT_MS / 1000 } }),
         TOGGLE_TIMEOUT_MS,
       )
     })
@@ -566,8 +564,9 @@ async function runToggle(id: string, enable: boolean): Promise<void> {
     const resultKey = enable ? 'desktop.plugin.enabledSuccess' : 'desktop.plugin.disabledSuccess'
     toast.success(t(resultKey, { name }))
   } catch (e: any) {
-    const errKey = enable ? 'desktop.plugin.activateFailed' : 'desktop.plugin.deactivateFailed'
-    toast.error(t(errKey, { error: e.message || 'Unknown error' }))
+    // 票 02（ADR 0030）：统一消费层——友好文案 + 日志，永不渲染错误原文；
+    // 仅 host.invoke.timeout 提供「重试」按钮（重发原启停操作）
+    showUserError(e, { retry: () => runToggle(id, enable) })
   } finally {
     clearTimeout(timer)
     togglingId.value = null
@@ -609,7 +608,8 @@ async function confirmUninstall(): Promise<void> {
     // 插件已删除，详情页无对象可展示，回列表页
     goBack()
   } catch (e: any) {
-    toast.error(t('desktop.plugin.uninstallFailed', { error: e.message || String(e) }))
+    // 票 02（ADR 0030）：统一消费层——友好文案 + 日志，永不渲染错误原文
+    showUserError(e)
     showUninstallConfirm.value = false
   } finally {
     uninstalling.value = false

@@ -273,6 +273,7 @@ import { onMounted, onUnmounted, computed, watch, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useServer } from '@/composables/useServer'
 import { useToast } from '@/composables/useToast'
+import { showUserError } from '@/utils/userError'
 import VChart from 'vue-echarts'
 import PluginPageToolbar from '@/plugin/components/PluginPageToolbar.vue'
 import { use } from 'echarts/core'
@@ -492,8 +493,8 @@ async function handleStart() {
     await startServer()
     toast.success(t('desktop.server.startSuccess'))
     startPolling()
-  } catch (e: any) {
-    toast.error(e.message)
+  } catch (e) {
+    showUserError(e, { retry: handleStart })
   }
 }
 
@@ -503,8 +504,8 @@ async function handleStop() {
     await stopServer()
     toast.success(t('desktop.server.stopSuccess'))
     stopPolling()
-  } catch (e: any) {
-    toast.error(e.message)
+  } catch (e) {
+    showUserError(e, { retry: handleStop })
   }
 }
 
@@ -529,8 +530,8 @@ async function handleRestart() {
     syncPortInput()
     toast.success(t('desktop.server.restartSuccess'))
     startPolling()
-  } catch (e: any) {
-    toast.error(e.message)
+  } catch (e) {
+    showUserError(e, { retry: handleRestart })
   }
 }
 
@@ -538,8 +539,8 @@ async function handleRestart() {
 async function handleAutoStartToggle(val: boolean) {
   try {
     await updateAutoStart(val)
-  } catch (e: any) {
-    toast.error(String(e))
+  } catch (e) {
+    showUserError(e)
   }
 }
 
@@ -663,8 +664,8 @@ async function handleResetDefaults() {
       ws_max_message_size_mb: defaults.ws_max_message_size_mb,
     }
     toast.success(t('desktop.server.resetSuccess'))
-  } catch (e: any) {
-    toast.error(e.message)
+  } catch (e) {
+    showUserError(e)
   }
 }
 

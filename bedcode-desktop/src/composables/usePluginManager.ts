@@ -14,6 +14,7 @@ import { pluginLoader } from '@/plugin/loader'
 import { useToast } from '@/composables/useToast'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import i18n from '@/locales'
+import { IPC_TIMEOUT_CODE, showUserError } from '@/utils/userError'
 import type { PluginInfo } from '@/plugin/types'
 
 /** 启停操作总超时：后端激活/停用含 hooks 清理（wsl.exe 桥接最长约 15s）与 fs 授权弹窗（30s），给足余量 */
@@ -86,9 +87,10 @@ export function usePluginManager() {
       }
       togglingId.value = id
       const op = enable ? pluginLoader.activate(id) : pluginLoader.deactivate(id)
+      // 票 02（ADR 0030）：超时承载为信封形状（统一超时码），不泄漏命令名/技术详情
       const timeout = new Promise<never>((_, reject) => {
         timer = setTimeout(
-          () => reject(new Error(t('desktop.plugin.toggleTimeout'))),
+          () => reject({ code: IPC_TIMEOUT_CODE, params: { seconds: TOGGLE_TIMEOUT_MS / 1000 } }),
           TOGGLE_TIMEOUT_MS,
         )
       })
@@ -104,9 +106,9 @@ export function usePluginManager() {
       return true
     } catch (e: any) {
       logger.error(`[PluginManager] togglePlugin(${id}) failed:`, e)
-      const msg = e?.message || ''
-      const key = enable ? 'desktop.plugin.activateFailed' : 'desktop.plugin.deactivateFailed'
-      toast.error(t(key, { error: msg || 'Unknown error' }))
+      // 票 02（ADR 0030）：统一消费层——友好文案 + 日志，永不渲染错误原文；
+      // 仅 host.invoke.timeout 提供「重试」按钮（重发原启停操作）
+      showUserError(e, { retry: () => togglePlugin(id, enable) })
       return false
     } finally {
       clearTimeout(timer)

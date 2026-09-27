@@ -3,7 +3,7 @@
 **Type:** task
 **Spec:** `../spec.md`（§2 核心契约 / §4 P1+P3 范围子集 / §3 A·E·F 组局部）；契约单一事实源 `docs/adr/0030-error-envelope-and-user-prompt-boundary.md`
 **Blocked by:** None — can start immediately
-**Status:** ready-for-agent
+**Status:** done（2026-09-27；frontier 移交 02/03）
 
 **What to build:** 用户启动/停止/重启服务器失败时，界面只显示友好提示（如「操作未完成，请稍后重试」「操作超时，请重试」），不再出现任何技术原文、命令名或内部标识；错误详情（原文/堆栈/anyhow 链）带追踪号只进产生方日志——含前端侧：release 构建下 error/warn 级日志也落盘（此前 release 为空函数，前端侧详情不落盘）。
 

@@ -86,7 +86,7 @@ export default {
       checkUpdate: 'Check for Updates',
       alreadyLatest: 'Already on the latest version',
       checkingUpdate: 'Checking for updates...',
-      checkFailed: 'Failed to check for updates',
+      checkFailed: 'Failed to check for updates, please try again',
       newVersionAvailable: 'New version available',
       downloadingUpdate: 'Downloading update...',
       downloadComplete: 'Download complete, installing...',

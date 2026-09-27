@@ -37,12 +37,20 @@ pub const LIFECYCLE_SHUTDOWN: &str = "lifecycle:shutdown";
 /// 插件开发模式热重载通知
 pub const PLUGIN_DEV_RELOAD: &str = "plugin:dev-reload";
 
-/// 插件自检失败提示（host_mark_plugin_error）— 前端弹窗提示，不改插件状态
+/// 插件自检失败提示（host_mark_plugin_error）— 前端提示，不改插件状态
+///
+/// payload: 错误信封 `{ code, request_id, params: { plugin } }`，code 恒为
+/// `host.plugin.self-check-failed`（ADR 0030 决定 7）；自检详情只进宿主日志。
 pub const PLUGIN_ERROR: &str = "plugin:error";
 
 /// 插件运行时异常统一上报（WASM 调用 panic / trap / 自动恢复失败）
 ///
-/// payload: `{ plugin_id, plugin_name, kind, error }`，kind ∈ panic | trap | recovery_failed。
+/// payload: 错误信封 `{ code, request_id, params: { name } }`（与 IPC 信封同形状）；
+/// code 由异常 kind 映射（`panic` | `trap` → `host.plugin.trap`，
+/// `recovery_failed` → `host.plugin.recovery-failed`，未知 kind → `host.internal`），
+/// 映射表见 `manager/host/errors.rs::runtime_error_code`。panic 消息 / 回溯等
+/// 全量详情只进宿主日志，与信封 `request_id` 同条带出。
+///
 /// 与 `PLUGIN_ERROR`（插件主动自检上报）不同：本事件由宿主在检测到插件异常时
 /// 主动发出，前端统一 toast 提示用户（节流：同一插件 15s 内合并）。
 pub const PLUGIN_RUNTIME_ERROR: &str = "plugin:runtime-error";

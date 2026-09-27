@@ -120,6 +120,10 @@ export type MessageSchema = {
   'session.error.deleteFailed': string
   'session.error.saveFailed': string
   'session.error.notRunning': string
+  // 票 02（ADR 0030 决定 6）：业务码文案骨架——code = 注册后完整 key
+  // `<plugin_id>.session.error.sessionNotFound`；宿主对插件码只透传不解释，
+  // 前端消费层以裸 key 回退查找（业务码与文案 key 零映射层）
+  'session.error.sessionNotFound': string
 
   // ==================== 配置表单 ====================
   'session.form.title.new': string

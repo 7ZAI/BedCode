@@ -201,7 +201,7 @@ function closeEditor() {
 
       <!-- 扫描/导入失败提示 -->
       <div v-if="state?.status === 'error' && state?.error" class="ah-cli-error">
-        {{ t('hub.skill.scanError', { error: state.error }) }}
+        {{ t('hub.skill.scanError') }}
       </div>
 
       <!-- GitHub 安装表单 -->
@@ -257,7 +257,7 @@ function closeEditor() {
       <div v-if="state?.import?.last" class="ah-sk-result" :class="{ err: !state.import.last.ok }">
         {{ state.import.last.ok
           ? t('hub.skill.import.done', { name: state.import.last.name, n: state.import.last.fileCount })
-          : t('hub.skill.import.failed', { error: state.import.last.error ?? '' }) }}
+          : t('hub.skill.import.failed') }}
       </div>
       <div v-if="state?.github?.last?.ok" class="ah-sk-result">
         {{ t('hub.skill.github.done', { n: state.github.last.installed.length })
@@ -279,7 +279,7 @@ function closeEditor() {
               <span class="ah-mono ah-sk-row-dir">{{ row.entry.dir }}</span>
             </span>
             <span class="ah-sk-row-desc" :title="row.entry.description ?? ''">
-              {{ row.entry.description ?? row.entry.error ?? '' }}
+              {{ row.entry.description ?? '' }}
             </span>
           </div>
           <div class="ah-sk-row-dist">

@@ -96,13 +96,15 @@ async function apply(force: boolean) {
     appliedFiles.value = result.files ?? []
     keyValue.value = ''
   } else if (result.error) {
-    error.value = result.error
+    // 票 04（ADR 0030）：应用失败原因只进日志，界面显示友好 i18n，不携带原文
+    console.error(`[Agent Hub] apply provider failed (${target.value})`, result.error)
+    error.value = t('hub.pv.apply.failed')
   }
 }
 </script>
 
 <template>
-  <div class="ah-card ah-pv-apply" data-testid="provider-apply">
+  <div class="ah-card" data-testid="provider-apply">
     <div class="ah-inst-head">
       <span class="ah-section-title">{{ t('hub.pv.apply.title', { name: preset.name }) }}</span>
       <button type="button" class="ah-btn ah-btn-ghost ah-btn-sm" data-testid="apply-close" @click="emit('close')">
@@ -200,7 +202,7 @@ async function apply(force: boolean) {
         </button>
       </div>
 
-      <div v-if="error" class="ah-cli-error">{{ t('hub.pv.apply.failed', { error }) }}</div>
+      <div v-if="error" class="ah-cli-error">{{ t('hub.pv.apply.failed') }}</div>
 
       <div class="ah-pv-apply-actions">
         <button

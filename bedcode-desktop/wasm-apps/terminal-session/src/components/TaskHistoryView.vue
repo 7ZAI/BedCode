@@ -1775,7 +1775,7 @@ function onLiveChanged() {
                 </p>
               </div>
               <p v-if="item.job.error" class="text-xs text-red-500 mt-1.5 break-words">
-                {{ t('task.scheduledError') }}: {{ item.job.error }}
+                {{ t('task.scheduledError') }}
               </p>
 
               <!-- 操作区：pending 可删除；missed/failed 可删除或重新设置（重置回 pending 重新调度）；executed 可删除（清档） -->

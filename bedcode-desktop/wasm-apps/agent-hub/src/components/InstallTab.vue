@@ -145,7 +145,9 @@ async function onAddCustom() {
     customUrl.value = ''
     customError.value = null
   } catch (e) {
-    customError.value = (e as Error)?.message ?? String(e)
+    // 票 04（ADR 0030）：命令面错误原文只进日志；界面显示友好 i18n
+    console.error('[Agent Hub] add-custom-source failed:', e)
+    customError.value = t('hub.inst.failed')
   }
 }
 
@@ -188,7 +190,9 @@ const rows = computed<Row[]>(() =>
       return row
     }
     if (info.status === 'error') {
-      row.hint = info.error ?? t('hub.card.error')
+      // 票 04（ADR 0030）：检测失败详情只进日志，行内提示用友好 i18n
+      if (info.error) console.error('[Agent Hub] cli detect error:', info.error)
+      row.hint = t('hub.card.error')
       return row
     }
     if (!nodeReady.value) {
@@ -298,7 +302,7 @@ watch(
             </button>
           </div>
         </div>
-        <div v-else-if="speedFailed" class="ah-cli-error">{{ speed?.error ?? t('hub.speed.fail') }}</div>
+        <div v-else-if="speedFailed" class="ah-cli-error">{{ t('hub.speed.fail') }}</div>
 
         <!-- 用户自定义源：添加 / 管理 -->
         <div class="ah-speed-custom">
@@ -334,7 +338,7 @@ watch(
         <div v-if="customError" class="ah-cli-error">{{ customError }}</div>
       </div>
 
-      <div v-if="speed?.error" class="ah-cli-error">{{ speed.error }}</div>
+      <div v-if="speedFailed" class="ah-cli-error">{{ t('hub.speed.fail') }}</div>
 
       <div v-if="speedDone || npmrc?.backupExists" class="ah-speed-actions">
         <span v-if="npmrc?.backupExists" class="ah-speed-actions-btns">
@@ -440,7 +444,8 @@ watch(
       </div>
       <div v-if="consoleCommand" class="ah-console-cmd ah-mono">$ {{ consoleCommand }}</div>
       <pre ref="consoleEl" class="ah-console ah-mono">{{ consoleText || t('hub.inst.outputEmpty') }}</pre>
-      <div v-if="lastRun?.error" class="ah-cli-error">{{ lastRun.error }}</div>
+      <!-- 票 04（ADR 0030）：运行失败详情只进 guest 日志，界面显示友好 i18n -->
+      <div v-if="lastRun?.error" class="ah-cli-error">{{ t('hub.inst.failed') }}</div>
     </div>
   </div>
 </template>

@@ -53,7 +53,7 @@ const methodLabel = computed(() => {
       <span v-if="methodLabel" class="ah-cli-method">{{ methodLabel }}</span>
     </div>
 
-    <div v-if="props.info?.error" class="ah-cli-error">{{ props.info.error }}</div>
+    <div v-if="props.info?.error" class="ah-cli-error">{{ t('hub.card.error') }}</div>
 
     <div v-if="props.info?.dual" class="ah-cli-dual">
       <div>{{ t('hub.card.dualWarning', { n: props.info.paths.length }) }}</div>

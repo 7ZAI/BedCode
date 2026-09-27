@@ -62,6 +62,7 @@ const en: MessageSchema = {
   testConnection: 'Test Connection',
   testing: 'Testing...',
   testOk: 'Connection OK',
+  testFailed: 'Connection test failed, please try again',
   cancel: 'Cancel',
   contextLimitExceeded: 'Context length exceeded — start a new conversation',
   authRevoked: 'Directory authorization revoked — re-authorize in settings',
@@ -71,6 +72,7 @@ const en: MessageSchema = {
   rateLimitStop: 'Stop',
   rateLimitExhausted: 'Rate limited by provider: retries exhausted — try again later or switch model',
   rateLimitAborted: 'Rate limit retry stopped',
+  requestFailed: 'Request failed, please try again',
 }
 
 export default en

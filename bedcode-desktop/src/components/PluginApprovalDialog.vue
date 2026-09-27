@@ -130,6 +130,7 @@ import { pluginApprove } from '@/plugin/commands'
 import { getPermissionMeta, isHighRiskPermission } from '@/plugin/contributionKinds'
 import { useToast } from '@/composables/useToast'
 import { logger } from '@/utils/frontendLogger'
+import { showUserError } from '@/utils/userError'
 import i18n from '@/locales'
 import type { PluginInfo } from '@/plugin/types'
 
@@ -173,7 +174,9 @@ async function confirmApprove(): Promise<void> {
     emit('approved', target.id)
   } catch (e: any) {
     logger.error(`[PluginApprovalDialog] pluginApprove(${target.id}) failed:`, e)
-    toast.error(t('desktop.plugin.approve.failed', { error: e?.message || String(e) }))
+    // 票 02（ADR 0030）：统一消费层——友好文案 + 日志，永不渲染错误原文；
+    // 失败保留弹层供重试
+    showUserError(e)
   } finally {
     approving.value = false
   }

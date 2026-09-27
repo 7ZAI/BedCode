@@ -347,18 +347,35 @@ const currentModelKey = computed(() =>
     : '',
 )
 
+/**
+ * lastError → 友好文案（票 04 / ADR 0030）：lastError 值可能是
+ * ① 插件 i18n 键（`com.bedcode.ai-chatbox.*`，registerMessages 注册后可被宿主 t() 解析）
+ * ② 遗留 hardcode 文本（含错误码/技术详情）
+ * 规则：能解析 → 解析；否则（遗留原文 / 未知键）→ 通用兜底文案 `requestFailed`，
+ * **永不把错误码 / 技术原文直接渲染上界面**。
+ */
+function resolveLastErrorText(): string {
+  const code = lastError.value
+  if (!code) return ''
+  // 插件 i18n 键以插件 ID 注册（com.bedcode.ai-chatbox.*），t() 可解析；
+  // 解析失败时 vue-i18n 返回 key 原文→按未注册处理，落兜底
+  const resolved = String(t(code))
+  if (resolved !== code) return resolved
+  return String(t('com.bedcode.ai-chatbox.requestFailed'))
+}
+
 /** 最近一条消息的错误文本（assistant 空内容时显示） */
 const messageErrorText = computed(() => {
   const last = messages.value[messages.value.length - 1]
   if (!last || last.role !== 'assistant' || last.content) return ''
-  return lastError.value.startsWith('desktop.plugin.') ? t(lastError.value) : lastError.value
+  return resolveLastErrorText()
 })
 
 /** 全局错误条（请求失败/授权失效，非单消息错误） */
 const visibleError = computed(() => {
   if (!lastError.value) return ''
   if (lastError.value === dismissedError.value) return ''
-  return lastError.value.startsWith('desktop.plugin.') ? t(lastError.value) : lastError.value
+  return resolveLastErrorText()
 })
 
 const canRegenerate = computed(

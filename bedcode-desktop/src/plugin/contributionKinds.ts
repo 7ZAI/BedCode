@@ -380,11 +380,6 @@ export function isDegraded(state: PluginState): boolean {
   return state.state === 'Degraded'
 }
 
-/** 获取降级原因（on_startup 失败信息） */
-export function getDegradedMessage(state: PluginState): string {
-  return state.state === 'Degraded' ? state.error || '' : ''
-}
-
 /**
  * 判断实例是否在运行（Activated 或 Degraded）。
  *
@@ -402,10 +397,10 @@ export function isErrorState(state: PluginState): boolean {
   return state.state === 'Error'
 }
 
-/** 错误信息 */
-export function getErrorMessage(state: PluginState): string {
-  return state.state === 'Error' ? state.error || '' : ''
-}
+// 票 03 / ADR 0030 决定 11：`getErrorMessage` / `getDegradedMessage` 已删除。
+// `PluginState.error` 是宿主侧的**诊断事实**（完整错误串），曾被列表项、tooltip、
+// 详情页直接渲染——技术详情因此出现在用户界面。现在用户面只出徽标 + 通用文案
+// （降级带应用名参数，文案 `errors.host.plugin.degraded`），详情只留在宿主日志。
 
 // 字节数 / 时间戳格式化已收敛到 @/utils/format，此处 import + re-export
 // 保持既有调用（模块内与 PluginDetailView 等）不断链

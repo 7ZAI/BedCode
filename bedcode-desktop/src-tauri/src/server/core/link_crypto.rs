@@ -1528,12 +1528,22 @@ mod tests {
 
     #[test]
     fn registration_into_fresh_chain_is_named_and_idempotent_per_instance() {
+        // 持锁：防止并行执行的其他用例（sync_registration / update_config 系列）
+        // 在同一时刻改动全局链，把本用例的「独立实例不妨碍全局」断言搅黄；
+        // 全局链基线读两次做差分断言（而非「不得包含本过滤器」）——并行套件里
+        // 兄弟用例可能已把过滤器注册进全局链，绝对断言会误红（flaky：单跑绿、
+        // 全量并发红，2026-09-27 全量回归实测）
+        let _guard = SNAPSHOT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let global_names_before = TrafficFilterChain::global().list_names();
         let chain = TrafficFilterChain::new();
         register_into(&chain);
         assert_eq!(chain.list_names(), vec![FILTER_NAME.to_string()]);
-        // 独立实例互不干扰；全局单例不被本测试污染
-        let global_names = TrafficFilterChain::global().list_names();
-        assert!(!global_names.iter().any(|n| n == FILTER_NAME), "单元测试不得触碰全局链");
+        // 独立实例互不干扰：注册入新链不得改动全局链（含此前的并行注册态）
+        let global_names_after = TrafficFilterChain::global().list_names();
+        assert_eq!(
+            global_names_after, global_names_before,
+            "register_into 只作用于自建链，不得触碰全局链"
+        );
     }
 
     #[test]

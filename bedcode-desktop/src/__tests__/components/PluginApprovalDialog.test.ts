@@ -108,7 +108,11 @@ describe('PluginApprovalDialog', () => {
     expect(wrapper.emitted('approved')).toBeUndefined()
     expect(toastMock.success).not.toHaveBeenCalled()
     expect(toastMock.error).toHaveBeenCalledTimes(1)
-    expect(String(toastMock.error.mock.calls[0][0])).toContain('requires user approval')
+    // 票 02（ADR 0030）：错误原文永不上用户可见面——toast 只显示友好兜底文案
+    const message = String(toastMock.error.mock.calls[0][0])
+    expect(message).not.toContain('requires user approval')
+    expect(message).not.toContain('Error')
+    expect(message).toContain('操作未完成，请稍后重试')
     // 弹层仍在（plugin prop 未变）→ 用户可重试
     expect(wrapper.text()).toContain('批准应用权限')
   })

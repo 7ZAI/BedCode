@@ -751,7 +751,8 @@ async function stopSession() {
     toast.info(t('session.terminal.stopped'))
     await appWindow.close()
   } catch (e) {
-    toast.error(t('session.terminal.stopFailed', { error: (e as Error).message }))
+    console.error(`[terminal-session] failed to stop session ${sessionId}:`, e)
+    toast.error(t('session.terminal.stopFailed'))
   }
 }
 

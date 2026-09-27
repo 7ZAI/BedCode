@@ -82,7 +82,7 @@ export default {
       checkUpdate: '检查更新',
       alreadyLatest: '已是最新版本',
       checkingUpdate: '正在检查更新...',
-      checkFailed: '检查更新失败',
+      checkFailed: '检查更新失败，请稍后重试',
       newVersionAvailable: '发现新版本',
       downloadingUpdate: '正在下载更新...',
       downloadComplete: '下载完成，正在安装...',

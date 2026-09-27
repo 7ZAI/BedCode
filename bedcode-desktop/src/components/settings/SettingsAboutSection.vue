@@ -51,7 +51,7 @@
               </div>
             </div>
             <p v-if="updateStatus === 'failed'" class="mt-2 text-xs text-red-500">
-              {{ errorMessage }}
+              {{ getUpdateStatusText() }}
             </p>
           </div>
         </section>
@@ -80,7 +80,6 @@ const toast = useToast()
 const {
   status: updateStatus,
   downloadProgress,
-  errorMessage,
   checkForUpdate,
   downloadAndInstall,
   getUpdateStatusText,

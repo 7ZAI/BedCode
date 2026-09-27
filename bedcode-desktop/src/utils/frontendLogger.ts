@@ -10,7 +10,8 @@
  * 行为契约（双端一致，与旧 devConsoleRelay 等价）：
  * - dev（import.meta.env.DEV）：先调原始 console（DevTools 照常可见），
  *   再批量转发到 Rust `report_frontend_log`（target=frontend 落盘）
- * - release：methodFactory 返回空函数，连 DevTools 控制台也不打印
+ * - release：info/debug 空函数；**error/warn 仍批量转发落盘**（ADR 0030：技术详情
+ *   只进日志，前端 release 侧同样成立——此前 release 为空函数，前端侧详情不落盘）
  * - 转发失败静默（仅一次警告），防止递归输出
  *
  * 初始化：main.ts 调用 `initFrontendLogger()`（默认读 import.meta.env.DEV）；
@@ -82,7 +83,7 @@ function flush() {
       // 动态读取当前 console.warn：测试 spy 可捕获；reportedFailure 已保证只警告一次，
       // 且警告本身经 console.warn 直调（非 logger）不会再次触发转发递归
       reportedFailure = true
-      console.warn('[frontendLogger] 日志转发失败（仅 dev 生效，release 无此命令）')
+      console.warn('[frontendLogger] 日志转发失败（URL 不可达；error/warn 级可能未落盘）')
     }
   })
 }
@@ -99,7 +100,8 @@ const LEVEL_MAP: Record<string, string> = {
 
 /**
  * 构造 methodFactory（loglevel 调用：methodName, logLevel, loggerName）
- * @param dev 是否 dev 构建：true=原始 console + 转发落盘；false=空函数（生产零开销）
+ * @param dev 是否 dev 构建：true=原始 console + 转发落盘；false=仅 error/warn 转发落盘（
+ *   info/debug 裁剪，不写 console——生产零面向用户的控制台输出，但错误详情仍落盘）
  */
 function makeMethodFactory(dev: boolean) {
   return (
@@ -107,13 +109,13 @@ function makeMethodFactory(dev: boolean) {
     _logLevel: loglevel.LogLevelNumbers,
     _loggerName: string | symbol,
   ): ((...args: unknown[]) => void) => {
-    if (!dev) {
-      // 生产：空函数，日志零开销零输出（连 DevTools 也不打印）
+    if (!dev && methodName !== 'error' && methodName !== 'warn') {
+      // 生产：info/debug 空函数（零开销零输出）
       return () => {}
     }
 
-    // 动态读取当前 console 方法（非模块级快照）：测试 spy 替换 console 后可被捕获，
-    // dev 下 DevTools 照常可见；release 分支在上面已提前返回空函数
+    // 动态读取当前 console 方法（非模块级快照）：测试 spy 替换 console 后可被捕获；
+    // release 下 error/warn 不写 console（仅转发落盘），original 不参与
     // SAFETY: console 的方法属性是运行时字符串索引，但 TS 的 Console 类型没有 index
     // signature；经 unknown 中转索引后回调类型断言，取值以实际运行时对象为准。
     const original = (console as unknown as Record<string, unknown>)[methodName] as
@@ -122,13 +124,13 @@ function makeMethodFactory(dev: boolean) {
     const fn = original ?? console.log
     const level = LEVEL_MAP[methodName] ?? 'debug'
 
-    // 启动定时器（幂等）
+    // 启动定时器（幂等；release 下 error/warn 复用同一攒批/节流通道）
     if (!flushTimer) {
       flushTimer = setInterval(flush, FLUSH_INTERVAL_MS)
     }
 
     return (...args: unknown[]): void => {
-      fn.apply(console, args)
+      if (dev) fn.apply(console, args)
       const message = formatLogArgs(args)
       if (!message) return
       entries.push({ level, message })
@@ -140,7 +142,7 @@ function makeMethodFactory(dev: boolean) {
 const logger = loglevel.getLogger('bedcode')
 
 /**
- * 配置 logger（dev 转发落盘 / release 空函数），幂等可重入。
+ * 配置 logger（dev 全量转发 / release 仅 error-warn 转发），幂等可重入。
  * @param dev 是否 dev 构建；默认读 import.meta.env.DEV（测试可注入）
  */
 export function configureLogger(dev: boolean = import.meta.env.DEV): void {

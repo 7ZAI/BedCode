@@ -57,6 +57,8 @@ use bedcode_plugin_api::host::bus::owned_topic;
 #[cfg(target_arch = "wasm32")]
 use bedcode_plugin_api::host::{HostBus, HostEvents, HostLog, HostPty};
 #[cfg(target_arch = "wasm32")]
+use bedcode_plugin_api::user_facing_string;
+#[cfg(target_arch = "wasm32")]
 use bedcode_plugin_api::wasm_host::WasmHost;
 #[cfg(target_arch = "wasm32")]
 use registry::Registry;
@@ -251,7 +253,11 @@ pub fn note_canonical(session_id: &str, source: &RendererSource) -> Result<(), S
 pub fn note_annotation(session_id: &str, key: &str, value: &str) -> Result<(), String> {
     match REGISTRY.annotate(&WasmHost, session_id, key, value)? {
         true => Ok(()),
-        false => Err(format!("会话不存在：{session_id}")),
+        false => Err(user_facing_string(
+            // ADR 0030 决定 6：业务码 = 插件 i18n 注册后的完整 key（宿主只透传不解释）
+            "com.bedcode.terminal-session.session.error.sessionNotFound",
+            serde_json::json!({ "sessionId": session_id }),
+        )),
     }
 }
 
@@ -375,7 +381,12 @@ static PENDING_STOP_SOURCE: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new()
 pub fn close_via_pty(session_id: &str, source_device: Option<&str>) -> Result<(), String> {
     let record = REGISTRY
         .get(&WasmHost, session_id)?
-        .ok_or_else(|| format!("会话不存在：{session_id}"))?;
+        .ok_or_else(|| {
+            user_facing_string(
+                "com.bedcode.terminal-session.session.error.sessionNotFound",
+                serde_json::json!({ "sessionId": session_id }),
+            )
+        })?;
     // 停止即回收输出背压水位/驻留态：进程终止后环不再产出，残留水位无意义
     // （重启会走 `note_removed` → 新 PTY 环偏移从 0 起，需与旧水位彻底解耦）
     crate::output::forget_via_host(session_id);
@@ -448,7 +459,12 @@ pub fn input_via_pty(
 ) -> Result<(), String> {
     let record = REGISTRY
         .get(&WasmHost, session_id)?
-        .ok_or_else(|| format!("会话不存在：{session_id}"))?;
+        .ok_or_else(|| {
+            user_facing_string(
+                "com.bedcode.terminal-session.session.error.sessionNotFound",
+                serde_json::json!({ "sessionId": session_id }),
+            )
+        })?;
     let Some(pty_id) = record.pty_id.as_deref() else {
         return Err(format!("会话缺少 PTY 句柄，无法写入：{session_id}"));
     };

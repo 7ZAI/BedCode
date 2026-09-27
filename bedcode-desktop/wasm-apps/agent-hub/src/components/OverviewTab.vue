@@ -112,7 +112,7 @@ const recommendMirror = computed(() => speed.value?.recommend === 'npmmirror')
             <span class="ah-cli-dot"></span>{{ recommendMirror ? t('hub.speed.recommendMirror') : t('hub.speed.recommendOfficial') }}
           </span>
         </span>
-        <span v-else-if="speedFailed" class="ah-speed-text ah-cli-error">{{ speed?.error ?? t('hub.speed.fail') }}</span>
+        <span v-else-if="speedFailed" class="ah-speed-text ah-cli-error">{{ t('hub.speed.fail') }}</span>
         <span v-else class="ah-speed-text"></span>
         <span class="ah-speed-line-btns">
           <button

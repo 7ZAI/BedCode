@@ -69,7 +69,7 @@ const zhCN: MessageSchema = {
   'session.terminal.scrollToBottom': '滚动到底部',
   'session.terminal.uptime': '运行时长',
   'session.terminal.stopped': '会话已停止',
-  'session.terminal.stopFailed': '停止会话失败: {error}',
+  'session.terminal.stopFailed': '停止会话失败，请稍后重试',
   'session.terminal.historyTruncated': '终端历史过长，最早输出已被截断',
   'session.terminal.bgImage': '背景图片',
   'session.terminal.bgImageSelect': '选择图片',
@@ -110,12 +110,14 @@ const zhCN: MessageSchema = {
 
   // ==================== 错误提示 ====================
   'session.error.loadFailed': '会话数据加载失败',
-  'session.error.startFailed': '启动会话失败: {error}',
-  'session.error.stopFailed': '停止会话失败: {error}',
-  'session.error.restartFailed': '重启会话失败: {error}',
-  'session.error.deleteFailed': '删除会话失败: {error}',
-  'session.error.saveFailed': '保存失败: {error}',
+  'session.error.startFailed': '启动会话失败，请稍后重试',
+  'session.error.stopFailed': '停止会话失败，请稍后重试',
+  'session.error.restartFailed': '重启会话失败，请稍后重试',
+  'session.error.deleteFailed': '删除会话失败，请稍后重试',
+  'session.error.saveFailed': '保存失败，请稍后重试',
   'session.error.notRunning': '会话未运行，无法查看终端',
+  // 票 02（ADR 0030）：业务码骨架
+  'session.error.sessionNotFound': '会话不存在或已结束',
 
   // ==================== 配置表单 ====================
   'session.form.title.new': '新建配置',
@@ -127,7 +129,7 @@ const zhCN: MessageSchema = {
   'session.form.wslDistroPlaceholder': '选择发行版',
   'session.form.wslInitializing': 'WSL 初始化中...',
   'session.form.wslNotDetected': '未检测到 WSL，请确认已安装 WSL2',
-  'session.form.wslDetectFailed': 'WSL 检测失败: {error}',
+  'session.form.wslDetectFailed': 'WSL 检测失败，请稍后重试',
   'session.form.workingDir': '工作目录',
   'session.form.command': '启动命令',
   'session.form.commandPlaceholder': '选择或输入命令',

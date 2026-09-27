@@ -62,6 +62,7 @@ const zhCN: MessageSchema = {
   testConnection: '测试连接',
   testing: '测试中...',
   testOk: '连接正常',
+  testFailed: '连接测试失败，请稍后重试',
   cancel: '取消',
   contextLimitExceeded: '超出上下文长度，请新建对话',
   authRevoked: '目录授权已失效，请在设置中重新授权',
@@ -71,6 +72,7 @@ const zhCN: MessageSchema = {
   rateLimitStop: '终止',
   rateLimitExhausted: '供应商限流：自动重试后仍失败，请稍后重试或更换模型',
   rateLimitAborted: '已终止限流重试',
+  requestFailed: '请求失败，请稍后重试',
 }
 
 export default zhCN

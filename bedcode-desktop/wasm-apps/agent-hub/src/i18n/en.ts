@@ -97,7 +97,7 @@ const en: MessageSchema = {
   'hub.skill.targetStale': '{name} · {n} stale',
   'hub.skill.targetIdle': '{name} none',
   'hub.skill.targetNoConvention': 'opencode / codex have no skills directory convention',
-  'hub.skill.scanError': 'Scan failed: {error}',
+  'hub.skill.scanError': 'Scan failed, please try again',
   'hub.skill.empty': 'No skills in the library yet',
   'hub.skill.emptyHint': 'Install from GitHub, or import a local directory containing SKILL.md.',
   'hub.skill.edit': 'Edit',
@@ -129,7 +129,7 @@ const en: MessageSchema = {
   'hub.skill.import.overwrite': 'Overwrite & import',
   'hub.skill.import.authDenied': 'Directory authorization declined; cannot import.',
   'hub.skill.import.done': 'Imported {name} ({n} files)',
-  'hub.skill.import.failed': 'Import failed: {error}',
+  'hub.skill.import.failed': 'Import failed, please try again',
 
   // ==================== Skills · editor (ticket 04) ====================
   'hub.skill.editor.title': 'Edit skill',
@@ -153,7 +153,7 @@ const en: MessageSchema = {
   'hub.pv.importDone': 'Imported {n} preset(s)',
   'hub.pv.importSkipped': '{names} already exist; skipped',
   'hub.pv.importNone': 'No importable provider config found (pi / opencode)',
-  'hub.pv.importFailed': 'Import failed: {error}',
+  'hub.pv.importFailed': 'Import failed, please try again',
   'hub.pv.keyMask': 'key: {mask}',
   'hub.pv.empty': 'No presets yet',
   'hub.pv.emptyHint': 'Create one from a built-in template, or import from a configured CLI.',
@@ -215,7 +215,7 @@ const en: MessageSchema = {
   'hub.pv.apply.conflict':
     'claude self-built bridge detected ({files}). Writing only rewrites the env block in settings.json and never touches bridge files. Continue?',
   'hub.pv.apply.conflictConfirm': 'Write anyway (bridges untouched)',
-  'hub.pv.apply.failed': 'Apply failed: {error}',
+  'hub.pv.apply.failed': 'Apply failed, please try again',
   // ==================== 使用统计（票据 06） ====================
   'hub.st.syncedTag': 'Watermark: {n} files synced',
   'hub.st.syncing': 'Syncing…',

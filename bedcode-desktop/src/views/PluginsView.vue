@@ -85,10 +85,11 @@
                         >v{{ plugin.version }}</span
                       >
                       <!-- 降级徽章：实例运行中但启动初始化失败，与完全激活区分（spec §3.6） -->
+                      <!-- tooltip 只给通用降级文案 + 应用名（ADR 0030 决定 11：降级原因原文不再上 UI） -->
                       <span
                         v-if="isDegraded(plugin.state)"
                         class="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[calc(10px*var(--ui-scale))] font-medium bg-amber-50 dark:bg-amber-500/10 text-amber-600 dark:text-amber-400"
-                        :title="getDegradedMessage(plugin.state)"
+                        :title="$t('errors.host.plugin.degraded', { name: plugin.name })"
                       >
                         ⚠ {{ $t(getStateKey(plugin.state)) }}
                       </span>
@@ -240,11 +241,7 @@
                             : 'text-[var(--text-tertiary)]'
                         "
                       >
-                        {{
-                          isErrorState(plugin.state)
-                            ? getErrorMessage(plugin.state)
-                            : $t(getStateKey(plugin.state))
-                        }}
+                        {{ $t(getStateKey(plugin.state)) }}
                       </span>
                     </div>
                     <div class="mt-0.5">
@@ -258,8 +255,9 @@
                         ]"
                       >
                         {{
+                          // 错误态只出通用提示：宿主侧的错误原文（插件状态里的错误串）留在日志
                           isErrorState(plugin.state)
-                            ? '⚠ ' + getErrorMessage(plugin.state)
+                            ? '⚠ ' + $t('desktop.plugin.runtimeUnexpected')
                             : plugin.description || $t('desktop.plugin.noDescription')
                         }}
                       </div>
@@ -385,15 +383,14 @@ import PluginApprovalDialog from '@/components/PluginApprovalDialog.vue'
 import { open } from '@tauri-apps/plugin-dialog'
 import { pluginInstallFromFile } from '@/plugin/commands'
 import { useToast } from '@/composables/useToast'
+import { showUserError } from '@/utils/userError'
 import i18n from '@/locales'
 import type { PluginInfo } from '@/plugin/types'
 import {
   getContributionChips,
   getStateKey,
   isDegraded,
-  getDegradedMessage,
   isErrorState,
-  getErrorMessage,
   isNeedsApproval,
   hasConfiguration,
   isRunning,
@@ -425,7 +422,8 @@ async function handleInstallFile(): Promise<void> {
     toast.success(t('desktop.plugin.installSuccess', { name: pluginId }))
     await loadPlugins()
   } catch (e: any) {
-    toast.error(t('desktop.plugin.installFailed', { error: e.message || String(e) }))
+    // 票 02（ADR 0030）：统一消费层——友好文案 + 日志，永不渲染错误原文
+    showUserError(e)
   } finally {
     installing.value = false
     // 无论成功失败都收起弹窗（成功时列表已刷新，失败时 toast 已提示）

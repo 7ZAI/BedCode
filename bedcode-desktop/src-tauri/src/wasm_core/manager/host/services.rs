@@ -6,8 +6,6 @@
 
 use std::pin::Pin;
 
-use tauri::Emitter;
-
 use super::owner::{GuestOp, GuestReply};
 use super::PluginHost;
 use crate::wasm_core::manager::runtime::PluginServices;
@@ -26,21 +24,10 @@ use bedcode_plugin_api::PluginState;
 impl PluginServices for PluginHost {
     fn mark_plugin_error(&self, plugin_id: String, error: String) {
         crate::wasm_core::runtime_util::block_on_async(async move {
-            // 仅通知前端弹窗提示：不置 Error、不持久化，插件保持激活，会话照常运行。
+            // 仅通知前端提示：不置 Error、不持久化，插件保持激活，会话照常运行。
             // hooks 安装失败等自检错误属可恢复/局部问题，不应因此禁用整个插件。
-            tracing::error!(plugin_id = %plugin_id, error = %error, "[PluginHost] Plugin self-check failed");
-
-            // 无头/测试上下文无 AppHandle：跳过前端弹窗
-            let ctx = crate::system::app_context::AppContext::global();
-            if let Some(handle) = ctx.app_handle() {
-                let _ = handle.emit(
-                    crate::system::constants::PLUGIN_ERROR,
-                    serde_json::json!({
-                        "plugin_id": plugin_id,
-                        "error": error,
-                    }),
-                );
-            }
+            // 详情（error）只进日志；前端收错误信封（见 notify_plugin_self_check_error）
+            self.notify_plugin_self_check_error(&plugin_id, &error).await;
         });
     }
 

@@ -6,7 +6,7 @@
 import { ref, onUnmounted } from 'vue'
 import { logger } from '@/utils/frontendLogger'
 import { invoke } from '@tauri-apps/api/core'
-import i18n from '@/locales'
+import { parseInvokeError } from '@/utils/userError'
 
 /** 服务器状态 */
 export type ServerStatus = 'stopped' | 'starting' | 'running'
@@ -96,8 +96,10 @@ export function useServer() {
     try {
       await invoke('server_start', { port: port.value })
       status.value = 'running'
-    } catch (e: any) {
-      throw new Error(i18n.global.t('desktop.server.startFailed', { error: e }))
+    } catch (e) {
+      // 票 01（ADR 0030）：rejection 归一到 UserError 抛给调用方（ServerView catch 后
+      // showUserError 展示友好文案）；不再把技术详情插进错误消息
+      throw parseInvokeError(e)
     } finally {
       loading.value = false
     }
@@ -109,8 +111,8 @@ export function useServer() {
     try {
       await invoke('server_stop')
       status.value = 'stopped'
-    } catch (e: any) {
-      throw new Error(i18n.global.t('desktop.server.stopFailed', { error: e }))
+    } catch (e) {
+      throw parseInvokeError(e)
     } finally {
       loading.value = false
     }
@@ -122,8 +124,8 @@ export function useServer() {
     try {
       await invoke('server_restart')
       status.value = 'running'
-    } catch (e: any) {
-      throw new Error(i18n.global.t('desktop.server.restartFailed', { error: e }))
+    } catch (e) {
+      throw parseInvokeError(e)
     } finally {
       loading.value = false
     }

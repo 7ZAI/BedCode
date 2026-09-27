@@ -77,9 +77,11 @@ export default {
       startSuccess: '服务器已启动',
       stopSuccess: '服务器已停止',
       restartSuccess: '服务器已重启',
-      startFailed: '启动失败: {error}',
-      stopFailed: '停止失败: {error}',
-      restartFailed: '重启失败: {error}',
+      // 票 01（错误信封）：去 {error} 插值（技术详情禁止上用户可见面，ADR 0030）；
+      // 具体失败详情由 showUserError → errors.host.* 统一呈现，这三个 key 保留为静态兜底文案
+      startFailed: '启动失败，请稍后重试',
+      stopFailed: '停止失败，请稍后重试',
+      restartFailed: '重启失败，请稍后重试',
       advancedConfig: '高级配置',
       workers: 'Worker 线程数',
       workersHint: '0 = 自动（CPU 核心数）',
@@ -120,7 +122,8 @@ export default {
       loaded: '已加载',
       activating: '激活中',
       degraded: '已降级',
-      degradedReason: '启动初始化失败，应用以降级模式运行：{error}',
+      // degradedReason 随票 03 退役：降级说明改走 errors.host.plugin.degraded
+      // （带应用名参数），失败原因原文只留日志（ADR 0030 决定 11）
       needsApproval: '待授权',
       deactivated: '已停用',
       disable: '停用',
@@ -132,17 +135,17 @@ export default {
       reset: '重置',
       configSaved: '配置已保存',
       configReset: '配置已重置',
-      activateFailed: '激活失败: {error}',
-      deactivateFailed: '停用失败: {error}',
+      // 票 02（错误信封 ADR 0030）：下列失败键去 {error} 插值，具体失败详情由
+      // showUserError → errors.host.plugin.* 统一呈现；本组键保留为静态兜底文案
+      activateFailed: '激活应用失败，请稍后重试',
+      deactivateFailed: '停用应用失败，请稍后重试',
       loadFailed: '加载应用失败',
       enabledSuccess: '应用 {name} 已启用',
       disabledSuccess: '应用 {name} 已停用',
-      selfCheckFailed: '应用 {plugin} 自检失败：{error}，请检查应用配置',
-      runtimePanic: '应用「{name}」发生未知错误，已尝试自动恢复：{error}',
-      runtimeTrap: '应用「{name}」异常退出，正在尝试自动重载恢复',
-      runtimeRecoveryFailed: '应用「{name}」运行异常且自动恢复失败：{error}，请到应用中心查看',
+      // selfCheckFailed / runtimePanic / runtimeTrap / runtimeRecoveryFailed 随票 03
+      // 退役：运行时异常改走错误信封（errors.host.plugin.*），文案不再插值错误原文
       runtimeUnexpected: '发生了未知错误，详情见日志',
-      toggleTimeout: '操作超时（后端未响应），已停止等待',
+      // 票 02：desktop.plugin.toggleTimeout 随超时改信封形状（host.invoke.timeout）退役删除
       copyFailed: '复制路径失败',
       pluginNotActivated: '应用未激活，无法访问配置',
       noConfigAvailable: '无可用的配置项',
@@ -247,7 +250,7 @@ export default {
         cancel: '取消',
         approving: '正在批准...',
         success: '已批准应用 {name}',
-        failed: '批准失败: {error}',
+        failed: '批准失败，请稍后重试',
       },
       // 统计条
       stat: {
@@ -286,7 +289,7 @@ export default {
       installFromFileDesc: '选择一个应用 zip 包（内含 plugin.json、index.js、可选的 wasm）',
       installing: '正在加载应用...',
       installSuccess: '应用 {name} 加载成功',
-      installFailed: '应用加载失败: {error}',
+      installFailed: '应用加载失败，请稍后重试',
       installCancel: '取消',
       uninstall: '卸载',
       uninstallDisabledHint: '请先停用应用后再卸载',
@@ -295,7 +298,7 @@ export default {
         '将删除应用「{name}」的所有数据（安装目录、存储与启用状态），此操作不可恢复。确定卸载？',
       uninstallCancel: '取消',
       uninstallSuccess: '应用 {name} 已卸载',
-      uninstallFailed: '卸载失败: {error}',
+      uninstallFailed: '卸载失败，请稍后重试',
     },
   },
 }

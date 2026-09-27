@@ -125,13 +125,28 @@ describe('useServer', () => {
       expect(server.loading.value).toBe(false)
     })
 
-    it('startServer should throw i18n error and keep status on failure', async () => {
+    it('startServer should reject UserError(host.internal) and keep status on failure', async () => {
       mockInvoke.mockRejectedValueOnce(new Error('boom'))
 
       const server = useServer()
-      await expect(server.startServer()).rejects.toThrow('启动失败: Error: boom')
+      await expect(server.startServer()).rejects.toMatchObject({ code: 'host.internal' })
       expect(server.status.value).toBe('stopped')
       expect(server.loading.value).toBe(false)
+    })
+
+    it('startServer should pass envelope rejection through to caller', async () => {
+      mockInvoke.mockRejectedValueOnce({
+        code: 'host.invoke.timeout',
+        request_id: 'ab12cd34',
+        params: { seconds: 30 },
+      })
+
+      const server = useServer()
+      await expect(server.startServer()).rejects.toMatchObject({
+        code: 'host.invoke.timeout',
+        requestId: 'ab12cd34',
+        params: { seconds: 30 },
+      })
     })
 
     it('stopServer should invoke server_stop and set status to stopped', async () => {

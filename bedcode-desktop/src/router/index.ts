@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { pluginLoader } from '@/plugin/loader'
+import { logger } from '@/utils/frontendLogger'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -69,7 +70,13 @@ router.beforeEach(async (to) => {
   if (to.name === 'plugin-sidebar-view' || to.name === 'plugin-toolbox-view') {
     const pluginId = to.params.pluginId as string
     if (pluginId && !pluginLoader.getActivePlugin(pluginId)) {
-      await pluginLoader.activate(pluginId)
+      try {
+        await pluginLoader.activate(pluginId)
+      } catch (e) {
+        // 票 05：激活失败已由 loader 诊断/登记后上抛——导航守卫不得带着未处理
+        // rejection 中断路由切换（进不到插件视图由窗口宿主兜底提示），只记日志
+        logger.error(`[Router] Plugin activation failed: ${pluginId}`, e)
+      }
     }
     return
   }

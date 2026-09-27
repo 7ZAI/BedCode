@@ -216,8 +216,9 @@ async function loadWslDistros(): Promise<void> {
     wslDistros.value = list
   } catch (e) {
     wslDistros.value = []
-    wslError.value = (e as Error)?.message || String(e)
+    // 票 04（ADR 0030）：原文只进日志；wslError 仅作布尔门控（UI 显示友好 i18n）
     console.error('[Session Center] wsl distros failed:', e)
+    wslError.value = t('session.form.wslNotDetected')
   } finally {
     wslLoading.value = false
   }

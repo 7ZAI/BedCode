@@ -70,7 +70,7 @@ const en: MessageSchema = {
   'session.terminal.scrollToBottom': 'Scroll to Bottom',
   'session.terminal.uptime': 'Uptime',
   'session.terminal.stopped': 'Session stopped',
-  'session.terminal.stopFailed': 'Failed to stop session: {error}',
+  'session.terminal.stopFailed': 'Failed to stop session, please try again',
   'session.terminal.historyTruncated': 'Terminal history is too long, the earliest output was truncated',
   'session.terminal.bgImage': 'Background Image',
   'session.terminal.bgImageSelect': 'Choose Image',
@@ -113,12 +113,14 @@ const en: MessageSchema = {
 
   // ==================== Error messages ====================
   'session.error.loadFailed': 'Failed to load session data',
-  'session.error.startFailed': 'Failed to start session: {error}',
-  'session.error.stopFailed': 'Failed to stop session: {error}',
-  'session.error.restartFailed': 'Failed to restart session: {error}',
-  'session.error.deleteFailed': 'Failed to delete session: {error}',
-  'session.error.saveFailed': 'Save failed: {error}',
+  'session.error.startFailed': 'Failed to start session, please try again',
+  'session.error.stopFailed': 'Failed to stop session, please try again',
+  'session.error.restartFailed': 'Failed to restart session, please try again',
+  'session.error.deleteFailed': 'Failed to delete session, please try again',
+  'session.error.saveFailed': 'Save failed, please try again',
   'session.error.notRunning': 'Session is not running, cannot view terminal',
+  // Ticket 02 (ADR 0030): business code skeleton
+  'session.error.sessionNotFound': 'Session not found or already ended',
 
   // ==================== Config form ====================
   'session.form.title.new': 'New Config',
@@ -130,7 +132,7 @@ const en: MessageSchema = {
   'session.form.wslDistroPlaceholder': 'Select distribution',
   'session.form.wslInitializing': 'WSL initializing...',
   'session.form.wslNotDetected': 'WSL not detected. Please confirm WSL2 is installed.',
-  'session.form.wslDetectFailed': 'WSL detection failed: {error}',
+  'session.form.wslDetectFailed': 'WSL detection failed, please try again',
   'session.form.workingDir': 'Working Directory',
   'session.form.command': 'Start Command',
   'session.form.commandPlaceholder': 'Select or enter a command',
