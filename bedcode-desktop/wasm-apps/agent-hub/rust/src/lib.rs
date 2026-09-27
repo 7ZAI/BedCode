@@ -35,6 +35,7 @@ mod providers;
 mod skills;
 mod usage;
 mod usage_parse;
+mod usage_sqlite;
 
 pub(crate) const PLUGIN_ID: &str = "com.bedcode.agent-hub";
 /// host-storage 键：探测状态 JSON（前端 `AgentHubState` wire 形状）
@@ -269,6 +270,7 @@ impl WasmPlugin for AgentHubPlugin {
             "agent-hub.remove-usage-source" => usage::remove_source(&h, &args),
             "agent-hub.list-usage-sessions" => usage::list_sessions(&h, &args),
             "agent-hub.read-usage-session" => usage::read_session(&h, &args),
+            "agent-hub.clear-usage-data" => usage::clear_data(&h),
             other => Err(anyhow::anyhow!("unknown command: {other}")),
         }
     }

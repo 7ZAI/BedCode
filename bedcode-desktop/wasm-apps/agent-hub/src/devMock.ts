@@ -376,13 +376,22 @@ description: 本地导入演示技能（dev-shell 种子）
       home: HOME,
       adapters: {
         claude: { files: 142, parsed: 137, skipped: 5, sessions: 48, error: null },
+        // codex 已装未初始化：零会话（票 07 徽章信号）
+        codex: { files: 0, parsed: 0, skipped: 0, sessions: 0, error: null },
         pi: { files: 36, parsed: 36, skipped: 0, sessions: 21, error: null },
-        opencode: { files: 12, parsed: 9, skipped: 3, sessions: 4, error: null },
+        // opencode 是 SQLite 源：files 恒 0，parsed = 本轮解析的会话数
+        opencode: { files: 0, parsed: 54, skipped: 0, sessions: 4, error: null },
       },
       sources: [
-        { name: 'claude', path: `${HOME}/.claude/projects`, builtin: true },
-        { name: 'pi', path: `${HOME}/.pi/agent/sessions`, builtin: true },
-        { name: 'opencode', path: `${HOME}/.opencode/sessions`, builtin: false },
+        { name: 'claude', path: `${HOME}/.claude/projects`, builtin: true, kind: 'jsonl' },
+        { name: 'codex', path: `${HOME}/.codex/sessions`, builtin: true, kind: 'jsonl' },
+        { name: 'pi', path: `${HOME}/.pi/agent/sessions`, builtin: true, kind: 'jsonl' },
+        {
+          name: 'opencode',
+          path: `${HOME}/.local/share/opencode/opencode.db`,
+          builtin: true,
+          kind: 'sqlite',
+        },
       ],
     },
     stats: {

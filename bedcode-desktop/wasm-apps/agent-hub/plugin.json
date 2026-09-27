@@ -155,6 +155,10 @@
       {
         "id": "agent-hub.read-usage-session",
         "title": "Agent Hub: Read Usage Session"
+      },
+      {
+        "id": "agent-hub.clear-usage-data",
+        "title": "Agent Hub: Clear Usage Data"
       }
     ],
     "views": [

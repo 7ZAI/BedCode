@@ -36,6 +36,8 @@ export type MessageSchema = {
 
   // ==================== 概览 · CLI 卡片 ====================
   'hub.card.installed': string
+  // 已装但未初始化（票 07：CLI 装了却零会话数据，如本机 codex）
+  'hub.card.installedNoSessions': string
   'hub.card.notInstalled': string
   'hub.card.error': string
   'hub.card.detecting': string
@@ -250,6 +252,19 @@ export type MessageSchema = {
   'hub.st.sessionsTitle': string
   'hub.st.empty': string
   'hub.st.loadMore': string
+  // 数据清空（票 07：全量保留 + 手动清空）
+  'hub.st.clearData': string
+  'hub.st.clearDataAsk': string
+  'hub.st.clearDataConfirm': string
+  'hub.st.clearDataCancel': string
+  'hub.st.clearDataDone': string
+  'hub.st.clearDataFailed': string
+  // 适配器降级（票 07：opencode SQLite 源的机器可读 code → 界面文案）
+  'hub.st.degraded': string
+  'hub.st.degraded.sqlite3-missing': string
+  'hub.st.degraded.db-missing': string
+  'hub.st.degraded.query-failed': string
+
   // ==================== 会话日志（改版：来源 / 查询 / 分页 / 详情） ====================
   'hub.lg.sources.title': string
   'hub.lg.sources.builtin': string
@@ -263,6 +278,9 @@ export type MessageSchema = {
   'hub.lg.sources.remove': string
   'hub.lg.sources.noScan': string
   'hub.lg.sources.sessions': string
+  'hub.lg.sources.files': string
+  'hub.lg.sources.kind.jsonl': string
+  'hub.lg.sources.kind.sqlite': string
   'hub.lg.sources.addFailed': string
   'hub.lg.sources.removeFailed': string
   'hub.lg.filter.agent': string

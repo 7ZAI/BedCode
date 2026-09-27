@@ -58,11 +58,25 @@ const sourceBusy = ref(false)
 const sourceError = ref('')
 const removingSource = ref('')
 
-/** 来源扫描计数摘要（未扫描过显示提示） */
+/** 来源形态（jsonl 目录 / sqlite 库）；旧状态无 kind 字段按 jsonl 处理 */
+function sourceKind(s: UsageSource): 'jsonl' | 'sqlite' {
+  return s.kind === 'sqlite' ? 'sqlite' : 'jsonl'
+}
+
+/**
+ * 来源扫描计数摘要（未扫描过显示提示）
+ *
+ * **口径按 kind 分**（票 07）：JSONL 源的解析单位是文件（`parsed + skipped`
+ * 为本轮扫过的文件数），SQLite 源没有「文件」概念、解析单位是会话——两者
+ * 用同一模板会写出「54 文件 · 4 会话」这种自相矛盾的话。
+ */
 function scanCount(s: UsageSource): string {
   const sc = s.scan
   if (!sc) return t('hub.lg.sources.noScan')
-  return `${sc.parsed + sc.skipped} files · ${sc.sessions} ${t('hub.lg.sources.sessions')}`
+  if (sourceKind(s) === 'sqlite') {
+    return `${sc.parsed} ${t('hub.lg.sources.sessions')}`
+  }
+  return `${sc.parsed + sc.skipped} ${t('hub.lg.sources.files')} · ${sc.sessions} ${t('hub.lg.sources.sessions')}`
 }
 
 async function onAddSource() {
@@ -194,6 +208,8 @@ function tokenMeta(e: NormalizedEventView): string {
             <span class="ah-lg-source-type" :class="s.builtin ? 'builtin' : 'custom'">
               {{ s.builtin ? t('hub.lg.sources.builtin') : t('hub.lg.sources.custom') }}
             </span>
+            <!-- 形态标记（票 07）：SQLite 库是只读单文件、不支持自定义增删 -->
+            <span class="ah-lg-source-kind">{{ t(`hub.lg.sources.kind.${sourceKind(s)}`) }}</span>
             <span class="ah-lg-source-path ah-mono" :title="s.path">{{ abbreviateProject(s.path, home) }}</span>
             <span class="ah-lg-source-scan ah-mono">{{ scanCount(s) }}</span>
             <button

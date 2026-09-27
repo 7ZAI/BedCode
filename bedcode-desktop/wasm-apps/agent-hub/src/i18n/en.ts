@@ -22,6 +22,7 @@ const en: MessageSchema = {
   'hub.env.none': 'Not detected',
 
   'hub.card.installed': 'Installed',
+  'hub.card.installedNoSessions': 'Installed · not initialized',
   'hub.card.notInstalled': 'Not installed',
   'hub.card.error': 'Detect failed',
   'hub.card.detecting': 'Detecting…',
@@ -237,6 +238,18 @@ const en: MessageSchema = {
   'hub.st.sessionsTitle': 'Session details',
   'hub.st.empty': 'No data yet. Click "Scan now" to parse local CLI sessions.',
   'hub.st.loadMore': 'Load more ({n}/{total})',
+  // ==================== Clear collected data (ticket 07: keep all + manual clear) ====================
+  'hub.st.clearData': 'Clear statistics',
+  'hub.st.clearDataAsk': 'Clear everything? All collected session records and parse watermarks are deleted; a rescan is required to restore them.',
+  'hub.st.clearDataConfirm': 'Yes, clear',
+  'hub.st.clearDataCancel': 'Cancel',
+  'hub.st.clearDataDone': 'Statistics cleared',
+  'hub.st.clearDataFailed': 'Failed to clear statistics',
+  // Adapter degradation (ticket 07: machine-readable code from the opencode SQLite source)
+  'hub.st.degraded': 'Some sources were not synced',
+  'hub.st.degraded.sqlite3-missing': 'The system sqlite3 command-line tool is required to read the OpenCode database.',
+  'hub.st.degraded.db-missing': 'No OpenCode database found (run an OpenCode session first).',
+  'hub.st.degraded.query-failed': 'Querying the OpenCode database failed; see the plugin log for details.',
   // ==================== 会话日志（改版：来源 / 查询 / 分页 / 详情） ====================
   'hub.lg.sources.title': 'Log sources',
   'hub.lg.sources.builtin': 'Built-in',
@@ -250,6 +263,9 @@ const en: MessageSchema = {
   'hub.lg.sources.remove': 'Remove this source',
   'hub.lg.sources.noScan': 'Not scanned yet',
   'hub.lg.sources.sessions': 'sessions',
+  'hub.lg.sources.files': 'files',
+  'hub.lg.sources.kind.jsonl': 'Directory',
+  'hub.lg.sources.kind.sqlite': 'SQLite database',
   'hub.lg.sources.addFailed': 'Failed to add source',
   'hub.lg.sources.removeFailed': 'Failed to remove source',
   'hub.lg.filter.agent': 'Agent',

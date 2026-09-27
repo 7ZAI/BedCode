@@ -14,13 +14,19 @@
  *   会在两个 tab 间串味：统计加载更多后翻日志页再回来即出现重复行，
  *   日志页则显示 45 行却写着「第 1 页」）
  * - 日志来源：内置只读 + 自定义增删（list/add/remove-usage-source），
- *   扫描计数合并进 sources 列表
+ *   扫描计数合并进 sources 列表。opencode 是 SQLite 源（`kind: 'sqlite'`）：
+ *   guest 侧经 host-process 同步查库，不在 JSONL 枚举里，也不提供增删
  * - 日志视图：openSession 按会话 id 读源文件解析为归一事件流 + 原始行
- *   （与统计共用同一适配器层，单会话一次读盘双消费）
+ *   （与统计共用同一适配器层，单会话一次读盘双消费）；opencode 会话改为
+ *   现查 message/part 联表（无「原始行」视图）
+ * - 数据清空（票 07）：clearData 清会话聚合 + 解析水位（guest 侧同事务），
+ *   保留策略为全量保留不自动过期，清空只由用户显式触发
  */
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 import type {
+  AdapterErrorCode,
+  CliId,
   UsageDomainState,
   UsageSessionDetail,
   UsageSessionPage,
@@ -33,6 +39,17 @@ export type UseUsageReturn = ReturnType<typeof useUsage>
 
 /** 日志页分页步长（guest 上限 200 内的合理页大小） */
 export const PAGE_SIZE = 15
+
+/**
+ * CLI 的会话数据状态（票 07：codex「已装 · 未初始化」的信号源）
+ *
+ * - `scanned`：已扫描且采到会话 → 徽章显示常规「已装」
+ * - `empty`：已扫描但**零会话** → 「已装 · 未初始化」（本机 codex 正是此态：
+ *   `~/.codex/` 存在但从未跑过会话）
+ * - `unknown`：未扫描 / 未授权 / 扫描中 / 出错 → **不下结论**。这三态必须与
+ *   `empty` 严格区分：把「没数据可看」说成「装了没初始化」是误报。
+ */
+export type CliSessionState = 'scanned' | 'empty' | 'unknown'
 
 export function useUsage(context: PluginContext) {
   const state = ref<UsageDomainState | null>(null)
@@ -103,6 +120,43 @@ export function useUsage(context: PluginContext) {
   const logPage = ref(1)
 
   const logTotalPages = computed(() => Math.max(1, Math.ceil(logTotal.value / PAGE_SIZE)))
+
+  // ==================== 适配器降级（票 07）+ 会话数据状态 ====================
+
+  /**
+   * 处于降级态的适配器（code → 需 i18n 呈现，不透出 guest 原文）
+   *
+   * 只收 `adapters` 里的条目；`error` 为 null / 未识别的 code 均不收
+   * （未知 code 宁可少显示一条，也不用错误文案去渲染它）。
+   */
+  const adapterErrors = computed<{ adapter: string; code: AdapterErrorCode }[]>(() => {
+    const adapters = state.value?.adapters
+    if (!adapters) return []
+    const known: AdapterErrorCode[] = ['sqlite3-missing', 'db-missing', 'query-failed']
+    return Object.entries(adapters)
+      .filter((e): e is [string, (typeof adapters)[string]] => !!e[1])
+      .map(([adapter, stat]) => ({ adapter, code: stat.error }))
+      .filter(
+        (e): e is { adapter: string; code: AdapterErrorCode } =>
+          e.code !== null && known.includes(e.code),
+      )
+  })
+
+  /**
+   * CLI 会话数据状态（CliCard「已装 · 未初始化」的判据）
+   *
+   * 只有在**确实扫描完成**（status==='ok' 且已授权）时才给结论——
+   * 未授权 / 扫描中 / 扫描失败都返回 `unknown`，避免把「看不到数据」误报成
+   * 「装了没初始化」。
+   */
+  function cliSessionState(cli: CliId): CliSessionState {
+    const s = state.value
+    if (!s || s.status !== 'ok' || !s.authGranted) return 'unknown'
+    const stat = s.adapters?.[cli]
+    if (!stat) return 'unknown'
+    const has = (stat.files ?? 0) + (stat.parsed ?? 0) + (stat.sessions ?? 0)
+    return has > 0 ? 'scanned' : 'empty'
+  }
 
   function buildQuery() {
     return {
@@ -265,6 +319,33 @@ export function useUsage(context: PluginContext) {
     openedSession.value = null
   }
 
+  // ==================== 数据清空（票 07） ====================
+  /** 清空中（防重入；清空后列表与看板均需重拉） */
+  const clearing = ref(false)
+
+  /**
+   * 清空已采集的统计数据（会话聚合 + 解析水位，guest 侧同事务）
+   *
+   * 成功后一并重拉看板与两份列表首屏——不清会看到「空看板 + 旧列表」的
+   * 中间态。保留策略为**全量保留不自动过期**，故这是唯一的清理入口。
+   */
+  async function clearData(): Promise<{ ok: boolean }> {
+    if (clearing.value) return { ok: false }
+    clearing.value = true
+    try {
+      const data = await context.commands.execute('agent-hub.clear-usage-data', {})
+      applyState((data?.state ?? null) as UsageDomainState | null)
+      await Promise.all([reloadStats(), reloadSessions()])
+      return { ok: true }
+    } catch (e) {
+      // 票 04（ADR 0030）：详情只进日志，界面用 i18n 提示
+      console.error('[Agent Hub] clear-usage-data failed:', e)
+      return { ok: false }
+    } finally {
+      clearing.value = false
+    }
+  }
+
   const subscription = context.events.on('plugin:agent-hub:usage', (payload: UsageDomainState) => {
     applyState(payload)
   })
@@ -284,6 +365,7 @@ export function useUsage(context: PluginContext) {
     state,
     stats,
     sources,
+    adapterErrors,
     // 共享查询条件
     listFilter,
     searchText,
@@ -315,5 +397,8 @@ export function useUsage(context: PluginContext) {
     removeSource,
     openSession,
     closeSession,
+    clearData,
+    clearing,
+    cliSessionState,
   }
 }

@@ -3,16 +3,22 @@
  * 概览分区（票据 02 交付范围 + 票据 03 测速行）：目录授权横幅 + 环境条
  * （含 npm 源测速与推荐）+ 四张 CLI 卡片
  *
+ * 票 07：CLI 卡片的第六态「已装 · 未初始化」由 usage 域给出（父层经
+ * `sessionStates` 下传），本分区不自行探测会话数据。
  */
 import { computed, inject } from 'vue'
 import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 import type { AgentHubState, CliId, InstallDomainState } from '../types'
+import type { CliSessionState } from '../composables/useUsage'
 import CliCard from './CliCard.vue'
 
 const props = defineProps<{
   state: AgentHubState | null
   detecting: boolean
   installState: InstallDomainState | null
+  speedTesting: boolean
+  /** 各 CLI 的会话数据状态（票 07；缺项=不下结论） */
+  sessionStates?: Partial<Record<CliId, CliSessionState>>
 }>()
 const emit = defineEmits<{ detect: []; auth: []; 'speed-test': []; 'goto-install': [] }>()
 
@@ -140,6 +146,8 @@ const recommendMirror = computed(() => speed.value?.recommend === 'npmmirror')
         v-for="id in CLI_IDS"
         :key="id"
         :cli-id="id"
+        :info="state?.clis?.[id] ?? null"
+        :session-state="props.sessionStates?.[id]"
       />
     </div>
   </div>

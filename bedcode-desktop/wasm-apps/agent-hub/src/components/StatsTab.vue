@@ -135,6 +135,39 @@ const parsedTotal = computed(() => {
   return Object.values(adapters).reduce((sum, a) => sum + (a?.parsed ?? 0), 0)
 })
 
+// ==================== 适配器降级提示（票 07） ====================
+
+/** 处于降级态的数据源（机器可读 code → i18n 文案，不透出 guest 原文） */
+const degraded = computed(() => props.usage.adapterErrors.value)
+
+// ==================== 数据清空（票 07） ====================
+
+/** 两击确认：第一步只展开确认条，第二步才真发命令（防误触） */
+const clearAsking = ref(false)
+const clearDone = ref(false)
+const clearFailed = ref(false)
+
+async function onClearData() {
+  clearDone.value = false
+  clearFailed.value = false
+  if (!clearAsking.value) {
+    clearAsking.value = true
+    return
+  }
+  clearAsking.value = false
+  const r = await props.usage.clearData()
+  if (r.ok) {
+    clearDone.value = true
+  } else {
+    clearFailed.value = true
+  }
+}
+
+function onClearCancel() {
+  clearAsking.value = false
+  clearFailed.value = false
+}
+
 </script>
 
 <template>
@@ -156,6 +189,19 @@ const parsedTotal = computed(() => {
     <div v-if="authRequired" class="ah-banner">
       <span class="ah-banner-ic">⚠</span>
       <span class="ah-banner-text">{{ t('hub.auth.banner') }}</span>
+    </div>
+
+    <!-- 适配器降级（票 07）：opencode 等源读不到时**显式说明原因**，
+         不让「永远没数据」静默存在（spec §8 fail-visible） -->
+    <div v-if="degraded.length > 0" class="ah-banner ah-banner-info" data-testid="usage-degraded">
+      <span class="ah-banner-ic">ⓘ</span>
+      <span class="ah-banner-text">
+        <b>{{ t('hub.st.degraded') }}</b>
+        <span v-for="d in degraded" :key="d.adapter" class="ah-st-degraded-row">
+          <span class="ah-cli-tag neutral"><span class="ah-cli-dot"></span>{{ d.adapter }}</span>
+          <span class="ah-st-degraded-text">{{ t(`hub.st.degraded.${d.code}`) }}</span>
+        </span>
+      </span>
     </div>
 
     <div v-if="stats && total" class="ah-st-totals">
@@ -274,6 +320,46 @@ const parsedTotal = computed(() => {
           {{ t('hub.st.loadMore', { n: sessions.length, total: usage.statTotal.value }) }}
         </button>
       </div>
+    </div>
+
+    <!-- 数据清空（票 07）：保留策略为全量保留不自动过期，这是唯一的清理入口 -->
+    <div class="ah-card ah-st-clear" data-testid="usage-clear">
+      <div v-if="clearAsking" class="ah-st-clear-ask">
+        <span class="ah-st-clear-text">{{ t('hub.st.clearDataAsk') }}</span>
+        <span class="ah-st-clear-btns">
+          <button
+            type="button"
+            class="ah-btn ah-btn-warn ah-btn-sm"
+            :disabled="usage.clearing.value"
+            @click="onClearData"
+          >
+            {{ t('hub.st.clearDataConfirm') }}
+          </button>
+          <button
+            type="button"
+            class="ah-btn ah-btn-ghost ah-btn-sm"
+            :disabled="usage.clearing.value"
+            @click="onClearCancel"
+          >
+            {{ t('hub.st.clearDataCancel') }}
+          </button>
+        </span>
+      </div>
+      <button
+        v-else
+        type="button"
+        class="ah-btn ah-btn-ghost ah-btn-sm"
+        :disabled="usage.clearing.value"
+        @click="onClearData"
+      >
+        {{ t('hub.st.clearData') }}
+      </button>
+      <span v-if="clearDone" class="ah-st-clear-note" role="status">
+        {{ t('hub.st.clearDataDone') }}
+      </span>
+      <span v-else-if="clearFailed" class="ah-cli-error" role="alert">
+        {{ t('hub.st.clearDataFailed') }}
+      </span>
     </div>
   </div>
 </template>

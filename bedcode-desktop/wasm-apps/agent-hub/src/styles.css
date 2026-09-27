@@ -1391,9 +1391,58 @@
   text-align: center;
 }
 
+/* 适配器降级行（票 07）：每行 = 数据源名徽章 + 原因文案。
+   横幅底已是 primary-light（信息性，非警告），故行间距靠 margin 区分，
+   不再给每行叠底色——否则与徽章的 primary-light 底色撞成一块 */
+.ah-st-degraded-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  min-width: 0;
+}
 
+/* 降级原因文案：数据级（承载“为什么没数据”这一事实，不是装饰） */
+.ah-st-degraded-text {
+  color: var(--ah-text-data);
+  min-width: 0;
+}
 
+/* 数据清空区（票 07）：常驻一行，两击确认时在同一行展开确认条（不弹窗——
+   动作不可逆但影响面仅限本插件的统计库，就地确认比弹窗更轻） */
+.ah-st-clear {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
 
+.ah-st-clear-ask {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-width: 0;
+  flex: 1;
+}
+
+.ah-st-clear-text {
+  color: var(--ah-text-data);
+  min-width: 0;
+}
+
+.ah-st-clear-btns {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.ah-st-clear-note {
+  color: var(--ah-text-success);
+  font-size: var(--font-size-tag);
+}
 
 /* ==================== 会话日志（改版：来源 / 查询 / 分页 / 二级详情） ==================== */
 
@@ -1469,7 +1518,14 @@
   color: var(--text-primary);
 }
 
-
+/* 来源形态标记（票 07）：区分「目录」与「SQLite 库」——后者是只读单文件，
+   不接受自定义增删。无底色（与旁边的 builtin/custom tag 语义不同），
+   仅作辅助说明，故用数据级文字色 */
+.ah-lg-source-kind {
+  flex: none;
+  color: var(--ah-text-data);
+  font-size: var(--font-size-tag);
+}
 
 .ah-lg-source-path {
   flex: 1;

@@ -15,7 +15,7 @@ import { useInstall } from '../composables/useInstall'
 import { useSkills } from '../composables/useSkills'
 import { useProviders } from '../composables/useProviders'
 import { useUsage } from '../composables/useUsage'
-import type { HubTab } from '../types'
+import type { CliId, HubTab } from '../types'
 import OverviewTab from './OverviewTab.vue'
 import InstallTab from './InstallTab.vue'
 import SkillsTab from './SkillsTab.vue'
@@ -56,6 +56,19 @@ function gotoInstall() {
   activeTab.value = 'install'
 }
 
+/**
+ * 各 CLI 的会话数据状态（票 07：概览卡片第六态「已装 · 未初始化」）
+ *
+ * 由 usage 域单实例计算后下传——统计与概览两个分区共享同一个 useUsage，
+ * 不会重复拉取。未扫描 / 未授权 / 扫描中 → `unknown`（不下结论）。
+ */
+const CLI_IDS: CliId[] = ['claude', 'codex', 'opencode', 'pi']
+const sessionStates = computed(() => {
+  const out: Partial<Record<CliId, ReturnType<typeof usage.cliSessionState>>> = {}
+  for (const id of CLI_IDS) out[id] = usage.cliSessionState(id)
+  return out
+})
+
 /** 统计明细行点击 → 跳日志分区并打开该会话 */
 function gotoLogs(sessionId: number) {
   activeTab.value = 'logs'
@@ -87,6 +100,7 @@ function gotoLogs(sessionId: number) {
       :detecting="detecting"
       :install-state="install.state.value"
       :speed-testing="install.speedTesting.value"
+      :session-states="sessionStates"
       @detect="detect"
       @auth="requestAuth"
       @speed-test="install.speedTest"

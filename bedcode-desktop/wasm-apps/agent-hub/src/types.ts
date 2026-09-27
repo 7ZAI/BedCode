@@ -323,13 +323,23 @@ export interface ProvidersDomainState {
 
 // ==================== 使用统计与会话日志域（票据 06，guest usage.rs 同构） ====================
 
+/**
+ * 适配器降级原因（guest `usage_sqlite::SyncError::code()`，票 07）
+ *
+ * 机器可读 code 而非自然语言：界面文案走 i18n，日志与诊断保留原文。
+ * 三种成因对用户是完全不同的动作（装 sqlite3 / 跑一次 opencode / 看日志），
+ * 不可压成一句「同步失败」。
+ */
+export type AdapterErrorCode = 'sqlite3-missing' | 'db-missing' | 'query-failed'
+
 /** 适配器扫描分项（files=枚举文件数 parsed=本次解析 skipped=水位未变/超限跳过） */
 export interface UsageAdapterStat {
   files: number
   parsed: number
   skipped: number
   sessions: number
-  error: string | null
+  /** 机器可读降级 code（null=正常；前端按此查 i18n，不直接展示原文） */
+  error: AdapterErrorCode | null
 }
 
 /** 使用统计域状态（host-storage `usage` 键 + `plugin:agent-hub:usage` 事件载荷） */
@@ -340,20 +350,26 @@ export interface UsageDomainState {
   authGranted: boolean
   /** 用户主目录（项目路径 ~ 折叠展示用） */
   home: string
-  adapters: Record<'claude' | 'pi', UsageAdapterStat> & Record<string, UsageAdapterStat>
+  adapters: Record<CliId, UsageAdapterStat> & Record<string, UsageAdapterStat>
   /** 日志来源清单（内置只读 + 自定义增删；含各来源扫描计数） */
   sources: UsageSource[]
   /** 正在使用的项目会话（扫描时计算：claude 读 ~/.claude.json 配置权威，
-   *  pi 取最新会话；键=适配器，null=无） */
+   *  其余取最新会话；键=适配器，null=无） */
   activeSessions?: Partial<Record<string, { project: string | null; session_id: string } | null>>
 }
 
 /** 日志来源条目（wire 与 list-usage-sources 返回行同构） */
 export interface UsageSource {
   name: string
-  /** 绝对路径（展示时前端折叠 ~ 前缀） */
+  /** 绝对路径（展示时前端折叠 ~ 前缀）；sqlite 源是库文件路径 */
   path: string
   builtin: boolean
+  /**
+   * 数据源形态（票 07）：jsonl = 目录下的会话文件（可添加/移除自定义目录）；
+   * sqlite = 单个库文件（opencode，只读取数、不可增删）。缺省按 jsonl 处理，
+   * 以兼容票 06 写入的旧状态。
+   */
+  kind?: 'jsonl' | 'sqlite'
   /** 扫描计数（与 adapters[name] 同源，list-usage-sources 合并注入） */
   scan?: UsageAdapterStat
 }
@@ -445,6 +461,7 @@ export interface UsageSessionDetail {
   session: UsageSessionRow
   events: NormalizedEventView[]
   eventsTruncated: boolean
+  /** 原始行（SQLite 源无「原始 JSONL」概念，恒空数组且不标截断） */
   raw: string[]
   rawTruncated: boolean
   skippedLines: number

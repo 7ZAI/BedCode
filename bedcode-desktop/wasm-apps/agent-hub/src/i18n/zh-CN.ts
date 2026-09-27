@@ -22,6 +22,7 @@ const zhCN: MessageSchema = {
   'hub.env.none': '未检测',
 
   'hub.card.installed': '已装',
+  'hub.card.installedNoSessions': '已装 · 未初始化',
   'hub.card.notInstalled': '未安装',
   'hub.card.error': '探测失败',
   'hub.card.detecting': '检测中…',
@@ -237,6 +238,18 @@ const zhCN: MessageSchema = {
   'hub.st.sessionsTitle': '会话明细',
   'hub.st.empty': '暂无数据，点击「立即扫描」解析各 CLI 本地会话。',
   'hub.st.loadMore': '加载更多（{n}/{total}）',
+  // ==================== 数据清空（票 07：全量保留 + 手动清空） ====================
+  'hub.st.clearData': '清空统计数据',
+  'hub.st.clearDataAsk': '确认清空？所有已采集的会话记录与解析水位都会被删除，需要重新扫描才能恢复。',
+  'hub.st.clearDataConfirm': '确认清空',
+  'hub.st.clearDataCancel': '取消',
+  'hub.st.clearDataDone': '统计数据已清空',
+  'hub.st.clearDataFailed': '清空失败',
+  // 适配器降级（票 07：opencode SQLite 源的机器可读 code → 界面文案）
+  'hub.st.degraded': '部分数据源未同步',
+  'hub.st.degraded.sqlite3-missing': '需要系统的 sqlite3 命令行工具才能读取 OpenCode 数据库。',
+  'hub.st.degraded.db-missing': '未找到 OpenCode 数据库（先运行一次 OpenCode 会话）。',
+  'hub.st.degraded.query-failed': '查询 OpenCode 数据库失败，详情见插件日志。',
   // ==================== 会话日志（改版：来源 / 查询 / 分页 / 详情） ====================
   'hub.lg.sources.title': '日志来源',
   'hub.lg.sources.builtin': '内置',
@@ -250,6 +263,9 @@ const zhCN: MessageSchema = {
   'hub.lg.sources.remove': '移除该来源',
   'hub.lg.sources.noScan': '尚未扫描',
   'hub.lg.sources.sessions': '会话',
+  'hub.lg.sources.files': '个文件',
+  'hub.lg.sources.kind.jsonl': '目录',
+  'hub.lg.sources.kind.sqlite': 'SQLite 库',
   'hub.lg.sources.addFailed': '添加来源失败',
   'hub.lg.sources.removeFailed': '移除来源失败',
   'hub.lg.filter.agent': 'Agent',
