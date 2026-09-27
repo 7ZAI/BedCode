@@ -4,6 +4,25 @@
  * 每个 theme 包含完整的 ANSI 16 色定义，直接传给 xterm Terminal 构造器的 theme 选项。
  * label 使用 i18n key（如 'settings.appearance.lightMode'），
  * 由 useTerminalThemes() 在运行时解析为当前语言文本。
+ *
+ * ==================== 选区色（selectionBackground）口径 ====================
+ *
+ * **必须写带 alpha 的 rgba()，不能写不透明 hex。** xterm 6 DOM 渲染器的选区是
+ * `.xterm-selection` 里的一组**不透明** div，其底色取自
+ * `ThemeService.selectionBackgroundOpaque = blend(画布底色, selectionBackground)`——
+ * 即「把选区色按其 alpha 压在画布底色上」的结果（压在 TUI 单元格底色上时仍按画布底色
+ * 合成，保证选区内文字对比度不依赖被选单元格的底色）。
+ * 若传入不透明色，xterm 会**强制改写**为固定 30% 不透明度
+ * （`ThemeService._setTheme`: `isOpaque(sel) && (sel = opacity(sel, 0.3))`），
+ * 每个主题的选区强度就被锁死成同一档，无法按主题明暗调。
+ *
+ * **alpha 的取值口径**（由 `terminalThemes.test.ts` 的对比度矩阵锁定）：
+ *   - 可见性：合成后的选区块与画布底色 ΔRGB ≥ 40（此前 solarized-light 只有 7.5、
+ *     claude-code-light 15.3，浅色主题几乎看不出选中）
+ *   - 可读性：默认前景色在选区块上的对比度 ≥ 4.5；solarized-light 的前景色本身
+ *     只有 4.13:1（Solarized 设计如此），该主题放宽到 ≥ 3.0
+ *   - 各主题取「主题自己的 cursor 色」（终端既有的交互强调色，不新增色板）按上述
+ *     两条反解 alpha，因此深浅主题的 alpha 不必相同
  */
 
 /** xterm 终端主题配色 */
@@ -14,6 +33,11 @@ export interface TerminalTheme {
   foreground: string
   cursor: string
   cursorAccent: string
+  /**
+   * 选区底色：必须是带 alpha 的 `rgba(r, g, b, a)`（a ∈ (0, 1]）。
+   * 不透明 hex 会被 xterm 强制改写成固定 30%，失去按主题调节选区强度的能力
+   * （详见文件头「选区色口径」）。
+   */
   selectionBackground: string
   black: string
   red: string
@@ -41,7 +65,7 @@ export const TERMINAL_THEMES: Record<string, TerminalTheme> = {
     foreground: 'var(--mobile-text-primary)',
     cursor: '#00d4ff',
     cursorAccent: '#0a0a0f',
-    selectionBackground: '#1a3a4a',
+    selectionBackground: 'rgba(0, 212, 255, 0.22)',
     black: '#000000',
     red: '#ff5555',
     green: '#50fa7b',
@@ -65,7 +89,7 @@ export const TERMINAL_THEMES: Record<string, TerminalTheme> = {
     foreground: '#e0e0e0',
     cursor: '#00d4ff',
     cursorAccent: '#0a0a0f',
-    selectionBackground: '#1a3a4a',
+    selectionBackground: 'rgba(0, 212, 255, 0.22)',
     black: '#000000',
     red: '#ff5555',
     green: '#50fa7b',
@@ -89,7 +113,7 @@ export const TERMINAL_THEMES: Record<string, TerminalTheme> = {
     foreground: '#1a1b26',
     cursor: '#3b5998',
     cursorAccent: '#fafafa',
-    selectionBackground: '#b3d7ff',
+    selectionBackground: 'rgba(59, 89, 152, 0.28)',
     black: '#1a1b26',
     red: '#c53b53',
     green: '#3b9c64',
@@ -113,7 +137,7 @@ export const TERMINAL_THEMES: Record<string, TerminalTheme> = {
     foreground: '#657b83',
     cursor: '#586e75',
     cursorAccent: '#fdf6e3',
-    selectionBackground: '#eee8d5',
+    selectionBackground: 'rgba(88, 110, 117, 0.22)',
     black: '#073642',
     red: '#dc322f',
     green: '#859900',
@@ -137,7 +161,7 @@ export const TERMINAL_THEMES: Record<string, TerminalTheme> = {
     foreground: '#24292f',
     cursor: '#044289',
     cursorAccent: '#ffffff',
-    selectionBackground: '#b6e3ff',
+    selectionBackground: 'rgba(4, 66, 137, 0.23)',
     black: '#24292f',
     red: '#cf222e',
     green: '#116329',
@@ -161,7 +185,7 @@ export const TERMINAL_THEMES: Record<string, TerminalTheme> = {
     foreground: '#f8f8f2',
     cursor: '#f8f8f0',
     cursorAccent: '#282a36',
-    selectionBackground: '#44475a',
+    selectionBackground: 'rgba(248, 248, 240, 0.13)',
     black: '#000000',
     red: '#ff5555',
     green: '#50fa7b',
@@ -185,7 +209,7 @@ export const TERMINAL_THEMES: Record<string, TerminalTheme> = {
     foreground: '#f8f8f2',
     cursor: '#f8f8f0',
     cursorAccent: '#272822',
-    selectionBackground: '#49483e',
+    selectionBackground: 'rgba(248, 248, 240, 0.14)',
     black: '#000000',
     red: '#f92672',
     green: '#a6e22e',
@@ -209,7 +233,7 @@ export const TERMINAL_THEMES: Record<string, TerminalTheme> = {
     foreground: '#d8dee9',
     cursor: '#d8dee9',
     cursorAccent: '#2e3440',
-    selectionBackground: '#434c5e',
+    selectionBackground: 'rgba(216, 222, 233, 0.16)',
     black: '#3b4252',
     red: '#bf616a',
     green: '#a3be8c',
@@ -233,7 +257,7 @@ export const TERMINAL_THEMES: Record<string, TerminalTheme> = {
     foreground: '#1e1e2e',
     cursor: '#d97706',
     cursorAccent: '#f8f9fa',
-    selectionBackground: '#fef3c7',
+    selectionBackground: 'rgba(217, 119, 6, 0.40)',
     black: '#1e1e2e',
     red: '#dc2626',
     green: '#16a34a',
@@ -255,6 +279,41 @@ export const TERMINAL_THEMES: Record<string, TerminalTheme> = {
 
 /** i18n key 前缀：label 以此开头时需要 t() 解析 */
 const I18N_PREFIX = 'settings.appearance.'
+
+/** 选择模式取色框的不透明度（描边只做「已进入选择模式」提示，不抢选区本身） */
+const SELECTION_FRAME_ALPHA = 0.45
+
+/** #rgb / #rrggbb → [r, g, b]；不可解析时返回 null */
+function parseHexColor(color: string): [number, number, number] | null {
+  const hex = color.trim().replace(/^#/, '')
+  if (hex.length === 3) {
+    return [
+      parseInt(hex[0] + hex[0], 16),
+      parseInt(hex[1] + hex[1], 16),
+      parseInt(hex[2] + hex[2], 16),
+    ]
+  }
+  if (hex.length === 6) {
+    return [parseInt(hex.slice(0, 2), 16), parseInt(hex.slice(2, 4), 16), parseInt(hex.slice(4, 6), 16)]
+  }
+  return null
+}
+
+/**
+ * 选择模式取色框颜色：主题 cursor 色（终端既有的交互强调色）压到固定透明度。
+ *
+ * 供 CSS 变量 `--terminal-selection-frame` 消费（`.selection-mode` 的描边）。
+ * 此前描边写死 `rgba(0, 212, 255, 0.3)`——那是 dark 主题的 cursor 色，
+ * 切到 solarized-light / claude-code-light 等浅色主题后青蓝描边在暖白底上很突兀。
+ *
+ * @param theme - 已解析的具体色板（须先过 resolveTerminalTheme，var() 串不可解析）
+ * @returns rgba() 串；cursor 不可解析时回退 transparent（描边退化为不可见，不抛错）
+ */
+export function selectionFrameColor(theme: TerminalTheme): string {
+  const rgb = parseHexColor(theme.cursor)
+  if (!rgb) return 'transparent'
+  return `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${SELECTION_FRAME_ALPHA})`
+}
 
 /**
  * 解析「可传给 xterm 的具体色板」：

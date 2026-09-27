@@ -245,6 +245,7 @@ import ShortcutConfigModal from '@/components/ShortcutConfigModal.vue'
 import TerminalHelpModal from '@/components/TerminalHelpModal.vue'
 import TerminalOnboardingTour from '@/components/TerminalOnboardingTour.vue'
 import { usePresetTasks } from '@/composables/usePresetTasks'
+import { selectionFrameColor } from '@/config/terminalThemes'
 
 // ==================== Props & Route ====================
 
@@ -454,6 +455,7 @@ const keyboard = useTerminalKeyboardAvoidance({
   rootRef: terminalViewRef,
   safeAreaTop: () => safeAreaTop.value,
   canvasBackground: () => resolvedTerminalTheme.value.background,
+  selectionFrame: () => selectionFrameColor(resolvedTerminalTheme.value),
   onKeyboardHide: () => {
     if (inputBarRef.value?.isFocused()) inputBarRef.value.blurInput()
     scrollToBottomManual()

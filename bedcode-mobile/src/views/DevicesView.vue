@@ -48,16 +48,16 @@
 
     <!-- Main Content -->
     <div class="flex-1 overflow-y-auto overflow-x-hidden px-4 min-h-0">
-      <!-- Connection Status (connecting / error) -->
+      <!-- 连接失败提示（附加在页面区块上方，不替换列表；连接中 loading 由弹窗 LoadingDialog 承担，
+          避免状态卡片与列表的快速显示/隐藏跳变闪动） -->
       <Transition name="fade">
       <div
-        v-if="connectionStatus === 'connecting' || connectionStatus === 'error'"
+        v-if="connectionStatus === 'error'"
         class="mb-4"
       >
         <div class="group-card">
           <div class="group-row">
-            <div v-if="connectionStatus === 'connecting'" class="w-5 h-5 border-2 border-current border-t-transparent rounded-full animate-spin" style="color: var(--mobile-accent)" />
-            <svg v-else class="w-5 h-5" style="color: var(--mobile-chip-red)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg class="w-5 h-5" style="color: var(--mobile-chip-red)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
             </svg>
             <span class="group-row-sub">{{ connectionStatusText }}</span>
@@ -66,8 +66,11 @@
       </div>
       </Transition>
 
+      <!-- 主内容区互斥分支（已连接 / 扫描面板 / mDNS 发现 / 历史列表）：切换时淡入淡出（mode="out-in"），
+          避免卡片硬切闪动；分支均需显式 key（同标签 div 复用会跳过过渡） -->
+      <Transition name="fade" mode="out-in">
       <!-- Connected: 当前设备（会话配置已迁移到会话页） -->
-      <div v-if="isConnected" class="pb-8">
+      <div v-if="isConnected" key="connected" class="pb-8">
         <div class="pt-2 space-y-3">
           <!-- Connected device info + disconnect（同行，断开按钮位于卡片右侧） -->
           <div v-if="currentDevice" class="bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl p-4 transition-colors duration-300">
@@ -98,12 +101,12 @@
       </div>
 
       <!-- Not Connected: 内嵌扫描面板（扫描整合进连接页，替代独立扫描页） -->
-      <div v-else-if="showScanner" class="pb-8">
+      <div v-else-if="showScanner" key="scanner" class="pb-8">
         <ScanPanel @close="showScanner = false" @scan-result="handleScanResult" />
       </div>
 
       <!-- Not Connected: mDNS 扫描发现（融合进连接页：点击页头扫描按钮展开，扫描动画+结果在此展示，区域可关闭） -->
-      <div v-else-if="showDiscovery" class="pb-8 pt-2">
+      <div v-else-if="showDiscovery" key="discovery" class="pb-8 pt-2">
         <!-- 区域头部：扫描发现 + × 关闭（页面标题保持「连接配对」不变，无跳转） -->
         <div class="flex items-center justify-between pb-2">
           <span class="text-sm font-semibold text-[var(--mobile-text-muted)]">
@@ -187,7 +190,7 @@
       </div>
 
       <!-- Not Connected: History + Actions -->
-      <div v-else class="pb-8">
+      <div v-else key="history" class="pb-8">
         <div class="pt-2 space-y-3">
           <!-- Connection History header（带条数） -->
           <div class="flex items-center justify-between pt-2">
@@ -244,6 +247,7 @@
           </TransitionGroup>
 
           <!-- 扫描结果：与连接历史同级别的独立区块（识别到二维码停止扫描后出现），可关闭 -->
+          <Transition name="fade">
           <div v-if="scanResult" class="pt-4">
             <div class="flex items-center justify-between pb-2">
               <span class="text-sm font-semibold text-[var(--mobile-text-muted)]">
@@ -279,15 +283,20 @@
               </div>
             </button>
           </div>
+          </Transition>
         </div>
       </div>
+      </Transition>
     </div>
 
     <!-- Action Buttons (when not connected)：mDNS 扫描发现 / 二维码扫描 / 默认 三种模式互斥 -->
     <div v-if="!isConnected" class="flex-shrink-0 p-4 space-y-3" style="padding-bottom: max(1rem, var(--safe-area-bottom, 0px))">
+      <!-- 操作按钮互斥组（mDNS / 扫码 / 默认）：切换淡入淡出，避免按钮块硬切闪动 -->
+      <Transition name="fade" mode="out-in">
       <!-- mDNS 扫描发现：扫描中「停止扫描」/ 已停止「重新扫描」 -->
       <button
         v-if="showDiscovery"
+        key="mdns"
         class="w-full h-11 rounded-xl text-sm font-medium transition-colors active:opacity-80"
         style="background: var(--mobile-group-bg); border: 1px solid var(--mobile-group-border); color: var(--mobile-text-secondary)"
         :class="{ 'opacity-50': connection.isConnecting.value }"
@@ -300,6 +309,7 @@
       <!-- 二维码扫描：启动后按钮切换为「停止扫描」（红色） -->
       <button
         v-else-if="showScanner"
+        key="scan"
         class="w-full h-11 rounded-xl text-base font-medium transition-colors active:opacity-80 flex items-center justify-center gap-2"
         style="background: var(--mobile-chip-red-bg); color: var(--mobile-chip-red); border: 1px solid color-mix(in srgb, var(--mobile-chip-red) 25%, transparent)"
         :class="{ 'opacity-50': connection.isConnecting.value }"
@@ -312,7 +322,7 @@
         {{ t('mobile.scan.stopScan') }}
       </button>
 
-      <template v-else>
+      <div v-else key="default" class="space-y-3">
         <button
           class="w-full h-11 rounded-xl text-base font-medium transition-colors active:opacity-80 flex items-center justify-center gap-2"
           style="background: var(--mobile-accent); color: var(--mobile-text-on-accent)"
@@ -337,7 +347,8 @@
           </svg>
           {{ t('mobile.connection.manualConnect') }}
         </button>
-      </template>
+      </div>
+      </Transition>
     </div>
 
     <!-- Manual Connect Dialog -->

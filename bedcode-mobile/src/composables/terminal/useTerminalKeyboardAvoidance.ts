@@ -31,6 +31,8 @@ export interface TerminalKeyboardAvoidanceOptions {
   safeAreaTop: () => number
   /** 终端画布底色：网格贴合后顶部余量/行尾余量区显示的是容器底色，须与画布同色 */
   canvasBackground: () => string
+  /** 选择模式取色框颜色（描边）：跟随当前终端主题，避免浅色主题下配色突兀 */
+  selectionFrame: () => string
   /**
    * 键盘收起（偏移从可见归零）时回调：Android 返回键/下拉手势收起键盘时 WebView
    * 的输入框仍保有焦点，须主动退出编辑态（blur + 收缩单行 + 关补全弹层）；同时
@@ -90,6 +92,7 @@ export function useTerminalKeyboardAvoidance(options: TerminalKeyboardAvoidanceO
   const terminalViewStyle = computed(() => ({
     paddingTop: `${options.safeAreaTop()}px`,
     '--terminal-canvas-bg': options.canvasBackground(),
+    '--terminal-selection-frame': options.selectionFrame(),
     height: keyboardOffset.value > 0 ? `calc(100vh - ${keyboardOffset.value}px)` : '100vh',
   }))
 
