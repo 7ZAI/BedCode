@@ -212,10 +212,15 @@ mod tests {
 
         let owner = "test-jwt-guarded";
         let methods: Vec<String> = vec!["GET".to_string()];
+        // 宿主路径取**本用例专属**的 `/api/jwt-guarded-alias`（原为 `/api/configs`）：
+        // HTTP 端点注册表是**进程级全局**，host path + method 唯一。两个用例登记同一
+        // 路径时后到者拿到「already registered by plugin 'X'」而 panic，与线程调度
+        // 有关（同一对用例谁先谁后随机）——表现为全量 `cargo test` 偶发单红，而单跑
+        // 与单线程都绿。新增登记用例时**必须取专属路径**。
         crate::server::http::registry::register(
             owner,
-            "configs",
-            Some("/api/configs"),
+            "jwt-guarded-alias",
+            Some("/api/jwt-guarded-alias"),
             &methods,
             bedcode_plugin_api::EndpointAuth::Jwt,
         )
@@ -225,13 +230,15 @@ mod tests {
             actix_web::App::new().service(
                 web::scope("/api")
                     .wrap(from_fn(jwt_gateway))
-                    .route("/configs", web::get().to(sentinel)),
+                    .route("/jwt-guarded-alias", web::get().to(sentinel)),
             ),
         )
         .await;
         let resp = actix_web::test::call_service(
             &app,
-            actix_web::test::TestRequest::get().uri("/api/configs").to_request(),
+            actix_web::test::TestRequest::get()
+                .uri("/api/jwt-guarded-alias")
+                .to_request(),
         )
         .await;
         assert_eq!(resp.status(), actix_web::http::StatusCode::UNAUTHORIZED);
