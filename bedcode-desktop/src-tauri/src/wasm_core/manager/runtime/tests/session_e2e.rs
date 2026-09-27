@@ -1354,7 +1354,7 @@ fn test_business_endpoints_dual_track_closed_loop() {
     block_on_async(
         host_ctx
             .fs_auth()
-            .save_granted_path(SESSION_ID, &ws.path().to_string_lossy()),
+            .seed_legacy_granted_path(SESSION_ID, &ws.path().to_string_lossy()),
     )
     .expect("seed fs grant for workspace");
     // 私有库清空（marker 干净）
@@ -3045,9 +3045,13 @@ fn test_session_input_via_gateway_closed_loop() {
         let err = crate::utils::session_gateway::input(&host_ctx, "no-such-session", "ls\r")
             .await
             .expect_err("真源在插件登记域，未知会话必须显性失败");
+        // 票 05（ADR 0030）：插件侧只出信封码（中文文案由插件前端按 code 查
+        // i18n，见 terminal-session session/mod.rs user_facing_string）——宿主断言
+        // 契约码而非旧中文字面量（旧断言停在 09-25，bd3fed0e4 已改信封形态）
         assert!(
-            err.to_string().contains("会话不存在"),
-            "未知会话须报登记域缺失，got: {err}"
+            err.to_string()
+                .contains("com.bedcode.terminal-session.session.error.sessionNotFound"),
+            "未知会话须报 ADR 0030 信封码（sessionNotFound），got: {err}"
         );
 
         // ==================== 3. C-01 正例：普通输入被执行（探针回显 + 命令输出各一次） ============
