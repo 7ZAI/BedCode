@@ -431,6 +431,34 @@ describe('U8 日志来源增删', () => {
     expect((await usage.removeSource('demo')).ok).toBe(false)
     wrapper.unmount()
   })
+
+  it('pickSourceDir 成功选中 → { ok:true, picked:true, path }', async () => {
+    const { usage, wrapper } = mountUsage()
+    await flushPromises()
+    execute.mockResolvedValueOnce({ picked: true, path: '/home/u/.pi/sessions' } as never)
+    const r = await usage.pickSourceDir()
+    expect(r).toEqual({ ok: true, picked: true, path: '/home/u/.pi/sessions' })
+    expect(execute).toHaveBeenCalledWith('agent-hub.pick-source-dir', {})
+    wrapper.unmount()
+  })
+
+  it('pickSourceDir 用户取消 → picked:false 且 path 为空（不打扰）', async () => {
+    const { usage, wrapper } = mountUsage()
+    await flushPromises()
+    execute.mockResolvedValueOnce({ picked: false, path: '' } as never)
+    expect(await usage.pickSourceDir()).toEqual({ ok: true, picked: false, path: '' })
+    wrapper.unmount()
+  })
+
+  it('pickSourceDir 宿主拒绝（未授权等）→ { ok:false } 且不携带原文', async () => {
+    const { usage, wrapper } = mountUsage()
+    await flushPromises()
+    execute.mockRejectedValueOnce(new Error('permission denied: manifest must declare fs:pick'))
+    const r = await usage.pickSourceDir()
+    expect(r.ok).toBe(false)
+    expect(JSON.stringify(r)).not.toContain('fs:pick')
+    wrapper.unmount()
+  })
 })
 
 // ==================== U9 autoScanDone 语义 ====================

@@ -49,6 +49,14 @@ export type MessageSchema = {
   'hub.card.method.native': string
   'hub.card.method.standalone': string
   'hub.card.method.unknown': string
+  // ==================== 概览 · CLI 卸载（概览卡片动作） ====================
+  'hub.card.uninstall': string
+  'hub.card.uninstallConfirm': string
+  'hub.card.uninstallRunning': string
+  'hub.card.uninstallHintDual': string
+  'hub.card.uninstallHintMethod': string
+  'hub.card.uninstallHintNode': string
+  'hub.card.uninstallFailed': string
 
   // ==================== 目录授权 ====================
   'hub.auth.banner': string
@@ -273,6 +281,9 @@ export type MessageSchema = {
   'hub.lg.sources.add': string
   'hub.lg.sources.addName': string
   'hub.lg.sources.addPath': string
+  'hub.lg.sources.pick': string
+  'hub.lg.sources.picking': string
+  'hub.lg.sources.pickFailed': string
   'hub.lg.sources.confirm': string
   'hub.lg.sources.cancel': string
   'hub.lg.sources.remove': string

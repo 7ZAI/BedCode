@@ -23,6 +23,7 @@ import {
   formatSessionTime,
   formatTokens,
 } from '../utils/format'
+import { suggestSourceName } from '../utils/sources'
 import AgentIcon from './AgentIcon.vue'
 
 const props = defineProps<{ usage: UseUsageReturn }>()
@@ -57,6 +58,28 @@ const newSourcePath = ref('')
 const sourceBusy = ref(false)
 const sourceError = ref('')
 const removingSource = ref('')
+
+/**
+ * 从选中目录派生来源名（与 guest `is_valid_source_name` 同口径：小写字母开头，
+ * 字母/数字/连字符，≤32）：取 basename → 小写 → 去非法字符 → 剥前导非字母 → 截断。
+ * 全部剥空时兜底 `logs`。实现见 `utils/sources.ts`（SFC 不可导出，供测试直引）。
+ */
+
+/** 系统文件夹选择器选日志目录（fs:pick）；选中后回填路径 + 派生名 */
+async function onPickDir() {
+  if (sourceBusy.value) return
+  sourceBusy.value = true
+  sourceError.value = ''
+  const r = await usage.pickSourceDir()
+  sourceBusy.value = false
+  if (!r.ok) {
+    sourceError.value = t('hub.lg.sources.pickFailed')
+    return
+  }
+  if (!r.picked) return // 用户取消：不打扰
+  newSourcePath.value = r.path
+  if (!newSourceName.value.trim()) newSourceName.value = suggestSourceName(r.path)
+}
 
 /** 来源形态（jsonl 目录 / sqlite 库）；旧状态无 kind 字段按 jsonl 处理 */
 function sourceKind(s: UsageSource): 'jsonl' | 'sqlite' {
@@ -244,12 +267,23 @@ function tokenMeta(e: NormalizedEventView): string {
               :placeholder="t('hub.lg.sources.addName')"
               :disabled="sourceBusy"
             />
-            <input
-              v-model="newSourcePath"
-              class="ah-input ah-mono"
-              :placeholder="t('hub.lg.sources.addPath')"
-              :disabled="sourceBusy"
-            />
+            <span class="ah-lg-sources-pick">
+              <button
+                type="button"
+                class="ah-btn ah-btn-ghost ah-btn-sm"
+                :disabled="sourceBusy"
+                @click="onPickDir"
+              >
+                {{ sourceBusy ? t('hub.lg.sources.picking') : t('hub.lg.sources.pick') }}
+              </button>
+              <span
+                class="ah-lg-sources-pickpath ah-mono"
+                :title="newSourcePath"
+                :class="{ empty: !newSourcePath }"
+              >
+                {{ newSourcePath || t('hub.lg.sources.addPath') }}
+              </span>
+            </span>
             <span class="ah-speed-actions-btns">
               <button
                 type="button"

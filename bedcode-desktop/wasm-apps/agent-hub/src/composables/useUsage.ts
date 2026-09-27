@@ -87,6 +87,24 @@ export function useUsage(context: PluginContext) {
     }
   }
 
+  /**
+   * 系统文件夹选择器选日志目录（fs:pick 权限门与选中路径授权校验在宿主）。
+   * 返回 { ok, picked, path }：picked=false 表示用户取消；授权拒绝等失败 ok=false。
+   */
+  async function pickSourceDir(): Promise<{ ok: boolean; picked: boolean; path: string }> {
+    try {
+      const data = (await context.commands.execute('agent-hub.pick-source-dir', {})) as {
+        picked?: boolean
+        path?: string
+      } | null
+      return { ok: true, picked: data?.picked === true, path: data?.path ?? '' }
+    } catch (e) {
+      // 票 04（ADR 0030）：详情只进日志，界面触发友好 i18n
+      console.error('[Agent Hub] pick-source-dir failed:', e)
+      return { ok: false, picked: false, path: '' }
+    }
+  }
+
   async function removeSource(name: string): Promise<{ ok: boolean; error?: string }> {
     try {
       const data = await context.commands.execute('agent-hub.remove-usage-source', { name })
@@ -394,6 +412,7 @@ export function useUsage(context: PluginContext) {
     loadMoreSessions,
     reloadSources,
     addSource,
+    pickSourceDir,
     removeSource,
     openSession,
     closeSession,

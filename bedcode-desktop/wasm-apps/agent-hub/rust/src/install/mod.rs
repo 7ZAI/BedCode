@@ -41,6 +41,7 @@ pub(crate) use registry::{check_updates, speed_test};
 pub(crate) use state::now_ms;
 
 use self::recipe::build_install_script;
+use self::recipe::build_uninstall_script;
 use self::state::{emit, emit_and_return, read_state, write_state};
 
 /// 安装/更新超时：npm 全局安装含完整依赖下载，15 分钟上限（host 默认 10 分钟）
@@ -161,6 +162,81 @@ pub(crate) fn start(h: &WasmHost, args: &Value) -> anyhow::Result<Value> {
     emit_and_return(h, &state)
 }
 
+/// 触发卸载：recipe 白名单构造 → host-process 平台分派执行 → 状态落
+/// storage 推送前端（与安装共用同一 run 管线：active 互斥、输出回显、取消、
+/// 完成后自动重探测刷新卡片）。卸载是破坏性动作：只接受白名单 cli + 固定
+/// 模板，method 取自探测状态（不信任前端传参）；npm-global 依赖 node。
+pub(crate) fn uninstall(h: &WasmHost, args: &Value) -> anyhow::Result<Value> {
+    let cli = args
+        .get("cli")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("uninstall: missing cli"))?;
+    if !detect::CLI_KINDS.contains(&cli) {
+        return Err(anyhow::anyhow!("uninstall: unknown cli: {cli}"));
+    }
+
+    let mut state = read_state(h);
+    if state["active"].is_object() {
+        return Err(anyhow::anyhow!("uninstall: another run is active"));
+    }
+
+    // method 取自探测状态（不信任前端传参）；npm-global 卸载依赖 node 环境
+    let detection = h
+        .storage_get(super::STATE_KEY)
+        .map_err(|e| anyhow::anyhow!("uninstall: read detection failed: {e}"))?
+        .ok_or_else(|| anyhow::anyhow!("uninstall: detection not ready"))?;
+    let method = detection["clis"][cli]["method"]
+        .as_str()
+        .unwrap_or("unknown");
+    if method == "npm-global" && !detection["env"]["node"].is_string() {
+        return Err(anyhow::anyhow!("uninstall: node environment not detected"));
+    }
+    let script = build_uninstall_script(cli, method, is_windows()).map_err(anyhow::Error::msg)?;
+
+    let data_dir = DATA_DIR
+        .get()
+        .ok_or_else(|| anyhow::anyhow!("uninstall: data dir unavailable"))?;
+    let seq = RUN_SEQ.fetch_add(1, AtomicOrdering::Relaxed);
+    let output_path = format!("{data_dir}/runs/uninstall-{cli}-{seq}.log");
+    let (command, args_vec) = shell_invocation(script.clone(), is_windows());
+    let request = json!({
+        "command": command,
+        "args": args_vec,
+        "output_path": output_path,
+        "timeout_ms": INSTALL_TIMEOUT_MS,
+    });
+    let run_id = h
+        .process_run(&request.to_string())
+        .map_err(|e| anyhow::anyhow!("uninstall: spawn failed: {e}"))?;
+
+    pending()
+        .lock()
+        .map_err(|e| anyhow::anyhow!("uninstall: poisoned pending map: {e}"))?
+        .insert(
+            run_id.clone(),
+            PendingRun {
+                kind: "uninstall".to_string(),
+                output_path: output_path.clone(),
+                cli: Some(cli.to_string()),
+                source: None,
+            },
+        );
+
+    state["active"] = json!({
+        "runId": run_id,
+        "cli": cli,
+        "action": "uninstall",
+        "command": script,
+        "useMirror": false,
+        "outputPath": output_path,
+        "startedAt": now_ms(h).unwrap_or(0),
+        "cancelRequested": false,
+    });
+    write_state(h, &state);
+    h.log_info(&format!("uninstall run started (cli = {cli})"));
+    emit_and_return(h, &state)
+}
+
 /// 轮询回显：active run 读 output_path 尾部；无 active 时回放 last 的终态输出
 pub(crate) fn run_output(h: &WasmHost) -> anyhow::Result<Value> {
     let state = read_state(h);
@@ -216,7 +292,7 @@ pub(crate) fn cancel_run(h: &WasmHost) -> anyhow::Result<Value> {
 }
 
 /// 进程完成回灌：读输出尾部落 last 终态 → 清 active → 删除输出文件 →
-/// 推送 → 自动全量重探测刷新卡片
+/// 推送 → 自动全量重探测刷新卡片（install / uninstall 共用）
 pub(crate) fn handle_process_done(event: &ProcessDoneEvent) -> anyhow::Result<()> {
     let h = host();
     let removed = pending()
@@ -229,6 +305,7 @@ pub(crate) fn handle_process_done(event: &ProcessDoneEvent) -> anyhow::Result<()
     let Some(cli) = entry.cli else {
         return Ok(());
     };
+    let kind = entry.kind;
 
     let mut state = read_state(&h);
     if !state["active"].is_object() {
@@ -239,8 +316,7 @@ pub(crate) fn handle_process_done(event: &ProcessDoneEvent) -> anyhow::Result<()
     let active = state["active"].take();
     let cancelled = active["cancelRequested"] == json!(true);
     let ok = event.exit_code == Some(0) && !event.timed_out;
-    let log_line =
-        format!("install run finished (cli = {cli}, ok = {ok}, cancelled = {cancelled})");
+    let log_line = format!("{kind} run finished (cli = {cli}, ok = {ok}, cancelled = {cancelled})");
 
     let output = h
         .fs_read(&entry.output_path)

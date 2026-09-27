@@ -9,7 +9,7 @@
  */
 import { onUnmounted, ref } from 'vue'
 import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
-import type { InstallDomainState } from '../types'
+import type { CliId, InstallDomainState } from '../types'
 
 const POLL_INTERVAL_MS = 1200
 
@@ -112,6 +112,20 @@ export function useInstall(context: PluginContext) {
     }
   }
 
+  /**
+   * 卸载指定 CLI（recipe 白名单在 guest 端；两击确认在概览卡片层，这里只发命令）。
+   * 返回是否成功——失败（并发 run / 探测未就绪等 guest 拒绝）供调用方提示友好文案。
+   */
+  async function uninstall(cli: CliId): Promise<boolean> {
+    try {
+      await context.commands.execute('agent-hub.uninstall', { cli })
+      return true
+    } catch (e) {
+      console.error('[Agent Hub] uninstall failed', cli, e)
+      return false
+    }
+  }
+
   async function cancelRun() {
     try {
       await context.commands.execute('agent-hub.cancel-run', {})
@@ -144,6 +158,7 @@ export function useInstall(context: PluginContext) {
     restoreNpmrc,
     checkUpdates,
     install,
+    uninstall,
     cancelRun,
   }
 }

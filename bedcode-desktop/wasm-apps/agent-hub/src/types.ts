@@ -87,21 +87,21 @@ export interface CliUpdateInfo {
   error: string | null
 }
 
-/** 在途安装/更新 run */
+/** 在途安装/更新/卸载 run */
 export interface ActiveRun {
   runId: string
   cli: CliId
-  action: 'install' | 'update'
+  action: 'install' | 'update' | 'uninstall'
   command: string
   useMirror: boolean
   startedAt: number
   cancelRequested: boolean
 }
 
-/** 最近一次安装/更新终态（output 为尾部截断后的回显） */
+/** 最近一次安装/更新/卸载终态（output 为尾部截断后的回显） */
 export interface LastRun {
   cli: CliId
-  action: 'install' | 'update'
+  action: 'install' | 'update' | 'uninstall'
   command: string | null
   ok: boolean
   cancelled: boolean
@@ -129,7 +129,7 @@ export interface InstallDomainState {
 export interface RunOutput {
   status: 'idle' | 'running' | 'ok' | 'error' | 'cancelled'
   cli?: CliId
-  action?: 'install' | 'update'
+  action?: 'install' | 'update' | 'uninstall'
   command?: string | null
   output: string | null
 }

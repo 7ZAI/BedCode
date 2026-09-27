@@ -35,6 +35,15 @@ const en: MessageSchema = {
   'hub.card.method.standalone': 'standalone',
   'hub.card.method.unknown': '—',
 
+  // Overview · CLI uninstall (two-click confirm + unavailability reasons + failure)
+  'hub.card.uninstall': 'Uninstall',
+  'hub.card.uninstallConfirm': 'Confirm uninstall?',
+  'hub.card.uninstallRunning': 'Uninstalling…',
+  'hub.card.uninstallHintDual': 'Multiple installs detected; uninstall manually',
+  'hub.card.uninstallHintMethod': 'Unknown install method; uninstall manually',
+  'hub.card.uninstallHintNode': 'Node.js not detected; cannot uninstall automatically',
+  'hub.card.uninstallFailed': 'Uninstall failed; try again',
+
   'hub.auth.banner': 'CLI config directories not authorized (~/.codex, ~/.pi, opencode, etc.); related capabilities unavailable.',
   'hub.auth.action': 'Authorize',
 
@@ -257,7 +266,10 @@ const en: MessageSchema = {
   'hub.lg.sources.scan': 'Scan now',
   'hub.lg.sources.add': 'Add log directory',
   'hub.lg.sources.addName': 'Source name (lowercase letters/digits/-, e.g. opencode)',
-  'hub.lg.sources.addPath': 'Absolute log directory path (or start with ~/)',
+  'hub.lg.sources.addPath': 'No log directory selected yet',
+  'hub.lg.sources.pick': 'Choose folder',
+  'hub.lg.sources.picking': 'Picking…',
+  'hub.lg.sources.pickFailed': 'Pick failed; try again',
   'hub.lg.sources.confirm': 'Add',
   'hub.lg.sources.cancel': 'Cancel',
   'hub.lg.sources.remove': 'Remove this source',

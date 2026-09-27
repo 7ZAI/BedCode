@@ -5,6 +5,9 @@
  *
  * 票 07：CLI 卡片的第六态「已装 · 未初始化」由 usage 域给出（父层经
  * `sessionStates` 下传），本分区不自行探测会话数据。
+ *
+ * 卸载（本次新增）：卡片上的「卸载」经 `uninstall` 事件上抛，父层执行
+ * 命令并回传结果；本分区只负责把 busy / uninstalling / 失败信号下传给卡。
  */
 import { computed, inject } from 'vue'
 import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
@@ -19,8 +22,16 @@ const props = defineProps<{
   speedTesting: boolean
   /** 各 CLI 的会话数据状态（票 07；缺项=不下结论） */
   sessionStates?: Partial<Record<CliId, CliSessionState>>
+  /** 卸载失败信号（guest 拒绝/异常；瞬态提示，成功后由父层清除） */
+  uninstallFailed?: CliId | null
 }>()
-const emit = defineEmits<{ detect: []; auth: []; 'speed-test': []; 'goto-install': [] }>()
+const emit = defineEmits<{
+  detect: []
+  auth: []
+  'speed-test': []
+  'goto-install': []
+  uninstall: [cli: CliId]
+}>()
 
 const context = inject<PluginContext>('pluginContext')!
 const t = (key: string) => context.i18n.t(key)
@@ -55,6 +66,18 @@ const envRows = computed(() => {
     { label: t('hub.env.registry'), value: env?.registry },
   ]
 })
+
+/** 是否有任意在途 run（安装/更新/卸载共用同一 run 管线，busy 期间全禁） */
+const busy = computed(() => !!props.installState?.active)
+
+/** 正在被卸载的 CLI（active run 属主；其余卡片照常禁用） */
+const uninstalling = computed<CliId | null>(() => {
+  const a = props.installState?.active
+  return a?.action === 'uninstall' ? (a.cli as CliId) : null
+})
+
+/** node 环境是否就绪（npm-global 卸载依赖） */
+const nodeReady = computed(() => !!props.state?.env?.node)
 
 const speed = computed(() => props.installState?.mirror?.speed ?? null)
 const speedDone = computed(() => speed.value?.status === 'ok')
@@ -148,6 +171,11 @@ const recommendMirror = computed(() => speed.value?.recommend === 'npmmirror')
         :cli-id="id"
         :info="state?.clis?.[id] ?? null"
         :session-state="props.sessionStates?.[id]"
+        :busy="busy"
+        :uninstalling="uninstalling === id"
+        :uninstall-failed="props.uninstallFailed === id"
+        :node-ready="nodeReady"
+        @uninstall="(cli) => emit('uninstall', cli)"
       />
     </div>
   </div>

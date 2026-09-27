@@ -93,11 +93,11 @@ interface MirrorSeed extends Seed {
   }
 }
 
-/** 运行中安装（ActiveRun 子集） */
+/** 运行中安装/卸载（ActiveRun 子集） */
 interface ActiveRunSeed extends Seed {
   runId: string
   cli: string
-  action: 'install' | 'update'
+  action: 'install' | 'update' | 'uninstall'
   command: string
   startedAt: number
   cancelRequested: boolean
@@ -201,13 +201,13 @@ function maskKey(key: string): string {
 const NPMMIRROR = 'https://registry.npmmirror.com'
 const NPMJS = 'https://registry.npmjs.org'
 
-// ==================== 运行中安装模拟（单 run） ====================
+// ==================== 运行中安装/卸载模拟（单 run） ====================
 
 let runTimer: ReturnType<typeof setInterval> | null = null
 let runState: {
   runId: string
   cli: string
-  action: 'install' | 'update'
+  action: 'install' | 'update' | 'uninstall'
   command: string
   useMirror: boolean
   startedAt: number
@@ -224,21 +224,48 @@ function stopRunTimer(): void {
   }
 }
 
-/** run 模拟：每 tick 回放一行剧本输出，播完置终态并推送（返回待清理句柄）
- * @returns 新 run 的 runId（脚本缺失 = 启动失败时返回 null） */
-function startRun(context: PluginContext, cli: string, useMirror: boolean): string | null {
-  const script = install?.runScripts?.[cli]
-  if (!script) return null
-  const updates = (install?.updates ?? {}) as Record<string, { outdated: boolean | null }>
+/** 卸载剧本（与安装白名单同源包名；claude native/opencode standalone 官方命令） */
+const UNINSTALL_SCRIPTS: Record<string, { command: string; output: string[] }> = {
+  claude: {
+    command: 'npm uninstall -g @anthropic-ai/claude-code',
+    output: ['$ npm uninstall -g @anthropic-ai/claude-code', '', 'removed 1 package in 3s'],
+  },
+  codex: {
+    command: 'npm uninstall -g @openai/codex',
+    output: ['$ npm uninstall -g @openai/codex', '', 'removed 1 package in 4s'],
+  },
+  opencode: {
+    command: 'opencode uninstall --force',
+    output: ['$ opencode uninstall --force', '', 'opencode removed'],
+  },
+  pi: {
+    command: 'npm uninstall -g @earendil-works/pi-coding-agent',
+    output: ['$ npm uninstall -g @earendil-works/pi-coding-agent', '', 'removed 1 package in 3s'],
+  },
+}
+
+interface RunSpec {
+  cli: string
+  action: 'install' | 'update' | 'uninstall'
+  command: string
+  useMirror: boolean
+  lines: string[]
+  /** run 播完后的额外副作用（卸载：翻转探测为未安装） */
+  onDone?: () => void
+}
+
+/** run 模拟：每 tick 回放一行剧本输出，播完置终态并推送
+ * @returns 新 run 的 runId（启动失败时返回 null） */
+function startRunWith(context: PluginContext, spec: RunSpec): string | null {
   runState = {
     runId: `mock-run-${++runSeq}`,
-    cli,
-    action: updates[cli]?.outdated ? 'update' : 'install',
-    command: useMirror ? `${script.command} --registry=${NPMMIRROR}` : script.command,
-    useMirror,
+    cli: spec.cli,
+    action: spec.action,
+    command: spec.command,
+    useMirror: spec.useMirror,
     startedAt: Date.now(),
     cancelRequested: false,
-    lines: [...script.output],
+    lines: [...spec.lines],
     cursor: 0,
   }
   install!.active = {
@@ -246,7 +273,7 @@ function startRun(context: PluginContext, cli: string, useMirror: boolean): stri
     cli: runState.cli,
     action: runState.action,
     command: runState.command,
-    useMirror,
+    useMirror: runState.useMirror,
     startedAt: runState.startedAt,
     cancelRequested: false,
   } as any
@@ -271,14 +298,58 @@ function startRun(context: PluginContext, cli: string, useMirror: boolean): stri
         finishedAt: Date.now(),
       } as any
       install.active = null
+      const onDone = spec.onDone
       runState = null
       stopRunTimer()
+      onDone?.()
     } else if (install.active) {
       install.active.cancelRequested = runState.cancelRequested
     }
     emitInstall(context)
   }, 700)
   return runState.runId
+}
+
+/** 安装/更新 run（剧本来自种子 runScripts；action 按 outdated 判定） */
+function startRun(context: PluginContext, cli: string, useMirror: boolean): string | null {
+  const script = install?.runScripts?.[cli]
+  if (!script) return null
+  const updates = (install?.updates ?? {}) as Record<string, { outdated: boolean | null }>
+  return startRunWith(context, {
+    cli,
+    action: updates[cli]?.outdated ? 'update' : 'install',
+    command: useMirror ? `${script.command} --registry=${NPMMIRROR}` : script.command,
+    useMirror,
+    lines: [...script.output],
+  })
+}
+
+/** 卸载 run：剧本固定（无用户输入），播完翻转探测为未安装（与 guest 完成
+ * 后自动重探测同效） */
+function startUninstallRun(context: PluginContext, cli: string): string | null {
+  const script = UNINSTALL_SCRIPTS[cli]
+  if (!script) return null
+  return startRunWith(context, {
+    cli,
+    action: 'uninstall',
+    command: script.command,
+    useMirror: false,
+    lines: [...script.output],
+    onDone: () => {
+      if (detection?.clis?.[cli]) {
+        detection.clis[cli] = {
+          installed: false,
+          version: null,
+          method: 'unknown',
+          paths: [],
+          dual: false,
+          status: 'not-installed',
+          error: null,
+        }
+        emitDetection(context)
+      }
+    },
+  })
 }
 
 function cancelRun(context: PluginContext): void {
@@ -461,6 +532,15 @@ function registerCommands(context: PluginContext): void {
       // startRun 同步落 runState 并返回新 runId（无剧本时 null）——避免
       // 早退收窄后 `runState?.runId` 落在 never 上（TS 不跟踪跨函数赋值）
       const runId = startRun(context, cli, !!args?.mirror)
+      return { runId }
+    })
+    context.commands.register('agent-hub.uninstall', (args: any) => {
+      const cli: string = args?.cli ?? ''
+      if (!UNINSTALL_SCRIPTS[cli]) {
+        return Promise.reject(new Error(`no uninstall recipe for cli: ${cli}`))
+      }
+      if (runState) return Promise.reject(new Error('another run is active'))
+      const runId = startUninstallRun(context, cli)
       return { runId }
     })
     context.commands.register('agent-hub.cancel-run', () => {
@@ -789,6 +869,12 @@ function registerCommands(context: PluginContext): void {
         return scan ? { ...s, scan: clone(scan) } : s
       })
       return { sources: clone(sources) }
+    })
+    context.commands.register('agent-hub.pick-source-dir', () => {
+      // 浏览器里无法弹系统对话框：返回演示目录（项目 .pi/sessions 形态），
+      // 供前端完整走「选择 → 派生名 → 添加」链路
+      const home = usage!.state.home ?? '/home/dev'
+      return { picked: true, path: `${home}/project/tauriProject/BedCode/.pi/sessions` }
     })
     context.commands.register('agent-hub.add-usage-source', (args: any) => {
       const name = String(args?.name ?? '').trim()

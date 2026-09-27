@@ -28,10 +28,11 @@ import StatsTab from '../components/StatsTab.vue'
 import SessionLogsTab from '../components/SessionLogsTab.vue'
 import SkillsTab from '../components/SkillsTab.vue'
 import InstallTab from '../components/InstallTab.vue'
+import OverviewTab from '../components/OverviewTab.vue'
 import CliCard from '../components/CliCard.vue'
 import type { AdapterErrorCode, ProviderPreset, ProvidersDomainState, UsageSessionRow } from '../types'
 import type { UseProvidersReturn } from '../composables/useProviders'
-import type { CliSessionState, UseUsageReturn } from '../composables/useUsage'
+import type { CliSessionState, StatsDays, UseUsageReturn } from '../composables/useUsage'
 import type { UseSkillsReturn } from '../composables/useSkills'
 
 // 第三方控件内部实现不进契约
@@ -1110,6 +1111,352 @@ describe('A7-4 SessionLogsTab：来源形态与扫描计数口径', () => {
     expect(w.findAll('.ah-lg-source-remove')).toHaveLength(1)
     // 未扫描过显示提示而不是 0
     expect(w.text()).toContain('hub.lg.sources.noScan')
+    w.unmount()
+  })
+})
+
+// ==================== A8 概览卸载：卡片两击确认与不可用原因 ====================
+
+/**
+ * A8 概览卡片卸载动作的行为契约（本次新增）：
+ *  - A8-1 正例：已装 + 可自动卸载 → 卸载按钮，两击确认后才 emit uninstall(cli)
+ *  - A8-2 反例：未安装 / 检测中 / 失败 → 不渲染卸载动作
+ *  - A8-3 反例：双安装 / 未知安装方式 / npm-global 缺 node → 不给按钮，提示手动
+ *  - A8-4 边界：busy（任意在途 run）与 uninstalling（本卡卸载中）→ 禁用/文案
+ *  - A8-5 反例：卸载失败信号 → 友好 i18n 失败文案
+ *  - A8-6 边界：armed 4s 超时自动复位（防误触的第二道保险）
+ */
+describe('A8 CliCard：卸载动作（两击确认与不可用原因）', () => {
+  const info = {
+    installed: true,
+    version: '1.0',
+    method: 'npm-global',
+    paths: [] as string[],
+    dual: false,
+    status: 'ok',
+    error: null,
+  }
+
+  it('A8-1 正例：已装 npm-global + node → 两击确认后 emit uninstall(cli)', async () => {
+    const w = mountComponent(CliCard, { cliId: 'pi', info, nodeReady: true })
+    await flushPromises()
+    const btn = w.get('.ah-cli-foot .ah-btn')
+    expect(btn.text()).toBe('hub.card.uninstall')
+
+    await btn.trigger('click')
+    await flushPromises()
+    // 第一击只 arm：按钮变确认文案，不发命令
+    expect(btn.text()).toBe('hub.card.uninstallConfirm')
+    expect(w.emitted('uninstall')).toBeUndefined()
+
+    await btn.trigger('click')
+    await flushPromises()
+    expect(w.emitted('uninstall')?.[0]).toEqual(['pi'])
+    w.unmount()
+  })
+
+  it('A8-2 反例：未安装 → 不渲染卸载动作', async () => {
+    const w = mountComponent(CliCard, {
+      cliId: 'pi',
+      info: { ...info, installed: false, status: 'not-installed' },
+      nodeReady: true,
+    })
+    await flushPromises()
+    expect(w.find('.ah-cli-foot').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('A8-2 边界：检测中/失败 → 不渲染卸载动作', async () => {
+    for (const status of ['detecting', 'error'] as const) {
+      const w = mountComponent(CliCard, {
+        cliId: 'pi',
+        info: { ...info, status },
+        nodeReady: true,
+      })
+      await flushPromises()
+      expect(w.find('.ah-cli-foot').exists()).toBe(false)
+      w.unmount()
+    }
+  })
+
+  it('A8-3 反例：双安装 → 不给按钮，提示手动卸载', async () => {
+    const w = mountComponent(CliCard, {
+      cliId: 'opencode',
+      info: { ...info, method: 'standalone', dual: true, paths: ['/a/opencode', '/b/opencode'] },
+      nodeReady: true,
+    })
+    await flushPromises()
+    expect(w.text()).toContain('hub.card.uninstallHintDual')
+    expect(w.find('.ah-cli-foot .ah-btn').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('A8-3 反例：安装方式未知 → 提示手动卸载', async () => {
+    const w = mountComponent(CliCard, {
+      cliId: 'pi',
+      info: { ...info, method: 'unknown' },
+      nodeReady: true,
+    })
+    await flushPromises()
+    expect(w.text()).toContain('hub.card.uninstallHintMethod')
+    expect(w.find('.ah-cli-foot .ah-btn').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('A8-3 反例：npm-global 且缺 node → 提示不可自动卸载', async () => {
+    const w = mountComponent(CliCard, { cliId: 'pi', info, nodeReady: false })
+    await flushPromises()
+    expect(w.text()).toContain('hub.card.uninstallHintNode')
+    expect(w.find('.ah-cli-foot .ah-btn').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('A8-3 边界：native/standalone 卸载不依赖 node（仍有按钮）', async () => {
+    for (const [cliId, method] of [
+      ['claude', 'native'],
+      ['opencode', 'standalone'],
+    ] as const) {
+      const w = mountComponent(CliCard, { cliId, info: { ...info, method }, nodeReady: false })
+      await flushPromises()
+      expect(w.find('.ah-cli-foot .ah-btn').exists()).toBe(true)
+      w.unmount()
+    }
+  })
+
+  it('A8-4 边界：busy（任意在途 run）→ 按钮禁用', async () => {
+    const w = mountComponent(CliCard, { cliId: 'pi', info, nodeReady: true, busy: true })
+    await flushPromises()
+    expect(w.get('.ah-cli-foot .ah-btn').attributes('disabled')).toBeDefined()
+    w.unmount()
+  })
+
+  it('A8-4 边界：uninstalling（本卡卸载中）→ 「卸载中…」且禁用', async () => {
+    const w = mountComponent(CliCard, { cliId: 'pi', info, nodeReady: true, uninstalling: true })
+    await flushPromises()
+    const btn = w.get('.ah-cli-foot .ah-btn')
+    expect(btn.text()).toBe('hub.card.uninstallRunning')
+    expect(btn.attributes('disabled')).toBeDefined()
+    w.unmount()
+  })
+
+  it('A8-5 反例：卸载失败信号 → 显示友好失败文案', async () => {
+    const w = mountComponent(CliCard, { cliId: 'pi', info, nodeReady: true, uninstallFailed: true })
+    await flushPromises()
+    expect(w.text()).toContain('hub.card.uninstallFailed')
+    w.unmount()
+  })
+
+  it('A8-6 边界：armed 超时自动复位（4s 后按钮回到「卸载」）', async () => {
+    vi.useFakeTimers()
+    try {
+      const w = mountComponent(CliCard, { cliId: 'pi', info, nodeReady: true })
+      await flushPromises()
+      const btn = w.get('.ah-cli-foot .ah-btn')
+      await btn.trigger('click')
+      expect(btn.text()).toBe('hub.card.uninstallConfirm')
+      vi.advanceTimersByTime(4000)
+      await flushPromises()
+      expect(btn.text()).toBe('hub.card.uninstall')
+      w.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+// ==================== A9 概览：卸载事件上抛与失败信号下传 ====================
+
+/**
+ * A9 OverviewTab 的卸载接线：
+ *  - 卡片两击确认后 emit uninstall(cli) 上抛给父层
+ *  - uninstallFailed 信号下传对应卡片（其余卡片不误显示）
+ */
+describe('A9 OverviewTab：卸载事件上抛', () => {
+  function mountOverview(over: Record<string, unknown> = {}) {
+    return mountComponent(OverviewTab, {
+      state: {
+        authGranted: true,
+        envStatus: 'ok',
+        env: { node: 'v22' },
+        clis: {
+          pi: {
+            installed: true,
+            version: '0.1',
+            method: 'npm-global',
+            paths: [],
+            dual: false,
+            status: 'ok',
+            error: null,
+          },
+        },
+      },
+      detecting: false,
+      installState: { active: null, last: null, mirror: { speed: null }, updates: {} },
+      speedTesting: false,
+      ...over,
+    })
+  }
+
+  it('正例：卡片两击确认后 emit uninstall(cli)', async () => {
+    const w = mountOverview()
+    await flushPromises()
+    const btn = w.get('.ah-cli-foot .ah-btn')
+    await btn.trigger('click')
+    await flushPromises()
+    expect(w.emitted('uninstall')).toBeUndefined()
+    await btn.trigger('click')
+    await flushPromises()
+    expect(w.emitted('uninstall')?.[0]).toEqual(['pi'])
+    w.unmount()
+  })
+
+  it('正例：在途卸载 run（active.action=uninstall）→ 对应卡片「卸载中…」', async () => {
+    const w = mountOverview({
+      installState: {
+        active: {
+          runId: 'r1',
+          cli: 'pi',
+          action: 'uninstall',
+          command: 'npm uninstall -g @earendil-works/pi-coding-agent',
+          useMirror: false,
+          startedAt: 0,
+          cancelRequested: false,
+        },
+        last: null,
+        mirror: { speed: null },
+        updates: {},
+      },
+    })
+    await flushPromises()
+    expect(w.get('.ah-cli-foot .ah-btn').text()).toBe('hub.card.uninstallRunning')
+    expect(w.get('.ah-cli-foot .ah-btn').attributes('disabled')).toBeDefined()
+    w.unmount()
+  })
+
+  it('反例：卸载失败信号只落到对应卡片（其他卡片不误显示）', async () => {
+    const w = mountOverview({ uninstallFailed: 'pi' })
+    await flushPromises()
+    // pi 卡片下方有失败文案；其余卡片（未装/无信息）不出现
+    expect(w.text()).toContain('hub.card.uninstallFailed')
+    expect(w.findAll('.ah-cli-foot')).toHaveLength(1)
+    w.unmount()
+  })
+})
+
+// ==================== A10 日志来源：fs:pick 选择目录 ====================
+
+/**
+ * A10 添加日志目录改用系统选择器（fs:pick）的行为契约（本次新增）：
+ *  - A10-1 正例：选目录成功 → 路径回显 + 名称自动派生（basename 合法化）→ 确认添加
+ *  - A10-2 边界：用户取消 → 表单不变（不填路径、不报错）
+ *  - A10-3 反例：宿主拒绝（未授权等）→ 友好错误，不填路径
+ *  - A10-4 反例：未选目录时「确认添加」禁用（路径来自选择器，无手动输入面）
+ */
+describe('A10 SessionLogsTab：添加日志目录走 fs:pick 选择器', () => {
+  function usageStub(over: Partial<UseUsageReturn> = {}): UseUsageReturn {
+    return {
+      state: ref({ status: 'ok', home: '/home/binblink' }),
+      stats: ref(null),
+      sources: ref([]),
+      statsDays: ref(30 as StatsDays),
+      statsLoading: ref(false),
+      logSessions: ref([]),
+      logTotal: ref(0),
+      logPage: ref(1),
+      logTotalPages: ref(1),
+      logLoading: ref(false),
+      listFilter: ref(''),
+      searchText: ref(''),
+      rangeFrom: ref(null),
+      rangeTo: ref(null),
+      openedSession: ref(null),
+      openingSession: ref(false),
+      adapterErrors: ref([] as { adapter: string; code: AdapterErrorCode }[]),
+      clearing: ref(false),
+      clearData: vi.fn(async () => ({ ok: true })),
+      cliSessionState: vi.fn(() => 'unknown' as CliSessionState),
+      reloadStats: vi.fn(),
+      setStatsDays: vi.fn(),
+      reloadSessions: vi.fn(),
+      goPage: vi.fn(),
+      resetQuery: vi.fn(),
+      reloadSources: vi.fn(),
+      addSource: vi.fn(async () => ({ ok: true })),
+      pickSourceDir: vi.fn(async () => ({ ok: false, picked: false, path: '' })),
+      removeSource: vi.fn(async () => ({ ok: true })),
+      openSession: vi.fn(),
+      closeSession: vi.fn(),
+      refresh: vi.fn(),
+      scan: vi.fn(),
+      ...over,
+    } as unknown as UseUsageReturn
+  }
+
+  /** 展开来源折叠区并打开「添加日志目录」表单 */
+  async function openAddForm(w: ReturnType<typeof mountComponent>) {
+    await w.get('.ah-lg-sources-toggle').trigger('click')
+    await flushPromises()
+    await w.get('.ah-lg-sources-actions .ah-btn-ghost').trigger('click')
+    await flushPromises()
+  }
+
+  const PICKED = '/home/binblink/project/tauriProject/BedCode/.pi/sessions'
+
+  it('A10-1 正例：选择器选中 → 路径回显 + 名称自动派生，确认添加走 addSource', async () => {
+    const addSource = vi.fn(async () => ({ ok: true }))
+    const pickSourceDir = vi.fn(async () => ({ ok: true, picked: true, path: PICKED }))
+    const w = mountComponent(SessionLogsTab, { usage: usageStub({ addSource, pickSourceDir }) })
+    await flushPromises()
+    await openAddForm(w)
+
+    await w.get('.ah-lg-sources-pick .ah-btn').trigger('click')
+    await flushPromises()
+    // 路径回显 + 名称建议（basename 合法化 → sessions）
+    expect(w.get('.ah-lg-sources-pickpath').text()).toContain(PICKED)
+    expect(w.get('input.ah-input').element as HTMLInputElement).toHaveProperty('value', 'sessions')
+
+    // 确认添加 → guest add-source（name + 选择器路径）
+    await w.get('.ah-lg-sources-add .ah-btn-primary').trigger('click')
+    await flushPromises()
+    expect(addSource).toHaveBeenCalledWith('sessions', PICKED)
+    w.unmount()
+  })
+
+  it('A10-2 边界：用户取消 → 表单不变（路径为空、无错误）', async () => {
+    const pickSourceDir = vi.fn(async () => ({ ok: true, picked: false, path: '' }))
+    const w = mountComponent(SessionLogsTab, { usage: usageStub({ pickSourceDir }) })
+    await flushPromises()
+    await openAddForm(w)
+
+    await w.get('.ah-lg-sources-pick .ah-btn').trigger('click')
+    await flushPromises()
+    expect(w.get('.ah-lg-sources-pickpath').classes()).toContain('empty')
+    expect(w.text()).not.toContain('hub.lg.sources.pickFailed')
+    // 确认按钮仍禁用（无路径）
+    expect(w.get('.ah-lg-sources-add .ah-btn-primary').attributes('disabled')).toBeDefined()
+    w.unmount()
+  })
+
+  it('A10-3 反例：宿主拒绝（未授权等）→ 友好错误，不填路径', async () => {
+    const pickSourceDir = vi.fn(async () => ({ ok: false, picked: false, path: '' }))
+    const w = mountComponent(SessionLogsTab, { usage: usageStub({ pickSourceDir }) })
+    await flushPromises()
+    await openAddForm(w)
+
+    await w.get('.ah-lg-sources-pick .ah-btn').trigger('click')
+    await flushPromises()
+    expect(w.text()).toContain('hub.lg.sources.pickFailed')
+    expect(w.get('.ah-lg-sources-pickpath').classes()).toContain('empty')
+    w.unmount()
+  })
+
+  it('A10-4 反例：未选目录时「确认添加」禁用（路径只来自选择器）', async () => {
+    const w = mountComponent(SessionLogsTab, { usage: usageStub() })
+    await flushPromises()
+    await openAddForm(w)
+    expect(w.get('.ah-lg-sources-add .ah-btn-primary').attributes('disabled')).toBeDefined()
+    // 路径输入框已不存在（改为选择器按钮 + 回显）
+    expect(w.find('input.ah-mono').exists()).toBe(false)
     w.unmount()
   })
 })

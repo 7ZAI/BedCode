@@ -38,13 +38,23 @@ const usage = useUsage(context)
 
 const activeTab = ref<HubTab>('overview')
 
+/** 卸载失败信号（guest 拒绝/异常；瞬态提示，下次操作自动清除） */
+const uninstallFailed = ref<CliId | null>(null)
+
+/** 概览卡片卸载：发命令给 guest，失败则落瞬态提示（友好 i18n 在卡片层） */
+async function handleUninstall(cli: CliId) {
+  uninstallFailed.value = null
+  const ok = await install.uninstall(cli)
+  if (!ok) uninstallFailed.value = cli
+}
+
 const tabs = computed(() => [
   { id: 'overview' as const, label: context.i18n.t('hub.tab.overview') },
   { id: 'install' as const, label: context.i18n.t('hub.tab.install') },
   { id: 'skills' as const, label: context.i18n.t('hub.tab.skills') },
   { id: 'providers' as const, label: context.i18n.t('hub.tab.providers') },
-  { id: 'stats' as const, label: context.i18n.t('hub.tab.stats') },
   { id: 'logs' as const, label: context.i18n.t('hub.tab.logs') },
+  { id: 'stats' as const, label: context.i18n.t('hub.tab.stats') },
 ])
 
 onMounted(() => {
@@ -101,10 +111,12 @@ function gotoLogs(sessionId: number) {
       :install-state="install.state.value"
       :speed-testing="install.speedTesting.value"
       :session-states="sessionStates"
+      :uninstall-failed="uninstallFailed"
       @detect="detect"
       @auth="requestAuth"
       @speed-test="install.speedTest"
       @goto-install="gotoInstall"
+      @uninstall="handleUninstall"
     />
     <InstallTab
       v-else-if="activeTab === 'install'"
@@ -123,8 +135,8 @@ function gotoLogs(sessionId: number) {
     />
     <SkillsTab v-else-if="activeTab === 'skills'" :detection="state" :skills="skills" />
     <ProvidersTab v-else-if="activeTab === 'providers'" :detection="state" :providers="providers" />
-    <StatsTab v-else-if="activeTab === 'stats'" :usage="usage" @goto-logs="gotoLogs" />
-    <SessionLogsTab v-else :usage="usage" />
+    <SessionLogsTab v-else-if="activeTab === 'logs'" :usage="usage" />
+    <StatsTab v-else :usage="usage" />
     </Transition>
   </div>
 </template>

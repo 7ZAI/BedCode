@@ -436,6 +436,17 @@
   word-break: break-all;
 }
 
+/* 卸载动作行：顶部分隔线 + 右对齐（破坏性动作与信息区视觉分离） */
+.ah-cli-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
 /* 品牌图标 chip：claude / pi 用品牌色低透明度派生底色，其余走中性 token。
    品牌底色是**标识**而非语义/数据色，宿主 token 目录里没有对应项，
    故在此以 rgba 写死并在下方集中一处维护；它们只出现在 34px 图标底上，
@@ -1561,6 +1572,30 @@
   gap: 8px;
   margin-top: 8px;
   flex-wrap: wrap;
+}
+
+/* 添加来源：系统选择器（fs:pick）按钮 + 只读路径回显（省略号截断） */
+.ah-lg-sources-pick {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 240px;
+  min-width: 0;
+}
+
+.ah-lg-sources-pickpath {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+  font-size: var(--font-size-tag);
+}
+
+/* 未选中时的占位提示（复用 addPath 文案）降为数据色 */
+.ah-lg-sources-pickpath.empty {
+  color: var(--ah-text-data);
 }
 
 /* ---------- 查询条件条（Agent / 关键词 / 时间范围） ---------- */

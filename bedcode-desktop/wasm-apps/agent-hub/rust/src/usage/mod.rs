@@ -35,7 +35,7 @@ pub(crate) use clear::clear_data;
 pub(crate) use scan::{handle_scan_done, scan};
 pub(crate) use schema::ensure_schema;
 pub(crate) use sessions::{list_sessions, read_session};
-pub(crate) use sources::{add_source, list_sources, remove_source};
+pub(crate) use sources::{add_source, list_sources, pick_source_dir, remove_source};
 pub(crate) use stats::get_stats;
 
 use super::{AUTH_KEY, HOME};

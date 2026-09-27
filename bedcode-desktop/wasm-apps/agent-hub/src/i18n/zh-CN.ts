@@ -35,6 +35,15 @@ const zhCN: MessageSchema = {
   'hub.card.method.standalone': 'standalone',
   'hub.card.method.unknown': '—',
 
+  // 概览 · CLI 卸载（两击确认 + 不可用原因 + 失败提示）
+  'hub.card.uninstall': '卸载',
+  'hub.card.uninstallConfirm': '确认卸载？',
+  'hub.card.uninstallRunning': '卸载中…',
+  'hub.card.uninstallHintDual': '检测到多处安装，请手动卸载',
+  'hub.card.uninstallHintMethod': '安装方式未知，请手动卸载',
+  'hub.card.uninstallHintNode': '未检测到 Node.js，无法自动卸载',
+  'hub.card.uninstallFailed': '卸载失败，请重试',
+
   'hub.auth.banner': 'CLI 配置目录尚未授权（~/.codex、~/.pi、opencode 等），相关能力暂不可用。',
   'hub.auth.action': '授权目录',
 
@@ -257,7 +266,10 @@ const zhCN: MessageSchema = {
   'hub.lg.sources.scan': '立即扫描',
   'hub.lg.sources.add': '添加日志目录',
   'hub.lg.sources.addName': '来源名称（小写字母/数字/-，如 opencode）',
-  'hub.lg.sources.addPath': '日志目录绝对路径（或 ~/ 开头）',
+  'hub.lg.sources.addPath': '尚未选择日志目录',
+  'hub.lg.sources.pick': '选择目录',
+  'hub.lg.sources.picking': '选择中…',
+  'hub.lg.sources.pickFailed': '选择失败，请重试',
   'hub.lg.sources.confirm': '确认添加',
   'hub.lg.sources.cancel': '取消',
   'hub.lg.sources.remove': '移除该来源',

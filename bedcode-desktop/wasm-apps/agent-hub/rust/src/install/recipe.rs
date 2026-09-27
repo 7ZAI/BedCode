@@ -1,8 +1,11 @@
-//! 安装命令 recipe 白名单（纯函数，双平台可测）
+//! 安装/卸载命令 recipe 白名单（纯函数，双平台可测）
 //!
 //! 仅接受白名单 cli 名 + 固定模板，method/installed 来自探测状态而非前端
 //! 传参：claude native → `claude update`（镜像无关）；claude npm-global →
 //! npm 包安装；opencode standalone 拒绝自动安装（官方脚本手动，v1 提示）。
+//! 卸载同样只走白名单：npm-global → `npm uninstall -g <pkg>`；claude native
+//! → 官方文档卸载命令（rm launcher + 版本目录）；opencode standalone →
+//! `opencode uninstall --force`（官方命令，非交互跳过确认）。
 
 use super::registry::NPMMIRROR;
 
@@ -25,6 +28,43 @@ fn npm_install_cmd(pkg: &str, use_mirror: bool) -> String {
     } else {
         format!("npm install -g {pkg}")
     }
+}
+
+/// claude native 卸载命令（官方文档，双平台形态）：
+/// unix `rm -f ~/.local/bin/claude` + `rm -rf ~/.local/share/claude`；
+/// Windows cmd `del`/`rd` 等价（`%USERPROFILE%` 由 cmd 展开）
+fn claude_native_uninstall(windows: bool) -> String {
+    if windows {
+        "del /f \"%USERPROFILE%\\.local\\bin\\claude.exe\" & rd /s /q \"%USERPROFILE%\\.local\\share\\claude\"".to_string()
+    } else {
+        "rm -f ~/.local/bin/claude\nrm -rf ~/.local/share/claude".to_string()
+    }
+}
+
+/// 卸载命令构造（纯函数，双平台可测）
+///
+/// 仅接受白名单 cli 名 + 固定模板；method 来自探测状态而非前端传参。
+/// - npm-global（全部 CLI）→ `npm uninstall -g <pkg>`（卸载本地完成，镜像无关）
+/// - claude native → 官方文档卸载命令（unix / Windows 分派）
+/// - opencode standalone → `opencode uninstall --force`（官方命令，非交互跳过确认）
+///
+/// 其余 method（unknown 等）→ 拒绝（v1 提示手动卸载）
+pub(crate) fn build_uninstall_script(
+    cli: &str,
+    method: &str,
+    windows: bool,
+) -> Result<String, String> {
+    if cli == "claude" && method == "native" {
+        return Ok(claude_native_uninstall(windows));
+    }
+    if cli == "opencode" && method == "standalone" {
+        return Ok("opencode uninstall --force".to_string());
+    }
+    if method != "npm-global" {
+        return Err(format!("unsupported uninstall method: {cli} / {method}"));
+    }
+    let pkg = npm_package(cli).ok_or_else(|| format!("no uninstall recipe for cli: {cli}"))?;
+    Ok(format!("npm uninstall -g {pkg}"))
 }
 
 /// 安装/更新命令构造（纯函数，双平台可测）
@@ -125,5 +165,57 @@ mod tests {
     fn build_script_unknown_cli_rejected() {
         assert!(build_install_script("rm -rf /", "npm-global", false, false).is_err());
         assert!(build_install_script("", "npm-global", false, false).is_err());
+    }
+
+    // ==================== 卸载 recipe（票据：概览卸载） ====================
+
+    /// npm-global 卸载：四家 CLI 均 `npm uninstall -g <pkg>`（包名同安装白名单），
+    /// 镜像无关（本地完成）
+    #[test]
+    fn build_uninstall_npm_global() {
+        for (cli, pkg) in [
+            ("pi", "@earendil-works/pi-coding-agent"),
+            ("codex", "@openai/codex"),
+            ("opencode", "opencode-ai"),
+            ("claude", "@anthropic-ai/claude-code"),
+        ] {
+            let script =
+                build_uninstall_script(cli, "npm-global", false).expect("npm uninstall recipe");
+            assert_eq!(script, format!("npm uninstall -g {pkg}"), "cli: {cli}");
+        }
+    }
+
+    /// claude native 卸载：unix 移除 launcher + 版本目录；Windows cmd 等价形态
+    #[test]
+    fn build_uninstall_claude_native() {
+        let unix = build_uninstall_script("claude", "native", false).expect("unix recipe");
+        assert!(unix.contains("rm -f ~/.local/bin/claude"));
+        assert!(unix.contains("rm -rf ~/.local/share/claude"));
+
+        let win = build_uninstall_script("claude", "native", true).expect("win recipe");
+        assert!(win.contains("claude.exe"));
+        assert!(win.contains("rd /s /q"));
+    }
+
+    /// opencode standalone 卸载：官方 `opencode uninstall --force`（非交互跳过确认）
+    #[test]
+    fn build_uninstall_opencode_standalone() {
+        let script =
+            build_uninstall_script("opencode", "standalone", false).expect("standalone recipe");
+        assert_eq!(script, "opencode uninstall --force");
+    }
+
+    /// 未知安装方式（unknown）拒绝自动卸载（v1 提示手动）
+    #[test]
+    fn build_uninstall_unknown_method_rejected() {
+        let err = build_uninstall_script("pi", "unknown", false).unwrap_err();
+        assert!(err.contains("unsupported uninstall method"), "got: {err}");
+    }
+
+    /// 白名单外 cli 名拒绝（无用户自由输入拼接面）
+    #[test]
+    fn build_uninstall_unknown_cli_rejected() {
+        assert!(build_uninstall_script("rm -rf /", "npm-global", false).is_err());
+        assert!(build_uninstall_script("", "npm-global", false).is_err());
     }
 }

@@ -52,7 +52,7 @@ static DATA_DIR: OnceLock<String> = OnceLock::new();
 static HOME: OnceLock<String> = OnceLock::new();
 /// 在途进程归属：run_id → 归属描述；on_process_done 按 run_id 分发
 pub(crate) struct PendingRun {
-    /// "env" | CLI 名（探测）| "install" | "skills-scan" | "skills-import"
+    /// "env" | CLI 名（探测）| "install" | "uninstall" | "skills-scan" | "skills-import"
     pub kind: String,
     pub output_path: String,
     /// kind == "install" 时为 Some(cli)
@@ -193,6 +193,7 @@ impl WasmPlugin for AgentHubPlugin {
             "agent-hub.restore-npmrc" => install::restore_npmrc(&h),
             "agent-hub.check-updates" => install::check_updates(&h),
             "agent-hub.install" => install::start(&h, &args),
+            "agent-hub.uninstall" => install::uninstall(&h, &args),
             "agent-hub.describe-install" => install::describe_install(&h, &args),
             "agent-hub.get-run-output" => install::run_output(&h),
             "agent-hub.cancel-run" => install::cancel_run(&h),
@@ -215,6 +216,7 @@ impl WasmPlugin for AgentHubPlugin {
             "agent-hub.scan-usage" => usage::scan(&h),
             "agent-hub.get-usage-stats" => usage::get_stats(&h),
             "agent-hub.list-usage-sources" => usage::list_sources(&h),
+            "agent-hub.pick-source-dir" => usage::pick_source_dir(&h),
             "agent-hub.add-usage-source" => usage::add_source(&h, &args),
             "agent-hub.remove-usage-source" => usage::remove_source(&h, &args),
             "agent-hub.list-usage-sessions" => usage::list_sessions(&h, &args),
@@ -231,7 +233,7 @@ impl WasmPlugin for AgentHubPlugin {
             .get(&event.run_id)
             .map(|e| e.kind.clone());
         match kind.as_deref() {
-            Some("install") => install::handle_process_done(event),
+            Some("install") | Some("uninstall") => install::handle_process_done(event),
             Some(kind) if kind.starts_with("skills-") => skills::handle_process_done(event, kind),
             Some("usage-scan") => usage::handle_scan_done(event),
             Some(_) => detect::handle_process_done(event),

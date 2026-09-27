@@ -6,6 +6,7 @@
 use super::{emit_and_return, read_state, write_state};
 use crate::util::path_rejected_for_script;
 use crate::HOME;
+use bedcode_plugin_api::host::HostPlatform;
 use bedcode_plugin_api::wasm_host::WasmHost;
 use serde_json::{json, Value};
 
@@ -37,6 +38,16 @@ fn is_valid_source_name(name: &str) -> bool {
         _ => return false,
     }
     chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') && name.len() <= 32
+}
+
+/// 系统文件夹选择器选日志来源目录（fs:pick 权限门与选中路径授权校验都在
+/// 宿主 `host-platform.pick-folder`：用户取消返回空串，授权拒绝直接 Err）。
+/// 返回选中绝对路径，由前端自动派生来源名后走 add-source 入库。
+pub(crate) fn pick_source_dir(h: &WasmHost) -> anyhow::Result<Value> {
+    let path = h
+        .platform_pick_folder()
+        .map_err(|e| anyhow::anyhow!("pick-source-dir: {e}"))?;
+    Ok(json!({ "picked": !path.is_empty(), "path": path }))
 }
 
 /// 添加自定义来源：名称 + 目录（绝对路径或 ~/ 开头）入态，随后由前端引导扫描
