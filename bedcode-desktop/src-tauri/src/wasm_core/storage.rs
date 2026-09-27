@@ -31,6 +31,16 @@ impl PluginStorage {
         Self { db }
     }
 
+    /// 共享底层数据库句柄（只给需要**直接查宿主主库表**的宿主组件用）
+    ///
+    /// 当前唯一消费者是授权策略与授权记录真源（`security::auth_policy`，表
+    /// `plugin_auth_policies` / `plugin_auth_records` 不在 `plugin_storage` 里）：
+    /// 它由 `FsAuthChecker` 从本模块取得句柄构造，避免 `WasmRuntime` 再多传一路 db。
+    /// 插件可见面仍只有 `get` / `set` / `delete`——本访问器不进任何原语。
+    pub fn db(&self) -> Arc<Mutex<Database>> {
+        self.db.clone()
+    }
+
     /// 获取插件存储值
     pub async fn get(&self, plugin_id: &str, key: &str) -> crate::Result<Option<serde_json::Value>> {
         let db = self.db.lock().await;

@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createPluginContext } from '@/plugin/context'
-import { ensureHostCredential, pluginChannelToken, pluginFsAuthRespond } from '@/plugin/commands'
+import {
+  ensureHostCredential,
+  pluginAuthSetStrategy,
+  pluginChannelToken,
+  pluginFsAuthRespond,
+} from '@/plugin/commands'
 import type { PluginInfo } from '@/plugin/types'
 
 /**
@@ -111,12 +116,22 @@ describe('前端插件通道身份', () => {
   })
 
   it('C4 fs 授权应答带宿主面凭证（插件不得替用户同意）', async () => {
-    await pluginFsAuthRespond('req-1', true, false)
+    await pluginFsAuthRespond('req-1', 'deny')
 
     expect(argsOf('plugin_fs_auth_respond')).toEqual({
       requestId: 'req-1',
-      allowed: true,
-      remember: false,
+      decision: 'deny',
+      credential: LOADER_SESSION,
+    })
+  })
+
+  it('C4 策略档位设置同样带宿主面凭证（插件不得改自己的档位，票 03）', async () => {
+    await pluginAuthSetStrategy('com.bedcode.test', 'fs', 'always_ask')
+
+    expect(argsOf('plugin_auth_set_strategy')).toEqual({
+      pluginId: 'com.bedcode.test',
+      resource: 'fs',
+      strategy: 'always_ask',
       credential: LOADER_SESSION,
     })
   })

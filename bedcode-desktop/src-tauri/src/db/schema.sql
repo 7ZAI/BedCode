@@ -36,3 +36,38 @@ CREATE TABLE IF NOT EXISTS plugin_secrets (
     updated_at TEXT NOT NULL,
     PRIMARY KEY (plugin_id, key)
 );
+
+-- 授权策略（2026-09-27 授权策略增强 / 票 01）：每个 (wasm 应用, 受管资源) 至多一行，回答
+-- 「遇到授权记录未覆盖的目标时，要不要问用户」。三档 always_ask / default /
+-- always_allow；缺行 = default。策略只决定是否询问，不放宽任何安全硬闸门
+-- （manifest 声明门 / SSRF / 路径规范化 / 配额 / 属主隔离）。
+-- 真源单点：.scratch/2026-09-27-host-authorization-policy/spec.md §5.1
+CREATE TABLE IF NOT EXISTS plugin_auth_policies (
+    plugin_id  TEXT NOT NULL,
+    resource   TEXT NOT NULL,      -- 'fs' | 'network'
+    strategy   TEXT NOT NULL,      -- 'always_ask' | 'default' | 'always_allow'
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (plugin_id, resource)
+);
+
+-- 授权记录（2026-09-27 授权策略增强 / 票 01）：每个 (wasm 应用, 资源, 目标) 至多一行，落账
+-- 「某目标被允许或被拒绝」的运行期事实。fs 侧 target = 规范路径前缀，
+-- ops 记生效操作集；network 侧 target = 归一化 origin（query / fragment
+-- 绝不入库，AGENTS §8 凭据红线），prefix_match 标记 path 前缀收紧。
+-- 与 fs 旧记录（plugin_storage.fs_granted_paths）的关系：本表命中即完全
+-- 接管，未命中才回退旧扁平前缀表（spec §5.2）。
+CREATE TABLE IF NOT EXISTS plugin_auth_records (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    plugin_id    TEXT NOT NULL,
+    resource     TEXT NOT NULL,     -- 'fs' | 'network'
+    target       TEXT NOT NULL,     -- fs: 规范路径 | network: 'https://host:port[/prefix]'
+    effect       TEXT NOT NULL,     -- 'allow' | 'deny'
+    ops          TEXT NOT NULL DEFAULT '[]',  -- fs: ["read","write"]；network 恒 '[]'
+    prefix_match INTEGER NOT NULL DEFAULT 0,  -- network: 1 表示 target 带 path 前缀
+    source       TEXT NOT NULL,     -- 'user' | 'always_allow' | 'legacy' | 'user_deny'
+    created_at   INTEGER NOT NULL
+);
+
+-- 读模型 / 判定共用的查表路径（(应用, 资源, 目标) 三元组）
+CREATE INDEX IF NOT EXISTS idx_auth_records_lookup
+  ON plugin_auth_records(plugin_id, resource, target);

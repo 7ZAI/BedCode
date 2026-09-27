@@ -18,6 +18,9 @@
     <!-- File System Auth Dialog -->
     <FsAuthDialog />
 
+    <!-- Network Auth Dialog（票 05：出站 origin 询问，与 fs 弹窗分开） -->
+    <NetworkAuthDialog />
+
     <!-- Exit Confirm Dialog -->
     <ExitConfirmModal v-model:visible="showExitConfirm" :sessions="runningSessions" />
   </div>
@@ -47,6 +50,7 @@ import { Toaster, type ToasterProps } from 'vue-sonner'
 import DesktopLayout from '@/components/DesktopLayout.vue'
 import SplashLoading from '@/components/SplashLoading.vue'
 import FsAuthDialog from '@/components/FsAuthDialog.vue'
+import NetworkAuthDialog from '@/components/NetworkAuthDialog.vue'
 import ExitConfirmModal from '@/components/ExitConfirmModal.vue'
 import { useTheme } from '@/composables/useTheme'
 import { useFontSize } from '@/composables/useFontSize'

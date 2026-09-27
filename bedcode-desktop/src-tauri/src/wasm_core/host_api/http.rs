@@ -34,7 +34,15 @@ impl UnitExecutor for HttpUnitExecutor {
         _kind: &str,
         params: &serde_json::Value,
     ) -> Result<Option<String>, String> {
-        match http_fetch(host_ctx.as_ref(), host_ctx.as_ref(), owner, &params.to_string()) {
+        // may_prompt = false：池线程绝不弹窗（与 fs 任务单元同款约束，见 http_fetch 文档）
+        match http_fetch(
+            host_ctx.as_ref(),
+            host_ctx.as_ref(),
+            host_ctx.as_ref(),
+            owner,
+            &params.to_string(),
+            false,
+        ) {
             Ok(opt) => Ok(opt.map(|v| serde_json::json!(v).to_string())),
             Err(e) => Err(e),
         }
@@ -160,11 +168,18 @@ fn stream_client_for(url: &str) -> &'static reqwest::Client {
 /// 流式模式：宿主 spawn tokio 任务执行 HTTP 请求，逐 chunk 通过 emit_event 推送，
 /// http_fetch 立即返回 stream_id
 /// 非流式模式：block_on 执行，返回完整响应
+///
+/// `may_prompt` 决定未记录目标怎么处理：WIT import 路径（插件主流程）传 `true`
+/// （可弹窗询问用户）；**任务单元（core-task 池线程）传 `false`**——弹窗会占住池槽位
+/// 最短 30s，且用户在错误的时机看到问题（与 fs 任务单元同款约束）。池线程侧只认授权
+/// 记录，未记录即 fail-visible 拒绝（[`NetworkAuthChecker::authorize_outbound_quiet`]）。
 pub(crate) fn http_fetch(
     app: &dyn crate::wasm_core::host_api::context::AppHandleScope,
     perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
+    net_auth: &dyn crate::wasm_core::host_api::context::NetworkAuthScope,
     plugin_id: &str,
     request_json: &str,
+    may_prompt: bool,
 ) -> Result<Option<String>, String> {
     // 权限仲裁：未声明 network:http 的插件（WASM 路径）在宿主侧直接拒绝。
     // 前端 TS 路径已 fast-fail，此处是 Rust 端最终仲裁（安全边界，AGENTS.md §8）。
@@ -176,6 +191,40 @@ pub(crate) fn http_fetch(
     }
     let request: serde_json::Value =
         serde_json::from_str(request_json).map_err(|e| format!("http error: invalid request JSON: {}", e))?;
+
+    // 出站授权（票 05 / spec §6.1）：位置在声明门之后、**任何网络动作之前**——
+    // 流式与非流式两条分支都在此之前收敛，被拒的请求绝不会触达网络。
+    // 缺 `url` 的请求不在此处拦（归执行层的「Missing 'url'」错误），错误分类保持不变。
+    if let Some(url) = request.get("url").and_then(|v| v.as_str()) {
+        let checker = net_auth.net_auth();
+        let verdict = if may_prompt {
+            block_on_async(checker.authorize_outbound(plugin_id, url))
+        } else {
+            block_on_async(checker.authorize_outbound_quiet(plugin_id, url))
+        };
+        match verdict {
+            Ok(verdict) if verdict.is_allowed() => {
+                tracing::debug!(
+                    plugin_id = %plugin_id,
+                    origin = %verdict.origin(),
+                    may_prompt,
+                    "host-http: 出站授权放行"
+                );
+            }
+            Ok(verdict) => {
+                // 错误串只带归一化 origin（不带 path / query：AGENTS §8 凭据红线）
+                return Err(format!(
+                    "http error: network authorization denied ({}): plugin '{}' -> {}",
+                    verdict.reason(),
+                    plugin_id,
+                    verdict.origin()
+                ));
+            }
+            Err(e) => {
+                return Err(format!("http error: network authorization check failed: {}", e));
+            }
+        }
+    }
 
     let is_stream = request.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
 
@@ -599,8 +648,15 @@ mod tests {
     fn http_fetch_permission_denied_rejected() {
         let ctx = super::super::tests::build_host_ctx();
         // 未授予任何权限（含 network:http）
-        let err = http_fetch(ctx.as_ref(), ctx.as_ref(), "p1", r#"{"url":"http://127.0.0.1:1/x"}"#)
-            .expect_err("unpermissioned fetch must be rejected");
+        let err = http_fetch(
+            ctx.as_ref(),
+            ctx.as_ref(),
+            ctx.as_ref(),
+            "p1",
+            r#"{"url":"http://127.0.0.1:1/x"}"#,
+            true,
+        )
+        .expect_err("unpermissioned fetch must be rejected");
         assert!(
             err.contains("permission denied") && err.contains("network:http"),
             "error should state permission reason, got: {}",
@@ -615,7 +671,7 @@ mod tests {
         let ctx = super::super::tests::build_host_ctx();
         super::super::tests::grant_permissions(&ctx, "p1", &[PERMISSION_NETWORK_HTTP]);
         // 权限已放行 → 错误是请求解析/执行类，不再是 permission denied
-        let err = http_fetch(ctx.as_ref(), ctx.as_ref(), "p1", r#"{"method":"GET"}"#)
+        let err = http_fetch(ctx.as_ref(), ctx.as_ref(), ctx.as_ref(), "p1", r#"{"method":"GET"}"#, true)
             .expect_err("missing url is a request error");
         assert!(
             err.contains("Missing 'url'") || err.contains("http error"),
@@ -634,8 +690,8 @@ mod tests {
     fn http_fetch_invalid_json_is_request_error_not_permission() {
         let ctx = super::super::tests::build_host_ctx();
         super::super::tests::grant_permissions(&ctx, "p1", &[PERMISSION_NETWORK_HTTP]);
-        let err =
-            http_fetch(ctx.as_ref(), ctx.as_ref(), "p1", "not-json").expect_err("invalid JSON is a request error");
+        let err = http_fetch(ctx.as_ref(), ctx.as_ref(), ctx.as_ref(), "p1", "not-json", true)
+            .expect_err("invalid JSON is a request error");
         assert!(
             err.contains("invalid request JSON"),
             "error should be parse-level, got: {}",
@@ -836,5 +892,270 @@ mod tests {
             "http://192.168.1.9/x",
             &["http://192.168.1.5:8080/a", "https://api.example.com/y"],
         ));
+    }
+
+    // ==================== 出站授权（票 05） ====================
+
+    /// 计数型 mock 服务器：每接受一条连接 +1（用来证明「被拒的请求没触达网络」）
+    async fn spawn_counting_server(body: Vec<u8>) -> (std::net::SocketAddr, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        disable_proxy_for_loopback();
+        let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = hits.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            while let Ok((mut sock, _)) = listener.accept().await {
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let body = body.clone();
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 4096];
+                    let _ = sock.read(&mut buf).await;
+                    let head = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = sock.write_all(head.as_bytes()).await;
+                    let _ = sock.write_all(&body).await;
+                });
+            }
+        });
+        (addr, hits)
+    }
+
+    /// 给插件落一条 network allow 记录（走生产写面：`origin` 必须已归一化）
+    async fn grant_origin(ctx: &WasmHostContext, plugin_id: &str, origin: &str) {
+        use crate::wasm_core::security::auth_policy::{AuthPolicyStore, AuthRecordSource, AuthResource};
+        AuthPolicyStore::new(ctx.database().clone())
+            .grant(plugin_id, AuthResource::Network, origin, &[], AuthRecordSource::User)
+            .await
+            .expect("seed network allow record");
+    }
+
+    /// 归一化后的回环 origin（夹具端口是动态的，测试要按实际端口拼）
+    fn loopback_origin(addr: std::net::SocketAddr) -> String {
+        format!("http://127.0.0.1:{}", addr.port())
+    }
+
+    /// 302 跳转服务器：跳到给定 `Location`（公网 → 私网 SSRF 场景的夹具）
+    ///
+    /// 绑在 127.0.0.1 上但**用例用 `http://localhost:<port>` 访问**：`is_private_target`
+    /// 按 host 能否解析成 IP 判定私网，`localhost` 解析失败即判为「公网」——正是
+    /// 公网首跳 + 私网跳转目标这一 SSRF 形态的可达替身（`NO_PROXY` 已含 localhost）。
+    async fn spawn_redirect_server(location: &str) -> std::net::SocketAddr {
+        disable_proxy_for_loopback();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let head = Arc::new(format!(
+            "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        ));
+        tokio::spawn(async move {
+            while let Ok((mut sock, _)) = listener.accept().await {
+                let head = head.clone();
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 4096];
+                    let _ = sock.read(&mut buf).await;
+                    let _ = sock.write_all(head.as_bytes()).await;
+                });
+            }
+        });
+        addr
+    }
+
+    /// 票 05 C1：未记录的目标在**触达网络之前**被拒（无弹窗通道的无头上下文）
+    ///
+    /// 变异判据：把授权检查挪到执行之后（或只门流式分支）本条转红——mock 服务器
+    /// 会收到连接，命中数从 0 变 1。
+    #[tokio::test]
+    async fn unrecorded_origin_is_denied_before_any_network_io() {
+        let ctx = super::super::tests::build_host_ctx();
+        super::super::tests::grant_permissions(&ctx, "p1", &[PERMISSION_NETWORK_HTTP]);
+        let (addr, hits) = spawn_counting_server(b"{\"ok\":true}".to_vec()).await;
+
+        let err = http_fetch(
+            ctx.as_ref(),
+            ctx.as_ref(),
+            ctx.as_ref(),
+            "p1",
+            &json!({"method": "GET", "url": format!("http://{}/x", addr)}).to_string(),
+            true,
+        )
+        .expect_err("未记录的目标必须被拒（无头上下文 = 无弹窗通道）");
+
+        assert!(
+            err.contains("network authorization denied"),
+            "错误须是授权拒绝而非请求错误: {err}"
+        );
+        assert_eq!(
+            hits.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "被拒的请求不得触达网络（授权检查必须在执行之前）"
+        );
+    }
+
+    /// 票 05 C1 正例：记录命中的 origin 真正放行（请求到达对端并拿到响应）
+    ///
+    /// **必须 multi_thread**：`http_fetch` 是同步函数，内部经 `block_on_async` 阻塞
+    /// 调用线程；单线程测试运行时下夹具服务的 accept 任务被一同卡死（表现为连接超时）。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn allow_record_releases_the_request() {
+        let ctx = super::super::tests::build_host_ctx();
+        super::super::tests::grant_permissions(&ctx, "p1", &[PERMISSION_NETWORK_HTTP]);
+        let (addr, hits) = spawn_counting_server(b"{\"ok\":true}".to_vec()).await;
+        grant_origin(&ctx, "p1", &loopback_origin(addr)).await;
+
+        let response = http_fetch(
+            ctx.as_ref(),
+            ctx.as_ref(),
+            ctx.as_ref(),
+            "p1",
+            &json!({"method": "GET", "url": format!("http://{}/x", addr)}).to_string(),
+            true,
+        )
+        .expect("记录命中的 origin 必须放行")
+        .expect("fetch returns payload");
+        // 返回值是响应对象的 JSON 文本（body 字段仍是被转义的原文）
+        let parsed: serde_json::Value = serde_json::from_str(&response).expect("响应是合法 JSON");
+        assert_eq!(parsed["status"], 200);
+        assert_eq!(parsed["body"], "{\"ok\":true}", "响应体应原样返回");
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1, "放行的请求应真实到达对端");
+    }
+
+    /// 凭据红线（AGENTS §8）：拒绝错误串带 origin，**不带 path / query 里的 token**
+    #[tokio::test]
+    async fn denial_error_carries_origin_but_never_query() {
+        let ctx = super::super::tests::build_host_ctx();
+        super::super::tests::grant_permissions(&ctx, "p1", &[PERMISSION_NETWORK_HTTP]);
+
+        let err = http_fetch(
+            ctx.as_ref(),
+            ctx.as_ref(),
+            ctx.as_ref(),
+            "p1",
+            r#"{"method":"GET","url":"https://api.example.com/v1?access_token=SECRET_TOKEN"}"#,
+            true,
+        )
+        .expect_err("未记录 origin 必须被拒");
+
+        assert!(
+            err.contains("https://api.example.com:443"),
+            "错误须点明被拒的 origin: {err}"
+        );
+        assert!(!err.contains("SECRET_TOKEN"), "token 不得进错误串: {err}");
+        assert!(!err.contains("/v1"), "path 不得进错误串: {err}");
+    }
+
+    /// 任务单元（池线程）路径：may_prompt=false ⇒ 只能靠记录，未记录即拒
+    ///
+    /// 变异判据：把两个路径写反（或池线程也去弹窗）时 reason 会变，本条转红。
+    #[tokio::test]
+    async fn task_unit_path_denies_unrecorded_origin_with_no_record_reason() {
+        let ctx = super::super::tests::build_host_ctx();
+        super::super::tests::grant_permissions(&ctx, "p1", &[PERMISSION_NETWORK_HTTP]);
+        let (addr, hits) = spawn_counting_server(b"{}".to_vec()).await;
+
+        let err = http_fetch(
+            ctx.as_ref(),
+            ctx.as_ref(),
+            ctx.as_ref(),
+            "p1",
+            &json!({"method": "GET", "url": format!("http://{}/x", addr)}).to_string(),
+            false,
+        )
+        .expect_err("池线程不得弹窗，未记录目标必须被拒");
+
+        assert!(
+            err.contains("no-record"),
+            "池线程拒绝原因应为 no-record（而非询问侧的 user-denied）: {err}"
+        );
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 0, "被拒的请求不得触达网络");
+    }
+
+    /// 流式分支同样在授权之后：未记录目标不得拿到 streamId（变异：只门非流式）
+    #[tokio::test]
+    async fn streaming_mode_is_gated_too() {
+        let ctx = super::super::tests::build_host_ctx();
+        super::super::tests::grant_permissions(&ctx, "p1", &[PERMISSION_NETWORK_HTTP]);
+
+        let err = http_fetch(
+            ctx.as_ref(),
+            ctx.as_ref(),
+            ctx.as_ref(),
+            "p1",
+            r#"{"method":"POST","url":"https://api.example.com/v1/chat","stream":true,"streamEvent":"x:y"}"#,
+            true,
+        )
+        .expect_err("流式请求同样要过授权门");
+        assert!(err.contains("network authorization denied"), "流式分支必须被同一道门拦住: {err}");
+    }
+
+    /// spec §4.2 / §6.4 / §12.2：**授权层的放行放行不了 SSRF 闸门**
+    ///
+    /// 两种放行来源各试一遍（用户记录命中 / 「始终允许」档免询问放行）：它们都只回答
+    /// 「这个地址要不要问用户」，而公网 → 私网（云元数据 `169.254.169.254`）的跳转
+    /// 阻断是执行期的安全裁决，与档位正交。若某天把策略层的判定结果喂给
+    /// `redirect_decision`（=「SSRF 闸门放到策略之后」这个变异），本条转红。
+    ///
+    /// 断言形态：跳转**未被跟随** ⇒ 拿到的就是首跳的 302 本身；一旦被跟随，请求会
+    /// 打到链路本地元数据地址（多半超时或非 302）。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn granted_origin_does_not_open_public_to_private_redirects() {
+        use crate::wasm_core::security::auth_policy::{AuthPolicyStore, AuthResource, AuthStrategy};
+
+        let ctx = super::super::tests::build_host_ctx();
+        super::super::tests::grant_permissions(&ctx, "p1", &[PERMISSION_NETWORK_HTTP]);
+        let addr = spawn_redirect_server("http://169.254.169.254/latest/meta-data").await;
+        let origin = format!("http://localhost:{}", addr.port());
+
+        // 情形一：用户确认过的 origin 有 allow 记录
+        grant_origin(&ctx, "p1", &origin).await;
+        let response = http_fetch(
+            ctx.as_ref(),
+            ctx.as_ref(),
+            ctx.as_ref(),
+            "p1",
+            &json!({"method": "GET", "url": format!("{origin}/x")}).to_string(),
+            true,
+        )
+        .expect("记录命中的 origin 本身应放行")
+        .expect("fetch returns payload");
+        let parsed: serde_json::Value = serde_json::from_str(&response).expect("响应是合法 JSON");
+        assert_eq!(
+            parsed["status"], 302,
+            "记录命中不得放行公网 → 链路本地元数据的重定向（SSRF 闸门在授权之外）"
+        );
+
+        // 情形二：「始终允许」档（免询问自动放行，同样是授权层的放行）
+        AuthPolicyStore::new(ctx.database().clone())
+            .set_strategy("p1", AuthResource::Network, AuthStrategy::AlwaysAllow)
+            .await
+            .expect("set strategy");
+        let response = http_fetch(
+            ctx.as_ref(),
+            ctx.as_ref(),
+            ctx.as_ref(),
+            "p1",
+            &json!({"method": "GET", "url": format!("{origin}/x")}).to_string(),
+            true,
+        )
+        .expect("始终允许档应放行该 origin")
+        .expect("fetch returns payload");
+        let parsed: serde_json::Value = serde_json::from_str(&response).expect("响应是合法 JSON");
+        assert_eq!(
+            parsed["status"], 302,
+            "始终允许档同样不得放行公网 → 私网重定向（档位是「不问」，不是「越闸」）"
+        );
+    }
+
+    /// 入站方向零改动：未记录任何网络授权时，`register-endpoint` 仍照旧注册成功
+    /// （策略只管出站——spec §6.4）
+    #[test]
+    fn inbound_registration_is_untouched_by_outbound_policy() {
+        let ctx = super::super::tests::build_host_ctx();
+        let plugin = format!("test-inbound-{}", uuid::Uuid::new_v4());
+        super::super::tests::grant_permissions(&ctx, &plugin, &[PERMISSION_NETWORK_HTTP]);
+
+        let id = http_register_endpoint(ctx.as_ref(), &plugin, r#"{"path":"probe"}"#).expect("inbound must not ask");
+        assert!(id.starts_with("http-"));
+        crate::server::http::registry::purge_for_plugin(&plugin);
     }
 }

@@ -33,14 +33,19 @@ function createTestI18n() {
             fsAuthTitle: '文件访问授权',
             fsAuthRequest: '{plugin} 请求{operation}以下路径',
             fsAuthPickerRequest: '你刚在系统选择框中选中以下路径，{plugin} 请求{operation}',
-            fsAuthGrantScopeDir: '按所在目录授权',
+            // 票 02：目录范围与「记住」都要带本次请求的操作集（读 / 写 / 读写）
+            fsAuthGrantScopeDir: '按所在目录授权（{operation}）',
             fsAuthPath: '路径',
             fsAuthPaths: '{count} 个路径',
-            fsAuthRemember: '记住此授权',
+            fsAuthRemember: '记住此{operation}授权',
             fsAuthDeny: '拒绝',
             fsAuthAllow: '允许',
+            // 票 03：三态应答——「总是询问」档不提供「记住」，允许只承诺这一次
+            fsAuthAllowOnce: '允许本次',
+            fsAuthDenyAlways: '以后都拒绝',
             fsAuthWrite: '写入',
             fsAuthRead: '读取',
+            fsAuthReadWrite: '读写',
           },
         },
       },
@@ -93,13 +98,30 @@ function dialogBody(): string {
   return document.querySelector('.max-w-sm')?.textContent ?? ''
 }
 
+/** 点弹窗上文本含 `label` 的按钮并等回调落地（找不到即失败——不静默跳过） */
+async function clickButton(label: string) {
+  const buttons = Array.from(document.querySelectorAll('.max-w-sm button'))
+  const button = buttons.find((b) => b.textContent?.includes(label))
+  expect(button, `弹窗上没有按钮: ${label}`).toBeTruthy()
+  await button!.click()
+  await flushPromises()
+}
+
 /** 点弹窗上的「允许」并等回调落地 */
 async function clickAllow() {
-  const buttons = Array.from(document.querySelectorAll('.max-w-sm button'))
-  const allowBtn = buttons.find((b) => b.textContent?.includes('允许'))
-  expect(allowBtn).toBeTruthy()
-  await allowBtn!.click()
-  await flushPromises()
+  await clickButton('允许')
+}
+
+/** 弹窗上的「记住」勾选框（「总是询问」档不应存在） */
+function rememberCheckbox(): HTMLInputElement | null {
+  return document.querySelector<HTMLInputElement>('.max-w-sm input[type="checkbox"]')
+}
+
+/** 最近一次 plugin_fs_auth_respond 的 decision（弹窗应答的对外事实） */
+async function lastDecision(): Promise<string | undefined> {
+  const invoke = vi.mocked((await import('@tauri-apps/api/core')).invoke)
+  const call = invoke.mock.calls.filter((c) => c[0] === 'plugin_fs_auth_respond').at(-1)
+  return (call?.[1] as { decision?: string } | undefined)?.decision
 }
 
 /** 从 overlay 根元素的 Tailwind z 工具类解析数值（z-50 → 50、z-[9999] → 9999） */
@@ -154,7 +176,7 @@ describe('FsAuthDialog Component', () => {
 
     expect(vi.mocked(await import('@tauri-apps/api/core')).invoke).toHaveBeenCalledWith(
       'plugin_fs_auth_respond',
-      { requestId: 'req-1', allowed: true, remember: true },
+      { requestId: 'req-1', decision: 'allow_remember' },
     )
     // 响应后弹窗关闭（Transition 离场在 happy-dom 依赖兜底定时器，轮询等待）
     await vi.waitFor(() => {
@@ -217,7 +239,7 @@ describe('FsAuthDialog Component', () => {
     await clickAllow()
     expect(vi.mocked(await import('@tauri-apps/api/core')).invoke).toHaveBeenCalledWith(
       'plugin_fs_auth_respond',
-      { requestId: 'req-pick-2', allowed: true, remember: true },
+      { requestId: 'req-pick-2', decision: 'allow_remember' },
     )
     wrapper.unmount()
   })
@@ -248,6 +270,120 @@ describe('FsAuthDialog Component', () => {
     const body = dialogBody()
     expect(body).toContain('写入')
     expect(body).not.toContain('按所在目录授权')
+    wrapper.unmount()
+  })
+
+  // ==================== 操作集文案（票 02：读 / 写 / 读写） ====================
+
+  it('读写请求显示「读写」，且「记住」与目录范围文案都带本次操作集', async () => {
+    const wrapper = mountDialog()
+    await emitFsAuthPayload({
+      requestId: 'req-rw',
+      pluginId: 'com.bedcode.file-transfer',
+      paths: ['/home/u/Downloads'],
+      path: '/home/u/Downloads',
+      operation: 'read+write',
+      origin: 'picker',
+      grantScope: 'directory',
+    })
+
+    const body = dialogBody()
+    expect(body).toContain('读写')
+    // 票 02：授权按操作拆分，「记住」记的是这次的操作集——文案必须说清
+    expect(body).toContain('记住此读写授权')
+    expect(body).toContain('按所在目录授权（读写）')
+    wrapper.unmount()
+  })
+
+  it('只读请求的「记住」文案带「读取」（不得暗示连写一起记住）', async () => {
+    const wrapper = mountDialog()
+    await emitFsAuthRequest()
+
+    const body = dialogBody()
+    expect(body).toContain('请求读取以下路径')
+    expect(body).toContain('记住此读取授权')
+    expect(body).not.toContain('记住此读写授权')
+    wrapper.unmount()
+  })
+})
+
+// ==================== 三态应答与档位（票 03） ====================
+
+describe('FsAuthDialog 三态应答与档位（票 03）', () => {
+  beforeEach(() => {
+    document.body.innerHTML = ''
+    tauriEvent.lastFsAuthHandler = null
+  })
+
+  /** 「总是询问」档的授权请求（宿主 `request_user_auth` 发出的形状：带 strategy） */
+  async function emitAlwaysAsk() {
+    await emitFsAuthPayload({
+      requestId: 'req-ask',
+      pluginId: 'com.bedcode.test',
+      paths: ['/home/u/data'],
+      path: '/home/u/data',
+      operation: 'read',
+      origin: 'fs',
+      grantScope: 'exact',
+      strategy: 'always_ask',
+    })
+  }
+
+  it('「总是询问」档不出现「记住」，允许按钮只承诺这一次', async () => {
+    const wrapper = mountDialog()
+    await emitAlwaysAsk()
+
+    expect(rememberCheckbox(), '总是询问档跳过记录，不得提供「记住」').toBeNull()
+    const labels = Array.from(document.querySelectorAll('.max-w-sm button')).map((b) =>
+      b.textContent?.trim(),
+    )
+    expect(labels).toEqual(['拒绝', '以后都拒绝', '允许本次'])
+    wrapper.unmount()
+  })
+
+  it('「允许本次」= allow_once（一次性放行，不落授权记录）', async () => {
+    const wrapper = mountDialog()
+    await emitAlwaysAsk()
+
+    await clickButton('允许本次')
+    expect(await lastDecision()).toBe('allow_once')
+    wrapper.unmount()
+  })
+
+  it('「以后都拒绝」= deny_always（落 deny 记录由宿主执行）', async () => {
+    const wrapper = mountDialog()
+    await emitAlwaysAsk()
+
+    await clickButton('以后都拒绝')
+    expect(await lastDecision()).toBe('deny_always')
+    wrapper.unmount()
+  })
+
+  it('「拒绝」= deny（不落账，下次访问仍会询问）', async () => {
+    const wrapper = mountDialog()
+    await emitFsAuthRequest()
+
+    await clickButton('拒绝')
+    expect(await lastDecision()).toBe('deny')
+    wrapper.unmount()
+  })
+
+  it('「默认」档保留「记住」：勾选=allow_remember，取消勾选=allow_once', async () => {
+    const wrapper = mountDialog()
+    await emitFsAuthRequest()
+    expect(rememberCheckbox(), '默认档必须提供「记住」').not.toBeNull()
+
+    const box = rememberCheckbox()!
+    box.checked = false
+    box.dispatchEvent(new Event('change'))
+    await flushPromises()
+    await clickButton('允许')
+    expect(await lastDecision()).toBe('allow_once')
+
+    // 再弹一次并保持默认勾选 → 记住（两态确实不同，不是恒真断言）
+    await emitFsAuthRequest()
+    await clickAllow()
+    expect(await lastDecision()).toBe('allow_remember')
     wrapper.unmount()
   })
 })

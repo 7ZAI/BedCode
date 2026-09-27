@@ -8,7 +8,7 @@ use crate::wasm_core::host_api::context::WasmHostContext;
 use crate::wasm_core::host_api::unit_executor::UnitExecutor;
 use crate::wasm_core::permission::{PERMISSION_FS_READ, PERMISSION_FS_WRITE};
 use crate::wasm_core::runtime_util::block_on_async;
-use crate::wasm_core::security::fs_auth::FsOp;
+use crate::wasm_core::security::fs_auth::{FsOp, FsOps};
 use std::sync::Arc;
 
 // ==================== 任务单元执行器（C4：core-task 经注册表分发到域实现） ====================
@@ -104,7 +104,10 @@ fn ensure_unit_path_granted(
         // 缺路径的单元由各 kind 自己报错（那才是它契约里的事），这里不替它判
         return Ok(());
     };
-    if block_on_async(host_ctx.fs_auth().is_granted(owner, path)) {
+    // 所需能力按单元种类取（票 02 操作拆分）：写单元要写授权，其余要读授权——
+    // 不带操作集的话「授权读」的目录能跑写单元，池线程这条无弹窗通道就成了绕过口
+    let needed = if needs_write { FsOps::WRITE } else { FsOps::READ };
+    if block_on_async(host_ctx.fs_auth().is_granted(owner, path, needed)) {
         return Ok(());
     }
     Err(format!(
@@ -181,7 +184,10 @@ pub(crate) fn fs_request_auth(fs_auth: &dyn crate::wasm_core::host_api::context:
         return Ok(true);
     }
     let fs_auth = fs_auth.fs_auth().clone();
-    let allowed = block_on_async(fs_auth.check_batch(plugin_id, &paths, FsOp::Read));
+    // 操作集 = 读 + 写：`request-auth` 的 WIT 签名没有操作维度，插件的用途（fs 单元
+    // 可读可写）决定这里要申请两种能力——与改造前「无操作维度 = 读写等价」逐字一致
+    // （票 02 只做拆分与落账，不动这条原语的契约；将来要收窄需 WIT 加参）
+    let allowed = block_on_async(fs_auth.check_batch(plugin_id, &paths, FsOps::READ_WRITE));
     if !allowed {
         tracing::warn!(
             plugin_id = %plugin_id,
@@ -397,7 +403,7 @@ mod tests {
         assert!(err.contains("request-auth"), "错误文案须给出出路: {err}");
 
         // ③ 预置持久化授权（= 用户在弹窗里点过「记住」）→ 放行并真实执行成功
-        block_on_async(ctx.fs_auth().save_granted_path("test-plugin", &path)).expect("seed grant");
+        block_on_async(ctx.fs_auth().seed_legacy_granted_path("test-plugin", &path)).expect("seed grant");
         executor.execute(&ctx, "test-plugin", "fs.read", &read_params)
             .expect("已授权路径须放行");
 
@@ -439,7 +445,8 @@ mod tests {
     /// `fs_granted_paths` 前缀记录，测的仍然是 fs 原语本身而不是授权豁免的后门。
     fn granted_temp_root(name: &str, ctx: &WasmHostContext) -> (tempfile::TempDir, std::path::PathBuf) {
         let (dir, root) = bare_temp_root(name);
-        block_on_async(ctx.fs_auth().save_granted_path(PLUGIN, &root.to_string_lossy())).expect("seed persisted grant");
+        block_on_async(ctx.fs_auth().seed_legacy_granted_path(PLUGIN, &root.to_string_lossy()))
+            .expect("seed persisted grant");
         (dir, root)
     }
 

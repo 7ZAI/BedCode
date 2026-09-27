@@ -388,6 +388,10 @@ impl PluginHost {
         // core-security × core-monitor：决策计数埋点两阶段注入
         // （monitor 生于 WasmRuntime，晚于宿主上下文构建）
         wasm_host_ctx.security().set_monitor(wasm_runtime.monitor());
+        // 授权记录容量丢弃计数（spec §8.2）：同一处两阶段注入（计数在落账点）
+        wasm_runtime.fs_auth().set_monitor(wasm_runtime.monitor());
+        // 网络侧同一机制（票 06：「始终允许」档下网络记录按 origin 累积）
+        wasm_host_ctx.net_auth().set_monitor(wasm_runtime.monitor());
 
         // 1. 收集静态注册的 Rust 插件
         let static_plugins: Vec<&'static bedcode_plugin_api::BedcodePluginEntry> =

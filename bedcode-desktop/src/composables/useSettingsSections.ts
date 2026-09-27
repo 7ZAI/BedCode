@@ -13,6 +13,7 @@ import { computed, type ComputedRef } from 'vue'
 import { getPluginRegistry, isContributionActiveState } from '@/plugin/registry'
 import PluginSettingsSection from '@/plugin/components/PluginSettingsSection.vue'
 import SettingsAppearanceSection from '@/components/settings/SettingsAppearanceSection.vue'
+import SettingsAuthorizationSection from '@/components/settings/SettingsAuthorizationSection.vue'
 import SettingsLinkCryptoSection from '@/components/settings/SettingsLinkCryptoSection.vue'
 import SettingsSystemSection from '@/components/settings/SettingsSystemSection.vue'
 import SettingsLoggingSection from '@/components/settings/SettingsLoggingSection.vue'
@@ -32,6 +33,10 @@ export const BUILTIN_SECTION_ORDERS = {
   session: 400,
   system: 500,
   logging: 600,
+  // 「应用授权」二级入口（2026-09-27 授权策略增强 · 票 01）：排在日志之后、
+  // 「关于」之前——它是引擎侧安全闸门的管理入口（ADR 0022 §5.1.3），不是业务分组，
+  // 故不占靠前位置；贡献分组缺省 600 仍落在它之前
+  authorization: 700,
   about: 9999,
 } as const
 
@@ -110,6 +115,12 @@ export function useSettingsSections(
         key: 'logging',
         order: BUILTIN_SECTION_ORDERS.logging,
         component: SettingsLoggingSection,
+        props: {},
+      },
+      {
+        key: 'authorization',
+        order: BUILTIN_SECTION_ORDERS.authorization,
+        component: SettingsAuthorizationSection,
         props: {},
       },
       {

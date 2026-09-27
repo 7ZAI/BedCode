@@ -954,6 +954,19 @@ interface manifest {
 /// **双端偏离**：移动端 `host-platform` 的 SAF 选择器（`pick-files` / `pick-folder`）
 /// 维持「选择即授权、不设门」——移动端系统本身按 tree URI 授予访问权（ADR 0018
 /// 移动独立契约），不跟演本条。
+///
+/// **第三例（出站授权记录与询问，2026-09-28 授权策略增强）**：`host-http` 的 `fetch`
+/// 由「权限位通过即请求」改为「权限位 + 出站授权记录」双门；未记录的新 origin 弹窗询问
+/// （新事件 `plugin:network-auth-request` + 新宿主命令 `plugin_network_auth_respond`，
+/// 应答沿用 fs 侧的宿主面凭证绑定机制；`allow_once` 按 origin 落 allow 记录、
+/// `deny_always` 落 deny 记录）。**WIT 函数签名与 import / return 面零变化**——`fetch`
+/// 仍收同一份 request JSON、仍返回同一形状的响应文本，变的是**宿主内部的准入条件**，
+/// 与上一例的权限门同型。入站方向 `register-endpoint` 零改动（策略只管出站）。
+/// 旧插件不会被静默断流：它若访问新 origin，会拿到显式的授权拒绝 `Err`（错误分类与
+/// 文案同 fs 侧授权拒绝），用户在弹窗点一次允许即恢复——不兼容但可自愈，故不 bump。
+/// 权威记账在 ADR 0022「授权策略 = 安全闸门」节与
+/// `.scratch/2026-09-27-host-authorization-policy/`。
+/// **双端偏离**：移动端是自持业务 App，出站授权由其自身 SAF / 网络策略承担，不跟演本条。
 interface abi {
     version: func() -> u32;
     form: func() -> u32;

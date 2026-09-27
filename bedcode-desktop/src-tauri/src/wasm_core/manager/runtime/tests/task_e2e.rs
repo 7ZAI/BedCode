@@ -25,7 +25,7 @@ fn task_e2e_registry_guard() -> std::sync::MutexGuard<'static, ()> {
 /// 放行，已随票 07 退役。这里改走生产同款：`fs_granted_paths` 前缀记录。
 fn seed_fs_grant(ctx: &crate::wasm_core::manager::runtime::WasmHostContext, plugin_id: &str, dir: &std::path::Path) {
     crate::wasm_core::runtime_util::block_on_async(
-        ctx.fs_auth().save_granted_path(plugin_id, &dir.to_string_lossy()),
+        ctx.fs_auth().seed_legacy_granted_path(plugin_id, &dir.to_string_lossy()),
     )
     .expect("seed fs_granted_paths 记录");
 }

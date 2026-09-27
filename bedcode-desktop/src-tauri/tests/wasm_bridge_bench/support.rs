@@ -165,7 +165,7 @@ pub async fn build_env(full: bool) -> anyhow::Result<BenchEnv> {
     // 直接种进插件存储——无头上下文没有 AppHandle，弹窗层必然拒绝（生产同款约束）
     let fs_dir = temp_root.join("fs");
     std::fs::create_dir_all(&fs_dir)?;
-    let storage = PluginStorage::new(db);
+    let storage = PluginStorage::new(db.clone());
     storage
         .set(
             MAIN_ID,
@@ -219,6 +219,23 @@ pub async fn build_env(full: bool) -> anyhow::Result<BenchEnv> {
     }
 
     let (port, task) = start_http_fixture().await?;
+
+    // host-http 场景：给夹具 origin 落一条 allow 授权记录（票 05 出站授权）。
+    // 无头上下文没有 AppHandle → 弹窗层必然拒绝（与上面 fs 授权同款约束）：
+    // 基准要测的是桥接开销，不该被授权弹窗拦在门外
+    let fixture_origin = format!("http://127.0.0.1:{port}");
+    let auth_store = bedcode_lib::wasm_core::security::auth_policy::AuthPolicyStore::new(db.clone());
+    for id in [MAIN_ID, PEER_ID] {
+        auth_store
+            .grant(
+                id,
+                bedcode_lib::wasm_core::security::auth_policy::AuthResource::Network,
+                &fixture_origin,
+                &[],
+                bedcode_lib::wasm_core::security::auth_policy::AuthRecordSource::User,
+            )
+            .await?;
+    }
 
     Ok(BenchEnv {
         host,

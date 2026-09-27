@@ -27,7 +27,7 @@ use crate::wasm_core::permission::{PermissionManager, PERMISSION_FS_READ, PERMIS
 use bedcode_plugin_api::ResourceOverrides;
 
 use super::api_registry::ApiRegistry;
-use super::fs_auth::{FsAuthChecker, FsOp};
+use super::fs_auth::{FsAuthChecker, FsOp, FsOps};
 
 // ==================== 资源与决策 ====================
 
@@ -171,8 +171,9 @@ impl Default for SecurityFramework {
 ///
 /// 管线映射（与 host_impl/fs.rs 手工内联链语义一致）：
 /// - 阶段 1：manifest `fs:read` / `fs:write` 权限声明（PermissionManager）
-/// - 阶段 2：持久化授权记录（`FsAuthChecker::is_granted`）
-/// - 阶段 3：三层校验（路径白名单 → 插件白名单 → 弹窗授权，`FsAuthChecker::check`）
+/// - 阶段 2：免弹窗判定——硬拒绝记录 / 第一方目录 / 授权记录（含操作集）/ 旧记录
+///   （`FsAuthChecker::is_granted`，票 02 起带所需能力集）
+/// - 阶段 3：完整判定（命中放行，未命中弹窗，`FsAuthChecker::check`）
 pub struct FsAuthorizer {
     permission: Arc<PermissionManager>,
     fs_auth: Arc<FsAuthChecker>,
@@ -184,16 +185,29 @@ impl FsAuthorizer {
     }
 }
 
+/// fs 操作名 → 操作类型（未知操作返回 None，调用方按拒绝处理）
+///
+/// 单点映射：阶段 1（权限位）、阶段 2（所需能力集）、阶段 3（弹窗文案与落账）
+/// 必须对同一操作名给出一致理解，否则「声明了 fs:read 却按写放行」这类错位会藏在
+/// 三处各写一遍的 match 里。
+fn fs_op_of(operation: &str) -> Option<FsOp> {
+    match operation {
+        "read" => Some(FsOp::Read),
+        "write" => Some(FsOp::Write),
+        _ => None,
+    }
+}
+
 impl ResourceAuthorizer for FsAuthorizer {
     fn kind(&self) -> ResourceKind {
         ResourceKind::Fs
     }
 
     fn check_declared(&self, req: &AuthRequest) -> AuthDecision {
-        let permission = match req.operation {
-            "read" => PERMISSION_FS_READ,
-            "write" => PERMISSION_FS_WRITE,
-            other => return AuthDecision::Deny(format!("未知 fs 操作 '{other}'")),
+        let permission = match fs_op_of(req.operation) {
+            Some(FsOp::Read) => PERMISSION_FS_READ,
+            Some(FsOp::Write) => PERMISSION_FS_WRITE,
+            None => return AuthDecision::Deny(format!("未知 fs 操作 '{}'", req.operation)),
         };
         if self.permission.check(req.plugin_id, permission) {
             AuthDecision::Allow
@@ -203,8 +217,16 @@ impl ResourceAuthorizer for FsAuthorizer {
     }
 
     fn check_approved(&self, req: &AuthRequest) -> AuthDecision {
-        let granted =
-            crate::wasm_core::runtime_util::block_on_async(self.fs_auth.is_granted(req.plugin_id, req.target));
+        // 所需能力 = 本次操作（票 02 操作拆分）：授权记录带操作集，「授权读」不再覆盖写。
+        // 阶段 1 已对未知操作 Deny，这里再兜一次（本函数可被单独调用）
+        let Some(op) = fs_op_of(req.operation) else {
+            return AuthDecision::Deny(format!("未知 fs 操作 '{}'", req.operation));
+        };
+        let granted = crate::wasm_core::runtime_util::block_on_async(self.fs_auth.is_granted(
+            req.plugin_id,
+            req.target,
+            FsOps::single(op),
+        ));
         if granted {
             AuthDecision::Allow
         } else {
@@ -213,10 +235,8 @@ impl ResourceAuthorizer for FsAuthorizer {
     }
 
     fn enforce(&self, req: &AuthRequest) -> AuthDecision {
-        let op = match req.operation {
-            "read" => FsOp::Read,
-            "write" => FsOp::Write,
-            other => return AuthDecision::Deny(format!("未知 fs 操作 '{other}'")),
+        let Some(op) = fs_op_of(req.operation) else {
+            return AuthDecision::Deny(format!("未知 fs 操作 '{}'", req.operation));
         };
         let allowed =
             crate::wasm_core::runtime_util::block_on_async(self.fs_auth.check(req.plugin_id, req.target, op));
@@ -635,6 +655,54 @@ mod tests {
             ),
             "sibling directory of a granted prefix must not be allowed"
         );
+    }
+
+    /// 票 04 端到端：`always_allow` 档放行未覆盖目标并落账，但**越不过声明闸门**
+    ///
+    /// 两段断言在同一条管线上：① 未声明 `fs:read` 时即使档位是「始终允许」也 Deny
+    /// （manifest 声明门在阶段 1，策略层在阶段 2/3——spec §4.2 的硬闸门）；
+    /// ② 补上声明后同一路径放行，且读模型里出现一条 `always_allow` 记录。
+    /// 变异判据：把策略判定提到声明段之前（或让声明段放行）⇒ ① 转红。
+    #[tokio::test]
+    async fn always_allow_allows_undeclared_target_only_after_declaration() {
+        use crate::wasm_core::security::auth_policy::{AuthPolicyStore, AuthResource, AuthStrategy};
+
+        let (permission, storage, _authorizer, fw) = fs_environment();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let target = tmp.path().join("new").join("f.txt");
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(&target, "x").unwrap();
+
+        let store = AuthPolicyStore::new(storage.db());
+        store
+            .set_strategy("com.test.p", AuthResource::Fs, AuthStrategy::AlwaysAllow)
+            .await
+            .expect("set strategy");
+
+        let decision = fw.authorize(&fs_req("com.test.p", "read", target.to_str().unwrap()));
+        assert!(
+            matches!(&decision, AuthDecision::Deny(m) if m.contains(PERMISSION_FS_READ)),
+            "始终允许档不得绕过 manifest 声明闸门: {decision:?}"
+        );
+        assert!(
+            store
+                .records_for_match("com.test.p", AuthResource::Fs)
+                .await
+                .unwrap()
+                .is_empty(),
+            "被声明门拒绝的调用不得留下自动放行记录"
+        );
+
+        permission.grant_permissions("com.test.p", &[PERMISSION_FS_READ.to_string()]);
+        assert_eq!(
+            fw.authorize(&fs_req("com.test.p", "read", target.to_str().unwrap())),
+            AuthDecision::Allow,
+            "声明补齐后未覆盖目标免询问放行"
+        );
+        let overview = store.overview("com.test.p", "T").await.unwrap();
+        assert_eq!(overview.records.len(), 1, "免询问放行必须留痕: {overview:?}");
+        assert_eq!(overview.records[0].source, "always_allow");
+        assert_eq!(overview.records[0].ops, vec!["read".to_string()]);
     }
 
     // ==================== 资源覆盖仲裁（票据 07） ====================

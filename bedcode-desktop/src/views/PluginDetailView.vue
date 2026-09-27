@@ -243,9 +243,9 @@
               </div>
             </CollapseSection>
 
-            <!-- 权限（默认折叠） -->
+            <!-- 申请的权限（manifest 静态声明位，默认折叠） -->
             <CollapseSection
-              :title="$t('desktop.plugin.section.permissions')"
+              :title="$t('desktop.plugin.section.requestedPermissions')"
               emoji="🛡️"
               :badge="plugin.permissions.length"
               :default-open="false"
@@ -281,6 +281,84 @@
                   —
                 </div>
               </div>
+            </CollapseSection>
+
+            <!-- 授权记录（运行期落账，默认折叠；与「申请的权限」并列，spec §9.2） -->
+            <CollapseSection
+              :title="$t('desktop.plugin.section.authRecords')"
+              emoji="🗝️"
+              :badge="authBadge"
+              :default-open="false"
+            >
+              <div v-if="authLoading" class="px-1 pb-3">
+                <p class="text-[calc(12px*var(--ui-scale))] text-[var(--text-tertiary)]">
+                  {{ $t('settings.authorization.empty') }}
+                </p>
+              </div>
+              <div v-else-if="!authOverview" class="px-1 pb-3">
+                <p class="text-[calc(12px*var(--ui-scale))] text-[var(--text-tertiary)]">
+                  {{ $t('settings.authorization.sections.empty') }}
+                </p>
+              </div>
+              <template v-else>
+                <!-- 分区一：用户已授权 -->
+                <AuthSection
+                  :title="$t('settings.authorization.sections.userGranted')"
+                  :empty-text="$t('settings.authorization.sections.empty')"
+                  :has-records="userGrantedRecords(authOverview).length > 0"
+                >
+                  <AuthRecordRow
+                    v-for="record in userGrantedRecords(authOverview)"
+                    :key="record.id"
+                    :record="record"
+                    :busy="busyKey === recordKey(record)"
+                    @revoke="revokeRecord(record)"
+                  />
+                </AuthSection>
+                <!-- 分区二：免询问自动放行（未经确认标记） -->
+                <AuthSection
+                  :title="$t('settings.authorization.sections.autoAllowed')"
+                  :empty-text="$t('settings.authorization.sections.empty')"
+                  :has-records="autoAllowedRecords(authOverview).length > 0"
+                >
+                  <AuthRecordRow
+                    v-for="record in autoAllowedRecords(authOverview)"
+                    :key="record.id"
+                    :record="record"
+                    :unconfirmed="true"
+                    :busy="busyKey === recordKey(record)"
+                    @revoke="revokeRecord(record)"
+                  />
+                </AuthSection>
+                <!-- 分区三：内置免询问（第一方清单投影） -->
+                <AuthSection
+                  :title="$t('settings.authorization.sections.firstParty')"
+                  :empty-text="$t('settings.authorization.sections.empty')"
+                  :has-records="firstPartyDirsOf(authOverview).length > 0"
+                >
+                  <AuthFirstPartyRow
+                    v-for="entry in firstPartyDirsOf(authOverview)"
+                    :key="entry.kind + entry.value"
+                    :entry="entry"
+                    :busy="busyKey === 'first-party:' + entry.value"
+                    @revoke="revokeFirstParty"
+                  />
+                </AuthSection>
+                <!-- 分区四：硬拒绝（可移除 deny 记录） -->
+                <AuthSection
+                  :title="$t('settings.authorization.sections.denied')"
+                  :empty-text="$t('settings.authorization.sections.empty')"
+                  :has-records="deniedRecords(authOverview).length > 0"
+                >
+                  <AuthRecordRow
+                    v-for="record in deniedRecords(authOverview)"
+                    :key="record.id"
+                    :record="record"
+                    :busy="busyKey === recordKey(record)"
+                    @revoke="removeDeny(record)"
+                  />
+                </AuthSection>
+              </template>
             </CollapseSection>
 
             <!-- 详细信息（默认折叠） -->
@@ -416,18 +494,32 @@
 /**
  * PluginDetailView - 插件详情页
  *
- * Hero + 操作行 + 统计条 + 四折叠区（简介/扩展点/权限/详细信息）。
+ * Hero + 操作行 + 统计条 + 折叠区（简介/扩展点/申请的权限/授权记录/详细信息）。
+ * 「申请的权限」是 manifest 静态声明位，「授权记录」是运行期落账——两者正交事实、
+ * 并列不合并不嵌套（spec §9.2）。授权记录区块四个分区（用户已授权 / 免询问自动放行
+ * / 内置免询问 / 硬拒绝），与设置页共用同一读模型命令 `plugin_auth_overview`（防漂移）；
+ * 三档策略控件只在设置页（职责切分：详情页看 + 撤销，设置页设策略）。
  * 从插件列表进入，返回直接回列表页。
  */
-import { ref, onMounted, onActivated, watch } from 'vue'
+import { ref, onMounted, onActivated, watch, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { pluginListLoaded, pluginPreauthorize, pluginUninstall } from '@/plugin/commands'
+import {
+  pluginListLoaded,
+  pluginPreauthorize,
+  pluginUninstall,
+  pluginAuthOverview,
+  pluginAuthRevoke,
+  pluginAuthRemoveRecord,
+} from '@/plugin/commands'
 import { useToast } from '@/composables/useToast'
 import { IPC_TIMEOUT_CODE, showUserError } from '@/utils/userError'
 import i18n from '@/locales'
 import PluginIcon from '@/components/PluginIcon.vue'
 import CollapseSection from '@/components/CollapseSection.vue'
 import PluginApprovalDialog from '@/components/PluginApprovalDialog.vue'
+import AuthSection from '@/components/AuthSection.vue'
+import AuthRecordRow from '@/components/AuthRecordRow.vue'
+import AuthFirstPartyRow from '@/components/AuthFirstPartyRow.vue'
 import {
   getContributionChips,
   getPermissionMeta,
@@ -443,6 +535,15 @@ import {
 } from '@/plugin/contributionKinds'
 import { pluginLoader } from '@/plugin/loader'
 import type { PluginInfo, PluginState } from '@/plugin/types'
+import {
+  userGrantedRecords,
+  autoAllowedRecords,
+  deniedRecords,
+  firstPartyDirsOf,
+  type AuthRecord,
+  type FirstPartyDirEntry,
+  type PluginAuthOverview,
+} from '@/utils/authPolicy'
 
 const route = useRoute()
 const router = useRouter()
@@ -472,14 +573,121 @@ async function loadPlugin(): Promise<void> {
     const found = list.find((p) => p.id === pluginId)
     if (!found) {
       plugin.value = null
+      authOverview.value = null
     } else {
       plugin.value = found
+      // 插件信息就绪后并行拉授权读模型（详情页与设置页共用同一命令，spec §9.3）
+      void loadAuthOverview()
     }
   } catch {
     toast.error(t('desktop.plugin.loadFailed'))
     plugin.value = null
   } finally {
     loading.value = false
+  }
+}
+
+// ==================== 授权记录区块（票 07：四分区，与「申请的权限」并列） ====================
+
+/**
+ * 授权读模型（与设置页共用同一命令 `plugin_auth_overview`，spec §9.3，防两页漂移）
+ *
+ * 宿主命令按 plugin_id 过滤：未知应用返回空数组而不是错误。加载失败时置空并显性
+ * toast（ADR 0030 统一消费层），不渲染原始错误——授权区块宁可显示空态也不报错页。
+ */
+const authOverview = ref<PluginAuthOverview | null>(null)
+const authLoading = ref(false)
+/** 进行中的记录操作 key（同一行按钮防重复点击） */
+const busyKey = ref<string | null>(null)
+
+async function loadAuthOverview(): Promise<void> {
+  const id = plugin.value?.id
+  if (!id) return
+  authLoading.value = true
+  try {
+    const apps = await pluginAuthOverview(id)
+    authOverview.value = apps[0] ?? null
+  } catch {
+    authOverview.value = null
+    // 票 01（ADR 0030）：统一消费层——友好文案 + 日志，永不渲染错误原文
+    showUserError(t('errors.host.internal'))
+  } finally {
+    authLoading.value = false
+  }
+}
+
+/** 徽标：四分区记录总数 + 内置免询问项数（无记录时显示 0） */
+const authBadge = computed(() => {
+  if (!authOverview.value) return 0
+  const { records } = authOverview.value
+  return records.length + authOverview.value.firstPartyDirs.length
+})
+
+function recordKey(record: AuthRecord): string {
+  return `${plugin.value?.id ?? ''}:${record.id}`
+}
+
+/** 撤销授权：删 allow + 落 deny（spec §8.4）；成功后刷新读模型（记录会移到硬拒绝分区） */
+async function revokeRecord(record: AuthRecord): Promise<void> {
+  const id = plugin.value?.id
+  if (!id) return
+  const key = recordKey(record)
+  busyKey.value = key
+  try {
+    await pluginAuthRevoke(id, record.resource, record.target)
+    toast.success(
+      t(
+        record.resource === 'network'
+          ? 'settings.authorization.records.networkRevoked'
+          : 'settings.authorization.records.revoked',
+      ),
+    )
+    await loadAuthOverview()
+  } catch (e) {
+    // 票 01（ADR 0030）：统一消费层——友好文案 + 日志，永不渲染错误原文
+    showUserError(e)
+  } finally {
+    busyKey.value = null
+  }
+}
+
+/** 移除 deny 记录（spec §8.4 的恢复出口）：只删 deny，回到「默认」档未覆盖状态 */
+async function removeDeny(record: AuthRecord): Promise<void> {
+  const id = plugin.value?.id
+  if (!id) return
+  const key = recordKey(record)
+  busyKey.value = key
+  try {
+    await pluginAuthRemoveRecord(id, record.resource, record.target)
+    toast.success(t('settings.authorization.records.denyRemoved'))
+    await loadAuthOverview()
+  } catch (e) {
+    showUserError(e)
+  } finally {
+    busyKey.value = null
+  }
+}
+
+/**
+ * 撤销内置免询问（home 形态，spec §7：撤销 = 落一条 deny 记录，由判定链优先拦截）
+ *
+ * target 用 `~/` 前缀形态传给宿主（前端拿不到 $HOME），宿主 `AuthPolicyStore::revoke`
+ * 展开成绝对路径再落账；project-segment 形态（任意项目的具名段）落不成可复用的
+ * 授权记录，`AuthFirstPartyRow` 对它不渲染撤销按钮（票 08 定：只读展示）。
+ */
+async function revokeFirstParty(entry: FirstPartyDirEntry): Promise<void> {
+  const id = plugin.value?.id
+  if (!id || entry.kind !== 'home') return
+  const key = `first-party:${entry.value}`
+  busyKey.value = key
+  try {
+    await pluginAuthRevoke(id, 'fs', `~/` + entry.value)
+    toast.success(t('settings.authorization.records.revoked'))
+    await loadAuthOverview()
+  } catch (e) {
+    showUserError(e)
+  } finally {
+    busyKey.value = null
   }
 }
 
@@ -636,7 +844,10 @@ watch(
 // 首次挂载在 KeepAlive 内同样触发一次（onMounted 已加载过），用标志位跳过
 let activatedOnce = false
 onActivated(() => {
-  if (activatedOnce) loadPlugin()
+  if (activatedOnce) {
+    loadPlugin()
+    loadAuthOverview()
+  }
   activatedOnce = true
 })
 </script>

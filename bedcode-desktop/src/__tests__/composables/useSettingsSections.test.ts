@@ -75,8 +75,15 @@ describe('useSettingsSections', () => {
     usedPluginIds.clear()
   })
 
-  it('未注册贡献时只有内置分组，顺序与改造前逐分组一致（退役：pairing 票 14 / session 随域下沉）', () => {
-    expect(keys()).toEqual(['appearance', 'linkCrypto', 'system', 'logging', 'about'])
+  it('未注册贡献时只有内置分组，顺序与改造前逐分组一致（退役：pairing 票 14 / session 随域下沉；新增 authorization）', () => {
+    expect(keys()).toEqual([
+      'appearance',
+      'linkCrypto',
+      'system',
+      'logging',
+      'authorization',
+      'about',
+    ])
   })
 
   it('内置分组排序槽位间隔 100，且「关于」恒在最末', () => {
@@ -86,7 +93,7 @@ describe('useSettingsSections', () => {
     expect(orders).toEqual([...orders].sort((a, b) => a - b))
   })
 
-  it('贡献分组缺省 order 时排在「日志」之后、「关于」之前', () => {
+  it('贡献分组缺省 order 时排在「日志」之后、「应用授权」之前', () => {
     contribute('com.bedcode.terminal-session', 'session-settings')
     expect(keys()).toEqual([
       'appearance',
@@ -94,6 +101,7 @@ describe('useSettingsSections', () => {
       'system',
       'logging',
       'plugin-com.bedcode.terminal-session-session-settings',
+      'authorization',
       'about',
     ])
   })
@@ -108,6 +116,7 @@ describe('useSettingsSections', () => {
       'plugin-com.bedcode.terminal-session-task',
       'system',
       'logging',
+      'authorization',
       'about',
     ])
   })
@@ -137,8 +146,9 @@ describe('useSettingsSections', () => {
 
     registry.clearPlugin('com.bedcode.terminal-session')
     expect(keys()).not.toContain('plugin-com.bedcode.terminal-session-session-settings')
-    // 内置分组共 5 项（原 7 项中的 pairing「票 14」与 session「随域下沉」已退役）
-    expect(keys()).toHaveLength(5)
+    // 内置分组共 6 项（原 7 项中的 pairing「票 14」与 session「随域下沉」已退役，
+    // 2026-09-27 新增 authorization）
+    expect(keys()).toHaveLength(6)
   })
 
   it('插件进入 error 态后贡献分组被摘除，恢复激活后重新出现', () => {

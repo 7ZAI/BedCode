@@ -445,6 +445,9 @@ pub fn run() {
             app.manage(mdns_advertiser.clone());
             app.manage(plugin_host.clone());
             app.manage(plugin_host.wasm_runtime().fs_auth().clone());
+            // 网络出站授权应答通道（票 05）：与 fs 应答同一形态——前端弹窗经
+            // 宿主面凭证代答，故应答器必须是进程级单例（与事件广播的询问一一对应）
+            app.manage(plugin_host.wasm_host_ctx().net_auth().clone());
             // peer-net 节点的启动不再需要 boot 对账（审计票 12）：旧实现要在装配末尾
             // 按硬编码插件 id 补一次状态对账，因为 activate 外壳经
             // `AppContext::try_global()` 取句柄，而 boot 装配期全局尚未注册
@@ -665,6 +668,11 @@ pub fn run() {
             commands::plugin_list_rust_commands,
             commands::plugin_dev_reload,
             commands::plugin_fs_auth_respond,
+            commands::plugin_network_auth_respond,
+            commands::plugin_auth_overview,
+            commands::plugin_auth_set_strategy,
+            commands::plugin_auth_revoke,
+            commands::plugin_auth_remove_record,
             // Server
             commands::server_start,
             commands::server_stop,

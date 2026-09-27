@@ -207,6 +207,29 @@ Rust 侧按内核五模块组织（`wasm_core.rs` 为唯一组合点/facade，�
   （`GrantScope::Directory`，文件 → 父目录），拒绝 / 超时回 `Err` 不回传路径）、
   frontend_channel（前端通道身份：loader 会话密钥 / 插件通道令牌 → 身份，审计票 06）、
   api_registry（互调门，ADR 0017）
+- **授权策略 / 授权记录（2026-09-28，security/ 下的策略层）**：用户诉求「按应用分档 + 授权记录可查可撤」，
+  实现分四个文件（裁决见 ADR 0022「授权策略 = 安全闸门」节）：
+  - **auth_policy.rs** — **策略与记录真源**：两张主库表 `plugin_auth_policies` / `plugin_auth_records`
+    （幂等迁移 + `idx_auth_records_lookup`），读写面（`strategy` / `grant` / `deny` / `revoke` /
+    `remove_deny` / `purge_plugin`）、单读模型命令 `plugin_auth_overview`（策略 + 记录 + 第一方免询问项；
+    设置页总览与详情页**共用**它防漂移）、记录封顶 500 条（超出丢弃 + core-monitor 计数）、
+    撤销时的 `~/` 展开（前端拿不到 `$HOME`，直接落 `~/` 字面量会静默撤销无效）
+  - **strategy.rs** — **档位 → 动作的唯一映射点**（`StrategyStep::{Ask, ConsultRecords, AutoAllow}`）
+    与「先判档位还是先读记录」的顺序真源，fs / network 共用。两处各写一遍必然漂移，而漂移的形态是
+    安全语义级的（「总是询问在文件侧跳过记录、在网络侧却仍读记录」两边看着都自洽）
+  - **fs_auth.rs**（扩）— 判定链接入档位：`decide_without_dialog` 单点给出
+    `Denied / Allowed(layer) / Ask(档位)`，三条入口（`check` / `check_batch` / `is_granted`）共用；
+    记录按**操作集**（读 / 写分开）匹配，旧 `fs_granted_paths` 退化为**只读回退**（未被新表管理的子树才走）
+  - **network_auth.rs** — 出站（`host-http.fetch`）的 origin 归一化（query / fragment 绝不落库）、
+    段边界前缀匹配、同 origin 询问合并（2s 显式窗口，不做隐式去抖）、**弹窗面与无询问面共用同一判据**
+    （池线程绝不弹窗，只认记录；`always_allow` 档不留痕地放行仍落账）
+  - 生命周期：**停用保留 / 卸载清空**（`purge_plugin`，与 ADR 0020 内容哈希钉扎同调）——
+    两者语义不同，各有防回接锁
+  - 界面：设置页「应用授权」（`AuthorizationView.vue` / `SettingsAuthorizationSection.vue`，
+    二级入口，不占一级菜单）+ 应用详情页「授权记录」区块（`PluginDetailView.vue`，
+    原「权限」区块改名「申请的权限」——静态声明与运行期落账是正交事实）；共享行标记
+    `AuthSection.vue` / `AuthRecordRow.vue` / `AuthFirstPartyRow.vue`，弹窗为 `FsAuthDialog.vue`
+    与 `NetworkAuthDialog.vue`
 - **bus（core-bus）**：插件间 Topic 消息总线（发布/订阅，JSON + 二进制双载荷 + 背压），经 MessageDispatcher trait 解耦与 PluginHost 的循环引用。
   **`bus` 不是桌面端权限位**（移动端 SDK 有 `PERMISSION_BUS`，属 ADR 0018 双端契约分叉）：桌面总线订阅/发布不经权限门，
   访问控制归 **topic 命名空间**（票 05 已落地）——`<plugin-id>::<name>` 是某插件的收件箱，宿主按形态仲裁：

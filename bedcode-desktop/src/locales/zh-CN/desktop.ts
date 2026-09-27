@@ -154,14 +154,32 @@ export default {
       fsAuthTitle: '文件访问授权',
       fsAuthRead: '读取',
       fsAuthWrite: '写入',
+      // 票 02：授权记录按操作拆分，弹窗要说清这次要的是读、写还是两者
+      fsAuthReadWrite: '读写',
       fsAuthRequest: '应用 {plugin} 请求{operation}文件',
       fsAuthPickerRequest: '你刚在系统选择框中选中以下路径，应用 {plugin} 请求{operation}',
-      fsAuthGrantScopeDir: '勾选「记住」将按所在目录授权：该目录下其它文件以后不再询问',
+      fsAuthGrantScopeDir: '勾选「记住」将按所在目录授权：该目录下其它文件的{operation}以后不再询问',
       fsAuthPath: '文件路径',
       fsAuthPaths: '文件路径（{count} 个目录）',
-      fsAuthRemember: '记住此路径，下次自动放行',
+      // 票 02：「记住」现在只记**这次的操作**（读 / 写 / 读写），文案必须跟着说清
+      fsAuthRemember: '记住此路径的{operation}授权，下次自动放行',
       fsAuthAllow: '允许',
       fsAuthDeny: '拒绝',
+      // 票 03：应答三态——「总是询问」档不提供「记住」，允许按钮只能承诺这一次；
+      // 「以后都拒绝」落 deny 记录（该目标与其子树此后被直接拒绝）
+      fsAuthAllowOnce: '允许本次',
+      fsAuthDenyAlways: '以后都拒绝',
+      // ==================== 网络出站授权（票 05） ====================
+      netAuthTitle: '网络访问授权',
+      netAuthRequest: '应用 {plugin} 请求访问一个网络地址',
+      netAuthOrigin: '地址',
+      // 同意 = 此地址此后免询问：授权范围必须让用户看得见，否则只能靠猜
+      netAuthScope: '同意后，该地址（此主机与端口）以后不再询问；拒绝可在「设置 → 应用授权」里撤销',
+      // 「总是询问」档下的同一处说明：该档不落记录，说「以后不再询问」就是在骗用户
+      netAuthScopeOnce: '只放行这一批请求；该应用处于「总是询问」，下次访问仍会询问',
+      netAuthAllow: '允许',
+      netAuthDeny: '拒绝',
+      netAuthDenyAlways: '以后都拒绝',
       alwaysOn: '始终启用',
       noSystemOpenPermission: '应用 {plugin} 缺少 system:open 权限',
       // ==================== 详情页新增 ====================
@@ -268,8 +286,11 @@ export default {
       section: {
         intro: '简介',
         contributes: '扩展点',
-        permissions: '权限',
         details: '详细信息',
+        // 07 票：详情页「授权记录」区块（与「申请的权限」并列，正交事实）
+        authRecords: '授权记录',
+        // 07 票：权限区块改名——manifest 静态声明位，与运行期授权记录正交（spec §9.2）
+        requestedPermissions: '申请的权限',
       },
       // 详细信息行
       detail: {

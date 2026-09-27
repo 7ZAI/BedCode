@@ -20,6 +20,13 @@ const router = createRouter({
       component: () => import('@/views/SettingsView.vue'),
     },
     {
+      // 设置页二级入口：应用授权（策略 + 记录 + 内置免询问项的查看与管理）
+      // 不占一级菜单——权限不是业务门面（spec §9.1）
+      path: '/settings/authorization',
+      name: 'settings-authorization',
+      component: () => import('@/views/AuthorizationView.vue'),
+    },
+    {
       path: '/plugins',
       name: 'plugins',
       component: () => import('@/views/PluginsView.vue'),

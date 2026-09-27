@@ -116,6 +116,9 @@ pub struct PluginMetrics {
     lifecycle_last_unix: [AtomicU64; 6],
     /// 授权决策计数（按 [`AuthzDecisionKind`] 索引：allow/deny/require_approval）
     authz_decisions: [AtomicU64; 3],
+    /// 授权记录落账被容量上限丢弃的计数（spec §8.2：每 (应用, 资源) 封顶
+    /// [`crate::wasm_core::security::auth_policy::AUTH_RECORDS_CAP`] 条）
+    authz_records_dropped_total: AtomicU64,
     /// 消息总线丢弃计数（v11）：订阅者队列满时丢弃（背压保护）
     bus_dropped_total: AtomicU64,
     /// 消息总线格式不匹配拒绝计数（v11）：订阅方格式偏好与消息格式不符
@@ -135,6 +138,7 @@ impl Default for PluginMetrics {
             lifecycle_counts: std::array::from_fn(|_| AtomicU64::new(0)),
             lifecycle_last_unix: std::array::from_fn(|_| AtomicU64::new(0)),
             authz_decisions: std::array::from_fn(|_| AtomicU64::new(0)),
+            authz_records_dropped_total: AtomicU64::new(0),
             bus_dropped_total: AtomicU64::new(0),
             bus_format_rejected_total: AtomicU64::new(0),
         }
@@ -194,6 +198,14 @@ impl PluginMetrics {
             AuthzDecisionKind::RequireApproval => 2,
         };
         self.authz_decisions[idx].fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// 授权记录因容量上限被丢弃的记账（spec §8.2）
+    ///
+    /// 与决策计数分开：丢弃是「安全闸门账本满了」，不是某次放行/拒绝判定，
+    /// 混进 `authz.allow` 会让「放行次数」这个口径失真。
+    pub fn record_authz_record_dropped(&self) {
+        self.authz_records_dropped_total.fetch_add(1, Ordering::Relaxed);
     }
 
     /// 消息总线队列满丢弃记账（v11，背压保护）
@@ -288,6 +300,10 @@ impl PluginMetrics {
                 (
                     "require_approval".to_string(),
                     self.authz_decisions[2].load(Ordering::Relaxed),
+                ),
+                (
+                    "records_dropped".to_string(),
+                    self.authz_records_dropped_total.load(Ordering::Relaxed),
                 ),
             ]),
             bus: HashMap::from([
@@ -448,6 +464,23 @@ mod tests {
         assert_eq!(snap.authz["allow"], 2);
         assert_eq!(snap.authz["deny"], 1, "deny 不得记入 allow/require_approval 桶");
         assert_eq!(snap.authz["require_approval"], 3);
+    }
+
+    /// 授权记录容量丢弃计数与决策计数互不串台（spec §8.2）
+    ///
+    /// 变异判据：把 `record_authz_record_dropped` 记到 `authz_decisions` 的某个槽位，
+    /// 本条的 allow 计数或 dropped 计数必有一侧转红。
+    #[test]
+    fn authz_record_drops_counted_separately_from_decisions() {
+        let m = PluginMetrics::default();
+        m.record_authz_decision(AuthzDecisionKind::Allow);
+        m.record_authz_record_dropped();
+        m.record_authz_record_dropped();
+        let snap = m.snapshot();
+        assert_eq!(snap.authz["records_dropped"], 2, "丢弃必须有自己的桶");
+        assert_eq!(snap.authz["allow"], 1, "丢弃不得计入放行决策");
+        assert_eq!(snap.authz["deny"], 0);
+        assert_eq!(snap.authz["require_approval"], 0);
     }
 
     /// 总线计数：队列满丢弃与格式不匹配拒绝分别累计，互不影响

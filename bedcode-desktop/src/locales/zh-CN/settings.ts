@@ -51,6 +51,100 @@ export default {
       saved: '日志配置已保存',
       saveFailed: '日志配置保存失败',
     },
+    // 授权策略与记录（2026-09-27 授权策略增强 · 票 01）：设置页二级入口「应用授权」
+    // 与授权管理页文案。档位措辞与 spec §4.1 逐字一致；resource 分类名对应宿主
+    // 读模型的 resource 值（fs / network）在界面上的说法
+    authorization: {
+      title: '应用授权',
+      entry: '应用授权记录',
+      entryDesc: '查看每个应用的文件与网络授权记录，管理免询问策略',
+      back: '返回设置',
+      refresh: '刷新',
+      appCount: '{count} 个应用',
+      empty: '暂无可管理的应用',
+      emptyHint: '安装并启用应用后，这里会列出它们的授权情况',
+      recordCount: '{count} 条记录',
+      // 授权记录清单（票 02）：展开行里的文件目录记录与逐条管理动作。
+      // ops 用「读 / 写 / 读写」与弹窗的「读取 / 写入 / 读写」保持同一口径；
+      // source 的 user / always_allow / legacy / user_deny 与宿主记录来源一一对应
+      records: {
+        toggle: '展开授权记录',
+        fsTitle: '文件目录记录',
+        // 票 05：网络侧记录（归一化 origin，可带 path 前缀）
+        networkTitle: '网络地址记录',
+        empty: '该应用还没有文件授权记录',
+        // 按资源分区的空态 key（`<resource>Empty`，票 05 起展开面板逐资源渲染）
+        fsEmpty: '该应用还没有文件授权记录',
+        networkEmpty: '该应用还没有网络授权记录',
+        revoke: '取消授权',
+        removeDeny: '移除拒绝',
+        revoked: '已取消该目录的授权，后续访问会被直接拒绝',
+        networkRevoked: '已取消该地址的授权，后续请求会被直接拒绝',
+        denyRemoved: '已移除拒绝记录，该目录回到未授权状态',
+        effect: {
+          allow: '已授权',
+          deny: '硬拒绝',
+        },
+        ops: {
+          read: '读',
+          write: '写',
+          read_write: '读写',
+        },
+        source: {
+          user: '用户确认',
+          always_allow: '免询问自动放行',
+          legacy: '旧版遗留',
+          user_deny: '用户拒绝',
+        },
+      },
+      // 四分区标题与空态（票 07 详情页 / 票 08 设置页共用，spec §9.2）：
+      // 用户已授权 / 免询问自动放行（未经确认）/ 内置免询问（第一方）/ 硬拒绝
+      sections: {
+        userGranted: '用户已授权',
+        autoAllowed: '免询问自动放行',
+        firstParty: '内置免询问',
+        denied: '硬拒绝',
+        // 免询问自动放行记录必须带「未经确认」标记并与用户确认记录视觉区分（spec §9.4）
+        unconfirmed: '未经确认',
+        empty: '暂无授权记录',
+        // 内置免询问项的两种形态（第一方清单：home 前缀 / 任意项目的具名段）
+        firstPartyHome: '家目录',
+        firstPartySegment: '项目目录',
+        revokeHint: '撤销后该目录后续访问会被直接拒绝',
+        // 该应用没有内置免询问项时的空态（与「有项」区分：空态是事实，不是缺数据）
+        firstPartyEmpty: '该应用没有内置免询问项',
+        firstPartyRevoked: '已取消该目录的免询问，后续访问会被直接拒绝',
+      },
+      strategy: {
+        always_ask: '总是询问',
+        default: '默认',
+        always_allow: '始终允许',
+      },
+      // 策略控件（票 03 起，票 04 放开「始终允许」）：三档都可选；切到「始终允许」
+      // 走二次确认，确认文案必须说清该档的语义边界（spec §4.3）——切档**不**一次性
+      // 授予全部权限，只有实际访问到的目标才逐步累积进记录（可持续累积，故仍要提示）
+      strategyControl: {
+        title: '{resource}请求策略',
+        saved: '策略已更新，下一次判定立即生效',
+        hint: {
+          // 「总是询问」跳过全部 allow 记录，所以已授权过的目标也照问——
+          // 写成「未记录的目标都会询问」会让用户以为已授权的静默通过（票 06 修正）
+          always_ask: '每次访问都询问（已授权过的目标也照问）',
+          default: '记录命中即放行，未记录才询问',
+          always_allow: '未记录的目标免询问放行，并自动记录（未经确认）',
+        },
+        confirmTitle: '改为「始终允许」？',
+        // 语义边界（spec §4.3）必须出现在确认里：用户以为「一次点开全盘」与
+        // 以为「什么都不会发生」都是错的认知
+        confirmBody:
+          '「{name}」的{resource}请求将不再询问：没记录过的目标会直接放行，并以「未经确认」记入授权记录。切档不会一次性授予全部权限，只有该应用实际访问到的目标才会逐步累积——持续访问会让这份清单持续变长，可随时在下方逐条取消授权。',
+        confirmOk: '改为始终允许',
+      },
+      resource: {
+        fs: '文件',
+        network: '网络',
+      },
+    },
     ui: {
       title: '界面设置',
     },

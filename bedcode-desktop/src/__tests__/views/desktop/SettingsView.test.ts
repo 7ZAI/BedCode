@@ -42,12 +42,14 @@ describe('SettingsView 分组渲染', () => {
 
   /** 内置分组标题 key（顺序与写死的分组组件一一对应）；
    * 已退役内置分组：`settings.pairing.title`（票 14，配对分组改由 com.bedcode.terminal-session
-   * 贡献）与 `settings.session.title`（会话默认值分组随域下沉同一插件） */
+   * 贡献）与 `settings.session.title`（会话默认值分组随域下沉同一插件）；
+   * 2026-09-27 新增 `settings.authorization.title`（应用授权二级入口，order 700） */
   const BUILTIN_TITLE_KEYS = [
     'settings.ui.title',
     'settings.linkCrypto.title',
     'settings.system.title',
     'settings.log.title',
+    'settings.authorization.title',
     'settings.about.title',
   ]
   const BUILTIN_TITLES = BUILTIN_TITLE_KEYS.map((k) => i18n.global.t(k))
@@ -73,7 +75,15 @@ describe('SettingsView 分组渲染', () => {
     setActivePinia(createPinia())
     router = createRouter({
       history: createWebHistory(),
-      routes: [{ path: '/:pathMatch(.*)*', component: { template: '<div />' } }],
+      routes: [
+        // 应用授权分组的 router-link 目标（缺它会在挂载时告警「无名路由」）
+        {
+          path: '/settings/authorization',
+          name: 'settings-authorization',
+          component: { template: '<div />' },
+        },
+        { path: '/:pathMatch(.*)*', component: { template: '<div />' } },
+      ],
     })
   })
 
@@ -86,7 +96,7 @@ describe('SettingsView 分组渲染', () => {
     return { id: 'com.bedcode.terminal-session', _disposables: [] } as unknown as PluginContext
   }
 
-  it('未注册贡献时渲染 5 个内置分组，标题序列与内置分组定义一致', async () => {
+  it('未注册贡献时渲染 6 个内置分组，标题序列与内置分组定义一致', async () => {
     const wrapper = await mountView()
     expect(titles(wrapper)).toEqual(BUILTIN_TITLES)
   })

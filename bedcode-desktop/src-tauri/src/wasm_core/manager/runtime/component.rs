@@ -557,11 +557,14 @@ impl bedcode::plugin::host_events::Host for WasmPluginState {
 
 impl bedcode::plugin::host_http::Host for WasmPluginState {
     fn fetch(&mut self, request_json: String) -> Result<Option<String>, String> {
+        // may_prompt = true：插件主流程（guest 调用栈）可弹窗询问出站授权
         http::http_fetch(
+            self.host_ctx.as_ref(),
             self.host_ctx.as_ref(),
             self.host_ctx.as_ref(),
             &self.plugin_id,
             &request_json,
+            true,
         )
     }
 
@@ -1865,6 +1868,9 @@ fn expand_preopen_declarations_with_home(
 /// - 仅保留已授权目录（is_granted 无弹窗校验）：manifest 路径可能指向任意
 ///   主机位置，不得绕过授权机制建立预打开。只读档同样要授权——档位只收紧
 ///   guest 能力，不放宽宿主边界（票 07 裁决 3）
+/// - **所需能力按档位取**（票 02 操作拆分）：只读档要读授权，读写档要读 + 写授权。
+///   预打开把这两项能力直接交给 guest（WASI 层不再过宿主闸门），所以授权记录必须
+///   覆盖对应能力——否则「授权读」的目录换来一个可写 preopen，操作拆分被原地架空
 /// - 无 tokio 运行时上下文（无头场景）无法查询授权 → 返回空（不阻断加载）
 pub(crate) fn resolve_preopen_dirs(
     host_ctx: &WasmHostContext,
@@ -1884,9 +1890,17 @@ fn resolve_preopen_dirs_with_home(
     if tokio::runtime::Handle::try_current().is_err() {
         return Vec::new();
     }
+    use crate::wasm_core::security::fs_auth::FsOps;
     expand_preopen_declarations_with_home(plugin_id, declared_dirs, home_override)
         .into_iter()
-        .filter(|dir| block_on_async(host_ctx.fs_auth.is_granted(plugin_id, dir.path())))
+        .filter(|dir| {
+            let needed = if dir.readonly() {
+                FsOps::READ
+            } else {
+                FsOps::READ_WRITE
+            };
+            block_on_async(host_ctx.fs_auth.is_granted(plugin_id, dir.path(), needed))
+        })
         .collect()
 }
 

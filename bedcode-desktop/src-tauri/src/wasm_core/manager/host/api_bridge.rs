@@ -75,6 +75,31 @@ pub async fn plugin_channel_token(
     Ok(token)
 }
 
+/// 授权管理面命令的宿主面凭证门（读取 / 撤销 / 代答授权决定）
+///
+/// 授权记录是安全闸门的配给账：插件面凭证不得用它枚举其它应用的授权情况，
+/// 更不能替用户撤销或同意。这里把判据收成一处，避免每个命令各写一遍
+/// `resolve(...) != Some(Host)` 时漏掉一个。
+fn require_host_surface(
+    plugin_host: &PluginHost,
+    webview_label: &str,
+    command: &str,
+    credential: &str,
+    denial: &str,
+) -> crate::Result<()> {
+    use crate::wasm_core::security::frontend_channel::ChannelIdentity;
+    if plugin_host.frontend_channel().resolve(webview_label, credential) != Some(ChannelIdentity::Host)
+    {
+        tracing::warn!(
+            webview = %webview_label,
+            command = %command,
+            "[API] 非宿主面凭证，拒绝授权管理操作"
+        );
+        return Err(crate::AppError::Plugin(denial.to_string()));
+    }
+    Ok(())
+}
+
 /// 插件面命令的统一身份校验（fail-closed 语义与裁决规则见 `frontend_channel::authorize`）
 fn authorize_plugin_call(
     plugin_host: &PluginHost,
@@ -386,6 +411,11 @@ pub async fn plugin_dev_reload(plugin_id: String, plugin_host: State<'_, Arc<Plu
 
 /// 回复文件系统授权请求（由前端弹窗调用）
 ///
+/// 决定取值见 [`FsDecision`](crate::wasm_core::security::fs_auth::FsDecision)：
+/// `allow_once` / `allow_remember` / `deny` / `deny_always`（票 03 固定；「记住」只在
+/// 「默认」档成立，「总是询问」档的弹窗根本不提供它）。
+/// 未知决定值**显性报错**，不兜底成放行（与 [`plugin_network_auth_respond`] 同一口径）。
+///
 /// **只接受宿主面凭证**（loader 会话密钥，审计票 06）：授权请求事件是广播的，插件前端也
 /// 能 `listen` 到，若该命令不绑身份，插件就能替用户「同意」自己的文件访问请求——
 /// 那是把授权弹窗变成摆设。宿主弹窗 `FsAuthDialog.vue` 持宿主面凭证，插件拿不到。
@@ -393,35 +423,247 @@ pub async fn plugin_dev_reload(plugin_id: String, plugin_host: State<'_, Arc<Plu
 pub async fn plugin_fs_auth_respond(
     webview: tauri::Webview,
     request_id: String,
-    allowed: bool,
-    remember: bool,
+    decision: String,
     credential: String,
     plugin_host: State<'_, Arc<PluginHost>>,
     fs_auth: State<'_, Arc<FsAuthChecker>>,
 ) -> crate::Result<()> {
-    use crate::wasm_core::security::frontend_channel::ChannelIdentity;
-    if plugin_host
-        .frontend_channel()
-        .resolve(webview.label(), &credential)
-        != Some(ChannelIdentity::Host)
-    {
-        tracing::warn!(
-            webview = %webview.label(),
-            request_id = %request_id,
-            "[API] plugin_fs_auth_respond: 非宿主面凭证，拒绝替代用户决策"
-        );
-        return Err(crate::AppError::Plugin(
-            "file system authorization must be answered by the host frontend".to_string(),
-        ));
-    }
+    use crate::wasm_core::security::fs_auth::FsDecision;
+    require_host_surface(
+        &plugin_host,
+        webview.label(),
+        "plugin_fs_auth_respond",
+        &credential,
+        "file system authorization must be answered by the host frontend",
+    )?;
+    let decision = FsDecision::parse(&decision).ok_or_else(|| {
+        crate::AppError::InvalidInput(format!(
+            "未知文件授权决定 '{decision}'（允许 allow_once / allow_remember / deny / deny_always）"
+        ))
+    })?;
     tracing::info!(
-        "[API] plugin_fs_auth_respond: request_id={}, allowed={}, remember={}",
+        "[API] plugin_fs_auth_respond: request_id={}, decision={}",
         request_id,
-        allowed,
-        remember
+        decision.as_str()
     );
-    fs_auth.respond(&request_id, allowed, remember).await;
+    fs_auth.respond(&request_id, decision).await;
     Ok(())
+}
+
+// ==================== Network Auth（票 05） ====================
+
+/// 回复网络出站授权询问（由前端弹窗调用）
+///
+/// **不复用 fs 侧的双布尔签名**（票 05 固定三态）：网络侧的询问粒度就是 origin，
+/// 用户点头的语义是「这个地址可以访问」——不存在「只这一次、别记」的中间档。
+/// `allow_once` 落 allow 记录（`source='user'`）、`deny_always` 落 deny 记录、
+/// `deny` 不落账。未知决定值**显性报错**，不得兜底成放行（AGENTS §8 fail-visible）。
+///
+/// **只接受宿主面凭证**（与 [`plugin_fs_auth_respond`] 同一判据）：询问事件是广播的，
+/// 插件前端也能 `listen` 到；不绑身份的话插件就能替用户「同意」自己的出站访问。
+#[tauri::command]
+pub async fn plugin_network_auth_respond(
+    webview: tauri::Webview,
+    request_id: String,
+    decision: String,
+    credential: String,
+    plugin_host: State<'_, Arc<PluginHost>>,
+    net_auth: State<'_, Arc<crate::wasm_core::security::network_auth::NetworkAuthChecker>>,
+) -> crate::Result<()> {
+    require_host_surface(
+        &plugin_host,
+        webview.label(),
+        "plugin_network_auth_respond",
+        &credential,
+        "network authorization must be answered by the host frontend",
+    )?;
+    let decision = crate::wasm_core::security::network_auth::NetworkDecision::parse(&decision).ok_or_else(|| {
+        crate::AppError::InvalidInput(format!(
+            "未知网络授权决定 '{decision}'（允许 allow_once / deny / deny_always）"
+        ))
+    })?;
+    tracing::info!(
+        "[API] plugin_network_auth_respond: request_id={}, decision={}",
+        request_id,
+        decision.as_str()
+    );
+    net_auth.respond(&request_id, decision).await;
+    Ok(())
+}
+
+// ==================== 应用授权读模型（授权策略增强 · 票 01） ====================
+
+/// 应用授权读模型（spec §9.3）：策略 + 授权记录 + 第一方免询问项
+///
+/// 设置页「应用授权」总览与应用详情页「授权记录」区块共用本命令，不各写一套查询。
+/// `plugin_id` 为空 = 总览（全部已安装 wasm 应用）；指定时只返回该应用——未安装 /
+/// 未知 id 返回空列表而不是错误：调用方只按列表里的 id 取值，且卸载后残留的策略
+/// 与记录不应把界面变成报错页。
+///
+/// **只接受宿主面凭证**（与 [`plugin_fs_auth_respond`] 同一判据）：授权记录是安全闸门
+/// 的配给账，插件面凭证不得用它枚举其它应用的授权情况。
+///
+/// 只列 wasm 应用（`pluginType = rust-ts`）：授权策略与记录只对经 fs / http 原语的
+/// 应用成立，纯宿主侧插件没有可管理的授权面。
+#[tauri::command]
+pub async fn plugin_auth_overview(
+    webview: tauri::Webview,
+    plugin_id: Option<String>,
+    credential: String,
+    plugin_host: State<'_, Arc<PluginHost>>,
+    db: State<'_, Arc<tokio::sync::Mutex<crate::db::Database>>>,
+) -> crate::Result<Vec<crate::wasm_core::security::auth_policy::PluginAuthOverview>> {
+    use crate::wasm_core::security::auth_policy::AuthPolicyStore;
+    require_host_surface(
+        &plugin_host,
+        webview.label(),
+        "plugin_auth_overview",
+        &credential,
+        "plugin authorization overview must be requested by the host frontend",
+    )?;
+
+    let store = AuthPolicyStore::new(db.inner().clone());
+    let mut apps: Vec<DesktopPluginInfo> = plugin_host
+        .list_plugins()
+        .await
+        .into_iter()
+        .filter(|info| info.plugin_type == bedcode_plugin_api::PluginType::RustTs)
+        .collect();
+    if let Some(target) = plugin_id.as_deref() {
+        apps.retain(|info| info.id == target);
+    }
+
+    let mut out = Vec::with_capacity(apps.len());
+    for info in &apps {
+        out.push(store.overview(&info.id, &info.name).await?);
+    }
+    tracing::debug!(
+        plugin_id = plugin_id.as_deref().unwrap_or("(all)"),
+        app_count = out.len(),
+        "[API] plugin_auth_overview：读模型已装配"
+    );
+    Ok(out)
+}
+
+/// 设置某应用在某资源上的授权策略档位（spec §4.1 三档；设置页策略控件的唯一写入口）
+///
+/// 管理面命令（宿主面凭证）：档位是安全闸门的松紧，插件面不得替用户改自己的档位。
+/// 未知档位值**显性报错**——写面不猜档位：把 `always_allow` 手误写错却静默存成
+/// `default`，用户会以为设置成功了（见 `AuthStrategy::parse_wire`）。
+#[tauri::command]
+pub async fn plugin_auth_set_strategy(
+    webview: tauri::Webview,
+    plugin_id: String,
+    resource: String,
+    strategy: String,
+    credential: String,
+    plugin_host: State<'_, Arc<PluginHost>>,
+    db: State<'_, Arc<tokio::sync::Mutex<crate::db::Database>>>,
+) -> crate::Result<()> {
+    use crate::wasm_core::security::auth_policy::{AuthPolicyStore, AuthResource, AuthStrategy};
+    require_host_surface(
+        &plugin_host,
+        webview.label(),
+        "plugin_auth_set_strategy",
+        &credential,
+        "authorization strategy must be set by the host frontend",
+    )?;
+    let resource = AuthResource::parse(&resource).ok_or_else(|| {
+        crate::AppError::InvalidInput(format!("未知授权资源 '{resource}'（允许 fs / network）"))
+    })?;
+    let strategy = AuthStrategy::parse_wire(&strategy).ok_or_else(|| {
+        crate::AppError::InvalidInput(format!(
+            "未知授权档位 '{strategy}'（允许 always_ask / default / always_allow）"
+        ))
+    })?;
+
+    AuthPolicyStore::new(db.inner().clone())
+        .set_strategy(&plugin_id, resource, strategy)
+        .await?;
+    tracing::info!(
+        plugin_id = %plugin_id,
+        resource = resource.as_str(),
+        strategy = strategy.as_str(),
+        "[API] plugin_auth_set_strategy：策略档位已更新（判定侧实时读取）"
+    );
+    Ok(())
+}
+
+/// 撤销某目标的授权（spec §8.4：删除该目标的 allow 记录 + 落一条 `deny` 记录）
+///
+/// 管理面命令（宿主面凭证）：撤销是安全决策——插件面不得替用户撤掉或保留自己的授权。
+/// 返回被删除的 allow 行数（0 表示该目标本就没有 allow 记录）。
+#[tauri::command]
+pub async fn plugin_auth_revoke(
+    webview: tauri::Webview,
+    plugin_id: String,
+    resource: String,
+    target: String,
+    credential: String,
+    plugin_host: State<'_, Arc<PluginHost>>,
+    db: State<'_, Arc<tokio::sync::Mutex<crate::db::Database>>>,
+) -> crate::Result<usize> {
+    use crate::wasm_core::security::auth_policy::{AuthPolicyStore, AuthResource};
+    require_host_surface(
+        &plugin_host,
+        webview.label(),
+        "plugin_auth_revoke",
+        &credential,
+        "authorization revoke must be requested by the host frontend",
+    )?;
+    let resource = AuthResource::parse(&resource).ok_or_else(|| {
+        crate::AppError::InvalidInput(format!("未知授权资源 '{resource}'（允许 fs / network）"))
+    })?;
+
+    let removed = AuthPolicyStore::new(db.inner().clone())
+        .revoke(&plugin_id, resource, &target)
+        .await?;
+    tracing::info!(
+        plugin_id = %plugin_id,
+        resource = resource.as_str(),
+        target = %target,
+        removed_records = removed,
+        "[API] plugin_auth_revoke：已撤销授权并落 deny 记录"
+    );
+    Ok(removed)
+}
+
+/// 移除某目标的 deny 记录（spec §8.4 的恢复出口：只删 deny，回到未覆盖状态）
+///
+/// 管理面命令（宿主面凭证）。返回删除的 deny 行数（0 = 本就没有 deny 记录）。
+#[tauri::command]
+pub async fn plugin_auth_remove_record(
+    webview: tauri::Webview,
+    plugin_id: String,
+    resource: String,
+    target: String,
+    credential: String,
+    plugin_host: State<'_, Arc<PluginHost>>,
+    db: State<'_, Arc<tokio::sync::Mutex<crate::db::Database>>>,
+) -> crate::Result<usize> {
+    use crate::wasm_core::security::auth_policy::{AuthPolicyStore, AuthResource};
+    require_host_surface(
+        &plugin_host,
+        webview.label(),
+        "plugin_auth_remove_record",
+        &credential,
+        "authorization record removal must be requested by the host frontend",
+    )?;
+    let resource = AuthResource::parse(&resource).ok_or_else(|| {
+        crate::AppError::InvalidInput(format!("未知授权资源 '{resource}'（允许 fs / network）"))
+    })?;
+
+    let removed = AuthPolicyStore::new(db.inner().clone())
+        .remove_deny(&plugin_id, resource, &target)
+        .await?;
+    tracing::info!(
+        plugin_id = %plugin_id,
+        resource = resource.as_str(),
+        target = %target,
+        removed_records = removed,
+        "[API] plugin_auth_remove_record：已移除拒绝记录"
+    );
+    Ok(removed)
 }
 
 // ==================== Tests ====================

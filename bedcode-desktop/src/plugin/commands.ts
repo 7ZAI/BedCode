@@ -7,6 +7,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { logger } from '@/utils/frontendLogger'
 import type { PluginInfo } from './types'
+import type { AuthStrategy, PluginAuthOverview } from '@/utils/authPolicy'
 
 // ==================== 前端通道身份（审计票 06 / P0-5） ====================
 
@@ -202,6 +203,20 @@ export async function pluginStorageDelete(
 // 插件写自家会话的输入走自有命令通道（`context.commands.execute('session.input', …)`）。
 
 /**
+ * 文件授权询问的应答决定（宿主 `fs_auth::FsDecision` 的 wire 值，票 03）
+ *
+ * - `allow_once`：允许本次，不落账（下次访问同一路径仍会询问）
+ * - `allow_remember`：允许并「记住」——**仅「默认」档的弹窗提供**，按本次操作集落
+ *   allow 记录；「总是询问」档跳过记录，落一条没人读的记录只会造成两处口径
+ * - `deny`：拒绝本次，不落账（下次访问重新询问）
+ * - `deny_always`：以后都拒绝（落 deny 记录，该目标与其子树此后被直接拒绝）
+ *
+ * 不再用 `allowed + remember` 双布尔：它表达不了「以后都拒绝」，四种组合里还有
+ * 两种非法态（拒绝 + 记住 / 拒绝 + 不记住 的差别只有宿主知道）。
+ */
+export type FsAuthDecision = 'allow_once' | 'allow_remember' | 'deny' | 'deny_always'
+
+/**
  * 回复文件系统授权请求（宿主面命令：需宿主凭证）
  *
  * 授权请求事件是广播的，插件前端也能监听到——命令绑定宿主凭证后，
@@ -209,11 +224,10 @@ export async function pluginStorageDelete(
  */
 export async function pluginFsAuthRespond(
   requestId: string,
-  allowed: boolean,
-  remember: boolean,
+  decision: FsAuthDecision,
 ): Promise<void> {
   const credential = await ensureHostCredential()
-  return await invoke('plugin_fs_auth_respond', { requestId, allowed, remember, credential })
+  return await invoke('plugin_fs_auth_respond', { requestId, decision, credential })
 }
 
 /** 获取所有命令 */
@@ -266,4 +280,118 @@ export async function pluginDevReload(pluginId: string): Promise<void> {
 /** 获取插件激活状态映射（plugin_id → is_activated） */
 export async function pluginGetActivatedState(): Promise<Record<string, boolean>> {
   return await invoke<Record<string, boolean>>('plugin_get_activated_state')
+}
+
+// ==================== 应用授权（授权策略增强 · 票 01） ====================
+
+/**
+ * 应用授权读模型（spec §9.3）：策略 + 授权记录 + 第一方免询问项
+ *
+ * 宿主面命令（需宿主凭证）：授权记录是安全闸门的配给账，插件前端不得枚举其它
+ * 应用的授权情况。`pluginId` 省略 = 总览（全部已安装 wasm 应用）。
+ */
+export async function pluginAuthOverview(pluginId?: string): Promise<PluginAuthOverview[]> {
+  const credential = await ensureHostCredential()
+  const apps = await invoke<PluginAuthOverview[]>('plugin_auth_overview', {
+    pluginId: pluginId ?? null,
+    credential,
+  })
+  logger.log(`[PluginCmd] pluginAuthOverview(${pluginId ?? 'all'}) returned ${apps.length} app(s)`)
+  return apps
+}
+
+/**
+ * 撤销某目标的授权（spec §8.4：删 allow 记录 + 落一条 `deny` 记录）
+ *
+ * 宿主面命令（与读模型同判据，宿主后端二次校验）：撤销是安全决策，插件面凭证
+ * 不得替用户撤销自己的授权。
+ *
+ * @returns 被删除的 allow 记录条数（0 = 本就没有 allow 记录）
+ */
+export async function pluginAuthRevoke(
+  pluginId: string,
+  resource: string,
+  target: string,
+): Promise<number> {
+  const credential = await ensureHostCredential()
+  const removed = await invoke<number>('plugin_auth_revoke', {
+    pluginId,
+    resource,
+    target,
+    credential,
+  })
+  logger.log(
+    `[PluginCmd] pluginAuthRevoke(${pluginId}/${resource}) removed ${removed} allow record(s)`,
+  )
+  return removed
+}
+
+/**
+ * 移除某目标的 `deny` 记录（spec §8.4 的恢复出口：只删 deny，回到未覆盖状态）
+ *
+ * @returns 被删除的 deny 记录条数（0 = 本就没有 deny 记录）
+ */
+export async function pluginAuthRemoveRecord(
+  pluginId: string,
+  resource: string,
+  target: string,
+): Promise<number> {
+  const credential = await ensureHostCredential()
+  const removed = await invoke<number>('plugin_auth_remove_record', {
+    pluginId,
+    resource,
+    target,
+    credential,
+  })
+  logger.log(
+    `[PluginCmd] pluginAuthRemoveRecord(${pluginId}/${resource}) removed ${removed} deny record(s)`,
+  )
+  return removed
+}
+
+/**
+ * 设置某应用在某资源上的授权策略档位（spec §4.1 三档，票 03 起）
+ *
+ * 宿主面命令（与读模型 / 撤销同判据）：档位是安全闸门的松紧，插件面凭证不得替
+ * 用户改自己的档位。未知档位值由宿主**显性报错**（写面不猜档位：手误写错却静默
+ * 存成默认档，用户会以为设置成功了）。
+ */
+export async function pluginAuthSetStrategy(
+  pluginId: string,
+  resource: string,
+  strategy: AuthStrategy,
+): Promise<void> {
+  const credential = await ensureHostCredential()
+  await invoke('plugin_auth_set_strategy', { pluginId, resource, strategy, credential })
+  logger.log(`[PluginCmd] pluginAuthSetStrategy(${pluginId}/${resource}) = ${strategy}`)
+}
+
+// ==================== 网络出站授权（授权策略增强 · 票 05） ====================
+
+/**
+ * 出站授权询问的三态决定（宿主 `network_auth::NetworkDecision` 的 wire 值）
+ *
+ * - `allow_once`：允许本次询问覆盖的那批请求，并按 origin 落 allow 记录
+ *   （同 origin 后续请求免询问）
+ * - `deny`：拒绝本次，不落账（下次访问同一 origin 会再问）
+ * - `deny_always`：拒绝本次并落 deny 记录（以后都拒绝）
+ *
+ * 与 fs 侧的应答形状不共用（fs 侧票 03 起也是枚举，但多一档「记住」）：网络侧
+ * 询问粒度就是 origin，没有「只这一次、别记」的中间档（详见
+ * `NetworkAuthDialog.vue` 的组件说明）。
+ */
+export type NetworkAuthDecision = 'allow_once' | 'deny' | 'deny_always'
+
+/**
+ * 回复网络出站授权请求（宿主面命令：需宿主凭证）
+ *
+ * 询问事件是广播的，插件前端也能 `listen` 到——命令绑定宿主凭证后，插件无法替用户
+ * 「同意」自己发起的出站访问（与 `pluginFsAuthRespond` 同一威胁模型）。
+ */
+export async function pluginNetworkAuthRespond(
+  requestId: string,
+  decision: NetworkAuthDecision,
+): Promise<void> {
+  const credential = await ensureHostCredential()
+  return await invoke('plugin_network_auth_respond', { requestId, decision, credential })
 }

@@ -250,6 +250,17 @@ impl PluginHost {
                 "Failed to revoke plugin approval on uninstall"
             );
         }
+        // 授权策略与授权记录（spec §8.3）：**卸载清空 / 重装即全新授权**。
+        // 不跟着 `clear_all` 走 —— 那是插件私有存储，这两张表在主库。停用不清空，
+        // 那是另一条语义（见 auth_policy::purge_plugin 的文档与 lifecycle 用例）
+        let auth_store = crate::wasm_core::security::auth_policy::AuthPolicyStore::new(self.storage.db());
+        if let Err(e) = auth_store.purge_plugin(plugin_id).await {
+            tracing::warn!(
+                plugin_id = %plugin_id,
+                error = %e,
+                "Failed to purge auth policies/records on uninstall"
+            );
+        }
         self.persist_activation_state().await;
 
         // 清理限频簿记：避免重装同 id 插件沿用旧记录

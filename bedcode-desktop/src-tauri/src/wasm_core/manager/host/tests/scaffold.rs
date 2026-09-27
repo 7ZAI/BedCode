@@ -54,6 +54,10 @@ pub(super) async fn setup_host() -> PluginHost {
     ));
 
     wasm_host_ctx.security().set_monitor(wasm_runtime.monitor());
+    // 与生产同形：授权记录容量丢弃计数（spec §8.2）也注入，无头用例可断言该计数
+    wasm_runtime.fs_auth().set_monitor(wasm_runtime.monitor());
+    // 网络侧同一机制（票 06）：与生产同形注入，无头用例可断言网络记录的容量计数
+    wasm_host_ctx.net_auth().set_monitor(wasm_runtime.monitor());
     // v24 认证记录下沉：认证中心（terminal-session）配对/历史真源在插件私有库。
     // 无头测试无 AppHandle，注入进程级临时根使激活建表/播种/断言可达私有库
     // （auth-policy 闭环等依赖）

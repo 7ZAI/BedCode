@@ -16,6 +16,7 @@
 use bedcode_plugin_api::PluginManifest;
 
 use crate::system::constants::{PLUGIN_PTY_MAX_SESSIONS_PER_PLUGIN, PLUGIN_PTY_SESSIONS_CEILING_PER_PLUGIN};
+use crate::wasm_core::security::auth_policy::AuthStrategy;
 
 /// 校验 manifest 必填字段
 ///
@@ -61,12 +62,130 @@ pub fn validate_pty_quota(declared: Option<usize>) -> crate::Result<()> {
     Ok(())
 }
 
-/// 解析 manifest 文本（含必填字段校验）——两条入口的读取/解析/必填统一口径
+/// 解析 manifest 文本（含必填字段校验 + 授权策略声明拒绝）——两条入口的统一口径
+///
+/// 先解析成 `serde_json::Value` 再查策略声明、最后反序列化：宿主 manifest 结构里
+/// **根本没有**策略字段，反序列化之后未知键已被 serde 丢掉，届时再查就查不到了
+/// （这正是不加这道检查时「声明了也静默无效」的机制）。
 pub fn parse_manifest_json(content: &str) -> crate::Result<PluginManifest> {
-    let manifest: PluginManifest = serde_json::from_str(content)
+    let value: serde_json::Value = serde_json::from_str(content)
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to parse plugin.json: {}", e)))?;
+    reject_policy_declaration(&value)?;
+    let manifest: PluginManifest = serde_json::from_value(value)
         .map_err(|e| crate::AppError::Plugin(format!("Failed to parse plugin.json: {}", e)))?;
     validate_manifest_required(&manifest)?;
     Ok(manifest)
+}
+
+/// 授权策略相关的 manifest 键名（小写比较；**命中即拒，不看取值**）
+///
+/// 键名按「插件作者会怎么写」列全而不是只挡一个拼写：漏挡的后果是允许一条
+/// 「声明了却没有任何一行代码读它」的配置留在包里，作者以为档位生效了。
+const POLICY_DECLARATION_KEYS: &[&str] = &[
+    "authstrategy",
+    "authstrategies",
+    "authpolicy",
+    "authpolicies",
+    "authorizationstrategy",
+    "authorizationstrategies",
+    "authorizationpolicy",
+    "authorizationpolicies",
+    "permissionstrategy",
+    "permissionstrategies",
+    "fsstrategy",
+    "fsstrategies",
+    "networkstrategy",
+    "networkstrategies",
+];
+
+/// 通用键名（`strategy` / `policy` 一类）：只在取值命中档位词汇表时才拒
+///
+/// 这类键名太常见（别的用途也会叫 policy），一律拒会误伤正常声明；
+/// 「键名像策略 + 取值是档位词汇」的组合才说明作者确实在声明档位。
+const GENERIC_POLICY_KEYS: &[&str] = &["strategy", "strategies", "policy", "policies"];
+
+/// 档位取值词汇表（与宿主 `AuthStrategy` 的 wire 值同源，两处各拼一套必然漂移）
+const TIER_VALUES: [&str; 3] = [
+    AuthStrategy::AlwaysAsk.as_str(),
+    AuthStrategy::Default.as_str(),
+    AuthStrategy::AlwaysAllow.as_str(),
+];
+
+/// manifest 不得声明授权策略档位 —— 声明即加载期显性拒绝（spec §11 B5）
+///
+/// 档位是**用户**对某个应用的安全决定（宿主主库 `plugin_auth_policies` 是真源）；
+/// manifest 是应用自报的静态声明，若允许它声明档位，等于应用自报「我可以免询问」。
+/// 静默忽略比报错更危险：作者会以为声明生效了（详见 `parse_manifest_json` 的注释）。
+pub fn reject_policy_declaration(value: &serde_json::Value) -> crate::Result<()> {
+    if let Some((key_path, shown)) = find_policy_declaration(value) {
+        return Err(crate::AppError::Plugin(format!(
+            "plugin.json 不得声明授权策略档位（发现 {key_path} = {shown}）：\
+             策略由用户在设置页按应用设置，真源在宿主主库，manifest 声明不会被读取"
+        )));
+    }
+    Ok(())
+}
+
+/// 递归查找策略声明，返回 `(键路径, 取值摘要)`
+///
+/// 递归（含 `contributes` 等嵌套对象与数组元素）：写 `contributes.fsStrategy` 与写
+/// 顶层一样都是「声明档位」，只查顶层等于留一条绕过路径。
+fn find_policy_declaration(value: &serde_json::Value) -> Option<(String, String)> {
+    find_policy_declaration_at(value, "")
+}
+
+fn find_policy_declaration_at(value: &serde_json::Value, path: &str) -> Option<(String, String)> {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, child) in map {
+                let key_lc = key.to_ascii_lowercase();
+                let key_path = if path.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{path}.{key}")
+                };
+                if POLICY_DECLARATION_KEYS.contains(&key_lc.as_str()) {
+                    return Some((key_path, describe_value(child)));
+                }
+                if GENERIC_POLICY_KEYS.contains(&key_lc.as_str()) && carries_tier_value(child) {
+                    return Some((key_path, describe_value(child)));
+                }
+                if let Some(found) = find_policy_declaration_at(child, &key_path) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        serde_json::Value::Array(items) => {
+            for (index, item) in items.iter().enumerate() {
+                if let Some(found) = find_policy_declaration_at(item, &format!("{path}[{index}]")) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+/// 取值（含数组元素形态）是否命中档位词汇表
+fn carries_tier_value(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::String(s) => TIER_VALUES.contains(&s.as_str()),
+        serde_json::Value::Array(items) => items.iter().any(carries_tier_value),
+        serde_json::Value::Object(map) => map.values().any(carries_tier_value),
+        _ => false,
+    }
+}
+
+/// 取值摘要（错误文案点名用；超长截断，避免把整个 manifest 抄进错误里）
+fn describe_value(value: &serde_json::Value) -> String {
+    let raw = value.to_string();
+    if raw.chars().count() > 60 {
+        format!("{}…", raw.chars().take(60).collect::<String>())
+    } else {
+        raw
+    }
 }
 
 /// 插件 id 最大长度（反向域名约定，避免超长 id 打日志/路径）
@@ -207,6 +326,73 @@ mod tests {
     fn parse_without_quota() -> PluginManifest {
         parse_manifest_json(r#"{"id":"com.bedcode.quota","name":"quota","version":"1.0.0"}"#)
             .expect("无 ptyQuota 的既有 manifest 必须照常加载")
+    }
+
+    /// 授权策略档位声明在**加载期显性拒绝**（spec §11 B5：宿主不得替插件决定业务策略）
+    ///
+    /// 变异判据：把 `reject_policy_declaration` 从 `parse_manifest_json` 里摘掉，
+    /// 本条全部转红（这些 manifest 会静默加载成功，档位声明等于没写）。
+    #[test]
+    fn policy_declaration_in_manifest_is_rejected_at_load() {
+        let with = |extra: &str| {
+            parse_manifest_json(&format!(
+                r#"{{"id":"com.bedcode.p","name":"p","version":"1.0.0"{extra}}}"#
+            ))
+        };
+
+        // 策略味儿键名：命中即拒，不看取值
+        for extra in [
+            r#","authStrategy":"always_ask""#,
+            r#","authPolicies":{"fs":"default"}"#,
+            r#","authorizationStrategies":["always_allow"]"#,
+            r#","fsStrategy":"always_allow""#,
+            r#","networkStrategy":"default""#,
+            r#","permissionStrategies":{"fs":"always_ask"}"#,
+        ] {
+            let err = with(extra)
+                .err()
+                .unwrap_or_else(|| panic!("策略声明必须被拒绝: {extra}"));
+            assert!(
+                err.to_string().contains("不得声明授权策略档位"),
+                "错误必须说清拒绝理由，got: {err}"
+            );
+        }
+
+        // 通用键名 + 档位取值：拒（作者确实在声明档位）
+        for extra in [
+            r#","strategy":"always_ask""#,
+            r#","strategies":["default"]"#,
+            r#","policy":{"fs":"always_allow"}"#,
+        ] {
+            assert!(with(extra).is_err(), "通用键名带档位取值也必须拒绝: {extra}");
+        }
+
+        // 嵌套（contributes 内）与一般未知键：前者拒，后者照常加载（老端忽略未知字段的演进约定）
+        assert!(
+            with(r#","contributes":{"fsStrategy":"always_ask"}"#).is_err(),
+            "嵌套位置的策略声明同样是声明档位（只查顶层等于留一条绕过路径）"
+        );
+        assert!(
+            with(r#","retentionPolicy":"default""#).is_ok(),
+            "键名不像策略、取值只是碰巧是 default 的声明不得误伤"
+        );
+        assert!(
+            with(r#","sandbox":"isolated""#).is_ok(),
+            "退役字段照常加载（票 06 裁决 2）——本闸门只针对策略档位"
+        );
+    }
+
+    /// 档位词汇表与宿主 `AuthStrategy` 同源（词表漂移会让闸门漏挡或误伤）
+    #[test]
+    fn tier_vocabulary_matches_host_strategy_values() {
+        assert_eq!(
+            TIER_VALUES,
+            [
+                AuthStrategy::AlwaysAsk.as_str(),
+                AuthStrategy::Default.as_str(),
+                AuthStrategy::AlwaysAllow.as_str()
+            ]
+        );
     }
 
     #[test]

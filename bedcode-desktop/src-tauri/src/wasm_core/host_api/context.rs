@@ -26,6 +26,7 @@ use tokio::sync::{Mutex, RwLock};
 use crate::db::Database;
 use crate::wasm_core::permission::PermissionManager;
 use crate::wasm_core::security::fs_auth::FsAuthChecker;
+use crate::wasm_core::security::network_auth::NetworkAuthChecker;
 use crate::wasm_core::storage::PluginStorage;
 
 // tauri::Manager：`AppHandle::path()` 扩展（get_or_create_plugin_db 数据目录派生）
@@ -215,6 +216,12 @@ pub struct WasmHostContext {
     plugin_db_root: Arc<std::sync::RwLock<Option<PathBuf>>>,
     pub(crate) permission: Arc<PermissionManager>,
     pub(crate) fs_auth: Arc<FsAuthChecker>,
+    /// 网络出站授权校验器（票 05：`host-http.fetch` 的出站询问与网络授权记录）
+    ///
+    /// 与 `fs_auth` 同一形态（持 db 句柄 + AppHandle），判定入口分别是
+    /// `authorize_outbound`（弹窗面）与 `is_granted`（任务单元无询问面）。
+    /// 入站方向（`register-endpoint`）不归它管——「我要暴露什么接口」是业务编排。
+    pub(crate) net_auth: Arc<NetworkAuthChecker>,
     pub(crate) message_bus: Arc<crate::wasm_core::bus::MessageBus>,
     /// 插件宿主服务（两阶段初始化，避免 PluginHost 与 WasmHostContext 类型互引）
     plugin_services: Arc<RwLock<Option<Arc<dyn PluginServices>>>>,
@@ -369,6 +376,9 @@ impl WasmHostContext {
         capabilities: Arc<dyn CapabilityProvider>,
     ) -> Self {
         let api_registry = Arc::new(crate::wasm_core::security::api_registry::ApiRegistry::new());
+        // 网络出站授权（票 05）：与 fs_auth 同形态——主库句柄 + AppHandle，
+        // app_handle 需先 clone 再 move 进本结构
+        let net_auth = Arc::new(NetworkAuthChecker::new(db.clone(), app_handle.clone()));
         // 统一授权框架：注册既有资源的仲裁器（fs 三层校验 / api-call 互调门）
         let security = crate::wasm_core::security::SecurityFramework::new();
         security.register(Arc::new(crate::wasm_core::security::framework::FsAuthorizer::new(
@@ -386,6 +396,7 @@ impl WasmHostContext {
             app_handle,
             permission,
             fs_auth,
+            net_auth,
             message_bus,
             plugin_services: Arc::new(RwLock::new(None)),
             task_engine: Arc::new(RwLock::new(None)),
@@ -420,6 +431,11 @@ impl WasmHostContext {
     /// 文件系统访问校验器（票 07：闭环用例预置「已记住」授权记录的唯一入口）
     pub(crate) fn fs_auth(&self) -> &Arc<FsAuthChecker> {
         &self.fs_auth
+    }
+
+    /// 网络出站授权校验器（票 05：host-http 出站面 / 应答命令的 Tauri State）
+    pub(crate) fn net_auth(&self) -> &Arc<NetworkAuthChecker> {
+        &self.net_auth
     }
 
     /// 权限管理器（core-task 单元预检读声明闸门用，见 `manager::task`）
@@ -635,6 +651,12 @@ pub trait FsAuthScope: Send + Sync {
     fn fs_auth(&self) -> &Arc<crate::wasm_core::security::fs_auth::FsAuthChecker>;
 }
 
+/// 网络出站授权视图（票 05：`host-http.fetch` 的出站判定面）
+pub trait NetworkAuthScope: Send + Sync {
+    /// 出站授权校验器（`authorize_outbound` 弹窗面 / `is_granted` 无询问面）
+    fn net_auth(&self) -> &Arc<crate::wasm_core::security::network_auth::NetworkAuthChecker>;
+}
+
 /// 消息总线视图
 pub trait BusScope: Send + Sync {
     /// 内核消息总线（发布/订阅/事件广播）
@@ -718,6 +740,12 @@ impl StorageScope for WasmHostContext {
 impl FsAuthScope for WasmHostContext {
     fn fs_auth(&self) -> &Arc<crate::wasm_core::security::fs_auth::FsAuthChecker> {
         self.fs_auth()
+    }
+}
+
+impl NetworkAuthScope for WasmHostContext {
+    fn net_auth(&self) -> &Arc<crate::wasm_core::security::network_auth::NetworkAuthChecker> {
+        self.net_auth()
     }
 }
 

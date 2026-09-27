@@ -161,14 +161,39 @@ export default {
       fsAuthTitle: 'File Access Authorization',
       fsAuthRead: 'read',
       fsAuthWrite: 'write',
-      fsAuthRequest: 'App {plugin} requests to {operation} file',
-      fsAuthPickerRequest: 'You just picked these paths in the system picker; {plugin} requests to {operation} them',
-      fsAuthGrantScopeDir: '“Remember” grants the containing folder: other files in it will not be asked again',
+      // Ticket 02: authorization records are split by operation — the dialog must say
+      // whether this request is for read, write, or both.
+      fsAuthReadWrite: 'read & write',
+      fsAuthRequest: 'App {plugin} requests {operation} access',
+      fsAuthPickerRequest:
+        'You just picked these paths in the system picker; {plugin} requests {operation} access',
+      fsAuthGrantScopeDir:
+        '“Remember” grants the containing folder for {operation}: other files in it will not be asked again',
       fsAuthPath: 'File path',
       fsAuthPaths: 'File paths ({count} directories)',
-      fsAuthRemember: 'Remember this path for future access',
+      // Ticket 02: “Remember” now only covers **this request's operations** (read / write / both)
+      fsAuthRemember: 'Remember {operation} access to this path',
       fsAuthAllow: 'Allow',
       fsAuthDeny: 'Deny',
+      // Ticket 03: three-way answer — the "always ask" tier offers no "Remember", so the
+      // allow button can only commit to this one time; "Always deny" lands a deny record
+      // (the target and its subtree are denied from then on).
+      fsAuthAllowOnce: 'Allow once',
+      fsAuthDenyAlways: 'Always deny',
+      // ==================== Outbound network authorization (ticket 05) ====================
+      netAuthTitle: 'Network Access Authorization',
+      netAuthRequest: 'App {plugin} requests access to a network address',
+      netAuthOrigin: 'Address',
+      // Consent scope must be visible: otherwise users can only guess what “Allow” means
+      netAuthScope:
+        'Once allowed, this address (host and port) will not be asked again; you can revoke it in Settings → App Authorization',
+      // Same dialog under the "Always Ask" tier: that tier records nothing, so
+      // promising "will not be asked again" would be a lie
+      netAuthScopeOnce:
+        'This batch of requests only — the app is set to "Always Ask", so the next request will ask again',
+      netAuthAllow: 'Allow',
+      netAuthDeny: 'Deny',
+      netAuthDenyAlways: 'Always deny',
       alwaysOn: 'Always on',
       noSystemOpenPermission: 'App {plugin} lacks the system:open permission',
       // ==================== Detail page additions ====================
@@ -285,8 +310,11 @@ export default {
       section: {
         intro: 'Introduction',
         contributes: 'Contributions',
-        permissions: 'Permissions',
         details: 'Details',
+        // Ticket 07: detail-view authorization records block (parallel to requested permissions)
+        authRecords: 'Authorization Records',
+        // Ticket 07: permissions section renamed — manifest declaration vs runtime records are orthogonal (spec §9.2)
+        requestedPermissions: 'Requested Permissions',
       },
       // Detail info rows
       detail: {

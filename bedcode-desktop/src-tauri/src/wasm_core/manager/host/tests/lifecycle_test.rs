@@ -236,3 +236,74 @@ async fn declared_ws_endpoint_follows_activation_lifecycle() {
     assert!(crate::server::websocket::endpoint::find_by_mount(&mount).is_some());
     crate::server::websocket::endpoint::purge_for_plugin(plugin_id);
 }
+
+// ==================== 授权记录 / 策略的生命周期（spec §8.3 · 票 09 防回接锁） ====================
+
+/// 授权记录与策略的生命周期：**停用保留 / 卸载清空**（spec §8.3 防回接锁）
+///
+/// 两者语义不同，合并即错：
+/// - **停用**是运行期开关，用户停了又开是常事。清授权记录等于让「停用」变成不可逆
+///   操作——重启后所有目录/地址都要重新弹一遍窗。
+/// - **卸载**清空（重装即全新授权，与 ADR 0020 内容哈希钉扎同调）。
+///
+/// 这条锁存在的理由就是「容易被后人顺手统一」：两处都是 `plugin_id` 维度的删除，
+/// 看起来像同一件事。变异判据：① 停用路径加 purge ⇒ 后半段转红；② 卸载去掉 purge
+/// ⇒ 前半段转红。
+#[tokio::test(flavor = "multi_thread")]
+async fn auth_records_survive_deactivate_and_are_purged_on_uninstall() {
+    use crate::wasm_core::security::auth_policy::{AuthPolicyStore, AuthRecordSource, AuthResource, AuthStrategy};
+
+    let host = setup_host().await;
+    host.plugins.write().await.insert(
+        TEST_PLUGIN_ID.to_string(),
+        make_plugin(TEST_PLUGIN_ID, PluginSource::FileScan, PluginState::Activated),
+    );
+    let store = AuthPolicyStore::new(host.storage().db());
+    store
+        .set_strategy(TEST_PLUGIN_ID, AuthResource::Fs, AuthStrategy::AlwaysAsk)
+        .await
+        .expect("seed strategy");
+    store
+        .grant(
+            TEST_PLUGIN_ID,
+            AuthResource::Fs,
+            "/tmp/some-dir",
+            &["read".to_string()],
+            AuthRecordSource::User,
+        )
+        .await
+        .expect("seed record");
+
+    // 停用：记录与策略都在
+    host.deactivate_plugin(TEST_PLUGIN_ID, false).await.unwrap();
+    let after_deactivate = store.overview(TEST_PLUGIN_ID, "T").await.unwrap();
+    assert_eq!(
+        after_deactivate.records.len(),
+        1,
+        "停用不得清授权记录（否则「停了再开」= 全部重新弹窗）"
+    );
+    assert_eq!(
+        after_deactivate
+            .strategies
+            .iter()
+            .find(|s| s.resource == AuthResource::Fs.as_str())
+            .map(|s| s.strategy.as_str()),
+        Some(AuthStrategy::AlwaysAsk.as_str()),
+        "停用不得清策略档位"
+    );
+
+    // 卸载：清空（重装即全新授权）
+    host.uninstall_plugin(TEST_PLUGIN_ID).await.unwrap();
+    let after_uninstall = store.overview(TEST_PLUGIN_ID, "T").await.unwrap();
+    assert!(
+        after_uninstall.records.is_empty(),
+        "卸载必须清空授权记录：重装不该继承前一任的授权"
+    );
+    assert!(
+        after_uninstall
+            .strategies
+            .iter()
+            .all(|s| s.strategy == AuthStrategy::Default.as_str()),
+        "卸载必须清空策略档位（重装回到默认档）"
+    );
+}
