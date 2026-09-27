@@ -14,7 +14,8 @@
 //! `on_process_done` → 读输出文件解析 → 更新 storage → emit 事件推前端。
 //! 状态 JSON 为唯一真源（host-storage `detection` 键），每次读-改-写。
 
-use super::{host, pending, shell_invocation, PendingRun, AUTH_KEY, DATA_DIR, STATE_KEY};
+use super::{host, pending, PendingRun, AUTH_KEY, DATA_DIR, STATE_KEY};
+use crate::util::{is_windows, os_platform, shell_invocation};
 use bedcode_plugin_api::events::ProcessDoneEvent;
 use bedcode_plugin_api::host::{HostEvents, HostFs, HostLog, HostProcess, HostStorage};
 use bedcode_plugin_api::wasm_host::WasmHost;
@@ -54,7 +55,7 @@ fn read_state(h: &WasmHost) -> Value {
 /// 不经 shell 采集，解析层段标记契约不含该段
 fn ensure_env_os(env: &mut Value) {
     if env.is_object() && env.get("os").is_none() {
-        env["os"] = json!(super::os_platform());
+        env["os"] = json!(os_platform());
     }
 }
 
@@ -149,7 +150,7 @@ pub(crate) fn spawn_all(h: &WasmHost) -> anyhow::Result<()> {
         let seq = RUN_SEQ.fetch_add(1, Ordering::Relaxed);
         let output_path = format!("{data_dir}/runs/{kind}-{seq}.log");
         let script = detection_script(kind);
-        let (command, args) = shell_invocation(script, super::is_windows());
+        let (command, args) = shell_invocation(script, is_windows());
         let request = json!({
             "command": command,
             "args": args,
