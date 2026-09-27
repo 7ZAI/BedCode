@@ -11,13 +11,6 @@ const zhCN: MessageSchema = {
   'hub.tab.stats': '使用统计',
   'hub.tab.logs': '会话日志',
 
-  'hub.placeholder.hint': '该分区由后续票据交付，当前为占位展示。',
-  'hub.placeholder.install.title': '安装与更新',
-  'hub.placeholder.skills.title': 'Skills 管理',
-  'hub.placeholder.providers.title': '供应商统一配置',
-  'hub.placeholder.stats.title': '使用统计',
-  'hub.placeholder.logs.title': '会话日志（JSONL 解析）',
-
   'hub.env.title': '环境',
   'hub.env.os': '系统',
   'hub.env.node': 'Node',
@@ -217,7 +210,7 @@ const zhCN: MessageSchema = {
   'hub.pv.apply.conflictConfirm': '确认写入（不覆盖桥接）',
   'hub.pv.apply.failed': '应用失败，请稍后重试',
   // ==================== 使用统计（票据 06） ====================
-  'hub.st.syncedTag': '增量水位：已同步 {n} 个文件',
+  'hub.st.syncedTag': '增量水位：已解析 {n} 个条目',
   'hub.st.syncing': '扫描中…',
   'hub.st.scanning': '扫描中…',
   'hub.st.scanNow': '立即扫描',

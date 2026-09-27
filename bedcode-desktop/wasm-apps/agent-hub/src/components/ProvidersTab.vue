@@ -12,7 +12,7 @@
  * 设计真源：原型 `.scratch/agent-hub/prototype/index.html` #a-pv（页头双动作 +
  * 安全横幅 + 预设表格 + 应用卡）。
  */
-import { computed, inject, ref } from 'vue'
+import { computed, inject, nextTick, ref, useTemplateRef, watch } from 'vue'
 import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 import type { AgentHubState, ProviderPreset, ProvidersDomainState } from '../types'
 import type { UseProvidersReturn } from '../composables/useProviders'
@@ -115,6 +115,61 @@ async function save() {
   if (result.saved) showEditor.value = false
 }
 
+// ==================== 弹窗焦点管理 ====================
+
+/**
+ * 原实现把 `@keydown.esc` 挂在无 tabindex 的遮罩 div 上：焦点不在其子元素时
+ * 事件根本不冒到那里，Esc 时常按不动。这里改为：
+ * ① 打开时把焦点移入面板（面板 tabindex=-1）
+ * ② Tab 循环锁在面板内（focus trap）
+ * ③ document 级 Esc 监听，任何焦点位置都能关
+ * ④ 关闭后把焦点还给触发按钮
+ */
+const editorPanel = useTemplateRef<HTMLElement>('editorPanel')
+const editorTrigger = useTemplateRef<HTMLElement>('editorTrigger')
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+
+function focusables(): HTMLElement[] {
+  if (!editorPanel.value) return []
+  return Array.from(editorPanel.value.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(
+    // checkVisibility 过滤隐藏元素；无此 API 的环境（如测试）默认可见
+    (el) => el.checkVisibility?.() ?? true,
+  )
+}
+
+function onEditorKeydown(e: KeyboardEvent) {
+  if (e.key !== 'Tab') return
+  const items = focusables()
+  if (items.length === 0) return
+  const first = items[0]
+  const last = items[items.length - 1]
+  const active = document.activeElement as HTMLElement | null
+  if (e.shiftKey && (active === first || !editorPanel.value?.contains(active))) {
+    e.preventDefault()
+    last.focus()
+  } else if (!e.shiftKey && active === last) {
+    e.preventDefault()
+    first.focus()
+  }
+}
+
+function onEditorEsc() {
+  if (showEditor.value) showEditor.value = false
+}
+
+watch(showEditor, async (open) => {
+  if (open) {
+    document.addEventListener('keydown', onEditorEsc)
+    await nextTick()
+    focusables()[0]?.focus()
+  } else {
+    document.removeEventListener('keydown', onEditorEsc)
+    await nextTick()
+    editorTrigger.value?.focus()
+  }
+})
+
 // ==================== 删除（两击确认） ====================
 
 const deleteArmId = ref<number | null>(null)
@@ -178,6 +233,7 @@ function sourceTag(preset: ProviderPreset): string {
             {{ props.providers.importing.value ? t('hub.pv.importing') : t('hub.pv.import') }}
           </button>
           <button
+            ref="editorTrigger"
             type="button"
             class="ah-btn ah-btn-primary ah-btn-sm"
             :disabled="busy"
@@ -189,8 +245,9 @@ function sourceTag(preset: ProviderPreset): string {
         </span>
       </div>
 
-      <!-- key 安全横幅（原型 #a-pv 🔐） -->
-      <div class="ah-banner">
+      <!-- key 安全横幅（常驻说明，非警告：改用信息性底色，
+           把 warning 底色留给同页真警告「桥接冲突」） -->
+      <div class="ah-banner ah-banner-info">
         <span class="ah-banner-ic">🔐</span>
         <span class="ah-banner-text">{{ t('hub.pv.secure') }}</span>
       </div>
@@ -319,9 +376,14 @@ function sourceTag(preset: ProviderPreset): string {
             role="dialog"
             aria-modal="true"
             @click.self="showEditor = false"
-            @keydown.esc="showEditor = false"
           >
-            <div class="ah-modal-panel ah-card" data-testid="preset-editor">
+            <div
+              ref="editorPanel"
+              class="ah-modal-panel ah-card"
+              tabindex="-1"
+              data-testid="preset-editor"
+              @keydown="onEditorKeydown"
+            >
               <div class="ah-inst-head">
                 <span class="ah-section-title">
                   {{ editingId === null ? t('hub.pv.editor.titleNew') : t('hub.pv.editor.titleEdit') }}
@@ -355,11 +417,11 @@ function sourceTag(preset: ProviderPreset): string {
 
               <div class="ah-pv-field">
                 <span class="ah-pv-label">{{ t('hub.pv.editor.name') }}</span>
-                <input v-model="formName" class="ah-sk-url ah-pv-input" type="text" spellcheck="false" autofocus data-testid="preset-name" />
+                <input v-model="formName" class="ah-input ah-pv-input" type="text" spellcheck="false" data-testid="preset-name" />
               </div>
               <div class="ah-pv-field">
                 <span class="ah-pv-label">{{ t('hub.pv.editor.baseUrl') }}</span>
-                <input v-model="formBaseUrl" class="ah-sk-url ah-pv-input ah-mono" type="text" spellcheck="false" data-testid="preset-baseurl" />
+                <input v-model="formBaseUrl" class="ah-input ah-pv-input ah-mono" type="text" spellcheck="false" data-testid="preset-baseurl" />
               </div>
               <div class="ah-pv-field">
                 <span class="ah-pv-label">{{ t('hub.pv.editor.apiStyle') }}</span>
@@ -387,7 +449,7 @@ function sourceTag(preset: ProviderPreset): string {
                 <span class="ah-pv-keyrow">
                   <input
                     v-model="formKey"
-                    class="ah-sk-url ah-pv-input ah-mono"
+                    class="ah-input ah-pv-input ah-mono"
                     type="password"
                     autocomplete="new-password"
                     spellcheck="false"

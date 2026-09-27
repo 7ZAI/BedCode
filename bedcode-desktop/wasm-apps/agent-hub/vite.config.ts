@@ -4,8 +4,6 @@ import { resolve } from 'path'
 import cssInjectedByJsPlugin from 'vite-plugin-css-injected-by-js'
 import { bedcodePlugin } from '@binblink/bedcode-plugin-sdk-desktop/vite'
 
-const pluginId = 'com.bedcode.agent-hub'
-
 export default defineConfig({
   plugins: [vue(), cssInjectedByJsPlugin(), bedcodePlugin()],
   define: {

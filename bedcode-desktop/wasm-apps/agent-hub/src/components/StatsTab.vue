@@ -118,21 +118,30 @@ const summaryRows = computed<SummaryRow[]>(() => {
 
 const total = computed(() => stats.value?.total)
 
-// ==================== 会话明细列表（与日志视图共用分页数据） ====================
+// ==================== 会话明细列表（追加加载语义，列表与游标均为统计分区私有） ====================
 
-const sessions = computed<UsageSessionRow[]>(() => props.usage.sessions.value)
-const hasMore = computed(() => sessions.value.length < props.usage.sessionsTotal.value)
+const sessions = computed<UsageSessionRow[]>(() => props.usage.statSessions.value)
+const hasMore = computed(() => sessions.value.length < props.usage.statTotal.value)
 
 function sessionLabel(s: UsageSessionRow): string {
   return s.title || s.cli_session_id
 }
+
+/** 已同步条目数：遍历全部适配器求和，新增适配器（opencode/codex）自动纳入。
+ * 口径是「条目」而非「文件」——opencode 是 SQLite 源，解析单位是会话。 */
+const parsedTotal = computed(() => {
+  const adapters = state.value?.adapters
+  if (!adapters) return 0
+  return Object.values(adapters).reduce((sum, a) => sum + (a?.parsed ?? 0), 0)
+})
+
 </script>
 
 <template>
   <div>
     <div class="ah-st-head">
       <span class="ah-cli-tag" :class="{ ok: !syncing }">
-        {{ syncing ? t('hub.st.syncing') : t('hub.st.syncedTag', { n: (state?.adapters?.claude?.parsed ?? 0) + (state?.adapters?.pi?.parsed ?? 0) }) }}
+        {{ syncing ? t('hub.st.syncing') : t('hub.st.syncedTag', { n: parsedTotal }) }}
       </span>
       <button
         type="button"
@@ -259,10 +268,10 @@ function sessionLabel(s: UsageSessionRow): string {
         <button
           type="button"
           class="ah-btn ah-btn-ghost ah-btn-sm"
-          :disabled="usage.loadingSessions.value"
+          :disabled="usage.statLoading.value"
           @click="usage.loadMoreSessions()"
         >
-          {{ t('hub.st.loadMore', { n: sessions.length, total: usage.sessionsTotal.value }) }}
+          {{ t('hub.st.loadMore', { n: sessions.length, total: usage.statTotal.value }) }}
         </button>
       </div>
     </div>

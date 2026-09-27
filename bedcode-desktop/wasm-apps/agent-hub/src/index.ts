@@ -18,10 +18,12 @@ export const devMock = hubDevMock
 /**
  * @vuepic/vue-datepicker 主题覆盖：全部映射宿主 CSS 变量（跟随明暗主题）。
  * 与 auto-task 插件同源（会话日志与定时任务共用同一日期组件外观）。
- * 输入框规格与宿主表单控件一致（高 32px、圆角 6px、focus 主色描边）。
+ * 输入框规格与插件内 .ah-input / SDK Select 对齐（票 12）：
+ * 高 var(--input-height)、圆角 --radius-input、边框 --border-input、
+ * 底色 --bg-input，占位符用 --ah-text-data。
  */
 const DATEPICKER_THEME_OVERRIDES = `
-/* 输入框与宿主控件保持一致（同 auto-task：高 32px、圆角 6px、跟随设计变量） */
+/* 输入框与插件内其它表单控件保持同一规格（票 12） */
 .dp__main {
   width: 100%;
 }
@@ -29,10 +31,10 @@ const DATEPICKER_THEME_OVERRIDES = `
   width: 100%;
 }
 .dp__input {
-  height: 32px;
-  min-height: 32px;
-  font-size: 12px;
-  border-radius: 6px;
+  height: var(--input-height);
+  min-height: var(--input-height);
+  font-size: var(--font-size-base);
+  border-radius: var(--radius-input);
   border-color: var(--border-input);
   background: var(--bg-input);
   color: var(--text-primary);
@@ -44,7 +46,7 @@ const DATEPICKER_THEME_OVERRIDES = `
   border-color: var(--color-primary);
 }
 .dp__input::placeholder {
-  color: var(--text-tertiary);
+  color: var(--ah-text-data);
 }
 .dp__theme_dark {
   --dp-background-color: var(--bg-card);
@@ -59,9 +61,9 @@ const DATEPICKER_THEME_OVERRIDES = `
   /* 底部操作按钮（确认/取消/现在）：文字色跟随主题对比色（深色下为深色文字），
      避免浅色 primary 背景 + 白字导致按钮不可见 */
   --dp-primary-text-color: var(--color-primary-contrast);
-  --dp-secondary-color: var(--text-tertiary);
+  --dp-secondary-color: var(--ah-text-data);
   --dp-success-color: var(--color-primary);
-  --dp-icon-color: var(--text-secondary);
+  --dp-icon-color: var(--ah-text-data);
   --dp-disabled-color: var(--text-tertiary);
   --dp-disabled-border-color: var(--border);
   --dp-font-family: inherit;

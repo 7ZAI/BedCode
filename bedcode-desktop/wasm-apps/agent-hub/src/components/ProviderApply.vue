@@ -141,7 +141,7 @@ async function apply(force: boolean) {
       <!-- 配置条目名（写入目标文件中的键名） -->
       <div class="ah-pv-field">
         <span class="ah-pv-label">{{ t('hub.pv.apply.targetName') }}</span>
-        <input v-model="targetName" class="ah-sk-url ah-pv-input ah-mono" type="text" spellcheck="false" />
+        <input v-model="targetName" class="ah-input ah-pv-input ah-mono" type="text" spellcheck="false" />
       </div>
       <div class="ah-inst-hint">{{ t('hub.pv.apply.targetNameHint', { target }) }}</div>
 
@@ -170,7 +170,7 @@ async function apply(force: boolean) {
       <input
         v-if="keyMode === 'inline'"
         v-model="keyValue"
-        class="ah-sk-url ah-pv-input ah-mono"
+        class="ah-input ah-pv-input ah-mono"
         type="password"
         autocomplete="off"
         data-testid="apply-key-input"

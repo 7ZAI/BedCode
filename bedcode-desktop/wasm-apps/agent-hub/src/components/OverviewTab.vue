@@ -2,6 +2,7 @@
 /**
  * 概览分区（票据 02 交付范围 + 票据 03 测速行）：目录授权横幅 + 环境条
  * （含 npm 源测速与推荐）+ 四张 CLI 卡片
+ *
  */
 import { computed, inject } from 'vue'
 import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
@@ -12,7 +13,6 @@ const props = defineProps<{
   state: AgentHubState | null
   detecting: boolean
   installState: InstallDomainState | null
-  speedTesting: boolean
 }>()
 const emit = defineEmits<{ detect: []; auth: []; 'speed-test': []; 'goto-install': [] }>()
 
@@ -75,7 +75,7 @@ const recommendMirror = computed(() => speed.value?.recommend === 'npmmirror')
 </script>
 
 <template>
-  <div class="ah-overview">
+  <div>
     <div v-if="state && !state.authGranted" class="ah-banner">
       <span class="ah-banner-ic">⚠</span>
       <span class="ah-banner-text">{{ t('hub.auth.banner') }}</span>
@@ -136,7 +136,11 @@ const recommendMirror = computed(() => speed.value?.recommend === 'npmmirror')
     </div>
 
     <div class="ah-grid">
-      <CliCard v-for="id in CLI_IDS" :key="id" :cli-id="id" :info="state?.clis?.[id] ?? null" />
+      <CliCard
+        v-for="id in CLI_IDS"
+        :key="id"
+        :cli-id="id"
+      />
     </div>
   </div>
 </template>

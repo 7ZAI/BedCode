@@ -54,11 +54,8 @@ const rows = computed<SkillRow[]>(() =>
 function targetSummary(target: 'claude' | 'pi'): { status: 'ok' | 'warn' | 'neutral'; count: number } {
   const skills = state.value?.skills ?? []
   let bad = 0
-  let good = 0
   for (const s of skills) {
-    const st = s.distribution[target]?.status
-    if (st === 'distributed') good++
-    else bad++
+    if (s.distribution[target]?.status !== 'distributed') bad++
   }
   if (skills.length === 0) return { status: 'neutral', count: 0 }
   if (bad === 0) return { status: 'ok', count: 0 }
@@ -100,16 +97,22 @@ async function installGithub(overwrite: boolean) {
 const importPending = ref<{ path: string; name: string } | null>(null)
 const importAuthDenied = ref(false)
 
-async function importLocal(force?: boolean) {
+/**
+ * 本地导入。语义：「有同名待确认 → 本次点击即为覆盖」——
+ * 确认条上的「覆盖」按钮与导入按钮走同一个函数，前者在有 importPending 时
+ * 携 `{ path, force: true }` 重入，guest 才会真正覆盖同名 skill
+ * （原实现把 force 只当分支选择器、正常路径仍发 `{}`，
+ *  点「覆盖」等于再问一次 exists，确认条永远消不掉）。
+ */
+async function importLocal() {
   importAuthDenied.value = false
-  if (!force && importPending.value) {
-    // 覆盖确认路径：携已选 path 重入
+  if (importPending.value) {
     const { path } = importPending.value
+    importPending.value = null
     const r = await props.skills.importLocal({ path, force: true })
     handleImportResult(r)
     return
   }
-  importPending.value = null
   const r = await props.skills.importLocal({})
   handleImportResult(r)
 }
@@ -212,7 +215,7 @@ function closeEditor() {
         <div class="ah-sk-github-row">
           <input
             v-model="githubUrl"
-            class="ah-sk-url ah-mono"
+            class="ah-input ah-mono"
             type="text"
             :placeholder="t('hub.skill.github.urlPlaceholder')"
             spellcheck="false"
@@ -247,7 +250,7 @@ function closeEditor() {
       <div v-if="importPending" class="ah-banner ah-sk-confirm" data-testid="import-confirm">
         <span class="ah-banner-ic">⚠</span>
         <span class="ah-banner-text">{{ t('hub.skill.import.exists', { name: importPending.name }) }}</span>
-        <button type="button" class="ah-btn ah-btn-ghost ah-btn-sm" @click="importLocal(true)">
+        <button type="button" class="ah-btn ah-btn-ghost ah-btn-sm" @click="importLocal()">
           {{ t('hub.skill.import.overwrite') }}
         </button>
       </div>

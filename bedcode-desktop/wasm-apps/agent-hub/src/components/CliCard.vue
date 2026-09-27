@@ -3,6 +3,7 @@
  * 单 CLI 卡片：官方图标 + 状态徽章 + 版本/安装方式 + 双安装警告
  *
  * 徽章色语义：ok=success；双安装=warning；error=danger；其余中性
+ *
  */
 import { computed, inject } from 'vue'
 import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
@@ -37,7 +38,7 @@ const methodLabel = computed(() => {
 </script>
 
 <template>
-  <div class="ah-card ah-cli-card">
+  <div class="ah-card">
     <div class="ah-cli-head">
       <span class="ah-cli-name">
         <CliIcon :cli-id="cliId" />

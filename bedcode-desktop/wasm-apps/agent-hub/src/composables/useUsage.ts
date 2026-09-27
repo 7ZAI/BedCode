@@ -6,8 +6,13 @@
  *   入口（fs_auth 第三层按路径弹窗，guest 侧已闸门拦截，不再触发弹窗）
  * - 看板：stats 一次拉全部分组（按天/CLI/项目/模型），维度切换纯前端；
  *   扫描完成后自动重拉
- * - 会话列表：多条件查询（adapter / 关键词 / 时间范围）+ 分页（页大小
- *   PAGE_SIZE），供统计明细（追加加载）与日志页（页导航）共用同一查询域
+ * - 会话列表：**共享查询条件 + 两份独立列表**。统计明细是「追加加载」、
+ *   日志表格是「按页替换」，两者游标语义相反，因此
+ *   `statSessions/statTotal/statLoaded` 与 `logSessions/logTotal/logPage`
+ *   各自持有；`listFilter/searchText/rangeFrom/rangeTo` 由两个 tab 共享，
+ *   任一变更都让两份列表同时回到第一页（此前单一 `sessions/page/loadedOffset`
+ *   会在两个 tab 间串味：统计加载更多后翻日志页再回来即出现重复行，
+ *   日志页则显示 45 行却写着「第 1 页」）
  * - 日志来源：内置只读 + 自定义增删（list/add/remove-usage-source），
  *   扫描计数合并进 sources 列表
  * - 日志视图：openSession 按会话 id 读源文件解析为归一事件流 + 原始行
@@ -32,12 +37,9 @@ export const PAGE_SIZE = 15
 export function useUsage(context: PluginContext) {
   const state = ref<UsageDomainState | null>(null)
   const stats = ref<UsageStats | null>(null)
-  const sessions = ref<UsageSessionRow[]>([])
-  const sessionsTotal = ref(0)
-  /** 追加加载游标（统计明细 load-more 用；页导航后重置） */
-  let loadedOffset = 0
-  /** 列表加载中（防分页重入） */
-  const loadingSessions = ref(false)
+  /** 列表加载中（防重入；两份列表各自一个，互不阻塞） */
+  const statLoading = ref(false)
+  const logLoading = ref(false)
   /** 当前打开的日志会话（null = 未选中） */
   const openedSession = ref<UsageSessionDetail | null>(null)
   const openingSession = ref(false)
@@ -62,7 +64,9 @@ export function useUsage(context: PluginContext) {
       await reloadSources()
       return { ok: true }
     } catch (e) {
-      return { ok: false, error: e instanceof Error ? e.message : String(e) }
+      // 票 04（ADR 0030）：详情只进日志，返回值仅供界面触发友好 i18n（不携带原文）
+      console.error('[Agent Hub] add-usage-source failed:', e)
+      return { ok: false }
     }
   }
 
@@ -73,24 +77,32 @@ export function useUsage(context: PluginContext) {
       await reloadSources()
       return { ok: true }
     } catch (e) {
-      return { ok: false, error: e instanceof Error ? e.message : String(e) }
+      console.error('[Agent Hub] remove-usage-source failed:', e)
+      return { ok: false }
     }
   }
 
-  // ==================== 会话列表（多条件查询 + 分页） ====================
-  /** 适配器过滤（'' = 全部） */
+  // ==================== 会话列表（共享查询条件 + 两份独立列表） ====================
+  /** 适配器过滤（'' = 全部）——两个 tab 共享 */
   const listFilter = ref('')
-  /** 关键词（标题 / 项目 / 会话 id 模糊匹配，空 = 不限定） */
+  /** 关键词（标题 / 项目 / 会话 id 模糊匹配，空 = 不限定）——两个 tab 共享 */
   const searchText = ref('')
-  /** 时间范围（epoch ms，null = 不限定） */
+  /** 时间范围（epoch ms，null = 不限定）——两个 tab 共享 */
   const rangeFrom = ref<number | null>(null)
   const rangeTo = ref<number | null>(null)
-  /** 日志页当前页码（1 基） */
-  const page = ref(1)
 
-  const totalPages = computed(() =>
-    Math.max(1, Math.ceil(sessionsTotal.value / PAGE_SIZE)),
-  )
+  // ---- 统计分区私有：追加加载语义 ----
+  const statSessions = ref<UsageSessionRow[]>([])
+  const statTotal = ref(0)
+  /** 已追加加载的条数（= 下一页的 offset） */
+  const statLoaded = ref(0)
+
+  // ---- 日志分区私有：按页替换语义 ----
+  const logSessions = ref<UsageSessionRow[]>([])
+  const logTotal = ref(0)
+  const logPage = ref(1)
+
+  const logTotalPages = computed(() => Math.max(1, Math.ceil(logTotal.value / PAGE_SIZE)))
 
   function buildQuery() {
     return {
@@ -101,57 +113,78 @@ export function useUsage(context: PluginContext) {
     }
   }
 
-  /** 拉取一页（replace=true 替换列表；false 追加——统计明细 load-more） */
-  async function fetchSessionsPage(offset: number, replace: boolean) {
-    loadingSessions.value = true
+  /** 拉取一页原始数据（offset/limit 固定由调用方给） */
+  async function fetchPage(offset: number): Promise<UsageSessionPage | null> {
+    const data = await context.commands.execute('agent-hub.list-usage-sessions', {
+      offset,
+      limit: PAGE_SIZE,
+      ...buildQuery(),
+    })
+    return data as UsageSessionPage
+  }
+
+  /** 统计明细：把一页追加到已有列表之后（游标只在本列表内推进） */
+  async function loadStatPage(replace: boolean) {
+    if (statLoading.value) return
+    statLoading.value = true
     try {
-      const data = await context.commands.execute('agent-hub.list-usage-sessions', {
-        offset,
-        limit: PAGE_SIZE,
-        ...buildQuery(),
-      })
-      const p = data as UsageSessionPage
-      sessions.value = replace
-        ? p.sessions
-        : [...sessions.value, ...p.sessions]
-      sessionsTotal.value = p.total
-      loadedOffset = replace ? p.sessions.length : loadedOffset + p.sessions.length
+      const offset = replace ? 0 : statLoaded.value
+      const p = await fetchPage(offset)
+      if (p === null) return
+      const rows = p.sessions ?? []
+      statSessions.value = replace ? rows : [...statSessions.value, ...rows]
+      statTotal.value = p.total
+      statLoaded.value = replace ? rows.length : statLoaded.value + rows.length
     } catch (e) {
-      console.error('[Agent Hub] list-usage-sessions failed', e)
+      console.error('[Agent Hub] list-usage-sessions failed (stats)', e)
     } finally {
-      loadingSessions.value = false
+      statLoading.value = false
     }
   }
 
-  /** 按当前查询条件重载第 1 页（扫描完成回流 / 查询按钮 / 重置） */
+  /** 日志表格：把某页替换进列表（游标只在本列表内推进） */
+  async function loadLogPage(page: number) {
+    if (logLoading.value) return
+    logLoading.value = true
+    try {
+      const p = await fetchPage((page - 1) * PAGE_SIZE)
+      if (p === null) return
+      logSessions.value = p.sessions ?? []
+      logTotal.value = p.total
+      logPage.value = page
+    } catch (e) {
+      console.error('[Agent Hub] list-usage-sessions failed (logs)', e)
+    } finally {
+      logLoading.value = false
+    }
+  }
+
+  /** 共享条件或扫描结果变化 → 两份列表同时回第一页 */
   async function reloadSessions() {
-    page.value = 1
-    loadedOffset = 0
-    await fetchSessionsPage(0, true)
+    await Promise.all([loadStatPage(true), loadLogPage(1)])
   }
 
-  /** 日志页页导航（替换列表为该页切片） */
+  /** 日志页页导航（只动日志列表） */
   async function goPage(p: number) {
-    const target = Math.min(Math.max(1, p), totalPages.value)
-    if (target === page.value && sessions.value.length > 0) return
-    page.value = target
-    await fetchSessionsPage((target - 1) * PAGE_SIZE, true)
+    const target = Math.min(Math.max(1, p), logTotalPages.value)
+    if (target === logPage.value && logSessions.value.length > 0) return
+    await loadLogPage(target)
   }
 
-  /** 列表适配器过滤切换：重设条件并回到第 1 页 */
+  /** 列表适配器过滤切换：重设共享条件并让两份列表都回第 1 页 */
   async function setListFilter(adapter: string) {
     if (listFilter.value === adapter) return
     listFilter.value = adapter
     await reloadSessions()
   }
 
-  /** 统计明细追加加载（保持既有「加载更多」语义） */
+  /** 统计明细追加加载（保持既有「加载更多」语义，游标不与日志页串味） */
   async function loadMoreSessions() {
-    if (loadingSessions.value || loadedOffset >= sessionsTotal.value) return
-    await fetchSessionsPage(loadedOffset, false)
+    if (statLoading.value || statLoaded.value >= statTotal.value) return
+    await loadStatPage(false)
   }
 
-  /** 重置查询条件并回到第 1 页 */
+  /** 重置共享查询条件并让两份列表都回第 1 页 */
   async function resetQuery() {
     listFilter.value = ''
     searchText.value = ''
@@ -169,7 +202,11 @@ export function useUsage(context: PluginContext) {
     }
   }
 
-  /** 面板打开后自动扫描已触发过（idle 态只扫一次，防事件风暴下重复发起） */
+  /**
+   * 自动扫描是否已**成功发起**过：只锁「已发起」，发起失败即回滚，
+   * 使下次 idle 回流（面板重开 / refresh）能重试。
+   * 标志只由 scan() 持有，applyState 只读取。
+   */
   let autoScanDone = false
 
   function applyState(next: UsageDomainState | null) {
@@ -178,7 +215,6 @@ export function useUsage(context: PluginContext) {
     // spec §4.5「应用打开面板时增量扫描」：从未扫描（idle）时自动触发一次
     // （auth-required 不自动触发——由用户经授权入口先授权）
     if (next?.status === 'idle' && !autoScanDone) {
-      autoScanDone = true
       void scan()
       return
     }
@@ -190,10 +226,14 @@ export function useUsage(context: PluginContext) {
 
   /** 触发增量扫描（guest 闸门：未授权 → auth-required，同步返回状态） */
   async function scan() {
+    // 手动/重试扫描允许再次自动触发：autoScanDone 只锁「已成功发起的自动扫描」
+    autoScanDone = true
     try {
       const data = await context.commands.execute('agent-hub.scan-usage', {})
       applyState((data?.state ?? null) as UsageDomainState | null)
     } catch (e) {
+      // 发起失败 → 释放自动扫描锁，下次 idle 回流可重试
+      autoScanDone = false
       console.error('[Agent Hub] scan-usage failed', e)
     }
   }
@@ -244,15 +284,22 @@ export function useUsage(context: PluginContext) {
     state,
     stats,
     sources,
-    sessions,
-    sessionsTotal,
-    totalPages,
-    loadingSessions,
+    // 共享查询条件
     listFilter,
     searchText,
     rangeFrom,
     rangeTo,
-    page,
+    // 统计分区（追加加载）
+    statSessions,
+    statTotal,
+    statLoaded,
+    statLoading,
+    // 日志分区（按页替换）
+    logSessions,
+    logTotal,
+    logPage,
+    logTotalPages,
+    logLoading,
     openedSession,
     openingSession,
     refresh,

@@ -11,13 +11,6 @@ const en: MessageSchema = {
   'hub.tab.stats': 'Usage',
   'hub.tab.logs': 'Session Logs',
 
-  'hub.placeholder.hint': 'This section ships with a later ticket; placeholder only.',
-  'hub.placeholder.install.title': 'Install & Update',
-  'hub.placeholder.skills.title': 'Skills Management',
-  'hub.placeholder.providers.title': 'Provider Configuration',
-  'hub.placeholder.stats.title': 'Usage Statistics',
-  'hub.placeholder.logs.title': 'Session Logs (JSONL Parsing)',
-
   'hub.env.title': 'Environment',
   'hub.env.os': 'OS',
   'hub.env.node': 'Node',
@@ -217,7 +210,7 @@ const en: MessageSchema = {
   'hub.pv.apply.conflictConfirm': 'Write anyway (bridges untouched)',
   'hub.pv.apply.failed': 'Apply failed, please try again',
   // ==================== 使用统计（票据 06） ====================
-  'hub.st.syncedTag': 'Watermark: {n} files synced',
+  'hub.st.syncedTag': 'Watermark: {n} entries parsed',
   'hub.st.syncing': 'Syncing…',
   'hub.st.scanning': 'Syncing…',
   'hub.st.scanNow': 'Scan now',

@@ -5,7 +5,11 @@
  * 图元数据单一真源在 src/icons.ts，与概览卡片（CliIcon）同一份：
  * adapter ∈ {claude, codex, opencode, pi} 渲染官方品牌标（随主题的
  * currentColor 走 token，claude 保持品牌橙）；其他适配器（含自定义
- * 日志来源）回退 FNV-1a 渐变字母徽标（同宿主 LetterAvatar 配色逻辑）。
+ * 日志来源）回退 FNV-1a 字母徽标。
+ *
+ * 字母徽标底色走 --ah-avatar-0..5（宿主 token 的中性派生，见 styles.css），
+ * 不使用硬编码 hex 色板：同一来源名恒得同一档（hash 取模），
+ * 文字用 --text-primary，在任何主题/承载面上都 ≥ 12:1。
  */
 import { computed } from 'vue'
 import { CLI_ICONS } from '../icons'
@@ -24,25 +28,27 @@ const props = withDefaults(
 const isBrand = computed(() => Object.prototype.hasOwnProperty.call(CLI_ICONS, props.adapter))
 const glyph = computed(() => CLI_ICONS[props.adapter] ?? null)
 
-/** 未知适配器回退：FNV-1a 渐变字母（配色与宿主 LetterAvatar 一致） */
+/** 未知适配器回退：FNV-1a 字母（取 --ah-avatar-N 之一，样式层 token 化） */
 const letter = computed(() => (props.adapter.trim().charAt(0) || '?').toUpperCase())
 
-const GRADIENTS = [
-  'linear-gradient(135deg, #6366f1, #4f46e5)',
-  'linear-gradient(135deg, #3b82f6, #6366f1)',
-  'linear-gradient(135deg, #10b981, #0d9488)',
-  'linear-gradient(135deg, #f59e0b, #d97706)',
-  'linear-gradient(135deg, #8b5cf6, #6d28d9)',
-  'linear-gradient(135deg, #0ea5e9, #3b82f6)',
+/** 6 档中性派生底色，与 styles.css 的 --ah-avatar-0..5 一一对应 */
+const AVATAR_TOKENS = [
+  'var(--ah-avatar-0)',
+  'var(--ah-avatar-1)',
+  'var(--ah-avatar-2)',
+  'var(--ah-avatar-3)',
+  'var(--ah-avatar-4)',
+  'var(--ah-avatar-5)',
 ]
 
-const gradient = computed(() => {
+/** FNV-1a hash（与宿主 LetterAvatar 同款逻辑）：同一名字恒得同一档 */
+const avatarToken = computed(() => {
   let hash = 2166136261
   for (let i = 0; i < props.adapter.length; i++) {
     hash ^= props.adapter.charCodeAt(i)
     hash = Math.imul(hash, 16777619)
   }
-  return GRADIENTS[(hash >>> 0) % GRADIENTS.length]
+  return AVATAR_TOKENS[(hash >>> 0) % AVATAR_TOKENS.length]
 })
 </script>
 
@@ -70,6 +76,6 @@ const gradient = computed(() => {
       />
     </svg>
     <!-- 自定义来源：字母徽标回退 -->
-    <span v-else :style="{ background: gradient }" class="ah-agent-ic-letter">{{ letter }}</span>
+    <span v-else :style="{ background: avatarToken }" class="ah-agent-ic-letter">{{ letter }}</span>
   </span>
 </template>

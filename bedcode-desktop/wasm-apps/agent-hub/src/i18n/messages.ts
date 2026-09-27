@@ -22,12 +22,6 @@ export type MessageSchema = {
   'hub.tab.logs': string
 
   // ==================== 分区占位（票据 03–07 交付） ====================
-  'hub.placeholder.hint': string
-  'hub.placeholder.install.title': string
-  'hub.placeholder.skills.title': string
-  'hub.placeholder.providers.title': string
-  'hub.placeholder.stats.title': string
-  'hub.placeholder.logs.title': string
 
   // ==================== 概览 · 环境条 ====================
   'hub.env.title': string
@@ -256,7 +250,6 @@ export type MessageSchema = {
   'hub.st.sessionsTitle': string
   'hub.st.empty': string
   'hub.st.loadMore': string
-
   // ==================== 会话日志（改版：来源 / 查询 / 分页 / 详情） ====================
   'hub.lg.sources.title': string
   'hub.lg.sources.builtin': string

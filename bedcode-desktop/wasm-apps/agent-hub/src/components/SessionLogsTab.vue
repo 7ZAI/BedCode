@@ -35,12 +35,12 @@ const state = computed(() => usage.state.value)
 const home = computed(() => state.value?.home ?? '')
 const authRequired = computed(() => state.value?.status === 'auth-required')
 const syncing = computed(() => state.value?.status === 'syncing')
-const sessions = computed(() => usage.sessions.value)
+const sessions = computed(() => usage.logSessions.value)
 const sources = computed(() => usage.sources.value)
-const sessionsTotal = computed(() => usage.sessionsTotal.value)
-const totalPages = computed(() => usage.totalPages.value)
-const page = computed(() => usage.page.value)
-const loadingSessions = computed(() => usage.loadingSessions.value)
+const sessionsTotal = computed(() => usage.logTotal.value)
+const totalPages = computed(() => usage.logTotalPages.value)
+const page = computed(() => usage.logPage.value)
+const loadingSessions = computed(() => usage.logLoading.value)
 
 /** 当前打开会话（二级详情）；打开会话重置页签 */
 const opened = computed(() => usage.openedSession.value)
@@ -96,10 +96,13 @@ async function onRemoveSource(name: string) {
 }
 
 // ==================== 查询条件（Agent / 关键词 / 时间范围） ====================
+// 本地输入初值从共享查询域回填：agent/keyword 原本就对齐了，日期两个框
+// 此前初值恒为 null —— 设过时间范围后切到统计 tab 再回来，框里是空的而
+// 列表仍被过滤，点「查询」就把日期条件静默清掉了。
 const filterAgent = ref(usage.listFilter.value)
 const keyword = ref(usage.searchText.value)
-const fromInput = ref<Date | null>(null)
-const toInput = ref<Date | null>(null)
+const fromInput = ref<Date | null>(usage.rangeFrom.value ? new Date(usage.rangeFrom.value) : null)
+const toInput = ref<Date | null>(usage.rangeTo.value ? new Date(usage.rangeTo.value) : null)
 
 /**
  * 日期选择器（@vuepic/vue-datepicker，与 auto-task 同款）：
@@ -173,7 +176,7 @@ function tokenMeta(e: NormalizedEventView): string {
     <!-- ==================== 一级：来源区 + 查询 + 分页表格 ==================== -->
     <template v-if="!opened">
       <!-- 日志来源（默认折叠；内置只读 + 自定义增删 + 扫描） -->
-      <div class="ah-lg-sources">
+      <div>
         <button
           type="button"
           class="ah-btn ah-btn-ghost ah-btn-sm ah-lg-sources-toggle"
@@ -221,13 +224,13 @@ function tokenMeta(e: NormalizedEventView): string {
           <div v-if="addingSource" class="ah-lg-sources-add">
             <input
               v-model="newSourceName"
-              class="h-[var(--input-height)] min-w-[180px] flex-1 rounded-input border border-[var(--border-input)] bg-[var(--bg-input)] px-4 text-[var(--text-primary)] outline-none transition-all duration-200 shadow-xs placeholder:text-[var(--text-tertiary)] focus:border-brand focus:shadow-input-focus dark:shadow-none"
+              class="ah-input"
               :placeholder="t('hub.lg.sources.addName')"
               :disabled="sourceBusy"
             />
             <input
               v-model="newSourcePath"
-              class="ah-mono h-[var(--input-height)] min-w-[180px] flex-1 rounded-input border border-[var(--border-input)] bg-[var(--bg-input)] px-4 text-[var(--text-primary)] outline-none transition-all duration-200 shadow-xs placeholder:text-[var(--text-tertiary)] focus:border-brand focus:shadow-input-focus dark:shadow-none"
+              class="ah-input ah-mono"
               :placeholder="t('hub.lg.sources.addPath')"
               :disabled="sourceBusy"
             />
@@ -258,7 +261,7 @@ function tokenMeta(e: NormalizedEventView): string {
           <span class="ah-lg-filter-label">{{ t('hub.lg.filter.keyword') }}</span>
           <input
             v-model="keyword"
-            class="w-full h-[var(--input-height)] rounded-input border border-[var(--border-input)] bg-[var(--bg-input)] px-4 text-[var(--text-primary)] outline-none transition-all duration-200 shadow-xs placeholder:text-[var(--text-tertiary)] focus:border-brand focus:shadow-input-focus dark:shadow-none"
+            class="ah-input"
             :placeholder="t('hub.lg.filter.keywordPh')"
             @keydown.enter="applyQuery"
           />
@@ -310,9 +313,9 @@ function tokenMeta(e: NormalizedEventView): string {
       <!-- 分页表格：Agent | 会话 | 项目 | 开始时间 | 时长 | Tokens -->
       <div class="ah-card ah-lg-table">
         <div class="ah-lg-table-head">
-          <span class="ah-lg-col-agent">{{ t('hub.lg.col.agent') }}</span>
-          <span class="ah-lg-col-title">{{ t('hub.lg.col.session') }}</span>
-          <span class="ah-lg-col-project">{{ t('hub.lg.col.project') }}</span>
+          <span>{{ t('hub.lg.col.agent') }}</span>
+          <span>{{ t('hub.lg.col.session') }}</span>
+          <span>{{ t('hub.lg.col.project') }}</span>
           <span class="ah-lg-col-time">{{ t('hub.lg.col.started') }}</span>
           <span class="ah-lg-col-dur">{{ t('hub.lg.col.duration') }}</span>
           <span class="ah-lg-col-tokens">{{ t('hub.lg.col.tokens') }}</span>
@@ -334,15 +337,15 @@ function tokenMeta(e: NormalizedEventView): string {
             @click="openDetail(s.id)"
             @keydown.enter="openDetail(s.id)"
           >
-          <div class="ah-lg-col-agent ah-lg-cell-agent">
+          <div class="ah-lg-cell-agent">
             <AgentIcon :adapter="s.adapter" :size="16" />
             <span class="ah-lg-cell-agent-name">{{ s.adapter }}</span>
             <span v-if="s.active" class="ah-lg-badge-current">{{ t('hub.lg.row.current') }}</span>
           </div>
-          <div class="ah-lg-col-title ah-lg-cell-title" :title="s.title || s.cli_session_id">
+          <div class="ah-lg-cell-title" :title="s.title || s.cli_session_id">
             {{ s.title || s.cli_session_id }}
           </div>
-          <div class="ah-lg-col-project ah-lg-cell-sub" :title="s.project || ''">
+          <div class="ah-lg-cell-sub" :title="s.project || ''">
             {{ abbreviateProject(s.project, home) }}
           </div>
           <div class="ah-lg-col-time ah-mono">{{ formatSessionTime(s.started_at) }}</div>

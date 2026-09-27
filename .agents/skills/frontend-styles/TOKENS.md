@@ -61,6 +61,23 @@ Defined in `bedcode-desktop/src/style.css`. Light is `:root`, dark is `:root.dar
 
 Status 文字在浅色背景用 `*-600` 系（`text-red-600`），暗色背景用 `*-400` 系（`dark:text-red-400`）——这是允许的 `dark:` 场景（无语义别名）。
 
+> **Status 色不得当数据色用。** 图表分段、角色标识、进度条这类“编码数值而非状态”的图形不能借用
+> `--color-success/warning/danger`：琥珀色输出段会被读成“警告”，绿色工具标签会被读成“成功”。
+> 数据色另走 `--chart-*`（见下），且必须同时满足 ① 承载面上 ≥3:1（WCAG 1.4.11）
+> ② 两段 ΔE(CIE76) ≥25 ③ 与语义三色 ΔE ≥25 ④ 与色板 `--color-primary` ΔE ≥20。
+
+### Chart Colors（数据色，非语义色）
+
+| Token | Light | Dark | Usage |
+|-------|-------|------|-------|
+| `--chart-in` | `#6F5B3D` | `#83835A` | 图表第 1 段（占比大的系列） |
+| `--chart-out` | `#3B3B60` | `#7C7CA2` | 图表第 2 段（需要突出的系列） |
+
+> 固定值而非从 `--color-primary` 派生：warm 色板的 primary 是无彩色（近黑 `#1D1A14` / 近白 `#ECE8DC`），
+> 任何「由 primary 派生的两段」在默认色板下都只能靠亮度区分。定义方为插件
+> （`wasm-apps/agent-hub/src/styles.css` 的 `:root` / `:root.dark`），此处登记为跨插件可复用的口径。
+> 判定脚本：`.scratch/2026-09-27-agent-hub-audit-fixes/evidence/ah-matrix.mjs`。
+
 ### Radius
 
 | Token | Value | Semantic Alias |
