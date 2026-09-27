@@ -234,6 +234,7 @@ describe('S7 无写死第三方色板', () => {
       'rgba(217, 119, 87, 0.16)',
       'rgba(245, 158, 11, 0.16)',
       'rgba(0, 0, 0, 0.5)', // 弹窗遮罩（宿主 Modal 同款）
+      'rgb(0 0 0 / 0.04)', // 输入框常态阴影（= 宿主 tailwind.config 的 boxShadow.xs，--ah-ctl-shadow）
     ])
     const unexpected = hardcodedColors().filter((c) => !allowed.has(c))
     expect(unexpected, `出现未登记的写死色值：${unexpected.join(', ')}`).toEqual([])
@@ -268,17 +269,209 @@ describe('S9 死代码清理（票 14）', () => {
 
   it('.ah-input 只剩一处定义（票 12：两处冲突定义已合并）', () => {
     expect((STYLES.match(/^\.ah-input \{/gm) ?? []).length).toBe(1)
-    expect(STYLES).toMatch(/\.ah-input \{[^}]*height: var\(--input-height\)/)
+    expect(STYLES).toMatch(/\.ah-input \{[^}]*height: var\(--ah-ctl-height\)/)
   })
-
   it('.ah-sk-url 第三套输入规格已并入 .ah-input', () => {
     expect(STYLES).not.toMatch(/^\.ah-sk-url \{/m)
   })
 
-  it('日期选择器主题覆盖与 .ah-input 同一规格', () => {
+  it('日期选择器主题覆盖与 .ah-input 引用同一批 --ah-ctl-* 规格 token', () => {
     const index = readFileSync(resolve(AGENT_HUB, 'src/index.ts'), 'utf8')
-    expect(index).toMatch(/\.dp__input \{[^}]*height: var\(--input-height\)/)
+    expect(index).toMatch(/\.dp__input \{[^}]*height: var\(--ah-ctl-height\)/)
     expect(index).not.toMatch(/\.dp__input \{[^}]*height: 32px/)
+  })
+})
+
+/** 取 .ah-input / .dp__input 覆盖块的声明体（跨文件同规格对比用） */
+function declsOfBlock(css: string, selector: string): Record<string, string> {
+  const hit = parseRules(css).filter((r) => r.selector === selector)
+  expect(hit.length, `${selector} 没有规则块`).toBe(1)
+  return hit[0].decls
+}
+
+describe('S12 同排表单控件共用一份规格（查询条件条：下拉 / 关键词 / 日期）', () => {
+  // 回归成因：三类控件各写各的数值（关键词 12px 内边距 + base 字号、日期框
+  // vendor 字体栈 + 12px 内边距 + 0.7 透明度占位），同排一眼就不齐。
+  // 契约：三者逐属性引用同一批 --ah-ctl-* token，且 token 值对齐宿主真源。
+  const INDEX = readFileSync(resolve(AGENT_HUB, 'src/index.ts'), 'utf8')
+  const input = declsOf('.ah-input')
+  const dp = declsOfBlock(INDEX, '.dp__input')
+
+  it('高度 / 圆角 / 底色 / 前景色 / 字号 / 占位色 / 常态阴影：两侧同 token', () => {
+    const pairs: [string, string][] = [
+      ['height', 'height'],
+      ['min-height', 'min-height'],
+      ['border-radius', 'border-radius'],
+      ['background', 'background'],
+      ['color', 'color'],
+      ['font-size', 'font-size'],
+      ['box-shadow', 'box-shadow'],
+    ]
+    for (const [a, b] of pairs) {
+      expect(dp[b], `.dp__input 缺 ${b}`).toBeTruthy()
+      expect(dp[b], `${a}：.dp__input 与 .ah-input 不一致`).toBe(input[a])
+    }
+    // 边框：.ah-input 写简写，日期框覆盖的是 border-color
+    expect(dp['border-color']).toBe('var(--ah-ctl-border-color)')
+    expect(input.border).toBe('1px solid var(--ah-ctl-border-color)')
+    // 占位色走各自的伪元素块
+    const phInput = declsOf('.ah-input::placeholder')
+    const phDp = declsOfBlock(INDEX, '.dp__input::placeholder')
+    expect(phDp.color).toBe(phInput.color)
+    expect(phDp.opacity, 'vendor 占位符 opacity: .7 比同排控件淡 30%').toBe('1')
+  })
+
+  /**
+   * 高度下限：height 必须与 min-height 成对
+   *
+   * 实机 bug（2026-09-28，截图实测）：`.ah-input` 带 `flex: 1`（横向 flex 行里
+   * 占满宽度），而查询条件条的字段容器是**列向** flex——flex-basis 作用于高度、
+   * 容器高度又是 auto，高度被压成内容高：关键词框 20.8px，同排 Select / 日期框
+   * 36px。声明层面看不出差别，只有渲染后才发现，故在此锁死 min-height。
+   */
+  it('两处控件都声明 min-height（列向 flex 里 flex:1 会把 height 压成内容高）', () => {
+    for (const [name, decls] of [['ah-input', input], ['dp__input', dp]] as const) {
+      expect(decls['min-height'], `${name} 缺 min-height（列向 flex 里高度会被压扁）`).toBe(
+        'var(--ah-ctl-height)',
+      )
+    }
+  })
+
+  /**
+   * token 用法合法性：长写属性不得引用简写值
+   *
+   * 实机 bug（同日）：`--ah-ctl-border: 1px solid var(--border-input)` 被同时用作
+   * `border`（合法）与 `border-color`（**整条声明失效**）——日期框边框因此回退到
+   * vendor 默认色（实测 rgb(236,232,220) = --border 浅色），与同排控件不是一个颜色。
+   */
+  it('长写属性不引用简写 token（border-color 拿到 1px solid 会整条失效）', () => {
+    const tokenOf = (css: string, name: string) =>
+      new RegExp(`${name}:\\s*([^;]+);`).exec(css)?.[1]?.trim() ?? ''
+    const css = `${STYLES}\n${INDEX}`
+    const tokens = [...STYLES.matchAll(/(--ah-ctl-[\w-]+):\s*([^;]+);/g)].map(
+      (m) => [m[1], m[2].trim()] as const,
+    )
+    expect(tokens.length, '未解析到 --ah-ctl-* 族').toBeGreaterThan(6)
+    // 颜色类长写：值里不得出现宽度/线型关键字（无论直接写还是经 token）
+    const colorLonghands = ['border-color', 'background-color', 'color', 'outline-color']
+    for (const rule of parseRules(css)) {
+      for (const prop of colorLonghands) {
+        const v = rule.decls[prop]
+        if (!v) continue
+        expect(
+          v,
+          `${rule.selector} { ${prop}: ${v} } —— 颜色长写里出现宽度/线型关键字，整条声明会失效并回退默认色`,
+        ).not.toMatch(/\b(solid|dashed|dotted|double|px|em|rem)\b/)
+        for (const [name] of tokens) {
+          if (v === `var(${name})`) {
+            const value = tokenOf(STYLES, name)
+            expect(value, `${rule.selector} { ${prop}: var(${name}) } —— 引用了简写 token`).not.toMatch(
+              /\b(solid|dashed|dotted|double|px|em|rem)\b/,
+            )
+          }
+        }
+      }
+    }
+    // 边框色 token 必须是纯颜色（供 .ah-input 的 border 简写与 .dp__input 的 border-color 共用）
+    expect(tokenOf(STYLES, '--ah-ctl-border-color')).toBe('var(--border-input)')
+  })
+
+  /**
+   * vendor 字体栈的每个消费方都要被覆盖
+   *
+   * 实机 bug（同日）：vendor 把自带字体栈（Linux 落到 -apple-system/sans-serif，
+   * 与宿主 'Segoe UI'/system-ui 栈不同字形）设在 `.dp__main` 上，`.dp__input` 的
+   * `font-family: inherit` 只是继承到这个栈。逐个消费方核对，vendor 升版新增
+   * 消费方时本例会红。
+   */
+  it('vendor 用 --dp-font-family 的每个选择器都被 font-family: inherit 覆盖', () => {
+    const vendorPath = resolve(
+      AGENT_HUB,
+      'node_modules/@vuepic/vue-datepicker/dist/main.css',
+    )
+    if (!existsSync(vendorPath)) {
+      // vendor 文件缺失（依赖未安装）时本条无意义，但不得静默通过
+      expect(existsSync(resolve(AGENT_HUB, 'package.json'))).toBe(true)
+      return
+    }
+    const vendor = readFileSync(vendorPath, 'utf8')
+    const consumers = new Set<string>()
+    for (const r of parseRules(vendor)) {
+      if ((r.decls['font-family'] ?? '').includes('--dp-font-family')) {
+        consumers.add(r.selector.split(',')[0].trim())
+      }
+    }
+    expect(consumers.size, '未解析到 vendor 的字体消费方').toBeGreaterThan(1)
+    for (const sel of consumers) {
+      const covered = parseRules(INDEX).some(
+        (r) => r.selector.split(',').map((s) => s.trim()).includes(sel) &&
+          r.decls['font-family'] === 'inherit',
+      )
+      expect(covered, `vendor 的 ${sel} 用了自带字体栈，覆盖里必须显式 font-family: inherit`).toBe(true)
+    }
+  })
+
+  it('日期框行高跟宿主继承值（vendor 按 --dp-font-size=12px 算 18px，与实际字号脱钩）', () => {
+    expect(dp['line-height']).toBe('1.5')
+  })
+
+  it('日期框补上 vendor 字体栈与左内边距覆盖（否则与关键词框不齐）', () => {
+    expect(dp['font-family'], 'vendor 自带字体栈（Linux 落到 sans-serif）').toBe('inherit')
+    expect(dp.padding, '左内边距须与 px-4 一致，右侧留清除按钮位').toContain('var(--ah-ctl-padding-x)')
+  })
+
+  it('聚焦态两侧同 token（border-brand + shadow-input-focus）', () => {
+    const fInput = declsOf('.ah-input:focus')
+    const fDp = declsOfBlock(INDEX, '.dp__input:focus')
+    expect(fDp['border-color']).toBe(fInput['border-color'])
+    expect(fDp['box-shadow']).toBe(fInput['box-shadow'])
+  })
+
+  it('token 值与宿主真源一致（tailwind.config 的 fontSize.sm / boxShadow.xs）', () => {
+    const tw = readFileSync(resolve(AGENT_HUB, '../../tailwind.config.js'), 'utf8')
+    // 两个段都含 xs/sm 键，必须按段切开再取，否则会串到 fontSize 的同名键
+    const section = (name: string) =>
+      new RegExp(`${name}:\\s*\\{([^}]*)\\}`).exec(tw)?.[1] ?? ''
+    const sm = /sm:\s*'([^']+)'/.exec(section('fontSize'))?.[1] ?? ''
+    const xs = /xs:\s*'([^']+)'/.exec(section('boxShadow'))?.[1] ?? ''
+    expect(sm, 'tailwind.config fontSize.sm 读取失败').not.toBe('')
+    expect(xs, 'tailwind.config boxShadow.xs 读取失败').not.toBe('')
+    // 字号：--font-size-lg 必须与 tailwind text-sm 同表达式（否则两控件字号不等）
+    const hostCss = readFileSync(resolve(AGENT_HUB, '../../src/style.css'), 'utf8')
+    const lg = /--font-size-lg:\s*([^;]+);/.exec(hostCss)?.[1] ?? ''
+    expect(lg, '宿主 --font-size-lg 定义变了').toBe(sm)
+    const ctlFont = /--ah-ctl-font-size:\s*([^;]+);/.exec(STYLES)?.[1] ?? ''
+    expect(ctlFont.trim()).toBe('var(--font-size-lg)')
+    // 常态阴影：= tailwind shadow-xs 同值
+    const ctlShadow = /--ah-ctl-shadow:\s*([^;]+);/.exec(STYLES)?.[1] ?? ''
+    expect(ctlShadow.trim()).toBe(xs)
+    expect(input['box-shadow']).toBe('var(--ah-ctl-shadow)')
+  })
+
+  it('宿主 Input.vue / SDK Select 的类组合未漂移（漂移即需同步本规格）', () => {
+    for (const [rel, marker] of [
+      ['../../src/components/Input.vue', 'shadow-xs dark:shadow-none'],
+      ['../../src/components/Input.vue', 'placeholder:text-[var(--text-tertiary)]'],
+      ['../../src/components/Input.vue', 'focus:shadow-input-focus'],
+      ['../../packages/plugin-sdk-desktop/src/ui/Select.vue', 'rounded-input'],
+      ['../../packages/plugin-sdk-desktop/src/ui/Select.vue', "h-[var(--input-height)] px-4 text-sm"],
+    ] as const) {
+      expect(readFileSync(resolve(AGENT_HUB, rel), 'utf8'), `${rel} 缺 ${marker}`).toContain(marker)
+    }
+  })
+})
+
+describe('S13 分段栏宽度与选中态无关', () => {
+  // 回归成因（实机）：.ah-tab.active 改 font-weight: 600，粗体字更宽，而
+  // .ah-tabs 是 inline-flex 收缩容器 → 整条分段栏随选中项宽度伸缩。
+  // 契约：字重在 .ah-tab 上恒定，选中态规则不得再声明 font-weight。
+  it('.ah-tab.active 不改字重（否则分段栏宽度随选中项变化）', () => {
+    const active = declsOf('.ah-tab.active')
+    expect(
+      active['font-weight'],
+      '.ah-tab.active 不得改 font-weight（粗体更宽 → inline-flex 整条跟着变宽）',
+    ).toBeUndefined()
+    expect(declsOf('.ah-tab')['font-weight'], '字重须在 .ah-tab 上恒定').toBe('600')
   })
 })
 

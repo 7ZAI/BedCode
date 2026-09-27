@@ -166,6 +166,10 @@
   color: var(--ah-text-data);
   font-size: var(--font-size-base);
   font-family: inherit;
+  /* **字重恒定**（2026-09-28）：选中态若改成 font-weight: 600，粗体字更宽 →
+     .ah-tabs 是 inline-flex 收缩容器，整条分段栏会随选中项宽度变化（实测切到
+     「技能」时整条变宽）。选中与未选中同字重，选中只由底色 + 对比色表达。 */
+  font-weight: 600;
   /* 换行兜底时保持单项完整，宁可整块换行也不把中文标签挤成两行 */
   white-space: nowrap;
   cursor: pointer;
@@ -178,10 +182,10 @@
   background: var(--bg-hover);
 }
 
+/* 选中态只改底色与前景色，**不改字重**（见 .ah-tab 的字重恒定注释） */
 .ah-tab.active {
   background: var(--color-primary);
   color: var(--color-primary-contrast);
-  font-weight: 600;
 }
 
 .ah-tab.active:hover {
@@ -671,36 +675,83 @@
   margin-top: 8px;
 }
 
+/* ==================== 表单控件统一规格（2026-09-28） ====================
+   真源：宿主 `bedcode-desktop/src/components/Input.vue` 与
+   `packages/plugin-sdk-desktop/src/ui/Select.vue`（size=md）的 Tailwind 类组合
+   ——`h-[var(--input-height)] px-4 rounded-input border-[var(--border-input)]
+   bg-[var(--bg-input)] text-[var(--text-primary)] text-sm
+   placeholder:text-[var(--text-tertiary)] shadow-xs dark:shadow-none
+   focus:border-brand focus:shadow-input-focus`。
+
+   本组 token 是那串类的**逐属性镜像**，供两类控件共用：`.ah-input`（原生 input）
+   与 `src/index.ts` 里 @vuepic 的 `.dp__input` 覆盖（日期框）。**两侧必须引用
+   同一批 token**：各写各的数值必然漂移成「同排控件看起来不是一套」。
+
+   两个易错换算（2026-09-28 实测纠正）：
+   - `text-sm` ≡ `--font-size-lg`：宿主 `tailwind.config.js` 把 fontSize 覆写成
+     `calc(14px * var(--ui-scale))`，与 `--font-size-lg` 表达式**完全相同**
+     （不是 Tailwind 默认的 0.875rem）。
+   - `shadow-xs` ≡ `0 1px 2px 0 rgb(0 0 0 / 0.04)`：值在 `tailwind.config.js`
+     的 `boxShadow.xs`，没有对应的 CSS 变量，故在此定为插件派生 token。 */
+:root {
+  --ah-ctl-height: var(--input-height);
+  --ah-ctl-padding-x: 16px; /* px-4 */
+  --ah-ctl-radius: var(--radius-input); /* rounded-input */
+  /* 边框拆成「长写 + 宽度」两枚：`border-color` 是长写属性，把 `1px solid …`
+     整条塞给它会让整条声明失效并回退到 vendor 默认色（实测日期框边框变成
+     --border 的浅色，与同排控件不是一个颜色）。 shorthands 不能当长写用。 */
+  --ah-ctl-border-color: var(--border-input);
+  --ah-ctl-bg: var(--bg-input);
+  --ah-ctl-fg: var(--text-primary);
+  --ah-ctl-font-size: var(--font-size-lg); /* = text-sm */
+  --ah-ctl-placeholder: var(--text-tertiary);
+  --ah-ctl-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.04); /* = shadow-xs */
+  --ah-ctl-focus-border: var(--color-primary); /* focus:border-brand */
+  --ah-ctl-focus-shadow: var(--shadow-input-focus); /* focus:shadow-input-focus */
+}
+
 /* 插件内唯一输入框规格（票 12 定死：走宿主表单 token，不再自定一套）
-   --input-height(36) / --radius-input / --border-input / --bg-input
-   —— 与宿主表单、SDK Select 同一规格；历史上有两处 .ah-input 定义
-   （32px/transparent/border 与 30px/bg-page/border-strong 互相覆盖），
-   另有 .ah-sk-url 第三套（30px/--radius-button/bg-page），本票全部合并为 .ah-input。 */
+   历史上有两处 .ah-input 定义（32px/transparent/border 与
+   30px/bg-page/border-strong 互相覆盖），另有 .ah-sk-url 第三套
+   （30px/--radius-button/bg-page），票 12 已全部合并为 .ah-input。 */
 .ah-input {
   flex: 1;
   min-width: 0;
-  height: var(--input-height);
-  padding: 0 12px;
   box-sizing: border-box;
-  border: 1px solid var(--border-input);
-  border-radius: var(--radius-input);
-  background: var(--bg-input);
-  color: var(--text-primary);
+  /* height 必须与 min-height 成对（2026-09-28 实机坑）：`.ah-input` 要在
+     横向 flex 行里占满宽度，故带 `flex: 1`；而**列向** flex 容器里 flex 的
+     flex-basis 作用于高度，容器高度又是 auto —— 高度就被压成内容高
+     （实测查询条件条的关键词框 20.8px，同排 Select / 日期框都是 36px）。
+     min-height 把下限钉回 --input-height，flex: 1 在列向容器里最多只多长高。 */
+  height: var(--ah-ctl-height);
+  min-height: var(--ah-ctl-height);
+  padding: 0 var(--ah-ctl-padding-x);
+  border: 1px solid var(--ah-ctl-border-color);
+  border-radius: var(--ah-ctl-radius);
+  background: var(--ah-ctl-bg);
+  color: var(--ah-ctl-fg);
   font-family: inherit;
-  font-size: var(--font-size-base);
+  font-size: var(--ah-ctl-font-size);
+  box-shadow: var(--ah-ctl-shadow);
   transition:
     border-color 0.2s,
-    background-color 0.2s;
+    background-color 0.2s,
+    box-shadow 0.2s;
+}
+
+/* 深色主题去掉常态阴影（宿主 shadow-xs dark:shadow-none） */
+:root.dark .ah-input {
+  box-shadow: none;
 }
 
 .ah-input:focus {
   outline: none;
-  border-color: var(--color-primary);
-  box-shadow: var(--shadow-input-focus);
+  border-color: var(--ah-ctl-focus-border);
+  box-shadow: var(--ah-ctl-focus-shadow);
 }
 
 .ah-input::placeholder {
-  color: var(--ah-text-data);
+  color: var(--ah-ctl-placeholder);
 }
 
 /* 临时镜像开关行 */
@@ -2046,12 +2097,25 @@
   padding: 10px 12px;
 }
 
+/* 单个来源：头部行 + 目录清单（每来源多目录） */
+.ah-lg-source {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 4px 2px;
+}
+
 .ah-lg-source-row {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
-  padding: 4px 2px;
+}
+
+/* 头部行右侧弹性空白：把操作按钮推到行尾 */
+.ah-lg-source-flex {
+  flex: 1;
+  min-width: 0;
 }
 
 .ah-lg-source-name {
@@ -2086,6 +2150,36 @@
   font-size: var(--font-size-tag);
 }
 
+.ah-lg-source-scan {
+  flex: none;
+  color: var(--ah-text-data);
+}
+
+/* 目录清单：每行一个目录；缩进到来源名之下 */
+.ah-lg-source-paths {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 2px 0 2px 28px;
+}
+
+.ah-lg-source-path-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* 目录行首的小圆点（层级标记，无语义） */
+.ah-lg-source-path-dot {
+  flex: none;
+  width: 4px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--bg-hover);
+}
+
 .ah-lg-source-path {
   flex: 1;
   min-width: 0;
@@ -2095,15 +2189,28 @@
   color: var(--ah-text-data);
 }
 
-.ah-lg-source-scan {
+/* 不可移除的内置默认路径标记 */
+.ah-lg-source-lock {
   flex: none;
   color: var(--ah-text-data);
+  font-size: var(--font-size-tag);
+}
+
+.ah-lg-source-path-remove {
+  flex: none;
+  min-width: 24px;
+  padding: 0 6px;
 }
 
 .ah-lg-source-remove {
   flex: none;
   min-width: 24px;
   padding: 0 6px;
+}
+
+/* 给来源追加目录的按钮（与「添加日志来源」区分：只选目录、名已定） */
+.ah-lg-source-adddir {
+  flex: none;
 }
 
 .ah-lg-sources-actions {
@@ -2114,7 +2221,8 @@
   flex-wrap: wrap;
 }
 
-.ah-lg-sources-add {
+.ah-lg-sources-add,
+.ah-lg-source-path-add {
   display: flex;
   align-items: center;
   gap: 8px;

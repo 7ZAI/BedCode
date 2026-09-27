@@ -219,6 +219,8 @@ impl WasmPlugin for AgentHubPlugin {
             "agent-hub.pick-source-dir" => usage::pick_source_dir(&h),
             "agent-hub.add-usage-source" => usage::add_source(&h, &args),
             "agent-hub.remove-usage-source" => usage::remove_source(&h, &args),
+            "agent-hub.add-usage-source-path" => usage::add_source_path(&h, &args),
+            "agent-hub.remove-usage-source-path" => usage::remove_source_path(&h, &args),
             "agent-hub.list-usage-sessions" => usage::list_sessions(&h, &args),
             "agent-hub.read-usage-session" => usage::read_session(&h, &args),
             "agent-hub.clear-usage-data" => usage::clear_data(&h),

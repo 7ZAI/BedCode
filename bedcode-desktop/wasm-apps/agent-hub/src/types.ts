@@ -359,10 +359,20 @@ export interface UsageDomainState {
 }
 
 /** 日志来源条目（wire 与 list-usage-sources 返回行同构） */
-export interface UsageSource {
-  name: string
+export interface UsageSourcePath {
   /** 绝对路径（展示时前端折叠 ~ 前缀）；sqlite 源是库文件路径 */
   path: string
+  /** 是否可移除：内置默认路径不可移除（removable=false），用户追加的目录可移除 */
+  removable: boolean
+}
+
+export interface UsageSource {
+  name: string
+  /**
+   * 该来源的全部目录（多目录：内置来源也可追加用户目录；sqlite 源是单个库文件）。
+   * wire 形态为 [{ path, removable }]，guest 在 list-usage-sources 时装饰。
+   */
+  paths: UsageSourcePath[]
   builtin: boolean
   /**
    * 数据源形态（票 07）：jsonl = 目录下的会话文件（可添加/移除自定义目录）；

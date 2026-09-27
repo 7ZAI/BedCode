@@ -36,6 +36,24 @@ const state = computed(() => usage.state.value)
 const home = computed(() => state.value?.home ?? '')
 const authRequired = computed(() => state.value?.status === 'auth-required')
 const syncing = computed(() => state.value?.status === 'syncing')
+/**
+ * 扫描失败提示（ADR 0030：guest 只落机器可读 code，原文不外泄）
+ *
+ * 失败必须**看得见**——2026-09-28 实机：扫描在途卡死（回调丢失）时按钮停在
+ * 「扫描中…」，用户既看不到失败也点不动。已登记 code 逐条映射，未登记的
+ * （含旧版本遗留的原文串）统一走泛化文案，不拿原文渲染。
+ */
+const SCAN_ERROR_TEXT: Record<string, string> = {
+  'scan-timeout': 'hub.lg.sources.scanTimeout',
+  'scan-output-unreadable': 'hub.lg.sources.scanUnreadable',
+  'scan-interrupted': 'hub.lg.sources.scanInterrupted',
+  'scan-failed': 'hub.lg.sources.scanFailed',
+}
+const scanError = computed(() => {
+  const code = state.value?.error
+  if (!code || state.value?.status !== 'error') return ''
+  return t(SCAN_ERROR_TEXT[code] ?? 'hub.lg.sources.scanFailed')
+})
 const sessions = computed(() => usage.logSessions.value)
 const sources = computed(() => usage.sources.value)
 const sessionsTotal = computed(() => usage.logTotal.value)
@@ -87,6 +105,19 @@ function sourceKind(s: UsageSource): 'jsonl' | 'sqlite' {
 }
 
 /**
+ * 来源的全部目录（wire `paths: [{path, removable}]`）；旧 guest 单 `path` 字段
+ * 兜底（内置条目按不可移除处理，与 guest 迁移口径一致）。
+ */
+function sourcePaths(s: UsageSource): { path: string; removable: boolean }[] {
+  if (Array.isArray(s.paths) && s.paths.length > 0) return s.paths
+  const legacy = (s as unknown as { path?: string }).path
+  if (typeof legacy === 'string' && legacy) {
+    return [{ path: legacy, removable: !s.builtin }]
+  }
+  return []
+}
+
+/**
  * 来源扫描计数摘要（未扫描过显示提示）
  *
  * **口径按 kind 分**（票 07）：JSONL 源的解析单位是文件（`parsed + skipped`
@@ -130,6 +161,59 @@ async function onRemoveSource(name: string) {
   const r = await usage.removeSource(name)
   removingSource.value = ''
   if (!r.ok) sourceError.value = r.error ?? t('hub.lg.sources.removeFailed')
+}
+
+// ==================== 每来源多目录：给来源追加 / 从来源移除目录 ====================
+/** 正在添加目录的来源名（null = 无；按钮同时充当开关） */
+const addingPathSource = ref<string | null>(null)
+/** 该来源新增目录的选中路径（fs:pick 回填） */
+const newPathForSource = ref('')
+/** 正在移除的目录（name + path 复合键，防重入） */
+const removingPath = ref('')
+
+/** 给来源选目录（fs:pick，选择器与来源无关）；取消不打扰，失败显示友好错误 */
+async function onPickDirForSource() {
+  if (sourceBusy.value) return
+  sourceBusy.value = true
+  sourceError.value = ''
+  const r = await usage.pickSourceDir()
+  sourceBusy.value = false
+  if (!r.ok) {
+    sourceError.value = t('hub.lg.sources.pickFailed')
+    return
+  }
+  if (!r.picked) return
+  newPathForSource.value = r.path
+}
+
+/** 确认：给来源追加目录（guest 校验路径全局唯一 / 非 sqlite） */
+async function onAddSourcePath(name: string) {
+  if (!newPathForSource.value.trim()) return
+  sourceBusy.value = true
+  sourceError.value = ''
+  const r = await usage.addSourcePath(name, newPathForSource.value.trim())
+  sourceBusy.value = false
+  if (r.ok) {
+    addingPathSource.value = null
+    newPathForSource.value = ''
+  } else {
+    sourceError.value = r.error ?? t('hub.lg.sources.addPathFailed')
+  }
+}
+
+/** 确认：从来源移除目录（内置默认路径 / 最后一条路径由 guest 拒绝） */
+async function onRemoveSourcePath(name: string, path: string) {
+  removingPath.value = `${name}\u0000${path}`
+  sourceError.value = ''
+  const r = await usage.removeSourcePath(name, path)
+  removingPath.value = ''
+  if (!r.ok) sourceError.value = r.error ?? t('hub.lg.sources.removePathFailed')
+}
+
+function cancelAddPath() {
+  addingPathSource.value = null
+  newPathForSource.value = ''
+  sourceError.value = ''
 }
 
 // ==================== 查询条件（Agent / 关键词 / 时间范围） ====================
@@ -225,26 +309,99 @@ function tokenMeta(e: NormalizedEventView): string {
           <span class="ah-lg-sources-count">{{ sources.length }}</span>
         </button>
         <div v-if="sourcesOpen" class="ah-card ah-lg-sources-body">
-          <div v-for="s in sources" :key="s.name" class="ah-lg-source-row">
-            <AgentIcon :adapter="s.name" :size="16" />
-            <span class="ah-lg-source-name">{{ s.name }}</span>
-            <span class="ah-lg-source-type" :class="s.builtin ? 'builtin' : 'custom'">
-              {{ s.builtin ? t('hub.lg.sources.builtin') : t('hub.lg.sources.custom') }}
-            </span>
-            <!-- 形态标记（票 07）：SQLite 库是只读单文件、不支持自定义增删 -->
-            <span class="ah-lg-source-kind">{{ t(`hub.lg.sources.kind.${sourceKind(s)}`) }}</span>
-            <span class="ah-lg-source-path ah-mono" :title="s.path">{{ abbreviateProject(s.path, home) }}</span>
-            <span class="ah-lg-source-scan ah-mono">{{ scanCount(s) }}</span>
-            <button
-              v-if="!s.builtin"
-              type="button"
-              class="ah-btn ah-btn-ghost ah-btn-sm ah-lg-source-remove"
-              :disabled="removingSource === s.name"
-              :title="t('hub.lg.sources.remove')"
-              @click="onRemoveSource(s.name)"
-            >
-              ✕
-            </button>
+          <div v-for="s in sources" :key="s.name" class="ah-lg-source">
+            <div class="ah-lg-source-row">
+              <AgentIcon :adapter="s.name" :size="16" />
+              <span class="ah-lg-source-name">{{ s.name }}</span>
+              <span class="ah-lg-source-type" :class="s.builtin ? 'builtin' : 'custom'">
+                {{ s.builtin ? t('hub.lg.sources.builtin') : t('hub.lg.sources.custom') }}
+              </span>
+              <!-- 形态标记（票 07）：SQLite 库是只读单文件、不支持自定义增删 -->
+              <span class="ah-lg-source-kind">{{ t(`hub.lg.sources.kind.${sourceKind(s)}`) }}</span>
+              <span class="ah-lg-source-scan ah-mono">{{ scanCount(s) }}</span>
+              <span class="ah-lg-source-flex"></span>
+              <!-- 整来源移除：仅自定义来源（连带其全部目录） -->
+              <button
+                v-if="!s.builtin"
+                type="button"
+                class="ah-btn ah-btn-ghost ah-btn-sm ah-lg-source-remove"
+                :disabled="removingSource === s.name"
+                :title="t('hub.lg.sources.removeSource')"
+                @click="onRemoveSource(s.name)"
+              >
+                ✕
+              </button>
+              <!-- 给该来源追加目录：仅目录型来源（sqlite 单文件不接受增删） -->
+              <button
+                v-if="sourceKind(s) === 'jsonl'"
+                type="button"
+                class="ah-btn ah-btn-ghost ah-btn-sm ah-lg-source-adddir"
+                :aria-expanded="addingPathSource === s.name"
+                @click="addingPathSource = addingPathSource === s.name ? null : s.name"
+              >
+                {{ addingPathSource === s.name ? t('hub.lg.sources.cancel') : t('hub.lg.sources.addDir') }}
+              </button>
+            </div>
+            <!-- 目录清单（每来源多目录；内置默认路径只读，用户追加目录可移除） -->
+            <div class="ah-lg-source-paths">
+              <div v-for="p in sourcePaths(s)" :key="p.path" class="ah-lg-source-path-row">
+                <span class="ah-lg-source-path-dot" aria-hidden="true"></span>
+                <span class="ah-lg-source-path ah-mono" :title="p.path">
+                  {{ abbreviateProject(p.path, home) }}
+                </span>
+                <span v-if="!p.removable" class="ah-lg-source-lock ah-mono">
+                  {{ t('hub.lg.sources.builtinPath') }}
+                </span>
+                <button
+                  v-if="p.removable"
+                  type="button"
+                  class="ah-btn ah-btn-ghost ah-btn-sm ah-lg-source-path-remove"
+                  :disabled="removingPath === `${s.name}\u0000${p.path}`"
+                  :title="t('hub.lg.sources.removePath')"
+                  @click="onRemoveSourcePath(s.name, p.path)"
+                >
+                  ✕
+                </button>
+              </div>
+              <!-- 该来源的追加目录表单（fs:pick 选择器 + 回显 + 确认） -->
+              <div v-if="addingPathSource === s.name" class="ah-lg-source-path-add">
+                <span class="ah-lg-sources-pick">
+                  <button
+                    type="button"
+                    class="ah-btn ah-btn-ghost ah-btn-sm"
+                    :disabled="sourceBusy"
+                    @click="onPickDirForSource()"
+                  >
+                    {{ sourceBusy ? t('hub.lg.sources.picking') : t('hub.lg.sources.pick') }}
+                  </button>
+                  <span
+                    class="ah-lg-sources-pickpath ah-mono"
+                    :title="newPathForSource"
+                    :class="{ empty: !newPathForSource }"
+                  >
+                    {{ newPathForSource || t('hub.lg.sources.addPath') }}
+                  </span>
+                </span>
+                <span class="ah-speed-actions-btns">
+                  <button
+                    type="button"
+                    class="ah-btn ah-btn-primary ah-btn-sm"
+                    :disabled="sourceBusy || !newPathForSource.trim()"
+                    @click="onAddSourcePath(s.name)"
+                  >
+                    {{ t('hub.lg.sources.confirm') }}
+                  </button>
+                  <button
+                    type="button"
+                    class="ah-btn ah-btn-ghost ah-btn-sm"
+                    :disabled="sourceBusy"
+                    @click="cancelAddPath"
+                  >
+                    {{ t('hub.lg.sources.cancel') }}
+                  </button>
+                </span>
+              </div>
+            </div>
           </div>
           <div class="ah-lg-sources-actions">
             <button
@@ -258,6 +415,7 @@ function tokenMeta(e: NormalizedEventView): string {
             <button type="button" class="ah-btn ah-btn-ghost ah-btn-sm" @click="addingSource = true">
               {{ t('hub.lg.sources.add') }}
             </button>
+            <span v-if="scanError" class="ah-cli-error" data-testid="scan-error">{{ scanError }}</span>
             <span v-if="sourceError" class="ah-cli-error">{{ sourceError }}</span>
           </div>
           <div v-if="addingSource" class="ah-lg-sources-add">
@@ -318,6 +476,9 @@ function tokenMeta(e: NormalizedEventView): string {
         </label>
         <label class="ah-lg-filter-field ah-lg-filter-date">
           <span class="ah-lg-filter-label">{{ t('hub.lg.filter.from') }}</span>
+          <!-- hide-input-icon：隐藏 vendor 的左侧日历图标（它会把框内文字推到 35px 处，
+               与同排关键词输入框的 16px 明显不齐；「开始时间」标签 + 占位文案
+               已说明这是日期框，此处图标是冗余暗示） -->
           <Datepicker
             v-model="fromInput"
             :format="dateFormat"
@@ -325,6 +486,7 @@ function tokenMeta(e: NormalizedEventView): string {
             :dark="isDark"
             :clearable="true"
             :enable-time-picker="true"
+            :hide-input-icon="true"
             :select-text="dpSelectText"
             :cancel-text="dpCancelText"
             :now-button-label="dpNowLabel"
@@ -342,6 +504,7 @@ function tokenMeta(e: NormalizedEventView): string {
             :dark="isDark"
             :clearable="true"
             :enable-time-picker="true"
+            :hide-input-icon="true"
             :select-text="dpSelectText"
             :cancel-text="dpCancelText"
             :now-button-label="dpNowLabel"

@@ -35,10 +35,13 @@ pub(crate) use clear::clear_data;
 pub(crate) use scan::{handle_scan_done, scan};
 pub(crate) use schema::ensure_schema;
 pub(crate) use sessions::{list_sessions, read_session};
-pub(crate) use sources::{add_source, list_sources, pick_source_dir, remove_source};
+pub(crate) use sources::{
+    add_source, add_source_path, list_sources, pick_source_dir, remove_source, remove_source_path,
+};
 pub(crate) use stats::get_stats;
 
 use super::{AUTH_KEY, HOME};
+use crate::install::now_ms;
 use bedcode_plugin_api::host::{HostEvents, HostLog, HostStorage};
 use bedcode_plugin_api::wasm_host::WasmHost;
 use serde_json::{json, Value};
@@ -61,6 +64,16 @@ pub(super) const SESSION_ROOTS: [(&str, &str); 3] = [
 pub(super) const OPENCODE_ADAPTER: &str = "opencode";
 /// 枚举超时：纯文件系统遍历（与 skills 扫描同量级）
 pub(super) const SCAN_TIMEOUT_MS: u64 = 30_000;
+/// 扫描在途无进展的判定窗口（2026-09-28 实机 bug 的兜底）
+///
+/// 实机症状：扫描发起后回调丢失（宿主未投递 `on_process_done` / guest 中途异常），
+/// 状态永远停在 `syncing`——按钮卡「扫描中…」且禁用，`scan` 的重入闸门又
+/// 拒绝再次发起，**重启应用也解不开**（status 是持久化的）。故按「距上次
+/// 进展心跳多久」判定失活：超窗即落 `error`，状态复原、按钮可重试。
+///
+/// 窗口取枚举超时的 4 倍：回灌阶段每片（≤32 文件）刷新一次心跳，正常扫描
+/// 不会触碰这条线；而一次卡死的扫描必须在窗口内被治愈，否则等于没修。
+pub(super) const SCAN_STALE_MS: u64 = SCAN_TIMEOUT_MS * 4;
 /// 按项目 / 按模型汇总表行数上限（看板展示面）
 pub(super) const BREAKDOWN_LIMIT: usize = 20;
 /// 原始 JSONL 行回显上限（与事件流同量级防御）
@@ -74,17 +87,19 @@ pub(crate) const PAGE_SIZE: i64 = 50;
 ///
 /// opencode 是 SQLite 源而非 JSONL 目录，条目带 `kind: "sqlite"` 与展开后的
 /// 库文件路径（前端据此提示「需要 sqlite3」而不是把它当可添加/移除的目录）。
+/// 每个条目带 `paths` 数组（首个元素 = 内置默认路径，只读；用户可在其上追加
+/// 更多目录）。
 fn builtin_sources() -> Vec<Value> {
     let home = HOME.get().cloned().unwrap_or_default();
     let mut out: Vec<Value> = SESSION_ROOTS
         .iter()
         .map(|(name, seg)| {
-            json!({ "name": name, "path": format!("{home}/{seg}"), "kind": "jsonl", "builtin": true })
+            json!({ "name": name, "paths": [format!("{home}/{seg}")], "kind": "jsonl", "builtin": true })
         })
         .collect();
     out.push(json!({
         "name": OPENCODE_ADAPTER,
-        "path": crate::usage_sqlite::db_path(&home),
+        "paths": [crate::usage_sqlite::db_path(&home)],
         "kind": "sqlite",
         "builtin": true,
     }));
@@ -103,6 +118,8 @@ pub(super) fn default_state() -> Value {
         "status": "idle",
         "error": null,
         "syncedAt": null,
+        // 扫描在途心跳（epoch ms）：发起时与回灌每片刷新，stale 守卫据此判失活
+        "scanStartedAt": null,
         "authGranted": false,
         "adapters": Value::Object(adapters),
         // 日志来源清单（内置只读 + 自定义增删）；旧状态无此键由 read_state 补齐
@@ -137,6 +154,10 @@ pub(super) fn read_state(h: &WasmHost) -> Value {
             }
         }
         state["sources"] = json!(merged);
+    }
+    // 多目录（票 XX）：旧状态单 path → paths 数组幂等迁移（内置/自定义统一）
+    if let Some(arr) = state["sources"].as_array().cloned() {
+        state["sources"] = sources::normalize_sources_paths(arr);
     }
     // 票 07 旧状态的 adapters 只有 claude/pi：补齐新槽位（保留已有计数）
     if let Some(adapters) = state["adapters"].as_object_mut() {
@@ -183,7 +204,43 @@ pub(super) fn auth_granted(h: &WasmHost) -> bool {
 pub(crate) fn get_state(h: &WasmHost) -> anyhow::Result<Value> {
     let mut state = read_state(h);
     state["authGranted"] = json!(auth_granted(h));
+    // 失活扫描在**读侧**治愈：这是「按一下重新打开面板就能重试」的那条路
+    heal_stale_scan(h, &mut state);
     Ok(json!({ "state": state }))
+}
+
+// ==================== 扫描失活守卫（2026-09-28） ====================
+
+/// 扫描是否已失活（纯函数，可测）：`status == syncing` 且距上次心跳超窗
+///
+/// **无心跳时间戳的 syncing 一律判失活**：新代码每次进入 syncing 都会写
+/// `scanStartedAt`，所以「有 syncing 却无心跳」只可能来自旧版本落库或
+/// 写盘前崩溃——那正是实机卡死的形态，放它继续卡着没有意义。
+pub(super) fn scan_is_stale(state: &Value, now_ms: u64) -> bool {
+    if state["status"] != json!("syncing") {
+        return false;
+    }
+    match state.get("scanStartedAt").and_then(|v| v.as_u64()) {
+        None => true,
+        Some(started) => now_ms.saturating_sub(started) > SCAN_STALE_MS,
+    }
+}
+
+/// 失活扫描落 `error` 并推前端（返回是否发生了治愈）
+///
+/// fail-visible：状态绝不允许无限期停在 `syncing`——那会让「扫描中…」成为
+/// 不可撤销的假状态（用户既看不到失败也点不动重试）。
+pub(super) fn heal_stale_scan(h: &WasmHost, state: &mut Value) -> bool {
+    if !scan_is_stale(state, now_ms(h).unwrap_or(0)) {
+        return false;
+    }
+    state["status"] = json!("error");
+    state["error"] = json!("scan-interrupted");
+    state["scanStartedAt"] = json!(null);
+    write_state(h, state);
+    h.log_warn("usage: scan abandoned (no progress), state reset to error");
+    let _ = emit_and_return(h, state);
+    true
 }
 
 // ==================== Tests（纯函数单测） ====================
@@ -191,6 +248,7 @@ pub(crate) fn get_state(h: &WasmHost) -> anyhow::Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::usage::sources::normalize_sources_paths;
 
     /// 状态默认形状：四内置适配器槽位 + 四内置来源齐备（自定义来源待添加）
     #[test]
@@ -203,19 +261,21 @@ mod tests {
         let sources = s["sources"].as_array().expect("sources array");
         assert_eq!(sources.len(), 4, "三家 JSONL 目录 + opencode SQLite 库");
         assert!(sources.iter().all(|x| x["builtin"] == json!(true)));
-        // opencode 是 SQLite 源：条目带 kind=sqlite，路径是展开后的库文件
+        // opencode 是 SQLite 源：条目带 kind=sqlite，paths 是展开后的库文件
         let oc = sources
             .iter()
             .find(|x| x["name"] == json!("opencode"))
             .expect("opencode source");
         assert_eq!(oc["kind"], json!("sqlite"));
-        assert!(oc["path"].as_str().unwrap_or("").ends_with("opencode.db"));
+        assert!(oc["paths"][0].as_str().unwrap_or("").ends_with("opencode.db"));
         // 三家 JSONL 源显式标 kind（前端据此区分「可添加/移除的目录」）
         let jsonl: Vec<&Value> = sources
             .iter()
             .filter(|x| x["kind"] == json!("jsonl"))
             .collect();
         assert_eq!(jsonl.len(), 3);
+        // 内置源每条都带 paths 数组（首个元素为默认路径）
+        assert!(sources.iter().all(|x| x["paths"].as_array().map(|a| a.len() == 1).unwrap_or(false)));
         // 正在使用的项目会话：默认空映射（扫描收尾重算）
         assert!(s["activeSessions"]
             .as_object()
@@ -243,8 +303,8 @@ mod tests {
         // 直接验证 read_state 的补齐规则（不依赖 host：形状变换写成本地 helper）
         let mut merged = legacy["sources"].as_array().cloned().expect("sources");
         for want in json!([
-            { "name": "codex", "path": "/home/u/.codex/sessions", "kind": "jsonl", "builtin": true },
-            { "name": "opencode", "path": "/home/u/.local/share/opencode/opencode.db", "kind": "sqlite", "builtin": true },
+            { "name": "codex", "paths": ["/home/u/.codex/sessions"], "kind": "jsonl", "builtin": true },
+            { "name": "opencode", "paths": ["/home/u/.local/share/opencode/opencode.db"], "kind": "sqlite", "builtin": true },
         ])
         .as_array()
         .cloned()
@@ -255,11 +315,57 @@ mod tests {
                 merged.push(want);
             }
         }
-        let names: Vec<&str> = merged.iter().map(|s| s["name"].as_str().unwrap()).collect();
+        // 旧单 path 条目迁移为 paths 数组（read_state 的幂等归一）
+        let merged = normalize_sources_paths(merged);
+        let names: Vec<&str> = merged.as_array().unwrap()
+            .iter().map(|s| s["name"].as_str().unwrap()).collect();
         // 五条：四内置 + 用户自定义；自定义来源**未丢**
         assert_eq!(names.len(), 5);
         assert!(names.contains(&"my-logs"));
         assert!(names.contains(&"codex"));
         assert!(names.contains(&"opencode"));
+        // 迁移后的每条都带非空 paths 数组且无遗留 path 字段
+        for s in merged.as_array().unwrap() {
+            assert!(s["paths"].as_array().map(|a| !a.is_empty()).unwrap_or(false));
+            assert!(s.get("path").is_none());
+        }
+    }
+
+    /// 扫描失活判定（2026-09-28 实机卡死回归锁）
+    ///
+    /// 契约：`syncing` + 心跳超窗 → 失活（落 error，按钮复原可重试）；
+    /// 心跳在窗内 → 存活（回灌慢 ≠ 卡死）；**无心跳的 syncing → 直接判失活**
+    /// （旧版本落库 / 崩溃现场的形态）；非 syncing 状态永不判失活。
+    #[test]
+    fn scan_is_stale_heals_only_abandoned_runs() {
+        let now = 1_000_000_000u64;
+
+        // 正例：syncing 且心跳过期 → 失活
+        let stuck = json!({ "status": "syncing", "scanStartedAt": now - SCAN_STALE_MS - 1 });
+        assert!(scan_is_stale(&stuck, now));
+
+        // 反例守门：心跳在窗内 → 存活（回灌 852 文件耗时数分钟属正常）
+        let live = json!({ "status": "syncing", "scanStartedAt": now - 5_000 });
+        assert!(!scan_is_stale(&live, now));
+
+        // 边界：恰好等于窗口不算失活（严格大于才判定）
+        let edge = json!({ "status": "syncing", "scanStartedAt": now - SCAN_STALE_MS });
+        assert!(!scan_is_stale(&edge, now));
+
+        // 实机形态：syncing 却无心跳（旧版本落库）→ 立即判失活
+        assert!(scan_is_stale(&json!({ "status": "syncing" }), now));
+        assert!(scan_is_stale(&json!({ "status": "syncing", "scanStartedAt": null }), now));
+
+        // 非在途状态永不判失活（否则每次读状态都会误伤一次成功扫描）
+        for status in ["idle", "ok", "error", "auth-required"] {
+            let s = json!({ "status": status });
+            assert!(!scan_is_stale(&s, now), "{status} 不该被判失活");
+            let s_old = json!({ "status": status, "scanStartedAt": 0 });
+            assert!(!scan_is_stale(&s_old, now), "{status}（旧心跳）不该被判失活");
+        }
+
+        // 时钟回拨（now < started）不得下溢成「超窗」
+        let future = json!({ "status": "syncing", "scanStartedAt": now + 10_000 });
+        assert!(!scan_is_stale(&future, now));
     }
 }

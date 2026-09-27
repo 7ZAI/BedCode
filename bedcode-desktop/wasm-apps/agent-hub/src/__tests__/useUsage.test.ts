@@ -17,13 +17,14 @@
  * - U7 打开/关闭会话详情
  * - U8 日志来源增删：成功回流状态 + 失败返回 { ok:false }（界面走友好 i18n）
  * - U9 autoScanDone：发起失败后释放锁，下一次 idle 回流能重试
+ * - U12 扫描在途对账：卡在 syncing 时按间隔回拉状态复原，终态停表、卸载清表
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { defineComponent, h } from 'vue'
 import { mount, flushPromises } from '@vue/test-utils'
 import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
-import { useUsage, PAGE_SIZE, type UseUsageReturn } from '../composables/useUsage'
+import { useUsage, PAGE_SIZE, SCAN_WATCHDOG_INTERVAL_MS, type UseUsageReturn } from '../composables/useUsage'
 import type { UsageDomainState, UsageSessionRow } from '../types'
 
 // ==================== 替身 ====================
@@ -66,12 +67,25 @@ const execute = vi.fn(async (command: string, args?: Record<string, unknown>) =>
       return { sessions: all.slice(offset, offset + limit), total: all.length }
     }
     case 'agent-hub.list-usage-sources':
-      return { sources: [{ name: 'claude', path: '/home/u/.claude', builtin: true, scan: null }] }
+      return {
+        sources: [
+          {
+            name: 'claude',
+            paths: [{ path: '/home/u/.claude', removable: false }],
+            builtin: true,
+            scan: null,
+          },
+        ],
+      }
     case 'agent-hub.scan-usage':
       return { state: { status: 'ok' } as unknown as UsageDomainState }
     case 'agent-hub.add-usage-source':
       return { state: { status: 'ok' } as unknown as UsageDomainState }
     case 'agent-hub.remove-usage-source':
+      return { state: { status: 'ok' } as unknown as UsageDomainState }
+    case 'agent-hub.add-usage-source-path':
+      return { state: { status: 'ok' } as unknown as UsageDomainState }
+    case 'agent-hub.remove-usage-source-path':
       return { state: { status: 'ok' } as unknown as UsageDomainState }
     case 'agent-hub.read-usage-session':
       return { session: row(1), events: [], raw: [] }
@@ -129,12 +143,25 @@ beforeEach(() => {
         return { sessions: all.slice(offset, offset + limit), total: all.length }
       }
       case 'agent-hub.list-usage-sources':
-        return { sources: [{ name: 'claude', path: '/home/u/.claude', builtin: true, scan: null }] }
+        return {
+          sources: [
+            {
+              name: 'claude',
+              paths: [{ path: '/home/u/.claude', removable: false }],
+              builtin: true,
+              scan: null,
+            },
+          ],
+        }
       case 'agent-hub.scan-usage':
         return { state: { status: 'ok' } as unknown as UsageDomainState }
       case 'agent-hub.add-usage-source':
         return { state: { status: 'ok' } as unknown as UsageDomainState }
       case 'agent-hub.remove-usage-source':
+        return { state: { status: 'ok' } as unknown as UsageDomainState }
+      case 'agent-hub.add-usage-source-path':
+        return { state: { status: 'ok' } as unknown as UsageDomainState }
+      case 'agent-hub.remove-usage-source-path':
         return { state: { status: 'ok' } as unknown as UsageDomainState }
       case 'agent-hub.read-usage-session':
         return { session: row(1), events: [], raw: [] }
@@ -468,6 +495,42 @@ describe('U8 日志来源增删', () => {
     expect(JSON.stringify(r)).not.toContain('fs:pick')
     wrapper.unmount()
   })
+
+  it('addSourcePath 成功 → 走 add-usage-source-path（name + path）+ 重拉来源列表', async () => {
+    const { usage, wrapper } = mountUsage()
+    await flushPromises()
+    const r = await usage.addSourcePath('pi', '/home/u/extra')
+    expect(r).toEqual({ ok: true })
+    expect(execute).toHaveBeenCalledWith('agent-hub.add-usage-source-path', {
+      name: 'pi',
+      path: '/home/u/extra',
+    })
+    expect(execute).toHaveBeenCalledWith('agent-hub.list-usage-sources', {})
+    wrapper.unmount()
+  })
+
+  it('addSourcePath 失败 → { ok:false } 且原文不外泄', async () => {
+    const { usage, wrapper } = mountUsage()
+    await flushPromises()
+    execute.mockRejectedValueOnce(new Error('path already registered to another source'))
+    const r = await usage.addSourcePath('pi', '/home/u/extra')
+    expect(r.ok).toBe(false)
+    expect(JSON.stringify(r)).not.toContain('path already registered')
+    wrapper.unmount()
+  })
+
+  it('removeSourcePath 成功 → 走 remove-usage-source-path；失败同 addSourcePath 两态', async () => {
+    const { usage, wrapper } = mountUsage()
+    await flushPromises()
+    expect(await usage.removeSourcePath('pi', '/home/u/extra')).toEqual({ ok: true })
+    expect(execute).toHaveBeenCalledWith('agent-hub.remove-usage-source-path', {
+      name: 'pi',
+      path: '/home/u/extra',
+    })
+    execute.mockRejectedValueOnce(new Error('builtin default path cannot be removed'))
+    expect((await usage.removeSourcePath('pi', '/home/u/extra')).ok).toBe(false)
+    wrapper.unmount()
+  })
 })
 
 // ==================== U9 autoScanDone 语义 ====================
@@ -740,5 +803,85 @@ describe('U12 数据清空', () => {
     release()
     expect(await first).toEqual({ ok: true })
     wrapper.unmount()
+  })
+})
+
+// ==================== U12 扫描在途对账（watchdog） ====================
+
+describe('U12 扫描卡在「扫描中…」时状态必须能自己复原', () => {
+  // 实机回归（2026-09-28）：扫描发起后回调丢失 → status 永远 syncing →
+  // 按钮既显示「扫描中…」又 disabled，用户看不到失败也点不动重试。
+  // 契约：在途期间按间隔回拉真实状态；终态停表；卸载清表（不泄漏定时器）。
+  const callsOf = (name: string) => execute.mock.calls.filter((c) => c[0] === name)
+  const stateOf = (status: string, error: string | null = null) =>
+    ({ status, error } as unknown as UsageDomainState)
+
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('正例：状态卡在 syncing → 定期回拉 get-usage-state 带回终态', async () => {
+    let pulled = 0
+    execute.mockImplementation((async (command: string) => {
+      if (command === 'agent-hub.get-usage-state') {
+        pulled += 1
+        // 第一次回拉（挂载）给在途，之后 guest 已把失活扫描落 error
+        return { state: stateOf(pulled === 1 ? 'syncing' : 'error', 'scan-interrupted') }
+      }
+      if (command === 'agent-hub.scan-usage') return { state: stateOf('syncing') }
+      if (command === 'agent-hub.list-usage-sources') return { sources: [] }
+      if (command === 'agent-hub.list-usage-sessions') return { sessions: [], total: 0 }
+      return null
+    }) as never)
+
+    const { usage, wrapper } = mountUsage()
+    await flushPromises()
+    expect(usage.state.value?.status).toBe('syncing')
+    const before = callsOf('agent-hub.get-usage-state').length
+
+    // 推进一个对账间隔 → 触发回拉，终态随之落地
+    await vi.advanceTimersByTimeAsync(SCAN_WATCHDOG_INTERVAL_MS)
+    await flushPromises()
+    expect(callsOf('agent-hub.get-usage-state').length).toBeGreaterThan(before)
+    expect(usage.state.value?.status, '对账必须把卡住的 syncing 拉回终态').toBe('error')
+    expect(usage.state.value?.error).toBe('scan-interrupted')
+
+    // 终态后停表：再推进多个间隔不再回拉
+    const after = callsOf('agent-hub.get-usage-state').length
+    await vi.advanceTimersByTimeAsync(SCAN_WATCHDOG_INTERVAL_MS * 3)
+    await flushPromises()
+    expect(callsOf('agent-hub.get-usage-state').length).toBe(after)
+    wrapper.unmount()
+  })
+
+  it('反例守门：非在途状态根本不起表（挂载即 ok 不得空转回拉）', async () => {
+    const { usage, wrapper } = mountUsage()
+    await flushPromises()
+    expect(usage.state.value?.status).toBe('ok')
+    const before = callsOf('agent-hub.get-usage-state').length
+    await vi.advanceTimersByTimeAsync(SCAN_WATCHDOG_INTERVAL_MS * 2)
+    await flushPromises()
+    expect(callsOf('agent-hub.get-usage-state').length).toBe(before)
+    wrapper.unmount()
+  })
+
+  it('卸载即清表（面板关掉后不留后台轮询）', async () => {
+    execute.mockImplementation((async (command: string) => {
+      if (command === 'agent-hub.get-usage-state') return { state: stateOf('syncing') }
+      if (command === 'agent-hub.list-usage-sources') return { sources: [] }
+      if (command === 'agent-hub.list-usage-sessions') return { sessions: [], total: 0 }
+      return null
+    }) as never)
+    const { usage, wrapper } = mountUsage()
+    await flushPromises()
+    expect(usage.state.value?.status).toBe('syncing')
+    wrapper.unmount()
+    const after = callsOf('agent-hub.get-usage-state').length
+    await vi.advanceTimersByTimeAsync(SCAN_WATCHDOG_INTERVAL_MS * 3)
+    await flushPromises()
+    expect(callsOf('agent-hub.get-usage-state').length, '卸载后不得继续对账').toBe(after)
   })
 })

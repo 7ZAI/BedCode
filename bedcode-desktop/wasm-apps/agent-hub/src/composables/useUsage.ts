@@ -38,6 +38,25 @@ export type UseUsageReturn = ReturnType<typeof useUsage>
 export const PAGE_SIZE = 15
 
 /**
+ * 扫描在途对账间隔（2026-09-28 实机 bug）
+ *
+ * 实机：扫描发起后回调丢失，状态永远停在 `syncing` → 按钮卡「扫描中…」且禁用，
+ * 用户看不到失败也点不动重试（guest 侧重入闸门还会拒绝再次发起）。
+ * 真源仍在 guest；本看门狗只做**对账**：在途期间定期回拉状态，覆盖
+ * 「事件丢失 / guest 卡死」两种情形，guest 侧的失活守卫（无进展超 2 分钟落
+ * error）则把回拉到的真实终态带回来。
+ */
+export const SCAN_WATCHDOG_INTERVAL_MS = 15_000
+/**
+ * 对账次数上限（12 × 15s ≈ 3 分钟）
+ *
+ * **必须长于 guest 侧失活窗口**（`usage::SCAN_STALE_MS` = 2×枚举超时 = 2 分钟）：
+ * 停表早了，guest 就算已把失活扫描落 error，前端也永远收不到那一帧，界面就
+ * 又变回“永不退出的扫描中”。停表只防面板长开时的无限轮询。
+ */
+export const SCAN_WATCHDOG_MAX_TICKS = 12
+
+/**
  * 看板时间窗（天）：0 = 全部
  *
  * 前端只提供这四档（与看板 pills 一一对应）；guest 侧另有清洗
@@ -123,6 +142,41 @@ export function useUsage(context: PluginContext) {
       return { ok: true }
     } catch (e) {
       console.error('[Agent Hub] remove-usage-source failed:', e)
+      return { ok: false }
+    }
+  }
+
+  /** 给既有来源追加一个目录（内置来源也可追加；sqlite 源拒绝） */
+  async function addSourcePath(
+    name: string,
+    path: string,
+  ): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const data = await context.commands.execute('agent-hub.add-usage-source-path', { name, path })
+      applyState((data as { state: UsageDomainState })?.state ?? null)
+      await reloadSources()
+      return { ok: true }
+    } catch (e) {
+      console.error('[Agent Hub] add-usage-source-path failed:', e)
+      return { ok: false }
+    }
+  }
+
+  /** 从来源移除一个目录（内置默认路径 / 自定义来源最后一条路径由 guest 拒绝） */
+  async function removeSourcePath(
+    name: string,
+    path: string,
+  ): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const data = await context.commands.execute('agent-hub.remove-usage-source-path', {
+        name,
+        path,
+      })
+      applyState((data as { state: UsageDomainState })?.state ?? null)
+      await reloadSources()
+      return { ok: true }
+    } catch (e) {
+      console.error('[Agent Hub] remove-usage-source-path failed:', e)
       return { ok: false }
     }
   }
@@ -253,9 +307,45 @@ export function useUsage(context: PluginContext) {
    */
   let autoScanDone = false
 
+  // ==================== 扫描在途对账（watchdog） ====================
+  // 节奏常量见文件顶部导出（与测试同源，避免两处各写一份数值）。
+  let watchdogTimer: ReturnType<typeof setTimeout> | null = null
+  let watchdogTicks = 0
+
+  function stopScanWatchdog() {
+    if (watchdogTimer !== null) {
+      clearTimeout(watchdogTimer)
+      watchdogTimer = null
+    }
+    watchdogTicks = 0
+  }
+
+  /** 在途则排下一次对账（幂等：已在表则不重排）；否则停表归零 */
+  function ensureScanWatchdog() {
+    if (state.value?.status !== 'syncing') {
+      stopScanWatchdog()
+      return
+    }
+    if (watchdogTimer !== null) return
+    watchdogTimer = setTimeout(() => {
+      watchdogTimer = null
+      watchdogTicks += 1
+      if (state.value?.status !== 'syncing') {
+        watchdogTicks = 0
+        return
+      }
+      void refresh().finally(() => {
+        if (watchdogTicks < SCAN_WATCHDOG_MAX_TICKS) ensureScanWatchdog()
+        else watchdogTicks = 0
+      })
+    }, SCAN_WATCHDOG_INTERVAL_MS)
+  }
+
   function applyState(next: UsageDomainState | null) {
     const syncing = state.value?.status === 'syncing'
     state.value = next
+    // 在途开表、终态停表：让「扫描中…」不可能成为永不退出的假状态
+    ensureScanWatchdog()
     // spec §4.5「应用打开面板时增量扫描」：从未扫描（idle）时自动触发一次
     // （auth-required 不自动触发——由用户经授权入口先授权）
     if (next?.status === 'idle' && !autoScanDone) {
@@ -374,6 +464,7 @@ export function useUsage(context: PluginContext) {
 
   onUnmounted(() => {
     subscription.dispose()
+    stopScanWatchdog()
   })
 
   return {
@@ -405,6 +496,8 @@ export function useUsage(context: PluginContext) {
     resetQuery,
     reloadSources,
     addSource,
+    addSourcePath,
+    removeSourcePath,
     pickSourceDir,
     removeSource,
     openSession,

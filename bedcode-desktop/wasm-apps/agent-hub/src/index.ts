@@ -18,12 +18,21 @@ export const devMock = hubDevMock
 /**
  * @vuepic/vue-datepicker 主题覆盖：全部映射宿主 CSS 变量（跟随明暗主题）。
  * 与 auto-task 插件同源（会话日志与定时任务共用同一日期组件外观）。
- * 输入框规格与插件内 .ah-input / SDK Select 对齐（票 12）：
- * 高 var(--input-height)、圆角 --radius-input、边框 --border-input、
- * 底色 --bg-input，占位符用 --ah-text-data。
+ *
+ * **输入框规格引用插件派生的 `--ah-ctl-*` 族**（真源 = 宿主 Input.vue /
+ * SDK Select md 的类组合，映射见 styles.css「表单控件统一规格」段）：日期框与
+ * 同排的关键词输入框、Agent 下拉因此逐属性同源，不会各写一套数值漂移。
+ * vendor 默认里三处会让它「看起来不是一套」的项已就地覆盖：
+ * - `--dp-font-family` 是 vendor 自带字体栈（Linux 上落到 sans-serif，
+ *   与宿主 'Segoe UI'/system-ui 栈不同字形）→ `font-family: inherit`
+ * - `--dp-input-padding: 6px 30px 6px 12px` 左内边距 12px（≠ px-4 的 16px）
+ *   → 左 16px；右侧保留 30px 供清除按钮（clearable）落位
+ * - `.dp__input::placeholder { opacity: .7 }` 比同排控件淡 30% → 回到 1
+ * 明暗两套主题类共用同一组 token（v9 的浅色类名是 `.dp__theme_light`，
+ * 原先只覆盖 dark，导致浅色下弹层字号落到 `--dp-font-size: 1rem`）。
  */
 const DATEPICKER_THEME_OVERRIDES = `
-/* 输入框与插件内其它表单控件保持同一规格（票 12） */
+/* 输入框与插件内其它表单控件保持同一规格（票 12；2026-09-28 改走 --ah-ctl-* 族） */
 .dp__main {
   width: 100%;
 }
@@ -31,23 +40,51 @@ const DATEPICKER_THEME_OVERRIDES = `
   width: 100%;
 }
 .dp__input {
-  height: var(--input-height);
-  min-height: var(--input-height);
-  font-size: var(--font-size-base);
-  border-radius: var(--radius-input);
-  border-color: var(--border-input);
-  background: var(--bg-input);
-  color: var(--text-primary);
+  height: var(--ah-ctl-height);
+  min-height: var(--ah-ctl-height);
+  box-sizing: border-box;
+  font-family: inherit;
+  font-size: var(--ah-ctl-font-size);
+  /* 行高回到宿主继承值（vendor 按 --dp-font-size=12px 算 18px，与输入框实际
+     字号 14px 脱钩，文字会比同排控件偏上） */
+  line-height: 1.5;
+  padding: 0 30px 0 var(--ah-ctl-padding-x);
+  border-radius: var(--ah-ctl-radius);
+  border-color: var(--ah-ctl-border-color);
+  background: var(--ah-ctl-bg);
+  color: var(--ah-ctl-fg);
+  box-shadow: var(--ah-ctl-shadow);
+  transition:
+    border-color 0.2s,
+    background-color 0.2s,
+    box-shadow 0.2s;
+}
+/* vendor 把自带字体栈（Linux 上是 -apple-system/sans-serif，与宿主
+   'Segoe UI'/system-ui 栈不同字形）设在 .dp__main 上，.dp__input 的
+   font-family: inherit 只会继承到这个栈——所以外层也必须显式 inherit。
+   弹层（Teleport 到 body）的三处消费方同理。 */
+.dp__main,
+.dp__menu,
+.dp__time_input,
+.dp__action_button,
+.dp__overlay {
+  font-family: inherit;
+}
+:root.dark .dp__input {
+  box-shadow: none;
 }
 .dp__input:hover {
-  border-color: var(--border-input);
+  border-color: var(--ah-ctl-border-color);
 }
 .dp__input:focus {
-  border-color: var(--color-primary);
+  border-color: var(--ah-ctl-focus-border);
+  box-shadow: var(--ah-ctl-focus-shadow);
 }
 .dp__input::placeholder {
-  color: var(--ah-text-data);
+  color: var(--ah-ctl-placeholder);
+  opacity: 1;
 }
+.dp__theme_light,
 .dp__theme_dark {
   --dp-background-color: var(--bg-card);
   --dp-text-color: var(--text-primary);
@@ -66,7 +103,9 @@ const DATEPICKER_THEME_OVERRIDES = `
   --dp-icon-color: var(--ah-text-data);
   --dp-disabled-color: var(--text-tertiary);
   --dp-disabled-border-color: var(--border);
-  --dp-font-family: inherit;
+  /* 字体不再靠 token：--dp-font-family 的每个消费方都在本文件里显式写
+     font-family: inherit（自定义属性写 inherit 只是取父级的同名 token，
+     等于没改——这是自定义属性与真实属性的关键差别） */
   --dp-border-radius: 6px;
   --dp-font-size: 12px;
   --dp-preview-font-size: 12px;

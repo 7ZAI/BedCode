@@ -383,12 +383,31 @@ description: 本地导入演示技能（dev-shell 种子）
         opencode: { files: 0, parsed: 54, skipped: 0, sessions: 4, error: null },
       },
       sources: [
-        { name: 'claude', path: `${HOME}/.claude/projects`, builtin: true, kind: 'jsonl' },
-        { name: 'codex', path: `${HOME}/.codex/sessions`, builtin: true, kind: 'jsonl' },
-        { name: 'pi', path: `${HOME}/.pi/agent/sessions`, builtin: true, kind: 'jsonl' },
+        {
+          name: 'claude',
+          paths: [{ path: `${HOME}/.claude/projects`, removable: false }],
+          builtin: true,
+          kind: 'jsonl',
+        },
+        {
+          name: 'codex',
+          paths: [{ path: `${HOME}/.codex/sessions`, removable: false }],
+          builtin: true,
+          kind: 'jsonl',
+        },
+        {
+          name: 'pi',
+          paths: [
+            { path: `${HOME}/.pi/agent/sessions`, removable: false },
+            // 内置来源上追加的用户目录：可移除（每来源多目录的演示）
+            { path: `${HOME}/projects/tauriProject/BedCode/.pi/sessions`, removable: true },
+          ],
+          builtin: true,
+          kind: 'jsonl',
+        },
         {
           name: 'opencode',
-          path: `${HOME}/.local/share/opencode/opencode.db`,
+          paths: [{ path: `${HOME}/.local/share/opencode/opencode.db`, removable: false }],
           builtin: true,
           kind: 'sqlite',
         },

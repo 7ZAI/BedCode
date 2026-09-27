@@ -330,6 +330,8 @@ export type MessageSchema = {
   'hub.lg.sources.custom': string
   'hub.lg.sources.scan': string
   'hub.lg.sources.add': string
+  'hub.lg.sources.addDir': string
+  'hub.lg.sources.builtinPath': string
   'hub.lg.sources.addName': string
   'hub.lg.sources.addPath': string
   'hub.lg.sources.pick': string
@@ -337,7 +339,8 @@ export type MessageSchema = {
   'hub.lg.sources.pickFailed': string
   'hub.lg.sources.confirm': string
   'hub.lg.sources.cancel': string
-  'hub.lg.sources.remove': string
+  'hub.lg.sources.removeSource': string
+  'hub.lg.sources.removePath': string
   'hub.lg.sources.noScan': string
   'hub.lg.sources.sessions': string
   'hub.lg.sources.files': string
@@ -345,6 +348,12 @@ export type MessageSchema = {
   'hub.lg.sources.kind.sqlite': string
   'hub.lg.sources.addFailed': string
   'hub.lg.sources.removeFailed': string
+  'hub.lg.sources.addPathFailed': string
+  'hub.lg.sources.removePathFailed': string
+  'hub.lg.sources.scanTimeout': string
+  'hub.lg.sources.scanUnreadable': string
+  'hub.lg.sources.scanInterrupted': string
+  'hub.lg.sources.scanFailed': string
   'hub.lg.filter.agent': string
   'hub.lg.filter.all': string
   'hub.lg.filter.keyword': string

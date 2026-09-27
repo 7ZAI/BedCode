@@ -11,7 +11,7 @@ use super::ingest::{
     watermark_unchanged,
 };
 use super::schema::ensure_schema;
-use super::{auth_granted, emit_and_return, read_state, write_state};
+use super::{auth_granted, emit_and_return, heal_stale_scan, read_state, write_state};
 use super::{SCAN_TIMEOUT_MS, SESSION_ROOTS};
 use crate::install::now_ms;
 use crate::usage_parse::MAX_FILE_BYTES;
@@ -34,6 +34,9 @@ static RUN_SEQ: AtomicU32 = AtomicU32::new(0);
 pub(crate) fn scan(h: &WasmHost) -> anyhow::Result<Value> {
     ensure_schema(h)?;
     let mut state = read_state(h);
+    // 失活扫描先治愈再谈重入：否则上一轮卡在 syncing（回调丢失 / 中途异常）
+    // 会把重入闸门永久关上，用户点多少次「立即扫描」都是原样返回
+    heal_stale_scan(h, &mut state);
     state["authGranted"] = json!(auth_granted(h));
     if !auth_granted(h) {
         // 授权被拒不弹窗（fs_auth 第三层会按路径逐个弹窗）：整体降级，
@@ -51,7 +54,7 @@ pub(crate) fn scan(h: &WasmHost) -> anyhow::Result<Value> {
         .ok_or_else(|| anyhow::anyhow!("usage: home unavailable"))?;
     // 分段 = 内置 JSONL 来源（按当前 home 展开）+ 自定义来源（state 持久化绝对路径）。
     // opencode 的内置条目 kind=sqlite，不进枚举（它由 sync_opencode 单独同步取数）
-    let sections = scan_sections(&home, &state);
+    let sections = scan_sections(home, &state);
     let script = scan_script(&sections, is_windows());
     let (command, args_vec) = shell_invocation(script, is_windows());
 
@@ -85,15 +88,22 @@ pub(crate) fn scan(h: &WasmHost) -> anyhow::Result<Value> {
 
     state["status"] = json!("syncing");
     state["error"] = json!(null);
+    // 在途心跳起点：回灌每片刷新；超窗未刷新即由 stale 守卫治愈
+    state["scanStartedAt"] = json!(now_ms(h).unwrap_or(0));
     write_state(h, &state);
     h.log_info("usage scan started");
     emit_and_return(h, &state)
 }
 
-/// 枚举分段构造（纯函数，可测）：内置 JSONL 根目录 + 自定义来源目录
+/// 枚举分段构造（纯函数，可测）：内置 JSONL 根目录 + 各来源用户目录
 ///
-/// **内置条目一律不取**（它们已在 [`SESSION_ROOTS`] 里按 home 展开），
-/// 且 `kind == "sqlite"` 的条目不取——opencode 的库文件不是 `*.jsonl`，
+/// 分段 = (来源名, 根目录)。**内置默认路径**按 [`SESSION_ROOTS`] 以当前 home
+/// 展开（防家目录变更后 state 旧路径滞留）；state 里的其余目录（内置来源上
+/// 追加的用户目录 + 自定义来源目录）逐条加入。同一来源的多个目录用同名分段
+/// ——`== 分段 ==` 标记重复出现在枚举脚本里，[`crate::skills::parse_listing`]
+/// 会把它们全部归到该来源名下，适配器 / 水位键天然聚合。
+///
+/// `kind == "sqlite"` 的条目不取——opencode 的库文件不是 `*.jsonl`，
 /// 走 [`sync_opencode`] 同步查表而非文件枚举。
 fn scan_sections(home: &str, state: &Value) -> Vec<(String, String)> {
     let mut sections: Vec<(String, String)> = SESSION_ROOTS
@@ -103,19 +113,31 @@ fn scan_sections(home: &str, state: &Value) -> Vec<(String, String)> {
     if let Some(arr) = state.get("sources").and_then(|s| s.as_array()) {
         for src in arr {
             if src
-                .get("builtin")
-                .and_then(|b| b.as_bool())
-                .unwrap_or(false)
+                .get("kind")
+                .and_then(|k| k.as_str())
+                == Some("sqlite")
             {
                 continue;
             }
-            if src.get("kind").and_then(|k| k.as_str()) == Some("sqlite") {
+            let name = src.get("name").and_then(|n| n.as_str()).unwrap_or("");
+            if name.is_empty() {
                 continue;
             }
-            let name = src.get("name").and_then(|n| n.as_str()).unwrap_or("");
-            let path = src.get("path").and_then(|p| p.as_str()).unwrap_or("");
-            if !name.is_empty() && !path.is_empty() {
-                sections.push((name.to_string(), path.to_string()));
+            for path in super::sources::entry_paths(src) {
+                if path.is_empty() {
+                    continue;
+                }
+                // 内置默认路径已由 SESSION_ROOTS 段覆盖；这里只收用户追加的目录
+                if src
+                    .get("builtin")
+                    .and_then(|b| b.as_bool())
+                    .unwrap_or(false)
+                    && super::sources::builtin_default_path(home, name).as_deref()
+                        == Some(path.as_str())
+                {
+                    continue;
+                }
+                sections.push((name.to_string(), path));
             }
         }
     }
@@ -151,7 +173,30 @@ fn scan_script(sections: &[(String, String)], windows: bool) -> String {
 }
 
 /// 扫描进程回灌：读列举输出 → 逐文件水位判定 + 解析 + 落库 → 状态推送
+///
+/// **失败一律落终态**（2026-09-28）：内部任何 `?` 提前返回、或 pending 表里查不到
+/// 该 run（宿主未投递 / 停用清理后迟到），都不允许把 `status` 留在 `syncing`
+/// ——那是不可撤销的假状态。异常详情只进插件日志，状态只留机器可读 code。
 pub(crate) fn handle_scan_done(event: &ProcessDoneEvent) -> anyhow::Result<()> {
+    match scan_done_inner(event) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            let h = host();
+            let mut state = read_state(&h);
+            if state["status"] == json!("syncing") {
+                state["status"] = json!("error");
+                state["error"] = json!("scan-failed");
+                state["scanStartedAt"] = json!(null);
+                write_state(&h, &state);
+                h.log_warn(&format!("usage: scan failed: {e}"));
+                let _ = emit_and_return(&h, &state);
+            }
+            Err(e)
+        }
+    }
+}
+
+fn scan_done_inner(event: &ProcessDoneEvent) -> anyhow::Result<()> {
     let h = host();
     let output_path = {
         let mut map = pending()
@@ -160,14 +205,25 @@ pub(crate) fn handle_scan_done(event: &ProcessDoneEvent) -> anyhow::Result<()> {
         map.remove(&event.run_id).map(|e| e.output_path)
     };
     let Some(output_path) = output_path else {
-        // 停用清理后的迟到回调——放行
+        // 该 run 已不在 pending 表（宿主未投递 / 停用清理后迟到）：这次回灌永远
+        // 不会发生，若状态还在 syncing 就是卡死现场——落终态让用户能重试
+        let mut state = read_state(&h);
+        if state["status"] == json!("syncing") {
+            state["status"] = json!("error");
+            state["error"] = json!("scan-interrupted");
+            state["scanStartedAt"] = json!(null);
+            write_state(&h, &state);
+            h.log_warn("usage: scan completion for unknown run; state reset to error");
+            let _ = emit_and_return(&h, &state);
+        }
         return Ok(());
     };
 
     let mut state = read_state(&h);
     if event.timed_out {
         state["status"] = json!("error");
-        state["error"] = json!("scan timed out");
+        state["error"] = json!("scan-timeout");
+        state["scanStartedAt"] = json!(null);
         write_state(&h, &state);
         h.log_warn("usage scan timed out");
         return emit_and_return(&h, &state).map(|_| ());
@@ -176,7 +232,8 @@ pub(crate) fn handle_scan_done(event: &ProcessDoneEvent) -> anyhow::Result<()> {
     // 枚举失败（如 shell 不可用）≠ 无文件：报错态推进
     let Some(output) = h.fs_read(&output_path).ok().flatten() else {
         state["status"] = json!("error");
-        state["error"] = json!("scan output unreadable");
+        state["error"] = json!("scan-output-unreadable");
+        state["scanStartedAt"] = json!(null);
         write_state(&h, &state);
         h.log_warn("usage scan output unreadable");
         return emit_and_return(&h, &state).map(|_| ());
@@ -189,6 +246,7 @@ pub(crate) fn handle_scan_done(event: &ProcessDoneEvent) -> anyhow::Result<()> {
         state["error"] = json!(null);
         state["status"] = json!("ok");
         state["syncedAt"] = json!(now_ms(&h).ok());
+        state["scanStartedAt"] = json!(null);
         write_state(&h, &state);
         h.log_info("usage scan finished: no session files found");
         return emit_and_return(&h, &state).map(|_| ());
@@ -219,6 +277,9 @@ pub(crate) fn handle_scan_done(event: &ProcessDoneEvent) -> anyhow::Result<()> {
     // 逐文件循环里**串行全量重读**（`fs_read` 无截断），逐文件即释放不累积。
     // 解析与 DB 写保持串行：SQLite 连接单 Mutex，水位/upsert 依赖顺序处理。
     for slice in scan_slices(&listing) {
+        // 心跳：回灌每片刷新一次（stale 守卫据此区分「慢」与「卡死」）
+        state["scanStartedAt"] = json!(now_ms(&h).unwrap_or(now));
+        write_state(&h, &state);
         let read_results = parallel_read(&h, slice);
         for (idx, (section, path)) in slice.iter().enumerate() {
             let Some(slot) = per_adapter.get_mut(section.as_str()) else {
@@ -303,6 +364,7 @@ pub(crate) fn handle_scan_done(event: &ProcessDoneEvent) -> anyhow::Result<()> {
     state["error"] = json!(null);
     state["status"] = json!("ok");
     state["syncedAt"] = json!(now_ms(&h).ok());
+    state["scanStartedAt"] = json!(null);
     write_state(&h, &state);
     h.log_info("usage scan finished");
     emit_and_return(&h, &state).map(|_| ())
@@ -545,10 +607,10 @@ mod tests {
     fn scan_sections_excludes_sqlite_source() {
         let state = json!({
             "sources": [
-                { "name": "claude", "path": "/home/u/.claude/projects", "kind": "jsonl", "builtin": true },
-                { "name": "codex", "path": "/home/u/.codex/sessions", "kind": "jsonl", "builtin": true },
-                { "name": "opencode", "path": "/home/u/.local/share/opencode/opencode.db", "kind": "sqlite", "builtin": true },
-                { "name": "my-logs", "path": "/data/logs", "kind": "jsonl", "builtin": false },
+                { "name": "claude", "paths": ["/home/u/.claude/projects"], "kind": "jsonl", "builtin": true },
+                { "name": "codex", "paths": ["/home/u/.codex/sessions"], "kind": "jsonl", "builtin": true },
+                { "name": "opencode", "paths": ["/home/u/.local/share/opencode/opencode.db"], "kind": "sqlite", "builtin": true },
+                { "name": "my-logs", "paths": ["/data/logs"], "kind": "jsonl", "builtin": false },
             ]
         });
         let sections = scan_sections("/home/u", &state);
@@ -559,10 +621,38 @@ mod tests {
 
         // 自定义来源声明为 sqlite 也不进文件枚举（kind 是权威判据）
         let custom_sqlite = json!({
-            "sources": [{ "name": "x-db", "path": "/data/x.db", "kind": "sqlite", "builtin": false }]
+            "sources": [{ "name": "x-db", "paths": ["/data/x.db"], "kind": "sqlite", "builtin": false }]
         });
         assert!(!scan_sections("/home/u", &custom_sqlite)
             .iter()
             .any(|(n, _)| n == "x-db"));
+    }
+
+    /// 每来源多目录：同一来源的两个目录产出**同名分段**（parse_listing 会聚合），
+    /// 内置来源上追加的用户目录也进枚举，内置默认路径不重复
+    #[test]
+    fn scan_sections_multiple_paths_per_source() {
+        let state = json!({
+            "sources": [
+                {
+                    "name": "pi",
+                    "paths": ["/home/u/.pi/agent/sessions", "/home/u/pi-extra"],
+                    "kind": "jsonl",
+                    "builtin": true,
+                },
+                { "name": "my-logs", "paths": ["/data/a", "/data/b"], "kind": "jsonl", "builtin": false },
+            ]
+        });
+        let sections = scan_sections("/home/u", &state);
+        // 内置默认（.pi/agent/sessions）来自 SESSION_ROOTS，不重复收录；
+        // 追加目录 pi-extra 与自定义来源的两个目录都要进枚举
+        let names: Vec<&str> = sections.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["claude", "codex", "pi", "pi", "my-logs", "my-logs"]
+        );
+        assert!(sections.iter().any(|(n, p)| n == "pi" && p == "/home/u/pi-extra"));
+        assert!(sections.iter().any(|(n, p)| n == "my-logs" && p == "/data/a"));
+        assert!(sections.iter().any(|(n, p)| n == "my-logs" && p == "/data/b"));
     }
 }

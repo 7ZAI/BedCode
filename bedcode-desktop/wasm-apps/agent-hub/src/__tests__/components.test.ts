@@ -19,6 +19,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { mount, flushPromises } from '@vue/test-utils'
 import { computed, ref } from 'vue'
 import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
@@ -33,6 +35,7 @@ import CliCard from '../components/CliCard.vue'
 import type { AdapterErrorCode, ProviderPreset, ProvidersDomainState, UsageSessionRow } from '../types'
 import type { UseProvidersReturn } from '../composables/useProviders'
 import type { CliSessionState, StatsDays, UseUsageReturn } from '../composables/useUsage'
+import { AGENT_HUB } from './helpers/contrast'
 import type { UseSkillsReturn } from '../composables/useSkills'
 
 // 第三方控件内部实现不进契约
@@ -603,8 +606,18 @@ describe('A4 SessionLogsTab：查询 / 重置 / 翻页 / 详情 / 原始页签',
       state: ref({ status: 'ok', home: '/home/u' }),
       stats: ref(null),
       sources: ref([
-        { name: 'claude', path: '/home/u/.claude', builtin: true, scan: null },
-        { name: 'demo', path: '/tmp/demo', builtin: false, scan: null },
+        {
+          name: 'claude',
+          paths: [{ path: '/home/u/.claude', removable: false }],
+          builtin: true,
+          scan: null,
+        },
+        {
+          name: 'demo',
+          paths: [{ path: '/tmp/demo', removable: true }],
+          builtin: false,
+          scan: null,
+        },
       ]),
       statsDays: ref(30 as StatsDays),
       statsLoading: ref(false),
@@ -632,6 +645,8 @@ describe('A4 SessionLogsTab：查询 / 重置 / 翻页 / 详情 / 原始页签',
       reloadSources: vi.fn(),
       addSource: vi.fn(),
       removeSource: vi.fn(),
+      addSourcePath: vi.fn(),
+      removeSourcePath: vi.fn(),
       openSession: vi.fn(),
       closeSession: vi.fn(),
       refresh: vi.fn(),
@@ -1204,6 +1219,8 @@ describe('A7-4 SessionLogsTab：来源形态与扫描计数口径', () => {
       reloadSources: vi.fn(),
       addSource: vi.fn(),
       removeSource: vi.fn(),
+      addSourcePath: vi.fn(),
+      removeSourcePath: vi.fn(),
       openSession: vi.fn(),
       closeSession: vi.fn(),
       refresh: vi.fn(),
@@ -1222,7 +1239,7 @@ describe('A7-4 SessionLogsTab：来源形态与扫描计数口径', () => {
       usage: usageStub([
         {
           name: 'opencode',
-          path: '/home/u/.local/share/opencode/opencode.db',
+          paths: [{ path: '/home/u/.local/share/opencode/opencode.db', removable: false }],
           builtin: true,
           kind: 'sqlite',
           scan: { files: 0, parsed: 54, skipped: 0, sessions: 4, error: null },
@@ -1244,7 +1261,7 @@ describe('A7-4 SessionLogsTab：来源形态与扫描计数口径', () => {
       usage: usageStub([
         {
           name: 'claude',
-          path: '/home/u/.claude/projects',
+          paths: [{ path: '/home/u/.claude/projects', removable: false }],
           builtin: true,
           kind: 'jsonl',
           scan: { files: 10, parsed: 8, skipped: 2, sessions: 5, error: null },
@@ -1261,7 +1278,7 @@ describe('A7-4 SessionLogsTab：来源形态与扫描计数口径', () => {
     w.unmount()
   })
 
-  it('边界：旧状态无 kind 字段按目录处理（票 06 存量兼容）', async () => {
+  it('边界：旧状态无 kind 且单 path 按目录处理（票 06 存量兼容，前端路径兑底）', async () => {
     const w = mountComponent(SessionLogsTab, {
       usage: usageStub([
         {
@@ -1274,8 +1291,10 @@ describe('A7-4 SessionLogsTab：来源形态与扫描计数口径', () => {
     })
     await flushPromises()
     await openSources(w)
+    // 无 kind → 按目录型处理；无 paths → 单 path 兑底成不可移除（内置）
     expect(w.text()).toContain('hub.lg.sources.kind.jsonl')
     expect(w.text()).toContain('3 hub.lg.sources.files')
+    expect(w.findAll('.ah-lg-source-path-remove')).toHaveLength(0)
     w.unmount()
   })
 
@@ -1284,20 +1303,130 @@ describe('A7-4 SessionLogsTab：来源形态与扫描计数口径', () => {
       usage: usageStub([
         {
           name: 'opencode',
-          path: '/home/u/.local/share/opencode/opencode.db',
+          paths: [{ path: '/home/u/.local/share/opencode/opencode.db', removable: false }],
           builtin: true,
           kind: 'sqlite',
           scan: null,
         },
-        { name: 'demo', path: '/tmp/demo', builtin: false, kind: 'jsonl', scan: null },
+        {
+          name: 'demo',
+          paths: [{ path: '/tmp/demo', removable: true }],
+          builtin: false,
+          kind: 'jsonl',
+          scan: null,
+        },
       ]),
     })
     await flushPromises()
     await openSources(w)
-    // 仅自定义目录有移除按钮
+    // 仅自定义来源有整来源移除按钮
     expect(w.findAll('.ah-lg-source-remove')).toHaveLength(1)
+    // sqlite 源不提供「添加目录」按钮（单文件库不接受增删）；目录型来源有
+    expect(w.findAll('.ah-lg-source-adddir')).toHaveLength(1)
     // 未扫描过显示提示而不是 0
     expect(w.text()).toContain('hub.lg.sources.noScan')
+    w.unmount()
+  })
+
+  it('正例：每来源多目录 —— 内置默认路径只读、追加目录可移除，各自成行', async () => {
+    const w = mountComponent(SessionLogsTab, {
+      usage: usageStub([
+        {
+          name: 'pi',
+          paths: [
+            { path: '/home/u/.pi/agent/sessions', removable: false },
+            { path: '/home/u/projects/bedcode/.pi/sessions', removable: true },
+          ],
+          builtin: true,
+          kind: 'jsonl',
+          scan: null,
+        },
+      ]),
+    })
+    await flushPromises()
+    await openSources(w)
+    // 两条目录都渲染（home 折叠为 ~）
+    expect(w.findAll('.ah-lg-source-path-row')).toHaveLength(2)
+    expect(w.text()).toContain('~/.pi/agent/sessions')
+    expect(w.text()).toContain('~/projects/bedcode/.pi/sessions')
+    // 内置默认路径无 ✕ + 显示「内置目录」标记；追加目录有 ✕
+    expect(w.findAll('.ah-lg-source-path-remove')).toHaveLength(1)
+    expect(w.text()).toContain('hub.lg.sources.builtinPath')
+    w.unmount()
+  })
+
+  it('正例：移除来源目录走 removeSourcePath（name + 路径）', async () => {
+    const removeSourcePath = vi.fn(async () => ({ ok: true }))
+    const usage = usageStub([
+      {
+        name: 'my-logs',
+        paths: [
+          { path: '/data/a', removable: true },
+          { path: '/data/b', removable: true },
+        ],
+        builtin: false,
+        kind: 'jsonl',
+        scan: null,
+      },
+    ])
+    usage.removeSourcePath = removeSourcePath
+    const w = mountComponent(SessionLogsTab, { usage })
+    await flushPromises()
+    await openSources(w)
+    await w.findAll('.ah-lg-source-path-remove')[0].trigger('click')
+    await flushPromises()
+    expect(removeSourcePath).toHaveBeenCalledWith('my-logs', '/data/a')
+    w.unmount()
+  })
+
+  it('正例：给来源追加目录 —— 选目录 → 确认走 addSourcePath（名已定，只选目录）', async () => {
+    const addSourcePath = vi.fn(async () => ({ ok: true }))
+    const pickSourceDir = vi.fn(async () => ({ ok: true, picked: true, path: '/home/u/extra' }))
+    const usage = usageStub([
+      {
+        name: 'pi',
+        paths: [{ path: '/home/u/.pi/agent/sessions', removable: false }],
+        builtin: true,
+        kind: 'jsonl',
+        scan: null,
+      },
+    ])
+    usage.addSourcePath = addSourcePath
+    usage.pickSourceDir = pickSourceDir
+    const w = mountComponent(SessionLogsTab, { usage })
+    await flushPromises()
+    await openSources(w)
+    // 打开该来源的追加目录表单（无名称输入——名已定）
+    await w.get('.ah-lg-source-adddir').trigger('click')
+    await flushPromises()
+    expect(w.find('.ah-lg-source-path-add').exists()).toBe(true)
+    // 选择目录 → 回显 → 确认
+    await w.get('.ah-lg-source-path-add .ah-lg-sources-pick .ah-btn').trigger('click')
+    await flushPromises()
+    expect(w.get('.ah-lg-source-path-add .ah-lg-sources-pickpath').text()).toContain('/home/u/extra')
+    await w.get('.ah-lg-source-path-add .ah-btn-primary').trigger('click')
+    await flushPromises()
+    expect(addSourcePath).toHaveBeenCalledWith('pi', '/home/u/extra')
+    w.unmount()
+  })
+
+  it('反例：未选目录时「确认添加」禁用（该来源追加目录表单）', async () => {
+    const w = mountComponent(SessionLogsTab, {
+      usage: usageStub([
+        {
+          name: 'pi',
+          paths: [{ path: '/home/u/.pi/agent/sessions', removable: false }],
+          builtin: true,
+          kind: 'jsonl',
+          scan: null,
+        },
+      ]),
+    })
+    await flushPromises()
+    await openSources(w)
+    await w.get('.ah-lg-source-adddir').trigger('click')
+    await flushPromises()
+    expect(w.get('.ah-lg-source-path-add .ah-btn-primary').attributes('disabled')).toBeDefined()
     w.unmount()
   })
 })
@@ -1571,6 +1700,8 @@ describe('A10 SessionLogsTab：添加日志目录走 fs:pick 选择器', () => {
       addSource: vi.fn(async () => ({ ok: true })),
       pickSourceDir: vi.fn(async () => ({ ok: false, picked: false, path: '' })),
       removeSource: vi.fn(async () => ({ ok: true })),
+      addSourcePath: vi.fn(async () => ({ ok: true })),
+      removeSourcePath: vi.fn(async () => ({ ok: true })),
       openSession: vi.fn(),
       closeSession: vi.fn(),
       refresh: vi.fn(),
@@ -1645,5 +1776,105 @@ describe('A10 SessionLogsTab：添加日志目录走 fs:pick 选择器', () => {
     // 路径输入框已不存在（改为选择器按钮 + 回显）
     expect(w.find('input.ah-mono').exists()).toBe(false)
     w.unmount()
+  })
+})
+
+// ==================== A11 扫描失败可复原 + 失败可见 ====================
+
+describe('A11 SessionLogsTab：扫描失败必须看得见且按钮能重试', () => {
+  // 实机回归（2026-09-28）：扫描回调丢失后状态永远 syncing → 按钮卡「扫描中…」
+  // 且 disabled，失败原因也不显示。契约：终态 error 时按钮复原可点，并按
+  // 机器可读 code 显示友好文案（ADR 0030：不透出 guest 原文）。
+  function usageStub(over: Partial<UseUsageReturn> = {}): UseUsageReturn {
+    return {
+      state: ref({ status: 'error', home: '/home/u', error: 'scan-interrupted' }),
+      stats: ref(null),
+      sources: ref([]),
+      statsDays: ref(30 as StatsDays),
+      statsLoading: ref(false),
+      logSessions: ref([]),
+      logTotal: ref(0),
+      logPage: ref(1),
+      logTotalPages: ref(1),
+      logLoading: ref(false),
+      listFilter: ref(''),
+      searchText: ref(''),
+      rangeFrom: ref(null),
+      rangeTo: ref(null),
+      openedSession: ref(null),
+      openingSession: ref(false),
+      adapterErrors: ref([]),
+      clearing: ref(false),
+      clearData: vi.fn(async () => ({ ok: true })),
+      cliSessionState: vi.fn(() => 'unknown' as CliSessionState),
+      reloadStats: vi.fn(),
+      setStatsDays: vi.fn(),
+      reloadSessions: vi.fn(),
+      goPage: vi.fn(),
+      resetQuery: vi.fn(),
+      reloadSources: vi.fn(),
+      addSource: vi.fn(),
+      removeSource: vi.fn(),
+      openSession: vi.fn(),
+      closeSession: vi.fn(),
+      refresh: vi.fn(),
+      scan: vi.fn(),
+      ...over,
+    } as unknown as UseUsageReturn
+  }
+
+  async function openSources(w: ReturnType<typeof mountComponent>) {
+    await w.get('.ah-lg-sources-toggle').trigger('click')
+    await flushPromises()
+  }
+
+  it('正例：error 终态 → 扫描按钮恢复可点 + 显示「扫描已中断」文案', async () => {
+    const scan = vi.fn()
+    const w = mountComponent(SessionLogsTab, { usage: usageStub({ scan }) })
+    await openSources(w)
+    const btn = w.findAll('.ah-btn').find((b) => b.text() === 'hub.lg.sources.scan')
+    expect(btn, '按钮文案须回到「立即扫描」').toBeTruthy()
+    expect(btn!.attributes('disabled')).toBeUndefined()
+    const err = w.get('[data-testid="scan-error"]')
+    expect(err.text(), '失败文案走 i18n key，不透出 guest 原文').toBe(
+      'hub.lg.sources.scanInterrupted',
+    )
+    await btn!.trigger('click')
+    expect(scan).toHaveBeenCalled()
+  })
+
+  it('未登记 code 走泛化文案（不拿原文渲染）', async () => {
+    const w = mountComponent(SessionLogsTab, {
+      usage: usageStub({
+        state: ref({
+          status: 'error',
+          home: '/home/u',
+          error: 'something the host wrote in english',
+        }) as never,
+      }),
+    })
+    await openSources(w)
+    expect(w.get('[data-testid="scan-error"]').text()).toBe('hub.lg.sources.scanFailed')
+  })
+
+  it('反例：状态回到非 error（如 ok）时不显示失败条', async () => {
+    const w = mountComponent(SessionLogsTab, {
+      usage: usageStub({
+        state: ref({ status: 'ok', home: '/home/u', error: 'scan-interrupted' }) as never,
+      }),
+    })
+    await openSources(w)
+    expect(w.find('[data-testid="scan-error"]').exists()).toBe(false)
+  })
+
+  it('日期筛选框隐藏 vendor 左侧日历图标（否则框内文字与关键词框不齐）', () => {
+    const src = readFileSync(resolve(AGENT_HUB, 'src/components/SessionLogsTab.vue'), 'utf8')
+    const dps = src.match(/<Datepicker[\s\S]*?\/>/g) ?? []
+    expect(dps.length, '查询条件条应有两个日期框').toBe(2)
+    for (const dp of dps) {
+      expect(dp, '日期框缺 hide-input-icon（vendor 图标会把文字推到 35px 处）').toContain(
+        ':hide-input-icon="true"',
+      )
+    }
   })
 })

@@ -91,6 +91,13 @@
 - 另：默认时间窗改为近 30 天（pills 里一键可切「全部」）；窗内无数据会显式说明并给「看全部」出口，而不是摆一个空看板
 - 成本：WIT/ABI 不动、宿主模块未动、无新命令，`get-usage-stats` 增加一个可选入参并多返回两个键；插件 `dist/index.js` 由 422 KB 增至 446 KB（gzip 123 KB）
 
+#### Agent Hub 日志来源支持每来源多目录（桌面端，wasm 应用 `com.bedcode.agent-hub`；**WIT/ABI 不动，宿主未动**）
+- **来源 = 名称 + 任意多个目录，不再是单目录**：每个来源（含 `pi` 等内置来源）都可以追加日志目录，例如项目内 `.pi/sessions` 可以并进 `~/.pi/agent/sessions` 同属一个来源，而不是被塞进独立来源。持久化状态在读取时把旧单 `path` 幂等迁移为 `paths` 数组（内置 / 自定义条目一视同仁），不丢用户已添加的自定义来源
+- **目录级增删 + 归属规则**：新增 `add-usage-source-path` / `remove-usage-source-path` 两命令。目录在**全来源间全局唯一**（同一目录挂两个来源会让同一批会话文件以两个适配器名各入一次库）；内置来源的默认路径不可移除（在其上追加的用户目录可移除）；自定义来源的最后一条目录拒绝移除（应整体移除来源）；sqlite 源（opencode）仍是单文件只读。所有校验（`~/` 展开、绝对路径与扫描脚本安全）与 `add-usage-source` 共用纯函数并单测覆盖
+- **扫描枚举全部目录**：`scan_sections` 改为按（来源, 目录）出段、同一来源的多个目录用**同名分段**——`parse_listing` 会把它们全部归到适配器名下，水位键 / 适配器键照旧；内置默认路径仍按当前 home 展开，同一来源的多个目录合并成一条扫描计数
+- **来源面板渲染目录清单**：每个来源下缩进列出目录行（内置默认路径带标记不可移除，用户追加目录逐行可移除），并有每来源的**「添加目录」**按钮——复用新增来源同款 fs:pick 选择器流程（无名称输入，名已定）；整来源新增流程文案改为「添加日志来源」以区分两者
+- 成本：WIT/ABI 不动、宿主模块未动、无新权限；新增两条插件命令；插件 `dist/index.js` 增至 457 KB（gzip 125 KB）
+
 #### 插件调用模型升级 —— 事件循环属主（可灰度）+ 按需 async 化评估退役（桌面端；**默认值不变，ABI 不变**）
 - 宿主侧插件调用从「每次调用抢一把实例锁 + `spawn_blocking` + `block_on_async`」收敛为**装配条目**形态：`WasmInstanceEntry { meta, call_model, slot }` 是 Store 的**唯一**宿主，调用一律经门面 `PluginHost::call_guest`（异步）/ `call_guest_blocking`（同步桥）；`mutex` 分支**逐字保留原实现**（存量插件返回值、错误串、trap 恢复逐字节等价），`event-loop` 分支为每实例一个常驻 `run_concurrent` 属主循环（`start_call_concurrent` + oneshot 结算 + `select! { biased }` 保「启动顺序 = 入队顺序」）
 - 灰度开关 `CoreConfig.call_model`（`mutex`（默认，回退窗口）/ `event-loop`，`wasm-core.json` 可按名覆盖，非法值加载即报错）；实例级快照，**reload 即切换**；**默认值不变**，回退窗口保留（切默认待真机复验）
