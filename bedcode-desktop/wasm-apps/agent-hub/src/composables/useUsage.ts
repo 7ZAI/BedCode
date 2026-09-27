@@ -1,24 +1,21 @@
 /**
- * Agent Hub 使用统计与会话日志域编排（票据 06 + 日志页改版）
+ * Agent Hub 使用统计与会话日志域编排（票据 06 + 看板改版）
  *
  * - 状态流：挂载时拉取持久化状态（host-storage `usage` 键），guest 每次扫描
  *   完成 emit `plugin:agent-hub:usage` 覆盖本地状态；auth-required 呈现授权
  *   入口（fs_auth 第三层按路径弹窗，guest 侧已闸门拦截，不再触发弹窗）
- * - 看板：stats 一次拉全部分组（按天/CLI/项目/模型），维度切换纯前端；
- *   扫描完成后自动重拉
- * - 会话列表：**共享查询条件 + 两份独立列表**。统计明细是「追加加载」、
- *   日志表格是「按页替换」，两者游标语义相反，因此
- *   `statSessions/statTotal/statLoaded` 与 `logSessions/logTotal/logPage`
- *   各自持有；`listFilter/searchText/rangeFrom/rangeTo` 由两个 tab 共享，
- *   任一变更都让两份列表同时回到第一页（此前单一 `sessions/page/loadedOffset`
- *   会在两个 tab 间串味：统计加载更多后翻日志页再回来即出现重复行，
- *   日志页则显示 45 行却写着「第 1 页」）
+ * - 看板：stats 一次拉回「汇总 + 全部维度分组 + 7×24 节奏矩阵」，指标 /
+ *   维度切换纯前端；时间窗（`statsDays`）走 guest 参数，服务端切片
+ * - **会话列表只有一份**（日志分区独有）：此前统计分区挂了一份同源的
+ *   「会话明细」列表（追加加载语义），与日志表格（按页替换）重复且游标
+ *   语义相反，两个 tab 还要共享一套筛选条件互相干扰。现已删除统计侧列表，
+ *   `listFilter/searchText/rangeFrom/rangeTo` 只服务日志表格
  * - 日志来源：内置只读 + 自定义增删（list/add/remove-usage-source），
  *   扫描计数合并进 sources 列表。opencode 是 SQLite 源（`kind: 'sqlite'`）：
  *   guest 侧经 host-process 同步查库，不在 JSONL 枚举里，也不提供增删
  * - 日志视图：openSession 按会话 id 读源文件解析为归一事件流 + 原始行
- *   （与统计共用同一适配器层，单会话一次读盘双消费）；opencode 会话改为
- *   现查 message/part 联表（无「原始行」视图）
+ *   （单会话一次读盘双消费）；opencode 会话改为现查 message/part 联表
+ *   （无「原始行」视图）
  * - 数据清空（票 07）：clearData 清会话聚合 + 解析水位（guest 侧同事务），
  *   保留策略为全量保留不自动过期，清空只由用户显式触发
  */
@@ -41,6 +38,14 @@ export type UseUsageReturn = ReturnType<typeof useUsage>
 export const PAGE_SIZE = 15
 
 /**
+ * 看板时间窗（天）：0 = 全部
+ *
+ * 前端只提供这四档（与看板 pills 一一对应）；guest 侧另有清洗
+ * （负数 / 超上限回落全量），前端不做静默夹取。
+ */
+export type StatsDays = 0 | 7 | 30 | 90
+
+/**
  * CLI 的会话数据状态（票 07：codex「已装 · 未初始化」的信号源）
  *
  * - `scanned`：已扫描且采到会话 → 徽章显示常规「已装」
@@ -54,8 +59,13 @@ export type CliSessionState = 'scanned' | 'empty' | 'unknown'
 export function useUsage(context: PluginContext) {
   const state = ref<UsageDomainState | null>(null)
   const stats = ref<UsageStats | null>(null)
-  /** 列表加载中（防重入；两份列表各自一个，互不阻塞） */
-  const statLoading = ref(false)
+  /** 看板时间窗（默认 30 天：近况是看板的主要读数诉求，「全部」在 pills 里显式选） */
+  const statsDays = ref<StatsDays>(30)
+  /** 看板加载中（任一请求在飞即为 true；响应按 statsSeq 丢弃过期） */
+  const statsLoading = ref(false)
+  /** 看板响应序号（只认最后一次，防旧窗响应覆盖新窗） */
+  let statsSeq = 0
+  /** 日志列表加载中（防重入） */
   const logLoading = ref(false)
   /** 当前打开的日志会话（null = 未选中） */
   const openedSession = ref<UsageSessionDetail | null>(null)
@@ -117,22 +127,16 @@ export function useUsage(context: PluginContext) {
     }
   }
 
-  // ==================== 会话列表（共享查询条件 + 两份独立列表） ====================
-  /** 适配器过滤（'' = 全部）——两个 tab 共享 */
+  // ==================== 会话列表（日志分区独有） ====================
+  /** 适配器过滤（'' = 全部） */
   const listFilter = ref('')
-  /** 关键词（标题 / 项目 / 会话 id 模糊匹配，空 = 不限定）——两个 tab 共享 */
+  /** 关键词（标题 / 项目 / 会话 id 模糊匹配，空 = 不限定） */
   const searchText = ref('')
-  /** 时间范围（epoch ms，null = 不限定）——两个 tab 共享 */
+  /** 时间范围（epoch ms，null = 不限定） */
   const rangeFrom = ref<number | null>(null)
   const rangeTo = ref<number | null>(null)
 
-  // ---- 统计分区私有：追加加载语义 ----
-  const statSessions = ref<UsageSessionRow[]>([])
-  const statTotal = ref(0)
-  /** 已追加加载的条数（= 下一页的 offset） */
-  const statLoaded = ref(0)
-
-  // ---- 日志分区私有：按页替换语义 ----
+  // ---- 日志分区：按页替换语义 ----
   const logSessions = ref<UsageSessionRow[]>([])
   const logTotal = ref(0)
   const logPage = ref(1)
@@ -195,25 +199,6 @@ export function useUsage(context: PluginContext) {
     return data as UsageSessionPage
   }
 
-  /** 统计明细：把一页追加到已有列表之后（游标只在本列表内推进） */
-  async function loadStatPage(replace: boolean) {
-    if (statLoading.value) return
-    statLoading.value = true
-    try {
-      const offset = replace ? 0 : statLoaded.value
-      const p = await fetchPage(offset)
-      if (p === null) return
-      const rows = p.sessions ?? []
-      statSessions.value = replace ? rows : [...statSessions.value, ...rows]
-      statTotal.value = p.total
-      statLoaded.value = replace ? rows.length : statLoaded.value + rows.length
-    } catch (e) {
-      console.error('[Agent Hub] list-usage-sessions failed (stats)', e)
-    } finally {
-      statLoading.value = false
-    }
-  }
-
   /** 日志表格：把某页替换进列表（游标只在本列表内推进） */
   async function loadLogPage(page: number) {
     if (logLoading.value) return
@@ -231,9 +216,9 @@ export function useUsage(context: PluginContext) {
     }
   }
 
-  /** 共享条件或扫描结果变化 → 两份列表同时回第一页 */
+  /** 查询条件或扫描结果变化 → 日志列表回第一页 */
   async function reloadSessions() {
-    await Promise.all([loadStatPage(true), loadLogPage(1)])
+    await loadLogPage(1)
   }
 
   /** 日志页页导航（只动日志列表） */
@@ -243,20 +228,7 @@ export function useUsage(context: PluginContext) {
     await loadLogPage(target)
   }
 
-  /** 列表适配器过滤切换：重设共享条件并让两份列表都回第 1 页 */
-  async function setListFilter(adapter: string) {
-    if (listFilter.value === adapter) return
-    listFilter.value = adapter
-    await reloadSessions()
-  }
-
-  /** 统计明细追加加载（保持既有「加载更多」语义，游标不与日志页串味） */
-  async function loadMoreSessions() {
-    if (statLoading.value || statLoaded.value >= statTotal.value) return
-    await loadStatPage(false)
-  }
-
-  /** 重置共享查询条件并让两份列表都回第 1 页 */
+  /** 重置查询条件并让日志列表回第 1 页 */
   async function resetQuery() {
     listFilter.value = ''
     searchText.value = ''
@@ -310,13 +282,38 @@ export function useUsage(context: PluginContext) {
     }
   }
 
+  /**
+   * 拉取看板聚合（带时间窗）
+   *
+   * 窗由 `statsDays` 决定（guest 侧再清洗一次非法值）；`window.days` 回显
+   * 服务端实际生效的窗，界面据此判定「服务端真的切片了」。
+   *
+   * **按序号丢弃过期响应**（与探测域 `AgentHubState.seq` 同一手法）：切窗
+   * 与扫描回流可能同时在飞，若用「在飞就跳过」防重入，扫描那次旧窗的响应
+   * 仍会落地，界面就成了「新 pill 选中 + 旧窗数据」。序号只认最后一次。
+   */
   async function reloadStats() {
+    const seq = ++statsSeq
+    statsLoading.value = true
     try {
-      const data = await context.commands.execute('agent-hub.get-usage-stats', {})
+      const data = await context.commands.execute('agent-hub.get-usage-stats', {
+        days: statsDays.value,
+      })
+      if (seq !== statsSeq) return
       stats.value = (data ?? null) as UsageStats | null
     } catch (e) {
+      if (seq !== statsSeq) return
       console.error('[Agent Hub] get-usage-stats failed', e)
+    } finally {
+      if (seq === statsSeq) statsLoading.value = false
     }
+  }
+
+  /** 切换时间窗并重拉看板（同窗连点不重打 guest） */
+  async function setStatsDays(days: StatsDays) {
+    if (statsDays.value === days) return
+    statsDays.value = days
+    await reloadStats()
   }
 
   /** 打开会话日志（事件流 + 原始行，单会话一次读盘双消费） */
@@ -382,18 +379,15 @@ export function useUsage(context: PluginContext) {
   return {
     state,
     stats,
+    statsDays,
+    statsLoading,
     sources,
     adapterErrors,
-    // 共享查询条件
+    // 日志分区的查询条件
     listFilter,
     searchText,
     rangeFrom,
     rangeTo,
-    // 统计分区（追加加载）
-    statSessions,
-    statTotal,
-    statLoaded,
-    statLoading,
     // 日志分区（按页替换）
     logSessions,
     logTotal,
@@ -405,11 +399,10 @@ export function useUsage(context: PluginContext) {
     refresh,
     scan,
     reloadStats,
+    setStatsDays,
     reloadSessions,
-    setListFilter,
     goPage,
     resetQuery,
-    loadMoreSessions,
     reloadSources,
     addSource,
     pickSourceDir,

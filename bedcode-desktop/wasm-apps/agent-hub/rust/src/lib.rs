@@ -214,7 +214,7 @@ impl WasmPlugin for AgentHubPlugin {
             // ==================== 票据 06：使用统计与会话日志 ====================
             "agent-hub.get-usage-state" => usage::get_state(&h),
             "agent-hub.scan-usage" => usage::scan(&h),
-            "agent-hub.get-usage-stats" => usage::get_stats(&h),
+            "agent-hub.get-usage-stats" => usage::get_stats(&h, &args),
             "agent-hub.list-usage-sources" => usage::list_sources(&h),
             "agent-hub.pick-source-dir" => usage::pick_source_dir(&h),
             "agent-hub.add-usage-source" => usage::add_source(&h, &args),

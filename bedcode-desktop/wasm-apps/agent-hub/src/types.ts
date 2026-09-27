@@ -397,40 +397,129 @@ export interface UsageSessionRow {
   source_path?: string | null
 }
 
-/** 看板聚合（get-usage-stats 返回；day/project/model 为分组行） */
+/** 看板聚合（get-usage-stats 返回；day/cli/project/model/hour 为分组行） */
 export interface UsageStats {
-  total: {
-    sessions: number
-    tokens_in: number
-    tokens_out: number
-    tokens_cache_read: number
-    tokens_cache_write: number
-    tokens_reasoning: number
-    duration_ms: number
-    cost_total: number | null
-  }
-  byDay: { day: string; sessions: number; tokens_in: number; tokens_out: number }[]
-  byCli: (GroupStatRow & { adapter: string })[]
-  byProject: (GroupStatRow & { project: string | null })[]
-  byModel: {
-    model: string
-    sessions: number
-    messages: number
-    tokens_in: number
-    tokens_out: number
-  }[]
+  /** 本次聚合实际生效的时间窗（回显入参，前端据此确认服务端真的切片了） */
+  window: { days: number; now: number }
+  total: UsageTotalRow
+  byDay: DayStatRow[]
+  byCli: CliStatRow[]
+  byProject: ProjectStatRow[]
+  byModel: ModelStatRow[]
+  /** 7×24 节奏矩阵（dow=0 周日 … 6 周六；只含非空格） */
+  byHour: HourCell[]
 }
 
-/** 分组统计行（按 CLI / 按项目共用形状，key 字段二选一） */
-export interface GroupStatRow {
+/** 汇总行：一次扫描取全部标量 + 派生维度（活跃天数 / 覆盖面 / 数据区间） */
+export interface UsageTotalRow {
   sessions: number
-  duration_ms: number
   tokens_in: number
   tokens_out: number
-  tokens_cache_read?: number
-  tokens_cache_write?: number
-  tokens_reasoning?: number
+  tokens_cache_read: number
+  tokens_cache_write: number
+  tokens_reasoning: number
+  duration_ms: number
   cost_total: number | null
+  /** 有 started_at 的会话落在多少个自然日 */
+  active_days: number
+  /** 非空 project 的去重数（不含「未知项目」桶） */
+  projects: number
+  /** 非空 model 的去重数（主导模型口径） */
+  models: number
+  first_at: number | null
+  last_at: number | null
+}
+
+/**
+ * 分组行的共有度量（按天 / CLI / 项目 / 模型同形状）
+ *
+ * 五个 token 桶互不重叠且**不含**推理：`reasoning` 是 `out` 的子集
+ * （claude 的 thinking_tokens 属于 output_tokens），重复相加会放大总量。
+ */
+export interface MeasureRow {
+  sessions: number
+  tokens_in: number
+  tokens_out: number
+  tokens_cache_read: number
+  tokens_cache_write: number
+  tokens_reasoning: number
+  duration_ms: number
+  cost_total: number | null
+}
+
+export interface DayStatRow extends MeasureRow {
+  day: string
+}
+
+export interface CliStatRow extends MeasureRow {
+  adapter: string
+  last_at: number | null
+}
+
+export interface ProjectStatRow extends MeasureRow {
+  project: string | null
+  last_at: number | null
+}
+
+/** 按模型：消息级归属（会话多模型时不按主导模型摊派） */
+export interface ModelStatRow {
+  model: string
+  sessions: number
+  messages: number
+  tokens_in: number
+  tokens_out: number
+  tokens_cache_read: number
+  tokens_cache_write: number
+  tokens_reasoning: number
+}
+
+/** 节奏矩阵单格（格内度量是 token 总量，不是会话数） */
+export interface HourCell {
+  dow: number
+  hour: number
+  sessions: number
+  tokens: number
+}
+
+/**
+ * 看板指标（趋势图 / 排行 / 占比共用的度量选择）
+ *
+ * `tokens` = 输入 + 输出 + 缓存读 + 缓存写（**不含推理**，见 [`MeasureRow`]）。
+ */
+export type StatsMetric =
+  | 'tokens'
+  | 'tokens_in'
+  | 'tokens_out'
+  | 'tokens_cache_read'
+  | 'tokens_cache_write'
+  | 'tokens_reasoning'
+  | 'sessions'
+  | 'cost_total'
+  | 'duration_ms'
+
+// ==================== 看板图表视图模型 ====================
+//
+// 组件与测试共用，故放在此处而不是 SFC 内：`<script setup>` 不允许
+// `export`，类型写在组件里就没法被测试 import。
+
+/** 占比环的一段（CLI 维度；`colorIndex` 是固定身份色槽下标） */
+export interface DonutSlice {
+  key: string
+  label: string
+  value: number
+  /** 固定色槽下标 0..3（与排序无关，保证同一 CLI 在所有图里同色） */
+  colorIndex: number
+}
+
+/** 排行的一行（项目 / 模型维度共用；`value` 与 `valueText` 由父级按指标给出） */
+export interface BarRow {
+  key: string
+  label: string
+  /** 行首名称下的副行（消息数 / 会话数等） */
+  sub?: string
+  value: number
+  /** 条末数值（已按指标格式化） */
+  valueText: string
 }
 
 /** 会话列表分页载荷（list-usage-sessions 返回） */

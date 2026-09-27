@@ -239,6 +239,8 @@ describe('A2 预设编辑器：Esc / 焦点进出（票 14 P3-6）', () => {
     // 打开时焦点进入面板内的第一个可聚焦元素（不再依赖 autofocus 属性）
     const panel = w.get('[data-testid="preset-editor"]').element as HTMLElement
     expect(panel.contains(document.activeElement)).toBe(true)
+    // 且落点是表单首个字段（名称），不是面板里 DOM 最靠前的关闭按钮
+    expect(document.activeElement).toBe(w.get('[data-testid="preset-name"]').element)
 
     // 焦点移到面板外（模拟用户点了别处）后 Esc 依然生效
     ;(document.body as HTMLElement).focus()
@@ -251,7 +253,7 @@ describe('A2 预设编辑器：Esc / 焦点进出（票 14 P3-6）', () => {
     w.unmount()
   })
 
-  it('Tab 焦点不会逃出面板（focus trap）', async () => {
+  it('Tab 焦点不会逃出面板（focus trap）：首尾两个边界拦截、中间放行', async () => {
     const w = mountComponent(ProvidersTab, {
       detection: tabWithPresets(),
       providers: providersStub(),
@@ -259,25 +261,35 @@ describe('A2 预设编辑器：Esc / 焦点进出（票 14 P3-6）', () => {
     await flushPromises()
     await w.get('[data-testid="new-preset"]').trigger('click')
     await flushPromises()
+    // 名称非空 → 保存按钮（type=submit）不被 disabled，成为面板内最后一个可聚焦元素
+    await w.get('[data-testid="preset-name"]').setValue('my-preset')
 
-    const panel = w.get('[data-testid="preset-editor"]')
-    const panelEl = panel.element as HTMLElement
+    const panelEl = w.get('[data-testid="preset-editor"]').element as HTMLElement
 
-    // 打开时组件自身已把焦点放进面板（第一个可聚焦元素）
+    // 打开时组件自身已把焦点放进面板（表单首个字段）
     expect(panelEl.contains(document.activeElement)).toBe(true)
 
-    // 焦点在首部时按 Shift+Tab → 必须被 trap 拦截（defaultPrevented），
+    // 焦点在首部（关闭按钮）时按 Shift+Tab → 必须被 trap 拦截（defaultPrevented），
     // 否则浏览器默认行为会把焦点甩到面板外的页面元素上
+    const close = w.get('[data-testid="preset-editor-close"]').element as HTMLElement
+    close.focus()
     const back = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, cancelable: true })
     panelEl.dispatchEvent(back)
     expect(back.defaultPrevented).toBe(true)
+    expect(document.activeElement).toBe(w.get('[data-testid="preset-save"]').element)
+
+    // 焦点在尾部（保存）时按 Tab → 同样被拦回面板首部
+    const fwd = new KeyboardEvent('keydown', { key: 'Tab', cancelable: true })
+    panelEl.dispatchEvent(fwd)
+    expect(fwd.defaultPrevented).toBe(true)
+    expect(document.activeElement).toBe(close)
 
     // 非边界位置按 Tab → 放行浏览器默认遍历（证明不是无脑拦截）
     const middle = panelEl.querySelector<HTMLElement>('[data-testid="preset-name"]')!
     middle.focus()
-    const fwd = new KeyboardEvent('keydown', { key: 'Tab', cancelable: true })
-    panelEl.dispatchEvent(fwd)
-    expect(fwd.defaultPrevented).toBe(false)
+    const mid = new KeyboardEvent('keydown', { key: 'Tab', cancelable: true })
+    panelEl.dispatchEvent(mid)
+    expect(mid.defaultPrevented).toBe(false)
 
     w.unmount()
   })
@@ -303,6 +315,192 @@ describe('A2 预设编辑器：Esc / 焦点进出（票 14 P3-6）', () => {
   })
 })
 
+// ==================== A7 预设编辑器弹窗：表单语义与无障碍关联 ====================
+
+describe('A7 预设编辑器弹窗：标签关联 / 必填标记 / 错误落位 / 表单提交', () => {
+  function tabWithPresets() {
+    return {
+      authGranted: true,
+      clis: {},
+      env: { node: 'v22', registry: 'https://r' },
+      envStatus: 'ok',
+    }
+  }
+
+  async function openEditor(over: Partial<UseProvidersReturn> = {}, attach = true) {
+    const providers = providersStub(over)
+    const w = mountComponent(
+      ProvidersTab,
+      { detection: tabWithPresets(), providers },
+      attach,
+    )
+    await flushPromises()
+    await w.get('[data-testid="new-preset"]').trigger('click')
+    await flushPromises()
+    return { w, providers }
+  }
+
+  /**
+   * 点「保存」必须走原生 element.click()：面板是 <form>、保存是 type=submit，
+   * 而 VTU 的 trigger('click') 派发的是合成事件，jsdom 不执行 submit 按钮的
+   * activation behavior（不派发 submit），表单提交路径会被静默跳过。
+   */
+  function clickSave(w: { get: (s: string) => { element: unknown } }) {
+    ;(w.get('[data-testid="preset-save"]').element as HTMLButtonElement).click()
+  }
+
+  it('每个控件都有 label[for] 关联（无 “只有 placeholder 的输入框”）', async () => {
+    const { w } = await openEditor()
+    const panel = w.get('[data-testid="preset-editor"]').element as HTMLElement
+    for (const id of ['pv-name', 'pv-baseurl', 'pv-models', 'pv-key']) {
+      expect(panel.querySelector(`label[for="${id}"]`), `缺少 label[for=${id}]`).not.toBeNull()
+      expect(panel.querySelector(`#${id}`), `缺少控件 #${id}`).not.toBeNull()
+    }
+    w.unmount()
+  })
+
+  it('名称是唯一必填项：星号标记带可读名 + aria-required', async () => {
+    const { w } = await openEditor()
+    const name = w.get('[data-testid="preset-name"]')
+    expect(name.attributes('aria-required')).toBe('true')
+    const req = w.get('.ah-pv-req')
+    expect(req.text()).toBe('*')
+    // 星号对读屏无意义：另给「必填」的可读名
+    expect(req.attributes('aria-label')).toBe('hub.pv.editor.required')
+    // 其它字段不得标成必填
+    expect(w.get('[data-testid="preset-baseurl"]').attributes('aria-required')).toBeUndefined()
+    w.unmount()
+  })
+
+  it('同名错误落在名称字段下方，并被 aria-describedby / aria-invalid 关联', async () => {
+    const savePreset = vi.fn().mockResolvedValue({ saved: false, nameExists: true })
+    const { w } = await openEditor({ savePreset })
+    await w.get('[data-testid="preset-name"]').setValue('dup')
+    clickSave(w)
+    await flushPromises()
+
+    // 错误在弹窗里（未关闭）
+    expect(w.find('[data-testid="preset-editor"]').exists()).toBe(true)
+    const name = w.get('[data-testid="preset-name"]')
+    const describedBy = name.attributes('aria-describedby')
+    expect(name.attributes('aria-invalid')).toBe('true')
+    const err = w.find(`#${describedBy}`)
+    expect(err.exists()).toBe(true)
+    expect(err.text()).toBe('hub.pv.editor.nameExists')
+    // 落位在名称字段内（紧贴出错控件，而不是飘到弹窗底部）
+    const field = err.element.closest('.ah-pv-field')
+    expect(field, '错误未落在任何 .ah-pv-field 内').not.toBeNull()
+    expect(field?.contains(name.element), '错误与名称控件不在同一字段行').toBe(true)
+    w.unmount()
+  })
+
+  it('修改名称后上一轮的同名错误作废（不挂到下次重试）', async () => {
+    const savePreset = vi.fn().mockResolvedValue({ saved: false, nameExists: true })
+    const { w } = await openEditor({ savePreset })
+    await w.get('[data-testid="preset-name"]').setValue('dup')
+    clickSave(w)
+    await flushPromises()
+    expect(w.find('.ah-cli-error').exists()).toBe(true)
+
+    await w.get('[data-testid="preset-name"]').setValue('dup-2')
+    await flushPromises()
+    expect(w.find('.ah-cli-error').exists()).toBe(false)
+    expect(w.get('[data-testid="preset-name"]').attributes('aria-invalid')).toBeUndefined()
+    w.unmount()
+  })
+
+  it('面板是 form：点保存 / 表单 submit（等价于文本字段回车）走同一条保存入参', async () => {
+    const savePreset = vi.fn().mockResolvedValue({ saved: true })
+    const { w } = await openEditor({ savePreset })
+    // 面板本身就是 <form>（回车 = 保存），而不是一堆散装按钮
+    expect(w.get('[data-testid="preset-editor"]').element.tagName).toBe('FORM')
+    expect(w.get('[data-testid="preset-save"]').attributes('type')).toBe('submit')
+
+    await w.get('[data-testid="preset-name"]').setValue(' my-preset ')
+    await w.get('[data-testid="preset-baseurl"]').setValue(' https://api.x.dev ')
+    await w.get('[data-testid="preset-style-anthropic"]').trigger('click')
+    await w.get('[data-testid="preset-models"]').setValue('a\n\nb\n')
+    await w.get('[data-testid="preset-key"]').setValue(' sk-1 ')
+
+    // 路径一：点保存按钮
+    clickSave(w)
+    await flushPromises()
+    expect(savePreset).toHaveBeenCalledTimes(1)
+    expect(savePreset).toHaveBeenCalledWith({
+      id: undefined,
+      name: 'my-preset',
+      baseUrl: 'https://api.x.dev',
+      apiStyle: 'anthropic',
+      models: ['a', 'b'],
+      apiKey: 'sk-1',
+    })
+    // 保存成功 → 弹窗关闭
+    expect(w.find('[data-testid="preset-editor"]').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('名称为空时保存按钮 disabled（必填项未填不得提交）', async () => {
+    const savePreset = vi.fn().mockResolvedValue({ saved: true })
+    const { w } = await openEditor({ savePreset })
+    const save = w.get('[data-testid="preset-save"]')
+    expect(save.attributes('disabled')).toBeDefined()
+    clickSave(w)
+    await flushPromises()
+    expect(savePreset).not.toHaveBeenCalled()
+    w.unmount()
+  })
+
+  it('模板快选仅新建态出现，点击后回填名称 / URL / 方言 / 模型', async () => {
+    const { w } = await openEditor()
+    expect(w.find('[data-testid="preset-template-deepseek"]').exists()).toBe(true)
+    await w.get('[data-testid="preset-template-deepseek"]').trigger('click')
+    expect((w.get('[data-testid="preset-name"]').element as HTMLInputElement).value).not.toBe('')
+    expect((w.get('[data-testid="preset-baseurl"]').element as HTMLInputElement).value).toContain(
+      'https://',
+    )
+    // 选中的方言 chip 带 active 与 aria-pressed（可读出当前选择）
+    const active = w.findAll('.ah-pv-target.active')
+    expect(active.length).toBe(1)
+    expect(active[0].attributes('aria-pressed')).toBe('true')
+    w.unmount()
+  })
+
+  it('编辑态：无模板组、key 占位带掩码、清空开关映射为 apiKey=""', async () => {
+    const savePreset = vi.fn().mockResolvedValue({ saved: true })
+    const providers = providersStub({
+      savePreset,
+      state: ref({
+        claude: { env: {}, bridge: {} },
+        presets: [preset({ id: 7, name: 'kimi', keyMask: 'sk-9***3ab' })],
+        import: { last: null },
+      } as unknown as ProvidersDomainState),
+    })
+    const w = mountComponent(
+      ProvidersTab,
+      { detection: tabWithPresets(), providers },
+      true,
+    )
+    await flushPromises()
+    await w.get('[data-testid="edit-kimi"]').trigger('click')
+    await flushPromises()
+
+    // 编辑态不提供模板快选（会覆盖既有值）
+    expect(w.find('[data-testid="preset-template-deepseek"]').exists()).toBe(false)
+    expect(w.get('[data-testid="preset-key"]').attributes('placeholder')).toContain('sk-9***3ab')
+
+    const clear = w.get('[data-testid="preset-key-clear"]')
+    expect(clear.attributes('aria-pressed')).toBe('false')
+    await clear.trigger('click')
+    expect(clear.attributes('aria-pressed')).toBe('true')
+    clickSave(w)
+    await flushPromises()
+    expect(savePreset).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 7, name: 'kimi', apiKey: '' }),
+    )
+    w.unmount()
+  })
+})
+
 // ==================== A3 StatsTab 适配器求和（票 13 P2-4） ====================
 
 describe('A3 StatsTab：syncedTag 遍历全部适配器', () => {
@@ -320,10 +518,8 @@ describe('A3 StatsTab：syncedTag 遍历全部适配器', () => {
       clearing: ref(false),
       clearData: vi.fn(async () => ({ ok: true })),
       cliSessionState: vi.fn(() => 'unknown' as CliSessionState),
-      statSessions: ref([] as UsageSessionRow[]),
-      statTotal: ref(0),
-      statLoaded: ref(0),
-      statLoading: ref(false),
+      statsDays: ref(30 as StatsDays),
+      statsLoading: ref(false),
       logSessions: ref([]),
       logTotal: ref(0),
       logPage: ref(1),
@@ -336,11 +532,10 @@ describe('A3 StatsTab：syncedTag 遍历全部适配器', () => {
       openedSession: ref(null),
       openingSession: ref(false),
       reloadStats: vi.fn(),
+      setStatsDays: vi.fn(),
       reloadSessions: vi.fn(),
-      setListFilter: vi.fn(),
       goPage: vi.fn(),
       resetQuery: vi.fn(),
-      loadMoreSessions: vi.fn(),
       reloadSources: vi.fn(),
       addSource: vi.fn(),
       removeSource: vi.fn(),
@@ -381,17 +576,21 @@ describe('A3 StatsTab：syncedTag 遍历全部适配器', () => {
     w.unmount()
   })
 
-  it('明细「加载更多」只在未装满时出现，点击走 loadMoreSessions', async () => {
-    const loadMoreSessions = vi.fn()
-    const usage = usageStub({
-      statSessions: ref([{ id: 1, adapter: 'claude', title: 'a' } as unknown as UsageSessionRow]),
-      statTotal: ref(30),
-      loadMoreSessions,
-    })
-    const w = mountComponent(StatsTab, { usage })
+  it('看板不再有会话明细列表（去重契约：明细只在日志分区）', async () => {
+    const w = mountComponent(StatsTab, { usage: usageStub() })
     await flushPromises()
-    await w.get('.ah-st-more button').trigger('click')
-    expect(loadMoreSessions).toHaveBeenCalled()
+    // 统计分区曾挂了一份同源会话列表，与日志表格重复
+    expect(w.find('.ah-st-row').exists()).toBe(false)
+    expect(w.find('.ah-st-more').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('时间窗 pills 点选走 setStatsDays（服务端切片，前端不自行过滤）', async () => {
+    const setStatsDays = vi.fn()
+    const w = mountComponent(StatsTab, { usage: usageStub({ setStatsDays }) })
+    await flushPromises()
+    await w.get('[data-testid=range-7]').trigger('click')
+    expect(setStatsDays).toHaveBeenCalledWith(7)
     w.unmount()
   })
 })
@@ -407,10 +606,8 @@ describe('A4 SessionLogsTab：查询 / 重置 / 翻页 / 详情 / 原始页签',
         { name: 'claude', path: '/home/u/.claude', builtin: true, scan: null },
         { name: 'demo', path: '/tmp/demo', builtin: false, scan: null },
       ]),
-      statSessions: ref([]),
-      statTotal: ref(0),
-      statLoaded: ref(0),
-      statLoading: ref(false),
+      statsDays: ref(30 as StatsDays),
+      statsLoading: ref(false),
       logSessions: ref([1, 2, 3].map((i) => ({ id: i, adapter: 'claude', title: `t${i}` }) as unknown as UsageSessionRow)),
       logTotal: ref(45),
       logPage: ref(1),
@@ -428,11 +625,10 @@ describe('A4 SessionLogsTab：查询 / 重置 / 翻页 / 详情 / 原始页签',
       clearData: vi.fn(async () => ({ ok: true })),
       cliSessionState: vi.fn(() => 'unknown' as CliSessionState),
       reloadStats: vi.fn(),
+      setStatsDays: vi.fn(),
       reloadSessions: vi.fn(),
-      setListFilter: vi.fn(),
       goPage: vi.fn(),
       resetQuery: vi.fn(),
-      loadMoreSessions: vi.fn(),
       reloadSources: vi.fn(),
       addSource: vi.fn(),
       removeSource: vi.fn(),
@@ -824,10 +1020,8 @@ describe('A7-2 StatsTab：适配器降级横幅', () => {
       state: ref({ status: 'ok', home: '/home/u', adapters: {} }),
       stats: ref(null),
       sources: ref([]),
-      statSessions: ref([]),
-      statTotal: ref(0),
-      statLoaded: ref(0),
-      statLoading: ref(false),
+      statsDays: ref(30 as StatsDays),
+      statsLoading: ref(false),
       logSessions: ref([]),
       logTotal: ref(0),
       logPage: ref(1),
@@ -844,11 +1038,10 @@ describe('A7-2 StatsTab：适配器降级横幅', () => {
       clearData: vi.fn(async () => ({ ok: true })),
       cliSessionState: vi.fn(() => 'unknown' as CliSessionState),
       reloadStats: vi.fn(),
+      setStatsDays: vi.fn(),
       reloadSessions: vi.fn(),
-      setListFilter: vi.fn(),
       goPage: vi.fn(),
       resetQuery: vi.fn(),
-      loadMoreSessions: vi.fn(),
       reloadSources: vi.fn(),
       addSource: vi.fn(),
       removeSource: vi.fn(),
@@ -893,10 +1086,8 @@ describe('A7-3 StatsTab：数据清空两击确认', () => {
       state: ref({ status: 'ok', home: '/home/u', adapters: {} }),
       stats: ref(null),
       sources: ref([]),
-      statSessions: ref([]),
-      statTotal: ref(0),
-      statLoaded: ref(0),
-      statLoading: ref(false),
+      statsDays: ref(30 as StatsDays),
+      statsLoading: ref(false),
       logSessions: ref([]),
       logTotal: ref(0),
       logPage: ref(1),
@@ -913,11 +1104,10 @@ describe('A7-3 StatsTab：数据清空两击确认', () => {
       clearData: vi.fn(async () => ({ ok: true })),
       cliSessionState: vi.fn(() => 'unknown' as CliSessionState),
       reloadStats: vi.fn(),
+      setStatsDays: vi.fn(),
       reloadSessions: vi.fn(),
-      setListFilter: vi.fn(),
       goPage: vi.fn(),
       resetQuery: vi.fn(),
-      loadMoreSessions: vi.fn(),
       reloadSources: vi.fn(),
       addSource: vi.fn(),
       removeSource: vi.fn(),
@@ -989,10 +1179,8 @@ describe('A7-4 SessionLogsTab：来源形态与扫描计数口径', () => {
       state: ref({ status: 'ok', home: '/home/u' }),
       stats: ref(null),
       sources: ref(sources),
-      statSessions: ref([]),
-      statTotal: ref(0),
-      statLoaded: ref(0),
-      statLoading: ref(false),
+      statsDays: ref(30 as StatsDays),
+      statsLoading: ref(false),
       logSessions: ref([]),
       logTotal: ref(0),
       logPage: ref(1),
@@ -1009,11 +1197,10 @@ describe('A7-4 SessionLogsTab：来源形态与扫描计数口径', () => {
       clearData: vi.fn(async () => ({ ok: true })),
       cliSessionState: vi.fn(() => 'unknown' as CliSessionState),
       reloadStats: vi.fn(),
+      setStatsDays: vi.fn(),
       reloadSessions: vi.fn(),
-      setListFilter: vi.fn(),
       goPage: vi.fn(),
       resetQuery: vi.fn(),
-      loadMoreSessions: vi.fn(),
       reloadSources: vi.fn(),
       addSource: vi.fn(),
       removeSource: vi.fn(),

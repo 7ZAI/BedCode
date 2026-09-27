@@ -29,6 +29,7 @@ import {
   runMatrix,
   runGraphicsMatrix,
   runChartPairCheck,
+  runHeatRampCheck,
   templateClasses,
   selectorClassTokens,
 } from './helpers/contrast'
@@ -39,6 +40,7 @@ const RULES = parseRules(STYLES)
 const matrix = runMatrix()
 const graphics = runGraphicsMatrix()
 const chart = runChartPairCheck()
+const heat = runHeatRampCheck()
 
 describe('S1 文字对比度矩阵（12 套主题取最差）', () => {
   it('受审清单非空且每个选择器都能在 styles.css 解析到 color（防清单腐化）', () => {
@@ -77,22 +79,76 @@ describe('S2 无文本图形对比度（WCAG 1.4.11）', () => {
     expect(graphics.filter((g) => g.missing).map((g) => g.sel)).toEqual([])
   })
 
-  it.each(graphics.map((g) => [g.sel, g] as const))('%s 在承载面上 ≥ 3:1', (_sel, g) => {
+  it.each(
+    graphics
+      .filter((g) => !g.exempt)
+      .map((g) => [g.sel, g] as const),
+  )('%s 在承载面上 ≥ 3:1', (_sel, g) => {
     expect(g.worst, `${g.sel} 最差 ${g.worst.toFixed(2)}:1 @ ${g.worstTheme}`).toBeGreaterThanOrEqual(3)
+  })
+
+  it('豁免项必须写明理由（S4 同口径：不留「静默不过」）', () => {
+    for (const g of graphics.filter((x) => x.exempt)) {
+      expect((g.exempt ?? '').length, `${g.sel} 的豁免理由为空`).toBeGreaterThan(20)
+    }
+  })
+
+  it('热力图色阶的豁免只限低两档（顶档必须硬过 3:1）', () => {
+    const exemptHeat = graphics
+      .filter((g) => g.sel.startsWith('.ah-heat-cell.lv') && g.exempt)
+      .map((g) => g.sel)
+      .sort()
+    expect(exemptHeat).toEqual(['.ah-heat-cell.lv1', '.ah-heat-cell.lv2'])
   })
 })
 
-describe('S3 图表双段可区分度', () => {
-  it('两段 ΔE(CIE76) ≥ 25', () => {
+describe('S3 分类色组可区分度（4 槽：输入 / 输出 / 缓存读 / 缓存写）', () => {
+  it('槽位清单就是 4 个（新增分类必须同步登记）', () => {
+    expect(chart.slots).toEqual(['--chart-c1', '--chart-c2', '--chart-c3', '--chart-c4'])
+  })
+
+  it('任意两槽 ΔE(CIE76) ≥ 25（全组两两，不是只比相邻）', () => {
     expect(chart.worstPair, `最差 ΔE ${chart.worstPair.toFixed(1)} @ ${chart.worstPairTheme}`).toBeGreaterThanOrEqual(25)
   })
 
-  it('与语义三色 ΔE ≥ 25（输出段不得读成「警告色」）', () => {
+  it('与语义三色 ΔE ≥ 25（扇区不得读成「警告色/成功色」）', () => {
     expect(chart.worstSem, `最差 ΔE ${chart.worstSem.toFixed(1)} @ ${chart.worstSemWhere}`).toBeGreaterThanOrEqual(25)
   })
 
   it('与色板 primary ΔE ≥ 20', () => {
     expect(chart.worstPri, `最差 ΔE ${chart.worstPri.toFixed(1)} @ ${chart.worstPriWhere}`).toBeGreaterThanOrEqual(20)
+  })
+
+  it('对承载面 --bg-card ≥ 3:1（扇区 / 图例块是内联绑色的，故在 token 层校验）', () => {
+    expect(
+      chart.worstCard,
+      `最差 ${chart.worstCard.toFixed(2)}:1 @ ${chart.worstCardTheme}（${chart.worstCardSlot}）`,
+    ).toBeGreaterThanOrEqual(3)
+  })
+})
+
+describe('S3-5 热力图顺序标度（低档豁免的代价：标度本身必须成立）', () => {
+  it('四档齐全', () => {
+    expect(heat.steps).toEqual(['--chart-heat-1', '--chart-heat-2', '--chart-heat-3', '--chart-heat-4'])
+  })
+
+  it('亮度严格单调（读者才能把「更深 = 更多」记成一条规则）', () => {
+    expect(heat.monotone, '存在主题内亮度非单调的档序，标度方向会读反').toBe(true)
+  })
+
+  it('顶档对 --bg-card ≥ 3:1（最重的那一格必须看得见）', () => {
+    expect(heat.topWorst, `顶档最差 ${heat.topWorst.toFixed(2)}:1 @ ${heat.topWorstTheme}`).toBeGreaterThanOrEqual(3)
+  })
+
+  it('低两档确实低于 3:1（否则「低档豁免」就是无理由放宽）', () => {
+    expect(heat.worstPerStep[0].worst, 'lv1 竟已达标，则该登记的豁免理由失效').toBeLessThan(3)
+    expect(heat.worstPerStep[1].worst, 'lv2 竟已达标，则该登记的豁免理由失效').toBeLessThan(3)
+  })
+
+  it('低两档与空格轨道底仍可区分（否则低档会读成「无数据」）', () => {
+    for (const step of heat.worstPerStep.slice(0, 2)) {
+      expect(step.worst, `${step.step} 与卡片面对比 ${step.worst.toFixed(2)}:1，太接近空档`).toBeGreaterThan(1.1)
+    }
   })
 })
 
@@ -157,12 +213,24 @@ describe('S7 无写死第三方色板', () => {
     return hits
   }
 
-  it('写死色值仅限已登记的例外（chart 双段 + 品牌 chip 底色）', () => {
+  it('写死色值仅限已登记的例外（chart 分类色 + 热力色阶 + 品牌 chip 底色）', () => {
     const allowed = new Set([
+      // --chart-c1..c4（分类色；c1/c2 同值于票 13 的 --chart-in/--chart-out）
       '#6f5b3d',
       '#3b3b60',
+      '#509b69',
+      '#bf69a2',
       '#83835a',
       '#7c7ca2',
+      '#359756',
+      '#d770b4',
+      // --chart-heat-1..4（顺序标度）
+      '#afa392',
+      '#9a8b76',
+      '#847359',
+      '#55543b',
+      '#646345',
+      '#747350',
       'rgba(217, 119, 87, 0.16)',
       'rgba(245, 158, 11, 0.16)',
       'rgba(0, 0, 0, 0.5)', // 弹窗遮罩（宿主 Modal 同款）
@@ -211,5 +279,73 @@ describe('S9 死代码清理（票 14）', () => {
     const index = readFileSync(resolve(AGENT_HUB, 'src/index.ts'), 'utf8')
     expect(index).toMatch(/\.dp__input \{[^}]*height: var\(--input-height\)/)
     expect(index).not.toMatch(/\.dp__input \{[^}]*height: 32px/)
+  })
+})
+
+/** 取单类名规则的声明体（用于样式层布局契约断言） */
+function declsOf(selector: string): Record<string, string> {
+  const hit = RULES.filter((r) => r.selector === selector)
+  expect(hit.length, `${selector} 在 styles.css 里没有单类名规则`).toBeGreaterThan(0)
+  return Object.assign({}, ...hit.map((r) => r.decls)) as Record<string, string>
+}
+
+describe('S10 顶部分段栏宽度与纵向滚动条解耦', () => {
+  // 回归成因：.ah-view 是 flex 列容器，.ah-tabs 作为 flex item 会被 stretch
+  // 拉成整行宽（＝内容区宽 − 滚动条宽）—— 滚动条一出现/消失，分段栏就变宽/横移。
+  // 宽度必须只由内容决定（原型里就是 inline-flex 收窄形态）。
+  it('.ah-tabs 收窄为内容宽（align-self: flex-start），不再随容器伸缩', () => {
+    const tabs = declsOf('.ah-tabs')
+    expect(tabs['align-self'], '.ah-tabs 缺 align-self: flex-start（会退回整行宽）').toBe(
+      'flex-start',
+    )
+    expect(tabs['max-width'], '缺 max-width: 100%（窄面板会撑破整列）').toBe('100%')
+  })
+
+  it('.ah-tab 单项不压缩：靠 nowrap + 分段栏换行，而不是把中文标签挤断行', () => {
+    const tab = declsOf('.ah-tab')
+    expect(tab['white-space']).toBe('nowrap')
+    expect(declsOf('.ah-tabs')['flex-wrap'], '窄面板需靠 flex-wrap 换行兜底').toBe('wrap')
+  })
+
+  it('滚动条槽位常驻（.ah-view scrollbar-gutter: stable），整列内容不横移', () => {
+    expect(declsOf('.ah-view')['scrollbar-gutter']).toBe('stable')
+  })
+})
+
+describe('S11 预设编辑器弹窗：头 / 体 / 脚三段 + 纵向字段', () => {
+  it('面板是 flex 列且自身不滚动（滚动交给体部，头脚常驻）', () => {
+    const panel = declsOf('.ah-modal-panel')
+    expect(panel.display).toBe('flex')
+    expect(panel['flex-direction']).toBe('column')
+    expect(panel.overflow).toBe('hidden')
+    expect(panel.padding, '面板须清掉 .ah-card 的内边距，改由三段各自负责').toBe('0')
+  })
+
+  it('体部独立滚动 + min-height: 0（否则超高表单会把脚部挤出 max-height）', () => {
+    const body = declsOf('.ah-modal-body')
+    expect(body['overflow-y']).toBe('auto')
+    expect(body['min-height'], '缺 min-height: 0，flex 子项无法收缩').toBe('0')
+  })
+
+  it('脚部动作行右对齐且与体部有分隔线', () => {
+    const foot = declsOf('.ah-modal-foot')
+    expect(foot['justify-content']).toBe('flex-end')
+    expect(foot['border-top']).toBeTruthy()
+  })
+
+  it('字段为纵向堆叠，且控件解除 flex: 1（纵向 flex 里 flex-basis 作用于高度）', () => {
+    expect(declsOf('.ah-pv-field')['flex-direction']).toBe('column')
+    const input = declsOf('.ah-pv-input')
+    expect(input.flex, '缺 flex: 0 0 auto → 36px 输入框会被压成 0 高').toBe('0 0 auto')
+    expect(input.width).toBe('100%')
+    // key 行的输入框例外：行内要恢复弹性，否则把清空按钮挤出可视区
+    const keyInput = declsOf('.ah-pv-keyrow .ah-pv-input')
+    expect(keyInput.flex).toBe('1 1 auto')
+  })
+
+  it('label 关联与必填标记的类都在（模板侧契约由 components.test.ts 覆盖）', () => {
+    for (const cls of ['.ah-pv-label', '.ah-pv-req', '.ah-modal-head', '.ah-modal-title']) {
+      expect(declsOf(cls), `${cls} 无规则`).toBeTruthy()
+    }
   })
 })

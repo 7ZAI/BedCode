@@ -198,6 +198,8 @@ export type MessageSchema = {
   // ==================== 供应商 · 编辑器（票据 05） ====================
   'hub.pv.editor.titleNew': string
   'hub.pv.editor.titleEdit': string
+  'hub.pv.editor.close': string
+  'hub.pv.editor.required': string
   'hub.pv.editor.template': string
   'hub.pv.editor.name': string
   'hub.pv.editor.baseUrl': string
@@ -232,34 +234,83 @@ export type MessageSchema = {
   'hub.pv.apply.conflict': string
   'hub.pv.apply.conflictConfirm': string
   'hub.pv.apply.failed': string
-  // ==================== 使用统计（票据 06） ====================
+  // ==================== 使用统计看板（票据 06 + 改版） ====================
   'hub.st.syncedTag': string
   'hub.st.syncing': string
   'hub.st.scanning': string
   'hub.st.scanNow': string
-  'hub.st.totalSessions': string
-  'hub.st.totalTokens': string
-  'hub.st.totalDuration': string
-  'hub.st.totalCost': string
-  'hub.st.dim.day': string
-  'hub.st.dim.cli': string
-  'hub.st.dim.project': string
-  'hub.st.dim.model': string
-  'hub.st.dailyChart': string
-  'hub.st.dayTip': string
-  'hub.st.legendIn': string
-  'hub.st.legendOut': string
-  'hub.st.summaryBy': string
-  'hub.st.col.name': string
-  'hub.st.col.sessions': string
-  'hub.st.col.tokensIn': string
-  'hub.st.col.tokensOut': string
-  'hub.st.col.cost': string
+  // ---------- 时间窗 ----------
+  'hub.st.range': string
+  'hub.st.range.0': string
+  'hub.st.range.7': string
+  'hub.st.range.30': string
+  'hub.st.range.90': string
+  // ---------- KPI 卡 ----------
+  'hub.st.kpi.sessions': string
+  'hub.st.kpi.sessionsSub': string
+  'hub.st.kpi.tokens': string
+  'hub.st.kpi.tokensSub': string
+  'hub.st.kpi.cache': string
+  'hub.st.kpi.cacheSub': string
+  'hub.st.kpi.duration': string
+  'hub.st.kpi.durationSub': string
+  'hub.st.kpi.cost': string
+  'hub.st.kpi.costSub': string
+  'hub.st.kpi.costNone': string
+  'hub.st.kpi.coverage': string
+  'hub.st.kpi.coverageVal': string
+  'hub.st.kpi.coverageSub': string
+  'hub.st.kpi.range': string
+  'hub.st.kpi.noRange': string
+  // ---------- 指标（趋势 / 排行 / 占比共用） ----------
+  'hub.st.metricLabel': string
+  'hub.st.metric.tokens': string
+  'hub.st.metric.tokens_in': string
+  'hub.st.metric.tokens_out': string
+  'hub.st.metric.tokens_cache_read': string
+  'hub.st.metric.tokens_cache_write': string
+  'hub.st.metric.tokens_reasoning': string
+  'hub.st.metric.sessions': string
+  'hub.st.metric.cost_total': string
+  'hub.st.metric.duration_ms': string
+  // ---------- 趋势图 ----------
+  'hub.st.trend.title': string
+  'hub.st.trend.mode.total': string
+  'hub.st.trend.mode.stack': string
+  'hub.st.trend.table': string
+  'hub.st.trend.chart': string
+  'hub.st.trend.empty': string
+  'hub.st.trend.col.day': string
+  // ---------- 节奏热力图（7×24） ----------
+  'hub.st.heat.title': string
+  'hub.st.heat.sub': string
+  'hub.st.heat.empty': string
+  'hub.st.heat.aria': string
+  'hub.st.heat.peak': string
+  'hub.st.heat.peakShort': string
+  'hub.st.heat.noPeak': string
+  'hub.st.heat.rowTotal': string
+  'hub.st.heat.legendLow': string
+  'hub.st.heat.dow.0': string
+  'hub.st.heat.dow.1': string
+  'hub.st.heat.dow.2': string
+  'hub.st.heat.dow.3': string
+  'hub.st.heat.dow.4': string
+  'hub.st.heat.dow.5': string
+  'hub.st.heat.dow.6': string
+  // ---------- CLI 占比环 ----------
+  'hub.st.donut.title': string
+  'hub.st.donut.sub': string
+  'hub.st.donut.empty': string
+  // ---------- 排行 ----------
+  'hub.st.bars.projects': string
+  'hub.st.bars.models': string
+  'hub.st.bars.empty': string
+  'hub.st.bars.more': string
   'hub.st.modelMessages': string
   'hub.st.noProject': string
-  'hub.st.sessionsTitle': string
   'hub.st.empty': string
-  'hub.st.loadMore': string
+  'hub.st.emptyWindow': string
   // 数据清空（票 07：全量保留 + 手动清空）
   'hub.st.clearData': string
   'hub.st.clearDataAsk': string

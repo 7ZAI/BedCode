@@ -212,59 +212,75 @@ pub(crate) fn handle_scan_done(event: &ProcessDoneEvent) -> anyhow::Result<()> {
 
     // 会话文件读内容：v20 host-task `execute-batch` **并行**（读是主流开销——
     // 大量 JSONL 日志文件逐个串行 fs_read 各占一次宿主调用；池线程真并发替代）。
+    // **分片读→处理→释放（2026-09-28 OOM trap 修复）**：wasm 线性内存硬顶
+    // 256MB，全量 listing（实机 430MB）一次驻留 + 解码副本必然 rust_oom abort；
+    // 逐片读（≤ [`SCAN_SLICE_FILES`] 文件）→ 逐文件解析落库 → 释放再读下一片，
+    // 峰值内存 = 单片内容。宿主单元结果 >1MB 截断（truncated）的大文件在
+    // 逐文件循环里**串行全量重读**（`fs_read` 无截断），逐文件即释放不累积。
     // 解析与 DB 写保持串行：SQLite 连接单 Mutex，水位/upsert 依赖顺序处理。
-    let read_results = parallel_read(&h, &listing);
-
-    for (idx, (section, path)) in listing.iter().enumerate() {
-        let Some(slot) = per_adapter.get_mut(section.as_str()) else {
-            continue;
-        };
-        slot.0 += 1;
-        // 逐文件水位：内容字节长未变 → 跳过解析（JSONL append-only）
-        let content_opt = match &read_results[idx] {
-            Ok(opt) => opt.clone(),
-            Err(e) => {
-                h.log_warn(&format!("usage: read session file failed: {e}"));
+    for slice in scan_slices(&listing) {
+        let read_results = parallel_read(&h, slice);
+        for (idx, (section, path)) in slice.iter().enumerate() {
+            let Some(slot) = per_adapter.get_mut(section.as_str()) else {
+                continue;
+            };
+            slot.0 += 1;
+            // 逐文件水位：内容字节长未变 → 跳过解析（JSONL append-only）
+            let content_opt = match &read_results[idx] {
+                ReadOutcome::Content(opt) => opt.clone(),
+                ReadOutcome::Truncated => {
+                    // 大文件（宿主单元结果 >1MB 截断，产物非完整 JSON）：串行全量重读
+                    match h.fs_read(path) {
+                        Ok(opt) => opt,
+                        Err(e) => {
+                            h.log_warn(&format!("usage: read session file failed: {}", e.message));
+                            continue;
+                        }
+                    }
+                }
+                ReadOutcome::Failed(e) => {
+                    h.log_warn(&format!("usage: read session file failed: {e}"));
+                    continue;
+                }
+            };
+            let Some(content) = content_opt else {
+                continue; // 枚举与读取间隙被删除
+            };
+            let size = content.len();
+            if watermark_unchanged(&h, section, path, size) {
+                slot.2 += 1;
                 continue;
             }
-        };
-        let Some(content) = content_opt else {
-            continue; // 枚举与读取间隙被删除
-        };
-        let size = content.len();
-        if watermark_unchanged(&h, section, path, size) {
-            slot.2 += 1;
-            continue;
-        }
-        if size > MAX_FILE_BYTES {
-            h.log_warn(&format!(
-                "usage: session file exceeds cap, skipped, size = {size}"
-            ));
-            slot.2 += 1;
-            continue;
-        }
-        let Some(mut parsed) = parse_by_adapter(section, &content) else {
-            continue;
-        };
-        if parsed.cli_session_id.is_empty() {
-            // 无会话头（未知格式自定义来源）：以文件名兜底，保证可入库与详情定位
-            if let Some(stem) = file_stem(path) {
-                parsed.cli_session_id = format!("file:{stem}");
-                if parsed.title.is_none() {
-                    parsed.title = Some(stem.to_string());
+            if size > MAX_FILE_BYTES {
+                h.log_warn(&format!(
+                    "usage: session file exceeds cap, skipped, size = {size}"
+                ));
+                slot.2 += 1;
+                continue;
+            }
+            let Some(mut parsed) = parse_by_adapter(section, &content) else {
+                continue;
+            };
+            if parsed.cli_session_id.is_empty() {
+                // 无会话头（未知格式自定义来源）：以文件名兜底，保证可入库与详情定位
+                if let Some(stem) = file_stem(path) {
+                    parsed.cli_session_id = format!("file:{stem}");
+                    if parsed.title.is_none() {
+                        parsed.title = Some(stem.to_string());
+                    }
                 }
             }
+            if parsed.skipped_lines > 0 {
+                h.log_warn(&format!(
+                    "usage: skipped unparseable lines, count = {}, adapter = {section}",
+                    parsed.skipped_lines
+                ));
+            }
+            let sessions = upsert_session(&h, section, path, &parsed, now);
+            upsert_watermark(&h, section, path, size, now);
+            slot.1 += 1;
+            slot.3 += sessions;
         }
-        if parsed.skipped_lines > 0 {
-            h.log_warn(&format!(
-                "usage: skipped unparseable lines, count = {}, adapter = {section}",
-                parsed.skipped_lines
-            ));
-        }
-        let sessions = upsert_session(&h, section, path, &parsed, now);
-        upsert_watermark(&h, section, path, size, now);
-        slot.1 += 1;
-        slot.3 += sessions;
     }
 
     // opencode（SQLite 源，票 07）：不进上面的文件枚举，在 JSONL 回灌后
@@ -292,19 +308,47 @@ pub(crate) fn handle_scan_done(event: &ProcessDoneEvent) -> anyhow::Result<()> {
     emit_and_return(&h, &state).map(|_| ())
 }
 
-/// 并行读全部会话文件内容（v20 host-task `execute-batch`：`fs.read` 单元池线程
-/// 真并发）。返回按入参顺序的结果：`Ok(Some(content))` / `Ok(None)`（枚举与读取
-/// 间隙被删除）/ `Err`（宿主读失败，文案与 [`WasmHost::fs_read`] 同源）。
-/// 批次级失败（宿主拒绝 plan / 权限缺失 / 响应损坏）整体降级为逐条 Err——
-/// 调用方按原串行路径的 `log_warn + continue` 语义处理，不抛致命错误。
-fn parallel_read(
-    h: &WasmHost,
-    listing: &[(String, String)],
-) -> Vec<Result<Option<String>, String>> {
-    if listing.is_empty() {
-        return Vec::new();
-    }
-    let units: Vec<TaskUnit> = listing
+/// 扫描分片粒度（文件数/片）——**wasm 线性内存纪律（2026-09-28 OOM trap 修复）**：
+/// 插件线性内存硬顶 256MB（宿主 `MAX_PLUGIN_MEMORY_BYTES`），而宿主
+/// `execute-batch` 一次性返回整片全部单元结果，插件解码还会产生 2 份副本
+/// （raw + parsed/results + 解码内容）。单片 32 文件 × 单元结果上限（~1MB）× 3
+/// ≈ 96MB 峰值，安全余量充足；同时远低于宿主单 plan 单元数上限 256。
+/// 全量 listing（实机 430MB）一次驻留必然 OOM。
+const SCAN_SLICE_FILES: usize = 32;
+
+/// 单文件读取结果（execute-batch 单元结果 → 调用方逐文件处理）
+#[derive(Clone, Debug)]
+enum ReadOutcome {
+    /// 成功；None = 枚举与读取间隙被删除（文件不存在）
+    Content(Option<String>),
+    /// 宿主 task `fs.read` 单元结果被截断（结果 JSON 编码 >1MB，宿主按
+    /// `PLUGIN_TASK_UNIT_RESULT_MAX_BYTES` 截断成**非完整 JSON**）——必须由调用方
+    /// 经串行 [`WasmHost::fs_read`] 全量重读（该路径无截断）
+    Truncated,
+    /// 宿主读失败（批次级失败 / 权限缺失 / 响应损坏 / 单元级错误）
+    Failed(String),
+}
+
+/// 分片：listing → 每片 ≤ [`SCAN_SLICE_FILES`] 的连续切片（保持原序）。
+/// 纯函数（可测）：分片粒度是 OOM 修复的回归锁——单片「读→处理→释放」
+/// 保证峰值内存 = 单片内容，与全量 listing 大小解耦。
+fn scan_slices(listing: &[(String, String)]) -> Vec<&[(String, String)]> {
+    listing.chunks(SCAN_SLICE_FILES).collect()
+}
+
+/// 并行读**一片**会话文件内容（v20 host-task `execute-batch`：`fs.read` 单元池线程
+/// 真并发）。返回按入参顺序的结果。
+///
+/// **内存纪律**：wasm 线性内存 256MB 硬顶，宿主响应整片返回 + 解码副本——
+/// 全量一次提交（此前 200 单元/片 × ~660KB 平均 ≈ 500MB 峰值）直接
+/// `rust_oom` abort trap。调用方必须经 [`scan_slices`] 分片，逐片读→处理→释放。
+/// 单元结果 >1MB 被宿主截断（`truncated` 标记，产物非完整 JSON）→
+/// [`ReadOutcome::Truncated`]，由调用方逐文件串行全量重读（不累积驻留）。
+/// 批次级失败（宿主拒绝 plan / 权限缺失 / 响应损坏）整体降级为逐条
+/// [`ReadOutcome::Failed`]——调用方按原串行路径的 `log_warn + continue` 语义
+/// 处理，不抛致命错误。
+fn parallel_read(h: &WasmHost, slice: &[(String, String)]) -> Vec<ReadOutcome> {
+    let units: Vec<TaskUnit> = slice
         .iter()
         .enumerate()
         .map(|(i, (_, path))| TaskUnit::fs_read(&format!("r{i}"), path))
@@ -313,39 +357,54 @@ fn parallel_read(
         Ok(r) => r,
         Err(e) => {
             let msg = format!("usage: batch read failed: {}", e.message);
-            return (0..listing.len()).map(|_| Err(msg.clone())).collect();
+            return (0..slice.len())
+                .map(|_| ReadOutcome::Failed(msg.clone()))
+                .collect();
         }
     };
     let parsed: serde_json::Value = match serde_json::from_str(&raw) {
         Ok(v) => v,
         Err(_) => {
             let msg = "usage: batch read: invalid host response".to_string();
-            return (0..listing.len()).map(|_| Err(msg.clone())).collect();
+            return (0..slice.len())
+                .map(|_| ReadOutcome::Failed(msg.clone()))
+                .collect();
         }
     };
     let results = parsed["results"].as_array().cloned().unwrap_or_default();
-    let mut out = Vec::with_capacity(listing.len());
-    for i in 0..listing.len() {
-        let entry = results.get(i).cloned().unwrap_or(serde_json::Value::Null);
-        if entry["ok"] == true {
-            // fs.read 原返回 Option<String>：value 字段缺失 = None（文件不存在）；
-            // 存在 = JSON 编码字符串（`"内容"`）
-            match entry.get("value").and_then(|v| v.as_str()) {
-                None => out.push(Ok(None)),
-                Some(v) => match serde_json::from_str::<Option<String>>(v) {
-                    Ok(opt) => out.push(Ok(opt)),
-                    Err(e) => out.push(Err(format!("usage: decode read result failed: {e}"))),
-                },
-            }
-        } else {
-            let err = entry["error"]
-                .as_str()
-                .unwrap_or("unknown batch unit error")
-                .to_string();
-            out.push(Err(err));
-        }
+    (0..slice.len())
+        .map(|i| decode_read_outcome(results.get(i)))
+        .collect()
+}
+
+/// 单条单元结果 → [`ReadOutcome`]（纯函数，可测）：
+/// - `truncated` 标记 → [`ReadOutcome::Truncated`]（截断产物非完整 JSON，禁解码）
+/// - `ok == false` → [`ReadOutcome::Failed`]（单元级错误原样透传）
+/// - `ok == true` 无 value → [`ReadOutcome::Content(None)`]（文件不存在）
+/// - `ok == true` 有 value → 解码 `Option<String>`（value 是 JSON 编码字符串）
+fn decode_read_outcome(entry: Option<&serde_json::Value>) -> ReadOutcome {
+    let Some(entry) = entry else {
+        return ReadOutcome::Failed("usage: batch read: missing unit result".to_string());
+    };
+    if entry["truncated"] == true {
+        return ReadOutcome::Truncated;
     }
-    out
+    if entry["ok"] != true {
+        let err = entry["error"]
+            .as_str()
+            .unwrap_or("unknown batch unit error")
+            .to_string();
+        return ReadOutcome::Failed(err);
+    }
+    // fs.read 原返回 Option<String>：value 字段缺失 = None（文件不存在）；
+    // 存在 = JSON 编码字符串（`"内容"`）
+    match entry.get("value").and_then(|v| v.as_str()) {
+        None => ReadOutcome::Content(None),
+        Some(v) => match serde_json::from_str::<Option<String>>(v) {
+            Ok(opt) => ReadOutcome::Content(opt),
+            Err(e) => ReadOutcome::Failed(format!("usage: decode read result failed: {e}")),
+        },
+    }
 }
 
 // ==================== Tests（纯函数单测） ====================
@@ -390,6 +449,95 @@ mod tests {
         // 路径含单引号：'\'' 转义后不逃逸包裹，整体仍为单引号字符串
         let quoted = scan_script(&[("q".to_string(), "/tmp/it's here".to_string())], false);
         assert!(quoted.contains("find '/tmp/it'\\''s here' -type f -name '*.jsonl'"));
+    }
+
+    /// 分片回归锁（2026-09-28 实机 bug 两个）：① 852 单元一次 execute-batch
+    /// 被宿主拒绝（`plan exceeds max units per plan (852 > 256)`）→ 零扫描；
+    /// ② 全量 430MB 内容一次驻留 + 解码副本 → wasm 线性内存 256MB 硬顶
+    /// rust_oom abort trap（`on_process_done`）。断言：listing 切成多片、
+    /// 每片 ≤ [`SCAN_SLICE_FILES`]（既是内存包络也远低于宿主 plan 上限 256）、
+    /// 原序覆盖无丢失。
+    #[test]
+    fn scan_slices_bound_memory_and_plan_units() {
+        // 空列表 → 无分片
+        assert!(scan_slices(&[]).is_empty());
+
+        // 边界：恰超一片 → 两片，尺寸 32 + 1
+        let boundary: Vec<(String, String)> = (0..(SCAN_SLICE_FILES + 1))
+            .map(|i| (format!("s{i}"), format!("/tmp/b{i}.jsonl")))
+            .collect();
+        let slices = scan_slices(&boundary);
+        assert_eq!(slices.len(), 2);
+        assert_eq!(slices[0].len(), SCAN_SLICE_FILES);
+        assert_eq!(slices[1].len(), 1);
+
+        // 实机规模（852 文件）：多片、每片不越内存包络（同时 < 宿主 plan 上限 256）
+        let bulk: Vec<(String, String)> = (0..852)
+            .map(|i| (format!("s{i}"), format!("/tmp/f{i}.jsonl")))
+            .collect();
+        let slices = scan_slices(&bulk);
+        assert!(slices.len() > 1);
+        for slice in &slices {
+            assert!(!slice.is_empty());
+            assert!(
+                slice.len() <= SCAN_SLICE_FILES,
+                "单片 {} 文件越分片粒度 {}",
+                slice.len(),
+                SCAN_SLICE_FILES
+            );
+            assert!(
+                slice.len() <= 256,
+                "单片 {} 文件越宿主 plan 单元上限",
+                slice.len()
+            );
+        }
+
+        // 原序覆盖：完整、无丢失、无乱序（调用方按此序逐文件回填）
+        let flattened: Vec<&(String, String)> = slices.iter().copied().flatten().collect();
+        assert_eq!(flattened.len(), bulk.len());
+        for (i, item) in flattened.iter().enumerate() {
+            assert_eq!(item.0, bulk[i].0);
+            assert_eq!(item.1, bulk[i].1);
+        }
+    }
+
+    /// 单元结果 → [`ReadOutcome`] 映射契约：
+    /// truncated 标记优先（截断产物非完整 JSON，禁解码）；失败原样透传；
+    /// value 缺失 = None；正常解码；缺失条目显性失败。
+    #[test]
+    fn decode_read_outcome_maps_unit_results() {
+        // truncated 标记 → Truncated（即使 ok=true 也不解码）
+        let truncated =
+            json!({ "id": "r0", "ok": true, "value": "\"……[truncated]", "truncated": true });
+        assert!(matches!(
+            decode_read_outcome(Some(&truncated)),
+            ReadOutcome::Truncated
+        ));
+
+        // 单元级失败 → Failed（错误原样透传）
+        let unit_err =
+            json!({ "id": "r1", "ok": false, "error": "fs error: file read failed: denied" });
+        assert!(matches!(
+            decode_read_outcome(Some(&unit_err)),
+            ReadOutcome::Failed(e) if e == "fs error: file read failed: denied"
+        ));
+
+        // 成功但无 value（文件不存在）→ Content(None)
+        let none = json!({ "id": "r2", "ok": true });
+        assert!(matches!(
+            decode_read_outcome(Some(&none)),
+            ReadOutcome::Content(None)
+        ));
+
+        // 成功且有 value → 解码 Option<String>（value 是 JSON 编码字符串）
+        let some = json!({ "id": "r3", "ok": true, "value": "\"hello\\n\"" });
+        assert!(matches!(
+            decode_read_outcome(Some(&some)),
+            ReadOutcome::Content(Some(s)) if s == "hello\n"
+        ));
+
+        // 缺失条目 → Failed（防越界静默）
+        assert!(matches!(decode_read_outcome(None), ReadOutcome::Failed(_)));
     }
 
     /// 枚举分段只含 JSONL 目录：opencode 的 SQLite 库不进文件枚举

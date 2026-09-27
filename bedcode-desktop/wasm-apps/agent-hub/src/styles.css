@@ -60,19 +60,33 @@
   --ah-bubble: color-mix(in srgb, var(--color-primary) 82%, var(--text-primary));
   --ah-on-primary: var(--color-primary-contrast);
 
-  /* 每日 tokens 双段专用色（不使用任何语义色，也不复用 --color-primary）。
-     原实现输出段借 --color-warning(#f59e0b 琥珀 = 警告色) 且输入段用
-     --color-primary —— warm 色板的 primary 是近黑 rgb(29,26,20)，
-     于是 90% 的图幅是黑条 + 一点警告琥珀。
-     下面是实测选出的一对固定值（理由见票 13）：
-       12 套主题 × {--bg-card, --bg-hover} 最差 3.16:1（WCAG 1.4.11 门槛 3）
-       两段 ΔE(CIE76) = 45（门槛 25）
-       与 --color-success/warning/danger 的最小 ΔE = 60（门槛 25）
-       与各色板 --color-primary 的最小 ΔE = 28
-     固定值而非派生：warm 色板的 primary 是无彩色（近黑/近白），
-     任何“由 primary 派生”的两段在默认色板下都只能靠亮度区分。 */
-  --chart-in: #6f5b3d;
-  --chart-out: #3b3b60;
+  /* 图表分类色（4 槽：输入 / 输出 / 缓存读 / 缓存写）。
+     c1/c2 沿用票 13 实测选出的 --chart-in/--chart-out 同值（改名以统一槽位
+     命名，色值一字未动）；c3/c4 是本次补的两槽，选取由一次性搜索脚本在
+     12 套主题下穷举得出（判据与 styleGuards 同数学）：
+       ① 对 --bg-card ≥ 3:1（无文本图形 WCAG 1.4.11）
+       ② 槽位两两 ΔE(CIE76) ≥ 25（相邻段不靠色相区分）
+       ③ 与语义三色 ΔE ≥ 25（不得读成「警告/成功色」）
+       ④ 与色板 primary ΔE ≥ 20（不得读成品牌色）
+       ⑤ 相邻槽位色相间隔 ≥ 50°（不能「两个都像蓝」）
+       ⑥ 同一槽位浅/深取色相一致 ≤ 6°（切主题时身份色不变）
+     最差实测：card 3.51 / pair 43.7 / sem 34.5 / pri 22.5（浅），
+                card 3.89 / pair 36.8 / sem 27.4 / pri 26.5（深） */
+  --chart-c1: #6f5b3d;
+  --chart-c2: #3b3b60;
+  --chart-c3: #509b69;
+  --chart-c4: #bf69a2;
+
+  /* 节奏热力图色阶（单色**顺序标度**，4 档 + 空格）：
+     空格用 --bg-hover（轨道底），四档是 c1 向卡片底色混出的 55/70/85/100%，
+     亮度单调递减、顶档 = c1 本身。低端两档对 --bg-card 低于 3:1 属**预期**
+     （顺序标度的低档本就该「若有若无」；WCAG 1.4.11 不适用于「数值另有文字
+     通道」的标度格），已在 styleGuards 里以豁免登记，判据换成「亮度单调 +
+     顶档 ≥ 3:1 + 每格有 title/aria 文字替代」。 */
+  --chart-heat-1: #afa392;
+  --chart-heat-2: #9a8b76;
+  --chart-heat-3: #847359;
+  --chart-heat-4: #6f5b3d;
 
   /* 自定义日志来源的字母徽标底色：6 档中性混色（--bg-hover 往 --text-primary
      方向按 6% 步进加深），既能按名字稳定取一档做视觉区分，又不引入
@@ -87,8 +101,17 @@
 }
 
 :root.dark {
-  --chart-in: #83835a;
-  --chart-out: #7c7ca2;
+  /* 深色下的 c1/c2 同色相提亮（沿用票 13 实测值），c3/c4 同规则 */
+  --chart-c1: #83835a;
+  --chart-c2: #7c7ca2;
+  --chart-c3: #359756;
+  --chart-c4: #d770b4;
+
+  /* 热力色阶深色版（向深色卡底混出，顶档 = 深色下的 c1） */
+  --chart-heat-1: #55543b;
+  --chart-heat-2: #646345;
+  --chart-heat-3: #747350;
+  --chart-heat-4: #83835a;
 }
 
 /* ==================== 面板骨架 ==================== */
@@ -100,13 +123,31 @@
   flex-direction: column;
   height: 100%;
   overflow-y: auto;
+  /* 滚动条槽位常驻：分区切换时内容是否溢出会变化，纵向经典滚动条随之出现/消失，
+     内容区宽度按滚动条宽（本机 WebKitGTK 实测 17px）跳变，顶部分段栏与整列内容
+     一起横向横移，叠加淡入淡出过渡即表现为画面抖动。常驻槽位让宽度恒定为
+     内容宽 − 滚动条宽，任意分区/任一溢出状态都不再横移。
+     （scrollbar-gutter 支持：WebKitGTK ≥ 2.48、Chromium ≥ 94 / WebView2，
+       overlay 滚动条平台无布局占用天然无此问题。） */
+  scrollbar-gutter: stable;
   padding: 20px;
   box-sizing: border-box;
 }
 
-/* 顶部 pill 分段导航（变体 B） */
+/* 顶部 pill 分段导航（变体 B）
+ *
+ * 宽度只由内容决定（原型里就是 inline-flex 收窄形态）：.ah-view 是 flex 列容器，
+ * 本块作为 flex item 会被 align-items: stretch 拉成整行宽 —— 而整行宽等于
+ * 「内容区宽 − 纵向滚动条宽」，于是分区内容一溢出、滚动条一出现/消失，整条
+ * 分段栏（含底色块与描边）就跟着变宽/横移。align-self: flex-start 把它改回
+ * 内容宽，滚动条状态与之完全无关。
+ * max-width + flex-wrap 是窄面板兜底（最小窗口宽 800px + UI 放大档可能放不下
+ * 6 项）：让分段栏换行，而不是压缩标签或把整列撑出横向滚动条。 */
 .ah-tabs {
   display: inline-flex;
+  align-self: flex-start;
+  max-width: 100%;
+  flex-wrap: wrap;
   gap: 4px;
   padding: 3px;
   background: var(--bg-sidebar);
@@ -125,6 +166,8 @@
   color: var(--ah-text-data);
   font-size: var(--font-size-base);
   font-family: inherit;
+  /* 换行兜底时保持单项完整，宁可整块换行也不把中文标签挤成两行 */
+  white-space: nowrap;
   cursor: pointer;
   transition:
     background-color 0.2s,
@@ -143,6 +186,17 @@
 
 .ah-tab.active:hover {
   background: var(--color-primary-hover);
+}
+
+/* 键盘焦点环：控件本身无边框，UA 默认环与设计语言不一致，改走 token。
+   选中项底色就是 primary，描边须换成 primary 前景对比色，否则同色不可见。 */
+.ah-tab:focus-visible {
+  outline: 2px solid var(--text-primary);
+  outline-offset: -2px;
+}
+
+.ah-tab.active:focus-visible {
+  outline-color: var(--color-primary-contrast);
 }
 
 /* ==================== 页面切换过渡动画 ==================== */
@@ -1031,28 +1085,41 @@
   font-weight: 600;
 }
 
-/* 表单字段行：label + 控件（窄面板换行） */
+/* 表单字段行：标签在上、控件在下（弹窗内控件占满字段宽；旧形态是 96px 定宽
+   标签列 + 控件，长标签「模型列表（每行一个）」「API Key（中心凭据）」会溢出
+   定宽列并在窄弹窗里互相挤压） */
 .ah-pv-field {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
   min-width: 0;
 }
 
 .ah-pv-label {
-  width: 96px;
-  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
   color: var(--ah-text-data);
+  font-size: var(--font-size-label);
 }
 
+/* 必填标记：星号对读屏无意义，另给可读的「必填」名（aria-label / title） */
+.ah-pv-req {
+  color: var(--ah-text-danger);
+  font-weight: 700;
+}
+
+/* 控件在纵向字段里占满宽度。必须解除 .ah-input 的 flex: 1 —— 纵向 flex 中
+   flex-basis 作用于高度，会把 --input-height(36px) 的输入框压成 0 高 */
 .ah-pv-input {
+  flex: 0 0 auto;
+  width: 100%;
   max-width: 100%;
-  flex: 1;
-  min-width: 200px;
 }
 
-/* chip 选择组（目标 CLI / API 方言 / 模板快选） */
+/* chip 选择组（模板快选 / API 方言）：作为表单选项，高度抬到 28px 且给
+   常态描边，读得出「这是个可点选项」而不是静态标签 */
 .ah-pv-targets {
   display: inline-flex;
   align-items: center;
@@ -1061,8 +1128,10 @@
 }
 
 .ah-pv-target {
+  height: 28px;
+  padding: 0 10px;
   cursor: pointer;
-  border: 1px solid transparent;
+  border: 1px solid var(--border-strong);
   font-family: inherit;
   transition:
     background-color 0.2s,
@@ -1076,7 +1145,18 @@
 
 .ah-pv-target.active {
   background: var(--color-primary);
+  border-color: var(--color-primary);
   color: var(--color-primary-contrast);
+  font-weight: 600;
+}
+
+.ah-pv-target:focus-visible {
+  outline: 2px solid var(--text-primary);
+  outline-offset: 1px;
+}
+
+.ah-pv-target.active:focus-visible {
+  outline-color: var(--color-primary-contrast);
 }
 
 /* key 四选一（radio 行，v2 起含中心库 stored） */
@@ -1108,22 +1188,29 @@
 
 /* 模型列表 textarea（编辑器内，矮于 SKILL 编辑器） */
 .ah-pv-models {
+  flex: 0 0 auto;
+  width: 100%;
   height: 110px;
-  width: auto;
-  flex: 1;
-  min-width: 200px;
 }
 
-/* 编辑器 key 行：输入框 + 清空切换（v2 中心凭据） */
+/* 编辑器 key 行：输入框 + 清空切换（v2 中心凭据）。行内控件恢复弹性，
+   左侧输入框吃掉剩余宽度，按钮固定在行尾 */
 .ah-pv-keyrow {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 8px;
-  flex: 1;
-  min-width: 200px;
+  width: 100%;
+  min-width: 0;
 }
 
-/* 应用/编辑器动作行 */
+.ah-pv-keyrow .ah-pv-input {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+}
+
+/* 应用面板（ProviderApply）动作行：内置页里“写入配置”主操作的落位，
+   弹窗编辑器的动作行已改用 .ah-modal-foot */
 .ah-pv-apply-actions {
   display: flex;
   align-items: center;
@@ -1146,12 +1233,88 @@
   backdrop-filter: blur(4px);
 }
 
-/* 面板：复用 .ah-card 材质；宽度/高度受限，内容超高时面板内滚动 */
+/* 面板：复用 .ah-card 材质；内部为「头 / 体 / 脚」三段——
+   体部独立滚动，头（标题 + 关闭）与脚（保存 / 取消）常驻，
+   表单再长滚动时也不会把标题和主操作滚出视野。
+   padding: 0 覆盖 .ah-card 的 14/16 内边距，改由三段各自负责。 */
 .ah-modal-panel {
+  display: flex;
+  flex-direction: column;
   width: min(560px, 100%);
   max-height: calc(100vh - 48px);
-  overflow-y: auto;
+  padding: 0;
+  overflow: hidden;
   box-sizing: border-box;
+}
+
+.ah-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex: none;
+  padding: 14px 14px 14px 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.ah-modal-title {
+  margin: 0;
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* 关闭：图标按钮（28px 方形、无常态描边），比通用 .ah-btn 轻一级，
+   避免与页头主操作抢注意力 */
+.ah-modal-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-button);
+  background: transparent;
+  color: var(--ah-text-data);
+  font-size: var(--font-size-base);
+  font-family: inherit;
+  cursor: pointer;
+  transition:
+    background-color 0.2s,
+    color 0.2s;
+}
+
+.ah-modal-close:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.ah-modal-close:focus-visible {
+  outline: 2px solid var(--text-primary);
+  outline-offset: -2px;
+}
+
+.ah-modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  flex: 1 1 auto;
+  /* min-height: 0：作为 flex 子项允许真正收缩，否则超高时会把脚部挤出 max-height */
+  min-height: 0;
+  padding: 16px 18px 18px;
+  overflow-y: auto;
+}
+
+.ah-modal-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex: none;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border);
 }
 
 /* 进出场：整体淡入 + 面板轻微上浮/缩放（无动画偏好时被全局 reduce 规则降级） */
@@ -1180,103 +1343,105 @@
   margin-top: 10px;
 }
 
-/* ==================== 使用统计（票据 06，原型变体 B stats 页） ==================== */
+/* ==================== 使用统计看板（票据 06 + 改版） ====================
+ *
+ * 结构：页头（水位 / 时间窗 / 扫描）→ KPI 六卡 → 指标选择 → 趋势主图
+ * → 节奏热力图 + CLI 占比环 → 项目 / 模型排行 → 数据清空。
+ * 会话级明细**不在本分区**（只在日志分区），故无列表 / 分页 / 表格样式。
+ */
 
+/* ---------- 页头 ---------- */
 .ah-st-head {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
   margin-bottom: 12px;
 }
 
-.ah-st-totals {
+/* 把「立即扫描」推到行尾；无内容时仍占位，避免窄面板下按钮换行 */
+.ah-st-head-spacer {
+  flex: 1;
+  min-width: 8px;
+}
+
+.ah-st-ranges {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+/* ---------- KPI 六卡 ---------- */
+/* grid 而非 flex：六张卡等宽等高，卡内副行长短不影响同行基线 */
+.ah-st-kpis {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
   margin-bottom: 14px;
 }
 
-.ah-st-total {
+.ah-st-kpi {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius-card);
-  padding: 12px 14px;
+  padding: 10px 12px;
+  min-width: 0;
 }
 
-.ah-st-total-val {
+.ah-st-kpi-val {
   font-size: var(--font-size-lg);
   font-weight: 600;
   color: var(--text-primary);
-  font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+  line-height: 1.3;
+  /* 长数字换行而不是撑破卡片（覆盖度 / 成本等位数不定） */
+  overflow-wrap: anywhere;
 }
 
-.ah-st-total-label {
+.ah-st-kpi-label {
   margin-top: 2px;
   font-size: var(--font-size-tag);
   color: var(--ah-text-data);
 }
 
-.ah-st-dims {
+/* 副行：均值 / 明细拆分，可换行（窄面板下不截断成「…」以外的信息） */
+.ah-st-kpi-sub {
+  margin-top: 1px;
+  font-size: var(--font-size-tag);
+  color: var(--ah-text-data);
+  overflow-wrap: anywhere;
+}
+
+/* 第三行（数据区间）刻意再弱一档：它是参考信息不是读数 */
+.ah-st-kpi-sub-dim {
+  color: var(--text-tertiary);
+}
+
+/* ---------- 指标选择（趋势 / 排行 / 占比共用一个选择） ---------- */
+.ah-st-metrics {
   display: flex;
-  gap: 6px;
+  gap: 4px;
+  flex-wrap: wrap;
   margin-bottom: 12px;
 }
 
-/* 每日 tokens 堆叠横条（输入/输出两段） */
-.ah-st-chart {
+/* ---------- 窗内空态：给出「看全部」出口 ---------- */
+.ah-st-nowindow {
   display: flex;
-  flex-direction: column;
-  gap: 5px;
-  margin-top: 8px;
-}
-
-.ah-st-crow {
-  display: grid;
-  grid-template-columns: 52px 1fr 64px;
   align-items: center;
-  gap: 10px;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
 }
 
-.ah-st-clabel {
+.ah-card-sub {
+  margin-top: -2px;
+  margin-bottom: 6px;
   font-size: var(--font-size-tag);
   color: var(--ah-text-data);
 }
 
-/* 每行色块；1px gap 露出一条轨道底色作为两段的分界，
-   使“哪一段是哪一段”不只依赖色相区分（ui-ux-pro-max --domain ux「Color Only」） */
-.ah-st-cbar {
-  height: 12px;
-  border-radius: var(--radius-tag);
-  background: var(--bg-hover);
-  overflow: hidden;
-  display: flex;
-  gap: 1px;
-}
-
-.ah-st-cin {
-  background: var(--chart-in);
-  height: 100%;
-}
-
-.ah-st-cout {
-  background: var(--chart-out);
-  height: 100%;
-}
-
-.ah-st-cval {
-  font-size: var(--font-size-tag);
-  color: var(--ah-text-data);
-  text-align: right;
-}
-
-.ah-st-legend {
-  display: flex;
-  gap: 14px;
-  font-size: var(--font-size-tag);
-  color: var(--ah-text-data);
-  margin-top: 8px;
-}
-
+/* ---------- 图例色块（环 / 排行 / 堆叠共用） ---------- */
 .ah-st-k {
   width: 10px;
   height: 10px;
@@ -1284,17 +1449,467 @@
   display: inline-block;
   margin-right: 5px;
   vertical-align: -1px;
+  flex-shrink: 0;
 }
 
-.ah-st-k.in {
-  background: var(--chart-in);
+/* ---------- 趋势图 ---------- */
+.ah-trend {
+  margin-top: 6px;
 }
 
-.ah-st-k.out {
-  background: var(--chart-out);
+.ah-trend-modes {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
 }
 
-/* 汇总表 */
+/* 图区：左侧固定宽刻度列 + 右侧图形（图形内部再叠 HTML 交互层） */
+.ah-trend-plot {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+}
+
+.ah-trend-yaxis {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  /* 与 SVG 顶部内边距对齐：首刻度贴顶线、末刻度贴基线 */
+  padding: 3px 0 2px;
+  flex-shrink: 0;
+  text-align: right;
+}
+
+.ah-trend-ytick {
+  font-size: var(--font-size-tag);
+  color: var(--ah-text-data);
+  white-space: nowrap;
+}
+
+.ah-trend-graphic {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+/* preserveAspectRatio=none + 固定高：y 方向 1:1 不变形，x 方向随容器拉伸；
+   描边一律 non-scaling-stroke，横向拉伸不会把线宽拉粗 */
+.ah-trend-svg {
+  display: block;
+  width: 100%;
+  height: 180px;
+  overflow: visible;
+}
+
+.ah-trend-grid {
+  stroke: var(--border);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.ah-trend-line {
+  fill: none;
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+
+/* 堆叠带描 1px 卡片底色：段与段之间露出底色，使「哪段是哪段」不只靠色相 */
+.ah-trend-band {
+  stroke: var(--bg-card);
+  stroke-width: 1;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+/* 交互层：每列一个透明可聚焦按钮（hover 与 focus 走同一条取值路径） */
+.ah-trend-hits {
+  position: absolute;
+  inset: 0;
+  display: flex;
+}
+
+.ah-trend-hit {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.ah-trend-hit:hover,
+.ah-trend-hit.on {
+  background: var(--bg-hover);
+}
+
+.ah-trend-tip {
+  position: absolute;
+  top: 4px;
+  /* 贴列中心；靠边界时由 max-width + translate 收拢，不越出图区 */
+  transform: translateX(-50%);
+  max-width: 220px;
+  padding: 6px 8px;
+  background: var(--bg-sidebar);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-tag);
+  box-shadow: var(--shadow-card);
+  pointer-events: none;
+  z-index: 20;
+}
+
+.ah-trend-tip-day {
+  font-size: var(--font-size-tag);
+  color: var(--ah-text-data);
+}
+
+.ah-trend-tip-main {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  margin: 1px 0 3px;
+  color: var(--text-primary);
+}
+
+.ah-trend-tip-unit {
+  font-size: var(--font-size-tag);
+  color: var(--ah-text-data);
+}
+
+.ah-trend-tip-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: var(--font-size-tag);
+  color: var(--ah-text-data);
+}
+
+.ah-trend-xaxis {
+  position: relative;
+  height: 16px;
+  /* 标签用绝对定位按 SVG 的同一套 x() 对齐（flex 均分会与数据点错位） */
+  margin: 2px 0 0 46px;
+}
+
+.ah-trend-xtick {
+  position: absolute;
+  transform: translateX(-50%);
+  font-size: var(--font-size-tag);
+  color: var(--ah-text-data);
+  white-space: nowrap;
+}
+
+.ah-trend-legend {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  font-size: var(--font-size-tag);
+  color: var(--ah-text-data);
+  margin-top: 6px;
+}
+
+.ah-trend-table-wrap {
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+/* ---------- 节奏热力图（7×24） ---------- */
+.ah-heat {
+  margin-top: 4px;
+}
+
+/* grid-template-columns 在各行重复声明（每行一个独立 grid 才能按列对齐） */
+.ah-heat-grid {
+  display: grid;
+  grid-template-columns: 30px repeat(24, minmax(0, 1fr));
+  gap: 2px;
+  align-items: center;
+}
+
+.ah-heat-row {
+  display: grid;
+  grid-template-columns: 30px repeat(24, minmax(0, 1fr));
+  gap: 2px;
+  align-items: center;
+}
+
+.ah-heat-corner {
+  display: block;
+}
+
+.ah-heat-hour {
+  font-size: var(--font-size-tag);
+  color: var(--ah-text-data);
+  text-align: center;
+}
+
+.ah-heat-dow {
+  font-size: var(--font-size-tag);
+  color: var(--ah-text-data);
+  white-space: nowrap;
+}
+
+/* 格子：aspect-ratio 保方格，宽度自适应（窄面板下不压成扁条） */
+.ah-heat-cell {
+  aspect-ratio: 1;
+  border-radius: 2px;
+  background: var(--bg-hover);
+  min-width: 0;
+}
+
+/* lv0 = 空格（用轨道底）；lv1..lv4 = 色阶，亮度单调递减 */
+.ah-heat-cell.lv1 {
+  background: var(--chart-heat-1);
+}
+
+.ah-heat-cell.lv2 {
+  background: var(--chart-heat-2);
+}
+
+.ah-heat-cell.lv3 {
+  background: var(--chart-heat-3);
+}
+
+.ah-heat-cell.lv4 {
+  background: var(--chart-heat-4);
+}
+
+.ah-heat-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.ah-heat-peak {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text-primary);
+}
+
+.ah-heat-peak-when {
+  font-size: var(--font-size-tag);
+  color: var(--ah-text-data);
+}
+
+.ah-heat-legend {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.ah-heat-legend-cap {
+  font-size: var(--font-size-tag);
+  color: var(--ah-text-data);
+}
+
+.ah-heat-legend-cap:first-child {
+  margin-right: 4px;
+}
+
+.ah-heat-legend-cap:last-child {
+  margin-left: 4px;
+}
+
+.ah-heat-swatch {
+  width: 11px;
+  height: 11px;
+  border-radius: 2px;
+  background: var(--bg-hover);
+}
+
+.ah-heat-swatch.lv1 {
+  background: var(--chart-heat-1);
+}
+
+.ah-heat-swatch.lv2 {
+  background: var(--chart-heat-2);
+}
+
+.ah-heat-swatch.lv3 {
+  background: var(--chart-heat-3);
+}
+
+.ah-heat-swatch.lv4 {
+  background: var(--chart-heat-4);
+}
+
+/* ---------- CLI 占比环 ---------- */
+/* 根容器：窄面板下环与图例改为上下堆叠（ah-donut-body 负责换行） */
+.ah-donut {
+  margin-top: 4px;
+}
+
+.ah-donut-body {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.ah-donut-graphic {
+  position: relative;
+  width: 160px;
+  height: 160px;
+  flex-shrink: 0;
+}
+
+.ah-donut-svg {
+  display: block;
+  width: 160px;
+  height: 160px;
+}
+
+/* 轨道底：环的空位底色（纯装饰，不承载信息） */
+.ah-donut-track {
+  fill: none;
+  stroke: var(--bg-hover);
+}
+
+/* 面积填充：纯 token 半透明（不用 linearGradient——渐变需要全局唯一的
+   SVG id，在插件注入的 HTML 里会与宿主/其他插件的 id 撞名） */
+.ah-trend-area {
+  fill: var(--chart-c1);
+  fill-opacity: 0.2;
+}
+
+.ah-donut-arc {
+  fill: none;
+  stroke-linecap: butt;
+  transition: stroke-width 0.2s;
+}
+
+.ah-donut-center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  pointer-events: none;
+}
+
+.ah-donut-center-val {
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.ah-donut-center-label {
+  font-size: var(--font-size-tag);
+  color: var(--ah-text-data);
+}
+
+.ah-donut-legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  flex: 1;
+  min-width: 0;
+}
+
+.ah-donut-legend-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0;
+  font-size: var(--font-size-tag);
+}
+
+.ah-donut-legend-name {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ah-donut-legend-pct {
+  color: var(--ah-text-data);
+  flex-shrink: 0;
+}
+
+/* 零值扇位的图例色块：空心描边，与「有值」实心块区分 */
+.ah-donut-legend-k0 {
+  background: transparent;
+  border: 1px solid var(--border);
+}
+
+/* ---------- 排行（项目 / 模型） ---------- */
+.ah-bars {
+  margin-top: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.ah-bars-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 96px 62px;
+  align-items: center;
+  gap: 8px;
+}
+
+.ah-bars-head {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.ah-bars-name {
+  color: var(--text-primary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ah-bars-sub {
+  font-size: var(--font-size-tag);
+  color: var(--ah-text-data);
+  flex-shrink: 0;
+}
+
+.ah-bars-track {
+  height: 8px;
+  border-radius: var(--radius-tag);
+  background: var(--bg-hover);
+  overflow: hidden;
+}
+
+.ah-bars-fill {
+  height: 100%;
+  border-radius: var(--radius-tag);
+  /* 填充用 transform: scaleX 由 0 起（见组件内 width 绑定）：内容扩张
+     动画必须走 grid-template-rows/max-height，装饰条走 scaleX 不会拉变形 */
+  background: var(--chart-c1);
+}
+
+.ah-bars-val {
+  text-align: right;
+  font-size: var(--font-size-tag);
+  color: var(--ah-text-data);
+}
+
+.ah-bars-rest {
+  margin-top: 8px;
+  font-size: var(--font-size-tag);
+  color: var(--ah-text-data);
+}
+
+/* ---------- 数据表（趋势图兜底呈现，仍沿用票 06 的表格样式） ---------- */
 .ah-st-table {
   width: 100%;
   border-collapse: collapse;
@@ -1309,6 +1924,9 @@
   font-size: var(--font-size-tag);
   padding: 6px 10px;
   border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  background: var(--bg-card);
 }
 
 .ah-st-table td {
@@ -1325,84 +1943,15 @@
   text-align: right;
 }
 
-.ah-st-name {
-  color: var(--text-primary);
-}
-
-.ah-st-sub {
-  margin-top: 2px;
-  font-size: var(--font-size-tag);
-  color: var(--ah-text-data);
-}
-
-/* 会话明细列表 */
-.ah-st-detail {
-  margin-top: 12px;
-}
-
-/* 空态整句：装饰级豁免（--text-tertiary）。整句是「没有数据」的唯一线索，
-   但它不承载具体数值/时间/路径，读不出不影响任何一次操作判断；
-   抬高只会让空态比有数据的行更抢眼。豁免登记见票 09 清单 */
+/* ---------- 空态 ----------
+   整句是「没有数据」的唯一线索，不承载任何数值/时间/路径（豁免见票 09）。 */
 .ah-st-empty {
   padding: 14px 4px;
   color: var(--text-tertiary);
   font-size: var(--font-size-body);
 }
 
-.ah-st-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 9px 4px;
-  border-bottom: 1px solid var(--border);
-  cursor: pointer;
-  transition: background-color 0.2s;
-}
-
-.ah-st-row:last-of-type {
-  border-bottom: none;
-}
-
-.ah-st-row:hover {
-  background: var(--bg-hover);
-}
-
-.ah-st-row-main {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.ah-st-row-title {
-  color: var(--text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ah-st-row-meta {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex: none;
-  color: var(--ah-text-data);
-}
-
-.ah-st-row-project {
-  max-width: 200px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ah-st-more {
-  margin-top: 10px;
-  text-align: center;
-}
-
-/* 适配器降级行（票 07）：每行 = 数据源名徽章 + 原因文案。
+/* ---------- 适配器降级行（票 07）：每行 = 数据源名徽章 + 原因文案 ----------
    横幅底已是 primary-light（信息性，非警告），故行间距靠 margin 区分，
    不再给每行叠底色——否则与徽章的 primary-light 底色撞成一块 */
 .ah-st-degraded-row {
@@ -1413,14 +1962,14 @@
   min-width: 0;
 }
 
-/* 降级原因文案：数据级（承载“为什么没数据”这一事实，不是装饰） */
+/* 降级原因文案：数据级（承载「为什么没数据」这一事实，不是装饰） */
 .ah-st-degraded-text {
   color: var(--ah-text-data);
   min-width: 0;
 }
 
-/* 数据清空区（票 07）：常驻一行，两击确认时在同一行展开确认条（不弹窗——
-   动作不可逆但影响面仅限本插件的统计库，就地确认比弹窗更轻） */
+/* ---------- 数据清空区（票 07）：常驻一行，两击确认时在同一行展开确认条
+   （不弹窗——动作不可逆但影响面仅限本插件的统计库，就地确认比弹窗更轻） ---------- */
 .ah-st-clear {
   display: flex;
   align-items: center;
@@ -1454,7 +2003,6 @@
   color: var(--ah-text-success);
   font-size: var(--font-size-tag);
 }
-
 /* ==================== 会话日志（改版：来源 / 查询 / 分页 / 二级详情） ==================== */
 
 .ah-lg {

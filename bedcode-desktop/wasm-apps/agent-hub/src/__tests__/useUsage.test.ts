@@ -146,41 +146,37 @@ beforeEach(() => {
   })
 })
 
-// ==================== U1/U2/U3 列表游标 ====================
+// ==================== U1 会话列表去重 ====================
 
-describe('U1 统计明细：追加加载', () => {
-  it('首次挂载装入第 1 页，load-more 拼在其后且 id 序列连续无重复', async () => {
+describe('U1 会话级列表只有一份（统计/日志重复展示的回归见证）', () => {
+  it('返回值上不再有统计侧列表面（statSessions / loadMoreSessions 等已删除）', async () => {
     const { usage, wrapper } = mountUsage()
     await flushPromises()
-    expect(ids(usage.statSessions.value)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15])
-
-    await usage.loadMoreSessions()
-    await flushPromises()
-    expect(ids(usage.statSessions.value)).toEqual([
-      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30,
-    ])
-
-    await usage.loadMoreSessions()
-    await flushPromises()
-    const third = ids(usage.statSessions.value)
-    // 反例守门：重复行 / 断号（回归见证，旧实现游标串味时这里会出现）
-    expect(new Set(third).size).toBe(third.length)
-    expect(third).toEqual(Array.from({ length: 45 }, (_, i) => i + 1))
+    // 此前统计分区挂了一份同源会话列表，与日志表格重复且游标语义相反
+    expect('statSessions' in usage).toBe(false)
+    expect('statTotal' in usage).toBe(false)
+    expect('statLoaded' in usage).toBe(false)
+    expect('statLoading' in usage).toBe(false)
+    expect('loadMoreSessions' in usage).toBe(false)
+    expect('setListFilter' in usage).toBe(false)
     wrapper.unmount()
   })
 
-  it('反例：已装满（statLoaded == statTotal）时 load-more 不再发命令', async () => {
+  it('挂载只发一次 list-usage-sessions（两份列表时代是两次）', async () => {
     const { usage, wrapper } = mountUsage()
     await flushPromises()
-    await usage.loadMoreSessions()
-    await usage.loadMoreSessions()
+    expect(listCalls()).toHaveLength(1)
+    expect(usage.logSessions.value).toHaveLength(PAGE_SIZE)
+    wrapper.unmount()
+  })
+
+  it('看板与列表互不触发：切时间窗不重拉会话列表', async () => {
+    const { usage, wrapper } = mountUsage()
     await flushPromises()
     const before = listCalls().length
-
-    await usage.loadMoreSessions()
+    await usage.setStatsDays(7)
     await flushPromises()
     expect(listCalls()).toHaveLength(before)
-    expect(ids(usage.statSessions.value)).toHaveLength(TOTAL)
     wrapper.unmount()
   })
 })
@@ -217,81 +213,92 @@ describe('U2 日志表格：按页替换', () => {
   })
 })
 
-describe('U3 两份列表游标互不干扰（P1-2 回归见证）', () => {
-  it('路径 A：统计 load-more 到 45 行 → 日志翻到第 2 页 → 回统计 load-more 不产生重复行', async () => {
+describe('U3 看板时间窗（服务端切片）', () => {
+  it('默认 30 天，挂载时就把 days 传给 guest', async () => {
     const { usage, wrapper } = mountUsage()
     await flushPromises()
-    await usage.loadMoreSessions()
-    await usage.loadMoreSessions()
-    await flushPromises()
-    expect(usage.statSessions.value).toHaveLength(45)
-
-    await usage.goPage(2)
-    await flushPromises()
-    expect(ids(usage.logSessions.value)).toEqual([16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30])
-
-    // 统计明细再点「加载更多」：已装满 → 不发命令，列表不得被日志页的页切片污染
-    const before = listCalls().length
-    await usage.loadMoreSessions()
-    await flushPromises()
-    expect(listCalls()).toHaveLength(before)
-    const stat = ids(usage.statSessions.value)
-    expect(new Set(stat).size).toBe(45)
-    expect(stat).toEqual(Array.from({ length: 45 }, (_, i) => i + 1))
-    // 日志列表也不因统计的追加而变长
-    expect(usage.logSessions.value).toHaveLength(15)
-    expect(usage.logPage.value).toBe(2)
+    expect(usage.statsDays.value).toBe(30)
+    const args = execute.mock.calls.filter((c) => c[0] === 'agent-hub.get-usage-stats').at(-1)?.[1]
+    expect(args).toEqual({ days: 30 })
     wrapper.unmount()
   })
 
-  it('路径 A′：统计未装满时 load-more 仍按统计自己的游标续拉，不受日志页码影响', async () => {
+  it('setStatsDays 切窗重拉看板；同窗连点不重发命令', async () => {
     const { usage, wrapper } = mountUsage()
     await flushPromises()
-    await usage.goPage(3) // 日志页码先走到 3
+    await usage.setStatsDays(7)
     await flushPromises()
+    expect(usage.statsDays.value).toBe(7)
 
-    await usage.loadMoreSessions()
+    const after = execute.mock.calls.filter((c) => c[0] === 'agent-hub.get-usage-stats').length
+    await usage.setStatsDays(7)
     await flushPromises()
-    expect(ids(usage.statSessions.value)).toEqual(Array.from({ length: 30 }, (_, i) => i + 1))
-    expect(usage.logPage.value).toBe(3)
-    expect(usage.logSessions.value[0]?.id).toBe(31)
+    expect(execute.mock.calls.filter((c) => c[0] === 'agent-hub.get-usage-stats')).toHaveLength(after)
     wrapper.unmount()
   })
 
-  it('路径 B：统计装到 45 行后切日志页，表格行数与「第 N/共 M 页」自洽', async () => {
+  it('反例守门：切窗期间的旧响应不得覆盖新窗（否则「新 pill + 旧数据」）', async () => {
+    // 先让 7 天那次请求挂起，再用 30 天的响应放行
+    const gates = new Map<number, () => void>()
+    const emptyStats = (days: number) => ({
+      window: { days, now: 0 },
+      total: { sessions: days },
+      byDay: [],
+      byCli: [],
+      byProject: [],
+      byModel: [],
+      byHour: [],
+    })
+    execute.mockImplementation((async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'agent-hub.get-usage-stats') {
+        const days = Number(args?.days)
+        if (days === 7) {
+          await new Promise<void>((r) => gates.set(days, r))
+          return emptyStats(7)
+        }
+        return emptyStats(30)
+      }
+      if (command === 'agent-hub.get-usage-state') {
+        return { state: { status: 'ok' } as unknown as UsageDomainState }
+      }
+      return null
+    }) as never)
+
     const { usage, wrapper } = mountUsage()
     await flushPromises()
-    await usage.loadMoreSessions()
-    await usage.loadMoreSessions()
+    void usage.setStatsDays(7) // 挂起
     await flushPromises()
+    await usage.setStatsDays(30) // 30 天先落地
+    await flushPromises()
+    expect(usage.stats.value?.total.sessions).toBe(30)
 
-    expect(usage.logSessions.value).toHaveLength(PAGE_SIZE)
-    expect(usage.logPage.value).toBe(1)
-    expect(usage.logTotalPages.value).toBe(Math.ceil(usage.logTotal.value / PAGE_SIZE))
-    expect(usage.logSessions.value.length).toBeLessThanOrEqual(PAGE_SIZE)
+    gates.get(7)?.() // 7 天的旧响应这时才回来
+    await flushPromises()
+    expect(usage.stats.value?.total.sessions, '旧窗响应覆盖了新窗').toBe(30)
+    expect(usage.statsLoading.value).toBe(false)
     wrapper.unmount()
   })
 })
 
 // ==================== U4/U5 共享查询条件 ====================
 
-describe('U4 共享查询条件变更让两份列表同时回第 1 页', () => {
-  it('setListFilter 后统计回到首屏、日志页码归 1', async () => {
+describe('U4 查询条件变更让日志列表回第 1 页', () => {
+  it('改适配器条件 + reloadSessions → 日志页码归 1、回到首屏', async () => {
     const { usage, wrapper } = mountUsage()
     await flushPromises()
-    await usage.loadMoreSessions()
     await usage.goPage(3)
     await flushPromises()
 
-    await usage.setListFilter('claude')
+    usage.listFilter.value = 'claude'
+    await usage.reloadSessions()
     await flushPromises()
     expect(usage.listFilter.value).toBe('claude')
     expect(usage.logPage.value).toBe(1)
-    expect(ids(usage.statSessions.value)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15])
+    expect(ids(usage.logSessions.value)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15])
     wrapper.unmount()
   })
 
-  it('resetQuery 清空四个共享条件并让两份列表回第 1 页', async () => {
+  it('resetQuery 清空四个查询条件并让日志列表回第 1 页', async () => {
     const { usage, wrapper } = mountUsage()
     await flushPromises()
     usage.listFilter.value = 'claude'
@@ -347,14 +354,16 @@ describe('U6 列表加载失败不破坏已有数据', () => {
   it('list-usage-sessions 抛错时保留原列表且 loading 复位', async () => {
     const { usage, wrapper } = mountUsage()
     await flushPromises()
-    const before = ids(usage.statSessions.value)
+    await usage.goPage(2)
+    await flushPromises()
+    const before = ids(usage.logSessions.value)
 
     execute.mockRejectedValueOnce(new Error('boom'))
-    await usage.loadMoreSessions()
+    await usage.reloadSessions()
     await flushPromises()
 
-    expect(ids(usage.statSessions.value)).toEqual(before)
-    expect(usage.statLoading.value).toBe(false)
+    expect(ids(usage.logSessions.value)).toEqual(before)
+    expect(usage.logLoading.value).toBe(false)
     wrapper.unmount()
   })
 
@@ -675,8 +684,8 @@ describe('U12 数据清空', () => {
     expect(r).toEqual({ ok: true })
     expect(callsOf('agent-hub.clear-usage-data')).toHaveLength(1)
     expect(callsOf('agent-hub.get-usage-stats').length).toBe(before.stats + 1)
-    // 两份列表各重载一次（统计 replace + 日志第 1 页）
-    expect(callsOf('agent-hub.list-usage-sessions').length).toBe(before.sessions + 2)
+    // 清空后重拉看板 + 日志首屏各一次（两份列表时代是 +2）
+    expect(callsOf('agent-hub.list-usage-sessions').length).toBe(before.sessions + 1)
     expect(usage.clearing.value).toBe(false)
     wrapper.unmount()
   })
@@ -697,7 +706,7 @@ describe('U12 数据清空', () => {
     const before = {
       stats: callsOf('agent-hub.get-usage-stats').length,
       sessions: callsOf('agent-hub.list-usage-sessions').length,
-      list: ids(usage.statSessions.value),
+      list: ids(usage.logSessions.value),
     }
     const r = await usage.clearData()
     await flushPromises()
@@ -705,7 +714,7 @@ describe('U12 数据清空', () => {
     expect(callsOf('agent-hub.get-usage-stats').length).toBe(before.stats)
     expect(callsOf('agent-hub.list-usage-sessions').length).toBe(before.sessions)
     // 失败不得把已有列表清空
-    expect(ids(usage.statSessions.value)).toEqual(before.list)
+    expect(ids(usage.logSessions.value)).toEqual(before.list)
     expect(usage.clearing.value).toBe(false)
     wrapper.unmount()
   })

@@ -7,6 +7,10 @@
  * 票据 04 交付 Skills、票据 05 交付供应商、票据 06 交付使用统计与会话
  * 日志（07 收尾 opencode/codex）。useDetection / useInstall 均为单实例：
  * 事件订阅与输出轮询在此层持有，各分区经 props + emits 交互。
+ *
+ * 分区职责（统计改版后）：**统计 = 聚合看板**（汇总 / 趋势 / 节奏 / 分布），
+ * **日志 = 会话级明细**（分页表格 + 二级详情）。两者不再展示同一份会话
+ * 列表，因此本层不再持有 `goto-logs` 跳转。
  */
 import { computed, inject, onMounted, ref } from 'vue'
 import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
@@ -78,12 +82,6 @@ const sessionStates = computed(() => {
   for (const id of CLI_IDS) out[id] = usage.cliSessionState(id)
   return out
 })
-
-/** 统计明细行点击 → 跳日志分区并打开该会话 */
-function gotoLogs(sessionId: number) {
-  activeTab.value = 'logs'
-  void usage.openSession(sessionId)
-}
 </script>
 
 <template>
