@@ -22,7 +22,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { mount, flushPromises } from '@vue/test-utils'
-import { computed, ref } from 'vue'
+import { computed, h, ref } from 'vue'
 import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 import ProviderApply from '../components/ProviderApply.vue'
 import ProvidersTab from '../components/ProvidersTab.vue'
@@ -32,7 +32,7 @@ import SkillsTab from '../components/SkillsTab.vue'
 import InstallTab from '../components/InstallTab.vue'
 import OverviewTab from '../components/OverviewTab.vue'
 import CliCard from '../components/CliCard.vue'
-import type { AdapterErrorCode, ProviderPreset, ProvidersDomainState, UsageSessionRow } from '../types'
+import type { AdapterErrorCode, ProviderPreset, ProvidersDomainState, UsageSessionRow, UsageSource } from '../types'
 import type { UseProvidersReturn } from '../composables/useProviders'
 import type { CliSessionState, StatsDays, UseUsageReturn } from '../composables/useUsage'
 import { AGENT_HUB } from './helpers/contrast'
@@ -43,7 +43,31 @@ vi.mock('@vuepic/vue-datepicker', () => ({
   default: { name: 'Datepicker', props: ['modelValue'], render: () => null },
 }))
 vi.mock('@binblink/bedcode-plugin-sdk-desktop/ui', () => ({
-  default: { name: 'Select', props: ['modelValue'], render: () => null },
+  // 真实 Select（宿主共享下拉）的最小可用替身：渲染 <select> 并在 change 时
+  // emit update:modelValue，使「下拉选项 + 选中回填」可被组件层行为契约断言；
+  // 面板定位 / 键盘 / 主题等实现细节不进契约。
+  default: {
+    name: 'Select',
+    props: ['modelValue', 'options', 'placeholder', 'disabled'],
+    emits: ['update:modelValue'],
+    render(this: any) {
+      return h(
+        'select',
+        {
+          class: 'select-stub',
+          disabled: this.disabled,
+          onChange: (e: Event) =>
+            this.$emit('update:modelValue', (e.target as HTMLSelectElement).value),
+        },
+        [
+          this.placeholder ? h('option', { value: '' }, this.placeholder) : null,
+          ...(this.options ?? []).map((o: any) =>
+            h('option', { value: String(o.value), selected: String(o.value) === String(this.modelValue) }, o.label),
+          ),
+        ],
+      )
+    },
+  },
 }))
 
 const execute = vi.fn(
@@ -1798,6 +1822,245 @@ describe('A10 SessionLogsTab：添加日志目录走 fs:pick 选择器', () => {
     expect(w.get('.ah-lg-sources-add .ah-btn-primary').attributes('disabled')).toBeDefined()
     // 路径输入框已不存在（改为选择器按钮 + 回显）
     expect(w.find('input.ah-mono').exists()).toBe(false)
+    w.unmount()
+  })
+})
+
+// ==================== A12 来源名可下拉可选 + 目录重复拦截 ====================
+
+/**
+ * A12 行为契约（用户需求原文：「来源名称应该是一个可以自定义和下拉选择的，
+ * 下拉选项为已添加的来源名称；如果选择同一个名称如 pi 则将目录添加到 pi 来源
+ * 名下；同时校验添加的目录是否已经存在，存在则提示重复无法添加」）：
+ *
+ *  - A12-1 正例：下拉列出全部**目录型**已有来源 + 自定义哨兵（sqlite 源不列）
+ *  - A12-2 正例：下拉选中已有来源 `pi` → 回填名称 + 确认走 addSourcePath（不建新源）
+ *  - A12-3 正例：下拉选自定义哨兵 → 清空名称交给手输（可新建）
+ *  - A12-4 正例：手输新名 → 确认走 addSource（新建来源）
+ *  - A12-5 边界：手输打中的**已有**来源名同样走追加（路由只看名称是否已存在）
+ *  - A12-6 反例：选中已登记目录 → 就地「重复无法添加」提示 + 确认禁用 + 不打 guest
+ *  - A12-7 边界：重复目录挂在**同**一来源下同样拦（多目录下也成立）
+ *  - A12-8 正例：未登记目录不受影响（不误伤新目录）
+ */
+describe('A12 SessionLogsTab：来源名下拉（已有来源）+ 目录重复拦截', () => {
+  const PI = '/home/u/.pi/agent/sessions'
+  const CLAUDE = '/home/u/.claude/projects'
+  const DB = '/home/u/.local/share/opencode/opencode.db'
+  const FRESH = '/home/u/work/extra-sessions'
+
+  function src(name: string, paths: string[], over: Partial<UsageSource> = {}): UsageSource {
+    return {
+      name,
+      paths: paths.map((path) => ({ path, removable: false })),
+      builtin: true,
+      kind: 'jsonl',
+      scan: { files: 0, parsed: 0, skipped: 0, sessions: 0, error: null },
+      ...over,
+    }
+  }
+
+  function usageStub(over: Partial<UseUsageReturn> = {}): UseUsageReturn {
+    return {
+      state: ref({ status: 'ok', home: '/home/u' }),
+      stats: ref(null),
+      sources: ref([src('pi', [PI]), src('claude', [CLAUDE]), src('opencode', [DB], { kind: 'sqlite' })]),
+      statsDays: ref(30 as StatsDays),
+      statsLoading: ref(false),
+      logSessions: ref([]),
+      logTotal: ref(0),
+      logPage: ref(1),
+      logTotalPages: ref(1),
+      logLoading: ref(false),
+      listFilter: ref(''),
+      searchText: ref(''),
+      rangeFrom: ref(null),
+      rangeTo: ref(null),
+      openedSession: ref(null),
+      openingSession: ref(false),
+      adapterErrors: ref([] as { adapter: string; code: AdapterErrorCode }[]),
+      clearing: ref(false),
+      clearData: vi.fn(async () => ({ ok: true })),
+      cliSessionState: vi.fn(() => 'unknown' as CliSessionState),
+      reloadStats: vi.fn(),
+      setStatsDays: vi.fn(),
+      reloadSessions: vi.fn(),
+      goPage: vi.fn(),
+      resetQuery: vi.fn(),
+      reloadSources: vi.fn(),
+      addSource: vi.fn(async () => ({ ok: true })),
+      addSourcePath: vi.fn(async () => ({ ok: true })),
+      pickSourceDir: vi.fn(async () => ({ ok: true, picked: true, path: FRESH })),
+      removeSource: vi.fn(async () => ({ ok: true })),
+      removeSourcePath: vi.fn(async () => ({ ok: true })),
+      openSession: vi.fn(),
+      closeSession: vi.fn(),
+      refresh: vi.fn(),
+      scan: vi.fn(),
+      ...over,
+    } as unknown as UseUsageReturn
+  }
+
+  /** 展开来源折叠区并打开「添加日志来源」表单 */
+  async function openAddForm(w: ReturnType<typeof mountComponent>) {
+    await w.get('.ah-lg-sources-toggle').trigger('click')
+    await flushPromises()
+    await w.get('.ah-lg-sources-actions .ah-btn-ghost').trigger('click')
+    await flushPromises()
+  }
+
+  /** 名称下拉的 <select>（Select 替身渲染在根元素上，class 直落其身） */
+  function nameSelect(w: ReturnType<typeof mountComponent>) {
+    return w.get('select.ah-lg-sources-nameselect')
+  }
+
+  /** 在名称下拉里选中一个选项（按 option 文本定位，再回填其 value） */
+  async function pickName(w: ReturnType<typeof mountComponent>, label: string) {
+    const sel = nameSelect(w)
+    const opt = sel.findAll('option').find((o) => o.text() === label)
+    if (!opt) throw new Error(`下拉缺少选项：${label}`)
+    await sel.setValue(opt.attributes('value') ?? '')
+    await flushPromises()
+  }
+
+  it('A12-1 正例：下拉列出全部目录型已有来源 + 自定义哨兵（sqlite 源不列）', async () => {
+    const w = mountComponent(SessionLogsTab, { usage: usageStub() })
+    await flushPromises()
+    await openAddForm(w)
+    const labels = nameSelect(w).findAll('option').map((o) => o.text())
+    expect(labels).toContain('pi')
+    expect(labels).toContain('claude')
+    expect(labels).toContain('hub.lg.sources.nameCustom')
+    // sqlite 源单库不接受追加目录，不应出现在下拉里
+    expect(labels).not.toContain('opencode')
+    w.unmount()
+  })
+
+  it('A12-2 正例：下拉选已有来源 pi → 回填名称 + 确认走 addSourcePath（不建新源）', async () => {
+    const addSource = vi.fn(async () => ({ ok: true }))
+    const addSourcePath = vi.fn(async () => ({ ok: true }))
+    const w = mountComponent(SessionLogsTab, { usage: usageStub({ addSource, addSourcePath }) })
+    await flushPromises()
+    await openAddForm(w)
+
+    await pickName(w, 'pi')
+    // 名称回填到输入框
+    expect((w.get('.ah-lg-sources-name input').element as HTMLInputElement).value).toBe('pi')
+
+    // 选目录 → 已有名称不派生覆盖（不回退成 basename）
+    await w.get('.ah-lg-sources-pick .ah-btn').trigger('click')
+    await flushPromises()
+    expect((w.get('.ah-lg-sources-name input').element as HTMLInputElement).value).toBe('pi')
+
+    await w.get('.ah-lg-sources-add .ah-btn-primary').trigger('click')
+    await flushPromises()
+    expect(addSourcePath).toHaveBeenCalledWith('pi', FRESH)
+    expect(addSource).not.toHaveBeenCalled()
+    w.unmount()
+  })
+
+  it('A12-3 正例：下拉选自定义哨兵 → 清空名称交给手输（新建通道）', async () => {
+    const addSource = vi.fn(async () => ({ ok: true }))
+    const addSourcePath = vi.fn(async () => ({ ok: true }))
+    const w = mountComponent(SessionLogsTab, { usage: usageStub({ addSource, addSourcePath }) })
+    await flushPromises()
+    await openAddForm(w)
+
+    await pickName(w, 'pi')
+    await pickName(w, 'hub.lg.sources.nameCustom')
+    expect((w.get('.ah-lg-sources-name input').element as HTMLInputElement).value).toBe('')
+
+    await w.get('.ah-lg-sources-name input').setValue('my-logs')
+    await w.get('.ah-lg-sources-pick .ah-btn').trigger('click')
+    await flushPromises()
+    await w.get('.ah-lg-sources-add .ah-btn-primary').trigger('click')
+    await flushPromises()
+    expect(addSource).toHaveBeenCalledWith('my-logs', FRESH)
+    expect(addSourcePath).not.toHaveBeenCalled()
+    w.unmount()
+  })
+
+  it('A12-4 正例：手输新名 → 确认走 addSource（新建来源）', async () => {
+    const addSource = vi.fn(async () => ({ ok: true }))
+    const addSourcePath = vi.fn(async () => ({ ok: true }))
+    const w = mountComponent(SessionLogsTab, { usage: usageStub({ addSource, addSourcePath }) })
+    await flushPromises()
+    await openAddForm(w)
+
+    await w.get('.ah-lg-sources-name input').setValue('my-logs')
+    await w.get('.ah-lg-sources-pick .ah-btn').trigger('click')
+    await flushPromises()
+    await w.get('.ah-lg-sources-add .ah-btn-primary').trigger('click')
+    await flushPromises()
+    expect(addSource).toHaveBeenCalledWith('my-logs', FRESH)
+    expect(addSourcePath).not.toHaveBeenCalled()
+    w.unmount()
+  })
+
+  it('A12-5 边界：手输打中的已有来源名同样走追加（路由只看名称是否已存在）', async () => {
+    const addSource = vi.fn(async () => ({ ok: true }))
+    const addSourcePath = vi.fn(async () => ({ ok: true }))
+    const w = mountComponent(SessionLogsTab, { usage: usageStub({ addSource, addSourcePath }) })
+    await flushPromises()
+    await openAddForm(w)
+
+    // 用户没走下拉，直接把名字打成已有来源 pi
+    await w.get('.ah-lg-sources-name input').setValue('pi')
+    await w.get('.ah-lg-sources-pick .ah-btn').trigger('click')
+    await flushPromises()
+    await w.get('.ah-lg-sources-add .ah-btn-primary').trigger('click')
+    await flushPromises()
+    expect(addSourcePath).toHaveBeenCalledWith('pi', FRESH)
+    expect(addSource).not.toHaveBeenCalled()
+    w.unmount()
+  })
+
+  it('A12-6 反例：选中已登记目录 → 就地「重复无法添加」+ 确认禁用 + 不打 guest', async () => {
+    const addSource = vi.fn(async () => ({ ok: true }))
+    const addSourcePath = vi.fn(async () => ({ ok: true }))
+    const usage = usageStub({ addSource, addSourcePath })
+    usage.pickSourceDir = vi.fn(async () => ({ ok: true, picked: true, path: PI }))
+    const w = mountComponent(SessionLogsTab, { usage })
+    await flushPromises()
+    await openAddForm(w)
+
+    await w.get('.ah-lg-sources-pick .ah-btn').trigger('click')
+    await flushPromises()
+    // 就地提示（与路径框 aria-describedby 关联）
+    expect(w.get('[data-testid="add-dup"]').text()).toBe('hub.lg.sources.pathDuplicate')
+    expect(w.get('.ah-lg-sources-pickpath').attributes('aria-describedby')).toBe('lg-add-dup-error')
+    expect(w.get('.ah-lg-sources-pickpath').classes()).toContain('dup')
+    // 确认禁用（不给点进去的机会）
+    expect(w.get('.ah-lg-sources-add .ah-btn-primary').attributes('disabled')).toBeDefined()
+    w.unmount()
+  })
+
+  it('A12-7 边界：重复目录挂在同一来源的第 N 条路径下同样拦', async () => {
+    const usage = usageStub()
+    usage.sources = ref([
+      src('pi', [PI, FRESH]), // FRESH 已是 pi 的第二条目录
+    ])
+    const w = mountComponent(SessionLogsTab, { usage })
+    await flushPromises()
+    await openAddForm(w)
+
+    await w.get('.ah-lg-sources-pick .ah-btn').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="add-dup"]').exists()).toBe(true)
+    expect(w.get('.ah-lg-sources-add .ah-btn-primary').attributes('disabled')).toBeDefined()
+    w.unmount()
+  })
+
+  it('A12-8 正例：未登记目录不受影响（不误伤），确认可用', async () => {
+    const addSource = vi.fn(async () => ({ ok: true }))
+    const w = mountComponent(SessionLogsTab, { usage: usageStub({ addSource }) })
+    await flushPromises()
+    await openAddForm(w)
+
+    await w.get('.ah-lg-sources-name input').setValue('my-logs')
+    await w.get('.ah-lg-sources-pick .ah-btn').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="add-dup"]').exists()).toBe(false)
+    expect(w.get('.ah-lg-sources-add .ah-btn-primary').attributes('disabled')).toBeUndefined()
     w.unmount()
   })
 })

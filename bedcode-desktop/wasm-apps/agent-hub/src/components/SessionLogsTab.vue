@@ -23,7 +23,7 @@ import {
   formatSessionTime,
   formatTokens,
 } from '../utils/format'
-import { suggestSourceName } from '../utils/sources'
+import { suggestSourceName, isPathRegistered } from '../utils/sources'
 import AgentIcon from './AgentIcon.vue'
 
 const props = defineProps<{ usage: UseUsageReturn }>()
@@ -78,6 +78,63 @@ const sourceError = ref('')
 const removingSource = ref('')
 
 /**
+ * 「自定义新名称」下拉哨兵值（选它 → 转入手输新建来源）
+ *
+ * 取 `__new__`：来源名合法性（guest `is_valid_source_name`）要求小写字母
+ * 开头 + 字母/数字/连字符，故带下划线的哨兵永不可能与真实来源名相撞。
+ */
+const CUSTOM_SOURCE = '__new__'
+
+/** 可选为目标的来源（仅目录型 jsonl 源——sqlite 单库不接受追加目录） */
+const addableSources = computed(() => sources.value.filter((s) => sourceKind(s) === 'jsonl'))
+
+/**
+ * 来源名下拉选项：已有来源名（选它 → 目录追加到该来源下）+ 「自定义」哨兵。
+ * label 复用来源名本身；自定义行的文案在 i18n 里（带 ✚ 前缀表新建）。
+ */
+const sourceNameOptions = computed(() => [
+  ...addableSources.value.map((s) => ({ value: s.name, label: s.name })),
+  { value: CUSTOM_SOURCE, label: t('hub.lg.sources.nameCustom') },
+])
+
+/** 当前名称命中的已有来源（null = 自定义新来源）——决定提交走新建还是追加 */
+const matchedSource = computed(
+  () => addableSources.value.find((s) => s.name === newSourceName.value.trim()) ?? null,
+)
+
+/**
+ * 已选目录是否已登记在任一来源下（重复）——选中即比对，就地拦下不走到提交。
+ * guest 同样以 `error.pathTaken` 最终仲裁；此处只是更早的 UX 反馈。
+ */
+const pathDuplicate = computed(
+  () => !!newSourcePath.value.trim() && isPathRegistered(sources.value, newSourcePath.value.trim()),
+)
+
+/** 提交禁用：未选目录 / 未定名 / 目录重复（重复时给出就地错误提示） */
+const addDisabled = computed(
+  () => !newSourceName.value.trim() || !newSourcePath.value.trim() || pathDuplicate.value,
+)
+
+/**
+ * 名称下拉的回显/写入（与手输同一个真源 `newSourceName`）
+ *
+ * 名称命中已有来源 → 回显该来源名；否则回显「自定义」哨兵。写回时选中来源名
+ * 直接填进 `newSourceName`（提交即追加到该来源），选哨兵则清空交给用户手输新名。
+ */
+const sourceNamePick = computed({
+  get: () => (matchedSource.value ? matchedSource.value.name : CUSTOM_SOURCE),
+  set: (v: string | number) => {
+    if (String(v) === CUSTOM_SOURCE) newSourceName.value = ''
+    else newSourceName.value = String(v)
+  },
+})
+
+/** 来源形态（jsonl 目录 / sqlite 库）；旧状态无 kind 字段按 jsonl 处理 */
+function sourceKind(s: UsageSource): 'jsonl' | 'sqlite' {
+  return s.kind === 'sqlite' ? 'sqlite' : 'jsonl'
+}
+
+/**
  * 从选中目录派生来源名（与 guest `is_valid_source_name` 同口径：小写字母开头，
  * 字母/数字/连字符，≤32）：取 basename → 小写 → 去非法字符 → 剥前导非字母 → 截断。
  * 全部剥空时兜底 `logs`。实现见 `utils/sources.ts`（SFC 不可导出，供测试直引）。
@@ -99,13 +156,7 @@ async function onPickDir() {
   if (!newSourceName.value.trim()) newSourceName.value = suggestSourceName(r.path)
 }
 
-/** 来源形态（jsonl 目录 / sqlite 库）；旧状态无 kind 字段按 jsonl 处理 */
-function sourceKind(s: UsageSource): 'jsonl' | 'sqlite' {
-  return s.kind === 'sqlite' ? 'sqlite' : 'jsonl'
-}
-
-/**
- * 来源的全部目录（wire `paths: [{path, removable}]`）；旧 guest 单 `path` 字段
+/** 来源的全部目录（wire `paths: [{path, removable}]`）；旧 guest 单 `path` 字段
  * 兜底（内置条目按不可移除处理，与 guest 迁移口径一致）。
  */
 function sourcePaths(s: UsageSource): { path: string; removable: boolean }[] {
@@ -133,11 +184,23 @@ function scanCount(s: UsageSource): string {
   return `${sc.parsed + sc.skipped} ${t('hub.lg.sources.files')} · ${sc.sessions} ${t('hub.lg.sources.sessions')}`
 }
 
+/**
+ * 提交添加：名称命中已有来源 → 目录追加到该来源下；否则 → 新建来源
+ *
+ * 一份表单覆盖两种动作（用户原话「选择同一个名称如 pi 则将目录添加到 pi
+ * 来源名下」）：走哪条路由只看**最终名称是否已存在**，不区分它是下拉选的
+ * 还是手输打对的。目录重复在前端已拦（`pathDuplicate`），这里再兜一层，
+ * 避免任何绕过路径把重复目录送到 guest。
+ */
 async function onAddSource() {
-  if (!newSourceName.value.trim() || !newSourcePath.value.trim()) return
+  if (addDisabled.value) return
+  const name = newSourceName.value.trim()
+  const path = newSourcePath.value.trim()
   sourceBusy.value = true
   sourceError.value = ''
-  const r = await usage.addSource(newSourceName.value.trim(), newSourcePath.value.trim())
+  const r = matchedSource.value
+    ? await usage.addSourcePath(name, path)
+    : await usage.addSource(name, path)
   sourceBusy.value = false
   if (r.ok) {
     addingSource.value = false
@@ -419,12 +482,22 @@ function tokenMeta(e: NormalizedEventView): string {
             <span v-if="sourceError" class="ah-cli-error">{{ sourceError }}</span>
           </div>
           <div v-if="addingSource" class="ah-lg-sources-add">
-            <input
-              v-model="newSourceName"
-              class="ah-input"
-              :placeholder="t('hub.lg.sources.addName')"
-              :disabled="sourceBusy"
-            />
+            <div class="ah-lg-sources-name">
+              <Select
+                v-model="sourceNamePick"
+                class="ah-lg-sources-nameselect"
+                size="sm"
+                :options="sourceNameOptions"
+                :disabled="sourceBusy"
+                :placeholder="t('hub.lg.sources.namePick')"
+              />
+              <input
+                v-model="newSourceName"
+                class="ah-input"
+                :placeholder="t('hub.lg.sources.addName')"
+                :disabled="sourceBusy"
+              />
+            </div>
             <span class="ah-lg-sources-pick">
               <button
                 type="button"
@@ -437,16 +510,21 @@ function tokenMeta(e: NormalizedEventView): string {
               <span
                 class="ah-lg-sources-pickpath ah-mono"
                 :title="newSourcePath"
-                :class="{ empty: !newSourcePath }"
+                :class="{ empty: !newSourcePath, dup: pathDuplicate }"
+                :aria-describedby="pathDuplicate ? 'lg-add-dup-error' : undefined"
+                :aria-invalid="pathDuplicate ? 'true' : undefined"
               >
                 {{ newSourcePath || t('hub.lg.sources.addPath') }}
               </span>
             </span>
+            <p v-if="pathDuplicate" id="lg-add-dup-error" class="ah-cli-error" data-testid="add-dup">
+              {{ t('hub.lg.sources.pathDuplicate') }}
+            </p>
             <span class="ah-speed-actions-btns">
               <button
                 type="button"
                 class="ah-btn ah-btn-primary ah-btn-sm"
-                :disabled="sourceBusy || !newSourceName.trim() || !newSourcePath.trim()"
+                :disabled="sourceBusy || addDisabled"
                 @click="onAddSource"
               >
                 {{ t('hub.lg.sources.confirm') }}

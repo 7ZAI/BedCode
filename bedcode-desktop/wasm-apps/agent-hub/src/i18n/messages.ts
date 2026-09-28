@@ -338,6 +338,9 @@ export type MessageSchema = {
   'hub.lg.sources.addDir': string
   'hub.lg.sources.builtinPath': string
   'hub.lg.sources.addName': string
+  'hub.lg.sources.nameCustom': string
+  'hub.lg.sources.namePick': string
+  'hub.lg.sources.pathDuplicate': string
   'hub.lg.sources.addPath': string
   'hub.lg.sources.pick': string
   'hub.lg.sources.picking': string

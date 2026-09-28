@@ -2249,9 +2249,39 @@
   font-size: var(--font-size-tag);
 }
 
+/* 添加来源：来源名下拉（已有来源）+ 名称手输（新建），一行两控件 */
+.ah-lg-sources-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 320px;
+  min-width: 0;
+}
+
+.ah-lg-sources-name .ah-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.ah-lg-sources-nameselect {
+  flex: 0 0 168px;
+  min-width: 0;
+}
+
 /* 未选中时的占位提示（复用 addPath 文案）降为数据色 */
 .ah-lg-sources-pickpath.empty {
   color: var(--ah-text-data);
+}
+
+/* 目录重复（已登记在任一来源下）→ 路径转危险色，与就地错误提示（aria-describedby 关联）成对出现 */
+.ah-lg-sources-pickpath.dup {
+  color: var(--ah-text-danger);
+}
+
+/* 就地重复错误占满一行（.ah-lg-sources-add 是 flex-wrap 容器，不占满会挤在控件旁） */
+.ah-lg-sources-add > .ah-cli-error {
+  flex: 1 0 100%;
+  margin-top: 0;
 }
 
 /* ---------- 查询条件条（Agent / 关键词 / 时间范围） ---------- */

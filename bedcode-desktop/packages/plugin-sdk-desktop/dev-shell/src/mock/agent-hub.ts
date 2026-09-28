@@ -148,12 +148,27 @@ interface ProvidersSeed extends Seed {
   apply?: { last: Record<string, unknown> | null }
 }
 
+/** 来源的一个目录（wire 装饰形状：内置默认目录 `removable=false`） */
+interface UsageSourcePathSeed {
+  path: string
+  removable: boolean
+}
+
 /** 使用统计域状态（UsageDomainState 子集：sources/adapters/home 为自由域） */
 interface UsageStateSeed extends Seed {
   status?: string
   syncedAt?: number
   home?: string
-  sources?: Array<{ name: string; path: string; builtin?: boolean; [key: string]: unknown }>
+  /** 选目录 mock 的递增计数（每次 pick 换一个演示目录，避免与已登记目录撞上） */
+  pickSeq?: number
+  /**
+   * 来源 = 名称 + 多个目录（与 guest `usage::sources` 现行 wire 同构）
+   *
+   * `paths` 是**已装饰**的 wire 形态（`[{ path, removable }]`）：内置默认目录
+   * `removable=false` 不可移除，用户追加的目录 `removable=true`。种子即此形状，
+   * 故增删目录时只追加/剔除 `removable:true` 的项，不重新推导默认值。
+   */
+  sources?: Array<{ name: string; paths: UsageSourcePathSeed[]; builtin?: boolean; [key: string]: unknown }>
   adapters?: Record<string, unknown>
 }
 
@@ -180,6 +195,26 @@ function clone<T>(v: T): T {
   } catch {
     return v
   }
+}
+
+/** `~/x` 展开为绝对路径（与 guest `usage::sources::normalize_path` 同口径） */
+function expandHome(raw: string, home: string): string {
+  if (!raw) return ''
+  return raw.startsWith('~/') ? `${home}/${raw.slice(2)}` : raw
+}
+
+/**
+ * 目录是否已被任一来源登记（全局唯一）
+ *
+ * 与 guest `path_registered` 同口径：同一目录归属两个来源会让同一批会话文件
+ * 以两个适配器名各入一次库，统计重复，故 mock 也要拦（此前该查重用 `s.path`
+ * 字段，seed 早已改用 `paths` 数组 → 比较恒不成立，重复检查形同虚设）。
+ */
+function pathRegistered(
+  sources: Array<{ paths?: UsageSourcePathSeed[] }>,
+  path: string,
+): boolean {
+  return sources.some((s) => (s.paths ?? []).some((p) => p.path === path))
 }
 
 /** FNV-1a 32bit hex（guest skills.rs 同款逐文件 hash 算法） */
@@ -862,7 +897,7 @@ function registerCommands(context: PluginContext): void {
         limit,
       }
     })
-    // 来源清单：内置只读 + 自定义增删（state.sources 持久化，扫描计数合并）
+    // 来源清单：内置只读 + 自定义增删 + 每来源多目录（state.sources 持久化，扫描计数合并）
     context.commands.register('agent-hub.list-usage-sources', () => {
       const sources = (usage!.state.sources ?? []).map((s) => {
         const scan = (usage!.state.adapters ?? {})[s.name]
@@ -872,22 +907,25 @@ function registerCommands(context: PluginContext): void {
     })
     context.commands.register('agent-hub.pick-source-dir', () => {
       // 浏览器里无法弹系统对话框：返回演示目录（项目 .pi/sessions 形态），
-      // 供前端完整走「选择 → 派生名 → 添加」链路
+      // 供前端完整走「选择 → 派生名 / 下拉选已有来源 → 添加」链路。
+      // 首个来源（claude）换个目录，让下拉追加路径在 demo 里看得见区别。
       const home = usage!.state.home ?? '/home/dev'
-      return { picked: true, path: `${home}/project/tauriProject/BedCode/.pi/sessions` }
+      const n = (usage!.state.pickSeq = (usage!.state.pickSeq ?? 0) + 1)
+      const tail = n === 1 ? 'projects/tauriProject/BedCode/.pi/sessions' : `work/pick-${n}`
+      return { picked: true, path: `${home}/${tail}` }
     })
     context.commands.register('agent-hub.add-usage-source', (args: any) => {
       const name = String(args?.name ?? '').trim()
-      let path = String(args?.path ?? '').trim()
+      const path = expandHome(String(args?.path ?? '').trim(), usage!.state.home ?? '')
       if (!name || !path) return Promise.reject(new Error('add-source: name and path required'))
-      if (path.startsWith('~/')) path = `${usage!.state.home ?? ''}/${path.slice(2)}`
+      if (!/^[a-z][a-z0-9-]{0,31}$/.test(name))
+        return Promise.reject(new Error('add-source: invalid name'))
       const srcs = usage!.state.sources ?? []
-      if (
-        srcs.some((s) => s.name === name || s.path === path) ||
-        !/^[a-z][a-z0-9-]{0,31}$/.test(name)
-      )
-        return Promise.reject(new Error('add-source: name or path already registered'))
-      srcs.push({ name, path, builtin: false })
+      if (srcs.some((s) => s.name === name))
+        return Promise.reject(new Error('add-source: source name already registered'))
+      if (pathRegistered(srcs, path))
+        return Promise.reject(new Error('add-source: path already registered'))
+      srcs.push({ name, paths: [{ path, removable: true }], builtin: false, kind: 'jsonl' })
       ;(usage!.state.adapters ?? {})[name] = {
         files: 0,
         parsed: 0,
@@ -895,6 +933,37 @@ function registerCommands(context: PluginContext): void {
         sessions: 0,
         error: null,
       }
+      usage!.state = { ...usage!.state }
+      emitUsage(context)
+      return { state: clone(usage!.state) }
+    })
+    context.commands.register('agent-hub.add-usage-source-path', (args: any) => {
+      const name = String(args?.name ?? '').trim()
+      const path = expandHome(String(args?.path ?? '').trim(), usage!.state.home ?? '')
+      if (!name || !path) return Promise.reject(new Error('add-source-path: name and path required'))
+      const srcs = usage!.state.sources ?? []
+      const target = srcs.find((s) => s.name === name)
+      if (!target) return Promise.reject(new Error('add-source-path: source not found'))
+      if (pathRegistered(srcs, path))
+        return Promise.reject(new Error('add-source-path: path already registered'))
+      target.paths = [...(target.paths ?? []), { path, removable: true }]
+      usage!.state = { ...usage!.state }
+      emitUsage(context)
+      return { state: clone(usage!.state) }
+    })
+    context.commands.register('agent-hub.remove-usage-source-path', (args: any) => {
+      const name = String(args?.name ?? '').trim()
+      const path = expandHome(String(args?.path ?? '').trim(), usage!.state.home ?? '')
+      const srcs = usage!.state.sources ?? []
+      const target = srcs.find((s) => s.name === name)
+      if (!target) return Promise.reject(new Error('remove-source-path: source not found'))
+      const hit = (target.paths ?? []).find((p) => p.path === path)
+      if (!hit) return Promise.reject(new Error('remove-source-path: path not in source'))
+      if (hit.removable === false)
+        return Promise.reject(new Error('remove-source-path: builtin path protected'))
+      if ((target.paths ?? []).length <= 1)
+        return Promise.reject(new Error('remove-source-path: last path protected'))
+      target.paths = target.paths.filter((p) => p.path !== path)
       usage!.state = { ...usage!.state }
       emitUsage(context)
       return { state: clone(usage!.state) }
