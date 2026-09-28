@@ -29,8 +29,9 @@ const props = defineProps<{
   busy?: boolean
   /** 该 CLI 是否正被卸载（active run 属于本卡；按钮变“卸载中…”） */
   uninstalling?: boolean
-  /** 卸载失败信号（guest 拒绝/异常；瞬态提示，成功后由父层清除） */
-  uninstallFailed?: boolean
+  /** 卸载失败信号（guest 拒绝/异常；瞬态提示，成功后由父层清除）。
+   * 值为友好 i18n 文案（ADR 0030：guest 业务码优先，原文不携带） */
+  uninstallFailed?: string | null
   /** node 环境是否就绪（npm-global 卸载依赖 npm） */
   nodeReady?: boolean
 }>()
@@ -161,6 +162,6 @@ onUnmounted(() => {
           : armed ? t('hub.card.uninstallConfirm') : t('hub.card.uninstall') }}
       </button>
     </div>
-    <div v-if="uninstallFailed" class="ah-cli-error">{{ t('hub.card.uninstallFailed') }}</div>
+    <div v-if="uninstallFailed" class="ah-cli-error">{{ uninstallFailed }}</div>
   </div>
 </template>

@@ -546,7 +546,8 @@ pub(crate) fn enqueue(
     } else {
         let mut queue = pending_sends().lock().expect("pending sends lock");
         if queue.len() >= PENDING_SENDS_CAP {
-            anyhow::bail!("enqueue: send queue full (cap {PENDING_SENDS_CAP})");
+            // 发送队列满（用户可见拒绝；ADR 0030 业务码，前端经插件 i18n 展示）
+            bedcode_plugin_api::bail_with_code!("com.bedcode.file-transfer.transfer.error.queueFull");
         }
         queue.push(PendingSend { node_id, endpoint, paths });
         h.log_info("send queued by plugin-side concurrency gate");

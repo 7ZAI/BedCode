@@ -8,6 +8,7 @@
  */
 import { computed, inject, nextTick, ref, watch } from 'vue'
 import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
+import { resolvePluginErrorText } from '../utils/pluginError'
 import type { AgentHubState, CliDetectInfo, CliId, CliUpdateInfo, InstallDomainState } from '../types'
 import CliIcon from './CliIcon.vue'
 
@@ -145,9 +146,9 @@ async function onAddCustom() {
     customUrl.value = ''
     customError.value = null
   } catch (e) {
-    // 票 04（ADR 0030）：命令面错误原文只进日志；界面显示友好 i18n
+    // ADR 0030：命令面错误原文只进日志；界面显示友好 i18n（guest 业务码优先）
     console.error('[Agent Hub] add-custom-source failed:', e)
-    customError.value = t('hub.inst.failed')
+    customError.value = resolvePluginErrorText(context, e, 'hub.inst.failed')
   }
 }
 

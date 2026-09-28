@@ -9,6 +9,7 @@
  */
 import { onUnmounted, ref } from 'vue'
 import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
+import { resolvePluginErrorText } from '../utils/pluginError'
 import type { CliId, InstallDomainState } from '../types'
 
 const POLL_INTERVAL_MS = 1200
@@ -114,15 +115,17 @@ export function useInstall(context: PluginContext) {
 
   /**
    * 卸载指定 CLI（recipe 白名单在 guest 端；两击确认在概览卡片层，这里只发命令）。
-   * 返回是否成功——失败（并发 run / 探测未就绪等 guest 拒绝）供调用方提示友好文案。
+   * 返回 { ok, error? }——失败（并发 run / 探测未就绪等 guest 拒绝）供调用方提示
+   * 友好文案（guest 业务码优先，原文只进日志）。
    */
-  async function uninstall(cli: CliId): Promise<boolean> {
+  async function uninstall(cli: CliId): Promise<{ ok: boolean; error?: string }> {
     try {
       await context.commands.execute('agent-hub.uninstall', { cli })
-      return true
+      return { ok: true }
     } catch (e) {
+      // ADR 0030：详情只进日志；失败原因（guest 业务码优先）交调用方显示友好文案
       console.error('[Agent Hub] uninstall failed', cli, e)
-      return false
+      return { ok: false, error: resolvePluginErrorText(context, e, 'hub.card.uninstallFailed') }
     }
   }
 

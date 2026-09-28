@@ -171,6 +171,10 @@ const en: MessageSchema = {
   'transfer.error.rejectedByUser': 'The transfer was rejected by the peer',
   'transfer.error.noResponse': 'No response from the peer; the request timed out',
   'transfer.error.policyDenied': 'The peer is set to reject incoming transfers',
+  // ADR 0030 business error code (guest bail_with_code!)
+  'transfer.error.queueFull': 'Send queue is full; try again later',
+  // send-failure fallback (resolvePluginErrorText fallbackKey)
+  'transfer.error.sendFailed': 'Send failed; try again',
 
   // ==================== Transfer history (v2) ====================
   'transfer.history.title': 'History',

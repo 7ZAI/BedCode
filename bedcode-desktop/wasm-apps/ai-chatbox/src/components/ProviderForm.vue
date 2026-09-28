@@ -148,8 +148,10 @@
  * 添加模式由 preset 模板回填（自定义模板传 null 全空）；编辑模式 initialValues 回填，
  * presetId 保持原值；删除走 ConfirmDialog（禁原生 confirm 弹窗）。
  */
-import { ref, reactive, computed } from 'vue'
+import { ref, reactive, computed, inject } from 'vue'
 import { useI18n } from 'vue-i18n'
+import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
+import { resolvePluginErrorText } from '../utils/pluginError'
 import ModelListEditor from './ModelListEditor.vue'
 import ConfirmDialog from './ConfirmDialog.vue'
 import { generateId } from '../types'
@@ -174,6 +176,9 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
+
+// ADR 0030：测试连接失败 → 业务码优先的友好文案（guest 错误原文只进日志）
+const context = inject<PluginContext>('pluginContext')!
 
 /** 回填来源：编辑取已有数据，添加取预设模板（自定义模板为 null → 全空） */
 const source = computed(() =>
@@ -234,10 +239,11 @@ async function onTestConnection(): Promise<void> {
     const reply = await props.testConnection({ ...form })
     testOk.value = true
     testResult.value = reply.slice(0, 120)
-  } catch (e: any) {
+  } catch (e: unknown) {
     console.error('[AI Chatbox] test connection failed:', e)
     testOk.value = false
-    testResult.value = t('com.bedcode.ai-chatbox.testFailed')
+    // ADR 0030：业务码优先的友好文案，原文只进日志
+    testResult.value = resolvePluginErrorText(context, e, 'testFailed')
   } finally {
     testing.value = false
   }

@@ -21,6 +21,7 @@
  */
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
+import { resolvePluginErrorText } from '../utils/pluginError'
 import type {
   AdapterErrorCode,
   CliId,
@@ -102,7 +103,7 @@ export function useUsage(context: PluginContext) {
     }
   }
 
-  /** 添加目录：返回 { ok, error? }（guest 校验失败经命令拒绝透传消息） */
+  /** 添加目录：返回 { ok, error? }（guest 校验失败经命令拒绝 → 友好文案，不携带原文） */
   async function addSource(name: string, path: string): Promise<{ ok: boolean; error?: string }> {
     try {
       const data = await context.commands.execute('agent-hub.add-usage-source', { name, path })
@@ -110,17 +111,23 @@ export function useUsage(context: PluginContext) {
       await reloadSources()
       return { ok: true }
     } catch (e) {
-      // 票 04（ADR 0030）：详情只进日志，返回值仅供界面触发友好 i18n（不携带原文）
+      // ADR 0030：详情只进日志，返回值仅供界面显示友好 i18n（guest 业务码优先）
       console.error('[Agent Hub] add-usage-source failed:', e)
-      return { ok: false }
+      return { ok: false, error: resolvePluginErrorText(context, e, 'hub.lg.sources.addFailed') }
     }
   }
 
   /**
    * 系统文件夹选择器选日志目录（fs:pick 权限门与选中路径授权校验在宿主）。
-   * 返回 { ok, picked, path }：picked=false 表示用户取消；授权拒绝等失败 ok=false。
+   * 返回 { ok, picked, path, error? }：picked=false 表示用户取消；
+   * 授权拒绝等失败 ok=false（error 为友好 i18n 文案）。
    */
-  async function pickSourceDir(): Promise<{ ok: boolean; picked: boolean; path: string }> {
+  async function pickSourceDir(): Promise<{
+    ok: boolean
+    picked: boolean
+    path: string
+    error?: string
+  }> {
     try {
       const data = (await context.commands.execute('agent-hub.pick-source-dir', {})) as {
         picked?: boolean
@@ -128,9 +135,9 @@ export function useUsage(context: PluginContext) {
       } | null
       return { ok: true, picked: data?.picked === true, path: data?.path ?? '' }
     } catch (e) {
-      // 票 04（ADR 0030）：详情只进日志，界面触发友好 i18n
+      // ADR 0030：详情只进日志，界面触发友好 i18n（guest 业务码优先）
       console.error('[Agent Hub] pick-source-dir failed:', e)
-      return { ok: false, picked: false, path: '' }
+      return { ok: false, picked: false, path: '', error: resolvePluginErrorText(context, e, 'hub.lg.sources.pickFailed') }
     }
   }
 
@@ -141,8 +148,9 @@ export function useUsage(context: PluginContext) {
       await reloadSources()
       return { ok: true }
     } catch (e) {
+      // ADR 0030：详情只进日志，界面触发友好 i18n（guest 业务码优先）
       console.error('[Agent Hub] remove-usage-source failed:', e)
-      return { ok: false }
+      return { ok: false, error: resolvePluginErrorText(context, e, 'hub.lg.sources.removeFailed') }
     }
   }
 
@@ -157,8 +165,12 @@ export function useUsage(context: PluginContext) {
       await reloadSources()
       return { ok: true }
     } catch (e) {
+      // ADR 0030：详情只进日志，界面触发友好 i18n（guest 业务码优先）
       console.error('[Agent Hub] add-usage-source-path failed:', e)
-      return { ok: false }
+      return {
+        ok: false,
+        error: resolvePluginErrorText(context, e, 'hub.lg.sources.addPathFailed'),
+      }
     }
   }
 
@@ -176,8 +188,12 @@ export function useUsage(context: PluginContext) {
       await reloadSources()
       return { ok: true }
     } catch (e) {
+      // ADR 0030：详情只进日志，界面触发友好 i18n（guest 业务码优先）
       console.error('[Agent Hub] remove-usage-source-path failed:', e)
-      return { ok: false }
+      return {
+        ok: false,
+        error: resolvePluginErrorText(context, e, 'hub.lg.sources.removePathFailed'),
+      }
     }
   }
 

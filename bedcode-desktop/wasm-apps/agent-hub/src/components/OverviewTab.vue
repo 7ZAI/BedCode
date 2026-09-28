@@ -22,8 +22,9 @@ const props = defineProps<{
   speedTesting: boolean
   /** 各 CLI 的会话数据状态（票 07；缺项=不下结论） */
   sessionStates?: Partial<Record<CliId, CliSessionState>>
-  /** 卸载失败信号（guest 拒绝/异常；瞬态提示，成功后由父层清除） */
-  uninstallFailed?: CliId | null
+  /** 卸载失败信号：{ cli, error }（guest 拒绝/异常；瞬态提示，成功后由父层清除）
+   * error 为友好 i18n 文案（ADR 0030：guest 业务码优先，原文不携带） */
+  uninstallFailed?: { cli: CliId; error: string } | null
 }>()
 const emit = defineEmits<{
   detect: []
@@ -173,7 +174,7 @@ const recommendMirror = computed(() => speed.value?.recommend === 'npmmirror')
         :session-state="props.sessionStates?.[id]"
         :busy="busy"
         :uninstalling="uninstalling === id"
-        :uninstall-failed="props.uninstallFailed === id"
+        :uninstall-failed="props.uninstallFailed?.cli === id ? props.uninstallFailed.error : undefined"
         :node-ready="nodeReady"
         @uninstall="(cli) => emit('uninstall', cli)"
       />

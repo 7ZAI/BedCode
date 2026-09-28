@@ -168,6 +168,11 @@ export type MessageSchema = {
   'transfer.error.rejectedByUser': string
   'transfer.error.noResponse': string
   'transfer.error.policyDenied': string
+  // ADR 0030 业务错误码（guest bail_with_code!，完整 key =
+  // com.bedcode.file-transfer.transfer.error.queueFull）：发送入队被拒的原因文案
+  'transfer.error.queueFull': string
+  // 发送失败兜底（前端 resolvePluginErrorText 的 fallbackKey）
+  'transfer.error.sendFailed': string
 
   // ==================== 传输历史（v2） ====================
   'transfer.history.title': string

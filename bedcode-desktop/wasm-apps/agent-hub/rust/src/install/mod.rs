@@ -97,7 +97,8 @@ pub(crate) fn start(h: &WasmHost, args: &Value) -> anyhow::Result<Value> {
 
     let mut state = read_state(h);
     if state["active"].is_object() {
-        return Err(anyhow::anyhow!("install: another run is active"));
+        // 并发安装/更新（用户可见拒绝；ADR 0030 业务码，前端经插件 i18n 展示）
+        bedcode_plugin_api::bail_with_code!("com.bedcode.agent-hub.hub.inst.error.busy");
     }
 
     // method/installed 取自探测状态（不信任前端传参）；node 环境缺失时前端
@@ -105,10 +106,17 @@ pub(crate) fn start(h: &WasmHost, args: &Value) -> anyhow::Result<Value> {
     let detection = h
         .storage_get(super::STATE_KEY)
         .map_err(|e| anyhow::anyhow!("install: read detection failed: {e}"))?
-        .ok_or_else(|| anyhow::anyhow!("install: detection not ready"))?;
+        .ok_or_else(|| {
+            // 探测未就绪（用户可见拒绝；ADR 0030 业务码）
+            anyhow::anyhow!(bedcode_plugin_api::user_facing_string(
+                "com.bedcode.agent-hub.hub.inst.error.detectionPending",
+                serde_json::Value::Null,
+            ))
+        })?;
     let node_ok = detection["env"]["node"].is_string();
     if !node_ok {
-        return Err(anyhow::anyhow!("install: node environment not detected"));
+        // 无 node 环境（用户可见拒绝；ADR 0030 业务码）
+        bedcode_plugin_api::bail_with_code!("com.bedcode.agent-hub.hub.inst.error.nodeMissing");
     }
     let info = &detection["clis"][cli];
     let method = info["method"].as_str().unwrap_or("unknown");
@@ -177,19 +185,27 @@ pub(crate) fn uninstall(h: &WasmHost, args: &Value) -> anyhow::Result<Value> {
 
     let mut state = read_state(h);
     if state["active"].is_object() {
-        return Err(anyhow::anyhow!("uninstall: another run is active"));
+        // 并发卸载（用户可见拒绝；ADR 0030 业务码）
+        bedcode_plugin_api::bail_with_code!("com.bedcode.agent-hub.hub.inst.error.busy");
     }
 
     // method 取自探测状态（不信任前端传参）；npm-global 卸载依赖 node 环境
     let detection = h
         .storage_get(super::STATE_KEY)
         .map_err(|e| anyhow::anyhow!("uninstall: read detection failed: {e}"))?
-        .ok_or_else(|| anyhow::anyhow!("uninstall: detection not ready"))?;
+        .ok_or_else(|| {
+            // 探测未就绪（用户可见拒绝；ADR 0030 业务码）
+            anyhow::anyhow!(bedcode_plugin_api::user_facing_string(
+                "com.bedcode.agent-hub.hub.inst.error.detectionPending",
+                serde_json::Value::Null,
+            ))
+        })?;
     let method = detection["clis"][cli]["method"]
         .as_str()
         .unwrap_or("unknown");
     if method == "npm-global" && !detection["env"]["node"].is_string() {
-        return Err(anyhow::anyhow!("uninstall: node environment not detected"));
+        // 无 node 环境（用户可见拒绝；ADR 0030 业务码）
+        bedcode_plugin_api::bail_with_code!("com.bedcode.agent-hub.hub.inst.error.nodeMissing");
     }
     let script = build_uninstall_script(cli, method, is_windows()).map_err(anyhow::Error::msg)?;
 

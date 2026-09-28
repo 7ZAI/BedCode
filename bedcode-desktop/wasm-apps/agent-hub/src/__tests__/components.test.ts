@@ -52,13 +52,29 @@ const execute = vi.fn(
 
 function makeContext(): PluginContext {
   return {
-    // i18n 桩直返 key，但把插值参数渲染出来（syncedTag 等需要断言数值）
+    id: 'com.bedcode.agent-hub',
+    // i18n 桩直返 key，但把插值参数渲染出来（syncedTag 等需要断言数值）；
+    // getI18n 返回注册表桩（模拟 registerMessages 扁平命中：完整 key → 短 key），
+    // 供 resolvePluginErrorText 的业务码 / fallback 解析（ADR 0030）
     i18n: {
       t: (k: string, params?: Record<string, unknown>) =>
         params && Object.keys(params).length > 0
           ? `${k}(${Object.entries(params).map(([pk, pv]) => `${pk}=${String(pv)}`).join(',')})`
           : k,
-      getI18n: () => undefined,
+      getI18n: () => ({
+        global: {
+          t: (key: string, params?: Record<string, unknown>) => {
+            const prefix = 'com.bedcode.agent-hub.'
+            const short = key.startsWith(prefix) ? key.slice(prefix.length) : key
+            if (params && Object.keys(params).length > 0) {
+              return `${short}(${Object.entries(params)
+                .map(([pk, pv]) => `${pk}=${String(pv)}`)
+                .join(',')})`
+            }
+            return short
+          },
+        },
+      }),
     },
     commands: { execute },
     events: { on: () => ({ dispose: () => {} }) },
@@ -1556,7 +1572,13 @@ describe('A8 CliCard：卸载动作（两击确认与不可用原因）', () => 
   })
 
   it('A8-5 反例：卸载失败信号 → 显示友好失败文案', async () => {
-    const w = mountComponent(CliCard, { cliId: 'pi', info, nodeReady: true, uninstallFailed: true })
+    const w = mountComponent(CliCard, {
+      cliId: 'pi',
+      info,
+      nodeReady: true,
+      // ADR 0030：prop 直接是文案（{ cli, error } 解包后），不渲染 code/detail
+      uninstallFailed: 'hub.card.uninstallFailed',
+    })
     await flushPromises()
     expect(w.text()).toContain('hub.card.uninstallFailed')
     w.unmount()
@@ -1650,7 +1672,8 @@ describe('A9 OverviewTab：卸载事件上抛', () => {
   })
 
   it('反例：卸载失败信号只落到对应卡片（其他卡片不误显示）', async () => {
-    const w = mountOverview({ uninstallFailed: 'pi' })
+    // ADR 0030：信号 = { cli, error }（error 为友好 i18n 文案）
+    const w = mountOverview({ uninstallFailed: { cli: 'pi', error: 'hub.card.uninstallFailed' } })
     await flushPromises()
     // pi 卡片下方有失败文案；其余卡片（未装/无信息）不出现
     expect(w.text()).toContain('hub.card.uninstallFailed')

@@ -262,7 +262,8 @@ describe('useTasks orchestration', () => {
 
     const sent = await tasks.sendPickedFiles()
 
-    expect(sent).toBe(0)
+    // ADR 0030 收口：返回 { sent, error? }（error 为友好 i18n 文案，仅失败时）
+    expect(sent).toEqual({ sent: 0 })
     expect(env.calls.some((c) => c.id === 'file-transfer.enqueue')).toBe(false)
   })
 
@@ -273,7 +274,7 @@ describe('useTasks orchestration', () => {
 
     const sent = await tasks.sendPickedFiles()
 
-    expect(sent).toBe(2)
+    expect(sent).toEqual({ sent: 2 })
     expect(env.calls).toContainEqual({
       id: 'file-transfer.enqueue',
       args: { paths: ['C:/a.pdf', 'C:/b.txt'] },

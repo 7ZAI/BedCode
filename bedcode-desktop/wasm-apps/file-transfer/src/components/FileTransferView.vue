@@ -24,6 +24,7 @@ import { useSettings } from '../composables/useSettings'
 import { usePeerDevices } from '../composables/usePeerDevices'
 import { useBatchPrompt } from '../composables/useBatchPrompt'
 import { formatBytes } from '../utils/format'
+import { toast } from 'vue-sonner'
 import type { PendingBatch } from '../types'
 
 const context = inject<PluginContext>('pluginContext')!
@@ -168,11 +169,15 @@ async function handleRefresh(): Promise<void> {
   await Promise.all([refreshTasks(), fs.refresh(), refreshDevices()])
 }
 
-/** 发送到手机：系统多文件选择器直发活跃对端 */
+/** 发送到手机：系统多文件选择器直发活跃对端（失败 → 友好 toast，原文只进日志） */
 async function handleUpload(): Promise<void> {
   if (!peer.value.online) return
-  const ok = await sendPickedFiles()
-  if (ok > 0) queueVisible.value = true
+  const r = await sendPickedFiles()
+  if (r.error) {
+    toast.error(r.error)
+    return
+  }
+  if (r.sent > 0) queueVisible.value = true
 }
 
 /** 下载完成 → 打开本地所在目录（插件自有命令 → 宿主原语 host-platform.reveal-in-dir） */

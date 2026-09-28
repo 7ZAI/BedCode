@@ -619,6 +619,7 @@
 import { computed, inject, onMounted, onUnmounted, ref } from 'vue'
 import { toast } from 'vue-sonner'
 import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
+import { resolvePluginErrorText } from '../utils/pluginError'
 import PluginModal from './PluginModal.vue'
 import SessionConfigForm, { type SessionConfigFormData } from './SessionConfigForm.vue'
 import { useSessionCenter, isRunningStatus, type SessionDto } from '../composables/useSessionCenter'
@@ -770,7 +771,7 @@ async function refresh(): Promise<void> {
     await load()
     toast.info(t('session.toast.listRefreshed'))
   } catch (e) {
-    toast.error(t('session.error.loadFailed'))
+    toast.error(resolvePluginErrorText(context, e, 'session.error.loadFailed'))
   }
 }
 
@@ -799,7 +800,7 @@ async function doStart(configId: string): Promise<void> {
     toast.success(t('session.toast.started'))
   } catch (e: any) {
     console.error('[Session Center] start session failed:', e)
-    toast.error(t('session.error.startFailed'))
+    toast.error(resolvePluginErrorText(context, e, 'session.error.startFailed'))
   } finally {
     isOperating.value = false
   }
@@ -817,7 +818,7 @@ async function viewSession(session: SessionDto): Promise<void> {
     if (!opened) toast.info(t('session.error.notRunning'))
   } catch (e) {
     console.error('[Session Center] openTerminal error:', e)
-    toast.error(t('session.terminal.openFailed'))
+    toast.error(resolvePluginErrorText(context, e, 'session.terminal.openFailed'))
   } finally {
     isTerminalOpening.value = false
   }
@@ -837,7 +838,7 @@ async function confirmStop(): Promise<void> {
     toast.info(t('session.toast.stopped'))
   } catch (e: any) {
     console.error('[Session Center] stop session failed:', e)
-    toast.error(t('session.error.stopFailed'))
+    toast.error(resolvePluginErrorText(context, e, 'session.error.stopFailed'))
   } finally {
     isOperating.value = false
     showStopConfirmDialog.value = false
@@ -853,7 +854,7 @@ async function doRestart(session: SessionDto): Promise<void> {
     toast.success(t('session.toast.restarted'))
   } catch (e: any) {
     console.error('[Session Center] restart session failed:', e)
-    toast.error(t('session.error.restartFailed'))
+    toast.error(resolvePluginErrorText(context, e, 'session.error.restartFailed'))
   } finally {
     isOperating.value = false
   }
@@ -886,7 +887,7 @@ async function confirmDeleteSessionNow(): Promise<void> {
     toast.success(t('session.toast.deleted'))
   } catch (e: any) {
     console.error('[Session Center] delete session failed:', e)
-    toast.error(t('session.error.deleteFailed'))
+    toast.error(resolvePluginErrorText(context, e, 'session.error.deleteFailed'))
   } finally {
     isOperating.value = false
     showDeleteSessionConfirmDialog.value = false
@@ -906,7 +907,7 @@ async function confirmDeleteConfigNow(): Promise<void> {
     toast.success(t('session.toast.configDeleted'))
   } catch (e: any) {
     console.error('[Session Center] delete config failed:', e)
-    toast.error(t('session.error.saveFailed'))
+    toast.error(resolvePluginErrorText(context, e, 'session.error.saveFailed'))
   } finally {
     showDeleteConfirmDialog.value = false
     pendingDeleteConfigId.value = null
@@ -945,7 +946,7 @@ async function handleSaveConfig(form: SessionConfigFormData): Promise<void> {
     void context.storage.set(FORM_DEFAULTS_KEY, formDefaults.value)
   } catch (e: any) {
     console.error('[Session Center] save config failed:', e)
-    toast.error(t('session.error.saveFailed'))
+    toast.error(resolvePluginErrorText(context, e, 'session.error.saveFailed'))
   }
 }
 
@@ -981,7 +982,7 @@ onMounted(async () => {
     await loadFormDefaults()
   } catch (e) {
     console.error('[Session Center] load failed:', e)
-    toast.error(t('session.error.loadFailed'))
+    toast.error(resolvePluginErrorText(context, e, 'session.error.loadFailed'))
   }
   isLoading.value = false
   startTicker()

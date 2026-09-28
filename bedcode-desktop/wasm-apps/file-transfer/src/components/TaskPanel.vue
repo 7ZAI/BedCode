@@ -10,6 +10,7 @@ import { computed, inject, ref } from 'vue'
 import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 import type { HistoryEntry, ReceivingTask, Task, TaskStateName } from '../types'
 import { formatBytes, formatEta, displayName, formatClock } from '../utils/format'
+import { reasonText, historyReason } from '../utils/taskReason'
 
 const context = inject<PluginContext>('pluginContext')!
 const t = (key: string, params?: Record<string, any>) => context.i18n.t(key, params)
@@ -131,29 +132,7 @@ function etaOf(task: Task): string {
   return formatEta((task.size - task.offset) / sp, t)
 }
 
-/** 拒绝原因映射 */
-function rejectReasonText(reason: string | null | undefined): string {
-  switch (reason) {
-    case 'user-rejected':
-      return t('transfer.error.rejectedByUser')
-    case 'timeout':
-      return t('transfer.error.noResponse')
-    case 'policy-denied':
-      return t('transfer.error.policyDenied')
-    case 'duplicate-name':
-      return t('transfer.error.duplicateName')
-    default:
-      return ''
-  }
-}
-
-/** 失败/拒绝原因文案 */
-function reasonText(task: Task): string {
-  if (task.state === 'rejected')
-    return rejectReasonText(task.reason) || t('transfer.task.state.rejected')
-  if (task.state === 'failed') return rejectReasonText(task.reason) || (task.reason ?? '')
-  return ''
-}
+/** 失败/拒绝原因文案（ADR 0030 收口：未知码落状态兜底，原文永不渲染） */
 
 /** 对端展示名（peerId → 缓存名 → 原始 ID） */
 function peerNameOf(peerId: string): string {
@@ -255,14 +234,7 @@ function historyResult(entry: HistoryEntry): string {
   return t(`transfer.history.results.${entry.state}`)
 }
 
-/** 历史条目原因文案（仅失败/拒绝时显示） */
-function historyReason(entry: HistoryEntry): string {
-  if (entry.state === 'failed' && entry.reason)
-    return rejectReasonText(entry.reason) || entry.reason
-  if (entry.state === 'rejected')
-    return rejectReasonText(entry.reason) || t('transfer.task.state.rejected')
-  return ''
-}
+/** 历史条目原因文案（仅失败/拒绝时显示；ADR 0030 收口，规则同 reasonText） */
 </script>
 
 <template>
@@ -398,8 +370,8 @@ function historyReason(entry: HistoryEntry): string {
                 <span>{{ formatBytes(entry.size) }}</span>
                 <span v-if="entry.peerName">{{ entry.peerName }}</span>
               </div>
-              <div v-if="historyReason(entry)" class="ft-task-reason">
-                {{ historyReason(entry) }}
+              <div v-if="historyReason(entry.state, entry.reason, t)" class="ft-task-reason">
+                {{ historyReason(entry.state, entry.reason, t) }}
               </div>
             </div>
           </div>
@@ -736,7 +708,7 @@ function historyReason(entry: HistoryEntry): string {
                   <span v-if="speedOf(task) > 0">{{ formatBytes(speedOf(task)) }}/s</span>
                   <span v-if="etaOf(task)">{{ etaOf(task) }}</span>
                 </div>
-                <div v-if="reasonText(task)" class="ft-task-reason">{{ reasonText(task) }}</div>
+                <div v-if="reasonText(task.state, task.reason, t)" class="ft-task-reason">{{ reasonText(task.state, task.reason, t) }}</div>
               </template>
             </div>
           </template>

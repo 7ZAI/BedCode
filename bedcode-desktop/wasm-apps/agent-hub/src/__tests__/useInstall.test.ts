@@ -3,8 +3,10 @@
  *
  * 契约来源：
  * - uninstall(cli)：只发 `agent-hub.uninstall` 命令（recipe 白名单与并发
- *   互斥都在 guest 端仲裁，前端不做业务判断）；成功返回 true，guest 拒绝
- *   （并发 run / 探测未就绪等）返回 false 且不抛——概览卡片据此显示友好文案
+ *   互斥都在 guest 端仲裁，前端不做业务判断）；成功返回 `{ ok: true }`，
+ *   guest 拒绝（并发 run / 探测未就绪等）返回 `{ ok: false, error }` 且不抛——
+ *   error 为友好 i18n 文案（ADR 0030：guest 业务码优先，原文只进日志），
+ *   概览卡片据此展示
  * - install(cli, mirror)：既有安装面不被卸载改动（回归见证）
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -19,7 +21,27 @@ const execute = vi.fn(
 
 function makeContext(): PluginContext {
   return {
-    i18n: { t: (k: string) => k, getI18n: () => undefined },
+    id: 'com.bedcode.agent-hub',
+    // mock i18n：context.i18n.t 直返 key（既有断言兼容）；getI18n 返回注册表桩——
+    // `com.bedcode.agent-hub.<短key>` 解析为短 key（i18n 桩直返 key 约定，模拟
+    // registerMessages 扁平注册后的命中），非前缀 key 原样返回 = 未注册语义
+    i18n: {
+      t: (k: string) => k,
+      getI18n: () => ({
+        global: {
+          t: (key: string, params?: Record<string, unknown>) => {
+            const prefix = 'com.bedcode.agent-hub.'
+            const short = key.startsWith(prefix) ? key.slice(prefix.length) : key
+            if (params && Object.keys(params).length > 0) {
+              return `${short}(${Object.entries(params)
+                .map(([pk, pv]) => `${pk}=${String(pv)}`)
+                .join(',')})`
+            }
+            return short
+          },
+        },
+      }),
+    },
     commands: { execute },
     events: { on: () => ({ dispose: () => {} }) },
   } as unknown as PluginContext
@@ -48,32 +70,33 @@ afterEach(() => {
 })
 
 describe('U1 uninstall 命令分发', () => {
-  it('正例：成功 → 调用 agent-hub.uninstall 并返回 true', async () => {
+  it('正例：成功 → 调用 agent-hub.uninstall 并返回 { ok:true }', async () => {
     const s = mountInstall()
     const ok = await s.uninstall('codex')
-    expect(ok).toBe(true)
+    expect(ok).toEqual({ ok: true })
     expect(execute).toHaveBeenCalledWith('agent-hub.uninstall', { cli: 'codex' })
   })
 
-  it('反例：guest 拒绝（如并发 run）→ 返回 false 且不抛', async () => {
+  it('反例：guest 拒绝（如并发 run）→ { ok:false, error:友好文案 } 且不抛', async () => {
     execute.mockImplementation(async (cmd: string) => {
       if (cmd === 'agent-hub.uninstall') throw new Error('another run is active')
       return null
     })
     const s = mountInstall()
     const ok = await s.uninstall('pi')
-    expect(ok).toBe(false)
+    expect(ok.ok).toBe(false)
+    expect(ok.error).toBe('hub.card.uninstallFailed')
     expect(execute).toHaveBeenCalledWith('agent-hub.uninstall', { cli: 'pi' })
   })
 
-  it('反例：命令原文不进返回值（错误只进日志，调用方拿 false 显示友好文案）', async () => {
+  it('反例：命令原文不进返回值（错误只进日志，error 为友好 i18n 文案）', async () => {
     execute.mockImplementation(async () => {
       throw new Error('npm exploded secret')
     })
     const s = mountInstall()
     const ok = await s.uninstall('claude')
-    expect(ok).toBe(false)
-    // 返回值不携带技术详情
+    expect(ok.ok).toBe(false)
+    expect(JSON.stringify(ok)).not.toContain('npm exploded secret')
     expect(s.state.value).toBeNull()
   })
 

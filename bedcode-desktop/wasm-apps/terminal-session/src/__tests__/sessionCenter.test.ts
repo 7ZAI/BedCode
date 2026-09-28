@@ -81,7 +81,20 @@ const eventDispose = vi.fn()
 
 function makeContext(): PluginContext {
   return {
-    i18n: { t: (key: string) => key },
+    id: 'com.bedcode.terminal-session',
+    // i18n 桩直返 key；getI18n 返回注册表桩（完整 key → 短 key，模拟
+    // registerMessages 扁平命中）供 resolvePluginErrorText 解析（ADR 0030）
+    i18n: {
+      t: (key: string) => key,
+      getI18n: () => ({
+        global: {
+          t: (key: string) =>
+            key.startsWith('com.bedcode.terminal-session.')
+              ? key.slice('com.bedcode.terminal-session.'.length)
+              : key,
+        },
+      }),
+    },
     commands: { execute },
     session: { openTerminal, closeTerminal, isTerminalOpen, predictTerminalSize },
     storage: { get: storageGet, set: storageSet },

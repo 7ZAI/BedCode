@@ -42,14 +42,20 @@ const usage = useUsage(context)
 
 const activeTab = ref<HubTab>('overview')
 
-/** 卸载失败信号（guest 拒绝/异常；瞬态提示，下次操作自动清除） */
-const uninstallFailed = ref<CliId | null>(null)
+/** 卸载失败信号（guest 拒绝/异常；瞬态提示，下次操作自动清除）。
+ * 携带失败 CLI + 友好 i18n 文案（ADR 0030：guest 业务码优先，原文不携带） */
+const uninstallFailed = ref<{ cli: CliId; error: string } | null>(null)
 
-/** 概览卡片卸载：发命令给 guest，失败则落瞬态提示（友好 i18n 在卡片层） */
+/** 概览卡片卸载：发命令给 guest，失败则落瞬态提示（友好 i18n 文案） */
 async function handleUninstall(cli: CliId) {
   uninstallFailed.value = null
-  const ok = await install.uninstall(cli)
-  if (!ok) uninstallFailed.value = cli
+  const r = await install.uninstall(cli)
+  if (!r.ok) {
+    uninstallFailed.value = {
+      cli,
+      error: r.error ?? context.i18n.t('hub.card.uninstallFailed'),
+    }
+  }
 }
 
 const tabs = computed(() => [

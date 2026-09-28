@@ -102,12 +102,12 @@ pub(crate) fn add_source(h: &WasmHost, args: &Value) -> anyhow::Result<Value> {
 
     let mut state = read_state(h);
     if source_named(&state, &name) {
-        return Err(anyhow::anyhow!("add-source: name already registered"));
+        // 来源名已被占用（用户可见拒绝；ADR 0030 业务码）
+        bedcode_plugin_api::bail_with_code!("com.bedcode.agent-hub.hub.lg.sources.error.nameTaken");
     }
     if path_registered(&state, &path) {
-        return Err(anyhow::anyhow!(
-            "add-source: path already registered to another source"
-        ));
+        // 目录已归属另一来源（用户可见拒绝；ADR 0030 业务码）
+        bedcode_plugin_api::bail_with_code!("com.bedcode.agent-hub.hub.lg.sources.error.pathTaken");
     }
     // 适配器槽位 + 来源条目（首个目录即 paths[0]）
     if let Some(adapters) = state.get_mut("adapters").and_then(|a| a.as_object_mut()) {
@@ -158,14 +158,12 @@ pub(crate) fn add_source_path(h: &WasmHost, args: &Value) -> anyhow::Result<Valu
         return Err(anyhow::anyhow!("add-source-path: source not found"));
     }
     if source_is_sqlite(&state, &name) {
-        return Err(anyhow::anyhow!(
-            "add-source-path: sqlite sources are single-file and read-only"
-        ));
+        // sqlite 源单文件只读（用户可见拒绝；ADR 0030 业务码）
+        bedcode_plugin_api::bail_with_code!("com.bedcode.agent-hub.hub.lg.sources.error.sqliteReadonly");
     }
     if path_registered(&state, &path) {
-        return Err(anyhow::anyhow!(
-            "add-source-path: path already registered to another source"
-        ));
+        // 目录已归属另一来源（用户可见拒绝；ADR 0030 业务码）
+        bedcode_plugin_api::bail_with_code!("com.bedcode.agent-hub.hub.lg.sources.error.pathTaken");
     }
     let sources = state
         .get_mut("sources")
@@ -224,14 +222,16 @@ pub(crate) fn remove_source_path(h: &WasmHost, args: &Value) -> anyhow::Result<V
             return Err(anyhow::anyhow!("remove-source-path: path not in source"));
         }
         if builtin_default_path(&home, &name).as_deref() == Some(path.as_str()) {
-            return Err(anyhow::anyhow!(
-                "remove-source-path: builtin default path cannot be removed"
-            ));
+            // 内置默认目录不可移除（用户可见拒绝；ADR 0030 业务码）
+            bedcode_plugin_api::bail_with_code!(
+                "com.bedcode.agent-hub.hub.lg.sources.error.builtinProtected"
+            );
         }
         if paths.len() == 1 {
-            return Err(anyhow::anyhow!(
-                "remove-source-path: last path — remove the whole source instead"
-            ));
+            // 最后一条目录拒绝单独移除（用户可见拒绝；ADR 0030 业务码）
+            bedcode_plugin_api::bail_with_code!(
+                "com.bedcode.agent-hub.hub.lg.sources.error.lastPathProtected"
+            );
         }
         paths.retain(|p| p != &path);
         src["paths"] = json!(paths);

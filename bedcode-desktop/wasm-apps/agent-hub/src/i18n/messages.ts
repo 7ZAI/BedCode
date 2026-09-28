@@ -104,6 +104,11 @@ export type MessageSchema = {
   'hub.inst.copied': string
   'hub.inst.done': string
   'hub.inst.failed': string
+  // ADR 0030 业务错误码（guest bail_with_code!/user_facing_string，完整 key =
+  // com.bedcode.agent-hub.hub.inst.error.*）：用户可见拒绝的原因文案
+  'hub.inst.error.busy': string
+  'hub.inst.error.detectionPending': string
+  'hub.inst.error.nodeMissing': string
   'hub.inst.cancelled': string
   'hub.inst.cancel': string
   'hub.inst.outputEmpty': string
@@ -347,6 +352,13 @@ export type MessageSchema = {
   'hub.lg.sources.kind.jsonl': string
   'hub.lg.sources.kind.sqlite': string
   'hub.lg.sources.addFailed': string
+  // ADR 0030 业务错误码（guest bail_with_code!，完整 key =
+  // com.bedcode.agent-hub.hub.lg.sources.error.*）：来源/目录增删被拒的原因文案
+  'hub.lg.sources.error.nameTaken': string
+  'hub.lg.sources.error.pathTaken': string
+  'hub.lg.sources.error.sqliteReadonly': string
+  'hub.lg.sources.error.builtinProtected': string
+  'hub.lg.sources.error.lastPathProtected': string
   'hub.lg.sources.removeFailed': string
   'hub.lg.sources.addPathFailed': string
   'hub.lg.sources.removePathFailed': string

@@ -163,6 +163,10 @@ const zhCN: MessageSchema = {
   'transfer.error.rejectedByUser': '对方拒绝了传输',
   'transfer.error.noResponse': '对方未响应，请求已超时',
   'transfer.error.policyDenied': '对方设置了直接拒绝',
+  // ADR 0030 业务错误码（guest bail_with_code!）
+  'transfer.error.queueFull': '发送队列已满，请稍后再试',
+  // 发送失败兜底（resolvePluginErrorText fallbackKey）
+  'transfer.error.sendFailed': '发送失败，请重试',
 
   // ==================== 传输历史（v2） ====================
   'transfer.history.title': '历史',

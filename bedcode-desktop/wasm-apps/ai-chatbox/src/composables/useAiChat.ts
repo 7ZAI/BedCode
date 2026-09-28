@@ -14,6 +14,7 @@ import { buildStreamRequest, parseStreamEvent } from '../adapters/registry'
 import { isValidBaseUrl } from '../adapters/utils'
 import type { AdapterMessage, StreamEvent, ThinkingOptions } from '../adapters/types'
 import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
+import { parsePluginError } from '../utils/pluginError'
 import type { useAiConfig } from './useAiConfig'
 
 type AiConfig = ReturnType<typeof useAiConfig>
@@ -439,7 +440,12 @@ export function useAiChat(
 
       context.commands
         .execute('ai-chatbox.chat-stream', { streamId, request })
-        .catch((e: any) => handleStreamError(String(e?.message || e)))
+        .catch((e: unknown) => {
+          // ADR 0030：命令级 rejection 是信封对象——取业务码走统一分类/收尾，
+          // 避免 String(信封) 得 "[object Object]"（丢信息）；未识别形状回落原文。
+          const env = parsePluginError(e)
+          handleStreamError(env ? env.code : String((e as Error)?.message || e))
+        })
     }
 
     /** 流错误分派：非限流直接收尾；限流在未收到内容且尚有重试额度时进入指数退避 */

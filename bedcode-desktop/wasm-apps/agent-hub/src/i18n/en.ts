@@ -87,6 +87,10 @@ const en: MessageSchema = {
   'hub.inst.copied': 'Copied',
   'hub.inst.done': 'Done',
   'hub.inst.failed': 'Failed',
+  // ADR 0030 business error codes (same source as messages.ts type)
+  'hub.inst.error.busy': 'An install/update is already running; try again later',
+  'hub.inst.error.detectionPending': 'Environment detection is not ready yet; try again later',
+  'hub.inst.error.nodeMissing': 'Node.js environment not detected; cannot run automatically',
   'hub.inst.cancelled': 'Cancelled',
   'hub.inst.cancel': 'Cancel',
   'hub.inst.outputEmpty': '(no output yet)',
@@ -333,6 +337,12 @@ const en: MessageSchema = {
   'hub.lg.sources.kind.jsonl': 'Directory',
   'hub.lg.sources.kind.sqlite': 'SQLite database',
   'hub.lg.sources.addFailed': 'Failed to add source',
+  // ADR 0030 business error codes (same source as messages.ts type)
+  'hub.lg.sources.error.nameTaken': 'Source name already exists; pick another name',
+  'hub.lg.sources.error.pathTaken': 'This directory already belongs to another source',
+  'hub.lg.sources.error.sqliteReadonly': 'SQLite sources are single-file read-only; cannot add directories',
+  'hub.lg.sources.error.builtinProtected': 'Built-in default directories cannot be removed',
+  'hub.lg.sources.error.lastPathProtected': 'Remove the whole source instead of its last directory',
   'hub.lg.sources.removeFailed': 'Failed to remove source',
   'hub.lg.sources.addPathFailed': 'Failed to add directory',
   'hub.lg.sources.removePathFailed': 'Failed to remove directory',

@@ -87,6 +87,10 @@ const zhCN: MessageSchema = {
   'hub.inst.copied': '已复制',
   'hub.inst.done': '已完成',
   'hub.inst.failed': '失败',
+  // ADR 0030 业务错误码（与 messages.ts 类型同源）
+  'hub.inst.error.busy': '已有安装/更新任务进行中，请稍后再试',
+  'hub.inst.error.detectionPending': '环境探测尚未就绪，请稍后再试',
+  'hub.inst.error.nodeMissing': '未检测到 Node.js 环境，无法自动执行',
   'hub.inst.cancelled': '已取消',
   'hub.inst.cancel': '取消',
   'hub.inst.outputEmpty': '（暂无输出）',
@@ -333,6 +337,12 @@ const zhCN: MessageSchema = {
   'hub.lg.sources.kind.jsonl': '目录',
   'hub.lg.sources.kind.sqlite': 'SQLite 库',
   'hub.lg.sources.addFailed': '添加来源失败',
+  // ADR 0030 业务错误码（与 messages.ts 类型同源）
+  'hub.lg.sources.error.nameTaken': '来源名称已存在，请换一个名称',
+  'hub.lg.sources.error.pathTaken': '该目录已归属另一个来源',
+  'hub.lg.sources.error.sqliteReadonly': 'SQLite 来源为单文件只读，不能添加目录',
+  'hub.lg.sources.error.builtinProtected': '内置来源的默认目录不能移除',
+  'hub.lg.sources.error.lastPathProtected': '请移除整个来源，而不是移除最后一个目录',
   'hub.lg.sources.removeFailed': '移除来源失败',
   'hub.lg.sources.addPathFailed': '添加目录失败',
   'hub.lg.sources.removePathFailed': '移除目录失败',

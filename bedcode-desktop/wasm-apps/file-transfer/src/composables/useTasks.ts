@@ -7,6 +7,7 @@
  */
 import { ref, computed, type Ref } from 'vue'
 import type { Disposable, PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
+import { resolvePluginErrorText } from '../utils/pluginError'
 import type { Task, TaskStateName } from '../types'
 import { isTerminalState } from '../types'
 
@@ -44,7 +45,10 @@ function mapWireTask(raw: any): Task {
     offset: raw.transferredBytes ?? 0,
     rateBps: raw.rateBps ?? 0,
     state: mapState(status),
-    reason: raw.detail ?? raw.rejectReason ?? null,
+    // ADR 0030 收口（2026-09-28）：reason 只承载 rejectReason（wire 枚举，见
+    // transfer_store.rs terminal_status_of）。历史实现曾 `raw.detail ?? raw.rejectReason`
+    // （detail 优先），wire 技术串会经 TaskPanel 未知码兜底上用户面——已退役。
+    reason: raw.rejectReason ?? null,
     initiator: 'me',
     batchId: raw.batchId ?? null,
     createdAt: raw.createdAtMs ?? 0,
@@ -95,17 +99,22 @@ export function useTasks(context: PluginContext) {
     return peerOnline.value
   }
 
-  /** 系统选择器多选文件直发活跃对端（返回成功入队的文件数，0 = 取消/失败） */
-  async function sendPickedFiles(): Promise<number> {
+  /**
+   * 系统选择器多选文件直发活跃对端。
+   * 返回 { sent, error? }：sent = 成功入队文件数（0 = 取消/失败）；
+   * error = 友好 i18n 文案（guest 业务码优先，原文只进日志；ADR 0030）。
+   */
+  async function sendPickedFiles(): Promise<{ sent: number; error?: string }> {
     try {
       const raw = await context.commands.execute('file-transfer.pick-files', {})
       const paths: string[] = Array.isArray(raw) ? raw : []
-      if (paths.length === 0) return 0
+      if (paths.length === 0) return { sent: 0 }
       await context.commands.execute('file-transfer.enqueue', { paths })
-      return paths.length
+      return { sent: paths.length }
     } catch (e) {
+      // ADR 0030：详情只进日志；失败原因（guest 业务码优先）交调用方提示
       console.error('[File Transfer] pick/send failed:', e)
-      return 0
+      return { sent: 0, error: resolvePluginErrorText(context, e, 'transfer.error.sendFailed') }
     }
   }
 
