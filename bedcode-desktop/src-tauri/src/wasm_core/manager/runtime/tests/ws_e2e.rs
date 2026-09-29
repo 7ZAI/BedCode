@@ -41,7 +41,7 @@ async fn ws_client_recv_action(
 }
 /// host-websocket 客户端域端到端（ABI v14）
 ///
-/// fixture 插件（`packages/plugin-ws-test`）→ 宿主 `connect`（**真握手**）→
+/// fixture 插件（`packages/plugin-sdk-fixtures`，feature=ws）→ 宿主 `connect`（**真握手**）→
 /// 文本 / 二进制回文经 `events-ws` 回灌 → 属主私有状态事件
 /// （`ws:open` / `ws:close`）经 host-bus 投递 → `close` 后 `is-connected`
 /// 立即为 false（spec D3 时序）。
@@ -274,7 +274,7 @@ fn test_ws_client_outbound_roundtrip() {
 /// host-websocket 服务端域端到端（ABI v14，票 05）
 ///
 /// 真实宿主 WS 服务器（进程内随机端口）+ 真实 tokio-tungstenite 客户端 +
-/// fixture 插件（`packages/plugin-ws-test`）一次贯通：
+/// fixture 插件（`packages/plugin-sdk-fixtures`，feature=ws）一次贯通：
 ///
 /// 1. `register-endpoint`（`auth: none`，`maxClients: 1`）→ 通配路由挂载
 ///    `/ws/plugin/<owner>/echo`；

@@ -45,9 +45,6 @@ bedcode-desktop/                      # 桌面端项目 (Tauri 2.0 + Vue 3)
 │   │                                 #   http.json / pty.json / …，根 plugin.json 归 sdk 夹具
 │   │                                 #   （#[plugin_api] 宏编译期硬读该路径）；宿主侧
 │   │                                 #   build_sdk_fixture(feature) 互斥锁串行构建并按 feature 归档产物
-│   ├── plugin-component-test/        # 测试用 WASM 插件 crate（手写 wit-bindgen 绑定，Component Model
-│   │                                 #   连通性与签名验证；兼作「未导出 events-ws / events-task 的旧产物」
-│   │                                 #   降级路径载体，供宿主 runtime 测试套件）
 │   ├── plugin-p3-async-host-import-test/ # p3 async host import 测试插件（手写 wit-bindgen 绑定）
 │   ├── plugin-bench-test/            # 性能基准夹具（独立 crate：749 行 / 29 命令，与功能闭环夹具性质不同）
 │   ├── plugin-system-test/           # 系统组件形态测试插件 crate（导出 host-* 同形能力接口，验证能力装配
@@ -646,7 +643,7 @@ Rust 侧以 `abi.rs` 为宿主/插件共同引用的单一事实来源（签名�
 | 插件系统 (Rust) | `src-tauri/src/wasm_core/` |
 | 插件系统 (前端) | `src/plugin/`、`src/composables/`（usePluginManager） |
 | 插件开发 SDK | `packages/plugin-sdk-desktop/` |
-| 测试插件 | `packages/plugin-sdk-fixtures/`（SDK 绑定夹具合集，feature 互斥）、`plugin-component-test/`、`plugin-p3-async-host-import-test/`、`plugin-bench-test/`、`plugin-system-test/`、`plugin-wasi-test/`（wasip2 preopen，不参与合并） |
+| 测试插件 | `packages/plugin-sdk-fixtures/`（SDK 绑定夹具合集，feature 互斥）、`plugin-p3-async-host-import-test/`、`plugin-bench-test/`、`plugin-system-test/`、`plugin-wasi-test/`（wasip2 preopen，不参与合并）。**已删**：`plugin-{http,task,pty,wasip3,sdk,ws}-test` 与 `plugin-component-test`（前六个并入合集；后者连同「旧产物缺可选导出」降级路径的测试一并退役——SDK 的 `wasm_entry!` 无条件导出全部 interface，造不出缺导出的产物） |
 | wasm 应用源码 | `wasm-apps/agent-hub/`、`wasm-apps/ai-chatbox/`、`wasm-apps/file-transfer/`、`wasm-apps/terminal-session/`（终端会话中心：**会话真源登记域**（`rust/src/session/`，P1-b 起含状态机 / 生命周期分发 / 提交行重建 / 经 `host-pty` 的创建停止输入尺寸输出）+ 配对与信任 + 会话编排 + Agent 任务域 + 快捷指令域（票 02）+ 文件浏览域（票 03）+ **WS 会话控制词表分派**（`rust/src/ws_control.rs`，票 09b）+ **HTTP 路由代码注册**（`rust/src/http_routes.rs`，ABI v29：activate 期经 `host-http.register-endpoint` 注册全部路由）+ **sessions REST 域**（`rust/src/sessions_http.rs`：/api/sessions* 七条），票 17 起顶替旧 `com.bedcode.auto-task` 插件；HTTP 业务端点经动态注册表接管 /api/configs /api/quick-actions / 文件浏览五端点 / /api/auth/* / /api/sessions* / /static/terminal-bg） |
 | 系统常量 / 错误类型 / 生命周期 | `src-tauri/src/system/`（constants.rs 按领域分组） |
 | 应用上下文 (DI) | `src-tauri/src/system/`（app_context） |

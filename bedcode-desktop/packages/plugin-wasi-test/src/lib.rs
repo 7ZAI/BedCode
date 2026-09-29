@@ -5,11 +5,16 @@
 //! WASI 文件系统——宿主在实例化时按插件配置预打开目录 `/data` 后，
 //! 插件即拥有对该目录的直接读写能力（无需宿主 fs_* 转发）。
 //!
+//! 本夹具固定 wasip2、不参与夹具合并：实测 preopen 在 wasip3 上不工作
+//! （两个 E2E 均 trap 于 `filesystem_method_descriptor_open_at`，p3 linker
+//! 虽接上但预打开目录能力未建到 p3 filesystem 接口）。合并不要求统一
+//! target，故保留 wasip2 独立 crate。
+//!
 //! 仅供宿主测试套件加载验证（宿主侧 E2E：preopen → std::fs 写 → 宿主
-//! 侧校验落盘文件）。
+//! 侧校验落盘文件，含沙箱边界断言：preopen 根外路径不可达）。
 
 use bedcode_plugin_api::types::PluginManifest;
-use bedcode_plugin_api::{WasmHost, WasmPlugin};
+use bedcode_plugin_api::WasmPlugin;
 
 struct WasiTestPlugin;
 

@@ -5,7 +5,7 @@
 //! 落盘，**统一在阶段 5 全量回归时运行**——fixture 构建 + 真实 WASM 闭环属
 //! 集成测试执行，阶段 1–4 期间不单独运行。
 //!
-//! 覆盖：fixture 插件（`packages/plugin-http-test`）经 `host-http.register-endpoint`
+//! 覆盖：fixture 插件（`packages/plugin-sdk-fixtures`，feature=http）经 `host-http.register-endpoint`
 //! 在 activate 期注册内部路径 + host 别名 + 模板别名 → 宿主动态注册表可查（内部 /
 //! 精确 / 模板捕获）→ `_http_endpoint` 回显入参形状 → `unregister-endpoint` 属主
 //! 注销幂等。

@@ -830,8 +830,8 @@ mod tests {
 
     /// 测试用插件 ID（非 WASM 插件）
     const TEST_PLUGIN_ID: &str = "com.bedcode.test";
-    /// 测试用组件形态 WASM 插件 ID（与 plugin-component-test 的 manifest 一致）
-    const TEST_WASM_PLUGIN_ID: &str = "com.bedcode.component-test";
+    /// 测试用组件形态 WASM 插件 ID（与 plugin-sdk-fixtures 的 sdk 夹具 manifest 一致）
+    const TEST_WASM_PLUGIN_ID: &str = "com.bedcode.sdk-test";
 
     // 用例与脚手架按域拆分（票 11 第 7 项）：内联块只留 imports / 测试常量 / 子模块声明。
     // 模块树 `host::tests::<文件>` 与内联形态等价；各域文件经 `use super::*;` 拿到宿主项

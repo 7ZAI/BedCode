@@ -5,62 +5,12 @@ use super::*;
 
 // ==================== WASM 插件（真实组件测试插件） ====================
 
-/// 将 wit-bindgen 产出的 core module 编码为组件
-/// （与 wasm_runtime.rs 测试同策略，等价于 `wasm-tools component new`）
-
-/// 构建测试用组件插件并编码为组件（packages/plugin-component-test）
+/// 构建测试用组件插件（合集 `packages/plugin-sdk-fixtures` `feature = "sdk"`）
+///
+/// 原先指向 `packages/plugin-component-test`（手写 wit-bindgen 绑定的独立夹具），
+/// 夹具删除后改用 SDK 夹具；宿主加载组件的代码路径与客体绑定方式无关。
 pub(super) fn build_test_component() -> Vec<u8> {
-    let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let packages_dir = manifest_dir.join("../packages");
-    let plugin_dir = packages_dir.join("plugin-component-test");
-
-    let module_path = crate::wasm_core::manager::runtime::fixture_target::artifact(
-        "wasm32-wasip3",
-        "release",
-        "bedcode_plugin_component_test",
-    );
-
-    if module_path.exists() {
-        let src_files = [
-            plugin_dir.join("src/lib.rs"),
-            packages_dir.join("plugin-sdk-desktop/rust/wit/bedcode.wit"),
-        ];
-        let module_modified = std::fs::metadata(&module_path)
-            .and_then(|m| m.modified())
-            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-
-        let needs_rebuild = src_files.iter().any(|f| {
-            std::fs::metadata(f)
-                .and_then(|m| m.modified())
-                .map(|t| t > module_modified)
-                .unwrap_or(true)
-        });
-
-        if !needs_rebuild {
-            return std::fs::read(&module_path).expect("Failed to read test component module");
-        }
-    }
-
-    let manifest_path = plugin_dir.join("Cargo.toml");
-    let status = std::process::Command::new("cargo")
-        .env("RUSTUP_TOOLCHAIN", crate::wasm_core::manager::runtime::WASIP3_NIGHTLY)
-        .env(
-            "CARGO_TARGET_DIR",
-            crate::wasm_core::manager::runtime::fixture_target::dir(),
-        )
-        .args([
-            "build",
-            "--target",
-            "wasm32-wasip3",
-            "--release",
-            "--manifest-path",
-            manifest_path.to_str().unwrap(),
-        ])
-        .status()
-        .expect("Failed to run cargo build for test component");
-    assert!(status.success(), "Test component WASM build failed");
-
-    std::fs::read(&module_path).expect("Failed to read test component after build")
+    crate::wasm_core::manager::runtime::fixture_build::build_sdk_fixture("sdk")
 }
 
 /// 将组件形态测试插件实例化并注入宿主（plugins + 装配条目双表）

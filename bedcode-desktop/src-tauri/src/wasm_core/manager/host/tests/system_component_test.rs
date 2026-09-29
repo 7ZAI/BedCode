@@ -727,7 +727,7 @@ async fn test_boot_activates_system_components_before_app_plugins() {
     let tmp_dir = tempfile::TempDir::new().unwrap();
     let plugins_dir = tmp_dir.path().join("plugins");
     let sys_id = "com.bedcode.system-test";
-    let app_id = "com.bedcode.component-test";
+    let app_id = "com.bedcode.sdk-test";
 
     // 写两个插件包：系统组件（type=system）+ 应用插件（dependencies）
     for (id, rust_lib, manifest_extra) in [

@@ -13,6 +13,10 @@ mod component;
 // pub(crate)：host/tests/* 下的夹具构建器与 runtime/component.rs 也要用同一落点
 #[cfg(test)]
 pub(crate) mod fixture_target;
+// 夹具构建器：runtime::tests / runtime::component::tests / host::tests::* 三处共用
+// 同一实现（`runtime::tests` 自身是私有模块，兄弟模块寻址不到它）
+#[cfg(test)]
+pub(crate) mod fixture_build;
 
 /// 声明展开（不过滤授权，preauthorize 收集弹窗候选用，见 host.rs `preauthorize_plugin`）
 pub(crate) use component::expand_preopen_declarations;
@@ -35,29 +39,23 @@ use crate::wasm_core::runtime_util::block_on_async;
 use crate::db::Database;
 #[cfg(test)]
 use crate::wasm_core::permission::PermissionManager;
+use crate::wasm_core::security::fs_auth::FsAuthChecker;
 #[cfg(test)]
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 #[cfg(test)]
 use std::pin::Pin;
-#[cfg(test)]
-use tokio::sync::{Mutex, RwLock};
-use crate::wasm_core::security::fs_auth::FsAuthChecker;
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::Manager;
+#[cfg(test)]
+use tokio::sync::{Mutex, RwLock};
 use wasmtime::{Cache, CacheConfig, Config, Engine, ResourceLimiter, WasmBacktraceDetails};
-
 
 // ==================== 宿主上下文（票 04 迁移 host_api::context） ====================
 // 定义已迁 `crate::wasm_core::host_api::context`（host_api 消费方家园）；以下 re-export
 // 保持历史路径 `manager::runtime::WasmHostContext` 等编译绿——manager→host_api 合法
 // 方向，后续迭代按需清理（见 .scratch/2026-09-24-wasm-core-decouple/issues/04）
-pub use crate::wasm_core::host_api::context::{
-    CapabilityProvider,
-    PluginServices,
-    ProcessRegistry,
-    WasmHostContext,
-};
+pub use crate::wasm_core::host_api::context::{CapabilityProvider, PluginServices, ProcessRegistry, WasmHostContext};
 // ==================== Resource Limits & Interruption ====================
 
 // 运行参数单一事实源在配置模块（core-config，见 `crate::wasm_core::config`）：
@@ -244,7 +242,6 @@ impl ResourceLimiter for WasmPluginState {
         self.limits.max_tables
     }
 }
-
 
 /// 已加载的 WASM 插件（迁移阶段 C：组件形态唯一）
 ///
@@ -585,12 +582,12 @@ impl WasmRuntime {
     }
 }
 
-
 // ==================== Tests ====================
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::fixture_build::build_sdk_fixture;
 
     // A0-3 前置探针（P1/P2/P5）：async store 兼容性 + 资源限制 async 语义 + 性能基线。
     // 文档：.scratch/2026-09-21-a0-3-host-async/spec.md + report.md（只读探针，不碰生产路径）
@@ -640,9 +637,9 @@ mod tests {
     /// 以指定内核配置构建无头运行时（测试专用；`a03_probe` 的燃料禁用/紧内存探针用）
     fn setup_wasm_runtime_with_config(core_config: CoreConfig) -> (WasmRuntime, Arc<WasmHostContext>) {
         use crate::db::Database;
+        use crate::system::config::AppConfig;
         use crate::wasm_core::bus::MessageBus;
         use crate::wasm_core::storage::PluginStorage;
-        use crate::system::config::AppConfig;
 
         // AppConfig 初始化
         static CONFIG_INIT: std::sync::Once = std::sync::Once::new();
@@ -737,63 +734,19 @@ mod tests {
 
     // ==================== Component Model 测试 ====================
 
-    /// 构建测试用组件插件并编码为组件
+    /// 构建测试用组件插件（合集 `packages/plugin-sdk-fixtures` `feature = "sdk"`）
     ///
-    /// 测试插件为独立 crate（packages/plugin-component-test），基于
-    /// WIT 契约（packages/plugin-sdk-desktop/rust/wit）生成绑定；
-    /// 源码变更检测与 build_test_wasm 同策略
+    /// 原先指向 `packages/plugin-component-test`（手写 wit-bindgen 绑定的独立夹具），
+    /// 已被 30+ 处通用引擎测试当「随便一个可加载组件」使用。夹具删除后改用 SDK 夹具：
+    /// 宿主加载组件的代码路径与客体绑定方式无关（宿主无 `ComponentEncoder` 路径，
+    /// 两种写法都直出组件），实际依赖的只有 `test.echo` / `test.panic` /
+    /// `test.storage-get` / 启动失败注入四个可观测点，已并入 SDK 夹具。
     ///
     /// `BEDCODE_PLUGIN_DEBUG=1`（dev 构建下）时以 debug profile 构建（保留
-    /// DWARF 行号，供行号冒烟测试断言 trap 错误串含 file:line）
+    /// DWARF 行号，供行号冒烟测试断言 trap 错误串含 file:line）——由
+    /// `fixture_build::build_sdk_fixture` 内部按 profile 分档处理。
     fn build_test_component() -> Vec<u8> {
-        let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let packages_dir = manifest_dir.join("../packages");
-        let plugin_dir = packages_dir.join("plugin-component-test");
-
-        let profile = if plugin_debug_mode() { "debug" } else { "release" };
-        let module_path =
-            fixture_target::artifact("wasm32-wasip3", profile, "bedcode_plugin_component_test");
-
-        if module_path.exists() {
-            let src_files = [
-                plugin_dir.join("src/lib.rs"),
-                packages_dir.join("plugin-sdk-desktop/rust/wit/bedcode.wit"),
-            ];
-            let module_modified = std::fs::metadata(&module_path)
-                .and_then(|m| m.modified())
-                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-
-            let needs_rebuild = src_files.iter().any(|f| {
-                std::fs::metadata(f)
-                    .and_then(|m| m.modified())
-                    .map(|t| t > module_modified)
-                    .unwrap_or(true)
-            });
-
-            if !needs_rebuild {
-                return std::fs::read(&module_path).expect("Failed to read test component module");
-            }
-        }
-
-        let manifest_path = plugin_dir.join("Cargo.toml");
-        let mut args = vec!["build", "--target", "wasm32-wasip3"];
-        if profile == "release" {
-            args.push("--release");
-        }
-        args.extend(["--manifest-path", manifest_path.to_str().unwrap()]);
-        // 与 ws / pty / sdk / wasip3 fixture 同构：wasm32-wasip3 只存在于 pinned
-        // nightly，ambient 工具链（stable）没有该 target → 必须显式注入
-        // RUSTUP_TOOLCHAIN，否则 WIT/fixture 源一变更（mtime 触发重建）就报
-        // 「Test component WASM build failed」，与代码无关地一次红几十项
-        let status = std::process::Command::new("cargo")
-            .env("RUSTUP_TOOLCHAIN", WASIP3_NIGHTLY)
-            .env("CARGO_TARGET_DIR", fixture_target::dir())
-            .args(&args)
-            .status()
-            .expect("Failed to run cargo build for test component");
-        assert!(status.success(), "Test component WASM build failed");
-
-        std::fs::read(&module_path).expect("Failed to read test component after build")
+        build_sdk_fixture("sdk")
     }
 
     // ==================== host-websocket 客户端域端到端（ABI v14） ====================
@@ -944,116 +897,20 @@ mod tests {
         }
     }
 
-    /// 构建 host-websocket fixture 插件（packages/plugin-ws-test）并编码为组件
+    /// 构建 host-websocket fixture 插件（合集 `packages/plugin-sdk-fixtures`
+    /// `feature = "ws"`）并编码为组件
     ///
-    /// 源码变更检测覆盖 fixture 与 SDK 的 host-websocket 链路文件
+    /// 原先的新鲜度检查额外盯 SDK 的 `wasm_ws.rs` / `host/ws.rs` 等链路文件；合集
+    /// crate 后不再单独盯——SDK 任一文件变动会经 cargo 依赖指纹触发重建。
     fn build_ws_test_component() -> Vec<u8> {
-        let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let packages_dir = manifest_dir.join("../packages");
-        let plugin_dir = packages_dir.join("plugin-ws-test");
-
-        let module_path = fixture_target::artifact("wasm32-wasip3", "release", "bedcode_plugin_ws_test");
-
-        if module_path.exists() {
-            let src_files = [
-                plugin_dir.join("src/lib.rs"),
-                plugin_dir.join("plugin.json"),
-                packages_dir.join("plugin-sdk-desktop/rust/src/wasm.rs"),
-                packages_dir.join("plugin-sdk-desktop/rust/src/wasm_ws.rs"),
-                packages_dir.join("plugin-sdk-desktop/rust/src/wasm_host.rs"),
-                packages_dir.join("plugin-sdk-desktop/rust/src/host/ws.rs"),
-                packages_dir.join("plugin-sdk-desktop/rust/wit/bedcode.wit"),
-            ];
-            let module_modified = std::fs::metadata(&module_path)
-                .and_then(|m| m.modified())
-                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-
-            let needs_rebuild = src_files.iter().any(|f| {
-                std::fs::metadata(f)
-                    .and_then(|m| m.modified())
-                    .map(|t| t > module_modified)
-                    .unwrap_or(true)
-            });
-
-            if !needs_rebuild {
-                return std::fs::read(&module_path).expect("Failed to read ws fixture component module");
-            }
-        }
-
-        let manifest_path = plugin_dir.join("Cargo.toml");
-        let status = std::process::Command::new("cargo")
-            .env("RUSTUP_TOOLCHAIN", crate::wasm_core::manager::runtime::WASIP3_NIGHTLY)
-            .env("CARGO_TARGET_DIR", fixture_target::dir())
-            .args([
-                "build",
-                "--target",
-                "wasm32-wasip3",
-                "--release",
-                "--manifest-path",
-                manifest_path.to_str().unwrap(),
-            ])
-            .status()
-            .expect("Failed to run cargo build for ws fixture component");
-        assert!(status.success(), "ws fixture component WASM build failed");
-
-        // wasm32-wasip3（同 wasip2）已内嵌 wasm-component-ld：产物直接是组件，无需 encode
-        std::fs::read(&module_path).expect("Failed to read ws fixture component after build")
+        build_sdk_fixture("ws")
     }
 
     // ==================== host-http 服务端域端到端（ABI v29，路由注册下沉） ====================
 
-    /// 构建 host-http fixture 插件（packages/plugin-http-test）并编码为组件
+    /// host-http 服务端域 fixture（合集 `packages/plugin-sdk-fixtures` `feature = "http"`）
     fn build_http_test_component() -> Vec<u8> {
-        let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let packages_dir = manifest_dir.join("../packages");
-        let plugin_dir = packages_dir.join("plugin-http-test");
-
-        let module_path =
-            fixture_target::artifact("wasm32-wasip3", "release", "bedcode_plugin_http_test");
-
-        if module_path.exists() {
-            let src_files = [
-                plugin_dir.join("src/lib.rs"),
-                plugin_dir.join("plugin.json"),
-                packages_dir.join("plugin-sdk-desktop/rust/src/wasm.rs"),
-                packages_dir.join("plugin-sdk-desktop/rust/src/wasm_host.rs"),
-                packages_dir.join("plugin-sdk-desktop/rust/src/host/http.rs"),
-                packages_dir.join("plugin-sdk-desktop/rust/wit/bedcode.wit"),
-            ];
-            let module_modified = std::fs::metadata(&module_path)
-                .and_then(|m| m.modified())
-                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-
-            let needs_rebuild = src_files.iter().any(|f| {
-                std::fs::metadata(f)
-                    .and_then(|m| m.modified())
-                    .map(|t| t > module_modified)
-                    .unwrap_or(true)
-            });
-
-            if !needs_rebuild {
-                return std::fs::read(&module_path).expect("Failed to read http fixture component module");
-            }
-        }
-
-        let manifest_path = plugin_dir.join("Cargo.toml");
-        let status = std::process::Command::new("cargo")
-            .env("RUSTUP_TOOLCHAIN", crate::wasm_core::manager::runtime::WASIP3_NIGHTLY)
-            .env("CARGO_TARGET_DIR", fixture_target::dir())
-            .args([
-                "build",
-                "--target",
-                "wasm32-wasip3",
-                "--release",
-                "--manifest-path",
-                manifest_path.to_str().unwrap(),
-            ])
-            .status()
-            .expect("Failed to run cargo build for http fixture component");
-        assert!(status.success(), "http fixture component WASM build failed");
-
-        // wasm32-wasip3（同 wasip2）已内嵌 wasm-component-ld：产物直接是组件，无需 encode
-        std::fs::read(&module_path).expect("Failed to read http fixture component after build")
+        build_sdk_fixture("http")
     }
 
     // ==================== host-pty 创建→拉取端到端（ABI v16，票 02） ====================
@@ -1069,112 +926,16 @@ mod tests {
         PTY_FIXTURE_E2E_LOCK.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// 构建 host-pty fixture 插件（packages/plugin-pty-test）
+    /// 构建 host-pty fixture 插件（合集 `packages/plugin-sdk-fixtures` `feature = "pty"`）
+    /// host-pty fixture e2e（合集 `packages/plugin-sdk-fixtures` `feature = "pty"`，ABI v16）
     fn build_pty_test_component() -> Vec<u8> {
-        let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let packages_dir = manifest_dir.join("../packages");
-        let plugin_dir = packages_dir.join("plugin-pty-test");
-
-        let module_path =
-            fixture_target::artifact("wasm32-wasip3", "release", "bedcode_plugin_pty_test");
-
-        if module_path.exists() {
-            let src_files = [
-                plugin_dir.join("src/lib.rs"),
-                plugin_dir.join("plugin.json"),
-                packages_dir.join("plugin-sdk-desktop/rust/src/wasm.rs"),
-                packages_dir.join("plugin-sdk-desktop/rust/src/wasm_host.rs"),
-                packages_dir.join("plugin-sdk-desktop/rust/src/host/pty.rs"),
-                packages_dir.join("plugin-sdk-desktop/rust/wit/bedcode.wit"),
-            ];
-            let module_modified = std::fs::metadata(&module_path)
-                .and_then(|m| m.modified())
-                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-
-            let needs_rebuild = src_files.iter().any(|f| {
-                std::fs::metadata(f)
-                    .and_then(|m| m.modified())
-                    .map(|t| t > module_modified)
-                    .unwrap_or(true)
-            });
-
-            if !needs_rebuild {
-                return std::fs::read(&module_path).expect("Failed to read pty fixture component module");
-            }
-        }
-
-        let manifest_path = plugin_dir.join("Cargo.toml");
-        let status = std::process::Command::new("cargo")
-            .env("RUSTUP_TOOLCHAIN", crate::wasm_core::manager::runtime::WASIP3_NIGHTLY)
-            .env("CARGO_TARGET_DIR", fixture_target::dir())
-            .args([
-                "build",
-                "--target",
-                "wasm32-wasip3",
-                "--release",
-                "--manifest-path",
-                manifest_path.to_str().unwrap(),
-            ])
-            .status()
-            .expect("Failed to run cargo build for pty fixture component");
-        assert!(status.success(), "pty fixture component WASM build failed");
-
-        std::fs::read(&module_path).expect("Failed to read pty fixture component after build")
+        build_sdk_fixture("pty")
     }
 
-    /// 构建 host-task fixture 插件（packages/plugin-task-test，ABI v20）
+    /// 构建 host-task fixture 插件（合集 `packages/plugin-sdk-fixtures` `feature = "task"`，ABI v20）
+    /// 构建 host-task fixture 插件（合集 `packages/plugin-sdk-fixtures` `feature = "task"`，ABI v20）
     fn build_task_test_component() -> Vec<u8> {
-        let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let packages_dir = manifest_dir.join("../packages");
-        let plugin_dir = packages_dir.join("plugin-task-test");
-
-        let module_path =
-            fixture_target::artifact("wasm32-wasip3", "release", "bedcode_plugin_task_test");
-
-        if module_path.exists() {
-            let src_files = [
-                plugin_dir.join("src/lib.rs"),
-                plugin_dir.join("plugin.json"),
-                packages_dir.join("plugin-sdk-desktop/rust/src/wasm.rs"),
-                packages_dir.join("plugin-sdk-desktop/rust/src/wasm_task.rs"),
-                packages_dir.join("plugin-sdk-desktop/rust/src/wasm_host.rs"),
-                packages_dir.join("plugin-sdk-desktop/rust/src/host/task.rs"),
-                packages_dir.join("plugin-sdk-desktop/rust/wit/bedcode.wit"),
-            ];
-            let module_modified = std::fs::metadata(&module_path)
-                .and_then(|m| m.modified())
-                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-
-            let needs_rebuild = src_files.iter().any(|f| {
-                std::fs::metadata(f)
-                    .and_then(|m| m.modified())
-                    .map(|t| t > module_modified)
-                    .unwrap_or(true)
-            });
-
-            if !needs_rebuild {
-                return std::fs::read(&module_path).expect("Failed to read task fixture component module");
-            }
-        }
-
-        let manifest_path = plugin_dir.join("Cargo.toml");
-        let status = std::process::Command::new("cargo")
-            .env("RUSTUP_TOOLCHAIN", crate::wasm_core::manager::runtime::WASIP3_NIGHTLY)
-            .env("CARGO_TARGET_DIR", fixture_target::dir())
-            .args([
-                "build",
-                "--target",
-                "wasm32-wasip3",
-                "--release",
-                "--manifest-path",
-                manifest_path.to_str().unwrap(),
-            ])
-            .status()
-            .expect("Failed to run cargo build for task fixture component");
-        assert!(status.success(), "task fixture component WASM build failed");
-
-        // wasm32-wasip3（同 wasip2）已内嵌 wasm-component-ld：产物直接是组件，无需 encode
-        std::fs::read(&module_path).expect("Failed to read task fixture component after build")
+        build_sdk_fixture("task")
     }
 
     /// fixture 命令的 error 载荷（`wasm_entry!` 把 guest Err 编码为 `{"error": ...}`
@@ -1297,61 +1058,18 @@ mod tests {
         }
     }
 
-    /// 构建 SDK 组件形态测试插件（packages/plugin-sdk-test）并编码为组件
+    /// 构建 SDK 组件形态测试插件（合集 `packages/plugin-sdk-fixtures`
+    /// `feature = "sdk"`）并编码为组件
     ///
-    /// 与 build_test_component 的区别：插件经真实 SDK（wasm_entry! 宏 + WasmHost）
-    /// 构建，验证迁移阶段 B 的 SDK 组件产物链路；源码变更检测覆盖 SDK 关键文件
+    /// 与 `build_test_component` 的区别：插件经真实 SDK（wasm_entry! 宏 + WasmHost）
+    /// 构建，验证 SDK 组件产物链路。
+    ///
+    /// 注：原先本 builder 的新鲜度检查额外盯 `plugin-sdk-desktop/rust/src/{wasm,
+    /// wasm_host,api_call}.rs` 与 `rust-macros/src/lib.rs`（`#[plugin_api]` 宏）。
+    /// 合集 crate 后不再单独盯——合集产物在 `plugin-sdk-desktop` 任一文件变动时
+    /// 经 cargo 自身的依赖指纹重建（feature 变更会触发），此处只需盯夹具自身源文件。
     fn build_sdk_test_component() -> Vec<u8> {
-        let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let packages_dir = manifest_dir.join("../packages");
-        let plugin_dir = packages_dir.join("plugin-sdk-test");
-
-        let module_path =
-            fixture_target::artifact("wasm32-wasip3", "release", "bedcode_plugin_sdk_test");
-
-        if module_path.exists() {
-            let src_files = [
-                plugin_dir.join("src/lib.rs"),
-                plugin_dir.join("plugin.json"),
-                packages_dir.join("plugin-sdk-desktop/rust/src/wasm.rs"),
-                packages_dir.join("plugin-sdk-desktop/rust/src/wasm_host.rs"),
-                packages_dir.join("plugin-sdk-desktop/rust/src/api_call.rs"),
-                packages_dir.join("plugin-sdk-desktop/rust-macros/src/lib.rs"),
-                packages_dir.join("plugin-sdk-desktop/rust/wit/bedcode.wit"),
-            ];
-            let module_modified = std::fs::metadata(&module_path)
-                .and_then(|m| m.modified())
-                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-
-            let needs_rebuild = src_files.iter().any(|f| {
-                std::fs::metadata(f)
-                    .and_then(|m| m.modified())
-                    .map(|t| t > module_modified)
-                    .unwrap_or(true)
-            });
-
-            if !needs_rebuild {
-                return std::fs::read(&module_path).expect("Failed to read SDK test component module");
-            }
-        }
-
-        let manifest_path = plugin_dir.join("Cargo.toml");
-        let status = std::process::Command::new("cargo")
-            .env("RUSTUP_TOOLCHAIN", crate::wasm_core::manager::runtime::WASIP3_NIGHTLY)
-            .env("CARGO_TARGET_DIR", fixture_target::dir())
-            .args([
-                "build",
-                "--target",
-                "wasm32-wasip3",
-                "--release",
-                "--manifest-path",
-                manifest_path.to_str().unwrap(),
-            ])
-            .status()
-            .expect("Failed to run cargo build for SDK test component");
-        assert!(status.success(), "SDK test component WASM build failed");
-
-        std::fs::read(&module_path).expect("Failed to read SDK test component after build")
+        build_sdk_fixture("sdk")
     }
 
     /// 构建 wasm32-wasip2 测试组件（WASI preopen E2E 用）
@@ -1364,8 +1082,7 @@ mod tests {
         let packages_dir = manifest_dir.join("../packages");
         let plugin_dir = packages_dir.join("plugin-wasi-test");
 
-        let module_path =
-            fixture_target::artifact("wasm32-wasip2", "release", "bedcode_plugin_wasi_test");
+        let module_path = fixture_target::artifact("wasm32-wasip2", "release", "bedcode_plugin_wasi_test");
 
         if module_path.exists() {
             let src_files = [
@@ -1406,6 +1123,12 @@ mod tests {
 
         // wasm32-wasip2 目标（Rust 1.85+）已内嵌 wasm-component-ld：产物直接是
         // 组件（magic \0asm 0d），无需再经 encode_component 编码
+        //
+        // 注：preopen 目前只在 wasip2 上真正可用。曾尝试迁到 wasip3（统一夹具
+        // target 着想），但实测两个 preopen E2E 均 trap 于
+        // `filesystem_method_descriptor_open_at`——p3 linker 虽接上，预打开目录
+        // 的能力没建到 p3 filesystem 接口上。故本夹具固定 wasip2，不参与夹具
+        // 合并（合并不要求统一 target，见合并方案）。
         std::fs::read(&module_path).expect("Failed to read WASI test component after build")
     }
 
@@ -1445,49 +1168,7 @@ mod tests {
         if !wasip3_toolchain_ready() {
             return None;
         }
-        let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let plugin_dir = manifest_dir.join("../packages/plugin-wasip3-test");
-
-        let module_path =
-            fixture_target::artifact("wasm32-wasip3", "release", "bedcode_plugin_wasip3_test");
-
-        // 复用策略同其它测试组件：产物存在且源码未更新则跳过构建（跑测试不重复编译）
-        if module_path.exists() {
-            let src_files = [
-                plugin_dir.join("src/lib.rs"),
-                plugin_dir.join("Cargo.toml"),
-                manifest_dir.join("../packages/plugin-sdk-desktop/rust/wit/bedcode.wit"),
-            ];
-            let module_modified = std::fs::metadata(&module_path)
-                .and_then(|m| m.modified())
-                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-            let needs_rebuild = src_files.iter().any(|f| {
-                std::fs::metadata(f)
-                    .and_then(|m| m.modified())
-                    .map(|t| t > module_modified)
-                    .unwrap_or(true)
-            });
-            if !needs_rebuild {
-                return Some(std::fs::read(&module_path).expect("read wasip3 test component"));
-            }
-        }
-
-        let status = std::process::Command::new("cargo")
-            .env("RUSTUP_TOOLCHAIN", WASIP3_NIGHTLY)
-            .env("CARGO_TARGET_DIR", fixture_target::dir())
-            .args([
-                "build",
-                "--target",
-                "wasm32-wasip3",
-                "--release",
-                "--manifest-path",
-                plugin_dir.join("Cargo.toml").to_str().unwrap(),
-            ])
-            .status()
-            .expect("run cargo build for wasip3 test component");
-        assert!(status.success(), "wasip3 test component WASM build failed");
-
-        Some(std::fs::read(&module_path).expect("Failed to read wasip3 test component after build"))
+        Some(build_sdk_fixture("wasip3"))
     }
 
     // ==================== WASI preopen E2E ====================
@@ -1513,7 +1194,7 @@ mod tests {
             self.events.lock().unwrap_or_else(|e| e.into_inner()).push(event);
         }
         fn install_cli(
-                        &self,
+            &self,
             _plugin_id: String,
             _file_name: String,
             _bin_dir: String,
@@ -1521,7 +1202,7 @@ mod tests {
             Box::pin(async { Err("mock: no cli".to_string()) })
         }
         fn uninstall_cli(
-                        &self,
+            &self,
             _plugin_id: String,
             _file_name: String,
             _bin_dir: String,
@@ -1529,7 +1210,7 @@ mod tests {
             Box::pin(async { Ok(()) })
         }
         fn plugin_resource_dir(
-                        &self,
+            &self,
             _plugin_id: String,
         ) -> Pin<Box<dyn std::future::Future<Output = Result<String, String>> + Send + '_>> {
             Box::pin(async { Err("mock: no resource dir".to_string()) })
@@ -1583,7 +1264,7 @@ mod tests {
     // **为什么本 harness 里没有「正向认证」用例**（一次踩坑的记录，避免后人重走）：
     //
     // v33 之后，WS / HTTP 认证的**唯一**判定点是认证中心插件，而宿主侧两处调用
-    // （`verify_endpoint_jwt` / `jwt_gateway`）都经 `AppContext::try_global()` 取
+    // （`authenticate_endpoint_connection` / `auth_gateway`）都经 `AppContext::try_global()` 取
     // `PluginHost`——**无 AppContext ⇒ 无中心 ⇒ fail-closed 全拒**（这本身是对的：
     // 宿主已经没有本地验签面了，不存在「本地验签通过就放行」的旁路）。
     //

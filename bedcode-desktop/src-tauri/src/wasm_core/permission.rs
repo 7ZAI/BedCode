@@ -260,6 +260,12 @@ mod tests {
     /// SDK 授权时按词汇表过滤，未列入的声明等于没写——本轮审计实测 file-transfer 的
     /// `bus` / `fileservice` / `transfer` 即此类装饰词汇（移动端 `bus` 是合法位，
     /// 属 ADR 0018 双端契约分叉，不在本锁范围）。
+    ///
+    /// **扫描范围**：目录下**全部** `*.json`，靠「有 `id` 字段」筛出 plugin manifest。
+    /// 原先只认单夹具形态的 `plugin.json`；夹具合并成 `packages/plugin-sdk-fixtures/`
+    /// 后改按 feature 分文件放（`http.json` / `pty.json` / `task.json` / `ws.json` +
+    /// 根 `plugin.json`），只认 `plugin.json` 会**静默漏掉 4 份 fixture manifest**。
+    /// 同目录的 `package.json` / `tsconfig.json` 无 `id` 字段，天然被跳过。
     #[test]
     fn production_manifests_declare_only_known_vocabulary() {
         let root = desktop_root();
@@ -268,30 +274,45 @@ mod tests {
         for dir in ["wasm-apps", "packages"] {
             let base = root.join(dir);
             for entry in fs::read_dir(&base).expect("插件目录可读") {
-                let manifest = entry.expect("目录条目可读").path().join("plugin.json");
-                if !manifest.is_file() {
+                let entry_path = entry.expect("目录条目可读").path();
+                if !entry_path.is_dir() {
                     continue;
                 }
-                let text = read(&manifest);
-                let value: serde_json::Value = serde_json::from_str(&text)
-                    .unwrap_or_else(|e| panic!("{} 不是合法 JSON: {e}", manifest.display()));
-                let permissions = value["permissions"]
-                    .as_array()
-                    .unwrap_or_else(|| panic!("{} 缺 permissions 数组", manifest.display()));
-                for perm in permissions {
-                    let perm = perm.as_str().expect("权限必须是字符串");
-                    assert!(
-                        VALID_PERMISSIONS.contains(&perm),
-                        "{} 声明了词汇表外的权限 {perm}（宿主授权时会被静默过滤）",
-                        manifest.display()
-                    );
+                let mut candidates: Vec<std::path::PathBuf> = fs::read_dir(&entry_path)
+                    .expect("插件目录可读")
+                    .flatten()
+                    .map(|f| f.path())
+                    .filter(|p| p.is_file() && p.extension().is_some_and(|e| e == "json"))
+                    .collect();
+                candidates.sort();
+                for manifest in candidates {
+                    let text = read(&manifest);
+                    let value: serde_json::Value = serde_json::from_str(&text)
+                        .unwrap_or_else(|e| panic!("{} 不是合法 JSON: {e}", manifest.display()));
+                    // 非 plugin manifest（package.json / tsconfig.json）——按 id 筛除
+                    if value.get("id").is_none() {
+                        continue;
+                    }
+                    let permissions = value["permissions"]
+                        .as_array()
+                        .unwrap_or_else(|| panic!("{} 缺 permissions 数组", manifest.display()));
+                    for perm in permissions {
+                        let perm = perm.as_str().expect("权限必须是字符串");
+                        assert!(
+                            VALID_PERMISSIONS.contains(&perm),
+                            "{} 声明了词汇表外的权限 {perm}（宿主授权时会被静默过滤）",
+                            manifest.display()
+                        );
+                    }
+                    checked += 1;
                 }
-                checked += 1;
             }
         }
+        // 下限 11 = 4 个 wasm 应用 + bench-test + wasi-test + 合集 crate 的 5 份
+        // （http/plugin/pty/task/ws）。夹具再合并时本数只会变少，若变小先查扫描范围
         assert!(
-            checked >= 8,
-            "实测仅校验了 {checked} 份 manifest，扫描范围可疑"
+            checked >= 11,
+            "实测仅校验了 {checked} 份 manifest（预期 >= 11），扫描范围可疑"
         );
     }
 

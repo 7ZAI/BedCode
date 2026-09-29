@@ -143,51 +143,13 @@ impl bedcode::plugin::host_auth::Host for WasmPluginState {
         )
     }
 
-    // ==================== v19 保留面（v24 修订语义：公钥托管在 plugin_secrets） ====================
-
-    fn biometric_credential_bound(&mut self, fingerprint: String) -> Result<bool, String> {
-        auth::auth_biometric_credential_bound(
-            self.host_ctx.as_ref(),
-            self.host_ctx.as_ref(),
-            self.host_ctx.as_ref(),
-            &self.plugin_id,
-            &fingerprint,
-        )
-    }
-
-    fn biometric_verify_signature(
-        &mut self,
-        fingerprint: String,
-        message: String,
-        signature: String,
-    ) -> Result<bool, String> {
-        auth::auth_biometric_verify_signature(
-            self.host_ctx.as_ref(),
-            self.host_ctx.as_ref(),
-            self.host_ctx.as_ref(),
-            &self.plugin_id,
-            &fingerprint,
-            &message,
-            &signature,
-        )
-    }
+    // ==================== v19 保留面（v34 修订：生物凭证面已退役） ====================
 
     fn link_identity_parts(&mut self) -> Result<Option<String>, String> {
         auth::auth_link_identity_parts(self.host_ctx.as_ref(), &self.plugin_id)
     }
 
-    fn biometric_credential_bind(&mut self, fingerprint: String, public_key: String) -> Result<bool, String> {
-        auth::auth_biometric_credential_bind(
-            self.host_ctx.as_ref(),
-            self.host_ctx.as_ref(),
-            self.host_ctx.as_ref(),
-            &self.plugin_id,
-            &fingerprint,
-            &public_key,
-        )
-    }
-
-    // ==================== v33：设备入场 JWT 签发/验签接线退役（ADR 0033） ====================
+    // ==================== v33 / v34：认证中心自持凭据面接线退役（ADR 0033 + B-downsink） ====================
     // 原 `device_token_issue` / `device_token_verify` 接线（实现体在
     // `host_api/auth.rs`）随 WIT `host-auth` 两函数一并删除：入场密钥的生成 /
     // 签发 / 验签归认证中心自持，宿主不再持有任何设备 JWT 密码学。中心只经
@@ -1312,9 +1274,7 @@ impl LoadedWasmPlugin {
         // 「imports instance `bedcode:plugin/host-auth` … unknown import
         // `device-token-issue` has not been defined」与「unknown import
         // `bedcode:plugin/host-auth.device-token-issue` …」——前缀时有时无。
-        if instantiate_error.contains("device-token-issue")
-            || instantiate_error.contains("device-token-verify")
-        {
+        if instantiate_error.contains("device-token-issue") || instantiate_error.contains("device-token-verify") {
             return format!(
                 "（该产物按旧版插件 SDK 构建：ABI v{} 起 host-auth.device-token-issue / \
                  device-token-verify 已退役（入场签发密钥与验签归认证中心自持，ADR 0033），\
@@ -1997,57 +1957,14 @@ mod tests {
     ///
     /// `BEDCODE_PLUGIN_DEBUG=1`（dev 构建下）时以 debug profile 构建（保留
     /// DWARF 行号，供行号冒烟测试断言 trap 错误串含 file:line）
+    /// 构建测试用组件插件（合集 `packages/plugin-sdk-fixtures` `feature = "sdk"`）
+    ///
+    /// 原先指向 `packages/plugin-component-test`（手写 wit-bindgen 绑定的独立夹具），
+    /// 夹具删除后改用 SDK 夹具——宿主加载组件的代码路径与客体绑定方式无关。
+    /// profile 分档（`BEDCODE_PLUGIN_DEBUG=1` 走 debug 取 DWARF 行号）由
+    /// `fixture_build::build_sdk_fixture` 内部处理。
     fn build_test_component() -> Vec<u8> {
-        let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let packages_dir = manifest_dir.join("../packages");
-        let plugin_dir = packages_dir.join("plugin-component-test");
-
-        let profile = if plugin_debug_mode() { "debug" } else { "release" };
-        let module_path = crate::wasm_core::manager::runtime::fixture_target::artifact(
-            "wasm32-wasip3",
-            profile,
-            "bedcode_plugin_component_test",
-        );
-
-        if module_path.exists() {
-            let src_files = [
-                plugin_dir.join("src/lib.rs"),
-                packages_dir.join("plugin-sdk-desktop/rust/wit/bedcode.wit"),
-            ];
-            let module_modified = std::fs::metadata(&module_path)
-                .and_then(|m| m.modified())
-                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-
-            let needs_rebuild = src_files.iter().any(|f| {
-                std::fs::metadata(f)
-                    .and_then(|m| m.modified())
-                    .map(|t| t > module_modified)
-                    .unwrap_or(true)
-            });
-
-            if !needs_rebuild {
-                return std::fs::read(&module_path).expect("Failed to read test component module");
-            }
-        }
-
-        let manifest_path = plugin_dir.join("Cargo.toml");
-        let mut args = vec!["build", "--target", "wasm32-wasip3"];
-        if profile == "release" {
-            args.push("--release");
-        }
-        args.extend(["--manifest-path", manifest_path.to_str().unwrap()]);
-        let status = std::process::Command::new("cargo")
-            .env("RUSTUP_TOOLCHAIN", crate::wasm_core::manager::runtime::WASIP3_NIGHTLY)
-            .env(
-                "CARGO_TARGET_DIR",
-                crate::wasm_core::manager::runtime::fixture_target::dir(),
-            )
-            .args(&args)
-            .status()
-            .expect("Failed to run cargo build for test component");
-        assert!(status.success(), "Test component WASM build failed");
-
-        std::fs::read(&module_path).expect("Failed to read test component after build")
+        crate::wasm_core::manager::runtime::fixture_build::build_sdk_fixture("sdk")
     }
 
     /// 14 组 import 接口全部注册成功（add_to_linker 是纯接线代码，
@@ -2144,7 +2061,7 @@ mod tests {
 
             // manifest（guest 静态导出）
             let manifest: serde_json::Value = serde_json::from_str(&plugin.get_manifest().expect("manifest")).unwrap();
-            assert_eq!(manifest["id"], "com.bedcode.component-test");
+            assert_eq!(manifest["id"], "com.bedcode.sdk-test");
 
             // 命令调用：guest 内 host_storage.get 读回预写值（跨边界往返）
             let result = plugin
