@@ -21,7 +21,7 @@
   该位**不隐含** `fs:read` / `fs:write`（拿到路径 ≠ 能读内容）；`reveal-in-dir` 仍无门（不交付新路径）。
   manifest-gen 扫到 `platform_pick_*` 调用会自动补该位（`RUST_PERMISSION_RULES`）
 - [ ] 对外可调 API 在 manifest `api` 字段声明，经 `#[plugin_api]` 宏 + JSON-RPC 2.0；**未声明不可调**（ADR 0017）
-- [ ] 契约边界单点维护在 WIT（`packages/plugin-sdk-*/rust/wit/bedcode.wit`）；改 WIT 必须双端同步 + ABI bump（wasmtime 双端版本见 AGENTS.md §2、ADR 0019）。**双端偏离（ADR 0022「双端偏离」节）**：桌面独有接口不要求移动端跟演——`host-websocket`（v14）、`host-auth`（v15 密钥托管 / v18 认证记录面）、`host-pty`（v16）、`auth-policy` 导出（v17）、`host-session` 会话语义批次与 `host-platform.wsl-distros`（v19）、`host-task`（v20 + `events-task`）、`host-peer`（v25 节点生命周期）只在 desktop WIT/ABI/SDK 演进；当前 **desktop v28 / mobile 11**（v27 = `host-session` / `host-terminal` 整 interface 退役；v28 = websocket 业务下沉：新增 `host-websocket.connection-context` + 破坏性退役 `host-events.broadcast-sync` 与 `host-pty.spawn` 的 `hostBroadcastSessionId`——旧产物须按 v28 SDK 重建，详见 ADR 0022 修订记录）。移动端要接同类能力时再补该端 interface 并对齐计数。**同一批次内函数级追加不再 bump**，别拿批次号当函数号数。**不 bump 的行为变更**：`host-bus` topic 命名空间由 `<base>.<owner>` 改为 `<owner>::<base>`（签名零变化），跨属主订阅/伪发布宿主显式拒绝，旧产物 activate 期拿到点明错误、须按 v22 SDK 重建；移动端 `host-mdns` 仍旧形态、总线无门禁，该端跟演时需同批补 SDK 原语 + 总线 ACL + file-transfer 迁移，桌面结果不构成移动端正确性依据。v21–v27 各版删改明细见 ADR 0022 修订记录
+- [ ] 契约边界单点维护在 WIT（`packages/plugin-sdk-*/rust/wit/bedcode.wit`）；改 WIT 必须双端同步 + ABI bump（wasmtime 双端版本见 AGENTS.md §2、ADR 0019）。**双端偏离（ADR 0022「双端偏离」节）**：桌面独有接口不要求移动端跟演——`host-websocket`（v14）、`host-auth`（v15 密钥托管 / v18 认证记录面）、`host-pty`（v16）、`auth-policy` 导出（v17）、`host-session` 会话语义批次与 `host-platform.wsl-distros`（v19）、`host-task`（v20 + `events-task`）、`host-peer`（v25 节点生命周期）只在 desktop WIT/ABI/SDK 演进；当前 **desktop v32 / mobile 11**（v27 = `host-session` / `host-terminal` 整 interface 退役；v28 = websocket 业务下沉：新增 `host-websocket.connection-context` + 破坏性退役 `host-events.broadcast-sync` 与 `host-pty.spawn` 的 `hostBroadcastSessionId`；v29 = HTTP 路由代码注册下沉（`host-http.register-endpoint` / `unregister-endpoint`）；v30 = peer 节点面新增；v31 = `host-peer.resume-all-transfers` 退役；v32 = 认证中心显式注册（`host-auth` 四函数，ADR 0031）——旧产物须按 v32 SDK 重建，详见 ADR 0022 修订记录）。移动端要接同类能力时再补该端 interface 并对齐计数。**同一批次内函数级追加不再 bump**，别拿批次号当函数号数。**不 bump 的行为变更**：`host-bus` topic 命名空间由 `<base>.<owner>` 改为 `<owner>::<base>`（签名零变化），跨属主订阅/伪发布宿主显式拒绝，旧产物 activate 期拿到点明错误、须按 v22 SDK 重建；移动端 `host-mdns` 仍旧形态、总线无门禁，该端跟演时需同批补 SDK 原语 + 总线 ACL + file-transfer 迁移，桌面结果不构成移动端正确性依据。v21–v27 各版删改明细见 ADR 0022 修订记录
 - [ ] **同实例串行红线（依据 `docs/adr/0029-plugin-concurrency-owner-and-on-demand-async.md`，含实例级门实测）**：每插件实例同一时刻**仍只允许一个 guest 调用在执行**——async 化只改变「宿主线程在等待时让出」，不引入同实例并发进入 guest；`host.rs` 实例锁（std `Arc<Mutex<LoadedWasmPlugin>>`）async 化时改为 tokio `Mutex`（await 持锁、不因等待释放），串行语义与现在等价；**禁止**改成细粒度「await 点释放锁」（会导致同实例交错：插件静态状态竞态——配对码/QR/挑战注册表/config 缓存/私有库 + wasmtime Store 重入 panic）。
   **2026-09-27 强化（ADR 0029 决定 4 / spec §12）**：同实例串行由 wasmtime **实例级门**保证，**与 import 是否 async 无关**（async import 挂起期间，同实例第二条显式调用零进展、宿主实现到放行才被进入）；且**挂起期间属主闭包不被调度**（event-loop 属主循环一并停摆）⇒ 「把 host-* import 改成宿主实现侧 async（`func_wrap_async`）」**不产生**用户可见收益，**按需 async 化不立项**（票 07/08 已退役）；需要「不等待」的能力时走**非等待形态**（立即返回句柄 + 事件回调，参考 `host-process.run` 与流式 `fetch`），改动前先读 ADR 0029 与两条边界锁（`runtime/tests/p3_async_host_import.rs`）
 - [ ] 宿主能力经 `host-*` 原语访问（清单见 `plugin/manager/capability.rs::HOST_PRIMITIVE_CAPABILITIES`，现 **21 组**：进程 = `host-pty`（交互式）/ `host-process`（非交互）/ `host-task`（并发任务域 v20，WASM 插件调度宿主 OS 线程池），网络 = `host-http` / `host-websocket` / `host-mdns` / `host-peer` / `host-connection`（在册连接清单，权限位 `connection:read`），存储 = `host-database` / `host-plugin-database` / `host-storage` / `host-fs`，宿主面 = `host-events` / `host-config` / `host-log` / `host-timer` / `host-app` / `host-platform` / `host-crypto`，互调与总线 = `host-bus` / `host-api-call`），能力**不得携带业务语义**（ADR 0022）；**授权无默认位**（旧形态在 `grant_permissions` 里无条件塞 `storage` 使权限门恒过，现只授予 manifest 声明且在本表内的权限，被过滤项由激活路径 `warn` 留痕），且主库 SQL 面与私有库面分域：主库（`host-database` 的 `db_*`）挂独立高危位 `database:main`——**当前生产插件零消费者，改判为仅第一方按需申请**（逐位人工确认），访问还受 SQLite 引擎层表名白名单仲裁（正则 `validate_sql_table_prefix` 只是早失败文案，不是边界）；私有库（`host-plugin-database`）与 KV（`host-storage`）仍走 `storage`；权限按风险域拆分（如 `pty:spawn` / `pty:io`、`ws:client` / `ws:server`、`task:run` + 每单元 kind 既有域权限门双门），拆分后同步点必须同步落：**权限词汇唯一真源是桌面 SDK `packages/plugin-sdk-desktop/rust/src/permission.rs`**（打包 CLI 与前端合法集读的都是它的生成物 `bin/permission-vocabulary.json` / `src/plugin/permission-vocabulary.ts`，加/拆位后跑 SDK `pnpm run gen:permissions` 重出，禁止再手抄清单），随后落宿主能力清单与 host_impl 权限门——漏任一处即词汇漂移锁翻红（锁在 `plugin/permission.rs`，断言集合相等而非包含）；**插件构建链的映射表**（`packages/plugin-sdk-desktop/bin/manifest-gen.js` 的 `RUST_PERMISSION_RULES` / `FRONTEND_PERMISSION_RULES`）同为消费方——退役/改名权限位必须同步改表，表含词汇表外权限时 manifest-gen **加载即抛错**（词汇自检护栏；权限词汇唯一真源是 `permission.rs`）
@@ -31,6 +31,35 @@
   插件事件一律 **`host-bus.publish`（属主私有 topic，跨插件用 public topic）+ `host-events.emit`**
   （桌面前端 Tauri 事件），载荷由插件自定义 JSON。宿主不再按事件类型/载荷决定广播目标或生成
   刷新通知——会话/设备/任务事件真源与派生视图都在 `com.bedcode.terminal-session`。
+- [ ] **插件分类（manifest `type` / `lifecycle`，ADR 0032）**：两个字段**正交**，都缺省即旧行为
+  （`type` 不写 = L3 业务应用，`lifecycle` 不写 = 常驻），既有工程零迁移。取值域真源是 SDK
+  `packages/plugin-sdk-desktop/rust/src/types.rs`（`PluginKind` / `InstanceLifecycle`），
+  构建链 `manifest-validate.js` 只抄拼写（改枚举必须同改它），非法取值**构建期 + 宿主加载期双侧拒**。
+  - `type`：**L1 `basic-service`**（引擎域组件，最先激活，其导出的 host-* 同形接口注册为能力提供者）
+    → **L2 `internal-business`**（宿主网关的裁决依赖方，宿主**主动调它**；本仓唯一的反向依赖类别）
+    → **L3 `business-app`**（业务应用面，缺省）。加载顺序固定 L1 → L2 → L3，批内按 id 排序；
+    L1/L2 是**角色驱动**（启停不持久化，持久化真源是「角色」）。历史拼写 `system` / `application`
+    仍被宿主按别名接受（只告警不拦）。L2 的三条红线（白名单式登记 / 只做安全闸门 / 宿主只转发不解释）
+    由防回接锁 `internal_business_host_dependency_stays_gated` 守着（`host/tests/l2_gating_test.rs`）：
+    新增 L2 消费点必须登记进锁内白名单并写明理由
+  - `lifecycle: ephemeral`（业务 worker：只对 store 操作、无页面、即用即弃）**本期只预留类型**——
+    宿主一次性实例机制与调度框架未落地，声明即**双侧显性拒绝**，不做「静默当常驻处理」；
+    启用时需补齐的清单见 ADR 0032 §6（调度方 / 传参协议 / 权限模型 / per-app 配额 / 内存动机回归锁）。
+    存在理由是**内存生命周期**（wasm 线性内存只增不减，长驻实例撞单实例限额且不自愈），不是业务分层
+  - 宿主侧**只按谓词**判角色（`is_role_driven` / `provides_host_capabilities` / `is_business_app`），
+    加载顺序取自 SDK 常量 `PluginKind::ROLE_DRIVEN_LOAD_ORDER`——新增角色不必改宿主
+- [ ] **认证中心面（`host-auth` v32 四函数，ADR 0031）**：**只有中心插件需要**，其余插件用组合式
+  原语即可，不要自己注册。① 中心在 `activate()` 内调 `auth_center_register(methods)` 自注册
+  （注册表**单中心**：第二个注册者被拒并点名在册属主），`deactivate()` 调
+  `auth_center_unregister()`；**宿主还会按插件停用/卸载兜底 `purge`**，但插件自己注销才是
+  及时路径。② 宿主裁决一律 **fail-closed**：无中心 / 中心调用失败 / 中心拒绝 → 拒绝
+  （HTTP 401 / WS close 4001，`deny_kind` 分 `no_center` / `unavailable` / `policy`）——
+  **中心插件漏注册 = 全机认证面不可用**，这是有意的，配套的 fail-visible 手段是宿主在 L2
+  激活后打点名 `error` 日志（「按当前 SDK 重建」），所以**中心产物必须与宿主同批发布**。
+  ③ 组合式：其他插件 `auth_method_invoke(method, params)` 复用中心已实现的认证方式
+  （先 `auth_methods_list()` 看在册清单），宿主只校验「method 在注册表内」后**零解析窄转发**
+  到中心 `auth-grant` 互调 api，中心业务错误原样透传。④ `methods` 是**声明式**能力清单
+  （宿主不解释语义，缺席一个 method 由中心分派侧显性失败）
 - [ ] 插件导出：`activate`/`deactivate`、`command`、`_http_endpoint`（v27 起 `terminal-hooks` 与 `events` 的生命周期/输入观察两个回调已随会话观察面退役，不再属导出面）
 - [ ] 插件 HTTP 面（`_http_endpoint`，审计票 08）：**只认声明**——`contributes.httpEndpoints` 未声明的路径宿主直接 404（「未声明清单 → 前缀内 ANY 放行」的零迁移过渡已退役，未声明清单等于没有 HTTP 面）。每条可写 `{path, auth}` 声明认证档位，档位词汇 `none | jwt`（真源桌面 SDK `rust/src/types.rs::EndpointAuth`，与 `host-websocket` 注册面共用同一枚举；缺省档各面自定：WS = `none`、HTTP = **`jwt` 最严**），非法取值构建期由 `manifest-validate.js` 拒绝、运行期不登记该条（端点不可达）；`auth: "none"` 是免凭证可达的唯一形态，写给「拿不到 JWT 的调用方」（本机 hook 脚本、配对 / QR 这类 token 之前的入口）。宿主转发的入参带 `caller` = `device | localhost | anonymous`（环回按 TCP 对端判），可信设备另带 `device` 对象——**JWT 本体与设备指纹不透传**（AGENTS.md §8 凭据红线）。网关别名条目的 `RouteAuth` 与插件声明档位**取较严者**，两方都不得单方面开门。信任模型详见 `docs/knowledge/plugin-http-endpoint-trust.md`
 - [ ] 存储：插件独立库（私有 SQLite）/ 主库前缀隔离（表名强制 `plugin_id_` 前缀，且由 SQLite authorizer 在引擎层仲裁——逗号多表、引号标识符、`main.` 限定、ATTACH/PRAGMA 都绕不过去，见票 02）；**禁止在 dev-shell 写具体业务 mock**——mock 数据/演示种子归各自插件工程（插件入口导出 `devMock`）

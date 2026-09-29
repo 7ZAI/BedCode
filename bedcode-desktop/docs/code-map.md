@@ -186,9 +186,16 @@ Rust 侧按内核五模块组织（`wasm_core.rs` 为唯一组合点/facade，�
     fs/process/http 各自的域执行器（fs 执行器内置声明闸门 + fs_auth 已授权预检，绝不弹窗）
     经 `manager::task::register_unit_executor` 注册；core-task 执行单元时查注册表分发，
     不再直调 host_api 域函数
-  - **capability**：能力注册表与系统组件装配（manifest `type: system|application` + `dependencies`）——
-    能力名 → 宿主原语 / WASM 系统组件实例二选一装配；应用插件的 host-* import 由 Linker 经此
-    host-side 转发到系统组件同形导出；系统组件内置、默认启用、先于应用插件激活
+  - **capability**：能力注册表与 L1 基础服务装配（manifest `type` + `dependencies`）——
+    能力名 → 宿主原语 / WASM L1 组件实例二选一装配；业务应用的 host-* import 由 Linker 经此
+    host-side 转发到 L1 同形导出。**插件分类三层**（ADR 0032，manifest `type`：
+    `basic-service`（L1 引擎域，最先激活、提供上述能力）/ `internal-business`（L2 宿主网关的
+    裁决依赖方，宿主**主动调它**，唯一反向依赖类别）/ `business-app`（L3 业务应用面，缺省））：
+    加载顺序 L1 → L2 → L3 由 `PluginHost::activate_role_driven_components` 逐层激活
+    （`boot.rs`，层序真源是 SDK 常量 `PluginKind::ROLE_DRIVEN_LOAD_ORDER`，批内按 id 排序，
+    单个失败不阻断其余），L3 批即 `auto_activate_from_persisted_state`；L1/L2 为**角色驱动**、
+    启停不持久化（`get_activated_state` 跳过）；`lifecycle: ephemeral`（业务 worker）**只预留类型**，
+    声明即加载期拒（`validation.rs::validate_lifecycle`）直至调度框架落地
   - **storage / types / validation / watcher**：插件存储、类型定义、校验、开发模式热重载监听
 - **（已退役）一次性 handoff 迁移链**：`quick_actions_migration` / `auth_records_migration` /
   `task_data_migration` / `session_db_migration` 四迁移（宿主 legacy 表 / 插件私有库旧 id 路径 →
@@ -268,7 +275,7 @@ ABI v14；宿实现 `wasm_core/host_api/ws.rs`。**零业务代码红线（ADR 0
   消息帧走 `events-ws` 回调（未导出 → 丢弃 + 首次 `warn` + 计数，宿主不缓存）；
 - **回收**：插件停用 → `ws::purge_for_plugin` 关闭并摘除其全部出站连接与入站端点（只碰本人，4005）。
 
-### 宿主能力实现域 · 认证记录面 — `host-auth`（ABI v18）
+### 宿主能力实现域 · 认证记录面 — `host-auth`（ABI v18，v32 追加认证中心注册面）
 
 WIT 契约 `host-auth`（v15 密钥托管四函数 + v18 记录面四函数，SDK `rust/wit/bedcode.wit`）、
 **无可选导出**，ABI desktop 17 → 18（mobile 不跟演，见 ADR 0022「双端偏离」）；宿实现
@@ -288,6 +295,24 @@ key=`biometric:<fp>`）/ device-token / link-identity / setting。**裁剪线（
 - **`auth-setting-set(key, value)`**：内核 `settings` 表写入，键白名单 `pairing_code_ttl` /
   `qr_token_ttl` + 正整数校验（宿主命令面据此取 TTL；读取走宿主配置 / 命令面）；
 - **凭据红线（AGENTS §8）**：`pairings.session_token` / `public_key` 不出口，日志只记长度。
+
+- **v32 认证中心注册面（ADR 0031，desktop ABI 31 → 32，mobile 不跟演）**——四函数
+  （`auth-center-register` / `auth-center-unregister` / `auth-methods-list` /
+  `auth-method-invoke`）落在**通用注册表**这一类薄壳里（ADR 0022 §5.1.3）：
+  - **注册表** `wasm_core/host_api/auth_center.rs`：`AuthCenterEntry { center_id, owner,
+    methods }` 单槽（第二个注册者被拒并点名在册属主）；核心状态机是**纯函数**
+    （`register_inner` / `unregister_inner` / `purge_inner`）便于单测，全局静态只做锁外包装。
+    停用回收接线在 `manager/host/activation.rs::deactivate_plugin_inner`（与 mdns 同组）
+  - **裁决面** `utils/auth/auth_center.rs::enforce_connection_policy`（查注册表 O(1)，
+    **fail-closed**）：无中心 / 调用失败 / 中心拒绝三类拒因以 `deny_kind` 结构化字段区分；
+    退役的「能力探测 + 排序取首个」与两条 fail-open 降级由防回接锁
+    `retired_auth_center_discovery_is_not_reintroduced` 锁住
+  - **组合式认证** `invoke_auth_method` 是**零解析窄转发**（只校验 method 在注册表内，
+    不拆 `params`、不解释 method 语义）→ 中心 `<owner>.auth-grant` 互调 api
+  - **就位点校验**：`manager/host/boot.rs::activate_role_driven_components` 在 L2 激活后
+    检查是否已注册，未注册则 `error!` 点名「按当前 SDK 重建」（fail-visible 形态②）
+  - 中心侧 = `com.bedcode.terminal-session`（`type: internal-business` 的 L2 组件，
+    激活即注册，见 ADR 0032）
 
 ### 宿主能力实现域 · PTY 基础能力服务 — `host-pty`（ABI v16）
 

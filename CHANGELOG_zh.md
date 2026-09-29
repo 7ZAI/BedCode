@@ -15,6 +15,26 @@
 
 ### 功能
 
+#### 认证中心改为显式注册，「没有中心」从「放行」变成「拒绝」（ADR 0031，桌面端 ABI v31 → v32；移动端 WIT/ABI 不动）
+
+- **事故是什么**：2026-09-29 桌面端把所有带 JWT 的请求与 WS 连接全部拒掉（`auth-policy not provided by this plugin` → HTTP 401 / WS close 4001），而移动端无退避地自愈重连，98 秒内刷出 616 次拒绝、616 次 toast。宿主本身没坏，它只是**选错了认证中心**：SDK 让每个用 SDK 构建的插件**无条件导出** `auth-policy`（默认拒绝实现），而宿主取「按 id 升序的第一个候选」当中心——排序第一的恰好是没实现真实策略的 `com.bedcode.agent-hub`，于是全局拒绝
+- **「谁是认证中心」从猜测变成注册事实**：中心插件在 `activate()` 内调 `host-auth.auth-center-register(methods)`，宿主持**单槽注册表**（`wasm_core/host_api/auth_center.rs`），第二个注册者**被点名拒绝**（含在册属主），停用时注销，宿主在插件停用/卸载时兜底回收。旧的「能力探测 + 排序取首个」与第二套发现机制（已退役的 `SESSION_MARKER_API` api_registry 锚点）**删除而非弃用**——防回接锁 `retired_auth_center_discovery_is_not_reintroduced` 让任一条被加回即测红
+- **fail-closed 取代两条 fail-open 降级**：「无中心 → 放行」与「中心调用失败 → 放行」均已删除。无中心在册、中心调用失败、中心拒绝现在是**三类可区分**的拒绝，带结构化 `deny_kind`（`no_center` / `unavailable` / `policy`）与可读原因——三者的排障路径完全不同。代价是有意的：中心插件未激活时本机全部需认证面不可用，**认证面失效时放行等于无认证裸奔**
+- **旧中心产物无法再静默失败**：启动序列在激活 L2 组件后就位检查「是否真有中心在册」，未注册则打**点名插件与修法**的 `error` 日志（「按当前 SDK 重建并在 activate 内调 auth-center-register」）；实例化期指引同时补了**反向**分支（v32 产物跑在旧宿主 → 提示「升级 BedCode」而不是「重建产物」）
+- **组合式认证**：新增 `auth-methods-list` / `auth-method-invoke`，其他插件可直接复用中心已实现的认证方式（配对码 / QR / 生物 / JWT），不必复制第二份实现。宿主只校验「method 在注册表内」，随后**零解析**转发到中心 `auth-grant` 互调 api；中心返回的业务拒绝原样透传
+- **移动端同批修（不动协议与 ABI）**：WS 客户端现在**保留关闭码**（`ServerClosed { code, reason }`；未携带按 1006），并把 **4001 / 4003 判为致命**——不自愈重连、只发一次「需重新配对」toast，因为对着一个正在故意拒绝的宿主机重试只会制造日志风暴。退避额外加了**硬下限 1s**（钳在 `calculate_delay` 里而不只是配置里）与**同因熔断**（连续 5 次同因失败即放弃，原因变化重置）作纵深防御
+- **迁移**：本仓所有插件产物均由源码构建，故桌面宿主与重建后的中心产物天然同批；其余三个 wasm 应用不是中心，旧产物在 ABI 32 宿主上仍可加载
+
+#### 插件分类落为三层显式分层，「谁先加载」不再靠隐式顺序（桌面端宿主 + 插件 SDK；**不动 WIT/ABI —— 只动 manifest**）
+
+- **今天的现状不是「没有分类」，而是分类说不出我们需要的东西**：`PluginKind` 原本两值（`Application` / `System`），而 `System` 的定义是「向能力注册表提供 host-* 同形能力」——它是**基础服务的代理身份**，却**零插件使用**（`ROUTABLE_CAPABILITIES` 只有 `host-storage` 一项）。有两样东西装不进去：认证中心是**宿主网关的裁决依赖方**（宿主主动调它，本仓唯一的反向依赖，既不是「提供能力」也不是「产品功能」）；「用完即弃」的 worker 则完全没有表达位——`CallModel::EventLoop` 是**常驻**属主任务，与即用即弃语义正好相反
+- **三个角色、加载顺序 `L1 → L2 → L3`**：`basic-service`（L1 引擎域组件，最先激活，其 host-* 导出注册为能力提供者）→ `internal-business`（L2 宿主裁决依赖方）→ `business-app`（L3 业务应用面，**缺省**）。启动序列里原本「一批 System 组件」拆为**两批显式**（`activate_role_driven_components`），持久化批量就是 L3 批且现在只收 L3；批内按 id 排序，不引入隐式优先级规则。历史拼写 `system` / `application` 仍按 serde 别名解析（旧产物零迁移，序列化统一写新拼写）；非法 `type` 在**构建期**（`manifest-validate.js`，文案点名合法取值）与**加载期**（serde）双侧拒，不静默回落 L3
+- **宿主只认谓词、不认角色名**：加载顺序读 SDK 常量 `PluginKind::ROLE_DRIVEN_LOAD_ORDER`，所有判定点走 `is_role_driven()` / `provides_host_capabilities()` / `is_business_app()`；宿主源码里**不出现** `PluginKind::BasicService` / `InternalBusiness` / `BusinessApp`——新增角色不必改宿主，分类学也不会退化成「宿主按角色名做业务判断」（锁 `host_switches_on_role_predicates_not_role_values`）
+- **L1/L2 是角色驱动：启停真源是「角色」不是用户开关**——两者不进持久化激活表。单个失败仍不阻断其余：L2 激活失败时 L3 照常激活，失败以点名角色的 `error` 日志 + 插件列表 Error 态可见
+- **`lifecycle: ephemeral`（业务 worker）只登记类型、别的都没做**：它的存在理由是**内存生命周期**而非业务分层——wasm 线性内存只增不减，宿主单实例限额只记账不释放，长驻实例处理大输入会单调涨到限额并 trap，且不重启进程不自愈。一次性实例机制与调度框架未落地，故声明 `ephemeral` 在**构建期与加载期双侧显性拒绝**（文案点名 ADR 0032 §6 缺口清单）——静默当常驻处理恰好是它存在理由的反面
+- **L2 红线落成代码而非散文**：`internal_business_host_dependency_stays_gated` 把「宿主可碰 L2 桥接面的文件」钉死为显式白名单（网关 / WS 认证中间件 = 安全闸门；`session_gateway` = 零解析转发；`host-auth` 组合式认证原语 = 零解析转发 + 单中心仲裁），并做**反向自检**（白名单条目不再命中即报错），防止白名单腐化后静默放行越界消费点；`l2_gate_returns_decision_only` 把裁决门签名钉死为 `Result<(), String>`——宿主一旦能从 L2 回复里解析出产品载荷即转红
+- **第一个真实 L2 是 `com.bedcode.terminal-session`，两段判据同批落地**（ADR 0031）：静态声明 `"type": "internal-business"` 决定加载顺序，`auth-center-register` 做动态就绪与唯一性仲裁，只上线其一会让两段判据自相矛盾。**该角色的用户可见后果**：认证中心的启停转为角色驱动——它不再进持久化激活表，在插件管理页停用它只对当前会话生效，下次启动按角色恢复（与 fail-closed 同向）
+
 #### Agent Hub 文件访问改为批量授权 —— 一个业务一次弹窗，而不是逐文件弹窗（桌面宿主 + wasm 应用 `com.bedcode.agent-hub`；**不动 WIT/ABI**）
 - **要解决的问题**：一次业务操作读写多个文件时，每个文件各自弹一次授权框——更有甚者授权根本「记不住」：宿主进程产物（`~/.bedcode/agent-hub/runs/*.log`）**每次运行都是新文件名**，精确粒度的「记住」只记了这一次的文件，下一次运行再问一次；usage 扫描读 `~/.claude/projects/` 下的 Claude 会话文件，而该目录**没有任何授权覆盖**（全局 `.claude/` 白名单退役后静默读失败）；打开供应商页一次弹三个框（settings.json + 两个桥接文件存在性）；应用一次供应商到 Claude 最多弹五次
 - **宿主**：`~/.bedcode/agent-hub/runs` 加入 agent-hub 第一方免弹窗清单（判据②：插件自持瞬时产物，Exact 粒度授权无法表达「整目录」——逐次弹窗每次运行都重复）。范围严格限于 runs/ 子目录，不含用户内容；审计投影与 `auth_policy` 概览测试自动覆盖

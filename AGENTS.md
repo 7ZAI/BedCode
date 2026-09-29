@@ -100,8 +100,8 @@ pnpm exec eslint .
 | 改前端 UI / 样式 / 布局（组件、CSS、token、动画、主题、响应式） | **先加载 `frontend-styles` skill**（`.agents/skills/frontend-styles/SKILL.md`，强制）+ 对应端 code-map |
 | 写 / 改 / 审查单元测试 | **先加载 `unit-test-discipline` skill**（`.agents/skills/unit-test-discipline/SKILL.md`，强制） |
 | 改 Rust 后端（任意模块） | 对应端 code-map → 模块目录 → §6 Rust 规范 + 相关 ADR（docs/adr/） |
-| 在宿主侧新增/修改任何能力、类型、状态、存储、路由 | **§5.1 宿主侧无业务代码（六条判据 B1-B6 + 三问裁决 + 提交前自检 3 问）+ §5.2 桌面端架构 + ADR 0022**——先判归属再动手；越线必须停下向用户确认 |
-| 改插件 | `docs/knowledge/plugin-development-checklist.md`（全文）+ WIT（`bedcode-desktop/packages/plugin-sdk-desktop/rust/wit/bedcode.wit`，移动端另有一份）+ ADR 0017/0019/0022 |
+| 在宿主侧新增/修改任何能力、类型、状态、存储、路由 | **§5.1 宿主侧无业务代码（六条判据 B1-B6 + 三问裁决 + 提交前自检 3 问）+ §5.2 桌面端架构 + ADR 0022**——先判归属再动手；越线必须停下向用户确认。新增**基础服务 / 内部统一业务**角色或**即用即弃 worker** 形态前，另读 ADR 0032 |
+| 改插件 | `docs/knowledge/plugin-development-checklist.md`（全文）+ WIT（`bedcode-desktop/packages/plugin-sdk-desktop/rust/wit/bedcode.wit`，移动端另有一份）+ ADR 0017/0019/0022；插件**分类/加载顺序/生命周期形态**问题读 ADR 0032 |
 | 改 wasm 应用 / 移动插件（业务代码主场） | 该应用自己的 crate（`wasm-apps/<app-id>/rust` 或 `plugins/<plugin-id>/rust`）+ 自有测试命令（§3 插件块）；**不要拿宿主 `cargo test` 当它的验证** |
 | 改数据库 / schema | §9 数据规范 + `bedcode-desktop/src-tauri/src/db/` |
 | 改跨端协议（HTTP/WS/QR/认证） | §9 协议规范 + `docs/knowledge/mobile-desktop-auth.md`，两端同步评估 |
@@ -231,7 +231,7 @@ pnpm exec eslint .
   `docs/adr/0029-plugin-concurrency-owner-and-on-demand-async.md`（含 C1–C4 判据、白名单、实例级门结论；宿主实现侧 async，不改 WIT）
 - **宿主直调命令面只保留外壳**：`src-tauri/src/commands.rs` 只服务宿主页面（外壳 / 诊断 / 引擎事实），
   业务面一律走插件命令面；`src/composables/` 同理
-- **域 → 原语接口 → 业务真源**（ABI desktop 31；每域详解见 `bedcode-desktop/docs/code-map.md` Core Modules 段）：
+- **域 → 原语接口 → 业务真源**（ABI desktop 32；每域详解见 `bedcode-desktop/docs/code-map.md` Core Modules 段）：
   - 四引擎域：伪终端 `pty/` → `host-pty`（真源：terminal-session 的 `sessions` / `session_annotations` 库）· 传输 `server/http/` + `server/websocket/` → `host-http` / `host-websocket`（真源：terminal-session REST 域、file-transfer WS 域）· 对等网络 `server/peer_net/` + `packages/peer-net` → `host-peer` v31（真源：file-transfer 事件归约状态机）· 认证 `utils/auth/` + `host_api/auth.rs` → `host-auth` v18（真源：terminal-session `auth_records/` 私有库）
   - 其余：存储 `db/` → `host-storage` / `host-database` / `host-plugin-database`（各应用私有库，`plugin_id_` 前缀或独立库）· 通信 `wasm_core/bus` + `api_registry` → `host-bus` / `host-api-call`（通道本身无真源）· 运行时 `wasm_core/` → `host-app` / `host-config` / `host-log` / `host-process` / `host-fs` / `host-timer` / `host-platform` / `host-mdns` / `host-crypto` / `host-task`（各应用自持）· 连接清单 `server/websocket/registry.rs` → `host-connection`（仅在册连接事实）
 
@@ -300,7 +300,7 @@ manifest 静态声明面 `contributes.httpEndpoints` / `toolProviders` · 宿主
 
 - **禁止提交密钥/凭据**：仓库内唯一例外是签名真源 `bedcode.keystore`（私有仓库设计，见 §9 Android）；新增的任何密钥、token、密码禁止入库、禁止进日志、禁止写进文档/备注；API token 泄露按仓库规范删除重建
 - **认证链路只走既有 auth 模块**（JWT / 设备指纹 / 二维码 / 生物凭证），禁止旁路；**日志与存储中凭据只记长度不落明文**（`token.length()` 模式）
-- **配对 / 认证的编排归插件**（ADR 0022 分层）：配对码与 QR 的编排、签发、验签全在 `com.bedcode.terminal-session`（`pairing/` / `qr/` / `auth_http`），认证记录真源在该插件私有库 `auth_records` 域；宿主只剩 `host-auth` 密钥托管 / 生物凭证原语 / 认证策略 capability（`auth-policy`，传输失败回退放行 + `warn` 留痕，**不算旁路**）。宿主主库 `pairings` / `connection_history` / `session_configs` 三表与存量迁移链已退役（旧库滞留表不读不迁不清理；生物公钥寄主 `plugin_secrets` key=`biometric:<fp>` 语义不变）。**无宿主代签降级路径**——插件未激活时前端命令面显性报错，新代码不得绕过插件自行签发或验签（删除清单与日期见 ADR 0022）
+- **配对 / 认证的编排归插件**（ADR 0022 分层）：配对码与 QR 的编排、签发、验签全在 `com.bedcode.terminal-session`（`pairing/` / `qr/` / `auth_http`），认证记录真源在该插件私有库 `auth_records` 域；宿主只剩 `host-auth` 密钥托管 / 生物凭证原语 / 认证中心桥接。**认证中心 = 单一显式注册的中心**（ADR 0031，v32 已实施）：中心激活时调 `host-auth.auth-center-register` 登记进宿主单中心注册表（第二注册者被拒并点名在册属主），停用时注销 / 宿主 `purge_for_plugin` 回收；`auth-policy` 的发现方式**不再是能力探测 + 排序取首个**。**裁决一律 fail-closed**：无中心在册 / 中心调用失败 / 中心拒绝 → 一律拒绝（`deny_kind` 分 `no_center` / `unavailable` / `policy`），**没有「查不到中心就放行」「传输失败就放行」的降级路径**。宿主主库 `pairings` / `connection_history` / `session_configs` 三表与存量迁移链已退役（旧库滞留表不读不迁不清理；生物公钥寄主 `plugin_secrets` key=`biometric:<fp>` 语义不变）。**无宿主代签降级路径**——插件未激活时前端命令面显性报错，新代码不得绕过插件自行签发或验签（删除清单与日期见 ADR 0022）
 - 输入校验与权限仲裁在 Rust 端，前端校验仅是 UX；WebSocket/HTTP 接入必须过认证与过滤链（TrafficFilterChain）
 - **真源换了地方就要 fail-visible**（通用判据）：事实真源迁走后，**旧读路径必须显性失败，
   禁止静默降级成「无数据」**——静默降级会让「线还在、数据永远是空」的断链在测试全绿的情况下
@@ -442,7 +442,7 @@ CI 门禁（合并到 master/uat 时）：`lint.yml`（eslint 0 error）+ `test.
 | 构建与产物治理 | `docs/knowledge/build-process.md`（target 目录治理）、`docs/knowledge/wasip3-toolchain.md`（§7 移动端待决策项） |
 | 插件 HTTP 信任模型 | `docs/knowledge/plugin-http-endpoint-trust.md` |
 | 架构路线 | `docs/knowledge/plugin-kernel-roadmap.md`、`docs/knowledge/businessless-kernel-vision.md` |
-| **宿主/插件边界裁决（§5 红线的单一事实源）** | `docs/adr/0022-plugin-host-interface-primitive-boundary.md`（+ ADR 0017 互调 / 0018 移动独立契约 / 0019 双端锁版） |
+| **宿主/插件边界裁决（§5 红线的单一事实源）** | `docs/adr/0022-plugin-host-interface-primitive-boundary.md`（+ ADR 0017 互调 / 0018 移动独立契约 / 0019 双端锁版 / 0031 认证中心注册与组合式认证 / 0032 wasm 插件分类体系） |
 | pi 工具手册 | `docs/agents/pi-tools.md`（附录） |
 
 ---

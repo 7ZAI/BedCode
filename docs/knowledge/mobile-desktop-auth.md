@@ -147,6 +147,36 @@ GET http://{address}:{port}/api/health
 └─────────────────────────────────────────────────────┘
 ```
 
+### 4.0 桌面端裁决面：认证中心 fail-closed（ADR 0031，2026-09-29）
+
+移动端发什么不影响**能不能连上**——能不能连上由桌面端的裁决面单方面决定，且现在是
+**fail-closed**（这是本节存在的理由：排障时「移动端一切正常但连不上」的根因往往在桌面端）：
+
+```text
+请求（HTTP /api/* 或 WS 插件端点首消息）
+  → 宿主验签（HS256，引擎原语，不移动）
+  → 查认证中心注册表（单中心，O(1)）
+      ├─ 无中心在册      → 拒绝  deny_kind=no_center     「no auth center registered」
+      ├─ 中心调用失败    → 拒绝  deny_kind=unavailable   「auth center unavailable: …」
+      └─ 中心裁决通过    → 放行（claims 以宿主验签结果为准）
+      └─ 中心拒绝（撤销等）→ 拒绝 deny_kind=policy       原因原样透出
+```
+
+- **「谁是认证中心」是注册事实，不是猜测**：中心插件激活时调
+  `host-auth.auth-center-register` 登记（第二注册者被拒并点名在册属主），停用时注销 /
+  宿主回收。旧的「能力探测 + 按 id 排序取首个」已退役——它在候选 > 1 时会选中未实现
+  策略的插件（2026-09-29 事故：600+ 次 4001 / 98 秒的拒绝洪水，根因即此）。
+- **没有 fail-open 降级**：「查不到中心就放行」「调用失败就放行」两条已删除。
+  代价是认证中心未激活时本机全部需认证面不可用——**这是有意的**（认证面失效时放行
+  等于无认证裸奔）。真因此状时桌面端日志会出现点名
+  「L2 插件激活完成但未注册为认证中心」的 `error` 行。
+- **对移动端的可观测后果**：以上三类拒绝对 WS 一律是 `close 4001`，对 HTTP 是 401。
+  移动端把 **4001 / 4003 判为致命**（见「重连机制」节），**不自愈**——重连不可能成功，
+  反复重试只会刷日志。界面提示「需重新配对」。
+
+源码: `bedcode-desktop/src-tauri/src/utils/auth/auth_center.rs`（裁决面）、
+`bedcode-desktop/src-tauri/src/wasm_core/host_api/auth_center.rs`（注册表）
+
 ### 4.1 AuthStage 枚举
 
 所有认证消息通过 `AuthStage` 区分阶段：
@@ -451,7 +481,17 @@ Disconnected ──connect()──► Connecting ──WS握手──► Connect
 ## 重连机制
 
 - **最大重试次数**: 3 次
-- **退避策略**: 指数退避
+- **退避策略**: 指数退避，**下限 1000ms**（`MIN_RECONNECT_DELAY_MS`，钳制在
+  `calculate_delay` 里而不是只在配置里——纵深防御：任何给出 0 / 负退避的调用方都不会
+  打出 6 Hz 风暴）
+- **同因熔断**: 连续 5 次**相同原因**的重连失败即放弃（`CIRCUIT_BREAKER_SAME_CAUSE_LIMIT`
+  + `same_cause_streak`）。原因变化即重置计数（网络抖动不会把临时故障打成永久放弃）；
+  手动 `reset` 同时清掉熔断态
+- **认证类关闭码不自愈**（M1，ADR 0031 配套）: `4001`（认证失败）与 `4003`
+  （链路完整性失败）属**致命**——`is_auth_fatal_close_code` 判真后
+  ① 跳过 supervisor 自愈、② 事件带 `fatal: true`、③ 前端只发**一次** toast
+  「需重新配对 / 重新连接」，不走 `handleUnexpectedDisconnect`
+  （桌面端此刻已 fail-closed 拒绝，重连不可能成功，见 §4.0）
 - **手动断开检测**: `manual_disconnect` 标记，用户主动断开时不触发重连
 - **重连流程**:
   1. 断开旧客户端
@@ -459,7 +499,13 @@ Disconnected ──connect()──► Connecting ──WS握手──► Connect
   3. 连接成功 → 尝试 JWT 重认证
   4. JWT 认证失败 → 清除凭据，需用户重新配对
 
-源码: `bedcode-mobile/src-tauri/src/connection/manager.rs` → `reconnect()`
+> 关闭码曾被 `ws_client` 丢弃（只按连接是否 clean 处理），4001 与「网络掉线」不可区分——
+> 这正是 2026-09-29 事故里移动端无退避自愈、616 次 / 98 秒刷屏的放大器。
+> `ServerClosed { code, reason }` 起保留关闭码（未携带时按 1006 处理）。
+
+源码: `bedcode-mobile/src-tauri/src/connection/manager.rs` → `reconnect()`、
+`bedcode-mobile/src-tauri/src/connection/reconnect.rs`（退避 / 熔断）、
+`bedcode-mobile/src-tauri/src/system/constants/{connection,reconnect}.rs`（常量与判据）
 
 ---
 

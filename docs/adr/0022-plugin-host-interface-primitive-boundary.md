@@ -496,6 +496,11 @@ serve 供流记账 / peer_name 解析 / 取消原因码映射 / pull 任务行�
 
 ## 授权策略 = 安全闸门，不是业务默认值（2026-09-28 桌面端，ABI 不变）
 
+> **⚠️ 本节「认证策略 capability」部分已被 ADR 0031 修订**（2026-09-29）：`auth-policy`
+> 的发现方式从「能力探测 + 排序取首个」改为**显式注册**（认证中心注册表，单中心），
+> 且**无中心 / 调用失败一律拒绝**（取代原「传输失败回退放行」的 fail-open 降级）。
+> 配套见 `.scratch/2026-09-29-auth-center-registration/`。
+
 `.scratch/2026-09-27-host-authorization-policy/`（spec + 票 01–09）。**裁决要点**：授权策略
 （每 app × 每类资源的「总是询问 / 默认 / 始终允许」三档）与其配套的授权记录落在宿主，
 但它们**不构成 B5（业务默认值）的越线**——理由与边界如下：
@@ -783,3 +788,32 @@ serve 供流记账 / peer_name 解析 / 取消原因码映射 / pull 任务行�
   改经插件互调 `session-history`（插件自持 pty_id 调 `ring-fetch`）。实施与验收见
   `.scratch/2026-09-25-websocket-business-downsink/`（票 02-09；性能门禁含 WS 输出路径
   `ws_output_perf.rs` 探针：常态 196 KiB 全量到达 0 截断 / 压力 10 MiB 节流产出边产边拉 ≥ 4 MiB）。
+
+### v32：认证中心显式注册（2026-09-29，ADR 0031）
+
+本 ADR 的「授权策略 = 安全闸门」节与「双端偏离」节被 **ADR 0031** 修订；插件分类体系
+（三层：基础服务 / 内部统一业务 / 业务应用 + worker 预留）另见 **ADR 0032**。
+
+- `auth-policy` 能力发现的**注册语义**取代本 ADR 记载的「能力探测 + 排序取首个」——
+  后者在候选 > 1 时会选中未实现策略的插件（2026-09-29 移动端 4001 日志风暴事故根因）
+- **fail-closed 取代 fail-open**：「无中心 → 放行」与「传输失败 → 放行」两条降级删除
+- `host-auth` 追加 4 函数（`auth-center-register` / `auth-center-unregister` /
+  `auth-methods-list` / `auth-method-invoke`），**桌面独有**，移动端不跟演（ABI 11 不变）
+- 认证记录真源归属不变（仍在认证中心插件私有库，宿主主库 `pairings` /
+  `connection_history` / `session_configs` 仍退役）
+
+### v33：插件分类三层（2026-09-29，ADR 0032）
+
+插件分类（manifest `type`）是**机制学**（谁先加载、谁提供什么、谁依赖谁），不新增业务语义，
+不改变本 ADR 的裁剪线（B1–B6）与四类薄壳口径。
+
+- 新增 **L2 内部统一业务应用**类别：宿主内核**主动调用**该 wasm 组件做安全闸门裁决——
+  本仓唯一的反向依赖类别。三条红线（白名单式登记 / 只做安全闸门 / 宿主只转发不解释）
+  落成防回接锁 `internal_business_host_dependency_stays_gated`
+  （`wasm_core/manager/host/tests/l2_gating_test.rs`）
+- 加载顺序 `L1 基础服务 → L2 内部统一业务 → L3 业务应用` 是**显式分批**（原「一批
+  `System` 组件 + 持久化批量」），宿主只按谓词判角色、层序真源在 SDK 常量
+- **`lifecycle: ephemeral`（业务 worker）只预留类型**：声明在构建链与宿主加载期双侧显性
+  拒绝，直到一次性实例机制与调度框架落地（ADR 0032 §6 启用清单）
+- **双端偏离**：分类**桌面独有**（移动端 SDK 无 `PluginKind`、无角色驱动分批；移动端是
+  自持业务 App 的客户端），移动端何时跟进由其首个需要分层的场景决定
