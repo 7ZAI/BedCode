@@ -35,6 +35,21 @@ async fn seed_config_in_plugin_store(
 ///
 /// e2e 作为插件集成测试的一部分解析回执驱动后续网关调用；宿主生产代码零解析
 /// （2026-09-25 网关 Value 化）。
+/// 占用认证中心注册表的**测试闸门**（v32 / ADR 0031 K1 单中心 desk）
+///
+/// 注册表是**进程级单例**：桥接门 `session_active()` 查它，而走同一闸门的闭环用例
+/// （`host/tests/system_component_test.rs` 两条 auth-policy 闭环）会 `reset()` 清台。
+/// 本文件用例会与它们**并行**执行——一旦被清台，本文件的桥接调用就瞬时变成
+/// 「session plugin not active」（偶发红，且与被测行为无关）。
+/// 故：本文件每个用例在进入异步体时**持闸门到用例结束**（permit 跨 await 合法），
+/// 并由 guest 的 `activate` 自行登记中心（产物含 `auth-center-register`）。
+async fn lock_auth_center_desk() -> tokio::sync::SemaphorePermit<'static> {
+    crate::wasm_core::host_api::auth_center::registry_gate()
+        .acquire()
+        .await
+        .expect("auth center registry test gate")
+}
+
 fn session_id_of(reply: serde_json::Value, what: &str) -> String {
     reply["sessionId"]
         .as_str()
@@ -46,6 +61,14 @@ fn session_id_of(reply: serde_json::Value, what: &str) -> String {
 
 fn test_session_plugin_artifact_lifecycle() {
     use crate::utils::auth::auth_center as bridge;
+
+    // 同一份会话中心私有库（与全部会话闭环用例共用进程级根）：持串行锁
+    let _serial = session_plugin_db_guard();
+    // 认证中心注册表是**进程级单中心**：本用例的 guest `deactivate` 会
+    // `auth-center-unregister` 清台，若与并行用例交错会把对方的桥接门瞬时打成
+    // 「插件未激活」。同步用例用自带 runtime 取闸门 permit 并持到用例结束。
+    let gate_rt = tokio::runtime::Runtime::new().expect("runtime");
+    let _center_desk = gate_rt.block_on(lock_auth_center_desk());
 
     let wasm_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../resources/plugins/desktop/com.bedcode.terminal-session/bedcode_plugin_terminal_session.wasm");
@@ -147,7 +170,7 @@ fn test_session_plugin_artifact_lifecycle() {
              session:read（config-get 全量行，迁移读 legacy 用）+ storage（配置私有库）；\
              票 14：ui:sidebar + ui:settings（两个纯前端贡献面）；票 15：任务域四位（v27 起）；\
              票 17：ui:input（任务弹窗工具栏入口）；票 21：task:run（git 域 execute-batch 并行）"
-             );
+    );
     let declared_api: Vec<String> = manifest["api"]
         .as_array()
         .expect("api 数组")
@@ -156,7 +179,7 @@ fn test_session_plugin_artifact_lifecycle() {
         .collect();
     assert_eq!(
         declared_api.len(),
-        33,
+        34,
         "pairing 八项 + trust 两项 + consent 一项 + config 三项 + session-create 一项（票 09）+ \
              会话动作四项（票 10）+ annotate + devices-connect-list 两项（票 11）\
              + quick-actions-import 一项（票 02）\
@@ -165,7 +188,8 @@ fn test_session_plugin_artifact_lifecycle() {
              + 会话登记域读取面两项（P1：session-list / session-get）\
              + P1-b 停止/输入两项（session-close / session-input）\
              + 票 08 历史快照一项（session-history，websocket 业务下沉）\
-             + 票 09b WS 会话控制词表分派一项（session-ws-control），got: {declared_api:?}"
+             + 票 09b WS 会话控制词表分派一项（session-ws-control）\
+             + v32 认证中心组合式出口一项（auth-grant，ADR 0031），got: {declared_api:?}"
     );
     // P1-b 互调面必须存在：宿主窄转发层的停止 / 输入转发依赖
     for p1b_api in [
@@ -212,11 +236,12 @@ fn test_session_plugin_artifact_lifecycle() {
             "manifest 缺会话动作 api {consumed}"
         );
     }
-    // 宿主桥接锚点必须真在声明面里：锚点漂移 = 桥接永久静默降级（无人报错）
+    // 认证中心组合式出口（v32 ADR 0031 K6）必须在声明面里：`auth-method-invoke`
+    // 经宿主窄转发到 `auth-grant`，未声明则「未声明 api 不可调」门禁整片拒绝。
+    // 桥接探活锚点（旧 SESSION_MARKER_API/trust-list）已随注册表显式登记退役（K7）
     assert!(
-        declared_api.contains(&bridge::SESSION_MARKER_API.to_string()),
-        "manifest 缺桥接探活锚点 {}",
-        bridge::SESSION_MARKER_API
+        declared_api.contains(&"com.bedcode.terminal-session.auth-grant".to_string()),
+        "manifest 缺认证中心组合式出口 api auth-grant"
     );
     // 文件传输插件经互调消费 consent / trust：两条 api 必须在声明面里，
     // 否则「未声明 api 不可调」门禁会把它的调用整片拒掉（静默降级）
@@ -341,6 +366,8 @@ fn test_session_task_domain_closed_loop() {
         .expect("compile session artifact");
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {
+        // v32（ADR 0031）：桥接门查进程级单中心注册表 → 与闭环用例互斥（见 helper）
+        let _center_desk = lock_auth_center_desk().await;
         let instances = Arc::new(RwLock::new(HashMap::new()));
         let plugin = Arc::new(Mutex::new(
             wasm_runtime
@@ -544,10 +571,7 @@ fn test_session_task_domain_closed_loop() {
         let close_out = plugin
             .lock()
             .await
-            .invoke_command(
-                "session.close",
-                &serde_json::json!({ "sessionId": sid }).to_string(),
-            )
+            .invoke_command("session.close", &serde_json::json!({ "sessionId": sid }).to_string())
             .expect("session.close");
         let close_reply: serde_json::Value = serde_json::from_str(&close_out).unwrap();
         assert!(
@@ -779,8 +803,10 @@ fn test_session_task_http_and_scheduled_closed_loop() {
     //    （scheduled → launch spec 的解析链读私有库，见 task/scheduled.rs 模块文档）
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     let config_id = rt
-        .block_on(async { seed_config_in_plugin_store(&mut plugin, "定时探针", "/tmp", "claude").await })
-        ["id"].as_str().unwrap().to_string();
+        .block_on(async { seed_config_in_plugin_store(&mut plugin, "定时探针", "/tmp", "claude").await })["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
 
     let r = http_call(
         &mut plugin,
@@ -878,10 +904,7 @@ fn test_session_task_http_and_scheduled_closed_loop() {
         )
         .expect("session.create（定时探针会话）");
     let created: serde_json::Value = serde_json::from_str(&create_out).unwrap();
-    assert!(
-        created["error"].is_null(),
-        "session.create 不得报错, got: {create_out}"
-    );
+    assert!(created["error"].is_null(), "session.create 不得报错, got: {create_out}");
     let scheduled_session_id = created["sessionId"]
         .as_str()
         .expect("session.create 回执 sessionId")
@@ -1122,9 +1145,10 @@ fn test_session_trust_and_consent_api_closed_loop() {
 
     // 授权路径等价 PluginHost 装载（manifest permissions 登记）：会话中心声明
     // auth（secret-store + 记录面）+ peer（consent 取可信集 / trust peer 段）
-    host_ctx
-        .permission
-        .grant_permissions(session_id, &["auth".to_string(), "peer".to_string(), "storage".to_string()]);
+    host_ctx.permission.grant_permissions(
+        session_id,
+        &["auth".to_string(), "peer".to_string(), "storage".to_string()],
+    );
     // 登记目标插件声明的 api（等价 PluginHost::activate_plugin 的登记）。
     // 清单读插件工程 manifest（单一真源），不在测试里抄第二份。
     let session_api_list = session_apis();
@@ -1135,6 +1159,8 @@ fn test_session_trust_and_consent_api_closed_loop() {
 
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
+        // v32（ADR 0031）：桥接门查进程级单中心注册表 → 与闭环用例互斥（见 helper）
+        let _center_desk = lock_auth_center_desk().await;
         let session = Arc::new(Mutex::new(
             wasm_runtime
                 .instantiate_component(&session_component, session_id, host_ctx.clone(), &[], None)
@@ -1368,7 +1394,8 @@ fn test_business_endpoints_dual_track_closed_loop() {
         SESSION_ID,
         &[
             "auth".to_string(),
-            "peer".to_string(), "storage".to_string(),
+            "peer".to_string(),
+            "storage".to_string(),
             "session:read".to_string(),
             "storage".to_string(),
             "fs:read".to_string(),
@@ -1389,6 +1416,8 @@ fn test_business_endpoints_dual_track_closed_loop() {
     );
 
     rt.block_on(async move {
+        // v32（ADR 0031）：桥接门查进程级单中心注册表 → 与闭环用例互斥（见 helper）
+        let _center_desk = lock_auth_center_desk().await;
         let component = wasm_runtime
             .compile_component(&std::fs::read(&wasm_path).expect("read session artifact"))
             .expect("compile session artifact");
@@ -1724,7 +1753,8 @@ fn test_session_create_with_spec_closed_loop() {
         SESSION_ID,
         &[
             "auth".to_string(),
-            "peer".to_string(), "storage".to_string(),
+            "peer".to_string(),
+            "storage".to_string(),
             "session:read".to_string(),
             // 票 09：host-session.create-with-spec（创建编排执行端）
             // 会话引擎下沉 P1-b：业务会话改走 host-pty 原语
@@ -1740,6 +1770,8 @@ fn test_session_create_with_spec_closed_loop() {
 
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
+        // v32（ADR 0031）：桥接门查进程级单中心注册表 → 与闭环用例互斥（见 helper）
+        let _center_desk = lock_auth_center_desk().await;
         // ==================== 1. 激活会话中心（配置面 v21 起插件必需） ====================
         let instances = Arc::new(RwLock::new(HashMap::new()));
         let session = Arc::new(Mutex::new(
@@ -1763,11 +1795,9 @@ fn test_session_create_with_spec_closed_loop() {
         // 不再有 start=false 双态：host-pty 无 create-without-spawn，创建即启动真实进程
         //（bash，cwd=/tmp 存在）；回执即会话 id，无需轮询宿主落库。
         let sid1 = session_id_of(
-            crate::utils::session_gateway::start(
-                &host_ctx, &seeded["id"].as_str().unwrap(), None, None, true, None,
-            )
-            .await
-            .expect("plugin active → 必须编排成功"),
+            crate::utils::session_gateway::start(&host_ctx, &seeded["id"].as_str().unwrap(), None, None, true, None)
+                .await
+                .expect("plugin active → 必须编排成功"),
             "创建 sid1",
         );
         assert_eq!(sid1.len(), 36, "插件自产 UUID; got: {sid1}");
@@ -1775,37 +1805,38 @@ fn test_session_create_with_spec_closed_loop() {
             .await
             .expect("view");
         assert!(!v1.is_null(), "会话应在册");
+        assert_eq!(v1["status"], serde_json::json!("running"), "P1-b 创建即启动 → Running");
         assert_eq!(
-            v1["status"], serde_json::json!("running"),
-            "P1-b 创建即启动 → Running"
+            v1["name"],
+            serde_json::json!("编排会话"),
+            "命名唯一化首见 = 原名（插件决策）"
         );
-        assert_eq!(v1["name"], serde_json::json!("编排会话"), "命名唯一化首见 = 原名（插件决策）");
         assert_eq!(
-            v1["configId"], serde_json::json!(seeded["id"].as_str().unwrap()),
+            v1["configId"],
+            serde_json::json!(seeded["id"].as_str().unwrap()),
             "configId 透传（会话记录标真源配置）"
         );
-        assert!(
-            v1.get("startedAt").is_some(),
-            "创建即启动 → startedAt 已填"
-        );
+        assert!(v1.get("startedAt").is_some(), "创建即启动 → startedAt 已填");
         // 真源切换验收：**宿主内核会话表已不存在**（票 11 随 `session/` 目录删除），
         // 故此处不再有「查一下宿主有没有登记」的运行时断言——该事实现在由结构性锁
         // `retired_kernel_session_domain_is_not_reintroduced`（wasm_flow_test）保证。
 
         // ==================== 4. 命名唯一化：同配置第二次 → 原名(1) ====================
         let sid2 = session_id_of(
-            crate::utils::session_gateway::start(
-                &host_ctx, &seeded["id"].as_str().unwrap(), None, None, true, None,
-            )
-            .await
-            .expect("plugin active → 必须编排成功"),
+            crate::utils::session_gateway::start(&host_ctx, &seeded["id"].as_str().unwrap(), None, None, true, None)
+                .await
+                .expect("plugin active → 必须编排成功"),
             "创建 sid2",
         );
         let v2 = crate::utils::session_gateway::view(&host_ctx, &sid2)
             .await
             .expect("view");
         assert!(!v2.is_null(), "会话应在册");
-        assert_eq!(v2["name"], serde_json::json!("编排会话(1)"), "重名冲突 → 插件改写为 (1) 后缀");
+        assert_eq!(
+            v2["name"],
+            serde_json::json!("编排会话(1)"),
+            "重名冲突 → 插件改写为 (1) 后缀"
+        );
         assert_eq!(v2["configId"], serde_json::json!(seeded["id"].as_str().unwrap()));
 
         // ============ 4b. P1-b 真源：插件会话登记域（宿主窄转发层改读本域） ============
@@ -1860,9 +1891,7 @@ fn test_session_create_with_spec_closed_loop() {
         let gateway_reply = crate::utils::session_gateway::list_views(&host_ctx)
             .await
             .expect("gateway list");
-        let gateway_sessions = gateway_reply["sessions"]
-            .as_array()
-            .expect("网关 reply sessions 数组");
+        let gateway_sessions = gateway_reply["sessions"].as_array().expect("网关 reply sessions 数组");
         assert_eq!(gateway_sessions, sessions, "网关透传 = 登记域视图（忠实投影）");
 
         // 关窗守卫专用查询（`session-list {filter:"running"}`，2026-09-25 下沉）：
@@ -1887,17 +1916,11 @@ fn test_session_create_with_spec_closed_loop() {
             .iter()
             .map(|v| (v["id"].as_str().expect("视图含 id").to_string(), v))
             .collect();
-        let raw1 = sessions
-            .iter()
-            .find(|s| s["id"] == sid1)
-            .expect("登记域含 sid1");
+        let raw1 = sessions.iter().find(|s| s["id"] == sid1).expect("登记域含 sid1");
         assert_eq!(raw1["id"], serde_json::json!(sid1));
         assert_eq!(raw1["name"], serde_json::json!("编排会话"));
         assert_eq!(raw1["configId"], serde_json::json!(seeded["id"].as_str().unwrap()));
-        assert_eq!(
-            raw1["status"], serde_json::json!("running"),
-            "wire 形态与插件视图一致"
-        );
+        assert_eq!(raw1["status"], serde_json::json!("running"), "wire 形态与插件视图一致");
         // 网关视图行与登记域视图同值（宿主窄转发层 = 插件登记域的忠实投影）
         let gw1 = gw_by_id.get(&sid1).expect("网关视图含 sid1");
         assert_eq!(gw1["name"], serde_json::json!("编排会话"));
@@ -1955,15 +1978,21 @@ fn test_session_create_with_spec_closed_loop() {
         );
 
         // ==================== 5. 插件必需：注销互调面 → 显性报错（无宿主降级） ====================
+        // v32（ADR 0031 K7）后「插件不可用」是**两道独立的门**，报错随之分岔：
+        // - 桥接门（`session_active()` 查认证中心注册表）：无中心在册 → "session plugin not active"；
+        // - 互调门（api-call gate 查声明面）：中心在册但声明面已注销 → "not declared by any
+        //   activated plugin (gate)"（点名 api）。
+        // 本步注销的是**互调面** → 断言第二道门；第一道门由 host 侧闭环用例
+        // （`host/tests/system_component_test.rs`，走 `registry_gate()` 串行）覆盖。
         host_ctx.api_registry().unregister(SESSION_ID);
-        let err = crate::utils::session_gateway::start(
-            &host_ctx, &seeded["id"].as_str().unwrap(), None, None, true, None,
-        )
-        .await
-        .expect_err("插件不可用 → 必须显性报错（host-business-decarriage 收尾：降级轨已删）");
+        let err =
+            crate::utils::session_gateway::start(&host_ctx, &seeded["id"].as_str().unwrap(), None, None, true, None)
+                .await
+                .expect_err("插件不可用 → 必须显性报错（host-business-decarriage 收尾：降级轨已删）");
+        let text = err.to_string();
         assert!(
-            err.to_string().contains("session plugin not active"),
-            "错误必须指明插件未激活, got: {err}"
+            text.contains("not declared by any activated plugin") && text.contains("session-create"),
+            "互调面注销后必须由 api-call gate 显性报错并点名 api, got: {err}"
         );
 
         session.lock().await.deactivate().expect("final deactivate");
@@ -2024,7 +2053,8 @@ fn test_session_actions_closed_loop() {
         SESSION_ID,
         &[
             "auth".to_string(),
-            "peer".to_string(), "storage".to_string(),
+            "peer".to_string(),
+            "storage".to_string(),
             "session:read".to_string(),
             // 会话引擎下沉 P1-b：业务会话改走 host-pty 原语
             "pty:spawn".to_string(),
@@ -2039,6 +2069,8 @@ fn test_session_actions_closed_loop() {
 
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
+        // v32（ADR 0031）：桥接门查进程级单中心注册表 → 与闭环用例互斥（见 helper）
+        let _center_desk = lock_auth_center_desk().await;
         let instances = Arc::new(RwLock::new(HashMap::new()));
         let session = Arc::new(Mutex::new(
             wasm_runtime
@@ -2058,11 +2090,9 @@ fn test_session_actions_closed_loop() {
         // working_dir /tmp 必须存在（真实 spawn）；无正统端归属 = 裁决态 1 起点
         let seeded = seed_config_in_plugin_store(&mut *session.lock().await, "动作会话", "/tmp", "bash").await;
         let sid = session_id_of(
-            crate::utils::session_gateway::start(
-                &host_ctx, &seeded["id"].as_str().unwrap(), None, None, true, None,
-            )
-            .await
-            .expect("plugin active → 必须编排成功"),
+            crate::utils::session_gateway::start(&host_ctx, &seeded["id"].as_str().unwrap(), None, None, true, None)
+                .await
+                .expect("plugin active → 必须编排成功"),
             "创建",
         );
         let v = crate::utils::session_gateway::view(&host_ctx, &sid)
@@ -2071,10 +2101,7 @@ fn test_session_actions_closed_loop() {
         assert!(!v.is_null(), "会话应在册");
         assert_eq!(v["name"], serde_json::json!("动作会话"));
         assert_eq!(v["id"], serde_json::json!(sid));
-        assert_eq!(
-            v["status"], serde_json::json!("running"),
-            "创建即启动 → Running"
-        );
+        assert_eq!(v["status"], serde_json::json!("running"), "创建即启动 → Running");
 
         // ==================== 2. 改名（插件互调 api；真源 = 登记域记录） ====================
         let renamed = crate::utils::auth::auth_center::call_api(
@@ -2100,11 +2127,9 @@ fn test_session_actions_closed_loop() {
 
         // ==================== 3. 尺寸裁决四态（规则与登记事实都在插件登记域） ====================
         // 态 1 无渲染端 → 首个请求方即位正统（Desktop）
-        let applied = crate::utils::session_gateway::resize(
-            &host_ctx, &sid, 100, 30, desktop(), false,
-        )
-        .await
-        .expect("resize");
+        let applied = crate::utils::session_gateway::resize(&host_ctx, &sid, 100, 30, desktop(), false)
+            .await
+            .expect("resize");
         assert_eq!(
             applied,
             serde_json::json!({ "status": "applied", "canonical": { "kind": "desktop" } }),
@@ -2112,23 +2137,20 @@ fn test_session_actions_closed_loop() {
         );
 
         // 态 2 单端（归属 = 请求方）→ 直接应用，无确认
-        let applied = crate::utils::session_gateway::resize(
-            &host_ctx, &sid, 110, 32, desktop(), false,
-        )
-        .await
-        .expect("resize again");
+        let applied = crate::utils::session_gateway::resize(&host_ctx, &sid, 110, 32, desktop(), false)
+            .await
+            .expect("resize again");
         assert_eq!(
-            applied["status"], serde_json::json!("applied"),
+            applied["status"],
+            serde_json::json!("applied"),
             "单端 → applied, got: {applied:?}"
         );
 
         // 态 3 多端争用（归属 Desktop；移动端未 force）→ needsConfirmation 且零改动
         // （零改动的行为断言：随后 Desktop resize 依然直通——归属未被抢占）
-        let outcome = crate::utils::session_gateway::resize(
-            &host_ctx, &sid, 80, 24, mobile(), false,
-        )
-        .await
-        .expect("resize contended");
+        let outcome = crate::utils::session_gateway::resize(&host_ctx, &sid, 80, 24, mobile(), false)
+            .await
+            .expect("resize contended");
         assert_eq!(
             outcome,
             serde_json::json!({
@@ -2137,23 +2159,20 @@ fn test_session_actions_closed_loop() {
             }),
             "多端争用 → 需覆盖确认（回执当前正统端）"
         );
-        let still_owner = crate::utils::session_gateway::resize(
-            &host_ctx, &sid, 90, 30, desktop(), false,
-        )
-        .await
-        .expect("original owner resize");
+        let still_owner = crate::utils::session_gateway::resize(&host_ctx, &sid, 90, 30, desktop(), false)
+            .await
+            .expect("original owner resize");
         assert_eq!(
-            still_owner["status"], serde_json::json!("applied"),
+            still_owner["status"],
+            serde_json::json!("applied"),
             "需确认路径必须零改动（归属仍是 Desktop，可直通）"
         );
 
         // 态 4 端接管（force = 覆盖确认通过）→ 应用并移交归属；
         // 移交后原归属者（Desktop）成为被抢占方 → 未 force 需确认
-        let outcome = crate::utils::session_gateway::resize(
-            &host_ctx, &sid, 80, 24, mobile(), true,
-        )
-        .await
-        .expect("resize takeover");
+        let outcome = crate::utils::session_gateway::resize(&host_ctx, &sid, 80, 24, mobile(), true)
+            .await
+            .expect("resize takeover");
         assert_eq!(
             outcome,
             serde_json::json!({
@@ -2162,11 +2181,9 @@ fn test_session_actions_closed_loop() {
             }),
             "force → 应用并移交归属"
         );
-        let displaced = crate::utils::session_gateway::resize(
-            &host_ctx, &sid, 90, 30, desktop(), false,
-        )
-        .await
-        .expect("displaced resize");
+        let displaced = crate::utils::session_gateway::resize(&host_ctx, &sid, 90, 30, desktop(), false)
+            .await
+            .expect("displaced resize");
         assert_eq!(
             displaced,
             serde_json::json!({
@@ -2193,17 +2210,17 @@ fn test_session_actions_closed_loop() {
         assert_eq!(v["status"], serde_json::json!("running"), "重启后 Running");
         assert_eq!(v["name"], serde_json::json!("重命名后"), "重启保持名字（不做二次命名）");
         assert_eq!(
-            v["configId"], serde_json::json!(seeded["id"].as_str().unwrap()),
+            v["configId"],
+            serde_json::json!(seeded["id"].as_str().unwrap()),
             "重启保持 configId"
         );
         // 正统端回到启动端（Desktop）：重启后 Desktop resize 直通
-        let owner_again = crate::utils::session_gateway::resize(
-            &host_ctx, &sid, 95, 35, desktop(), false,
-        )
-        .await
-        .expect("resize after restart");
+        let owner_again = crate::utils::session_gateway::resize(&host_ctx, &sid, 95, 35, desktop(), false)
+            .await
+            .expect("resize after restart");
         assert_eq!(
-            owner_again["status"], serde_json::json!("applied"),
+            owner_again["status"],
+            serde_json::json!("applied"),
             "重启归属回到启动端（Desktop 可直通）"
         );
 
@@ -2220,13 +2237,15 @@ fn test_session_actions_closed_loop() {
         );
 
         // ==================== 6. 插件必需：注销互调面 → 宿主窄转发层显性报错 ====================
+        // 两道门分岔同步骤 5（ADR 0031 K7）：此处注销互调面 → api-call gate 拒
         host_ctx.api_registry().unregister(SESSION_ID);
-        let err = crate::utils::session_gateway::remove(&host_ctx, "any", None)
+        let err = crate::utils::session_gateway::remove(&host_ctx, &sid, None)
             .await
             .expect_err("插件不可用 → 必须显性报错（无宿主降级轨）");
+        let text = err.to_string();
         assert!(
-            err.to_string().contains("session plugin not active"),
-            "错误必须指明插件未激活, got: {err}"
+            text.contains("not declared by any activated plugin") && text.contains("session-remove"),
+            "互调面注销后必须由 api-call gate 显性报错并点名 api, got: {err}"
         );
 
         session.lock().await.deactivate().expect("final deactivate");
@@ -2302,6 +2321,8 @@ fn test_session_annotate_and_devices_closed_loop() {
 
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
+        // v32（ADR 0031）：桥接门查进程级单中心注册表 → 与闭环用例互斥（见 helper）
+        let _center_desk = lock_auth_center_desk().await;
         let instances = Arc::new(RwLock::new(HashMap::new()));
         let session = Arc::new(Mutex::new(
             wasm_runtime
@@ -2324,11 +2345,9 @@ fn test_session_annotate_and_devices_closed_loop() {
         let seeded = seed_config_in_plugin_store(&mut *session.lock().await, "注解会话", "/tmp", "bash").await;
 
         let sid = session_id_of(
-            crate::utils::session_gateway::start(
-                &host_ctx, &seeded["id"].as_str().unwrap(), None, None, true, None,
-            )
-            .await
-            .expect("plugin active → 必须编排成功"),
+            crate::utils::session_gateway::start(&host_ctx, &seeded["id"].as_str().unwrap(), None, None, true, None)
+                .await
+                .expect("plugin active → 必须编排成功"),
             "创建",
         );
         // P1-b 创建同步完成：回执即已登记（无需轮询宿主落库）
@@ -2378,7 +2397,8 @@ fn test_session_annotate_and_devices_closed_loop() {
         assert_eq!(v["taskStatus"].as_str(), Some("asking"), "槽值经对外视图透出");
         assert_eq!(v["taskReason"].as_str(), Some("等待用户答复"));
         assert_eq!(
-            v["taskStatus"], serde_json::json!("asking"),
+            v["taskStatus"],
+            serde_json::json!("asking"),
             "wire 字段名不变（前端 / 移动端契约）"
         );
         // 宿主内核会话表（含其注解槽）已不存在（票 11），真源切换由结构性锁保证
@@ -2394,10 +2414,7 @@ fn test_session_annotate_and_devices_closed_loop() {
             )
             .expect("ghost annotate returns json");
         let r: serde_json::Value = serde_json::from_str(&ghost).unwrap();
-        assert!(
-            r["error"].as_str().is_some(),
-            "未知会话必须显性报错, got: {ghost}"
-        );
+        assert!(r["error"].as_str().is_some(), "未知会话必须显性报错, got: {ghost}");
         assert!(
             crate::utils::auth::auth_center::call_api(
                 &host_ctx,
@@ -2428,7 +2445,10 @@ fn test_session_annotate_and_devices_closed_loop() {
 
         // 宿主命令面只回引擎事实（连接注册表原始记录），派生视图归插件
         assert_eq!(
-            crate::server::websocket::WebSocketManager::global().list_clients().await.len(),
+            crate::server::websocket::WebSocketManager::global()
+                .list_clients()
+                .await
+                .len(),
             0,
             "无头上下文连接注册表为空 → 宿主事实面为空"
         );
@@ -2457,6 +2477,8 @@ fn test_session_annotate_and_devices_closed_loop() {
 #[test]
 
 fn test_filetransfer_consumes_session_center_closed_loop() {
+    // 同一份会话中心私有库：与其余会话闭环用例串行（见 session_plugin_db_guard 文档）
+    let _serial = session_plugin_db_guard();
     use crate::utils::auth::auth_center as bridge;
 
     const FT_ID: &str = "com.bedcode.file-transfer";
@@ -2484,10 +2506,13 @@ fn test_filetransfer_consumes_session_center_closed_loop() {
     // 授权路径等价 PluginHost 装载（manifest permissions 登记）：
     // - 会话中心声明 auth/peer（auth 含记录面；peer 供 consent 取可信集）
     // - file-transfer 声明 peer（宿主应答/降级直查路径需权限门放行）
+    host_ctx.permission.grant_permissions(
+        session_id,
+        &["auth".to_string(), "peer".to_string(), "storage".to_string()],
+    );
     host_ctx
         .permission
-        .grant_permissions(session_id, &["auth".to_string(), "peer".to_string(), "storage".to_string()]);
-    host_ctx.permission.grant_permissions(FT_ID, &["peer".to_string(), "storage".to_string()]);
+        .grant_permissions(FT_ID, &["peer".to_string(), "storage".to_string()]);
     let center_apis = session_apis();
     host_ctx.api_registry().register(
         session_id,
@@ -2499,6 +2524,8 @@ fn test_filetransfer_consumes_session_center_closed_loop() {
 
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
+        // v32（ADR 0031）：桥接门查进程级单中心注册表 → 与闭环用例互斥（见 helper）
+        let _center_desk = lock_auth_center_desk().await;
         host_ctx
             .message_bus
             .subscribe_static(
@@ -2798,7 +2825,8 @@ fn test_session_output_ring_fetch_closed_loop() {
         SESSION_ID,
         &[
             "auth".to_string(),
-            "peer".to_string(), "storage".to_string(),
+            "peer".to_string(),
+            "storage".to_string(),
             "session:read".to_string(),
             // 票 04：输出消费二进制原语（terminal:output）
             "terminal:output".to_string(),
@@ -2815,6 +2843,8 @@ fn test_session_output_ring_fetch_closed_loop() {
 
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
+        // v32（ADR 0031）：桥接门查进程级单中心注册表 → 与闭环用例互斥（见 helper）
+        let _center_desk = lock_auth_center_desk().await;
         let instances = Arc::new(RwLock::new(HashMap::new()));
         let session = Arc::new(Mutex::new(
             wasm_runtime
@@ -2842,11 +2872,9 @@ fn test_session_output_ring_fetch_closed_loop() {
         )
         .await;
         let sid = session_id_of(
-            crate::utils::session_gateway::start(
-                &host_ctx, &seeded["id"].as_str().unwrap(), None, None, true, None,
-            )
-            .await
-            .expect("plugin active → 必须编排成功"),
+            crate::utils::session_gateway::start(&host_ctx, &seeded["id"].as_str().unwrap(), None, None, true, None)
+                .await
+                .expect("plugin active → 必须编排成功"),
             "创建",
         );
         // P1-b 创建同步完成：回执即已登记并已启动（无需轮询 / start_existing_session）
@@ -2854,10 +2882,7 @@ fn test_session_output_ring_fetch_closed_loop() {
             .await
             .expect("view");
         assert!(!v.is_null(), "会话应在册");
-        assert_eq!(
-            v["status"], serde_json::json!("running"),
-            "创建即启动 → Running"
-        );
+        assert_eq!(v["status"], serde_json::json!("running"), "创建即启动 → Running");
 
         // ==================== 2. 等 bash 输出进入会话 ring（echo + pwd + prompt） ====================
 
@@ -3010,6 +3035,8 @@ fn test_session_input_via_gateway_closed_loop() {
 
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
+        // v32（ADR 0031）：桥接门查进程级单中心注册表 → 与闭环用例互斥（见 helper）
+        let _center_desk = lock_auth_center_desk().await;
         let instances = Arc::new(RwLock::new(HashMap::new()));
         let session = Arc::new(Mutex::new(
             wasm_runtime

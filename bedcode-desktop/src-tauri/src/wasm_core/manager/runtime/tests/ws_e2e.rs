@@ -295,9 +295,9 @@ fn test_ws_endpoint_server_domain_roundtrip() {
     let _e2e_guard = lock_ws_fixture_e2e();
     let rt = tokio::runtime::Runtime::new().expect("tokio multi-thread runtime");
     rt.block_on(ws_e2e_guard("ws 服务端域 e2e", async {
+        use crate::utils::auth::jwt::JwtService;
         use futures_util::SinkExt;
         use tokio_tungstenite::tungstenite::Message;
-        use crate::utils::auth::jwt::JwtService;
 
         const PLUGIN_ID: &str = "com.bedcode.ws-test";
         let connect_topic = ws_event_topic(WS_CLIENT_CONNECT, PLUGIN_ID);
@@ -676,7 +676,11 @@ fn test_ws_endpoint_server_domain_roundtrip() {
         };
         let secure_url = format!("ws://127.0.0.1:{port}/ws/plugin/{PLUGIN_ID}/secure");
         let token = JwtService::new()
-            .generate_token("ws-test-device".to_string(), Some("Phone".to_string()), Some("fp-ws".to_string()))
+            .generate_token(
+                "ws-test-device".to_string(),
+                Some("Phone".to_string()),
+                Some("fp-ws".to_string()),
+            )
             .expect("mint jwt");
         let (mut client_d, _) = tokio_tungstenite::connect_async(&secure_url)
             .await
@@ -704,7 +708,10 @@ fn test_ws_endpoint_server_domain_roundtrip() {
             std::time::Duration::from_secs(5),
         )
         .await;
-        assert!(ws_event_payload(&state, &connect_topic).is_some(), "JWT 成功必须产生接入事件");
+        assert!(
+            ws_event_payload(&state, &connect_topic).is_some(),
+            "JWT 成功必须产生接入事件"
+        );
         let clients = ws_wait_clients(&plugin, &secure_endpoint, 1).await;
         assert_eq!(clients[0]["authenticated"], true, "认证成功后注册表必须可见");
         client_d
@@ -736,10 +743,13 @@ fn test_ws_endpoint_server_domain_roundtrip() {
         ));
         let _ = ws_poll_state(
             &plugin,
-            |s| s["events"].as_array().is_some_and(|events| events.iter().any(|event| {
-                event["topic"] == disconnect_topic.as_str()
-                    && event["payload"]["clientId"] == client_d_id
-            })),
+            |s| {
+                s["events"].as_array().is_some_and(|events| {
+                    events.iter().any(|event| {
+                        event["topic"] == disconnect_topic.as_str() && event["payload"]["clientId"] == client_d_id
+                    })
+                })
+            },
             std::time::Duration::from_secs(5),
         )
         .await;
@@ -933,14 +943,12 @@ fn test_ws_two_plugin_isolation() {
             "B 看不到 A 的端点"
         );
         assert_eq!(
-            crate::wasm_core::host_api::ws::ws_list_clients(ctx_b.as_ref(), PLUGIN_B, &endpoint_a)
-                .unwrap_err(),
+            crate::wasm_core::host_api::ws::ws_list_clients(ctx_b.as_ref(), PLUGIN_B, &endpoint_a).unwrap_err(),
             "not owner of ws endpoint",
             "B 不得查询 A 的端点客户端"
         );
         assert_eq!(
-            crate::wasm_core::host_api::ws::ws_is_connected(ctx_a.as_ref(), PLUGIN_A, &handle_b)
-                .unwrap_err(),
+            crate::wasm_core::host_api::ws::ws_is_connected(ctx_a.as_ref(), PLUGIN_A, &handle_b).unwrap_err(),
             "not owner of ws handle",
             "A 不得操作 B 的出站句柄"
         );
@@ -964,13 +972,7 @@ fn test_ws_two_plugin_isolation() {
         );
         // B 的对端仍在线：可继续发送（fail-visible 之外的正向断言）
         assert!(
-            crate::wasm_core::host_api::ws::ws_send_text(
-                ctx_b.as_ref(),
-                PLUGIN_B,
-                &handle_b,
-                "still-alive"
-            )
-            .is_ok(),
+            crate::wasm_core::host_api::ws::ws_send_text(ctx_b.as_ref(), PLUGIN_B, &handle_b, "still-alive").is_ok(),
             "A 停用后 B 仍可发送"
         );
 
@@ -1086,7 +1088,13 @@ fn test_session_control_endpoint_direct_roundtrip() {
                 instances: Arc::new(RwLock::new(HashMap::from([(PLUGIN_ID.to_string(), plugin.clone())]))),
             }))
             .await;
-        plugin.lock().await.activate().expect("activate session");
+        // guest `activate` 会 `auth-center-register` / `deactivate` 会 `auth-center-unregister`
+        // → 写进程级单中心注册表；必须在测试闸门内（否则与认证面闭环用例互清台，
+        // 表现为**别的**用例偶发红）。只包住这一行，不包整个用例。
+        {
+            let _center_desk = crate::wasm_core::host_api::auth_center::hold_registry_desk().await;
+            plugin.lock().await.activate().expect("activate session");
+        }
 
         // 激活期等价登记（PluginHost::activate_plugin 激活成功分支的对应物）：
         // 声明端点在端点表落地后，插件端点路由才可达
@@ -1099,11 +1107,18 @@ fn test_session_control_endpoint_direct_roundtrip() {
             host_ctx.message_bus.clone(),
         )
         .expect("register declared session/control endpoint");
-        assert_eq!(entry.mount_path, "/ws/plugin/com.bedcode.terminal-session/session-control");
+        assert_eq!(
+            entry.mount_path,
+            "/ws/plugin/com.bedcode.terminal-session/session-control"
+        );
 
         // 真实 JWT（同一进程 secret-store：generate/verify 同密钥）
         let token = JwtService::new()
-            .generate_token("dev-direct-1".to_string(), Some("Phone".to_string()), Some("fp-1".to_string()))
+            .generate_token(
+                "dev-direct-1".to_string(),
+                Some("Phone".to_string()),
+                Some("fp-1".to_string()),
+            )
             .expect("mint jwt");
 
         let url = format!("ws://127.0.0.1:{port}/ws/plugin/{PLUGIN_ID}/session-control");
@@ -1253,9 +1268,14 @@ fn test_session_control_endpoint_direct_roundtrip() {
             }
             other => panic!("期望 stop_session 回包，got: {other:?}"),
         }
-        // pty:exit 终态收尾是异步的（退出事件驱动）；轮询 list 直到 stopped
+        // pty:exit 终态收尾是异步的（退出事件驱动）；**按截止时间轮询** list 直到 stopped。
+        // 原形态是「40 次紧循环」——每轮只是一次快回包，40 轮总共只有几十毫秒，等价于
+        // 「立刻断言」：全量并行跑时（CPU 被 1000+ 用例抢）pty 退出事件来不及落库就红，
+        // 且失败信息看起来像产品缺陷（实为轮询窗口太短）。改成 20s 截止 + 100ms 间隔。
+        let poll_deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         let mut stopped = false;
-        for _ in 0..40 {
+        let mut last_seen = String::from("<no session_list reply>");
+        while std::time::Instant::now() < poll_deadline {
             client
                 .send(Message::Text(r#"{"type":"list_sessions"}"#.to_string()))
                 .await
@@ -1265,19 +1285,20 @@ fn test_session_control_endpoint_direct_roundtrip() {
             {
                 let reply: serde_json::Value = serde_json::from_str(&text).expect("reply json");
                 if reply["type"] == "session_list" {
-                    if let Some(status) = reply["sessions"].as_array()
+                    let status = reply["sessions"]
+                        .as_array()
                         .and_then(|a| a.first())
-                        .and_then(|s| s["status"].as_str())
-                    {
-                        if status == "stopped" {
-                            stopped = true;
-                            break;
-                        }
+                        .and_then(|s| s["status"].as_str());
+                    last_seen = format!("{status:?}");
+                    if status == Some("stopped") {
+                        stopped = true;
+                        break;
                     }
                 }
             }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
-        assert!(stopped, "stop 后会话应进入 stopped 终态（pty:exit 驱动）");
+        assert!(stopped, "stop 后会话应进入 stopped 终态（pty:exit 驱动），最后看到 {last_seen}");
 
         // remove_session → 摘记录 → 列表清空
         client
@@ -1310,7 +1331,13 @@ fn test_session_control_endpoint_direct_roundtrip() {
         server_handle.stop(true).await;
         server_task.abort();
         crate::server::websocket::endpoint::purge_for_plugin(PLUGIN_ID);
-        plugin.lock().await.deactivate().expect("deactivate = 0");
+        // guest `activate` 会 `auth-center-register` / `deactivate` 会 `auth-center-unregister`
+        // → 写进程级单中心注册表；必须在测试闸门内（否则与认证面闭环用例互清台，
+        // 表现为**别的**用例偶发红）。只包住这一行，不包整个用例。
+        {
+            let _center_desk = crate::wasm_core::host_api::auth_center::hold_registry_desk().await;
+            plugin.lock().await.deactivate().expect("deactivate = 0");
+        }
     }));
 }
 
@@ -1405,7 +1432,13 @@ fn test_terminal_stream_endpoint_closed_loop() {
                 instances: Arc::new(RwLock::new(HashMap::from([(PLUGIN_ID.to_string(), plugin.clone())]))),
             }))
             .await;
-        plugin.lock().await.activate().expect("activate session");
+        // guest `activate` 会 `auth-center-register` / `deactivate` 会 `auth-center-unregister`
+        // → 写进程级单中心注册表；必须在测试闸门内（否则与认证面闭环用例互清台，
+        // 表现为**别的**用例偶发红）。只包住这一行，不包整个用例。
+        {
+            let _center_desk = crate::wasm_core::host_api::auth_center::hold_registry_desk().await;
+            plugin.lock().await.activate().expect("activate session");
+        }
 
         // 声明端点等价登记（票 04：terminal 端点，auth=jwt）
         let entry = crate::server::websocket::endpoint::register(
@@ -1443,7 +1476,10 @@ fn test_terminal_stream_endpoint_closed_loop() {
         let create_out = plugin
             .lock()
             .await
-            .invoke_command("session.create", &serde_json::json!({ "configId": config_id }).to_string())
+            .invoke_command(
+                "session.create",
+                &serde_json::json!({ "configId": config_id }).to_string(),
+            )
             .expect("create session via plugin command");
         let session_id = serde_json::from_str::<serde_json::Value>(&create_out)
             .expect("create json")
@@ -1454,7 +1490,11 @@ fn test_terminal_stream_endpoint_closed_loop() {
 
         // 真实 JWT + 直连 terminal 端点 + 首消息认证
         let token = JwtService::new()
-            .generate_token("dev-term-1".to_string(), Some("Pad".to_string()), Some("fp-2".to_string()))
+            .generate_token(
+                "dev-term-1".to_string(),
+                Some("Pad".to_string()),
+                Some("fp-2".to_string()),
+            )
             .expect("mint jwt");
         let url = format!("ws://127.0.0.1:{port}/ws/plugin/{PLUGIN_ID}/terminal");
         let (mut client, _) = tokio_tungstenite::connect_async(&url)
@@ -1504,10 +1544,7 @@ fn test_terminal_stream_endpoint_closed_loop() {
                 Some(Message::Text(text)) => {
                     // poll 期间只应有输出（binary）与可能的 ring_resync；error 即异常
                     let v: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
-                    assert!(
-                        v["type"] != "error",
-                        "输出过程中不得出现 error 帧: {text}"
-                    );
+                    assert!(v["type"] != "error", "输出过程中不得出现 error 帧: {text}");
                 }
                 None => {}
                 _ => {}
@@ -1562,7 +1599,10 @@ fn test_terminal_stream_endpoint_closed_loop() {
         plugin
             .lock()
             .await
-            .invoke_command("session.close", &serde_json::json!({ "sessionId": session_id }).to_string())
+            .invoke_command(
+                "session.close",
+                &serde_json::json!({ "sessionId": session_id }).to_string(),
+            )
             .expect("close session via plugin command");
         let mut got_stop = false;
         for _ in 0..60 {
@@ -1593,7 +1633,13 @@ fn test_terminal_stream_endpoint_closed_loop() {
         server_handle.stop(true).await;
         server_task.abort();
         crate::server::websocket::endpoint::purge_for_plugin(PLUGIN_ID);
-        plugin.lock().await.deactivate().expect("deactivate = 0");
+        // guest `activate` 会 `auth-center-register` / `deactivate` 会 `auth-center-unregister`
+        // → 写进程级单中心注册表；必须在测试闸门内（否则与认证面闭环用例互清台，
+        // 表现为**别的**用例偶发红）。只包住这一行，不包整个用例。
+        {
+            let _center_desk = crate::wasm_core::host_api::auth_center::hold_registry_desk().await;
+            plugin.lock().await.deactivate().expect("deactivate = 0");
+        }
     }));
 }
 
@@ -1696,7 +1742,13 @@ fn test_ws_device_events_and_auth_records_closed_loop() {
                 instances: Arc::new(RwLock::new(HashMap::from([(PLUGIN_ID.to_string(), plugin.clone())]))),
             }))
             .await;
-        plugin.lock().await.activate().expect("activate session");
+        // guest `activate` 会 `auth-center-register` / `deactivate` 会 `auth-center-unregister`
+        // → 写进程级单中心注册表；必须在测试闸门内（否则与认证面闭环用例互清台，
+        // 表现为**别的**用例偶发红）。只包住这一行，不包整个用例。
+        {
+            let _center_desk = crate::wasm_core::host_api::auth_center::hold_registry_desk().await;
+            plugin.lock().await.activate().expect("activate session");
+        }
 
         // 声明端点等价登记（票 09b：session-control 端点，auth=jwt）
         let entry = crate::server::websocket::endpoint::register(
@@ -1708,7 +1760,10 @@ fn test_ws_device_events_and_auth_records_closed_loop() {
             host_ctx.message_bus.clone(),
         )
         .expect("register declared session/control endpoint");
-        assert_eq!(entry.mount_path, "/ws/plugin/com.bedcode.terminal-session/session-control");
+        assert_eq!(
+            entry.mount_path,
+            "/ws/plugin/com.bedcode.terminal-session/session-control"
+        );
 
         // ==================== 播种认证记录（私有库真源，auth-records-import） ====================
         // 配对行（fp-dev-1，活跃，connectCount=0）+ 一条 open 连接历史行
@@ -1737,7 +1792,11 @@ fn test_ws_device_events_and_auth_records_closed_loop() {
 
         // 反例 1：未配对指纹（fp-ghost）连接 → touch 零行更新（无派生行、count 不变）
         let ghost_token = JwtService::new()
-            .generate_token("ghost-dev".to_string(), Some("Ghost".to_string()), Some("fp-ghost".to_string()))
+            .generate_token(
+                "ghost-dev".to_string(),
+                Some("Ghost".to_string()),
+                Some("fp-ghost".to_string()),
+            )
             .expect("mint ghost jwt");
         let ghost_url = format!("ws://127.0.0.1:{port}/ws/plugin/{PLUGIN_ID}/session-control");
         let (mut ghost, _) = tokio_tungstenite::connect_async(&ghost_url)
@@ -1774,7 +1833,11 @@ fn test_ws_device_events_and_auth_records_closed_loop() {
 
         // 正例：已配对指纹（fp-dev-1）连接 → touch（lastSeen + connectCount 0→1）
         let token = JwtService::new()
-            .generate_token("dev-1".to_string(), Some("Pixel 9".to_string()), Some("fp-dev-1".to_string()))
+            .generate_token(
+                "dev-1".to_string(),
+                Some("Pixel 9".to_string()),
+                Some("fp-dev-1".to_string()),
+            )
             .expect("mint jwt");
         let url = format!("ws://127.0.0.1:{port}/ws/plugin/{PLUGIN_ID}/session-control");
         let (mut client, _) = tokio_tungstenite::connect_async(&url)
@@ -1809,10 +1872,7 @@ fn test_ws_device_events_and_auth_records_closed_loop() {
             panic!("已配对连接必须 touch 认证记录（connectCount 0→1），devices-list 未观察到");
         }
         .await;
-        assert!(
-            touched["lastSeen"].is_string(),
-            "touch 必须刷新 lastSeen: {touched}"
-        );
+        assert!(touched["lastSeen"].is_string(), "touch 必须刷新 lastSeen: {touched}");
 
         // 断开 → client-disconnect → 插件 close_open：open 历史行回填 disconnectedAt
         let _ = client.close(None).await;
@@ -1846,6 +1906,12 @@ fn test_ws_device_events_and_auth_records_closed_loop() {
         server_handle.stop(true).await;
         server_task.abort();
         crate::server::websocket::endpoint::purge_for_plugin(PLUGIN_ID);
-        plugin.lock().await.deactivate().expect("deactivate = 0");
+        // guest `activate` 会 `auth-center-register` / `deactivate` 会 `auth-center-unregister`
+        // → 写进程级单中心注册表；必须在测试闸门内（否则与认证面闭环用例互清台，
+        // 表现为**别的**用例偶发红）。只包住这一行，不包整个用例。
+        {
+            let _center_desk = crate::wasm_core::host_api::auth_center::hold_registry_desk().await;
+            plugin.lock().await.deactivate().expect("deactivate = 0");
+        }
     }));
 }

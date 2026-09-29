@@ -218,7 +218,13 @@ fn perf_ws_terminal_output_throughput() {
                 instances: Arc::new(RwLock::new(HashMap::from([(PLUGIN_ID.to_string(), plugin.clone())]))),
             }))
             .await;
-        plugin.lock().await.activate().expect("activate session");
+        // guest `activate` 会 `auth-center-register` / `deactivate` 会 `auth-center-unregister`
+        // → 写进程级单中心注册表；必须在测试闸门内（否则与认证面闭环用例互清台，
+        // 表现为**别的**用例偶发红）。只包住这一行，不包整个用例（本用例长达一分钟）。
+        {
+            let _center_desk = crate::wasm_core::host_api::auth_center::hold_registry_desk().await;
+            plugin.lock().await.activate().expect("activate session");
+        }
 
         let entry = crate::server::websocket::endpoint::register(
             PLUGIN_ID,
@@ -368,6 +374,12 @@ fn perf_ws_terminal_output_throughput() {
         server_handle.stop(true).await;
         server_task.abort();
         crate::server::websocket::endpoint::purge_for_plugin(PLUGIN_ID);
-        plugin.lock().await.deactivate().expect("deactivate = 0");
+        // guest `activate` 会 `auth-center-register` / `deactivate` 会 `auth-center-unregister`
+        // → 写进程级单中心注册表；必须在测试闸门内（否则与认证面闭环用例互清台，
+        // 表现为**别的**用例偶发红）。只包住这一行，不包整个用例（本用例长达一分钟）。
+        {
+            let _center_desk = crate::wasm_core::host_api::auth_center::hold_registry_desk().await;
+            plugin.lock().await.deactivate().expect("deactivate = 0");
+        }
     }));
 }

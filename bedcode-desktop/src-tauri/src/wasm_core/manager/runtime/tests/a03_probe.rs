@@ -133,6 +133,8 @@ fn a03_p1a_sync_host_impl_under_async_store() {
 /// 全链路。产物缺失（未跑插件构建）时跳过。
 #[test]
 fn a03_p1b_wasip3_artifact_full_closed_loop() {
+    // 认证中心注册表闸门（ADR 0031 K1 单中心 desk）：同步用例用自带 runtime 取 permit
+    let gate_rt = tokio::runtime::Runtime::new().expect("auth center gate runtime");
     let wasm_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../resources/plugins/desktop/com.bedcode.terminal-session/bedcode_plugin_terminal_session.wasm");
     if !wasm_path.exists() {
@@ -181,7 +183,13 @@ fn a03_p1b_wasip3_artifact_full_closed_loop() {
         )
         .expect("load wasip3 session: all imports must resolve");
 
-    assert_eq!(plugin.activate().expect("activate"), 0, "activate 必须成功");
+    // guest `activate` 会 `auth-center-register` / `deactivate` 会 `auth-center-unregister`
+    // → 写进程级单中心注册表（进程级单例）；本用例是同步 `#[test]`，故用自带
+    // runtime 取闸门 permit，并只包住写表的那一行。
+    {
+        let _center_desk = gate_rt.block_on(crate::wasm_core::host_api::auth_center::hold_registry_desk());
+        assert_eq!(plugin.activate().expect("activate"), 0, "activate 必须成功");
+    }
     // 命令面（session.status 回显 manifest 声明，宿主侧无业务依赖）
     let v = run_command(&mut plugin, "session.status", "{}");
     assert_eq!(
@@ -196,7 +204,13 @@ fn a03_p1b_wasip3_artifact_full_closed_loop() {
     // manifest 往返
     let m: serde_json::Value = serde_json::from_str(&plugin.get_manifest().expect("manifest")).unwrap();
     assert_eq!(m["id"], "com.bedcode.terminal-session");
-    assert_eq!(plugin.deactivate().expect("deactivate"), 0, "deactivate 必须成功");
+    // guest `activate` 会 `auth-center-register` / `deactivate` 会 `auth-center-unregister`
+    // → 写进程级单中心注册表（进程级单例）；本用例是同步 `#[test]`，故用自带
+    // runtime 取闸门 permit，并只包住写表的那一行。
+    {
+        let _center_desk = gate_rt.block_on(crate::wasm_core::host_api::auth_center::hold_registry_desk());
+        assert_eq!(plugin.deactivate().expect("deactivate"), 0, "deactivate 必须成功");
+    }
     println!("[a03][P1-b] session 产物全链路（activate → status → hooks → manifest → deactivate）OK");
 }
 // ==================== P1-c · 生产产物在 async store 下零回归 ====================

@@ -491,3 +491,71 @@ fn retired_session_observation_surface_is_not_reintroduced() {
         violations.join("\n")
     );
 }
+
+// ==================== 认证中心发现路径防回接锁（ADR 0031 v32） ====================
+
+/// 源码扫描锁：宿主侧不得再出现「能力探测 + 排序取首个」的认证中心发现路径。
+///
+/// v32（2026-09-29，ADR 0031）把认证中心角色发现从「扫描导出 auth-policy 的
+/// 激活插件 + 按 id 取第一个」改为**注册表显式登记**（`auth-center-register` +
+/// 唯一性仲裁）——旧路径在候选 > 1 时选中未实现策略的插件（2026-09-29 移动端
+/// 4001 日志风暴事故根因），且与 api_registry 锚点形成**两套发现机制并存**的
+/// 结构病灶。谁把这些符号加回宿主源码（函数 / 常量 / fail-open 降级），谁就要
+/// 先推翻 ADR 0031 的裁定。
+///
+/// 只扫「宿主源码里的定义与调用」，不扫注释：本文件与各模块的说明段落里出现这些
+/// 名字是**记账**（说清为什么删），不是回接。fail-visible 形态③（删即抛）。
+#[test]
+fn retired_auth_center_discovery_is_not_reintroduced() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut violations: Vec<String> = Vec::new();
+
+    // 逐条列出「退役面的形状」。命中即红。
+    let forbidden: [&str; 4] = [
+        // 旧角色发现：扫描 + 排序取首个（v32 改查注册表）
+        "auth_center_candidates",
+        // 旧桥接锚点：api_registry 探活（v32 退役，改查注册表 is_registered）
+        "SESSION_MARKER_API",
+        // 旧 fail-open：插件不可用时记录降级并放行（v32 改 fail-closed 拒绝）
+        "log_fallback",
+        // 旧锚点查询辅助函数（随 SESSION_MARKER_API 一并退役）
+        "fn api_registered",
+    ];
+
+    let mut stack = vec![root.clone()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let Ok(content) = std::fs::read_to_string(&path) else { continue };
+            // 本文件是锁自身，跳过（避免自匹配）
+            if path.ends_with("wasm_flow_test.rs") {
+                continue;
+            }
+            for (idx, raw_line) in content.lines().enumerate() {
+                let line = raw_line.trim_start();
+                if line.starts_with("//") {
+                    continue;
+                }
+                for needle in forbidden {
+                    if line.contains(needle) {
+                        violations.push(format!("{}:{}: {}", path.display(), idx + 1, line.trim()));
+                    }
+                }
+            }
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "认证中心发现路径（v32 已整体退役，改注册表显式登记）出现回接痕迹：\n{}",
+        violations.join("\n")
+    );
+}
