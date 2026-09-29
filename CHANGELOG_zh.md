@@ -13,44 +13,25 @@
 > 基础建设变更（wasmtime 47 → 48，见「基础建设」节）——**两端版本号均不动**；桌面批次的
 > 范围豁免与移动端受损清单见「文档」节。
 
-#### `packages/` 下的测试夹具合并为一个按 feature 选择的 crate（桌面测试基建；无生产代码、无 ABI、无版本号变动）
+#### SDK 的 `wasm_entry!` 不再把 guest 自报失败记为 error 级（桌面 SDK 行为变更；四个 wasm 应用产物已重建；SDK 包需重新发布）
 
-- **做了什么**：6 个 SDK 绑定夹具 `plugin-http-test` / `plugin-task-test` / `plugin-pty-test` /
-  `plugin-wasip3-test` / `plugin-sdk-test` / `plugin-ws-test` 合并为单一
-  `packages/plugin-sdk-fixtures` crate（一个夹具占一个 `[features]` 槽位）并**删除**。
-  六份几乎逐字重复的「mtime 检查 + `cargo build`」收成一份参数化
-  `build_sdk_fixture(feature)`，原六个 builder 各变成一行转发
-- **feature 互斥是硬约束，但理由不是人们直觉的那个**：spike 推翻了最直观的说法。两个
-  feature 同时编**不会**撞名——`wasm_entry!` / `export!` 在各自 module 内生成不冲突的符号，
-  产物还大了约四倍、两个夹具都编进去了。互斥的真正理由是**产物歧义**：
-  `build_sdk_fixture(feature)` 按 feature 名归档产物，一个产物必须无歧义地对应一个夹具。
-  cargo 表达不了「至多一个」，故该约束由 `compile_error!` 兜底
-- **产物同名冲突及其引发的竞态**：各 feature 产出的都是
-  `bedcode_plugin_sdk_fixtures.wasm`，后构建覆盖先构建。解法是按 feature 归档成带后缀的
-  产物名。但这**还不够**——测试并行时，某线程会归档到**另一个线程半写完**的文件
-  （实测报错 `failed to parse WebAssembly module`），故 build + 归档改为进程级互斥锁串行，
-  取锁后再做一次新鲜度缓存复查
-- **漂移锁抓出的是真实覆盖漏洞，不只是数字变了**：
-  `production_manifests_declare_only_known_vocabulary` 会断言自己扫了多少份 manifest，
-  5 份 `plugin.json` 合进一个 crate 的分 feature `http.json` / `pty.json` / `task.json` /
-  `ws.json` + 根 `plugin.json` 后，从 11 掉到 7。原锁只认单夹具形态的 `plugin.json`
-  文件名，于是 **4 份 fixture manifest 静默掉出了权限词汇表校验**。现改为扫目录下全部
-  `*.json`、靠「有 `id` 字段」筛出 plugin manifest（`package.json` / `tsconfig.json`
-  无 `id`，天然跳过），下限提到 11 并写明构成
-- **分夹具 manifest**：合集 crate 每夹具一份 `<fixture>.json`；根 `plugin.json` 归 `sdk`
-  夹具——因为 `#[plugin_api]` 在编译期硬读该路径（ADR 0005 单一真源）并比对 trait 方法名
-  与 `api` 字段，让模块另指一份会让那个防漂移比对形同虚设
-- **`plugin-wasi-test` 保持独立 crate 且固定 `wasm32-wasip2`**：曾按「共享 `WasiCtx` + p2/p3
-  两套 linker 均注册 ⇒ 与 target 无关」的推断把 preopen 迁到 wasip3，**实测证伪**——两个
-  preopen E2E 均 trap 于 `filesystem_method_descriptor_open_at`：p3 linker 接上了，但预打开
-  目录的能力没建到 p3 filesystem 接口上。已回退，两个用例全绿，结论写进了源码注释。
-  夹具合并不要求统一 target
-- **`plugin-bench-test` 保持独立**（749 行 / 29 命令）：性能基准夹具与功能闭环夹具是两类东西
-- **验证**：宿主 `cargo test --lib` **1058 绿 / 0 红 / 1 ignored**（删除六个 crate 后复跑同结果）；
-  `scripts/wasip3-toolchain.sh fixture` 仍能从合并后的 crate 产出通过 magic 校验的 Component。
-  `bedcode.wit` 未动，无 ABI 影响
-
-### 功能
+- **做了什么**：宏内 10 条失败路径——`activate` / `deactivate` / `on_startup` /
+  `on_shutdown` / `on_message` / `on_message_binary` / `on_process_done` /
+  `on_ws_message` / `on_ws_client_message` / `on_task_event`——由 `log_error` 改为 `log_warn`
+- **依据**：AGENTS.md §8 的硬规则「**guest 自报的可处理错误不升 `error!`**」。这些 `Err` 是
+  插件自己报告的失败（双层 Result 的内层），不是宿主侧证据。真正的宿主故障（trap、
+  Store 中毒、fuel 耗尽）本来就由宿主运行时自己以 `error!` 记录并计数，所以降级**不会
+  漏掉任何一次宿主故障**；它只是阻止 error 级退化成「某个插件返回了个 Err」——那会让这个
+  级别失去告警价值
+- **为何错这么久没被发现**：契约锁 `engine_limits::test_component_guest_self_reported_failure_no_host_error`
+  一直只跑手写 wit-bindgen 夹具（直接返回 `Err(String)`，根本不经本宏），SDK 这条路径
+  从未被放到该断言前面。夹具并到 SDK 绑定形态后才第一次照到
+- **影响面**：SDK 行为变更，四个 wasm 应用产物已重建（`pnpm run build`，wasmHash 重新
+  注入），SDK 包需重新发布。WIT 未变、ABI 号未动、宿主代码未改
+- **运维提醒**：若有基于 error 级插件日志的告警，将不再在那里看到 guest 自报失败；消息
+  以同样内容降为 warn 保留，宿主侧故障不受影响
+- **验证**：SDK crate 158 绿 + `wasm32-wasip3` release 构建通过；宿主 `cargo test` lib
+  1057 绿，全部集成 target 绿
 
 #### 生物认证面完全下沉认证中心 —— 公钥托管 + 验签执行离开宿主（B-downsink，桌面端 ABI v33 → v34；**破坏性：已绑定生物认证的设备需重新绑定**；移动端 WIT/ABI 不动）
 
