@@ -200,6 +200,33 @@ impl bedcode::plugin::host_auth::Host for WasmPluginState {
     fn device_token_verify(&mut self, token: String) -> Result<String, String> {
         auth::auth_device_token_verify(self.host_ctx.as_ref(), &self.plugin_id, &token)
     }
+
+    // ==================== v32：认证中心显式注册 + 组合式认证原语（ADR 0031） ====================
+    // 属主 = 注册调用方插件实例的 plugin_id；权限门 `auth` + 单中心唯一性仲裁在
+    // host_api/auth_center.rs 注册表；auth-method-invoke 零解析窄转发到中心的
+    // `auth-grant` 互调 api（宿主不解释 method/params 语义）。
+
+    fn auth_center_register(&mut self, methods: Vec<String>) -> Result<String, String> {
+        auth::auth_center_register(self.host_ctx.as_ref(), &self.plugin_id, methods)
+    }
+
+    fn auth_center_unregister(&mut self) -> Result<(), String> {
+        auth::auth_center_unregister(self.host_ctx.as_ref(), &self.plugin_id)
+    }
+
+    fn auth_methods_list(&mut self) -> Result<Vec<String>, String> {
+        auth::auth_methods_list(self.host_ctx.as_ref(), &self.plugin_id)
+    }
+
+    fn auth_method_invoke(&mut self, method: String, params: String) -> Result<String, String> {
+        auth::auth_method_invoke(
+            self.host_ctx.as_ref(),
+            self.host_ctx.as_ref(),
+            &self.plugin_id,
+            &method,
+            &params,
+        )
+    }
 }
 
 // ==================== host-pty（v16 插件私有伪终端） ====================
@@ -1282,6 +1309,18 @@ impl LoadedWasmPlugin {
                 abi::ABI_VERSION
             );
         }
+        // v32 反向（产物新于宿主）：host-auth 新增 `auth-center-register`（认证中心
+        // 显式注册，ADR 0031）——旧宿主 linker 无该 import 实现 → 实例化报点名；
+        // 此时问题在宿主太旧（升级 BedCode），不是产物要重建，故单独一条指引
+        if instantiate_error.contains("auth-center-register") || instantiate_error.contains("auth-method-invoke") {
+            return format!(
+                "（该产物使用了 ABI v{} 的 host-auth 认证中心注册/组合式认证原语 \
+                 （auth-center-register / auth-method-invoke），当前宿主仅支持 ABI v{}，\
+                 请升级 BedCode）",
+                abi::ABI_VERSION,
+                abi::ABI_VERSION
+            );
+        }
         let is_stale_contract = instantiate_error.contains("host-session")
             || instantiate_error.contains("host-terminal")
             || instantiate_error.contains("terminal-hooks")
@@ -1901,11 +1940,7 @@ fn resolve_preopen_dirs_with_home(
     expand_preopen_declarations_with_home(plugin_id, declared_dirs, home_override)
         .into_iter()
         .filter(|dir| {
-            let needed = if dir.readonly() {
-                FsOps::READ
-            } else {
-                FsOps::READ_WRITE
-            };
+            let needed = if dir.readonly() { FsOps::READ } else { FsOps::READ_WRITE };
             block_on_async(host_ctx.fs_auth.is_granted(plugin_id, dir.path(), needed))
         })
         .collect()
@@ -2303,6 +2338,40 @@ mod tests {
         );
         let msg_v29b = "unknown import `bedcode:plugin/host-http.unregister-endpoint` has not been defined";
         assert!(LoadedWasmPlugin::stale_artifact_rebuild_hint(msg_v29b).contains("升级 BedCode"));
+
+        // v32 反向（认证中心注册专项 ADR 0031）：host-auth 追加 `auth-center-register`
+        // / `auth-method-invoke`——v32+ 产物在 v31 宿主上实例化失败点名该 import，
+        // 问题在宿主太旧，指引必须是「升级 BedCode」而非「重建产物」。
+        // 真实 wasmtime 文案同时含 `not found in the linker`，若分支次序写错会被
+        // 后面的通用旧产物分支劫持（给出「重建插件产物」的错误指引）——故此处
+        // 除正向断言外还要反断言那条误导文案不出现。
+        let msg_v32 = "component imports instance `bedcode:plugin/host-auth`, but a matching \
+                       implementation was not found in the linker: unknown import \
+                       `auth-center-register` has not been defined";
+        let hint_v32 = LoadedWasmPlugin::stale_artifact_rebuild_hint(msg_v32);
+        assert!(hint_v32.contains("升级 BedCode"), "v32 反向必须指宿主升级: {hint_v32}");
+        assert!(
+            hint_v32.contains(&format!("v{}", abi::ABI_VERSION)),
+            "v32 反向必须点明 ABI 版本: {hint_v32}"
+        );
+        assert!(
+            hint_v32.contains("auth-center-register"),
+            "v32 反向必须点名缺失函数: {hint_v32}"
+        );
+        assert!(
+            !hint_v32.contains("重建插件产物"),
+            "v32 反向不得误导为重建产物（被通用旧产物分支劫持）: {hint_v32}"
+        );
+        // 组合式认证原语同属 v32 新增面，走同一条指引
+        let hint_v32b =
+            LoadedWasmPlugin::stale_artifact_rebuild_hint("unknown import `auth-method-invoke` has not been defined");
+        assert!(
+            hint_v32b.contains("升级 BedCode") && hint_v32b.contains("auth-method-invoke"),
+            "v32 反向必须覆盖 auth-method-invoke: {hint_v32b}"
+        );
+        // 反向：只有「认证中心」字样、没有缺失函数名的实例化失败不得被 v32 分支劫持
+        // （判据锚在函数名而非关键词，否则文案层面的巧合会给出错误的升级指引）
+        assert!(LoadedWasmPlugin::stale_artifact_rebuild_hint("认证中心未注册").is_empty());
 
         // 反向：与契约变更无关的实例化失败不得附指引（避免掩盖真因）
         assert!(LoadedWasmPlugin::stale_artifact_rebuild_hint("failed to find a pre-opened directory").is_empty());

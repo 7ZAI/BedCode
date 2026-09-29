@@ -510,9 +510,10 @@ impl PluginHost {
         // 注册 Rust 插件的 terminal handlers（inventory 静态注册）
         host.register_rust_terminal_handlers().await;
 
-        // 4. 系统组件优先激活（core-plugin-manager）：内置、默认启用、先于
-        // 应用插件——其能力注册表装配必须先于应用插件激活时的依赖检查
-        host.activate_system_components().await;
+        // 4. 角色驱动层优先激活（core-plugin-manager · ADR 0032）：L1 基础服务
+        // → L2 内部统一业务应用，均由 manifest `type` 驱动、先于 L3 业务应用——
+        // L1 的能力注册表装配必须先于消费方的依赖检查，L2 的裁决面须先于业务面就绪
+        host.activate_role_driven_components().await;
 
         // 5. 根据持久化状态自动激活之前已激活的插件
         tracing::info!("[PluginHost] Starting auto-activation from persisted state...");
@@ -690,7 +691,10 @@ impl PluginHost {
                 plugin_id, capability
             )));
         }
-        match self.call_guest(plugin_id, GuestOp::CapAuthVerifyDeviceToken { token }).await {
+        match self
+            .call_guest(plugin_id, GuestOp::CapAuthVerifyDeviceToken { token })
+            .await
+        {
             Ok(GuestReply::GuestStr(inner)) => Ok(inner),
             Ok(other) => Err(crate::AppError::Plugin(format!(
                 "plugin '{}' auth-policy returned unexpected reply: {:?}",
@@ -701,37 +705,8 @@ impl PluginHost {
     }
 
     /// 扫描导出 `auth-policy` 能力的激活插件（认证中心角色发现，HTTP 路由代码注册
-    /// 下沉专项阶段 3）：返回运行中（Activated / Degraded）且实例化时探测到
-    /// `auth-policy` 能力导出的插件 id 清单（按 id 升序，确定性）。
-    ///
-    /// 取代认证中心角色的硬编码插件 id：任何导出该能力的激活插件都可能是认证中心；
-    /// 空清单 = 无认证中心（宿主策略回退）。
-    pub async fn auth_center_candidates(&self) -> Vec<String> {
-        let plugins = self.plugins.read().await;
-        let wasm_plugins = self.wasm_plugins.read().await;
-        let mut out = Vec::new();
-        for (id, entry) in wasm_plugins.iter() {
-            // 仅运行中的实例可作为认证中心（停用/未激活的实例不参与策略裁决）
-            let running = plugins
-                .get(id)
-                .is_some_and(|p| matches!(p.state, PluginState::Activated | PluginState::Degraded(_)));
-            if !running {
-                continue;
-            }
-            // 元数据外提（I1）：能力探测结果在实例元数据里，不必锁实例
-            if entry
-                .meta()
-                .exported_capabilities
-                .iter()
-                .any(|c| c == crate::wasm_core::manager::capability::CAP_AUTH_POLICY)
-            {
-                out.push(id.clone());
-            }
-        }
-        out.sort();
-        tracing::debug!(candidates = ?out, "auth-policy capability candidates");
-        out
-    }
+    /// 下沉专项阶段 3，已删——v32 ADR 0031 起角色发现改查注册表，见
+    /// `utils/auth/auth_center.rs::enforce_connection_policy`）。
 
     pub fn registry(&self) -> &Arc<PluginRegistry> {
         &self.registry
@@ -841,9 +816,9 @@ pub(crate) use preauth::{collect_preauth_paths, preauth_providers, PreauthProvid
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::system::config::AppConfig;
     use crate::wasm_core::bus::{MessageBus, MessageDispatcher};
     use crate::wasm_core::manager::runtime::PluginServices;
-    use crate::system::config::AppConfig;
     use bedcode_plugin_api::{
         PluginCommand, PluginContributes, PluginManifest, PluginType, RustPluginContext, TerminalHandler,
     };
@@ -866,6 +841,7 @@ mod tests {
     mod contributions_test;
     mod host_api_test;
     mod instance_call_model_test;
+    mod l2_gating_test;
     mod lifecycle_test;
     mod runtime_preauth_test;
     mod scaffold;

@@ -34,8 +34,10 @@ pub fn get_claims_from_request(req: &actix_web::HttpRequest) -> Option<JwtClaims
 /// 从 Authorization header 提取并验证 JWT
 ///
 /// 验签执行留宿主中间件（密码学引擎不移动，票 12 C3）；验签通过后取认证中心
-/// 策略（`auth-policy` capability 导出），认证中心未激活/调用失败 → 宿主策略
-/// 回退（验签通过即放行，无单点）。
+/// 策略（`auth-policy`），**fail-closed**（ADR 0031 v32）：无中心在册 / 中心调用
+/// 失败 / 中心拒绝 → 一律拒绝（`deny_kind` 分 no_center / unavailable / policy）。
+/// 唯一例外是拿不到 AppContext（无头 / 单测上下文）时整段跳过——生产运行期
+/// AppContext 恒在，这不构成部署降级路径。
 ///
 /// 返回 Some(claims) 表示校验通过（含策略放行），None 表示无 token / 验签失败 / 策略拒绝
 pub fn extract_and_verify_jwt(req: &actix_web::dev::ServiceRequest) -> Option<JwtClaims> {
@@ -44,7 +46,8 @@ pub fn extract_and_verify_jwt(req: &actix_web::dev::ServiceRequest) -> Option<Jw
     let jwt_service = JwtService::new();
     let claims = jwt_service.verify_token_with_expiry(token).ok()?;
 
-    // 票 12 C3：验签后取认证中心策略。无 AppContext（无头/单测）→ 宿主策略。
+    // 票 12 C3 → v32 fail-closed：验签后查认证中心注册表并裁决。仅当无 AppContext
+    // （无头 / 单测）才整段跳过；生产运行期不存在「查不到中心就放行」的分支。
     if let Some(ctx) = crate::system::app_context::AppContext::try_global() {
         if let Err(reason) = crate::utils::auth::auth_center::enforce_connection_policy(ctx.plugin_host(), token) {
             tracing::warn!(
@@ -313,13 +316,13 @@ mod tests {
         assert!(extract_and_verify_jwt(&req).is_none(), "非 Bearer scheme → None");
     }
 
-    /// 宿主验签通过 + 单测上下文无 AppContext（认证中心不可判定）→ 宿主策略
-    /// 回退放行（无单点）：合法 token 返回 claims，sub/device_name/fingerprint 注入
+    /// 宿主验签通过 + 单测上下文无 AppContext（整段跳过策略检查）→ 放行：合法
+    /// token 返回 claims，sub/device_name/fingerprint 注入。生产运行期不存在此路径。
     #[test]
-    fn valid_token_accepted_with_host_policy_fallback() {
+    fn valid_token_accepted_when_no_app_context_to_check_policy() {
         let token = issue_token("device-1", Some("fp-abc"));
         let req = srv_req_with_bearer(&token);
-        let claims = extract_and_verify_jwt(&req).expect("合法 token 放行（宿主策略回退）");
+        let claims = extract_and_verify_jwt(&req).expect("合法 token 放行（无 AppContext，策略整段跳过）");
         assert_eq!(claims.sub, "device-1");
         assert_eq!(claims.device_name.as_deref(), Some("Pixel 9"));
         assert_eq!(claims.fingerprint.as_deref(), Some("fp-abc"));

@@ -244,10 +244,11 @@ fn verify_endpoint_jwt(conn: &mut WsConnBase, token: &str) -> Result<String, (St
         .verify_token_with_expiry(token)
         .map_err(|e| ("AUTH_FAILED".to_string(), jwt_error_message(&e).to_string()))?;
 
-    // 认证对齐（HTTP 路由代码注册下沉专项阶段 3，用户裁定 ⑥）：验签后经认证中心
-    // 策略，与 HTTP 中间件（`jwt_auth::extract_and_verify_jwt`）**同判据**——
-    // 认证中心拒绝 / 撤销 → 拒绝连接；无 AppContext / 无认证中心候选 → 宿主策略
-    // 回退放行（无单点）。
+    // 认证对齐（HTTP 路由代码注册下沉专项阶段 3）：验签后经认证中心策略，与 HTTP
+    // 中间件（`jwt_auth::extract_and_verify_jwt`）**同判据**——ADR 0031 v32 起
+    // fail-closed：查注册表，无中心 / 调用失败 / 中心拒绝 → 一律拒绝连接
+    // （deny_kind 分 no_center / unavailable / policy），随后 close 4001；
+    // 仅当无 AppContext（无头 / 单测）整段跳过。
     if let Some(ctx) = crate::system::app_context::AppContext::try_global() {
         if let Err(reason) = crate::utils::auth::auth_center::enforce_connection_policy(ctx.plugin_host(), token) {
             return Err(("AUTH_FAILED".to_string(), reason));

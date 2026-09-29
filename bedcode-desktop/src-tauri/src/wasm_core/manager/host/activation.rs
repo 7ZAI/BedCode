@@ -565,10 +565,10 @@ impl PluginHost {
             self.register_declared_ws_endpoints(plugin_id, &plan.ws_endpoints).await;
         }
 
-        // core-plugin-manager：系统组件激活后装配能力注册表——实例化时探测到的
-        // 可路由能力导出（host-* 同形接口）注册为系统组件提供者，应用插件的
-        // 对应 import 自此经 Linker 路由转发到本组件实例（host-side 转发）
-        if plan.kind == PluginKind::System {
+        // L1 基础服务激活后装配能力注册表——实例化时探测到的可路由能力导出
+        // （host-* 同形接口）注册为该组件的提供者，应用插件的对应 import
+        // 自此经 Linker 路由转发到本组件实例（host-side 转发）
+        if plan.kind.provides_host_capabilities() {
             self.register_system_capabilities(plugin_id).await;
         }
 
@@ -691,6 +691,10 @@ impl PluginHost {
         // mDNS 基础能力服务（spec v2 §5.1）：插件停用即回收其全部浏览 + 广播
         // 句柄（host-mdns v2 生命周期随属主；只碰本人，宿主/它插件登记不受影响）
         crate::wasm_core::host_api::mdns::purge_for_plugin(plugin_id);
+
+        // 认证中心注册表（ADR 0031）：属主停用即回收其认证中心角色——认证面随之
+        // fail-closed（无中心 = 拒绝），不静默降级成“无认证放行”（只碰本人）
+        crate::wasm_core::host_api::auth_center::purge_for_plugin(plugin_id);
 
         // WS 基础能力服务（ABI v14，spec §2.3）：插件停用即回收其全部出站连接
         // （只碰本人；服务端端点双表回收随票 05 一并接入）
@@ -855,10 +859,10 @@ impl PluginHost {
             if loaded.source == PluginSource::StaticRegistry {
                 continue;
             }
-            // core-plugin-manager：系统组件默认启用、启动时无条件激活
-            // （activate_system_components），其启停不持久化——持久化真源是
-            // 「内置」而非用户状态，停用仅对当前会话生效
-            if loaded.manifest.kind == PluginKind::System {
+            // core-plugin-manager · ADR 0032：角色驱动层（L1 基础服务 / L2 内部
+            // 统一业务应用）启动时按角色无条件激活（activate_role_driven_components），
+            // 其启停不持久化——持久化真源是「角色」而非用户状态，停用仅对当前会话生效
+            if loaded.manifest.kind.is_role_driven() {
                 continue;
             }
             let is_active = matches!(loaded.state, PluginState::Activated | PluginState::Degraded(_));
@@ -888,12 +892,11 @@ impl PluginHost {
         }
     }
 
-    /// 系统组件优先激活（core-plugin-manager，内置、默认启用、只停不删）
+    /// 角色驱动层先于业务应用激活（L1 基础服务 → L2 内部统一业务，ADR 0032）——**本段为历史残留注释**
     ///
-    /// 在持久化状态自动激活之前执行：系统组件激活时将其能力导出注册进
-    /// 能力注册表，后续应用插件激活的依赖检查才能命中。激活顺序按插件 ID
-    /// 排序（确定性）；单个失败不阻断其余（失败组件落 Error 态，其能力
-    /// 缺失由消费方激活时的依赖检查如实报错）。
+    /// 实现已迁至 [`Self::activate_role_driven_components`]（`boot.rs`）：层序取自 SDK 常量
+    /// `PluginKind::ROLE_DRIVEN_LOAD_ORDER`，含 L2 第二批。保留本段仅记录旧口径：
+    /// **不**承诺「只停不删」（按 kind 拒绝卸载的守卫未实现，见 ADR 0032 §6 L1 清单第 3 项）。
 
     /// 判断插件是否应该按需激活
     pub async fn should_lazy_activate(&self, plugin_id: &str) -> bool {

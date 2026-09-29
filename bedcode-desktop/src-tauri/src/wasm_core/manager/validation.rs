@@ -13,7 +13,7 @@
 //! 保证 id 不可歧义（一个 id 只对应一个目录、一份 manifest），为审批
 //! 门禁（approval.rs）提供可钉扎的身份锚点。完整模型见 docs/adr/。
 
-use bedcode_plugin_api::PluginManifest;
+use bedcode_plugin_api::{InstanceLifecycle, PluginManifest};
 
 use crate::system::constants::{PLUGIN_PTY_MAX_SESSIONS_PER_PLUGIN, PLUGIN_PTY_SESSIONS_CEILING_PER_PLUGIN};
 use crate::wasm_core::security::auth_policy::AuthStrategy;
@@ -38,6 +38,29 @@ pub fn validate_manifest_required(manifest: &PluginManifest) -> crate::Result<()
         return Err(crate::AppError::Plugin("plugin.json missing version field".to_string()));
     }
     validate_pty_quota(manifest.pty_quota)?;
+    validate_lifecycle(manifest)?;
+    Ok(())
+}
+
+/// 校验 manifest 声明的实例生命周期策略（ADR 0032）
+///
+/// `ephemeral`（业务 worker 形态）**本期只预留类型**：宿主的一次性实例机制与
+/// 调度框架尚未落地（ADR 0032 §6 的启用清单），因此声明即**加载期显性拒绝**。
+///
+/// 为什么不能「先当常驻处理」：常驻语义下 worker 会与其存在理由**正好相反**地
+/// 长驻——线性内存只能 grow 不能 shrink，长驻实例处理大输入会单调增长到宿主
+/// 单实例限额（`runtime.rs::memory_growing` 拒绝增长 → guest trap）且不重启进程
+/// 好不了。静默降级会让作者以为 worker 生效了，实际既没省内存又没省限额。
+/// 拒绝时点名缺什么（缺调度方 + 传参协议 + 配额），便于对着清单补齐后再启用。
+pub fn validate_lifecycle(manifest: &PluginManifest) -> crate::Result<()> {
+    if manifest.lifecycle != InstanceLifecycle::Persistent {
+        return Err(crate::AppError::Plugin(format!(
+            "plugin.json lifecycle=\"{}\" 暂不可用：一次性实例机制与调度框架尚未落地 \
+             （业务 worker 形态已登记，见 ADR 0032 §6；启用前需补齐调度方、store 传参协议、\
+             权限模型与 per-app 配额）。请改用 lifecycle=\"persistent\" 或删去该字段",
+            manifest.lifecycle.as_str()
+        )));
+    }
     Ok(())
 }
 
@@ -326,6 +349,63 @@ mod tests {
     fn parse_without_quota() -> PluginManifest {
         parse_manifest_json(r#"{"id":"com.bedcode.quota","name":"quota","version":"1.0.0"}"#)
             .expect("无 ptyQuota 的既有 manifest 必须照常加载")
+    }
+
+    /// 角色维度（ADR 0032）：`lifecycle` 声明的校验在**加载期**生效
+    ///
+    /// 正例：缺省与显式 `persistent` 都照常加载（旧产物零迁移）；
+    /// 反例：`ephemeral` 必须加载期失败并点名缺什么——静默当常驻处理会让作者
+    /// 以为 worker 已生效，而常驻恰好是 worker 存在理由的反面（线性内存只增不减）。
+    #[test]
+    fn lifecycle_ephemeral_is_rejected_at_load_persistent_and_absent_pass() {
+        let parse = |extra: &str| -> crate::Result<PluginManifest> {
+            parse_manifest_json(&format!(
+                r#"{{"id":"com.bedcode.worker","name":"worker","version":"1.0.0"{extra}}}"#
+            ))
+        };
+
+        assert!(parse("").is_ok(), "缺省（未声明 lifecycle）= 常驻，既有插件零迁移");
+        assert_eq!(
+            parse(r#","lifecycle":"persistent""#)
+                .expect("显式声明常驻合法")
+                .lifecycle,
+            bedcode_plugin_api::InstanceLifecycle::Persistent
+        );
+
+        let err = parse(r#","lifecycle":"ephemeral""#)
+            .err()
+            .expect("预留形态声明必须加载期显性拒绝");
+        let text = err.to_string();
+        assert!(
+            text.contains("lifecycle") && text.contains("ephemeral") && text.contains("ADR 0032"),
+            "错误必须点名字段、取值与缺口（否则作者无从下手），got: {text}"
+        );
+
+        // 非法取值不得回落常驻（serde 反序列化即拒，host 侧根本拿不到 manifest）
+        assert!(
+            parse(r#","lifecycle":"workerish""#).is_err(),
+            "未知 lifecycle 取值必须失败，不得静默当常驻"
+        );
+    }
+
+    /// 角色（`type`）的取值域在反序列化期收口：三角色 + 旧拼写别名，
+    /// 其余一律拒（不回落缺省 L3——那会让「声明了基础服务却被当业务应用装配」
+    /// 这类错误一路活到运行期）
+    #[test]
+    fn manifest_role_spelling_domain_is_closed_at_load() {
+        let parse = |kind: &str| -> crate::Result<PluginManifest> {
+            parse_manifest_json(&format!(
+                r#"{{"id":"com.bedcode.role","name":"role","version":"1.0.0","type":"{kind}"}}"#
+            ))
+        };
+        assert!(parse("basic-service").is_ok());
+        assert!(parse("internal-business").is_ok());
+        assert!(parse("business-app").is_ok());
+        assert!(parse("system").is_ok(), "旧拼写（L1）仍按别名解析，旧产物零迁移");
+        assert!(parse("application").is_ok(), "旧拼写（L3）仍按别名解析");
+        for bad in ["systemm", "internal", "BASIC-SERVICE", ""] {
+            assert!(parse(bad).is_err(), "非法角色取值必须加载期失败: {bad:?}");
+        }
     }
 
     /// 授权策略档位声明在**加载期显性拒绝**（spec §11 B5：宿主不得替插件决定业务策略）

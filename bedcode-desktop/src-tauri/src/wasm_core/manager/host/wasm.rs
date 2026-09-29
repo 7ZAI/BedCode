@@ -188,16 +188,16 @@ impl PluginHost {
             .await
             .insert(plugin_id.to_string(), new_entry);
 
-        // core-plugin-manager：系统组件实例重建后，能力注册表中的旧实例句柄
+        // core-plugin-manager：L1 基础服务实例重建后，能力注册表中的旧实例句柄
         // 已失效，按新实例重新装配（trap 自愈回落宿主原语的场景亦在此恢复）
-        let is_system = {
+        let provides_capabilities = {
             let plugins = self.plugins.read().await;
             plugins
                 .get(plugin_id)
-                .map(|p| p.manifest.kind == PluginKind::System)
+                .map(|p| p.manifest.kind.provides_host_capabilities())
                 .unwrap_or(false)
         };
-        if is_system {
+        if provides_capabilities {
             self.wasm_host_ctx.capabilities().revert_all_from(plugin_id);
             self.register_system_capabilities(plugin_id).await;
         }

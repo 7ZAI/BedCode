@@ -380,6 +380,71 @@ pub(crate) fn auth_link_identity_parts(perm: &dyn crate::wasm_core::host_api::co
     }
 }
 
+// ==================== v32：认证中心显式注册 + 组合式认证原语（ADR 0031） ====================
+//
+// 单中心注册表本体 + 唯一性仲裁 + 停用回收在 `host_api/auth_center.rs`；本面只做
+// 权限门（全部复用既有 `auth` 权限位，K8）+ 对注册表的薄分派。`auth-method-invoke`
+// 是**零解析窄转发**（ADR 0032 L2 红线③）：宿主不拆 `params`、不解释 `method` 的
+// 业务含义，只校验「method 在注册表内」（安全闸门判据，不是解释，B1 不命中），
+// 把调用转发到认证中心的 `auth-grant` 互调 api 并原样透回。
+
+/// 注册本插件为认证中心（K1；单中心仲裁 K4 在注册表内，重复注册标点名在册属主）
+pub(crate) fn auth_center_register(
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
+    plugin_id: &str,
+    methods: Vec<String>,
+) -> Result<String, String> {
+    if !super::check_permission(perm, plugin_id, PERMISSION_AUTH, "host_auth_center_register") {
+        return Err("permission denied".to_string());
+    }
+    crate::wasm_core::host_api::auth_center::register(plugin_id, methods)
+}
+
+/// 注销本插件的认证中心角色（仅属主本人；无中心在册幂等成功）
+pub(crate) fn auth_center_unregister(
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
+    plugin_id: &str,
+) -> Result<(), String> {
+    if !super::check_permission(perm, plugin_id, PERMISSION_AUTH, "host_auth_center_unregister") {
+        return Err("permission denied".to_string());
+    }
+    crate::wasm_core::host_api::auth_center::unregister(plugin_id)
+}
+
+/// 列取当前认证中心登记的认证方式（组合式认证的发现端，K6；无中心 fail-closed）
+pub(crate) fn auth_methods_list(
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
+    plugin_id: &str,
+) -> Result<Vec<String>, String> {
+    if !super::check_permission(perm, plugin_id, PERMISSION_AUTH, "host_auth_methods_list") {
+        return Err("permission denied".to_string());
+    }
+    let Some(entry) = crate::wasm_core::host_api::auth_center::center() else {
+        tracing::warn!(plugin_id = %plugin_id, deny_kind = "no_center", "auth-methods-list without a registered auth center");
+        return Err("no auth center registered".to_string());
+    };
+    Ok(entry.methods)
+}
+
+/// 经认证中心执行一次认证方式调用（K6 零解析窄转发）。
+///
+/// 边界（spec §4.3.1）：无中心 → `no auth center registered`（fail-closed）；
+/// method 不在注册表 → 点名 method 与在册列表（安全闸门）；调用传输失败 →
+/// `auth center unavailable: <原因>`；中心返回错误信封 → **原样透传**（业务拒绝，
+/// 不吞成宿主错误）。
+pub(crate) fn auth_method_invoke(
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
+    host_ctx: &crate::wasm_core::host_api::context::WasmHostContext,
+    plugin_id: &str,
+    method: &str,
+    params: &str,
+) -> Result<String, String> {
+    if !super::check_permission(perm, plugin_id, PERMISSION_AUTH, "host_auth_method_invoke") {
+        return Err("permission denied".to_string());
+    }
+    crate::utils::auth::auth_center::invoke_auth_method(host_ctx, method, params)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
