@@ -61,7 +61,7 @@ describe('C1 插件身份五处一致', () => {
     expect(cargoToml).toContain('crate-type = ["cdylib"]')
   })
 
-  it('票 05/08/09/10/11 + 票 15/16/17 + 票 02 + 认证记录下沉：八域廿八项 api + auth/peer/storage/session:*/terminal:*/ui:* 权限', () => {
+  it('票 05/08/09/10/11 + 票 15/16/17 + 票 02 + 认证记录下沉 + v32 组合式认证：八域廿九项 api + auth/peer/storage/session:*/terminal:*/ui:* 权限', () => {
     // 权限清单与 D2 能力映射一一对应：auth = host-auth（密钥托管 + 认证记录面）、
     // peer = host-peer（consent 取可信集 / trust 的 peer 段）、
     // storage = host-plugin-database（票 08 配置真源私有库）、
@@ -141,6 +141,11 @@ describe('C1 插件身份五处一致', () => {
       'com.bedcode.terminal-session.history-list',
       'com.bedcode.terminal-session.connection-touch',
       'com.bedcode.terminal-session.connection-close',
+      // v32（ADR 0031）：组合式认证原语 `auth-method-invoke` 的转发目标——宿主
+      // `invoke_auth_method` 按 `format!("{}.auth-grant", center_owner)` 组装请求 topic，
+      // 「未声明 api 不可调」门禁会直接拒掉它。**必须**在此声明，否则其他插件的
+      // 组合式认证调用会在总线门禁处静默失败（无声明 = 没有 API 面）
+      'com.bedcode.terminal-session.auth-grant',
       'com.bedcode.terminal-session.session-create',
       'com.bedcode.terminal-session.session-restart',
       'com.bedcode.terminal-session.session-remove',

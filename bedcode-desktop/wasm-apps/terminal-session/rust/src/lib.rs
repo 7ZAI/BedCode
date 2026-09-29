@@ -81,7 +81,7 @@ mod ws_terminal;
 pub mod ws_events;
 mod trust;
 
-use bedcode_plugin_api::host::{HostBus, HostLog, HostStorage, HostTimer, HostWebsocket};
+use bedcode_plugin_api::host::{HostAuth, HostBus, HostLog, HostStorage, HostTimer, HostWebsocket};
 use bedcode_plugin_api::types::PluginManifest;
 use bedcode_plugin_api::wasm::WasmPlugin;
 use bedcode_plugin_api::wasm_host::WasmHost;
@@ -152,6 +152,16 @@ pub trait SessionApi {
     fn consent_decide(
         request: consent::model::ConsentRequest,
     ) -> Result<consent::model::ConsentDecision, String>;
+
+    // ==================== v32：组合式认证出口（ADR 0031 K6） ====================
+    // 认证中心按 method 分派一次认证方式调用。`method` ∈ 注册时声明的
+    // ["pairing_code", "qr", "biometric", "jwt"]；`params` 为该方式的入参
+    // 形状（复用既有实现内部形状，本接口只固定「哪个 method 对应哪段实现」的
+    // 映射表，不新增形状定义——见 impl 注释）。宿主侧 `auth-method-invoke`
+    // 已经校验过「method 在注册表内」，本端按合同不再重复；返回错误信封
+    // （ADR 0030 `{code, message, params?}`）原样透回调用方。
+    #[api("auth-grant")]
+    fn auth_grant(method: String, params: serde_json::Value) -> Result<serde_json::Value, String>;
 
     // ==================== 票 08：会话配置域（真源 = 本插件私有库） ====================
 
@@ -366,6 +376,114 @@ impl SessionApi for SessionPlugin {
         request: consent::model::ConsentRequest,
     ) -> Result<consent::model::ConsentDecision, String> {
         consent::ops::decide_consent_via_host(request)
+    }
+
+    // ==================== v32：组合式认证出口（ADR 0031 K6） ====================
+    //
+    // method → 既有实现映射表（spec §4.3.2：本票不新增形状定义，只固定映射）：
+    // - pairing_code → `pairing/code.rs::PairingCode` + 本文件 pair_code_*（CURRENT_CODE
+    //   状态机，与 /api/auth/pairing|verify 同源；一次性消耗语义一致）
+    // - qr           → `pairing/qr.rs::QrTokenManager` + 本文件 qr_*（qr_manager() 状态机）
+    // - biometric    → `auth_http/biometric.rs`（issue_challenge / verify_signature）
+    // - jwt          → `auth_http/jwt.rs`（issue_device_token / verify_device_token，
+    //   签发验签执行点留宿主 host-auth 原语，本端只做编排与文案映射）
+    //
+    // action 键接受 `action` / `phase` 两个拼写（spec 示例 A 用 action、示例 B 用
+    // phase），取其一即可；未知 method / action 显性报错（不猜、不回退）。
+    fn auth_grant(method: String, params: serde_json::Value) -> Result<serde_json::Value, String> {
+        let action = params
+            .get("action")
+            .or_else(|| params.get("phase"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let str_field = |key: &str| {
+            params
+                .get(key)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string()
+        };
+        match method.as_str() {
+            "pairing_code" => match action.as_str() {
+                "generate" => {
+                    let ttl = params.get("ttl").and_then(|v| v.as_u64()).unwrap_or(60);
+                    pair_code_generate(ttl)
+                }
+                "status" => Ok(pair_code_status()?.unwrap_or(serde_json::Value::Null)),
+                "verify" => {
+                    let code = str_field("code");
+                    Ok(serde_json::json!({"valid": pair_code_verify(&code)?}))
+                }
+                "clear" => {
+                    *CURRENT_CODE
+                        .lock()
+                        .map_err(|e| format!("pairing code lock: {e}"))? = None;
+                    Ok(serde_json::json!({}))
+                }
+                other => Err(format!("auth-grant: unknown pairing_code action '{other}'")),
+            },
+            "qr" => match action.as_str() {
+                "generate" => {
+                    let ttl = params.get("ttl").and_then(|v| v.as_u64()).unwrap_or(60);
+                    qr_generate(ttl)
+                }
+                "status" => Ok(qr_status()?.unwrap_or(serde_json::Value::Null)),
+                "verify" => {
+                    let token = str_field("token");
+                    qr_verify(&token)
+                }
+                "clear" => {
+                    qr_manager().clear();
+                    Ok(serde_json::json!({}))
+                }
+                other => Err(format!("auth-grant: unknown qr action '{other}'")),
+            },
+            "biometric" => match action.as_str() {
+                "challenge" => {
+                    let fingerprint = str_field("fingerprint");
+                    let nonce =
+                        crate::auth_http::biometric::issue_challenge(&WasmHost, &fingerprint)?;
+                    Ok(serde_json::json!(nonce))
+                }
+                "verify" => {
+                    let fingerprint = str_field("fingerprint");
+                    let nonce = str_field("challenge");
+                    let signature = str_field("signature");
+                    crate::auth_http::biometric::verify_signature(
+                        &WasmHost,
+                        &fingerprint,
+                        &nonce,
+                        &signature,
+                    )
+                }
+                other => Err(format!("auth-grant: unknown biometric action '{other}'")),
+            },
+            "jwt" => match action.as_str() {
+                "issue" => {
+                    let sub = str_field("sub");
+                    if sub.is_empty() {
+                        return Err("auth-grant: jwt issue requires non-empty sub".to_string());
+                    }
+                    let device_name = str_field("deviceName");
+                    let fingerprint = str_field("fingerprint");
+                    let (token, expires_in) = crate::auth_http::jwt::issue_device_token(
+                        &sub,
+                        (!device_name.is_empty()).then_some(device_name.as_str()),
+                        (!fingerprint.is_empty()).then_some(fingerprint.as_str()),
+                    )?;
+                    Ok(serde_json::json!({"token": token, "expires_in": expires_in}))
+                }
+                "verify" => {
+                    let token = str_field("token");
+                    crate::auth_http::jwt::verify_device_token(&WasmHost, &token)
+                }
+                other => Err(format!("auth-grant: unknown jwt action '{other}'")),
+            },
+            other => Err(format!(
+                "auth-grant: unknown method '{other}' (registered: pairing_code, qr, biometric, jwt)"
+            )),
+        }
     }
 
     // ==================== 票 08：会话配置域 ====================
@@ -657,6 +775,8 @@ impl WasmPlugin for SessionPlugin {
         host.log_info("Terminal Session Center plugin activated");
         // 订阅互调请求 topic（宏生成）：`bedcode.api.<api>` 逐个订阅，宿主去重幂等
         SessionApiDispatcher::register()?;
+        // v32（ADR 0031 K1）的注册调用在**本函数末尾**（就位 = 激活全部成功），
+        // 理由见末尾注释。
         // 密钥托管探活（host-auth secret-store；明文不落日志，只记存在性与长度）。
         // 失败不阻断激活：凭据按需生成，认证路径显性报错而非静默降级（D7 分段语义）
         match pairing::keys::jwt_key_from_host_auth() {
@@ -858,12 +978,42 @@ impl WasmPlugin for SessionPlugin {
         // （业务/认证别名 + 任务域内部路径 + sessions REST + terminal-bg）。
         // 单条失败只 warn（该路由 404 可见，不把整个插件打成 Error——D7 故障隔离）。
         http_routes::register_all(&host);
+
+        // v32（ADR 0031 K1）：激活**末尾**注册为本机**认证中心**。静态声明段 =
+        // manifest `type: internal-business`（决定加载顺序），动态就绪段 = 本调用 +
+        // 宿主唯一性仲裁（单中心 D2；重复注册标点名在册属主）。
+        //
+        // **为什么放末尾而不是开头**（2026-09-29 集成测试实证）：注册即“就位”，而本
+        // activate 有多处 `?` 硬失败（会话登记域建表 / pty:exit 订阅 …）。注册在前则
+        // 「激活失败」会留下一个**在册的半死中心**——宿主侧 `is_registered()` 为真，
+        // 认证面去找一个没有会话域的中心，表现为「报 unavailable 而不是 no_center」，
+        // 排障方向被带偏（且本进程内重新激活会撞「already registered」）。就位 = 激活
+        // 全部成功，故注册必须是最后一步。
+        //
+        // 失败**不阻断激活**（它已经是最后一步），但认证面随之 fail-closed（无中心 =
+        // 拒绝），必须 error 留痕让排障可定位（宿主另有 `deny_kind=no_center` 日志 +
+        // L2 激活期未注册校验兜底点名「按当前 SDK 重建」）。
+        let reg_methods = ["pairing_code", "qr", "biometric", "jwt"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>();
+        match host.auth_center_register(reg_methods) {
+            Ok(center_id) => host.log_info(&format!("auth center registered: {center_id}")),
+            Err(e) => host.log_error(&format!(
+                "auth center registration failed (auth surfaces stay fail-closed): {e}"
+            )),
+        }
         Ok(())
     }
 
     fn deactivate() -> anyhow::Result<()> {
         let host = WasmHost;
         host.log_info("Terminal Session Center plugin deactivated");
+        // v32（ADR 0031 K1）：注销认证中心角色（仅属主本人；宿主 purge_for_plugin
+        // 兜底回收）。注销失败不阻断停用流程——宿主侧回收兜底，故只留痕。
+        if let Err(e) = host.auth_center_unregister() {
+            host.log_warn(&format!("auth center unregister failed (host purge backs up): {e}"));
+        }
         // ABI v29：路由回收依赖宿主停用 purge（同 host-websocket 先例）；
         // 此处留痕 + 状态自清（双保险）
         http_routes::unregister_all(&host);
@@ -1910,6 +2060,56 @@ mod tests {
         assert_eq!(env!("CARGO_PKG_NAME"), "bedcode-plugin-terminal-session");
     }
 
+    /// v32（ADR 0031 K1）：认证中心注册是 `activate` 的**最后一步**（就位 = 激活全部成功）
+    ///
+    /// 契约：`auth_center_register` 必须排在每个硬失败步骤（`?`）之后。注册在前则
+    /// 「激活中途失败」会留下一个在册的半死中心：宿主 `is_registered()` 为真、认证面
+    /// 去找一个没有会话域的中心，表现为 `unavailable` 而非 `no_center`（排障方向被带偏），
+    /// 且同进程内重新激活撞「already registered」。这是 2026-09-29 集成测试
+    /// `broadcast_shutdown` 暴露的真实形态。
+    ///
+    /// 锁法：源码内 `fn activate` 体内量位置（结构锁，与宿主 `production_code_lines`
+    /// 同类思路）。反例：把注册块搬回 activate 开头即转红。
+    #[test]
+    fn auth_center_registration_is_the_last_activate_step() {
+        let src = include_str!("lib.rs");
+        let activate_start = src
+            .find("    fn activate() -> anyhow::Result<()> {")
+            .expect("activate fn found");
+        let deactivate_start = src
+            .find("    fn deactivate() -> anyhow::Result<()> {")
+            .expect("deactivate fn found");
+        assert!(activate_start < deactivate_start, "activate 必须先于 deactivate 出现");
+        let body = &src[activate_start..deactivate_start];
+
+        let reg = body
+            .find("host.auth_center_register(reg_methods)")
+            .expect("activate 必须调 auth_center_register");
+        // 每个硬失败步骤（`?` 传播 = 激活失败 = 不该留下在册中心）
+        for hard_fail_step in [
+            "session registry schema init failed at activate",
+            "pty exit subscription failed",
+            "ws client-disconnect subscription failed",
+            "ws client-connect subscription failed",
+        ] {
+            let at = body
+                .find(hard_fail_step)
+                .unwrap_or_else(|| panic!("activate 必须含硬失败步骤 `{hard_fail_step}`（否则本锁已失效）"));
+            assert!(
+                reg > at,
+                "认证中心注册必须排在硬失败步骤 `{hard_fail_step}` 之后（注册在前 = 激活失败留下半死中心）"
+            );
+        }
+        // 末位：排在 HTTP 路由注册（activate 最后一个非注册步骤）之后
+        let routes = body
+            .find("http_routes::register_all(&host);")
+            .expect("activate 必须注册 http 路由");
+        assert!(
+            reg > routes,
+            "认证中心注册必须在 http 路由注册之后（就位 = 激活全部成功）"
+        );
+    }
+
     /// 能力面声明只随已落地语义增长：票 05 = pairing 八项 + trust 两项 + consent 一项；
     /// 票 08 = config 三项（配置真源私有库）；票 09 = session-create（创建编排）；
     /// 票 10 = 会话动作四项 + 配置面只读化（v22，`session:config` 权限随写原语退役）；
@@ -1994,7 +2194,7 @@ mod tests {
         assert_eq!(actual, expected, "manifest api 必须与 trait 声明一致");
         assert_eq!(
             manifest.api.len(),
-            33,
+            34,
             "pairing 八项 + trust 两项（list/revoke）+ consent 一项（decide）+ config 三项 + \
              session-create 一项（票 09）+ 会话动作四项（票 10 restart/remove/rename/resize）\
              + 票 11 annotate + devices-connect-list 两项 + 票 02 quick-actions-import 一项 + \
@@ -2002,7 +2202,9 @@ mod tests {
              connection-touch / connection-close）+ 会话引擎下沉 P1 登记域读取面两项 \
              （session-list / session-get）+ P1-b 停止/输入两项（session-close / session-input）\
              + 票 08 历史快照一项（session-history，websocket 业务下沉）\
-             + 票 09b WS 会话控制词表分派一项（session-ws-control）"
+             + 票 09b WS 会话控制词表分派一项（session-ws-control）\
+             + v32 认证中心组合式出口一项（auth-grant，ADR 0031：宿主 \
+             `auth-method-invoke` 零解析窄转发到它，未声明即被互调门禁整片拒）"
         );
     }
 
