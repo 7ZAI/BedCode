@@ -9,7 +9,7 @@
 use super::jsonc::parse_jsonc;
 use super::mapping::mask_key;
 use super::merge::claude_env_view;
-use super::paths::{bridge_paths, claude_settings_path};
+use super::paths::{bridge_paths, claude_auth_paths, claude_settings_path};
 use super::PROVIDERS_KEY;
 use crate::HOME;
 use bedcode_plugin_api::host::{HostEvents, HostFs, HostLog, HostPluginDatabase, HostStorage};
@@ -175,10 +175,18 @@ fn claude_view(h: &WasmHost, home: &str) -> Value {
 }
 
 /// 组装全量状态（命令返回值与事件载荷同形）
+///
+/// claude 视图一次读 3 个路径（settings + 两桥接文件存在性），先批量授权整组
+/// （[`claude_auth_paths`]）再逐路径读取：同一业务（打开供应商页 / 一次应用）
+/// 预见多个文件访问，逐个 fs_read 会弹 N 次框；一次 request-auth 弹一次框列出
+/// 全部，命中即静默、未命中拒绝则视图降级（claude_view 的读失败分支与
+/// 未授权一致——env 空 + 桥接 false，不阻断页签）。
 pub(super) fn build_state(h: &WasmHost) -> anyhow::Result<Value> {
     ensure_schema(h)?;
     let (import_last, apply_last) = read_stored(h);
     let home = HOME.get().map(|s| s.as_str()).unwrap_or("");
+    // 拒绝只降级视图（见上），不阻断状态组装
+    let _ = h.fs_request_auth(&claude_auth_paths(home)).unwrap_or(false);
     Ok(json!({
         "presets": list_presets(h)?,
         "claude": claude_view(h, home),

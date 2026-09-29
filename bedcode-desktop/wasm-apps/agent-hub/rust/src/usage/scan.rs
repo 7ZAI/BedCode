@@ -1,9 +1,12 @@
 //! 扫描异步流：枚举 → 回灌解析
 //!
-//! `scan-usage` 以 AUTH_KEY 为闸门（未授权降级 auth-required，避免弹窗风暴）
-//! → host-process 平台分派枚举各来源根目录（`== 分段 ==` 标记）→
-//! `on_process_done` 回灌：并行读文件（v20 host-task `execute-batch`）→
-//! 逐文件水位判定 + 解析 + 落库 → opencode SQLite 同步 → 状态推送。
+//! `scan-usage` 以**本次扫描的实际来源根目录**为闸门（先一次批量
+//! `fs_request_auth`，拒绝才降级 auth-required——同一业务预见多个文件访问
+//! 时用批量授权代替逐个弹窗；旧版以 AUTH_KEY 固定清单为闸门，claude 会话
+//! 目录不在清单内，回灌直读静默失败）→ host-process 平台分派枚举各来源根
+//! 目录（`== 分段 ==` 标记）→ `on_process_done` 回灌：并行读文件（v20
+//! host-task `execute-batch`）→ 逐文件水位判定 + 解析 + 落库 → opencode
+//! SQLite 同步 → 状态推送。
 
 use super::active::compute_active_sessions;
 use super::ingest::{
@@ -11,7 +14,7 @@ use super::ingest::{
     watermark_unchanged,
 };
 use super::schema::ensure_schema;
-use super::{auth_granted, emit_and_return, heal_stale_scan, read_state, write_state};
+use super::{emit_and_return, heal_stale_scan, read_state, write_state};
 use super::{SCAN_TIMEOUT_MS, SESSION_ROOTS};
 use crate::install::now_ms;
 use crate::usage_parse::MAX_FILE_BYTES;
@@ -29,22 +32,14 @@ static RUN_SEQ: AtomicU32 = AtomicU32::new(0);
 
 // ==================== 扫描（异步流：枚举 → 回灌解析） ====================
 
-/// 触发增量扫描：授权闸门 → 枚举两家 JSONL → 回灌逐文件解析。
-/// 扫描进行中（status == syncing）拒绝重入。
+/// 触发增量扫描：批量授权本次扫描的实际来源根目录 → 枚举各家 JSONL →
+/// 回灌逐文件解析。扫描进行中（status == syncing）拒绝重入。
 pub(crate) fn scan(h: &WasmHost) -> anyhow::Result<Value> {
     ensure_schema(h)?;
     let mut state = read_state(h);
     // 失活扫描先治愈再谈重入：否则上一轮卡在 syncing（回调丢失 / 中途异常）
     // 会把重入闸门永久关上，用户点多少次「立即扫描」都是原样返回
     heal_stale_scan(h, &mut state);
-    state["authGranted"] = json!(auth_granted(h));
-    if !auth_granted(h) {
-        // 授权被拒不弹窗（fs_auth 第三层会按路径逐个弹窗）：整体降级，
-        // 前端呈现 auth-required + 授权入口
-        state["status"] = json!("auth-required");
-        write_state(h, &state);
-        return emit_and_return(h, &state);
-    }
     if state["status"] == json!("syncing") {
         return emit_and_return(h, &state);
     }
@@ -55,6 +50,21 @@ pub(crate) fn scan(h: &WasmHost) -> anyhow::Result<Value> {
     // 分段 = 内置 JSONL 来源（按当前 home 展开）+ 自定义来源（state 持久化绝对路径）。
     // opencode 的内置条目 kind=sqlite，不进枚举（它由 sync_opencode 单独同步取数）
     let sections = scan_sections(home, &state);
+    // 批量申请本次扫描的全部来源根目录（一次弹窗；已授权路径宿主静默跳过）。
+    // 同一业务（一次扫描）预见 N 个目录的逐文件访问，逐个 fs_read 会弹 N 次框；
+    // 先把整组根目录拿到手，回灌时的 task fs.read 单元（无弹窗面，is_granted）
+    // 与会话明细直读（fs_read 弹窗面）全部前缀命中、静默放行。
+    // 拒绝 → 整体降级 auth-required（与旧闸门同语义，但闸门从「activate 固定清单」
+    // 换成「本次扫描实际要读的根目录」——claude projects 与会话源目录只有这里
+    // 申请得到，旧闸门下它们静默读失败且无修复入口）
+    let granted = h.fs_request_auth(&scan_auth_roots(&sections)).unwrap_or(false);
+    state["authGranted"] = json!(granted);
+    if !granted {
+        state["status"] = json!("auth-required");
+        write_state(h, &state);
+        h.log_warn("usage: scan roots authorization declined; scan degraded");
+        return emit_and_return(h, &state);
+    }
     let script = scan_script(&sections, is_windows());
     let (command, args_vec) = shell_invocation(script, is_windows());
 
@@ -112,11 +122,7 @@ fn scan_sections(home: &str, state: &Value) -> Vec<(String, String)> {
         .collect();
     if let Some(arr) = state.get("sources").and_then(|s| s.as_array()) {
         for src in arr {
-            if src
-                .get("kind")
-                .and_then(|k| k.as_str())
-                == Some("sqlite")
-            {
+            if src.get("kind").and_then(|k| k.as_str()) == Some("sqlite") {
                 continue;
             }
             let name = src.get("name").and_then(|n| n.as_str()).unwrap_or("");
@@ -170,6 +176,26 @@ fn scan_script(sections: &[(String, String)], windows: bool) -> String {
     } else {
         parts.join("")
     }
+}
+
+/// 扫描授权根目录（纯函数，可测）：全部枚举分段根去重、剔除空路径
+///
+/// `fs_request_auth([])` 宿主直接放行（空批约定），空列表会落一个
+/// 「什么都没问就 granted」的假象——本函数保证要么非空、要么调用方拿不到
+/// 列表。来源目录全局唯一（add-source 时 path 唯一性校验），去重是防御性
+/// 保险；顺序保留首个出现位置（弹窗路径列表按扫描分段序展示）。
+pub(super) fn scan_auth_roots(sections: &[(String, String)]) -> Vec<String> {
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    sections
+        .iter()
+        .filter_map(|(_, root)| {
+            if root.is_empty() || !seen.insert(root.as_str()) {
+                None
+            } else {
+                Some(root.clone())
+            }
+        })
+        .collect()
 }
 
 /// 扫描进程回灌：读列举输出 → 逐文件水位判定 + 解析 + 落库 → 状态推送
@@ -513,6 +539,33 @@ mod tests {
         assert!(quoted.contains("find '/tmp/it'\\''s here' -type f -name '*.jsonl'"));
     }
 
+    /// 扫描授权根目录：去重（防御）、空路径剔除、顺序保留首个出现位置
+    #[test]
+    fn scan_auth_roots_dedups_and_drops_empty() {
+        let sections = vec![
+            ("claude".to_string(), "/home/u/.claude/projects".to_string()),
+            ("claude".to_string(), "/home/u/.claude/projects".to_string()),
+            ("my-logs".to_string(), String::new()),
+            ("my-logs".to_string(), "/data/logs".to_string()),
+            ("pi".to_string(), "/home/u/.pi/agent/sessions".to_string()),
+            ("dup".to_string(), "/home/u/.claude/projects".to_string()),
+        ];
+        let roots = scan_auth_roots(&sections);
+        assert_eq!(
+            roots,
+            vec![
+                "/home/u/.claude/projects".to_string(),
+                "/data/logs".to_string(),
+                "/home/u/.pi/agent/sessions".to_string(),
+            ],
+            "去重 + 空路径剔除 + 首个位置保序"
+        );
+
+        // 全空输入：不得产出任何授权路径（空批会被宿主直接判 granted，
+        // 落一个「没问就放行」的假象给前端）
+        assert!(scan_auth_roots(&[]).is_empty());
+    }
+
     /// 分片回归锁（2026-09-28 实机 bug 两个）：① 852 单元一次 execute-batch
     /// 被宿主拒绝（`plan exceeds max units per plan (852 > 256)`）→ 零扫描；
     /// ② 全量 430MB 内容一次驻留 + 解码副本 → wasm 线性内存 256MB 硬顶
@@ -651,8 +704,14 @@ mod tests {
             names,
             vec!["claude", "codex", "pi", "pi", "my-logs", "my-logs"]
         );
-        assert!(sections.iter().any(|(n, p)| n == "pi" && p == "/home/u/pi-extra"));
-        assert!(sections.iter().any(|(n, p)| n == "my-logs" && p == "/data/a"));
-        assert!(sections.iter().any(|(n, p)| n == "my-logs" && p == "/data/b"));
+        assert!(sections
+            .iter()
+            .any(|(n, p)| n == "pi" && p == "/home/u/pi-extra"));
+        assert!(sections
+            .iter()
+            .any(|(n, p)| n == "my-logs" && p == "/data/a"));
+        assert!(sections
+            .iter()
+            .any(|(n, p)| n == "my-logs" && p == "/data/b"));
     }
 }

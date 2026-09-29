@@ -3,7 +3,9 @@
  *
  * - 状态流：挂载时拉取持久化状态（host-storage `usage` 键），guest 每次扫描
  *   完成 emit `plugin:agent-hub:usage` 覆盖本地状态；auth-required 呈现授权
- *   入口（fs_auth 第三层按路径弹窗，guest 侧已闸门拦截，不再触发弹窗）
+ *   入口。授权口径：扫描命令发起时 guest 先对**本次扫描的实际来源根目录**
+ *   批量 request-auth（一次弹窗列全部，已授权路径静默跳过）——同一业务预见
+ *   多个文件访问用批量授权代替逐个弹窗；拒绝才整体降级 auth-required
  * - 看板：stats 一次拉回「汇总 + 全部维度分组 + 7×24 节奏矩阵」，指标 /
  *   维度切换纯前端；时间窗（`statsDays`）走 guest 参数，服务端切片
  * - **会话列表只有一份**（日志分区独有）：此前统计分区挂了一份同源的
@@ -363,7 +365,8 @@ export function useUsage(context: PluginContext) {
     // 在途开表、终态停表：让「扫描中…」不可能成为永不退出的假状态
     ensureScanWatchdog()
     // spec §4.5「应用打开面板时增量扫描」：从未扫描（idle）时自动触发一次
-    // （auth-required 不自动触发——由用户经授权入口先授权）
+    // （auth-required 不自动触发——用户点扫描时 guest 侧会对来源根目录
+    // 批量弹窗，拒绝才落 auth-required；也可先经概览授权入口批量授权）
     if (next?.status === 'idle' && !autoScanDone) {
       void scan()
       return

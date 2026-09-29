@@ -8,7 +8,8 @@
 use super::jsonc::{ensure_container, parse_jsonc, upsert_entry};
 use super::merge::{claude_env_entries, merge_opencode_entry, merge_pi_entry, pi_auth_entry};
 use super::paths::{
-    bridge_paths, claude_settings_path, opencode_cfg_path, pi_auth_path, pi_models_path,
+    bridge_paths, claude_auth_paths, claude_settings_path, opencode_cfg_path, pi_auth_path,
+    pi_models_path,
 };
 use super::store::{
     build_state, emit_and_return, ensure_schema, list_presets, preset_key_of, read_stored,
@@ -138,6 +139,23 @@ pub(crate) fn apply_provider(h: &WasmHost, args: &Value) -> anyhow::Result<Value
         .and_then(|v| v.as_str())
         .unwrap_or("none")
         .to_string();
+    let home = HOME
+        .get()
+        .ok_or_else(|| anyhow::anyhow!("apply: home unavailable"))?;
+    // claude 目标（或 key 源为 claude）一次应用会读写最多 5 个文件（source_key
+    // 直读 settings、settings 读+写、两桥接文件存在性检查）：先批量授权整组
+    // （一次弹窗列出全部，已授权路径宿主静默跳过），把「同一业务预见多个文件
+    // 访问」收进一次授权，不再让每次 fs_read / fs_write 各自弹一次框。
+    // 拒绝不阻断流程：后续读写的显性失败文案照常给出（fail-visible）。
+    let key_source_claude = matches!(key_mode.as_str(), "source")
+        && args
+            .get("key")
+            .and_then(|k| k.get("cli"))
+            .and_then(|v| v.as_str())
+            == Some("claude");
+    if target.as_str() == "claude" || key_source_claude {
+        let _ = h.fs_request_auth(&claude_auth_paths(&home)).unwrap_or(false);
+    }
     let force = args.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
     let key: Option<String> = match key_mode.as_str() {
         "inline" => Some(
@@ -173,9 +191,6 @@ pub(crate) fn apply_provider(h: &WasmHost, args: &Value) -> anyhow::Result<Value
         _ => None,
     };
 
-    let home = HOME
-        .get()
-        .ok_or_else(|| anyhow::anyhow!("apply: home unavailable"))?;
     let mut files: Vec<String> = Vec::new();
 
     match target.as_str() {

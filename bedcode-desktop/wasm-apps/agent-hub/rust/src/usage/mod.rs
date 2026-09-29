@@ -1,9 +1,11 @@
 //! 使用统计与会话日志域（票据 06 + 增补：正在使用的项目会话；票据 07：opencode
 //! SQLite 适配 + codex 预留骨架 + 数据清空）
 //!
-//! 数据流：`scan-usage` 以 AUTH_KEY 为闸门（fs_auth 第三层按路径弹窗，
-//! 未授权时扫描会引发弹窗风暴，故整体降级为 auth-required）→ host-process
-//! 枚举各家 JSONL + opencode SQLite 源同步 → 回灌解析入库 → 状态推送。
+//! 数据流：`scan-usage` 发起时先对**本次扫描的实际来源根目录**批量授权
+//! （一次 `fs_request_auth` 弹窗列全部，已授权路径宿主静默跳过——同一业务
+//! 预见多个文件访问用批量授权代替逐个弹窗；拒绝才降级 auth-required）→
+//! host-process 枚举各家 JSONL + opencode SQLite 源同步 → 回灌解析入库 →
+//! 状态推送。
 //!
 //! # 模块结构
 //! - [`schema`]：幂等建表（parse_watermark / usage_session / provider_preset）
@@ -267,7 +269,10 @@ mod tests {
             .find(|x| x["name"] == json!("opencode"))
             .expect("opencode source");
         assert_eq!(oc["kind"], json!("sqlite"));
-        assert!(oc["paths"][0].as_str().unwrap_or("").ends_with("opencode.db"));
+        assert!(oc["paths"][0]
+            .as_str()
+            .unwrap_or("")
+            .ends_with("opencode.db"));
         // 三家 JSONL 源显式标 kind（前端据此区分「可添加/移除的目录」）
         let jsonl: Vec<&Value> = sources
             .iter()
@@ -275,7 +280,9 @@ mod tests {
             .collect();
         assert_eq!(jsonl.len(), 3);
         // 内置源每条都带 paths 数组（首个元素为默认路径）
-        assert!(sources.iter().all(|x| x["paths"].as_array().map(|a| a.len() == 1).unwrap_or(false)));
+        assert!(sources
+            .iter()
+            .all(|x| x["paths"].as_array().map(|a| a.len() == 1).unwrap_or(false)));
         // 正在使用的项目会话：默认空映射（扫描收尾重算）
         assert!(s["activeSessions"]
             .as_object()
@@ -317,8 +324,12 @@ mod tests {
         }
         // 旧单 path 条目迁移为 paths 数组（read_state 的幂等归一）
         let merged = normalize_sources_paths(merged);
-        let names: Vec<&str> = merged.as_array().unwrap()
-            .iter().map(|s| s["name"].as_str().unwrap()).collect();
+        let names: Vec<&str> = merged
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["name"].as_str().unwrap())
+            .collect();
         // 五条：四内置 + 用户自定义；自定义来源**未丢**
         assert_eq!(names.len(), 5);
         assert!(names.contains(&"my-logs"));
@@ -326,7 +337,10 @@ mod tests {
         assert!(names.contains(&"opencode"));
         // 迁移后的每条都带非空 paths 数组且无遗留 path 字段
         for s in merged.as_array().unwrap() {
-            assert!(s["paths"].as_array().map(|a| !a.is_empty()).unwrap_or(false));
+            assert!(s["paths"]
+                .as_array()
+                .map(|a| !a.is_empty())
+                .unwrap_or(false));
             assert!(s.get("path").is_none());
         }
     }
@@ -354,14 +368,20 @@ mod tests {
 
         // 实机形态：syncing 却无心跳（旧版本落库）→ 立即判失活
         assert!(scan_is_stale(&json!({ "status": "syncing" }), now));
-        assert!(scan_is_stale(&json!({ "status": "syncing", "scanStartedAt": null }), now));
+        assert!(scan_is_stale(
+            &json!({ "status": "syncing", "scanStartedAt": null }),
+            now
+        ));
 
         // 非在途状态永不判失活（否则每次读状态都会误伤一次成功扫描）
         for status in ["idle", "ok", "error", "auth-required"] {
             let s = json!({ "status": status });
             assert!(!scan_is_stale(&s, now), "{status} 不该被判失活");
             let s_old = json!({ "status": status, "scanStartedAt": 0 });
-            assert!(!scan_is_stale(&s_old, now), "{status}（旧心跳）不该被判失活");
+            assert!(
+                !scan_is_stale(&s_old, now),
+                "{status}（旧心跳）不该被判失活"
+            );
         }
 
         // 时钟回拨（now < started）不得下溢成「超窗」

@@ -1391,6 +1391,7 @@ mod tests {
                 ("home", ".agents"),
                 ("home", ".claude/skills"),
                 ("home", ".pi/agent/skills"),
+                ("home", ".bedcode/agent-hub/runs"),
             ],
             "agent-hub 的内置免询问项是家目录前缀形态"
         );

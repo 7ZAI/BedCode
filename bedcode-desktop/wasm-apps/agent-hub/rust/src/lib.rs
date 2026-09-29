@@ -16,10 +16,14 @@
 //! 进程为异步执行（run-id + output_path 落盘），完成事件 `on_process_done`
 //! 按 run_id 归属驱动解析 → storage 持久化 → 事件推送前端。
 //!
-//! 目录授权（AC3）：activate 时对 CLI 配置目录做一次批量 request-auth 弹窗；
-//! 拒绝**不阻断激活**（区别于 ai-chatbox 的激活门控 ADR 0007），降级由概览页
-//! 横幅呈现，用户可随时经 `agent-hub.request-auth` 命令重试。`~/.claude` 走
-//! 宿主 fs_auth 路径白名单免审，不在申请列。
+//! 目录授权（AC3）：activate 时对 CLI 配置目录 + 会话目录 + 自身数据目录做一次
+//! 批量 request-auth 弹窗；拒绝**不阻断激活**（区别于 ai-chatbox 的激活门控
+//! ADR 0007），降级由概览页横幅呈现，用户可随时经 `agent-hub.request-auth`
+//! 命令重试。批量口是唯一免逐个弹窗的出路：同一业务预见多个文件访问
+//! （扫描 N 个来源目录、供应商一次读写多个 CLI 配置）时，先一次 request-auth
+//! 把整组目录拿到手，后续逐文件访问全部前缀命中、静默放行。`~/.claude/skills`
+//! 走宿主第一方清单免审；`~/.claude/projects` 会话目录不在清单内，须随
+//! activate 批量（或 usage 扫描时按实际来源根目录）申请。
 
 use bedcode_plugin_api::events::ProcessDoneEvent;
 use bedcode_plugin_api::host::{ConfigKey, HostConfig, HostFs, HostLog, HostStorage};
@@ -70,10 +74,15 @@ fn host() -> WasmHost {
     WasmHost
 }
 
-/// 批量授权目录清单：全部为家目录绝对路径前缀；`~/.claude` 走宿主路径
-/// 白名单免审，不在申请列（fs_auth 对含 `.claude/` 段的路径直接放行）；
-/// `~/.claude.json` 是文件且不含 `.claude/` 段，白名单不覆盖，需单独申请
-/// （同意后 usage 扫描可读配置提取「正在使用的项目会话」）。
+/// 批量授权目录清单：全部为家目录绝对路径前缀。
+///
+/// 宿主侧第一方清单已免审 `~/.agents`、`~/.claude/skills`、`~/.pi/agent/skills`
+/// 与自身数据根的 `~/.bedcode/agent-hub/runs`（回灌产物目录），不在申请列；
+/// 其余每次会话都会读写的目录在这里一次性批量申请：CLI 配置/会话目录
+/// （codex / pi / opencode / claude projects）、npmrc、claude.json。
+/// `~/.claude/projects` 是 usage 扫描的会话真源（claude 适配器逐文件读），
+/// 不随宿主免询目录放行（用户内容），须用户点头；拒绝后 usage 域降级，
+/// 扫描时仍可就「实际来源根目录」重新批量申请。
 fn auth_dirs(home: &str) -> Vec<String> {
     vec![
         format!("{home}/.codex"),
@@ -83,6 +92,7 @@ fn auth_dirs(home: &str) -> Vec<String> {
         format!("{home}/.agents"),
         format!("{home}/.npmrc"),
         format!("{home}/.claude.json"),
+        format!("{home}/.claude/projects"),
     ]
 }
 
@@ -258,18 +268,22 @@ mod tests {
         assert!(m.permissions.contains(&"process:run".to_string()));
     }
 
-    /// 授权目录清单：家目录绝对路径前缀、覆盖四家 CLI 配置落点，且不含
-    /// `~/.claude`（fs_auth 路径白名单对含 `.claude/` 段的路径直接放行）
+    /// 授权目录清单：家目录绝对路径前缀、覆盖四家 CLI 配置/会话落点，
+    /// 且不含宿主第一方清单已免审的目录（`.claude/skills`、`.bedcode/agent-hub/runs`）
     #[test]
     fn auth_dirs_cover_cli_homes() {
         let dirs = auth_dirs("/home/u");
-        assert_eq!(dirs.len(), 7);
+        assert_eq!(dirs.len(), 8);
         assert!(dirs.iter().all(|d| d.starts_with("/home/u/")));
         assert!(dirs.iter().any(|d| d.ends_with("/.codex")));
         assert!(dirs.iter().any(|d| d.ends_with("/.pi")));
-        // ~/.claude 目录走白名单免审；仅 .claude.json 文件需授权（白名单不含文件）
+        // usage 扫描的 claude 会话真源：不随宿主第一方免询（用户内容），须授权
+        assert!(dirs.iter().any(|d| d.ends_with("/.claude/projects")));
         assert!(dirs.iter().any(|d| d.ends_with("/.claude.json")));
-        assert!(dirs.iter().all(|d| !d.contains("/.claude/")));
+        // 宿主第一方清单已免审的目录不进申请列（清单：.agents / .claude/skills /
+        // .pi/agent/skills / .bedcode/agent-hub/runs；.agents 因技能库仍需逐文件读写）
+        assert!(dirs.iter().all(|d| !d.contains("/.claude/skills")));
+        assert!(dirs.iter().all(|d| !d.contains("/.bedcode/agent-hub/runs")));
     }
 }
 

@@ -41,9 +41,7 @@ pub(crate) fn list_sources(h: &WasmHost) -> anyhow::Result<Value> {
                 s["paths"] = json!(paths
                     .iter()
                     .filter_map(|p| p.as_str())
-                    .map(|p| {
-                        json!({ "path": p, "removable": default.as_deref() != Some(p) })
-                    })
+                    .map(|p| { json!({ "path": p, "removable": default.as_deref() != Some(p) }) })
                     .collect::<Vec<Value>>());
             }
             out.push(s);
@@ -159,7 +157,9 @@ pub(crate) fn add_source_path(h: &WasmHost, args: &Value) -> anyhow::Result<Valu
     }
     if source_is_sqlite(&state, &name) {
         // sqlite 源单文件只读（用户可见拒绝；ADR 0030 业务码）
-        bedcode_plugin_api::bail_with_code!("com.bedcode.agent-hub.hub.lg.sources.error.sqliteReadonly");
+        bedcode_plugin_api::bail_with_code!(
+            "com.bedcode.agent-hub.hub.lg.sources.error.sqliteReadonly"
+        );
     }
     if path_registered(&state, &path) {
         // 目录已归属另一来源（用户可见拒绝；ADR 0030 业务码）
@@ -198,7 +198,9 @@ pub(crate) fn remove_source_path(h: &WasmHost, args: &Value) -> anyhow::Result<V
         .trim()
         .to_string();
     if name.is_empty() || raw_path.is_empty() {
-        return Err(anyhow::anyhow!("remove-source-path: name and path required"));
+        return Err(anyhow::anyhow!(
+            "remove-source-path: name and path required"
+        ));
     }
     let home = HOME
         .get()
@@ -322,9 +324,7 @@ fn normalize_path(raw: &str, home: &str) -> anyhow::Result<String> {
         raw.to_string()
     };
     if !path.starts_with('/') {
-        return Err(anyhow::anyhow!(
-            "path must be absolute (or start with ~/)"
-        ));
+        return Err(anyhow::anyhow!("path must be absolute (or start with ~/)"));
     }
     if path_rejected_for_script(&path) {
         return Err(anyhow::anyhow!(
@@ -337,7 +337,10 @@ fn normalize_path(raw: &str, home: &str) -> anyhow::Result<String> {
 /// 收集来源条目的全部目录（state 内 paths 数组；防御旧形态单 path 兜底）
 pub(super) fn entry_paths(src: &Value) -> Vec<String> {
     if let Some(arr) = src.get("paths").and_then(|p| p.as_array()) {
-        let ps: Vec<String> = arr.iter().filter_map(|p| p.as_str().map(String::from)).collect();
+        let ps: Vec<String> = arr
+            .iter()
+            .filter_map(|p| p.as_str().map(String::from))
+            .collect();
         if !ps.is_empty() {
             return ps;
         }
@@ -353,7 +356,10 @@ fn source_named(state: &Value, name: &str) -> bool {
     state
         .get("sources")
         .and_then(|s| s.as_array())
-        .map(|arr| arr.iter().any(|s| s.get("name").and_then(|n| n.as_str()) == Some(name)))
+        .map(|arr| {
+            arr.iter()
+                .any(|s| s.get("name").and_then(|n| n.as_str()) == Some(name))
+        })
         .unwrap_or(false)
 }
 
@@ -378,7 +384,8 @@ fn path_registered(state: &Value, path: &str) -> bool {
         .get("sources")
         .and_then(|s| s.as_array())
         .map(|arr| {
-            arr.iter().any(|src| entry_paths(src).iter().any(|p| p == path))
+            arr.iter()
+                .any(|src| entry_paths(src).iter().any(|p| p == path))
         })
         .unwrap_or(false)
 }
@@ -440,7 +447,10 @@ mod tests {
         ]);
         let out = normalize_sources_paths(modern.as_array().cloned().unwrap());
         let arr = out.as_array().unwrap();
-        assert_eq!(arr[0]["paths"], json!(["/home/u/.pi/agent/sessions", "/extra"]));
+        assert_eq!(
+            arr[0]["paths"],
+            json!(["/home/u/.pi/agent/sessions", "/extra"])
+        );
         assert_eq!(arr[1]["paths"], json!([]));
     }
 
@@ -504,7 +514,10 @@ mod tests {
             builtin_default_path(home, "opencode").as_deref(),
             Some("/home/u/.local/share/opencode/opencode.db")
         );
-        assert_eq!(builtin_default_path(home, "codex").as_deref(), Some("/home/u/.codex/sessions"));
+        assert_eq!(
+            builtin_default_path(home, "codex").as_deref(),
+            Some("/home/u/.codex/sessions")
+        );
         assert_eq!(builtin_default_path(home, "my-logs"), None);
     }
 }

@@ -109,8 +109,11 @@ enum TrustedDir {
 /// 第一方插件的集成目录归属清单（票 07）
 ///
 /// 逐条写明「谁、为什么必须免弹窗」，新增条目要说得出消费它的函数；说不出归属的
-/// 一律不加——让它走弹窗 + 记住，而不是往这张表里塞特权。判据：该目录的位置由
-/// **第三方 CLI 的约定**决定（插件无从让用户挑），且每次会话都会访问。
+/// 一律不加——让它走弹窗 + 记住，而不是往这张表里塞特权。两类合法判据：
+/// ① 目录的位置由**第三方 CLI 的约定**决定（插件无从让用户挑），且每次会话都会访问；
+/// ② 插件**自身数据目录下的瞬时产物**（运行日志回灌）：`Exact` 粒度落账无法表达
+/// 「整目录」——产物每次运行都是新文件名（`runs/skills-scan-3.log` → `-4.log`），
+/// 「记住」永远不命中，弹窗 + 记住在这里是伪出路，只能靠免询问 + 审计投影。
 const FIRST_PARTY_TRUSTED_DIRS: &[(&str, &[TrustedDir])] = &[
     (
         // agent-hub 技能库：规范库在 `~/.agents/skills`，分发目标由
@@ -121,6 +124,12 @@ const FIRST_PARTY_TRUSTED_DIRS: &[(&str, &[TrustedDir])] = &[
             TrustedDir::Home(".agents"),
             TrustedDir::Home(".claude/skills"),
             TrustedDir::Home(".pi/agent/skills"),
+            // agent-hub 数据根下的**输出目录**（判据 ②）：detect / install /
+            // skills / usage 的 host-process 产物 `runs/*.log` 都写在这，
+            // 回灌读取（handle_process_done 的 fs_read(output_path)）后即删。
+            // 范围精确到 runs/ 子目录：该插件统计库与会话数据不在这棵子树
+            // （走 host-storage / 用户授权），本豁免不含任何用户内容。
+            TrustedDir::Home(".bedcode/agent-hub/runs"),
         ],
     ),
     (
@@ -1584,6 +1593,31 @@ mod tests {
             ),
             "agent-hub 只拿到 skills 子树，不是整个 ~/.claude"
         );
+        // 自身数据根下的输出目录（判据 ②）：runs 子树任一层放行，
+        // 但仅限 runs/——统计库（同数据根下非 runs）不走豁免
+        assert!(first_party_dir_matches_with_home(
+            "com.bedcode.agent-hub",
+            &p("/home/u/.bedcode/agent-hub/runs/skills-scan-3.log"),
+            Some(home)
+        ));
+        assert!(first_party_dir_matches_with_home(
+            "com.bedcode.agent-hub",
+            &p("/home/u/.bedcode/agent-hub/runs/a/b/c.log"),
+            Some(home)
+        ));
+        assert!(
+            !first_party_dir_matches_with_home(
+                "com.bedcode.agent-hub",
+                &p("/home/u/.bedcode/agent-hub/stats.db"),
+                Some(home)
+            ),
+            "豁免只到 runs/ 子目录，同一数据根下的其他文件不放开"
+        );
+        assert!(!first_party_dir_matches_with_home(
+            "com.bedcode.agent-hub",
+            &p("/home/u/.bedcode/agent-hubx/runs/x.log"),
+            Some(home)
+        ));
         assert!(!first_party_dir_matches_with_home(
             "com.bedcode.agent-hub",
             &p("/home/other/.agents/x"),
