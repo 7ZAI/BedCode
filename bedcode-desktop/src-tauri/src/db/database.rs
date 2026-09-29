@@ -44,6 +44,31 @@ impl Database {
         // `schema.sql` 的 `IF NOT EXISTS` 建出（单一事实源，见 AGENTS §9），
         // 无需列级迁移；幂等性由 `auth_tables_migration_is_idempotent` 与
         // `auth_tables_are_created_on_legacy_db` 两条锁覆盖。
+        //
+        // v33（2026-09-29 ADR 0033）：入场签发密钥的真源迁到认证中心，宿主不再
+        // 读写入场密钥。`plugin_secrets` 里属主为 `host` 的那把 `jwt.key` 因此成为
+        // 不可达的旧密钥材料——**清掉它**（幂等：不存在也视为成功）。
+        //
+        // 与「退役业务表不读不迁不清理」（v24 口径）的区别：那条针对的是**已退役的
+        // 表**（留在那里无害、也不会被误读）；这里是**一张仍在用、仍会被插件读的
+        // 表里的密钥行**——留着就是白给的攻击面（谁读到主库谁就拿到过期的入场密钥）。
+        // 清理只按精确三元组（属主 `host` + 键名 `jwt.key`）删，不碰任何其它行，
+        // 尤其**不碰** `biometric:<fingerprint>` 公钥寄主（生物凭证验签仍在宿主）。
+        let purged = self
+            .conn
+            .execute(
+                "DELETE FROM plugin_secrets WHERE plugin_id = 'host' AND key = 'jwt.key'",
+                [],
+            )
+            .map_err(|e| {
+                crate::AppError::Internal(format!("purge retired host jwt key: {e}"))
+            })?;
+        if purged > 0 {
+            tracing::info!(
+                purged_rows = purged,
+                "db migration v33: purged retired host-owned entry-token signing key (ADR 0033)"
+            );
+        }
         Ok(())
     }
 
@@ -192,6 +217,76 @@ mod tests {
                 .expect("count query");
             assert_eq!(count, 0, "退役表 {table} 不得被建出");
         }
+    }
+
+    /// v33（ADR 0033）：宿主属主的入场签发密钥行被清掉，且**只**清这一行
+    ///
+    /// 三条判据：
+    /// ① 旧库（有那行）跑完迁移后不再有；
+    /// ② 幂等（连跑两次结果一致，不报错）；
+    /// ③ **不误伤**——插件属主的同名行（中心自己迁移前的密钥行 / 新真源密钥环）与
+    ///    生物公钥寄主 `biometric:<fp>` 必须原样保留（后者仍由宿主托管）。
+    #[test]
+    fn retired_host_entry_token_key_is_purged_without_touching_others() {
+        let dir = std::env::temp_dir().join(format!("db-purge-jwtkey-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let db_path = dir.join("bedcode.db");
+        // 造一个「旧库」：四条密钥行同表并存
+        {
+            let db = Database::new(&db_path).expect("open");
+            db.init_schema().expect("init schema");
+            for (owner, key, value) in [
+                ("host", "jwt.key", "aa"),
+                ("com.bedcode.terminal-session", "jwt.key", "bb"),
+                ("com.bedcode.terminal-session", "jwt.keyring", "cc"),
+                ("host", "biometric:fp-abc", "dd"),
+            ] {
+                db.conn()
+                    .execute(
+                        "INSERT INTO plugin_secrets (plugin_id, key, value, updated_at) \
+                         VALUES (?1, ?2, ?3, '2026-09-29')",
+                        rusqlite::params![owner, key, value],
+                    )
+                    .expect("seed secret row");
+            }
+        }
+
+        // 直接读 `plugin_secrets` 的 (属主, 键名) 清单
+        fn secret_rows(db: &Database) -> Vec<(String, String)> {
+            let mut stmt = db
+                .conn()
+                .prepare("SELECT plugin_id, key FROM plugin_secrets ORDER BY plugin_id, key")
+                .expect("prepare");
+            let mapped = stmt
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+                .expect("query");
+            mapped.map(|r| r.expect("row")).collect()
+        }
+
+        {
+            let db = Database::new(&db_path).expect("reopen");
+            db.run_migrations().expect("first migration");
+            let remaining = secret_rows(&db);
+            assert!(
+                !remaining.contains(&("host".to_string(), "jwt.key".to_string())),
+                "宿主入场密钥行必须被清掉: {remaining:?}"
+            );
+            for keep in [
+                ("com.bedcode.terminal-session", "jwt.key"),
+                ("com.bedcode.terminal-session", "jwt.keyring"),
+                ("host", "biometric:fp-abc"),
+            ] {
+                assert!(
+                    remaining.contains(&(keep.0.to_string(), keep.1.to_string())),
+                    "不得误伤 {keep:?}: {remaining:?}"
+                );
+            }
+            // 第二次迁移：幂等（不报错、不再删任何行）
+            db.run_migrations().expect("second migration");
+            assert_eq!(secret_rows(&db), remaining, "重复迁移必须幂等");
+        }
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
 

@@ -599,9 +599,10 @@ interface host-auth {
     // 随之**退役删除**。旧产物（v23 SDK 构建）在 activate 期拿到点明新形态的
     // 错误，须按 v24 SDK 重建。
     //
-    // 保留面（凭据与密码学不动，§8 红线）：secret-store 密钥托管、生物凭证
-    // 公钥托管 + 验签执行（biometric-*，宿主 `plugin_secrets`）、JWT 签发/验签
-    // （device-token-*）、链路身份（link-identity-parts）。
+    // 保留面（凭据与密码学归属见 **v33 条目**，ADR 0033）：secret-store 密钥托管、
+    // 生物凭证公钥托管 + 验签执行（biometric-*，宿主 `plugin_secrets`）、链路身份
+    // （link-identity-parts）。**设备入场 JWT 签发/验签已于 v33 从本 interface 退役**
+    // （原先的 `device-token-issue` / `device-token-verify`）。
 
     /// 「已配对且绑定生物凭证公钥」查询（挑战签发闸门；判定 = 宿主托管公钥存在
     /// （`plugin_secrets`）。配对状态由认证中心私有库判定（插件侧先查自己库）。
@@ -619,14 +620,14 @@ interface host-auth {
     /// `ok(none)` = 身份未就绪。JSON：`{ publicB64, fingerprint }`。
     /// 响应字段 `kdPublicB64` / `kdFingerprint` 的数据源；只含公开材料。
     link-identity-parts: func() -> result<option<string>, string>;
-    /// 设备认证 JWT 签发（宿主 `JwtService` 同一代码路径：HS256 + secret-store
-    /// 托管密钥，**密钥不出宿主**——插件编排、宿主签发）。返回 token 字符串。
-    /// 过期窗口与宿主一致（7 天）。`device-name` / `fingerprint` 空串 = 缺省 None。
-    device-token-issue: func(sub: string, device-name: string, fingerprint: string) -> result<string, string>;
-    /// 设备认证 JWT 验签（宿主 `verify_token_with_expiry` 语义：签名 + 结构 + 时效）。
-    /// 有效 → `ok(claims-json)`（`{sub, iss, iat, exp, device_name?, fingerprint?}`）；
-    /// 无效 → `err("expired")`（过期）| `err("invalid")`（其余）——用户文案映射归插件。
-    device-token-verify: func(token: string) -> result<string, string>;
+
+    // ==================== v33：设备入场 JWT 签发/验签退役（ADR 0033） ====================
+    // 原 `device-token-issue` / `device-token-verify` 两函数**删除**（破坏性）：
+    // 认证中心（`com.bedcode.terminal-session`）自持入场密钥并自签自验，宿主不再
+    // 持有任何设备 JWT 密码学，`utils/auth/jwt.rs` 整个退役。旧产物（v32 SDK
+    // 构建）仍 import 这两个函数 → **实例化期**即被拒，`stale_artifact_rebuild_hint`
+    // 点名「按 v33 SDK 重建」，不是 trap 也不是静默降级。
+    // token wire 格式逐字节不变（移动端把 token 当不透明串，零改动）。
 
     // ==================== v32：认证中心显式注册 + 组合式认证原语（ADR 0031） ====================
     // 用户裁定 2026-09-29：认证中心与微服务 auth server 概念一致，只不过这里没有也
@@ -959,6 +960,12 @@ interface manifest {
 ///   退役，运行期显性报错），旧快照 topic `peer:transfer` / `peer:receive` 退役。
 ///   旧产物在**实例化**阶段即被点名拒绝（stale_artifact_rebuild_hint 点明 v31 重建）。
 ///   权威记账在 SDK `rust/src/abi.rs`
+/// - **v33（认证中心持有入场密钥，2026-09-29，ADR 0033，破坏性）**：`host-auth` 删
+///   `device-token-issue` / `device-token-verify`——认证中心自持入场密钥并自签自验，
+///   宿主不再持有设备 JWT 密码学（`utils/auth/jwt.rs` 整个退役）。旧产物（v32 SDK
+///   构建）仍 import 这两函数 → **实例化期**被点名拒绝（stale_artifact_rebuild_hint
+///   点明 v33 重建）。token wire 格式逐字节不变，移动端零改动。**desktop 独有**，
+///   移动端 WIT/ABI/SDK 不跟演不投影（mobile ABI 保持 11）。
 ///
 /// **不 bump 版本号的语义变更（审计票 05，落在 v22 批次内）**：host-bus topic 命名空间。
 /// 函数签名零变化，故不动版本号；但**定向事件的 topic 串**由 `<base>.<owner>` 改为
@@ -1117,20 +1124,21 @@ world plugin-task {
 /// v17：认证策略导出（**desktop 独有，双端偏离**——认证中心能力，同
 /// host-auth/host-pty 先例，ADR 0022「双端偏离」节：桌面独有接口不要求移动端跟演）
 ///
-/// 消费方 = 宿主 server 认证中间件（票 12 C3）：连接建立验签**执行留宿主**
-/// （密码学引擎不移动，spec §3「不动」表），验签通过后经本导出取权威插件策略
-/// 裁决（claims 结构/时效策略 + 信任撤销检查）；该插件未激活/调用失败时
-/// 宿主策略回退（验签通过即放行，无单点）。
+/// 消费方 = 宿主 server 认证中间件（票 12 C3）：连接建立的**验签与策略裁决收为
+/// 一次调用**（v33 / ADR 0033：验签执行移入认证中心，密码学引擎随入场密钥一同
+/// 下沉；宿主不再持有任何设备 JWT 密码学），本导出内部先验签再做策略裁决
+/// （claims 结构/时效策略 + 信任撤销检查）；该插件未激活 / 调用失败时
+/// **拒绝**（fail-closed，ADR 0031；旧口径的「宿主策略回退」已随 v31 删除）。
 ///
 /// 可选导出（**不进 `plugin` world 必选导出列表**——同 events-binary/events-ws）：
 /// 宿主实例化后动态探测 `bedcode:plugin/auth-policy#verify-device-token`；未导出
-/// 的插件（旧 SDK 产物 / 非权威插件）不提供策略，宿主中间件仅对权威插件
-/// （`com.bedcode.terminal-session`，终端会话中心票 05 起兼管认证策略）调用本导出——
+/// 的插件（旧 SDK 产物 / 非权威插件）不提供策略，宿主中间件仅对**在册认证中心**
+/// （`com.bedcode.terminal-session`，经 `auth-center-register` 显式登记）调用本导出——
 /// 独立认证中心插件已整体退役（票 06），不存在第二个候选。
 ///
-/// 入参 = 宿主已验签通过的 JWT token（**验签不在此重复**：插件密钥域与宿主
-/// 不同，无法也不应验签——spec §3 红线「验签执行点留宿主」）；返回 claims JSON
-/// （放行）或错误（拒绝原因）。
+/// 入参 = 设备入场 JWT token（**中心自持密钥并自行验签**，ADR 0033：宿主不再持有
+/// 任何设备 JWT 密码学，验签与本导出是同一次调用内的两步——先验签再策略裁决）；
+/// 返回 claims JSON（放行）或错误（拒绝原因）。
 interface auth-policy {
     /// 策略裁决：claims 结构/时效策略 + 信任撤销检查 → claims JSON | 拒绝原因
     verify-device-token: func(token: string) -> result<string, string>;

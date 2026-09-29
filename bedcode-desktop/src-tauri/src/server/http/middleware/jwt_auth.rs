@@ -1,20 +1,26 @@
-//! HTTP 网关中间件 — JWT 认证
+//! HTTP 网关中间件 — 认证
 //!
 //! 挂载在 /api scope 上，统一拦截认证：
-//! - /api/auth/* — 放行（公开路由，配对/登录）
-//! - /api/plugin/* — 有 JWT 就验签并注入 claims；无 JWT 一律**放行到 handler**，
+//! - /api/health 等宿主自持公开端点 — 放行
+//! - /api/plugin/* — 有凭证就问认证中心；无凭证一律**放行到 handler**，
 //!   由 handler 按**端点声明的档位**决定要不要真的到达插件（票 08）：manifest
 //!   `contributes.httpEndpoints` 未声明 `auth` 即最严档 `jwt`（无凭证 → 401），
-//!   免凭证必须逐条显式声明 `auth: "none"`（环回 hook 脚本无法持有 JWT，正是这一格）。
+//!   免凭证必须逐条显式声明 `auth: "none"`（环回 hook 脚本无法持有凭证，正是这一格）。
 //!   本中间件不做端点级判定，因为它还不知道属主插件是谁（旧前缀兜底在 handler 里解）。
-//! - 其余 /api/* — 必须通过 JWT 校验
+//! - 其余 /api/* — 必须通过认证中心裁决
 //!
 //! 信任边界：服务监听 BIND_ADDRESS（0.0.0.0）。票 08 前「局域网内任意设备可无凭证
 //! 调用已激活插件的 HTTP 端点（含写操作）」；现在这一面由插件的逐端点声明承担——
 //! 未显式声明 `auth: "none"` 的端点要求验签，且插件拿得到宿主判定的调用方身份
 //! （`caller` = device / localhost / anonymous）用于自行收紧。
 //!
-//! 校验通过后将 JwtClaims 注入 request extensions，handler 通过 get_claims_from_request 提取。
+//! **验签执行点 = 认证中心**（v33 / ADR 0033）：宿主不再持有任何设备 JWT 密码学
+//! （`utils/auth/jwt.rs` 已退役），本中间件**只问中心一次**——中心内部先验签再
+//! 逐条做策略，成功时交回连接身份注入 request extensions，handler 经
+//! [`get_authenticated_identity`] 提取。裁决 **fail-closed**（ADR 0031 v32）：
+//! 无中心在册 / 中心调用失败 / 中心拒绝 → 一律拒绝（`deny_kind` 分
+//! no_center / unavailable / policy）。唯一例外是拿不到 AppContext（无头 / 单测
+//! 上下文）时整段跳过——生产运行期 AppContext 恒在，这不构成部署降级路径。
 
 use actix_web::body::MessageBody;
 use actix_web::dev::{ServiceRequest, ServiceResponse};
@@ -22,43 +28,46 @@ use actix_web::middleware::Next;
 use actix_web::{Error, HttpMessage, HttpResponse};
 use serde_json::json;
 
-use crate::utils::auth::jwt::{JwtClaims, JwtService};
+use crate::utils::auth::identity::AuthenticatedIdentity;
 
-/// 从 request extensions 提取 JWT claims
+/// 从 request extensions 提取认证中心交回的连接身份
 ///
-/// 供 handler 使用，中间件校验通过后 claims 已注入
-pub fn get_claims_from_request(req: &actix_web::HttpRequest) -> Option<JwtClaims> {
-    req.extensions().get::<JwtClaims>().cloned()
+/// 供 handler 使用：中间件裁决通过后身份已注入
+pub fn get_authenticated_identity(req: &actix_web::HttpRequest) -> Option<AuthenticatedIdentity> {
+    req.extensions().get::<AuthenticatedIdentity>().cloned()
 }
 
-/// 从 Authorization header 提取并验证 JWT
+/// 从 Authorization header 取 Bearer 凭证（纯解析，不做任何判定）
 ///
-/// 验签执行留宿主中间件（密码学引擎不移动，票 12 C3）；验签通过后取认证中心
-/// 策略（`auth-policy`），**fail-closed**（ADR 0031 v32）：无中心在册 / 中心调用
-/// 失败 / 中心拒绝 → 一律拒绝（`deny_kind` 分 no_center / unavailable / policy）。
-/// 唯一例外是拿不到 AppContext（无头 / 单测上下文）时整段跳过——生产运行期
-/// AppContext 恒在，这不构成部署降级路径。
-///
-/// 返回 Some(claims) 表示校验通过（含策略放行），None 表示无 token / 验签失败 / 策略拒绝
-pub fn extract_and_verify_jwt(req: &actix_web::dev::ServiceRequest) -> Option<JwtClaims> {
+/// 只认逐字 `Bearer ` 前缀（大小写敏感）：宽松接受 `bearer` / `Token` 会让凭证
+/// 提取这一层变成「猜 scheme」，而 scheme 是线协议的一部分（移动端只发 Bearer）。
+fn bearer_credential(req: &actix_web::dev::ServiceRequest) -> Option<&str> {
     let auth_header = req.headers().get("Authorization")?.to_str().ok()?;
-    let token = auth_header.strip_prefix("Bearer ")?;
-    let jwt_service = JwtService::new();
-    let claims = jwt_service.verify_token_with_expiry(token).ok()?;
+    auth_header.strip_prefix("Bearer ")
+}
 
-    // 票 12 C3 → v32 fail-closed：验签后查认证中心注册表并裁决。仅当无 AppContext
-    // （无头 / 单测）才整段跳过；生产运行期不存在「查不到中心就放行」的分支。
-    if let Some(ctx) = crate::system::app_context::AppContext::try_global() {
-        if let Err(reason) = crate::utils::auth::auth_center::enforce_connection_policy(ctx.plugin_host(), token) {
-            tracing::warn!(
-                device_id = %claims.sub,
-                %reason,
-                "HTTP /api request denied by auth center policy"
-            );
-            return None;
+/// 从 Authorization header 取凭证并问认证中心裁决
+///
+/// 返回 `Some(identity)` = 中心放行（身份注入 extensions）；`None` = 无凭证 /
+/// 中心拒绝（原因已由 [`enforce_connection_policy`] 打点，结构化字段 `deny_kind`）。
+pub fn extract_and_verify_jwt(req: &actix_web::dev::ServiceRequest) -> Option<AuthenticatedIdentity> {
+    authenticate(bearer_credential(req)?)
+}
+
+/// 问认证中心裁决一次（无中心 / 调用失败 / 拒绝 / 身份不可用 → `None`）
+///
+/// 验签 + 策略都在中心内部（ADR 0033），故这里是**唯一**的认证入口，不再有
+/// 「先本地验签、再问策略」两步。仅当无 AppContext（无头 / 单测）才放行——生产
+/// 运行期不存在「查不到中心就放行」的分支。
+fn authenticate(token: &str) -> Option<AuthenticatedIdentity> {
+    let ctx = crate::system::app_context::AppContext::try_global()?;
+    match crate::utils::auth::auth_center::enforce_connection_policy(ctx.plugin_host(), token) {
+        Ok(identity) => Some(identity),
+        Err(reason) => {
+            tracing::warn!(%reason, "HTTP /api request denied by auth center");
+            None
         }
     }
-    Some(claims)
 }
 
 /// 判断请求路径是否属于宿主自持公开端点（无需认证）
@@ -72,18 +81,18 @@ pub fn is_public_path(path: &str) -> bool {
 
 /// 判断请求路径是否属于插件端点
 ///
-/// 插件端点**有 JWT 就验签**（claims 注入后由 handler 按端点档位判定）；无 JWT 的
+/// 插件端点**有凭证就问中心**（身份注入后由 handler 按端点档位判定）；无凭证的
 /// 请求放行到 handler——端点级认证在 `plugin_controller::plugin_http_endpoint`，
 /// 不在这里（本层还解析不出属主插件，旧前缀兜要按接管方的声明判）。
 pub fn is_plugin_path(path: &str) -> bool {
     path.starts_with("/api/plugin/")
 }
 
-/// HTTP 网关中间件（`/api` scope）：验签通过注入 claims，否则按路径规则放行 / 401
+/// HTTP 网关中间件（`/api` scope）：认证通过注入身份，否则按路径规则放行 / 401
 ///
-/// 从 `server/http/routes.rs` 的路由构造里提出来成为具名中间件，目的是让「协议网关挂在验签之后」
+/// 从 `server/http/routes.rs` 的路由构造里提出来成为具名中间件，目的是让「协议网关挂在认证之后」
 /// 这一顺序约束可被真实 actix 栈测到（见 `server/http/gateway.rs` 的中间件用例），而不是靠注释
-/// 约定。业务 JWT 的验签执行点始终在这里，不下沉、不外移（AGENTS.md §8 认证红线）。
+/// 约定。认证判定本身**下沉到认证中心**（ADR 0033），本层只做「问中心 + 注入 / 放行」。
 pub(crate) async fn jwt_gateway<B>(req: ServiceRequest, next: Next<B>) -> Result<ServiceResponse, Error>
 where
     B: MessageBody + 'static,
@@ -106,9 +115,9 @@ where
         }
     }
 
-    // 有效 JWT → 注入 claims 并放行
-    if let Some(claims) = extract_and_verify_jwt(&req) {
-        req.extensions_mut().insert(claims);
+    // 认证通过 → 注入连接身份并放行
+    if let Some(identity) = extract_and_verify_jwt(&req) {
+        req.extensions_mut().insert(identity);
         return next.call(req).await.map(|res| res.map_into_boxed_body());
     }
 
@@ -119,7 +128,7 @@ where
         return next.call(req).await.map(|res| res.map_into_boxed_body());
     }
 
-    // 其余受保护路由：无有效 JWT → 返回 401
+    // 其余受保护路由：认证未过 → 返回 401
     let (req, _payload) = req.into_parts();
     let response = HttpResponse::Unauthorized().json(json!({
         "code": 1007,
@@ -131,6 +140,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::system::app_context::AppContext;
     use actix_web::web;
 
     /// 宿主自持公开端点只剩 `/api/health` 与 `/health`（历史别名）。
@@ -259,19 +269,14 @@ mod tests {
         assert!(!is_plugin_path("/api/plugin2/"));
     }
 
-    // ==================== 票 12 C3：验签留宿主 + 策略门（中间件单测） ====================
-
-    /// 签发一个宿主合法 token（单测无 AppContext → JwtService 进程内随机密钥
-    /// 回退，签发/验签同进程稳定，jwt.rs 既有测试同模式）
-    fn issue_token(sub: &str, fingerprint: Option<&str>) -> String {
-        JwtService::new()
-            .generate_token(
-                sub.to_string(),
-                Some("Pixel 9".to_string()),
-                fingerprint.map(String::from),
-            )
-            .expect("issue token")
-    }
+    // ==================== ADR 0033：认证问中心（中间件单测） ====================
+    //
+    // v33 起宿主**没有签发面也没有验签面**（`utils/auth/jwt.rs` 已退役），故本层
+    // 单测不再造 token。可单测的部分收成两半：
+    // ① 凭证**提取**（纯解析，Bearer scheme / 缺头 / 非 Bearer）；
+    // ② 无运行时上下文（无头 / 单测）时**一律拒**（fail-closed 的可观测形态之一）。
+    // 「合法凭证放行」那一半在 in-crate 闭环用例里用**真实中心产物**断言
+    // （`wasm_core/manager/host/tests/system_component_test.rs`）——那里才有中心。
 
     /// 构造带 Authorization: Bearer 头的 ServiceRequest
     fn srv_req_with_bearer(token: &str) -> actix_web::dev::ServiceRequest {
@@ -282,49 +287,50 @@ mod tests {
             .to_srv_request()
     }
 
-    /// 验签仍执行于宿主：签名被篡改的 token（claims 合法但签名失效）→ None
-    /// （策略门在验签之后，篡改 token 连策略都到不了）
+    /// 凭证提取：Bearer scheme 逐字取出；缺头 / 非 Bearer / 畸形 scheme → None
     #[test]
-    fn tampered_token_rejected_by_host_verification() {
-        let token = issue_token("device-1", Some("fp-abc"));
-        let tampered = format!("{}x", &token[..token.len() - 4]); // 破坏签名尾段
-        let req = srv_req_with_bearer(&tampered);
-        assert!(
-            extract_and_verify_jwt(&req).is_none(),
-            "篡改签名必须被宿主验签拒绝（验签执行点留宿主）"
-        );
-    }
+    fn bearer_credential_extraction_matrix() {
+        let req = srv_req_with_bearer("token-abc");
+        assert_eq!(bearer_credential(&req), Some("token-abc"));
+        // 只剥前缀、不 trim：凭证原样交中心判定（空格/空串都原样透传，
+        // 判「形不对」是中心的活，提取层不猜）
+        assert_eq!(bearer_credential(&srv_req_with_bearer(" ")), Some(" "));
+        assert_eq!(bearer_credential(&srv_req_with_bearer("")), Some(""));
 
-    /// 验签仍执行于宿主：非 JWT 乱串 / 过期语义由宿主 `JwtService` 负责 → None
-    #[test]
-    fn garbage_token_rejected_by_host_verification() {
-        let req = srv_req_with_bearer("not-a-jwt");
-        assert!(extract_and_verify_jwt(&req).is_none());
-    }
-
-    /// 无 Authorization / 非 Bearer scheme → None（中间件入口解析）
-    #[test]
-    fn missing_or_non_bearer_header_returns_none() {
-        use actix_web::test;
-        let req = test::TestRequest::get().uri("/api/sessions").to_srv_request();
-        assert!(extract_and_verify_jwt(&req).is_none(), "无 Authorization 头 → None");
-
-        let req = test::TestRequest::get()
+        // 无 Authorization 头
+        let req = actix_web::test::TestRequest::get()
             .uri("/api/sessions")
-            .insert_header(("Authorization", "Basic abc"))
             .to_srv_request();
-        assert!(extract_and_verify_jwt(&req).is_none(), "非 Bearer scheme → None");
+        assert_eq!(bearer_credential(&req), None, "无 Authorization 头 → None");
+
+        // 非 Bearer scheme
+        for scheme in ["Basic abc", "bearer token-abc", "Token token-abc"] {
+            let req = actix_web::test::TestRequest::get()
+                .uri("/api/sessions")
+                .insert_header(("Authorization", scheme))
+                .to_srv_request();
+            assert_eq!(bearer_credential(&req), None, "非 Bearer scheme: {scheme}");
+        }
     }
 
-    /// 宿主验签通过 + 单测上下文无 AppContext（整段跳过策略检查）→ 放行：合法
-    /// token 返回 claims，sub/device_name/fingerprint 注入。生产运行期不存在此路径。
+    /// 无运行时上下文（无头 / 单测）时**任何**凭证都拿不到身份 → fail-closed。
+    ///
+    /// 这条不是「测试环境将就」：它锁的是「宿主不得在没有中心的情况下放行」——
+    /// 中间件里已经没有任何本地验签面，凭证形如与否都不影响结论。
     #[test]
-    fn valid_token_accepted_when_no_app_context_to_check_policy() {
-        let token = issue_token("device-1", Some("fp-abc"));
-        let req = srv_req_with_bearer(&token);
-        let claims = extract_and_verify_jwt(&req).expect("合法 token 放行（无 AppContext，策略整段跳过）");
-        assert_eq!(claims.sub, "device-1");
-        assert_eq!(claims.device_name.as_deref(), Some("Pixel 9"));
-        assert_eq!(claims.fingerprint.as_deref(), Some("fp-abc"));
+    fn no_runtime_context_denies_every_credential() {
+        assert!(AppContext::try_global().is_none(), "本用例前提：单测上下文无全局 AppContext");
+        for token in ["not-a-jwt", "a.b.c", "", "eyJhbGciOiJIUzI1NiJ9.e30.x"] {
+            let req = srv_req_with_bearer(token);
+            assert!(
+                extract_and_verify_jwt(&req).is_none(),
+                "无中心在册时凭证一律不得放行: {token}"
+            );
+        }
+        // 无 Authorization 头同样 None
+        let req = actix_web::test::TestRequest::get()
+            .uri("/api/sessions")
+            .to_srv_request();
+        assert!(extract_and_verify_jwt(&req).is_none());
     }
 }

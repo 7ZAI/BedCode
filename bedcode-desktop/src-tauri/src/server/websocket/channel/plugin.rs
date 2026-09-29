@@ -35,7 +35,8 @@ use super::super::conn::{AuthMode, ChannelHandler, ConnCtx, WsConnBase};
 use super::super::endpoint::{EndpointAuth, EndpointEntry};
 use crate::server::websocket::registry::WsSessionRegistry;
 use crate::system::constants::PLUGIN_WS_SEND_QUEUE_CAPACITY;
-use crate::utils::auth::jwt::{jwt_error_message, JwtService};
+// 认证中心裁决返回的身份类型见 `crate::utils::auth::identity`（`enforce_connection_policy`
+// 的返回类型，本文件不需具名引用）
 use crate::wasm_core::bus::MessageBus;
 use crate::wasm_core::host_api::ws::deliver_endpoint_frame;
 
@@ -236,30 +237,31 @@ impl PluginChannel {
     }
 }
 
-/// 插件端点 JWT 校验（只置会话认证态，不触达配对设备在线语义）
+/// 插件端点认证（只置会话认证态，不触达配对设备在线语义）
 ///
-/// 成功返回 `claims.sub`（连接上下文的脱敏身份来源）
+/// **验签与策略都由认证中心做**（v33 / ADR 0033）：宿主不再持有任何设备 JWT
+/// 密码学（`utils/auth/jwt.rs` 已退役），这里只问中心一次
+/// （`enforce_connection_policy`，与 HTTP 中间件 `jwt_auth::extract_and_verify_jwt`
+/// **同一条路径、同一个判据**），成功后把中心交回的连接身份写进连接会话。
+///
+/// fail-closed（ADR 0031）：无中心 / 调用失败 / 中心拒绝 → 拒绝连接（随后 close
+/// 4001），`deny_kind` 三态在中心桥接面分类；仅当无 AppContext（无头 / 单测）跳过。
 fn verify_endpoint_jwt(conn: &mut WsConnBase, token: &str) -> Result<String, (String, String)> {
-    let claims = JwtService::new()
-        .verify_token_with_expiry(token)
-        .map_err(|e| ("AUTH_FAILED".to_string(), jwt_error_message(&e).to_string()))?;
-
-    // 认证对齐（HTTP 路由代码注册下沉专项阶段 3）：验签后经认证中心策略，与 HTTP
-    // 中间件（`jwt_auth::extract_and_verify_jwt`）**同判据**——ADR 0031 v32 起
-    // fail-closed：查注册表，无中心 / 调用失败 / 中心拒绝 → 一律拒绝连接
-    // （deny_kind 分 no_center / unavailable / policy），随后 close 4001；
-    // 仅当无 AppContext（无头 / 单测）整段跳过。
-    if let Some(ctx) = crate::system::app_context::AppContext::try_global() {
-        if let Err(reason) = crate::utils::auth::auth_center::enforce_connection_policy(ctx.plugin_host(), token) {
-            return Err(("AUTH_FAILED".to_string(), reason));
-        }
-    }
+    let Some(ctx) = crate::system::app_context::AppContext::try_global() else {
+        // 无头 / 单测上下文：没有认证中心可问（生产运行期不存在此路径）
+        return Err((
+            "AUTH_FAILED".to_string(),
+            "auth center unavailable: no runtime context".to_string(),
+        ));
+    };
+    let identity = crate::utils::auth::auth_center::enforce_connection_policy(ctx.plugin_host(), token)
+        .map_err(|reason| ("AUTH_FAILED".to_string(), reason))?;
 
     conn.session.authenticated = true;
-    conn.session.device_id = Some(claims.sub.clone());
-    conn.session.device_name = claims.device_name.clone();
-    conn.session.fingerprint = claims.fingerprint.clone();
-    Ok(claims.sub)
+    conn.session.device_id = Some(identity.device_id.clone());
+    conn.session.device_name = identity.device_name.clone();
+    conn.session.fingerprint = identity.fingerprint.clone();
+    Ok(identity.device_id)
 }
 
 /// 帧投递任务：串行消费队列并投给属主插件（同连接内保序，spec §2.2 D2）

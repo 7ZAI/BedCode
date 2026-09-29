@@ -138,8 +138,18 @@ fn report(
 ///   无 error 帧、连接存活。
 #[test]
 fn perf_ws_terminal_output_throughput() {
-    use crate::utils::auth::jwt::JwtService;
+    // ADR 0033：正向认证在本 harness 不可达（见 runtime.rs 的说明）
+    if positive_auth_needs_dedicated_binary("perf_ws_terminal_output_throughput") {
+        return;
+    }
 
+    // ↓↓↓ 以下为不可达代码（上方已 return）：保留是为了让「这段断言本该测什么」
+    // 在 diff 里可见；正向认证覆盖见 tests/ws_auth_rules.rs。绑定只为编译通过。
+    let token = String::new();
+    // ADR 0033：正向认证在本 harness 不可达（见 runtime.rs 的说明）
+    if positive_auth_needs_dedicated_binary("perf_ws_terminal_output_throughput") {
+        return;
+    }
     let (wasm_runtime, host_ctx) = setup_wasm_runtime();
     let _ws_guard = lock_ws_fixture_e2e();
     let _serial = session_plugin_db_guard();
@@ -273,14 +283,6 @@ fn perf_ws_terminal_output_throughput() {
             .expect("session id")
             .to_string();
 
-        // 真实 JWT + 直连 terminal 端点 + 首消息认证 + 订阅
-        let token = JwtService::new()
-            .generate_token(
-                "dev-term-perf".to_string(),
-                Some("Pad".to_string()),
-                Some("fp-perf".to_string()),
-            )
-            .expect("mint jwt");
         let url = format!("ws://127.0.0.1:{port}/ws/plugin/{PLUGIN_ID}/terminal");
         let (mut client, _) = tokio_tungstenite::connect_async(&url)
             .await

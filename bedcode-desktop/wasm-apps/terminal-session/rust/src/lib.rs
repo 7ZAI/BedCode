@@ -325,6 +325,28 @@ static CURRENT_CODE: Mutex<Option<PairingCode>> = Mutex::new(None);
 /// QR token 管理器状态（OnceLock：仅运行时首次访问初始化一次，返回 &'static）
 static QR_MANAGER: OnceLock<QrTokenManager> = OnceLock::new();
 
+/// 本插件作为**认证中心**的注册结果（`activate` 末尾写入）
+///
+/// `Some(Ok(center_id))` = 注册成功；`Some(Err(why))` = 注册失败（fail-closed 下
+/// **所有入站连接被拒**，`deny_kind=no_center`）；`None` = 尚未 activate。
+///
+/// 存在的理由（ADR 0031 欠账 / 票 08 §8.1）：fail-closed 的失败**发生在入站方向**，
+/// 而本插件的设备中心界面照常打开（配对码能生成、界面无异常）——没有这份状态，
+/// 用户只看到「配对成功但手机连不上」，无法区分「本机中心没就位」与「对方网络问题」。
+/// 它是**本插件对自己注册结果的记录**，不需要宿主开新查询面。
+static CENTER_REGISTRATION: Mutex<Option<std::result::Result<String, String>>> = Mutex::new(None);
+
+/// 写入本插件的认证中心注册结果（`activate` 末尾调用）
+///
+/// 锁中毒（wasm 单线程 + 无 panic 传播面）**静默忽略**：注册状态只是给 UI 的
+/// 诊断信号，写不进去不该把一次已经成功的激活变成失败——真正的拒绝已经由宿主
+/// `deny_kind=no_center` 承担。
+fn set_center_registration(outcome: std::result::Result<String, String>) {
+    if let Ok(mut slot) = CENTER_REGISTRATION.lock() {
+        *slot = Some(outcome);
+    }
+}
+
 impl SessionApi for SessionPlugin {
     fn pairing_code_generate(ttl: u64) -> Result<serde_json::Value, String> {
         pair_code_generate(ttl)
@@ -476,8 +498,12 @@ impl SessionApi for SessionPlugin {
                 }
                 "verify" => {
                     let token = str_field("token");
-                    crate::auth_http::jwt::verify_device_token(&WasmHost, &token)
+                    crate::auth_http::jwt::verify_device_token(&token)
                 }
+                // v33（ADR 0033 D4）：轮换入场签发密钥——保留上一代用于宽限期验签，
+                // 不撤销既有 token（撤销归撤销域）。宿主命令面经 `auth-method-invoke`
+                // 零解析转发进来，不新增 method 登记。
+                "rotate-key" => crate::auth_http::jwt::rotate_signing_key(),
                 other => Err(format!("auth-grant: unknown jwt action '{other}'")),
             },
             other => Err(format!(
@@ -777,15 +803,26 @@ impl WasmPlugin for SessionPlugin {
         SessionApiDispatcher::register()?;
         // v32（ADR 0031 K1）的注册调用在**本函数末尾**（就位 = 激活全部成功），
         // 理由见末尾注释。
-        // 密钥托管探活（host-auth secret-store；明文不落日志，只记存在性与长度）。
-        // 失败不阻断激活：凭据按需生成，认证路径显性报错而非静默降级（D7 分段语义）
-        match pairing::keys::jwt_key_from_host_auth() {
-            Ok(key) => host.log_info(&format!(
-                "jwt key ready via host-auth secret-store (len {})",
-                key.len()
-            )),
-            Err(e) => host.log_warn(&format!("jwt key unavailable at activate: {}", e)),
+        // v33（ADR 0033）：入场密钥的真源在本插件。activate 期做两件事：
+        // ① 清理 ADR 0033 之前的**死**密钥行（`jwt.key`）——迁移前本插件就在写
+        //    它，但生产签发走宿主代签，故它零生产调用点；D1 之后签发权归本插件，
+        //    新真源是密钥环（`jwt.keyring`），这行是不可达的旧密钥材料；
+        // ② 读回密钥环（首启生成）——**失败阻断激活**（F4 fail-visible）。
+        //    禁止降级为 warn 继续：那会让中心在没有可用入场密钥的情况下对外服务，
+        //    表现为「配对时看着成功、之后一律连不上」，比直接失败难排障得多。
+        match pairing::keys::purge_legacy_key_from_host_auth() {
+            Ok(true) => host.log_info("retired jwt.key secret purged (superseded by keyring)"),
+            Ok(false) => {}
+            Err(e) => host.log_warn(&format!("retired jwt.key purge failed (harmless): {}", e)),
         }
+        let keyring = pairing::keys::keyring_from_host_auth().map_err(|e| {
+            anyhow::anyhow!("auth keyring unavailable at activate: {e}")
+        })?;
+        host.log_info(&format!(
+            "device token signing key ready from plugin-owned keyring (kid {}, len {})",
+            keyring.active_kid(),
+            keyring.signing_key().map(|k| k.len()).unwrap_or(0)
+        ));
         // 票 16（spec D5）：私有库表名前缀统一迁移——**必须在任何建表之前**跑。
         // 顺序是本票唯一的静默风险点：先建后改会让统一名以空表先占位，迁移因
         // 「新旧名同时存在」跳过该条，旧表里的真实数据留在无人读的名字下（现象是
@@ -998,10 +1035,20 @@ impl WasmPlugin for SessionPlugin {
             .map(|s| s.to_string())
             .collect::<Vec<_>>();
         match host.auth_center_register(reg_methods) {
-            Ok(center_id) => host.log_info(&format!("auth center registered: {center_id}")),
-            Err(e) => host.log_error(&format!(
-                "auth center registration failed (auth surfaces stay fail-closed): {e}"
-            )),
+            Ok(center_id) => {
+                host.log_info(&format!("auth center registered: {center_id}"));
+                set_center_registration(Ok(center_id));
+            }
+            Err(e) => {
+                host.log_error(&format!(
+                    "auth center registration failed (auth surfaces stay fail-closed): {e}"
+                ));
+                // 记下失败原因供**设备中心 UI** 读取（ADR 0031 欠账 + 票 08 §8.1）：
+                // fail-closed 下本插件仍在册、界面照常打开，但**所有入站连接都会被拒**
+                // （`deny_kind=no_center`）。没有这个信号，用户只看到「配对码能生成、
+                // 手机却连不上」，无从判断是本机没就位还是对方网络问题。
+                set_center_registration(Err(e.to_string()));
+            }
         }
         Ok(())
     }
@@ -1410,6 +1457,48 @@ impl WasmPlugin for SessionPlugin {
                     .and_then(|v| v.as_u64())
                     .ok_or_else(|| anyhow::anyhow!("value required"))?;
                 device_face::ttl_set_via_host(key, value).map_err(anyhow::Error::msg)
+            }
+
+            // ==================== 票 05 命令面（入场签发密钥轮换 · ADR 0033 D4） ====================            // **操作员手动触发面**（UI 按钮在插件设备中心）。与组合式出口
+            // `auth-grant` / `jwt` / `rotate-key`（供其他插件经 `host-auth
+            // auth-method-invoke` 组合式调用）**同一实现体**，两条触发面不重复编排。
+            //
+            // 为什么放**插件命令面**而不是宿主 Tauri 命令（票 05 原文写「宿主命令面」，
+            // 实施按 AGENTS §5.2「业务面一律走插件命令面」改判并在此登记理由）：
+            // 轮换是认证域产品操作，密钥真源、宽限期、跨代验签全在本插件，宿主只需
+            // 转发——放宿主会凭空多出一条宿主→业务的命令面通路（还要在 L2 白名单登记），
+            // 却拿不到任何宿主侧才有的信息。
+            //
+            // 返回 `{rotated, kid, previousKid?}`（`kid` = 代次标识，**不含密钥材料**——
+            // 凭据红线）。**不撤销既有 token**：撤销归撤销域；上一代在宽限期内继续验签。
+            "session.auth.rotate-key" => {
+                crate::auth_http::jwt::rotate_signing_key().map_err(anyhow::Error::msg)
+            }
+
+            // 认证中心**就位状态**（纯读；ADR 0031 欠账 / 票 08 §8.1）
+            // → `{registered, centerId?, error?}`
+            //
+            // 读的是本插件自己 `activate` 末尾那次注册的**结果**，不反查宿主注册表
+            // （那需要宿主开新查询面，而本插件没有理由知道全局单槽的其它属主）。
+            // `registered: false` ⇒ fail-closed 下**所有入站连接被拒**，UI 据此
+            // 给出点名原因的提示，而不是让用户对着「配对码正常」猜手机为何连不上。
+            "session.auth.center-status" => {
+                let outcome = CENTER_REGISTRATION
+                    .lock()
+                    .map_err(|e| anyhow::anyhow!("center registration lock: {e}"))?
+                    .clone();
+                Ok(match outcome {
+                    Some(Ok(center_id)) => serde_json::json!({
+                        "registered": true,
+                        "centerId": center_id,
+                    }),
+                    Some(Err(why)) => serde_json::json!({
+                        "registered": false,
+                        "error": why,
+                    }),
+                    // 尚未 activate（理论上不可达：本命令只在插件激活后可调）
+                    None => serde_json::json!({ "registered": false }),
+                })
             }
 
             // ==================== 票 15 命令面（任务域后端①：Agent 集成与会话状态） ====================
@@ -2258,6 +2347,58 @@ mod tests {
             err.to_string().contains("invalid consent request"),
             "got: {err}"
         );
+    }
+
+    /// 票 05 命令面接线：`session.auth.rotate-key` 必须**派发到轮换实现体**而非
+    /// 落到 `Unknown command` 兜底。
+    ///
+    /// native（cargo test）下密钥环依赖宿主 secret-store，轮换实现体显性失败——
+    /// 断言的正是**这条错误文案**（区别于未知命令的 `Unknown command`）。它锁住
+    /// 「命令面确实接到了 `rotate_signing_key`，且失败是显性的（不静默成功）」。
+    /// 跨代验签 / 宽限期 / 幂等的真实行为由 `auth_http::jwt` 与 `pairing::keys`
+    /// 的 wasm 侧用例覆盖（那里有真密钥环）。
+    #[test]
+    fn rotate_key_command_face_routes_to_rotation_and_fails_loudly_on_native() {
+        let err = SessionPlugin::invoke_command("session.auth.rotate-key", serde_json::json!({}))
+            .expect_err("native 下密钥环不可用，必须显性失败");
+        assert!(
+            err.to_string().contains("unavailable outside wasm runtime"),
+            "必须派发到轮换实现体（而非 Unknown command）: {err}"
+        );
+    }
+
+    /// 票 08 命令面接线：`session.auth.center-status` 必须把**注册结果**如实
+    /// 映射为 `{registered, centerId? | error?}`，且**未就位不得静默当成已就位**。
+    ///
+    /// native 下可直接操纵 static（无并发），故三个分支都能钉：
+    /// 注册成功 → `registered: true` + 中心句柄；注册失败 → `false` + 原因；
+    /// 未 activate → `false`（**不带** `error`，因为那时还没有失败原因）。
+    #[test]
+    fn center_status_command_reports_registration_outcome() {
+        // 先复位为「未 activate」，避免与其它用例的写入互相污染
+        *CENTER_REGISTRATION.lock().expect("lock") = None;
+        let v = SessionPlugin::invoke_command("session.auth.center-status", serde_json::json!({}))
+            .expect("center-status 已接线");
+        assert_eq!(v["registered"], false, "未 activate 不得报已就位");
+        assert!(v.get("error").is_none(), "未 activate 无失败原因: {v}");
+
+        // 注册失败：失败原因必须透出（UI 要据此点名）
+        *CENTER_REGISTRATION.lock().expect("lock") =
+            Some(Err("permission denied".to_string()));
+        let v = SessionPlugin::invoke_command("session.auth.center-status", serde_json::json!({}))
+            .expect("center-status");
+        assert_eq!(v["registered"], false);
+        assert_eq!(v["error"], "permission denied", "失败原因必须透出: {v}");
+
+        // 注册成功：中心句柄回显
+        *CENTER_REGISTRATION.lock().expect("lock") = Some(Ok("authc-1234".to_string()));
+        let v = SessionPlugin::invoke_command("session.auth.center-status", serde_json::json!({}))
+            .expect("center-status");
+        assert_eq!(v["registered"], true);
+        assert_eq!(v["centerId"], "authc-1234");
+
+        // 复位，避免污染同进程其它用例
+        *CENTER_REGISTRATION.lock().expect("lock") = None;
     }
 
     /// native 命令面：宿主原语不可用（非 wasm 目标）→ 显性失败，不静默返回空视图

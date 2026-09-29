@@ -345,6 +345,33 @@ describe('连接流：useMobileConnection × useHttpApi × terminalBuffer store'
     expect(invokeCalls('ws_reconnect')).toHaveLength(0)
   })
 
+  it('凭证被永久拒绝：ws_reauth_rejected → 状态 error（**不是** disconnected），且不再自愈重试', async () => {
+    // 契约（ADR 0033 §F3 / 票 08 §8.2）：桌面端答复「凭据不认」（入场密钥换手 /
+    // 设备被撤销）与「重连重试耗尽」是**两件事**：
+    // - 状态不同：error（需用户重新配对）vs disconnected（网络类）；
+    // - 后续行为不同：两者都不自愈，但本者必须让 UI 呈现「重新配对」而非
+    //   「重连失败」——合并成一个终态正是本事件存在的理由。
+    await freshConnection(() => {
+      const creds = makeAuthCredentials()
+      localStorage.setItem('auth_pairing_id', creds.pairingId)
+      localStorage.setItem('auth_fingerprint', creds.fingerprint)
+      localStorage.setItem('auth_session_token', creds.sessionToken)
+    })
+
+    await emit('ws_reauth_rejected', { reason: 'Authentication error: code 1007: Invalid token' })
+    await flushAsync()
+
+    // 正向断言先行：先证明它确实不是 reconnect_failed 的终态
+    expect(conn.connectionStatus.value).toBe('error')
+    expect(conn.connectionStatus.value).not.toBe('disconnected')
+    expect(conn.isConnecting.value).toBe(false)
+
+    // 重试已耗尽：后续意外断开不得再拉起重连（否则会对着一个故意拒绝的宿主刷重试）
+    await emit('ws_unexpected_disconnect', { reason: 'again' })
+    await flushAsync()
+    expect(invokeCalls('ws_reconnect')).toHaveLength(0)
+  })
+
   it('服务端关闭：ws_server_closed → 状态 disconnected + 错误原因透传', async () => {
     await emit('ws_server_closed', { reason: 'Server shutdown' })
     await flushAsync()

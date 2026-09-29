@@ -200,6 +200,22 @@ export type MessageSchema = {
   'pairing.device.confirmRemoveMsg': string
   'pairing.device.removed': string
 
+  // ==================== 入场签发密钥轮换（ADR 0033 D4） ====================
+  'pairing.key.sectionTitle': string
+  'pairing.key.description': string
+  'pairing.key.rotate': string
+  'pairing.key.confirmTitle': string
+  'pairing.key.confirmMsg': string
+  'pairing.key.rotated': string
+  'pairing.key.rotatedTo': string
+  'pairing.key.error': string
+
+  // ==================== 认证中心就位状态（ADR 0031 欠账 / 票 08 §8.1） ====================
+  'pairing.center.notReadyTitle': string
+  'pairing.center.notReadyDesc': string
+  'pairing.center.rebuildHint': string
+  'pairing.center.statusUnknown': string
+
   // ==================== 连接历史 ====================
   'pairing.history.title': string
   'pairing.history.back': string

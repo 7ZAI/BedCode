@@ -599,6 +599,9 @@ mod tests {
     mod terminal_output_perf;
     // WS 终端输出路径吞吐探针（票 09 性能门禁 §9.3：插件 ring-fetch + WIT binary + WS send）
     mod ws_output_perf;
+    // 认证中心热路径性能探针（ADR 0031 v32 fail-closed 裁决的每请求成本：
+    // 宿主原生验签 vs 认证中心往返），只读探针
+    mod auth_center_perf;
     // 域拆分（P0）：测试函数自本文件拆至 wasm_runtime/tests/，共享脚手架留在下方；
     // 各域文件 `use super::*` 复用，fixture 互斥与产物构建语义不变
     mod component_e2e;
@@ -1573,6 +1576,50 @@ mod tests {
 
     fn session_plugin_db_guard() -> std::sync::MutexGuard<'static, ()> {
         SESSION_PLUGIN_DB_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    // ==================== ADR 0033：认证面在无头上下文里的边界 ====================
+    //
+    // **为什么本 harness 里没有「正向认证」用例**（一次踩坑的记录，避免后人重走）：
+    //
+    // v33 之后，WS / HTTP 认证的**唯一**判定点是认证中心插件，而宿主侧两处调用
+    // （`verify_endpoint_jwt` / `jwt_gateway`）都经 `AppContext::try_global()` 取
+    // `PluginHost`——**无 AppContext ⇒ 无中心 ⇒ fail-closed 全拒**（这本身是对的：
+    // 宿主已经没有本地验签面了，不存在「本地验签通过就放行」的旁路）。
+    //
+    // 本 harness 曾试过装一个进程级 `AppContext`（`OnceCell` + 真实中心产物）来
+    // 造正向认证，三条实测阻塞把这条路堵死了：
+    // 1. **端点表是进程级全局**：那个中心一旦 `activate` 就登记了
+    //    `session-control` / `terminal` 端点，本文件里各自装载实例的 WS 用例再登记
+    //    同路径 → `path already registered` 直接 panic；
+    // 2. **端点归属与实例绑定**：端点由某个实例登记、帧投递给那个实例，于是「用
+    //    全局中心签的 token」+「用例自己的实例收帧」必然错配（认证身份与状态快照
+    //    分属两个实例）；
+    // 3. **AppContext 是 `OnceLock`**：一个用例装上后全 harness 共享，隔离性消失，
+    //    且 `PluginHost::new` 的重量级初始化被所有用例连带。
+    //
+    // **正向认证的覆盖因此落在自带真实 AppContext 的独立测试二进制**：
+    // `tests/ws_auth_rules.rs`（WS 首消息认证四规则 + 有效凭证后业务帧可达）与
+    // `tests/http_auth_biometric.rs`（中心签发 → 验签闭环）。宿主 harness 这边只锁
+    // **无中心即全拒**这条边界——它恰好是 v33 之后最该被钉住的新性质。
+
+    /// 需要**正向认证**（中心签发 → 首消息认证 → 业务帧往返）的用例在无头 harness
+    /// 里**不可达**，此处显式退出并说明去哪儿跑
+    ///
+    /// v33 之后宿主无签发面也无验签面，认证判定全在认证中心插件里，而宿主侧两处
+    /// 调用都经 `AppContext::try_global()`——本 harness 装不出隔离的 AppContext
+    /// （三条阻塞见上方「ADR 0033：认证面在无头上下文里的边界」）。故这些用例
+    /// **显式跳过并打印去向**（不是静默 skip：静默会把「未验证」伪装成「通过」）。
+    /// 正向认证的覆盖在 `tests/ws_auth_rules.rs`（WS 首消息认证四规则 + 有效
+    /// 凭证后业务帧可达）与 `tests/http_auth_biometric.rs`（中心签发闭环）。
+    fn positive_auth_needs_dedicated_binary(test: &str) -> bool {
+        eprintln!(
+            "[skip] {test}: 需要正向认证（中心签发 → 首消息认证 → 业务帧往返），\
+             但 v33 之后认证判定在认证中心插件里，宿主侧调用需要 AppContext——\
+             无头 harness 装不出隔离的 AppContext。正向认证覆盖见 \
+             tests/ws_auth_rules.rs 与 tests/http_auth_biometric.rs。"
+        );
+        true
     }
 
     /// 互调 wire 捕获器（票 10 闭环）：静态订阅认证中心的请求 topic，记录

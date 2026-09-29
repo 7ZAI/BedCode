@@ -188,7 +188,16 @@
 //!   纯增量（旧产物不 import 仍可实例化），但**行为破坏**：旧认证中心产物不注册 →
 //!   认证面全拒（fail-visible 形态②，见 spec §7）。**desktop 独有，双端偏离**——
 //!   移动端 WIT/ABI/SDK 不跟演不投影（mobile ABI 保持 11，ADR 0022「双端偏离」节）。
-pub const ABI_VERSION: u32 = 32;
+//!
+//! - **v33: 认证中心持有入场签发密钥与验签执行（2026-09-29，ADR 0033，破坏性）**——
+//!   `host-auth` **删除 2 函数** `device-token-issue` / `device-token-verify`：入场
+//!   密钥的生成 / 签发 / 验签全部归认证中心（`com.bedcode.terminal-session`），
+//!   宿主 `utils/auth/jwt.rs` 整个退役（宿主不再持有任何设备 JWT 密码学）。
+//!   旧产物（v32 SDK 构建）仍 import 这两函数 → **实例化期**即被拒，
+//!   `stale_artifact_rebuild_hint` 点名「按 v33 SDK 重建」，不是 trap 不是静默降级。
+//!   token wire 格式逐字节不变（移动端把 token 当不透明串，零改动）。**desktop
+//!   独有**，移动端 WIT/ABI/SDK 不跟演不投影（mobile ABI 保持 11）。
+pub const ABI_VERSION: u32 = 33;
 
 /// 组件形态标识：`abi.form() == FORM_COMPONENT`（WIT `abi` 接口的 form() 声明）
 ///
@@ -202,7 +211,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_abi_version_is_v31() {
+    fn test_abi_version_is_v33() {
         // 版本号序列与历史 core ABI 共用：v26 = host-crypto 宿主加密引擎原语面
         // （并发批次先落地，占 26）；**v27 = 会话原语域整 interface 退役**
         // （会话引擎下沉票 10：host-session 12 函数 + terminal-hooks + events 两个导出）；
@@ -218,6 +227,9 @@ mod tests {
         // 即发即会话 + concurrency 脉冲字段退役；旧快照 topic 退役）；
         // **v32 = 认证中心显式注册专项**（2026-09-29，ADR 0031：host-auth 函数级
         // 追加 auth-center-register 等 4 函数，desktop 独有）；
+        // **v33 = 认证中心持有入场签发密钥与验签执行**（2026-09-29，ADR 0033：
+        // 破坏性，host-auth 删除 device-token-issue / device-token-verify 两函数，
+        // 宿主设备 JWT 密码学整个退役；desktop 独有）；
         // 再往前叠加 v25 host-peer 节点生命周期原语（审计票 12 裁决 1 = 选项 A）、
         // v24 认证记录下沉（2026-09-22，host-auth 记录面七函数退役 + host-session
         // config 读取面退役）、v23 host-session
@@ -228,7 +240,7 @@ mod tests {
         // （同批次之一）、v17 认证策略导出（auth-policy）、v16 插件私有伪终端原语
         // （host-pty）、v15 密钥托管（host-auth / secret-store）、v14 host-websocket、
         // v13 host-mdns v2、v12 总线二进制载荷与 v11 host-peer 传输控制三原语
-        assert_eq!(ABI_VERSION, 32);
+        assert_eq!(ABI_VERSION, 33);
     }
 
     #[test]

@@ -314,6 +314,30 @@ key=`biometric:<fp>`）/ device-token / link-identity / setting。**裁剪线（
   - 中心侧 = `com.bedcode.terminal-session`（`type: internal-business` 的 L2 组件，
     激活即注册，见 ADR 0032）
 
+- **v33 入场签发密钥与验签下沉（ADR 0033，desktop ABI 32 → 33，mobile 不跟演）**——
+  `host-auth` **退役 2 函数** `device-token-issue` / `device-token-verify`：
+  - **入场密码学整体离开宿主**：`utils/auth/jwt.rs`（`JwtService`）与
+    `utils/auth/host_secrets.rs` **两个模块整删除**（后者实测零生产消费者——生物
+    公钥走 `host_api/auth.rs` 的**插件属主** secret-store，宿主属主的
+    `host_secrets` 仅服务过 JWT）；残留的 `('host','jwt.key')` 死密钥行由
+    `db::run_migrations` 幂等 `DELETE`（精确三元组，不碰 `biometric:<fp>` 与插件属主行）
+  - **真源**：`com.bedcode.terminal-session` 的 `pairing::keys`（密钥环 `jwt.keyring`，
+    一个 secret 值、最多两代）+ `pairing::jwt`（HS256 自实现）。`kid` 是**可选** claim
+    且声明在末尾 ⇒ 不带 `kid` 的 token 与迁移前**逐字节相同**（冻结向量钉住）
+  - **裁决面收窄为一次调用**：`enforce_connection_policy` 成功态从 `()` 改为
+    `AuthenticatedIdentity`（**恰好 3 字段**，被 L2 锁钉死）；中心放行却给不出身份
+    按 `deny_kind=unavailable` 拒（宿主**绝不**回查本地凭据表——ADR 0022 §5.1.4 红线）
+  - **防回接锁**：`l2_gating_test.rs::host_has_no_entry_token_crypto`（生产路径不得再
+    出现 `JwtService` / `verify_token_with_expiry` / `generate_device_token` /
+    `verify_device_token` / `device_token_issue` / `device_token_verify` / `JwtClaims`）
+  - **fail-visible ②**：v32 产物仍 import 那 2 函数 → **实例化期**拿到点名
+    「按 v33 SDK 重建」的错误（`LoadedWasmPlugin::stale_artifact_rebuild_hint`）
+  - **密钥轮换（D4）**：中心持密钥环，最多两代（当前 + 上一代），上一代在宽限期
+    （= 最长 token TTL = 7 天）内继续可验签；触发面 = 插件命令 `session.auth.rotate-key`
+    （操作员手动，UI 在插件设备中心）与组合式出口 `auth-grant` / `jwt` / `rotate-key`
+    （其他插件经 `host-auth auth-method-invoke`）。**轮换不撤销既有 token**
+  - **迁移代价**：存量已配对设备需**全量重新配对**（D3 方案 A，与 v24 退役三表口径一致）
+
 ### 宿主能力实现域 · PTY 基础能力服务 — `host-pty`（ABI v16）
 
 WIT 契约 `host-pty`（6 函数，SDK `rust/wit/bedcode.wit`）、**无可选导出**（push 输出模型已被
@@ -583,7 +607,7 @@ Rust 侧以 `abi.rs` 为宿主/插件共同引用的单一事实来源（签名�
 | 宿主会话唯一入口（窄转发层，纯互调 api） | `src-tauri/src/utils/session_gateway.rs` |
 | 会话引擎（PTY）与宿主直读输出环 | `src-tauri/src/pty/`、`wasm_core/host_api/pty.rs`（票 11 起唯一的 PTY 注册表与输出环） |
 | HTTP/WS 服务器（core/http/websocket 三层）、REST 控制器、终端 WS | `src-tauri/src/server/` |
-| 设备认证 / 配对 / QR Token | `src-tauri/src/utils/auth/` |
+| 设备认证 / 配对 / QR Token | `src-tauri/src/utils/auth/`（**仅桥接面**：注册表查询 + 裁决转发 + 组合式认证窄转发。认证编排与**入场密码学**在 `wasm-apps/terminal-session/rust/src/{auth_http,pairing}/`，ADR 0033） |
 | 数据库 | `src-tauri/src/db/` |
 | 全局事件系统 | `src-tauri/src/events/` |
 | mDNS 广播 | `src-tauri/src/mdns/` |
@@ -648,5 +672,5 @@ Claude Code (PTY)
 | 对等网络 | `src-tauri/src/peer_*.rs`（命令注册于 `lib.rs`） |
 | 链路加密 | `src-tauri/src/server/core/link_crypto.rs` |
 | 加密工具（报文/文件传输加密） | `src-tauri/src/utils/crypto/` |
-| 认证工具 | `src-tauri/src/utils/auth/*.rs` |
+| 认证工具（桥接面） | `src-tauri/src/utils/auth/*.rs`（`auth_center.rs` / `identity.rs`；**无 JWT 密码学**，ADR 0033） |
 | 前端测试 | `src/__tests__/**/*.test.ts` |

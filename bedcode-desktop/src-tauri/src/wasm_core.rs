@@ -18,6 +18,9 @@
 
 pub mod bus;
 pub mod config;
+/// 宿主→插件互调客户端（中立层，ADR 0033 从 `utils/auth/auth_center.rs` 上提）：
+/// JSON-RPC 2.0 over host-bus 的通用发起端 + 请求 id 分配
+pub mod intercall;
 /// 宿主对外接口模块：WASM 宿主能力实现（host-* 原语，权限校验 + 宿主服务调用，
 /// 由 `manager::runtime::component` 的 Host trait 绑定逐接口调用）+ 前端 Tauri
 /// 命令桥（api_bridge，权限校验后执行操作）

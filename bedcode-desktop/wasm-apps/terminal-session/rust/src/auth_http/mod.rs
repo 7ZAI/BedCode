@@ -1,19 +1,26 @@
 //! 认证链 HTTP 编排域（票 07）——`/api/auth/*` 七端点的插件侧实现
 //!
-//! **职责边界（票 07 用户裁定，ADR 0022 修订口径）**：认证**执行编排**归本插件
-//! （配对码 / QR / 挑战状态机、JWT 签发与 Claims 构造、连接记录的调用决策），
-//! **密钥托管与信任表留宿主**——插件经 host-auth 原语（v19 追加 ×7）回调宿主
-//! 统一认证：`trusted-device-upsert` / `trusted-device-touch` /
+//! **职责边界（票 07 用户裁定，ADR 0022 修订口径；v33 / ADR 0033 修订「密钥托管」一条）**：
+//! 认证**执行编排**归本插件（配对码 / QR / 挑战状态机、JWT 签发与 Claims 构造、
+//! **入场密钥的生成与验签**、连接记录的调用决策）；
+//! 插件经 host-auth 原语回调宿主的只剩**不属于入场密码学**的那些面——
+//! `trusted-device-upsert` / `trusted-device-touch` /
 //! `connection-history-record`（信任与历史记录写面）、`biometric-credential-bound`
 //! / `biometric-verify-signature` / `biometric-credential-bind`（生物凭证，
-//! 公钥不出宿主）、`link-identity-parts`（链路身份公开材料）。
+//! P-256 公钥不出宿主）、`link-identity-parts`（链路身份公开材料）。
+//!
+//! **v33 / ADR 0033 修订**：入场 JWT 签发密钥的真源已从宿主移入本插件
+//! （`pairing::keys` 的密钥环，属主 = 本插件的 secret-store），签发与验签都走
+//! `pairing::jwt` 本地实现。原先那句「密钥托管留宿主」到此**只对生物凭证成立**
+//! （P-256 公钥仍由宿主托管，与设备 JWT 是两条线）。
 //!
 //! 认证插件**默认常开**（用户裁定）：网关对这七条是 `Public + PluginRequired`
 //! 公开路由——JWT 之前的入口免验签转发，插件未激活即明确报错，无宿主降级轨。
 //!
 //! 字节级契约：宿主旧 `auth_controller` 的响应形状、业务码（1001/1005/1006/
-//! 1007/1008/1009/1010）与确定性错误文案逐字复刻；JWT 与宿主 `JwtService`
-//! 逐字节同构（同一 secret-store 密钥 + HS256 + 同 Claims 形状），宿主中间件
+//! 1007/1008/1009/1010）与确定性错误文案逐字复刻；JWT 与迁移前宿主 `JwtService`
+//! 逐字节同构（HS256 + 同 Claims 形状 + `kid` 可选且声明在末尾 ⇒ 不带 `kid` 的
+//! token 与迁移前逐字节相同，见 `pairing/jwt` 的冻结向量），宿主中间件
 //! `enforce_connection_policy`（本插件 policy 导出）无感。
 
 pub mod biometric;
@@ -300,15 +307,17 @@ fn handle_qr_connect(host: &WasmHost, body: &serde_json::Value) -> serde_json::V
 
 // ==================== POST /api/auth/reauth ====================
 
-/// 持既有 JWT 静默重认证（验签执行点 = 本插件 policy 导出，签发同源）
+/// 持既有 JWT 静默重认证（验签执行点 = 本插件 `pairing::jwt` + 密钥环，签发同源；
+/// ADR 0033 起验签与签发都在本插件，宿主不再持有入场密码学）
 #[cfg(target_arch = "wasm32")]
 fn handle_reauth(host: &WasmHost, body: &serde_json::Value) -> serde_json::Value {
     let device_id = str_field(body, "deviceId").to_string();
     let fingerprint = str_field(body, "fingerprint").to_string();
     let session_token = str_field(body, "sessionToken").to_string();
 
-    // 验签（宿主 JwtService 同一路径：签名 + 结构 + 时效，密钥不出宿主）
-    let claims = match jwt::verify_device_token(host, &session_token) {
+    // 验签（中心自持密钥：签名 + 结构 + 时效；密钥环逐代尝试，轮换宽限期内
+    // 旧 token 仍可验签——ADR 0033）
+    let claims = match jwt::verify_device_token(&session_token) {
         Ok(c) => c,
         Err(e) => {
             let _ = connection_history_record(
@@ -440,8 +449,8 @@ fn handle_biometric_bind(host: &WasmHost, body: &serde_json::Value) -> serde_jso
     let public_key = str_field(body, "publicKey").to_string();
     let session_token = str_field(body, "sessionToken").to_string();
 
-    // 1. JWT 校验（宿主 JwtService 同一路径）+ token 归属校验
-    let claims = match jwt::verify_device_token(host, &session_token) {
+    // 1. JWT 校验（中心自持密钥，ADR 0033）+ token 归属校验
+    let claims = match jwt::verify_device_token(&session_token) {
         Ok(c) => c,
         Err(e) => {
             host.log_warn(&format!("auth http: bind verify failed: {e}"));

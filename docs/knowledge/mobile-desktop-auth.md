@@ -23,7 +23,7 @@
 │             │ ◄─── WS Messages ───────  │  (Actor)         │
 │             │                            │                  │
 │  AuthManager│ ──── Auth Messages ─────► │  auth_service    │
-│             │ ◄─── JWT Token ─────────  │  JwtService      │
+│             │ ◄─── JWT Token ─────────  │  认证中心插件    │
 │             │                            │  PairingService  │
 │             │                            │  QrTokenManager  │
 └─────────────┘                            └─────────────────┘
@@ -36,10 +36,10 @@
 | Desktop | `MdnsAdvertiser` | 广播 `_bedcode._tcp.local.` 服务，含端口和设备名 |
 | Desktop | `Actix Web Server` | HTTP API + WebSocket 统一端口（默认 8765） |
 | Desktop | `TerminalWs` (Actor) | WebSocket 连接管理，消息路由 |
-| Desktop | `auth_service` | 处理 Auth 消息（配对码验证 / QR 认证 / JWT 重认证） |
+| Desktop | `auth_service` | 处理 Auth 消息（配对码验证 / QR 认证 / JWT 重认证）——**在认证中心插件 `com.bedcode.terminal-session` 内**（`auth_http/`） |
 | Desktop | `PairingService` | 配对码生成、验证、消耗 |
 | Desktop | `QrTokenManager` | QR Token 生成、验证、一次性消耗 |
-| Desktop | `JwtService` | JWT Token 生成与验证（HS256，7 天有效期） |
+| Desktop | `pairing::jwt`（**认证中心插件内**） | JWT 生成与验证（HS256，7 天有效期）+ 入场签发密钥的密钥环。**v33 / ADR 0033 起宿主不再持有任何设备入场密码学**（`utils/auth/jwt.rs` 已整模块退役） |
 | Mobile | `MdnsDiscovery` | 扫描局域网 BedCode 服务 |
 | Mobile | `ConnectionManager` | WebSocket 连接生命周期管理 |
 | Mobile | `AuthManager` | 认证流程编排（配对 / QR / JWT 重认证） |
@@ -154,13 +154,21 @@ GET http://{address}:{port}/api/health
 
 ```text
 请求（HTTP /api/* 或 WS 插件端点首消息）
-  → 宿主验签（HS256，引擎原语，不移动）
   → 查认证中心注册表（单中心，O(1)）
       ├─ 无中心在册      → 拒绝  deny_kind=no_center     「no auth center registered」
       ├─ 中心调用失败    → 拒绝  deny_kind=unavailable   「auth center unavailable: …」
-      └─ 中心裁决通过    → 放行（claims 以宿主验签结果为准）
-      └─ 中心拒绝（撤销等）→ 拒绝 deny_kind=policy       原因原样透出
+      └─ 中心内部：先验签（HS256，密钥环）→ 再逐条做策略
+            ├─ 签名无效 / 过期 / 结构非法 / 已撤销 → 拒绝 deny_kind=policy
+            └─ 全部通过 → 放行，并交回连接身份（deviceId / deviceName / fingerprint）
 ```
+
+- **验签与裁决收为同一次调用**（v33 / ADR 0033）：迁移前是「宿主先验签 → 再问中心策略」
+  两步，如今中心在 `policy::evaluate` 内部先做密码学验签（密钥来自中心自持的密钥环）
+  再逐条做策略，宿主只拿一份裁决结果 + 连接身份。**对称密码学下验签方必须持密钥**，
+  所以「验签执行点留宿主」与「密钥归中心」二者只能留其一（ADR 0033 §信任模型论证：
+  中心本来就有为任意设备签发凭证的权力，交出密钥**不增加**实际授权面）。
+- **token wire 格式逐字节未变**（HS256 + 三段 base64url + 既有 claims 形状），
+  `kid` 是**可选** claim 且声明在末尾 ⇒ 移动端把 token 当不透明串，**零改动**。
 
 - **「谁是认证中心」是注册事实，不是猜测**：中心插件激活时调
   `host-auth.auth-center-register` 登记（第二注册者被拒并点名在册属主），停用时注销 /
@@ -522,6 +530,12 @@ Disconnected ──connect()──► Connecting ──WS握手──► Connect
 
 源码: `bedcode-desktop/wasm-apps/terminal-session/rust/src/auth_http/`（`/api/auth/*` 端点编排已下沉认证中心插件，宿主不再注册认证业务路由——JWT 之前的入口经网关免验签转发）
 
+> **迁移提醒（2026-09-29，ADR 0033）**：入场签发密钥改由认证中心自持，**存量已配对设备需
+> 全量重新配对**（与 v24 退役 `pairings` / `connection_history` / `session_configs`
+> 三表的既有口径一致）。移动端侧的表现是 `handle_reauth` 返回「凭证失效」类业务码
+> 而非网络错误——文案区分见 ADR 0030 错误码口径。移动端把 token 当**不透明串**
+> （只存本地、只往上传，从不自行验签或解析），故 wire 格式变化对移动端零影响。
+
 ---
 
 ## 关键源码索引
@@ -530,7 +544,7 @@ Disconnected ──connect()──► Connecting ──WS握手──► Connect
 
 | 文件 | 职责 |
 |------|------|
-| `src-tauri/src/utils/auth/jwt.rs` | JWT 生成/验证（HS256，7 天有效期；宿主 `host-auth` 密钥托管） |
+| `src-tauri/src/utils/auth/auth_center.rs` | 认证中心宿主桥接：裁决面（`enforce_connection_policy`，**只问中心一次**）+ 注册表查询 + 组合式认证窄转发。**宿主无任何设备 JWT 密码学**（`utils/auth/jwt.rs` / `host_secrets.rs` 已随 ADR 0033 整模块删除） |
 | `wasm-apps/terminal-session/rust/src/pairing/code.rs` | 配对码生成/验证（6 位数字，60 秒有效期；编排已下沉认证中心插件） |
 | `wasm-apps/terminal-session/rust/src/pairing/qr.rs` | QR 配对 Token（一次性；编排已下沉认证中心插件） |
 | `src-tauri/src/server/websocket/conn.rs` | WS 连接骨架：首消息认证窗口（JWT 重连 / 配对流程） |

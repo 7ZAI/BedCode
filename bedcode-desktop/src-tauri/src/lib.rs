@@ -388,14 +388,10 @@ pub fn run() {
 
             let db = Arc::new(Mutex::new(db));
 
-            // 宿主密钥托管（票 05）：注入主库句柄并预生成 JWT 密钥（首启随机
-            // 生成 + 持久化，重启稳定）。预生成失败直接上抛阻断启动——若此处
-            // 静默降级，运行时签发 token 将因密钥未落库而在重启后全部失效
-            crate::utils::auth::host_secrets::init(db.clone());
-            crate::utils::auth::host_secrets::get_or_generate(
-                crate::utils::auth::jwt::JWT_SECRET_KEY_ID,
-                crate::utils::auth::jwt::JWT_SECRET_KEY_LEN,
-            )?;
+            // v33（ADR 0033）：宿主**不再持有**入场签发密钥（签发/验签均在认证
+            // 中心），故此处无密钥预生成。旧的 `plugin_secrets` 属主 `host` 行
+            // （`('host','jwt.key')`）由 `db::run_migrations` 幂等清理（见
+            // migrations 的 v33 条目）——那是不可达的旧密钥材料，留着只是白给的面。
 
             // ==================== 创建所有全局单实例 ====================
 

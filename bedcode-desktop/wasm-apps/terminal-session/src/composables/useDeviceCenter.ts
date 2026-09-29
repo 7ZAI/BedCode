@@ -52,6 +52,25 @@ export interface QrConnectionInfo {
 /** 插件存储键：用户选择的对外 IP（宿主 `AppConfig.network.qr_host` 的插件侧承接） */
 const QR_HOST_STORAGE_KEY = 'pairing.qrHost'
 
+/** 轮换结果（`kid` = 代次标识，**不含任何密钥材料**——凭据红线） */
+export interface RotateKeyResult {
+  rotated: boolean
+  kid: string
+  previousKid?: string | null
+}
+
+/**
+ * 认证中心就位状态（读本插件 activate 末尾那次注册的结果）
+ *
+ * 不导出：只在 composable 内部使用（调用方拿结构值用，不按名引用类型），
+ * 多一个 `export` 就多一个无消费者的公开面（knip 会报）。
+ */
+interface AuthCenterStatus {
+  registered: boolean
+  centerId?: string
+  error?: string
+}
+
 /** 宿主事件载荷（仅取 fingerprint） */
 interface DeviceEventPayload {
   fingerprint?: string
@@ -280,6 +299,51 @@ export function useDeviceCenter(context: PluginContext) {
     await loadDevices()
   }
 
+  // ==================== 入场签发密钥轮换（ADR 0033 D4） ====================
+
+  /**
+   * 轮换设备入场签发密钥（操作员手动触发）
+   *
+   * 语义要点（真源在插件 `pairing::keys` 的密钥环，宿主不参与）：
+   * - 生成新一代密钥并激活，**上一代在宽限期内继续可验签**（宽限期 = 最长 token
+   *   TTL = 7 天），故**不会**立刻踢掉在线设备；
+   * - **不撤销既有 token**——撤销是撤销域（`session.devices.revoke`）的职责；
+   * - 超出宽限期的旧 token 自然验不过，届时相关设备需重新配对。
+   */
+  async function rotateSigningKey(): Promise<RotateKeyResult> {
+    const result = (await context.commands.execute('session.auth.rotate-key', {})) as
+      | RotateKeyResult
+      | undefined
+    if (!result?.rotated || !result.kid) {
+      // 不静默当成功：缺 rotated / kid 就是没轮换成，调用方必须能看到
+      throw new Error('key rotation returned no generation')
+    }
+    return result
+  }
+
+  // ==================== 认证中心就位状态（ADR 0031 欠账 / 票 08 §8.1） ====================
+
+  /**
+   * 读本插件作为认证中心的**就位状态**
+   *
+   * `registered: false` ⇒ 宿主 fail-closed 生效，**所有入站连接被拒**
+   * （`deny_kind=no_center`）。此时本插件界面照常可用（配对码能生成、页面无异常），
+   * 所以没有这个信号的话，用户只会看到「配对成功但手机连不上」而无从判断原因。
+   *
+   * 读失败**不**当作 `registered: false`：那会把「读不到状态」误报成「中心没就位」，
+   * 两种情况的正确动作完全不同（前者是宿主/通信问题，后者是重建插件产物）。
+   * 故此处抛错，调用方按「状态未知」呈现而不是按「未就位」呈现。
+   */
+  async function loadAuthCenterStatus(): Promise<AuthCenterStatus> {
+    const status = (await context.commands.execute('session.auth.center-status', {})) as
+      | AuthCenterStatus
+      | undefined
+    if (!status || typeof status.registered !== 'boolean') {
+      throw new Error('auth center status unavailable')
+    }
+    return status
+  }
+
   // ==================== 宿主事件订阅 ====================
 
   /**
@@ -360,6 +424,8 @@ export function useDeviceCenter(context: PluginContext) {
     offlineDevices: offlineDevices as ComputedRef<PairedDeviceInfo[]>,
     loadDevices,
     removeDevice,
+    rotateSigningKey,
+    loadAuthCenterStatus,
     // 网络
     port,
     addresses,

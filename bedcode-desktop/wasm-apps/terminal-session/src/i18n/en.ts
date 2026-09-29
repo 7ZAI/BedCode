@@ -189,6 +189,26 @@ const en: MessageSchema = {
     'Are you sure you want to remove this device? You will need to pair it again.',
   'pairing.device.removed': 'Device removed',
 
+  // ==================== 入场签发密钥轮换（ADR 0033 D4） ====================
+  'pairing.key.sectionTitle': 'Entry signing key',
+  'pairing.key.description':
+    'Rotate the signing key for device entry credentials. Paired devices are not affected — their credentials stay valid during the grace window.',
+  'pairing.key.rotate': 'Rotate key',
+  'pairing.key.confirmTitle': 'Rotate entry signing key',
+  'pairing.key.confirmMsg':
+    'A new signing key generation will be created. Existing credentials of paired devices stay valid for the 7-day grace window; after that they must be re-paired. Continue?',
+  'pairing.key.rotated': 'Entry signing key rotated',
+  'pairing.key.rotatedTo': 'Entry signing key rotated to generation {kid}',
+  'pairing.key.error': 'Failed to rotate entry signing key',
+
+  // ==================== Auth centre readiness (ADR 0031 debt / ticket 08 §8.1) ====================
+  'pairing.center.notReadyTitle': 'Auth centre not ready',
+  'pairing.center.notReadyDesc':
+    'The auth centre on this host did not register successfully, so every incoming connection is being rejected (clients cannot connect).',
+  'pairing.center.rebuildHint':
+    'Deactivate and re-enable this plugin in the plugin manager; if it persists, check the logs.',
+  'pairing.center.statusUnknown': 'Unable to read auth centre status',
+
   'pairing.history.title': 'Connection History',
   'pairing.history.back': 'Back to Devices',
   'pairing.history.empty': 'No connection history',

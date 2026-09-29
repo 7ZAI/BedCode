@@ -19,6 +19,13 @@
 pub(super) mod api;
 pub(super) mod app;
 pub(super) mod auth;
+/// 测试夹具出口：以宿主身份往某插件属主的 secret-store 写一个键
+///
+/// `auth` 模块本身是 `pub(super)`（只在 `wasm_core` 内可见），而唯一使用方
+/// `utils::auth::test_tokens` 在 `utils` 域——故从这里定点再导出**一个**函数，
+/// 而不是把整个模块放宽到 `pub(crate)`（那会顺带放开 `auth_secret_*` 全部原语）。
+#[cfg(test)]
+pub(crate) use auth::test_seed_plugin_secret;
 pub(crate) mod auth_center;
 pub(super) mod bus;
 pub(super) mod config;

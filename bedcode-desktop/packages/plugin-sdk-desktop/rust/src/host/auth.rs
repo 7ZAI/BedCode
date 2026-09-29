@@ -58,13 +58,13 @@ pub trait HostAuth {
     /// 成功 `Ok(true)`
     fn auth_biometric_credential_bind(&self, fingerprint: &str, public_key: &str) -> Result<bool, HostError>;
 
-    /// 设备认证 JWT 签发（宿主 `JwtService` 同一路径，密钥不出宿主）→ token；
-    /// `device_name` / `fingerprint` 空串 = None
-    fn auth_device_token_issue(&self, sub: &str, device_name: &str, fingerprint: &str) -> Result<String, HostError>;
-
-    /// 设备认证 JWT 验签：有效 → `Ok(claims JSON)`；无效 → `Err("expired")`
-    /// （过期）| `Err("invalid")`（其余）。用户文案映射归插件。
-    fn auth_device_token_verify(&self, token: &str) -> Result<String, HostError>;
+    // ==================== v33：设备入场 JWT 签发/验签原语退役（ADR 0033） ====================
+    // 原 `auth_device_token_issue` / `auth_device_token_verify` 两方法**删除**：入场
+    // 密钥的生成 / 签发 / 验签归认证中心自持（`com.bedcode.terminal-session` 的
+    // `pairing::jwt` + `pairing::keys`），宿主不再持有任何设备 JWT 密码学。认证中心
+    // 只经 `host-auth` 的 `secret-*` 取存密钥材料（属主隔离照旧）。
+    // 破坏性：旧产物（v32 SDK 构建）实例化期即被拒（`stale_artifact_rebuild_hint`
+    // 点名 v33 重建），不是 trap 也不是静默降级。
 
     // ==================== v32：认证中心显式注册 + 组合式认证原语（ADR 0031） ====================
     // 认证中心 ≡ 微服务 auth server，区别只在于**没有也不需要服务发现**：注册表就是

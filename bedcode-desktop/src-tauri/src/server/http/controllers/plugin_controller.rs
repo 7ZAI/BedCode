@@ -9,7 +9,8 @@ use std::collections::HashMap;
 use bedcode_plugin_api::EndpointAuth;
 
 use crate::server::http::dtos::{ApiResponse, CODE_INVALID_REQUEST, CODE_PLUGIN_AUTH_FAILED};
-use crate::server::http::middleware::jwt_auth::get_claims_from_request;
+use crate::server::http::middleware::jwt_auth::get_authenticated_identity;
+use crate::utils::auth::identity::AuthenticatedIdentity;
 use crate::system::app_context::AppContext;
 
 // ==================== 插件动态 HTTP 端点代理 ====================
@@ -131,13 +132,16 @@ impl HttpCaller {
 /// [`HttpCaller::Device`] 同源同步；设备上下文只取 claims 派生标识，
 /// **JWT 本体与指纹不出宿主**（AGENTS.md §8 凭据红线）。
 pub(crate) fn caller_identity(req: &actix_web::HttpRequest) -> (HttpCaller, Option<serde_json::Value>) {
-    let claims = get_claims_from_request(req);
+    let identity = get_authenticated_identity(req);
     let loopback = req.peer_addr().is_some_and(|addr| addr.ip().is_loopback());
-    let caller = HttpCaller::classify(claims.is_some(), loopback);
-    let device = claims.map(|claims| {
+    let caller = HttpCaller::classify(identity.is_some(), loopback);
+    let device = identity.map(|identity| {
         let mut device = serde_json::Map::new();
-        device.insert("deviceId".to_string(), serde_json::Value::String(claims.sub));
-        if let Some(name) = claims.device_name {
+        device.insert(
+            "deviceId".to_string(),
+            serde_json::Value::String(identity.device_id),
+        );
+        if let Some(name) = identity.device_name {
             device.insert("deviceName".to_string(), serde_json::Value::String(name));
         }
         serde_json::Value::Object(device)
@@ -523,25 +527,26 @@ mod tests {
         assert_eq!(HttpCaller::Anonymous.as_str(), "anonymous");
     }
 
-    /// 票 08 + 凭据红线：`caller_identity` 只给 claims 派生标识，JWT 本体与指纹不外泄
+    /// 票 08 + 凭据红线：`caller_identity` 只给身份派生标识，凭证本体与指纹不外泄
     ///
-    /// claims 走真实签发/验签链路（不手搓结构体，字段增减不会让本用例假绿）。
+    /// 认证中心交回的连接身份经中间件注入 extensions（ADR 0033：宿主不再自行验签，
+    /// 也没有签发面，故本用例直接构造身份而不造 token）。断言：转发给插件的
+    /// `device` 上下文只有 `deviceId` / `deviceName`，**不含指纹**。
     #[test]
     fn caller_identity_carries_only_host_derived_labels() {
-        use crate::utils::auth::jwt::JwtService;
         use actix_web::HttpMessage;
 
-        // 无 claims、无对端地址（TestRequest 默认）→ anonymous，且不带设备上下文
+        // 无身份、无对端地址（TestRequest 默认）→ anonymous，且不带设备上下文
         let req = actix_web::test::TestRequest::get()
             .uri("/api/plugin/com.bedcode.terminal-session/task-status")
             .to_http_request();
         assert_eq!(
             caller_identity(&req),
             (HttpCaller::Anonymous, None),
-            "未验签且取不到对端地址时按最弱身份处理"
+            "未认证且取不到对端地址时按最弱身份处理"
         );
 
-        // 无 claims 但对端是环回 → localhost（hook 脚本可被插件区分）
+        // 无身份但对端是环回 → localhost（hook 脚本可被插件区分）
         let req = actix_web::test::TestRequest::get()
             .uri("/api/plugin/com.bedcode.terminal-session/task-status")
             .peer_addr("127.0.0.1:54321".parse().expect("loopback addr"))
@@ -560,35 +565,28 @@ mod tests {
             .to_http_request();
         assert_eq!(caller_identity(&req).0, HttpCaller::Localhost);
 
-        // 已验签 → device + claims 派生标识；指纹与 token 本体一律不进转发入参
-        let jwt = JwtService::new();
-        let token = jwt
-            .generate_token(
-                "device-1".to_string(),
-                Some("Pixel 9".to_string()),
-                Some("fp-secret".to_string()),
-            )
-            .expect("issue token");
-        let claims = jwt.verify_token_with_expiry(&token).expect("verify token");
-        assert_eq!(
-            claims.fingerprint.as_deref(),
-            Some("fp-secret"),
-            "前置：claims 里确实带指纹，下面断言的「不外泄」才有意义"
-        );
+        // 已认证 → device + 身份派生标识；指纹不得透传给插件
+        let identity = AuthenticatedIdentity {
+            device_id: "device-1".to_string(),
+            device_name: Some("Pixel 9".to_string()),
+            fingerprint: Some("fp-secret".to_string()),
+        };
         let req = actix_web::test::TestRequest::get()
             .uri("/api/plugin/com.bedcode.terminal-session/task-status")
             .peer_addr("192.168.1.7:54321".parse().expect("lan addr"))
             .to_http_request();
-        req.extensions_mut().insert(claims);
+        req.extensions_mut().insert(identity);
         let (caller, device) = caller_identity(&req);
-        assert_eq!(caller, HttpCaller::Device, "已验签压倒对端地址判定");
+        assert_eq!(caller, HttpCaller::Device, "已认证压倒对端地址判定");
         assert_eq!(
             device,
             Some(serde_json::json!({ "deviceId": "device-1", "deviceName": "Pixel 9" }))
         );
         let rendered = device.expect("device 上下文").to_string();
-        assert!(!rendered.contains("fp-secret"), "指纹不得透传给插件");
-        assert!(!rendered.contains(&token), "JWT 本体不得透传给插件");
+        assert!(
+            !rendered.contains("fp-secret"),
+            "指纹不得透传给插件（凭据红线）: {rendered}"
+        );
     }
 
     /// 票 08：认证拒绝的响应形状是「401 + 1007 + 点名两条出路」，而不是 200 带业务码

@@ -170,14 +170,15 @@ async fn test_system_component_capability_routing_end_to_end() {
     assert_eq!(result["value"], json!({"sys": "routed"}), "got: {}", result);
 }
 
-/// 票 05 闭环（v32 改为 fail-closed）：server 认证策略（
-/// 验签 → 注册表找中心 → 中心 `auth-policy` 导出 → 放行/拒绝）
+/// 票 05 闭环（v32 fail-closed → v33 验签一并下沉）：server 认证策略
+/// （注册表找中心 → 中心 `auth-policy` 导出 → 验签 + 策略 → 放行/拒绝）
 ///
-/// 真实认证中心 wasip3 产物经宿主 async 运行时加载：验签由宿主 `JwtService`
-/// 执行（中间件路径，密码学引擎不移动），验签后经
-/// `auth_center::enforce_connection_policy` **查注册表**（ADR 0031，不再是
-/// 「能力探测 + 排序取首个」）找到中心，再调中心 `auth-policy` capability
-/// 导出做策略裁决（结构 / claims / 时效 + **信任撤销检查**）。覆盖：
+/// 真实认证中心 wasip3 产物经宿主 async 运行时加载：`enforce_connection_policy`
+/// **查注册表**（ADR 0031，不再是「能力探测 + 排序取首个」）找到中心，调中心
+/// `auth-policy` capability 导出；**验签在中心内部**（ADR 0033：入场密钥自持，
+/// 宿主 `utils/auth/jwt.rs` 已退役）——故 token 一律经
+/// `crate::utils::auth::test_tokens::issue` 从中心签出（走生产 `auth-grant` 路径）。
+/// 覆盖：
 /// - 无中心在册 → **拒绝**（`no auth center registered`，fail-closed K3）
 /// - 激活 + 注册中心 + 私有库无配对记录 → 放行（无信任锚点，仅凭验签）
 /// - 私有库存在活跃配对记录 → 放行
@@ -215,28 +216,19 @@ async fn test_server_auth_policy_closed_loop() {
     let host = setup_host().await;
 
     // ============ fail-closed 锁（K3）：无中心 = 拒绝，不得静默放行 ============
-    let valid_token = crate::utils::auth::JwtService::new()
-        .generate_token(
-            "device-1".to_string(),
-            Some("Pixel 9".to_string()),
-            Some("fp-abc".to_string()),
-        )
-        .expect("issue host token");
-    // 验签在宿主执行（中间件路径）：无效 token 连策略都到不了
-    assert!(crate::utils::auth::JwtService::new()
-        .verify_token_with_expiry("not-a-jwt")
-        .is_err());
-    crate::utils::auth::JwtService::new()
-        .verify_token_with_expiry(&valid_token)
-        .expect("host verifies signature");
+    // 此刻中心还没激活，**造不出**合法 token（v33：宿主无签发面）——但也不需要：
+    // 无中心分支在解析凭证之前就拒了，凭证是什么不影响结论。用一个显眼的占位串
+    // 顺带锁住「拒绝文本不得回显凭据」。
+    let placeholder_token = "pre-center-placeholder-not-a-real-token";
     assert!(!registry::is_registered(), "reset 后无中心在册");
-    let no_center = bridge::enforce_connection_policy(&host, &valid_token).expect_err("无中心必须拒绝（fail-closed）");
+    let no_center =
+        bridge::enforce_connection_policy(&host, placeholder_token).expect_err("无中心必须拒绝（fail-closed）");
     assert!(
         no_center.contains("no auth center registered"),
         "fail-closed 拒绝原因可读: {no_center}"
     );
     assert!(
-        !no_center.contains(&valid_token),
+        !no_center.contains(placeholder_token),
         "错误文本不得含凭据/token 片段（AGENTS §8）: {no_center}"
     );
 
@@ -259,7 +251,18 @@ async fn test_server_auth_policy_closed_loop() {
         vec!["auth".to_string(), "peer".to_string(), "storage".to_string()];
     host.plugins.write().await.insert(session_id.to_string(), loaded);
 
-    host.wasm_host_ctx().api_registry().register(session_id, &[]);
+    // 种子：把中心的入场密钥环种成**已知密钥**（必须在 activate 之前——中心
+    // activate 会读一次密钥环，格式不对即阻断激活）。之后本用例用这把密钥签
+    // 测试 token：与中心**同一把**钥匙，故中心必然认。
+    // 走种子而非 `auth-grant` 互调：互调要总线派发落地（自建 PluginHost 未
+    // `init_message_bus` 时等不到回复），那是测试基建限制，不是被测行为。
+    // 种入要过中心的 `auth` 权限门（`auth_secret_set` 判据），故先授权
+    host.permission.grant_permissions(
+        session_id,
+        &["auth".to_string(), "peer".to_string(), "storage".to_string()],
+    );
+    const TEST_KEY: [u8; 32] = [0x5a; 32];
+    crate::utils::auth::test_tokens::seed_keyring(host.wasm_host_ctx(), session_id, &TEST_KEY);
     host.activate_plugin(session_id, false).await.expect("activate session");
 
     // 注册中心：新 SDK 产物 activate 内已自注册；旧产物（v31）未注册 → 手动
@@ -276,14 +279,26 @@ async fn test_server_auth_policy_closed_loop() {
         registry::is_registered(),
         "会话中心注册（自注册或手动补位）后必须有一个在册中心"
     );
-    assert!(bridge::session_active(host.wasm_host_ctx()));
+    assert!(bridge::session_active(), "注册后桥接门必须放行（注册表查询，无参）");
 
-    // ============ 激活会话中心 → 策略取中心（注册表） ============
-    // 私有库无配对记录 → 放行（无信任锚点，仅凭验签；搬迁前语义）
-    assert!(
-        bridge::enforce_connection_policy(&host, &valid_token).is_ok(),
-        "私有库无记录 → 放行"
+    // ============ 激活会话中心 → 验签 + 策略取中心（注册表） ============
+    // token 只能从中心签出（v33）：走生产 `auth-grant` / `jwt` / `issue`
+    let valid_token = crate::utils::auth::test_tokens::sign_with_seeded_key(
+        &TEST_KEY,
+        "device-1",
+        Some("Pixel 9"),
+        Some("fp-abc"),
     );
+
+    // 私有库无配对记录 → 放行（无信任锚点，仅凭验签；搬迁前语义）
+    let decision = bridge::enforce_connection_policy(&host, &valid_token)
+        .expect("私有库无记录 → 放行（中心验签通过）");
+    assert_eq!(
+        decision.device_id, "device-1",
+        "放行时必须交回连接身份（ADR 0033：宿主据此建立连接/转发 caller 上下文）"
+    );
+    assert_eq!(decision.device_name.as_deref(), Some("Pixel 9"));
+    assert_eq!(decision.fingerprint.as_deref(), Some("fp-abc"));
 
     // 认证中心私有库写入活跃配对记录（v24 下沉后真源在私有库）→ 放行
     {
@@ -340,13 +355,12 @@ async fn test_server_auth_policy_closed_loop() {
     );
 
     // 未撤销记录的其他设备 token → 放行（未命中从宽，搬迁前语义）
-    let other_token = crate::utils::auth::JwtService::new()
-        .generate_token(
-            "device-2".to_string(),
-            Some("Phone 2".to_string()),
-            Some("fp-xyz".to_string()),
-        )
-        .expect("issue other token");
+    let other_token = crate::utils::auth::test_tokens::sign_with_seeded_key(
+        &TEST_KEY,
+        "device-2",
+        Some("Phone 2"),
+        Some("fp-xyz"),
+    );
     ensure_center();
     assert!(
         bridge::enforce_connection_policy(&host, &other_token).is_ok(),
@@ -427,7 +441,12 @@ async fn test_auth_center_multi_candidate_registration_lock() {
         loaded.manifest.rust_library = lib.to_string();
         loaded.manifest.permissions = vec!["auth".to_string(), "storage".to_string()];
         host.plugins.write().await.insert(id.to_string(), loaded);
-        host.wasm_host_ctx().api_registry().register(id, &[]);
+        // 种子密钥环：activate 之前种好，之后用同一把钥匙签测试 token
+        // （见同文件另一用例的注释：走互调要总线派发，自建 PluginHost 未
+        //  init_message_bus 时等不到回复）。种入要过 `auth` 权限门
+        host.permission.grant_permissions(id, &["auth".to_string()]);
+        const TEST_KEY: [u8; 32] = [0x5a; 32];
+        crate::utils::auth::test_tokens::seed_keyring(host.wasm_host_ctx(), id, &TEST_KEY);
         if let Err(e) = host.activate_plugin(id, false).await {
             eprintln!("[warn] activate {id} failed (proceed with installed instance): {e}");
         }
@@ -444,13 +463,16 @@ async fn test_auth_center_multi_candidate_registration_lock() {
         "注册表只认注册者（agent-hub 排序在前也不被选中）"
     );
 
-    let token = crate::utils::auth::JwtService::new()
-        .generate_token(
-            "device-t".to_string(),
-            Some("Phone".to_string()),
-            Some("fp-t".to_string()),
-        )
-        .expect("token");
+    // token 用**中心自己那份密钥环**（本用例给 terminal-session 种子）签出：
+    // 验签方只能是 terminal-session；若旧逻辑选中 agent-hub 的默认拒绝实现，
+    // 它既没有这把密钥也验不过 → 裁决必错，与本用例要锁的「注册表说了算」同向
+    const TEST_KEY: [u8; 32] = [0x5a; 32];
+    let token = crate::utils::auth::test_tokens::sign_with_seeded_key(
+        &TEST_KEY,
+        "device-t",
+        Some("Phone"),
+        Some("fp-t"),
+    );
     // 私有库无撤销记录 → 放行（若旧逻辑选中 agent-hub 的默认拒绝，这里会是 Err）
     // 失败信息带裁决原文：三类拒因（no_center / unavailable / policy）排障路径完全不同，
     // 只报「assert is_ok」会把「注册表被并发清台」与「guest 调用超时」混成一个症状

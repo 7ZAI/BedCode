@@ -17,6 +17,24 @@ use crate::wasm_core::permission::PERMISSION_AUTH;
 use chrono::Utc;
 use rusqlite::OptionalExtension;
 
+/// **测试夹具**：以宿主身份往某插件属主的 secret-store 写一个键
+///
+/// 只为 `utils::auth::test_tokens::seed_keyring` 服务——那里需要把认证中心的
+/// 入场密钥环种成已知密钥，才能在**不自造 JWT 密码学**的前提下签出中心认的
+/// token（ADR 0033 后宿主没有签发面）。走真实的 `auth_secret_set` 实现
+/// （含权限门与明文不落日志），而不是直接写库——夹具走的是真路径。
+#[cfg(test)]
+pub(crate) fn test_seed_plugin_secret(
+    db: &dyn crate::wasm_core::host_api::context::DbScope,
+    secrets: &dyn crate::wasm_core::host_api::context::SecretsScope,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
+    plugin_id: &str,
+    key: &str,
+    value: &str,
+) -> Result<(), String> {
+    auth_secret_set(db, secrets, perm, plugin_id, key, value)
+}
+
 /// 认证域设置项写侧白名单（v18 `auth-setting-set`）
 ///
 /// `settings` 表是宿主真源（TTL 由宿主命令面读取后传入插件），插件只能写这一域
@@ -316,51 +334,6 @@ pub(crate) fn auth_biometric_credential_bind(
         "host_auth_biometric_credential_bind: public key bound (length only)"
     );
     Ok(true)
-}
-
-/// 设备认证 JWT 签发（宿主 `JwtService` 同一代码路径：密钥托管在 secret-store，
-/// 签发执行点留宿主——插件编排、宿主签发，密钥不出宿主）
-pub(crate) fn auth_device_token_issue(
-    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
-    plugin_id: &str,
-    sub: &str,
-    device_name: &str,
-    fingerprint: &str,
-) -> Result<String, String> {
-    if !super::check_permission(perm, plugin_id, PERMISSION_AUTH, "host_auth_device_token_issue") {
-        return Err("permission denied".to_string());
-    }
-    if sub.is_empty() {
-        return Err("auth error: empty subject".to_string());
-    }
-    let jwt = crate::utils::auth::jwt::JwtService::new();
-    jwt.generate_token(
-        sub.to_string(),
-        (!device_name.is_empty()).then(|| device_name.to_string()),
-        (!fingerprint.is_empty()).then(|| fingerprint.to_string()),
-    )
-    .map_err(|e| format!("auth error: jwt issue failed: {}", e))
-}
-
-/// 设备认证 JWT 验签（`verify_token_with_expiry` 语义）。错误归类：
-/// `JwtError::TokenExpired` → "expired"；其余 → "invalid"（用户文案映射归插件）。
-pub(crate) fn auth_device_token_verify(
-    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
-    plugin_id: &str,
-    token: &str,
-) -> Result<String, String> {
-    use crate::utils::auth::jwt::JwtError;
-    if !super::check_permission(perm, plugin_id, PERMISSION_AUTH, "host_auth_device_token_verify") {
-        return Err("permission denied".to_string());
-    }
-    let jwt = crate::utils::auth::jwt::JwtService::new();
-    match jwt.verify_token_with_expiry(token) {
-        Ok(claims) => serde_json::to_string(&claims).map_err(|e| format!("auth error: claims serialize failed: {}", e)),
-        Err(e) => Err(match e {
-            JwtError::TokenExpired => "expired".to_string(),
-            _ => "invalid".to_string(),
-        }),
-    }
 }
 
 /// 链路身份 Kd 公钥材料读取（`link_crypto::identity_parts` 语义）；未就绪 → None

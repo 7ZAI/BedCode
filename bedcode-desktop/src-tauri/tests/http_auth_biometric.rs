@@ -25,7 +25,6 @@ use bedcode_lib::server::core::app::start_http_server;
 use bedcode_lib::system::app_context::AppContext;
 use bedcode_lib::system::app_context::AppContextBuilder;
 use bedcode_lib::system::info::SystemInfo;
-use bedcode_lib::utils::auth::jwt::JwtService;
 use bedcode_lib::AppConfig;
 use p256::ecdsa::signature::Signer;
 use p256::ecdsa::SigningKey;
@@ -40,6 +39,84 @@ fn post_json(client: &reqwest::Client, url: &str, value: &serde_json::Value) -> 
         .post(url)
         .header("Content-Type", "application/json")
         .body(serde_json::to_string(value).expect("serialize json body failed"))
+}
+
+/// 解出设备入场 token 的 claims（**只解码，不验签**）
+///
+/// v33（ADR 0033）后宿主没有任何验签面，签名验证是认证中心插件的职责。这里
+/// 只断言「claims 里带了什么」（sub / 指纹等字段是否正确），**不**把「解得出来」
+/// 当成「签名有效」——后者由 `ws_auth_rules.rs` / `system_component_test.rs` 的
+/// 闭环用例经真实 `enforce_connection_policy` 覆盖。
+fn decode_entry_token_claims(token: &str) -> serde_json::Value {
+    use base64::Engine;
+    let payload = token
+        .split('.')
+        .nth(1)
+        .unwrap_or_else(|| panic!("token must have 3 segments: {token}"));
+    let raw = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload)
+        .expect("payload must be base64url");
+    serde_json::from_slice(&raw).expect("claims must be JSON")
+}
+
+/// 当前 unix 秒（`exp` 断言用；测试里直接用 std 时钟）
+fn chrono_now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock after epoch")
+        .as_secs()
+}
+
+/// 跑一次完整的生物认证挑战-响应流程，换回该设备的一枚入场 token
+///
+/// v33 后**唯一**能拿到 token 的办法：走生产 HTTP 面（中心自签）。本用例需要
+/// 「另一台设备的 token」时用它，而不是自己造（宿主已无签发面）。
+async fn mint_token_via_biometric(
+    client: &reqwest::Client,
+    challenge_url: &str,
+    verify_url: &str,
+    device_id: &str,
+    fingerprint: &str,
+    spki_b64: &str,
+    signing_key: &SigningKey,
+) -> String {
+    let resp = send_until(
+        post_json(
+            client,
+            challenge_url,
+            &serde_json::json!({ "deviceId": device_id, "deviceFingerprint": fingerprint }),
+        ),
+        Duration::from_secs(5),
+    )
+    .await
+    .expect("challenge request must reach server");
+    let body = body_json(resp).await;
+    assert_eq!(body["code"], 0, "已配对设备挑战签发必须成功");
+    let nonce = body["data"]["challengeNonce"]
+        .as_str()
+        .expect("challenge nonce must be present")
+        .to_string();
+    let resp = send_until(
+        post_json(
+            client,
+            verify_url,
+            &serde_json::json!({
+                "deviceId": device_id,
+                "deviceFingerprint": fingerprint,
+                "challengeNonce": nonce,
+                "signature": sign_message(signing_key, &nonce),
+            }),
+        ),
+        Duration::from_secs(5),
+    )
+    .await
+    .expect("verify request must reach server");
+    let body = body_json(resp).await;
+    assert_eq!(body["code"], 0, "正确签名验证必须成功");
+    body["data"]["token"]
+        .as_str()
+        .expect("token must be present")
+        .to_string()
 }
 
 /// 会话中心插件 id（认证端点编排的权威实现方）
@@ -374,12 +451,18 @@ async fn http_biometric_auth_contract() {
         .to_string();
     assert!(!token.is_empty(), "token 必须非空");
 
-    // JWT 可被服务端验证，且 sub 指向配对记录 id
-    let claims = JwtService::new()
-        .verify_token_with_expiry(&token)
-        .expect("returned token must be verifiable");
-    assert_eq!(claims.sub, pairing_id, "JWT sub 必须等于配对记录 id");
-    assert_eq!(claims.fingerprint.as_deref(), Some(fingerprint), "JWT 必须携带设备指纹");
+    // token 的 claims 由中心自签（ADR 0033）：此处只断言载荷内容，验签归中心
+    let claims = decode_entry_token_claims(&token);
+    assert_eq!(claims["sub"], pairing_id, "入场凭证 sub 必须等于配对记录 id");
+    assert_eq!(
+        claims["fingerprint"], fingerprint,
+        "入场凭证必须携带设备指纹"
+    );
+    assert_eq!(claims["iss"], "BedCode", "签发者必须是 BedCode");
+    assert!(
+        claims["exp"].as_u64().expect("exp 必填") > chrono_now_secs(),
+        "exp 必在未来（7 天窗口）"
+    );
 
     // 配对播种必须保留生物公钥（verify 端点只读公钥验签，不得覆盖/清空——
     // §8 凭据红线：公钥在宿主 plugin_secrets，@plugin_secrets）
@@ -600,13 +683,27 @@ async fn http_biometric_auth_contract() {
     // ==================== T10：token 指纹不匹配 → code 1007 ====================
 
     // 为另一台设备签发 token，用它绑定 fingerprint 对应设备 → 指纹不一致被拒
-    let other_token = JwtService::new()
-        .generate_token(
-            "other-device-id".to_string(),
-            None,
-            Some("other-device-fingerprint".to_string()),
-        )
-        .expect("generate other-device token");
+    // v33：token 只能从中心拿（宿主无签发面）——给第二台设备跑一遍生物认证流程
+    let (other_spki_b64, other_signing_key) = make_keypair();
+    let other_fingerprint = "fp-bio-http-002";
+    let other_pairing_id = "p-bio-http-002";
+    seed_biometric_public_key(other_fingerprint, &other_spki_b64).await;
+    seed_pairing_in_plugin_db(other_pairing_id, "Other Phone", other_fingerprint);
+    let other_token = mint_token_via_biometric(
+        &client,
+        &challenge_url,
+        &verify_url,
+        other_pairing_id,
+        other_fingerprint,
+        &other_spki_b64,
+        &other_signing_key,
+    )
+    .await;
+    assert_eq!(
+        decode_entry_token_claims(&other_token)["fingerprint"],
+        other_fingerprint,
+        "第二台设备的 token 必须带它自己的指纹（否则 T10 就不是「指纹不匹配」了）"
+    );
     let resp = send_until(
         post_json(
             &client,

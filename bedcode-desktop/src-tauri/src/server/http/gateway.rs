@@ -250,7 +250,6 @@ mod tests {
     use super::*;
     use crate::server::http::controllers::plugin_controller::build_plugin_http_args;
     use crate::server::http::middleware::jwt_auth::jwt_gateway;
-    use crate::utils::auth::jwt::JwtService;
 
     /// 注册一条测试别名（全局注册表跨用例共享：路径带用例唯一段）
     fn register_test_alias(owner: &str, path: &str, host: &str, methods: &[&str], auth: EndpointAuth) {
@@ -461,10 +460,16 @@ mod tests {
         HttpResponse::Ok().json(ApiResponse::ok_with_data(serde_json::json!({ "configs": [] })))
     }
 
-    fn bearer_token() -> String {
-        JwtService::new()
-            .generate_token("device-1".to_string(), Some("Pixel 9".to_string()), None)
-            .expect("issue token")
+    /// 只挂网关（不挂认证中间件）的测试 scope
+    ///
+    /// v33 起宿主**没有签发面**（`utils/auth/jwt.rs` 已退役），无头单测里拿不到
+    /// 「能通过认证中间件的凭证」。要单独测网关的转发判定就不能连中间件一起挂——
+    /// 否则被测的是中间件（它会一律 401），不是网关。
+    fn gateway_only_scope() -> impl actix_web::dev::HttpServiceFactory + 'static {
+        use actix_web::middleware::from_fn;
+        web::scope("/api")
+            .wrap(from_fn(business_gateway))
+            .route("/configs", web::get().to(host_sentinel))
     }
 
     /// 未验签请求绝不进网关转发：`/api/configs` 无 token → 401（今天的形状）
@@ -531,17 +536,19 @@ mod tests {
     }
 
     /// 已登记别名 + 无 AppContext（无头/测试：插件面不可判定）→ 原样放行（哨兵应答）
+    ///
+    /// 只挂网关：本用例的被测对象是**网关的转发判定**（插件面不可判定时原样放行），
+    /// 认证中间件不在链路里——无头上下文里没有认证中心，整条链上任何凭证都过不了
+    /// 认证（fail-closed），把它一起挂上就变成在测中间件了。
     #[actix_web::test]
     async fn registered_alias_falls_through_when_plugin_surface_unavailable() {
         let owner = "test-gw-fallthrough";
         register_test_alias(owner, "configs", "/api/configs", &["GET"], EndpointAuth::Jwt);
-        let app = actix_web::test::init_service(actix_web::App::new().service(test_scope())).await;
+        let app =
+            actix_web::test::init_service(actix_web::App::new().service(gateway_only_scope())).await;
         let resp = actix_web::test::call_service(
             &app,
-            actix_web::test::TestRequest::get()
-                .uri("/api/configs")
-                .insert_header(("Authorization", format!("Bearer {}", bearer_token())))
-                .to_request(),
+            actix_web::test::TestRequest::get().uri("/api/configs").to_request(),
         )
         .await;
         assert_eq!(resp.status(), actix_web::http::StatusCode::OK);

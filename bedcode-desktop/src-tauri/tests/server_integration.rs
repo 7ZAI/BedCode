@@ -12,9 +12,14 @@
 //! `AppContext::global()`，而 `AppContext.app_handle` 是硬编码的
 //! `Arc<AppHandle<Wry>>`，tauri 的 `mock_app()` 只能给出 `MockRuntime` 句柄，
 //! 二者类型不兼容，集成测试无法初始化 AppContext（api_bridge.rs 的 cfg(test)
-//! 注释亦记录了此限制）。JWT 中间件先于路由执行：对未注册路径，
-//! 无/非法 token 在中间件被 401 拦截，合法 token 放行后由路由返回 404——
-//! 「401 vs 404」之差即是放行契约的可观测证明，全程不触发 handler。
+//! 注释亦记录了此限制）。认证中间件先于路由执行：对未注册路径，
+//! 放行的请求由路由返回 404，未放行的在中间件被 401 拦截。
+//!
+//! **v33（ADR 0033）后本文件不再有「合法 token 放行」那一格**：宿主既无签发面
+//! 也无验签面，认证判定全部在认证中心插件里，而本文件**没有 AppContext**（上面
+//! 说了装不了）⇒ 无头进程里认证中心不可达 ⇒ 任何凭证都被拒（fail-closed）。
+//! 这正是本文件现在锁的性质：**无中心即全拒**。放行那一半由自带真实 AppContext
+//! + 真实中心产物的集成二进制覆盖（`ws_auth_rules.rs` / `http_auth_biometric.rs`）。
 
 use std::io;
 use std::time::{Duration, Instant};
@@ -22,7 +27,6 @@ use std::time::{Duration, Instant};
 use actix_web::dev::ServerHandle;
 use bedcode_lib::server::core::app::start_http_server;
 use bedcode_lib::server::core::supervisor::ServerSupervisor;
-use bedcode_lib::utils::auth::jwt::{JwtClaims, JwtService};
 use bedcode_lib::AppConfig;
 
 /// 探测空闲端口：绑定 127.0.0.1:0 由 OS 分配，立即释放后交给服务器绑定 0.0.0.0
@@ -134,37 +138,50 @@ async fn http_contract_and_server_lifecycle() {
     let body = body_json(resp).await;
     assert_eq!(body["code"], 1007, "garbage token 401 body must carry code 1007");
 
-    // 2c. 非法 token（结构合法但用错误密钥签名）→ 401
-    // 用 jsonwebtoken（生产依赖，测试可直接使用）以不同密钥签发同结构 claims
-    let wrong_key_token = jsonwebtoken::encode(
-        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256),
-        &JwtClaims::new("test-device".to_string(), None, None, 3600),
-        &jsonwebtoken::EncodingKey::from_secret(b"different-secret-for-test"),
-    )
-    .expect("mint token with wrong key failed");
+    // 2c. 结构合法但无中心可验的 token（HS256 三段、签名位非空）→ 同样 401
+    //
+    // v33 前这里是「用错误密钥签的 token」；v33 后宿主**没有任何验签面**，所以
+    // 「签名对不对」根本轮不到宿主判——无中心一律拒（fail-closed）。用一个
+    // 结构上完全合法的 token 钉住这一点：**别再把 401 归因成「token 坏了」**。
+    let structurally_valid_token = format!(
+        "{}.{}.{}",
+        "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9",
+        "eyJzdWIiOiJ0ZXN0LWRldmljZSIsImlzcyI6IkJlZENvZGUiLCJpYXQiOjE3MDAwMDAwMDAsImV4cCI6MTcwMDYwNDgwMH0",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    );
     let resp = send_until(
-        client.get(&protected).bearer_auth(&wrong_key_token),
+        client.get(&protected).bearer_auth(&structurally_valid_token),
         Duration::from_secs(5),
     )
     .await
-    .expect("request with wrong-key token must reach server");
-    assert_eq!(resp.status(), 401, "wrongly signed token must be rejected");
-    let body = body_json(resp).await;
-    assert_eq!(body["code"], 1007, "wrongly signed token 401 body must carry code 1007");
-
-    // 2d. 合法 token（JwtService 同密钥签发，即生产签发路径）→ 放行
-    // 断言 404 而非 401：请求已通过中间件进入路由，只是该路径未注册
-    let valid_token = JwtService::new()
-        .generate_token("test-device".to_string(), Some("Integration Test".to_string()), None)
-        .expect("mint valid token failed");
-    let resp = send_until(client.get(&protected).bearer_auth(&valid_token), Duration::from_secs(5))
-        .await
-        .expect("request with valid token must reach server");
+    .expect("request with structurally valid token must reach server");
     assert_eq!(
         resp.status(),
-        404,
-        "valid token passes middleware, unmatched route must 404 (not 401)"
+        401,
+        "无认证中心可达时结构合法的 token 同样必须被拒（fail-closed）"
     );
+    let body = body_json(resp).await;
+    assert_eq!(body["code"], 1007, "401 body must carry code 1007");
+
+    // 2d. **无中心 = 全拒**（ADR 0031 K3 的可观测形态之一）
+    //
+    // 本进程无 AppContext ⇒ 无认证中心 ⇒ 无论凭证长什么样都到不了路由
+    // （404）。这是 v33 之后本文件唯一能诚实断言的鉴权性质：宿主侧**没有**
+    // 「本地验签通过就放行」的旁路（v33 前有，靠 `utils/auth/jwt.rs`）。
+    for token in ["", "a.b.c", "definitely.not.a.jwt"] {
+        let mut req = client.get(&protected);
+        if !token.is_empty() {
+            req = req.bearer_auth(token);
+        }
+        let resp = send_until(req, Duration::from_secs(5))
+            .await
+            .expect("request must reach server");
+        assert_eq!(
+            resp.status(),
+            401,
+            "无认证中心时任何凭证都不得放行（token={token:?}）"
+        );
+    }
 
     // ==================== 场景 3：优雅停机 + 端口复用 ====================
 

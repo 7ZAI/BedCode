@@ -1859,7 +1859,7 @@ fn test_session_create_with_spec_closed_loop() {
 
         // ============ 4c. 宿主窄转发层读取面对齐锁：网关视图 == 插件登记域视图 ============
         // 注解槽经插件自己的 annotate api 写（真源在本域），任务字段随网关视图透传
-        let call_api = crate::utils::auth::auth_center::call_api;
+        let call_api = crate::wasm_core::intercall::call_api;
         call_api(
             &host_ctx,
             "com.bedcode.terminal-session.annotate",
@@ -2104,7 +2104,7 @@ fn test_session_actions_closed_loop() {
         assert_eq!(v["status"], serde_json::json!("running"), "创建即启动 → Running");
 
         // ==================== 2. 改名（插件互调 api；真源 = 登记域记录） ====================
-        let renamed = crate::utils::auth::auth_center::call_api(
+        let renamed = crate::wasm_core::intercall::call_api(
             &host_ctx,
             "com.bedcode.terminal-session.session-rename",
             serde_json::json!({ "sessionId": sid, "name": "重命名后" }),
@@ -2118,7 +2118,7 @@ fn test_session_actions_closed_loop() {
         assert_eq!(v["name"], serde_json::json!("重命名后"));
 
         // 未知会话：显性失败（插件侧存在性预检同步可见）
-        let missing = crate::utils::auth::auth_center::call_api(
+        let missing = crate::wasm_core::intercall::call_api(
             &host_ctx,
             "com.bedcode.terminal-session.session-rename",
             serde_json::json!({ "sessionId": "ghost-session", "name": "x" }),
@@ -2196,7 +2196,7 @@ fn test_session_actions_closed_loop() {
         // ==================== 4. 重启（同一 id 重建并启动）+ 完成信号 ====================
         // P1-b：重启全同步（摘记录 → 杀旧 pty → 同 id spawn → 重登记），回执即完成；
         // 完成信号 = 插件视图回到 Running（名字/configId 保持）
-        let restarted = crate::utils::auth::auth_center::call_api(
+        let restarted = crate::wasm_core::intercall::call_api(
             &host_ctx,
             "com.bedcode.terminal-session.session-restart",
             serde_json::json!({ "sessionId": sid }),
@@ -2416,7 +2416,7 @@ fn test_session_annotate_and_devices_closed_loop() {
         let r: serde_json::Value = serde_json::from_str(&ghost).unwrap();
         assert!(r["error"].as_str().is_some(), "未知会话必须显性报错, got: {ghost}");
         assert!(
-            crate::utils::auth::auth_center::call_api(
+            crate::wasm_core::intercall::call_api(
                 &host_ctx,
                 "com.bedcode.terminal-session.session-get",
                 serde_json::json!({ "sessionId": "ghost" }),

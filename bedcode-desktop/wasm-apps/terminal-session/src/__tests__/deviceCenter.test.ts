@@ -55,7 +55,14 @@ vi.mock('@binblink/bedcode-plugin-sdk-desktop', () => ({
 const seed = devMock.pairing
 
 /** 命令面路由：按命令 id 返演示数据，并记录调用（断言入参） */
-async function defaultExecute(command: string, args?: unknown) {
+/**
+ * 命令面路由：按命令 id 返演示数据，并记录调用（断言入参）
+ *
+ * 返回类型显式标 `Promise<unknown>`：各用例组会 mockImplementation 注入本函数
+ * 形状之外的回执（如轮换的 `{rotated, kid}`、以及故意畸形的缺字段回执），
+ * 让 TS 按联合类型逐条收窄只会把用例拒之门外。断言全在运行时，类型不承载语义。
+ */
+async function defaultExecute(command: string, args?: unknown): Promise<unknown> {
   switch (command) {
     case 'session.network.info':
       return seed.network
@@ -76,6 +83,10 @@ async function defaultExecute(command: string, args?: unknown) {
       return { cleared: true }
     case 'session.devices.revoke':
       return { removed: true, kind: 'pairing' }
+    case 'session.auth.rotate-key':
+      return { rotated: true, kid: 'g2', previousKid: 'g1' }
+    case 'session.auth.center-status':
+      return { registered: true, centerId: 'authc-1234' }
     default:
       throw new Error(`unexpected command: ${command} (args=${JSON.stringify(args)})`)
   }
@@ -443,5 +454,201 @@ describe('DeviceCenterView（设备与配对页面）', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  // ==================== 入场密钥轮换（ADR 0033 D4） ====================
+
+  it('C14 轮换入场密钥：确认后调 session.auth.rotate-key 并以代次提示成功', async () => {
+    execute.mockImplementation(async (command: string) => {
+      if (command === 'session.auth.rotate-key') {
+        return { rotated: true, kid: 'g2', previousKid: 'g1' }
+      }
+      return defaultExecute(command)
+    })
+    const wrapper = mountView()
+    await flushPromises()
+    await findButton(wrapper, 'pairing.tab.devices')!.trigger('click')
+    await flushPromises()
+    const { toast } = await import('vue-sonner')
+
+    // 先点页面上的「轮换密钥」→ 出现确认弹窗
+    await findButton(wrapper, 'pairing.key.rotate')!.trigger('click')
+    await flushPromises()
+    const confirm = wrapper
+      .findAll('button')
+      .filter((b) => b.text() === 'pairing.key.rotate')
+      .find((b) => b.element.closest('.fixed') !== null)
+    expect(confirm, '轮换确认弹窗必须出现').toBeTruthy()
+    await confirm!.trigger('click')
+    await flushPromises()
+
+    expect(commandsTo('session.auth.rotate-key')).toHaveLength(1)
+    // 提示携带新代次（kid 只是代次标识，不含密钥材料）
+    expect(toast.success).toHaveBeenCalledWith('pairing.key.rotatedTo')
+  })
+
+  it('C15 轮换不触发设备列表重取（轮换不撤销，上一密钥在宽限期继续验签）', async () => {
+    execute.mockImplementation(async (command: string) => {
+      if (command === 'session.auth.rotate-key') {
+        return { rotated: true, kid: 'g2', previousKid: 'g1' }
+      }
+      return defaultExecute(command)
+    })
+    const wrapper = mountView()
+    await flushPromises()
+    await findButton(wrapper, 'pairing.tab.devices')!.trigger('click')
+    await flushPromises()
+
+    await findButton(wrapper, 'pairing.key.rotate')!.trigger('click')
+    await flushPromises()
+    const confirm = wrapper
+      .findAll('button')
+      .filter((b) => b.text() === 'pairing.key.rotate')
+      .find((b) => b.element.closest('.fixed') !== null)
+    await confirm!.trigger('click')
+    await flushPromises()
+
+    // 只在初始加载取过一次列表（与撤销的 C9 相反）
+    expect(commandsTo('session.devices.paired-list')).toHaveLength(1)
+  })
+
+  it('C16 轮换失败（命令报错）：以错误文案提示，不误报成功', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    await findButton(wrapper, 'pairing.tab.devices')!.trigger('click')
+    await flushPromises()
+    execute.mockImplementation(async (command: string) => {
+      if (command === 'session.auth.rotate-key') throw new Error('rotate failed')
+      return defaultExecute(command)
+    })
+    const { toast } = await import('vue-sonner')
+
+    await findButton(wrapper, 'pairing.key.rotate')!.trigger('click')
+    await flushPromises()
+    const confirm = wrapper
+      .findAll('button')
+      .filter((b) => b.text() === 'pairing.key.rotate')
+      .find((b) => b.element.closest('.fixed') !== null)
+    await confirm!.trigger('click')
+    await flushPromises()
+
+    expect(toast.error).toHaveBeenCalledWith('pairing.key.error')
+    expect(toast.success).not.toHaveBeenCalled()
+  })
+
+  it('C17 回执缺代次（rotated/kid 任一为空）：视为未轮换，抛错而非误报成功', async () => {
+    // 契约：`rotateSigningKey` 对缺 `rotated`/`kid` 的回执抛错（composable 层），
+    // UI 捕获后走错误文案——宁可报失败也不能让用户以为密钥已换
+    for (const bad of [{}, { rotated: false, kid: 'g2' }, { rotated: true }, { rotated: true, kid: '' }]) {
+      execute.mockImplementation(async (command: string) => {
+        if (command === 'session.auth.rotate-key') return bad
+        return defaultExecute(command)
+      })
+      const wrapper = mountView()
+      await flushPromises()
+      await findButton(wrapper, 'pairing.tab.devices')!.trigger('click')
+      await flushPromises()
+      const { toast } = await import('vue-sonner')
+      vi.clearAllMocks()
+      execute.mockImplementation(async (command: string) => {
+        if (command === 'session.auth.rotate-key') return bad
+        return defaultExecute(command)
+      })
+
+      await findButton(wrapper, 'pairing.key.rotate')!.trigger('click')
+      await flushPromises()
+      const confirm = wrapper
+        .findAll('button')
+        .filter((b) => b.text() === 'pairing.key.rotate')
+        .find((b) => b.element.closest('.fixed') !== null)
+      await confirm!.trigger('click')
+      await flushPromises()
+
+      expect(toast.error, `回执 ${JSON.stringify(bad)} 必须判失败`).toHaveBeenCalledWith('pairing.key.error')
+      expect(toast.success).not.toHaveBeenCalled()
+    }
+  })
+
+  // ==================== 认证中心就位横幅（ADR 0031 欠账 / 票 08 §8.1） ====================
+
+  it('C18 中心已就位：不显示横幅（正向断言先行，避免恒真）', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    expect(commandsTo('session.auth.center-status')).toHaveLength(1)
+    expect(wrapper.text()).not.toContain('pairing.center.notReadyTitle')
+  })
+
+  it('C19 中心未就位：横幅点名「入站会被拒」并给出修复指引', async () => {
+    execute.mockImplementation(async (command: string) => {
+      if (command === 'session.auth.center-status') {
+        return { registered: false, error: 'permission denied' }
+      }
+      return defaultExecute(command)
+    })
+    const wrapper = mountView()
+    await flushPromises()
+
+    const text = wrapper.text()
+    expect(text).toContain('pairing.center.notReadyTitle')
+    expect(text).toContain('pairing.center.notReadyDesc')
+    expect(text).toContain('pairing.center.rebuildHint')
+  })
+
+  it('C20 横幅不随 Tab 切换隐藏（入站拒绝与当前看哪个 Tab 无关）', async () => {
+    execute.mockImplementation(async (command: string) => {
+      if (command === 'session.auth.center-status') return { registered: false }
+      return defaultExecute(command)
+    })
+    const wrapper = mountView()
+    await flushPromises()
+    expect(wrapper.text()).toContain('pairing.center.notReadyTitle')
+
+    await findButton(wrapper, 'pairing.tab.devices')!.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('pairing.center.notReadyTitle')
+
+    await findButton(wrapper, 'pairing.tab.pairing')!.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('pairing.center.notReadyTitle')
+  })
+
+  it('C21 读不到状态：不误报成「未就位」（两者排障路径不同）', async () => {
+    // 契约：`loadAuthCenterStatus` 对畸形/缺失回执**抛错**而不是当作 registered=false，
+    // 页面因此呈现「状态未知」而不是给出「重建产物」的误导指引
+    for (const bad of [undefined, {}, { registered: 'yes' }]) {
+      execute.mockImplementation(async (command: string) => {
+        if (command === 'session.auth.center-status') return bad
+        return defaultExecute(command)
+      })
+      const wrapper = mountView()
+      await flushPromises()
+
+      const text = wrapper.text()
+      expect(
+        text,
+        `回执 ${JSON.stringify(bad)} 不得报成「未就位」`,
+      ).not.toContain('pairing.center.notReadyTitle')
+      expect(text).toContain('pairing.center.statusUnknown')
+      wrapper.unmount()
+    }
+  })
+
+  it('C22 点刷新会重读就位状态（修完立刻看到横幅消失）', async () => {
+    let registered = false
+    execute.mockImplementation(async (command: string) => {
+      if (command === 'session.auth.center-status') return { registered }
+      return defaultExecute(command)
+    })
+    const wrapper = mountView()
+    await flushPromises()
+    expect(wrapper.text()).toContain('pairing.center.notReadyTitle')
+
+    // 模拟用户停用/重启插件后重新就位
+    registered = true
+    await findButton(wrapper, 'pairing.button.refresh')!.trigger('click')
+    await flushPromises()
+
+    expect(commandsTo('session.auth.center-status')).toHaveLength(2)
+    expect(wrapper.text()).not.toContain('pairing.center.notReadyTitle')
   })
 })

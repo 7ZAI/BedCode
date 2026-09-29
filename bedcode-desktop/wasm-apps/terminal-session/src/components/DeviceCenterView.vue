@@ -55,6 +55,53 @@
       </div>
     </div>
 
+    <!-- ==================== 认证中心未就绪横幅（ADR 0031 欠账 / 票 08 §8.1） ==================== -->
+    <!-- 置顶且**不随 Tab 切换隐藏**：fail-closed 的失败发生在入站方向，与用户当前
+         看哪个 Tab 无关；且此时本页其余功能（配对码生成等）**照常可用**，
+         没有横幅就会出现「配对成功但手机连不上」且界面无任何解释的静默失败。 -->
+    <div
+      v-if="centerStatusError"
+      class="mx-6 mt-4 mb-0 rounded-[10px] border px-4 py-3 flex items-start gap-3"
+      :class="
+        centerStatusError === 'not_ready'
+          ? 'border-[var(--color-danger)] bg-[var(--color-danger-light)]'
+          : 'border-[var(--border-strong)] bg-[var(--bg-card)]'
+      "
+    >
+      <span
+        class="w-1.5 h-1.5 rounded-full mt-1.5 shrink-0"
+        :class="
+          centerStatusError === 'not_ready'
+            ? 'bg-[var(--color-danger)]'
+            : 'bg-[var(--text-tertiary)]'
+        "
+      ></span>
+      <div class="min-w-0 flex-1">
+        <template v-if="centerStatusError === 'not_ready'">
+          <p
+            class="text-[calc(13px*var(--ui-scale))] font-semibold text-[var(--color-danger)]"
+          >
+            {{ t('pairing.center.notReadyTitle') }}
+          </p>
+          <p class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)] mt-0.5">
+            {{ t('pairing.center.notReadyDesc') }}
+          </p>
+          <p class="text-[calc(12px*var(--ui-scale))] text-[var(--text-tertiary)] mt-1">
+            {{ t('pairing.center.rebuildHint') }}
+          </p>
+        </template>
+        <!-- 状态未知：**不**给「重建产物」指引——那是未就位的修法，
+             状态读不到是另一类问题，给错指引会把排障方向带偏 -->
+        <template v-else>
+          <p
+            class="text-[calc(13px*var(--ui-scale))] font-semibold text-[var(--text-secondary)]"
+          >
+            {{ t('pairing.center.statusUnknown') }}
+          </p>
+        </template>
+      </div>
+    </div>
+
     <div class="flex-1 overflow-auto px-6 py-5 space-y-6">
       <Transition name="tab-fade" mode="out-in">
         <!-- ==================== Tab1 设备配对 · 网络信息 + 配对码 + QR（各占一行） ==================== -->
@@ -415,6 +462,27 @@
               </article>
             </div>
           </section>
+
+          <!-- ==================== 入场密钥轮换（ADR 0033 D4） ==================== -->
+          <section>
+            <h3 class="wb-section-title">{{ t('pairing.key.sectionTitle') }}</h3>
+            <div
+              class="px-4 py-3.5 rounded-[10px] border border-[var(--border)] bg-[var(--bg-card)] flex items-center justify-between gap-4"
+            >
+              <p
+                class="flex-1 min-w-0 text-[calc(12px*var(--ui-scale))] text-[var(--text-tertiary)]"
+              >
+                {{ t('pairing.key.description') }}
+              </p>
+              <button
+                class="h-8 px-3 rounded-[6px] border border-[var(--border)] wb-mono text-[calc(11px*var(--ui-scale))] uppercase tracking-wide text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-colors flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                :disabled="isRotatingKey"
+                @click="showRotateKeyDialog = true"
+              >
+                {{ t('pairing.key.rotate') }}
+              </button>
+            </div>
+          </section>
         </div>
       </Transition>
     </div>
@@ -435,6 +503,30 @@
           </button>
           <button class="wb-btn-primary bg-[var(--color-danger)]" @click="confirmRemoveDevice">
             {{ t('pairing.button.remove') }}
+          </button>
+        </div>
+      </template>
+    </PluginModal>
+    <!-- 轮换入场密钥确认 -->
+    <PluginModal
+      v-model="showRotateKeyDialog"
+      :title="t('pairing.key.confirmTitle')"
+      size="sm"
+    >
+      <p class="text-[var(--text-primary)] text-[calc(13px*var(--ui-scale))]">
+        {{ t('pairing.key.confirmMsg') }}
+      </p>
+      <template #footer>
+        <div class="flex justify-end gap-3">
+          <button class="wb-btn-ghost" @click="showRotateKeyDialog = false">
+            {{ t('pairing.button.cancel') }}
+          </button>
+          <button
+            class="wb-btn-primary"
+            :disabled="isRotatingKey"
+            @click="confirmRotateKey"
+          >
+            {{ t('pairing.key.rotate') }}
           </button>
         </div>
       </template>
@@ -488,6 +580,8 @@ const {
   offlineDevices,
   loadDevices,
   removeDevice: revokeDevice,
+  rotateSigningKey,
+  loadAuthCenterStatus,
   port,
   addresses,
   selectedHost,
@@ -510,6 +604,33 @@ const displayIp = computed(() => selectedHost.value || t('pairing.network.notSel
 // ==================== 撤销确认 ====================
 const showRemoveDeviceDialog = ref(false)
 const pendingDeviceId = ref<string | null>(null)
+
+// ==================== 入场密钥轮换确认（ADR 0033 D4） ====================
+const showRotateKeyDialog = ref(false)
+const isRotatingKey = ref(false)
+
+// ==================== 认证中心就位横幅（ADR 0031 欠账 / 票 08 §8.1） ====================
+/** 非 null 即「中心未就位」；`unknown` 区分「读不到状态」与「确知未注册」 */
+const centerStatusError = ref<null | 'not_ready' | 'unknown'>(null)
+
+/**
+ * 读认证中心就位状态并更新横幅
+ *
+ * **三态**（不得压成两态）：
+ * - `registered: true` → 无横幅（正常态）
+ * - `registered: false` → 「未就位」横幅：入站必被拒，给出修复指引
+ * - **读失败** → 「状态未知」横幅：**不**当作未就位。两者正确动作不同
+ *   （前者是重建产物，后者是通信/宿主问题），混同会把排障方向带偏。
+ */
+async function refreshCenterStatus(): Promise<void> {
+  try {
+    const status = await loadAuthCenterStatus()
+    centerStatusError.value = status.registered ? null : 'not_ready'
+  } catch (e) {
+    console.error('[Device Center] auth center status unavailable:', e)
+    centerStatusError.value = 'unknown'
+  }
+}
 
 // ==================== QR 渲染 ====================
 
@@ -578,6 +699,9 @@ function cancelPairing() {
 /** 刷新设备列表（保留在线集合，仅重取配对记录） */
 async function refreshAll() {
   await loadDevices()
+  // 顺带重读就位状态：用户「停用并重新启用插件」后的第一手反馈就来自这次点击，
+  // 不必等重启页面（横幅正是为「修完立刻看到好了」而存在的）
+  await refreshCenterStatus()
   toast.success(t('pairing.toast.listRefreshed'))
 }
 
@@ -606,6 +730,28 @@ async function confirmRemoveDevice() {
   } finally {
     showRemoveDeviceDialog.value = false
     pendingDeviceId.value = null
+  }
+}
+
+/**
+ * 确认轮换入场签发密钥（ADR 0033 D4）
+ *
+ * 轮换**不撤销既有凭证**（撤销走 `revokeDevice`），上一代密钥在宽限期内继续
+ * 验签，所以这里**不**触发设备列表刷新——列表不会因轮换而变化。
+ * `kid` 只是代次标识，回显给用户便于对照日志（不含密钥材料）。
+ */
+async function confirmRotateKey() {
+  if (isRotatingKey.value) return
+  isRotatingKey.value = true
+  try {
+    const result = await rotateSigningKey()
+    toast.success(t('pairing.key.rotatedTo', { kid: result.kid }))
+  } catch (e) {
+    console.error('[Device Center] rotate entry signing key failed:', e)
+    toast.error(t('pairing.key.error'))
+  } finally {
+    isRotatingKey.value = false
+    showRotateKeyDialog.value = false
   }
 }
 
@@ -639,6 +785,8 @@ onMounted(async () => {
     console.error('[Device Center] load device data failed:', e)
     toast.error(t('pairing.error.loadFailed'))
   }
+  // 认证中心就位横幅（独立于数据加载：它自己处理失败，不弹 toast 扰动用户）
+  await refreshCenterStatus()
   // 恢复既有 QR / 配对码（不重新生成，与宿主原页一致）
   await restoreQr(selectedHost.value || undefined)
   await restoreCode()

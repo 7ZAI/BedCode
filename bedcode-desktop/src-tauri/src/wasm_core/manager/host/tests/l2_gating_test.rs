@@ -8,12 +8,18 @@
 //! | 约束 | 本文件如何锁 | 谁落地 |
 //! | --- | --- | --- |
 //! | ① 白名单式登记，不自动发现 | 锁「调用点白名单」+ 锁「桥接面导出面固定」 | 注册表本体见 ADR 0031 |
-//! | ② 只做安全闸门用途 | 锁「裁决面只回裁决」：`enforce_connection_policy` 成功态是 `()` | 同上 |
-//! | ③ 宿主只转发不解释 | 零解析转发层形状 + 签名断言（`Result<(), String>`） | `utils/session_gateway.rs` |
+//! | ② 只做安全闸门用途 | 锁「裁决面只回裁决」：成功态是字段集**钉死**的连接身份 | 同上 |
+//! | ③ 宿主只转发不解释 | 零解析转发层形状 + 签名断言 | `utils/session_gateway.rs` |
 //!
-//! 另有第四条锁（`host_switches_on_role_predicates_not_role_values`）防另一类漂移：
-//! 宿主若开始**按角色身份分支**做业务判断，每加一个角色就要改宿主，红线随之从
-//! 「分类学」退化成「业务识别」。
+//! 另有两条锁：
+//!
+//! - ④ `host_switches_on_role_predicates_not_role_values` 防「按角色身份分支」：
+//!   宿主若开始**按角色身份**做业务判断，每加一个角色就要改宿主，红线随之从
+//!   「分类学」退化成「业务识别」。
+//! - ⑤ `host_has_no_entry_token_crypto` 防**宿主把入场密码学接回来**：ADR 0033
+//!   删掉 `utils/auth/jwt.rs` 之后，生产路径上重新出现 `JwtService` /
+//!   `verify_token_with_expiry` / `generate_device_token` 等字样，就是把
+//!   「验签执行点留宿主」那条已退役口径复活了。
 //!
 //! ## 各锁的判据与**已知边界**（评审 2026-09-29 收紧后）
 //!
@@ -49,11 +55,16 @@ use super::*;
 /// - `wasm_core/manager/host/boot.rs` / `activation.rs`：生命周期闸门接线——
 ///   停用时 `purge_for_plugin` 回收中心句柄、启动期按在册中心做对账
 ///   （同 pty / ws / http / task 停用回收一组）。
+/// - `utils/auth/test_tokens.rs`（**仅 `#[cfg(test)]`**）：ADR 0033 后宿主没有签发面，
+///   测试也不能自己造「合法 token」——唯一诚实的造法是走生产 `auth-grant` /
+///   `jwt` / `issue`。它只经 `invoke_auth_method` 零解析转发，**零解释**（约束③），
+///   产出只给测试断言用（不产产品事实，约束②不适用），且不参与生产构建。
 ///
 /// **纯模块声明文件不在表内**（`utils/auth.rs` / `host_api.rs` 的 `mod auth_center;`）：
 /// 扫描器对 `mod X;` / `pub mod X;` 声明行直接跳过——声明不是「消费」。
 const L2_CONSUMER_ALLOWLIST: &[&str] = &[
     "src/utils/auth/auth_center.rs",
+    "src/utils/auth/test_tokens.rs",
     "src/utils/session_gateway.rs",
     "src/server/http/middleware/jwt_auth.rs",
     "src/server/websocket/channel/plugin.rs",
@@ -66,14 +77,13 @@ const L2_CONSUMER_ALLOWLIST: &[&str] = &[
 /// L2 桥接门的导出面（函数 / 常量 / `pub use` 别名）—— 锁 1b 的登记表
 ///
 /// 加删导出项必须同改本表：新增项意味着新的宿主→L2 通路（或新的别名绕过面），
-/// 需要显式裁决而不是悄悄长出来。ADR 0031 组合式认证加 `invoke_auth_method`
-/// 时即在本表登记过。
+/// 需要显式裁决而不是悄悄长出来。历史：ADR 0031 组合式认证加 `invoke_auth_method`
+/// 时登记过；**ADR 0033** 删两项——`call_api`（通用 JSON-RPC 客户端，上提到
+/// `wasm_core::intercall`：它服务会话面也服务认证面，住在认证域是归属错位）与
+/// `format_device_display_name`（死代码，HTTP 同构实现早已下沉到插件 `auth_http`）。
 const BRIDGE_PUBLIC_SURFACE: &[&str] = &[
-    "AUTH_CENTER_TIMEOUT_MS",
     "SESSION_PLUGIN_ID",
-    "call_api",
     "enforce_connection_policy",
-    "format_device_display_name",
     "invoke_auth_method",
     "session_active",
 ];
@@ -430,10 +440,21 @@ fn gate_signature(lines: &[&str]) -> Option<String> {
     )
 }
 
-/// 裁决门签名是否「只回裁决」：`Result<(), String>` + 无 `&mut` 出参 +
-/// 参数表恰为「宿主门面 + 待裁决凭据」两项只读引用
+/// 裁决门成功态允许携带的唯一载荷：字段集**钉死**的连接身份
+///
+/// ADR 0033 修订了本锁的形状（v32 时成功态是 `()`）。修订**不是**放宽：
+/// - 中心交回连接身份是**传输面必需**的——HTTP 中间件要注入请求上下文、
+///   `caller` 转发要 `deviceId` / `deviceName`、WS 连接会话要脱敏身份、
+///   日志要 `device_id`。没有它宿主只能「验签通过但不知道是谁」。
+/// - 但身份**只是同一份数据的换来源**（宿主验签结果 → 中心裁决结果），不是新增
+///   产品事实。所以本锁把成功态钉成**恰好三个字段**：配对记录 / 信任列表 / 设备
+///   档案 / 撤销状态一律不许进宿主（那些留在中心私有库，按需走别的面取）。
+const IDENTITY_PAYLOAD_FIELDS: &[&str] = &["device_id", "device_name", "fingerprint"];
+
+/// 裁决门签名是否「只回裁决」：`Result<AuthenticatedIdentity, String>` + 无 `&mut`
+/// 出参 + 参数表恰为「宿主门面 + 待裁决凭据」两项只读引用
 fn gate_signature_is_decision_only(signature: &str) -> bool {
-    if !signature.contains("Result<(), String>") || signature.contains("&mut") {
+    if !signature.contains("Result<AuthenticatedIdentity, String>") || signature.contains("&mut") {
         return false;
     }
     // 参数表归一化：逐项 trim + 丢空项 + 重新拼接——否则跨行签名的尾逗号
@@ -456,23 +477,27 @@ fn gate_signature_is_decision_only(signature: &str) -> bool {
 /// 签名判定器自身的用例（假红与两种绕过都要在这里钉住）
 ///
 /// - 单行 / **跨行**签名都判绿（拆行不是绕过，也不是假红来源）
-/// - 返回带载荷（`Result<Vec<String>, String>`）判红：宿主能解析产品事实
+/// - 退回 `Result<(), String>` 判红：那是 v32 的形状，v33 起中心必须交回身份
+/// - 返回**别的**载荷（如 `Vec<String>`）判红：宿主能解析产品事实
 /// - 加 `&mut` 出参判红：门内攒事实
 /// - 加工具参数判红：宿主开始攒上下文
 #[test]
 fn gate_signature_judgement_handles_wrapping_and_rejects_payloads() {
     for ok in [
-        "pub fn enforce_connection_policy(plugin_host: &PluginHost, token: &str) -> std::result::Result<(), String> {",
-        "pub fn enforce_connection_policy(\n    plugin_host: &PluginHost,\n    token: &str,\n) -> std::result::Result<(), String> {\n    let _ = 1;",
+        "pub fn enforce_connection_policy(plugin_host: &PluginHost, token: &str) -> std::result::Result<AuthenticatedIdentity, String> {",
+        "pub fn enforce_connection_policy(\n    plugin_host: &PluginHost,\n    token: &str,\n) -> std::result::Result<AuthenticatedIdentity, String> {\n    let _ = 1;",
     ] {
         let lines: Vec<&str> = ok.lines().collect();
         let sig = gate_signature(&lines).expect("signature found");
         assert!(gate_signature_is_decision_only(&sig), "必须判绿: {sig}");
     }
     for bad in [
+        // v32 形状（`()`）不再允许：中心放行时必须给出连接身份
+        "pub fn enforce_connection_policy(plugin_host: &PluginHost, token: &str) -> std::result::Result<(), String> {",
+        // 产品事实载荷
         "pub fn enforce_connection_policy(plugin_host: &PluginHost, token: &str) -> std::result::Result<Vec<String>, String> {",
-        "pub fn enforce_connection_policy(plugin_host: &PluginHost, token: &str, log: &mut Vec<String>) -> std::result::Result<(), String> {",
-        "pub fn enforce_connection_policy(plugin_host: &PluginHost, token: &str, device: &str) -> std::result::Result<(), String> {",
+        "pub fn enforce_connection_policy(plugin_host: &PluginHost, token: &str, log: &mut Vec<String>) -> std::result::Result<AuthenticatedIdentity, String> {",
+        "pub fn enforce_connection_policy(plugin_host: &PluginHost, token: &str, device: &str) -> std::result::Result<AuthenticatedIdentity, String> {",
     ] {
         let lines: Vec<&str> = bad.lines().collect();
         let sig = gate_signature(&lines).expect("signature found");
@@ -482,10 +507,11 @@ fn gate_signature_judgement_handles_wrapping_and_rejects_payloads() {
 
 /// 防回接锁：L2 裁决面只回裁决，宿主不解析其返回值（约束②③）
 ///
-/// `enforce_connection_policy` 的成功态是 `()`、失败态是原因串——宿主据此决定
-/// 放行 / 拒绝，**不**从中读任何产品事实。签名一旦变成带载荷（如返回设备档案、
-/// 配对记录、信任列表），或长出 `&mut` 出参 / 额外上下文参数，就是「宿主开始解释
-/// L2 的业务语义」，本条立即转红。判据见 [`gate_signature_is_decision_only`]。
+/// `enforce_connection_policy` 的成功态是一枚**字段集钉死**的连接身份、失败态是
+/// 原因串——宿主据此决定放行 / 拒绝，**不**从中读任何产品事实。签名一旦变成别的
+/// 载荷（配对记录 / 信任列表 / 设备档案），或长出 `&mut` 出参 / 额外上下文参数，
+/// 就是「宿主开始解释 L2 的业务语义」，本条立即转红。判据见
+/// [`gate_signature_is_decision_only`]。
 #[test]
 fn l2_gate_returns_decision_only() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/utils/auth/auth_center.rs");
@@ -494,7 +520,92 @@ fn l2_gate_returns_decision_only() {
     let signature = gate_signature(&lines).expect("L2 裁决门必须存在于 utils/auth/auth_center.rs");
     assert!(
         gate_signature_is_decision_only(&signature),
-        "L2 裁决门必须只返回「放行 / 拒绝原因」且无出参 / 无额外上下文：{signature}"
+        "L2 裁决门成功态只允许是连接身份、且无出参 / 无额外上下文：{signature}"
+    );
+}
+
+/// 防回接锁（ADR 0033 修订收紧）：连接身份载荷的字段集必须**恰好**是三个
+///
+/// 这是本文件对「宿主从认证中心返回值里读产品事实」这条红线的**具体封口**。
+/// 中心加字段（配对 id、信任等级、撤销状态……）时这个类型不得跟着长——那些事实
+/// 留在中心私有库，宿主要就另开一条按需取的面并各自裁决。反过来，删字段也转红
+/// （那说明传输面必需的身份信息被弄丢了）。
+#[test]
+fn l2_identity_payload_is_pinned_identity_only() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/utils/auth/identity.rs");
+    let content = std::fs::read_to_string(&path).expect("read identity module");
+    let body = content
+        .split("pub struct AuthenticatedIdentity {")
+        .nth(1)
+        .and_then(|rest| rest.split('}').next())
+        .expect("AuthenticatedIdentity struct body");
+    let mut actual: Vec<String> = Vec::new();
+    for line in body.lines() {
+        let trimmed = line.trim();
+        // 只认字段声明行（`pub <name>: <type>`），跳过属性行与注释
+        let Some(rest) = trimmed.strip_prefix("pub ") else {
+            continue;
+        };
+        let Some(name) = rest.split(':').next() else {
+            continue;
+        };
+        let name = name.trim();
+        if name.is_empty() {
+            continue;
+        }
+        actual.push(name.to_string());
+    }
+    let mut expected: Vec<String> = IDENTITY_PAYLOAD_FIELDS.iter().map(|s| s.to_string()).collect();
+    expected.sort();
+    actual.sort();
+    assert_eq!(
+        actual, expected,
+        "连接身份字段集变了：宿主只允许持有 {expected:?}（传输面必需），\
+         产品事实一律留在中心私有库（ADR 0033 修订 L2 锁）"
+    );
+}
+
+/// 防回接锁（ADR 0033 fail-visible ③）：宿主生产路径不得再出现入场密码学
+///
+/// 判据 = 文本扫描 + 与测试/注释区隔离：ADR 0033 删掉了 `utils/auth/jwt.rs`
+/// （`JwtService` / `generate_device_token` / `verify_device_token` /
+/// `verify_token_with_expiry`）与两个 `host-auth` 原语。任何一处重新出现，
+/// 都意味着「验签执行点留宿主」那条**已退役**的口径被复活——而那正是本专项
+/// 要消除的错位二（注释说「密钥不出宿主」，代码里插件自持明文副本）。
+///
+/// 边界：测试代码里出现这些字样是允许的（回归锁自身 + 探针文档），扫描只取
+/// 「纯代码」视图（剥注释）且排除 `#[cfg(test)]` 模块。
+#[test]
+fn host_has_no_entry_token_crypto() {
+    const NEEDLES: &[&str] = &[
+        "JwtService",
+        "verify_token_with_expiry",
+        "generate_device_token",
+        "verify_device_token",
+        "device_token_issue",
+        "device_token_verify",
+        "JwtClaims",
+    ];
+    let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut violations = Vec::new();
+    for rel in host_files_mentioning("utils::auth") {
+        let Ok(content) = std::fs::read_to_string(base.join(&rel)) else {
+            continue;
+        };
+        for line in code_lines(&content) {
+            if line.starts_with("#[cfg(test)]") || line.starts_with("mod tests") {
+                break;
+            }
+            for needle in NEEDLES {
+                if line.contains(needle) {
+                    violations.push(format!("{rel}: {needle} → {}", line.trim()));
+                }
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "宿主生产路径不得再持有设备入场密码学（ADR 0033）：{violations:#?}"
     );
 }
 

@@ -511,6 +511,32 @@ async function init() {
     })
   })
 
+  // 凭证被桌面端**永久**拒绝（ADR 0033 §F3 / 票 08）
+  //
+  // 与 `ws_reconnect_failed` 刻意**分开**：后者是「退避重试耗尽」（网络类），
+  // 本者是一次就判定的「凭据不认」（入场密钥换手 / 设备被撤销 / 从未配对）——
+  // 两者排障路径完全不同，重试无用且正确动作是**重新配对**。
+  // 混成一个终态正是本事件存在的理由：迁移前两者都落到「重连失败」。
+  await listen<{ reason: string }>('ws_reauth_rejected', (event) => {
+    logger.error('[MobileConnection] Credential permanently rejected (needs re-pair):', event.payload.reason)
+    clearConnectionTimeout()
+    connectionStatus.value = 'error'
+    // 状态机标记重试已耗尽：避免监督器把它当「还能自愈」再拉起退避循环
+    autoReconnectAttemptCount = MAX_AUTO_RECONNECT_ATTEMPTS
+    isConnecting.value = false
+    autoStopForegroundService()
+
+    const toast = useToast()
+    // 复用已有文案 key（与 WS 致命关闭 4001/4003 同一条）：明确指向「重新配对」
+    toast.error(i18n.global.t('common.notification.authFailedRePair', { reason: event.payload.reason }), 5000)
+
+    // 后台运行时的系统通知也用「需重新配对」而非「重连失败」
+    showConnectionNotification({
+      type: 'auth_failed',
+      deviceName: currentDevice.value?.name,
+    })
+  })
+
   // 监听重连失败事件
   await listen<{ reason: string }>('ws_reconnect_failed', (event) => {
     logger.error('[MobileConnection] Reconnect failed:', event.payload.reason)

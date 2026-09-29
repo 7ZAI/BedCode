@@ -187,19 +187,13 @@ impl bedcode::plugin::host_auth::Host for WasmPluginState {
         )
     }
 
-    fn device_token_issue(&mut self, sub: String, device_name: String, fingerprint: String) -> Result<String, String> {
-        auth::auth_device_token_issue(
-            self.host_ctx.as_ref(),
-            &self.plugin_id,
-            &sub,
-            &device_name,
-            &fingerprint,
-        )
-    }
-
-    fn device_token_verify(&mut self, token: String) -> Result<String, String> {
-        auth::auth_device_token_verify(self.host_ctx.as_ref(), &self.plugin_id, &token)
-    }
+    // ==================== v33：设备入场 JWT 签发/验签接线退役（ADR 0033） ====================
+    // 原 `device_token_issue` / `device_token_verify` 接线（实现体在
+    // `host_api/auth.rs`）随 WIT `host-auth` 两函数一并删除：入场密钥的生成 /
+    // 签发 / 验签归认证中心自持，宿主不再持有任何设备 JWT 密码学。中心只经
+    // `auth_secret_get/set` 存取密钥材料（属主隔离照旧）。旧产物（v32 SDK 构建）
+    // 仍 import 这两个函数 → 实例化期被拒（`stale_artifact_rebuild_hint` 点名
+    // v33 重建），不是 trap 也不是静默降级。
 
     // ==================== v32：认证中心显式注册 + 组合式认证原语（ADR 0031） ====================
     // 属主 = 注册调用方插件实例的 plugin_id；权限门 `auth` + 单中心唯一性仲裁在
@@ -1309,6 +1303,25 @@ impl LoadedWasmPlugin {
                 abi::ABI_VERSION
             );
         }
+        // v33（认证中心持有入场密钥，ADR 0033）：host-auth.device-token-issue /
+        // device-token-verify **退役删除**——v32 产物仍 import 这两个函数，在 v33
+        // 宿主上实例化失败，指引必须是「按 v33 SDK 重建插件产物」（与 v32 反向的
+        // 「升级 BedCode」方向相反，两者靠函数名判据区分，不靠分支次序）。
+        //
+        // 判据锚**函数名**（不含 `host-auth.` 前缀）：wasmtime 的两种文案形态分别是
+        // 「imports instance `bedcode:plugin/host-auth` … unknown import
+        // `device-token-issue` has not been defined」与「unknown import
+        // `bedcode:plugin/host-auth.device-token-issue` …」——前缀时有时无。
+        if instantiate_error.contains("device-token-issue")
+            || instantiate_error.contains("device-token-verify")
+        {
+            return format!(
+                "（该产物按旧版插件 SDK 构建：ABI v{} 起 host-auth.device-token-issue / \
+                 device-token-verify 已退役（入场签发密钥与验签归认证中心自持，ADR 0033），\
+                 请用当前 SDK 重建插件产物）",
+                abi::ABI_VERSION
+            );
+        }
         // v32 反向（产物新于宿主）：host-auth 新增 `auth-center-register`（认证中心
         // 显式注册，ADR 0031）——旧宿主 linker 无该 import 实现 → 实例化报点名；
         // 此时问题在宿主太旧（升级 BedCode），不是产物要重建，故单独一条指引
@@ -2372,6 +2385,36 @@ mod tests {
         // 反向：只有「认证中心」字样、没有缺失函数名的实例化失败不得被 v32 分支劫持
         // （判据锚在函数名而非关键词，否则文案层面的巧合会给出错误的升级指引）
         assert!(LoadedWasmPlugin::stale_artifact_rebuild_hint("认证中心未注册").is_empty());
+
+        // v33（认证中心持有入场密钥，ADR 0033）：host-auth.device-token-issue /
+        // device-token-verify **退役删除**——v32 产物仍 import 这两个函数，在 v33
+        // 宿主上实例化失败，指引必须是「按 v33 SDK 重建插件产物」（与 v32 反向的
+        // 「升级 BedCode」方向相反，两者靠函数名判据区分，不靠分支次序）。
+        let msg_v33 = "component imports instance `bedcode:plugin/host-auth`, but a matching \
+                       implementation was not found in the linker: unknown import \
+                       `device-token-issue` has not been defined";
+        let hint_v33 = LoadedWasmPlugin::stale_artifact_rebuild_hint(msg_v33);
+        assert!(hint_v33.contains("重建插件产物"), "v33 删项必须指重建产物: {hint_v33}");
+        assert!(
+            hint_v33.contains(&format!("v{}", abi::ABI_VERSION)),
+            "v33 删项必须点明 ABI 版本: {hint_v33}"
+        );
+        assert!(
+            hint_v33.contains("device-token-issue"),
+            "v33 删项必须点名缺失函数: {hint_v33}"
+        );
+        assert!(
+            !hint_v33.contains("升级 BedCode"),
+            "v33 删项不得误导为升级宿主（方向与 v32 反向相反）: {hint_v33}"
+        );
+        // 验签面同属 v33 删项，走同一条指引
+        let hint_v33b = LoadedWasmPlugin::stale_artifact_rebuild_hint(
+            "unknown import `bedcode:plugin/host-auth.device-token-verify` has not been defined",
+        );
+        assert!(
+            hint_v33b.contains("重建插件产物") && hint_v33b.contains("device-token-verify"),
+            "v33 删项必须覆盖 device-token-verify: {hint_v33b}"
+        );
 
         // 反向：与契约变更无关的实例化失败不得附指引（避免掩盖真因）
         assert!(LoadedWasmPlugin::stale_artifact_rebuild_hint("failed to find a pre-opened directory").is_empty());

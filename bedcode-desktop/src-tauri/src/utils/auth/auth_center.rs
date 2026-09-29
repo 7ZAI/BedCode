@@ -1,19 +1,21 @@
 //! 认证中心宿主桥接（票 11 C2 落地 → 终端会话中心票 04/05 改指 → 2026-09-29
-//! ADR 0031 v32：注册表显式登记取代能力探测）
+//! ADR 0031 v32：注册表显式登记取代能力探测 → v33 / ADR 0033：验签执行一并下沉）
 //!
 //! 认证中心 ≡ 微服务架构的 auth server（用户裁定）：唯一裁决者、注册进网关、可提供
 //! 多种认证方式（grant）。与微服务的唯一结构差异是**没有也不需要服务发现**——发现
 //! 协议就是「插件激活时调 `auth-center-register` + 宿主唯一性仲裁」这一个函数
-//! （`wasm_core/host_api/auth_center.rs` 单中心注册表，D2）。**两套发现路径已合一**：
+//! （`wasm_core/host_api/auth_center.rs` 单中心注册表，ADR 0031 D2）。**两套发现路径已合一**：
 //! 本文件的桥接门（[`session_active`]）与裁决面（[`enforce_connection_policy`]）都查
-//! 注册表；退役 api_registry 锚点 [`SESSION_MARKER_API`]（K7：留锚点 = 留第二套
+//! 注册表；退役 api_registry 锚点 `SESSION_MARKER_API`（K7：留锚点 = 留第二套
 //! 发现机制 = 留 2026-09-29 选错中心的同型病灶）。
 //!
-//! 认证语义（配对码 / QR / trust / consent / 生物 / JWT 编排）实现在认证中心插件
-//! `com.bedcode.terminal-session`（[`SESSION_PLUGIN_ID`]），本文件是宿主侧唯一桥接门：
-//! - **裁决面**（[`enforce_connection_policy`]，K2/K3）：验签后经注册表找到中心，再
-//!   调中心 `auth-policy` 策略（结构/claims/时效 + 信任撤销）；**无中心 / 调用失败
-//!   一律拒绝**（fail-closed，取代两条 fail-open 降级）——三类拒绝以结构化字段
+//! 认证语义（配对码 / QR / trust / consent / 生物 / **入场 JWT 签发与验签**）实现在
+//! 认证中心插件 `com.bedcode.terminal-session`（[`SESSION_PLUGIN_ID`]），本文件是宿主
+//! 侧唯一桥接门：
+//! - **裁决面**（[`enforce_connection_policy`]，K2/K3 + ADR 0033）：**验签与策略收为
+//!   一次调用**——中心内部先验签（入场密钥自持）再逐条做策略，宿主只拿一份
+//!   [`AuthenticatedIdentity`]。**无中心 / 调用失败 一律拒绝**（fail-closed，取代
+//!   两条 fail-open 降级）——三类拒绝以结构化字段
 //!   `deny_kind = no_center | unavailable | policy` 区分（AGENTS §8 结构化字段红线）
 //! - **桥接门**（[`session_active`]，K7）：查注册表（替代旧锚点判据）
 //! - **组合式认证**（[`invoke_auth_method`]，K6）：零解析窄转发到中心 `auth-grant`
@@ -24,25 +26,24 @@
 //! - Tauri 命令面：`commands/system.rs`（配对码）、`commands/qr.rs`（QR）
 //! - server 配对端点：`controllers/auth_controller.rs`（/api/auth/pairing ·
 //!   /verify · /qr-connect）——移动端验签与前端展示必须同源
-//! - server 认证中间件：WS 插件端点 + HTTP 网关取 `auth-policy` 策略
+//! - server 认证面：WS 插件端点 + HTTP 网关（**都只调本文件的裁决面**）
 //! - `utils/session_gateway.rs`：会话互调窄转发的激活门（[`session_active`]）
 //!
-//! 边界：
+//! 边界（ADR 0033 后）：
 //! - TTL 配置（`pairing_code_ttl` / `qr_token_ttl`）留宿主 DB 设置（配置域；生成
 //!   命令把配置值传插件），TTL get/set 命令不转发。插件可经 host-auth
 //!   `auth-setting-set` 写这两项（白名单 + 正整数校验），读取仍走宿主配置 / 命令面
-//! - 认证记录真源在认证中心私有库（v24 下沉；宿主主库 `pairings` 等退役表不读不迁
-//!   不清理）；宿主只剩 host-auth 密钥托管 / 生物验签 / JWT 签发验签原语（K5 不动）
+//! - 认证记录真源在认证中心私有库（v24 下沉）；宿主只剩 host-auth 密钥托管 /
+//!   生物验签 / 链路身份原语。**设备入场密码学已完全离开宿主**（ADR 0033 D1）
 //!
-//! 互调调用约定：请求 topic `bedcode.api.<plugin-id>.<method>`，回复 topic
-//! `bedcode.api.reply.<caller>.<request-id>`；caller 为宿主虚拟身份
-//! [`crate::wasm_core::host_api::api::HOST_API_CALLER_ID`]
-//! （互调门禁只校验目标 api 声明，不校验调用方）。
+//! 互调调用约定与通用客户端：见 [`crate::wasm_core::intercall`]（ADR 0033 从本
+//! 文件上提——原住这里的 `call_api` 实际是通用 JSON-RPC 客户端，被会话面也当通用
+//! 互调用，归属错位）。
 
+use crate::utils::auth::identity::AuthenticatedIdentity;
+use crate::wasm_core::intercall::AUTH_CENTER_TIMEOUT_MS;
 use crate::wasm_core::manager::runtime::WasmHostContext;
-use crate::{AppError, Result};
 
-// 票 12 C3：认证策略取认证中心 capability 导出（验签执行留宿主中间件）；
 // 票 06 起具体导出名与调用模型收口在宿主门面 `PluginHost::call_auth_policy` 内
 use crate::wasm_core::manager::host::PluginHost;
 use crate::wasm_core::runtime_util::block_on_async;
@@ -51,89 +52,52 @@ use crate::wasm_core::runtime_util::block_on_async;
 /// trust / consent / 认证策略；v32 起为**认证中心**，经注册表显式登记，ADR 0031）
 pub const SESSION_PLUGIN_ID: &str = "com.bedcode.terminal-session";
 
-/// 宿主→插件互调超时（毫秒）：单次操作远快于此，超时视为故障走拒绝（fail-closed）
-pub const AUTH_CENTER_TIMEOUT_MS: u64 = 5_000;
-
 /// 认证中心是否在册（K7 桥接门：替代退役的 api_registry 锚点判据）。
 ///
 /// 注册表 = 宿主进程内的发现协议：中心激活时调 `auth-center-register` 登记、
-/// 停用时注销 / 宿主 purge 回收，故在册 ⇔ 中心已就绪。`host_ctx` 保留为参数
-/// 以兼容既有调用方（历史锚点判据需要它；注册表是全局，不再需要）。
-pub fn session_active(host_ctx: &WasmHostContext) -> bool {
-    let _ = host_ctx;
+/// 停用时注销 / 宿主 purge 回收，故在册 ⇔ 中心已就绪。
+///
+/// 无参：注册表是**进程级单例**（`wasm_core/host_api/auth_center.rs`），不需要
+/// `WasmHostContext`。ADR 0033 同批去掉了那个只为历史锚点判据保留、实际
+/// `let _ = host_ctx;` 的参数——留着会让人以为「在册与否」和某个上下文有关。
+pub fn session_active() -> bool {
     crate::wasm_core::host_api::auth_center::is_registered()
 }
 
-/// 宿主互调请求 id 计数器（全局单调；宿主多线程并发调用，reply topic 含
-/// caller+id，id 必须全局唯一防止并发调用串台——SDK 侧用 thread_local（wasm
-/// 单线程），宿主必须 Atomic）
-static HOST_REQUEST_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+// ==================== server 认证面（票 12 C3 → ADR 0031 v32 → ADR 0033 v33） ====================
 
-fn next_host_request_id() -> String {
-    let n = HOST_REQUEST_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-    format!("host-req-{n}")
-}
-
-/// 调用认证中心互调 api：构造 JSON-RPC 请求 → 发布等待 → 解码 reply → result 值
+/// 连接建立认证：**问认证中心一次**（验签 + 策略在中心内部完成，ADR 0033）
 ///
-/// wire 形状与 SDK `api_call` 约定一致（spec §9.3）：请求
-/// `{jsonrpc, id, method, params}`，响应 `{jsonrpc, id, result | error}`；
-/// SDK api_call 模块被 `wasm` feature 门禁（guest 侧），宿主按同一约定本地实现。
-pub(crate) fn call_api(host_ctx: &WasmHostContext, api: &str, params: serde_json::Value) -> Result<serde_json::Value> {
-    let request_topic = format!("bedcode.api.{api}");
-    // JSON-RPC `method` 字段 = 短方法名（与 SDK client 同约定：topic 全限定、
-    // payload 短名——插件宏分派 `match req.method` 按短名匹配）
-    let method = api.rsplit_once('.').map(|(_, m)| m).unwrap_or(api);
-    let id = next_host_request_id();
-    let payload = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": id,
-        "method": method,
-        "params": params,
-    });
-    let reply_json = host_ctx
-        .call_plugin_api_host(&request_topic, &payload.to_string(), AUTH_CENTER_TIMEOUT_MS)
-        .map_err(|e| AppError::Plugin(format!("auth center api call '{api}' failed: {e}")))?;
-    let reply: serde_json::Value = serde_json::from_str(&reply_json)
-        .map_err(|e| AppError::Plugin(format!("auth center api '{api}' reply invalid JSON: {e}")))?;
-    if let Some(err) = reply.get("error") {
-        let message = err
-            .get("message")
-            .and_then(|v| v.as_str())
-            .unwrap_or("rpc error")
-            .to_string();
-        return Err(AppError::Plugin(format!("auth center api '{api}' error: {message}")));
-    }
-    reply
-        .get("result")
-        .cloned()
-        .ok_or_else(|| AppError::Plugin(format!("auth center api '{api}' reply missing result/error")))
-}
-
-// ==================== server 认证策略（票 12 C3） ====================
-
-/// server 连接建立认证策略：**验签执行留宿主中间件**（密码学引擎不移动，spec
-/// §3「不动」表——中间件已用宿主 `JwtService` 验签），验签通过后经注册表找到
-/// 认证中心，再调中心 `auth-policy.verify-device-token` 策略导出（claims 结构/
-/// 时效 + 信任撤销检查，见认证中心插件 `policy` 模块）做裁决。
+/// 返回：
+/// - `Ok(identity)` = 中心放行，并交回连接身份（`device_id` / `device_name` /
+///   `fingerprint`，字段集被 L2 锁钉死）
+/// - `Err(reason)` = 拒绝原因
 ///
-/// **v32（ADR 0031）替换旧实现**：角色发现从「能力探测 + 排序取首个」改为**查
-/// 注册表**（`wasm_core/host_api/auth_center.rs`，O(1)，不复刻 2026-09-29 不住
-/// 选错中心的病灶）；两条 fail-open 降级（无候选放行 / 传输失败放行）删除，改
-/// **fail-closed**（K3）：
+/// **v32（ADR 0031）**把角色发现从「能力探测 + 排序取首个」改为**查注册表**
+/// （`wasm_core/host_api/auth_center.rs`，O(1)，不复刻 2026-09-29 不住选错中心的
+/// 病灶）；两条 fail-open 降级（无候选放行 / 传输失败放行）删除，改 **fail-closed**（K3）：
 /// - 无中心在册 → 拒绝（`no auth center registered`，`deny_kind=no_center`）
-/// - 中心策略放行 → `Ok(())`（调用方保留自身验签 claims 作为连接身份）
-/// - 中心策略拒绝（guest 自报 Err）→ 上抛拒绝原因（`deny_kind=policy`）
-/// - 能力调用传输失败（实例缺失/trap/超时）→ 拒绝（`auth center unavailable: …`，
+/// - 中心调用失败（实例缺失 / trap / 超时）→ 拒绝（`auth center unavailable: …`，
 ///   `deny_kind=unavailable`）
+/// - 中心策略拒绝（guest 自报 Err）→ 上抛拒绝原因（`deny_kind=policy`）
+/// - 中心放行但给不出身份 → 拒绝（`deny_kind=unavailable`，见下方注释）
 ///
-/// 三类拒绝必须可区分（规格 §5.1）：`no_center` / `unavailable` 是部署/故障问题，
+/// **v33（ADR 0033）**：中心内部先验签（入场密钥自持）再裁决，宿主**不再有任何
+/// JWT 密码学**。失败面从迁移前的「宿主验签 → 问中心策略」两次调用收窄为一次。
+/// **失败面收窄的代价**：宿主不再有独立的验签层，故中心**必须**先把签名验过才
+/// 谈策略；中心放行却给不出 `sub` 视为中心侧故障（`deny_kind=unavailable`），
+/// 宿主绝不回查本地凭据表——那正是 ADR 0022 §5.1.4 的「宿主侧回查」红线。
+///
+/// 三类拒绝必须可区分（ADR 0031 §规格）：`no_center` / `unavailable` 是部署/故障问题，
 /// `policy` 是产品语义问题（如设备被撤销），排障路径完全不同。
 ///
 /// 调用方：`server/websocket/channel/plugin.rs::verify_endpoint_jwt`（WS 插件端点
-/// 首消息认证）+ `server/middleware/jwt_auth.rs::extract_and_verify_jwt`
-/// （HTTP /api 网关）。
-pub fn enforce_connection_policy(plugin_host: &PluginHost, token: &str) -> std::result::Result<(), String> {
+/// 首消息认证）+ `server/http/middleware/jwt_auth.rs::extract_and_verify_jwt`
+/// （HTTP `/api` 网关）。
+pub fn enforce_connection_policy(
+    plugin_host: &PluginHost,
+    token: &str,
+) -> std::result::Result<AuthenticatedIdentity, String> {
     // 注册表查询（O(1)，无候选遍历、无“取第一个”启发式）：无中心 = 拒绝（K3）
     let Some(entry) = crate::wasm_core::host_api::auth_center::center() else {
         tracing::warn!(
@@ -149,9 +113,19 @@ pub fn enforce_connection_policy(plugin_host: &PluginHost, token: &str) -> std::
     let call_owner = center_owner.clone();
     let result = block_on_async(async move { plugin_host.call_auth_policy(&call_owner, token).await });
     match result {
-        Ok(Ok(_claims_json)) => Ok(()), // 认证中心策略放行（claims 以宿主验签结果为准）
+        Ok(Ok(claims_json)) => AuthenticatedIdentity::from_center_claims(&claims_json).map_err(|e| {
+            tracing::error!(
+                deny_kind = "unavailable",
+                center_id = %center_id,
+                center_owner = %center_owner,
+                error = %e,
+                "auth center admitted a token without a usable identity, denying (fail-closed)"
+            );
+            e
+        }),
         Ok(Err(reason)) => {
-            // 中心策略拒绝（撤销/其他）：deny_kind=policy，原因透出（F4）
+            // 中心策略拒绝（撤销 / 签名无效 / 过期 / 结构非法）：deny_kind=policy，
+            // 原因透出（中心侧才是判定方，宿主不解释）
             tracing::warn!(
                 deny_kind = "policy",
                 center_id = %center_id,
@@ -213,7 +187,7 @@ pub(crate) fn invoke_auth_method(
     let api = format!("{}.auth-grant", entry.owner);
     let request_topic = format!("bedcode.api.{api}");
     let method_short = api.rsplit_once('.').map(|(_, m)| m).unwrap_or(&api);
-    let id = next_host_request_id();
+    let id = crate::wasm_core::intercall::next_host_request_id();
     let payload = serde_json::json!({
         "jsonrpc": "2.0",
         "id": id,
@@ -239,12 +213,4 @@ pub(crate) fn invoke_auth_method(
         .cloned()
         .ok_or_else(|| "auth center unavailable (reply missing result/error)".to_string())?;
     serde_json::to_string(&result).map_err(|e| format!("auth center reply serialize failed: {e}"))
-}
-
-/// 格式化设备显示名称：名称 + 首次连接 IP（原 `auth_service` 同名函数，
-/// 票 07 后 WS 重认证路径仍在宿主使用——HTTP 路径的同构实现在插件 auth_http）
-pub fn format_device_display_name(device_name: &str, address: &str) -> String {
-    // address 格式为 "IP:PORT"，提取 IP 部分
-    let ip = address.rsplit_once(':').map(|(ip, _)| ip).unwrap_or(address);
-    format!("{} ({})", device_name, ip)
 }

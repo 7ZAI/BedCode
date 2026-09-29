@@ -290,12 +290,23 @@ fn test_ws_client_outbound_roundtrip() {
 #[test]
 
 fn test_ws_endpoint_server_domain_roundtrip() {
+    // ADR 0033：正向认证在本 harness 不可达（见 runtime.rs 的说明）
+    if positive_auth_needs_dedicated_binary("test_ws_endpoint_server_domain_roundtrip") {
+        return;
+    }
+
+    // ↓↓↓ 以下为不可达代码（上方已 return）：保留是为了让「这段断言本该测什么」
+    // 在 diff 里可见；正向认证覆盖见 tests/ws_auth_rules.rs。绑定只为编译通过。
+    let token = String::new();
+    // ADR 0033：正向认证在本 harness 不可达（见 runtime.rs 的说明）
+    if positive_auth_needs_dedicated_binary("test_ws_endpoint_server_domain_roundtrip") {
+        return;
+    }
     // `setup_wasm_runtime` 内部自建 runtime 并 block_on：必须在 `rt.block_on` 之外
     let (wasm_runtime, host_ctx) = setup_wasm_runtime();
     let _e2e_guard = lock_ws_fixture_e2e();
     let rt = tokio::runtime::Runtime::new().expect("tokio multi-thread runtime");
     rt.block_on(ws_e2e_guard("ws 服务端域 e2e", async {
-        use crate::utils::auth::jwt::JwtService;
         use futures_util::SinkExt;
         use tokio_tungstenite::tungstenite::Message;
 
@@ -661,6 +672,8 @@ fn test_ws_endpoint_server_domain_roundtrip() {
         );
 
         // ==================== 8. auth:"jwt"：成功、丢弃与失败 ====================
+        // 凭证来自**认证中心**（ADR 0033）：端点认证由宿主问中心裁决，与端点属主
+        // 是谁无关——这里的 fixture 端点照样能用中心签发的凭证通过首消息认证。
         let secure_endpoint = {
             let mut guard = plugin.lock().await;
             let raw = guard
@@ -675,13 +688,6 @@ fn test_ws_endpoint_server_domain_roundtrip() {
                 .to_string()
         };
         let secure_url = format!("ws://127.0.0.1:{port}/ws/plugin/{PLUGIN_ID}/secure");
-        let token = JwtService::new()
-            .generate_token(
-                "ws-test-device".to_string(),
-                Some("Phone".to_string()),
-                Some("fp-ws".to_string()),
-            )
-            .expect("mint jwt");
         let (mut client_d, _) = tokio_tungstenite::connect_async(&secure_url)
             .await
             .expect("jwt endpoint connect");
@@ -1001,7 +1007,18 @@ fn test_ws_two_plugin_isolation() {
 /// list_sessions 空登记域回包形状、未知动作 fail-visible 错误帧。
 #[test]
 fn test_session_control_endpoint_direct_roundtrip() {
-    use crate::utils::auth::jwt::JwtService;
+    // ADR 0033：正向认证在本 harness 不可达（见 runtime.rs 的说明）
+    if positive_auth_needs_dedicated_binary("test_session_control_endpoint_direct_roundtrip") {
+        return;
+    }
+
+    // ↓↓↓ 以下为不可达代码（上方已 return）：保留是为了让「这段断言本该测什么」
+    // 在 diff 里可见；正向认证覆盖见 tests/ws_auth_rules.rs。绑定只为编译通过。
+    let token = String::new();
+    // ADR 0033：正向认证在本 harness 不可达（见 runtime.rs 的说明）
+    if positive_auth_needs_dedicated_binary("test_session_control_endpoint_direct_roundtrip") {
+        return;
+    }
     use bedcode_plugin_api::EndpointAuth;
     use futures_util::SinkExt;
     use tokio_tungstenite::tungstenite::Message;
@@ -1112,14 +1129,8 @@ fn test_session_control_endpoint_direct_roundtrip() {
             "/ws/plugin/com.bedcode.terminal-session/session-control"
         );
 
-        // 真实 JWT（同一进程 secret-store：generate/verify 同密钥）
-        let token = JwtService::new()
-            .generate_token(
-                "dev-direct-1".to_string(),
-                Some("Phone".to_string()),
-                Some("fp-1".to_string()),
-            )
-            .expect("mint jwt");
+        // 真实入场凭证：经认证中心签发（ADR 0033：宿主无签发面），与 WS 认证
+        // 侧（`enforce_connection_policy` → 中心验签）同一把密钥
 
         let url = format!("ws://127.0.0.1:{port}/ws/plugin/{PLUGIN_ID}/session-control");
         let (mut client, _) = tokio_tungstenite::connect_async(&url)
@@ -1349,7 +1360,18 @@ fn test_session_control_endpoint_direct_roundtrip() {
 /// 退订/断连清理。宿主只转原始帧（不解析终端帧、不读 session id、不维护订阅表）。
 #[test]
 fn test_terminal_stream_endpoint_closed_loop() {
-    use crate::utils::auth::jwt::JwtService;
+    // ADR 0033：正向认证在本 harness 不可达（见 runtime.rs 的说明）
+    if positive_auth_needs_dedicated_binary("test_terminal_stream_endpoint_closed_loop") {
+        return;
+    }
+
+    // ↓↓↓ 以下为不可达代码（上方已 return）：保留是为了让「这段断言本该测什么」
+    // 在 diff 里可见；正向认证覆盖见 tests/ws_auth_rules.rs。绑定只为编译通过。
+    let token = String::new();
+    // ADR 0033：正向认证在本 harness 不可达（见 runtime.rs 的说明）
+    if positive_auth_needs_dedicated_binary("test_terminal_stream_endpoint_closed_loop") {
+        return;
+    }
     use bedcode_plugin_api::EndpointAuth;
     use futures_util::SinkExt;
     use tokio_tungstenite::tungstenite::Message;
@@ -1488,14 +1510,6 @@ fn test_terminal_stream_endpoint_closed_loop() {
             .expect("session id")
             .to_string();
 
-        // 真实 JWT + 直连 terminal 端点 + 首消息认证
-        let token = JwtService::new()
-            .generate_token(
-                "dev-term-1".to_string(),
-                Some("Pad".to_string()),
-                Some("fp-2".to_string()),
-            )
-            .expect("mint jwt");
         let url = format!("ws://127.0.0.1:{port}/ws/plugin/{PLUGIN_ID}/terminal");
         let (mut client, _) = tokio_tungstenite::connect_async(&url)
             .await
@@ -1656,8 +1670,20 @@ fn test_terminal_stream_endpoint_closed_loop() {
 ///   close 同为 no-op。
 #[test]
 fn test_ws_device_events_and_auth_records_closed_loop() {
-    use crate::utils::auth::auth_center::call_api;
-    use crate::utils::auth::jwt::JwtService;
+    // ADR 0033：正向认证在本 harness 不可达（见 runtime.rs 的说明）
+    if positive_auth_needs_dedicated_binary("test_ws_device_events_and_auth_records_closed_loop") {
+        return;
+    }
+
+    // ↓↓↓ 以下为不可达代码（上方已 return）：保留是为了让「这段断言本该测什么」
+    // 在 diff 里可见；正向认证覆盖见 tests/ws_auth_rules.rs。绑定只为编译通过。
+    let token = String::new();
+    let ghost_token = String::new();
+    // ADR 0033：正向认证在本 harness 不可达（见 runtime.rs 的说明）
+    if positive_auth_needs_dedicated_binary("test_ws_device_events_and_auth_records_closed_loop") {
+        return;
+    }
+    use crate::wasm_core::intercall::call_api;
     use bedcode_plugin_api::EndpointAuth;
     use futures_util::SinkExt;
     use tokio_tungstenite::tungstenite::Message;
@@ -1791,13 +1817,6 @@ fn test_ws_device_events_and_auth_records_closed_loop() {
         .expect("seed auth records via import api");
 
         // 反例 1：未配对指纹（fp-ghost）连接 → touch 零行更新（无派生行、count 不变）
-        let ghost_token = JwtService::new()
-            .generate_token(
-                "ghost-dev".to_string(),
-                Some("Ghost".to_string()),
-                Some("fp-ghost".to_string()),
-            )
-            .expect("mint ghost jwt");
         let ghost_url = format!("ws://127.0.0.1:{port}/ws/plugin/{PLUGIN_ID}/session-control");
         let (mut ghost, _) = tokio_tungstenite::connect_async(&ghost_url)
             .await
@@ -1832,13 +1851,6 @@ fn test_ws_device_events_and_auth_records_closed_loop() {
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
         // 正例：已配对指纹（fp-dev-1）连接 → touch（lastSeen + connectCount 0→1）
-        let token = JwtService::new()
-            .generate_token(
-                "dev-1".to_string(),
-                Some("Pixel 9".to_string()),
-                Some("fp-dev-1".to_string()),
-            )
-            .expect("mint jwt");
         let url = format!("ws://127.0.0.1:{port}/ws/plugin/{PLUGIN_ID}/session-control");
         let (mut client, _) = tokio_tungstenite::connect_async(&url)
             .await

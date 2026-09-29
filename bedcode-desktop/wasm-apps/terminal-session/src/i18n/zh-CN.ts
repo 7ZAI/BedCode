@@ -186,6 +186,23 @@ const zhCN: MessageSchema = {
   'pairing.device.confirmRemoveMsg': '确定要移除此设备吗？移除后需要重新配对。',
   'pairing.device.removed': '设备已移除',
 
+  // ==================== 入场签发密钥轮换（ADR 0033 D4） ====================
+  'pairing.key.sectionTitle': '入场密钥',
+  'pairing.key.description': '轮换设备入场凭证的签发密钥。已配对设备不受影响，凭证在宽限期内继续有效。',
+  'pairing.key.rotate': '轮换密钥',
+  'pairing.key.confirmTitle': '轮换入场密钥',
+  'pairing.key.confirmMsg':
+    '将生成新一代签发密钥。已配对设备的现有凭证在 7 天宽限期内继续有效，超期后需重新配对。是否继续？',
+  'pairing.key.rotated': '入场密钥已轮换',
+  'pairing.key.rotatedTo': '入场密钥已轮换至第 {kid} 代',
+  'pairing.key.error': '轮换入场密钥失败',
+
+  // ==================== 认证中心就位状态（ADR 0031 欠账 / 票 08 §8.1） ====================
+  'pairing.center.notReadyTitle': '认证中心未就绪',
+  'pairing.center.notReadyDesc': '本机认证中心未注册成功，所有入站连接都会被拒绝（手机无法连上）。',
+  'pairing.center.rebuildHint': '请在插件管理中停用并重新启用本插件；若仍失败请查看日志。',
+  'pairing.center.statusUnknown': '无法读取认证中心状态',
+
   'pairing.history.title': '连接历史',
   'pairing.history.back': '返回设备列表',
   'pairing.history.empty': '暂无连接历史',

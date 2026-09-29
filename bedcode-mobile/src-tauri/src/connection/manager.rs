@@ -460,6 +460,11 @@ impl ConnectionManager {
     /// reconnected / reconnect_failed）与退避节奏保持原样，前端零改动。
     /// `app_handle` 可为 `None`：04 监督任务自愈重连在无窗口上下文中可测
     /// （仅跳过前端事件发射，HTTP 语义不变），command 层传 `Some`。
+    ///
+    /// **永久性凭证拒绝不走退避**（ADR 0033）：见循环体内注释与
+    /// [`is_credential_rejection`]。这种失败发 `ws_reauth_rejected` 而**不是**
+    /// `ws_reconnect_failed`——两者在 UI 上必须是**不同文案**（前者「需重新
+    /// 配对」，后者「网络/重连失败」），合并成一个终态正是本次要修的缺陷。
     pub async fn reconnect(&self, app_handle: Option<AppHandle>, token: Option<String>) -> Result<()> {
         let max_retry = DEFAULT_MAX_RETRIES;
         let mut current_retry: u32 = 0;
@@ -533,8 +538,18 @@ impl ConnectionManager {
                 break;
             }
 
-            // HTTP reauth：成功（含 AuthSuccess 契口广播）即恢复；拒绝/网络
-            // 故障都继续退避（业务码 1001 等属于永久性拒绝，退避到上限自然退出）
+            // HTTP reauth：成功（含 AuthSuccess 契口广播）即恢复。
+            //
+            // **永久性拒绝立即停止重试**（ADR 0033 迁移后的关键区分）：入场签发
+            // 密钥换手后，存量已配对设备的旧 token 会被**永久**拒绝（业务码信封
+            // → `AppError::Auth`）。继续退避重试到上限只会：① 制造与网络故障
+            // 无法区分的假象；② 让用户以为是网络问题反复等待，而正确动作是
+            // **重新配对**。故这里按错误**变体**分流（`Auth` = 桌面端明确答复
+            // 「凭据不认」；`Internal`/`Parse` = 传输或协议层故障，值得重试）。
+            //
+            // 迁移前的口径是「业务码 1001 等属于永久性拒绝，退避到上限自然退出」——
+            // 那正是本次要改的行为：自然退出给用户的终态是「重连失败」，而真实
+            // 原因是「凭证失效需重配」。
             match auth_mgr.authenticate_with_token(&session_token).await {
                 Ok(true) => {
                     tracing::info!("Reconnect attempt {} succeeded (HTTP reauth)", current_retry + 1);
@@ -552,6 +567,22 @@ impl ConnectionManager {
                     current_retry += 1;
                 }
                 Err(e) => {
+                    if is_credential_rejection(&e) {
+                        // 永久性：发专用信号让前端点名「需重新配对」，然后停。
+                        // 不走 ws_reconnect_failed（那是网络类失败的终态文案）。
+                        tracing::warn!(
+                            "HTTP reauth permanently rejected (credential invalid, needs re-pair): {}",
+                            e
+                        );
+                        self.is_reconnecting.store(false, Ordering::SeqCst);
+                        if let Some(ah) = &app_handle {
+                            let _ = ah.emit(
+                                "ws_reauth_rejected",
+                                serde_json::json!({ "reason": e.to_string() }),
+                            );
+                        }
+                        return Err(e);
+                    }
                     tracing::warn!("Reconnect attempt {} failed: {}", current_retry + 1, e);
                     current_retry += 1;
                 }
@@ -712,6 +743,21 @@ impl ConnectionManager {
     }
 }
 
+/// 该错误是否代表**桌面端明确答复「凭据不被接受」**（永久性，重试无用）
+///
+/// 判据 = [`AppError`] 的**变体**而非错误文本：桌面端把业务拒绝包在 HTTP 200 的
+/// `{code, message}` 信封里，`auth::http::parse_envelope` 把 `code != 0` 映射成
+/// [`AppError::Auth`]；而传输失败（连不上 / 超时 / 非 2xx）与响应畸形分别落
+/// `Internal` / `Parse`。两类排障路径完全不同：前者要**重新配对**，后者值得退避重试。
+///
+/// **为什么不用错误文本判**：文本会随桌面端文案调整而漂移，判据必须落在结构上。
+///
+/// 典型触发（ADR 0033 D3 迁移）：入场签发密钥换手后，存量已配对设备的旧 token
+/// 被永久拒绝——**任何**重试策略都无法让它通过，只有重新配对。
+fn is_credential_rejection(e: &crate::AppError) -> bool {
+    matches!(e, crate::AppError::Auth(_))
+}
+
 impl Default for ConnectionManager {
     fn default() -> Self {
         let (event_tx, _) = broadcast::channel(BROADCAST_CHANNEL_CAPACITY);
@@ -739,5 +785,53 @@ impl Clone for ConnectionManager {
             retry_count: self.retry_count.clone(),
             is_reconnecting: self.is_reconnecting.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_credential_rejection;
+    use crate::AppError;
+
+    /// 行为契约（ADR 0033 §8.2 / F3）：只有 `Auth`（桌面端业务信封 `code != 0`）
+    /// 算**永久性凭证拒绝**——它是「桌面端答复了，而且答复是凭据不认」。
+    ///
+    /// 正例锁住：迁移后存量设备的旧 token 走这条路径（业务码信封 → `Auth`）。
+    #[test]
+    fn business_envelope_is_a_permanent_credential_rejection() {
+        // parse_envelope 对 `code != 0` 的映射形状（`code 1007: Invalid token`）
+        assert!(is_credential_rejection(&AppError::Auth("code 1007: Invalid token".into())));
+        // 业务码具体取值不敏感：判据是变体，不是文案
+        assert!(is_credential_rejection(&AppError::Auth("code 1001: Device not paired".into())));
+    }
+
+    /// 反例：传输 / 协议 / 业务以外的各种故障**不得**被判成永久性——
+    /// 它们退避重试是有意义的（网络会恢复），误判会让真·网络抖动永远不再重连。
+    #[test]
+    fn transport_and_protocol_failures_stay_retryable() {
+        for e in [
+            AppError::Internal("HTTP request to http://x/api/auth/reauth failed: timeout".into()),
+            AppError::Internal("HTTP 502 from http://x/api/auth/reauth".into()),
+            AppError::Parse("Invalid API response JSON".into()),
+            AppError::WebSocket("connection closed".into()),
+        ] {
+            assert!(
+                !is_credential_rejection(&e),
+                "传输类故障不得被判为永久性凭证拒绝: {e}"
+            );
+        }
+    }
+
+    /// 变异自检锚点：若有人把判据改回「看错误文本里有没有 token / auth 字样」，
+    /// 第一条用例会先转红（它的文本含 `Invalid token` 但变体是 `Auth`），
+    /// 而「换个业务码就不认了」这类退化会被第二条抓住。
+    #[test]
+    fn judgement_is_structural_not_textual() {
+        // 变体是 Auth 但文本完全不含关键词 → 仍须判为永久性
+        assert!(is_credential_rejection(&AppError::Auth("1005".into())));
+        // 变体是 Internal 但文本含 credential/token 字样 → 不得判为永久性
+        assert!(!is_credential_rejection(&AppError::Internal(
+            "token credential rejected by proxy".into()
+        )));
     }
 }

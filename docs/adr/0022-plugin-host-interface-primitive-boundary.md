@@ -817,3 +817,25 @@ serve 供流记账 / peer_name 解析 / 取消原因码映射 / pull 任务行�
   拒绝，直到一次性实例机制与调度框架落地（ADR 0032 §6 启用清单）
 - **双端偏离**：分类**桌面独有**（移动端 SDK 无 `PluginKind`、无角色驱动分批；移动端是
   自持业务 App 的客户端），移动端何时跟进由其首个需要分层的场景决定
+
+### v34：认证中心持有入场签发密钥与验签执行（2026-09-29，ADR 0033）
+
+ADR 0033 把设备入场 JWT 的**生成 / 签发 / 验签**从宿主移入认证中心（L2
+`com.bedcode.terminal-session`），宿主 `utils/auth/jwt.rs` 整个退役。本条不新增
+interface、不改裁剪线，只改归属与契约面。
+
+- **契约面**：`host-auth` **删除 2 函数** `device-token-issue` / `device-token-verify`
+  （ABI desktop 32 → **33**，破坏性）。旧产物（v32 SDK 构建）仍 import 这两个函数 →
+  **实例化期**即被拒，`stale_artifact_rebuild_hint` 点名「按 v33 SDK 重建」
+- **双端偏离**：本组 2 函数**桌面独有**（`host-auth` 自 v15 起即桌面独有；移动端 WIT/SDK
+  本就不含它们，已 grep 核实），移动端不跟演不投影，**mobile ABI 保持 11**
+- **归属依据**（§5.1.2 三问）：入场凭证是产品概念（设备名 / 指纹 / 撤销 / 7 天窗口），
+  宿主没有第二个消费者 → 归插件。宿主侧只剩 ADR 0022 §5.1.3 允许的两类薄壳：**安全闸门**
+  （`enforce_connection_policy` 只问中心一次 + `deny_kind` 三态分类，中心不可达即拒）
+  与**零解析窄转发**（`auth-method-invoke` / 会话互调）
+- **ADR 0032 的 L2 锁修订**：`l2_gate_returns_decision_only` 要求裁决门
+  `-> Result<(), String>`。D1 之后宿主必须拿到认证身份才能填连接会话与转发给插件的
+  `caller` 上下文——那不是新增产品事实，而是同一数据换了来源。故该锁**收紧**：成功态改
+  为字段集**钉死**的 `AuthenticatedIdentity`（恰好 3 字段），仍禁止配对记录 / 信任列表 /
+  设备档案等载荷，仍禁止 `&mut` 出参与额外上下文参数
+- 论证、性能实测、迁移与发布原子性、fail-visible 三形态见 `docs/adr/0033-*.md`

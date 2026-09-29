@@ -41,7 +41,7 @@
 //! 转发；票 09 已把处理器的内核回查兜底与状态订阅转接通道（`events/forwarder.rs`）
 //! 一并删除（载荷必须自携带，缺失即 `warn` + 不广播）。
 
-use crate::utils::auth::auth_center::call_api;
+use crate::wasm_core::intercall::call_api;
 use crate::wasm_core::manager::runtime::WasmHostContext;
 use crate::{AppError, Result};
 
@@ -65,14 +65,16 @@ fn plugin_required_error(what: &str) -> AppError {
 /// 插件互调统一包装：未激活显性报错 + 失败留痕
 ///
 /// `call_api` 是同步阻塞调用（宿主桥接等待插件回复；调用方按 async 约定，
-/// 此处保持同步——与旧 `session_create_bridge` 同构）。
+/// 此处保持同步——与旧 `session_create_bridge` 同构）。它是**通用**互调客户端
+/// （`wasm_core::intercall`，ADR 0033 从认证域上提），本层只负责会话 api 名与
+/// 「插件必须激活」这道门。
 fn call_session_api(
     host_ctx: &WasmHostContext,
     api: &str,
     what: &str,
     params: serde_json::Value,
 ) -> Result<serde_json::Value> {
-    if !crate::utils::auth::auth_center::session_active(host_ctx) {
+    if !crate::utils::auth::auth_center::session_active() {
         tracing::warn!(api = %api, "{what} refused: session plugin not active");
         return Err(plugin_required_error(what));
     }
