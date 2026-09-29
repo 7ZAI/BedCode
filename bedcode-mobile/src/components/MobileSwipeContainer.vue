@@ -50,6 +50,20 @@ const router = useRouter()
 const containerRef = ref<HTMLElement | null>(null)
 const trackRef = ref<HTMLElement | null>(null)
 
+/**
+ * 单页步进宽度（translateX 每翻一页的位移量）。
+ *
+ * 必须取轨道实测宽度而非 window.innerWidth：两者只在「祖先链上没有任何 padding /
+ * border / scrollbar 预留槽」时才相等。祖先一旦收窄内容区（容器 padding、
+ * border，或全局 `scrollbar-gutter: stable` 在 overflow:hidden 包装层上预留的
+ * 滚动条槽——真机 WebView 的 ::-webkit-scrollbar 是占位式而非 overlay），
+ * 页面就比视口窄，用 innerWidth 当步进会让轨道多推 (innerWidth - 页宽) × 页序号：
+ * 第 4 页多推 48px，左侧被裁 48px、右侧留 48px 空白（设置页肉眼可见的错位）。
+ */
+function pageWidth(): number {
+  return trackRef.value?.clientWidth || window.innerWidth
+}
+
 // 插件注册表
 const pluginRegistry = getPluginRegistry()
 
@@ -159,7 +173,7 @@ function syncPageFromRoute() {
     const page = parseInt(queryPage as string, 10)
     if (!isNaN(page) && page >= 0 && page <= pages.value.length - 1) {
       currentPage.value = page
-      translateX.value = -page * window.innerWidth
+      translateX.value = -page * pageWidth()
       return
     }
   }
@@ -168,7 +182,7 @@ function syncPageFromRoute() {
   const pageIndex = pages.value.findIndex(p => p.name === name)
   if (pageIndex !== -1) {
     currentPage.value = pageIndex
-    translateX.value = -pageIndex * window.innerWidth
+    translateX.value = -pageIndex * pageWidth()
   }
 }
 
@@ -187,7 +201,7 @@ function goToPage(page: number) {
 
   isAnimating.value = true
   currentPage.value = page
-  translateX.value = -page * window.innerWidth
+  translateX.value = -page * pageWidth()
 
   syncRoute(page)
 
@@ -205,7 +219,7 @@ function resetTouchState() {
   isAnimating.value = false
   direction = null
   // 修正 translateX 与当前页面同步（窗口大小可能在停用期间变化）
-  translateX.value = -currentPage.value * window.innerWidth
+  translateX.value = -currentPage.value * pageWidth()
 }
 
 // ==================== Touch Event Handling (capture + non-passive) ====================
@@ -277,7 +291,7 @@ function onTouchMove(e: TouchEvent) {
     }
     if (zoneOwned) return
 
-    const containerWidth = window.innerWidth
+    const containerWidth = pageWidth()
     const baseTranslate = -currentPage.value * containerWidth
     let newTranslate = baseTranslate + deltaX
 
@@ -313,7 +327,7 @@ function onTouchEnd(e: TouchEvent) {
   const deltaTime = Date.now() - startTime
   const velocity = Math.abs(deltaX) / deltaTime
 
-  const containerWidth = window.innerWidth
+  const containerWidth = pageWidth()
   const shouldSwipe = Math.abs(deltaX) > CONFIG.swipeThreshold || velocity > CONFIG.velocityThreshold
 
   if (shouldSwipe) {
@@ -337,7 +351,7 @@ function onTouchCancel() {
   isDragging.value = false
   direction = null
   resetZoneState()
-  translateX.value = -currentPage.value * window.innerWidth
+  translateX.value = -currentPage.value * pageWidth()
 }
 
 // ==================== Teleport 弹窗检测 ====================
@@ -391,7 +405,7 @@ watch(() => route.query.page, (queryPage) => {
 // ==================== 窗口大小变化 ====================
 
 function handleResize() {
-  translateX.value = -currentPage.value * window.innerWidth
+  translateX.value = -currentPage.value * pageWidth()
 }
 
 // ==================== 生命周期 ====================

@@ -223,8 +223,18 @@ function isNativeBinary(p) {
  * 决定——默认 Polite 映射 FilterLevel::Info，Rust debug!（tracing → logcat
  * D 级）会被 CLI 过滤，控制台/.dev-logs 只剩 INFO+。-v 映射 LoudAndProud →
  * Debug。android-dev-log.js（:dev:log 落盘排查模式）设置该 env 自动开启。
+ *
+ * 固定追加 --host 127.0.0.1：tauri CLI 2.11.x 在**真机**上会把 tauri.conf.json 的
+ * devUrl 主机名替换成宿主机局域网 IP（写进 APK 内 gen/android/app/src/main/assets/
+ * tauri.conf.json 随包分发），以便设备走 WiFi 直连开发服务器。设备仅 USB 连接
+ * （WiFi 关闭 / 不在同一网段）时该地址不可达，WebView 首屏即报
+ * `Failed to request http://<LAN_IP>:<port>/`，页面全白但进程活着——现象上像"没跑起来"。
+ * 显式给 --host 127.0.0.1 后 devUrl 保持回环地址，配合本脚本 precheckAdbReverse()
+ * 建的 adb reverse 隧道（设备 127.0.0.1:<port> → 宿主机 vite）即可正常加载，
+ * 且不依赖宿主机 IP 变动（DHCP 换 IP 不会再次白屏）。
+ * 注意 --host 只接受合法 IP 字面量，'localhost' 会被 CLI 拒绝（invalid IP address syntax）。
  */
-const HOST_BASE_ARGS = ['run', 'tauri', 'android', 'dev']
+const HOST_BASE_ARGS = ['run', 'tauri', 'android', 'dev', '--host', '127.0.0.1']
 if (process.env.BEDCODE_DEV_VERBOSE === '1') HOST_BASE_ARGS.push('-v')
 const DEFAULT_HOST_CMD = isNativeBinary(PKG_MGR_CLI)
   ? [PKG_MGR_CLI, HOST_BASE_ARGS]
