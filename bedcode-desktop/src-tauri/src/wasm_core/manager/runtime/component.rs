@@ -1615,6 +1615,9 @@ impl LoadedWasmPlugin {
     /// 此处防御性拒绝（旧插件二进制 → 格式不匹配拒绝的语义由总线保证）
     pub(crate) fn on_message_binary(&mut self, topic: &str, sender: &str, payload: &[u8]) -> crate::Result<()> {
         let _timer = self.track_call();
+        // 燃料续费：本方法不经 `exports()`（直接持探测句柄调用），必须自带
+        // 续费，否则本回调的燃料跨调用累积耗尽 → trap → Store 中毒 → 自动重载
+        self.refill_call_fuel()?;
         // TypedFunc 先 clone 再调用，避免与 &mut self.store 的借用冲突
         let Some(func) = self.store.data().on_message_binary.clone() else {
             return Err(AppError::Plugin(format!(
@@ -1643,6 +1646,8 @@ impl LoadedWasmPlugin {
     pub(crate) fn on_ws_frame(&mut self, frame: &crate::wasm_core::bus::WsFrameDispatch) -> crate::Result<bool> {
         use crate::wasm_core::bus::WsFrameDispatch;
         let _timer = self.track_call();
+        // 燃料续费：同 on_message_binary——不经 exports()，须自带续费
+        self.refill_call_fuel()?;
         match frame {
             WsFrameDispatch::Client { handle, kind, payload } => {
                 // TypedFunc 先 clone 再调用，避免与 &mut self.store 的借用冲突
@@ -1691,6 +1696,8 @@ impl LoadedWasmPlugin {
     /// `list-jobs` 自愈）。无返回值（观察型回调，同 `on_ws_frame`）。
     pub(crate) fn on_task_event(&mut self, event_json: &str) -> crate::Result<bool> {
         let _timer = self.track_call();
+        // 燃料续费：同 on_message_binary——不经 exports()，须自带续费
+        self.refill_call_fuel()?;
         // TypedFunc 先 clone 再调用，避免与 &mut self.store 的借用冲突
         let Some(func) = self.store.data().on_task_event.clone() else {
             return Ok(false);

@@ -169,6 +169,113 @@ fn test_component_fuel_watchdog() {
     });
 }
 
+/// 燃料看门狗覆盖面：绕过 `exports()` 的三条可选导出回调也必须自带续费
+///
+/// 缺陷背景（2026-09-29 审查）：`on_message_binary` / `on_ws_frame` /
+/// `on_task_event` 直接持探测句柄 `call_async`，不经 `exports()`，因而漏掉
+/// `refill_call_fuel()`。后果是这三条回调的燃料**跳调用累积**：长会话下
+/// （file-transfer 收 WS 帧、宿主任务事件密集）耗尽 → `all fuel consumed`
+/// trap → Store 中毒 → 限频自动重载，且 `fuel_consumed_total` 少计。
+/// `event-loop` 调用模型经 `start_op` → `refill_fuel` 覆盖全部 op，不受影响；
+/// 本组用例锁的是默认 `mutex` 模型这条生产路径。
+#[test]
+fn test_optional_export_callbacks_refill_fuel() {
+    use crate::wasm_core::bus::WsFrameDispatch;
+    use crate::wasm_core::manager::runtime::LoadedWasmPlugin as Plugin;
+
+    let (wasm_runtime, host_ctx) = setup_wasm_runtime();
+    let budget = StoreLimits::default().fuel_per_call;
+    let client_frame = WsFrameDispatch::Client {
+        handle: "wsc-fuel".to_string(),
+        kind: "text".to_string(),
+        payload: b"fuel probe".to_vec(),
+    };
+
+    // 排干到远低于单次预算：若回调不续费，调用后剩余仍是这个量级
+    fn drain(plugin: &mut Plugin) {
+        let (store, _) = plugin.raw_store();
+        store.set_fuel(1_000_000).expect("drain fuel");
+    }
+    fn remaining(plugin: &mut Plugin) -> u64 {
+        let (store, _) = plugin.raw_store();
+        store.get_fuel().expect("get fuel")
+    }
+
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        // C-102 / C-104 / C-105：SDK 产物同时导出 events-ws 与 events-binary
+        let sdk_component = wasm_runtime
+            .compile_component(&build_sdk_test_component())
+            .expect("compile SDK test component");
+        let mut sdk_plugin = wasm_runtime
+            .instantiate_component(&sdk_component, TEST_PLUGIN_ID, host_ctx.clone(), &[], None)
+            .expect("instantiate SDK component");
+
+        // C-105 边界：连续三轮，每轮都排干后调用——杀「只在首次续费」的变异
+        for round in 1..=3u32 {
+            drain(&mut sdk_plugin);
+            let ws_delivered = sdk_plugin
+                .on_ws_frame(&client_frame)
+                .expect("ws frame deliver");
+            assert!(ws_delivered, "round {round}: SDK 产物必须导出 events-ws");
+            let left = remaining(&mut sdk_plugin);
+            assert!(
+                left > budget / 2,
+                "round {round}: on_ws_frame 未续费，剩余 {left}（预算 {budget}）"
+            );
+
+            drain(&mut sdk_plugin);
+            sdk_plugin
+                .on_message_binary("fuel-topic", "com.test.sender", b"\x00\xff\x01bin")
+                .expect("binary frame deliver");
+            let left = remaining(&mut sdk_plugin);
+            assert!(
+                left > budget / 2,
+                "round {round}: on_message_binary 未续费，剩余 {left}（预算 {budget}）"
+            );
+        }
+
+        // C-103：events-task 由 task 夹具导出
+        let task_component = wasm_runtime
+            .compile_component(&build_task_test_component())
+            .expect("compile task fixture");
+        let mut task_plugin = wasm_runtime
+            .instantiate_component(&task_component, TEST_PLUGIN_ID, host_ctx.clone(), &[], None)
+            .expect("instantiate task component");
+        drain(&mut task_plugin);
+        let task_delivered = task_plugin
+            .on_task_event(r#"{"jobId":"fuel","phase":"completed"}"#)
+            .expect("task event deliver");
+        assert!(task_delivered, "task 产物必须导出 events-task");
+        let left = remaining(&mut task_plugin);
+        assert!(
+            left > budget / 2,
+            "on_task_event 未续费，剩余 {left}（预算 {budget}）"
+        );
+
+        // C-106 反例：未导出 events-ws 的产物走降级路径——加续费不得改变其语义
+        let legacy_component = wasm_runtime
+            .compile_component(&build_test_component())
+            .expect("compile component-test");
+        let mut legacy_plugin = wasm_runtime
+            .instantiate_component(
+                &legacy_component,
+                "com.bedcode.component-test",
+                host_ctx,
+                &[],
+                None,
+            )
+            .expect("未导出 events-ws 的产物不得影响加载");
+        drain(&mut legacy_plugin);
+        assert!(
+            !legacy_plugin
+                .on_ws_frame(&client_frame)
+                .expect("legacy 降级不得报错"),
+            "未导出 events-ws 的产物必须恰为 Ok(false) 降级"
+        );
+    });
+}
+
 /// 票据 02 验收：运行时覆盖生效——覆盖后新建立的 Store 按新上限运行；
 /// 资源限制器行为等价：超限增长被拒绝，限额来自配置
 #[test]

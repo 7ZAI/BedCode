@@ -277,6 +277,10 @@
 ### 修复
 
 #### 桌面端
+- **燃料看门狗漏掉三条可选导出回调，累积烧穿后触发幽灵重载** —— 单次调用预算在 `LoadedWasmPlugin::exports()` 内续费，但 `on_message_binary`（v11）、`on_ws_frame`（v14，客户端域与服务端域两条分支）、`on_task_event`（v20）是直接持探测到的 `TypedFunc` 句柄 `call_async`，**不经过 `exports()`**。这三条入口因此拿不到续费，燃料变成**跳调用累积**扣减，与 `config.rs` 里写死的契约（`FUEL_PER_CALL`：“每次导出调用前重置燃料，预算只约束单次调用内 guest 计算量”）相左。余额归零后 guest `all fuel consumed` trap → Store 中毒 → `schedule_plugin_reload_after_trap` 重载插件。主调用面恰好是这三条回调的插件首当其冲：file-transfer（WebSocket 帧）、以及任何持续收宿主任务事件的插件。同一处缺口还让 `fuel_consumed_total` 监控少计（`record_fuel_consumed` 只在续费时落账）
+  - **影响面**：默认 `mutex` 调用模型。`event-loop` 模型全部 op 经 `start_op` → `refill_fuel`，本就不受影响——这也正是既有 `test_component_fuel_watchdog`（只跑 `invoke_command`，走 `exports()`）一直绿的原因
+  - **修法**：三个方法各自在入口自带续费，理由写在调用点。`on_ws_frame` 选在 `match` 之前续费而非各分支内，使降级路径的消耗记账也保持流动
+  - **护栏**：`test_optional_export_callbacks_refill_fuel` 先把燃料排干到预算一成以下，再断言三条回调各自把它补回——连续三轮（杀“只在首次续费”的变异）、`events-task` 用自己的夹具单独覆盖，以及反例：未导出 `events-ws` 的产物仍恰为 `Ok(false)` 且不被扰动。变异自检已验：删掉任一条续费、或把续费砍半均测红；存活的那条变异（把续费挪到无导出的提前返回之后）语义等价，如实记录而不粉饰
 - **终端会话中心插件的 Tailwind 工具类根本没被编译** —— 插件目录改名后 `bedcode-desktop/tailwind.config.js` 仍写 `./plugins/session/src/**`（另有一条指向已退役插件的 `./plugins/scheduler/src/**`），而缺 `./plugins/terminal-session/src/**`。Tailwind 只在宿主编译（无第二处 content 注入点，插件产物也不携带编译后的 Tailwind），于是**仅本插件使用**的类全部拿不到规则：插件 405 个 class 令牌中 165 个为插件独有，其中 158 个无 CSS —— 9 个 Vue 文件 / 77 处引用丢失间距、固定尺寸（`w-96`、`max-h-[440px]`、`h-[168px]`）、栅格（`grid-cols-[auto_1fr]`）、z-index/定位与状态色。修法：content 改指 `terminal-session` 并删两条死路径；新增护栏用例 `src/__tests__/plugin/tailwindContentCoverage.test.ts` 双向锁住 `plugins/*` 与 content 清单
 - **插件引用的两个宿主设计类全仓不存在**：`wb-select`（终端头部 / 设置面板 4 处原生 select）与 `wb-btn-secondary`（背景图选择按钮）无任何定义——宿主样式表只有 `wb-btn-ghost` / `wb-btn-primary` / `wb-mono` / `wb-section-title` / `wb-sidebar-section` / `wb-toolbar`。死类名已清除：select 改带 `cursor-pointer` + `focus:border-brand`（与宿主表单控件同一套焦点反馈），选择按钮改用迁移前就在用的 `wb-btn-ghost`
 - **`.plugin-icon` 是宿主工具栏组件的 scoped 类**（scoped 不外泄），插件复刻的三处扩展点图标槽因此没有任何规则；插件现于自身 scoped 块内定义同款 `font-size: calc(14px * var(--ui-scale)); line-height: 1`
