@@ -5,14 +5,16 @@
 //! **入场密钥的生成与验签**、连接记录的调用决策）；
 //! 插件经 host-auth 原语回调宿主的只剩**不属于入场密码学**的那些面——
 //! `trusted-device-upsert` / `trusted-device-touch` /
-//! `connection-history-record`（信任与历史记录写面）、`biometric-credential-bound`
-//! / `biometric-verify-signature` / `biometric-credential-bind`（生物凭证，
-//! P-256 公钥不出宿主）、`link-identity-parts`（链路身份公开材料）。
+//! `connection-history-record`（信任与历史记录写面；这些早已改为本域私有库
+//! 直写，见下）、`link-identity-parts`（链路身份公开材料）。生物凭证
+//! （公钥托管 + 验签执行）已随 B-downsink（2026-09-30）整体下沉本插件——
+//! 宿主 host-auth `biometric-*` 三原语同日退役。
 //!
 //! **v33 / ADR 0033 修订**：入场 JWT 签发密钥的真源已从宿主移入本插件
 //! （`pairing::keys` 的密钥环，属主 = 本插件的 secret-store），签发与验签都走
-//! `pairing::jwt` 本地实现。原先那句「密钥托管留宿主」到此**只对生物凭证成立**
-//! （P-256 公钥仍由宿主托管，与设备 JWT 是两条线）。
+//! `pairing::jwt` 本地实现。**B-downsink 再加一调**：生物凭证公钥真源也移入
+//! 本插件私有库（`auth_records::biometric_key_*`），验签用 WASM 内 p256——
+//! 宿主不再托管任何设备侧凭据材料（唯 `link-identity-parts` 链路公开材料留宿主）。
 //!
 //! 认证插件**默认常开**（用户裁定）：网关对这七条是 `Public + PluginRequired`
 //! 公开路由——JWT 之前的入口免验签转发，插件未激活即明确报错，无宿主降级轨。
@@ -123,7 +125,10 @@ pub fn handle_http_endpoint(
     _body: &serde_json::Value,
     _query: &serde_json::Value,
 ) -> serde_json::Value {
-    error_response(CODE_TOKEN_FAILURE, "auth endpoints unavailable outside wasm runtime")
+    error_response(
+        CODE_TOKEN_FAILURE,
+        "auth endpoints unavailable outside wasm runtime",
+    )
 }
 
 // ==================== 入参提取（auth DTO 全部带 rename_all=camelCase） ====================
@@ -171,7 +176,10 @@ fn handle_verify(host: &WasmHost, body: &serde_json::Value) -> serde_json::Value
     let device_id = str_field(body, "deviceId").to_string();
     let device_name = str_field(body, "deviceName").to_string();
     let fingerprint = str_field(body, "fingerprint").to_string();
-    let uid_hash = body.get("uidHash").and_then(|v| v.as_str()).map(str::to_string);
+    let uid_hash = body
+        .get("uidHash")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
     let pairing_code = str_field(body, "pairingCode").to_string();
     let address = str_field(body, "address").to_string();
 
@@ -197,17 +205,14 @@ fn handle_verify(host: &WasmHost, body: &serde_json::Value) -> serde_json::Value
     }
 
     // 签发 JWT（与宿主 JwtService 同构：同密钥 + HS256 + 同 Claims）
-    let (token, expires_in) = match jwt::issue_device_token(
-        &device_id,
-        Some(&device_name),
-        Some(&fingerprint),
-    ) {
-        Ok(v) => v,
-        Err(e) => {
-            host.log_error(&format!("auth http: jwt issue failed: {e}"));
-            return error_response(CODE_TOKEN_FAILURE, "Failed to generate token");
-        }
-    };
+    let (token, expires_in) =
+        match jwt::issue_device_token(&device_id, Some(&device_name), Some(&fingerprint)) {
+            Ok(v) => v,
+            Err(e) => {
+                host.log_error(&format!("auth http: jwt issue failed: {e}"));
+                return error_response(CODE_TOKEN_FAILURE, "Failed to generate token");
+            }
+        };
 
     // 记录/更新配对设备（publicKey 缺省 = 保留既有值；展示名与宿主同构）
     let display_name = format_device_display_name(&device_name, &address);
@@ -230,7 +235,13 @@ fn handle_verify(host: &WasmHost, body: &serde_json::Value) -> serde_json::Value
     );
 
     // 通知桌面前端有设备连接
-    let _ = emit_device_connected(host, &address, &device_id, Some(&device_name), Some(&fingerprint));
+    let _ = emit_device_connected(
+        host,
+        &address,
+        &device_id,
+        Some(&device_name),
+        Some(&fingerprint),
+    );
 
     ok_with_data(token_response(&token, expires_in))
 }
@@ -243,7 +254,10 @@ fn handle_qr_connect(host: &WasmHost, body: &serde_json::Value) -> serde_json::V
     let device_id = str_field(body, "deviceId").to_string();
     let device_name = str_field(body, "deviceName").to_string();
     let fingerprint = str_field(body, "fingerprint").to_string();
-    let uid_hash = body.get("uidHash").and_then(|v| v.as_str()).map(str::to_string);
+    let uid_hash = body
+        .get("uidHash")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
     let qr_token = str_field(body, "qrToken").to_string();
     let address = str_field(body, "address").to_string();
 
@@ -269,17 +283,14 @@ fn handle_qr_connect(host: &WasmHost, body: &serde_json::Value) -> serde_json::V
 
     let _ = host_events_emit(host, "qr-token-consumed", serde_json::Value::Null);
 
-    let (token, expires_in) = match jwt::issue_device_token(
-        &device_id,
-        Some(&device_name),
-        Some(&fingerprint),
-    ) {
-        Ok(v) => v,
-        Err(e) => {
-            host.log_error(&format!("auth http: jwt issue failed: {e}"));
-            return error_response(CODE_TOKEN_FAILURE, "Failed to generate token");
-        }
-    };
+    let (token, expires_in) =
+        match jwt::issue_device_token(&device_id, Some(&device_name), Some(&fingerprint)) {
+            Ok(v) => v,
+            Err(e) => {
+                host.log_error(&format!("auth http: jwt issue failed: {e}"));
+                return error_response(CODE_TOKEN_FAILURE, "Failed to generate token");
+            }
+        };
 
     let display_name = format_device_display_name(&device_name, &address);
     if let Err(e) = trusted_device_upsert(
@@ -300,7 +311,13 @@ fn handle_qr_connect(host: &WasmHost, body: &serde_json::Value) -> serde_json::V
         Some(&address),
     );
 
-    let _ = emit_device_connected(host, &address, &device_id, Some(&device_name), Some(&fingerprint));
+    let _ = emit_device_connected(
+        host,
+        &address,
+        &device_id,
+        Some(&device_name),
+        Some(&fingerprint),
+    );
 
     ok_with_data(token_response(&token, expires_in))
 }
@@ -335,27 +352,19 @@ fn handle_reauth(host: &WasmHost, body: &serde_json::Value) -> serde_json::Value
     let device_name = claims["device_name"].as_str().map(str::to_string);
     let token_fingerprint = claims["fingerprint"].as_str().map(str::to_string);
 
-    let (token, expires_in) = match jwt::issue_device_token(
-        &sub,
-        device_name.as_deref(),
-        token_fingerprint.as_deref(),
-    ) {
-        Ok(v) => v,
-        Err(e) => {
-            host.log_error(&format!("auth http: jwt issue failed: {e}"));
-            return error_response(CODE_TOKEN_FAILURE, "Failed to generate token");
-        }
-    };
+    let (token, expires_in) =
+        match jwt::issue_device_token(&sub, device_name.as_deref(), token_fingerprint.as_deref()) {
+            Ok(v) => v,
+            Err(e) => {
+                host.log_error(&format!("auth http: jwt issue failed: {e}"));
+                return error_response(CODE_TOKEN_FAILURE, "Failed to generate token");
+            }
+        };
 
     // last_seen / connect_count 刷新（HTTP 重认证路径无地址，名称刷新由 WS 承担）
     if let Some(fp) = token_fingerprint.as_deref() {
-        let _ = connection_history_record(
-            host,
-            fp,
-            history_value::JWT,
-            history_value::SUCCESS,
-            None,
-        );
+        let _ =
+            connection_history_record(host, fp, history_value::JWT, history_value::SUCCESS, None);
         if let Err(e) = trusted_device_touch(host, fp) {
             host.log_warn(&format!("auth http: pairing touch failed: {e}"));
         }
@@ -405,16 +414,24 @@ fn handle_biometric_verify(host: &WasmHost, body: &serde_json::Value) -> serde_j
         Ok(record) => {
             // 记录：device_name 取配对记录（HTTP 端点无自报名称）；publicKey 缺省保留
             let pairing_id = record["id"].as_str().unwrap_or_default().to_string();
-            let record_name = record["deviceName"].as_str().unwrap_or_default().to_string();
-            let (token, expires_in) =
-                match jwt::issue_device_token(&pairing_id, Some(&record_name), Some(&fingerprint)) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        host.log_error(&format!("auth http: jwt issue failed: {e}"));
-                        return error_response(CODE_TOKEN_FAILURE, "Failed to generate token");
-                    }
-                };
-            if let Err(e) = trusted_device_upsert(host, &record_name, &fingerprint, None, None, None) {
+            let record_name = record["deviceName"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
+            let (token, expires_in) = match jwt::issue_device_token(
+                &pairing_id,
+                Some(&record_name),
+                Some(&fingerprint),
+            ) {
+                Ok(v) => v,
+                Err(e) => {
+                    host.log_error(&format!("auth http: jwt issue failed: {e}"));
+                    return error_response(CODE_TOKEN_FAILURE, "Failed to generate token");
+                }
+            };
+            if let Err(e) =
+                trusted_device_upsert(host, &record_name, &fingerprint, None, None, None)
+            {
                 host.log_warn(&format!("auth http: pairing record failed: {e}"));
             }
             let _ = connection_history_record(
@@ -424,7 +441,13 @@ fn handle_biometric_verify(host: &WasmHost, body: &serde_json::Value) -> serde_j
                 history_value::SUCCESS,
                 None,
             );
-            let _ = emit_device_connected(host, "", &pairing_id, Some(&record_name), Some(&fingerprint));
+            let _ = emit_device_connected(
+                host,
+                "",
+                &pairing_id,
+                Some(&record_name),
+                Some(&fingerprint),
+            );
             ok_with_data(token_response(&token, expires_in))
         }
         Err(msg) => {
@@ -458,11 +481,14 @@ fn handle_biometric_bind(host: &WasmHost, body: &serde_json::Value) -> serde_jso
         }
     };
     if claims["fingerprint"].as_str() != Some(fingerprint.as_str()) {
-        return error_response(CODE_PLUGIN_NOT_ACTIVATED, "Token does not belong to this device");
+        return error_response(
+            CODE_PLUGIN_NOT_ACTIVATED,
+            "Token does not belong to this device",
+        );
     }
 
-    // 2. 更新凭证（空串 = 解绑；只改凭证不动计数——宿主原语语义）
-    match biometric_credential_bind(host, &fingerprint, &public_key) {
+    // 2. 更新凭证（空串 = 解绑；只改凭证不动计数——私有库语义，B-downsink）
+    match biometric_credential_bind(&fingerprint, &public_key) {
         Ok(true) => ok_with_data(serde_json::json!({ "bound": !public_key.is_empty() })),
         Ok(false) => error_response(CODE_BIO_BIND, "Device not paired"),
         Err(e) => {
@@ -478,7 +504,11 @@ use bedcode_plugin_api::host::{HostAuth, HostEvents, HostLog};
 
 /// host-events.emit_event：Tauri 前端事件（事件名与载荷形状 = 宿主旧 emit 逐字节一致）
 #[cfg(target_arch = "wasm32")]
-fn host_events_emit(host: &WasmHost, event_name: &str, payload: serde_json::Value) -> Result<(), String> {
+fn host_events_emit(
+    host: &WasmHost,
+    event_name: &str,
+    payload: serde_json::Value,
+) -> Result<(), String> {
     host.emit_event(event_name, &payload);
     Ok(())
 }
@@ -538,12 +568,16 @@ fn trusted_device_touch(_host: &WasmHost, fingerprint: &str) -> Result<(), Strin
     crate::auth_records::touch(fingerprint)
 }
 
-/// 绑定/解绑生物凭证（host-auth `biometric-credential-bind` 原语——**公钥留宿主**
-/// plugin_secrets，配对记录下沉后此路仍走宿主，凭据红线保持）
+/// 绑定/解绑生物凭证（B-downsink：真源 = 本插件私有库 `auth_biometric_keys`，
+/// 不再经宿主 host-auth 原语——公钥托管与验签执行点均在插件内）
 #[cfg(target_arch = "wasm32")]
-fn biometric_credential_bind(host: &WasmHost, fingerprint: &str, public_key: &str) -> Result<bool, String> {
-    use bedcode_plugin_api::host::HostAuth;
-    host.auth_biometric_credential_bind(fingerprint, public_key).map_err(|e| e.message)
+fn biometric_credential_bind(fingerprint: &str, public_key: &str) -> Result<bool, String> {
+    if public_key.is_empty() {
+        crate::auth_records::biometric_key_delete(fingerprint)?;
+    } else {
+        crate::auth_records::biometric_key_set(fingerprint, public_key)?;
+    }
+    Ok(true)
 }
 
 /// QR 拒绝原因 → 用户提示（宿主 `auth_center::qr_failure_user_message` 逐字复刻）
@@ -561,7 +595,10 @@ fn qr_failure_user_message(reason: &str) -> &str {
 
 /// 展示名格式化（宿主 `format_device_display_name` 逐字复刻：名称 + (IP)）
 fn format_device_display_name(device_name: &str, address: &str) -> String {
-    let ip = address.rsplit_once(':').map(|(ip, _)| ip).unwrap_or(address);
+    let ip = address
+        .rsplit_once(':')
+        .map(|(ip, _)| ip)
+        .unwrap_or(address);
     format!("{} ({})", device_name, ip)
 }
 

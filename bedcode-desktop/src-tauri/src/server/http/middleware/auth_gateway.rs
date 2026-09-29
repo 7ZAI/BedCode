@@ -46,11 +46,13 @@ fn bearer_credential(req: &actix_web::dev::ServiceRequest) -> Option<&str> {
     auth_header.strip_prefix("Bearer ")
 }
 
-/// 从 Authorization header 取凭证并问认证中心裁决
+/// 从 Authorization header 取凭证并问认证中心裁决一次
 ///
+/// 名字里的「认证」指**问中心**而不是本地验签：v33（ADR 0033）后宿主没有验签面，
+/// 本函数只做「提取 Bearer 凭证 → 交给中心」两件事（凭证形状对宿主不透明）。
 /// 返回 `Some(identity)` = 中心放行（身份注入 extensions）；`None` = 无凭证 /
 /// 中心拒绝（原因已由 [`enforce_connection_policy`] 打点，结构化字段 `deny_kind`）。
-pub fn extract_and_verify_jwt(req: &actix_web::dev::ServiceRequest) -> Option<AuthenticatedIdentity> {
+pub fn authenticate_with_center(req: &actix_web::dev::ServiceRequest) -> Option<AuthenticatedIdentity> {
     authenticate(bearer_credential(req)?)
 }
 
@@ -74,7 +76,7 @@ fn authenticate(token: &str) -> Option<AuthenticatedIdentity> {
 ///
 /// 只含**宿主自有**公开面：`/api/health`（健康检查）与 `/health`（历史别名）。
 /// 插件注册的公开别名（`auth: "none"`）**不走本函数**——公开判定统一走动态
-/// 注册表档位（ABI v29 路由下沉，见 [`jwt_gateway`] 的注册表查询），精确匹配非前缀。
+/// 注册表档位（ABI v29 路由下沉，见 [`auth_gateway`] 的注册表查询），精确匹配非前缀。
 pub fn is_public_path(path: &str) -> bool {
     path == "/api/health" || path == "/health"
 }
@@ -93,7 +95,7 @@ pub fn is_plugin_path(path: &str) -> bool {
 /// 从 `server/http/routes.rs` 的路由构造里提出来成为具名中间件，目的是让「协议网关挂在认证之后」
 /// 这一顺序约束可被真实 actix 栈测到（见 `server/http/gateway.rs` 的中间件用例），而不是靠注释
 /// 约定。认证判定本身**下沉到认证中心**（ADR 0033），本层只做「问中心 + 注入 / 放行」。
-pub(crate) async fn jwt_gateway<B>(req: ServiceRequest, next: Next<B>) -> Result<ServiceResponse, Error>
+pub(crate) async fn auth_gateway<B>(req: ServiceRequest, next: Next<B>) -> Result<ServiceResponse, Error>
 where
     B: MessageBody + 'static,
 {
@@ -116,7 +118,7 @@ where
     }
 
     // 认证通过 → 注入连接身份并放行
-    if let Some(identity) = extract_and_verify_jwt(&req) {
+    if let Some(identity) = authenticate_with_center(&req) {
         req.extensions_mut().insert(identity);
         return next.call(req).await.map(|res| res.map_into_boxed_body());
     }
@@ -170,7 +172,7 @@ mod tests {
     }
 
     /// ABI v29：公开判定走注册表档位——插件登记 `auth: "none"` 的别名免验签放行
-    /// （真实中间件栈：注册公开别名 → 无 token 请求通过 jwt_gateway 到哨兵）
+    /// （真实中间件栈：注册公开别名 → 无 token 请求通过 auth_gateway 到哨兵）
     #[actix_web::test]
     async fn registered_none_tier_alias_passes_without_token() {
         use actix_web::middleware::from_fn;
@@ -193,7 +195,7 @@ mod tests {
         let app = actix_web::test::init_service(
             actix_web::App::new().service(
                 web::scope("/api")
-                    .wrap(from_fn(jwt_gateway))
+                    .wrap(from_fn(auth_gateway))
                     .route("/auth/pairing", web::post().to(sentinel)),
             ),
         )
@@ -242,7 +244,7 @@ mod tests {
         let app = actix_web::test::init_service(
             actix_web::App::new().service(
                 web::scope("/api")
-                    .wrap(from_fn(jwt_gateway))
+                    .wrap(from_fn(auth_gateway))
                     .route("/jwt-guarded-alias", web::get().to(sentinel)),
             ),
         )
@@ -319,11 +321,14 @@ mod tests {
     /// 中间件里已经没有任何本地验签面，凭证形如与否都不影响结论。
     #[test]
     fn no_runtime_context_denies_every_credential() {
-        assert!(AppContext::try_global().is_none(), "本用例前提：单测上下文无全局 AppContext");
+        assert!(
+            AppContext::try_global().is_none(),
+            "本用例前提：单测上下文无全局 AppContext"
+        );
         for token in ["not-a-jwt", "a.b.c", "", "eyJhbGciOiJIUzI1NiJ9.e30.x"] {
             let req = srv_req_with_bearer(token);
             assert!(
-                extract_and_verify_jwt(&req).is_none(),
+                authenticate_with_center(&req).is_none(),
                 "无中心在册时凭证一律不得放行: {token}"
             );
         }
@@ -331,6 +336,6 @@ mod tests {
         let req = actix_web::test::TestRequest::get()
             .uri("/api/sessions")
             .to_srv_request();
-        assert!(extract_and_verify_jwt(&req).is_none());
+        assert!(authenticate_with_center(&req).is_none());
     }
 }

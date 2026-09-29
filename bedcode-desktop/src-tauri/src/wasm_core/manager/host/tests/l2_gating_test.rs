@@ -44,7 +44,7 @@ use super::*;
 ///
 /// 逐条理由：
 /// - `utils/auth/auth_center.rs`：L2 桥接门本体（策略裁决 + 配对/QR/trust 零解析转发）；
-/// - `server/http/middleware/jwt_auth.rs` / `server/websocket/channel/plugin.rs`：
+/// - `server/http/middleware/auth_gateway.rs` / `server/websocket/channel/plugin.rs`：
 ///   **安全闸门**——HTTP 网关与 WS 通道的认证中间件（唯一正当的裁决消费方）；
 /// - `wasm_core/host_api/auth.rs`：**组合式认证原语**（ADR 0031 K1/K6）——权限门 +
 ///   唯一性仲裁的调用方 + 零解析窄转发，属安全闸门；（注册表本体
@@ -66,7 +66,7 @@ const L2_CONSUMER_ALLOWLIST: &[&str] = &[
     "src/utils/auth/auth_center.rs",
     "src/utils/auth/test_tokens.rs",
     "src/utils/session_gateway.rs",
-    "src/server/http/middleware/jwt_auth.rs",
+    "src/server/http/middleware/auth_gateway.rs",
     "src/server/websocket/channel/plugin.rs",
     "src/wasm_core/host_api/auth.rs",
     "src/wasm_core/manager/host/boot.rs",
@@ -606,6 +606,46 @@ fn host_has_no_entry_token_crypto() {
     assert!(
         violations.is_empty(),
         "宿主生产路径不得再持有设备入场密码学（ADR 0033）：{violations:#?}"
+    );
+}
+
+/// 防回接锁（B-downsink fail-visible ③）：宿主生产路径不得再出现生物凭证密码学
+///
+/// v34（2026-09-30）把生物凭证公钥托管 + P-256 验签执行从宿主下沉认证中心
+/// （`auth_biometric_keys` 私有库 + WASM 内 p256）；宿主 `utils/auth/biometric.rs`
+/// 整模块删除。判据同 v33 入场密码学锁：`host-auth` 三个生物原语 / 宿主验签函数 /
+/// 挑战管理器任何一处重新出现在**生产**代码里，都意味着「公钥托管 + 验签留宿主」
+/// 那条已退役的口径被复活——本专项要消除的正是它。
+///
+/// 边界：测试代码里出现这些字样是允许的（回归锁自身 + 集成测试的名称/白盒查询），
+/// 扫描只取「纯代码」视图（剥注释）且排除 `#[cfg(test)]` 模块与 `tests/` 目录。
+#[test]
+fn host_has_no_biometric_crypto() {
+    const NEEDLES: &[&str] = &[
+        "auth_biometric_credential_bound",
+        "auth_biometric_verify_signature",
+        "auth_biometric_credential_bind",
+        "verify_biometric_signature",
+        "BiometricChallengeManager",
+        "biometric_secret_key",
+    ];
+    let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut violations = Vec::new();
+    for rel in host_files_mentioning("utils::auth") {
+        let Ok(content) = std::fs::read_to_string(base.join(&rel)) else {
+            continue;
+        };
+        for line in production_code_lines(&content) {
+            for needle in NEEDLES {
+                if line.contains(needle) {
+                    violations.push(format!("{rel}: {needle} → {}", line.trim()));
+                }
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "宿主生产路径不得再持有生物凭证密码学（B-downsink）：{violations:#?}"
     );
 }
 

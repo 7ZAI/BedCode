@@ -27,8 +27,9 @@ CREATE TABLE IF NOT EXISTS plugin_storage (
 -- 明文不落日志（宿主只记长度）；本表是凭据的唯一指定存储位（AGENTS.md §8
 -- 「日志与存储中凭据只记长度不落明文」的例外/指定位——secret-store 的用途即
 -- 可读回凭据，其余任何存储/日志位置禁止出现值本身）。
--- v24 追加：生物凭证公钥亦托管于此（key = `biometric:<fingerprint>`，
--- 配对记录下沉后公钥随 §8 凭据红线留宿主）
+-- v24 曾追加：生物凭证公钥亦托管于此（key = `biometric:<fingerprint>`）；
+-- v34（B-downsink）起生物公钥真源迁认证中心插件私有库 `auth_biometric_keys`，
+-- 宿主不再持有任何生物凭证材料，旧 `biometric:*` 行由 `run_migrations` 幂等清扫。
 CREATE TABLE IF NOT EXISTS plugin_secrets (
     plugin_id  TEXT NOT NULL,
     key        TEXT NOT NULL,

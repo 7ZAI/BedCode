@@ -203,8 +203,7 @@ pub fn history_list(device_id: &str) -> Result<serde_json::Value, String> {
         use bedcode_plugin_api::wasm_host::WasmHost;
         use store::AuthRecordsStore;
         let rows = WasmHost.history_by_device(device_id)?;
-        serde_json::to_value(rows)
-            .map_err(|e| format!("auth history serialize: {e}"))
+        serde_json::to_value(rows).map_err(|e| format!("auth history serialize: {e}"))
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -250,6 +249,54 @@ pub fn pairing_active(fingerprint: &str) -> Result<bool, String> {
     }
 }
 
+/// 按指纹取生物凭证公钥（未绑定 → `Ok(None)`）
+///
+/// B-downsink（2026-09-30）真源从宿主 `plugin_secrets` 迁入本库
+/// `auth_biometric_keys`；宿主 host-auth `biometric-*` 三原语同日退役。
+pub fn biometric_key_get(fingerprint: &str) -> Result<Option<String>, String> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        use bedcode_plugin_api::wasm_host::WasmHost;
+        use store::AuthRecordsStore;
+        WasmHost.biometric_key_get(fingerprint)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = fingerprint;
+        Err("auth records biometric key unavailable outside wasm runtime".to_string())
+    }
+}
+
+/// 绑定/覆盖生物凭证公钥（`public_key` 非空）；未配对也允许落行（绑定闸门在调用方）
+pub fn biometric_key_set(fingerprint: &str, public_key: &str) -> Result<(), String> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        use bedcode_plugin_api::wasm_host::WasmHost;
+        use store::AuthRecordsStore;
+        WasmHost.biometric_key_set(fingerprint, public_key)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = (fingerprint, public_key);
+        Err("auth records biometric key unavailable outside wasm runtime".to_string())
+    }
+}
+
+/// 解绑生物凭证公钥（删行；未绑定幂等成功）
+pub fn biometric_key_delete(fingerprint: &str) -> Result<(), String> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        use bedcode_plugin_api::wasm_host::WasmHost;
+        use store::AuthRecordsStore;
+        WasmHost.biometric_key_delete(fingerprint)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = fingerprint;
+        Err("auth records biometric key unavailable outside wasm runtime".to_string())
+    }
+}
+
 // ==================== Tests ====================
 
 #[cfg(test)]
@@ -277,7 +324,8 @@ mod tests {
         let store = MockAuthRecords::new(vec![existing]);
 
         // uid_hash 命中 → 复用原 id
-        let outcome = ops::upsert_record(&store, "New Phone", "fp-new", None, Some("uid-1")).expect("merge");
+        let outcome =
+            ops::upsert_record(&store, "New Phone", "fp-new", None, Some("uid-1")).expect("merge");
         assert!(matches!(outcome, UpsertOutcome::Merged { id } if id == "legacy-id"));
         let all = store.pairings_all().expect("all");
         assert_eq!(all.len(), 1, "归并不新增行");
@@ -299,7 +347,8 @@ mod tests {
             connect_count: 2,
             is_active: true,
         }]);
-        let outcome = ops::upsert_record(&store, "Pixel 9", "fp-1", Some("192.168.1.5:9000"), None).expect("upsert");
+        let outcome = ops::upsert_record(&store, "Pixel 9", "fp-1", Some("192.168.1.5:9000"), None)
+            .expect("upsert");
         assert!(matches!(outcome, UpsertOutcome::Upserted { id } if id == "p-1"));
         let all = store.pairings_all().expect("all");
         assert_eq!(all.len(), 1);
@@ -326,7 +375,13 @@ mod tests {
         let first = ops::migrate(&store, &rows).expect("first migrate");
         assert_eq!(first.imported_pairings, 1);
         let second = ops::migrate(&store, &rows).expect("second migrate");
-        assert!(matches!(second, MigrationReport { already_migrated: true, .. }));
+        assert!(matches!(
+            second,
+            MigrationReport {
+                already_migrated: true,
+                ..
+            }
+        ));
     }
 
     /// 迁移导入：凭据列不迁移（publicKey / sessionToken 即使被推送也剥离）
@@ -350,7 +405,17 @@ mod tests {
         assert_eq!(report.imported_pairings, 1);
         let all = store.pairings_all().expect("all");
         assert_eq!(all.len(), 1);
-        assert!(!serde_json::to_string(&all[0]).expect("serialize").contains("SPKI"), "公钥不得入私有库");
-        assert!(!serde_json::to_string(&all[0]).expect("serialize").contains("JWT-SECRET"), "session_token 不得入私有库");
+        assert!(
+            !serde_json::to_string(&all[0])
+                .expect("serialize")
+                .contains("SPKI"),
+            "公钥不得入私有库"
+        );
+        assert!(
+            !serde_json::to_string(&all[0])
+                .expect("serialize")
+                .contains("JWT-SECRET"),
+            "session_token 不得入私有库"
+        );
     }
 }

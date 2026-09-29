@@ -167,7 +167,7 @@ impl PluginChannel {
             return;
         }
 
-        match verify_endpoint_jwt(conn, &frame.token) {
+        match authenticate_endpoint_connection(conn, &frame.token) {
             Ok(subject) => {
                 // 注册表认证态同步（异步态：list-clients 的 authenticated 字段来源）。
                 // 不经 `authenticate_jwt`：插件端点的第三方客户端**不参与配对设备
@@ -241,12 +241,12 @@ impl PluginChannel {
 ///
 /// **验签与策略都由认证中心做**（v33 / ADR 0033）：宿主不再持有任何设备 JWT
 /// 密码学（`utils/auth/jwt.rs` 已退役），这里只问中心一次
-/// （`enforce_connection_policy`，与 HTTP 中间件 `jwt_auth::extract_and_verify_jwt`
+/// （`enforce_connection_policy`，与 HTTP 中间件 `auth_gateway::authenticate_with_center`
 /// **同一条路径、同一个判据**），成功后把中心交回的连接身份写进连接会话。
 ///
 /// fail-closed（ADR 0031）：无中心 / 调用失败 / 中心拒绝 → 拒绝连接（随后 close
 /// 4001），`deny_kind` 三态在中心桥接面分类；仅当无 AppContext（无头 / 单测）跳过。
-fn verify_endpoint_jwt(conn: &mut WsConnBase, token: &str) -> Result<String, (String, String)> {
+fn authenticate_endpoint_connection(conn: &mut WsConnBase, token: &str) -> Result<String, (String, String)> {
     let Some(ctx) = crate::system::app_context::AppContext::try_global() else {
         // 无头 / 单测上下文：没有认证中心可问（生产运行期不存在此路径）
         return Err((

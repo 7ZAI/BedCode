@@ -9,9 +9,9 @@ use std::collections::HashMap;
 use bedcode_plugin_api::EndpointAuth;
 
 use crate::server::http::dtos::{ApiResponse, CODE_INVALID_REQUEST, CODE_PLUGIN_AUTH_FAILED};
-use crate::server::http::middleware::jwt_auth::get_authenticated_identity;
-use crate::utils::auth::identity::AuthenticatedIdentity;
+use crate::server::http::middleware::auth_gateway::get_authenticated_identity;
 use crate::system::app_context::AppContext;
+use crate::utils::auth::identity::AuthenticatedIdentity;
 
 // ==================== 插件动态 HTTP 端点代理 ====================
 
@@ -128,7 +128,7 @@ impl HttpCaller {
 
 /// 本次请求的调用方身份与可信设备上下文（`/api/plugin/*` 与业务网关共用一条判据）
 ///
-/// claims 只在验签通过后存在（`jwt_gateway` 注入），因此 `device` 与
+/// 连接身份只在认证中心放行后注入（认证闸门 `auth_gateway`），因此 `device` 与
 /// [`HttpCaller::Device`] 同源同步；设备上下文只取 claims 派生标识，
 /// **JWT 本体与指纹不出宿主**（AGENTS.md §8 凭据红线）。
 pub(crate) fn caller_identity(req: &actix_web::HttpRequest) -> (HttpCaller, Option<serde_json::Value>) {
@@ -137,10 +137,7 @@ pub(crate) fn caller_identity(req: &actix_web::HttpRequest) -> (HttpCaller, Opti
     let caller = HttpCaller::classify(identity.is_some(), loopback);
     let device = identity.map(|identity| {
         let mut device = serde_json::Map::new();
-        device.insert(
-            "deviceId".to_string(),
-            serde_json::Value::String(identity.device_id),
-        );
+        device.insert("deviceId".to_string(), serde_json::Value::String(identity.device_id));
         if let Some(name) = identity.device_name {
             device.insert("deviceName".to_string(), serde_json::Value::String(name));
         }
@@ -311,7 +308,7 @@ pub(crate) fn plugin_http_unauthenticated_response(full_path: &str) -> HttpRespo
 /// 插件动态 HTTP 端点 — 请求到达后通过 PluginHost.invoke_rust_command 路由到插件 handler。
 /// 仅支持已激活的 Rust / WASM 插件，TS-only 插件的 HTTP 端点通过前端 Tauri event 桥接。
 ///
-/// 认证：`jwt_gateway` 中间件先验签（有效 JWT 时注入 claims），本 handler 按**属主端点
+/// 认证：`auth_gateway` 中间件先问认证中心（放行时注入连接身份），本 handler 按**属主端点
 /// 声明的档位**决定是否要求已验签（票 08）：manifest 未声明 `auth` 即最严档 `jwt`，
 /// 免凭证必须逐条显式声明 `auth: "none"`。服务监听 0.0.0.0，收紧前「插件端点对局域网
 /// 无凭证可达」正是本票处置的风险。
@@ -323,7 +320,7 @@ pub async fn plugin_http_endpoint(
 ) -> HttpResponse {
     let (plugin_id, endpoint_path) = path.into_inner();
 
-    // 中间件只做「有 JWT 就验签」；本路由无凭证的请求（环回 hook、局域网匿名）
+    // 中间件只对带凭证的请求问认证中心；本路由无凭证的请求（环回 hook、局域网匿名）
     // 放行到这里，由下面的端点级档位判定决定是否真的到达插件。
 
     // 检查插件是否已激活；未激活时旧前缀可兜底转给接管方（票 16，见 resolve_http_owner）

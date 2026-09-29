@@ -22,7 +22,6 @@ use std::time::{Duration, Instant};
 use crate::server::core::filter::{Direction, FilterContext, TrafficChannel, TrafficFilterChain};
 use crate::server::core::link_crypto;
 use crate::server::websocket::registry::{WsRegistration, WsSessionRegistry};
-use crate::system::app_context::AppContext;
 use crate::system::constants::{HEARTBEAT_INTERVAL_SECS, REMOTE_CLIENT_TIMEOUT_SECS, WS_AUTH_TIMEOUT_SECS};
 
 /// 心跳间隔
@@ -529,21 +528,11 @@ impl Actor for WsConnBase {
         // 注销 WsSessionRegistry + 断连清理。
         // 票 07：设备离线判定 / 认证记录 close / device 事件全部归插件
         // （`<owner>::ws:client-disconnect` → 插件自驱 touch/close + emit），
-        // 宿主不再代做；本块只剩引擎事实清理（注册表摘除 + 生物挑战 + 链路加密密码表）。
+        // 宿主不再代做；本块只剩引擎事实清理（注册表摘除 + 链路加密密码表）。
         let client_id = self.session.addr.to_string();
-        let fingerprint = self.session.fingerprint.clone();
         actix::spawn(async move {
-            // 无头上下文（库级测试 / 独立 WS 服务器）无 AppContext 单例：生物认证
-            // 挑战清理按「无」处理（生产路径 AppContext 必已初始化）
-            let app_ctx = AppContext::try_global();
             let registry = WsSessionRegistry::global();
             registry.unregister(&client_id).await;
-
-            // 断连清理：清除该连接的生物认证挑战值（ticket 01 起按键为
-            // fingerprint；addr 键已是空操作，改用指纹键精确清理）
-            if let (Some(app_ctx), Some(fp)) = (app_ctx, fingerprint) {
-                app_ctx.biometric_challenges().clear(&fp).await;
-            }
 
             // 断连清理：链路加密密码表（issue 04）——必须在连接标识失效前移除
             link_crypto::ws_remove_ciphers(&client_id);

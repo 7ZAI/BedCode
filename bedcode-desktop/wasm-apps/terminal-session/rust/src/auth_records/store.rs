@@ -13,12 +13,14 @@
 //!
 //! 表结构（插件私有库，无主库 `plugin_<id>_` 前缀约束）：
 //! - `auth_pairings`：配对设备公开记录（**不含凭据列** `public_key` /
-//!   `session_token`——公钥随 §8 凭据红线留宿主 `plugin_secrets`，session_token
-//!   是死列直接丢弃，凭据零复制）
+//!   `session_token`——session_token 是死列直接丢弃，凭据零复制；公钥自
+//!   B-downsink 起真源 = 本库 `auth_biometric_keys` 独立表，见下）
+//! - `auth_biometric_keys`：生物凭证公钥表（2026-09-30 生物线下沉：公钥托管
+//!   从宿主 `plugin_secrets` 迁本库，P-256 验签执行点也在插件内）
 //! - `auth_connection_history`：连接历史（无凭据列）
 //! - `plugin_meta`：迁移 marker（与配置域共用同一张表）
 
-use super::model::{PairingRecord, ConnectionEventRecord};
+use super::model::{ConnectionEventRecord, PairingRecord};
 
 /// 建表语句（逐条执行——`plugin_db_execute` 是单语句版）
 pub const SCHEMA: &[&str] = &[
@@ -36,6 +38,13 @@ pub const SCHEMA: &[&str] = &[
      connect_count INTEGER NOT NULL DEFAULT 1, \
      is_active INTEGER NOT NULL DEFAULT 1)",
     "CREATE INDEX IF NOT EXISTS idx_auth_pairings_fingerprint ON auth_pairings(device_fingerprint)",
+    // 生物凭证公钥（B-downsink：真源从宿主 `plugin_secrets` 迁入本库；
+    // 与 host-auth `biometric-*` 三原语同日退役，验签执行点在插件内）
+    "CREATE TABLE IF NOT EXISTS auth_biometric_keys (\
+     fingerprint TEXT PRIMARY KEY, \
+     public_key TEXT NOT NULL, \
+     updated_at TEXT NOT NULL)",
+    "CREATE INDEX IF NOT EXISTS idx_auth_biometric_keys_fingerprint ON auth_biometric_keys(fingerprint)",
     // 连接历史：按 device_id（= auth_pairings.id）键控
     "CREATE TABLE IF NOT EXISTS auth_connection_history (\
      id INTEGER PRIMARY KEY AUTOINCREMENT, \
@@ -68,6 +77,15 @@ pub trait AuthRecordsStore {
     fn pairing_put(&self, record: &PairingRecord) -> Result<(), String>;
     /// 软删配对（`is_active = 0`）；返回是否命中了活跃记录
     fn pairing_revoke(&self, id: &str) -> Result<bool, String>;
+
+    // ==================== 生物凭证公钥（B-downsink：真源从宿主迁入本库） ====================
+
+    /// 按指纹取生物凭证公钥（未绑定 → `Ok(None)`）
+    fn biometric_key_get(&self, fingerprint: &str) -> Result<Option<String>, String>;
+    /// 绑定/覆盖生物凭证公钥（`updated_at` 由存储写入）
+    fn biometric_key_set(&self, fingerprint: &str, public_key: &str) -> Result<(), String>;
+    /// 解绑（删行；未绑定视为成功幂等）
+    fn biometric_key_delete(&self, fingerprint: &str) -> Result<(), String>;
 
     // ==================== 连接历史 ====================
 
@@ -107,11 +125,23 @@ mod wasm_impl {
             id: required("id")?,
             device_name: required("device_name")?,
             device_fingerprint: required("device_fingerprint")?,
-            address: row.get("address").and_then(|v| v.as_str()).map(str::to_string),
-            uid_hash: row.get("uid_hash").and_then(|v| v.as_str()).map(str::to_string),
+            address: row
+                .get("address")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            uid_hash: row
+                .get("uid_hash")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
             paired_at: required("paired_at")?,
-            last_seen: row.get("last_seen").and_then(|v| v.as_str()).map(str::to_string),
-            connect_count: row.get("connect_count").and_then(|v| v.as_i64()).unwrap_or(0) as u32,
+            last_seen: row
+                .get("last_seen")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            connect_count: row
+                .get("connect_count")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0) as u32,
             is_active: row.get("is_active").and_then(|v| v.as_i64()).unwrap_or(1) != 0,
         })
     }
@@ -129,14 +159,23 @@ mod wasm_impl {
             device_id: required("device_id")?,
             auth_method: required("auth_method")?,
             result: required("result")?,
-            address: row.get("address").and_then(|v| v.as_str()).map(str::to_string),
+            address: row
+                .get("address")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
             connected_at: required("connected_at")?,
-            disconnected_at: row.get("disconnected_at").and_then(|v| v.as_str()).map(str::to_string),
+            disconnected_at: row
+                .get("disconnected_at")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
         })
     }
 
     /// JSON 数组（查询结果）→ 模型列表；`None` / 非数组 → 空
-    fn rows_to<T>(rows: Option<serde_json::Value>, mapper: impl Fn(&serde_json::Value) -> Result<T, String>) -> Result<Vec<T>, String> {
+    fn rows_to<T>(
+        rows: Option<serde_json::Value>,
+        mapper: impl Fn(&serde_json::Value) -> Result<T, String>,
+    ) -> Result<Vec<T>, String> {
         let rows = rows.unwrap_or_else(|| serde_json::json!([]));
         let array = rows
             .as_array()
@@ -160,7 +199,10 @@ mod wasm_impl {
                 .and_then(|rows| rows_to(rows, row_to_pairing))
         }
 
-        fn pairing_by_fingerprint(&self, fingerprint: &str) -> Result<Option<PairingRecord>, String> {
+        fn pairing_by_fingerprint(
+            &self,
+            fingerprint: &str,
+        ) -> Result<Option<PairingRecord>, String> {
             let rows = self
                 .plugin_db_query_params(
                     "SELECT * FROM auth_pairings WHERE device_fingerprint = ?1",
@@ -209,6 +251,42 @@ mod wasm_impl {
             Ok(changed > 0)
         }
 
+        fn biometric_key_get(&self, fingerprint: &str) -> Result<Option<String>, String> {
+            let rows = self
+                .plugin_db_query_params(
+                    "SELECT public_key FROM auth_biometric_keys WHERE fingerprint = ?1",
+                    &sql_params![fingerprint],
+                )
+                .map_err(|e| format!("plugin db query failed: {}", e.message))?;
+            let rows = rows.unwrap_or_else(|| serde_json::json!([]));
+            Ok(rows
+                .as_array()
+                .and_then(|a| a.first())
+                .and_then(|r| r.get("public_key"))
+                .and_then(|v| v.as_str())
+                .map(str::to_string))
+        }
+
+        fn biometric_key_set(&self, fingerprint: &str, public_key: &str) -> Result<(), String> {
+            let now = crate::pairing::jwt::now_secs();
+            self.plugin_db_execute_params(
+                "INSERT OR REPLACE INTO auth_biometric_keys (fingerprint, public_key, updated_at) \
+                 VALUES (?1, ?2, ?3)",
+                &sql_params![fingerprint, public_key, now.to_string()],
+            )
+            .map_err(|e| format!("plugin db write failed: {}", e.message))?;
+            Ok(())
+        }
+
+        fn biometric_key_delete(&self, fingerprint: &str) -> Result<(), String> {
+            self.plugin_db_execute_params(
+                "DELETE FROM auth_biometric_keys WHERE fingerprint = ?1",
+                &sql_params![fingerprint],
+            )
+            .map_err(|e| format!("plugin db write failed: {}", e.message))?;
+            Ok(())
+        }
+
         fn history_by_device(&self, device_id: &str) -> Result<Vec<ConnectionEventRecord>, String> {
             let rows = self
                 .plugin_db_query_params(
@@ -236,7 +314,11 @@ mod wasm_impl {
             Ok(())
         }
 
-        fn history_close_open(&self, device_id: &str, disconnected_at: &str) -> Result<bool, String> {
+        fn history_close_open(
+            &self,
+            device_id: &str,
+            disconnected_at: &str,
+        ) -> Result<bool, String> {
             let changed = self
                 .plugin_db_execute_params(
                     "UPDATE auth_connection_history SET disconnected_at = ?1 \
@@ -299,6 +381,7 @@ pub(crate) mod tests {
         pub pairings: Mutex<Vec<PairingRecord>>,
         pub history: Mutex<Vec<ConnectionEventRecord>>,
         pub meta: Mutex<std::collections::HashMap<String, String>>,
+        pub biometric_keys: Mutex<std::collections::HashMap<String, String>>,
     }
 
     impl MockAuthRecords {
@@ -307,6 +390,7 @@ pub(crate) mod tests {
                 pairings: Mutex::new(pairings),
                 history: Mutex::new(Vec::new()),
                 meta: Mutex::new(std::collections::HashMap::new()),
+                biometric_keys: Mutex::new(std::collections::HashMap::new()),
             }
         }
     }
@@ -320,7 +404,10 @@ pub(crate) mod tests {
             Ok(self.pairings.lock().unwrap().clone())
         }
 
-        fn pairing_by_fingerprint(&self, fingerprint: &str) -> Result<Option<PairingRecord>, String> {
+        fn pairing_by_fingerprint(
+            &self,
+            fingerprint: &str,
+        ) -> Result<Option<PairingRecord>, String> {
             Ok(self
                 .pairings
                 .lock()
@@ -334,10 +421,16 @@ pub(crate) mod tests {
             let mut pairings = self.pairings.lock().unwrap();
             // 归并语义：指纹相同 → 更新既有行；uid_hash 命中（指纹不同，稳定设备
             // UID 再派生）→ 复用该行 id（连接历史不分裂）；全新 → 追加
-            if let Some(existing) = pairings.iter_mut().find(|r| r.device_fingerprint == record.device_fingerprint) {
+            if let Some(existing) = pairings
+                .iter_mut()
+                .find(|r| r.device_fingerprint == record.device_fingerprint)
+            {
                 *existing = record.clone();
             } else if let Some(hash) = record.uid_hash.as_deref() {
-                if let Some(anchor) = pairings.iter_mut().find(|r| r.uid_hash.as_deref() == Some(hash)) {
+                if let Some(anchor) = pairings
+                    .iter_mut()
+                    .find(|r| r.uid_hash.as_deref() == Some(hash))
+                {
                     let mut merged = record.clone();
                     merged.id = anchor.id.clone();
                     *anchor = merged;
@@ -362,6 +455,28 @@ pub(crate) mod tests {
             Ok(true)
         }
 
+        fn biometric_key_get(&self, fingerprint: &str) -> Result<Option<String>, String> {
+            Ok(self
+                .biometric_keys
+                .lock()
+                .unwrap()
+                .get(fingerprint)
+                .cloned())
+        }
+
+        fn biometric_key_set(&self, fingerprint: &str, public_key: &str) -> Result<(), String> {
+            self.biometric_keys
+                .lock()
+                .unwrap()
+                .insert(fingerprint.to_string(), public_key.to_string());
+            Ok(())
+        }
+
+        fn biometric_key_delete(&self, fingerprint: &str) -> Result<(), String> {
+            self.biometric_keys.lock().unwrap().remove(fingerprint);
+            Ok(())
+        }
+
         fn history_by_device(&self, device_id: &str) -> Result<Vec<ConnectionEventRecord>, String> {
             let mut rows: Vec<ConnectionEventRecord> = self
                 .history
@@ -380,7 +495,11 @@ pub(crate) mod tests {
             Ok(())
         }
 
-        fn history_close_open(&self, device_id: &str, disconnected_at: &str) -> Result<bool, String> {
+        fn history_close_open(
+            &self,
+            device_id: &str,
+            disconnected_at: &str,
+        ) -> Result<bool, String> {
             let mut history = self.history.lock().unwrap();
             let Some(record) = history
                 .iter_mut()
@@ -405,7 +524,10 @@ pub(crate) mod tests {
         }
 
         fn set_marker(&self, key: &str, value: &str) -> Result<(), String> {
-            self.meta.lock().unwrap().insert(key.to_string(), value.to_string());
+            self.meta
+                .lock()
+                .unwrap()
+                .insert(key.to_string(), value.to_string());
             Ok(())
         }
     }
@@ -425,7 +547,9 @@ pub(crate) mod tests {
             is_active: true,
         }]);
         assert!(store.pairing_revoke("p-1").expect("revoke"));
-        assert!(!store.pairing_revoke("p-1").expect("revoke again idempotent"));
+        assert!(!store
+            .pairing_revoke("p-1")
+            .expect("revoke again idempotent"));
         let all = store.pairings_all().expect("all");
         assert_eq!(all.len(), 1, "软删保留行");
         assert!(!all[0].is_active);

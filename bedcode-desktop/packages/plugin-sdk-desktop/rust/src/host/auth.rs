@@ -1,8 +1,8 @@
-//! 宿主能力：密钥托管（secret-store，按插件属主隔离）+ 生物凭证验签 + JWT 签发
+//! 宿主能力：密钥托管（secret-store，按插件属主隔离）+ 链路身份公开材料
 
 use super::HostError;
 
-/// 密钥托管（v15 secret-store）+ 生物凭证 / JWT 密码学面（v19 保留，v24 修订）
+/// 密钥托管（v15 secret-store）+ 链路身份（v19 保留，v24 修订，v34 再收窄）
 ///
 /// 宿主托管的凭据存储：JWT 密钥 / 配对种子等敏感值经宿主持久化于主库
 /// `plugin_secrets` 表，按调用方插件实例属主隔离（guest 无法伪造属主）。
@@ -16,13 +16,16 @@ use super::HostError;
 /// `auth_trusted_device_touch` / `auth_connection_history_record`）：
 ///
 /// - 配对记录读写 → 认证中心私有库（插件侧直接查）；
-/// - 连接历史读写 → 认证中心私有库；
-/// - 生物凭证公钥 → 宿主 `plugin_secrets`（§8 凭据红线：公钥不出宿主，
-///   验签执行点在宿主）——`biometric-credential-bound` 判定改为查托管公钥
-///   存在性，配对状态由认证中心私有库判定。
+/// - 连接历史读写 → 认证中心私有库。
 ///
-/// 保留面：secret-store、`auth_setting_set`（settings 表配置域）、biometric-*、
-/// device-token-*、link-identity-parts。
+/// **v34（B-downsink，2026-09-30）**：生物凭证面（`auth_biometric_credential_bound`
+/// / `auth_biometric_verify_signature` / `auth_biometric_credential_bind`）随 WIT
+/// `host-auth` 三函数一起退役——生物公钥托管与验签执行下沉认证中心私有库
+/// （`auth_records::biometric_key_*` + WASM 内 p256），宿主不再托管任何设备侧
+/// 凭证材料。
+///
+/// 保留面：secret-store、`auth_setting_set`（settings 表配置域）、
+/// link-identity-parts。
 pub trait HostAuth {
     /// 读取属主密钥；键不存在返回 `Ok(None)`
     fn auth_secret_get(&self, key: &str) -> Result<Option<String>, HostError>;
@@ -39,24 +42,9 @@ pub trait HostAuth {
     /// 认证域设置项写入（键白名单 `pairing_code_ttl` / `qr_token_ttl`，十进制秒数）
     fn auth_setting_set(&self, key: &str, value: &str) -> Result<(), HostError>;
 
-    // ==================== v19 保留面（v24 修订语义：公钥托管在 plugin_secrets） ====================
-
-    /// 「已绑定生物凭证公钥」查询（挑战签发闸门之一：**配对状态由认证中心私有库
-    /// 判定**，本原语只查宿主托管的公钥存在性）。公钥本身不出口（凭据红线）
-    fn auth_biometric_credential_bound(&self, fingerprint: &str) -> Result<bool, HostError>;
-
-    /// 生物认证签名验证（P-256 ECDSA）：用**宿主托管**的绑定公钥验 `message`；
-    /// 未绑定公钥返回 `Ok(false)`。密钥与公钥不出宿主
-    fn auth_biometric_verify_signature(&self, fingerprint: &str, message: &str, signature: &str) -> Result<bool, HostError>;
-
     /// 链路身份 Kd 公钥材料读取（只含公开材料）；未就绪返回 `Ok(None)`。
     /// JSON：`{ publicB64, fingerprint }`
     fn auth_link_identity_parts(&self) -> Result<Option<serde_json::Value>, HostError>;
-
-    /// 绑定/解绑生物凭证公钥（宿主托管语义：只改凭证不动计数——与认证登录路径的
-    /// 计数语义刻意不同）；`public_key` 空串 = 解绑。未找到配对记录返回 `Ok(false)`；
-    /// 成功 `Ok(true)`
-    fn auth_biometric_credential_bind(&self, fingerprint: &str, public_key: &str) -> Result<bool, HostError>;
 
     // ==================== v33：设备入场 JWT 签发/验签原语退役（ADR 0033） ====================
     // 原 `auth_device_token_issue` / `auth_device_token_verify` 两方法**删除**：入场

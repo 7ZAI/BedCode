@@ -599,27 +599,27 @@ interface host-auth {
     // 随之**退役删除**。旧产物（v23 SDK 构建）在 activate 期拿到点明新形态的
     // 错误，须按 v24 SDK 重建。
     //
-    // 保留面（凭据与密码学归属见 **v33 条目**，ADR 0033）：secret-store 密钥托管、
-    // 生物凭证公钥托管 + 验签执行（biometric-*，宿主 `plugin_secrets`）、链路身份
-    // （link-identity-parts）。**设备入场 JWT 签发/验签已于 v33 从本 interface 退役**
-    // （原先的 `device-token-issue` / `device-token-verify`）。
+    // 保留面（凭据与密码学归属见 **v33 / v34 条目**，ADR 0033）：secret-store 密钥托管、
+    // 链路身份（link-identity-parts）。**设备入场 JWT 签发/验签已于 v33 从本 interface 退役**
+    // （原先的 `device-token-issue` / `device-token-verify`）；**生物凭证面（原先的
+    // `biometric-credential-bound` / `biometric-verify-signature` /
+    // `biometric-credential-bind`）已于 v34 退役**——公钥托管与验签执行下沉认证中心
+    // 插件私有库（B-downsink），宿主不再持有任何设备侧凭证材料。
 
-    /// 「已配对且绑定生物凭证公钥」查询（挑战签发闸门；判定 = 宿主托管公钥存在
-    /// （`plugin_secrets`）。配对状态由认证中心私有库判定（插件侧先查自己库）。
-    /// 公钥本身**不出口**（凭据红线）。
-    biometric-credential-bound: func(fingerprint: string) -> result<bool, string>;
-    /// 生物认证签名验证（P-256 ECDSA，SPKI DER base64 公钥 + r||s base64 签名）：
-    /// 用**宿主托管**的绑定公钥验 `message`，返回验签结果；未绑定公钥返回
-    /// `ok(false)`。密钥与公钥不出宿主（凭据红线），验签执行点在宿主。
-    biometric-verify-signature: func(fingerprint: string, message: string, signature: string) -> result<bool, string>;
-    /// 绑定/解绑生物凭证公钥（宿主托管语义：**只改凭证不动计数**——与认证登录
-    /// 路径的计数语义刻意不同）。`public-key` 空串 = 解绑。未找到配对记录返回
-    /// `ok(false)`；成功 `ok(true)`。
-    biometric-credential-bind: func(fingerprint: string, public-key: string) -> result<bool, string>;
     /// 链路身份 Kd 公钥材料读取（`link_crypto::identity_parts` 语义）：
     /// `ok(none)` = 身份未就绪。JSON：`{ publicB64, fingerprint }`。
     /// 响应字段 `kdPublicB64` / `kdFingerprint` 的数据源；只含公开材料。
     link-identity-parts: func() -> result<option<string>, string>;
+
+    // ==================== v34：生物凭证面退役（B-downsink，2026-09-30） ====================
+    // 原 `biometric-credential-bound` / `biometric-verify-signature` /
+    // `biometric-credential-bind` 三函数**删除**（破坏性）：认证中心
+    // （`com.bedcode.terminal-session`）自持生物公钥（本插件私有库 `auth_biometric_keys`）
+    // 并在 WASM 内用 p256 验签，宿主不再托管任何生物凭证材料（宿主
+    // `utils/auth/biometric.rs` 与 `host_secrets` 的生物键同批退役）。旧产物
+    // （v33 SDK 构建）仍 import 这三函数 → **实例化期**即被拒，
+    // `stale_artifact_rebuild_hint` 点名「按 v34 SDK 重建」，不是 trap 也不是静默降级。
+    // wire 格式与挑战-应答流程逐字节不变（移动端仍走 HTTP /api/auth/biometric-*，零改动）。
 
     // ==================== v33：设备入场 JWT 签发/验签退役（ADR 0033） ====================
     // 原 `device-token-issue` / `device-token-verify` 两函数**删除**（破坏性）：

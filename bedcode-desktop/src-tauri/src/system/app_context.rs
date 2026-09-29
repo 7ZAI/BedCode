@@ -5,9 +5,8 @@
 
 use crate::db::Database;
 use crate::mdns::advertiser::MdnsAdvertiser;
-use crate::wasm_core::PluginHost;
 use crate::system::info::SystemInfo;
-use crate::utils::auth::biometric::BiometricChallengeManager;
+use crate::wasm_core::PluginHost;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::AppHandle;
@@ -25,8 +24,6 @@ pub struct AppContext {
     // 窄转发层互调，不再持有内核会话对象。
     /// 插件宿主（生命周期管理）
     plugin_host: Arc<PluginHost>,
-    /// 生物认证挑战值管理器
-    biometric_challenges: Arc<BiometricChallengeManager>,
     /// mDNS 广播管理器
     mdns_advertiser: Arc<tokio::sync::RwLock<MdnsAdvertiser>>,
     /// Tauri AppHandle
@@ -77,10 +74,6 @@ impl AppContext {
         &self.plugin_host
     }
 
-    pub fn biometric_challenges(&self) -> &Arc<BiometricChallengeManager> {
-        &self.biometric_challenges
-    }
-
     pub fn mdns_advertiser(&self) -> &Arc<tokio::sync::RwLock<MdnsAdvertiser>> {
         &self.mdns_advertiser
     }
@@ -102,7 +95,6 @@ impl AppContext {
 pub struct AppContextBuilder {
     db: Option<Arc<Mutex<Database>>>,
     plugin_host: Option<Arc<PluginHost>>,
-    biometric_challenges: Option<Arc<BiometricChallengeManager>>,
     mdns_advertiser: Option<Arc<tokio::sync::RwLock<MdnsAdvertiser>>>,
     app_handle: Option<Arc<AppHandle>>,
     resource_dir: Option<Arc<PathBuf>>,
@@ -114,7 +106,6 @@ impl AppContextBuilder {
         Self {
             db: None,
             plugin_host: None,
-            biometric_challenges: None,
             mdns_advertiser: None,
             app_handle: None,
             resource_dir: None,
@@ -157,9 +148,6 @@ impl AppContextBuilder {
         let ctx = AppContext {
             db: self.db.expect("AppContext: db is required"),
             plugin_host: self.plugin_host.expect("AppContext: plugin_host is required"),
-            biometric_challenges: self
-                .biometric_challenges
-                .unwrap_or_else(|| Arc::new(BiometricChallengeManager::new())),
             mdns_advertiser: self.mdns_advertiser.expect("AppContext: mdns_advertiser is required"),
             // app_handle 允许 None（无头/测试上下文），其余字段仍必填
             app_handle: self.app_handle,

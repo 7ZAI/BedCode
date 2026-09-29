@@ -52,21 +52,35 @@ impl Database {
         // 与「退役业务表不读不迁不清理」（v24 口径）的区别：那条针对的是**已退役的
         // 表**（留在那里无害、也不会被误读）；这里是**一张仍在用、仍会被插件读的
         // 表里的密钥行**——留着就是白给的攻击面（谁读到主库谁就拿到过期的入场密钥）。
-        // 清理只按精确三元组（属主 `host` + 键名 `jwt.key`）删，不碰任何其它行，
-        // 尤其**不碰** `biometric:<fingerprint>` 公钥寄主（生物凭证验签仍在宿主）。
+        // 清理只按精确三元组（属主 `host` + 键名 `jwt.key`）删，不碰任何其它行。
         let purged = self
             .conn
             .execute(
                 "DELETE FROM plugin_secrets WHERE plugin_id = 'host' AND key = 'jwt.key'",
                 [],
             )
-            .map_err(|e| {
-                crate::AppError::Internal(format!("purge retired host jwt key: {e}"))
-            })?;
+            .map_err(|e| crate::AppError::Internal(format!("purge retired host jwt key: {e}")))?;
         if purged > 0 {
             tracing::info!(
                 purged_rows = purged,
                 "db migration v33: purged retired host-owned entry-token signing key (ADR 0033)"
+            );
+        }
+
+        // v34（2026-09-30 B-downsink）：生物凭证公钥真源迁到认证中心插件私有库
+        // `auth_biometric_keys`（WASM 内 p256 验签），宿主不再读写信凭据材料。
+        // 宿主 `plugin_secrets` 里形如 `biometric:<fingerprint>` 的旧行（v24–v33
+        // 期间由宿主托管）因此成为不可达的死数据——**清掉**（v33 jwt.key 同款：
+        // 在用的表里留死行 = 杂物）。幂等：按键名前缀 `biometric:` 精确删，不动
+        // 其它任何行（含密钥环 `jwt.key` / `jwt.keyring`）。
+        let bio_purged = self
+            .conn
+            .execute("DELETE FROM plugin_secrets WHERE key LIKE 'biometric:%'", [])
+            .map_err(|e| crate::AppError::Internal(format!("purge retired biometric rows: {e}")))?;
+        if bio_purged > 0 {
+            tracing::info!(
+                purged_rows = bio_purged,
+                "db migration v34: purged retired host-hosted biometric public key rows (B-downsink)"
             );
         }
         Ok(())
@@ -170,9 +184,7 @@ mod tests {
             )
             .expect("seed legacy fs grant");
         db.conn()
-            .execute_batch(
-                "DROP TABLE plugin_auth_records; DROP TABLE plugin_auth_policies;",
-            )
+            .execute_batch("DROP TABLE plugin_auth_records; DROP TABLE plugin_auth_policies;")
             .expect("simulate legacy db without auth tables");
         assert_eq!(master_count(&db, "table", "plugin_auth_policies"), 0);
         assert_eq!(
@@ -219,19 +231,20 @@ mod tests {
         }
     }
 
-    /// v33（ADR 0033）：宿主属主的入场签发密钥行被清掉，且**只**清这一行
+    /// v33（ADR 0033）+ v34（B-downsink）：宿主属主的入场签发密钥行与宿主托管
+    /// 的生物公钥行被清掉，**且只清这两类**
     ///
-    /// 三条判据：
-    /// ① 旧库（有那行）跑完迁移后不再有；
+    /// 判据：
+    /// ① 旧库（有那些行）跑完迁移后不再有；
     /// ② 幂等（连跑两次结果一致，不报错）；
-    /// ③ **不误伤**——插件属主的同名行（中心自己迁移前的密钥行 / 新真源密钥环）与
-    ///    生物公钥寄主 `biometric:<fp>` 必须原样保留（后者仍由宿主托管）。
+    /// ③ **不误伤**——密钥环（`jwt.key` / `jwt.keyring`，v33 后真源在插件
+    ///    属主 / 中心密钥环）必须原样保留。
     #[test]
     fn retired_host_entry_token_key_is_purged_without_touching_others() {
         let dir = std::env::temp_dir().join(format!("db-purge-jwtkey-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("temp dir");
         let db_path = dir.join("bedcode.db");
-        // 造一个「旧库」：四条密钥行同表并存
+        // 造一个「旧库」：五条密钥行同表并存
         {
             let db = Database::new(&db_path).expect("open");
             db.init_schema().expect("init schema");
@@ -239,7 +252,9 @@ mod tests {
                 ("host", "jwt.key", "aa"),
                 ("com.bedcode.terminal-session", "jwt.key", "bb"),
                 ("com.bedcode.terminal-session", "jwt.keyring", "cc"),
-                ("host", "biometric:fp-abc", "dd"),
+                // B-downsink 前的宿主托管生物公钥（v24–v33 期间属主 = 插件）
+                ("com.bedcode.terminal-session", "biometric:fp-abc", "dd"),
+                ("host", "biometric:fp-xyz", "ee"),
             ] {
                 db.conn()
                     .execute(
@@ -271,10 +286,21 @@ mod tests {
                 !remaining.contains(&("host".to_string(), "jwt.key".to_string())),
                 "宿主入场密钥行必须被清掉: {remaining:?}"
             );
+            // v34：宿主托管的生物公钥行（不论属主）必须被清掉
+            assert!(
+                !remaining.contains(&(
+                    "com.bedcode.terminal-session".to_string(),
+                    "biometric:fp-abc".to_string()
+                )),
+                "B-downsink 后宿主不得再托管生物公钥（插件属主行）: {remaining:?}"
+            );
+            assert!(
+                !remaining.contains(&("host".to_string(), "biometric:fp-xyz".to_string())),
+                "B-downsink 后宿主不得再托管生物公钥（host 属主行）: {remaining:?}"
+            );
             for keep in [
                 ("com.bedcode.terminal-session", "jwt.key"),
                 ("com.bedcode.terminal-session", "jwt.keyring"),
-                ("host", "biometric:fp-abc"),
             ] {
                 assert!(
                     remaining.contains(&(keep.0.to_string(), keep.1.to_string())),
@@ -289,4 +315,3 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 }
-

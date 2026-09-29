@@ -91,8 +91,8 @@ pub fn session_active() -> bool {
 /// 三类拒绝必须可区分（ADR 0031 §规格）：`no_center` / `unavailable` 是部署/故障问题，
 /// `policy` 是产品语义问题（如设备被撤销），排障路径完全不同。
 ///
-/// 调用方：`server/websocket/channel/plugin.rs::verify_endpoint_jwt`（WS 插件端点
-/// 首消息认证）+ `server/http/middleware/jwt_auth.rs::extract_and_verify_jwt`
+/// 调用方：`server/websocket/channel/plugin.rs::authenticate_endpoint_connection`（WS 插件端点
+/// 首消息认证）+ `server/http/middleware/auth_gateway.rs::authenticate_with_center`
 /// （HTTP `/api` 网关）。
 pub fn enforce_connection_policy(
     plugin_host: &PluginHost,

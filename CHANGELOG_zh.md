@@ -13,7 +13,52 @@
 > 基础建设变更（wasmtime 47 → 48，见「基础建设」节）——**两端版本号均不动**；桌面批次的
 > 范围豁免与移动端受损清单见「文档」节。
 
+#### `packages/` 下的测试夹具合并为一个按 feature 选择的 crate（桌面测试基建；无生产代码、无 ABI、无版本号变动）
+
+- **做了什么**：6 个 SDK 绑定夹具 `plugin-http-test` / `plugin-task-test` / `plugin-pty-test` /
+  `plugin-wasip3-test` / `plugin-sdk-test` / `plugin-ws-test` 合并为单一
+  `packages/plugin-sdk-fixtures` crate（一个夹具占一个 `[features]` 槽位）并**删除**。
+  六份几乎逐字重复的「mtime 检查 + `cargo build`」收成一份参数化
+  `build_sdk_fixture(feature)`，原六个 builder 各变成一行转发
+- **feature 互斥是硬约束，但理由不是人们直觉的那个**：spike 推翻了最直观的说法。两个
+  feature 同时编**不会**撞名——`wasm_entry!` / `export!` 在各自 module 内生成不冲突的符号，
+  产物还大了约四倍、两个夹具都编进去了。互斥的真正理由是**产物歧义**：
+  `build_sdk_fixture(feature)` 按 feature 名归档产物，一个产物必须无歧义地对应一个夹具。
+  cargo 表达不了「至多一个」，故该约束由 `compile_error!` 兜底
+- **产物同名冲突及其引发的竞态**：各 feature 产出的都是
+  `bedcode_plugin_sdk_fixtures.wasm`，后构建覆盖先构建。解法是按 feature 归档成带后缀的
+  产物名。但这**还不够**——测试并行时，某线程会归档到**另一个线程半写完**的文件
+  （实测报错 `failed to parse WebAssembly module`），故 build + 归档改为进程级互斥锁串行，
+  取锁后再做一次新鲜度缓存复查
+- **漂移锁抓出的是真实覆盖漏洞，不只是数字变了**：
+  `production_manifests_declare_only_known_vocabulary` 会断言自己扫了多少份 manifest，
+  5 份 `plugin.json` 合进一个 crate 的分 feature `http.json` / `pty.json` / `task.json` /
+  `ws.json` + 根 `plugin.json` 后，从 11 掉到 7。原锁只认单夹具形态的 `plugin.json`
+  文件名，于是 **4 份 fixture manifest 静默掉出了权限词汇表校验**。现改为扫目录下全部
+  `*.json`、靠「有 `id` 字段」筛出 plugin manifest（`package.json` / `tsconfig.json`
+  无 `id`，天然跳过），下限提到 11 并写明构成
+- **分夹具 manifest**：合集 crate 每夹具一份 `<fixture>.json`；根 `plugin.json` 归 `sdk`
+  夹具——因为 `#[plugin_api]` 在编译期硬读该路径（ADR 0005 单一真源）并比对 trait 方法名
+  与 `api` 字段，让模块另指一份会让那个防漂移比对形同虚设
+- **`plugin-wasi-test` 保持独立 crate 且固定 `wasm32-wasip2`**：曾按「共享 `WasiCtx` + p2/p3
+  两套 linker 均注册 ⇒ 与 target 无关」的推断把 preopen 迁到 wasip3，**实测证伪**——两个
+  preopen E2E 均 trap 于 `filesystem_method_descriptor_open_at`：p3 linker 接上了，但预打开
+  目录的能力没建到 p3 filesystem 接口上。已回退，两个用例全绿，结论写进了源码注释。
+  夹具合并不要求统一 target
+- **`plugin-bench-test` 保持独立**（749 行 / 29 命令）：性能基准夹具与功能闭环夹具是两类东西
+- **验证**：宿主 `cargo test --lib` **1058 绿 / 0 红 / 1 ignored**（删除六个 crate 后复跑同结果）；
+  `scripts/wasip3-toolchain.sh fixture` 仍能从合并后的 crate 产出通过 magic 校验的 Component。
+  `bedcode.wit` 未动，无 ABI 影响
+
 ### 功能
+
+#### 生物认证面完全下沉认证中心 —— 公钥托管 + 验签执行离开宿主（B-downsink，桌面端 ABI v33 → v34；**破坏性：已绑定生物认证的设备需重新绑定**；移动端 WIT/ABI 不动）
+
+- **为什么下沉**：生物认证的**编排**（挑战签发/单次消费/过期、配对判定、HTTP 端点）早已在认证中心（`terminal-session` 插件），宿主只剩「公钥托管（`plugin_secrets` 的 `biometric:<fp>` 行）+ P-256 验签执行」两块——与 v33 入场 JWT 迁中心（ADR 0033 D1）同路线。P-256 公钥是**公开材料**（私钥永在移动端安全硬件，ADR 0002），托管位置无泄露面变化；验签执行点从宿主引擎移到中心 WASM
+- **宿主侧变更**：`host-auth` **退役 3 原语** `biometric-credential-bound` / `biometric-verify-signature` / `biometric-credential-bind`；`utils/auth/biometric.rs`（挑战管理器 + 验签）与 `system/app_context.rs` 的 `biometric_challenges` **整面删除**；宿主 `plugin_secrets` 的 `biometric:*` 死行按 v33 `jwt.key` 同款幂等清扫（不碰密钥环）
+- **中心侧接管**：生物公钥真源 = 插件私有库新增 `auth_biometric_keys` 表（`biometric_key_get/set/delete`），验签在 WASM 内 p256（`auth_http/biometric.rs::verify_biometric_signature`，p256 crate 已在 wasm32-wasip3 探针验证可编译）；挑战闸门改查私有库，绑定/解绑写私有库（与配对记录解耦）
+- **fail-visible ②**：旧 v33 产物仍 import 那 3 函数 → **实例化期**拿到点名「按 v34 SDK 重建」的错误，不是 trap 不是静默降级
+- **迁移，明说**：宿主旧 `biometric:*` 行被清，已绑定生物认证的设备需**重新绑定**（一次性；配对记录与配对码 / QR / JWT 认证不受影响）。移动端 wire 流程（`/api/auth/biometric-*` 挑战-应答）**逐字节不变**，移动端**零改动**；宿主（ABI 34）与重建后的中心产物**必须同批发布**
 
 #### 认证中心持有入场签发密钥，宿主不再有任何设备入场密码学（ADR 0033，桌面端 ABI v32 → v33；**破坏性：存量已配对设备需全量重新配对**；移动端 WIT/ABI 不动）
 

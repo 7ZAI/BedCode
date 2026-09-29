@@ -6,7 +6,7 @@
 //! `host-http.register-endpoint` 在运行时注册自身路由（含对外 URL 别名、方法、
 //! 认证档位），宿主只保留四件事——通用注册表（`server/http/registry`）、通用判定
 //! （本文件 [`decide`]）、通用转发（复用 `plugin_controller::forward_to_plugin`）、
-//! 验签引擎（`middleware/jwt_auth`）。本模块**零业务路由常量**：不再持有任何
+//! 认证闸门（`middleware/auth_gateway`，v33 起只问认证中心不本地验签）。本模块**零业务路由常量**：不再持有任何
 //! 业务 URL 别名表 / 业务域枚举 / 硬编码插件 id。
 //!
 //! ## 三条不变量
@@ -14,11 +14,11 @@
 //! 1. **形状不变**：对外 URL、方法、响应 JSON 与迁移前逐字节一致。URL 别名由
 //!    插件注册声明（含 `{id}` 模板段），网关按注册表精确/模板匹配，模板捕获值
 //!    经 `params` 字段传给插件；响应形状契约锁在本文件测试段。
-//! 2. **验签不移动**：移动端 JWT 仍在宿主 `/api` scope 的中间件里统一校验
-//!    （AGENTS.md §8 认证红线），网关只挂在它**之后**；转发只透传 claims 派生的
-//!    设备标识与 `caller` 三档调用方身份，**JWT 本体与指纹不出宿主**。档位判定
-//!    统一在网关（只有网关看得见注册表档位）：`jwt` 档要求宿主已验签，`none` 档
-//!    免验签转发。
+//! 2. **认证在网关之外**：认证裁决下沉认证中心插件（v33 / ADR 0033，宿主不再持有
+//!    任何设备 JWT 密码学），网关只挂在认证闸门（`middleware/auth_gateway`）**之后**；
+//!    转发只透传认证中心交回的连接身份派生的设备标识与 `caller` 三档调用方身份，
+//!    **凭证本体与指纹不出宿主**。档位判定统一在网关（只有网关看得见注册表档位）：
+//!    `jwt` 档要求已通过认证，`none` 档免认证转发。
 //! 3. **不发明传输机制**：转发复用 `http/controllers/plugin_controller` 的同一内核
 //!    （[`forward_to_plugin`]）与同一请求构造（headers 白名单 / status/contentType
 //!    解析口径）。
@@ -249,7 +249,7 @@ where
 mod tests {
     use super::*;
     use crate::server::http::controllers::plugin_controller::build_plugin_http_args;
-    use crate::server::http::middleware::jwt_auth::jwt_gateway;
+    use crate::server::http::middleware::auth_gateway::auth_gateway;
 
     /// 注册一条测试别名（全局注册表跨用例共享：路径带用例唯一段）
     fn register_test_alias(owner: &str, path: &str, host: &str, methods: &[&str], auth: EndpointAuth) {
@@ -403,15 +403,15 @@ mod tests {
 
     // ==================== 中间件行为（真实 actix 栈） ====================
 
-    /// 组装「JWT 中间件（外）→ 网关中间件（内）→ 哨兵宿主 handler」的最小 `/api` scope
+    /// 组装「认证闸门（外）→ 业务网关（内）→ 哨兵宿主 handler」的最小 `/api` scope
     ///
-    /// 两个中间件都取生产实现（`jwt_gateway` / `business_gateway`），所以这里验的是真实
+    /// 两个中间件都取生产实现（`auth_gateway` / `business_gateway`），所以这里验的是真实
     /// 链路顺序，不是测试自己搭的近似物。哨兵 handler 复刻宿主自持端点的回包形状。
     fn test_scope() -> impl actix_web::dev::HttpServiceFactory + 'static {
         use actix_web::middleware::from_fn;
         web::scope("/api")
             .wrap(from_fn(business_gateway))
-            .wrap(from_fn(jwt_gateway))
+            .wrap(from_fn(auth_gateway))
             .route("/configs", web::get().to(host_sentinel))
             .route("/git/branches", web::get().to(host_sentinel))
     }
@@ -544,8 +544,7 @@ mod tests {
     async fn registered_alias_falls_through_when_plugin_surface_unavailable() {
         let owner = "test-gw-fallthrough";
         register_test_alias(owner, "configs", "/api/configs", &["GET"], EndpointAuth::Jwt);
-        let app =
-            actix_web::test::init_service(actix_web::App::new().service(gateway_only_scope())).await;
+        let app = actix_web::test::init_service(actix_web::App::new().service(gateway_only_scope())).await;
         let resp = actix_web::test::call_service(
             &app,
             actix_web::test::TestRequest::get().uri("/api/configs").to_request(),

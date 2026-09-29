@@ -30,7 +30,13 @@ sha2 = "0.10"
 base64 = "0.21"
 hex = "0.4"
 getrandom = "0.4"
+# B-downsink（2026-09-30）：生物凭证公钥托管 + P-256 ECDSA 验签从宿主迁入
+# （宿主 host-auth `biometric-*` 三原语同日退役）。纯 Rust 纯软件实现，
+# wasm32-wasip3 可编译（探针验证）。ecdsa = 验签 / pkcs8 = SPKI 公钥解析。
+p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
 
 [dev-dependencies]
 # 文件浏览域单测（票 03）：临时工作区构造（宿主同样用 tempfile）
 tempfile = "3"
+# 生物验签单测（B-downsink）：临时 P-256 密钥对生成（`SigningKey::random`）
+rand = "0.8"

@@ -140,14 +140,14 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     // 由 server/gateway.rs 的 unverified_requests_never_reach_gateway 在真实 actix 栈上钉死
     cfg.service(
         web::scope("/api")
-            // 注册顺序 = 由内到外（`Scope::wrap` 后注册者先执行），故网关在前、验签在后。
-            // 顺序语义由 server/gateway.rs 的中间件用例钉死；即便写反，网关的「已验签」
-            // 前置也会把未验签的业务请求挡在插件之外（降级宿主，由验签中间件 401）。
+            // 注册顺序 = 由内到外（`Scope::wrap` 后注册者先执行），故业务网关在前、认证闸门在后。
+            // 顺序语义由 server/gateway.rs 的中间件用例钉死；即便写反，业务网关的「已认证」
+            // 前置也会把未认证的业务请求挡在插件之外（降级宿主，由认证闸门 401）。
             .wrap(actix_web::middleware::from_fn(
                 crate::server::http::gateway::business_gateway,
             ))
             .wrap(actix_web::middleware::from_fn(
-                crate::server::http::middleware::jwt_auth::jwt_gateway,
+                crate::server::http::middleware::auth_gateway::auth_gateway,
             ))
             // ABI v29（HTTP 路由代码注册下沉）：/api/sessions* 七条与 /api/auth/* 七条
             // 已随终端插件 activate 期代码注册接管（host-http.register-endpoint 模板别名），
