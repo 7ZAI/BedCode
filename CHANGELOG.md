@@ -26,6 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **One unexplained transient observed, not reproduced**: the first full run after the four wasm application artifacts were rebuilt reported 1055 passed / 2 failed; five subsequent runs (including one with all fixture artifacts deleted, forcing six live rebuilds) were all 1057 green. Most likely an overlap with the application-artifact rebuild, but that is a hypothesis — the failing test names were not captured and it did not recur
 - **Verified**: host `cargo test` **lib 1057 passed / 0 failed / 1 ignored**, all integration targets green (broadcast_shutdown, build_manifest_smoke, error_envelope_integration, http_auth_biometric, link_crypto_http, pty_session_chain, server_integration, ws_auth_rules); `scripts/wasip3-toolchain.sh fixture` still produces a magic-validated Component off the merged crate. `bedcode.wit` unchanged, so no ABI implications
 
+#### Terminal history truncation no longer toasts — silent on both ends (desktop wasm app `com.bedcode.terminal-session` + mobile; **no WIT/ABI move**)
+
+- **What**: when history exceeds the cache (ring eviction / truncation), neither the desktop nor the mobile end prompts the user anymore — one background log line remains for diagnostics. Aligned with mature terminal products (no prompt; the user is none the wiser). Also removed the orphaned `desktop.terminal.historyTruncated` host copy key and the plugin/mobile i18n keys that had no consumers left
+
 #### SDK `wasm_entry!` stops logging guest-reported failures at error level (desktop SDK behaviour; all four wasm application artifacts rebuilt; SDK package needs re-publishing)
 
 - **What**: all ten failure paths inside the `wasm_entry!` macro — `activate` / `deactivate` / `on_startup` / `on_shutdown` / `on_message` / `on_message_binary` / `on_process_done` / `on_ws_message` / `on_ws_client_message` / `on_task_event` — now call `log_warn` instead of `log_error`

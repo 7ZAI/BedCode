@@ -70,7 +70,6 @@ const zhCN: MessageSchema = {
   'session.terminal.uptime': '运行时长',
   'session.terminal.stopped': '会话已停止',
   'session.terminal.stopFailed': '停止会话失败，请稍后重试',
-  'session.terminal.historyTruncated': '终端历史过长，最早输出已被截断',
   'session.terminal.bgImage': '背景图片',
   'session.terminal.bgImageSelect': '选择图片',
   'session.terminal.bgImageRemove': '移除',

@@ -69,6 +69,12 @@
 
 ### 功能
 
+#### 终端历史截断不再弹 toast —— 双端静默处理（桌面端 wasm 应用 `com.bedcode.terminal-session` + 移动端；**WIT/ABI 不动**）
+
+- **做了什么**：历史输出超过缓存上限（环淘汰/截断）时，桌面与移动端都不再提示用户，
+  仅留一条后台日志便于排查——对齐成熟终端产品（不提示、用户无感知）。顺带清理宿主侧
+  迁移后已无消费方的 `desktop.terminal.historyTruncated` 文案 key 与插件/移动端 i18n key
+
 #### SDK 的 `wasm_entry!` 不再把 guest 自报失败记为 error 级（桌面 SDK 行为变更；四个 wasm 应用产物已重建；SDK 包需重新发布）
 
 - **做了什么**：宏内 10 条失败路径——`activate` / `deactivate` / `on_startup` /

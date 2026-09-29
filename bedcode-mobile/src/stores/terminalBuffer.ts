@@ -53,7 +53,7 @@ export interface RealtimeHandler {
   onReplayDone?: () => void
   /** 清屏（ring_resync / 重订阅重锚：在屏内容将被重播取代） */
   onClear?: () => void
-  /** 历史头部被淘汰提示 */
+  /** 历史头部被淘汰通知（仅后台日志，不提示用户） */
   onTruncated?: (offset: number) => void
 }
 
@@ -71,7 +71,7 @@ export interface SessionBuffer {
   sessionStopped: boolean
   /** 本次页面生命周期内是否渲染过内容（resync 清屏/提示门控） */
   hasRenderedContent: boolean
-  /** 截断提示已展示（每会话一次） */
+  /** 截断通知已派发（每会话一次；仅后台日志，防重复刷屏） */
   truncatedNotified: boolean
 }
 

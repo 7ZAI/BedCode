@@ -14,8 +14,8 @@
  *   订阅）；插件版改为注入 `TerminalOutputSource`（enqueue/reset/truncated 回调
  *   由调用方实现）——数据通道本体（票 04 WIT 二进制原语）实现时以同一接口接入，
  *   本模块不感知通道形态（输出帧已通过游标校验/去重，直接入队）；
- * - 依赖：插件自持 i18n（`useI18n` 同宿主机制）+ 宿主注入的 toast 能力
- *   （`TerminalOutputCallbacks.notify`），不引宿主 store / 前端 Logger。
+ * - 依赖：插件自持 i18n（`useI18n` 同宿主机制），不引宿主 store / 前端
+ *   Logger；历史截断仅后台日志、不提示用户（对齐成熟终端产品，用户无感知）。
  *
  * 其余逻辑（分片/水线/补刷/队列合并）逐字等价，行为契约以宿主 terminal-flow
  * 集成测试为准。
@@ -50,9 +50,7 @@ export interface TerminalOutputSink {
 }
 
 export interface TerminalWritePipelineOptions {
-  /** 历史截断提示（宿主 toast 等价物；由调用方注入，插件不自带 UI 依赖） */
-  notifyTruncated: () => void
-  /** 历史截断后台日志（重复触发仅记录，不打扰） */
+  /** 历史截断后台日志（仅诊断用；用户无感知，成熟终端均不提示） */
   logTruncated: (message: string, minOffset?: number) => void
 }
 
@@ -72,9 +70,6 @@ export function useTerminalWritePipeline(
   let replayRefreshTimer: ReturnType<typeof setTimeout> | null = null
   let pendingReplayRefresh = false
   let flushing = false
-  // 历史截断提示标记：min_offset > 0 说明会话开头输出已不可恢复，
-  // 仅首次提示一次，后续重连/重订阅触发时仅后台日志记录
-  let historyTruncatedNotified = false
 
   async function flushWriteQueue() {
     // 避免重入：已有 flush 在跑（其 while 轮次会消费新入队数据），直接返回
@@ -180,7 +175,7 @@ export function useTerminalWritePipeline(
    * 把输出源接入写入管线（调用方在订阅建立时调用）。
    *
    * 返回的 sink 回调：onData 帧已通过游标校验/去重直接入队；onReset 清屏后
-   * 全量重播（补刷防中间态残留）；onTruncated 首次提示、后续仅日志。
+   * 全量重播（补刷防中间态残留）；onTruncated 仅后台日志（静默，不提示用户）。
    */
   function attachSource(): TerminalOutputSink {
     return {
@@ -199,27 +194,14 @@ export function useTerminalWritePipeline(
         }
       },
       onTruncated: (minOffset: number) => {
-        if (historyTruncatedNotified) {
-          // 已提示过：仅后台日志记录，不再打扰用户
-          options.logTruncated(
-            `[terminal-session] 终端历史已被环形缓冲截断（已提示过，仅记录）`,
-            minOffset,
-          )
-          return
-        }
-        historyTruncatedNotified = true
+        // 历史头部被环形缓冲淘汰：用户无感知（对齐成熟终端不提示），仅留
+        // 后台日志便于排查「会话开头输出缺失」
         options.logTruncated(
           `[terminal-session] 终端历史已被环形缓冲截断，会话开头输出不可用`,
           minOffset,
         )
-        options.notifyTruncated()
       },
     }
-  }
-
-  /** 新会话开始时重置历史截断提示标记，允许再次提示 */
-  function resetTruncatedNotified() {
-    historyTruncatedNotified = false
   }
 
   /** 组件卸载清理：取消挂起调度并清空队列（未 flush 的数据仍存于服务端环形，重开窗口可恢复） */
@@ -245,7 +227,6 @@ export function useTerminalWritePipeline(
     attachSource,
     enqueueOutput,
     armReplayRefresh,
-    resetTruncatedNotified,
     dispose,
   }
 }

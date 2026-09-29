@@ -71,7 +71,6 @@ const en: MessageSchema = {
   'session.terminal.uptime': 'Uptime',
   'session.terminal.stopped': 'Session stopped',
   'session.terminal.stopFailed': 'Failed to stop session, please try again',
-  'session.terminal.historyTruncated': 'Terminal history is too long, the earliest output was truncated',
   'session.terminal.bgImage': 'Background Image',
   'session.terminal.bgImageSelect': 'Choose Image',
   'session.terminal.bgImageRemove': 'Remove',

@@ -37,7 +37,6 @@ export default {
       close: 'Close',
       loadingSession: 'Loading session...',
       scrollToBottom: 'Scroll to Bottom',
-      historyTruncated: 'Terminal history is too long, the earliest output was truncated',
       bgImage: 'Background Image',
       bgImageSelect: 'Choose Image',
       bgImageRemove: 'Remove',

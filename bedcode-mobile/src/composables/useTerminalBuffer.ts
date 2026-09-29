@@ -12,8 +12,6 @@
 import { useTerminalBufferStore } from '@/stores/terminalBuffer'
 import { logger } from '@/utils/frontendLogger'
 import { createWriteCoalescer } from '@/composables/writeCoalescer'
-import { useToast } from '@/composables/useToast'
-import i18n from '@/locales'
 import type { Terminal } from '@xterm/xterm'
 
 /** 会话页预加载的超时上限（毫秒）：超时不再等待，直接跳转由终端页自行重试 */
@@ -92,7 +90,6 @@ export interface RealtimeHandlerRegistration {
 
 export function useTerminalBuffer() {
   const store = useTerminalBufferStore()
-  const toast = useToast()
 
   /**
    * 注册实时输出 handler — 服务端回放（历史）与实时推送统一经 rAF 合并写入 xterm
@@ -186,10 +183,8 @@ export function useTerminalBuffer() {
         }
       },
       onTruncated: (offset: number) => {
+        // 历史头部被环淘汰：用户无感知（对齐成熟终端不提示），仅留后台日志
         logger.warn(`[useTerminalBuffer] history truncated at offset=${offset}`)
-        // 用户可见后果是「画面被清空 + 重播」（环淘汰/重连重订阅）：必须给出
-        // 原因提示，否则看起来像凭空丢内容
-        toast.warning(i18n.global.t('mobile.terminal.historyTruncated'))
       },
       onReplayDone: () => {
         armReplayIdleRefresh()

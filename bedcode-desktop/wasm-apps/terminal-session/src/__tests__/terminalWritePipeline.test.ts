@@ -96,9 +96,8 @@ describe('useTerminalWritePipeline（插件迁移版）', () => {
   it('入队输出合并为单次 write（正例）：多帧同 rAF 合并一块字节，一次 terminal.write', async () => {
     const terminal = makeTerminal()
     const ctx = makeCtx({ terminalRef: shallowRef(terminal as any) })
-    const notify = vi.fn()
     const log = vi.fn()
-    const pipeline = useTerminalWritePipeline(ctx, { notifyTruncated: notify, logTruncated: log })
+    const pipeline = useTerminalWritePipeline(ctx, { logTruncated: log })
     const source = pipeline.attachSource()
 
     source.onData({ data: new Uint8Array([0x68, 0x69]) }) // "hi"
@@ -110,13 +109,12 @@ describe('useTerminalWritePipeline（插件迁移版）', () => {
     expect(terminal.write).toHaveBeenCalledTimes(1)
     const combined = terminal.write.mock.calls[0][0] as Uint8Array
     expect([...combined]).toEqual([0x68, 0x69, 0x0a])
-    expect(notify).not.toHaveBeenCalled()
   })
 
   it('空帧丢弃（边界）：data.length=0 不入队不写', async () => {
     const terminal = makeTerminal()
     const ctx = makeCtx({ terminalRef: shallowRef(terminal as any) })
-    const pipeline = useTerminalWritePipeline(ctx, { notifyTruncated: vi.fn(), logTruncated: vi.fn() })
+    const pipeline = useTerminalWritePipeline(ctx, { logTruncated: vi.fn() })
     const source = pipeline.attachSource()
 
     source.onData({ data: new Uint8Array(0) })
@@ -127,7 +125,7 @@ describe('useTerminalWritePipeline（插件迁移版）', () => {
 
   it('终端未就绪丢弃不 panic（反例/防御）：terminalRef 为 null 时 flush 安全清队', async () => {
     const ctx = makeCtx({ terminalRef: shallowRef(null as any) })
-    const pipeline = useTerminalWritePipeline(ctx, { notifyTruncated: vi.fn(), logTruncated: vi.fn() })
+    const pipeline = useTerminalWritePipeline(ctx, { logTruncated: vi.fn() })
     const source = pipeline.attachSource()
 
     source.onData({ data: new Uint8Array([1, 2, 3]) })
@@ -139,7 +137,7 @@ describe('useTerminalWritePipeline（插件迁移版）', () => {
   it('大块分片 + 水线让出（正例）：>64KiB 拆块，累积 256KiB 让出主线程一次', async () => {
     const terminal = makeTerminal()
     const ctx = makeCtx({ terminalRef: shallowRef(terminal as any) })
-    const pipeline = useTerminalWritePipeline(ctx, { notifyTruncated: vi.fn(), logTruncated: vi.fn() })
+    const pipeline = useTerminalWritePipeline(ctx, { logTruncated: vi.fn() })
     const source = pipeline.attachSource()
 
     // 300 KiB（> MAX_WRITE_CHUNK=64KiB，> WRITE_YIELD_THRESHOLD=256KiB）
@@ -165,45 +163,18 @@ describe('useTerminalWritePipeline（插件迁移版）', () => {
   it('onReset 清屏 + 置补刷（正例）：terminal.clear 调用一次', async () => {
     const terminal = makeTerminal()
     const ctx = makeCtx({ terminalRef: shallowRef(terminal as any) })
-    const pipeline = useTerminalWritePipeline(ctx, { notifyTruncated: vi.fn(), logTruncated: vi.fn() })
+    const pipeline = useTerminalWritePipeline(ctx, { logTruncated: vi.fn() })
     const source = pipeline.attachSource()
 
     source.onReset()
     expect(terminal.clear).toHaveBeenCalledTimes(1)
   })
 
-  it('onTruncated 首次提示 + 后续仅日志（边界）：notify 一次，log 每次', async () => {
-    const terminal = makeTerminal()
-    const ctx = makeCtx({ terminalRef: shallowRef(terminal as any) })
-    const notify = vi.fn()
-    const log = vi.fn()
-    const pipeline = useTerminalWritePipeline(ctx, { notifyTruncated: notify, logTruncated: log })
-    const source = pipeline.attachSource()
-
-    source.onTruncated(1024)
-    source.onTruncated(2048)
-
-    expect(notify).toHaveBeenCalledTimes(1) // 仅首次打扰用户
-    expect(log).toHaveBeenCalledTimes(2) // 每次都有后台日志
-  })
-
-  it('resetTruncatedNotified 后再次截断可重新提示（正例）', async () => {
-    const terminal = makeTerminal()
-    const ctx = makeCtx({ terminalRef: shallowRef(terminal as any) })
-    const notify = vi.fn()
-    const pipeline = useTerminalWritePipeline(ctx, { notifyTruncated: notify, logTruncated: vi.fn() })
-    const source = pipeline.attachSource()
-
-    source.onTruncated(1)
-    pipeline.resetTruncatedNotified()
-    source.onTruncated(2)
-    expect(notify).toHaveBeenCalledTimes(2)
-  })
 
   it('回放静止补刷（正例）：onData 后 REPLAY_IDLE_MS 无新数据 → terminal.refresh 一次', async () => {
     const terminal = makeTerminal()
     const ctx = makeCtx({ terminalRef: shallowRef(terminal as any) })
-    const pipeline = useTerminalWritePipeline(ctx, { notifyTruncated: vi.fn(), logTruncated: vi.fn() })
+    const pipeline = useTerminalWritePipeline(ctx, { logTruncated: vi.fn() })
     const source = pipeline.attachSource()
 
     // 回放静止补刷由 armReplayRefresh 单独驱动（宿主 onReset 后置补刷路径）
@@ -216,7 +187,7 @@ describe('useTerminalWritePipeline（插件迁移版）', () => {
   it('dispose 清理挂起调度（正例）：dispose 后入队不再写、无泄漏', async () => {
     const terminal = makeTerminal()
     const ctx = makeCtx({ terminalRef: shallowRef(terminal as any) })
-    const pipeline = useTerminalWritePipeline(ctx, { notifyTruncated: vi.fn(), logTruncated: vi.fn() })
+    const pipeline = useTerminalWritePipeline(ctx, { logTruncated: vi.fn() })
     const source = pipeline.attachSource()
 
     source.onData({ data: new Uint8Array([1]) })
