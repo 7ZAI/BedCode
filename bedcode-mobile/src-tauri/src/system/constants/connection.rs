@@ -65,3 +65,14 @@ pub const WS_PLUGIN_BASE_PATH: &str = "/ws/plugin/com.bedcode.terminal-session";
 /// 认证首帧 `{"type":"auth","token":"<jwt>"}`；入站只有事件帧
 /// `{"type":"event","event":"<name>","payload":{...}}`（票 02 定稿帧壳）。
 pub const WS_PLUGIN_SESSION_CONTROL_PATH: &str = "/ws/plugin/com.bedcode.terminal-session/session-control";
+
+/// 认证类 WS 关闭码（桌面端语义，M1/ADR 0031）：4001 = 认证被拒（auth-policy
+/// 拒绝/无中心 fail-closed）、4003 = 链路加密失败。收到这类 close 说明「重连前
+/// 需重新配对/认证」，自愈重连无意义——ConnMonitor 与自愈监督按致命处理：
+/// 不自愈、只发一次提示。非致命 code（1005/1006/网络断开等）走既有自愈路径。
+pub const WS_AUTH_FATAL_CLOSE_CODES: &[u16] = &[4001, 4003];
+
+/// 判定 WS 关闭码是否认证类致命（M1）
+pub fn is_auth_fatal_close_code(code: u16) -> bool {
+    WS_AUTH_FATAL_CLOSE_CODES.contains(&code)
+}

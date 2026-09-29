@@ -385,8 +385,9 @@ async function init() {
     },
   })
 
-  // 监听意外断开事件（Rust 端 WsClient 检测到异常断开时发射）
-  await listen<{ reason: string }>('ws_unexpected_disconnect', (event) => {
+  // 监听意外断开事件（Rust 端 WsClient 检测到异常断开时发射；`fatal` 标记认证类
+  // 致命关闭，M1/ADR 0031）
+  await listen<{ reason: string; fatal?: boolean }>('ws_unexpected_disconnect', (event) => {
     logger.warn('[MobileConnection] Unexpected disconnect:', event.payload.reason)
     connectionStatus.value = 'disconnected'
     connectionError.value = 'common.notification.connectionDisconnected'
@@ -412,6 +413,15 @@ async function init() {
     // 更新前台服务通知为断连状态
     const { updateNotification } = useForegroundService()
     updateNotification()
+
+    // M1/ADR 0031：认证类致命关闭（4001/4003）——自愈重连前需重新配对/认证，
+    // 重连无意义。只弹一次「需重新配对」提示，**不走自动重连**（避免 2026-09-29
+    // 616 次/98 秒重连风暴）。
+    if (event.payload.fatal) {
+      logger.warn('[MobileConnection] Auth-fatal disconnect, need re-pair (no auto-reconnect)')
+      toast.error(i18n.global.t('common.notification.authFailedRePair', { reason: event.payload.reason }), 5000)
+      return
+    }
 
     // 取消所有任务通知
     cancelAllTaskNotifications()

@@ -118,7 +118,17 @@ bedcode-mobile/                       # 移动端项目 (Tauri 2.0 + Vue 3)
 - **event_ws**：`session-control` 插件端点常驻事件通道（票 03：极简认证帧 `{"type":"auth","token"}` +
   事件帧 `{"type":"event",…}` → `MobileEvent` → 前端 `ws_sync_*`；就绪发射 `ws_event_channel_ready`，
   前端据此 HTTP 对账补齐重连期间事件缺口——事件不重放）
-- **heartbeat / reconnect**：心跳保活、断线重连
+- **heartbeat / reconnect**：心跳保活、断线重连——**退避下限 1000ms**
+  （`system/constants/reconnect.rs::MIN_RECONNECT_DELAY_MS`，钳在 `calculate_delay` 里而非配置里）
+  + **同因熔断**（连续 5 次同因失败即放弃，原因变化重置，`reset` 清熔断态）
+- **关闭码与自愈边界**（M1，ADR 0031 配套）：`ws_client` 保留 Close 帧的
+  **code**（`ServerClosed { code, reason }`；未携带按 1006 处理）——曾被丢弃时
+  「认证失败」与「网络掉线」不可区分。`system/constants/connection.rs::
+  WS_AUTH_FATAL_CLOSE_CODES = [4001, 4003]` + `is_auth_fatal_close_code` 判**致命**：
+  跳过 supervisor 自愈、事件带 `fatal: true`、前端只发一次「需重新配对」toast
+  （`ws_unexpected_disconnect` 不走 `handleUnexpectedDisconnect`）。
+  桌面端此刻已 fail-closed 拒绝（无认证中心 / 设备被撤销），重连不可能成功
+  （背景与桌面端裁决面见 `docs/knowledge/mobile-desktop-auth.md` §4.0）
 - **codec / request / request_response**：消息编解码、请求发送与请求-响应关联
 - **manager / lifecycle**：连接管理器、生命周期管理
 - **pairing_service**：配对服务（与 `auth/pairing.rs` 协作）

@@ -263,13 +263,26 @@ impl WsClient {
                                     }
                                 }
                                 Some(Ok(WsMsg::Close(reason))) => {
-                                    let reason_str = reason.map(|r| r.to_string()).unwrap_or_default();
-                                    info!("[WsClient] Server closed: {}", reason_str);
+                                    // M1：保留 close **code**（认证类 4001/4003 致命，
+                                    // 供 ConnMonitor/自愈监督判定「重连无意义」）；
+                                    // 未携带 CloseFrame 时按 1005（无状态码）处理
+                                    let code = reason
+                                        .as_ref()
+                                        .map(|f| u16::from(f.code))
+                                        .unwrap_or(1005);
+                                    let reason_str = reason
+                                        .as_ref()
+                                        .map(|r| r.reason.to_string())
+                                        .unwrap_or_default();
+                                    info!("[WsClient] Server closed: code={} reason={}", code, reason_str);
 
                                     // 通知所有 pending 请求
                                     request_manager.on_error("Server closed").await;
 
-                                    let _ = event_tx.send(WsClientEvent::ServerClosed { reason: reason_str });
+                                    let _ = event_tx.send(WsClientEvent::ServerClosed {
+                                        code,
+                                        reason: reason_str,
+                                    });
                                     break;
                                 }
                                 Some(Ok(WsMsg::Ping(data))) => {
@@ -372,7 +385,12 @@ impl WsClient {
                                 let _ = event_tx.send(WsClientEvent::HeartbeatResponse);
                             }
                             Ok(IoEvent::ConnectionClosed { reason }) => {
-                                let _ = event_tx.send(WsClientEvent::ServerClosed { reason });
+                                // IoEvent::ConnectionClosed 无生产方（死路径）；
+                                // code 按 1006（异常关闭）兜底，语义 = 非致命网络断连
+                                let _ = event_tx.send(WsClientEvent::ServerClosed {
+                                    code: 1006,
+                                    reason,
+                                });
                             }
                             Ok(IoEvent::Error { message }) => {
                                 let _ = event_tx.send(WsClientEvent::Error { message });

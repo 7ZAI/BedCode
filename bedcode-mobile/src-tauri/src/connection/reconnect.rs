@@ -11,7 +11,8 @@ use tokio::sync::RwLock;
 use tracing::info;
 
 use crate::system::constants::reconnect::{
-    DEFAULT_BACKOFF_MULTIPLIER, DEFAULT_INITIAL_DELAY_MS, DEFAULT_MAX_DELAY_MS, DEFAULT_MAX_RETRIES,
+    CIRCUIT_BREAKER_SAME_CAUSE_LIMIT, DEFAULT_BACKOFF_MULTIPLIER, DEFAULT_INITIAL_DELAY_MS,
+    DEFAULT_MAX_DELAY_MS, DEFAULT_MAX_RETRIES, MIN_RECONNECT_DELAY_MS,
 };
 
 /// 重连配置
@@ -94,6 +95,10 @@ pub struct ReconnectManager {
     current_delay: RwLock<Duration>,
     /// 是否已放弃
     abandoned: RwLock<bool>,
+    /// 上次失败原因（同因熔断 M2 判据）
+    last_error: RwLock<String>,
+    /// 连续同因失败次数（达到 CIRCUIT_BREAKER_SAME_CAUSE_LIMIT → 熔断放弃）
+    same_cause_streak: RwLock<u32>,
 }
 
 impl ReconnectManager {
@@ -106,6 +111,8 @@ impl ReconnectManager {
             retry_count: RwLock::new(0),
             current_delay: RwLock::new(Duration::from_millis(initial_delay)),
             abandoned: RwLock::new(false),
+            last_error: RwLock::new(String::new()),
+            same_cause_streak: RwLock::new(0),
         })
     }
 
@@ -188,15 +195,21 @@ impl ReconnectManager {
         Some(delay)
     }
 
-    /// 计算延迟（指数退避）
+    /// 计算延迟（指数退避，M2 下限钳制）：
+    /// `max(初始×倍数^(attempt-1), MIN_RECONNECT_DELAY_MS)` 且不超上限——任何
+    /// 配置/轮次下单次等待不得小于 1s（2026-09-29 自愈风暴的纵深防御）。
     async fn calculate_delay(&self, attempt: u32) -> Duration {
         let max = Duration::from_millis(self.config.max_delay_ms);
         let multiplier = self.config.backoff_multiplier;
 
         let delay_ms = (self.config.initial_delay_ms as f64) * (multiplier.powi(attempt as i32 - 1));
 
-        let delay = Duration::from_millis(delay_ms as u64);
-
+        let mut delay = Duration::from_millis(delay_ms as u64);
+        // M2：退避下限 1s（初始延迟配置 0 / 抖动回退都不能击穿下限）
+        let min = Duration::from_millis(MIN_RECONNECT_DELAY_MS);
+        if delay < min {
+            delay = min;
+        }
         if delay > max {
             max
         } else {
@@ -215,9 +228,39 @@ impl ReconnectManager {
         self.reset().await;
     }
 
-    /// 重连失败
+    /// 重连失败（M2 同因熔断）：记录失败原因，连续 `CIRCUIT_BREAKER_SAME_CAUSE_LIMIT`
+    /// 次**相同原因**即熔断放弃（网络抖动换因后会重置计数，不会误熔断）。
     pub async fn on_failure(&self, error: String) {
         let attempts = *self.retry_count.read().await;
+
+        // 同因熔断判据：本次原因 ≠ 上次 → 重置计数；相同 → 递增
+        {
+            let mut last = self.last_error.write().await;
+            let mut streak = self.same_cause_streak.write().await;
+            if *last == error {
+                *streak += 1;
+            } else {
+                *last = error.clone();
+                *streak = 1;
+            }
+            if *streak >= CIRCUIT_BREAKER_SAME_CAUSE_LIMIT {
+                drop(last);
+                drop(streak);
+                tracing::warn!(
+                    attempts = attempts,
+                    cause = %error,
+                    limit = CIRCUIT_BREAKER_SAME_CAUSE_LIMIT,
+                    "[ReconnectManager] Circuit breaker tripped: {} consecutive same-cause failures",
+                    CIRCUIT_BREAKER_SAME_CAUSE_LIMIT
+                );
+                self.abandon(format!(
+                    "same cause repeated {} times: {}",
+                    CIRCUIT_BREAKER_SAME_CAUSE_LIMIT, error
+                ))
+                .await;
+                return;
+            }
+        }
 
         if self.config.max_retries > 0 && attempts >= self.config.max_retries {
             *self.state.write().await = ReconnectState::Failed {
@@ -250,6 +293,8 @@ impl ReconnectManager {
         *self.retry_count.write().await = 0;
         *self.current_delay.write().await = Duration::from_millis(self.config.initial_delay_ms);
         *self.abandoned.write().await = false;
+        *self.last_error.write().await = String::new();
+        *self.same_cause_streak.write().await = 0;
         *self.state.write().await = ReconnectState::Idle;
     }
 
@@ -279,6 +324,8 @@ impl Default for ReconnectManager {
             retry_count: RwLock::new(0),
             current_delay: RwLock::new(Duration::from_millis(initial_delay)),
             abandoned: RwLock::new(false),
+            last_error: RwLock::new(String::new()),
+            same_cause_streak: RwLock::new(0),
         }
     }
 }
@@ -467,11 +514,92 @@ mod tests {
 
     #[tokio::test]
     async fn test_zero_initial_delay_ok() {
-        // 边界：初始延迟为 0 时退避序列全为 0（不 panic 且可连续调用）
+        // 边界（M2 修订）：初始延迟配置 0 时**不 panic 且可连续调用**，但退避被
+        // 下限钳到 1s（MIN_RECONNECT_DELAY_MS）——2026-09-29 风暴的纵深防御：
+        // 任何配置都不能打出“无退避”的 6 Hz 循环。
         let mgr = ReconnectManager::new(deterministic_config(3, 0, 30_000));
         for _ in 0..3 {
             let delay = mgr.start().await.unwrap();
-            assert_eq!(delay, Duration::ZERO);
+            assert_eq!(
+                delay,
+                Duration::from_millis(MIN_RECONNECT_DELAY_MS),
+                "配置 0 也要钳到最小退避下限"
+            );
         }
+    }
+
+    /// M2：退避下限 1s——初始延迟配置小于下限时按下限等
+    #[tokio::test]
+    async fn test_min_backoff_clamps_below_floor() {
+        // 初始 100ms（< 1s 下限）→ 每轮都被钳到 1000ms（而非 100/200/400）
+        let mgr = ReconnectManager::new(deterministic_config(3, 100, 30_000));
+        for _ in 0..3 {
+            let delay = mgr.start().await.unwrap();
+            assert_eq!(delay, Duration::from_millis(MIN_RECONNECT_DELAY_MS));
+        }
+        // 上限仍然生效：初始 1s、max 4s → 第 5 次理论 16s 被钳到 4s
+        let mgr = ReconnectManager::new(deterministic_config(5, 1000, 4000));
+        let last = {
+            let mut last = Duration::ZERO;
+            for _ in 0..5 {
+                last = mgr.start().await.unwrap();
+            }
+            last
+        };
+        assert_eq!(last, Duration::from_millis(4000), "max 上限仍然生效");
+    }
+
+    /// M2：同因熔断——连续 N 次相同原因失败 → 熔断放弃（should_retry=false）
+    #[tokio::test]
+    async fn test_circuit_breaker_trips_on_same_cause() {
+        use crate::system::constants::reconnect::CIRCUIT_BREAKER_SAME_CAUSE_LIMIT;
+        let mgr = ReconnectManager::new(deterministic_config(100, 1000, 30_000));
+        // 前 LIMIT-1 次同因失败：仍可重试（未熔断）
+        for _ in 0..(CIRCUIT_BREAKER_SAME_CAUSE_LIMIT - 1) {
+            mgr.on_failure("auth rejected (4001)".to_string()).await;
+            assert!(!mgr.is_abandoned().await, "未达阈值不熔断");
+            assert!(mgr.should_retry().await);
+        }
+        // 第 LIMIT 次同因失败 → 熔断放弃
+        mgr.on_failure("auth rejected (4001)".to_string()).await;
+        assert!(mgr.is_abandoned().await, "同因连续失败必须熔断放弃");
+        assert!(!mgr.should_retry().await, "熔断后不得再重试");
+    }
+
+    /// M2：熔断只熔**同因**——原因变化重置计数，临时抖动不会被误熔断
+    #[tokio::test]
+    async fn test_circuit_breaker_resets_on_cause_change() {
+        use crate::system::constants::reconnect::CIRCUIT_BREAKER_SAME_CAUSE_LIMIT;
+        let mgr = ReconnectManager::new(deterministic_config(100, 1000, 30_000));
+        // 同因两次后换因：计数重置（不会因累计到阈值而熔断）
+        mgr.on_failure("cause-a".to_string()).await; // streak=1
+        mgr.on_failure("cause-a".to_string()).await; // streak=2
+        mgr.on_failure("cause-b".to_string()).await; // 换因 → streak=1
+        mgr.on_failure("cause-a".to_string()).await; // 又换回 a → streak=1（重新起算，不是 3）
+        // 此刻连续同因 streak=1；再同因 (LIMIT-2) 次 → streak=LIMIT-1，仍未熔断
+        for _ in 0..(CIRCUIT_BREAKER_SAME_CAUSE_LIMIT - 2) {
+            mgr.on_failure("cause-a".to_string()).await;
+        }
+        assert!(!mgr.is_abandoned().await, "换因重置后连续同因未达阈值不误熔断");
+        // 再同因一次 → 连续同因达到 LIMIT 次 → 熔断
+        mgr.on_failure("cause-a".to_string()).await;
+        assert!(mgr.is_abandoned().await, "换因后从 streak=1 重新起算，达到连续阈值即熔断");
+    }
+
+    /// M2：reset 后熔断判据复位（新一轮重连重新起算）
+    #[tokio::test]
+    async fn test_reset_clears_circuit_breaker_state() {
+        use crate::system::constants::reconnect::CIRCUIT_BREAKER_SAME_CAUSE_LIMIT;
+        let mgr = ReconnectManager::new(deterministic_config(100, 1000, 30_000));
+        for _ in 0..CIRCUIT_BREAKER_SAME_CAUSE_LIMIT {
+            mgr.on_failure("same".to_string()).await;
+        }
+        assert!(mgr.is_abandoned().await);
+        mgr.reset().await;
+        assert!(!mgr.is_abandoned().await, "reset 后熔断复位");
+        assert!(mgr.should_retry().await);
+        // 熔断计数已清零：再次同因失败不会立即熔断
+        mgr.on_failure("same".to_string()).await;
+        assert!(!mgr.is_abandoned().await, "reset 后计数归零，单次失败不熔断");
     }
 }

@@ -76,6 +76,8 @@ export default {
       connectionDisconnected: 'Connection lost: {reason}',
       reconnectFailed: 'Reconnect failed: {reason}. Please reconnect manually',
       reconnectAbandoned: 'Auto-reconnect abandoned. Please reconnect manually',
+      // M1/ADR 0031: auth-fatal close (4001/4003) — re-pair needed before reconnecting
+      authFailedRePair: 'Authentication invalidated. Please re-pair before reconnecting: {reason}',
     },
     errorCode: {
       ptyError: 'Terminal process error',

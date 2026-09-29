@@ -54,7 +54,11 @@ pub enum WsClientEvent {
     Error {
         message: String,
     },
+    /// 服务端主动关闭（保留 close **code**，M1/ADR 0031）：认证类 code（4001 /
+    /// 4003）是**致命**关闭（重新配对前重连无意义），ConnMonitor / 自愈监督据此
+    /// 不自愈、只提示重新配对；非致命 code 走既有网络断连自愈路径
     ServerClosed {
+        code: u16,
         reason: String,
     },
 }

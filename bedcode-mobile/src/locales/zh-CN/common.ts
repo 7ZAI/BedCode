@@ -76,6 +76,8 @@ export default {
       connectionDisconnected: '连接已断开: {reason}',
       reconnectFailed: '重连失败: {reason}，请手动重新连接',
       reconnectAbandoned: '自动重连已放弃，请手动重新连接',
+      // M1/ADR 0031：认证类致命关闭（4001/4003）——需重新配对/认证后再连
+      authFailedRePair: '身份认证已失效，请重新配对后再连接: {reason}',
     },
     errorCode: {
       ptyError: '终端进程错误',

@@ -237,8 +237,10 @@ async fn scenario_tcp_close_emits_client_event() {
     loop {
         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
         match tokio::time::timeout(remaining, events.recv()).await {
-            Ok(Ok(bedcode_lib::connection::WsClientEvent::ServerClosed { reason })) => {
+            Ok(Ok(bedcode_lib::connection::WsClientEvent::ServerClosed { code, reason })) => {
                 assert!(!reason.is_empty(), "断开原因不应为空");
+                // M1/ADR 0031：close code 必须保留（优雅关闭 = 1000 系）
+                assert!(code != 0, "close code 不得丢弃: {code}");
                 break;
             }
             Ok(Ok(bedcode_lib::connection::WsClientEvent::Error { .. })) => {

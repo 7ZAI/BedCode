@@ -100,10 +100,26 @@ pub async fn run_supervisor(
                 loop {
                     match client_rx.recv().await {
                         // 断开类事件：清空 + 目标未变则自愈（reconnect 成功经
-                        // apply_auth_success 广播 AuthSuccess → 外层重建事件 WS）
-                        Ok(WsClientEvent::Disconnected)
-                        | Ok(WsClientEvent::Error { .. })
-                        | Ok(WsClientEvent::ServerClosed { .. }) => {
+                        // apply_auth_success 广播 AuthSuccess → 外层重建事件 WS）。
+                        // M1/ADR 0031：认证类致命 close（4001/4003）**不自愈**——
+                        // 重连前需重新配对/认证，HTTP reauth 只会反复被拒（2026-09-29
+                        // 616 次/98 秒日志风暴的直接放大器）；等新认证流（用户重扫 QR/
+                        // 配对）再重建。
+                        Ok(event @ (WsClientEvent::Disconnected
+                            | WsClientEvent::Error { .. }
+                            | WsClientEvent::ServerClosed { .. })) => {
+                            let fatal = matches!(
+                                event,
+                                WsClientEvent::ServerClosed { code, .. }
+                                    if crate::system::constants::connection::is_auth_fatal_close_code(code)
+                            );
+                            if fatal {
+                                tracing::warn!(
+                                    "[EventWsSupervisor] Auth-fatal WS close, skip self-heal (need re-pair)"
+                                );
+                                current = None;
+                                break;
+                            }
                             tracing::warn!("[EventWsSupervisor] Event WS disconnected, self-healing");
                             current = None;
                             if establish_target.as_ref() == manager.get_target().await.as_ref() {

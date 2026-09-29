@@ -379,16 +379,33 @@ impl ConnectionManager {
                 match event {
                     WsClientEvent::Disconnected | WsClientEvent::Error { .. } | WsClientEvent::ServerClosed { .. } => {
                         if !manual_flag.load(Ordering::SeqCst) {
-                            tracing::warn!("[ConnMonitor] Unexpected disconnect detected: {:?}", event);
-                            let reason = match &event {
-                                WsClientEvent::ServerClosed { reason } => reason.clone(),
-                                WsClientEvent::Error { message } => message.clone(),
-                                _ => "Connection lost".to_string(),
+                            // M1/ADR 0031：认证类 close code（4001/4003）是**致命**
+                            // 关闭——自愈重连前需重新配对/认证，重连无意义。前端据此
+                            // 只弹一次「需重新配对」提示，不走自动重连；后端自愈监督
+                            // 同样跳过（见 event_ws.rs）。非致命断开走既有自愈路径。
+                            let (reason, fatal) = match &event {
+                                WsClientEvent::ServerClosed { code, reason } => {
+                                    let fatal =
+                                        crate::system::constants::connection::is_auth_fatal_close_code(*code);
+                                    if fatal {
+                                        tracing::warn!(
+                                            close_code = %code,
+                                            %reason,
+                                            "[ConnMonitor] Auth-fatal WS close (need re-pair), no self-heal"
+                                        );
+                                    } else {
+                                        tracing::warn!("[ConnMonitor] Unexpected disconnect detected: {:?}", event);
+                                    }
+                                    (reason.clone(), fatal)
+                                }
+                                WsClientEvent::Error { message } => (message.clone(), false),
+                                _ => ("Connection lost".to_string(), false),
                             };
                             let _ = app_clone.emit(
                                 "ws_unexpected_disconnect",
                                 serde_json::json!({
-                                    "reason": reason
+                                    "reason": reason,
+                                    "fatal": fatal,
                                 }),
                             );
 
