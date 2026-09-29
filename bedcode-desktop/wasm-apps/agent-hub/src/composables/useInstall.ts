@@ -10,9 +10,26 @@
 import { onUnmounted, ref } from 'vue'
 import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 import { resolvePluginErrorText } from '../utils/pluginError'
-import type { CliId, InstallDomainState } from '../types'
+import type { CliId, InstallDomainState, LastRun } from '../types'
 
 const POLL_INTERVAL_MS = 1200
+
+/**
+ * 终态 run 失败归因（纯函数）：last 为一次「进程级失败」的卸载 run
+ * （exit≠0 / 超时；非 guest 拒绝、非用户取消）时返回对应 CLI，其余
+ * （成功 / 取消 / 安装或更新动作 / 无 last）返回 null。
+ *
+ * 供概览卡片把失败上屏——2026-09-29 实测：卸载 run 因 npm 不可达 exit 127
+ * 「完成」，卡片此前静默回到「已安装」造成「卸载没生效」的错觉（失败详情
+ * 只在安装页控制台可见）。
+ */
+export function failedUninstallFromLast(last: LastRun | null): CliId | null {
+  if (!last) return null
+  if (last.action !== 'uninstall') return null
+  if (last.ok) return null
+  if (last.cancelled) return null
+  return last.cli
+}
 
 export function useInstall(context: PluginContext) {
   const state = ref<InstallDomainState | null>(null)

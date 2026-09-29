@@ -57,6 +57,7 @@ export type MessageSchema = {
   'hub.card.uninstallHintMethod': string
   'hub.card.uninstallHintNode': string
   'hub.card.uninstallFailed': string
+  'hub.card.uninstallRunFailed': string
 
   // ==================== 目录授权 ====================
   'hub.auth.banner': string

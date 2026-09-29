@@ -12,10 +12,10 @@
  * **日志 = 会话级明细**（分页表格 + 二级详情）。两者不再展示同一份会话
  * 列表，因此本层不再持有 `goto-logs` 跳转。
  */
-import { computed, inject, onMounted, ref } from 'vue'
+import { computed, inject, onMounted, ref, watch } from 'vue'
 import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 import { useDetection } from '../composables/useDetection'
-import { useInstall } from '../composables/useInstall'
+import { failedUninstallFromLast, useInstall } from '../composables/useInstall'
 import { useSkills } from '../composables/useSkills'
 import { useProviders } from '../composables/useProviders'
 import { useUsage } from '../composables/useUsage'
@@ -42,9 +42,25 @@ const usage = useUsage(context)
 
 const activeTab = ref<HubTab>('overview')
 
-/** 卸载失败信号（guest 拒绝/异常；瞬态提示，下次操作自动清除）。
+/** 卸载失败信号（guest 拒绝/异常 + 进程级 run 失败；瞬态提示，下次操作自动清除）。
  * 携带失败 CLI + 友好 i18n 文案（ADR 0030：guest 业务码优先，原文不携带） */
 const uninstallFailed = ref<{ cli: CliId; error: string } | null>(null)
+
+// 进程级卸载失败（run exit≠0 / 超时，如 npm 不可达 127）：last 终态落地时上屏。
+// 此前失败只在安装页控制台可见，卡片静默回到「已安装」——2026-09-29 实测
+// npm 127 后卡片无任何提示。与 guest 拒绝共用 uninstallFailed 通道。
+watch(
+  () => install.state.value?.last,
+  (last) => {
+    const cli = failedUninstallFromLast(last ?? null)
+    if (cli) {
+      uninstallFailed.value = {
+        cli,
+        error: context.i18n.t('hub.card.uninstallRunFailed'),
+      }
+    }
+  },
+)
 
 /** 概览卡片卸载：发命令给 guest，失败则落瞬态提示（友好 i18n 文案） */
 async function handleUninstall(cli: CliId) {

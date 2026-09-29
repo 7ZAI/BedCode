@@ -13,7 +13,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { defineComponent, h } from 'vue'
 import { mount } from '@vue/test-utils'
 import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
-import { useInstall } from '../composables/useInstall'
+import type { LastRun } from '../types'
+import { failedUninstallFromLast, useInstall } from '../composables/useInstall'
 
 const execute = vi.fn(
   async (_command: string, _args?: Record<string, unknown>): Promise<Record<string, unknown> | null> => null,
@@ -104,5 +105,45 @@ describe('U1 uninstall 命令分发', () => {
     const s = mountInstall()
     await s.install('claude', true)
     expect(execute).toHaveBeenCalledWith('agent-hub.install', { cli: 'claude', mirror: true })
+  })
+})
+
+describe('U2 failedUninstallFromLast 终态失败归因（概览卡片失败上屏）', () => {
+  /** 构造 last 终态夹具（关键字段显式，其余取既有默认语义） */
+  function last(partial: Partial<LastRun>): LastRun {
+    return {
+      cli: 'codex',
+      action: 'uninstall',
+      command: 'npm uninstall -g @openai/codex',
+      ok: false,
+      cancelled: false,
+      exitCode: 127,
+      timedOut: false,
+      error: 'exit=Some(127) timed_out=false',
+      output: '/bin/bash: 行 1: npm: 未找到命令\n',
+      finishedAt: 1790647390916,
+      ...partial,
+    }
+  }
+
+  it('正例：进程级卸载失败（exit≠0）→ 归因该 CLI', () => {
+    expect(failedUninstallFromLast(last({}))).toBe('codex')
+  })
+
+  it('反例：卸载成功 → null（不得误报）', () => {
+    expect(failedUninstallFromLast(last({ ok: true, exitCode: 0, error: null }))).toBeNull()
+  })
+
+  it('反例：用户取消 → null（不得误报为失败）', () => {
+    expect(failedUninstallFromLast(last({ cancelled: true }))).toBeNull()
+  })
+
+  it('反例：安装动作的失败 → null（信号只归卸载）', () => {
+    expect(failedUninstallFromLast(last({ action: 'install' }))).toBeNull()
+    expect(failedUninstallFromLast(last({ action: 'update' }))).toBeNull()
+  })
+
+  it('边界：无 last 终态 → null', () => {
+    expect(failedUninstallFromLast(null)).toBeNull()
   })
 })

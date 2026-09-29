@@ -7,7 +7,9 @@
 //! - **最新版本**：registry HTTP API `GET /<pkg>/latest`（免 shell，官方源失败
 //!   回落 npmmirror），与探测到的本地版本比较得 outdated
 //! - **一键安装/更新**：recipe 白名单构造（cli 名 + 固定模板，无用户自由输入
-//!   拼接），host-process 平台分派执行（unix `bash -lc` / Windows `cmd /C`），
+//!   拼接），host-process 平台分派执行（unix `bash -lc` / Windows `cmd /C`，
+//!   unix 执行前经 [`exec_script`] 前缀 PATH 引导——登录 shell 不读 `~/.bashrc`，
+//!   nvm 等 PATH 注入失效会让 npm 直接 127，与 detect 同源 pitfall），
 //!   输出落盘供前端轮询回显；完成后自动触发全量重探测刷新卡片
 //! - **持久换源**：改写 `{HomeDir}/.npmrc`（改前备份、UI 一键还原）；registry
 //!   行之外的内容原样保留（含 authToken 行），文件内容不落日志
@@ -22,6 +24,7 @@
 
 use super::{host, pending, PendingRun, DATA_DIR, HOME, INSTALL_KEY};
 use crate::detect;
+use crate::detect::path_bootstrap_unix;
 use crate::util::{is_windows, shell_invocation};
 use bedcode_plugin_api::events::ProcessDoneEvent;
 use bedcode_plugin_api::host::{HostFs, HostLog, HostProcess, HostStorage};
@@ -46,6 +49,19 @@ use self::state::{emit, emit_and_return, read_state, write_state};
 
 /// 安装/更新超时：npm 全局安装含完整依赖下载，15 分钟上限（host 默认 10 分钟）
 const INSTALL_TIMEOUT_MS: u64 = 900_000;
+
+/// 执行前包装：unix 前缀 PATH 引导（登录 shell 不读 `~/.bashrc`，nvm 等 PATH
+/// 注入在交互守卫内直接失效 → npm 未找到 exit 127，卸载/安装"完成"却毫无效果；
+/// 与 detect 同源 pitfall，见 `detect::path_bootstrap_unix`）；Windows cmd /C
+/// 读注册表用户 PATH 无需引导。仅影响实际执行的脚本——`state.active.command`
+/// 仍存原始 recipe 供展示。
+fn exec_script(script: String, windows: bool) -> String {
+    if windows {
+        script
+    } else {
+        format!("{}{}", path_bootstrap_unix(), script)
+    }
+}
 /// 输出回显尾部截断：控制台只需尾部，限制 guest↔host 每次轮询的载荷
 const OUTPUT_TAIL_BYTES: usize = 16 * 1024;
 
@@ -129,7 +145,8 @@ pub(crate) fn start(h: &WasmHost, args: &Value) -> anyhow::Result<Value> {
         .ok_or_else(|| anyhow::anyhow!("install: data dir unavailable"))?;
     let seq = RUN_SEQ.fetch_add(1, AtomicOrdering::Relaxed);
     let output_path = format!("{data_dir}/runs/install-{cli}-{seq}.log");
-    let (command, args_vec) = shell_invocation(script.clone(), is_windows());
+    let (command, args_vec) =
+        shell_invocation(exec_script(script.clone(), is_windows()), is_windows());
     let request = json!({
         "command": command,
         "args": args_vec,
@@ -214,7 +231,8 @@ pub(crate) fn uninstall(h: &WasmHost, args: &Value) -> anyhow::Result<Value> {
         .ok_or_else(|| anyhow::anyhow!("uninstall: data dir unavailable"))?;
     let seq = RUN_SEQ.fetch_add(1, AtomicOrdering::Relaxed);
     let output_path = format!("{data_dir}/runs/uninstall-{cli}-{seq}.log");
-    let (command, args_vec) = shell_invocation(script.clone(), is_windows());
+    let (command, args_vec) =
+        shell_invocation(exec_script(script.clone(), is_windows()), is_windows());
     let request = json!({
         "command": command,
         "args": args_vec,
@@ -408,6 +426,21 @@ fn output_tail(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 执行包装：unix 脚本必须带 PATH 引导（回归锁——npm 类安装/卸载此前裸
+    /// 跑登录 shell，nvm 用户 npm 找不到 → exit 127，卸载"完成"却毫无效果，
+    /// 卡片仍显示已安装）；Windows cmd /C 原样透传
+    #[test]
+    fn exec_script_unix_carries_path_bootstrap() {
+        let unix = exec_script("npm uninstall -g @openai/codex".to_string(), false);
+        assert!(unix.starts_with(path_bootstrap_unix()));
+        assert!(unix.ends_with("npm uninstall -g @openai/codex"));
+
+        assert_eq!(
+            exec_script("npm install -g pi".to_string(), true),
+            "npm install -g pi"
+        );
+    }
 
     /// 输出尾部截断：小文件原样；大文件取尾部且 char boundary 安全
     #[test]

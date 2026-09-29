@@ -43,6 +43,7 @@ const zhCN: MessageSchema = {
   'hub.card.uninstallHintMethod': '安装方式未知，请手动卸载',
   'hub.card.uninstallHintNode': '未检测到 Node.js，无法自动卸载',
   'hub.card.uninstallFailed': '卸载失败，请重试',
+  'hub.card.uninstallRunFailed': '卸载失败，详情见「安装」页控制台',
 
   'hub.auth.banner': 'CLI 配置目录尚未授权（~/.codex、~/.pi、opencode 等），相关能力暂不可用。',
   'hub.auth.action': '授权目录',

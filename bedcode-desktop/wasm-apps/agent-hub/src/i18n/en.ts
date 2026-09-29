@@ -43,6 +43,7 @@ const en: MessageSchema = {
   'hub.card.uninstallHintMethod': 'Unknown install method; uninstall manually',
   'hub.card.uninstallHintNode': 'Node.js not detected; cannot uninstall automatically',
   'hub.card.uninstallFailed': 'Uninstall failed; try again',
+  'hub.card.uninstallRunFailed': 'Uninstall failed; see console on Install tab',
 
   'hub.auth.banner': 'CLI config directories not authorized (~/.codex, ~/.pi, opencode, etc.); related capabilities unavailable.',
   'hub.auth.action': 'Authorize',

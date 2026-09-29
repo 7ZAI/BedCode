@@ -269,7 +269,7 @@ fn detection_script(kind: &str) -> String {
 /// not found。改为从交互子 shell 提取 PATH（`2>/dev/null` 吞无 tty 的
 /// ioctl 警告；`tail -n 1` 取末行，防 rc 启动输出污染），再在当前非交互
 /// shell 继续采集——两侧段标记契约不受影响。
-fn path_bootstrap_unix() -> &'static str {
+pub(crate) fn path_bootstrap_unix() -> &'static str {
     "export PATH=\"$(bash -ic 'printf \"%s\\n\" \"$PATH\"' 2>/dev/null | tail -n 1)\"\n"
 }
 
