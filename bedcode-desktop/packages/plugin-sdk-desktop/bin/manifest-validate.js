@@ -20,6 +20,24 @@ const VOCABULARY_PATH = join(SDK_ROOT, 'bin', 'permission-vocabulary.json')
 
 const VALID_PLUGIN_TYPES = new Set(['ts-only', 'rust-ts', 'rust'])
 
+/**
+ * 装配角色取值域（manifest `type`，ADR 0032）
+ *
+ * 真源是 SDK `rust/src/types.rs::PluginKind`，此处不手抄第二套语义，只抄拼写
+ * （与 Rust 侧 serde `rename_all = "kebab-case"` 一致；改枚举必须同改这里，
+ * 否则新角色在本机过不了、装了却不被宿主识别）。
+ */
+const VALID_PLUGIN_KINDS = new Set(['basic-service', 'internal-business', 'business-app'])
+
+/** 历史拼写（反序列化仍被宿主按别名接受，ADR 0032 之前）→ 现行角色 + 告警文案 */
+const LEGACY_PLUGIN_KINDS = new Map([
+  ['system', 'basic-service'],
+  ['application', 'business-app'],
+])
+
+/** 实例生命周期取值域（manifest `lifecycle`，ADR 0032；真源同 PluginKind 所在文件） */
+const VALID_LIFECYCLES = new Set(['persistent', 'ephemeral'])
+
 /** 权限词汇生成物（惰性读：缺文件时给出可操作的错误，而非 CLI 启动即崩） */
 let vocabulary = null
 export function permissionVocabulary() {
@@ -87,6 +105,43 @@ export function validateManifest(dir) {
   }
   if (manifest.pluginType === 'rust-ts' && !manifest.rustLibrary) {
     errors.push('pluginType=rust-ts 时必须提供 rustLibrary（与 Cargo.toml 包名一致）')
+  }
+
+  // type（装配角色，ADR 0032）：L1 基础服务 / L2 内部统一业务 / L3 业务应用
+  // 非法取值**构建期拒**——宿主反序列化会拒（落 Error 态），但那时产物已发出去，
+  // 表现是「插件装了却不出现」；`system` / `application` 是历史拼写，宿主仍按别名
+  // 接受，故只告警不拦（拦会打断既有工程）。
+  if (manifest.type !== undefined && manifest.type !== null && manifest.type !== '') {
+    if (!VALID_PLUGIN_KINDS.has(manifest.type) && !LEGACY_PLUGIN_KINDS.has(manifest.type)) {
+      errors.push(
+        `type 非法: "${manifest.type}"（允许: ${[...VALID_PLUGIN_KINDS].join(' / ')}）`,
+      )
+    } else if (LEGACY_PLUGIN_KINDS.has(manifest.type)) {
+      warnings.push(
+        `type="${manifest.type}" 是历史拼写，改写为 "${LEGACY_PLUGIN_KINDS.get(manifest.type)}"（ADR 0032 角色维度重构）`,
+      )
+    }
+  }
+
+  // lifecycle（实例生命周期，ADR 0032）：缺省 persistent；`ephemeral`（业务 worker）
+  // **只预留类型**——宿主一次性实例机制与调度框架未落地（ADR 0032 §6 启用清单），
+  // 声明后在宿主加载期会被显性拒绝。构建期先拦，避免产出「装了必失败」的包。
+  if (manifest.lifecycle !== undefined && manifest.lifecycle !== null && manifest.lifecycle !== '') {
+    if (!VALID_LIFECYCLES.has(manifest.lifecycle)) {
+      errors.push(
+        `lifecycle 非法: "${manifest.lifecycle}"（允许: ${[...VALID_LIFECYCLES].join(' / ')}，缺省即 persistent）`,
+      )
+    } else if (manifest.lifecycle === 'ephemeral') {
+      if (manifest.pluginType !== 'rust') {
+        errors.push(
+          `lifecycle="ephemeral" 只能配 pluginType="rust"（即用即弃 worker 无页面产物）: ${JSON.stringify(manifest.pluginType)}`,
+        )
+      } else {
+        errors.push(
+          'lifecycle="ephemeral" 暂不可用：宿主一次性实例机制与调度框架尚未落地（业务 worker 形态已登记，见 ADR 0032 §6；启用前需补齐调度方、store 传参协议、权限模型与 per-app 配额）',
+        )
+      }
+    }
   }
 
   // wasmHash（票 14）：形态非法即拒；**值由构建注入产物**，源清单带它属于误用——

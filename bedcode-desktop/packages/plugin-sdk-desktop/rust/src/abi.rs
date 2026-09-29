@@ -180,7 +180,15 @@
 //!   （peer:*-event）成为唯一回流；④ `active-transfers` 实现改会话句柄表投影
 //!   （接口形状不变）；⑤ `pull-files` 逐文件会话立即发起（宿主并发信号量删除），
 //!   会话发起经 `pull-started` 引擎事件直推。
-pub const ABI_VERSION: u32 = 31;
+//!
+//! - **v32: 认证中心显式注册 + 组合式认证原语（2026-09-29，ADR 0031）**——`host-auth`
+//!   函数级追加 4 函数：`auth-center-register` / `auth-center-unregister` /
+//!   `auth-methods-list` / `auth-method-invoke`（认证中心角色改经注册表显式登记 +
+//!   唯一性仲裁取代「能力探测 + 排序取首个」；无中心/调用失败一律拒绝 fail-closed）。
+//!   纯增量（旧产物不 import 仍可实例化），但**行为破坏**：旧认证中心产物不注册 →
+//!   认证面全拒（fail-visible 形态②，见 spec §7）。**desktop 独有，双端偏离**——
+//!   移动端 WIT/ABI/SDK 不跟演不投影（mobile ABI 保持 11，ADR 0022「双端偏离」节）。
+pub const ABI_VERSION: u32 = 32;
 
 /// 组件形态标识：`abi.form() == FORM_COMPONENT`（WIT `abi` 接口的 form() 声明）
 ///
@@ -208,6 +216,8 @@ mod tests {
         // **v31 = 传输编排下沉专项票 3**（2026-09-25，破坏性：退役
         // resume-all-transfers——「全部恢复」编排归插件；send-files 语义收窄为
         // 即发即会话 + concurrency 脉冲字段退役；旧快照 topic 退役）；
+        // **v32 = 认证中心显式注册专项**（2026-09-29，ADR 0031：host-auth 函数级
+        // 追加 auth-center-register 等 4 函数，desktop 独有）；
         // 再往前叠加 v25 host-peer 节点生命周期原语（审计票 12 裁决 1 = 选项 A）、
         // v24 认证记录下沉（2026-09-22，host-auth 记录面七函数退役 + host-session
         // config 读取面退役）、v23 host-session
@@ -218,7 +228,7 @@ mod tests {
         // （同批次之一）、v17 认证策略导出（auth-policy）、v16 插件私有伪终端原语
         // （host-pty）、v15 密钥托管（host-auth / secret-store）、v14 host-websocket、
         // v13 host-mdns v2、v12 总线二进制载荷与 v11 host-peer 传输控制三原语
-        assert_eq!(ABI_VERSION, 31);
+        assert_eq!(ABI_VERSION, 32);
     }
 
     #[test]

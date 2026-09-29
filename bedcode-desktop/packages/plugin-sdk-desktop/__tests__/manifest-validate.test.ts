@@ -377,3 +377,103 @@ describe('wasiPreopenDirs 校验', () => {
     expect(errors[0]).toContain('7')
   })
 })
+
+/**
+ * 分类字段（`type` / `lifecycle`，ADR 0032）校验
+ *
+ * 行为契约（真源：bin/manifest-validate.js 分支 + SDK rust/src/types.rs 的
+ * `PluginKind` / `InstanceLifecycle`）：
+ * - C-R1 `type` 取值域 = L1 `basic-service` / L2 `internal-business` / L3 `business-app`；
+ *   缺省即 L3，不写 `type` 的既有工程零迁移；
+ * - C-R2 非法取值**构建期拒**——宿主反序列化虽也拒，但那时包已发出去，
+ *   现场表现是「插件装了却不出现」，构建期必须先拦；
+ * - C-R3 历史拼写 `system` / `application` 宿主仍按别名接受（旧产物零迁移），
+ *   故只告警不拦（拦会打断既有工程），且告警点名现行拼写；
+ * - C-R4 `lifecycle` 缺省 / `persistent` 是合法态（常驻）；
+ * - C-R5 `ephemeral` 本期只预留类型：宿主一次性实例机制与调度框架未落地，
+ *   声明即在**构建期与宿主加载期双侧显性拒绝**——不静默当常驻处理
+ *   （那会让作者以为 worker 生效，而常驻恰是 worker 存在理由的反面）；
+ * - C-R6 `ephemeral` 必须配 `pluginType: rust`（无页面的即用即弃形态）。
+ */
+describe('分类字段 type / lifecycle 校验（ADR 0032）', () => {
+  /** 写一份最小 manifest，返回与分类字段相关的错误 / 告警 */
+  function classify(extra: Record<string, unknown>): { errors: string[]; warnings: string[] } {
+    writeFileSync(
+      join(cwd, 'plugin.json'),
+      JSON.stringify(
+        {
+          id: 'com.example.test',
+          name: 'Test Plugin',
+          version: '1.0.0',
+          main: 'index.js',
+          pluginType: 'rust',
+          rustLibrary: 'test_plugin',
+          permissions: [],
+          contributes: {},
+          ...extra,
+        },
+        null,
+        2,
+      ),
+      'utf-8',
+    )
+    const { errors, warnings } = validateManifest(cwd)
+    const relevant = (list: string[]) => list.filter((e) => e.includes('type') || e.includes('lifecycle'))
+    return { errors: relevant(errors), warnings: relevant(warnings) }
+  }
+
+  it('C-R1 三个角色拼写都合法，缺省（不写 type）也合法', () => {
+    for (const kind of ['basic-service', 'internal-business', 'business-app']) {
+      expect(classify({ type: kind }).errors, `type=${kind} 应当合法`).toEqual([])
+    }
+    expect(classify({}).errors, '缺省即 L3 业务应用，旧工程零迁移').toEqual([])
+  })
+
+  it('C-R2 非法角色取值构建期即拒，且文案点名允许值', () => {
+    for (const bad of ['systemm', 'internal', 'BASIC-SERVICE', 'worker']) {
+      const { errors } = classify({ type: bad })
+      expect(errors.length, `type=${bad} 必须被拒`).toBeGreaterThan(0)
+      expect(errors[0]).toContain(bad)
+      expect(errors[0]).toContain('basic-service')
+    }
+  })
+
+  it('C-R3 历史拼写只告警不拦（宿主按别名接受），且告警点名现行拼写', () => {
+    for (const [legacy, current] of [
+      ['system', 'basic-service'],
+      ['application', 'business-app'],
+    ]) {
+      const { errors, warnings } = classify({ type: legacy })
+      expect(errors, `type=${legacy} 不得拦（会打断既有工程）`).toEqual([])
+      expect(warnings.some((w) => w.includes(legacy) && w.includes(current))).toBe(true)
+    }
+  })
+
+  it('C-R4 缺省与显式 persistent 都是合法态', () => {
+    expect(classify({}).errors).toEqual([])
+    expect(classify({ lifecycle: 'persistent' }).errors).toEqual([])
+  })
+
+  it('C-R5 ephemeral 构建期被拒（调度框架未落地），文案点名 ADR 0032 与缺口', () => {
+    const { errors } = classify({ lifecycle: 'ephemeral' })
+    expect(errors.length).toBe(1)
+    expect(errors[0]).toContain('ephemeral')
+    expect(errors[0]).toContain('ADR 0032')
+    expect(errors[0]).toContain('调度')
+  })
+
+  it('C-R6 ephemeral 配非 rust 形态时先报形态错（无页面的即用即弃形态）', () => {
+    for (const pluginType of ['rust-ts', 'ts-only']) {
+      const { errors } = classify({ pluginType, lifecycle: 'ephemeral' })
+      expect(errors.length, `pluginType=${pluginType} + ephemeral 必须被拒`).toBe(1)
+      expect(errors[0]).toContain('rust')
+    }
+  })
+
+  it('C-R4 非法 lifecycle 取值构建期即拒并点名允许值', () => {
+    const { errors } = classify({ lifecycle: 'forever' })
+    expect(errors.length).toBe(1)
+    expect(errors[0]).toContain('forever')
+    expect(errors[0]).toContain('persistent')
+  })
+})

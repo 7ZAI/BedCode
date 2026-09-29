@@ -65,4 +65,26 @@ pub trait HostAuth {
     /// 设备认证 JWT 验签：有效 → `Ok(claims JSON)`；无效 → `Err("expired")`
     /// （过期）| `Err("invalid")`（其余）。用户文案映射归插件。
     fn auth_device_token_verify(&self, token: &str) -> Result<String, HostError>;
+
+    // ==================== v32：认证中心显式注册 + 组合式认证原语（ADR 0031） ====================
+    // 认证中心 ≡ 微服务 auth server，区别只在于**没有也不需要服务发现**：注册表就是
+    // 宿主进程内的发现协议（激活期注册，单中心唯一性仲裁在宿主）。4 函数权限均 `auth`，
+    // **桌面独有**（ADR 0022 双端偏离：移动端不承载服务端网关与认证中心，mobile ABI 不动）。
+
+    /// 注册本插件为**认证中心**（单中心角色）。入参 = 本中心提供的认证方式标识列表
+    /// （**声明式**：宿主不解释每个 method 的业务语义）；成功返回中心句柄
+    /// `authc-<uuid>`。已有中心在册 → `Err`（点名在册属主）；无 `auth` 权限 → `Err`。
+    /// 停用后由宿主 `purge_for_plugin` 兜底回收。
+    fn auth_center_register(&self, methods: Vec<String>) -> Result<String, HostError>;
+
+    /// 注销本插件的认证中心角色（仅属主本人可调；非属主 → `Err`；无中心在册视为成功）
+    fn auth_center_unregister(&self) -> Result<(), HostError>;
+
+    /// 列取当前中心注册时声明的认证方式（无中心在册 → `Err`）——组合式认证的发现端
+    fn auth_methods_list(&self) -> Result<Vec<String>, HostError>;
+
+    /// 经认证中心执行一次认证方式调用（**零解析窄转发**：`params` 原样透传、返回值
+    /// 原样透回，宿主只校验 `method` 在册——安全闸门判据，非语义解释）。
+    /// 无中心 → `Err`（fail-closed）；中心不可用 → `Err`；中心业务拒绝 → 原样透传
+    fn auth_method_invoke(&self, method: &str, params: &str) -> Result<String, HostError>;
 }

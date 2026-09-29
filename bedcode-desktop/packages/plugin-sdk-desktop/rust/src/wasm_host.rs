@@ -134,6 +134,26 @@ impl HostAuth for WasmHost {
     fn auth_device_token_verify(&self, token: &str) -> Result<String, HostError> {
         host_auth::device_token_verify(token).map_err(|e| host_err("auth_device_token_verify", e))
     }
+
+    // ==================== v32：认证中心显式注册 + 组合式认证原语（ADR 0031） ====================
+    // 认证中心角色经注册表显式登记（唯一性仲裁在宿主），methods 声明式列表宿主
+    // 不解释；auth-method-invoke 零解析窄转发（宿主只校验 method 在注册表内）。
+
+    fn auth_center_register(&self, methods: Vec<String>) -> Result<String, HostError> {
+        host_auth::auth_center_register(&methods).map_err(|e| host_err("auth_center_register", e))
+    }
+
+    fn auth_center_unregister(&self) -> Result<(), HostError> {
+        host_auth::auth_center_unregister().map_err(|e| host_err("auth_center_unregister", e))
+    }
+
+    fn auth_methods_list(&self) -> Result<Vec<String>, HostError> {
+        host_auth::auth_methods_list().map_err(|e| host_err("auth_methods_list", e))
+    }
+
+    fn auth_method_invoke(&self, method: &str, params: &str) -> Result<String, HostError> {
+        host_auth::auth_method_invoke(method, params).map_err(|e| host_err("auth_method_invoke", e))
+    }
 }
 
 // ==================== HostStorage ====================

@@ -74,14 +74,19 @@ pub struct PluginManifest {
     /// 未授权目录无论哪一档都建不出 preopen（审计票 07 裁决 3）。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub wasi_preopen_dirs: Vec<WasiPreopenDir>,
-    /// 组件类型：`system`（系统组件）/ `application`（应用插件）
+    /// 装配角色：`basic-service`（L1 基础服务）/ `internal-business`
+    /// （L2 内部统一业务应用）/ `business-app`（L3 业务应用，缺省）
     ///
-    /// 系统组件：内置、默认启用、只停不删、先于应用插件激活，其导出
-    /// 的 host-* 同形接口注册进能力注册表作为能力提供者（host-side
-    /// 转发装配，见 core-plugin-manager）。缺省 `application`，旧插件
-    /// 零迁移。注意与 `pluginType`（产物形态 rust/rust-ts/ts-only）
-    /// 正交——本字段描述装配角色。
-    #[serde(rename = "type", default, skip_serializing_if = "PluginKind::is_application")]
+    /// 三个角色对应三张加载层，顺序固定 **L1 → L2 → L3**（ADR 0032）：
+    /// L1 最早（其 host-* 同形能力要先装配进能力注册表）→ L2 次之（宿主网关
+    /// 的裁决依赖方须先于业务应用就绪）→ L3 最后（持久化批量激活的应用面）。
+    /// L1/L2 是**角色驱动**（启停不持久化，持久化真源是「角色」而非用户状态）。
+    /// 缺省 `business-app`，旧插件零迁移。
+    ///
+    /// 历史拼写兼容（反序列化别名，序列化统一写新拼写）：`application` =
+    /// L3、`system` = L1（ADR 0032 之前的 `PluginKind::System`）。
+    /// 注意与 `pluginType`（产物形态）正交——本字段描述**装配角色**。
+    #[serde(rename = "type", default, skip_serializing_if = "PluginKind::is_business_app")]
     pub kind: PluginKind,
     /// 能力依赖声明（应用插件消费的能力名，WIT host-* 接口名，如
     /// `host-storage`）
@@ -110,6 +115,20 @@ pub struct PluginManifest {
     /// 变成该插件的配额；默认 8 条是「多 shell 并发」型插件的档位，不是会话产品档位。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pty_quota: Option<usize>,
+    /// 实例生命周期策略：`persistent`（常驻，缺省）/ `ephemeral`（即用即弃）
+    ///
+    /// **正交于 `kind`（装配角色）**：角色回答「装配在哪一层、谁调它」，
+    /// 本字段回答「实例活多久」。`ephemeral` = 业务 worker 形态
+    /// （只对 store 操作、用完即弃、无页面），其存在理由是**内存生命周期**：
+    /// wasm 线性内存只能 grow 不能 shrink，长驻实例处理大输入会单调增长到宿主
+    /// 单实例限额并 trap，drop 实例则内存归还 OS、限额从低水位重算。
+    ///
+    /// **本期只预留类型**（ADR 0032 §6）：宿主的一次性实例机制与调度框架
+    /// 尚未落地，故声明 `ephemeral` 的 manifest 在**加载期显性被拒**（宿主
+    /// `manager/validation.rs` + 构建链 `manifest-validate.js` 双侧拒），
+    /// 不做「静默当常驻处理」——那会让作者以为 worker 已生效。
+    #[serde(default, skip_serializing_if = "InstanceLifecycle::is_persistent")]
+    pub lifecycle: InstanceLifecycle,
 }
 
 /// 单插件 Store 资源上限覆盖请求（manifest `resourceOverrides`）
@@ -159,24 +178,122 @@ impl Default for PluginType {
     }
 }
 
-/// 组件装配角色（manifest `type` 字段，core-plugin-manager）
+/// 组件装配角色（manifest `type` 字段，core-plugin-manager · ADR 0032）
 ///
-/// 与 [`PluginType`]（产物形态）正交：本枚举描述插件在能力装配中的角色。
+/// 与 [`PluginType`]（产物形态）、[`Lifecycle`]（实例生命周期）**正交**：
+/// 本枚举只回答「这个组件装配在哪一层、谁调它」。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum PluginKind {
-    /// 应用插件（缺省）：消费能力，经 `dependencies` 声明依赖
+    /// **L3 业务应用**（缺省）：消费 host-* 能力，经 `dependencies` 声明依赖
     #[default]
-    Application,
-    /// 系统组件：内置、默认启用、只停不删、先于应用插件激活，
-    /// 向能力注册表提供 host-* 同形接口能力
-    System,
+    #[serde(alias = "application")]
+    BusinessApp,
+    /// **L1 基础服务**：引擎域组件，最先激活，向能力注册表提供 host-*
+    /// 同形接口能力（应用插件的 import 经 Linker 路由到它）
+    #[serde(alias = "system")]
+    BasicService,
+    /// **L2 内部统一业务应用**：宿主网关的**裁决依赖方**——宿主内核**主动
+    /// 调它**做 allow/deny 裁决，是本仓唯一「宿主反向依赖 wasm 组件」的
+    /// 角色（ADR 0032 三条红线：白名单式登记 / 只做安全闸门 / 宿主只转发不解释）
+    InternalBusiness,
 }
 
 impl PluginKind {
-    /// serde skip_serializing_if 钩子：缺省角色不写入序列化输出
-    pub fn is_application(&self) -> bool {
-        matches!(self, PluginKind::Application)
+    /// 角色驱动层的加载顺序（**L1 先于 L2**；不含 L3——L3 走持久化批量激活）
+    ///
+    /// 顺序真源在本 SDK 而非宿主：宿主按本常量逐层激活，新增角色只需改这一处，
+    /// 宿主不必（也不应）认识具体角色值（防回接锁
+    /// `internal_business_host_dependency_stays_gated` 断言宿主只调谓词）。
+    pub const ROLE_DRIVEN_LOAD_ORDER: [PluginKind; 2] =
+        [PluginKind::BasicService, PluginKind::InternalBusiness];
+
+    /// serde skip_serializing_if 钩子：缺省角色（L3）不写入序列化输出
+    pub fn is_business_app(&self) -> bool {
+        matches!(self, PluginKind::BusinessApp)
+    }
+
+    /// 是否**角色驱动**（L1 / L2）：启动由角色而非用户状态决定，启停不持久化
+    ///
+    /// 持久化真源是「角色」——停用只对当前会话生效，下次启动按角色重新激活。
+    pub fn is_role_driven(&self) -> bool {
+        matches!(self, PluginKind::BasicService | PluginKind::InternalBusiness)
+    }
+
+    /// 是否向能力注册表提供 host-* 同形接口能力（**仅 L1**）
+    ///
+    /// L2 不提供能力（它是裁决方不是提供方），L3 是消费方。
+    pub fn provides_host_capabilities(&self) -> bool {
+        matches!(self, PluginKind::BasicService)
+    }
+
+    /// 是否 L2 内部统一业务应用（宿主网关的裁决依赖方；宿主静态声明段用它判定
+    /// “谁该先加载”，动态就绪段 = `auth-center-register` 调用，两段不合并，
+    /// ADR 0031 K9）
+    pub fn is_internal_business(&self) -> bool {
+        matches!(self, PluginKind::InternalBusiness)
+    }
+
+    /// 日志 / 诊断用的角色标签（如 `L1 基础服务`）
+    pub fn label(&self) -> &'static str {
+        match self {
+            PluginKind::BasicService => "L1 基础服务",
+            PluginKind::InternalBusiness => "L2 内部统一业务",
+            PluginKind::BusinessApp => "L3 业务应用",
+        }
+    }
+
+    /// manifest wire 拼写（与 serde `rename_all = "kebab-case"` 同源，
+    /// 供日志 / 诊断输出使用；**不是**反序列化入口）
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            PluginKind::BasicService => "basic-service",
+            PluginKind::InternalBusiness => "internal-business",
+            PluginKind::BusinessApp => "business-app",
+        }
+    }
+}
+
+/// 实例生命周期策略（manifest `lifecycle` 字段，ADR 0032）
+///
+/// 命名带 `Instance` 前缀是为了与 `contributes.lifecycle`（应用生命周期钩子贡献，
+/// `LifecycleContribution`）区分：两者毫无关系，同名会让人以为 worker 与钩子有关。
+///
+/// 正交于 [`PluginKind`]：角色管装配层，本枚举管实例活多久。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum InstanceLifecycle {
+    /// 常驻实例（缺省）：激活即持有，deactivate 才释放
+    #[default]
+    Persistent,
+    /// 即用即弃实例（业务 worker）：用完即 drop，线性内存归还 OS
+    ///
+    /// **无别名**：wire 拼写只有 `ephemeral`（构建链 `manifest-validate.js` 的取值域
+    /// 同源）。曾加过 `alias = "worker"`，已删——它未经裁定，且会让两侧取值域漂移
+    /// （构建期拒、宿主期收）
+    Ephemeral,
+}
+
+impl InstanceLifecycle {
+    /// serde skip_serializing_if 钩子：缺省策略（常驻）不写入序列化输出
+    pub fn is_persistent(&self) -> bool {
+        matches!(self, InstanceLifecycle::Persistent)
+    }
+
+    /// 日志 / 诊断用的策略标签
+    pub fn label(&self) -> &'static str {
+        match self {
+            InstanceLifecycle::Persistent => "常驻",
+            InstanceLifecycle::Ephemeral => "即用即弃",
+        }
+    }
+
+    /// manifest wire 拼写（与 serde `rename_all = "kebab-case"` 同源）
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            InstanceLifecycle::Persistent => "persistent",
+            InstanceLifecycle::Ephemeral => "ephemeral",
+        }
     }
 }
 
@@ -725,34 +842,160 @@ mod tests {
     }
 
     #[test]
-    fn test_manifest_parse_system_component_kind_and_dependencies() {
-        // core-plugin-manager：系统组件 manifest 声明 type=system + 能力依赖
+    fn test_manifest_parse_basic_service_kind_and_dependencies() {
+        // L1 基础服务 manifest：声明 type + 能力依赖
         let json = serde_json::json!({
             "id": "com.bedcode.sys-store",
             "name": "Sys Store",
             "version": "1.0.0",
-            "type": "system",
+            "type": "basic-service",
             "dependencies": ["host-storage", "host-log"]
         });
         let m: PluginManifest = serde_json::from_value(json).unwrap();
-        assert_eq!(m.kind, PluginKind::System);
+        assert_eq!(m.kind, PluginKind::BasicService);
+        assert!(m.kind.provides_host_capabilities());
+        assert!(m.kind.is_role_driven());
+        assert!(!m.kind.is_business_app());
         assert_eq!(m.dependencies, vec!["host-storage", "host-log"]);
-        // 序列化回写：system 角色与依赖保留
+        // 序列化回写：角色与依赖保留
         let back = serde_json::to_value(&m).unwrap();
-        assert_eq!(back["type"], serde_json::json!("system"));
+        assert_eq!(back["type"], serde_json::json!("basic-service"));
         assert_eq!(back["dependencies"], serde_json::json!(["host-storage", "host-log"]));
+    }
+
+    /// 旧拼写兼容（ADR 0032 角色维度重构）：`system` / `application` 仍按新角色
+    /// 解析，但序列化统一写新拼写——旧产物零迁移，又不让历史拼写继续扩散
+    #[test]
+    fn test_manifest_legacy_kind_spellings_alias_into_new_roles() {
+        for (legacy, expected) in [
+            ("system", PluginKind::BasicService),
+            ("application", PluginKind::BusinessApp),
+        ] {
+            let json = serde_json::json!({
+                "id": "com.bedcode.legacy-kind",
+                "name": "Legacy Kind",
+                "version": "1.0.0",
+                "type": legacy,
+            });
+            let m: PluginManifest = serde_json::from_value(json).unwrap();
+            assert_eq!(m.kind, expected, "legacy spelling {legacy} must map to a role");
+            let back = serde_json::to_value(&m).unwrap();
+            if expected.is_business_app() {
+                assert!(back.get("type").is_none(), "L3 是缺省角色，不序列化: {back}");
+            } else {
+                assert_eq!(
+                    back["type"],
+                    serde_json::json!(expected.as_str()),
+                    "旧拼写不得继续回写（wire 拼写唯一真源是 as_str）"
+                );
+            }
+        }
+    }
+
+    /// 角色维度重构的**行为契约**（ADR 0032）：三层各就各位
+    ///
+    /// - L1 提供 host-* 同形能力、是角色驱动层且排在 L2 之前；
+    /// - L2 是角色驱动层但**不**提供能力（裁决方 ≠ 提供方）；
+    /// - L3 是缺省业务应用，不进角色驱动序列（走持久化批量激活）。
+    ///
+    /// 变异判据：把 `provides_host_capabilities` 放宽到含 L2、或把 L3 塞进
+    /// `ROLE_DRIVEN_LOAD_ORDER`，本条立即转红。
+    #[test]
+    fn plugin_kind_roles_keep_their_adrs_0032_contracts() {
+        assert_eq!(
+            PluginKind::ROLE_DRIVEN_LOAD_ORDER,
+            [PluginKind::BasicService, PluginKind::InternalBusiness],
+            "加载顺序真源固定 L1 → L2"
+        );
+        assert!(PluginKind::ROLE_DRIVEN_LOAD_ORDER[0].provides_host_capabilities());
+        assert!(
+            !PluginKind::InternalBusiness.provides_host_capabilities(),
+            "L2 是裁决方不是能力提供方（误注册会让任意 basic-service 接管它）"
+        );
+        assert!(!PluginKind::BusinessApp.is_role_driven());
+        assert!(PluginKind::default() == PluginKind::BusinessApp, "缺省 = L3");
+        assert!(!PluginKind::BusinessApp.provides_host_capabilities());
+    }
+
+    /// L2 反向依赖是**唯一**方向：它被宿主主动调、自身不提供能力也不进 L1 序位
+    #[test]
+    fn internal_business_is_the_only_reverse_dependency_role() {
+        let l2 = PluginKind::InternalBusiness;
+        assert!(l2.is_role_driven());
+        assert!(!l2.provides_host_capabilities());
+        assert!(!l2.is_business_app());
+        assert_eq!(l2.label(), "L2 内部统一业务");
+    }
+
+    /// 非法角色拼写在**反序列化期**即拒（不静默回落缺省 L3——那会让
+    /// 「声明了基础服务却被当业务应用装配」这类错误一路活到运行期）
+    #[test]
+    fn test_manifest_rejects_unknown_kind_spelling() {
+        let json = serde_json::json!({
+            "id": "com.bedcode.bad-kind",
+            "name": "Bad Kind",
+            "version": "1.0.0",
+            "type": "systemm",
+        });
+        assert!(
+            serde_json::from_value::<PluginManifest>(json).is_err(),
+            "未知角色取值必须加载期失败，不得静默回落缺省 L3"
+        );
+    }
+
+    /// `lifecycle`：缺省常驻（不序列化落盘）；`ephemeral` 可解析并保留
+    #[test]
+    fn test_manifest_lifecycle_default_and_ephemeral() {
+        let json = serde_json::json!({ "id": "com.bedcode.legacy", "name": "L", "version": "0.1.0" });
+        let m: PluginManifest = serde_json::from_value(json).unwrap();
+        assert!(m.lifecycle.is_persistent());
+        let back = serde_json::to_value(&m).unwrap();
+        assert!(back.get("lifecycle").is_none(), "缺省常驻不序列化: {back}");
+
+        let json = serde_json::json!({
+            "id": "com.bedcode.worker",
+            "name": "Worker",
+            "version": "1.0.0",
+            "pluginType": "rust",
+            "lifecycle": "ephemeral",
+        });
+        let m: PluginManifest = serde_json::from_value(json).unwrap();
+        assert_eq!(m.lifecycle, InstanceLifecycle::Ephemeral);
+        assert!(!m.lifecycle.is_persistent());
+        let back = serde_json::to_value(&m).unwrap();
+        assert_eq!(back["lifecycle"], serde_json::json!("ephemeral"));
+        assert_eq!(m.lifecycle.label(), "即用即弃");
+    }
+
+/// 非法 lifecycle 取值不得回落常驻（serde 反序列化即拒，host 侧根本拿不到 manifest）
+    #[test]
+    fn test_manifest_rejects_unknown_lifecycle_spelling() {
+        // 取值域只有 persistent / ephemeral：未经裁定的别名（如曾加过的 `worker`）
+        // 不得被接受——它会与构建链 `manifest-validate.js` 的取值域漂移
+        for bad in ["worker", "ephemeral-ish", "Persistent"] {
+            let json = serde_json::json!({
+                "id": "com.bedcode.worker",
+                "name": "W",
+                "version": "1.0.0",
+                "lifecycle": bad,
+            });
+            assert!(
+                serde_json::from_value::<PluginManifest>(json).is_err(),
+                "非法 lifecycle 拼写 {bad} 必须加载期失败"
+            );
+        }
     }
 
     #[test]
     fn test_manifest_kind_and_dependencies_default_for_legacy() {
-        // 缺省兼容：旧插件 manifest 无 type/dependencies 字段 → application + 空依赖，
+        // 缺省兼容：旧插件 manifest 无 type/dependencies 字段 → L3 业务应用 + 空依赖，
         // 序列化回写时缺省值不落盘（skip_serializing_if）
         let json = serde_json::json!({ "id": "com.bedcode.legacy", "name": "L", "version": "0.1.0" });
         let m: PluginManifest = serde_json::from_value(json).unwrap();
-        assert_eq!(m.kind, PluginKind::Application);
+        assert!(m.kind.is_business_app());
         assert!(m.dependencies.is_empty());
         let back = serde_json::to_value(&m).unwrap();
-        assert!(back.get("type").is_none(), "application 缺省角色不序列化");
+        assert!(back.get("type").is_none(), "L3 缺省角色不序列化");
         assert!(back.get("dependencies").is_none(), "空依赖不序列化");
     }
 

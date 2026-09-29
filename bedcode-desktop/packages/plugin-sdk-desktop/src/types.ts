@@ -17,8 +17,27 @@ export interface Disposable {
 /** 插件类型 */
 export type PluginType = 'rust' | 'rust-ts' | 'ts-only'
 
-/** 组件装配角色（manifest `type` 字段，core-plugin-manager）：系统组件 / 应用插件 */
-export type PluginKind = 'system' | 'application'
+/**
+ * 组件装配角色（manifest `type` 字段，core-plugin-manager · ADR 0032）
+ *
+ * 三层加载顺序固定 `L1 → L2 → L3`：
+ * - `basic-service`（L1）：引擎域组件，提供 host-* 同形能力，最先激活；
+ * - `internal-business`（L2）：宿主网关的裁决依赖方（宿主**主动调它**）；
+ * - `business-app`（L3）：业务应用面，缺省。
+ *
+ * 历史拼写 `system` / `application` 仍被宿主按别名解析（只影响反序列化），
+ * 新声明一律用上面的三个值。
+ */
+export type PluginKind = 'basic-service' | 'internal-business' | 'business-app'
+
+/**
+ * 实例生命周期策略（manifest `lifecycle` 字段，ADR 0032）
+ *
+ * 正交于装配角色：角色管「装配在哪一层」，本字段管「实例活多久」。
+ * `ephemeral` = 业务 worker（无页面、即用即弃；存在理由是避开 wasm 线性内存
+ * 单调增长撞单实例限额）。**本期只预留类型**，宿主加载期与构建链均显式拒绝声明。
+ */
+export type InstanceLifecycle = 'persistent' | 'ephemeral'
 
 /** 插件描述文件 (plugin.json) 结构 */
 export interface PluginManifest {
@@ -36,16 +55,21 @@ export interface PluginManifest {
   permissions: string[]
   contributes: PluginContributes
   /**
-   * 组件装配角色：`system`（系统组件）/ `application`（应用插件，缺省）
-   *
-   * 系统组件内置、默认启用、只停不删、先于应用插件激活，其导出的 host-*
-   * 同形接口注册为能力提供者。缺省 application，旧插件零迁移。
+   * 组件装配角色：`basic-service`（L1）/ `internal-business`（L2）/
+   * `business-app`（L3，缺省）。缺省 L3，旧插件零迁移。
    */
   type?: PluginKind
   /**
+   * 实例生命周期策略：`persistent`（缺省）/ `ephemeral`（即用即弃 worker）
+   *
+   * `ephemeral` 目前**只预留类型**（ADR 0032 §6）：宿主的一次性实例机制与
+   * 调度框架未落地，声明即在加载期与构建链被显式拒绝（不静默当常驻处理）。
+   */
+  lifecycle?: InstanceLifecycle
+  /**
    * 能力依赖声明（应用插件消费的能力名，WIT host-* 接口名）
    *
-   * 宿主激活时校验：每个依赖必须已有提供者（宿主原语或已激活系统组件），
+   * 宿主激活时校验：每个依赖必须已有提供者（宿主原语或已激活的 L1 基础服务），
    * 缺失即激活失败并指明能力名。缺省空数组 = 无依赖。
    */
   dependencies?: string[]

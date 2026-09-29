@@ -627,6 +627,32 @@ interface host-auth {
     /// 有效 → `ok(claims-json)`（`{sub, iss, iat, exp, device_name?, fingerprint?}`）；
     /// 无效 → `err("expired")`（过期）| `err("invalid")`（其余）——用户文案映射归插件。
     device-token-verify: func(token: string) -> result<string, string>;
+
+    // ==================== v32：认证中心显式注册 + 组合式认证原语（ADR 0031） ====================
+    // 用户裁定 2026-09-29：认证中心与微服务 auth server 概念一致，只不过这里没有也
+    // 不需要服务发现——注册表就是宿主进程内的发现协议（激活时注册 + 唯一性仲裁）。
+    // 本组 4 函数为**桌面独有**（双端偏离，ADR 0022）：移动端是客户端，不承载服务端
+    // 网关与认证中心角色，不跟演不投影，mobile ABI 保持 11。
+    //
+    // 权限门：4 函数全部 `auth`（复用既有 PERMISSION_AUTH，不新增词汇位）。
+
+    /// 注册本插件为**认证中心**（单中心角色，K4）。入参 = 本中心提供的认证方式标识
+    /// 列表（**声明式**，宿主不解释每个 method 的业务语义）；成功返回中心句柄
+    /// `authc-<uuid>`。已有中心在册 → `err`（点名在册属主）；无 `auth` 权限位 →
+    /// `err("permission denied")`。停用后宿主 `purge_for_plugin` 兜底回收。
+    auth-center-register: func(methods: list<string>) -> result<string, string>;
+    /// 注销本插件的认证中心角色（仅属主本人可调；非属主 → `err`）。无中心在册也
+    /// 视为成功（幂等）。
+    auth-center-unregister: func() -> result<_, string>;
+    /// 列取当前认证中心注册时声明的认证方式（无中心在册 → `err`）。其他插件据此
+    /// 发现可用的认证方式（组合式认证的发现端，K6）。权限 `auth`。
+    auth-methods-list: func() -> result<list<string>, string>;
+    /// 经认证中心执行一次认证方式调用（**零解析窄转发**：`params` 原样透传给中心，
+    /// 返回值原样透回）。`method` 必须在中心注册的 methods 内（安全闸门判据，非
+    /// 语义解释），否则 `err`（点名 method 与在册列表）。无中心 → `err(no auth center
+    /// registered)`（fail-closed）；中心调用失败 → `err(auth center unavailable: …)`；
+    /// 中心返回业务错误 → 原样透传（不吞成宿主错误）。权限 `auth`。
+    auth-method-invoke: func(method: string, params: string) -> result<string, string>;
 }
 
 /// 插件私有伪终端（host-pty，v16）：裸 PTY 引擎原语，零业务语义（ADR 0022）
