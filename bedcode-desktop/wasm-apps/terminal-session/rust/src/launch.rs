@@ -817,6 +817,32 @@ pub fn create_via_host(draft_json: &serde_json::Value) -> Result<serde_json::Val
 ///    进程）；
 /// 4. Created 逻辑（重启补发 `session-restarted` + 定时任务域就绪信号）；
 /// 5. 广播 `SessionCreated`（概要自本域视图，宿主不回查内核）。
+/// 会话 PTY 输出环容量声明（字节，`host-pty.spawn` 的 `ringBytes`）
+///
+/// 不声明则取宿主默认 `PLUGIN_PTY_RING_BYTES` = 256 KiB。**环是拉取模型下唯一
+/// 的有界缓冲**：客户端落后多少字节 == 环里还剩多少字节，环满即淘汰最旧 +
+/// `truncated` → 客户端清屏重锚。移动端经 WiFi + WebView 渲染，秒级卡顿
+/// （JS GC / 切前后台 / 弱网重传）就能吃掉 256 KiB——也就是说**正常操作就能
+/// 触发一次清屏**，而清屏对 TUI 类会话（vim / htop / Claude Code）等于现场
+/// 丢失上下文。故按宿主上限 `PLUGIN_PTY_RING_MAX_BYTES` = 4 MiB 声明（超限
+/// `spawn` 直接报错，不会静默夹取）。
+///
+/// 与背压窗口的关系（两条约束一起看）：
+/// - 内存**按需增长**：`PtyRing` 的 `VecDeque` 随产出增长，空闲会话不占内存。
+///   最坏上界 = 宿主 PTY 配额（`PLUGIN_PTY_SESSIONS_CEILING_PER_PLUGIN` = 64）
+///   × 4 MiB = 256 MiB，且需 64 条会话同时各产生 4 MiB 未被拉取的输出；
+///   背压窗口（`output::HIGH_WATER_BYTES` = 128 KiB）把「已拉走但未确认」的量
+///   钉在 128 KiB，真实驻留远低于上界。
+/// - **窗口必须远小于环**（编译期断言）：否则「抑制」毫无意义——数据先被环
+///   淘汰，客户端永远 ack 不到该水位，背压退化成静默丢数据。
+pub const SESSION_PTY_RING_BYTES: u64 = 4 * 1024 * 1024;
+
+// 水位参数不变量（编译期自检，spawn 侧接入校验）：背压窗口 ≤ 环容量的一半。
+// 取一半是保守界：抑制时数据仍可完整驻留到客户端追平。
+const _: () = {
+    assert!(crate::output::HIGH_WATER_BYTES * 2 <= SESSION_PTY_RING_BYTES);
+};
+
 #[cfg(target_arch = "wasm32")]
 pub fn spawn_session(
     config_id: &str,
@@ -857,6 +883,9 @@ pub fn spawn_session(
     if let Some(rows) = spec.rows {
         builder = builder.rows(rows);
     }
+    // 输出环容量按 [`SESSION_PTY_RING_BYTES`] 声明（省略则退回宿主默认 256 KiB，
+    // 见该常量文档的取舍依据）
+    builder = builder.ring_bytes(SESSION_PTY_RING_BYTES);
     // 宿主广播声明已随 websocket 业务下沉票 08 退役（`hostBroadcastSessionId` 删除）：
     // PTY 引擎不再知道 session id，会话输出只经本插件 `ring-fetch` 自持游标拉取
     // （含 WS terminal 端点与 HTTP history 互调），宿主不再直读会话输出环

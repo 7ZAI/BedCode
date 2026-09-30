@@ -125,7 +125,15 @@ pub struct PumpSnapshot {
 }
 
 /// 水位快照 → 诊断 JSON（纯函数，native 可测；行过滤在调用侧完成）
-pub fn render_watermark_report(rows: &[PumpSnapshot]) -> serde_json::Value {
+///
+/// `ws_rows` 是 **WS 终端连接**的交付水位（每连接独立游标 / 独立 ack 基准，
+/// 见 `ws_terminal::Watermark`）。与 `rows`（插件自己前端的会话级拉取水位）
+/// 分开上报而不是合并：两者的 ack 基准不同源（会话级用环绝对偏移，WS 级用
+/// `base + 客户端本地计数`），混在一张表里会让人按错误的基准对齐两个数字。
+pub fn render_watermark_report(
+    rows: &[PumpSnapshot],
+    ws_rows: &[crate::ws_terminal::WsWatermarkRow],
+) -> serde_json::Value {
     let entries: Vec<serde_json::Value> = rows
         .iter()
         .map(|r| {
@@ -142,7 +150,32 @@ pub fn render_watermark_report(rows: &[PumpSnapshot]) -> serde_json::Value {
             })
         })
         .collect();
-    serde_json::json!({ "entries": entries, "count": rows.len() })
+    let ws: Vec<serde_json::Value> = ws_rows
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "endpointId": r.endpoint_id,
+                "clientId": r.client_id,
+                "sessionId": r.session_id,
+                "base": r.base,
+                "pushed": r.pushed,
+                "acked": r.acked,
+                "unacked": r.unacked,
+                "parked": r.parked,
+                "parkCount": r.park_count,
+                "unparkCount": r.unpark_count,
+                "throttledCycles": r.throttled_cycles,
+                // forcedDrains > 0 = 记账错位信号（背压逃生阀被触发过）
+                "forcedDrains": r.forced_drains,
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "entries": entries,
+        "count": rows.len(),
+        "ws": ws,
+        "wsCount": ws.len(),
+    })
 }
 
 /// 水位表（wasm 单实例串行；`(pushed, acked)` 两水位单调不回退，`parked` 为驻留态）。
@@ -397,8 +430,7 @@ pub fn ack_via_host(_args: &serde_json::Value) -> Result<serde_json::Value, Stri
 }
 
 /// 水位诊断读面（G2 水位可观测 / 对齐迁移前 `SubscriberStats`）：
-/// `{sessionId?}` → `{entries: [{sessionId, pushed, acked, unacked, parked,
-/// parkCount, unparkCount, throttledPulls, truncatedCount}], count}`
+/// `{sessionId?}` → `{entries: [...], count, ws: [...], wsCount}`
 ///
 /// **纯读**——不建条目、不改状态（未知 `sessionId` 返回 `count: 0`，不伪造零水位）。
 /// 无 `sessionId` 时返回全部在册会话。前端仅在驻留退出时取一次快照打日志（诊断用），
@@ -409,7 +441,17 @@ pub fn watermarks_via_host(args: &serde_json::Value) -> Result<serde_json::Value
         .get("sessionId")
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty());
-    Ok(render_watermark_report(&pump::snapshots(session_id)))
+    // `sessionId` 过滤只作用在会话级段；WS 段是连接级（一个连接一个基准），
+    // 仍按同一 sessionId 过滤以便「查某会话的所有消费者」
+    let ws_rows: Vec<crate::ws_terminal::WsWatermarkRow> =
+        crate::ws_terminal::watermark_rows()
+            .into_iter()
+            .filter(|r| session_id.is_none_or(|sid| r.session_id == sid))
+            .collect();
+    Ok(render_watermark_report(
+        &pump::snapshots(session_id),
+        &ws_rows,
+    ))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -459,26 +501,35 @@ pub fn notify_pty_id(payload: &serde_json::Value) -> Option<&str> {
 
 /// 处理 `<owner>::pty:output` 通知：`ptyId` → `sessionId` → 前端事件（P2）
 ///
+/// 返回解析出的 `sessionId`（供调用方驱动 **WS 终端连接的 drain**——同一份
+/// 限频唤醒对两条消费路径都有用，见 `ws_terminal::drain_session`）。
+///
 /// 反查不到会话时只留 debug 日志——正常竞态（spawn 之后登记之前、会话刚移除），
 /// 此刻前端也没有接入输出源，丢了不影响正确性。
 #[cfg(target_arch = "wasm32")]
-pub fn on_pty_output(payload: &serde_json::Value) {
-    let Some(pty_id) = notify_pty_id(payload) else {
-        return;
-    };
+pub fn on_pty_output(payload: &serde_json::Value) -> Option<String> {
+    let pty_id = notify_pty_id(payload)?;
     match crate::session::session_id_by_pty(pty_id) {
-        Some(session_id) => WasmHost.emit_event(
-            EVENT_OUTPUT_AVAILABLE,
-            &output_available_payload(&session_id),
-        ),
-        None => WasmHost.log_debug(&format!(
-            "输出可用通知：pty 未登记会话（忽略；pty_id={pty_id}）"
-        )),
+        Some(session_id) => {
+            WasmHost.emit_event(
+                EVENT_OUTPUT_AVAILABLE,
+                &output_available_payload(&session_id),
+            );
+            Some(session_id)
+        }
+        None => {
+            WasmHost.log_debug(&format!(
+                "输出可用通知：pty 未登记会话（忽略；pty_id={pty_id}）"
+            ));
+            None
+        }
     }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub fn on_pty_output(_payload: &serde_json::Value) {}
+pub fn on_pty_output(_payload: &serde_json::Value) -> Option<String> {
+    None
+}
 
 /// 一次性历史快照互调 api（`session-history`）：`{sessionId, from}` →
 /// `{data: number[], minOffset, snapshotOffset, historyBytes}`
@@ -638,12 +689,16 @@ mod tests {
     }
 
     /// C9 常量不变量：LOW < HIGH 且 HIGH − ack(64 KiB) ≤ LOW（迟滞带 ≥ 一个 ack 周期）
+    ///
+    /// 环容量约束挂在 spawn 侧声明的 [`crate::launch::SESSION_PTY_RING_BYTES`]
+    /// 上（不写死 256 KiB：那是宿主**默认**值，本插件已显式声明更大的环）。
+    /// 编译期版本在 `launch.rs`（常量自检在编译期跑，不依赖测试进程）。
     #[test]
     fn water_level_constants_hold_hysteresis_invariant() {
         assert!(LOW < HIGH);
         assert!(HIGH - 64 * 1024 <= LOW);
-        // 环容量约束：HIGH ≤ 宿主默认环 256 KiB / 2（当前插件未声明 ringBytes）
-        assert!(HIGH <= 256 * 1024 / 2);
+        // 环容量约束：背压窗口 ≤ 声明环容量 / 2（窗口比环还深时抑制无意义）
+        assert!(HIGH * 2 <= crate::launch::SESSION_PTY_RING_BYTES);
     }
 
     // ==================== 水位表（单调 + 回收） ====================
@@ -794,6 +849,9 @@ mod tests {
     }
 
     /// D4 报告 JSON 形状：字段名与计数逐项落到线上（诊断面靠它被人读/被脚本抓）
+    ///
+    /// 会话级段（`entries`）与连接级段（`ws`）分开上报：两者 ack 基准不同源
+    /// （会话级 = 环绝对偏移；WS 级 = `base + 客户端本地计数`）。
     #[test]
     fn report_json_exposes_every_stat() {
         let rows = vec![PumpSnapshot {
@@ -807,7 +865,21 @@ mod tests {
             throttled_pulls: 7,
             truncated_count: 5,
         }];
-        let json = render_watermark_report(&rows);
+        let ws_rows = vec![crate::ws_terminal::WsWatermarkRow {
+            endpoint_id: "terminal".to_string(),
+            client_id: "10.0.0.2:5001".to_string(),
+            session_id: "sess-x".to_string(),
+            base: 4096,
+            pushed: 8192,
+            acked: 6144,
+            unacked: 2048,
+            parked: false,
+            park_count: 1,
+            unpark_count: 1,
+            throttled_cycles: 9,
+            forced_drains: 0,
+        }];
+        let json = render_watermark_report(&rows, &ws_rows);
         assert_eq!(json["count"], 1);
         let entry = &json["entries"][0];
         assert_eq!(entry["sessionId"], "sess-x");
@@ -819,9 +891,28 @@ mod tests {
         assert_eq!(entry["unparkCount"], 1);
         assert_eq!(entry["throttledPulls"], 7);
         assert_eq!(entry["truncatedCount"], 5);
-        // 空表：仍是合法形状（count 0 / entries 空），不是缺字段的 null
-        let empty = render_watermark_report(&[]);
+
+        // WS 段：连接级行 + 背压计数（含 forcedDrains 错位信号）
+        assert_eq!(json["wsCount"], 1);
+        let ws_entry = &json["ws"][0];
+        assert_eq!(ws_entry["endpointId"], "terminal");
+        assert_eq!(ws_entry["clientId"], "10.0.0.2:5001");
+        assert_eq!(ws_entry["sessionId"], "sess-x");
+        assert_eq!(ws_entry["base"], 4096);
+        assert_eq!(ws_entry["pushed"], 8192);
+        assert_eq!(ws_entry["acked"], 6144);
+        assert_eq!(ws_entry["unacked"], 2048);
+        assert_eq!(ws_entry["parked"], false);
+        assert_eq!(ws_entry["parkCount"], 1);
+        assert_eq!(ws_entry["unparkCount"], 1);
+        assert_eq!(ws_entry["throttledCycles"], 9);
+        assert_eq!(ws_entry["forcedDrains"], 0);
+
+        // 空表：仍是合法形状（count 0 / entries 空 / ws 空），不是缺字段的 null
+        let empty = render_watermark_report(&[], &[]);
         assert_eq!(empty["count"], 0);
         assert!(empty["entries"].as_array().is_some_and(|e| e.is_empty()));
+        assert_eq!(empty["wsCount"], 0);
+        assert!(empty["ws"].as_array().is_some_and(|e| e.is_empty()));
     }
 }
