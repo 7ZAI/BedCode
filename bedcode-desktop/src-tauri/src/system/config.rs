@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-pub use crate::server::base::config::{
+pub use bedcode_server_base::config::{
     default_backlog, default_client_disconnect_timeout_secs,
     default_client_request_timeout_secs, default_keep_alive_secs,
     default_max_connections, default_metrics_enabled, default_prevent_sleep,

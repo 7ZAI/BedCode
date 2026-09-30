@@ -732,16 +732,31 @@ mod tests {
     ///
     /// 只扫非注释行——各模块的「为什么删」说明段落里出现这些名字是**记账**。
     /// 注释豁免的代价是「把回接写进注释不算违规」，这是有意的：注释不参与运行。
+    ///
+    /// 扫描面含**六个 server lib crate 的 `src`**（server-lib-split 票 07）：宿主侧
+    /// 的会话命令面与 WS 面的会话观察面是对偶的一族退役面（`host-session` /
+    /// `host-terminal` interface 已于 ABI v27 退役），命令名若被回接到面 crate 里，
+    /// 只扫宿主 `src` 的锁看不见。crate 清单来自 `server::crate_boundary_lock`
+    /// （单一事实源，避免两处登记表漂移）。
+    ///
+    /// **已知判据边界**（票 07 变异自检实测）：Rust 侧 needle 只认 `commands::` 限定
+    /// 形态，所以面 crate 里一个**裸**的 `list_sessions` 不会被本锁拦下（M8 变异实测
+    /// 假绿、M8b 的 `commands::` 形态实测打红）。这是刻意收窄：Rust 里裸名与前端
+    /// 不同，会大量误中无关标识符；本锁守的是「注册表与调用路径」，裸名函数进不了
+    /// `generate_handler!` 也就调不到。真正的兜底是 `retired_session_observation_*`
+    /// （对偶退役面，扫全 crate 的裸形态标识符）。
     #[test]
     fn retired_session_command_surface_is_not_reintroduced() {
         let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
 
         // 三个源码面：宿主 Rust、宿主前端（含 .vue）、插件前端
-        let scan_roots: Vec<std::path::PathBuf> = vec![
+        let mut scan_roots: Vec<std::path::PathBuf> = vec![
             manifest_dir.join("src"),
             manifest_dir.join("../src"),
             manifest_dir.join("../plugins"),
         ];
+        // server lib crate 的 Rust 源码面（前端源码不搬进 crates，故不加 ts/vue 根）
+        scan_roots.extend(crate::server::crate_boundary_lock::server_lib_src_roots());
 
         let rust_needles = [
             "commands::list_sessions",
@@ -787,6 +802,10 @@ mod tests {
                     };
                     // 本文件是锁自身，跳过（避免自匹配）
                     if path.ends_with("api_bridge.rs") {
+                        continue;
+                    }
+                    // crate 侧结构锁以字符串形式携带这些命令名去匹配（自锁规避）
+                    if path.ends_with("dependency_direction_lock.rs") {
                         continue;
                     }
                     let Ok(content) = std::fs::read_to_string(&path) else { continue };

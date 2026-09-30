@@ -182,7 +182,7 @@ fn perf_ws_terminal_output_throughput() {
         let (server_handle, server_task, port) = {
             let config = crate::system::config::AppConfig::default().network;
             let port = ws_pick_free_port();
-            let (handle, server) = crate::server::core::app::start_http_server(port, &config)
+            let (handle, server) = crate::server::composition::start_http_server(port, &config)
                 .await
                 .expect("start host http+ws server");
             (handle, tokio::spawn(server), port)
@@ -236,13 +236,15 @@ fn perf_ws_terminal_output_throughput() {
             plugin.lock().await.activate().expect("activate session");
         }
 
-        let entry = crate::server::websocket::endpoint::register(
+        let entry = bedcode_server_websocket::endpoint::register(
             PLUGIN_ID,
             "terminal",
             EndpointAuth::Jwt,
             None,
             None,
-            host_ctx.message_bus.clone(),
+            Arc::new(crate::server::ports_impl::HostBusPort::new(
+                host_ctx.message_bus.clone(),
+            )),
         )
         .expect("register declared terminal endpoint");
         assert_eq!(entry.mount_path, "/ws/plugin/com.bedcode.terminal-session/terminal");
@@ -375,7 +377,7 @@ fn perf_ws_terminal_output_throughput() {
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         server_handle.stop(true).await;
         server_task.abort();
-        crate::server::websocket::endpoint::purge_for_plugin(PLUGIN_ID);
+        bedcode_server_websocket::endpoint::purge_for_plugin(PLUGIN_ID);
         // guest `activate` 会 `auth-center-register` / `deactivate` 会 `auth-center-unregister`
         // → 写进程级单中心注册表；必须在测试闸门内（否则与认证面闭环用例互清台，
         // 表现为**别的**用例偶发红）。只包住这一行，不包整个用例（本用例长达一分钟）。

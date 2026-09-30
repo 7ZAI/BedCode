@@ -1,0 +1,41 @@
+[package]
+name = "bedcode-server-http"
+version = "0.1.0"
+description = "BedCode 桌面 HTTP 传输面：动态端点注册表/协议网关/插件代理控制器/认证与流量过滤中间件/DTO 形状锚点（server-lib-split 票 04）"
+authors = ["binblink"]
+edition = "2021"
+
+[dependencies]
+# Actix Web（HTTP 路由 + 中间件 + 测试 harness）
+actix-web = "4"
+# TransportFace::wrap 的 BoxService 装箱契约（类型与 bedcode-server-core 同源）
+actix-service = "2"
+# 异步（背景图端点 tokio::fs；测试 harness）
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "fs", "time"] }
+# 端点句柄 uuid
+uuid = { version = "1", features = ["v4"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = { version = "0.1", features = ["attributes"] }
+# http_filter 的 LocalBoxFuture
+futures-util = "0.3"
+# 认证档位词汇 EndpointAuth（宿主/插件契约真源）
+bedcode-plugin-api = { path = "../plugin-sdk-desktop/rust" }
+# 基础层（AppError/Result、常量、NetworkConfig、端口 traits 与全局注册表）
+bedcode-server-base = { path = "../bedcode-server-base" }
+# 内核层（流量过滤链 TrafficFilterChain/Direction/FilterContext/TrafficChannel、
+# 链路加密 NEGOTIATION_HEADER、supervisor 状态）
+bedcode-server-core = { path = "../bedcode-server-core" }
+
+[dev-dependencies]
+tempfile = "3"
+# http_filter 的 01 完成事件日志用例需要捕获式 subscriber（fmt layer + MakeWriter）
+tracing-subscriber = { version = "0.3", features = ["fmt", "registry"] }
+# 票 08：链路加密 HTTP 集成用例（从宿主 `src-tauri/tests/link_crypto_http.rs` 迁入，
+# 见该文件头「为什么住在 http 面」）。该用例扮演**客户端**，需要 x25519 密钥对原语
+# ——生产代码一律经 core 的 link_crypto 取能力，不直接依赖算法引擎；只有测试侧要
+# 自建对端密钥才需要直取。`base64` 随 x25519 一起来。
+bedcode-crypto-engine = { path = "../bedcode-crypto-engine" }
+base64 = "0.21"
+# 本 crate 无 `[[test]]` 段：cargo 按 `tests/*.rs` 自动发现，新增即生效（与 `src-tauri`
+# 的 `[[test]]` 手写登记不同）。

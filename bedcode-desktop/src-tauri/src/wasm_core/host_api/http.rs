@@ -314,7 +314,7 @@ pub(crate) fn http_register_endpoint(
     // 未定义取值报错，绝不静默降级为较宽档位
     let auth = EndpointAuth::parse_with(config.auth.as_deref(), EndpointAuth::Jwt)
         .map_err(|e| format!("http register-endpoint: {e}"))?;
-    let entry = crate::server::http::registry::register(
+    let entry = bedcode_server_http::registry::register(
         plugin_id,
         &config.path,
         config.host.as_deref(),
@@ -327,7 +327,7 @@ pub(crate) fn http_register_endpoint(
 /// 注销插件 HTTP 端点（WIT `host-http.unregister-endpoint`，ABI v29 服务端域）
 ///
 /// 属主仲裁：未知句柄 → `Ok(false)`（幂等）；他人句柄 → `Err`。
-/// 插件停用时的自动回收另见 [`crate::server::http::registry::purge_for_plugin`]。
+/// 插件停用时的自动回收另见 [`bedcode_server_http::registry::purge_for_plugin`]。
 pub(crate) fn http_unregister_endpoint(
     perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
     plugin_id: &str,
@@ -341,12 +341,12 @@ pub(crate) fn http_unregister_endpoint(
     ) {
         return Err("permission denied: network:http".to_string());
     }
-    crate::server::http::registry::remove_if_owner(endpoint_id, plugin_id)
+    bedcode_server_http::registry::remove_if_owner(endpoint_id, plugin_id)
 }
 
 /// 回收指定插件的全部 HTTP 端点（插件停用/卸载时由 PluginHost 调用；只碰本人）
 pub(crate) fn purge_for_plugin(plugin_id: &str) -> usize {
-    let entries = crate::server::http::registry::purge_for_plugin(plugin_id);
+    let entries = bedcode_server_http::registry::purge_for_plugin(plugin_id);
     entries.len()
 }
 
@@ -750,7 +750,7 @@ mod tests {
         let id = http_register_endpoint(ctx.as_ref(), &plugin, r#"{"path":"configs"}"#).expect("register");
         assert!(id.starts_with("http-"), "句柄前缀: {id}");
         let internal = format!("/api/plugin/{plugin}/configs");
-        let entry = crate::server::http::registry::find_by_internal(&internal).expect("registered");
+        let entry = bedcode_server_http::registry::find_by_internal(&internal).expect("registered");
         assert_eq!(entry.owner, plugin);
         assert_eq!(entry.auth, EndpointAuth::Jwt, "未声明 auth 落最严档");
 
@@ -764,13 +764,13 @@ mod tests {
             ),
         )
         .expect("register alias");
-        assert!(crate::server::http::registry::is_owner(&id2, &plugin));
+        assert!(bedcode_server_http::registry::is_owner(&id2, &plugin));
 
         // 注销：属主命中；他人句柄 → Err 且不消费
         let other = format!("test-httpapi-other-{}", uuid::Uuid::new_v4());
         assert!(http_unregister_endpoint(ctx.as_ref(), &other, &id).is_err());
         assert!(
-            crate::server::http::registry::is_owner(&id, &plugin),
+            bedcode_server_http::registry::is_owner(&id, &plugin),
             "他人注销不得消费句柄"
         );
         assert!(http_unregister_endpoint(ctx.as_ref(), &plugin, &id).unwrap());
@@ -778,10 +778,10 @@ mod tests {
             !http_unregister_endpoint(ctx.as_ref(), &plugin, &id).unwrap(),
             "重复注销幂等 false"
         );
-        assert!(crate::server::http::registry::find_by_internal(&internal).is_none());
+        assert!(bedcode_server_http::registry::find_by_internal(&internal).is_none());
 
-        crate::server::http::registry::purge_for_plugin(&plugin);
-        crate::server::http::registry::purge_for_plugin(&other);
+        bedcode_server_http::registry::purge_for_plugin(&plugin);
+        bedcode_server_http::registry::purge_for_plugin(&other);
     }
 
     /// 非法 config：畸形 JSON / 空 path / 非法 auth 档位 → Err（fail-visible，零副作用）
@@ -800,7 +800,7 @@ mod tests {
             "文案须点明非法取值与合法档位: {err}"
         );
         assert_eq!(
-            crate::server::http::registry::count_by_owner(&plugin),
+            bedcode_server_http::registry::count_by_owner(&plugin),
             0,
             "失败零副作用"
         );
@@ -1156,6 +1156,6 @@ mod tests {
 
         let id = http_register_endpoint(ctx.as_ref(), &plugin, r#"{"path":"probe"}"#).expect("inbound must not ask");
         assert!(id.starts_with("http-"));
-        crate::server::http::registry::purge_for_plugin(&plugin);
+        bedcode_server_http::registry::purge_for_plugin(&plugin);
     }
 }

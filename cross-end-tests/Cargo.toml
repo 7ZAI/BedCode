@@ -17,6 +17,12 @@ path = "src/lib.rs"
 # L0 改名（`bedcode_lib` → 端专用名）之前，这两行只能二选一。
 bedcode-desktop-lib = { package = "bedcode-desktop", path = "../bedcode-desktop/src-tauri" }
 bedcode-mobile-lib = { package = "bedcode-mobile", path = "../bedcode-mobile/src-tauri" }
+# server-lib-split 票 07：桌面端 server 基础层（**端口 traits 的定义处**）。仅用于
+# 装配自检直读 `ports::get()` —— 端口注册表是进程级单例，rig 是否装了端口面正是
+# 「七个场景同时 404」那次实测的根因，必须有一条**不经过被测代码**的可观测判据。
+# 端口**装配**本身仍走宿主组合根 `server::composition::install_server_ports()`
+# （与 GUI bootstrap 同一函数），本依赖只让自检能验「装的是不是真端口面」。
+bedcode-server-base = { package = "bedcode-server-base", path = "../bedcode-desktop/packages/bedcode-server-base" }
 
 [dev-dependencies]
 # tokio：测试运行时与轮询等待（与两端同版本，依赖图统一为一份）

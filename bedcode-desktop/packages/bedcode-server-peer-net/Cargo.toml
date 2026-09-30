@@ -1,0 +1,31 @@
+[package]
+name = "bedcode-server-peer-net"
+version = "0.1.0"
+description = "BedCode 桌面对等网络引擎域：节点身份/节点与发现守护生命周期/host-peer 引擎转发（server-lib-split 票 06）"
+authors = ["binblink"]
+edition = "2021"
+
+[dependencies]
+# 异步运行时（节点运行时 tokio::Mutex/Semaphore、会话表 watch/mpsc、派生任务、
+# mDNS 重查节流 sleep、下载目录 mkdir、TCP 监听读地址）
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util", "net"] }
+# DTO 形状（PeerNodeStatus / TrustedPeerDto / DialPeerResultDto / 引擎事件载荷）
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# 引擎事件与生命周期日志
+tracing = { version = "0.1", features = ["attributes"] }
+# 首连确认弹窗请求 id / 发送 batch id
+uuid = { version = "1", features = ["v4"] }
+# BusMessageHandler 端口签名（bus 静态订阅载荷形状，宿主/插件契约真源）
+bedcode-plugin-api = { path = "../plugin-sdk-desktop/rust" }
+# BusMessageHandler::on_message 的 anyhow::Result（生产代码里的 trait 签名）
+anyhow = "1"
+# 基础层（AppError/Result、常量、错误边界 spawn、端口 traits 与全局注册表）
+bedcode-server-base = { path = "../bedcode-server-base" }
+# 对等网络共享引擎 crate（节点身份 / 信任库 / 共享目录 / 传输引擎 / mDNS 守护）
+bedcode-peer-net = { path = "../../../packages/peer-net" }
+
+[dev-dependencies]
+tempfile = "3"
+# 可信条目 DTO 用例以 Utc::now() 造 added_at
+chrono = { version = "0.4", features = ["serde"] }

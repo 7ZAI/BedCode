@@ -650,11 +650,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
+name = "bedcode-crypto-engine"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "base64 0.22.1",
+ "bedcode-server-base",
+ "chacha20poly1305",
+ "hkdf",
+ "rand 0.8.8",
+ "rsa",
+ "serde",
+ "serde_json",
+ "sha2",
+ "x25519-dalek",
+]
+
+[[package]]
 name = "bedcode-desktop"
 version = "2.1.1"
 dependencies = [
  "actix",
- "actix-cors",
  "actix-rt",
  "actix-web",
  "actix-web-actors",
@@ -662,9 +678,15 @@ dependencies = [
  "anyhow",
  "async-trait",
  "base64 0.22.1",
+ "bedcode-crypto-engine",
  "bedcode-link-crypto",
  "bedcode-peer-net",
  "bedcode-plugin-api",
+ "bedcode-server-base",
+ "bedcode-server-core",
+ "bedcode-server-http",
+ "bedcode-server-peer-net",
+ "bedcode-server-websocket",
  "chacha20poly1305",
  "chrono",
  "dbus",
@@ -827,6 +849,103 @@ dependencies = [
  "inventory",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "bedcode-server-base"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bedcode-link-crypto",
+ "bedcode-plugin-api",
+ "futures-util",
+ "local-ip-address",
+ "mdns-sd",
+ "notify",
+ "rand 0.8.8",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sysinfo",
+ "tauri",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "bedcode-server-core"
+version = "0.1.0"
+dependencies = [
+ "actix-cors",
+ "actix-service",
+ "actix-web",
+ "base64 0.22.1",
+ "bedcode-crypto-engine",
+ "bedcode-link-crypto",
+ "bedcode-server-base",
+ "chrono",
+ "hex",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sysinfo",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "bedcode-server-http"
+version = "0.1.0"
+dependencies = [
+ "actix-service",
+ "actix-web",
+ "bedcode-plugin-api",
+ "bedcode-server-base",
+ "bedcode-server-core",
+ "futures-util",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "bedcode-server-peer-net"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bedcode-peer-net",
+ "bedcode-plugin-api",
+ "bedcode-server-base",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "bedcode-server-websocket"
+version = "0.1.0"
+dependencies = [
+ "actix",
+ "actix-rt",
+ "actix-web",
+ "actix-web-actors",
+ "async-trait",
+ "bedcode-plugin-api",
+ "bedcode-server-base",
+ "bedcode-server-core",
+ "chrono",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -1522,6 +1641,7 @@ dependencies = [
  "actix-web",
  "bedcode-desktop",
  "bedcode-mobile",
+ "bedcode-server-base",
  "futures-util",
  "serde_json",
  "tauri",

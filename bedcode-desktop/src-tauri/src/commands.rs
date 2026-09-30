@@ -8,12 +8,12 @@
 //! 的注册顺序解耦——按域就近维护即可。
 
 use crate::db::Database;
-use crate::server::core::link_crypto::{self, LinkCryptoConfig};
-use crate::server::core::metrics::ServerMetrics;
-use crate::server::core::supervisor::{ServerStatusInfo, ServerSupervisor};
 use crate::system::config::{AppConfig, NetworkConfig};
 use crate::system::constants::{TERMINAL_BG_EXTENSIONS, TERMINAL_BG_FILE_PREFIX, TERMINAL_BG_MAX_BYTES};
 use crate::Result;
+use bedcode_server_core::link_crypto::{self, LinkCryptoConfig};
+use bedcode_server_core::metrics::ServerMetrics;
+use bedcode_server_core::supervisor::{ServerStatusInfo, ServerSupervisor};
 use serde::Deserialize;
 use std::sync::Arc;
 use tauri::{Manager, State};
@@ -406,7 +406,7 @@ pub async fn set_traffic_encryption_config(
 ) -> Result<()> {
     {
         let guard = db.lock().await;
-        link_crypto::persist_config_to_db(&guard, &config)?;
+        link_crypto::persist_config_to_db(guard.conn(), &config)?;
     }
     link_crypto::update_config(config);
     link_crypto::sync_registration();
@@ -416,7 +416,8 @@ pub async fn set_traffic_encryption_config(
 /// 本机链路加密身份指纹（SHA-256 前 16 hex；未初始化时懒生成）
 #[tauri::command]
 pub async fn get_link_crypto_fingerprint(app_handle: tauri::AppHandle) -> Result<String> {
-    link_crypto::ensure_identity_fingerprint(&app_handle).await
+    // core 只接应用数据目录，AppHandle → 目录的解析留在宿主组合根薄壳
+    crate::server::composition::link_crypto_identity_fingerprint(&app_handle)
 }
 
 /// 获取网络配置

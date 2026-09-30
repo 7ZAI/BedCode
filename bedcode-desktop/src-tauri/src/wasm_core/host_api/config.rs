@@ -29,7 +29,7 @@ pub(crate) fn config_get(db: &dyn crate::wasm_core::host_api::context::DbScope, 
     let value = match config_key {
         ConfigKey::NetworkPort => {
             // 优先获取服务器实际运行端口（端口冲突时会被重新分配）
-            let supervisor = crate::server::core::supervisor::ServerSupervisor::global();
+            let supervisor = bedcode_server_core::supervisor::ServerSupervisor::global();
             let actual_port = block_on_async(supervisor.get_status_info()).port;
             // 实际端口为 0 表示服务器未启动，回退到配置值
             if actual_port > 0 {

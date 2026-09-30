@@ -25,12 +25,12 @@ use std::time::{Duration, Instant};
 use actix_web::dev::ServerHandle;
 use bedcode_desktop_lib::db::Database;
 use bedcode_desktop_lib::mdns::advertiser::MdnsAdvertiser;
-use bedcode_desktop_lib::server::core::app::start_http_server;
-use bedcode_desktop_lib::server::websocket::WebSocketManager;
+use bedcode_desktop_lib::server::composition::start_http_server;
 use bedcode_desktop_lib::system::app_context::AppContextBuilder;
 use bedcode_desktop_lib::system::info::SystemInfo;
 use bedcode_desktop_lib::wasm_core::PluginHost;
 use bedcode_desktop_lib::AppConfig;
+use bedcode_server_websocket::WebSocketManager;
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::Message as WsMsg;
@@ -137,9 +137,8 @@ async fn init_test_app_context() {
             .system_info(system_info)
             .build_and_init();
 
-            bedcode_desktop_lib::server::base::ports::init(
-                bedcode_desktop_lib::server::ports_impl::assemble(),
-            );
+        // server-lib-split 票 07：走组合根的单一装配点（与 GUI bootstrap 同一函数）
+        bedcode_desktop_lib::server::composition::install_server_ports();
 
         let ws_manager = WebSocketManager::global();
         ws_manager.init().await.expect("init WebSocketManager failed");

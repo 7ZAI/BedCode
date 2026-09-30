@@ -236,6 +236,45 @@ async fn test_schedule_plugin_reload_throttle() {
 
 // ==================== 内核会话域防回接锁（票 11） ====================
 
+/// 防回接锁的源码扫描面：宿主 `src` + **六个 server lib crate 的 `src`**
+///
+/// server-lib-split 票 07：面抽 crate 后只扫宿主 `src` 是不够的——退役面若被回接到
+/// crate 里，宿主侧的锁一个也看不见。尤其 `bedcode-server-peer-net`（传输编排下沉后
+/// 引擎面正是最可能复归编排的地方）与 `bedcode-server-websocket`（会话观察面）。
+/// crate 清单的登记处是 `server::crate_boundary_lock::SERVER_LIB_CRATES`（单一事实源）。
+fn retired_domain_scan_roots() -> Vec<std::path::PathBuf> {
+    let mut roots = vec![std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src")];
+    roots.extend(crate::server::crate_boundary_lock::server_lib_src_roots());
+    roots
+}
+
+/// 递归收集扫描面下所有 `.rs` 文件（路径 + 相对宿主 crate 根的定位串）
+fn collect_retired_domain_rs_files() -> Vec<(std::path::PathBuf, String)> {
+    let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut out = Vec::new();
+    let mut stack = retired_domain_scan_roots();
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let rel = path
+                .strip_prefix(base)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            out.push((path, rel));
+        }
+    }
+    out
+}
+
 /// 源码扫描锁：宿主侧不得再出现内核会话域的任何符号。
 ///
 /// 票 11 删除了 `src/session/` 整个目录（`SessionManager` / `SessionConfigManager` /
@@ -248,7 +287,6 @@ async fn test_schedule_plugin_reload_throttle() {
 /// 且跳过两张锁自身（`sync_handler.rs` 与本文件——它们把标识符当字符串去匹配）。
 #[test]
 fn retired_kernel_session_domain_is_not_reintroduced() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut violations: Vec<String> = Vec::new();
 
     let forbidden: [&str; 8] = [
@@ -262,32 +300,20 @@ fn retired_kernel_session_domain_is_not_reintroduced() {
         "UnifiedOutputQueue",
     ];
 
-    let mut stack = vec![root];
-    while let Some(dir) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
+    for (path, rel) in collect_retired_domain_rs_files() {
+        // 锁自身：它们以字符串形式携带这些标识符去匹配
+        if rel.ends_with("wasm_flow_test.rs") || rel.ends_with("sync_handler.rs") {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(&path) else { continue };
+        for (idx, raw_line) in content.lines().enumerate() {
+            let line = raw_line.trim_start();
+            if line.starts_with("//") || line.starts_with("///") {
                 continue;
             }
-            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
-                continue;
-            }
-            // 两张锁自身：它们以字符串形式携带这些标识符去匹配
-            if path.ends_with("wasm_flow_test.rs") || path.ends_with("sync_handler.rs") {
-                continue;
-            }
-            let Ok(content) = std::fs::read_to_string(&path) else { continue };
-            for (idx, raw_line) in content.lines().enumerate() {
-                let line = raw_line.trim_start();
-                if line.starts_with("//") || line.starts_with("///") {
-                    continue;
-                }
-                for needle in forbidden {
-                    if line.contains(needle) {
-                        violations.push(format!("{}:{}: {}", path.display(), idx + 1, line.trim()));
-                    }
+            for needle in forbidden {
+                if line.contains(needle) {
+                    violations.push(format!("{}:{}: {}", path.display(), idx + 1, line.trim()));
                 }
             }
         }
@@ -319,7 +345,6 @@ fn retired_kernel_session_domain_is_not_reintroduced() {
 /// `concurrency` 字段检测（host_api/peer.rs，行为级）。
 #[test]
 fn retired_peer_transfer_orchestration_is_not_reintroduced() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut violations: Vec<String> = Vec::new();
 
     let forbidden: [&str; 15] = [
@@ -341,32 +366,20 @@ fn retired_peer_transfer_orchestration_is_not_reintroduced() {
         "set_transfer_concurrency_for_plugin",
     ];
 
-    let mut stack = vec![root];
-    while let Some(dir) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
+    for (path, rel) in collect_retired_domain_rs_files() {
+        // 锁自身：以字符串形式携带这些标识符去匹配
+        if rel.ends_with("wasm_flow_test.rs") {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(&path) else { continue };
+        for (idx, raw_line) in content.lines().enumerate() {
+            let line = raw_line.trim_start();
+            if line.starts_with("//") || line.starts_with("///") {
                 continue;
             }
-            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
-                continue;
-            }
-            // 锁自身：以字符串形式携带这些标识符去匹配
-            if path.ends_with("wasm_flow_test.rs") {
-                continue;
-            }
-            let Ok(content) = std::fs::read_to_string(&path) else { continue };
-            for (idx, raw_line) in content.lines().enumerate() {
-                let line = raw_line.trim_start();
-                if line.starts_with("//") || line.starts_with("///") {
-                    continue;
-                }
-                for needle in forbidden {
-                    if line.contains(needle) {
-                        violations.push(format!("{}:{}: {}", path.display(), idx + 1, line.trim()));
-                    }
+            for needle in forbidden {
+                if line.contains(needle) {
+                    violations.push(format!("{}:{}: {}", path.display(), idx + 1, line.trim()));
                 }
             }
         }
@@ -391,7 +404,6 @@ fn retired_peer_transfer_orchestration_is_not_reintroduced() {
 /// 名字是**记账**（说清为什么删），不是回接。
 #[test]
 fn retired_session_observation_surface_is_not_reintroduced() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut violations: Vec<String> = Vec::new();
 
     // 逐条列出「退役面的形状」。命中即红。
@@ -404,32 +416,20 @@ fn retired_session_observation_surface_is_not_reintroduced() {
         "dispatch_input_to_plugin",
     ];
 
-    let mut stack = vec![root.clone()];
-    while let Some(dir) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
+    for (path, rel) in collect_retired_domain_rs_files() {
+        // 本文件是锁自身，跳过（避免自匹配）
+        if rel.ends_with("wasm_flow_test.rs") {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(&path) else { continue };
+        for (idx, raw_line) in content.lines().enumerate() {
+            let line = raw_line.trim_start();
+            if line.starts_with("//") {
                 continue;
             }
-            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
-                continue;
-            }
-            let Ok(content) = std::fs::read_to_string(&path) else { continue };
-            // 本文件是锁自身，跳过（避免自匹配）
-            if path.ends_with("wasm_flow_test.rs") {
-                continue;
-            }
-            for (idx, raw_line) in content.lines().enumerate() {
-                let line = raw_line.trim_start();
-                if line.starts_with("//") {
-                    continue;
-                }
-                for needle in forbidden {
-                    if line.contains(needle) {
-                        violations.push(format!("{}:{}: {}", path.display(), idx + 1, line.trim()));
-                    }
+            for needle in forbidden {
+                if line.contains(needle) {
+                    violations.push(format!("{}:{}: {}", path.display(), idx + 1, line.trim()));
                 }
             }
         }

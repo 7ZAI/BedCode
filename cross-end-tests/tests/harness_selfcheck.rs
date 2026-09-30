@@ -5,18 +5,20 @@
 //! 把台子的四段接线各自钉一条强断言：
 //!
 //! 1. 移动端地址真源：`set_target` 后 `get_target` 回读一致
-//! 2. 桌面真实插件在处理请求：移动端 `AuthHttpClient` 走真实 HTTP 拿到真实配对码
-//! 3. 端口归属：停机后同一请求必须失败（证明刚才应答的确实是本进程服务器，
+//! 2. 服务器端口已按 GUI bootstrap 同一装配面装好（票 07 的实测教训）
+//! 3. 桌面真实插件在处理请求：移动端 `AuthHttpClient` 走真实 HTTP 拿到真实配对码
+//! 4. 端口归属：停机后同一请求必须失败（证明刚才应答的确实是本进程服务器，
 //!    也证明没有留下监听进程）
-//! 4. 插件端点已登记：WS 插件端点存在（未注册端点 404 / 已注册端点可升级）
+//! 5. 插件端点已登记：WS 插件端点存在（未注册端点 404 / 已注册端点可升级）
 //!
-//! 只跑一个 `#[tokio::test]`：桌面端 `AppContext` 是进程级 `OnceLock`，
-//! 场景子步骤必须串行（与 `pty_session_chain` 同口径）。
+//! 只跑一个 `#[tokio::test]`：桌面端 `AppContext` 与服务器端口注册表都是进程级
+//! `OnceLock` 单例，场景子步骤必须串行（与 `pty_session_chain` 同口径）。
 
 mod common;
 
 use std::time::Duration;
 
+use bedcode_server_base::ports;
 use common::desktop_ctx;
 use common::mobile_ctx;
 
@@ -35,7 +37,24 @@ async fn cross_end_rig_is_wired_end_to_end() {
     desktop_ctx::init_app_context().await;
     let (port, handle, server_task) = desktop_ctx::start_server().await;
 
-    // ==================== 2. 移动端目标设备接线（HTTP / WS 的地址真源） ====================
+    // ==================== 2. 装配面与 GUI bootstrap 同款（票 07） ====================
+    // 判据是**注入后插件面真的认得中心已激活**，不是只查注册表非空：
+    // 端口没装时网关 `ports::get() == None` 判 `PassThrough`，插件登记的宿主别名
+    // 全 404，而端口占用 / WS 升级等不依赖端口的路径照常工作——症状伪装成协议 bug。
+    // 这条断言把它降级成「台子接线」问题并点名根因。
+    let server_ports = ports::get().expect(
+        "跨端 rig 必须走宿主组合根的 `server::composition::install_server_ports()`：\
+         缺端口时 HTTP 网关判 PassThrough，插件登记的宿主别名（/api/auth/* 等）全 404",
+    );
+    assert!(
+        server_ports
+            .plugin_invoker
+            .is_activated(common::desktop_ctx::SESSION_PLUGIN_ID)
+            .await,
+        "注入的 PluginInvoker 端口必须认得已激活的认证中心（否则 rig 装了个空壳端口面）"
+    );
+
+    // ==================== 3. 移动端目标设备接线（HTTP / WS 的地址真源） ====================
     mobile_ctx::set_target(port).await;
     let target = bedcode_mobile_lib::state::get_connection_manager()
         .get_target()
@@ -44,7 +63,7 @@ async fn cross_end_rig_is_wired_end_to_end() {
     assert_eq!(target.address, "127.0.0.1", "移动端目标地址必须回读一致");
     assert_eq!(target.port, port, "移动端目标端口必须是本服务器实际监听端口");
 
-    // ==================== 3. 移动端真实客户端 → 桌面真实插件 ====================
+    // ==================== 4. 移动端真实客户端 → 桌面真实插件 ====================
     let auth = bedcode_mobile_lib::auth::http::AuthHttpClient::new();
     let base = mobile_ctx::base_url(port);
     let pairing = auth
@@ -61,7 +80,7 @@ async fn cross_end_rig_is_wired_end_to_end() {
         pairing.expires_in
     );
 
-    // ==================== 4. WS 插件端点已登记（认证中心激活期登记） ====================
+    // ==================== 5. WS 插件端点已登记（认证中心激活期登记） ====================
     // 已注册端点可完成 WS 升级（认证/订阅在场景测试里做，这里只验「路由在」）
     let registered = format!("ws://127.0.0.1:{port}/ws/plugin/com.bedcode.terminal-session/terminal");
     let upgrade = tokio_tungstenite::connect_async(&registered).await;
@@ -77,7 +96,7 @@ async fn cross_end_rig_is_wired_end_to_end() {
     let err = tokio_tungstenite::connect_async(&unregistered).await;
     assert!(err.is_err(), "未注册端点必须拒绝（404 无升级），不得静默放行: {err:?}");
 
-    // ==================== 5. 停机收尾 + 端口不再应答 ====================
+    // ==================== 6. 停机收尾 + 端口不再应答 ====================
     desktop_ctx::stop_server(handle, server_task).await;
     tokio::time::sleep(Duration::from_millis(200)).await;
     let after_stop = auth

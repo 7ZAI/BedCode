@@ -105,7 +105,8 @@ impl PluginHost {
         let Some(app) = self.wasm_host_ctx.app_handle() else {
             return;
         };
-        match crate::server::peer_net::release_node_for(app, plugin_id).await {
+        let ctx = crate::server::peer_net_cmds::peer_ctx(&app);
+        match bedcode_server_peer_net::release_node_for(ctx, plugin_id).await {
             Ok(true) => {
                 tracing::info!(
                     plugin_id = %plugin_id,
@@ -382,6 +383,9 @@ impl PluginHost {
             //    实例化），实例预打开为空；重试激活（停用再启用）时授权已持久化，
             //    若实例未覆盖则重建——否则 /data 永远挂不上，激活自检必失败
             //    （Bug B 死循环）。未声明目录的 `mutex` 实例跳过（零开销）。
+            //    **仅 worker 类别可达**（ADR 0034）：非 worker 声明 preopen 在加载期
+            //    被显性拒绝，主 wasm-app 数据目录走 host-fs + fs_request_auth，
+            //    无实例漂移——本分支是 worker 预留能力的重建前置。
             let rebuild_reason: Option<String> = {
                 let entry = self.get_instance(plugin_id).await;
                 match &entry {

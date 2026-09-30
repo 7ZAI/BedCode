@@ -2560,3 +2560,11 @@ mod tests {
         assert!(qr_status().expect("status after").is_none());
     }
 }
+
+/// 票 08 / D10 跨端契约测试：本插件的路由公理 × **真实**宿主 server 网关
+///
+/// 单独成文件而非并入上面的 `mod tests`：它带 8 个端口实现 + 两套闭环，且文件头
+/// 有一整段「为什么现在才可能存在」的论证，与其余单测的可读性要求不同。形态与
+/// 理由（为何不是 `tests/` 集成目标）见该文件头。
+#[cfg(test)]
+mod d10_contract_test;

@@ -11,7 +11,7 @@
 //! 注销幂等。
 
 use super::*;
-use crate::server::http::registry;
+use bedcode_server_http::registry;
 
 #[test]
 fn test_http_route_registration_server_domain_roundtrip() {

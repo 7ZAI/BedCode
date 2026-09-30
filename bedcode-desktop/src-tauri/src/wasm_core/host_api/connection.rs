@@ -24,7 +24,7 @@ pub(crate) fn connection_list(
     if !super::check_permission(perm, plugin_id, PERMISSION_CONNECTION_READ, "host_connection_list") {
         return Err("permission denied".to_string());
     }
-    let manager = crate::server::websocket::WebSocketManager::global();
+    let manager = bedcode_server_websocket::WebSocketManager::global();
     let clients = block_on_async(manager.list_clients());
     let values: Vec<serde_json::Value> = clients
         .into_iter()
