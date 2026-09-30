@@ -6,7 +6,7 @@ authors = ["binblink"]
 edition = "2021"
 
 [lib]
-name = "bedcode_lib"
+name = "bedcode_desktop_lib"
 crate-type = ["cdylib", "rlib"]
 
 [build-dependencies]

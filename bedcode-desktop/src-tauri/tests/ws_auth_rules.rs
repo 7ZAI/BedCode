@@ -23,14 +23,14 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use actix_web::dev::ServerHandle;
-use bedcode_lib::db::Database;
-use bedcode_lib::mdns::advertiser::MdnsAdvertiser;
-use bedcode_lib::server::core::app::start_http_server;
-use bedcode_lib::server::websocket::WebSocketManager;
-use bedcode_lib::system::app_context::AppContextBuilder;
-use bedcode_lib::system::info::SystemInfo;
-use bedcode_lib::wasm_core::PluginHost;
-use bedcode_lib::AppConfig;
+use bedcode_desktop_lib::db::Database;
+use bedcode_desktop_lib::mdns::advertiser::MdnsAdvertiser;
+use bedcode_desktop_lib::server::core::app::start_http_server;
+use bedcode_desktop_lib::server::websocket::WebSocketManager;
+use bedcode_desktop_lib::system::app_context::AppContextBuilder;
+use bedcode_desktop_lib::system::info::SystemInfo;
+use bedcode_desktop_lib::wasm_core::PluginHost;
+use bedcode_desktop_lib::AppConfig;
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::Message as WsMsg;
@@ -136,6 +136,10 @@ async fn init_test_app_context() {
             .resource_dir(Arc::new(PathBuf::from(".")))
             .system_info(system_info)
             .build_and_init();
+
+            bedcode_desktop_lib::server::base::ports::init(
+                bedcode_desktop_lib::server::ports_impl::assemble(),
+            );
 
         let ws_manager = WebSocketManager::global();
         ws_manager.init().await.expect("init WebSocketManager failed");

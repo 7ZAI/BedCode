@@ -17,7 +17,7 @@
 | --- | --- |
 | 桌面端 | 始终写文件 `%LOCALAPPDATA%\com.bedcode.app\logs\`：`runtime.*.log` 全级别（dev 强制 debug）/ `error.*.log` 仅 ERROR / `frontend.*.log` 仅 dev，按天轮转 |
 | 移动端 | `pnpm run tauri:android:dev:log` 落盘 `bedcode-mobile/.dev-logs/android-dev.YYYY-MM-DD.log`（可 grep）；release 走 logcat |
-| 移动端落盘过滤 | `:dev:log` 脚本默认过滤非业务噪音：wasmtime/cranelift JIT 内部、`mdns_sd::`、Android 框架 tag（按本方 tag 白名单，`BedCode*` 前缀 + 崩溃关键 tag 保留）、主机侧 Gradle/Vite 构建进展；业务与链路日志（`bedcode_lib::*`、`reqwest::connect` 等）全保留；控制台与落盘同一套过滤；退出时打印过滤统计；`BEDCODE_LOG_NO_FILTER=1` 关闭过滤 |
+| 移动端落盘过滤 | `:dev:log` 脚本默认过滤非业务噪音：wasmtime/cranelift JIT 内部、`mdns_sd::`、Android 框架 tag（按本方 tag 白名单，`BedCode*` 前缀 + 崩溃关键 tag 保留）、主机侧 Gradle/Vite 构建进展；业务与链路日志（`bedcode_mobile_lib::*`、`reqwest::connect` 等）全保留；控制台与落盘同一套过滤；退出时打印过滤统计；`BEDCODE_LOG_NO_FILTER=1` 关闭过滤 |
 
 **前端 console 日志（仅 debug）**：`logger.*` → `report_frontend_log` → tracing（target=`frontend`），release 自动剥离。
 
@@ -25,7 +25,7 @@
 
 ## 3. 插件 WASM 日志
 
-- target 固定 `bedcode_lib::plugin::plugin_log`，`[plugin:xxx]` 前缀
+- target 固定（两端各自，2026-09-30 lib 改名后）：桌面 `bedcode_desktop_lib::wasm_core::plugin_log`（`host_api/log.rs` 内**硬编码常量**，非 `module_path!`）；移动 `bedcode_mobile_lib::plugin::commands::plugin_log`（`tracing!` 宏自动取模块路径）。两端均为 `[plugin:xxx]` 前缀
 - per-plugin 级别：`BEDCODE_PLUGIN_LOG=id=level`（filter 不能按字段过滤，per-plugin 级别需在 emit_plugin_log 入口做宿主侧阈值映射）
 - WASM trap 必须带 backtrace：`Config::wasm_backtrace_max_frames(Some(32))` **不得关闭**（wasmtime 48.0.3 `default` features 已含 backtrace，零编译成本）
 - 插件 wasm 恒 `--release` 构建（保留 names section 函数名、无 DWARF 行号）

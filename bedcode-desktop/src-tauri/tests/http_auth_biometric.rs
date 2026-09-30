@@ -18,13 +18,13 @@ use std::time::{Duration, Instant};
 
 use actix_web::dev::ServerHandle;
 use base64::Engine;
-use bedcode_lib::db::Database;
-use bedcode_lib::mdns::advertiser::MdnsAdvertiser;
-use bedcode_lib::server::core::app::start_http_server;
-use bedcode_lib::system::app_context::AppContextBuilder;
-use bedcode_lib::system::info::SystemInfo;
-use bedcode_lib::wasm_core::PluginHost;
-use bedcode_lib::AppConfig;
+use bedcode_desktop_lib::db::Database;
+use bedcode_desktop_lib::mdns::advertiser::MdnsAdvertiser;
+use bedcode_desktop_lib::server::core::app::start_http_server;
+use bedcode_desktop_lib::system::app_context::AppContextBuilder;
+use bedcode_desktop_lib::system::info::SystemInfo;
+use bedcode_desktop_lib::wasm_core::PluginHost;
+use bedcode_desktop_lib::AppConfig;
 use p256::ecdsa::signature::Signer;
 use p256::ecdsa::SigningKey;
 use p256::pkcs8::EncodePublicKey;
@@ -291,6 +291,10 @@ async fn init_test_app_context() {
             .resource_dir(Arc::new(PathBuf::from(".")))
             .system_info(system_info)
             .build_and_init();
+
+            bedcode_desktop_lib::server::base::ports::init(
+                bedcode_desktop_lib::server::ports_impl::assemble(),
+            );
         let _ = INIT.set(());
     }
 }

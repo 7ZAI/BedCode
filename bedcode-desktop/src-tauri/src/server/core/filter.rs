@@ -23,7 +23,7 @@
 //!
 //! ```
 //! use std::sync::Arc;
-//! use bedcode_lib::server::core::filter::{Direction, FilterContext, TrafficFilter, Verdict};
+//! use bedcode_desktop_lib::server::core::filter::{Direction, FilterContext, TrafficFilter, Verdict};
 //!
 //! struct AesGcmCipher { /* key material */ }
 //!

@@ -12,10 +12,15 @@ const ignores = [
   '**/dist',
   '**/dist-ssr',
   '**/src-tauri',
+  // Cargo 构建目录：tauri build 会把插件产物（index.js）拷进 target/ 下的
+  // resources/plugins/**，那是生成物（压缩过的 index.js），不是源码。
+  // 仓库根新包 cross-end-tests/ 同样有 target/（2026-09-30 新增）
+  '**/target',
   '**/coverage',
   '**/playwright-report',
   '**/test-results',
   '**/scripts/**',
+  '**/.scratch/**',
   '**/__tests__/**',
   '**/*.test.ts',
   '**/*.test.js',

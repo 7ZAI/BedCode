@@ -18,7 +18,7 @@
  *     其余框架 tag 一律过滤，新设备新框架 tag 自动滤除，无需维护列表
  *   - 主机侧 tauri CLI -v 的 Debug 行与 neli 路由表 dump、Gradle 任务/配置进展、
  *     Vite 与插件 watch 重建的重复进展行（构建/编译错误不匹配这些行，天然保留）
- *   业务日志（bedcode_lib::*、bedcode_peer_net::*、[plugin:xxx]、前端 relay、
+ *   业务日志（bedcode_mobile_lib::*、bedcode_peer_net::*、[plugin:xxx]、前端 relay、
  *   Kotlin 侧 BedCode-*）与链路排障日志（reqwest::connect 等）全部保留。
  *   完整关闭过滤（行为同旧版全量；控制台不再带 ANSI 颜色，统一纯文本管线）：
  *   BEDCODE_LOG_NO_FILTER=1 pnpm run tauri:android:dev:log
@@ -92,7 +92,7 @@ const DROP_PATTERNS = [
   /wasmtime_internal_cranelift::/,
   /wasmtime_cranelift::/,
   /wasmtime::runtime::code_memory/,
-  // mdns_sd crate 内部 debug（业务发现日志在 bedcode_lib::mdns::* / bedcode_peer_net::*）
+  // mdns_sd crate 内部 debug（业务发现日志在 bedcode_mobile_lib::mdns::* / bedcode_peer_net::*）
   /mdns_sd::/,
   // 主机侧 tauri CLI -v 的 Debug 行（结构 dump / 文件监视器）与 neli 路由表 dump
   /\[neli::socket\]/,

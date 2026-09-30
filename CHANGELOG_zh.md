@@ -9,6 +9,45 @@
 
 ## [未发布]
 
+#### 跨端真实互连集成测试（新增 `cross-end-tests` 工程 + 两端 lib 改名；无生产逻辑、无 ABI、无版本号变动）
+
+- **做了什么**：新增仓库根 Rust 包 `cross-end-tests/`，在同一测试进程内让
+  **桌面端真实 Actix 服务器 + 真实 `com.bedcode.terminal-session` WASM 产物**与
+  **移动端真实客户端代码**（`AuthHttpClient` / `SessionHttpClient` / `TerminalLinkManager`）
+  互连——零 mock、无 adb、无 WebView、无模拟器，可直接进 CI。此前两端的集成测试
+  各自 mock 对方（桌面侧对面是通用 reqwest / tokio-tungstenite 客户端，移动端对面是
+  假桌面服务器）：两套 mock 各自自洽，**契约在两端之间漂移时两边全绿而真实链路已坏**
+- **L0 前置——两端 lib 同名去重**：`bedcode_lib`（两端同名）→ `bedcode_desktop_lib` /
+  `bedcode_mobile_lib`。同名 crate 无法同时出现在一个依赖图里，不改名则本工程只能依赖
+  一端。影响面已核实并限定在两端各自的 src / tests / bench，加上少量字符串常量
+  （EnvFilter 默认值 `bedcode_lib=debug`、插件日志 target 前缀、`android-backup` 手工保留
+  副本里的 `System.loadLibrary`、四份文档表格）。路径依赖默认以 **package 名**为键，
+  故 `Cargo.toml` 需显式写 `package = "..."`
+- **已知行为变化（非静默）**：用户既有的 `bedcode_lib=debug` EnvFilter（及任何按插件
+  日志 target 过滤的规则）需改新名——这是开发调试配置而非产品功能。Android 的 `.so`
+  文件名跟随 lib 名，`System.loadLibrary("bedcode_mobile_lib")` 随之变化；`gen/android`
+  下的副本被 gitignore 且由 tauri 自动重建，**但手工保留的
+  `android-backup/app-java/generated/Rust.kt` 副本已同步修改**，否则恢复即失配
+- **覆盖（每个场景 = 一个独立测试二进制：`AppContext` 是进程级 `OnceLock` 单例）**：
+  配对 / QR / 重认证真实往返（含四类反例）；**从客户端侧证明 ADR 0033 密钥环轮换宽限期**
+  （轮换前的 token 在 HTTP 与 WS 两面仍能通过认证，轮换后新签发 token 带新 `kid`）；
+  会话控制 HTTP 面（含 `1002` 错误信封与「remove 幂等 vs stop/input 严格」这条**不对称**
+  契约）；**终端流闭环**——真实 `bash` PTY 字节经桌面插件 → `host-pty` → WS → 移动端
+  ingest 门控 → 页面通道；无中心在册 / 伪造凭证的 fail-closed（HTTP + WS 两面）；桌面停用 /
+  激活插件对移动端连接的联动影响
+- **只有跨端互连才能暴露的两处发现（初稿契约写错，实测行为更有价值）**：
+  ① 无中心在册时配对端点返回 **401 而非 404**——免凭证档位由插件在 activate 期登记，
+  未激活即**不存在无认证的自助配对入口**；② 对不存在的会话 `remove` 是**幂等成功**
+  （`actions::remove_via_host` 注释有据），而 `stop` / `input` 严格报 1002。这条不对称
+  现已在跨端层钉死，未被绕过
+- **诚实边界（记录而非隐藏）**：`deny_kind` 三态是宿主**日志**字段而非 wire 字段，
+  客户端一律只看到 401（这是有意的，不泄露部署状态）；生物认证正向路径需要 Android
+  Keystore 中的真设备私钥，无头进程构造不出（只覆盖「未绑定 → 1008」反例）；QR 的
+  「桌面扫码确认」UI 步骤被跳过，改为直接驱动插件自身的 `qr-code-generate` 入口
+- **CI**：`test.yml` 新增 `cross-end` job（ubuntu-latest，复用桌面插件产物构建）。
+  验证：改名后两端 `cargo test` 全量绿（桌面 lib 1058 + 全部集成 target；移动端全量），
+  `cross-end-tests` 7/7 绿；运行前已重建两端插件产物
+
 > 以桌面端为主（路线图阶段 2 + 阶段 3 会话部分合并为一个批次执行），外加一项移动端
 > 基础建设变更（wasmtime 47 → 48，见「基础建设」节）——**两端版本号均不动**；桌面批次的
 > 范围豁免与移动端受损清单见「文档」节。

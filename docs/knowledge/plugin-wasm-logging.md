@@ -15,7 +15,7 @@
    内部哪个函数、哪一层调用崩的。AI agent 排查插件崩溃只能看到"哪个导出失败"，无法定位插件内部故障点。
 2. **插件 wasm 恒 `--release` 构建**：dev 桌面端下插件也是 release 产物——保留 names section（函数名）
    但无 DWARF 行号，深度调试（定位到源码行）不可达；且没有"调试模式"开关来按需切换构建 profile。
-3. **插件日志级别全局绑定**：插件日志 target 固定 `bedcode_lib::plugin::plugin_log`，tracing filter
+3. **插件日志级别全局绑定**：插件日志 target 固定（桌面 `bedcode_desktop_lib::wasm_core::plugin_log`），tracing filter
    无法按插件区分（filter 不支持按字段过滤）。release 下想单查某个插件的 debug/trace 日志只能全局
    热调（`set_log_level`），会刷爆整个 runtime 文件。
 

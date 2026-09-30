@@ -11,9 +11,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
-use bedcode_lib::db::Database;
-use bedcode_lib::wasm_core::storage::PluginStorage;
-use bedcode_lib::wasm_core::PluginHost;
+use bedcode_desktop_lib::db::Database;
+use bedcode_desktop_lib::wasm_core::storage::PluginStorage;
+use bedcode_desktop_lib::wasm_core::PluginHost;
 use serde_json::json;
 use tokio::sync::Mutex;
 
@@ -224,15 +224,15 @@ pub async fn build_env(full: bool) -> anyhow::Result<BenchEnv> {
     // 无头上下文没有 AppHandle → 弹窗层必然拒绝（与上面 fs 授权同款约束）：
     // 基准要测的是桥接开销，不该被授权弹窗拦在门外
     let fixture_origin = format!("http://127.0.0.1:{port}");
-    let auth_store = bedcode_lib::wasm_core::security::auth_policy::AuthPolicyStore::new(db.clone());
+    let auth_store = bedcode_desktop_lib::wasm_core::security::auth_policy::AuthPolicyStore::new(db.clone());
     for id in [MAIN_ID, PEER_ID] {
         auth_store
             .grant(
                 id,
-                bedcode_lib::wasm_core::security::auth_policy::AuthResource::Network,
+                bedcode_desktop_lib::wasm_core::security::auth_policy::AuthResource::Network,
                 &fixture_origin,
                 &[],
-                bedcode_lib::wasm_core::security::auth_policy::AuthRecordSource::User,
+                bedcode_desktop_lib::wasm_core::security::auth_policy::AuthRecordSource::User,
             )
             .await?;
     }

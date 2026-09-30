@@ -12,7 +12,7 @@
 //! ② 老字符串形状（如参数解析类错误，tauri 走 `InvokeError::from_error` 的 to_string）
 //!    仍需被前端 parseInvokeError 兜底为 host.internal —— 形状矩阵锁在前端测试。
 
-use bedcode_lib::system::error::AppError;
+use bedcode_desktop_lib::system::error::AppError;
 use serde_json::json;
 
 /// 模拟整条「命令 Err → IPC rejection 响应体」：信封形状必须直达前端。

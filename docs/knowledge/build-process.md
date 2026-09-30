@@ -269,7 +269,9 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
-name = "bedcode_lib"
+# lib 名跟随所属端（2026-09-30 改名）：两端曾同为 `bedcode_lib`，导致任何同时依赖
+# 两端的工程（跨端集成测试）crate 名冲突。同名是隐患不是风格问题。
+name = "bedcode_desktop_lib"   # 移动端为 "bedcode_mobile_lib"
 # 关键：生成多种类型的库文件
 # - staticlib: 静态库 (iOS 使用)
 # - cdylib: 动态库 (Android 使用)
@@ -316,13 +318,19 @@ mod session;
 
 ### 编译产物
 
-| 目标平台 | 编译目标 | 产物类型 | 产物名称 |
-|---------|---------|---------|---------|
-| Windows | x86_64-pc-windows-msvc | .dll | bedcode_lib.dll |
-| macOS | aarch64-apple-darwin | .dylib | libbedcode_lib.dylib |
-| Linux | x86_64-unknown-linux-gnu | .so | libbedcode_lib.so |
-| Android | aarch64-linux-android | .so | libbedcode_lib.so |
-| iOS | aarch64-apple-ios | .a | libbedcode_lib.a |
+| 端 | 目标平台 | 编译目标 | 产物类型 | 产物名称 |
+|----|---------|---------|---------|---------|
+| 桌面 | Windows | x86_64-pc-windows-msvc | .dll | bedcode_desktop_lib.dll |
+| 桌面 | macOS | aarch64-apple-darwin | .dylib | libbedcode_desktop_lib.dylib |
+| 桌面 | Linux | x86_64-unknown-linux-gnu | .so | libbedcode_desktop_lib.so |
+| 移动 | Android | aarch64-linux-android | .so | libbedcode_mobile_lib.so |
+| 移动 | iOS | aarch64-apple-ios | .a | libbedcode_mobile_lib.a |
+
+> 产物名跟随 `[lib] name`（tauri build 自动生成 `System.loadLibrary` / jniLibs
+> 文件名）。改名后 Android `gen/android/.../generated/Rust.kt` 的
+> `System.loadLibrary("bedcode_mobile_lib")` 随之变化——该目录被 gitignore，
+> `tauri android init` 重建时自动跟随；**手工备份副本
+> `android-backup/app-java/generated/Rust.kt` 需同步改**，否则恢复即失配。
 
 ---
 
@@ -390,7 +398,7 @@ pnpm run tauri:android:build
 │    - rustBuildArm64Debug → cargo build --target aarch64     │
 │    - rustBuildX86_64Debug → cargo build --target x86_64     │
 │    - rustBuildArmDebug → cargo build --target armv7         │
-│    输出: libbedcode_lib.so                                   │
+│    输出: libbedcode_mobile_lib.so                           │
 └─────────────────────────────────────────────────────────────┘
        │
        ▼
@@ -517,7 +525,7 @@ pnpm run tauri:build
 ┌─────────────────────────────────────────────────────────────┐
 │ 2. Rust 编译                                                 │
 │    cargo build --release                                     │
-│    产物: libbedcode_lib.so / .dll / .dylib                   │
+│    产物: libbedcode_desktop_lib.so / .dll / .dylib          │
 └─────────────────────────────────────────────────────────────┘
        │
        ▼
@@ -615,6 +623,13 @@ Rust 增量编译会导致 `target` 目录持续增长。**本仓库无根 works
 | `bedcode-desktop/target/fixtures/` | 桌面 9 个测试夹具共享 | `src-tauri/.../runtime/fixture_target.rs` + `packages/.cargo/config.toml` |
 | `bedcode-desktop/target/wasm-apps/` | 桌面 4 个 wasm 应用共享 | `scripts/plugin-wasm-config.mjs`（`WASM_TARGET_DIR`）+ `wasm-apps/.cargo/config.toml` |
 | `bedcode-mobile/target/fixtures/` | 移动 2 个夹具 / 插件共享 | `bedcode-mobile/src-tauri/.../component.rs` 的 `fixture_target_dir()` |
+| `cross-end-tests/target/` | 跨端互连测试（仓库根工程，依赖两端 lib） | cargo 默认；**刻意独立**（见下） |
+
+`cross-end-tests/target/` **不并入任何端内目录**：它的依赖图是两端 lib 的**并集**
+再加自己的 dev 依赖（tauri / actix-web 用于取类型），与任一端都不同——并入会驱逐该端
+缓存；且端内 target 有 15G 自动 `cargo clean` 阈值，混在一起会统计失真并连带清掉
+跨端缓存（与 `fixtures` / `wasm-apps` 不并入宿主同因）。代价是它的依赖图**整份重新
+编译一次**（首次构建分钟级、峰值十几 GB）——换来的是两端缓存互不干扰。
 
 `fixtures` 与 `wasm-apps` **刻意不合并**：夹具 crate 有
 `[profile.release] opt-level="s"/lto=true`，wasm 应用无 `[profile.*]`（cargo 默认）；
@@ -636,6 +651,7 @@ const CONFIG = {
   maxSizeGB: 15,        // 仅约束宿主 src-tauri/target，超阈值执行 cargo clean
   sharedTargetDirs: [...],    // 共享目录：只报告，不自动删（删=丢共享编译缓存）
   legacyTargetParents: [...], // 遗留 per-crate 目录：报告为「可安全删除」
+  rootTargetDirs: ['cross-end-tests/target'], // 仓库根级工程：只报告（依赖图独立）
 }
 ```
 

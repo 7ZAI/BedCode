@@ -699,3 +699,8 @@ Claude Code (PTY)
 | 加密工具（报文/文件传输加密） | `src-tauri/src/utils/crypto/` |
 | 认证工具（桥接面） | `src-tauri/src/utils/auth/*.rs`（`auth_center.rs` / `identity.rs`；**无 JWT 密码学**，ADR 0033） |
 | 前端测试 | `src/__tests__/**/*.test.ts` |
+
+> 跨端（移动端 ↔ 桌面端）真实互连集成测试不在本工程，**在仓库根 `cross-end-tests/`**
+> （独立 Rust 包，依赖两端 lib）：`bedcode-desktop/src-tauri/tests/` 里的集成测试
+> 对面是**通用 reqwest / tokio-tungstenite 客户端**，`cross-end-tests/` 里的对面才是
+> **移动端真实客户端代码**。改跨端协议契约时两边都要看（见 AGENTS §3）。
