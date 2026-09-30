@@ -126,6 +126,20 @@ impl OutputRecorder {
     pub fn frame_count(&self) -> usize {
         self.chunks.lock().unwrap_or_else(|p| p.into_inner()).len()
     }
+
+    /// 帧边界（`(该帧起始字节偏移, 该帧长度)` 列表）
+    ///
+    /// 取证用：把「某个字节偏移」映射回「它落在哪一帧 / 帧内第几字节」，即可判定
+    /// 字节级错位发生在**帧内部**（环 / 插件拼装）还是**帧边界上**（传输 / 转发）。
+    pub fn frame_spans(&self) -> Vec<(usize, usize)> {
+        let mut spans = Vec::new();
+        let mut offset = 0usize;
+        for chunk in self.chunks.lock().unwrap_or_else(|p| p.into_inner()).iter() {
+            spans.push((offset, chunk.len()));
+            offset += chunk.len();
+        }
+        spans
+    }
 }
 
 /// 造一个把移动端终端输出记到 `recorder` 的页面级 Channel

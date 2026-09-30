@@ -3,13 +3,24 @@
 //! 复刻 `bedcode-desktop/src-tauri/tests/pty_session_chain.rs`（`app_handle(None)`
 //! 无头模式）。与桌面端单端测试的差别只有一处、也是本工程的全部意义：
 //! **对面是移动端真实客户端代码**，不是通用 reqwest / tokio-tungstenite。
+//!
+//! **装配面必须与 GUI bootstrap 完全同款**（server-lib-split 票 07）：端口注册表
+//! 经宿主组合根的单一装配点 [`bedcode_desktop_lib::server::composition`]
+//! `install_server_ports` 装。历史上本 rig 只建 `AppContext` 不装端口，症状是
+//! HTTP 网关 `ports::get() == None` 判 `PassThrough` → 插件在激活期登记的全部宿主
+//! 别名（`/api/auth/*` / `/api/sessions*` / `/api/configs`）一律 404，而端口占用、
+//! WS 升级等不依赖端口的路径照常工作——七个场景同时红、且看起来像协议问题。
+//! 自检用例 `rig_assembles_the_same_server_ports_face_as_gui_boot` 钉住这条不变量。
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use bedcode_desktop_lib::db::Database;
 use bedcode_desktop_lib::mdns::advertiser::MdnsAdvertiser;
-use bedcode_desktop_lib::server::core::app::start_http_server;
+// server-lib-split 票 03：内核组合入口 `server::core::app` 已下沉为
+// `bedcode_server_core::app::serve`，宿主侧兼容面在 `server::composition`
+// （签名与拆分前一致，调用点不必改）
+use bedcode_desktop_lib::server::composition::{install_server_ports, start_http_server};
 use bedcode_desktop_lib::system::app_context::{AppContext, AppContextBuilder};
 use bedcode_desktop_lib::system::info::SystemInfo;
 use bedcode_desktop_lib::wasm_core::PluginHost;
@@ -95,18 +106,15 @@ async fn init_app_context_inner(activate_center: bool) {
         plugin_host
             .wasm_host_ctx()
             .set_plugin_db_root(Some(plugin_db_root().clone()));
-        if activate_center {
-            // 激活认证中心：/api/auth/*、/api/sessions*、/api/configs 与两条 WS
-            // 插件端点全在插件侧；激活期宿主据 manifest 自动登记端点
-            plugin_host
-                .activate_plugin(SESSION_PLUGIN_ID, false)
-                .await
-                .expect("activate com.bedcode.terminal-session (bundled artifact)");
-        }
 
         let mdns_advertiser = Arc::new(tokio::sync::RwLock::new(MdnsAdvertiser::new()));
         let system_info = Arc::new(SystemInfo::collect());
 
+        // 顺序 = GUI bootstrap 的同一顺序（src-tauri/src/lib.rs setup）：
+        // AppContext 先注册 → 端口装配（`assemble()` 取总线走 `AppContext::try_global`，
+        // 早一步会装上占位空总线，插件的 `bus-subscribe` 便永收不到互调请求）→
+        // 最后才激活插件（激活期宿主据 manifest 自动登记端点，端点表与
+        // `PluginInvoker` 端口此刻都必须已就位）。
         AppContextBuilder::new()
             .db(db.clone())
             .plugin_host(plugin_host.clone())
@@ -115,6 +123,16 @@ async fn init_app_context_inner(activate_center: bool) {
             .resource_dir(Arc::new(PathBuf::from(".")))
             .system_info(system_info)
             .build_and_init();
+        install_server_ports();
+
+        if activate_center {
+            // 激活认证中心：/api/auth/*、/api/sessions*、/api/configs 与两条 WS
+            // 插件端点全在插件侧；激活期宿主据 manifest 自动登记端点
+            plugin_host
+                .activate_plugin(SESSION_PLUGIN_ID, false)
+                .await
+                .expect("activate com.bedcode.terminal-session (bundled artifact)");
+        }
         let _ = INIT.set(());
     }
 }
@@ -184,6 +202,34 @@ pub async fn plugin_api_call(api: &str, params: serde_json::Value) -> serde_json
         panic!("plugin api '{api}' error: {err}");
     }
     reply.get("result").cloned().expect("result")
+}
+
+/// 驱动插件 **Rust 命令面**（= 桌面宿主前端那条路，与 `plugin_invoke` 同一下游）
+///
+/// 走 `PluginHost::invoke_rust_command`（`api_bridge::plugin_invoke` 的下游，
+/// 去掉的是 webview + 凭证层——那是身份管道，不是输出管道）。因此本函数能
+/// 在无头场景里扮演**桌面终端预览消费者**（`session.output.pull` /
+/// `session.output.ack`），与移动端 WS 消费者**共享同一个 PTY 输出环**。
+///
+/// 这是「桌面端 + 移动端同时看同一个终端」唯一能真实构造的位置：两个消费者
+/// 的帧面根本不同（命令面 JSON vs WS 二进制帧），任何单端 mock 都拼不出来。
+pub async fn plugin_command(plugin_id: &str, command: &str, args: serde_json::Value) -> serde_json::Value {
+    try_plugin_command(plugin_id, command, args)
+        .await
+        .unwrap_or_else(|e| panic!("plugin command '{plugin_id}::{command}' failed: {e}"))
+}
+
+/// [`plugin_command`] 的可失败版（长循环里用：错误要能被断言到，不得靠 panic 传递）
+pub async fn try_plugin_command(
+    plugin_id: &str,
+    command: &str,
+    args: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    AppContext::global()
+        .plugin_host()
+        .invoke_rust_command(plugin_id, command, args)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// 播种一条可直接启动的会话配置（bash，工作目录临时目录），返回 config id

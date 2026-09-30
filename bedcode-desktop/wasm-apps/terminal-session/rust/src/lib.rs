@@ -1123,14 +1123,19 @@ impl WasmPlugin for SessionPlugin {
             return Ok(());
         }
         // pty:output（P2 宿主限频唤醒；payload `{ ptyId }`，只提示「环有新字节」）→
-        // 前端事件（终端组件据此立即拉一轮；字节仍走 `session.output.pull` 拉取）
+        // ① 前端事件（终端组件据此立即拉一轮；字节仍走 `session.output.pull` 拉取）
+        // ② **移动端 WS 连接**（`drain_session`）：此前只有插件自己的前端被唤醒，
+        //    移动端拿不到 → 空闲期首个字节只能等 1s 调度 tick。同一份限频唤醒
+        //    （≥50ms 一条）对两条消费路径都成立，无需新增通道。
         if msg.topic
             == bedcode_plugin_api::host::pty_event_topic(
                 bedcode_plugin_api::host::PTY_OUTPUT,
                 Self::ID,
             )
         {
-            output::on_pty_output(&msg.payload);
+            if let Some(session_id) = output::on_pty_output(&msg.payload) {
+                ws_terminal::drain_session(&session_id);
+            }
             return Ok(());
         }
         // ws:client-connect（属主私有 topic，票 07）：设备派生事件与认证记录 touch

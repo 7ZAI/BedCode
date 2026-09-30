@@ -72,16 +72,42 @@ pub struct PtyRing {
     /// 驻留条目上限（防御极小块风暴：字节没超容量但块数失控时同样淘汰最旧）
     ///
     /// 沿用会话输出环的块级惯例（旧 `channels.global_queue_max_chunks` 已随会话下沉退役）；正常读块量级（KB 级）
-    /// 下字节上限先触发，本值只在碎块场景兜底。
+    /// 下字节上限先触发，本值只在碎块场景兜底——**前提是尾块合并**（`push` 内），
+    /// 否则行式输出的短读块会先于字节上限触发（见 [`PtyRing::DEFAULT_MAX_CHUNKS`]）。
     max_chunks: usize,
 }
 
 impl PtyRing {
+    /// 尾块合并目标（字节）
+    ///
+    /// 取 `PLUGIN_PTY_RING_FETCH_MAX_BYTES`（16 KiB，单次 `ring-fetch` 上限）同值：
+    /// 合并块不超过任何消费者的单次取数窗口（块边界对 `fetch` 不可见，此值只为让
+    /// 「块数 = 容量 / 合并目标」这个估算是诚实的），同时足够大到能吸掉 PTY 的短读
+    /// （行式输出实测 ~7 B/次）。
+    ///
+    /// **上限也是淘汰粒度的上限**：淘汰只能整块丢，所以合并块越大，一次淘汰就越
+    /// 可能连带丢掉仍可服务的历史（消费者只落后 1 字节也会被 `truncated`）。16 KiB
+    /// 把这个过冲钉在 4 MiB 环的 0.4%，可接受；不宜再大。
+    pub const COALESCE_TARGET: usize = 16 * 1024;
+
+    /// 启用尾块合并的**最小环容量**（字节）
+    ///
+    /// 容量小于本值时保持「一次 push 一块」：此时 `DEFAULT_MAX_CHUNKS`（4096）与
+    /// 字节容量已是同一量级（4096 × 16 B = 64 KiB），条目上限几乎不是生效维度，
+    /// 而精确的块粒度换来更细的淘汰（不过冲）。容量 ≥ 64 KiB 时条目上限会先于字节
+    /// 上限成为瓶颈（实测 4 MiB 环在 29 KiB 处淘汰），必须靠合并把字节上限恢复为
+    /// 唯一权威维度。
+    pub const COALESCE_MIN_CAPACITY: u64 = 64 * 1024;
+
     /// 默认条目上限（碎块防御）
     ///
     /// 沿用会话输出环块级惯例，本环量级下取 4096：
     /// 正常读块（KB 级）时字节容量先触发淘汰，本值只挡「一次 read 只回几字节」的病态
     /// 碎块场景——否则块数可堆到容量值，元数据开销反超数据本身。
+    ///
+    /// **前提是尾块合并**（见 [`PtyRing::push`]): 没有合并时，行式输出的 ~7 B/次
+    /// 读块会先于字节容量撞上本上限（实测：声明 4 MiB 的会话环在产出 29 KiB 处
+    /// 就开始淘汰）。合并后块数由容量决定（4 MiB → 256 块），本值回到「病态硬闸」。
     pub const DEFAULT_MAX_CHUNKS: usize = 4096;
 
     pub fn new(capacity_bytes: u64) -> Self {
@@ -101,31 +127,87 @@ impl PtyRing {
 
     /// 追加一段产出（生产端唯一入口，均摊 O(1)）
     ///
-    /// 空投递直接忽略（不产生块、不推进偏移）。超字节容量或超条目上限时按最旧优先
-    /// 淘汰；单段即超容量时整环腾清后仍保留该段——至少驻留一块，否则消费者的游标
-    /// 将永远落在驻留区间之外。
+    /// **尾块合并**：尾块未达 [`COALESCE_TARGET`] 时把新段并进去，而不是「一次
+    /// 读一块」。这不是优化而是**正确性前提**——PTY 主设备的一次 `read` 只返回
+    /// 当时已到达的字节（行式输出实测 **~7 B/次**），若每次 push 都新开一块，
+    /// 则 [`DEFAULT_MAX_CHUNKS`] 会在**字节容量远未用满**时先触发淘汰：
+    /// 实测声明 4 MiB 的会话环在产出 29 KiB 处就开始淘汰（`min_offset=29062`
+    /// ≈ 4096 × 7 B，2026-09-30 跨端压力测试），即「4 MiB 环」对行式输出实际
+    /// 只相当于 28 KiB 环，每次淘汰都逼客户端清屏重锚。合并后块数由
+    /// 「容量 / [`COALESCE_TARGET`]`」决定（4 MiB → 256 块），字节上限重新成为
+    /// 唯一生效维度，`max_chunks` 退回它本来的定位：**病态场景的硬闸**。
+    ///
+    /// 合并不改变可观测语义：`fetch` 本就跨块合并，块边界对消费者不可见；游标、
+    /// 偏移、淘汰与 `truncated` 语义全部不变（每块区间仍连续无重叠）。
+    ///
+    /// 淘汰规则不变：超字节容量或超条目上限时按最旧优先淘汰；单段即超容量时整环
+    /// 腾清后仍保留该段——至少驻留一块，否则消费者的游标将永远落在驻留区间之外。
     pub fn push(&mut self, bytes: &[u8]) {
         if bytes.is_empty() {
             return;
         }
-
-        let len = bytes.len() as u64;
-        while self.resident_bytes + len > self.capacity_bytes || self.chunks.len() + 1 > self.max_chunks {
-            let Some(evicted) = self.chunks.pop_front() else {
-                break;
+        let mut rest = bytes;
+        // ① 并入未满的尾块（仅大环启用；小环保持精确淘汰粒度，见 COALESCE_MIN_CAPACITY）
+        let target = if self.capacity_bytes >= Self::COALESCE_MIN_CAPACITY {
+            Self::COALESCE_TARGET
+        } else {
+            0
+        };
+        loop {
+            let room = match self.chunks.back() {
+                Some(tail) => target.saturating_sub(tail.bytes.len()),
+                None => 0,
             };
-            self.resident_bytes -= evicted.bytes.len() as u64;
+            if room == 0 || rest.is_empty() {
+                break;
+            }
+            while self.resident_bytes + 1 > self.capacity_bytes && self.chunks.len() > 1 {
+                if !self.evict_oldest() {
+                    break;
+                }
+            }
+            let free = self.capacity_bytes.saturating_sub(self.resident_bytes) as usize;
+            let take = room.min(rest.len()).min(free);
+            if take == 0 {
+                break;
+            }
+            let tail = self.chunks.back_mut().expect("刚判定过尾块存在");
+            tail.bytes.extend_from_slice(&rest[..take]);
+            self.max_offset = tail.start + tail.bytes.len() as u64;
+            self.resident_bytes += take as u64;
+            rest = &rest[take..];
+            // 驻留起点不受影响（只动尾块）
         }
-
+        if rest.is_empty() {
+            return;
+        }
+        // ② 余量作为新块（先淘汰腾位）
+        let len = rest.len() as u64;
+        while self.resident_bytes + len > self.capacity_bytes || self.chunks.len() + 1 > self.max_chunks {
+            if !self.evict_oldest() {
+                break;
+            }
+        }
         let start = self.max_offset;
         self.chunks.push_back(RingChunk {
             start,
-            bytes: bytes.to_vec(),
+            bytes: rest.to_vec(),
         });
         self.resident_bytes += len;
         self.max_offset = start + len;
         // 淘汰后驻留起点前移；环此前为空时即本块起点
         self.min_offset = self.chunks.front().map(|chunk| chunk.start).unwrap_or(self.max_offset);
+    }
+
+    /// 淘汰最旧一块；返回 `false` = 环已空（调用方据此停止淘汰）
+    fn evict_oldest(&mut self) -> bool {
+        match self.chunks.pop_front() {
+            Some(evicted) => {
+                self.resident_bytes -= evicted.bytes.len() as u64;
+                true
+            }
+            None => false,
+        }
     }
 
     /// 从 `from_offset` 起拉取至多 `max_bytes` 字节（跨块合并，对消费者隐藏块边界）
@@ -440,25 +522,30 @@ mod tests {
     }
 
     /// C-014 碎块防御：字节有余量、块数达上限时同样淘汰最旧（票 05 条目上限）
+    ///
+    /// 压满条目上限需要**超过合并目标**的单次 push（否则尾块会吸进去，见
+    /// C-017）——这里用 18 KiB/次，块数维度才是唯一生效维度。
     #[test]
     fn chunk_count_cap_evicts_even_when_bytes_fit() {
-        // 容量 1 KiB（字节维度足够放 100 个 8 字节块），条目上限才是生效维度
-        let mut ring = PtyRing::with_limits(1024, 4);
-        for tag in 0u8..8 {
-            ring.push(&payload(tag, 8));
+        // 每段 18 KiB：超过合并目标 ⇒ 每次 push 自成一块（条目上限才能生效）
+        const BIG: usize = PtyRing::COALESCE_TARGET + 1024;
+        // 容量 256 KiB：6 × 18 KiB = 108 KiB 远未满（字节维度不触发）
+        let mut ring = PtyRing::with_limits(256 * 1024, 4);
+        for tag in 0u8..6 {
+            ring.push(&payload(tag, BIG));
         }
 
         let (min, max) = ring.watermarks();
-        assert_eq!(max, 64, "产出偏移与条目上限无关，永不回退");
-        assert_eq!(min, 32, "只驻留最后 4 块（每块 8 字节）");
-        assert_eq!(ring.resident_bytes(), 32, "块数被钳在上限内");
+        assert_eq!(max, (6 * BIG) as u64, "产出偏移与条目上限无关，永不回退");
+        assert_eq!(min, (2 * BIG) as u64, "只驻留最后 4 块（每块 18 KiB）");
+        assert_eq!(ring.resident_bytes(), (4 * BIG) as u64, "块数被钳在上限内");
         assert_eq!(ring.chunk_count(), 4);
 
-        let behind = ring.fetch(0, 1024);
+        let behind = ring.fetch(0, 1024 * 1024);
         assert!(behind.truncated, "块数淘汰同样造成缺口，必须如实上报");
         assert_eq!(
             behind.data,
-            (4u8..8).flat_map(|tag| payload(tag, 8)).collect::<Vec<u8>>()
+            (2u8..6).flat_map(|tag| payload(tag, BIG)).collect::<Vec<u8>>()
         );
     }
 
@@ -472,7 +559,127 @@ mod tests {
 
         let (min, max) = ring.watermarks();
         assert_eq!((min, max), (32, 64), "字节容量 32 生效：只驻留最后两块");
-        assert_eq!(ring.chunk_count(), 2, "块数远低于上限，条目维度不参与淘汰");
+        assert_eq!(
+            ring.chunk_count(),
+            2,
+            "容量 32 < COALESCE_MIN_CAPACITY ⇒ 不合并，保持精确淘汰粒度；\
+             块数远低于上限，条目维度不参与淘汰"
+        );
+    }
+
+    /// C-017 行式输出回归：极短 push 在字节容量用满前**不得**触发淘汰
+    ///
+    /// 实测缺陷（2026-09-30 跨端压力测试）：PTY 主设备一次 `read` 只返回已到达的
+    /// 字节，行式输出实测 ~7 B/次。原实现「一次 push 一块」+ 固定 4096 块上限，
+    /// 使得声明 4 MiB 的会话环在产出 29 KiB 处就开始淘汰（客户端每次被逼清屏重锚）。
+    /// 本用例在修复前必然红（`min_offset` 会是 28672 = 4096 × 7）。
+    #[test]
+    fn tiny_pushes_reach_full_byte_capacity_before_any_eviction() {
+        const PUSHES: usize = 200_000; // 200k 次 ~7 B 短读 = 1.33 MiB
+        let mut ring = PtyRing::with_limits(4 * 1024 * 1024, PtyRing::DEFAULT_MAX_CHUNKS);
+        for i in 0..PUSHES {
+            ring.push(&payload((i % 251) as u8, 7));
+        }
+
+        let (min, max) = ring.watermarks();
+        assert_eq!(
+            min, 0,
+            "字节容量未满时不得淘汰：有效驻留窗口必须等于声明容量，否则慢消费者 \
+             被无谓地逼进重锚（历史教训：会话输出环的固定块数上限）"
+        );
+        assert_eq!(max, (PUSHES * 7) as u64, "产出偏移 = 全部短读之和，不丢字节");
+        assert_eq!(ring.resident_bytes(), (PUSHES * 7) as u64, "驻留字节 = 产出字节");
+        assert!(
+            ring.chunk_count() <= 4 * 1024 * 1024 / PtyRing::COALESCE_TARGET + 1,
+            "块数由「容量 / 合并目标」决定（4 MiB → ≤257），不得回到「一次 push 一块」：{}",
+            ring.chunk_count()
+        );
+    }
+
+    /// C-019 合并 + 淘汰 叠加下的字节级连续性：慢消费者按游标续拉，序列不得有洞
+    ///
+    /// 盯的是「合并把块变粗」与「淘汰只能整块丢」叠加后的行为：游标停在原地、
+    /// 产出继续推进到多次淘汰之后，消费者必须**自缺口处续上**且与产出逐字节相等。
+    /// 若合并实现的容量/游标记账有偏差，这里会报长度不等或中间缺口。
+    #[test]
+    fn coalescing_with_eviction_keeps_stream_byte_exact() {
+        const CAPACITY: u64 = 64 * 1024; // ≥ COALESCE_MIN_CAPACITY ⇒ 合并启用
+        const PUSHES: usize = 20_000; // 20k × 7 B = 140 KB ⇒ 淘汰 2 轮以上
+        let mut ring = PtyRing::new(CAPACITY);
+        let mut expected: Vec<u8> = Vec::new();
+        for i in 0..PUSHES {
+            let chunk = payload((i % 251) as u8, 7);
+            ring.push(&chunk);
+            expected.extend_from_slice(&chunk);
+        }
+
+        let (min, max) = ring.watermarks();
+        let total = expected.len() as u64;
+        // 驻留量不得超过声明容量（淘汰只能整块丢 ⇒ 实际驻留可能**小于**容量，
+        // 过冲上限 = 一个合并块；这是「合并换取块数可控」的已知代价）
+        assert!(
+            ring.resident_bytes() <= CAPACITY,
+            "驻留字节不得超过声明容量：{} > {CAPACITY}",
+            ring.resident_bytes()
+        );
+        assert_eq!(max - min, ring.resident_bytes(), "偏移差必须等于驻留字节（记账自洽）");
+        assert!(min >= total - CAPACITY, "淘汰不得少于溢出量（min={min}）");
+        assert!(min < total, "环不得被清空");
+        // ① 游标落后于驻留起点 ⇒ 必须报缺口（淘汰的诚实性），且从 min_offset 起续
+        let behind = ring.fetch(0, 4 * 1024);
+        assert!(behind.truncated, "已被淘汰的字节必须如实上报，不得静默补洞");
+        assert_eq!(behind.next_offset, min + 4096, "从驻留起点起返回，且不超过请求上限");
+
+        // ② 自驻留起点续拉到底：必须与产出对应区间逐字节相等
+        let mut cursor = min;
+        let mut got: Vec<u8> = Vec::new();
+        let mut pulls = 0;
+        while cursor < max {
+            let f = ring.fetch(cursor, 4 * 1024);
+            assert!(!f.truncated, "游标已在驻留区内，不得再报缺口");
+            assert!(f.next_offset > cursor, "游标必须推进（防空转）");
+            got.extend_from_slice(&f.data);
+            cursor = f.next_offset;
+            pulls += 1;
+            assert!(pulls < 1000, "续拉不得空转");
+        }
+        assert_eq!(
+            got,
+            expected[min as usize..],
+            "自驻留起点拿到的字节必须与产出对应区间逐字节相等（合并不得造成空洞/错位）"
+        );
+    }
+
+    /// C-018 合并的字节级保真：短读与大块交替时，序列逐字节不变、游标单调推进
+    #[test]
+    fn coalescing_preserves_byte_exact_sequence_and_cursor_progress() {
+        // 容量必须**大于**总产出（否则会淘汰，`truncated` 是预期行为而非本用例对象）
+        let mut ring = PtyRing::new(1024 * 1024);
+        let mut expected: Vec<u8> = Vec::new();
+        for round in 0..8u8 {
+            // 短读段（7 B，模拟行式输出）
+            let small = payload(round, 7);
+            ring.push(&small);
+            expected.extend_from_slice(&small);
+            // 大块段（20 KiB，超过合并目标 → 自成一块）
+            let big = payload(round.wrapping_add(100), 20 * 1024);
+            ring.push(&big);
+            expected.extend_from_slice(&big);
+        }
+
+        // 逐块按游标取回，必须与期望序列逐字节相等（合并不得错位 / 重叠 / 丢字节）
+        let mut cursor = 0u64;
+        let mut got: Vec<u8> = Vec::new();
+        while cursor < expected.len() as u64 {
+            let f = ring.fetch(cursor, 16 * 1024);
+            assert!(!f.truncated, "容量充足不得报缺口");
+            assert!(f.next_offset > cursor, "游标必须单调推进（防空转）");
+            assert!(f.data.len() <= 16 * 1024, "单次取数不超过请求上限");
+            cursor = f.next_offset;
+            got.extend_from_slice(&f.data);
+        }
+        assert_eq!(got, expected, "合并后字节序列必须与产出逐字节相等");
+        assert_eq!(ring.watermarks().1, expected.len() as u64);
     }
 
     /// C-016 多消费者：一个消费者的读取不释放空间、不影响他人游标（票 05 契约，
