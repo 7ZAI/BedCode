@@ -9,10 +9,10 @@
     // 组件的独立工程不加载（见 .vscode/README.md）。
     // 声明多个工程 = 单 RA 实例加载两端宿主，内存高于多根工作区的双实例拆分；
     // 需要更低的单实例内存时改用 BedCode.code-workspace（每文件夹独立实例）。
-    "rust-analyzer.linkedProjects": [
-        "bedcode-desktop/src-tauri/Cargo.toml",
-        "bedcode-mobile/src-tauri/Cargo.toml"
-    ],
+    // "rust-analyzer.linkedProjects": [
+    //     "bedcode-desktop/src-tauri/Cargo.toml",
+    //     "bedcode-mobile/src-tauri/Cargo.toml"
+    // ],
     // 背景：2026-09-04 打开工作区根同时索引两端多个 Tauri 工程（当时 RA 递归发现全部
     // ~28 个 Cargo.toml），RSS 冲到 3.2GB 被 systemd-oomd 杀进程；linkedProjects 显式
     // 声明后禁用递归发现，加载集合大幅缩小。当时使用的
