@@ -4,12 +4,13 @@
 > 日期: 2026-09-30
 > 决策记录（2026-09-30，用户确认）：
 > 1. 形态选 **A（单进程真实互连）**，B/C 仅记录不实施
-> 2. 两端 lib 改名根治同名冲突：`bedcode_lib` → `bedcode_desktop_lib`（桌面）/ `bedcode_mobile_lib`（移动）——作为 **L0 前置步骤**（§3-A 关键工程点 1 + §7），影响面已核实（§6-1）
+> 2. 两端 lib 改名根治同名冲突：`bedcode_lib` → `bedcode_desktop_lib`（桌面）/ `bedcode_mobile_lib`（移动）——作为 **L0 前置步骤**（§3-A 关键工程点 1 + §7）
 > 前置文档: `归档文档/2026-08-16-desktop-integration-tests/spec.md`（桌面 L1/L2，已完成）、
 > `归档文档/2026-08-16-mobile-integration-tests/spec.md`（移动 L1/L2，已完成）、
 > `归档文档/2026-09-09-desktop-e2e-webdriver/spec.md`（桌面 WebDriver E2E，ready-for-agent）、
 > `docs/knowledge/mobile-desktop-auth.md`（认证/协议单一事实源）、ADR 0031/0033/0034
 > 实施后的三处偏差（一律以实施记录为准）：① §3-A2 / §6-4「fixture 构建机制跨工程不可引用」**不成立**——认证中心是真实 wasm 应用产物（随包目录，路径引用即可）；② §6-7「轮换需宿主命令面接线否则标 blocked」**不成立**——轮换触发面是插件互调 `auth-grant`，已真被覆盖；③ §5「场景 5 三种 deny_kind 各一」**跨端不可观测**——`deny_kind` 是宿主日志字段不是 wire 字段（客户端一律 401，这是有意的）。另 §6-1「Android 无 libbedcode_lib 硬编码」实查为假：手工保留且入库的 `android-backup/.../generated/Rust.kt` 需同步改名。
+> **§5 / §7 的「可进 CI（test.yml 增 job）」未实施**（2026-09-30 用户定案：维持现有 CI，按需手动跑）。`test.yml` 保持接入前原样；跨端契约漂移改由 AGENTS §10 的「改跨端协议必须跑 cross-end-tests」人工门禁兜。
 
 ---
 

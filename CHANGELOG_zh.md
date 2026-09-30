@@ -14,7 +14,9 @@
 - **做了什么**：新增仓库根 Rust 包 `cross-end-tests/`，在同一测试进程内让
   **桌面端真实 Actix 服务器 + 真实 `com.bedcode.terminal-session` WASM 产物**与
   **移动端真实客户端代码**（`AuthHttpClient` / `SessionHttpClient` / `TerminalLinkManager`）
-  互连——零 mock、无 adb、无 WebView、无模拟器，可直接进 CI。此前两端的集成测试
+  互连——零 mock、无 adb、无 WebView、无模拟器，**按需手动跑，不接入 workflow**
+  （决定 2026-09-30：跨端测试的构建前置是两端插件产物，CI 上重建成本高于收益；
+  命令见 AGENTS §3 `cd cross-end-tests && cargo test`）。此前两端的集成测试
   各自 mock 对方（桌面侧对面是通用 reqwest / tokio-tungstenite 客户端，移动端对面是
   假桌面服务器）：两套 mock 各自自洽，**契约在两端之间漂移时两边全绿而真实链路已坏**
 - **L0 前置——两端 lib 同名去重**：`bedcode_lib`（两端同名）→ `bedcode_desktop_lib` /
@@ -44,7 +46,9 @@
   客户端一律只看到 401（这是有意的，不泄露部署状态）；生物认证正向路径需要 Android
   Keystore 中的真设备私钥，无头进程构造不出（只覆盖「未绑定 → 1008」反例）；QR 的
   「桌面扫码确认」UI 步骤被跳过，改为直接驱动插件自身的 `qr-code-generate` 入口
-- **CI**：`test.yml` 新增 `cross-end` job（ubuntu-latest，复用桌面插件产物构建）。
+- **不接入 CI**：`test.yml` 未新增 job（决定 2026-09-30，按需手动跑）。代价与缓解：跨端
+  契约漂移不会在 PR 阶段被自动拦住，靠 AGENTS §10 的「改跨端协议必须跑 cross-end-tests」
+  这条人工门禁 + `docs/knowledge/mobile-desktop-auth.md` 的协议章交叉引用来兜。
   验证：改名后两端 `cargo test` 全量绿（桌面 lib 1058 + 全部集成 target；移动端全量），
   `cross-end-tests` 7/7 绿；运行前已重建两端插件产物
 

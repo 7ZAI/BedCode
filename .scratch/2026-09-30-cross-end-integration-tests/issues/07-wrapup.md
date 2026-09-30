@@ -8,9 +8,9 @@
 | 项 | 落点 |
 |---|---|
 | 新工程 | `cross-end-tests/`（Cargo.toml / rustfmt.toml / README.md / src/lib.rs / tests/×7 + tests/common/×2） |
-| CI | `.github/workflows/test.yml` 新增 `cross-end` job；`paths` 过滤器加 `cross-end-tests/**` |
+| CI | **不接入 workflow**（2026-09-30 用户定案，按需手动跑）——`test.yml` 保持接入前原样。代价与缓解已写进 CHANGELOG 双语条目 |
 | 命令 | `AGENTS.md` §3 黄金命令 + §10 DoD（改跨端协议必须跑）+ §4 路由表 |
-| 协议文档 | `docs/knowledge/mobile-desktop-auth.md` 新增「跨端真实互连测试」章（含诚实边界清单） |
+| 文档 | `docs/knowledge/mobile-desktop-auth.md` 新增「跨端真实互连测试」章（含诚实边界清单） |
 | 代码地图 | `bedcode-desktop/docs/code-map.md` 末尾指明「跨端测试在仓库根 `cross-end-tests/`」 |
 | CHANGELOG | `CHANGELOG.md` + `CHANGELOG_zh.md` 双语条目 |
 | bug 台账 | `.scratch/test-coverage-bugs.md` 新增 1 条（互调失败只落日志、调用方只能等到超时） |
