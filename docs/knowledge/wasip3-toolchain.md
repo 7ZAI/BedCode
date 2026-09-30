@@ -105,6 +105,9 @@ fixture 工程：`bedcode-desktop/packages/plugin-wasip3-test/`（`com.bedcode.w
   宿主测试 7 个 fixture 全部 wasip3 Component；CI（test.yml / release.yml 桌面
   job）新增 pinned nightly 安装步骤 + targets 收窄 `wasm32-wasip2`；
   mobile/移动端与 wasip2 preopen fixture（plugin-wasi-test）维持现状。
+  **preopen 仅 worker 类别可用（ADR 0034）**：主 wasm-app 文件访问走宿主 host-fs，
+  plugin-wasi-test 是 worker 预留能力的机制守门测试；worker 启用专项需一并解决
+  wasip3 的 preopen 装配问题。
 - **wasip3 的 thread_local 是真 TLS**（`target_thread_local`=true）：按宿主调用
   线程隔离——插件状态若存 thread_local，跨线程（投递线程写 / 查询线程读）会读空，
   须用实例级 static Mutex（实证：ws/sdk/system fixture 跨线程 TLS 四测全挂，改后全绿）。

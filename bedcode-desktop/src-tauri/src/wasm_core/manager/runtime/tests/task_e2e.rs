@@ -274,28 +274,6 @@ fn test_task_cancel_semantics() {
     });
 }
 
-/// 旧产物（plugin-component-test，未导出 events-task）：on_task_event 降级
-/// Ok(false)，不影响加载与其余导出（spec §5.3 降级路径）
-#[test]
-
-fn test_task_legacy_component_event_export_degrades() {
-    let _task_e2e_guard = task_e2e_registry_guard();
-    let (wasm_runtime, host_ctx) = setup_wasm_runtime();
-    let component = wasm_runtime
-        .compile_component(&build_test_component())
-        .expect("compile legacy component");
-    let mut plugin = wasm_runtime
-        .instantiate_component(&component, "com.bedcode.component-test", host_ctx, &[], None)
-        .expect("legacy component must load (no events-task)");
-    assert!(
-        !plugin
-            .on_task_event("{\"jobId\":\"x\",\"phase\":\"completed\"}")
-            .expect("probe"),
-        "未导出 events-task 的产物必须走降级路径（Ok(false)）"
-    );
-    assert!(plugin.get_manifest().is_ok(), "降级后其余导出照常");
-}
-
 /// 双门：仅授 task:run 不授 fs:read → fs.stat 单元失败（permission denied），
 /// 批次继续（fail-collect）；fs_auth 未授权路径直接 Err、不弹窗
 #[test]

@@ -174,7 +174,7 @@ export function makeAppConfig(overrides: Partial<AppConfigFixture> = {}): AppCon
     },
     log: {
       file_level: 'info',
-      console_filter: 'bedcode_lib=debug,actix_web=info,actix_http=info',
+      console_filter: 'bedcode_desktop_lib=debug,actix_web=info,actix_http=info',
       rotation: 'daily',
       max_files: 7,
       capacity_bytes: 512 * 1024 * 1024,

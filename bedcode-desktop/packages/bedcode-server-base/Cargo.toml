@@ -1,0 +1,42 @@
+[package]
+name = "bedcode-server-base"
+version = "0.1.0"
+description = "BedCode 桌面 server 基础层：错误/常量/错误边界/系统信息/网络配置形状/连接身份/端口 traits（server-lib-split 票 02）"
+authors = ["binblink"]
+edition = "2021"
+
+[dependencies]
+# 错误类型（AppError：Serialize 信封 + thiserror）
+thiserror = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rand = "0.8"
+# new_request_id / Serialize 信封的日志副作用
+tracing = { version = "0.1", features = ["attributes"] }
+# AppError::Database(#[from] rusqlite::Error)
+rusqlite = { version = "0.32", features = ["bundled"] }
+# From<tauri::Error>（AppError 的 From impl 在宿主时代依赖，拆分后随迁）
+tauri = { version = "2", features = [] }
+# From<notify::Error>（文件监听错误映射）
+notify = "6"
+# From<bedcode_link_crypto::LinkCryptoError>（链路加密共享 crate）
+bedcode-link-crypto = { path = "../../../packages/link-crypto" }
+# error_boundary（futures FutureExt::catch_unwind）
+futures-util = "0.3"
+# error_boundary 测试
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+# ports：异步 trait
+async-trait = "0.1"
+# ports：静态订阅载荷形状
+bedcode-plugin-api = { path = "../plugin-sdk-desktop/rust" }
+# ports：MdnsPort（peer-net 发现守护接入，ServiceDaemon 类型）
+mdns-sd = "0.20"
+# info：SystemInfo 采集
+sysinfo = "0.33"
+local-ip-address = "0.6"
+# 测试
+anyhow = "1"
+
+[dev-dependencies]
+tempfile = "3"
+tracing-subscriber = { version = "0.3", features = ["fmt", "registry", "ansi"] }

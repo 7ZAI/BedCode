@@ -23,7 +23,7 @@
 
 **Tech Stack:** Tauri 2.0 + Vue 3 + TypeScript + TailwindCSS v3 + Rust (Tokio) + SQLite + vue-i18n@9 + WASM（wasmtime 48 组件模型，目标 `wasm32-wasip3`）
 
-**Monorepo 结构（目录树看两端 `docs/code-map.md`）**：`bedcode-desktop/`（桌面主机）/ `bedcode-mobile/`（移动远程终端），各自独立 `src/`（前端）+ `src-tauri/`（Rust 后端）+ `pnpm-lock.yaml`；业务代码在端内插件工程——桌面 `wasm-apps/<app-id>/`（**wasm 应用**，2026-09-25 术语变更，内部实现 / 插件 ID 契约 / 运行时 `app_data_dir/plugins` 均不变）、移动 `plugins/<plugin-id>/`；插件 SDK（WIT 契约）= `bedcode-desktop/packages/plugin-sdk-desktop/` + `bedcode-mobile/packages/plugin-sdk-mobile/`；**Rust 无根 workspace**（两端 30+ 个独立 `Cargo.toml`，测试与构建各自 crate 根跑，§3）
+**Monorepo 结构（目录树看两端 `docs/code-map.md`）**：`bedcode-desktop/`（桌面主机）/ `bedcode-mobile/`（移动远程终端），各自独立 `src/`（前端）+ `src-tauri/`（Rust 后端）+ `pnpm-lock.yaml`；业务代码在端内插件工程——桌面 `wasm-apps/<app-id>/`（**wasm 应用**，2026-09-25 术语变更，内部实现 / 插件 ID 契约 / 运行时 `app_data_dir/plugins` 均不变）、移动 `plugins/<plugin-id>/`；插件 SDK（WIT 契约）= `bedcode-desktop/packages/plugin-sdk-desktop/` + `bedcode-mobile/packages/plugin-sdk-mobile/`；**Rust 无根 workspace**（两端 30+ 个独立 `Cargo.toml`，测试与构建各自 crate 根跑，§3）；仓库根另有 `cross-end-tests/`（跨端真实互连集成测试，同时依赖两端 lib，§3）
 
 ---
 
@@ -67,6 +67,12 @@ cd bedcode-mobile && pnpm run test:run
 cd bedcode-desktop/src-tauri && cargo test
 cd bedcode-mobile/src-tauri && cargo test
 
+# 跨端互连测试（仓库根第三个 Rust 包：桌面真实服务器 + 移动真实客户端代码 同进程互连，零 mock）
+# 前置：桌面随包 wasm 产物（认证中心 com.bedcode.terminal-session）须已构建——
+# 缺产物时测试**显性失败**（不静默 skip）；开发期重建：cd bedcode-desktop && pnpm run plugins:build
+cd cross-end-tests && cargo test
+cd cross-end-tests && cargo test --test terminal_ws_flow   # 针对性过滤（每个场景 = 独立测试二进制）
+
 # wasm 应用 / 移动插件 crate（独立 workspace，命令必须在各自 crate 根执行）
 cd bedcode-desktop/wasm-apps/<app-id>/rust && cargo test   # agent-hub / ai-chatbox / file-transfer / terminal-session
 cd bedcode-mobile/plugins/<plugin-id>/rust && cargo test    # ai-chatbox / auto-task / file-transfer
@@ -104,7 +110,7 @@ pnpm exec eslint .
 | 改插件 | `docs/knowledge/plugin-development-checklist.md`（全文）+ WIT（`bedcode-desktop/packages/plugin-sdk-desktop/rust/wit/bedcode.wit`，移动端另有一份）+ ADR 0017/0019/0022；插件**分类/加载顺序/生命周期形态**问题读 ADR 0032 |
 | 改 wasm 应用 / 移动插件（业务代码主场） | 该应用自己的 crate（`wasm-apps/<app-id>/rust` 或 `plugins/<plugin-id>/rust`）+ 自有测试命令（§3 插件块）；**不要拿宿主 `cargo test` 当它的验证** |
 | 改数据库 / schema | §9 数据规范 + `bedcode-desktop/src-tauri/src/db/` |
-| 改跨端协议（HTTP/WS/QR/认证） | §9 协议规范 + `docs/knowledge/mobile-desktop-auth.md`，两端同步评估 |
+| 改跨端协议（HTTP/WS/QR/认证） | §9 协议规范 + `docs/knowledge/mobile-desktop-auth.md`（含「跨端真实互连测试」章），两端同步评估；改完**跑 `cross-end-tests`**（§3） |
 | 排查日志 / 无日志问题 | `docs/knowledge/logging.md` + `docs/knowledge/adb-fd0-bug.md`（adb fd0 根因与 shim 维护要点） |
 | 启动多任务 / 需要规划 | `.scratch/<task>/` 记录（项目未设计 GitHub PR 流程，开发过程文档走这里） |
 | 改文档 / 改本文件规则 | 先读 §13 文档索引找到**单一事实源**（命令 → §3；边界 → ADR 0022；契约 → WIT / code-map），改源文件而非改引用方；改完核对引用是否失效 |
@@ -299,8 +305,8 @@ manifest 静态声明面 `contributes.httpEndpoints` / `toolProviders` · 宿主
 ### 安全红线（不可违反）
 
 - **禁止提交密钥/凭据**：仓库内唯一例外是签名真源 `bedcode.keystore`（私有仓库设计，见 §9 Android）；新增的任何密钥、token、密码禁止入库、禁止进日志、禁止写进文档/备注；API token 泄露按仓库规范删除重建
-- **认证链路只走既有 auth 模块**（JWT / 设备指纹 / 二维码 / 生物凭证），禁止旁路；**日志与存储中凭据只记长度不落明文**（`token.length()` 模式）。**入场签发密钥与验签执行归认证中心自持**（ADR 0033，desktop ABI v33）：`host-auth` 的 `device-token-issue` / `device-token-verify` 两原语**已退役**，宿主 `utils/auth/jwt.rs`（`JwtService`）与 `host_secrets.rs` **整模块删除**——**宿主不得持有任何设备入场密码学**（防回接锁 `host_has_no_entry_token_crypto`）。密钥环（最多两代）在中心插件的 `pairing/keys`，`kid` 只是**诊断标签不是授权门**（真闸门是「签名能否用环内某把密钥验过」）；轮换上一代在宽限期（7 天）内继续可验签，**轮换不撤销既有 token**。生物凭证（P-256 公钥）**仍**由宿主托管，是另一条线。
-- **配对 / 认证的编排归插件**（ADR 0022 分层）：配对码与 QR 的编排、签发、验签全在 `com.bedcode.terminal-session`（`pairing/` / `qr/` / `auth_http`），认证记录真源在该插件私有库 `auth_records` 域；宿主只剩 `host-auth` **生物凭证**原语 / 认证中心桥接（`host-auth` 密钥托管面仅剩 `biometric:<fp>` 属主行）。**认证中心 = 单一显式注册的中心**（ADR 0031，v32 已实施）：中心激活时调 `host-auth.auth-center-register` 登记进宿主单中心注册表（第二注册者被拒并点名在册属主），停用时注销 / 宿主 `purge_for_plugin` 回收；`auth-policy` 的发现方式**不再是能力探测 + 排序取首个**。**裁决一律 fail-closed**：无中心在册 / 中心调用失败 / 中心拒绝 → 一律拒绝（`deny_kind` 分 `no_center` / `unavailable` / `policy`），**没有「查不到中心就放行」「传输失败就放行」的降级路径**。宿主主库 `pairings` / `connection_history` / `session_configs` 三表与存量迁移链已退役（旧库滞留表不读不迁不清理；生物公钥寄主 `plugin_secrets` key=`biometric:<fp>` 语义不变）。**无宿主代签降级路径**——插件未激活时前端命令面显性报错，新代码不得绕过插件自行签发或验签（删除清单与日期见 ADR 0022）
+- **认证链路只走既有 auth 模块**（JWT / 设备指纹 / 二维码 / 生物凭证），禁止旁路；**日志与存储中凭据只记长度不落明文**（`token.length()` 模式）。**入场签发密钥与验签执行归认证中心自持**（ADR 0033，desktop ABI v33）：`host-auth` 的 `device-token-issue` / `device-token-verify` 两原语**已退役**，宿主 `utils/auth/jwt.rs`（`JwtService`）与 `host_secrets.rs` **整模块删除**——**宿主不得持有任何设备入场密码学**（防回接锁 `host_has_no_entry_token_crypto`）。**生物凭证面（公钥托管 + 验签执行）已随 v34 下沉认证中心**（B-downsink，desktop ABI 34）：`host-auth` 的 `biometric-credential-bound` / `biometric-verify-signature` / `biometric-credential-bind` 三原语**已退役**，宿主 `utils/auth/biometric.rs` **整模块删除**，生物公钥真源在中心插件私有库 `auth_biometric_keys`（WASM 内 p256 验签）——**宿主不再托管任何设备侧凭证材料**。密钥环（最多两代）在中心插件的 `pairing/keys`，`kid` 只是**诊断标签不是授权门**（真闸门是「签名能否用环内某把密钥验过」）；轮换上一代在宽限期（7 天）内继续可验签，**轮换不撤销既有 token**。
+- **配对 / 认证的编排归插件**（ADR 0022 分层）：配对码与 QR 的编排、签发、验签全在 `com.bedcode.terminal-session`（`pairing/` / `qr/` / `auth_http`），认证记录真源在该插件私有库 `auth_records` 域；宿主只剩 `host-auth` **链路身份**原语 / 认证中心桥接（`link-identity-parts` 只含公开材料）。**认证中心 = 单一显式注册的中心**（ADR 0031，v32 已实施）：中心激活时调 `host-auth.auth-center-register` 登记进宿主单中心注册表（第二注册者被拒并点名在册属主），停用时注销 / 宿主 `purge_for_plugin` 回收；`auth-policy` 的发现方式**不再是能力探测 + 排序取首个**。**裁决一律 fail-closed**：无中心在册 / 中心调用失败 / 中心拒绝 → 一律拒绝（`deny_kind` 分 `no_center` / `unavailable` / `policy`），**没有「查不到中心就放行」「传输失败就放行」的降级路径**。宿主主库 `pairings` / `connection_history` / `session_configs` 三表与存量迁移链已退役（旧库滞留表不读不迁不清理；v34 起宿主 `plugin_secrets` 的 `biometric:*` 死行由迁移幂等清扫）。**无宿主代签降级路径**——插件未激活时前端命令面显性报错，新代码不得绕过插件自行签发或验签（删除清单与日期见 ADR 0022）
 - 输入校验与权限仲裁在 Rust 端，前端校验仅是 UX；WebSocket/HTTP 接入必须过认证与过滤链（TrafficFilterChain）
 - **真源换了地方就要 fail-visible**（通用判据）：事实真源迁走后，**旧读路径必须显性失败，
   禁止静默降级成「无数据」**——静默降级会让「线还在、数据永远是空」的断链在测试全绿的情况下
@@ -360,6 +366,7 @@ manifest 静态声明面 `contributes.httpEndpoints` / `toolProviders` · 宿主
 
 - 集成测试：补齐/更新相关用例（Rust `src-tauri/tests/`、前端 `src/__tests__/integration/`）；与本任务无涉时写明理由跳过
 - 改了 Rust → `cargo test` **全量**通过（宿主：两端各自 `src-tauri`，含集成 target；**插件：在 `wasm-apps/<app-id>/rust` / `plugins/<plugin-id>/rust` 各自 crate 根跑**）
+- 改了**跨端协议 / 任一端客户端或插件的认证·会话·终端面** → `cross-end-tests` 全量通过（§3；两端各自的 mock 各自自洽，真实互连才是契约的真正门禁）
 - 改了前端 → `pnpm run test:run` **全量**通过（对应端）。注意覆盖面只到 §3 所列 include；`wasm-apps/ai-chatbox`、`wasm-apps/file-transfer`、`bedcode-mobile/plugins/*` 的前端测试**不在门禁内**，改动落在那里须自行运行并说明
 - **未纳入自动化门禁的手工验证项**（须在交付说明里逐项写「跑了 / 没跑 + 原因」）：wasm 应用完整构建（`cd wasm-apps/<id> && pnpm run build`，含 wasmHash 注入）· 未接入 vitest 的应用测试 · `gen/android` gradlew 编译 · 真机 / 浏览器核验
 - 改了 `gen/android` 下 Kotlin → `./gradlew :app:compileUniversalDebugKotlin` 通过
@@ -434,6 +441,7 @@ CI 门禁（合并到 master/uat 时）：`lint.yml`（eslint 0 error）+ `test.
 | Issue tracker | issues 为 `.scratch/` 下的 markdown，见 `docs/agents/issue-tracker.md` |
 | Triage 标签 | needs-triage / needs-info / ready-for-agent / ready-for-human / wontfix，见 `docs/agents/triage-labels.md` |
 | 发布流程 | `docs/knowledge/release-workflow.md`（桌面 updater / 移动发布）、`docs/knowledge/sdk-publish.md`（SDK 发布） |
+| 跨端协议测试 | `cross-end-tests/`（§3 命令）+ `docs/knowledge/mobile-desktop-auth.md`「跨端真实互连测试」章 |
 | 日志 / 排障 | `docs/knowledge/logging.md`、`docs/knowledge/adb-fd0-bug.md` |
 | 插件开发检查清单 | `docs/knowledge/plugin-development-checklist.md`（AGENTS §7 指向的全文） |
 | 插件 WASM 日志 | `docs/knowledge/plugin-wasm-logging.md`（dev 调试模式 + trap backtrace + per-plugin 级别） |

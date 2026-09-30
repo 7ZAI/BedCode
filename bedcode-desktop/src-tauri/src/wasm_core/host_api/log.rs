@@ -24,8 +24,8 @@ impl Callsite for PluginLogCallsite {
 
     fn metadata(&self) -> &'static Metadata<'static> {
         static META: Metadata<'static> = Metadata::new(
-            "bedcode_lib::wasm_core::plugin_log",
-            "bedcode_lib::wasm_core::plugin_log",
+            "bedcode_desktop_lib::wasm_core::plugin_log",
+            "bedcode_desktop_lib::wasm_core::plugin_log",
             Level::INFO,
             None,
             None,
@@ -54,12 +54,12 @@ fn plugin_log_metadata(level: Level, file: &str, line: u32) -> &'static Metadata
         let file: &'static str = Box::leak(file.to_string().into_boxed_str());
         let fields = field::FieldSet::new(&["message"], callsite::Identifier(&PLUGIN_LOG_CALLSITE));
         Box::leak(Box::new(Metadata::new(
-            "bedcode_lib::wasm_core::plugin_log",
-            "bedcode_lib::wasm_core::plugin_log",
+            "bedcode_desktop_lib::wasm_core::plugin_log",
+            "bedcode_desktop_lib::wasm_core::plugin_log",
             level,
             Some(file),
             Some(line),
-            Some("bedcode_lib::wasm_core::plugin_log"),
+            Some("bedcode_desktop_lib::wasm_core::plugin_log"),
             fields,
             Kind::EVENT,
         )))
@@ -289,7 +289,7 @@ mod tests {
         assert_eq!(m1.level(), &Level::INFO);
         assert_eq!(m1.file(), Some("guest.rs"));
         assert_eq!(m1.line(), Some(10));
-        assert_eq!(m1.target(), "bedcode_lib::wasm_core::plugin_log");
+        assert_eq!(m1.target(), "bedcode_desktop_lib::wasm_core::plugin_log");
     }
 
     /// 不同 level 视为不同调用点：各自独立缓存（字段集一致但级别不同）

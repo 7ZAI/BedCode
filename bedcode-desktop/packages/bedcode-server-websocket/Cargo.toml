@@ -1,0 +1,31 @@
+[package]
+name = "bedcode-server-websocket"
+version = "0.1.0"
+description = "BedCode 桌面 WebSocket 传输面：连接骨架/插件端点通道/连接与端点注册表/生命周期与优雅停机（server-lib-split 票 05）"
+authors = ["binblink"]
+edition = "2021"
+
+[dependencies]
+# Actix：WS actor（conn 骨架）、actix-web-actors 握手、actix-rt 独立 runtime 线程
+actix-web = "4"
+actix = "0.13"
+actix-web-actors = "4"
+actix-rt = "2"
+# 异步运行时（注册表/管理器的 RwLock、broadcast、oneshot）
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+# BusMessageHandler 端口的 async trait
+async-trait = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+tracing = { version = "0.1", features = ["attributes"] }
+# 认证档位词汇 EndpointAuth + host::bus / host::ws 常量（宿主/插件契约真源）
+bedcode-plugin-api = { path = "../plugin-sdk-desktop/rust" }
+# 基础层（AppError/Result、常量、端口 traits 与全局注册表、生命周期事件）
+bedcode-server-base = { path = "../bedcode-server-base" }
+# 内核层（流量过滤链 / 链路加密 / 指标 / 组合装配 serve + TransportFace）
+bedcode-server-core = { path = "../bedcode-server-core" }
+
+[dev-dependencies]
+tempfile = "3"

@@ -33,3 +33,12 @@
 - 期望: 与 QrConnect 分支（同文件 :299-316）一致，VerifyCode 成功的 Authenticated 响应携带 `device_name: Some(device_name.clone())`
 - 修复建议: 参照 QrConnect 分支补齐 device_name 字段；注意 WS 协议层不变，移动端字段名对齐
 - 影响面: 移动端首次配对连接（非 JWT 重连）触发会话控制类操作时，广播排除不生效；JWT 重连路径（handle_auth_jwt 从 claims 取 device_name）不受影响
+
+## [未修复] [桌面插件互调] 被调插件 on_message 失败时调用方拿不到错误，只等到超时
+- 状态: **未修复**（跨端互连测试 ticket 04 发现，按 spec 约定记台账统一修）
+- 文件: `wasm_core/bus` 的 WASM 投递路径（`on_message failed: plugin api '<plugin-id>.<method>': ...` 只落日志）+ SDK `api_call.rs` 的回复等待
+- 测试: `cross-end-tests/tests/pairing_auth_flow.rs`（C-006 段，构造手段）；复现方式见下
+- 现象: 互调请求的参数形状错时（例如 `qr-code-generate(ttl: u64)` 误传 `{"ttl":300}` 而非裸 `300`），被调插件的 `on_message` 解析失败并**只打一条 warn 日志**，请求方在 `bedcode.api.reply.*` 上等满超时才拿到 `api_call: timeout after 5000ms`。真实失败原因与真实症状（超时）之间没有任何关联，排查成本极高——本次即先误判为「bus 未订阅 / 注册名不对」
+- 期望: 被调插件处理请求失败时应回一条 JSON-RPC `error` 回复到调用方的 reply topic（错误信息即 `invalid params: ...`），调用方拿到 `ApiCallError::Rpc` 而非超时；或至少在超时错误里带上被调插件侧的失败原因
+- 修复建议: 投递失败分支（guest `on_message` 抛错）改为发布 `{"jsonrpc":"2.0","id":<请求 id>,"error":{"code":-32602,"message":<原因>}}` 到请求里的 reply topic；ADR 0017 的 JSON-RPC 约定本就允许 error 回复，只是失败路径没接上
+- 影响面: 任何「插件 A 调插件 B 失败」的场景，调用方都表现为超时而非明确错误。生产里更隐蔽的连带后果是**调用方的重试/退避逻辑会把参数错误当瞬时故障反复重试**。当前唯一无此症状的调用方是宿主 `api_registry` 路径（宿主侧自己解析并返回错误，不经这条回复等待）

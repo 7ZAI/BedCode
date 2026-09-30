@@ -12,7 +12,7 @@ use base64::Engine as _;
 use serde_json::{json, Value};
 use tokio::sync::OnceCell;
 
-use bedcode_lib::commands::http_proxy::{execute_proxy, http_cancel, HttpProxyRequest};
+use bedcode_mobile_lib::commands::http_proxy::{execute_proxy, http_cancel, HttpProxyRequest};
 
 /// 全局串行闸：代理的全局 state（desktop_targets / link crypto context /
 /// pending requests）是进程级共享，测试并发执行会互相污染——所有用例串行跑
@@ -245,11 +245,11 @@ fn proxy_req(request_id: &str, method: &str, url: &str, kind: &str) -> HttpProxy
 
 /// 测试环境初始化：重置全局 Egress 目标与授权记忆
 fn reset_egress() {
-    let p = bedcode_lib::egress::policy();
+    let p = bedcode_mobile_lib::egress::policy();
     p.clear_desktop_targets();
     p.revoke_all_grants();
     // 重置加密上下文为默认（防泄漏到其它用例）
-    bedcode_lib::state::set_link_crypto_context(Default::default());
+    bedcode_mobile_lib::state::set_link_crypto_context(Default::default());
 }
 
 async fn mock_once() -> &'static MockDesktop {
@@ -267,8 +267,8 @@ async fn jwt_injection_and_auth_whitelist() {
     let mock = mock_once().await;
 
     // desktop 类先声明目标（前端 setApiBaseUrl 语义）
-    bedcode_lib::egress::policy().add_desktop_target(&mock.addr.ip().to_string(), mock.addr.port());
-    bedcode_lib::state::set_global_token("test-jwt-token");
+    bedcode_mobile_lib::egress::policy().add_desktop_target(&mock.addr.ip().to_string(), mock.addr.port());
+    bedcode_mobile_lib::state::set_global_token("test-jwt-token");
 
     let resp = execute_proxy(
         proxy_req("jwt-1", "GET", &format!("{}/api/sessions", mock.base_url()), "desktop"),
@@ -292,10 +292,10 @@ async fn jwt_injection_and_auth_whitelist() {
     let cap = mock.capture("/api/auth/pairing");
     assert!(cap.authorization.is_none(), "auth 路径不得注入 JWT");
     // pin 刷新收束：auth 响应带 kdPublicB64 → Rust 侧落地
-    let ctx = bedcode_lib::state::get_link_crypto_context();
+    let ctx = bedcode_mobile_lib::state::get_link_crypto_context();
     assert!(ctx.kd_public_b64.is_some(), "auth 响应应触发 pin 刷新落地");
 
-    bedcode_lib::state::clear_global_token();
+    bedcode_mobile_lib::state::clear_global_token();
 }
 
 /// Egress L1：desktop 类未声明目标 → fail-closed 拒绝；声明后放行
@@ -324,7 +324,7 @@ async fn desktop_requires_declared_target() {
     assert!(err.to_string().contains("EXTERNAL_URL_NOT_DECLARED"));
 
     // 声明后放行（probe 时序模拟：probe 前先 declare）
-    bedcode_lib::egress::policy().add_desktop_target(&mock.addr.ip().to_string(), mock.addr.port());
+    bedcode_mobile_lib::egress::policy().add_desktop_target(&mock.addr.ip().to_string(), mock.addr.port());
     let resp = execute_proxy(
         proxy_req("d-3", "GET", &format!("{}/api/health", mock.base_url()), "desktop"),
         None,
@@ -340,7 +340,7 @@ async fn wire_alignment() {
     let _serial = SERIAL.lock().unwrap();
     reset_egress();
     let mock = mock_once().await;
-    bedcode_lib::egress::policy().add_desktop_target(&mock.addr.ip().to_string(), mock.addr.port());
+    bedcode_mobile_lib::egress::policy().add_desktop_target(&mock.addr.ip().to_string(), mock.addr.port());
 
     let mut req = proxy_req("w-1", "POST", &format!("{}/echo", mock.base_url()), "desktop");
     req.headers.insert("Host".to_string(), "evil.example.com".to_string());
@@ -367,10 +367,10 @@ async fn crypto_envelope_roundtrip() {
     let _serial = SERIAL.lock().unwrap();
     reset_egress();
     let mock = mock_once().await;
-    bedcode_lib::egress::policy().add_desktop_target(&mock.addr.ip().to_string(), mock.addr.port());
+    bedcode_mobile_lib::egress::policy().add_desktop_target(&mock.addr.ip().to_string(), mock.addr.port());
 
     // 开加密：主开关 + HTTP 子开关 + pin（对应前端推送 set_link_crypto_context）
-    bedcode_lib::state::set_link_crypto_context(bedcode_lib::state::LinkCryptoContext {
+    bedcode_mobile_lib::state::set_link_crypto_context(bedcode_mobile_lib::state::LinkCryptoContext {
         enabled: true,
         strict_mode: true,
         encrypt_http: true,
@@ -397,7 +397,7 @@ async fn concurrent_request_ids() {
     let _serial = SERIAL.lock().unwrap();
     reset_egress();
     let mock = mock_once().await;
-    bedcode_lib::egress::policy().add_desktop_target(&mock.addr.ip().to_string(), mock.addr.port());
+    bedcode_mobile_lib::egress::policy().add_desktop_target(&mock.addr.ip().to_string(), mock.addr.port());
 
     let mut handles = Vec::new();
     for i in 0..10 {
@@ -419,7 +419,7 @@ async fn cancel_inflight_request() {
     let _serial = SERIAL.lock().unwrap();
     reset_egress();
     let mock = mock_once().await;
-    bedcode_lib::egress::policy().add_desktop_target(&mock.addr.ip().to_string(), mock.addr.port());
+    bedcode_mobile_lib::egress::policy().add_desktop_target(&mock.addr.ip().to_string(), mock.addr.port());
 
     let url = format!("{}/slow", mock.base_url());
     let req = proxy_req("cancel-1", "GET", &url, "desktop");

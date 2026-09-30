@@ -225,16 +225,16 @@ async fn declared_ws_endpoint_follows_activation_lifecycle() {
     )];
     host.plugins.write().await.insert(plugin_id.to_string(), plugin);
 
-    let mount = crate::server::websocket::endpoint::mount_path(plugin_id, "echo");
+    let mount = bedcode_server_websocket::endpoint::mount_path(plugin_id, "echo");
     host.activate_plugin(plugin_id, false).await.unwrap();
-    assert!(crate::server::websocket::endpoint::find_by_mount(&mount).is_some());
+    assert!(bedcode_server_websocket::endpoint::find_by_mount(&mount).is_some());
 
     host.deactivate_plugin(plugin_id, false).await.unwrap();
-    assert!(crate::server::websocket::endpoint::find_by_mount(&mount).is_none());
+    assert!(bedcode_server_websocket::endpoint::find_by_mount(&mount).is_none());
 
     host.activate_plugin(plugin_id, false).await.unwrap();
-    assert!(crate::server::websocket::endpoint::find_by_mount(&mount).is_some());
-    crate::server::websocket::endpoint::purge_for_plugin(plugin_id);
+    assert!(bedcode_server_websocket::endpoint::find_by_mount(&mount).is_some());
+    bedcode_server_websocket::endpoint::purge_for_plugin(plugin_id);
 }
 
 // ==================== 授权记录 / 策略的生命周期（spec §8.3 · 票 09 防回接锁） ====================

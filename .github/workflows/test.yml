@@ -100,6 +100,38 @@ jobs:
       - name: Cargo test (desktop plugin SDK)
         run: cargo test --manifest-path bedcode-desktop/packages/plugin-sdk-desktop/rust/Cargo.toml
 
+      # server-lib-split 票 02-06：error/constants/加密引擎/内核（supervisor·filter·
+      # link_crypto·metrics·组合装配）、两个传输面（HTTP：registry·gateway·controllers·
+      # middleware·dtos；WS：conn·channel·registry·endpoint·routes·manager）与对等网络
+      # 引擎域（节点身份/节点与发现守护生命周期/host-peer 引擎转发）的 194 项测试随代码
+      # 迁出宿主 crate（票 06 起 peer-net 再 +28），src-tauri 的 cargo test 不再执行它们——
+      # 不补这一步，拆出来的层在合并门禁上无人看守。
+      # **必须 cd 进 crate 根**（AGENTS §3）：各 crate 的 .cargo/config.toml 把 target 指向
+      # 仓库根 target/server-libs（相对 crate 根 `../../../`），而 cargo 只从 cwd 向上找 config——
+      # 用 --manifest-path 从仓库根跑会漏掉重定向、把产物写进 `<crate>/target`。
+      - name: Cargo test (desktop server libs)
+        run: |
+          for lib in bedcode-server-base bedcode-crypto-engine bedcode-server-core bedcode-server-http bedcode-server-websocket bedcode-server-peer-net; do
+            (cd "bedcode-desktop/packages/$lib" && cargo test)
+          done
+
+      - name: Cargo test (desktop wasm app crates)
+        # 四个 wasm 应用的**插件侧** crate（业务代码主场）。AGENTS §3 一直列着它们的
+        # 测试命令，但 test.yml 一直没跑——拆出来的层与插件 crate 在合并门禁上都没人
+        # 守。票 08 的 D10 跨端契约测试（`wasm-apps/terminal-session/rust` 里把本插件
+        # 的路由公理喂进真实 server 网关）也在这里才真正跑得到。
+        # **必须 cd 进 crate 根**（AGENTS §3 + 与 server-libs 步骤同理由）：各 crate 的
+        # `.cargo/config.toml` 把 target 指向仓库根 `target/wasm-apps`（相对 crate 根
+        # `../../../`），用 --manifest-path 从仓库根跑会漏掉重定向、把产物写进
+        # `<crate>/target`（AGENTS §3「构建产物落点」）。
+        #
+        # 这里跑的是 **native** 单测（不是 wasm32-wasip3）：crate-type 仍是纯 cdylib，
+        # 单测 harness 由 cargo 自己编；wasm 产物链由上面的 plugins:build 负责。
+        run: |
+          for app in terminal-session ai-chatbox file-transfer agent-hub; do
+            (cd "bedcode-desktop/wasm-apps/$app/rust" && cargo test)
+          done
+
       - name: Cargo test (desktop)
         working-directory: bedcode-desktop/src-tauri
         run: cargo test

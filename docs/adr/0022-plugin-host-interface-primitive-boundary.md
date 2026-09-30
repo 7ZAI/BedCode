@@ -839,3 +839,29 @@ interface、不改裁剪线，只改归属与契约面。
   为字段集**钉死**的 `AuthenticatedIdentity`（恰好 3 字段），仍禁止配对记录 / 信任列表 /
   设备档案等载荷，仍禁止 `&mut` 出参与额外上下文参数
 - 论证、性能实测、迁移与发布原子性、fail-visible 三形态见 `docs/adr/0033-*.md`
+
+### v35：生物凭证面下沉（2026-09-30，B-downsink，ADR 0033 修订）
+
+生物凭证（P-256 公钥）的**托管与验签执行**从宿主移入认证中心（L2
+`com.bedcode.terminal-session`）私有库 `auth_biometric_keys`，WASM 内 p256 验签。
+与 v34 区块（ADR 0033 入场 JWT）同路线：认证中心自持凭证材料并自验，宿主不再持有
+任何设备侧凭证材料。
+
+- **契约面**（ABI desktop 33 → **34**，破坏性）：`host-auth` **删除 3 函数**
+  `biometric-credential-bound` / `biometric-verify-signature` /
+  `biometric-credential-bind`。旧产物（v33 SDK 构建）仍 import 这三函数 → **实例化期**
+  即被拒，`stale_artifact_rebuild_hint` 点名「按 v34 SDK 重建」
+- **宿主退役面**：`utils/auth/biometric.rs`（挑战管理器 + P-256 验签）整模块删除、
+  `system/app_context.rs` 的 `biometric_challenges` 字段删除、`plugin_secrets` 的
+  `biometric:*` 死行由 `db::run_migrations` 幂等清扫（v33 jwt.key 同款）
+- **插件接管面**：`auth_records` 新增 `auth_biometric_keys` 表（`biometric_key_get/set/delete`
+  端口）、`auth_http/biometric.rs` 挑战闸门改查私有库 + WASM 内 p256 验签
+  （`p256` crate 已探针验证 wasm32-wasip3 可编译）、`auth_http/mod.rs` 的 bind 写私有库
+- **双端偏离**：生物面**桌面独有**（移动端 WIT/SDK 本就不含 `biometric-*`，走 HTTP
+  `/api/auth/biometric-*`，grep 已核实），移动端不跟演不投影，**mobile ABI 保持 11**；
+  wire 流程与挑战-应答逐字节不变，移动端零改动
+- **存量影响**：宿主旧 `biometric:<fp>` 行被清 → 已绑定生物认证的设备需**重新绑定**
+  （配对记录 `auth_pairings` 在插件私有库，不受影响；配对码 / QR / JWT 认证不受影响）
+- 依据（§5.1.2 三问）：生物凭证是产品概念（设备绑定事实），且 host-crypto 原语面
+  只有 aead/kdf/x25519 无 ECDSA 验签——认证全归中心的纯粹性优先于「中性验签原语留
+  宿主」的替代方案（用户裁定选 B）

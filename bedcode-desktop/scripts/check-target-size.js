@@ -30,6 +30,11 @@ const CONFIG = {
   sharedTargetDirs: ['target/fixtures', 'target/wasm-apps'],
   // 遗留的 per-crate target 目录（改造前的独立落点）：报告时标注可删
   legacyTargetParents: ['packages', 'wasm-apps'],
+  // 仓库根级 target 目录（在两端目录之外，故只报告不自动处理）：
+  // `cross-end-tests/` 的依赖图是两端 lib 的**并集** + 自己的 dev 依赖，
+  // 跟任何一端都不相同——并入端内目录会驱逐该端缓存，且端内 target 有 15G
+  // 自动 clean 阈值，混在一起会统计失真
+  rootTargetDirs: ['cross-end-tests/target'],
 }
 
 /**
@@ -126,6 +131,14 @@ function collectOtherTargetDirs() {
     }
   }
 
+  for (const rel of CONFIG.rootTargetDirs) {
+    // 相对**仓库根**：本脚本 cwd 为 bedcode-desktop/ 或 bedcode-mobile/，仓库根 = cwd/..
+    const dir = join(process.cwd(), '..', rel)
+    if (existsSync(dir)) {
+      found.push({ rel, dir, size: getDirectorySize(dir), kind: 'root' })
+    }
+  }
+
   return found.sort((a, b) => b.size - a.size)
 }
 
@@ -162,10 +175,15 @@ function main() {
   const others = collectOtherTargetDirs()
   if (others.length === 0) return
 
-  console.log('📦 其它 target 目录（共享编译落点 / 改造前残留）:\n')
+  console.log('📦 其它 target 目录（共享编译落点 / 改造前残留 / 仓库根工程）:\n')
   for (const { rel, size, kind } of others) {
-    const tag = kind === 'shared' ? '共享' : '遗留'
-    const note = kind === 'shared' ? '保留（删除会丢失共享编译缓存）' : '可安全删除'
+    const tag = kind === 'shared' ? '共享' : kind === 'root' ? '根级' : '遗留'
+    const note =
+      kind === 'shared'
+        ? '保留（删除会丢失共享编译缓存）'
+        : kind === 'root'
+          ? '保留（依赖图独立；删除=下次重建十几分钟）'
+          : '可安全删除'
     console.log(`  [${tag}] ${rel} — ${formatSize(size)}  ${note}`)
   }
   const legacyBytes = others.filter((d) => d.kind === 'legacy').reduce((a, d) => a + d.size, 0)

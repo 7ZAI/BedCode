@@ -9,11 +9,142 @@
 
 ## [未发布]
 
+#### 跨端真实互连集成测试（新增 `cross-end-tests` 工程 + 两端 lib 改名；无生产逻辑、无 ABI、无版本号变动）
+
+- **做了什么**：新增仓库根 Rust 包 `cross-end-tests/`，在同一测试进程内让
+  **桌面端真实 Actix 服务器 + 真实 `com.bedcode.terminal-session` WASM 产物**与
+  **移动端真实客户端代码**（`AuthHttpClient` / `SessionHttpClient` / `TerminalLinkManager`）
+  互连——零 mock、无 adb、无 WebView、无模拟器，**按需手动跑，不接入 workflow**
+  （决定 2026-09-30：跨端测试的构建前置是两端插件产物，CI 上重建成本高于收益；
+  命令见 AGENTS §3 `cd cross-end-tests && cargo test`）。此前两端的集成测试
+  各自 mock 对方（桌面侧对面是通用 reqwest / tokio-tungstenite 客户端，移动端对面是
+  假桌面服务器）：两套 mock 各自自洽，**契约在两端之间漂移时两边全绿而真实链路已坏**
+- **L0 前置——两端 lib 同名去重**：`bedcode_lib`（两端同名）→ `bedcode_desktop_lib` /
+  `bedcode_mobile_lib`。同名 crate 无法同时出现在一个依赖图里，不改名则本工程只能依赖
+  一端。影响面已核实并限定在两端各自的 src / tests / bench，加上少量字符串常量
+  （EnvFilter 默认值 `bedcode_lib=debug`、插件日志 target 前缀、`android-backup` 手工保留
+  副本里的 `System.loadLibrary`、四份文档表格）。路径依赖默认以 **package 名**为键，
+  故 `Cargo.toml` 需显式写 `package = "..."`
+- **已知行为变化（非静默）**：用户既有的 `bedcode_lib=debug` EnvFilter（及任何按插件
+  日志 target 过滤的规则）需改新名——这是开发调试配置而非产品功能。Android 的 `.so`
+  文件名跟随 lib 名，`System.loadLibrary("bedcode_mobile_lib")` 随之变化；`gen/android`
+  下的副本被 gitignore 且由 tauri 自动重建，**但手工保留的
+  `android-backup/app-java/generated/Rust.kt` 副本已同步修改**，否则恢复即失配
+- **覆盖（每个场景 = 一个独立测试二进制：`AppContext` 是进程级 `OnceLock` 单例）**：
+  配对 / QR / 重认证真实往返（含四类反例）；**从客户端侧证明 ADR 0033 密钥环轮换宽限期**
+  （轮换前的 token 在 HTTP 与 WS 两面仍能通过认证，轮换后新签发 token 带新 `kid`）；
+  会话控制 HTTP 面（含 `1002` 错误信封与「remove 幂等 vs stop/input 严格」这条**不对称**
+  契约）；**终端流闭环**——真实 `bash` PTY 字节经桌面插件 → `host-pty` → WS → 移动端
+  ingest 门控 → 页面通道；无中心在册 / 伪造凭证的 fail-closed（HTTP + WS 两面）；桌面停用 /
+  激活插件对移动端连接的联动影响
+- **只有跨端互连才能暴露的两处发现（初稿契约写错，实测行为更有价值）**：
+  ① 无中心在册时配对端点返回 **401 而非 404**——免凭证档位由插件在 activate 期登记，
+  未激活即**不存在无认证的自助配对入口**；② 对不存在的会话 `remove` 是**幂等成功**
+  （`actions::remove_via_host` 注释有据），而 `stop` / `input` 严格报 1002。这条不对称
+  现已在跨端层钉死，未被绕过
+- **诚实边界（记录而非隐藏）**：`deny_kind` 三态是宿主**日志**字段而非 wire 字段，
+  客户端一律只看到 401（这是有意的，不泄露部署状态）；生物认证正向路径需要 Android
+  Keystore 中的真设备私钥，无头进程构造不出（只覆盖「未绑定 → 1008」反例）；QR 的
+  「桌面扫码确认」UI 步骤被跳过，改为直接驱动插件自身的 `qr-code-generate` 入口
+- **不接入 CI**：`test.yml` 未新增 job（决定 2026-09-30，按需手动跑）。代价与缓解：跨端
+  契约漂移不会在 PR 阶段被自动拦住，靠 AGENTS §10 的「改跨端协议必须跑 cross-end-tests」
+  这条人工门禁 + `docs/knowledge/mobile-desktop-auth.md` 的协议章交叉引用来兜。
+  验证：改名后两端 `cargo test` 全量绿（桌面 lib 1058 + 全部集成 target；移动端全量），
+  `cross-end-tests` 7/7 绿；运行前已重建两端插件产物
+
 > 以桌面端为主（路线图阶段 2 + 阶段 3 会话部分合并为一个批次执行），外加一项移动端
 > 基础建设变更（wasmtime 47 → 48，见「基础建设」节）——**两端版本号均不动**；桌面批次的
 > 范围豁免与移动端受损清单见「文档」节。
 
+#### `packages/` 下的测试夹具合并为一个按 feature 选择的 crate（桌面测试基建；无生产代码、无 ABI、无版本号变动）
+
+- **做了什么**：6 个 SDK 绑定夹具 `plugin-http-test` / `plugin-task-test` / `plugin-pty-test` /
+  `plugin-wasip3-test` / `plugin-sdk-test` / `plugin-ws-test` 合并为单一
+  `packages/plugin-sdk-fixtures` crate（一个夹具占一个 `[features]` 槽位）并**删除**。
+  手写绑定的 `plugin-component-test`（30+ 调用点）**一并删除**——它的四个可观测行为
+  （`test.panic`、`test.storage-get`、启动失败注入、`name`/`args`/`stored` 回包形状）
+  已移入 `sdk` 夹具；DB 往返拆为新命令 `test.db-roundtrip`，使被燃料与延迟探针高频调用的
+  `test.echo` 不必背两次建表+插入+查询的开销。六份几乎逐字重复的「mtime 检查 +
+  `cargo build`」收成一份参数化 `build_sdk_fixture(feature)`，原六个 builder 各变成一行转发
+- **feature 互斥是硬约束，但理由不是人们直觉的那个**：spike 推翻了最直观的说法。两个
+  feature 同时编**不会**撞名——`wasm_entry!` / `export!` 在各自 module 内生成不冲突的符号，
+  产物还大了约四倍、两个夹具都编进去了。互斥的真正理由是**产物歧义**：
+  `build_sdk_fixture(feature)` 按 feature 名归档产物，一个产物必须无歧义地对应一个夹具。
+  cargo 表达不了「至多一个」，故该约束由 `compile_error!` 兜底
+- **产物同名冲突及其引发的竞态**：各 feature 产出的都是
+  `bedcode_plugin_sdk_fixtures.wasm`，后构建覆盖先构建。解法是按 feature 归档成带后缀的
+  产物名。但这**还不够**——测试并行时，某线程会归档到**另一个线程半写完**的文件
+  （实测报错 `failed to parse WebAssembly module`），故 build + 归档改为进程级互斥锁串行，
+  取锁后再做一次新鲜度缓存复查
+- **漂移锁抓出的是真实覆盖漏洞，不只是数字变了**：
+  `production_manifests_declare_only_known_vocabulary` 会断言自己扫了多少份 manifest，
+  5 份 `plugin.json` 合进一个 crate 的分 feature `http.json` / `pty.json` / `task.json` /
+  `ws.json` + 根 `plugin.json` 后，从 11 掉到 7。原锁只认单夹具形态的 `plugin.json`
+  文件名，于是 **4 份 fixture manifest 静默掉出了权限词汇表校验**。现改为扫目录下全部
+  `*.json`、靠「有 `id` 字段」筛出 plugin manifest（`package.json` / `tsconfig.json`
+  无 `id`，天然跳过），下限提到 11 并写明构成
+- **明确接受的代价**：`plugin-component-test` 删除后，**没有任何东西能造出「缺少某个可选
+  interface」的组件**——SDK 的 `wasm_entry!` 无条件导出全部 interface。依赖这种产物的三个
+  降级测试已移除，即「旧插件产物仍能加载、可选导出缺失时降级为 `Ok(false)`」**不再有测试
+  覆盖**。宿主的探测与降级代码未动，消失的只是它的测试覆盖
+- **分夹具 manifest**：合集 crate 每夹具一份 `<fixture>.json`；根 `plugin.json` 归 `sdk`
+  夹具——因为 `#[plugin_api]` 在编译期硬读该路径（ADR 0005 单一真源）并比对 trait 方法名
+  与 `api` 字段，让模块另指一份会让那个防漂移比对形同虚设
+- **一个隐性的夹具产物陈旧 bug 被查出并修复**：收拢后的新鲜度检查只盯合集 crate 自己的
+  3 个文件，而它在**调用 cargo 之前就短路返回**——所以「cargo 的依赖指纹会发现 SDK 变了」
+  **不成立**。SDK 一改，所有缓存产物全部陈旧：**测试全绿但跑的是旧产物**。现改为递归遍历
+  SDK 源目录树（而非枚举文件清单——原来各 builder 的手写清单本身就是同一个坑的定时炸弹），
+  其下任一文件更新即重建。已用冷缓存验证：6 个 feature 全部现场重建，套件全绿
+- **观察到一次无法复现的偶发失败**：重建四个 wasm 应用产物后的首次全量跑报
+  1055 绿 / 2 红；此后 5 次（含一次删光全部夹具产物、迫使 6 个 feature 现场重建）均
+  1057 全绿。最可能是与应用产物重建过程重叠，但这是**推测**——当时未捕获失败用例名，且未再现
+- **`plugin-wasi-test` 保持独立 crate 且固定 `wasm32-wasip2`**：曾按「共享 `WasiCtx` + p2/p3
+  两套 linker 均注册 ⇒ 与 target 无关」的推断把 preopen 迁到 wasip3，**实测证伪**——两个
+  preopen E2E 均 trap 于 `filesystem_method_descriptor_open_at`：p3 linker 接上了，但预打开
+  目录的能力没建到 p3 filesystem 接口上。已回退，两个用例全绿，结论写进了源码注释。
+  夹具合并不要求统一 target
+- **`plugin-bench-test` 保持独立**（749 行 / 29 命令）：性能基准夹具与功能闭环夹具是两类东西
+- **验证**：宿主 `cargo test` **lib 1057 绿 / 0 红 / 1 ignored**，全部集成 target 绿
+  （broadcast_shutdown、build_manifest_smoke、error_envelope_integration、
+  http_auth_biometric、link_crypto_http、pty_session_chain、server_integration、
+  ws_auth_rules）；`scripts/wasip3-toolchain.sh fixture` 仍能从合并后的 crate 产出通过
+  magic 校验的 Component。`bedcode.wit` 未动，无 ABI 影响
+
 ### 功能
+
+#### 终端历史截断不再弹 toast —— 双端静默处理（桌面端 wasm 应用 `com.bedcode.terminal-session` + 移动端；**WIT/ABI 不动**）
+
+- **做了什么**：历史输出超过缓存上限（环淘汰/截断）时，桌面与移动端都不再提示用户，
+  仅留一条后台日志便于排查——对齐成熟终端产品（不提示、用户无感知）。顺带清理宿主侧
+  迁移后已无消费方的 `desktop.terminal.historyTruncated` 文案 key 与插件/移动端 i18n key
+
+#### SDK 的 `wasm_entry!` 不再把 guest 自报失败记为 error 级（桌面 SDK 行为变更；四个 wasm 应用产物已重建；SDK 包需重新发布）
+
+- **做了什么**：宏内 10 条失败路径——`activate` / `deactivate` / `on_startup` /
+  `on_shutdown` / `on_message` / `on_message_binary` / `on_process_done` /
+  `on_ws_message` / `on_ws_client_message` / `on_task_event`——由 `log_error` 改为 `log_warn`
+- **依据**：AGENTS.md §8 的硬规则「**guest 自报的可处理错误不升 `error!`**」。这些 `Err` 是
+  插件自己报告的失败（双层 Result 的内层），不是宿主侧证据。真正的宿主故障（trap、
+  Store 中毒、fuel 耗尽）本来就由宿主运行时自己以 `error!` 记录并计数，所以降级**不会
+  漏掉任何一次宿主故障**；它只是阻止 error 级退化成「某个插件返回了个 Err」——那会让这个
+  级别失去告警价值
+- **为何错这么久没被发现**：契约锁 `engine_limits::test_component_guest_self_reported_failure_no_host_error`
+  一直只跑手写 wit-bindgen 夹具（直接返回 `Err(String)`，根本不经本宏），SDK 这条路径
+  从未被放到该断言前面。夹具并到 SDK 绑定形态后才第一次照到
+- **影响面**：SDK 行为变更，四个 wasm 应用产物已重建（`pnpm run build`，wasmHash 重新
+  注入），SDK 包需重新发布。WIT 未变、ABI 号未动、宿主代码未改
+- **运维提醒**：若有基于 error 级插件日志的告警，将不再在那里看到 guest 自报失败；消息
+  以同样内容降为 warn 保留，宿主侧故障不受影响
+- **验证**：SDK crate 158 绿 + `wasm32-wasip3` release 构建通过；宿主 `cargo test` lib
+  1057 绿，全部集成 target 绿
+
+#### 生物认证面完全下沉认证中心 —— 公钥托管 + 验签执行离开宿主（B-downsink，桌面端 ABI v33 → v34；**破坏性：已绑定生物认证的设备需重新绑定**；移动端 WIT/ABI 不动）
+
+- **为什么下沉**：生物认证的**编排**（挑战签发/单次消费/过期、配对判定、HTTP 端点）早已在认证中心（`terminal-session` 插件），宿主只剩「公钥托管（`plugin_secrets` 的 `biometric:<fp>` 行）+ P-256 验签执行」两块——与 v33 入场 JWT 迁中心（ADR 0033 D1）同路线。P-256 公钥是**公开材料**（私钥永在移动端安全硬件，ADR 0002），托管位置无泄露面变化；验签执行点从宿主引擎移到中心 WASM
+- **宿主侧变更**：`host-auth` **退役 3 原语** `biometric-credential-bound` / `biometric-verify-signature` / `biometric-credential-bind`；`utils/auth/biometric.rs`（挑战管理器 + 验签）与 `system/app_context.rs` 的 `biometric_challenges` **整面删除**；宿主 `plugin_secrets` 的 `biometric:*` 死行按 v33 `jwt.key` 同款幂等清扫（不碰密钥环）
+- **中心侧接管**：生物公钥真源 = 插件私有库新增 `auth_biometric_keys` 表（`biometric_key_get/set/delete`），验签在 WASM 内 p256（`auth_http/biometric.rs::verify_biometric_signature`，p256 crate 已在 wasm32-wasip3 探针验证可编译）；挑战闸门改查私有库，绑定/解绑写私有库（与配对记录解耦）
+- **fail-visible ②**：旧 v33 产物仍 import 那 3 函数 → **实例化期**拿到点名「按 v34 SDK 重建」的错误，不是 trap 不是静默降级
+- **迁移，明说**：宿主旧 `biometric:*` 行被清，已绑定生物认证的设备需**重新绑定**（一次性；配对记录与配对码 / QR / JWT 认证不受影响）。移动端 wire 流程（`/api/auth/biometric-*` 挑战-应答）**逐字节不变**，移动端**零改动**；宿主（ABI 34）与重建后的中心产物**必须同批发布**
 
 #### 认证中心持有入场签发密钥，宿主不再有任何设备入场密码学（ADR 0033，桌面端 ABI v32 → v33；**破坏性：存量已配对设备需全量重新配对**；移动端 WIT/ABI 不动）
 

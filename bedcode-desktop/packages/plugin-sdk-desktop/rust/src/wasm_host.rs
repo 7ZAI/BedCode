@@ -15,15 +15,16 @@
 //! trait 签名（`host/*` 定义）保持不变，插件业务代码零改动。
 
 use crate::host::{
-    ConfigKey, FsDirEntry, FsStat, HostApp, HostAuth, HostBus, HostConfig, HostConnection, HostDatabase, HostError,
-    HostEvents, HostFs, HostHttp, HostLog, HostMdns, HostPeer, HostPlatform, HostPluginDatabase,
-    HostCrypto, HostProcess, HostPty, HostStorage, HostTask, HostWebsocket,
-    CryptoKeypair, ProcessSyncResult, PtyRingFetch,
+    ConfigKey, CryptoKeypair, FsDirEntry, FsStat, HostApp, HostAuth, HostBus, HostConfig,
+    HostConnection, HostCrypto, HostDatabase, HostError, HostEvents, HostFs, HostHttp, HostLog,
+    HostMdns, HostPeer, HostPlatform, HostPluginDatabase, HostProcess, HostPty, HostStorage,
+    HostTask, HostWebsocket, ProcessSyncResult, PtyRingFetch,
 };
 use crate::wasm::bedcode::plugin::{
-    host_app, host_auth, host_bus, host_config, host_database, host_events, host_fs, host_http,
-    host_crypto, host_log, host_mdns, host_peer, host_platform, host_plugin_database, host_process, host_pty,
-    host_connection, host_storage, host_task, host_timer, host_websocket,
+    host_app, host_auth, host_bus, host_config, host_connection, host_crypto, host_database,
+    host_events, host_fs, host_http, host_log, host_mdns, host_peer, host_platform,
+    host_plugin_database, host_process, host_pty, host_storage, host_task, host_timer,
+    host_websocket,
 };
 
 /// 宿主 API 绑定（WASM 插件侧）
@@ -95,23 +96,6 @@ impl HostAuth for WasmHost {
         host_auth::auth_setting_set(key, value).map_err(|e| host_err("auth_setting_set", e))
     }
 
-    // ==================== v19 保留面（v24 修订语义：公钥托管在 plugin_secrets） ====================
-
-    fn auth_biometric_credential_bound(&self, fingerprint: &str) -> Result<bool, HostError> {
-        host_auth::biometric_credential_bound(fingerprint)
-            .map_err(|e| host_err("auth_biometric_credential_bound", e))
-    }
-
-    fn auth_biometric_verify_signature(
-        &self,
-        fingerprint: &str,
-        message: &str,
-        signature: &str,
-    ) -> Result<bool, HostError> {
-        host_auth::biometric_verify_signature(fingerprint, message, signature)
-            .map_err(|e| host_err("auth_biometric_verify_signature", e))
-    }
-
     fn auth_link_identity_parts(&self) -> Result<Option<serde_json::Value>, HostError> {
         host_auth::link_identity_parts()
             .map_err(|e| host_err("auth_link_identity_parts", e))
@@ -121,14 +105,14 @@ impl HostAuth for WasmHost {
             })
     }
 
-    fn auth_biometric_credential_bind(&self, fingerprint: &str, public_key: &str) -> Result<bool, HostError> {
-        host_auth::biometric_credential_bind(fingerprint, public_key)
-            .map_err(|e| host_err("auth_biometric_credential_bind", e))
-    }
-
     // v33（ADR 0033）：`auth_device_token_issue` / `auth_device_token_verify` 随
     // WIT `host-auth` 两函数一起退役——入场密钥的签发/验签归认证中心自持，宿主不再
     // 持有设备 JWT 密码学。密钥材料仍经 `auth_secret_get/set` 出入（属主隔离）。
+    // v34（B-downsink）：`auth_biometric_credential_bound` /
+    // `auth_biometric_verify_signature` / `auth_biometric_credential_bind` 随 WIT
+    // `host-auth` 三函数一起退役——生物凭证公钥托管与验签执行下沉认证中心插件
+    // 私有库（`auth_records::biometric_key_*` + WASM 内 p256），宿主不再持有任何
+    // 设备侧凭证材料。
 
     // ==================== v32：认证中心显式注册 + 组合式认证原语（ADR 0031） ====================
     // 认证中心角色经注册表显式登记（唯一性仲裁在宿主），methods 声明式列表宿主
@@ -289,7 +273,8 @@ impl HostConnection for WasmHost {
     /// 走 `host-connection`（票 04）：这份宿主 server 的连接事实
     /// 不随会话原语域退役；权限判据是 `connection:read`。
     fn connections_list(&self) -> Result<serde_json::Value, HostError> {
-        let raw = host_connection::connections_list().map_err(|e| host_err("connections_list", e))?;
+        let raw =
+            host_connection::connections_list().map_err(|e| host_err("connections_list", e))?;
         parse_json("connections_list", raw)
     }
 }
@@ -314,7 +299,8 @@ impl HostProcess for WasmHost {
     }
 
     fn process_run_sync(&self, request_json: &str) -> Result<ProcessSyncResult, HostError> {
-        let json = host_process::run_sync(request_json).map_err(|e| host_err("process_run_sync", e))?;
+        let json =
+            host_process::run_sync(request_json).map_err(|e| host_err("process_run_sync", e))?;
         serde_json::from_str(&json)
             .map_err(|e| HostError::custom(-1, format!("process_run_sync: decode failed: {}", e)))
     }
@@ -392,8 +378,7 @@ impl HostHttp for WasmHost {
 
     /// v29 服务端域：注册插件 HTTP 端点（config-json 原样透传宿主）
     fn http_register_endpoint(&self, config_json: &str) -> Result<String, HostError> {
-        host_http::register_endpoint(config_json)
-            .map_err(|e| host_err("http_register_endpoint", e))
+        host_http::register_endpoint(config_json).map_err(|e| host_err("http_register_endpoint", e))
     }
 
     /// v29 服务端域：注销本插件 HTTP 端点
@@ -648,14 +633,18 @@ impl HostPeer for WasmHost {
         )
     }
 
-    fn peer_collect_outgoing(&self, paths: &[serde_json::Value]) -> Result<serde_json::Value, HostError> {
+    fn peer_collect_outgoing(
+        &self,
+        paths: &[serde_json::Value],
+    ) -> Result<serde_json::Value, HostError> {
         let paths_json = to_json_string(
             "peer_collect_outgoing",
             &serde_json::to_value(paths).unwrap_or_default(),
         )?;
         peer_json(
             "peer_collect_outgoing",
-            host_peer::collect_outgoing(&paths_json).map_err(|e| host_err("peer_collect_outgoing", e))?,
+            host_peer::collect_outgoing(&paths_json)
+                .map_err(|e| host_err("peer_collect_outgoing", e))?,
         )
     }
 }
@@ -765,7 +754,11 @@ impl HostWebsocket for WasmHost {
         host_websocket::list_endpoints().map_err(|e| host_err("ws_list_endpoints", e))
     }
 
-    fn ws_connection_context(&self, endpoint_id: &str, client_id: &str) -> Result<String, HostError> {
+    fn ws_connection_context(
+        &self,
+        endpoint_id: &str,
+        client_id: &str,
+    ) -> Result<String, HostError> {
         host_websocket::connection_context(endpoint_id, client_id)
             .map_err(|e| host_err("ws_connection_context", e))
     }
@@ -840,7 +833,8 @@ impl HostCrypto for WasmHost {
     }
 
     fn aead_generate_key(&self, algorithm: &str) -> Result<Vec<u8>, HostError> {
-        host_crypto::aead_generate_key(algorithm).map_err(|e| host_err("crypto_aead_generate_key", e))
+        host_crypto::aead_generate_key(algorithm)
+            .map_err(|e| host_err("crypto_aead_generate_key", e))
     }
 
     fn aead_generate_nonce(&self, algorithm: &str) -> Result<Vec<u8>, HostError> {
@@ -867,7 +861,10 @@ impl HostCrypto for WasmHost {
         if bytes.len() != 64 {
             return Err(HostError::custom(
                 -1,
-                format!("crypto_keyagreement_generate: expected 64 bytes, got {}", bytes.len()),
+                format!(
+                    "crypto_keyagreement_generate: expected 64 bytes, got {}",
+                    bytes.len()
+                ),
             ));
         }
         let private = bytes[..32].to_vec();

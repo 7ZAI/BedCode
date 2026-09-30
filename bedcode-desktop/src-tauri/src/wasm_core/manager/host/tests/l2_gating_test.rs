@@ -44,8 +44,13 @@ use super::*;
 ///
 /// 逐条理由：
 /// - `utils/auth/auth_center.rs`：L2 桥接门本体（策略裁决 + 配对/QR/trust 零解析转发）；
-/// - `server/http/middleware/jwt_auth.rs` / `server/websocket/channel/plugin.rs`：
-///   **安全闸门**——HTTP 网关与 WS 通道的认证中间件（唯一正当的裁决消费方）；
+/// - `../packages/bedcode-server-http/src/middleware/auth_gateway.rs`（票 04 前是
+///   `src/server/http/middleware/auth_gateway.rs`）/
+///   `../packages/bedcode-server-websocket/src/channel/plugin.rs`（票 05 前是
+///   `src/server/websocket/channel/plugin.rs`）：**安全闸门**——HTTP 网关与 WS 通道的
+///   认证中间件（唯一正当的裁决消费方）；两个面抽 crate 后它们都经 `base::ports` 的
+///   `AuthCenter` 端口字段取裁决，**扫描面必须跟着代码走**（见 `L2_SCAN_ROOTS`）：
+///   只扫宿主 `src` 会让这些白名单悬空、并把 crate 里新长出的越界消费点静默放行；
 /// - `wasm_core/host_api/auth.rs`：**组合式认证原语**（ADR 0031 K1/K6）——权限门 +
 ///   唯一性仲裁的调用方 + 零解析窄转发，属安全闸门；（注册表本体
 ///   `wasm_core/host_api/auth_center.rs` 不在本表：它是 L2 侧的**注册表**，
@@ -66,8 +71,9 @@ const L2_CONSUMER_ALLOWLIST: &[&str] = &[
     "src/utils/auth/auth_center.rs",
     "src/utils/auth/test_tokens.rs",
     "src/utils/session_gateway.rs",
-    "src/server/http/middleware/jwt_auth.rs",
-    "src/server/websocket/channel/plugin.rs",
+    "../packages/bedcode-server-http/src/middleware/auth_gateway.rs",
+    "../packages/bedcode-server-websocket/src/channel/plugin.rs",
+    "src/server/ports_impl.rs",
     "src/wasm_core/host_api/auth.rs",
     "src/wasm_core/manager/host/boot.rs",
     "src/wasm_core/manager/host/activation.rs",
@@ -286,11 +292,31 @@ pub fn after_tests() {
     );
 }
 
-/// 收集 `src/` 下「纯代码」命中 needle 的非测试 .rs 文件（相对 `src/` 的路径集合）
+/// L2 消费点的扫描根（相对 `src-tauri`）
+///
+/// server-lib-split 票 04：HTTP 面抽成 `bedcode-server-http` crate 后，闸门消费点
+/// （`middleware/auth_gateway.rs`）住在 crate 里——扫描面不跟着代码走，等于让那条
+/// 白名单悬空、并把 crate 内新长出的越界消费点静默放行。票 07 补齐其余三个消费侧
+/// crate（core / peer-net / crypto-engine）：它们同样能经 `bedcode_server_base::ports`
+/// 取 `AuthCenter` 端口，扫描面漏掉就等于给它们开了免检通道。
+///
+/// 只纳**消费侧** crate：`bedcode-server-base::ports` 是 `AuthCenter` 端口与
+/// `ServerPorts.auth_center` 字段的**定义方**，把它扫进来等于给词汇定义开白名单，
+/// 本锁「登记 = 显式裁决」的语义就没了。
+const L2_SCAN_ROOTS: &[&str] = &[
+    "src",
+    "../packages/bedcode-server-core/src",
+    "../packages/bedcode-server-http/src",
+    "../packages/bedcode-server-websocket/src",
+    "../packages/bedcode-server-peer-net/src",
+    "../packages/bedcode-crypto-engine/src",
+];
+
+/// 收集扫描根下「纯代码」命中 needle 的非测试 .rs 文件（相对 `src-tauri` 的路径集合）
 fn host_files_mentioning(needle: &str) -> Vec<String> {
     let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut hits = Vec::new();
-    let mut stack = vec![base.join("src")];
+    let mut stack: Vec<std::path::PathBuf> = L2_SCAN_ROOTS.iter().map(|root| base.join(root)).collect();
     while let Some(dir) = stack.pop() {
         let Ok(entries) = std::fs::read_dir(&dir) else { continue };
         for entry in entries.flatten() {
@@ -532,7 +558,10 @@ fn l2_gate_returns_decision_only() {
 /// （那说明传输面必需的身份信息被弄丢了）。
 #[test]
 fn l2_identity_payload_is_pinned_identity_only() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/utils/auth/identity.rs");
+    // server-lib-split：AuthenticatedIdentity 真源在 bedcode-server-base crate
+    // （packages/bedcode-server-base/src/identity.rs；utils/auth/identity.rs 为
+    // re-export 薄壳），锁跨 crate 读真源文件
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../packages/bedcode-server-base/src/identity.rs");
     let content = std::fs::read_to_string(&path).expect("read identity module");
     let body = content
         .split("pub struct AuthenticatedIdentity {")
@@ -606,6 +635,46 @@ fn host_has_no_entry_token_crypto() {
     assert!(
         violations.is_empty(),
         "宿主生产路径不得再持有设备入场密码学（ADR 0033）：{violations:#?}"
+    );
+}
+
+/// 防回接锁（B-downsink fail-visible ③）：宿主生产路径不得再出现生物凭证密码学
+///
+/// v34（2026-09-30）把生物凭证公钥托管 + P-256 验签执行从宿主下沉认证中心
+/// （`auth_biometric_keys` 私有库 + WASM 内 p256）；宿主 `utils/auth/biometric.rs`
+/// 整模块删除。判据同 v33 入场密码学锁：`host-auth` 三个生物原语 / 宿主验签函数 /
+/// 挑战管理器任何一处重新出现在**生产**代码里，都意味着「公钥托管 + 验签留宿主」
+/// 那条已退役的口径被复活——本专项要消除的正是它。
+///
+/// 边界：测试代码里出现这些字样是允许的（回归锁自身 + 集成测试的名称/白盒查询），
+/// 扫描只取「纯代码」视图（剥注释）且排除 `#[cfg(test)]` 模块与 `tests/` 目录。
+#[test]
+fn host_has_no_biometric_crypto() {
+    const NEEDLES: &[&str] = &[
+        "auth_biometric_credential_bound",
+        "auth_biometric_verify_signature",
+        "auth_biometric_credential_bind",
+        "verify_biometric_signature",
+        "BiometricChallengeManager",
+        "biometric_secret_key",
+    ];
+    let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut violations = Vec::new();
+    for rel in host_files_mentioning("utils::auth") {
+        let Ok(content) = std::fs::read_to_string(base.join(&rel)) else {
+            continue;
+        };
+        for line in production_code_lines(&content) {
+            for needle in NEEDLES {
+                if line.contains(needle) {
+                    violations.push(format!("{rel}: {needle} → {}", line.trim()));
+                }
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "宿主生产路径不得再持有生物凭证密码学（B-downsink）：{violations:#?}"
     );
 }
 

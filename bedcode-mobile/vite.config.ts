@@ -98,6 +98,17 @@ export default defineConfig({
       '@tauri-apps/plugin-dialog',
       '@tauri-apps/plugin-os',
       '@skipperndt/plugin-machine-uid',
+      // 终端栈：TerminalView 是懒加载路由，依赖只经该 chunk 可达。必须逐个显式列出——
+      // addon-webgl 仅出现在 useTerminalRenderer 的 `await import()` 里，dep scanner 不扫动态
+      // 导入，启动预热漏掉它 → 首次进终端时运行时发现新依赖 → 「optimized dependencies
+      // changed. reloading」整页重载，导航中的 TerminalView.vue 动态导入失败（Failed to fetch
+      // dynamically imported module），终端卡在 loading，且整页重载清空 useMobileConnection
+      // 的内存态连接状态 → 设备列表退回「未连接」历史列表。
+      '@xterm/xterm',
+      '@xterm/addon-fit',
+      '@xterm/addon-web-links',
+      '@xterm/addon-unicode11',
+      '@xterm/addon-webgl',
       'ansi_up',
       'html5-qrcode',
       'uuid',

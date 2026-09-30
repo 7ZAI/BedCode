@@ -38,13 +38,23 @@ bedcode-desktop/                      # 桌面端项目 (Tauri 2.0 + Vue 3)
 │   │   │                             #   权限/SQL/命令参数辅助宏；rust-macros/ 为配套过程宏 crate
 │   │   └── src/                      # TS SDK：插件类型定义、共享模块运行时代理（__BEDCODE_SHARED__）、
 │   │                                 #   Vite 构建插件（vue/pinia/vue-i18n 外部化）
-│   ├── plugin-component-test/        # 测试用 WASM 插件 crate（Component Model 绑定验证与连通性测试，
-│   │                                 #   覆盖宿主调用路径，供宿主 runtime 测试套件做签名验证）
-│   ├── plugin-sdk-test/              # SDK 接口测试用插件 crate
+│   ├── plugin-sdk-fixtures/         # 宿主测试夹具合集（SDK 绑定形态）：http / task / pty / sdk /
+│   │                                 #   ws / wasip3 六个夹具合一 crate（bench 独立，见下），按 cargo
+│   │                                 #   feature 选夹具（**互斥**：一次构建一个，理由见该 crate
+│   │                                 #   Cargo.toml）；各夹具 manifest 按 feature 分文件放
+│   │                                 #   http.json / pty.json / …，根 plugin.json 归 sdk 夹具
+│   │                                 #   （#[plugin_api] 宏编译期硬读该路径）；宿主侧
+│   │                                 #   build_sdk_fixture(feature) 互斥锁串行构建并按 feature 归档产物
+│   ├── plugin-p3-async-host-import-test/ # p3 async host import 测试插件（手写 wit-bindgen 绑定）
+│   ├── plugin-bench-test/            # 性能基准夹具（独立 crate：749 行 / 29 命令，与功能闭环夹具性质不同）
 │   ├── plugin-system-test/           # 系统组件形态测试插件 crate（导出 host-* 同形能力接口，验证能力装配
 │   │                                 #   框架：注册表路由 / host-side 转发 / 依赖检查 / trap 隔离）
 │   └── plugin-wasi-test/             # WASI preopen 测试插件（wasm32-wasip2，std::fs 直读写预打开目录；
-│                                     #   同一 fixture 分钉可写档与只读档两种挂载）
+│                                     #   同一 fixture 分钉可写档与只读档两种挂载）。**不参与夹具合并**：
+│                                     #   实测 preopen 在 wasip3 上不工作（trap 于
+│                                     #   filesystem_method_descriptor_open_at），合并不要求统一 target）
+│                                     #   **preopen 仅 worker 类别可用（ADR 0034）**：本夹具是 worker 预留
+│                                     #   能力的机制守门测试（在策略闸门之下，不走 manifest 校验路径）
 ├── wasm-apps/                        # wasm 应用源码目录（2026-09-25 语义：桌面端 wasm 插件对外称
 │                                     #   wasm 应用；内部代码实现与插件 ID 契约不变。每个应用独立
 │                                     #   package：plugin.json 元数据 +
@@ -284,8 +294,8 @@ WIT 契约 `host-auth`（v15 密钥托管四函数 + v18 记录面四函数，SD
 表退役——配对设备 / 连接历史真源在认证中心私有库 `auth_records` 域（插件
 `auth_records/`，表 `auth_pairings` / `auth_connection_history`）；存量迁移链
 2026-09-23 用户裁定整体退役（不再兼容旧版本存量用户，旧库滞留表不读不迁不清理）；
-`host-auth` 只保留密钥托管 / 生物凭证原语（bound/verify/bind，公钥在 `plugin_secrets`
-key=`biometric:<fp>`）/ device-token / link-identity / setting。**裁剪线（ADR 0022）**：宿主只给
+`host-auth` 只保留密钥托管 / `auth-setting-set` / link-identity / 认证中心注册面——
+**生物凭证原语（bound/verify/bind）已随 v34 退役**，见下。**裁剪线（ADR 0022）**：宿主只给
 引擎级原语，排序、过滤、解读与展示组织全部归插件。
 
 - **（v24 退役）** `trusted-devices-list` / `trusted-device-revoke` /
@@ -338,6 +348,23 @@ key=`biometric:<fp>`）/ device-token / link-identity / setting。**裁剪线（
     （其他插件经 `host-auth auth-method-invoke`）。**轮换不撤销既有 token**
   - **迁移代价**：存量已配对设备需**全量重新配对**（D3 方案 A，与 v24 退役三表口径一致）
 
+- **v34 生物凭证面下沉（B-downsink，desktop ABI 33 → 34，mobile 不跟演）**——
+  `host-auth` **退役 3 函数** `biometric-credential-bound` / `biometric-verify-signature` /
+  `biometric-credential-bind`：
+  - **生物凭据材料整体离开宿主**：`utils/auth/biometric.rs`（挑战管理器 +
+    P-256 验签）**整模块删除**；`system/app_context.rs` 的 `biometric_challenges` 字段删除；
+    宿主 `plugin_secrets` 的 `biometric:*` 死行由 `db::run_migrations` 幂等清扫
+    （v33 `jwt.key` 同款，只按前缀删不碰密钥环）
+  - **真源**：`com.bedcode.terminal-session` 的 `auth_records::auth_biometric_keys`（新表，
+    `biometric_key_get/set/delete` 端口）；验签在 WASM 内 p256
+    （`auth_http/biometric.rs::verify_biometric_signature`，p256 crate 探针验证可编译）
+  - **边界**：配对记录 `auth_pairings` 与生物公钥解耦（绑定/解绑不碰 connect_count /
+    last_seen）；挑战状态机本就在插件（票 07），闸门改查私有库
+  - **fail-visible ②**：v33 产物仍 import 那 3 函数 → **实例化期**拿到点名
+    「按 v34 SDK 重建」的错误（`stale_artifact_rebuild_hint`）
+  - **迁移代价**：宿主旧 `biometric:*` 行被清，已绑定生物认证的设备需**重新绑定**
+    （配对记录与配对码 / QR / JWT 认证不受影响；移动端 wire 流程逐字节不变，零改动）
+
 ### 宿主能力实现域 · PTY 基础能力服务 — `host-pty`（ABI v16）
 
 WIT 契约 `host-pty`（6 函数，SDK `rust/wit/bedcode.wit`）、**无可选导出**（push 输出模型已被
@@ -372,8 +399,8 @@ PTY **同为引擎句柄**——输出读取一律归插件 `ring-fetch`（webso
 - **回收**：插件停用 → `pty::purge_for_plugin`（`host.rs::deactivate_plugin_inner`，紧邻 mdns / ws
   回收、先于订阅注销）kill 并摘除本人全部 PTY、逐条补发 killed 事件；
 - **属主隔离**：六函数一律先过权限门再查属主，他人句柄 `not owner of pty handle`，摘除后
-  `pty handle not found`；fixture 闭环见 `packages/plugin-pty-test`（wasm32-wasip3）与
-  `manager/runtime.rs` 的 `test_pty_*` 矩阵。
+  `pty handle not found`；fixture 闭环见 `packages/plugin-sdk-fixtures`（feature=pty，wasm32-wasip3）
+  与 `manager/runtime.rs` 的 `test_pty_*` 矩阵。
 
 ### 宿主能力实现域 · 并发任务 — `host-task`（ABI v20）
 
@@ -403,7 +430,7 @@ WIT 契约 `host-task`（5 函数：execute-batch / submit / status / cancel / l
   回收）cancel 全部在册任务 + 清回调队列；
 - **重入红线（spec §8）**：池线程永不回调进插件（回调只经消费派发任务 + 实例锁）；插件禁止
   在 guest 调用栈内同步等待自己任务的事件（自死锁），等待一律走 execute-batch；
-- **fixture 闭环**：`packages/plugin-task-test`（wasm32-wasip3）+ `manager/runtime.rs` 的
+- **fixture 闭环**：`packages/plugin-sdk-fixtures`（feature=task，wasm32-wasip3）+ `manager/runtime.rs` 的
   `test_task_*`（并行保序 / 事件管道 / status / cancel 幂等 / legacy 降级 / 双门权限）。
 
 ### 服务器 — `src-tauri/src/server/`（Actix Web HTTP + WS 单端口）
@@ -438,9 +465,9 @@ WIT 契约 `host-task`（5 函数：execute-batch / submit / status / cancel / l
     （`auth: "none"` 之外一律要求已验签）→ 同一 `forward_to_plugin` 内核；`session_controller.rs` 已随
     sessions REST 下沉插件删除；**dtos/** 请求/响应 DTO（config / file / git / session 四组保留为形状
     契约锚点——插件面必须逐字节复刻）
-  - **middleware/**：`jwt_auth` JWT 网关（宿主自持公开端点 `/api/health` 白名单 + 插件公开别名
-    走注册表档位判定（`auth: "none"` 即公开，精确匹配非前缀）；具名中间件 `jwt_gateway`，
-    协议网关必须挂在它**之后**——`Scope::wrap` 后注册者先执行，故 `http/routes.rs` 里网关写在验签之前）、
+  - **middleware/**：`auth_gateway` 认证闸门（宿主自持公开端点 `/api/health` 白名单 + 插件公开别名
+    走注册表档位判定（`auth: "none"` 即公开，精确匹配非前缀）；具名中间件 `auth_gateway`，
+    业务网关必须挂在它**之后**——`Scope::wrap` 后注册者先执行，故 `http/routes.rs` 里网关写在认证闸门之前）、
     `http_filter` HTTP 流量过滤器中间件
 - **websocket/**（WS 传输面，websocket 业务下沉票 08 终态 = 通用 transport）：
   - **routes.rs**：只有一个握手端点 `/ws/plugin/{plugin_id}/{path}`（未注册 / 属主未激活 404、
@@ -618,7 +645,7 @@ Rust 侧以 `abi.rs` 为宿主/插件共同引用的单一事实来源（签名�
 | 插件系统 (Rust) | `src-tauri/src/wasm_core/` |
 | 插件系统 (前端) | `src/plugin/`、`src/composables/`（usePluginManager） |
 | 插件开发 SDK | `packages/plugin-sdk-desktop/` |
-| 测试插件 | `packages/plugin-component-test/`、`plugin-sdk-test/`、`plugin-system-test/`、`plugin-wasi-test/` |
+| 测试插件 | `packages/plugin-sdk-fixtures/`（SDK 绑定夹具合集，feature 互斥）、`plugin-p3-async-host-import-test/`、`plugin-bench-test/`、`plugin-system-test/`、`plugin-wasi-test/`（wasip2 preopen；**preopen 仅 worker 类别可用，ADR 0034**——本夹具是 worker 预留能力的机制守门测试，不参与合并）。**已删**：`plugin-{http,task,pty,wasip3,sdk,ws}-test` 与 `plugin-component-test`（前六个并入合集；后者连同「旧产物缺可选导出」降级路径的测试一并退役——SDK 的 `wasm_entry!` 无条件导出全部 interface，造不出缺导出的产物） |
 | wasm 应用源码 | `wasm-apps/agent-hub/`、`wasm-apps/ai-chatbox/`、`wasm-apps/file-transfer/`、`wasm-apps/terminal-session/`（终端会话中心：**会话真源登记域**（`rust/src/session/`，P1-b 起含状态机 / 生命周期分发 / 提交行重建 / 经 `host-pty` 的创建停止输入尺寸输出）+ 配对与信任 + 会话编排 + Agent 任务域 + 快捷指令域（票 02）+ 文件浏览域（票 03）+ **WS 会话控制词表分派**（`rust/src/ws_control.rs`，票 09b）+ **HTTP 路由代码注册**（`rust/src/http_routes.rs`，ABI v29：activate 期经 `host-http.register-endpoint` 注册全部路由）+ **sessions REST 域**（`rust/src/sessions_http.rs`：/api/sessions* 七条），票 17 起顶替旧 `com.bedcode.auto-task` 插件；HTTP 业务端点经动态注册表接管 /api/configs /api/quick-actions / 文件浏览五端点 / /api/auth/* / /api/sessions* / /static/terminal-bg） |
 | 系统常量 / 错误类型 / 生命周期 | `src-tauri/src/system/`（constants.rs 按领域分组） |
 | 应用上下文 (DI) | `src-tauri/src/system/`（app_context） |
@@ -674,3 +701,8 @@ Claude Code (PTY)
 | 加密工具（报文/文件传输加密） | `src-tauri/src/utils/crypto/` |
 | 认证工具（桥接面） | `src-tauri/src/utils/auth/*.rs`（`auth_center.rs` / `identity.rs`；**无 JWT 密码学**，ADR 0033） |
 | 前端测试 | `src/__tests__/**/*.test.ts` |
+
+> 跨端（移动端 ↔ 桌面端）真实互连集成测试不在本工程，**在仓库根 `cross-end-tests/`**
+> （独立 Rust 包，依赖两端 lib）：`bedcode-desktop/src-tauri/tests/` 里的集成测试
+> 对面是**通用 reqwest / tokio-tungstenite 客户端**，`cross-end-tests/` 里的对面才是
+> **移动端真实客户端代码**。改跨端协议契约时两边都要看（见 AGENTS §3）。

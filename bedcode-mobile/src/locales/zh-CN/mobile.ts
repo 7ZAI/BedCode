@@ -200,7 +200,6 @@ export default {
       refreshed: '已刷新格式',
       refreshFailed: '刷新格式失败',
       subscribeFailed: '终端输出订阅失败，正在重试...',
-      historyTruncated: '较早的历史输出已超出缓存上限，仅显示最近部分',
       scrollToBottom: '回到底部',
       rendererOverrideTitle: '覆盖终端尺寸',
       rendererOverrideBody:

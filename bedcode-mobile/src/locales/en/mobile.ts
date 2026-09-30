@@ -203,7 +203,6 @@ export default {
       refreshed: 'Format refreshed',
       refreshFailed: 'Refresh failed',
       subscribeFailed: 'Failed to subscribe terminal output, retrying...',
-      historyTruncated: 'Older history exceeded the cache limit; only recent output is shown',
       scrollToBottom: 'Scroll to bottom',
       rendererOverrideTitle: 'Override Terminal Size',
       rendererOverrideBody:

@@ -35,7 +35,7 @@ fn test_component_roundtrip() {
 
         // manifest
         let manifest: serde_json::Value = serde_json::from_str(&plugin.get_manifest().expect("manifest")).unwrap();
-        assert_eq!(manifest["id"], "com.bedcode.component-test");
+        assert_eq!(manifest["id"], "com.bedcode.sdk-test");
 
         // 命令调用：guest 内 host_storage.get 往返
         let result = plugin
@@ -45,8 +45,24 @@ fn test_component_roundtrip() {
         assert_eq!(result_json["name"], "test.echo");
         assert_eq!(result_json["stored"]["k"], "v");
 
+        // 消息总线发布（同步投递）：随 `plugin-component-test` 删除而移入 sdk 夹具
+        // （原断言读的是 `invoke` 默认分支里的 `busPublished` 字段）
+        let bus_result = plugin.invoke_command("test_bus", r#"{}"#).expect("bus publish command");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&bus_result).expect("bus reply json")["published"],
+            serde_json::json!(true),
+            "guest 侧 bus_publish 必须成功"
+        );
+
+        // 主库 + 插件私有库往返（走专用命令 `test.db-roundtrip`——不挂在 `test.echo`
+        // 上是因后者被燃料/性能探针高频调用，不宜背两次建表+插入+查询的开销）
+        let db_result = plugin
+            .invoke_command("test.db-roundtrip", r#"{}"#)
+            .expect("db roundtrip command");
+        let db_json: serde_json::Value = serde_json::from_str(&db_result).unwrap();
+
         // 主库往返：前缀校验通过 + 建表 + 插入 + 查询
-        let db_rows = result_json["dbRows"].as_array().expect("dbRows array");
+        let db_rows = db_json["dbRows"].as_array().expect("dbRows array");
         assert_eq!(db_rows.len(), 1);
         assert_eq!(db_rows[0]["val"], "hello");
 
@@ -56,16 +72,11 @@ fn test_component_roundtrip() {
         // **真实往返成立**：建表 + 插入 + 查询全链（比原断言更强，
         // 且是插件私有库在宿主测试里的第一条真实覆盖）。
         assert!(
-            result_json["pdbCreateError"].is_null(),
+            db_json["pdbCreateError"].is_null(),
             "私有库建表不得报错, got: {}",
-            result_json["pdbCreateError"]
+            db_json["pdbCreateError"]
         );
-        assert!(
-            result_json["pdbQueryError"].is_null(),
-            "私有库查询不得报错, got: {}",
-            result_json["pdbQueryError"]
-        );
-        let pdb_rows = result_json["pdbRows"].as_array().expect("pdbRows array");
+        let pdb_rows = db_json["pdbRows"].as_array().expect("pdbRows array");
         // 行数不断言等于 1：私有库根目录是**进程级**注入（`plugin_db_root()`），
         // 同一进程内共享 `com.bedcode.test/plugin.db`，其它用例的插入会累积
         // （持久化正是私有库的语义）。这里断言的是「写入可读回」这一链路的
@@ -73,19 +84,16 @@ fn test_component_roundtrip() {
         assert!(
             !pdb_rows.is_empty(),
             "私有库往返必须读到插入行, got: {}",
-            result_json["pdbRows"]
+            db_json["pdbRows"]
         );
         assert!(
             pdb_rows.iter().all(|r| r["val"] == "pdb"),
             "私有库行内容必须与 fixture 插入一致, got: {}",
-            result_json["pdbRows"]
+            db_json["pdbRows"]
         );
 
         // v27（票 10）：`sessions` 断言（原 `test_session_list`）与终端钩子断言
         // 随 host-session / terminal-hooks 两个 interface 退役一并删除。
-
-        // 消息总线发布（同步投递）
-        assert_eq!(result_json["busPublished"], serde_json::json!(true));
 
         // 事件回调 + 启动/关闭（`on_message` / `on_process_done` 仍是必选导出）
         plugin
@@ -105,10 +113,13 @@ fn test_component_roundtrip() {
 /// v14：`events-ws` 可选导出的探测与投递
 ///
 /// - SDK 产物（`wasm_entry!` 无条件导出 `events-ws`）→ 探测命中：
-///   `on_ws_frame` 投递成功（`Ok(true)`），客户端域与服务端域两条回调都可达；
-/// - 手写绑定产物（`plugin-component-test`，未导出 `events-ws`）→ 探测为
-///   None：`on_ws_frame` 返回 `Ok(false)`（调用方按 spec §2.2 降级：丢弃 +
-///   首次 warn + 计数，宿主不缓存），**不影响加载与其余导出**
+///   `on_ws_frame` 投递成功（`Ok(true)`），客户端域与服务端域两条回调都可达。
+///
+/// **覆盖缺口（原手写绑定降级分支已删）**：本测试原先还验「未导出 `events-ws` 的旧产物
+/// 探测为 None → 降级 `Ok(false)`、不影响加载与其余导出」。该分支随
+/// `plugin-component-test`（手写 wit-bindgen 夹具，唯一能造出缺可选导出产物的载体）
+/// 一并删除，SDK 的 `wasm_entry!` 无条件导出全部 interface，造不出这种产物。
+/// 也就是说「旧插件产物仍能加载、可选导出缺失时优雅降级」这条向后兼容保证**目前无测试覆盖**。
 #[test]
 
 fn test_ws_events_export_probe_and_dispatch() {
@@ -118,9 +129,6 @@ fn test_ws_events_export_probe_and_dispatch() {
     let sdk_component = wasm_runtime
         .compile_component(&build_sdk_test_component())
         .expect("compile SDK test component");
-    let legacy_component = wasm_runtime
-        .compile_component(&build_test_component())
-        .expect("compile component-test");
 
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
@@ -147,22 +155,5 @@ fn test_ws_events_export_probe_and_dispatch() {
             sdk_plugin.on_ws_frame(&server_frame).expect("deliver server frame"),
             "服务端域回调必须可投递"
         );
-
-        // 旧产物（v13 及更早，未导出 events-ws）：探测 None → 降级 Ok(false)
-        let mut legacy_plugin = wasm_runtime
-            .instantiate_component(
-                &legacy_component,
-                "com.bedcode.component-test",
-                host_ctx.clone(),
-                &[],
-                None,
-            )
-            .expect("未导出 events-ws 的产物不得影响加载");
-        assert!(
-            !legacy_plugin.on_ws_frame(&client_frame).expect("legacy probe"),
-            "未导出 events-ws 的产物必须走降级路径（Ok(false)）"
-        );
-        // 降级不得影响其余导出
-        assert!(legacy_plugin.get_manifest().is_ok(), "降级后其余导出照常");
     });
 }

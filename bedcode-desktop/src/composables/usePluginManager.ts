@@ -76,8 +76,9 @@ export function usePluginManager() {
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
       // 启用方向授权先行:先单独调 preauthorize(此阶段不显示 loading 遮罩,
-      // 授权弹窗可正常交互;manifest wasiPreopenDirs 与 storage preauth_paths
-      // 均在此统一弹窗),通过后才显示遮罩进入激活,拒绝则直接失败不遮罩。
+      // 授权弹窗可正常交互;storage preauth_paths 与插件 activate 内的 fs_request_auth
+      // 均在此统一弹窗——manifest wasiPreopenDirs 仅 worker 类别可达（ADR 0034），
+      // 业务应用目录授权走 host-fs + preauth),通过后才显示遮罩进入激活,拒绝则直接失败不遮罩。
       // 停用无授权环节,直接进遮罩。
       // 注意:插件 activate 内的 fs_request_auth(ADR 0007 激活期目录授权,
       // 如 agent-hub 的 CLI 配置目录)路径未声明、无法前置,弹窗会出现在遮罩

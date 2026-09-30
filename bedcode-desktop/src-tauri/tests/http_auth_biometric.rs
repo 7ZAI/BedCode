@@ -18,14 +18,13 @@ use std::time::{Duration, Instant};
 
 use actix_web::dev::ServerHandle;
 use base64::Engine;
-use bedcode_lib::db::Database;
-use bedcode_lib::mdns::advertiser::MdnsAdvertiser;
-use bedcode_lib::wasm_core::PluginHost;
-use bedcode_lib::server::core::app::start_http_server;
-use bedcode_lib::system::app_context::AppContext;
-use bedcode_lib::system::app_context::AppContextBuilder;
-use bedcode_lib::system::info::SystemInfo;
-use bedcode_lib::AppConfig;
+use bedcode_desktop_lib::db::Database;
+use bedcode_desktop_lib::mdns::advertiser::MdnsAdvertiser;
+use bedcode_desktop_lib::server::composition::start_http_server;
+use bedcode_desktop_lib::system::app_context::AppContextBuilder;
+use bedcode_desktop_lib::system::info::SystemInfo;
+use bedcode_desktop_lib::wasm_core::PluginHost;
+use bedcode_desktop_lib::AppConfig;
 use p256::ecdsa::signature::Signer;
 use p256::ecdsa::SigningKey;
 use p256::pkcs8::EncodePublicKey;
@@ -77,7 +76,6 @@ async fn mint_token_via_biometric(
     verify_url: &str,
     device_id: &str,
     fingerprint: &str,
-    spki_b64: &str,
     signing_key: &SigningKey,
 ) -> String {
     let resp = send_until(
@@ -152,7 +150,9 @@ fn session_plugin_db_root() -> &'static PathBuf {
 /// 会话中心插件私有库文件（插件 activate 后存在，schema 见插件
 /// `auth_records::store::SCHEMA`：auth_pairings / auth_connection_history）
 fn session_plugin_db_path() -> PathBuf {
-    session_plugin_db_root().join("com.bedcode.terminal-session").join("plugin.db")
+    session_plugin_db_root()
+        .join("com.bedcode.terminal-session")
+        .join("plugin.db")
 }
 
 /// 白盒种子：直写认证中心私有库 `auth_pairings` 播种配对（id 固定，测试持有；
@@ -194,35 +194,30 @@ fn plugin_db_pairing_name(fingerprint: &str) -> Option<String> {
     .ok()
 }
 
-/// 白盒断言/种子（异步版本）：宿主主库 `plugin_secrets` 公钥读
-async fn biometric_public_key_in_db(fingerprint: &str) -> Option<String> {
-    let db_guard = AppContext::global().db().lock().await;
-    db_guard
-        .conn()
-        .query_row(
-            "SELECT value FROM plugin_secrets WHERE plugin_id = ?1 AND key = ?2",
-            rusqlite::params![SESSION_PLUGIN_ID, format!("biometric:{fingerprint}")],
-            |row| row.get::<_, String>(0),
-        )
-        .ok()
+/// 白盒断言（B-downsink 后）：认证中心私有库 `auth_biometric_keys` 公钥读
+/// （公钥真源已从宿主 `plugin_secrets` 迁入插件私有库，宿主不再托管）
+fn biometric_public_key_in_db(fingerprint: &str) -> Option<String> {
+    let conn = rusqlite::Connection::open(session_plugin_db_path()).expect("open plugin db");
+    conn.query_row(
+        "SELECT public_key FROM auth_biometric_keys WHERE fingerprint = ?1",
+        rusqlite::params![fingerprint],
+        |row| row.get::<_, String>(0),
+    )
+    .ok()
 }
 
-/// 白盒种子：写宿主主库 `plugin_secrets` 生物凭证公钥（幂等覆盖）
-async fn seed_biometric_public_key(fingerprint: &str, public_key: &str) {
-    let db_guard = AppContext::global().db().lock().await;
-    db_guard
-        .conn()
-        .execute(
-            "INSERT INTO plugin_secrets (plugin_id, key, value, updated_at) VALUES (?1, ?2, ?3, ?4) \
-             ON CONFLICT(plugin_id, key) DO UPDATE SET value = ?3, updated_at = ?4",
-            rusqlite::params![
-                SESSION_PLUGIN_ID,
-                format!("biometric:{fingerprint}"),
-                public_key,
-                "2026-09-22T00:00:00Z"
-            ],
-        )
-        .expect("seed biometric public key");
+/// 白盒种子（B-downsink 后）：直写认证中心私有库 `auth_biometric_keys`
+/// 生物凭证公钥（幂等覆盖；schema 由插件 activate 建出）
+/// 白盒种子（B-downsink 后）：直写认证中心私有库 `auth_biometric_keys`
+/// 生物凭证公钥（幂等覆盖；schema 由插件 activate 建出）
+fn seed_biometric_public_key(fingerprint: &str, public_key: &str) {
+    let conn = rusqlite::Connection::open(session_plugin_db_path()).expect("open plugin db");
+    conn.execute(
+        "INSERT OR REPLACE INTO auth_biometric_keys (fingerprint, public_key, updated_at) \
+         VALUES (?1, ?2, '2026-09-22T00:00:00Z')",
+        rusqlite::params![fingerprint, public_key],
+    )
+    .expect("seed biometric public key into plugin db");
 }
 
 /// 探测空闲端口：绑定 127.0.0.1:0 由 OS 分配，立即释放后交给服务器绑定
@@ -296,6 +291,9 @@ async fn init_test_app_context() {
             .resource_dir(Arc::new(PathBuf::from(".")))
             .system_info(system_info)
             .build_and_init();
+
+        // server-lib-split 票 07：走组合根的单一装配点（与 GUI bootstrap 同一函数）
+        bedcode_desktop_lib::server::composition::install_server_ports();
         let _ = INIT.set(());
     }
 }
@@ -344,7 +342,12 @@ fn sign_message(signing_key: &SigningKey, message: &str) -> String {
 #[tokio::test]
 async fn http_biometric_auth_contract() {
     // 测试日志输出到 harness；重复 init 静默跳过
-    if tracing_subscriber::fmt().with_test_writer().with_max_level(tracing::Level::DEBUG).try_init().is_err() {
+    if tracing_subscriber::fmt()
+        .with_test_writer()
+        .with_max_level(tracing::Level::DEBUG)
+        .try_init()
+        .is_err()
+    {
         tracing::debug!("tracing subscriber already initialized");
     }
 
@@ -369,7 +372,7 @@ async fn http_biometric_auth_contract() {
     let (spki_b64, signing_key) = make_keypair();
     let fingerprint = "fp-bio-http-001";
     let pairing_id = "p-bio-http-001";
-    seed_biometric_public_key(fingerprint, &spki_b64).await;
+    seed_biometric_public_key(fingerprint, &spki_b64);
     seed_pairing_in_plugin_db(pairing_id, "Bio Phone", fingerprint);
 
     // ==================== T1：未配对指纹调 challenge → 1008 ====================
@@ -454,10 +457,7 @@ async fn http_biometric_auth_contract() {
     // token 的 claims 由中心自签（ADR 0033）：此处只断言载荷内容，验签归中心
     let claims = decode_entry_token_claims(&token);
     assert_eq!(claims["sub"], pairing_id, "入场凭证 sub 必须等于配对记录 id");
-    assert_eq!(
-        claims["fingerprint"], fingerprint,
-        "入场凭证必须携带设备指纹"
-    );
+    assert_eq!(claims["fingerprint"], fingerprint, "入场凭证必须携带设备指纹");
     assert_eq!(claims["iss"], "BedCode", "签发者必须是 BedCode");
     assert!(
         claims["exp"].as_u64().expect("exp 必填") > chrono_now_secs(),
@@ -465,9 +465,9 @@ async fn http_biometric_auth_contract() {
     );
 
     // 配对播种必须保留生物公钥（verify 端点只读公钥验签，不得覆盖/清空——
-    // §8 凭据红线：公钥在宿主 plugin_secrets，@plugin_secrets）
+    // B-downsink 后公钥真源在认证中心私有库 `auth_biometric_keys`）
     {
-        let stored = biometric_public_key_in_db(fingerprint).await;
+        let stored = biometric_public_key_in_db(fingerprint);
         assert_eq!(stored.as_deref(), Some(spki_b64.as_str()), "验证后生物公钥必须原样保留");
         assert_eq!(
             plugin_db_pairing_name(fingerprint).as_deref(),
@@ -627,11 +627,11 @@ async fn http_biometric_auth_contract() {
     assert_eq!(body["code"], 0, "有效 token 绑定公钥必须成功");
     assert_eq!(body["data"]["bound"], true, "非空公钥绑定 bound 必须为 true");
     {
-        let stored = biometric_public_key_in_db(fingerprint).await;
+        let stored = biometric_public_key_in_db(fingerprint);
         assert_eq!(
             stored.as_deref(),
             Some(new_spki_b64.as_str()),
-            "绑定后公钥必须更新为新值（宿主 plugin_secrets）"
+            "绑定后公钥必须更新为新值（认证中心私有库 auth_biometric_keys）"
         );
     }
 
@@ -656,8 +656,8 @@ async fn http_biometric_auth_contract() {
     assert_eq!(body["code"], 0, "空公钥解绑必须成功");
     assert_eq!(body["data"]["bound"], false, "空公钥解绑 bound 必须为 false");
     {
-        let stored = biometric_public_key_in_db(fingerprint).await;
-        assert_eq!(stored, None, "解绑后公钥键必须删除（宿主 plugin_secrets 无行）");
+        let stored = biometric_public_key_in_db(fingerprint);
+        assert_eq!(stored, None, "解绑后公钥行必须删除（认证中心私有库无行）");
     }
 
     // ==================== T9：无效 token 绑定 → code 1001 ====================
@@ -687,7 +687,7 @@ async fn http_biometric_auth_contract() {
     let (other_spki_b64, other_signing_key) = make_keypair();
     let other_fingerprint = "fp-bio-http-002";
     let other_pairing_id = "p-bio-http-002";
-    seed_biometric_public_key(other_fingerprint, &other_spki_b64).await;
+    seed_biometric_public_key(other_fingerprint, &other_spki_b64);
     seed_pairing_in_plugin_db(other_pairing_id, "Other Phone", other_fingerprint);
     let other_token = mint_token_via_biometric(
         &client,
@@ -695,7 +695,6 @@ async fn http_biometric_auth_contract() {
         &verify_url,
         other_pairing_id,
         other_fingerprint,
-        &other_spki_b64,
         &other_signing_key,
     )
     .await;

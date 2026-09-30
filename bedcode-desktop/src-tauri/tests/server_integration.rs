@@ -25,9 +25,9 @@ use std::io;
 use std::time::{Duration, Instant};
 
 use actix_web::dev::ServerHandle;
-use bedcode_lib::server::core::app::start_http_server;
-use bedcode_lib::server::core::supervisor::ServerSupervisor;
-use bedcode_lib::AppConfig;
+use bedcode_desktop_lib::server::composition::start_http_server;
+use bedcode_desktop_lib::AppConfig;
+use bedcode_server_core::supervisor::ServerSupervisor;
 
 /// 探测空闲端口：绑定 127.0.0.1:0 由 OS 分配，立即释放后交给服务器绑定 0.0.0.0
 ///

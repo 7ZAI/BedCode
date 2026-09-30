@@ -570,3 +570,43 @@ Disconnected ──connect()──► Connecting ──WS握手──► Connect
 | `src/composables/useMobileConnection.ts` | 前端连接/认证状态管理 |
 | `src/composables/useMdnsDiscovery.ts` | 前端 mDNS 发现 composable |
 | `src/composables/useHttpApi.ts` | HTTP API 客户端 + 连接探测 |
+
+---
+
+## 跨端真实互连测试（2026-09-30 起）
+
+本文件描述的每一条链路（配对 / QR / 重认证 / WS 端点认证 / 终端流）都**有跨端
+测试守着**——不是「两端各自的 mock 自洽」，而是同一进程内**桌面端真实服务器 +
+真实 wasm 认证中心产物**与**移动端真实客户端代码**互连。
+
+```bash
+cd cross-end-tests && cargo test
+```
+
+工程：`cross-end-tests/`（仓库根，第三个 Rust 包；依赖两端 lib：
+`bedcode-desktop-lib` / `bedcode-mobile-lib`）。前置：桌面随包 wasm 产物须先构建
+（`cd bedcode-desktop && pnpm run plugins:build`）——认证中心是**真实产物**，
+缺失时测试**显性失败**而非跳过。
+
+| 场景文件 | 覆盖链路 |
+|---------|---------|
+| `harness_selfcheck.rs` | 台子自检：两端接线 + 端点登记 + 停机后不再应答 |
+| `pairing_auth_flow.rs` | §5 配对码 / §6 QR / §7 重认证（正例 + 错码 1005 / 篡改 token / QR 一次性 / 未绑定生物 1008） |
+| `jwt_rotate_reconnect.rs` | §7 + ADR 0033 密钥环轮换宽限期（**旧 token 轮换后仍可用**，含 WS 面） |
+| `session_http_flow.rs` | §HTTP API 会话域：`/api/sessions*` 契约 + 1002 错误信封 + remove 幂等 vs stop/input 严格 |
+| `terminal_ws_flow.rs` | §终端流：订阅 → **真实 bash PTY 输出字节到达移动端页面通道** → 终态 `session_stopped` |
+| `fail_closed_flow.rs` | ADR 0031 fail-closed：无中心在册 / 伪造凭证一律拒绝（HTTP + WS 两面） |
+| `lifecycle_flow.rs` | 桌面停用 / 激活插件对移动端连接的联动影响 |
+
+**覆盖不到的部分（诚实边界）**：
+
+- `deny_kind` 三态（`no_center` / `unavailable` / `policy`）是宿主**日志结构化
+  字段**，不是 wire 字段——客户端一律看到 401，这是有意的（不泄露部署信息）。
+  三态分类的覆盖在宿主 `utils/auth/auth_center` 单测。
+- 生物认证正向路径：移动端私钥在 Android Keystore，无头进程构造不出真设备密钥，
+  只覆盖了「未绑定 → 1008」的反例。
+- QR 的「桌面扫码确认」UI 步骤：无头装配直接走插件 `qr-code-generate` 互调
+  （即桌面 UI 的同一入口）生成 token，跳过扫码动作本身。
+
+每个场景 = 独立测试二进制（进程隔离）：桌面端 `AppContext` 是进程级 `OnceLock`
+单例，场景之间无法重装。

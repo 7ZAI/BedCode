@@ -20,7 +20,7 @@ mod bench_channel;
 
 // ==================== Re-exports ====================
 
-use crate::server::peer_net;
+use crate::server::peer_net_cmds;
 pub use system::{AppConfig, AppContext, AppError, Result};
 
 // ==================== Application Setup ====================
@@ -348,7 +348,7 @@ pub fn run() {
             let ws_port = app_config.network.port;
 
             // 检查端口可用性
-            let ws_port = match server::core::port_checker::check_and_resolve_port(&app_handle, ws_port) {
+            let ws_port = match server::host_port::check_and_resolve_port(&app_handle, ws_port) {
                 Ok(port) => port,
                 Err(e) => {
                     tracing::error!("Port check failed: {}", e);
@@ -370,18 +370,21 @@ pub fn run() {
             // 注入目录），node_identity.json 与 bedcode.db 并列存放；错误经 ? 上抛
             // 走既有启动失败路径——静默换身份会让对端可信列表全部失效（D3）
             let peer_net_data_dir = app_handle.path().app_data_dir().expect("Failed to get app data dir");
-            crate::server::peer_net::init_node_identity(&peer_net_data_dir)?;
+            bedcode_server_peer_net::init_node_identity(&peer_net_data_dir)?;
 
             // 对等网络节点状态容器（ticket 03）：节点生命周期按**属主**随插件启停
             // （审计票 12——插件经 host-peer.start-node / stop-node 自行请求，
             // 内核只记账；见 peer_net::start_node_owned / release_node_for。
             // 旧 setup 无条件自启与旧的按产品 id 开关外壳都已退役）
-            app.manage(crate::server::peer_net::PeerNetState::default());
+            // 状态以 Arc 托管（server-lib-split）：peer-net 引擎派生任务需要
+            // 克隆句柄跨 await 存活（drive_gate / session_watch / 入站桥 /
+            // 发现刷新订阅）；命令壳与 host_api 经 peer_ctx 一次装配
+            app.manage(Arc::new(bedcode_server_peer_net::PeerNetState::default()));
             // peer-engine 状态仅保存当前引擎会话控制句柄与事件快照，不是业务持久化真源；
             // 任务、历史、设置均由 file-transfer 插件私有库持有。
-            app.manage(crate::server::peer_net::peer_engine_transfer::PeerTransferState::default());
-            app.manage(crate::server::peer_net::peer_engine_receive::PeerReceiveState::default());
-            app.manage(crate::server::peer_net::peer_engine_remote::PeerRemoteState::default());
+            app.manage(Arc::new(bedcode_server_peer_net::peer_engine_transfer::PeerTransferState::default()));
+            app.manage(Arc::new(bedcode_server_peer_net::peer_engine_receive::PeerReceiveState::default()));
+            app.manage(Arc::new(bedcode_server_peer_net::peer_engine_remote::PeerRemoteState::default()));
 
             let db = Database::new(&db_path)?;
             db.init_schema()?;
@@ -436,6 +439,11 @@ pub fn run() {
                 .system_info(system_info.clone())
                 .build_and_init();
 
+            // server-lib-split：装配服务器端口（宿主壳实现注入；supervisor /
+            // ws / http / peer-net 的「无 AppContext」保守分支依赖本注册表）。
+            // 走组合根的单一装配点：无头 harness（cross-end-tests）调同一函数
+            crate::server::composition::install_server_ports();
+
             // 同时注册到 Tauri State（前端 invoke 可用）
             app.manage(db.clone());
             app.manage(mdns_advertiser.clone());
@@ -470,19 +478,20 @@ pub fn run() {
 
             // 链路加密装配句柄（issue 01）：init_at_startup 需访问数据目录与 DB 状态
             let link_crypto_app_handle = app_handle.clone();
-            let supervisor = server::core::supervisor::ServerSupervisor::global();
+            let supervisor = bedcode_server_core::supervisor::ServerSupervisor::global();
             let ws_port_for_spawn = ws_port;
             // 产品决策：服务器永久自启动，不再可配置（本地功能依赖此服务，
             // 见 ServerSupervisor 类注释；config 中 network.auto_start 已废弃）
             let auto_start = true;
             tauri::async_runtime::spawn(async move {
                 // 链路加密先于服务器启动装配：第一条流量就要被开关裁决（spec §6）；
-                // 身份损坏时强制回退全关，不阻断启动
-                server::core::link_crypto::init_at_startup(&link_crypto_app_handle).await;
+                // 身份损坏时强制回退全关，不阻断启动。core 不认 AppHandle/Database，
+                // 数据目录与主库连接由宿主组合根薄壳解析后传入
+                server::composition::init_link_crypto_at_startup(&link_crypto_app_handle).await;
 
                 supervisor.init_config(ws_port_for_spawn, auto_start).await;
 
-                let ws_manager = crate::server::websocket::WebSocketManager::global();
+                let ws_manager = bedcode_server_websocket::WebSocketManager::global();
                 ws_manager.init().await.expect("Failed to initialize WebSocketManager");
 
                 if auto_start {
@@ -683,16 +692,17 @@ pub fn run() {
             commands::set_traffic_encryption_config,
             commands::get_link_crypto_fingerprint,
             commands::reset_server_network_config,
-            // Peer Net
-            peer_net::start_peer_node,
-            peer_net::stop_peer_node,
+            // Peer Net（命令壳在 peer_net_cmds——引擎实现不持有 AppHandle，
+            // server-lib-split）
+            peer_net_cmds::start_peer_node,
+            peer_net_cmds::stop_peer_node,
             // Phase 4（issue 13）：对等网络产品面已整体迁入 file-transfer 插件
             // （WIT host-peer 13 原语），主前端命令面退役——仅保留生命周期、
             // 首连确认与信任管理（宿主级兜底路径）。其余查询/管理命令的函数体
             // 暂留一版（部分仍为 host_impl 内部簿记调用），下版本删除。
-            peer_net::respond_peer_consent,
-            peer_net::list_trusted_peers,
-            peer_net::revoke_trusted_peer,
+            peer_net_cmds::respond_peer_consent,
+            peer_net_cmds::list_trusted_peers,
+            peer_net_cmds::revoke_trusted_peer,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

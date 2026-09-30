@@ -117,8 +117,7 @@ UnifiedOutputQueue（字节块环，唯一缓冲，50MB）
 
 1. 清屏（`xterm.clear()`）
 2. 游标重锚到 `min_offset`（此后重播帧恰从该点起 → 无缺口、无重复）
-3. 提示「历史不完整」（移动端 `mobile.terminal.historyTruncated`；桌面本地终端 toast），
-   同一订阅者一次截断只提示一次
+3. 历史截断**静默**：不提示用户（对齐成熟终端产品；截断属预期行为，用户无感知）
 4. 移动端额外：重锚缓存（`SessionCache::reset_to`）+ acked/cursor/frontend_rendered 全部
    置到 `min_offset` + 立即回发一次 ack（让桌面端窗口归零、立刻解除驻留）
 

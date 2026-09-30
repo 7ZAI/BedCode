@@ -1,6 +1,6 @@
 //! 认证中心热路径性能探针（ADR 0031 v32 fail-closed 裁决的**每请求**成本）
 //!
-//! 背景：宿主 HTTP `/api` scope 挂着 `jwt_gateway` 中间件（`from_fn`），**每个
+//! 背景：宿主 HTTP `/api` scope 挂着 `auth_gateway` 中间件（`from_fn`），**每个
 //! 请求**都会走 `enforce_connection_policy` → `call_auth_policy` → 真实
 //! terminal-session WASM 插件的 `auth-policy.verify-device-token` 导出。本探针
 //! **v33（ADR 0033）后只剩一段**：验签与策略收进同一次调用——
@@ -143,8 +143,11 @@ fn auth_center_hotpath_cost_probe() {
 
     println!("\n[auth-center-perf] 迭代数 N = {n}（环境变量 AUTH_CENTER_PERF_N 可覆盖）");
     println!("[auth-center-perf] 认证中心一次调用（验签 + 策略，guest 导出）: {b_us:>10.2} µs/op  (放行 {b_allow} / 拒绝 {b_err})");
-    println!("[auth-center-perf] ── 每请求合计 (jwt_gateway 热路径)     : {b_us:>10.2} µs/op");
-    println!("[auth-center-perf] ── 单核串行理论吞吐上限             : {:>10.0} req/s", 1_000_000.0 / b_us.max(1e-9));
+    println!("[auth-center-perf] ── 每请求合计 (auth_gateway 热路径)     : {b_us:>10.2} µs/op");
+    println!(
+        "[auth-center-perf] ── 单核串行理论吞吐上限             : {:>10.0} req/s",
+        1_000_000.0 / b_us.max(1e-9)
+    );
     println!(
         "[auth-center-perf] （v33 起宿主无 JWT 密码学，宿主原生验签 A 段已消失；\
 变更前基线见 ADR 0033 §4：往返 95.7–113.5 µs/op、合计 101.7–120.6 µs/op。\

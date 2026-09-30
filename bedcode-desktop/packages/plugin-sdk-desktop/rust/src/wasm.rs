@@ -215,6 +215,24 @@ mod tests {
 ///
 /// v27：`terminal-hooks` 组已随 interface 删除（票 10）。
 ///
+/// # 失败一律记 `warn`、不记 `error`（AGENTS §8 日志红线 ③）
+///
+/// 宏内 10 处失败路径（`activate` / `deactivate` / `on_startup` / `on_shutdown` /
+/// `on_message` / `on_message_binary` / `on_process_done` / `on_ws_message` /
+/// `on_ws_client_message` / `on_task_event`）**全部**用 `log_warn` 而非 `log_error`。
+///
+/// 依据：AGENTS.md §8「guest 自报的可处理错误不升 `error!`」。这些 `Err` 都是**插件
+/// 自己报告的失败**（双层 Result 语义的内层），不是宿主侧的证据——真正的宿主故障
+/// （trap、Store 中毒、fuel 耗尽）由宿主运行时自己以 `error!` 记录并计数。把 guest
+/// 自报失败也打 error 会让「error 级」从「影响功能的宿主故障」退化成「插件返回了个 Err」，
+/// 告警因此失真。
+///
+/// 历史上这里是 `log_error`：该锁
+/// （`engine_limits::test_component_guest_self_reported_failure_no_host_error`）一直只跑
+/// 手写 wit-bindgen 夹具（直接返回 `Err(String)`，不经本宏），故这条实现与红线不符的
+/// 状态一直未被检验到。夹具合并到 SDK 绑定形态后（`packages/plugin-sdk-fixtures`）
+/// 首次照到并修正。
+///
 /// # 用法
 /// ```ignore
 /// struct MyPlugin;
@@ -265,7 +283,7 @@ macro_rules! wasm_entry {
                         Ok(())
                     }
                     Err(e) => {
-                        $crate::host::HostLog::log_error(&host, &format!("activate failed: {}", e));
+                        $crate::host::HostLog::log_warn(&host, &format!("activate failed: {}", e));
                         Err(e.to_string())
                     }
                 }
@@ -276,7 +294,7 @@ macro_rules! wasm_entry {
                     Ok(()) => Ok(()),
                     Err(e) => {
                         let host = $crate::wasm_host::WasmHost;
-                        $crate::host::HostLog::log_error(
+                        $crate::host::HostLog::log_warn(
                             &host,
                             &format!("deactivate failed: {}", e),
                         );
@@ -293,7 +311,7 @@ macro_rules! wasm_entry {
                         Ok(())
                     }
                     Err(e) => {
-                        $crate::host::HostLog::log_error(
+                        $crate::host::HostLog::log_warn(
                             &host,
                             &format!("on_startup failed: {}", e),
                         );
@@ -307,7 +325,7 @@ macro_rules! wasm_entry {
                     Ok(()) => Ok(()),
                     Err(e) => {
                         let host = $crate::wasm_host::WasmHost;
-                        $crate::host::HostLog::log_error(
+                        $crate::host::HostLog::log_warn(
                             &host,
                             &format!("on_shutdown failed: {}", e),
                         );
@@ -339,7 +357,7 @@ macro_rules! wasm_entry {
                     Ok(()) => Ok(()),
                     Err(e) => {
                         let host = $crate::wasm_host::WasmHost;
-                        $crate::host::HostLog::log_error(
+                        $crate::host::HostLog::log_warn(
                             &host,
                             &format!("on_message failed: {}", e),
                         );
@@ -356,7 +374,7 @@ macro_rules! wasm_entry {
                     Ok(()) => Ok(()),
                     Err(e) => {
                         let host = $crate::wasm_host::WasmHost;
-                        $crate::host::HostLog::log_error(
+                        $crate::host::HostLog::log_warn(
                             &host,
                             &format!("on_process_done failed: {}", e),
                         );
@@ -381,7 +399,7 @@ macro_rules! wasm_entry {
                 };
                 if let Err(e) = <$plugin_type as $crate::wasm::WasmPlugin>::on_message_binary(&msg) {
                     let host = $crate::wasm_host::WasmHost;
-                    $crate::host::HostLog::log_error(
+                    $crate::host::HostLog::log_warn(
                         &host,
                         &format!("on_message_binary failed: {}", e),
                     );
@@ -425,7 +443,7 @@ macro_rules! wasm_entry {
                     <$plugin_type as $crate::wasm::WasmPlugin>::on_ws_message(&handle, &kind, &payload)
                 {
                     let host = $crate::wasm_host::WasmHost;
-                    $crate::host::HostLog::log_error(&host, &format!("on_ws_message failed: {}", e));
+                    $crate::host::HostLog::log_warn(&host, &format!("on_ws_message failed: {}", e));
                 }
             }
 
@@ -438,7 +456,7 @@ macro_rules! wasm_entry {
                     &payload,
                 ) {
                     let host = $crate::wasm_host::WasmHost;
-                    $crate::host::HostLog::log_error(&host, &format!("on_ws_client_message failed: {}", e));
+                    $crate::host::HostLog::log_warn(&host, &format!("on_ws_client_message failed: {}", e));
                 }
             }
         }
@@ -462,7 +480,7 @@ macro_rules! wasm_entry {
             fn on_task_event(event_json: String) {
                 if let Err(e) = <$plugin_type as $crate::wasm::WasmPlugin>::on_task_event(&event_json) {
                     let host = $crate::wasm_host::WasmHost;
-                    $crate::host::HostLog::log_error(&host, &format!("on_task_event failed: {}", e));
+                    $crate::host::HostLog::log_warn(&host, &format!("on_task_event failed: {}", e));
                 }
             }
         }

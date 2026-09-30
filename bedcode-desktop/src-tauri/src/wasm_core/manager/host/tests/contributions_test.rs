@@ -73,7 +73,7 @@ fn all_contributions() -> PluginContributes {
 }
 
 /// 注册面快照（manifest contributes 的对外可见投影；ABI v29 起 HTTP 路由面
-/// 已退役出 manager 注册表——动态注册表在 `server/http/registry`）
+/// 已退役出 manager 注册表——动态注册表在 `bedcode-server-http::registry`）
 async fn contributions_snapshot(
     host: &PluginHost,
 ) -> (Vec<String>, Vec<String>, Vec<String>, Vec<String>) {
@@ -192,7 +192,7 @@ async fn registered_manifest_declared_ws_endpoints() {
     host.register_declared_ws_endpoints(plugin_id, &endpoints)
         .await;
 
-    use crate::server::websocket::endpoint;
+    use bedcode_server_websocket::endpoint;
     let echo = endpoint::find_by_mount(&endpoint::mount_path(plugin_id, "echo"));
     assert!(echo.is_some(), "declared echo endpoint must be registered");
     assert_eq!(echo.unwrap().auth, EndpointAuth::None, "缺省档 = none");
@@ -214,18 +214,18 @@ async fn declared_ws_endpoints_require_ws_server_permission() {
     let plugin_id = "com.test.ws-declared-permission";
     let endpoints = vec![bedcode_plugin_api::WsEndpointContribution::Path("guarded".into())];
     host.register_declared_ws_endpoints(plugin_id, &endpoints).await;
-    assert!(crate::server::websocket::endpoint::find_by_mount(
-        &crate::server::websocket::endpoint::mount_path(plugin_id, "guarded")
+    assert!(bedcode_server_websocket::endpoint::find_by_mount(
+        &bedcode_server_websocket::endpoint::mount_path(plugin_id, "guarded")
     )
     .is_none());
 
     host.permission.grant_permissions(plugin_id, &["ws:server".to_string()]);
     host.register_declared_ws_endpoints(plugin_id, &endpoints).await;
-    assert!(crate::server::websocket::endpoint::find_by_mount(
-        &crate::server::websocket::endpoint::mount_path(plugin_id, "guarded")
+    assert!(bedcode_server_websocket::endpoint::find_by_mount(
+        &bedcode_server_websocket::endpoint::mount_path(plugin_id, "guarded")
     )
     .is_some());
-    crate::server::websocket::endpoint::purge_for_plugin(plugin_id);
+    bedcode_server_websocket::endpoint::purge_for_plugin(plugin_id);
 }
 
 /// 源码漂移锁：registry 注册调用**只允许出现在 `register_plugin_contributions` 一处**。

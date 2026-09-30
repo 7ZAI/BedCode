@@ -197,7 +197,18 @@
 //!   `stale_artifact_rebuild_hint` 点名「按 v33 SDK 重建」，不是 trap 不是静默降级。
 //!   token wire 格式逐字节不变（移动端把 token 当不透明串，零改动）。**desktop
 //!   独有**，移动端 WIT/ABI/SDK 不跟演不投影（mobile ABI 保持 11）。
-pub const ABI_VERSION: u32 = 33;
+//!
+//! - **v34: 生物凭证面下沉（2026-09-30，B-downsink，破坏性）**——`host-auth`
+//!   **删除 3 函数** `biometric-credential-bound` / `biometric-verify-signature` /
+//!   `biometric-credential-bind`：生物凭证公钥托管与验签执行下沉认证中心
+//!   （`com.bedcode.terminal-session`）私有库 `auth_biometric_keys`（WASM 内 p256
+//!   验签）。宿主 `utils/auth/biometric.rs` 整个退役（宿主不再托管任何设备侧
+//!   凭证材料——入场 JWT 已随 v33 退役，生物公钥随本版退役）。旧产物（v33 SDK
+//!   构建）仍 import 这三函数 → **实例化期**即被拒，`stale_artifact_rebuild_hint`
+//!   点名「按 v34 SDK 重建」，不是 trap 不是静默降级。wire 流程逐字节不变
+//!   （移动端仍走 HTTP /api/auth/biometric-*，零改动）。**desktop 独有**，移动端
+//!   WIT/ABI/SDK 不跟演不投影（mobile ABI 保持 11）。
+pub const ABI_VERSION: u32 = 34;
 
 /// 组件形态标识：`abi.form() == FORM_COMPONENT`（WIT `abi` 接口的 form() 声明）
 ///
@@ -211,7 +222,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_abi_version_is_v33() {
+    fn test_abi_version_is_v34() {
         // 版本号序列与历史 core ABI 共用：v26 = host-crypto 宿主加密引擎原语面
         // （并发批次先落地，占 26）；**v27 = 会话原语域整 interface 退役**
         // （会话引擎下沉票 10：host-session 12 函数 + terminal-hooks + events 两个导出）；
@@ -230,6 +241,10 @@ mod tests {
         // **v33 = 认证中心持有入场签发密钥与验签执行**（2026-09-29，ADR 0033：
         // 破坏性，host-auth 删除 device-token-issue / device-token-verify 两函数，
         // 宿主设备 JWT 密码学整个退役；desktop 独有）；
+        // **v34 = 生物凭证面下沉**（2026-09-30，B-downsink：破坏性，host-auth
+        // 删除 biometric-credential-bound / biometric-verify-signature /
+        // biometric-credential-bind 三函数，生物公钥托管与验签执行下沉认证中心
+        // 私有库，宿主设备侧凭证材料整面退役；desktop 独有）；
         // 再往前叠加 v25 host-peer 节点生命周期原语（审计票 12 裁决 1 = 选项 A）、
         // v24 认证记录下沉（2026-09-22，host-auth 记录面七函数退役 + host-session
         // config 读取面退役）、v23 host-session
@@ -240,7 +255,7 @@ mod tests {
         // （同批次之一）、v17 认证策略导出（auth-policy）、v16 插件私有伪终端原语
         // （host-pty）、v15 密钥托管（host-auth / secret-store）、v14 host-websocket、
         // v13 host-mdns v2、v12 总线二进制载荷与 v11 host-peer 传输控制三原语
-        assert_eq!(ABI_VERSION, 33);
+        assert_eq!(ABI_VERSION, 34);
     }
 
     #[test]

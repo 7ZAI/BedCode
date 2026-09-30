@@ -97,7 +97,7 @@ impl PluginHost {
     /// 与 HTTP 端点的**登记时机不同**：httpEndpoints 在 load 期经
     /// `register_plugin_contributions` 一次性登记进 registry（生命周期随 load），而
     /// WS 端点的生命周期**随激活**——deactivate 会 `purge_for_plugin` 回收该插件全部
-    /// WS 端点（`server::websocket::endpoint` 表）。因此声明端点必须在**激活成功**时
+    /// WS 端点（`bedcode_server_websocket::endpoint` 表）。因此声明端点必须在**激活成功**时
     /// 登记，才能在 deactivate→activate 循环后不丢（否则首次激活后 deactivate 即丢，
     /// reactivate 不重登记）。调用方：`activate_plugin_inner` 激活成功分支。
     ///
@@ -150,13 +150,13 @@ impl PluginHost {
                     continue;
                 }
             };
-            match crate::server::websocket::endpoint::register(
+            match bedcode_server_websocket::endpoint::register(
                 plugin_id,
                 path,
                 auth,
                 None,
                 None,
-                self.message_bus.clone(),
+                Arc::new(crate::server::ports_impl::HostBusPort::new(self.message_bus.clone())),
             ) {
                 Ok(entry) => {
                     tracing::info!(

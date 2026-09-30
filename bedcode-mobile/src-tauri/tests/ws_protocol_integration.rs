@@ -12,15 +12,15 @@ mod common;
 use std::sync::Arc;
 use std::time::Duration;
 
-use bedcode_lib::auth::AuthCredentials;
-use bedcode_lib::connection::event_ws::run_supervisor;
-use bedcode_lib::connection::manager::ConnectionManager;
-use bedcode_lib::connection::request::AuthRequest;
-use bedcode_lib::connection::ConnectionStatus;
-use bedcode_lib::enums::control::SessionControlAction;
-use bedcode_lib::model::message::Message;
-use bedcode_lib::router::MobileEvent;
-use bedcode_lib::state::{clear_global_token, get_auth_manager, get_global_token, set_global_token};
+use bedcode_mobile_lib::auth::AuthCredentials;
+use bedcode_mobile_lib::connection::event_ws::run_supervisor;
+use bedcode_mobile_lib::connection::manager::ConnectionManager;
+use bedcode_mobile_lib::connection::request::AuthRequest;
+use bedcode_mobile_lib::connection::ConnectionStatus;
+use bedcode_mobile_lib::enums::control::SessionControlAction;
+use bedcode_mobile_lib::model::message::Message;
+use bedcode_mobile_lib::router::MobileEvent;
+use bedcode_mobile_lib::state::{clear_global_token, get_auth_manager, get_global_token, set_global_token};
 use tokio::sync::{broadcast, oneshot};
 
 #[path = "support/mock_plugin_ws.rs"]
@@ -185,7 +185,7 @@ async fn scenario_send_and_wait_ack_matching() {
     match resp {
         Message::Ack { request_id, code, .. } => {
             assert_eq!(request_id, req_id, "ack 应匹配请求 message_id");
-            assert_eq!(code, bedcode_lib::model::message::ACK_CODE_SUCCESS);
+            assert_eq!(code, bedcode_mobile_lib::model::message::ACK_CODE_SUCCESS);
         }
         other => panic!("expected Ack response, got {:?}", other),
     }
@@ -223,7 +223,7 @@ async fn scenario_tcp_close_emits_client_event() {
     // connection_monitor 消费 WsClientEvent 通知前端），TCP 断开本身的
     // 感知契约在 WsClient 事件层——这里直接驱动 WsClient 验证
     let server = MockDesktopServer::start().await;
-    let client = bedcode_lib::connection::WsClient::new(bedcode_lib::connection::WsClientConfig::new(
+    let client = bedcode_mobile_lib::connection::WsClient::new(bedcode_mobile_lib::connection::WsClientConfig::new(
         "127.0.0.1",
         server.addr.port(),
     ));
@@ -237,13 +237,13 @@ async fn scenario_tcp_close_emits_client_event() {
     loop {
         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
         match tokio::time::timeout(remaining, events.recv()).await {
-            Ok(Ok(bedcode_lib::connection::WsClientEvent::ServerClosed { code, reason })) => {
+            Ok(Ok(bedcode_mobile_lib::connection::WsClientEvent::ServerClosed { code, reason })) => {
                 assert!(!reason.is_empty(), "断开原因不应为空");
                 // M1/ADR 0031：close code 必须保留（优雅关闭 = 1000 系）
                 assert!(code != 0, "close code 不得丢弃: {code}");
                 break;
             }
-            Ok(Ok(bedcode_lib::connection::WsClientEvent::Error { .. })) => {
+            Ok(Ok(bedcode_mobile_lib::connection::WsClientEvent::Error { .. })) => {
                 // 传输错误同样表示断开感知，两种事件皆可
                 break;
             }

@@ -6,7 +6,7 @@ authors = ["binblink"]
 edition = "2021"
 
 [lib]
-name = "bedcode_lib"
+name = "bedcode_desktop_lib"
 crate-type = ["cdylib", "rlib"]
 
 [build-dependencies]
@@ -109,6 +109,18 @@ bedcode-plugin-api = { path = "../packages/plugin-sdk-desktop/rust" }
 bedcode-peer-net = { path = "../../packages/peer-net" }
 # 链路报文加密协议核心（issue 09 共享 crate，与移动端 event WS 共同消费）
 bedcode-link-crypto = { path = "../../packages/link-crypto" }
+# server-lib-split：桌面 server 基础层（错误/常量/错误边界/系统信息/网络配置/
+# 连接身份/端口 traits）与加密引擎（算法实现 + 注册表）
+bedcode-server-base = { path = "../packages/bedcode-server-base" }
+bedcode-crypto-engine = { path = "../packages/bedcode-crypto-engine" }
+# server-lib-split 票 03：传输无关内核（supervisor/filter/link_crypto/metrics + TransportFace 组合）
+bedcode-server-core = { path = "../packages/bedcode-server-core" }
+# server-lib-split 票 04：HTTP 传输面（registry/gateway/controllers/middleware/dtos + HttpTransportFace）
+bedcode-server-http = { path = "../packages/bedcode-server-http" }
+# server-lib-split 票 05：WebSocket 传输面（conn/channel/registry/endpoint/routes/manager）
+bedcode-server-websocket = { path = "../packages/bedcode-server-websocket" }
+# server-lib-split 票 06：对等网络引擎域（节点身份/节点与发现守护生命周期/host-peer 引擎转发）
+bedcode-server-peer-net = { path = "../packages/bedcode-server-peer-net" }
 inventory = "0.3"
 
 # Power management (prevent system sleep)
@@ -127,7 +139,6 @@ actix-web = "4"
 actix = "0.13"
 actix-web-actors = "4"
 actix-rt = "2"
-actix-cors = "0.7"
 
 # PTY management
 portable-pty = "0.8"

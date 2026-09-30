@@ -35,7 +35,6 @@ export default {
       close: '关闭',
       loadingSession: '加载会话中...',
       scrollToBottom: '滚动到底部',
-      historyTruncated: '终端历史过长，最早输出已被截断',
       bgImage: '背景图片',
       bgImageSelect: '选择图片',
       bgImageRemove: '移除',

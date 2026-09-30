@@ -1468,8 +1468,8 @@ fn test_business_endpoints_dual_track_closed_loop() {
 
         // --- GET configs：插件面 == 宿主旧 ConfigItem 形状 ---
         let configs = http(&session, "GET", "configs", serde_json::Value::Null).await;
-        let golden_configs = serde_json::to_value(crate::server::http::dtos::config_dto::ConfigListResponseData {
-            configs: vec![crate::server::http::dtos::config_dto::ConfigItem {
+        let golden_configs = serde_json::to_value(bedcode_server_http::dtos::config_dto::ConfigListResponseData {
+            configs: vec![bedcode_server_http::dtos::config_dto::ConfigItem {
                 id: seeded_config["id"].as_str().unwrap().to_string(),
                 name: "工作台".into(),
                 environment: "linux".into(),
@@ -2445,7 +2445,7 @@ fn test_session_annotate_and_devices_closed_loop() {
 
         // 宿主命令面只回引擎事实（连接注册表原始记录），派生视图归插件
         assert_eq!(
-            crate::server::websocket::WebSocketManager::global()
+            bedcode_server_websocket::WebSocketManager::global()
                 .list_clients()
                 .await
                 .len(),

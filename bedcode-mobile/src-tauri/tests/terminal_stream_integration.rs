@@ -17,8 +17,8 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use bedcode_lib::state::{clear_global_token, get_connection_manager, set_global_token};
-use bedcode_lib::terminal_link::{
+use bedcode_mobile_lib::state::{clear_global_token, get_connection_manager, set_global_token};
+use bedcode_mobile_lib::terminal_link::{
     terminal_ack_rendered, terminal_send_input, terminal_unsubscribe_all, terminal_link_manager,
     TerminalEventSink,
 };
@@ -97,7 +97,7 @@ fn page_attach(session_id: &str) {
 
 /// 订阅会话并等待 mock 端收到 auth + subscribe 帧（链路已建立）
 async fn subscribe_and_wait_ready(server: &MockPluginWsServer, sink: Arc<RecorderSink>) {
-    bedcode_lib::terminal_link::terminal_link_manager().subscribe(sink, SESSION_ID.to_string());
+    bedcode_mobile_lib::terminal_link::terminal_link_manager().subscribe(sink, SESSION_ID.to_string());
 
     // 链路建连 → 认证 → 订阅；夹具按到达序记录（auth 先于 subscribe）
     server

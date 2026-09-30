@@ -180,7 +180,6 @@
  * 测试 + 01/02 各域单测为准）。
  */
 import { ref, computed, watch, onMounted, onUnmounted, nextTick, inject } from 'vue'
-import { toast } from 'vue-sonner'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
@@ -325,7 +324,6 @@ const requestResizeImpl: ResizeRequester = async (sessionId, cols, rows, force) 
 const kernel = createTerminalKernel(() => props.session, terminalHostRef)
 const settings = useTerminalSettingsSync(kernel, caps.settings, console)
 const pipeline = useTerminalWritePipeline(kernel, {
-  notifyTruncated: () => toast.warning(t('session.terminal.historyTruncated')),
   logTruncated: (message) => console.warn(message),
 })
 const scroll = useTerminalScroll(kernel)
@@ -673,7 +671,6 @@ function stopOutputPull() {
 function attachOutputSource() {
   if (!props.session?.id) return
   stopOutputPull()
-  pipeline.resetTruncatedNotified()
   outputCursor = 0
   deliveredOffset = 0
   ackedThroughOffset = 0

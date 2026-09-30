@@ -84,15 +84,20 @@ check_component_magic() {
 
 cmd_fixture() {
   cmd_verify
-  local crate="$ROOT/bedcode-desktop/packages/plugin-wasip3-test"
+  # 夹具已并入 SDK 绑定合集 crate（`packages/plugin-sdk-fixtures`），按 cargo
+  # feature 选夹具。wasip3 夹具 = `feature = "wasip3"`（其余 feature 互斥，见
+  # 该 crate 的 Cargo.toml）。下面构建命令须与宿主侧 `build_sdk_fixture`
+  # （src-tauri/.../runtime.rs）的参数保持一致，否则两边产物对不上。
+  local crate="$ROOT/bedcode-desktop/packages/plugin-sdk-fixtures"
   # 夹具共享 target 目录（与宿主测试构建器同一落点）：
   #   路径真源 = bedcode-desktop/src-tauri/src/wasm_core/manager/runtime/fixture_target.rs
-  #   （fixtures 共享目录；9 个夹具 crate 共用一份依赖图，见 .scratch/2026-09-26-cargo-target-space/）
+  #   （fixtures 共享目录；夹具 crate 共用一份依赖图，见 .scratch/2026-09-26-cargo-target-space/）
   local target_dir="$ROOT/bedcode-desktop/target/fixtures"
-  log "构建 fixture（${WASIP3_NIGHTLY} + wasm32-wasip3，target-dir=${target_dir}）"
+  log "构建 fixture（${WASIP3_NIGHTLY} + wasm32-wasip3，feature=wasip3，target-dir=${target_dir}）"
   CARGO_TARGET_DIR="$target_dir" RUSTUP_TOOLCHAIN="${WASIP3_NIGHTLY}" cargo build \
-    --target wasm32-wasip3 --release --manifest-path "$crate/Cargo.toml"
-  local out="$target_dir/wasm32-wasip3/release/bedcode_plugin_wasip3_test.wasm"
+    --target wasm32-wasip3 --release --no-default-features --features wasip3 \
+    --manifest-path "$crate/Cargo.toml"
+  local out="$target_dir/wasm32-wasip3/release/bedcode_plugin_sdk_fixtures.wasm"
   if check_component_magic "$out"; then
     log "fixture 产物为 Component（magic \\0asm + 0d 00 01 00）✅"
     log "  $out（$(du -h "$out" | cut -f1)）"

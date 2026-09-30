@@ -11,6 +11,12 @@ native = []
 wasm = []
 
 [lib]
+# 只 cdylib。**不要加 rlib**（票 08 实测）：一旦声明可链接形式，cargo 会连带为宿主
+# 目标构建 x86_64 cdylib，而本 crate 的 wit-bindgen 导出名（`bedcode:plugin/abi#form`）
+# 在 ELF version script 里非法 ⇒ 链接期直接失败。跨端契约测试因此写成
+# `src/d10_contract_test.rs`（`#[cfg(test)]` 模块）而不是 `tests/*.rs` 集成目标——
+# 单测 harness 本就不需要 crate-type 可链接。SDK 能用 `["lib","cdylib"]` 是因为它
+# 没有 WIT 导出。
 crate-type = ["cdylib"]
 
 [dependencies]
@@ -30,7 +36,45 @@ sha2 = "0.10"
 base64 = "0.21"
 hex = "0.4"
 getrandom = "0.4"
+# B-downsink（2026-09-30）：生物凭证公钥托管 + P-256 ECDSA 验签从宿主迁入
+# （宿主 host-auth `biometric-*` 三原语同日退役）。纯 Rust 纯软件实现，
+# wasm32-wasip3 可编译（探针验证）。ecdsa = 验签 / pkcs8 = SPKI 公钥解析。
+p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
 
 [dev-dependencies]
 # 文件浏览域单测（票 03）：临时工作区构造（宿主同样用 tempfile）
 tempfile = "3"
+# 生物验签单测（B-downsink）：临时 P-256 密钥对生成（`SigningKey::random`）
+rand = "0.8"
+# ==================== 票 08 / D10：插件侧跨端契约测试 ====================
+# 本插件的 HTTP/WS 路由公理要过**真实**的宿主 server 网关（真注册表 + 真 `serve()` +
+# 真实 HTTP/WS 客户端）。拆分前那两个 crate 住在宿主里（宿主拖 Tauri + wasmtime），
+# 插件侧根本够不着——这就是拆分的收益兑现点（D10）。四个 server lib crate 的生产
+# 依赖里**没有 tauri**（base 依赖 tauri 只为 `From<tauri::Error> for AppError`），
+# 所以本测试不会把 Tauri 拖进来。
+#
+# 为什么是 `src/d10_contract_test.rs`（`#[cfg(test)]` 模块）而不是 `tests/*.rs`：
+# 集成目标需要 crate-type 可链接（rlib），而加 rlib 会连带构建 x86_64 cdylib 并
+# 因 WIT 导出名在 ELF 下非法而链接失败（见 `[lib]` 注释）。单测 harness 不需要。
+# 收益不变：dev-deps 不参与 wasm 构建，`pnpm run build` 的产物链零影响。
+bedcode-server-base = { path = "../../../packages/bedcode-server-base" }
+bedcode-server-core = { path = "../../../packages/bedcode-server-core" }
+bedcode-server-http = { path = "../../../packages/bedcode-server-http" }
+bedcode-server-websocket = { path = "../../../packages/bedcode-server-websocket" }
+# 真实 HTTP 客户端（与宿主 `src-tauri` 同版本 0.12，依赖图统一为一份）
+reqwest = { version = "0.12", features = ["json"] }
+# 真实 WS 客户端（裸升级探测 + 认证帧 A/B；与 `cross-end-tests` 同选型）
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
+# 端口 traits 的 `#[async_trait]` 实现需要直接引用该宏
+async-trait = "0.1"
+# `#[tokio::test]` 与端口签名里的 `tokio::sync::broadcast` / `tokio::runtime::Handle`；
+# `tracing::Level` 用于失败现场日志。与 server lib crate 同版本（依赖图统一一份）。
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tracing = "0.1"
+# 失败现场日志（server 网关与 WS 通道的 tracing 在本 crate 不可见，不接则归因成本高）
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# `MdnsPort::shared_daemon` 的返回类型（面端口签名的一部分，测试的 `PilotMdns`
+# 必须能写出该签名）——**必须与 `bedcode-server-base` 同一版本**（0.20），否则依赖图里
+# 会出现两份 `mdns_sd`，trait 签名对不上（编译期 E0059 表现为“方法签名不匹配”）
+mdns-sd = "0.20"

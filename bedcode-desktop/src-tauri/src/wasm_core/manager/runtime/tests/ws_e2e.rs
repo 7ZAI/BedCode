@@ -41,7 +41,7 @@ async fn ws_client_recv_action(
 }
 /// host-websocket 客户端域端到端（ABI v14）
 ///
-/// fixture 插件（`packages/plugin-ws-test`）→ 宿主 `connect`（**真握手**）→
+/// fixture 插件（`packages/plugin-sdk-fixtures`，feature=ws）→ 宿主 `connect`（**真握手**）→
 /// 文本 / 二进制回文经 `events-ws` 回灌 → 属主私有状态事件
 /// （`ws:open` / `ws:close`）经 host-bus 投递 → `close` 后 `is-connected`
 /// 立即为 false（spec D3 时序）。
@@ -274,7 +274,7 @@ fn test_ws_client_outbound_roundtrip() {
 /// host-websocket 服务端域端到端（ABI v14，票 05）
 ///
 /// 真实宿主 WS 服务器（进程内随机端口）+ 真实 tokio-tungstenite 客户端 +
-/// fixture 插件（`packages/plugin-ws-test`）一次贯通：
+/// fixture 插件（`packages/plugin-sdk-fixtures`，feature=ws）一次贯通：
 ///
 /// 1. `register-endpoint`（`auth: none`，`maxClients: 1`）→ 通配路由挂载
 ///    `/ws/plugin/<owner>/echo`；
@@ -318,7 +318,7 @@ fn test_ws_endpoint_server_domain_roundtrip() {
         let (server_handle, server_task, port) = {
             let config = crate::system::config::AppConfig::default().network;
             let port = ws_pick_free_port();
-            let (handle, server) = crate::server::core::app::start_http_server(port, &config)
+            let (handle, server) = crate::server::composition::start_http_server(port, &config)
                 .await
                 .expect("start host http+ws server");
             (handle, tokio::spawn(server), port)
@@ -633,7 +633,7 @@ fn test_ws_endpoint_server_domain_roundtrip() {
             other => panic!("期望 Close(4005)，got: {other:?}"),
         }
         assert!(
-            crate::server::websocket::endpoint::get(&endpoint_id).is_none(),
+            bedcode_server_websocket::endpoint::get(&endpoint_id).is_none(),
             "停用回收端点表条目（只碰本人）"
         );
         // 停用路径同样恰好一条 disconnect 事件
@@ -807,7 +807,7 @@ fn test_ws_endpoint_server_domain_roundtrip() {
         server_task.abort();
         plugin.lock().await.deactivate().expect("deactivate = 0");
         // 全局端点表在本进程内跨用例共享：显式清理（deactivate 不触达宿主侧回收）
-        crate::server::websocket::endpoint::purge_for_plugin(PLUGIN_ID);
+        bedcode_server_websocket::endpoint::purge_for_plugin(PLUGIN_ID);
     }));
 }
 
@@ -906,7 +906,7 @@ fn test_ws_two_plugin_isolation() {
         let (server_handle, server_task, port) = {
             let config = crate::system::config::AppConfig::default().network;
             let port = ws_pick_free_port();
-            let (handle, server) = crate::server::core::app::start_http_server(port, &config)
+            let (handle, server) = crate::server::composition::start_http_server(port, &config)
                 .await
                 .expect("start host http+ws server");
             (handle, tokio::spawn(server), port)
@@ -968,7 +968,7 @@ fn test_ws_two_plugin_isolation() {
             other => panic!("期望 Close(4005)，got: {other:?}"),
         }
         assert!(
-            crate::server::websocket::endpoint::get(&endpoint_a).is_none(),
+            bedcode_server_websocket::endpoint::get(&endpoint_a).is_none(),
             "A 的端点随停用回收"
         );
         assert!(
@@ -989,8 +989,8 @@ fn test_ws_two_plugin_isolation() {
         plugin_b.lock().await.deactivate().expect("deactivate B");
         crate::wasm_core::host_api::ws::purge_for_plugin(PLUGIN_A);
         crate::wasm_core::host_api::ws::purge_for_plugin(PLUGIN_B);
-        crate::server::websocket::endpoint::purge_for_plugin(PLUGIN_A);
-        crate::server::websocket::endpoint::purge_for_plugin(PLUGIN_B);
+        bedcode_server_websocket::endpoint::purge_for_plugin(PLUGIN_A);
+        bedcode_server_websocket::endpoint::purge_for_plugin(PLUGIN_B);
         peer.abort();
     }));
 }
@@ -1058,7 +1058,7 @@ fn test_session_control_endpoint_direct_roundtrip() {
         let (server_handle, server_task, port) = {
             let config = crate::system::config::AppConfig::default().network;
             let port = ws_pick_free_port();
-            let (handle, server) = crate::server::core::app::start_http_server(port, &config)
+            let (handle, server) = crate::server::composition::start_http_server(port, &config)
                 .await
                 .expect("start host http+ws server");
             (handle, tokio::spawn(server), port)
@@ -1115,13 +1115,15 @@ fn test_session_control_endpoint_direct_roundtrip() {
 
         // 激活期等价登记（PluginHost::activate_plugin 激活成功分支的对应物）：
         // 声明端点在端点表落地后，插件端点路由才可达
-        let entry = crate::server::websocket::endpoint::register(
+        let entry = bedcode_server_websocket::endpoint::register(
             PLUGIN_ID,
             "session-control",
             EndpointAuth::Jwt,
             None,
             None,
-            host_ctx.message_bus.clone(),
+            Arc::new(crate::server::ports_impl::HostBusPort::new(
+                host_ctx.message_bus.clone(),
+            )),
         )
         .expect("register declared session/control endpoint");
         assert_eq!(
@@ -1341,7 +1343,7 @@ fn test_session_control_endpoint_direct_roundtrip() {
         // ==================== 收尾：优雅停机 + 清理 ====================
         server_handle.stop(true).await;
         server_task.abort();
-        crate::server::websocket::endpoint::purge_for_plugin(PLUGIN_ID);
+        bedcode_server_websocket::endpoint::purge_for_plugin(PLUGIN_ID);
         // guest `activate` 会 `auth-center-register` / `deactivate` 会 `auth-center-unregister`
         // → 写进程级单中心注册表；必须在测试闸门内（否则与认证面闭环用例互清台，
         // 表现为**别的**用例偶发红）。只包住这一行，不包整个用例。
@@ -1408,7 +1410,7 @@ fn test_terminal_stream_endpoint_closed_loop() {
         let (server_handle, server_task, port) = {
             let config = crate::system::config::AppConfig::default().network;
             let port = ws_pick_free_port();
-            let (handle, server) = crate::server::core::app::start_http_server(port, &config)
+            let (handle, server) = crate::server::composition::start_http_server(port, &config)
                 .await
                 .expect("start host http+ws server");
             (handle, tokio::spawn(server), port)
@@ -1463,13 +1465,15 @@ fn test_terminal_stream_endpoint_closed_loop() {
         }
 
         // 声明端点等价登记（票 04：terminal 端点，auth=jwt）
-        let entry = crate::server::websocket::endpoint::register(
+        let entry = bedcode_server_websocket::endpoint::register(
             PLUGIN_ID,
             "terminal",
             EndpointAuth::Jwt,
             None,
             None,
-            host_ctx.message_bus.clone(),
+            Arc::new(crate::server::ports_impl::HostBusPort::new(
+                host_ctx.message_bus.clone(),
+            )),
         )
         .expect("register declared terminal endpoint");
         assert_eq!(entry.mount_path, "/ws/plugin/com.bedcode.terminal-session/terminal");
@@ -1646,7 +1650,7 @@ fn test_terminal_stream_endpoint_closed_loop() {
         // ==================== 收尾：优雅停机 + 清理 ====================
         server_handle.stop(true).await;
         server_task.abort();
-        crate::server::websocket::endpoint::purge_for_plugin(PLUGIN_ID);
+        bedcode_server_websocket::endpoint::purge_for_plugin(PLUGIN_ID);
         // guest `activate` 会 `auth-center-register` / `deactivate` 会 `auth-center-unregister`
         // → 写进程级单中心注册表；必须在测试闸门内（否则与认证面闭环用例互清台，
         // 表现为**别的**用例偶发红）。只包住这一行，不包整个用例。
@@ -1721,7 +1725,7 @@ fn test_ws_device_events_and_auth_records_closed_loop() {
         let (server_handle, server_task, port) = {
             let config = crate::system::config::AppConfig::default().network;
             let port = ws_pick_free_port();
-            let (handle, server) = crate::server::core::app::start_http_server(port, &config)
+            let (handle, server) = crate::server::composition::start_http_server(port, &config)
                 .await
                 .expect("start host http+ws server");
             (handle, tokio::spawn(server), port)
@@ -1777,13 +1781,15 @@ fn test_ws_device_events_and_auth_records_closed_loop() {
         }
 
         // 声明端点等价登记（票 09b：session-control 端点，auth=jwt）
-        let entry = crate::server::websocket::endpoint::register(
+        let entry = bedcode_server_websocket::endpoint::register(
             PLUGIN_ID,
             "session-control",
             EndpointAuth::Jwt,
             None,
             None,
-            host_ctx.message_bus.clone(),
+            Arc::new(crate::server::ports_impl::HostBusPort::new(
+                host_ctx.message_bus.clone(),
+            )),
         )
         .expect("register declared session/control endpoint");
         assert_eq!(
@@ -1917,7 +1923,7 @@ fn test_ws_device_events_and_auth_records_closed_loop() {
         // ==================== 收尾：优雅停机 + 清理 ====================
         server_handle.stop(true).await;
         server_task.abort();
-        crate::server::websocket::endpoint::purge_for_plugin(PLUGIN_ID);
+        bedcode_server_websocket::endpoint::purge_for_plugin(PLUGIN_ID);
         // guest `activate` 会 `auth-center-register` / `deactivate` 会 `auth-center-unregister`
         // → 写进程级单中心注册表；必须在测试闸门内（否则与认证面闭环用例互清台，
         // 表现为**别的**用例偶发红）。只包住这一行，不包整个用例。

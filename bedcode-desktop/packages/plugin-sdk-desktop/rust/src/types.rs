@@ -62,12 +62,19 @@ pub struct PluginManifest {
     /// 插件图标：图片路径（相对插件目录）或内联 SVG 标记
     #[serde(default)]
     pub icon: Option<String>,
-    /// WASI 预打开目录声明（wasm32-wasip2 插件 std::fs 直连文件访问）
+    /// WASI 预打开目录声明（**仅 worker 类别可用**，ADR 0034）
     ///
+    /// 主 wasm-app 文件访问一律走宿主 `host-fs` 授权机制（`fs:read` / `fs:write`
+    /// 权限 + `fs_request_auth` / preauth 目录授权），不再使用 WASI preopen。
+    /// 本字段为 worker 类别（`lifecycle: ephemeral`，ADR 0032 L3.b 预留）保留：
     /// 宿主在实例化时逐项校验授权（is_granted，无弹窗）后挂载到 guest
     /// 路径 `/data`、`/data1`、…；未授权/展开失败的目录跳过（不阻断加载）。
     /// 支持 `${home}` 变量展开为主目录绝对路径。缺省空数组 = 无预打开
     /// （既有 wasm32-unknown-unknown 插件不受影响）。
+    ///
+    /// 非 worker 声明在**构建期（manifest-validate.js）与加载期（validation.rs）双侧
+    /// 显性拒绝**（ADR 0034）：worker 未实现期间（ephemeral 本身被拒）本字段对一切
+    /// manifest 不可达。
     ///
     /// 条目两形态（[`WasiPreopenDir`]）：裸路径 = 可写挂载，`{path, readonly}`
     /// = 只读挂载。只读档只收紧 guest 对该目录的写能力，**不放宽授权**——

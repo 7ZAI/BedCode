@@ -337,7 +337,7 @@ describe('TerminalPreview（插件版组装）', () => {
     expect(pullArgs.some((args) => (args as { fromOffset?: number }).fromOffset === text.length)).toBe(true)
   })
 
-  it('truncated 重锚：环淘汰后游标落后 → 清屏 + 截断提示 + 从现存段起播', async () => {
+  it('truncated 重锚：环淘汰后游标落后 → 清屏 + 后台日志 + 从现存段起播', async () => {
     const context = makeContext()
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     // 首帧 truncated：现存段 [8,12) = "tail"（min_offset=8）
@@ -361,7 +361,7 @@ describe('TerminalPreview（插件版组装）', () => {
 
     // 现存段渲染（清屏重锚后播放）
     await vi.waitFor(() => expect(renderedRowsText(wrapper!)).toContain('tail'), { timeout: 3000 })
-    // 截断提示（historyTruncated 首次触发：logTruncated 经 console.warn 落日志）
+    // 截断静默：仅后台日志（logTruncated 经 console.warn 落日志，不弹 toast）
     await vi.waitFor(
       () => expect(warnSpy.mock.calls.some((args) => String(args[0]).includes('截断'))).toBe(true),
       { timeout: 2000 },

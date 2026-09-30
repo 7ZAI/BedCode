@@ -1,0 +1,39 @@
+[package]
+name = "bedcode-plugin-sdk-fixtures"
+version = "0.1.0"
+description = "宿主测试夹具合集（SDK 绑定形态） — 按 cargo feature 选择夹具，产物为组件（仅供宿主测试套件使用）"
+authors = ["binblink"]
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+bedcode-plugin-api = { path = "../plugin-sdk-desktop/rust", features = ["wasm"] }
+serde_json = "1"
+anyhow = "1"
+# 夹具按需拉取：getrandom 只被 wasip3 的 wasi:random async 熵源探针用，
+# 设成可选避免无关 feature 也进依赖图。
+# （原各夹具 Cargo.toml 里列的 `serde` 经逐模块核对确认**无人使用**——pty/sdk/ws
+#  都只用 serde_json，故此处不再引入）
+# getrandom 0.4 支持 target_env = "p3"（走 wasi:random/random 的 async
+# get-random-bytes）——wasip3 夹具「async 随机字节返回熵」闭环验证用
+getrandom = { version = "0.4", optional = true }
+
+[features]
+# 各夹具互斥：一次构建只启用一个。**理由不是会编译失败**——spike 实测两个 feature
+# 同时开也能编译（`wasm_entry!` / `export!` 在各自 module 内生成不冲突的符号），
+# 而是一个产物必须**无歧义地**对应一个夹具：宿主侧 `build_sdk_fixture(feature)`
+# 按 feature 归档产物，多开时无从判断产物是哪个夹具。约束由 lib.rs 的
+# `compile_error!` 兜底。
+http = []
+task = []
+pty = []
+sdk = []
+ws = []
+wasip3 = ["dep:getrandom"]
+
+[profile.release]
+# 与各原夹具对齐：wasm 产物尺寸优先（宿主测试加载）
+opt-level = "s"
+lto = true

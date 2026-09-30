@@ -1,0 +1,60 @@
+[package]
+name = "cross-end-tests"
+# 独立包：跨端真实互连集成测试（移动端真实客户端代码 ↔ 桌面端真实服务器，
+# 同一进程、零 mock）。spec：.scratch/2026-09-30-cross-end-integration-tests/spec.md
+# 版本号不参与发布（publish = false），两端版本以各自 Cargo.toml 为准
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+# 空 lib：让 `cargo build` 有目标可建（内容只有 crate 级说明）
+path = "src/lib.rs"
+
+[dependencies]
+# 依赖键 = lib name（路径依赖默认用 package 名，必须显式 `package` 重命名到
+# lib name——这正是 L0 改名的直接收益：两端 lib 同名时无法各起一个依赖键）
+# L0 改名（`bedcode_lib` → 端专用名）之前，这两行只能二选一。
+bedcode-desktop-lib = { package = "bedcode-desktop", path = "../bedcode-desktop/src-tauri" }
+bedcode-mobile-lib = { package = "bedcode-mobile", path = "../bedcode-mobile/src-tauri" }
+# server-lib-split 票 07：桌面端 server 基础层（**端口 traits 的定义处**）。仅用于
+# 装配自检直读 `ports::get()` —— 端口注册表是进程级单例，rig 是否装了端口面正是
+# 「七个场景同时 404」那次实测的根因，必须有一条**不经过被测代码**的可观测判据。
+# 端口**装配**本身仍走宿主组合根 `server::composition::install_server_ports()`
+# （与 GUI bootstrap 同一函数），本依赖只让自检能验「装的是不是真端口面」。
+bedcode-server-base = { package = "bedcode-server-base", path = "../bedcode-desktop/packages/bedcode-server-base" }
+
+[dev-dependencies]
+# tokio：测试运行时与轮询等待（与两端同版本，依赖图统一为一份）
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+serde_json = "1"
+# tracing：把两端链路日志（含桌面插件 WASM 日志）导到 test harness，失败现场可查
+tracing = "0.1"
+# tauri：仅用 `ipc::Channel` 承接移动端终端链路推给「页面」的输出帧。
+# 与两端依赖同版本（2.11.1）→ 依赖图统一为一份 crate，类型同一性成立
+# （若解析出两份 tauri，`Channel<InvokeResponseBody>` 传不进移动端 API）
+tauri = { version = "2" }
+# actix-web：仅取 `dev::ServerHandle` 类型标注（服务器本体由桌面端 crate 内部
+# 启动；与桌面端同版本 → 依赖图统一为一份，ServerHandle 类型同一性成立）
+actix-web = "4"
+# 装配自检里「端点路由是否存在」的裸 WS 升级探测用（不承载协议：认证 / 订阅
+# 全部由移动端真实客户端 `TerminalLinkManager` 走，场景测试不含通用 WS 客户端）。
+# 与移动端同版本 → 依赖图统一为一份
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# ==================== 编译资源（对齐两端，避免 wasmtime/actix 编译期 OOM） ====================
+# 路径依赖的 profile 只认本包根（workspace 语义）：不写则退回 cargo 默认
+# （全量调试信息 + 无 line-tables 优化），编译峰值内存显著更高、体积更大。
+# 取值与两端同款，理由见仓库根 `.cargo/config.toml` 与两端 `Cargo.toml` 注释。
+[profile.dev]
+debug = "line-tables-only"
+incremental = true
+split-debuginfo = "packed"
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.test.package.wasmtime]
+debug-assertions = false

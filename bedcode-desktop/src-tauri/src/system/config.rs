@@ -12,6 +12,14 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+
+pub use bedcode_server_base::config::{
+    default_backlog, default_client_disconnect_timeout_secs,
+    default_client_request_timeout_secs, default_keep_alive_secs,
+    default_max_connections, default_metrics_enabled, default_prevent_sleep,
+    default_shutdown_timeout_secs, default_tcp_nodelay,
+    default_ws_max_frame_size_kb, default_ws_max_message_size_mb, NetworkConfig,
+};
 /// 全局配置单例
 static CONFIG_INSTANCE: std::sync::OnceLock<AppConfig> = std::sync::OnceLock::new();
 
@@ -46,7 +54,7 @@ static PROPERTY_COMMENTS: &[(&str, &str)] = &[
     ("terminal.default_rows", "默认终端行数"),
     ("terminal.read_buffer_size", "PTY 读取缓冲区大小（字节）- 单次读取的最大字节数"),
     ("log.file_level", "运行时日志文件级别（trace / debug / info / warn / error）"),
-    ("log.console_filter", "控制台日志过滤器（支持 EnvFilter 语法，如 bedcode_lib=debug,actix_web=info）"),
+    ("log.console_filter", "控制台日志过滤器（支持 EnvFilter 语法，如 bedcode_desktop_lib=debug,actix_web=info）"),
     ("log.rotation", "日志文件轮转策略（daily / hourly / never）"),
     ("log.max_files", "日志文件最大保留数量（0 = 不限制）"),
     ("log.capacity_bytes", "日志目录总容量上限（字节，0 = 不限制；超出后按修改时间删除最旧文件，当前在写文件除外）"),
@@ -133,107 +141,6 @@ pub struct AppConfig {
     /// 日志配置
     #[serde(default)]
     pub log: LogConfig,
-}
-
-/// 网络配置
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct NetworkConfig {
-    /// WebSocket 服务器端口
-    pub port: u16,
-    /// 应用启动时是否自动开启服务器
-    pub auto_start: bool,
-    /// 服务器运行时阻止系统休眠（允许屏幕熄灭）
-    #[serde(default = "default_prevent_sleep")]
-    pub prevent_sleep: bool,
-    /// Actix Web worker 线程数（0 = CPU 核心数）
-    #[serde(default)]
-    pub workers: usize,
-    /// HTTP Keep-Alive 超时秒数（0 = 禁用）
-    #[serde(default = "default_keep_alive_secs")]
-    pub keep_alive_secs: u64,
-    /// 客户端请求头读取超时秒数
-    #[serde(default = "default_client_request_timeout_secs")]
-    pub client_request_timeout_secs: u64,
-    /// 客户端断开连接等待超时秒数
-    #[serde(default = "default_client_disconnect_timeout_secs")]
-    pub client_disconnect_timeout_secs: u64,
-    /// 每 worker 最大并发连接数
-    #[serde(default = "default_max_connections")]
-    pub max_connections: usize,
-    /// TCP 半连接队列上限
-    #[serde(default = "default_backlog")]
-    pub backlog: u32,
-    /// 启用 TCP_NODELAY
-    #[serde(default = "default_tcp_nodelay")]
-    pub tcp_nodelay: bool,
-    /// 优雅停机超时秒数
-    #[serde(default = "default_shutdown_timeout_secs")]
-    pub shutdown_timeout_secs: u64,
-    /// WebSocket 单帧最大大小（KB）
-    #[serde(default = "default_ws_max_frame_size_kb")]
-    pub ws_max_frame_size_kb: usize,
-    /// WebSocket 单消息最大大小（MB）
-    #[serde(default = "default_ws_max_message_size_mb")]
-    pub ws_max_message_size_mb: usize,
-    /// 服务器性能监控采集总开关（默认关闭；开启时采集 CPU/内存/WS 速率指标）
-    #[serde(default = "default_metrics_enabled")]
-    pub metrics_enabled: bool,
-}
-
-fn default_prevent_sleep() -> bool {
-    true
-}
-
-fn default_keep_alive_secs() -> u64 {
-    5
-}
-fn default_client_request_timeout_secs() -> u64 {
-    5
-}
-fn default_client_disconnect_timeout_secs() -> u64 {
-    5
-}
-fn default_max_connections() -> usize {
-    25000
-}
-fn default_backlog() -> u32 {
-    2048
-}
-fn default_tcp_nodelay() -> bool {
-    true
-}
-fn default_shutdown_timeout_secs() -> u64 {
-    30
-}
-fn default_ws_max_frame_size_kb() -> usize {
-    64
-}
-fn default_ws_max_message_size_mb() -> usize {
-    16
-}
-fn default_metrics_enabled() -> bool {
-    false
-}
-
-impl Default for NetworkConfig {
-    fn default() -> Self {
-        Self {
-            port: 8765,
-            auto_start: true,
-            prevent_sleep: true,
-            workers: 0,
-            keep_alive_secs: default_keep_alive_secs(),
-            client_request_timeout_secs: default_client_request_timeout_secs(),
-            client_disconnect_timeout_secs: default_client_disconnect_timeout_secs(),
-            max_connections: default_max_connections(),
-            backlog: default_backlog(),
-            tcp_nodelay: default_tcp_nodelay(),
-            shutdown_timeout_secs: default_shutdown_timeout_secs(),
-            ws_max_frame_size_kb: default_ws_max_frame_size_kb(),
-            ws_max_message_size_mb: default_ws_max_message_size_mb(),
-            metrics_enabled: default_metrics_enabled(),
-        }
-    }
 }
 
 /// UI 界面配置
@@ -363,7 +270,7 @@ pub struct LogConfig {
     pub file_level: String,
     /// 控制台日志过滤器
     /// debug 构建始终启用控制台输出；release 构建需同时设置 console_in_release=true
-    /// 支持 tracing EnvFilter 语法，如 "bedcode_lib=debug,actix_web=info"
+    /// 支持 tracing EnvFilter 语法，如 "bedcode_desktop_lib=debug,actix_web=info"
     #[serde(default = "default_log_console_filter")]
     pub console_filter: String,
     /// 日志文件轮转策略（daily / hourly / never）
@@ -390,7 +297,7 @@ fn default_log_file_level() -> String {
     "info".to_string()
 }
 fn default_log_console_filter() -> String {
-    "bedcode_lib=debug,actix_web=info,actix_http=info".to_string()
+    "bedcode_desktop_lib=debug,actix_web=info,actix_http=info".to_string()
 }
 fn default_log_rotation() -> String {
     "daily".to_string()
@@ -853,7 +760,7 @@ channels.lifecycle_capacity=16
         assert_eq!(config.file_level, "info");
         assert_eq!(
             config.console_filter,
-            "bedcode_lib=debug,actix_web=info,actix_http=info"
+            "bedcode_desktop_lib=debug,actix_web=info,actix_http=info"
         );
         assert_eq!(config.rotation, "daily");
         assert_eq!(config.max_files, 7);

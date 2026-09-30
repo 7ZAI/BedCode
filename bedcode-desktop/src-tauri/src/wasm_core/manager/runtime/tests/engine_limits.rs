@@ -20,7 +20,7 @@ fn test_load_plugin_from_file() {
     // 加载成功即可调用：激活 + manifest 往返验证组件路径
     assert_eq!(plugin.activate().expect("activate"), 0);
     let manifest: serde_json::Value = serde_json::from_str(&plugin.get_manifest().expect("manifest")).unwrap();
-    assert_eq!(manifest["id"], "com.bedcode.component-test");
+    assert_eq!(manifest["id"], "com.bedcode.sdk-test");
 
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
@@ -252,27 +252,10 @@ fn test_optional_export_callbacks_refill_fuel() {
             left > budget / 2,
             "on_task_event 未续费，剩余 {left}（预算 {budget}）"
         );
-
-        // C-106 反例：未导出 events-ws 的产物走降级路径——加续费不得改变其语义
-        let legacy_component = wasm_runtime
-            .compile_component(&build_test_component())
-            .expect("compile component-test");
-        let mut legacy_plugin = wasm_runtime
-            .instantiate_component(
-                &legacy_component,
-                "com.bedcode.component-test",
-                host_ctx,
-                &[],
-                None,
-            )
-            .expect("未导出 events-ws 的产物不得影响加载");
-        drain(&mut legacy_plugin);
-        assert!(
-            !legacy_plugin
-                .on_ws_frame(&client_frame)
-                .expect("legacy 降级不得报错"),
-            "未导出 events-ws 的产物必须恰为 Ok(false) 降级"
-        );
+        // C-106 反例（未导出 events-ws 的产物走降级路径——加续费不得改变其语义）
+        // 随 `plugin-component-test` 删除而移除：SDK 的 `wasm_entry!` 无条件导出全部
+        // interface，造不出缺可选导出的产物，故「补续费不得改变降级语义」这条反例
+        // 目前无载体可测。
     });
 }
 

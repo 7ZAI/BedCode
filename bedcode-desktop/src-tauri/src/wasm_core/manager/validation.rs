@@ -39,6 +39,7 @@ pub fn validate_manifest_required(manifest: &PluginManifest) -> crate::Result<()
     }
     validate_pty_quota(manifest.pty_quota)?;
     validate_lifecycle(manifest)?;
+    validate_preopen_category(manifest)?;
     Ok(())
 }
 
@@ -60,6 +61,28 @@ pub fn validate_lifecycle(manifest: &PluginManifest) -> crate::Result<()> {
              权限模型与 per-app 配额）。请改用 lifecycle=\"persistent\" 或删去该字段",
             manifest.lifecycle.as_str()
         )));
+    }
+    Ok(())
+}
+
+/// 校验 manifest 声明的 WASI 预打开目录归属类别（ADR 0034）
+///
+/// `wasiPreopenDirs` 仅 worker 类别（`lifecycle: ephemeral`）可用——主 wasm-app
+/// 文件访问一律走宿主 `host-fs` 授权机制（`fs:read` / `fs:write` 权限 + `fs_request_auth`
+/// / preauth 目录授权）。非 worker 声明即**加载期显性拒绝**：静默忽略会让「声明了却
+/// 没人读它」的目录配置一路活到分发链（§8 fail-visible 形态之③）。
+///
+/// worker 未实现期间（ADR 0032 §6 双侧拒绝）`ephemeral` 本身被 [`validate_lifecycle`]
+/// 拒绝，故本字段当前对一切 manifest 不可达——此处的类别闸门是取值域层面的落死，
+/// worker 启用（ephemeral 放行）后 preopen 即恢复为 worker 专属能力。
+pub fn validate_preopen_category(manifest: &PluginManifest) -> crate::Result<()> {
+    if !manifest.wasi_preopen_dirs.is_empty() && manifest.lifecycle != InstanceLifecycle::Ephemeral {
+        return Err(crate::AppError::Plugin(
+            "plugin.json wasiPreopenDirs 仅 worker 类别（lifecycle=\"ephemeral\"）可用：\
+             业务应用文件访问一律走宿主 host-fs 授权机制（permissions 声明 fs:read/fs:write，\
+             目录经 fs_request_auth / preauth 授权并持久化），见 ADR 0034"
+                .to_string(),
+        ));
     }
     Ok(())
 }
@@ -385,6 +408,55 @@ mod tests {
         assert!(
             parse(r#","lifecycle":"workerish""#).is_err(),
             "未知 lifecycle 取值必须失败，不得静默当常驻"
+        );
+    }
+
+    /// `wasiPreopenDirs` 的归属类别闸门（ADR 0034）：仅 worker（`lifecycle: ephemeral`）
+    /// 可声明，主 wasm-app 文件访问一律走宿主 host-fs。
+    ///
+    /// 正例：无声明（一切现有 manifest）照常加载；
+    /// 反例：缺省 / 显式 `persistent` 声明 preopen → 加载期显性拒绝并点名 host-fs 替代；
+    /// `ephemeral` + preopen → 由既有 `validate_lifecycle` 闸门先拒（worker 未实现，
+    /// 点名 ADR 0032 缺口）——两类缺口不许混同。
+    ///
+    /// 变异判据：把 `validate_preopen_category` 从 `validate_manifest_required` 摘掉，
+    /// 反例全部转红（preopen 声明会静默进入宿主、按 manifest 预打开目录）。
+    #[test]
+    fn wasi_preopen_dirs_on_non_worker_is_rejected_at_load() {
+        let parse = |extra: &str| -> crate::Result<PluginManifest> {
+            parse_manifest_json(&format!(
+                r#"{{"id":"com.bedcode.po","name":"po","version":"1.0.0"{extra}}}"#
+            ))
+        };
+
+        // 无声明：既有 manifest 零迁移
+        assert!(parse("").is_ok());
+        assert!(parse(r#","lifecycle":"persistent""#).is_ok());
+
+        // 缺省 lifecycle（= persistent）声明 preopen → 拒
+        let err = parse(r#","wasiPreopenDirs":["${home}/data"]"#)
+            .err()
+            .expect("persistent manifest declaring preopen must be rejected");
+        let text = err.to_string();
+        assert!(
+            text.contains("wasiPreopenDirs") && text.contains("host-fs") && text.contains("ADR 0034"),
+            "错误必须点名字段、替代机制与 ADR，got: {text}"
+        );
+
+        // 显式 persistent 声明 preopen → 同样拒
+        assert!(
+            parse(r#","lifecycle":"persistent","wasiPreopenDirs":["/x"]"#).is_err(),
+            "显式 persistent 声明 preopen 必须拒绝"
+        );
+
+        // ephemeral + preopen：由既有 lifecycle 闸门先拒（worker 未实现），
+        // 错误指向 ADR 0032 缺口而不是 ADR 0034 类别
+        let err = parse(r#","lifecycle":"ephemeral","wasiPreopenDirs":["/x"]"#)
+            .err()
+            .expect("ephemeral manifest must be rejected by the lifecycle gate");
+        assert!(
+            err.to_string().contains("ADR 0032"),
+            "ephemeral 缺口必须点名 ADR 0032，got: {err}"
         );
     }
 

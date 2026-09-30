@@ -75,7 +75,6 @@ export type MessageSchema = {
   'session.terminal.uptime': string
   'session.terminal.stopped': string
   'session.terminal.stopFailed': string
-  'session.terminal.historyTruncated': string
   'session.terminal.bgImage': string
   'session.terminal.bgImageSelect': string
   'session.terminal.bgImageRemove': string
