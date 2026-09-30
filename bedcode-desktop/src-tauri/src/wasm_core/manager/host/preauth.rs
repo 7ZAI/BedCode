@@ -73,6 +73,9 @@ impl PluginHost {
         // 1.5 并入 manifest wasiPreopenDirs 声明目录(展开不过滤授权,未授权
         // 项正需在此弹窗)。只读档同样要弹窗授权——档位收紧 guest 写能力，
         // 不构成免授权通道（票 07 裁决 3）。
+        // **仅 worker 类别可达**（ADR 0034）：非 worker 声明 preopen 在加载期被
+        // 显性拒绝，主 wasm-app 文件访问走 host-fs + preauth_paths——本分支是
+        // worker 预留能力的授权前置，当前对一切可加载 manifest 不可达。
         // 短读锁克隆后立即释放:check_batch 会发事件、可能
         // 回调宿主,跨 await 持锁有死锁风险
         let declared = {

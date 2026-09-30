@@ -5,6 +5,11 @@
 //! WASI 文件系统——宿主在实例化时按插件配置预打开目录 `/data` 后，
 //! 插件即拥有对该目录的直接读写能力（无需宿主 fs_* 转发）。
 //!
+//! **preopen 仅 worker 类别可用（ADR 0034）**：主 wasm-app 文件访问一律走
+//! 宿主 host-fs 授权机制；本夹具是 worker 预留能力的**机制守门测试**（在策略
+//! 闸门之下，不走 manifest 校验路径），worker 启用专项需一并解决 wasip3 的
+//! preopen 装配问题。
+//!
 //! 本夹具固定 wasip2、不参与夹具合并：实测 preopen 在 wasip3 上不工作
 //! （两个 E2E 均 trap 于 `filesystem_method_descriptor_open_at`，p3 linker
 //! 虽接上但预打开目录能力未建到 p3 filesystem 接口）。合并不要求统一

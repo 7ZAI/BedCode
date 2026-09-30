@@ -290,7 +290,7 @@ describe('wasmHash 校验', () => {
 // ==================== wasiPreopenDirs（票 07 只读档）====================
 
 /** 写一份只关心 wasiPreopenDirs 的最小 manifest，返回与该字段相关的错误 */
-function errorsForWasiPreopenDirs(dirs: unknown): string[] {
+function errorsForWasiPreopenDirs(dirs: unknown, lifecycle: string | null = 'ephemeral'): string[] {
   const manifest: Record<string, unknown> = {
     id: 'com.example.test',
     name: 'Test Plugin',
@@ -301,6 +301,11 @@ function errorsForWasiPreopenDirs(dirs: unknown): string[] {
     permissions: [],
     contributes: {},
   }
+  // ADR 0034 后 preopen 仅 worker 类别可用：形态校验默认放在合法类别（ephemeral）
+  // 语境下测，否则类别闸门错误会污染形态断言（ephemeral 本身被 lifecycle 分支拦截，
+  // 其错误不含 'wasiPreopenDirs'，过滤后不影响形态断言）；传 null = 不写 lifecycle
+  // （缺省 persistent），用于类别闸门反例
+  if (lifecycle !== null) manifest.lifecycle = lifecycle
   if (dirs !== undefined) manifest.wasiPreopenDirs = dirs
   writeFileSync(join(cwd, 'plugin.json'), JSON.stringify(manifest, null, 2), 'utf-8')
   const { errors } = validateManifest(cwd)
@@ -317,6 +322,27 @@ describe('wasiPreopenDirs 校验', () => {
         { path: '${home}/no-flag' },
       ]),
     ).toEqual([])
+  })
+
+  it('C-W6 类别闸门（ADR 0034）：非 worker 声明 preopen 构建期拒绝，文案指路 host-fs', () => {
+    // 缺省 lifecycle（= persistent）→ 类别闸门错误
+    const defaultErrors = errorsForWasiPreopenDirs(['/x'], null)
+    expect(defaultErrors).toHaveLength(1)
+    expect(defaultErrors[0]).toContain('host-fs')
+    expect(defaultErrors[0]).toContain('ephemeral')
+    // 显式 persistent → 同样拒
+    const persistentErrors = errorsForWasiPreopenDirs(['/x'], 'persistent')
+    expect(persistentErrors).toHaveLength(1)
+    expect(persistentErrors[0]).toContain('host-fs')
+    // worker（ephemeral）声明 → 不报类别闸门错误（形态合法时零 wasiPreopenDirs 错误）
+    expect(errorsForWasiPreopenDirs(['/x'], 'ephemeral')).toEqual([])
+  })
+
+  it('C-W6 类别闸门在形态校验之外独立生效：非法形态 + 非 worker 同时报两条', () => {
+    const errors = errorsForWasiPreopenDirs('${home}/x', 'persistent')
+    expect(errors).toHaveLength(2)
+    expect(errors.some((e) => e.includes('host-fs'))).toBe(true)
+    expect(errors.some((e) => e.includes('readonly'))).toBe(true)
   })
 
   it('C-W1 两形态混列合法（同一列表里档位逐条独立）', () => {

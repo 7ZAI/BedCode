@@ -20,8 +20,8 @@
 
 - **Rust WASM 层**：对话日志 JSONL 落盘（`store.rs`）、HTTP 请求透传（`client.rs`）、命令路由（`commands.rs`）、数据目录集中授权（宿主 `fs_auth` 弹窗）
 - **TS 前端**：协议适配层 `src/adapters/`（openai / anthropic / gemini / custom 方言的请求构建与 SSE 解析）、对话 UI 与设置页
-- **激活流程**：激活时宿主弹出目录授权（`fs_auth` 弹窗）→ 同意后持久化授权记录并初始化数据目录 → 激活成功；拒绝/超时 → 激活失败（Error 状态），重新启用可重试；首次启用需停用再启用一次完成 WASI 预打开挂载
-- **数据目录**：固定为 `{home}/.bedcode/ai-chatbox/`（与 manifest `wasiPreopenDirs` 声明一致），由宿主经 WASI 预打开为 guest 侧 `/data`，Rust 端 `std::fs` 直读直写；对话文件落盘于 `/data/conversations/{id}.jsonl`（首行 meta + 逐行消息），索引 `/data/index.jsonl`
+- **激活流程**：激活时宿主弹出目录授权（`fs_auth` 弹窗）→ 同意后持久化授权记录并初始化数据目录 → 激活成功；拒绝/超时 → 激活失败（Error 状态），重新启用可重试
+- **数据目录**：固定为宿主绝对路径 `{HomeDir}/.bedcode/ai-chatbox/`，激活时经 `fs_request_auth` 集中授权一次、同意后宿主持久化（免弹窗）；Rust 端文件访问一律经宿主 `host-fs` 原语转发（**不经 WASI preopen**——业务应用已统一走宿主自身授权机制，ADR 0034）；对话文件落盘于 `conversations/{id}.jsonl`（首行 meta + 逐行消息），索引 `index.jsonl`
 
 ## 目录结构
 

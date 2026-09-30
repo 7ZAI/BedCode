@@ -2,7 +2,7 @@
   "id": "com.bedcode.wasi-test",
   "name": "WASI Test",
   "version": "0.1.0",
-  "description": "WASI preopen 测试插件",
+  "description": "WASI preopen 测试插件（仅 worker 类别可用，ADR 0034；仅供宿主测试套件使用）",
   "author": "BedCode",
   "main": "index.js",
   "sandbox": "inline",

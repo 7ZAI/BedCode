@@ -132,9 +132,9 @@ async fn preauthorize_file_transfer_empty_shared_roots_passes() {
     );
 }
 
-/// manifest `wasiPreopenDirs` 声明目录并入预授权收集(如 ai-chatbox 数据
-/// 目录)。未授权 + 无头上下文(check_batch 保守拒绝)→ 返回「授权被拒」
-/// 错误——若声明目录未被收集,空路径会直接放行,本用例即失去意义
+/// manifest `wasiPreopenDirs` 声明目录并入预授权收集（**仅 worker 类别可达**，
+/// ADR 0034；机制保留为 worker 预留能力）。未授权 + 无头上下文（check_batch 保守
+/// 拒绝）→ 返回「授权被拒」错误——若声明目录未被收集,空路径会直接放行,本用例即失去意义
 ///
 /// 声明特意用**只读档**（票 07）：档位只收紧 guest 的写能力，不构成免授权通道，
 /// 所以只读目录同样必须被收集并因未授权而拒绝
@@ -165,7 +165,8 @@ async fn preauthorize_collects_manifest_preopen_dirs_ungranted_denied() {
 }
 
 /// 声明目录已授权(storage fs_granted_paths 前缀命中)→ check_batch 短路
-/// 通过,preauthorize 整体放行
+/// 通过,preauthorize 整体放行。**仅 worker 类别可达**（ADR 0034）：本用例
+/// 直接设 manifest 字段测机制，在策略闸门（validation.rs）之下。
 #[tokio::test]
 async fn preauthorize_manifest_preopen_dir_granted_passes() {
     let host = setup_host().await;

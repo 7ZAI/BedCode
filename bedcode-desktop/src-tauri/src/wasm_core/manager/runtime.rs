@@ -1129,6 +1129,9 @@ mod tests {
         // `filesystem_method_descriptor_open_at`——p3 linker 虽接上，预打开目录
         // 的能力没建到 p3 filesystem 接口上。故本夹具固定 wasip2，不参与夹具
         // 合并（合并不要求统一 target，见合并方案）。
+        // **preopen 仅 worker 类别可用**（ADR 0034）：本夹具是 worker 预留能力的
+        // 机制守门测试（在策略闸门之下，不走 manifest 校验路径）；worker 启用
+        // 专项需一并解决 wasip3 的 preopen 装配问题（见 ADR 0034 §worker 启用时需补）。
         std::fs::read(&module_path).expect("Failed to read WASI test component after build")
     }
 

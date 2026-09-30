@@ -90,7 +90,13 @@ export interface PluginManifest {
    */
   ptyQuota?: number
   /**
-   * WASI 预打开目录声明（manifest `wasiPreopenDirs`，仅 wasm32-wasip2 插件）
+   * WASI 预打开目录声明（manifest `wasiPreopenDirs`，**仅 worker 类别可用**，ADR 0034）
+   *
+   * 主 wasm-app 文件访问一律走宿主 `host-fs` 授权机制（manifest permissions 声明
+   * `fs:read` / `fs:write`，目录经 `fs_request_auth` / preauth 授权并持久化），不再
+   * 使用 WASI preopen。本字段为 worker 类别（`lifecycle: ephemeral`，ADR 0032 L3.b
+   * 预留）保留：worker 未实现期间（ephemeral 本身被拒）它对一切 manifest 不可达——
+   * 非 worker 声明在构建期与宿主加载期双侧显性拒绝。
    *
    * 条目两形态：裸路径字符串 = 可写挂载（既有形态，零迁移）；
    * `{ path, readonly: true }` = 只读挂载。宿主实例化时逐项过授权

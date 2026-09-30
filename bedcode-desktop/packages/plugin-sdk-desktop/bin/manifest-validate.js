@@ -305,12 +305,23 @@ export function validateManifest(dir) {
     }
   }
 
-  // wasiPreopenDirs（票 07 只读档）：条目两形态——裸路径字符串（可写，既有形态）
-  // 或 `{ path, readonly }` 对象。这里管形态，宿主 Rust 端（SDK
+  // wasiPreopenDirs（票 07 只读档；ADR 0034 归属类别闸门）：条目两形态——裸路径字符串
+  // （可写，既有形态）或 `{ path, readonly }` 对象。这里管形态，宿主 Rust 端（SDK
   // rust/src/types.rs::WasiPreopenDir::from_json）管仲裁：未知键 / 非布尔 readonly
   // 若被静默忽略，只读声明会退化成可写挂载，所以两侧都不放过。
+  //
+  // **类别闸门（ADR 0034）**：`wasiPreopenDirs` 仅 worker 类别（lifecycle="ephemeral"）
+  // 可用——主 wasm-app 文件访问一律走宿主 host-fs 授权机制。非 worker 声明即构建期
+  // 显性拒绝（不静默忽略：静默忽略会让「声明了却没人读它」的目录配置一路活到分发链）。
+  // worker 未实现期间（ADR 0032 §6 双侧拒绝）ephemeral 本身被下方 lifecycle 分支拦截，
+  // 故该字段当前对一切 manifest 不可达；此处闸门是取值域层面的落死。
   const preopenDirs = manifest.wasiPreopenDirs
   if (preopenDirs !== undefined && preopenDirs !== null) {
+    if (manifest.lifecycle !== 'ephemeral') {
+      errors.push(
+        'wasiPreopenDirs 仅 worker 类别（lifecycle="ephemeral"）可用：业务应用文件访问一律走宿主 host-fs 授权机制（permissions 声明 fs:read/fs:write，目录经 fs_request_auth 授权并持久化），见 ADR 0034',
+      )
+    }
     if (!Array.isArray(preopenDirs)) {
       errors.push('wasiPreopenDirs 必须是「路径字符串」或「{path, readonly} 对象」的数组')
     } else {

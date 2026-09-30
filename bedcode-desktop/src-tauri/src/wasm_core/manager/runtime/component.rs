@@ -1219,6 +1219,7 @@ impl LoadedWasmPlugin {
     /// 宿主激活时的预打开目录漂移判定自票 06 起直接读装配条目的
     /// [`InstanceMeta::preopened_dirs`]（属主模型下不允许「锁实例读元数据」——
     /// 那是第二个 Store 入口）；本访问器保留给直接持有实例的测试。
+    /// **仅 worker 类别可达**（ADR 0034）：非 worker 声明 preopen 已被加载期闸门拒绝。
     #[allow(dead_code)]
     pub(crate) fn preopened_dirs(&self) -> &[String] {
         &self.meta.preopened_dirs
@@ -1767,11 +1768,16 @@ impl LoadedWasmPlugin {
     }
 }
 
-// ==================== WASI 预打开 ====================
+// ==================== WASI 预打开（仅 worker 类别，ADR 0034） ====================
 
 /// 构建 WASI 上下文：将 manifest 声明（`wasiPreopenDirs`，经展开+授权过滤）的
 /// 目录逐项预打开到 guest 路径 `/data`、`/data1`、…；无声明时为空上下文。
 /// 单项失败仅告警不阻断（该目录 guest 不可见，由插件激活时自检并引导用户）。
+///
+/// **仅 worker 类别（`lifecycle: ephemeral`，ADR 0032 L3.b 预留）可用**（ADR 0034）：
+/// 主 wasm-app 文件访问一律走宿主 `host-fs` 授权机制，非 worker 声明 preopen 在
+/// 构建期与加载期双侧显性拒绝——本函数是 worker 启用后的预留能力装配点，
+/// 当前对一切可加载 manifest 不可达（worker 未实现）。
 ///
 /// 挂载档由条目声明决定（审计票 07 只读档）：`readonly: true` → `FsPerms::ReadOnly`，
 /// 其余（裸路径 / `readonly` 缺省或 false）→ `FsPerms::ReadWrite`，与改造前逐字一致。
@@ -1882,6 +1888,9 @@ fn expand_preopen_declarations_with_home(
 }
 
 /// 解析 manifest `wasiPreopenDirs` 声明为可预打开的主机路径列表（含挂载档）
+///
+/// **仅 worker 类别可用**（ADR 0034，机制保留为 worker 预留能力）；主 wasm-app
+/// 不经过此路径（非 worker 声明 preopen 已被加载期闸门拒绝）。
 ///
 /// - 先经 [`expand_preopen_declarations`] 展开
 /// - 仅保留已授权目录（is_granted 无弹窗校验）：manifest 路径可能指向任意
