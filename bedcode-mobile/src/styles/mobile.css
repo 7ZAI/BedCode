@@ -468,6 +468,22 @@ button.group-row:active,
   color: var(--mobile-row-value);
 }
 
+/* ==================== 列表行内联状态文字 ==================== */
+
+/* 任务状态行内文字：语义色弱标记。宽度不可预测的内容一律 nowrap，
+   宁可与相邻的运行时长争空间也不折行（折行会让整行行高突变）。 */
+.task-state {
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.task-state--idle { color: var(--mobile-chip-zinc); }
+.task-state--in-progress { color: var(--mobile-chip-amber); }
+.task-state--asking { color: var(--mobile-chip-violet); }
+.task-state--completed { color: var(--mobile-chip-emerald); }
+.task-state--interrupted { color: var(--mobile-chip-red); }
+
 /* ==================== 图标 chip ==================== */
 
 .icon-chip {
@@ -486,6 +502,29 @@ button.group-row:active,
 .chip-violet { color: var(--mobile-chip-violet); background: var(--mobile-chip-violet-bg); }
 .chip-red { color: var(--mobile-chip-red); background: var(--mobile-chip-red-bg); }
 .chip-zinc { color: var(--mobile-chip-zinc); background: var(--mobile-chip-zinc-bg); }
+
+/* 卡片内的图标 chip：会话配置卡在用（.config-icon / .config-icon-sm）。
+   这两个类此前只被引用、从未定义，卡片图标实际是以裸 SVG 尺寸贴在色块上，
+   与 .icon-chip 的 36px 圆角 chip 视觉不齐。 */
+.config-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: clamp(2.25rem, 2.5rem + (100vw - 360px) / 800 * 4, 2.5rem);
+  height: clamp(2.25rem, 2.5rem + (100vw - 360px) / 800 * 4, 2.5rem);
+  border-radius: 0.75rem;
+  flex-shrink: 0;
+}
+
+.config-icon-sm {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 0.5rem;
+  flex-shrink: 0;
+}
 
 /* ==================== 状态 badge ==================== */
 

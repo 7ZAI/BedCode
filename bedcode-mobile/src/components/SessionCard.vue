@@ -8,12 +8,18 @@
       <component :is="statusIcon" class="w-5 h-5" />
     </span>
 
+    <!-- 中间列恒定两行，每行 nowrap：标题行=会话名，状态行=任务状态+运行时长。
+         早先把「类型 / 时长 / 任务状态」三段挤在同一行，实测该列只有 141px，
+         三段共需 142px —— 1px 溢出就让 CJK 逐字折行（子行高 23px → 45px），
+         同一列表的行高随之从 79px 涨到 102px。现在把易变的状态归到一行、
+         名称独占一行，两行都在预算内，不再有折行面。
+         （原副行里的「PTY / Plugin」类型标签已移除：PTY 是实现细节，
+         用户无法据此做任何决策，名称右侧的图标与徽章已足够表达会话状态。） -->
     <div class="flex-1 min-w-0">
       <div class="group-row-title truncate">{{ session.name }}</div>
-      <div class="group-row-sub mt-0.5 flex items-center gap-2">
-        <span v-if="sessionType">{{ sessionType }}</span>
-        <span class="font-mono" style="color: var(--mobile-row-sub)">{{ elapsed }}</span>
-        <span v-if="taskStatusLabel" style="color: var(--mobile-chip-amber)">{{ taskStatusLabel }}</span>
+      <div class="group-row-sub mt-0.5 flex items-center gap-1.5 min-w-0">
+        <span v-if="taskStatusLabel" class="task-state" :class="taskStatusClass">{{ taskStatusLabel }}</span>
+        <span class="font-mono truncate min-w-0" style="color: var(--mobile-row-sub)">{{ elapsed }}</span>
       </div>
     </div>
 
@@ -115,9 +121,16 @@ const statusLabel = computed(() => {
   }
 })
 
-const sessionType = computed(() => {
-  const type = props.session.sessionType
-  return type === 'plugin' ? 'Plugin' : type === 'pty' ? 'PTY' : null
+// 任务状态语义色：状态各有归属（原先一律 amber，「已完成」与「执行中」同色）。
+// 颜色只作强化——状态文案本身一直常驻，不靠颜色单独承载信息。
+const taskStatusClass = computed(() => {
+  switch (props.session.taskStatus) {
+    case 'in_progress': return 'task-state--in-progress'
+    case 'asking': return 'task-state--asking'
+    case 'completed': return 'task-state--completed'
+    case 'interrupted': return 'task-state--interrupted'
+    default: return 'task-state--idle'
+  }
 })
 
 const taskStatusLabel = computed(() => {

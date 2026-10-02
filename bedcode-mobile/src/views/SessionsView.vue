@@ -34,8 +34,9 @@
       </div>
     </div>
 
-    <!-- Content -->
-    <div class="flex-1 overflow-auto px-4 pb-8">
+    <!-- Content（页面内容滚动容器：scrollbar-gutter-stable 防滚动条显隐引起整页横向抖动；
+         session-scroll 局部收细并压暗滚动条，暖黑卡片上默认 8px 冷色条是一条明显噪音） -->
+    <div class="scrollbar-gutter-stable session-scroll flex-1 overflow-auto px-4 pb-8">
       <!-- 未连接提示（图标 + 引导） -->
       <div v-if="!isConnected" class="min-h-[45vh] flex flex-col items-center justify-center text-center">
         <svg class="w-12 h-12 mb-4" style="color: var(--mobile-text-disabled)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -53,27 +54,25 @@
       </div>
 
       <template v-else>
-        <!-- 会话配置（从连接页迁移）：header 标题区可点击折叠 + 独立刷新按钮 -->
-        <div class="flex items-center gap-2 pt-1">
+        <!-- 区块头：两个区块共用同一结构与高度（可折叠标题 + 右侧动作槽），
+             避免「可折叠标题行」与「裸文字标题行」在垂直节奏上对不齐 -->
+        <div class="section-head pt-1">
           <button
-            class="flex-1 min-w-0 h-11 flex items-center gap-1.5 text-left rounded-lg transition-opacity active:opacity-80"
+            class="section-head__title"
             :aria-expanded="configsExpanded"
             @click="configsExpanded = !configsExpanded"
           >
-            <span class="text-sm font-semibold text-[var(--mobile-text-muted)]">{{ t('mobile.session.config') }}</span>
+            <span class="section-head__label">{{ t('mobile.session.config') }}</span>
             <svg
-              class="config-chevron w-4 h-4 flex-shrink-0"
+              class="config-chevron section-head__chevron"
               :class="{ 'config-chevron--collapsed': !configsExpanded }"
-              style="color: var(--mobile-text-disabled)"
               fill="none" stroke="currentColor" viewBox="0 0 24 24"
             >
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
             </svg>
           </button>
           <button
-            class="p-2 rounded-lg transition-colors active:opacity-80"
-            style="color: var(--mobile-text-muted)"
-            :class="{ 'opacity-50': isRefreshing }"
+            class="section-head__action"
             :title="t('mobile.session.refreshConfig')"
             :disabled="isRefreshing"
             @click="refreshConfigs"
@@ -127,7 +126,9 @@
         <!-- 运行中的会话：与会话配置同级别的独立区域，展示全部会话卡片
              （恢复改版前的 SessionCard 完整功能：点击进入终端 / 停止 / 删除） -->
         <div class="mt-6">
-          <span class="text-sm font-semibold text-[var(--mobile-text-muted)]">{{ t('mobile.session.runningSessions') }}</span>
+          <div class="section-head">
+            <span class="section-head__label">{{ t('mobile.session.runningSessions') }}</span>
+          </div>
 
           <!-- Mock Terminal Session (DEV only) -->
           <div v-if="mockTerminal.isDev && mockTerminal.enabled.value" class="group-card mt-3">
@@ -418,6 +419,91 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+/* 页面标题与下方卡片左对齐：.page-header 横向内边距是 20px，而内容容器是 px-4（16px），
+   标题会比卡片右移 4px。局部覆写成 16px，不动全局（避免波及其他视图的 header）。 */
+.page-header {
+  padding-left: 1rem;
+  padding-right: 1rem;
+}
+
+/* 区块头统一语言：两个区块标题同一高度（44px 触控下限）、同一内缩。
+   内缩放在 label 上而非按钮上，这样「可折叠」与「不可折叠」两种区块头的
+   标题文字落在同一条竖线上。 */
+.section-head {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-height: 2.75rem;
+}
+
+.section-head__title {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  flex: 1;
+  min-width: 0;
+  height: 2.75rem;
+  border-radius: 0.5rem;
+  /* button 默认 text-align:center 会传给后代文字，需显式左对齐 */
+  text-align: left;
+  transition: opacity 0.15s ease;
+}
+
+.section-head__title:active {
+  opacity: 0.7;
+}
+
+.section-head__label {
+  padding-inline: 0.25rem;
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--mobile-text-secondary);
+}
+
+.section-head__chevron {
+  width: 1rem;
+  height: 1rem;
+  flex-shrink: 0;
+  color: var(--mobile-text-disabled);
+}
+
+.section-head__action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  flex-shrink: 0;
+  border-radius: 0.5rem;
+  color: var(--mobile-text-secondary);
+  transition: opacity 0.15s ease, background-color 0.15s ease;
+}
+
+.section-head__action:active {
+  opacity: 0.7;
+}
+
+.section-head__action:disabled {
+  opacity: 0.5;
+}
+
+/* 内容滚动容器：默认 8px 滚动条在本主题下是 slate 色，与暖黑卡片（#1D1A15）
+   形成一条偏亮偏冷的竖条。局部收细到 6px 并压到 --mobile-row-sub 的低透明度，
+   保留 scrollbar-gutter-stable 的防抖动价值，只去掉视觉噪音。 */
+.session-scroll::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.session-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.session-scroll::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--mobile-row-sub) 40%, transparent);
+  border-radius: 999px;
+}
+
 /* 会话配置折叠：内容展开走 grid-template-rows 0fr→1fr 过渡
    （内容展开 UX 允许动画布局属性；与 CollapseSection 同款机制） */
 .config-section-body {
