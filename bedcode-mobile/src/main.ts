@@ -12,6 +12,10 @@ import { completeStartupTask } from '@/composables/useAppStartup'
 import { initFrontendLogger } from '@/utils/frontendLogger'
 import './style.css'
 import './styles/mobile.css'
+// 终端内置 CJK 等宽字体的 @font-face 声明（src/styles/terminal-font.css）：
+// 声明全局引入，使任意页面都能经 ensureTerminalFontLoaded 预热（会话页的网格预算、
+// 终端页的首次测量）；woff2 本体仍只在终端首次渲染时按需下载
+import './styles/terminal-font.css'
 import 'vue-sonner/style.css'
 
 const app = createApp(App)

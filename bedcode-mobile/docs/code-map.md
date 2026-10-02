@@ -237,8 +237,8 @@ bedcode-mobile/                       # 移动端项目 (Tauri 2.0 + Vue 3)
 - **composables/terminal/**（TerminalView 拆分产物，范式参考桌面端 `composables/terminal/`，
   共享实例与回调经 `terminalKernel` 上下文交换）。按**大颗粒主题**分组（2026-09-18 二次拆分）：
   - **useTerminalDisplay**（终端显示）：xterm 实例装配与销毁（构造选项/addon/ResizeObserver/
-    首帧 fit 收敛/DPR 监听）、主题解析与网格重排、清屏 / 手动刷新 / 合成层强制重绘、
-    选择操作栏定位
+    首帧 fit 收敛/DPR 监听）、内置 CJK 等宽字体就绪等待、主题解析与网格重排、
+    清屏 / 手动刷新 / 合成层强制重绘、选择操作栏定位
   - **useTerminalInput**（终端输入）：输入栏回传（文本 / 执行 / 特殊键）、预设任务发送与执行、
     命令面板预设识别（config_id 反查）、侧栏「插入引用」填充
   - **useTerminalPanels**（功能栏）：标题栏 / 侧边栏 / 弹窗开关状态、工具栏动作分发、新手引导
@@ -246,7 +246,8 @@ bedcode-mobile/                       # 移动端项目 (Tauri 2.0 + Vue 3)
     context-loss 恢复、字符图集预热（仅 WebGL 生效）、DPR 变化监听
   - **useTerminalResize**：PTY 尺寸串行队列 + 服务端正统渲染端裁决（覆盖确认弹窗）
   - **useTerminalKeyboardAvoidance**：visualViewport + 插件 safeAreaChanged 双通道键盘检测、
-    根容器高度收缩避让、页面 pan 守卫
+    **lift 语义避让**（`.movable-area` 整体 `translateY(-键盘高)`，网格尺寸不变、零重排；
+    旧的「根容器高度收缩 = resize 语义」已注释保留在文件末）、页面 pan 守卫
   - **useTerminalSubscription**：订阅失败重试 + 历史渲染就绪门控（加载遮罩放行三信号）
 - **terminalBuffer store + useTerminalBuffer**：Rust 命令驱动（订阅/输入/ack），帧消费 =
   页面 Channel **裸字节**按序渲染 + 本地计数（lastRenderedOffset，仅 ack 水位）；
@@ -255,6 +256,11 @@ bedcode-mobile/                       # 移动端项目 (Tauri 2.0 + Vue 3)
   （无独立 history 阶段）
 - **useTerminalScroll**：触摸滚动（含惯性）、自定义滚动条、长按选择模式
 - **utils/terminal***：resize 触发策略（`resolveGridResize` 列漂移钳制）、分层防抖、网格测量、滚动历史行数
+- **终端字体（`src/styles/terminal-font.css` + `src/assets/fonts/`）**：随包内置 **Sarasa Mono SC 子集**
+  （更纱黑体，OFL-1.1；拉丁 0.5em / CJK 1em=2 格 / 制表符 0.5em），根治「系统等宽给拉丁 advance +
+  比例 CJK 回退 1em」造成的行尾凹凸与 TUI 背景盒出界；子集生成器 `scripts/build-terminal-font.mjs`
+  （10635 码位 / 1.05MB woff2，许可证随字体入库）。就绪时序由 `terminalMetrics.ensureTerminalFontLoaded()`
+  把关（首次测量前 await，3s 超时回退 fallback）——字体栈 `FONT_FAMILY` 是唯一真源
 - **useMobileConnection / useMobileCommands / useHttpApi**：连接初始化与事件同步、Tauri 命令封装（含
   `terminal_*`）、HTTP API（文件树、会话模式、任务队列）
 

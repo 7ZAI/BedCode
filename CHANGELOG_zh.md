@@ -90,6 +90,49 @@
   `mdns_sd::ServiceDaemon`（join 其收包线程），且 actix runtime 跑在**非 daemon** OS 线程上
   不退。现收尾经 `catch_unwind` + resume，失败断言实测 1.0s
 
+#### 移动端终端键盘避让由「resize」改为「上移」+ 随包内置中文严格等宽字体（仅移动端前端；无协议/无 ABI/无版本号变动）
+
+- **做了什么（键盘避让）**：原实现是 resize 语义——`terminal-view` 根容器
+  `height = calc(100vh - 键盘高)` 收缩 → `ResizeObserver` 重新 fit → **行数实时重算
+  并重发一次 PTY resize**。现改为与快捷键面板弹出完全同法的 **lift（整体上移）**：
+  `.movable-area`（终端显示区 + 输入栏）`translateY(-keyboardOffset)`，顶部被
+  `.movable-clip`（`overflow:hidden`）裁在 Header 之下。终端网格 cols/rows/PTY 尺寸
+  全部不变 ⇒ 键盘弹收**零重排**、TUI 不整屏重画、缓冲区不回流。旧实现按需求**注释
+  保留**在 `useTerminalKeyboardAvoidance.ts` 文件末（含三步恢复说明），并新增一条
+  断言 `terminalViewStyle` 不含 `height` 的单测作防回接锁
+- **已知代价（如实记录，不是 bug）**：键盘多高就裁掉多少顶部行；横屏 + 键盘时可见
+  行数会明显变少。lift 成立的前提是「布局视口不被键盘压缩」
+  （`AndroidManifest` `windowSoftInputMode=adjustNothing`）——该前提与失效现象已写进
+  域文件头，换设备/WebView 时先查它而不是加补偿
+- **合成层收尾**：快捷键面板与键盘两处 translate 还原后都会残留旧帧分块（真机实测
+  米白横带/右侧竖带），原先只对面板做的「动画结束后全量 refresh + 强制重合成」
+  定时器改为同时监听两个位移源
+- **做了什么（字体）**：终端随包内置 **Sarasa Mono SC 子集**（更纱黑体，OFL-1.1）——
+  拉丁 0.5em / CJK 1em（= 2 格）/ 制表符 0.5em。选它的唯一理由是**根治行尾「凹凸」与
+  TUI 背景盒出界**：系统等宽字体给拉丁 advance（~0.6em）、中文字形落到 1em 的比例
+  CJK 字体，`1em ≠ 2×0.6em`，亚像素误差逐字累积（`terminal.css`「行尾软裁切」注释里
+  记的正是这条）。Android/国产 ROM 都不预装 CJK **等宽**字体（Noto Sans Mono CJK
+  缺失），所以只能随包带
+- **不随包带完整字体**：完整 `SarasaMonoSC-Regular.ttf` 14MB 对 APK 不可接受。新增
+  `scripts/build-terminal-font.mjs`（+ devDep `subset-font`）按终端真实字符集做子集：
+  GB2312 全集 6763 汉字 + 制表符 + 块元素 + 标点 + 数学/箭头/技术符号 + 假名 +
+  全半角 = 10635 码位，产物 **1.05MB woff2**。子集外的汉字（繁体、生僻字）落回系统
+  CJK 字体，其 advance 恒为 1em = 2×0.5em，**仍然满足「CJK = 2 格」**，不会把漂移带回来
+- **字体就绪时序（不做就会错）**：格宽从 fallback 的 ~0.6em 变成内置的 0.5em，
+  同一屏先后按两套度量算列行数 = 行尾错位 + fit 横跳。新增 `ensureTerminalFontLoaded()`
+  （3s 超时、失败按 fallback 继续并 `logger.warn`），在 `initTerminal` 首次测量前与
+  会话页「按设备预算起步网格」前各 await 一次；`@font-face` 声明全局引入
+  （`styles/terminal-font.css`）而 woff2 本体仍按需下载，**不拖慢启动**
+- **合规**：许可证全文随字体入库（`src/assets/fonts/LICENSE-Sarasa-Gothic.txt`，OFL
+  第 2 条），子集保留 name 表全部条目（机器可读元数据带版权声明）；主字体名不含其
+  CJK 部分声明的保留名 `'Source'`（OFL 第 3 条）
+- **验证**：新增 15 项单测（双通道检测 + 10px 阈值 + lift 样式 + 防 resize 回接锁 +
+  收起回调 + dispose 解绑），4 个人工变异探针（`>`→`>=`、阈值门槛、通道优先级、
+  基准冻结）逐一被对应用例打红；移动端 `vitest` **53 文件 / 524 用例全绿**、
+  `vue-tsc --noEmit` 通过、根 `eslint .` **0 error**、`vite build` 产物含带 hash 的
+  woff2 且 CSS 引用正确。**未做真机核验**（键盘弹收观感、TUI 边框跨行、满行中文
+  行尾）——需在 Android 真机跑 `pnpm run tauri:android:dev` 确认
+
 #### 跨端真实互连集成测试（新增 `cross-end-tests` 工程 + 两端 lib 改名；无生产逻辑、无 ABI、无版本号变动）
 
 - **做了什么**：新增仓库根 Rust 包 `cross-end-tests/`，在同一测试进程内让

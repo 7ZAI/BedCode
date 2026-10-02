@@ -30,7 +30,7 @@ import { useInputAssistantStore } from '@/stores/inputAssistant'
 import { useTerminalBufferStore } from '@/stores/terminalBuffer'
 import { isMockSession } from '@/composables/useMockTerminal'
 import { resolveTerminalTheme } from '@/config/terminalThemes'
-import { FONT_FAMILY, TERMINAL_LINE_HEIGHT, TERMINAL_SCROLLBAR_GUTTER_PX } from '@/utils/terminalMetrics'
+import { FONT_FAMILY, TERMINAL_LINE_HEIGHT, TERMINAL_SCROLLBAR_GUTTER_PX, ensureTerminalFontLoaded } from '@/utils/terminalMetrics'
 import { TerminalResizeDebouncer } from '@/utils/terminalResizeDebouncer'
 import { TERMINAL_SCROLLBACK } from '@/utils/terminalScrollback'
 import type { TerminalKernelContext } from './terminalKernel'
@@ -162,6 +162,11 @@ export function useTerminalDisplay(ctx: TerminalKernelContext, deps: TerminalDis
   async function initTerminal() {
     const container = ctx.xtermContainerRef.value
     if (!container) return
+
+    // 内置 CJK 等宽字体就绪后再测量：格宽从 fallback 的 ~0.6em 变为内置的 0.5em，
+    // 不等就位会让「创建期预估网格 / xterm 内部 charMeasure / fit 收敛」分三套
+    // 度量算列行数（行尾错位、满行被裁、fit 横跳）。就绪失败不阻断（按 fallback 继续）
+    await ensureTerminalFontLoaded(terminalSettings.value.fontSize ?? 14)
 
     // 创建前预测量：直接以适配屏幕的行列值构造，不再经过默认 80x24 阶段
     const initial = deps.renderer.computeInitialSize(terminalSettings.value.fontSize ?? 14)

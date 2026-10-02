@@ -25,9 +25,10 @@
 
     <!-- 裁剪容器：限制上移区域不突破 Header 底部 -->
     <div class="movable-clip">
-      <!-- 可移动区域：终端内容 + 输入栏，随根容器高度收缩（键盘避让由
-           terminal-view bottom 收缩承担，见 terminalViewStyle） -->
-      <div class="movable-area">
+      <!-- 可移动区域：终端内容 + 输入栏，随键盘弹出整体上移（lift 语义避让，
+           位移量 = 实测键盘高度，见 keyboard.movableAreaStyle）——终端网格尺寸
+           不变，键盘弹/收不触发重排、fit 与 PTY resize -->
+      <div class="movable-area" :style="movableAreaStyle">
         <!-- Main Content: Terminal + Sidebar overlay -->
         <div class="main-content">
           <div class="terminal-output-area">
@@ -204,10 +205,12 @@
  *   输入统一由底部 TerminalInputBar 承担（命令/特殊键/快捷键面板）
  * - 触摸滚动接管：自定义触摸滚动 + 惯性 + 长按选择复制（useTerminalScroll）
  * - 键盘避让：visualViewport 优先 + 插件 safeAreaChanged 兜底双通道检测，
- *   terminal-view 根容器高度收缩压缩终端显示区高度（resize 语义，配合
- *   AndroidManifest adjustNothing）——行数实时重算并同步 PTY，TUI 完整
- *   重排可见；布局视口与可视区等高，无聚焦呈现视口 pan 空间
+ *   终端区 + 输入栏整体 translateY 上移一个键盘高度（lift 语义，与快捷键
+ *   面板避让同法）——行列数/PTY 尺寸不变，键盘弹收零重排（配合
+ *   AndroidManifest adjustNothing）
  * - Unicode11 addon：TUI 应用 box-drawing 字符列宽计算正确性
+ * - 内置 CJK 严格等宽字体（styles/terminal-font.css）：CJK 2 格/行尾对齐，
+ *   首次测量前等字体就绪（ensureTerminalFontLoaded）
  */
 defineOptions({ name: 'TerminalView' })
 
@@ -445,7 +448,7 @@ const {
 } = useTerminalPanels({ refreshTerminal })
 
 // 键盘避让域（移动端特有）：visualViewport 优先 + 插件 safeAreaChanged 兜底双通道
-// 检测，terminal-view 根容器高度收缩承担避让（行数实时重算并同步 PTY）。
+// 检测，movable-area 整体 translateY 上移（lift 语义，网格尺寸不变、零重排）。
 // onKeyboardHide 在键盘收起（偏移从可见归零）瞬间回调：先退出输入编辑态
 // （光标消失、输入框收缩回单行、命令补全弹层关闭），再滚回最新行（键盘弹出期间
 // 用户可能已上翻历史）。回调体内引用的 inputBarRef / scrollToBottomManual 由
@@ -461,14 +464,7 @@ const keyboard = useTerminalKeyboardAvoidance({
     scrollToBottomManual()
   },
 })
-const { terminalViewStyle } = keyboard
-
-// 可移动区域：终端内容 + 输入栏。键盘避让由 terminal-view 根容器高度收缩
-// 承担（见上方 terminalViewStyle 注释）：终端区（flex:1）与输入栏随根容器
-// 等比压缩/还原，ResizeObserver 触发重新 fit → 行数实时变化并同步 PTY。
-// 此处的 movable-area 不再做任何避让变换/内边距——历史上先后用过
-// translateY 整体平移与 padding-bottom 挤压，前者行数不变顶部被裁、后者
-// 会与 WebView 聚焦呈现的视口 pan 叠加（双重补偿），均已废弃
+const { terminalViewStyle, movableAreaStyle } = keyboard
 
 // ==================== 模板事件接线（薄封装：跨两个域的一步操作） ====================
 
@@ -527,14 +523,15 @@ watch(
   { immediate: true, deep: true },
 )
 
-// 快捷键面板收起后强制重绘：xterm 容器经 translateY(-h) 上移后还原时，真机
-// WebView 合成层会残留旧帧分块（错位/露出主题背景色，实测表现为终端区出现
-// 米白横带与右侧竖带、底部“间隔”）。过渡动画（250ms）结束后强制 xterm 重绘
+// 快捷键面板收起 / 键盘避让还原后强制重绘：两处都用 translate 上移 xterm 画布
+// （面板在 .xterm-container，键盘在 .movable-area），真机 WebView 合成层在 transform
+// 还原后会残留旧帧分块（错位/露出主题背景色，实测表现为终端区出现米白横带与右侧
+// 竖带、底部“间隔”）。动画（面板 250ms / 键盘跟手）结束后强制 xterm 重绘
 // 全部行 + 合成器重合成，清除残留（与入场渲染收尾同模式）
 let panelRepaintTimer: ReturnType<typeof setTimeout> | null = null
-watch(shortcutsPanelHeight, (height) => {
-  // 仅面板收起（还原 transform）时需要清理；展开时上移由合成器处理
-  if (height > 0) return
+watch([shortcutsPanelHeight, keyboard.keyboardOffset], ([panelHeight, kbOffset]) => {
+  // 仅上移量全部归零时需要清理；上移中由合成器处理
+  if (panelHeight > 0 || kbOffset > 0) return
   if (panelRepaintTimer) clearTimeout(panelRepaintTimer)
   panelRepaintTimer = setTimeout(() => {
     panelRepaintTimer = null

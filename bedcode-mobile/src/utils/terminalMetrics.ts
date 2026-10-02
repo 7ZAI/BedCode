@@ -9,6 +9,7 @@
  * 网格计算对齐 FitAddon 公式，并额外扣除行列余量：列尾留两格（滚动条
  * 预留宽之外再留两格，行尾字符远离边缘）、行尾留一格（底部留白呼吸空间）。
  */
+import { logger } from '@/utils/frontendLogger'
 
 /**
  * 自绘滚动条预留宽度（CSS px，唯一真源）：
@@ -57,13 +58,68 @@ export interface CellSize {
 }
 
 /**
+ * 随包内置的 CJK 严格等宽字体族名（@font-face 声明见 styles/terminal-font.css）：
+ * 拉丁 0.5em / CJK 1em（= 2 格）/ 制表符 0.5em —— 终端行尾对齐的硬需求，
+ * 系统等宽字体 + 比例 CJK 回退会让 CJK advance ≠ 2×格宽，误差逐字累积成
+ * 行尾「凹凸」与 TUI 背景盒出界（见 styles/terminal.css「行尾软裁切」注释）。
+ */
+export const TERMINAL_CJK_FONT_FAMILY = 'Sarasa Mono SC'
+
+/**
  * 移动端终端字体栈（唯一真源，TerminalView 与启动尺寸预估共用）：
- * monospace 优先（Android 无 Cascadia/Consolas/Monaco，直接回退系统等宽，
- * 避免「测量时字体缓存未就绪 → fallback 不同 → 网格与渲染宽度不一致」导致
- * 行尾字符溢出/裁半）；Windows 桌面调试时回退链覆盖等宽字体
+ * 内置 CJK 等宽优先，monospace 次之（Android 无 Cascadia/Consolas/Monaco，
+ * 直接回退系统等宽，避免「测量时字体缓存未就绪 → fallback 不同 → 网格与渲染
+ * 宽度不一致」导致行尾字符溢出/裁半）；Windows 桌面调试时回退链覆盖等宽字体。
+ *
+ * 内置字体必须与 @font-face 声明同序：xterm 的字符测量元素与本文件的
+ * measureCellSize 用同一串字体，两者不一致会让「测量格宽 ≠ 渲染格宽」。
  */
 export const FONT_FAMILY =
-  'monospace, "Cascadia Mono", Consolas, Monaco, "Courier New", "Roboto Mono", "Droid Sans Mono"'
+  `"${TERMINAL_CJK_FONT_FAMILY}", monospace, "Cascadia Mono", Consolas, Monaco, "Courier New", "Roboto Mono", "Droid Sans Mono"`
+
+/** 内置字体就绪等待上限（ms）：解码异常/设备异常时不能让终端永远等下去 */
+const FONT_LOAD_TIMEOUT_MS = 3000
+
+/**
+ * 等待内置 CJK 等宽字体就绪（返回是否真的用上了内置字体）。
+ *
+ * 为什么必须等：字体未就绪时 measureCellSize / xterm 内部 charMeasure 量到的是
+ * fallback 的格宽（0.6em 级），字体到位后变成内置的 0.5em —— 同一屏先后按两套
+ * 度量算列数/行数，表现为行尾错位、满行被裁、fit 反复横跳。等到位再首次测量，
+ * 「测量口径 = 渲染口径」才成立。
+ *
+ * 失败不阻断终端：超时/不支持 document.fonts 时返回 false，按 fallback 栈继续
+ * （与引入内置字体前的行为一致）。
+ */
+export async function ensureTerminalFontLoaded(fontSize: number): Promise<boolean> {
+  if (typeof document === 'undefined' || !document.fonts) return false
+  // 测量元素用 32 个 W（与本文件 measureCellSize / xterm 内部同法），按此提示
+  // 浏览器需要哪些字形；两串字体都 load：内置族名 + 完整栈
+  const probe = 'W'.repeat(32)
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`timeout after ${FONT_LOAD_TIMEOUT_MS}ms`)), FONT_LOAD_TIMEOUT_MS)
+  })
+  try {
+    await Promise.race([
+      Promise.all([
+        document.fonts.load(`${fontSize}px "${TERMINAL_CJK_FONT_FAMILY}"`, probe),
+        document.fonts.load(`${fontSize}px ${FONT_FAMILY}`, probe),
+      ]),
+      timeout,
+    ])
+    return document.fonts.check(`${fontSize}px "${TERMINAL_CJK_FONT_FAMILY}"`)
+  } catch (e) {
+    // 走 fallback 栈：功能不缺失（只是 CJK 对齐回退到系统字体），记 warn 不静默
+    logger.warn(
+      `[terminalMetrics] 内置终端字体未就绪，按 fallback 栈渲染: ${e instanceof Error ? e.message : String(e)}`,
+    )
+    return false
+  } finally {
+    // 字体先到时也要清掉超时定时器（Promise.race 的落败方不会自动清理）
+    if (timer) clearTimeout(timer)
+  }
+}
 
 /**
  * 测量字体网格：32 个 'W' 的隐藏行内元素（与 xterm _measureElement 同法）。

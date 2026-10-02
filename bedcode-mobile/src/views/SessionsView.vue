@@ -205,7 +205,7 @@ import { useTerminalBuffer } from '@/composables/useTerminalBuffer'
 import { httpStopSession, httpRemoveSession } from '@/composables/useHttpApi'
 import { useToast } from '@/composables/useToast'
 import { useMockTerminal, MOCK_SESSION_ID } from '@/composables/useMockTerminal'
-import { computeDeviceDefaultGridSize } from '@/utils/terminalMetrics'
+import { computeDeviceDefaultGridSize, ensureTerminalFontLoaded } from '@/utils/terminalMetrics'
 import { useInputAssistantStore } from '@/stores/inputAssistant'
 import SessionCard from '@/components/SessionCard.vue'
 import SessionConfigCard, { type SessionConfigSummary } from '@/components/SessionConfigCard.vue'
@@ -366,6 +366,9 @@ async function handleStartSession(config: SessionConfigSummary) {
 
   startingConfigId.value = config.id
   try {
+    // 网格预算前等内置 CJK 等宽字体就绪：格宽按 fallback 量（~0.6em）与按内置量
+    // （0.5em）差约 20% 列，起步尺寸会明显偏小（挂载后 fit 会校准，但首帧已经错）
+    await ensureTerminalFontLoaded(assistStore.settings.terminalFontSize)
     const size = computeDeviceDefaultGridSize(assistStore.settings.terminalFontSize)
     const result = await connection.startSession(config.id, size)
     if (result.sessionId) {

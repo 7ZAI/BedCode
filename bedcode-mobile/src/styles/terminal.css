@@ -17,13 +17,15 @@
   bottom: 0;
   z-index: 1;
   overflow: hidden;
-  /* 只负责顶部安全区域，键盘避让由 movable-area 的 transform 处理 */
-  transition: padding-top 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  /* 只负责顶部安全区域（键盘避让由 movable-area 的 transform 抬升） */
+  transition: padding-top 0.25s cubic-bezier(0.4, 0, 0, 0.2, 1);
 }
 
 /* 可移动区域的裁剪容器
- * 限制 movable-area 不突破 Header 底部边界（键盘避让由 terminal-view
- * 根容器高度收缩承担，快捷键面板展开时内容仍收敛在终端页内） */
+ * 双重职责：① 限制 movable-area 不突破 Header 底部边界（快捷键面板展开时内容
+ * 仍收敛在终端页内）；② 键盘避让时裁掉上移出去的顶部若干行（lift 语义）。
+ * 裁切点是「Header 下沿」这一固定常量：平移距离随键盘高度变化，但可见上界恒定，
+ * 因此不会像逐行 clip-path 那样出现随内容摆动的色块 */
 .movable-clip {
   flex: 1;
   min-height: 0;
@@ -33,10 +35,13 @@
 }
 
 /* 可移动区域：终端内容 + 输入栏
- * 高度 100% 跟随 terminal-view——键盘避让时根容器 bottom 收缩，本区域
- * 连同终端区（flex:1）与输入栏等比压缩，输入条贴合键盘顶缘
- * （不在本层做避让：translateY 平移会使行数不变顶部被裁；padding 挤压
- * 会与 WebView 聚焦呈现的视口 pan 叠加产生空白，均已废弃） */
+ * 键盘避让（lift 语义，位移量 = 实测键盘高度，由 TerminalView 内联
+ * transform 提供）把整块内容上移，使输入栏底边落在键盘上沿。
+ * 终端网格尺寸（cols/rows）不变：键盘弹/收不触发 ResizeObserver 重新 fit，
+ * 不改 PTY 尺寸，TUI 无整屏重排。代价是上移量对应高度的顶部行被上方
+ * .movable-clip 裁在 Header 之下（横屏 + 键盘时可见行数会明显变少）。
+ * 不在此层做高度/内边距避让：历史上的高度收缩会与 WebView 聚焦呈现的视口 pan
+ * 叠加产生空白（旧实现已注释保留在 useTerminalKeyboardAvoidance.ts 文件末） */
 .movable-area {
   display: flex;
   flex-direction: column;
@@ -407,14 +412,21 @@
 }
 
 /* 行尾软裁切（DOM 渲染器 CJK advance 累计漂移的静态止血；2026-09-15 重做，
- * 取代已停用的 terminalRowClip JS 补丁；2026-09-27 裁切点上移到 .xterm-screen）：
+ * 取代已停用的 terminalRowClip JS 补丁；2026-09-27 裁切点上移到 .xterm-screen；
+ * 2026-10-01 漂移源头已修，见下）：
  *
  * 问题（真机 CDP 实测）：xterm 内联给每行注入 width=网格宽 + overflow:hidden
- * （行级硬裁），而行内 span 依浏览器真实 advance 流式排布——CJK 回退字体
- * advance ≠ 精确 2× 格宽，亚像素误差逐字符累积，于是：
+ * （行级硬裁），而行内 span 依浏览器真实 advance 流式排布——CJK 字体 advance
+ * ≠ 精确 2× 格宽时，亚像素误差逐字符累积，于是：
  *   (a) 满行末字墨迹溢出网格右界「数 px」→ 被硬裁右半（pi 等中文满行输出必现）
  *   (b) TUI（opencode）用「背景色 + 空格」填充面板时，背景盒被推出网格右界
  *       7~22px → 行尾余量区出现随内容重绘左右摆动的色块（右侧视觉抖动来源）
+ *
+ * ★ 2026-10-01 起 (a)(b) 的根因已根治：随包内置 CJK 严格等宽字体
+ *   （styles/terminal-font.css：拉丁 0.5em / CJK 1em = 2 格 / 制表符 0.5em），
+ *   CJK advance 恰为 2×格宽，累计漂移归零。残留触发面只有「子集外汉字落回
+ *   系统 CJK 字体」（其 advance 恒为 1em = 2×0.5em，仍对齐）与 hinting 舍入，
+ *   量级为亚像素 → 本裁切规则退居静态安全网，继续保留（零逐帧写入、无抖动）。
  *
  * 方案：保留行级 overflow:visible 解除行级硬裁（(a) 得以落墨进行尾余量区），
  * 裁切本身放在 **.xterm-screen 一层**（见其规则内的 clip-path）统一右扩 6px
