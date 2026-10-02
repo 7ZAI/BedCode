@@ -80,6 +80,48 @@ where
         let skip_filtering = req.path().starts_with("/ws") || req.method() == actix_web::http::Method::HEAD;
 
         let chain = TrafficFilterChain::global();
+
+        // 链路加密协商头（issue 02）：原样透传给过滤器，解析归 link_crypto。
+        // 提到快速路径之前——下面那条 fail-visible 裁决要先看它。
+        let negotiation = req
+            .headers()
+            .get(bedcode_server_core::link_crypto::NEGOTIATION_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+
+        // ==================== fail-visible：协商头在，本端却不参与 ====================
+        // 背景：spec §6 决策模型第 3 条「响应绑定」要求——请求一旦带协商头，对端就必须
+        // 按信号参与（解密 + 用 k_resp 回加密），不取决于本端子开关当前值；而同一份
+        // spec 的实现语义段又写「主开关关闭 ⇒ 过滤器不注册」，§7 兼容矩阵更把
+        // 「任一侧默认关」直接等同于明文。三处互相矛盾，实现落在「不注册」这一支。
+        //
+        // 后果（跨端实测）：移动端开启加密、桌面端未开启时，过滤器不在链上 ⇒ 协商头
+        // **根本没人读** ⇒ 密文原样透给插件 ⇒ 插件把密文当 JSON 解析，回出
+        // `{"code":1002,"message":"configId required"}` 之类**误导性业务码**。
+        //
+        // 本分支按「静默错误必须显性化」（AGENTS §8）处理：显性 4xx + 点名开关，
+        // 而不是继续往下游丢密文。GET 同样拒——否则「GET 静默明文通、POST 神秘报
+        // 业务错」的不一致更难排查。
+        //
+        // 成本：未参与时每个非 HEAD/WS 请求多一次 header 查找（表已解析完的一次
+        // 哈希查）。换来的是不再出现「200 + 误导性业务码」。
+        if !skip_filtering && !negotiation.is_empty() && !chain.contains(bedcode_server_core::link_crypto::FILTER_NAME)
+        {
+            let message = "encrypted request rejected: link-crypto capability is not active on this \
+server (trafficEncryption disabled, filter not registered). Enable 链路加密 on the desktop, \
+or turn off encryption on the mobile client."
+                .to_string();
+            return Box::pin(async move {
+                tracing::warn!(
+                    path = %req.path(),
+                    method = %req.method(),
+                    "HTTP inbound rejected: encryption negotiated but server not participating"
+                );
+                Ok(reject_encrypted_request(req, message))
+            });
+        }
+
         if skip_filtering || chain.is_empty() {
             let fut = self.service.call(req);
             return Box::pin(async move { Ok(fut.await?.map_into_boxed_body()) });
@@ -90,13 +132,6 @@ where
             .map(|a| a.to_string())
             .unwrap_or_else(|| "unknown".to_string());
         let path = req.path().to_string();
-        // 链路加密协商头（issue 02）：原样透传给过滤器，解析归 link_crypto
-        let negotiation = req
-            .headers()
-            .get(bedcode_server_core::link_crypto::NEGOTIATION_HEADER)
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("")
-            .to_string();
         let service = self.service.clone();
 
         // 链路追踪（05 调用链）：请求级 span 在同步上下文创建，`instrument` 包裹异步体
@@ -122,6 +157,19 @@ where
 /// 单一出口统一记录请求完成事件（01 全路径日志）：请求结束按结果记
 /// `status` + `duration_ms` 结构化字段，级别按结果语义（成功 debug 不刷 info /
 /// 4xx warn / 5xx+异常 error）；`request_id`/`method`/`path` 由外层 span 字段继承。
+///
+/// 协商头在、本端却不参与时的显性拒绝（不进下游、不碰 body）
+///
+/// 与 `run_traffic_filter` 内部的过滤器 Reject 分支**同一个错误信封**（400 +
+/// `CODE_INVALID_REQUEST`），使客户端侧两种「拒绝」形状一致、便于按 code 归类。
+/// 消息**点名开关与两端各自的修法**（`trafficEncryption`），否则用户只会看到
+/// 一句无处置建议的 400。
+fn reject_encrypted_request(req: ServiceRequest, message: String) -> ServiceResponse {
+    let (http_req, _payload) = req.into_parts();
+    let response = HttpResponse::BadRequest().json(ApiResponse::<()>::error(CODE_INVALID_REQUEST, &message));
+    ServiceResponse::new(http_req, response)
+}
+
 async fn run_traffic_filter<S, B>(
     req: ServiceRequest,
     service: Rc<S>,
@@ -307,6 +355,119 @@ mod tests {
         fn on_inbound(&self, _ctx: &mut FilterContext<'_>) -> Verdict {
             Verdict::Reject("blocked by test".to_string())
         }
+    }
+
+    /// 同名 `link-crypto` 的空转过滤器（只验「在链上时不得被协商裁决拒」）
+    struct LinkCryptoNamedNoop;
+
+    impl TrafficFilter for LinkCryptoNamedNoop {
+        fn name(&self) -> &str {
+            bedcode_server_core::link_crypto::FILTER_NAME
+        }
+        fn on_inbound(&self, _ctx: &mut FilterContext<'_>) -> Verdict {
+            Verdict::Continue
+        }
+        fn on_outbound(&self, _ctx: &mut FilterContext<'_>) -> Verdict {
+            Verdict::Continue
+        }
+    }
+
+    /// 协商头在、本端不参与 → 显性 4xx（fail-visible 裁决）
+    ///
+    /// 背景：spec §6 决策模型第 3 条「响应绑定」要求「请求一旦带协商头，对端就按信号
+    /// 参与，不取决于本端子开关当前值」；同一份 spec 的实现语义段又写「主开关关闭 ⇒
+    /// 过滤器不注册」，§7 兼容矩阵更把「任一侧默认关」等同于明文——三处互相矛盾。
+    /// 实现落在「不注册」这一支，后果是密文原样透给插件，插件把密文当 JSON 解析，
+    /// 回出 `1002 configId required` 这类**误导性业务码**（跨端实测）。本分支按
+    /// AGENTS §8「静默错误必须显性化」收口。
+    #[actix_web::test]
+    async fn negotiated_request_is_rejected_when_link_crypto_not_registered() {
+        let _guard = GLOBAL_CHAIN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let chain = TrafficFilterChain::global();
+        chain.clear();
+        // 链上有**别的**过滤器也不算数——判据是按名找 link-crypto 是否在链上
+        chain.register(std::sync::Arc::new(RejectAllFilter));
+
+        let app = test::init_service(
+            App::new()
+                .wrap(TrafficFilter)
+                .route("/echo", web::post().to(echo_handler)),
+        )
+        .await;
+        let req = test::TestRequest::post()
+            .uri("/echo")
+            .insert_header((
+                bedcode_server_core::link_crypto::NEGOTIATION_HEADER,
+                "v1 AAAAC3NzaC1lZDI1NTE5AAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            ))
+            .set_payload("hello")
+            .to_request();
+        let res = test::call_service(&app, req).await;
+
+        assert_eq!(res.status(), actix_web::http::StatusCode::BAD_REQUEST);
+        let body = test::read_body(res).await;
+        let text = String::from_utf8_lossy(&body);
+        // 消息必须点名开关，否则用户只看到一句无处置建议的 400
+        assert!(
+            text.contains("trafficEncryption"),
+            "拒绝消息应点名开关 trafficEncryption: {text}"
+        );
+        assert!(
+            !text.contains("blocked by test"),
+            "本端不参与时的拒绝必须来自协商裁决，不得落到链上其他过滤器: {text}"
+        );
+        chain.clear();
+    }
+
+    /// 对照：链上**有** link-crypto 时，带协商头的请求不得被这条裁决拒
+    /// （否则能力开启反被自己的守卫挡住）
+    #[actix_web::test]
+    async fn negotiated_request_passes_when_link_crypto_registered() {
+        let _guard = GLOBAL_CHAIN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let chain = TrafficFilterChain::global();
+        chain.clear();
+        chain.register(std::sync::Arc::new(LinkCryptoNamedNoop));
+
+        let app = test::init_service(
+            App::new()
+                .wrap(TrafficFilter)
+                .route("/echo", web::post().to(echo_handler)),
+        )
+        .await;
+        let req = test::TestRequest::post()
+            .uri("/echo")
+            .insert_header((bedcode_server_core::link_crypto::NEGOTIATION_HEADER, "v1 AAAA"))
+            .set_payload("hello")
+            .to_request();
+        let res = test::call_service(&app, req).await;
+        assert!(
+            res.status().is_success(),
+            "link-crypto 在链上时不得被协商裁决拒: status={}",
+            res.status()
+        );
+        chain.clear();
+    }
+
+    /// 默认态回归：桌面端不开加密（过滤器不在链）时，**无协商头的明文请求照常通过**
+    /// ——opt-in 基线，本次 fail-visible 不得改变它
+    #[actix_web::test]
+    async fn plain_request_passes_when_link_crypto_not_registered() {
+        let _guard = GLOBAL_CHAIN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        TrafficFilterChain::global().clear();
+
+        let app = test::init_service(
+            App::new()
+                .wrap(TrafficFilter)
+                .route("/echo", web::post().to(echo_handler)),
+        )
+        .await;
+        let req = test::TestRequest::post().uri("/echo").set_payload("hello").to_request();
+        let res = test::call_service(&app, req).await;
+        assert!(
+            res.status().is_success(),
+            "默认态（不加密）明文请求必须照常通过，不得被协商裁决误伤: status={}",
+            res.status()
+        );
     }
 
     /// 拒绝型过滤器：出站一律拒绝（模拟加密链路裁决失败）

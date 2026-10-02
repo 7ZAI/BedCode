@@ -249,6 +249,21 @@ impl TrafficFilterChain {
         }
     }
 
+    /// 某名称的过滤器是否在链上（接线点按名判定「本端是否参与」；无分配）
+    ///
+    /// 供 HTTP 接线点做 fail-visible 裁决：请求带加密协商头、而本端对应能力
+    /// **未参与**（`trafficEncryption.enabled=false` ⇒ 过滤器未注册）时必须显性
+    /// 拒绝，而不是把密文原样透给下游业务解析（那会回出误导性业务码）。
+    pub fn contains(&self, name: &str) -> bool {
+        match self.inner.filters.read() {
+            Ok(guard) => guard.iter().any(|f| f.name() == name),
+            // 锁中毒退化为「不在链上」：调用方据此走**显性拒绝**（fail-closed）。
+            // 与上面 `is_empty` 的中毒退化方向相反且刻意如此：那条放行的是**明文**
+            // （可解读），这条要放行的是**无法解读的密文**。
+            Err(_) => false,
+        }
+    }
+
     /// 入站执行：按注册顺序依次调用 `on_inbound`
     ///
     /// 返回 Err 表示被某过滤器拒绝（短路，后续过滤器不再执行）
