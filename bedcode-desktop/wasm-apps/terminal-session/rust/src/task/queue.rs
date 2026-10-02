@@ -3,17 +3,24 @@
 //! 每个会话维护独立的待执行任务队列，支持添加、删除、查询、清空操作。
 //!
 //! 调度状态机（ADR-0004）：
-
+//!
 //! ```text
-//! pending ──(会话已有上下文，需先 clear，延迟 2s 发送)──▶ waiting ──(SessionStart idle 到达)──▶ executing ──▶ done
-//! pending ──(全新会话，跳过 clear，直接下发)────────────────▶ executing ──▶ done
-//! waiting ──(超时 60s，重试一次 clear 后仍无响应)──▶ cancelled
+//! pending ──(全新会话，直接下发)───────────────────────────────────▶ executing ──▶ done
+//! pending ──(会话已有上下文：关闭旧会话 + 同配置新建，等新会话就绪)──▶ waiting ──(新会话 idle 到达 / 宽限耗尽)──▶ executing ──▶ done
 //! ```
 //!
-//! - waiting：clear 已计划（延迟 CLEAR_DELAY_SECONDS 由 scheduler-tick 发送，见
-//!   send_due_clears）或已发送，等待 Claude Code 重建会话后的 idle 推送（见 state.rs idle 分支）
+//! - waiting：轮换会话（[`rotate_session_for_next_task`]）后等待新会话就绪——
+//!   有 idle 信号的 agent（claude / pi / codex 的 SessionStart）由 state.rs idle
+//!   分支触发 on_session_idle 下发；**无 idle 信号或 hook 静默**时由
+//!   check_waiting_timeouts 宽限超时后直接下发（不取消任务）。主动取消仍走
+//!   cancel_task（用户操作）。
+//! - **任务间上下文隔离不再经终端清理命令**（/clear、/new 等）：上一任务终态后
+//!   关闭旧会话、以同一配置创建新会话，每个任务在全新上下文中执行（效果与旧
+//!   「clear 重建上下文」等价，但不再向终端发送任何命令字）；**opencode 同样
+//!   轮换**（其无 /clear 语义，首个 prompt 提交才创建 agent 会话——新会话就绪
+//!   改由宽限下发兑底，见 [`check_waiting_timeouts`]）
 //! - 出队时由插件直接写任务行（description = prompt，source='queue'），
-//!   不再依赖输入行重建，避免 /clear 与 prompt 拆行提交的时序竞争
+//!   不再依赖输入行重建，避免 prompt 与提交时序竞争
 //!
 //! SQL 一律使用参数绑定（`*_params` + `?N` 占位符），无手写转义。
 
@@ -29,11 +36,13 @@ use serde_json::Value;
 use crate::task::agent;
 use crate::task::yield_guard;
 
-/// waiting 态最大尝试次数（首次 clear + 2 次重试，共 3 次机会）
+/// waiting 态最大尝试次数（进入 waiting + 2 次重试，共 3 次机会）
 ///
-/// agent 会话重建（pi /new、Claude /clear 后的 SessionStart）通常需要 1~3s，
-/// 单次等待窗口无法覆盖慢速重建；按次递增重试，三次都等不到新会话 idle
-/// 才放弃，避免"任务永远卡在 waiting"或"慢启动被误杀"。
+/// 轮换会话后等待新会话的 SessionStart idle 推送：agent CLI 完整启动
+/// （spawn shell → 加载 hooks → SessionStart）通常需要 2~5s，单次等待窗口无法
+/// 覆盖慢速启动；按次递增重试（3s/5s/8s，见 [`rotation_wait_window_seconds`]）。
+/// 三次尝试合计约 16s——**仍无 idle 就按宽限直接下发**（不取消，见
+/// [`check_waiting_timeouts`]），覆盖 opencode 等无 idle 信号的 agent。
 const MAX_DISPATCH_ATTEMPTS: i64 = 3;
 
 /// executing 态静默看门狗阈值（秒）
@@ -48,13 +57,19 @@ const MAX_DISPATCH_ATTEMPTS: i64 = 3;
 /// 但 elapsed 含休眠时长），取 12h 折中。
 pub const EXECUTING_SILENCE_TIMEOUT_SECS: i64 = 12 * 3600;
 
-/// 第 N 次尝试的等待窗口（秒）：clear 发出后等待新会话 idle 推送的时限
+/// 第 N 次尝试的等待窗口（秒）：轮换会话后等待新会话 idle 推送的时限
 ///
-/// 节奏 1s → 2s → 3s 递增：首次给终端留出渲染输出的时间窗口，重试窗口
-/// 逐次放宽覆盖慢速重建（如 pi agent /new 往往超过 1s）。超窗后由
-/// check_waiting_timeouts 重发 clear（下一轮窗口更宽）或耗尽后取消。
-fn wait_window_seconds(attempts: i64) -> i64 {
-    attempts.clamp(1, MAX_DISPATCH_ATTEMPTS)
+/// 节奏 3s → 5s → 8s 递增（每次重试重置计时，累计约 16s）：
+/// - 有 idle 信号的 agent（claude / pi / codex，SessionStart）1~3s 到达，走快路径；
+/// - 无 idle 信号的 agent（opencode TUI：首个 prompt 提交才创建 agent 会话，
+///   实测从 PTY 启动到输入框就绪约 9s）在宽限耗尽后由
+///   [`check_waiting_timeouts`] 直接下发兑底（输入即创建会话执行），不再取消。
+fn rotation_wait_window_seconds(attempts: i64) -> i64 {
+    match attempts.clamp(1, MAX_DISPATCH_ATTEMPTS) {
+        1 => 3,
+        2 => 5,
+        _ => 8,
+    }
 }
 
 /// 自动任务投递输入的提交符（统一为 Enter 键字节 `\r`，所有平台一致）
@@ -508,26 +523,33 @@ pub fn try_dispatch_next(host: &WasmHost, session_id: &str) {
         broadcast_queue_changed(host, session_id, remaining, "done", Some(task_id), Some("done"));
     }
 
-    // 先处理超时的 waiting 项（重试或取消），避免卡住后续调度
+    // 先处理超时的 waiting 项（重试或宽限兑底下发），避免卡住后续调度
     check_waiting_timeouts(host, session_id);
 
-    // 仍有 waiting 项（clear 已发、新会话尚未就绪）时不重复调度
-    if find_waiting_task(host, session_id).is_some() {
+    // waiting 项处理完成后再次判空，两类情形都不得继续出队：
+    // ① 仍有 waiting（未超时 / idle 未到）→ 等新会话就绪后再调度；
+    // ② 宽限兑底刚把 waiting 置为 executing（任务行已建 in_progress）→
+    //    会话已有活动任务，此刻再出队会两个任务同时执行
+    if find_waiting_task(host, session_id).is_some()
+        || crate::task::state::has_active_task(host, session_id)
+    {
         host.log_debug(&format!(
-            "try_dispatch_next: session_id={} has waiting task, hold dispatch",
+            "try_dispatch_next: session_id={} has active or waiting task, hold dispatch",
             session_id
         ));
         return;
     }
 
     let queue = list_queue(host, session_id);
-    if queue.is_empty() {
+    if queue.is_empty() && !has_inflight_task(host, session_id) {
         host.log_debug(&format!(
             "try_dispatch_next: no pending tasks for session_id={}",
             session_id
         ));
-        // 队列清空（最后一个任务终态到达）且无 waiting 项：若该会话由
-        // 定时任务创建，自动关闭会话释放 PTY（无人值守语义，见 scheduled.rs）
+        // 队列清空（最后一个任务终态到达）且无在途项（waiting/executing）：若该
+        // 会话由定时任务创建，自动关闭会话释放 PTY（无人值守语义，见 scheduled.rs）。
+        // has_inflight_task 守卫：宽限兑底刚把 waiting 变 executing 但任务行
+        // 尚未可见的窗口内，不得因队列为空关闭正在执行任务的会话
         maybe_close_scheduled_session(host, session_id);
         return;
     }
@@ -570,39 +592,184 @@ pub fn try_dispatch_next(host: &WasmHost, session_id: &str) {
     }
 
     let agent_name = crate::task::state::session_agent(host, session_id);
-    let clear_command = agent::clear_command_for(agent_name);
 
-    // 全新会话（无终态任务记录）或 agent 未适配清理命令 → 跳过 clear 直接下发
-    if clear_command.is_none() || !crate::task::state::has_terminal_task(host, session_id) {
-        dispatch_task(host, session_id, &task_id, &prompt, agent_name, &source);
+    // 会话已有终态任务上下文（非全新会话）且 agent 支持完整自动任务
+    // （claude / pi / opencode / codex）→ 轮换会话：不再向终端发送 clear/new，
+    // 关闭已完成的旧会话、以同一配置创建新会话，剩余队列迁移到新会话后置
+    // waiting，等新会话就绪（idle 或宽限兑底，见 check_waiting_timeouts）再下发。
+    // 全新会话 / 不支持自动任务的 agent（unknown）→ 直接下发。
+    if should_rotate_session(
+        agent_name,
+        crate::task::state::has_terminal_task(host, session_id),
+    ) {
+        rotate_session_for_next_task(host, session_id, &task_id);
         return;
     }
 
-    // 有上下文：置 waiting 并登记首次 clear 发送时间（首次尝试窗口 1s）。
-    // 实际发送由 scheduler-tick 的 send_due_clears 在到点后执行：
-    // 立即发送会让终端 UI 来不及渲染上一任务的输出，产生"任务未完成就被清屏"的错觉
-    let clear_due = format!("datetime('now', '+{} seconds')", wait_window_seconds(1));
+    dispatch_task(host, session_id, &task_id, &prompt, agent_name, &source);
+}
+
+/// 是否需要轮换会话（纯判定，native 可测）
+///
+/// 判据：会话已有终态任务上下文（非全新会话）且 agent 支持完整自动任务
+/// （claude / pi / opencode / codex：建任务行 + 状态回传，见 agent::is_supported）。
+/// 轮换 = 关闭旧会话 + 同配置新建，替代旧的 clear/new 命令；opencode 同样
+/// 轮换（其无 /clear 语义，新会话就绪改由「等待宽限超时直接下发」兑底，见
+/// [`check_waiting_timeouts`]）。
+fn should_rotate_session(agent_name: &str, has_terminal_task: bool) -> bool {
+    agent::is_supported(agent_name) && has_terminal_task
+}
+
+/// 轮换会话执行下一个任务（替代旧「clear / new 命令重建上下文」）
+///
+/// 上一任务终态后：关闭已完成的旧会话，以**同一配置**（configId）创建新会话，
+/// 把剩余队列（waiting + pending）整体迁移到新会话，置 waiting 等待新会话就绪
+/// （agent SessionStart 的 idle 推送，见 state.rs idle 分支 → on_session_idle）
+/// 后下发。每个任务在全新上下文中执行，总体效果与旧 clear 语义等价，但不再
+/// 向终端发送任何清理命令字。
+///
+/// **session_id 传递逻辑（本函数是唯一迁移点）**：
+/// - `task_queue`：waiting + pending 行改键到新会话（executing 不存在——调用前
+///   已归档 done；新会话据此继续出队）；
+/// - `task_session_settings`：auto_execute / auto_answer 随会话复制（新会话
+///   保持自动执行语义）；
+/// - `task_scheduled`：executed 档案的 session_id 迁移（队列清空时最终会话仍能
+///   被 [`maybe_close_scheduled_session`] 关闭，无人值守语义不丢）；
+/// - `task_history` / `task_session_mapping`：留在旧会话下（历史与记账，不迁移）。
+///
+/// 失败路径 fail-visible：新会话创建失败 → 任务回退 pending 并广播 revert，
+/// 旧会话保持不动（下次调度重试）；绝不把任务静默留在 waiting。
+fn rotate_session_for_next_task(host: &WasmHost, session_id: &str, task_id: &str) {
+    // 1. 置 waiting（等待新会话就绪；clear_due_at 恒为 NULL——本流程不再有延迟
+    //    clear，on_session_idle 据此直接放行），先占住在途标记防并发调度
     let _ = host.plugin_db_execute_params(
-        &format!(
-            "UPDATE task_queue SET status = 'waiting', dispatch_attempts = 1, \
-             clear_due_at = {}, updated_at = datetime('now') WHERE id = ?1",
-            clear_due
-        ),
+        "UPDATE task_queue SET status = 'waiting', dispatch_attempts = 1, clear_due_at = NULL, \
+         updated_at = datetime('now') WHERE id = ?1",
         &sql_params![task_id],
     );
+
+    // 2. 读旧会话配置（会话登记域视图 configId）
+    let config_id = crate::session::view_via_host(session_id)
+        .ok()
+        .flatten()
+        .and_then(|info| {
+            info.get("configId")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        });
+    let Some(config_id) = config_id else {
+        host.log_error(&format!(
+            "rotate_session: 读旧会话 configId 失败，回退 pending: session_id={} task_id={}",
+            session_id, task_id
+        ));
+        revert_rotated_task(host, session_id, task_id);
+        return;
+    };
+
+    // 3. 以同一配置创建新会话（插件编排入口：命名唯一化 + config→launch spec
+    //    + host-pty.spawn，同步返回新 session_id）
+    let new_session_id = match crate::launch::create_via_host(&serde_json::json!({
+        "configId": config_id,
+        "start": true,
+    })) {
+        Ok(reply) => match reply
+            .get("sessionId")
+            .and_then(|s| s.as_str())
+            .map(str::to_string)
+        {
+            Some(id) if !id.is_empty() => id,
+            _ => {
+                host.log_error(&format!(
+                    "rotate_session: 新会话回执缺 sessionId，回退 pending: session_id={} task_id={}",
+                    session_id, task_id
+                ));
+                revert_rotated_task(host, session_id, task_id);
+                return;
+            }
+        },
+        Err(e) => {
+            host.log_error(&format!(
+                "rotate_session: 新会话创建失败，回退 pending: session_id={} task_id={} err={}",
+                session_id, task_id, e
+            ));
+            revert_rotated_task(host, session_id, task_id);
+            return;
+        }
+    };
+
+    // 4. 迁移队列到新会话（waiting + pending；此时无 executing——调用前已归档 done）
+    let _ = host.plugin_db_execute_params(
+        "UPDATE task_queue SET session_id = ?1, updated_at = datetime('now') \
+         WHERE session_id = ?2 AND status IN ('waiting', 'pending')",
+        &sql_params![new_session_id, session_id],
+    );
+
+    // 5. 会话开关随会话复制（新会话保持 auto_execute / auto_answer）
+    let (auto_execute, auto_answer) = crate::task::state::session_flags(host, session_id);
+    crate::task::state::set_session_flags(
+        host,
+        &new_session_id,
+        Some(auto_execute),
+        Some(auto_answer),
+    );
+
+    // 6. 定时任务档案关联迁移：最终会话在队列清空时仍能被关闭（无人值守语义）
+    let _ = host.plugin_db_execute_params(
+        "UPDATE task_scheduled SET session_id = ?1 WHERE session_id = ?2 AND status = 'executed'",
+        &sql_params![new_session_id, session_id],
+    );
+
+    // 7. 关闭已完成的旧会话（尽力而为：失败只留痕，不阻断新会话执行）
+    if let Err(e) = crate::session::close_via_pty(session_id, None) {
+        host.log_warn(&format!(
+            "rotate_session: 旧会话关闭失败（不阻断新会话）: session_id={} err={}",
+            session_id, e
+        ));
+    }
+
     host.log_info(&format!(
-        "try_dispatch_next: task_id={} entering waiting (attempt 1), clear scheduled in 1s for session_id={}",
-        task_id, session_id
+        "rotate_session: 旧会话 {} 已关闭，新会话 {} 创建（config_id={}），队列已迁移，等待新会话就绪后下发 task_id={}",
+        session_id, new_session_id, config_id, task_id
     ));
+
+    // 8. 广播队列变更（新会话 id 键控：前端/移动端据此刷新队列归属与 waiting 态）
+    let remaining = pending_count(host, &new_session_id);
+    broadcast_queue_changed(
+        host,
+        &new_session_id,
+        remaining,
+        "rotate",
+        Some(task_id),
+        Some("waiting"),
+    );
+}
+
+/// 轮换失败回退：waiting → pending（下次调度重试），广播 revert
+fn revert_rotated_task(host: &WasmHost, session_id: &str, task_id: &str) {
+    let _ = host.plugin_db_execute_params(
+        "UPDATE task_queue SET status = 'pending', clear_due_at = NULL, \
+         updated_at = datetime('now') WHERE id = ?1",
+        &sql_params![task_id],
+    );
+    let remaining = pending_count(host, session_id);
+    broadcast_queue_changed(
+        host,
+        session_id,
+        remaining,
+        "revert",
+        Some(task_id),
+        Some("pending"),
+    );
 }
 
 /// 新会话就绪回调（SessionStart → idle 推送时由 state.rs 调用）
 ///
-/// 有 waiting 项且 clear 已实际发送（clear_due_at 已置空）→ 立即下发；
-/// clear 仍在延迟窗口内 → 等 send_due_clears 到点发送后，Claude 重建会话的
-/// 下一次 idle 再下发。无 waiting 项但有 pending 项 → 走常规调度
-/// （定时任务新建会话入队后首次就绪走此路径）。
-/// 队列无任务时不做任何事（避免普通用户会话每次 SessionStart 都广播自动模式变更）。
+/// 有 waiting 项且 clear_due_at 为空（轮换流恒为空——新会话创建后等待本回调）
+/// → 立即下发；clear_due_at 仍在（升级前遗留的旧 clear 流在途）→ 等
+/// send_due_clears 到点发送后、Claude 重建会话的下一次 idle 再下发。
+/// 无 waiting 项但有 pending 项 → 走常规调度（定时任务新建会话入队后首次
+/// 就绪走此路径）。队列无任务时不做任何事（避免普通用户会话每次 SessionStart
+/// 都广播自动模式变更）。
 pub fn on_session_idle(host: &WasmHost, session_id: &str) {
     // 超时检查：若 waiting 已超时，先重试/取消再决定是否下发
     check_waiting_timeouts(host, session_id);
@@ -790,11 +957,12 @@ fn find_waiting_task(host: &WasmHost, session_id: &str) -> Option<Value> {
 
 /// 到点发送等待中的延迟 clear 命令（scheduler-tick 周期调用）
 ///
-/// try_dispatch_next 置 waiting 时只登记 clear_due_at（now + 2s，见
-/// CLEAR_DELAY_SECONDS），实际写入终端的 clear 由本函数在到点后发送：
-/// 给终端 UI 留出渲染上一任务输出的时间，避免"任务未执行完就被清屏"的错觉。
-/// 发送成功把 clear_due_at 置空（on_session_idle 据此放行下发）并重置
-/// updated_at（超时计时从 clear 实际发送时刻起算）；失败回退 pending。
+/// **仅服务升级前遗留的 waiting 行**（旧「clear 重建上下文」流程在途）：
+/// 轮换流程（[`rotate_session_for_next_task`]）进入 waiting 时 clear_due_at 恒为
+/// NULL，本函数对新行是无操作。遗留行由本函数补发 clear 后放行下发（等
+/// on_session_idle），避免升级瞬间在途任务静默卡死；发送成功把 clear_due_at
+/// 置空并重置 updated_at（超时计时从 clear 实际发送时刻起算）；失败回退 pending。
+/// 发送失败回退 pending（下一次终态触发时重试调度）。
 /// 票 15：moved from auto-task 后把私有库查询失败**冒泡为本域 Result**（旧实现把
 /// `.ok()` 静默吞掉）。定时器回调据此按域计数失败——行级失败仍在循环内自愈
 /// （回滚 pending + 广播 revert），只有「这一轮连在途项都查不到」才算本域降级。
@@ -874,15 +1042,17 @@ pub fn send_due_clears(host: &WasmHost, now_utc: &str) -> Result<(), String> {
 /// 检查 waiting 态超时项（调度入口幂等调用）
 ///
 /// WASM 无系统时钟，超时判断全部由 SQLite 宿侧时间计算：
-/// updated_at 距当前超过 WAITING_TIMEOUT_SECONDS 视为超时。
-/// 未达最大重试次数 → 重新登记延迟 clear（与首次一致，同样延迟
-/// CLEAR_DELAY_SECONDS，由 send_due_clears 到点发送）；否则置 cancelled 并广播。
-fn check_waiting_timeouts(host: &WasmHost, session_id: &str) {    // 超时判定按行内 attempts 选择窗口（1s/2s/3s 递增），elapsed 由 SQLite 计算
-    // （WASM 无系统时钟）；clear 发送成功会重置 updated_at，窗口即从
-    // "clear 已发出、等待新会话 idle" 时刻起算
+/// updated_at 距当前超过当前尝试的等待窗口（3s/5s/8s，见
+/// [`rotation_wait_window_seconds`]）视为超时。未达最大重试次数 → 仅放宽
+/// 下一轮窗口（重设 updated_at 重新计时）；**宽限耗尽直接下发**（不再取消，
+/// 覆盖 opencode 等无 idle 信号 agent；空 prompt 脏数据行除外）。
+fn check_waiting_timeouts(host: &WasmHost, session_id: &str) {
+    // 超时判定按行内 attempts 选择窗口（3s/5s/8s 递增），elapsed 由 SQLite
+    // 计算（WASM 无系统时钟）；重试会把 updated_at 重置为 now，窗口即从本轮
+    // 起算（轮换流没有可重发的动作——会话已在创建，重试 = 放宽等待窗口）
     let overdue = host
         .plugin_db_query_params(
-            "SELECT id, dispatch_attempts, \
+            "SELECT id, prompt, source, dispatch_attempts, \
                 (strftime('%s', 'now') - strftime('%s', updated_at)) AS elapsed \
              FROM task_queue \
              WHERE session_id = ?1 AND status = 'waiting'",
@@ -899,6 +1069,16 @@ fn check_waiting_timeouts(host: &WasmHost, session_id: &str) {    // 超时判�
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
+        let prompt = row
+            .get("prompt")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let source = row
+            .get("source")
+            .and_then(|v| v.as_str())
+            .unwrap_or("queue")
+            .to_string();
         let attempts = row
             .get("dispatch_attempts")
             .and_then(|v| v.as_i64())
@@ -912,39 +1092,34 @@ fn check_waiting_timeouts(host: &WasmHost, session_id: &str) {    // 超时判�
         }
 
         // 未到当前尝试的等待窗口：继续等 idle（idle 到达由 on_session_idle 下发）
-        if elapsed <= wait_window_seconds(attempts) {
+        if elapsed <= rotation_wait_window_seconds(attempts) {
             continue;
         }
 
         if attempts < MAX_DISPATCH_ATTEMPTS {
-            // 重试：进入下一轮尝试，等待窗口加宽（2s/3s），重新登记 clear 发送时间
+            // 重试：仅递增尝试并重置计时（下一轮窗口更宽 3s→5s→8s）。
+            // clear_due_at 保持原值：轮换流恒为 NULL；升级前遗留的 clear 行
+            // 若尚未发送仍会被 send_due_clears 补发（见其文档）
             let next_attempts = attempts + 1;
-            let clear_due = format!(
-                "datetime('now', '+{} seconds')",
-                wait_window_seconds(next_attempts)
-            );
             let _ = host.plugin_db_execute_params(
-                &format!(
-                    "UPDATE task_queue SET dispatch_attempts = ?1, clear_due_at = {}, updated_at = datetime('now') WHERE id = ?2",
-                    clear_due
-                ),
+                "UPDATE task_queue SET dispatch_attempts = ?1, updated_at = datetime('now') WHERE id = ?2",
                 &sql_params![next_attempts, task_id],
             );
             host.log_warn(&format!(
-                "check_waiting_timeouts: waiting timeout, clear retry {}/{} scheduled for task_id={} session_id={}",
+                "check_waiting_timeouts: waiting timeout, retry {}/{} scheduled for task_id={} session_id={}",
                 next_attempts, MAX_DISPATCH_ATTEMPTS, task_id, session_id
             ));
-        } else {
-            // 三次尝试均未等到新会话 idle：取消任务并广播 cancel（带 task_id），
+        } else if prompt.is_empty() {
+            // 脏数据兑底：waiting 行无 prompt 无法下发——取消并广播（带 task_id），
             // 移动端据此把对应预设落 interrupted，避免"任务静默消失"
+            host.log_warn(&format!(
+                "check_waiting_timeouts: waiting row without prompt, cancelled task_id={} session_id={}",
+                task_id, session_id
+            ));
             let _ = host.plugin_db_execute_params(
                 "UPDATE task_queue SET status = 'cancelled', updated_at = datetime('now') WHERE id = ?1",
                 &sql_params![task_id],
             );
-            host.log_warn(&format!(
-                "check_waiting_timeouts: waiting timeout after {} attempts, cancelled task_id={} session_id={}",
-                attempts, task_id, session_id
-            ));
             let remaining = pending_count(host, session_id);
             broadcast_queue_changed(
                 host,
@@ -954,6 +1129,21 @@ fn check_waiting_timeouts(host: &WasmHost, session_id: &str) {    // 超时判�
                 Some(task_id.as_str()),
                 Some("cancelled"),
             );
+        } else {
+            // 宽限耗尽（累计约 16s）仍未等到新会话 idle：**直接下发，不取消**。
+            // 覆盖两类场景：
+            // ① opencode 等无 idle 信号的 agent——宽限已覆盖其 TUI 启动时间
+            //   （实测约 9s），下发即创建 agent 会话并执行（会话在轮换时已同步
+            //   创建成功，此路径保证「创建成功后才输入任务内容」的顺序）；
+            // ② hook 静默（idle 推送丢失）——直接下发比取消更能让任务跑起来。
+            // 输入失败由 dispatch_task 兜底标 interrupted；会话已创建且运行，
+            // 宽限足以让 agent CLI 就绪。
+            let agent_name = crate::task::state::session_agent(host, session_id);
+            host.log_info(&format!(
+                "check_waiting_timeouts: waiting grace exhausted, dispatching task_id={} session_id={} prompt_len={}",
+                task_id, session_id, prompt.len()
+            ));
+            dispatch_task(host, session_id, &task_id, &prompt, agent_name, &source);
         }
     }
 }
@@ -1312,4 +1502,60 @@ pub fn broadcast_queue_changed(
     host.emit_event(EVENT_TASK_QUEUE_CHANGED, &payload);
     // 移动端事件源（票 02）：`session-control` 端点全体客户端；失败只留痕
     crate::ws_events::broadcast_event(host, EVENT_TASK_QUEUE_CHANGED, &payload);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---------- rotation_wait_window_seconds ----------
+
+    #[test]
+    fn rotation_wait_window_scales_with_attempts() {
+        assert_eq!(rotation_wait_window_seconds(1), 3);
+        assert_eq!(rotation_wait_window_seconds(2), 5);
+        assert_eq!(rotation_wait_window_seconds(3), 8);
+        // clamp：attempts 越界回落到 [1, MAX_DISPATCH_ATTEMPTS]
+        assert_eq!(rotation_wait_window_seconds(0), 3);
+        assert_eq!(rotation_wait_window_seconds(99), 8);
+    }
+
+    // ---------- should_rotate_session ----------
+
+    /// 正例：有终态任务上下文 + 支持完整自动任务的 agent（claude/pi/opencode/codex）→ 轮换
+    #[test]
+    fn rotate_decision_for_supported_agents() {
+        for agent in ["claude", "pi", "codex", "opencode"] {
+            assert!(
+                should_rotate_session(agent, true),
+                "{agent} 有上下文时必须轮换会话（opencode 同样轮换）"
+            );
+        }
+    }
+
+    /// 反例：无上下文（全新会话）→ 直接下发
+    #[test]
+    fn rotate_decision_fresh_session_dispatches_directly() {
+        assert!(!should_rotate_session("claude", false));
+        assert!(!should_rotate_session("opencode", false));
+    }
+
+    /// 反例：不支持自动任务的 agent（unknown）→ 直接下发
+    #[test]
+    fn rotate_decision_unsupported_agent_dispatches_directly() {
+        assert!(!should_rotate_session("unknown", true));
+    }
+
+    /// 轮换决策与 agent 支持注册联动（新增 agent 自动获得语义）
+    #[test]
+    fn rotate_decision_matches_supported_registry() {
+        for profile in crate::task::agent::AGENT_PROFILES {
+            assert_eq!(
+                should_rotate_session(profile.name, true),
+                crate::task::agent::is_supported(profile.name),
+                "{} 的轮换判定必须与 is_supported 一致（任何支持完整自动任务的 agent 都轮换）",
+                profile.name
+            );
+        }
+    }
 }

@@ -30,8 +30,10 @@ pub enum SessionIntegration {
 /// Agent profile：CLI 级 agent 能力描述
 ///
 /// 新增 agent 的扩展点（全部在 registry 声明，调度/部署代码零改动）：
-/// - clear_command：上下文清理命令，自动任务执行前清理上下文防止超限；
-///   None 表示未适配（调度时跳过 clear 直接下发）
+/// - clear_command：agent 原生上下文清理命令（`/clear` / `/new`）。**调度不再
+///   发送它**——任务间上下文隔离统一走轮换（关闭旧会话 + 同配置新建）；该字段
+///   仅存为 agent 语义纪录 + 升级前遗留 waiting 行的兼容发送（见
+///   queue::send_due_clears）
 /// - session_integration：状态回传的部署载体（hooks / pi 扩展 / 无）
 /// - tracks_input：会话输入是否作为任务跟踪（决定 on_input_submitted 是否建任务行）
 pub struct AgentProfile {
@@ -53,8 +55,10 @@ pub struct AgentProfile {
 /// - pi：完整适配（pi 扩展 + /new）—— pi 无 /clear，等效的上下文重建命令是 /new
 ///   （开启新会话，pi 会话按分支管理，无"清空上下文继续当前会话"的语义）
 /// - opencode：完整适配（opencode 插件，状态回传同 pi 扩展机制）。
-///   上下文清理命令未适配：opencode 无 /clear，/compact 只压缩不重建，
-///   调度时跳过 clear 直接下发（任务行跟踪不受影响）
+///   无原生上下文清理命令（opencode 无 /clear，/compact 只压缩不重建）——
+///   任务间隔离与 claude/pi/codex 一样走轮换（新会话无 idle 信号：opencode
+///   TUI 首个 prompt 提交才创建 agent 会话，新会话就绪由等待宽限超时直接下发
+///   兑底，见 queue::check_waiting_timeouts）
 /// - codex：完整适配（Codex hooks 集成 + /clear）。
 ///   注意：Codex 项目级 hooks 需用户信任项目 `.codex/` 配置层并在 `/hooks`
 ///   中确认信任钩子（与 pi 首次 trust 流程同源，宿主无法代答）

@@ -1103,6 +1103,445 @@ fn test_session_task_http_and_scheduled_closed_loop() {
     );
 }
 
+/// 任务轮换闭环（票：任务终态后不再发 clear/new，关闭旧会话 + 同配置新建）
+///
+/// 真实 PTY 多会话链路，验证「自动任务中一个任务执行完毕 → 关闭上一个执行完的
+/// 会话 → 创建新会话执行下一个任务」的完整编排与 **session_id 传递逻辑**：
+///
+/// 1. `session.create`（command 含 `claude` → agent=claude → 走轮换）→ sid1；
+/// 2. 入队 T1/T2/T3 + 开自动执行 → 首任务直接下发（全新会话，executing）；
+/// 3. 模拟 T1 completed（hook 推送形态：`bedcode_session_id`=sid1）→ 轮换：
+///    - sid1 关闭（有界轮询收敛 stopped）；
+///    - sid2 创建（**同一 config_id**）；
+///    - 队列迁移：sid1 队列空、sid2 的 active_task = T2(waiting)；
+///    - session flags（auto_execute）复制到 sid2；
+/// 4. 模拟 sid2 的 agent SessionStart idle → on_session_idle 下发 T2（executing）；
+/// 5. T2 completed → 再次轮换（sid3）→ T3 迁移 waiting——证明链路可连续重复；
+///
+/// 轮换失败路径（新会话创建失败回退 pending）由插件 native 单测覆盖（无宿主依赖）。
+#[test]
+fn test_session_task_rotation_closed_loop() {
+    // 会话插件私有库是进程级共享路径：与其它会话闭环用例串行（见锁文档）
+    let _serial = session_plugin_db_guard();
+
+    let wasm_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../resources/plugins/desktop/com.bedcode.terminal-session/bedcode_plugin_terminal_session.wasm");
+    if !wasm_path.exists() {
+        eprintln!("[skip] session wasip3 artifact not built");
+        return;
+    }
+    let (wasm_runtime, host_ctx) = setup_wasm_runtime();
+    host_ctx.permission.grant_permissions(
+        "com.bedcode.terminal-session",
+        &[
+            "auth",
+            "peer",
+            "storage",
+            "session:read",
+            "broadcast",
+            "fs:read",
+            "fs:write",
+            "terminal:input",
+            "timer:schedule",
+            "ui:sidebar",
+            "ui:settings",
+            "pty:spawn",
+            "pty:io",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect::<Vec<_>>(),
+    );
+    host_ctx.api_registry().register(
+        "com.bedcode.terminal-session",
+        &session_apis().iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+    );
+
+    let component = wasm_runtime
+        .compile_component(&std::fs::read(&wasm_path).expect("read session artifact"))
+        .expect("compile session artifact");
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    rt.block_on(async {
+        // v32（ADR 0031）：桥接门查进程级单中心注册表 → 与闭环用例互斥（见 helper）
+        let _center_desk = lock_auth_center_desk().await;
+        let instances = Arc::new(RwLock::new(HashMap::new()));
+        let plugin = Arc::new(Mutex::new(
+            wasm_runtime
+                .instantiate_component(&component, "com.bedcode.terminal-session", host_ctx.clone(), &[], None)
+                .expect("instantiate session"),
+        ));
+        instances
+            .write()
+            .await
+            .insert("com.bedcode.terminal-session".to_string(), Arc::clone(&plugin));
+        host_ctx
+            .message_bus
+            .set_dispatcher(Arc::new(TestInstanceDispatcher {
+                instances: Arc::clone(&instances),
+            }))
+            .await;
+        plugin.lock().await.activate().expect("activate");
+
+        /// 以客户端形态打一次插件 HTTP 端点（宿主 plugin_controller 构造的同一形状）
+        async fn http_call(
+            plugin: &Arc<Mutex<LoadedWasmPlugin>>,
+            method: &str,
+            path: &str,
+            body: serde_json::Value,
+            query: serde_json::Value,
+        ) -> serde_json::Value {
+            let args = serde_json::json!({
+                "method": method,
+                "path": path,
+                "headers": {},
+                "body": body,
+                "query": query,
+            });
+            let out = plugin
+                .lock()
+                .await
+                .invoke_command("_http_endpoint", &args.to_string())
+                .unwrap_or_else(|e| panic!("_http_endpoint {method} {path} 调用失败: {e}"));
+            serde_json::from_str(&out)
+                .unwrap_or_else(|e| panic!("_http_endpoint {method} {path} 回包非法 JSON: {e} / {out}"))
+        }
+
+        /// 会话列表 → 找到「运行中且非给定 sid」的新会话（轮换新建的那条）
+        async fn running_session_other_than(
+            plugin: &Arc<Mutex<LoadedWasmPlugin>>,
+            exclude: &str,
+            config_id: &str,
+        ) -> String {
+            for _ in 0..100 {
+                let out = plugin
+                    .lock()
+                    .await
+                    .invoke_command("session.list", "{}")
+                    .expect("session.list");
+                let sessions: serde_json::Value = serde_json::from_str(&out).unwrap();
+                if let Some(found) = sessions["sessions"]
+                    .as_array()
+                    .and_then(|arr| {
+                        arr.iter().find(|s| {
+                            s["id"].as_str() != Some(exclude)
+                                && s["configId"].as_str() == Some(config_id)
+                                && s["status"].as_str() == Some("running")
+                        })
+                    })
+                    .and_then(|s| s["id"].as_str().map(str::to_string))
+                {
+                    return found;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+            panic!("5s 内未找到轮换新建的运行会话（config_id={config_id}, exclude={exclude}）");
+        }
+
+        /// 有界轮询：会话收敛到 stopped
+        async fn wait_stopped(plugin: &Arc<Mutex<LoadedWasmPlugin>>, sid: &str) {
+            for _ in 0..100 {
+                let out = plugin
+                    .lock()
+                    .await
+                    .invoke_command("session.list", "{}")
+                    .expect("session.list");
+                let sessions: serde_json::Value = serde_json::from_str(&out).unwrap();
+                let stopped = sessions["sessions"].as_array().map(|arr| {
+                    arr.iter()
+                        .find(|s| s["id"].as_str() == Some(sid))
+                        .map(|s| s["status"].as_str() == Some("stopped"))
+                        .unwrap_or(false)
+                });
+                if stopped == Some(true) {
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+            panic!("5s 内会话 {sid} 未收敛为 stopped");
+        }
+
+        // 1. 播种配置（command 含 claude → agent=claude → profile 带 clear_command → 轮换）
+        let probe_dir = std::env::temp_dir().join(format!("bedcode-task-rotate-{}", std::process::id()));
+        std::fs::create_dir_all(&probe_dir).expect("create probe dir");
+        let config = seed_config_in_plugin_store(
+            &mut *plugin.lock().await,
+            "轮换探针",
+            &probe_dir.to_string_lossy(),
+            "echo claude && exec bash",
+        )
+        .await;
+        let config_id = config["id"].as_str().unwrap().to_string();
+
+        // 2. 创建 sid1（真实 PTY）
+        let create_out = plugin
+            .lock()
+            .await
+            .invoke_command(
+                "session.create",
+                &serde_json::json!({ "configId": config_id }).to_string(),
+            )
+            .expect("session.create");
+        let created: serde_json::Value = serde_json::from_str(&create_out).unwrap();
+        assert!(
+            created["error"].is_null(),
+            "session.create 不得报错, got: {create_out}"
+        );
+        let sid1 = created["sessionId"].as_str().expect("sessionId").to_string();
+
+        // 2.5 播种一条 executed 定时任务档案关联 sid1（验证轮换时关联迁移——
+        //     队列清空时最终会话仍能被无人值守关闭）
+        let db_path = plugin_db_root()
+            .join("com.bedcode.terminal-session")
+            .join("plugin.db");
+        {
+            let conn = rusqlite::Connection::open(&db_path)
+                .unwrap_or_else(|e| panic!("打开插件私有库失败 {}: {e}", db_path.display()));
+            let _ = conn.busy_timeout(std::time::Duration::from_secs(10));
+            conn.execute(
+                "INSERT OR REPLACE INTO task_scheduled \
+                 (id, name, config_id, trigger_at, prompts, status, session_id, executed_at, error, created_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, 'executed', ?6, NULL, NULL, datetime('now'))",
+                rusqlite::params![
+                    "rotate-job",
+                    "rotate-probe",
+                    config_id,
+                    "2026-09-20 00:00:00",
+                    r#"["rotate-scheduled-prompt"]"#,
+                    sid1
+                ],
+            )
+            .expect("seed executed scheduled job");
+        }
+
+        // 3. 入队 T1/T2/T3 + 开自动执行 → 首任务直接下发（全新会话，无终态上下文）
+        let mut task_ids = Vec::new();
+        for prompt in ["rotate-task-1", "rotate-task-2", "rotate-task-3"] {
+            let r = http_call(
+                &plugin,
+                "POST",
+                "task-queue/add",
+                serde_json::json!({ "session_id": sid1, "prompt": prompt }),
+                serde_json::json!({}),
+            )
+            .await;
+            assert_eq!(r["status"], 200, "task-queue/add 必须 200, got: {r}");
+            let task_id = r["body"]["data"]["task_id"]
+                .as_str()
+                .unwrap_or_else(|| panic!("add 回包缺 task_id: {r}"))
+                .to_string();
+            task_ids.push(task_id);
+        }
+        let t1 = task_ids[0].clone();
+        let t2 = task_ids[1].clone();
+        let t3 = task_ids[2].clone();
+
+        let out = plugin
+            .lock()
+            .await
+            .invoke_command(
+                "session.task.set-auto-mode",
+                &serde_json::json!({ "session_id": sid1, "auto_execute": true }).to_string(),
+            )
+            .expect("set-auto-mode");
+        let r: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert!(r["error"].is_null(), "set-auto-mode 不得报错, got: {out}");
+        // 全新会话 → T1 直接下发为 executing
+        let r = http_call(&plugin, "GET", "task-queue/list", serde_json::Value::Null, serde_json::json!({ "session_id": sid1 })).await;
+        assert_eq!(
+            r["body"]["data"]["active_task"]["id"],
+            serde_json::json!(t1),
+            "全新会话首任务必须直接下发（executing）, got: {r}"
+        );
+        assert_eq!(
+            r["body"]["data"]["active_task"]["status"],
+            serde_json::json!("executing"),
+            "首任务必须 executing, got: {r}"
+        );
+
+        // 4. 模拟 T1 completed（hook 推送形态：bedcode_session_id = sid1）→ 轮换
+        let r = http_call(
+            &plugin,
+            "POST",
+            "task-status",
+            serde_json::json!({
+                "session_id": "claude-session-rotate-1",
+                "bedcode_session_id": sid1,
+                "status": "completed",
+                "reason": "rotate probe task 1 done",
+            }),
+            serde_json::json!({}),
+        )
+        .await;
+        assert_eq!(r["status"], 200, "task-status completed 必须 200, got: {r}");
+
+        // 轮换结果：sid1 队列迁空、sid2 创建（同 config）、T2 迁移为 waiting、开关复制
+        let sid2 = running_session_other_than(&plugin, &sid1, &config_id).await;
+        wait_stopped(&plugin, &sid1).await;
+        let r = http_call(&plugin, "GET", "task-queue/list", serde_json::Value::Null, serde_json::json!({ "session_id": sid1 })).await;
+        assert!(
+            r["body"]["data"]["tasks"].as_array().map(|a| a.is_empty()).unwrap_or(false),
+            "轮换后旧会话队列必须已迁移（sid1 无 pending）, got: {r}"
+        );
+        assert!(
+            r["body"]["data"]["active_task"].is_null(),
+            "轮换后旧会话不得残留 active 队列项, got: {r}"
+        );
+        let r = http_call(&plugin, "GET", "task-queue/list", serde_json::Value::Null, serde_json::json!({ "session_id": sid2 })).await;
+        assert_eq!(
+            r["body"]["data"]["active_task"]["id"],
+            serde_json::json!(t2),
+            "T2 必须迁移到新会话并进入 waiting, got: {r}"
+        );
+        assert_eq!(
+            r["body"]["data"]["active_task"]["status"],
+            serde_json::json!("waiting"),
+            "T2 必须为 waiting（等待新会话就绪）, got: {r}"
+        );
+        // session flags 随会话复制（新会话保持自动执行语义）
+        let r = http_call(&plugin, "GET", "session-settings", serde_json::Value::Null, serde_json::json!({ "session_id": sid2 })).await;
+        assert_eq!(
+            r["body"]["data"]["auto_execute"],
+            serde_json::json!(true),
+            "新会话必须继承 auto_execute, got: {r}"
+        );
+        // 定时任务档案关联随轮换迁移（最终会话在队列清空时仍被无人值守关闭）
+        let r = http_call(&plugin, "GET", "scheduled-jobs/list", serde_json::Value::Null, serde_json::json!({})).await;
+        let rotated_job = r["body"]["data"]["jobs"]
+            .as_array()
+            .and_then(|jobs| jobs.iter().find(|j| j["id"].as_str() == Some("rotate-job")).cloned())
+            .unwrap_or_else(|| panic!("列表中找不到 rotate-job, got: {r}"));
+        assert_eq!(
+            rotated_job["session_id"],
+            serde_json::json!(sid2),
+            "executed 档案的 session_id 必须随轮换迁移到新会话, got: {rotated_job}"
+        );
+
+        // 5. 模拟 sid2 的 agent SessionStart idle → on_session_idle 下发 T2
+        let r = http_call(
+            &plugin,
+            "POST",
+            "task-status",
+            serde_json::json!({
+                "session_id": "claude-session-rotate-2",
+                "bedcode_session_id": sid2,
+                "status": "idle",
+                "reason": "Session started",
+            }),
+            serde_json::json!({}),
+        )
+        .await;
+        assert_eq!(r["status"], 200, "task-status idle 必须 200, got: {r}");
+        let r = http_call(&plugin, "GET", "task-queue/list", serde_json::Value::Null, serde_json::json!({ "session_id": sid2 })).await;
+        assert_eq!(
+            r["body"]["data"]["active_task"]["id"],
+            serde_json::json!(t2),
+            "idle 后 T2 必须仍为 active, got: {r}"
+        );
+        assert_eq!(
+            r["body"]["data"]["active_task"]["status"],
+            serde_json::json!("executing"),
+            "新会话 idle 到达后 T2 必须已下发（executing）, got: {r}"
+        );
+
+        // 6. T2 completed → 再次轮换（链路可连续重复）→ T3 迁移 waiting
+        let r = http_call(
+            &plugin,
+            "POST",
+            "task-status",
+            serde_json::json!({
+                "session_id": "claude-session-rotate-2",
+                "bedcode_session_id": sid2,
+                "status": "completed",
+                "reason": "rotate probe task 2 done",
+            }),
+            serde_json::json!({}),
+        )
+        .await;
+        assert_eq!(r["status"], 200, "task-status completed(2) 必须 200, got: {r}");
+        let sid3 = running_session_other_than(&plugin, &sid2, &config_id).await;
+        wait_stopped(&plugin, &sid2).await;
+        let r = http_call(&plugin, "GET", "task-queue/list", serde_json::Value::Null, serde_json::json!({ "session_id": sid3 })).await;
+        assert_eq!(
+            r["body"]["data"]["active_task"]["id"],
+            serde_json::json!(t3),
+            "第二轮换后 T3 必须迁移到 sid3, got: {r}"
+        );
+        assert_eq!(
+            r["body"]["data"]["active_task"]["status"],
+            serde_json::json!("waiting"),
+            "T3 必须为 waiting, got: {r}"
+        );
+
+        // 7. 宽限兑底下发（opencode 等无 idle 信号 agent 的路径）：
+        //    把 T3 的 waiting 行改成「第 3 次尝试已过期」（dispatch_attempts=3、
+        //    updated_at 30s 前），触发一次 try_dispatch_next（经无行的 completed
+        //    推送 → 终态门）→ 宽限耗尽后直接下发，**不取消**，且不会因队列为
+        //    空而关闭仍在执行任务的会话
+        {
+            let conn = rusqlite::Connection::open(&db_path)
+                .unwrap_or_else(|e| panic!("打开插件私有库失败 {}: {e}", db_path.display()));
+            let _ = conn.busy_timeout(std::time::Duration::from_secs(10));
+            let affected = conn
+                .execute(
+                    "UPDATE task_queue SET dispatch_attempts = 3, \
+                     updated_at = datetime('now', '-30 seconds') \
+                     WHERE id = ?1 AND session_id = ?2 AND status = 'waiting'",
+                    rusqlite::params![t3, sid3],
+                )
+                .expect("seed stale waiting row");
+            assert_eq!(affected, 1, "T3 必须处于 waiting 且被种子命中");
+        }
+        let r = http_call(
+            &plugin,
+            "POST",
+            "task-status",
+            serde_json::json!({
+                "session_id": "claude-session-rotate-3",
+                "bedcode_session_id": sid3,
+                "status": "completed",
+                "reason": "no-row trigger for grace dispatch",
+            }),
+            serde_json::json!({}),
+        )
+        .await;
+        assert_eq!(r["status"], 200, "task-status 必须 200, got: {r}");
+        let r = http_call(&plugin, "GET", "task-queue/list", serde_json::Value::Null, serde_json::json!({ "session_id": sid3 })).await;
+        assert_eq!(
+            r["body"]["data"]["active_task"]["id"],
+            serde_json::json!(t3),
+            "宽限耗尽后 T3 必须直接下发（executing，不取消）, got: {r}"
+        );
+        assert_eq!(
+            r["body"]["data"]["active_task"]["status"],
+            serde_json::json!("executing"),
+            "宽限耗尽后 T3 必须 executing, got: {r}"
+        );
+        // 队列为空但有 executing 在途：不得触发定时会话关闭（见 try_dispatch_next
+        // 的 empty-queue 守卫）——sid3 必须仍在运行
+        let out = plugin
+            .lock()
+            .await
+            .invoke_command("session.list", "{}")
+            .expect("session.list");
+        let sessions: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let sid3_status = sessions["sessions"]
+            .as_array()
+            .and_then(|arr| arr.iter().find(|s| s["id"].as_str() == Some(sid3.as_str())))
+            .and_then(|s| s["status"].as_str().map(str::to_string));
+        assert_eq!(
+            sid3_status.as_deref(),
+            Some("running"),
+            "宽限下发后会话不得被空队列守卫关闭（T3 仍在执行）, got: {sessions}"
+        );
+
+        // 清理：摘除最终会话（杀真实 bash 进程）与临时工作目录
+        crate::utils::session_gateway::remove(&host_ctx, &sid3, None)
+            .await
+            .expect("remove final session");
+        let _ = std::fs::remove_dir_all(&probe_dir);
+    });
+}
+
 /// 票 05 会话中心互调闭环（消费方 = sdk-test caller 角色），两条路径：
 ///
 /// **trust 路径（列表 → 撤销 → 列表变化）**：认证中心私有库 `auth_pairings`
