@@ -9,6 +9,14 @@
 
 ## [未发布]
 
+#### Agent Hub「检测更新」现在会先重新探测本地已安装版本，再比较最新版——outdated 徽标与展示的本地版本同源同实（仅桌面 agent-hub 插件；无 ABI/WIT/协议变更）
+
+- **修掉的症状**：pi 实际已装到 1.0.0，安装与更新页点「检测更新」仍显示 `0.87 → 1.0`（判旧）；要到概览页再点一次「重新检测」，行才显示 1.0。原因：检测更新只把 registry `latest` 与**上次全量探测的缓存版本**比较，从不重跑本地 `--version` 探测——在 hub 之外安装/升级过的 CLI，其缓存一直停在旧值
+- **改动**：`agent-hub.check-updates` 不再同步读过期缓存。它置一个 pending 标志并触发与概览「重新检测」相同的全量探测（`spawn_all`）；整批探测收敛后（`is_batch_done`：该 run 从批集合中移除**且**集合变空——旧一轮的迟到完成事件 id 不在集合里，remove 未命中，绝不会误判收敛），插件自动用**刷新后的**本地版本查 registry `latest` 并推送安装域状态。UI 流程不变（行内短暂显示「检测中」，随后是真实版本与正确的 outdated 徽标）
+- **并发与清理**：每次 `spawn_all` 整体替换批集合，探测中途再点一次只是开启新一批，旧批迟到完成事件被忽略（remove 未命中）；pending 标志在批收敛时、整批一个 run 都没 spawn 成功时、`spawn_all` 报错时、以及 `deactivate` 时都会被清除——残留标志不会在后续普通探测收敛时凭空触发查询
+- **验证**：agent-hub crate `cargo test` **153 绿 / 0 红**（5 条新单测：最后 run 完成=批收敛 / 旧 run 不判收敛 / 本地落后=outdated / 本地持平或超前=非 outdated / 本地版本缺失=null）；`wasm32-wasip3` release 构建通过并重新注入 wasmHash；宿主 `system_component_test`（真实加载 agent-hub 产物）10 绿。变异探针：去掉 `is_empty` 判定 → `batch_done_on_last_run` 变红；反转版本比较 → `outdated_flag_marks_local_behind` 变红；缺失本地版本时返回 `Some` → `outdated_flag_unknown_local_is_null` 变红
+- **未改**：安装完成后的自动重探测（`install::handle_process_done` 内已有）保持现状——只刷新本地版本、不自动查最新版，用户可再点「检测更新」拿徽标；`providers/apply.rs` / `usage/scan.rs` 的既有 fmt 欠账与未触碰文件里的 `vec!`/可合并 `if` clippy 提示不顺手处理
+
 #### 链路加密协商改为 fail-visible：桌面端**未开启**加密却收到加密请求时显性 4xx，不再把密文喂给业务层
 
 - **修掉的症状**：移动端开了加密、桌面端**没开**时，带 body 的 POST 返回

@@ -168,6 +168,8 @@ impl WasmPlugin for AgentHubPlugin {
             .lock()
             .map(|mut p| p.clear())
             .map_err(|e| anyhow::anyhow!("deactivate: poisoned pending map: {e}"))?;
+        // 清空探测批跟踪与「检测更新」pending 标志：防重激活后旧标志误触发
+        detect::clear_detect_tracking();
         // 在途安装进程尽力终止并落终态，避免 storage 里残留永久 "running"
         if let Err(e) = install::abort_active(&host()) {
             host().log_warn(&format!("deactivate: abort active run failed: {e}"));

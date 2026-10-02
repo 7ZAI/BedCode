@@ -143,8 +143,18 @@ fn fetch_latest_version(h: &WasmHost, pkg: &str) -> Result<String, String> {
     Err(format!("latest version unavailable for {pkg}"))
 }
 
-/// 批量检查更新：四家 CLI 各查一次 latest，与探测到的本地版本比较得 outdated
+/// 「检测更新」命令入口：置位 pending 并触发全量重探测（刷新本地已安装版本），
+/// 探测收敛后由 detect 回灌自动执行 [`run_update_check`]。
+/// 不在此同步查 registry——本地版本若用上次探测缓存，outdated 会按旧版本误判
+/// （2026-10-02 实测：pi 已装 1.0、缓存 0.87，检测更新仍显示可更新）
 pub(crate) fn check_updates(h: &WasmHost) -> anyhow::Result<Value> {
+    detect::request_update_check(h)?;
+    Ok(json!({ "started": true }))
+}
+
+/// 最新版本查询本体（探测收敛后由 detect 回灌调用：本地版本为本轮实测值）。
+/// 四家 CLI 各查一次 latest，与刷新后的本地版本比较得 outdated
+pub(crate) fn run_update_check(h: &WasmHost) -> anyhow::Result<()> {
     let mut state = read_state(h);
     let detection = h.storage_get(crate::STATE_KEY).ok().flatten();
     let checked_at = now_ms(h).unwrap_or(0);
@@ -156,12 +166,12 @@ pub(crate) fn check_updates(h: &WasmHost) -> anyhow::Result<Value> {
             .map(|s| s.to_string());
         let entry = match npm_package(cli) {
             Some(pkg) => match fetch_latest_version(h, pkg) {
-                Ok(latest) => {
-                    let outdated = local
-                        .as_deref()
-                        .map(|l| compare_versions(l, &latest) == Ordering::Less);
-                    json!({ "latest": latest, "outdated": outdated, "checkedAt": checked_at, "error": null })
-                }
+                Ok(latest) => json!({
+                    "latest": latest,
+                    "outdated": outdated_flag(local.as_deref(), &latest),
+                    "checkedAt": checked_at,
+                    "error": null,
+                }),
                 Err(e) => {
                     json!({ "latest": null, "outdated": null, "checkedAt": checked_at, "error": e })
                 }
@@ -175,7 +185,14 @@ pub(crate) fn check_updates(h: &WasmHost) -> anyhow::Result<Value> {
     }
     write_state(h, &state);
     h.log_info("update check finished");
-    emit_and_return(h, &state)
+    emit(h, &state);
+    Ok(())
+}
+
+/// outdated 判定（纯函数，可测）：本地版本缺失（未安装/探测失败）时不判旧；
+/// 其余按 local < latest
+fn outdated_flag(local: Option<&str>, latest: &str) -> Option<bool> {
+    local.map(|l| compare_versions(l, latest) == Ordering::Less)
 }
 
 // ==================== Tests（纯函数单测，双平台形态覆盖） ====================
@@ -214,5 +231,26 @@ mod tests {
         assert_eq!(v[0]["id"], json!("b"));
         assert_eq!(v[1]["id"], json!("a"));
         assert_eq!(v[2]["id"], json!("c"));
+    }
+
+    /// outdated 判定正例：本地落后 → 可更新
+    #[test]
+    fn outdated_flag_marks_local_behind() {
+        assert_eq!(outdated_flag(Some("0.87.0"), "1.0.0"), Some(true));
+        assert_eq!(outdated_flag(Some("0.153.4"), "0.154.0"), Some(true));
+    }
+
+    /// outdated 判定：本地与最新持平/超前 → 非可更新（超前视为最新，不判旧）
+    #[test]
+    fn outdated_flag_not_outdated_when_local_latest_or_newer() {
+        assert_eq!(outdated_flag(Some("1.0.0"), "1.0.0"), Some(false));
+        assert_eq!(outdated_flag(Some("2.0.0"), "1.0.0"), Some(false));
+    }
+
+    /// outdated 判定反例：本地版本缺失（未安装 / 探测失败）→ 不判旧（null），
+    /// 由行内安装/手动提示兜底，避免把「未知」展示成「可更新」
+    #[test]
+    fn outdated_flag_unknown_local_is_null() {
+        assert_eq!(outdated_flag(None, "1.0.0"), None);
     }
 }

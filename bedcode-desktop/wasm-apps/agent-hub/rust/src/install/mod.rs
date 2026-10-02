@@ -40,7 +40,7 @@ mod version;
 
 /// 命令入口面（lib.rs 路由）
 pub(crate) use mirror::{add_custom_source, apply_mirror, remove_custom_source, restore_npmrc};
-pub(crate) use registry::{check_updates, speed_test};
+pub(crate) use registry::{check_updates, run_update_check, speed_test};
 pub(crate) use state::now_ms;
 
 use self::recipe::build_install_script;

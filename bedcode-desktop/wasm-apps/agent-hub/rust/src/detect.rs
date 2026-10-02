@@ -20,7 +20,9 @@ use bedcode_plugin_api::events::ProcessDoneEvent;
 use bedcode_plugin_api::host::{HostEvents, HostFs, HostLog, HostProcess, HostStorage};
 use bedcode_plugin_api::wasm_host::WasmHost;
 use serde_json::{json, Value};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 /// 探测项：4 个 CLI + 1 个环境采集
 pub(crate) const ENV_KIND: &str = "env";
@@ -31,6 +33,70 @@ const TIMEOUT_MS: u64 = 20_000;
 static RUN_SEQ: AtomicU32 = AtomicU32::new(0);
 /// 状态推送序号（push_state 单调自增，前端按 seq 过滤乱序旧事件）
 static STATE_SEQ: AtomicU32 = AtomicU32::new(0);
+
+/// 「检测更新」pending 标志：`agent-hub.check-updates` 置位后触发全量重探测
+/// （刷新本地已安装版本），探测收敛时由 [`maybe_run_update_check`] 自动执行
+/// 最新版本查询——outdated 必须基于「当前实际安装版本」而非上次探测缓存
+/// （2026-10-02 实测：pi 已更新到 1.0，但安装页检测更新仍按缓存 0.87 判旧）
+static PENDING_UPDATE_CHECK: AtomicBool = AtomicBool::new(false);
+
+/// 最近一轮探测发起的 run_id 集合：全部完成（remove 命中 + 变空）= 一次探测
+/// 收敛。以「remove 命中」判定——旧轮迟到的完成事件不在集合中，不得触发后续
+/// 动作（并发重探测下集合会被下一轮整体替换，旧 run 完成若误判会提前/重复
+/// 执行最新版本查询）
+static DETECT_RUNS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+
+fn detect_runs() -> &'static Mutex<HashSet<String>> {
+    DETECT_RUNS.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// 批收敛判定（纯函数，可测）：run_id 属于本批且移除后集合为空 = 本批完成
+fn is_batch_done(runs: &mut HashSet<String>, run_id: &str) -> bool {
+    runs.remove(run_id) && runs.is_empty()
+}
+
+/// 探测收敛钩子：本批 run 完成时移除并判定收敛；本批全部完成且安装域有
+/// pending 更新检查时，自动执行最新版本查询（此刻本地版本已是本轮刷新后的
+/// 实测值）。非本批的迟到完成事件（remove 未命中）不触发任何动作
+fn maybe_run_update_check(h: &WasmHost, run_id: &str) {
+    if !PENDING_UPDATE_CHECK.load(Ordering::Relaxed) {
+        return;
+    }
+    let mut runs = match detect_runs().lock() {
+        Ok(r) => r,
+        Err(_) => return,
+    };
+    if !is_batch_done(&mut runs, run_id) {
+        return;
+    }
+    // 本批探测已全部收敛：清标志后执行查询（查询本身失败不影响探测结果）
+    PENDING_UPDATE_CHECK.store(false, Ordering::Relaxed);
+    drop(runs);
+    if let Err(e) = crate::install::run_update_check(h) {
+        h.log_warn(&format!("detect: post-detect update check failed: {e}"));
+    }
+}
+
+/// 「检测更新」命令入口（install 域调用）：置位 pending 并触发全量重探测。
+/// 探测为异步（process-done 回灌），完成时由 [`maybe_run_update_check`] 执行
+/// 最新版本查询
+pub(crate) fn request_update_check(h: &WasmHost) -> anyhow::Result<()> {
+    PENDING_UPDATE_CHECK.store(true, Ordering::Relaxed);
+    if let Err(e) = spawn_all(h) {
+        // 探测未能发起：复位标志，避免残留 pending 在后续普通探测收敛时误触发
+        PENDING_UPDATE_CHECK.store(false, Ordering::Relaxed);
+        return Err(e);
+    }
+    Ok(())
+}
+
+/// 停用清理：清空批跟踪与 pending 标志，防重激活后旧标志误触发查询
+pub(crate) fn clear_detect_tracking() {
+    PENDING_UPDATE_CHECK.store(false, Ordering::Relaxed);
+    if let Ok(mut runs) = detect_runs().lock() {
+        runs.clear();
+    }
+}
 
 // ==================== 状态（读-改-写） ====================
 
@@ -146,6 +212,13 @@ pub(crate) fn spawn_all(h: &WasmHost) -> anyhow::Result<()> {
 
     let mut kinds = vec![ENV_KIND];
     kinds.extend(CLI_KINDS);
+    // 批跟踪：本轮发起的 run 全部收敛才算一次探测完成（旧批集合整体替换，
+    // 迟到旧 run 完成事件不误触发后续动作）
+    let mut runs = detect_runs()
+        .lock()
+        .map_err(|e| anyhow::anyhow!("detect: poisoned batch map: {e}"))?;
+    runs.clear();
+    let mut spawned = 0usize;
     for kind in kinds {
         let seq = RUN_SEQ.fetch_add(1, Ordering::Relaxed);
         let output_path = format!("{data_dir}/runs/{kind}-{seq}.log");
@@ -159,6 +232,8 @@ pub(crate) fn spawn_all(h: &WasmHost) -> anyhow::Result<()> {
         });
         match h.process_run(&request.to_string()) {
             Ok(run_id) => {
+                runs.insert(run_id.clone());
+                spawned += 1;
                 let mut map = pending()
                     .lock()
                     .map_err(|e| anyhow::anyhow!("detect: poisoned pending map: {e}"))?;
@@ -179,6 +254,12 @@ pub(crate) fn spawn_all(h: &WasmHost) -> anyhow::Result<()> {
                 write_state(h, &state);
             }
         }
+    }
+    drop(runs);
+    // 本批一个 run 都没发起（全部 spawn 失败）：pending 更新检查无从等待收敛，
+    // 复位标志，避免残留到后续普通探测收敛时误触发
+    if spawned == 0 {
+        PENDING_UPDATE_CHECK.store(false, Ordering::Relaxed);
     }
     push_state(h);
     Ok(())
@@ -223,6 +304,9 @@ pub(crate) fn handle_process_done(event: &ProcessDoneEvent) -> anyhow::Result<()
     }
     write_state(&h, &state);
     push_state(&h);
+    // 探测收敛钩子：本批 run 完成时移除判定，全部完成且安装域有 pending
+    // 更新检查时自动查最新版本（本地版本此刻已刷新）
+    maybe_run_update_check(&h, &event.run_id);
     Ok(())
 }
 
@@ -625,5 +709,24 @@ mod tests {
         let out = "== node ==\nv24.20.0\n== npm ==\n12.0.2\n== pnpm ==\n'pnpm' is not recognized as an internal or external command\n== registry ==\nhttps://registry.npmjs.org/\n";
         let env = parse_env(out);
         assert_eq!(env["pnpm"], json!(null));
+    }
+
+    // ==================== 探测批收敛判定 ====================
+
+    /// 正例：本批最后一个 run 完成（remove 命中 + 集合变空）= 探测收敛
+    #[test]
+    fn batch_done_on_last_run() {
+        let mut runs = HashSet::from(["a".to_string(), "b".to_string()]);
+        assert!(!is_batch_done(&mut runs, "a"));
+        assert!(is_batch_done(&mut runs, "b"));
+    }
+
+    /// 反例：run_id 不在本批（旧轮迟到的完成事件）时绝不判收敛——即使集合
+    /// 恰好已空也不触发后续动作（并发重探测下集合已被下一轮整体替换）
+    #[test]
+    fn stale_run_never_finishes_batch() {
+        let mut runs = HashSet::new();
+        assert!(!is_batch_done(&mut runs, "stale-run"));
+        assert!(runs.is_empty(), "remove 未命中不得改动集合");
     }
 }
