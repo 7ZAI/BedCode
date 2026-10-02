@@ -14,9 +14,12 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use bedcode_desktop_lib::db::Database;
 use bedcode_desktop_lib::mdns::advertiser::MdnsAdvertiser;
+use bedcode_server_websocket::endpoint;
+use bedcode_server_websocket::registry::{ClientSummary, WsSessionRegistry};
 // server-lib-split 票 03：内核组合入口 `server::core::app` 已下沉为
 // `bedcode_server_core::app::serve`，宿主侧兼容面在 `server::composition`
 // （签名与拆分前一致，调用点不必改）
@@ -29,6 +32,122 @@ use bedcode_desktop_lib::AppConfig;
 /// 认证中心 / 会话真源插件 id（`com.bedcode.terminal-session`：配对、JWT 签发、
 /// 会话登记域、WS 端点编排全在它自己进程内）
 pub const SESSION_PLUGIN_ID: &str = "com.bedcode.terminal-session";
+
+/// 常驻事件通道端点后缀（插件 manifest `contributes.wsEndpoints` 声明值；宿主拼出
+/// 完整挂载路径 `/ws/plugin/<plugin-id>/session-control`）
+pub const EVENT_CHANNEL_PATH: &str = "session-control";
+
+/// 单次测试的等待预算（与移动端装配同口径）
+const WAIT_TIMEOUT: Duration = Duration::from_secs(15);
+
+// ==================== 插件 WS 端点的只读观测（事件通道场景用） ====================
+
+/// 插件 WS 端点句柄（按属主 + 路径后缀反查；未登记则显性失败）
+///
+/// 插件侧拿到的 `wse-` 句柄不可预测，宿主测试与它走同一条真源：
+/// [`endpoint::find_by_mount`]（路由分发自身用的那张表）。
+pub fn plugin_ws_endpoint_id(plugin_id: &str, path: &str) -> String {
+    let mount = endpoint::mount_path(plugin_id, path);
+    endpoint::find_by_mount(&mount)
+        .unwrap_or_else(|| panic!("插件 WS 端点未登记：{mount}（插件未激活或 manifest 未声明该端点）"))
+        .endpoint_id
+}
+
+/// 该端点当前在线的连接摘要（**含认证态**）
+pub async fn plugin_ws_endpoint_clients(plugin_id: &str, path: &str) -> Vec<ClientSummary> {
+    let endpoint_id = plugin_ws_endpoint_id(plugin_id, path);
+    WsSessionRegistry::global().list_by_endpoint(&endpoint_id).await
+}
+
+/// 轮询直到该端点上有**首帧认证已通过**的连接（超时 panic 并打印现场）
+///
+/// 这是「事件通道就绪」的无竞态判据：插件侧广播前先看 `clientCount > 0`（零客户端
+/// 早退），而认证态置位才意味着这一条连接真的会收到广播帧——两者之间的窗口用
+/// 事件断言去等只会偶发丢首帧（真实生产里由前端 `ws_event_channel_ready` 之后的
+/// HTTP 对账兜底，但测试不能靠兜底蒙混）。
+pub async fn wait_plugin_ws_endpoint_authenticated(plugin_id: &str, path: &str, what: &str) -> ClientSummary {
+    let deadline = Instant::now() + WAIT_TIMEOUT;
+    loop {
+        let clients = plugin_ws_endpoint_clients(plugin_id, path).await;
+        if let Some(c) = clients.iter().find(|c| c.authenticated) {
+            return c.clone();
+        }
+        if Instant::now() >= deadline {
+            panic!("timed out waiting for {what}; endpoint clients={clients:#?}");
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// 轮询直到该端点上出现一条**与给定连接不同**且首帧认证已通过的连接（超时 panic）
+///
+/// 自愈类断言用「换了连接」而不是「曾经空过」：实测监督任务的重连快到
+/// **毫秒级**（HTTP reauth → 重建，全程 <10ms），任何轮询间隔都观察不到中间的空窗，
+/// 「空过」因此是不可靠判据；「client_id 变了 + 已认证」既是可靠判据，也正是
+/// 生产真正要的那条性质（真的重建了一条连接，而不是沿用旧连接）。
+pub async fn wait_new_plugin_ws_endpoint_client(
+    plugin_id: &str,
+    path: &str,
+    previous_client_id: &str,
+    what: &str,
+) -> ClientSummary {
+    match poll_new_plugin_ws_client(plugin_id, path, previous_client_id, WAIT_TIMEOUT).await {
+        Some(client) => client,
+        None => panic!(
+            "timed out waiting for {what}; endpoint clients={:#?}",
+            plugin_ws_endpoint_clients(plugin_id, path).await
+        ),
+    }
+}
+
+/// 同上的「反例」版：给定预算内**不得**出现新连接（返回是否真的保持静默）
+///
+/// 用于「认证类致命关闭不自愈」这类反例：观察窗内没有新连接才算通过。
+pub async fn assert_no_new_plugin_ws_client(
+    plugin_id: &str,
+    path: &str,
+    known_client_id: &str,
+    what: &str,
+    budget: Duration,
+) {
+    if let Some(client) = poll_new_plugin_ws_client(plugin_id, path, known_client_id, budget).await {
+        panic!("{what}：不该出现的重连真的发生了，新连接 = {}", client.client_id);
+    }
+}
+
+/// 轮询窗口内寻找「不同于 `previous_client_id` 的已认证连接」；窗口耗尽返回 `None`
+async fn poll_new_plugin_ws_client(
+    plugin_id: &str,
+    path: &str,
+    previous_client_id: &str,
+    budget: Duration,
+) -> Option<ClientSummary> {
+    let deadline = Instant::now() + budget;
+    loop {
+        let fresh: Option<ClientSummary> = plugin_ws_endpoint_clients(plugin_id, path)
+            .await
+            .into_iter()
+            .find(|c| c.authenticated && c.client_id != previous_client_id);
+        if fresh.is_some() {
+            return fresh;
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+/// 桌面侧主动断开该端点的全部连接（返回断开条数；0 条 = 没有在线连接）
+///
+/// 用于「意外掉线」场景的服务端侧动作（等价于网络中断时骨架收尾的那一步），
+/// 不伪造任何数据：断开之后帧真的不再流动，由断言去验。
+pub async fn disconnect_plugin_ws_endpoint_clients(plugin_id: &str, path: &str, code: u16, reason: &str) -> usize {
+    let endpoint_id = plugin_ws_endpoint_id(plugin_id, path);
+    WsSessionRegistry::global()
+        .disconnect_by_endpoint(&endpoint_id, code, reason)
+        .await
+}
 
 /// 随包 wasm 产物目录（桌面端 `pnpm run tauri:build` / `plugin-build.js` 产出）
 ///
@@ -62,6 +181,69 @@ fn plugin_db_root() -> &'static PathBuf {
 /// 激活时撞审批门禁）
 fn user_plugins_dir() -> PathBuf {
     std::env::temp_dir().join(format!("bedcode-crossend-userplugins-{}", std::process::id()))
+}
+
+/// 链路加密身份材料目录（GUI 侧 = `app_data_dir`；无头 rig 取临时目录）
+fn link_crypto_dir() -> &'static PathBuf {
+    static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| {
+        let dir = std::env::temp_dir().join(format!("bedcode-crossend-linkcrypto-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    })
+}
+
+// ==================== 链路加密（HTTP 信封）headless 装配 ====================
+
+/// 启动期链路加密装配（headless 版）+ 开启 HTTP 子通道
+///
+/// 与 GUI 的 `composition::init_link_crypto_at_startup(app_handle)` **同款**
+/// （`link_crypto::init_at_startup`：建 Kd 身份 → 读 DB 配置 → 同步注册），
+/// 差别只在数据目录由 rig 供给（无 AppHandle 取不到 `app_data_dir`）。
+///
+/// 必须早于配对：认证响应里的 `kdPublicB64` 就是这条身份公钥（认证中心经
+/// `host-auth.link-identity-parts` 读），移动端的 pin 由此而来——**pin 不能手工造假**
+/// （假 pin 桌面解不开，P-003 会假红）。
+pub async fn enable_link_crypto_http() {
+    // 身份材料是落盘文件（`load_or_create` 不建父目录，GUI 侧目录由 app_data_dir 保证）
+    std::fs::create_dir_all(link_crypto_dir()).expect("create link crypto dir");
+    let guard = AppContext::global().db().lock().await;
+    // `init_at_startup` 自身对身份失败只 error 日志 + 强制全关（fail-safe），
+    // 因此这里必须核对快照真的开了，否则后续断言会在“全关但无报错”下假绿
+    bedcode_server_core::link_crypto::init_at_startup(link_crypto_dir(), guard.conn());
+    // 主开关：GUI 由用户在设置页写入 DB settings，rig 直接置运行期快照
+    // （其余子开关 / 明文回落策略取默认值 = 子通道全开 + 允许老客户端明文）
+    bedcode_server_core::link_crypto::update_config(bedcode_server_core::link_crypto::LinkCryptoConfig {
+        enabled: true,
+        ..Default::default()
+    });
+    bedcode_server_core::link_crypto::sync_registration();
+    assert!(
+        bedcode_server_core::link_crypto::identity_parts().is_some(),
+        "rig 链路加密身份未就绪（建身份失败会被 fail-safe 静默降级为全关）"
+    );
+}
+
+/// 运行期开关：桌面端链路加密参与意愿（与宿主 `set_traffic_encryption_config` 同款，
+/// 差别是 rig 不落库——只改内存快照 + 同步过滤器注册）
+///
+/// 用它覆盖「两端开关不一致」这一格：移动端开着加密、桌面端关着时，桌面端必须
+/// **显性拒绝**协商过的请求，而不是把密文透给业务解析。
+pub fn set_link_crypto_enabled(enabled: bool) {
+    let mut config = bedcode_server_core::link_crypto::current_config();
+    config.enabled = enabled;
+    bedcode_server_core::link_crypto::update_config(config);
+    bedcode_server_core::link_crypto::sync_registration();
+}
+
+/// 桌面侧链路加密计数器快照（**只读**：加密帧数 / 解密失败数 / 响应取钥失败数）
+///
+/// 加密帧计数的口径（`link_crypto.rs`）：实际解封了请求体 +1、成功加密响应 +1；
+/// **GET 空 body 协商不计数**（否则会高估加密吞吐）。故“有 body 的加密往返”
+/// 每趟 +2，是 P-003 的直接证据。
+pub fn link_crypto_counters() -> (u64, u64, u64) {
+    let m = bedcode_server_core::metrics::MetricsCollector::global().sample(0, 0.0, 0);
+    (m.encrypted_frames, m.decrypt_failures, m.response_key_miss)
 }
 
 /// 组装真实服务 AppContext（`app_handle=None` 无头模式）+ 激活认证中心插件
@@ -137,6 +319,59 @@ async fn init_app_context_inner(activate_center: bool) {
     }
 }
 
+/// 当前系统信息（广播实例名断言的 device_name 来源）
+pub fn system_info() -> &'static bedcode_desktop_lib::system::info::SystemInfo {
+    AppContext::global().system_info().as_ref()
+}
+
+/// 广播 TXT `version` 的**生产真源**：`SystemInfoPort::app_version()`
+///
+/// 坑：`AppContext::system_info().app_version` **不是**应用版本——`SystemInfo::collect()`
+/// 在 `bedcode-server-base` 里编译，取的是该**包的**版本（0.1.0）；而广播走端口
+/// （宿主壳实现 = 桌面 crate 的 `CARGO_PKG_VERSION` = 2.1.1）。断言必须对着端口。
+pub fn advertised_app_version() -> String {
+    use bedcode_server_base::ports::get as ports_get;
+    ports_get().expect("server ports installed").system_info.app_version()
+}
+
+// ==================== 生产同款服务器启动（经 ServerSupervisor，票 03） ====================
+
+/// 启动服务器（**生产同款**：GUI bootstrap `lib.rs` 第 2-4 步）
+///
+/// 与 [`start_server`] 的区别不是「快慢」而是**语义**：supervisor 才是服务器生命周期的
+/// 主人，它额外做三件与本场景直接相关的事——
+/// ① 把端口写进自己的状态（`/api/health` 的 `port` 字段取自这里，不走 supervisor 就是
+/// 默认端口，用户与诊断看到的端口会撒谎）；
+/// ② 启动 mDNS 广播（用户「发现并连上桌面」的入口）；
+/// ③ 重置指标计数器。
+///
+/// 因此 mDNS / health 场景必须走这条路径；其余场景走 [`start_server`]（更轻）。
+pub async fn start_server_via_supervisor(port: u16) {
+    use bedcode_server_base::ports::get as ports_get;
+    use bedcode_server_core::supervisor::ServerSupervisor;
+
+    let supervisor = ServerSupervisor::global();
+    supervisor.init_config(port, true).await;
+    bedcode_server_websocket::WebSocketManager::global()
+        .init()
+        .await
+        .expect("WebSocketManager init（GUI bootstrap 同一步）");
+    // 端口面必须已装配（`install_server_ports`）——否则 supervisor 直接报
+    // "server lifecycle port unavailable"
+    assert!(
+        ports_get().is_some(),
+        "server ports must be installed before starting via supervisor"
+    );
+    supervisor
+        .start(port)
+        .await
+        .expect("supervisor start（生产同款启动路径）");
+}
+
+/// 停止 supervisor 管理的服务器（幂等）
+pub async fn stop_server_via_supervisor() {
+    let _ = bedcode_server_core::supervisor::ServerSupervisor::global().stop().await;
+}
 /// 探测空闲端口：绑 127.0.0.1:0 由 OS 分配，立即释放后交给服务器绑定
 pub fn pick_free_port() -> u16 {
     let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("probe free port failed");
@@ -251,4 +486,5 @@ pub async fn seed_shell_config(name: &str) -> String {
 pub fn cleanup_temp_dirs() {
     let _ = std::fs::remove_dir_all(user_plugins_dir());
     let _ = std::fs::remove_dir_all(plugin_db_root());
+    let _ = std::fs::remove_dir_all(link_crypto_dir());
 }

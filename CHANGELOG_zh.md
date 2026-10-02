@@ -44,6 +44,52 @@
 - **矛盾记录在哪**：`.scratch/2026-10-02-encryption-negotiation-fail-visible.md`
   （目前是**行为** fail-visible；spec 矛盾本身仍只在代码注释里记着，尚未走 ADR 正本清源）
 
+#### 跨端测试覆盖面扩展：事件通道 / HTTP 代理面 + 链路加密信封 / mDNS + health（新增 3 个场景二进制；移动端一处增量 API；无 ABI/无协议/无版本号变动）
+
+- **做了什么**：2026-09-30 的跨端套件盖住了「认证 → 会话 HTTP → 终端流」主干，但移动端
+  还有三条生产链路**零真实互连覆盖**：`session-control` 事件通道（7 类事件帧）、
+  移动端**所有** HTTP 请求必经的 `http_request` 代理面（Egress 门禁 + JWT 注入 +
+  链路加密信封），以及用户「发现并连上桌面」的入口（mDNS 发现 + `/api/health`）。
+  新增 3 个场景二进制，沿用「每场景 = 独立进程」的既有约定
+- **事件通道**（`event_channel_flow.rs`）：7 类事件帧在桌面插件广播与移动端事件路由之间
+  真实往返（会话生命周期 / 任务·模式·定时，逐字段断言）。真正承重的是反例：伪造 JWT
+  的连接被**认证类致命**关闭码关掉且**一帧事件都不落地**；意外断链自愈成一条**新连接**
+  （按 client_id 判，不靠观察空窗）；认证类致命关闭**不自愈**，且重新认证后**不重放**
+  漏掉的事件——缺口由 HTTP 对账补齐
+- **HTTP 代理面**（`http_proxy_flow.rs`）：Egress L1 拒未声明目标、`https://` 逃逸、
+  需授权而无 UI 时的外网请求（fail-closed）；JWT 注入双向钉死（无 token → 401 + 业务码
+  1007，伪造 token → 401，真 token → 200）；**链路加密信封**用桌面端自己的加密计数器
+  证明双向真的发生——带 body 的 POST 让 `encrypted_frames` **+2** 且解密失败为 0，
+  GET 为响应侧 +1，而 `/api/auth/*` 白名单 **+0**（「一刀切加密」过不了）。`resize`
+  端点（移动端**无 Rust 客户端**）在此首次被真实跑通
+- **mDNS + health**（`mdns_health_flow.rs`）：桌面广播、移动端真实浏览
+  `_bedcode._tcp.local.`，再逐字段断言发现到的端口、`platform`/`device_name`/`version`
+  TXT、地址与主机名；health 探测断言 `{status, port, uptime_secs}` 且端口与发现到的一致
+- **唯一一处生产代码改动**：移动端 `MdnsDiscovery::start` 需要 `AppHandle`，而它的运行时
+  类型是 `Wry`，无头进程构造不出来。拆成 `start` / `start_headless` /
+  `start_inner(Option<AppHandle>)`：浏览、解析、缓存逻辑**逐字共用**，`app_handle = None`
+  只跳过前端 `emit`（原本就是 `let _ =`）。行为不变；移动端仍是自持业务 App，不受宿主
+  「无业务代码」红线约束
+- **诚实边界（如实记录）**：桌面端加密过滤器**按设计豁免环回对端**（hook 脚本与本机工具
+  保持明文），故加密场景连本机自己的 LAN IP——rig 若连 `127.0.0.1` 会静默跳过加密分支，
+  以「明文 200」假绿通过。`/api/health` 的端口取自**supervisor**，故 mDNS 场景必须经
+  supervisor 启动（生产路径）；轻量 `start_server` 绕过它，health 会报默认端口 8765。
+  `version` TXT 的真源是 `SystemInfoPort::app_version()`（2.1.1），**不是**
+  `SystemInfo::collect().app_version`（那是 `bedcode-server-base` **包**的版本 0.1.0——
+  命名陷阱，记录不改）。`SyncConfig*` 在该通道上无帧源，不纳入。peer-net P2P 文件传输、
+  生物认证正向路径、QR 扫码 UI 仍属范围外
+- **验证**：`cross-end-tests` **11/11 绿**，连跑两次；3 个新二进制各复跑 3-4 次验稳定性。
+  变异探针：改移动端 AAD 路由绑定 → 桌面端 `AES-256-GCM` 解密失败 → 400（证明 AAD 绑定
+  真的跨端生效）；关掉 JWT 注入 → 401 ≠ 200；让致命关闭也自愈 → 「断链期间事件不得落地」
+  打红；`platform` TXT 断言改错 → 打红。变异全部逐字回滚（两端生产代码 `git diff` 为空）。
+  回归：桌面 `cargo test` **884 lib 绿 / 0 红** + 全部集成 target；移动端 `cargo test`
+  **337 绿 / 0 红**；移动 vitest **53 文件 / 524 用例**；桌面 vitest **112 文件 / 1422 用例**；
+  根 `eslint .` **0 error / 117 warning**（与改前同数）；cross-end `clippy --tests`
+  本包 **0 诊断**。未跑：`pnpm run tauri:build`、真机核验、Kotlin 编译（无 UI / Kotlin 改动）
+- **测试基建附带修掉**：mDNS 场景的失败路径曾要 ~120s——unwind 会直接 drop 仍在运行的
+  `mdns_sd::ServiceDaemon`（join 其收包线程），且 actix runtime 跑在**非 daemon** OS 线程上
+  不退。现收尾经 `catch_unwind` + resume，失败断言实测 1.0s
+
 #### 跨端真实互连集成测试（新增 `cross-end-tests` 工程 + 两端 lib 改名；无生产逻辑、无 ABI、无版本号变动）
 
 - **做了什么**：新增仓库根 Rust 包 `cross-end-tests/`，在同一测试进程内让

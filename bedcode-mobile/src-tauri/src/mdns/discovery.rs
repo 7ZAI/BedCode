@@ -32,8 +32,22 @@ impl MdnsDiscovery {
         }
     }
 
-    /// 启动服务发现
+    /// 启动服务发现（生产入口：向前端 emit 发现事件）
     pub async fn start(&self, app_handle: AppHandle) -> crate::Result<()> {
+        self.start_inner(Some(app_handle)).await
+    }
+
+    /// 无头装配口（跨端互连测试）：与 [`Self::start`] **同一套浏览 / 解析 / 缓存逻辑**，
+    /// 只是没有前端可 emit（`app_handle = None` 时前端事件跳过）。
+    ///
+    /// 存在的理由：`AppHandle` 的运行时类型是 `Wry`，无头进程里构造不出来，而发现链路的
+    /// 真实可观测面是服务缓存（`get_services`）——不值得为测试改生产行为。
+    pub async fn start_headless(&self) -> crate::Result<()> {
+        self.start_inner(None).await
+    }
+
+    /// 启动服务发现
+    pub async fn start_inner(&self, app_handle: Option<AppHandle>) -> crate::Result<()> {
         let mut scanning = self.scanning.write().await;
         if *scanning {
             tracing::warn!("[MdnsDiscovery] Already scanning");
@@ -56,6 +70,12 @@ impl MdnsDiscovery {
         let services = self.services.clone();
         let scanning_flag = self.scanning.clone();
         tokio::spawn(async move {
+            // 前端事件出口（无头装配时 `app_handle = None` → 只填缓存，不 emit）
+            let emit = |event: &str, payload: serde_json::Value| {
+                if let Some(ah) = app_handle.as_ref() {
+                    let _ = ah.emit(event, payload);
+                }
+            };
             loop {
                 // 检查是否应该停止
                 if !*scanning_flag.read().await {
@@ -68,7 +88,7 @@ impl MdnsDiscovery {
                         match event {
                             ServiceEvent::ServiceFound(service_type, instance_name) => {
                                 tracing::debug!("[MdnsDiscovery] Found: {} ({})", instance_name, service_type);
-                                let _ = app_handle.emit(
+                                emit(
                                     "mdns_service_found",
                                     serde_json::json!({
                                         "instance_name": instance_name,
@@ -124,12 +144,15 @@ impl MdnsDiscovery {
                                 // 更新缓存
                                 services.write().await.insert(instance_name.clone(), service.clone());
 
-                                let _ = app_handle.emit("mdns_service_resolved", &service);
+                                emit(
+                                    "mdns_service_resolved",
+                                    serde_json::to_value(&service).unwrap_or(serde_json::Value::Null),
+                                );
                             }
                             ServiceEvent::ServiceRemoved(service_type, instance_name) => {
                                 tracing::debug!("[MdnsDiscovery] Removed: {} ({})", instance_name, service_type);
                                 services.write().await.remove(&instance_name);
-                                let _ = app_handle.emit(
+                                emit(
                                     "mdns_service_removed",
                                     serde_json::json!({
                                         "instance_name": instance_name,

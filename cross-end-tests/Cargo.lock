@@ -1642,6 +1642,8 @@ dependencies = [
  "bedcode-desktop",
  "bedcode-mobile",
  "bedcode-server-base",
+ "bedcode-server-core",
+ "bedcode-server-websocket",
  "futures-util",
  "serde_json",
  "tauri",

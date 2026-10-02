@@ -23,6 +23,17 @@ bedcode-mobile-lib = { package = "bedcode-mobile", path = "../bedcode-mobile/src
 # 端口**装配**本身仍走宿主组合根 `server::composition::install_server_ports()`
 # （与 GUI bootstrap 同一函数），本依赖只让自检能验「装的是不是真端口面」。
 bedcode-server-base = { package = "bedcode-server-base", path = "../bedcode-desktop/packages/bedcode-server-base" }
+# 事件通道场景（票 01）：**只读**观测桌面 WS 传输注册表（端点表 + 连接认证态）。
+# 用途：给「移动端首帧认证已被桌面端接受」一条无竞态的可观测判据——移动端的就绪
+# 信号（`ws_event_channel_ready`）在首帧**发出后**即发射，插件侧的零客户端早退看
+# `clientCount`，两者之间存在窗口；注册表的 `authenticated` 恰是窗口终点。
+# 本依赖不参与任何应答生成（零 mock 口径不变）。
+bedcode-server-websocket = { package = "bedcode-server-websocket", path = "../bedcode-desktop/packages/bedcode-server-websocket" }
+# HTTP 代理面场景（票 02）：headless 启动期**链路加密装配**（建身份 / 开主开关 /
+# 注册过滤器——GUI 侧由 `composition::init_link_crypto_at_startup` 经 AppHandle 做，
+# rig 无 AppHandle 故直调 core 的同名装配），以及**只读**加密计数器（证明信封真的
+# 加/解密过，不是“明文 200”恒真）。同样不参与任何应答生成。
+bedcode-server-core = { package = "bedcode-server-core", path = "../bedcode-desktop/packages/bedcode-server-core" }
 
 [dev-dependencies]
 # tokio：测试运行时与轮询等待（与两端同版本，依赖图统一为一份）

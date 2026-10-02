@@ -13,6 +13,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use bedcode_mobile_lib::router::MobileEvent;
 use bedcode_mobile_lib::state::{clear_global_token, get_connection_manager, set_global_token};
 use bedcode_mobile_lib::terminal_link::TerminalEventSink;
 use tauri::ipc::{Channel, InvokeResponseBody};
@@ -26,8 +27,14 @@ pub const WAIT_TIMEOUT: Duration = Duration::from_secs(15);
 /// 经 `resolve_base_url` / 链路 `connect_once` 从它取地址），因此这一行就是
 /// 「移动端连上桌面端」的全部接线。
 pub async fn set_target(port: u16) {
+    set_target_at("127.0.0.1", port).await
+}
+
+/// [`set_target`] 的显式主机版（链路加密等需要**非环回**对端的用例：
+/// 桌面端加密过滤器豁免环回对端，见测试内说明）
+pub async fn set_target_at(address: &str, port: u16) {
     get_connection_manager()
-        .set_target("127.0.0.1".to_string(), port, Some("cross-end-desktop".to_string()))
+        .set_target(address.to_string(), port, Some("cross-end-desktop".to_string()))
         .await;
 }
 
@@ -165,6 +172,89 @@ pub fn output_channel(recorder: Arc<OutputRecorder>) -> Channel<InvokeResponseBo
         }
         Ok(())
     })
+}
+
+/// 移动端业务事件记录器（`ConnectionManager` 的 `MobileEvent` 广播落点）
+///
+/// 生产形态是 `router::event::start_event_forwarding` 把 `MobileEvent` 转成 Tauri
+/// 事件推给页面 WebView；无头环境没有 WebView，这里只记录**已真实发生**的
+/// `MobileEvent`（每一帧都由桌面真实插件广播、经移动端真实 WS 客户端与事件路由
+/// 解析后才落进来），不伪造任何协议应答。
+#[derive(Default)]
+pub struct MobileEventRecorder {
+    events: Mutex<Vec<MobileEvent>>,
+}
+
+impl MobileEventRecorder {
+    /// 订阅 `ConnectionManager` 事件总线并持续落盘
+    ///
+    /// 必须在触发任何业务动作**之前**挂上（广播只投递给当时的订阅者）。
+    pub fn attach() -> Arc<Self> {
+        let recorder = Arc::new(Self::default());
+        let mut rx = get_connection_manager().subscribe();
+        let sink = recorder.clone();
+        tokio::spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(event) => sink.events.lock().unwrap_or_else(|p| p.into_inner()).push(event),
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        // 丢帧必须留痕：否则断言可能把「记录器没收到」误读成「对端没广播」
+                        tracing::warn!("cross-end: MobileEvent 广播滞后 {n} 帧（记录器丢帧）");
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+        recorder
+    }
+
+    /// 已落盘的事件快照（按到达序）
+    pub fn snapshot(&self) -> Vec<MobileEvent> {
+        self.events.lock().unwrap_or_else(|p| p.into_inner()).clone()
+    }
+
+    /// 快照中满足谓词的条数（用于「一条都不许有」的反例断言）
+    pub fn count(&self, mut pred: impl FnMut(&MobileEvent) -> bool) -> usize {
+        self.snapshot().iter().filter(|e| pred(e)).count()
+    }
+
+    /// 轮询等待第一条满足谓词的 `MobileEvent`（超时 panic 并打印现场）
+    ///
+    /// 事件是异步广播：断言必须轮询等，不得用定值 sleep 赌时序。
+    pub async fn wait_for(&self, what: &str, mut pred: impl FnMut(&MobileEvent) -> bool) -> MobileEvent {
+        let deadline = Instant::now() + WAIT_TIMEOUT;
+        loop {
+            let snapshot = self.snapshot();
+            if let Some(found) = snapshot.iter().find(|e| pred(e)) {
+                return found.clone();
+            }
+            if Instant::now() >= deadline {
+                panic!("timed out waiting for {what}; events={snapshot:#?}");
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+}
+
+/// 在给定预算内断言「一条满足谓词的事件都**没有**出现」（反例：断连期间不重放、
+/// 认证未过时不路由）。返回是否真的保持静默，供调用方在失败时补充上下文。
+pub async fn assert_no_mobile_event(
+    recorder: &Arc<MobileEventRecorder>,
+    what: &str,
+    budget: Duration,
+    mut pred: impl FnMut(&MobileEvent) -> bool,
+) {
+    let deadline = Instant::now() + budget;
+    loop {
+        let offending = recorder.snapshot().into_iter().find(|e| pred(e));
+        if let Some(event) = offending {
+            panic!("{what}：不该出现的事件真的出现了 = {event:?}");
+        }
+        if Instant::now() >= deadline {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 }
 
 /// 轮询直到 `pred` 为真（超时 panic 并打印现场，防卡死）

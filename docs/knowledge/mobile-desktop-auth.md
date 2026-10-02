@@ -597,6 +597,10 @@ cd cross-end-tests && cargo test
 | `terminal_ws_flow.rs` | §终端流：订阅 → **真实 bash PTY 输出字节到达移动端页面通道** → 终态 `session_stopped` |
 | `fail_closed_flow.rs` | ADR 0031 fail-closed：无中心在册 / 伪造凭证一律拒绝（HTTP + WS 两面） |
 | `lifecycle_flow.rs` | 桌面停用 / 激活插件对移动端连接的联动影响 |
+| `terminal_output_pressure.rs` | 终端输出压力：零缺口 / 重锚 fail-visible / 背压（环淘汰与拉取节奏） |
+| `event_channel_flow.rs` | 事件通道 `session-control`：7 类事件帧真实往返（会话生命周期 / 任务·模式·定时）+ 事件不重放 + 意外断链自愈 + 认证类致命关闭不自愈 + 未认证连接零事件落地 |
+| `http_proxy_flow.rs` | 移动端 HTTP 代理面：Egress L1 门禁 + JWT 注入 + **链路加密信封**（双端真实加解密互连，AAD 路由绑定）+ **两端开关不一致时的显性拒绝** + 生产端点抽样（resize / configs / quick-actions / task-queue）+ `http_cancel` |
+| `mdns_health_flow.rs` | 连接建立前的入口：桌面 mDNS 广播 → 移动端真实浏览发现（端口 / TXT / 地址逐字对齐）+ `/api/health` 探测形状 |
 
 **覆盖不到的部分（诚实边界）**：
 
@@ -607,6 +611,34 @@ cd cross-end-tests && cargo test
   只覆盖了「未绑定 → 1008」的反例。
 - QR 的「桌面扫码确认」UI 步骤：无头装配直接走插件 `qr-code-generate` 互调
   （即桌面 UI 的同一入口）生成 token，跳过扫码动作本身。
+- peer-net 文件传输（移动端↔桌面 P2P）：走 peer-net 引擎的 mDNS + P2P 直连，
+  **不经桌面 HTTP/WS 服务器**，现 rig（Actix HTTP/WS）结构上不含它。
+- 移动端前端的 HTTP **调用点**本身（`useHttpApi.ts` 里的每个函数）：跨端覆盖的是
+  它们共用的 Rust 代理面 `execute_proxy`（`http_proxy_flow.rs`），请求构造与
+  `ApiResult` 归一化仍由前端单测负责。
+- mDNS 场景依赖**本机组播**；无组播环境（部分 CI 容器）下 `mdns_health_flow`
+  会**显性失败**（15s 内发现不到即 panic）而非静默 skip。
 
 每个场景 = 独立测试二进制（进程隔离）：桌面端 `AppContext` 是进程级 `OnceLock`
 单例，场景之间无法重装。
+
+**装配约束（踩过的坑，写下来免得重蹈）**：
+
+1. **加密面必须走非环回地址**：桌面端链路加密过滤器对**环回对端显式豁免**
+   （`link_crypto::is_exempt`：hook 脚本 / 本机工具直连 REST 不加密）。rig 两端同主机，
+   连 `127.0.0.1` 会静默命中豁免、加密分支永不执行 ⇒ `http_proxy_flow` 连本机自己的
+   LAN IP（内核路由 `local … src <同IP>`，服务器看到的对端就非环回）。
+2. **两端开关不一致 ⇒ 桌面端显性 4xx**：链路加密是**跨设备传输**属性，两端各有独立的
+   opt-in 主开关（`trafficEncryption`，默认关；桌面端关 ⇒ 过滤器不注册）。所以「移动端开 /
+   桌面端关」是真实可达的一格，而那一格下协商头没人读。现已 fail-visible：带协商头的请求
+   一律 `400` + 点名 `trafficEncryption`（契约 P-006 钉住），**不再**把密文当 JSON 喂给插件
+   报出 `1002 configId required` 这种误导性业务码。原始设计 spec 的 §6 第 3 条与
+   §6 实现语义段/§7 兼容矩阵**自相矛盾**，详见
+   `.scratch/2026-10-02-encryption-negotiation-fail-visible.md`。
+3. **服务器生命周期有两个入口**：`start_server`（`app::serve`，轻）与
+   `start_server_via_supervisor`（生产同款：写端口状态 + 起 mDNS 广播 + 重置指标）。
+   `mdns_health_flow` 必须用后者——否则既不广播，`/api/health` 还会报默认端口。
+4. **收尾必须能在断言失败时执行**：`WebSocketManager` 在**非 daemon OS 线程**上跑
+   actix runtime；`mdns_sd::ServiceDaemon` 被直接 drop（而非 `stop()`）会 join 其收包
+   线程约 2 分钟。两者叠加曾让一个失败断言跑 120s；现用 `catch_unwind` + 外层收尾，
+   失败路径实测 1.0s。

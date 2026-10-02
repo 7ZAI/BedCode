@@ -148,13 +148,19 @@ async fn session_http_surface_matches_real_desktop() {
 
     // ==================== C-003 停止 → 终态 ====================
     sessions.stop_session(&base, &session_id).await.expect("C-003 停止会话");
-    // 终态由插件 pty:exit 事件异步收尾：轮询列表直到该会话不再 running
+    // 终态由插件 pty:exit 事件异步收尾：轮询列表直到该会话进入**终态**。
+    //
+    // 判据不能是「不再 running」——`stopping` 是 `Stopping` 生命周期到达后、
+    // `Stopped` 之前的**过渡态**（插件 `SessionStatus::Stopping` 文档原话），
+    // 命中它就会在 PTY 收尾之前断言（实测偶发：读到 stopping 时真流程还在
+    // `pty:kill → pty:exit → note_status(Stopped)`，只是断言先跑了）。
+    // 终态集合与插件 `SessionStatus::is_terminal()` 同源：stopped / error。
     let mut terminal_status = None;
     for _ in 0..100 {
         let list = sessions.list_sessions(&base).await.expect("C-003 终态轮询读列表");
         if let Some(entry) = list.iter().find(|s| s["id"] == session_id) {
             let status = entry["status"].as_str().unwrap_or("").to_string();
-            if status != "running" {
+            if status == "stopped" || status == "error" {
                 terminal_status = Some(status);
                 break;
             }
