@@ -291,9 +291,13 @@ pub trait SessionApi {
     #[api("session-close")]
     fn session_close(draft: serde_json::Value) -> Result<serde_json::Value, String>;
 
-    /// 写入输入：`{sessionId, data, special?}`；`special = true` 时绕过提交行重建
-    /// 直接写字节（对齐内核 `send_special_key` 的不对称），默认走提交行重建 +
-    /// 任务域观察。
+    /// 写入输入：`{sessionId, data?, specialKey?}`；`specialKey`（字符串，非空）时
+    /// 绕过提交行重建直接写字节（对齐内核 `send_special_key` 的不对称，由
+    /// `keys.rs` 自译自写），默认走提交行重建 + 任务域观察。
+    ///
+    /// 注：wire 字段是 `specialKey`（组合串），不是布尔 `special`——旧文档宣称
+    /// 布尔形，按文档发的 `special: true` 会被静默忽略（走 commit-line 重建，
+    /// 改变特殊键输入语义），T-F16 已统一为字符串字段。
     #[api("session-input")]
     fn session_input(draft: serde_json::Value) -> Result<serde_json::Value, String>;
 
@@ -726,7 +730,11 @@ fn pair_code_verify(input: &str) -> Result<bool, String> {
 fn qr_generate(ttl: u64) -> Result<serde_json::Value, String> {
     let manager = qr_manager();
     let token = manager.generate(ttl);
-    let (_, ttl, remaining) = manager.get_active().expect("fresh token active");
+    // 刚生成的 token 必须活跃：若管理器实现异常（生成即不可见），显性报错而不
+    // abort 整个插件（非测试路径 expect 会把 WASM 插件 trap）
+    let (_, ttl, remaining) = manager.get_active().ok_or_else(|| {
+        format!("qr token generate produced no active token (ttl={ttl})")
+    })?;
     Ok(serde_json::json!({ "token": token, "ttl": ttl, "remaining": remaining }))
 }
 
@@ -787,12 +795,25 @@ impl WasmPlugin for SessionPlugin {
         kind: &str,
         payload: &[u8],
     ) -> anyhow::Result<()> {
+        // 显式匹配两个已知端点路径；未知路径 / 解析失败 → 显性报错（fail-closed）：
+        // 旧实现 `_` 兜底把**任何**未解析端点（含终端端点解析失败时）送进
+        // ws_control 的 JSON 控制帧解析器——终端帧是裸二进制 PTY 字节，被当
+        // JSON 解析可误解析/误解，未知端点的控制帧也被照单全收
         match resolve_endpoint_path(endpoint_id).as_deref() {
             Some(crate::ws_terminal::ENDPOINT_PATH) => {
                 crate::ws_terminal::on_client_message(endpoint_id, client_id, kind, payload)
             }
-            // 未知路径回退 session-control（既有端点；路径解析失败不应丢帧）
-            _ => ws_control::on_client_message(endpoint_id, client_id, kind, payload),
+            // 控制端点路径字面量与 plugin.json 声明一致（ws_control 未抽常量，
+            // 与 ws_terminal::ENDPOINT_PATH 同源清单）
+            Some("session-control") => {
+                ws_control::on_client_message(endpoint_id, client_id, kind, payload)
+            }
+            Some(other) => Err(anyhow::anyhow!(
+                "ws terminal: unknown endpoint path '{other}' (endpoint_id={endpoint_id}) — frame dropped"
+            )),
+            None => Err(anyhow::anyhow!(
+                "ws terminal: endpoint path unresolvable (endpoint_id={endpoint_id}) — frame dropped"
+            )),
         }
     }
 

@@ -141,6 +141,13 @@ impl RenameRequest {
 }
 
 /// 尺寸调整请求（`force` = 覆盖确认已通过；缺省 false）
+///
+/// **`force` 的信任边界（T-F22 设计评审）**：`force` 只应由「用户已确认覆盖」
+/// 的弹窗重发路径携带（客户端在 NeedsConfirmation 回执上弹窗，确认后带 `force`
+/// 重发同一请求）——这是 `force` 的唯一设计路径。任意已认证设备若可绕过弹窗
+/// 直接发 `force`，就能接管他人会话的正统渲染端（尺寸裁决失效）。HTTP 面在
+/// 宿主 TrafficFilterChain + 认证中心策略之后，非匿名可达；`force` 的弹窗
+/// 确认流程是否需要宿主侧强制（当前是插件侧信任）已记录为待复核项。
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResizeRequest {
@@ -464,14 +471,30 @@ pub fn restart_via_host(draft_json: &serde_json::Value) -> Result<serde_json::Va
         pending.push((request.session_id.clone(), name.clone()));
     }
     // 编排职责 5：同 id 重建（spawn → 登记 → Created → 广播 SessionCreated）
-    crate::launch::spawn_session(
+    //
+    // **失败回滚（T-F06）**：旧 PTY 已杀、旧记录已摘——spawn 失败必须恢复记录
+    // （旧会话永久消失是最坏结果）并摘掉 pending 条目（否则同 id 日后重建会
+    // 发幽灵 `session-restarted` 事件）
+    if let Err(e) = crate::launch::spawn_session(
         &config_id,
         &spec,
         &request.session_id,
         &name,
         &None,
-    )
-    .map_err(|e| format!("重启重建失败：{e}"))?;
+    ) {
+        {
+            let mut pending = PENDING_RESTART.lock().unwrap_or_else(|e| e.into_inner());
+            pending.retain(|(id, _)| id != &request.session_id);
+        }
+        // 恢复旧记录（状态保持原样；PTY 已杀由宿主管——重建失败后会话登记
+        // 与 PTY 都不在册，会话列表显示一个不可操作的幽灵会话比消失更诚实）
+        if let Err(restore_err) = crate::session::note_restore(&record) {
+            return Err(format!(
+                "重启重建失败：{e}（且恢复旧记录失败：{restore_err}）"
+            ));
+        }
+        return Err(format!("重启重建失败：{e}"));
+    }
     Ok(serde_json::json!({
         "sessionId": request.session_id,
         "name": name,
@@ -582,11 +605,24 @@ pub fn resize_via_host(draft_json: &serde_json::Value) -> Result<serde_json::Val
                     request.session_id
                 ));
             };
-            WasmHost
-                .pty_resize(pty_id, request.cols, request.rows)
-                .map_err(|e| format!("host pty resize failed: {}", e.message))?;
-            // 归属以裁决结果为准（Apply = 请求方即位正统）：登记后回执
+            // 先登记属主、再改尺寸（T-F23）：注册失败 → 尺寸未动，返回错误即可；
+            // 旧实现先 pty_resize 后 note_canonical，注册失败会让「PTY 已改尺寸但
+            // 属主未更新」，后续 resize 看旧 canonical 错误要求确认（或旧主绕过确认）
             crate::session::note_canonical(&request.session_id, &request.requester)?;
+            if let Err(e) = WasmHost.pty_resize(pty_id, request.cols, request.rows) {
+                // 尺寸改失败 → 回滚属主（恢复原登记事实；失败则显性报错）
+                let rollback = current
+                    .as_ref()
+                    .map(|c| crate::session::note_canonical(&request.session_id, c))
+                    .transpose();
+                if let Err(rollback_err) = rollback {
+                    return Err(format!(
+                        "host pty resize failed: {}（且属主回滚失败：{}）",
+                        e.message, rollback_err
+                    ));
+                }
+                return Err(format!("host pty resize failed: {}", e.message));
+            }
             Ok(serde_json::to_value(ResizeOutcome::Applied {
                 canonical: request.requester,
             })

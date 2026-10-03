@@ -277,8 +277,17 @@ pub fn windows_to_wsl_path(path: &str) -> String {
     }
 
     // 盘符路径: C:\Users\test -> /mnt/c/Users/test
-    if path.len() >= 2 && path.chars().nth(1) == Some(':') {
-        let drive = path.chars().next().unwrap().to_ascii_lowercase();
+    // **字节级冒号检查**（T-F15）：`chars().nth(1) == Some(':')` 对 `"€:\\foo"`
+    // 也为真（多字节首字符 + 冒号），随后 `&path[2..]` 按字节切非字符边界会
+    // 运行期 panic（working_dir 来自配置 wire，不可信可崩整个 WASM 插件）——
+    // 只在首字符是单 ASCII 字母（A-Za-z）且第 2 字节是 `:` 时走盘符分支
+    if path.len() >= 3 && path.as_bytes()[1] == b':' {
+        let first = path.as_bytes()[0];
+        if !(first.is_ascii_alphabetic()) {
+            // 非 ASCII 首字符 + 冒号：不是盘符（如 `€:\foo`），按普通路径透传
+            return path.replace('\\', "/");
+        }
+        let drive = (first as char).to_ascii_lowercase();
         let rest = &path[2..].replace('\\', "/");
         return format!("/mnt/{}{}", drive, rest);
     }
@@ -364,7 +373,9 @@ pub struct CreateSessionRequest {
     pub cols: Option<u16>,
     #[serde(default)]
     pub rows: Option<u16>,
-    /// 两阶段启动编排决策：缺省 true（创建即启动；与宿主 start_session 语义一致）
+    /// 两阶段启动编排决策：缺省 true（创建即启动；与宿主 start_session 语义一致）。
+    /// **`start: false` 不被支持**（P1-b 起 host-pty 无 create-without-spawn）——
+    /// 显式 false 会收到显性错误，不会被静默覆盖成「总是启动」（T-F20）
     #[serde(default = "default_start")]
     pub start: bool,
     /// 启动端设备名（可选；移动端 HTTP/WS 启动路径携带 → 正统端初始归属该端）
@@ -796,9 +807,20 @@ pub fn create_via_host(draft_json: &serde_json::Value) -> Result<serde_json::Val
         &resolve_session_base_name(&config.name, &config.working_dir, FALLBACK_SESSION_BASE_NAME),
         &sessions,
     );
-    // config→launch spec 映射 + 两阶段启动决策（P1-b 起恒即起，start 保留为
-    // wire 兼容字段，不再有「只建不启」的双态——host-pty 无 create-without-spawn）
+    // config→launch spec 映射 + 两阶段启动决策。**P1-b 起恒即起**（host-pty
+    // 无 create-without-spawn，`start` 不再有「只建不启」的双态）——显式
+    // `start: false` 若被静默覆盖成「总是启动」会让调用方拿到与预期相反的会话
+    // 行为（T-F20），故显性拒绝而不是假装支持
+    if !request.start {
+        return Err(
+            "create-with-spec: start=false not supported (host-pty spawns on create)".to_string()
+        );
+    }
     let spec = build_launch_spec(&config, request.cols, request.rows, true)?;
+    // 唯一名解析后填 spec.name（T-F21）：旧实现 spec.name 在所有真实路径为空串
+    // 占位——spec 若被序列化（宿主调用/事件/diagnostics）会话名为空；
+    // 命名唯一化在插件侧（`generate_unique_name`），此处是唯一解析点
+    let spec = LaunchSpec { name: unique_name.clone(), ..spec };
     // 会话 id 由插件自产（宿主不再预生成，`BEDCODE_SESSION_ID` 随 env 注入）
     let session_id = crate::session::ops::new_session_id()?;
     spawn_session(&request.config_id, &spec, &session_id, &unique_name, &request.source_device)

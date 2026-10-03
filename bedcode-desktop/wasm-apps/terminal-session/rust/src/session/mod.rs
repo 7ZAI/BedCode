@@ -224,6 +224,16 @@ pub fn note_removed(session_id: &str) -> Result<bool, String> {
     Ok(removed)
 }
 
+/// 恢复旧记录（重启重建失败时把摘掉的记录原样写回——旧会话永久消失是
+/// 最坏结果，恢复后会话列表至少显示一个不可操作的记录，比凭空消失诚实）
+///
+/// 语义：`REGISTRY.record` 是 upsert（幂等），旧记录重新入册；注解槽等
+/// 会话级状态不在此恢复（重启本来就要重算）
+#[cfg(target_arch = "wasm32")]
+pub fn note_restore(record: &SessionRecord) -> Result<(), String> {
+    REGISTRY.record(&WasmHost, record)
+}
+
 /// 改名
 #[cfg(target_arch = "wasm32")]
 pub fn note_renamed(session_id: &str, name: &str) -> Result<(), String> {
@@ -597,6 +607,11 @@ pub fn note_status(_session_id: &str, _to: SessionStatus) -> Result<(), String> 
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn note_removed(_session_id: &str) -> Result<bool, String> {
+    Err("session registry store unavailable outside wasm runtime".to_string())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn note_restore(_record: &SessionRecord) -> Result<(), String> {
     Err("session registry store unavailable outside wasm runtime".to_string())
 }
 

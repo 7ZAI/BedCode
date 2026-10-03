@@ -127,13 +127,19 @@ fn write_ledger(store: &impl SchemaStore, entries: &[(String, String)]) -> Resul
 ///
 /// 可对同一库重复执行：第二次 `renamed` 为空、`already_prefixed` 覆盖全部条目。
 /// 必须在各域 `ensure_schema` 之前调用（见模块文档「顺序」）。
+///
+/// **原子性**：逐条 rename 后**立即写账本**（write-through）——rename 成功但
+/// 进程死在落账本之间会让已改名表不在账本里、重跑无法修复（表已无旧名 →
+/// 被算作 already_prefixed 跳过且不回填账本），回滚窗口永久丢失。每条 rename
+/// 前先落账本同样危险（改名失败账本却记了）——故采用「先 rename 成功 →
+/// 立即 write 账本 → 下一条」的逐条原子窗口。
 pub fn migrate_to_prefixed_names(
     store: &impl SchemaStore,
 ) -> Result<SchemaMigrationReport, String> {
     store.ensure_meta()?;
     // 账本先读后改：坏账本必须在**任何改名发生之前**显性失败，否则半途而废的库
     // （名已改、账未落）会让回滚无从依据
-    let existing_ledger = read_ledger(store)?;
+    let mut ledger = read_ledger(store)?;
     let tables = store.table_names()?;
     let has = |name: &str| tables.iter().any(|t| t == name);
 
@@ -149,35 +155,43 @@ pub fn migrate_to_prefixed_names(
                 .push(format!("{}|{}", entry.legacy, entry.prefixed));
             continue;
         }
+        // rename + 旧索引清理（索引名随表名不自动跟改，新索引由 ensure_schema 建回）
         store.rename_table(entry.legacy, entry.prefixed)?;
-        // 旧索引随重命名一起清掉（名字不会自动跟改），新索引由 ensure_schema 建回
         for index in store.indexes_of(entry.prefixed)? {
             store.drop_index(&index)?;
             report.indexes_dropped += 1;
         }
+        // **write-through**：本条 rename 已生效，立即入账（进程死在账本落盘
+        // 之前 = 该条回滚窗口丢失，见函数文档原子性段）
+        if !ledger.iter().any(|(legacy, _)| legacy == entry.legacy) {
+            ledger.push((entry.legacy.to_string(), entry.prefixed.to_string()));
+        }
+        write_ledger(store, &ledger)?;
+        report.ledger_written = true;
         report
             .renamed
             .push(format!("{}→{}", entry.legacy, entry.prefixed));
     }
 
-    if !report.renamed.is_empty() {
-        // 账本累积：回滚需要知道历史上改过哪些名字，而不只是最近一批
-        let mut ledger = existing_ledger;
-        for entry in TABLE_RENAMES {
-            if report
-                .renamed
-                .iter()
-                .any(|r| r == &format!("{}→{}", entry.legacy, entry.prefixed))
-            {
-                if !ledger.iter().any(|(legacy, _)| legacy == entry.legacy) {
-                    ledger.push((entry.legacy.to_string(), entry.prefixed.to_string()));
-                }
-            }
-        }
-        write_ledger(store, &ledger)?;
-        report.ledger_written = true;
-    }
     Ok(report)
+}
+
+/// 标识符白名单校验（SQL 拼接前的最后一道闸）：`[A-Za-z_][A-Za-z0-9_]*`
+///
+/// 表名 / 索引名来自本模块常量（可信）或 `plugin_meta` 账本读回值（可被
+/// 篡改/恢复——引号在 JSON 字符串内合法，解析检查拦不住）。未校验直插会
+/// 破坏 SQL 或注入（T-F05）；这里在拼语句前严格白名单拒绝。
+pub fn validate_identifier(name: &str) -> Result<(), String> {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        _ => return Err(format!("invalid SQL identifier: {name:?}")),
+    }
+    if chars.all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        Ok(())
+    } else {
+        Err(format!("invalid SQL identifier: {name:?}"))
+    }
 }
 
 /// 回滚：按账本把新名改回旧名（票 16「旧名回滚窗口」的执行面）
@@ -192,6 +206,7 @@ pub fn rollback_to_legacy_names(store: &impl SchemaStore) -> Result<SchemaMigrat
 
     let mut report = SchemaMigrationReport::default();
     let mut remaining: Vec<(String, String)> = Vec::new();
+    let mut changed = false;
     for (legacy, prefixed) in ledger {
         if !has(&prefixed) {
             // 新名不在了（表被删或已回滚过）→ 该条账目作废
@@ -208,9 +223,14 @@ pub fn rollback_to_legacy_names(store: &impl SchemaStore) -> Result<SchemaMigrat
             report.indexes_dropped += 1;
         }
         report.renamed.push(format!("{}→{}", prefixed, legacy));
+        changed = true;
     }
-    write_ledger(store, &remaining)?;
-    report.ledger_written = !report.renamed.is_empty();
+    // 只在有实际变更时写账本（无条目 rename 时写 = 清账/重写同账本，
+    // 与 `ledger_written` 的「账本是否被写过」含义矛盾）
+    if changed {
+        write_ledger(store, &remaining)?;
+        report.ledger_written = true;
+    }
     Ok(report)
 }
 
@@ -242,15 +262,26 @@ mod wasm_impl {
     use bedcode_plugin_api::wasm_host::WasmHost;
 
     /// 查询结果（JSON 数组）取某一列的字符串值
-    fn column(rows: Option<serde_json::Value>, key: &str) -> Vec<String> {
-        rows.unwrap_or_else(|| serde_json::json!([]))
-            .as_array()
-            .map(|a| {
-                a.iter()
-                    .filter_map(|r| r.get(key).and_then(|v| v.as_str()).map(str::to_string))
-                    .collect()
+    ///
+    /// **形状契约**：`None`（空结果）→ 空 Vec；非数组 / 行不是对象 / 列值不是
+    /// 字符串 → 显性 `Err`（宿主 wire 契约漂移时不能静默映射为空——那会把
+    /// 「读到畸形响应」当成「无账本/无表」，迁移逻辑据此做出错误决策）
+    fn column(rows: Option<serde_json::Value>, key: &str) -> Result<Vec<String>, String> {
+        let rows = rows.unwrap_or_else(|| serde_json::json!([]));
+        let array = rows.as_array().ok_or_else(|| {
+            format!("schema query did not return an array (key={key}): {rows}")
+        })?;
+        array
+            .iter()
+            .map(|r| {
+                r.get(key)
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .ok_or_else(|| {
+                        format!("schema query row missing string column '{key}': {r}")
+                    })
             })
-            .unwrap_or_default()
+            .collect()
     }
 
     impl SchemaStore for WasmHost {
@@ -264,7 +295,7 @@ mod wasm_impl {
             let rows = self
                 .plugin_db_query("SELECT name FROM sqlite_master WHERE type = 'table'")
                 .map_err(|e| format!("sqlite_master table query failed: {}", e.message))?;
-            Ok(column(rows, "name")
+            Ok(column(rows, "name")?
                 .into_iter()
                 .filter(|n| !n.starts_with("sqlite_"))
                 .collect())
@@ -277,21 +308,30 @@ mod wasm_impl {
                     &sql_params![table],
                 )
                 .map_err(|e| format!("sqlite_master index query failed: {}", e.message))?;
-            Ok(column(rows, "name")
+            Ok(column(rows, "name")?
                 .into_iter()
                 .filter(|n| !n.starts_with("sqlite_autoindex"))
                 .collect())
         }
 
         fn rename_table(&self, from: &str, to: &str) -> Result<(), String> {
-            // 表名来自本模块常量与账本（不由外部输入拼接），标识符无需转义
-            self.plugin_db_execute(&format!("ALTER TABLE {} RENAME TO {}", from, to))
-                .map_err(|e| format!("rename table {} → {} failed: {}", from, to, e.message))?;
+            // 标识符白名单校验：rollback 路径把 `plugin_meta` 账本读回值喂进来，
+            // 账本可被篡改/恢复（引号在 JSON 字符串内合法，解析检查拦不住）——
+            // 未校验的直插会破坏 SQL 或注入；先按 `[A-Za-z_][A-Za-z0-9_]*`
+            // 严格白名单校验，再引号包裹拼语句
+            validate_identifier(from)?;
+            validate_identifier(to)?;
+            self.plugin_db_execute(&format!(
+                "ALTER TABLE \"{}\" RENAME TO \"{}\"",
+                from, to
+            ))
+            .map_err(|e| format!("rename table {} → {} failed: {}", from, to, e.message))?;
             Ok(())
         }
 
         fn drop_index(&self, name: &str) -> Result<(), String> {
-            self.plugin_db_execute(&format!("DROP INDEX IF EXISTS {}", name))
+            validate_identifier(name)?;
+            self.plugin_db_execute(&format!("DROP INDEX IF EXISTS \"{}\"", name))
                 .map_err(|e| format!("drop index {} failed: {}", name, e.message))?;
             Ok(())
         }
@@ -303,7 +343,7 @@ mod wasm_impl {
                     &sql_params![key],
                 )
                 .map_err(|e| format!("plugin_meta read failed: {}", e.message))?;
-            Ok(column(rows, "value").into_iter().next())
+            Ok(column(rows, "value")?.into_iter().next())
         }
 
         fn meta_set(&self, key: &str, value: &str) -> Result<(), String> {

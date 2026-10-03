@@ -150,11 +150,14 @@ pub(crate) fn format_rfc3339_utc(unix_secs: u64) -> String {
     format!("{year:04}-{month:02}-{day:02}T{h:02}:{m:02}:{s:02}Z")
 }
 
-/// RFC3339 UTC（秒级）→ unix 秒；解析失败返回 None
+/// RFC3339 → unix 秒；解析失败返回 None
+///
+/// 期望形态 "YYYY-MM-DDTHH:MM:SS"，容忍尾部 `Z`（UTC）或 `±HH:MM` 时区偏移
+/// （偏移归一化到 UTC：`...T01:00:00+02:00` == `...T23:00:00Z` 前一日）——
+/// 字典序排序在混合偏移下不等于时间序（T-F04），比较前必须归一到 unix 秒
 pub(crate) fn parse_rfc3339_utc(s: &str) -> Option<u64> {
-    // 期望形态 "YYYY-MM-DDTHH:MM:SSZ"（容忍尾部 Z/时区偏移为 UTC 零偏移）
     let (date_part, time_part) = s.split_once('T')?;
-    let time_part = time_part.strip_suffix('Z').unwrap_or(time_part);
+    let (time_part, offset_secs) = split_timezone(time_part)?;
     let mut date_it = date_part.split('-');
     let year: i64 = date_it.next()?.parse().ok()?;
     let month: i64 = date_it.next()?.parse().ok()?;
@@ -164,7 +167,29 @@ pub(crate) fn parse_rfc3339_utc(s: &str) -> Option<u64> {
     let min: i64 = time_it.next()?.parse().ok()?;
     let sec: i64 = time_it.next()?.parse().ok()?;
     let days = days_from_civil(year, month, day)?;
-    Some((days as u64) * 86_400 + (hour as u64) * 3600 + (min as u64) * 60 + sec as u64)
+    let local = (days as i64) * 86_400 + hour * 3600 + min * 60 + sec;
+    Some((local - offset_secs) as u64)
+}
+
+/// 解析时区后缀：`Z` → 0 偏移；`±HH:MM` → 秒偏移（符号以「本地 = UTC + offset」
+/// 记——`+02:00` 意味着本地比 UTC 早 2 小时，归一时要减）；无后缀 → 0（宽容）
+fn split_timezone(time_part: &str) -> Option<(&str, i64)> {
+    let trimmed = time_part.strip_suffix('Z').unwrap_or(time_part);
+    for (i, ch) in trimmed.char_indices() {
+        if ch == '+' || ch == '-' {
+            if i == 0 {
+                return None; // 缺小时部分
+            }
+            let (base, offset) = trimmed.split_at(i);
+            let mut it = offset[1..].split(':');
+            let oh: i64 = it.next()?.parse().ok()?;
+            let om: i64 = it.next()?.parse().ok()?;
+            let secs = oh * 3600 + om * 60;
+            let sign = if offset.starts_with('-') { -1 } else { 1 };
+            return Some((base, sign * secs));
+        }
+    }
+    Some((trimmed, 0))
 }
 
 /// Howard Hinnant `days_from_civil` 算法（无符号运算安全版）— 公历日序号 → 日期

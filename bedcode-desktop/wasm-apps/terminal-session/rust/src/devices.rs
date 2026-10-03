@@ -16,8 +16,10 @@
 //!
 //! 内核没有「会话 ↔ 设备」归属表（会话记录无 source_device 持久化），唯一可靠的
 //! 每设备关联事实是**正统渲染端登记**（`canonicalRenderer`，会话被哪个端在看）。
-//! 故「该设备真正拥有的会话数」= 会话列表中 `canonicalRenderer.kind == mobile` 且
-//! `deviceName == 该连接设备名` 的会话数；归属 Desktop / 无归属的会话计为宿主本机。
+//! 故「该设备关联的会话数」= 会话列表中 `canonicalRenderer.kind == mobile` 且
+//! `deviceName == 该连接设备名` 的会话数——**含 Stopped 历史会话**（canonical
+//! 登记在会话停止后仍保留，计数口径按登记事实而非运行态；行为测试锁定
+//! `s4` Stopped 计入）；归属 Desktop / 无归属的会话计为宿主本机。
 //! 该口径随内核事实演进可调（ticket 14 接真 UI 时复核），但**排序与展示组织全在
 //! 插件侧**是本模块的固定边界。
 //!
@@ -132,36 +134,57 @@ fn parse_canonical_device(v: Option<&serde_json::Value>) -> Option<String> {
 
 // ==================== 派生（纯函数，native 单测全覆盖） ====================
 
+/// 配对记录行（命名结构体，替代位置化 4 元组——字段顺序错序会静默编译通过，T-F14）
+#[derive(Debug, Clone)]
+pub struct PairingRow {
+    pub id: String,
+    pub device_name: String,
+    pub fingerprint: String,
+    pub is_active: bool,
+}
+
 /// 派生连接列表行：每连接一行，带在线配对信息 / 会话数 / 会话明细（含任务状态合并）
 ///
 /// - 输入序 == 输出序（连接 raw 序保留；排序与展示组织归本插件，未来可按需调）
-/// - `paired`：`trusted-devices-list` 的**全量原始记录**（含软删行，`(id, deviceName,
-///   fingerprint, isActive)`）；本函数只把**活跃且指纹命中**的记录合并进 `paired` 行——
-///   已撤销设备（`isActive=false`）不合并配对信息，但**连接行保留**（不新增踢下线
+/// - `paired`：`trusted-devices-list` 的**全量原始记录**（含软删行）；本函数只把
+///   **活跃且指纹命中且连接已认证**的记录合并进 `paired` 行——未认证连接报个
+///   可信设备的指纹不能被渲染成已识别设备（T-F11）；已撤销设备
+///   （`isActive=false`）不合并配对信息，但**连接行保留**（不新增踢下线
 ///   语义，行为测试锁定，spec 保持宿主 `remove_pairing` 现状）
 /// - `sessions`：该设备名命中的会话明细（`canonicalRenderer.mobile.deviceName` 匹配），
-///   任务状态从会话注解槽合并（本插件写入的 `taskStatus` / `taskReason` 键）
+///   任务状态从会话注解槽合并（本插件写入的 `taskStatus` / `taskReason` 键）；
+///   空名连接不拥有任何会话（T-F12：无名字连接 fallback "" 不能认领所有
+///   空名会话）
 pub fn derive_connected(
     connections: &[ConnectionRecord],
     sessions: &[SessionRow],
-    paired: &[(String, String, String, bool)],
+    paired: &[PairingRow],
 ) -> Vec<serde_json::Value> {
     let mut out = Vec::with_capacity(connections.len());
     for conn in connections {
-        let device_name = conn.device_name.clone().unwrap_or_default();
-        let paired_row = conn
-            .fingerprint
-            .as_deref()
-            .and_then(|fp| {
+        let device_name = conn.device_name.as_deref().unwrap_or("");
+        // T-F11：paired 合并门加 conn.authenticated（与「在线判定」语义一致——
+        // 未认证连接报可信指纹不得渲染为已配对设备）
+        let paired_row = if conn.authenticated {
+            conn.fingerprint.as_deref().and_then(|fp| {
                 paired
                     .iter()
-                    .find(|(_, _, pfp, active)| *active && pfp == fp)
+                    .find(|r| r.is_active && r.fingerprint == fp)
+                    .map(|r| serde_json::json!({ "id": r.id, "deviceName": r.device_name }))
             })
-            .map(|(id, name, _, _)| serde_json::json!({ "id": id, "deviceName": name }));
-        let owned: Vec<&SessionRow> = sessions
-            .iter()
-            .filter(|s| s.canonical_device.as_deref() == Some(device_name.as_str()))
-            .collect();
+        } else {
+            None
+        };
+        // T-F12：空名连接不拥有任何会话（canonical 空名匹配会把所有空名会话
+        // 全部计给无名连接；同名校验「一名一连接」留给上游文档化）
+        let owned: Vec<&SessionRow> = if device_name.is_empty() {
+            Vec::new()
+        } else {
+            sessions
+                .iter()
+                .filter(|s| s.canonical_device.as_deref() == Some(device_name))
+                .collect()
+        };
         let session_rows: Vec<serde_json::Value> = owned
             .iter()
             .map(|s| {
@@ -201,11 +224,28 @@ pub fn connect_list_via_host() -> Result<serde_json::Value, String> {
     let records = crate::auth_records::records().map_err(|e| e)?;
     // 全量原始记录（含软删行 `is_active=false`）→ 推导；活跃过滤在
     // `derive_connected` 内完成（撤销检测依赖软删行可见；派生视图不得把已撤销
-    // 设备合并为 paired）
-    let paired: Vec<(String, String, String, bool)> = records
+    // 设备合并为 paired）。T-F24：同一 fingerprint 存在多条 active 配对时
+    // `.find` 取首个是非确定渲染——host 侧不变量是 fingerprint 唯一（auth_pairings
+    // 有 UNIQUE 约束），此处防御性报错（宿主契约破坏不该静默任意取一个）
+    let mut seen: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
+    let paired: Vec<PairingRow> = records
         .into_iter()
-        .map(|d| (d.id, d.device_name, d.device_fingerprint, d.is_active))
+        .map(|d| PairingRow {
+            id: d.id,
+            device_name: d.device_name,
+            fingerprint: d.device_fingerprint,
+            is_active: d.is_active,
+        })
         .collect();
+    for row in paired.iter().filter(|r| r.is_active) {
+        if let Some(prev) = seen.insert(&row.fingerprint, &row.id) {
+            return Err(format!(
+                "host pairing contract violated: fingerprint '{}' has multiple active rows \
+                 ({} and {})",
+                row.fingerprint, prev, row.id
+            ));
+        }
+    }
     let rows = derive_connected(
         &parse_connections(&connections),
         &parse_sessions(&sessions),
@@ -275,12 +315,22 @@ mod tests {
         }
     }
 
-    fn pairing(id: &str, name: &str, fp: &str) -> (String, String, String, bool) {
-        (id.to_string(), name.to_string(), fp.to_string(), true)
+    fn pairing(id: &str, name: &str, fp: &str) -> PairingRow {
+        PairingRow {
+            id: id.to_string(),
+            device_name: name.to_string(),
+            fingerprint: fp.to_string(),
+            is_active: true,
+        }
     }
 
-    fn revoked_pairing(id: &str, name: &str, fp: &str) -> (String, String, String, bool) {
-        (id.to_string(), name.to_string(), fp.to_string(), false)
+    fn revoked_pairing(id: &str, name: &str, fp: &str) -> PairingRow {
+        PairingRow {
+            id: id.to_string(),
+            device_name: name.to_string(),
+            fingerprint: fp.to_string(),
+            is_active: false,
+        }
     }
 
     /// 派生视图：连接指纹匹配配对 → paired 行；设备名命中正统渲染端 → 会话数与会话明细

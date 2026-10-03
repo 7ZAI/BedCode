@@ -258,10 +258,20 @@ pub fn active_pairings_json(all: &[PairingRecord]) -> serde_json::Value {
             }))
         })
         .collect();
+    // 按 pairedAt 时间序倒序（最新配对在前）：字典序在混合 offset 的 RFC3339
+    // 下不等于时间序（T-F04），先归一 unix 秒再比；解析失败按 0 靠后（宽容）
     rows.sort_by(|a, b| {
-        let left = a.get("pairedAt").and_then(|v| v.as_str()).unwrap_or("");
-        let right = b.get("pairedAt").and_then(|v| v.as_str()).unwrap_or("");
-        right.cmp(left)
+        let left = a
+            .get("pairedAt")
+            .and_then(|v| v.as_str())
+            .and_then(crate::pairing::code::parse_rfc3339_utc)
+            .unwrap_or(0);
+        let right = b
+            .get("pairedAt")
+            .and_then(|v| v.as_str())
+            .and_then(crate::pairing::code::parse_rfc3339_utc)
+            .unwrap_or(0);
+        right.cmp(&left)
     });
     serde_json::Value::Array(rows)
 }

@@ -13,14 +13,21 @@
 pub fn wsl_distros_via_host() -> Result<serde_json::Value, String> {
     use bedcode_plugin_api::host::HostPlatform;
     use bedcode_plugin_api::wasm_host::WasmHost;
+    // 保留宿主错误原文（含 code/原语名），不拍平成固定前缀（T-F13）：
+    // 丢 kind/code 会让前端只能显示「失败」而无法区分「非 Windows / 未安装 /
+    // 命令不可用」三种排障方向
     let distros = WasmHost
         .platform_wsl_distros()
         .map_err(|e| format!("host wsl-distros failed: {}", e.message))?;
     Ok(serde_json::json!({ "distros": distros }))
 }
 
-/// native（cargo test）：宿主原语不可用 → 显性失败（不静默返回空列表）
-#[cfg(not(target_arch = "wasm32"))]
+/// native（cargo test 专用）：宿主原语不可用 → 显性失败（不静默返回空列表）。
+///
+/// `#[cfg(all(not(target_arch = "wasm32"), test))]` 而非 `#[cfg(not(target_arch = "wasm32"))]`
+/// （T-F27）：旧写法把硬错桩编译进**每个非 wasm 构建**（含未来的 native 二进制），
+/// 非 test 调用方拿到的是运行期错误而非编译期信号——真 test-only 用 test cfg 限定
+#[cfg(all(not(target_arch = "wasm32"), test))]
 pub fn wsl_distros_via_host() -> Result<serde_json::Value, String> {
     Err("wsl distros unavailable outside wasm runtime".to_string())
 }

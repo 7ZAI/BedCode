@@ -174,7 +174,12 @@ fn qr_connection_info(
     host: Option<&str>,
     status: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
+    // 端口缺失/非法 → 显性报错（默认 0 会产出连不上机的 QR 载荷，
+    // 伪装成「可配对」比报错更难排障）；IPv4 空回退同理拒绝
     let port = config_seconds(ConfigKey::NetworkPort, 0)?;
+    if port == 0 {
+        return Err("network port unavailable (config missing/invalid)".to_string());
+    }
     let resolved_host = match host.map(str::trim).filter(|h| !h.is_empty()) {
         Some(h) => h.to_string(),
         None => WasmHost
@@ -182,7 +187,8 @@ fn qr_connection_info(
             .map_err(|e| e.message)?
             .into_iter()
             .next()
-            .unwrap_or_default(),
+            .filter(|h| !h.is_empty())
+            .ok_or_else(|| "no local IPv4 address available for QR payload".to_string())?,
     };
     let token = status
         .get("token")
@@ -255,10 +261,21 @@ pub fn active_pairings(raw: &serde_json::Value) -> Vec<serde_json::Value> {
             }))
         })
         .collect();
+    // 按 pairedAt 时间序倒序（最新配对在前）：字典序在混合 offset 的 RFC3339
+    // 下不等于时间序（`...T00:00:00Z` vs `...T01:00:00+02:00`），先归一 unix 秒
+    // 再比；解析失败（脏数据）按 0 处理并稳定靠后（宽容，不 panic）
     rows.sort_by(|a, b| {
-        let left = a.get("pairedAt").and_then(|v| v.as_str()).unwrap_or("");
-        let right = b.get("pairedAt").and_then(|v| v.as_str()).unwrap_or("");
-        right.cmp(left)
+        let left = a
+            .get("pairedAt")
+            .and_then(|v| v.as_str())
+            .and_then(crate::pairing::code::parse_rfc3339_utc)
+            .unwrap_or(0);
+        let right = b
+            .get("pairedAt")
+            .and_then(|v| v.as_str())
+            .and_then(crate::pairing::code::parse_rfc3339_utc)
+            .unwrap_or(0);
+        right.cmp(&left)
     });
     rows
 }

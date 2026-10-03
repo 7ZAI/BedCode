@@ -104,6 +104,9 @@ pub fn event_payload(identity: &DeviceIdentity, connected: bool) -> serde_json::
 // ==================== wasm：连接事件驱动（touch / close + emit） ====================
 
 /// 解析连接身份（`connection-context`；失败 → `None`，调用方按无身份处理）
+///
+/// 失败即意味着身份丢失（模块文档化的反注册竞态路径）：调用方只负责选
+/// 「按无身份处理」还是「显性留痕」——本函数不替调用方降级日志级别
 #[cfg(target_arch = "wasm32")]
 fn resolve_identity(endpoint_id: &str, client_id: &str) -> Option<DeviceIdentity> {
     let ctx = WasmHost
@@ -129,11 +132,23 @@ pub fn on_client_connected(endpoint_id: &str, client_id: &str) {
         return;
     };
     // 接入期记忆身份：断开事件到达时连接可能已被宿主摘除（bus 投递异步竞态），
-    // 届时 connection-context 查不到——断开期直接消费本表，不再查询
-    connected_devices()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(client_id.to_string(), identity.clone());
+    // 届时 connection-context 查不到——断开期直接消费本表，不再查询。
+    // **幂等化**：同一 client_id 已有活条目（重复/乱序 connect）→ 只刷新记忆，
+    // 不重触认证记录、不重发 device:connected（避免幽灵记忆与重复计数）
+    {
+        let mut guard = connected_devices().lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(existing) = guard.get(client_id) {
+            if existing.fingerprint == identity.fingerprint {
+                WasmHost.log_debug(&format!(
+                    "device: duplicate connect event ignored (client_id={client_id}, fingerprint unchanged)"
+                ));
+                return;
+            }
+            // 指纹变了 = 同 client_id 换身份（重连后身份再派生）：更新记忆，
+            // 按新身份重新 touch / 重发（旧身份由宿主按旧连接断开收尾）
+        }
+        guard.insert(client_id.to_string(), identity.clone());
+    }
     // 认证记录 touch（本插件私有库真源；失败显性留痕，不阻断事件发布）
     if let Err(e) = crate::auth_records::touch(&fp) {
         WasmHost.log_warn(&format!("device: auth record touch failed (fingerprint len={}): {e}", fp.len()));
@@ -149,16 +164,30 @@ pub fn on_client_connected(endpoint_id: &str, client_id: &str) {
 /// 设备下线（`ws:client-disconnect` 驱动）：
 /// 指纹存在 → 认证记录 close + emit `device:disconnected`；无指纹 → 跳过。
 /// 身份优先取接入期记忆（免查询）；记忆缺失（插件重启）才兑底查一次。
+///
+/// **锁纪律**：先 `remove` 把记忆身份**取出并释放锁**，再 `or_else` 宿主回程
+/// `resolve_identity`——旧实现 `remove().or_else(...)` 里 MutexGuard 活到
+/// let 初始化结束，宿主同步重入插件时非重入 Mutex 死锁（见 T-F02）
 #[cfg(target_arch = "wasm32")]
 pub fn on_client_disconnected(endpoint_id: &str, client_id: &str) {
-    let identity = connected_devices()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .remove(client_id)
-        .or_else(|| resolve_identity(endpoint_id, client_id));
+    let remembered = {
+        let mut guard = connected_devices().lock().unwrap_or_else(|e| e.into_inner());
+        guard.remove(client_id)
+    };
+    let identity = remembered.or_else(|| resolve_identity(endpoint_id, client_id));
     let Some(identity) = identity else {
-        WasmHost.log_debug(&format!(
-            "device: disconnect event skipped (no remembered identity, client_id={client_id})"
+        // 无记忆且 fallback 失败：该设备 auth_records 持久条目将保持 open
+        // （close 永不来）——**warn 级显性留痕**（模块契约：任何让真源变 stale
+        // 的路径要 warn 可见），而不是 debug 静默（「从未配对」与「身份丢失」
+        // 不可混为一谈）；错误经 `.ok()` 丢弃丢掉了上下文，这里补 endpoint/client
+        let err_detail = WasmHost
+            .ws_connection_context(endpoint_id, client_id)
+            .err()
+            .map(|e| e.message)
+            .unwrap_or_else(|| "connection already removed by host".to_string());
+        WasmHost.log_warn(&format!(
+            "device: disconnect identity lost (auth record stays open) \
+             endpoint_id={endpoint_id} client_id={client_id} detail={err_detail}"
         ));
         return;
     };
