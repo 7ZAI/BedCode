@@ -42,7 +42,8 @@ pub fn needs_close_confirmation(status: &SessionStatus) -> bool {
 /// - 同态 → 合法（幂等写：重复的 `Stopped` 迁移不报错）
 /// - 终态（`Stopped` / `Error`）→ 任何异态：**非法**（会话记录不能死而复生；
 ///   重启走「移除 + 同 id 重建」，是新记录而不是迁移）
-/// - `Idle` 只能被 `Starting` 认领（宿主会把 `Idle` 视作起始态）；
+/// - `Idle` 只能被 `Starting` 认领，或直接关停为 `Stopped`（宿主会把 `Idle`
+///   视作起始态；直接关停 idle 会话是有意的——未启动会话无需经过停止流程）；
 ///   本域今天不生产 `Idle`
 /// - `Stopping` 不可回到 `Running`（宿主 `kill` 路径单调向前）
 pub fn is_legal(from: &SessionStatus, to: &SessionStatus) -> bool {
@@ -79,6 +80,7 @@ pub fn is_legal(from: &SessionStatus, to: &SessionStatus) -> bool {
 /// - `Stopped` / `Error`：补 `stopped_at`
 /// - 任何**发生**的迁移都刷新 `updated_at`
 pub fn transition(record: &SessionRecord, to: SessionStatus, now: &str) -> Result<SessionRecord, String> {
+    validate_timestamp(now)?;
     if record.status == to {
         return Ok(record.clone());
     }
@@ -107,12 +109,26 @@ pub fn transition(record: &SessionRecord, to: SessionStatus, now: &str) -> Resul
     Ok(next)
 }
 
+/// 时间戳形状校验（RFC3339 基本形态）：域边界把畸形串挡在门外，
+/// 防止坏钟 / 脏数据写进 `started_at` / `stopped_at` / `updated_at`
+/// （字典序比较依赖良构时间戳，畸形值会静默破坏顺序语义）
+fn validate_timestamp(now: &str) -> Result<(), String> {
+    if now.len() != 20 || !now.ends_with('Z') || !now.contains('T') {
+        return Err(format!("invalid RFC3339 timestamp: {now}"));
+    }
+    Ok(())
+}
+
 /// 新建记录（创建编排产出 id 后调用）
 ///
 /// `start = true` → `Running` 且 `started_at` 已填、正统渲染端初始归属 = 启动端
 /// （桌面本地启动 = `Desktop`，移动端经 HTTP/WS 启动 = `Mobile{device_name}`），
 /// 与宿主 `create_session_from_spec` 的归属规则逐字一致；
 /// `start = false` → `Starting`、无归属、`started_at` 留空（两阶段第一阶段）。
+///
+/// `id` / `config_id` 形状不校验（store-restore 路径可携带存量值）：UUID-v4 形状
+/// 是 `new_session_id` 的**创建端契约**，不是本函数的不变量——消费方需要 UUID 时
+/// 应经 `new_session_id` 生成。
 pub fn new_record(
     id: &str,
     config_id: &str,
@@ -222,12 +238,40 @@ mod tests {
         ));
     }
 
+    /// Idle 双出口：可被 Starting 认领（正常起始），也可直接关停为 Stopped
+    /// （未启动会话无需经过停止流程）——文档契约与本实现钉死，防止分支误删
+    #[test]
+    fn idle_has_two_legal_exits_starting_and_stopped() {
+        assert!(is_legal(&SessionStatus::Idle, &SessionStatus::Starting));
+        assert!(is_legal(&SessionStatus::Idle, &SessionStatus::Stopped));
+        assert!(!is_legal(&SessionStatus::Idle, &SessionStatus::Running));
+        assert!(!is_legal(&SessionStatus::Idle, &SessionStatus::Error(None)));
+        // 直接关停 idle：Stopped 终态带 stopped_at、started_at 留空（Idle 从未启动）
+        let idle = record(SessionStatus::Idle);
+        let stopped = transition(&idle, SessionStatus::Stopped, now()).expect("Idle 直接关停合法");
+        assert_eq!(stopped.status, SessionStatus::Stopped);
+        assert!(stopped.stopped_at.is_some(), "直接关停必须落 stopped_at");
+        assert!(stopped.started_at.is_none(), "Idle 从未启动，started_at 保持空");
+    }
+
     /// 同态幂等：不报错、不刷时间戳（避免 updatedAt 抖动）
     #[test]
     fn same_status_is_idempotent_and_does_not_touch_timestamps() {
         let before = record(SessionStatus::Running);
         let after = transition(&before, SessionStatus::Running, "2026-09-23T11:00:00Z").expect("同态合法");
         assert_eq!(after, before, "同态写不得改动任何字段");
+    }
+
+    /// 时间戳形状校验：畸形 now 在域边界显性报错，不落库（坏钟/脏数据挡在门外）
+    #[test]
+    fn transition_rejects_malformed_timestamp() {
+        let err = transition(&record(SessionStatus::Starting), SessionStatus::Running, "not-a-date")
+            .expect_err("畸形时间戳必须拒绝");
+        assert!(err.contains("invalid RFC3339 timestamp"), "got: {err}");
+        // 良构 RFC3339（20 字符、T/Z 齐备）不受影响
+        let ok = transition(&record(SessionStatus::Starting), SessionStatus::Running, now())
+            .expect("良构时间戳通过");
+        assert_eq!(ok.status, SessionStatus::Running);
     }
 
     /// 幂等的 Stopped：重复到达的 Stopped 事件不报错也不改 stopped_at

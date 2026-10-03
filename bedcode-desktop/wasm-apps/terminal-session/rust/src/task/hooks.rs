@@ -179,12 +179,17 @@ pub fn ensure_project_hooks(
         Ok(Some(content)) => match serde_json::from_str(&content) {
             Ok(val) => val,
             Err(e) => {
-                // 已存在但解析失败：视为空配置继续，避免覆盖损坏文件时静默丢弃用户内容
-                host.log_warn(&format!(
-                    "ensure_project_hooks: settings.json parse failed, treating as empty: {}",
-                    e
-                ));
-                serde_json::json!({})
+                // 已存在但解析失败：**中止部署并显性报错**，绝不把合并结果
+                // （插件 hooks + `{}`）覆盖写回损坏文件——那会把用户其余配置键
+                // 全部丢弃（旧实现「视为空继续」的注释声称避免静默丢弃，实际
+                // 恰恰丢得更彻底）。备份由用户在文件系统侧自理，本函数不碰。
+                let msg = format!("settings.json parse failed: {e}");
+                host.log_error(&format!("ensure_project_hooks: {msg}"));
+                return AgentIntegrationResult {
+                    success: false,
+                    message: format!("项目 settings.json 解析失败，已中止写入（{}）", e),
+                    skipped: false,
+                };
             }
         },
         Ok(None) => {
@@ -269,7 +274,7 @@ pub fn ensure_project_hooks(
     // 3. 构建 hooks 配置并写入项目 settings.json
     //    解释器按宿主平台选择：Windows 用 `python`，Linux/macOS 用 `python3`
     //    （多数 Linux 发行版不提供 `python` 命令，只有 `python3`）
-    let hooks_config = build_hooks_config(port, &hook_script_path, python_interpreter(host));
+    let hooks_config = build_hooks_config(port, &hook_script_path, python_interpreter(host), host_is_windows(host));
 
     // 合并 hooks：保留非插件 hooks，添加插件 hooks
     let existing_hooks = settings
@@ -1040,16 +1045,19 @@ pub fn ensure_codex_hooks(
     let hook_script_path = format!("{}/{}", codex_dir, CODEX_HOOK_SCRIPT_NAME);
     let source_script = format!("{}/{}", resource_dir, CODEX_HOOK_SCRIPT_NAME);
 
-    // 1. 读取现有 hooks.json（解析失败视为空，避免覆盖损坏文件时静默丢弃用户内容）
+    // 1. 读取现有 hooks.json（解析失败 → **中止部署**：覆盖写会把用户
+    //    其余配置键全部丢弃；损坏文件先由用户修复/备份，不静默当空）
     let mut hooks: serde_json::Value = match host.fs_read(&hooks_path) {
         Ok(Some(content)) => match serde_json::from_str(&content) {
             Ok(val) => val,
             Err(e) => {
-                host.log_warn(&format!(
-                    "ensure_codex_hooks: hooks.json parse failed, treating as empty: {}",
-                    e
-                ));
-                serde_json::json!({})
+                let msg = format!("hooks.json parse failed: {e}");
+                host.log_error(&format!("ensure_codex_hooks: {msg}"));
+                return AgentIntegrationResult {
+                    success: false,
+                    message: format!("项目 hooks.json 解析失败，已中止写入（{}）", e),
+                    skipped: false,
+                };
             }
         },
         Ok(None) => serde_json::json!({}),
@@ -1063,8 +1071,14 @@ pub fn ensure_codex_hooks(
     };
 
     // 2. 端口与脚本模板版本均匹配 → 跳过；任一不匹配 → 重新部署
-    let needs_update = if is_codex_hooks_configured(&hooks) {
-        let port_matches = codex_hooks_port_matching(&hooks, port);
+    //    （谓词接内层 `hooks` 对象——顶层是整个 hooks.json 文件，真 hooks 在
+    //    `"hooks"` 键下；传顶层会让谓词恒 false，每次建会话都重拷脚本重写）
+    let inner_hooks: serde_json::Value = hooks
+        .get("hooks")
+        .cloned()
+        .unwrap_or(serde_json::json!({}));
+    let needs_update = if is_codex_hooks_configured(&inner_hooks) {
+        let port_matches = codex_hooks_port_matching(&inner_hooks, port);
         let script_version_matches = match host.fs_read(&hook_script_path) {
             Ok(Some(content)) => codex_hook_version_matches(&content),
             _ => false,
@@ -1105,7 +1119,7 @@ pub fn ensure_codex_hooks(
     }
 
     // 4. 构建 hooks 配置并合并写入（保留用户自有 hooks 条目）
-    let hooks_config = build_codex_hooks_config(port, &hook_script_path, python_interpreter(host));
+    let hooks_config = build_codex_hooks_config(port, &hook_script_path, python_interpreter(host), host_is_windows(host));
     let existing_hooks = hooks
         .get("hooks")
         .cloned()
@@ -1265,6 +1279,41 @@ fn python_interpreter_for(platform: Option<&str>) -> &'static str {
     }
 }
 
+/// 宿主是否 Windows（hook 命令的平台适配输入）
+fn host_is_windows(host: &WasmHost) -> bool {
+    let platform = host
+        .storage_get("platform")
+        .ok()
+        .flatten()
+        .and_then(|v| v.as_str().map(|s| s.to_string()));
+    platform.as_deref() == Some("windows")
+}
+
+/// 路径转义后进 shell 双引号字面量：working_dir 源自配置 wire（不可信），
+/// 插进命令串前必须按平台转义——
+/// - POSIX 双引号内 `\\` / `"` / `$` / 反引号 仍生效，逐一转义；
+/// - Windows cmd 内联（`set VAR=val&& cmd`）双引号内 `%` 会展开环境变量，
+///   `"` 用 `""` 转义（cmd 双引号转义规则）。
+/// 返回已含双引号的字面量（调用方直接拼命令串）
+fn shell_quote_path(path: &str, windows: bool) -> String {
+    if windows {
+        let escaped = path.replace('"', "\"\"").replace('%', "%%");
+        format!("\"{escaped}\"")
+    } else {
+        let mut escaped = String::with_capacity(path.len() + 8);
+        for c in path.chars() {
+            match c {
+                '\\' | '"' | '$' | '`' => {
+                    escaped.push('\\');
+                    escaped.push(c);
+                }
+                _ => escaped.push(c),
+            }
+        }
+        format!("\"{escaped}\"")
+    }
+}
+
 /// 构建 hooks JSON 配置
 ///
 /// 注册所有 Claude Code hook 事件，覆盖完整的状态机生命周期：
@@ -1274,38 +1323,53 @@ fn python_interpreter_for(platform: Option<&str>) -> &'static str {
 /// StopFailure（turn 因 API 错误结束，如 429 重试耗尽）：Claude 侧无重试可观测
 /// 信号（内部退避重试对 hooks 不可见），此处把错误结束收敛为 interrupted；
 /// 任务在重试期间保持 in_progress，不会在重试中被误标中断。
-fn build_hooks_config(port: u16, hook_script_path: &str, python_cmd: &str) -> serde_json::Value {
-    // 环境变量前缀：端口（脚本仅在 BedCode 注入 BEDCODE_SESSION_ID 的 PTY 中生效）
-    let env_prefix = format!("BEDCODE_PORT={} ", port);
+fn build_hooks_config(
+    port: u16,
+    hook_script_path: &str,
+    python_cmd: &str,
+    windows: bool,
+) -> serde_json::Value {
+    // 环境变量前缀：端口（脚本仅在 BedCode 注入 BEDCODE_SESSION_ID 的 PTY 中生效）。
+    // **平台差异**：POSIX `VAR=x cmd` 只在 sh/bash 有效；Windows cmd.exe 下
+    // 会被解析成命令名（hook 启动失败），改用 `set VAR=x&& cmd`（cmd 内联语法，
+    // `&&` 紧贴防多余空格污染命令名）
+    let env_prefix = if windows {
+        format!("set BEDCODE_PORT={port}&& ")
+    } else {
+        format!("BEDCODE_PORT={port} ")
+    };
+    // 路径转义：working_dir 源自配置 wire（不可信），插进双引号字面量前必须
+    // 按 shell 上下文转义（POSIX 双引号内 `"` / `$` / 反引号 / 反斜杠生效）
+    let quoted_script = shell_quote_path(hook_script_path, windows);
 
     let session_start_cmd = format!(
-        "{}{} \"{}\" session-start",
-        env_prefix, python_cmd, hook_script_path
+        "{}{} {} session-start",
+        env_prefix, python_cmd, quoted_script
     );
     let user_prompt_submit_cmd = format!(
-        "{}{} \"{}\" user-prompt-submit",
-        env_prefix, python_cmd, hook_script_path
+        "{}{} {} user-prompt-submit",
+        env_prefix, python_cmd, quoted_script
     );
-    let pre_tool_use_cmd = format!("{}{} \"{}\" pre-tool-use", env_prefix, python_cmd, hook_script_path);
+    let pre_tool_use_cmd = format!("{}{} {} pre-tool-use", env_prefix, python_cmd, quoted_script);
     let post_tool_use_cmd = format!(
-        "{}{} \"{}\" post-tool-use",
-        env_prefix, python_cmd, hook_script_path
+        "{}{} {} post-tool-use",
+        env_prefix, python_cmd, quoted_script
     );
     let post_tool_use_fail_cmd = format!(
-        "{}{} \"{}\" post-tool-use-fail",
-        env_prefix, python_cmd, hook_script_path
+        "{}{} {} post-tool-use-fail",
+        env_prefix, python_cmd, quoted_script
     );
-    let notification_cmd = format!("{}{} \"{}\" notification", env_prefix, python_cmd, hook_script_path);
-    let stop_cmd = format!("{}{} \"{}\" stop", env_prefix, python_cmd, hook_script_path);
+    let notification_cmd = format!("{}{} {} notification", env_prefix, python_cmd, quoted_script);
+    let stop_cmd = format!("{}{} {} stop", env_prefix, python_cmd, quoted_script);
     let stop_failure_cmd = format!(
-        "{}{} \"{}\" stop-failure",
-        env_prefix, python_cmd, hook_script_path
+        "{}{} {} stop-failure",
+        env_prefix, python_cmd, quoted_script
     );
     let subagent_stop_cmd = format!(
-        "{}{} \"{}\" subagent-stop",
-        env_prefix, python_cmd, hook_script_path
+        "{}{} {} subagent-stop",
+        env_prefix, python_cmd, quoted_script
     );
-    let session_end_cmd = format!("{}{} \"{}\" session-end", env_prefix, python_cmd, hook_script_path);
+    let session_end_cmd = format!("{}{} {} session-end", env_prefix, python_cmd, quoted_script);
 
     serde_json::json!({
         "SessionStart": [
@@ -1445,36 +1509,49 @@ fn build_hooks_config(port: u16, hook_script_path: &str, python_cmd: &str) -> se
 /// - 新增 SubagentStart：维护子 agent 计数，替代 Claude Stop 载荷的
 ///   background_tasks 字段（Codex Stop 无该字段）
 /// - SessionEnd 是 advisory 且超时上限 3 秒（文档规定），配置 3
-fn build_codex_hooks_config(port: u16, hook_script_path: &str, python_cmd: &str) -> serde_json::Value {
-    // 环境变量前缀：端口（脚本仅在 BedCode 注入 BEDCODE_SESSION_ID 的 PTY 中生效）
-    let env_prefix = format!("BEDCODE_PORT={} ", port);
+fn build_codex_hooks_config(
+    port: u16,
+    hook_script_path: &str,
+    python_cmd: &str,
+    windows: bool,
+) -> serde_json::Value {
+    // 环境变量前缀：端口（脚本仅在 BedCode 注入 BEDCODE_SESSION_ID 的 PTY 中生效）。
+    // Windows cmd 下 POSIX `VAR=x cmd` 语法失效（被解析成命令名）→ 用
+    // `set VAR=x&& cmd`（与 Claude 版同平台适配）
+    let env_prefix = if windows {
+        format!("set BEDCODE_PORT={port}&& ")
+    } else {
+        format!("BEDCODE_PORT={port} ")
+    };
+    // 路径转义（working_dir 不可信，见 [`shell_quote_path`]）
+    let quoted_script = shell_quote_path(hook_script_path, windows);
 
     let session_start_cmd = format!(
-        "{}{} \"{}\" session-start",
-        env_prefix, python_cmd, hook_script_path
+        "{}{} {} session-start",
+        env_prefix, python_cmd, quoted_script
     );
     let user_prompt_submit_cmd = format!(
-        "{}{} \"{}\" user-prompt-submit",
-        env_prefix, python_cmd, hook_script_path
+        "{}{} {} user-prompt-submit",
+        env_prefix, python_cmd, quoted_script
     );
     let permission_request_cmd = format!(
-        "{}{} \"{}\" permission-request",
-        env_prefix, python_cmd, hook_script_path
+        "{}{} {} permission-request",
+        env_prefix, python_cmd, quoted_script
     );
     let post_tool_use_cmd = format!(
-        "{}{} \"{}\" post-tool-use",
-        env_prefix, python_cmd, hook_script_path
+        "{}{} {} post-tool-use",
+        env_prefix, python_cmd, quoted_script
     );
     let subagent_start_cmd = format!(
-        "{}{} \"{}\" subagent-start",
-        env_prefix, python_cmd, hook_script_path
+        "{}{} {} subagent-start",
+        env_prefix, python_cmd, quoted_script
     );
     let subagent_stop_cmd = format!(
-        "{}{} \"{}\" subagent-stop",
-        env_prefix, python_cmd, hook_script_path
+        "{}{} {} subagent-stop",
+        env_prefix, python_cmd, quoted_script
     );
-    let stop_cmd = format!("{}{} \"{}\" stop", env_prefix, python_cmd, hook_script_path);
-    let session_end_cmd = format!("{}{} \"{}\" session-end", env_prefix, python_cmd, hook_script_path);
+    let stop_cmd = format!("{}{} {} stop", env_prefix, python_cmd, quoted_script);
+    let session_end_cmd = format!("{}{} {} session-end", env_prefix, python_cmd, quoted_script);
 
     serde_json::json!({
         "SessionStart": [
@@ -1647,23 +1724,36 @@ fn remove_script_hooks(hooks: &serde_json::Value, script_name: &str) -> serde_js
     if let Some(hooks_obj) = hooks.as_object() {
         for (event_type, events) in hooks_obj {
             if let Some(events_arr) = events.as_array() {
+                // 按**单个 hook 粒度**过滤：只删插件命令，同事件组内的用户 hook
+                // 保留（旧实现按「组内全部不含插件脚本名」才保留整组，混组时
+                // 用户 hook 被连带删除）
                 let filtered: Vec<serde_json::Value> = events_arr
                     .iter()
-                    .filter(|event| {
-                        event
-                            .get("hooks")
-                            .and_then(|v| v.as_array())
-                            .map(|hook_list| {
-                                hook_list.iter().all(|h| {
-                                    h.get("command")
-                                        .and_then(|v| v.as_str())
-                                        .map(|cmd| !cmd.contains(script_name))
-                                        .unwrap_or(true)
-                                })
+                    .filter_map(|event| {
+                        let Some(hook_list) = event.get("hooks").and_then(|v| v.as_array()) else {
+                            // 无 hooks 键的事件原样保留（matcher-only 事件）
+                            return Some(event.clone());
+                        };
+                        let kept: Vec<serde_json::Value> = hook_list
+                            .iter()
+                            .filter(|h| {
+                                h.get("command")
+                                    .and_then(|v| v.as_str())
+                                    .map(|cmd| !cmd.contains(script_name))
+                                    .unwrap_or(true)
                             })
-                            .unwrap_or(true)
+                            .cloned()
+                            .collect();
+                        // 事件组内插件 hook 被清空、且用户 hook 也被删光 → 事件
+                        // 不再有任何命令，整事件移除；否则保留过滤后的组
+                        if kept.is_empty() {
+                            None
+                        } else {
+                            let mut ev = event.clone();
+                            ev["hooks"] = serde_json::Value::Array(kept);
+                            Some(ev)
+                        }
                     })
-                    .cloned()
                     .collect();
 
                 if !filtered.is_empty() {
@@ -1716,23 +1806,34 @@ fn merge_script_hooks(
                         None => vec![],
                     };
 
+                    // 合并已有 hooks：插件事件类型内，已有事件按**单个 hook 粒度**
+                    // 去插件化——只剔除插件命令，保留同组内用户 hook（旧实现整组
+                    // 有插件 hook 就整组丢，用户 hook 被连带删除）
                     for event in existing_events {
-                        let is_plugin_event = event
-                            .get("hooks")
-                            .and_then(|v| v.as_array())
-                            .map(|hooks| {
-                                hooks.iter().any(|h| {
-                                    h.get("command")
-                                        .and_then(|v| v.as_str())
-                                        .map(|cmd| cmd.contains(script_name))
-                                        .unwrap_or(false)
-                                })
-                            })
-                            .unwrap_or(false);
-
-                        if !is_plugin_event {
+                        let Some(hook_list) = event.get("hooks").and_then(|v| v.as_array())
+                        else {
+                            // matcher-only 事件：不涉及命令，原样保留
                             merged_events.push(event.clone());
+                            continue;
+                        };
+                        let user_hooks: Vec<serde_json::Value> = hook_list
+                            .iter()
+                            .filter(|h| {
+                                h.get("command")
+                                    .and_then(|v| v.as_str())
+                                    .map(|cmd| !cmd.contains(script_name))
+                                    .unwrap_or(true)
+                            })
+                            .cloned()
+                            .collect();
+                        // 插件命令剔除后组内再无命令（纯插件事件）→ 整事件移除；
+                        // 还留有用户 hook → 保留过滤后的组
+                        if user_hooks.is_empty() {
+                            continue;
                         }
+                        let mut ev = event.clone();
+                        ev["hooks"] = serde_json::Value::Array(user_hooks);
+                        merged_events.push(ev);
                     }
 
                     result[key] = serde_json::Value::Array(merged_events);
@@ -1763,10 +1864,11 @@ fn codex_hooks_port_matching(hooks: &serde_json::Value, port: u16) -> bool {
 
 /// 检查现有 hooks 中指定脚本的端口是否与当前值匹配
 ///
-/// 环境变量前缀格式：BEDCODE_PORT={port}
-/// 解析 hook command 中的环境变量，与当前 port 比较
+/// 环境变量前缀两种平台形态都接受：POSIX `BEDCODE_PORT={port} `（sh/bash）与
+/// Windows cmd `set BEDCODE_PORT={port}&& `（cmd 内联语法，`&&` 紧贴防多余空格）
 fn is_script_hooks_port_matching(hooks: &serde_json::Value, port: u16, script_name: &str) -> bool {
-    let expected_prefix = format!("BEDCODE_PORT={} ", port);
+    let posix_prefix = format!("BEDCODE_PORT={port} ");
+    let windows_prefix = format!("set BEDCODE_PORT={port}&& ");
 
     let hooks_obj = match hooks.as_object() {
         Some(obj) => obj,
@@ -1780,8 +1882,10 @@ fn is_script_hooks_port_matching(hooks: &serde_json::Value, port: u16, script_na
                     for hook in hook_list {
                         if let Some(cmd) = hook.get("command").and_then(|v| v.as_str()) {
                             if cmd.contains(script_name) {
-                                // 检查命令中的环境变量前缀是否匹配
-                                if !cmd.starts_with(&expected_prefix) {
+                                // 检查命令中的环境变量前缀是否匹配（两种平台形态任一）
+                                if !cmd.starts_with(&posix_prefix)
+                                    && !cmd.starts_with(&windows_prefix)
+                                {
                                     return false;
                                 }
                             }
@@ -1811,7 +1915,7 @@ mod tests {
 
     #[test]
     fn build_hooks_config_registers_full_state_machine_including_stop_failure() {
-        let config = build_hooks_config(8765, r"/proj/.claude/auto_task_hook.py", "python3");
+        let config = build_hooks_config(8765, r"/proj/.claude/auto_task_hook.py", "python3", false);
         let hooks = config.as_object().expect("hooks config must be an object");
 
         for event in [
@@ -1844,7 +1948,7 @@ mod tests {
 
     #[test]
     fn build_hooks_config_linux_uses_python3() {
-        let config = build_hooks_config(8765, r"/home/u/proj/.claude/auto_task_hook.py", "python3");
+        let config = build_hooks_config(8765, r"/home/u/proj/.claude/auto_task_hook.py", "python3", false);
         let hooks = config.as_object().expect("hooks config must be an object");
         for (_event, groups) in hooks {
             for group in groups.as_array().expect("hook group must be array") {
@@ -1863,7 +1967,7 @@ mod tests {
 
     #[test]
     fn build_codex_hooks_config_linux_uses_python3() {
-        let config = build_codex_hooks_config(8765, r"/home/u/proj/.codex/codex_task_hook.py", "python3");
+        let config = build_codex_hooks_config(8765, r"/home/u/proj/.codex/codex_task_hook.py", "python3", false);
         let hooks = config.as_object().expect("hooks config must be an object");
         for (_event, groups) in hooks {
             for group in groups.as_array().expect("hook group must be array") {
@@ -1901,6 +2005,7 @@ mod tests {
             9876,
             r"C:\proj\.codex\codex_task_hook.py",
             "python",
+            true,
         );
         let hooks = config.as_object().expect("hooks config must be an object");
 
@@ -1936,8 +2041,8 @@ mod tests {
                         cmd
                     );
                     assert!(
-                        cmd.starts_with("BEDCODE_PORT=9876 "),
-                        "{}: command missing env prefix: {}",
+                        cmd.starts_with("set BEDCODE_PORT=9876&& "),
+                        "{}: command missing windows env prefix: {}",
                         event,
                         cmd
                     );
@@ -2006,7 +2111,7 @@ mod tests {
                 { "hooks": [{ "type": "command", "command": "user-end-hook" }] }
             ]
         });
-        let plugin = build_codex_hooks_config(8765, r"C:\proj\.codex\codex_task_hook.py", "python");
+        let plugin = build_codex_hooks_config(8765, r"C:\proj\.codex\codex_task_hook.py", "python", true);
 
         let merged = merge_codex_hooks(&existing, &plugin);
         let stop = merged["Stop"].as_array().expect("Stop must remain");
@@ -2058,7 +2163,7 @@ mod tests {
 
     #[test]
     fn codex_hooks_port_matching_detects_current_port() {
-        let hooks = build_codex_hooks_config(8765, r"C:\proj\.codex\codex_task_hook.py", "python");
+        let hooks = build_codex_hooks_config(8765, r"C:\proj\.codex\codex_task_hook.py", "python", true);
         assert!(codex_hooks_port_matching(&hooks, 8765));
         assert!(!codex_hooks_port_matching(&hooks, 9000));
     }

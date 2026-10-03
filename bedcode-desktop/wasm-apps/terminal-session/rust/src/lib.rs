@@ -1609,8 +1609,11 @@ impl WasmPlugin for SessionPlugin {
             }
 
             // 会话配置 + 是否受任务域支持（agent 能力 join）→ {configs}
+            // 读取失败显性报错（不静默返回空列表——「无配置」与「读失败」可区分）
             "session.task.session-configs" => {
-                let configs = task::list_configs_with_support_via_host();
+                let configs = task::list_configs_with_support_via_host().map_err(|e| {
+                    anyhow::anyhow!("session-configs read failed: {e}")
+                })?;
                 Ok(serde_json::json!({ "configs": configs }))
             }
 
@@ -1703,7 +1706,10 @@ impl WasmPlugin for SessionPlugin {
                 if prompt.is_empty() {
                     return Err(anyhow::anyhow!("add-task: missing prompt"));
                 }
-                let (task_id, position) = task::queue::add_task(&WasmHost, &session_id, &prompt);
+                let (task_id, position) = task::queue::add_task(&WasmHost, &session_id, &prompt)
+                    .map_err(|e| {
+                        anyhow::anyhow!("add-task enqueue failed (session_id={}): {}", session_id, e)
+                    })?;
                 dispatch_if_eligible_and_broadcast(&session_id, "add", None, None);
                 Ok(serde_json::json!({ "task_id": task_id, "position": position }))
             }

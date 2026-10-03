@@ -145,7 +145,35 @@ CREATE TABLE IF NOT EXISTS task_scheduled (
 /// **必须在 `crate::schema::migrate_via_host()` 之后调用**：旧库若先被这里建出统一名
 /// 的空表，重命名迁移会因「新旧名同时存在」跳过该条，旧表里的真实数据留在无人读的
 /// 名字下（现象是升级后列表变空而非报错）。
+///
+/// 顺序由**运行时强制**而非调用点纪律：建表前先查 `sqlite_master`——若仍有迁移清单
+/// 里的旧表名存在且对应新名未建，说明迁移没跑或跑到一半，直接显性报错（fail-visible：
+/// 不静默建出空前缀表把旧数据困在旧名下）
 pub fn ensure_schema_via_host(host: &WasmHost) -> Result<(), String> {
+    // 顺序守卫：迁移清单里的旧表名若仍存在 → 迁移未完成，拒绝建表
+    let tables = host
+        .plugin_db_query("SELECT name FROM sqlite_master WHERE type = 'table'")
+        .map_err(|e| format!("task schema order check query failed: {}", e.message))?;
+    let existing: std::collections::HashSet<String> = tables
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|row| row.get("name").and_then(|v| v.as_str()).map(|s| s.to_string()))
+        .collect();
+    let unrenamed: Vec<&str> = crate::schema::TABLE_RENAMES
+        .iter()
+        .filter(|r| existing.contains(r.legacy) && !existing.contains(r.prefixed))
+        .map(|r| r.legacy)
+        .collect();
+    if !unrenamed.is_empty() {
+        return Err(format!(
+            "task schema init requires prefix migration first: legacy table(s) still present \
+             without prefixed counterpart: {} (run crate::schema::migrate_via_host() before \
+             ensure_schema_via_host)",
+            unrenamed.join(", ")
+        ));
+    }
+
     for (name, schema) in [
         ("task_history", TASK_HISTORY_SCHEMA),
         ("task_session_mapping", SESSION_MAPPING_SCHEMA),
@@ -205,6 +233,12 @@ pub struct TickReport {
 /// **错误隔离契约（票 15 硬性验收第 6 项）**：三域同实例（配对 / 会话 / 任务），
 /// 任一步失败必须只降级本域；这里是该契约的 executable 形态——只要还想让后续的
 /// 定时任务域（票 16）在被前一个域拖累时仍能跑起来，就必须顺序独立执行。
+///
+/// **panic 边界（与契约的区分）**：隔离保证只对 `Result::Err` 生效；域闭包 panic
+/// 会穿出本函数（剩余域不跑）。wasm 目标以 `panic="abort"` 编译（wasmtime 侧
+/// 把 trap 视为实例失败），`catch_unwind` 在此不可用——panic 视为整个实例失败、
+/// 不在 D7 隔离保证内，由宿主按实例故障处置。native 单测下同样穿出（fail-fast，
+/// 测试立即红）——这是有意的：panic 是编程错误，不该被当成可恢复的域故障吞掉。
 pub fn run_tick_domains(
     steps: Vec<(&'static str, Box<dyn FnOnce() -> Result<(), String>>)>,
 ) -> TickReport {
@@ -857,14 +891,19 @@ pub fn handle_http_via_host(
 ///
 /// 配置真源在本插件私有库（票 08），command 经 agent registry 判定是否为本域
 /// 支持的 agent——消费方据此决定能否对该配置排队列任务。
-pub fn list_configs_with_support_via_host() -> Vec<serde_json::Value> {
+///
+/// 读取失败**显性报错**（`Err`）：`.ok()` 静默降级为空列表会让
+/// `list-configs-with-support` 的消费方（HTTP supported-agents、queue-add
+/// 支持门控）在瞬时 `list_via_host` 失败时得出「无 agent 受支持」的错误结论。
+pub fn list_configs_with_support_via_host() -> Result<Vec<serde_json::Value>, String> {
     let host = WasmHost;
-    let configs = crate::config::list_via_host()
-        .ok()
-        .and_then(|v| v.as_array().cloned())
-        .unwrap_or_default();
+    let configs = crate::config::list_via_host()?;
+    let configs = configs
+        .as_array()
+        .cloned()
+        .ok_or_else(|| format!("config list did not return an array: {configs}"))?;
     let mut counter = 0u64;
-    configs
+    Ok(configs
         .into_iter()
         .map(|mut c| {
             if let Some(cmd) = c.get("command").and_then(|v| v.as_str()) {
@@ -874,5 +913,5 @@ pub fn list_configs_with_support_via_host() -> Vec<serde_json::Value> {
             yield_guard(&host, &mut counter);
             c
         })
-        .collect()
+        .collect())
 }

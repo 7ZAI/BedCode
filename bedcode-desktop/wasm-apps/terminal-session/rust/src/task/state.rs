@@ -297,11 +297,13 @@ pub fn interrupt_running_tasks_on_session_end(host: &WasmHost, session_id: &str)
              WHERE session_id = ?1 AND status IN ('executing', 'waiting')",
             &sql_params![session_id],
         );
+        // 循环前算一次（UPDATE 后计数已定；每轮重查是 N+1 且值不会变）
+        let remaining = crate::task::queue::pending_count(host, session_id);
         for id in &queued_ids {
             crate::task::queue::broadcast_queue_changed(
                 host,
                 session_id,
-                crate::task::queue::pending_count(host, session_id),
+                remaining,
                 "interrupted",
                 Some(id),
                 Some("interrupted"),
@@ -382,7 +384,11 @@ pub fn create_task_from_dispatch(
     agent: &str,
     source: &str,
 ) {
-    insert_task_row(host, session_id, prompt, agent, source);
+    // 写表失败 / 缺行：短路后续广播与派发（不发布幻影 in_progress 事件、
+    // 不占投影槽位——DB 无行却发事件会让下游按不存在的任务推进）
+    if !insert_task_row(host, session_id, prompt, agent, source) {
+        return;
+    }
 
     // 调度触发的任务同样发布状态变更（bus + emit + WS，票 06 起不经宿主
     // broadcast_sync；票 02 补 WS 第三通道）
@@ -421,7 +427,10 @@ pub fn create_task_from_dispatch(
 ///
 /// auto_approve 取会话当前的 auto_answer 开关（自动应答）：开启则新任务行
 /// 标记为可自动应答（hook 据此自动回答提问），关闭则标记手动，随会话设置同步。
-fn insert_task_row(host: &WasmHost, session_id: &str, input: &str, agent: &str, source: &str) {
+///
+/// 返回是否成功写入了行（`Err` 或缺行 → `false`）：调用方据此短路广播——
+/// 写历史失败被当 log-only 会让「DB 无行却发 in_progress」的幻影事件溜过。
+fn insert_task_row(host: &WasmHost, session_id: &str, input: &str, agent: &str, source: &str) -> bool {
     let claude_sid = find_claude_sid_by_session(host, session_id);
     let (_, auto_answer) = session_flags(host, session_id);
     // 记录会话配置的工程目录：任务日志直接展示配置目录，后续配置变更不影响历史行
@@ -451,16 +460,28 @@ fn insert_task_row(host: &WasmHost, session_id: &str, input: &str, agent: &str, 
             auto_answer
         ],
     ) {
-        Ok(affected) => {
+        Ok(affected) if affected > 0 => {
             host.log_info(&format!(
             "Task row inserted: session_id={} agent={} source={} len={} auto_answer={} affected={}",
             session_id, agent, source, input.len(), auto_answer, affected
-        ))
+        ));
+            true
         }
-        Err(e) => host.log_error(&format!(
-            "Failed to insert task row: session_id={} source={} err={}",
-            session_id, source, e
-        )),
+        Ok(affected) => {
+            // 缺行（0 affected）：与 Err 同待遇——写没发生，调用方不得广播
+            host.log_error(&format!(
+                "Task row insert affected 0 rows: session_id={} source={} len={}",
+                session_id, source, input.len()
+            ));
+            false
+        }
+        Err(e) => {
+            host.log_error(&format!(
+                "Failed to insert task row: session_id={} source={} err={}",
+                session_id, source, e
+            ));
+            false
+        }
     }
 }
 
@@ -526,7 +547,9 @@ pub fn handle_submitted_input(host: &WasmHost, session_id: &str, text: &str) {
 /// 只带 bedcode_session_id）都能命中该行。
 pub fn create_task_from_input(host: &WasmHost, session_id: &str, input: &str) {
     let agent_name = session_agent(host, session_id);
-    insert_task_row(host, session_id, input, agent_name, "user");
+    if !insert_task_row(host, session_id, input, agent_name, "user") {
+        return;
+    }
 
     // 广播状态变更到消息总线 + 前端 UI（票 06 起不经宿主 broadcast_sync）
     let _ = host.bus_publish(
@@ -544,6 +567,15 @@ pub fn create_task_from_input(host: &WasmHost, session_id: &str, input: &str) {
             "taskStatus": "in_progress",
             "taskReason": "User submitted input",
         }),
+    );
+    // WS 第三通道（与 create_task_from_dispatch / hook 路径同源，票 02 单点收口）——
+    // 缺失会让移动端收不到用户提交任务的 in_progress 事件
+    broadcast_task_status(
+        host,
+        session_id,
+        "in_progress",
+        Some("User submitted input"),
+        None,
     );
     publish_task_slots(
         host,

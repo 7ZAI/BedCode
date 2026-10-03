@@ -529,12 +529,13 @@ mod tests {
                 .filter(|l| !l.trim_start().starts_with("//") && l.contains(marker))
                 .count()
         };
-        // state.rs：`broadcast_task_status` 1 定义 + 3 调用点（interrupted /
-        // dispatched / hook 状态）；`broadcast_event` 1（helper 内）+ 1（mode-changed）
+        // state.rs：`broadcast_task_status` 1 定义 + 4 调用点（interrupted /
+        // dispatched / hook 状态 / create_task_from_input——T-C04 修复后用户
+        // 提交输入路径也走 WS 广播）；`broadcast_event` 1（helper 内）+ 1（mode-changed）
         assert_eq!(
             count("task/state.rs", "broadcast_task_status("),
-            4,
-            "task:status-changed 三个 emit 点 + 单点收口函数定义"
+            5,
+            "task:status-changed 四个 emit 点 + 单点收口函数定义"
         );
         assert_eq!(
             count("task/state.rs", "ws_events::broadcast_event("),

@@ -125,9 +125,10 @@ pub fn add_preset_to_queue(
     }
 
     // 3. 复制进队列（source='queue'：预存被消费后即归入自动任务，
-    //    来源只区分 手动输入/自动任务/定时任务 三种）
+    //    来源只区分 手动输入/自动任务/定时任务 三种）；入队失败显性报错
     let (task_id, position) =
-        crate::task::queue::add_task_with_source(host, session_id, &prompt, "queue");
+        crate::task::queue::add_task_with_source(host, session_id, &prompt, "queue")
+            .map_err(|e| format!("preset enqueue failed: {e}"))?;
 
     host.log_info(&format!(
         "Preset task enqueued: preset_id={} task_id={} session_id={} position={}",

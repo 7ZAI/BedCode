@@ -47,8 +47,10 @@ impl SessionStatus {
     /// `error`**：`SessionSummary.status` 是 String 形状，把 `{"error": "…"}`
     /// 塞进去会让整条同步载荷在宿主侧解析失败；错误描述属于本域记录与
     /// `session-get` 视图，不经概要透出。
-    pub fn wire_name(&self) -> String {
-        let name = match self {
+    ///
+    /// 返回 `&'static str`（固定字面量，零分配）；需要所有权处由调用方 `.to_string()`
+    pub fn wire_name(&self) -> &'static str {
+        match self {
             SessionStatus::Idle => "idle",
             SessionStatus::Starting => "starting",
             SessionStatus::Running => "running",
@@ -56,8 +58,7 @@ impl SessionStatus {
             SessionStatus::Stopping => "stopping",
             SessionStatus::Stopped => "stopped",
             SessionStatus::Error(_) => "error",
-        };
-        name.to_string()
+        }
     }
 }
 

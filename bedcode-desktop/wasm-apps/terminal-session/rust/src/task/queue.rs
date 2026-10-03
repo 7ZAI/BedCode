@@ -116,21 +116,22 @@ CREATE TABLE IF NOT EXISTS task_queue (
 
 /// 添加任务到队列末尾（来源 queue：用户在 UI 手动添加）
 ///
-/// 返回 (task_id, position)
-pub fn add_task(host: &WasmHost, session_id: &str, prompt: &str) -> (String, i64) {
+/// 返回 `(task_id, position)`；写表失败 → `Err`（不再静默吞掉——
+/// 入队失败却照常广播会让队列视图与 DB 分叉）
+pub fn add_task(host: &WasmHost, session_id: &str, prompt: &str) -> Result<(String, i64), String> {
     add_task_with_source(host, session_id, prompt, "queue")
 }
 
 /// 添加任务到队列末尾（带来源标记：queue / scheduled）
 ///
 /// source 随调度写入 task_history.source，区分手动队列任务与定时任务。
-/// 返回 (task_id, position)
+/// 返回 `(task_id, position)`；写表失败 → `Err`
 pub fn add_task_with_source(
     host: &WasmHost,
     session_id: &str,
     prompt: &str,
     source: &str,
-) -> (String, i64) {
+) -> Result<(String, i64), String> {
     // 终态行清理（queue-closure issue 02）：入队时顺带删除该会话的终态行
     // （done/cancelled/interrupted），防 task_queue 随使用时长无限膨胀。
     // 终态行只写不读——list_queue 仅查 pending、list_active_task 仅查
@@ -163,18 +164,33 @@ pub fn add_task_with_source(
             format!("fallback-{}-{}", session_id, position)
         });
 
-    let _ = host.plugin_db_execute_params(
+    match host.plugin_db_execute_params(
         "INSERT INTO task_queue (id, session_id, prompt, position, status, source, created_at, updated_at) \
          VALUES (?1, ?2, ?3, ?4, 'pending', ?5, datetime('now'), datetime('now'))",
         &sql_params![id, session_id, prompt, position, source],
-    );
-
-    host.log_info(&format!(
-        "Task queued: id={} session_id={} position={}",
-        id, session_id, position
-    ));
-
-    (id, position)
+    ) {
+        Ok(affected) if affected > 0 => {
+            host.log_info(&format!(
+                "Task queued: id={} session_id={} position={}",
+                id, session_id, position
+            ));
+            Ok((id, position))
+        }
+        Ok(affected) => {
+            host.log_error(&format!(
+                "Task queue insert affected 0 rows: id={} session_id={} position={}",
+                id, session_id, position
+            ));
+            Err(format!("task queue insert affected {affected} rows"))
+        }
+        Err(e) => {
+            host.log_error(&format!(
+                "Task queue insert failed: id={} session_id={} position={} err={}",
+                id, session_id, position, e
+            ));
+            Err(format!("task queue insert failed: {e}"))
+        }
+    }
 }
 
 /// 取消队列中的活动任务（waiting / executing），供用户主动取消长任务
@@ -1260,8 +1276,18 @@ fn handle_add(host: &WasmHost, body: &Value, _query: &Value) -> Value {
     // 导致 auto_execute_on 查不到开关而"入队后永不调度"
     let resolved_id = crate::task::state::resolve_session_id(host, session_id);
 
-    // 入队（count_before 用于判断是否触发首次调度，此处仅保留日志语义）
-    let (task_id, position) = add_task(host, &resolved_id, prompt);
+    // 入队（count_before 用于判断是否触发首次调度，此处仅保留日志语义）；
+    // 写表失败显性报错——不广播、不调度（DB 无行却发事件 = 幻影）
+    let (task_id, position) = match add_task(host, &resolved_id, prompt) {
+        Ok(v) => v,
+        Err(e) => {
+            host.log_error(&format!(
+                "task queue add-task failed (session_id={}): {}",
+                resolved_id, e
+            ));
+            return http_response::error(500, &format!("Failed to enqueue task: {e}"));
+        }
+    };
 
     // 广播队列变更
     let count_after = pending_count(host, &resolved_id);

@@ -38,6 +38,9 @@ pub const SCHEMA: &[&str] = &[
      connect_count INTEGER NOT NULL DEFAULT 1, \
      is_active INTEGER NOT NULL DEFAULT 1)",
     "CREATE INDEX IF NOT EXISTS idx_auth_pairings_fingerprint ON auth_pairings(device_fingerprint)",
+    // 迁移 marker 表（与配置域共用同一张表；本 SCHEMA 一并建出，
+    // 避免本 store 的 ensure_schema 依赖外部初始化顺序——幂等 CREATE 无副作用）
+    "CREATE TABLE IF NOT EXISTS plugin_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
     // 生物凭证公钥（B-downsink：真源从宿主 `plugin_secrets` 迁入本库；
     // 与 host-auth `biometric-*` 三原语同日退役，验签执行点在插件内）
     "CREATE TABLE IF NOT EXISTS auth_biometric_keys (\
@@ -73,7 +76,9 @@ pub trait AuthRecordsStore {
     fn pairings_all(&self) -> Result<Vec<PairingRecord>, String>;
     /// 按指纹查配对记录（含软删；供撤销检测 / 生物凭证判定）
     fn pairing_by_fingerprint(&self, fingerprint: &str) -> Result<Option<PairingRecord>, String>;
-    /// 写入/归并配对记录（`INSERT OR IGNORE` + 更新；uid_hash 归并由调用方编排）
+    /// 写入/归并配对记录（按 id upsert：id 已存在 → 整行更新（含指纹变更），
+    /// 否则按指纹冲突更新 / 全新插入；uid_hash 归并由调用方编排——归并路径的
+    /// id 由调用方算出（见 [`super::ops::upsert_record`]））
     fn pairing_put(&self, record: &PairingRecord) -> Result<(), String>;
     /// 软删配对（`is_active = 0`）；返回是否命中了活跃记录
     fn pairing_revoke(&self, id: &str) -> Result<bool, String>;
@@ -89,7 +94,8 @@ pub trait AuthRecordsStore {
 
     // ==================== 连接历史 ====================
 
-    /// 某设备的连接历史（倒序由调用方排序；此处原样返回）
+    /// 某设备的连接历史（倒序由端口保证——wasm `ORDER BY connected_at DESC`，
+    /// mock 同序；与索引 `idx_auth_history_device` 的排序方向一致）
     fn history_by_device(&self, device_id: &str) -> Result<Vec<ConnectionEventRecord>, String>;
     /// 追加连接事件（指纹解析 device_id 由调用方完成；本端口只落库）
     fn history_append(&self, record: &ConnectionEventRecord) -> Result<(), String>;
@@ -179,8 +185,7 @@ mod wasm_impl {
         let rows = rows.unwrap_or_else(|| serde_json::json!([]));
         let array = rows
             .as_array()
-            .ok_or_else(|| format!("plugin db query did not return an array: {}", rows))?
-            .clone();
+            .ok_or_else(|| format!("plugin db query did not return an array: {}", rows))?;
         array.iter().map(mapper).collect()
     }
 
@@ -214,12 +219,17 @@ mod wasm_impl {
         }
 
         fn pairing_put(&self, record: &PairingRecord) -> Result<(), String> {
+            // 冲突目标选 id 而非指纹：uid_hash 归并路径会以「存量 id + 新指纹」
+            // 落库（`ops::upsert_record` 先算好目标 id），若只按指纹冲突则 id 已存在
+            // 于另一行时 INSERT 直接撞主键报错（mock 能通过、真 SQL 必挂的路径）；
+            // 按 id upsert 让「同 id 换指纹」与「同指纹同 id 更新」两条归并都命中。
             self.plugin_db_execute_params(
                 "INSERT INTO auth_pairings \
                  (id, device_name, device_fingerprint, address, uid_hash, paired_at, last_seen, connect_count, is_active) \
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) \
-                 ON CONFLICT(device_fingerprint) DO UPDATE SET \
+                 ON CONFLICT(id) DO UPDATE SET \
                    device_name = excluded.device_name, \
+                   device_fingerprint = excluded.device_fingerprint, \
                    address = excluded.address, \
                    uid_hash = COALESCE(excluded.uid_hash, auth_pairings.uid_hash), \
                    last_seen = excluded.last_seen, \
@@ -419,9 +429,12 @@ pub(crate) mod tests {
 
         fn pairing_put(&self, record: &PairingRecord) -> Result<(), String> {
             let mut pairings = self.pairings.lock().unwrap();
-            // 归并语义：指纹相同 → 更新既有行；uid_hash 命中（指纹不同，稳定设备
-            // UID 再派生）→ 复用该行 id（连接历史不分裂）；全新 → 追加
-            if let Some(existing) = pairings
+            // 归并语义与真 SQL 对齐（ON CONFLICT(id)，见 wasm_impl）：id 已存在
+            // → 整行覆盖（含指纹变更，uid_hash 归并路径）；否则指纹相同 → 更新；
+            // uid_hash 命中锚行（调用方算好 id 前兜底）→ 复用该行 id；全新 → 追加
+            if let Some(existing) = pairings.iter_mut().find(|r| r.id == record.id) {
+                *existing = record.clone();
+            } else if let Some(existing) = pairings
                 .iter_mut()
                 .find(|r| r.device_fingerprint == record.device_fingerprint)
             {

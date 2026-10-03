@@ -48,10 +48,13 @@ fn now_secs() -> u64 {
 }
 
 /// 16 字节随机数 → 32 字符 hex（宿主 `BiometricChallenge::new` 同格式）
-fn new_nonce() -> String {
+///
+/// 返回 `Result`：熵不可用（宿主 RNG 暂时不可用）不 trap 整个 WASM 插件，
+/// 由调用方按可恢复错误处理（fail-closed 红线：生产路径禁止 panic）
+fn new_nonce() -> Result<String, String> {
     let mut buf = [0u8; 16];
-    getrandom::fill(&mut buf).expect("getrandom: entropy unavailable");
-    hex::encode(buf)
+    getrandom::fill(&mut buf).map_err(|e| format!("biometric nonce entropy unavailable: {e}"))?;
+    Ok(hex::encode(buf))
 }
 
 /// 签发挑战：闸门（已配对且绑定公钥）→ 覆盖式登记新挑战
@@ -68,8 +71,11 @@ pub fn issue_challenge(host: &WasmHost, fingerprint: &str) -> Result<String, Str
     if !bound {
         return Err(MSG_CREDENTIAL_NOT_BOUND.to_string());
     }
-    let nonce = new_nonce();
+    let nonce = new_nonce()?;
     with_registry(|registry| {
+        // 机会性剪枝：签发新挑战前清理已过期条目（防静态 map 无界增长——
+        // 已绑定设备签发后永不回来验证的挑战永驻；TTL 之后即为死条目）
+        registry.retain(|_, c| now_secs().saturating_sub(c.created_secs) < BIO_CHALLENGE_TTL_SECS);
         registry.insert(
             fingerprint.to_string(),
             Challenge {
@@ -98,6 +104,9 @@ fn consume(fingerprint: &str, nonce: &str) -> Result<(), String> {
                 registry.remove(fingerprint);
                 Err("Biometric challenge already consumed".to_string())
             } else if challenge.nonce != nonce {
+                // 不匹配：挑战作废（模块文档「任一不满足 → 挑战作废并报错」，
+                // 验证即消费——不消费会让失败尝试保留可重试的活跃挑战）
+                registry.remove(fingerprint);
                 Err("Biometric challenge mismatch".to_string())
             } else {
                 challenge.used = true;
@@ -135,7 +144,9 @@ pub fn verify_signature(
         return Err(MSG_CREDENTIAL_NOT_BOUND.to_string());
     };
 
-    if !verify_biometric_signature(&public_key, nonce, signature)? {
+    if !verify_biometric_signature(&public_key, nonce, signature)
+        .map_err(|_| MSG_SIGNATURE_INVALID.to_string())?
+    {
         return Err(MSG_SIGNATURE_INVALID.to_string());
     }
     Ok(serde_json::json!({

@@ -66,6 +66,45 @@ const FIRST_DISPATCH_GRACE_SECS: i64 = 15;
 /// trigger_at 为 UTC 时间字符串（"YYYY-MM-DD HH:MM:SS"，与 SQLite
 /// datetime('now') 同格式）；前端负责把用户选择的本地时间转换为 UTC。
 /// 返回新任务 ID；参数非法返回 None
+/// trigger_at 格式校验（"YYYY-MM-DD HH:MM:SS"，UTC；与 SQLite datetime 输出同形）
+///
+/// 数字段按位校验（不需要额外日期 crate；wasip3 下无 chrono）：
+/// 年 4 位 / 月 1-12 / 日 1-31 / 时 0-23 / 分 0-59 / 秒 0-59，段间固定
+/// `-` / ` ` / `:` 分隔。宽松到「明显非法即拒」即可——字典序比较的语义是
+/// 格式必须与 datetime('now') 逐字可比，格式错比值错更致命
+fn is_valid_trigger_at(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    if bytes.len() != 19 {
+        return false;
+    }
+    let digit = |b: u8| (b'0'..=b'9').contains(&b);
+    // YYYY-MM-DD HH:MM:SS
+    let seg = |i: usize, n: usize| (i..i + n).all(|k| digit(bytes[k]));
+    let parse = |i: usize, n: usize| -> Option<i64> {
+        seg(i, n).then(|| s[i..i + n].parse().ok()).flatten()
+    };
+    if bytes[4] != b'-' || bytes[7] != b'-' || bytes[10] != b' ' || bytes[13] != b':' || bytes[16] != b':' {
+        return false;
+    }
+    let (y, mo, d, h, mi, se) = (
+        parse(0, 4),
+        parse(5, 2),
+        parse(8, 2),
+        parse(11, 2),
+        parse(14, 2),
+        parse(17, 2),
+    );
+    let (Some(y), Some(mo), Some(d), Some(h), Some(mi), Some(se)) = (y, mo, d, h, mi, se) else {
+        return false;
+    };
+    (1000..=9999).contains(&y)
+        && (1..=12).contains(&mo)
+        && (1..=31).contains(&d)
+        && (0..=23).contains(&h)
+        && (0..=59).contains(&mi)
+        && (0..=59).contains(&se)
+}
+
 pub fn create_job(
     host: &WasmHost,
     name: &str,
@@ -75,6 +114,16 @@ pub fn create_job(
 ) -> Option<String> {
     if config_id.is_empty() || trigger_at.is_empty() || prompts.is_empty() {
         host.log_warn("create_job: missing config_id/trigger_at/prompts");
+        return None;
+    }
+
+    // trigger_at 必须为 "YYYY-MM-DD HH:MM:SS"（UTC，与 SQLite datetime('now')
+    // 同格式）：所有 due/missed/timeout 判定靠与 datetime(...) 输出的字典序比较，
+    // 畸形值会被存成永远不触发且无法重置的 pending 行——这里在写库前拒绝
+    if !is_valid_trigger_at(trigger_at) {
+        host.log_warn(&format!(
+            "create_job: invalid trigger_at format (expected YYYY-MM-DD HH:MM:SS UTC): {trigger_at}"
+        ));
         return None;
     }
 
@@ -234,32 +283,71 @@ pub fn handle_scheduler_tick(host: &WasmHost, now_utc: &str) -> Result<(), Strin
 
     // 0. creating 卡死兑底：会话创建在宿主异步执行（wasm 调用栈内同步创建会
     //    死锁，见宿主 host_session_create），创建失败时 Created 事件不会到达；
-    //    超过宽限时长仍为 creating 视为创建失败
+    //    超过宽限时长仍为 creating 视为创建失败。
+    //    先查受影响 job id 再批量更新（UPDATE 拿不到具体行）；逐条广播带
+    //    job_id——前端按 job 更新视图，空 job_id 无法定位。
     let stuck_sql = format!(
         "UPDATE task_scheduled SET status = 'failed', executed_at = datetime('now'), \
          error = 'Session creation timed out' \
          WHERE status = 'creating' AND trigger_at <= datetime(?1, '-{} seconds')",
         MISSED_GRACE_SECONDS
     );
+    let stuck_ids: Vec<String> = host
+        .plugin_db_query_params(
+            &format!(
+                "SELECT id FROM task_scheduled WHERE status = 'creating' \
+                 AND trigger_at <= datetime(?1, '-{} seconds')",
+                MISSED_GRACE_SECONDS
+            ),
+            &sql_params![now_utc],
+        )
+        .map(|rows| {
+            rows.and_then(|v| v.as_array().cloned())
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|row| row.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
     match host.plugin_db_execute_params(&stuck_sql, &sql_params![now_utc]) {
         Ok(stuck_count) if stuck_count > 0 => {
             host.log_warn(&format!(
                 "scheduler-tick: {} job(s) marked failed (session creation timed out)",
                 stuck_count
             ));
-            broadcast_scheduled_changed(host, "", "failed", "failed");
+            for job_id in &stuck_ids {
+                broadcast_scheduled_changed(host, job_id, "failed", "failed");
+            }
         }
         Ok(_) => {}
         Err(e) => failures.push(format!("step0 creating-timeout update failed: {}", e.message)),
     }
 
-    // 1. 错过判定：trigger_at <= now - 宽限期 且仍 pending → missed
+    // 1. 错过判定：trigger_at <= now - 宽限期 且仍 pending → missed。
+    //    同样先查 id 再逐条广播（带 job_id）
     let missed_sql = format!(
         "UPDATE task_scheduled SET status = 'missed', executed_at = ?1, \
          error = 'Trigger time passed while app was not running' \
          WHERE status = 'pending' AND trigger_at <= datetime(?2, '-{} seconds')",
         MISSED_GRACE_SECONDS
     );
+    let missed_ids: Vec<String> = host
+        .plugin_db_query_params(
+            &format!(
+                "SELECT id FROM task_scheduled WHERE status = 'pending' \
+                 AND trigger_at <= datetime(?1, '-{} seconds')",
+                MISSED_GRACE_SECONDS
+            ),
+            &sql_params![now_utc],
+        )
+        .map(|rows| {
+            rows.and_then(|v| v.as_array().cloned())
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|row| row.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
     let missed_count = host
         .plugin_db_execute_params(&missed_sql, &sql_params![now_utc, now_utc]);
     match missed_count {
@@ -268,7 +356,9 @@ pub fn handle_scheduler_tick(host: &WasmHost, now_utc: &str) -> Result<(), Strin
                 "scheduler-tick: {} job(s) marked missed (trigger time passed)",
                 count
             ));
-            broadcast_scheduled_changed(host, "", "missed", "missed");
+            for job_id in &missed_ids {
+                broadcast_scheduled_changed(host, job_id, "missed", "missed");
+            }
         }
         Ok(_) => {}
         Err(e) => failures.push(format!("step1 missed-mark update failed: {}", e.message)),
@@ -400,46 +490,61 @@ pub fn handle_scheduler_tick(host: &WasmHost, now_utc: &str) -> Result<(), Strin
         // 创建会话即被杀）：继续每 tick（1s）重试只会无限刷日志且永远失败。
         // 一次性取消全部 pending 项并广播（复用 check_waiting_timeouts 的
         // cancel 语义：移动端预设据此落 interrupted），cancelled 不再命中
-        // 本查询，后续 tick 静默跳过
-        if crate::session::view_via_host(&session_id).ok().flatten().is_none() {
-            let pending_ids: Vec<String> = host
-                .plugin_db_query_params(
-                    "SELECT id FROM task_queue WHERE session_id = ?1 AND status = 'pending'",
-                    &sql_params![session_id],
-                )
-                .ok()
-                .flatten()
-                .and_then(|v| v.as_array().cloned())
-                .unwrap_or_default()
-                .iter()
-                .filter_map(|row| {
-                    row.get("id").and_then(|v| v.as_str()).map(|s| s.to_string())
-                })
-                .collect();
-            for task_id in &pending_ids {
-                let _ = host.plugin_db_execute_params(
-                    "UPDATE task_queue SET status = 'cancelled', updated_at = datetime('now') \
-                     WHERE id = ?1",
-                    &sql_params![task_id],
-                );
-                let remaining = crate::task::queue::pending_count(host, &session_id);
-                crate::task::queue::broadcast_queue_changed(
-                    host,
-                    &session_id,
-                    remaining,
-                    "cancel",
-                    Some(task_id),
-                    Some("cancelled"),
-                );
+        // 本查询，后续 tick 静默跳过。
+        //
+        // **只对 `Ok(None)`（会话确证不存在）走取消路径**：宿主/DB 错误（`Err`）
+        // 是瞬时故障，不能当「会话不存在」批量销毁 pending 任务（一次抖动
+        // 丢全部用户任务）；`Err` 记入 failures 按域失败处理。
+        match crate::session::view_via_host(&session_id) {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                let pending_ids: Vec<String> = host
+                    .plugin_db_query_params(
+                        "SELECT id FROM task_queue WHERE session_id = ?1 AND status = 'pending'",
+                        &sql_params![session_id],
+                    )
+                    .ok()
+                    .flatten()
+                    .and_then(|v| v.as_array().cloned())
+                    .unwrap_or_default()
+                    .iter()
+                    .filter_map(|row| {
+                        row.get("id").and_then(|v| v.as_str()).map(|s| s.to_string())
+                    })
+                    .collect();
+                for task_id in &pending_ids {
+                    let _ = host.plugin_db_execute_params(
+                        "UPDATE task_queue SET status = 'cancelled', updated_at = datetime('now') \
+                         WHERE id = ?1",
+                        &sql_params![task_id],
+                    );
+                    let remaining = crate::task::queue::pending_count(host, &session_id);
+                    crate::task::queue::broadcast_queue_changed(
+                        host,
+                        &session_id,
+                        remaining,
+                        "cancel",
+                        Some(task_id),
+                        Some("cancelled"),
+                    );
+                }
+                if !pending_ids.is_empty() {
+                    host.log_warn(&format!(
+                        "scheduler-tick: session {} gone, cancelled {} stale pending task(s)",
+                        session_id,
+                        pending_ids.len()
+                    ));
+                }
+                continue;
             }
-            if !pending_ids.is_empty() {
-                host.log_warn(&format!(
-                    "scheduler-tick: session {} gone, cancelled {} stale pending task(s)",
-                    session_id,
-                    pending_ids.len()
+            Err(e) => {
+                // 瞬时错误 ≠ 会话不存在：本次不取消任何任务，按步骤失败登记
+                // （D7 单域降级；下一 tick 重试仍可正常判定）
+                failures.push(format!(
+                    "step3 session-existence check failed for session {session_id}: {e}"
                 ));
+                continue;
             }
-            continue;
         }
 
         host.log_info(&format!(
@@ -503,9 +608,24 @@ pub fn handle_session_created(host: &WasmHost, session_id: &str, config_id: &str
         return;
     }
 
-    // prompts 依次入队（source='scheduled'），队列调度链复用常规自动任务路径
+    // prompts 依次入队（source='scheduled'），队列调度链复用常规自动任务路径。
+    // 任一条入队失败 → 记 failures（不静默丢 prompt）：仍执行已入队部分，
+    // 但 job 不标 executed——下个 tick 的 due 判定会再触发（幂等去重靠队列
+    // 已存在的行 + 本函数的 creating 匹配），避免「prompt 丢了却显示已完成」
+    let mut enqueue_failures: Vec<String> = Vec::new();
     for prompt in &prompts {
-        crate::task::queue::add_task_with_source(host, session_id, prompt, "scheduled");
+        if let Err(e) =
+            crate::task::queue::add_task_with_source(host, session_id, prompt, "scheduled")
+        {
+            enqueue_failures.push(format!("prompt {:?}: {e}", prompt));
+        }
+    }
+    if !enqueue_failures.is_empty() {
+        host.log_error(&format!(
+            "handle_session_created: job_id={} partial enqueue failed: {}",
+            job_id,
+            enqueue_failures.join("; ")
+        ));
     }
 
     // 开启会话自动执行：定时任务语义为无人值守自动执行，入队任务必须能自动调度。
@@ -532,11 +652,27 @@ pub fn handle_session_created(host: &WasmHost, session_id: &str, config_id: &str
         }),
     );
 
-    let _ = host.plugin_db_execute_params(
-        "UPDATE task_scheduled SET status = 'executed', executed_at = datetime('now'), error = NULL \
-         WHERE id = ?1",
-        &sql_params![job_id],
-    );
+    // 全部入队成功才标 executed（partial enqueue 留 creating 等下次触发补齐）
+    if enqueue_failures.is_empty() {
+        match host.plugin_db_execute_params(
+            "UPDATE task_scheduled SET status = 'executed', executed_at = datetime('now'), error = NULL \
+             WHERE id = ?1",
+            &sql_params![job_id],
+        ) {
+            Ok(affected) if affected > 0 => {
+                broadcast_scheduled_changed(host, &job_id, "executed", "trigger");
+            }
+            Ok(_) => host.log_error(&format!(
+                "handle_session_created: executed update affected 0 rows (job_id={})——\
+                 任务可能已被并发终结，不广播",
+                job_id
+            )),
+            Err(e) => host.log_error(&format!(
+                "handle_session_created: executed update failed (job_id={}): {}",
+                job_id, e
+            )),
+        }
+    }
 
     host.log_info(&format!(
         "handle_session_created: job_id={} enqueued {} prompt(s) to session_id={} config_id={}",
@@ -548,7 +684,6 @@ pub fn handle_session_created(host: &WasmHost, session_id: &str, config_id: &str
 
     let remaining = crate::task::queue::pending_count(host, session_id);
     crate::task::queue::broadcast_queue_changed(host, session_id, remaining, "add", None, None);
-    broadcast_scheduled_changed(host, &job_id, "executed", "trigger");
 }
 
 /// 启动恢复：重启前处于 creating 态的任务标记 failed（activate 调用）
@@ -698,4 +833,25 @@ fn broadcast_scheduled_changed(host: &WasmHost, job_id: &str, status: &str, acti
     host.emit_event(EVENT_TASK_SCHEDULED_CHANGED, &payload);
     // 移动端事件源（票 02）：失败只留痕，不影响定时任务推进
     crate::ws_events::broadcast_event(host, EVENT_TASK_SCHEDULED_CHANGED, &payload);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// trigger_at 格式校验：良构 UTC 串通过；畸形（缺段/非法范围/错分隔符）拒绝
+    #[test]
+    fn trigger_at_format_is_validated() {
+        assert!(is_valid_trigger_at("2026-10-03 15:00:00"));
+        assert!(is_valid_trigger_at("2026-12-31 23:59:59"));
+        assert!(!is_valid_trigger_at("2026-13-01 00:00:00"), "月超界");
+        assert!(!is_valid_trigger_at("2026-10-00 00:00:00"), "日 0");
+        assert!(!is_valid_trigger_at("2026-10-03 24:00:00"), "时超界");
+        assert!(!is_valid_trigger_at("2026-10-03 15:60:00"), "分超界");
+        assert!(!is_valid_trigger_at("2026-10-03T15:00:00"), "T 分隔不是空格");
+        assert!(!is_valid_trigger_at("2026-10-03 15:00"), "缺秒");
+        assert!(!is_valid_trigger_at("10/03/2026 15:00:00"), "斜杠分隔");
+        assert!(!is_valid_trigger_at("not-a-date"), "非数字");
+        assert!(!is_valid_trigger_at(""), "空串");
+    }
 }
