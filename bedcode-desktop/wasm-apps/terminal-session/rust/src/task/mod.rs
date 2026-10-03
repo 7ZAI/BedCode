@@ -733,6 +733,49 @@ mod tests {
             );
         }
     }
+
+    /// hook 适配器的**状态语义回归锁**（随包脚本 = 部署到用户项目的产物，无运行时测试）
+    ///
+    /// 三条都是「错了不会报错、只会静默把任务状态判错」的缺陷：
+    /// 1. opencode：`session.error` 一律推 retrying → 鉴权/额度类**不可重试**错误也停在
+    ///    活动态，随后 `session.idle` 把它推成 completed（失败任务被标成功）
+    /// 2. claude：`StopFailure` 的 `error_details` 可能是对象，直接切片 TypeError →
+    ///    在 `push_task_status(interrupted)` 之前中断，retrying 任务卡死
+    /// 3. pi：状态码正则无词边界 → 「512 tokens」这类数字片段误命中可重试
+    ///
+    /// 锁的是**行为分支的存在性**（而非逐字符快照）：把任一分支改回旧形态即转红。
+    #[test]
+    fn hook_adapters_keep_error_classification_contracts() {
+        let opencode = include_str!("../../../scripts/opencode_task_hook.ts");
+        assert!(
+            opencode.contains("} else if (isRetryableError(error)) {"),
+            "opencode 的 retrying 分支必须由可重试判定守卫（不可重试错误要收敛 interrupted）"
+        );
+        assert!(
+            opencode.contains("Run failed, not retryable"),
+            "opencode 缺少不可重试错误的 interrupted 出口"
+        );
+
+        let claude = include_str!("../../../scripts/auto_task_hook.py");
+        assert!(
+            claude.contains("if not isinstance(error_details, str):"),
+            "StopFailure 的 error_details 可能是对象，切片前必须归一成字符串"
+        );
+        assert!(
+            claude.contains("Turn failed, {} background task(s) still running"),
+            "StopFailure 缺 background_tasks 守卫（与 handle_stop 不对称，后台任务会被提前判死）"
+        );
+
+        let pi = include_str!("../../../scripts/pi_task_hook.ts");
+        assert!(
+            pi.contains("\\b5\\d\\d\\b"),
+            "pi 可重试状态码需加词边界（否则 512/52000 等数字片段误命中）"
+        );
+        assert!(
+            !pi.contains("|50[234]|"),
+            "50[234] 是 5\\d\\d 的子集，不该以备选分支形式存在（避免重复分支掩盖遗漏）"
+        );
+    }
 }
 
 // ==================== HTTP 端点面（票 16） ====================

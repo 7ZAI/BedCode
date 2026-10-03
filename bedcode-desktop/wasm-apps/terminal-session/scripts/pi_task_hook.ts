@@ -9,13 +9,22 @@
  *                          宿主据此放行 waiting 态队列任务，等价 SessionStart）
  *   before_agent_start   → in_progress（用户提交 prompt，等价 UserPromptSubmit）
  *   tool_execution_end   → in_progress（工具执行结束，等价 PostToolUse）
+ *   after_provider_response / agent_end(error)
+ *                        → retrying（LLM 调用返回可重试 HTTP 错误（429/5xx）或
+ *                          run 以 error 结束 → pi 进入自动重试，任务保持活动，
+ *                          宿主按过渡态处理，不触发队列调度）
  *   agent_settled        → completed / interrupted（run 完全收敛后触发。
- *                          注意：agent_settled 在 finally 中发出，LLM 报错
- *                          （429 等）重试耗尽或用户中断时照样触发，不能无
- *                          条件视为完成——须结合 agent_end 记录的最后一条
+ *                          agent_settled 只在全部自动工作（重试/压缩/排队续跑）
+ *                          结束后触发一次，LLM 报错重试耗尽或用户中断时照样到达，
+ *                          不能无条件视为完成——须结合 agent_end 记录的最后一条
  *                          assistant 消息的 stopReason/errorMessage 判定成败）
  *   session_shutdown     → interrupted（仅 quit：退出 pi 时任务未完成视为中断；
  *                          new/fork/resume 只是会话切换，pi 仍运行，不推送）
+ *
+ * 重试语义：pi 对 429/5xx/网络错误等瞬时故障自动指数退避重试（见
+ * core/agent-session.js retryAssistantCall）。重试期间推送 retrying 过渡态，
+ * 任务绝不被标记中断；终态判定只在 agent_settled（所有自动重试结束后）做出——
+ * 重试成功 → completed，重试耗尽 → interrupted。
  *
  * 生效条件：仅当 BEDCODE_SESSION_ID 环境变量存在时推送状态。
  * BedCode 启动的 PTY 终端会自动注入此变量（pty_process.rs），
@@ -38,7 +47,7 @@ import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 // 部署时由宿主按当前端口改写（hooks.rs replace_pi_extension_port），勿手改
 const BEDCODE_PORT = 8765 // @bedcode-port
 // 模板版本标记：内容升级时递增，宿主据此对旧部署副本自动重部署（hooks.rs）
-// @bedcode-template-version 4
+// @bedcode-template-version 6
 
 const PLUGIN_ID = 'com.bedcode.terminal-session'
 const HOST = '127.0.0.1'
@@ -115,6 +124,22 @@ function promptPreview(prompt: string): string {
   return prompt.length > 100 ? `${prompt.slice(0, 100)}...` : prompt
 }
 
+/**
+ * 可重试 LLM 错误判定（与 pi 内核 retryAssistantCall 的
+ * RETRYABLE_PROVIDER_ERROR_PATTERN 同源的压缩子集）：命中才推送 retrying，
+ * 避免把计费/额度类不可重试错误也标成重试中。
+ *
+ * 状态码必须加词边界（`\b5\d\d\b`）：否则「512 tokens」「52000」这类数字片段
+ * 也会命中，把不可重试的失败误标成重试中（`50[234]` 是 `5\d\d` 的子集，已删）。
+ */
+const RETRYABLE_ERROR_PATTERN =
+  /\b429\b|rate\s?limit|too many requests|overloaded|\b5\d\d\b|service\s?unavailable|server\s?error|network\s?error|connection\s?(?:error|refused|lost)|socket\s?hang|fetch failed|getaddrinfo|ENOTFOUND|EAI_AGAIN|reset before headers|timed?\s?out|timeout|stream\s?ended|retry delay|you can retry|try your request again/i
+
+/** 可重试 HTTP 状态码：429 限流、408 超时、5xx 服务器错误（含 520/524） */
+function isRetryableHttpStatus(status: number): boolean {
+  return status === 429 || status === 408 || status >= 500
+}
+
 /** 最近一次 agent loop 结束时记录的失败信息（null = 正常结束） */
 interface LastRunFailure {
   /** 用户主动中断（Esc/Ctrl+C）；false = LLM 报错重试耗尽 */
@@ -160,15 +185,28 @@ export default function (pi: ExtensionAPI) {
     void push('in_progress', `User submitted: ${promptPreview(event.prompt)}`)
   })
 
+  // LLM 调用返回可重试 HTTP 错误（429 限流 / 408 / 5xx）→ pi 将自动重试：
+  // 推送 retrying 过渡态，任务保持活动，绝不被标记中断
+  pi.on('after_provider_response', (event) => {
+    if (isRetryableHttpStatus(event.status)) {
+      void push('retrying', `Provider returned HTTP ${event.status}, auto retrying`)
+    }
+  })
+
   // 工具执行结束（成功/失败均视为任务进行中，与 PostToolUse 语义一致）
   pi.on('tool_execution_end', (event) => {
     void push('in_progress', `Tool ${event.toolName} completed`)
   })
 
   // agent loop 结束：记录末条 assistant 消息的成败状态，供 agent_settled 判定终态
-  // （扩展层拿不到 auto_retry_start/end 事件，stopReason/errorMessage 是唯一错误信号）
+  // （扩展层拿不到 auto_retry_start/end 事件，stopReason/errorMessage 是唯一错误信号）。
+  // 错误结果可能触发 pi 自动重试（网络错误无 HTTP 状态码，此处补推 retrying）；
+  // 终态仍只在 agent_settled 判定——中间 agent_end 的错误会被后续成功重试覆盖
   pi.on('agent_end', (event) => {
     recordLastRunFailure(event.messages)
+    if (lastRunFailure && !lastRunFailure.aborted && RETRYABLE_ERROR_PATTERN.test(lastRunFailure.errorMessage)) {
+      void push('retrying', `LLM error, auto retrying: ${lastRunFailure.errorMessage}`)
+    }
   })
 
   // run 完全收敛（自动重试/压缩/排队续跑均结束）。agent_settled 在 finally 中发出，

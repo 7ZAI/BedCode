@@ -244,6 +244,7 @@ const zhCN: MessageSchema = {
   'task.idle': '空闲',
   'task.inProgress': '执行中',
   'task.asking': '等待输入',
+  'task.retrying': '重试中',
   'task.completed': '已完成',
   'task.interrupted': '已中断',
   'task.pending': '待执行',

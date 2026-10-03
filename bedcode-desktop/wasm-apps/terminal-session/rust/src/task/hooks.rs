@@ -764,7 +764,7 @@ fn pi_extension_port_matches(content: &str, port: u16) -> bool {
 /// 先 bump 会出现「你改回旧前缀、我改回新前缀」的来回覆盖）。此处递增即把已写入
 /// 用户项目的集成副本重写成新前缀。随包脚本首行标记必须与本常量同值
 /// （`task::tests::shipped_hook_scripts_point_at_this_plugin` 逐脚本对账）。
-pub(crate) const PI_EXTENSION_TEMPLATE_VERSION: &str = "4";
+pub(crate) const PI_EXTENSION_TEMPLATE_VERSION: &str = "6";
 
 /// 检查已部署扩展是否携带当前模板版本标记
 fn pi_extension_version_matches(content: &str) -> bool {
@@ -989,7 +989,7 @@ fn opencode_plugin_port_matches(content: &str, port: u16) -> bool {
 
 /// 模板版本标记：内容升级时递增模板内标记，旧部署副本据此自动重部署
 /// （端口匹配检查无法发现脚本内容更新）
-pub(crate) const OPENCODE_PLUGIN_TEMPLATE_VERSION: &str = "2";
+pub(crate) const OPENCODE_PLUGIN_TEMPLATE_VERSION: &str = "4";
 
 /// 检查已部署插件是否携带当前模板版本标记
 fn opencode_plugin_version_matches(content: &str) -> bool {
@@ -1269,7 +1269,11 @@ fn python_interpreter_for(platform: Option<&str>) -> &'static str {
 ///
 /// 注册所有 Claude Code hook 事件，覆盖完整的状态机生命周期：
 /// SessionStart → UserPromptSubmit → PreToolUse → PostToolUse/PostToolUseFailure
-/// → Notification → Stop/SubagentStop → SessionEnd
+/// → Notification → Stop/StopFailure/SubagentStop → SessionEnd
+///
+/// StopFailure（turn 因 API 错误结束，如 429 重试耗尽）：Claude 侧无重试可观测
+/// 信号（内部退避重试对 hooks 不可见），此处把错误结束收敛为 interrupted；
+/// 任务在重试期间保持 in_progress，不会在重试中被误标中断。
 fn build_hooks_config(port: u16, hook_script_path: &str, python_cmd: &str) -> serde_json::Value {
     // 环境变量前缀：端口（脚本仅在 BedCode 注入 BEDCODE_SESSION_ID 的 PTY 中生效）
     let env_prefix = format!("BEDCODE_PORT={} ", port);
@@ -1293,6 +1297,10 @@ fn build_hooks_config(port: u16, hook_script_path: &str, python_cmd: &str) -> se
     );
     let notification_cmd = format!("{}{} \"{}\" notification", env_prefix, python_cmd, hook_script_path);
     let stop_cmd = format!("{}{} \"{}\" stop", env_prefix, python_cmd, hook_script_path);
+    let stop_failure_cmd = format!(
+        "{}{} \"{}\" stop-failure",
+        env_prefix, python_cmd, hook_script_path
+    );
     let subagent_stop_cmd = format!(
         "{}{} \"{}\" subagent-stop",
         env_prefix, python_cmd, hook_script_path
@@ -1379,6 +1387,18 @@ fn build_hooks_config(port: u16, hook_script_path: &str, python_cmd: &str) -> se
                     {
                         "type": "command",
                         "command": stop_cmd,
+                        "timeout": 5
+                    }
+                ]
+            }
+        ],
+        "StopFailure": [
+            {
+                "matcher": "",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": stop_failure_cmd,
                         "timeout": 5
                     }
                 ]
@@ -1558,7 +1578,7 @@ fn build_codex_hooks_config(port: u16, hook_script_path: &str, python_cmd: &str)
 
 /// 模板版本标记：内容升级时递增模板内标记，旧部署副本据此自动重部署
 /// （端口匹配检查无法发现脚本内容更新）。v1：修复 HTTP 重试路径缺失的 `import time`
-pub(crate) const CLAUDE_HOOK_TEMPLATE_VERSION: &str = "2";
+pub(crate) const CLAUDE_HOOK_TEMPLATE_VERSION: &str = "5";
 
 /// 检查已部署脚本是否携带当前模板版本标记
 fn claude_hook_version_matches(content: &str) -> bool {
@@ -1787,6 +1807,39 @@ mod tests {
         // 未知平台回退 python（Windows 兼容，保持既有行为）
         assert_eq!(python_interpreter_for(None), "python");
         assert_eq!(python_interpreter_for(Some("android")), "python");
+    }
+
+    #[test]
+    fn build_hooks_config_registers_full_state_machine_including_stop_failure() {
+        let config = build_hooks_config(8765, r"/proj/.claude/auto_task_hook.py", "python3");
+        let hooks = config.as_object().expect("hooks config must be an object");
+
+        for event in [
+            "SessionStart",
+            "UserPromptSubmit",
+            "PreToolUse",
+            "PostToolUse",
+            "PostToolUseFailure",
+            "Notification",
+            "Stop",
+            "StopFailure",
+            "SubagentStop",
+            "SessionEnd",
+        ] {
+            assert!(hooks.contains_key(event), "missing event {}", event);
+        }
+
+        // StopFailure 覆盖全部 error 类型（rate_limit/overloaded/server_error 等）：
+        // 429 等重试耗尽后 turn 因 API 错误结束，任务按 interrupted 收敛（不标 completed）
+        let stop_failure_hooks = hooks["StopFailure"][0]["hooks"].as_array().unwrap();
+        assert_eq!(stop_failure_hooks.len(), 1);
+        assert!(
+            stop_failure_hooks[0]["command"]
+                .as_str()
+                .unwrap_or_default()
+                .ends_with("auto_task_hook.py\" stop-failure"),
+            "StopFailure command must dispatch to stop-failure handler"
+        );
     }
 
     #[test]

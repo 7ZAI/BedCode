@@ -265,6 +265,7 @@ export type MessageSchema = {
   'task.idle': string
   'task.inProgress': string
   'task.asking': string
+  'task.retrying': string
   'task.completed': string
   'task.interrupted': string
   'task.pending': string

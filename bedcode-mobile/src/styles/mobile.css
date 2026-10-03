@@ -481,6 +481,7 @@ button.group-row:active,
 .task-state--idle { color: var(--mobile-chip-zinc); }
 .task-state--in-progress { color: var(--mobile-chip-amber); }
 .task-state--asking { color: var(--mobile-chip-violet); }
+.task-state--retrying { color: var(--mobile-chip-amber); }
 .task-state--completed { color: var(--mobile-chip-emerald); }
 .task-state--interrupted { color: var(--mobile-chip-red); }
 

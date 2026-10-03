@@ -102,6 +102,7 @@ const statusLabel: Record<string, string> = {
   idle: t('task.idle'),
   in_progress: t('task.inProgress'),
   asking: t('task.asking'),
+  retrying: t('task.retrying'),
   completed: t('task.completed'),
   interrupted: t('task.interrupted'),
   pending: t('task.pending'),
@@ -111,14 +112,15 @@ const statusColor: Record<string, string> = {
   idle: 'var(--text-tertiary)',
   in_progress: 'var(--color-primary)',
   asking: '#f59e0b',
+  retrying: '#f59e0b',
   completed: '#22c55e',
   interrupted: '#ef4444',
   pending: 'var(--text-tertiary)',
 }
 
-// 当前执行中的任务（执行中/等待输入），否则显示空闲
+// 当前执行中的任务（执行中/重试中/等待输入），否则显示空闲
 const displayTask = computed(() => {
-  if (currentTask.value && ['in_progress', 'asking'].includes(currentTask.value.status)) {
+  if (currentTask.value && ['in_progress', 'asking', 'retrying'].includes(currentTask.value.status)) {
     return currentTask.value
   }
   return null

@@ -30,7 +30,13 @@ export interface TaskHistoryItem {
 }
 
 /** 状态筛选选项：'all' 表示不筛选（HTTP 层不传 status） */
-export type HistoryStatusFilter = 'all' | 'in_progress' | 'completed' | 'interrupted' | 'failed'
+export type HistoryStatusFilter =
+  | 'all'
+  | 'in_progress'
+  | 'retrying'
+  | 'completed'
+  | 'interrupted'
+  | 'failed'
 
 /** 每页条数（桌面端 limit 上限 500，移动端固定小页） */
 const PAGE_SIZE = 20

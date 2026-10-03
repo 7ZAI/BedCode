@@ -12,6 +12,7 @@
     python3 auto_task_hook.py post-tool-use-fail  # PostToolUseFailure hook
     python3 auto_task_hook.py notification        # Notification hook
     python3 auto_task_hook.py stop                # Stop hook
+    python3 auto_task_hook.py stop-failure        # StopFailure hook（API 错误导致 turn 结束）
     python3 auto_task_hook.py subagent-stop       # SubagentStop hook
     python3 auto_task_hook.py session-end         # SessionEnd hook
 
@@ -36,6 +37,10 @@
     Stop                → completed / interrupted（根据当前状态判断）；
                           background_tasks 有 running 项（v2.1.145+）→ in_progress
                           （会话暂停等待后台任务完成，任务未结束）
+    StopFailure         → interrupted（turn 因 API 错误结束。Claude Code 对 429/5xx
+                          等瞬时错误最多自动重试 10 次且重试对 hooks 不可见；重试耗尽
+                          后触发本事件，agent 已停止、任务未完成 → 按中断收敛。
+                          "重试中"无法在 Claude 侧观测，任务在重试期间保持 in_progress）
     SubagentStop        → 不推送（子 agent 成功/失败均不影响主任务状态，仅记录日志）
     SessionEnd          → interrupted / 不推送（根据 reason 和当前状态判断）
 
@@ -70,7 +75,7 @@ from urllib.request import Request, urlopen
 from urllib.error import URLError
 
 # 模板版本标记：内容升级时递增，宿主据此对旧部署副本自动重部署（hooks.rs）
-# @bedcode-template-version 2
+# @bedcode-template-version 5
 
 # ==================== Constants ====================
 
@@ -753,6 +758,91 @@ def handle_stop(data, logger):
     push_task_status(session_id, status, reason, logger)
 
 
+def handle_stop_failure(data, logger):
+    """处理 StopFailure 事件。
+
+    turn 因 API 错误结束（Claude Code 自动重试耗尽后触发，如 429/5xx），
+    与 Stop 互斥：正常完成走 Stop，API 错误走 StopFailure。
+
+    语义（与宿主任务定义对齐）：agent 已停止、任务未完成 → 中断。
+    先查当前状态：终态或 idle 则跳过（Stop 已标记完成 / 无任务运行），
+    否则把运行中的任务收敛到 interrupted（宿主据此调度下一个队列任务）。
+
+    注意：重试期间 hooks 不可见（Claude Code 内部指数退避重试，最多 10 次），
+    任务在重试期间保持 in_progress——只有重试耗尽、turn 真正结束才到达本事件。
+    """
+    session_id = data.get("session_id", "")
+    if not session_id:
+        logger.error("stop_failure: missing session_id, data keys={}".format(list(data.keys())))
+        return
+
+    error_type = data.get("error", "unknown")
+    error_details = data.get("error_details") or data.get("last_assistant_message") or ""
+    # error_details / last_assistant_message 可能是**结构化对象**（Claude 的
+    # StopFailure 载荷如此），直接切片会 TypeError —— 而本函数必须跑到最后一行
+    # push_task_status(interrupted)：中途抛错会让 retrying 任务卡到会话结束兜底。
+    # 故先归一成字符串再截断。
+    if not isinstance(error_details, str):
+        try:
+            error_details = json.dumps(error_details, ensure_ascii=False)
+        except (TypeError, ValueError):
+            error_details = str(error_details)
+    if not isinstance(error_type, str):
+        error_type = json.dumps(error_type, ensure_ascii=False)
+    preview = error_details[:120]
+
+    logger.info(
+        "HOOK stop_failure: session_id={} error={} details={}".format(
+            session_id, error_type, preview
+        )
+    )
+
+    # 与 SessionEnd 同款守卫：终态 / idle / 查询失败一律跳过，
+    # 只收敛真正在运行中的任务（避免覆盖已完成的正常任务）
+    current = query_task_status(session_id, logger)
+    if current in TERMINAL_STATUSES or current in ("idle", None):
+        logger.info(
+            "HOOK stop_failure: session_id={} skipped, current status '{}' is terminal or idle".format(
+                session_id, current
+            )
+        )
+        return
+
+    # 后台任务（子 agent local_agent / 后台 shell local_bash 等）仍在运行：
+    # 本轮因 API 错误结束，但后台工作还没收尾 —— 与 handle_stop 同口径推
+    # in_progress，不提前把任务判死。收敛交给 SessionEnd 兜底（届时仍无后续
+    # Stop 才会终结），故不会永久卡住。
+    # 载荷里没有 background_tasks 字段时（老版本 Claude Code）本段自然跳过，
+    # 行为与加守卫之前一致。
+    background_tasks = data.get("background_tasks") or []
+    running_bg = [
+        t for t in background_tasks
+        if isinstance(t, dict) and t.get("status") in ("pending", "running")
+    ]
+    if running_bg:
+        logger.info(
+            "HOOK stop_failure: session_id={} background tasks still running: {}".format(
+                session_id,
+                [t.get("description") or t.get("agent_type") or t.get("type") or "?" for t in running_bg],
+            )
+        )
+        push_task_status(
+            session_id,
+            "in_progress",
+            "Turn failed, {} background task(s) still running".format(len(running_bg)),
+            logger,
+        )
+        return
+
+    status_reason = "Turn ended due to API error: {}".format(error_type)
+    logger.info(
+        "HOOK stop_failure: session_id={} status=interrupted error={}".format(
+            session_id, error_type
+        )
+    )
+    push_task_status(session_id, "interrupted", status_reason, logger)
+
+
 def handle_subagent_stop(data, logger):
     """处理 SubagentStop 事件。
 
@@ -862,6 +952,7 @@ COMMAND_HANDLERS = {
     "post-tool-use-fail": handle_post_tool_use_failure,
     "notification": handle_notification,
     "stop": handle_stop,
+    "stop-failure": handle_stop_failure,
     "subagent-stop": handle_subagent_stop,
     "session-end": handle_session_end,
 }

@@ -144,6 +144,7 @@ const { tasks, hasMore, statusFilter, loading, loadingMore, offline } = props.hi
 const statusFilters: { value: HistoryStatusFilter; label: string }[] = [
   { value: 'all', label: 'history.statusFilter.all' },
   { value: 'in_progress', label: 'history.statusFilter.in_progress' },
+  { value: 'retrying', label: 'history.statusFilter.retrying' },
   { value: 'completed', label: 'history.statusFilter.completed' },
   { value: 'interrupted', label: 'history.statusFilter.interrupted' },
   { value: 'failed', label: 'history.statusFilter.failed' },
@@ -169,6 +170,8 @@ function statusLabel(status: string): string {
       return t('history.statusFilter.failed')
     case 'asking':
       return t('asking')
+    case 'retrying':
+      return t('retrying')
     case 'pending':
       return t('pending')
     case 'waiting':
@@ -184,6 +187,7 @@ function badgeStyle(status: string): Record<string, string> {
     idle: 'var(--mobile-text-disabled)',
     in_progress: 'var(--mobile-accent)',
     asking: '#f59e0b',
+    retrying: '#f59e0b',
     completed: '#22c55e',
     interrupted: 'var(--mobile-error)',
     failed: 'var(--mobile-error)',

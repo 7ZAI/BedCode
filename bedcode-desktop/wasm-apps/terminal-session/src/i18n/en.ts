@@ -250,6 +250,7 @@ const en: MessageSchema = {
   'task.idle': 'Idle',
   'task.inProgress': 'In Progress',
   'task.asking': 'Waiting for Input',
+  'task.retrying': 'Retrying',
   'task.completed': 'Completed',
   'task.interrupted': 'Interrupted',
   'task.pending': 'Pending',

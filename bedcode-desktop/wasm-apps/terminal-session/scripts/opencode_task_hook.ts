@@ -10,7 +10,9 @@
  *                                waiting 态队列任务，等价 SessionStart）
  *   session.next.prompted      → in_progress（用户提交 prompt，等价 UserPromptSubmit）
  *   session.next.tool.called   → in_progress（工具被调用，等价 PostToolUse 前置信号）
- *   session.status(busy/retry) → in_progress（响应运行中/自动重试，任务未结束）
+ *   session.status(busy/retry) → in_progress / retrying（响应运行中/自动重试。
+ *                                重试是过渡态：推 retrying 而非 in_progress，
+ *                                宿主按非终态处理，不触发队列调度）
  *   session.status(idle)       → completed（run 完全收敛：子 agent / 后台工具均结束后
  *                                状态回 idle，天然等价 Stop + background_tasks 判定，
  *                                无 claude 的提前终态风险）
@@ -18,10 +20,13 @@
  *   permission.asked           → asking（仅当规则评估需要用户决策时发布，
  *                                等价 Notification(permission_prompt)）
  *   permission.replied         → in_progress（用户已回复授权请求）
- *   session.error              → interrupted（仅 MessageAbortedError，即用户中断；
- *                                其余错误 agent 会重试恢复，按 PostToolUseFailure 语义
- *                                保持 in_progress）
- *   session.next.step.failed   → in_progress（步骤失败会触发自动重试，任务仍在进行）
+ *   session.error              → interrupted（用户中断 MessageAbortedError，
+ *                                以及鉴权/额度/配置类**不可重试**错误——opencode
+ *                                不会自动重试它们，保持活动态只会让任务永远停在
+ *                                「重试中」，随后 session.idle 还会把它推成 completed）；
+ *                                可重试错误（429/超时/网络/5xx）推 retrying，
+ *                                保持任务活动，绝不标记中断
+ *   session.next.step.failed   → retrying（步骤失败会触发自动重试，任务仍在进行）
  *
  * 生效条件：仅当 BEDCODE_SESSION_ID 环境变量存在时推送状态。
  * BedCode 启动的 PTY 终端会自动注入此变量（pty_process.rs），
@@ -50,7 +55,7 @@ import type { Plugin } from '@opencode-ai/plugin'
 // 部署时由宿主按当前端口改写（hooks.rs replace_opencode_plugin_port），勿手改
 const BEDCODE_PORT = 8765 // @bedcode-port
 // 模板版本标记：内容升级时递增，宿主据此对旧部署副本自动重部署（hooks.rs）
-// @bedcode-template-version 2
+// @bedcode-template-version 4
 
 const PLUGIN_ID = 'com.bedcode.terminal-session'
 const HOST = '127.0.0.1'
@@ -69,6 +74,27 @@ function eventTime(): string {
 /** 截断过长的 prompt 用于 reason */
 function promptPreview(text: string): string {
   return text.length > 100 ? `${text.slice(0, 100)}...` : text
+}
+
+/**
+ * 可重试错误判定（与 pi 适配器的 RETRYABLE_ERROR_PATTERN 同源的压缩子集）
+ *
+ * 为什么要分类：`session.error` 若一律推 retrying，鉴权失败 / 额度耗尽 / 配置错误
+ * 这类 opencode **不会自动重试**的错误也会被标成「重试中」，任务永远停在活动态；
+ * 而 run 结束后 session 仍会回 idle → `completed`，失败任务被标成成功。
+ */
+const RETRYABLE_ERROR_PATTERN =
+  /\b429\b|rate\s?limit|too many requests|overloaded|\b5\d\d\b|service\s?unavailable|server\s?error|network\s?error|connection\s?(?:error|refused|lost)|socket\s?hang|fetch failed|getaddrinfo|ENOTFOUND|EAI_AGAIN|timed?\s?out|timeout|stream\s?ended/i
+
+/** opencode `session.error` 的 error 载荷形状（name + 可选 message） */
+interface SessionErrorPayload {
+  name?: string
+  data?: { message?: string }
+}
+
+/** 是否可重试：命中错误名或 message 里的可重试特征 */
+function isRetryableError(error: SessionErrorPayload): boolean {
+  return RETRYABLE_ERROR_PATTERN.test(`${error.name ?? ''} ${error.data?.message ?? ''}`)
 }
 
 /**
@@ -167,7 +193,7 @@ export const BedCodeTaskHook: Plugin = async () => {
           if (status === 'idle') {
             void push('completed', 'Task completed')
           } else if (status === 'retry') {
-            void push('in_progress', 'Auto retry in progress')
+            void push('retrying', 'Auto retry in progress')
           } else {
             void push('in_progress', 'Response running')
           }
@@ -191,20 +217,23 @@ export const BedCodeTaskHook: Plugin = async () => {
           void push('in_progress', 'User replied to permission')
           break
 
-        // 用户中断（Ctrl+C / Esc）→ interrupted；其余错误 agent 会恢复 → 保持进行中
+        // 用户中断（Ctrl+C / Esc）→ interrupted；可重试错误 → retrying（agent 会自动重试）；
+        // 其余（鉴权/额度/配置）opencode 不会重试 → interrupted（不留在活动态等一个不会来的重试）
         case 'session.error': {
-          const error = (properties.error ?? {}) as { name?: string; data?: { message?: string } }
+          const error = (properties.error ?? {}) as SessionErrorPayload
           if (error.name === 'MessageAbortedError') {
             void push('interrupted', 'User interrupted the run')
+          } else if (isRetryableError(error)) {
+            void push('retrying', `Run error, auto retrying: ${error.name ?? 'unknown'}`)
           } else {
-            void push('in_progress', `Run error (recovering): ${error.name ?? 'unknown'}`)
+            void push('interrupted', `Run failed, not retryable: ${error.name ?? 'unknown'}`)
           }
           break
         }
 
-        // 步骤失败会触发自动重试 → 任务仍在进行
+        // 步骤失败会触发自动重试 → retrying（过渡态，任务仍在进行）
         case 'session.next.step.failed':
-          void push('in_progress', 'Step failed, retrying')
+          void push('retrying', 'Step failed, auto retrying')
           break
       }
     },

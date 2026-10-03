@@ -261,7 +261,7 @@ fn now_rfc3339(host: &WasmHost) -> String {
 /// 插件据此用当前 session_id 查询运行中任务并统一置为 interrupted，
 /// 保证任务状态机收敛到终态（completed / interrupted 之一）。
 ///
-/// 仅影响运行中状态行（in_progress / asking）：正常退出场景下 Stop hook
+/// 仅影响运行中状态行（in_progress / asking / retrying）：正常退出场景下 Stop hook
 /// 已推送 completed / interrupted 终态，已终态的行不受影响，此处是纯兜底。
 pub fn interrupt_running_tasks_on_session_end(host: &WasmHost, session_id: &str) {
     const REASON: &str = "Session ended unexpectedly (task interrupted)";
@@ -270,7 +270,7 @@ pub fn interrupt_running_tasks_on_session_end(host: &WasmHost, session_id: &str)
         .plugin_db_execute_params(
             "UPDATE task_history SET status = 'interrupted', exit_reason = ?1, \
              completed_at = datetime('now'), updated_at = datetime('now') \
-             WHERE session_id = ?2 AND status IN ('in_progress', 'asking')",
+             WHERE session_id = ?2 AND status IN ('in_progress', 'asking', 'retrying')",
             &sql_params![REASON, session_id],
         )
         .unwrap_or(0);
@@ -662,7 +662,10 @@ fn handle_update_task_status(host: &WasmHost, body: &Value) -> Value {
     }
 
     // 验证 status 值
-    let valid_statuses = ["idle", "in_progress", "asking", "completed", "interrupted"];
+    // retrying：agent 收到可重试错误（如 429）后自动重试中的过渡态，非终态——
+    // 任务仍在执行（has_active_task 视为活动），重试成功由后续推送收敛到
+    // in_progress/completed，重试耗尽由 agent_settled / StopFailure 收敛到 interrupted。
+    let valid_statuses = ["idle", "in_progress", "asking", "retrying", "completed", "interrupted"];
     if !valid_statuses.contains(&status) {
         host.log_warn(&format!(
             "task-status invalid status: '{}' for session_id={}",
@@ -750,7 +753,7 @@ fn handle_update_task_status(host: &WasmHost, body: &Value) -> Value {
             return http_response::ok();
         }
 
-        // 运行中行保护：执行中/等待输入的任务收到 idle 推送时不降级状态。
+        // 运行中行保护：执行中/重试中/等待输入的任务收到 idle 推送时不降级状态。
         // idle 本义是"无任务运行"（SessionStart），但任务运行中途也会到达：
         // opencode Task 工具创建子会话推 session.created→idle、Claude Code
         // compact/resume 触发 SessionStart。若据此把执行中行改写为 idle，
@@ -759,7 +762,7 @@ fn handle_update_task_status(host: &WasmHost, body: &Value) -> Value {
         // 为 done —— 移动端对应预设被误标「已完成」而原任务仍在执行。
         // Codex 版已在脚本侧以 SessionStart matcher 限定 startup|resume|clear
         // 规避同类问题，此处为全部 agent 的宿主侧兜底。
-        if status == "idle" && matches!(current_status, "in_progress" | "asking") {
+        if status == "idle" && matches!(current_status, "in_progress" | "asking" | "retrying") {
             if let Some(bedcode_sid) = bedcode_session_id.filter(|s| !s.is_empty()) {
                 upsert_session_mapping(host, session_id, bedcode_sid);
             }

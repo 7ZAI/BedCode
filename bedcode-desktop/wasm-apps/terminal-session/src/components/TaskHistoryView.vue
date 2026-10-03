@@ -239,6 +239,7 @@ const statusLabel: Record<string, string> = {
   idle: t('task.idle'),
   in_progress: t('task.inProgress'),
   asking: t('task.asking'),
+  retrying: t('task.retrying'),
   completed: t('task.completed'),
   interrupted: t('task.interrupted'),
   pending: t('task.pending'),
@@ -248,6 +249,7 @@ const statusColor: Record<string, string> = {
   idle: 'text-[var(--text-tertiary)]',
   in_progress: 'text-blue-500',
   asking: 'text-amber-500',
+  retrying: 'text-amber-500',
   completed: 'text-green-500',
   interrupted: 'text-red-500',
   pending: 'text-[var(--text-tertiary)]',
@@ -257,6 +259,7 @@ const statusDot: Record<string, string> = {
   idle: 'bg-[var(--text-tertiary)]',
   in_progress: 'bg-blue-500',
   asking: 'bg-amber-500',
+  retrying: 'bg-amber-500 animate-pulse',
   completed: 'bg-green-500',
   interrupted: 'bg-red-500',
   pending: 'bg-[var(--text-tertiary)]',
@@ -321,9 +324,9 @@ const tabs: { key: TabKey; label: string }[] = [
 
 // ==================== 当前任务（Tab1） ====================
 
-// 执行中的任务（in_progress / asking）
+// 执行中的任务（in_progress / asking / retrying）
 const activeTasks = computed(() =>
-  runningSessions.value.filter((s) => ['in_progress', 'asking'].includes(s.task_status)),
+  runningSessions.value.filter((s) => ['in_progress', 'asking', 'retrying'].includes(s.task_status)),
 )
 // 有待执行队列的会话（执行任务区段）
 const executingSessions = computed(() => runningSessions.value.filter((s) => s.queue.length > 0))
@@ -383,7 +386,7 @@ async function loadRunningSessions(opts: { silent?: boolean } = {}) {
       const adapted = sessions.filter((s) => s.is_supported)
       const preferred =
         adapted.find(
-          (s) => s.queue_count > 0 || ['in_progress', 'asking'].includes(s.task_status),
+          (s) => s.queue_count > 0 || ['in_progress', 'asking', 'retrying'].includes(s.task_status),
         ) || adapted[0]
       createSessionId.value = preferred?.session_id ?? ''
     } else if (
@@ -522,7 +525,7 @@ function cancelEditPreset() {
 
 // ==================== 筛选选项与统计（Tab2/Tab4） ====================
 
-const statusOptions = ['', 'idle', 'in_progress', 'asking', 'completed', 'interrupted']
+const statusOptions = ['', 'idle', 'in_progress', 'asking', 'retrying', 'completed', 'interrupted']
 const agentOptions = ['', 'claude', 'codex', 'opencode', 'pi', 'unknown']
 const sourceOptions = ['', 'user', 'queue', 'scheduled']
 
@@ -544,7 +547,7 @@ const filterSourceOptions = sourceOptions
   .slice(1)
   .map((s) => ({ value: s, label: sourceLabel[s] || s }))
 
-const knownStatuses = ['idle', 'in_progress', 'asking', 'completed', 'interrupted']
+const knownStatuses = ['idle', 'in_progress', 'asking', 'retrying', 'completed', 'interrupted']
 const statusStatsList = computed(() =>
   knownStatuses
     .filter((s) => (stats.value?.by_status?.[s] ?? 0) > 0)

@@ -127,6 +127,7 @@ const taskStatusClass = computed(() => {
   switch (props.session.taskStatus) {
     case 'in_progress': return 'task-state--in-progress'
     case 'asking': return 'task-state--asking'
+    case 'retrying': return 'task-state--retrying'
     case 'completed': return 'task-state--completed'
     case 'interrupted': return 'task-state--interrupted'
     default: return 'task-state--idle'
@@ -140,6 +141,7 @@ const taskStatusLabel = computed(() => {
     case 'idle': return t('mobile.sessionCard.taskIdle')
     case 'in_progress': return t('mobile.sessionCard.taskInProgress')
     case 'asking': return t('mobile.sessionCard.taskAsking')
+    case 'retrying': return t('mobile.sessionCard.taskRetrying')
     case 'completed': return t('mobile.sessionCard.taskCompleted')
     case 'interrupted': return t('mobile.sessionCard.taskInterrupted')
     default: return status

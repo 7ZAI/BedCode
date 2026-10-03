@@ -30,6 +30,7 @@ const zhCN: Record<string, string> = {
   idle: '空闲',
   inProgress: '执行中',
   asking: '等待输入',
+  retrying: '重试中',
   completed: '已完成',
   interrupted: '已中断',
   pending: '待执行',
@@ -56,6 +57,7 @@ const zhCN: Record<string, string> = {
   // ==================== 任务记录页 ====================
   'history.statusFilter.all': '全部',
   'history.statusFilter.in_progress': '执行中',
+  'history.statusFilter.retrying': '重试中',
   'history.statusFilter.completed': '已完成',
   'history.statusFilter.interrupted': '已中断',
   'history.statusFilter.failed': '失败',
@@ -142,6 +144,7 @@ const en: Record<string, string> = {
   idle: 'Idle',
   inProgress: 'In Progress',
   asking: 'Awaiting Input',
+  retrying: 'Retrying',
   completed: 'Completed',
   interrupted: 'Interrupted',
   pending: 'Pending',
@@ -168,6 +171,7 @@ const en: Record<string, string> = {
   // ==================== Task History tab ====================
   'history.statusFilter.all': 'All',
   'history.statusFilter.in_progress': 'Running',
+  'history.statusFilter.retrying': 'Retrying',
   'history.statusFilter.completed': 'Completed',
   'history.statusFilter.interrupted': 'Interrupted',
   'history.statusFilter.failed': 'Failed',
