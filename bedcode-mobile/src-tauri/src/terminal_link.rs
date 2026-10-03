@@ -237,6 +237,35 @@ fn special_key_to_pty_bytes(name: &str) -> Option<Vec<u8>> {
     combo.to_pty_bytes()
 }
 
+/// 输入投递计划：把「文本 + 特殊键」这一对入参展开成**有序**的出站帧序列。
+///
+/// 纯函数（可单测），语义即本命令的对外契约（spec §3.3「两者可并存，帧序即写入序」）：
+/// - 有文本 → 追加 `TextInput`；文本在前
+/// - 有特殊键 → 追加 `BinaryInput`；键字节在后（「先打字，再回车」）
+/// - 两者皆空 → 空计划（无帧投递）
+///
+/// **历史缺陷（2026-10-02 修复）**：实现曾写成 `if 有键 … else if 有文本` 的互斥分支，
+/// 于是输入栏「命令 + Enter」这条唯一生产路径（前端恒传 `specialKey: "enter"`）只发得出
+/// 一个裸回车，命令文本被静默丢弃——真机表现是「输入没反应」，且前端无任何报错可查。
+/// 契约与实现不一致的判据：函数自身的文档注释写着「两者可并存」。
+///
+/// 特殊键**先校验后投递**：不支持的键名返回 Err 且一帧都不发，避免「文本已写进 PTY、
+/// 回车没发」的半截输入（PTY 侧不可回滚）。
+fn plan_input_frames(data: &str, special_key: Option<&str>) -> Result<Vec<Outbound>, String> {
+    let key_bytes = match special_key.filter(|k| !k.is_empty()) {
+        Some(key) => Some(special_key_to_pty_bytes(key).ok_or_else(|| format!("unsupported special key: {key}"))?),
+        None => None,
+    };
+    let mut frames = Vec::with_capacity(2);
+    if !data.is_empty() {
+        frames.push(Outbound::TextInput { data: data.to_string() });
+    }
+    if let Some(bytes) = key_bytes {
+        frames.push(Outbound::BinaryInput { bytes });
+    }
+    Ok(frames)
+}
+
 /// ack 回发节流判定（64KB 阈值 + 250ms 空闲兜底）。
 ///
 /// `pending == 0` 一律不发：pending 在收帧时累计（见 `ingest_output`），为 0 即
@@ -464,14 +493,19 @@ impl TerminalLink {
 
     /// 发送出站帧（命令侧调用）。通道关闭 = IO 任务已退出（链接死亡），此时
     /// 命令随之丢弃必须留痕——重连恢复由状态机/重新订阅负责，不在此处重试
-    async fn send_out(&self, out: Outbound) {
-        if let Err(e) = self.write_tx.send(out).await {
+    ///
+    /// **失败必须上抛**：输入面多帧化（文本帧 + 特殊键帧）后，调用方需要知道
+    /// 帧没投递出去；单帧时代「丢弃 + 留痕」尚可接受，多帧时代静默丢弃会让
+    /// 「命令文本已写入 PTY、回车没发」被当成成功返回（PTY 侧不可回滚）。
+    async fn send_out(&self, out: Outbound) -> Result<(), String> {
+        self.write_tx.send(out).await.map_err(|e| {
             tracing::warn!(
                 session_id = %self.session_id,
                 out = ?e.0,
                 "terminal link io task exited, outbound command dropped"
             );
-        }
+            format!("terminal link closed (session {session_id})", session_id = self.session_id)
+        })
     }
 }
 
@@ -1002,18 +1036,21 @@ pub async fn terminal_remove(session_id: String) -> Result<(), String> {
 ///
 /// 双形态（spec §3.3）：`special_key`（控制字符/特殊键）→ `KeyCombo::to_pty_bytes()`
 /// → **binary 帧**原始字节；`data`（可打印 UTF-8 文本）→ `{"type":"input","data":...}`
-/// text 帧。两者可并存（如「命令 + Enter」= text 帧 + binary `\r`），帧序即写入序
+/// text 帧。两者可并存（如「命令 + Enter」= text 帧 + binary `\r`），帧序即写入序。
+///
+/// 投递计划由纯函数 [`plan_input_frames`] 决定（顺序、校验时机都在那里单测）。
+///
+/// **投递失败上抛**：链路 IO 任务退出时帧会被丢弃，此时返回 Err（而非静默 Ok）——
+/// 多帧输入下「文本已写进 PTY、回车没发」必须让前端看得见（PTY 侧不可回滚）。
 #[tauri::command]
 pub async fn terminal_send_input(session_id: String, data: String, special_key: Option<String>) -> Result<(), String> {
+    let frames = plan_input_frames(&data, special_key.as_deref())?;
     let manager = terminal_link_manager();
     let link = manager
         .get(&session_id)
         .ok_or_else(|| "terminal link not subscribed".to_string())?;
-    if let Some(key) = special_key.filter(|k| !k.is_empty()) {
-        let bytes = special_key_to_pty_bytes(&key).ok_or_else(|| format!("unsupported special key: {key}"))?;
-        link.send_out(Outbound::BinaryInput { bytes }).await;
-    } else if !data.is_empty() {
-        link.send_out(Outbound::TextInput { data }).await;
+    for frame in frames {
+        link.send_out(frame).await?;
     }
     Ok(())
 }
@@ -1026,7 +1063,11 @@ pub async fn terminal_ack_rendered(session_id: String, offset: u64) -> Result<()
     let link = manager
         .get(&session_id)
         .ok_or_else(|| "terminal link not subscribed".to_string())?;
-    link.send_out(Outbound::Ack { offset }).await;
+    link.send_out(Outbound::Ack { offset })
+        .await
+        // ack 是尽力投递的渲染进度确认（丢失由对端重发 / 重连恢复补上），
+        // 失败已在 send_out 内留痕，不向渲染热路径报错
+        .ok();
     Ok(())
 }
 
@@ -1189,6 +1230,149 @@ mod tests {
         }
         assert_eq!(special_key_to_pty_bytes("no_such_key"), None);
         assert_eq!(special_key_to_pty_bytes(""), None);
+    }
+
+    // ==================== 输入投递计划（文本 + 特殊键 共存契约） ====================
+
+    /// 抽出帧序列的可读形状（断言「投了几帧、什么顺序、什么载荷」，不绑死枚举变体名）
+    fn plan_shape(data: &str, special_key: Option<&str>) -> Result<Vec<String>, String> {
+        Ok(plan_input_frames(data, special_key)?
+            .into_iter()
+            .map(|f| match f {
+                Outbound::TextInput { data } => format!("text:{data}"),
+                Outbound::BinaryInput { bytes } => {
+                    format!("bytes:{}", bytes.iter().map(|b| format!("{b:02x}")).collect::<String>())
+                }
+                other => panic!("输入计划不得产生非输入帧：{other:?}"),
+            })
+            .collect())
+    }
+
+    /// C-IN-001 正例：纯文本（输入栏「发送」= 不带回车）
+    #[test]
+    fn plan_input_frames_text_only_sends_one_text_frame() {
+        assert_eq!(
+            plan_shape("ls -la", None).unwrap(),
+            vec!["text:ls -la".to_string()],
+            "纯文本必须且只发一帧 text"
+        );
+    }
+
+    /// C-IN-002 反例（回归锁）：纯特殊键（快捷键 / 方向键 / Ctrl+C）→ 只发 binary
+    #[test]
+    fn plan_input_frames_key_only_sends_one_binary_frame() {
+        assert_eq!(
+            plan_shape("", Some("ctrl_c")).unwrap(),
+            vec!["bytes:03".to_string()],
+            "纯特殊键必须且只发一帧 binary"
+        );
+    }
+
+    /// C-IN-003 正例（历史缺陷回归锁）：「命令 + Enter」两帧共存且**文本在前**
+    ///
+    /// 缺陷版实现是 `if 有键 … else if 有文本`，输入栏唯一的生产路径
+    /// （前端恒传 specialKey="enter"）只发得出裸回车、命令文本被丢弃。
+    #[test]
+    fn plan_input_frames_keeps_text_before_special_key() {
+        assert_eq!(
+            plan_shape("echo HI", Some("enter")).unwrap(),
+            vec!["text:echo HI".to_string(), "bytes:0d".to_string()],
+            "命令 + Enter 必须先发文本帧再发回车帧（帧序即写入序）"
+        );
+    }
+
+    /// C-IN-004 反例（变异探针）：把文本帧丢掉/换序，这条断言必须失败——
+    /// 与 C-IN-003 组成同一契约的正反两面，禁止只留顺序断言
+    #[test]
+    fn plan_input_frames_order_is_observable_by_plan_length_and_payload() {
+        let both = plan_shape("echo HI", Some("enter")).unwrap();
+        let text_only = plan_shape("echo HI", None).unwrap();
+        assert_eq!(both.len(), 2, "有键 + 有文本必须产生两帧");
+        assert_eq!(
+            both[0], text_only[0],
+            "共存计划的第一帧必须与纯文本计划的第一帧一致（即文本未被丢弃）"
+        );
+    }
+
+    /// C-IN-005 异常：不支持的键名 → Err，且**一帧都不投递**（半截输入不可回滚）
+    #[test]
+    fn plan_input_frames_rejects_unknown_key_without_partial_send() {
+        let err = plan_shape("echo HI", Some("no_such_key")).unwrap_err();
+        assert!(err.contains("no_such_key"), "错误信息必须点名非法键名，实际={err}");
+    }
+
+    /// C-IN-006 边界：空串键名视作「无特殊键」（前端可能传 Some("")）
+    #[test]
+    fn plan_input_frames_empty_key_name_is_treated_as_absent() {
+        assert_eq!(
+            plan_shape("echo HI", Some("")).unwrap(),
+            vec!["text:echo HI".to_string()],
+            "空键名不得产生 binary 帧"
+        );
+    }
+
+    /// C-IN-007 边界：两者皆空 → 空计划（不发帧，但不报错）
+    #[test]
+    fn plan_input_frames_empty_both_sends_nothing() {
+        assert!(plan_input_frames("", None).unwrap().is_empty(), "空输入不得产生任何帧");
+    }
+
+    // ==================== 投递失败上抛（多帧输入的半截输入护栏） ====================
+
+    /// 测试替身：不发射任何前端事件（投递失败路径不经过发射面）
+    struct NullSink;
+
+    impl TerminalEventSink for NullSink {
+        fn emit(&self, _event: &str, _payload: serde_json::Value) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    /// 构造一条链路：返回 (link, 发送端持有者)；丢弃发送端即模拟 IO 任务退出
+    fn link_with_channel(session_id: &str) -> (Arc<TerminalLink>, mpsc::Sender<Outbound>) {
+        let (tx, rx) = mpsc::channel::<Outbound>(8);
+        let link = TerminalLink::new(
+            session_id.to_string(),
+            Arc::new(NullSink),
+            tx.clone(),
+            Arc::new(AtomicBool::new(true)),
+            Arc::new(Mutex::new(None)),
+        );
+        // IO 任务立刻退出：接收端被丢弃 → 后续 send 必失败
+        drop(rx);
+        (link, tx)
+    }
+
+    /// C-IN-008 正例：通道仍活着 → 投递成功
+    #[tokio::test]
+    async fn send_out_succeeds_while_io_task_alive() {
+        let (tx, mut rx) = mpsc::channel::<Outbound>(8);
+        let link = TerminalLink::new(
+            "s1".to_string(),
+            Arc::new(NullSink),
+            tx,
+            Arc::new(AtomicBool::new(true)),
+            Arc::new(Mutex::new(None)),
+        );
+
+        let res = link.send_out(Outbound::TextInput { data: "ls".to_string() }).await;
+
+        assert!(res.is_ok(), "通道存活时投递必须成功，实际={res:?}");
+        assert!(matches!(rx.try_recv(), Ok(Outbound::TextInput { .. })), "帧必须真的进了通道");
+    }
+
+    /// C-IN-009 异常：IO 任务退出（通道关闭）→ 必须返回 Err
+    ///
+    /// 单帧时代「丢弃 + 留痕」尚可接受；多帧输入（命令 + Enter）下静默丢弃会让
+    /// 「文本已写进 PTY、回车没发」被当成成功返回（PTY 侧不可回滚）。
+    #[tokio::test]
+    async fn send_out_reports_error_after_io_task_exited() {
+        let (link, _tx) = link_with_channel("s-dead");
+
+        let res = link.send_out(Outbound::TextInput { data: "echo HI".to_string() }).await;
+
+        let err = res.expect_err("通道关闭必须上抛 Err（不得静默丢弃）");
+        assert!(err.contains("s-dead"), "错误信息必须点名会话（便于前端/日志定位），实际={err}");
     }
 
     // ==================== ack 节流（回归护栏：语义与旧 TB v3 版一致） ====================

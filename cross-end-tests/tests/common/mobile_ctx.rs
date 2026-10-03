@@ -296,3 +296,33 @@ pub async fn wait_output(recorder: &Arc<OutputRecorder>, marker: &str) {
     })
     .await;
 }
+
+/// 统计 marker 作为**独占一行**出现的次数（行首 + 行尾均为行边界）
+///
+/// **为什么不能直接数 marker 出现次数**：真实 PTY 开回显，bash 每次重绘提示符
+/// 都把当前输入行整行重发（`]0;title` + prompt + 已键入文本），同一个 marker
+/// 会在输出流里出现多次而命令**从未执行**——变异探针实测：去掉行锚定后，
+/// 「Enter 被丢弃」这个变异会伪装成通过（断言恒真）。
+/// 只有「独占一行」的形态才可能来自命令的真实输出，因此判「命令是否执行」
+/// 一律用本函数。
+pub fn count_line_occurrences(text: &str, marker: &str) -> usize {
+    // 空 marker 会让 `find("")` 恒返回 Some(0) 且 from 不前进 → 无限循环（测试进程卡死）。
+    // 当前调用方都传非空常量，但本函数是 pub 通用判据，入口就拦住非法参数。
+    if marker.is_empty() {
+        return 0;
+    }
+    let bytes = text.as_bytes();
+    let mut count = 0usize;
+    let mut from = 0usize;
+    while let Some(rel) = text.get(from..).and_then(|s| s.find(marker)) {
+        let start = from + rel;
+        let end = start + marker.len();
+        let line_start = start == 0 || matches!(bytes[start - 1], b'\n' | b'\r');
+        let line_end = end == bytes.len() || matches!(bytes[end], b'\n' | b'\r');
+        if line_start && line_end {
+            count += 1;
+        }
+        from = end;
+    }
+    count
+}

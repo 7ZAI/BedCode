@@ -110,3 +110,33 @@ async fn cross_end_rig_is_wired_end_to_end() {
     mobile_ctx::clear_identity();
     desktop_ctx::cleanup_temp_dirs();
 }
+
+// ==================== 台子判据自身的纯函数自检 ====================
+//
+// `count_line_occurrences` 是「命令是否真的执行」的判据本身：判据坏了（恒真 / 卡死），
+// 场景测试会集体伪装成通过，所以它的边界必须单独钉住。
+
+/// 空 marker 会让 `find("")` 恒返回 0 且游标不前进 —— 未防御时本测试直接死循环卡死
+#[test]
+fn empty_marker_returns_zero_instead_of_hanging() {
+    assert_eq!(mobile_ctx::count_line_occurrences("任意输出\n第二行\n", ""), 0);
+    assert_eq!(mobile_ctx::count_line_occurrences("", ""), 0);
+}
+
+/// 独占一行的形态才算命令真实输出（PTY 回显会把输入行整行重发）
+#[test]
+fn only_whole_line_occurrences_are_counted() {
+    let text = "prefix-MARKER-suffix\nMARKER\ntail MARKER here\n";
+    assert_eq!(
+        mobile_ctx::count_line_occurrences(text, "MARKER"),
+        1,
+        "只有独占一行的出现才算命令真实输出，其余（行内出现）必须不计"
+    );
+}
+
+/// 边界：未出现返回 0；CRLF 行尾同样算行边界
+#[test]
+fn absent_marker_is_zero_and_crlf_counts_as_line_boundary() {
+    assert_eq!(mobile_ctx::count_line_occurrences("no marker here\n", "MARKER"), 0);
+    assert_eq!(mobile_ctx::count_line_occurrences("head\r\nMARKER\r\n", "MARKER"), 1);
+}
