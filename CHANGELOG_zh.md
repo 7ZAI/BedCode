@@ -9,17 +9,124 @@
 
 ## [未发布]
 
-#### 移动端会话页：运行中会话行不再破行，页面的层级与对齐缺陷一并修正（纯 UI，功能不变）
+#### Agent Hub 聊天记录：工具输出上限 400 → 1000 字符，pi 逐轮空消息不再渲染成零 token 气泡
 
-- **本次修掉的现象**：运行中会话列表里有一行明显比相邻行高，琥珀色的任务状态被压成逐字竖排（截图里的「已完／成」）。页面还同时存在若干缺陷：显示了用户无法据此决策的会话类型（`PTY`）、「启动」按钮低于 44px 触控下限、两个区块头垂直节奏不一致、页面标题比卡片右移 4px，以及右侧一条常驻的冷色 8px 滚动条竖条
-- **根因是量出来的，不是看出来的**：在 406px 视口下，前置图标与状态徽章 + 操作按钮之间的信息列实测只有 **141px**。旧副行把「类型 / 时长 / 任务状态」三段全塞进这一列，共需 **142px** —— 1px 溢出。CJK 可在任意两字之间断行，于是尾部两段逐字折行：子行高 23px → 45px，同一列表的行高被撑成 **79 / 102 / 80px**
-- **改法**：该列改为恒定两行 —— 上行只放会话名，下行放易变的状态（任务状态 + 运行时长）。每段一律 `nowrap`；唯一宽度不可预测者（运行时长）是唯一允许 `truncate` 的。最坏情形实测「等待输入 60px + 2小时5分 63px = 129px」，仍在 141px 预算内
-- **任务状态不再一律 amber**：原先所有状态同色，「已完成」与「执行中」长得一模一样。现按状态各自取色（空闲 zinc / 执行中 amber / 等待回答 violet / 已完成 emerald / 已中断 red）。状态文案始终在场，颜色只作强化、不单独承载信息
-- **类型标签移除**：`PTY` / `Plugin` 是用户无法据此做任何决策的实现细节，而左侧图标与状态徽章已足够表达会话在做什么；移除后也把整列宽度让给会话名
-- **其余缺陷（逐项实测）**：`.config-icon` / `.config-icon-sm` **只被引用、从未定义**，配置卡图标实为裸 SVG 贴在色块上 —— 现补为 40px / 28px 圆角 chip，与 `.icon-chip` 对齐。「启动」按钮原为 `h-8`（32px），低于触控下限 —— 改 44px 并沿用应用 accent 描边语言，顺带把卡片顶行从 72px 收到 64px。配置卡的 label 与 value 原同为 `text-xs`、只靠颜色深浅区分 —— 现 label 为最暗 xs、value 升为 sm。页面标题与卡片左边缘差 4px（`.page-header` 20px vs 内容 `px-4` 16px）—— 局部覆写为 16px，不动全局，避免波及其他视图的 header。两个区块头（一个可折叠、一个裸文字）统一为 `.section-head` 结构，两个标题落在同一条竖线上
-- **真机验证**：用真实组件 + 真实 CSS + 真机 406px 视口并排渲染改前/改后 —— 旧三段副行量得 **79 / 102 / 80px**（散布 23px；子段高 45px 即已折行），新两行结构量得 **79 / 80 / 80 / 80px**（散布 1px；每段均 23px；长名称单行截断）。深浅两套主题下几何完全一致
-- **未改动**：功能、事件、i18n key、数据流均未变。`vue-tsc --noEmit` exit 0；移动端 vitest 53 文件 / 524 用例全绿；根 `eslint .` 0 error / 117 warning
+- **工具输出上限 400 → 1000**（四个适配器统一：`CODEX_TOOL_TEXT_CAP` / `OPENCODE_TOOL_TEXT_CAP` + claude / pi 的 `tool_result` 字面量）——400 字符点开也读不完一条命令输出；展示层镜像 `GUEST_TEXT_CAPS.toolOutput` 同步，工具卡折叠阈值随之 200 → 400（上限的 40%）：短命令直接铺开，长输出默认收起
+- **展示层不做字符级截断**：DOM 里始终是 guest 给的全文，阈值只决定是否给展开控件
+- **pi 逐轮空助手消息不再变气泡**：pi 每轮至少写一条 `content: []` 的 assistant 消息且 `usage` 是空对象，guest 判据是「usage 是对象」就算「有用量」，于是这些行带着**五项全 0** 的 TokenUsage 进事件流——实机单会话 **83 条里 58 条**（70%）是这种空消息。现在正文空且 token 全零的助手行整条不渲染，全零 token 行也不再出（「↑0 ↓0 ⚡0 +0」不是信息，只会让人以为统计坏了）；正文空但 token 有量的行仍保留（将来 A2 的推理内容要有地方落）
+- **解析层跟进已登记**（README A10）：guest 侧可考虑直接不 push 这类事件；展示层的兜底已覆盖当前 wire
+- **验证**：agent-hub 432 用例全绿；插件 `cargo test --lib` 162 全绿；eslint 0 error
 
+#### Agent Hub 聊天记录：markdown 渲染 + 工具折叠卡片 + 截断内容的完整原文入口
+
+- **助手回复渲染 markdown**（此前是纯文本）。新增 `src/utils/markdown.ts`：**零依赖、先转义后拼标签**的 CommonMark 子集渲染器——段落（软换行 → `br`）、ATX 标题、有序 / 无序列表（含两级缩进嵌套）、引用、分隔线、围栏代码块（``` 与 ~~~）、GFM 管道表格，行内 `code` / 粗体 / 斜体 / 删除线 / 链接。输出只含本文件的白名单标签，故**无需 sanitizer**；链接刻意降级为不可点文本（URL 挂 `title` 悬停可见）——宿主已撤 shell/opener 权限且 CSP `connect-src 'none'`，可点链接只会是骗人的死链；图片只留 alt（前端零资源访问红线）。**只渲染助手正文**：用户行是「我说的话」、工具行是命令原文，都不该被排版
+- **折叠态不生成 HTML**：折叠预览用剥标记的纯文本（`markdownPlainPreview`），因为 CSS line-clamp 只对纯文本行数可靠；结构化 HTML 只在展开时产出。长消息因此保留 B1 既定的「3 行 + 省略号」手感，还省掉一次解析
+- **为什么不用 marked**（原 needs-triage 的裁决）：agent-hub 是**只读日志查看器**（无流式、无输入框），为一个读记录的视图引解析器 + sanitizer 不划算；双端 ai-chatbox 虽已自带 marked + DOMPurify，但那两处都在流式对话主链路上
+- **工具行变成卡片**：按 guest 的 ` · ` 约定切成**卡头（类型 · 名称）+ 卡身（参数 / 输出）**，覆盖四适配器四种形态（claude `tool_use` / `tool_result`、codex / opencode `tool · 名称 (状态) · 卡身`、pi `名称 (error) · 卡身`），未知形态整条落卡身不编头、不切碎正文。卡身超 200 字**默认收起**（同 B1 模式，按钮文案区分「展开详情」）；`tool_use · Bash` 无卡身时不渲染空正文块；pi / opencode 尾部 `(error)` → 危险色左条 + 卡头转语义危险色
+- **截断内容有了看得见的完整原文路径**：guest 只在真截断时补省略号，展示层据此识别（**末字符是省略号** + **最后一个 ` · ` 段长于最小上限 120**）——按**末段**而非整条长度判定，因为卡内可能有嵌套上限（claude 新增的 120 字符参数摘要让 `tool_use · 名称 · 参数…` 整条才 ~140 字，按工具 400 判整条会漏报），给一行提示 + 「查看原始 JSONL」按钮直达 raw 页签——对应 ui-ux-pro-max ux-guidelines「Essential Text Truncation（Critical）：必须给可见的完整详情路径」
+- **仍在解析层（本次未做）**：调用↔结果配对、claude / codex 的 `is_error`、工具参数摘要，都需要结构化 guest 字段（`NormalizedEventView.error` / `toolUseId` 由在途任务落地）；本次的文本 `(error)` 启发式是兼容兜底
+- **验证**：agent-hub 428 用例（新增 49：markdown 14 条行为契约含 XSS / `javascript:` URL / 属性注入 / 占位符撞数字回归，工具卡与截断 14 条，组件层 19 条）+ 桌面全量 vitest 1482 全绿；eslint 0 error；agent-hub `tsc --noEmit` 改动文件干净
+
+
+#### Agent Hub 会话日志：模型输出折叠（默认收起）+ JSONL 解析缺口审计
+
+- **模型输出折叠（默认收起）**：聊天记录视图中，助手回复正文超过 500 字符即提供「展开全文 / 收起」控件且**默认折叠**（3 行截断 + 省略号预览），长回复不再铺满视口。短消息不折叠也不显示按钮（clamp 剪不到，按钮是噪音）；折叠态按事件下标记录，切换会话时重置；按钮带 `aria-expanded` / `aria-controls`（锚定对应正文）。设计依据：ui-ux-pro-max ux-guidelines「Truncate with ellipsis and expand option」
+- **JSONL → 对话还原审计**（对比 zcode / qoder 等成熟桌面 GUI agent）：确认仍有信息未解析到——
+  1. **pi 适配器 `toolCall` 块整体丢失（真 bug）**：助手展示复用 claude 的 `assistant_display_text`，只匹配 claude 拼写 `tool_use`；pi 实际内容块类型是 `toolCall`（实测单会话 72 个块），助手消息里永远看不到工具调用本身
+  2. **`thinking` 块两种适配器全部丢弃**（pi 实测单会话 46 块），推理过程不可见
+  3. **工具调用参数（input/arguments）不展示**，只见工具名；`tool_result` 的 `is_error` 不标记；`tool_use_id` 与 `tool_result` 不对接
+  4. **claude `attachment` 行不解析为附件条目**（实测单会话 115 条）；`ai-title` 行未用于更优标题；`tool_result` 中的图片块静默丢弃
+  5. 错误边界不对称：opencode 侧对超大正文有 600/400 截断护栏，**claude user 正文不截断**直入事件流（WATM 序列化隐患）
+  6. 展示层对比差距：纯文本渲染（无 markdown / 代码高亮），工具行无独立折叠卡片，错误结果无视觉标记
+- **修复范围**：本次只落地「模型输出折叠」前端效果；解析层（A1–A8）与展示层（B1–B4）缺陷已全量登记到 `.scratch/2026-10-03-agent-hub-chat-recon-gaps/README.md`（含实机证据、修复建议、优先级与 triage 状态），待排期修复
+- **解析层修复·第一批（信息丢失级，2026-10-03 全部落地，各带夹具）**：审计的 P0/P1 解析缺口逐项修复——
+  1. **pi `toolCall` 块不再丢失**（真 bug：实测单会话 72 块全丢）：`assistant_display_text` 同时命中 claude 的 `tool_use` 与 pi 的 `toolCall`，渲染 `tool_use · 工具名 · 参数摘要`（紧凑 JSON，≤120 字符）
+  2. **工具调用参数可见**：claude `tool_use.input` 同套路出紧凑 JSON 摘要（实测 353 块此前只有名字）
+  3. **`tool_result` 携带 `is_error`**（claude `is_error` / pi `isError` → 结构化 `error` 标记，进 wire）；**`tool_use_id` 不再丢弃**（wire `toolUseId`），claude 结果**按 id 先后序栈配对**到调用、结果行带工具名；**非 text 块（图片/二进制）给 `[类型 块，原始 JSONL 可查]` 占位**而非静默过滤
+  4. **claude `attachment` 行归一为 system 附件条目**（实测单会话 115 条）：`attachment · 类型 · 文件名/prompt 摘要`，不进标题与 token 聚合
+  5. **claude（pi 对称补齐）user 正文截断到 2000 字符**再入事件流（opencode 侧本就有护栏；标题仍取截断前原文前 120）
+- **wire 契约**：`NormalizedEvent` 新增 `error: bool` + `tool_use_id: Option<String>`（wire `error` / `toolUseId`），向后兼容的增量字段，展示层（B3）可直接消费做错误样式与调用↔结果配对
+- **验证**：agent-hub Rust 162 用例（A1/A3/A4/A5/A7 新增 11 条夹具，经变异自检）+ agent-hub 前端 423 + 桌面全量 vitest 1482 全绿；改动文件 eslint 0 error；wasm release 构建 + wasmHash 注入通过；vue-tsc 仅剩改动区外既有 2 error（StatsTab 命名导出）
+
+#### 前端零资源访问红线：禁止前端绕过权限闸门自行发 HTTP / WebSocket / 文件请求（三层封锁）
+
+- **原则**：前端只做 UI 显示，不含后端逻辑。HTTP / WebSocket / 文件访问一律由 Rust 端发起并经权限仲裁（`host-*` 原语 + egress / approval 闸门）——前端直连就是绕过闸门
+- **现状审计**：双端前端本来就**零** `fetch` / `XMLHttpRequest` / `WebSocket`（唯一的字面命中在 ai-chatbox `dev-mock.ts` 的一段 markdown 代码块**字符串**里，不真执行）；资源访问已全部收口到 `invoke(...)` → 宿主命令 / 插件命令面。真正的暴露是**没有锁**——下一个 `fetch` 可以直接写进去
+- **三层封锁**（由外到内，改前端代码绕不过第 2/3 层）：
+  1. **源码约定**——根 `eslint.config.js` 新增 `bedcode/frontend-no-resource-access`，一份配置双端生效（两端宿主 `src/` + 业务 wasm 应用 / 移动插件 `src/` + 双端 SDK 前端），进 CI `lint.yml` 0 error 门禁：禁 `fetch` / `XMLHttpRequest` / `WebSocket` / `EventSource` / `navigator.sendBeacon`（含 `window.fetch` / `globalThis['fetch']` 等取用写法）、带网络或文件能力的 Tauri 插件 import、全局句柄 `__TAURI__`（两端 `withGlobalTauri: true`，经它调用能绕开 import 级拦截）
+  2. **能力层（Rust 运行期强制）**——两端 `capabilities/*.json` 撤除 `shell:allow-open` 与 `updater:default`。Tauri 的 `plugin:*` 命令**无条件**过 ACL：权限不在 capability 里就 `acl.is_none()` → 运行期直接 reject（`tauri/src/webview/mod.rs`），前端无论怎么写都调不动。桌面端进一步移除 `tauri-plugin-shell` 依赖——少一个「只差一条 capability」的回头路
+  3. **引擎层（浏览器强制）**——两端 `tauri.conf.json` 的 `app.security.csp` 由 `null` 改为 `{ "connect-src": "'none'" }`，封掉 `fetch` / `XMLHttpRequest` / `WebSocket` / `EventSource` / `sendBeacon` 全族，与 JS 写法无关、不依赖 Tauri。IPC 走 `postMessage`、插件前端包走 `import()`（受 `script-src` 管），两者都不受 `connect-src` 影响；dev 期 HMR 由新增的 `devCsp` 单独放行
+- **能力发起权收归 Rust**：前端不再持有 updater / OS 打开两类调用面
+  - `check_for_update` / `install_update`：升级检查与安装改由宿主命令发起（Rust 侧出站 + minisign 公钥验签），前端只拿已验签的版本元数据与 `app://update-progress` 进度事件；`install_update` 返回 `bool` 表示「是否进入安装流程」，不用错误文案匹配做分支
+  - `open_external_url`：设置页「项目主页」改走宿主命令 + `system::opener::validate_external_url` 的 http/https scheme 白名单（fail-closed：空串 / 无冒号 / 非法 scheme 词法 / `file:` `javascript:` `data:` `smb:` 等 / 含控制字符一律拒）。桌面端改用 `tauri-plugin-opener`（其 `Shell::open` 已废弃），与移动端 `open_url_in_browser` 同一口径
+- **防回接锁**：新增 `bedcode-desktop/src-tauri/src/capabilities_test.rs`（7 条），锁住第 2/3 层——两端 capability 禁列权限、`tauri-plugin-{http,fs,shell}` 不进 Cargo.toml、**撤权限与补宿主命令必须成对**（防只撤不补导致功能静默失效）、两端 CSP 必须含 `connect-src 'none'` 且不得被置回 `null`。锁自身带正例自检（提取器在真回接时必须报错，防假阴性）
+- **验证**：ESLint 探针 18 种写法全部拦截（验证后删除），全仓 0 error / 117 warning（与基线一致）；`capabilities_test` 7 条全绿；opener 白名单 9 条单测（正例 / scheme 反例 / 词法边界 / 控制字符走私 / 词法-白名单分支归因）；更新检查相关前端用例 17 条全绿（并新增「订阅先于 invoke」「累计字节直写」「无可用更新不算失败」「任何路径都 unlisten」四条契约）
+- **更正**：本次顺带查明上一轮我说的「`shell:allow-open` 因未配 scope 而 fail-closed、按钮大概率不生效」是**错的**——`tauri-plugin-shell` 在 config 为 `Unset` 时会内置默认 scope 正则 `^((mailto:\w+)|(tel:\w+)|(https?://\w+)).+`，实测能匹配 GitHub URL，该按钮此前是**真实生效**的。正因如此，撤掉它才是真收口而不是空撤
+- **未做 / 待核**：移动端生产包的 `connect-src 'none'` 只做了静态核对（移动端前端同样零网络调用），**未在真机跑过**——Android 侧需实机核验；桌面端 dev 模式本就由 vite dev server 供页（不经 Tauri 自定义协议，CSP 不注入），CSP 的真实拦截效果以正式构建为准
+
+#### 正式版右键原生菜单从「只管主窗口」扩到「每个窗口」
+
+- **现象**：Linux 正式版在会话终端窗口里右键仍弹出 WebKitGTK 内置菜单（检查元素/重新加载/后退）。
+  原因是抑制信号只在启动时给 `main` 窗口连了一次；Windows/macOS 本来就没这问题——
+  前端 `preventDefault` 随同一份前端包在每个窗口里都跑
+- **改动**：新增 `native_context_menu_guard` 插件，在**页面加载钩子**里连接 WebKitGTK 的
+  `context-menu` 信号——该钩子对**每个** webview 触发（主窗口 + 运行期创建的各会话终端窗口）。
+  仅正式版生效，且每个 webview 只连一次（每次导航都会再次触发页面加载钩子，而
+  `connect_context_menu` 是追加处理器，重复连接会叠加）；dev 构建保留右键菜单以便调试
+- **设计取舍**：dev/正式版开关写成钩子内的 `cfg!(debug_assertions)` 提前返回，而不是用
+  `#[cfg(...)]` 把整块挡掉——这样正式版走的就是debug 构建会编译、会被单测覆盖的同一条代码路径，
+  正式版专属代码不该是「只有发版时才编译过一次」的黑盒
+- **验证**：桌面端 `cargo test` **888 个 lib 用例 + 全部集成 target 全绿**（新增 4 条单测：
+  每 webview 只连一次、不同 webview 互不影响、去重键写入正确、锁中毒不 panic）。
+  变异自检：抽掉去重逻辑 → 3 条转红；抽掉中毒恢复 → 第 4 条转红
+
+#### 自动任务状态机新增「重试中」（retrying）：agent 自动重试期间不再把任务标记为中断
+
+- **语义（与宿主任务定义对齐）**：只有「agent 执行完全停止且任务未完成」才标记为中断。
+  agent 收到可重试错误（如 429）自动重试时，任务保持在活动态并显示「重试中」，
+  重试成功 → completed，重试耗尽 → interrupted，绝不在重试中途落终态
+- **pi 适配器（pi_task_hook.ts）**：`after_provider_response` 返回可重试 HTTP 状态
+  （429 / 408 / 5xx）或 `agent_end` 携带可重试错误消息时推 `retrying`；终态判定仍在
+  `agent_settled`（pi 全部自动重试/压缩/排队续跑结束后只触发一次），重试成功
+  → completed、耗尽 → interrupted
+- **Claude Code 适配器（auto_task_hook.py）**：新增 `StopFailure` hook 事件——Claude 对
+  429/5xx 等瞬时错误内部指数退避重试（最多 10 次，对 hooks 不可见），重试期间任务
+  保持 in_progress；重试耗尽、turn 因 API 错误结束（`StopFailure` 与 `Stop` 互斥）时
+  收敛为 interrupted（原先该场景任务会永久卡在 in_progress 或误标 completed）
+- **opencode 适配器（opencode_task_hook.ts）**：`session.status(retry)` /
+  `session.next.step.failed` / 非用户中断的 `session.error` 均推 `retrying`
+- **宿主状态机（terminal-session 插件）**：`task-status` 白名单新增 `retrying`；
+  会话结束时运行中任务兜底中断覆盖 `retrying` 行；idle 推送不降级 `retrying` 行
+- **展示**：桌面任务历史/队列、移动端会话卡与任务记录页均新增「重试中」
+  标签与状态色（amber），i18n 双端同步
+- **未覆盖（agent 能力边界，非本仓可改）**：Claude Code 内部重试与 API 传输错误无
+  hook 事件可观测（Anthropic 特性请求 #46959/#70026 未落地），故 Claude 侧无法在
+  重试期间推送 retrying，只能保证「不误标中断 + 重试耗尽后正确收敛 interrupted」；
+  Codex 同样无 API 错误 hook 信号（openai/codex #22774）
+
+#### 自动任务任务间上下文隔离改为「关闭旧会话 + 同配置新建」，不再发送 clear/new 命令
+
+- **变更**：自动任务队列在「上一任务执行完毕 → 执行下一任务」时不再向终端发送 `/clear`（claude/codex）或 `/new`（pi）重建上下文——改为关闭已完成的旧会话、以**同一配置**（configId）创建新会话，把剩余队列迁移到新会话并等待其就绪（agent SessionStart idle）后下发。每个任务在全新上下文中执行，总体效果与旧行为等价
+- **session id 传递逻辑跟随修改（轮换函数是唯一迁移点）**：`task_queue` 的 waiting + pending 行整体改键到新会话；`task_session_settings`（auto_execute / auto_answer）随会话复制；`task_scheduled` 的 executed 档案 session_id 迁移（队列清空时最终会话仍能被无人值守关闭）；`task_history` / `task_session_mapping` 留在旧会话下（历史与记账）
+- **等待窗口收敛 + 宽限兑底（不取消）**：waiting 态等待新会话就绪的窗口为 3s/5s/8s（每次重试重置计时，累计约 16s）。**三次仍未等到 idle 就按宽限直接下发**（取代旧「取消任务」）：覆盖无 idle 信号或 hook 静默的场景——输入失败由调度兜底标 interrupted，不再有「任务静默消失」
+- **opencode 同样走轮换**（无 /clear 语义、首个 prompt 提交才创建 agent 会话）：其新会话无 idle 信号，就绪由「宽限超时直接下发」兑底（宽限 16s 覆盖其 TUI 从 PTY 启动到输入框就绪的实测约 9s）——会话在轮换时已同步创建成功，宽限保证「创建完成成功后 才输入任务内容执行」的顺序
+- **验证**：terminal-session 插件 native 429 用例全绿（轮换判定含 opencode / 等待窗口 5 条）；宿主闭环 `test_session_task_rotation_closed_loop`（真实 PTY 连续两次轮换 sid1→sid2→sid3 + 宽限兑底下发场景：队列迁移 / 开关复制 / 旧会话收敛 stopped / idle 驱动下发 / 宽限下发且不触发空队列关闭，全断言）
+
+#### 修复移动端终端输入：命令 + Enter 只发出回车，命令文本被静默丢弃
+
+- **修掉的症状**：移动端终端页无论输入什么、点什么，桌面 shell 都收不到——▶ 按钮、键盘回车、快捷命令（`/model`、`/skill:` 等）全部毫无反应，没有报错、没有 toast、日志里也查不到；快捷键（Enter/Del/方向键/Ctrl+C）看起来也“死了”，因为回车只提交了一个空行
+- **真因**：移动端 WS 终端链路的 `terminal_send_input` 用**互斥分支**造帧——`if 有特殊键 { 只发键字节 } else if data 非空 { 发文本 }`。而输入栏的执行路径**恒定**同时传 `specialKey: "enter"` 与命令文本，于是每次发送都退化成裸 `\r`，文本被丢弃。该函数自己的文档注释写的恰好相反（「两者可并存，帧序即写入序」）——实现与自带契约相互矛盾
+- **是证据不是猜测**：直接驱动同一条命令，单独发文本帧时提示符上出现了 `| ZZ_PLAIN`；而「文本 + Enter」提交的是**空行**。Rust → WS → 插件 → PTY 这段链路本身是好的（同一 payload 直接 invoke 能在桌面执行出 `echo RUST_PROBE_MARKER`）
+- **改动**：帧计划改由纯函数 `plan_input_frames` 生成（文本在前、键字节在后，帧序即写入序）；不支持的键名改为**先校验再投递**（不产生“文本已写、回车没发”的半截输入），`Some("")` 空键名视作无特殊键
+- **让它溜过去的覆盖缺口（回答，并已补上）**：`cross-end-tests` 的 `terminal_ws_flow` C-004 走的是**HTTP** `session-input` 面，而输入栏与快捷命令实际走 **WS** 面——两条面从未在测试里相遇，期间 HTTP 面一直是绿的。新增两条契约直接打真实 WS 面 + 真实 PTY：C-005（文本 + Enter 必须真的执行命令）、C-006（`ctrl+u` 键帧必须真的清行，且配反向自证，避免“全链路丢帧”也能蒙混过关）
+- **验证**：移动端 `cargo test` **344 绿 / 0 红**（7 条新单测：纯文本 / 纯键 / 文本+键顺序 / 顺序可观测 / 非法键不产生半截投递 / 空键名 / 两者皆空）。变异探针：恢复旧的互斥分支 → 2 条单测 + 跨端 C-005 变红；只丢 `ctrl+u` 帧 → C-006 变红（`left: 1, right: 0`）。`cross-end-tests` `terminal_ws_flow` 绿；移动端 vitest 53 文件 / 524 用例绿；根 `eslint .` 0 error / 117 warning
+
+#### 移动端滚动条槽位改为按需 class，不再全局 `*` 一刀切——终端不再被九层包装层吃掉 69px 宽
+
+- **修掉的症状**：终端页右侧出现一条约 32px 白色空带，终端网格明显比屏幕窄。实测：视口 711px，`.xterm-screen` 只有 642px——**凭空少了 69px（10%）宽度**
+- **真因**：`46e416618`（防滚动条显隐 CLS）加了 `* { scrollbar-gutter: stable }`。本 WebView 的 `::-webkit-scrollbar` 是**占位式**（占布局 8px，非 overlay），于是该规则给**每个** `overflow:hidden` 元素都预留槽位。终端页一条链上有九层（`.terminal-view` → `.movable-clip` → `.movable-area` → `.main-content` → `.terminal-output-area` → `.terminal-scroll-container` → `.xterm-container` → `.xterm` → `.xterm-scrollable-element`），每层 8px；露出的 `.terminal-view` 底色（`#faf9f5`）正是用户看到的白带。那次提交其实已为此豁免了两层包装层，只是漏了终端链
+- **改动**：去掉全局规则，改由单个工具类 `.scrollbar-gutter-stable` 承担，只写在**真正滚动页面内容**的容器上（各视图的 `flex-1` 内容滚动容器与 `SettingsSubPage`），原有防抖保护在需要处保留。刻意**不加**在：`overflow:hidden` 布局包装层（永不显示滚动条，纯死区）与定宽弹层（modal、输入栏补全、文件侧栏——常驻 8px 会把面板内容挤窄）
+- **验证（真机）**：把等价规则实时注入运行中的 app 后，`.terminal-view` / `.movable-area` / `.terminal-output-area` / `.xterm` / `.xterm-scrollable-element` 均量到满宽 711px，`.xterm-screen` 由 642px 增到 696px；截图确认白带消失、快捷键条与输入栏铺满全宽。移动端 vitest 53 文件 / 524 用例绿；根 `eslint .` 0 error / 117 warning
 
 #### Agent Hub「检测更新」现在会先重新探测本地已安装版本，再比较最新版——outdated 徽标与展示的本地版本同源同实（仅桌面 agent-hub 插件；无 ABI/WIT/协议变更）
 
