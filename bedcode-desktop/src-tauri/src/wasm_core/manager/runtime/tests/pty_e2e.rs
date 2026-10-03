@@ -79,6 +79,13 @@ fn test_pty_spawn_ring_fetch_roundtrip() {
                 .unwrap()
                 .as_nanos()
         );
+        // M-20：marker 经 `echo {marker}` 拼进 shell 命令串——钉死字符集为
+        // 数字+下划线（无 shell 元字符）；若未来把 marker 改成含 $()/`/;/引号
+        // 的内容，此处立即转红（注入面回归信号），而不是等模式悄悄演变
+        assert!(
+            marker.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'),
+            "marker 必须为 shell 安全字符集: {marker}"
+        );
         let spawned = {
             let mut guard = plugin_a.lock().await;
             guard
@@ -284,10 +291,13 @@ fn test_pty_exit_event_and_purge_roundtrip() {
 
         // 接线锁：停用路径必须调用插件 PTY 回收（本夹具没有 PluginHost，行为侧由
         // 下面的 purge 断言兜住，调用点存在性在此锁死——AGENTS §7 停用回收契约）。
-        // 注意：deactivate_plugin_inner 经 P2 拆至 host/activation.rs，此处锁其源码
+        // 注意：deactivate_plugin_inner 经 P2 拆至 host/activation.rs，此处锁其源码。
+        // 断言放宽到「host_api::pty::purge_for_plugin 调用点存在」（M-13）：旧式整行
+        // 精确匹配会被参数签名/rustfmt 变动弄断且不在运行路径执行——参数形态交给
+        // 下方行为断言与编译期类型检查
         let host_src = include_str!("../../host/activation.rs");
         assert!(
-            host_src.contains("pty::purge_for_plugin(plugin_id, &self.message_bus)"),
+            host_src.contains("host_api::pty::purge_for_plugin"),
             "deactivate_plugin_inner 未接线 host-pty 停用回收"
         );
 
@@ -498,9 +508,22 @@ fn test_pty_declared_ring_backpressure_roundtrip() {
             .unwrap_or_default()
             .to_string();
 
-        // 消费者（本用例）先不拉取，让产出远超 512 字节
-        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
-        let stale = pty_fixture_fetch(&plugin, &pty_id, 0).await;
+        // 消费者（本用例）先不拉取，让产出远超 512 字节——**有界轮询**（M-12）：
+        // 固定 400ms sleep 在慢/加载 CI 上产出可能不足 512B（源速率假设 ~1.3KB/s
+        // 不成立）导致多处断言伪失败；改为反复 fetch(0) 直到 nextOffset > 512
+        //（带总超时），产出速率只决定轮询次数不决定成败
+        let stale_deadline = std::time::Instant::now() + std::time::Duration::from_millis(4000);
+        let stale = loop {
+            let r = pty_fixture_fetch(&plugin, &pty_id, 0).await;
+            if r["nextOffset"].as_u64().unwrap_or(0) > 512 {
+                break r;
+            }
+            assert!(
+                std::time::Instant::now() < stale_deadline,
+                "产出端 4s 内未写满 512B（源侧被拖住？）"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        };
         assert_eq!(stale["truncated"], true, "游标 0 必已落后于驻留起点: {stale}");
         let first_end = stale["nextOffset"].as_u64().unwrap_or(0);
         assert!(first_end > 512, "产出必须已远超声明容量（源侧未被拖住）: {stale}");

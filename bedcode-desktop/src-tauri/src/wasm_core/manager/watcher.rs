@@ -7,11 +7,11 @@
 //! 仅在开发模式下启用（cfg!(debug_assertions)）
 
 use notify::{Event, EventKind, RecursiveMode, Watcher};
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::Emitter;
-use tokio::sync::RwLock;
 
 use crate::system::constants::PLUGIN_DEV_RELOAD;
 use crate::system::constants::PLUGIN_RELOAD_DEBOUNCE_MS;
@@ -21,8 +21,9 @@ use crate::system::constants::PLUGIN_RELOAD_DEBOUNCE_MS;
 /// 持有 notify::Watcher 实例，监听插件产物目录变化。
 /// 检测到变化后通过 AppContext 获取 PluginHost 触发热重载。
 pub struct PluginDevWatcher {
-    // Watcher 必须 hold 住生命周期，drop 后停止监听
-    _watcher: Box<dyn Watcher + Send>,
+    // Watcher 必须 hold 住生命周期，drop 后停止监听；
+    // None = 创建/开始监听失败（M-06：dev-only 工具失败不应崩 Tauri setup，记日志降级）
+    _watcher: Option<Box<dyn Watcher + Send>>,
 }
 
 impl PluginDevWatcher {
@@ -34,13 +35,23 @@ impl PluginDevWatcher {
     /// # Arguments
     /// * `plugins_dir` - 插件产物目录（resources/plugins/desktop/）
     /// * `runtime_handle` - Tokio 运行时 Handle（notify 回调在非 Tokio 线程，需通过 handle spawn）
+    ///
+    /// 创建/监听失败（如 fresh checkout 无 plugins_dir）记 warn 降级返回，不崩 setup（M-06）。
     pub fn start(plugins_dir: PathBuf, runtime_handle: tokio::runtime::Handle) -> Self {
-        // 防抖状态：记录最近一次变化的插件 ID 和时间
-        let pending: Arc<RwLock<Option<(String, Instant)>>> = Arc::new(RwLock::new(None));
+        // canonicalize（M-14）：watch 根与事件路径共用规范路径——macOS /private/var
+        // symlink、`..` 组件会让 strip_prefix 失配 → 事件全量静默丢弃（热重载死亡无日志）。
+        // 目录不存在时 canonicalize 失败，保留原路径（watch 会在下方报错降级）。
+        let canonical = plugins_dir.canonicalize().unwrap_or_else(|_| plugins_dir.clone());
 
-        let pd = plugins_dir.clone();
+        // 防抖状态：plugin_id → 最近一次触发时间（per-plugin 时间戳，M-05——
+        // 共享单 (id, Instant) 对会让异插件事件交错覆盖彼此的防抖窗口）。
+        // std Mutex 而非 tokio RwLock：WASM 分支在 spawn 内异步持有、JS 分支在
+        // notify 回调线程同步持有，两种上下文都要能用。
+        let pending: Arc<Mutex<HashMap<String, Instant>>> = Arc::new(Mutex::new(HashMap::new()));
 
-        let mut watcher = notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
+        let pd = canonical.clone();
+
+        let mut watcher = match notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
             let event = match res {
                 Ok(e) => e,
                 Err(e) => {
@@ -75,21 +86,21 @@ impl PluginDevWatcher {
                         let plugin_id_clone = plugin_id.clone();
                         // notify 回调在非 Tokio 线程中运行，必须通过 Handle::spawn 而非 tokio::spawn
                         runtime_handle.spawn(async move {
-                            // 防抖：500ms 内同一插件只触发一次重载
+                            // 防抖 check-and-set 全程持写锁（M-05）：并发两任务都看到空/过期
+                            // pending 都调 reload 的窗口被原子化堵死；per-plugin 时间戳使
+                            // 异插件事件互不干扰对方的防抖窗口
                             {
-                                let p = pending.read().await;
-                                if let Some((ref prev_id, ref prev_time)) = *p {
-                                    if prev_id == &plugin_id_clone
-                                        && prev_time.elapsed() < Duration::from_millis(PLUGIN_RELOAD_DEBOUNCE_MS)
-                                    {
-                                        tracing::debug!(plugin_id = %plugin_id_clone, "Plugin watcher: debounced reload");
-                                        return;
-                                    }
+                                let mut p = pending.lock().unwrap_or_else(|e| e.into_inner());
+                                if p.get(&plugin_id_clone).is_some_and(|t| {
+                                    t.elapsed() < Duration::from_millis(PLUGIN_RELOAD_DEBOUNCE_MS)
+                                }) {
+                                    tracing::debug!(
+                                        plugin_id = %plugin_id_clone,
+                                        "Plugin watcher: debounced reload"
+                                    );
+                                    return;
                                 }
-                            }
-                            {
-                                let mut p = pending.write().await;
-                                *p = Some((plugin_id_clone.clone(), Instant::now()));
+                                p.insert(plugin_id_clone.clone(), Instant::now());
                             }
 
                             // 通过 AppContext 全局单例获取 PluginHost
@@ -109,13 +120,24 @@ impl PluginDevWatcher {
                             }
                         });
                     }
-                    // TS 产物变化 → 通知前端重新加载
+                    // TS 产物变化 → 通知前端重新加载（M-09：打包器一次重建写多个 JS
+                    // 文件会逐个触发 → 同样走防抖，否则前端收到 reload 洪泛）
                     Some("js") => {
                         tracing::info!(
                             plugin_id = %plugin_id,
                             "Plugin watcher: JS changed: {}",
                             path.display()
                         );
+
+                        let mut p = pending.lock().unwrap_or_else(|e| e.into_inner());
+                        if p.get(&plugin_id).is_some_and(|t| {
+                            t.elapsed() < Duration::from_millis(PLUGIN_RELOAD_DEBOUNCE_MS)
+                        }) {
+                            tracing::debug!(plugin_id = %plugin_id, "Plugin watcher: debounced JS reload");
+                            continue;
+                        }
+                        p.insert(plugin_id.clone(), Instant::now());
+                        drop(p);
 
                         let ctx = crate::system::app_context::AppContext::global();
                         // 无头/测试上下文无 AppHandle：跳过前端重载通知
@@ -126,18 +148,28 @@ impl PluginDevWatcher {
                     _ => {}
                 }
             }
-        })
-        .expect("Failed to create plugin file watcher");
+        }) {
+            Ok(w) => w,
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to create plugin file watcher; dev hot-reload disabled");
+                return Self { _watcher: None };
+            }
+        };
 
-        // 开始监听插件目录
-        watcher
-            .watch(&plugins_dir, RecursiveMode::Recursive)
-            .expect("Failed to start watching plugin directory");
+        // 开始监听插件目录（用规范路径；fresh checkout 无目录时记 warn 降级）
+        if let Err(e) = watcher.watch(&canonical, RecursiveMode::Recursive) {
+            tracing::warn!(
+                error = %e,
+                dir = %canonical.display(),
+                "Failed to start watching plugin directory; dev hot-reload disabled"
+            );
+            return Self { _watcher: None };
+        }
 
-        tracing::info!("Plugin dev watcher started: watching '{}'", plugins_dir.display());
+        tracing::info!("Plugin dev watcher started: watching '{}'", canonical.display());
 
         Self {
-            _watcher: Box::new(watcher),
+            _watcher: Some(Box::new(watcher)),
         }
     }
 }

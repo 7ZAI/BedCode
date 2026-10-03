@@ -41,6 +41,9 @@ const TERM_PERF_PLUGIN: &str = "com.bedcode.term-perf";
 /// 使 P2 测的是「纯消费侧成本」而非「生产等待时间」。实测 1 MiB 经 PTY 管道输出需要数百 ms
 /// （`tr` 逐块吞吐约束），固定 settle 会漏判生产未完成、把等待时间混进消费计时。
 const PRODUCE_POLL_TIMEOUT_MS: u64 = 8000;
+/// fetch 追赶的截止时间（M-10）：none 分支 / 游标停滞时 fail-visible 退出，
+/// 不无限自旋（对齐 [`wait_produced`] 的 deadline 口径）
+const FETCH_POLL_TIMEOUT_MS: u64 = 8000;
 /// 宿主单次 ring-fetch 返回上限（对齐 `PLUGIN_PTY_RING_FETCH_MAX_BYTES`=16 KiB；
 /// 探针内自持常量以便钳制断言，不改生产常量定义）
 const HOST_FETCH_MAX_BYTES: u32 = 16 * 1024;
@@ -141,6 +144,10 @@ async fn wait_produced(plugin: &Mutex<LoadedWasmPlugin>, pty_id: &str, target: u
 }
 
 /// 从 from_offset 循环拉取直到 next_offset 到达 target（返回调用次数与截断标记）
+///
+/// 带截止时间（M-10）：none 分支若无限重试，命令停滞 / 产出不足 / 提前退出
+/// （host-pty 退出即摘环 → 恒返回 none）会让测试无限自旋且持全局锁挂整组。
+/// 镜像 [`wait_produced`] 的 deadline 口径；超时 fail-visible。
 async fn fetch_until(
     plugin: &Mutex<LoadedWasmPlugin>,
     pty_id: &str,
@@ -151,6 +158,7 @@ async fn fetch_until(
     let mut cursor = from_offset;
     let mut calls = 0usize;
     let mut seen_truncated = Vec::new();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(FETCH_POLL_TIMEOUT_MS);
     loop {
         calls += 1;
         let resp = probe_command(
@@ -164,6 +172,10 @@ async fn fetch_until(
             if cursor >= target {
                 return (calls, seen_truncated);
             }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "[perf] fetch 追赶 {FETCH_POLL_TIMEOUT_MS}ms 未达 target={target}（none 分支卡死？）"
+            );
             tokio::time::sleep(std::time::Duration::from_millis(1)).await;
             continue;
         }
@@ -172,6 +184,10 @@ async fn fetch_until(
         if cursor >= target {
             return (calls, seen_truncated);
         }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "[perf] fetch 追赶 {FETCH_POLL_TIMEOUT_MS}ms 未达 target={target} (cursor={cursor})"
+        );
     }
 }
 
@@ -288,8 +304,10 @@ fn perf_p2_guest_ring_fetch_batch_curve() {
 
 // ==================== P3 · 真 PTY 端到端追赶（边产边拉） ====================
 
-/// P3：spawn 持续输出 4 MiB 的命令，插件以 16K 批量**边产边拉**（不预等 settle），
-/// 验证「生产端零暂停 + 拉取侧追赶」：最终 offset 完整、无 truncated、无丢块。
+/// P3：spawn 持续输出 3 MiB 的命令（`CATCHUP_BYTES`，见其常量注释——环容量
+/// 4 MiB 下输出取 3 MiB 保证追赶全程无淘汰），插件以 16K 批量**边产边拉**
+/// （不预等 settle），验证「生产端零暂停 + 拉取侧追赶」：最终 offset 完整、
+/// 无 truncated、无丢块。
 #[test]
 fn perf_p3_end_to_end_catchup() {
     let (runtime, host_ctx) = setup_wasm_runtime();

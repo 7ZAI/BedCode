@@ -4,6 +4,54 @@
 //! 全部导入与常量，方法与字段可见性规则与内联时一致。
 
 use super::*;
+use futures_util::FutureExt;
+use std::pin::Pin;
+
+/// 回调执行结果（M-01 圈护后的分类）
+#[derive(Debug)]
+enum CallbackOutcome {
+    /// 正常完成
+    Done,
+    /// 返回 Err（同步或未来内）
+    Failed(String),
+    /// panic（同步调用段或未来 poll 段）
+    Panicked(String),
+}
+
+/// 圈护静态插件回调（M-01）：`on_startup` / `on_shutdown` 是第三方链接代码，
+/// 同步调用段与未来 poll 段的 panic 都不得 unwind 穿透宿主任务——两段分别
+/// `catch_unwind`，载荷转 [`CallbackOutcome`] 供日志点名。
+fn guarded_callback<F>(invoke: F) -> Pin<Box<dyn std::future::Future<Output = CallbackOutcome> + Send>>
+where
+    F: FnOnce() -> Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>> + Send + 'static,
+{
+    // 同步调用段（返回 future 之前可能 panic）
+    let invoked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(invoke));
+    match invoked {
+        Ok(fut) => Box::pin(
+            std::panic::AssertUnwindSafe(fut)
+                .catch_unwind()
+                .map(|r| match r {
+                    Ok(Ok(())) => CallbackOutcome::Done,
+                    Ok(Err(e)) => CallbackOutcome::Failed(format!("{e:#}")),
+                    Err(payload) => CallbackOutcome::Panicked(panic_message(&payload)),
+                }),
+        ),
+        Err(payload) => Box::pin(futures_util::future::ready(CallbackOutcome::Panicked(panic_message(&payload)))),
+    }
+}
+
+/// panic 载荷的人类可读描述（M-01 日志用）：优先 downcast 到 `&str` / `String`，
+/// 其余落类型名——让「插件回调 panic」至少有点名信息可排障
+fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        format!("<non-string panic payload: {:?}>", payload.type_id())
+    }
+}
 
 /// L2「静态声明 + 动态就绪」两段的运行时判据（ADR 0031 K9 · fail-visible 形态②）
 ///
@@ -21,25 +69,33 @@ fn l2_auth_center_unready(kind: PluginKind, plugin_id: &str, registered_owner: O
 impl PluginHost {
     /// 通知所有已激活的 Rust 插件应用启动完成
     pub async fn notify_startup(&self) {
-        // 静态注册插件
-        let static_plugins: Vec<&'static bedcode_plugin_api::BedcodePluginEntry> =
+        // 静态注册插件（按 ID 排序，确定性顺序，M-07）
+        let mut static_plugins: Vec<&'static bedcode_plugin_api::BedcodePluginEntry> =
             inventory::iter::<bedcode_plugin_api::BedcodePluginEntry>
                 .into_iter()
                 .collect();
+        static_plugins.sort_by_key(|e| e.id);
         for entry in &static_plugins {
             if self.is_activated(entry.id).await {
                 tracing::debug!(plugin_id = %entry.id, "Notifying plugin on_startup");
+                // catch_unwind 圈护（M-01）：on_startup 是第三方链接代码，panic 会
+                // unwind 穿透宿主任务（乃至整个宿主）；记录载荷后继续其余插件
                 let result = tokio::time::timeout(
                     std::time::Duration::from_secs(PLUGIN_CALLBACK_TIMEOUT_SECS),
-                    (entry.on_startup)(),
+                    guarded_callback(entry.on_startup),
                 )
                 .await;
                 match result {
                     Err(_) => tracing::error!(plugin_id = %entry.id, "Plugin on_startup timed out"),
-                    Ok(Ok(())) => {}
+                    Ok(CallbackOutcome::Panicked(panic)) => {
+                        tracing::error!(plugin_id = %entry.id, panic = %panic, "Plugin on_startup panicked");
+                    }
+                    Ok(CallbackOutcome::Done) => {}
                     // v8 契约：启动初始化失败如实记录（静态插件无 Degraded 态，
                     // 仅日志可观测；builtin 常驻语义见 ticket 03）
-                    Ok(Err(e)) => tracing::error!(plugin_id = %entry.id, error = %e, "Plugin on_startup failed"),
+                    Ok(CallbackOutcome::Failed(e)) => {
+                        tracing::error!(plugin_id = %entry.id, error = %e, "Plugin on_startup failed")
+                    }
                 }
             }
         }
@@ -58,28 +114,39 @@ impl PluginHost {
         tracing::info!("PluginHost notify_startup completed");
     }
 
-    /// 通知所有已激活的插件应用即将关闭
-
-    /// 通知所有已激活的插件应用即将关闭
+    /// 通知所有已激活的 Rust 插件应用即将关闭
+    ///
+    /// **职责边界（M-08，显式受检契约）**：本方法只通知**静态注册**插件的
+    /// on_shutdown；WASM 插件的 on_shutdown 由 `deactivate_plugin()` 负责。
+    /// 调用方（`system/lifecycle.rs` 的 shutdown 链）必须保证顺序：
+    /// `notify_shutdown`（优先级 15）先于 `deactivate_all`（优先级 20）——
+    /// 静态回调先跑完，WASM 插件随后逐个停用并各跑自己的 on_shutdown。
     pub async fn notify_shutdown(&self) {
-        // 静态注册插件
-        let static_plugins: Vec<&'static bedcode_plugin_api::BedcodePluginEntry> =
+        // 静态注册插件（按 ID 排序，确定性顺序，M-07）
+        let mut static_plugins: Vec<&'static bedcode_plugin_api::BedcodePluginEntry> =
             inventory::iter::<bedcode_plugin_api::BedcodePluginEntry>
                 .into_iter()
                 .collect();
+        static_plugins.sort_by_key(|e| e.id);
         for entry in &static_plugins {
             if self.is_activated(entry.id).await {
                 tracing::debug!(plugin_id = %entry.id, "Notifying plugin on_shutdown");
+                // catch_unwind 圈护（M-01）：on_shutdown panic 不得打断其余插件收尾
                 let result = tokio::time::timeout(
                     std::time::Duration::from_secs(PLUGIN_CALLBACK_TIMEOUT_SECS),
-                    (entry.on_shutdown)(),
+                    guarded_callback(entry.on_shutdown),
                 )
                 .await;
                 match result {
                     Err(_) => tracing::error!(plugin_id = %entry.id, "Plugin on_shutdown timed out"),
-                    Ok(Ok(())) => {}
+                    Ok(CallbackOutcome::Panicked(panic)) => {
+                        tracing::error!(plugin_id = %entry.id, panic = %panic, "Plugin on_shutdown panicked");
+                    }
+                    Ok(CallbackOutcome::Done) => {}
                     // 清理失败仅记录：停用流程继续，不影响状态机
-                    Ok(Err(e)) => tracing::error!(plugin_id = %entry.id, error = %e, "Plugin on_shutdown failed"),
+                    Ok(CallbackOutcome::Failed(e)) => {
+                        tracing::error!(plugin_id = %entry.id, error = %e, "Plugin on_shutdown failed")
+                    }
                 }
             }
         }
@@ -95,8 +162,6 @@ impl PluginHost {
 
         tracing::info!("PluginHost notify_shutdown completed");
     }
-
-    /// 停用所有已激活的插件（应用关闭流程）
 
     /// 角色驱动层先于业务应用激活（L1 基础服务 → L2 内部统一业务，ADR 0032）
     ///
@@ -160,8 +225,6 @@ impl PluginHost {
             }
         }
     }
-
-    /// 根据持久化状态自动激活之前已激活的插件
 
     /// 存量兼容（ADR 0020 迁移）：升级前已启用的用户插件首启自动批准一次
     ///
@@ -294,12 +357,16 @@ impl PluginHost {
             to_activate.len()
         );
 
+        let mut activated_count = 0usize;
         for plugin_id in &to_activate {
             tracing::info!(plugin_id = %plugin_id, "[PluginHost] Auto-activating plugin");
             // 存量兼容（ADR 0020）：审批门禁上线前就已启用的用户插件，首启补一次自动批准
             self.auto_approve_legacy_user_plugin(plugin_id).await;
-            if let Err(e) = self.activate_plugin(plugin_id, false).await {
-                tracing::error!(plugin_id = %plugin_id, error = %e, "[PluginHost] Failed to auto-activate plugin");
+            match self.activate_plugin(plugin_id, false).await {
+                Ok(()) => activated_count += 1,
+                Err(e) => {
+                    tracing::error!(plugin_id = %plugin_id, error = %e, "[PluginHost] Failed to auto-activate plugin");
+                }
             }
         }
 
@@ -318,12 +385,11 @@ impl PluginHost {
             }
         }
 
-        if !to_activate.is_empty() {
-            tracing::info!(
-                "[PluginHost] Auto-activated {} plugin(s) from persisted state",
-                to_activate.len()
-            );
-        }
+        // 最终计数报**实际成功数**（M-18）：尝试数在部分失败时误导诊断
+        tracing::info!(
+            "[PluginHost] Auto-activated {} plugin(s) from persisted state",
+            activated_count
+        );
     }
 }
 

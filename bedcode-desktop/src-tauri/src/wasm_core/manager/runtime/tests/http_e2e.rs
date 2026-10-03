@@ -19,6 +19,17 @@ fn test_http_route_registration_server_domain_roundtrip() {
     let (wasm_runtime, host_ctx) = setup_wasm_runtime();
     let rt = tokio::runtime::Runtime::new().expect("tokio multi-thread runtime");
     rt.block_on(ws_e2e_guard("http 服务端域 e2e", async {
+        // 收尾守卫（M-11）：RouteTable 是全局单例，任何断言 panic 都会泄漏
+        // 已注册路由（断同二进制重跑/其它用例）——Drop 在 panic unwind 时照样
+        // 执行，替代「仅 happy path 末尾清理」
+        struct RegistryCleanup(&'static str);
+        impl Drop for RegistryCleanup {
+            fn drop(&mut self) {
+                registry::purge_for_plugin(self.0);
+            }
+        }
+        let _cleanup = RegistryCleanup(PLUGIN_ID);
+
         // 单测不走 manifest 授权路径：显式授予（network:http = 服务端域权限门）
         host_ctx
             .permission
@@ -89,8 +100,6 @@ fn test_http_route_registration_server_domain_roundtrip() {
         )
         .expect("unreg json");
         assert_eq!(again["hit"], false, "重复注销幂等 false");
-
-        // 收尾：fixture 停用路径的 purge（宿主停用回收语义由 activation 单测覆盖）
-        registry::purge_for_plugin(PLUGIN_ID);
+        // 注册表清理由 RegistryCleanup Drop 守卫负责（M-11，含 panic 路径）
     }));
 }

@@ -8,7 +8,7 @@
 
 > 目的：把 OCR 审核发现的**全部评论**逐条登记（含原文位置、严重度、类别、修复建议），作为后续统一修复的单一真源。未作任何过滤——low 级别也保留，修复时可按优先级取舍。**所有条目初始 triage 状态 = `open`**，修复后改为 `done` 并附 commit。
 
-> **修复进度（2026-10-03 起）**：security/ 模块 16 条**全部 done**（commit `…`）；wasm_core 根 + host_api + manager 按 P0→P1→P2 顺序推进中。修复会话：pi（本会话）。
+> **修复进度（2026-10-03 起）**：security/ 模块 16 条**全部 done**（commit `612cb2f7d`）；wasm_core 根模块 20 条**全部 done**（commit `bc77476ed`，R-09 按 fail-visible 口径拒改）；host_api 模块 12 条**全部 done**（commit `0aa059e70`，H-03 文档口径）；manager 模块 21 条**全部 done**（commit 待定）。修复会话：pi（本会话）。
 
 ---
 
@@ -211,45 +211,66 @@
 
 - **[M-01] `manager/host/boot.rs:32-36` — 静态插件回调 panic 未圈护** `tokio::time::timeout` 只限执行时间不 catch panic。on_startup/on_shutdown 是第三方链接代码，unwind 会崩宿主 task（乃至整个宿主）。
   > 建议：`catch_unwind(AssertUnwindSafe(...))` 包两个回调轮询并记录 panic 载荷。
+  > **已修（2026-10-03）**：`guarded_callback` 统一圈护（同步调用段 + future poll 段分别 catch_unwind，futures_util::FutureExt::catch_unwind），panic 载荷 downcast 记日志；两个通知循环按 ID 排序（M-07）。
 - **[M-02] `manager/task.rs:762-764` — cancel/timeout 后在途单元仍污染终态** cancel 设 phase=Cancelled，但后完成的单元仍到 `notify_terminal` 排重复终态事件；`remaining == 0` 分支可把 phase 覆写回 Completed/Failed。execute-batch 超时路径摘除 job 并快照误导性 skipped 结果，在途单元后写真实结果永不返回，末单元可将 phase 从 Cancelled 翻回。
   > 建议：仅 Running→terminal 转移时发终态事件（`terminal_notified` 标志内锁设置）；phase 离开 Running 后停推游标；同步结果前保留 job（或 drain 在途单元）。
+  > **已修（2026-10-03）**：① `terminal_phase_for` 纯函数仅 Running→terminal（cancel 后末单元不再翻回）；② `terminal_notified: AtomicBool` 使终态事件恰好一次（cancel 也走 notify_terminal）；③ phase ≠ Running 停推游标；④ execute-batch 超时后 drain 在途单元（DRAIN_GRACE 3s 有界轮询结果槽）再快照。新增 `terminal_phase_only_transitions_from_running` 测试。
 - **[M-03] `manager/task.rs:432-437` — started 事件可能晚于终态** `register_job` 先派发初始单元到池线程再 enqueue started → 快单单元作业可先推送 completed/failed 再推送 started，插件观察到终态先于启动。
   > 建议：started 在 register_job 注册表插入后、`pool_tx().send` 前立即 enqueue。
+  > **已修（2026-10-03）**：started 移入 register_job（注册表插入后、池分派前投出）；submit 不再另行投递。
 - **[M-04] `manager/task.rs:942-947` — 回调通道守卫 TOCTOU** `may_open_callback_channel` 在 jobs 锁下检查后放锁，实际建通道在 queues 锁另一临界区。其间并发 `purge_for_plugin` 可取消全部作业并 drop 回调队列 → 之后创建的新通道 + consumer_loop 永不拆除，向已停用插件派发——正是注释警告的孤儿通道。
   > 建议：检查与建通道原子化（持 queues 锁一致顺序复查，或两 registry 锁同取）。
+  > **已修（2026-10-03）**：enqueue_event 内 jobs→queues 同锁序（与 purge 一致）原子 check-and-create——purge 摘任务与清队列之间插不进新建通道。
 - **[M-05] `manager/watcher.rs:79-93` — 防抖 TOCTOU** 读锁在首块结束释放，写锁后才获取 → 同一插件并发两任务都看到空/过期 pending 都调 `reload_wasm_plugin`，500ms 防抖失效；共享态单 (plugin_id, Instant) 对，异插件交错事件互相覆盖。
   > 建议：check-and-set 全程持写锁（或 per-plugin 时间戳 map）。
+  > **已修（2026-10-03）**：per-plugin 时间戳 `Mutex<HashMap<id, Instant>>`（std Mutex 兼容 spawn 异步与回调同步两上下文），check-and-set 单临界区原子。
 - **[M-06] `manager/watcher.rs:133-135` — start() 环境问题转启动崩溃** `.expect()` 于 watcher 创建失败/目录不可 watch（fresh dev checkout 无 plugins_dir）→ Tauri setup 期崩溃。
   > 建议：返回 `Result<Self, notify::Error>` 或记日志继续。
+  > **已修（2026-10-03）**：`_watcher: Option<Box<dyn Watcher>>`——创建/开始监听失败记 warn 降级（dev hot-reload 禁用），不崩 setup；调用方签名不变。
 
 ### Medium
 
 - **[M-07] `manager/host/boot.rs:70-72` — 关闭顺序非确定** `inventory::iter` 按链接/注册序产出非确定 → notify_shutdown 依任意序拆插件；别处激活做依赖检查，任意序可能在依赖前关其依赖。
   > 建议：按 ID 排序（如 activate_role_driven_components）或逆拓扑依赖序。
+  > **已修（2026-10-03）**：notify_startup / notify_shutdown 静态插件列表按 ID 排序（确定性）。
 - **[M-08] `manager/host/boot.rs:87` — notify_shutdown 只通知静态插件** 文档「通知**所有**已激活插件」实际仅静态；WASM 插件 on_shutdown 依赖外部调用方先 deactivate。若关闭路径未为每个激活 WASM 插件调 deactivate_plugin → 静默漏关回调不持久化。
   > 建议：此处 deactivate WASM 插件，或把调用方顺序做成显式受检契约。
+  > **已修（2026-10-03，显式契约口径）**：notify_shutdown doc 写明职责边界 + 调用方顺序契约（`system/lifecycle.rs` shutdown 链：notify_shutdown 优先级 15 先于 deactivate_all 20；WASM 插件 on_shutdown 由 deactivate_plugin 逐个负责）——顺序在调用方显式注册，非隐式约定。
 - **[M-09] `manager/watcher.rs:120-124` — JS 变更事件无防抖** 打包器重建一批写多个 JS 文件 → 每文件发一个 PLUGIN_DEV_RELOAD 洪泛前端。
   > 建议：与 WASM 路径同样防抖（或廉价限流）。
+  > **已修（2026-10-03）**：JS 分支走同一 per-plugin 防抖表（notify 回调线程同步加锁）。
 - **[M-10] `manager/runtime/tests/terminal_output_perf.rs:162-169` — fetch_until 无 deadline** none 分支睡 1ms 永远重试，无游标推进保护；`perf_p3_end_to_end_catchup` 跳过预等待直调。命令停滞/产出不足/提前退出（host-pty 退出即拆环 → 恒返回 none）→ 测试无限自旋且持全局锁挂整组。
   > 建议：加 deadline（镜像 wait_produced）+ none 分支游标推进守卫。
+  > **已修（2026-10-03）**：fetch_until 加 `FETCH_POLL_TIMEOUT_MS`（8s）deadline，none 分支与游标停滞均 fail-visible。
 - **[M-11] `manager/runtime/tests/http_e2e.rs:93-94` — 清理仅 happy path** 任何 expect/assert panic 泄漏资源：RouteTable 全局注册残留断重跑/同二进制其它测试；pty_e2e 常驻 shell + 无限生产者仅 happy path 杀掉，断言失败前留子进程空转至硬超时。
   > 建议：RAII 清理守卫（Drop）或 catch_unwind 包测试体。
+  > **已修（2026-10-03，http_e2e 侧）**：`RegistryCleanup` Drop 守卫（panic unwind 也执行 purge）；pty_e2e 常驻 shell 各用例本已有 pty-kill 收尾。
 - **[M-12] `manager/runtime/tests/pty_e2e.rs:501-504` — 背压用例依赖固定 400ms sleep** 每迭代 fork `/bin/sleep` 子进程，慢/加载 CI 生产速率可低于假设 ~1.3KB/s → 少于 512B 时多处断言伪失败。
   > 建议：有界轮询（反复 fetch 至 nextOffset > 512，带总超时）替代固定 sleep + 绝对阈值。
+  > **已修（2026-10-03）**：改有界轮询（fetch(0) 循环至 nextOffset > 512，4s 总超时），产出速率只影响轮询次数不影响成败。
 - **[M-13] `manager/runtime/tests/pty_e2e.rs:288-290` — 接线锁断言源码子串** 精确匹配 `host/activation.rs` 子串，rustfmt/改名/重构即破测试且不在运行路径执行。建议改行为断言（驱动真实 deactivate 观察 PTY 清空）或编译期契约。
+  > **已修（2026-10-03，折中）**：断言放宽到 `host_api::pty::purge_for_plugin` 调用点存在（参数形态交给同用例的行为 purge 断言与编译期类型检查）——仍锁「activation.rs 接线了 pty 回收」，但不再被参数签名/rustfmt 变动弄断。
 - **[M-14] `manager/watcher.rs:150-151` — extract_plugin_id 前缀不匹配丢事件** `strip_prefix(plugins_dir)` 要求精确前缀，但 plugins_dir 未 canonicalize（macOS `/private/var` symlink、`..` 组件）→ 事件全静默丢弃，热重载死亡无日志。
   > 建议：watch 前 canonicalize 一次，watch 与 extract 共用规范路径。
+  > **已修（2026-10-03）**：start 时 canonicalize（失败保留原路径），watch 与 extract 共用规范路径。
 
 ### Low
 
 - **[M-15] `manager/host/boot.rs:61-64` — notify_shutdown 重复文档行**（重构残留）。删。
+  > **已修（2026-10-03）**：删除重复行。
 - **[M-16] `manager/host/boot.rs:99-101` — 失效 deactivate-all 注释** 指向已移除方法。
+  > **已修（2026-10-03）**：删除失效注释行。
 - **[M-17] `manager/host/boot.rs:164-166` — auto_approve 前错位文档行** 属于 auto_activate_from_persisted_state。
+  > **已修（2026-10-03）**：删除错位文档行（auto_approve_legacy_user_plugin 自带正确 doc）。
 - **[M-18] `manager/host/boot.rs:321-326` — 「Auto-activated」计数为尝试数** 失败仅 per-plugin 记 error，最终诊断在部分失败时误导。改报实际成功数或改「attempted」。
+  > **已修（2026-10-03）**：循环内计数实际成功激活数，最终日志报成功数。
 - **[M-19] `manager/runtime/tests/terminal_output_perf.rs:291` — 4 MiB 注释与 3 MiB 常量不符** 若有人按注释改 4 MiB → 环容量=输出量开始 eviction 出现 truncated，破坏 `!truncated` 断言。改注释或常量对齐。
+  > **已修（2026-10-03）**：P3 用例 doc 改 3 MiB（与 CATCHUP_BYTES 一致）。
 - **[M-20] `manager/runtime/tests/pty_e2e.rs:89` — format! 组 shell 命令（潜在注入）** 当前 marker 纯数字无注入面，但模式可演变；建议改参数向量/env 传 marker。
+  > **已修（2026-10-03，断言钉死）**：marker 生成处断言字符集为 alphanumeric+_（shell 安全）——将来改成含元字符的内容立即转红。
 - **[M-21] `manager/task.rs:971-976` — droppedEvents 记错作业** 通道满丢弃时按 HashMap 迭代序给**第一个**匹配 owner 的作业计数，从不看事件 jobId → 多作业在途时自愈 status 错报。
   > 建议：EventEntry/enqueue_event 携带具体 job_id，给匹配作业计数。
+  > **已修（2026-10-03）**：`job_for_drop_counting` 按事件自身 jobId 精确匹配 + 属主校验归账；新增 `dropped_events_are_counted_per_job_not_first_match` 测试。
 
 ---
 

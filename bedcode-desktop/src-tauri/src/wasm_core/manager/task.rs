@@ -47,6 +47,12 @@ use crate::wasm_core::monitor::{MetricsRegistry, MetricsSource};
 use crate::wasm_core::runtime_util::ambient_handle;
 use crate::system::constants as C;
 
+/// execute-batch 超时后等待在途单元落盘的结果宽限期（M-02）
+///
+/// 单元是同步宿主调用（各自带超时），在途数 <= 初始并发窗口，此宽限有界；
+/// 到期仍未落盘则按当时快照返回（失败仍可见，不无限阻塞调用方）。
+const DRAIN_GRACE: Duration = Duration::from_secs(3);
+
 // ==================== 数据类型 ====================
 
 /// 单元定义（plan 解析产物；结果槽下标 = units 下标）
@@ -149,6 +155,9 @@ pub(crate) struct JobHandle {
     pub(crate) emit_events: bool,
     /// 宿主上下文（池线程 / 消费任务经此访问 services 与权限门）
     pub(crate) host_ctx: Arc<WasmHostContext>,
+    /// 终态事件已投递（M-02：仅 Running→terminal 转移投递一次；cancel /
+    /// 超时 / 后完成单元不得重复排终态事件）
+    pub(crate) terminal_notified: std::sync::atomic::AtomicBool,
 }
 
 impl JobHandle {
@@ -428,13 +437,10 @@ impl TaskEngine for CoreTaskEngine {
 /// 登记任务并立即返回 `task-<hex>`（`submit`）：started 事件 + 池执行 + 回调
 pub(crate) fn submit(host_ctx: Arc<WasmHostContext>, owner: &str, plan_json: &str) -> Result<String, String> {
     let plan = parse_plan(plan_json)?;
-    let job_id = register_job(host_ctx.clone(), owner, plan, true)?;
-    enqueue_event(
-        &host_ctx,
-        owner,
-        serde_json::json!({ "jobId": job_id, "phase": "started" }),
-        true,
-    );
+    // started 事件在 register_job 内、池分派**之前**投出（M-03）：快单单元作业
+    // 若先投 started 再分派，单单元可在 started 入队前完成 → 插件观察到终态先于
+    // 启动（「完成比启动早」的乱序）。
+    let job_id = register_job(host_ctx, owner, plan, true)?;
     Ok(job_id)
 }
 
@@ -442,6 +448,7 @@ pub(crate) fn submit(host_ctx: Arc<WasmHostContext>, owner: &str, plan_json: &st
 /// 阻塞调用线程至全部单元终态（或墙钟超时）——同 `run-sync` 语义，不投回调。
 pub(crate) fn execute_batch(host_ctx: Arc<WasmHostContext>, owner: &str, plan_json: &str) -> Result<String, String> {
     let plan = parse_plan(plan_json)?;
+    let units_len = plan.units.len();
     let job_id = register_job(host_ctx, owner, plan, false)?;
     let job = REGISTRY
         .jobs
@@ -471,6 +478,22 @@ pub(crate) fn execute_batch(host_ctx: Arc<WasmHostContext>, owner: &str, plan_js
         inner.phase = JobPhase::Cancelled;
     }
     drop(finished);
+
+    // drain 在途单元（M-02）：取消后仍在执行的单元会把真实结果写回结果槽；
+    // 等它们落盘再快照，避免「误导性 skipped + 在途真实结果永不返回」。
+    // 单元是同步宿主调用（各自有超时），在途数 <= 初始窗口，等待有界。
+    // （未开始单元经 run_unit 顶部 phase 检查返回，槽保持 None → 快照补 skipped，如实）
+    let drain_deadline = std::time::Instant::now() + DRAIN_GRACE;
+    loop {
+        let filled = {
+            let inner = job.inner.lock().unwrap_or_else(|e| e.into_inner());
+            inner.results.iter().filter(|r| r.is_some()).count()
+        };
+        if filled == units_len || std::time::Instant::now() >= drain_deadline {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
 
     // 同步批不留痕（避免占每插件 MAX_JOBS 配额）
     REGISTRY.jobs.lock().unwrap_or_else(|e| e.into_inner()).remove(&job_id);
@@ -512,18 +535,9 @@ pub(crate) fn cancel(owner: &str, job_id: &str) -> Result<bool, String> {
     inner.phase = JobPhase::Cancelled;
     let owner = inner.owner.clone();
     drop(inner);
-    notify_finished(&job);
-    if job.emit_events {
-        let (done, failed) = job.done_failed();
-        let ev = serde_json::json!({
-            "jobId": job_id,
-            "phase": "cancelled",
-            "doneUnits": done,
-            "failedUnits": failed,
-            "result": result_json(job_id, &job),
-        });
-        enqueue_event(&job.host_ctx, &owner, ev, true);
-    }
+    // 终态事件经 notify_terminal（M-02）：terminal_notified 标志恰好一次——
+    // 在途单元随后完成不再重复排终态事件
+    notify_terminal(&job, job_id, &owner);
     Ok(true)
 }
 
@@ -652,13 +666,25 @@ fn register_job(host_ctx: Arc<WasmHostContext>, owner: &str, plan: Plan, emit_ev
         finished: Mutex::new(false),
         condvar: Condvar::new(),
         emit_events,
-        host_ctx,
+        host_ctx: host_ctx.clone(),
+        terminal_notified: std::sync::atomic::AtomicBool::new(false),
     });
     REGISTRY
         .jobs
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .insert(job_id.clone(), handle);
+
+    // started 事件：注册表插入后、池分派前投出（M-03）——池线程可能立即完成
+    // 单单元并触发终态事件，若 started 晚于分派会被终态抢先（乱序）
+    if emit_events {
+        enqueue_event(
+            &host_ctx,
+            owner,
+            serde_json::json!({ "jobId": job_id, "phase": "started" }),
+            true,
+        );
+    }
 
     // 提交初始并发窗口（cursor 已停在 window 处，剩余由完成回调推进）
     let tx = pool_tx();
@@ -710,7 +736,9 @@ fn run_unit(item: &QueuedUnit, job: &Arc<JobHandle>) {
     }
 
     // 终态判定 / 推进
-    let next_index = if inner.remaining == 0 {
+    // phase 离开 Running 后**停推游标**（M-02）：cancel/超时后不再派发新单元——
+    // 未开始单元保持 skipped（终态快照如实），在途单元照常完成写结果
+    let next_index = if inner.phase != JobPhase::Running || inner.remaining == 0 {
         None
     } else if job_timeout_exceeded(&inner) {
         inner.phase = JobPhase::Cancelled;
@@ -724,12 +752,10 @@ fn run_unit(item: &QueuedUnit, job: &Arc<JobHandle>) {
             None
         }
     };
-    if inner.remaining == 0 {
-        inner.phase = if inner.failed == inner.units.len() {
-            JobPhase::Failed
-        } else {
-            JobPhase::Completed
-        };
+    // 仅 Running→terminal 转移（M-02）：cancel 已置 Cancelled 后完成的单元不得
+    // 把 phase 覆写回 Completed/Failed（末单元翻回 = 终态被污染）
+    if let Some(terminal) = terminal_phase_for(&inner) {
+        inner.phase = terminal;
     }
     let phase = inner.phase;
     let jid = item.job_id.clone();
@@ -764,8 +790,15 @@ fn run_unit(item: &QueuedUnit, job: &Arc<JobHandle>) {
     }
 }
 
-/// 终态通知：condvar 唤醒 + 终态事件（terminal 必达）
+/// 终态通知：condvar 唤醒 + 终态事件（terminal 必达；**恰好一次**，M-02）
+///
+/// `terminal_notified` 标志内锁设置：cancel / 超时 / 后完成单元都会到达这里，
+/// 但只有首个 Running→terminal 转移者投递事件；重复到达只唤醒 condvar 不再
+/// 排终态事件（插件侧不会收到两条终态）。
 fn notify_terminal(job: &Arc<JobHandle>, job_id: &str, owner: &str) {
+    if job.terminal_notified.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
     if job.emit_events {
         let (done, failed) = job.done_failed();
         let ev = serde_json::json!({
@@ -866,6 +899,20 @@ fn job_timeout_exceeded(inner: &JobInner) -> bool {
     unix_ms().saturating_sub(inner.started_at_ms) > inner.job_timeout_ms
 }
 
+/// 终态转移判定（M-02）：**仅 Running → terminal**——cancel/超时已置终态时
+/// 保持（在途单元后完成不得把 Cancelled 覆写回 Completed/Failed）。
+/// 纯函数便于直测。
+fn terminal_phase_for(inner: &JobInner) -> Option<JobPhase> {
+    if inner.phase != JobPhase::Running || inner.remaining != 0 {
+        return None;
+    }
+    Some(if inner.failed == inner.units.len() {
+        JobPhase::Failed
+    } else {
+        JobPhase::Completed
+    })
+}
+
 fn unix_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -924,8 +971,8 @@ fn may_open_callback_channel(owner: &str) -> bool {
 fn enqueue_event(host_ctx: &Arc<WasmHostContext>, owner: &str, event: serde_json::Value, terminal: bool) {
     // purge 后到达的事件不得重建回调 channel（审计票 09）：插件已停用、其任务已从注册表
     // 摘除，此处若新建 channel + consumer 会永久残留（停用后不会再有人 purge 它）并把
-    // 事件派发给已停用的插件。判据 = 注册表里已无该属主的在册任务（`submit` 的 started
-    // 事件在 `register_job` 之后投出，任务必在表；`execute-batch` 不留痕但也不投事件）。
+    // 事件派发给已停用的插件。快路径判据 = 注册表里已无该属主的在册任务；真正创建前的
+    // 复查在下方锁内（M-04）。
     if !may_open_callback_channel(owner) {
         tracing::debug!(
             plugin_id = %owner,
@@ -940,6 +987,17 @@ fn enqueue_event(host_ctx: &Arc<WasmHostContext>, owner: &str, event: serde_json
         event,
     };
     let tx = {
+        // 原子 check-and-create（M-04）：属主在册任务检查与回调通道创建同一临界区，
+        // 与 purge（jobs→queues 同锁序）不插缝——purge 摘任务与清队列之间不会
+        // 再插入一条新建通道 + 永久 consumer（审计票 09 注释警告的孤儿通道）。
+        let jobs = REGISTRY.jobs.lock().unwrap_or_else(|e| e.into_inner());
+        if !jobs.values().any(|h| h.owner() == owner) {
+            tracing::debug!(
+                plugin_id = %owner,
+                "[host-task] owner purged between check and create, event dropped"
+            );
+            return;
+        }
         let mut queues = REGISTRY.queues.lock().unwrap_or_else(|e| e.into_inner());
         match queues.get(owner) {
             Some(tx) => tx.clone(),
@@ -954,7 +1012,7 @@ fn enqueue_event(host_ctx: &Arc<WasmHostContext>, owner: &str, event: serde_json
     };
     match tx.try_send(entry) {
         Ok(()) => {}
-        Err(tmpsc::error::TrySendError::Full(_)) => {
+        Err(tmpsc::error::TrySendError::Full(failed_entry)) => {
             TASK_METRICS.events_dropped_total.fetch_add(1, Ordering::Relaxed);
             if terminal {
                 tracing::error!(
@@ -967,14 +1025,10 @@ fn enqueue_event(host_ctx: &Arc<WasmHostContext>, owner: &str, event: serde_json
                     "[host-task] progress event dropped (callback queue full)"
                 );
             }
-            // droppedEvents 计数（status 可见，spec §5.3）
-            if let Some(job) = REGISTRY
-                .jobs
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .values()
-                .find(|h| h.owner() == owner)
-            {
+            // droppedEvents 计数（status 可见，spec §5.3）——按事件自身的 jobId
+            // 归账（M-21）：旧实现按 HashMap 迭代序给「第一个匹配属主」的作业计数，
+            // 多作业在途时自愈 status 错报。
+            if let Some(job) = job_for_drop_counting(owner, &failed_entry.event) {
                 let mut inner = job.inner.lock().unwrap_or_else(|e| e.into_inner());
                 inner.dropped_events = inner.dropped_events.saturating_add(1);
             }
@@ -983,6 +1037,19 @@ fn enqueue_event(host_ctx: &Arc<WasmHostContext>, owner: &str, event: serde_json
             // consumer 已退出（purge / 插件停用）：静默丢弃（宿主不缓存）
             tracing::debug!(plugin_id = %owner, "[host-task] callback channel closed, event dropped");
         }
+    }
+}
+
+/// 为丢弃事件找归账作业（M-21）：按事件自身 `jobId` 精确匹配且校验属主——
+/// 多作业在途时 droppedEvents 只记到真正丢了事件的作业上。
+fn job_for_drop_counting(owner: &str, event: &serde_json::Value) -> Option<Arc<JobHandle>> {
+    let job_id = event.get("jobId").and_then(|v| v.as_str())?;
+    let jobs = REGISTRY.jobs.lock().unwrap_or_else(|e| e.into_inner());
+    let job = jobs.get(job_id).cloned()?;
+    if job.owner() == owner {
+        Some(job)
+    } else {
+        None
     }
 }
 
@@ -1042,6 +1109,107 @@ mod tests {
         );
         let queues = REGISTRY.queues.lock().unwrap_or_else(|e| e.into_inner());
         assert!(queues.get(owner).is_none(), "purge 后回调队列不得残留/复活");
+    }
+
+    /// M-02：终态转移只发生在 Running → terminal——cancel/超时已置终态后，
+    /// 在途单元完成不得把 phase 覆写回 Completed/Failed。变异判据：把判定改回
+    /// 「remaining == 0 即覆写」⇒ 本条转红（Cancelled 被末单元翻回）。
+    #[test]
+    fn terminal_phase_only_transitions_from_running() {
+        let mut inner = |phase: JobPhase, remaining: usize, failed: usize| JobInner {
+            owner: "t".to_string(),
+            units: vec![PlanUnit {
+                id: "u".to_string(),
+                kind: "fs.stat".to_string(),
+                params: serde_json::json!({}),
+            }],
+            phase,
+            results: vec![None; 1],
+            remaining,
+            next_to_start: 1,
+            done: 1,
+            failed,
+            created_at_ms: 0,
+            started_at_ms: 0,
+            job_timeout_ms: 60000,
+            progress_every_units: 10,
+            progress_every_ms: 500,
+            last_progress_ms: 0,
+            dropped_events: 0,
+        };
+
+        // Running + 全单元完成 → Completed / Failed
+        assert_eq!(terminal_phase_for(&inner(JobPhase::Running, 0, 0)), Some(JobPhase::Completed));
+        assert_eq!(terminal_phase_for(&inner(JobPhase::Running, 0, 1)), Some(JobPhase::Failed));
+        // Running 但还有单元未完成 → 不终态
+        assert_eq!(terminal_phase_for(&inner(JobPhase::Running, 1, 0)), None);
+        // 已 Cancelled（cancel/超时）即使 remaining==0 也不得翻回
+        assert_eq!(terminal_phase_for(&inner(JobPhase::Cancelled, 0, 0)), None, "Cancelled 不得被覆写");
+        // 已 Completed / Failed 幂等保持
+        assert_eq!(terminal_phase_for(&inner(JobPhase::Completed, 0, 0)), None);
+        assert_eq!(terminal_phase_for(&inner(JobPhase::Failed, 0, 1)), None);
+    }
+
+    /// M-21：丢弃事件按**事件自身 jobId** 归账——多作业在途时不得错记到
+    /// 「第一个匹配属主」的作业上。
+    #[test]
+    fn dropped_events_are_counted_per_job_not_first_match() {
+        purge_for_plugin("drop-probe");
+        // 造两个同属主作业（直接插注册表；submit 依赖真实执行链，这里只测归账）
+        let mk = |job_id: &str, phase: JobPhase| {
+            let handle = Arc::new(JobHandle {
+                inner: Mutex::new(JobInner {
+                    owner: "drop-probe".to_string(),
+                    units: vec![PlanUnit {
+                        id: "u".to_string(),
+                        kind: "fs.stat".to_string(),
+                        params: serde_json::json!({}),
+                    }],
+                    phase,
+                    results: vec![None; 1],
+                    remaining: 0,
+                    next_to_start: 1,
+                    done: 1,
+                    failed: 0,
+                    created_at_ms: 0,
+                    started_at_ms: 0,
+                    job_timeout_ms: 60000,
+                    progress_every_units: 10,
+                    progress_every_ms: 500,
+                    last_progress_ms: 0,
+                    dropped_events: 0,
+                }),
+                finished: Mutex::new(true),
+                condvar: Condvar::new(),
+                emit_events: false,
+                host_ctx: build_test_ctx().clone(),
+                terminal_notified: std::sync::atomic::AtomicBool::new(true),
+            });
+            REGISTRY
+                .jobs
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(job_id.to_string(), handle.clone());
+            handle
+        };
+        let job_a = mk("task-aaa", JobPhase::Completed);
+        let job_b = mk("task-bbb", JobPhase::Completed);
+
+        // 事件属于 B → 归账 B（旧实现会记到迭代序第一个 = A）
+        let ev = serde_json::json!({ "jobId": "task-bbb", "phase": "progress" });
+        let found = job_for_drop_counting("drop-probe", &ev).expect("必须命中 B");
+        assert_eq!(found.inner.lock().unwrap_or_else(|e| e.into_inner()).owner, "drop-probe");
+        // 直接走计数语义：给 B 记一笔
+        let b = job_for_drop_counting("drop-probe", &ev).unwrap();
+        b.inner.lock().unwrap_or_else(|e| e.into_inner()).dropped_events += 1;
+        assert_eq!(job_a.inner.lock().unwrap_or_else(|e| e.into_inner()).dropped_events, 0, "A 不得被错记");
+        assert_eq!(job_b.inner.lock().unwrap_or_else(|e| e.into_inner()).dropped_events, 1);
+
+        // 未知 jobId / 无 jobId / 非属主 → None（不归账）
+        assert!(job_for_drop_counting("drop-probe", &serde_json::json!({ "jobId": "task-zzz" })).is_none());
+        assert!(job_for_drop_counting("drop-probe", &serde_json::json!({ "phase": "progress" })).is_none());
+        assert!(job_for_drop_counting("other-owner", &ev).is_none());
+        purge_for_plugin("drop-probe");
     }
 
     #[test]
@@ -1145,6 +1313,7 @@ mod tests {
             condvar: Condvar::new(),
             emit_events: true,
             host_ctx: build_test_ctx().clone(),
+            terminal_notified: std::sync::atomic::AtomicBool::new(true),
         });
         let job_running = Arc::new(JobHandle {
             inner: Mutex::new(JobInner {
@@ -1172,6 +1341,7 @@ mod tests {
             condvar: Condvar::new(),
             emit_events: true,
             host_ctx: build_test_ctx().clone(),
+            terminal_notified: std::sync::atomic::AtomicBool::new(false),
         });
         {
             let mut jobs = REGISTRY.jobs.lock().unwrap_or_else(|e| e.into_inner());
