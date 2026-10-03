@@ -39,6 +39,13 @@ pub(crate) struct NormalizedEvent {
     pub model: Option<String>,
     /// 助手事件附带的 token 明细
     pub tokens: Option<TokenUsage>,
+    /// 工具事件为 true（claude tool_result.is_error / pi toolResult.isError）；
+    /// 非工具事件恒 false——展示层据此给失败结果加视觉标记
+    pub error: bool,
+    /// 工具事件携带的调用 id（claude tool_result.tool_use_id / pi
+    /// toolResult.toolCallId / codex call_id）——调用与结果配对的键；
+    /// 非工具事件为 None
+    pub tool_use_id: Option<String>,
 }
 
 /// 单模型用量（主导模型判定与按模型聚合的明细）
@@ -63,7 +70,9 @@ pub(crate) struct ParsedSession {
     /// 有则存（claude totalCostUSD / pi usage.cost.total），null 不估算
     pub cost_total: Option<f64>,
     pub events: Vec<NormalizedEvent>,
-    /// 事件流被截断（超 MAX_EVENTS）
+    /// 已入流的**附件**事件数（独立子上限，见 `MAX_ATTACHMENT_EVENTS`）
+    pub attachment_events: u32,
+    /// 事件流被截断（实质事件超 MAX_EVENTS，或附件超 MAX_ATTACHMENT_EVENTS）
     pub events_truncated: bool,
     /// 解析过程中被跳过的损坏行数（截断行 / 非法 JSON）
     pub skipped_lines: u32,

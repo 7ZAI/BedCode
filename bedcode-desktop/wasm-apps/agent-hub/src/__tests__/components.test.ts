@@ -28,11 +28,12 @@ import ProviderApply from '../components/ProviderApply.vue'
 import ProvidersTab from '../components/ProvidersTab.vue'
 import StatsTab from '../components/StatsTab.vue'
 import SessionLogsTab from '../components/SessionLogsTab.vue'
+import { COLLAPSE_THRESHOLD_CHARS, COLLAPSE_THRESHOLD_TOOL_CHARS, GUEST_TEXT_CAPS } from '../utils/format'
 import SkillsTab from '../components/SkillsTab.vue'
 import InstallTab from '../components/InstallTab.vue'
 import OverviewTab from '../components/OverviewTab.vue'
 import CliCard from '../components/CliCard.vue'
-import type { AdapterErrorCode, ProviderPreset, ProvidersDomainState, UsageSessionRow, UsageSource } from '../types'
+import type { AdapterErrorCode, ProviderPreset, ProvidersDomainState, UsageSessionDetail, UsageSessionRow, UsageSource } from '../types'
 import type { UseProvidersReturn } from '../composables/useProviders'
 import type { CliSessionState, StatsDays, UseUsageReturn } from '../composables/useUsage'
 import { AGENT_HUB } from './helpers/contrast'
@@ -762,6 +763,513 @@ describe('A4 SessionLogsTab：查询 / 重置 / 翻页 / 详情 / 原始页签',
     await tabs.at(-1)!.trigger('click')
     await flushPromises()
     expect(w.text()).toContain('{"a":1}')
+    w.unmount()
+  })
+
+  // ------ 模型输出折叠（默认折叠：超阈值助手正文收起 + 展开/收起互切） ------
+
+  /** 打开详情视图的通用夹具：长/短助手消息 + 长用户消息 */
+  function openedWithMessages(events: unknown[]): UsageSessionDetail {
+    return {
+      session: {
+        id: 1,
+        adapter: 'claude',
+        cli_session_id: 'c-1',
+        project: null,
+        title: 't1',
+        started_at: 1,
+        ended_at: null,
+        duration_ms: null,
+        tokens_in: 0,
+        tokens_out: 0,
+        tokens_cache_read: 0,
+        tokens_cache_write: 0,
+        tokens_reasoning: 0,
+        cost_total: null,
+        model: null,
+        active: false,
+        source_path: '/x',
+      },
+      events: events as UsageSessionDetail['events'],
+      raw: [],
+      eventsTruncated: false,
+      rawTruncated: false,
+      skippedLines: 0,
+    } satisfies UsageSessionDetail
+  }
+
+  it('超阈值助手正文默认折叠：clamp 类 + 展开按钮，aria 状态为收起', async () => {
+    const ts = 'x'.repeat(COLLAPSE_THRESHOLD_CHARS + 1)
+    const w = mountComponent(SessionLogsTab, {
+      usage: usageStub({
+        openedSession: ref(
+          openedWithMessages([{ role: 'assistant', text: ts, ts: 1 }]),
+        ) as never,
+      }),
+    })
+    await flushPromises()
+    const textEl = w.get('.ah-msg-text')
+    // 默认折叠：截断样式生效
+    expect(textEl.classes()).toContain('is-collapsed')
+    expect(textEl.text()).toBe(ts) // 文本本身仍在 DOM（CSS 截断，非删内容）
+    // 展开按钮存在且处于收起态
+    const btn = w.get('.ah-msg-expand')
+    expect(btn.attributes('aria-expanded')).toBe('false')
+    expect(btn.text()).toContain('hub.lg.detail.expand')
+    expect(btn.attributes('aria-controls')).toBe('lg-msg-text-0')
+    w.unmount()
+  })
+
+  it('点展开 → 全文展示（去掉 clamp 类），再点收起回到折叠态', async () => {
+    const ts = 'x'.repeat(COLLAPSE_THRESHOLD_CHARS + 1)
+    const w = mountComponent(SessionLogsTab, {
+      usage: usageStub({
+        openedSession: ref(
+          openedWithMessages([{ role: 'assistant', text: ts, ts: 1 }]),
+        ) as never,
+      }),
+    })
+    await flushPromises()
+    const btn = w.get('.ah-msg-expand')
+    await btn.trigger('click')
+    await flushPromises()
+    expect(w.get('.ah-msg-text').classes()).not.toContain('is-collapsed')
+    expect(btn.attributes('aria-expanded')).toBe('true')
+    expect(btn.text()).toContain('hub.lg.detail.collapse')
+    // 圆路：再点收起
+    await btn.trigger('click')
+    await flushPromises()
+    expect(w.get('.ah-msg-text').classes()).toContain('is-collapsed')
+    expect(btn.attributes('aria-expanded')).toBe('false')
+    w.unmount()
+  })
+
+  it('短暂助手正文不折叠也不出现按钮（clamp 剪不到，按钮是噪音）', async () => {
+    const w = mountComponent(SessionLogsTab, {
+      usage: usageStub({
+        openedSession: ref(
+          openedWithMessages([{ role: 'assistant', text: '短回复', ts: 1 }]),
+        ) as never,
+      }),
+    })
+    await flushPromises()
+    expect(w.find('.ah-msg-text').classes()).not.toContain('is-collapsed')
+    expect(w.find('.ah-msg-expand').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('用户 / 系统角色即使超阈值也不提供折叠（折叠只针对模型输出与工具卡身）', async () => {
+    const long = 'y'.repeat(COLLAPSE_THRESHOLD_CHARS + 1)
+    const w = mountComponent(SessionLogsTab, {
+      usage: usageStub({
+        openedSession: ref(
+          openedWithMessages([
+            { role: 'user', text: long, ts: 1 },
+            { role: 'system', text: long, ts: 3 },
+          ]),
+        ) as never,
+      }),
+    })
+    await flushPromises()
+    expect(w.findAll('.ah-msg-expand')).toHaveLength(0)
+    expect(w.findAll('.ah-msg-text.is-collapsed')).toHaveLength(0)
+    w.unmount()
+  })
+
+  // ------ B2：助手正文 markdown 渲染（只助手，其他角色保持纯文本） ------
+
+  it('助手正文渲染成 markdown 结构（围栏 / 强调 / 标题），用户行仍为纯文本', async () => {
+    const w = mountComponent(SessionLogsTab, {
+      usage: usageStub({
+        openedSession: ref(
+          openedWithMessages([
+            { role: 'user', text: '# 不是标题\n\n**也不是加粗**', ts: 1 },
+            { role: 'assistant', text: '## 小节\n\n看 `code` 与 **加粗**\n\n```bash\nls -l\n```', ts: 2 },
+          ]),
+        ) as never,
+      }),
+    })
+    await flushPromises()
+    const md = w.get('[data-testid="lg-msg-md"]')
+    expect(md.classes()).toContain('ah-md')
+    expect(md.html()).toContain('<h2>小节</h2>')
+    expect(md.html()).toContain('<strong>加粗</strong>')
+    expect(md.html()).toContain('<pre><code data-lang="bash">ls -l</code></pre>')
+    // 用户行不得带 markdown 容器（“我说的话”不该被排版）
+    expect(w.findAll('.ah-md')).toHaveLength(1)
+    expect(w.find('.ah-msg.role-user .ah-msg-text').text()).toContain('# 不是标题')
+    w.unmount()
+  })
+
+  it('助手正文里的原始 HTML 被实体化（不产生可执行节点）', async () => {
+    const w = mountComponent(SessionLogsTab, {
+      usage: usageStub({
+        openedSession: ref(
+          openedWithMessages([{ role: 'assistant', text: '<img src=x onerror=alert(1)><script>alert(2)</script>', ts: 1 }]),
+        ) as never,
+      }),
+    })
+    await flushPromises()
+    // 断言「没有被解析成节点」而非「序列化串里没有尖括号」：happy-dom 的
+    // outerHTML 序列化对文本节点不保证转义，字符串断言会假红
+    expect(w.find('script').exists()).toBe(false)
+    expect(w.find('img').exists()).toBe(false)
+    expect(w.get('[data-testid="lg-msg-md"]').text()).toContain('<script>alert(2)</script>')
+    w.unmount()
+  })
+
+  // 上条只覆盖**展开态**（renderMarkdown 会转义）；折叠态走 markdownPlainPreview，
+  // 那条路径同样经 v-html 注入，不转义就会把 agent 输出里的 HTML 当节点执行
+  it('折叠态（默认态）的原始 HTML 同样不产生可执行节点', async () => {
+    const payload = `<img src=x onerror=alert(1)>\n\n${'后续正文。'.repeat(COLLAPSE_THRESHOLD_CHARS / 5)}`
+    expect(payload.length).toBeGreaterThan(COLLAPSE_THRESHOLD_CHARS)
+    const w = mountComponent(SessionLogsTab, {
+      usage: usageStub({
+        openedSession: ref(openedWithMessages([{ role: 'assistant', text: payload, ts: 1 }])) as never,
+      }),
+    })
+    await flushPromises()
+    const el = w.get('[data-testid="lg-msg-md"]')
+    expect(el.classes()).toContain('is-collapsed')
+    expect(w.find('img').exists()).toBe(false)
+    // 原文仍可读（实体化后浏览器会还原成字符，text() 拿到的是原始字面量）
+    expect(el.text()).toContain('<img src=x onerror=alert(1)>')
+    w.unmount()
+  })
+
+  it('仅由分隔线组成的长正文不被整行丢弃（折叠预览为空也不判行空）', async () => {
+    // 预览会剥掉全部 HR 行 → 空串；若拿预览判空，这条实质消息会连同截断提示一起消失
+    const payload = '---\n'.repeat(COLLAPSE_THRESHOLD_CHARS / 2)
+    expect(payload.length).toBeGreaterThan(COLLAPSE_THRESHOLD_CHARS)
+    const w = mountComponent(SessionLogsTab, {
+      usage: usageStub({
+        openedSession: ref(openedWithMessages([{ role: 'assistant', text: payload, ts: 1 }])) as never,
+      }),
+    })
+    await flushPromises()
+    expect(w.findAll('.ah-msg.role-assistant')).toHaveLength(1)
+    w.unmount()
+  })
+
+  it('折叠态给剥标记的纯文本预览，展开后才产出结构化 HTML', async () => {
+    const md = `## 标题\n\n**要点**\n\n\`\`\`js\nconst a = 1\n\`\`\`\n\n${'补充说明。'.repeat(120)}`
+    expect(md.length).toBeGreaterThan(COLLAPSE_THRESHOLD_CHARS)
+    const w = mountComponent(SessionLogsTab, {
+      usage: usageStub({
+        openedSession: ref(openedWithMessages([{ role: 'assistant', text: md, ts: 1 }])) as never,
+      }),
+    })
+    await flushPromises()
+    const el = w.get('[data-testid="lg-msg-md"]')
+    expect(el.classes()).toContain('is-collapsed')
+    expect(el.html()).not.toContain('<pre>')
+    expect(el.text()).not.toContain('**')
+    await w.get('.ah-msg-expand').trigger('click')
+    await flushPromises()
+    expect(w.get('[data-testid="lg-msg-md"]').html()).toContain('<pre><code data-lang="js">')
+    w.unmount()
+  })
+
+  // ------ B3：工具卡（头 / 身切片 + 失败标记 + 默认收起） ------
+
+  it('工具行切成卡头 + 卡身（codex/opencode 形态）', async () => {
+    const w = mountComponent(SessionLogsTab, {
+      usage: usageStub({
+        openedSession: ref(
+          openedWithMessages([{ role: 'tool', text: 'tool · read (completed) · ok', ts: 1 }]),
+        ) as never,
+      }),
+    })
+    await flushPromises()
+    expect(w.get('.ah-msg-tool-head').text()).toBe('tool · read (completed)')
+    expect(w.get('.ah-msg.role-tool .ah-msg-text').text()).toBe('ok')
+    w.unmount()
+  })
+
+  it('claude tool_use 只有卡头（无卡身则不渲染正文块）', async () => {
+    const w = mountComponent(SessionLogsTab, {
+      usage: usageStub({
+        openedSession: ref(
+          openedWithMessages([{ role: 'tool', text: 'tool_use · Bash', ts: 1 }]),
+        ) as never,
+      }),
+    })
+    await flushPromises()
+    expect(w.get('.ah-msg-tool-head').text()).toBe('tool_use · Bash')
+    expect(w.find('.ah-msg-body').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('tool_use 的参数摘要进卡身（guest 带出参数时不能被卡片吃掉）', async () => {
+    const w = mountComponent(SessionLogsTab, {
+      usage: usageStub({
+        openedSession: ref(
+          openedWithMessages([{ role: 'tool', text: 'tool_use · Bash · {"command":"ls -l"}', ts: 1 }]),
+        ) as never,
+      }),
+    })
+    await flushPromises()
+    expect(w.get('.ah-msg-tool-head').text()).toBe('tool_use · Bash')
+    expect(w.get('.ah-msg.role-tool .ah-msg-text').text()).toBe('{"command":"ls -l"}')
+    w.unmount()
+  })
+
+  it('pi 的 (error) 标记给失败视觉，非失败行没有', async () => {
+    const w = mountComponent(SessionLogsTab, {
+      usage: usageStub({
+        openedSession: ref(
+          openedWithMessages([
+            { role: 'tool', text: 'bash (error) · command not found', ts: 1 },
+            { role: 'tool', text: 'bash · hi', ts: 2 },
+          ]),
+        ) as never,
+      }),
+    })
+    await flushPromises()
+    const bodies = w.findAll('.ah-msg.role-tool .ah-msg-body')
+    expect(bodies[0].classes()).toContain('is-error')
+    expect(bodies[1].classes()).not.toContain('is-error')
+    w.unmount()
+  })
+
+  // claude 的 tool_result 文本不带 `(error)`（只有 wire error 字段），
+  // 失败视觉只认文本标记会让 claude（最大适配器）的失败行永远不标红
+  it('wire error 字段给失败视觉（claude 形态：文本无 (error) 标记）', async () => {
+    const w = mountComponent(SessionLogsTab, {
+      usage: usageStub({
+        openedSession: ref(
+          openedWithMessages([
+            { role: 'tool', text: 'tool_result · Bash · exit status 1', ts: 1, error: true },
+            { role: 'tool', text: 'tool_result · Bash · ok', ts: 2, error: false },
+          ]),
+        ) as never,
+      }),
+    })
+    await flushPromises()
+    const bodies = w.findAll('.ah-msg.role-tool .ah-msg-body')
+    expect(bodies[0].classes()).toContain('is-error')
+    expect(bodies[1].classes()).not.toContain('is-error')
+    w.unmount()
+  })
+
+  // guest 只吐机器 token（wire 无 i18n 通道），文案必须由展示层查语言包：
+  // 不接 t 时英文界面会直接显示 guest 的中文占位。
+  it('非文本块占位走 i18n key（不显示 guest 原文 token）', async () => {
+    const w = mountComponent(SessionLogsTab, {
+      usage: usageStub({
+        openedSession: ref(
+          openedWithMessages([{ role: 'tool', text: 'tool_result · Read · [non-text:image]', ts: 1 }]),
+        ) as never,
+      }),
+    })
+    await flushPromises()
+    const body = w.get('.ah-msg.role-tool .ah-msg-text').text()
+    expect(body).toBe('hub.lg.nonTextBlock(kind=image)')
+    expect(body).not.toContain('[non-text:image]')
+    w.unmount()
+  })
+
+  it('无 kind 的退化 token 走无参数 key', async () => {
+    const w = mountComponent(SessionLogsTab, {
+      usage: usageStub({
+        openedSession: ref(
+          openedWithMessages([{ role: 'tool', text: 'tool_result · Read · [non-text]', ts: 1 }]),
+        ) as never,
+      }),
+    })
+    await flushPromises()
+    expect(w.get('.ah-msg.role-tool .ah-msg-text').text()).toBe('hub.lg.nonTextBlockUnknown')
+    w.unmount()
+  })
+
+  // 残留歧义（无法完全消除）：工具输出是不可信文本，若 agent 输出里恰好出现
+  // `[non-text:x]` 字面量，它会被当占位本地化。这里把真实行为精确钉住——
+  // **只有 token 那一组被替换，其余字符一字不改**。
+  it('工具输出里恰好出现 token 字面量：只替换该组，其余字符逐字保留', async () => {
+    const w = mountComponent(SessionLogsTab, {
+      usage: usageStub({
+        openedSession: ref(
+          openedWithMessages([
+            { role: 'tool', text: 'tool_result · Bash · 请手动写 [non-text:image] 占位', ts: 1 },
+          ]),
+        ) as never,
+      }),
+    })
+    await flushPromises()
+    const body = w.get('.ah-msg.role-tool .ah-msg-text').text()
+    expect(body).toBe('请手动写 hub.lg.nonTextBlock(kind=image) 占位')
+    w.unmount()
+  })
+
+  it('长工具输出默认收起，点开切换（按钮文案走「展开详情」）', async () => {
+    const out = 'o'.repeat(COLLAPSE_THRESHOLD_TOOL_CHARS + 1)
+    const w = mountComponent(SessionLogsTab, {
+      usage: usageStub({
+        openedSession: ref(
+          openedWithMessages([{ role: 'tool', text: `tool · bash · ${out}`, ts: 1 }]),
+        ) as never,
+      }),
+    })
+    await flushPromises()
+    expect(w.get('.ah-msg.role-tool .ah-msg-text').classes()).toContain('is-collapsed')
+    const btn = w.get('.ah-msg-expand')
+    expect(btn.text()).toContain('hub.lg.detail.expandDetail')
+    expect(btn.attributes('aria-expanded')).toBe('false')
+    await btn.trigger('click')
+    await flushPromises()
+    expect(w.get('.ah-msg.role-tool .ah-msg-text').classes()).not.toContain('is-collapsed')
+    expect(w.get('.ah-msg-expand').text()).toContain('hub.lg.detail.collapse')
+    w.unmount()
+  })
+
+  it('短工具输出不折叠也不出按钮（阈值以下不添噪音）', async () => {
+    const w = mountComponent(SessionLogsTab, {
+      usage: usageStub({
+        openedSession: ref(
+          openedWithMessages([{ role: 'tool', text: 'tool · ls · a.txt', ts: 1 }]),
+        ) as never,
+      }),
+    })
+    await flushPromises()
+    expect(w.find('.ah-msg-expand').exists()).toBe(false)
+    expect(w.find('.ah-msg-text').classes()).not.toContain('is-collapsed')
+    w.unmount()
+  })
+
+  // ------ pi 逐轮空助手消息（噪音气泡）不得进对话流 ------
+
+  it('正文空且五项 token 全零的助手行整条不渲染（pi 每轮都写的空消息）', async () => {
+    const zero = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0 }
+    const w = mountComponent(SessionLogsTab, {
+      usage: usageStub({
+        openedSession: ref(
+          openedWithMessages([
+            { role: 'user', text: '问题', ts: 1 },
+            { role: 'assistant', text: '', model: 'deepseek-v4-flash', tokens: zero, ts: 2 },
+            { role: 'assistant', text: '   ', model: 'deepseek-v4-flash', tokens: zero, ts: 3 },
+            { role: 'assistant', text: '真实回复', model: 'deepseek-v4-flash', tokens: { ...zero, output: 12 }, ts: 4 },
+          ]),
+        ) as never,
+      }),
+    })
+    await flushPromises()
+    // 空消息既不占行也不出 token 行；正常回复仍在（模型名只出现在它头上一次）
+    expect(w.findAll('.ah-msg')).toHaveLength(2)
+    expect(w.findAll('.ah-msg-model')).toHaveLength(1)
+    const metas = w.findAll('.ah-msg-meta')
+    expect(metas).toHaveLength(1)
+    expect(metas[0].text()).toContain('↓ 12')
+  })
+
+  it('零 token 行不出（“↑0 ↓0 ⚡0 +0” 只会让人以为统计坏了）', async () => {
+    const zero = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0 }
+    const w = mountComponent(SessionLogsTab, {
+      usage: usageStub({
+        openedSession: ref(
+          openedWithMessages([{ role: 'assistant', text: '有正文但零 token', tokens: zero, ts: 1 }]),
+        ) as never,
+      }),
+    })
+    await flushPromises()
+    // 行在（正文有信息），只是不出零 token 行
+    expect(w.findAll('.ah-msg')).toHaveLength(1)
+    expect(w.find('.ah-msg-text').text()).toBe('有正文但零 token')
+    expect(w.find('.ah-msg-meta').exists()).toBe(false)
+  })
+
+  it('反例：正文为空但 token 有量的助手行仍然渲染（不误删信息）', async () => {
+    const w = mountComponent(SessionLogsTab, {
+      usage: usageStub({
+        openedSession: ref(
+          openedWithMessages([
+            {
+              role: 'assistant',
+              text: '',
+              model: 'deepseek-v4-flash',
+              tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 340 },
+              ts: 1,
+            },
+          ]),
+        ) as never,
+      }),
+    })
+    await flushPromises()
+    expect(w.findAll('.ah-msg')).toHaveLength(1)
+    expect(w.get('.ah-msg-meta').text()).toContain('◈')
+  })
+
+  it('工具卡正文随 guest 上限走（1000 字符全文在 DOM，不做展示层截断）', async () => {
+    const out = 'o'.repeat(GUEST_TEXT_CAPS.toolOutput)
+    const w = mountComponent(SessionLogsTab, {
+      usage: usageStub({
+        openedSession: ref(
+          openedWithMessages([{ role: 'tool', text: `tool · bash · ${out}`, ts: 1 }]),
+        ) as never,
+      }),
+    })
+    await flushPromises()
+    const body = w.get('.ah-msg.role-tool .ah-msg-text')
+    expect(body.classes()).toContain('is-collapsed') // 超阈值默认收起
+    expect(body.text()).toHaveLength(GUEST_TEXT_CAPS.toolOutput) // 全文在 DOM
+    await w.get('.ah-msg-expand').trigger('click')
+    await flushPromises()
+    expect(w.get('.ah-msg.role-tool .ah-msg-text').classes()).not.toContain('is-collapsed')
+    expect(w.get('.ah-msg.role-tool .ah-msg-text').text()).toHaveLength(GUEST_TEXT_CAPS.toolOutput)
+  })
+
+  // ------ B4：解析层截断给「完整原文」可见路径 ------
+
+  it('达上限的正文提示截断并可一键跳到原始 JSONL', async () => {
+    const capped = 'z'.repeat(GUEST_TEXT_CAPS.message) + '…'
+    const w = mountComponent(SessionLogsTab, {
+      usage: usageStub({
+        openedSession: ref(
+          openedWithMessages([{ role: 'assistant', text: capped, ts: 1 }]),
+        ) as never,
+      }),
+    })
+    await flushPromises()
+    expect(w.get('[data-testid="lg-msg-truncated"]').text()).toContain('hub.lg.detail.truncated')
+    await w.get('.ah-msg-trunc-jump').trigger('click')
+    await flushPromises()
+    expect(w.text()).not.toContain('hub.lg.detail.expand')
+    w.unmount()
+  })
+
+  it('未达上限的等长正文不报截断（反例：不能只看长度）', async () => {
+    const exact = 'z'.repeat(GUEST_TEXT_CAPS.message)
+    const w = mountComponent(SessionLogsTab, {
+      usage: usageStub({
+        openedSession: ref(
+          openedWithMessages([
+            { role: 'assistant', text: exact, ts: 1 },
+            { role: 'assistant', text: '正常一句', ts: 2 },
+          ]),
+        ) as never,
+      }),
+    })
+    await flushPromises()
+    expect(w.findAll('[data-testid="lg-msg-truncated"]')).toHaveLength(0)
+    w.unmount()
+  })
+
+  it('切换会话后折叠态回到默认（上个会话展开的不带过来）', async () => {
+    const ts = 'x'.repeat(COLLAPSE_THRESHOLD_CHARS + 1)
+    const opened = ref<UsageSessionDetail | null>(null)
+    opened.value = openedWithMessages([{ role: 'assistant', text: ts, ts: 1 }])
+    const w = mountComponent(SessionLogsTab, {
+      usage: usageStub({ openedSession: opened as never }),
+    })
+    await flushPromises()
+    await w.get('.ah-msg-expand').trigger('click')
+    await flushPromises()
+    expect(w.get('.ah-msg-text').classes()).not.toContain('is-collapsed')
+    // 切到另一会话再切回：展开态被重置
+    opened.value = null
+    await flushPromises()
+    opened.value = openedWithMessages([{ role: 'assistant', text: ts, ts: 1 }])
+    await flushPromises()
+    expect(w.get('.ah-msg-text').classes()).toContain('is-collapsed')
     w.unmount()
   })
 

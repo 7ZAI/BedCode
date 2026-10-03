@@ -17,7 +17,7 @@ use serde_json::Value;
 
 /// codex 助手事件的工具/推理摘要上限（官方 `function_call_output` 逐字回传
 /// 命令输出，可达数万字符）
-const CODEX_TOOL_TEXT_CAP: usize = 400;
+const CODEX_TOOL_TEXT_CAP: usize = 1000;
 
 /// codex rollout JSONL 适配器：聚合 + 事件流（**预留骨架**）
 ///
@@ -102,14 +102,15 @@ pub(crate) fn parse_codex_session(content: &str) -> ParsedSession {
                                 session.title = Some(truncate_text(text.trim(), 120));
                             }
                             push_event(
-                                &mut session.events,
-                                &mut session.events_truncated,
+                                &mut session,
                                 NormalizedEvent {
                                     ts,
                                     role: ROLE_USER,
                                     text: truncate_text(text.trim(), 2000),
                                     model: None,
                                     tokens: None,
+                                    error: false,
+                                    tool_use_id: None,
                                 },
                             );
                         }
@@ -121,14 +122,15 @@ pub(crate) fn parse_codex_session(content: &str) -> ParsedSession {
                             .or_else(|| payload.get("text").and_then(|t| t.as_str()))
                         {
                             push_event(
-                                &mut session.events,
-                                &mut session.events_truncated,
+                                &mut session,
                                 NormalizedEvent {
                                     ts,
                                     role: ROLE_ASSISTANT,
                                     text: truncate_text(text.trim(), 2000),
                                     model: current_model.clone(),
                                     tokens: None,
+                                    error: false,
+                                    tool_use_id: None,
                                 },
                             );
                         }
@@ -150,8 +152,7 @@ pub(crate) fn parse_codex_session(content: &str) -> ParsedSession {
                             .or_else(|| payload.get("stdout").and_then(|o| o.as_str()))
                             .unwrap_or("");
                         push_event(
-                            &mut session.events,
-                            &mut session.events_truncated,
+                            &mut session,
                             NormalizedEvent {
                                 ts,
                                 role: ROLE_TOOL,
@@ -161,6 +162,8 @@ pub(crate) fn parse_codex_session(content: &str) -> ParsedSession {
                                 ),
                                 model: None,
                                 tokens: None,
+                                error: false,
+                                tool_use_id: None,
                             },
                         );
                     }
@@ -170,16 +173,17 @@ pub(crate) fn parse_codex_session(content: &str) -> ParsedSession {
             }
             // response_item 是回退面：event_msg 已有权威消息时它会被去重
             "response_item" => {
-                if let Some((role, text, model)) = codex_response_item_event(payload) {
+                if let Some((role, text, model, tool_use_id)) = codex_response_item_event(payload) {
                     push_event(
-                        &mut session.events,
-                        &mut session.events_truncated,
+                        &mut session,
                         NormalizedEvent {
                             ts,
                             role,
                             text,
                             model,
                             tokens: None,
+                            error: false,
+                            tool_use_id,
                         },
                     );
                 }
@@ -223,8 +227,15 @@ fn codex_last_token_usage(payload: &Value) -> Option<TokenUsage> {
         .then_some(usage)
 }
 
-/// codex `response_item.payload` → (role, text, model)；无正文返回 None
-fn codex_response_item_event(payload: &Value) -> Option<(&'static str, String, Option<String>)> {
+/// codex `response_item.payload` → (role, text, model, tool_use_id)；无正文返回 None
+fn codex_response_item_event(
+    payload: &Value,
+) -> Option<(&'static str, String, Option<String>, Option<String>)> {
+    let call_id = payload
+        .get("call_id")
+        .and_then(|c| c.as_str())
+        .filter(|c| !c.is_empty())
+        .map(|c| c.to_string());
     match payload.get("type").and_then(|t| t.as_str()).unwrap_or("") {
         "message" => {
             let role = match payload.get("role").and_then(|r| r.as_str()).unwrap_or("") {
@@ -234,7 +245,7 @@ fn codex_response_item_event(payload: &Value) -> Option<(&'static str, String, O
                 _ => return None,
             };
             let text = codex_content_text(payload.get("content"))?;
-            Some((role, truncate_text(text.trim(), 2000), None))
+            Some((role, truncate_text(text.trim(), 2000), None, None))
         }
         "function_call" | "custom_tool_call" => {
             let name = payload
@@ -254,6 +265,7 @@ fn codex_response_item_event(payload: &Value) -> Option<(&'static str, String, O
                     truncate_text(args.trim(), CODEX_TOOL_TEXT_CAP)
                 ),
                 None,
+                call_id,
             ))
         }
         "function_call_output" | "custom_tool_call_output" => {
@@ -265,6 +277,7 @@ fn codex_response_item_event(payload: &Value) -> Option<(&'static str, String, O
                     truncate_text(out.trim(), CODEX_TOOL_TEXT_CAP)
                 ),
                 None,
+                call_id,
             ))
         }
         // reasoning：加密密文不展示（渲染成乱码），summary 文本才有意义
@@ -277,6 +290,7 @@ fn codex_response_item_event(payload: &Value) -> Option<(&'static str, String, O
                     "reasoning · {}",
                     truncate_text(text.trim(), CODEX_TOOL_TEXT_CAP)
                 ),
+                None,
                 None,
             ))
         }

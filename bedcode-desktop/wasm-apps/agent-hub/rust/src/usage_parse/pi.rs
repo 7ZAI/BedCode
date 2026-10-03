@@ -5,7 +5,9 @@
 //! 文件以消息行兜底推进（id 缺省由调用方按文件名补足）。
 
 use super::claude::assistant_display_text;
-use super::common::{as_i64, extract_text, parse_line, push_event, truncate_text};
+use super::common::{
+    as_i64, extract_text, parse_line, push_event, tool_result_text, truncate_text,
+};
 use super::time::parse_iso8601_ms;
 use super::types::{NormalizedEvent, ParsedSession, TokenUsage};
 use super::{ROLE_ASSISTANT, ROLE_SYSTEM, ROLE_TOOL, ROLE_USER};
@@ -79,14 +81,15 @@ pub(crate) fn parse_pi_session(content: &str) -> ParsedSession {
                             session.cost_total = Some(cost);
                         }
                         push_event(
-                            &mut session.events,
-                            &mut session.events_truncated,
+                            &mut session,
                             NormalizedEvent {
                                 ts,
                                 role: ROLE_ASSISTANT,
                                 text: assistant_display_text(msg.get("content")),
                                 model: Some(model),
                                 tokens: has_usage.then_some(usage),
+                                error: false,
+                                tool_use_id: None,
                             },
                         );
                     }
@@ -97,14 +100,16 @@ pub(crate) fn parse_pi_session(content: &str) -> ParsedSession {
                                 session.title = Some(truncate_text(&text, 120));
                             }
                             push_event(
-                                &mut session.events,
-                                &mut session.events_truncated,
+                                &mut session,
                                 NormalizedEvent {
                                     ts,
                                     role: ROLE_USER,
-                                    text,
+                                    // A7 对称补齐：user 正文与 assistant 同口径截断
+                                    text: truncate_text(&text, 2000),
                                     model: None,
                                     tokens: None,
+                                    error: false,
+                                    tool_use_id: None,
                                 },
                             );
                         }
@@ -114,25 +119,31 @@ pub(crate) fn parse_pi_session(content: &str) -> ParsedSession {
                             .get("toolName")
                             .and_then(|n| n.as_str())
                             .unwrap_or("tool");
-                        let text = extract_text(msg.get("content").unwrap_or(&Value::Null))
-                            .unwrap_or_default();
+                        // A4 ③：非 text 块（图片/二进制）给占位而非静默丢弃
+                        let text = tool_result_text(msg.get("content").unwrap_or(&Value::Null));
                         let err = msg
                             .get("isError")
                             .and_then(|e| e.as_bool())
                             .unwrap_or(false);
+                        let tid = msg
+                            .get("toolCallId")
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("")
+                            .to_string();
                         push_event(
-                            &mut session.events,
-                            &mut session.events_truncated,
+                            &mut session,
                             NormalizedEvent {
                                 ts,
                                 role: ROLE_TOOL,
                                 text: format!(
                                     "{tool}{} · {}",
                                     if err { " (error)" } else { "" },
-                                    truncate_text(&text, 400)
+                                    truncate_text(&text, 1000)
                                 ),
                                 model: None,
                                 tokens: None,
+                                error: err,
+                                tool_use_id: (!tid.is_empty()).then_some(tid),
                             },
                         );
                     }
@@ -146,14 +157,15 @@ pub(crate) fn parse_pi_session(content: &str) -> ParsedSession {
                     .map(|m| format!("model_change · {m}"))
                     .unwrap_or_else(|| "model_change".to_string());
                 push_event(
-                    &mut session.events,
-                    &mut session.events_truncated,
+                    &mut session,
                     NormalizedEvent {
                         ts,
                         role: ROLE_SYSTEM,
                         text,
                         model: None,
                         tokens: None,
+                        error: false,
+                        tool_use_id: None,
                     },
                 );
             }
@@ -261,6 +273,97 @@ mod tests {
         let roles: Vec<&str> = s.events.iter().map(|e| e.role).collect();
         assert_eq!(roles, vec!["user", "tool"]);
         assert!(s.events[1].text.starts_with("bash ·"));
+        // A4：非错误结果不标记 error，toolCallId 保留为配对键
+        assert!(!s.events[1].error);
+        assert_eq!(s.events[1].tool_use_id.as_deref(), Some("c1"));
+    }
+
+    /// A1：pi assistant toolCall 块不再丢——事件文本含工具名与参数摘要
+    #[test]
+    fn pi_tool_call_blocks_shown_with_args() {
+        let content = format!(
+            "{}\n{}\n",
+            pi_session_header(),
+            json!({
+                "type": "message",
+                "timestamp": "2026-09-07T20:54:10.000Z",
+                "message": {
+                    "role": "assistant",
+                    "model": "deepseek-v4-flash",
+                    "content": [
+                        { "type": "thinking", "thinking": "看看文件在哪里" },
+                        { "type": "toolCall", "id": "call_aa", "name": "read",
+                          "arguments": { "path": "bedcode-mobile/docs/code-map.md" } }
+                    ]
+                }
+            })
+            .to_string()
+        );
+        let s = parse_pi_session(&content);
+        assert_eq!(s.events.len(), 1);
+        assert!(
+            s.events[0].text.contains("tool_use · read"),
+            "toolCall 应出现（A1 丢失修复）: {}",
+            s.events[0].text
+        );
+        assert!(
+            s.events[0].text.contains("code-map.md"),
+            "参数摘要应可见: {}",
+            s.events[0].text
+        );
+    }
+
+    /// A4①：pi toolResult isError=true → error 标记；图片块占位不丢
+    #[test]
+    fn pi_tool_result_error_flagged_and_image_placeholder() {
+        let content = format!(
+            "{}\n{}\n",
+            pi_session_header(),
+            json!({
+                "type": "message",
+                "timestamp": "2026-09-07T20:54:30.000Z",
+                "message": {
+                    "role": "toolResult",
+                    "toolName": "bash",
+                    "toolCallId": "c2",
+                    "isError": true,
+                    "content": [
+                        { "type": "text", "text": "command not found" },
+                        { "type": "image", "format": "png", "source": "data:image/png;base64,AAA=" }
+                    ]
+                }
+            })
+            .to_string()
+        );
+        let s = parse_pi_session(&content);
+        assert_eq!(s.events.len(), 1);
+        assert!(s.events[0].error, "isError=true 应标记 error");
+        assert!(
+            s.events[0].text.contains("[non-text:image]"),
+            "非 text 块占位: {}",
+            s.events[0].text
+        );
+        assert!(s.events[0].text.contains("command not found"));
+    }
+
+    /// A7 对称：pi user 超长正文截断（与 claude 同口径）
+    #[test]
+    fn pi_long_user_text_truncated() {
+        let long = "很".repeat(2500);
+        let content = format!(
+            "{}\n{}\n",
+            pi_session_header(),
+            json!({
+                "type": "message",
+                "timestamp": "2026-09-07T20:54:10.000Z",
+                "message": { "role": "user", "content": { "type": "text", "text": long } }
+            })
+            .to_string()
+        );
+        let s = parse_pi_session(&content);
+        assert_eq!(s.events.len(), 1);
+        assert_eq!(s.events[0].text.chars().count(), 2000 + 1);
+        assert!(s.events[0].text.ends_with('…'));
     }
 
     #[test]

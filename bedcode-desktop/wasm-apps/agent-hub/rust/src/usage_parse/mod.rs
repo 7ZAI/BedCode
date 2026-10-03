@@ -59,5 +59,12 @@ pub(crate) const ROLE_SYSTEM: &str = "system";
 
 /// 事件流上限：防御异常巨大的会话文件拖垮 WATM 边界序列化，超出截断
 pub(crate) const MAX_EVENTS: usize = 5000;
+/// 附件事件（读过/注入的文件、工具清单、提醒）的**独立**上限
+///
+/// 附件行在长会话里极频繁（实测单会话 115 条），且几乎不带信息量。若与
+/// user / assistant / tool 共用同一个 5000 额度，接近上限的会话里附件噪音会把
+/// **后续实质消息**挤出日志视图——而用户看不出丢了什么（日志完整性回退）。
+/// 独立计数后实质消息始终能拿满 `MAX_EVENTS`，整体仍有界（两者之和）。
+pub(crate) const MAX_ATTACHMENT_EVENTS: usize = 500;
 /// 单文件解析上限（字节）：超过视为异常数据跳过（正常会话 < 30MB）
 pub(crate) const MAX_FILE_BYTES: usize = 64 * 1024 * 1024;

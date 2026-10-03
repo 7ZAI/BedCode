@@ -402,6 +402,17 @@ export type MessageSchema = {
   'hub.lg.detail.back': string
   'hub.lg.detail.tabChat': string
   'hub.lg.detail.tabRaw': string
+  'hub.lg.detail.expand': string
+  'hub.lg.detail.collapse': string
+  /** 工具卡身展开（与「展开全文」区分：展开的是参数 / 输出） */
+  'hub.lg.detail.expandDetail': string
+  /** guest 上限截断提示（票 B4 的可做部分） */
+  'hub.lg.detail.truncated': string
+  'hub.lg.detail.viewRaw': string
+  /** guest 非文本块占位 token 的本地化（带块类型；类型名由 guest 给，不翻译） */
+  'hub.lg.nonTextBlock': string
+  /** 同上，但块类型缺失 / 形态不符 guest 校验 */
+  'hub.lg.nonTextBlockUnknown': string
   'hub.lg.noSource': string
   'hub.lg.eventsTruncated': string
   'hub.lg.rawTruncated': string

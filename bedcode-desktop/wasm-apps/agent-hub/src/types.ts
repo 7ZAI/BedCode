@@ -546,6 +546,10 @@ export interface NormalizedEventView {
   role: 'user' | 'assistant' | 'tool' | 'system'
   text: string
   model: string | null
+  /** 工具事件为 true（claude tool_result.is_error / pi toolResult.isError）；非工具事件缺省 */
+  error?: boolean
+  /** 工具事件携带的调用 id，调用与结果配对的键；非工具事件缺省 */
+  toolUseId?: string | null
   tokens: {
     input: number
     output: number

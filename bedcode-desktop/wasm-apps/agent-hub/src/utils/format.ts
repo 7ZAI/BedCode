@@ -7,6 +7,175 @@
  */
 import type { StatsMetric } from '../types'
 
+/**
+ * 会话聊天视图「模型输出折叠」阈值（字符）。
+ *
+ * 超过才提供展开控件且默认**收起**（短消息 clamp 剪不到，按钮是噪音）。
+ * 设计依据：ui-ux-pro-max ux-guidelines「Content/Truncation: Truncate with
+ * ellipsis and expand option」；预览行为 3 行（取 line-clamp-2 示例语义、
+ * 略放宽一行为模型输出的结构化正文留可读预览，仍带省略号 + 展开入口）。
+ */
+export const COLLAPSE_THRESHOLD_CHARS = 500
+
+/**
+ * 工具卡「卡身」折叠阈值（字符）。
+ *
+ * 工具卡默认收起（对照 zcode/qoder/trae），阈值取 guest 工具上限 1000 的四成：
+ * 低于它直接铺开（短命令 / 单行结果一眼看完），高于它收起并给展开控件——
+ * 参数 / 输出（命令、长栈、文件内容）点开才看得完，铺开会淹没对话流。
+ * **不做字符级截断**：阈值只决定是否给展开控件，DOM 里始终是 guest 给的全文。
+ */
+export const COLLAPSE_THRESHOLD_TOOL_CHARS = 400
+
+/**
+ * guest 解析层的截断上限矩阵（展示层镜像，**只用于「疑似截断」提示**）
+ *
+ * 单一事实源在 guest `usage_parse/*.rs` 的 `truncate_text(_, cap)` 调用点：
+ * - 消息正文（user / assistant）2000——四适配器一致
+ * - 工具输出 / 结果 / 参数 1000（codex、opencode、claude `tool_result`、pi
+ *   `toolResult`；**2026-10-03 从 400 提上来**——400 字符点开也读不完命令输出）
+ * - 工具参数摘要 / attachment 名称（claude `TOOL_ARGS_CAP`）120
+ * - 会话标题 120（不进事件流，本层用不到）
+ * 另有事件流条数上限 `MAX_EVENTS = 5000`（已有独立的「事件流过长」横幅）。
+ *
+ * **只读镜像**：上限在 guest 变动时本层最多漏报一次（提示语刻意用「已达上限」
+ * 的建议口吻），不会谎报——真正的信号是 guest 截断时补的那个省略号。
+ */
+export const GUEST_TEXT_CAPS = {
+  message: 2000,
+  toolOutput: 1000,
+  toolArgs: 120,
+  title: 120,
+} as const
+
+/**
+ * 「自然长句恰好以省略号收尾」的排除阀（= guest 最小上限）
+ *
+ * 只看「以 `…` 收尾」会把中文里常见的「等等…」误报；把长度条件压到
+ * **最小**上限（120）而不是按角色取各自上限，是因为卡内可能有嵌套上限
+ * （`tool_use · 名称 · 参数摘要120` 整条远不到工具行的 400），且提示语是
+ * 建议式的——宁可多提示一次，也不让真截断从提示里漏掉。
+ */
+export const TRUNCATION_MIN_CAP = Math.min(...Object.values(GUEST_TEXT_CAPS))
+
+/**
+ * 事件文本是否疑似「被 guest 上限截断」
+ *
+ * guest 的 `truncate_text` 只在真截断时补一个省略号收尾，因此**末字符是省略号
+ * 就是必要信号**；长度条件只用来滤掉自然收尾的省略号。判定按角色分流：
+ * - **工具行**只看**最后一个 ` · ` 段**：被截的永远是卡身那段，按整条长度判会
+ *   连带误判（参数摘要 120 上限的行整条可能只有 150 字）。
+ * - **非工具行**（user / assistant / system 正文）回退**整条长度**判：正文里出现
+ *   ` · ` 是常态（“配置 · 超时 · 重试”式行文），只看末段会把真截断整条漏报。
+ *
+ * 展示层据此给出「完整原文见原始 JSONL」的可见路径（票 B4 的可做部分）。
+ */
+export function looksTruncated(text: string): boolean {
+  if (!text.endsWith('…')) return false
+  const parts = text.split(' · ')
+  // 无分隔段：单段文本没有「头/身」结构，整条判
+  if (parts.length === 1) return parts[0].length > TRUNCATION_MIN_CAP
+  // 首段是工具类型前缀才走「末段」判，其余（正文里带 · 的行文）整条判
+  const isToolRow = TOOL_KINDS.has(parts[0].trim())
+  return (isToolRow ? parts[parts.length - 1].length : text.length) > TRUNCATION_MIN_CAP
+}
+
+/** 工具卡的展示切片：卡头（类型 · 名称）+ 卡身（参数 / 输出）+ 失败标记 */
+export interface ToolCard {
+  /** 卡头文本；空表示整条都属卡身 */
+  head: string
+  /** 卡身文本；空表示这条只有头（`tool_use · Bash`） */
+  body: string
+  /** 失败标记：文本尾部的 `(error)` 约定（pi 直接给；claude 的权威来源是 wire `error`） */
+  isError: boolean
+}
+
+/** 四适配器写进 tool 事件的「类型前缀」字面量（见各 `usage_parse/*.rs`） */
+const TOOL_KINDS = new Set(['tool', 'tool_use', 'tool_result'])
+
+/**
+ * guest 非文本块占位 token 的展示层镜像
+ *
+ * 真源：`wasm-apps/agent-hub/rust/src/usage_parse/common.rs` 的
+ * `NON_TEXT_TOKEN_PREFIX` / `NON_TEXT_TOKEN_GENERIC` 与 `non_text_placeholder()`
+ * （kind 严格校验 `[A-Za-z0-9_.-]{1,40}`，不合规退化为无 kind 形态）。
+ *
+ * guest 只吐机器 token 是因为 wire 上没有 i18n 通道（裸字符串）——文案必须在前端
+ * 语言包里查；此处是正则镜像，两侧任一改动需同步（guest 侧有单测钉形状）。
+ */
+const NON_TEXT_TOKEN_RE = /\[non-text(?::([A-Za-z0-9_.-]{1,40}))?\]/g
+
+/** i18n 取值器签名（与 `context.i18n.t` 同形；传进来以保持本文件无 i18n 依赖） */
+type Translate = (key: string, params?: Record<string, unknown>) => string
+
+/**
+ * 把 guest 的非文本块占位 token 换成本地化文案
+ *
+ * - 带 kind → `hub.lg.nonTextBlock`（kind 作参数）
+ * - 无 kind / token 形态不符 → `hub.lg.nonTextBlockUnknown`
+ * - 无 token 时原样返回（快速路径：不碰正文）
+ *
+ * **为什么整组替换而不是「包含即替换」**：工具输出是不可信文本，若 agent 输出里恰好
+ * 出现 `[non-text:x]` 字面量，只有「整组匹配」才不会被误当占位改写——宁可漏报，
+ * 不可篡改真实输出。
+ */
+function renderNonTextBlocks(text: string, t: Translate): string {
+  if (!text.includes('[non-text')) return text
+  return text.replace(
+    NON_TEXT_TOKEN_RE,
+    (_m, kind: string | undefined) =>
+      kind ? t('hub.lg.nonTextBlock', { kind }) : t('hub.lg.nonTextBlockUnknown'),
+  )
+}
+
+/** 卡身占位本地化（t 缺省时不做任何改写，纯文本工具照旧） */
+function localize(body: string, t?: Translate): string {
+  return t ? renderNonTextBlocks(body, t) : body
+}
+
+/**
+ * 工具事件文本切成「卡头 + 卡身」（卡身内的非文本块占位按传入的 `t` 本地化）
+ *
+ * guest 把工具行拼成一条文本，以 ` · ` 分隔；各形态的卡头长度不同：
+ * - claude `tool_use · 名称` / `tool_use · 名称 · 参数摘要`（有参数才有第三段）
+ * - claude `tool_result · 输出` 或配对后 `tool_result · 名称 · 输出`
+ * - codex / opencode `tool · 名称 (状态) · 输出`；codex `tool_result · 输出`
+ * - pi `bash (error) · 输出`（无类型前缀，首段即卡头）
+ *
+ * 未知形态（首段不是已知类型、也没有分隔符）整条落卡身，不凭空造头、
+ * 不切碎正文：`tool_result` 有第三段时按「带名称」解读是**启发式**——输出正文
+ * 自身含 ` · ` 时会把首段词挪进卡头，但内容一段不少。
+ */
+export function splitToolText(text: string, t?: Translate): ToolCard {
+  const segments = text.split(' · ')
+  if (segments.length === 1) {
+    return { head: '', body: localize(text, t), isError: hasErrorMark(text) }
+  }
+  const kind = segments[0].trim()
+  const tail = segments.slice(1)
+  let head: string
+  let body: string
+  if (!TOOL_KINDS.has(kind)) {
+    // pi 形态：首段就是工具名（可带 (error) / (status)）
+    head = segments[0]
+    body = tail.join(' · ')
+  } else if (kind === 'tool_result') {
+    // 有第三段 = 配对后带名称的形态（`tool_result · Bash · 输出`）
+    head = tail.length >= 2 ? segments.slice(0, 2).join(' · ') : kind
+    body = (tail.length >= 2 ? tail.slice(1) : tail).join(' · ')
+  } else {
+    // `tool · 名称 (状态)` / `tool_use · 名称`：头两段归卡头，余下归卡身
+    head = segments.slice(0, 2).join(' · ')
+    body = tail.slice(1).join(' · ')
+  }
+  return { head, body: localize(body, t), isError: hasErrorMark(head) }
+}
+
+/** guest 失败标记约定：文本尾部的 `(error)`（大小写不敏感） */
+function hasErrorMark(s: string): boolean {
+  return /\(error\)\s*$/i.test(s.trim())
+}
+
 /** token / 大数字量缩写：0–999 原样，k / M / G 三级，1 位小数 */
 export function formatTokens(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(n)) return '—'

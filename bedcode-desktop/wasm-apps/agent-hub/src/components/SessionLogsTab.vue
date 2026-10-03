@@ -4,7 +4,7 @@
  *
  * 一级页：日志来源（折叠区：内置/自定义目录 + 扫描 + 添加目录）→ 多条件查询
  * （Agent / 关键词 / 时间范围）→ 分页表格（点击行进二级详情）。
- * 二级页：会话详情头卡 + 页签切换（聊天记录 / 原始 JSONL），聊天为只读
+ * 二级页：会话详情头卡 + 页签切换（任务记录 / 原始 JSONL），任务记录为只读
  * 对话样式（类 zcode/trae，无输入框）。
  *
  * 数据流：列表分页与统计明细共用 useUsage 同一查询域；打开会话经
@@ -18,11 +18,16 @@ import type { NormalizedEventView, UsageSource } from '../types'
 import type { UseUsageReturn } from '../composables/useUsage'
 import {
   abbreviateProject,
+  COLLAPSE_THRESHOLD_CHARS,
+  COLLAPSE_THRESHOLD_TOOL_CHARS,
   formatDuration,
   formatEventTime,
   formatSessionTime,
   formatTokens,
+  looksTruncated,
+  splitToolText,
 } from '../utils/format'
+import { markdownPlainPreview, renderMarkdown } from '../utils/markdown'
 import { suggestSourceName, isPathRegistered } from '../utils/sources'
 import AgentIcon from './AgentIcon.vue'
 
@@ -61,12 +66,9 @@ const totalPages = computed(() => usage.logTotalPages.value)
 const page = computed(() => usage.logPage.value)
 const loadingSessions = computed(() => usage.logLoading.value)
 
-/** 当前打开会话（二级详情）；打开会话重置页签 */
+/** 当前打开会话（二级详情）；页签与折叠展开态在打开会话时重置（见下方折叠区块） */
 const opened = computed(() => usage.openedSession.value)
 const detailTab = ref<'chat' | 'raw'>('chat')
-watch(opened, () => {
-  detailTab.value = 'chat'
-})
 
 // ==================== 来源区（默认折叠） ====================
 const sourcesOpen = ref(false)
@@ -352,6 +354,95 @@ function tokenMeta(e: NormalizedEventView): string {
   ]
     .filter(Boolean)
     .join(' · ')
+}
+
+// ==================== 聊天行模型（折叠 / 工具卡 / markdown / 截断提示） ====================
+/** 已展开的事件下标（空 = 全部收起，即默认折叠态） */
+// 展开态行号集合：用 Set 而非数组 —— chatRows 是整体 computed，切换任一行会让
+// 全部行重算，数组的 includes()/filter() 在 MAX_EVENTS=5000 量级退化为 O(n²)
+const expandedIndexes = ref<Set<number>>(new Set())
+
+watch(opened, () => {
+  detailTab.value = 'chat'
+  expandedIndexes.value = new Set()
+})
+
+/**
+ * 聊天视图的行模型（一次算全：工具卡切片 + 折叠阈值 + markdown 正文 + 截断提示）
+ *
+ * 四条展示规则都落在这里，模板只做渲染：
+ * - **折叠**：助手正文按 500 字、工具卡身按 400 字（工具输出上限 1000，见 format.ts）；
+ *   超阈值默认收起，切换会话由上方 watch 重置。
+ * - **markdown**：只渲染助手正文（用户行是「我说的话」、工具行是命令原文，都不该排版）。
+ *   折叠态给剥标记的纯文本——CSS line-clamp 只对纯文本可靠（块级子元素上
+ *   `-webkit-line-clamp` 会数不准行），展开态才产出结构化 HTML。
+ * - **截断提示**：guest 在上限处补省略号收尾，这里据此提示「完整原文见原始 JSONL」。
+ * - **空泡丢弃**：pi 每一轮都会写一条 `content: []` 的空助手消息（带空 usage 对象），
+ *   实测单会话 58/83 条——渲染出来就是一串「助手 / 模型 / ↑0 ↓0 ⚡0 +0」的噪音气泡。
+ *   正文空且五项 token 全为 0 的助手行整条不渲染；零 token 行本身也不再出
+ *   （token 明细只在真有量时才有信息，“0 0 0 0” 只会让人以为统计坏了）。
+ */
+const chatRows = computed(() => {
+  const events = opened.value?.events ?? []
+  return events
+    .map((e, i) => {
+      // 传入 t：工具卡身里的非文本块占位 token（`[non-text:image]`）按当前语言本地化
+      const card = e.role === 'tool' ? splitToolText(e.text, t) : null
+      const collapsible =
+        e.role === 'assistant'
+          ? e.text.length > COLLAPSE_THRESHOLD_CHARS
+          : card
+            ? card.body.length > COLLAPSE_THRESHOLD_TOOL_CHARS
+            : false
+      const collapsed = collapsible && !expandedIndexes.value.has(i)
+      const isMd = e.role === 'assistant'
+      const bodyText = isMd
+        ? collapsed
+          ? markdownPlainPreview(e.text)
+          : renderMarkdown(e.text)
+        : card
+          ? card.body
+          : e.text
+      const truncated = looksTruncated(e.text)
+      const tokens = e.tokens
+      const hasTokens =
+        !!tokens &&
+        (tokens.input + tokens.output + tokens.cacheRead + tokens.cacheWrite + tokens.reasoning) > 0
+      // 行存亡只看**原始文本 + token**：折叠预览是展示派生物，仅由分隔线 / 表格分隔行
+      // 等块级构造组成的长正文剥完标记会是空串，拿它判空会把整条实质消息丢掉
+      const empty = isMd && !e.text.trim() && !hasTokens
+      return {
+        e,
+        i,
+        card,
+        collapsible,
+        collapsed,
+        isMd,
+        // 卡头为空（`tool_use · Bash` 已在头行）或正文为空时整段不渲染
+        bodyText,
+        truncated,
+        hasTokens,
+        hasBody: !!bodyText || collapsible || hasTokens || truncated,
+        empty,
+      }
+    })
+    .filter((row) => !row.empty)
+})
+
+function msgId(i: number): string {
+  return `lg-msg-text-${i}`
+}
+
+function toggleExpand(i: number) {
+  // 整体替换（而非原地 mutate）：Set 在 Vue 的响应式代理里 mutate 也能触发，
+  // 但重建一次表达「本行折叠态集合」的完整快照，读代码时无歧义
+  const next = new Set(expandedIndexes.value)
+  if (next.has(i)) {
+    next.delete(i)
+  } else {
+    next.add(i)
+  }
+  expandedIndexes.value = next
 }
 </script>
 
@@ -723,27 +814,72 @@ function tokenMeta(e: NormalizedEventView): string {
           <div v-if="opened.rawTruncated" class="ah-lg-warn">{{ t('hub.lg.rawTruncated') }}</div>
         </div>
 
-        <!-- 聊天记录（只读对话样式，无输入框） -->
+        <!-- 任务记录（只读对话样式，无输入框） -->
         <div v-if="detailTab === 'chat'" class="ah-card ah-lg-events">
           <div v-if="opened.events.length === 0" class="ah-st-empty">{{ t('hub.lg.noEvents') }}</div>
           <div v-else class="ah-chat">
             <div class="ah-chat-scroll">
               <div
-                v-for="(e, i) in opened.events"
-                :key="i"
+                v-for="row in chatRows"
+                :key="row.i"
                 class="ah-msg"
-                :class="`role-${e.role}`"
+                :class="`role-${row.e.role}`"
               >
                 <div class="ah-msg-head">
                   <span class="ah-msg-dot" aria-hidden="true"></span>
-                  <span class="ah-msg-role">{{ t(`hub.lg.role.${e.role}`) }}</span>
-                  <span v-if="e.model" class="ah-msg-model ah-mono">{{ e.model }}</span>
-                  <span class="ah-msg-time ah-mono">{{ formatEventTime(e.ts) }}</span>
+                  <span class="ah-msg-role">{{ t(`hub.lg.role.${row.e.role}`) }}</span>
+                  <!-- 工具卡头：类型 · 名称（无头形态时整条都落进卡身） -->
+                  <span v-if="row.card && row.card.head" class="ah-msg-tool-head ah-mono">
+                    {{ row.card.head }}
+                  </span>
+                  <span v-if="row.e.model" class="ah-msg-model ah-mono">{{ row.e.model }}</span>
+                  <span class="ah-msg-time ah-mono">{{ formatEventTime(row.e.ts) }}</span>
                 </div>
-                <div class="ah-msg-body">
-                  <div class="ah-msg-text">{{ e.text }}</div>
-                  <div v-if="e.tokens" class="ah-msg-meta ah-mono">
-                    <span>{{ tokenMeta(e) }}</span>
+                <div
+                  v-if="row.hasBody"
+                  class="ah-msg-body"
+                  :class="{ 'is-error': row.card?.isError || row.e.error }"
+                >
+                  <!-- 助手正文：markdown 结构化渲染（折叠态是剥标记的纯文本预览） -->
+                  <div
+                    v-if="row.isMd && row.bodyText"
+                    :id="msgId(row.i)"
+                    class="ah-msg-text ah-md"
+                    :class="{ 'is-collapsed': row.collapsed }"
+                    data-testid="lg-msg-md"
+                    v-html="row.bodyText"
+                  ></div>
+                  <!-- 工具卡身 / 用户 / 系统：纯文本（命令原文不该排版） -->
+                  <div
+                    v-else-if="row.bodyText"
+                    :id="msgId(row.i)"
+                    class="ah-msg-text"
+                    :class="{ 'is-collapsed': row.collapsed }"
+                  >{{ row.bodyText }}</div>
+                  <!-- 模型输出 / 工具卡身折叠：超阈值默认收起，点击展开/收起 -->
+                  <button
+                    v-if="row.collapsible"
+                    type="button"
+                    class="ah-msg-expand"
+                    :aria-expanded="!row.collapsed"
+                    :aria-controls="msgId(row.i)"
+                    @click="toggleExpand(row.i)"
+                  >
+                    {{ row.collapsed
+                      ? row.card
+                        ? t('hub.lg.detail.expandDetail')
+                        : t('hub.lg.detail.expand')
+                      : t('hub.lg.detail.collapse') }}
+                  </button>
+                  <!-- guest 上限截断：给一个看得见的完整原文路径（票 B4 可做部分） -->
+                  <div v-if="row.truncated" class="ah-msg-trunc" data-testid="lg-msg-truncated">
+                    <span>{{ t('hub.lg.detail.truncated') }}</span>
+                    <button type="button" class="ah-msg-trunc-jump" @click="detailTab = 'raw'">
+                      {{ t('hub.lg.detail.viewRaw') }}
+                    </button>
+                  </div>
+                  <div v-if="row.hasTokens" class="ah-msg-meta ah-mono">
+                    <span>{{ tokenMeta(row.e) }}</span>
                   </div>
                 </div>
               </div>

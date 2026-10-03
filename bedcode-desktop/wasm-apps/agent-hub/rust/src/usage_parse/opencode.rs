@@ -14,7 +14,7 @@ use serde_json::Value;
 
 /// 单条工具事件的展示文本上限（opencode `part.data` 的 `state.output` 可达
 /// 数十 KB——整段塞进事件流会撑爆 WATM 边界序列化）
-const OPENCODE_TOOL_TEXT_CAP: usize = 400;
+const OPENCODE_TOOL_TEXT_CAP: usize = 1000;
 
 /// opencode `session` 表行 → 归一会话（聚合层，与 JSONL 适配器同构）
 ///
@@ -116,8 +116,8 @@ fn opencode_model_name(raw: Option<&Value>) -> String {
 /// - `t_*` 合成列仅在 `tokens` 块存在时有值（`json_extract` 对缺失路径返回
 ///   NULL）——user 消息不带 token，故 user 事件恒 `tokens: None`。
 pub(crate) fn parse_opencode_events(rows: &[Value]) -> Vec<NormalizedEvent> {
-    let mut events: Vec<NormalizedEvent> = Vec::new();
-    let mut truncated = false;
+    // opencode 无附件事件：用一个只装实质事件的临时 session 复用统一的入流上限
+    let mut session = ParsedSession::default();
     let mut i = 0usize;
     while i < rows.len() {
         let mid = rows[i].get("mid").and_then(|v| v.as_str()).unwrap_or("");
@@ -193,8 +193,7 @@ pub(crate) fn parse_opencode_events(rows: &[Value]) -> Vec<NormalizedEvent> {
             _ => (ROLE_SYSTEM, false),
         };
         push_event(
-            &mut events,
-            &mut truncated,
+            &mut session,
             NormalizedEvent {
                 ts: head.get("mts").and_then(|v| v.as_i64()),
                 role: event_role,
@@ -208,11 +207,13 @@ pub(crate) fn parse_opencode_events(rows: &[Value]) -> Vec<NormalizedEvent> {
                     None
                 },
                 tokens: if keep_tokens { tokens } else { None },
+                error: false,
+                tool_use_id: None,
             },
         );
         i = j;
     }
-    events
+    session.events
 }
 
 /// opencode 联表行的 `t_*` 合成列 → 归一 token 明细；全为 NULL 时返回 None

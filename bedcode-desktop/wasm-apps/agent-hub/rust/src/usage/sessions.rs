@@ -225,6 +225,8 @@ fn event_to_json(e: &NormalizedEvent) -> Value {
         "role": e.role,
         "text": e.text,
         "model": e.model,
+        "error": e.error,
+        "toolUseId": e.tool_use_id,
         "tokens": e.tokens.map(|t| json!({
             "input": t.input, "output": t.output, "cacheRead": t.cache_read,
             "cacheWrite": t.cache_write, "reasoning": t.reasoning,
@@ -267,7 +269,7 @@ mod tests {
         );
     }
 
-    /// 事件 → wire 形状：token 明细 camelCase、ts 透传
+    /// 事件 → wire 形状：token 明细 camelCase、ts 透传、A4 新增 error/toolUseId
     #[test]
     fn event_wire_shape() {
         let e = NormalizedEvent {
@@ -282,18 +284,26 @@ mod tests {
                 cache_write: 4,
                 reasoning: 5,
             }),
+            error: true,
+            tool_use_id: Some("call_1".to_string()),
         };
         let v = event_to_json(&e);
         assert_eq!(v["role"], "assistant");
         assert_eq!(v["tokens"]["cacheRead"], 3);
         assert_eq!(v["tokens"]["reasoning"], 5);
+        assert_eq!(v["error"], true);
+        assert_eq!(v["toolUseId"], "call_1");
         let no_tokens = event_to_json(&NormalizedEvent {
             ts: None,
             role: "user",
             text: "t".to_string(),
             model: None,
             tokens: None,
+            error: false,
+            tool_use_id: None,
         });
         assert!(no_tokens["tokens"].is_null());
+        assert_eq!(no_tokens["error"], false);
+        assert!(no_tokens["toolUseId"].is_null());
     }
 }
