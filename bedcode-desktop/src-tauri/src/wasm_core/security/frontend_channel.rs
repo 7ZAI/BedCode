@@ -41,12 +41,24 @@ const CREDENTIAL_BYTES: usize = 32;
 /// 一次前端页面加载内有效的凭证集合（按 webview label 分区）
 #[derive(Default)]
 pub struct FrontendChannelRegistry {
-    /// webview label → 该窗口当前页面加载的 loader 会话密钥（缺失 = 尚未签发，等待其 bootstrap 取用）
-    loader_sessions: Mutex<HashMap<String, String>>,
-    /// webview label → (通道令牌 → 插件 id)（令牌决定身份）
-    tokens: Mutex<HashMap<String, HashMap<String, String>>>,
-    /// (webview label, 插件 id) → 令牌（同域覆盖签发时回收旧令牌用）
-    plugin_tokens: Mutex<HashMap<(String, String), String>>,
+    /// webview label → 该窗口的凭证域（loader 密钥 + 令牌表）。
+    ///
+    /// **单一把锁**建模整个凭证域（2026-10-03，S-02）：早先拆成三把独立
+    /// `Mutex<HashMap>` 会让 `issue_token` 的「校验 loader 会话 → 写入令牌」
+    /// 跨锁非原子（校验通过后 `reset()` 清域、随后过期凭据被插回 → 已过期的
+    /// 通道令牌以陈旧身份存活）。合并后校验+写入在同一临界区，其它方法亦然。
+    domains: Mutex<HashMap<String, WebviewDomain>>,
+}
+
+/// 单 webview 的凭证域：loader 会话密钥 + 令牌双向表
+#[derive(Default)]
+struct WebviewDomain {
+    /// 该窗口当前页面加载的 loader 会话密钥（None = 尚未签发，等待其 bootstrap 取用）
+    loader_session: Option<String>,
+    /// 通道令牌 → 插件 id（`resolve` 主查表，令牌决定身份）
+    tokens: HashMap<String, String>,
+    /// 插件 id → 通道令牌（同域覆盖签发时回收旧令牌用）
+    plugin_token: HashMap<String, String>,
 }
 
 /// 凭证解析出的身份
@@ -69,23 +81,10 @@ impl FrontendChannelRegistry {
     /// 需能重新取得宿主面凭证）；**其它 webview 的域不受影响**——这是多窗口互踩修复的关键：
     /// 终端窗口加载不再回收主窗口的凭证。
     pub fn reset(&self, webview_label: &str) -> usize {
-        let had_session = self
-            .loader_sessions
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(webview_label)
-            .is_some();
-        let revoked = self
-            .tokens
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(webview_label)
-            .map(|domain| domain.len())
-            .unwrap_or(0);
-        self.plugin_tokens
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .retain(|(label, _), _| label != webview_label);
+        let mut domains = self.domains.lock().unwrap_or_else(|e| e.into_inner());
+        let removed = domains.remove(webview_label);
+        let had_session = removed.as_ref().map(|d| d.loader_session.is_some()).unwrap_or(false);
+        let revoked = removed.map(|d| d.tokens.len()).unwrap_or(0);
         tracing::debug!(
             webview = %webview_label,
             had_loader_session = had_session,
@@ -97,15 +96,16 @@ impl FrontendChannelRegistry {
 
     /// 签发某 webview 的 loader 会话密钥（宿主前端 bootstrap；**域内首个调用者生效**）
     pub fn issue_loader_session(&self, webview_label: &str) -> crate::Result<String> {
-        let mut sessions = self.loader_sessions.lock().unwrap_or_else(|e| e.into_inner());
-        if sessions.contains_key(webview_label) {
+        let mut domains = self.domains.lock().unwrap_or_else(|e| e.into_inner());
+        let domain = domains.entry(webview_label.to_string()).or_default();
+        if domain.loader_session.is_some() {
             // 不返回既有密钥：重复取用只可能是插件前端在事后尝试自取
             return Err(AppError::Plugin(
                 "frontend loader session already issued for this page load".to_string(),
             ));
         }
         let credential = generate_credential();
-        sessions.insert(webview_label.to_string(), credential.clone());
+        domain.loader_session = Some(credential.clone());
         tracing::info!(
             webview = %webview_label,
             "[PluginChannel] 前端 loader 会话密钥已签发（宿主面凭证）"
@@ -115,44 +115,32 @@ impl FrontendChannelRegistry {
 
     /// 校验某 webview 的 loader 会话密钥
     pub fn verify_loader_session(&self, webview_label: &str, candidate: &str) -> bool {
-        let sessions = self.loader_sessions.lock().unwrap_or_else(|e| e.into_inner());
+        let domains = self.domains.lock().unwrap_or_else(|e| e.into_inner());
         matches!(
-            sessions.get(webview_label).map(String::as_str),
+            domains.get(webview_label).and_then(|d| d.loader_session.as_deref()),
             Some(current) if current == candidate
         )
     }
 
     /// 为某 webview 的已激活插件签发通道令牌（覆盖同域旧令牌并回收）
+    ///
+    /// **校验与登记同临界区**（S-02）：loader 会话校验通过到令牌写入之间
+    /// 不再有 `reset()` / `revoke_plugin()` 插缝——夹缝期清掉的域不会被
+    /// 过期令牌重新填满。
     pub fn issue_token(&self, webview_label: &str, loader_session: &str, plugin_id: &str) -> crate::Result<String> {
-        if !self.verify_loader_session(webview_label, loader_session) {
+        let mut domains = self.domains.lock().unwrap_or_else(|e| e.into_inner());
+        let domain = domains.entry(webview_label.to_string()).or_default();
+        if domain.loader_session.as_deref() != Some(loader_session) {
             return Err(AppError::Plugin(
                 "invalid frontend loader session credential".to_string(),
             ));
         }
         let token = generate_credential();
-        let key = (webview_label.to_string(), plugin_id.to_string());
-        // 先摘旧令牌、再登记新令牌：两次加锁互不嵌套，避免与其它方法形成锁序
-        let previous = self
-            .plugin_tokens
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(key, token.clone());
-        if let Some(old) = previous {
-            if let Some(domain) = self
-                .tokens
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .get_mut(webview_label)
-            {
-                domain.remove(&old);
-            }
+        // 先摘旧令牌、再登记新令牌（同一临界区内）
+        if let Some(old) = domain.plugin_token.insert(plugin_id.to_string(), token.clone()) {
+            domain.tokens.remove(&old);
         }
-        self.tokens
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .entry(webview_label.to_string())
-            .or_default()
-            .insert(token.clone(), plugin_id.to_string());
+        domain.tokens.insert(token.clone(), plugin_id.to_string());
         tracing::debug!(
             webview = %webview_label,
             plugin_id = %plugin_id,
@@ -166,31 +154,20 @@ impl FrontendChannelRegistry {
     /// 插件可在多个窗口各有前端实例与各自令牌，停用必须全量回收——只清当前窗口会让
     /// 其它窗口的旧令牌继续解析出身份。
     pub fn revoke_plugin(&self, plugin_id: &str) {
-        let revoked: Vec<(String, String)> = {
-            let mut plugin_tokens = self.plugin_tokens.lock().unwrap_or_else(|e| e.into_inner());
-            let keys: Vec<(String, String)> = plugin_tokens
-                .keys()
-                .filter(|(_, pid)| pid == plugin_id)
-                .cloned()
-                .collect();
-            keys.into_iter()
-                .filter_map(|key| plugin_tokens.remove(&key).map(|token| (key.0, token)))
-                .collect()
-        };
-        if revoked.is_empty() {
-            return;
-        }
-        {
-            let mut tokens = self.tokens.lock().unwrap_or_else(|e| e.into_inner());
-            for (label, token) in &revoked {
-                if let Some(domain) = tokens.get_mut(label) {
-                    domain.remove(token);
-                }
+        let mut domains = self.domains.lock().unwrap_or_else(|e| e.into_inner());
+        let mut revoked = 0usize;
+        for domain in domains.values_mut() {
+            domain.tokens.retain(|_, pid| pid != plugin_id);
+            if domain.plugin_token.remove(plugin_id).is_some() {
+                revoked += 1;
             }
+        }
+        if revoked == 0 {
+            return;
         }
         tracing::debug!(
             plugin_id = %plugin_id,
-            webviews = revoked.len(),
+            webviews = revoked,
             "[PluginChannel] 插件前端通道令牌已回收"
         );
     }
@@ -200,17 +177,12 @@ impl FrontendChannelRegistry {
         if credential.is_empty() {
             return None;
         }
-        if let Some(plugin_id) = self
-            .tokens
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(webview_label)
-            .and_then(|domain| domain.get(credential))
-            .cloned()
-        {
-            return Some(ChannelIdentity::Plugin(plugin_id));
+        let domains = self.domains.lock().unwrap_or_else(|e| e.into_inner());
+        let domain = domains.get(webview_label)?;
+        if let Some(plugin_id) = domain.tokens.get(credential) {
+            return Some(ChannelIdentity::Plugin(plugin_id.clone()));
         }
-        if self.verify_loader_session(webview_label, credential) {
+        if domain.loader_session.as_deref() == Some(credential) {
             return Some(ChannelIdentity::Host);
         }
         None

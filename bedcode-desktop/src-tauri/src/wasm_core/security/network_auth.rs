@@ -52,7 +52,7 @@ use crate::db::Database;
 use crate::wasm_core::security::auth_policy::{
     AuthPolicyStore, AuthRecordMatch, AuthRecordSource, AuthResource, GrantOutcome, AUTH_EFFECT_ALLOW, AUTH_EFFECT_DENY,
 };
-use crate::wasm_core::security::strategy::{self, StrategyStep};
+use crate::wasm_core::security::strategy::{self, StrategyStep, Tier};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -349,11 +349,17 @@ impl NetworkAuthChecker {
 
         // 第 2 步：策略层（三档；判定时实时读取，不缓存）
         let strategy = self.read_strategy(plugin_id).await;
-        match strategy.step {
+        match strategy.step.tier() {
             // 「始终允许」：免询问放行 + 以 `source='always_allow'` 留痕。
             // 记录粒度 = 本次归一化 origin（询问粒度就是 origin，落更细的 path
             // 等于替用户收紧/放大到另一套粒度上；整站记录与「允许本 origin」同形）
-            StrategyStep::AutoAllow => {
+            Tier::AutoAllow => {
+                // 落账是档位的义务（S-11）：档位标志把义务钉在类型上，
+                // 删除落账会让此处断言（debug 测试构建）与行为测试同时转红
+                debug_assert!(
+                    strategy.step.must_land_auto_allow(),
+                    "AutoAllow 档位字段丢失审计义务（S-11）"
+                );
                 self.land_auto_allow(plugin_id, &target).await;
                 return Ok(OutboundVerdict::Allow {
                     origin: target.origin,
@@ -361,18 +367,18 @@ impl NetworkAuthChecker {
                 });
             }
             // 「总是询问」：跳过全部 allow 记录（含 path 前缀记录）直接进询问
-            StrategyStep::Ask => {
+            Tier::Ask => {
                 tracing::debug!(
                     plugin_id = %plugin_id,
                     origin = %target.origin,
                     "host-http: 总是询问档，跳过授权记录"
                 );
             }
-            StrategyStep::ConsultRecords => {}
+            Tier::ConsultRecords => {}
         }
 
         // 第 3 步：授权记录命中（**仅默认档读记录**——「总是询问」在此之前已跳过）
-        if strategy.step.uses_records()
+        if strategy.step.reads_allow_records()
             && records
                 .iter()
                 .any(|row| row.effect == AUTH_EFFECT_ALLOW && record_covers(row, &target))
@@ -443,15 +449,19 @@ impl NetworkAuthChecker {
         }
         // 策略层：与弹窗面同一个 `read_strategy`（档位语义不分面）
         let strategy = self.read_strategy(plugin_id).await;
-        if matches!(strategy.step, StrategyStep::AutoAllow) {
-            // 留痕与弹窗面同点：档位语义是「不问」，留痕是它的义务
+        if matches!(strategy.step.tier(), Tier::AutoAllow) {
+            // 留痕与弹窗面同点：档位语义是「不问」，留痕是它的义务（S-11）
+            debug_assert!(
+                strategy.step.must_land_auto_allow(),
+                "AutoAllow 档位字段丢失审计义务（S-11）"
+            );
             self.land_auto_allow(plugin_id, &target).await;
             return Ok(OutboundVerdict::Allow {
                 origin: target.origin,
                 layer: "always-allow",
             });
         }
-        if strategy.step.uses_records()
+        if strategy.step.reads_allow_records()
             && records
                 .iter()
                 .any(|row| row.effect == AUTH_EFFECT_ALLOW && record_covers(row, &target))
@@ -479,7 +489,7 @@ impl NetworkAuthChecker {
     async fn read_strategy(&self, plugin_id: &str) -> StrategyVerdict {
         match strategy::evaluate(&self.store, plugin_id, AuthResource::Network).await {
             Ok(step) => StrategyVerdict {
-                lands_allow_record: step.uses_records(),
+                lands_allow_record: step.reads_allow_records(),
                 step,
             },
             Err(e) => {
@@ -489,7 +499,7 @@ impl NetworkAuthChecker {
                     "network_auth: 策略档位读取失败，本次判定按询问处理"
                 );
                 StrategyVerdict {
-                    step: StrategyStep::Ask,
+                    step: StrategyStep::ask(),
                     lands_allow_record: true,
                 }
             }

@@ -108,7 +108,7 @@ fn test_sdk_plugin_api_call_roundtrip() {
             "com.bedcode.sdk-test.echo".to_string(),
             "com.bedcode.sdk-test.fail".to_string(),
         ],
-    );
+    ).unwrap();
 
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
@@ -176,7 +176,7 @@ fn test_sdk_plugin_api_call_roundtrip() {
         // 声明未实现场景），分派器不处理 → 不回复 → 调用方 800ms 超时
         host_ctx
             .api_registry()
-            .register(TARGET_ID, &["com.bedcode.sdk-test.no-response".to_string()]);
+            .register(TARGET_ID, &["com.bedcode.sdk-test.no-response".to_string()]).unwrap();
         host_ctx
             .message_bus
             .subscribe_wasm(TARGET_ID, "bedcode.api.com.bedcode.sdk-test.no-response")

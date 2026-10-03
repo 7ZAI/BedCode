@@ -1090,7 +1090,7 @@ fn test_session_control_endpoint_direct_roundtrip() {
         host_ctx.api_registry().register(
             PLUGIN_ID,
             &session_apis().iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-        );
+        ).unwrap();
         let component = wasm_runtime
             .compile_component(&std::fs::read(&wasm_path).expect("read session artifact"))
             .expect("compile session artifact");
@@ -1441,7 +1441,7 @@ fn test_terminal_stream_endpoint_closed_loop() {
         host_ctx.api_registry().register(
             PLUGIN_ID,
             &session_apis().iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-        );
+        ).unwrap();
         let component = wasm_runtime
             .compile_component(&std::fs::read(&wasm_path).expect("read session artifact"))
             .expect("compile session artifact");
@@ -1757,7 +1757,7 @@ fn test_ws_device_events_and_auth_records_closed_loop() {
         host_ctx.api_registry().register(
             PLUGIN_ID,
             &session_apis().iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-        );
+        ).unwrap();
         let component = wasm_runtime
             .compile_component(&std::fs::read(&wasm_path).expect("read session artifact"))
             .expect("compile session artifact");

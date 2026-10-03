@@ -62,13 +62,24 @@ impl PluginApprovalStore {
         Self { storage }
     }
 
-    /// 加载全部审批记录（无记录/损坏时返回空 map）
+    /// 加载全部审批记录（无记录 → 空 map；**损坏 → 删除坏行并回落空 map**）
+    ///
+    /// 损坏不可恢复会让后续 approve/revoke 全部失败直到手工清 key（早年实测形态：
+    /// 日志说 resetting 实际没 reset）。这里真正落盘重置：删掉坏行，下次
+    /// `get` / `approve` 从干净状态继续，并且复位动作本身不阻断本次加载。
     pub async fn load_all(&self) -> crate::Result<HashMap<String, PluginApproval>> {
         match self.storage.get(SYSTEM_PLUGIN_ID, APPROVAL_STORAGE_KEY).await? {
-            Some(value) => serde_json::from_value(value).map_err(|e| {
-                tracing::warn!("Failed to parse plugin approvals, resetting: {}", e);
-                AppError::Plugin(format!("Invalid plugin approvals: {}", e))
-            }),
+            Some(value) => match serde_json::from_value::<HashMap<String, PluginApproval>>(value) {
+                Ok(map) => Ok(map),
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to parse plugin approvals; resetting stored approvals");
+                    // 尽力而为清除坏行；失败仅记 warn（下次触发会再次尝试重置）
+                    if let Err(clear_err) = self.storage.delete(SYSTEM_PLUGIN_ID, APPROVAL_STORAGE_KEY).await {
+                        tracing::warn!(error = %clear_err, "Failed to clear corrupted plugin approvals");
+                    }
+                    Ok(HashMap::new())
+                }
+            },
             None => Ok(HashMap::new()),
         }
     }
@@ -85,6 +96,11 @@ impl PluginApprovalStore {
     }
 
     /// 记录/更新审批（覆盖式：以本次批准的权限集合为准）
+    ///
+    /// **原子读-改-写**（S-04）：读 map → 插入 → 写回 全程在同一 DB 锁内完成，
+    /// 并发 approve/revoke（多实例各自构造的 `PluginApprovalStore` 共享同一
+    /// `Arc<PluginStorage>`）不再互相覆盖——先前的「load_all → save_all」两次
+    /// 独立操作在并发交错下会丢掉其中一方的修改（revoke 丢失 = 过期授予存活）。
     pub async fn approve(
         &self,
         plugin_id: &str,
@@ -92,46 +108,75 @@ impl PluginApprovalStore {
         content_hash: &str,
         version: &str,
     ) -> crate::Result<()> {
-        let mut map = self.load_all().await?;
-        map.insert(
-            plugin_id.to_string(),
-            PluginApproval {
-                approved_permissions: approved_permissions.to_vec(),
-                content_hash: content_hash.to_string(),
-                version: version.to_string(),
-                approved_at: chrono::Utc::now().to_rfc3339(),
-            },
-        );
-        self.save_all(&map).await
+        let plugin_id = plugin_id.to_string();
+        let approved_permissions = approved_permissions.to_vec();
+        let content_hash = content_hash.to_string();
+        let version = version.to_string();
+        self.storage
+            .update(SYSTEM_PLUGIN_ID, APPROVAL_STORAGE_KEY, move |value| {
+                let mut map = parse_approvals(value)?;
+                map.insert(
+                    plugin_id,
+                    PluginApproval {
+                        approved_permissions,
+                        content_hash,
+                        version,
+                        approved_at: chrono::Utc::now().to_rfc3339(),
+                    },
+                );
+                Ok(serde_json::to_value(map)?)
+            })
+            .await
     }
 
-    /// 撤销审批（哈希不匹配 / 卸载时调用）
+    /// 撤销审批（哈希不匹配 / 卸载时调用）；同样走原子读-改-写（S-04）
     pub async fn revoke(&self, plugin_id: &str) -> crate::Result<()> {
-        let mut map = self.load_all().await?;
-        if map.remove(plugin_id).is_some() {
-            self.save_all(&map).await?;
-        }
-        Ok(())
+        let plugin_id = plugin_id.to_string();
+        self.storage
+            .update(SYSTEM_PLUGIN_ID, APPROVAL_STORAGE_KEY, move |value| {
+                let mut map = parse_approvals(value)?;
+                map.remove(&plugin_id);
+                Ok(serde_json::to_value(map)?)
+            })
+            .await
     }
 }
 
-/// 哈希排除的运行时数据文件（非安装内容）
-///
-/// 插件私有 SQLite 库位于插件安装目录内（`app_data/plugins/<id>/plugin.db`，
-/// 见 `wasm_runtime.rs` 的私有库路径装配），批准之后运行期会持续变化；
-/// 把它计入哈希会让「批准 → 启用 → 停用 → 再启用」每次都判成 HashMismatch
-/// 并撤销批准，插件再也起不来。排除的只是**数据面**：plugin.json / index.js /
-/// *.wasm 等代码面仍在哈希内，替换代码依然会被抓住。
-const HASH_EXCLUDED_FILES: &[&str] = &["plugin.db", "plugin.db-wal", "plugin.db-shm", "plugin.db-journal"];
+/// 从存储值解析审批 map；损坏/缺失统一回落到空 map（配合 S-10 的 reset 语义：
+/// 写路径遇到坏数据也不致永败，而是以空 map 为基线继续）
+fn parse_approvals(value: Option<serde_json::Value>) -> crate::Result<HashMap<String, PluginApproval>> {
+    match value {
+        Some(v) => serde_json::from_value(v).map_err(|e| {
+            tracing::warn!(error = %e, "Failed to parse plugin approvals; continuing with empty map");
+            crate::AppError::Plugin(format!("Invalid plugin approvals: {}", e))
+        }),
+        None => Ok(HashMap::new()),
+    }
+}
 
-/// 计算插件目录内容 SHA-256（相对路径排序 + 文件内容）
+// 哈希排除的运行时数据文件（非安装内容）：**根级**私有 SQLite 库及其边车文件
+//
+// 插件私有 SQLite 库位于插件安装目录内（`app_data/plugins/<id>/plugin.db`，
+// 见 `wasm_runtime.rs` 的私有库路径装配），批准之后运行期会持续变化；
+// 把它计入哈希会让「批准 → 启用 → 停用 → 再启用」每次都判成 HashMismatch
+// 并撤销批准，插件再也起不来。排除的只是**数据面**：plugin.json / index.js /
+// *.wasm 等代码面仍在哈希内，替换代码依然会被抓住。
+//
+// 排除规则按**根相对路径**精确匹配（S-08）：`rel == "plugin.db"` 或
+// `rel.starts_with("plugin.db-")`——只有根级的库与边车文件豁免，
+// `assets/plugin.db*` 等嵌套同名文件仍参与哈希（过宽的裸文件名匹配会让
+// 深层数据文件在审批后改动而不失效钉扎）。
+
+/// 计算插件目录内容 SHA-256（相对路径排序 + 长度前缀帧）
 ///
-/// 覆盖目录下全部文件（含 plugin.json / wasm / js 产物），
-/// 任一文件被替换都会导致哈希变化；运行时数据文件见 [`HASH_EXCLUDED_FILES`]。
+/// 覆盖目录下全部文件（含 plugin.json / wasm / js 产物），任一文件被替换都会
+/// 导致哈希变化；根级运行时数据文件按上述规则排除。拒绝含符号链接的目录
+/// （S-03，fail-closed）。哈希帧带文件计数与每字段长度前缀（S-07），
+/// 内容含 NUL 也不产生帧歧义。
 pub fn compute_dir_hash(dir: &Path) -> crate::Result<String> {
     let mut files: Vec<(String, Vec<u8>)> = Vec::new();
 
-    fn collect(dir: &Path, base: &Path, files: &mut Vec<(String, Vec<u8>)>) -> crate::Result<()> {
+fn collect(dir: &Path, base: &Path, files: &mut Vec<(String, Vec<u8>)>) -> crate::Result<()> {
         for entry in std::fs::read_dir(dir)? {
             let entry = entry?;
             let path = entry.path();
@@ -140,10 +185,25 @@ pub fn compute_dir_hash(dir: &Path) -> crate::Result<String> {
                 .map_err(|e| AppError::Plugin(format!("Hash path strip failed: {}", e)))?
                 .to_string_lossy()
                 .to_string();
-            if path.is_dir() {
+            // lstat 语义（entry.file_type() 不跟随符号链接，S-03）：插件目录里的
+            // symlink 一律拒绝——跟随它可读取/哈希插件根外文件、链接环可致递归
+            // 栈溢出 DoS；钉扎语义要求哈希覆盖的正是目录树本身
+            let file_type = entry
+                .file_type()
+                .map_err(|e| AppError::Plugin(format!("Failed to stat '{}' for hashing: {}", rel, e)))?;
+            if file_type.is_symlink() {
+                return Err(AppError::Plugin(format!(
+                    "Plugin directory contains symlink '{}'; symbolic links are not allowed in pinned content (approval blocked)",
+                    rel
+                )));
+            }
+            if file_type.is_dir() {
                 collect(&path, base, files)?;
-            } else if path.is_file() {
-                if HASH_EXCLUDED_FILES.iter().any(|name| path.file_name().is_some_and(|n| n == *name)) {
+            } else if file_type.is_file() {
+                // 排除规则按**根相对路径**精确匹配（S-08）：只豁免根级的私有库
+                // 及其 SQLite 边车文件；`assets/plugin.db*` 等嵌套同名文件仍参与哈希
+                let excluded = rel == "plugin.db" || rel.starts_with("plugin.db-");
+                if excluded {
                     continue;
                 }
                 let content = std::fs::read(&path)
@@ -159,11 +219,16 @@ pub fn compute_dir_hash(dir: &Path) -> crate::Result<String> {
     files.sort_by(|a, b| a.0.cmp(&b.0));
 
     let mut hasher = Sha256::new();
+    // 防哈希帧歧义（S-07）：文件计数 + 每字段 u64 LE 长度前缀，字段间不再依赖
+    // NUL 分隔——内容含 NUL 时「rel+[0]+content+[0]」可能使不同文件集产出相同
+    // 摘要（在位替换攻击可保持哈希不变）。旧版钉扎摘要格式已变，存量已批准
+    // 插件需重新审批（fail-visible，不静默沿用旧摘要）。
+    hasher.update((files.len() as u64).to_le_bytes());
     for (rel, content) in &files {
+        hasher.update((rel.len() as u64).to_le_bytes());
         hasher.update(rel.as_bytes());
-        hasher.update([0u8]);
+        hasher.update((content.len() as u64).to_le_bytes());
         hasher.update(content);
-        hasher.update([0u8]);
     }
     Ok(format!("{:x}", hasher.finalize()))
 }
@@ -223,7 +288,11 @@ pub fn verify_approval(approval: Option<&PluginApproval>, dir: &Path) -> crate::
     let status = match approval {
         None => ApprovalStatus::Pending,
         Some(appr) => {
-            if appr.content_hash == current_hash {
+            if appr.approved_permissions.is_empty() {
+                // 空权限集 = 从未批准任何权限（文档口径：Pending）——把零权限审批
+                // 当有效授权会让调用方拿着空集继续（S-09，fail-visible）
+                ApprovalStatus::Pending
+            } else if appr.content_hash == current_hash {
                 ApprovalStatus::Approved
             } else {
                 ApprovalStatus::HashMismatch
@@ -391,7 +460,7 @@ mod tests {
 
         // 审批哈希一致 → Approved
         let approval = PluginApproval {
-            approved_permissions: vec![],
+            approved_permissions: vec!["storage".to_string()],
             content_hash: hash.clone(),
             version: "1.0.0".to_string(),
             approved_at: "now".to_string(),
@@ -399,9 +468,127 @@ mod tests {
         let (status, _) = verify_approval(Some(&approval), &dir).unwrap();
         assert_eq!(status, ApprovalStatus::Approved);
 
+        // 空权限集 → Pending（S-09：零权限审批不得当作有效授权）
+        let empty = PluginApproval {
+            approved_permissions: vec![],
+            content_hash: hash.clone(),
+            version: "1.0.0".to_string(),
+            approved_at: "now".to_string(),
+        };
+        let (status, _) = verify_approval(Some(&empty), &dir).unwrap();
+        assert_eq!(status, ApprovalStatus::Pending, "空权限集必须判 Pending");
+
         // 文件被替换 → HashMismatch
         std::fs::write(dir.join("plugin.json"), r#"{"id":"com.test.p","name":"evil"}"#).unwrap();
         let (status, _) = verify_approval(Some(&approval), &dir).unwrap();
         assert_eq!(status, ApprovalStatus::HashMismatch);
+    }
+
+    /// S-03：插件目录含符号链接 → 哈希计算拒绝（fail-closed；lstat 不跟随）
+    #[test]
+    fn compute_dir_hash_rejects_symlinks() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let outside = tmp.path().join("outside.txt");
+        std::fs::write(&outside, "secret").unwrap();
+        let dir = tmp.path().join("p");
+        write_plugin_dir(&dir, &[("plugin.json", r#"{"id":"com.test.p"}"#)]);
+        // 目录内链接指向插件根外文件
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, dir.join("leak.txt")).unwrap();
+        #[cfg(windows)]
+        {
+            // 文件链接需要管理员权限，退化为目录链接（同样触发拒绝）
+            std::os::windows::fs::symlink_dir(&outside.parent().unwrap(), dir.join("leak")).unwrap();
+        }
+
+        let err = compute_dir_hash(&dir).expect_err("含 symlink 的目录必须被拒绝");
+        assert!(
+            format!("{err}").contains("symlink"),
+            "错误须点名 symlink 原因: {err}"
+        );
+    }
+
+    /// S-08：排除规则只豁免**根级**私有库——嵌套同名 `assets/plugin.db` 参与哈希
+    #[test]
+    fn compute_dir_hash_excludes_only_root_level_runtime_db() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = tmp.path().join("p");
+        write_plugin_dir(&dir, &[("plugin.json", r#"{"id":"com.test.p"}"#)]);
+        let before = compute_dir_hash(&dir).unwrap();
+
+        // 根级 plugin.db 及其边车：豁免
+        std::fs::write(dir.join("plugin.db"), b"sqlite").unwrap();
+        std::fs::write(dir.join("plugin.db-wal"), b"wal").unwrap();
+        assert_eq!(compute_dir_hash(&dir).unwrap(), before, "根级库与边车必须豁免");
+
+        // 嵌套同名文件：必须改变哈希（过宽匹配会漏掉它）
+        std::fs::create_dir_all(dir.join("assets")).unwrap();
+        std::fs::write(dir.join("assets").join("plugin.db"), b"nested sqlite").unwrap();
+        assert_ne!(compute_dir_hash(&dir).unwrap(), before, "嵌套 plugin.db 必须参与哈希");
+    }
+
+    /// S-10：损坏的审批存储必须自愈——读路径删坏行回落空 map，写路径以空 map
+    /// 为基线继续（旧形态：损坏后 approve/revoke 永败直到手工清 key）
+    #[tokio::test]
+    async fn corrupted_approvals_are_reset_not_fatal() {
+        let store = test_store().await;
+        // 写入一个不是对象形态的坏值（如纯字符串）
+        store
+            .storage
+            .set(SYSTEM_PLUGIN_ID, APPROVAL_STORAGE_KEY, serde_json::json!("corrupted"))
+            .await
+            .unwrap();
+
+        // 读路径：损坏 → 回落空 map，且坏行被真正清掉
+        assert!(store.load_all().await.unwrap().is_empty(), "损坏数据必须回落空 map");
+        assert!(
+            store.load_all().await.unwrap().is_empty(),
+            "坏行必须真正清掉（否则后续还是失败）"
+        );
+
+        // 写路径：损坏 → 以空 map 为基线 approve，不永败
+        store
+            .approve("com.test.p", &["fs:read".to_string()], "h", "1.0.0")
+            .await
+            .unwrap();
+        let approval = store.get("com.test.p").await.unwrap().expect("approve 后必须可读");
+        assert_eq!(approval.approved_permissions, vec!["fs:read"]);
+    }
+
+    /// S-04：并发 approve/revoke 经 `PluginStorage::update` 原子化——交错执行
+    /// 不丢任何一方的写入（旧形态 load→save 两次独立操作在并发交错下互相覆盖）
+    #[tokio::test]
+    async fn concurrent_approve_revoke_do_not_lose_updates() {
+        let db = Database::new(&std::path::Path::new(":memory:")).unwrap();
+        db.init_schema().unwrap();
+        let store = PluginApprovalStore::new(Arc::new(PluginStorage::new(Arc::new(Mutex::new(db)))));
+        // 两个实例共享同一 storage（生产形态：boot / install / activation 各处
+        // 各自 new PluginApprovalStore，共享同一 Arc<PluginStorage>）
+        let s1 = PluginApprovalStore::new(store.storage.clone());
+        let s2 = PluginApprovalStore::new(store.storage.clone());
+
+        // 并发双 approve：都成功且都可见
+        let perms_a = vec!["fs:read".to_string()];
+        let perms_b = vec!["fs:read".to_string()];
+        let (r1, r2) = tokio::join!(
+            s1.approve("com.a", &perms_a, "h1", "1.0.0"),
+            s2.approve("com.b", &perms_b, "h2", "1.0.0"),
+        );
+        r1.unwrap();
+        r2.unwrap();
+        let map = store.load_all().await.unwrap();
+        assert!(map.contains_key("com.a") && map.contains_key("com.b"), "并发双写不得丢一方");
+
+        // 并发 approve C + revoke A：两者都落盘（旧形态 revoke 的 load 可覆盖 approve）
+        let perms_c = vec!["storage".to_string()];
+        let (r1, r2) = tokio::join!(
+            s1.approve("com.c", &perms_c, "h3", "1.0.0"),
+            s2.revoke("com.a"),
+        );
+        r1.unwrap();
+        r2.unwrap();
+        let map = store.load_all().await.unwrap();
+        assert!(map.contains_key("com.c"), "approve 结果不得被并发 revoke 覆盖");
+        assert!(!map.contains_key("com.a"), "revoke 结果必须生效");
     }
 }

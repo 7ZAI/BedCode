@@ -274,7 +274,10 @@ impl ResourceAuthorizer for ApiCallAuthorizer {
     }
 
     fn enforce(&self, req: &AuthRequest) -> AuthDecision {
-        if self.registry.contains(req.target) {
+        // 走 `gate`（单读锁内「存在性 + 属主」）而非裸 `contains`：与回复道
+        // 的属主解析（api_gate_target_owner 亦用 gate）同一语义同一把锁，
+        // 门禁放行与属主解析不跨锁漂移（S-05）
+        if self.registry.gate(req.target).is_some() {
             AuthDecision::Allow
         } else {
             AuthDecision::Deny(format!("api '{}' 未由任何已激活插件声明（互调门）", req.target))
@@ -767,7 +770,7 @@ mod tests {
     #[test]
     fn api_call_gate_via_framework() {
         let registry = Arc::new(ApiRegistry::new());
-        registry.register("com.bedcode.target", &["com.bedcode.target.run".to_string()]);
+        registry.register("com.bedcode.target", &["com.bedcode.target.run".to_string()]).unwrap();
         let fw = SecurityFramework::new();
         fw.register(Arc::new(ApiCallAuthorizer::new(registry)));
 

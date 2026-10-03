@@ -85,6 +85,41 @@ impl PluginStorage {
         Ok(())
     }
 
+    /// 原子读-改-写（同一 DB 锁内完成 get → f → set，跨调用窗口串行化同 key 并发修改）
+    ///
+    /// 现有 `get` / `set` 各自独立加锁，读-改-写跨锁：并发写同一 key 时后提交覆盖
+    /// 先提交（lost update）。本原语把整段读写放进一次锁持有，读到的必是最近提交值、
+    /// 写出的必落在下一个读者之前——比如审批记录的 approve/revoke
+    /// （`security::approval`）两个实例并发时不再互相覆盖。
+    ///
+    /// `f` 返回写入的 value（始终 upsert）；实现内直接读写 conn，**不得**再调
+    /// `get` / `set` / `delete`（它们会再抢同一把锁 → 自死锁）。
+    pub async fn update<F>(&self, plugin_id: &str, key: &str, f: F) -> crate::Result<()>
+    where
+        F: FnOnce(Option<serde_json::Value>) -> crate::Result<serde_json::Value>,
+    {
+        let db = self.db.lock().await;
+        let conn = db.conn();
+        let previous = {
+            let mut stmt = conn.prepare("SELECT value FROM plugin_storage WHERE plugin_id = ?1 AND key = ?2")?;
+            match stmt.query_row(rusqlite::params![plugin_id, key], |row| row.get::<_, String>(0)) {
+                Ok(json_str) => Some(serde_json::from_str::<serde_json::Value>(&json_str)?),
+                Err(rusqlite::Error::QueryReturnedNoRows) => None,
+                Err(e) => return Err(crate::AppError::Database(e)),
+            }
+        };
+        let next = f(previous)?;
+        let json_str = serde_json::to_string(&next)?;
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO plugin_storage (plugin_id, key, value, updated_at) \
+             VALUES (?1, ?2, ?3, ?4) \
+             ON CONFLICT(plugin_id, key) DO UPDATE SET value = ?3, updated_at = ?4",
+            rusqlite::params![plugin_id, key, json_str, now],
+        )?;
+        Ok(())
+    }
+
     /// 清空插件所有存储（插件卸载时使用）
     pub async fn clear_all(&self, plugin_id: &str) -> crate::Result<()> {
         let db = self.db.lock().await;

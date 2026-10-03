@@ -556,7 +556,11 @@ impl PluginHost {
         // 票 07 B2：改名插件额外登记旧 api 名（双投窗口）——仍指向本插件，
         // 未更新的旧调用方按旧名互调时照常可达
         let api_list = with_api_aliases(plugin_id, &plan.api);
-        self.wasm_host_ctx.api_registry().register(plugin_id, &api_list);
+        self.wasm_host_ctx.api_registry().register(plugin_id, &api_list).map_err(|e| {
+            // fail-closed（S-01）：api 名被其它激活插件占用时激活显性失败，
+            // 避免被拒后插件仍在运行但其 api 静默不可达（fail-visible）
+            crate::AppError::Plugin(format!("插件 '{}' 登记互调 api 失败: {}", plugin_id, e))
+        })?;
 
         // 票 09a：manifest 声明的 WS 端点登记（expand——声明式静态路由与宿主硬编码
         // 分发并存）。这里的登记必须以「激活期」为锚点：deactivate 会 `purge_for_plugin`

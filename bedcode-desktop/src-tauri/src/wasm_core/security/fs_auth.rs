@@ -56,7 +56,7 @@ use crate::wasm_core::security::auth_policy::{
     AuthPolicyStore, AuthRecordSource, AuthResource, AuthStrategy, GrantOutcome, AUTH_EFFECT_ALLOW,
     AUTH_EFFECT_DENY,
 };
-use crate::wasm_core::security::strategy::{self, StrategyStep};
+use crate::wasm_core::security::strategy::{self, StrategyStep, Tier};
 use crate::wasm_core::storage::PluginStorage;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -414,7 +414,7 @@ impl PendingRequest {
     /// 「总是询问」档跳过记录 ⇒ 落账写了也没人读 ⇒ 弹窗不提供「记住」
     /// （spec §6.3），应答侧据此把越界的 `allow_remember` 降级为一次性放行。
     fn offers_remember(&self) -> bool {
-        StrategyStep::of(self.strategy).uses_records()
+        StrategyStep::of(self.strategy).reads_allow_records()
     }
 }
 
@@ -593,9 +593,9 @@ impl FsAuthChecker {
                 return NoDialogDecision::Ask(AuthStrategy::Default);
             }
         };
-        match step {
+        match step.tier() {
             // 「总是询问」：跳过全部 allow 记录（含旧记录回退），直接进询问
-            StrategyStep::Ask => {
+            Tier::Ask => {
                 tracing::debug!(
                     plugin_id = %plugin_id,
                     path = %canonical.display(),
@@ -609,11 +609,17 @@ impl FsAuthChecker {
             // 这里直接放行；落账让「免询问自动放行」在管理界面可见（spec §9.4）。
             // 硬闸门（deny 记录 / 路径规范化 / manifest 声明 / 配额）全在本步之前或
             // 之外，档位管不着（spec §4.2、票 04 的红测断言）
-            StrategyStep::AutoAllow => {
+            Tier::AutoAllow => {
+                // 审计义务随档位携带（S-11）：类型上防止「match 后什么都不做」——
+                // 删除落账会让本断言（debug 测试构建）与行为测试同时转红
+                debug_assert!(
+                    step.must_land_auto_allow(),
+                    "AutoAllow 档位字段丢失审计义务（S-11）"
+                );
                 self.land_auto_allow(plugin_id, canonical, needed).await;
                 return NoDialogDecision::Allowed(FsGrantLayer::AlwaysAllow);
             }
-            StrategyStep::ConsultRecords => {}
+            Tier::ConsultRecords => {}
         }
         match signals.allow_ops {
             // 3. 授权记录命中且操作集覆盖本次能力 → 放行

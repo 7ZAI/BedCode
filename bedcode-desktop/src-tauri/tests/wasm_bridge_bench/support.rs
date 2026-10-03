@@ -341,6 +341,12 @@ fn stage_app_dirs(plugins_dir: &Path) -> anyhow::Result<()> {
         m["id"] = serde_json::Value::String(id.to_string());
         if id == PEER_ID {
             m["name"] = serde_json::Value::String("Bridge Bench Probe (peer)".to_string());
+        } else {
+            // 主实例是 api-call 的**调用方**（服务方是对端 peer）：不声明互调 api。
+            // 两实例同源清单原来靠「后登记覆盖」共存（同名 api 最后登记方为属主），
+            // 注册表 fail-closed 后（api_registry S-01）冲突登记会使后激活实例
+            // 整体激活失败——按角色归属声明才是新语义下的正确形态
+            m["api"] = serde_json::json!([]);
         }
         std::fs::write(dir.join("plugin.json"), serde_json::to_string_pretty(&m)?)?;
         std::fs::copy(&artifact, dir.join(format!("{FIXTURE_LIB}.wasm")))?;

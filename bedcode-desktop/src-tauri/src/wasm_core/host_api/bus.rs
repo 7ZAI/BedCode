@@ -106,7 +106,9 @@ pub(crate) fn api_gate_target_owner(reg: &dyn crate::wasm_core::host_api::contex
     if api.starts_with("reply.") {
         return None;
     }
-    reg.api_registry().owner_of(api)
+    // 走 `gate`（单读锁内同时返回存在性与属主，S-05）：门禁判定与回复道
+    // sender 校验读同一把锁同一份快照，不被 register/unregister 插缝漂移
+    reg.api_registry().gate(api)
 }
 
 /// 发布 JSON 消息到 Topic（同步投递，总线内部异步派发）

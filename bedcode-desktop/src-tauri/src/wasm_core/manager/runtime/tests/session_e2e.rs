@@ -358,7 +358,7 @@ fn test_session_task_domain_closed_loop() {
     host_ctx.api_registry().register(
         "com.bedcode.terminal-session",
         &session_apis().iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-    );
+    ).unwrap();
 
     // 实例化 + 总线分派器（宿主窄转发层的互调回复需经总线路由回插件实例）
     let component = wasm_runtime
@@ -1155,7 +1155,7 @@ fn test_session_task_rotation_closed_loop() {
     host_ctx.api_registry().register(
         "com.bedcode.terminal-session",
         &session_apis().iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-    );
+    ).unwrap();
 
     let component = wasm_runtime
         .compile_component(&std::fs::read(&wasm_path).expect("read session artifact"))
@@ -1594,7 +1594,7 @@ fn test_session_trust_and_consent_api_closed_loop() {
     host_ctx.api_registry().register(
         session_id,
         &session_api_list.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-    );
+    ).unwrap();
 
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
@@ -1852,7 +1852,7 @@ fn test_business_endpoints_dual_track_closed_loop() {
     host_ctx.api_registry().register(
         SESSION_ID,
         &session_api_list.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-    );
+    ).unwrap();
 
     rt.block_on(async move {
         // v32（ADR 0031）：桥接门查进程级单中心注册表 → 与闭环用例互斥（见 helper）
@@ -2205,7 +2205,7 @@ fn test_session_create_with_spec_closed_loop() {
     host_ctx.api_registry().register(
         SESSION_ID,
         &session_apis().iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-    );
+    ).unwrap();
 
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
@@ -2504,7 +2504,7 @@ fn test_session_actions_closed_loop() {
     host_ctx.api_registry().register(
         SESSION_ID,
         &session_apis().iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-    );
+    ).unwrap();
 
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
@@ -2756,7 +2756,7 @@ fn test_session_annotate_and_devices_closed_loop() {
     host_ctx.api_registry().register(
         SESSION_ID,
         &session_apis().iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-    );
+    ).unwrap();
 
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
@@ -2956,7 +2956,7 @@ fn test_filetransfer_consumes_session_center_closed_loop() {
     host_ctx.api_registry().register(
         session_id,
         &center_apis.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-    );
+    ).unwrap();
 
     // wire 捕获（静态订阅，与会话中心的 wasm 订阅共存 fan-out）
     let captures: Arc<std::sync::Mutex<Vec<(String, serde_json::Value)>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -3172,7 +3172,7 @@ fn test_filetransfer_consumes_session_center_closed_loop() {
         host_ctx.api_registry().register(
             session_id,
             &center_apis.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-        );
+        ).unwrap();
         let result = filetransfer
             .lock()
             .await
@@ -3278,7 +3278,7 @@ fn test_session_output_ring_fetch_closed_loop() {
     host_ctx.api_registry().register(
         SESSION_ID,
         &session_apis().iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-    );
+    ).unwrap();
 
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
@@ -3470,7 +3470,7 @@ fn test_session_input_via_gateway_closed_loop() {
     host_ctx.api_registry().register(
         SESSION_ID,
         &session_apis().iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-    );
+    ).unwrap();
 
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
