@@ -58,9 +58,18 @@ use crate::wasm_core::host_api::context::WasmHostContext;
 
 /// 统一权限守卫
 ///
-/// 校验通过返回 true；拒绝时记录结构化错误日志并返回 false，
-/// 调用方据此返回 Err。替换原先约 30 处重复的 check/log 三连。
+/// 校验通过返回 true；拒绝时记录结构化日志并返回 false，调用方据此返回 Err。
+/// 替换原先约 30 处重复的 check/log 三连。
 /// 签名收 `&dyn PermissionScope`（票 05 ISP）：域函数不再依赖上帝对象。
+///
+/// `#[must_use]`（R-01）：裸 bool 返回值若被调用方忽略（忘记把 false 转 Err 就
+/// 继续执行宿主操作）会产生编译警告——「宿主 API 入口必须消费权限判定结果」
+/// 由编译器强制，而非靠 review 记得。
+///
+/// 拒绝日志用 `warn!`（R-08）：策略性拒绝是**预期结果**而非系统错误——不受信任
+/// 插件反复探测若每探一次 error!，日志会被无限冲刷（log-DoS）；warn! 仍默认可见，
+/// 但语义与「影响功能的失败」区分开。
+#[must_use]
 pub(super) fn check_permission(
     scope: &dyn crate::wasm_core::host_api::context::PermissionScope,
     plugin_id: &str,
@@ -70,7 +79,7 @@ pub(super) fn check_permission(
     if scope.permission().check(plugin_id, permission) {
         true
     } else {
-        tracing::error!(plugin_id = %plugin_id, permission = %permission, api = %api, "permission denied");
+        tracing::warn!(plugin_id = %plugin_id, permission = %permission, api = %api, "permission denied");
         false
     }
 }

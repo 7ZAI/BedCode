@@ -147,10 +147,15 @@ impl Default for PluginMetrics {
 
 impl PluginMetrics {
     /// 内存增长记账（limiter 批准路径调用）：current = desired，峰值取大
+    ///
+    /// current 与 peak 用同序（SeqCst，R-16）：Relaxed 下较晚提交的较小
+    /// current 可被观测先于较早的较大值（重排），出现 current < peak 而真实
+    /// 分配其实回落的矛盾读数；同序后一次快照内两指标自洽（last-writer 语义
+    /// 下的瞬时一致性）。
     pub(crate) fn record_memory_growth(&self, desired: usize) {
         let desired = desired as u64;
-        self.memory_current_bytes.store(desired, Ordering::Relaxed);
-        self.memory_peak_bytes.fetch_max(desired, Ordering::Relaxed);
+        self.memory_current_bytes.store(desired, Ordering::SeqCst);
+        self.memory_peak_bytes.fetch_max(desired, Ordering::SeqCst);
     }
 
     /// 燃料消耗记账（exports() 续费前调用：consumed = 预算 - 剩余）
@@ -281,8 +286,8 @@ impl PluginMetrics {
             }
         }
         PluginMetricsSnapshot {
-            memory_current_bytes: self.memory_current_bytes.load(Ordering::Relaxed),
-            memory_peak_bytes: self.memory_peak_bytes.load(Ordering::Relaxed),
+            memory_current_bytes: self.memory_current_bytes.load(Ordering::SeqCst),
+            memory_peak_bytes: self.memory_peak_bytes.load(Ordering::SeqCst),
             calls_total: self.calls_total.load(Ordering::Relaxed),
             fuel_consumed_total: self.fuel_consumed_total.load(Ordering::Relaxed),
             call_duration_us_total: self.call_duration_us_total.load(Ordering::Relaxed),
@@ -327,7 +332,14 @@ pub struct MetricsRegistry {
     /// plugin_id → 指标集
     plugins: RwLock<HashMap<String, Arc<PluginMetrics>>>,
     /// 系统维度快照源（键 = 快照输出段名，如 `task`；注册制注入，见 [`MetricsSource`]）
-    sources: RwLock<HashMap<String, Box<dyn MetricsSource>>>,
+    sources: RwLock<HashMap<String, Arc<dyn MetricsSource>>>,
+}
+
+/// 锁中毒恢复：记录事件后继续（指标是对外观测面，锁中毒不应让整个监控面
+/// 永久 panic；R-17——恢复的代价是可能丢一笔计数，比全入口崩溃可接受）
+fn recovered<T>(e: std::sync::PoisonError<T>, what: &'static str) -> T {
+    tracing::warn!(what, "MetricsRegistry lock poisoned, recovering");
+    e.into_inner()
 }
 
 impl Default for MetricsRegistry {
@@ -345,20 +357,32 @@ impl MetricsRegistry {
     }
 
     /// 注册系统维度快照源（幂等：同名重复注册覆盖不叠加）
+    ///
+    /// `plugins` 是快照的**保留段名**（插件维度指标），用户源不得占用——
+    /// 否则注册名 `"plugins"` 的源会静默覆盖/碰撞插件维度段（R-18）。
+    /// 保留名注册被拒绝（error 日志 + 跳过注册）：快照里该段缺失本身就是
+    /// fail-visible 信号。
     pub fn register_source(&self, name: &str, source: Box<dyn MetricsSource>) {
+        if name == "plugins" {
+            tracing::error!(
+                name = %name,
+                "MetricsRegistry: 快照段名 'plugins' 是插件维度保留段，拒绝注册（R-18）"
+            );
+            return;
+        }
         self.sources
             .write()
-            .expect("metrics sources lock poisoned")
-            .insert(name.to_string(), source);
+            .unwrap_or_else(|e| recovered(e, "sources"))
+            .insert(name.to_string(), Arc::from(source));
     }
 
     /// 获取（或创建）插件指标句柄
     pub fn plugin(&self, plugin_id: &str) -> Arc<PluginMetrics> {
         // 快路径：读锁命中
-        if let Some(m) = self.plugins.read().expect("metrics lock poisoned").get(plugin_id) {
+        if let Some(m) = self.plugins.read().unwrap_or_else(|e| recovered(e, "plugins")).get(plugin_id) {
             return m.clone();
         }
-        let mut map = self.plugins.write().expect("metrics lock poisoned");
+        let mut map = self.plugins.write().unwrap_or_else(|e| recovered(e, "plugins"));
         map.entry(plugin_id.to_string())
             .or_insert_with(|| Arc::new(PluginMetrics::default()))
             .clone()
@@ -372,22 +396,31 @@ impl MetricsRegistry {
     /// 计数、单元完成累计、并发高水位、回调丢弃计数（spec §5.1）——各段均纯原子
     /// 记账、快照导出是唯一消费口。未注册段在快照中缺失而非 panic（确定性降级，
     /// fail-visible；生产路径 runtime 初始化即注册，无此窗口）。
+    ///
+    /// **用户回调不持锁**（R-07）：`MetricsSource::snapshot()` 是任意实现（可能回捣
+    /// 注册表取插件句柄 → 写锁请求）；在短锁内先收集源列表、释放两把读锁后再逐个
+    /// 调用，杜绝「快照持读锁 → 源回调请求写锁 → 自锁/饥饿」。
     pub fn snapshot(&self) -> serde_json::Value {
-        let map = self.plugins.read().expect("metrics lock poisoned");
-        let plugins: serde_json::Map<String, serde_json::Value> = map
-            .iter()
-            .map(|(id, m)| {
-                (
-                    id.clone(),
-                    serde_json::to_value(m.snapshot()).unwrap_or(serde_json::Value::Null),
-                )
-            })
-            .collect();
+        let plugins: serde_json::Map<String, serde_json::Value> = {
+            let map = self.plugins.read().unwrap_or_else(|e| recovered(e, "plugins"));
+            map.iter()
+                .map(|(id, m)| {
+                    (
+                        id.clone(),
+                        serde_json::to_value(m.snapshot()).unwrap_or(serde_json::Value::Null),
+                    )
+                })
+                .collect()
+        };
         let mut out = serde_json::Map::new();
         out.insert("plugins".to_string(), serde_json::Value::Object(plugins));
-        let sources = self.sources.read().expect("metrics sources lock poisoned");
-        for (name, source) in sources.iter() {
-            out.insert(name.clone(), source.snapshot());
+        // 短锁收集源（Arc 克隆），锁外调用用户回调
+        let sources: Vec<(String, Arc<dyn MetricsSource>)> = {
+            let s = self.sources.read().unwrap_or_else(|e| recovered(e, "sources"));
+            s.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+        };
+        for (name, source) in sources {
+            out.insert(name, source.snapshot());
         }
         serde_json::Value::Object(out)
     }
@@ -618,5 +651,66 @@ mod tests {
         let snap = reg.snapshot();
         assert!(snap.get("plugins").is_some());
         assert!(snap.get("task").is_none(), "未注册段缺失而非 panic");
+    }
+
+    /// R-18：`plugins` 是快照保留段名，用户源不得占用——保留名注册被拒绝，
+    /// 插件维度段不被静默覆盖/碰撞。变异判据：register_source 放行保留名 ⇒ 转红。
+    #[test]
+    fn reserved_plugins_segment_name_rejected_for_user_sources() {
+        struct Sneaky;
+        impl MetricsSource for Sneaky {
+            fn snapshot(&self) -> serde_json::Value {
+                serde_json::json!({ "hijacked": true })
+            }
+        }
+        let reg = MetricsRegistry::new();
+        reg.register_source("plugins", Box::new(Sneaky));
+        let snap = reg.snapshot();
+        assert!(
+            !snap["plugins"].get("hijacked").is_some(),
+            "保留段不得被用户源劫持: {snap}"
+        );
+        // 正常段名仍可注册
+        reg.register_source("custom", Box::new(Sneaky));
+        assert!(reg.snapshot()["custom"]["hijacked"].as_bool().is_some());
+    }
+
+    /// R-07：用户 `MetricsSource::snapshot()` 回捣注册表（取插件句柄 → 写锁）
+    /// 不得死锁——快照先释放两把读锁再调用户回调。
+    #[test]
+    fn user_source_reentry_into_registry_does_not_deadlock() {
+        struct Reentrant {
+            reg: std::sync::Arc<MetricsRegistry>,
+        }
+        impl MetricsSource for Reentrant {
+            fn snapshot(&self) -> serde_json::Value {
+                // 回捣：取插件句柄并记账（需要写锁路径）——持读锁期间调用即死锁
+                self.reg.plugin("com.bedcode.reentrant").record_memory_growth(8);
+                serde_json::json!({ "ok": true })
+            }
+        }
+        let reg = std::sync::Arc::new(MetricsRegistry::new());
+        reg.register_source("reentrant", Box::new(Reentrant { reg: reg.clone() }));
+        // 快照正常返回（修复前：持读锁调源回调 → 回调请求写锁 → 自锁）
+        let snap = reg.snapshot();
+        assert_eq!(snap["reentrant"]["ok"], serde_json::json!(true));
+        // 回调的记账确实落盘（回调发生在 plugins 段构建之后，故第二次快照才可见）
+        assert_eq!(reg.plugin("com.bedcode.reentrant").snapshot().memory_current_bytes, 8);
+        assert_eq!(
+            reg.snapshot()["plugins"]["com.bedcode.reentrant"]["memory_current_bytes"],
+            8,
+            "回捣记账应进入插件维度段"
+        );
+    }
+
+    /// R-16：current 与 peak 同序观察自洽——回落分配后读到的 current 不大于 peak
+    #[test]
+    fn memory_current_never_exceeds_peak_in_snapshot() {
+        let m = PluginMetrics::default();
+        m.record_memory_growth(4096);
+        m.record_memory_growth(1024); // 回落
+        let snap = m.snapshot();
+        assert!(snap.memory_current_bytes <= snap.memory_peak_bytes);
+        assert_eq!(snap.memory_peak_bytes, 4096);
     }
 }

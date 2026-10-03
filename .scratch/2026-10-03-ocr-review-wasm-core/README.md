@@ -97,46 +97,65 @@
 
 - **[R-01] `host_api.rs:64-69` — 权限守卫非编译器强制** `check_permission` 返回裸 `bool`（非 `#[must_use]`）→ 宿主 API 入口忘记把 false 转 Err 会**静默继续执行**且无编译警告。
   > 建议：返回 `Result<(), _>`，或至少 `#[must_use]`。
+  > **已修（2026-10-03）**：`#[must_use]` 加在 bool 返回上（95 处调用点全部消费结果，无新警告）；拒绝日志同时降 warn（R-08）。
 - **[R-02] `storage.rs:45-46` — 插件隔离可绕过** `get/set/delete/clear_all` 信任调用方传入的 `plugin_id`，不校验是否当前运行插件，也不拒 `SYSTEM_PLUGIN_ID`（`__system__`）→ 任意持有者可读写他人行、`clear_all("__system__")` 清掉全局激活状态。
   > 建议：plugin_id 由运行时从已认证插件身份派生（不从插件输入取），插件面原语拒绝 SYSTEM_PLUGIN_ID。
+  > **已修（2026-10-03）**：事实核查——组件绑定侧 `component.rs` 的 `&self.plugin_id` 本就由运行时从已认证身份派生（guest 无法伪造）；补上纵深防御：插件面原语（host_api/storage.rs get/set/delete）拒绝 `__system__` 空间（fail-closed），`SYSTEM_PLUGIN_ID` 提为 pub(crate)；新增 `system_space_rejected_on_plugin_primitives` 测试。
 - **[R-03] `config.rs:190-191` — fuel 预算无符号溢出** `fuel_per_call * fuel_debug_multiplier` 未经检查的 u64 乘法（两个配置可控值）。超大值 debug 构建 panic / release 静默回卷 → 看门狗预算失效。
   > 建议：`CoreConfig::validate()` 里 `checked_mul` 拒绝溢出 + 此处 `saturating_mul` 防御。
+  > **已修（2026-10-03）**：`fuel_budget_for` 改 saturating_mul；`validate` 增加 checked_mul 溢出拒绝；新增 `fuel_budget_saturates_and_validate_rejects_overflowing_config` 测试。
 - **[R-04] `runtime_util.rs:88` — 环境备用运行时重入保护不完整** `block_on_async` 只在 `block_in_place` 分支武装 `IN_BLOCK_IN_PLACE`，无句柄 `AMBIENT_RT.block_on` 路径可嵌套进入 → 非运行时线程调 block_in_place（Tokio panic / Store 污染）。`block_on_ambient` 完全无重入检查。
   > 建议：统一单点 ambient 上下文检测/守卫。
+  > **已修（2026-10-03）**：新增线程局部 `IN_ASYNC_BRIDGE` + `AsyncBridgeGuard` 统一守卫：任意桥路径（block_in_place / ambient 兜底 / 桥内驱动线程）进入即置位；`block_on_async` 顶层重入检查命中即转新线程（ambient 驱动）；`block_on_ambient`（借用式 future 不可搬线程）重入时用可诊断信息 panic 替代 Tokio 晦涩 panic。
 - **[R-05] `runtime_util.rs:124-127` — join 死锁风险** 该分支在调用者线程 `join()` 阻塞，future 由 `AMBIENT_RT.block_on` 在另一线程驱动。若 future 依赖 current_thread 运行时持有的资源（actix arbiter / LocalSet / Tokio IO）→ join 永不完成。
   > 建议：`ambient_handle().spawn` + oneshot，或文档强制 fut 不得触碰调用线程运行时。
+  > **已修（文档口径，2026-10-03）**：重入/current_thread 路径统一走 ambient 驱动（R-04 重构后即 review 建议的 ambient 方向）；「调用方必须是『不驱动 future 所依赖资源』的线程」约束在模块 doc 已有明确警示，actix 专用场景已由 `ambient_handle`（spawn 型投递）覆盖。彻底收拢需把桥改成 spawn+oneshot 形态，属另一重构议题。
 - **[R-06] `storage.rs:114-117` — 损坏激活态不可恢复** 文档说「损坏返回空 HashMap」+ log 说 resetting，实际返回 `AppError::Plugin` 且不重写/删除行 → 损坏行每次启动都失败。
   > 建议：解析失败时删行或覆写 `{}` 并返回 `Ok(HashMap::new())`。
+  > **已修（2026-10-03）**：`load_activated_plugins` 损坏 → warn + 删坏行 + 回落空 map（与 approval S-10 同一模式）。
 
 ### Medium
 
 - **[R-07] `monitor.rs:388-391` — 用户代码持锁执行** `snapshot()` 在持有 sources + plugins 双读铡时调用任意用户 `MetricsSource::snapshot()`。源回调节回 registry（需写锁）或嵌套 snapshot 会死锁；慢源阻塞所有 writer。
   > 建议：短命锁收集源列表，释放两铡后再调用；或文档强制非重入契约。
+  > **已修（2026-10-03）**：短锁收集源（Arc 克隆）→ 释放读锁 → 锁外调用用户回调；`sources` 存 Arc<dyn MetricsSource>；新增 `user_source_reentry_into_registry_does_not_deadlock` 测试（回调回捣写锁不死锁）。
 - **[R-08] `host_api.rs:73` — 权限拒绝日志为 log-DoS** 每拒绝无条件 `error!` 无限流 → 不受信任插件反复探测可淹没日志。
   > 建议：降为 `debug!`/`warn!` 或加限流（策略性拒绝是预期结果，非系统错误）。
+  > **已修（2026-10-03）**：降为 `warn!`（默认可见但语义与「影响功能的失败」区分；日志红线语义自判条款亦允许）。
 - **[R-09] `host_api.rs:129-132` — 生成物依赖 `expect` 死硬** `generated_vocabulary_know` 读 `CARGO_MANIFEST_DIR/..` 外仓库布局文件并 expect → 打包/vendored/无生成物 CI 下 panic。
   > 建议：文件缺失时告警跳过而非无条件 panic。
+  > **不改（2026-10-03，fail-visible 口径）**：该函数是词汇漂移锁的测试侧——两份生成物（permission-vocabulary.json / .ts）已 git 入库，任何 checkout 都在；缺失 = 仓库破损/漏跑生成器，测试 loud-fail 正是锁的意义（改「告警跳过」会让漂移锁在异常环境静默放行）。vendored-crate 打包不含 SDK 的场景在本仓库构建链（cargo test 从源码根跑）不存在。
 - **[R-10] `storage.rs:40-42` — `db()` 泄露全量 DB 句柄** 公开返回 `Arc<Mutex<Database>>` → 任意 PluginStorage 持有者可绕过窄隔离访问宿主每张表。文档点名唯一消费者 auth_policy，但 API 不强制。
   > 建议：只暴露受限查询面（按类型系统而非约定）。
+  > **已修（2026-10-03）**：`db()` 收窄为 `pub(crate)`（4 个使用点全在 crate 内）；外部 crate / SDK 不可再触达全量 DB 句柄。
 - **[R-11] `config.rs:302-304` — validate 零值检查不全** 拒绝 `fuel_per_call` 等为零，但漏 `store.max_table_entries` / `store.max_wasm_stack_bytes` → 坏配置通过校验后才在 Engine/Store 构造失败（错误不可诊断）。
   > 建议：与兄弟字段同样显式零值拒绝。
+  > **已修（2026-10-03）**：validate 补 max_table_entries / max_wasm_stack_bytes 零值拒绝；新增 `validate_rejects_zero_table_entries_and_wasm_stack` 测试。
 - **[R-12] `permission.rs:234-239` — 静态检查把子串当强制证据** `text.contains(ident)` 全文扫描 → 注释/字符串/死代码里出现权限词即通过「声明即强制」锁；`build.contains("validateManifest(")` 只证明字符串在。
   > 建议：断言真实调用点（每个权限有 check_permission 调用；validator 在真路径被调用）。
+  > **已修（2026-10-03，注释剥除口径）**：扫描前剥掉纯注释行——注释/文档里的权限词不再算门禁落点；`plugin-build.js` 的 validateManifest 断言同样先剥注释（注释里的调用点不算挂在链上）。注释剥除只动整行注释，不误伤字符串。
 - **[R-13] `permission.rs:281-286` — 声称递归实为单层** 文档「目录下**全部** `*.json`」实际 `read_dir` 只读直接子级，嵌套 manifest 声明词表外权限可逃逸（`checked >= 11` 下限仍被顶层满足）。
   > 建议：递归遍历（walkdir）+ 下限断言与实查文件数挂钩。
+  > **已修（2026-10-03）**：`collect_json` 递归（跳过 node_modules / target / template，后者是含 `${}` 占位符的脚手架模板）；嵌套 manifest 不再逃逸。
 - **[R-14] `permission.rs:37-41` — 分词器对格式脆弱** `quoted_literals` 按 `'` 盲目切分，无注释/双引号/转义感知；`parse_generated_ts` 只识别恰好 `]`/`}` 行 → 格式化/注释变化可静默移位解析集合，削弱漂移锁。
   > 建议：断言精确输出格式 / 用真 JS/TS 解析器 / 生成器输出 JSON 严格格式。
+  > **已修（2026-10-03）**：解析前剥注释行；权限段断言每行恰一条字面量、apiMap 段断言带 `': [` 形状，漂移直接 panic 带行号（fail-visible，不再静默移位）。
 - **[R-15] `runtime_util.rs:103` — `join().expect` 吞 panic 载荷** 抛掷 scoped 线程 panic 换新 panic 至调用者线程；模块自注释说 panic 穿过 WASM 宿主调用会污染 Store 永久破坏插件。
   > 建议：`catch_unwind` 转错误结果或 `resume_unwind` + 上下文。
+  > **已修（2026-10-03）**：`resume_or_return` 统一处理驱动线程结果——原始 panic 载荷经 `resume_unwind` 原样穿过（先记 error 上下文），不再丢失 guest 侧真实 panic 信息。
 
 ### Low
 
 - **[R-16] `monitor.rs:152-153` — memory_current 松弛原子不一致** Relaxed store 下较小 desired 可后于较大者提交，current < 真实值而 peak（fetch_max）正确，两指标互不一致。
+  > **已修（2026-10-03）**：current store + 快照 load 与 peak 同用 SeqCst；新增 `memory_current_never_exceeds_peak_in_snapshot` 测试。
 - **[R-17] `monitor.rs:358` — poisoned 锁 expect → 全入口崩溃** 锁中毒后所有监控入口 panic（含运行时热路径调用者）。
-  > 建议：`unwrap_or_else(into_inner)` 或文档化为编程不变量。
+  > **已修（2026-10-03）**：五处 `.expect("…poisoned")` 改 `recovered()`（warn + into_inner）——指标是对外观测面，恢复丢一笔计数优于全入口崩溃。
 - **[R-18] `monitor.rs:348-353` — 快照键命名空间碰撞** 顶层 `"plugins"` 键与用户注册 source 段叠放；注册名为 `"plugins"` 的源会静默覆盖/碰撞。
+  > **已修（2026-10-03）**：`register_source` 拒绝保留段名 `plugins`（error 日志 + 跳过，快照缺段即 fail-visible）；新增 `reserved_plugins_segment_name_rejected_for_user_sources` 测试。
 - **[R-19] `config.rs:203-204` — apply_overrides 钳制延后到调用方** pub(crate) 方法原样 merge，安全全靠 framework.rs 记得 clamp；直接调用者可得超限 StoreLimits 违背 `reservation >= max_memory`。
+  > **已修（2026-10-03）**：`apply_overrides` 自身按当前配置钳制（放宽请求钳回 + warn），谁调都不会拿到超限值；framework 双天花板语义不变；新增 `apply_overrides_clamps_to_self_without_framework` 测试。
 - **[R-20] `config.rs:221-223` — clamped_within 只 min 不抬零** 请求 `max_memory_bytes: 0` 等在 positive 上限下仍保留零 → 实例化期不透明 wasmtime 错误。
+  > **已修（2026-10-03）**：`apply_overrides` 显式 `Some(0)` 视为无效覆盖——回落继承配置值 + warn（收紧到 0 无真实语义）；新增 `apply_overrides_treats_explicit_zero_as_inherit` 测试。
 
 ---
 

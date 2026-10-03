@@ -17,7 +17,11 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 /// 系统级 plugin_id，用于存储非插件私有的全局数据
-const SYSTEM_PLUGIN_ID: &str = "__system__";
+///
+/// pub(crate)：插件面存储原语（host_api/storage.rs）据此**拒绝**插件实例
+/// 触碰系统空间（R-02 纵深防御）——插件实例的 plugin_id 由运行时从已认证
+/// 身份派生，永远不可能是它；真出现 = 实施者 bug 或被绕过，fail-closed。
+pub(crate) const SYSTEM_PLUGIN_ID: &str = "__system__";
 /// 插件激活状态持久化 key
 const ACTIVATION_STATE_KEY: &str = "activation_state";
 
@@ -37,7 +41,11 @@ impl PluginStorage {
     /// `plugin_auth_policies` / `plugin_auth_records` 不在 `plugin_storage` 里）：
     /// 它由 `FsAuthChecker` 从本模块取得句柄构造，避免 `WasmRuntime` 再多传一路 db。
     /// 插件可见面仍只有 `get` / `set` / `delete`——本访问器不进任何原语。
-    pub fn db(&self) -> Arc<Mutex<Database>> {
+    ///
+    /// `pub(crate)`（R-10）：全量 `Arc<Mutex<Database>>` 句柄暴露给任意持有者
+    /// 会绕过窄存储隔离直读宿主每张表；本句柄只应在 crate 内（安全/能力模块）
+    /// 出现，外部（SDK / 其它 crate）不得触达。
+    pub(crate) fn db(&self) -> Arc<Mutex<Database>> {
         self.db.clone()
     }
 
@@ -142,16 +150,22 @@ impl PluginStorage {
 
     /// 加载插件激活状态映射
     ///
-    /// 首次启动或数据损坏时返回空 HashMap
+    /// 首次启动或数据损坏时返回空 HashMap，**并真正清掉坏行**（R-06）——
+    /// 旧实现损坏时返回 Err 且不重整：损坏行每次启动都失败，激活状态从此
+    /// 永不恢复（与 approval S-10 同一 fail-visible 反面教材）。复位后下次
+    /// 启动从干净状态继续。
     pub async fn load_activated_plugins(&self) -> crate::Result<HashMap<String, bool>> {
         match self.get(SYSTEM_PLUGIN_ID, ACTIVATION_STATE_KEY).await? {
-            Some(value) => {
-                let map: HashMap<String, bool> = serde_json::from_value(value).map_err(|e| {
-                    tracing::warn!("Failed to parse activation state, resetting: {}", e);
-                    crate::AppError::Plugin(format!("Invalid activation state: {}", e))
-                })?;
-                Ok(map)
-            }
+            Some(value) => match serde_json::from_value::<HashMap<String, bool>>(value) {
+                Ok(map) => Ok(map),
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to parse activation state, resetting");
+                    if let Err(clear_err) = self.delete(SYSTEM_PLUGIN_ID, ACTIVATION_STATE_KEY).await {
+                        tracing::warn!(error = %clear_err, "Failed to clear corrupted activation state");
+                    }
+                    Ok(HashMap::new())
+                }
+            },
             None => Ok(HashMap::new()),
         }
     }

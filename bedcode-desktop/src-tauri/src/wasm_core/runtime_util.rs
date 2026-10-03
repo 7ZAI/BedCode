@@ -55,6 +55,63 @@ impl Drop for BlockInPlaceGuard {
     }
 }
 
+thread_local! {
+    /// 当前线程是否已处于任意一条异步桥路径（block_in_place 分支 /
+    /// AMBIENT_RT.block_on 分支 / 桥内驱动线程）——统一重入检测点（R-04）
+    static IN_ASYNC_BRIDGE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// 桥上下文守卫：进入桥路径时置位，退出（含 panic 穿透）时复位
+struct AsyncBridgeGuard;
+
+impl AsyncBridgeGuard {
+    fn enter() -> Self {
+        debug_assert!(!IN_ASYNC_BRIDGE.with(|f| f.get()), "调用方须先做完重入检查");
+        IN_ASYNC_BRIDGE.with(|f| f.set(true));
+        Self
+    }
+}
+
+impl Drop for AsyncBridgeGuard {
+    fn drop(&mut self) {
+        IN_ASYNC_BRIDGE.with(|f| f.set(false));
+    }
+}
+
+/// 驱动线程返回处理：透传正常值；原始 panic 载荷原样穿过（R-15）
+///
+/// `join().expect(...)` 会把驱动线程的 panic 换成新 panic 且丢弃原载荷——
+/// guest 侧真实 panic 信息（wasmtime trap 细节）随之丢失，且模块自注释说
+/// panic 穿过 WASM 宿主调用会污染 Store；这里保留原载荷让排障看到根因。
+fn resume_or_return<T>(result: std::thread::Result<T>) -> T {
+    match result {
+        Ok(value) => value,
+        Err(payload) => {
+            tracing::error!("block_on_async: driver thread panicked, re-raising original panic payload");
+            std::panic::resume_unwind(payload);
+        }
+    }
+}
+
+/// 在新线程上经 ambient runtime 驱动 future（R-04 重入路径 / current_thread 分支的共同实现）
+///
+/// 新线程的 IN_ASYNC_BRIDGE 由守卫置位：该线程驱动期间任何嵌套 block_on_async
+/// 都会命中顶层重入检查再开新线程（不 panic、不回到本线程的 runtime 上下文）。
+fn run_on_fresh_thread_ambient<F, R>(fut: F) -> R
+where
+    F: std::future::Future<Output = R> + Send,
+    R: Send + 'static,
+{
+    let result = std::thread::scope(|s| {
+        s.spawn(|| {
+            let _bridge = AsyncBridgeGuard::enter();
+            AMBIENT_RT.block_on(fut)
+        })
+        .join()
+    });
+    resume_or_return(result)
+}
+
 /// 在同步上下文中执行 async 闭包，兼容多线程和 current_thread 运行时
 ///
 /// WASM host functions 是同步的，但需要调用 async Tokio 代码（数据库、锁等）。
@@ -79,54 +136,52 @@ where
     F: std::future::Future<Output = R> + Send,
     R: Send + 'static,
 {
-    let Ok(handle) = tokio::runtime::Handle::try_current() else {
-        // 无当前 runtime 上下文（spawn_blocking 阻塞线程 / 纯 std 线程）：
-        // 在全局 ambient multi-thread 运行时上阻塞执行。
-        // 与 wasmtime-wasi 的 ambient runtime 同策略——这是 WASI 预打开模式的关键：
-        // 插件调用被搬到无 handle 线程后，wasi 同步绑定（in_tokio）走其自身 ambient
-        // runtime，宿主函数经此 ambient runtime 阻塞执行，两者互不冲突。
-        return AMBIENT_RT.block_on(fut);
-    };
-    match handle.runtime_flavor() {
-        tokio::runtime::RuntimeFlavor::MultiThread => {
-            if let Some(_guard) = BlockInPlaceGuard::enter() {
-                // guard 持有期间当前线程在 worker 池外阻塞；退出（含 panic）时复位重入标志
+    // 统一重入检测（R-04）：本线程已在任一路桥上下文内（block_in_place /
+    // AMBIENT_RT.block_on / 桥内驱动线程）又调用本函数时——嵌套 block_in_place
+    // 在已让出线程上 panic、嵌套 block_on 触发 enter 守卫 panic（Cannot start a
+    // runtime from within a runtime）、非 worker 线程调 block_in_place 同样 panic
+    // ——一律改到无上下文的新线程驱动。旧实现只在 block_in_place 分支武装
+    // IN_BLOCK_IN_PLACE，无句柄的 ambient 兜底路径可被嵌套进入而漏网。
+    if IN_ASYNC_BRIDGE.with(|f| f.get()) {
+        return run_on_fresh_thread_ambient(fut);
+    }
+    match tokio::runtime::Handle::try_current() {
+        Err(_) => {
+            // 无当前 runtime 上下文（spawn_blocking 阻塞线程 / 纯 std 线程）：
+            // 在全局 ambient multi-thread 运行时上阻塞执行。
+            // 与 wasmtime-wasi 的 ambient runtime 同策略——这是 WASI 预打开模式的关键：
+            // 插件调用被搬到无 handle 线程后，wasi 同步绑定（in_tokio）走其自身 ambient
+            // runtime，宿主函数经此 ambient runtime 阻塞执行，两者互不冲突。
+            let _bridge = AsyncBridgeGuard::enter();
+            AMBIENT_RT.block_on(fut)
+        }
+        Ok(handle) => match handle.runtime_flavor() {
+            tokio::runtime::RuntimeFlavor::MultiThread => {
+                // guard 持有期间当前线程在 worker 池外阻塞；退出（含 panic）时复位两个标志
+                let _guard = BlockInPlaceGuard::enter();
+                let _bridge = AsyncBridgeGuard::enter();
                 tokio::task::block_in_place(|| handle.block_on(fut))
-            } else {
-                // 重入：当前线程已被外层 block_in_place + handle.block_on 占据
-                // （enter 守卫仍生效），嵌套 handle.block_on 必然 panic
-                // （Cannot start a runtime from within a runtime）。
-                // 新线程无 enter 守卫，block_on 合法；外层同步 join 等待结果。
-                std::thread::scope(|s| {
-                    s.spawn(|| handle.block_on(fut))
-                        .join()
-                        .expect("block_on_async: spawned thread panicked")
-                })
             }
-        }
-        _ => {
-            // current_thread 运行时（#[tokio::test] / Actix-rt worker）：当前线程
-            // 已在 runtime context 内，两条路都走不通：
-            // - `handle.block_on`（current_thread 调度器由 owner 线程独占驱动，
-            //   本线程即 owner 线程，直接调用必然死锁；跨线程驱动 IO/process
-            //   future 同样永久空转——历史死锁：process_kill 测试）；
-            // - `AMBIENT_RT.block_on`（本线程）：重入检查 panic
-            //   （"Cannot start a runtime from within a runtime"）。
-            // 方案：在 scoped 新线程（无 runtime 上下文、支持非 'static future）
-            // 上 AMBIENT_RT.block_on。ambient runtime 是 multi_thread + enable_all，
-            // IO/process/time 驱动齐全，multi_thread 的 block_on 契约本就允许任意
-            // 线程调用（future 在调用线程内执行、spawned 任务进线程池）。
-            //
-            // ⚠️ 本分支会阻塞调用线程直到 future 完成：**调用方必须是「不驱动
-            // future 所依赖资源」的线程**。actix arbiter 是反例——宿主 WS 原语要
-            // await arbiter 上的连接 actor，投递任务若在 arbiter 线程上同步等待即
-            // 自锁（见 `ambient_handle` 说明）。
-            std::thread::scope(|s| {
-                s.spawn(|| AMBIENT_RT.block_on(fut))
-                    .join()
-                    .expect("block_on_async: spawned thread panicked")
-            })
-        }
+            _ => {
+                // current_thread 运行时（#[tokio::test] / Actix-rt worker）：当前线程
+                // 已在 runtime context 内，两条路都走不通：
+                // - `handle.block_on`（current_thread 调度器由 owner 线程独占驱动，
+                //   本线程即 owner 线程，直接调用必然死锁；跨线程驱动 IO/process
+                //   future 同样永久空转——历史死锁：process_kill 测试）；
+                // - `AMBIENT_RT.block_on`（本线程）：重入检查 panic
+                //   （"Cannot start a runtime from within a runtime"）。
+                // 方案：在 scoped 新线程（无 runtime 上下文、支持非 'static future）
+                // 上 AMBIENT_RT.block_on。ambient runtime 是 multi_thread + enable_all，
+                // IO/process/time 驱动齐全，multi_thread 的 block_on 契约本就允许任意
+                // 线程调用（future 在调用线程内执行、spawned 任务进线程池）。
+                //
+                // ⚠️ 本分支会阻塞调用线程直到 future 完成：**调用方必须是「不驱动
+                // future 所依赖资源」的线程**。actix arbiter 是反例——宿主 WS 原语要
+                // await arbiter 上的连接 actor，投递任务若在 arbiter 线程上同步等待即
+                // 自锁（见 `ambient_handle` 说明）。
+                run_on_fresh_thread_ambient(fut)
+            }
+        },
     }
 }
 
@@ -136,10 +191,22 @@ where
 /// 输出满足 `'static`——仅同步驱动当前 future 并返回结果，不把 future
 /// 交给其它执行器接管。`run_guest_call` 在 `spawn_blocking` 线程驱动 tokio
 /// Mutex 锁获取用（借用闭包内 Arc，无法满足 `'static` 约束）。
+///
+/// 重入（本线程已在任一路桥内）不可恢复——借用式 future 无法搬去新线程，
+/// 直接嵌套 AMBIENT_RT.block_on 会得到 Tokio 难以阅读的
+/// "Cannot start a runtime from within a runtime"；这里显式 panic 并点名
+/// 约束（R-04）：此类重入是实施错误，不应静默发生。
 pub(crate) fn block_on_ambient<F>(fut: F) -> F::Output
 where
     F: std::future::Future + Send,
 {
+    if IN_ASYNC_BRIDGE.with(|f| f.get()) {
+        panic!(
+            "block_on_ambient called on a thread already inside an async bridge; \
+             borrowed futures cannot be moved to a driver thread — this path must not nest"
+        );
+    }
+    let _bridge = AsyncBridgeGuard::enter();
     AMBIENT_RT.block_on(fut)
 }
 

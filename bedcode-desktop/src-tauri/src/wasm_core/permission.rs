@@ -41,13 +41,37 @@ mod tests {
             .collect()
     }
 
+    /// 剥掉纯注释行（整行 `//` / `*` / `/*` 前缀，R-12/R-14）
+    ///
+    /// 漂移锁扫描「源码/生成物里出现权限词即算落点」时，注释/文档里的权限词
+    /// 不该算数——纯注释行剥掉后再扫，只有真实代码引用才算门禁落点；生成物解析
+    /// 同理：注释行不参与字面量收集（否则注释里的单引号会插入假权限）。
+    /// 只剥**整行注释**，不动行内注释与字符串（避免误伤 `"http://..."`）。
+    fn strip_comment_lines(text: &str) -> String {
+        text.lines()
+            .filter(|line| {
+                let t = line.trim_start();
+                !(t.starts_with("//")
+                    || t.starts_with("/*")
+                    || t.starts_with("*/")
+                    || t.starts_with("*"))
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     /// 解析前端生成物：`(权限词汇, API 映射表)`
+    ///
+    /// 严格形状解析（R-14）：生成器输出是固定格式（`  'perm',` 与
+    /// `  'perm': ['m1', 'm2'],`），任何漂移（换行、注释插队、多字面量、
+    /// 缺 `': [` 形状）**直接报错**而非静默移位解析集合——"格式化/注释变化
+    /// 可静默改变集合"正是本锁要防的静默通道。
     fn parse_generated_ts(text: &str) -> (BTreeSet<String>, BTreeMap<String, Vec<String>>) {
         let mut permissions = BTreeSet::new();
         let mut api_map = BTreeMap::new();
         let mut section = "";
-        for line in text.lines() {
-            let trimmed = line.trim();
+        for (idx, raw) in strip_comment_lines(text).lines().enumerate() {
+            let trimmed = raw.trim();
             if trimmed.starts_with("export const GENERATED_VALID_PERMISSIONS") {
                 section = "permissions";
                 continue;
@@ -56,24 +80,40 @@ mod tests {
                 section = "apiMap";
                 continue;
             }
-            match trimmed {
-                "]" | "}" => {
-                    section = "";
-                    continue;
-                }
-                _ => {}
+            if trimmed == "]" || trimmed == "}" || trimmed == "];" || trimmed == ";}" {
+                section = "";
+                continue;
+            }
+            if trimmed.is_empty() {
+                continue;
             }
             let literals = quoted_literals(trimmed);
             match section {
                 "permissions" => {
-                    if let Some(p) = literals.first() {
-                        permissions.insert(p.clone());
-                    }
+                    assert_eq!(
+                        literals.len(),
+                        1,
+                        "permission-vocabulary.ts:{}: 权限段行形状漂移（应恰一条单引号字面量）: {}",
+                        idx + 1,
+                        raw
+                    );
+                    permissions.insert(literals[0].clone());
                 }
                 "apiMap" => {
-                    if let (Some(key), methods) = (literals.first(), literals[1..].to_vec()) {
-                        api_map.insert(key.clone(), methods);
-                    }
+                    assert!(
+                        !literals.is_empty(),
+                        "permission-vocabulary.ts:{}: apiMap 段行无字面量: {}",
+                        idx + 1,
+                        raw
+                    );
+                    assert!(
+                        trimmed.contains("': ["),
+                        "permission-vocabulary.ts:{}: apiMap 行形状漂移（应 `'perm': [...]`）: {}",
+                        idx + 1,
+                        raw
+                    );
+                    let (key, methods) = (literals[0].clone(), literals[1..].to_vec());
+                    api_map.insert(key, methods);
                 }
                 _ => {}
             }
@@ -131,6 +171,27 @@ mod tests {
             if path.is_dir() {
                 collect_rs(&path, out);
             } else if path.extension().map(|e| e == "rs").unwrap_or(false) {
+                out.push(path);
+            }
+        }
+    }
+
+    /// 递归收集目录下全部 `*.json` 文件（R-13：嵌套目录中的 manifest 不得逃逸扫描）
+    ///
+    /// 跳过 `node_modules` / `target`（第三方依赖与构建产物里的 JSON 不是 plugin
+    /// manifest；tsconfig 等带注释的 JSON 也会让解析直接崩掉）
+    fn collect_json(dir: &Path, out: &mut Vec<PathBuf>) {
+        for entry in fs::read_dir(dir).expect("目录可读") {
+            let path = entry.expect("目录条目可读").path();
+            if path.is_dir() {
+                let name = path.file_name().and_then(|n| n.to_str());
+                // node_modules / target：第三方依赖与构建产物；template：脚手架模板
+                // （含 `${...}` 占位符，不是合法 JSON 也不是真实 manifest）
+                if matches!(name, Some("node_modules" | "target" | "template" | "templates")) {
+                    continue;
+                }
+                collect_json(&path, out);
+            } else if path.extension().is_some_and(|e| e == "json") {
                 out.push(path);
             }
         }
@@ -231,7 +292,9 @@ mod tests {
             if file.file_name().map(|n| n == "permission.rs").unwrap_or(false) {
                 continue;
             }
-            let text = read(file);
+            // 剥掉纯注释行（R-12）：注释/文档里出现权限词不算门禁落点——
+            // 变异判据：把某权限的 check_permission 落点改成注释即转红
+            let text = strip_comment_lines(&read(file));
             for (ident, perm) in PERMISSION_VOCABULARY {
                 if text.contains(ident) || text.contains(&format!("\"{perm}\"")) {
                     referenced.insert((*perm).to_string());
@@ -261,11 +324,11 @@ mod tests {
     /// `bus` / `fileservice` / `transfer` 即此类装饰词汇（移动端 `bus` 是合法位，
     /// 属 ADR 0018 双端契约分叉，不在本锁范围）。
     ///
-    /// **扫描范围**：目录下**全部** `*.json`，靠「有 `id` 字段」筛出 plugin manifest。
-    /// 原先只认单夹具形态的 `plugin.json`；夹具合并成 `packages/plugin-sdk-fixtures/`
-    /// 后改按 feature 分文件放（`http.json` / `pty.json` / `task.json` / `ws.json` +
-    /// 根 `plugin.json`），只认 `plugin.json` 会**静默漏掉 4 份 fixture manifest**。
-    /// 同目录的 `package.json` / `tsconfig.json` 无 `id` 字段，天然被跳过。
+    /// **扫描范围**：目录下**全部** `*.json`（递归，R-13——旧实现只读直接子级，
+    /// 嵌套目录里的 manifest 声明词汇表外权限可逃逸），靠「有 `id` 字段」筛出
+    /// plugin manifest。夹具按 feature 分文件放（`http.json` / `pty.json` /
+    /// `task.json` / `ws.json` + 根 `plugin.json`）；同目录的 `package.json` /
+    /// `tsconfig.json` 无 `id` 字段，天然被跳过。
     #[test]
     fn production_manifests_declare_only_known_vocabulary() {
         let root = desktop_root();
@@ -278,12 +341,8 @@ mod tests {
                 if !entry_path.is_dir() {
                     continue;
                 }
-                let mut candidates: Vec<std::path::PathBuf> = fs::read_dir(&entry_path)
-                    .expect("插件目录可读")
-                    .flatten()
-                    .map(|f| f.path())
-                    .filter(|p| p.is_file() && p.extension().is_some_and(|e| e == "json"))
-                    .collect();
+                let mut candidates = Vec::new();
+                collect_json(&entry_path, &mut candidates);
                 candidates.sort();
                 for manifest in candidates {
                     let text = read(&manifest);
@@ -309,7 +368,7 @@ mod tests {
             }
         }
         // 下限 11 = 4 个 wasm 应用 + bench-test + wasi-test + 合集 crate 的 5 份
-        // （http/plugin/pty/task/ws）。夹具再合并时本数只会变少，若变小先查扫描范围
+        // （http/plugin/pty/task/ws）。递归扫描只可能让实测数更多；若变小先查扫描范围
         assert!(
             checked >= 11,
             "实测仅校验了 {checked} 份 manifest（预期 >= 11），扫描范围可疑"
@@ -325,7 +384,9 @@ mod tests {
     #[test]
     fn manifest_validation_runs_in_the_plugin_build_chain() {
         let root = desktop_root();
-        let build = read(&root.join("scripts/plugin-build.js"));
+        // 剥注释再断言调用（R-12）：`validateManifest(` 若只出现在注释/字符串里
+        // 不算挂在链上——注释里的调用点不能当作强制执行证据
+        let build = strip_comment_lines(&read(&root.join("scripts/plugin-build.js")));
         assert!(
             build.contains("validateManifest("),
             "插件构建链必须调用 manifest 校验（scripts/plugin-build.js）"

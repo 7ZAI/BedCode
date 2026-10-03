@@ -185,10 +185,15 @@ impl StoreLimits {
     /// 燃料预算的纯逻辑形态：按 `debug_mode` 决定是否应用放大倍率
     ///
     /// 独立于 [`plugin_debug_mode`]（环境变量 + 构建形态）以便单测直接覆盖
-    /// 倍率分支，不依赖进程级环境变量（测试并行安全）
+    /// 倍率分支，不依赖进程级环境变量（测试并行安全）。
+    ///
+    /// 乘法饱和防溢出（R-03）：放大倍率与燃料预算都是配置可控值，超大组合在
+    /// debug 构建 panic / release 静默回卷会让看门狗预算失真；饱和到 u64::MAX
+    /// 后 wasmtime 侧超限注入会拒绝而非回卷出小预算（伪看门狗）。非法配置本身
+    /// 由 [`CoreConfig::validate`] 的 checked_mul 检查在加载期拒绝。
     pub(crate) fn fuel_budget_for(&self, debug_mode: bool) -> u64 {
         if debug_mode {
-            self.fuel_per_call * self.fuel_debug_multiplier
+            self.fuel_per_call.saturating_mul(self.fuel_debug_multiplier)
         } else {
             self.fuel_per_call
         }
@@ -196,28 +201,39 @@ impl StoreLimits {
 
     /// 应用插件 manifest 的资源覆盖请求：`None` 字段继承内核配置
     ///
-    /// 仅做「请求合并」，不做仲裁——越界请求的钳制由安全模块负责
-    /// （[`crate::wasm_core::security::SecurityFramework::resolve_store_limits`]），
+    /// 仅做「请求合并」+ **钳制到自身配置值**，不做跨上限仲裁——越界请求的最终
+    /// 钳制由安全模块负责（[`crate::wasm_core::security::SecurityFramework::resolve_store_limits`]），
     /// 保证「谁声明谁合并、谁仲裁谁钳制」的职责边界。`max_wasm_stack_bytes`
     /// 不在可请求面（Engine 构建期参数，见字段注释），恒继承配置。
+    ///
+    /// **钳制到自身（R-19）**：放宽请求（大于当前配置）被钳回配置值——历史上
+    /// 这里只做合并、钳制全交给 framework 记得调用，任何直接调用方都会拿到
+    /// 超限 StoreLimits（违背 `reservation >= max_memory`）。钳制到 self 后无论
+    /// 谁调用本方法，结果都不会突破当前配置。
+    ///
+    /// **显式 `0` 视为无效覆盖（R-20）**：请求值 0（如 `max_memory_bytes: 0`）
+    /// 不是合法资源限制（实例化期会得到不透明 wasmtime 错误），回落继承配置值
+    /// 并 warn 记录（防静默）；「收紧到 0」没有真实语义，不需要被支持。
     pub(crate) fn apply_overrides(&self, request: &ResourceOverrides) -> StoreLimits {
         StoreLimits {
-            fuel_per_call: request.fuel_per_call.unwrap_or(self.fuel_per_call),
+            fuel_per_call: nonzero_or_inherit("fuel_per_call", request.fuel_per_call, self.fuel_per_call),
             // debug 放大倍率不在请求面（全局调试开关参数），恒继承配置
             fuel_debug_multiplier: self.fuel_debug_multiplier,
-            max_memory_bytes: request.max_memory_bytes.unwrap_or(self.max_memory_bytes),
-            max_table_entries: request.max_table_entries.unwrap_or(self.max_table_entries),
+            max_memory_bytes: nonzero_or_inherit("max_memory_bytes", request.max_memory_bytes, self.max_memory_bytes),
+            max_table_entries: nonzero_or_inherit(
+                "max_table_entries",
+                request.max_table_entries,
+                self.max_table_entries,
+            ),
             max_wasm_stack_bytes: self.max_wasm_stack_bytes,
-            max_instances: request.max_instances.unwrap_or(self.max_instances),
-            max_memories: request.max_memories.unwrap_or(self.max_memories),
-            max_tables: request.max_tables.unwrap_or(self.max_tables),
+            max_instances: nonzero_or_inherit("max_instances", request.max_instances, self.max_instances),
+            max_memories: nonzero_or_inherit("max_memories", request.max_memories, self.max_memories),
+            max_tables: nonzero_or_inherit("max_tables", request.max_tables, self.max_tables),
         }
     }
 
-    /// 在硬上限内取覆盖值（逐字段 min）——单插件覆盖的安全钳制机制
-    ///
-    /// `ceiling` 通常为编译期默认（[`StoreLimits::default`]）：插件可请求
-    /// 更紧的限制（自我约束），放宽请求被钳制回硬上限
+    /// 当前配置值内的钳制（逐字段 min）——单插件覆盖的收紧语义：
+    /// 请求可更紧，放宽被钳回
     pub fn clamped_within(&self, ceiling: &StoreLimits) -> StoreLimits {
         StoreLimits {
             fuel_per_call: self.fuel_per_call.min(ceiling.fuel_per_call),
@@ -229,6 +245,35 @@ impl StoreLimits {
             max_memories: self.max_memories.min(ceiling.max_memories),
             max_tables: self.max_tables.min(ceiling.max_tables),
         }
+    }
+}
+
+/// 覆盖请求字段的取值助手：
+/// - `Some(0)` 无效（R-20）：回落继承并 warn（防实例化期不透明错误）；
+/// - `Some(v)` 且 v > 当前配置：钳回当前配置（R-19，放宽请求不得突破当前配置，
+///   直接调用方也拿不到超限值）；
+/// - 其余取请求值；`None` 继承
+fn nonzero_or_inherit<T>(field: &'static str, request: Option<T>, current: T) -> T
+where
+    T: Copy + PartialEq + PartialOrd + From<u8>,
+{
+    match request {
+        Some(v) if v == T::from(0) => {
+            tracing::warn!(
+                field = %field,
+                "Plugin resource override is 0 (not a valid limit), inheriting kernel config value"
+            );
+            current
+        }
+        Some(v) if v > current => {
+            tracing::warn!(
+                field = %field,
+                "Plugin resource override exceeds kernel config, clamped to config value"
+            );
+            current
+        }
+        Some(v) => v,
+        None => current,
     }
 }
 
@@ -299,8 +344,23 @@ impl CoreConfig {
         if self.store.fuel_debug_multiplier == 0 {
             return Err("store.fuel_debug_multiplier 必须 > 0".to_string());
         }
+        // R-03：fuel × 倍率的乘积必须不溢出——debug 模式下 `fuel_budget_for`
+        // 会饱和，但配置面不该把「超产品预算」放进来（加载期就拒掉）
+        if self.store.fuel_per_call.checked_mul(self.store.fuel_debug_multiplier).is_none() {
+            return Err(
+                "store.fuel_per_call × fuel_debug_multiplier 溢出 u64（debug 模式预算无法表示）".to_string(),
+            );
+        }
         if self.store.max_memory_bytes == 0 {
             return Err("store.max_memory_bytes 必须 > 0".to_string());
+        }
+        // R-11：兄弟字段同样显式拒绝零值（坏配置不该拖到 Engine/Store 构造期
+        // 才报不透明错误）
+        if self.store.max_table_entries == 0 {
+            return Err("store.max_table_entries 必须 > 0".to_string());
+        }
+        if self.store.max_wasm_stack_bytes == 0 {
+            return Err("store.max_wasm_stack_bytes 必须 > 0（0 会让任意深度的 wasm 递归立即栈溢出）".to_string());
         }
         if self.store.max_instances == 0 || self.store.max_memories == 0 || self.store.max_tables == 0 {
             return Err("store.max_instances/max_memories/max_tables 必须 > 0（为 0 组件无法实例化）".to_string());
@@ -464,6 +524,83 @@ mod tests {
         let mut cfg = CoreConfig::default();
         cfg.engine.memory_reservation_bytes = (cfg.store.max_memory_bytes - 1) as u64;
         assert!(cfg.validate().unwrap_err().contains("memory_reservation"));
+    }
+
+    /// R-11：与兄弟字段同口径的零值拒绝——max_table_entries / max_wasm_stack_bytes
+    /// 为 0 也必须在 validate 期报错（不拖到 Engine/Store 构造期的不透明错误）
+    #[test]
+    fn validate_rejects_zero_table_entries_and_wasm_stack() {
+        let mut cfg = CoreConfig::default();
+        cfg.store.max_table_entries = 0;
+        assert!(cfg.validate().unwrap_err().contains("max_table_entries"));
+
+        let mut cfg = CoreConfig::default();
+        cfg.store.max_wasm_stack_bytes = 0;
+        assert!(cfg.validate().unwrap_err().contains("max_wasm_stack_bytes"));
+    }
+
+    /// R-03：燃料预算 × 放大倍率溢出时 saturating 到 u64::MAX（防 debug panic /
+    /// release 回卷成伪看门狗预算）；校验面拒绝溢出的配置组合
+    #[test]
+    fn fuel_budget_saturates_and_validate_rejects_overflowing_config() {
+        let limits = StoreLimits {
+            fuel_per_call: u64::MAX / 2 + 1,
+            fuel_debug_multiplier: u64::MAX,
+            ..StoreLimits::default()
+        };
+        // 乘法溢出 → 饱和而非回卷
+        assert_eq!(limits.fuel_budget_for(true), u64::MAX);
+        assert_eq!(limits.fuel_budget_for(false), limits.fuel_per_call, "非 debug 不过倍率");
+
+        // 配置面拒绝超产品预算（加载期就判非法）
+        let mut cfg = CoreConfig::default();
+        cfg.store.fuel_per_call = u64::MAX / 2 + 1;
+        cfg.store.fuel_debug_multiplier = u64::MAX;
+        assert!(
+            cfg.validate().unwrap_err().contains("溢出"),
+            "乘积溢出配置必须在 validate 期被拒: {:?}",
+            cfg.validate()
+        );
+    }
+
+    /// R-19（直接调用面就不该拿到超限值）：`apply_overrides` 自身钳制到当前配置，
+    /// 不依赖 framework 记得 clamp——放宽请求直接被钳回，收紧请求保留
+    #[test]
+    fn apply_overrides_clamps_to_self_without_framework() {
+        let cfg = StoreLimits::default();
+        let relaxed = ResourceOverrides {
+            max_memory_bytes: Some(cfg.max_memory_bytes * 2),
+            fuel_per_call: Some(cfg.fuel_per_call * 2),
+            max_tables: Some(cfg.max_tables * 2),
+            ..ResourceOverrides::default()
+        };
+        let merged = cfg.apply_overrides(&relaxed);
+        assert_eq!(merged.max_memory_bytes, cfg.max_memory_bytes, "放宽请求须被钳回配置值");
+        assert_eq!(merged.fuel_per_call, cfg.fuel_per_call);
+        assert_eq!(merged.max_tables, cfg.max_tables);
+
+        let tightened = ResourceOverrides {
+            max_memory_bytes: Some(1024),
+            ..ResourceOverrides::default()
+        };
+        assert_eq!(cfg.apply_overrides(&tightened).max_memory_bytes, 1024, "收紧请求须保留");
+    }
+
+    /// R-20：显式 `Some(0)` 不是合法资源限制，回落继承配置值（防实例化期不透明
+    /// wasmtime 错误）——覆盖请求面与 None 语义一致
+    #[test]
+    fn apply_overrides_treats_explicit_zero_as_inherit() {
+        let cfg = StoreLimits::default();
+        let zeros = ResourceOverrides {
+            max_memory_bytes: Some(0),
+            fuel_per_call: Some(0),
+            max_tables: Some(0),
+            ..ResourceOverrides::default()
+        };
+        let merged = cfg.apply_overrides(&zeros);
+        assert_eq!(merged.max_memory_bytes, cfg.max_memory_bytes, "Some(0) 必须继承配置值");
+        assert_eq!(merged.fuel_per_call, cfg.fuel_per_call);
+        assert_eq!(merged.max_tables, cfg.max_tables);
     }
 
     #[test]

@@ -11,6 +11,20 @@
 use crate::wasm_core::manager::capability;
 use crate::wasm_core::runtime_util::block_on_async;
 use crate::wasm_core::permission::PERMISSION_STORAGE;
+use crate::wasm_core::storage::SYSTEM_PLUGIN_ID;
+
+/// 插件面存储原语的系统空间守卫（R-02 纵深防御）
+///
+/// 插件实例的 `plugin_id` 由运行时从已认证身份派生（`component.rs` 内
+/// `&self.plugin_id`），guest 无法伪造；但若真出现 `__system__`（实施者 bug /
+/// 未来某条宽松入径），必须 fail-closed——系统空间是宿主激活状态/审批记录等的
+/// 真源，任何插件写它就是越权。
+fn ensure_not_system_space(plugin_id: &str) -> Result<(), String> {
+    if plugin_id == SYSTEM_PLUGIN_ID {
+        return Err("storage: plugin may not access system storage space".to_string());
+    }
+    Ok(())
+}
 
 /// 获取值（权限校验 + 服务调用）
 pub(crate) fn storage_get(
@@ -23,6 +37,7 @@ pub(crate) fn storage_get(
     if !super::check_permission(perm, plugin_id, PERMISSION_STORAGE, "host_storage_get") {
         return Err("permission denied".to_string());
     }
+    ensure_not_system_space(plugin_id)?;
     // 能力路由：系统组件提供者命中时转发（组件间不共享内存，WIT 边界序列化）
     if let Some(result) = capability::forward_storage_get(cap, plugin_id, key) {
         return result.map(|opt| opt.map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::String(s))));
@@ -43,6 +58,7 @@ pub(crate) fn storage_set(
     if !super::check_permission(perm, plugin_id, PERMISSION_STORAGE, "host_storage_set") {
         return Err("permission denied".to_string());
     }
+    ensure_not_system_space(plugin_id)?;
     if let Some(result) = capability::forward_storage_set(cap, plugin_id, key, &value.to_string()) {
         return result;
     }
@@ -58,6 +74,7 @@ pub(crate) fn storage_delete(
     if !super::check_permission(perm, plugin_id, PERMISSION_STORAGE, "host_storage_delete") {
         return Err("permission denied".to_string());
     }
+    ensure_not_system_space(plugin_id)?;
     if let Some(result) = capability::forward_storage_delete(cap, plugin_id, key) {
         return result;
     }
@@ -106,5 +123,31 @@ mod tests {
         assert!(storage_get(ctx.as_ref(), ctx.as_ref(), ctx.as_ref(), PLUGIN, "cfg").expect("get ok").is_none());
         // 删除不存在的 key 幂等
         storage_delete(ctx.as_ref(), ctx.as_ref(), ctx.as_ref(), PLUGIN, "cfg").expect("delete again ok");
+    }
+
+    /// R-02 纵深防御：系统空间（`__system__`）对插件面原语不可达——即便权限
+    /// 已授予，读/写/删系统空间一律拒绝（激活状态、审批记录等宿主真源不可触碰）
+    #[test]
+    fn system_space_rejected_on_plugin_primitives() {
+        let ctx = build_host_ctx();
+        // 正常插件 + 模拟“系统 id 被误授权限”（buggy 路径）：权限门过了
+        // 也必须在纵深守卫处被拒
+        grant_permissions(&ctx, PLUGIN, &[PERMISSION_STORAGE]);
+        grant_permissions(&ctx, SYSTEM_PLUGIN_ID, &[PERMISSION_STORAGE]);
+
+        let err = storage_get(ctx.as_ref(), ctx.as_ref(), ctx.as_ref(), SYSTEM_PLUGIN_ID, "activation_state")
+            .expect_err("系统空间读取必须被拒");
+        assert!(err.contains("system storage space"), "实际: {err}");
+        assert!(
+            storage_set(ctx.as_ref(), ctx.as_ref(), ctx.as_ref(), SYSTEM_PLUGIN_ID, "k", serde_json::json!(1))
+                .is_err(),
+            "系统空间写入必须被拒"
+        );
+        assert!(
+            storage_delete(ctx.as_ref(), ctx.as_ref(), ctx.as_ref(), SYSTEM_PLUGIN_ID, "activation_state").is_err(),
+            "系统空间删除必须被拒"
+        );
+        // 正常插件空间不受影响
+        assert!(storage_get(ctx.as_ref(), ctx.as_ref(), ctx.as_ref(), PLUGIN, "k").expect("get ok").is_none());
     }
 }
