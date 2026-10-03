@@ -79,11 +79,20 @@ fn list_sessions(host: &WasmHost, method: &str) -> Value {
         return http_response::error(405, &format!("Method not allowed: {method}"));
     }
     let views = match SessionPlugin::session_list(serde_json::json!({})) {
-        Ok(v) => v
-            .get("sessions")
-            .and_then(|s| s.as_array())
-            .cloned()
-            .unwrap_or_default(),
+        Ok(v) => {
+            // 契约违规显性报错（缺 sessions / 非数组 = 插件实现故障，
+            // 不是「空列表」）——伪装成 200 OK 空成功会让移动端拿到
+            // 假清单；只有真·空数组算合法
+            match v.get("sessions").and_then(|s| s.as_array()).cloned() {
+                Some(arr) => arr,
+                None => {
+                    host.log_error(&format!(
+                        "sessions list http: malformed plugin reply (missing/non-array sessions): {v}"
+                    ));
+                    return sessions_error("sessions list plugin reply malformed");
+                }
+            }
+        }
         Err(e) => {
             host.log_warn(&format!("sessions list http: {e}"));
             return sessions_error(&e);
@@ -116,7 +125,8 @@ fn list_sessions(host: &WasmHost, method: &str) -> Value {
 /// 启动会话（POST /api/sessions/start）→ `{sessionId, status:"running"}`
 ///
 /// 与旧控制器同判据：cols/rows 两者齐备且 >0 才作为 PTY 初始尺寸；源设备名
-/// 参与正统端初始归属与前端刷新事件。
+/// 参与正统端初始归属与前端刷新事件。缺省设备名 → `"desktop"`（桌面本地源，
+/// 与 resize 路径 `kind: "desktop"` 同一语义；旧实现误回落 `"mobile"`）。
 fn start_session(host: &WasmHost, method: &str, body: &Value, device: &Value) -> Value {
     if method != "POST" {
         return http_response::error(405, &format!("Method not allowed: {method}"));
@@ -130,9 +140,18 @@ fn start_session(host: &WasmHost, method: &str, body: &Value, device: &Value) ->
         Ok(c) => c,
         Err(e) => return sessions_error(&e),
     };
-    let num = |k: &str| body.get(k).and_then(|v| v.as_u64()).map(|v| v as u16);
+    let num = |k: &str| body.get(k).and_then(|v| v.as_u64());
+    // u16::try_from：JSON 整数 >65535 静默截断会回绕成非法 PTY 尺寸——
+    // 越界按业务错误拒绝（与 resize 路径同一口径）
     let initial_size = match (num("cols"), num("rows")) {
-        (Some(cols), Some(rows)) if cols > 0 && rows > 0 => (Some(cols), Some(rows)),
+        (Some(cols), Some(rows)) if cols > 0 && rows > 0 => {
+            match (u16::try_from(cols), u16::try_from(rows)) {
+                (Ok(cols), Ok(rows)) => (Some(cols), Some(rows)),
+                _ => {
+                    return sessions_error("invalid PTY size (cols/rows out of u16 range)");
+                }
+            }
+        }
         _ => (None, None),
     };
     let source_device = device_name(device);
@@ -159,7 +178,7 @@ fn start_session(host: &WasmHost, method: &str, body: &Value, device: &Value) ->
                 "sessions-refresh",
                 &serde_json::json!({
                     "refreshType": "sessions",
-                    "source": source_device.clone().unwrap_or_else(|| "mobile".to_string()),
+                    "source": source_device.clone().unwrap_or_else(|| "desktop".to_string()),
                 }),
             );
             http_response::ok_with_data(serde_json::json!({
@@ -190,7 +209,7 @@ fn stop_session(host: &WasmHost, method: &str, params: &Value, device: &Value) -
                 "sessions-refresh",
                 &serde_json::json!({
                     "refreshType": "sessions",
-                    "source": source_device.clone().unwrap_or_else(|| "mobile".to_string()),
+                    "source": source_device.clone().unwrap_or_else(|| "desktop".to_string()),
                 }),
             );
             http_response::ok()
@@ -221,7 +240,7 @@ fn remove_session(host: &WasmHost, method: &str, params: &Value, device: &Value)
                 "sessions-refresh",
                 &serde_json::json!({
                     "refreshType": "sessions",
-                    "source": source_device.clone().unwrap_or_else(|| "mobile".to_string()),
+                    "source": source_device.clone().unwrap_or_else(|| "desktop".to_string()),
                 }),
             );
             http_response::ok()
@@ -251,8 +270,24 @@ fn resize_session(
         Ok(id) => id,
         Err(e) => return sessions_error(&e),
     };
-    let cols = body.get("cols").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
-    let rows = body.get("rows").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
+    let cols = match body.get("cols").and_then(|v| v.as_u64()) {
+        Some(v) => match u16::try_from(v) {
+            Ok(c) => c,
+            Err(_) => return sessions_error("invalid PTY size (cols out of u16 range)"),
+        },
+        None => 0,
+    };
+    let rows = match body.get("rows").and_then(|v| v.as_u64()) {
+        Some(v) => match u16::try_from(v) {
+            Ok(r) => r,
+            Err(_) => return sessions_error("invalid PTY size (rows out of u16 range)"),
+        },
+        None => 0,
+    };
+    // 缺省/零值拒绝：与 start 路径 cols/rows > 0 检查一致（0 是非法 PTY 尺寸）
+    if cols == 0 || rows == 0 {
+        return sessions_error("invalid PTY size (cols/rows must be > 0)");
+    }
     let force = body.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
     let requester = match device_name(device) {
         Some(name) => serde_json::json!({ "kind": "mobile", "deviceName": name }),
@@ -323,21 +358,60 @@ fn history_session(host: &WasmHost, method: &str, params: &Value, query: &Value)
     let draft = serde_json::json!({ "sessionId": session_id, "from": from });
     match SessionPlugin::session_history(draft) {
         Ok(v) => {
-            let data: Vec<u8> = v
+            // 必填字段缺失/畸形 → 显性报错（伪装成空历史 = 移动端把
+            // 半截屏当完整快照）；真·空 data / 0 偏移才算合法
+            let data: Vec<u8> = match v
                 .get("data")
                 .and_then(|d| d.as_array())
                 .map(|arr| {
                     arr.iter()
                         .filter_map(|b| b.as_u64().map(|b| b as u8))
                         .collect()
-                })
-                .unwrap_or_default();
-            let min_offset = v.get("minOffset").and_then(|n| n.as_u64()).unwrap_or(0);
-            let snapshot_offset = v
-                .get("snapshotOffset")
-                .and_then(|n| n.as_u64())
-                .unwrap_or(0);
-            let history_bytes = v.get("historyBytes").and_then(|n| n.as_u64()).unwrap_or(0);
+                }) {
+                Some(data) => data,
+                None => {
+                    let msg = format!(
+                        "sessions history http: malformed plugin reply (data missing/non-array): {v}"
+                    );
+                    host.log_error(&msg);
+                    return sessions_error("session history plugin reply malformed");
+                }
+            };
+            let required = |key: &str| -> Result<u64, serde_json::Value> {
+                v.get(key)
+                    .and_then(|n| n.as_u64())
+                    .ok_or_else(|| v.clone())
+            };
+            let min_offset = match required("minOffset") {
+                Ok(n) => n,
+                Err(v) => {
+                    let msg = format!(
+                        "sessions history http: malformed plugin reply (minOffset missing): {v}"
+                    );
+                    host.log_error(&msg);
+                    return sessions_error("session history plugin reply malformed");
+                }
+            };
+            let snapshot_offset = match required("snapshotOffset") {
+                Ok(n) => n,
+                Err(v) => {
+                    let msg = format!(
+                        "sessions history http: malformed plugin reply (snapshotOffset missing): {v}"
+                    );
+                    host.log_error(&msg);
+                    return sessions_error("session history plugin reply malformed");
+                }
+            };
+            let history_bytes = match required("historyBytes") {
+                Ok(n) => n,
+                Err(v) => {
+                    let msg = format!(
+                        "sessions history http: malformed plugin reply (historyBytes missing): {v}"
+                    );
+                    host.log_error(&msg);
+                    return sessions_error("session history plugin reply malformed");
+                }
+            };
             use base64::Engine as _;
             let data_base64 = base64::engine::general_purpose::STANDARD.encode(&data);
             http_response::ok_with_data(serde_json::json!({

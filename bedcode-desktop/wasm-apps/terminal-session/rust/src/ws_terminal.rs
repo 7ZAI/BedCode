@@ -397,35 +397,36 @@ fn handle_text_frame(conn: &mut TerminalConnection, frame: &serde_json::Value) -
             let pty_id = record
                 .pty_id
                 .ok_or_else(|| format!("会话缺少 PTY 句柄：{session_id}"))?;
-            conn.session_id = Some(session_id.clone());
-            conn.pty_id = Some(pty_id);
-            // 新订阅从头拉（历史 = 环驻留窗口内的字节；环已淘汰 → 首次 fetch 即
-            // truncated → ring_resync 重锚）
-            conn.cursor = 0;
-            // 水位全归零：客户端收到下方 `subscribed` 回包时也会把本地计数归零，
-            // 两边必须从同一基准起算（会话重启后环偏移也从 0 起）
-            conn.watermark.reset();
-            conn.mode = match parsed.mode.as_deref() {
+            let mode = match parsed.mode.as_deref() {
                 Some("poll") => TerminalMode::Poll,
                 _ => TerminalMode::Live,
             };
-            let reply = serde_json::json!({
-                "type": "subscribed",
-                "sessionId": session_id,
-                "mode": if conn.mode == TerminalMode::Live { "live" } else { "poll" },
-            });
+            // 回帧**先发后提交**：subscribed 发不出去（满邮箱）→ 连接留在未订阅态
+            // （session_id 未设、水位未清）——客户端从未收到 subscribed，其本地
+            // ack 基线未归零，若此时提交订阅态后续输出帧会对不上基线。
+            // 发送成功才落状态（新订阅从头拉：历史 = 环驻留窗口内的字节；
+            // 水位全归零：客户端收到 subscribed 时也把本地计数归零）
+            let reply = serde_json::json!({ "type": "subscribed", "sessionId": session_id, "mode": if mode == TerminalMode::Live { "live" } else { "poll" } });
             send_text(&conn.endpoint_id, &conn.client_id, &reply.to_string())?;
+            conn.session_id = Some(session_id);
+            conn.pty_id = Some(pty_id);
+            conn.cursor = 0;
+            conn.watermark.reset();
+            conn.mode = mode;
             Ok(true)
         }
         "unsubscribe" => {
-            conn.session_id = None;
-            conn.pty_id = None;
-            conn.cursor = 0;
+            // 回帧先发后提交（与 subscribe 同理由）：unsubscribed 发不出去 →
+            // 连接保留订阅态（客户端未收到确认、仍按订阅中自处），避免
+            // 单侧清状态后客户端对不上基线
             send_text(
                 &conn.endpoint_id,
                 &conn.client_id,
                 &serde_json::json!({ "type": "unsubscribed" }).to_string(),
             )?;
+            conn.session_id = None;
+            conn.pty_id = None;
+            conn.cursor = 0;
             Ok(false)
         }
         // 流控信号：客户端按**渲染水位**确认已消费的本地累计字节。
@@ -624,7 +625,13 @@ fn drain_for(endpoint_id: &str, client_id: &str) -> Result<(), String> {
             Ok(None) => break, // 追平（游标 == 产出端）
             Err(e) => {
                 let msg = e.to_string();
-                if msg.contains("not found") {
+                // 退出竞态窗口：会话/PTY 已摘除（宿主 `not_found` 固定文案
+                // `pty handle not found:` 或属主校验 `not owner:`）。按稳定前缀
+                // 分类（不匹配泛化 `not found` 子串——宿主措辞若改，预期中的
+                // 退出后竞态会静默重分类为硬 Err 并上抛调用方，session_stopped
+                // 尾帧路径整体降级）。宿主错误面是裸串（无 kind/code 可借），
+                // 匹配这里锁死的前缀是当前边界下最稳的分类。
+                if msg.contains("pty handle not found:") || msg.contains("not owner:") {
                     // 会话/PTY 已摘除（exit 竞态窗口）：drain 到此为止
                     return Ok(());
                 }
@@ -722,69 +729,78 @@ pub fn watermark_rows() -> Vec<WsWatermarkRow> {
 /// 停止帧（tail 在前、停止帧在后）；订阅置空、游标归零（客户端可重订阅）
 #[cfg(target_arch = "wasm32")]
 pub fn on_session_terminated(session_id: &str, reason: &str, exit_code: Option<i32>) {
-    let targets: Vec<(String, String, String)> = {
+    // 锁内只拷贝状态、锁外做宿主调用（drain_for 同款规矩）：
+    // pty_ring_fetch / ws_send_* 是宿主调用，持 CONNECTIONS 锁执行会在
+    // 单线程运行时下被宿主重入（send 触发 client-disconnect）卡死整张表
+    let mut snapshots: Vec<(String, String, String, String, u64)> = {
         let mut table = CONNECTIONS.lock().unwrap_or_else(|e| e.into_inner());
         table
             .iter_mut()
             .filter(|c| c.session_id.as_deref() == Some(session_id))
             .map(|c| {
-                // 尽力尾帧：环仍在（罕见窗口）则拉取剩余字节；已摘除 → debug 跳过
-                if let Some(pty_id) = c.pty_id.clone() {
-                    match WasmHost.pty_ring_fetch(&pty_id, c.cursor, MAX_FETCH_BYTES) {
-                        Ok(Some(fetched)) => {
-                            // 退出路径的**截断必须上报**：慢客户端在退出时点已被
-                            // 淘汰过，尾帧就是从环中段开始的；不补 `ring_resync`
-                            // 客户端就会把「半截屏 + session_stopped」当成完整
-                            // 终态（这是尾帧路径独有的静默缺口——drain 路径有
-                            // 截断必重锚，退出路径早前漏了）。
-                            if fetched.truncated {
-                                if let Err(e) = send_text(
-                                    &c.endpoint_id,
-                                    &c.client_id,
-                                    &ring_resync_payload(c.cursor, fetched.next_offset).to_string(),
-                                ) {
-                                    WasmHost.log_warn(&format!(
-                                        "ws terminal: 退出尾帧 ring_resync 发送失败（client_id={}）: {e}",
-                                        c.client_id
-                                    ));
-                                }
-                                c.watermark.reanchor(fetched.next_offset);
-                                c.cursor = fetched.next_offset;
-                            }
-                            if !fetched.data.is_empty() {
-                                if let Err(e) =
-                                    WasmHost.ws_send_binary_to_client(&c.endpoint_id, &c.client_id, &fetched.data)
-                                {
-                                    WasmHost.log_warn(&format!(
-                                        "ws terminal: 退出尾帧下发失败（client_id={}, bytes={}）: {}",
-                                        c.client_id,
-                                        fetched.data.len(),
-                                        e.message
-                                    ));
-                                }
-                                c.watermark.note_pushed(fetched.next_offset);
-                                c.cursor = fetched.next_offset;
-                            }
-                        }
-                        Ok(None) => {}
-                        Err(e) => {
-                            WasmHost.log_debug(&format!(
-                                "ws terminal: 退出尾帧 fetch 失败（跳过，client_id={}）: {}",
-                                c.client_id, e.message
-                            ));
-                        }
-                    }
-                }
-                let target = (c.endpoint_id.clone(), c.client_id.clone(), session_id.to_string());
+                let snapshot = (
+                    c.endpoint_id.clone(),
+                    c.client_id.clone(),
+                    c.pty_id.clone().unwrap_or_default(),
+                    session_id.to_string(),
+                    c.cursor,
+                );
                 c.session_id = None;
                 c.pty_id = None;
                 c.cursor = 0;
                 c.watermark.reset();
-                target
+                snapshot
             })
             .collect()
     };
-    for (endpoint_id, client_id, sid) in targets {
+    // 锁外：尽力尾帧（环可能在最后一次 fetch 后被摘除 → 跳过）
+    for (endpoint_id, client_id, pty_id, sid, cursor) in &mut snapshots {
+        if pty_id.is_empty() {
+            continue;
+        }
+        match WasmHost.pty_ring_fetch(pty_id, *cursor, MAX_FETCH_BYTES) {
+            Ok(Some(fetched)) => {
+                // 退出路径的**截断必须上报**：慢客户端在退出时点已被
+                // 淘汰过，尾帧就是从环中段开始的；不补 `ring_resync`
+                // 客户端就会把「半截屏 + session_stopped」当成完整
+                // 终态（这是尾帧路径独有的静默缺口——drain 路径有
+                // 截断必重锚，退出路径早前漏了）。
+                if fetched.truncated {
+                    if let Err(e) = send_text(
+                        endpoint_id,
+                        client_id,
+                        &ring_resync_payload(*cursor, fetched.next_offset).to_string(),
+                    ) {
+                        WasmHost.log_warn(&format!(
+                            "ws terminal: 退出尾帧 ring_resync 发送失败（client_id={client_id}）: {e}"
+                        ));
+                    }
+                    *cursor = fetched.next_offset;
+                }
+                if !fetched.data.is_empty() {
+                    if let Err(e) =
+                        WasmHost.ws_send_binary_to_client(endpoint_id, client_id, &fetched.data)
+                    {
+                        WasmHost.log_warn(&format!(
+                            "ws terminal: 退出尾帧下发失败（client_id={client_id}, bytes={}）: {}",
+                            fetched.data.len(),
+                            e.message
+                        ));
+                    }
+                    *cursor = fetched.next_offset;
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                WasmHost.log_debug(&format!(
+                    "ws terminal: 退出尾帧 fetch 失败（跳过，client_id={client_id}）: {}",
+                    e.message
+                ));
+            }
+        }
+    }
+    // 锁外：停止帧（tail 在前、停止帧在后）
+    for (endpoint_id, client_id, _, sid, _) in snapshots {
         let mut payload = serde_json::json!({
             "type": "session_stopped",
             "sessionId": sid,
