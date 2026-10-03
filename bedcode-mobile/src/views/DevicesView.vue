@@ -46,8 +46,8 @@
       </div>
     </div>
 
-    <!-- Main Content -->
-    <div class="flex-1 overflow-y-auto overflow-x-hidden px-4 min-h-0">
+    <!-- Main Content（页面内容滚动容器：scrollbar-gutter-stable 防滚动条显隐引起整页横向抖动） -->
+    <div class="scrollbar-gutter-stable flex-1 overflow-y-auto overflow-x-hidden px-4 min-h-0">
       <!-- 连接失败提示（附加在页面区块上方，不替换列表；连接中 loading 由弹窗 LoadingDialog 承担，
           避免状态卡片与列表的快速显示/隐藏跳变闪动） -->
       <Transition name="fade">

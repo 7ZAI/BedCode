@@ -19,7 +19,7 @@
           </div>
         </div>
 
-        <div class="flex-1 overflow-y-auto">
+        <div class="scrollbar-gutter-stable flex-1 overflow-y-auto">
           <!-- Hero：图标 + 名称 + 作者/版本 + 状态 -->
           <div class="px-5 pt-6 pb-5 flex items-center gap-4">
             <PluginIcon
@@ -188,8 +188,8 @@
       </div>
     </div>
 
-    <!-- Plugin List -->
-    <div class="flex-1 overflow-y-auto px-4 pb-8">
+    <!-- Plugin List（页面内容滚动容器：scrollbar-gutter-stable 防滚动条显隐引起整页横向抖动） -->
+    <div class="scrollbar-gutter-stable flex-1 overflow-y-auto px-4 pb-8">
       <!-- Empty state -->
       <div v-if="plugins.length === 0" class="flex flex-col items-center justify-center h-full px-8 text-center">
         <div class="w-12 h-12 rounded-2xl flex items-center justify-center text-2xl mb-4" style="background: var(--mobile-group-bg); border: 1px solid var(--mobile-group-border)">🧩</div>

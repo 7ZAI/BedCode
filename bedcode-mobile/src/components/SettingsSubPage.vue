@@ -13,8 +13,8 @@
       <h1 class="flex-1 min-w-0 text-lg font-semibold text-[var(--mobile-text-primary)] tracking-wide truncate">{{ title }}</h1>
     </header>
 
-    <!-- Content -->
-    <div class="flex-1 overflow-y-auto overflow-x-hidden">
+    <!-- Content（页面内容滚动容器：scrollbar-gutter-stable 防滚动条显隐引起整页横向抖动） -->
+    <div class="scrollbar-gutter-stable flex-1 overflow-y-auto overflow-x-hidden">
       <slot />
     </div>
   </div>

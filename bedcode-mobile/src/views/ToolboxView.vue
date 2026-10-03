@@ -27,7 +27,7 @@
         <h1 class="page-title">{{ t('mobile.toolbox.title') }}</h1>
       </div>
 
-      <div class="flex-1 overflow-y-auto px-4 pb-8">
+      <div class="scrollbar-gutter-stable flex-1 overflow-y-auto px-4 pb-8">
         <div class="pt-2 space-y-3">
           <!-- 预设任务入口 -->
           <button

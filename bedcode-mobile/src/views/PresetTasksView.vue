@@ -17,7 +17,7 @@
     </div>
 
     <!-- 编辑区域 + 任务卡片（整体滚动，结构参照 auto-task Tab1：创建表单在上、卡片列表在下） -->
-    <div ref="contentScrollRef" class="flex-1 overflow-y-auto overflow-x-hidden px-4 pb-8">
+    <div ref="contentScrollRef" class="scrollbar-gutter-stable flex-1 overflow-y-auto overflow-x-hidden px-4 pb-8">
       <!-- 编辑区域：原编辑弹窗内容常驻页面顶部 -->
       <div class="group-card p-4 space-y-3">
         <div class="flex items-center justify-between">

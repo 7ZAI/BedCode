@@ -5,7 +5,7 @@
       <h1 class="page-title">{{ $t('settings.title') }}</h1>
     </div>
 
-    <div class="flex-1 overflow-y-auto overflow-x-hidden px-4 pb-8">
+    <div class="scrollbar-gutter-stable flex-1 overflow-y-auto overflow-x-hidden px-4 pb-8">
       <!-- 分组入口（连接 / 通知 / 安全 / 系统） -->
       <template v-for="group in categoryGroups" :key="group.titleKey">
         <div class="pt-4 pb-1.5">
