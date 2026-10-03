@@ -27,6 +27,12 @@ pub struct ApiRegistry {
     apis: RwLock<HashMap<String, String>>,
 }
 
+impl Default for ApiRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ApiRegistry {
     pub fn new() -> Self {
         Self {
@@ -100,6 +106,11 @@ impl ApiRegistry {
     pub fn len(&self) -> usize {
         let map = self.apis.read().unwrap_or_else(recover_poison);
         map.len()
+    }
+
+    /// 注册表是否为空（clippy 配对建议）
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 }
 
