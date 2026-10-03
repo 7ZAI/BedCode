@@ -14,13 +14,13 @@
 
 ## 0. 汇总
 
-| 模块 | 文件数 | 评论数 | high | medium | low | 耗时 | 输出 |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `security/` | 8 | 16 | 3 | 8 | 5 | 6m50s | /tmp/ocr_security.txt |
-| 根目录（顶层 10 文件） | 10 | 20 | 6 | 9 | 5 | ~7m | /tmp/ocr_root.txt |
-| `manager/host_api/` | 29 | 12 | 3 | 7 | 2 | — | /tmp/ocr_host_api.txt |
-| `manager/` | 52 | 20 | 6 | 9 | 5 | ~22m | /tmp/ocr_manager.txt |
-| **合计** | **99** | **68** | **18** | **33** | **17** | ~40m | — |
+| 模块 | 文件数 | 评论数 | high | medium | low | 耗时 | 输出 | 状态 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `security/` | 8 | 16 | 3 | 8 | 5 | 6m50s | /tmp/ocr_security.txt | ✅ done（612cb2f7d） |
+| 根目录（顶层 10 文件） | 10 | 20 | 6 | 9 | 5 | ~7m | /tmp/ocr_root.txt | ✅ done（bc77476ed；R-09 按 fail-visible 口径拒改） |
+| `manager/host_api/` | 29 | 12 | 3 | 7 | 2 | — | /tmp/ocr_host_api.txt | ✅ done（0aa059e70；H-03 文档口径） |
+| `manager/` | 52 | 20 | 6 | 9 | 5 | ~22m | /tmp/ocr_manager.txt | ✅ done（c47e5adf4） |
+| **合计** | **99** | **68** | **18** | **33** | **17** | ~40m | — | **68/68 done（另有 c5559ff00 clippy 收尾）** |
 
 **跨模块高频主题：**
 
