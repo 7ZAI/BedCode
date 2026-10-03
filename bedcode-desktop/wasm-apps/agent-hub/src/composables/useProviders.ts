@@ -21,6 +21,20 @@ import type {
 
 export type UseProvidersReturn = ReturnType<typeof useProviders>
 
+/**
+ * 命令结果判别联合：把「成功 / 被忽略 / 失败」三种结局显式分开
+ *
+ * 修复前四个命令统一返回 `T | null`，而 `null` 同时代表「命令抛错」「busy 忽略」
+ * 「guest 空回执」三义，调用方只能一律 `if (result === null) return` 静默吞掉——
+ * 表现为点保存/删除/应用后界面毫无反应、也无任何提示（违反 fail-visible 红线）。
+ * 现在失败与忽略必须被调用方显式接住：失败给用户错误提示，忽略保持静默。
+ */
+export type CommandResult<T> =
+  | { status: 'ok'; data: T }
+  /** 同一动作进行中，本次调用被忽略——不是失败，不应弹错误 */
+  | { status: 'busy' }
+  | { status: 'error'; error: unknown }
+
 /** 保存预设载荷（id 缺省 = 新建）；apiKey 缺省 = 保留既有、'' = 清空、非空 = 设置 */
 export interface PresetPayload {
   id?: number
@@ -51,42 +65,44 @@ export function useProviders(context: PluginContext) {
   }
 
   /** 新建/更新预设；同名冲突由调用方按 nameExists 呈现 */
-  async function savePreset(payload: PresetPayload): Promise<SavePresetResult | null> {
-    if (saving.value) return null
+  async function savePreset(payload: PresetPayload): Promise<CommandResult<SavePresetResult | null>> {
+    if (saving.value) return { status: 'busy' }
     saving.value = true
     try {
       const data = await context.commands.execute('agent-hub.save-preset', payload)
-      return (data ?? null) as SavePresetResult | null
+      return { status: 'ok', data: (data ?? null) as SavePresetResult | null }
     } catch (e) {
       console.error('[Agent Hub] save-preset failed', e)
-      return null
+      return { status: 'error', error: e }
     } finally {
       saving.value = false
     }
   }
 
-  async function deletePreset(id: number) {
-    if (saving.value) return
+  async function deletePreset(id: number): Promise<CommandResult<null>> {
+    if (saving.value) return { status: 'busy' }
     saving.value = true
     try {
       await context.commands.execute('agent-hub.delete-preset', { id })
+      return { status: 'ok', data: null }
     } catch (e) {
       console.error('[Agent Hub] delete-preset failed', id, e)
+      return { status: 'error', error: e }
     } finally {
       saving.value = false
     }
   }
 
   /** 反向导入（pi/opencode → 预设 + key 掩码） */
-  async function importProviders(): Promise<ImportProvidersResult | null> {
-    if (importing.value) return null
+  async function importProviders(): Promise<CommandResult<ImportProvidersResult | null>> {
+    if (importing.value) return { status: 'busy' }
     importing.value = true
     try {
       const data = await context.commands.execute('agent-hub.import-providers', {})
-      return (data ?? null) as ImportProvidersResult | null
+      return { status: 'ok', data: (data ?? null) as ImportProvidersResult | null }
     } catch (e) {
       console.error('[Agent Hub] import-providers failed', e)
-      return null
+      return { status: 'error', error: e }
     } finally {
       importing.value = false
     }
@@ -102,8 +118,8 @@ export function useProviders(context: PluginContext) {
     targetName: string,
     keySpec: ApplyKeySpec,
     force = false,
-  ): Promise<ApplyProviderResult | null> {
-    if (applying.value) return null
+  ): Promise<CommandResult<ApplyProviderResult | null>> {
+    if (applying.value) return { status: 'busy' }
     applying.value = true
     try {
       const data = await context.commands.execute('agent-hub.apply-provider', {
@@ -113,10 +129,10 @@ export function useProviders(context: PluginContext) {
         key: keySpec,
         force,
       })
-      return (data ?? null) as ApplyProviderResult | null
+      return { status: 'ok', data: (data ?? null) as ApplyProviderResult | null }
     } catch (e) {
       console.error('[Agent Hub] apply-provider failed', e)
-      return null
+      return { status: 'error', error: e }
     } finally {
       applying.value = false
     }

@@ -43,6 +43,18 @@ import type { UseSkillsReturn } from '../composables/useSkills'
 vi.mock('@vuepic/vue-datepicker', () => ({
   default: { name: 'Datepicker', props: ['modelValue'], render: () => null },
 }))
+
+// toast 队列本体由宿主共享实例持有（SDK vite 插件外部化到 __BEDCODE_SHARED__）。
+// 这里只录「发了哪条、什么级别」，不关心 sonner 内部渲染。
+const toastCalls: Array<{ level: string; message: unknown }> = []
+vi.mock('vue-sonner', () => ({
+  toast: {
+    success: (m: unknown) => toastCalls.push({ level: 'success', message: m }),
+    error: (m: unknown) => toastCalls.push({ level: 'error', message: m }),
+    info: (m: unknown) => toastCalls.push({ level: 'info', message: m }),
+    warning: (m: unknown) => toastCalls.push({ level: 'warning', message: m }),
+  },
+}))
 vi.mock('@binblink/bedcode-plugin-sdk-desktop/ui', () => ({
   // 真实 Select（宿主共享下拉）的最小可用替身：渲染 <select> 并在 change 时
   // emit update:modelValue，使「下拉选项 + 选中回填」可被组件层行为契约断言；
@@ -119,6 +131,7 @@ const callsTo = (id: string) => execute.mock.calls.filter((c) => c[0] === id)
 beforeEach(() => {
   vi.clearAllMocks()
   execute.mockImplementation(async () => null)
+  toastCalls.length = 0
 })
 
 // ==================== A1 ProviderApply ====================
@@ -136,6 +149,11 @@ function preset(over: Partial<ProviderPreset> = {}): ProviderPreset {
   } as unknown as ProviderPreset
 }
 
+/** 命令结果判别联合的构造助手（与 useProviders.CommandResult 同形） */
+const ok = <T,>(data: T) => ({ status: 'ok' as const, data })
+const busy = () => ({ status: 'busy' as const })
+const cmdErr = (e: unknown) => ({ status: 'error' as const, error: e })
+
 function providersStub(over: Partial<UseProvidersReturn> = {}): UseProvidersReturn {
   return {
     state: ref({
@@ -147,17 +165,17 @@ function providersStub(over: Partial<UseProvidersReturn> = {}): UseProvidersRetu
     applying: ref(false),
     saving: ref(false),
     refresh: vi.fn(),
-    savePreset: vi.fn(),
-    deletePreset: vi.fn(),
-    importProviders: vi.fn(),
-    applyProvider: vi.fn(),
+    savePreset: vi.fn().mockResolvedValue(ok({ saved: true })),
+    deletePreset: vi.fn().mockResolvedValue(ok(null)),
+    importProviders: vi.fn().mockResolvedValue(ok(null)),
+    applyProvider: vi.fn().mockResolvedValue(ok(null)),
     ...over,
   } as unknown as UseProvidersReturn
 }
 
 describe('A1 ProviderApply：key 四选一 + 桥接冲突两击确认', () => {
   it('默认（无 stored key、无 source 标注）选中 inline，提交 inline key', async () => {
-    const applyProvider = vi.fn().mockResolvedValue({ applied: true, files: ['auth.json'] })
+    const applyProvider = vi.fn().mockResolvedValue(ok({ applied: true, files: ['auth.json'] }))
     const w = mountComponent(ProviderApply, { providers: providersStub({ applyProvider }), preset: preset() })
     await flushPromises()
     await w.get('[data-testid="apply-key-input"]').setValue('sk-123')
@@ -168,7 +186,7 @@ describe('A1 ProviderApply：key 四选一 + 桥接冲突两击确认', () => {
   })
 
   it('预设已有 stored key 时默认选中 stored，提交 { kind:"stored" }', async () => {
-    const applyProvider = vi.fn().mockResolvedValue({ applied: true, files: [] })
+    const applyProvider = vi.fn().mockResolvedValue(ok({ applied: true, files: [] }))
     const w = mountComponent(ProviderApply, {
       providers: providersStub({ applyProvider }),
       preset: preset({ keyMask: 'sk-1***' }),
@@ -181,7 +199,7 @@ describe('A1 ProviderApply：key 四选一 + 桥接冲突两击确认', () => {
   })
 
   it('反向导入标注的预设默认选中 source，提交源 cli/provider', async () => {
-    const applyProvider = vi.fn().mockResolvedValue({ applied: true, files: [] })
+    const applyProvider = vi.fn().mockResolvedValue(ok({ applied: true, files: [] }))
     const w = mountComponent(ProviderApply, {
       providers: providersStub({ applyProvider }),
       preset: preset({ notes: 'pi:sensenova' }),
@@ -194,7 +212,7 @@ describe('A1 ProviderApply：key 四选一 + 桥接冲突两击确认', () => {
   })
 
   it('切到 none 提交 { kind:"none" }；inline 未填值时写入按钮禁用', async () => {
-    const applyProvider = vi.fn().mockResolvedValue({ applied: true, files: [] })
+    const applyProvider = vi.fn().mockResolvedValue(ok({ applied: true, files: [] }))
     const w = mountComponent(ProviderApply, { providers: providersStub({ applyProvider }), preset: preset() })
     await flushPromises()
 
@@ -213,8 +231,8 @@ describe('A1 ProviderApply：key 四选一 + 桥接冲突两击确认', () => {
   it('桥接冲突：第一次 force=false 被拒 → 出现冲突条 → 确认后 force=true 重试', async () => {
     const applyProvider = vi
       .fn()
-      .mockResolvedValueOnce({ bridgeConflict: true, bridges: ['provider-config.sh'] })
-      .mockResolvedValueOnce({ applied: true, files: ['settings.json'] })
+      .mockResolvedValueOnce(ok({ bridgeConflict: true, bridges: ['provider-config.sh'] }))
+      .mockResolvedValueOnce(ok({ applied: true, files: ['settings.json'] }))
     const w = mountComponent(ProviderApply, {
       providers: providersStub({ applyProvider }),
       preset: preset({ keyMask: 'sk-1***' }),
@@ -234,7 +252,7 @@ describe('A1 ProviderApply：key 四选一 + 桥接冲突两击确认', () => {
   })
 
   it('目标 CLI 切换改变提交入参（默认 pi）', async () => {
-    const applyProvider = vi.fn().mockResolvedValue({ applied: true, files: [] })
+    const applyProvider = vi.fn().mockResolvedValue(ok({ applied: true, files: [] }))
     const w = mountComponent(ProviderApply, { providers: providersStub({ applyProvider }), preset: preset() })
     await flushPromises()
     await w.get('[data-testid="apply-key-input"]').setValue('sk-1')
@@ -245,14 +263,59 @@ describe('A1 ProviderApply：key 四选一 + 桥接冲突两击确认', () => {
     w.unmount()
   })
 
-  it('applyProvider 返回 null（命令失败）时不呈现成功也不呈现冲突', async () => {
-    const applyProvider = vi.fn().mockResolvedValue(null)
+  it('apply 命令报错时显性失败：面板报错 + error toast，不呈现成功也不呈现冲突', async () => {
+    const applyProvider = vi.fn().mockResolvedValue(cmdErr(new Error('host command failed')))
     const w = mountComponent(ProviderApply, { providers: providersStub({ applyProvider }), preset: preset() })
     await flushPromises()
+    // 默认方言 inline 且写入按钮要求已填 key（未填时 disabled）
+    await w.get('[data-testid="apply-key-input"]').setValue('sk-1')
     await w.get('[data-testid="apply-write"]').trigger('click')
     await flushPromises()
     expect(w.find('[data-testid="apply-done"]').exists()).toBe(false)
     expect(w.find('[data-testid="apply-conflict"]').exists()).toBe(false)
+    // fail-visible：命令失败必须在界面上看得见（旧实现静默 return）
+    expect(toastCalls.some((c) => c.level === 'error')).toBe(true)
+    expect(w.text()).toContain('hub.pv.apply.failed')
+    w.unmount()
+  })
+
+  it('apply 并发被忽略（busy）时不误报失败、不弹错误', async () => {
+    const applying = ref(false)
+    const applyProvider = vi
+      .fn()
+      .mockResolvedValueOnce(ok({ bridgeConflict: true, bridges: ['provider-config.sh'] }))
+      .mockResolvedValue(busy())
+    const w = mountComponent(ProviderApply, {
+      providers: providersStub({ applyProvider, applying }),
+      preset: preset({ keyMask: 'sk-1***' }),
+    })
+    await flushPromises()
+    await w.get('[data-testid="apply-write"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="apply-conflict"]').exists()).toBe(true)
+    toastCalls.length = 0
+
+    // 冲突确认按钮不受 applying 影响 → 能真正进入 apply()：守卫必须先拦下
+    applying.value = true
+    await flushPromises()
+    await w.get('[data-testid="apply-conflict-confirm"]').trigger('click')
+    await flushPromises()
+
+    expect(applyProvider).toHaveBeenCalledTimes(1)
+    expect(toastCalls.filter((c) => c.level === 'error')).toHaveLength(0)
+    w.unmount()
+  })
+
+  it('apply 成功：弹成功 toast + 呈现写入文件清单（面板保留供读重启提示）', async () => {
+    const applyProvider = vi.fn().mockResolvedValue(ok({ applied: true, files: ['auth.json'] }))
+    const w = mountComponent(ProviderApply, { providers: providersStub({ applyProvider }), preset: preset() })
+    await flushPromises()
+    await w.get('[data-testid="apply-key-input"]').setValue('sk-1')
+    await w.get('[data-testid="apply-write"]').trigger('click')
+    await flushPromises()
+    expect(toastCalls.some((c) => c.level === 'success')).toBe(true)
+    expect(toastCalls.filter((c) => c.level === 'error')).toHaveLength(0)
+    expect(w.find('[data-testid="apply-done"]').exists()).toBe(true)
     w.unmount()
   })
 })
@@ -294,6 +357,53 @@ describe('A2 预设编辑器：Esc / 焦点进出（票 14 P3-6）', () => {
 
     await flushPromises()
     expect(document.activeElement).toBe(trigger.element)
+    w.unmount()
+  })
+
+  // 回归锁：document 级 Esc 监听曾漏判 key，导致「弹窗里敲任意键即关闭」
+  // （输入框无法输入）。契约：只有 Escape 关闭；字符键 / Enter / IME 组合中的
+  // Escape 都不关。断言强到能杀死「删掉 key 过滤」这一变异。
+  it('输入普通按键（字符 / Enter）不关闭弹窗：焦点与已输入内容都保持', async () => {
+    const w = mountComponent(ProvidersTab, {
+      detection: tabWithPresets(),
+      providers: providersStub(),
+    }, true)
+    await flushPromises()
+    await w.get('[data-testid="new-preset"]').trigger('click')
+    await flushPromises()
+
+    const name = w.get('[data-testid="preset-name"]').element as HTMLInputElement
+    name.focus()
+    name.value = 'gpt'
+    for (const key of ['p', 'Enter', 'ArrowLeft', 'Shift']) {
+      name.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }))
+      await flushPromises()
+    }
+
+    expect(w.find('[data-testid="preset-editor"]').exists()).toBe(true)
+    expect(document.activeElement).toBe(name)
+    expect(name.value).toBe('gpt')
+
+    // 证明监听仍挂着（不是「意外没注册」导致的假绿）：Escape 立刻能关
+    name.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await flushPromises()
+    expect(w.find('[data-testid="preset-editor"]').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('IME 组合输入中的 Escape 只取消候选词，不关闭弹窗', async () => {
+    const w = mountComponent(ProvidersTab, {
+      detection: tabWithPresets(),
+      providers: providersStub(),
+    }, true)
+    await flushPromises()
+    await w.get('[data-testid="new-preset"]').trigger('click')
+    await flushPromises()
+
+    const name = w.get('[data-testid="preset-name"]').element as HTMLInputElement
+    name.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, isComposing: true }))
+    await flushPromises()
+    expect(w.find('[data-testid="preset-editor"]').exists()).toBe(true)
     w.unmount()
   })
 
@@ -393,6 +503,250 @@ describe('A7 预设编辑器弹窗：标签关联 / 必填标记 / 错误落位 
     ;(w.get('[data-testid="preset-save"]').element as HTMLButtonElement).click()
   }
 
+  // ==================== A7-b 保存反馈：成功 toast + 自动关窗 / 失败可见 ====================
+
+  it('保存成功：弹成功 toast 并自动关闭弹窗', async () => {
+    const savePreset = vi.fn().mockResolvedValue(ok({ saved: true }))
+    const { w } = await openEditor({ savePreset })
+    await w.get('[data-testid="preset-name"]').setValue('my-preset')
+    clickSave(w)
+    await flushPromises()
+
+    expect(w.find('[data-testid="preset-editor"]').exists()).toBe(false)
+    expect(toastCalls).toHaveLength(1)
+    expect(toastCalls[0].level).toBe('success')
+    expect(toastCalls[0].message).toBe('hub.pv.toast.created')
+    w.unmount()
+  })
+
+  it('编辑态保存成功用「已更新」文案（新建/编辑不串词）', async () => {
+    const savePreset = vi.fn().mockResolvedValue(ok({ saved: true }))
+    const providers = providersStub({
+      savePreset,
+      state: ref({
+        claude: { env: {}, bridge: {} },
+        presets: [preset({ id: 7, name: 'kimi' })],
+        import: { last: null },
+      } as unknown as ProvidersDomainState),
+    })
+    const w = mountComponent(ProvidersTab, { detection: tabWithPresets(), providers }, true)
+    await flushPromises()
+    await w.get('[data-testid="edit-kimi"]').trigger('click')
+    await flushPromises()
+    clickSave(w)
+    await flushPromises()
+
+    expect(toastCalls[0]?.message).toBe('hub.pv.toast.updated')
+    w.unmount()
+  })
+
+  it('保存命令报错：弹错误 toast、弹窗保持打开（旧实现静默无反应）', async () => {
+    const savePreset = vi.fn().mockResolvedValue(cmdErr(new Error('host command failed')))
+    const { w } = await openEditor({ savePreset })
+    await w.get('[data-testid="preset-name"]').setValue('my-preset')
+    clickSave(w)
+    await flushPromises()
+
+    // fail-visible：不能默默吞掉，用户必须能重试
+    expect(toastCalls).toHaveLength(1)
+    expect(toastCalls[0].level).toBe('error')
+    expect(toastCalls[0].message).toBe('hub.pv.editor.saveFailed')
+    expect(w.find('[data-testid="preset-editor"]').exists()).toBe(true)
+    w.unmount()
+  })
+
+  it('guest 回执异常（既无 saved 也无 nameExists）视为失败，不装作无事发生', async () => {
+    const savePreset = vi.fn().mockResolvedValue(ok({}))
+    const { w } = await openEditor({ savePreset })
+    await w.get('[data-testid="preset-name"]').setValue('my-preset')
+    clickSave(w)
+    await flushPromises()
+
+    expect(toastCalls[0]?.level).toBe('error')
+    expect(w.find('[data-testid="preset-editor"]').exists()).toBe(true)
+    w.unmount()
+  })
+
+  it('同名冲突：弹窗内报错，但不算命令失败、不弹错误 toast', async () => {
+    const savePreset = vi.fn().mockResolvedValue(ok({ saved: false, nameExists: true }))
+    const { w } = await openEditor({ savePreset })
+    await w.get('[data-testid="preset-name"]').setValue('dup')
+    clickSave(w)
+    await flushPromises()
+
+    expect(w.find('.ah-cli-error').exists()).toBe(true)
+    expect(toastCalls.filter((c) => c.level === 'error')).toHaveLength(0)
+    w.unmount()
+  })
+
+  it('并发保存被忽略（busy）：不发命令，也不误报失败', async () => {
+    const saving = ref(false)
+    const savePreset = vi.fn().mockResolvedValue(busy())
+    const { w } = await openEditor({ savePreset, saving })
+    await w.get('[data-testid="preset-name"]').setValue('my-preset')
+    saving.value = true
+    await flushPromises()
+    // 直接 submit 表单（回车路径不受 submit 按钮 disabled 影响）→ 真正进入 save()
+    await w.get('[data-testid="preset-editor"]').trigger('submit')
+    await flushPromises()
+
+    expect(savePreset).not.toHaveBeenCalled()
+    expect(toastCalls).toHaveLength(0)
+    w.unmount()
+  })
+
+  it('删除失败：弹错误 toast（列表行保留，不装作已删）', async () => {
+    const deletePreset = vi.fn().mockResolvedValue(cmdErr(new Error('host command failed')))
+    const providers = providersStub({
+      deletePreset,
+      state: ref({
+        claude: { env: {}, bridge: {} },
+        presets: [preset({ id: 3, name: 'kimi' })],
+        import: { last: null },
+      } as unknown as ProvidersDomainState),
+    })
+    const w = mountComponent(ProvidersTab, { detection: tabWithPresets(), providers }, true)
+    await flushPromises()
+
+    await w.get('[data-testid="delete-kimi"]').trigger('click') // 一击：武装
+    await w.get('[data-testid="delete-kimi"]').trigger('click') // 二击：执行
+    await flushPromises()
+
+    expect(toastCalls.some((c) => c.level === 'error')).toBe(true)
+    expect(w.find('[data-testid="preset-row-kimi"]').exists()).toBe(true)
+    w.unmount()
+  })
+
+  it('删除成功：弹成功 toast', async () => {
+    const deletePreset = vi.fn().mockResolvedValue(ok(null))
+    const providers = providersStub({
+      deletePreset,
+      state: ref({
+        claude: { env: {}, bridge: {} },
+        presets: [preset({ id: 3, name: 'kimi' })],
+        import: { last: null },
+      } as unknown as ProvidersDomainState),
+    })
+    const w = mountComponent(ProvidersTab, { detection: tabWithPresets(), providers }, true)
+    await flushPromises()
+
+    await w.get('[data-testid="delete-kimi"]').trigger('click')
+    await w.get('[data-testid="delete-kimi"]').trigger('click')
+    await flushPromises()
+
+    expect(toastCalls.some((c) => c.level === 'success')).toBe(true)
+    w.unmount()
+  })
+
+  it('导入失败：弹错误 toast，且不展示上一次导入的回执卡片', async () => {
+    const importProviders = vi.fn().mockResolvedValue(cmdErr(new Error('host command failed')))
+    const providers = providersStub({
+      importProviders,
+      state: ref({
+        claude: { env: {}, bridge: {} },
+        presets: [],
+        // 上一轮成功导入的陈旧回执：失败时绝不能被当成本次结果呈现
+        import: { last: { created: ['old'], skipped: [], keys: {} } },
+      } as unknown as ProvidersDomainState),
+    })
+    const w = mountComponent(ProvidersTab, { detection: tabWithPresets(), providers }, true)
+    await flushPromises()
+
+    await w.get('[data-testid="import-providers"]').trigger('click')
+    await flushPromises()
+
+    expect(toastCalls.some((c) => c.level === 'error')).toBe(true)
+    expect(w.find('[data-testid="import-result"]').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('导入成功：展示本次回执卡片', async () => {
+    const importProviders = vi.fn().mockResolvedValue(ok({ created: ['a'], skipped: [], keys: {} }))
+    const providers = providersStub({
+      importProviders,
+      state: ref({
+        claude: { env: {}, bridge: {} },
+        presets: [],
+        import: { last: { created: ['a'], skipped: [], keys: {} } },
+      } as unknown as ProvidersDomainState),
+    })
+    const w = mountComponent(ProvidersTab, { detection: tabWithPresets(), providers }, true)
+    await flushPromises()
+
+    await w.get('[data-testid="import-providers"]').trigger('click')
+    await flushPromises()
+
+    expect(w.find('[data-testid="import-result"]').exists()).toBe(true)
+    expect(toastCalls.filter((c) => c.level === 'error')).toHaveLength(0)
+    w.unmount()
+  })
+
+  // ==================== A7-c 模板快选：空表单直接填 / 已填内容先确认 ====================
+
+  it('空表单点模板：直接填满，不弹覆盖确认条（常用路径零摩擦）', async () => {
+    const { w } = await openEditor()
+    await w.get('[data-testid="preset-template-deepseek"]').trigger('click')
+    await flushPromises()
+
+    expect(w.find('[data-testid="template-confirm"]').exists()).toBe(false)
+    expect((w.get('[data-testid="preset-name"]').element as HTMLInputElement).value).not.toBe('')
+    w.unmount()
+  })
+
+  it('已填内容点模板：不静默抹除，先弹覆盖确认条且表单原样保留', async () => {
+    const { w } = await openEditor()
+    await w.get('[data-testid="preset-name"]').setValue('my-custom')
+    await w.get('[data-testid="preset-baseurl"]').setValue('https://my.api.dev/v1')
+
+    await w.get('[data-testid="preset-template-deepseek"]').trigger('click')
+    await flushPromises()
+
+    expect(w.find('[data-testid="template-confirm"]').exists()).toBe(true)
+    // 关键：用户刚输入的内容一条都不能丢
+    expect((w.get('[data-testid="preset-name"]').element as HTMLInputElement).value).toBe('my-custom')
+    expect((w.get('[data-testid="preset-baseurl"]').element as HTMLInputElement).value).toBe(
+      'https://my.api.dev/v1',
+    )
+    w.unmount()
+  })
+
+  it('覆盖确认 → 应用模板；取消 → 不覆盖（表单与确认条各自复位）', async () => {
+    const { w } = await openEditor()
+    await w.get('[data-testid="preset-name"]').setValue('my-custom')
+
+    // 取消路径
+    await w.get('[data-testid="preset-template-deepseek"]').trigger('click')
+    await flushPromises()
+    await w.get('[data-testid="template-overwrite-cancel"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="template-confirm"]').exists()).toBe(false)
+    expect((w.get('[data-testid="preset-name"]').element as HTMLInputElement).value).toBe('my-custom')
+
+    // 再确认路径
+    await w.get('[data-testid="preset-template-deepseek"]').trigger('click')
+    await flushPromises()
+    await w.get('[data-testid="template-overwrite-confirm"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="template-confirm"]').exists()).toBe(false)
+    expect((w.get('[data-testid="preset-name"]').element as HTMLInputElement).value).not.toBe('my-custom')
+
+    // 覆盖后基准重置：再点其它模板不应再要确认（不会二次打扰）
+    await w.get('[data-testid="preset-template-deepseek"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="template-confirm"]').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('只改了方言也算「已填内容」（填了 key 同理），一并纳入确认', async () => {
+    const { w } = await openEditor()
+    await w.get('[data-testid="preset-style-anthropic"]').trigger('click')
+    await flushPromises()
+    await w.get('[data-testid="preset-template-deepseek"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="template-confirm"]').exists()).toBe(true)
+    w.unmount()
+  })
+
   it('每个控件都有 label[for] 关联（无 “只有 placeholder 的输入框”）', async () => {
     const { w } = await openEditor()
     const panel = w.get('[data-testid="preset-editor"]').element as HTMLElement
@@ -417,7 +771,7 @@ describe('A7 预设编辑器弹窗：标签关联 / 必填标记 / 错误落位 
   })
 
   it('同名错误落在名称字段下方，并被 aria-describedby / aria-invalid 关联', async () => {
-    const savePreset = vi.fn().mockResolvedValue({ saved: false, nameExists: true })
+    const savePreset = vi.fn().mockResolvedValue(ok({ saved: false, nameExists: true }))
     const { w } = await openEditor({ savePreset })
     await w.get('[data-testid="preset-name"]').setValue('dup')
     clickSave(w)
@@ -439,7 +793,7 @@ describe('A7 预设编辑器弹窗：标签关联 / 必填标记 / 错误落位 
   })
 
   it('修改名称后上一轮的同名错误作废（不挂到下次重试）', async () => {
-    const savePreset = vi.fn().mockResolvedValue({ saved: false, nameExists: true })
+    const savePreset = vi.fn().mockResolvedValue(ok({ saved: false, nameExists: true }))
     const { w } = await openEditor({ savePreset })
     await w.get('[data-testid="preset-name"]').setValue('dup')
     clickSave(w)
@@ -454,7 +808,7 @@ describe('A7 预设编辑器弹窗：标签关联 / 必填标记 / 错误落位 
   })
 
   it('面板是 form：点保存 / 表单 submit（等价于文本字段回车）走同一条保存入参', async () => {
-    const savePreset = vi.fn().mockResolvedValue({ saved: true })
+    const savePreset = vi.fn().mockResolvedValue(ok({ saved: true }))
     const { w } = await openEditor({ savePreset })
     // 面板本身就是 <form>（回车 = 保存），而不是一堆散装按钮
     expect(w.get('[data-testid="preset-editor"]').element.tagName).toBe('FORM')
@@ -484,7 +838,7 @@ describe('A7 预设编辑器弹窗：标签关联 / 必填标记 / 错误落位 
   })
 
   it('名称为空时保存按钮 disabled（必填项未填不得提交）', async () => {
-    const savePreset = vi.fn().mockResolvedValue({ saved: true })
+    const savePreset = vi.fn().mockResolvedValue(ok({ saved: true }))
     const { w } = await openEditor({ savePreset })
     const save = w.get('[data-testid="preset-save"]')
     expect(save.attributes('disabled')).toBeDefined()
@@ -510,7 +864,7 @@ describe('A7 预设编辑器弹窗：标签关联 / 必填标记 / 错误落位 
   })
 
   it('编辑态：无模板组、key 占位带掩码、清空开关映射为 apiKey=""', async () => {
-    const savePreset = vi.fn().mockResolvedValue({ saved: true })
+    const savePreset = vi.fn().mockResolvedValue(ok({ saved: true }))
     const providers = providersStub({
       savePreset,
       state: ref({

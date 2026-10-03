@@ -13,6 +13,7 @@
  * 安全横幅 + 预设表格 + 应用卡）。
  */
 import { computed, inject, nextTick, ref, useTemplateRef, watch } from 'vue'
+import { toast } from 'vue-sonner'
 import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 import type { AgentHubState, ProviderPreset, ProvidersDomainState } from '../types'
 import type { UseProvidersReturn } from '../composables/useProviders'
@@ -62,6 +63,24 @@ const editingKeyMask = computed(() => {
 /** 同名冲突（guest 返回 nameExists 后呈现） */
 const nameExists = ref(false)
 
+/**
+ * 表单内容指纹：openEditor 时定格一份，用于判定「用户是否已填内容」。
+ * 含 apiStyle / key——光改方言或填了 key 也算已填，同样不能被模板无声覆盖。
+ */
+function formSignature(): string {
+  return JSON.stringify([
+    formName.value,
+    formBaseUrl.value,
+    formApiStyle.value,
+    formModels.value,
+    formKey.value,
+    clearKey.value,
+  ])
+}
+
+/** openEditor 时的指纹基准（普通变量：只在 openEditor / 应用模板时重写，无需响应式） */
+let formBaseline = formSignature()
+
 function openEditor(preset: ProviderPreset | null, templateId?: string) {
   nameExists.value = false
   formKey.value = ''
@@ -80,16 +99,53 @@ function openEditor(preset: ProviderPreset | null, templateId?: string) {
     formApiStyle.value = tpl?.apiStyle ?? 'openai'
     formModels.value = (tpl?.models ?? []).join('\n')
   }
+  pendingTemplateId.value = null
+  formBaseline = formSignature()
   showEditor.value = true
 }
 
+/** 用户是否已改动过表单（与打开时/应用模板后的基准比对） */
+const formTouched = computed(() => formSignature() !== formBaseline)
+
+/** 待确认覆盖的模板 id（非空 = 覆盖确认条展示中） */
+const pendingTemplateId = ref<string | null>(null)
+
+function applyTemplate(id: string) {
+  const tpl = PROVIDER_TEMPLATES.find((x) => x.id === id)
+  if (!tpl) return
+  pendingTemplateId.value = null
+  nameExists.value = false
+  formKey.value = ''
+  clearKey.value = false
+  formName.value = tpl.name
+  formBaseUrl.value = tpl.baseUrl
+  formApiStyle.value = tpl.apiStyle
+  formModels.value = tpl.models.join('\n')
+  formBaseline = formSignature()
+}
+
+/**
+ * 模板快选（仅新建态）
+ *
+ * 模板语义是「从头开始」，直接 openEditor 会静默抹掉用户刚输入的内容。
+ * 分流：表单未被改动 → 直接填满（零摩擦）；已改动 → 先弹覆盖确认条。
+ * 不采用「只填空字段」：那会拼出「用户 URL + 模板模型」的自相矛盾组合，
+ * 错得隐蔽；宁可多一次点击。
+ */
 function pickTemplate(id: string) {
   // 模板只在新建态提供（编辑态保留原值）
   if (editingId.value !== null) return
-  openEditor(null, id)
+  if (formTouched.value) {
+    pendingTemplateId.value = id
+    return
+  }
+  applyTemplate(id)
 }
 
 async function save() {
+  // busy 守卫：保存按钮 disabled 只是第一道防线，回车/快速连点仍可能重入。
+  // 这里必须先拦——否则 composable 返回 busy 会被当成「保存失败」误报。
+  if (busy.value) return
   const name = formName.value.trim()
   if (!name) return
   const models = formModels.value
@@ -99,7 +155,9 @@ async function save() {
   const keyInput = formKey.value.trim()
   // apiKey 语义：输入新 key → 设置；否则 clearKey 勾选 → 清空；都没 → 保留
   const apiKey = keyInput ? keyInput : clearKey.value ? '' : undefined
-  const result = await props.providers.savePreset({
+  // 新建/编辑在关窗前定格：关窗后不能再拿它拼 toast 文案
+  const wasEditing = editingId.value !== null
+  const res = await props.providers.savePreset({
     id: editingId.value ?? undefined,
     name,
     baseUrl: formBaseUrl.value.trim(),
@@ -107,12 +165,28 @@ async function save() {
     models,
     apiKey,
   })
-  if (result === null) return
+  // 被忽略（并发中）：静默，调用方本就在做同一件事
+  if (res.status === 'busy') return
+  if (res.status === 'error') {
+    toast.error(t('hub.pv.editor.saveFailed'))
+    return
+  }
+  const result = res.data
+  if (!result) {
+    toast.error(t('hub.pv.editor.saveFailed'))
+    return
+  }
   if (result.nameExists) {
     nameExists.value = true
     return
   }
-  if (result.saved) showEditor.value = false
+  if (!result.saved) {
+    // 既未保存也无同名冲突 = guest 回执异常，不装作无事发生
+    toast.error(t('hub.pv.editor.saveFailed'))
+    return
+  }
+  showEditor.value = false
+  toast.success(t(wasEditing ? 'hub.pv.toast.updated' : 'hub.pv.toast.created'))
 }
 
 // ==================== 弹窗焦点管理 ====================
@@ -155,7 +229,15 @@ function onEditorKeydown(e: KeyboardEvent) {
   }
 }
 
-function onEditorEsc() {
+/**
+ * document 级 Esc 监听：面板 Teleport 到 body，事件在 document 上兜底关闭。
+ * 必须先按 key 过滤——此监听对**所有** keydown 生效，漏判就成了「敲任意键
+ * 弹窗即关」（历史 bug：输入框里一打字就被关掉）。
+ * isComposing 同样放过：组合输入中 Esc 是取消候选词，不是关弹窗。
+ */
+function onEditorEsc(e: KeyboardEvent) {
+  if (e.key !== 'Escape') return
+  if (e.isComposing) return
   if (showEditor.value) showEditor.value = false
 }
 
@@ -189,7 +271,13 @@ async function remove(preset: ProviderPreset) {
     return
   }
   deleteArmId.value = null
-  await props.providers.deletePreset(preset.id)
+  const res = await props.providers.deletePreset(preset.id)
+  if (res.status === 'busy') return
+  if (res.status === 'error') {
+    toast.error(t('hub.pv.deleteFailed'))
+    return
+  }
+  toast.success(t('hub.pv.toast.deleted'))
 }
 
 // ==================== 反向导入 ====================
@@ -197,8 +285,16 @@ async function remove(preset: ProviderPreset) {
 const importResultShown = ref(false)
 
 async function importProviders() {
+  if (busy.value) return
+  // 先置 false：失败时不能沿用上一次的回执卡片（会把旧结果当成本次导入）
+  importResultShown.value = false
+  const res = await props.providers.importProviders()
+  if (res.status === 'busy') return
+  if (res.status === 'error') {
+    toast.error(t('hub.pv.importFailed'))
+    return
+  }
   importResultShown.value = true
-  await props.providers.importProviders()
 }
 
 const importLast = computed(() => state.value?.import.last ?? null)
@@ -426,6 +522,27 @@ function sourceTag(preset: ProviderPreset): string {
                       @click="pickTemplate(tpl.id)"
                     >
                       {{ tpl.id === 'custom' ? t('hub.pv.style.custom') : tpl.name }}
+                    </button>
+                  </div>
+                  <!-- 覆盖确认：已填内容时点模板不无声抹除，先问一句 -->
+                  <div v-if="pendingTemplateId" class="ah-banner ah-sk-confirm" data-testid="template-confirm">
+                    <span class="ah-banner-ic">⚠</span>
+                    <span class="ah-banner-text">{{ t('hub.pv.editor.templateOverwrite') }}</span>
+                    <button
+                      type="button"
+                      class="ah-btn ah-btn-warn ah-btn-ghost ah-btn-sm"
+                      data-testid="template-overwrite-confirm"
+                      @click="applyTemplate(pendingTemplateId)"
+                    >
+                      {{ t('hub.pv.editor.templateOverwriteConfirm') }}
+                    </button>
+                    <button
+                      type="button"
+                      class="ah-btn ah-btn-ghost ah-btn-sm"
+                      data-testid="template-overwrite-cancel"
+                      @click="pendingTemplateId = null"
+                    >
+                      {{ t('hub.pv.editor.cancel') }}
                     </button>
                   </div>
                 </div>

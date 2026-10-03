@@ -14,6 +14,7 @@
  * 设计真源：原型 `.scratch/agent-hub/prototype/index.html` #a-pv「应用 sensenova → Pi」卡。
  */
 import { computed, inject, ref } from 'vue'
+import { toast } from 'vue-sonner'
 import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 import type { ApplyKeySpec, ProviderPreset } from '../types'
 import { APPLY_TARGETS, sourceFromNotes } from '../utils/providers'
@@ -70,6 +71,8 @@ const error = ref<string | null>(null)
 const appliedFiles = ref<string[] | null>(null)
 
 async function apply(force: boolean) {
+  // 并发守卫：写入按钮 disabled 之外，回车/连点仍可重入；busy 不是失败不提示
+  if (props.providers.applying.value) return
   error.value = null
   conflict.value = null
   const key: ApplyKeySpec =
@@ -80,25 +83,44 @@ async function apply(force: boolean) {
         : keyMode.value === 'source' && source.value
           ? { kind: 'source', cli: source.value.cli, provider: source.value.provider }
           : { kind: 'none' }
-  const result = await props.providers.applyProvider(
+  const res = await props.providers.applyProvider(
     props.preset.id,
     target.value,
     targetName.value,
     key,
     force,
   )
-  if (result === null) return
+  if (res.status === 'busy') return
+  if (res.status === 'error') {
+    console.error(`[Agent Hub] apply provider command failed (${target.value})`, res.error)
+    error.value = t('hub.pv.apply.failed')
+    toast.error(t('hub.pv.apply.failed'))
+    return
+  }
+  const result = res.data
+  if (!result) {
+    error.value = t('hub.pv.apply.failed')
+    toast.error(t('hub.pv.apply.failed'))
+    return
+  }
   if (result.bridgeConflict) {
     conflict.value = result.bridges ?? []
     return
   }
   if (result.applied) {
+    // 面板保留：写入文件清单 + 重启提示需可读，不自动关
     appliedFiles.value = result.files ?? []
     keyValue.value = ''
+    toast.success(t('hub.pv.toast.applied', { name: props.preset.name }))
   } else if (result.error) {
     // 票 04（ADR 0030）：应用失败原因只进日志，界面显示友好 i18n，不携带原文
     console.error(`[Agent Hub] apply provider failed (${target.value})`, result.error)
     error.value = t('hub.pv.apply.failed')
+    toast.error(t('hub.pv.apply.failed'))
+  } else {
+    // 既未写入也无错误字段：guest 回执异常，不装作无事发生
+    error.value = t('hub.pv.apply.failed')
+    toast.error(t('hub.pv.apply.failed'))
   }
 }
 </script>

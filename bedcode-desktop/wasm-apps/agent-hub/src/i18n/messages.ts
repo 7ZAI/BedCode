@@ -178,6 +178,11 @@ export type MessageSchema = {
   'hub.pv.importSkipped': string
   'hub.pv.importNone': string
   'hub.pv.importFailed': string
+  'hub.pv.deleteFailed': string
+  'hub.pv.toast.created': string
+  'hub.pv.toast.updated': string
+  'hub.pv.toast.deleted': string
+  'hub.pv.toast.applied': string
   'hub.pv.keyMask': string
   'hub.pv.empty': string
   'hub.pv.emptyHint': string
@@ -207,11 +212,14 @@ export type MessageSchema = {
   'hub.pv.editor.close': string
   'hub.pv.editor.required': string
   'hub.pv.editor.template': string
+  'hub.pv.editor.templateOverwrite': string
+  'hub.pv.editor.templateOverwriteConfirm': string
   'hub.pv.editor.name': string
   'hub.pv.editor.baseUrl': string
   'hub.pv.editor.apiStyle': string
   'hub.pv.editor.models': string
   'hub.pv.editor.nameExists': string
+  'hub.pv.editor.saveFailed': string
   'hub.pv.editor.save': string
   'hub.pv.editor.cancel': string
   'hub.pv.editor.key': string
