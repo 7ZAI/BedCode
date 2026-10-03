@@ -993,6 +993,37 @@ mod tests {
         assert_eq!(src["children"][0]["name"], "main.rs");
     }
 
+    /// T-G05：git 失败路径（非零退出 / stderr 诊断）经注入后真正被测——
+    /// 旧 MockGit 恒成功，失败行为从未验证
+    #[test]
+    fn diff_file_tree_surfaces_injected_git_failure() {
+        let root = temp_root().to_string_lossy().to_string();
+        // 第一条 diff --name-only 注入非零退出 + stderr（宿主 run_git_command
+        // 失败路径：500 + Internal error 前缀）
+        let git = MockGit::fail_with(
+            &root,
+            &["diff", "--name-only"],
+            bedcode_plugin_api::host::ProcessSyncResult {
+                exit_code: Some(128),
+                stdout: String::new(),
+                stderr: "fatal: not a git repository".to_string(),
+                timed_out: false,
+            },
+        );
+        let err = diff_file_tree(&git, &root, &[]).expect_err("注入失败必须显性报错");
+        assert!(err.contains("Internal error: git command failed"), "got: {err}");
+        assert!(err.contains("fatal: not a git repository"), "stderr 透传: {err}");
+        // 未命中的命令返回成功（失败注入按条命中，不影响其余）
+        let ok = git
+            .run(&root, &["diff", "--name-only"])
+            .expect("命中失败注入");
+        assert_eq!(ok.exit_code, Some(128));
+        let ok = git
+            .run(&root, &["status", "--porcelain"])
+            .expect("未命中走默认成功");
+        assert_eq!(ok.exit_code, Some(0));
+    }
+
     // ==================== 单文件 diff 解析（与宿主 parse_unified_diff 对照） ====================
 
     #[test]
@@ -1120,6 +1151,18 @@ index 123..456 100644
                 timed_out: false,
             })
         }
+
+        fn run_batch(
+            &self,
+            cwd: &str,
+            batch: &[Vec<String>],
+        ) -> Vec<Result<bedcode_plugin_api::host::ProcessSyncResult, String>> {
+            // 与 MockGit 同语义的显式串行（确定性注入）
+            batch
+                .iter()
+                .map(|args| self.run(cwd, &args.iter().map(|s| s.as_str()).collect::<Vec<_>>()))
+                .collect()
+        }
     }
 
     /// 启动失败的 git 双（宿主 spawn 失败路径）
@@ -1131,6 +1174,17 @@ index 123..456 100644
             _args: &[&str],
         ) -> Result<bedcode_plugin_api::host::ProcessSyncResult, String> {
             Err("process error: spawn 'git' failed: No such file or directory".to_string())
+        }
+
+        fn run_batch(
+            &self,
+            cwd: &str,
+            batch: &[Vec<String>],
+        ) -> Vec<Result<bedcode_plugin_api::host::ProcessSyncResult, String>> {
+            batch
+                .iter()
+                .map(|args| self.run(cwd, &args.iter().map(|s| s.as_str()).collect::<Vec<_>>()))
+                .collect()
         }
     }
 

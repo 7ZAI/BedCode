@@ -98,11 +98,15 @@ pub(crate) mod tests {
 
         fn revoke(&self, id: &str) -> Result<bool, String> {
             let mut records = self.inner.lock().unwrap();
+            // 与 wasm `pairing_revoke`（UPDATE ... WHERE is_active = 1）对齐：
+            // 只有「命中了**活跃**记录」才算 removed——已非活跃的记录幂等 false
+            // （T-G01 三态裁决依赖这个语义：非活跃 pairing 不落 peer 路径）
             match records.iter_mut().find(|r| r.id == id) {
-                Some(record) => {
+                Some(record) if record.is_active => {
                     record.is_active = false;
                     Ok(true)
                 }
+                Some(_) => Ok(false),
                 None => Ok(false),
             }
         }

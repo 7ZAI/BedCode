@@ -22,12 +22,15 @@ pub fn wsl_distros_via_host() -> Result<serde_json::Value, String> {
     Ok(serde_json::json!({ "distros": distros }))
 }
 
-/// native（cargo test 专用）：宿主原语不可用 → 显性失败（不静默返回空列表）。
+/// native 构建（cargo test / clippy / 非 wasm 编译探针）：宿主原语不可用 →
+/// 显性失败（不静默返回空列表）。
 ///
-/// `#[cfg(all(not(target_arch = "wasm32"), test))]` 而非 `#[cfg(not(target_arch = "wasm32"))]`
-/// （T-F27）：旧写法把硬错桩编译进**每个非 wasm 构建**（含未来的 native 二进制），
-/// 非 test 调用方拿到的是运行期错误而非编译期信号——真 test-only 用 test cfg 限定
-#[cfg(all(not(target_arch = "wasm32"), test))]
+/// **T-F27 口径**：本插件 crate 是 wasm-only cdylib（见 `Cargo.toml [lib]`），
+/// native 编译只发生在测试/探针路径——`lib.rs` 的命令面（native 也编译）引用
+/// 本函数，故这里保留非 wasm 通用 fallback 而非 `cfg(test)` 硬错桩（后者会让
+/// native 非 test 编译直接编译失败；产品上不存在 native 二进制，fallback 只
+/// 是「原语不可用时的显性失败」，与 wasm 面同一文案）
+#[cfg(not(target_arch = "wasm32"))]
 pub fn wsl_distros_via_host() -> Result<serde_json::Value, String> {
     Err("wsl distros unavailable outside wasm runtime".to_string())
 }

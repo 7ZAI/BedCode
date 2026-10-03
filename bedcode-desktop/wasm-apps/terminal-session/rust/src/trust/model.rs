@@ -83,6 +83,11 @@ pub struct TrustedDeviceDto {
 
 impl TrustedDeviceDto {
     /// 从内核原始记录构造统一条目（kind=pairing）
+    ///
+    /// **T-G06（active 语义统一）**：统一视图的列表恒为信任集（`active` 恒 true——
+    /// 撤销即从列表消失）。`from_pairing` 调用方（`ops::list`）在构造前已按
+    /// `is_active` 过滤软删行，此处不再拷 `record.is_active`（否则字段语义自相矛盾：
+    /// 字段文档称「列表恒为 true」，拷软删位会让消费者困惑该包含还是过滤）
     pub(crate) fn from_pairing(record: &PairingRecord) -> Self {
         Self {
             kind: TrustKind::Pairing,
@@ -93,42 +98,45 @@ impl TrustedDeviceDto {
             added_at: record.paired_at.clone(),
             last_seen: record.last_seen.clone(),
             connect_count: Some(record.connect_count),
-            active: record.is_active,
+            active: true,
         }
     }
 
     /// 从宿主 `TrustedPeerDto` JSON（host-peer `list-trusted` 原样返回）构造
     /// 统一条目（kind=peer）。字段对齐宿主 `TrustedPeerDto`：
     /// `nodeId` / `displayName` / `fingerprintShort` / `addedAt`
-    pub(crate) fn from_peer(peer: &serde_json::Value) -> Self {
-        Self {
+    ///
+    /// **T-G02（不静默缺省）**：`nodeId` / `addedAt` 缺失 → 显性错误（可失败
+    /// 构造器）——宿主契约破坏被映射成空串会破坏信任身份与排序；调用方按 Err
+    /// 处理而不是伪装成空条目。
+    pub(crate) fn from_peer(peer: &serde_json::Value) -> Result<Self, String> {
+        let node_id = peer
+            .get("nodeId")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| format!("trusted peer dto missing nodeId: {peer}"))?;
+        let added_at = peer
+            .get("addedAt")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| format!("trusted peer dto missing addedAt: {peer}"))?;
+        Ok(Self {
             kind: TrustKind::Peer,
-            id: peer
-                .get("nodeId")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string(),
+            id: node_id.to_string(),
             name: peer
                 .get("displayName")
                 .and_then(|v| v.as_str())
                 .map(String::from),
-            fingerprint: peer
-                .get("nodeId")
-                .and_then(|v| v.as_str())
-                .map(String::from),
+            fingerprint: Some(node_id.to_string()),
             fingerprint_short: peer
                 .get("fingerprintShort")
                 .and_then(|v| v.as_str())
                 .map(String::from),
-            added_at: peer
-                .get("addedAt")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string(),
+            added_at: added_at.to_string(),
             last_seen: None,
             connect_count: None,
             active: true,
-        }
+        })
     }
 }
 
@@ -208,7 +216,7 @@ mod tests {
             "fingerprintShort": "aabbccdd",
             "addedAt": "2026-09-18T12:00:00Z",
         });
-        let dto = TrustedDeviceDto::from_peer(&peer);
+        let dto = TrustedDeviceDto::from_peer(&peer).expect("peer dto");
         assert_eq!(dto.kind, TrustKind::Peer);
         assert_eq!(dto.id, peer["nodeId"]);
         assert_eq!(dto.name.as_deref(), Some("书房台式机"));
@@ -223,7 +231,7 @@ mod tests {
             "fingerprintShort": "11223344",
             "addedAt": "2026-09-18T12:00:00Z",
         });
-        let dto = TrustedDeviceDto::from_peer(&no_name);
+        let dto = TrustedDeviceDto::from_peer(&no_name).expect("peer dto");
         assert_eq!(dto.name, None, "displayName 缺失 → None（宿主同语义）");
     }
 }

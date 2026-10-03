@@ -33,17 +33,13 @@ pub trait GitPort {
     /// 批量只读执行（v20 host-task：生产实现用 `execute-batch` 真并行——status
     /// 树等互相独立的只读 git 命令并发执行，替代串行排队）；结果按入参顺序返回
     /// （fail-collect：单条失败不中断其余，错误定位与该命令单测语义一致）。
-    /// native 测试的 Mock 实现保持默认串行（确定性注入不变）。
+    /// **无默认实现**（T-G07）：旧实现给默认串行回退——忘了覆盖的实现会静默
+    /// 获得性能/语义变化（被测路径不是生产路径）；每个实现必须显式决定并行与否
     fn run_batch(
         &self,
         cwd: &str,
         batch: &[Vec<String>],
-    ) -> Vec<Result<bedcode_plugin_api::host::ProcessSyncResult, String>> {
-        batch
-            .iter()
-            .map(|args| self.run(cwd, &args.iter().map(|s| s.as_str()).collect::<Vec<_>>()))
-            .collect()
-    }
+    ) -> Vec<Result<bedcode_plugin_api::host::ProcessSyncResult, String>>;
 }
 
 // ==================== wasm 实现（host-fs / host-process） ====================
@@ -146,6 +142,20 @@ pub mod wasm_impl {
                 .as_array()
                 .cloned()
                 .unwrap_or_default();
+            // T-G03 防御：批次映射依赖宿主「results 顺序与输入 batch 一致 + 成功
+            // payload 是 JSON 编码串」两条不变量。宿主若重排/省略/夹带，位置序
+            // 映射会把错误归给错误命令——这里先做**长度对账**：短数组（宿主省略）
+            // 立即整体报错，而不是让 `results.get(i)` 滑到错位单元后把缺位当
+            // 通用错误。顺序本身无法在插件侧验证（host 契约，已文档化）
+            if results.len() < batch.len() {
+                let msg = format!(
+                    "file browse: git batch result count mismatch: expected {} got {} \
+                     (host must echo results in input order, one per unit)",
+                    batch.len(),
+                    results.len()
+                );
+                return (0..batch.len()).map(|_| Err(msg.clone())).collect();
+            }
             // 按入参顺序取单元结果（host 保序）：ok → 恢复 ProcessSyncResult；
             // !ok → Err（与 run 的 transport 错误同语义，前缀由调用方按 run_git_lines 规则加）
             let mut out = Vec::with_capacity(batch.len());
@@ -161,11 +171,19 @@ pub mod wasm_impl {
                         ))),
                     }
                 } else {
+                    // 单元级失败：统一 `file browse: git batch unit {i}` 前缀
+                    // （T-G04——与传输层/非法 payload 错误同前缀约定，调用方按
+                    // 稳定约定统一决定是否加 `Internal error:` 前缀）
                     let err = entry["error"]
                         .as_str()
                         .unwrap_or("unknown batch unit error")
                         .to_string();
-                    out.push(Err(err));
+                    out.push(Err(format!(
+                        "file browse: git batch unit {} ({}): {}",
+                        i,
+                        args.join(" "),
+                        err
+                    )));
                 }
             }
             out
@@ -249,6 +267,10 @@ pub(crate) mod tests {
         pub outputs: Mutex<HashMap<(String, String), String>>,
         /// 命令执行记录（断言调用顺序与参数）
         pub calls: Mutex<Vec<(String, Vec<String>)>>,
+        /// 失败注入（T-G05）：(cwd, args-joined) → ProcessSyncResult 重写——
+        /// 非零退出码 / stderr 诊断 / 超时的行为在此编码（旧实现恒成功，
+        /// git 失败路径从未被测）；命中即返回重写结果，不查 outputs
+        pub failures: Mutex<HashMap<(String, String), bedcode_plugin_api::host::ProcessSyncResult>>,
     }
 
     impl MockGit {
@@ -256,6 +278,21 @@ pub(crate) mod tests {
             Self {
                 outputs: Mutex::new(outputs),
                 calls: Mutex::new(Vec::new()),
+                failures: Mutex::new(HashMap::new()),
+            }
+        }
+
+        /// 注入一条失败结果（exit_code != 0 / stderr / timed_out）
+        pub fn fail_with(cwd: &str, args: &[&str], result: bedcode_plugin_api::host::ProcessSyncResult) -> Self {
+            let mut failures = HashMap::new();
+            failures.insert(
+                (cwd.to_string(), args.join(" ")),
+                result,
+            );
+            Self {
+                outputs: Mutex::new(HashMap::new()),
+                calls: Mutex::new(Vec::new()),
+                failures: Mutex::new(failures),
             }
         }
     }
@@ -271,6 +308,10 @@ pub(crate) mod tests {
                 args.iter().map(|s| s.to_string()).collect(),
             ));
             let key = (cwd.to_string(), args.join(" "));
+            // 失败注入优先：命中即返回重写结果（非零退出/stderr/超时行为可测）
+            if let Some(result) = self.failures.lock().unwrap().get(&key).cloned() {
+                return Ok(result);
+            }
             let stdout = self
                 .outputs
                 .lock()
@@ -284,6 +325,19 @@ pub(crate) mod tests {
                 stderr: String::new(),
                 timed_out: false,
             })
+        }
+
+        fn run_batch(
+            &self,
+            cwd: &str,
+            batch: &[Vec<String>],
+        ) -> Vec<Result<bedcode_plugin_api::host::ProcessSyncResult, String>> {
+            // 显式串行（与旧默认同语义）：确定性注入——单测注入的失败/输出表
+            // 按条命中，批量调用逐条走 run（生产实现才是真并行）
+            batch
+                .iter()
+                .map(|args| self.run(cwd, &args.iter().map(|s| s.as_str()).collect::<Vec<_>>()))
+                .collect()
         }
     }
 }

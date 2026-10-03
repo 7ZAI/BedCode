@@ -30,13 +30,20 @@ pub fn list(h: &impl TrustRecords, peer: &impl HostPeer) -> Result<serde_json::V
     records.retain(|r| r.is_active);
     records.sort_by(|a, b| b.paired_at.cmp(&a.paired_at));
 
-    // peer 段：透传宿主 list-trusted（TrustedPeerDto JSON 数组，条目序保留）
+    // peer 段：透传宿主 list-trusted（TrustedPeerDto JSON 数组，条目序保留）。
+    // T-G02：非数组 Ok 当 Err 处理（宿主契约破坏伪装成空列表会破坏信任身份）；
+    // 单条 DTO 缺 nodeId/addedAt 也按 Err（不静默变空条目）
     let mut peers: Vec<serde_json::Value> = Vec::new();
     let peer_error = match peer.peer_list_trusted() {
-        Ok(v) => {
-            peers = v.as_array().cloned().unwrap_or_default();
-            None
-        }
+        Ok(v) => match v.as_array() {
+            Some(arr) => {
+                peers = arr.clone();
+                None
+            }
+            None => Some(format!(
+                "trusted peers list did not return an array: {v}"
+            )),
+        },
         Err(e) => Some(e.message),
     };
 
@@ -48,9 +55,11 @@ pub fn list(h: &impl TrustRecords, peer: &impl HostPeer) -> Result<serde_json::V
         );
     }
     for peer in peers {
+        // 单条畸形 → 整体报错（不静默跳过——信任列表缺条目会破坏撤销寻址）
+        let dto = TrustedDeviceDto::from_peer(&peer)
+            .map_err(|e| format!("trusted peer dto invalid: {e}"))?;
         devices.push(
-            serde_json::to_value(TrustedDeviceDto::from_peer(&peer))
-                .map_err(|e| format!("serialize peer dto: {}", e))?,
+            serde_json::to_value(dto).map_err(|e| format!("serialize trust dto: {}", e))?,
         );
     }
 
@@ -66,18 +75,37 @@ pub fn list(h: &impl TrustRecords, peer: &impl HostPeer) -> Result<serde_json::V
 ///
 /// 未命中：pairing 幂等 `removed=false` 不报错（宿主 UPDATE 影响 0 行）；
 /// peer 目标无权限/引擎不可用时上抛错误（不做「看似成功」的假撤销）。
+///
+/// **T-G01（三态裁决）**：`h.revoke` 的 bool 无法区分「未命中 / 已非活跃 /
+/// 根本不是 pairing」——陈旧 pairing id 撞上 peer node id 会把无关的活跃 peer
+/// 撤销。故先按 records() 判定目标身份：
+/// - records 里找得到该 id 且活跃 → pairing 软删
+/// - records 里找得到该 id 但已非活跃 → pairing 幂等成功（removed=false，不落 peer）
+/// - records 里找不到 → 才尝试 peer 路径（此时 id 明确不是 pairing）
 pub fn revoke(
     h: &impl TrustRecords,
     peer: &impl HostPeer,
     id: &str,
 ) -> Result<serde_json::Value, String> {
-    // pairing 优先：命中即软删
-    if h.revoke(id)? {
-        return Ok(serde_json::json!({ "removed": true, "kind": "pairing" }));
+    // 三态预判：目标 id 是否在 pairing 记录里（含软删行——撤销检测依赖可见性）
+    let pairing_state = h.records()?.iter().find(|r| r.id == id).map(|r| r.is_active);
+    match pairing_state {
+        Some(true) => {
+            // 活跃 pairing：软删（records 里的 is_active 是该记录的活跃位）
+            let removed = h.revoke(id)?;
+            Ok(serde_json::json!({ "removed": removed, "kind": "pairing" }))
+        }
+        Some(false) => {
+            // 已非活跃 pairing：幂等成功（不落 peer 路径——id 属于 pairing 域，
+            // 即使它撞上一个 peer node id 也不能撤销那个无关 peer）
+            Ok(serde_json::json!({ "removed": false, "kind": "pairing" }))
+        }
+        None => {
+            // 明确不是 pairing → peer 目标（host-peer revoke-trusted，node_id 寻址）
+            let removed = peer.peer_revoke_trusted(id).map_err(|e| e.message)?;
+            Ok(serde_json::json!({ "removed": removed, "kind": "peer" }))
+        }
     }
-    // peer 目标：host-peer revoke-trusted（node_id 寻址）
-    let removed = peer.peer_revoke_trusted(id).map_err(|e| e.message)?;
-    Ok(serde_json::json!({ "removed": removed, "kind": "peer" }))
 }
 
 // ==================== 命令面入口（cfg 分流，native 显性失败） ====================
@@ -436,6 +464,24 @@ mod tests {
         let r = revoke(&records, &peer, "ghost-id").expect("revoke unknown");
         assert_eq!(r["removed"], false);
         assert_eq!(r["kind"], "peer", "未命中 pairing 即按 peer 寻址");
+    }
+
+    /// T-G01：已非活跃 pairing 的 id 不得落 peer 路径——即使它撞上某个 peer
+    /// node id，也不能撤销那个无关的活跃 peer（旧实现 bool false 无法区分
+    /// 「已非活跃」与「不是 pairing」，会误撤销）
+    #[test]
+    fn revoke_inactive_pairing_id_does_not_touch_peer() {
+        let mut inactive = MockRecords::record("p-stale-00", "Old", "fp-x", "2026-09-01T00:00:00Z");
+        inactive.is_active = false;
+        let records = MockRecords::new(vec![inactive]);
+        // peer 列表里恰好有个 node id = 陈旧的 pairing id：
+        // 撤销该 id 必须只报 pairing 幂等，绝不能删掉这个活跃 peer
+        let peer = MockPeer::new(vec![sample_peer("p-stale-00", "书房台式机")]);
+        let r = revoke(&records, &peer, "p-stale-00").expect("revoke stale pairing");
+        assert_eq!(r["removed"], false);
+        assert_eq!(r["kind"], "pairing", "id 在 pairing 域 → 不落 peer 路径");
+        let after = peer.trusted.lock().unwrap();
+        assert_eq!(after.len(), 1, "活跃 peer 必须原样保留");
     }
 
     /// 撤销 peer 目标：转发 host-peer revoke-trusted（kind=peer、removed 透传）
