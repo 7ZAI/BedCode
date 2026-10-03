@@ -69,8 +69,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useToast } from '@/composables/useToast'
 import { useUpdateChecker } from '@/composables/useUpdateChecker'
-import { getAppVersion } from '@/composables/useDesktopCommands'
-import { open } from '@tauri-apps/plugin-shell'
+import { getAppVersion, openExternalUrl } from '@/composables/useDesktopCommands'
 import { logger } from '@/utils/frontendLogger'
 import i18n from '@/locales'
 
@@ -100,10 +99,10 @@ async function handleInstallUpdate() {
   await downloadAndInstall()
 }
 
-/** 在系统浏览器中打开 GitHub 仓库 */
+/** 在系统浏览器中打开 GitHub 仓库（经宿主命令，http/https scheme 白名单闸门） */
 async function openGitHub() {
   try {
-    await open('https://github.com/7ZAI/BedCode')
+    await openExternalUrl('https://github.com/7ZAI/BedCode')
   } catch (e) {
     logger.error('Failed to open GitHub repo:', e)
   }

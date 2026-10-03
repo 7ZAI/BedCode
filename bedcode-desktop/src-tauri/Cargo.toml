@@ -14,7 +14,10 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = ["protocol-asset", "tray-icon", "test"] }
-tauri-plugin-shell = "2"
+# tauri-plugin-shell 已移除（前端零资源访问红线）：它给前端提供 open/spawn/execute 的
+# 直接调用面，而 shell:allow-open 正是靠一条 capability 就放开的。宿主侧打开外部链接改用
+# tauri-plugin-opener（与移动端同一口径），见 commands.rs::open_external_url。
+tauri-plugin-opener = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-os = "2"

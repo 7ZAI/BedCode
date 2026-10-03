@@ -1,7 +1,7 @@
 /**
  * 更新检查全链路错误信封集成测试（票 04，票 05 启用，随全量回归执行）
  *
- * 垂直切片：tauri-plugin-updater `check()` reject（原始技术错误）
+ * 垂直切片：宿主命令 `check_for_update` reject（原始技术错误）
  *   → useUpdateChecker（status=failed，详情只进 logger.error）
  *   → SettingsAboutSection（设置页渲染通用文案「检查更新失败，请稍后重试」）
  *   → 断言：DOM / toast 均不含错误原文、堆栈、命令名，详情只在日志
@@ -14,6 +14,10 @@
  * 驱动方式说明（票 05 启用时实测修正）：SettingsAboutSection **不自动触发**更新检查
  * （挂载只读版本号；「检查更新」按钮在 SettingsView 工具栏），故本文件经
  * useUpdateChecker 组合式函数驱动 `checkForUpdate()`，组件只做失败态的 DOM 断言。
+ *
+ * 传输面（前端零资源访问红线）：升级检查与安装的发起权在 Rust 端，前端只 invoke
+ * 宿主命令；`@tauri-apps/plugin-updater` 的调用面已随 `updater:default` 权限撤除，
+ * GitHub 链接同理改走 `open_external_url`（原 `plugin-shell.open`）。
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
@@ -25,24 +29,21 @@ import { useUpdateChecker } from '@/composables/useUpdateChecker'
 
 // ==================== mock Tauri 边界 ====================
 
-const mockCheck = vi.fn()
-vi.mock('@tauri-apps/plugin-updater', () => ({
-  check: (...args: unknown[]) => mockCheck(...args),
-}))
-
 const mockRelaunch = vi.fn()
 vi.mock('@tauri-apps/plugin-process', () => ({
   relaunch: (...args: unknown[]) => mockRelaunch(...args),
 }))
 
-const mockInvoke = vi.fn()
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: (...args: any[]) => mockInvoke(...args),
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: vi.fn(async () => () => {}),
 }))
 
-const mockOpen = vi.fn()
-vi.mock('@tauri-apps/plugin-shell', () => ({
-  open: (...args: unknown[]) => mockOpen(...args),
+const mockInvoke = vi.fn()
+// 按命令名路由的 invoke handler 表；**未登记的命令直接抛错**——避免用例没跟上迁移
+// 却因为 mock 返回 undefined 而静默变绿（假阴性）。
+const invokeHandlers = new Map<string, (args: unknown) => Promise<unknown>>()
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: (...args: any[]) => mockInvoke(...args),
 }))
 
 vi.mock('vue-sonner', () => ({
@@ -68,16 +69,21 @@ beforeEach(() => {
   vi.clearAllMocks()
   // mock 队列卫生：clearAllMocks 不清 once 队列，跨用例残留会让用例拿到
   // 前一个用例的 rejection；reset 后每用例独立设置
-  mockCheck.mockReset()
   mockRelaunch.mockReset()
-  mockOpen.mockReset()
   mockInvoke.mockReset()
+  invokeHandlers.clear()
+  // 按命令名路由：未登记即抛错（宁可红也不静默绿）
+  mockInvoke.mockImplementation(async (cmd: string, args?: unknown) => {
+    const handler = invokeHandlers.get(cmd)
+    if (!handler) throw new Error(`unmocked invoke command: ${cmd}`)
+    return handler(args)
+  })
   resetLoggerState()
   configureLogger(true)
   setActivePinia(createPinia())
   errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {})
-  // 挂载时读取版本号：invoke('get_app_version')
-  mockInvoke.mockResolvedValue('1.0.0')
+  // 挂载时读取版本号
+  invokeHandlers.set('get_app_version', async () => '1.0.0')
   // 载入前把单例状态复位（模块级 ref 跨用例共享）
   const { status } = useUpdateChecker()
   status.value = 'idle'
@@ -92,12 +98,14 @@ afterEach(() => {
 })
 
 describe('更新检查失败全链路', () => {
-  it('check() 抛技术错误 → 设置页显示通用文案，原文只进日志', async () => {
-    // 最真实的失败形状：updater 插件网络/签名错误，含 URL / 堆栈片段
+  it('宿主命令抛技术错误 → 设置页显示通用文案，原文只进日志', async () => {
+    // 最真实的失败形状：Rust 侧出站失败，含 URL / 堆栈片段
     const raw = new Error(
       'updater check failed: GET https://example.com/latest.json -> 500 (server error)\n    at fetchUrl (updater.js:42:10)',
     )
-    mockCheck.mockRejectedValueOnce(raw)
+    invokeHandlers.set('check_for_update', async () => {
+      throw raw
+    })
 
     const { checkForUpdate } = useUpdateChecker()
     wrapper = mount(SettingsAboutSection, {
@@ -131,7 +139,12 @@ describe('更新检查失败全链路', () => {
   })
 
   it('失败后重新检查成功 → 状态恢复为已是最新版本，失败段落消失', async () => {
-    mockCheck.mockRejectedValueOnce(new Error('network is unreachable'))
+    let attempts = 0
+    invokeHandlers.set('check_for_update', async () => {
+      attempts += 1
+      if (attempts === 1) throw new Error('network is unreachable')
+      return { available: false, version: null, date: null }
+    })
     const { checkForUpdate, status } = useUpdateChecker()
     wrapper = mount(SettingsAboutSection, {
       global: { plugins: [createPinia(), i18n] },
@@ -142,7 +155,6 @@ describe('更新检查失败全链路', () => {
     expect(wrapper.text()).toContain('检查更新失败，请稍后重试')
 
     // 第二次检查成功（无更新）→ 状态清回 latest，失败段落消失
-    mockCheck.mockResolvedValueOnce(null)
     await checkForUpdate()
     await flushAsync()
     expect(status.value).toBe('latest')
@@ -151,10 +163,14 @@ describe('更新检查失败全链路', () => {
 
   it('下载/安装失败 → 详情只进日志，页面保持通用失败态无原文', async () => {
     const raw = new Error('checksum mismatch: expected 8f3a... got deadbeef')
-    const installing = {
-      downloadAndInstall: vi.fn().mockRejectedValueOnce(raw),
-    }
-    mockCheck.mockResolvedValue(installing) // 检查 + 下载内部 check 都命中
+    invokeHandlers.set('check_for_update', async () => ({
+      available: true,
+      version: '9.9.9',
+      date: null,
+    }))
+    invokeHandlers.set('install_update', async () => {
+      throw raw
+    })
 
     const { checkForUpdate, downloadAndInstall } = useUpdateChecker()
     wrapper = mount(SettingsAboutSection, {
@@ -162,7 +178,7 @@ describe('更新检查失败全链路', () => {
     })
     await flushAsync()
     await checkForUpdate() // → available（显示下载按钮态）
-    await downloadAndInstall() // → downloading → downloadAndInstall reject → failed
+    await downloadAndInstall() // → downloading → install_update reject → failed
     await flushAsync()
 
     const text = wrapper.text()
@@ -172,9 +188,13 @@ describe('更新检查失败全链路', () => {
     expect(errorSpy).toHaveBeenCalledWith('[update-checker] downloadAndInstall failed:', raw)
   })
 
+  // 组件层锁「已是最新版本」toast：调用方靠 `!r && status==='latest'` 分支，
+  // 而 checkForUpdate 在无更新时若返回真值对象，该分支永不成立 → 点击静默无反应
   it('GitHub 打开失败 → 只记日志，不弹任何技术错误 toast', async () => {
     const raw = new Error('failed to open external link: protocol handler missing')
-    mockOpen.mockRejectedValueOnce(raw)
+    invokeHandlers.set('open_external_url', async () => {
+      throw raw
+    })
 
     wrapper = mount(SettingsAboutSection, {
       global: { plugins: [createPinia(), i18n] },

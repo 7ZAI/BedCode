@@ -26,7 +26,12 @@
       }
     ],
     "security": {
-      "csp": null,
+      "csp": {
+        "connect-src": "'none'"
+      },
+      "devCsp": {
+        "connect-src": "'self' ipc: http://ipc.localhost ws: wss: http: https:"
+      },
       "assetProtocol": {
         "enable": true,
         "scope": {

@@ -274,6 +274,19 @@ manifest 静态声明面 `contributes.httpEndpoints` / `toolProviders` · 宿主
 
 ### Frontend（Vue 3 + TypeScript）
 
+- **前端零资源访问（强制红线，三层封锁）**：前端只做 UI 显示，**不含后端逻辑**。HTTP / WebSocket / 文件访问一律由 **Rust 端**发起并经权限仲裁（`host-*` 原语 + egress / approval 闸门）——前端直连即绕过权限闸门。三层由外到内，**改前端代码绕不过第 2/3 层**：
+
+  | 层 | 机制 | 强度 | 落点 |
+  | --- | --- | --- | --- |
+  | ① 源码约定 | ESLint `no-restricted-*` | 写代码时就报 | 根 `eslint.config.js` 的 `bedcode/frontend-no-resource-access` 块（两端宿主 `src/` + 业务 wasm 应用 / 移动插件 `src/` + 双端 SDK 前端，一次配置双端生效，CI `lint.yml` 0 error 门禁） |
+  | ② 能力层 | Tauri ACL | **Rust 运行期直接拒** | 两端 `capabilities/*.json` 不授予 `shell:` / `updater:` / `http:` / `fs:` / `deep-link:` / `opener:` 任何权限（`plugin:*` 命令无条件过 ACL，`acl.is_none()` 即 reject）；`tauri-plugin-{http,fs,shell}` 不进 Cargo.toml |
+  | ③ 引擎层 | CSP | **浏览器拒发连接** | 两端 `tauri.conf.json` 的 `app.security.csp` = `{ "connect-src": "'none'" }`，封 `fetch` / `XMLHttpRequest` / `WebSocket` / `EventSource` / `sendBeacon` 全族，与 JS 写法无关；dev 期由 `devCsp` 单独放行 HMR |
+
+  - ①禁网络原语（`fetch` / `XMLHttpRequest` / `WebSocket` / `EventSource` / `navigator.sendBeacon`，含 `window.fetch` / `globalThis['fetch']` 等取用写法）、带网络或文件能力的 Tauri 插件 import、全局 Tauri 句柄 `__TAURI__`（两端 `withGlobalTauri: true`，经它调用可绕开 import 级拦截；宿主探测写法 `'__TAURI__' in window` 不受影响）
+  - **正路**：`invoke(...)` → 宿主命令 / 插件命令面（`invoke` 与 `convertFileSrc` 放行——后者是插件前端包 / 图标的既定加载路径，受 `assetProtocol.scope` 约束）
+  - **需要新能力时**（如「打开外部链接」「检查更新」）：能力发起权收归 Rust（宿主命令 / `host-*` 原语），宿主侧加闸门（scheme / 权限 / 配额白名单），前端只拿元数据或事件。**撤 capability 与补宿主命令必须成对提交**
+  - **防回接锁**：`bedcode-desktop/src-tauri/src/capabilities_test.rs` 锁②③（两端 capability 禁列、禁依赖 crate、撤权限↔补命令配对、CSP 必须含 `connect-src 'none'`）；①由 lint 门禁兼
+  - **豁免**：①层确需豁免时在违规行写 `eslint-disable-next-line` **并注明理由**，让豁免随 code review 可见，禁止改配置开白名单静默放行；新增豁免须在交付说明里点名。**②③层无豁免机制**（要开就改锁并写清理由）
 - **任何 UI 改动（组件、布局、CSS/Tailwind 类、design token、动画/过渡、主题、响应式、安全区、字体/行高）必须先加载 `frontend-styles` skill 并以其规范为准**，禁止凭通用前端经验自行发挥
 - **禁止用 viewport 宽度 / UA 字符串推断平台**；平台判断统一走 Tauri API（如 `@tauri-apps/plugin-os` 的 `platform()`），两端渲染容器不一致时以 API 为准
 - **前端错误处理**：统一 `logger`（两端真源 `src/utils/frontendLogger.ts`，`logger.error/info` 带上下文），禁止静默 `catch`；用户可见错误/状态文案一律走 i18n，禁止 composable / 组件内硬编码中文字符串
@@ -308,6 +321,7 @@ manifest 静态声明面 `contributes.httpEndpoints` / `toolProviders` · 宿主
 - **认证链路只走既有 auth 模块**（JWT / 设备指纹 / 二维码 / 生物凭证），禁止旁路；**日志与存储中凭据只记长度不落明文**（`token.length()` 模式）。**入场签发密钥与验签执行归认证中心自持**（ADR 0033，desktop ABI v33）：`host-auth` 的 `device-token-issue` / `device-token-verify` 两原语**已退役**，宿主 `utils/auth/jwt.rs`（`JwtService`）与 `host_secrets.rs` **整模块删除**——**宿主不得持有任何设备入场密码学**（防回接锁 `host_has_no_entry_token_crypto`）。**生物凭证面（公钥托管 + 验签执行）已随 v34 下沉认证中心**（B-downsink，desktop ABI 34）：`host-auth` 的 `biometric-credential-bound` / `biometric-verify-signature` / `biometric-credential-bind` 三原语**已退役**，宿主 `utils/auth/biometric.rs` **整模块删除**，生物公钥真源在中心插件私有库 `auth_biometric_keys`（WASM 内 p256 验签）——**宿主不再托管任何设备侧凭证材料**。密钥环（最多两代）在中心插件的 `pairing/keys`，`kid` 只是**诊断标签不是授权门**（真闸门是「签名能否用环内某把密钥验过」）；轮换上一代在宽限期（7 天）内继续可验签，**轮换不撤销既有 token**。
 - **配对 / 认证的编排归插件**（ADR 0022 分层）：配对码与 QR 的编排、签发、验签全在 `com.bedcode.terminal-session`（`pairing/` / `qr/` / `auth_http`），认证记录真源在该插件私有库 `auth_records` 域；宿主只剩 `host-auth` **链路身份**原语 / 认证中心桥接（`link-identity-parts` 只含公开材料）。**认证中心 = 单一显式注册的中心**（ADR 0031，v32 已实施）：中心激活时调 `host-auth.auth-center-register` 登记进宿主单中心注册表（第二注册者被拒并点名在册属主），停用时注销 / 宿主 `purge_for_plugin` 回收；`auth-policy` 的发现方式**不再是能力探测 + 排序取首个**。**裁决一律 fail-closed**：无中心在册 / 中心调用失败 / 中心拒绝 → 一律拒绝（`deny_kind` 分 `no_center` / `unavailable` / `policy`），**没有「查不到中心就放行」「传输失败就放行」的降级路径**。宿主主库 `pairings` / `connection_history` / `session_configs` 三表与存量迁移链已退役（旧库滞留表不读不迁不清理；v34 起宿主 `plugin_secrets` 的 `biometric:*` 死行由迁移幂等清扫）。**无宿主代签降级路径**——插件未激活时前端命令面显性报错，新代码不得绕过插件自行签发或验签（删除清单与日期见 ADR 0022）
 - 输入校验与权限仲裁在 Rust 端，前端校验仅是 UX；WebSocket/HTTP 接入必须过认证与过滤链（TrafficFilterChain）
+- **前端不得自行发起网络 / 文件访问**（HTTP / WebSocket / 文件），资源访问只经 Rust 端并过权限闸门；三层封锁（Tauri ACL 运行期拒 + CSP 引擎级封 + ESLint 静态锁）与豁免规则见 §6 前端规范「前端零资源访问」
 - **真源换了地方就要 fail-visible**（通用判据）：事实真源迁走后，**旧读路径必须显性失败，
   禁止静默降级成「无数据」**——静默降级会让「线还在、数据永远是空」的断链在测试全绿的情况下
   长期存活。三种具体形态，缺一不可：① **宿主侧回查**：旧读路径要么删掉、要么对真源外的对象
@@ -374,6 +388,7 @@ manifest 静态声明面 `contributes.httpEndpoints` / `toolProviders` · 宿主
 - i18n key 同步出现在 zh-CN 和 en
 - 公开项有文档注释；错误处理用 `AppError` 而非裸字符串
 - 前端 UI 改动通过 `frontend-styles` 自查（token-bound、无原生控件外观、无反模式）
+- 前端改动零直连资源访问（§6 红线）：`pnpm exec eslint .` 0 error 即静态锁证据；带 `eslint-disable-next-line` 的豁免须在交付说明里逐条点名（理由 + 为何不构成绕过）
 - 改动落在宿主侧时通过 §5.1 自检（三问裁决 + 提交前自检 3 问有答案）、B1-B6 判据零命中；未在宿主新增业务类型 / 状态 / 存储 / 路由 / 业务默认值；新引入的退役面回接被防回接锁覆盖
 - 真源搬迁类改动附 fail-visible 三形态证据（§8）：旧读路径显性失败 / 旧产物实例化期点名 / 退役词汇加载即抛
 - 单元测试改动通过 `unit-test-discipline` 自查（契约 / 正反例 / 变异）

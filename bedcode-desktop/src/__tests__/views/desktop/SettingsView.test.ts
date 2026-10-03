@@ -6,6 +6,9 @@ import i18n from '@/locales'
 import SettingsView from '@/views/SettingsView.vue'
 import { getPluginRegistry } from '@/plugin/registry'
 import type { PluginContext } from '@/plugin/types'
+import { invoke } from '@tauri-apps/api/core'
+import { toast } from 'vue-sonner'
+import { useUpdateChecker } from '@/composables/useUpdateChecker'
 
 // Mock Tauri APIs（设置 store / 更新检查均经 invoke）
 vi.mock('@tauri-apps/api/core', () => ({
@@ -28,6 +31,11 @@ vi.mock('@tauri-apps/api/event', () => ({
 
 vi.mock('@tauri-apps/plugin-os', () => ({
   platform: vi.fn(async () => 'windows'),
+}))
+
+// toast 只需「被调用 + 参数」，渲染交给 vue-sonner 自身（本组不测 toast 外观）
+vi.mock('vue-sonner', () => ({
+  toast: { info: vi.fn(), error: vi.fn(), success: vi.fn() },
 }))
 
 /**
@@ -146,5 +154,78 @@ describe('SettingsView 分组渲染', () => {
 
     expect(wrapper.find('[data-testid="plugin-body"]').exists()).toBe(false)
     expect(titles(wrapper)).toEqual(BUILTIN_TITLES)
+  })
+})
+
+/**
+ * 「检查更新」按钮的反馈契约
+ *
+ * 调用方（SettingsView.handleCheckUpdate）按 `!r && status==='latest'` 弹
+ * 「已是最新版本」——若 checkForUpdate 在无更新时返回**真值对象**（而非 null），
+ * 该分支永不成立，点击「检查更新」就静默无反应（本用例锁的就是这条）。
+ */
+describe('设置页「检查更新」按钮', () => {
+  let router: ReturnType<typeof createRouter>
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.mocked(toast.info).mockClear()
+    vi.mocked(toast.error).mockClear()
+    // useUpdateChecker 的 status 是模块级单例 ref：上一条用例留下的终态会改掉
+    // 按钮文案（「检查更新」→「已是最新版本」），跨用例必须复位
+    useUpdateChecker().status.value = 'idle'
+    router = createRouter({
+      history: createWebHistory(),
+      routes: [
+        { path: '/settings/authorization', name: 'settings-authorization', component: { template: '<div />' } },
+        { path: '/:pathMatch(.*)*', component: { template: '<div />' } },
+      ],
+    })
+  })
+
+  async function mountAndClickCheck(): Promise<void> {
+    const wrapper = mount(SettingsView, { global: { plugins: [createPinia(), i18n, router] } })
+    await flushPromises()
+    const btn = wrapper.findAll('button').find((b) => b.text().includes(i18n.global.t('settings.about.checkUpdate')))
+    expect(btn, '工具栏必须有「检查更新」按钮').toBeTruthy()
+    await btn!.trigger('click')
+    await flushPromises()
+    wrapper.unmount()
+  }
+
+  it('已是最新版本 → 弹 info 提示（不静默无反应）', async () => {
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'get_app_settings') {
+        return { network: { port: 8765 }, ui: { theme: 'system', language: 'zh-CN', animations_enabled: true }, log: { level: 'info' } }
+      }
+      if (cmd === 'check_for_update') return { available: false, version: null, date: null }
+      return undefined
+    })
+
+    await mountAndClickCheck()
+
+    expect(vi.mocked(toast.info)).toHaveBeenCalledWith(
+      i18n.global.t('settings.about.alreadyLatest'),
+      expect.anything(),
+    )
+    expect(vi.mocked(toast.error)).not.toHaveBeenCalled()
+  })
+
+  it('检查失败 → 弹 error 提示（且不弹「已是最新」）', async () => {
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'get_app_settings') {
+        return { network: { port: 8765 }, ui: { theme: 'system', language: 'zh-CN', animations_enabled: true }, log: { level: 'info' } }
+      }
+      if (cmd === 'check_for_update') throw new Error('network is unreachable')
+      return undefined
+    })
+
+    await mountAndClickCheck()
+
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
+      i18n.global.t('settings.about.checkFailed'),
+      expect.anything(),
+    )
+    expect(vi.mocked(toast.info)).not.toHaveBeenCalled()
   })
 })

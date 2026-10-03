@@ -16,7 +16,7 @@ use bedcode_server_core::metrics::ServerMetrics;
 use bedcode_server_core::supervisor::{ServerStatusInfo, ServerSupervisor};
 use serde::Deserialize;
 use std::sync::Arc;
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 use tracing_subscriber::filter::EnvFilter;
 
 // ==================== 会话命令面（票 08 已整体注销） ====================
@@ -266,6 +266,140 @@ pub fn open_log_dir() -> Result<()> {
     }
     crate::system::opener::reveal_in_dir(dir)
         .map_err(|e| crate::AppError::Internal(format!("open log directory '{}' failed: {e}", dir.display())))
+}
+
+/// 在系统默认浏览器中打开外部 URL（设置页「项目主页」入口）
+///
+/// **为什么需要这条命令**：`shell:allow-open` 权限已随「前端零资源访问」红线从
+/// `capabilities/default.json` 撤除（前端不得直接调用 OS 级能力），能力发起权收归
+/// Rust；闸门是 [`crate::system::opener::validate_external_url`] 的 http/https
+/// scheme 白名单（fail-closed）。
+///
+/// 不用 `tauri-plugin-shell`（已随本次收口从桌面端移除）：它的 `Shell::open` 已废弃，
+/// 且留着这个 crate 就等于给前端留了一条“加条 capability 就能开”的回头路。
+/// 改用 `tauri-plugin-opener`——与移动端 `commands/android.rs::open_url_in_browser` 同一口径。
+///
+/// 不走插件权限链：这是宿主外壳入口，不是产品能力。
+#[tauri::command]
+pub fn open_external_url(app_handle: tauri::AppHandle, url: String) -> Result<()> {
+    crate::system::opener::validate_external_url(&url)?;
+    use tauri_plugin_opener::OpenerExt;
+    app_handle
+        .opener()
+        .open_url(&url, None::<&str>)
+        .map_err(|e| crate::AppError::Internal(format!("open external url '{url}' failed: {e}")))
+}
+
+// ==================== Updater Commands（外壳命令，能力发起权收归 Rust） ====================
+
+// 前端零资源访问红线：`updater:default` 权限（check / download / install /
+// download-and-install）已从 capabilities 撤除，升级检查与安装的**发起权**收归 Rust。
+// 前端只拿已验签的版本元数据与下载进度事件，拿不到 updater 句柄。
+//
+// 归属判断（AGENTS.md §5.1.2 三问）：插件无法自建「替换宿主二进制」的能力（离宿主不能实现）
+// → 归宿主；命令只做「检查 / 安装」两件事，不含版本比较策略、提示文案、更新时机等产品语义
+// （B1/B2/B5 零命中），业务呈现全在前端。
+
+use tauri_plugin_updater::UpdaterExt;
+
+/// 升级检查结果（只含已验签元数据，不回传 updater 句柄）
+#[derive(serde::Serialize, Clone)]
+pub struct UpdateCheckResult {
+    /// 是否存在新版本
+    pub available: bool,
+    /// 新版本号（`available=false` 时为 None）
+    pub version: Option<String>,
+    /// 发布日期（签名元数据原样透传）
+    pub date: Option<String>,
+}
+
+/// 升级检查：Rust 侧发起 HTTPS 请求并用 minisign 公钥验签，只回传元数据
+#[tauri::command]
+pub async fn check_for_update(app_handle: tauri::AppHandle) -> Result<UpdateCheckResult> {
+    let update = app_handle
+        .updater()
+        .map_err(|e| crate::AppError::Internal(format!("check_for_update: updater unavailable: {e}")))?
+        .check()
+        .await
+        .map_err(|e| crate::AppError::Internal(format!("check_for_update: {e}")))?;
+
+    Ok(match update {
+        Some(update) => UpdateCheckResult {
+            available: true,
+            version: Some(update.version.clone()),
+            date: update.date.map(|d| d.to_string()),
+        },
+        None => UpdateCheckResult {
+            available: false,
+            version: None,
+            date: None,
+        },
+    })
+}
+
+/// 下载并安装更新；进度经 `app://update-progress` 事件回流前端
+///
+/// 返回 `true` = 已进入安装流程；`false` = 当前无可用更新（**不是错误**——
+/// 前端据此保持既有状态，不弹失败，与迁移前 JS 侧 `if (!update) return` 的语义一致；
+/// 不靠错误文案匹配做分支）。
+///
+/// 事件载荷：`{"downloaded": u64, "content_length": u64, "finished": bool}`
+#[tauri::command]
+pub async fn install_update(app_handle: tauri::AppHandle) -> Result<bool> {
+    let updater = app_handle
+        .updater()
+        .map_err(|e| crate::AppError::Internal(format!("install_update: updater unavailable: {e}")))?;
+
+    let Some(update) = updater
+        .check()
+        .await
+        .map_err(|e| crate::AppError::Internal(format!("install_update: check failed: {e}")))?
+    else {
+        return Ok(false);
+    };
+
+    let mut downloaded: u64 = 0;
+    let app_handle_for_events = app_handle.clone();
+    update
+        .download_and_install(
+            move |chunk_length, content_length| {
+                downloaded += chunk_length as u64;
+                let payload = UpdateProgressPayload {
+                    downloaded,
+                    content_length: content_length.unwrap_or(0),
+                    finished: false,
+                };
+                let _ = app_handle_for_events.emit("app://update-progress", payload);
+            },
+            || {},
+        )
+        .await
+        .map_err(|e| crate::AppError::Internal(format!("install_update: {e}")))?;
+
+    // 安装已经完成（Windows 上安装动作已执行），末尾这条进度通知**失败不得终结命令**：
+    // 返回 Err 会让前端 catch 置 failed 并跳过 relaunch()，用户卡在“已装未重启”的半更新状态。
+    if let Err(e) = app_handle.emit(
+        "app://update-progress",
+        UpdateProgressPayload {
+            downloaded: 0,
+            content_length: 0,
+            finished: true,
+        },
+    ) {
+        tracing::warn!(error = %e, "update progress finished emit failed（安装已完成，仅进度通知丢失）");
+    }
+    Ok(true)
+}
+
+/// 升级下载进度事件载荷
+#[derive(serde::Serialize, Clone)]
+pub struct UpdateProgressPayload {
+    /// 已下载字节
+    pub downloaded: u64,
+    /// 总字节（服务端未给 Content-Length 时为 0）
+    pub content_length: u64,
+    /// 是否下载完成（安装阶段）
+    pub finished: bool,
 }
 
 // ==================== Dev Console Log Relay ====================

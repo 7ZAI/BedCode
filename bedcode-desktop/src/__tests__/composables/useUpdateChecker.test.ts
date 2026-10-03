@@ -6,20 +6,32 @@
  *   （组件返回对象无 errorMessage 字段——裸错误曾渲染进设置页，已退役）
  * - 技术详情唯一落点 = logger.error（release 下仍转发落盘，见 frontendLogger）
  * - 成功/无更新/进行中等状态映射不受影响
+ * - 传输面契约（前端零资源访问红线）：只 invoke 宿主命令 `check_for_update` /
+ *   `install_update`，**不再**触碰 `@tauri-apps/plugin-updater`（能力已随
+ *   `updater:default` 权限撤除，Rust 运行期即拒）
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { configureLogger, resetLoggerState, logger } from '@/utils/frontendLogger'
 
-// ==================== mock Tauri updater / process ====================
+// ==================== mock Tauri 边界 ====================
 
-const mockCheck = vi.fn()
-const mockRelaunch = vi.fn()
-let mockDownloadAndInstall = vi.fn()
-
-vi.mock('@tauri-apps/plugin-updater', () => ({
-  check: (...args: unknown[]) => mockCheck(...args),
+const mockInvoke = vi.fn()
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: (...args: any[]) => mockInvoke(...args),
 }))
 
+// 进度事件：mock listen，捕获注册的 handler 以便测试手动触发事件
+type ProgressHandler = (event: { payload: unknown }) => void
+let progressHandlers: ProgressHandler[] = []
+const mockUnlisten = vi.fn()
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: vi.fn(async (_name: string, handler: ProgressHandler) => {
+    progressHandlers.push(handler)
+    return mockUnlisten
+  }),
+}))
+
+const mockRelaunch = vi.fn()
 vi.mock('@tauri-apps/plugin-process', () => ({
   relaunch: (...args: unknown[]) => mockRelaunch(...args),
 }))
@@ -31,6 +43,15 @@ vi.mock('@/locales', async () => {
 
 import { useUpdateChecker } from '@/composables/useUpdateChecker'
 
+/** 手动广播一条下载进度事件（模拟 Rust 侧 `app://update-progress`） */
+function emitProgress(payload: {
+  downloaded: number
+  content_length: number
+  finished: boolean
+}): void {
+  for (const handler of progressHandlers) handler({ payload })
+}
+
 // ==================== 基建 ====================
 
 let errorSpy: ReturnType<typeof vi.spyOn>
@@ -40,9 +61,14 @@ beforeEach(() => {
   resetLoggerState()
   configureLogger(true) // 显式 dev（不依赖 import.meta）
   errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {})
-  mockCheck.mockReset()
+  mockInvoke.mockReset()
   mockRelaunch.mockReset()
-  mockDownloadAndInstall = vi.fn().mockResolvedValue(undefined)
+  mockUnlisten.mockReset()
+  progressHandlers = []
+  // 单例 ref 跨用例共享：复位状态，避免上一例的 status 渗进下一例
+  const { status, downloadProgress } = useUpdateChecker()
+  status.value = 'idle'
+  downloadProgress.value = { downloaded: 0, contentLength: 0 }
 })
 
 afterEach(() => {
@@ -52,29 +78,37 @@ afterEach(() => {
 
 describe('checkForUpdate', () => {
   it('成功发现有更新 → status=available', async () => {
-    mockCheck.mockResolvedValueOnce({ version: '1.2.3' })
+    mockInvoke.mockResolvedValueOnce({ available: true, version: '1.2.3', date: '2026-01-01' })
     const { status, checkForUpdate } = useUpdateChecker()
 
     const update = await checkForUpdate()
 
-    expect(update).toEqual({ version: '1.2.3' })
+    expect(update).toEqual({ available: true, version: '1.2.3', date: '2026-01-01' })
     expect(status.value).toBe('available')
     expect(errorSpy).not.toHaveBeenCalled()
   })
 
-  it('成功但无更新 → status=latest', async () => {
-    mockCheck.mockResolvedValueOnce(null)
+  it('经宿主命令发起（不碰 updater 插件）', async () => {
+    mockInvoke.mockResolvedValueOnce({ available: true, version: '2.0.0', date: null })
+    await useUpdateChecker().checkForUpdate()
+
+    expect(mockInvoke).toHaveBeenCalledWith('check_for_update')
+  })
+
+  it('成功但无更新 → status=latest 且返回 null（调用方靠 null + status 弹「已是最新版本」）', async () => {
+    mockInvoke.mockResolvedValueOnce({ available: false, version: null, date: null })
     const { status, checkForUpdate } = useUpdateChecker()
 
     const update = await checkForUpdate()
 
+    // 返回真值对象会让 `!update && status==='latest'` 永不成立，toast 静默失效
     expect(update).toBeNull()
     expect(status.value).toBe('latest')
   })
 
   it('失败 → status=failed 且原始错误只进日志（不暴露给调用方 UI）', async () => {
     const raw = new Error('tls error: certificate expired at 2026-09-27')
-    mockCheck.mockRejectedValueOnce(raw)
+    mockInvoke.mockRejectedValueOnce(raw)
     const checker = useUpdateChecker()
 
     const update = await checker.checkForUpdate()
@@ -91,8 +125,8 @@ describe('checkForUpdate', () => {
   })
 
   it('失败后重新检查成功 → 状态恢复（不残留 failed）', async () => {
-    mockCheck.mockRejectedValueOnce(new Error('network down'))
-    mockCheck.mockResolvedValueOnce(null)
+    mockInvoke.mockRejectedValueOnce(new Error('network down'))
+    mockInvoke.mockResolvedValueOnce({ available: false, version: null, date: null })
     const { status, checkForUpdate } = useUpdateChecker()
 
     await checkForUpdate()
@@ -105,25 +139,68 @@ describe('checkForUpdate', () => {
 
 describe('downloadAndInstall', () => {
   it('成功下载+安装 → 状态走 downloaded → installing → relaunch', async () => {
-    const update = {
-      downloadAndInstall: mockDownloadAndInstall,
-    }
-    mockCheck.mockResolvedValueOnce(update)
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === 'install_update') {
+        // 安装期间 Rust 会推 finished 事件
+        setTimeout(() => emitProgress({ downloaded: 100, content_length: 100, finished: true }), 0)
+        return true
+      }
+      throw new Error(`unexpected invoke: ${cmd}`)
+    })
     const { status, downloadAndInstall } = useUpdateChecker()
 
     await downloadAndInstall()
 
-    expect(mockDownloadAndInstall).toHaveBeenCalled()
+    expect(mockInvoke).toHaveBeenCalledWith('install_update')
     expect(mockRelaunch).toHaveBeenCalled()
     expect(status.value).toBe('installing')
     expect(errorSpy).not.toHaveBeenCalled()
   })
 
+  it('订阅在 invoke 之前建立（晚订阅会丢首批进度事件）', async () => {
+    const order: string[] = []
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      order.push(cmd)
+      return cmd === 'install_update'
+    })
+    const { downloadAndInstall } = useUpdateChecker()
+
+    await downloadAndInstall()
+
+    // listen 同步把 handler 压进 progressHandlers，而它早于 install_update 的调用
+    expect(progressHandlers.length).toBeGreaterThan(0)
+    expect(order).toEqual(['install_update'])
+  })
+
+  it('进度事件 → 累计字节直写 + onProgress 回调 + 完成后转 downloaded', async () => {
+    const onProgress = vi.fn()
+    mockInvoke.mockResolvedValue(false) // 无更新：不会走到完成分支
+    const { downloadProgress, downloadAndInstall } = useUpdateChecker()
+
+    await downloadAndInstall(onProgress)
+    emitProgress({ downloaded: 512, content_length: 2048, finished: false })
+
+    expect(downloadProgress.value).toEqual({ downloaded: 512, contentLength: 2048 })
+    expect(onProgress).toHaveBeenCalledWith(512, 2048)
+
+    emitProgress({ downloaded: 2048, content_length: 2048, finished: true })
+    expect(useUpdateChecker().status.value).toBe('downloaded')
+  })
+
+  it('无可用更新（install_update 返回 false）→ 不算失败、不 relaunch', async () => {
+    mockInvoke.mockResolvedValue(false)
+    const { status, downloadAndInstall } = useUpdateChecker()
+
+    await downloadAndInstall()
+
+    expect(status.value).toBe('available')
+    expect(mockRelaunch).not.toHaveBeenCalled()
+    expect(errorSpy).not.toHaveBeenCalled()
+  })
+
   it('下载/安装失败 → status=failed 且详情只进日志', async () => {
-    const update = { downloadAndInstall: mockDownloadAndInstall }
     const raw = new Error('checksum mismatch: expected abc123')
-    mockCheck.mockResolvedValueOnce(update)
-    mockDownloadAndInstall.mockRejectedValueOnce(raw)
+    mockInvoke.mockRejectedValue(raw)
     const { status, downloadAndInstall } = useUpdateChecker()
 
     await downloadAndInstall()
@@ -131,6 +208,18 @@ describe('downloadAndInstall', () => {
     expect(status.value).toBe('failed')
     expect(errorSpy).toHaveBeenCalledWith('[update-checker] downloadAndInstall failed:', raw)
     expect(useUpdateChecker().getUpdateStatusText()).not.toContain('checksum')
+  })
+
+  it('任何退出路径都解除事件订阅（不泄漏监听器）', async () => {
+    mockInvoke.mockRejectedValue(new Error('boom'))
+    await useUpdateChecker().downloadAndInstall()
+    expect(mockUnlisten).toHaveBeenCalled()
+
+    mockUnlisten.mockClear()
+    mockInvoke.mockResolvedValue(true)
+    mockRelaunch.mockResolvedValue(undefined)
+    await useUpdateChecker().downloadAndInstall()
+    expect(mockUnlisten).toHaveBeenCalled()
   })
 })
 

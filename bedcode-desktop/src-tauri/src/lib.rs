@@ -3,6 +3,9 @@
 #[cfg(all(test, target_os = "linux"))]
 mod native_context_menu_test;
 
+#[cfg(test)]
+mod capabilities_test;
+
 // ==================== Domain Modules ====================
 
 pub mod commands;
@@ -273,7 +276,7 @@ pub fn run() {
     let start = app_start.0;
 
     let mut builder = tauri::Builder::default()
-        .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_os::init())
@@ -725,6 +728,10 @@ pub fn run() {
             commands::set_log_level,
             commands::save_log_settings,
             commands::open_log_dir,
+            commands::open_external_url,
+            // Updater（外壳命令：updater:default 权限已撤除，发起权收归 Rust）
+            commands::check_for_update,
+            commands::install_update,
             // Settings
             commands::get_app_settings,
             commands::save_app_settings,
