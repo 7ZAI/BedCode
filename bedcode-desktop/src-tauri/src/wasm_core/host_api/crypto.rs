@@ -21,6 +21,13 @@ fn audit(plugin_id: &str, api: &str, algorithm: &str) {
     tracing::info!(plugin_id = %plugin_id, api = %api, algorithm = %algorithm, "host-crypto 原语调用");
 }
 
+/// 注册表/提供器错误带上操作上下文（H-09）：`to_string()` 丢掉类型化错误与
+/// 操作名，WIT 边界处多种函数共享同一泛错——故障时连是哪一步、哪个算法都
+/// 说不清。统一加 `api[algorithm]` 前缀。
+fn crypto_err(api: &str, algorithm: &str, e: impl std::fmt::Display) -> String {
+    format!("{api}[{algorithm}]: {e}")
+}
+
 /// AEAD 加密（`crypto:aead`）
 pub(crate) fn aead_encrypt(
     perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
@@ -34,10 +41,10 @@ pub(crate) fn aead_encrypt(
     if !super::check_permission(perm, plugin_id, PERMISSION_CRYPTO_AEAD, "host_crypto_aead_encrypt") {
         return Err("permission denied: crypto:aead".to_string());
     }
-    let provider = resolve_aead(algorithm).map_err(|e| e.to_string())?;
+    let provider = resolve_aead(algorithm).map_err(|e| crypto_err("aead_encrypt", algorithm, e))?;
     let out = provider
         .encrypt(key, nonce, plaintext, aad)
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| crypto_err("aead_encrypt", algorithm, e))?;
     audit(plugin_id, "host_crypto_aead_encrypt", algorithm);
     Ok(out)
 }
@@ -55,10 +62,10 @@ pub(crate) fn aead_decrypt(
     if !super::check_permission(perm, plugin_id, PERMISSION_CRYPTO_AEAD, "host_crypto_aead_decrypt") {
         return Err("permission denied: crypto:aead".to_string());
     }
-    let provider = resolve_aead(algorithm).map_err(|e| e.to_string())?;
+    let provider = resolve_aead(algorithm).map_err(|e| crypto_err("aead_decrypt", algorithm, e))?;
     let out = provider
         .decrypt(key, nonce, ciphertext, aad)
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| crypto_err("aead_decrypt", algorithm, e))?;
     audit(plugin_id, "host_crypto_aead_decrypt", algorithm);
     Ok(out)
 }
@@ -77,7 +84,9 @@ pub(crate) fn aead_generate_key(
     ) {
         return Err("permission denied: crypto:aead".to_string());
     }
-    let key = resolve_aead(algorithm).map_err(|e| e.to_string())?.generate_key();
+    let key = resolve_aead(algorithm)
+        .map_err(|e| crypto_err("aead_generate_key", algorithm, e))?
+        .generate_key();
     audit(plugin_id, "host_crypto_aead_generate_key", algorithm);
     Ok(key)
 }
@@ -96,7 +105,9 @@ pub(crate) fn aead_generate_nonce(
     ) {
         return Err("permission denied: crypto:aead".to_string());
     }
-    let nonce = resolve_aead(algorithm).map_err(|e| e.to_string())?.generate_nonce();
+    let nonce = resolve_aead(algorithm)
+        .map_err(|e| crypto_err("aead_generate_nonce", algorithm, e))?
+        .generate_nonce();
     audit(plugin_id, "host_crypto_aead_generate_nonce", algorithm);
     Ok(nonce)
 }
@@ -114,13 +125,23 @@ pub(crate) fn kdf_derive(
     if !super::check_permission(perm, plugin_id, PERMISSION_CRYPTO_KDF, "host_crypto_kdf_derive") {
         return Err("permission denied: crypto:kdf".to_string());
     }
-    let provider = resolve_kdf(algorithm).map_err(|e| e.to_string())?;
-    provider
+    let provider = resolve_kdf(algorithm).map_err(|e| crypto_err("kdf_derive", algorithm, e))?;
+    let out = provider
         .derive(salt, ikm, info, length as usize)
-        .map_err(|e| e.to_string())
+        .map_err(|e| crypto_err("kdf_derive", algorithm, e))?;
+    // 审计（H-08）：KDF 派生与密钥协商返回派生秘密，同样必须落审计——
+    // 合规监控不能只记加解密而漏记最敏感的派生/协商面
+    audit(plugin_id, "host_crypto_kdf_derive", algorithm);
+    Ok(out)
 }
 
 /// 密钥交换临时密钥对（`crypto:asym`）——返回 `private ‖ public` 定长字节
+///
+/// **布局契约（H-03）**：单缓冲 = 私钥 ‖ 公钥 顺序拼接，切分偏移 = 私钥长度，
+/// 随算法而定（如 X25519 私/公均 32 字节 → 前 32 后 32）。切分知识在插件 SDK
+/// 侧（它知道自己在请求哪个算法）；本原语不做算法特定切分（中性原语）。
+/// **安全警告**：前半段是私钥材料，任何插件代码/日志都不应把它当公开 blob
+/// 输出或打印——日志与错误路径不得携带密钥字节。
 pub(crate) fn key_agreement_generate(
     perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
     plugin_id: &str,
@@ -134,7 +155,7 @@ pub(crate) fn key_agreement_generate(
     ) {
         return Err("permission denied: crypto:asym".to_string());
     }
-    let provider = resolve_key_agreement(algorithm).map_err(|e| e.to_string())?;
+    let provider = resolve_key_agreement(algorithm).map_err(|e| crypto_err("key_agreement_generate", algorithm, e))?;
     let (private, public) = provider.generate_keypair();
     let mut out = Vec::with_capacity(private.len() + public.len());
     out.extend_from_slice(&private);
@@ -159,10 +180,13 @@ pub(crate) fn key_agreement_shared(
     ) {
         return Err("permission denied: crypto:asym".to_string());
     }
-    let provider = resolve_key_agreement(algorithm).map_err(|e| e.to_string())?;
-    provider
+    let provider = resolve_key_agreement(algorithm).map_err(|e| crypto_err("key_agreement_shared", algorithm, e))?;
+    let out = provider
         .compute_shared(local_private, peer_public)
-        .map_err(|e| e.to_string())
+        .map_err(|e| crypto_err("key_agreement_shared", algorithm, e))?;
+    // 审计（H-08）：密钥协商派生共享秘密，与 KDF 同属敏感面，必须落审计
+    audit(plugin_id, "host_crypto_keyagreement_shared", algorithm);
+    Ok(out)
 }
 
 // 测试整体迁至 tests/crypto.rs（#[path] 声明，保持模块树 crypto::tests 不变，

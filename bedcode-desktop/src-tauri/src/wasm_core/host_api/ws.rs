@@ -174,6 +174,10 @@ pub(crate) fn ws_connect(
         ));
     }
     // 连接数上限（spec §4.4）：超限直接 Err，不产生任何副作用
+    //
+    // 首检是廉价快路；**插入时锁内复查**（H-07）兜住握手窗口的并发——
+    // 表锁读数→放锁→阻塞握手→再插入 的窗口里，同插件并行 ws_connect 可
+    // 全部通过首检；复查把并发超限挡在插入前（超额连接直接关，不占配额槽）。
     let owned = {
         let table = CLIENTS.lock().unwrap_or_else(|e| e.into_inner());
         table.values().filter(|e| e.owner == plugin_id).count()
@@ -256,20 +260,32 @@ pub(crate) fn ws_connect(
         ),
     );
 
+    let entry = ClientEntry {
+        owner: owner.clone(),
+        url: url.clone(),
+        tx,
+        state,
+        bus: Arc::clone(&bus),
+        reader,
+        writer,
+    };
     {
         let mut table = CLIENTS.lock().unwrap_or_else(|e| e.into_inner());
-        table.insert(
-            handle.clone(),
-            ClientEntry {
-                owner: owner.clone(),
-                url: url.clone(),
-                tx,
-                state,
-                bus: Arc::clone(&bus),
-                reader,
-                writer,
-            },
-        );
+        // 插入前锁内复查上限（H-07）：握手窗口里并发连接可能都通过了首检，
+        // 超额者在此拒绝并关闭（writer 中止 + entry 随作用域 drop → rx 关闭）
+        let owned_now = table.values().filter(|e| e.owner == owner).count();
+        if owned_now >= PLUGIN_WS_MAX_CONNS_PER_PLUGIN {
+            drop(table);
+            tracing::warn!(
+                plugin_id = %owner,
+                "ws connect: connection limit reached at insert (concurrent connects), closing excess connection"
+            );
+            entry.writer.abort();
+            return Err(format!(
+                "ws connect: connection limit reached ({PLUGIN_WS_MAX_CONNS_PER_PLUGIN})"
+            ));
+        }
+        table.insert(handle.clone(), entry);
     }
 
     // 成功才发 open 事件（失败路径零事件，D4）；发布先于返回值到达插件
@@ -337,9 +353,23 @@ pub(crate) fn ws_close(
         }
         entry
     };
-    if entry.tx.try_send(OutboundFrame::Close { code, reason }).is_err() {
-        // 写任务已退出（对端先断）：句柄已摘除，语义等同关闭完成
-        tracing::debug!(plugin_id = %plugin_id, handle = %handle, "ws close: writer already finished");
+    match entry.tx.try_send(OutboundFrame::Close { code, reason }) {
+        Ok(()) => {}
+        Err(mpsc::error::TrySendError::Closed(_)) => {
+            // 写任务已退出（对端先断）：句柄已摘除，语义等同关闭完成
+            tracing::debug!(plugin_id = %plugin_id, handle = %handle, "ws close: writer already finished");
+        }
+        Err(mpsc::error::TrySendError::Full(_)) => {
+            // 发送队列满（H-01）：Close 帧无法入队——静默丢弃会让连接永不关闭
+            //（writer 卡在积压帧的 send 上）。强制中止写任务：写半段立即释放，
+            // 对端收到 EOF；读任务继续读到对端关闭并上报 close（wasClean=false）
+            tracing::warn!(
+                plugin_id = %plugin_id,
+                handle = %handle,
+                "ws close: send queue full, aborting writer to force close"
+            );
+            entry.writer.abort();
+        }
     }
     Ok(true)
 }
@@ -362,6 +392,10 @@ pub(crate) fn ws_is_connected(
 }
 
 /// 入队出站帧（fail-visible：队列满 / 连接已关闭立即返回明确错误，D10）
+///
+/// 入队前检查连接状态（H-06）：peer 已关闭（state→CLOSED）后仍返回 Ok 会让
+/// 插件以为帧已排队（实际无法投递，还占着队列与配额槽）；CLOSED 连接在此直接
+/// 拒绝。
 fn enqueue(plugin_id: &str, handle: &str, frame: OutboundFrame) -> Result<(), String> {
     let table = CLIENTS.lock().unwrap_or_else(|e| e.into_inner());
     let Some(entry) = table.get(handle) else {
@@ -369,6 +403,9 @@ fn enqueue(plugin_id: &str, handle: &str, frame: OutboundFrame) -> Result<(), St
     };
     if entry.owner != plugin_id {
         return Err(NOT_OWNER.to_string());
+    }
+    if entry.state.load(Ordering::SeqCst) != STATE_OPEN {
+        return Err(format!("ws connection is closed: {handle}"));
     }
     match entry.tx.try_send(frame) {
         Ok(()) => Ok(()),
@@ -800,15 +837,20 @@ fn purge_one(owner: &str, handle: &str) -> bool {
         entry
     };
     // 属主停用回收：close code 4005（spec §4.5），wasClean=false
-    if entry
-        .tx
-        .try_send(OutboundFrame::Close {
-            code: 4005,
-            reason: "plugin deactivated".to_string(),
-        })
-        .is_err()
-    {
-        tracing::debug!(handle = %handle, "ws purge: writer already finished");
+    match entry.tx.try_send(OutboundFrame::Close {
+        code: 4005,
+        reason: "plugin deactivated".to_string(),
+    }) {
+        Ok(()) => {}
+        Err(mpsc::error::TrySendError::Closed(_)) => {
+            tracing::debug!(handle = %handle, "ws purge: writer already finished");
+        }
+        Err(mpsc::error::TrySendError::Full(_)) => {
+            // 队列满（H-01）：Close 帧无法入队，强制中止写任务以释放连接
+            //（对端收到 EOF，读任务随后上报 close，wasClean=false）
+            tracing::warn!(handle = %handle, "ws purge: send queue full, aborting writer");
+            entry.writer.abort();
+        }
     }
     true
 }
@@ -900,6 +942,16 @@ async fn run_reader(mut read: WsRead, handle: String, owner: String, state: Arc<
     } else {
         // 未收到对端 Close（TCP 断 / 传输错误 / 宿主主动关）→ code 省略 + wasClean=false
         report_close(&bus, &owner, &handle, None, "", false, &close_reported);
+    }
+    // 摘除已关闭连接的条目（H-06）：CLOSED 条目继续占表位会让连接配额槽泄漏、
+    // 后续 send 在入队检查（enqueue state 检查）前已过 owner 校验但投递无意义。
+    // 摘除 drop tx → 写任务 rx 关闭 → writer 收尾 write.close()。
+    // 属主校验避免误摘（handle 为 UUID 无复用，防御性保留）。
+    {
+        let mut table = CLIENTS.lock().unwrap_or_else(|e| e.into_inner());
+        if table.get(&handle).is_some_and(|e| e.owner == owner) {
+            table.remove(&handle);
+        }
     }
     tracing::debug!(plugin_id = %owner, handle = %handle, "ws client reader exited");
 }
@@ -1043,8 +1095,14 @@ fn publish_ws(bus: &MessageBus, topic: &str, payload: serde_json::Value) {
 }
 
 /// 帧/消息字节上限：与移动端终端链路同一事实源；配置不可读时回退常量
+///
+/// 形状 `ws_frame_limit().max(1).min(PLUGIN_WS_MAX_MESSAGE_BYTES)`（H-04）：
+/// 网络配置上限（可被运维调大）**不得突破** 1 MiB 平台硬上限——旧式
+/// `PLUGIN_WS_MAX_MESSAGE_BYTES.min(1)` 把常量钳成 1，整式坍缩为
+/// `ws_frame_limit().max(1)`，硬上限形同虚设（若 frame_limit 为 0 还退化成
+/// 1 字节全拒）。与 endpoint.rs 的 hard-cap 模式对齐。
 fn max_message_bytes() -> usize {
-    bedcode_server_websocket::routes::ws_frame_limit().max(PLUGIN_WS_MAX_MESSAGE_BYTES.min(1))
+    bedcode_server_websocket::routes::ws_frame_limit().clamp(1, PLUGIN_WS_MAX_MESSAGE_BYTES)
 }
 
 // ==================== Tests ====================

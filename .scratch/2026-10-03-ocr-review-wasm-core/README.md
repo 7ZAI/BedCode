@@ -165,31 +165,43 @@
 
 - **[H-01] `ws.rs:340-343` — TrySendError::Full 与 writer 已结束混淆** ws_close 与 purge 路径中发送队列满时 Close 帧**静默丢弃**（默认关 1000 而非 4005/wasClean 语义）；若发送中途阻塞可能永不关闭。
   > 建议：区分 Full 与 Closed，Full 显式处理（等待入队或强制 abort writer）后再从表移除。
+  > **已修（2026-10-03）**：ws_close / purge_one 区分 Full 与 Closed——Full 时强制 `entry.writer.abort()`（写半段释放、对端收到 EOF、读任务随后上报 wasClean=false）；不再静默丢弃 Close 帧。
 - **[H-02] `wsl_fs.rs:20-22` — wsl.exe 参数重拼接 = 注入面** wsl.exe 把 `--` 后参数重拼为单命令行经发行版默认 shell 执行（模块自己承认）。路径含空格/`$()`/反引号/`;`/glob 会被 shell 二次解析 → `/home/user/$(cmd)` 执行 cmd。影响所有调用点（cat/mkdir/tee/rm/test）。
   > 建议：POSIX 单引号转义路径参数（`'` → `'\''`），或改 stdin/stdout 传字节。
+  > **已修（2026-10-03）**：`--` 后全部参数经 `wsl_quote` 单引号化（内部 `'` 转义 `'\''`）——shell 重拼后参数为单一字面量，元字符不再被解释。
 - **[H-03] `crypto.rs:138-141` — 私钥拼接返回** keypair 作为不透明 `private‖public` 单缓冲返回，需算法特定长度切分（未文档化），首个半段是私钥材料但类型无任何表示 → 易被误记日志/当公开 blob 用。
   > 建议：返回结构化 keypair（或 `(private, public)`），或文档化切分偏移并警告勿记日志。
+  > **已修（2026-10-03，文档口径）**：布局契约（私钥‖公钥，切分偏移=私钥长度随算法而定）与「勿当公开 blob / 勿进日志」警告写入 doc；返回结构化形态需 WIT 契约变更（ABI），另立条目评估。
 - **[H-04] `ws.rs:1046-1048` — 插件消息上限常量是死代码** `PLUGIN_WS_MAX_MESSAGE_BYTES.min(1)` 把 1 MiB 常量钳成 1 → 整式坍缩为 `ws_frame_limit().max(1)`，插件端上限失效；若 frame_limit 为 0 则生效上限变 1 字节全部被拒。违背 spec §4.4。
   > 建议：`ws_frame_limit().max(1).min(PLUGIN_WS_MAX_MESSAGE_BYTES)`（对齐 endpoint.rs hard-cap 模式）。
+  > **已修（2026-10-03）**：改 `ws_frame_limit().clamp(1, PLUGIN_WS_MAX_MESSAGE_BYTES)`——网络配置上限不再突破 1 MiB 平台硬上限。
 
 ### Medium
 
 - **[H-05] `events.rs:11-14` — 非法 JSON 静默降级为字符串** 无效 payload 变 JSON 字符串且返回 Ok → guest 以为已投递，前端收到形状不同的载荷，监听方按原 schema 解析运行时失败无信号。
   > 建议：返回 Err（带解析错误）或显式信封包装。
+  > **已修（2026-10-03）**：非法 JSON 直接 Err（fail-visible，带解析错误）；测试改锁拒绝路径。
 - **[H-06] `ws.rs:373-377` — enqueue 不查 entry.state** peer 已关闭（state→CLOSED）后 `ws_send_text/binary` 仍返回 Ok 排队无法投递帧；读循环退出从不 abort writer/drop tx → writer 残留 + CLOSED 条目占连接配额槽。
   > 建议：`enqueue` 检查 `state == STATE_OPEN`，读循环退出时终止 writer 或 drop sender。
+  > **已修（2026-10-03）**：enqueue 入队前检查 state（CLOSED → Err）；读任务收尾摘除条目（属主守卫）→ drop tx → writer 收尾。
 - **[H-07] `ws.rs:177-181` — 连接上限 check-then-act 竞态** 表锁下读数→放锁→阻塞握手（至 timeout_secs）→新锁下插入。并发 ws_connect（同插件多实例/并行调用）可全部通过 `owned >= MAX` 再全部插入超限。违背 spec §4.4。
   > 建议：插入锁内复查计数（或握手前预留 slot）。
+  > **已修（2026-10-03）**：插入前锁内复查属主计数，超限者中止 writer 并拒绝（不占配额槽）。
 - **[H-08] `crypto.rs:117-120` — KDF/协商缺审计** `kdf_derive` / `key_agreement_shared` 返回派生秘密不调 audit，其它 host-crypto 原语都记录（仅算法名无密材）→ 合规监控静默漏记。
   > 建议：两函数返回前补 `audit(plugin_id, "...", algorithm)`。
+  > **已修（2026-10-03）**：两函数成功路径补 audit（最敏感的派生/协商面不再漏记）。
 - **[H-09] `crypto.rs:37` — 注册表/提供器错误拍平为 String** `to_string()` 丢弃类型化错误与操作上下文，WIT 边界处多种函数共享同一泛错。建议前缀 `format!("aead_encrypt[{algorithm}]: {e}")`。
+  > **已修（2026-10-03）**：统一 `crypto_err(api, algorithm, e)` 前缀（`api[algorithm]: …`），注册表与提供器错误全部带上下文。
 - **[H-10] `wsl_fs.rs:55-58` — cat 失败全合并为 NotFound** 权限拒绝/是目录/distro 错配都被拍成 NotFound → 调用方（依 NotFound 分支「文件不存在」跳过或创建）静默误判真实 I/O 错。
   > 建议：检查 stderr 映射（No such file → NotFound，其余 PermissionDenied/Other）。
+  > **已修（2026-10-03）**：`map_wsl_failure` 按 stderr 关键字映射 NotFound / PermissionDenied / IsADirectory / Other。
 
 ### Low
 
 - **[H-11] `wsl_fs.rs:154-155` — test -e 不可访问误报 false** 文件缺席与父目录无权限同为非零退出 → 瞬态失败被当「不存在」继续（重建）。建议传播可区分失败或文档化偏离。
+  > **已修（2026-10-03）**：`exists_via_wsl` 仅「明确不存在」（stderr 含 No such file / not found）返回 false，其余按可区分错误传播（fail-visible）。
 - **[H-12] `events.rs:47` — 未使用导入** 测试模块 `grant_permissions` 导入未用。
+  > **已修（2026-10-03）**：移除。
 
 ---
 

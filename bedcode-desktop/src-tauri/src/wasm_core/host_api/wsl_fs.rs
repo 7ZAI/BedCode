@@ -16,10 +16,34 @@ use crate::wasm_core::runtime_util::block_on_async;
 /// wsl.exe 子进程超时：发行版冷启动（数秒）加桥接命令余量；超时即失败，避免调用方悬挂
 const WSL_CMD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
+/// POSIX 单引号转义（H-02）：`wsl.exe` 会把 `--` 后的参数**重拼为单命令行**交给
+/// 发行版默认 shell 执行——路径含空格 / `$()` / 反引号 / `;` / glob 会被二次解析
+/// 成命令注入（`/home/user/$(cmd)` 会真的执行 cmd）。逐参数包单引号、内部 `'`
+/// 转义为 `'\''` 后，参数作为单一字面量传给 shell，元字符不再被解释。
+fn wsl_quote(arg: &str) -> String {
+    let mut out = String::with_capacity(arg.len() + 2);
+    out.push('\'');
+    for c in arg.chars() {
+        if c == '\'' {
+            out.push_str("'\\''");
+        } else {
+            out.push(c);
+        }
+    }
+    out.push('\'');
+    out
+}
+
 /// 构造 wsl.exe 命令（`-d <distro> -- <args>`；Windows 下隐藏窗口，与 create_command 一致）
+///
+/// `--` 后的全部参数经 [`wsl_quote`] 单引号转义——wsl.exe 侧 argv 数组原样
+/// 送达，但发行版默认 shell 会重拼，所以必须在这里就交给它「已引号化」的参数。
 fn wsl_command(distro: &str, args: &[&str]) -> tokio::process::Command {
     let mut cmd = tokio::process::Command::new("wsl.exe");
-    cmd.arg("-d").arg(distro).arg("--").args(args);
+    cmd.arg("-d").arg(distro).arg("--");
+    for arg in args {
+        cmd.arg(wsl_quote(arg));
+    }
     #[cfg(target_os = "windows")]
     {
         // CREATE_NO_WINDOW = 0x08000000（tokio::process::Command 固有方法）
@@ -51,14 +75,33 @@ pub fn read_bytes_via_wsl(distro: &str, wsl_path: &str) -> std::io::Result<Vec<u
     let output = run_wsl_output(distro, &["cat", wsl_path])?;
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            format!("wsl cat failed (distro={}): {}", distro, stderr.trim()),
-        ));
+        return Err(map_wsl_failure("wsl cat", distro, &output.stderr));
     }
 
     Ok(output.stdout)
+}
+
+/// 按 stderr 映射 wsl.exe 失败为可区分 io::Error（H-10）
+///
+/// 旧实现把所有失败都拍成 NotFound——权限拒绝 / 是目录 / 发行版错配也被调用方
+/// 按「文件不存在 → 跳过或重建」处理，静默误判真实 I/O 错。按 stderr 关键字
+/// 映射：文件缺席 → NotFound（既有语义不变），权限 → PermissionDenied，其余
+/// → Other。
+fn map_wsl_failure(action: &str, distro: &str, stderr: &[u8]) -> std::io::Error {
+    let msg = String::from_utf8_lossy(stderr);
+    let kind = if msg.contains("No such file") || msg.contains("cannot open") || msg.contains("not found") {
+        std::io::ErrorKind::NotFound
+    } else if msg.contains("Permission denied") {
+        std::io::ErrorKind::PermissionDenied
+    } else if msg.contains("Is a directory") {
+        std::io::ErrorKind::IsADirectory
+    } else {
+        std::io::ErrorKind::Other
+    };
+    std::io::Error::new(
+        kind,
+        format!("{} failed (distro={}): {}", action, distro, msg.trim()),
+    )
 }
 
 /// 通过 wsl.exe 读取文本文件（等价于 std::fs::read_to_string）
@@ -150,9 +193,21 @@ pub fn delete_via_wsl(distro: &str, wsl_path: &str) -> std::io::Result<()> {
 }
 
 /// 通过 wsl.exe 检查文件是否存在（`test -e`）
+///
+/// `false` 只表示「明确不存在」；权限拒绝 / 其它非零退出按可区分错误传播
+/// （H-11）——旧实现把「父目录无权限」也当「不存在」让调用方继续重建。
 pub fn exists_via_wsl(distro: &str, wsl_path: &str) -> std::io::Result<bool> {
     let output = run_wsl_output(distro, &["test", "-e", wsl_path])?;
-    Ok(output.status.success())
+    if output.status.success() {
+        return Ok(true);
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if stderr.contains("No such file") || stderr.contains("not found") {
+        return Ok(false);
+    }
+    // 非「明确不存在」的失败（权限 / 发行版错配 / 其它）按错误传播，不做
+    // 静默降级（fail-visible）
+    Err(map_wsl_failure("wsl test", distro, &output.stderr))
 }
 
 /// 判断路径是否为 WSL UNC 路径（兼容 / 与 \ 分隔符混合）
