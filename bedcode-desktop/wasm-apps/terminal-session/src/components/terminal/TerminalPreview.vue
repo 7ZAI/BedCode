@@ -112,43 +112,49 @@
     </div>
 
     <!-- 正统渲染端覆盖确认弹窗：本端 resize 被服务端裁决为
-         needsConfirmation（另一个端正在渲染输出）时弹出，确认后 force 重发 -->
-    <div
-      v-if="showRendererOverrideModal"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
-      @click.self="cancelRendererOverride"
-    >
+         needsConfirmation（另一个端正在渲染输出）时弹出，确认后 force 重发。
+         Teleport 到 body（D-03，2026-10-04 OCR）：固定层不得渲染在页面内部——
+         路由/分区切换的 160-220ms 里旧页残影层（absolute + will-change）
+         会变成 fixed 后代的 containing block，弹窗临时重锚到页面元素而非视口，
+         肉眼跳变。 -->
+    <Teleport to="body">
       <div
-        class="w-96 rounded-[10px] border border-[var(--border)] bg-[var(--bg-card)] shadow-xl"
+        v-if="showRendererOverrideModal"
+        class="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+        @click.self="cancelRendererOverride"
       >
-        <div class="px-4 py-3 border-b border-[var(--border)]">
-          <span class="text-[calc(13px*var(--ui-scale))] font-semibold text-[var(--text-primary)]">
-            {{ t('session.terminal.rendererOverrideTitle') }}
-          </span>
-        </div>
-        <div class="px-4 py-4 text-[calc(12.5px*var(--ui-scale))] text-[var(--text-secondary)] whitespace-pre-line">
-          {{
-            t('session.terminal.rendererOverrideBody', {
-              renderer: rendererOverrideTarget?.rendererName ?? '',
-            })
-          }}
-        </div>
-        <div class="px-4 py-3 flex justify-end gap-2 border-t border-[var(--border)]">
-          <button
-            class="wb-btn-ghost !h-7 !px-3 text-[calc(12px*var(--ui-scale))]"
-            @click="cancelRendererOverride"
-          >
-            {{ t('session.terminal.rendererOverrideCancel') }}
-          </button>
-          <button
-            class="wb-btn-primary !h-7 !px-3 text-[calc(12px*var(--ui-scale))]"
-            @click="confirmRendererOverride"
-          >
-            {{ t('session.terminal.rendererOverrideConfirm') }}
-          </button>
+        <div
+          class="w-96 rounded-[10px] border border-[var(--border)] bg-[var(--bg-card)] shadow-xl"
+        >
+          <div class="px-4 py-3 border-b border-[var(--border)]">
+            <span class="text-[calc(13px*var(--ui-scale))] font-semibold text-[var(--text-primary)]">
+              {{ t('session.terminal.rendererOverrideTitle') }}
+            </span>
+          </div>
+          <div class="px-4 py-4 text-[calc(12.5px*var(--ui-scale))] text-[var(--text-secondary)] whitespace-pre-line">
+            {{
+              t('session.terminal.rendererOverrideBody', {
+                renderer: rendererOverrideTarget?.rendererName ?? '',
+              })
+            }}
+          </div>
+          <div class="px-4 py-3 flex justify-end gap-2 border-t border-[var(--border)]">
+            <button
+              class="wb-btn-ghost !h-7 !px-3 text-[calc(12px*var(--ui-scale))]"
+              @click="cancelRendererOverride"
+            >
+              {{ t('session.terminal.rendererOverrideCancel') }}
+            </button>
+            <button
+              class="wb-btn-primary !h-7 !px-3 text-[calc(12px*var(--ui-scale))]"
+              @click="confirmRendererOverride"
+            >
+              {{ t('session.terminal.rendererOverrideConfirm') }}
+            </button>
+          </div>
         </div>
       </div>
-    </div>
+    </Teleport>
   </div>
 </template>
 

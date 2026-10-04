@@ -13,6 +13,7 @@ import { useToast } from '@/composables/useToast'
 import { setupSharedRuntime } from '@/plugin/shared-runtime'
 import { setupPluginRuntimeListeners } from '@/plugin/runtime-listeners'
 import { initFrontendLogger } from '@/utils/frontendLogger'
+import { applyPageTransitionEffect, DEFAULT_PAGE_TRANSITION_EFFECT } from '@/utils/pageTransition'
 import 'vue-sonner/style.css'
 import './style.css'
 
@@ -76,6 +77,17 @@ Promise.all([initPlatform(), settingsStore.loadSettings()]).then(
     logger.log('[Init] Platform and settings pre-loaded')
   },
 )
+
+// 页面过渡效果写到根元素：必须在 app.mount 之前，否则首屏先按 CSS 缺省效果
+// 渲染一帧。启动路径不得被效果名拼写错误整死（D-06，2026-10-04 OCR）：
+// 拼错 → 记一条 error 并回落默认效果（测试路径仍保留 applyPageTransitionEffect
+// 的 throw 做精确断言）。
+try {
+  applyPageTransitionEffect(document.documentElement)
+} catch (e) {
+  console.error('[Init] page transition effect invalid, falling back to default', e)
+  document.documentElement.dataset.pageFx = DEFAULT_PAGE_TRANSITION_EFFECT
+}
 
 app.mount('#app')
 

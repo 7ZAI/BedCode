@@ -679,24 +679,138 @@ html.anim-disabled *::after {
   animation: pulse-slow 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
 
-/* 页面切换过渡动画 */
-.page-enter-active {
-  transition:
-    opacity 0.2s ease,
-    transform 0.2s ease;
+/* ==================== 页面过渡动效（全端单一事实源） ====================
+ * 宿主路由 + 四个 wasm 应用的「整视图 / 分区切换」共用这一套，三条硬约定：
+ *   1. transition 名字恒为 `page`（不得再出现 ah-page / ft-page / page-fade /
+ *      view-slide / tab-fade 等各自为政的页面级过渡）；
+ *   2. 过渡容器必须带 `page-swap`（定位上下文，见下）；
+ *   3. 效果由 <html data-page-fx> 选择，唯一切换点是
+ *      `src/utils/pageTransition.ts` 的 PAGE_TRANSITION_EFFECT（代码级，无设置项）。
+ *
+ * 为什么是「两层重叠交叉」而不是 `mode="out-in"`：out-in 先播完出场、再挂载入场，
+ * 两者之间存在一帧以上「容器里什么都没有」的窗口，露出的是 --bg-page —— 五套暗色
+ * 主题下它分别是 #15130f / #0f172a / #101713 / #0b1620 / #1b1210，全是近黑，
+ * 于是切页表现为「黑屏 + 闪烁」（历史上同一机制还在插件视图上触发过永久白屏）。
+ * 现在出场层 `position: absolute` 脱离文档流、新元素从第一帧就占位，两层同屏叠加，
+ * 容器永不断层。
+ */
+
+/* 动效 token：所有页面过渡的时长 / 缓动 / 幅度只从这里取，不允许把同一组数字
+   抄进各组件的 scoped 样式（参考：ui-ux-pro-max ux 域 Animation·Duration Timing
+   —— use shared motion tokens，而非 one duration copied to every transition）。 */
+:root {
+  --motion-page-duration-in: 220ms;
+  --motion-page-duration-out: 160ms;
+  --motion-page-ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --motion-page-shift: 10px;
+  --motion-page-scale: 0.985;
 }
+
+/*
+ * 过渡容器（`.page-swap`）：出场的绝对定位层以它为定位上下文。
+ * `--page-swap-pad-*` 是内边距补偿——绝对定位按 padding box 解析，容器有内边距时
+ * 出场层会整体偏移（横向滑走），用负偏移抵消回 content box，与入场层严丝合缝。
+ * 两个变量同时充当「内边距真值」与「补偿量」，同一处声明，不会漂移。
+ */
+.page-swap {
+  position: relative;
+  --page-swap-pad-x: 0px;
+  --page-swap-pad-y: 0px;
+}
+
+/* 带内边距的过渡容器（替代原先散落的 Tailwind p-*，保证补偿量与内边距同源）。
+   等价 Tailwind `px-6 py-5`；新增带内边距的过渡容器时按需加一档，别把裸 px-*/py-*
+   写回容器上——那样补偿量与内边距就变成两个来源。 */
+.page-swap-pad-lg {
+  --page-swap-pad-x: 1.5rem;
+  --page-swap-pad-y: 1.25rem;
+  padding: var(--page-swap-pad-y) var(--page-swap-pad-x);
+}
+
+.page-enter-active,
 .page-leave-active {
   transition:
-    opacity 0.15s ease,
-    transform 0.15s ease;
+    opacity var(--motion-page-duration-in) var(--motion-page-ease),
+    transform var(--motion-page-duration-in) var(--motion-page-ease);
+  will-change: opacity, transform;
 }
-.page-enter-from {
-  opacity: 0;
-  transform: translateY(8px);
+
+.page-leave-active {
+  /* 出场层脱离文档流 → 新元素立即占位，容器无空帧。top/left 用减法写法抵消
+     内边距（CSS Values-4 的 `calc(-1 * var())` 乘法要 Chromium 111+ 才支持，
+     WebView2/WKWebView 老内核会在解析期整条丢弃，见 2026-10-04 OCR D-02）；
+     width 扣掉两侧内边距；**不写 bottom、不设 height** —— 高度保持自然值，
+     否则长内容会被容器可视高度拉伸变形。
+     pointer-events: none：重叠过渡期间点按落在正在淡出的旧页上会重复触发
+     切页/双击（D-04）——160ms 里旧页只是残影，不该再接事件。 */
+  position: absolute;
+  top: calc(0px - var(--page-swap-pad-y));
+  left: calc(0px - var(--page-swap-pad-x));
+  /* width 同样不用乘法（老内核整条丢弃）：扣两次即可 */
+  width: calc(100% - var(--page-swap-pad-x) - var(--page-swap-pad-x));
+  /* 高度上限 = 容器可视高：出场层是旧页的残影，长表单/长会话淡出时若保持自然
+     高度会画出容器可视区（被 main{overflow:hidden} 裁掉的部分仍参与绘制，
+     短内容时则露底下入场页；见 2026-10-04 OCR D-05）。max-height 只截超长，
+     不强制拉满——短内容仍是自然高度。 */
+  max-height: 100%;
+  overflow: hidden;
+  transition-duration: var(--motion-page-duration-out);
+  /* 绝对定位层本就绘制在静态流内容之上，显式写出 z-index：将来入场元素自带定位 /
+     z-index 时次序不会翻转（旧页压在新页下面 = 新页纹丝不动，读不出交叉淡入）。 */
+  z-index: 1;
+  pointer-events: none;
 }
-.page-leave-to {
+
+/* 效果变体：入场起点 / 出场终点。无 data-page-fx（首帧、JS 未生效）默认 slide-up。 */
+.page-enter-from,
+html[data-page-fx='slide-up'] .page-enter-from {
   opacity: 0;
-  transform: translateY(-4px);
+  transform: translateY(var(--motion-page-shift));
+}
+.page-leave-to,
+html[data-page-fx='slide-up'] .page-leave-to {
+  opacity: 0;
+  transform: translateY(calc(0px - var(--motion-page-shift) / 2));
+}
+
+/* fade：纯透明度交叉，无位移 */
+html[data-page-fx='fade'] .page-enter-from,
+html[data-page-fx='fade'] .page-leave-to {
+  transform: none;
+}
+
+/* slide-left：横向推移（前进 / 后退的方向感） */
+html[data-page-fx='slide-left'] .page-enter-from {
+  opacity: 0;
+  transform: translateX(var(--motion-page-shift));
+}
+html[data-page-fx='slide-left'] .page-leave-to {
+  opacity: 0;
+  transform: translateX(calc(0px - var(--motion-page-shift) / 2));
+}
+
+/* zoom：轻微缩放，transform-origin 默认居中 */
+html[data-page-fx='zoom'] .page-enter-from {
+  opacity: 0;
+  transform: scale(var(--motion-page-scale));
+}
+html[data-page-fx='zoom'] .page-leave-to {
+  opacity: 0;
+  transform: scale(var(--motion-page-scale));
+}
+
+/* 减弱动态：过渡压到近乎瞬时后，入场起点若仍是 opacity:0，容器仍会闪一帧全透明
+   （近黑背景一闪）——故连起点/终点一并强制为完全可见、无位移。 */
+@media (prefers-reduced-motion: reduce) {
+  .page-enter-active,
+  .page-leave-active {
+    transition-duration: 0.01ms !important;
+  }
+  .page-enter-from,
+  .page-leave-to {
+    opacity: 1 !important;
+    transform: none !important;
+  }
 }
 
 /* 数据卡片交错淡入动画 */

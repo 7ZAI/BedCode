@@ -982,26 +982,10 @@
 
 /* ==================== 过渡动画 ==================== */
 
-/* 页面状态切换（空态 ↔ 工作台）：淡入 + 轻微上移，out-in 交叉过渡避免闪烁 */
-.ft-page-enter-active,
-.ft-page-leave-active {
-  transition: opacity 0.2s ease, transform 0.2s ease;
-  will-change: transform, opacity;
-}
-
-.ft-page-leave-active {
-  transition-duration: 0.15s;
-}
-
-.ft-page-enter-from {
-  opacity: 0;
-  transform: translateY(8px);
-}
-
-.ft-page-leave-to {
-  opacity: 0;
-  transform: translateY(-4px);
-}
+/* 页面状态切换（空态 ↔ 工作台）已收归宿主页面过渡体系（src/style.css 的 .page-* /
+   .page-swap）：名字恒为 `page`，时长/缓动/位移走 --motion-page-* token，效果变体由
+   <html data-page-fx> 选（全端唯一切换点 = 宿主 src/utils/pageTransition.ts）。
+   本文件不再自带 .ft-page-* —— 同一份页面过渡散落多处必然漂移。 */
 
 /* 传输队列面板：内容淡入 + 自右滑入，与网格列宽动画（280ms）同步 */
 .ft-queue-panel-enter-active,
@@ -1068,7 +1052,8 @@
   position: absolute;
 }
 
-/* 面板/队列/页面/任务卡过渡保持全时长（曾用 prefers-reduced-motion 压成 0.01ms 导致动画失效） */
+/* 面板/队列/任务卡过渡保持全时长（曾用 prefers-reduced-motion 压成 0.01ms 导致动画失效）。
+   页面级过渡不在此列 —— 它由宿主 src/style.css 统一提供，并自带 reduced-motion 降级。 */
 
 /* ==================== 设置面板（覆盖层） ==================== */
 
@@ -1225,8 +1210,15 @@
 
 /* ==================== v2 队列 4 tab（自绘分段，禁原生 select） ==================== */
 
+/* 分段栏包住标签本身，与 agent-hub 的分段栏一致。
+   早前是 .ft-tab{flex:1}，四个标签被均分撑满抽屉宽度，读起来像四块「按钮」而不是
+   一组筛选标签，视觉重量也高于其导航作用。
+   注意：只写 inline-flex 不够——.ft-queue-body 是 flex column 容器，flex 项的
+   inline-flex 会被 blockify 成 flex 并沿交叉轴 stretch 回满宽；必须显式
+   align-self: flex-start 才真正包住内容。 */
 .ft-tabs {
-  display: flex;
+  display: inline-flex;
+  align-self: flex-start;
   gap: 2px;
   padding: 3px;
   margin-bottom: 6px;
@@ -1234,12 +1226,18 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-btn);
   flex-shrink: 0;
+  max-width: 100%;
+  /* 本地化长标签（如德语/日文）超出容器时给出水平滚动，而不是被
+     .ft-queue{overflow:hidden} 裁掉（2026-10-04 OCR F-01）。不用 wrap：
+     换行会把分段栏撕成两行，失去「一组筛选标签」的形态；单行 + 滚动
+     保留分段语义，长文案仍可读。 */
+  overflow-x: auto;
 }
 
 .ft-tab {
-  flex: 1;
+  flex: 0 0 auto;
   min-width: 0;
-  padding: 5px 4px;
+  padding: 5px 10px;
   border: none;
   border-radius: calc(var(--radius-btn) - 3px);
   background: transparent;

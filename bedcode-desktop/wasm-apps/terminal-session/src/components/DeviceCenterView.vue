@@ -37,17 +37,27 @@
     </div>
 
     <!-- ==================== Tab 切换：设备配对 / 设备列表 ==================== -->
-    <div class="px-6 pt-3 flex-shrink-0">
-      <div class="flex items-center gap-1 p-1 rounded-lg bg-[var(--bg-hover)]">
+    <!-- Tab 区规格与 Agent任务（TaskHistoryView）同款，三点对齐：
+         ① 满宽分段控件（容器 flex + 单项 flex-1 等分），不是收缩条；
+         ② tab 带自身带底边线 + 卡片底色，与下方内容区物理分开；
+         ③ 水平内边距 px-6 与内容列同宽，tab 条左右缘与卡片对齐。
+         早前是 inline-flex 收缩条浮在页面底色上（整条 172px、两项各 80px），
+         读起来像一对工具按钮而不是页签导航。 -->
+    <div
+      class="px-6 pt-3 pb-3 flex-shrink-0 bg-[var(--bg-card)] border-b border-[var(--border)]"
+    >
+      <div class="flex items-center gap-1 p-1 rounded-lg bg-[var(--bg-hover)]" role="tablist">
         <button
           v-for="tab in deviceTabs"
           :key="tab.key"
-          class="h-8 flex-1 px-4 rounded-md text-[calc(12px*var(--ui-scale))] font-medium transition-colors duration-200"
+          class="flex-1 h-8 rounded-md text-[calc(12px*var(--ui-scale))] font-medium transition-colors duration-200"
           :class="
             activeTab === tab.key
               ? 'bg-[var(--bg-card)] text-[var(--text-primary)] shadow-sm'
               : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
           "
+          role="tab"
+          :aria-selected="activeTab === tab.key"
           @click="activeTab = tab.key"
         >
           {{ tab.label }}
@@ -102,8 +112,8 @@
       </div>
     </div>
 
-    <div class="flex-1 overflow-auto px-6 py-5 space-y-6">
-      <Transition name="tab-fade" mode="out-in">
+    <div class="page-swap page-swap-pad-lg flex-1 overflow-auto">
+      <Transition name="page">
         <!-- ==================== Tab1 设备配对 · 网络信息 + 配对码 + QR（各占一行） ==================== -->
         <div v-if="activeTab === 'pairing'" class="space-y-5">
           <!-- ==================== 网络信息条（置顶） ==================== -->
@@ -803,19 +813,8 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-/* Tab 切换过渡：淡入淡出 + 轻微 Y 位移，避免切换闪现（与宿主原页同一套过渡名） */
-.tab-fade-enter-active,
-.tab-fade-leave-active {
-  transition:
-    opacity 0.16s ease,
-    transform 0.16s ease;
-}
-.tab-fade-enter-from {
-  opacity: 0;
-  transform: translateY(4px);
-}
-.tab-fade-leave-to {
-  opacity: 0;
-  transform: translateY(-4px);
-}
+/* Tab 切换过渡已收归宿主页面过渡体系（src/style.css 的 .page-* / .page-swap）：
+   名字恒为 `page`，时长/缓动/位移走 --motion-page-* token，效果变体由
+   <html data-page-fx> 选（全端唯一切换点 = 宿主 src/utils/pageTransition.ts）。
+   本文件不再自带 .tab-fade-* —— 同一份页面过渡散落多处必然漂移。 */
 </style>
