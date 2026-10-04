@@ -14,7 +14,6 @@ import { logger } from '@/utils/frontendLogger'
 import {
   computeGridSize,
   FONT_FAMILY,
-  TERMINAL_LINE_END_MARGIN_COLS,
   TERMINAL_LINE_HEIGHT,
 } from '@/utils/terminalMetrics'
 import { getXtermScaledDimensions } from '@/utils/terminalDimensions'
@@ -106,13 +105,13 @@ export function useTerminalRenderer(ctx: TerminalKernelContext) {
   }
 
   /**
-   * 创建前预计算终端网格：容器尺寸 ÷ 字体网格（与 FitAddon 一致，仅扣自绘
-   * 滚动条预留宽 + 行尾安全余量 1 列，高度不增减）
+   * 创建前预计算终端网格：容器尺寸 ÷ 字体网格（与 FitAddon 一致，列尾不再额外
+   * 预留——见 TERMINAL_RIGHT_RESERVE_PX 的「右侧竖直黑带」实测；高度不增减）
    */
   function computeInitialSize(fontSize: number): { cols: number; rows: number } {
     const container = ctx.xtermContainerRef.value
     if (!container) return { cols: 80, rows: 24 }
-    const grid = computeGridSize(container, fontSize, FONT_FAMILY, TERMINAL_LINE_END_MARGIN_COLS, 0, TERMINAL_LINE_HEIGHT)
+    const grid = computeGridSize(container, fontSize, FONT_FAMILY, 0, 0, TERMINAL_LINE_HEIGHT)
     // 字体未就绪（0 尺寸）时回退默认值：发送路径的 80x24 过滤 + fit 后校准兜底
     if (grid.cols <= 0 || grid.rows <= 0) return { cols: 80, rows: 24 }
     return grid
@@ -124,6 +123,9 @@ export function useTerminalRenderer(ctx: TerminalKernelContext) {
     if (!term) return null
     // addon-fit 0.11 内部即此访问路径（FitAddon.proposeDimensions）；
     // 私有 API 无类型声明，逐级防御，任一环节缺失即回退 fitAddon.fit()
+    // SAFETY: `_core` 是 xterm 内部字段，类型声明里不存在；这里只读取
+    // `_renderService.dimensions.css.cell` 的 width/height 数值（可选链逐级兜底），
+    // 拿不到就返回 null 走降级分支，不假设它一定存在。
     const core = (term as unknown as { _core?: unknown })._core as
       | { _renderService?: { dimensions?: { css?: { cell?: { width: number; height: number } } } } }
       | undefined
@@ -154,7 +156,7 @@ export function useTerminalRenderer(ctx: TerminalKernelContext) {
 
   /**
    * DPR 感知 fit：容器 CSS 尺寸 × devicePixelRatio 换算物理像素后计算 cols/rows
-   * （行高 ceil、列宽 floor；仅扣自绘滚动条预留宽 + 行尾安全余量 1 列），
+   * （行高 ceil、列宽 floor；列尾不再额外预留，见 TERMINAL_RIGHT_RESERVE_PX），
    * 替代裸 fitAddon.fit() 的 DPR 不感知计算（Android 高 DPR 下网格更精确、无字模）。
    * 容器/cell 尺寸不可用时优雅降级回 fitAddon.fit()，不炸。
    *
@@ -178,7 +180,10 @@ export function useTerminalRenderer(ctx: TerminalKernelContext) {
       cellWidthCss: cell.width,
       cellHeightCss: cell.height,
       devicePixelRatio: window.devicePixelRatio,
-      marginCols: TERMINAL_LINE_END_MARGIN_COLS,
+      // 行尾不再额外预留格数：TERMINAL_RIGHT_RESERVE_PX（px）已在
+      // getXtermScaledDimensions 内扣除，这里不再叠加格数（两者都为 0，
+      // 但一个是 px 一个是格数，语义不同，不能互传）
+      marginCols: 0,
     })
     // 走到这里说明容器与字体度量都已就绪：网格可信（与是否发生尺寸变化无关，
     // 供 queueResize 判断「当前 cols/rows 是否仍属构造期兜底值」）

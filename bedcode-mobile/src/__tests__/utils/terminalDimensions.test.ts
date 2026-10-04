@@ -1,10 +1,13 @@
 /**
- * 终端网格 DPR 感知计算测试（对齐桌面端 terminalDimensions 语义 + 移动端
- * 对齐 FitAddon 裸 fit 的滚动条扣除 / margin 参数）
+ * 终端网格 DPR 感知计算测试（对齐桌面端 terminalDimensions 语义）
+ *
+ * 关键口径：行尾右缘**不预留**（TERMINAL_RIGHT_RESERVE_PX = 0）——多留一格就会在
+ * 容器右缘留下一条无单元格绘制的差额带，TUI（opencode）自带底色铺满列宽时那条带
+ * 就是「右侧竖直黑带」。故 cols 必须等于 floor(容器宽 / 格宽)。
  */
 import { describe, it, expect } from 'vitest'
 import { getXtermScaledDimensions } from '@/utils/terminalDimensions'
-import { TERMINAL_SCROLLBAR_GUTTER_PX } from '@/utils/terminalMetrics'
+import { TERMINAL_RIGHT_RESERVE_PX } from '@/utils/terminalMetrics'
 
 const base = {
   containerWidthCss: 1000,
@@ -14,24 +17,36 @@ const base = {
 }
 
 describe('getXtermScaledDimensions (DPR 感知)', () => {
-  it('DPR=1：滚动条预留宽 6px 扣除，列宽 floor / 行高线性', () => {
+  it('行尾不预留：cols = floor(容器宽 / 格宽)，不因右缘留白少一列', () => {
     const r = getXtermScaledDimensions({ ...base, devicePixelRatio: 1 })
-    // 可用宽=1000-6=994，char宽=10 → cols=99；可用高=500，char高=20 → rows=25
-    expect(r).toEqual({ cols: 99, rows: 25 })
+    // 无预留：可用宽=1000，格宽=10 → cols=100；可用高=500，行高=20 → rows=25
+    expect(r).toEqual({ cols: 100, rows: 25 })
   })
 
   it('DPR=2：CSS像素×DPR 换算物理像素', () => {
     const r = getXtermScaledDimensions({ ...base, devicePixelRatio: 2 })
-    // 物理可用宽=1000*2-6*2=1988，char宽=10*2=20 → cols=99
-    // 物理可用高=500*2=1000，char高=ceil(20*2)=40 → rows=25
-    expect(r).toEqual({ cols: 99, rows: 25 })
+    // 物理可用宽=1000*2=2000，格宽=10*2=20 → cols=100
+    // 物理可用高=500*2=1000，行高=ceil(20*2)=40 → rows=25
+    expect(r).toEqual({ cols: 100, rows: 25 })
   })
 
   it('DPR=1.5（150% 缩放）', () => {
     const r = getXtermScaledDimensions({ ...base, devicePixelRatio: 1.5 })
-    // 物理可用宽=1000*1.5-6*1.5=1491，char宽=10*1.5=15 → cols=99
-    // 物理可用高=500*1.5=750，char高=ceil(20*1.5)=30 → rows=25
-    expect(r).toEqual({ cols: 99, rows: 25 })
+    // 物理可用宽=1500，格宽=15 → cols=100；物理可用高=750，行高=30 → rows=25
+    expect(r).toEqual({ cols: 100, rows: 25 })
+  })
+
+  it('手机实测口径：容器 407 / 格宽 7.5 → 54 列（余 2px 发丝线，非 17px 黑带）', () => {
+    const r = getXtermScaledDimensions({
+      containerWidthCss: 407,
+      containerHeightCss: 700,
+      cellWidthCss: 7.5,
+      cellHeightCss: 18,
+      devicePixelRatio: 3,
+    })
+    expect(r.cols).toBe(54)
+    // 差额 = 容器宽 - cols×格宽 = 407 - 405 = 2px < 1 格（旧口径会多扣 6+7.5=13.5px）
+    expect(407 - r.cols * 7.5).toBeLessThan(7.5)
   })
 
   it('cell 高×DPR 为小数时不 ceil（原始值），最后一行仍放得下', () => {
@@ -42,11 +57,11 @@ describe('getXtermScaledDimensions (DPR 感知)', () => {
     expect(r.rows).toBe(33)
   })
 
-  it('marginCols/marginRows 额外扣除格数', () => {
+  it('marginCols/marginRows 额外扣除格数（调用方显式传入才扣）', () => {
     const r = getXtermScaledDimensions({ ...base, devicePixelRatio: 1, marginCols: 2, marginRows: 1 })
-    // 可用宽再减 2*10=20 → 974；char=10 → cols=97
-    // 可用高再减 1*20 → 480；char=20 → rows=24
-    expect(r).toEqual({ cols: 97, rows: 24 })
+    // 可用宽再减 2*10=20 → 980；格宽=10 → cols=98
+    // 可用高再减 1*20 → 480；行高=20 → rows=24
+    expect(r).toEqual({ cols: 98, rows: 24 })
   })
 
   it('退化入参（≤0 / NaN）返回 {1,1} 兜底', () => {
@@ -68,27 +83,32 @@ describe('getXtermScaledDimensions (DPR 感知)', () => {
     )
   })
 
-  it('可用物理宽 ≤ 0（容器 ≤ 滚动条预留宽）→ cols 钳制为 1', () => {
-    // 容器宽恰好等于滚动条预留宽：扣减后可用物理宽 = 0 → floor 得 0 → Math.max(...,1)
-    const exactly = getXtermScaledDimensions({
+  it('显式 marginCols 吃满可用宽 → cols 钳制为 1（行数不受影响）', () => {
+    // 容器 20px、格宽 10px、marginCols=2 → 可用宽 0 → floor 得 0 → 钳制为 1
+    const r = getXtermScaledDimensions({
       ...base,
       devicePixelRatio: 1,
-      containerWidthCss: TERMINAL_SCROLLBAR_GUTTER_PX,
+      containerWidthCss: 20,
+      marginCols: 2,
     })
-    expect(exactly.cols).toBe(1)
-    // 容器宽小于预留宽：可用物理宽为负 → 仍钳制为 1（行数不受影响）
-    const negative = getXtermScaledDimensions({
-      ...base,
-      devicePixelRatio: 1,
-      containerWidthCss: TERMINAL_SCROLLBAR_GUTTER_PX - 1,
-    })
-    expect(negative.cols).toBe(1)
-    expect(negative.rows).toBeGreaterThan(1)
+    expect(r.cols).toBe(1)
+    expect(r.rows).toBe(25)
   })
 
   it('恒为非零合法维度（极小容器也拿 1 行 1 列）', () => {
     const r = getXtermScaledDimensions({ ...base, devicePixelRatio: 1, containerWidthCss: 5, containerHeightCss: 5 })
     expect(r.cols).toBeGreaterThanOrEqual(1)
     expect(r.rows).toBeGreaterThanOrEqual(1)
+  })
+
+  it('TERMINAL_RIGHT_RESERVE_PX 锁 0：右缘不预留（回归即右侧竖直黑带）', () => {
+    expect(TERMINAL_RIGHT_RESERVE_PX).toBe(0)
+    // 常量一旦被改回 >0，本断言直接失败——它是「不留黑带」的契约锁
+    const withReserve = getXtermScaledDimensions({
+      ...base,
+      devicePixelRatio: 1,
+      marginCols: 0,
+    })
+    expect(withReserve.cols).toBe(Math.floor(base.containerWidthCss / base.cellWidthCss))
   })
 })

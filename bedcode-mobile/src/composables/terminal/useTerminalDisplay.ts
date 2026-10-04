@@ -30,7 +30,7 @@ import { useInputAssistantStore } from '@/stores/inputAssistant'
 import { useTerminalBufferStore } from '@/stores/terminalBuffer'
 import { isMockSession } from '@/composables/useMockTerminal'
 import { resolveTerminalTheme } from '@/config/terminalThemes'
-import { FONT_FAMILY, TERMINAL_LINE_HEIGHT, TERMINAL_SCROLLBAR_GUTTER_PX, ensureTerminalFontLoaded } from '@/utils/terminalMetrics'
+import { FONT_FAMILY, TERMINAL_LINE_HEIGHT, TERMINAL_RIGHT_RESERVE_PX, bustFontFamilyCache, ensureTerminalFontLoaded } from '@/utils/terminalMetrics'
 import { TerminalResizeDebouncer } from '@/utils/terminalResizeDebouncer'
 import { TERMINAL_SCROLLBACK } from '@/utils/terminalScrollback'
 import type { TerminalKernelContext } from './terminalKernel'
@@ -163,9 +163,9 @@ export function useTerminalDisplay(ctx: TerminalKernelContext, deps: TerminalDis
     const container = ctx.xtermContainerRef.value
     if (!container) return
 
-    // 内置 CJK 等宽字体就绪后再测量：格宽从 fallback 的 ~0.6em 变为内置的 0.5em，
-    // 不等就位会让「创建期预估网格 / xterm 内部 charMeasure / fit 收敛」分三套
-    // 度量算列行数（行尾错位、满行被裁、fit 横跳）。就绪失败不阻断（按 fallback 继续）
+    // 内置 CJK 等宽字体「已加载且已进入排版」后再测量：格宽从 fallback 的 ~0.6em 变为
+    // 内置的 0.5em，不等就位会让「创建期预估网格 / xterm 内部 charMeasure / fit 收敛」
+    // 分三套度量算列行数（行尾错位、满行被裁、fit 横跳）。就绪失败不阻断（按 fallback 继续）
     await ensureTerminalFontLoaded(terminalSettings.value.fontSize ?? 14)
 
     // 创建前预测量：直接以适配屏幕的行列值构造，不再经过默认 80x24 阶段
@@ -183,11 +183,13 @@ export function useTerminalDisplay(ctx: TerminalKernelContext, deps: TerminalDis
       lineHeight: TERMINAL_LINE_HEIGHT,
       // 滚动历史行数（与桌面主机服务端事件队列容量对齐）
       scrollback: TERMINAL_SCROLLBACK,
-      // 自绘滚动条预留宽（唯一真源 TERMINAL_SCROLLBAR_GUTTER_PX）：xterm 6 内部
-      // verticalScrollbarSize 与 FitAddon 可用宽扣除同源取此值（缺省 14px，
-      // 原生滚动条已被 CSS 隐藏却仍按 14px 预留 → 右侧固定空白竖条）。
-      // 设为自绘指示线足迹后，画布右缘与滚动条零重叠且死区收窄到 6px
-      overviewRuler: { width: TERMINAL_SCROLLBAR_GUTTER_PX },
+      // 行尾预留宽（唯一真源 TERMINAL_RIGHT_RESERVE_PX，当前 0）：xterm 6 内部的
+      // verticalScrollbarSize / overviewRuler 与 FitAddon 的可用宽扣除均取此值。
+      // 曾经设为自绘滚动指示线的 6px 足迹（14px 缺省会让画布右缘出现死区），但任何
+      // 预留都会在容器右缘留下一条无单元格绘制的差额带——TUI（opencode）自带底色
+      // 铺满自己的列宽，差额带就成了一条竖直黑带（见常量注释）。改 0 后差额退化为
+      // 「容器宽 mod 格宽」的发丝线，自绘指示线改为覆盖在最后一列之上。
+      overviewRuler: { width: TERMINAL_RIGHT_RESERVE_PX },
       // 默认即时滚动：关闭平滑滚动，避免滚动动画期间合成器缓存旧帧导致重影；
       // 仅在惯性甩动时由 useTerminalScroll 临时开启（smoothScrollDuration）
       // 做单次平滑滑行，滑行结束立即复位为 0
@@ -223,6 +225,14 @@ export function useTerminalDisplay(ctx: TerminalKernelContext, deps: TerminalDis
     term.unicode.activeVersion = '11'
 
     term.open(container)
+
+    // 字体进入排版后强制 xterm 失效重测一次（必须在 open 之后，构造期赋值等于没变）：
+    // xterm 的 WidthCache 按 (fontFamily, fontSize, weight) 去重，swap 之前量到的
+    // fallback 宽度会被一直沿用，DomRenderer 随后把它当成「行宽补偿」写进 rows 的
+    // letter-spacing（真机 -1.5px = 格宽 7.5 − fallback 9.0）。该补偿按每字符施加，
+    // CJK（2 格宽）被一并压窄 1.5px → 汉字逐字重叠、行尾漂移。换同字体不同串触发
+    // charMeasure 重测 + WidthCache.clear() + 补偿重算（详见 bustFontFamilyCache）。
+    term.options.fontFamily = bustFontFamilyCache(FONT_FAMILY)
 
     // 渲染器初始化：按 USE_WEBGL_RENDERER 决策加载 WebGL（或保持 DOM），
     // WebGL 激活后隐藏 DOM 层光标（保留 WebGL 层光标，避免双光标）

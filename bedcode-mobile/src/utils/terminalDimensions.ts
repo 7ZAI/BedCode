@@ -11,13 +11,12 @@
  * 取整（xterm 画布按原始 cell×dpr 渲染，ceil 会让高 DPR 下少算行数、网格
  * 贴底对齐时顶部露出空带，详见函数头注释），rows×cell ≤ 容器高恒成立。
  *
- * 移动端口径与 fitWithMargin 对齐（FitAddon 裸 fit：仅扣自绘滚动条预留宽
- * TERMINAL_SCROLLBAR_GUTTER_PX、无行列余量）：默认 marginCols=0 /
+ * 移动端口径与 fitWithMargin 对齐（FitAddon 裸 fit：行尾不额外预留）：默认 marginCols=0 /
  * marginRows=0。余量参数保留供需要时自定义。
  */
 
 // 纯数值常量导入不破坏本模块零 DOM 依赖（terminalMetrics 模块加载无副作用）
-import { TERMINAL_SCROLLBAR_GUTTER_PX } from './terminalMetrics'
+import { TERMINAL_RIGHT_RESERVE_PX } from './terminalMetrics'
 
 export interface XtermScaledDimensionsInput {
   /** 容器 CSS 宽度（px） */
@@ -30,7 +29,7 @@ export interface XtermScaledDimensionsInput {
   cellHeightCss: number
   /** window.devicePixelRatio（1/1.25/1.5/2/…） */
   devicePixelRatio: number
-  /** 列尾额外预留的格数（移动端对齐 FitAddon 裸 fit，默认 0） */
+  /** 行尾额外预留的格数（移动端对齐 FitAddon 裸 fit，默认 0） */
   marginCols?: number
   /** 行尾额外预留的格数（移动端对齐 FitAddon 裸 fit，默认 0） */
   marginRows?: number
@@ -42,8 +41,9 @@ export interface XtermScaledDimensionsInput {
  * 换算口径与 VS Code 一致：容器宽高 × DPR 得到可用物理像素；cell 宽 × DPR
  * 得到物理字符宽度（BedCode 无 letterSpacing，缺省为 0）。列宽 floor、行数
  * floor，分别防截断与防溢出。
- * 滚动条预留宽在 DPR 归一到物理像素的可用宽度内扣除（与 computeGridSize
- * 滚动条扣除逻辑一致，量纲对齐）。余量（marginCols/rows）可额外扣除，
+ * 行尾右缘预留宽（px）在 DPR 归一到物理像素的可用宽度内扣除（与 computeGridSize
+ * 口径一致，量纲对齐；移动端当前为 0，见 TERMINAL_RIGHT_RESERVE_PX「不预留
+ * 才不会在 TUI 右侧留出竖直黑带」）。余量（marginCols/rows）可额外扣除，
  * 默认对齐 FitAddon 裸 fit 为 0。
  *
  * 行高为什么不做 ceil（修正）：实测 xterm 渲染器的画布/屏幕高度 = rows ×
@@ -87,10 +87,10 @@ export function getXtermScaledDimensions(
   // 物理字符高度：cell 高 × DPR（原始值，不做 ceil——见函数头注释）
   const scaledCharHeight = cellHeightCss * dpr
 
-  // 可用物理像素 = CSS 像素 × DPR；扣除滚动条预留宽与行列余量（全部归一物理像素）
-  const scrollbarScaled = TERMINAL_SCROLLBAR_GUTTER_PX * dpr
+  // 可用物理像素 = CSS 像素 × DPR；扣除行尾右缘预留宽与行列余量（全部归一物理像素）
+  const rightReserveScaled = TERMINAL_RIGHT_RESERVE_PX * dpr
   const scaledWidthAvailable =
-    containerWidthCss * dpr - scrollbarScaled - marginCols * scaledCharWidth
+    containerWidthCss * dpr - rightReserveScaled - marginCols * scaledCharWidth
   const scaledHeightAvailable = containerHeightCss * dpr - marginRows * scaledCharHeight
 
   // 列宽向下取整防行尾截断；行数线性 floor 防溢出（rows × cell ≤ 容器高恒成立）
