@@ -9,6 +9,49 @@
 
 ## [未发布]
 
+#### 移动端 WS 断线重连：策略收敛到单一执行者，补上半开检测与关闭码三档
+
+- **退避引擎写了却从未接线**：`ReconnectManager`（605 行，含指数退避 / 10% 抖动 / 同因熔断 / 1s 下限钳制）挂在 `WsClient::reconnect()` 上，而该方法**全仓零调用者**（`rg "\.reconnect\(\)"` 无结果）。真正在跑的是 `ConnectionManager::reconnect` 里 `DEFAULT_RETRY_DELAYS_MS` 硬编码表 `[1s, 2s, 4s]` ——**无抖动、无下限钳制**，且表的第 3 项（4000）在 3 轮循环里从未被索引到。两张表内容相同、来源不同，只靠注释声称「一致」互相背书
+- **最讽刺的代价**：2026-09-29 那次 616 次/98 秒（≈6.3 Hz）自愈风暴事后加的护栏 `MIN_RECONNECT_DELAY_MS = 1000`，钳制代码在死代码里，对真实风暴零作用；真实防线的 TS 用户间隔下限恰好是 1s，与钳制线重合，形同虚设
+- **P0 两套策略并发触发、计数互相污染**：一次断线同时唤醒 `EventWsSupervisor`（Rust 自愈）与前端 `handleUnexpectedDisconnect`（固定间隔 + MAX 3 + 递归重试）。Rust 通常先赢（首轮不等，TS 默认等 5s），前端后到的 `ws_reconnect` 撞上 `is_reconnecting` 直接 skip —— 但前端**计数已经 +1**，3 次预算被空转烧掉，表现为「桌面端在线却弹自动重连已放弃」
+- **修复：重连策略单一事实源**。`ConnectionManager` 持有 `reconnect_policy`，顶层重连循环改为驱动它（`start` / `on_failure` / `on_success` / `reset` / `is_abandoned`）；退避移到轮末按策略取（`current_delay` 天然等于本轮值，无需偏移索引，且无目标 / 无 token 的提前退出不再白白等一个退避）。删除 `WsClient::reconnect()` 死路径与 `DEFAULT_RETRY_DELAYS_MS` 表，只留一个来源。抖动与下限钳制由此进入真实路径；节奏与修复前一致（首轮立即试、随后 1s、2s ± 10%）
+- **前端不再持有重连循环**：`handleUnexpectedDisconnect` 整函数删除（递归重试、`MAX_AUTO_RECONNECT_ATTEMPTS`、`autoReconnectAttemptCount` 全部退场），前端只订阅 `ws_reconnecting` / `ws_reconnected` / `ws_reconnect_failed` 更新 UI。`autoReconnectAborted` 收敛为纯粹的**过期事件丢弃标记**
+- **心跳半开检测此前完全失效**：建连后首个 Pong 到达前（默认整整一个心跳间隔 30s），`last_pong` 恒为 `None` 而 `is_connection_lost` 对 `None` 返回 `false` —— 这段窗口内既不因 `send(Ping)` 报错（TCP 半开时只写本地缓冲区并成功返回）、也不判超时，死连接可无限期挂着。新增 `mark_connected()`（握手成功后调用一次），判死基准二选一：收到过 Pong 用 `last_pong`，否则回落到建连时刻
+- **关闭码从两档补到三档**：此前只有「认证类致命（4001/4003）不重连」与「其余一律重连」两极，协议错（1002/1003/1010）、负载非 UTF-8（1007）、策略拒收（1008）、超大消息（1009）都会被当网络抖动白重连 3 轮。新增 `WS_NON_RETRYABLE_CLOSE_CODES` + `is_non_retryable_close_code`，监督任务与 ConnMonitor 均按三档分流；1000/1001/1005/1006/1011/1012/1013 明确**保持可重连**（服务端优雅关闭、崩溃、过载、网络切换都应自愈），未知业务码默认可重试（fail-open 于重试，与认证的 fail-closed 相反）
+- **第三档要有自己的文案**：`ws_unexpected_disconnect` 载荷新增 `non_retryable` 字段（老端忽略未知字段），前端提示指向「升级应用」而非「重新配对」—— 否则用户会按重新配对反复折腾，却解决不了版本 / 协议不匹配
+- **自动重连开关从 localStorage 递到连接层**：新增 `set_auto_reconnect` 命令 + `ConnectionManager::auto_reconnect` 标志。Rust 侧 flag 不随 localStorage 自动恢复，不同步则用户关掉的开关在重启后悄悄变回开启；`init()` 与设置页 `onMounted` 双入口幂等推送
+- **移除「重连间隔」可调项**：退避是指数 + 抖动的，把算法参数漏给用户只会诱导他调出打服务端的配置；留着开关却不再生效则是静默失效。设置页、`MobileSettings` 类型、zh-CN / en 四处 locale key 一并清除（存量 localStorage 字段自动忽略）
+- **验证**：移动端 `cargo test --lib` 357 全绿（新增 10 条：半开检测回归锁 ×3、关闭码三档正/反/边界 ×5、自动重连开关共享状态 ×3；重写 1 条锁死旧静默行为的用例）；`cargo test` 全绿；`pnpm run test:run` 539 全绿 / 54 文件（连接流集成改写 3 条、新增 4 条，含「前端不得发起重连」「第三档文案互斥」）；`cross-end-tests` 全绿（14 个测试二进制）；根 `eslint` 0 error；`cargo clippy` 警告数 47 → 47（零新增）；fmt 仅剩 23 个文件的既有 drift（我的新增行全部干净）
+- **遗留**：`CIRCUIT_BREAKER_SAME_CAUSE_LIMIT = 5` 在 `DEFAULT_MAX_RETRIES = 3` 下不可达（轮次先耗尽），接线后成为纵深防御。若要让它生效需把阈值调到 ≤3 —— 属业务默认值，待产品确认。终端流那条 WS 连接目前无监督任务（`WsClient::new` 生产调用点仅事件通道一处），其建连方与重连责任待单独确认
+
+#### 桌面端自动任务：重试中状态与会话维度的任务一律收敛到终态（闭环修复）
+
+- **现场属实且可复现**：任务卡在 `retrying`、队列项卡在 `executing`、队列第二项永不下发。查随包插件库找到那条真实行——状态 `retrying`、最后事件 `2026-10-03 16:10:57`、`completed_at` 为空，8 小时后仍是 `retrying`，同会话队列第二项仍 `pending`，而那个会话本身早已不在。`retrying` 的语义是「agent 正在自动重试可恢复错误」，按 agent 自身的重试上界（pi 最多 `maxRetries=3` 次、退避封顶 60s）本该几分钟内收敛，因此长时间静默 = **收敛信号丢失**，而非「任务还在跑」
+- **宿主侧对这类状态无界**：唯一兜底是挂在队列行上的 12h executing 静默看门狗；而宿主重启则一切悬空——`activate` 会清空会话表（会话与 PTY 同为进程域），却无人对账任务行，于是该行永远停在 `retrying`、`has_active_task` 恒真、整条队列停摆（12h 看门狗要到数小时后才动，实质等于没有）
+- **补三处闭环缺口**（无 WIT / ABI / HTTP / 线协议变更，全部在 terminal-session 插件内）：
+  - **重试停滞看门狗**（新增 tick 域 `queue-retrying-check`）：`retrying` 行静默超过 **20 分钟**（远高于 pi 数分钟的重试上界，远低于 12h）即收敛为 `interrupted` 并写明原因，**并继续跑队列**（`try_dispatch_next` → 下一项照常下发）；按会话聚合，保证同一会话的第二条停滞行不会误杀刚续跑下发的任务
+  - **启动对账**（`state::recover_running_tasks_on_restart`，activate 与既有定时任务恢复并列调用）：会话已不在登记域的运行中任务行（`in_progress` / `asking` / `retrying`）与未终结队列项（`pending` / `waiting` / `executing`）一律收敛为 `interrupted`，原因写明「宿主重启时任务仍在运行」；孤儿 `pending` 也一并终结——其会话已消失，无处投递
+  - **会话移除 / 重启**：两条路径都是「先摘记录再杀 PTY」，退出事件按无记录 no-op，会话结束兜底收不到；任务域改为**在摘记录前**先收敛在途任务。重启保留 `pending` 项（新会话同 id 会在就绪后接手）
+- **hook 适配器是根因**：pi 内核**先查不可重试的限额/额度表**（`insufficient_quota`、`quota exceeded`、`billing` 等）并立即放弃重试，而随包适配器只查了可重试表——于是 `429 {"code":"insufficient_quota"}` 命中 `\b429\b` 被推成 `retrying`，实际根本没有重试在进行。pi 与 opencode 两侧适配器现补齐同一份非重试守卫（限额类错误不再推 retrying；终态仍由 agent 自身的 settled 事件判定，两侧不会分叉）；模板版本递增（pi 6→7、opencode 4→5）使已部署副本自动重写
+- **收敛 SQL 单一事实源**：两处收敛面改为从 `RUNNING_STATUSES` / `UNTERMINATED_QUEUE_STATUSES` 生成 `IN (...)`，不再各自内联字面量——两份拷贝漏掉 `retrying` 正是本次缺陷的形态
+- **验证**：插件 crate `cargo test --lib` 449 全绿（新增 14 条：看门狗裁决正/反/边界、阈值双侧区间、收敛与续跑形状、只取 retrying 行、按会话聚合、状态集覆盖、activate 调用顺序、hook 守卫存在性）；4 处变异（阈值 `>`→`>=`、删 `GROUP BY`、删续跑、状态集漏 `retrying`）逐一测红；`wasm32-wasip3` 构建无新增告警（18 条为存量，均不在改动代码内）
+
+#### 桌面端自动任务：任务队列（按配置分组·先入队后建会话）、自动模式轮换会话、会话关闭联动前端窗口
+
+- **会话选择框扩大为「选择执行会话」**：除运行中的会话外，每个适配的会话配置提供「创建新的 {配置名} 会话」——提交任务**不立即建会话**，而是进入按配置分组的**任务队列**（该配置已有未启动队列则并入，否则新建）；队列启动/自动模式时才 `launch::create_via_host` 新建会话并把整队任务迁移过去（任务以队列 id 作 `task_queue.session_id` 占位键挂账，复用既有队列机制）
+- **任务队列区（Tab1 新增）**：每张队列卡片显示执行会话（配置名）、自动任务列表，并提供「启动」（建会话并执行）与「自动模式」开关（开启且队列有任务即自动建会话执行）；启动后队列移交会话内队列机制（执行任务区按会话展示，开关即会话 auto_execute）；**未执行任务可行内编辑**（改写 prompt，复用 queue-update，同一编辑模式也覆盖执行任务区的 pending 项）
+- **预设任务可选目标任务队列**：预设「加入队列」改为写入选定的任务队列（`preset-enqueue-queue`）
+- **自动模式任务间轮换会话**：上一任务完成 → 关闭旧会话、同配置新建会话执行下一任务（既有 `rotate_session_for_next_task`）；关闭期间**桌面终端窗口联动**——`TerminalWindowView` 订阅 `session:stopped`，匹配会话即 `closeTerminal` 自关（不会误伤重启：restart 走 `session:removed` + 同 id 重建，不产生 stopped）；也顺带消除了「死窗口持续轮询已删会话」的旧问题
+- **实现**：新表 `task_config_queues`（task 域 schema 注册）+ 新模块 `task/config_queue.rs`（不在广播点钉锁扫描列表；桌面 UI 走 `task:config-queue-changed` emit，会话 mode 变更沿用三连广播）；命令 `create-and-enqueue`（改语义）/ `config-queues-list` / `config-queue-start` / `config-queue-set-auto` / `preset-enqueue-queue`；钉锁保持 baseline（bus/emit 成对 9、ws 出口 queue.rs 1）
+- **验证**：插件 crate `cargo test` 435 全绿；终端会话应用 vitest 21 文件 / 244 用例全绿（H4 入队不建会话 / H5 启动与自动模式 / H6 预设入队，H1 六域数据）；eslint 0 error；vue-tsc 仅存量错误（`item.job` / TerminalPreview / is_supported / 测试文件 mock 类型，均在改动区外或既有基线）
+
+#### 移动端终端：消除 TUI 右侧竖直黑带、修复中文字距被压窄；代码查看全屏不再入侵状态栏
+
+- **TUI（opencode）右侧竖直黑带消除**：网格计算不再预留行尾右缘（原「滚动条预留宽 6px + 行尾安全余量 1 列」），差额带从真机实测 **17px（屏宽 4.2%）** 退化为「容器宽 mod 格宽」的发丝线。普通 shell 会话（pi）全程用终端底色，故此前看不出差别；TUI 用自带底色铺满自己的列宽，差额就成了一条黑带。新常量 `TERMINAL_RIGHT_RESERVE_PX = 0` 是唯一真源（`computeGridSize` / `getXtermScaledDimensions` / `overviewRuler.width` 同源）；行尾墨迹越界仍由 `.xterm-screen` 的常量 `clip-path` 右扩 6px 承接，自绘滚动指示线改为覆盖在最后一列之上
+- **中文字距「几乎没有」的根因修复**：真机 CDP 实测 `rows { letter-spacing: -1.5px }` = 格宽 7.5 − fallback 9.0 —— 内置 Sarasa 字体声明为 `font-display: swap`，`document.fonts.load()` 已 resolve、`check()` 为 true 时排版**仍在用系统等宽**，xterm 的 `WidthCache` 把 fallback 宽度缓存下来且不自动失效，随后 DomRenderer 把它当作「行宽补偿」按**每字符**施加：拉丁被压窄 1.5px，CJK（2 格宽）被一并压窄 1.5px → 汉字逐字重叠、行尾漂移。两处修复：① `ensureTerminalFontLoaded` 增加**排版复核**（逐帧比对终端字体栈与纯回退栈的单字符推进宽，不同才算就绪）；② `open()` 后用 `bustFontFamilyCache()` 赋一次「同字体不同串」，强制 xterm 重测格宽 + 清空宽度缓存 + 重算补偿（补偿归 0）
+- **代码查看弹窗全屏不再压状态栏**：全屏时遮罩去掉 `padding: 1rem`、弹窗改为真·全屏（安全区收进弹窗内部 padding）。旧实现弹窗顶边停在 16px，而状态栏高 40px —— 顶部 24px 压在状态栏图标区，看着就是「弹窗钻进状态栏」
+- **验证**：移动端 vitest 54 文件 / 535 用例全绿（新增 `terminalMetrics.test.ts` 9 条 + 更新 `terminalDimensions.test.ts`）；根 eslint 0 error（117 warning 为基线）；真机 CDP 复核格宽/容器宽/letter-spacing 口径
+
 #### Agent Hub 聊天记录：工具输出上限 400 → 1000 字符，pi 逐轮空消息不再渲染成零 token 气泡
 
 - **工具输出上限 400 → 1000**（四个适配器统一：`CODEX_TOOL_TEXT_CAP` / `OPENCODE_TOOL_TEXT_CAP` + claude / pi 的 `tool_result` 字面量）——400 字符点开也读不完一条命令输出；展示层镜像 `GUEST_TEXT_CAPS.toolOutput` 同步，工具卡折叠阈值随之 200 → 400（上限的 40%）：短命令直接铺开，长输出默认收起
