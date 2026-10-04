@@ -222,6 +222,7 @@ impl WasmPlugin for AgentHubPlugin {
             "agent-hub.save-preset" => providers::save_preset(&h, &args),
             "agent-hub.delete-preset" => providers::delete_preset(&h, &args),
             "agent-hub.import-providers" => providers::import_providers(&h),
+            "agent-hub.fetch-models" => providers::fetch_models(&h, &args),
             "agent-hub.apply-provider" => providers::apply_provider(&h, &args),
             // ==================== 票据 06：使用统计与会话日志 ====================
             "agent-hub.get-usage-state" => usage::get_state(&h),

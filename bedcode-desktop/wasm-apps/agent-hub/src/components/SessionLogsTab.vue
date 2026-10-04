@@ -744,7 +744,9 @@ function toggleExpand(i: number) {
             {{ t('hub.lg.pager.total', { total: sessionsTotal }) }} ·
             {{ t('hub.lg.pager.page', { page, pages: totalPages }) }}
           </span>
-          <span class="ah-speed-actions-btns">
+          <!-- 翻页按钮只在真的有多页时出现：单页时两个按钮恒禁用，
+               是既不能点也不传达信息的死控件（条目计数信息仍保留）。 -->
+          <span v-if="totalPages > 1" class="ah-speed-actions-btns">
             <button
               type="button"
               class="ah-btn ah-btn-ghost ah-btn-sm"

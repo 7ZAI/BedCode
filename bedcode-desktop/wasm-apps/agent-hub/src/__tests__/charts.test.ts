@@ -199,6 +199,26 @@ describe('H 节奏热力图', () => {
     ])
   })
 
+  it('容器子元素恒为 8 个整行（表头 + 7 天）——styleGuards S14 的 DOM 侧前提', () => {
+    // 为什么值得单独锁：`.ah-heat-grid` 的列模板必须是单列堆叠，而它能不能这么写
+    // 取决于**子元素是不是整行**。子元素一旦变成 25 个格子（模板改平铺），单列堆叠
+    // 就反过来把格子排成一条。CSS 契约（styleGuards S14）与本条必须成对成立。
+    const w = mountComponent(StatsHeatmap, { cells: [{ dow: 1, hour: 9, sessions: 1, tokens: 100 }] })
+    const kids = Array.from(w.get('.ah-heat-grid').element.children)
+    expect(kids).toHaveLength(8)
+    expect(kids.every((el) => el.classList.contains('ah-heat-row'))).toBe(true)
+    // 首行是表头：角标 + 5 个小时刻度（刻度靠 grid-column 定位，故只有 6 个子元素）
+    expect(kids[0].querySelector('.ah-heat-corner')).toBeTruthy()
+    expect(kids[0].querySelectorAll('.ah-heat-hour')).toHaveLength(5)
+    expect(kids[0].children).toHaveLength(6)
+    // 其余 7 行各自是 星期标签 + 24 格 = 25 个直接子元素
+    for (const el of kids.slice(1)) {
+      expect(el.children).toHaveLength(25)
+      expect(el.querySelectorAll('.ah-heat-cell')).toHaveLength(24)
+      expect(el.querySelector('.ah-heat-dow')).toBeTruthy()
+    }
+  })
+
   it('峰值文字给出正确的星期与小时（token 最大的格）', () => {
     const cells: HourCell[] = [
       { dow: 1, hour: 9, sessions: 1, tokens: 500 },

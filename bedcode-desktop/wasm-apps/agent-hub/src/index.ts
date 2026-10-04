@@ -118,6 +118,14 @@ const DATEPICKER_THEME_OVERRIDES = `
 
 // ==================== UI 注册（标题随宿主语言切换重注册） ====================
 
+/**
+ * 侧边栏槽位：紧跟 Agent任务（terminal-session 210）之后。
+ * 宿主 useSidebarMenu 把内置项与各插件贡献目录按 order 统一升序排布，
+ * 此值须与 plugin.json `contributes.views[0].order` 同源（宿主 Rust 侧
+ * 也按 manifest 登记视图，两处漂移会让菜单顺序与工具箱面板列表不一致）。
+ */
+export const AGENT_HUB_SIDEBAR_ORDER = 215
+
 let sidebarDisposable: { dispose(): void } | null = null
 let stopLocaleWatch: (() => void) | null = null
 
@@ -126,7 +134,9 @@ let stopLocaleWatch: (() => void) | null = null
  *
  * 注册时标题被宿主静态捕获（labelKey 非 i18n key，不随 vue-i18n 自动更新），
  * 语言切换时先释放旧注册再重新注册，菜单显示文本即时刷新。
- * 排序：紧跟 file-transfer（220）之后，位于服务器（内置 300）之前。
+ * 排序：紧跟 Agent任务（terminal-session 槽位 210）之后，取 215 独占槽位
+ * （10 的倍数已被占用：200 终端会话 / 210 Agent任务 / 220 file-transfer /
+ * 230 ai-chatbox），位于其余插件目录之前。
  */
 function registerPluginUi(context: PluginContext) {
   sidebarDisposable?.dispose()
@@ -134,7 +144,7 @@ function registerPluginUi(context: PluginContext) {
   sidebarDisposable = context.ui.registerSidebarPanel({
     id: 'agent-hub.sidebar',
     title: context.i18n.t('hub.sidebar.title'),
-    order: 240,
+    order: AGENT_HUB_SIDEBAR_ORDER,
     icon: 'M12 2L2 12l10 10 10-10L12 2zm0 5.2l4.8 4.8-4.8 4.8L7.2 12l4.8-4.8z',
     component: AgentHubView,
   })

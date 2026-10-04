@@ -4,16 +4,26 @@
 //! opencode provider 的 models 按身份合并（既有的保留、新增的补最小定义），
 //! key 仅在显式提供时覆盖（keyMode=none 保留目标既有凭据）；claude 的
 //! env 块条目构造与只读视图（token 掩码）。
+//!
+//! 覆盖规则里有一处**刻意不覆盖**：预设 apiStyle 只到「openai 家族」这一层，
+//! 目标条目已有同家族方言（pi `openai-responses` / opencode `@ai-sdk/openai`）
+//! 时保持原样——预设无法表达具体方言，盲目改写会把用户已调通的端点降级成
+//! 另一种（completions）而症状极隐蔽（能连上、行为不同）。跨家族
+//! （anthropic / gemini）仍然照预设切换。
 
-use super::mapping::{mask_key, opencode_npm_of, pi_api_of};
+use super::mapping::{
+    is_openai_family_api, is_openai_family_npm, mask_key, opencode_npm_of, pi_api_of,
+};
 use serde_json::{json, Map, Value};
 
 // ==================== 应用条目构造（纯函数） ====================
 
 /// pi providers 条目：合并既有条目（保留用户模型定义等未知字段），
-/// 覆盖 name/baseUrl/api；models 按 id 合并（既有的保留，新增的补最小定义）
+/// 覆盖 name/baseUrl；api 按家族规则覆盖（同家族不降级）；models 按 id
+/// 合并（既有的保留，新增的补最小定义）
 pub(crate) fn merge_pi_entry(
     existing: Option<&Value>,
+    name: &str,
     base_url: &str,
     api_style: &str,
     models: &[String],
@@ -22,8 +32,13 @@ pub(crate) fn merge_pi_entry(
         Some(v) if v.is_object() => v.as_object().unwrap().clone(),
         _ => Map::new(),
     };
+    if !name.is_empty() {
+        entry.insert("name".to_string(), json!(name));
+    }
     entry.insert("baseUrl".to_string(), json!(base_url));
-    entry.insert("api".to_string(), json!(pi_api_of(api_style)));
+    if !keep_existing_pi_api(&entry, api_style) {
+        entry.insert("api".to_string(), json!(pi_api_of(api_style)));
+    }
     let mut merged: Vec<Value> = entry
         .get("models")
         .and_then(|v| v.as_array())
@@ -43,16 +58,26 @@ pub(crate) fn merge_pi_entry(
     Value::Object(entry)
 }
 
+/// 预设 openai 家族 + 既有条目同家族方言 → 保留既有 `api`
+fn keep_existing_pi_api(entry: &Map<String, Value>, api_style: &str) -> bool {
+    api_style == "openai"
+        && entry
+            .get("api")
+            .and_then(|v| v.as_str())
+            .is_some_and(is_openai_family_api)
+}
+
 /// pi auth.json 条目
 pub(crate) fn pi_auth_entry(key: &str) -> Value {
     json!({ "type": "api_key", "key": key })
 }
 
-/// opencode provider 条目：合并既有条目；npm 由 apiStyle 决定；options.baseURL
-/// 覆盖、apiKey 仅在有 key 时覆盖（keyMode=none 时保留用户既有 key）；
-/// models 按 key 合并
+/// opencode provider 条目：合并既有条目；`name` 覆盖、npm 按家族规则覆盖
+/// （同 openai 家族不降级）；options.baseURL 覆盖、apiKey 仅在有 key 时覆盖
+/// （keyMode=none 时保留用户既有 key）；models 按 key 合并
 pub(crate) fn merge_opencode_entry(
     existing: Option<&Value>,
+    name: &str,
     base_url: &str,
     api_style: &str,
     models: &[String],
@@ -62,7 +87,12 @@ pub(crate) fn merge_opencode_entry(
         Some(v) if v.is_object() => v.as_object().unwrap().clone(),
         _ => Map::new(),
     };
-    entry.insert("npm".to_string(), json!(opencode_npm_of(api_style)));
+    if !name.is_empty() {
+        entry.insert("name".to_string(), json!(name));
+    }
+    if !keep_existing_opencode_npm(&entry, api_style) {
+        entry.insert("npm".to_string(), json!(opencode_npm_of(api_style)));
+    }
     let mut options = entry
         .get("options")
         .and_then(|v| v.as_object())
@@ -87,6 +117,25 @@ pub(crate) fn merge_opencode_entry(
         entry.insert("models".to_string(), Value::Object(merged));
     }
     Value::Object(entry)
+}
+
+/// 预设 openai 家族 + 既有条目同家族包 → 保留既有 `npm`
+fn keep_existing_opencode_npm(entry: &Map<String, Value>, api_style: &str) -> bool {
+    api_style == "openai"
+        && entry
+            .get("npm")
+            .and_then(|v| v.as_str())
+            .is_some_and(is_openai_family_npm)
+}
+
+/// 条目合并后的模型数（写前自检：0 个模型的条目对 pi / opencode 不可用）
+pub(crate) fn merged_model_count(entry: &Value) -> usize {
+    match entry.get("models") {
+        Some(Value::Array(a)) => a.len(),
+        // opencode 的 models 是对象（键即 id），pi 的是数组
+        Some(Value::Object(o)) => o.len(),
+        _ => 0,
+    }
 }
 
 /// claude settings.json `env` 块条目：key 未提供时不生成 AUTH_TOKEN 键
@@ -137,12 +186,14 @@ mod tests {
         .unwrap();
         let merged = merge_pi_entry(
             Some(&existing),
+            "新名字",
             "https://new/v1",
             "anthropic",
             &["glm-5.2".to_string(), "claude-sonnet-4".to_string()],
         );
         assert_eq!(merged["baseUrl"], "https://new/v1");
         assert_eq!(merged["api"], "anthropic-messages");
+        assert_eq!(merged["name"], "新名字");
         let models = merged["models"].as_array().unwrap();
         assert_eq!(models.len(), 2);
         // 既有定义保留（reasoning/contextWindow 未丢）
@@ -151,9 +202,45 @@ mod tests {
         assert_eq!(models[1]["name"], "claude-sonnet-4");
 
         // 无既有条目 → 最小条目
-        let fresh = merge_pi_entry(None, "https://u/v1", "openai", &["m1".to_string()]);
+        let fresh = merge_pi_entry(None, "u", "https://u/v1", "openai", &["m1".to_string()]);
         assert_eq!(fresh["api"], "openai-completions");
         assert_eq!(fresh["models"][0]["id"], "m1");
+
+        // 预设无名字（空白）→ 不写 name 键（不拿空串覆盖用户既有展示名）
+        let unnamed = merge_pi_entry(None, "", "https://u/v1", "openai", &["m1".to_string()]);
+        assert!(
+            unnamed.get("name").is_none(),
+            "blank name must not overwrite"
+        );
+    }
+
+    /// 方言保护：预设只到「openai 家族」层，跨家族照预设切、同家族保留既有方言。
+    ///
+    /// 反例（回归锁）：目标条目已是 `openai-responses`，预设 apiStyle=openai 时
+    /// 若改写成 `openai-completions`，用户已调通的 responses 端点被静默降级。
+    #[test]
+    fn merge_pi_entry_never_downgrades_openai_dialect() {
+        let responses =
+            parse_jsonc(r#"{ "api": "openai-responses", "models": [ { "id": "m1" } ] }"#).unwrap();
+        let kept = merge_pi_entry(
+            Some(&responses),
+            "u",
+            "https://new/v1",
+            "openai",
+            &["m2".to_string()],
+        );
+        assert_eq!(
+            kept["api"], "openai-responses",
+            "same openai family must keep the existing dialect"
+        );
+
+        // 跨家族：预设要 anthropic 就切（受控字段仍由预设说了算）
+        let switched = merge_pi_entry(Some(&responses), "u", "https://b/v1", "anthropic", &[]);
+        assert_eq!(switched["api"], "anthropic-messages");
+
+        // 无既有条目 → 落预设默认方言
+        let fresh = merge_pi_entry(None, "u", "https://b/v1", "openai", &[]);
+        assert_eq!(fresh["api"], "openai-completions");
     }
 
     /// opencode 条目合并：keyMode=none 时保留既有 apiKey；models 按 key 合并
@@ -170,12 +257,15 @@ mod tests {
         .unwrap();
         let merged = merge_opencode_entry(
             Some(&existing),
+            "GMI 新名字",
             "https://new/v1",
             "openai",
             &["openai/gpt-5".to_string(), "openai/gpt-5.5".to_string()],
             None,
         );
         assert_eq!(merged["options"]["baseURL"], "https://new/v1");
+        assert_eq!(merged["name"], "GMI 新名字");
+        assert_eq!(merged["npm"], "@ai-sdk/openai-compatible");
         assert_eq!(
             merged["options"]["apiKey"], "existing-key",
             "no-key apply must keep existing"
@@ -187,12 +277,53 @@ mod tests {
         // 带 key 覆盖
         let merged = merge_opencode_entry(
             Some(&existing),
+            "GMI",
             "https://new/v1",
             "openai",
             &[],
             Some("fresh"),
         );
         assert_eq!(merged["options"]["apiKey"], "fresh");
+    }
+
+    /// opencode 方言保护：既有 `@ai-sdk/openai`（responses 包）不被预设降级成
+    /// openai-compatible；跨家族（anthropic）照预设切
+    #[test]
+    fn merge_opencode_entry_never_downgrades_openai_package() {
+        let responses = parse_jsonc(
+            r#"{ "npm": "@ai-sdk/openai", "options": { "baseURL": "https://old/v1" } }"#,
+        )
+        .unwrap();
+        let kept = merge_opencode_entry(
+            Some(&responses),
+            "u",
+            "https://new/v1",
+            "openai",
+            &["m1".to_string()],
+            None,
+        );
+        assert_eq!(kept["npm"], "@ai-sdk/openai");
+        let switched = merge_opencode_entry(
+            Some(&responses),
+            "u",
+            "https://new/v1",
+            "anthropic",
+            &[],
+            None,
+        );
+        assert_eq!(switched["npm"], "@ai-sdk/anthropic");
+    }
+
+    /// 合并后模型数（写前自检用）：pi 数组 / opencode 对象 / 缺失均计入
+    #[test]
+    fn merged_model_count_counts_both_shapes() {
+        assert_eq!(merged_model_count(&json!({})), 0);
+        assert_eq!(merged_model_count(&json!({ "models": [] })), 0);
+        assert_eq!(merged_model_count(&json!({ "models": [{ "id": "a" }] })), 1);
+        assert_eq!(
+            merged_model_count(&json!({ "models": { "a": {}, "b": {} } })),
+            2
+        );
     }
 
     /// claude env 条目：key 缺省不生成 AUTH_TOKEN（保留既有 token）；MODEL 取首模型

@@ -14,8 +14,10 @@ import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 import type {
   ApplyProviderResult,
   ApplyKeySpec,
+  FetchModelsResult,
   ImportProvidersResult,
   ProvidersDomainState,
+  ProviderTarget,
   SavePresetResult,
 } from '../types'
 
@@ -42,7 +44,16 @@ export interface PresetPayload {
   baseUrl: string
   apiStyle: string
   models: string[]
+  /** 模型查询 URL（可空字符串 = 手动输入模型列表） */
+  modelsUrl?: string
   /** v2 中心凭据（明文仅在 save 命令在途，不落前端状态） */
+  apiKey?: string
+}
+
+/** 模型列表查询载荷：URL 必填；key 优先用 apiKey，其次 presetId 的中心库已存 key */
+export interface FetchModelsPayload {
+  url: string
+  presetId?: number
   apiKey?: string
 }
 
@@ -54,6 +65,8 @@ export function useProviders(context: PluginContext) {
   const applying = ref(false)
   /** 保存/删除进行中（同步命令，本地瞬态） */
   const saving = ref(false)
+  /** 模型列表查询进行中（guest 内 http_fetch 阻塞，本地瞬态） */
+  const fetchingModels = ref(false)
 
   async function refresh() {
     try {
@@ -108,26 +121,36 @@ export function useProviders(context: PluginContext) {
     }
   }
 
-  /**
-   * 应用预设到目标 CLI；keySpec 四选一（stored 中心库 / inline / source / none）；
-   * force 仅用于 claude 桥接冲突的二次确认（guest 顶层读取，与 key 分离）
-   */
+/**
+ * 应用预设到目标 CLI（可多目标：一次写多个 CLI，逐目标独立成败）
+ *
+ * keySpec 四选一（stored 中心库 / inline / source / none）；force 仅用于
+ * claude 桥接冲突的二次确认（guest 顶层读取，与 key 分离）。
+ * `codexEnvKey` 只在目标含 codex 时有意义：codex 配置里只写 env 变量名，
+ * 不吃 key 值（纯 codex 应用时 guest 也会跳过 key 解析）。
+ */
   async function applyProvider(
     id: number,
-    target: string,
+    targets: ProviderTarget[],
     targetName: string,
     keySpec: ApplyKeySpec,
     force = false,
+    codexEnvKey = '',
   ): Promise<CommandResult<ApplyProviderResult | null>> {
     if (applying.value) return { status: 'busy' }
+    if (targets.length === 0) {
+      // 不发空目标请求（guest 会拒；发出去只会得到一条无意义的失败）
+      return { status: 'error', error: new Error('no target selected') }
+    }
     applying.value = true
     try {
       const data = await context.commands.execute('agent-hub.apply-provider', {
         id,
-        target,
+        targets,
         targetName,
         key: keySpec,
         force,
+        codex: { envKey: codexEnvKey },
       })
       return { status: 'ok', data: (data ?? null) as ApplyProviderResult | null }
     } catch (e) {
@@ -135,6 +158,42 @@ export function useProviders(context: PluginContext) {
       return { status: 'error', error: e }
     } finally {
       applying.value = false
+    }
+  }
+
+  /**
+   * 查询模型列表（guest 代发 GET，解析 data[]/models[]/根数组）
+   *
+   * 失败一律走 `status: 'error'`——空列表/形状不认识都不能当「这个供应商就是
+   * 0 个模型」，否则会一路写进目标配置（pi 里表现为 `/model` 看不到模型）
+   */
+  async function fetchModels(
+    payload: FetchModelsPayload,
+  ): Promise<CommandResult<FetchModelsResult | null>> {
+    if (fetchingModels.value) return { status: 'busy' }
+    fetchingModels.value = true
+    try {
+      const data = await context.commands.execute('agent-hub.fetch-models', payload)
+      const result = (data ?? null) as FetchModelsResult | null
+      if (!result || !Array.isArray(result.models)) {
+        // guest 回了空回执：当作失败处理，不假装查到了模型
+        return { status: 'error', error: new Error('empty model list') }
+      }
+      // 条目校验（2026-10-04 OCR A-03）：只查数组/长度会让非字符串或空白条目
+      // 漏进下游 `mergeModelIds` 的 `id.trim()` 直接 TypeError（addAllFetched
+      // 崩溃）；未 trim 的 id 与已 trim 列表比对 → chip 激活态误判。与
+      // 「unrecognized shape 必须 fail-visible」契约一致：任一条目不是非空
+      // 字符串，整个回执拒绝，而不是悄悄丢条目。
+      const trimmed = result.models.map((m) => (typeof m === 'string' ? m.trim() : ''))
+      if (trimmed.length === 0 || trimmed.some((m) => !m)) {
+        return { status: 'error', error: new Error('invalid model list entries') }
+      }
+      return { status: 'ok', data: { ...result, models: trimmed } }
+    } catch (e) {
+      console.error('[Agent Hub] fetch-models failed', e)
+      return { status: 'error', error: e }
+    } finally {
+      fetchingModels.value = false
     }
   }
 
@@ -158,10 +217,12 @@ export function useProviders(context: PluginContext) {
     importing,
     applying,
     saving,
+    fetchingModels,
     refresh,
     savePreset,
     deletePreset,
     importProviders,
     applyProvider,
+    fetchModels,
   }
 }

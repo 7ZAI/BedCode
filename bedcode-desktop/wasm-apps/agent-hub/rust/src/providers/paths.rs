@@ -2,7 +2,7 @@
 //!
 //! pi `models.json` / `auth.json`、opencode `opencode.json`、claude
 //! `settings.json` + 自建桥接文件（provider-config.sh / anthropic-bridge.mjs，
-//! 存在任一即视为桥接体系在用）。反向导入与应用共用。
+//! 存在任一即视为桥接体系在用）、codex `config.toml`。反向导入与应用共用。
 
 // ==================== 路径（家目录相对段） ====================
 
@@ -16,6 +16,10 @@ pub(crate) fn pi_auth_path(home: &str) -> String {
 
 pub(crate) fn opencode_cfg_path(home: &str) -> String {
     format!("{home}/.config/opencode/opencode.json")
+}
+
+pub(crate) fn codex_config_path(home: &str) -> String {
+    format!("{home}/.codex/config.toml")
 }
 
 pub(crate) fn claude_settings_path(home: &str) -> String {
@@ -52,5 +56,11 @@ mod tests {
         assert!(paths.iter().any(|p| p.ends_with("settings.json")));
         assert!(paths.iter().any(|p| p.ends_with("provider-config.sh")));
         assert!(paths.iter().any(|p| p.ends_with("anthropic-bridge.mjs")));
+    }
+
+    /// codex 配置路径：家目录相对段（应用 / 只读视图共用的唯一真源）
+    #[test]
+    fn codex_path_under_codex_home() {
+        assert_eq!(codex_config_path("/home/u"), "/home/u/.codex/config.toml");
     }
 }

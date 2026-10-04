@@ -7,10 +7,11 @@
 import { describe, expect, it } from 'vitest'
 import {
   abbreviateProject,
-  axisTicks,
+  axisScale,
   cacheHitRate,
   COLLAPSE_THRESHOLD_CHARS,
   COLLAPSE_THRESHOLD_TOOL_CHARS,
+  formatAxisTick,
   formatCost,
   formatDuration,
   formatEventTime,
@@ -19,7 +20,6 @@ import {
   formatTokens,
   looksTruncated,
   metricValue,
-  niceMax,
   splitToolText,
   totalTokens,
   GUEST_TEXT_CAPS,
@@ -190,34 +190,101 @@ describe('formatPercent', () => {
   })
 })
 
-describe('niceMax（坐标轴上界）', () => {
-  it('取 1 / 2 / 2.5 / 5 × 10^k 中不小于 max 的最小值', () => {
-    expect(niceMax(1)).toBe(1)
-    expect(niceMax(1.2)).toBe(2)
-    expect(niceMax(0.3)).toBe(0.5)
-    expect(niceMax(7)).toBe(10)
-    expect(niceMax(120)).toBe(200)
+describe('axisScale（坐标轴标度）', () => {
+  /** 判据「好看」：档距必须落在 1 / 2 / 2.5 / 5 / 10 × 10^k 梯队上 */
+  function isNiceStep(step: number): boolean {
+    const mant = step / 10 ** Math.floor(Math.log10(step))
+    return [1, 2, 2.5, 5, 10].some((m) => Math.abs(mant - m) < 1e-9)
+  }
+
+  it('刻度全是可读的整数档（不产生 833k 这类等分残值）', () => {
+    // 旧实现对 2.5M 等分三档 → [2.5M, 1.7M, 833k, 0]，833k 读不出来
+    const { top, step, ticks } = axisScale(2_500_000, 3)
+    expect(step).toBe(1_000_000)
+    expect(top).toBe(3_000_000)
+    expect(ticks).toEqual([3_000_000, 2_000_000, 1_000_000, 0])
+    // 格式化后的标签无「小数尾巴」
+    for (const t of ticks) expect(formatAxisTick(t)).not.toMatch(/\.\d/)
   })
 
-  it('边界：非正 / 非有限 → 1（避免除零与空路径），且永远 ≥ max', () => {
-    expect(niceMax(0)).toBe(1)
-    expect(niceMax(-5)).toBe(1)
-    expect(niceMax(Number.NaN)).toBe(1)
-    for (const m of [0.04, 3, 9, 11, 250, 999, 1_000, 12_345]) {
-      expect(niceMax(m)).toBeGreaterThanOrEqual(m)
+  it('formatAxisTick 只抹整数档的小数尾巴，非整数值与数据值不受影响', () => {
+    // 刻度（axisScale 产出的整齐档）：3.0M → 3M
+    expect(formatAxisTick(3_000_000)).toBe('3M')
+    expect(formatAxisTick(2_500_000)).toBe('2.5M')
+    expect(formatAxisTick(833_000)).toBe('833k')
+    expect(formatAxisTick(0)).toBe('0')
+    expect(formatAxisTick(Number.NaN)).toBe('—')
+    // 数据值仍保留 1 位小数（1.3M 是真信息，不能被抹成 1M）
+    expect(formatTokens(1_300_000)).toBe('1.3M')
+    expect(formatAxisTick(1_300_000)).toBe('1.3M')
+  })
+
+  it('上界 ≥ max（最高点不顶边）且档距恒为整齐梯队', () => {
+    for (const m of [0.04, 3, 9, 11, 250, 999, 1_000, 12_345, 2_500_000]) {
+      const { top, step, ticks } = axisScale(m, 3)
+      expect(top).toBeGreaterThanOrEqual(m)
+      expect(isNiceStep(step)).toBe(true)
+      expect(ticks).toHaveLength(4)
+      // 刻度自上而下递减、末档恒为 0、顶档恒等于上界（与 y() 同一把尺子）
+      expect(ticks[0]).toBe(top)
+      expect(ticks[3]).toBe(0)
+      expect(ticks[0]).toBeGreaterThan(ticks[1])
+      expect(ticks[1]).toBeGreaterThan(ticks[2])
+      expect(ticks[2]).toBeGreaterThan(0)
     }
   })
-})
 
-describe('axisTicks（刻度序列）', () => {
-  it('自上而下：上界 → 0，等分 count+1 档', () => {
-    expect(axisTicks(100, 3)).toEqual([100, 200 / 3, 100 / 3, 0])
-    expect(axisTicks(10, 1)).toEqual([10, 0])
+  it('count 改变时档数随之改变（上界恒 = 档距 × 档数）', () => {
+    expect(axisScale(100, 1)).toEqual({ top: 100, step: 100, ticks: [100, 0] })
+    const four = axisScale(2_500_000, 4)
+    expect(four.ticks).toHaveLength(5)
+    expect(four.top).toBe(four.step * 4)
   })
 
-  it('边界：上界 0 时不再全为 0 造成「刻度重叠」（0/3 = 0）', () => {
-    // 0 上界下刻度全等，前端会画出 4 条重合线；此处只锁住「不会算出负数/NaN」
-    for (const t of axisTicks(0, 3)) expect(Number.isFinite(t)).toBe(true)
+  it('边界：非正 / 非有限 → top=1 且刻度不重合（0 上界会画出 4 条重叠线）', () => {
+    for (const bad of [0, -5, Number.NaN]) {
+      const { top, ticks } = axisScale(bad, 3)
+      expect(top).toBe(1)
+      expect(new Set(ticks).size).toBeGreaterThan(1)
+      for (const t of ticks) expect(Number.isFinite(t)).toBe(true)
+    }
+  })
+
+  it('兜底刻度自上而下降序（全零/非法数据时 Y 轴不颠倒）（A-01）', () => {
+    // 旧实现 `i === count ? 1 : 0` 产出 [0,0,0,1] 升序，与正常分支
+    // `[top,…,0]` 相反 → 全零数据时最高刻度画在最底部。
+    const { top, ticks } = axisScale(0, 3)
+    expect(top).toBe(1)
+    expect(ticks).toEqual([1, 0, 0, 0])
+  })
+
+  it('count<=0 时不产生 Infinity 刻度（A-01）', () => {
+    // 旧实现 `step = 1/count`：count=0 → Infinity；Array.from 长度也为 0。
+    const s0 = axisScale(0, 0)
+    expect(s0.ticks).toEqual([1, 0])
+    expect(Number.isFinite(s0.step)).toBe(true)
+    const sn = axisScale(0, -3)
+    expect(sn.ticks).toEqual([1, 0])
+    expect(Number.isFinite(sn.step)).toBe(true)
+  })
+
+  it('亚千刻度保留小数（axisScale 产出的 0.6/0.4/0.2 不被取整抹平）（A-02）', () => {
+    // 非整数刻度：0.6 → "0.6"（旧实现 formatTokens 直接 Math.round → "1"）
+    expect(formatAxisTick(0.6)).toBe('0.6')
+    expect(formatAxisTick(0.2)).toBe('0.2')
+    expect(formatAxisTick(0.04)).toBe('0.04')
+    // 整数值亚千刻度仍不带小数尾巴（与整数档一致）
+    expect(formatAxisTick(6)).toBe('6')
+    expect(formatAxisTick(833)).toBe('833')
+    // 整数刻度仍是整数（Math.round 分支不受影响）
+    expect(formatAxisTick(1)).toBe('1')
+    expect(formatAxisTick(0.0)).toBe('0')
+  })
+
+  it('亚千刻度直接取整的值仍走整数档（2.5 → 2.5，1.5 → 1.5）（A-02 补）', () => {
+    // 十进制小数不应被剥成整数：1.5 是 1.5，不是 1
+    expect(formatAxisTick(1.5)).toBe('1.5')
+    expect(formatAxisTick(2.5)).toBe('2.5')
   })
 })
 

@@ -18,6 +18,7 @@ import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 import type { AgentHubState, ProviderPreset, ProvidersDomainState } from '../types'
 import type { UseProvidersReturn } from '../composables/useProviders'
 import { PROVIDER_TEMPLATES, sourceFromNotes } from '../utils/providers'
+import { defaultModelsUrl, mergeModelIds, modelsToText, parseModelsText } from '../utils/providers'
 import ProviderApply from './ProviderApply.vue'
 
 const props = defineProps<{
@@ -51,6 +52,12 @@ const formName = ref('')
 const formBaseUrl = ref('')
 const formApiStyle = ref<string>('openai')
 const formModels = ref('')
+/** 模型查询 URL（可空 = 手动输入模型列表；查询与手动互不依赖） */
+const formModelsUrl = ref('')
+/** 查询到的模型 id（未加入模型列表的候选；点 chip 逐个加入） */
+const fetchedModels = ref<string[]>([])
+/** 查询失败提示（空串 = 无失败；不展示 guest 原文，只给可行动文案） */
+const modelsQueryError = ref(false)
 /** v2 中心凭据：编辑器输入的新 key（明文仅在 save 命令在途） */
 const formKey = ref('')
 /** 清空已存 key（与 formKey 互斥：输入新 key 时忽略此标志） */
@@ -73,6 +80,7 @@ function formSignature(): string {
     formBaseUrl.value,
     formApiStyle.value,
     formModels.value,
+    formModelsUrl.value,
     formKey.value,
     clearKey.value,
   ])
@@ -91,6 +99,7 @@ function openEditor(preset: ProviderPreset | null, templateId?: string) {
     formBaseUrl.value = preset.baseUrl
     formApiStyle.value = preset.apiStyle
     formModels.value = preset.models.join('\n')
+    formModelsUrl.value = preset.modelsUrl ?? ''
   } else {
     editingId.value = null
     const tpl = PROVIDER_TEMPLATES.find((x) => x.id === templateId) ?? null
@@ -98,7 +107,10 @@ function openEditor(preset: ProviderPreset | null, templateId?: string) {
     formBaseUrl.value = tpl?.baseUrl ?? ''
     formApiStyle.value = tpl?.apiStyle ?? 'openai'
     formModels.value = (tpl?.models ?? []).join('\n')
+    formModelsUrl.value = tpl ? defaultModelsUrl(tpl.baseUrl) : ''
   }
+  fetchedModels.value = []
+  modelsQueryError.value = false
   pendingTemplateId.value = null
   formBaseline = formSignature()
   showEditor.value = true
@@ -121,6 +133,9 @@ function applyTemplate(id: string) {
   formBaseUrl.value = tpl.baseUrl
   formApiStyle.value = tpl.apiStyle
   formModels.value = tpl.models.join('\n')
+  formModelsUrl.value = defaultModelsUrl(tpl.baseUrl)
+  fetchedModels.value = []
+  modelsQueryError.value = false
   formBaseline = formSignature()
 }
 
@@ -148,10 +163,7 @@ async function save() {
   if (busy.value) return
   const name = formName.value.trim()
   if (!name) return
-  const models = formModels.value
-    .split('\n')
-    .map((s) => s.trim())
-    .filter(Boolean)
+  const models = parseModelsText(formModels.value)
   const keyInput = formKey.value.trim()
   // apiKey 语义：输入新 key → 设置；否则 clearKey 勾选 → 清空；都没 → 保留
   const apiKey = keyInput ? keyInput : clearKey.value ? '' : undefined
@@ -163,6 +175,7 @@ async function save() {
     baseUrl: formBaseUrl.value.trim(),
     apiStyle: formApiStyle.value,
     models,
+    modelsUrl: formModelsUrl.value.trim(),
     apiKey,
   })
   // 被忽略（并发中）：静默，调用方本就在做同一件事
@@ -187,6 +200,82 @@ async function save() {
   }
   showEditor.value = false
   toast.success(t(wasEditing ? 'hub.pv.toast.updated' : 'hub.pv.toast.created'))
+}
+
+// ==================== 模型列表查询（可选 URL，与手动输入互补） ====================
+
+/** 填入由 baseUrl 派生的默认查询 URL（用户可再改成网关实际路径） */
+function fillDerivedModelsUrl() {
+  formModelsUrl.value = defaultModelsUrl(formBaseUrl.value)
+}
+
+/**
+ * 查询模型列表（guest 代发 GET）
+ *
+ * 失败**不留旧候选**：沿用上一次的查询结果会被误当成本次结果（列表看着还在，
+ * 其实早过期）。手动输入路径不受影响——查询只是候选来源。
+ */
+async function queryModels() {
+  if (busy.value || props.providers.fetchingModels.value) return
+  const url = formModelsUrl.value.trim() || defaultModelsUrl(formBaseUrl.value)
+  if (!url) {
+    modelsQueryError.value = true
+    return
+  }
+  if (!/^https?:\/\//i.test(url)) {
+    // 非 http(s)（如 file://）直接拦在前端，guest 也会拒
+    modelsQueryError.value = true
+    return
+  }
+  // 拒绝带 userinfo 的 URL（https://user:key@host/...）：凭据嵌 URL 既会在
+  // 失败日志中被回显，也会被当作普通 URL 保存进预设（A-08，2026-10-04 OCR）
+  if (/^https?:\/\/[^/@]+@/i.test(url)) {
+    modelsQueryError.value = true
+    return
+  }
+  formModelsUrl.value = url
+  fetchedModels.value = []
+  modelsQueryError.value = false
+  const res = await props.providers.fetchModels({
+    url,
+    // 编辑态优先用中心库已存 key（明文不进前端；新建态用手填的 key）
+    presetId: editingId.value ?? undefined,
+    apiKey: formKey.value.trim() || undefined,
+  })
+  if (res.status === 'busy') return
+  if (res.status === 'error') {
+    // 失败只能记状态/类别，不回显 guest 原文（A-07，2026-10-04 OCR）：
+    // guest 错误可能带 URL——若 URL 含用户凭据（query/嵌入），进日志即泄露
+    console.error('[Agent Hub] fetch models failed (status=error)')
+    modelsQueryError.value = true
+    return
+  }
+  fetchedModels.value = res.data?.models ?? []
+}
+
+/** 模型清单解析结果（同一文本域 O(行) 解析只做一次，复用给 chips 与全加） */
+const parsedModels = computed(() => parseModelsText(formModels.value))
+
+/** 候选 chip → 加入/移出模型列表（已加入的 chip 呈激活态，可点掉） */
+function toggleFetchedModel(id: string) {
+  const next = parsedModels.value.includes(id)
+    ? parsedModels.value.filter((m) => m !== id)
+    : [...parsedModels.value, id]
+  formModels.value = modelsToText(next)
+}
+
+/** 候选是否已在模型列表里（chip 激活态）——O(1) 查 Set，不再每 chip 每渲染
+ * 重新解析整个文本域（A-10，2026-10-04 OCR：几百个候选时 O(chips×lines)） */
+const parsedModelSet = computed(() => new Set(parsedModels.value))
+function modelInList(id: string): boolean {
+  return parsedModelSet.value.has(id)
+}
+
+/** 把尚未加入的候选全部追加（已加入的不重复追加，手动条目保留） */
+function addAllFetched() {
+  formModels.value = modelsToText(
+    mergeModelIds(parsedModels.value, fetchedModels.value),
+  )
 }
 
 // ==================== 弹窗焦点管理 ====================
@@ -259,6 +348,19 @@ watch(showEditor, async (open) => {
 /** 名称改动后作废上一轮的「同名预设」错误（否则错误会一直挂到下次打开） */
 watch(formName, () => {
   nameExists.value = false
+})
+
+/**
+ * 改 URL / 基址后作废上一轮的候选模型（2026-10-04 OCR A-05）
+ *
+ * fetchedModels 此前只在「下一次查询 / 开编辑器 / 关编辑器」时清空：成功查询后
+ * 改 models URL 或换预设（A→B），旧 A 的 chips 仍显示，`addAllFetched` 把
+ * A 模型并进现 B 目标的列表。URL 是候选的查询键，变了就是另一批候选。
+ * 手动输入路径不受影响（查询只是候选来源）。
+ */
+watch([formModelsUrl, formBaseUrl], () => {
+  fetchedModels.value = []
+  modelsQueryError.value = false
 })
 
 // ==================== 删除（两击确认） ====================
@@ -429,6 +531,12 @@ function sourceTag(preset: ProviderPreset): string {
             <span class="ah-sk-row-dir ah-mono">{{ preset.baseUrl || '—' }}</span>
             <span class="ah-sk-row-desc ah-mono">
               {{ t('hub.pv.models', { n: preset.models.length }) }}<template v-if="preset.models.length > 0">: {{ preset.models.slice(0, 4).join(' · ') }}<template v-if="preset.models.length > 4"> …</template></template>
+              <!-- 0 模型的预设点名：应用到 pi / opencode 会被拒（空供应商在目标 CLI 里不可见） -->
+              <span
+                v-if="preset.models.length === 0"
+                class="ah-cli-tag warn"
+                :data-testid="`preset-no-models-${preset.name}`"
+              >{{ t('hub.pv.modelsMissing') }}</span>
             </span>
           </div>
           <div class="ah-sk-row-dist">
@@ -613,6 +721,70 @@ function sourceTag(preset: ProviderPreset): string {
                     spellcheck="false"
                     data-testid="preset-models"
                   ></textarea>
+                </div>
+
+                <!-- 模型查询 URL（可选）：查到的候选点 chip 加入上方列表；
+                     查询失败不影响手动输入（两条路径互补） -->
+                <div class="ah-pv-field">
+                  <label class="ah-pv-label" for="pv-models-url">{{ t('hub.pv.editor.modelsUrl') }}</label>
+                  <div class="ah-pv-keyrow">
+                    <input
+                      id="pv-models-url"
+                      v-model="formModelsUrl"
+                      class="ah-input ah-pv-input ah-mono"
+                      type="text"
+                      spellcheck="false"
+                      :placeholder="defaultModelsUrl(formBaseUrl)"
+                      data-testid="preset-models-url"
+                    />
+                    <button
+                      type="button"
+                      class="ah-btn ah-btn-ghost ah-btn-sm"
+                      :disabled="busy || props.providers.fetchingModels.value"
+                      data-testid="preset-models-url-derive"
+                      @click="fillDerivedModelsUrl"
+                    >
+                      {{ t('hub.pv.editor.modelsUrlDerive') }}
+                    </button>
+                    <button
+                      type="button"
+                      class="ah-btn ah-btn-ghost ah-btn-sm"
+                      :disabled="busy || props.providers.fetchingModels.value"
+                      data-testid="preset-models-fetch"
+                      @click="queryModels"
+                    >
+                      {{ props.providers.fetchingModels.value ? t('hub.pv.editor.modelsFetching') : t('hub.pv.editor.modelsFetch') }}
+                    </button>
+                  </div>
+                  <div class="ah-inst-hint">{{ t('hub.pv.editor.modelsUrlHint') }}</div>
+                  <div v-if="modelsQueryError" class="ah-cli-error" role="alert" data-testid="preset-models-fetch-error">
+                    {{ t('hub.pv.editor.modelsFetchFailed') }}
+                  </div>
+                  <div v-if="fetchedModels.length > 0" class="ah-pv-targets ah-pv-modelchips" data-testid="preset-models-candidates">
+                    <button
+                      v-for="id in fetchedModels"
+                      :key="id"
+                      type="button"
+                      class="ah-cli-tag ah-pv-target ah-mono"
+                      :class="{ active: modelInList(id) }"
+                      :aria-pressed="modelInList(id)"
+                      :data-testid="`preset-model-chip-${id}`"
+                      @click="toggleFetchedModel(id)"
+                    >
+                      {{ id }}
+                    </button>
+                    <button
+                      type="button"
+                      class="ah-btn ah-btn-ghost ah-btn-sm"
+                      data-testid="preset-models-add-all"
+                      @click="addAllFetched"
+                    >
+                      {{ t('hub.pv.editor.modelsAddAll', { n: fetchedModels.length }) }}
+                    </button>
+                  </div>
+                  <div v-else-if="!modelsQueryError && !props.providers.fetchingModels.value && formModels.trim() === ''" class="ah-inst-hint">
+                    {{ t('hub.pv.editor.modelsEmpty') }}
+                  </div>
                 </div>
 
                 <!-- v2 中心凭据：新 key 输入 / 清空切换（明文仅在 save 命令在途） -->

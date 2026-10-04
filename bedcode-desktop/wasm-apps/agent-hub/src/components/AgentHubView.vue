@@ -123,40 +123,45 @@ const sessionStates = computed(() => {
       </button>
     </div>
 
-    <Transition name="ah-page" mode="out-in">
-      <OverviewTab
-      v-if="activeTab === 'overview'"
-      :state="state"
-      :detecting="detecting"
-      :install-state="install.state.value"
-      :speed-testing="install.speedTesting.value"
-      :session-states="sessionStates"
-      :uninstall-failed="uninstallFailed"
-      @detect="detect"
-      @auth="requestAuth"
-      @speed-test="install.speedTest"
-      @goto-install="gotoInstall"
-      @uninstall="handleUninstall"
-    />
-    <InstallTab
-      v-else-if="activeTab === 'install'"
-      :detection="state"
-      :state="install.state.value"
-      :output="install.output.value"
-      :checking="install.checking.value"
-      :speed-testing="install.speedTesting.value"
-      @speed-test="install.speedTest"
-      @apply-mirror="install.applyMirror"
-      @restore="install.restoreNpmrc"
-      @check-updates="install.checkUpdates"
-      @install="install.install"
-      @cancel="install.cancelRun"
-      @auth="requestAuth"
-    />
-    <SkillsTab v-else-if="activeTab === 'skills'" :detection="state" :skills="skills" />
-    <ProvidersTab v-else-if="activeTab === 'providers'" :detection="state" :providers="providers" />
-    <SessionLogsTab v-else-if="activeTab === 'logs'" :usage="usage" />
-    <StatsTab v-else :usage="usage" />
-    </Transition>
+    <!-- 分区切换：过渡容器 page-swap 必须包在分段栏下方（.ah-view 本身还含顶部分段栏，
+         直接标在 .ah-view 上会让退场层从栏顶开始绘制而盖住导航）。过渡类与效果
+         变体由宿主 src/style.css 统一提供，本文件不再自带 .ah-page-*。 -->
+    <div class="page-swap">
+      <Transition name="page">
+        <OverviewTab
+        v-if="activeTab === 'overview'"
+        :state="state"
+        :detecting="detecting"
+        :install-state="install.state.value"
+        :speed-testing="install.speedTesting.value"
+        :session-states="sessionStates"
+        :uninstall-failed="uninstallFailed"
+        @detect="detect"
+        @auth="requestAuth"
+        @speed-test="install.speedTest"
+        @goto-install="gotoInstall"
+        @uninstall="handleUninstall"
+      />
+      <InstallTab
+        v-else-if="activeTab === 'install'"
+        :detection="state"
+        :state="install.state.value"
+        :output="install.output.value"
+        :checking="install.checking.value"
+        :speed-testing="install.speedTesting.value"
+        @speed-test="install.speedTest"
+        @apply-mirror="install.applyMirror"
+        @restore="install.restoreNpmrc"
+        @check-updates="install.checkUpdates"
+        @install="install.install"
+        @cancel="install.cancelRun"
+        @auth="requestAuth"
+      />
+      <SkillsTab v-else-if="activeTab === 'skills'" :detection="state" :skills="skills" />
+      <ProvidersTab v-else-if="activeTab === 'providers'" :detection="state" :providers="providers" />
+      <SessionLogsTab v-else-if="activeTab === 'logs'" :usage="usage" />
+      <StatsTab v-else :usage="usage" />
+      </Transition>
+    </div>
   </div>
 </template>

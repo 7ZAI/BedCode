@@ -20,7 +20,7 @@ use serde_json::{json, Value};
 // ==================== 插件库：provider_preset 表 ====================
 
 /// 建表 + 幂等迁移。宿主 `plugin_db_execute` 为单语句版本，schema 不拆分
-/// （单表无索引）；v2 列迁移走 PRAGMA 存在性检查，旧库重跑安全
+/// （单表无索引）；列迁移走 PRAGMA 存在性检查，旧库重跑安全
 pub(crate) fn ensure_schema(h: &WasmHost) -> anyhow::Result<()> {
     h.plugin_db_execute(
         "CREATE TABLE IF NOT EXISTS provider_preset (\
@@ -29,31 +29,46 @@ pub(crate) fn ensure_schema(h: &WasmHost) -> anyhow::Result<()> {
          base_url TEXT NOT NULL DEFAULT '', \
          api_style TEXT NOT NULL DEFAULT 'openai', \
          models_json TEXT NOT NULL DEFAULT '[]', \
+         models_url TEXT NOT NULL DEFAULT '', \
          api_key TEXT NOT NULL DEFAULT '', \
          notes TEXT, \
          created_at INTEGER NOT NULL, \
          updated_at INTEGER NOT NULL)",
     )
     .map_err(|e| anyhow::anyhow!("providers: ensure schema failed: {e}"))?;
-    // 幂等迁移：v1 库无 api_key 列（旧 schema 刻意无 key 列），检测到缺列才补
+    // 幂等迁移：旧库缺列时逐列补（v2 加 api_key 中心凭据列；v3 加 models_url
+    // 模型查询 URL 列）。检测到缺列才执行 ALTER，旧库重跑安全
+    for (col, ddl) in [
+        (
+            "api_key",
+            "ALTER TABLE provider_preset ADD COLUMN api_key TEXT NOT NULL DEFAULT ''",
+        ),
+        (
+            "models_url",
+            "ALTER TABLE provider_preset ADD COLUMN models_url TEXT NOT NULL DEFAULT ''",
+        ),
+    ] {
+        if !has_column(h, col)? {
+            h.plugin_db_execute(ddl)
+                .map_err(|e| anyhow::anyhow!("providers: migrate {col} failed: {e}"))?;
+        }
+    }
+    Ok(())
+}
+
+/// 表是否已有某列（PRAGMA table_info）
+fn has_column(h: &WasmHost, col: &str) -> anyhow::Result<bool> {
     let cols = h
         .plugin_db_query("PRAGMA table_info(provider_preset)")
         .map_err(|e| anyhow::anyhow!("providers: pragma failed: {e}"))?
         .unwrap_or(Value::Array(Vec::new()));
-    let has_api_key = cols
+    Ok(cols
         .as_array()
         .map(|arr| {
             arr.iter()
-                .any(|c| c.get("name").and_then(|v| v.as_str()) == Some("api_key"))
+                .any(|c| c.get("name").and_then(|v| v.as_str()) == Some(col))
         })
-        .unwrap_or(false);
-    if !has_api_key {
-        h.plugin_db_execute(
-            "ALTER TABLE provider_preset ADD COLUMN api_key TEXT NOT NULL DEFAULT ''",
-        )
-        .map_err(|e| anyhow::anyhow!("providers: migrate api_key failed: {e}"))?;
-    }
-    Ok(())
+        .unwrap_or(false))
 }
 
 /// 库行 → wire JSON（models_json 反序列化；key 只以掩码 keyMask 出现——
@@ -72,6 +87,8 @@ fn preset_row_to_json(row: &Value) -> Option<Value> {
         "baseUrl": row.get("base_url")?.as_str().unwrap_or(""),
         "apiStyle": row.get("api_style")?.as_str().unwrap_or("openai"),
         "models": models,
+        // 模型查询 URL（可空：留空 = 手动输入模型列表）
+        "modelsUrl": row.get("models_url").and_then(|v| v.as_str()).unwrap_or(""),
         "keyMask": mask_key(key),
         "notes": row.get("notes").cloned().unwrap_or(Value::Null),
         "createdAt": row.get("created_at")?,
@@ -82,8 +99,8 @@ fn preset_row_to_json(row: &Value) -> Option<Value> {
 pub(super) fn list_presets(h: &WasmHost) -> anyhow::Result<Vec<Value>> {
     let rows = h
         .plugin_db_query(
-            "SELECT id, name, base_url, api_style, models_json, api_key, notes, created_at, updated_at \
-             FROM provider_preset ORDER BY name",
+            "SELECT id, name, base_url, api_style, models_json, models_url, api_key, notes, \
+             created_at, updated_at FROM provider_preset ORDER BY name",
         )
         .map_err(|e| anyhow::anyhow!("providers: list failed: {e}"))?
         .unwrap_or(Value::Array(Vec::new()));
@@ -181,6 +198,8 @@ fn claude_view(h: &WasmHost, home: &str) -> Value {
 /// 预见多个文件访问，逐个 fs_read 会弹 N 次框；一次 request-auth 弹一次框列出
 /// 全部，命中即静默、未命中拒绝则视图降级（claude_view 的读失败分支与
 /// 未授权一致——env 空 + 桥接 false，不阻断页签）。
+/// codex 视图同理：读 `~/.codex/config.toml`（激活时的批量授权已含该目录），
+/// 读失败/未授权 → 全 null 视图（面板据此不显示「当前模型」行，不阻断）。
 pub(super) fn build_state(h: &WasmHost) -> anyhow::Result<Value> {
     ensure_schema(h)?;
     let (import_last, apply_last) = read_stored(h);
@@ -190,6 +209,7 @@ pub(super) fn build_state(h: &WasmHost) -> anyhow::Result<Value> {
     Ok(json!({
         "presets": list_presets(h)?,
         "claude": claude_view(h, home),
+        "codex": super::codex::codex_view(h, home),
         "import": { "last": import_last },
         "apply": { "last": apply_last },
     }))
@@ -212,6 +232,7 @@ mod tests {
         let row = json!({
             "id": 1, "name": "sensenova", "base_url": "https://u/v1",
             "api_style": "openai", "models_json": "[\"m1\"]",
+            "models_url": "https://u/v1/models",
             "api_key": "super-secret-raw-0123456789", "notes": "pi:sensenova",
             "created_at": 1, "updated_at": 2,
         });
@@ -224,10 +245,22 @@ mod tests {
             "models_json 已解码为 models"
         );
         assert_eq!(p["models"], json!(["m1"]));
+        assert_eq!(p["modelsUrl"], "https://u/v1/models");
         assert_eq!(p["notes"], "pi:sensenova");
         assert!(
             !p.to_string().contains("super-secret-raw"),
             "明文不得进入 wire 形状"
+        );
+
+        // 旧行缺 models_url 列（v3 迁移前）→ 空串而非缺键（前端不必判 undefined）
+        let legacy = json!({
+            "id": 2, "name": "legacy", "base_url": "https://l/v1",
+            "api_style": "openai", "models_json": "[]", "api_key": "",
+            "notes": Value::Null, "created_at": 1, "updated_at": 1,
+        });
+        assert_eq!(
+            preset_row_to_json(&legacy).expect("legacy maps")["modelsUrl"],
+            ""
         );
     }
 
@@ -236,7 +269,7 @@ mod tests {
     fn apply_state_records_key_len_only() {
         let key = "super-secret-key-0123456789";
         let apply_last = json!({
-            "ok": true, "preset": "sensenova", "target": "pi",
+            "ok": true, "preset": "sensenova", "target": "pi", "targets": ["pi"],
             "files": ["models.json", "auth.json"], "keyMode": "source",
             "keyLen": key.chars().count(), "error": null, "at": 0,
         });

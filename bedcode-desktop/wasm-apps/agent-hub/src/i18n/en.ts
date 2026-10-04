@@ -17,6 +17,10 @@ const en: MessageSchema = {
   'hub.env.npm': 'npm',
   'hub.env.pnpm': 'pnpm',
   'hub.env.registry': 'npm registry',
+  'hub.env.python': 'Python',
+  'hub.env.arch': 'Arch',
+  'hub.env.osVersion': 'OS version',
+  'hub.env.shell': 'Shell',
   'hub.env.detect': 'Re-detect',
   'hub.env.detecting': 'Detecting…',
   'hub.env.none': 'Not detected',
@@ -177,6 +181,7 @@ const en: MessageSchema = {
   'hub.pv.style.gemini': 'Gemini',
   'hub.pv.style.custom': 'Custom',
   'hub.pv.models': '{n} model(s)',
+  'hub.pv.modelsMissing': 'no models (applying to pi / opencode is refused)',
   'hub.pv.apply': 'Apply to…',
   'hub.pv.edit': 'Edit',
   'hub.pv.delete': 'Delete',
@@ -203,6 +208,17 @@ const en: MessageSchema = {
   'hub.pv.editor.baseUrl': 'Base URL',
   'hub.pv.editor.apiStyle': 'API style',
   'hub.pv.editor.models': 'Models (one per line)',
+  'hub.pv.editor.modelsUrl': 'Model query URL (optional)',
+  'hub.pv.editor.modelsUrlHint':
+    'Leave empty to type models by hand; fill it in to query candidates (click a chip or "add all" to copy them into the list above). Many gateways do not expose /models under the base URL — edit freely.',
+  'hub.pv.editor.modelsUrlDerive': 'Derive from base URL',
+  'hub.pv.editor.modelsFetch': 'Fetch models',
+  'hub.pv.editor.modelsFetching': 'Fetching…',
+  'hub.pv.editor.modelsFetchFailed':
+    'Fetch failed: check the URL, network and key — or the gateway has no model list, so type the models by hand',
+  'hub.pv.editor.modelsAddAll': 'Add all ({n})',
+  'hub.pv.editor.modelsEmpty':
+    'No models yet: without models, applying to pi / opencode writes a provider with zero models.',
   'hub.pv.editor.nameExists': 'A preset with this name already exists',
   'hub.pv.editor.saveFailed': 'Save failed, please try again',
   'hub.pv.editor.save': 'Save',
@@ -216,7 +232,11 @@ const en: MessageSchema = {
 
   // ==================== Providers · apply (ticket 05) ====================
   'hub.pv.apply.title': 'Apply "{name}"',
-  'hub.pv.apply.target': 'Target CLI',
+  'hub.pv.apply.back': 'Back to providers',
+  'hub.pv.apply.note': 'Will write {n} CLI(s): {targets}',
+  'hub.pv.apply.noteNone': 'No target CLI selected',
+  'hub.pv.apply.target': 'Target CLI(s)',
+  'hub.pv.apply.targetHint': 'Apply to several CLIs at once; a failing target does not block the others',
   'hub.pv.apply.targetName': 'Config entry name',
   'hub.pv.apply.targetNameHint': 'The entry key written into the {target} config file',
   'hub.pv.apply.codexUnsupported': 'codex config format pending calibration; not supported in v1',
@@ -233,6 +253,23 @@ const en: MessageSchema = {
   'hub.pv.apply.conflict':
     'claude self-built bridge detected ({files}). Writing only rewrites the env block in settings.json and never touches bridge files. Continue?',
   'hub.pv.apply.conflictConfirm': 'Write anyway (bridges untouched)',
+  'hub.pv.apply.noModels': 'Not written: the preset has no models',
+  'hub.pv.apply.noModelsHint':
+    'This preset has an empty model list, so applying to {targets} would only create a provider with zero models (nothing shows up afterwards). Query or type the models in the preset first.',
+  'hub.pv.apply.reason.bridge': 'Not written: claude self-built bridge detected, needs confirmation',
+  'hub.pv.apply.reason.writeFailed': 'Not written: writing the config file failed',
+  'hub.pv.apply.reason.dialect':
+    'Not written: codex only speaks the Responses protocol, this API style has no codex form',
+  'hub.pv.apply.reason.envKey':
+    'Not written: invalid env var name (letters/digits/underscore only, must not start with a digit)',
+  'hub.pv.apply.codex.envKey': 'API key env var name',
+  'hub.pv.apply.codex.envKeyHint':
+    "codex's config only names the variable; the value comes from your shell environment (the plugin never reads or writes your env files). It must be set when codex starts.",
+  'hub.pv.apply.codex.switchHint':
+    'This switches the current codex model from {from} to {to} (codex has no model list — it can only point at one model).',
+  'hub.pv.apply.codex.dialectBlocked':
+    "This preset's API style has no codex form (codex only speaks Responses), so the codex target will be refused.",
+  'hub.pv.apply.partial': 'Some targets were written ({n} failed); keeping the failed targets for retry',
   'hub.pv.apply.failed': 'Apply failed, please try again',
   // ==================== Usage dashboard (ticket 06 + redesign) ====================
   'hub.st.syncedTag': 'Watermark: {n} entries parsed',

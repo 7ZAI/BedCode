@@ -35,6 +35,10 @@ const devMock: AgentHubDevMock = {
       npm: '10.9.2',
       pnpm: '12.2.1',
       registry: 'https://registry.npmjs.org',
+      python: '3.12.3',
+      arch: 'x86_64',
+      osVersion: 'Linux 6.8.0-45-generic',
+      shell: '/bin/bash',
     },
     clis: {
       claude: {
@@ -277,6 +281,7 @@ description: 本地导入演示技能（dev-shell 种子）
         baseUrl: 'https://api.deepseek.com',
         apiStyle: 'openai',
         models: ['deepseek-chat', 'deepseek-reasoner'],
+        modelsUrl: 'https://api.deepseek.com/models',
         keyMask: 'sk-…(36)',
         notes: null,
         createdAt: NOW - 20 * DAY,
@@ -288,6 +293,7 @@ description: 本地导入演示技能（dev-shell 种子）
         baseUrl: 'https://api.moonshot.cn/anthropic',
         apiStyle: 'anthropic',
         models: ['kimi-k2-0905-preview'],
+        modelsUrl: '',
         keyMask: '—',
         notes: 'pi:kimi',
         createdAt: NOW - 12 * DAY,
@@ -299,6 +305,7 @@ description: 本地导入演示技能（dev-shell 种子）
         baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
         apiStyle: 'openai',
         models: ['glm-4.6', 'glm-4.5-air'],
+        modelsUrl: 'https://open.bigmodel.cn/api/paas/v4/models',
         keyMask: 'sk-…(28)',
         notes: 'opencode:glm',
         createdAt: NOW - 6 * DAY,
@@ -316,6 +323,11 @@ description: 本地导入演示技能（dev-shell 种子）
         anthropicBridgeMjs: true,
       },
     },
+    codex: {
+      model: 'deepseek-v4-pro-0813',
+      modelProvider: 'tokenplan',
+      providers: ['tokenplan', 'amd'],
+    },
     import: {
       last: {
         ok: true,
@@ -331,7 +343,24 @@ description: 本地导入演示技能（dev-shell 种子）
         ok: true,
         preset: '月之暗面 Kimi',
         target: 'claude',
-        files: [`${HOME}/.claude/settings.json`, 'provider-config.sh', 'anthropic-bridge.mjs'],
+        targets: ['claude', 'pi'],
+        results: [
+          {
+            target: 'claude',
+            ok: true,
+            files: [`${HOME}/.claude/settings.json`],
+            reason: null,
+            error: null,
+          },
+          {
+            target: 'pi',
+            ok: true,
+            files: ['models.json', 'auth.json'],
+            reason: null,
+            error: null,
+          },
+        ],
+        files: [`${HOME}/.claude/settings.json`, 'models.json', 'auth.json'],
         keyMode: 'source',
         keyLen: 52,
         error: null,

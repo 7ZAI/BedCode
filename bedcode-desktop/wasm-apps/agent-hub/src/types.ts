@@ -26,6 +26,14 @@ export interface EnvInfo {
   npm: string | null
   pnpm: string | null
   registry: string | null
+  /** Python 版本（如 python3 --version 输出） */
+  python: string | null
+  /** 系统架构（uname -m / %PROCESSOR_ARCHITECTURE%） */
+  arch: string | null
+  /** 系统版本详情（uname -sr / Windows ver 输出） */
+  osVersion: string | null
+  /** 当前 shell（$SHELL / %COMSPEC%） */
+  shell: string | null
 }
 
 /** 探测状态（host-storage 持久化 + `plugin:agent-hub:detection` 事件推送的完整形状） */
@@ -228,8 +236,8 @@ export interface ImportSkillResult {
 /** API 方言（与 chatbox ApiStyle 同构；custom 为逃生舱槽位） */
 export type ApiStyle = 'openai' | 'anthropic' | 'gemini' | 'custom'
 
-/** 应用目标（codex config.toml 官方格式未校准，v1 不开放） */
-export type ProviderTarget = 'claude' | 'pi' | 'opencode'
+/** 应用目标（codex = 登记 provider + 设为当前模型，形态见 codex.rs 模块头） */
+export type ProviderTarget = 'claude' | 'pi' | 'opencode' | 'codex'
 
 /** 供应商预设（guest provider_preset 表同构；key 只以掩码 keyMask 出现） */
 export interface ProviderPreset {
@@ -238,6 +246,12 @@ export interface ProviderPreset {
   baseUrl: string
   apiStyle: ApiStyle
   models: string[]
+  /**
+   * 模型查询 URL（可空字符串 = 不查询，手动输入模型列表）
+   *
+   * 与 `models` 互补而非替代：查询失败 / 网关不提供 /models 时手动输入仍可用。
+   */
+  modelsUrl: string
   /** key 掩码（前 3 字符 + 长度；"—" 表示未存 key）。明文只存 guest 插件库 */
   keyMask: string
   /** 来源标注（如 `pi:sensenova` / `opencode:gmi`），手工创建为 null */
@@ -259,6 +273,22 @@ export interface ClaudeEnvView {
   }
 }
 
+/**
+ * codex 只读视图：`~/.codex/config.toml` 顶层键 + 已登记的 provider 名
+ *
+ * 应用到 codex 会切走当前 `model` / `model_provider`（codex 没有「只登记不切换」
+ * 的形态），面板据此展示「当前 → 将切换为」。
+ */
+export interface CodexConfigView {
+  model: string | null
+  modelProvider: string | null
+  providers: string[]
+  /** 配置文件不存在（首次应用） */
+  missing?: boolean
+  /** 读失败/未授权（视图降级，面板不显示当前模型行） */
+  denied?: boolean
+}
+
 /** 反向导入结果（keys 为预设名 → key 掩码，仅掩码形态） */
 export interface ImportProvidersResult {
   created: string[]
@@ -272,13 +302,50 @@ export interface SavePresetResult {
   nameExists?: boolean
 }
 
-/** 应用预设返回（bridgeConflict = claude 桥接冲突，待用户确认 force） */
+/** 单个目标的失败分类（guest REASON_* / codex plan；界面按此查 i18n） */
+export type ApplyTargetReason =
+  | 'noModels'
+  | 'writeFailed'
+  | 'bridgeConflict'
+  /** codex 专属：方言无对应写法（codex 只讲 Responses） */
+  | 'unsupportedDialect'
+  /** codex 专属：env 变量名非法 */
+  | 'invalidEnvKey'
+
+/** 单目标应用结果（多目标时逐个给，互不影响） */
+export interface ApplyTargetResult {
+  target: ProviderTarget
+  ok: boolean
+  files: string[]
+  /** null = 成功；否则为失败分类（`noModels` = 预设无模型，写入会产生空供应商） */
+  reason: ApplyTargetReason | null
+  /** 桥接冲突时的文件名（仅 reason = bridgeConflict） */
+  bridges?: string[]
+  /** 失败原文：只进 console / guest 日志，界面用 reason 查 i18n */
+  error?: string | null
+}
+
+/**
+ * 应用预设返回（bridgeConflict = claude 桥接冲突，待用户确认 force）
+ *
+ * 多目标：一次可写多个 CLI，`results` 逐目标给结局，`applied` 只在全部成功
+ * 时为 true（部分成功会同时给 results 里的失败项）。
+ */
 export interface ApplyProviderResult {
   applied: boolean
+  targets?: ProviderTarget[]
+  results?: ApplyTargetResult[]
   files?: string[]
   bridgeConflict?: boolean
   bridges?: string[]
-  error?: string
+  error?: string | null
+}
+
+/** 模型列表查询结果（guest fetch_models；不含任何凭据） */
+export interface FetchModelsResult {
+  models: string[]
+  url: string
+  count: number
 }
 
 /**
@@ -297,6 +364,7 @@ export interface ApplyKeySpec {
 export interface ProvidersDomainState {
   presets: ProviderPreset[]
   claude: ClaudeEnvView
+  codex: CodexConfigView
   import: {
     last: {
       ok: boolean
@@ -311,7 +379,10 @@ export interface ProvidersDomainState {
     last: {
       ok: boolean
       preset: string | null
+      /** 旧字段：首个目标（多目标时看 `targets`） */
       target: ProviderTarget | null
+      targets: ProviderTarget[]
+      results: ApplyTargetResult[]
       files: string[]
       keyMode: string
       keyLen: number | null

@@ -61,10 +61,14 @@ const envRows = computed(() => {
   const env = props.state?.env
   return [
     { label: t('hub.env.os'), value: osLabel(env?.os) },
+    { label: t('hub.env.arch'), value: env?.arch },
+    { label: t('hub.env.osVersion'), value: env?.osVersion },
+    { label: t('hub.env.shell'), value: env?.shell },
     { label: t('hub.env.node'), value: env?.node },
     { label: t('hub.env.npm'), value: env?.npm },
     { label: t('hub.env.pnpm'), value: env?.pnpm },
     { label: t('hub.env.registry'), value: env?.registry },
+    { label: t('hub.env.python'), value: env?.python },
   ]
 })
 

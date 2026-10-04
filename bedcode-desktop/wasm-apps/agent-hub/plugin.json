@@ -126,6 +126,10 @@
         "title": "Agent Hub: Import Providers from CLIs"
       },
       {
+        "id": "agent-hub.fetch-models",
+        "title": "Agent Hub: Fetch Provider Model List"
+      },
+      {
         "id": "agent-hub.apply-provider",
         "title": "Agent Hub: Apply Provider Preset to CLI"
       },
@@ -177,7 +181,7 @@
         "title": "Agent Hub",
         "component": "AgentHubView",
         "icon": "M12 2L2 12l10 10 10-10L12 2zm0 5.2l4.8 4.8-4.8 4.8L7.2 12l4.8-4.8z",
-        "order": 240
+        "order": 215
       }
     ],
     "configuration": {

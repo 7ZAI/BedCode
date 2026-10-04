@@ -143,6 +143,7 @@ function preset(over: Partial<ProviderPreset> = {}): ProviderPreset {
     baseUrl: 'https://api.sensenova.cn/v1',
     apiStyle: 'openai',
     models: ['deepseek-v3'],
+    modelsUrl: '',
     keyMask: '—',
     notes: '',
     ...over,
@@ -158,35 +159,38 @@ function providersStub(over: Partial<UseProvidersReturn> = {}): UseProvidersRetu
   return {
     state: ref({
       claude: { env: {}, bridge: {} },
+      codex: { model: null, modelProvider: null, providers: [] },
       presets: [],
       import: { last: null },
     } as unknown as ProvidersDomainState),
     importing: ref(false),
     applying: ref(false),
     saving: ref(false),
+    fetchingModels: ref(false),
     refresh: vi.fn(),
     savePreset: vi.fn().mockResolvedValue(ok({ saved: true })),
     deletePreset: vi.fn().mockResolvedValue(ok(null)),
     importProviders: vi.fn().mockResolvedValue(ok(null)),
     applyProvider: vi.fn().mockResolvedValue(ok(null)),
+    fetchModels: vi.fn().mockResolvedValue(ok({ models: [], url: '', count: 0 })),
     ...over,
   } as unknown as UseProvidersReturn
 }
 
-describe('A1 ProviderApply：key 四选一 + 桥接冲突两击确认', () => {
+describe('A1 ProviderApply：key 四选一 + 多目标 + 桥接冲突两击确认', () => {
   it('默认（无 stored key、无 source 标注）选中 inline，提交 inline key', async () => {
-    const applyProvider = vi.fn().mockResolvedValue(ok({ applied: true, files: ['auth.json'] }))
+    const applyProvider = vi.fn().mockResolvedValue(ok({ applied: true, results: [], files: ['auth.json'] }))
     const w = mountComponent(ProviderApply, { providers: providersStub({ applyProvider }), preset: preset() })
     await flushPromises()
     await w.get('[data-testid="apply-key-input"]').setValue('sk-123')
     await w.get('[data-testid="apply-write"]').trigger('click')
     await flushPromises()
-    expect(applyProvider).toHaveBeenCalledWith(1, 'pi', 'sensenova', { kind: 'inline', value: 'sk-123' }, false)
+    expect(applyProvider).toHaveBeenCalledWith(1, ['pi'], 'sensenova', { kind: 'inline', value: 'sk-123' }, false, '')
     w.unmount()
   })
 
   it('预设已有 stored key 时默认选中 stored，提交 { kind:"stored" }', async () => {
-    const applyProvider = vi.fn().mockResolvedValue(ok({ applied: true, files: [] }))
+    const applyProvider = vi.fn().mockResolvedValue(ok({ applied: true, results: [], files: [] }))
     const w = mountComponent(ProviderApply, {
       providers: providersStub({ applyProvider }),
       preset: preset({ keyMask: 'sk-1***' }),
@@ -194,7 +198,7 @@ describe('A1 ProviderApply：key 四选一 + 桥接冲突两击确认', () => {
     await flushPromises()
     await w.get('[data-testid="apply-write"]').trigger('click')
     await flushPromises()
-    expect(applyProvider).toHaveBeenCalledWith(1, 'pi', 'sensenova', { kind: 'stored' }, false)
+    expect(applyProvider).toHaveBeenCalledWith(1, ['pi'], 'sensenova', { kind: 'stored' }, false, '')
     w.unmount()
   })
 
@@ -207,7 +211,7 @@ describe('A1 ProviderApply：key 四选一 + 桥接冲突两击确认', () => {
     await flushPromises()
     await w.get('[data-testid="apply-write"]').trigger('click')
     await flushPromises()
-    expect(applyProvider).toHaveBeenCalledWith(1, 'pi', 'sensenova', { kind: 'source', cli: 'pi', provider: 'sensenova' }, false)
+    expect(applyProvider).toHaveBeenCalledWith(1, ['pi'], 'sensenova', { kind: 'source', cli: 'pi', provider: 'sensenova' }, false, '')
     w.unmount()
   })
 
@@ -224,7 +228,7 @@ describe('A1 ProviderApply：key 四选一 + 桥接冲突两击确认', () => {
     expect((write.element as HTMLButtonElement).disabled).toBe(false)
     await write.trigger('click')
     await flushPromises()
-    expect(applyProvider).toHaveBeenCalledWith(1, 'pi', 'sensenova', { kind: 'none' }, false)
+    expect(applyProvider).toHaveBeenCalledWith(1, ['pi'], 'sensenova', { kind: 'none' }, false, '')
     w.unmount()
   })
 
@@ -241,25 +245,183 @@ describe('A1 ProviderApply：key 四选一 + 桥接冲突两击确认', () => {
 
     await w.get('[data-testid="apply-write"]').trigger('click')
     await flushPromises()
-    expect(applyProvider).toHaveBeenNthCalledWith(1, 1, 'pi', 'sensenova', { kind: 'stored' }, false)
+    expect(applyProvider).toHaveBeenNthCalledWith(1, 1, ['pi'], 'sensenova', { kind: 'stored' }, false, '')
     expect(w.find('[data-testid="apply-conflict"]').exists()).toBe(true)
 
     await w.get('[data-testid="apply-conflict-confirm"]').trigger('click')
     await flushPromises()
-    expect(applyProvider).toHaveBeenNthCalledWith(2, 1, 'pi', 'sensenova', { kind: 'stored' }, true)
+    expect(applyProvider).toHaveBeenNthCalledWith(2, 1, ['pi'], 'sensenova', { kind: 'stored' }, true, '')
     expect(w.find('[data-testid="apply-conflict"]').exists()).toBe(false)
     w.unmount()
   })
 
-  it('目标 CLI 切换改变提交入参（默认 pi）', async () => {
-    const applyProvider = vi.fn().mockResolvedValue(ok({ applied: true, files: [] }))
+  it('目标 CLI 可多选：再点 claude 后一次提交两个目标（默认已含 pi）', async () => {
+    const applyProvider = vi.fn().mockResolvedValue(ok({ applied: true, results: [], files: [] }))
     const w = mountComponent(ProviderApply, { providers: providersStub({ applyProvider }), preset: preset() })
     await flushPromises()
     await w.get('[data-testid="apply-key-input"]').setValue('sk-1')
     await w.get('[data-testid="target-claude"]').trigger('click')
     await w.get('[data-testid="apply-write"]').trigger('click')
     await flushPromises()
-    expect(applyProvider.mock.calls[0][1]).toBe('claude')
+    expect(applyProvider.mock.calls[0][1]).toEqual(['pi', 'claude'])
+    w.unmount()
+  })
+
+  it('目标 chip 可取消：取消到零个目标时写入按钮禁用（不发空请求）', async () => {
+    const applyProvider = vi.fn().mockResolvedValue(ok({ applied: true, results: [], files: [] }))
+    const w = mountComponent(ProviderApply, { providers: providersStub({ applyProvider }), preset: preset() })
+    await flushPromises()
+    await w.get('[data-testid="apply-key-input"]').setValue('sk-1')
+    await w.get('[data-testid="target-pi"]').trigger('click')
+    await flushPromises()
+    const write = w.get('[data-testid="apply-write"]')
+    expect((write.element as HTMLButtonElement).disabled).toBe(true)
+    await write.trigger('click')
+    await flushPromises()
+    expect(applyProvider).not.toHaveBeenCalled()
+    w.unmount()
+  })
+
+  it('多目标逐行呈现结局：pi 成功 + opencode 无模型被拒，各给一行', async () => {
+    const applyProvider = vi.fn().mockResolvedValue(
+      ok({
+        applied: false,
+        targets: ['pi', 'opencode'],
+        files: ['models.json', 'auth.json'],
+        results: [
+          { target: 'pi', ok: true, files: ['models.json', 'auth.json'], reason: null },
+          { target: 'opencode', ok: false, files: [], reason: 'noModels' },
+        ],
+      }),
+    )
+    const w = mountComponent(ProviderApply, {
+      providers: providersStub({ applyProvider }),
+      preset: preset({ keyMask: 'sk-1***' }),
+    })
+    await flushPromises()
+    await w.get('[data-testid="target-opencode"]').trigger('click')
+    await w.get('[data-testid="apply-write"]').trigger('click')
+    await flushPromises()
+    expect(applyProvider.mock.calls[0][1]).toEqual(['pi', 'opencode'])
+    const done = w.get('[data-testid="apply-done"]')
+    // 成功目标列文件，失败目标给分类文案（不展示 guest 原文）
+    expect(done.text()).toContain('models.json')
+    expect(done.text()).toContain('hub.pv.apply.noModels')
+    // 部分成功（2026-10-04 OCR A-04）：成功目标已写入，不弹失败 toast；
+    // 表单保留、失败目标收敛，可就地重试
+    expect(toastCalls.some((c) => c.level === 'success')).toBe(false)
+    expect(toastCalls.some((c) => c.level === 'error')).toBe(false)
+    expect(w.find('[data-testid="apply-error"]').exists()).toBe(true)
+    expect(w.find('[data-testid="apply-error"]').text()).toContain('hub.pv.apply.partial')
+    // 表单仍在：目标收敛到失败的 opencode，写入按钮可用于就地重试
+    expect(w.get('[data-testid="target-opencode"]').attributes('aria-pressed')).toBe('true')
+    expect(w.get('[data-testid="target-pi"]').attributes('aria-pressed')).toBe('false')
+    expect((w.get('[data-testid="apply-write"]').element as HTMLButtonElement).disabled).toBe(false)
+    w.unmount()
+  })
+
+  it('部分成功后可就地重试：只重发失败目标（A-04 正例闭环）', async () => {
+    const applyProvider = vi
+      .fn()
+      .mockResolvedValueOnce(
+        ok({
+          applied: false,
+          results: [
+            { target: 'pi', ok: true, files: ['models.json'], reason: null },
+            { target: 'opencode', ok: false, files: [], reason: 'writeFailed' },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(ok({ applied: true, results: [{ target: 'opencode', ok: true, files: ['config.json'], reason: null }] }))
+    const w = mountComponent(ProviderApply, {
+      providers: providersStub({ applyProvider }),
+      preset: preset({ keyMask: 'sk-1***' }),
+    })
+    await flushPromises()
+    await w.get('[data-testid="target-opencode"]').trigger('click')
+    await w.get('[data-testid="apply-write"]').trigger('click')
+    await flushPromises()
+    expect(applyProvider.mock.calls[0][1]).toEqual(['pi', 'opencode'])
+
+    // 就地重试：表单仍在 → 写入按钮只带失败目标（pi 已成功，不重复写）
+    await w.get('[data-testid="apply-write"]').trigger('click')
+    await flushPromises()
+    expect(applyProvider.mock.calls[1][1]).toEqual(['opencode'])
+    expect(toastCalls.some((c) => c.level === 'success')).toBe(true)
+    w.unmount()
+  })
+
+  it('部分成功 + 桥接冲突：pi 成功行不被冲突提示盖掉，确认入口仍在', async () => {
+    const applyProvider = vi.fn().mockResolvedValueOnce(
+      ok({
+        applied: false,
+        bridgeConflict: true,
+        bridges: ['provider-config.sh'],
+        results: [
+          { target: 'pi', ok: true, files: ['models.json', 'auth.json'], reason: null },
+          {
+            target: 'claude',
+            ok: false,
+            files: [],
+            reason: 'bridgeConflict',
+            bridges: ['provider-config.sh'],
+          },
+        ],
+      }),
+    )
+    const w = mountComponent(ProviderApply, {
+      providers: providersStub({ applyProvider }),
+      preset: preset({ keyMask: 'sk-1***' }),
+    })
+    await flushPromises()
+    await w.get('[data-testid="target-claude"]').trigger('click')
+    await w.get('[data-testid="apply-write"]').trigger('click')
+    await flushPromises()
+
+    const done = w.get('[data-testid="apply-done"]')
+    expect(done.text()).toContain('models.json')
+    expect(done.text()).toContain('hub.pv.apply.reason.bridge')
+    // 冲突确认入口必须仍在（否则用户没法补写 claude）
+    expect(w.find('[data-testid="apply-conflict-confirm"]').exists()).toBe(true)
+    w.unmount()
+  })
+
+  it('预设 0 模型时提前给警示（pi / opencode / codex 会被 guest 拒绝写入）', async () => {
+    const applyProvider = vi.fn().mockResolvedValue(ok({ applied: true, results: [], files: [] }))
+    const w = mountComponent(ProviderApply, {
+      providers: providersStub({ applyProvider }),
+      preset: preset({ models: [], keyMask: 'sk-1***' }),
+    })
+    await flushPromises()
+    const warn = w.get('[data-testid="apply-no-models"]')
+    expect(warn.text()).toContain('hub.pv.apply.noModelsHint')
+    // 只选 claude 时不报（claude 端点写入不依赖模型列表）
+    await w.get('[data-testid="target-pi"]').trigger('click')
+    await w.get('[data-testid="target-claude"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="apply-no-models"]').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('预设 0 模型时 codex 也提前给警示（A-06：guest 侧 plan_apply 同样拒 noModels）', async () => {
+    const applyProvider = vi.fn().mockResolvedValue(ok({ applied: true, results: [], files: [] }))
+    const w = mountComponent(ProviderApply, {
+      providers: providersStub({ applyProvider }),
+      preset: preset({ models: [], keyMask: 'sk-1***' }),
+    })
+    await flushPromises()
+    // 切到 codex：此前 codexNextModel=null 时切换预览横幅不出现、也不在
+    // model-less 拦截里 → 查不到模型的预设选 codex 无任何点击前警告（A-06）
+    // 默认选中 pi（模型为空的预设 → warning 已在屏）；切到 codex 后 warning
+    // 必须点名 codex（A-06：此前 codex 不进 model-less 拦截，查不到模型的
+    // 预设选 codex 无任何点击前警告）
+    expect(w.find('[data-testid="apply-no-models"]').exists()).toBe(true)
+    await w.get('[data-testid="target-pi"]').trigger('click')
+    await w.get('[data-testid="target-codex"]').trigger('click')
+    await flushPromises()
+    const warn = w.get('[data-testid="apply-no-models"]')
+    expect(warn.text()).toContain('hub.pv.apply.noModelsHint')
+    expect(warn.text()).toContain('codex')
     w.unmount()
   })
 
@@ -307,7 +469,13 @@ describe('A1 ProviderApply：key 四选一 + 桥接冲突两击确认', () => {
   })
 
   it('apply 成功：弹成功 toast + 呈现写入文件清单（面板保留供读重启提示）', async () => {
-    const applyProvider = vi.fn().mockResolvedValue(ok({ applied: true, files: ['auth.json'] }))
+    const applyProvider = vi.fn().mockResolvedValue(
+      ok({
+        applied: true,
+        files: ['auth.json'],
+        results: [{ target: 'pi', ok: true, files: ['auth.json'], reason: null }],
+      }),
+    )
     const w = mountComponent(ProviderApply, { providers: providersStub({ applyProvider }), preset: preset() })
     await flushPromises()
     await w.get('[data-testid="apply-key-input"]').setValue('sk-1')
@@ -317,6 +485,228 @@ describe('A1 ProviderApply：key 四选一 + 桥接冲突两击确认', () => {
     expect(toastCalls.filter((c) => c.level === 'error')).toHaveLength(0)
     expect(w.find('[data-testid="apply-done"]').exists()).toBe(true)
     w.unmount()
+  })
+})
+
+// ==================== A1-c 二级页导航 / 预设速览 / 动作条回显 ====================
+/*
+ * 本页整个替换供应商列表视图（ProvidersTab 的 v-if 分支），因此「怎么回去」
+ * 与「正在写什么」都必须是面板自己的对外行为，不能依赖列表层：
+ * - N1 返回是唯一出口：点页头返回发出 close，且绝不顺手提交一次写入
+ * - N2 预设速览跟预设走（方言/URL/模型数/key 掩码），不是写死文案
+ * - N3 动作条左侧回显本次将写入的目标集合；零目标时点名「未选择」而不是留白
+ */
+
+describe('A1-c ProviderApply：二级页导航 / 预设速览 / 动作条回显', () => {
+  it('N1 点「返回供应商列表」发出 close，且不触发任何写入', async () => {
+    const applyProvider = vi.fn().mockResolvedValue(ok({ applied: true, results: [], files: [] }))
+    const w = mountComponent(ProviderApply, { providers: providersStub({ applyProvider }), preset: preset() })
+    await flushPromises()
+    await w.get('[data-testid="apply-close"]').trigger('click')
+    expect(w.emitted('close')).toHaveLength(1)
+    expect(applyProvider).not.toHaveBeenCalled()
+    w.unmount()
+  })
+
+  it('N1-b 返回入口在写入已完成后仍在（面板保留供读重启提示，不能把出口一起收走）', async () => {
+    const applyProvider = vi
+      .fn()
+      .mockResolvedValue(
+        ok({ applied: true, files: ['auth.json'], results: [{ target: 'pi', ok: true, files: ['auth.json'], reason: null }] }),
+      )
+    const w = mountComponent(ProviderApply, { providers: providersStub({ applyProvider }), preset: preset() })
+    await flushPromises()
+    await w.get('[data-testid="apply-key-input"]').setValue('sk-1')
+    await w.get('[data-testid="apply-write"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="apply-done"]').exists()).toBe(true)
+    const back = w.get('[data-testid="apply-close"]')
+    await back.trigger('click')
+    expect(w.emitted('close')).toHaveLength(1)
+    w.unmount()
+  })
+
+  it('N2 预设速览按预设渲染：方言走 hub.pv.style.* 映射 + URL / 模型数 / key 掩码', async () => {
+    const w = mountComponent(ProviderApply, {
+      providers: providersStub(),
+      preset: preset({
+        name: 'InkStone',
+        apiStyle: 'anthropic',
+        baseUrl: 'https://api.inkstone.cn/anthropic',
+        models: ['k2', 'k2-air'],
+        keyMask: 'sk-9***ab',
+      }),
+    })
+    await flushPromises()
+    const meta = w.get('.ah-pv-apply-meta')
+    expect(meta.text()).toContain('hub.pv.style.anthropic')
+    expect(meta.text()).toContain('https://api.inkstone.cn/anthropic')
+    expect(meta.text()).toContain('hub.pv.models(n=2)')
+    expect(meta.text()).toContain('hub.pv.keyMask(mask=sk-9***ab)')
+    // 反例：预设方言改了而速览写死 openai → 上面的 style 断言测红
+    w.unmount()
+  })
+
+  it('N3 默认单目标（pi）回显一条写入计划', async () => {
+    const w = mountComponent(ProviderApply, { providers: providersStub(), preset: preset() })
+    await flushPromises()
+    expect(w.get('[data-testid="apply-note"]').text()).toBe(
+      'hub.pv.apply.note(n=1,targets=pi)',
+    )
+    w.unmount()
+  })
+
+  it('N3-b 多选时回显全部目标（顺序即写入顺序）', async () => {
+    const w = mountComponent(ProviderApply, { providers: providersStub(), preset: preset() })
+    await flushPromises()
+    await w.get('[data-testid="target-claude"]').trigger('click')
+    await flushPromises()
+    expect(w.get('[data-testid="apply-note"]').text()).toBe(
+      'hub.pv.apply.note(n=2,targets=pi · claude)',
+    )
+    w.unmount()
+  })
+
+  it('N3-c 反例：零目标时点名「尚未选择」且写入按钮禁用（不留白也不发空请求）', async () => {
+    const applyProvider = vi.fn().mockResolvedValue(ok({ applied: true, results: [], files: [] }))
+    const w = mountComponent(ProviderApply, { providers: providersStub({ applyProvider }), preset: preset() })
+    await flushPromises()
+    await w.get('[data-testid="target-pi"]').trigger('click')
+    await flushPromises()
+    expect(w.get('[data-testid="apply-note"]').text()).toBe('hub.pv.apply.noteNone')
+    const write = w.get('[data-testid="apply-write"]')
+    expect((write.element as HTMLButtonElement).disabled).toBe(true)
+    await write.trigger('click')
+    await flushPromises()
+    expect(applyProvider).not.toHaveBeenCalled()
+    w.unmount()
+  })
+})
+
+// ==================== A1-b codex 目标（登记 provider + 设为当前模型） ====================
+
+describe('A1-b ProviderApply：codex 目标', () => {
+  it('codex 可选；纯 codex 应用不要求填 key，提交派生的 env 变量名', async () => {
+    const applyProvider = vi
+      .fn()
+      .mockResolvedValue(ok({ applied: true, results: [{ target: 'codex', ok: true, files: ['config.toml'], reason: null }] }))
+    const w = mountComponent(ProviderApply, {
+      providers: providersStub({ applyProvider }),
+      preset: preset({ name: 'InkStone', keyMask: 'sk-1***' }),
+    })
+    await flushPromises()
+    // chip 存在且可点（不再是置灰的 v1 ✕）
+    const chip = w.get('[data-testid="target-codex"]')
+    expect(chip.attributes('aria-pressed')).toBe('false')
+    await chip.trigger('click')
+    await flushPromises()
+    expect(w.get('[data-testid="target-codex"]').attributes('aria-pressed')).toBe('true')
+    // 取消默认的 pi → 只剩 codex（纯 codex 路径）
+    await w.get('[data-testid="target-pi"]').trigger('click')
+    await flushPromises()
+    expect(w.get('[data-testid="target-pi"]').attributes('aria-pressed')).toBe('false')
+
+    // key 四选一整块隐藏（codex 只写 env_key 变量名）
+    expect(w.find('input[type="radio"]').exists()).toBe(false)
+    // 不填 key 也能写入（keyMode=inline 的必填校验不得误伤）
+    const write = w.get('[data-testid="apply-write"]')
+    expect((write.element as HTMLButtonElement).disabled).toBe(false)
+    await write.trigger('click')
+    await flushPromises()
+    expect(applyProvider.mock.calls[0][1]).toEqual(['codex'])
+    expect(applyProvider.mock.calls[0][5]).toBe('INKSTONE_API_KEY')
+  })
+
+  it('env 变量名可改（供应商文档给了别的名字时）', async () => {
+    const applyProvider = vi.fn().mockResolvedValue(ok({ applied: true, results: [] }))
+    const w = mountComponent(ProviderApply, { providers: providersStub({ applyProvider }), preset: preset() })
+    await flushPromises()
+    // 默认已含 pi → 混合目标（key 四选一仍在）
+    await w.get('[data-testid="target-codex"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="apply-key-input"]').exists()).toBe(true)
+    await w.get('[data-testid="apply-codex-env-key"]').setValue('MY_GATEWAY_TOKEN')
+    await w.get('[data-testid="apply-key-input"]').setValue('sk-1')
+    await w.get('[data-testid="apply-write"]').trigger('click')
+    await flushPromises()
+    expect(applyProvider.mock.calls[0][1]).toEqual(['pi', 'codex'])
+    expect(applyProvider.mock.calls[0][5]).toBe('MY_GATEWAY_TOKEN')
+  })
+
+  it('会顶掉当前模型时预告 from → to（破坏性必须先看得见）', async () => {
+    const providers = providersStub({
+      state: ref({
+        claude: { env: {}, bridge: {} },
+        codex: { model: 'deepseek-v4-pro-0813', modelProvider: 'tokenplan', providers: ['tokenplan'] },
+        presets: [],
+        import: { last: null },
+      } as unknown as ProvidersDomainState),
+    })
+    const w = mountComponent(ProviderApply, {
+      providers,
+      preset: preset({ name: 'InkStone', models: ['glm-5.2', 'kimi-k3'], keyMask: 'sk-1***' }),
+    })
+    await flushPromises()
+    await w.get('[data-testid="target-pi"]').trigger('click')
+    await w.get('[data-testid="target-codex"]').trigger('click')
+    await flushPromises()
+    const hint = w.get('[data-testid="apply-codex-switch"]')
+    expect(hint.text()).toContain('deepseek-v4-pro-0813')
+    expect(hint.text()).toContain('glm-5.2')
+  })
+
+  it('切到同一个模型时不给破坏性预告（无变化不制造噪音）', async () => {
+    const providers = providersStub({
+      state: ref({
+        claude: { env: {}, bridge: {} },
+        codex: { model: 'deepseek-v3', modelProvider: 'sensenova', providers: ['sensenova'] },
+        presets: [],
+        import: { last: null },
+      } as unknown as ProvidersDomainState),
+    })
+    const w = mountComponent(ProviderApply, { providers, preset: preset() })
+    await flushPromises()
+    await w.get('[data-testid="target-pi"]').trigger('click')
+    await w.get('[data-testid="target-codex"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="apply-codex-switch"]').exists()).toBe(false)
+  })
+
+  it('非 openai 方言选 codex 时提前警示（codex 只讲 Responses）', async () => {
+    const w = mountComponent(ProviderApply, {
+      providers: providersStub(),
+      preset: preset({ apiStyle: 'anthropic' }),
+    })
+    await flushPromises()
+    await w.get('[data-testid="target-pi"]').trigger('click')
+    await w.get('[data-testid="target-codex"]').trigger('click')
+    await flushPromises()
+    expect(w.get('[data-testid="apply-codex-dialect"]').text()).toContain(
+      'hub.pv.apply.codex.dialectBlocked',
+    )
+  })
+
+  it('codex 因方言被拒时逐行给分类文案（不展示 guest 原文）', async () => {
+    const applyProvider = vi.fn().mockResolvedValue(
+      ok({
+        applied: false,
+        results: [
+          { target: 'codex', ok: false, files: [], reason: 'unsupportedDialect', error: 'apiStyle anthropic has no codex wire form' },
+        ],
+      }),
+    )
+    const w = mountComponent(ProviderApply, {
+      providers: providersStub({ applyProvider }),
+      preset: preset({ apiStyle: 'anthropic', keyMask: 'sk-1***' }),
+    })
+    await flushPromises()
+    await w.get('[data-testid="target-pi"]').trigger('click')
+    await w.get('[data-testid="target-codex"]').trigger('click')
+    await w.get('[data-testid="apply-write"]').trigger('click')
+    await flushPromises()
+    const done = w.get('[data-testid="apply-done"]')
+    expect(done.text()).toContain('hub.pv.apply.reason.dialect')
+    expect(done.text()).not.toContain('no codex wire form')
   })
 })
 
@@ -830,6 +1220,8 @@ describe('A7 预设编辑器弹窗：标签关联 / 必填标记 / 错误落位 
       baseUrl: 'https://api.x.dev',
       apiStyle: 'anthropic',
       models: ['a', 'b'],
+      // 查询 URL 未填 → 空串（= 手动输入模式），不是 undefined
+      modelsUrl: '',
       apiKey: 'sk-1',
     })
     // 保存成功 → 弹窗关闭
@@ -895,6 +1287,200 @@ describe('A7 预设编辑器弹窗：标签关联 / 必填标记 / 错误落位 
     expect(savePreset).toHaveBeenCalledWith(
       expect.objectContaining({ id: 7, name: 'kimi', apiKey: '' }),
     )
+    w.unmount()
+  })
+
+  // ==================== A7-e 模型列表查询（可选 URL）与手动输入互补 ====================
+
+  it('查询成功：候选 chip 出现，点单个 chip / 「全部加入」写进模型列表', async () => {
+    const fetchModels = vi
+      .fn()
+      .mockResolvedValue(ok({ models: ['m1', 'm2'], url: 'https://u/v1/models', count: 2 }))
+    const { w } = await openEditor({ fetchModels })
+    await w.get('[data-testid="preset-baseurl"]').setValue('https://u/v1')
+    await w.get('[data-testid="preset-models-url"]').setValue('https://u/v1/models')
+    await w.get('[data-testid="preset-models-fetch"]').trigger('click')
+    await flushPromises()
+
+    expect(fetchModels).toHaveBeenCalledWith({
+      url: 'https://u/v1/models',
+      presetId: undefined,
+      apiKey: undefined,
+    })
+    const chip = w.get('[data-testid="preset-model-chip-m1"]')
+    expect(chip.attributes('aria-pressed')).toBe('false')
+    await chip.trigger('click')
+    await flushPromises()
+    // chip 写入的是模型列表文本域（手动输入的同一处，两条路径不分离）
+    expect((w.get('[data-testid="preset-models"]').element as HTMLTextAreaElement).value).toBe('m1')
+    expect(w.get('[data-testid="preset-model-chip-m1"]').attributes('aria-pressed')).toBe('true')
+    // 再点一下 = 移出（可反复调整，不必重开编辑器）
+    await w.get('[data-testid="preset-model-chip-m1"]').trigger('click')
+    await flushPromises()
+    expect((w.get('[data-testid="preset-models"]').element as HTMLTextAreaElement).value).toBe('')
+
+    await w.get('[data-testid="preset-models-add-all"]').trigger('click')
+    await flushPromises()
+    expect((w.get('[data-testid="preset-models"]').element as HTMLTextAreaElement).value).toBe('m1\nm2')
+    w.unmount()
+  })
+
+  it('「全部加入」不覆盖手填内容：已有条目在前且不重复', async () => {
+    const fetchModels = vi
+      .fn()
+      .mockResolvedValue(ok({ models: ['m1', 'm2'], url: 'https://u/v1/models', count: 2 }))
+    const { w } = await openEditor({ fetchModels })
+    await w.get('[data-testid="preset-models"]').setValue('hand-written\nm1')
+    await w.get('[data-testid="preset-models-url"]').setValue('https://u/v1/models')
+    await w.get('[data-testid="preset-models-fetch"]').trigger('click')
+    await flushPromises()
+    await w.get('[data-testid="preset-models-add-all"]').trigger('click')
+    await flushPromises()
+    expect((w.get('[data-testid="preset-models"]').element as HTMLTextAreaElement).value).toBe(
+      'hand-written\nm1\nm2',
+    )
+    w.unmount()
+  })
+
+  it('查询失败：给可行动的错误文案，且不留下上一次的候选（不冒充本次结果）', async () => {
+    const fetchModels = vi
+      .fn()
+      .mockResolvedValueOnce(ok({ models: ['stale-model'], url: 'https://u/v1/models', count: 1 }))
+      .mockResolvedValueOnce(cmdErr(new Error('status 401')))
+    const { w } = await openEditor({ fetchModels })
+    await w.get('[data-testid="preset-models-url"]').setValue('https://u/v1/models')
+    await w.get('[data-testid="preset-models-fetch"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="preset-models-candidates"]').exists()).toBe(true)
+
+    await w.get('[data-testid="preset-models-fetch"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="preset-models-candidates"]').exists()).toBe(false)
+    expect(w.get('[data-testid="preset-models-fetch-error"]').text()).toBe(
+      'hub.pv.editor.modelsFetchFailed',
+    )
+    // 手动输入仍可用（查询只是候选来源）
+    await w.get('[data-testid="preset-models"]').setValue('typed-by-hand')
+    expect((w.get('[data-testid="preset-models"]').element as HTMLTextAreaElement).value).toBe(
+      'typed-by-hand',
+    )
+    w.unmount()
+  })
+
+  it('非 http(s) 的查询 URL 在前端就拦下（不发出请求）', async () => {
+    const fetchModels = vi.fn()
+    const { w } = await openEditor({ fetchModels })
+    await w.get('[data-testid="preset-models-url"]').setValue('file:///etc/passwd')
+    await w.get('[data-testid="preset-models-fetch"]').trigger('click')
+    await flushPromises()
+    expect(fetchModels).not.toHaveBeenCalled()
+    expect(w.find('[data-testid="preset-models-fetch-error"]').exists()).toBe(true)
+    w.unmount()
+  })
+
+  it('带 userinfo 凭据的 URL（https://user:key@host/...）在前端拦下（A-08）', async () => {
+    const fetchModels = vi.fn()
+    const { w } = await openEditor({ fetchModels })
+    await w
+      .get('[data-testid="preset-models-url"]')
+      .setValue('https://user:secret@api.example.com/v1/models')
+    await w.get('[data-testid="preset-models-fetch"]').trigger('click')
+    await flushPromises()
+    // 不发请求（凭据不得经 guest 出站转发）；界面给可行动的错误
+    expect(fetchModels).not.toHaveBeenCalled()
+    expect(w.find('[data-testid="preset-models-fetch-error"]').exists()).toBe(true)
+    w.unmount()
+  })
+
+  it('查询失败：console 只记状态类别，不回显 guest 原文（A-07 防凭据进日志）', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const fetchModels = vi
+      .fn()
+      .mockResolvedValue(cmdErr(new Error('upstream refused https://user:secret@host/api')))
+    const { w } = await openEditor({ fetchModels })
+    await w.get('[data-testid="preset-models-url"]').setValue('https://u/v1/models')
+    await w.get('[data-testid="preset-models-fetch"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="preset-models-fetch-error"]').exists()).toBe(true)
+    // 原文（含 URL/凭据信息形态）不得进日志
+    expect(spy).toHaveBeenCalled()
+    expect(spy.mock.calls.some((c) => JSON.stringify(c).includes('secret'))).toBe(false)
+    spy.mockRestore()
+    w.unmount()
+  })
+
+  it('编辑态回填已存的查询 URL，查询时带 presetId（key 由 guest 现读，明文不落地）', async () => {
+    const fetchModels = vi
+      .fn()
+      .mockResolvedValue(ok({ models: ['m1'], url: 'https://s/v1/models', count: 1 }))
+    const providers = providersStub({
+      fetchModels,
+      state: ref({
+        claude: { env: {}, bridge: {} },
+        presets: [
+          preset({ id: 7, name: 'kimi', modelsUrl: 'https://s/v1/models', keyMask: 'sk-1***' }),
+        ],
+        import: { last: null },
+      } as unknown as ProvidersDomainState),
+    })
+    const w = mountComponent(
+      ProvidersTab,
+      { detection: { authGranted: true, clis: {}, env: {}, envStatus: 'ok' }, providers },
+    )
+    await flushPromises()
+    await w.get('[data-testid="edit-kimi"]').trigger('click')
+    await flushPromises()
+    expect((w.get('[data-testid="preset-models-url"]').element as HTMLInputElement).value).toBe(
+      'https://s/v1/models',
+    )
+    await w.get('[data-testid="preset-models-fetch"]').trigger('click')
+    await flushPromises()
+    expect(fetchModels).toHaveBeenCalledWith({
+      url: 'https://s/v1/models',
+      presetId: 7,
+      apiKey: undefined,
+    })
+    w.unmount()
+  })
+
+  it('查询成功后改 models URL：旧候选立即失效，不残留（A-05）', async () => {
+    const fetchModels = vi
+      .fn()
+      .mockResolvedValue(ok({ models: ['model-of-A'], url: 'https://a/models', count: 1 }))
+    const { w } = await openEditor({ fetchModels })
+    await w.get('[data-testid="preset-models-url"]').setValue('https://a/models')
+    await w.get('[data-testid="preset-models-fetch"]').trigger('click')
+    await flushPromises()
+    // 旧 URL 的查询结果已显示为候选 chip
+    expect(w.find('[data-testid="preset-model-chip-model-of-A"]').exists()).toBe(true)
+
+    // 改 URL（A→B）：候选来自另一批模型，A 的 chips 不得残留——否则
+    // addAllFetched 会把 A 模型并进现 B 目标的列表（2026-10-04 OCR A-05）
+    await w.get('[data-testid="preset-models-url"]').setValue('https://b/models')
+    await flushPromises()
+    expect(w.find('[data-testid="preset-models-candidates"]').exists()).toBe(false)
+    expect(w.find('[data-testid="preset-model-chip-model-of-A"]').exists()).toBe(false)
+    // 手动输入不受影响（查询只是候选来源）
+    await w.get('[data-testid="preset-models"]').setValue('typed-by-hand')
+    expect((w.get('[data-testid="preset-models"]').element as HTMLTextAreaElement).value).toBe(
+      'typed-by-hand',
+    )
+    w.unmount()
+  })
+
+  it('改基址（baseUrl）同样作废候选（A-05：defaultModelsUrl 派留下来源变了）', async () => {
+    const fetchModels = vi
+      .fn()
+      .mockResolvedValue(ok({ models: ['m1'], url: 'https://u/v1/models', count: 1 }))
+    const { w } = await openEditor({ fetchModels })
+    await w.get('[data-testid="preset-models-url"]').setValue('https://u/v1/models')
+    await w.get('[data-testid="preset-models-fetch"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="preset-model-chip-m1"]').exists()).toBe(true)
+
+    await w.get('[data-testid="preset-baseurl"]').setValue('https://other/v1')
+    await flushPromises()
+    expect(w.find('[data-testid="preset-models-candidates"]').exists()).toBe(false)
     w.unmount()
   })
 })

@@ -19,12 +19,12 @@ import { computed, inject, ref } from 'vue'
 import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 import type { DayStatRow, StatsMetric } from '../types'
 import {
-  axisTicks,
+  axisScale,
+  formatAxisTick,
   formatCost,
   formatDuration,
   formatTokens,
   metricValue,
-  niceMax,
 } from '../utils/format'
 
 // `mode`：total = 单指标面积图；stack = 四段 token 构成堆叠
@@ -77,8 +77,11 @@ const values = computed(() =>
   }),
 )
 
-const max = computed(() => niceMax(Math.max(0, ...values.value)))
-const ticks = computed(() => axisTicks(max.value, 3))
+// 上界与刻度同源（axisScale 一次算出）：网格线画在 y() 的同一把尺子上，
+// 不会出现「刻度顶到画布外」或「网格线与刻度文字对不上」
+const scale = computed(() => axisScale(Math.max(0, ...values.value), 3))
+const max = computed(() => scale.value.top)
+const ticks = computed(() => scale.value.ticks)
 
 function x(i: number): number {
   if (n.value <= 1) return GEO.w / 2
@@ -142,6 +145,14 @@ function fmt(v: number): string {
     default:
       return formatTokens(v)
   }
+}
+
+/** Y 轴刻度标签：走「整数档不带小数」的刻度格式化（数据值仍用 fmt） */
+function axisLabel(v: number): string {
+  if (props.metric === 'cost_total') return formatCost(v)
+  if (props.metric === 'duration_ms') return formatDuration(v)
+  if (props.metric === 'sessions') return String(Math.round(v))
+  return formatAxisTick(v)
 }
 
 // ==================== 交互（hover / focus 共用一条路径） ====================
@@ -237,7 +248,7 @@ const tableMode = ref(false)
 
     <div v-else class="ah-trend-plot">
       <div class="ah-trend-yaxis">
-        <span v-for="tick in ticks" :key="tick" class="ah-trend-ytick ah-mono">{{ fmt(tick) }}</span>
+        <span v-for="tick in ticks" :key="tick" class="ah-trend-ytick ah-mono">{{ axisLabel(tick) }}</span>
       </div>
       <div class="ah-trend-graphic">
         <svg

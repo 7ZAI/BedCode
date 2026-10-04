@@ -17,6 +17,10 @@ const zhCN: MessageSchema = {
   'hub.env.npm': 'npm',
   'hub.env.pnpm': 'pnpm',
   'hub.env.registry': 'npm 源',
+  'hub.env.python': 'Python',
+  'hub.env.arch': '架构',
+  'hub.env.osVersion': '系统版本',
+  'hub.env.shell': 'Shell',
   'hub.env.detect': '重新检测',
   'hub.env.detecting': '检测中…',
   'hub.env.none': '未检测',
@@ -177,6 +181,7 @@ const zhCN: MessageSchema = {
   'hub.pv.style.gemini': 'Gemini',
   'hub.pv.style.custom': '自定义',
   'hub.pv.models': '{n} 个模型',
+  'hub.pv.modelsMissing': '无模型（应用到 pi / opencode 会被拒）',
   'hub.pv.apply': '应用到…',
   'hub.pv.edit': '编辑',
   'hub.pv.delete': '删除',
@@ -203,6 +208,15 @@ const zhCN: MessageSchema = {
   'hub.pv.editor.baseUrl': 'Base URL',
   'hub.pv.editor.apiStyle': 'API 方言',
   'hub.pv.editor.models': '模型列表（每行一个）',
+  'hub.pv.editor.modelsUrl': '模型查询 URL（可选）',
+  'hub.pv.editor.modelsUrlHint':
+    '留空 = 纯手动输入；填了就可一键查询候选（点 chip 或「全部加入」写进上方列表）。不少网关的 /models 不在 Base URL 下，可直接改。',
+  'hub.pv.editor.modelsUrlDerive': '按 Base URL 填',
+  'hub.pv.editor.modelsFetch': '查询模型',
+  'hub.pv.editor.modelsFetching': '查询中…',
+  'hub.pv.editor.modelsFetchFailed': '查询失败：请检查 URL、网络与 key（或该网关不提供模型列表，直接手动输入）',
+  'hub.pv.editor.modelsAddAll': '全部加入（{n}）',
+  'hub.pv.editor.modelsEmpty': '尚未填写模型：不填模型无法应用到 pi / opencode（会得到一个没有模型的供应商）。',
   'hub.pv.editor.nameExists': '同名预设已存在',
   'hub.pv.editor.saveFailed': '保存失败，请稍后重试',
   'hub.pv.editor.save': '保存',
@@ -216,7 +230,11 @@ const zhCN: MessageSchema = {
 
   // ==================== 供应商 · 应用（票据 05） ====================
   'hub.pv.apply.title': '应用「{name}」',
-  'hub.pv.apply.target': '目标 CLI',
+  'hub.pv.apply.back': '返回供应商列表',
+  'hub.pv.apply.note': '将写入 {n} 个 CLI：{targets}',
+  'hub.pv.apply.noteNone': '尚未选择目标 CLI',
+  'hub.pv.apply.target': '目标 CLI（可多选）',
+  'hub.pv.apply.targetHint': '可一次应用到多个 CLI；某个目标失败不影响其他目标写入',
   'hub.pv.apply.targetName': '配置条目名',
   'hub.pv.apply.targetNameHint': '写入 {target} 配置文件中的条目键名',
   'hub.pv.apply.codexUnsupported': 'codex 配置格式待校准，v1 暂不支持',
@@ -233,6 +251,20 @@ const zhCN: MessageSchema = {
   'hub.pv.apply.conflict':
     '检测到 claude 自建桥接（{files}）。写入仅改写 settings.json 的 env 块，不会触碰桥接文件；确认继续？',
   'hub.pv.apply.conflictConfirm': '确认写入（不覆盖桥接）',
+  'hub.pv.apply.noModels': '未写入：预设没有模型',
+  'hub.pv.apply.noModelsHint':
+    '该预设的模型列表为空，写入 {targets} 只会得到一个 0 模型的供应商（应用后看不到任何模型）。请先在预设里查询或手动填写模型。',
+  'hub.pv.apply.reason.bridge': '未写入：检测到 claude 自建桥接，需确认',
+  'hub.pv.apply.reason.writeFailed': '未写入：写入配置文件失败',
+  'hub.pv.apply.reason.dialect': '未写入：codex 只支持 Responses 协议，该方言无对应写法',
+  'hub.pv.apply.reason.envKey': '未写入：环境变量名非法（只允许字母/数字/下划线，且不以数字开头）',
+  'hub.pv.apply.codex.envKey': 'API Key 环境变量名',
+  'hub.pv.apply.codex.envKeyHint':
+    'codex 配置里只写变量名，真值由你的 shell 环境提供（插件不会读写你的环境文件）。需该变量在启动 codex 时已生效。',
+  'hub.pv.apply.codex.switchHint':
+    '会把 codex 当前模型从 {from} 切换为 {to}（codex 无模型清单，一次只能指向一个模型）。',
+  'hub.pv.apply.codex.dialectBlocked': '该预设的 API 方言在 codex 侧无对应写法（codex 只讲 Responses），codex 这一路会被拒。',
+  'hub.pv.apply.partial': '部分目标已写入（{n} 个失败），已保留失败目标供重试',
   'hub.pv.apply.failed': '应用失败，请稍后重试',
   // ==================== 使用统计看板（票据 06 + 改版） ====================
   'hub.st.syncedTag': '增量水位：已解析 {n} 个条目',

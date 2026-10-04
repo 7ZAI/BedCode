@@ -542,3 +542,58 @@ describe('S11 预设编辑器弹窗：头 / 体 / 脚三段 + 纵向字段', () 
     }
   })
 })
+
+describe('S14 节奏热力图：容器是「行堆叠」，不得是格子容器', () => {
+  // 实机 bug（2026-10-04）：`.ah-heat-grid` 也声明了 `30px repeat(24, ...)`，
+  // 而它的直接子元素是 8 个**整行**（表头 + 周一→周日），不是 25 个格子。
+  // CSS Grid 自动布局把 8 项按行填充，25 轨装得下 → 全部塞进第 1 行横排：
+  // 首行拿 30px 固定轨、其余 7 行分 1fr 窄轨，168 个格子实测塌成 **0×0 px**，
+  // 整图只剩 16px 高一条线（Chromium 150 实测数据，见 S14 注释里的数字）。
+  // 契约：列模板只属于 .ah-heat-row；容器是单列纵向堆叠。
+  // DOM 侧前提（容器子元素恒为整行）由 charts.test.ts 的
+  // 「容器子元素恒为 8 个整行」锁住，两侧合起来才覆盖本条。
+
+  it('.ah-heat-grid 是纵向堆叠容器，且不声明任何列模板', () => {
+    const grid = declsOf('.ah-heat-grid')
+    expect(grid.display, '必须是纵向堆叠（列向堆叠会把 8 个整行横排进第 1 行）').toBe('flex')
+    expect(grid['flex-direction']).toBe('column')
+    expect(
+      grid['grid-template-columns'],
+      '容器声明列模板 → 自动布局按行填充，8 个整行被塞进第 1 行，格子塌成 0px',
+    ).toBeUndefined()
+    expect(grid['grid-auto-flow'], 'flex 容器不得再声明 grid-auto-flow').toBeUndefined()
+  })
+
+  it('.ah-heat-grid 不声明 align-items（flex 列向下它是交叉轴=水平，center 会让整行收缩到内容宽）', () => {
+    expect(
+      declsOf('.ah-heat-grid')['align-items'],
+      'flex column 里 align-items 作用于水平方向；center 会让每行缩成内容宽，格子仍为 0px',
+    ).toBeUndefined()
+  })
+
+  it('列模板只在 .ah-heat-row 上（每行独立 grid 才能跨行按列对齐）', () => {
+    const row = declsOf('.ah-heat-row')
+    expect(row.display).toBe('grid')
+    expect(row['grid-template-columns'].replace(/\s+/g, ' ')).toBe(
+      '30px repeat(24, minmax(0, 1fr))',
+    )
+    // 首轨是星期标签列：窄于 30px 会挤断「周一」等中文标签
+    expect(row['grid-template-columns'].startsWith('30px')).toBe(true)
+  })
+
+  it('格子自身尺寸契约：aspect-ratio 保方格 + min-width 允许在窄面板收缩', () => {
+    const cell = declsOf('.ah-heat-cell')
+    expect(cell['aspect-ratio'], '缺 aspect-ratio: 1 → 格子被压成扁条').toBe('1')
+    expect(cell['min-width'], '缺 min-width: 0 → 1fr 轨道在窄面板下溢出').toBe('0')
+  })
+
+  it('整份样式表里只有 .ah-heat-row 一处 25 轨列模板（容器复制即回归）', () => {
+    const twentyFiveTrack = RULES.filter(
+      (r) => (r.decls['grid-template-columns'] ?? '').includes('repeat(24,'),
+    ).map((r) => r.selector)
+    expect(
+      twentyFiveTrack,
+      '25 轨列模板只允许出现在 .ah-heat-row；多出的选择器会把整行当格子排',
+    ).toEqual(['.ah-heat-row'])
+  })
+})

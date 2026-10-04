@@ -193,6 +193,29 @@ export function formatTokens(n: number | null | undefined): string {
   return `${rounded}${units[tier]}`
 }
 
+/**
+ * 坐标轴刻度标签：在 formatTokens 基础上抹掉「整数档上的多余小数」
+ *
+ * formatTokens 对 <10 的缩放值一律带 1 位小数（数据值需要：1.3M 是真信息），
+ * 但刻度是人为选定的整齐档，写成「3.0M / 2.0M / 1.0M」反而像未完成的四舍五入。
+ * 只影响 Y 轴刻度，数据值（悬停读数、表格、tooltip）仍用 formatTokens。
+ *
+ * **亚千刻度（2026-10-04 OCR A-02）**：formatTokens 对 <1000 直接
+ * `String(Math.round(v))`——axisScale 合法产出的 0.6/0.4/0.2 会被取整抹平为
+ * 1/0/0，坐标轴信息全丢。这里对 <1000 的刻度保留小数（仅剥掉整数值的
+ * `.0` 尾巴，保持与整数档一致的「整洁」）。
+ */
+export function formatAxisTick(v: number): string {
+  if (v == null || !Number.isFinite(v)) return '—'
+  if (v === 0) return '0'
+  if (v !== Math.round(v)) {
+    // 亚千刻度（非整数：axisScale 产出 0.6/0.4/0.2 这类）：保留小数，只剥
+    // 整数值的 `.0` 尾巴（1.0 → 1）
+    return String(v).replace(/\.0(?=$)/, '')
+  }
+  return formatTokens(v).replace(/\.0(?=[kMGT]|$)/, '')
+}
+
 /** 毫秒时长缩写：<1s 为 ms；<60s 为 s；<60m 为 min；<24h 为 h（1 位小数）；否则 d */
 export function formatDuration(ms: number | null | undefined): string {
   if (ms == null || !Number.isFinite(ms) || ms < 0) return '—'
@@ -334,24 +357,60 @@ export function formatPercent(ratio: number | null | undefined, digits = 0): str
   return `${(ratio * 100).toFixed(digits)}%`
 }
 
-/**
- * 「好看的」坐标轴上界：1 / 2 / 2.5 / 5 × 10^k 中不小于 max 的最小值
- *
- * 直接用 max 当上界会让最高点顶到画布边缘（无呼吸），用 ceil 到整数则会在
- * 0.3 这种小值上产生巨大空白。数据全 0 时返回 1（避免除零与空路径）。
- */
-export function niceMax(max: number): number {
-  if (!Number.isFinite(max) || max <= 0) return 1
-  const exp = Math.floor(Math.log10(max))
-  const base = 10 ** exp
-  for (const m of [1, 2, 2.5, 5, 10]) {
-    const cand = m * base
-    if (cand >= max - 1e-9) return cand
-  }
-  return 10 * base
+/** 坐标轴刻度档位（「好看的」数字梯队） */
+const NICE_MANTISSAS = [1, 2, 2.5, 5, 10] as const
+
+/** 坐标轴标度：上界与各档刻度，供折线/面积图共用一套缩放 */
+export interface AxisScale {
+  /** 上界（= step × count）：最高点与上界之间保留至少一档的呼吸 */
+  top: number
+  /** 档距（1 / 2 / 2.5 / 5 / 10 × 10^k） */
+  step: number
+  /** 自上而下的刻度（含 top 与 0），长度恒为 count + 1 */
+  ticks: number[]
 }
 
-/** 坐标轴刻度：上界向下取 3–4 档（0% / 50% / 100% 或四等分） */
-export function axisTicks(max: number, count = 3): number[] {
-  return Array.from({ length: count + 1 }, (_, i) => (max * (count - i)) / count)
+/**
+ * 坐标轴标度：档距吸附到「好看的」梯队，上界 = 档距 × 档数
+ *
+ * 为什么不直接用 `max` 再等分：等分会造出 2.5M → [2.5M, 1.7M, 833k, 0] 这类
+ * 读不出来的刻度（833k 既不是 1/2/2.5/5 的任一档，也没法在脑子里心算）。
+ * 先把**档距**吸附到整齐梯队、再乘档数，标签就恒是可读的整数档；代价是上界
+ * 可能略高于 max（数据不顶边，正是期望的呼吸）。数据全 0 / 非法时返回 top=1、
+ * step=1/count（避免除零与空路径）。
+ */
+export function axisScale(max: number, count = 3): AxisScale {
+  if (!Number.isFinite(max) || max <= 0 || count <= 0) {
+    // 兜底：top=1、step=1/n（n≥1，count≤0 时用 1 防除零）。**刻度必须自上而下
+    // 降序**（与正常分支的 `[top,…,0]` 同构）——旧实现 `i === count ? 1 : 0`
+    // 产出升序 [0,0,0,1]，全零/非法数据时 Y 轴上下颠倒（2026-10-04 OCR A-01）；
+    // count≤0 时 `1/count` 是 Infinity，刻度全为 1 重叠。
+    const n = Math.max(count, 1)
+    const step = 1 / n
+    return { top: 1, step, ticks: Array.from({ length: n + 1 }, (_, i) => (i === 0 ? 1 : 0)) }
+  }
+  // 先用「好看的上界」压一档：避免 max 恰在档距边界时多出一整档空白
+  const exp = Math.floor(Math.log10(max))
+  const base = 10 ** exp
+  let niceTop = 10 * base
+  for (const m of NICE_MANTISSAS) {
+    const cand = m * base
+    if (cand >= max - 1e-9) {
+      niceTop = cand
+      break
+    }
+  }
+  const rough = niceTop / count
+  const stepExp = Math.floor(Math.log10(rough))
+  const stepBase = 10 ** stepExp
+  let step = 10 * stepBase
+  for (const m of NICE_MANTISSAS) {
+    const cand = m * stepBase
+    if (cand >= rough - 1e-9) {
+      step = cand
+      break
+    }
+  }
+  const top = step * count
+  return { top, step, ticks: Array.from({ length: count + 1 }, (_, i) => step * (count - i)) }
 }

@@ -336,7 +336,7 @@ fn apply_output(state: &mut Value, kind: &str, output: &str) {
 fn detection_script(kind: &str) -> String {
     if cfg!(windows) {
         if kind == ENV_KIND {
-            "echo == node == & node --version 2>&1 & echo == npm == & npm --version 2>&1 & echo == pnpm == & pnpm --version 2>&1 & echo == registry == & npm config get registry 2>&1".to_string()
+            "echo == node == & node --version 2>&1 & echo == npm == & npm --version 2>&1 & echo == pnpm == & pnpm --version 2>&1 & echo == registry == & npm config get registry 2>&1 & echo == python == & py --version 2>&1 || python --version 2>&1 & echo == arch == & echo %PROCESSOR_ARCHITECTURE% & echo == os_version == & ver 2>&1 & echo == shell == & echo %COMSPEC%".to_string()
         } else {
             format!("echo == paths == & where {kind} 2>nul & echo == version == & {kind} --version 2>&1")
         }
@@ -369,7 +369,7 @@ fn cli_script_unix(kind: &str) -> String {
 /// unix 环境采集：node / npm / pnpm 版本 + 当前 npm registry
 fn env_script_unix() -> String {
     format!(
-        "{}echo '== node =='\nnode --version 2>&1\necho '== npm =='\nnpm --version 2>&1\necho '== pnpm =='\npnpm --version 2>&1\necho '== registry =='\nnpm config get registry 2>&1\n",
+        "{}echo '== node =='\nnode --version 2>&1\necho '== npm =='\nnpm --version 2>&1\necho '== pnpm =='\npnpm --version 2>&1\necho '== registry =='\nnpm config get registry 2>&1\necho '== python =='\npython3 --version 2>&1 || python --version 2>&1\necho '== arch =='\nuname -m\necho '== os_version =='\nuname -sr\necho '== shell =='\necho $SHELL\n",
         path_bootstrap_unix()
     )
 }
@@ -496,13 +496,18 @@ fn classify(kind: &str, paths: &[String]) -> &'static str {
     "unknown"
 }
 
-/// 解析环境输出（分段：== node == / == npm == / == pnpm == / == registry ==）；
-/// 各段取首个非空行，pnpm 未安装的 shell 报错行不算版本
+/// 解析环境输出（分段：== node == / == npm == / == pnpm == / == registry == /
+/// == python == / == arch == / == os_version == / == shell ==）；
+/// 各段取首个非空行，未安装的 shell 报错行不算版本
 pub(crate) fn parse_env(output: &str) -> Value {
     let mut node: Option<String> = None;
     let mut npm: Option<String> = None;
     let mut pnpm: Option<String> = None;
     let mut registry: Option<String> = None;
+    let mut python: Option<String> = None;
+    let mut arch: Option<String> = None;
+    let mut os_version: Option<String> = None;
+    let mut shell: Option<String> = None;
     let mut section = "";
     for line in output.lines() {
         let line = line.trim();
@@ -521,6 +526,22 @@ pub(crate) fn parse_env(output: &str) -> Value {
             }
             "== registry ==" => {
                 section = "registry";
+                continue;
+            }
+            "== python ==" => {
+                section = "python";
+                continue;
+            }
+            "== arch ==" => {
+                section = "arch";
+                continue;
+            }
+            "== os_version ==" => {
+                section = "os_version";
+                continue;
+            }
+            "== shell ==" => {
+                section = "shell";
                 continue;
             }
             _ => {}
@@ -555,10 +576,35 @@ pub(crate) fn parse_env(output: &str) -> Value {
                     registry = Some(line.to_string());
                 }
             }
+            "python" => {
+                // python 未安装：同 pnpm 的报错行过滤逻辑
+                if python.is_none()
+                    && !line.contains("not found")
+                    && !line.contains("not recognized")
+                    && !line.contains("未找到")
+                {
+                    python = Some(line.to_string());
+                }
+            }
+            "arch" => {
+                if arch.is_none() {
+                    arch = Some(line.to_string());
+                }
+            }
+            "os_version" => {
+                if os_version.is_none() {
+                    os_version = Some(line.to_string());
+                }
+            }
+            "shell" => {
+                if shell.is_none() {
+                    shell = Some(line.to_string());
+                }
+            }
             _ => {}
         }
     }
-    json!({ "node": node, "npm": npm, "pnpm": pnpm, "registry": registry })
+    json!({ "node": node, "npm": npm, "pnpm": pnpm, "registry": registry, "python": python, "arch": arch, "osVersion": os_version, "shell": shell })
 }
 
 // ==================== Tests（native 编译下的纯函数单测） ====================
@@ -624,7 +670,7 @@ mod tests {
         assert_eq!(extract_version("some note 42"), None);
     }
 
-    /// 环境解析：pnpm 报错行不算版本；registry 原样透传
+    /// 环境解析：pnpm 报错行不算版本；registry 原样透传；新字段缺段时为 null
     #[test]
     fn parse_env_sections() {
         let out = "== node ==\nv24.20.0\n== npm ==\n12.0.2\n== pnpm ==\n== registry ==\nhttps://registry.npmjs.org/\n";
@@ -632,6 +678,11 @@ mod tests {
         assert_eq!(env["node"], json!("v24.20.0"));
         assert_eq!(env["npm"], json!("12.0.2"));
         assert_eq!(env["registry"], json!("https://registry.npmjs.org/"));
+        assert_eq!(env["pnpm"], json!(null));
+        assert_eq!(env["python"], json!(null));
+        assert_eq!(env["arch"], json!(null));
+        assert_eq!(env["osVersion"], json!(null));
+        assert_eq!(env["shell"], json!(null));
     }
 
     /// pnpm 未安装：报错行被过滤
@@ -666,6 +717,9 @@ mod tests {
         assert_eq!(state["envStatus"], json!("ok"));
         assert_eq!(state["env"]["node"], json!("v24.20.0"));
         assert!(state["env"]["os"].as_str().is_some_and(|s| !s.is_empty()));
+        // 新字段缺段时为 null（不会 panic）
+        assert_eq!(state["env"]["python"], json!(null));
+        assert_eq!(state["env"]["osVersion"], json!(null));
     }
 
     /// Windows 形态：where 反斜杠输出规范化 + 盘符路径识别；npm 全局
@@ -701,6 +755,24 @@ mod tests {
         assert!(cli_script_unix("pi").starts_with(path_bootstrap_unix()));
         assert!(env_script_unix().contains("== registry =="));
         assert!(cli_script_unix("pi").contains("== version =="));
+        // 新增段标记存在
+        assert!(env_script_unix().contains("== python =="));
+        assert!(env_script_unix().contains("== arch =="));
+        assert!(env_script_unix().contains("== os_version =="));
+        assert!(env_script_unix().contains("== shell =="));
+    }
+
+    /// 新增段（python / arch / os_version / shell）全量解析：python 和 pnpm
+    /// 同为可缺失项（报错行过滤），arch/os_version/shell 恒有输出
+    #[test]
+    fn parse_env_new_sections_present() {
+        let out = "== node ==\nv24.20.0\n== npm ==\n12.0.2\n== pnpm ==\n12.2.1\n== registry ==\nhttps://registry.npmjs.org/\n== python ==\nbash: python3: command not found\n== arch ==\naarch64\n== os_version ==\nLinux 6.12.0-rc7+\n== shell ==\n/bin/zsh\n";
+        let env = parse_env(out);
+        // python 未安装：报错行被过滤，值为 null
+        assert_eq!(env["python"], json!(null));
+        assert_eq!(env["arch"], json!("aarch64"));
+        assert_eq!(env["osVersion"], json!("Linux 6.12.0-rc7+"));
+        assert_eq!(env["shell"], json!("/bin/zsh"));
     }
 
     /// Windows cmd：pnpm 未装的报错行（'pnpm' is not recognized）不算版本

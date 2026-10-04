@@ -205,35 +205,11 @@
 
 /* ==================== 页面切换过渡动画 ==================== */
 
-/* 各分区（tab）切换过渡：AgentHubView 用 <Transition mode="out-in"> 包裹，
-   旧分区先淡出、新分区再淡入，避免切换时生硬跳变；
-   时长/位移与宿主路由过渡 .page-*（style.css）保持一致 */
-.ah-page-enter-active {
-  transition:
-    opacity 0.2s ease,
-    transform 0.2s ease;
-}
-.ah-page-leave-active {
-  transition:
-    opacity 0.15s ease,
-    transform 0.15s ease;
-}
-.ah-page-enter-from {
-  opacity: 0;
-  transform: translateY(8px);
-}
-.ah-page-leave-to {
-  opacity: 0;
-  transform: translateY(-4px);
-}
-
-/* 本处显式过渡类优先级高于文件顶部减弱动态兜底，需单独覆盖回瞬时 */
-@media (prefers-reduced-motion: reduce) {
-  .ah-page-enter-active,
-  .ah-page-leave-active {
-    transition-duration: 0.01ms !important;
-  }
-}
+/* 各分区（tab）切换过渡已收归宿主页面过渡体系（src/style.css 的 .page-* /
+   .page-swap）：名字恒为 `page`，时长、缓动、位移幅度走 --motion-page-* token，
+   效果变体由 <html data-page-fx> 选（全端唯一切换点 = 宿主
+   src/utils/pageTransition.ts 的 PAGE_TRANSITION_EFFECT）。
+   本文件不再自带 .ah-page-* —— 同一份页面过渡散落多处必然漂移。 */
 
 /* ==================== 通用元件 ==================== */
 
@@ -1260,13 +1236,135 @@
   min-width: 0;
 }
 
-/* 应用面板（ProviderApply）动作行：内置页里“写入配置”主操作的落位，
-   弹窗编辑器的动作行已改用 .ah-modal-foot */
+/* ==================== 「应用到」二级页（ProviderApply） ====================
+   本页整个替换供应商列表视图，是「列表 → 二级页」而非弹窗，故页头自带返回入口与
+   预设速览；表单体与动作条分行，字段提示紧贴各自控件。 */
+
+/* 页卡本身：纵向排布，头 / 提示 / 表单体 / 动作条四段。
+   --ah-pv-apply-measure 是本页的内容列宽（可读行长）：表单体与动作条共用，
+   分隔线不会比表单宽出一截。 */
+.ah-pv-apply {
+  display: flex;
+  flex-direction: column;
+  --ah-pv-apply-measure: 760px;
+}
+
+/* 页头：返回入口 + 标题 + 预设速览；下边线把「页头」与「表单」物理分开 */
+.ah-pv-apply-head {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding-bottom: 12px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* 返回入口：文字按钮（不是角上的 ✕——本页是二级页，出口叫“返回”不叫“关闭”） */
+.ah-pv-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: var(--font-size-tag);
+  color: var(--ah-text-data);
+  transition: color 0.2s;
+}
+
+.ah-pv-back:hover {
+  color: var(--text-primary);
+}
+
+.ah-pv-back:focus-visible {
+  outline: 2px solid var(--text-primary);
+  outline-offset: 2px;
+}
+
+.ah-pv-back-ic {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+/* 预设速览：列表行里的决策依据（方言 / Base URL / 模型数 / key 掩码）在二级页补回 */
+.ah-pv-apply-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  min-width: 0;
+}
+
+.ah-pv-apply-meta-item {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ah-text-data);
+  font-size: var(--font-size-tag);
+}
+
+/* 表单体：字段之间给足呼吸，控件不撑满整卡（可读行长 + 输入框不过宽） */
+.ah-pv-apply-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.ah-pv-apply-body,
+.ah-pv-apply-actions {
+  max-width: var(--ah-pv-apply-measure);
+}
+
+/* 应用面板动作行：与表单体分离的收口行（上边线 + 右侧主按钮 + 左侧写入回显） */
 .ah-pv-apply-actions {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+/* 动作行左侧「将要写入什么」：可换行也不把主按钮挤出视野 */
+.ah-pv-apply-note {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* 应用面板逐目标结局：多目标应用时每行一个目标徽章 + 结果文案 */
+.ah-pv-results {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ah-pv-result-row {
+  display: flex;
+  align-items: center;
   gap: 8px;
-  margin-top: 2px;
+  min-width: 0;
+}
+
+.ah-pv-result-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* 模型查询候选 chip 区：网关可能返回上百个模型，限高内滚（不是横向滚动条）
+   ——横向滚动会让“这一屏有哪些模型”变成看不见的事实 */
+.ah-pv-modelchips {
+  display: flex;
+  max-height: 132px;
+  overflow-y: auto;
+  align-content: flex-start;
+  padding: 2px;
 }
 
 /* ==================== 弹窗（Teleport 到 body，遮罩 + 居中面板） ==================== */
@@ -1672,14 +1770,19 @@
   margin-top: 4px;
 }
 
-/* grid-template-columns 在各行重复声明（每行一个独立 grid 才能按列对齐） */
+/* 容器是「行堆叠」，不是「格子容器」：它的直接子元素是 8 个**整行**（表头 +
+   周一→周日），而不是 25 个格子。列模板只能落在 .ah-heat-row 上。
+   回归成因（实机，Chromium 150 实测）：容器也曾声明同一份列模板，CSS Grid
+   自动布局把 8 个整行按行填充 —— 25 轨装得下 8 项，于是全部塞进第 1 行横排，
+   每行被压进 1fr 窄轨（首行 30px / 其余 20px），168 个格子实测塌成 0×0 px，
+   整图只剩 16px 高一条线。故这里用纵向 flex 堆叠，横向交给默认 stretch。 */
 .ah-heat-grid {
-  display: grid;
-  grid-template-columns: 30px repeat(24, minmax(0, 1fr));
+  display: flex;
+  flex-direction: column;
   gap: 2px;
-  align-items: center;
 }
 
+/* 列模板在每一行重复声明：每行独立成 grid 才能跨行按列对齐 */
 .ah-heat-row {
   display: grid;
   grid-template-columns: 30px repeat(24, minmax(0, 1fr));

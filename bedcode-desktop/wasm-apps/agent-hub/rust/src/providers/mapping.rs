@@ -30,6 +30,20 @@ pub(crate) fn map_pi_api(api: &str) -> &'static str {
     }
 }
 
+/// pi `api` 是否属 openai 家族（completions / responses 两种方言）
+///
+/// 用途：应用时**不把用户目标配置里已有的 openai 方言降级**——预设只表达
+/// 「openai 家族」这一层（见 [`crate::providers::merge`]），具体方言由目标
+/// CLI 既有配置说了算，否则「重新应用一次」就会把 responses 端点改坏。
+pub(crate) fn is_openai_family_api(api: &str) -> bool {
+    matches!(api, "openai-completions" | "openai-responses")
+}
+
+/// opencode `npm` 是否属 openai 家族（compatible / openai 两种包）
+pub(crate) fn is_openai_family_npm(npm: &str) -> bool {
+    matches!(npm, "@ai-sdk/openai-compatible" | "@ai-sdk/openai")
+}
+
 /// pi apiStyle → models.json `api` 字段（custom 回落 openai-completions）
 pub(crate) fn pi_api_of(style: &str) -> &'static str {
     match style {
@@ -100,5 +114,20 @@ mod tests {
         assert_eq!(map_opencode_npm("@ai-sdk/azure"), "custom");
         assert_eq!(opencode_npm_of("anthropic"), "@ai-sdk/anthropic");
         assert_eq!(opencode_npm_of("custom"), "@ai-sdk/openai-compatible");
+    }
+
+    /// 家族判定：只有 openai 家族互认，跨家族（responses ↔ anthropic）不认
+    #[test]
+    fn openai_family_membership() {
+        assert!(is_openai_family_api("openai-completions"));
+        assert!(is_openai_family_api("openai-responses"));
+        assert!(!is_openai_family_api("anthropic-messages"));
+        assert!(!is_openai_family_api("google-generative-ai"));
+        assert!(!is_openai_family_api(""));
+
+        assert!(is_openai_family_npm("@ai-sdk/openai-compatible"));
+        assert!(is_openai_family_npm("@ai-sdk/openai"));
+        assert!(!is_openai_family_npm("@ai-sdk/anthropic"));
+        assert!(!is_openai_family_npm("@ai-sdk/azure"));
     }
 }

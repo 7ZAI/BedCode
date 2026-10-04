@@ -9,10 +9,12 @@
 //! - [`paths`]：CLI 配置文件路径（家目录相对段）
 //! - [`jsonc`]：JSONC 解析 + 文本级 splice（纯函数）
 //! - [`mapping`]：key 掩码与方言映射（纯函数）
+//! - [`codex`]：codex 目标（TOML splice + 只读视图）
+//! - [`discover`]：模型列表查询（可选 URL + 手动输入互补）
 //! - [`import`]：反向导入提取（PresetDraft / presets_from_* / plan_inserts）
 //! - [`merge`]：应用条目构造（合并既有 + 覆盖受控字段）
 //! - [`store`]：provider_preset 表 + 域状态（导入/应用结果）
-//! - [`apply`]：应用到目标 CLI（key 四选一 + claude 桥接冲突）
+//! - [`apply`]：应用到目标 CLI（多目标 + key 四选一 + claude 桥接冲突）
 //! - 本模块：命令入口（预设 CRUD / 反向导入 / get_state）
 
 /// host-storage 键：供应商域导入/应用结果（不含 presets——presets 真源在插件库）
@@ -25,6 +27,8 @@ const MODELS_MAX: usize = 256;
 /// api 方言白名单（与前端 ApiStyle 同构）
 const API_STYLES: [&str; 4] = ["openai", "anthropic", "gemini", "custom"];
 mod apply;
+mod codex;
+mod discover;
 mod import;
 mod jsonc;
 mod mapping;
@@ -34,10 +38,12 @@ mod store;
 
 /// 命令入口面（lib.rs 路由）
 pub(crate) use apply::apply_provider;
+pub(crate) use discover::fetch_models;
 pub(crate) use store::ensure_schema;
 
 use super::HOME;
 use crate::install::now_ms;
+use crate::providers::discover::validate_models_url;
 use crate::providers::import::{plan_inserts, presets_from_opencode, presets_from_pi, PresetDraft};
 use crate::providers::jsonc::parse_jsonc;
 use crate::providers::paths::{opencode_cfg_path, pi_auth_path, pi_models_path};
@@ -52,7 +58,17 @@ use serde_json::{json, Value};
 
 // ==================== 命令：预设 CRUD ====================
 
-fn validate_preset_payload(args: &Value) -> Result<(String, String, String, Vec<String>), String> {
+/// 预设入参（校验后）
+struct PresetInput {
+    name: String,
+    base_url: String,
+    api_style: String,
+    models: Vec<String>,
+    /// 模型查询 URL（可空；非空时必须是 http(s)）
+    models_url: String,
+}
+
+fn validate_preset_payload(args: &Value) -> Result<PresetInput, String> {
     let name = args
         .get("name")
         .and_then(|v| v.as_str())
@@ -87,7 +103,20 @@ fn validate_preset_payload(args: &Value) -> Result<(String, String, String, Vec<
     if models.len() > MODELS_MAX {
         return Err("too many models".to_string());
     }
-    Ok((name, base_url, api_style, models))
+    // 模型查询 URL 可留空（手动输入模型列表）；非空则校验 scheme
+    let models_url = match args.get("modelsUrl").and_then(|v| v.as_str()) {
+        Some(u) if !u.trim().is_empty() => validate_models_url(u)
+            .map_err(|e| format!("modelsUrl: {e}"))?
+            .to_string(),
+        _ => String::new(),
+    };
+    Ok(PresetInput {
+        name,
+        base_url,
+        api_style,
+        models,
+        models_url,
+    })
 }
 
 /// 新建/更新预设（id 缺省 = 新建）。同名冲突返回 `nameExists`（前端提示）。
@@ -95,8 +124,14 @@ fn validate_preset_payload(args: &Value) -> Result<(String, String, String, Vec<
 /// 非空 = 设置新 key。key 明文只进库（掩码函数是 UI 交界面），日志只记长度
 pub(crate) fn save_preset(h: &WasmHost, args: &Value) -> anyhow::Result<Value> {
     ensure_schema(h)?;
-    let (name, base_url, api_style, models) =
-        validate_preset_payload(args).map_err(|e| anyhow::anyhow!("save-preset: {e}"))?;
+    let input = validate_preset_payload(args).map_err(|e| anyhow::anyhow!("save-preset: {e}"))?;
+    let PresetInput {
+        name,
+        base_url,
+        api_style,
+        models,
+        models_url,
+    } = input;
     let models_json = serde_json::to_string(&models).unwrap_or_else(|_| "[]".to_string());
     let now = now_ms(h).unwrap_or(0);
     let id = args.get("id").and_then(|v| v.as_i64());
@@ -122,8 +157,17 @@ pub(crate) fn save_preset(h: &WasmHost, args: &Value) -> anyhow::Result<Value> {
         };
         h.plugin_db_execute_params(
             "UPDATE provider_preset SET name = ?1, base_url = ?2, api_style = ?3, \
-             models_json = ?4, api_key = ?5, updated_at = ?6 WHERE id = ?7",
-            &sql_params![name, base_url, api_style, models_json, next_key, now, id],
+             models_json = ?4, models_url = ?5, api_key = ?6, updated_at = ?7 WHERE id = ?8",
+            &sql_params![
+                name,
+                base_url,
+                api_style,
+                models_json,
+                models_url,
+                next_key,
+                now,
+                id
+            ],
         )
         .map_err(|e| anyhow::anyhow!("save-preset: update failed: {e}"))?;
     } else {
@@ -132,9 +176,17 @@ pub(crate) fn save_preset(h: &WasmHost, args: &Value) -> anyhow::Result<Value> {
         }
         let key0 = api_key.clone().unwrap_or_default();
         h.plugin_db_execute_params(
-            "INSERT INTO provider_preset (name, base_url, api_style, models_json, api_key, notes, \
-             created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?6)",
-            &sql_params![name, base_url, api_style, models_json, key0, now],
+            "INSERT INTO provider_preset (name, base_url, api_style, models_json, models_url, \
+             api_key, notes, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7, ?7)",
+            &sql_params![
+                name,
+                base_url,
+                api_style,
+                models_json,
+                models_url,
+                key0,
+                now
+            ],
         )
         .map_err(|e| anyhow::anyhow!("save-preset: insert failed: {e}"))?;
     }

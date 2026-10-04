@@ -30,6 +30,10 @@ export type MessageSchema = {
   'hub.env.npm': string
   'hub.env.pnpm': string
   'hub.env.registry': string
+  'hub.env.python': string
+  'hub.env.arch': string
+  'hub.env.osVersion': string
+  'hub.env.shell': string
   'hub.env.detect': string
   'hub.env.detecting': string
   'hub.env.none': string
@@ -193,6 +197,7 @@ export type MessageSchema = {
   'hub.pv.style.gemini': string
   'hub.pv.style.custom': string
   'hub.pv.models': string
+  'hub.pv.modelsMissing': string
   'hub.pv.apply': string
   'hub.pv.edit': string
   'hub.pv.delete': string
@@ -218,6 +223,14 @@ export type MessageSchema = {
   'hub.pv.editor.baseUrl': string
   'hub.pv.editor.apiStyle': string
   'hub.pv.editor.models': string
+  'hub.pv.editor.modelsUrl': string
+  'hub.pv.editor.modelsUrlHint': string
+  'hub.pv.editor.modelsUrlDerive': string
+  'hub.pv.editor.modelsFetch': string
+  'hub.pv.editor.modelsFetching': string
+  'hub.pv.editor.modelsFetchFailed': string
+  'hub.pv.editor.modelsAddAll': string
+  'hub.pv.editor.modelsEmpty': string
   'hub.pv.editor.nameExists': string
   'hub.pv.editor.saveFailed': string
   'hub.pv.editor.save': string
@@ -231,7 +244,11 @@ export type MessageSchema = {
 
   // ==================== 供应商 · 应用（票据 05） ====================
   'hub.pv.apply.title': string
+  'hub.pv.apply.back': string
+  'hub.pv.apply.note': string
+  'hub.pv.apply.noteNone': string
   'hub.pv.apply.target': string
+  'hub.pv.apply.targetHint': string
   'hub.pv.apply.targetName': string
   'hub.pv.apply.targetNameHint': string
   'hub.pv.apply.codexUnsupported': string
@@ -247,6 +264,17 @@ export type MessageSchema = {
   'hub.pv.apply.restartHint': string
   'hub.pv.apply.conflict': string
   'hub.pv.apply.conflictConfirm': string
+  'hub.pv.apply.noModels': string
+  'hub.pv.apply.noModelsHint': string
+  'hub.pv.apply.reason.bridge': string
+  'hub.pv.apply.reason.writeFailed': string
+  'hub.pv.apply.reason.dialect': string
+  'hub.pv.apply.reason.envKey': string
+  'hub.pv.apply.codex.envKey': string
+  'hub.pv.apply.codex.envKeyHint': string
+  'hub.pv.apply.codex.switchHint': string
+  'hub.pv.apply.codex.dialectBlocked': string
+  'hub.pv.apply.partial': string
   'hub.pv.apply.failed': string
   // ==================== 使用统计看板（票据 06 + 改版） ====================
   'hub.st.syncedTag': string
