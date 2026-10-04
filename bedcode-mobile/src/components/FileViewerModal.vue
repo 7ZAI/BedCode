@@ -1,7 +1,7 @@
 <template>
   <Teleport to="body">
     <transition name="center-modal">
-      <div v-if="visible" class="viewer-overlay mobile-ui" @click.self="handleClose" @touchstart.stop @touchmove.stop>
+      <div v-if="visible" class="viewer-overlay mobile-ui" :class="{ 'viewer-overlay-fullscreen': isFullscreen }" @click.self="handleClose" @touchstart.stop @touchmove.stop>
         <div class="viewer-modal modal-panel" :class="{ 'viewer-fullscreen': isFullscreen }" :style="modalStyle">
         <!-- Header -->
         <div class="viewer-header">
@@ -162,6 +162,16 @@ const codeStyle = computed(() => ({
   '--code-gutter-width': gutterWidth.value,
 }))
 
+/**
+ * 全屏态的遮罩层不再留外边距：弹窗改为真·全屏（0,0 → 100vw×100vh），
+ * 安全区改为**弹窗内部**的 padding（modalStyle）。
+ *
+ * 为什么必须这样（旧实现会入侵状态栏）：遮罩的 `padding: 1rem` 让全屏弹窗上边
+ * 停在 16px，而状态栏高度是 safeArea.top（本机 40px）——弹窗顶边落在状态栏带内，
+ * 顶部 24px 压着状态栏图标区，看上去就是“弹窗钻进状态栏”。若改成“弹窗整体缩在
+ * 安全区内”，又会在状态栏下方留一道遮罩色差缝，同样不像全屏。故取全屏铺满 +
+ * 内容避让安全区（与 TerminalView / CodeExplorerView 的全屏页同一口径）。
+ */
 const modalStyle = computed(() => {
   if (isFullscreen.value) {
     return {
@@ -224,6 +234,11 @@ watch(
   padding: 1rem;
 }
 
+/* 全屏态：遮罩铺满视口，安全区收进弹窗内部 padding（见 modalStyle 注释） */
+.viewer-overlay-fullscreen {
+  padding: 0;
+}
+
 .viewer-modal {
   background: var(--mobile-bg-secondary);
   border-radius: 1rem;
@@ -241,6 +256,8 @@ watch(
   height: 100%;
   max-width: none;
   border-radius: 0;
+  /* 内部 padding（安全区）计入高度，否则 100% + padding 会撑出视口底部 */
+  box-sizing: border-box;
 }
 
 .viewer-header {
