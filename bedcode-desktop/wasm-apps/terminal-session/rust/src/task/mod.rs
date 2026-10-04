@@ -31,6 +31,7 @@
 //! 边界、禁止跨域持锁；定时器回调按命令名分域计数失败，失败只降级本域。
 
 pub mod agent;
+pub mod config_queue;
 pub mod hooks;
 pub mod preset;
 pub mod queue;
@@ -179,6 +180,7 @@ pub fn ensure_schema_via_host(host: &WasmHost) -> Result<(), String> {
         ("task_session_mapping", SESSION_MAPPING_SCHEMA),
         ("task_session_settings", SESSION_SETTINGS_SCHEMA),
         ("task_queue", queue::TASK_QUEUE_SCHEMA),
+        ("task_config_queues", config_queue::CONFIG_QUEUE_SCHEMA),
         ("task_preset", preset::PRESET_TASKS_SCHEMA),
         ("task_scheduled", SCHEDULED_JOBS_SCHEMA),
     ] {
@@ -204,6 +206,13 @@ pub const DOMAIN_QUEUE_DELAY_CLEAR: &str = "queue-delay-clear";
 
 /// tick 分发表里的静默超时域步骤名
 pub const DOMAIN_QUEUE_SILENCE: &str = "queue-silence-check";
+
+/// tick 分发表里的重试停滞收敛域步骤名
+///
+/// 与 [`DOMAIN_QUEUE_SILENCE`] 分开而非合并：两者判据不同（12h 守「合法长任务
+/// 不许误杀」/ 20min 守「过渡态必须有界」）、收敛后的动作也不同（本域收敛后要续跑
+/// 队列）。独立成域才能在 tick 报告里分开归因（某个域失败只降级该域，D7）。
+pub const DOMAIN_QUEUE_RETRYING: &str = "queue-retrying-check";
 
 /// tick 分发表里的定时任务域步骤名（票 16）
 ///
@@ -257,9 +266,11 @@ pub fn run_tick_domains(
 
 /// 任务域 tick：宿主定时器到点调用
 ///
-/// 三个域依次独立执行（票 15 两域 + 票 16 定时任务域）：
+/// 四个域依次独立执行（票 15 两域 + 票 16 定时任务域 + 重试停滞收敛域）：
 /// - [`DOMAIN_QUEUE_DELAY_CLEAR`]：waiting 态项登记的延迟 clear 到点下发
 /// - [`DOMAIN_QUEUE_SILENCE`]：executing 态静默超时 → 复用会话结束兜底收敛
+/// - [`DOMAIN_QUEUE_RETRYING`]：retrying 过渡态静默超时 → 收敛并续跑队列
+///   （见 [`queue::check_retrying_silence`]）
 /// - [`DOMAIN_SCHEDULED_TRIGGER`]：定时任务宽限兑底 / 错过判定 / 到期触发 /
 ///   定时会话首轮下发兜底（见 [`scheduled::handle_scheduler_tick`]）
 ///
@@ -284,6 +295,13 @@ pub fn tick_via_host(host: &WasmHost, now_utc: &str) -> serde_json::Value {
             }),
         ),
         (
+            DOMAIN_QUEUE_RETRYING,
+            Box::new({
+                let now = now.clone();
+                move || queue::check_retrying_silence(&host, &now)
+            }),
+        ),
+        (
             DOMAIN_SCHEDULED_TRIGGER,
             Box::new(move || scheduled::handle_scheduler_tick(&host, &now)),
         ),
@@ -301,6 +319,52 @@ pub fn tick_via_host(host: &WasmHost, now_utc: &str) -> serde_json::Value {
 }
 
 // ==================== Tests ====================
+
+/// 启动恢复：activate 必须同时跑两个域的恢复（任务行/队列项 + 定时任务 creating）
+///
+/// 宿主重启时会话与 agent 进程一起消失，两处遗留各需一条恢复：任务域的
+/// `in_progress` / `asking` / `retrying` 行与未终结队列项（否则队列被
+/// `has_active_task` 恒真堵死），定时域的 `creating` 任务（否则 Created 事件永不到达）。
+/// 任缺一条都不会编译报错、不会让测试变红，只在真实重启后留下悬挂项——故以结构锁
+/// 钉住 activate 的调用面（native 无法跑 activate：无宿主 import）。
+#[test]
+fn activate_runs_both_restart_recoveries() {
+    let src = include_str!("../lib.rs");
+    let body = src
+        .split("fn activate() -> anyhow::Result<()> {")
+        .nth(1)
+        .expect("activate body must exist")
+        .split("#[cfg(test)]")
+        .next()
+        .unwrap();
+    assert!(
+        body.contains("state::recover_running_tasks_on_restart("),
+        "activate 缺任务域启动恢复：上一进程遗留的运行中/重试中任务行与在途队列项会永久悬挂"
+    );
+    assert!(
+        body.contains("scheduled::recover_creating_jobs("),
+        "activate 缺定时域启动恢复：creating 态定时任务会永久等待永不到达的 Created 事件"
+    );
+    // 顺序：建表先于恢复（表不在就无从更新），会话表清空先于任务域恢复
+    //（口径是「会话不在登记域才收敛」）
+    let schema_at = body
+        .find("task::ensure_schema_via_host(")
+        .expect("task schema init must be called at activate");
+    let recovery_at = body
+        .find("state::recover_running_tasks_on_restart(")
+        .expect("task recovery must be called at activate");
+    assert!(
+        schema_at < recovery_at,
+        "任务域建表必须早于启动恢复（表不存在时恢复无从执行）"
+    );
+    let session_init_at = body
+        .find("session::ensure_schema_via_host()")
+        .expect("session schema init must be called at activate");
+    assert!(
+        session_init_at < recovery_at,
+        "会话表清空必须早于任务域启动恢复（恢复口径是「会话不在登记域才收敛」）"
+    );
+}
 
 #[cfg(test)]
 mod tests {
@@ -605,13 +669,14 @@ mod tests {
         }
     }
 
-    /// tick 分发表覆盖三个域（票 15 两域 + 票 16 定时域），且定时域不重复注册
+    /// tick 分发表覆盖四个域（票 15 两域 + 票 16 定时域 + 重试停滞收敛域），且定时域不重复注册
     #[test]
     fn tick_domains_cover_queue_and_scheduled_without_duplicates() {
         let ran = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
         let steps: Vec<(&'static str, Box<dyn FnOnce() -> Result<(), String>>)> = [
             DOMAIN_QUEUE_DELAY_CLEAR,
             DOMAIN_QUEUE_SILENCE,
+            DOMAIN_QUEUE_RETRYING,
             DOMAIN_SCHEDULED_TRIGGER,
         ]
         .into_iter()
@@ -633,12 +698,49 @@ mod tests {
             vec![
                 DOMAIN_QUEUE_DELAY_CLEAR.to_string(),
                 DOMAIN_QUEUE_SILENCE.to_string(),
+                DOMAIN_QUEUE_RETRYING.to_string(),
                 DOMAIN_SCHEDULED_TRIGGER.to_string(),
             ],
-            "一轮 tick 三域各执行一次"
+            "一轮 tick 四域各执行一次"
         );
-        assert_eq!(report.executed.len(), 3);
+        assert_eq!(report.executed.len(), 4);
         assert!(report.failed.is_empty());
+    }
+
+    /// tick 实际接线：`tick_via_host` 真的注册了四个域（而非只有常量）
+    ///
+    /// 上一条锁的是分发表自身的执行语义；本条锁的是**接线**——新增的
+    /// `DOMAIN_QUEUE_RETRYING` 若忘了写进 `tick_via_host`，宿主定时器永远不会调它，
+    /// 看门狗形同不存在而测试全绿。
+    #[test]
+    fn tick_via_host_wires_every_domain_step() {
+        let tick_src = include_str!("mod.rs");
+        let body = tick_src
+            .split("pub fn tick_via_host")
+            .nth(1)
+            .expect("tick_via_host must exist")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("tick body must precede the test module");
+        // 钉的是**标识符**（body 里注册的是常量名，不是常量值——常量值只出现在
+        // 定义处，用值去搜会恒false）
+        for identifier in [
+            "DOMAIN_QUEUE_DELAY_CLEAR",
+            "DOMAIN_QUEUE_SILENCE",
+            "DOMAIN_QUEUE_RETRYING",
+            "DOMAIN_SCHEDULED_TRIGGER",
+        ] {
+            assert!(
+                body.contains(identifier),
+                "tick_via_host 未接线域 {identifier}（常量存在但没注册 = 定时器永不调用）"
+            );
+        }
+        // 反向：分发表里不得出现未登记的域步骤（新增域时漏加常量 / 漏改分发表）
+        assert_eq!(
+            body.matches("Box::new(").count(),
+            4,
+            "tick_via_host 的步骤数与已登记域数不符（新增域时两处必须同步）"
+        );
     }
 
     /// 票 17（原票 16 的「双轨对照」用例退役）：四类广播的触发点数钉死
@@ -808,6 +910,56 @@ mod tests {
         assert!(
             !pi.contains("|50[234]|"),
             "50[234] 是 5\\d\\d 的子集，不该以备选分支形式存在（避免重复分支掩盖遗漏）"
+        );
+    }
+
+    /// 限额/额度类错误的**非重试守卫**：pi 与 opencode 两侧都不得再推 retrying
+    ///
+    /// 这类载荷（`429 {"code":"insufficient_quota"}`）同时命中可重试表的 `\b429\b`
+    /// 与内核的非重试表——而 agent 内核**先查非重试表并直接放弃重试**（run 立即收敛、
+    /// 随后 agent_settled 推终态）。宿主侧只查可重试表就会把一个「没有重试在进行」
+    /// 的任务标成「重试中」，等一个永远不会到来的重试成功事件：2026-10-03 现场该行
+    /// 卡了逾 8 小时，其后队列第二项永不下发。
+    ///
+    /// 锁的是守卫的**存在与调用**（顺序语义由脚本内注释承担）：
+    /// ① 两侧都有 `NON_RETRYABLE_LIMIT_PATTERN`；② 判定入口确实先查它；
+    /// ③ 该守卫后面挂的是「不推 retrying」而不是「推 interrupted」——终态只能由
+    /// agent 自己的收敛事件给，适配器抢推终态会与之分叉。
+    #[test]
+    fn hook_adapters_reject_quota_errors_before_marking_retrying() {
+        let pi = include_str!("../../../scripts/pi_task_hook.ts");
+        let opencode = include_str!("../../../scripts/opencode_task_hook.ts");
+
+        for (file, content) in [("pi", pi), ("opencode", opencode)] {
+            assert!(
+                content.contains("NON_RETRYABLE_LIMIT_PATTERN"),
+                "{file} 缺少限额/额度类非重试守卫（insufficient_quota 之类会被误推 retrying）"
+            );
+            assert!(
+                content.contains("if (NON_RETRYABLE_LIMIT_PATTERN.test("),
+                "{file} 的守卫必须真的接在判定链上（声明了常量却没调用 = 形同虚设）"
+            );
+            assert!(
+                content.contains("insufficient_quota"),
+                "{file} 的守卫表必须含现场命中的 insufficient_quota 载荷码"
+            );
+        }
+
+        // pi：agent_end 的 retrying 分支必须经守卫后的判定函数，且守卫返回 false
+        // 时不推 retrying（保持当前状态，终态交给 agent_settled）
+        assert!(
+            pi.contains("isRetryableErrorMessage(lastRunFailure.errorMessage)"),
+            "pi 的 retrying 分支必须走带非重试守卫的判定（直接用可重试表会误标限额错误）"
+        );
+        assert!(
+            !pi.contains("isRetryableErrorMessage(lastRunFailure.errorMessage)) { void push('interrupted'"),
+            "pi 不得在 agent_end 抢推终态（终态只由 agent_settled 判定，双推会与它分叉）"
+        );
+
+        // opencode：session.error 的 retrying 分支必须经带守卫的 isRetryableError
+        assert!(
+            opencode.contains("} else if (isRetryableError(error)) {"),
+            "opencode 的 retrying 分支必须由带非重试守卫的判定函数守卫"
         );
     }
 }

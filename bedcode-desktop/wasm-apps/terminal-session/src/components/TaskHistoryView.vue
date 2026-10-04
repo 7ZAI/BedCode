@@ -96,6 +96,17 @@ interface RunningSession {
   auto_answer: boolean
 }
 
+/** 任务队列（后端 config-queues-list 返回：按配置分组的未绑定会话批次） */
+interface ConfigQueue {
+  id: string
+  config_id: string
+  name: string
+  workingDir: string
+  auto_mode: boolean
+  tasks: QueueItem[]
+  created_at: string
+}
+
 /** 预设任务（无会话/未选会话时创建，一次性消耗） */
 interface PresetItem {
   id: string
@@ -123,6 +134,16 @@ const createError = ref('')
 // Tab1 预设任务（无会话/未选会话时创建，加入队列后自动移除）
 const presets = ref<PresetItem[]>([])
 const presetError = ref('')
+// Tab1 任务队列（按配置分组的未绑定会话批次）+ 预设「目标任务队列」选择
+const configQueues = ref<ConfigQueue[]>([])
+const configQueueError = ref('')
+const presetQueueId = ref('')
+// 启动中的队列 id（按钮 loading + 防重复点击）
+const startingQueueId = ref('')
+// 任务行内编辑（任务队列 / 执行任务区共用；scope = 队列 id 或会话 id，占位键同语义）
+const editingTaskScope = ref('')
+const editingTaskId = ref('')
+const editingTaskText = ref('')
 
 // Tab2 任务记录
 const tasks = ref<TaskRecord[]>([])
@@ -338,13 +359,40 @@ function sessionLabel(s: RunningSession): string {
   return s.agent && s.agent !== 'unknown' ? `${base} · ${s.agent}` : base
 }
 
-// 会话下拉选项：预存选项永远存在且为默认（''），其后为运行中的会话（仅适配 agent）
+// 「创建新的 {配置} 会话」选项值前缀：该值不是真实 session_id，创建任务时按配置新建会话
+const NEW_SESSION_CONFIG_PREFIX = 'new:'
+
+// 会话下拉选项：预存选项永远存在且为默认（''），其后为运行中的会话（仅适配 agent），
+// 最后为「创建新的 {配置} 会话」（每个适配配置一项，选中后提交时新建会话并入队）
 const adaptedRunningSessions = computed(() => runningSessions.value.filter((s) => s.is_supported))
 
 const sessionOptions = computed(() => [
   { value: '', label: t('task.saveAsPresetOption') },
   ...adaptedRunningSessions.value.map((s) => ({ value: s.session_id, label: sessionLabel(s) })),
+  ...configs.value.map((c) => ({
+    value: `${NEW_SESSION_CONFIG_PREFIX}${c.id}`,
+    label: t('task.createNewSessionOption', { name: configLabel(c) }),
+  })),
 ])
+
+// 当前选择是否「创建新的 {配置} 会话」（尚未落真实 session_id，提交时才建会话）
+const creatingNewSession = computed(() =>
+  createSessionId.value.startsWith(NEW_SESSION_CONFIG_PREFIX),
+)
+
+// 任务队列标签：配置名（空则工作目录基名，再兜底配置 id）
+function queueLabel(q: ConfigQueue): string {
+  const base = baseName(q.workingDir)
+  return q.name || base || q.config_id
+}
+
+// 预设「目标任务队列」选项（ready 队列，按创建顺序）
+const presetQueueOptions = computed(() =>
+  configQueues.value.map((q) => ({
+    value: q.id,
+    label: t('task.createNewSessionOption', { name: queueLabel(q) }),
+  })),
+)
 
 async function loadRunningSessions(opts: { silent?: boolean } = {}) {
   // silent：点击下拉触发的刷新不置 loading —— 置 loading 会禁用 select，
@@ -391,6 +439,7 @@ async function loadRunningSessions(opts: { silent?: boolean } = {}) {
       createSessionId.value = preferred?.session_id ?? ''
     } else if (
       createSessionId.value &&
+      !creatingNewSession.value &&
       !sessions.some((s) => s.session_id === createSessionId.value)
     ) {
       createSessionId.value = ''
@@ -416,16 +465,26 @@ async function createTask() {
   createError.value = ''
   try {
     if (createSessionId.value) {
-      // 兜底：检查所选会话的 agent 是否适配（过滤列表理论上已排除，防止竞态/旧选择残留）
-      const session = runningSessions.value.find((s) => s.session_id === createSessionId.value)
-      if (session && !session.is_supported) {
-        createError.value = t('task.agentNotAdapted')
-        return
+      if (creatingNewSession.value) {
+        // 「创建新的 {配置} 会话」：按所选配置新建会话并把任务加入其队列，
+        // 首轮执行由新会话就绪的 idle 推送驱动（后端 create-and-enqueue）
+        const configId = createSessionId.value.slice(NEW_SESSION_CONFIG_PREFIX.length)
+        await context.commands.execute('session.task.create-and-enqueue', {
+          config_id: configId,
+          prompt,
+        })
+      } else {
+        // 兜底：检查所选会话的 agent 是否适配（过滤列表理论上已排除，防止竞态/旧选择残留）
+        const session = runningSessions.value.find((s) => s.session_id === createSessionId.value)
+        if (session && !session.is_supported) {
+          createError.value = t('task.agentNotAdapted')
+          return
+        }
+        await context.commands.execute('session.task.queue-add', {
+          session_id: createSessionId.value,
+          prompt,
+        })
       }
-      await context.commands.execute('session.task.queue-add', {
-        session_id: createSessionId.value,
-        prompt,
-      })
     } else {
       await context.commands.execute('session.task.preset-create', { prompt })
     }
@@ -434,7 +493,7 @@ async function createTask() {
     await nextTick()
     autosizeTextarea(createPromptEl.value)
     // 立即刷新展示（事件广播会兜底刷新，这里先给用户即时反馈）
-    await loadRunningSessions()
+    await Promise.all([loadRunningSessions(), loadConfigQueues()])
     if (!createSessionId.value) await loadPresets()
   } catch (e) {
     console.error('[Session Center/task] Failed to create task:', e)
@@ -458,21 +517,117 @@ async function loadPresets() {
   }
 }
 
-// 把预设任务加入下拉所选会话的队列（一次性消耗，加入后预设自动移除）
-async function addPresetToSession(presetId: string) {
-  if (!createSessionId.value) return
+// 把预设任务加入所选任务队列（一次性消耗，加入后预设自动移除）
+async function addPresetToQueue(presetId: string) {
+  if (!presetQueueId.value) return
   presetError.value = ''
   try {
-    await context.commands.execute('session.task.preset-enqueue', {
-      session_id: createSessionId.value,
+    await context.commands.execute('session.task.preset-enqueue-queue', {
+      queue_id: presetQueueId.value,
       preset_id: presetId,
     })
-    // 事件广播（queue/preset-changed）兜底，此处直接刷新即时反馈
-    await Promise.all([loadPresets(), loadRunningSessions()])
+    // 事件广播（config-queue/preset-changed）兜底，此处直接刷新即时反馈
+    await Promise.all([loadPresets(), loadConfigQueues(), loadRunningSessions()])
   } catch (e) {
     console.error('[Session Center/task] Failed to add preset to queue:', e)
     presetError.value = t('task.addPresetFailed')
   }
+}
+
+// ==================== 任务队列（Tab1） ====================
+
+async function loadConfigQueues() {
+  try {
+    const result: any = await context.commands.execute('session.task.config-queues-list')
+    configQueues.value = (result?.queues as ConfigQueue[]) ?? []
+    // 预设目标任务队列选择：失效 → 回退第一个；空 → 保持空（按钮禁用）
+    if (
+      presetQueueId.value &&
+      !configQueues.value.some((q) => q.id === presetQueueId.value)
+    ) {
+      presetQueueId.value = configQueues.value[0]?.id ?? ''
+    } else if (!presetQueueId.value) {
+      presetQueueId.value = configQueues.value[0]?.id ?? ''
+    }
+  } catch (e) {
+    console.error('[Session Center/task] Failed to load config queues:', e)
+    configQueueError.value = t('task.loadFailed')
+  }
+}
+
+// 启动队列：后端按队列配置新建会话并迁移整队任务执行（自动模式下任务间自动轮换会话）
+async function startConfigQueue(queueId: string) {
+  if (startingQueueId.value) return
+  startingQueueId.value = queueId
+  configQueueError.value = ''
+  try {
+    await context.commands.execute('session.task.config-queue-start', { queue_id: queueId })
+    // 启动后队列离开 ready 列表、新会话出现在运行中/执行任务区
+    await Promise.all([loadConfigQueues(), loadRunningSessions()])
+  } catch (e) {
+    console.error('[Session Center/task] Failed to start config queue:', e)
+    configQueueError.value = t('task.queueStartFailed')
+  } finally {
+    startingQueueId.value = ''
+  }
+}
+
+// 队列「自动模式」开关（乐观更新，失败回滚；开启且队列已有任务时后端已自动启动）
+async function toggleConfigQueueAutoMode(q: ConfigQueue) {
+  const prev = q.auto_mode
+  q.auto_mode = !prev
+  configQueueError.value = ''
+  try {
+    const result: any = await context.commands.execute('session.task.config-queue-set-auto', {
+      queue_id: q.id,
+      auto_mode: q.auto_mode,
+    })
+    q.auto_mode = result?.auto_mode ?? q.auto_mode
+    await Promise.all([loadConfigQueues(), loadRunningSessions()])
+  } catch (e) {
+    console.error('[Session Center/task] Failed to set config queue auto mode:', e)
+    q.auto_mode = prev
+    configQueueError.value = t('task.queueAutoFailed')
+  }
+}
+
+// ==================== 未执行任务行内编辑（任务队列 / 执行任务区共用） ====================
+
+// 进入编辑态：预填当前 prompt（Esc 取消 / 回车保存，与预设编辑同键位）
+function startEditTask(scopeKey: string, item: QueueItem) {
+  editingTaskScope.value = scopeKey
+  editingTaskId.value = item.id
+  editingTaskText.value = item.prompt
+}
+
+// 保存改写（仅 pending 可改；scope = 队列 id / 会话 id——queue-update 的
+// session_id 用占位键即命中队列内的任务行）
+async function saveEditTask() {
+  const prompt = editingTaskText.value.trim()
+  if (!editingTaskScope.value || !editingTaskId.value || !prompt) {
+    editingTaskId.value = ''
+    return
+  }
+  configQueueError.value = ''
+  try {
+    await context.commands.execute('session.task.queue-update', {
+      session_id: editingTaskScope.value,
+      task_id: editingTaskId.value,
+      prompt,
+    })
+    editingTaskId.value = ''
+    editingTaskScope.value = ''
+    // 刷新任务队列区 + 执行任务区（随 running-sessions 重载）
+    await Promise.all([loadConfigQueues(), loadRunningSessions()])
+  } catch (e) {
+    console.error('[Session Center/task] Failed to update task:', e)
+    configQueueError.value = t('task.updateFailed')
+  }
+}
+
+function cancelEditTask() {
+  editingTaskId.value = ''
+  editingTaskScope.value = ''
 }
 
 async function deletePreset(presetId: string) {
@@ -609,7 +764,10 @@ function onFilterChanged() {
 
 // 切到对应 tab 时加载最新数据（事件刷新可能因未挂载而遗漏）
 watch(activeTab, (tab) => {
-  if (tab === 'current') loadRunningSessions()
+  if (tab === 'current') {
+    loadRunningSessions()
+    loadConfigQueues()
+  }
   if (tab === 'stats') loadStats()
 })
 
@@ -890,6 +1048,7 @@ function formatPercent(rate: number | undefined): string {
 
 let statusDisposable: { dispose(): void } | null = null
 let queueDisposable: { dispose(): void } | null = null
+let configQueueDisposable: { dispose(): void } | null = null
 let scheduledDisposable: { dispose(): void } | null = null
 let presetDisposable: { dispose(): void } | null = null
 let modeDisposable: { dispose(): void } | null = null
@@ -900,6 +1059,7 @@ onMounted(async () => {
     loadJobs(),
     loadConfigs(),
     loadRunningSessions(),
+    loadConfigQueues(),
     loadPresets(),
   ])
 
@@ -910,9 +1070,10 @@ onMounted(async () => {
   themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] })
 
   // status/queue 变更刷新当前任务 + 任务记录；scheduled 变更刷新定时任务；preset 变更刷新预设区；
-  // mode 变更同步会话开关状态（定时任务/弹窗等路径修改后当前页不失步）
+  // config-queue 变更刷新任务队列区（自动启动还可能产出新会话）；mode 变更同步会话开关状态
   statusDisposable = context.events.on('task:status-changed', onLiveChanged)
   queueDisposable = context.events.on('task:queue-changed', onLiveChanged)
+  configQueueDisposable = context.events.on('task:config-queue-changed', onConfigQueueLiveChanged)
   scheduledDisposable = context.events.on('task:scheduled-changed', () => loadJobs())
   presetDisposable = context.events.on('task:preset-changed', () => loadPresets())
   modeDisposable = context.events.on('session:mode-changed', onModeChanged)
@@ -933,6 +1094,7 @@ onUnmounted(() => {
   themeObserver?.disconnect()
   statusDisposable?.dispose()
   queueDisposable?.dispose()
+  configQueueDisposable?.dispose()
   scheduledDisposable?.dispose()
   presetDisposable?.dispose()
   modeDisposable?.dispose()
@@ -941,6 +1103,14 @@ onUnmounted(() => {
 // 任务状态/队列实时变更：任务记录（含统计）与当前任务 Tab 一起刷新
 function onLiveChanged() {
   refreshRecords()
+  loadRunningSessions()
+  // 队列尺寸/内容可能随 queue 键广播变化（含队列 id 占位键的更新/取消）
+  loadConfigQueues()
+}
+
+// 任务队列变更（入队/启动/自动模式）：刷新任务队列区；自动启动可能产出新会话
+function onConfigQueueLiveChanged() {
+  loadConfigQueues()
   loadRunningSessions()
 }
 </script>
@@ -1019,6 +1189,167 @@ function onLiveChanged() {
             <p v-if="createError" class="text-xs text-red-500 break-words">{{ createError }}</p>
           </div>
 
+          <!-- 任务队列（按配置分组的未绑定会话批次：启动/自动模式时才建会话执行） -->
+          <div
+            v-if="configQueues.length > 0"
+            class="rounded-lg border border-[var(--border)] bg-[var(--bg-card)] p-3 space-y-2"
+          >
+            <h3 class="text-xs font-semibold text-[var(--text-primary)]">
+              {{ t('task.configQueueTitle') }}
+            </h3>
+            <div class="space-y-2.5">
+              <div
+                v-for="q in configQueues"
+                :key="q.id"
+                class="rounded-lg border border-[var(--border)] bg-[var(--bg-hover)] p-3 space-y-1.5"
+              >
+                <!-- 执行会话（配置名） + 自动任务数 -->
+                <div class="flex items-center gap-2">
+                  <span
+                    class="text-xs font-medium text-[var(--text-primary)] truncate flex-1 min-w-0"
+                  >
+                    {{ t('task.createNewSessionOption', { name: queueLabel(q) }) }}
+                  </span>
+                  <span class="text-xs text-[var(--text-secondary)] flex-shrink-0">
+                    {{ t('task.queueCount', { count: q.tasks.length }) }}
+                  </span>
+                </div>
+                <!-- 自动任务列表（未执行任务支持行内编辑） -->
+                <div v-if="q.tasks.length > 0" class="space-y-1">
+                  <div
+                    v-for="item in q.tasks"
+                    :key="item.id"
+                    class="flex items-center gap-2 px-3 py-1.5 rounded-md bg-[var(--bg-card)]"
+                  >
+                    <!-- 编辑模式：自动增高输入框 + 保存/取消（回车保存，Shift+回车换行，Esc 取消） -->
+                    <template v-if="editingTaskId === item.id && editingTaskScope === q.id">
+                      <textarea
+                        :ref="(el) => autosizeTextarea(el as HTMLTextAreaElement | null)"
+                        v-model="editingTaskText"
+                        rows="1"
+                        :class="textareaCls"
+                        :placeholder="item.prompt"
+                        @input="autosizeTextarea($event.target)"
+                        @keydown="submitOnEnter(saveEditTask)($event)"
+                        @keydown.esc="cancelEditTask"
+                      />
+                      <button
+                        class="flex-shrink-0 w-7 h-7 rounded-[6px] flex items-center justify-center text-[var(--color-primary)] hover:bg-[var(--color-primary)]/10 transition-colors duration-200"
+                        :title="t('task.save')"
+                        @click="saveEditTask"
+                      >
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            stroke-width="2"
+                            d="M5 13l4 4L19 7"
+                          />
+                        </svg>
+                      </button>
+                      <button
+                        class="flex-shrink-0 w-7 h-7 rounded-[6px] flex items-center justify-center text-[var(--text-tertiary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors duration-200"
+                        :title="t('task.cancel')"
+                        @click="cancelEditTask"
+                      >
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            stroke-width="2"
+                            d="M6 18L18 6M6 6l12 12"
+                          />
+                        </svg>
+                      </button>
+                    </template>
+                    <!-- 常规模式：位置 + prompt + 编辑 -->
+                    <template v-else>
+                      <span
+                        class="text-xs text-[var(--text-tertiary)] w-5 text-right flex-shrink-0"
+                        >#{{ item.position }}</span
+                      >
+                      <span class="text-sm text-[var(--text-primary)] truncate flex-1">{{ item.prompt }}</span>
+                      <button
+                        class="flex-shrink-0 w-6 h-6 rounded-[6px] flex items-center justify-center text-[var(--text-tertiary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors duration-200"
+                        :title="t('task.edit')"
+                        @click="startEditTask(q.id, item)"
+                      >
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            stroke-width="2"
+                            d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"
+                          />
+                          <path
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            stroke-width="2"
+                            d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"
+                          />
+                        </svg>
+                      </button>
+                    </template>
+                  </div>
+                </div>
+                <!-- 启动 + 自动模式（ready 态控制；启动后迁移到会话卡片） -->
+                <div class="flex items-center gap-4 pt-1">
+                  <button
+                    class="inline-flex items-center gap-1 flex-shrink-0 h-7 px-2.5 rounded-[6px] text-xs font-medium transition-opacity duration-200 disabled:opacity-40 disabled:cursor-not-allowed"
+                    :class="
+                      q.tasks.length > 0 && startingQueueId !== q.id
+                        ? 'bg-[var(--color-primary)] text-[var(--color-primary-contrast)] hover:opacity-90'
+                        : 'bg-[var(--border)] text-[var(--text-tertiary)]'
+                    "
+                    :disabled="q.tasks.length === 0 || startingQueueId !== ''"
+                    :title="
+                      q.tasks.length === 0
+                        ? t('task.queueStartEmptyHint')
+                        : t('task.queueStartHint')
+                    "
+                    @click="startConfigQueue(q.id)"
+                  >
+                    {{ startingQueueId === q.id ? t('task.loading') : t('task.queueStart') }}
+                  </button>
+                  <button
+                    class="inline-flex items-center gap-1.5"
+                    :title="t('task.queueAutoModeHint')"
+                    @click="toggleConfigQueueAutoMode(q)"
+                  >
+                    <span
+                      class="relative w-8 h-4 rounded-full transition-colors duration-200"
+                      :class="
+                        q.auto_mode ? 'bg-[var(--color-primary)]' : 'bg-[var(--border-strong)]'
+                      "
+                    >
+                      <span
+                        class="absolute top-[2px] w-3 h-3 rounded-full transition-all duration-200"
+                        :class="
+                          q.auto_mode
+                            ? 'left-[18px] bg-[var(--color-primary-contrast)]'
+                            : 'left-[2px] bg-[var(--text-tertiary)]'
+                        "
+                      ></span>
+                    </span>
+                    <span
+                      class="text-xs transition-colors duration-200"
+                      :class="
+                        q.auto_mode
+                          ? 'text-[var(--text-primary)]'
+                          : 'text-[var(--text-secondary)]'
+                      "
+                    >
+                      {{ t('task.queueAutoMode') }}
+                    </span>
+                  </button>
+                </div>
+              </div>
+            </div>
+            <p v-if="configQueueError" class="text-xs text-red-500 break-words">
+              {{ configQueueError }}
+            </p>
+          </div>
+
           <!-- 预设任务（常显：只要存在预设就展示，不随会话选择隐藏） -->
           <div
             v-if="presets.length > 0"
@@ -1027,6 +1358,16 @@ function onLiveChanged() {
             <h3 class="text-xs font-semibold text-[var(--text-primary)]">
               {{ t('task.presetTitle') }} ({{ presets.length }})
             </h3>
+            <!-- 目标任务队列：预设加入哪个任务队列由用户选定（一次性消耗） -->
+            <div>
+              <label class="block text-xs text-[var(--text-secondary)] mb-1">{{ t('task.presetQueueLabel') }}</label>
+              <Select
+                v-model="presetQueueId"
+                :options="presetQueueOptions"
+                size="sm"
+                :placeholder="t('task.presetQueueEmpty')"
+              />
+            </div>
             <div class="space-y-1">
               <div
                 v-for="p in presets"
@@ -1082,13 +1423,13 @@ function onLiveChanged() {
                   <button
                     class="inline-flex items-center gap-1 flex-shrink-0 h-7 px-2.5 rounded-[6px] text-xs font-medium transition-opacity duration-200 disabled:opacity-40 disabled:cursor-not-allowed"
                     :class="
-                      createSessionId
+                      presetQueueId
                         ? 'bg-[var(--color-primary)] text-[var(--color-primary-contrast)] hover:opacity-90'
                         : 'bg-[var(--border)] text-[var(--text-tertiary)]'
                     "
-                    :disabled="!createSessionId"
-                    :title="createSessionId ? t('task.addToQueue') : t('task.presetAddHint')"
-                    @click="addPresetToSession(p.id)"
+                    :disabled="!presetQueueId"
+                    :title="presetQueueId ? t('task.addToQueue') : t('task.presetQueueHint')"
+                    @click="addPresetToQueue(p.id)"
                   >
                     {{ t('task.addToQueue') }}
                   </button>
@@ -1129,11 +1470,8 @@ function onLiveChanged() {
                 </template>
               </div>
             </div>
-            <p
-              v-if="!createSessionId"
-              class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)]"
-            >
-              {{ t('task.presetAddHint') }}
+            <p v-if="!presetQueueId" class="text-xs text-red-500 break-words">
+              {{ t('task.presetQueueHint') }}
             </p>
             <p v-if="presetError" class="text-xs text-red-500 break-words">{{ presetError }}</p>
           </div>
@@ -1267,12 +1605,74 @@ function onLiveChanged() {
                     :key="item.id"
                     class="flex items-center gap-2 px-3 py-2 rounded-md bg-[var(--bg-hover)] text-sm"
                   >
-                    <span class="text-xs text-[var(--text-tertiary)] w-5 text-right flex-shrink-0"
-                      >#{{ item.position }}</span
-                    >
-                    <span class="text-[var(--text-primary)] truncate flex-1">{{
-                      item.prompt
-                    }}</span>
+                    <!-- 未执行（pending）任务支持行内编辑，作用域 = 会话 id -->
+                    <template v-if="editingTaskId === item.id && editingTaskScope === s.session_id">
+                      <textarea
+                        :ref="(el) => autosizeTextarea(el as HTMLTextAreaElement | null)"
+                        v-model="editingTaskText"
+                        rows="1"
+                        :class="textareaCls"
+                        :placeholder="item.prompt"
+                        @input="autosizeTextarea($event.target)"
+                        @keydown="submitOnEnter(saveEditTask)($event)"
+                        @keydown.esc="cancelEditTask"
+                      />
+                      <button
+                        class="flex-shrink-0 w-7 h-7 rounded-[6px] flex items-center justify-center text-[var(--color-primary)] hover:bg-[var(--color-primary)]/10 transition-colors duration-200"
+                        :title="t('task.save')"
+                        @click="saveEditTask"
+                      >
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            stroke-width="2"
+                            d="M5 13l4 4L19 7"
+                          />
+                        </svg>
+                      </button>
+                      <button
+                        class="flex-shrink-0 w-7 h-7 rounded-[6px] flex items-center justify-center text-[var(--text-tertiary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors duration-200"
+                        :title="t('task.cancel')"
+                        @click="cancelEditTask"
+                      >
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            stroke-width="2"
+                            d="M6 18L18 6M6 6l12 12"
+                          />
+                        </svg>
+                      </button>
+                    </template>
+                    <template v-else>
+                      <span
+                        class="text-xs text-[var(--text-tertiary)] w-5 text-right flex-shrink-0"
+                        >#{{ item.position }}</span
+                      >
+                      <span class="text-[var(--text-primary)] truncate flex-1">{{ item.prompt }}</span>
+                      <button
+                        class="flex-shrink-0 w-6 h-6 rounded-[6px] flex items-center justify-center text-[var(--text-tertiary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors duration-200"
+                        :title="t('task.edit')"
+                        @click="startEditTask(s.session_id, item)"
+                      >
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            stroke-width="2"
+                            d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"
+                          />
+                          <path
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            stroke-width="2"
+                            d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"
+                          />
+                        </svg>
+                      </button>
+                    </template>
                   </div>
                 </div>
               </div>

@@ -817,6 +817,9 @@ onMounted(async () => {
     }
   })
 
+  // 会话被关闭（自动任务轮换关旧会话 / 会话停止）→ 本窗口随之关闭，避免死窗口继续轮询
+  subscribeSessionShutdown()
+
   // 运行时长每秒刷新
   uptimeTimer = setInterval(() => {
     nowTick.value = Date.now()
@@ -824,6 +827,36 @@ onMounted(async () => {
 
   loadSessionInfo()
 })
+
+// ==================== 会话停止 → 自动关闭窗口 ====================
+
+/** 会话生命周期事件订阅（仅 `session:stopped`——重启走 removed + 同 id 重建，不关窗） */
+let sessionStoppedDisposable: { dispose(): void } | null = null
+// 幂等：同一会话的重复 stopped（迟到的退出事件）只关一次
+let shutdownClosed = false
+
+function subscribeSessionShutdown() {
+  sessionStoppedDisposable = context.events.on('session:stopped', (data: unknown) => {
+    const stoppedId = (data as { session_id?: string } | null)?.session_id
+    if (stoppedId !== sessionId) return
+    closeWindowForSessionShutdown()
+  })
+}
+
+/** 关闭本窗口（自动任务轮换关闭旧会话时，其对应终端窗口一并关闭） */
+async function closeWindowForSessionShutdown() {
+  if (shutdownClosed) return
+  shutdownClosed = true
+  console.info(
+    `[terminal-session] session stopped, closing terminal window (session=${sessionId})`,
+  )
+  try {
+    await context.session.closeTerminal(sessionId)
+  } catch (e) {
+    console.error('[terminal-session] Failed to close window after session stopped:', e)
+    // 关窗失败不重试（可能窗口已由宿主回收），轮询会在会话数据失效时报错停止
+  }
+}
 
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeydown)
@@ -840,6 +873,7 @@ onUnmounted(() => {
   if (unlistenSnapped) unlistenSnapped()
   if (unlistenShow) unlistenShow()
   if (unlistenFocus) unlistenFocus()
+  sessionStoppedDisposable?.dispose()
 })
 </script>
 

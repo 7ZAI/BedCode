@@ -769,7 +769,8 @@ fn pi_extension_port_matches(content: &str, port: u16) -> bool {
 /// 先 bump 会出现「你改回旧前缀、我改回新前缀」的来回覆盖）。此处递增即把已写入
 /// 用户项目的集成副本重写成新前缀。随包脚本首行标记必须与本常量同值
 /// （`task::tests::shipped_hook_scripts_point_at_this_plugin` 逐脚本对账）。
-pub(crate) const PI_EXTENSION_TEMPLATE_VERSION: &str = "6";
+/// v7：补 NON_RETRYABLE_LIMIT_PATTERN 守卫（限额/额度类错误不再误推 retrying）。
+pub(crate) const PI_EXTENSION_TEMPLATE_VERSION: &str = "7";
 
 /// 检查已部署扩展是否携带当前模板版本标记
 fn pi_extension_version_matches(content: &str) -> bool {
@@ -994,7 +995,8 @@ fn opencode_plugin_port_matches(content: &str, port: u16) -> bool {
 
 /// 模板版本标记：内容升级时递增模板内标记，旧部署副本据此自动重部署
 /// （端口匹配检查无法发现脚本内容更新）
-pub(crate) const OPENCODE_PLUGIN_TEMPLATE_VERSION: &str = "4";
+/// v5：补 NON_RETRYABLE_LIMIT_PATTERN 守卫（限额/额度类错误不再误推 retrying）。
+pub(crate) const OPENCODE_PLUGIN_TEMPLATE_VERSION: &str = "5";
 
 /// 检查已部署插件是否携带当前模板版本标记
 fn opencode_plugin_version_matches(content: &str) -> bool {

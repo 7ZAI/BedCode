@@ -135,7 +135,7 @@ fn summary_view(record: &SessionRecord) -> bedcode_plugin_api::wire::SessionSumm
     bedcode_plugin_api::wire::SessionSummary {
         id: record.id.clone(),
         name: record.name.clone(),
-        status: record.status.wire_name(),
+        status: record.status.wire_name().to_string(),
         created_at: record.created_at.clone(),
         started_at: record.started_at.clone(),
         session_type: Some("pty".to_string()),

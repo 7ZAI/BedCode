@@ -442,7 +442,10 @@ pub fn restart_via_host(draft_json: &serde_json::Value) -> Result<serde_json::Va
     let config_id = record.config_id.clone();
     let name = record.name.clone();
     if config_id.is_empty() {
-        return Err(format!("会话缺少 configId，无法重建：{}", request.session_id));
+        return Err(format!(
+            "会话缺少 configId，无法重建：{}",
+            request.session_id
+        ));
     }
     // 编排职责 2：配置真源在插件私有库 → 同一 id 的 launch spec（沿用旧名）
     let config = WasmHost
@@ -453,6 +456,12 @@ pub fn restart_via_host(draft_json: &serde_json::Value) -> Result<serde_json::Va
 
     // 编排职责 3：先摘记录 + 发布 SessionRemoved，再杀旧 PTY（退出事件按已无
     // 记录 no-op，见函数文档）。websocket 业务下沉票 05：会话事件由本插件自发布
+    //
+    // 任务域必须**在摘记录之前**自行收敛：本路径摘记录后杀 PTY，退出事件按
+    // 「无记录 no-op」收不到（会话结束兜底 `on_pty_exit` 不会触发），若不在此
+    // 收敛，被重启会话的在途任务行（in_progress / asking / retrying）与在途队列项
+    // 会永久悬挂，把该会话的队列堵死。
+    crate::task::state::interrupt_running_tasks_on_session_end(&WasmHost, &request.session_id);
     crate::session::note_removed(&request.session_id)?;
     crate::session::events::publish_removed(&request.session_id, &name, "");
     if let Some(old_pty) = record.pty_id.as_deref() {
@@ -475,13 +484,9 @@ pub fn restart_via_host(draft_json: &serde_json::Value) -> Result<serde_json::Va
     // **失败回滚（T-F06）**：旧 PTY 已杀、旧记录已摘——spawn 失败必须恢复记录
     // （旧会话永久消失是最坏结果）并摘掉 pending 条目（否则同 id 日后重建会
     // 发幽灵 `session-restarted` 事件）
-    if let Err(e) = crate::launch::spawn_session(
-        &config_id,
-        &spec,
-        &request.session_id,
-        &name,
-        &None,
-    ) {
+    if let Err(e) =
+        crate::launch::spawn_session(&config_id, &spec, &request.session_id, &name, &None)
+    {
         {
             let mut pending = PENDING_RESTART.lock().unwrap_or_else(|e| e.into_inner());
             pending.retain(|(id, _)| id != &request.session_id);
@@ -525,7 +530,11 @@ pub fn remove_via_host(draft_json: &serde_json::Value) -> Result<serde_json::Val
             "removed": true,
         }));
     };
-    // 先摘记录（旧 pty 退出事件按无记录 no-op），再杀旧 PTY
+    // 先摘记录（旧 pty 退出事件按无记录 no-op），再杀旧 PTY。
+    // 任务域先收敛（与 `restart_via_host` 同口径）：摘记录后退出事件收不到，
+    // 在途任务行 / 队列项若不在此收敛会永久悬挂。pending 项不受影响——摘记录
+    // 不改队列，待该会话不再可达时由启动恢复统一终结。
+    crate::task::state::interrupt_running_tasks_on_session_end(&WasmHost, &request.session_id);
     crate::session::note_removed(&request.session_id)?;
     if let Some(old_pty) = record.pty_id.as_deref() {
         if let Err(e) = WasmHost.pty_kill(old_pty) {

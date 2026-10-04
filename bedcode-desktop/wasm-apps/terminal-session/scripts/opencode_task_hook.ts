@@ -55,7 +55,7 @@ import type { Plugin } from '@opencode-ai/plugin'
 // 部署时由宿主按当前端口改写（hooks.rs replace_opencode_plugin_port），勿手改
 const BEDCODE_PORT = 8765 // @bedcode-port
 // 模板版本标记：内容升级时递增，宿主据此对旧部署副本自动重部署（hooks.rs）
-// @bedcode-template-version 4
+// @bedcode-template-version 5
 
 const PLUGIN_ID = 'com.bedcode.terminal-session'
 const HOST = '127.0.0.1'
@@ -82,6 +82,8 @@ function promptPreview(text: string): string {
  * 为什么要分类：`session.error` 若一律推 retrying，鉴权失败 / 额度耗尽 / 配置错误
  * 这类 opencode **不会自动重试**的错误也会被标成「重试中」，任务永远停在活动态；
  * 而 run 结束后 session 仍会回 idle → `completed`，失败任务被标成成功。
+ * 故下方 `isRetryableError` 先排除限额/额度类（[`NON_RETRYABLE_LIMIT_PATTERN`]），
+ * 再查本表。
  */
 const RETRYABLE_ERROR_PATTERN =
   /\b429\b|rate\s?limit|too many requests|overloaded|\b5\d\d\b|service\s?unavailable|server\s?error|network\s?error|connection\s?(?:error|refused|lost)|socket\s?hang|fetch failed|getaddrinfo|ENOTFOUND|EAI_AGAIN|timed?\s?out|timeout|stream\s?ended/i
@@ -92,9 +94,22 @@ interface SessionErrorPayload {
   data?: { message?: string }
 }
 
-/** 是否可重试：命中错误名或 message 里的可重试特征 */
+/**
+ * 不可重试的限额/额度类错误（与 pi 适配器的 NON_RETRYABLE_LIMIT_PATTERN 同源）
+ *
+ * 与 pi 内核的 NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN 同口径：这类错误
+ * opencode 同样**不会自动重试**，必须先行排除——否则 `429 {"code":
+ * "insufficient_quota"}` 这类载荷（同时命中 429 与本表）会被推成 retrying，
+ * 任务停在等一个永远不会到来的重试成功事件。
+ */
+const NON_RETRYABLE_LIMIT_PATTERN =
+  /insufficient_quota|quota\s?exceeded|out\s?of\s?budget|usage\s?limit|monthly\s+usage\s+limit|available\s+balance|billing/i
+
+/** 是否可重试：先排除限额/额度类，再查错误名或 message 里的可重试特征 */
 function isRetryableError(error: SessionErrorPayload): boolean {
-  return RETRYABLE_ERROR_PATTERN.test(`${error.name ?? ''} ${error.data?.message ?? ''}`)
+  const text = `${error.name ?? ''} ${error.data?.message ?? ''}`
+  if (NON_RETRYABLE_LIMIT_PATTERN.test(text)) return false
+  return RETRYABLE_ERROR_PATTERN.test(text)
 }
 
 /**

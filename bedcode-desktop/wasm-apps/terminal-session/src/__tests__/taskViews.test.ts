@@ -13,9 +13,14 @@
  * - M3 入队：输入回车 → `session.task.queue-add` 收 {session_id, prompt}，随后重取队列
  * - M4 开关：目标值在 await 前固化（事件先于 invoke 返回到达也不回翻）
  * - M5 事件门：队列变更仅在可见时重取
- * - H1 历史视图挂载即拉五域数据（记录 / 定时 / 会话配置 / 运行中会话 / 预设）
+ * - H1 历史视图挂载即拉六域数据（记录 / 定时 / 会话配置 / 运行中会话 / 任务队列 / 预设）
  * - H2 记录筛选：history-list 与 history-stats 收同一份筛选条件，且带分页 limit/offset
  * - H3 无会话时的创建路径落预设（不写队列）
+ * - H4 选择「创建新的 {配置} 会话」时任务写入任务队列（create-and-enqueue，
+ *    不写运行中会话队列/预设）
+ * - H5 任务队列卡片：启动 → config-queue-start；自动模式开关 → config-queue-set-auto
+ * - H6 预设「加入队列」：写入所选目标任务队列（preset-enqueue-queue）
+ * - H7 任务队列未执行任务可行内编辑：queue-update 收占位键 scope + 改写后 prompt
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -62,6 +67,30 @@ async function defaultExecute(command: string, args?: unknown) {
       return { jobs: [] }
     case 'session.task.queue-add':
       return { task_id: 't1', position: 0 }
+    case 'session.task.create-and-enqueue':
+      return { queue_id: 'q1', task_id: 't2', position: 0 }
+    case 'session.task.config-queues-list':
+      return {
+        queues: [
+          {
+            id: 'q1',
+            config_id: 'c1',
+            name: 'claude-dev',
+            workingDir: '/work',
+            auto_mode: false,
+            created_at: '2026-01-01 00:00:00',
+            tasks: [{ id: 'qt1', prompt: '队列任务一', position: 1, status: 'pending' }],
+          },
+        ],
+      }
+    case 'session.task.config-queue-start':
+      return { session_id: 'new-sess-1' }
+    case 'session.task.config-queue-set-auto':
+      return { auto_mode: true }
+    case 'session.task.preset-enqueue-queue':
+      return { task_id: 't3', position: 0 }
+    case 'session.task.queue-update':
+      return { updated: true }
     case 'session.task.preset-create':
       return { preset_id: 'p2' }
     case 'session.task.set-auto-mode':
@@ -218,7 +247,7 @@ describe('TaskHistoryView（侧边栏任务历史）', () => {
     taskModalVisible.value = false
   })
 
-  it('H1 挂载即拉五域数据（命令名全部落 session.task.* 命名空间）', async () => {
+  it('H1 挂载即拉六域数据（命令名全部落 session.task.* 命名空间）', async () => {
     const wrapper = mountComponent(TaskHistoryView)
     await flushPromises()
 
@@ -228,6 +257,7 @@ describe('TaskHistoryView（侧边栏任务历史）', () => {
       'session.task.scheduled-list',
       'session.task.session-configs',
       'session.task.running-sessions',
+      'session.task.config-queues-list',
       'session.task.preset-list',
     ]) {
       expect(commandsTo(id), `${id} 未被调用`).toHaveLength(1)
@@ -277,6 +307,89 @@ describe('TaskHistoryView（侧边栏任务历史）', () => {
       ['session.task.queue-add', { session_id: SESSION_ID, prompt: '白天跑冒烟' }],
     ])
     expect(commandsTo('session.task.preset-create')).toEqual([])
+    wrapper.unmount()
+  })
+
+  it('H4 选择「创建新的 {配置} 会话」时任务写入任务队列（create-and-enqueue）', async () => {
+    const inputs = () => wrapper.findAll('textarea')
+    const createBox = () => inputs()[inputs().length - 1]
+
+    const wrapper = mountComponent(TaskHistoryView)
+    await flushPromises()
+
+    // 首个 Select = 创建任务区的会话选择框（模板序：创建区 → 任务队列区 → 预设区）
+    const select = wrapper.findComponent({ name: 'Select' })
+    expect(select.exists()).toBe(true)
+    select.vm.$emit('update:modelValue', 'new:c1')
+    await flushPromises()
+
+    await createBox().setValue('在全新会话里跑一次')
+    await createBox().trigger('keydown', { key: 'Enter', shiftKey: false, isComposing: false })
+    await flushPromises()
+
+    // 入任务队列（不立即建会话）：create-and-enqueue 收 config_id + prompt
+    expect(commandsTo('session.task.create-and-enqueue')).toEqual([
+      ['session.task.create-and-enqueue', { config_id: 'c1', prompt: '在全新会话里跑一次' }],
+    ])
+    expect(commandsTo('session.task.queue-add')).toEqual([])
+    expect(commandsTo('session.task.preset-create')).toEqual([])
+    wrapper.unmount()
+  })
+
+  it('H5 任务队列卡片：启动与自动模式各自下发目标命令', async () => {
+    const wrapper = mountComponent(TaskHistoryView)
+    await flushPromises()
+
+    // 启动按钮（mock 队列带任务 → 可用）
+    const startBtn = wrapper
+      .findAll('button')
+      .find((b) => b.text() === 'task.queueStart')
+    expect(startBtn?.attributes('disabled')).toBeUndefined()
+    await startBtn?.trigger('click')
+    await flushPromises()
+    expect(commandsTo('session.task.config-queue-start')).toEqual([
+      ['session.task.config-queue-start', { queue_id: 'q1' }],
+    ])
+
+    // 自动模式开关（开启 → auto_mode: true）
+    const autoBtn = wrapper
+      .findAll('button')
+      .find((b) => b.text().includes('task.queueAutoMode'))
+    expect(autoBtn).toBeTruthy()
+    await autoBtn?.trigger('click')
+    await flushPromises()
+    expect(commandsTo('session.task.config-queue-set-auto')).toEqual([
+      ['session.task.config-queue-set-auto', { queue_id: 'q1', auto_mode: true }],
+    ])
+    wrapper.unmount()
+  })
+
+  it('H7 任务队列未执行任务可行内编辑（queue-update 用队列 id 作占位键）', async () => {
+    const wrapper = mountComponent(TaskHistoryView)
+    await flushPromises()
+
+    // 任务队列卡片内的编辑按钮（title = task.edit）
+    const editBtn = wrapper
+      .findAll('button')
+      .find((b) => b.attributes('title') === 'task.edit')
+    expect(editBtn).toBeTruthy()
+    await editBtn?.trigger('click')
+    await flushPromises()
+
+    // 编辑态出现 textarea（提取最后一个：创建任务输入框之外的新增编辑框）
+    const editBox = wrapper.findAll('textarea').at(-1)!
+    await editBox.setValue('改写后的任务内容')
+    await editBox.trigger('keydown', { key: 'Enter', shiftKey: false, isComposing: false })
+    await flushPromises()
+
+    expect(commandsTo('session.task.queue-update')).toEqual([
+      [
+        'session.task.queue-update',
+        { session_id: 'q1', task_id: 'qt1', prompt: '改写后的任务内容' },
+      ],
+    ])
+    // 保存后刷新任务队列区
+    expect(commandsTo('session.task.config-queues-list').length).toBeGreaterThanOrEqual(2)
     wrapper.unmount()
   })
 })

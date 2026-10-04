@@ -13,7 +13,7 @@ use bedcode_plugin_api::http_response;
 use bedcode_plugin_api::sql_params;
 use bedcode_plugin_api::wasm_host::WasmHost;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::task::agent;
 use crate::task::yield_guard;
@@ -253,6 +253,45 @@ fn now_rfc3339(host: &WasmHost) -> String {
     crate::config::model::rfc3339_from_unix(secs)
 }
 
+/// 会话结束兜底的收敛原因（写入 `exit_reason`，历史页与移动端据此解释）
+pub const SESSION_END_INTERRUPT_REASON: &str = "Session ended unexpectedly (task interrupted)";
+
+/// 宿主重启兜底的收敛原因（会话与 agent 进程同生命周期，随进程一并消失）
+pub const RESTART_INTERRUPT_REASON: &str =
+    "Host restarted while task was running (session and agent process ended)";
+
+/// **非终态**任务状态全集（会话消失 / 重试停滞 / 宿主重启时必须收敛的行）
+///
+/// 收敛面有两处 SQL（[`interrupt_running_tasks`] 与 [`recover_running_tasks_on_restart`]），
+/// 两处各自内联状态字面量时极易漂移——漏掉 `retrying` 正是 2026-10-03 现场那条
+/// 「任务卡在重试中逾 8 小时」的形态之一。故单一事实源在此，两个调用方均从它生成
+/// `IN (...)` 片段（见 [`in_list_fragment`]）。
+pub const RUNNING_STATUSES: &[&str] = &["in_progress", "asking", "retrying"];
+
+/// **未终结**队列状态全集（`pending` 待下发 / `waiting` 等新会话就绪 / `executing` 已下发）
+///
+/// 启动恢复的口径比运行期收敛更宽：运行期只动 `waiting` / `executing`（pending 仍
+/// 可能被投递），启动恢复时所属会话已随进程消失，pending 同样无处投递，故一并终结。
+pub const UNTERMINATED_QUEUE_STATUSES: &[&str] = &["pending", "waiting", "executing"];
+
+/// 由状态字面量集生成 `IN (...)` 片段（纯格式化，native 可测）
+///
+/// 入参必须是编译期常量（[`RUNNING_STATUSES`] / [`UNTERMINATED_QUEUE_STATUSES`]），
+/// 不得传入任何外部输入——本函数不做引号转义。调用方拼成 `... AND status {片段}`。
+///
+/// **空集直接 panic**：空集会渲染成 `IN ()`（SQLite 语法错误），而这条 UPDATE
+/// 跑在真库的收敛路径上——让它带着语法错误上线，表现为「会话消失后任务行照样悬挂」
+/// 且日志里只有一条驱动层错误。状态集是编译期常量，空集只可能是代码缺陷，
+/// 故在构造点 loud-fail（fail-visible）。
+pub fn in_list_fragment(statuses: &[&str]) -> String {
+    assert!(
+        !statuses.is_empty(),
+        "in_list_fragment: 状态集为空会生成 `IN ()` 语法错误（收敛 SQL 会在真库上直接失败）"
+    );
+    let quoted: Vec<String> = statuses.iter().map(|s| format!("'{}'", s)).collect();
+    format!("IN ({})", quoted.join(", "))
+}
+
 /// 会话结束时兜底中断仍在运行的任务（意外退出兜底）
 ///
 /// 会话意外退出（进程崩溃 / 用户强制关闭 / 直接结束会话）时，agent 的
@@ -264,56 +303,105 @@ fn now_rfc3339(host: &WasmHost) -> String {
 /// 仅影响运行中状态行（in_progress / asking / retrying）：正常退出场景下 Stop hook
 /// 已推送 completed / interrupted 终态，已终态的行不受影响，此处是纯兜底。
 pub fn interrupt_running_tasks_on_session_end(host: &WasmHost, session_id: &str) {
-    const REASON: &str = "Session ended unexpectedly (task interrupted)";
+    interrupt_running_tasks(host, session_id, SESSION_END_INTERRUPT_REASON);
+}
 
-    let affected = host
-        .plugin_db_execute_params(
+/// 把指定会话的**运行中任务行 + 在途队列项**一并收敛到 interrupted（唯一收敛面）
+///
+/// 三个调用方共用同一收敛面，差别只在 `reason`（写入 `exit_reason`，让历史页与
+/// 移动端能区分「会话结束 / 重试停滞 / 宿主重启」）：
+/// - [`interrupt_running_tasks_on_session_end`]：会话退出（pty:exit 事件驱动）
+/// - [`crate::task::queue::check_retrying_silence`]：retrying 过渡态停滞看门狗
+/// - [`actions::remove_via_host`] / `restart_via_host`：会话被移除 / 重启前先收敛
+///   （这两条路径摘记录后再杀 PTY，退出事件按「无记录 no-op」收不到，任务域
+///   若不在摘记录前自行收敛，该会话的在途任务会永久悬挂）
+///
+/// 只影响非终态行：已 completed / interrupted 的行不被改写，故本函数幂等
+/// （重复调用安全，广播在「无运行中任务」时提前 return）。
+pub fn interrupt_running_tasks(host: &WasmHost, session_id: &str, reason: &str) {
+    // 收敛 SQL 失败必须显性留痕（fail-visible）：`unwrap_or(0)` 会把 Err 吞成
+    // 「无运行中任务」走下面的提前 return——任务行照样悬挂且无任何告警，与本函数
+    // 想守的「retrying 8 小时悬挂」故障同形。失败时 log_error 后返回：不广播
+    //（广播面要求真实收敛结果，DB 未收敛时广播会造成前端与 DB 分叉）。
+    let affected = match host.plugin_db_execute_params(
+        &format!(
             "UPDATE task_history SET status = 'interrupted', exit_reason = ?1, \
              completed_at = datetime('now'), updated_at = datetime('now') \
-             WHERE session_id = ?2 AND status IN ('in_progress', 'asking', 'retrying')",
-            &sql_params![REASON, session_id],
-        )
-        .unwrap_or(0);
+             WHERE session_id = ?2 AND status {}",
+            in_list_fragment(RUNNING_STATUSES)
+        ),
+        &sql_params![reason, session_id],
+    ) {
+        Ok(n) => n,
+        Err(e) => {
+            host.log_error(&format!(
+                "interrupt_running_tasks: 收敛 task_history 失败（session_id={} reason={}）：{}",
+                session_id, reason, e.message
+            ));
+            return;
+        }
+    };
 
     // 队列项兜底（与 task_history 独立）：下发后状态回传丢失、等待 idle 期间
     // 会话被杀等场景会残留 waiting/executing 队列项，没有终态归档将永久卡在
     // 处理中（历史数据里存在大量这类悬挂项）。统一标 interrupted 并逐项广播
     // （带 task_id，移动端据此把对应预设落 interrupted）
-    let queued_ids: Vec<String> = host
-        .plugin_db_query_params(
-            "SELECT id FROM task_queue WHERE session_id = ?1 AND status IN ('executing', 'waiting')",
-            &sql_params![session_id],
-        )
-        .ok()
-        .flatten()
-        .and_then(|v| v.as_array().cloned())
-        .unwrap_or_default()
-        .iter()
-        .filter_map(|row| row.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()))
-        .collect();
+    // 队列项查询失败也显性留痕（fail-visible）：`ok().flatten().unwrap_or_default()`
+    // 会把 Err 静默成空列表 → 队列项不收敛、悬挂且无告警。失败记 log_error 后按
+    // 空列表继续（task_history 主收敛面照常）。
+    let queued_ids: Vec<String> = match host.plugin_db_query_params(
+        "SELECT id FROM task_queue WHERE session_id = ?1 AND status IN ('executing', 'waiting')",
+        &sql_params![session_id],
+    ) {
+        Ok(v) => v
+            .and_then(|arr| arr.as_array().cloned())
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|row| {
+                row.get("id")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            })
+            .collect(),
+        Err(e) => {
+            host.log_error(&format!(
+                "interrupt_running_tasks: 查询在途队列项失败（session_id={}）：{}",
+                session_id, e.message
+            ));
+            Vec::new()
+        }
+    };
     if !queued_ids.is_empty() {
-        let _ = host.plugin_db_execute_params(
+        // 队列项 UPDATE 失败时 log_error 且**不广播**：广播 interrupted 而 DB 仍
+        // 是 executing 会让前端与真源分叉（§8 fail-visible：宁可不广播也不假广播）。
+        if let Err(e) = host.plugin_db_execute_params(
             "UPDATE task_queue SET status = 'interrupted', updated_at = datetime('now') \
              WHERE session_id = ?1 AND status IN ('executing', 'waiting')",
             &sql_params![session_id],
-        );
-        // 循环前算一次（UPDATE 后计数已定；每轮重查是 N+1 且值不会变）
-        let remaining = crate::task::queue::pending_count(host, session_id);
-        for id in &queued_ids {
-            crate::task::queue::broadcast_queue_changed(
-                host,
-                session_id,
-                remaining,
-                "interrupted",
-                Some(id),
-                Some("interrupted"),
-            );
+        ) {
+            host.log_error(&format!(
+                "interrupt_running_tasks: 收敛队列项失败（session_id={}）：{}",
+                session_id, e.message
+            ));
+        } else {
+            // 循环前算一次（UPDATE 后计数已定；每轮重查是 N+1 且值不会变）
+            let remaining = crate::task::queue::pending_count(host, session_id);
+            for id in &queued_ids {
+                crate::task::queue::broadcast_queue_changed(
+                    host,
+                    session_id,
+                    remaining,
+                    "interrupted",
+                    Some(id),
+                    Some("interrupted"),
+                );
+            }
+            host.log_info(&format!(
+                "Session ended: interrupted {} queued task(s) for session_id={}",
+                queued_ids.len(),
+                session_id
+            ));
         }
-        host.log_info(&format!(
-            "Session ended: interrupted {} queued task(s) for session_id={}",
-            queued_ids.len(),
-            session_id
-        ));
     }
 
     // 无运行中任务（正常退出 / 空闲会话）无需广播 task_history 变更
@@ -322,8 +410,8 @@ pub fn interrupt_running_tasks_on_session_end(host: &WasmHost, session_id: &str)
     }
 
     host.log_info(&format!(
-        "Session ended: interrupted {} running task(s) for session_id={}",
-        affected, session_id
+        "Task convergence: interrupted {} running task(s) for session_id={} reason={}",
+        affected, session_id, reason
     ));
 
     // 广播状态变更到消息总线 + 前端 UI + 移动端 WS，保证全局状态一致
@@ -341,13 +429,119 @@ pub fn interrupt_running_tasks_on_session_end(host: &WasmHost, session_id: &str)
         &serde_json::json!({
             "session_id": session_id,
             "taskStatus": "interrupted",
-            "taskReason": REASON,
+            "taskReason": reason,
         }),
     );
-    broadcast_task_status(host, session_id, "interrupted", Some(REASON), None);
+    broadcast_task_status(host, session_id, "interrupted", Some(reason), None);
     // 注解槽投影：会话列表上的任务字段同步收敛到 interrupted
     // （缺这一步，移动端会一直把已终止会话显示成运行中）
-    publish_task_slots(host, session_id, "interrupted", Some(REASON), None);
+    publish_task_slots(host, session_id, "interrupted", Some(reason), None);
+}
+
+// ==================== 启动恢复（宿主重启后任务面自洽） ====================
+
+/// 启动恢复的收敛计数（activate 侧只按此汇总记日志，不逐行处理）
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct RestartRecovery {
+    /// 被收敛的会话数（会话已不在登记域）
+    pub sessions: usize,
+    /// 被收敛的运行中任务行数（in_progress / asking / retrying）
+    pub tasks: i32,
+    /// 被收敛的队列项数（pending / waiting / executing）
+    pub queue_items: i32,
+}
+
+/// 启动恢复：把上一进程遗留的运行中任务行与在途队列项收敛为 interrupted
+///
+/// **为什么必须有**：会话与 PTY 同生命周期（`session::ensure_schema_via_host`
+/// 在 activate 清空上一进程的会话行），而 agent 进程随宿主退出——新进程里既没有
+/// 那个会话，也不会再有任何 hook 推送（agent 进程已死）。若无本函数，上一进程
+/// 留在 `in_progress` / `asking` / **`retrying`** 的任务行与 `executing` 的队列项
+/// 会永久悬挂：任务历史页长期显示「重试中」、`has_active_task` 恒真把整个队列
+/// 堵死（后续任务再不下发）、定时任务的会话回收也不再触发。
+///
+/// 与 [`crate::task::scheduled::recover_creating_jobs`] 同为启动恢复、互补两个域
+/// （那里收敛定时任务的 `creating`，这里收敛任务行与队列项）。
+///
+/// 口径与广播：
+/// - 只收敛**会话不在登记域**的行（activate 已清空会话表，故启动时恒为全部遗留行；
+///   写成「不在册才收敛」使调用顺序变化也不会误伤活会话）；
+/// - `pending` 队列项一并收敛：其会话已随进程消失，无处投递，留着就是永远
+///   不会被读到的孤儿行（入队清理只在该会话再次入队时发生，而那永不到来）；
+/// - **不广播**：载荷以 `session_id` 键控，而该会话已不存在，订阅方无从匹配；
+///   真相在私有库，前端/移动端下次拉取即见收敛结果。
+pub fn recover_running_tasks_on_restart(host: &WasmHost) -> Result<RestartRecovery, String> {
+    // 1. 候选会话：有非终态任务行，或有未终结队列项
+    let candidates: Vec<String> = host
+        .plugin_db_query_params(
+            &format!(
+                "SELECT DISTINCT session_id FROM task_history \
+                 WHERE session_id IS NOT NULL AND session_id <> '' \
+                   AND status {} \
+                 UNION \
+                 SELECT DISTINCT session_id FROM task_queue \
+                 WHERE session_id IS NOT NULL AND session_id <> '' \
+                   AND status {}",
+                in_list_fragment(RUNNING_STATUSES),
+                in_list_fragment(UNTERMINATED_QUEUE_STATUSES)
+            ),
+            &[],
+        )
+        .map_err(|e| format!("query orphan task sessions failed: {}", e.message))?
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|row| row.get("session_id").and_then(|v| v.as_str()).map(str::to_string))
+        .collect();
+
+    // 2. 过滤仍在册会话（P1-b 真源在本域登记视图）
+    let live: HashSet<String> = crate::session::internal_records_json()
+        .ok()
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|s| s.get("id").and_then(|v| v.as_str()).map(str::to_string))
+        .collect();
+    let orphans: Vec<String> = candidates
+        .into_iter()
+        .filter(|sid| !live.contains(sid))
+        .collect();
+
+    // 3. 逐会话收敛（让出护栏：循环内每步都是宿主 await 点，但 D7 要求长循环
+    //    仍有兜底——遗留会话数可达数十）
+    let mut report = RestartRecovery {
+        sessions: orphans.len(),
+        tasks: 0,
+        queue_items: 0,
+    };
+    let mut yield_counter = 0u64;
+    for session_id in &orphans {
+        yield_guard(host, &mut yield_counter);
+        report.tasks += host
+            .plugin_db_execute_params(
+                &format!(
+                    "UPDATE task_history SET status = 'interrupted', exit_reason = ?1, \
+                     completed_at = datetime('now'), updated_at = datetime('now') \
+                     WHERE session_id = ?2 AND status {}",
+                    in_list_fragment(RUNNING_STATUSES)
+                ),
+                &sql_params![RESTART_INTERRUPT_REASON, session_id],
+            )
+            .map_err(|e| format!("converge task rows for {} failed: {}", session_id, e.message))?;
+        report.queue_items += host
+            .plugin_db_execute_params(
+                &format!(
+                    "UPDATE task_queue SET status = 'interrupted', updated_at = datetime('now') \
+                     WHERE session_id = ?1 AND status {}",
+                    in_list_fragment(UNTERMINATED_QUEUE_STATUSES)
+                ),
+                &sql_params![session_id],
+            )
+            .map_err(|e| {
+                format!("converge queue rows for {} failed: {}", session_id, e.message)
+            })?;
+    }
+    Ok(report)
 }
 
 /// `task:status-changed` 的移动端广播（票 02：单点收口）
@@ -1813,6 +2007,109 @@ pub fn get_session_settings(host: &WasmHost, session_id: &str) -> anyhow::Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---------- 收敛面状态集（单一事实源） ----------
+
+    /// 正例：`in_list_fragment` 逐字产出可用的 SQL 谓词片段
+    #[test]
+    fn in_list_fragment_renders_quoted_sql_predicate() {
+        assert_eq!(
+            in_list_fragment(RUNNING_STATUSES),
+            "IN ('in_progress', 'asking', 'retrying')"
+        );
+        assert_eq!(in_list_fragment(&["pending"]), "IN ('pending')");
+    }
+
+    /// 反例：空集 loud-fail（不得渲染成 `IN ()` —— SQLite 语法错误，且发生在
+    /// 会话消失后的收敛路径上，表现为「任务行照样悬挂」）
+    #[test]
+    #[should_panic(expected = "状态集为空")]
+    fn in_list_fragment_rejects_empty_status_set() {
+        let _ = in_list_fragment(&[]);
+    }
+
+    /// 收敛面必须盖住**全部**非终态任务状态（含 retrying）
+    ///
+    /// 这是本次修复的根因锁：2026-10-03 现场那条 `insufficient_quota` 任务卡在
+    /// `retrying` 逾 8 小时，而收敛路径曾只盯 `in_progress` / `asking`。
+    /// 少了任一状态，那类行就会在会话消失 / 宿主重启后永久悬挂并堵死整条队列。
+    #[test]
+    fn running_statuses_cover_every_non_terminal_task_state() {
+        for status in ["in_progress", "asking", "retrying"] {
+            assert!(
+                RUNNING_STATUSES.contains(&status),
+                "收敛面漏了非终态 {status}：该状态的任务行会在会话消失后永久悬挂"
+            );
+        }
+        // 反向：终态不得进收敛面（否则会把已 completed / interrupted 的行改写掉）
+        for terminal in ["completed", "interrupted", "idle"] {
+            assert!(
+                !RUNNING_STATUSES.contains(&terminal),
+                "终态 {terminal} 不应被收敛面改写"
+            );
+        }
+        assert_eq!(RUNNING_STATUSES.len(), 3, "非终态集合不应多出无主状态");
+    }
+
+    /// 启动恢复的队列口径盖住三类未终结项（比运行期宽：pending 也无处投递）
+    #[test]
+    fn unterminated_queue_statuses_cover_pending_waiting_executing() {
+        assert_eq!(
+            UNTERMINATED_QUEUE_STATUSES,
+            &["pending", "waiting", "executing"]
+        );
+        for terminal in ["done", "cancelled", "interrupted"] {
+            assert!(
+                !UNTERMINATED_QUEUE_STATUSES.contains(&terminal),
+                "已终结队列状态 {terminal} 不应被启动恢复改写"
+            );
+        }
+    }
+
+    /// 两处收敛 SQL 都从同一组常量生成，不得各自内联状态字面量
+    ///
+    /// 漂移是这类缺陷的固有形态（改了一处忘了另一处，测试仍全绿），而 native
+    /// 无法跑真库 SQL，故以源码形状钉住「单一事实源」这条约束。
+    #[test]
+    fn both_convergence_sites_derive_status_lists_from_constants() {
+        let src = include_str!("state.rs");
+        let converge = src
+            .split("pub fn interrupt_running_tasks(")
+            .nth(1)
+            .expect("interrupt_running_tasks must exist")
+            .split("/// 启动恢复的收敛计数")
+            .next()
+            .expect("converge section must precede the recovery report");
+        assert!(
+            converge.contains("in_list_fragment(RUNNING_STATUSES)"),
+            "运行期收敛面不得内联任务状态字面量（与启动恢复漂移 = 漏收敛某类行）"
+        );
+        let recovery = src
+            .split("pub fn recover_running_tasks_on_restart(")
+            .nth(1)
+            .expect("recover_running_tasks_on_restart must exist")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("recovery body must precede the test module");
+        assert!(
+            recovery.contains("in_list_fragment(RUNNING_STATUSES)")
+                && recovery.contains("in_list_fragment(UNTERMINATED_QUEUE_STATUSES)"),
+            "启动恢复必须同时用任务状态集与队列状态集生成谓词"
+        );
+        // 反向：实现段里不得再出现内联的三个非终态任务状态连写（注释与断言文本不计）
+        let implementation: String = src
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap_or(src)
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            !implementation.contains("IN ('in_progress', 'asking', 'retrying')"),
+            "状态字面量又被打回 SQL 里内联了：收敛面重新出现两份定义"
+        );
+    }
 
     /// 构造 query JSON：key 存在则放入，避免空 value 键干扰
     fn query(pairs: &[(&str, &str)]) -> Value {

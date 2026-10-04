@@ -25,6 +25,9 @@
  * core/agent-session.js retryAssistantCall）。重试期间推送 retrying 过渡态，
  * 任务绝不被标记中断；终态判定只在 agent_settled（所有自动重试结束后）做出——
  * 重试成功 → completed，重试耗尽 → interrupted。
+ * 限额/额度类错误（insufficient_quota / quota exceeded / billing …）pi 内核
+ * **不重试**（NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN 先行排除），故本扩展
+ * 也不把它们推成 retrying——推了就是等一个永远不会到来的重试事件。
  *
  * 生效条件：仅当 BEDCODE_SESSION_ID 环境变量存在时推送状态。
  * BedCode 启动的 PTY 终端会自动注入此变量（pty_process.rs），
@@ -47,7 +50,7 @@ import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 // 部署时由宿主按当前端口改写（hooks.rs replace_pi_extension_port），勿手改
 const BEDCODE_PORT = 8765 // @bedcode-port
 // 模板版本标记：内容升级时递增，宿主据此对旧部署副本自动重部署（hooks.rs）
-// @bedcode-template-version 6
+// @bedcode-template-version 7
 
 const PLUGIN_ID = 'com.bedcode.terminal-session'
 const HOST = '127.0.0.1'
@@ -140,6 +143,28 @@ function isRetryableHttpStatus(status: number): boolean {
   return status === 429 || status === 408 || status >= 500
 }
 
+/**
+ * 不可重试的限额/额度类错误（与 pi 内核 NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN
+ * 同源的压缩子集）。
+ *
+ * **必须有**：pi 内核先查这张表再查可重试表——命中即**不重试**（run 立即收敛，
+ * 随后 agent_settled 推终态）。宿主侧若只查可重试表，这类错误会被推成 `retrying`，
+ * 而实际没有任何重试在进行：任务停在「重试中」等一个永远不会到来的重试成功事件。
+ * 2026-10-03 现场：`429 {"code":"insufficient_quota"}` 同时命中 `\b429\b` 与本表，
+ * 任务被误标重试中逾 8 小时、队列整条停摆。
+ *
+ * 命中时**不推 retrying**（保持当前状态），终态仍由 agent_settled 按
+ * lastRunFailure 判定——不在此处重复推终态，避免与 agent_settled 的判断分叉。
+ */
+const NON_RETRYABLE_LIMIT_PATTERN =
+  /insufficient_quota|quota\s?exceeded|out\s?of\s?budget|usage\s?limit|monthly\s+usage\s+limit|available\s+balance|billing/i
+
+/** 是否可重试：先排除限额/额度类（内核口径：这类不重试），再查可重试特征 */
+function isRetryableErrorMessage(message: string): boolean {
+  if (NON_RETRYABLE_LIMIT_PATTERN.test(message)) return false
+  return RETRYABLE_ERROR_PATTERN.test(message)
+}
+
 /** 最近一次 agent loop 结束时记录的失败信息（null = 正常结束） */
 interface LastRunFailure {
   /** 用户主动中断（Esc/Ctrl+C）；false = LLM 报错重试耗尽 */
@@ -204,7 +229,11 @@ export default function (pi: ExtensionAPI) {
   // 终态仍只在 agent_settled 判定——中间 agent_end 的错误会被后续成功重试覆盖
   pi.on('agent_end', (event) => {
     recordLastRunFailure(event.messages)
-    if (lastRunFailure && !lastRunFailure.aborted && RETRYABLE_ERROR_PATTERN.test(lastRunFailure.errorMessage)) {
+    if (
+      lastRunFailure &&
+      !lastRunFailure.aborted &&
+      isRetryableErrorMessage(lastRunFailure.errorMessage)
+    ) {
       void push('retrying', `LLM error, auto retrying: ${lastRunFailure.errorMessage}`)
     }
   })

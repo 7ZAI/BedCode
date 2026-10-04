@@ -934,6 +934,24 @@ impl WasmPlugin for SessionPlugin {
                 e
             )),
         }
+        // 任务域启动恢复（与下方定时域 recover_creating_jobs 互补）：上一进程遗留的
+        // 运行中任务行（in_progress / asking / retrying）与未终结队列项（pending /
+        // waiting / executing）所属会话已随进程销毁（会话表刚被清空、agent 进程已死），
+        // 新进程里不会再有任何终态推送——不收敛就会永久悬挂：历史页长期显示「重试中」、
+        // has_active_task 恒真把整个队列堵死（后续任务永不下发）、定时任务的会话回收
+        // 也不再触发。放在建表之后（表不在就无从更新）、定时器注册之前。
+        match task::state::recover_running_tasks_on_restart(&host) {
+            Ok(r) if r.sessions > 0 => host.log_warn(&format!(
+                "task recovery at activate: {} orphan session(s) converged ({} running \
+                 task(s) and {} queue item(s) -> interrupted)",
+                r.sessions, r.tasks, r.queue_items
+            )),
+            Ok(_) => host.log_debug("task recovery at activate: no stale running task"),
+            Err(e) => host.log_warn(&format!(
+                "task recovery at activate failed (task face degraded): {}",
+                e
+            )),
+        }
         // 票 16 启动恢复（ADR 0003）：上次进程退出前处于 creating 态的定时任务，其
         // 会话已随进程销毁、Created 事件永不到达（新进程的会话不属于该任务），
         // 直接终结避免永久卡死。放在建表之后、定时器注册之前（表不在就无从更新）。
@@ -1019,8 +1037,8 @@ impl WasmPlugin for SessionPlugin {
         host.log_info("ws client-connect event subscribed (device derivation & auth records)");
 
         // 任务域定时器（清单第 4 项：定时器属本域能力面）：驱动队列「延迟 clear
-        // 到点发送」与「执行中静默超时」两个周期步骤。回调按命令名分域计数失败，
-        // 单域失败只降级本域（D7）——票 16 把定时任务域并入同一 tick 的分发表。
+        // 到点发送」「执行中静默超时」「重试停滞收敛」三个周期步骤。回调按命令名分域
+        // 计数失败，单域失败只降级本域（D7）——票 16 把定时任务域并入同一 tick 的分发表。
         match host.timer_register(task::SCHEDULER_INTERVAL_SECS, task::SCHEDULER_TICK_COMMAND) {
             Ok(()) => host.log_info(&format!(
                 "task scheduler timer registered: interval={}s",
@@ -1732,6 +1750,74 @@ impl WasmPlugin for SessionPlugin {
                         anyhow::anyhow!("add-task enqueue failed (session_id={}): {}", session_id, e)
                     })?;
                 dispatch_if_eligible_and_broadcast(&session_id, "add", None, None);
+                Ok(serde_json::json!({ "task_id": task_id, "position": position }))
+            }
+            // 新建任务任务队列（「创建新的 {配置} 会话」选项）：进按配置分组的
+            // 队列，**不立即建会话**（启动/自动模式时才建）；队列存在则并入
+            // {config_id, prompt} → {queue_id, task_id, position}
+            "session.task.create-and-enqueue" => {
+                let a = CommandArgs::new(args);
+                let config_id = a.str_or("config_id", "");
+                let prompt = a.str_or("prompt", "");
+                if config_id.is_empty() {
+                    return Err(anyhow::anyhow!("create-and-enqueue: missing config_id"));
+                }
+                if prompt.is_empty() {
+                    return Err(anyhow::anyhow!("create-and-enqueue: missing prompt"));
+                }
+                let (queue_id, task_id, position) =
+                    task::config_queue::create_or_enqueue(&WasmHost, &config_id, &prompt)
+                        .map_err(anyhow::Error::msg)?;
+                Ok(serde_json::json!({
+                    "queue_id": queue_id,
+                    "task_id": task_id,
+                    "position": position,
+                }))
+            }
+            // 任务队列区列表（只列 ready：未绑定会话的批次）→ {queues}
+            "session.task.config-queues-list" => {
+                let queues = task::config_queue::list(&WasmHost);
+                Ok(serde_json::json!({ "queues": queues }))
+            }
+            // 启动任务队列：按配置新建会话并迁移整队任务执行 → {session_id}
+            "session.task.config-queue-start" => {
+                let a = CommandArgs::new(args);
+                let queue_id = a.str_or("queue_id", "");
+                if queue_id.is_empty() {
+                    return Err(anyhow::anyhow!("config-queue-start: missing queue_id"));
+                }
+                let session_id =
+                    task::config_queue::start(&WasmHost, &queue_id).map_err(anyhow::Error::msg)?;
+                Ok(serde_json::json!({ "session_id": session_id }))
+            }
+            // 任务队列自动模式开关（仅 ready 可切）→ {auto_mode}
+            "session.task.config-queue-set-auto" => {
+                let a = CommandArgs::new(args);
+                let queue_id = a.str_or("queue_id", "");
+                if queue_id.is_empty() {
+                    return Err(anyhow::anyhow!("config-queue-set-auto: missing queue_id"));
+                }
+                let auto_mode = a.value("auto_mode").and_then(|v| v.as_bool());
+                let auto_mode = auto_mode
+                    .ok_or_else(|| anyhow::anyhow!("config-queue-set-auto: missing auto_mode"))?;
+                task::config_queue::set_auto_mode(&WasmHost, &queue_id, auto_mode)
+                    .map_err(anyhow::Error::msg)
+            }
+            // 预设入队到任务队列（一次性消耗）→ {task_id, position}
+            "session.task.preset-enqueue-queue" => {
+                let a = CommandArgs::new(args);
+                let queue_id = a.str_or("queue_id", "");
+                let preset_id = a.str_or("preset_id", "");
+                if queue_id.is_empty() {
+                    return Err(anyhow::anyhow!("preset-enqueue-queue: missing queue_id"));
+                }
+                if preset_id.is_empty() {
+                    return Err(anyhow::anyhow!("preset-enqueue-queue: missing preset_id"));
+                }
+                let (task_id, position) =
+                    task::config_queue::preset_enqueue(&WasmHost, &queue_id, &preset_id)
+                        .map_err(anyhow::Error::msg)?;
+                task::preset::broadcast_preset_changed(&WasmHost, &preset_id, "enqueue");
                 Ok(serde_json::json!({ "task_id": task_id, "position": position }))
             }
             // 取消队列项（仅 waiting / executing）{session_id, task_id}

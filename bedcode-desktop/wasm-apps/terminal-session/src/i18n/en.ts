@@ -327,14 +327,29 @@ const en: MessageSchema = {
   'task.executingTaskTitle': 'Executing',
   'task.queueCount': 'Queue {count}',
   'task.createTaskTitle': 'New Task',
-  'task.createTaskSession': 'Running Session',
+  'task.createTaskSession': 'Select Execution Session',
   'task.saveAsPresetOption': 'Save as preset task',
+  'task.createNewSessionOption': 'Create new {name} session',
   'task.createTaskPromptPlaceholder': 'Enter a prompt, press Enter to create',
   'task.createTaskSubmit': 'Create',
   'task.createTaskFailed': 'Failed to create task',
   'task.noRunningSessions': 'No running sessions',
   'task.noRunningSessionsHint':
     'Created tasks are saved as presets — enqueue them after a session starts',
+  // ==================== Task Queues (config-keyed, session not yet created) ====================
+  'task.configQueueTitle': 'Task Queues',
+  'task.queueStart': 'Start',
+  'task.queueStartHint': 'Create the session and start executing queued tasks',
+  'task.queueStartEmptyHint': 'Queue is empty, add a task first',
+  'task.queueAutoMode': 'Auto mode',
+  'task.queueAutoModeHint':
+    'When on, a queue auto-creates its session once it has tasks; between tasks the session closes and a new one is created (rotation)',
+  'task.queueStartFailed': 'Failed to start queue',
+  'task.queueAutoFailed': 'Failed to set auto mode',
+  'task.presetQueueLabel': 'Target queue',
+  'task.presetQueueEmpty': 'No queues yet',
+  'task.presetQueueHint':
+    'No queues yet — submit a task via "Create new … session" in New Task to create one, then presets can be added to a queue',
   'task.agentNotAdapted':
     "The current session's Agent is not compatible with Auto Task. Please select a compatible session (claude / codex / opencode / pi).",
   // ==================== Preset Tasks ====================

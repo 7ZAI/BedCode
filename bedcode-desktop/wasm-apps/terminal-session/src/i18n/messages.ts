@@ -318,11 +318,23 @@ export type MessageSchema = {
   'task.createTaskTitle': string
   'task.createTaskSession': string
   'task.saveAsPresetOption': string
+  'task.createNewSessionOption': string
   'task.createTaskPromptPlaceholder': string
   'task.createTaskSubmit': string
   'task.createTaskFailed': string
   'task.noRunningSessions': string
   'task.noRunningSessionsHint': string
+  'task.configQueueTitle': string
+  'task.queueStart': string
+  'task.queueStartHint': string
+  'task.queueStartEmptyHint': string
+  'task.queueAutoMode': string
+  'task.queueAutoModeHint': string
+  'task.queueStartFailed': string
+  'task.queueAutoFailed': string
+  'task.presetQueueLabel': string
+  'task.presetQueueEmpty': string
+  'task.presetQueueHint': string
   'task.agentNotAdapted': string
   // ==================== 预设任务 ====================
   'task.presetTitle': string

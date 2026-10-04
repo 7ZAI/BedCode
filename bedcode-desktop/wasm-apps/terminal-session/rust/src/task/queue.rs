@@ -57,6 +57,57 @@ const MAX_DISPATCH_ATTEMPTS: i64 = 3;
 /// 但 elapsed 含休眠时长），取 12h 折中。
 pub const EXECUTING_SILENCE_TIMEOUT_SECS: i64 = 12 * 3600;
 
+/// retrying 过渡态静默看门狗阈值（秒）
+///
+/// `retrying` 是 agent「可重试错误后正在自动退避重试」的**过渡态**：按约定它必然
+/// 收敛到 in_progress / completed（重试成功）或 interrupted（重试耗尽 /
+/// agent_settled）。因此「长时间无任何事件」= 收敛信号已丢失，而不是任务还在跑。
+///
+/// 阈值依据（pi 内核 auto-retry 上界，`settings.retry` 默认值）：
+/// `maxRetries = 3` 次，每次退避 `min(baseDelay 2s × 2^(n-1), maxAgentDelay 60s)`
+/// → 退避总时长上界 ≈ 2 + 4 + 8 = 14s，加上三次请求自身的耗时，最坏也在数分钟内
+/// 收敛。取 20 min 留足余量（含用户自定义更激进的退避配置）。
+///
+/// 为什么不用 [`EXECUTING_SILENCE_TIMEOUT_SECS`] 的 12h：那把「推送链断裂」当罕见
+/// 事故，而 retrying 的断裂是**常态**（宿主重启 / 终态推送 HTTP 丢失 / 限额类错误
+/// 被 hook 误判为可重试）。12h 内 `has_active_task` 恒真 → 队列全链停摆：后续任务
+/// 不再下发、定时任务的会话回收不触发、历史页长期显示「重试中」（2026-10-03 实测
+/// 现场：一条 `insufficient_quota` 的 429 任务卡在 retrying 逾 8 小时，队列第二项
+/// 永不下发）。
+///
+/// 取舍（休眠）：阈值短于 12h，机器休眠跨过阈值时可能在唤醒后误判一次。误判代价
+/// 有界且可接受——该任务记为 interrupted、队列轮换出新会话继续跑，仍在退避的 agent
+/// 被隔离在已关闭的旧会话里，不会把输入打进新任务；反之（阈值拉长）就是上面那条
+/// 「整链停摆一整天」的现场。
+pub const RETRYING_SILENCE_TIMEOUT_SECS: i64 = 20 * 60;
+
+/// retrying 停滞收敛原因（写入 `exit_reason`，历史页与移动端据此解释）
+pub const RETRY_STALL_INTERRUPT_REASON: &str =
+    "Retry stalled: agent stopped reporting status without a terminal result";
+
+/// retrying 行的看门狗裁决（纯判定，native 可测）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RetryingVerdict {
+    /// 静默时长未超阈值：agent 仍在退避重试，继续等待（**不得**收敛——
+    /// 误杀正在正常重试的长任务比多等一会儿坏得多）
+    Wait,
+    /// 静默时长已超阈值：重试链已断（agent 崩溃 / 终态推送丢失），
+    /// 收敛为 interrupted 并续跑队列
+    Interrupt,
+}
+
+/// retrying 行裁决：静默时长是否已越过阈值（纯判定，native 可测）
+///
+/// 严格大于（`>`）而非 `>=`：阈值本身是「仍可信」的上界，恰好等于阈值的那一秒
+/// 仍属可接受范围；越界需要**跨过**阈值才算断链。
+pub fn judge_retrying_stall(silent_secs: i64, timeout_secs: i64) -> RetryingVerdict {
+    if silent_secs > timeout_secs {
+        RetryingVerdict::Interrupt
+    } else {
+        RetryingVerdict::Wait
+    }
+}
+
 /// 第 N 次尝试的等待窗口（秒）：轮换会话后等待新会话 idle 推送的时限
 ///
 /// 节奏 3s → 5s → 8s 递增（每次重试重置计时，累计约 16s）：
@@ -1219,6 +1270,80 @@ pub fn check_executing_silence(host: &WasmHost, now_utc: &str) -> Result<(), Str
     Ok(())
 }
 
+/// retrying 过渡态静默看门狗（scheduler-tick 周期调用）
+///
+/// 逐条检查 `retrying` 任务行：以行内最后事件时间（`event_time`，缺失时回退
+/// `updated_at` / `created_at`）为准算静默时长，越过
+/// [`RETRYING_SILENCE_TIMEOUT_SECS`] 即判定 agent 的收敛信号丢失，复用
+/// [`crate::task::state::interrupt_running_tasks`] 把该会话的运行中任务行与
+/// 在途队列项一并收敛为 interrupted。
+///
+/// 与 [`check_executing_silence`] 的分工：后者守的是「合法长任务不许被误杀」
+/// （12h），本者守的是「过渡态必须有界」——retrying 按 agent 的重试上界必然在
+/// 数分钟内收敛，长时间静默只能是推送链断了，故用短阈值。
+///
+/// **收敛后必须续跑**（[`Self::check_executing_silence`] 不续跑：那是会话已死
+/// 的场景）：会话仍在册时立即 [`try_dispatch_next`]，把队列里下一项下发——
+/// 闭环的最后一环，否则这一条卡住会让整条队列跟着停摆。会话已不在册时跳过
+/// （收敛本身已完成，调度入口也会自己判「会话不存在」返回）。
+///
+/// 票 15：私有库查询失败冒泡为本域 Result，供定时器回调按域计数降级。
+pub fn check_retrying_silence(host: &WasmHost, now_utc: &str) -> Result<(), String> {
+    // **按会话聚合**（GROUP BY session_id）而不是逐行：收敛面是会话级的
+    //（interrupt_running_tasks 会把该会话全部非终态行一并收敛），逐行走会在同一会话
+    // 有多条停滞行时对同一会话调两次——第一次收敛后已续跑下一项（新建 in_progress 行），
+    // 第二次会把刚下发的任务一并误杀。按会话聚合后一轮 tick 每会话至多收敛一次。
+    let rows = host
+        .plugin_db_query_params(
+            "SELECT session_id, MAX(strftime('%s', ?1) - strftime('%s', \
+                 COALESCE(NULLIF(event_time, ''), NULLIF(updated_at, ''), created_at))) AS silent_secs \
+             FROM task_history WHERE status = 'retrying' GROUP BY session_id",
+            &sql_params![now_utc],
+        )
+        .map_err(|e| format!("query stalled retrying tasks: {}", e.message))?
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default();
+
+    let mut yield_counter = 0u64;
+    for row in rows {
+        yield_guard(host, &mut yield_counter);
+        let session_id = row
+            .get("session_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        if session_id.is_empty() {
+            continue;
+        }
+        let silent_secs = row.get("silent_secs").and_then(|v| v.as_i64()).unwrap_or(0);
+        if judge_retrying_stall(silent_secs, RETRYING_SILENCE_TIMEOUT_SECS)
+            != RetryingVerdict::Interrupt
+        {
+            continue;
+        }
+
+        host.log_warn(&format!(
+            "check_retrying_silence: session_id={} retrying silent for {}s (> {}s), \
+             terminal signal lost, converging to interrupted",
+            session_id, silent_secs, RETRYING_SILENCE_TIMEOUT_SECS
+        ));
+        crate::task::state::interrupt_running_tasks(
+            host,
+            &session_id,
+            RETRY_STALL_INTERRUPT_REASON,
+        );
+        // 会话仍在册才续跑下一项（已消失时调度入口只会自己判不存在返回）
+        if crate::session::view_via_host(&session_id)
+            .ok()
+            .flatten()
+            .is_some()
+        {
+            try_dispatch_next(host, &session_id);
+        }
+    }
+    Ok(())
+}
+
 // ==================== HTTP Endpoint Handler ====================
 
 /// 处理队列相关的 HTTP 端点请求
@@ -1583,5 +1708,130 @@ mod tests {
                 profile.name
             );
         }
+    }
+
+    // ---------- judge_retrying_stall ----------
+
+    /// 正例：静默时长跨过阈值 → 收敛（重试链已断，不收敛就会永久卡在重试中）
+    #[test]
+    fn retrying_stall_verdict_interrupts_after_threshold() {
+        assert_eq!(
+            judge_retrying_stall(RETRYING_SILENCE_TIMEOUT_SECS + 1, RETRYING_SILENCE_TIMEOUT_SECS),
+            RetryingVerdict::Interrupt
+        );
+    }
+
+    /// 反例：未到阈值 → 继续等待（误杀正在正常退避重试的长任务比多等一会儿坏得多）
+    #[test]
+    fn retrying_stall_verdict_waits_before_threshold() {
+        assert_eq!(
+            judge_retrying_stall(0, RETRYING_SILENCE_TIMEOUT_SECS),
+            RetryingVerdict::Wait
+        );
+        assert_eq!(
+            judge_retrying_stall(599, RETRYING_SILENCE_TIMEOUT_SECS),
+            RetryingVerdict::Wait
+        );
+    }
+
+    /// 边界：恰好等于阈值仍算「可信」（判据是严格大于 `>`，不是 `>=`）
+    ///
+    /// 锁的是比较符本身：改成 `>=` 会让「刚好卡在阈值」的那一秒提前收敛，而实测
+    /// pi 的退避总时长上界就在数分钟量级，阈值边界的归属直接影响误杀面。
+    #[test]
+    fn retrying_stall_verdict_boundary_is_strictly_greater() {
+        assert_eq!(
+            judge_retrying_stall(RETRYING_SILENCE_TIMEOUT_SECS, RETRYING_SILENCE_TIMEOUT_SECS),
+            RetryingVerdict::Wait
+        );
+        assert_eq!(
+            judge_retrying_stall(
+                RETRYING_SILENCE_TIMEOUT_SECS + 1,
+                RETRYING_SILENCE_TIMEOUT_SECS
+            ),
+            RetryingVerdict::Interrupt
+        );
+    }
+
+    /// 阈值档位契约：必须**远小于** executing 静默阈值（12h）且**远大于** agent
+    /// 自身的重试上界（pi `maxRetries=3` × `min(2s×2^(n-1), 60s)` ≈ 14s 退避）
+    ///
+    /// 两端都是产品判断而非任意取值：
+    /// - 下界（≥ 5min）：小于 agent 自身重试上界太多 → 正常退避中被误杀；
+    /// - 上界（< 12h = EXECUTING_SILENCE_TIMEOUT_SECS）：等于 12h 就是本次修复前
+    ///   的现场（队列停摆一整天），等于则本看门狗形同虚设。
+    #[test]
+    fn retrying_silence_threshold_is_bounded_by_both_sides() {
+        assert!(
+            RETRYING_SILENCE_TIMEOUT_SECS >= 5 * 60,
+            "阈值 {}s 小于 agent 重试上界余量（≥5min），会把正常退避重试误判为断链",
+            RETRYING_SILENCE_TIMEOUT_SECS
+        );
+        assert!(
+            RETRYING_SILENCE_TIMEOUT_SECS < EXECUTING_SILENCE_TIMEOUT_SECS,
+            "阈值 {}s 不小于 executing 静默阈值 {}s：retrying 停滞与合法长任务同等待，遇断链仍会整链停摆",
+            RETRYING_SILENCE_TIMEOUT_SECS,
+            EXECUTING_SILENCE_TIMEOUT_SECS
+        );
+    }
+
+    /// 闭环两半都在：停滞收敛**且**继续调度下一项
+    ///
+    /// 收敛面（`state::interrupt_running_tasks`）与续跑（`try_dispatch_next`）
+    /// 任缺其一都会让「任务不卡住」但「队列不推进」变成新的半闭环。两者都是宿主
+    /// 编排（native 无 DB 连接），故以结构锁钉住调用形状。
+    #[test]
+    fn retrying_watchdog_converges_and_continues_the_queue() {
+        let src = include_str!("queue.rs");
+        let body = src
+            .split("pub fn check_retrying_silence")
+            .nth(1)
+            .expect("check_retrying_silence must exist")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("watchdog body must precede the test module");
+        assert!(
+            body.contains("state::interrupt_running_tasks("),
+            "停滞收敛必须走唯一收敛面 state::interrupt_running_tasks（另起一套 SQL 会与它漂移）"
+        );
+        assert!(
+            body.contains("RETRY_STALL_INTERRUPT_REASON"),
+            "收敛必须带上可读的停滞原因（历史页与移动端据此解释为什么中断）"
+        );
+        assert!(
+            body.contains("try_dispatch_next(host, &session_id)"),
+            "收敛后必须续跑队列：缺失会让队列在第一个停滞任务后整体停摆（闭环缺失的最后一环）"
+        );
+        assert!(
+            body.contains("view_via_host(&session_id)"),
+            "续跑前必须判会话是否仍在册（会话已消失时调度入口只会自己判不存在返回）"
+        );
+    }
+
+    /// 看门狗只看 retrying 行：合法长任务（in_progress）与等待人工应答（asking）
+    /// 不得被本阈值收敛
+    #[test]
+    fn retrying_watchdog_query_is_scoped_to_retrying_rows() {
+        let src = include_str!("queue.rs");
+        let body = src
+            .split("pub fn check_retrying_silence")
+            .nth(1)
+            .expect("check_retrying_silence must exist")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+        assert!(
+            body.contains("WHERE status = 'retrying'"),
+            "看门狗 SQL 必须只取 retrying 行：带上 in_progress/asking 就会误杀长任务与等人工应答的任务"
+        );
+        assert!(
+            body.contains("GROUP BY session_id"),
+            "看门狗必须按会话聚合：逐行走会在同一会话有多条停滞行时重复收敛，\
+             第二次会把刚续跑下发的任务一并误杀"
+        );
+        assert!(
+            body.contains("NULLIF(event_time, '')"),
+            "静默时长必须以行内最后事件时间为准（用 updated_at 会把本域自身的写算成心跳，永远不触发）"
+        );
     }
 }
