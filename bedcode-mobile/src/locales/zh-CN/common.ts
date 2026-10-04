@@ -75,9 +75,12 @@ export default {
       sessionStoppedNoName: '"{device}" 停止了会话',
       connectionDisconnected: '连接已断开: {reason}',
       reconnectFailed: '重连失败: {reason}，请手动重新连接',
-      reconnectAbandoned: '自动重连已放弃，请手动重新连接',
       // M1/ADR 0031：认证类致命关闭（4001/4003）——需重新配对/认证后再连
       authFailedRePair: '身份认证已失效，请重新配对后再连接: {reason}',
+      // 协议/策略层不可重试关闭（1002/1003/1007/1008/1009/1010）——重连必然同样
+      // 失败，正确动作是升级其中一端。必须与 authFailedRePair 分开：否则用户会
+      // 按「重新配对」反复折腾，却解决不了版本/协议不匹配
+      protocolIncompatible: '连接协议不兼容，已停止自动重连，请升级应用后重试: {reason}',
     },
     errorCode: {
       ptyError: '终端进程错误',

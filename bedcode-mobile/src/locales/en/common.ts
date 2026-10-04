@@ -75,9 +75,13 @@ export default {
       sessionStoppedNoName: '"{device}" stopped a session',
       connectionDisconnected: 'Connection lost: {reason}',
       reconnectFailed: 'Reconnect failed: {reason}. Please reconnect manually',
-      reconnectAbandoned: 'Auto-reconnect abandoned. Please reconnect manually',
       // M1/ADR 0031: auth-fatal close (4001/4003) — re-pair needed before reconnecting
       authFailedRePair: 'Authentication invalidated. Please re-pair before reconnecting: {reason}',
+      // Protocol/policy non-retryable close (1002/1003/1007/1008/1009/1010):
+      // reconnecting with identical parameters cannot succeed — the fix is
+      // upgrading an endpoint. Kept separate from authFailedRePair so users are
+      // not sent to re-pair for what is really a version mismatch.
+      protocolIncompatible: 'Connection protocol incompatible. Auto-reconnect stopped; please update the app and retry: {reason}',
     },
     errorCode: {
       ptyError: 'Terminal process error',

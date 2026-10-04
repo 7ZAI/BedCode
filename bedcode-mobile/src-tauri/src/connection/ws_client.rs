@@ -5,7 +5,7 @@
 
 use crate::connection::MessageHandler;
 use crate::connection::{
-    heartbeat::HeartbeatManager, io::IoManager, lifecycle::LifecycleManager, reconnect::ReconnectManager,
+    heartbeat::HeartbeatManager, io::IoManager, lifecycle::LifecycleManager,
     ws_connection::WsConnectionManager, ConnectionStatus, IoEvent, MatchOutcome, RequestResponseManager,
     WsClientConfig, WsClientEvent,
 };
@@ -29,7 +29,6 @@ pub struct WsClient {
     io: Arc<IoManager>,
     heartbeat: Arc<HeartbeatManager>,
     lifecycle: Arc<LifecycleManager>,
-    reconnect: Arc<ReconnectManager>,
     /// 请求-响应管理器
     request_manager: Arc<RequestResponseManager>,
     /// 推送消息处理器
@@ -58,7 +57,6 @@ impl WsClient {
         let connection = WsConnectionManager::new(config.clone(), lifecycle.clone());
         let io = IoManager::new();
         let heartbeat = HeartbeatManager::from_client_config(config.heartbeat_interval_secs);
-        let reconnect = ReconnectManager::from_client_config(config.heartbeat_interval_secs);
         let request_manager = RequestResponseManager::new();
 
         let (event_tx, _) = broadcast::channel(BROADCAST_CHANNEL_CAPACITY);
@@ -69,7 +67,6 @@ impl WsClient {
             io,
             heartbeat,
             lifecycle,
-            reconnect,
             request_manager,
             handler: RwLock::new(None),
             ws_sender: RwLock::new(None),
@@ -425,6 +422,11 @@ impl WsClient {
         let heartbeat = self.heartbeat.clone();
         let event_tx = self.event_tx.clone();
 
+        // 握手已成功（connect() 在此之后才调本方法），此刻标记建连时刻作为
+        // 首个 Pong 到达前的半开检测基准。缺这一步会让这段窗口（默认 30s）
+        // 内的死连接既不报 send 错也不判超时。
+        heartbeat.mark_connected().await;
+
         let interval = heartbeat.config().interval;
         let max_timeouts = heartbeat.config().max_timeouts;
 
@@ -590,29 +592,7 @@ impl WsClient {
         }
     }
 
-    pub async fn reconnect(self: &Arc<Self>) -> Result<()> {
-        if !self.reconnect.should_retry().await {
-            return Err(crate::AppError::WebSocket("Max retries exceeded".to_string()));
-        }
 
-        if let Some(delay) = self.reconnect.start().await {
-            info!("[WsClient] Reconnecting in {:?}...", delay);
-            tokio::time::sleep(delay).await;
-
-            match self.connect().await {
-                Ok(_) => {
-                    self.reconnect.on_success().await;
-                    Ok(())
-                }
-                Err(e) => {
-                    self.reconnect.on_failure(e.to_string()).await;
-                    Err(crate::AppError::WebSocket(format!("Reconnect failed: {}", e)))
-                }
-            }
-        } else {
-            Err(crate::AppError::WebSocket("Reconnect abandoned".to_string()))
-        }
-    }
 }
 
 #[cfg(test)]

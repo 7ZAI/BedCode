@@ -12,37 +12,6 @@
             <span class="settings-label">{{ $t('settings.connection.keepAlive') }}</span>
             <Toggle v-model="settings.keepAlive" />
           </div>
-          <div class="settings-row">
-            <span class="settings-label">{{ $t('settings.connection.reconnectInterval') }}</span>
-            <div class="settings-stepper shrink-0">
-              <button
-                type="button"
-                class="settings-stepper-btn"
-                :disabled="Number(settings.reconnectInterval) <= 1"
-                @click="stepReconnectInterval(-1)"
-                :aria-label="t('common.button.decrease')"
-              >
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M20 12H4" /></svg>
-              </button>
-              <input
-                v-model.number="settings.reconnectInterval"
-                type="number"
-                inputmode="numeric"
-                min="1"
-                max="60"
-                class="settings-number-input"
-              />
-              <button
-                type="button"
-                class="settings-stepper-btn"
-                :disabled="Number(settings.reconnectInterval) >= 60"
-                @click="stepReconnectInterval(1)"
-                :aria-label="t('common.button.increase')"
-              >
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4" /></svg>
-              </button>
-            </div>
-          </div>
         </div>
       </section>
 
@@ -132,10 +101,15 @@
 
 <script setup lang="ts">
 /**
- * 连接设置二级页面 - 自动重连、保持连接、重连间隔、默认端口 + 链路加密（issue 08）
+ * 连接设置二级页面 - 自动重连、保持连接、默认端口 + 链路加密（issue 08）
  * 状态来自 useMobileSettings 共享单例，变更自动保存
+ *
+ * 「重连间隔」可调项已于 2026-10-04 移除：重连节奏收敛到 Rust 侧
+ * `ReconnectManager`（指数退避 + 抖动 + 同因熔断 + 1s 下限），不再是前端
+ * 的固定间隔循环。把退避算法参数漏给用户只会诱导他调出一个「3 秒重连一次」
+ * 的打服务端配置；留着开关却不再生效则是静默失效。
  */
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import SettingsSubPage from '@/components/SettingsSubPage.vue'
 import Toggle from '@/components/Toggle.vue'
@@ -146,6 +120,7 @@ import {
   useLinkEncryptionSettings,
 } from '@/composables/useLinkEncryption'
 import { useToast } from '@/composables/useToast'
+import { syncAutoReconnectSetting } from '@/composables/useMobileConnection'
 
 const { t } = useI18n()
 const toast = useToast()
@@ -185,19 +160,22 @@ function onToggleLinkEncryption(next: boolean) {
 onMounted(async () => {
   await loadSettings()
   refreshPinnedFingerprint()
+  // 首次同步：设置页是唯一入口，但 Rust 侧 flag 不随 localStorage 自动恢复，
+  // 不在这里推一次，重启后开关会回到默认值
+  await syncAutoReconnectSetting()
   // 配对/重认证（配对码/QR/reauth/生物认证）统一经 ws_link_crypto_pin 落地
   const { listen } = await import('@tauri-apps/api/event')
   const unlisten = await listen('ws_link_crypto_pin', refreshPinnedFingerprint)
   onUnmounted(() => unlisten())
 })
 
-// ==================== 数字步进 ====================
+// 自动重连开关递到 Rust 连接层（策略归连接层，UI 只递意图）
+watch(
+  () => settings.value.autoReconnect,
+  () => { void syncAutoReconnectSetting() },
+)
 
-/** 重连间隔（秒）步进：钳制到 1-60 */
-function stepReconnectInterval(delta: number) {
-  const next = Number(settings.value.reconnectInterval) + delta
-  settings.value.reconnectInterval = Math.max(1, Math.min(60, Number.isFinite(next) ? next : 1))
-}
+// ==================== 数字步进 ====================
 
 /** 默认端口步进：钳制到 1-65535 */
 function stepDefaultPort(delta: number) {

@@ -2,8 +2,15 @@
 //!
 //! HTTP 认证成功后（`MobileEvent::AuthSuccess` 广播契口）由单例监督任务自动建立
 //! `session-control` 插件端点常驻连接并发极简认证首帧（`establish_event_ws` 内部
-//! 完成，见 `connection/manager.rs`）；意外断开按既有 `DEFAULT_RETRY_DELAYS_MS`
-//! 退避经 HTTP reauth 自愈后重建，全程常驻、不主动断开、不干扰未来 P2 前端终端 WS。
+//! 完成，见 `connection/manager.rs`）；意外断开按 `ReconnectManager` 退避策略
+//! （指数退避 + 抖动 + 同因熔断）经 HTTP reauth 自愈后重建，全程常驻、不主动
+//! 断开、不干扰未来 P2 前端终端 WS。
+//!
+//! **本模块是自动重连的唯一执行者**（2026-10-04 收敛）：审计前前端
+//! `useMobileConnection.handleUnexpectedDisconnect` 另有一套固定间隔的重试
+//! 循环，两者在同一次断开里并发触发并互相烧计数（Rust 先赢、前端后到的调用
+//! 撞上 `is_reconnecting` 直接 skip，但前端计数已 +1 → 3 次预算空转）。现在
+//! 重连节奏只由 `ConnectionManager::reconnect` 决定，前端只订阅事件。
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -108,14 +115,39 @@ pub async fn run_supervisor(
                         Ok(event @ (WsClientEvent::Disconnected
                             | WsClientEvent::Error { .. }
                             | WsClientEvent::ServerClosed { .. })) => {
-                            let fatal = matches!(
-                                event,
-                                WsClientEvent::ServerClosed { code, .. }
-                                    if crate::system::constants::connection::is_auth_fatal_close_code(code)
-                            );
+                            let close_code = match &event {
+                                WsClientEvent::ServerClosed { code, .. } => Some(*code),
+                                _ => None,
+                            };
+                            let fatal = close_code
+                                .map(crate::system::constants::connection::is_auth_fatal_close_code)
+                                .unwrap_or(false);
+                            // 协议/策略层不可重试（1002/1003/1007/1008/1009/1010）：
+                            // 重连必然同样失败，只会把「版本不匹配」伪装成网络抖动。
+                            // 与认证类致命同属「不自愈」，但提示语不同（升级 vs 重新配对）。
+                            let non_retryable = close_code
+                                .map(crate::system::constants::connection::is_non_retryable_close_code)
+                                .unwrap_or(false);
                             if fatal {
                                 tracing::warn!(
                                     "[EventWsSupervisor] Auth-fatal WS close, skip self-heal (need re-pair)"
+                                );
+                                current = None;
+                                break;
+                            }
+                            if non_retryable {
+                                tracing::warn!(
+                                    "[EventWsSupervisor] Non-retryable WS close (protocol/policy), skip self-heal"
+                                );
+                                current = None;
+                                break;
+                            }
+                            // 用户关闭了自动重连：只断不愈，等用户手动或新认证流。
+                            // 「断开」事实已由 ConnMonitor 发过 ws_unexpected_disconnect，
+                            // 这里不再自愈，但也不能静默——明确记一行便于排障。
+                            if !manager.is_auto_reconnect_enabled() {
+                                tracing::info!(
+                                    "[EventWsSupervisor] Auto-reconnect disabled by user setting, skip self-heal"
                                 );
                                 current = None;
                                 break;

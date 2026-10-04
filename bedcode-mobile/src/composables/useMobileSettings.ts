@@ -14,7 +14,6 @@ import { useI18nStore } from '@/stores/i18n'
 export interface MobileSettings {
   autoReconnect: boolean
   keepAlive: boolean
-  reconnectInterval: number
   defaultPort: number
   notifyOnWaiting: boolean
   notifyOnConnection: boolean
@@ -31,7 +30,6 @@ export interface MobileSettings {
 export const defaultMobileSettings: MobileSettings = {
   autoReconnect: true,
   keepAlive: true,
-  reconnectInterval: 5,
   defaultPort: 8765,
   notifyOnWaiting: true,
   notifyOnConnection: true,

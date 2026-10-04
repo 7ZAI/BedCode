@@ -341,7 +341,6 @@ fn rand_simple() -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::system::constants::reconnect::DEFAULT_RETRY_DELAYS_MS;
 
     /// 构造确定性配置（禁用抖动），便于锁定退避序列
     fn deterministic_config(max_retries: u32, initial_delay_ms: u64, max_delay_ms: u64) -> ReconnectConfig {
@@ -405,21 +404,40 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_default_retry_delays_match_constant_table() {
-        // ReconnectManager 默认配置（等比 2.0）与 manager.rs 顶层重连等待表
-        // DEFAULT_RETRY_DELAYS_MS 一致：1s→2s→4s（max_retries=3），防止两侧漂移
+    async fn test_default_backoff_sequence_is_1s_2s_4s() {
+        // 退避序列的唯一事实源（本回归锁取代原「与 DEFAULT_RETRY_DELAYS_MS
+        // 保持一致」用例——2026-10-04 删除那张表后不再有第二个来源可对账）。
+        // 默认配置（等比 2.0、初始 1s）序列为 1s→2s→4s。
         let mgr = ReconnectManager::with_default_config();
-        for expect_ms in DEFAULT_RETRY_DELAYS_MS {
+        for expect_ms in [1000u64, 2000, 4000] {
             let delay = mgr.start().await.unwrap();
-            assert_eq!(delay, Duration::from_millis(*expect_ms));
+            assert_eq!(delay, Duration::from_millis(expect_ms));
         }
+        // 3 轮用尽（DEFAULT_MAX_RETRIES=3），下一轮不再给延迟
+        assert_eq!(mgr.get_retry_count().await, 3);
+        assert!(mgr.start().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_default_delays_respect_minimum_floor() {
+        // 下限钳制在真实退避路径上生效（MIN_RECONNECT_DELAY_MS）。旧实现里这道
+        // 钳制挂在零调用者的 WsClient::reconnect 上，等于没有；接线后它必须
+        // 对**低 initial_delay 配置**同样生效，而不是只保护默认值。
+        let mgr = ReconnectManager::new(deterministic_config(5, 0, 30_000));
+        let delay = mgr.start().await.unwrap();
+        assert_eq!(
+            delay,
+            Duration::from_millis(MIN_RECONNECT_DELAY_MS),
+            "initial_delay=0 不得击穿 1s 下限"
+        );
     }
 
     #[tokio::test]
     async fn test_reconnect_config_shrunk_to_three_rounds() {
-        // 重连收敛配置（2026-08-20）：3 轮封顶 + 等比 1s/2s/4s
+        // 重连收敛配置（2026-08-20）：3 轮封顶
         assert_eq!(DEFAULT_MAX_RETRIES, 3);
-        assert_eq!(DEFAULT_RETRY_DELAYS_MS, &[1000u64, 2000, 4000]);
+        assert_eq!(DEFAULT_INITIAL_DELAY_MS, 1000);
+        assert_eq!(DEFAULT_BACKOFF_MULTIPLIER, 2.0);
     }
 
     #[tokio::test]

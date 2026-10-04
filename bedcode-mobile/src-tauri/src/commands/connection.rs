@@ -115,6 +115,21 @@ pub async fn ws_is_connected() -> Result<bool> {
     Ok(conn.is_connected().await)
 }
 
+/// 同步「自动重连」设置项到连接层
+///
+/// 自动重连的执行者是 Rust 侧的 `EventWsSupervisor`（唯一自愈入口），退避
+/// 节奏由 `ConnectionManager` 的 `ReconnectManager` 策略决定。前端不持有重连
+/// 循环，只把用户的开关意图同步过来。
+///
+/// 关闭后：断开仍会照常上报 `ws_unexpected_disconnect`（断开是事实），但监督
+/// 任务不自愈，需用户手动连接或重新认证。
+#[tauri::command]
+pub async fn set_auto_reconnect(enabled: bool) -> Result<()> {
+    let manager = get_connection_manager();
+    manager.set_auto_reconnect(enabled);
+    Ok(())
+}
+
 /// 重新连接（断线重连）
 #[tauri::command]
 pub async fn ws_reconnect(app_handle: AppHandle, session_token: Option<String>) -> Result<()> {

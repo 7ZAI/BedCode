@@ -231,6 +231,7 @@ pub fn run() {
             commands::connection::ws_get_status,
             commands::connection::ws_is_connected,
             commands::connection::ws_reconnect,
+            commands::connection::set_auto_reconnect,
             commands::connection::get_ws_token,
             commands::connection::get_ws_url,
             // Terminal Link（会话级终端 WS，Rust 后端持有；票 05 新插件端点协议）

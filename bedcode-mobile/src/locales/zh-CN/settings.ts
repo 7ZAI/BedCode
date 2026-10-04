@@ -58,7 +58,6 @@ export default {
       subtitle: '自动重连、端口等连接参数',
       autoReconnect: '自动重连',
       keepAlive: '保持连接',
-      reconnectInterval: '重连间隔 (秒)',
       defaultPort: '默认端口',
       reconnectSection: '重连',
       networkSection: '网络',

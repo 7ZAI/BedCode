@@ -12,6 +12,7 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::{broadcast, RwLock};
 use tracing;
 
+use crate::connection::reconnect::ReconnectManager;
 use crate::connection::{ClientDefaultMessageHandler, WsClient, WsClientConfig, WsClientEvent};
 use crate::model::message::Message;
 use crate::state::get_global_token;
@@ -25,7 +26,7 @@ use crate::router::{ClientBusinessRouter, ClientRouteContext, MobileEvent};
 use crate::system::constants::connection::{
     BROADCAST_CHANNEL_CAPACITY, CONNECTION_STABILIZE_DELAY_MS, LOG_PREVIEW_MAX_LEN, WS_PLUGIN_SESSION_CONTROL_PATH,
 };
-use crate::system::constants::reconnect::{DEFAULT_MAX_RETRIES, DEFAULT_RETRY_DELAYS_MS};
+use crate::system::constants::reconnect::DEFAULT_MAX_RETRIES;
 
 // Re-export ConnectionStatus for public API
 pub use crate::connection::ConnectionStatus;
@@ -118,6 +119,17 @@ pub struct ConnectionManager {
     retry_count: Arc<AtomicU32>,
     /// 重连中标记
     is_reconnecting: Arc<AtomicBool>,
+    /// 重连退避策略（指数退避 + 抖动 + 同因熔断 + 1s 下限钳制）
+    ///
+    /// **单一事实源**：重连节奏只由本策略决定。2026-10-04 审计前本字段挂在
+    /// `WsClient::reconnect()` 上，而该方法全仓零调用者——等于退避引擎写了
+    /// 却从未接线，真正的等待走的是 `DEFAULT_RETRY_DELAYS_MS` 硬编码表
+    /// （无抖动）。两张表靠注释声称「一致」互相背书，实际各自独立。
+    reconnect_policy: Arc<ReconnectManager>,
+    /// 用户是否开启自动重连（设置项，前端经 `set_auto_reconnect` 同步）
+    ///
+    /// 关闭时监督任务不自愈，只发断连事件让 UI 提示用户手动重连。
+    auto_reconnect: Arc<AtomicBool>,
 }
 
 impl ConnectionManager {
@@ -133,12 +145,31 @@ impl ConnectionManager {
             manual_disconnect: Arc::new(AtomicBool::new(false)),
             retry_count: Arc::new(AtomicU32::new(0)),
             is_reconnecting: Arc::new(AtomicBool::new(false)),
+            reconnect_policy: ReconnectManager::with_default_config(),
+            auto_reconnect: Arc::new(AtomicBool::new(true)),
         })
     }
 
     /// 获取当前连接状态（设备级 status）
     pub async fn get_status(&self) -> ConnectionStatus {
         self.status.read().await.clone()
+    }
+
+    /// 设置是否允许自动重连（前端设置项同步）
+    ///
+    /// 自动重连的唯一执行者是 `EventWsSupervisor`（见 `connection/event_ws.rs`）：
+    /// 关闭后监督任务**不自愈**，但仍照常发 `ws_unexpected_disconnect` 让 UI
+    /// 提示断连——「断开」是事实，「是否自动恢复」是策略，二者不能一起关。
+    pub fn set_auto_reconnect(&self, enabled: bool) {
+        let previous = self.auto_reconnect.swap(enabled, Ordering::SeqCst);
+        if previous != enabled {
+            tracing::info!("Auto-reconnect setting changed: {} -> {}", previous, enabled);
+        }
+    }
+
+    /// 当前是否允许自动重连
+    pub fn is_auto_reconnect_enabled(&self) -> bool {
+        self.auto_reconnect.load(Ordering::SeqCst)
     }
 
     /// 获取目标设备
@@ -383,29 +414,40 @@ impl ConnectionManager {
                             // 关闭——自愈重连前需重新配对/认证，重连无意义。前端据此
                             // 只弹一次「需重新配对」提示，不走自动重连；后端自愈监督
                             // 同样跳过（见 event_ws.rs）。非致命断开走既有自愈路径。
-                            let (reason, fatal) = match &event {
+                            let (reason, fatal, non_retryable) = match &event {
                                 WsClientEvent::ServerClosed { code, reason } => {
-                                    let fatal =
-                                        crate::system::constants::connection::is_auth_fatal_close_code(*code);
+                                    let fatal = crate::system::constants::connection::is_auth_fatal_close_code(*code);
+                                    // 协议/策略层不可重试：重连必然同样失败，且会把
+                                    // 「版本不匹配」伪装成网络抖动。与认证类致命分开
+                                    // 上报，前端才能给出「升级一端」而非「重新配对」。
+                                    let non_retryable =
+                                        crate::system::constants::connection::is_non_retryable_close_code(*code);
                                     if fatal {
                                         tracing::warn!(
                                             close_code = %code,
                                             %reason,
                                             "[ConnMonitor] Auth-fatal WS close (need re-pair), no self-heal"
                                         );
+                                    } else if non_retryable {
+                                        tracing::warn!(
+                                            close_code = %code,
+                                            %reason,
+                                            "[ConnMonitor] Non-retryable WS close (protocol/policy), no self-heal"
+                                        );
                                     } else {
                                         tracing::warn!("[ConnMonitor] Unexpected disconnect detected: {:?}", event);
                                     }
-                                    (reason.clone(), fatal)
+                                    (reason.clone(), fatal, non_retryable)
                                 }
-                                WsClientEvent::Error { message } => (message.clone(), false),
-                                _ => ("Connection lost".to_string(), false),
+                                WsClientEvent::Error { message } => (message.clone(), false, false),
+                                _ => ("Connection lost".to_string(), false, false),
                             };
                             let _ = app_clone.emit(
                                 "ws_unexpected_disconnect",
                                 serde_json::json!({
                                     "reason": reason,
                                     "fatal": fatal,
+                                    "non_retryable": non_retryable,
                                 }),
                             );
 
@@ -480,11 +522,22 @@ impl ConnectionManager {
         }
         self.is_reconnecting.store(true, Ordering::SeqCst);
         self.retry_count.store(0, Ordering::SeqCst);
+        // 策略复位：上一轮的退避进度 / 同因熔断计数不带入本轮
+        self.reconnect_policy.reset().await;
 
         while current_retry < max_retry {
             // 用户主动断开，停止重连循环（统一出口复位 flag）
             if self.manual_disconnect.load(Ordering::SeqCst) {
                 tracing::info!("Manual disconnect detected, aborting reconnect");
+                break;
+            }
+
+            // 推进一轮策略（内部按 should_retry 判定；命中同因熔断时返回 None）
+            if self.reconnect_policy.start().await.is_none() {
+                tracing::warn!(
+                    "Reconnect policy gave up before round {} (circuit breaker or retries exhausted)",
+                    current_retry + 1
+                );
                 break;
             }
 
@@ -501,18 +554,6 @@ impl ConnectionManager {
                 );
             }
             tracing::info!("Reconnecting attempt {}/{}", current_retry + 1, max_retry);
-
-            // 等待指数退避间隔（首次不等待）
-            if current_retry > 0 {
-                let delay = DEFAULT_RETRY_DELAYS_MS[(current_retry - 1) as usize];
-                tracing::info!("Waiting {}ms before retry...", delay);
-                tokio::time::sleep(tokio::time::Duration::from_millis(delay)).await;
-                // 等待期间用户可能已断开（统一出口复位 flag）
-                if self.manual_disconnect.load(Ordering::SeqCst) {
-                    tracing::info!("Manual disconnect during reconnect delay, aborting");
-                    break;
-                }
-            }
 
             // 目标设备：HTTP reauth 的地址真源
             let target = self.target.read().await.clone();
@@ -553,6 +594,7 @@ impl ConnectionManager {
             match auth_mgr.authenticate_with_token(&session_token).await {
                 Ok(true) => {
                     tracing::info!("Reconnect attempt {} succeeded (HTTP reauth)", current_retry + 1);
+                    self.reconnect_policy.on_success().await;
                     self.is_reconnecting.store(false, Ordering::SeqCst);
                     self.retry_count.store(0, Ordering::SeqCst);
 
@@ -565,6 +607,9 @@ impl ConnectionManager {
                 Ok(false) => {
                     tracing::warn!("Reconnect attempt {} rejected", current_retry + 1);
                     current_retry += 1;
+                    self.reconnect_policy
+                        .on_failure("reauth rejected without error".to_string())
+                        .await;
                 }
                 Err(e) => {
                     if is_credential_rejection(&e) {
@@ -575,17 +620,34 @@ impl ConnectionManager {
                             e
                         );
                         self.is_reconnecting.store(false, Ordering::SeqCst);
+                        self.reconnect_policy.abandon("credential permanently rejected").await;
                         if let Some(ah) = &app_handle {
-                            let _ = ah.emit(
-                                "ws_reauth_rejected",
-                                serde_json::json!({ "reason": e.to_string() }),
-                            );
+                            let _ = ah.emit("ws_reauth_rejected", serde_json::json!({ "reason": e.to_string() }));
                         }
                         return Err(e);
                     }
                     tracing::warn!("Reconnect attempt {} failed: {}", current_retry + 1, e);
                     current_retry += 1;
+                    self.reconnect_policy.on_failure(e.to_string()).await;
                 }
+            }
+
+            // 失败后按策略退避（首轮不等：current_retry==1 时 current_delay 仍是
+            // 首轮的 1s，与审计前 `DEFAULT_RETRY_DELAYS_MS[0]` 节奏一致；后续轮
+            // 由策略给出 2s/4s + ±10% 抖动，并受 1s 下限钳制）。
+            //
+            // 放在轮末而非轮首：无目标 / 无 token 的提前退出不再白白等一个退避，
+            // 且 `current_delay` 天然等于**本轮**的退避值，无需偏移索引。
+            if current_retry >= max_retry || self.reconnect_policy.is_abandoned().await {
+                break;
+            }
+            let delay = self.reconnect_policy.get_delay().await;
+            tracing::info!("Waiting {:?} before next reconnect attempt...", delay);
+            tokio::time::sleep(delay).await;
+            // 等待期间用户可能已断开（统一出口复位 flag）
+            if self.manual_disconnect.load(Ordering::SeqCst) {
+                tracing::info!("Manual disconnect during reconnect delay, aborting");
+                break;
             }
         }
 
@@ -770,6 +832,8 @@ impl Default for ConnectionManager {
             manual_disconnect: Arc::new(AtomicBool::new(false)),
             retry_count: Arc::new(AtomicU32::new(0)),
             is_reconnecting: Arc::new(AtomicBool::new(false)),
+            reconnect_policy: ReconnectManager::with_default_config(),
+            auto_reconnect: Arc::new(AtomicBool::new(true)),
         }
     }
 }
@@ -784,13 +848,15 @@ impl Clone for ConnectionManager {
             manual_disconnect: self.manual_disconnect.clone(),
             retry_count: self.retry_count.clone(),
             is_reconnecting: self.is_reconnecting.clone(),
+            reconnect_policy: self.reconnect_policy.clone(),
+            auto_reconnect: self.auto_reconnect.clone(),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::is_credential_rejection;
+    use super::{is_credential_rejection, ConnectionManager};
     use crate::AppError;
 
     /// 行为契约（ADR 0033 §8.2 / F3）：只有 `Auth`（桌面端业务信封 `code != 0`）
@@ -833,5 +899,35 @@ mod tests {
         assert!(!is_credential_rejection(&AppError::Internal(
             "token credential rejected by proxy".into()
         )));
+    }
+
+    /// 行为契约（2026-10-04 审计 P0-2）：自动重连开关是「是否允许自愈」的
+    /// 唯一入口，由连接层持有。前端不再持有任何重连循环，只把用户意图同步过来。
+    #[test]
+    fn auto_reconnect_defaults_to_enabled() {
+        // 正例：默认开启（既有行为不变——升级不能悄悄关掉用户可见的自愈）
+        assert!(ConnectionManager::default().is_auto_reconnect_enabled());
+    }
+
+    #[test]
+    fn set_auto_reconnect_toggles_the_supervisor_gate() {
+        // 正例 + 反例往返：关 → 监督任务不自愈；开 → 恢复
+        let mgr = ConnectionManager::default();
+        mgr.set_auto_reconnect(false);
+        assert!(!mgr.is_auto_reconnect_enabled());
+        mgr.set_auto_reconnect(true);
+        assert!(mgr.is_auto_reconnect_enabled());
+    }
+
+    #[test]
+    fn auto_reconnect_flag_is_shared_across_clones() {
+        // 副作用/共享状态：监督任务持有的是 clone，改设置必须作用到它看到的那份
+        let mgr = ConnectionManager::default();
+        let supervisor_view = mgr.clone();
+        mgr.set_auto_reconnect(false);
+        assert!(
+            !supervisor_view.is_auto_reconnect_enabled(),
+            "clone 未共享开关会导致设置页关了、实际仍在自愈"
+        );
     }
 }

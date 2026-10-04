@@ -66,6 +66,8 @@ pub struct HeartbeatManager {
     is_running: Arc<RwLock<bool>>,
     /// 最后收到 Pong 的时间
     last_pong: RwLock<Option<std::time::Instant>>,
+    /// 建连时刻（首个 Pong 到达前的超时基准，见 `is_connection_lost`）
+    connected_at: RwLock<Option<std::time::Instant>>,
     /// 连续超时次数
     consecutive_timeouts: RwLock<u32>,
     /// 运行标记（用于原子操作）
@@ -81,6 +83,7 @@ impl HeartbeatManager {
             event_tx,
             is_running: Arc::new(RwLock::new(false)),
             last_pong: RwLock::new(None),
+            connected_at: RwLock::new(None),
             consecutive_timeouts: RwLock::new(0),
             running_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
@@ -120,14 +123,30 @@ impl HeartbeatManager {
         debug!("[HeartbeatManager] Pong received");
     }
 
+    /// 记录建连时刻：首个 Pong 到达前的半开检测基准
+    ///
+    /// 必须由调用方在 WS **握手成功后**、启动心跳循环前调用一次。缺了它，
+    /// 建连后首个 Pong 到达前（默认整整一个心跳间隔 = 30s）`last_pong` 恒为
+    /// `None`，半开连接（对端进程已死、中间 NAT 仍维持 TCP）既不因
+    /// `send(Ping)` 报错、也不被判超时 → 死连接可以无限期挂着。
+    pub async fn mark_connected(&self) {
+        *self.connected_at.write().await = Some(std::time::Instant::now());
+        *self.last_pong.write().await = None;
+        *self.consecutive_timeouts.write().await = 0;
+    }
+
     /// 检查是否应该认为连接已断开
+    ///
+    /// 基准二选一：收到过 Pong 用 `last_pong`；尚未收到（首个心跳周期内）用
+    /// 建连时刻 `connected_at`。两者都无 = 心跳循环从未启动，判定交由调用方。
     pub async fn is_connection_lost(&self) -> bool {
-        let last_pong = self.last_pong.read().await;
-        if let Some(last) = *last_pong {
-            last.elapsed() > self.config.timeout
-        } else {
-            false
+        if let Some(last) = *self.last_pong.read().await {
+            return last.elapsed() > self.config.timeout;
         }
+        if let Some(connected) = *self.connected_at.read().await {
+            return connected.elapsed() > self.config.timeout;
+        }
+        false
     }
 
     /// 停止心跳
@@ -162,6 +181,7 @@ impl Default for HeartbeatManager {
             event_tx: broadcast::channel(BROADCAST_CHANNEL_CAPACITY).0,
             is_running: Arc::new(RwLock::new(false)),
             last_pong: RwLock::new(None),
+            connected_at: RwLock::new(None),
             consecutive_timeouts: RwLock::new(0),
             running_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
@@ -240,9 +260,46 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_connection_lost_false_before_any_pong() {
-        // 从未收到 Pong（last_pong=None）时不算断连——当前实现的语义约定
+    async fn test_connection_lost_false_when_never_marked_connected() {
+        // 心跳循环从未启动（既无 mark_connected 也无 Pong）：判定权交还调用方，
+        // 本管理器不擅自判死。契约：两个基准都缺 → 不算断连
         let mgr = HeartbeatManager::new(HeartbeatConfig::default());
+        assert!(!mgr.is_connection_lost().await);
+    }
+
+    #[tokio::test]
+    async fn test_connection_lost_becomes_true_after_mark_connected_without_pong() {
+        // 回归锁（2026-10-04 审计 P1-3）：建连后**首个 Pong 到达前**的半开检测。
+        // 旧实现 `last_pong == None => false` 让这段窗口内的检测完全失效——TCP 半开时
+        // send(Ping) 只写本地缓冲区并成功返回，两条判据都不触发，死连接无限期挂着。
+        // 修复后基准回落到建连时刻，超时即判死。
+        //
+        // timeout 取 1ms + 30ms 真实等待（Instant 无注入缝，与既有超时用例同款取法）
+        let mgr = HeartbeatManager::new(HeartbeatConfig {
+            interval: Duration::from_secs(1),
+            timeout: Duration::from_millis(1),
+            max_timeouts: DEFAULT_MAX_HEARTBEAT_TIMEOUTS,
+        });
+        mgr.mark_connected().await;
+        assert!(!mgr.is_connection_lost().await, "刚建连不应立即判死");
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert!(
+            mgr.is_connection_lost().await,
+            "建连后未收到任何 Pong 且已超时应判死（半开检测不得失效）"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_mark_connected_resets_pong_baseline_and_timeout_count() {
+        // mark_connected 是新一轮建连的起点：清掉上一轮的 Pong 基准与超时计数，
+        // 否则重连后会沿用旧连接的 elapsed 而立即误判（或沿用旧计数直接触顶）
+        let mgr = HeartbeatManager::new(HeartbeatConfig::default());
+        mgr.on_pong_received().await;
+        mgr.increment_timeout().await;
+        mgr.increment_timeout().await;
+        mgr.mark_connected().await;
+        assert_eq!(mgr.get_consecutive_timeouts().await, 0);
+        // 旧 Pong 基准已清空 → 判定回落到建连时刻，默认 90s 超时下不判死
         assert!(!mgr.is_connection_lost().await);
     }
 

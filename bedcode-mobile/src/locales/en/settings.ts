@@ -58,7 +58,6 @@ export default {
       subtitle: 'Auto reconnect, port and other connection options',
       autoReconnect: 'Auto Reconnect',
       keepAlive: 'Keep Alive',
-      reconnectInterval: 'Reconnect Interval (s)',
       defaultPort: 'Default Port',
       reconnectSection: 'Reconnect',
       networkSection: 'Network',

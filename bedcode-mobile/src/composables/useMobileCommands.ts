@@ -65,6 +65,16 @@ export async function wsReconnect(sessionToken?: string): Promise<void> {
   return await invoke('ws_reconnect', { sessionToken: sessionToken || null })
 }
 
+/**
+ * 同步「自动重连」开关到 Rust 连接层
+ *
+ * 自动重连由 `EventWsSupervisor` 唯一执行、退避节奏由 `ReconnectManager` 决定，
+ * 前端不持有重连循环，只把用户意图递过去。
+ */
+export async function setAutoReconnect(enabled: boolean): Promise<void> {
+  return await invoke('set_auto_reconnect', { enabled })
+}
+
 // ==================== Token Commands ====================
 
 /**

@@ -14,15 +14,20 @@
  *
  * 覆盖：连接成功全链路（探测 → WS 连接 → 事件驱动状态流转 → 凭据恢复 →
  * 已配对设备持久化）；探测不可达；12s 连接超时（fake timers 压缩）；
- * 取消连接；意外断开自动重连（ws_reconnect → ws_reconnected → JWT 认证 →
- * ws_paired 闭环）；重连次数耗尽放弃；服务端关闭。
+ * 取消连接；意外断开时前端**不**发起重连（重连已收敛到 Rust 侧
+ * EventWsSupervisor，唯一自愈入口）；关闭码三档提示分流（认证类致命 /
+ * 协议层不可重试 / 可重连）；自动重连开关同步到 Rust；Rust 端重连事件链
+ * （ws_reconnecting → ws_reconnected → JWT 认证 → ws_paired）；重连耗尽终态；
+ * 服务端关闭。
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { toast } from 'vue-sonner'
 import { createPinia, setActivePinia } from 'pinia'
 import type { RemoteDevice } from '@/composables/model'
 import { flushAsync, loadFreshModule, resetLocalStorage, clearEventHandlers } from './helpers'
 import { makeAuthCredentials, makeSessionSummary } from '@/__tests__/fixtures/index'
+import { useTerminalBufferStore } from '@/stores/terminalBuffer'
 
 // ==================== mock Tauri 边界 ====================
 
@@ -239,57 +244,105 @@ describe('连接流：useMobileConnection × useHttpApi × terminalBuffer store'
     await p.catch(() => {})
   })
 
-  it('意外断开自动重连闭环：ws_unexpected_disconnect → ws_reconnect → ws_reconnected → JWT 认证 → ws_paired', async () => {
-    // 预置重连设置（间隔 0 立即重试）与凭据
+  it('意外断开：前端**不**发起重连（重连已收敛到 Rust 监督任务），仅更新 UI 与订阅信念', async () => {
+    // 契约变更（2026-10-04 审计 P0-2）：重连循环只剩 Rust 侧
+    // EventWsSupervisor 一处。前端收到 ws_unexpected_disconnect 后只做
+    // UI/通知，绝不再 invoke ws_reconnect —— 旧实现两处并发触发，Rust 先赢、
+    // 前端后到的调用撞上 is_reconnecting 直接 skip，但前端计数已 +1，
+    // 3 次预算被空转烧掉（表现为“明明在线却说自动重连已放弃”）。
     await freshConnection(() => {
-      localStorage.setItem('mobile-settings', JSON.stringify({ autoReconnect: true, reconnectInterval: 0 }))
       const creds = makeAuthCredentials()
       localStorage.setItem('auth_pairing_id', creds.pairingId)
       localStorage.setItem('auth_fingerprint', creds.fingerprint)
       localStorage.setItem('auth_session_token', creds.sessionToken)
     })
 
-    // 连接建立：onConnected 复位 aborted（本场景验证的修复点——
-    // connect() 置位的取消标记在连接成功后必须复位，否则重连不可达）
     await conn.connect(DEVICE)
     await flushAsync()
     await emit('ws_connected')
     await flushAsync()
     expect(conn.connectionStatus.value).toBe('connected')
 
-    // 意外断开 → 前端自动重连启动（携带已存 token）
+    // 订阅信念必须清除：服务端订阅随连接关闭，不清则重连后的重订阅会被
+    // subscribed=true 跳过，桌面端新连接无订阅 → 终端只有历史没有实时
+    const bufferStore = useTerminalBufferStore()
+    bufferStore.ensureBuffer('s1')
+    bufferStore.markSubscribed('s1')
+    expect(bufferStore.getBuffer('s1')?.subscribed).toBe(true)
+
     await emit('ws_unexpected_disconnect', { reason: 'Connection reset' })
     await flushAsync()
-    expect(invokeCalls('ws_reconnect')).toEqual([[{ sessionToken: 'test-jwt-token' }]])
-    expect(conn.connectionStatus.value).toBe('connecting')
-    expect(conn.isConnecting.value).toBe(true)
 
-    // Rust 端重连成功 → JWT 认证 → ws_paired 事件闭环
-    await emit('ws_reconnected')
-    await flushAsync()
-    expect(invokeCalls('ws_authenticate')).toEqual([[{ sessionToken: 'test-jwt-token' }]])
-    expect(conn.connectionStatus.value).toBe('connected')
-
-    await emit('ws_paired')
-    await flushAsync()
-    expect(conn.isPaired.value).toBe(true)
+    // 核心断言：没有任何前端发起的重连
+    expect(invokeCalls('ws_reconnect')).toHaveLength(0)
+    // UI 如实反映「已断开」（断开是事实，与是否自愈无关）
+    expect(conn.connectionStatus.value).toBe('disconnected')
+    expect(conn.isConnecting.value).toBe(false)
+    expect(conn.connectionError.value).toBe('common.notification.connectionDisconnected')
+    expect(
+      bufferStore.getBuffer('s1')?.subscribed,
+      '断连后订阅信念未清除：重连后的重订阅会被 skipped，终端只剩历史没实时',
+    ).toBe(false)
   })
 
-  it('连接中意外断开（ws_connected 未到达）：不触发自动重连（aborted 尚未复位）', async () => {
-    // 修复边界验证：connect() 置位后、onConnected 复位前的窗口期内意外断开
-    // 不重连——取消标记语义在此窗口内仍然生效（连接未成功建立，重连无意义）
+  it('认证类致命关闭（fatal）：最后一次提示是「需重新配对」而非普通断连', async () => {
     await freshConnection(() => {
-      localStorage.setItem('mobile-settings', JSON.stringify({ autoReconnect: true, reconnectInterval: 0 }))
       const creds = makeAuthCredentials()
-      localStorage.setItem('auth_pairing_id', creds.pairingId)
-      localStorage.setItem('auth_fingerprint', creds.fingerprint)
+      localStorage.setItem('auth_session_token', creds.sessionToken)
+    })
+    await conn.connect(DEVICE)
+    await flushAsync()
+    await emit('ws_connected')
+    await flushAsync()
+
+    vi.mocked(toast.error).mockClear()
+    await emit('ws_unexpected_disconnect', { reason: 'closed 4001', fatal: true })
+    await flushAsync()
+
+    // 仍不发起前端重连（Rust 监督任务已跳过自愈）
+    expect(invokeCalls('ws_reconnect')).toHaveLength(0)
+    expect(conn.connectionStatus.value).toBe('disconnected')
+    // 最后一条提示必须点名「重新配对」——与普通断连文案区分，否则用户只会反复重试。
+    // 断言渲染后的文案（而非 i18n key）：锁的是用户实际看到的那句话。
+    const lastToast = String(vi.mocked(toast.error).mock.calls.at(-1)?.[0])
+    expect(lastToast).toContain('请重新配对')
+    expect(lastToast).not.toContain('连接协议不兼容')
+  })
+
+  it('协议/策略层不可重试关闭（non_retryable）：提示指向「升级应用」而非「重新配对」', async () => {
+    // 第三档（2026-10-04 审计 P1-4）：1002/1003/1007/1008/1009/1010。
+    // 重连必然同样失败，正确动作是升级一端；若沿用 authFailedRePair 文案，
+    // 用户会按“重新配对”折腾一圈也解决不了版本/协议不匹配。
+    await freshConnection(() => {
+      const creds = makeAuthCredentials()
+      localStorage.setItem('auth_session_token', creds.sessionToken)
+    })
+    await conn.connect(DEVICE)
+    await flushAsync()
+    await emit('ws_connected')
+    await flushAsync()
+
+    vi.mocked(toast.error).mockClear()
+    await emit('ws_unexpected_disconnect', { reason: 'closed 1002', fatal: false, non_retryable: true })
+    await flushAsync()
+
+    expect(invokeCalls('ws_reconnect')).toHaveLength(0)
+    expect(conn.connectionStatus.value).toBe('disconnected')
+    const lastToast = String(vi.mocked(toast.error).mock.calls.at(-1)?.[0])
+    expect(lastToast).toContain('连接协议不兼容')
+    // 互斥：不得指向「重新配对」——那是认证类致命的文案，对版本不匹配无效
+    expect(lastToast).not.toContain('请重新配对')
+  })
+
+  it('连接中意外断开（ws_connected 未到达）：UI 同样不发起重连', async () => {
+    await freshConnection(() => {
+      const creds = makeAuthCredentials()
       localStorage.setItem('auth_session_token', creds.sessionToken)
     })
 
     const p = conn.connect(DEVICE)
     await flushAsync()
 
-    // ws_connected 尚未触发 → aborted 仍为 true
     await emit('ws_unexpected_disconnect', { reason: 'handshake lost' })
     await flushAsync()
     expect(invokeCalls('ws_reconnect')).toHaveLength(0)
@@ -324,12 +377,11 @@ describe('连接流：useMobileConnection × useHttpApi × terminalBuffer store'
     expect(conn.isPaired.value).toBe(true)
   })
 
-  it('重连失败事件：ws_reconnect_failed → 状态 disconnected + 重连计数耗尽标记', async () => {
-    // 预置凭据与重连设置（重连失败事件的前端处理不依赖 aborted 状态）
+  it('重连失败事件：ws_reconnect_failed → 状态 disconnected，且后续断开不由前端接管', async () => {
+    // Rust 侧退避耗尽的终态。前端不得在这里（也不会）另起一套重试——
+    // 重连循环只有 EventWsSupervisor 一处。
     await freshConnection(() => {
       const creds = makeAuthCredentials()
-      localStorage.setItem('auth_pairing_id', creds.pairingId)
-      localStorage.setItem('auth_fingerprint', creds.fingerprint)
       localStorage.setItem('auth_session_token', creds.sessionToken)
     })
 
@@ -339,10 +391,31 @@ describe('连接流：useMobileConnection × useHttpApi × terminalBuffer store'
     expect(conn.connectionStatus.value).toBe('disconnected')
     expect(conn.isConnecting.value).toBe(false)
     expect(conn.connectionError.value).toBe('common.notification.connectionDisconnected')
-    // 后续再触发意外断开：attempt 已耗尽（MAX_AUTO_RECONNECT_ATTEMPTS），不进入重连
+
+    // 后续再触发意外断开：仍无前端发起的重连
     await emit('ws_unexpected_disconnect', { reason: 'again' })
     await flushAsync()
     expect(invokeCalls('ws_reconnect')).toHaveLength(0)
+    expect(conn.connectionStatus.value).toBe('disconnected')
+  })
+
+  it('自动重连开关同步到 Rust：默认开启', async () => {
+    // 契约：Rust 侧 flag 不会随 localStorage 自动恢复，init() 必须推一次。
+    // 漏推的后果是用户关掉的开关在重启后悄悄变回开启。
+    //
+    // 取**最后一次**调用而非全量：loadFreshModule 只重置模块缓存，上一用例的
+    // init() 异步链仍可能在本用例内落地（helpers 已记录同类跨用例残留）。
+    // 要锁的是「本模块最终把哪个值递给了 Rust」。
+    await freshConnection()
+    expect(invokeCalls('set_auto_reconnect').at(-1)).toEqual([{ enabled: true }])
+  })
+
+  it('自动重连开关同步到 Rust：用户关掉时推 false', async () => {
+    // 反例：同步逻辑存在但恒推 true，等于开关没接上
+    await freshConnection(() => {
+      localStorage.setItem('mobile-settings', JSON.stringify({ autoReconnect: false }))
+    })
+    expect(invokeCalls('set_auto_reconnect').at(-1)).toEqual([{ enabled: false }])
   })
 
   it('凭证被永久拒绝：ws_reauth_rejected → 状态 error（**不是** disconnected），且不再自愈重试', async () => {
