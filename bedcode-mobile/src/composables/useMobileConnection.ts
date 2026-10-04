@@ -395,11 +395,15 @@ async function init() {
   //   `fatal`         —— 认证类致命 close（4001/4003），需重新配对
   //   `non_retryable` —— 协议/策略层不可重试（1002/1003/1007/1008/1009/1010），
   //                      重连必然同样失败，需升级一端
+  //   `auto_reconnect_disabled` —— 用户关掉了自动重连，监督任务不自愈（需手动重连）
   // 其余情况由 `EventWsSupervisor` 自愈，本回调**只负责 UI 与通知**，不发起重连
   // （重连循环已收敛到 Rust 侧，见文件头「重连控制」注释）。
-  await listen<{ reason: string; fatal?: boolean; non_retryable?: boolean }>(
-    'ws_unexpected_disconnect',
-    (event) => {
+  await listen<{
+    reason: string
+    fatal?: boolean
+    non_retryable?: boolean
+    auto_reconnect_disabled?: boolean
+  }>('ws_unexpected_disconnect', (event) => {
     logger.warn('[MobileConnection] Unexpected disconnect:', event.payload.reason)
     connectionStatus.value = 'disconnected'
     connectionError.value = 'common.notification.connectionDisconnected'
@@ -442,6 +446,14 @@ async function init() {
         i18n.global.t('common.notification.protocolIncompatible', { reason: event.payload.reason }),
         5000,
       )
+      return
+    }
+
+    // 用户关闭了自动重连：监督任务已跳过自愈。不告知的话前端只能显示通用的
+    // 「连接已断开」，用户分不清「正在自愈」与「不会自愈」，只能干等退避耗尽。
+    if (event.payload.auto_reconnect_disabled) {
+      logger.warn('[MobileConnection] Auto-reconnect disabled by user, no self-heal will happen')
+      toast.error(i18n.global.t('common.notification.autoReconnectDisabled'), 5000)
       return
     }
 

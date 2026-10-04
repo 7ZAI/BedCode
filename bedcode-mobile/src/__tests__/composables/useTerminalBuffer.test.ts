@@ -50,8 +50,10 @@ import { useTerminalBufferStore } from '@/stores/terminalBuffer'
 import { useTerminalBuffer } from '@/composables/useTerminalBuffer'
 import type { Terminal } from '@xterm/xterm'
 
-function emitState(sessionId: string, phase: string, detail?: string) {
-  eventHandlers['terminal-state']!({ payload: { session_id: sessionId, phase, detail } })
+function emitState(sessionId: string, phase: string, detail?: string, retryInMs?: number) {
+  eventHandlers['terminal-state']!({
+    payload: { session_id: sessionId, phase, detail, retry_in_ms: retryInMs },
+  })
 }
 
 async function flushAsync(n = 3) {
@@ -239,5 +241,138 @@ describe('useTerminalBuffer（票 05：新协议）', () => {
     expect(ok).toBe(true)
     await flushAsync()
     expect(cmd.terminalSendInput).toHaveBeenCalledWith('s1', 'echo hi', 'enter')
+  })
+
+  // ==================== 链路重连提示（2026-10-04） ====================
+  //
+  // 契约：断线退避时 `phase` 恒为 connecting，与「首次订阅中」无法区分，两者
+  // 用户含义相反。必须由 `reconnecting` 单独建模，否则终端静默冻结
+  // （ui-ux-pro-max ux 域 Severity High 的「No feedback」反模式）。
+
+  /** 惰性注册：store 的 terminal-state 监听由 subscribeSession 触发
+   * ensureEventListeners（异步），不先挂上监听 emitState 会直接报
+   * `eventHandlers.terminal-state is not a function`（另一个测试文件同款） */
+  async function armListeners(sessionId = 's1') {
+    await terminalBuffer.subscribeSession(sessionId)
+    await flushAsync()
+  }
+
+  it('重连提示：reconnecting 事件置位标记（正例）', async () => {
+    await armListeners()
+    store.ensureBuffer('s1')
+    emitState('s1', 'live')
+    expect(store.getBuffer('s1')?.reconnecting).toBe(false)
+
+    // 断线 → Rust 发 reconnecting（此时 phase 已是 connecting）
+    emitState('s1', 'connecting', 'reconnecting')
+    expect(store.getBuffer('s1')?.reconnecting).toBe(true)
+    expect(store.getBuffer('s1')?.reconnectInMs).toBeNull()
+  })
+
+  it('重连提示：reconnect_scheduled 携带倒计时（正例）', async () => {
+    await armListeners()
+    store.ensureBuffer('s1')
+    emitState('s1', 'connecting', 'reconnecting')
+    emitState('s1', 'connecting', 'reconnect_scheduled', 4000)
+
+    expect(store.getBuffer('s1')?.reconnecting).toBe(true)
+    expect(store.getBuffer('s1')?.reconnectInMs).toBe(4000)
+  })
+
+  it('重连提示：恢复 live 后标记与倒计时一并撤销（副作用）', async () => {
+    await armListeners()
+    store.ensureBuffer('s1')
+    emitState('s1', 'connecting', 'reconnect_scheduled', 4000)
+    emitState('s1', 'live')
+
+    // 不撤销会残留一个继续跑的倒计时，连接早已恢复却还在报「Xs 后重连」
+    expect(store.getBuffer('s1')?.reconnecting).toBe(false)
+    expect(store.getBuffer('s1')?.reconnectInMs).toBeNull()
+    expect(store.getBuffer('s1')?.reconnectReceivedAt).toBeNull()
+  })
+
+  it('重连提示：reconnect_scheduled 记录到达时刻作为倒计时基准（M-02）', async () => {
+    await armListeners()
+    store.ensureBuffer('s1')
+    // Rust 每轮顺序（terminal_link.rs Err(Io) 分支）：reconnecting（仅报状态）
+    // → reconnect_scheduled（带等待时长）。前者把倒计时清掉，后者才设基准。
+    emitState('s1', 'connecting', 'reconnecting')
+    expect(store.getBuffer('s1')?.reconnectInMs).toBeNull()
+    expect(store.getBuffer('s1')?.reconnectReceivedAt).toBeNull()
+
+    const before = Date.now()
+    emitState('s1', 'connecting', 'reconnect_scheduled', 4000)
+    const receivedAt = store.getBuffer('s1')?.reconnectReceivedAt ?? 0
+    expect(store.getBuffer('s1')?.reconnectInMs).toBe(4000)
+    expect(receivedAt).toBeGreaterThanOrEqual(before)
+    expect(receivedAt).toBeLessThanOrEqual(Date.now())
+  })
+
+  it('重连提示：stopped 后标记与倒计时一并清除（M-03，Rust 不再发事件）', async () => {
+    await armListeners()
+    store.ensureBuffer('s1')
+    emitState('s1', 'connecting', 'reconnect_scheduled', 4000)
+    expect(store.getBuffer('s1')?.reconnecting).toBe(true)
+
+    // 退避中途命中 stopped（strikes 耗尽/会话停止）：若不清除，横幅永久卡
+    // 「正在重连/30s 后重连」——Rust 侧链路放弃后不再发事件，无人收尾
+    emitState('s1', 'idle', 'stopped')
+    expect(store.getBuffer('s1')?.reconnecting).toBe(false)
+    expect(store.getBuffer('s1')?.reconnectInMs).toBeNull()
+    expect(store.getBuffer('s1')?.reconnectReceivedAt).toBeNull()
+  })
+
+  it('重连提示：session_missing 后标记与倒计时一并清除（M-03）', async () => {
+    await armListeners()
+    store.ensureBuffer('s1')
+    emitState('s1', 'connecting', 'reconnect_scheduled', 4000)
+
+    emitState('s1', 'idle', 'session_missing')
+    expect(store.getBuffer('s1')?.reconnecting).toBe(false)
+    expect(store.getBuffer('s1')?.reconnectInMs).toBeNull()
+    expect(store.getBuffer('s1')?.reconnectReceivedAt).toBeNull()
+  })
+
+  it('重连提示：unsubscribed 后标记与倒计时一并清除（M-03）', async () => {
+    await armListeners()
+    store.ensureBuffer('s1')
+    emitState('s1', 'connecting', 'reconnect_scheduled', 4000)
+
+    emitState('s1', 'idle', 'unsubscribed')
+    expect(store.getBuffer('s1')?.reconnecting).toBe(false)
+    expect(store.getBuffer('s1')?.reconnectInMs).toBeNull()
+    expect(store.getBuffer('s1')?.reconnectReceivedAt).toBeNull()
+  })
+
+  it('重连提示：首次订阅中的 connecting 不得误报为重连（反例）', async () => {
+    await armListeners()
+    store.ensureBuffer('s1')
+    // 无 detail 的普通 connecting = 正在建立连接，不是断线
+    emitState('s1', 'connecting', 'auth')
+    emitState('s1', 'connecting', 'subscribed_sent')
+
+    expect(store.getBuffer('s1')?.reconnecting).toBe(false)
+  })
+
+  it('重连提示：reconnect_scheduled 缺 retry_in_ms 时不编造数字（边界）', async () => {
+    await armListeners()
+    store.ensureBuffer('s1')
+    emitState('s1', 'connecting', 'reconnect_scheduled')
+
+    expect(store.getBuffer('s1')?.reconnecting).toBe(true)
+    // 显示「正在重连…」而非凭空显示「0 秒后重连」
+    expect(store.getBuffer('s1')?.reconnectInMs).toBeNull()
+  })
+
+  it('重连提示：新建 buffer 不得继承重连态（反例）', async () => {
+    await armListeners('s2')
+    store.ensureBuffer('s2')
+    emitState('s2', 'connecting', 'reconnecting')
+    expect(store.getBuffer('s2')?.reconnecting).toBe(true)
+
+    store.clearAllBuffers()
+    const fresh = store.ensureBuffer('s2')
+    expect(fresh.reconnecting).toBe(false)
+    expect(fresh.reconnectInMs).toBeNull()
   })
 })

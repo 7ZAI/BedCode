@@ -32,6 +32,15 @@
         <!-- Main Content: Terminal + Sidebar overlay -->
         <div class="main-content">
           <div class="terminal-output-area">
+            <!-- 链路重连提示：非阻断横幅（不遮输出、不抢焦点）。
+                 pointer-events:none —— 断线期间输入本就会被 sendInput 拒绝
+                 （logger.warn），加拦截层会连带阻断 xterm 的复制/选中原生交互。 -->
+            <transition name="reconnect-fade">
+              <div v-if="reconnecting" class="reconnect-banner" role="status" aria-live="polite">
+                <span class="reconnect-banner-spinner" aria-hidden="true"></span>
+                <span class="reconnect-banner-text">{{ reconnectBannerText }}</span>
+              </div>
+            </transition>
             <div
               ref="scrollContainer"
               class="terminal-scroll-container"
@@ -237,6 +246,7 @@ import { useTerminalDisplay } from '@/composables/terminal/useTerminalDisplay'
 import { useTerminalInput } from '@/composables/terminal/useTerminalInput'
 import { useTerminalPanels } from '@/composables/terminal/useTerminalPanels'
 import { nextPaintFrame } from '@/utils/nextPaintFrame'
+import { reconnectDisplaySeconds } from '@/utils/reconnectCountdown'
 import type { ToolbarItemConfig, TerminalSettings } from '@/components/TerminalSettingsModal.vue'
 import TerminalHeader from '@/components/TerminalHeader.vue'
 import TerminalSettingsModal from '@/components/TerminalSettingsModal.vue'
@@ -265,6 +275,64 @@ const sessionId = computed(() => route.params.id as string)
 // 若仍读 sessionId.value 会导致 ws_leave_session 调用失败 → 桌面端订阅泄漏 →
 // 重进会话时旧订阅流干扰游标连续性（violation 循环，终端多次进入才渲染完整）
 const mountedSessionId = sessionId.value
+
+// ==================== 链路重连提示（2026-10-04） ====================
+//
+// 终端链路断线时 Rust 发 `terminal-state` detail=reconnecting / reconnect_scheduled
+// （后者带 retry_in_ms）。此前这两个 detail 前端只写 logger.debug、无任何呈现——
+// 终端静默冻结，用户无从判断该不该等，正是 ui-ux-pro-max ux 域标记 Severity
+// High 的「No feedback」反模式。
+//
+// 倒计时在组件本地递减：Rust 只在每轮排期时发一次，不适合在 store 里跑定时器
+// （后台会话也会被计时器拖住）。基准 = store 记录的排期到达时刻
+// `reconnectReceivedAt`：倒计时 = `reconnectInMs − (now − reconnectReceivedAt)`，
+// 而不是每秒重读同一个毫秒数（2026-10-04 OCR M-02——读静态值导致显示秒数
+// 恒定不递减）。
+const reconnecting = computed(() => bufferStore.getBuffer(mountedSessionId)?.reconnecting ?? false)
+const reconnectSeconds = ref<number | null>(null)
+let reconnectTicker: ReturnType<typeof setInterval> | null = null
+
+function stopReconnectTicker() {
+  if (reconnectTicker !== null) {
+    clearInterval(reconnectTicker)
+    reconnectTicker = null
+  }
+}
+
+watch(reconnecting, (active) => {
+  stopReconnectTicker()
+  if (!active) {
+    reconnectSeconds.value = null
+    return
+  }
+  const sync = () => {
+    const buffer = bufferStore.getBuffer(mountedSessionId)
+    if (!buffer?.reconnecting || buffer.reconnectInMs == null || buffer.reconnectReceivedAt == null) {
+      // 未拿到排期（仅收到 reconnecting、或已恢复）：不编造数字，直接收掉
+      reconnectSeconds.value = null
+      stopReconnectTicker()
+      return
+    }
+    // 从排期到达时刻起算剩余毫秒（M-02：读静态 reconnectInMs 会让显示秒数
+    // 恒定不递减）；纯函数便于注入时钟做行为断言
+    reconnectSeconds.value = reconnectDisplaySeconds(
+      buffer.reconnectInMs,
+      buffer.reconnectReceivedAt,
+      Date.now(),
+    )
+  }
+  sync()
+  // 1s 粒度足够（退避以秒计）
+  reconnectTicker = setInterval(sync, 1000)
+})
+
+onUnmounted(stopReconnectTicker)
+
+const reconnectBannerText = computed(() =>
+  reconnectSeconds.value === null
+    ? t('mobile.terminal.reconnecting')
+    : t('mobile.terminal.reconnectingIn', { seconds: reconnectSeconds.value }),
+)
 
 // 安全区域从 App.vue inject
 const safeArea = inject<Ref<{ top: number; bottom: number }>>('safeArea')!

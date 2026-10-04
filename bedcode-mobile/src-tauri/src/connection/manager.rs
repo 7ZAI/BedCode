@@ -404,6 +404,7 @@ impl ConnectionManager {
         let mut event_rx = client.subscribe();
         let app_clone = app_handle.clone();
         let manual_flag = self.manual_disconnect.clone();
+        let auto_reconnect_flag = self.auto_reconnect.clone();
         spawn_with_error_boundary("connection_monitor", async move {
             tracing::debug!("[ConnMonitor] Started monitoring connection");
             while let Ok(event) = event_rx.recv().await {
@@ -442,12 +443,20 @@ impl ConnectionManager {
                                 WsClientEvent::Error { message } => (message.clone(), false, false),
                                 _ => ("Connection lost".to_string(), false, false),
                             };
+                            // `auto_reconnect_disabled`：用户关掉了自动重连时告知前端
+                            // 「不会自愈，需手动重连」。不告知的话前端只能显示通用的
+                            // 「连接已断开」，用户分不清「正在自愈」与「不会自愈」，
+                            // 只能干等退避耗尽（最长 3 轮 + 认证超时）才发现。
+                            let auto_reconnect_disabled = !auto_reconnect_flag.load(Ordering::SeqCst)
+                                && !fatal
+                                && !non_retryable;
                             let _ = app_clone.emit(
                                 "ws_unexpected_disconnect",
                                 serde_json::json!({
                                     "reason": reason,
                                     "fatal": fatal,
                                     "non_retryable": non_retryable,
+                                    "auto_reconnect_disabled": auto_reconnect_disabled,
                                 }),
                             );
 

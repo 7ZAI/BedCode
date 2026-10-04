@@ -196,6 +196,12 @@ export default {
       toolbarSettings: 'Settings',
       toolbarFolder: 'Files',
       preparing: 'Preparing terminal...',
+      // Terminal link reconnecting with backoff (2026-10-04): a silently frozen
+      // terminal is the Severity High "No feedback" anti-pattern flagged in the
+      // ui-ux-pro-max ux domain; the countdown matters because backoff caps at
+      // 30s, so without it users cannot tell "reconnecting" from "dead"
+      reconnecting: 'Connection lost, reconnecting...',
+      reconnectingIn: 'Connection lost, reconnecting in {seconds}s...',
       copied: 'Copied',
       copyFailed: 'Copy failed',
       selectAll: 'Select All',

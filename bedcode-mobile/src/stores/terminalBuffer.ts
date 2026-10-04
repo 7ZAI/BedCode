@@ -69,6 +69,29 @@ export interface SessionBuffer {
   lastRenderedOffset: number | null
   /** 会话是否已停止 */
   sessionStopped: boolean
+  /**
+   * 链路断开且正在退避重试（Rust `terminal-state` detail=reconnecting）
+   *
+   * **为什么要显式建模**：phase 在退避期间恒为 `connecting`，与「首次订阅中」
+   * 无法区分；两者的用户含义完全相反（前者是连接挂了正在自愈，后者是
+   * 正常建立中）。不区分的结果就是 ui-ux-pro-max ux 域标记 Severity High
+   * 的反模式「No feedback」——终端静默冻结，用户无从判断该不该等。
+   */
+  reconnecting: boolean
+  /**
+   * 下次重连的等待毫秒数（detail=reconnect_scheduled 携带；null = 未排期）
+   *
+   * 退避封顶 30s，无倒计时时用户无法区分「在重连」与「已死」。
+   */
+  reconnectInMs: number | null
+  /**
+   * 最近一次 reconnect_scheduled 到达的 wall-clock 时间戳（ms）。
+   *
+   * **为什么需要它**：reconnectInMs 是一次性的等待时长，不是截止时刻。前端
+   * 倒计时 = `reconnectInMs − (now − reconnectReceivedAt)`；只读静态值会导致
+   * 显示秒数恒定不递减（2026-10-04 OCR M-02——原实现每秒重读同一毫秒数）。
+   */
+  reconnectReceivedAt: number | null
   /** 本次页面生命周期内是否渲染过内容（resync 清屏/提示门控） */
   hasRenderedContent: boolean
   /** 截断通知已派发（每会话一次；仅后台日志，防重复刷屏） */
@@ -285,8 +308,8 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     handler.onOutput(data)
   }
 
-  /** Rust 链路状态事件：同步 phase/subscribed/停止等 */
-  function onStateEvent(payload: { session_id: string; phase?: string; detail?: string }) {
+/** Rust 链路状态事件：同步 phase/subscribed/停止等 */
+  function onStateEvent(payload: { session_id: string; phase?: string; detail?: string; retry_in_ms?: number }) {
     const statePhase = PHASE_MAP[payload.phase ?? ''] ?? null
     if (payload.detail === 'stopped' || payload.detail === 'session_missing' || payload.detail === 'unsubscribed') {
       knownPhases.delete(payload.session_id)
@@ -298,7 +321,7 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     if (phase !== buffer.phase) {
       logger.debug(
         `[terminalBuffer] state (${payload.session_id}): phase ${buffer.phase} -> ${phase}` +
-          `${payload.detail ? ` (${payload.detail})` : ''}`,
+        `${payload.detail ? ` (${payload.detail})` : ''}`,
       )
     }
     buffer.phase = phase
@@ -306,6 +329,24 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     if (phase === 'live') {
       buffer.subscribing = false
       buffer.sessionStopped = false
+      // 恢复 live → 断开提示与倒计时一并撤除（否则残留的倒计时会继续跑）
+      buffer.reconnecting = false
+      buffer.reconnectInMs = null
+      buffer.reconnectReceivedAt = null
+    }
+    // 退避重试：Rust 在每次断线后发 reconnecting（进入退避）+ reconnect_scheduled
+    // （本次等多久）。两者都置 reconnecting=true，只有后者带倒计时。
+    if (payload.detail === 'reconnecting' || payload.detail === 'reconnect_scheduled') {
+      buffer.reconnecting = true
+      if (payload.detail === 'reconnect_scheduled' && typeof payload.retry_in_ms === 'number') {
+        buffer.reconnectInMs = payload.retry_in_ms
+        // 排期到达时刻 = 倒计时基准（只在此处重置：同一轮退避内的 reconnecting
+        // 事件不得把已开始的倒计时拨回满值）
+        buffer.reconnectReceivedAt = Date.now()
+      } else {
+        buffer.reconnectInMs = null
+        buffer.reconnectReceivedAt = null
+      }
     }
     if (payload.detail === 'stopped' || payload.detail === 'session_missing') {
       buffer.phase = 'idle'
@@ -313,11 +354,20 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
       buffer.subscribing = false
       buffer.sessionStopped = true
       buffer.lastRenderedOffset = null
+      // 链路已放弃（strikes 耗尽 / 会话停止）：Rust 不再发事件，不清除会让
+      // 横幅永久卡「正在重连/30s 后重连」（2026-10-04 OCR M-03）
+      buffer.reconnecting = false
+      buffer.reconnectInMs = null
+      buffer.reconnectReceivedAt = null
     }
     if (payload.detail === 'unsubscribed') {
       buffer.subscribed = false
       if (buffer.phase !== 'idle') buffer.phase = 'idle'
       buffer.subscribing = false
+      // 主动取消订阅同样终止重连：横幅一并撤除（M-03 同款）
+      buffer.reconnecting = false
+      buffer.reconnectInMs = null
+      buffer.reconnectReceivedAt = null
     }
   }
 
@@ -335,6 +385,11 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
         subscribing: false,
         lastRenderedOffset: null,
         sessionStopped: false,
+        // 重连态**不**从 knownPhases 继承：继承的是 phase，而 phase=connecting
+        // 分不清「首次订阅中」与「断线退避中」，必须由 reconnecting 事件单独置位
+        reconnecting: false,
+        reconnectInMs: null,
+        reconnectReceivedAt: null,
         hasRenderedContent: false,
         truncatedNotified: false,
       }

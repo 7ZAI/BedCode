@@ -81,6 +81,9 @@ export default {
       // 失败，正确动作是升级其中一端。必须与 authFailedRePair 分开：否则用户会
       // 按「重新配对」反复折腾，却解决不了版本/协议不匹配
       protocolIncompatible: '连接协议不兼容，已停止自动重连，请升级应用后重试: {reason}',
+      // 用户关掉自动重连后的断连：不提示的话用户分不清「正在自愈」与「不会自愈」，
+      // 只能干等退避耗尽（3 轮 + 认证超时）才发现没人会救
+      autoReconnectDisabled: '连接已断开，自动重连已关闭，请手动重新连接',
     },
     errorCode: {
       ptyError: '终端进程错误',

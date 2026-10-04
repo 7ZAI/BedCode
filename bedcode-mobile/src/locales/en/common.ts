@@ -82,6 +82,10 @@ export default {
       // upgrading an endpoint. Kept separate from authFailedRePair so users are
       // not sent to re-pair for what is really a version mismatch.
       protocolIncompatible: 'Connection protocol incompatible. Auto-reconnect stopped; please update the app and retry: {reason}',
+      // Disconnect while the user has auto-reconnect turned off: without this the
+      // UI shows a generic "connection lost" and users cannot tell "recovering"
+      // from "nobody is coming", so they just wait out the full backoff
+      autoReconnectDisabled: 'Connection lost. Auto-reconnect is off; please reconnect manually',
     },
     errorCode: {
       ptyError: 'Terminal process error',

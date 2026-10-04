@@ -62,7 +62,10 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::protocol::Message as WsMsg;
 
+use crate::connection::heartbeat::{HeartbeatConfig, HeartbeatManager};
+use crate::connection::reconnect::{ReconnectConfig, ReconnectManager};
 use crate::enums::special_key::KeyCombo;
+use crate::system::constants::reconnect::{DEFAULT_INITIAL_DELAY_MS, DEFAULT_MAX_DELAY_MS};
 use crate::system::error_boundary::spawn_with_error_boundary;
 
 // ==================== 终端链路事件出口（trait；票 07 集成测试注入 mock） ====================
@@ -87,9 +90,25 @@ impl TerminalEventSink for AppHandle {
 
 // ==================== 常量 ====================
 
-/// 重连退避（ms）：500 → 1000 → 2000 → 4000 → 8000 封顶
-const RECONNECT_BASE_MS: u64 = 500;
-const RECONNECT_MAX_MS: u64 = 8000;
+/// 链路活性探测：Ping 周期（秒）与静默判死阈值（秒）
+///
+/// 与事件通道 `HeartbeatManager` 的默认值同档（30s / 90s）。静默阈值取 3×
+/// Ping 周期：静默 shell 不产生出站帧，判活只能靠入站活动，阈值必须宽到能
+/// 容下「终端长时间无人操作」而不误杀。
+///
+/// **重连退避已收敛到 `connection/reconnect.rs` 的 `ReconnectManager`**
+/// （2026-10-04 替换）。本文件此前自建 `RECONNECT_BASE_MS = 500` /
+/// `RECONNECT_MAX_MS = 8000` 的手写退避，两处问题：① `500` **低于**全局下限
+/// `MIN_RECONNECT_DELAY_MS = 1000`（2026-09-29 那次 616 次/98 秒自愈风暴正是
+/// 「无退避下限」形态）；② 无 jitter，多会话同步重连构成惊群。现由 `link_io`
+/// 驱动 `ReconnectManager`，与设备级事件通道共用同一份指数退避 + 抖动 + 下限钳制。
+///
+/// **节奏变化**（收敛的已知代价）：500→1000→…→8000 封顶 变为
+/// 1000→2000→…→30000 封顶。首轮更保守、封顶更长。
+const TERMINAL_HEARTBEAT_INTERVAL_SECS: u64 = 30;
+const TERMINAL_HEARTBEAT_TIMEOUT_SECS: u64 = 90;
+/// 判活轮询周期（毫秒）——只查时间戳，不发帧，代价可忽略
+const TERMINAL_HEARTBEAT_PROBE_TICK_MS: u64 = 5_000;
 
 /// 会话不存在（启动中/已停止）连续重试上限，超出后停止等待外部恢复
 const MAX_SESSION_MISSING_STRIKES: u32 = 3;
@@ -388,6 +407,32 @@ impl TerminalLink {
                 detail = %detail,
                 error = %e,
                 "terminal state event emit failed"
+            );
+        }
+    }
+
+    /// 重连退避排期事件：携带下一次重连的等待毫秒数
+    ///
+    /// 与 `emit_state("reconnecting")` 配对：前者报「已进入退避」，后者报
+    /// 「等多久再试」。前端据此显示倒计时而非干等（退避封顶 30s，无提示时
+    /// 用户无法区分「在重连」与「已死」）。字段为增量，老端忽略即可。
+    fn emit_reconnect_scheduled(&self, delay: std::time::Duration) {
+        let retry_in_ms = delay.as_millis().min(u128::from(u64::MAX)) as u64;
+        if let Err(e) = self.app.emit(
+            EVENT_TERMINAL_STATE,
+            serde_json::json!({
+                "session_id": self.session_id,
+                "phase": LinkPhase::from_u8(self.phase.load(Ordering::SeqCst)).as_api_str(),
+                "cursor": self.cursor.load(Ordering::SeqCst),
+                "detail": "reconnect_scheduled",
+                "retry_in_ms": retry_in_ms,
+            }),
+        ) {
+            tracing::warn!(
+                session_id = %self.session_id,
+                retry_in_ms,
+                error = %e,
+                "terminal reconnect_scheduled event emit failed"
             );
         }
     }
@@ -700,7 +745,7 @@ impl TerminalLinkManager {
 // ==================== IO 任务（连接 / 收发 / 重连） ====================
 
 /// 单次连接会话（成功 → 流结束即退出返回；意外断开 → 外层按原因重连）
-async fn connect_once(link: &Arc<TerminalLink>, write_rx: &mut mpsc::Receiver<Outbound>) -> Result<(), LinkExit> {
+async fn connect_once(link: &Arc<TerminalLink>, write_rx: &mut mpsc::Receiver<Outbound>, policy: &Arc<ReconnectManager>) -> Result<(), LinkExit> {
     // 「上一段连接曾进入 live → 重连恢复需发 terminal-resync」的判断**不在这里**：
     // link_io 的 Err(Io) 分支在睡眠前已把 phase 置回 Connecting（见下），本函数被
     // 调用时 phase 恒为 Connecting，此处判 Live 是永远不触发的死代码。真正落点
@@ -786,6 +831,32 @@ async fn connect_once(link: &Arc<TerminalLink>, write_rx: &mut mpsc::Receiver<Ou
     let mut ack_idle_tick = tokio::time::interval(Duration::from_millis(ACK_IDLE_TICK_MS));
     ack_idle_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
+    // ==================== 链路活性检测（2026-10-04 新增） ====================
+    //
+    // 此前本链路**完全没有心跳**，死连接只能靠 `ws_rx.next()` 返回 Err 或收到
+    // Close 来发现。TCP 半开时（对端进程已死、中间 NAT 仍维持连接）`next()`
+    // 永久挂起，用户看到的是一个「活着但永远不出字」的终端。`ack_idle_tick`
+    // 分支救不了：它只负责回发 ack，且 `ws_tx.send` 在半开连接上照样成功
+    // （只写本地缓冲区）。
+    //
+    // 复用事件通道的 `HeartbeatManager`（与 `ws_client` 同一套判据）：
+    // - `mark_connected()` 在握手成功后记下基准（**必须在订阅前**，否则静默
+    //   订阅期间的首个窗口无基准可依）
+    // - 周期性发 `WsMsg::Ping`（RFC 6455 标准帧，tungstenite 对端自动回 Pong）
+    // - **任意入站帧**（业务/控制/Pong/Ping）都调 `on_activity()`：静默 shell
+    //   不产生 Pong，只认 Pong 会把「终端空闲」误判成「连接已死」
+    // - 超过 timeout 没有任何入站活动 → 判死，落到既有 Err(Io) 重连路径
+    //
+    // 注意：ack / subscribe / input 等**出站**活动不计入（半开时出站照样成功）。
+    let heartbeat = HeartbeatManager::new(HeartbeatConfig::new(
+        TERMINAL_HEARTBEAT_INTERVAL_SECS,
+        TERMINAL_HEARTBEAT_TIMEOUT_SECS,
+    ));
+    heartbeat.mark_connected().await;
+    let mut ping_tick = tokio::time::interval(Duration::from_secs(TERMINAL_HEARTBEAT_INTERVAL_SECS));
+    ping_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    ping_tick.tick().await; // 跳过立即触发的那一拍
+
     loop {
         tokio::select! {
             out = write_rx.recv() => {
@@ -829,9 +900,11 @@ async fn connect_once(link: &Arc<TerminalLink>, write_rx: &mut mpsc::Receiver<Ou
                     tracing::debug!(session_id = %link.session_id, error = %e, "terminal ws stream error");
                     LinkExit::Io
                 })?;
+                // 任意入站帧 = 链路仍活（静默 shell 不发 Pong，只认 Pong 会误判死）
+                heartbeat.on_activity().await;
                 match msg {
                     WsMsg::Text(text) => {
-                        handle_control_text(link, &text).await?;
+                        handle_control_text(link, &text, policy).await?;
                     }
                     WsMsg::Binary(bin) => {
                         link.ingest_output(&bin);
@@ -851,6 +924,25 @@ async fn connect_once(link: &Arc<TerminalLink>, write_rx: &mut mpsc::Receiver<Ou
             _ = ack_idle_tick.tick() => {
                 maybe_ack(link, &mut ws_tx).await;
             }
+            _ = ping_tick.tick() => {
+                // 探活：发标准 Ping 帧（对端 tungstenite 自动回 Pong）
+                if ws_tx.send(WsMsg::Ping(Vec::new())).await.is_err() {
+                    tracing::debug!(session_id = %link.session_id, "terminal ping send failed");
+                    return Err(LinkExit::Io);
+                }
+            }
+            _ = tokio::time::sleep(Duration::from_millis(TERMINAL_HEARTBEAT_PROBE_TICK_MS)) => {
+                // 半开探测：TCP 半开时 ping 的 send() 仍然成功（只写本地缓冲区），
+                // 必须靠「多久没有任何入站活动」判死，而不是靠 send 报错
+                if heartbeat.is_connection_lost().await {
+                    tracing::warn!(
+                        session_id = %link.session_id,
+                        timeout_secs = TERMINAL_HEARTBEAT_TIMEOUT_SECS,
+                        "terminal link silent beyond timeout (half-open suspected), reconnecting"
+                    );
+                    return Err(LinkExit::Io);
+                }
+            }
         }
     }
     // 正常断流（服务端关闭）→ 视作意外断开回退重连（除非 stopped）
@@ -862,7 +954,11 @@ async fn connect_once(link: &Arc<TerminalLink>, write_rx: &mut mpsc::Receiver<Ou
 }
 
 /// 处理 JSON 控制帧（subscribed / ring_resync / session_stopped / error / unknown）
-async fn handle_control_text(link: &Arc<TerminalLink>, text: &str) -> Result<(), LinkExit> {
+async fn handle_control_text(
+    link: &Arc<TerminalLink>,
+    text: &str,
+    policy: &Arc<ReconnectManager>,
+) -> Result<(), LinkExit> {
     let msg: serde_json::Value = serde_json::from_str(text).unwrap_or(serde_json::Value::Null);
     match msg.get("type").and_then(|v| v.as_str()) {
         // 订阅回包：门控置位——此后二进制帧才是本订阅的流（回放 + 实时）。
@@ -881,6 +977,15 @@ async fn handle_control_text(link: &Arc<TerminalLink>, text: &str) -> Result<(),
             link.frontend_rendered.store(0, Ordering::SeqCst);
             link.pending_ack_bytes.store(0, Ordering::SeqCst);
             link.emit_state("subscribed");
+            // 重连恢复（2026-10-04 OCR M-01）：链路稳定回到 live 即视为本轮重连
+            // 成功。**此前从不调 on_success**——`link_io` 只在失败路径推进策略，
+            // retry_count 在整个链路生命周期累积，指数序列爬到 30s 封顶后，之后
+            // 每次断线（哪怕经过健康期）都从 30s 起退而非 1s。事件通道
+            // （connection/manager.rs reconnect 成功分支）对同一策略调 on_success，
+            // 本链路此前与它行为分叉。收到 subscribed = 订阅门控通过，是最接近
+            // 「重连成功」的可观测时点（fresh subscribe 时 retry_count 为 0，
+            // on_success 是幂等的空操作）。
+            policy.on_success().await;
             if link.pending_resync.swap(false, Ordering::SeqCst) {
                 // 重订阅/重连/停止后重建：前端可能已有在屏内容 → 清屏 + 基准重置
                 link.emit_resync(0);
@@ -946,13 +1051,31 @@ async fn handle_control_text(link: &Arc<TerminalLink>, text: &str) -> Result<(),
 }
 
 /// IO 任务主循环：连接 → 断 → 退避重连（意外）/ 停止（手动 / 会话缺失）
+/// 终端链路的重连退避策略：**与设备级事件通道共用 `ReconnectManager`**
+///
+/// 单一事实源（2026-10-04）：本文件此前自建 `RECONNECT_BASE_MS = 500` /
+/// `RECONNECT_MAX_MS = 8000` 的手写退避表，① `500` **低于**全局下限
+/// `MIN_RECONNECT_DELAY_MS = 1000`（2026-09-29 那次 616 次/98 秒自愈风暴正是
+/// 「无退避下限」形态）；② 无 jitter，多会话同步重连构成惊群。
+///
+/// `max_retries = 0` = 无限重试：终端链路随 subscribe 生命周期存在与销毁，不做
+/// 「N 次后交还用户」的裁决（交还与否由 `SessionMissing` 与 `stopped` 决定）。
+///
+/// 抽成独立函数是为了可测：直接内联在 `link_io` 里时退避序列无法被断言，
+/// 「有没有人又手写了一张表」只能靠读代码——而这正是本次缺陷的成因。
+fn terminal_reconnect_policy() -> Arc<ReconnectManager> {
+    ReconnectManager::new(ReconnectConfig::new(0, DEFAULT_INITIAL_DELAY_MS, DEFAULT_MAX_DELAY_MS))
+}
+
+/// IO 任务主循环：连接 → 断 → 退避重连（意外）/ 停止（手动 / 会话缺失）
 async fn link_io(link: Arc<TerminalLink>, mut write_rx: mpsc::Receiver<Outbound>) {
-    let mut attempt: u32 = 0;
+    // 退避策略：共享 `ReconnectManager`（指数退避 + 抖动 + 1s 下限钳制）
+    let policy = terminal_reconnect_policy();
     loop {
         if link.stopped.load(Ordering::SeqCst) {
             return;
         }
-        match connect_once(&link, &mut write_rx).await {
+        match connect_once(&link, &mut write_rx, &policy).await {
             Ok(()) => return, // 正常退出
             Err(LinkExit::SessionMissing) => {
                 // 会话缺失已达上限等外部恢复：不自动重连，等待 frontend 重新 subscribe
@@ -974,9 +1097,18 @@ async fn link_io(link: Arc<TerminalLink>, mut write_rx: mpsc::Receiver<Outbound>
                 }
                 link.phase.store(LinkPhase::Connecting.as_u8(), Ordering::SeqCst);
                 link.emit_state("reconnecting");
-                let delay_ms = (RECONNECT_BASE_MS * 2u64.pow(attempt.min(4))).min(RECONNECT_MAX_MS);
-                attempt = (attempt + 1).min(16);
-                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                // 策略推进一轮（无限重试下恒 Some；防御性保留熔断/轮数分支）
+                if policy.start().await.is_none() {
+                    tracing::warn!(
+                        session_id = %link.session_id,
+                        "terminal reconnect policy gave up"
+                    );
+                    return;
+                }
+                // `get_delay()` = 本轮退避 + ±10% 抖动（start 已置 current_delay）
+                let delay = policy.get_delay().await;
+                link.emit_reconnect_scheduled(delay);
+                tokio::time::sleep(delay).await;
             }
         }
     }
@@ -1166,6 +1298,213 @@ pub async fn terminal_get_state(session_id: String) -> Result<serde_json::Value,
 #[cfg(test)]
 mod tests {
     use super::*;
+    // 仅测试需要（退避下限断言）：生产代码不引用，放模块级会变成 release 未用导入
+    use crate::system::constants::reconnect::MIN_RECONNECT_DELAY_MS;
+
+    // ==================== 重连退避收敛（防手写第二张表） ====================
+
+    /// 行为契约（2026-10-04 审计 P0-1 同型缺陷的终端链路版本）：终端链路的退避
+    /// 必须与设备级事件通道**同一来源**。旧实现自建 `500→…→8000` 手写表，
+    /// 其中 500 低于全局下限 1000 —— 与事件通道那次「护栏挂在死代码上」是同一类
+    /// 教训，只是这次护栏和被保护的对象都在跑，却各用各的数。
+    ///
+    /// 正例：序列逐轮等于 `ReconnectManager` 默认等比退避（1s/2s/4s/8s/16s）
+    #[tokio::test]
+    async fn terminal_backoff_matches_shared_reconnect_manager_sequence() {
+        let policy = terminal_reconnect_policy();
+        for expect_ms in [1000u64, 2000, 4000, 8000, 16000] {
+            policy.start().await.expect("无限重试配置下不应耗尽");
+            let delay = policy.get_delay().await;
+            // 抖动是 0~+10% 的正偏移，故断言下界与「不超过 1.1×」上界
+            assert!(
+                delay.as_millis() as u64 >= expect_ms,
+                "第 {} 轮退避 {}ms 低于等比基线 {}ms",
+                policy.get_retry_count().await,
+                delay.as_millis(),
+                expect_ms
+            );
+            assert!(
+                delay.as_millis() as u64 <= expect_ms + expect_ms / 10,
+                "第 {} 轮退避 {}ms 超出 +10% 抖动上界",
+                policy.get_retry_count().await,
+                delay.as_millis()
+            );
+        }
+    }
+
+    /// 反例（最关键的一条）：单次等待不得低于全局下限 1s。旧实现在首轮就是
+    /// 500ms —— 与 2026-09-29 那次 616 次/98 秒自愈风暴同型。
+    #[tokio::test]
+    async fn terminal_backoff_never_breaches_global_minimum_delay() {
+        let policy = terminal_reconnect_policy();
+        policy.start().await.unwrap();
+        let delay = policy.get_delay().await;
+        assert!(
+            delay >= std::time::Duration::from_millis(MIN_RECONNECT_DELAY_MS),
+            "首轮退避 {}ms 击穿了全局下限 {}ms",
+            delay.as_millis(),
+            MIN_RECONNECT_DELAY_MS
+        );
+    }
+
+    /// 退避封顶必须生效：长时间断开后单轮等待不得无限增长
+    #[tokio::test]
+    async fn terminal_backoff_is_capped() {
+        let policy = terminal_reconnect_policy();
+        for _ in 0..10 {
+            policy.start().await.unwrap();
+        }
+        let delay = policy.get_delay().await;
+        assert!(
+            delay <= std::time::Duration::from_millis(DEFAULT_MAX_DELAY_MS + DEFAULT_MAX_DELAY_MS / 10),
+            "第 10 轮退避 {}ms 超出封顶 {}ms",
+            delay.as_millis(),
+            DEFAULT_MAX_DELAY_MS
+        );
+    }
+
+    /// 终端链路保持既有语义：**无限**重试（随 subscribe 生命周期销毁，不做
+    /// 「N 次后交还用户」的裁决）。若有人改成有限轮次，退避耗尽会让
+    /// `link_io` 直接 return 而不再自愈——终端永久卡死。
+    #[tokio::test]
+    async fn terminal_reconnect_is_unlimited_by_design() {
+        let policy = terminal_reconnect_policy();
+        for _ in 0..20 {
+            assert!(
+                policy.start().await.is_some(),
+                "第 {} 轮被截断：终端链路应无限重试",
+                policy.get_retry_count().await + 1
+            );
+        }
+        assert!(!policy.is_abandoned().await);
+    }
+
+    /// 反例（2026-10-04 OCR M-01 回归锁）：链路稳定回到 live 必须复位退避
+    /// 序列。修复前 `link_io` 只在失败路径调 `policy.start()`，从不调
+    /// `on_success()`——retry_count 在整个链路生命周期累积，指数序列爬到
+    /// 封顶（30s）后，之后每次断线（哪怕刚经过健康期）都从 30s 起退，而非
+    /// 从 1s 重来。事件通道（connection/manager.rs reconnect 成功分支）对同一
+    /// 策略调 on_success，终端链路与它行为分叉（「单一事实源」名存实亡）。
+    ///
+    /// 正例：多轮失败（计数爬到高位）后收到 `subscribed` 门控帧 → 计数归零，
+    /// 下一轮 `start()` 回到初始退避而非封顶值。
+    #[tokio::test]
+    async fn subscribed_resets_backoff_sequence_after_failures() {
+        let (tx, _rx) = mpsc::channel::<Outbound>(8);
+        let link = TerminalLink::new(
+            "s1".to_string(),
+            Arc::new(NullSink),
+            tx,
+            Arc::new(AtomicBool::new(true)),
+            Arc::new(Mutex::new(None)),
+        );
+
+        let policy = terminal_reconnect_policy();
+        // 多轮失败：退避爬到封顶
+        for _ in 0..10 {
+            policy.start().await.unwrap();
+        }
+        let capped = policy.get_delay().await;
+        let before = policy.get_retry_count().await;
+        assert!(before >= 10, "前置：退避计数应先爬上来（实际 {before}）");
+
+        // 链路恢复：收到 subscribed 门控帧（link_io 的 connect_once 收帧路径）
+        let subscribed = handle_control_text(
+            &link,
+            r#"{"type":"subscribed","mode":"live"}"#,
+            &policy,
+        )
+        .await;
+        assert!(subscribed.is_ok(), "subscribed 帧处理不得报错（LinkExit 无 Debug，断言 is_ok）");
+
+        // 反例断言：计数归零 → 下一次失败从初始退避重来，而不是沿用封顶值
+        assert_eq!(
+            policy.get_retry_count().await,
+            0,
+            "恢复 live 后退避计数必须归零（on_success 语义）"
+        );
+        let next = policy.start().await.unwrap();
+        assert!(
+            next < capped,
+            "复位后首轮退避 {:?} 应远低于封顶前 {:?}——否则健康期后的断线仍 30s 起退",
+            next,
+            capped
+        );
+        assert!(
+            next >= std::time::Duration::from_millis(MIN_RECONNECT_DELAY_MS),
+            "复位后同样受 1s 下限保护（实际 {:?}",
+            next
+        );
+    }
+
+    // ==================== 链路活性检测（半开） ====================
+
+    /// 判活基准必须回落到**建连时刻**：静默 shell 不发 Pong，若首个 Ping 之前
+    /// 没有基准，这段窗口的死连接检测不到（同事件通道那次修复的同型缺陷）。
+    ///
+    /// timeout 用 1ms + 30ms 真实等待（Instant 无注入缝，与 heartbeat.rs 既有
+    /// 超时用例同款取法）。注意 `HeartbeatConfig::new(secs, secs)` 收的是**秒**，
+    /// 要毫秒级必须用结构体字面量。
+    #[tokio::test]
+    async fn liveness_detects_silence_after_mark_connected_without_any_pong() {
+        let hb = HeartbeatManager::new(HeartbeatConfig {
+            interval: std::time::Duration::from_secs(TERMINAL_HEARTBEAT_INTERVAL_SECS),
+            timeout: std::time::Duration::from_millis(1),
+            max_timeouts: 3,
+        });
+        hb.mark_connected().await;
+        assert!(!hb.is_connection_lost().await, "刚建连不应立即判死");
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        assert!(
+            hb.is_connection_lost().await,
+            "建连后无任何入站活动且已超时应判死（半开检测不得失效）"
+        );
+    }
+
+    /// 正例：**任意**入站帧都刷新基准。终端的静默期只靠 Pong 会被误判成死链，
+    /// 只有业务输出帧而无 Pong 时仍必须算「活着」。
+    #[tokio::test]
+    async fn any_inbound_activity_refreshes_the_liveness_baseline() {
+        let hb = HeartbeatManager::new(HeartbeatConfig {
+            interval: std::time::Duration::from_secs(TERMINAL_HEARTBEAT_INTERVAL_SECS),
+            timeout: std::time::Duration::from_millis(1),
+            max_timeouts: 3,
+        });
+        hb.mark_connected().await;
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        assert!(hb.is_connection_lost().await, "前置：静默超时应已判死");
+
+        // 收到业务输出帧（非 Pong）
+        hb.on_activity().await;
+        assert!(!hb.is_connection_lost().await, "收到入站帧后应立即恢复为「活着」");
+    }
+
+    /// 边界：`mark_connected` 开启新一轮建连，清掉上一轮的基准与超时计数
+    #[tokio::test]
+    async fn mark_connected_resets_previous_round_state() {
+        let hb = HeartbeatManager::new(HeartbeatConfig {
+            interval: std::time::Duration::from_secs(TERMINAL_HEARTBEAT_INTERVAL_SECS),
+            timeout: std::time::Duration::from_millis(1),
+            max_timeouts: 3,
+        });
+        hb.on_activity().await;
+        hb.increment_timeout().await;
+        hb.increment_timeout().await;
+        hb.mark_connected().await;
+        assert_eq!(hb.get_consecutive_timeouts().await, 0);
+        assert!(!hb.is_connection_lost().await);
+    }
+
+    /// 未 mark_connected（心跳循环从未启动）→ 不擅自判死，判定权交还调用方
+    #[tokio::test]
+    async fn liveness_does_not_judge_before_mark_connected() {
+        let hb = HeartbeatManager::new(HeartbeatConfig {
+            interval: std::time::Duration::from_secs(TERMINAL_HEARTBEAT_INTERVAL_SECS),
+            timeout: std::time::Duration::from_millis(1),
+            max_timeouts: 3,
+        });
+        assert!(!hb.is_connection_lost().await);
+    }
 
     // ==================== 帧构造（新协议 wire 形状锁） ====================
 

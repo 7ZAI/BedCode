@@ -108,19 +108,29 @@ impl HeartbeatManager {
         self.event_tx.subscribe()
     }
 
-    /// 记录 Pong 响应（收到服务器 Pong 时调用）
+    /// 记录收到 Pong（收到服务器 Pong 时调用）
     ///
     /// 注意：必须在 async 上下文中调用（tokio RwLock 的 blocking_write 在
     /// 运行时任务内会 panic，见 ws_client 接收循环调用点）
     pub async fn on_pong_received(&self) {
+        self.on_activity().await;
+        debug!("[HeartbeatManager] Pong received");
+    }
+
+    /// 记录**任意入站活动**（Pong / Ping / 业务帧 / 控制帧）
+    ///
+    /// 与 `on_pong_received` 的记账完全相同，区别只是语义：**任何**入站帧都
+    /// 证明这条链路还通。终端链路（`terminal_link.rs`）据此判活——静默 shell
+    /// 不产生 Pong，若只认 Pong 会把「终端空闲」误判成「连接已死」。
+    ///
+    /// 注意：同 `on_pong_received`，必须在 async 上下文中调用。
+    pub async fn on_activity(&self) {
         *self.last_pong.write().await = Some(std::time::Instant::now());
 
         // 重置连续超时计数
         *self.consecutive_timeouts.write().await = 0;
 
         let _ = self.event_tx.send(HeartbeatEvent::PongReceived { latency_ms: 0 });
-
-        debug!("[HeartbeatManager] Pong received");
     }
 
     /// 记录建连时刻：首个 Pong 到达前的半开检测基准

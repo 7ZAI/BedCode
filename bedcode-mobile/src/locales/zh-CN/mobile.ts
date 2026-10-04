@@ -193,6 +193,11 @@ export default {
       toolbarSettings: '设置',
       toolbarFolder: '文件',
       preparing: '正在准备终端...',
+      // 链路断开退避重试（2026-10-04）：静默冻结是 ui-ux-pro-max ux 域标记的
+      // Severity High 反模式「No feedback」；带秒数是因为退避封顶 30s，无倒计时
+      // 用户无法区分「在重连」与「已死」
+      reconnecting: '连接已断开，正在重连...',
+      reconnectingIn: '连接已断开，{seconds} 秒后重连...',
       copied: '已复制',
       copyFailed: '复制失败',
       selectAll: '全选',

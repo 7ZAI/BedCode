@@ -399,6 +399,29 @@ describe('连接流：useMobileConnection × useHttpApi × terminalBuffer store'
     expect(conn.connectionStatus.value).toBe('disconnected')
   })
 
+  it('自动重连已关闭时的断连：提示指向「手动重连」而非「正在自愈」', async () => {
+    // Rust 监督任务在用户关闭自动重连后跳过自愈；不告知的话前端只显示通用
+    // 「连接已断开」，用户分不清「正在自愈」与「不会自愈」，只能干等退避耗尽。
+    await freshConnection(() => {
+      const creds = makeAuthCredentials()
+      localStorage.setItem('auth_session_token', creds.sessionToken)
+    })
+    await conn.connect(DEVICE)
+    await flushAsync()
+    await emit('ws_connected')
+    await flushAsync()
+
+    vi.mocked(toast.error).mockClear()
+    await emit('ws_unexpected_disconnect', { reason: 'peer gone', auto_reconnect_disabled: true })
+    await flushAsync()
+
+    expect(invokeCalls('ws_reconnect')).toHaveLength(0)
+    expect(conn.connectionStatus.value).toBe('disconnected')
+    const lastToast = String(vi.mocked(toast.error).mock.calls.at(-1)?.[0])
+    expect(lastToast).toContain('自动重连已关闭')
+    expect(lastToast).not.toContain('连接协议不兼容')
+  })
+
   it('自动重连开关同步到 Rust：默认开启', async () => {
     // 契约：Rust 侧 flag 不会随 localStorage 自动恢复，init() 必须推一次。
     // 漏推的后果是用户关掉的开关在重启后悄悄变回开启。
