@@ -225,7 +225,10 @@ impl MessageBus {
 
             let subscribers = subscribers_arc.read().await;
             let Some(subs) = subscribers.get(&topic) else {
-                tracing::debug!(topic = %topic, "MessageBus: no subscribers for topic, message dropped");
+                // 无订阅者 → 丢弃。这是**按消息触发**的分支，与下面的成功投递同属
+                // 热路径，逐条打 debug 同样会成风暴（实测 task:status-changed 这类
+                // 「bus + emit + ws 三通道」topic 在无跨插件消费者时每次事件都刷一行）。
+                // 发布意图由插件侧自己的日志留痕；本锁见 hot_path_logging_test.rs。
                 return;
             };
 
@@ -240,8 +243,6 @@ impl MessageBus {
                     .as_millis() as u64,
             };
 
-            let mut enqueued = 0;
-            let mut rejected = 0;
             for sub in subs.iter() {
                 if sub.plugin_id() == &sender {
                     continue;
@@ -257,13 +258,12 @@ impl MessageBus {
                         format = ?format,
                         "MessageBus: subscriber format mismatch, message rejected"
                     );
-                    rejected += 1;
                     continue;
                 }
                 // 每订阅者有界队列：try_send 失败即丢弃（背压保护），
                 // 丢弃计数进 core-monitor（plugin 维度）
                 match sub.try_send(msg.clone()) {
-                    Ok(()) => enqueued += 1,
+                    Ok(()) => {}
                     Err(TrySendError::Full(_)) => {
                         if let Some(m) = sub.metrics() {
                             m.record_bus_dropped();
@@ -275,24 +275,17 @@ impl MessageBus {
                         );
                     }
                     Err(TrySendError::Closed(_)) => {
-                        // 订阅者已移除/停用（队列关闭）：消息丢弃，不计数
-                        tracing::debug!(
-                            plugin_id = %sub.plugin_id(),
-                            topic = %topic,
-                            "MessageBus: subscriber queue closed, message dropped"
-                        );
+                        // 订阅者已移除/停用（队列关闭）：消息丢弃、不计数、不打日志
+                        // ——停用路径上队列关闭与消息到达同频发生，逐条打日志即风暴
                     }
                 }
             }
-
-            tracing::debug!(
-                "MessageBus: published topic='{}' sender='{}' enqueued={}/{} rejected={}",
-                topic,
-                sender,
-                enqueued,
-                subs.len(),
-                rejected
-            );
+            // 成功入队的路径**不落任何日志**：publish 是按消息触发的热路径，
+            // 高频数据面 topic（PTY 输出通知 ≥50ms/句柄、WS 事件流）会把它打成
+            // 日志风暴——实测单次会话 11 分钟刷 9585 行、占开发日志 52% 字节，且
+            // 每次内容都是 `enqueued=1/1 rejected=0` 的零信息重复。投递健康度由
+            // core-monitor 的 `bus.dropped` / `bus.format_rejected` 计数承担
+            // （本函数异常分支各自 warn），正常投递无需逐条留痕。
         });
     }
 

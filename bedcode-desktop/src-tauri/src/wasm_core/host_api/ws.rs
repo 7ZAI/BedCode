@@ -1067,13 +1067,10 @@ fn record_dropped_frame(plugin_id: &str, handle: &str) {
             dropped_total = total,
             "ws frame dropped: plugin exports no events-ws (frames are not buffered); subscribe state events via host-bus and query snapshots for self-healing"
         );
-    } else {
-        tracing::debug!(
-            plugin_id = %plugin_id,
-            dropped_total = total,
-            "ws frame dropped (no events-ws export)"
-        );
     }
+    // 后续每帧**不打日志**：这是按帧触发的丢弃路径，高频流下逐帧 debug 即风暴
+    // （与 bus 投递 / fs 放行同一类）。累计量在上面的首次 warn 里带出，
+    // 精确计数经 `dropped_frame_count` 读（本模块测试与排障用）。
 }
 
 /// 该插件的消息帧丢弃计数（宿主侧可见性；测试与排障用）

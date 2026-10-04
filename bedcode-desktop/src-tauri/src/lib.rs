@@ -6,6 +6,10 @@ mod native_context_menu_test;
 #[cfg(test)]
 mod capabilities_test;
 
+// 热路径日志风暴防回接锁（AGENTS §8 日志红线②）
+#[cfg(test)]
+mod hot_path_logging_test;
+
 // ==================== Domain Modules ====================
 
 pub mod commands;

@@ -536,16 +536,11 @@ impl FsAuthChecker {
                 );
                 false
             }
-            NoDialogDecision::Allowed(layer) => {
-                tracing::debug!(
-                    plugin_id = %plugin_id,
-                    path = %path,
-                    operation = operation.as_str(),
-                    layer = layer.as_str(),
-                    "fs_auth: allowed without dialog"
-                );
-                true
-            }
+            // 免弹窗放行是每次文件读写的默认路径（第一方目录 / 授权记录 / 旧记录），
+            // 逐次打日志即风暴：agent-hub 一次用量全盘扫描就是「一个文件一行」，
+            // 实测单分钟刷 1121 行。放行本身由 core-monitor 的授权决策计数承担，
+            // 真正需要留痕的拒绝 / 弹窗 / 规范化失败路径在各自分支单独记录。
+            NoDialogDecision::Allowed(_) => true,
             // 最后一层：弹窗授权（前面都未命中才走到这里）
             NoDialogDecision::Ask(strategy) => {
                 self.request_user_auth(plugin_id, path, FsOps::single(operation), strategy)
