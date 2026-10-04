@@ -701,12 +701,10 @@ impl TerminalLinkManager {
 
 /// 单次连接会话（成功 → 流结束即退出返回；意外断开 → 外层按原因重连）
 async fn connect_once(link: &Arc<TerminalLink>, write_rx: &mut mpsc::Receiver<Outbound>) -> Result<(), LinkExit> {
-    // 上一段连接曾进入 live（重连恢复）：重播与已在屏内容可能重叠 →
-    // subscribed 回包后需发 terminal-resync（前端清屏 + 基准重置）
-    if link.phase.load(Ordering::SeqCst) == LinkPhase::Live.as_u8() {
-        link.pending_resync.store(true, Ordering::SeqCst);
-    }
-
+    // 「上一段连接曾进入 live → 重连恢复需发 terminal-resync」的判断**不在这里**：
+    // link_io 的 Err(Io) 分支在睡眠前已把 phase 置回 Connecting（见下），本函数被
+    // 调用时 phase 恒为 Connecting，此处判 Live 是永远不触发的死代码。真正落点
+    // 见 link_io 的 Err(LinkExit::Io) 分支（置 Connecting 之前补 pending_resync）。
     let conn = crate::state::get_connection_manager();
     let target = conn.get_target().await.ok_or(LinkExit::Io)?; // 目标缺失：按 Io 重连（目标恢复后自动续）
     let url = format!(
@@ -963,6 +961,16 @@ async fn link_io(link: Arc<TerminalLink>, mut write_rx: mpsc::Receiver<Outbound>
             Err(LinkExit::Io) => {
                 if link.stopped.load(Ordering::SeqCst) {
                     return;
+                }
+                // 重连恢复：上一段连接曾进入 live → 重播与已在屏内容可能重叠，
+                // 重订阅的 `subscribed` 回包后必须发 terminal-resync 让前端清屏 +
+                // 基准重置。**必须在把 phase 置回 Connecting 之前判断**：否则下一次
+                // connect_once 进入时 phase 恒为 Connecting，本标记永远不会置位
+                // （2026-10-04 审查发现的死代码——原实现把同样判断放在
+                // connect_once 顶部，被这里先重置 phase 而永远跳过，导致断线重连
+                // 后回放直接叠在旧屏内容上，行式输出整屏重复）。
+                if link.phase.load(Ordering::SeqCst) == LinkPhase::Live.as_u8() {
+                    link.pending_resync.store(true, Ordering::SeqCst);
                 }
                 link.phase.store(LinkPhase::Connecting.as_u8(), Ordering::SeqCst);
                 link.emit_state("reconnecting");
