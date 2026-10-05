@@ -148,13 +148,14 @@ describe('PluginViewHost：插件二次激活换新 context 后子树必须拿�
  * `[Vue warn] Component inside <Transition> renders non-element root node that cannot be animated`
  * 栈顶正是 `<PluginContextProvider>`。
  *
- * 根因：宿主路由出口是 `<Transition name="page" mode="out-in">`，Transition 要求子组件
+ * 根因：宿主路由出口是 `<Transition name="page">`，Transition 要求子组件
  * 渲染**元素根**。上一版 PluginContextProvider 的模板只有裸 `<slot />`（Fragment 根）
- * → out-in 的 leave 拿不到可等待的元素 → afterLeave 不可靠触发 → 新页面永不挂载。
+ * → leave 拿不到可等待的元素 → 退出回调不可靠触发 → 新页面永不挂载（当时还叠了
+ * `mode="out-in"`：leave 永不完成，切走即**永久**白屏）。
  *
  * 契约：PluginContextProvider 必须有真实元素根（禁止退化成裸 slot 透传）。
  */
-describe('PluginContextProvider 渲染根契约：必须是元素节点（out-in 过渡的前提）', () => {
+describe('PluginContextProvider 渲染根契约：必须是元素节点（页面过渡的前提）', () => {
   /** 组件渲染根 vnode（Vue 的 Transition 判据 isElementRoot 正是看它的 type） */
   function rootVNodeType(instance: unknown): unknown {
     return (instance as { $: { subTree: { type: unknown } } }).$.subTree.type
@@ -182,7 +183,7 @@ describe('PluginContextProvider 渲染根契约：必须是元素节点（out-in
     wrapper.unmount()
   })
 
-  it('挂载在真实 Transition(mode=out-in) 下不产生 non-element root 警告且内容可见', async () => {
+  it('挂载在真实 Transition(name="page") 下不产生 non-element root 警告且内容可见', async () => {
     const { Probe } = makeProbe()
     registry.setContext(PLUGIN_ID, makeContext('ctx-a'))
     registry.registerView(PLUGIN_ID, 'sidebar', { id: 'view', title: 'view', component: Probe })
@@ -192,7 +193,7 @@ describe('PluginContextProvider 渲染根契约：必须是元素节点（out-in
 
     const Root = defineComponent({
       setup: () => () =>
-        h(Transition, { name: 'page', mode: 'out-in' }, () =>
+        h(Transition, { name: 'page' }, () =>
           h(PluginViewHost, { pluginId: PLUGIN_ID, viewId: 'view' }),
         ),
     })
@@ -203,7 +204,7 @@ describe('PluginContextProvider 渲染根契约：必须是元素节点（out-in
 
     expect(wrapper.text()).toContain('probe')
     // 反例（修复前）：Vue 报 `Component inside <Transition> renders non-element root
-    // node that cannot be animated` → out-in 的 leave 永不完成 → 切走即白屏
+    // node that cannot be animated` → leave 回调永不完成 → 切走即白屏
     const warnings = warnSpy.mock.calls.map((call) => String(call[0]))
     expect(warnings.some((msg) => msg.includes('non-element root node'))).toBe(false)
     wrapper.unmount()

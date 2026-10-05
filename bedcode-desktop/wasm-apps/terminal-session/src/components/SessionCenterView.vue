@@ -47,17 +47,28 @@
     </div>
 
     <!-- ==================== Tab 切换：终端配置 / 运行中的会话 ==================== -->
-    <div class="px-6 pt-3 flex-shrink-0">
-      <div class="flex items-center gap-1 p-1 rounded-lg bg-[var(--bg-hover)]">
+    <!-- Tab 区规格与 Agent任务（TaskHistoryView）及本插件的设备配对页同款：
+         ① 满宽分段控件（容器 flex + 单项 flex-1 等分），不是收缩条；
+         ② tab 带自身带底边线 + 卡片底色，与下方内容区物理分开；
+         ③ max-w-5xl mx-auto 与下方内容列同宽——本视图内容有宽度上限，
+            tab 条不跟着限就会在宽屏下比内容列宽出一截、两端脱节。
+         早前是 inline-flex 收缩条浮在页面底色上（整条 214px、两项各 80/122px），
+         读起来像一对工具按钮而不是页签导航。 -->
+    <div
+      class="px-6 pt-3 pb-3 flex-shrink-0 bg-[var(--bg-card)] border-b border-[var(--border)]"
+    >
+      <div class="flex items-center gap-1 p-1 rounded-lg bg-[var(--bg-hover)] max-w-5xl mx-auto" role="tablist">
         <button
           v-for="tab in sessionTabs"
           :key="tab.key"
-          class="h-8 flex-1 px-4 rounded-md text-[calc(12px*var(--ui-scale))] font-medium transition-colors duration-200"
+          class="flex-1 h-8 rounded-md text-[calc(12px*var(--ui-scale))] font-medium transition-colors duration-200"
           :class="
             activeTab === tab.key
               ? 'bg-[var(--bg-card)] text-[var(--text-primary)] shadow-sm'
               : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
           "
+          :aria-selected="activeTab === tab.key"
+          role="tab"
           @click="activeTab = tab.key"
         >
           {{ tab.label }}
@@ -67,7 +78,9 @@
 
     <!-- 内容区：按功能分 tab -->
     <div class="flex-1 overflow-auto px-6 py-6">
-      <div class="max-w-5xl mx-auto">
+      <!-- 内容区：按功能分 tab。page-swap 标在无内边距的 max-w 容器上（而非外层
+           滚动容器）——退场的绝对定位层以它为定位上下文，不会被滚动容器内边距偏移 -->
+      <div class="page-swap max-w-5xl mx-auto">
         <!-- Loading -->
         <div v-if="isLoading" class="flex flex-col items-center justify-center py-20">
           <svg
@@ -94,7 +107,7 @@
           </p>
         </div>
 
-        <Transition name="tab-fade" mode="out-in">
+        <Transition name="page">
           <!-- Tab1：终端配置 -->
           <div v-if="activeTab === 'configs'" class="space-y-6">
             <!-- Empty -->
@@ -1011,19 +1024,9 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-/* Tab 切换过渡：淡入淡出 + 轻微 Y 位移，避免切换闪现（宿主原页同款） */
-.tab-fade-enter-active,
-.tab-fade-leave-active {
-  transition:
-    opacity 0.16s ease,
-    transform 0.16s ease;
-}
-.tab-fade-enter-from {
-  opacity: 0;
-  transform: translateY(4px);
-}
-.tab-fade-leave-to {
-  opacity: 0;
-  transform: translateY(-4px);
-}
+/* Tab 切换过渡已收归宿主页面过渡体系（src/style.css 的 .page-* / .page-swap）：
+   名字恒为 `page`，时长/缓动/位移走 --motion-page-* token，效果变体由
+   <html data-page-fx> 选（全端唯一切换点 = 宿主 src/utils/pageTransition.ts）。
+   本文件不再自带 .tab-fade-* —— 同一份页面过渡散落多处必然漂移（原三处同名
+   tab-fade 的时长还各不相同，切 Tab 手感不一致）。 */
 </style>

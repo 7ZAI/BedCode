@@ -340,7 +340,7 @@ const zhCN: MessageSchema = {
   'task.queueAutoFailed': '设置自动模式失败',
   'task.presetQueueLabel': '目标任务队列',
   'task.presetQueueEmpty': '暂无任务队列',
-  'task.presetQueueHint': '暂无任务队列：在「创建新任务」选择「创建新的{配置}会话」提交任务后，即可将预设加入队列',
+  'task.presetQueueHint': '暂无任务队列：在「创建新任务」选择「创建新的…会话」提交任务后，即可将预设加入队列',
   'task.agentNotAdapted':
     '当前会话的 Agent 未适配自动任务功能，请选择适配的会话（claude / codex / opencode / pi）',
   // ==================== 预设任务 ====================

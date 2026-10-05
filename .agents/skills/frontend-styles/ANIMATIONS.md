@@ -11,6 +11,7 @@ Vue `<Transition>` patterns and CSS animation reference for BedCode.
 | Layout shifts | `250ms` | `cubic-bezier(0.4, 0, 0.2, 1)` | Keyboard avoidance, safe area padding |
 | Enter/leave (modals) | `200ms` | `ease` | Mount/unmount transitions |
 | Enter/leave (sheets) | `300ms` | `cubic-bezier(0.4, 0, 0.2, 1)` | Bottom sheets, slide panels |
+| Page / view swaps | in `220ms` · out `160ms` | `--motion-page-ease` | Route + wasm-app view swaps (tokens, see below) |
 | Theme switching | `200ms` | `ease` | Root containers only |
 
 ## Vue `<Transition>` Patterns
@@ -65,9 +66,43 @@ Vue `<Transition>` patterns and CSS animation reference for BedCode.
 </style>
 ```
 
-### Page transition (route changes)
+### Page transition (route / view swaps)
 
-Defined in desktop `style.css` as `.page-enter-active` / `.page-leave-active` — fade + slight Y offset for route transitions.
+Desktop only, and **one system for the whole端** — host routes plus all four wasm apps
+(they inject their CSS into the host document, so they share these classes).
+
+| Rule | Value |
+| --- | --- |
+| Transition name | always `page` — never a per-plugin variant (`ah-page` / `ft-page` / `page-fade` / `view-slide` / `tab-fade` are retired) |
+| Container class | always `page-swap` (positioning context for the leaving layer) |
+| Padding containers | `page-swap-pad-md` (p-5) / `page-swap-pad-lg` (px-6 py-5) — padding and offset compensation share one variable |
+| Mode | **no `mode`** — see below |
+| Timing | `--motion-page-duration-in` 220ms / `--motion-page-duration-out` 160ms, `--motion-page-ease` |
+
+```vue
+<div class="page-swap">
+  <Transition name="page"><component :is="view" /></Transition>
+</div>
+```
+
+**Why no `mode="out-in"`:** out-in finishes the leave *before* mounting the enter, so
+the container is empty for a frame or more and shows `--bg-page` — near-black in every
+dark theme (`#15130f` / `#0f172a` / `#101713` / `#0b1620` / `#1b1210`). On a full-viewport
+swap that reads as a black flash, not a transition. The default overlapping mode avoids
+it: `.page-leave-active` sets `position: absolute` (padded containers get negative
+top/left from `--page-swap-pad-*` so the layer stays aligned), so the old view leaves the
+flow while the new one occupies it from frame one — the container is never empty.
+
+**Effects (multiple, one switch point):** pick one of `fade` / `slide-up` (default) /
+`slide-left` / `zoom` by setting `PAGE_TRANSITION_EFFECT` in
+`bedcode-desktop/src/utils/pageTransition.ts` — it writes `<html data-page-fx="...">` and
+the CSS selects the matching enter-from / leave-to pair. No settings UI on purpose: page
+motion is app-level look, not a user preference, and a setting would destroy the single
+source of truth. An unknown name throws rather than silently falling back.
+
+**Enforcement:** `src/__tests__/style/pageTransition.test.ts` locks the name, the
+absence of `out-in`, the container class, effect coverage, the reduced-motion fallback,
+and that the four base classes are defined **only** in `src/style.css`.
 
 ## Keyframe Animations
 

@@ -1139,324 +1139,892 @@ function onConfigQueueLiveChanged() {
       </div>
     </div>
 
-    <!-- Tab1 当前任务 -->
-    <Transition name="tab-fade" mode="out-in">
-      <div v-if="activeTab === 'current'" class="flex-1 flex flex-col min-h-0">
-        <!-- 滚动内容：创建任务 / 当前任务 / 执行任务 -->
-        <div class="flex-1 overflow-y-auto px-4 py-3 space-y-4 min-h-0">
-          <!-- 创建新任务 -->
-          <div class="rounded-lg border border-[var(--border)] bg-[var(--bg-card)] p-3 space-y-2">
-            <h3 class="text-xs font-semibold text-[var(--text-primary)]">
-              {{ t('task.createTaskTitle') }}
-            </h3>
-            <div>
-              <label class="block text-xs text-[var(--text-secondary)] mb-1">{{
-                t('task.createTaskSession')
-              }}</label>
-              <!-- 预存选项永远存在且为默认：即使有运行中的会话，也可不加入队列直接预存 -->
-              <Select
-                v-model="createSessionId"
-                :options="sessionOptions"
-                size="sm"
-                @open="onSessionSelectFocus"
-              />
-            </div>
-            <div class="flex items-end gap-1.5">
-              <textarea
-                :ref="(el) => (createPromptEl = el as HTMLTextAreaElement | null)"
-                v-model="createPrompt"
-                rows="1"
-                :class="textareaCls"
-                :placeholder="t('task.createTaskPromptPlaceholder')"
-                @input="autosizeTextarea($event.target)"
-                @keydown="submitOnEnter(createTask)($event)"
-              />
-              <button
-                class="flex-shrink-0 h-8 px-3 rounded-[6px] bg-[var(--color-primary)] text-[var(--color-primary-contrast)] text-xs font-medium transition-opacity duration-200 hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
-                :disabled="creatingTask || !createPrompt.trim()"
-                @click="createTask"
+    <!-- Tab1 当前任务。page-swap 单独包一层：退场的绝对定位层需要以「Tab 内容区」为
+         定位上下文，直接标在视图根上会从页头顶部（标题与 tab 条所在行）开始绘制。 -->
+    <div class="page-swap flex-1 flex flex-col min-h-0">
+      <Transition name="page">
+        <div v-if="activeTab === 'current'" class="flex-1 flex flex-col min-h-0">
+          <!-- 滚动内容：创建任务 / 当前任务 / 执行任务 -->
+          <div class="flex-1 overflow-y-auto px-4 py-3 space-y-4 min-h-0">
+            <!-- 创建新任务 -->
+            <div class="rounded-lg border border-[var(--border)] bg-[var(--bg-card)] p-3 space-y-2">
+              <h3 class="text-xs font-semibold text-[var(--text-primary)]">
+                {{ t('task.createTaskTitle') }}
+              </h3>
+              <div>
+                <label class="block text-xs text-[var(--text-secondary)] mb-1">{{
+                  t('task.createTaskSession')
+                }}</label>
+                <!-- 预存选项永远存在且为默认：即使有运行中的会话，也可不加入队列直接预存 -->
+                <Select
+                  v-model="createSessionId"
+                  :options="sessionOptions"
+                  size="sm"
+                  @open="onSessionSelectFocus"
+                />
+              </div>
+              <div class="flex items-end gap-1.5">
+                <textarea
+                  :ref="(el) => (createPromptEl = el as HTMLTextAreaElement | null)"
+                  v-model="createPrompt"
+                  rows="1"
+                  :class="textareaCls"
+                  :placeholder="t('task.createTaskPromptPlaceholder')"
+                  @input="autosizeTextarea($event.target)"
+                  @keydown="submitOnEnter(createTask)($event)"
+                />
+                <button
+                  class="flex-shrink-0 h-8 px-3 rounded-[6px] bg-[var(--color-primary)] text-[var(--color-primary-contrast)] text-xs font-medium transition-opacity duration-200 hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
+                  :disabled="creatingTask || !createPrompt.trim()"
+                  @click="createTask"
+                >
+                  {{ createSessionId ? t('task.createTaskSubmit') : t('task.saveAsPreset') }}
+                </button>
+              </div>
+              <!-- 未选会话（预存模式）时的去向提示 -->
+              <p
+                v-if="!createSessionId"
+                class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)]"
               >
-                {{ createSessionId ? t('task.createTaskSubmit') : t('task.saveAsPreset') }}
-              </button>
+                {{ t('task.createTaskPresetHint') }}
+              </p>
+              <p v-if="createError" class="text-xs text-red-500 break-words">{{ createError }}</p>
             </div>
-            <!-- 未选会话（预存模式）时的去向提示 -->
-            <p
-              v-if="!createSessionId"
-              class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)]"
-            >
-              {{ t('task.createTaskPresetHint') }}
-            </p>
-            <p v-if="createError" class="text-xs text-red-500 break-words">{{ createError }}</p>
-          </div>
 
-          <!-- 任务队列（按配置分组的未绑定会话批次：启动/自动模式时才建会话执行） -->
-          <div
-            v-if="configQueues.length > 0"
-            class="rounded-lg border border-[var(--border)] bg-[var(--bg-card)] p-3 space-y-2"
-          >
-            <h3 class="text-xs font-semibold text-[var(--text-primary)]">
-              {{ t('task.configQueueTitle') }}
-            </h3>
-            <div class="space-y-2.5">
-              <div
-                v-for="q in configQueues"
-                :key="q.id"
-                class="rounded-lg border border-[var(--border)] bg-[var(--bg-hover)] p-3 space-y-1.5"
-              >
-                <!-- 执行会话（配置名） + 自动任务数 -->
-                <div class="flex items-center gap-2">
-                  <span
-                    class="text-xs font-medium text-[var(--text-primary)] truncate flex-1 min-w-0"
-                  >
-                    {{ t('task.createNewSessionOption', { name: queueLabel(q) }) }}
-                  </span>
-                  <span class="text-xs text-[var(--text-secondary)] flex-shrink-0">
-                    {{ t('task.queueCount', { count: q.tasks.length }) }}
-                  </span>
-                </div>
-                <!-- 自动任务列表（未执行任务支持行内编辑） -->
-                <div v-if="q.tasks.length > 0" class="space-y-1">
-                  <div
-                    v-for="item in q.tasks"
-                    :key="item.id"
-                    class="flex items-center gap-2 px-3 py-1.5 rounded-md bg-[var(--bg-card)]"
-                  >
-                    <!-- 编辑模式：自动增高输入框 + 保存/取消（回车保存，Shift+回车换行，Esc 取消） -->
-                    <template v-if="editingTaskId === item.id && editingTaskScope === q.id">
-                      <textarea
-                        :ref="(el) => autosizeTextarea(el as HTMLTextAreaElement | null)"
-                        v-model="editingTaskText"
-                        rows="1"
-                        :class="textareaCls"
-                        :placeholder="item.prompt"
-                        @input="autosizeTextarea($event.target)"
-                        @keydown="submitOnEnter(saveEditTask)($event)"
-                        @keydown.esc="cancelEditTask"
-                      />
-                      <button
-                        class="flex-shrink-0 w-7 h-7 rounded-[6px] flex items-center justify-center text-[var(--color-primary)] hover:bg-[var(--color-primary)]/10 transition-colors duration-200"
-                        :title="t('task.save')"
-                        @click="saveEditTask"
-                      >
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
-                            stroke-width="2"
-                            d="M5 13l4 4L19 7"
-                          />
-                        </svg>
-                      </button>
-                      <button
-                        class="flex-shrink-0 w-7 h-7 rounded-[6px] flex items-center justify-center text-[var(--text-tertiary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors duration-200"
-                        :title="t('task.cancel')"
-                        @click="cancelEditTask"
-                      >
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
-                            stroke-width="2"
-                            d="M6 18L18 6M6 6l12 12"
-                          />
-                        </svg>
-                      </button>
-                    </template>
-                    <!-- 常规模式：位置 + prompt + 编辑 -->
-                    <template v-else>
-                      <span
-                        class="text-xs text-[var(--text-tertiary)] w-5 text-right flex-shrink-0"
-                        >#{{ item.position }}</span
-                      >
-                      <span class="text-sm text-[var(--text-primary)] truncate flex-1">{{ item.prompt }}</span>
-                      <button
-                        class="flex-shrink-0 w-6 h-6 rounded-[6px] flex items-center justify-center text-[var(--text-tertiary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors duration-200"
-                        :title="t('task.edit')"
-                        @click="startEditTask(q.id, item)"
-                      >
-                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
-                            stroke-width="2"
-                            d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"
-                          />
-                          <path
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
-                            stroke-width="2"
-                            d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"
-                          />
-                        </svg>
-                      </button>
-                    </template>
-                  </div>
-                </div>
-                <!-- 启动 + 自动模式（ready 态控制；启动后迁移到会话卡片） -->
-                <div class="flex items-center gap-4 pt-1">
-                  <button
-                    class="inline-flex items-center gap-1 flex-shrink-0 h-7 px-2.5 rounded-[6px] text-xs font-medium transition-opacity duration-200 disabled:opacity-40 disabled:cursor-not-allowed"
-                    :class="
-                      q.tasks.length > 0 && startingQueueId !== q.id
-                        ? 'bg-[var(--color-primary)] text-[var(--color-primary-contrast)] hover:opacity-90'
-                        : 'bg-[var(--border)] text-[var(--text-tertiary)]'
-                    "
-                    :disabled="q.tasks.length === 0 || startingQueueId !== ''"
-                    :title="
-                      q.tasks.length === 0
-                        ? t('task.queueStartEmptyHint')
-                        : t('task.queueStartHint')
-                    "
-                    @click="startConfigQueue(q.id)"
-                  >
-                    {{ startingQueueId === q.id ? t('task.loading') : t('task.queueStart') }}
-                  </button>
-                  <button
-                    class="inline-flex items-center gap-1.5"
-                    :title="t('task.queueAutoModeHint')"
-                    @click="toggleConfigQueueAutoMode(q)"
-                  >
+            <!-- 任务队列（按配置分组的未绑定会话批次：启动/自动模式时才建会话执行） -->
+            <div
+              v-if="configQueues.length > 0"
+              class="rounded-lg border border-[var(--border)] bg-[var(--bg-card)] p-3 space-y-2"
+            >
+              <h3 class="text-xs font-semibold text-[var(--text-primary)]">
+                {{ t('task.configQueueTitle') }}
+              </h3>
+              <div class="space-y-2.5">
+                <div
+                  v-for="q in configQueues"
+                  :key="q.id"
+                  class="rounded-lg border border-[var(--border)] bg-[var(--bg-hover)] p-3 space-y-1.5"
+                >
+                  <!-- 执行会话（配置名） + 自动任务数 -->
+                  <div class="flex items-center gap-2">
                     <span
-                      class="relative w-8 h-4 rounded-full transition-colors duration-200"
+                      class="text-xs font-medium text-[var(--text-primary)] truncate flex-1 min-w-0"
+                    >
+                      {{ t('task.createNewSessionOption', { name: queueLabel(q) }) }}
+                    </span>
+                    <span class="text-xs text-[var(--text-secondary)] flex-shrink-0">
+                      {{ t('task.queueCount', { count: q.tasks.length }) }}
+                    </span>
+                  </div>
+                  <!-- 自动任务列表（未执行任务支持行内编辑） -->
+                  <div v-if="q.tasks.length > 0" class="space-y-1">
+                    <div
+                      v-for="item in q.tasks"
+                      :key="item.id"
+                      class="flex items-center gap-2 px-3 py-1.5 rounded-md bg-[var(--bg-card)]"
+                    >
+                      <!-- 编辑模式：自动增高输入框 + 保存/取消（回车保存，Shift+回车换行，Esc 取消） -->
+                      <template v-if="editingTaskId === item.id && editingTaskScope === q.id">
+                        <textarea
+                          :ref="(el) => autosizeTextarea(el as HTMLTextAreaElement | null)"
+                          v-model="editingTaskText"
+                          rows="1"
+                          :class="textareaCls"
+                          :placeholder="item.prompt"
+                          @input="autosizeTextarea($event.target)"
+                          @keydown="submitOnEnter(saveEditTask)($event)"
+                          @keydown.esc="cancelEditTask"
+                        />
+                        <button
+                          class="flex-shrink-0 w-7 h-7 rounded-[6px] flex items-center justify-center text-[var(--color-primary)] hover:bg-[var(--color-primary)]/10 transition-colors duration-200"
+                          :title="t('task.save')"
+                          @click="saveEditTask"
+                        >
+                          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path
+                              stroke-linecap="round"
+                              stroke-linejoin="round"
+                              stroke-width="2"
+                              d="M5 13l4 4L19 7"
+                            />
+                          </svg>
+                        </button>
+                        <button
+                          class="flex-shrink-0 w-7 h-7 rounded-[6px] flex items-center justify-center text-[var(--text-tertiary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors duration-200"
+                          :title="t('task.cancel')"
+                          @click="cancelEditTask"
+                        >
+                          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path
+                              stroke-linecap="round"
+                              stroke-linejoin="round"
+                              stroke-width="2"
+                              d="M6 18L18 6M6 6l12 12"
+                            />
+                          </svg>
+                        </button>
+                      </template>
+                      <!-- 常规模式：位置 + prompt + 编辑 -->
+                      <template v-else>
+                        <span
+                          class="text-xs text-[var(--text-tertiary)] w-5 text-right flex-shrink-0"
+                          >#{{ item.position }}</span
+                        >
+                        <span class="text-sm text-[var(--text-primary)] truncate flex-1">{{ item.prompt }}</span>
+                        <button
+                          class="flex-shrink-0 w-6 h-6 rounded-[6px] flex items-center justify-center text-[var(--text-tertiary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors duration-200"
+                          :title="t('task.edit')"
+                          @click="startEditTask(q.id, item)"
+                        >
+                          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path
+                              stroke-linecap="round"
+                              stroke-linejoin="round"
+                              stroke-width="2"
+                              d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"
+                            />
+                            <path
+                              stroke-linecap="round"
+                              stroke-linejoin="round"
+                              stroke-width="2"
+                              d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"
+                            />
+                          </svg>
+                        </button>
+                      </template>
+                    </div>
+                  </div>
+                  <!-- 启动 + 自动模式（ready 态控制；启动后迁移到会话卡片） -->
+                  <div class="flex items-center gap-4 pt-1">
+                    <button
+                      class="inline-flex items-center gap-1 flex-shrink-0 h-7 px-2.5 rounded-[6px] text-xs font-medium transition-opacity duration-200 disabled:opacity-40 disabled:cursor-not-allowed"
                       :class="
-                        q.auto_mode ? 'bg-[var(--color-primary)]' : 'bg-[var(--border-strong)]'
+                        q.tasks.length > 0 && startingQueueId !== q.id
+                          ? 'bg-[var(--color-primary)] text-[var(--color-primary-contrast)] hover:opacity-90'
+                          : 'bg-[var(--border)] text-[var(--text-tertiary)]'
                       "
+                      :disabled="q.tasks.length === 0 || startingQueueId !== ''"
+                      :title="
+                        q.tasks.length === 0
+                          ? t('task.queueStartEmptyHint')
+                          : t('task.queueStartHint')
+                      "
+                      @click="startConfigQueue(q.id)"
+                    >
+                      {{ startingQueueId === q.id ? t('task.loading') : t('task.queueStart') }}
+                    </button>
+                    <button
+                      class="inline-flex items-center gap-1.5"
+                      :title="t('task.queueAutoModeHint')"
+                      @click="toggleConfigQueueAutoMode(q)"
                     >
                       <span
-                        class="absolute top-[2px] w-3 h-3 rounded-full transition-all duration-200"
+                        class="relative w-8 h-4 rounded-full transition-colors duration-200"
+                        :class="
+                          q.auto_mode ? 'bg-[var(--color-primary)]' : 'bg-[var(--border-strong)]'
+                        "
+                      >
+                        <span
+                          class="absolute top-[2px] w-3 h-3 rounded-full transition-all duration-200"
+                          :class="
+                            q.auto_mode
+                              ? 'left-[18px] bg-[var(--color-primary-contrast)]'
+                              : 'left-[2px] bg-[var(--text-tertiary)]'
+                          "
+                        ></span>
+                      </span>
+                      <span
+                        class="text-xs transition-colors duration-200"
                         :class="
                           q.auto_mode
-                            ? 'left-[18px] bg-[var(--color-primary-contrast)]'
-                            : 'left-[2px] bg-[var(--text-tertiary)]'
+                            ? 'text-[var(--text-primary)]'
+                            : 'text-[var(--text-secondary)]'
                         "
-                      ></span>
-                    </span>
-                    <span
-                      class="text-xs transition-colors duration-200"
-                      :class="
-                        q.auto_mode
-                          ? 'text-[var(--text-primary)]'
-                          : 'text-[var(--text-secondary)]'
-                      "
+                      >
+                        {{ t('task.queueAutoMode') }}
+                      </span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <p v-if="configQueueError" class="text-xs text-red-500 break-words">
+                {{ configQueueError }}
+              </p>
+            </div>
+
+            <!-- 预设任务（常显：只要存在预设就展示，不随会话选择隐藏） -->
+            <div
+              v-if="presets.length > 0"
+              class="rounded-lg border border-[var(--border)] bg-[var(--bg-card)] p-3 space-y-2"
+            >
+              <h3 class="text-xs font-semibold text-[var(--text-primary)]">
+                {{ t('task.presetTitle') }} ({{ presets.length }})
+              </h3>
+              <!-- 目标任务队列：预设加入哪个任务队列由用户选定（一次性消耗） -->
+              <div>
+                <label class="block text-xs text-[var(--text-secondary)] mb-1">{{ t('task.presetQueueLabel') }}</label>
+                <Select
+                  v-model="presetQueueId"
+                  :options="presetQueueOptions"
+                  size="sm"
+                  :placeholder="t('task.presetQueueEmpty')"
+                />
+              </div>
+              <div class="space-y-1">
+                <div
+                  v-for="p in presets"
+                  :key="p.id"
+                  class="flex items-center gap-2 px-3 py-2 rounded-md bg-[var(--bg-hover)]"
+                >
+                  <!-- 编辑模式：自动增高输入框 + 保存/取消（回车保存，Shift+回车换行，Esc 取消） -->
+                  <template v-if="editingPresetId === p.id">
+                    <textarea
+                      :ref="(el) => autosizeTextarea(el)"
+                      v-model="editingPresetText"
+                      rows="1"
+                      :class="textareaCls"
+                      :placeholder="p.prompt"
+                      @input="autosizeTextarea($event.target)"
+                      @keydown="submitOnEnter(saveEditPreset)($event)"
+                      @keydown.esc="cancelEditPreset"
+                    />
+                    <button
+                      class="flex-shrink-0 w-7 h-7 rounded-[6px] flex items-center justify-center text-[var(--color-primary)] hover:bg-[var(--color-primary)]/10 transition-colors duration-200"
+                      :title="t('task.save')"
+                      @click="saveEditPreset"
                     >
-                      {{ t('task.queueAutoMode') }}
+                      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          stroke-width="2"
+                          d="M5 13l4 4L19 7"
+                        />
+                      </svg>
+                    </button>
+                    <button
+                      class="flex-shrink-0 w-7 h-7 rounded-[6px] flex items-center justify-center text-[var(--text-tertiary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors duration-200"
+                      :title="t('task.cancel')"
+                      @click="cancelEditPreset"
+                    >
+                      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          stroke-width="2"
+                          d="M6 18L18 6M6 6l12 12"
+                        />
+                      </svg>
+                    </button>
+                  </template>
+                  <!-- 常规模式：内容 + 加入队列 / 编辑 / 删除 -->
+                  <template v-else>
+                    <span class="text-sm text-[var(--text-primary)] truncate flex-1 min-w-0">{{
+                      p.prompt
+                    }}</span>
+                    <button
+                      class="inline-flex items-center gap-1 flex-shrink-0 h-7 px-2.5 rounded-[6px] text-xs font-medium transition-opacity duration-200 disabled:opacity-40 disabled:cursor-not-allowed"
+                      :class="
+                        presetQueueId
+                          ? 'bg-[var(--color-primary)] text-[var(--color-primary-contrast)] hover:opacity-90'
+                          : 'bg-[var(--border)] text-[var(--text-tertiary)]'
+                      "
+                      :disabled="!presetQueueId"
+                      :title="presetQueueId ? t('task.addToQueue') : t('task.presetQueueHint')"
+                      @click="addPresetToQueue(p.id)"
+                    >
+                      {{ t('task.addToQueue') }}
+                    </button>
+                    <button
+                      class="flex-shrink-0 w-7 h-7 rounded-[6px] flex items-center justify-center text-[var(--text-tertiary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors duration-200"
+                      :title="t('task.edit')"
+                      @click="startEditPreset(p)"
+                    >
+                      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          stroke-width="2"
+                          d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"
+                        />
+                        <path
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          stroke-width="2"
+                          d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"
+                        />
+                      </svg>
+                    </button>
+                    <button
+                      class="flex-shrink-0 w-7 h-7 rounded-[6px] flex items-center justify-center text-[var(--text-tertiary)] hover:text-red-500 hover:bg-red-500/10 transition-colors duration-200"
+                      :title="t('task.delete')"
+                      @click="deletePreset(p.id)"
+                    >
+                      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          stroke-width="2"
+                          d="M3 6h18m-2 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"
+                        />
+                      </svg>
+                    </button>
+                  </template>
+                </div>
+              </div>
+              <p v-if="!presetQueueId" class="text-xs text-red-500 break-words">
+                {{ t('task.presetQueueHint') }}
+              </p>
+              <p v-if="presetError" class="text-xs text-red-500 break-words">{{ presetError }}</p>
+            </div>
+
+            <!-- 当前任务（执行中的任务） -->
+            <div v-if="activeTasks.length > 0">
+              <h3
+                class="text-xs font-semibold text-[var(--text-tertiary)] uppercase tracking-wider mb-2"
+              >
+                {{ t('task.currentTaskTitle') }}
+              </h3>
+              <div class="space-y-1.5">
+                <div
+                  v-for="s in activeTasks"
+                  :key="s.session_id"
+                  class="rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20 p-3"
+                >
+                  <div class="flex items-center gap-2 mb-1">
+                    <div
+                      class="w-2 h-2 rounded-full animate-pulse flex-shrink-0"
+                      :class="statusDot[s.task_status] || 'bg-blue-500'"
+                    ></div>
+                    <span
+                      class="text-xs font-medium flex-shrink-0"
+                      :class="statusColor[s.task_status] || 'text-blue-500'"
+                    >
+                      {{ statusLabel[s.task_status] || s.task_status }}
                     </span>
-                  </button>
+                    <span class="text-xs text-[var(--text-tertiary)] truncate flex-1 min-w-0">{{
+                      sessionLabel(s)
+                    }}</span>
+                    <span
+                      v-if="s.queue_count > 0"
+                      class="text-xs text-[var(--text-secondary)] flex-shrink-0"
+                    >
+                      {{ t('task.queueCount', { count: s.queue_count }) }}
+                    </span>
+                  </div>
+                  <p class="text-sm text-[var(--text-primary)] break-words">
+                    {{ s.description || '-' }}
+                  </p>
+                  <p class="text-xs text-[var(--text-tertiary)] mt-1">
+                    {{ formatTime(s.started_at) }}
+                  </p>
                 </div>
               </div>
             </div>
-            <p v-if="configQueueError" class="text-xs text-red-500 break-words">
-              {{ configQueueError }}
-            </p>
-          </div>
 
-          <!-- 预设任务（常显：只要存在预设就展示，不随会话选择隐藏） -->
-          <div
-            v-if="presets.length > 0"
-            class="rounded-lg border border-[var(--border)] bg-[var(--bg-card)] p-3 space-y-2"
-          >
-            <h3 class="text-xs font-semibold text-[var(--text-primary)]">
-              {{ t('task.presetTitle') }} ({{ presets.length }})
-            </h3>
-            <!-- 目标任务队列：预设加入哪个任务队列由用户选定（一次性消耗） -->
-            <div>
-              <label class="block text-xs text-[var(--text-secondary)] mb-1">{{ t('task.presetQueueLabel') }}</label>
+            <!-- 执行任务（各会话待执行队列） -->
+            <div v-if="executingSessions.length > 0">
+              <h3
+                class="text-xs font-semibold text-[var(--text-tertiary)] uppercase tracking-wider mb-2"
+              >
+                {{ t('task.executingTaskTitle') }}
+              </h3>
+              <div class="space-y-2.5">
+                <div v-for="s in executingSessions" :key="s.session_id">
+                  <p class="text-xs text-[var(--text-tertiary)] mb-1">
+                    {{ sessionLabel(s) }} · {{ t('task.queueCount', { count: s.queue.length }) }}
+                  </p>
+                  <!-- 队列卡片头部：启动（自动执行）/ 自动应答开关；开启自动执行后队列立即调度 -->
+                  <div
+                    class="flex items-center gap-4 px-3 py-1.5 rounded-md bg-[var(--bg-card)] border border-[var(--border)] mb-1.5"
+                  >
+                    <button
+                      class="inline-flex items-center gap-1.5"
+                      :title="t('task.autoExecuteHint')"
+                      @click="toggleSessionFlag(s, 'auto_execute')"
+                    >
+                      <span
+                        class="relative w-8 h-4 rounded-full transition-colors duration-200"
+                        :class="
+                          s.auto_execute ? 'bg-[var(--color-primary)]' : 'bg-[var(--border-strong)]'
+                        "
+                      >
+                        <span
+                          class="absolute top-[2px] w-3 h-3 rounded-full transition-all duration-200"
+                          :class="
+                            s.auto_execute
+                              ? 'left-[18px] bg-[var(--color-primary-contrast)]'
+                              : 'left-[2px] bg-[var(--text-tertiary)]'
+                          "
+                        ></span>
+                      </span>
+                      <span
+                        class="text-xs transition-colors duration-200"
+                        :class="
+                          s.auto_execute
+                            ? 'text-[var(--text-primary)]'
+                            : 'text-[var(--text-secondary)]'
+                        "
+                      >
+                        {{ t('task.autoExecute') }}
+                      </span>
+                    </button>
+                    <button
+                      class="inline-flex items-center gap-1.5"
+                      :title="t('task.autoAnswerHint')"
+                      @click="toggleSessionFlag(s, 'auto_answer')"
+                    >
+                      <span
+                        class="relative w-8 h-4 rounded-full transition-colors duration-200"
+                        :class="
+                          s.auto_answer ? 'bg-[var(--color-primary)]' : 'bg-[var(--border-strong)]'
+                        "
+                      >
+                        <span
+                          class="absolute top-[2px] w-3 h-3 rounded-full transition-all duration-200"
+                          :class="
+                            s.auto_answer
+                              ? 'left-[18px] bg-[var(--color-primary-contrast)]'
+                              : 'left-[2px] bg-[var(--text-tertiary)]'
+                          "
+                        ></span>
+                      </span>
+                      <span
+                        class="text-xs transition-colors duration-200"
+                        :class="
+                          s.auto_answer
+                            ? 'text-[var(--text-primary)]'
+                            : 'text-[var(--text-secondary)]'
+                        "
+                      >
+                        {{ t('task.autoAnswer') }}
+                      </span>
+                    </button>
+                  </div>
+                  <div class="space-y-1">
+                    <div
+                      v-for="item in s.queue"
+                      :key="item.id"
+                      class="flex items-center gap-2 px-3 py-2 rounded-md bg-[var(--bg-hover)] text-sm"
+                    >
+                      <!-- 未执行（pending）任务支持行内编辑，作用域 = 会话 id -->
+                      <template v-if="editingTaskId === item.id && editingTaskScope === s.session_id">
+                        <textarea
+                          :ref="(el) => autosizeTextarea(el as HTMLTextAreaElement | null)"
+                          v-model="editingTaskText"
+                          rows="1"
+                          :class="textareaCls"
+                          :placeholder="item.prompt"
+                          @input="autosizeTextarea($event.target)"
+                          @keydown="submitOnEnter(saveEditTask)($event)"
+                          @keydown.esc="cancelEditTask"
+                        />
+                        <button
+                          class="flex-shrink-0 w-7 h-7 rounded-[6px] flex items-center justify-center text-[var(--color-primary)] hover:bg-[var(--color-primary)]/10 transition-colors duration-200"
+                          :title="t('task.save')"
+                          @click="saveEditTask"
+                        >
+                          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path
+                              stroke-linecap="round"
+                              stroke-linejoin="round"
+                              stroke-width="2"
+                              d="M5 13l4 4L19 7"
+                            />
+                          </svg>
+                        </button>
+                        <button
+                          class="flex-shrink-0 w-7 h-7 rounded-[6px] flex items-center justify-center text-[var(--text-tertiary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors duration-200"
+                          :title="t('task.cancel')"
+                          @click="cancelEditTask"
+                        >
+                          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path
+                              stroke-linecap="round"
+                              stroke-linejoin="round"
+                              stroke-width="2"
+                              d="M6 18L18 6M6 6l12 12"
+                            />
+                          </svg>
+                        </button>
+                      </template>
+                      <template v-else>
+                        <span
+                          class="text-xs text-[var(--text-tertiary)] w-5 text-right flex-shrink-0"
+                          >#{{ item.position }}</span
+                        >
+                        <span class="text-[var(--text-primary)] truncate flex-1">{{ item.prompt }}</span>
+                        <button
+                          class="flex-shrink-0 w-6 h-6 rounded-[6px] flex items-center justify-center text-[var(--text-tertiary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors duration-200"
+                          :title="t('task.edit')"
+                          @click="startEditTask(s.session_id, item)"
+                        >
+                          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path
+                              stroke-linecap="round"
+                              stroke-linejoin="round"
+                              stroke-width="2"
+                              d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"
+                            />
+                            <path
+                              stroke-linecap="round"
+                              stroke-linejoin="round"
+                              stroke-width="2"
+                              d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"
+                            />
+                          </svg>
+                        </button>
+                      </template>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 加载中 -->
+            <div v-if="currentLoading" class="flex justify-center py-4">
+              <span class="text-sm text-[var(--text-tertiary)]">{{ t('task.loading') }}</span>
+            </div>
+
+            <!-- 空状态：无运行会话且无预设任务时展示（有预设时由预设区替代） -->
+            <div
+              v-if="!currentLoading && runningSessions.length === 0 && presets.length === 0"
+              class="flex flex-col items-center justify-center py-12"
+            >
+              <svg
+                class="w-12 h-12 text-[var(--text-tertiary)] mb-3"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="1.5"
+                  d="M13 10V3L4 14h7v7l9-11h-7z"
+                />
+              </svg>
+              <p class="text-sm text-[var(--text-tertiary)]">{{ t('task.noRunningSessions') }}</p>
+              <p class="text-xs text-[var(--text-tertiary)] mt-1">
+                {{ t('task.noRunningSessionsHint') }}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab2 任务日志 -->
+        <div v-else-if="activeTab === 'records'" class="flex-1 flex flex-col min-h-0">
+          <!-- 筛选条 -->
+          <div class="px-4 pt-3 flex-shrink-0 space-y-2">
+            <div class="grid grid-cols-3 gap-1.5 items-start">
               <Select
-                v-model="presetQueueId"
-                :options="presetQueueOptions"
+                v-model="filterStatus"
+                :options="filterStatusOptions"
                 size="sm"
-                :placeholder="t('task.presetQueueEmpty')"
+                :placeholder="t('task.filterStatus')"
+                @update:model-value="onFilterChanged"
+              />
+              <Select
+                v-model="filterAgent"
+                :options="filterAgentOptions"
+                size="sm"
+                :placeholder="t('task.filterAgent')"
+                @update:model-value="onFilterChanged"
+              />
+              <Select
+                v-model="filterSource"
+                :options="filterSourceOptions"
+                size="sm"
+                :placeholder="t('task.filterSource')"
+                @update:model-value="onFilterChanged"
               />
             </div>
-            <div class="space-y-1">
-              <div
-                v-for="p in presets"
-                :key="p.id"
-                class="flex items-center gap-2 px-3 py-2 rounded-md bg-[var(--bg-hover)]"
+            <div class="grid grid-cols-2 gap-1.5">
+              <div>
+                <label class="block text-xs text-[var(--text-secondary)] mb-1">{{
+                  t('task.filterSince')
+                }}</label>
+                <Datepicker
+                  v-model="filterSince"
+                  :format="dateFormat"
+                  :locale="dateLocale"
+                  :dark="isDark"
+                  :clearable="true"
+                  :enable-time-picker="true"
+                  :select-text="dpSelectText"
+                  :cancel-text="dpCancelText"
+                  :now-button-label="dpNowLabel"
+                  :teleport="'body'"
+                  :placeholder="t('task.filterSince')"
+                  @update:model-value="onFilterChangedDebounced"
+                />
+              </div>
+              <div>
+                <label class="block text-xs text-[var(--text-secondary)] mb-1">{{
+                  t('task.filterUntil')
+                }}</label>
+                <Datepicker
+                  v-model="filterUntil"
+                  :format="dateFormat"
+                  :locale="dateLocale"
+                  :dark="isDark"
+                  :clearable="true"
+                  :enable-time-picker="true"
+                  :select-text="dpSelectText"
+                  :cancel-text="dpCancelText"
+                  :now-button-label="dpNowLabel"
+                  :teleport="'body'"
+                  :placeholder="t('task.filterUntil')"
+                  @update:model-value="onFilterChangedDebounced"
+                />
+              </div>
+            </div>
+            <div class="flex justify-end">
+              <button
+                class="text-xs text-[var(--color-primary)] hover:underline transition-colors duration-200"
+                @click="resetFilters"
               >
-                <!-- 编辑模式：自动增高输入框 + 保存/取消（回车保存，Shift+回车换行，Esc 取消） -->
-                <template v-if="editingPresetId === p.id">
-                  <textarea
-                    :ref="(el) => autosizeTextarea(el)"
-                    v-model="editingPresetText"
-                    rows="1"
-                    :class="textareaCls"
-                    :placeholder="p.prompt"
-                    @input="autosizeTextarea($event.target)"
-                    @keydown="submitOnEnter(saveEditPreset)($event)"
-                    @keydown.esc="cancelEditPreset"
-                  />
-                  <button
-                    class="flex-shrink-0 w-7 h-7 rounded-[6px] flex items-center justify-center text-[var(--color-primary)] hover:bg-[var(--color-primary)]/10 transition-colors duration-200"
-                    :title="t('task.save')"
-                    @click="saveEditPreset"
+                {{ t('task.filterReset') }}
+              </button>
+            </div>
+          </div>
+
+          <!-- 任务列表：固定高度区域（filterReset 与分页之间），任务超出时内部滚动；
+              分页固定在面板底部不随列表滚动。flex-1 + max-h 保证常规窗口下列表高度固定为 440px，
+              窗口过小时自动收缩以保持分页可见（相对容器计算，随 ui-scale 自适应） -->
+          <div
+            class="relative flex-1 min-h-0 max-h-[440px] overflow-y-auto overflow-x-hidden px-4 py-3 space-y-0.5 [scrollbar-gutter:stable]"
+          >
+            <!-- 列表加载中（浮层，不挤压列表布局，避免翻页时内容抖动） -->
+            <Transition name="fade">
+              <div
+                v-if="loading"
+                class="absolute inset-x-0 top-3 z-10 flex justify-center pointer-events-none"
+              >
+                <span
+                  class="rounded-full bg-[var(--bg-card)] px-3 py-1 text-xs text-[var(--text-tertiary)] shadow-sm border border-[var(--border)]"
+                >
+                  {{ t('task.loading') }}
+                </span>
+              </div>
+            </Transition>
+
+            <!-- 任务列表（自然高度卡片，超出滚动；分页固定在底部不随列表滚动）。
+               翻页/筛选切换：旧整块瞬时移除，新数据逐条从左向右横移滑入并淡入（stagger）。 -->
+            <TransitionGroup v-if="tasks.length > 0" tag="div" name="task-list" class="space-y-0.5">
+              <div
+                v-for="(task, idx) in tasks"
+                :key="task.id"
+                :style="{ '--enter-delay': idx * 45 + 'ms' }"
+                class="rounded-md border border-[var(--border)] bg-[var(--bg-card)] cursor-pointer transition-colors duration-200 hover:bg-[var(--bg-hover)]"
+                @click="toggleTask(task)"
+              >
+                <div class="flex items-center gap-2 px-2.5 py-1.5">
+                  <div
+                    class="w-1.5 h-1.5 rounded-full flex-shrink-0"
+                    :class="statusDot[task.status] || 'bg-[var(--text-tertiary)]'"
+                  ></div>
+                  <p class="flex-1 min-w-0 text-xs text-[var(--text-primary)] truncate">
+                    {{ task.description || task.session_id }}
+                  </p>
+                  <span
+                    class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] flex-shrink-0"
                   >
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        stroke-width="2"
-                        d="M5 13l4 4L19 7"
-                      />
-                    </svg>
-                  </button>
-                  <button
-                    class="flex-shrink-0 w-7 h-7 rounded-[6px] flex items-center justify-center text-[var(--text-tertiary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors duration-200"
-                    :title="t('task.cancel')"
-                    @click="cancelEditPreset"
+                    {{ formatTime(task.started_at || task.created_at) }}
+                  </span>
+                  <span
+                    class="text-[calc(11px*var(--ui-scale))] flex-shrink-0"
+                    :class="statusColor[task.status] || 'text-[var(--text-secondary)]'"
                   >
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        stroke-width="2"
-                        d="M6 18L18 6M6 6l12 12"
-                      />
-                    </svg>
-                  </button>
-                </template>
-                <!-- 常规模式：内容 + 加入队列 / 编辑 / 删除 -->
-                <template v-else>
-                  <span class="text-sm text-[var(--text-primary)] truncate flex-1 min-w-0">{{
-                    p.prompt
+                    {{ statusLabel[task.status] || task.status }}
+                  </span>
+                  <svg
+                    class="w-3 h-3 text-[var(--text-tertiary)] flex-shrink-0 transition-transform duration-200"
+                    :class="{ 'rotate-90': expandedId === task.id }"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="2"
+                      d="M9 5l7 7-7 7"
+                    />
+                  </svg>
+                </div>
+
+                <!-- 行内详情展开 -->
+                <div
+                  v-if="expandedId === task.id"
+                  class="px-3 pb-2.5 pt-1.5 border-t border-[var(--border)]"
+                >
+                  <div class="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-xs">
+                    <span class="text-[var(--text-tertiary)]">{{ t('task.detailAgent') }}</span>
+                    <span class="text-[var(--text-primary)] truncate min-w-0">{{
+                      task.agent || '-'
+                    }}</span>
+                    <span class="text-[var(--text-tertiary)]">{{ t('task.detailSource') }}</span>
+                    <span class="text-[var(--text-primary)] truncate min-w-0">{{
+                      sourceLabel[task.source] || task.source || '-'
+                    }}</span>
+                    <span class="text-[var(--text-tertiary)]">{{ t('task.detailCreated') }}</span>
+                    <span class="text-[var(--text-primary)] truncate min-w-0">{{
+                      formatTime(task.created_at)
+                    }}</span>
+                    <span class="text-[var(--text-tertiary)]">{{ t('task.detailStarted') }}</span>
+                    <span class="text-[var(--text-primary)] truncate min-w-0">{{
+                      formatTime(task.started_at)
+                    }}</span>
+                    <span class="text-[var(--text-tertiary)]">{{ t('task.detailCompleted') }}</span>
+                    <span class="text-[var(--text-primary)] truncate min-w-0">{{
+                      formatTime(task.completed_at)
+                    }}</span>
+                    <span class="text-[var(--text-tertiary)]">{{ t('task.detailWorkingDir') }}</span>
+                    <span class="text-[var(--text-primary)] truncate min-w-0">{{
+                      task.working_dir || '-'
+                    }}</span>
+                    <span class="text-[var(--text-tertiary)]">{{ t('task.detailExitReason') }}</span>
+                    <span class="text-[var(--text-primary)] truncate min-w-0">{{
+                      task.exit_reason || '-'
+                    }}</span>
+                  </div>
+                  <div class="text-xs mt-1">
+                    <span class="text-[var(--text-tertiary)]"
+                      >{{ t('task.detailDescription') }}:
+                    </span>
+                    <span class="text-[var(--text-primary)] whitespace-pre-wrap break-words">{{
+                      task.description || '-'
+                    }}</span>
+                  </div>
+                </div>
+              </div>
+            </TransitionGroup>
+
+            <!-- 空状态 -->
+            <div
+              v-if="!loading && tasks.length === 0"
+              class="flex flex-col items-center justify-center py-12"
+            >
+              <svg
+                class="w-12 h-12 text-[var(--text-tertiary)] mb-3"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="1.5"
+                  d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"
+                />
+              </svg>
+              <p class="text-sm text-[var(--text-tertiary)]">{{ t('task.emptyHistory') }}</p>
+              <p class="text-xs text-[var(--text-tertiary)] mt-1">{{ t('task.emptyHistoryHint') }}</p>
+            </div>
+          </div>
+
+          <!-- 分页 -->
+          <div
+            v-if="total > 0"
+            class="flex items-center justify-between px-4 py-2 border-t border-[var(--border)] flex-shrink-0"
+          >
+            <span class="text-xs text-[var(--text-secondary)]">
+              {{ t('task.paginationRange', { from: pageFrom, to: pageTo, total }) }}
+            </span>
+            <div class="flex items-center gap-1.5">
+              <button
+                class="h-7 px-2.5 rounded-[6px] text-xs font-medium bg-[var(--bg-hover)] text-[var(--text-primary)] hover:bg-[var(--border)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-200"
+                :disabled="!hasPrev"
+                @click="prevPage"
+              >
+                {{ t('task.paginationPrev') }}
+              </button>
+              <button
+                class="h-7 px-2.5 rounded-[6px] text-xs font-medium bg-[var(--bg-hover)] text-[var(--text-primary)] hover:bg-[var(--border)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-200"
+                :disabled="!hasNext"
+                @click="nextPage"
+              >
+                {{ t('task.paginationNext') }}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab3 定时任务 -->
+        <div v-else-if="activeTab === 'scheduled'" class="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+          <!-- 新建/收起 -->
+          <button
+            class="w-full h-8 rounded-[6px] bg-[var(--color-primary)] text-[var(--color-primary-contrast)] text-xs font-medium transition-opacity duration-200 hover:opacity-90"
+            @click="showForm = !showForm"
+          >
+            {{ showForm ? t('task.cancel') : t('task.scheduledNew') }}
+          </button>
+
+          <!-- 新建表单 -->
+          <div
+            v-if="showForm"
+            class="rounded-lg border border-[var(--border)] bg-[var(--bg-card)] p-3 space-y-2.5"
+          >
+            <div>
+              <label class="block text-xs text-[var(--text-secondary)] mb-1">{{
+                t('task.scheduledName')
+              }}</label>
+              <input v-model="formName" type="text" :class="controlCls" />
+            </div>
+            <div>
+              <label class="block text-xs text-[var(--text-secondary)] mb-1">{{
+                t('task.scheduledConfig')
+              }}</label>
+              <Select
+                v-model="formConfigId"
+                :options="configOptions"
+                size="sm"
+                :placeholder="t('task.scheduledConfigPlaceholder')"
+              />
+            </div>
+            <div>
+              <label class="block text-xs text-[var(--text-secondary)] mb-1">{{
+                t('task.scheduledTriggerAt')
+              }}</label>
+              <Datepicker
+                v-model="formTriggerAt"
+                :format="dateFormat"
+                :locale="dateLocale"
+                :dark="isDark"
+                :clearable="true"
+                :enable-time-picker="true"
+                :select-text="dpSelectText"
+                :cancel-text="dpCancelText"
+                :now-button-label="dpNowLabel"
+                :teleport="'body'"
+                :placeholder="t('task.scheduledTriggerAt')"
+              />
+              <p class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] mt-1">
+                {{ t('task.scheduledUtcHint', { time: utcPreview }) }}
+              </p>
+            </div>
+            <div>
+              <label class="block text-xs text-[var(--text-secondary)] mb-1">{{
+                t('task.scheduledPrompts')
+              }}</label>
+              <!-- 任务卡片：一条任务一个卡片，支持逐条删除（与队列弹窗交互一致） -->
+              <div v-if="formPrompts.length > 0" class="space-y-1 mb-2">
+                <div
+                  v-for="(p, idx) in formPrompts"
+                  :key="idx"
+                  class="flex items-center gap-2 px-3 py-2 rounded-md bg-[var(--bg-hover)]"
+                >
+                  <span class="text-xs text-[var(--text-tertiary)] w-5 text-right flex-shrink-0"
+                    >#{{ idx + 1 }}</span
+                  >
+                  <span class="flex-1 min-w-0 text-sm text-[var(--text-primary)] break-words">{{
+                    p
                   }}</span>
-                  <button
-                    class="inline-flex items-center gap-1 flex-shrink-0 h-7 px-2.5 rounded-[6px] text-xs font-medium transition-opacity duration-200 disabled:opacity-40 disabled:cursor-not-allowed"
-                    :class="
-                      presetQueueId
-                        ? 'bg-[var(--color-primary)] text-[var(--color-primary-contrast)] hover:opacity-90'
-                        : 'bg-[var(--border)] text-[var(--text-tertiary)]'
-                    "
-                    :disabled="!presetQueueId"
-                    :title="presetQueueId ? t('task.addToQueue') : t('task.presetQueueHint')"
-                    @click="addPresetToQueue(p.id)"
-                  >
-                    {{ t('task.addToQueue') }}
-                  </button>
-                  <button
-                    class="flex-shrink-0 w-7 h-7 rounded-[6px] flex items-center justify-center text-[var(--text-tertiary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors duration-200"
-                    :title="t('task.edit')"
-                    @click="startEditPreset(p)"
-                  >
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        stroke-width="2"
-                        d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"
-                      />
-                      <path
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        stroke-width="2"
-                        d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"
-                      />
-                    </svg>
-                  </button>
                   <button
                     class="flex-shrink-0 w-7 h-7 rounded-[6px] flex items-center justify-center text-[var(--text-tertiary)] hover:text-red-500 hover:bg-red-500/10 transition-colors duration-200"
                     :title="t('task.delete')"
-                    @click="deletePreset(p.id)"
+                    @click="removePrompt(idx)"
                   >
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path
@@ -1467,441 +2035,51 @@ function onConfigQueueLiveChanged() {
                       />
                     </svg>
                   </button>
-                </template>
-              </div>
-            </div>
-            <p v-if="!presetQueueId" class="text-xs text-red-500 break-words">
-              {{ t('task.presetQueueHint') }}
-            </p>
-            <p v-if="presetError" class="text-xs text-red-500 break-words">{{ presetError }}</p>
-          </div>
-
-          <!-- 当前任务（执行中的任务） -->
-          <div v-if="activeTasks.length > 0">
-            <h3
-              class="text-xs font-semibold text-[var(--text-tertiary)] uppercase tracking-wider mb-2"
-            >
-              {{ t('task.currentTaskTitle') }}
-            </h3>
-            <div class="space-y-1.5">
-              <div
-                v-for="s in activeTasks"
-                :key="s.session_id"
-                class="rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20 p-3"
-              >
-                <div class="flex items-center gap-2 mb-1">
-                  <div
-                    class="w-2 h-2 rounded-full animate-pulse flex-shrink-0"
-                    :class="statusDot[s.task_status] || 'bg-blue-500'"
-                  ></div>
-                  <span
-                    class="text-xs font-medium flex-shrink-0"
-                    :class="statusColor[s.task_status] || 'text-blue-500'"
-                  >
-                    {{ statusLabel[s.task_status] || s.task_status }}
-                  </span>
-                  <span class="text-xs text-[var(--text-tertiary)] truncate flex-1 min-w-0">{{
-                    sessionLabel(s)
-                  }}</span>
-                  <span
-                    v-if="s.queue_count > 0"
-                    class="text-xs text-[var(--text-secondary)] flex-shrink-0"
-                  >
-                    {{ t('task.queueCount', { count: s.queue_count }) }}
-                  </span>
                 </div>
-                <p class="text-sm text-[var(--text-primary)] break-words">
-                  {{ s.description || '-' }}
-                </p>
-                <p class="text-xs text-[var(--text-tertiary)] mt-1">
-                  {{ formatTime(s.started_at) }}
-                </p>
               </div>
-            </div>
-          </div>
-
-          <!-- 执行任务（各会话待执行队列） -->
-          <div v-if="executingSessions.length > 0">
-            <h3
-              class="text-xs font-semibold text-[var(--text-tertiary)] uppercase tracking-wider mb-2"
-            >
-              {{ t('task.executingTaskTitle') }}
-            </h3>
-            <div class="space-y-2.5">
-              <div v-for="s in executingSessions" :key="s.session_id">
-                <p class="text-xs text-[var(--text-tertiary)] mb-1">
-                  {{ sessionLabel(s) }} · {{ t('task.queueCount', { count: s.queue.length }) }}
-                </p>
-                <!-- 队列卡片头部：启动（自动执行）/ 自动应答开关；开启自动执行后队列立即调度 -->
-                <div
-                  class="flex items-center gap-4 px-3 py-1.5 rounded-md bg-[var(--bg-card)] border border-[var(--border)] mb-1.5"
+              <!-- 添加任务：输入后回车或点击按钮生成一张卡片（自动增高，最多 10 行） -->
+              <div class="flex items-end gap-1.5">
+                <textarea
+                  :ref="(el) => (newPromptEl = el as HTMLTextAreaElement | null)"
+                  v-model="newPrompt"
+                  rows="1"
+                  :class="textareaCls"
+                  :placeholder="t('task.scheduledPromptPlaceholder')"
+                  @input="autosizeTextarea($event.target)"
+                  @keydown="submitOnEnter(addPrompt)($event)"
+                />
+                <button
+                  class="flex-shrink-0 h-8 px-3 rounded-[6px] bg-[var(--color-primary)] text-[var(--color-primary-contrast)] text-xs font-medium transition-opacity duration-200 hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
+                  :disabled="!newPrompt.trim()"
+                  @click="addPrompt"
                 >
-                  <button
-                    class="inline-flex items-center gap-1.5"
-                    :title="t('task.autoExecuteHint')"
-                    @click="toggleSessionFlag(s, 'auto_execute')"
-                  >
-                    <span
-                      class="relative w-8 h-4 rounded-full transition-colors duration-200"
-                      :class="
-                        s.auto_execute ? 'bg-[var(--color-primary)]' : 'bg-[var(--border-strong)]'
-                      "
-                    >
-                      <span
-                        class="absolute top-[2px] w-3 h-3 rounded-full transition-all duration-200"
-                        :class="
-                          s.auto_execute
-                            ? 'left-[18px] bg-[var(--color-primary-contrast)]'
-                            : 'left-[2px] bg-[var(--text-tertiary)]'
-                        "
-                      ></span>
-                    </span>
-                    <span
-                      class="text-xs transition-colors duration-200"
-                      :class="
-                        s.auto_execute
-                          ? 'text-[var(--text-primary)]'
-                          : 'text-[var(--text-secondary)]'
-                      "
-                    >
-                      {{ t('task.autoExecute') }}
-                    </span>
-                  </button>
-                  <button
-                    class="inline-flex items-center gap-1.5"
-                    :title="t('task.autoAnswerHint')"
-                    @click="toggleSessionFlag(s, 'auto_answer')"
-                  >
-                    <span
-                      class="relative w-8 h-4 rounded-full transition-colors duration-200"
-                      :class="
-                        s.auto_answer ? 'bg-[var(--color-primary)]' : 'bg-[var(--border-strong)]'
-                      "
-                    >
-                      <span
-                        class="absolute top-[2px] w-3 h-3 rounded-full transition-all duration-200"
-                        :class="
-                          s.auto_answer
-                            ? 'left-[18px] bg-[var(--color-primary-contrast)]'
-                            : 'left-[2px] bg-[var(--text-tertiary)]'
-                        "
-                      ></span>
-                    </span>
-                    <span
-                      class="text-xs transition-colors duration-200"
-                      :class="
-                        s.auto_answer
-                          ? 'text-[var(--text-primary)]'
-                          : 'text-[var(--text-secondary)]'
-                      "
-                    >
-                      {{ t('task.autoAnswer') }}
-                    </span>
-                  </button>
-                </div>
-                <div class="space-y-1">
-                  <div
-                    v-for="item in s.queue"
-                    :key="item.id"
-                    class="flex items-center gap-2 px-3 py-2 rounded-md bg-[var(--bg-hover)] text-sm"
-                  >
-                    <!-- 未执行（pending）任务支持行内编辑，作用域 = 会话 id -->
-                    <template v-if="editingTaskId === item.id && editingTaskScope === s.session_id">
-                      <textarea
-                        :ref="(el) => autosizeTextarea(el as HTMLTextAreaElement | null)"
-                        v-model="editingTaskText"
-                        rows="1"
-                        :class="textareaCls"
-                        :placeholder="item.prompt"
-                        @input="autosizeTextarea($event.target)"
-                        @keydown="submitOnEnter(saveEditTask)($event)"
-                        @keydown.esc="cancelEditTask"
-                      />
-                      <button
-                        class="flex-shrink-0 w-7 h-7 rounded-[6px] flex items-center justify-center text-[var(--color-primary)] hover:bg-[var(--color-primary)]/10 transition-colors duration-200"
-                        :title="t('task.save')"
-                        @click="saveEditTask"
-                      >
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
-                            stroke-width="2"
-                            d="M5 13l4 4L19 7"
-                          />
-                        </svg>
-                      </button>
-                      <button
-                        class="flex-shrink-0 w-7 h-7 rounded-[6px] flex items-center justify-center text-[var(--text-tertiary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors duration-200"
-                        :title="t('task.cancel')"
-                        @click="cancelEditTask"
-                      >
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
-                            stroke-width="2"
-                            d="M6 18L18 6M6 6l12 12"
-                          />
-                        </svg>
-                      </button>
-                    </template>
-                    <template v-else>
-                      <span
-                        class="text-xs text-[var(--text-tertiary)] w-5 text-right flex-shrink-0"
-                        >#{{ item.position }}</span
-                      >
-                      <span class="text-[var(--text-primary)] truncate flex-1">{{ item.prompt }}</span>
-                      <button
-                        class="flex-shrink-0 w-6 h-6 rounded-[6px] flex items-center justify-center text-[var(--text-tertiary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors duration-200"
-                        :title="t('task.edit')"
-                        @click="startEditTask(s.session_id, item)"
-                      >
-                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
-                            stroke-width="2"
-                            d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"
-                          />
-                          <path
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
-                            stroke-width="2"
-                            d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"
-                          />
-                        </svg>
-                      </button>
-                    </template>
-                  </div>
-                </div>
+                  {{ t('task.add') }}
+                </button>
               </div>
+              <p class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] mt-1">
+                {{ t('task.scheduledPromptsHint') }}
+              </p>
             </div>
-          </div>
-
-          <!-- 加载中 -->
-          <div v-if="currentLoading" class="flex justify-center py-4">
-            <span class="text-sm text-[var(--text-tertiary)]">{{ t('task.loading') }}</span>
-          </div>
-
-          <!-- 空状态：无运行会话且无预设任务时展示（有预设时由预设区替代） -->
-          <div
-            v-if="!currentLoading && runningSessions.length === 0 && presets.length === 0"
-            class="flex flex-col items-center justify-center py-12"
-          >
-            <svg
-              class="w-12 h-12 text-[var(--text-tertiary)] mb-3"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="1.5"
-                d="M13 10V3L4 14h7v7l9-11h-7z"
-              />
-            </svg>
-            <p class="text-sm text-[var(--text-tertiary)]">{{ t('task.noRunningSessions') }}</p>
-            <p class="text-xs text-[var(--text-tertiary)] mt-1">
-              {{ t('task.noRunningSessionsHint') }}
-            </p>
-          </div>
-        </div>
-      </div>
-
-      <!-- Tab2 任务日志 -->
-      <div v-else-if="activeTab === 'records'" class="flex-1 flex flex-col min-h-0">
-        <!-- 筛选条 -->
-        <div class="px-4 pt-3 flex-shrink-0 space-y-2">
-          <div class="grid grid-cols-3 gap-1.5 items-start">
-            <Select
-              v-model="filterStatus"
-              :options="filterStatusOptions"
-              size="sm"
-              :placeholder="t('task.filterStatus')"
-              @update:model-value="onFilterChanged"
-            />
-            <Select
-              v-model="filterAgent"
-              :options="filterAgentOptions"
-              size="sm"
-              :placeholder="t('task.filterAgent')"
-              @update:model-value="onFilterChanged"
-            />
-            <Select
-              v-model="filterSource"
-              :options="filterSourceOptions"
-              size="sm"
-              :placeholder="t('task.filterSource')"
-              @update:model-value="onFilterChanged"
-            />
-          </div>
-          <div class="grid grid-cols-2 gap-1.5">
-            <div>
-              <label class="block text-xs text-[var(--text-secondary)] mb-1">{{
-                t('task.filterSince')
-              }}</label>
-              <Datepicker
-                v-model="filterSince"
-                :format="dateFormat"
-                :locale="dateLocale"
-                :dark="isDark"
-                :clearable="true"
-                :enable-time-picker="true"
-                :select-text="dpSelectText"
-                :cancel-text="dpCancelText"
-                :now-button-label="dpNowLabel"
-                :teleport="'body'"
-                :placeholder="t('task.filterSince')"
-                @update:model-value="onFilterChangedDebounced"
-              />
-            </div>
-            <div>
-              <label class="block text-xs text-[var(--text-secondary)] mb-1">{{
-                t('task.filterUntil')
-              }}</label>
-              <Datepicker
-                v-model="filterUntil"
-                :format="dateFormat"
-                :locale="dateLocale"
-                :dark="isDark"
-                :clearable="true"
-                :enable-time-picker="true"
-                :select-text="dpSelectText"
-                :cancel-text="dpCancelText"
-                :now-button-label="dpNowLabel"
-                :teleport="'body'"
-                :placeholder="t('task.filterUntil')"
-                @update:model-value="onFilterChangedDebounced"
-              />
-            </div>
-          </div>
-          <div class="flex justify-end">
             <button
-              class="text-xs text-[var(--color-primary)] hover:underline transition-colors duration-200"
-              @click="resetFilters"
+              class="w-full h-8 rounded-[6px] bg-[var(--color-primary)] text-[var(--color-primary-contrast)] text-xs font-medium transition-opacity duration-200 hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
+              :disabled="creatingJob"
+              @click="submitJob"
             >
-              {{ t('task.filterReset') }}
+              {{ t('task.scheduledCreate') }}
             </button>
           </div>
-        </div>
 
-        <!-- 任务列表：固定高度区域（filterReset 与分页之间），任务超出时内部滚动；
-            分页固定在面板底部不随列表滚动。flex-1 + max-h 保证常规窗口下列表高度固定为 440px，
-            窗口过小时自动收缩以保持分页可见（相对容器计算，随 ui-scale 自适应） -->
-        <div
-          class="relative flex-1 min-h-0 max-h-[440px] overflow-y-auto overflow-x-hidden px-4 py-3 space-y-0.5 [scrollbar-gutter:stable]"
-        >
-          <!-- 列表加载中（浮层，不挤压列表布局，避免翻页时内容抖动） -->
-          <Transition name="fade">
-            <div
-              v-if="loading"
-              class="absolute inset-x-0 top-3 z-10 flex justify-center pointer-events-none"
-            >
-              <span
-                class="rounded-full bg-[var(--bg-card)] px-3 py-1 text-xs text-[var(--text-tertiary)] shadow-sm border border-[var(--border)]"
-              >
-                {{ t('task.loading') }}
-              </span>
-            </div>
-          </Transition>
-
-          <!-- 任务列表（自然高度卡片，超出滚动；分页固定在底部不随列表滚动）。
-             翻页/筛选切换：旧整块瞬时移除，新数据逐条从左向右横移滑入并淡入（stagger）。 -->
-          <TransitionGroup v-if="tasks.length > 0" tag="div" name="task-list" class="space-y-0.5">
-            <div
-              v-for="(task, idx) in tasks"
-              :key="task.id"
-              :style="{ '--enter-delay': idx * 45 + 'ms' }"
-              class="rounded-md border border-[var(--border)] bg-[var(--bg-card)] cursor-pointer transition-colors duration-200 hover:bg-[var(--bg-hover)]"
-              @click="toggleTask(task)"
-            >
-              <div class="flex items-center gap-2 px-2.5 py-1.5">
-                <div
-                  class="w-1.5 h-1.5 rounded-full flex-shrink-0"
-                  :class="statusDot[task.status] || 'bg-[var(--text-tertiary)]'"
-                ></div>
-                <p class="flex-1 min-w-0 text-xs text-[var(--text-primary)] truncate">
-                  {{ task.description || task.session_id }}
-                </p>
-                <span
-                  class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] flex-shrink-0"
-                >
-                  {{ formatTime(task.started_at || task.created_at) }}
-                </span>
-                <span
-                  class="text-[calc(11px*var(--ui-scale))] flex-shrink-0"
-                  :class="statusColor[task.status] || 'text-[var(--text-secondary)]'"
-                >
-                  {{ statusLabel[task.status] || task.status }}
-                </span>
-                <svg
-                  class="w-3 h-3 text-[var(--text-tertiary)] flex-shrink-0 transition-transform duration-200"
-                  :class="{ 'rotate-90': expandedId === task.id }"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    stroke-width="2"
-                    d="M9 5l7 7-7 7"
-                  />
-                </svg>
-              </div>
-
-              <!-- 行内详情展开 -->
-              <div
-                v-if="expandedId === task.id"
-                class="px-3 pb-2.5 pt-1.5 border-t border-[var(--border)]"
-              >
-                <div class="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-xs">
-                  <span class="text-[var(--text-tertiary)]">{{ t('task.detailAgent') }}</span>
-                  <span class="text-[var(--text-primary)] truncate min-w-0">{{
-                    task.agent || '-'
-                  }}</span>
-                  <span class="text-[var(--text-tertiary)]">{{ t('task.detailSource') }}</span>
-                  <span class="text-[var(--text-primary)] truncate min-w-0">{{
-                    sourceLabel[task.source] || task.source || '-'
-                  }}</span>
-                  <span class="text-[var(--text-tertiary)]">{{ t('task.detailCreated') }}</span>
-                  <span class="text-[var(--text-primary)] truncate min-w-0">{{
-                    formatTime(task.created_at)
-                  }}</span>
-                  <span class="text-[var(--text-tertiary)]">{{ t('task.detailStarted') }}</span>
-                  <span class="text-[var(--text-primary)] truncate min-w-0">{{
-                    formatTime(task.started_at)
-                  }}</span>
-                  <span class="text-[var(--text-tertiary)]">{{ t('task.detailCompleted') }}</span>
-                  <span class="text-[var(--text-primary)] truncate min-w-0">{{
-                    formatTime(task.completed_at)
-                  }}</span>
-                  <span class="text-[var(--text-tertiary)]">{{ t('task.detailWorkingDir') }}</span>
-                  <span class="text-[var(--text-primary)] truncate min-w-0">{{
-                    task.working_dir || '-'
-                  }}</span>
-                  <span class="text-[var(--text-tertiary)]">{{ t('task.detailExitReason') }}</span>
-                  <span class="text-[var(--text-primary)] truncate min-w-0">{{
-                    task.exit_reason || '-'
-                  }}</span>
-                </div>
-                <div class="text-xs mt-1">
-                  <span class="text-[var(--text-tertiary)]"
-                    >{{ t('task.detailDescription') }}:
-                  </span>
-                  <span class="text-[var(--text-primary)] whitespace-pre-wrap break-words">{{
-                    task.description || '-'
-                  }}</span>
-                </div>
-              </div>
-            </div>
-          </TransitionGroup>
+          <!-- 错误提示 -->
+          <div
+            v-if="errorMessage"
+            class="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-500 break-words"
+          >
+            {{ errorMessage }}
+          </div>
 
           <!-- 空状态 -->
           <div
-            v-if="!loading && tasks.length === 0"
+            v-if="!jobsLoading && jobs.length === 0"
             class="flex flex-col items-center justify-center py-12"
           >
             <svg
@@ -1914,298 +2092,53 @@ function onConfigQueueLiveChanged() {
                 stroke-linecap="round"
                 stroke-linejoin="round"
                 stroke-width="1.5"
-                d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"
+                d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
               />
             </svg>
-            <p class="text-sm text-[var(--text-tertiary)]">{{ t('task.emptyHistory') }}</p>
-            <p class="text-xs text-[var(--text-tertiary)] mt-1">{{ t('task.emptyHistoryHint') }}</p>
+            <p class="text-sm text-[var(--text-tertiary)]">{{ t('task.scheduledEmpty') }}</p>
+            <p class="text-xs text-[var(--text-tertiary)] mt-1">{{ t('task.scheduledEmptyHint') }}</p>
           </div>
-        </div>
 
-        <!-- 分页 -->
-        <div
-          v-if="total > 0"
-          class="flex items-center justify-between px-4 py-2 border-t border-[var(--border)] flex-shrink-0"
-        >
-          <span class="text-xs text-[var(--text-secondary)]">
-            {{ t('task.paginationRange', { from: pageFrom, to: pageTo, total }) }}
-          </span>
-          <div class="flex items-center gap-1.5">
-            <button
-              class="h-7 px-2.5 rounded-[6px] text-xs font-medium bg-[var(--bg-hover)] text-[var(--text-primary)] hover:bg-[var(--border)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-200"
-              :disabled="!hasPrev"
-              @click="prevPage"
+          <!-- 任务列表：进行中在前，历史在后（单循环 + 区段头） -->
+          <div v-else class="space-y-2">
+            <template
+              v-for="item in renderedJobItems"
+              :key="item.header ? `header-${item.group}` : item.job.id"
             >
-              {{ t('task.paginationPrev') }}
-            </button>
-            <button
-              class="h-7 px-2.5 rounded-[6px] text-xs font-medium bg-[var(--bg-hover)] text-[var(--text-primary)] hover:bg-[var(--border)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-200"
-              :disabled="!hasNext"
-              @click="nextPage"
-            >
-              {{ t('task.paginationNext') }}
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <!-- Tab3 定时任务 -->
-      <div v-else-if="activeTab === 'scheduled'" class="flex-1 overflow-y-auto px-4 py-3 space-y-3">
-        <!-- 新建/收起 -->
-        <button
-          class="w-full h-8 rounded-[6px] bg-[var(--color-primary)] text-[var(--color-primary-contrast)] text-xs font-medium transition-opacity duration-200 hover:opacity-90"
-          @click="showForm = !showForm"
-        >
-          {{ showForm ? t('task.cancel') : t('task.scheduledNew') }}
-        </button>
-
-        <!-- 新建表单 -->
-        <div
-          v-if="showForm"
-          class="rounded-lg border border-[var(--border)] bg-[var(--bg-card)] p-3 space-y-2.5"
-        >
-          <div>
-            <label class="block text-xs text-[var(--text-secondary)] mb-1">{{
-              t('task.scheduledName')
-            }}</label>
-            <input v-model="formName" type="text" :class="controlCls" />
-          </div>
-          <div>
-            <label class="block text-xs text-[var(--text-secondary)] mb-1">{{
-              t('task.scheduledConfig')
-            }}</label>
-            <Select
-              v-model="formConfigId"
-              :options="configOptions"
-              size="sm"
-              :placeholder="t('task.scheduledConfigPlaceholder')"
-            />
-          </div>
-          <div>
-            <label class="block text-xs text-[var(--text-secondary)] mb-1">{{
-              t('task.scheduledTriggerAt')
-            }}</label>
-            <Datepicker
-              v-model="formTriggerAt"
-              :format="dateFormat"
-              :locale="dateLocale"
-              :dark="isDark"
-              :clearable="true"
-              :enable-time-picker="true"
-              :select-text="dpSelectText"
-              :cancel-text="dpCancelText"
-              :now-button-label="dpNowLabel"
-              :teleport="'body'"
-              :placeholder="t('task.scheduledTriggerAt')"
-            />
-            <p class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] mt-1">
-              {{ t('task.scheduledUtcHint', { time: utcPreview }) }}
-            </p>
-          </div>
-          <div>
-            <label class="block text-xs text-[var(--text-secondary)] mb-1">{{
-              t('task.scheduledPrompts')
-            }}</label>
-            <!-- 任务卡片：一条任务一个卡片，支持逐条删除（与队列弹窗交互一致） -->
-            <div v-if="formPrompts.length > 0" class="space-y-1 mb-2">
-              <div
-                v-for="(p, idx) in formPrompts"
-                :key="idx"
-                class="flex items-center gap-2 px-3 py-2 rounded-md bg-[var(--bg-hover)]"
-              >
-                <span class="text-xs text-[var(--text-tertiary)] w-5 text-right flex-shrink-0"
-                  >#{{ idx + 1 }}</span
-                >
-                <span class="flex-1 min-w-0 text-sm text-[var(--text-primary)] break-words">{{
-                  p
-                }}</span>
+              <!-- 区段头：进行中（纯文本）；历史（可折叠 + 一键清空执行档案） -->
+              <div v-if="item.header" class="flex items-center justify-between px-1 pt-1">
                 <button
-                  class="flex-shrink-0 w-7 h-7 rounded-[6px] flex items-center justify-center text-[var(--text-tertiary)] hover:text-red-500 hover:bg-red-500/10 transition-colors duration-200"
-                  :title="t('task.delete')"
-                  @click="removePrompt(idx)"
+                  v-if="item.group === 'finished'"
+                  class="inline-flex items-center gap-1 h-6 text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors duration-200"
+                  @click="finishedCollapsed = !finishedCollapsed"
                 >
-                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg
+                    class="w-3.5 h-3.5 transition-transform duration-200"
+                    :class="{ 'rotate-90': !finishedCollapsed }"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
                     <path
                       stroke-linecap="round"
                       stroke-linejoin="round"
                       stroke-width="2"
-                      d="M3 6h18m-2 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"
+                      d="M9 5l7 7-7 7"
                     />
                   </svg>
+                  {{ t('task.scheduledSectionFinished') }} ({{ finishedJobs.length }})
                 </button>
-              </div>
-            </div>
-            <!-- 添加任务：输入后回车或点击按钮生成一张卡片（自动增高，最多 10 行） -->
-            <div class="flex items-end gap-1.5">
-              <textarea
-                :ref="(el) => (newPromptEl = el as HTMLTextAreaElement | null)"
-                v-model="newPrompt"
-                rows="1"
-                :class="textareaCls"
-                :placeholder="t('task.scheduledPromptPlaceholder')"
-                @input="autosizeTextarea($event.target)"
-                @keydown="submitOnEnter(addPrompt)($event)"
-              />
-              <button
-                class="flex-shrink-0 h-8 px-3 rounded-[6px] bg-[var(--color-primary)] text-[var(--color-primary-contrast)] text-xs font-medium transition-opacity duration-200 hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
-                :disabled="!newPrompt.trim()"
-                @click="addPrompt"
-              >
-                {{ t('task.add') }}
-              </button>
-            </div>
-            <p class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] mt-1">
-              {{ t('task.scheduledPromptsHint') }}
-            </p>
-          </div>
-          <button
-            class="w-full h-8 rounded-[6px] bg-[var(--color-primary)] text-[var(--color-primary-contrast)] text-xs font-medium transition-opacity duration-200 hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
-            :disabled="creatingJob"
-            @click="submitJob"
-          >
-            {{ t('task.scheduledCreate') }}
-          </button>
-        </div>
-
-        <!-- 错误提示 -->
-        <div
-          v-if="errorMessage"
-          class="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-500 break-words"
-        >
-          {{ errorMessage }}
-        </div>
-
-        <!-- 空状态 -->
-        <div
-          v-if="!jobsLoading && jobs.length === 0"
-          class="flex flex-col items-center justify-center py-12"
-        >
-          <svg
-            class="w-12 h-12 text-[var(--text-tertiary)] mb-3"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="1.5"
-              d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-            />
-          </svg>
-          <p class="text-sm text-[var(--text-tertiary)]">{{ t('task.scheduledEmpty') }}</p>
-          <p class="text-xs text-[var(--text-tertiary)] mt-1">{{ t('task.scheduledEmptyHint') }}</p>
-        </div>
-
-        <!-- 任务列表：进行中在前，历史在后（单循环 + 区段头） -->
-        <div v-else class="space-y-2">
-          <template
-            v-for="item in renderedJobItems"
-            :key="item.header ? `header-${item.group}` : item.job.id"
-          >
-            <!-- 区段头：进行中（纯文本）；历史（可折叠 + 一键清空执行档案） -->
-            <div v-if="item.header" class="flex items-center justify-between px-1 pt-1">
-              <button
-                v-if="item.group === 'finished'"
-                class="inline-flex items-center gap-1 h-6 text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors duration-200"
-                @click="finishedCollapsed = !finishedCollapsed"
-              >
-                <svg
-                  class="w-3.5 h-3.5 transition-transform duration-200"
-                  :class="{ 'rotate-90': !finishedCollapsed }"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
+                <span
+                  v-else
+                  class="inline-flex items-center h-6 text-xs font-medium text-[var(--text-secondary)]"
                 >
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    stroke-width="2"
-                    d="M9 5l7 7-7 7"
-                  />
-                </svg>
-                {{ t('task.scheduledSectionFinished') }} ({{ finishedJobs.length }})
-              </button>
-              <span
-                v-else
-                class="inline-flex items-center h-6 text-xs font-medium text-[var(--text-secondary)]"
-              >
-                {{ t('task.scheduledSectionActive') }} ({{ activeJobs.length }})
-              </span>
-              <button
-                v-if="item.group === 'finished' && executedCount > 0"
-                class="inline-flex items-center gap-1 h-6 px-2 rounded-[6px] text-xs text-[var(--text-tertiary)] hover:text-red-500 hover:bg-red-500/10 transition-colors duration-200"
-                :title="t('task.scheduledClearFinished')"
-                @click="clearFinished"
-              >
-                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    stroke-width="2"
-                    d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                  />
-                </svg>
-                {{ t('task.scheduledClearFinished') }}
-              </button>
-            </div>
-
-            <!-- 任务卡片 -->
-            <div v-else class="rounded-lg border border-[var(--border)] bg-[var(--bg-card)] p-3">
-              <div class="flex items-start gap-2">
-                <div class="flex-1 min-w-0">
-                  <p class="text-sm text-[var(--text-primary)] font-medium truncate">
-                    {{ item.job.name || '-' }}
-                  </p>
-                  <p class="text-xs text-[var(--text-secondary)] mt-0.5">
-                    {{ t('task.scheduledTriggerAt') }}: {{ formatTime(item.job.trigger_at) }}
-                  </p>
-                  <p class="text-xs text-[var(--text-secondary)] mt-0.5">
-                    {{ t('task.scheduledConfig') }}: {{ item.job.config_id }}
-                  </p>
-                </div>
-                <span class="flex-shrink-0" :class="scheduledStatusBadge(item.job.status)">
-                  {{ scheduledStatusLabel[item.job.status] || item.job.status }}
+                  {{ t('task.scheduledSectionActive') }} ({{ activeJobs.length }})
                 </span>
-              </div>
-              <div v-if="item.job.prompts.length" class="mt-2 space-y-0.5">
-                <p
-                  v-for="(p, idx) in item.job.prompts"
-                  :key="idx"
-                  class="text-xs text-[var(--text-secondary)] truncate"
-                >
-                  {{ idx + 1 }}. {{ p }}
-                </p>
-              </div>
-              <p v-if="item.job.error" class="text-xs text-red-500 mt-1.5 break-words">
-                {{ t('task.scheduledError') }}
-              </p>
-
-              <!-- 操作区：pending 可删除；missed/failed 可删除或重新设置（重置回 pending 重新调度）；executed 可删除（清档） -->
-              <div
-                v-if="['pending', 'missed', 'failed', 'executed'].includes(item.job.status)"
-                class="flex justify-end gap-1 mt-2"
-              >
                 <button
-                  v-if="item.job.status !== 'pending' && item.job.status !== 'executed'"
-                  class="inline-flex items-center gap-1 h-6 px-2 rounded-[6px] text-xs text-[var(--color-primary)] hover:bg-[var(--color-primary)]/10 transition-colors duration-200"
-                  :title="t('task.scheduledReset')"
-                  @click="startReset(item.job)"
-                >
-                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      stroke-width="2"
-                      d="M4 4v5h5M20 20v-5h-5M4.1 9a8 8 0 0115.4-1M19.9 15a8 8 0 01-15.4 1"
-                    />
-                  </svg>
-                  {{ t('task.scheduledReset') }}
-                </button>
-                <button
-                  class="inline-flex items-center gap-1 h-6 px-2 rounded-[6px] text-xs text-red-500 hover:bg-red-500/10 transition-colors duration-200"
-                  :title="t('task.delete')"
-                  @click="deleteJob(item.job.id)"
+                  v-if="item.group === 'finished' && executedCount > 0"
+                  class="inline-flex items-center gap-1 h-6 px-2 rounded-[6px] text-xs text-[var(--text-tertiary)] hover:text-red-500 hover:bg-red-500/10 transition-colors duration-200"
+                  :title="t('task.scheduledClearFinished')"
+                  @click="clearFinished"
                 >
                   <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path
@@ -2215,176 +2148,229 @@ function onConfigQueueLiveChanged() {
                       d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
                     />
                   </svg>
-                  {{ t('task.delete') }}
+                  {{ t('task.scheduledClearFinished') }}
                 </button>
               </div>
 
-              <!-- 重新设置面板：选择新触发时间（默认当前时间），确认后回到 pending 重新调度 -->
-              <div
-                v-if="resettingId === item.job.id"
-                class="mt-2 rounded-lg border border-[var(--border)] bg-[var(--bg-hover)] p-2.5 space-y-2"
-              >
-                <div>
-                  <label class="block text-xs text-[var(--text-secondary)] mb-1">{{
-                    t('task.scheduledTriggerAt')
-                  }}</label>
-                  <Datepicker
-                    v-model="resetTriggerAt"
-                    :format="dateFormat"
-                    :locale="dateLocale"
-                    :dark="isDark"
-                    :clearable="false"
-                    :enable-time-picker="true"
-                    :select-text="dpSelectText"
-                    :cancel-text="dpCancelText"
-                    :now-button-label="dpNowLabel"
-                    :teleport="'body'"
-                    :placeholder="t('task.scheduledTriggerAt')"
-                  />
-                  <p class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] mt-1">
-                    {{ t('task.scheduledResetHint') }}
-                    {{ t('task.scheduledUtcHint', { time: resetUtcPreview }) }}
+              <!-- 任务卡片 -->
+              <div v-else class="rounded-lg border border-[var(--border)] bg-[var(--bg-card)] p-3">
+                <div class="flex items-start gap-2">
+                  <div class="flex-1 min-w-0">
+                    <p class="text-sm text-[var(--text-primary)] font-medium truncate">
+                      {{ item.job.name || '-' }}
+                    </p>
+                    <p class="text-xs text-[var(--text-secondary)] mt-0.5">
+                      {{ t('task.scheduledTriggerAt') }}: {{ formatTime(item.job.trigger_at) }}
+                    </p>
+                    <p class="text-xs text-[var(--text-secondary)] mt-0.5">
+                      {{ t('task.scheduledConfig') }}: {{ item.job.config_id }}
+                    </p>
+                  </div>
+                  <span class="flex-shrink-0" :class="scheduledStatusBadge(item.job.status)">
+                    {{ scheduledStatusLabel[item.job.status] || item.job.status }}
+                  </span>
+                </div>
+                <div v-if="item.job.prompts.length" class="mt-2 space-y-0.5">
+                  <p
+                    v-for="(p, idx) in item.job.prompts"
+                    :key="idx"
+                    class="text-xs text-[var(--text-secondary)] truncate"
+                  >
+                    {{ idx + 1 }}. {{ p }}
                   </p>
                 </div>
-                <div class="flex gap-1.5">
+                <p v-if="item.job.error" class="text-xs text-red-500 mt-1.5 break-words">
+                  {{ t('task.scheduledError') }}
+                </p>
+
+                <!-- 操作区：pending 可删除；missed/failed 可删除或重新设置（重置回 pending 重新调度）；executed 可删除（清档） -->
+                <div
+                  v-if="['pending', 'missed', 'failed', 'executed'].includes(item.job.status)"
+                  class="flex justify-end gap-1 mt-2"
+                >
                   <button
-                    class="flex-1 h-7 rounded-[6px] bg-[var(--color-primary)] text-[var(--color-primary-contrast)] text-xs font-medium transition-opacity duration-200 hover:opacity-90"
-                    @click="resetJob(item.job.id)"
+                    v-if="item.job.status !== 'pending' && item.job.status !== 'executed'"
+                    class="inline-flex items-center gap-1 h-6 px-2 rounded-[6px] text-xs text-[var(--color-primary)] hover:bg-[var(--color-primary)]/10 transition-colors duration-200"
+                    :title="t('task.scheduledReset')"
+                    @click="startReset(item.job)"
                   >
-                    {{ t('task.confirm') }}
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        stroke-width="2"
+                        d="M4 4v5h5M20 20v-5h-5M4.1 9a8 8 0 0115.4-1M19.9 15a8 8 0 01-15.4 1"
+                      />
+                    </svg>
+                    {{ t('task.scheduledReset') }}
                   </button>
                   <button
-                    class="flex-1 h-7 rounded-[6px] border border-[var(--border)] text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] transition-colors duration-200"
-                    @click="cancelReset"
+                    class="inline-flex items-center gap-1 h-6 px-2 rounded-[6px] text-xs text-red-500 hover:bg-red-500/10 transition-colors duration-200"
+                    :title="t('task.delete')"
+                    @click="deleteJob(item.job.id)"
                   >
-                    {{ t('task.cancel') }}
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        stroke-width="2"
+                        d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                      />
+                    </svg>
+                    {{ t('task.delete') }}
                   </button>
                 </div>
-              </div>
-            </div>
-          </template>
-        </div>
-      </div>
 
-      <!-- Tab4 统计 -->
-      <div v-else class="flex-1 overflow-y-auto px-4 py-3">
-        <!-- 加载中 -->
-        <div v-if="!stats" class="flex justify-center py-8">
-          <span class="text-sm text-[var(--text-tertiary)]">{{ t('task.loading') }}</span>
-        </div>
-
-        <!-- 统计卡片 -->
-        <div v-else class="space-y-3">
-          <div class="rounded-lg border border-[var(--border)] bg-[var(--bg-card)] px-4 py-3">
-            <div class="flex items-center justify-between">
-              <span class="text-xs font-medium text-[var(--text-secondary)]">{{
-                t('task.statsTitle')
-              }}</span>
-              <span class="text-sm font-semibold text-[var(--text-primary)]"
-                >{{ t('task.statsTotal') }}: {{ stats.total }}</span
-              >
-            </div>
-
-            <!-- 状态分布 -->
-            <div v-if="statusStatsList.length" class="flex flex-wrap gap-1.5 mt-2">
-              <span
-                v-for="s in statusStatsList"
-                :key="s.key"
-                class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[calc(11px*var(--ui-scale))] bg-[var(--bg-hover)] text-[var(--text-secondary)]"
-              >
-                <span class="w-1.5 h-1.5 rounded-full" :class="statusDot[s.key]"></span>
-                {{ s.label }} {{ s.count }}
-              </span>
-            </div>
-            <div v-else class="text-xs text-[var(--text-tertiary)] mt-2">-</div>
-
-            <!-- 核心指标 -->
-            <div class="grid grid-cols-2 gap-2 mt-3">
-              <div class="rounded-md bg-[var(--bg-hover)] px-3 py-2">
-                <div class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)]">
-                  {{ t('task.statsCompleted') }}
-                </div>
-                <div class="text-base font-semibold text-[var(--text-primary)] mt-0.5">
-                  {{ stats.completed }}
+                <!-- 重新设置面板：选择新触发时间（默认当前时间），确认后回到 pending 重新调度 -->
+                <div
+                  v-if="resettingId === item.job.id"
+                  class="mt-2 rounded-lg border border-[var(--border)] bg-[var(--bg-hover)] p-2.5 space-y-2"
+                >
+                  <div>
+                    <label class="block text-xs text-[var(--text-secondary)] mb-1">{{
+                      t('task.scheduledTriggerAt')
+                    }}</label>
+                    <Datepicker
+                      v-model="resetTriggerAt"
+                      :format="dateFormat"
+                      :locale="dateLocale"
+                      :dark="isDark"
+                      :clearable="false"
+                      :enable-time-picker="true"
+                      :select-text="dpSelectText"
+                      :cancel-text="dpCancelText"
+                      :now-button-label="dpNowLabel"
+                      :teleport="'body'"
+                      :placeholder="t('task.scheduledTriggerAt')"
+                    />
+                    <p class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] mt-1">
+                      {{ t('task.scheduledResetHint') }}
+                      {{ t('task.scheduledUtcHint', { time: resetUtcPreview }) }}
+                    </p>
+                  </div>
+                  <div class="flex gap-1.5">
+                    <button
+                      class="flex-1 h-7 rounded-[6px] bg-[var(--color-primary)] text-[var(--color-primary-contrast)] text-xs font-medium transition-opacity duration-200 hover:opacity-90"
+                      @click="resetJob(item.job.id)"
+                    >
+                      {{ t('task.confirm') }}
+                    </button>
+                    <button
+                      class="flex-1 h-7 rounded-[6px] border border-[var(--border)] text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] transition-colors duration-200"
+                      @click="cancelReset"
+                    >
+                      {{ t('task.cancel') }}
+                    </button>
+                  </div>
                 </div>
               </div>
-              <div class="rounded-md bg-[var(--bg-hover)] px-3 py-2">
-                <div class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)]">
-                  {{ t('task.statsTerminal') }}
-                </div>
-                <div class="text-base font-semibold text-[var(--text-primary)] mt-0.5">
-                  {{ stats.terminal }}
-                </div>
-              </div>
-              <div class="rounded-md bg-[var(--bg-hover)] px-3 py-2">
-                <div class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)]">
-                  {{ t('task.statsSuccessRate') }}
-                </div>
-                <div class="text-base font-semibold text-[var(--text-primary)] mt-0.5">
-                  {{ formatPercent(stats.success_rate) }}
-                </div>
-              </div>
-              <div class="rounded-md bg-[var(--bg-hover)] px-3 py-2">
-                <div class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)]">
-                  {{ t('task.statsAvgDuration') }}
-                </div>
-                <div class="text-base font-semibold text-[var(--text-primary)] mt-0.5">
-                  {{ formatDuration(stats.avg_duration_seconds) }}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- 无数据提示 -->
-          <div v-if="stats.total === 0" class="flex flex-col items-center justify-center py-10">
-            <svg
-              class="w-12 h-12 text-[var(--text-tertiary)] mb-3"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="1.5"
-                d="M11 3.055A9.001 9.001 0 1020.945 13H11V3.055zM20.488 9H15V3.512A9.025 9.025 0 0120.488 9z"
-              />
-            </svg>
-            <p class="text-sm text-[var(--text-tertiary)]">{{ t('task.emptyHistory') }}</p>
-            <p class="text-xs text-[var(--text-tertiary)] mt-1">{{ t('task.emptyHistoryHint') }}</p>
+            </template>
           </div>
         </div>
-      </div>
-    </Transition>
+
+        <!-- Tab4 统计 -->
+        <div v-else class="flex-1 overflow-y-auto px-4 py-3">
+          <!-- 加载中 -->
+          <div v-if="!stats" class="flex justify-center py-8">
+            <span class="text-sm text-[var(--text-tertiary)]">{{ t('task.loading') }}</span>
+          </div>
+
+          <!-- 统计卡片 -->
+          <div v-else class="space-y-3">
+            <div class="rounded-lg border border-[var(--border)] bg-[var(--bg-card)] px-4 py-3">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-medium text-[var(--text-secondary)]">{{
+                  t('task.statsTitle')
+                }}</span>
+                <span class="text-sm font-semibold text-[var(--text-primary)]"
+                  >{{ t('task.statsTotal') }}: {{ stats.total }}</span
+                >
+              </div>
+
+              <!-- 状态分布 -->
+              <div v-if="statusStatsList.length" class="flex flex-wrap gap-1.5 mt-2">
+                <span
+                  v-for="s in statusStatsList"
+                  :key="s.key"
+                  class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[calc(11px*var(--ui-scale))] bg-[var(--bg-hover)] text-[var(--text-secondary)]"
+                >
+                  <span class="w-1.5 h-1.5 rounded-full" :class="statusDot[s.key]"></span>
+                  {{ s.label }} {{ s.count }}
+                </span>
+              </div>
+              <div v-else class="text-xs text-[var(--text-tertiary)] mt-2">-</div>
+
+              <!-- 核心指标 -->
+              <div class="grid grid-cols-2 gap-2 mt-3">
+                <div class="rounded-md bg-[var(--bg-hover)] px-3 py-2">
+                  <div class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)]">
+                    {{ t('task.statsCompleted') }}
+                  </div>
+                  <div class="text-base font-semibold text-[var(--text-primary)] mt-0.5">
+                    {{ stats.completed }}
+                  </div>
+                </div>
+                <div class="rounded-md bg-[var(--bg-hover)] px-3 py-2">
+                  <div class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)]">
+                    {{ t('task.statsTerminal') }}
+                  </div>
+                  <div class="text-base font-semibold text-[var(--text-primary)] mt-0.5">
+                    {{ stats.terminal }}
+                  </div>
+                </div>
+                <div class="rounded-md bg-[var(--bg-hover)] px-3 py-2">
+                  <div class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)]">
+                    {{ t('task.statsSuccessRate') }}
+                  </div>
+                  <div class="text-base font-semibold text-[var(--text-primary)] mt-0.5">
+                    {{ formatPercent(stats.success_rate) }}
+                  </div>
+                </div>
+                <div class="rounded-md bg-[var(--bg-hover)] px-3 py-2">
+                  <div class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)]">
+                    {{ t('task.statsAvgDuration') }}
+                  </div>
+                  <div class="text-base font-semibold text-[var(--text-primary)] mt-0.5">
+                    {{ formatDuration(stats.avg_duration_seconds) }}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 无数据提示 -->
+            <div v-if="stats.total === 0" class="flex flex-col items-center justify-center py-10">
+              <svg
+                class="w-12 h-12 text-[var(--text-tertiary)] mb-3"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="1.5"
+                  d="M11 3.055A9.001 9.001 0 1020.945 13H11V3.055zM20.488 9H15V3.512A9.025 9.025 0 0120.488 9z"
+                />
+              </svg>
+              <p class="text-sm text-[var(--text-tertiary)]">{{ t('task.emptyHistory') }}</p>
+              <p class="text-xs text-[var(--text-tertiary)] mt-1">{{ t('task.emptyHistoryHint') }}</p>
+            </div>
+          </div>
+        </div>
+      </Transition>
+    </div>
   </div>
 </template>
 
 <style scoped>
 /*
- * Tab 切换过渡：out-in 模式。
- * 旧面板快速淡出上移，新面板随后从下方滑入插入（slide-up + fade + 轻微缩放），
- * 缓出曲线带出顺畅感，避免内容直接闪现的生硬切换。
+ * Tab 切换过渡已收归宿主页面过渡体系（src/style.css 的 .page-* / .page-swap）：
+ * 名字恒为 `page`，时长/缓动/位移幅度走 --motion-page-* token，效果变体由
+ * <html data-page-fx> 选（全端唯一切换点 = 宿主 src/utils/pageTransition.ts）。
+ * 本文件不再自带 .tab-fade-* —— 原先此处与 SessionCenterView / DeviceCenterView
+ * 同名不同参（进场 0.26s + scale(0.985) vs 0.16s + 4px），同一应用内切 Tab 手感
+ * 都不一致，正是「同一份页面过渡散落多处必然漂移」的实例。
  */
-.tab-fade-leave-active {
-  transition:
-    opacity 0.12s ease,
-    transform 0.12s ease;
-}
-.tab-fade-leave-to {
-  opacity: 0;
-  transform: translateY(-6px);
-}
-.tab-fade-enter-active {
-  transition:
-    opacity 0.26s cubic-bezier(0.22, 0.61, 0.36, 1),
-    transform 0.26s cubic-bezier(0.22, 0.61, 0.36, 1);
-  will-change: opacity, transform;
-}
-.tab-fade-enter-from {
-  opacity: 0;
-  transform: translateY(14px) scale(0.985);
-}
-
 /*
  * 加载浮层淡入淡出
  */

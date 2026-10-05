@@ -1,11 +1,15 @@
 <template>
   <div class="h-full flex flex-col bg-[var(--bg-page)]">
-    <!-- 顶栏：标题随视图流转（列表/模板选择/表单） -->
+    <!-- 顶栏：标题随视图流转（列表/模板选择/表单）
+         标题**左对齐**紧跟返回按钮，与宿主「← 返回 X」及各 wasm 应用
+         （agent-hub / terminal-session）的页头一致。原先用 justify-between +
+         右侧 w-20 空洞做居中，标题实际只在左侧按钮恰好 80px 宽时才真居中——
+         i18n 换文案（EN 的 "Back to chat"）就偏。 -->
     <header
-      class="h-12 flex items-center justify-between px-4 border-b border-[var(--border)] bg-[var(--bg-card)]"
+      class="h-12 flex items-center gap-2 px-4 border-b border-[var(--border)] bg-[var(--bg-card)]"
     >
       <button
-        class="flex items-center gap-1.5 text-sm text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] px-2 py-1 -ml-2 rounded-btn transition-colors"
+        class="flex-shrink-0 flex items-center gap-1.5 text-sm text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] px-2 py-1 -ml-2 rounded-btn transition-colors"
         @click="goBack"
       >
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -22,134 +26,137 @@
             : t('com.bedcode.ai-chatbox.back')
         }}
       </button>
-      <h3 class="text-sm font-medium text-[var(--text-primary)]">{{ headerTitle }}</h3>
-      <div class="w-20"></div>
+      <h3 class="min-w-0 truncate text-sm font-medium text-[var(--text-primary)]">{{ headerTitle }}</h3>
     </header>
 
-    <!-- 视图切换：列表 / 模板选择 / 表单（淡入 + 横向滑入，先出后进避免布局跳动） -->
-    <Transition name="view-slide" mode="out-in">
-      <!-- 视图一：已保存供应商实例列表 -->
-      <div v-if="view === 'list'" key="list" class="flex-1 overflow-y-auto p-4">
-        <!-- 添加按钮置顶 -->
-        <button
-          class="w-full h-10 flex items-center justify-center gap-1.5 text-sm rounded-btn bg-brand text-[var(--color-primary-contrast)] hover:opacity-90 transition-opacity"
-          @click="startAdd"
-        >
-          <svg
-            class="w-4 h-4"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-            stroke-width="2"
+    <!-- 视图切换：列表 / 模板选择 / 表单。page-swap 单独包一层并承接高度链：
+         退场的绝对定位层需要以「顶栏以下的视图区」为定位上下文，直接标在视图根上
+         会从顶栏行开始绘制。过渡类与效果变体由宿主 src/style.css 统一提供。 -->
+    <div class="page-swap flex-1 flex flex-col min-h-0">
+      <Transition name="page">
+        <!-- 视图一：已保存供应商实例列表 -->
+        <div v-if="view === 'list'" key="list" class="flex-1 overflow-y-auto p-4">
+          <!-- 添加按钮置顶 -->
+          <button
+            class="w-full h-10 flex items-center justify-center gap-1.5 text-sm rounded-btn bg-brand text-[var(--color-primary-contrast)] hover:opacity-90 transition-opacity"
+            @click="startAdd"
           >
-            <path stroke-linecap="round" stroke-linejoin="round" d="M12 5v14M5 12h14" />
-          </svg>
-          {{ t('com.bedcode.ai-chatbox.addProvider') }}
-        </button>
+            <svg
+              class="w-4 h-4"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+              stroke-width="2"
+            >
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 5v14M5 12h14" />
+            </svg>
+            {{ t('com.bedcode.ai-chatbox.addProvider') }}
+          </button>
 
-        <div
-          v-if="providers.length === 0"
-          class="mt-8 text-center text-xs text-[var(--text-tertiary)]"
-        >
-          {{ t('com.bedcode.ai-chatbox.noProvidersHint') }}
+          <div
+            v-if="providers.length === 0"
+            class="mt-8 text-center text-xs text-[var(--text-tertiary)]"
+          >
+            {{ t('com.bedcode.ai-chatbox.noProvidersHint') }}
+          </div>
+
+          <!-- 供应商行：点击进编辑；hover 出现删除 -->
+          <div class="mt-3 space-y-1">
+            <div
+              v-for="p in providers"
+              :key="p.id"
+              class="group flex items-center gap-2.5 px-2.5 py-2 rounded-btn cursor-pointer hover:bg-[var(--bg-hover)] transition-colors"
+              role="button"
+              tabindex="0"
+              @click="startEdit(p.id)"
+              @keydown.enter="startEdit(p.id)"
+            >
+              <ProviderAvatar :preset-id="p.presetId" :name="p.name" :size="32" />
+              <span class="flex-1 min-w-0 truncate text-sm text-[var(--text-primary)]">{{
+                p.name
+              }}</span>
+              <!-- 激活圆点 -->
+              <span
+                v-if="activeProviderId === p.id"
+                class="w-2 h-2 rounded-full bg-brand flex-shrink-0"
+                :title="t('com.bedcode.ai-chatbox.activeProvider')"
+              ></span>
+              <!-- hover 删除按钮（stop 阻止触发行进编辑） -->
+              <button
+                class="p-1.5 text-[var(--text-tertiary)] opacity-0 group-hover:opacity-100 hover:text-[var(--color-danger)] rounded transition-colors flex-shrink-0"
+                :title="t('com.bedcode.ai-chatbox.deleteProvider')"
+                @click.stop="askDelete(p)"
+              >
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    d="M6 18L18 6M6 6l12 12"
+                  />
+                </svg>
+              </button>
+            </div>
+          </div>
         </div>
 
-        <!-- 供应商行：点击进编辑；hover 出现删除 -->
-        <div class="mt-3 space-y-1">
-          <div
-            v-for="p in providers"
-            :key="p.id"
-            class="group flex items-center gap-2.5 px-2.5 py-2 rounded-btn cursor-pointer hover:bg-[var(--bg-hover)] transition-colors"
-            role="button"
-            tabindex="0"
-            @click="startEdit(p.id)"
-            @keydown.enter="startEdit(p.id)"
-          >
-            <ProviderAvatar :preset-id="p.presetId" :name="p.name" :size="32" />
-            <span class="flex-1 min-w-0 truncate text-sm text-[var(--text-primary)]">{{
-              p.name
-            }}</span>
-            <!-- 激活圆点 -->
-            <span
-              v-if="activeProviderId === p.id"
-              class="w-2 h-2 rounded-full bg-brand flex-shrink-0"
-              :title="t('com.bedcode.ai-chatbox.activeProvider')"
-            ></span>
-            <!-- hover 删除按钮（stop 阻止触发行进编辑） -->
+        <!-- 视图二：模板选择（4 预设 + 自定义） -->
+        <div v-else-if="view === 'templates'" key="templates" class="flex-1 overflow-y-auto p-4">
+          <p class="text-xs text-[var(--text-secondary)] mb-3">
+            {{ t('com.bedcode.ai-chatbox.selectTemplate') }}
+          </p>
+          <div class="grid grid-cols-2 gap-2">
             <button
-              class="p-1.5 text-[var(--text-tertiary)] opacity-0 group-hover:opacity-100 hover:text-[var(--color-danger)] rounded transition-colors flex-shrink-0"
-              :title="t('com.bedcode.ai-chatbox.deleteProvider')"
-              @click.stop="askDelete(p)"
+              v-for="preset in PROVIDER_PRESETS"
+              :key="preset.id"
+              class="flex flex-col items-center gap-2 px-3 py-4 rounded-card bg-[var(--bg-card)] border border-[var(--border)] hover:border-brand hover:bg-[var(--bg-hover)] transition-colors"
+              @click="choosePreset(preset)"
             >
-              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
+              <ProviderAvatar :preset-id="preset.id" :name="preset.name" :size="40" />
+              <span class="text-sm text-[var(--text-primary)]">{{ preset.name }}</span>
+            </button>
+
+            <!-- 自定义模板：全空表单入口 -->
+            <button
+              class="flex flex-col items-center gap-2 px-3 py-4 rounded-card bg-[var(--bg-card)] border border-dashed border-[var(--border)] hover:border-brand hover:bg-[var(--bg-hover)] transition-colors"
+              @click="chooseCustom"
+            >
+              <span
+                class="w-10 h-10 rounded-full bg-[var(--bg-hover)] flex items-center justify-center text-[var(--text-tertiary)]"
+              >
+                <svg
+                  class="w-5 h-5"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
                   stroke-width="2"
-                  d="M6 18L18 6M6 6l12 12"
-                />
-              </svg>
+                >
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M12 5v14M5 12h14" />
+                </svg>
+              </span>
+              <span class="text-sm text-[var(--text-primary)]">{{
+                t('com.bedcode.ai-chatbox.customTemplate')
+              }}</span>
             </button>
           </div>
         </div>
-      </div>
 
-      <!-- 视图二：模板选择（4 预设 + 自定义） -->
-      <div v-else-if="view === 'templates'" key="templates" class="flex-1 overflow-y-auto p-4">
-        <p class="text-xs text-[var(--text-secondary)] mb-3">
-          {{ t('com.bedcode.ai-chatbox.selectTemplate') }}
-        </p>
-        <div class="grid grid-cols-2 gap-2">
-          <button
-            v-for="preset in PROVIDER_PRESETS"
-            :key="preset.id"
-            class="flex flex-col items-center gap-2 px-3 py-4 rounded-card bg-[var(--bg-card)] border border-[var(--border)] hover:border-brand hover:bg-[var(--bg-hover)] transition-colors"
-            @click="choosePreset(preset)"
-          >
-            <ProviderAvatar :preset-id="preset.id" :name="preset.name" :size="40" />
-            <span class="text-sm text-[var(--text-primary)]">{{ preset.name }}</span>
-          </button>
-
-          <!-- 自定义模板：全空表单入口 -->
-          <button
-            class="flex flex-col items-center gap-2 px-3 py-4 rounded-card bg-[var(--bg-card)] border border-dashed border-[var(--border)] hover:border-brand hover:bg-[var(--bg-hover)] transition-colors"
-            @click="chooseCustom"
-          >
-            <span
-              class="w-10 h-10 rounded-full bg-[var(--bg-hover)] flex items-center justify-center text-[var(--text-tertiary)]"
-            >
-              <svg
-                class="w-5 h-5"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-                stroke-width="2"
-              >
-                <path stroke-linecap="round" stroke-linejoin="round" d="M12 5v14M5 12h14" />
-              </svg>
-            </span>
-            <span class="text-sm text-[var(--text-primary)]">{{
-              t('com.bedcode.ai-chatbox.customTemplate')
-            }}</span>
-          </button>
+        <!-- 视图三：表单（预设回填或全空；编辑已有实例） -->
+        <div v-else key="form" class="flex-1 overflow-y-auto p-6">
+          <ProviderForm
+            :key="formKey"
+            :mode="editingMode"
+            :initial-values="editingProvider"
+            :preset="selectedPreset"
+            :existing-names="existingNames"
+            :fetch-models="props.fetchModels"
+            :test-connection="props.testConnection"
+            @save="handleSave"
+            @delete="handleDelete"
+          />
         </div>
-      </div>
-
-      <!-- 视图三：表单（预设回填或全空；编辑已有实例） -->
-      <div v-else key="form" class="flex-1 overflow-y-auto p-6">
-        <ProviderForm
-          :key="formKey"
-          :mode="editingMode"
-          :initial-values="editingProvider"
-          :preset="selectedPreset"
-          :existing-names="existingNames"
-          :fetch-models="props.fetchModels"
-          :test-connection="props.testConnection"
-          @save="handleSave"
-          @delete="handleDelete"
-        />
-      </div>
-    </Transition>
+      </Transition>
+    </div>
 
     <!-- 行删除确认（表单内删除走 ProviderForm 自己的弹窗） -->
     <ConfirmDialog
@@ -295,19 +302,8 @@ function confirmDelete(): void {
 </script>
 
 <style scoped>
-/* 视图切换（列表 → 模板选择 → 表单）：淡入 + 横向滑入，出向轻微左移 */
-.view-slide-enter-active,
-.view-slide-leave-active {
-  transition:
-    opacity 0.16s ease,
-    transform 0.16s ease;
-}
-.view-slide-enter-from {
-  opacity: 0;
-  transform: translateX(12px);
-}
-.view-slide-leave-to {
-  opacity: 0;
-  transform: translateX(-8px);
-}
+/* 视图切换（列表 → 模板选择 → 表单）已收归宿主页面过渡体系（src/style.css 的
+   .page-* / .page-swap）：名字恒为 `page`，时长/缓动/位移走 --motion-page-* token，
+   效果变体由 <html data-page-fx> 选（全端唯一切换点 = 宿主
+   src/utils/pageTransition.ts）。本文件不再自带 .view-slide-*。 */
 </style>

@@ -1,7 +1,8 @@
 <template>
-  <div class="h-full flex bg-[var(--bg-page)]">
-    <!-- 配置页 / 聊天区切换（淡入淡出 + 轻微位移，避免闪现） -->
-    <Transition name="page-fade" mode="out-in">
+  <div class="page-swap h-full flex bg-[var(--bg-page)]">
+    <!-- 配置页 / 聊天区切换：过渡类与效果变体由宿主 src/style.css 统一提供
+         （名字恒为 `page`），本文件不再自带 .page-fade-* -->
+    <Transition name="page">
       <ProviderConfigPage
         v-if="showConfigPage"
         key="config"
@@ -443,21 +444,10 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-/* 配置页 / 聊天区切换：淡入淡出 + 轻微纵向位移（mode="out-in" 先出后进） */
-.page-fade-enter-active,
-.page-fade-leave-active {
-  transition:
-    opacity 0.18s ease,
-    transform 0.18s ease;
-}
-.page-fade-enter-from {
-  opacity: 0;
-  transform: translateY(4px);
-}
-.page-fade-leave-to {
-  opacity: 0;
-  transform: translateY(-2px);
-}
+/* 配置页 / 聊天区切换已收归宿主页面过渡体系（src/style.css 的 .page-* /
+   .page-swap）：名字恒为 `page`，时长/缓动/位移走 --motion-page-* token，效果
+   变体由 <html data-page-fx> 选（全端唯一切换点 = 宿主
+   src/utils/pageTransition.ts）。 */
 
 /* 限流重试滑出条：自输入区上缘滑入（位移 + 淡入，250ms 缓出） */
 .retry-slide-enter-active,

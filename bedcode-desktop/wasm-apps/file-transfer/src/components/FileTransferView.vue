@@ -471,78 +471,83 @@ watch(
 
     <!-- 双栏工作台：左栏随状态切换（空态提示 / 文件表格）；右栏传输队列默认收起，顶栏按钮展开 -->
     <div class="ft-main" :class="{ 'ft-main--queue': queueVisible }">
-      <!-- 页面切换：空态 ↔ 工作台 out-in 交叉过渡，避免状态跳变闪烁 -->
-      <Transition name="ft-page" mode="out-in">
-        <!-- 空态：未配置共享目录 -->
-        <div v-if="showNoRoots" class="ft-empty">
-          <div class="ft-empty-ico">
-            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="1.5"
-                d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"
-              />
-            </svg>
+      <!-- 页面切换：空态 ↔ 工作台交叉过渡（过渡类与效果变体由宿主 src/style.css 统一
+           提供，本插件不再自带 .ft-page-*）。page-swap 必须单独占一格：.ft-main 是两列
+           grid，若把定位上下文标在 .ft-main 上，退场的绝对定位层会脱离网格导致队列面板
+           串到第一列。 -->
+      <div class="page-swap">
+        <Transition name="page">
+          <!-- 空态：未配置共享目录 -->
+          <div v-if="showNoRoots" class="ft-empty">
+            <div class="ft-empty-ico">
+              <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="1.5"
+                  d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"
+                />
+              </svg>
+            </div>
+            <div class="ft-empty-title">{{ t('transfer.empty.noRoots') }}</div>
+            <div class="ft-empty-desc">{{ t('transfer.empty.noRootsHint') }}</div>
+            <button class="ft-btn ft-btn--primary ft-empty-action" @click="showSettings = true">
+              {{ t('transfer.topbar.settings') }}
+            </button>
           </div>
-          <div class="ft-empty-title">{{ t('transfer.empty.noRoots') }}</div>
-          <div class="ft-empty-desc">{{ t('transfer.empty.noRootsHint') }}</div>
-          <button class="ft-btn ft-btn--primary ft-empty-action" @click="showSettings = true">
-            {{ t('transfer.topbar.settings') }}
-          </button>
-        </div>
 
-        <!-- 空态：对端未连接 / 已连接但未共享 -->
-        <div v-else-if="showNoPeer" class="ft-empty">
-          <div class="ft-empty-ico">
-            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <rect x="6" y="2" width="12" height="20" rx="2" ry="2" />
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="1.5"
-                d="M11 18h2"
-              />
-            </svg>
+          <!-- 空态：对端未连接 / 已连接但未共享 -->
+          <div v-else-if="showNoPeer" class="ft-empty">
+            <div class="ft-empty-ico">
+              <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <rect x="6" y="2" width="12" height="20" rx="2" ry="2" />
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="1.5"
+                  d="M11 18h2"
+                />
+              </svg>
+            </div>
+            <div class="ft-empty-title">{{ noPeerLabel }}</div>
+            <div class="ft-empty-desc">{{ t('transfer.empty.noPeerHint') }}</div>
           </div>
-          <div class="ft-empty-title">{{ noPeerLabel }}</div>
-          <div class="ft-empty-desc">{{ t('transfer.empty.noPeerHint') }}</div>
-        </div>
 
-        <!-- 空态：未设置下载目录 -->
-        <div v-else-if="settings.downloadDir === ''" class="ft-empty">
-          <div class="ft-empty-ico">
-            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="1.5"
-                d="M12 3v12M5 12l7 7 7-7"
-              />
-            </svg>
+          <!-- 空态：未设置下载目录 -->
+          <div v-else-if="settings.downloadDir === ''" class="ft-empty">
+            <div class="ft-empty-ico">
+              <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="1.5"
+                  d="M12 3v12M5 12l7 7 7-7"
+                />
+              </svg>
+            </div>
+            <div class="ft-empty-title">{{ t('transfer.empty.noDownloadDir') }}</div>
+            <div class="ft-empty-desc">{{ t('transfer.empty.noDownloadDirHint') }}</div>
+            <button class="ft-btn ft-btn--primary ft-empty-action" @click="showSettings = true">
+              {{ t('transfer.topbar.settings') }}
+            </button>
           </div>
-          <div class="ft-empty-title">{{ t('transfer.empty.noDownloadDir') }}</div>
-          <div class="ft-empty-desc">{{ t('transfer.empty.noDownloadDirHint') }}</div>
-          <button class="ft-btn ft-btn--primary ft-empty-action" @click="showSettings = true">
-            {{ t('transfer.topbar.settings') }}
-          </button>
-        </div>
 
-        <!-- 工作态：远端文件表格 -->
-        <div v-else class="ft-browse">
-          <RemoteFileTable
-            :entries="fs.entries.value"
-            :loading="fs.loading.value"
-            :error-key="fs.errorKey.value"
-            :breadcrumb="fs.breadcrumb.value"
-            :selected-names="fs.selectedNames.value"
-            @enter="fs.cd"
-            @navigate="fs.goTo"
-            @toggle="fs.toggle"
-            @toggle-all="fs.toggleAll"
-          />
-        </div>
-      </Transition>
+          <!-- 工作态：远端文件表格 -->
+          <div v-else class="ft-browse">
+            <RemoteFileTable
+              :entries="fs.entries.value"
+              :loading="fs.loading.value"
+              :error-key="fs.errorKey.value"
+              :breadcrumb="fs.breadcrumb.value"
+              :selected-names="fs.selectedNames.value"
+              @enter="fs.cd"
+              @navigate="fs.goTo"
+              @toggle="fs.toggle"
+              @toggle-all="fs.toggleAll"
+            />
+          </div>
+        </Transition>
+      </div>
 
       <!-- 传输队列：默认收起，顶栏「传输队列」按钮展开；随网格列宽同步滑入/滑出 -->
       <Transition name="ft-queue-panel">

@@ -2,9 +2,9 @@
   PluginContextProvider — 插件上下文注入壳（keyed Provider）
 
   必须有真实元素根，禁止退化成裸 `<slot />`：宿主 DesktopLayout 的路由出口是
-  `<Transition name="page" mode="out-in">`，Transition 要求子组件渲染**元素根**。
-  裸 slot 透传会让 Vue 报 `Component inside <Transition> renders non-element root
-  node that cannot be animated`，且 out-in 的 leave 钩子挂在不会被 unmount 处理的
+  `<Transition name="page">`，Transition 要求子组件渲染**元素根**。裸 slot 透传会让
+  Vue 报 `Component inside <Transition> renders non-element root node that cannot be
+  animated`；历史上配合 `mode="out-in"` 时更严重——leave 钩子挂在不会被 unmount 处理的
   Fragment vnode 上 → afterLeave 永不触发 → 切走插件视图时主区域**永久白屏**
   （2026-09-25 实测）。同理，本文件顶部的说明必须是模板**外**注释——模板根级注释
   在 dev 编译下会被保留，与 div 一起构成多根（Fragment），把根重新变成非元素节点。
