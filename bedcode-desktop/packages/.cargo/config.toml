@@ -11,7 +11,19 @@
 #
 # 路径真源 = `src-tauri/src/wasm_core/manager/runtime/fixture_target.rs`
 # （`dir()` / `artifact()`，由宿主测试的 12 处夹具构建器经 `CARGO_TARGET_DIR`
-# 显式注入；env 优先级高于本文件，两处指向同一目录，注释互相指认）。
+# 显式注入；env 优先级高于本文件，两处必须指向同一目录，注释互相指认）。
+#
+# cargo 的 config 相对路径以**本 `.cargo` 目录的父目录**（= `bedcode-desktop/packages/`）
+# 为基准解析，故这里必须写 `../target/fixtures`，才等于 `fixture_target.rs` 的
+# `<desktop>/target/fixtures`。
+#
+# 历史坑（2026-10-04 修）：本行曾多写一个 `..`（`../../target/fixtures`），实际落到
+# **仓库根** `target/fixtures`——即「宿主测试内构建的夹具」与「手工 / 工具链探针构建
+# 的夹具」落在两个目录（后者当时甚至不存在，会被静默新建为第二落点），而注释与
+# build-process.md 都声称同一个目录。与 `wasm-apps/.cargo/config.toml` 是同一类错误。
+# 改这一行后必须核验：
+#   cd packages/<fixture-crate> && cargo metadata --no-deps --format-version 1
+# 其 `target_directory` 应为 `.../bedcode-desktop/target/fixtures`。
 #
 # 不影响宿主构建：宿主 cargo 以 `bedcode-desktop/src-tauri` 为 cwd 启动，
 # `packages/` 不是它的祖先目录，cargo 配置按 cwd 祖先链发现（故本文件对宿主无效）。
@@ -22,4 +34,4 @@
 #
 # 决策记录：.scratch/2026-09-26-cargo-target-space/spec.md
 [build]
-target-dir = "../../target/fixtures"
+target-dir = "../target/fixtures"

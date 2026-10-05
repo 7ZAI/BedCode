@@ -24,6 +24,8 @@ jobs:
   # ==================== 校验：版本一致性 + 构建 + 测试 + dry-run ====================
   verify:
     runs-on: ubuntu-latest
+    env:
+      SCCACHE_CACHE_SIZE: 2147483648  # 2GiB 纯字节数（sccache 0.18 不认 GiB 后缀）
     steps:
       - uses: actions/checkout@v4
 
@@ -40,6 +42,11 @@ jobs:
             bedcode-mobile/packages/plugin-sdk-mobile/pnpm-lock.yaml
 
       - uses: dtolnay/rust-toolchain@stable
+
+      # sccache：根 .cargo/config.toml 强制 rustc-wrapper=sccache，CI 必须安装；
+      # 仅 job 内缓存（不写 GHA cache 配额）。
+      - name: Install sccache (build cache)
+        uses: mozilla-actions/sccache-action@v0.0.11
 
       - name: Check tag version matches package versions
         if: startsWith(github.ref, 'refs/tags/sdk-v')
@@ -140,9 +147,16 @@ jobs:
     needs: verify
     if: startsWith(github.ref, 'refs/tags/sdk-v')
     runs-on: ubuntu-latest
+    env:
+      SCCACHE_CACHE_SIZE: 2147483648  # 2GiB 纯字节数（sccache 0.18 不认 GiB 后缀）
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+
+      # sccache：根 .cargo/config.toml 强制 rustc-wrapper=sccache（cargo publish 同样调
+      # rustc），CI 必须安装；仅 job 内缓存。
+      - name: Install sccache (build cache)
+        uses: mozilla-actions/sccache-action@v0.0.11
 
       - name: Dry-run publish (macros / mobile resolvable)
         # desktop 的 dry-run 需 macros 已发布（cargo publish 解析 crates.io 依赖），

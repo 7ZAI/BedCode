@@ -88,6 +88,10 @@ jobs:
   build-windows:
     needs: prepare-release
     runs-on: windows-latest
+    env:
+      # sccache 缓存上限：CI 磁盘有限 + 跨 run 缓存由 rust-cache 负责，2GiB 够 job 内命中；
+      # 根 .cargo/config.toml [env] force=false，外部值优先于 20GiB 默认。
+      SCCACHE_CACHE_SIZE: 2147483648  # 2GiB 纯字节数（sccache 0.18 不认 GiB 后缀）
     defaults:
       run:
         working-directory: bedcode-desktop
@@ -118,6 +122,11 @@ jobs:
         run: |
           rustup toolchain install nightly-2026-09-16 --profile minimal
           rustup target add wasm32-wasip3 --toolchain nightly-2026-09-16
+
+      # sccache：根 .cargo/config.toml 强制 rustc-wrapper=sccache，CI 必须安装；
+      # 不设 SCCACHE_GHA_ENABLED → 仅 job 内缓存，不写 GHA cache 配额。
+      - name: Install sccache (build cache)
+        uses: mozilla-actions/sccache-action@v0.0.11
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -201,6 +210,8 @@ jobs:
   build-android:
     needs: prepare-release
     runs-on: ubuntu-latest
+    env:
+      SCCACHE_CACHE_SIZE: 2147483648  # 2GiB 纯字节数（sccache 0.18 不认 GiB 后缀）
     defaults:
       run:
         working-directory: bedcode-mobile
@@ -225,6 +236,11 @@ jobs:
           # aarch64 为宿主 target；wasm32 用于插件产物构建（beforeBuildCommand 的 plugins:build）。
           # wasip2 防御性预装：mobile 插件当前用 unknown-unknown，未来若迁移 WASI preview2 不炸 CI
           targets: aarch64-linux-android, wasm32-unknown-unknown, wasm32-wasip2
+
+      # sccache：根 .cargo/config.toml 强制 rustc-wrapper=sccache，CI 必须安装；
+      # 仅 job 内缓存（不写 GHA cache 配额）。
+      - name: Install sccache (build cache)
+        uses: mozilla-actions/sccache-action@v0.0.11
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -306,6 +322,8 @@ jobs:
   build-linux:
     needs: prepare-release
     runs-on: ubuntu-latest
+    env:
+      SCCACHE_CACHE_SIZE: 2147483648  # 2GiB 纯字节数（sccache 0.18 不认 GiB 后缀）
     defaults:
       run:
         working-directory: bedcode-desktop
@@ -345,6 +363,11 @@ jobs:
         run: |
           rustup toolchain install nightly-2026-09-16 --profile minimal
           rustup target add wasm32-wasip3 --toolchain nightly-2026-09-16
+
+      # sccache：根 .cargo/config.toml 强制 rustc-wrapper=sccache，CI 必须安装；
+      # 仅 job 内缓存（不写 GHA cache 配额）。
+      - name: Install sccache (build cache)
+        uses: mozilla-actions/sccache-action@v0.0.11
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -399,6 +422,8 @@ jobs:
   package-plugins:
     needs: prepare-release
     runs-on: ubuntu-latest
+    env:
+      SCCACHE_CACHE_SIZE: 2147483648  # 2GiB 纯字节数（sccache 0.18 不认 GiB 后缀）
     steps:
       - uses: actions/checkout@v4
 
@@ -423,6 +448,11 @@ jobs:
           # 插件 WASM 产物 target：桌面 ai-chatbox 已迁移 WASI preview2（wasip2），
           # 其余桌面插件与移动端用 wasm32-unknown-unknown
           targets: wasm32-unknown-unknown, wasm32-wasip2
+
+      # sccache：根 .cargo/config.toml 强制 rustc-wrapper=sccache，CI 必须安装；
+      # 仅 job 内缓存（不写 GHA cache 配额）。
+      - name: Install sccache (build cache)
+        uses: mozilla-actions/sccache-action@v0.0.11
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -491,6 +521,8 @@ jobs:
   package-sdks:
     needs: prepare-release
     runs-on: ubuntu-latest
+    env:
+      SCCACHE_CACHE_SIZE: 2147483648  # 2GiB 纯字节数（sccache 0.18 不认 GiB 后缀）
     steps:
       - uses: actions/checkout@v4
 
@@ -513,6 +545,11 @@ jobs:
         with:
           # package-sdks.mjs --rust-wasm 的 guest 编译检查需要 wasm32-unknown-unknown
           targets: wasm32-unknown-unknown
+
+      # sccache：根 .cargo/config.toml 强制 rustc-wrapper=sccache，CI 必须安装；
+      # 仅 job 内缓存（不写 GHA cache 配额）。
+      - name: Install sccache (build cache)
+        uses: mozilla-actions/sccache-action@v0.0.11
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2

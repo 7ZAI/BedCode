@@ -33,8 +33,9 @@ const CONFIG = {
   // 仓库根级 target 目录（在两端目录之外，故只报告不自动处理）：
   // `cross-end-tests/` 的依赖图是两端 lib 的**并集** + 自己的 dev 依赖，
   // 跟任何一端都不相同——并入端内目录会驱逐该端缓存，且端内 target 有 15G
-  // 自动 clean 阈值，混在一起会统计失真
-  rootTargetDirs: ['cross-end-tests/target'],
+  // 自动 clean 阈值，混在一起会统计失真；
+  // `target/server-libs` 是 server-lib 拆出后 6 个 crate 的共享落点（仓库根）。
+  rootTargetDirs: ['target/server-libs', 'cross-end-tests/target'],
 }
 
 /**

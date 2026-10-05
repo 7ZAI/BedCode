@@ -320,6 +320,15 @@ gh run watch <run-id> -R 7ZAI/BedCode
 
 首次构建无 Rust 缓存，时间较长属正常。后续构建会利用 `swatinem/rust-cache` 加速。
 
+> **sccache（2026-10-05 引入）**：仓库根 `.cargo/config.toml` 强制 `rustc-wrapper = "sccache"`，
+> 因此**所有跑 cargo 的 job 必须安装 sccache**（test.yml 的 rust-desktop/rust-mobile、
+> release.yml 的 build-windows/build-android/build-linux/package-plugins/package-sdks、
+> sdk-publish.yml 的 verify/publish-crates 已用 `mozilla-actions/sccache-action@v0.0.11`，
+> 漏装 = cargo 直接失败）。CI 不启用 sccache 的 GHA cache 后端（不设 `SCCACHE_GHA_ENABLED`）：
+> 跨 run 缓存仍由 `swatinem/rust-cache` 负责，sccache 只做 job 内跨 crate 命中（server-libs /
+> wasm-apps 循环共享依赖），job 级 `SCCACHE_CACHE_SIZE=2GiB`（根 config `[env] force=false`
+> 让外部值优先于 20GiB 默认）。
+
 ### 忘记 keystore 密码
 
 查看项目中已有的 `key.properties` 文件（通常在 `src-tauri/gen/android/key.properties`），里面包含密码信息。
