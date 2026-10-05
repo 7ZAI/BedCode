@@ -83,7 +83,7 @@ const EXTERNAL_URL_ALLOWED_SCHEMES: [&str; 2] = ["http", "https"];
 ///
 /// 存在的理由：宿主外壳命令 `open_external_url` 是前端**唯一**合法的「打开外部链接」
 /// 通路（`shell:allow-open` 权限已随前端零资源访问红线撤除，见
-/// `capabilities/default.json` 与 `capabilities_test.rs` 的防回接锁），因此闸门必须
+/// `capabilities/default.json` 与 `tests/capabilities_lock.rs` 的防回接锁），因此闸门必须
 /// 落在宿主侧且**默认拒绝**。
 ///
 /// 拒绝：空串 / 无 `:` / scheme 非法字符（非 `ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )`）
@@ -106,9 +106,7 @@ pub fn validate_external_url(url: &str) -> crate::Result<&str> {
     }
 
     let mut chars = scheme.chars();
-    let starts_with_alpha = chars
-        .next()
-        .is_some_and(|c| c.is_ascii_alphabetic());
+    let starts_with_alpha = chars.next().is_some_and(|c| c.is_ascii_alphabetic());
     let rest_is_legal = chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
     if !starts_with_alpha || !rest_is_legal {
         return Err(err("scheme is not a legal RFC 3986 scheme token"));
@@ -305,11 +303,7 @@ mod external_url_tests {
             "HTTPS://EXAMPLE.COM/Path",
             "HtTp://localhost:1420/x?y=1#z",
         ] {
-            assert_eq!(
-                validate_external_url(url).ok(),
-                Some(url),
-                "http/https 必须放行：{url}"
-            );
+            assert_eq!(validate_external_url(url).ok(), Some(url), "http/https 必须放行：{url}");
         }
     }
 
@@ -331,10 +325,7 @@ mod external_url_tests {
             let err = validate_external_url(url)
                 .expect_err("白名单外 scheme 必须拒绝")
                 .to_string();
-            assert!(
-                err.contains("open_external_url"),
-                "错误必须带操作上下文，got: {err}"
-            );
+            assert!(err.contains("open_external_url"), "错误必须带操作上下文，got: {err}");
         }
     }
 
@@ -346,16 +337,13 @@ mod external_url_tests {
             "example.com",
             "//example.com",
             "/local/path",
-            "1http://example.com",  // scheme 不能以数字开头
-            "ht tp://example.com",  // scheme 内含空格
-            "ht+tp://example.com",  // '+' 合法于 scheme，但不在白名单
-            "http:",                // 冒号后为空
-            "://example.com",       // scheme 为空
+            "1http://example.com", // scheme 不能以数字开头
+            "ht tp://example.com", // scheme 内含空格
+            "ht+tp://example.com", // '+' 合法于 scheme，但不在白名单
+            "http:",               // 冒号后为空
+            "://example.com",      // scheme 为空
         ] {
-            assert!(
-                validate_external_url(url).is_err(),
-                "非法 URL 必须拒绝：{url:?}"
-            );
+            assert!(validate_external_url(url).is_err(), "非法 URL 必须拒绝：{url:?}");
         }
     }
 
@@ -379,7 +367,9 @@ mod external_url_tests {
     #[test]
     fn scheme_lexical_boundary_reaches_allowlist_check() {
         // 词法合法但不在白名单 → 报的是白名单错误（证明没被词法分支提前放过）
-        let err = validate_external_url("a+1-b.c://x").expect_err("应被白名单拒绝").to_string();
+        let err = validate_external_url("a+1-b.c://x")
+            .expect_err("应被白名单拒绝")
+            .to_string();
         assert!(
             err.contains("allowlist"),
             "合法词法的未知 scheme 应命中白名单分支，got: {err}"

@@ -33,7 +33,7 @@
 //! 队列满 / 格式不匹配、`fs_auth` 的拒绝与弹窗路径都仍逐条 warn）。
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 // ==================== 源码扫描原语（纯函数，可被 fixture 测试） ====================
 
@@ -168,6 +168,11 @@ fn debug_log_lines(body: &str) -> Vec<usize> {
 // ==================== 站点登记（宿主热路径，逐条附触发形状） ====================
 
 /// 被锁函数：`src-relative-path` + 函数名 + 为什么它是热路径
+///
+/// **路径可以是宿主 `src/` 以外的位置**：热路径随能力域 crate 化（wasm-core-lib-split
+/// 票 03/04）后会离开 `src-tauri/src`，锁必须跟着走，否则「函数不在登记里」会被
+/// 读成「扫描器失效」。WS 帧路径现居
+/// `packages/bedcode-server-websocket/src/plugin_binding.rs`。
 const LOCKED_SITES: &[(&str, &str, &str)] = &[
     (
         "src/wasm_core/bus.rs",
@@ -180,7 +185,7 @@ const LOCKED_SITES: &[(&str, &str, &str)] = &[
         "按文件操作触发：插件每次读写都过一次放行判定",
     ),
     (
-        "src/wasm_core/host_api/ws.rs",
+        "../packages/bedcode-server-websocket/src/plugin_binding.rs",
         "record_dropped_frame",
         "按帧触发：未导出 events-ws 的插件每条 WS 帧都到这里",
     ),
@@ -289,10 +294,10 @@ fn scanner_detects_planted_and_real_violations() {
     );
 
     // --- 2. 真实文件反例 ---
-    // `host_api::ws::dispatch_frame` 不在 LOCKED_SITES 里，且其函数体确实带
+    // `plugin_binding::dispatch_frame` 不在 LOCKED_SITES 里，且其函数体确实带
     // `tracing::debug!`（同名函数名一经重命名即失效，见步骤 2b）；把它当锁定站点
     // 扫，必须报违规——证明扫描器跑在真实文件上也能命中，不是只对 fixture 有效。
-    let raw = read_source("src/wasm_core/host_api/ws.rs");
+    let raw = read_source("../packages/bedcode-server-websocket/src/plugin_binding.rs");
     let masked = blank_out_comments_and_strings(&raw);
     let real_body = extract_fn_body(&masked, "dispatch_frame").expect("真实文件里必须能抽出 dispatch_frame 函数体");
     assert!(

@@ -25,9 +25,7 @@ use std::path::{Path, PathBuf};
 /// 注：`dialog:*` 刻意不在禁列——它是**用户点击后弹出的系统选择器**，只回传用户选定的
 /// 路径，前端读不到文件内容，真正的读取发生在 Rust 侧并过权限闸门；禁掉它等于禁用
 /// 「选择安装包 / 日志目录」这类正常 UI 能力。
-const NETWORK_CAPABLE_PERMISSION_PREFIXES: [&str; 6] = [
-    "shell:", "updater:", "http:", "fs:", "deep-link:", "opener:",
-];
+const NETWORK_CAPABLE_PERMISSION_PREFIXES: [&str; 6] = ["shell:", "updater:", "http:", "fs:", "deep-link:", "opener:"];
 
 /// 逐条禁止的进程类权限（`process:default` 只含 exit/restart，不在禁列）
 const FORBIDDEN_EXACT_PERMISSIONS: [&str; 1] = ["process:allow-spawn"];
@@ -96,15 +94,12 @@ fn network_capable_plugin_permissions_are_not_reintroduced() {
         );
 
         for file in entries {
-            let raw = fs::read_to_string(&file)
-                .unwrap_or_else(|e| panic!("读取 {} 失败：{e}", file.display()));
+            let raw = fs::read_to_string(&file).unwrap_or_else(|e| panic!("读取 {} 失败：{e}", file.display()));
             for permission in extract_permission_strings(&raw) {
                 let forbidden_prefix = NETWORK_CAPABLE_PERMISSION_PREFIXES
                     .iter()
                     .find(|p| permission.starts_with(**p));
-                if forbidden_prefix.is_some()
-                    || FORBIDDEN_EXACT_PERMISSIONS.contains(&permission.as_str())
-                {
+                if forbidden_prefix.is_some() || FORBIDDEN_EXACT_PERMISSIONS.contains(&permission.as_str()) {
                     granted.push(format!(
                         "{}（{}）",
                         permission,
@@ -136,7 +131,10 @@ fn network_capable_plugin_crates_are_not_depended_on() {
     /// 各端禁依赖的 crate：`http` / `fs` 是纯网络 / 文件面；`shell` 是已移除的前端调用面
     /// （它的 `open` 已废弃，且留着它等于留了一条“加条 capability 就能开”的回头路）。
     const FORBIDDEN: [(&str, [&str; 3]); 2] = [
-        ("desktop", ["tauri-plugin-http", "tauri-plugin-fs", "tauri-plugin-shell"]),
+        (
+            "desktop",
+            ["tauri-plugin-http", "tauri-plugin-fs", "tauri-plugin-shell"],
+        ),
         ("mobile", ["tauri-plugin-http", "tauri-plugin-fs", "tauri-plugin-shell"]),
     ];
 
@@ -151,11 +149,7 @@ fn network_capable_plugin_crates_are_not_depended_on() {
                 .expect("src-tauri 的两级上级应是仓库根")
         };
 
-        assert!(
-            manifest.is_file(),
-            "{end} Cargo.toml 缺失：{}",
-            manifest.display()
-        );
+        assert!(manifest.is_file(), "{end} Cargo.toml 缺失：{}", manifest.display());
         let raw = fs::read_to_string(&manifest).expect("读 Cargo.toml");
         // 逐行解析**真实依赖声明**而不是裸子串包含：否则「注释里说明这个 crate 已被移除」
         // 反而会把锁锁红（本项目就踩过一次：Cargo.toml 的移除说明注释命中了同名检查）。
@@ -205,8 +199,7 @@ fn csp_blocks_frontend_connect_sources() {
                 .expect("src-tauri 的两级上级应是仓库根"),
         ),
     ] {
-        let raw = fs::read_to_string(&manifest)
-            .unwrap_or_else(|e| panic!("读取 {end} tauri.conf.json 失败：{e}"));
+        let raw = fs::read_to_string(&manifest).unwrap_or_else(|e| panic!("读取 {end} tauri.conf.json 失败：{e}"));
         let csp_block = raw
             .split("\"csp\"")
             .nth(1)
@@ -270,11 +263,7 @@ fn capability_scan_covers_both_ends() {
         let count = fs::read_dir(&dir)
             .unwrap_or_else(|e| panic!("读取 {} 失败：{e}", dir.display()))
             .filter_map(|e| e.ok())
-            .filter(|e| {
-                Path::new(&e.path())
-                    .extension()
-                    .is_some_and(|ext| ext == "json")
-            })
+            .filter(|e| Path::new(&e.path()).extension().is_some_and(|ext| ext == "json"))
             .count();
         assert!(count > 0, "{end} 未扫到任何 capability json：{}", dir.display());
     }
