@@ -285,9 +285,7 @@ pub(crate) fn dispatch_mutex_op(plugin: &mut LoadedWasmPlugin, op: GuestOp) -> c
         GuestOp::OnMessageBinary { topic, sender, payload } => plugin
             .on_message_binary(&topic, &sender, &payload)
             .map(|()| GuestReply::Unit),
-        GuestOp::OnProcessDone { payload_json } => plugin
-            .on_process_done(&payload_json)
-            .map(|()| GuestReply::Unit),
+        GuestOp::OnProcessDone { payload_json } => plugin.on_process_done(&payload_json).map(|()| GuestReply::Unit),
         GuestOp::WsClientMessage { handle, kind, payload } => plugin
             .on_ws_frame(&WsFrameDispatch::Client { handle, kind, payload })
             .map(GuestReply::Bool),

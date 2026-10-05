@@ -4,6 +4,10 @@
 //! 经 `use super::*` 可见）；fixture 互斥与产物构建语义不变。
 
 use super::*;
+// 随机制内核搬迁后不再经 `super::*` 可见的两个名字（票 03）：`StoreLimits` 现由
+// `bedcode-host-kit` 持有、`ResourceLimiter` 是状态在 kit 侧实现的 trait。
+use bedcode_host_kit::limits::StoreLimits;
+use wasmtime::ResourceLimiter;
 /// 加载入口：load_plugin_from_file 直接走组件路径（阶段 C 起仅组件形态）
 #[test]
 
@@ -214,9 +218,7 @@ fn test_optional_export_callbacks_refill_fuel() {
         // C-105 边界：连续三轮，每轮都排干后调用——杀「只在首次续费」的变异
         for round in 1..=3u32 {
             drain(&mut sdk_plugin);
-            let ws_delivered = sdk_plugin
-                .on_ws_frame(&client_frame)
-                .expect("ws frame deliver");
+            let ws_delivered = sdk_plugin.on_ws_frame(&client_frame).expect("ws frame deliver");
             assert!(ws_delivered, "round {round}: SDK 产物必须导出 events-ws");
             let left = remaining(&mut sdk_plugin);
             assert!(
@@ -248,10 +250,7 @@ fn test_optional_export_callbacks_refill_fuel() {
             .expect("task event deliver");
         assert!(task_delivered, "task 产物必须导出 events-task");
         let left = remaining(&mut task_plugin);
-        assert!(
-            left > budget / 2,
-            "on_task_event 未续费，剩余 {left}（预算 {budget}）"
-        );
+        assert!(left > budget / 2, "on_task_event 未续费，剩余 {left}（预算 {budget}）");
         // C-106 反例（未导出 events-ws 的产物走降级路径——加续费不得改变其语义）
         // 随 `plugin-component-test` 删除而移除：SDK 的 `wasm_entry!` 无条件导出全部
         // interface，造不出缺可选导出的产物，故「补续费不得改变降级语义」这条反例

@@ -27,7 +27,7 @@ fn test_wasi_preopen_std_fs_e2e() {
         host_ctx.permission.grant_permissions(pid, &["storage".to_string()]);
         let dir = tempfile::tempdir().expect("tempdir");
         crate::wasm_core::host_api::storage::storage_set(
-                        host_ctx.as_ref(),
+            host_ctx.as_ref(),
             host_ctx.as_ref(),
             host_ctx.as_ref(),
             pid,
@@ -131,7 +131,7 @@ fn test_wasi_preopen_read_only_std_fs_e2e() {
         // 「挂载生效 + 读放行」，而不是「写失败顺带什么都读不到」
         std::fs::write(dir.path().join("demo.txt"), "preexisting-from-host").expect("seed host file");
         crate::wasm_core::host_api::storage::storage_set(
-                        host_ctx.as_ref(),
+            host_ctx.as_ref(),
             host_ctx.as_ref(),
             host_ctx.as_ref(),
             pid,
@@ -287,6 +287,14 @@ fn test_wasip3_fixture_async_closure() {
         .invoke_command("host-crypto.roundtrip", "{}")
         .expect("host-crypto roundtrip command");
     let v = serde_json::from_str::<serde_json::Value>(&r).unwrap();
-    assert_eq!(v.get("ok").and_then(|v| v.as_bool()), Some(true), "host-crypto 探针未通过: {r}");
-    assert_eq!(v.get("x25519").and_then(|v| v.as_bool()), Some(true), "x25519 双端共享未通过");
+    assert_eq!(
+        v.get("ok").and_then(|v| v.as_bool()),
+        Some(true),
+        "host-crypto 探针未通过: {r}"
+    );
+    assert_eq!(
+        v.get("x25519").and_then(|v| v.as_bool()),
+        Some(true),
+        "x25519 双端共享未通过"
+    );
 }

@@ -23,6 +23,8 @@ use std::sync::Arc;
 
 use tokio::sync::{Mutex, RwLock};
 
+use bedcode_host_kit::state::WasmPluginState;
+
 use crate::db::Database;
 use crate::wasm_core::permission::PermissionManager;
 use crate::wasm_core::security::fs_auth::FsAuthChecker;
@@ -78,7 +80,7 @@ pub trait PluginServices: Send + Sync + 'static {
     /// 由 host_impl/app.rs 经 block_on_async 驱动（宿主侧注册表/PATH 实现）。
     /// 返回 Box<dyn Future> 保持 trait dyn 兼容（async fn 会破坏 Arc<dyn>）。
     fn install_cli(
-                &self,
+        &self,
         plugin_id: String,
         file_name: String,
         bin_dir: String,
@@ -89,7 +91,7 @@ pub trait PluginServices: Send + Sync + 'static {
     /// 应用关闭流程（deactivate_all 置位 shutting_down）中调用时自动跳过，
     /// CLI 随下次激活重新安装。
     fn uninstall_cli(
-                &self,
+        &self,
         plugin_id: String,
         file_name: String,
         bin_dir: String,
@@ -100,7 +102,7 @@ pub trait PluginServices: Send + Sync + 'static {
     /// 的 `resource_dir` 同值）。由 host_impl/app.rs 经 block_on_async 驱动。
     /// 插件未加载 → `Err`（不静默返回空串，调用方据此显性失败）。
     fn plugin_resource_dir(
-                &self,
+        &self,
         plugin_id: String,
     ) -> Pin<Box<dyn std::future::Future<Output = Result<String, String>> + Send + '_>>;
 }
@@ -152,8 +154,7 @@ pub trait CapabilityProvider: Send + Sync {
 pub trait CapabilityTarget: Send + Sync + 'static {
     /// `host-storage.get`：外层 Err = 传输层失败（trap / 超时 / 属主已停），
     /// 内层 `Result` = guest 层 WIT `result<option<string>, string>` 本体
-    fn storage_get(&self, key: &str)
-        -> std::result::Result<std::result::Result<Option<String>, String>, String>;
+    fn storage_get(&self, key: &str) -> std::result::Result<std::result::Result<Option<String>, String>, String>;
     /// `host-storage.set`（层次同 [`CapabilityTarget::storage_get`]）
     fn storage_set(&self, key: &str, value: &str) -> std::result::Result<std::result::Result<(), String>, String>;
     /// `host-storage.delete`（层次同 [`CapabilityTarget::storage_get`]）
@@ -167,20 +168,16 @@ pub trait CapabilityTarget: Send + Sync + 'static {
 /// 只依赖本接口做「权限门 + 解析/配额」，不再 import `manager::task`（依赖单向化 C3）。
 pub trait TaskEngine: Send + Sync + 'static {
     /// 同步批（`execute-batch`）：扇出 → join → 一次性返回全部单元结果
-    fn execute_batch(
-        &self,
-        host_ctx: &Arc<WasmHostContext>,
-        owner: &str,
-        plan_json: &str,
-    ) -> Result<String, String>;
+    ///
+    /// **不再收 `host_ctx`**（wasm-core-lib-split 票 03）：任务登记表需要**拥有**
+    /// 一份宿主上下文强引用（任务在异步执行期间须独立于插件实例存活），而
+    /// `WasmPluginState` 的宿主字段搬进机制内核后是 `Arc<dyn HostPorts>`，拿不回
+    /// 具体 `Arc<WasmHostContext>`。改为**注入时捕获**——`set_task_engine` 本就是在
+    /// 那一个 `Arc` 上调用的，捕获到的与调用方持有的是同一个对象，语义不变。
+    fn execute_batch(&self, owner: &str, plan_json: &str) -> Result<String, String>;
 
     /// 异步任务（`submit`）：登记后立即返回 `task-<hex>` 句柄；终态经回调
-    fn submit(
-        &self,
-        host_ctx: &Arc<WasmHostContext>,
-        owner: &str,
-        plan_json: &str,
-    ) -> Result<String, String>;
+    fn submit(&self, owner: &str, plan_json: &str) -> Result<String, String>;
 
     /// 任务状态自愈快照（事件丢失后查询）；`Ok(None)` = 不存在 / 非属主
     fn status(&self, owner: &str, job_id: &str) -> Result<Option<String>, String>;
@@ -240,6 +237,18 @@ pub struct WasmHostContext {
     /// 能力注册表（core-plugin-manager 票据 06）：能力名 → 宿主原语/系统组件
     /// 实例（二选一装配）；host_impl 宿主函数内经此路由
     capabilities: Arc<dyn CapabilityProvider>,
+    /// 实例级能力域端口表（域名 → 端口对象）
+    ///
+    /// wasm-core-lib-split 票 04：迁出 `wasm_core` 的能力域（ws 等）在自己的 crate 里
+    /// 实现 `impl … Host for WasmPluginState`，拿不到本上下文，于是经
+    /// [`bedcode_host_kit::ports::HostPorts::domain_ports`] 从这里取回**与本实例同一份
+    /// 上下文绑定**的端口（权限管理器 / 消息总线 / 异步桥都取自它）。
+    ///
+    /// 为什么要表而不是全局单例：一个进程可以有多份宿主上下文（无头测试每个用例一份、
+    /// 多实例并行），各有各的权限与总线；全局只有一格 ⇒ 能力域会读到别的上下文的端口。
+    /// 装配点：生产经 `PluginHost::new`、无头测试经 `setup_wasm_runtime`，都在持有
+    /// `Arc<WasmHostContext>` 之后调 [`Self::set_domain_ports`]。
+    domain_ports: Arc<std::sync::RwLock<std::collections::HashMap<String, Arc<dyn std::any::Any + Send + Sync>>>>,
 }
 
 /// 运行中的进程（记录 pid 供进程组 kill）
@@ -407,7 +416,22 @@ impl WasmHostContext {
             // 私有库根目录覆盖：生产 None（走 app_handle 的 app_data_dir），
             // 无头测试在构造后经 `set_plugin_db_root` 注入（见 setup_wasm_runtime）
             plugin_db_root: Arc::new(std::sync::RwLock::new(None)),
+            // 能力域端口表：构造时为空，由持有 `Arc<WasmHostContext>` 的装配点注入
+            domain_ports: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
         }
+    }
+
+    /// 为某能力域装配**实例级**端口（生产与无头测试共用此入口）
+    ///
+    /// 端口对象应是 `Arc<dyn 该域的端口 trait>`（擦除成 `Arc<dyn Any + Send + Sync>`
+    /// 存表，能力域侧经 `downcast_domain_ports` 还原）。幂等：重复装配同一域时
+    /// **后写覆盖**（与 `set_plugin_db_root` 同风格）——装配点只有一个，
+    /// 重复调用是同形重放而非并存两套。
+    pub fn set_domain_ports(&self, domain: &str, ports: Arc<dyn std::any::Any + Send + Sync>) {
+        self.domain_ports
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(domain.to_string(), ports);
     }
 
     /// 插件私有库根目录覆盖：生产为 `None`（走 `app_handle` 的
@@ -669,13 +693,65 @@ pub trait AppHandleScope: Send + Sync {
     fn app_handle(&self) -> Option<&tauri::AppHandle>;
 }
 
+/// 本上下文是机制内核的宿主能力端口实现（wasm-core-lib-split 票 03）
+///
+/// `WasmPluginState` 住在 `bedcode-host-kit`，它的 `host` 字段是
+/// `Arc<dyn HostPorts>`——kit 不能认识本类型，否则整个宿主（tauri / 数据库 /
+/// 授权闸门）会被拖进机制内核。双向各走一条路：
+///
+/// - **kit → 宿主**：下面这个 impl（能力 crate 经 `Arc<dyn HostPorts>` 拿到的就是本类型）
+/// - **宿主 → 具体类型**：[`HostCtxOf`] 扩展 trait 的向下转型
+///
+/// 新增能力域时**不要**在这里堆方法——迁出的能力域按 `bedcode-server-base::ports`
+/// 先例自声明窄端口 trait，宿主在 adapter 层实现它们。
+impl bedcode_host_kit::ports::HostPorts for WasmHostContext {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+
+    /// 实例级能力域端口下发（票 04；未装配该域 ⇒ `None`，由能力域按自己的兜底口径处理）
+    fn domain_ports(&self, domain: &str) -> Option<Arc<dyn std::any::Any + Send + Sync>> {
+        self.domain_ports
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(domain)
+            .cloned()
+    }
+}
+
+/// 从插件实例状态取回宿主上下文（core 域接口的向下转型出口）
+///
+/// 只给**留在宿主的** `impl … Host for WasmPluginState` 用（它们本来就住在
+/// 宿主 crate 内，能直接指名 `WasmHostContext`）；迁出的能力域不碰本 trait，
+/// 它们消费的是各自 crate 声明的窄端口。类型不符时 panic 并带出期望/实际类型名
+/// （fail-visible：装配期编程错误，不静默降级为「拿不到宿主能力」）。
+pub(crate) trait HostCtxOf {
+    /// 宿主上下文引用
+    fn host_ctx(&self) -> &WasmHostContext;
+}
+
+impl HostCtxOf for WasmPluginState {
+    fn host_ctx(&self) -> &WasmHostContext {
+        bedcode_host_kit::ports::downcast_host(&*self.host)
+    }
+}
+
 /// 插件宿主服务视图（两阶段注入的 PluginServices trait 对象）
 pub trait ServicesScope: Send + Sync {
     /// 宿主服务引用（两阶段初始化完成前返回 None；async：内部 async RwLock；
     /// Pin<Box<dyn Future>> 返回保持 dyn 兼容，票 05）
     fn services<'a>(
         &'a self,
-    ) -> Pin<Box<dyn std::future::Future<Output = Option<Arc<dyn crate::wasm_core::host_api::context::PluginServices>>> + Send + 'a>>;
+    ) -> Pin<
+        Box<
+            dyn std::future::Future<Output = Option<Arc<dyn crate::wasm_core::host_api::context::PluginServices>>>
+                + Send
+                + 'a,
+        >,
+    >;
 }
 
 /// 进程注册表视图（host-process，v8）
@@ -764,7 +840,13 @@ impl AppHandleScope for WasmHostContext {
 impl ServicesScope for WasmHostContext {
     fn services<'a>(
         &'a self,
-    ) -> Pin<Box<dyn std::future::Future<Output = Option<Arc<dyn crate::wasm_core::host_api::context::PluginServices>>> + Send + 'a>> {
+    ) -> Pin<
+        Box<
+            dyn std::future::Future<Output = Option<Arc<dyn crate::wasm_core::host_api::context::PluginServices>>>
+                + Send
+                + 'a,
+        >,
+    > {
         Box::pin(self.services())
     }
 }

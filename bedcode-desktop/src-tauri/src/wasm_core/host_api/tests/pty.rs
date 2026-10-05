@@ -115,7 +115,13 @@ fn permission_sync_points_all_know_pty_domains() {
 #[test]
 fn spawn_without_permission_is_denied() {
     let ctx = build_host_ctx();
-    let err = pty_spawn(ctx.as_ref(), ctx.as_ref(), "com.bedcode.no-pty", r#"{"command":"/bin/true"}"#).unwrap_err();
+    let err = pty_spawn(
+        ctx.as_ref(),
+        ctx.as_ref(),
+        "com.bedcode.no-pty",
+        r#"{"command":"/bin/true"}"#,
+    )
+    .unwrap_err();
     assert_eq!(err, "permission denied: pty:spawn");
     assert_eq!(
         registered_count_for("com.bedcode.no-pty"),
@@ -129,7 +135,13 @@ fn spawn_without_permission_is_denied() {
 fn spawn_with_io_permission_only_is_denied() {
     let ctx = build_host_ctx();
     grant_permissions(&ctx, "com.bedcode.io-only", &[PERMISSION_PTY_IO]);
-    let err = pty_spawn(ctx.as_ref(), ctx.as_ref(), "com.bedcode.io-only", r#"{"command":"/bin/true"}"#).unwrap_err();
+    let err = pty_spawn(
+        ctx.as_ref(),
+        ctx.as_ref(),
+        "com.bedcode.io-only",
+        r#"{"command":"/bin/true"}"#,
+    )
+    .unwrap_err();
     assert_eq!(err, "permission denied: pty:spawn");
     assert_eq!(registered_count_for("com.bedcode.io-only"), 0);
 }
@@ -189,7 +201,10 @@ fn kill_still_enforces_owner_before_its_own_gate() {
     let ctx = build_host_ctx();
     grant_permissions(&ctx, "com.bedcode.owner-b", &[PERMISSION_PTY_SPAWN, PERMISSION_PTY_IO]);
 
-    assert_eq!(pty_kill(ctx.as_ref(), "com.bedcode.owner-b", &pty_id).unwrap_err(), NOT_OWNER);
+    assert_eq!(
+        pty_kill(ctx.as_ref(), "com.bedcode.owner-b", &pty_id).unwrap_err(),
+        NOT_OWNER
+    );
 }
 
 /// 反例：数据面同样受属主仲裁（write / resize / is-running 三函数）
@@ -223,9 +238,18 @@ fn every_api_without_any_permission_is_denied_before_any_lookup() {
     let cases: [(&str, Result<(), String>); 6] = [
         (
             "spawn",
-            pty_spawn(ctx.as_ref(), ctx.as_ref(), "com.bedcode.bare", r#"{"command":"/bin/true"}"#).map(|_| ()),
+            pty_spawn(
+                ctx.as_ref(),
+                ctx.as_ref(),
+                "com.bedcode.bare",
+                r#"{"command":"/bin/true"}"#,
+            )
+            .map(|_| ()),
         ),
-        ("write", pty_write(ctx.as_ref(), "com.bedcode.bare", probe, b"x").map(|_| ())),
+        (
+            "write",
+            pty_write(ctx.as_ref(), "com.bedcode.bare", probe, b"x").map(|_| ()),
+        ),
         (
             "resize",
             pty_resize(ctx.as_ref(), "com.bedcode.bare", probe, 80, 24).map(|_| ()),
@@ -370,7 +394,13 @@ async fn natural_exit_publishes_stopped_event_with_exit_code() {
     // 订阅先于 spawn：宿主不缓冲不重放，短命命令可能在订阅前就终态
     let events = subscribe(&ctx.message_bus, "sub-exit", &exit_topic(owner)).await;
 
-    pty_spawn(ctx.as_ref(), ctx.as_ref(), owner, r#"{"command":"/bin/sh","args":["-c","exit 42"]}"#).expect("spawn");
+    pty_spawn(
+        ctx.as_ref(),
+        ctx.as_ref(),
+        owner,
+        r#"{"command":"/bin/sh","args":["-c","exit 42"]}"#,
+    )
+    .expect("spawn");
     let event = wait_event(&events).await.expect("自然退出必须发出退出事件");
     assert_eq!(event["payload"]["reason"], "stopped", "非 kill 的退出: {event}");
     assert_eq!(
@@ -568,7 +598,13 @@ async fn failed_spawn_publishes_no_event_and_registers_nothing() {
     grant_permissions(&ctx, owner, &[PERMISSION_PTY_SPAWN, PERMISSION_PTY_IO]);
     let events = subscribe(&ctx.message_bus, "sub-fail", &exit_topic(owner)).await;
 
-    let err = pty_spawn(ctx.as_ref(), ctx.as_ref(), owner, r#"{"command":"/nonexistent/bedcode-pty-command"}"#).unwrap_err();
+    let err = pty_spawn(
+        ctx.as_ref(),
+        ctx.as_ref(),
+        owner,
+        r#"{"command":"/nonexistent/bedcode-pty-command"}"#,
+    )
+    .unwrap_err();
     assert!(
         err.contains("启动子进程失败") || err.contains("打开伪终端失败"),
         "spawn 失败必须带操作上下文: {err}"
@@ -621,10 +657,7 @@ fn output_topic(owner: &str) -> String {
 }
 
 /// 收集窗口内的全部投递（限频断言用：窗口内不得逐块推送）
-async fn drain_events(
-    rx: &std::sync::mpsc::Receiver<serde_json::Value>,
-    window: Duration,
-) -> Vec<serde_json::Value> {
+async fn drain_events(rx: &std::sync::mpsc::Receiver<serde_json::Value>, window: Duration) -> Vec<serde_json::Value> {
     let deadline = Instant::now() + window;
     let mut out = Vec::new();
     while Instant::now() < deadline {
@@ -755,7 +788,13 @@ fn write_response_comes_from_process_not_tty_echo() {
     let ctx = ctx_with_pty("com.bedcode.sed", r#"{"command":"/bin/sed","args":["s/^/OUT:/"]}"#);
     let pty_id = find_handle_of("com.bedcode.sed");
 
-    pty_write(ctx.as_ref(), "com.bedcode.sed", &pty_id, format!("body-{marker}\n").as_bytes()).expect("write");
+    pty_write(
+        ctx.as_ref(),
+        "com.bedcode.sed",
+        &pty_id,
+        format!("body-{marker}\n").as_bytes(),
+    )
+    .expect("write");
     let output = wait_for_output(&ring_of(&pty_id), &format!("OUT:body-{marker}"));
     assert!(
         output.contains(&format!("OUT:body-{marker}")),
@@ -1066,7 +1105,8 @@ fn declared_quota_above_default_allows_the_ninth_session() {
     register_quota(owner, Some(declared));
 
     for i in 0..declared {
-        pty_spawn(ctx.as_ref(), ctx.as_ref(), owner, ALIVE).unwrap_or_else(|e| panic!("第 {} 条应在声明额度内放行，got: {e}", i + 1));
+        pty_spawn(ctx.as_ref(), ctx.as_ref(), owner, ALIVE)
+            .unwrap_or_else(|e| panic!("第 {} 条应在声明额度内放行，got: {e}", i + 1));
     }
     assert_eq!(registered_count_for(owner), declared, "声明值即天花板");
     let err = pty_spawn(ctx.as_ref(), ctx.as_ref(), owner, ALIVE).unwrap_err();
@@ -1104,7 +1144,13 @@ fn declared_ring_bytes_out_of_range_is_rejected_without_side_effects() {
     grant_permissions(&ctx, owner, &[PERMISSION_PTY_SPAWN, PERMISSION_PTY_IO]);
 
     for bad in [0u64, PLUGIN_PTY_RING_MAX_BYTES + 1] {
-        let err = pty_spawn(ctx.as_ref(), ctx.as_ref(), owner, &format!(r#"{{"command":"/bin/true","ringBytes":{bad}}}"#)).unwrap_err();
+        let err = pty_spawn(
+            ctx.as_ref(),
+            ctx.as_ref(),
+            owner,
+            &format!(r#"{{"command":"/bin/true","ringBytes":{bad}}}"#),
+        )
+        .unwrap_err();
         assert!(err.contains("ringBytes"), "错误必须点名被拒的参数，got: {err}");
         assert!(
             err.contains(&bad.to_string()) || err.contains("greater than 0"),
@@ -1115,7 +1161,7 @@ fn declared_ring_bytes_out_of_range_is_rejected_without_side_effects() {
 
     // 恰等于上限的声明必须放行（off-by-one 的另一侧）
     pty_spawn(
-                ctx.as_ref(),
+        ctx.as_ref(),
         ctx.as_ref(),
         owner,
         &format!(r#"{{"command":"/bin/sh","args":["-c","read go"],"ringBytes":{PLUGIN_PTY_RING_MAX_BYTES}}}"#),

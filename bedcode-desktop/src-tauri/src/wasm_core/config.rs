@@ -16,77 +16,16 @@ use std::path::Path;
 
 // ==================== 编译期默认值 ====================
 
-/// 编译期默认值——与 wasm_runtime 历史生产常量逐一相等（对照测试锁定），
-/// 也是单插件覆盖的硬上限（任何覆盖不得突破）
-pub(crate) mod defaults {
-    /// 单次 wasm 导出调用允许消耗的燃料（指令数）——防失控/恶意插件无限执行
-    ///
-    /// 用燃料（fuel）而非 epoch 墙钟窗口做看门狗：
-    /// - 燃料只计 guest 指令数，宿主调用阻塞期间（授权弹窗、目录扫描、网络）
-    ///   guest 零消耗——慢宿主调用无论多久都不会被误杀；epoch 按墙钟计，
-    ///   宿主阻塞期间照走，正是历史上误杀慢调用的根因
-    /// - 纯 guest 死循环持续烧燃料，必然耗尽被 trap（确定性，不受宿主负载影响）
-    /// - 每次导出调用前重置燃料，预算只约束单次调用内 guest 计算量，
-    ///   与宿主延迟彻底解耦
-    ///   64G 指令 ≈ 数十秒纯 guest 计算（wasm32 release 约 1-3G 指令/秒），
-    ///   覆盖大 JSON 解析等重活；死循环最迟烧完被 trap
-    pub(crate) const FUEL_PER_CALL: u64 = 64_000_000_000;
-    /// 插件调试模式（`BEDCODE_PLUGIN_DEBUG=1`）下燃料预算放大倍率
-    ///
-    /// debug profile 的 wasm 产物不做优化，指令数与体积相对 release 成倍膨胀
-    /// （典型 10-30 倍），同一逻辑在 debug 产物下烧燃料更快；若不放大，正常
-    /// 插件调用可能被燃料看门狗误判为失控 trap。取 32 倍覆盖 debug 膨胀上界
-    /// 并留余量；仅 [`plugin_debug_mode`] 为真时生效
-    pub(crate) const FUEL_DEBUG_MULTIPLIER: u64 = 32;
-    /// 单插件线性内存上限（字节）——防失控/恶意插件耗尽宿主内存
-    ///
-    /// 双重身份：既是资源限制器的增长拒绝线，也是 Engine 层
-    /// `memory_reservation` 预留量的估算依据（估算的最大线性内存）：实例化时按此值
-    /// 一次性预留虚拟地址空间，guest 内存增长全程落在预留内（零系统调用、基址不搬移），
-    /// 触及上限前已被 limiter 拒绝。预留只占虚拟地址空间，物理内存仍按实际触碰页提交。
-    /// 两处必须严格一致：预留小于上限会让合法增长退化为搬移路径，
-    /// 大于上限则白白放大 VA 占用
-    pub(crate) const MAX_PLUGIN_MEMORY_BYTES: usize = 256 * 1024 * 1024;
-    /// 单插件表元素上限
-    pub(crate) const MAX_PLUGIN_TABLE_ENTRIES: usize = 1_000_000;
-    /// Wasm 执行栈深度上限（字节）——guest 深度递归超限即确定性栈溢出 trap
-    ///
-    /// 防递归打穿真实线程栈导致进程 abort。宿主函数栈帧不计入此预算但计入真实
-    /// 线程栈，故该值必须显著小于调用方线程栈余量（tokio blocking / std 线程
-    /// 默认 2MiB）。与 wasmtime 默认一致（512KiB），显式钉死防止上游默认漂移
-    pub(crate) const MAX_WASM_STACK_BYTES: usize = 512 * 1024;
-    /// 单 Store 核心实例数上限
-    ///
-    /// 组件实例化会为 wit-component 嵌入的 adapter module 派生额外核心实例
-    /// （正常插件 1-2 个），留余量的同时封顶防滥用；超限实例化直接报错
-    pub(crate) const MAX_PLUGIN_INSTANCES_PER_STORE: usize = 8;
-    /// 单 Store 线性内存数量上限
-    ///
-    /// 每个线性内存独立预留 VA（上限 × ~288MiB 含 guard），多内存声明会线性
-    /// 放大虚拟地址空间占用，WASI preview2 插件正常仅 1 个内存
-    pub(crate) const MAX_PLUGIN_MEMORIES_PER_STORE: usize = 4;
-    /// 单 Store 表数量上限
-    pub(crate) const MAX_PLUGIN_TABLES_PER_STORE: usize = 16;
-    /// WASM 内部调用栈 backtrace 最大帧数
-    ///
-    /// trap（panic/栈溢出/燃料耗尽/内存越界）错误串携带插件内部函数调用链
-    /// （names section 函数名，release 构建即有），随 AppError::Plugin 进
-    /// error.log 与插件 Degraded 状态。wasmtime 47 的 backtrace 在 default
-    /// features 内（零编译成本），显式钉死 32 帧防止上游默认（20 帧）漂移
-    pub(crate) const WASM_BACKTRACE_MAX_FRAMES: u32 = 32;
-}
-
-/// 插件调试模式是否开启（dev 构建下读 `BEDCODE_PLUGIN_DEBUG`，非空即开）
+/// 编译期默认值（转发）：真源在 `bedcode-host-kit`（wasm-core-lib-split 票 03 搬迁）。
 ///
-/// 仅 `cfg!(debug_assertions)` 生效：release 构建忽略该变量（调试产物不会
-/// 出现在 release 场景，见 `scripts/plugin-build.js` 与各插件 `build.js`）。
-/// 调试模式是会话态开关，不新增持久化配置项。
-pub(crate) fn plugin_debug_mode() -> bool {
-    cfg!(debug_assertions)
-        && std::env::var("BEDCODE_PLUGIN_DEBUG")
-            .map(|v| !v.is_empty())
-            .unwrap_or(false)
-}
+/// 可见性由 kit 的 `pub mod` 收窄为 `pub(crate)`，使既有 `config::defaults::X`
+/// 引用路径逐字不变——本仓库无根 workspace，改路径需连带 fixture 与
+/// `EngineConfig` 推导处同步，收益不足以换取一次搬迁噪音。
+pub(crate) use bedcode_host_kit::limits::defaults;
+
+/// 插件调试模式是否开启（转发）：真源在 `bedcode-host-kit`
+/// （wasm-core-lib-split 票 03 搬迁）。见 kit 内 `plugin_debug_mode` 的语义注释。
+pub(crate) use bedcode_host_kit::limits::plugin_debug_mode;
 
 // ==================== 配置结构 ====================
 
@@ -151,100 +90,44 @@ pub struct EngineConfig {
     pub compile_cache: bool,
 }
 
-/// Store 资源上限（单插件维度，实例化时快照注入）
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct StoreLimits {
-    /// 单次导出调用燃料预算（debug 模式按 [`Self::fuel_debug_multiplier`] 放大）
-    pub fuel_per_call: u64,
-    /// 插件调试模式燃料放大倍率
-    pub fuel_debug_multiplier: u64,
-    /// 单插件线性内存上限（字节）
-    pub max_memory_bytes: usize,
-    /// 单插件表元素上限
-    pub max_table_entries: usize,
-    /// Wasm 执行栈深度上限（字节）——Engine 构建参数，此处仅为覆盖快照同构保留
-    pub max_wasm_stack_bytes: usize,
-    /// 单 Store 核心实例数上限
-    pub max_instances: usize,
-    /// 单 Store 线性内存数量上限
-    pub max_memories: usize,
-    /// 单 Store 表数量上限
-    pub max_tables: usize,
-}
+/// Store 资源上限（转发）：真源在 `bedcode-host-kit`（wasm-core-lib-split 票 03 搬迁）。
+///
+/// 为什么整型搬走、覆盖合并留在本模块：上限值对象是**机制**——ResourceLimiter 与
+/// 燃料注入点直接消费它，且它随 `WasmPluginState` 一起住在机制内核里；而
+/// 「把插件 manifest 的资源覆盖请求合并进来」是**配置面**，输入是插件 SDK 的
+/// manifest 类型，机制内核不应认识。
+pub use bedcode_host_kit::limits::StoreLimits;
 
-impl StoreLimits {
-    /// 单次导出调用的燃料预算（debug 模式下按倍率放大）
-    ///
-    /// 所有燃料注入点（实例化 / ABI 协商 / 每次导出调用前）统一走此方法，
-    /// 避免调试模式与非调试模式语义分叉
-    pub(crate) fn fuel_budget(&self) -> u64 {
-        self.fuel_budget_for(plugin_debug_mode())
-    }
-
-    /// 燃料预算的纯逻辑形态：按 `debug_mode` 决定是否应用放大倍率
-    ///
-    /// 独立于 [`plugin_debug_mode`]（环境变量 + 构建形态）以便单测直接覆盖
-    /// 倍率分支，不依赖进程级环境变量（测试并行安全）。
-    ///
-    /// 乘法饱和防溢出（R-03）：放大倍率与燃料预算都是配置可控值，超大组合在
-    /// debug 构建 panic / release 静默回卷会让看门狗预算失真；饱和到 u64::MAX
-    /// 后 wasmtime 侧超限注入会拒绝而非回卷出小预算（伪看门狗）。非法配置本身
-    /// 由 [`CoreConfig::validate`] 的 checked_mul 检查在加载期拒绝。
-    pub(crate) fn fuel_budget_for(&self, debug_mode: bool) -> u64 {
-        if debug_mode {
-            self.fuel_per_call.saturating_mul(self.fuel_debug_multiplier)
-        } else {
-            self.fuel_per_call
-        }
-    }
-
-    /// 应用插件 manifest 的资源覆盖请求：`None` 字段继承内核配置
-    ///
-    /// 仅做「请求合并」+ **钳制到自身配置值**，不做跨上限仲裁——越界请求的最终
-    /// 钳制由安全模块负责（[`crate::wasm_core::security::SecurityFramework::resolve_store_limits`]），
-    /// 保证「谁声明谁合并、谁仲裁谁钳制」的职责边界。`max_wasm_stack_bytes`
-    /// 不在可请求面（Engine 构建期参数，见字段注释），恒继承配置。
-    ///
-    /// **钳制到自身（R-19）**：放宽请求（大于当前配置）被钳回配置值——历史上
-    /// 这里只做合并、钳制全交给 framework 记得调用，任何直接调用方都会拿到
-    /// 超限 StoreLimits（违背 `reservation >= max_memory`）。钳制到 self 后无论
-    /// 谁调用本方法，结果都不会突破当前配置。
-    ///
-    /// **显式 `0` 视为无效覆盖（R-20）**：请求值 0（如 `max_memory_bytes: 0`）
-    /// 不是合法资源限制（实例化期会得到不透明 wasmtime 错误），回落继承配置值
-    /// 并 warn 记录（防静默）；「收紧到 0」没有真实语义，不需要被支持。
-    pub(crate) fn apply_overrides(&self, request: &ResourceOverrides) -> StoreLimits {
-        StoreLimits {
-            fuel_per_call: nonzero_or_inherit("fuel_per_call", request.fuel_per_call, self.fuel_per_call),
-            // debug 放大倍率不在请求面（全局调试开关参数），恒继承配置
-            fuel_debug_multiplier: self.fuel_debug_multiplier,
-            max_memory_bytes: nonzero_or_inherit("max_memory_bytes", request.max_memory_bytes, self.max_memory_bytes),
-            max_table_entries: nonzero_or_inherit(
-                "max_table_entries",
-                request.max_table_entries,
-                self.max_table_entries,
-            ),
-            max_wasm_stack_bytes: self.max_wasm_stack_bytes,
-            max_instances: nonzero_or_inherit("max_instances", request.max_instances, self.max_instances),
-            max_memories: nonzero_or_inherit("max_memories", request.max_memories, self.max_memories),
-            max_tables: nonzero_or_inherit("max_tables", request.max_tables, self.max_tables),
-        }
-    }
-
-    /// 当前配置值内的钳制（逐字段 min）——单插件覆盖的收紧语义：
-    /// 请求可更紧，放宽被钳回
-    pub fn clamped_within(&self, ceiling: &StoreLimits) -> StoreLimits {
-        StoreLimits {
-            fuel_per_call: self.fuel_per_call.min(ceiling.fuel_per_call),
-            fuel_debug_multiplier: self.fuel_debug_multiplier.min(ceiling.fuel_debug_multiplier),
-            max_memory_bytes: self.max_memory_bytes.min(ceiling.max_memory_bytes),
-            max_table_entries: self.max_table_entries.min(ceiling.max_table_entries),
-            max_wasm_stack_bytes: self.max_wasm_stack_bytes.min(ceiling.max_wasm_stack_bytes),
-            max_instances: self.max_instances.min(ceiling.max_instances),
-            max_memories: self.max_memories.min(ceiling.max_memories),
-            max_tables: self.max_tables.min(ceiling.max_tables),
-        }
+/// 应用插件 manifest 的资源覆盖请求：`None` 字段继承内核配置
+///
+/// 仅做「请求合并」+ **钳制到自身配置值**，不做跨上限仲裁——越界请求的最终
+/// 钳制由安全模块负责（[`crate::wasm_core::security::SecurityFramework::resolve_store_limits`]），
+/// 保证「谁声明谁合并、谁仲裁谁钳制」的职责边界。`max_wasm_stack_bytes`
+/// 不在可请求面（Engine 构建期参数，见字段注释），恒继承配置。
+///
+/// **钳制到自身（R-19）**：放宽请求（大于当前配置）被钳回配置值——历史上
+/// 这里只做合并、钳制全交给 framework 记得调用，任何直接调用方都会拿到
+/// 超限 StoreLimits（违背 `reservation >= max_memory`）。钳制到 base 后无论
+/// 谁调用本函数，结果都不会突破当前配置。
+///
+/// **显式 `0` 视为无效覆盖（R-20）**：请求值 0（如 `max_memory_bytes: 0`）
+/// 不是合法资源限制（实例化期会得到不透明 wasmtime 错误），回落继承配置值
+/// 并 warn 记录（防静默）；「收紧到 0」没有真实语义，不需要被支持。
+///
+/// 形态说明：本函数是原 `StoreLimits::apply_overrides` 固有方法的等价物，仅因
+/// `StoreLimits` 已随机制内核搬出本模块（不能再给外来类型写 inherent impl）
+/// 而降为自由函数。调用点：`security::framework::resolve_store_limits` 与本模块单测。
+pub(crate) fn apply_store_overrides(base: &StoreLimits, request: &ResourceOverrides) -> StoreLimits {
+    StoreLimits {
+        fuel_per_call: nonzero_or_inherit("fuel_per_call", request.fuel_per_call, base.fuel_per_call),
+        // debug 放大倍率不在请求面（全局调试开关参数），恒继承配置
+        fuel_debug_multiplier: base.fuel_debug_multiplier,
+        max_memory_bytes: nonzero_or_inherit("max_memory_bytes", request.max_memory_bytes, base.max_memory_bytes),
+        max_table_entries: nonzero_or_inherit("max_table_entries", request.max_table_entries, base.max_table_entries),
+        max_wasm_stack_bytes: base.max_wasm_stack_bytes,
+        max_instances: nonzero_or_inherit("max_instances", request.max_instances, base.max_instances),
+        max_memories: nonzero_or_inherit("max_memories", request.max_memories, base.max_memories),
+        max_tables: nonzero_or_inherit("max_tables", request.max_tables, base.max_tables),
     }
 }
 
@@ -284,21 +167,6 @@ impl Default for EngineConfig {
             wasm_backtrace_max_frames: defaults::WASM_BACKTRACE_MAX_FRAMES,
             memory_reservation_bytes: defaults::MAX_PLUGIN_MEMORY_BYTES as u64,
             compile_cache: true,
-        }
-    }
-}
-
-impl Default for StoreLimits {
-    fn default() -> Self {
-        Self {
-            fuel_per_call: defaults::FUEL_PER_CALL,
-            fuel_debug_multiplier: defaults::FUEL_DEBUG_MULTIPLIER,
-            max_memory_bytes: defaults::MAX_PLUGIN_MEMORY_BYTES,
-            max_table_entries: defaults::MAX_PLUGIN_TABLE_ENTRIES,
-            max_wasm_stack_bytes: defaults::MAX_WASM_STACK_BYTES,
-            max_instances: defaults::MAX_PLUGIN_INSTANCES_PER_STORE,
-            max_memories: defaults::MAX_PLUGIN_MEMORIES_PER_STORE,
-            max_tables: defaults::MAX_PLUGIN_TABLES_PER_STORE,
         }
     }
 }
@@ -346,10 +214,13 @@ impl CoreConfig {
         }
         // R-03：fuel × 倍率的乘积必须不溢出——debug 模式下 `fuel_budget_for`
         // 会饱和，但配置面不该把「超产品预算」放进来（加载期就拒掉）
-        if self.store.fuel_per_call.checked_mul(self.store.fuel_debug_multiplier).is_none() {
-            return Err(
-                "store.fuel_per_call × fuel_debug_multiplier 溢出 u64（debug 模式预算无法表示）".to_string(),
-            );
+        if self
+            .store
+            .fuel_per_call
+            .checked_mul(self.store.fuel_debug_multiplier)
+            .is_none()
+        {
+            return Err("store.fuel_per_call × fuel_debug_multiplier 溢出 u64（debug 模式预算无法表示）".to_string());
         }
         if self.store.max_memory_bytes == 0 {
             return Err("store.max_memory_bytes 必须 > 0".to_string());
@@ -419,10 +290,7 @@ mod tests {
 
         std::fs::write(&path, r#"{"call_model":"nope"}"#).unwrap();
         let err = CoreConfig::load_from(&path).expect_err("未知取值必须报错");
-        assert!(
-            format!("{err}").contains("wasm-core.json"),
-            "错误须带文件路径: {err}"
-        );
+        assert!(format!("{err}").contains("wasm-core.json"), "错误须带文件路径: {err}");
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -504,7 +372,7 @@ mod tests {
             fuel_per_call: Some(42),
             ..ResourceOverrides::default()
         };
-        let merged = cfg.apply_overrides(&request);
+        let merged = apply_store_overrides(&cfg, &request);
         assert_eq!(merged.max_memory_bytes, 1024, "请求字段须生效");
         assert_eq!(merged.fuel_per_call, 42);
         assert_eq!(merged.max_tables, cfg.max_tables, "未请求字段须继承配置");
@@ -574,7 +442,7 @@ mod tests {
             max_tables: Some(cfg.max_tables * 2),
             ..ResourceOverrides::default()
         };
-        let merged = cfg.apply_overrides(&relaxed);
+        let merged = apply_store_overrides(&cfg, &relaxed);
         assert_eq!(merged.max_memory_bytes, cfg.max_memory_bytes, "放宽请求须被钳回配置值");
         assert_eq!(merged.fuel_per_call, cfg.fuel_per_call);
         assert_eq!(merged.max_tables, cfg.max_tables);
@@ -583,7 +451,11 @@ mod tests {
             max_memory_bytes: Some(1024),
             ..ResourceOverrides::default()
         };
-        assert_eq!(cfg.apply_overrides(&tightened).max_memory_bytes, 1024, "收紧请求须保留");
+        assert_eq!(
+            apply_store_overrides(&cfg, &tightened).max_memory_bytes,
+            1024,
+            "收紧请求须保留"
+        );
     }
 
     /// R-20：显式 `Some(0)` 不是合法资源限制，回落继承配置值（防实例化期不透明
@@ -597,7 +469,7 @@ mod tests {
             max_tables: Some(0),
             ..ResourceOverrides::default()
         };
-        let merged = cfg.apply_overrides(&zeros);
+        let merged = apply_store_overrides(&cfg, &zeros);
         assert_eq!(merged.max_memory_bytes, cfg.max_memory_bytes, "Some(0) 必须继承配置值");
         assert_eq!(merged.fuel_per_call, cfg.fuel_per_call);
         assert_eq!(merged.max_tables, cfg.max_tables);

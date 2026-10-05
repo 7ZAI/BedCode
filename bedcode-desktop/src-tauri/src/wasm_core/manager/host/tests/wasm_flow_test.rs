@@ -305,7 +305,9 @@ fn retired_kernel_session_domain_is_not_reintroduced() {
         if rel.ends_with("wasm_flow_test.rs") || rel.ends_with("sync_handler.rs") {
             continue;
         }
-        let Ok(content) = std::fs::read_to_string(&path) else { continue };
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            continue;
+        };
         for (idx, raw_line) in content.lines().enumerate() {
             let line = raw_line.trim_start();
             if line.starts_with("//") || line.starts_with("///") {
@@ -342,7 +344,8 @@ fn retired_kernel_session_domain_is_not_reintroduced() {
 ///
 /// 与票 11 的锁同理：只扫**非注释行**（模块头「为什么删」的说明段落是记账），
 /// 且跳过锁自身。fail-visible 双保险之一——另一保险是 `send-files` 载荷
-/// `concurrency` 字段检测（host_api/peer.rs，行为级）。
+/// `concurrency` 字段检测（wasm-core-lib-split 票 05 起在
+/// `bedcode-server-peer-net::plugin_binding`，行为级）。
 #[test]
 fn retired_peer_transfer_orchestration_is_not_reintroduced() {
     let mut violations: Vec<String> = Vec::new();
@@ -371,7 +374,9 @@ fn retired_peer_transfer_orchestration_is_not_reintroduced() {
         if rel.ends_with("wasm_flow_test.rs") {
             continue;
         }
-        let Ok(content) = std::fs::read_to_string(&path) else { continue };
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            continue;
+        };
         for (idx, raw_line) in content.lines().enumerate() {
             let line = raw_line.trim_start();
             if line.starts_with("//") || line.starts_with("///") {
@@ -421,7 +426,9 @@ fn retired_session_observation_surface_is_not_reintroduced() {
         if rel.ends_with("wasm_flow_test.rs") {
             continue;
         }
-        let Ok(content) = std::fs::read_to_string(&path) else { continue };
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            continue;
+        };
         for (idx, raw_line) in content.lines().enumerate() {
             let line = raw_line.trim_start();
             if line.starts_with("//") {
@@ -484,7 +491,9 @@ fn retired_auth_center_discovery_is_not_reintroduced() {
             if path.extension().and_then(|e| e.to_str()) != Some("rs") {
                 continue;
             }
-            let Ok(content) = std::fs::read_to_string(&path) else { continue };
+            let Ok(content) = std::fs::read_to_string(&path) else {
+                continue;
+            };
             // 本文件是锁自身，跳过（避免自匹配）
             if path.ends_with("wasm_flow_test.rs") {
                 continue;

@@ -220,9 +220,8 @@ async fn declared_ws_endpoint_follows_activation_lifecycle() {
     let plugin_id = "com.test.ws-endpoint-lifecycle";
     let mut plugin = make_plugin(plugin_id, PluginSource::FileScan, PluginState::Loaded);
     plugin.manifest.permissions.push("ws:server".to_string());
-    plugin.manifest.contributes.ws_endpoints = vec![bedcode_plugin_api::WsEndpointContribution::Path(
-        "echo".to_string(),
-    )];
+    plugin.manifest.contributes.ws_endpoints =
+        vec![bedcode_plugin_api::WsEndpointContribution::Path("echo".to_string())];
     host.plugins.write().await.insert(plugin_id.to_string(), plugin);
 
     let mount = bedcode_server_websocket::endpoint::mount_path(plugin_id, "echo");

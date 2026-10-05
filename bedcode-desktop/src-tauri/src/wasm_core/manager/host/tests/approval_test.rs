@@ -1,7 +1,7 @@
 //! 审批门禁（ADR 0020 / 审计票 03）用例。
 
-use super::*;
 use super::scaffold::*;
+use super::*;
 
 // ==================== 审批门禁（ADR 0020 / 审计票 03） ====================
 
@@ -152,7 +152,9 @@ async fn runtime_private_db_does_not_invalidate_approval() {
     host.activate_plugin(id, false).await.expect("首次激活");
     std::fs::write(tmp.path().join("plugin.db"), b"SQLite format 3").unwrap();
     host.deactivate_plugin(id, false).await.expect("停用");
-    host.activate_plugin(id, false).await.expect("再次激活不得被误判为内容被替换");
+    host.activate_plugin(id, false)
+        .await
+        .expect("再次激活不得被误判为内容被替换");
 }
 
 /// 信任分档：随包来源（内置 WASM / 文件扫描 / 静态注册）免审批
@@ -174,10 +176,10 @@ async fn builtin_source_skips_approval_gate() {
 async fn approve_rejects_trusted_source() {
     let host = setup_host().await;
     let id = "com.bedcode.test-builtin-approve";
-    host.plugins
-        .write()
-        .await
-        .insert(id.to_string(), make_plugin(id, PluginSource::FileScan, PluginState::Loaded));
+    host.plugins.write().await.insert(
+        id.to_string(),
+        make_plugin(id, PluginSource::FileScan, PluginState::Loaded),
+    );
 
     let err = host.approve_plugin(id).await.unwrap_err();
     assert!(err.to_string().contains("approval is not required"), "实际: {err}");

@@ -28,17 +28,17 @@ mod tests {
     }
 
     fn read(path: &Path) -> String {
-        fs::read_to_string(path)
-            .unwrap_or_else(|e| panic!("{} 不可读: {e}（生成物缺失？重跑 SDK 的 pnpm run gen:permissions）", path.display()))
+        fs::read_to_string(path).unwrap_or_else(|e| {
+            panic!(
+                "{} 不可读: {e}（生成物缺失？重跑 SDK 的 pnpm run gen:permissions）",
+                path.display()
+            )
+        })
     }
 
     /// 取一行里所有单引号包裹的字面量（生成物为手写排版，无需处理转义）
     fn quoted_literals(line: &str) -> Vec<String> {
-        line.split('\'')
-            .skip(1)
-            .step_by(2)
-            .map(|s| s.to_string())
-            .collect()
+        line.split('\'').skip(1).step_by(2).map(|s| s.to_string()).collect()
     }
 
     /// 剥掉纯注释行（整行 `//` / `*` / `/*` 前缀，R-12/R-14）
@@ -51,10 +51,7 @@ mod tests {
         text.lines()
             .filter(|line| {
                 let t = line.trim_start();
-                !(t.starts_with("//")
-                    || t.starts_with("/*")
-                    || t.starts_with("*/")
-                    || t.starts_with("*"))
+                !(t.starts_with("//") || t.starts_with("/*") || t.starts_with("*/") || t.starts_with("*"))
             })
             .collect::<Vec<_>>()
             .join("\n")
@@ -155,12 +152,7 @@ mod tests {
     fn sdk_api_map() -> BTreeMap<String, Vec<String>> {
         PERMISSION_API_MAP
             .iter()
-            .map(|(perm, apis)| {
-                (
-                    (*perm).to_string(),
-                    apis.iter().map(|a| (*a).to_string()).collect(),
-                )
-            })
+            .map(|(perm, apis)| ((*perm).to_string(), apis.iter().map(|a| (*a).to_string()).collect()))
             .collect()
     }
 
@@ -235,14 +227,8 @@ mod tests {
         for perm in VALID_PERMISSIONS {
             sdk_api.entry((*perm).to_string()).or_default();
         }
-        assert_eq!(
-            ts_api, sdk_api,
-            "前端生成物的 PERMISSION_API_MAP 与 SDK 真源不一致"
-        );
-        assert_eq!(
-            json_api, sdk_api,
-            "CLI 生成物的 PERMISSION_API_MAP 与 SDK 真源不一致"
-        );
+        assert_eq!(ts_api, sdk_api, "前端生成物的 PERMISSION_API_MAP 与 SDK 真源不一致");
+        assert_eq!(json_api, sdk_api, "CLI 生成物的 PERMISSION_API_MAP 与 SDK 真源不一致");
     }
 
     /// 漂移锁②：两份生成物自称生成物，且宿主前端确实 import 生成物（不再手抄清单）
@@ -252,10 +238,7 @@ mod tests {
         let ts = read(&root.join("src/plugin/permission-vocabulary.ts"));
         let json = read(&root.join("packages/plugin-sdk-desktop/bin/permission-vocabulary.json"));
         assert!(ts.contains("生成物，勿手改"), "前端生成物缺少生成物标注");
-        assert!(
-            json.contains("生成物，勿手改"),
-            "CLI 生成物缺少生成物标注"
-        );
+        assert!(json.contains("生成物，勿手改"), "CLI 生成物缺少生成物标注");
 
         let frontend = read(&root.join("src/plugin/permission.ts"));
         assert!(

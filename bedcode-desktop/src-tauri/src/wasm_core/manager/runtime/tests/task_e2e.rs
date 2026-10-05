@@ -25,7 +25,8 @@ fn task_e2e_registry_guard() -> std::sync::MutexGuard<'static, ()> {
 /// 放行，已随票 07 退役。这里改走生产同款：`fs_granted_paths` 前缀记录。
 fn seed_fs_grant(ctx: &crate::wasm_core::manager::runtime::WasmHostContext, plugin_id: &str, dir: &std::path::Path) {
     crate::wasm_core::runtime_util::block_on_async(
-        ctx.fs_auth().seed_legacy_granted_path(plugin_id, &dir.to_string_lossy()),
+        ctx.fs_auth()
+            .seed_legacy_granted_path(plugin_id, &dir.to_string_lossy()),
     )
     .expect("seed fs_granted_paths 记录");
 }
@@ -291,11 +292,7 @@ fn test_task_dual_gate_domain_permission_denied() {
             .instantiate_component(&component, &task_fixture_plugin_id(), host_ctx.clone(), &[], None)
             .expect("instantiate task fixture");
         // 只授 task:run（不授 fs:read / process:run）
-        crate::wasm_core::host_api::tests::grant_permissions(
-            &host_ctx,
-            &task_fixture_plugin_id(),
-            &["task:run"],
-        );
+        crate::wasm_core::host_api::tests::grant_permissions(&host_ctx, &task_fixture_plugin_id(), &["task:run"]);
         let tmp = std::env::temp_dir().join(format!("bedcode_task_dual_{}", std::process::id()));
         std::fs::write(&tmp, b"x").expect("write temp file");
         let plan = serde_json::json!({
@@ -358,8 +355,7 @@ fn test_task_execute_batch_empty_units_rejected() {
     let (_, host_ctx) = setup_wasm_runtime();
     let plugin = task_fixture_plugin_id();
     crate::wasm_core::host_api::tests::grant_permissions(&host_ctx, &plugin, &["task:run"]);
-    let err =
-        crate::wasm_core::host_api::task::execute_batch(&host_ctx, &plugin, r#"{"units":[]}"#).unwrap_err();
+    let err = crate::wasm_core::host_api::task::execute_batch(&host_ctx, &plugin, r#"{"units":[]}"#).unwrap_err();
     assert!(err.contains("no units"), "got: {err}");
 }
 
@@ -372,11 +368,7 @@ fn test_task_execute_batch_unknown_kind_fails_in_that_unit_only() {
     let _task_e2e_guard = task_e2e_registry_guard();
     let (_, host_ctx) = setup_wasm_runtime();
     let plugin = task_fixture_plugin_id();
-    crate::wasm_core::host_api::tests::grant_permissions(
-        &host_ctx,
-        &plugin,
-        &["task:run", "fs:read"],
-    );
+    crate::wasm_core::host_api::tests::grant_permissions(&host_ctx, &plugin, &["task:run", "fs:read"]);
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path().join("task-unknown-kind");
     std::fs::create_dir_all(&root).expect("create root");
@@ -403,6 +395,10 @@ fn test_task_execute_batch_unknown_kind_fails_in_that_unit_only() {
         results[0]["error"]
     );
     assert_eq!(results[1]["id"], "ok");
-    assert_eq!(results[1]["ok"], true, "已授权 fs.exists 单元应成功: {:?}", results[1]["error"]);
+    assert_eq!(
+        results[1]["ok"], true,
+        "已授权 fs.exists 单元应成功: {:?}",
+        results[1]["error"]
+    );
     std::fs::remove_file(&tmp).ok();
 }

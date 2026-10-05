@@ -4,8 +4,8 @@
 //! （`PluginServices::install_cli/uninstall_cli` 经 PluginHost 实现，
 //! 见 plugin/host/app_cli.rs）。插件只声明权限并传 file_name/bin_dir。
 
-use crate::wasm_core::runtime_util::block_on_async;
 use crate::wasm_core::permission::PERMISSION_APP_CLI;
+use crate::wasm_core::runtime_util::block_on_async;
 
 /// 安装 CLI（权限 + 载荷解析 + 宿主服务执行），返回 bin 目录绝对路径
 ///
@@ -13,7 +13,10 @@ use crate::wasm_core::permission::PERMISSION_APP_CLI;
 /// "bedtask"（Windows 自动补 .exe）；bin_dir 为空用平台默认。
 pub(crate) fn install_cli(
     svc: &dyn crate::wasm_core::host_api::context::ServicesScope,
-    perm: &dyn crate::wasm_core::host_api::context::PermissionScope, plugin_id: &str, payload_json: &str) -> Result<String, String> {
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
+    plugin_id: &str,
+    payload_json: &str,
+) -> Result<String, String> {
     if !super::check_permission(perm, plugin_id, PERMISSION_APP_CLI, "host_app_install_cli") {
         return Err("permission denied".to_string());
     }
@@ -30,15 +33,17 @@ pub(crate) fn install_cli(
         .unwrap_or("")
         .to_string();
 
-    let services =
-        block_on_async(svc.services()).ok_or_else(|| "app error: host services unavailable".to_string())?;
+    let services = block_on_async(svc.services()).ok_or_else(|| "app error: host services unavailable".to_string())?;
     block_on_async(services.install_cli(plugin_id.to_string(), file_name, bin_dir))
 }
 
 /// 卸载 CLI（权限 + 载荷解析 + 宿主服务执行）
 pub(crate) fn uninstall_cli(
     svc: &dyn crate::wasm_core::host_api::context::ServicesScope,
-    perm: &dyn crate::wasm_core::host_api::context::PermissionScope, plugin_id: &str, payload_json: &str) -> Result<(), String> {
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
+    plugin_id: &str,
+    payload_json: &str,
+) -> Result<(), String> {
     if !super::check_permission(perm, plugin_id, PERMISSION_APP_CLI, "host_app_uninstall_cli") {
         return Err("permission denied".to_string());
     }
@@ -55,8 +60,7 @@ pub(crate) fn uninstall_cli(
         .unwrap_or("")
         .to_string();
 
-    let services =
-        block_on_async(svc.services()).ok_or_else(|| "app error: host services unavailable".to_string())?;
+    let services = block_on_async(svc.services()).ok_or_else(|| "app error: host services unavailable".to_string())?;
     block_on_async(services.uninstall_cli(plugin_id.to_string(), file_name, bin_dir))
 }
 
@@ -65,9 +69,11 @@ pub(crate) fn uninstall_cli(
 /// 会话创建编排移交插件后（session-engine-downsink P1-b）宿主不再产生 `Creating`
 /// 生命周期事件，本原语成为插件取自身资源目录的唯一途径（Agent 集成 hook 脚本源
 /// 位于该目录）。未加载的插件 / 服务不可用 → `Err`（不静默返回空串）。
-pub(crate) fn plugin_resource_dir(svc: &dyn crate::wasm_core::host_api::context::ServicesScope, plugin_id: &str) -> Result<String, String> {
-    let services =
-        block_on_async(svc.services()).ok_or_else(|| "app error: host services unavailable".to_string())?;
+pub(crate) fn plugin_resource_dir(
+    svc: &dyn crate::wasm_core::host_api::context::ServicesScope,
+    plugin_id: &str,
+) -> Result<String, String> {
+    let services = block_on_async(svc.services()).ok_or_else(|| "app error: host services unavailable".to_string())?;
     block_on_async(services.plugin_resource_dir(plugin_id.to_string()))
 }
 
@@ -117,10 +123,7 @@ mod tests {
     async fn plugin_resource_dir_has_no_permission_gate() {
         let ctx = build_host_ctx();
         let err = plugin_resource_dir(ctx.as_ref(), PLUGIN).unwrap_err();
-        assert!(
-            !err.contains("permission denied"),
-            "资源目录不得设权限门，got: {err}"
-        );
+        assert!(!err.contains("permission denied"), "资源目录不得设权限门，got: {err}");
         assert!(err.contains("services unavailable"), "got: {}", err);
     }
 }

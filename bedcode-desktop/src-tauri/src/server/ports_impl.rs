@@ -9,21 +9,20 @@
 //! `endpoint_owner_activated` 的保守行为逐字对齐（fail-closed 优先，绝不把
 //! 请求交给不存在的插件 / 中心）。
 
-use bedcode_server_base::config::NetworkConfig;
-use bedcode_server_base::identity::AuthenticatedIdentity;
-use bedcode_server_base::ports::{
-    AuthCenter, BusMessageHandler, BusPort, ConfigPort, EventSink, MdnsAdvertiserPort, MdnsPort,
-    PathsPort, PluginInvoker, PowerPort, RuntimePort, ServerLifecycleEvent, ServerLifecyclePort,
-    ServerPorts, SystemInfoPort,
-};
 use crate::system::app_context::AppContext;
 use crate::system::constants::TXT_KEY_DEVICE_NAME;
 use crate::AppError;
 use crate::Result;
 use async_trait::async_trait;
+use bedcode_server_base::config::NetworkConfig;
+use bedcode_server_base::identity::AuthenticatedIdentity;
+use bedcode_server_base::ports::{
+    AuthCenter, BusMessageHandler, BusPort, ConfigPort, EventSink, MdnsAdvertiserPort, MdnsPort, PathsPort,
+    PluginInvoker, PowerPort, RuntimePort, ServerLifecycleEvent, ServerLifecyclePort, ServerPorts, SystemInfoPort,
+};
 use std::path::PathBuf;
-use tauri::{Emitter, Manager};
 use std::sync::Arc;
+use tauri::{Emitter, Manager};
 
 // ==================== PluginInvoker ====================
 
@@ -68,10 +67,7 @@ impl PluginInvoker for HostPluginInvoker {
 pub struct HostAuthCenter;
 
 impl AuthCenter for HostAuthCenter {
-    fn enforce_connection_policy(
-        &self,
-        token: &str,
-    ) -> std::result::Result<AuthenticatedIdentity, String> {
+    fn enforce_connection_policy(&self, token: &str) -> std::result::Result<AuthenticatedIdentity, String> {
         let Some(ctx) = AppContext::try_global() else {
             return Err("auth center unavailable: no runtime context".to_string());
         };
@@ -81,14 +77,20 @@ impl AuthCenter for HostAuthCenter {
 
 // ==================== BusPort ====================
 
-/// 插件消息总线 + WS 帧投递（`wasm_core::bus::MessageBus` + `deliver_endpoint_frame` 包装）
+/// 插件消息总线 + WS 帧投递（`wasm_core::bus::MessageBus` + 能力域 `deliver_endpoint_frame` 包装）
 pub struct HostBusPort {
     bus: Arc<crate::wasm_core::bus::MessageBus>,
+    /// 帧投递用的能力域端口视图（**构造一次**、不逐帧分配）：能力域的帧投递函数
+    /// 收 `&Arc<dyn WsPorts>`，故此处持一份绑定到本总线的窄端口（无权限管理器）。
+    ws_ports: Arc<dyn bedcode_server_websocket::plugin_binding::ports::WsPorts>,
 }
 
 impl HostBusPort {
     pub fn new(bus: Arc<crate::wasm_core::bus::MessageBus>) -> Self {
-        Self { bus }
+        Self {
+            ws_ports: Arc::new(crate::wasm_core::host_api::ws::HostWsPorts::from_bus(bus.clone())),
+            bus,
+        }
     }
 }
 
@@ -112,12 +114,7 @@ impl BusPort for HostBusPort {
         self.bus.publish_binary(topic, sender, payload);
     }
 
-    async fn subscribe_static(
-        &self,
-        subscriber: &str,
-        topic: &str,
-        handler: Box<dyn BusMessageHandler>,
-    ) {
+    async fn subscribe_static(&self, subscriber: &str, topic: &str, handler: Box<dyn BusMessageHandler>) {
         self.bus
             .subscribe_static(subscriber, topic, Box::new(WasmHandlerAdapter(handler)))
             .await;
@@ -131,8 +128,9 @@ impl BusPort for HostBusPort {
         kind: &str,
         payload: Vec<u8>,
     ) {
-        crate::wasm_core::host_api::ws::deliver_endpoint_frame(
-            &self.bus,
+        // 能力域已迁入 `bedcode_server_websocket::plugin_binding`（wasm-core-lib-split 票 04）
+        bedcode_server_websocket::plugin_binding::deliver_endpoint_frame(
+            &self.ws_ports,
             owner,
             endpoint_id,
             client_id,
@@ -170,7 +168,9 @@ pub struct HostPathsPort;
 impl PathsPort for HostPathsPort {
     fn app_data_dir(&self) -> Result<PathBuf> {
         let Some(handle) = app_handle() else {
-            return Err(AppError::Internal("resolve app data dir failed: no runtime context".to_string()));
+            return Err(AppError::Internal(
+                "resolve app data dir failed: no runtime context".to_string(),
+            ));
         };
         handle
             .path()
@@ -180,7 +180,9 @@ impl PathsPort for HostPathsPort {
 
     fn download_dir(&self) -> Result<PathBuf> {
         let Some(handle) = app_handle() else {
-            return Err(AppError::Internal("resolve downloads dir failed: no runtime context".to_string()));
+            return Err(AppError::Internal(
+                "resolve downloads dir failed: no runtime context".to_string(),
+            ));
         };
         handle
             .path()
@@ -237,14 +239,8 @@ impl PowerPort for HostPowerPort {
 pub struct HostMdnsAdvertiserPort;
 
 impl MdnsAdvertiserPort for HostMdnsAdvertiserPort {
-    fn advertise(
-        &self,
-        service_name: String,
-        port: u16,
-        txt_records: std::collections::HashMap<String, String>,
-    ) {
-        let Some(advertiser) = AppContext::try_global().map(|ctx| ctx.mdns_advertiser().clone())
-        else {
+    fn advertise(&self, service_name: String, port: u16, txt_records: std::collections::HashMap<String, String>) {
+        let Some(advertiser) = AppContext::try_global().map(|ctx| ctx.mdns_advertiser().clone()) else {
             return;
         };
         tokio::spawn(async move {
@@ -261,8 +257,7 @@ impl MdnsAdvertiserPort for HostMdnsAdvertiserPort {
     }
 
     fn stop(&self) {
-        let Some(advertiser) = AppContext::try_global().map(|ctx| ctx.mdns_advertiser().clone())
-        else {
+        let Some(advertiser) = AppContext::try_global().map(|ctx| ctx.mdns_advertiser().clone()) else {
             return;
         };
         tokio::spawn(async move {
@@ -330,24 +325,28 @@ impl ConfigPort for HostConfigPort {
 
 // ==================== MdnsPort ====================
 
-/// peer-net 发现守护接入（`wasm_core::host_api::mdns` 三函数包装）
+/// peer-net 发现守护接入（`bedcode-discovery-engine` 三函数包装）
+///
+/// **方向倒置已终结**（wasm-core-lib-split 票 03）：改造前三函数取自
+/// `wasm_core::host_api::mdns`——即宿主 server 的端口层依赖 wasm_core 的**插件
+/// 绑定模块**（ADR 0022 裁剪线要消除的方向）。现在直接依赖平台无关引擎 crate。
 pub struct HostMdnsPort;
 
 impl MdnsPort for HostMdnsPort {
     fn shared_daemon(&self) -> mdns_sd::ServiceDaemon {
-        crate::wasm_core::host_api::mdns::shared_daemon()
+        bedcode_discovery_engine::engine::shared_daemon()
     }
 
-    fn register_host_service(
-        &self,
-        service_type: &str,
-        fullname: &str,
-    ) -> std::result::Result<String, String> {
-        crate::wasm_core::host_api::mdns::register_host_service(service_type, fullname)
+    fn register_host_service(&self, service_type: &str, fullname: &str) -> std::result::Result<String, String> {
+        bedcode_discovery_engine::engine::register_host_service(
+            &bedcode_discovery_engine::ports::ports(),
+            service_type,
+            fullname,
+        )
     }
 
     fn stop_host_service(&self, advertise_id: &str) -> std::result::Result<bool, String> {
-        crate::wasm_core::host_api::mdns::stop_host_service(advertise_id)
+        bedcode_discovery_engine::engine::stop_host_service(advertise_id)
     }
 }
 

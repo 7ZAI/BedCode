@@ -1,25 +1,163 @@
-//! HTTP 代理域宿主实现（宿主代发请求，支持 SSE 流式推流）
+//! host-http 宿主侧适配器（能力域已迁出本模块）
+//!
+//! **本文件只剩四样东西**，原 1,161 行的 http 实现（入站 2 条 + 出站 1 条原语）
+//! 已整体迁入 `bedcode_server_http::plugin_binding`（wasm-core-lib-split 票 06：
+//! 入站与出站是同一 crate 里的两个模块——出站只有 1 条原语、独立 crate 过薄，
+//! 见 spec §7 D10）：
+//!
+//! 1. [`HostHttpPorts`] —— 能力域端口的宿主实现；
+//! 2. [`install`] —— 开机期装配端口（供 PluginHost 装配链调用）；
+//! 3. [`HttpUnitExecutor`] —— 任务单元执行器（**注册点留宿主**：它注册进留 core 的
+//!    任务引擎；执行体本身在能力域）；
+//! 4. 停用回收转发 —— 插件停用时 [`purge_for_plugin`] 只碰本人。
+//!
+//! ## 哪些机制**刻意留在宿主**（票 06 验收项）
+//!
+//! - **出站授权闸门整条链**（授权记录库 / 档位策略 / 弹窗询问面）：安全闸门属宿主
+//!   允许的四类薄壳之一，且闸门不应可插拔 ⇒ 能力域只经
+//!   [`HttpPorts::authorize_outbound`] 消费三态结果；
+//! - **声明门**（`network:http`）：复用既有 `host_api::check_permission`，同一份
+//!   PermissionManager、同一条拒绝 warn 路径；
+//! - **任务引擎与执行器注册表**：任务引擎留 core，执行器只提供「kind → 域函数」的
+//!   转发（params 原样透传，见 `manager::task`）。
+//!
+//! ## 出站闸门为什么在本文件里驱动异步（而不是给能力域一个 future）
+//!
+//! 授权 future 由宿主造（它才认得授权检查器），能力域造不出来；而 guest 侧的
+//! `host-http.fetch` 是**同步**函数。端口方法因此是同步的：宿主内部用那份唯一的
+//! 同步↔异步桥驱动完再交结果（桥的实现在 `runtime_util`，ambient runtime 与
+//! actix `current_thread` 自锁规避都是实测产物，能力域不得复制第二份）。
 
-use crate::system::constants::{
-    PLUGIN_HTTP_CONNECT_TIMEOUT_SECS, PLUGIN_HTTP_RESPONSE_BODY_LIMIT_BYTES, PLUGIN_HTTP_TIMEOUT_SECS,
-};
+use std::any::Any;
+use std::sync::Arc;
+
+use bedcode_server_http::plugin_binding::egress;
+use bedcode_server_http::plugin_binding::ports::{BoxedBlocked, HttpEventSink, HttpPorts, OutboundAuth};
+
 use crate::wasm_core::host_api::context::WasmHostContext;
 use crate::wasm_core::host_api::unit_executor::UnitExecutor;
-use crate::wasm_core::permission::PERMISSION_NETWORK_HTTP;
-use crate::wasm_core::runtime_util::block_on_async;
-use bedcode_plugin_api::EndpointAuth;
-use futures_util::StreamExt;
-use serde::Deserialize;
-use std::sync::{Arc, LazyLock};
-use std::time::Duration;
-use tauri::Emitter;
 
-// ==================== 任务单元执行器（C4：core-task 经注册表分发到域实现） ====================
+/// 停用回收的再导出（插件停用时由 `PluginHost` 调用；只碰本人）
+///
+/// 实现与端点注册表都在能力域（服务端域注册表本就是本传输面 crate 的既有资产），
+/// 宿主这一侧只保留调用路径（与 `ws::purge_for_plugin` 同形）。
+pub use bedcode_server_http::plugin_binding::purge_for_plugin;
+
+/// 能力模块名（必须与 `bedcode_server_http::plugin_binding::DESC.name` 逐字一致）
+///
+/// 它同时是 `component.rs` 里 `HOST_MODULES` 白名单的键——两者不同即红。
+pub const HOST_MODULE_NAME: &str = "http";
+
+/// 端口的宿主实现
+///
+/// 生产路径在**开机期**捕获 `Arc<WasmHostContext>`（`PluginHost::new` 已建好），
+/// 之后每条原语零查表地取权限门 / 出站授权 / 事件通道。
+pub struct HostHttpPorts {
+    /// 宿主上下文（权限门、出站授权检查器、AppHandle 三者都在它身上）
+    ctx: Arc<WasmHostContext>,
+}
+
+impl HostHttpPorts {
+    /// 端口（生产）：从宿主上下文取权限管理器、出站授权检查器与 `AppHandle`
+    pub fn from_ctx(ctx: Arc<WasmHostContext>) -> Self {
+        Self { ctx }
+    }
+}
+
+impl HttpPorts for HostHttpPorts {
+    fn check_permission(&self, plugin_id: &str, permission: &str, api: &str) -> bool {
+        // 权限门留宿主（AGENTS §5.1.3 四类薄壳之「安全闸门」——闸门不应可插拔）。
+        // 复用既有 `host_api::check_permission`：同一份 PermissionManager、同一条
+        // 拒绝 warn 路径（AGENTS §8 结构化字段），不另起一套判定。
+        super::check_permission(self.ctx.as_ref(), plugin_id, permission, api)
+    }
+
+    fn authorize_outbound(&self, plugin_id: &str, url: &str, may_prompt: bool) -> OutboundAuth {
+        // 出站授权闸门整条链留宿主（票 06）。`may_prompt = false` 走「只认记录、
+        // 绝不弹窗」那一支——弹窗会占住任务池槽位最短 30s，且用户在错误的时机
+        // 看到问题（与 fs 任务单元同款约束）。
+        let checker = self.ctx.net_auth();
+        let verdict = crate::wasm_core::runtime_util::block_on_async(async {
+            if may_prompt {
+                checker.authorize_outbound(plugin_id, url).await
+            } else {
+                checker.authorize_outbound_quiet(plugin_id, url).await
+            }
+        });
+        match verdict {
+            // origin 是归一化后的 origin（不含 path / query，AGENTS §8 凭据红线）
+            Ok(verdict) if verdict.is_allowed() => OutboundAuth::Allowed {
+                origin: verdict.origin().to_string(),
+            },
+            Ok(verdict) => OutboundAuth::Denied {
+                reason: verdict.reason().to_string(),
+                origin: verdict.origin().to_string(),
+            },
+            Err(e) => OutboundAuth::CheckFailed(e.to_string()),
+        }
+    }
+
+    fn event_sink(&self) -> Option<Arc<dyn HttpEventSink>> {
+        // 「缺席」与「投递失败」是两件事（能力域据此对无头流式请求显性报错），
+        // 故这里返回 `None` 而不是给一个静默丢弃的 sink。
+        let handle = self.ctx.app_handle()?;
+        Some(Arc::new(AppHandleEventSink {
+            handle: Arc::new(handle.clone()),
+        }))
+    }
+
+    fn block_on_any(&self, fut: BoxedBlocked) -> Box<dyn Any + Send> {
+        // 复用宿主那份唯一的同步↔异步桥（ambient runtime + actix current_thread
+        // 自锁规避都是实测产物，能力域不得复制第二份，见 ports 模块文档）
+        crate::wasm_core::runtime_util::block_on_async(fut)
+    }
+}
+
+/// 前端事件投递（`AppHandle::emit` 包装）
+///
+/// 失败语义与迁移前一致：流式路径逐 chunk emit 不上抛（一次投递失败不应中断整个
+/// 响应），故此处按迁移前的 `let _ =` 处置。
+struct AppHandleEventSink {
+    handle: Arc<tauri::AppHandle>,
+}
+
+impl HttpEventSink for AppHandleEventSink {
+    fn emit(&self, event: &str, payload: serde_json::Value) {
+        use tauri::Emitter;
+        let _ = self.handle.emit(event, payload);
+    }
+}
+
+/// 开机期装配能力域端口（幂等：重复装配被忽略，见 `install_ports`）
+///
+/// **两处登记**（各登一份等价对象，行为一致）：
+/// - **进程级** [`bedcode_server_http::plugin_binding::install_ports`]：供插件实例
+///   之外的非实例路径（停用回收转发）使用；
+/// - **实例级** [`WasmHostContext::set_domain_ports`]：供插件实例经
+///   [`bedcode_host_kit::ports::HostPorts::domain_ports`] 取回，使权限判定与出站
+///   授权落在**本实例的**权限管理器 / 授权记录库上（多上下文场景下不会读到别人的）。
+///
+/// **必须早于任何插件激活**——guest 一调 `host-http` 原语就取端口，取不到直接
+/// panic（fail-visible）。与 `set_services` / `set_task_engine` / `ws::install`
+/// 同属两阶段注入的装配链。
+pub fn install(ctx: Arc<WasmHostContext>) {
+    let ports: Arc<dyn HttpPorts> = Arc::new(HostHttpPorts::from_ctx(Arc::clone(&ctx)));
+    ctx.set_domain_ports(
+        bedcode_server_http::plugin_binding::DOMAIN,
+        Arc::new(Arc::clone(&ports)) as Arc<dyn std::any::Any + Send + Sync>,
+    );
+    bedcode_server_http::plugin_binding::install_ports(Arc::clone(&ports));
+}
+
+// ==================== 任务单元执行器（注册点留宿主） ====================
 
 /// http 单元执行器（kind `http.fetch`）
 ///
-/// 直调 `http_fetch`（域权限门在函数内部再把守）；返回体与既有 `execute_unit`
-/// 语义一致：`value` 按原生值 JSON 编码。
+/// **为什么执行器留宿主**：它注册进留 core 的任务引擎（`manager::task` 的执行器
+/// 注册表），注册点必须与引擎同侧——能力域不持有任务引擎，也不该知道 kind 路由表。
+/// 本类型只做「kind 匹配 + 取端口 + 转调能力域域函数」，执行体在
+/// [`bedcode_server_http::plugin_binding::egress`]。params 原样透传，返回体与既有
+/// `execute_unit` 语义一致：`value` 按原生值 JSON 编码。
 pub(crate) struct HttpUnitExecutor;
 
 impl UnitExecutor for HttpUnitExecutor {
@@ -34,1128 +172,27 @@ impl UnitExecutor for HttpUnitExecutor {
         _kind: &str,
         params: &serde_json::Value,
     ) -> Result<Option<String>, String> {
-        // may_prompt = false：池线程绝不弹窗（与 fs 任务单元同款约束，见 http_fetch 文档）
-        match http_fetch(
-            host_ctx.as_ref(),
-            host_ctx.as_ref(),
-            host_ctx.as_ref(),
-            owner,
-            &params.to_string(),
-            false,
-        ) {
+        // 端口按本次调用的宿主上下文现造（执行器是**进程级注册**的进程级对象，
+        // 不持有任何上下文）——语义等价于迁移前每次调用从 host_ctx 取三件套。
+        let ports: Arc<dyn HttpPorts> = Arc::new(HostHttpPorts::from_ctx(Arc::clone(host_ctx)));
+        // may_prompt = false：池线程绝不弹窗（与 fs 任务单元同款约束，见 egress 侧文档）
+        match egress::http_fetch(&ports, owner, &params.to_string(), false) {
             Ok(opt) => Ok(opt.map(|v| serde_json::json!(v).to_string())),
             Err(e) => Err(e),
         }
     }
 }
 
-/// 非流式 HTTP 客户端（连接超时 + 总超时，全宿主复用连接池）
-static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
-    reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(PLUGIN_HTTP_CONNECT_TIMEOUT_SECS))
-        .timeout(Duration::from_secs(PLUGIN_HTTP_TIMEOUT_SECS))
-        .redirect(redirect_policy())
-        .build()
-        .unwrap_or_default()
-});
-
-/// 流式 HTTP 客户端（仅连接超时，不设总超时 — SSE 长连接不应被截断）
-static HTTP_STREAM_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
-    reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(PLUGIN_HTTP_CONNECT_TIMEOUT_SECS))
-        .redirect(redirect_policy())
-        .build()
-        .unwrap_or_default()
-});
-
-/// 判断目标地址是否为私网/回环/链路本地地址（动态判定，无硬编码网段）
-///
-/// 系统代理（如 Clash）只应代理外网：局域网文件服务（对端共享目录）请求若
-/// 走代理，会被劫持到本地代理端口（127.0.0.1:10808），对端服务器收不到请求。
-/// 标准库 `Ipv4Addr::is_private()` 即 RFC1918（10/8、172.16/12、192.168/16），
-/// 配合 loopback/link-local，覆盖内网传输场景的全部直连目标。
-fn is_private_target(url: &str) -> bool {
-    reqwest::Url::parse(url)
-        .ok()
-        .and_then(|u| u.host_str().and_then(|h| h.parse::<std::net::IpAddr>().ok()))
-        .map(|ip| match ip {
-            std::net::IpAddr::V4(v4) => v4.is_private() || v4.is_loopback() || v4.is_link_local(),
-            std::net::IpAddr::V6(v6) => v6.is_loopback() || v6.is_unicast_link_local(),
-        })
-        .unwrap_or(false)
-}
-
-/// 跳转裁决（纯函数，供 `redirect_policy` 与单测共用）：
-///
-/// reqwest 默认跟随 10 跳且不重校验目标——公网插件 API 302 到内网/云元数据
-/// 在无系统代理环境（直连）下即 SSRF。规则：
-/// - 公网目标：跟随；
-/// - 私网目标：仅当链上前序 URL 全为私网时跟随（局域网文件服务站内跳转）；
-///   其余（公网 → 私网）Stop，调用方拿到 3xx 自行处理。
-fn redirect_decision(next_url: &str, previous: &[&str]) -> bool {
-    if !is_private_target(next_url) {
-        return true;
-    }
-    !previous.iter().any(|p| !is_private_target(p))
-}
-
-/// reqwest 跳转策略：`redirect_decision` 的适配层（同步裁决，见其文档）
-fn redirect_policy() -> reqwest::redirect::Policy {
-    reqwest::redirect::Policy::custom(|attempt| {
-        let prev: Vec<&str> = attempt.previous().iter().map(|u| u.as_str()).collect();
-        if redirect_decision(attempt.url().as_str(), &prev) {
-            attempt.follow()
-        } else {
-            attempt.stop()
-        }
-    })
-}
-
-/// 直连客户端（禁系统代理）：私网目标（局域网文件服务）专用，
-/// 配置与对应默认 client 一致（超时/响应上限语义不变）
-static HTTP_DIRECT_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
-    reqwest::Client::builder()
-        .no_proxy()
-        .connect_timeout(Duration::from_secs(PLUGIN_HTTP_CONNECT_TIMEOUT_SECS))
-        .timeout(Duration::from_secs(PLUGIN_HTTP_TIMEOUT_SECS))
-        .redirect(redirect_policy())
-        .build()
-        .unwrap_or_default()
-});
-
-/// 流式直连客户端（禁系统代理，仅连接超时）
-static HTTP_DIRECT_STREAM_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
-    reqwest::Client::builder()
-        .no_proxy()
-        .connect_timeout(Duration::from_secs(PLUGIN_HTTP_CONNECT_TIMEOUT_SECS))
-        .redirect(redirect_policy())
-        .build()
-        .unwrap_or_default()
-});
-
-/// 按目标地址选择客户端：私网直连，其余走系统代理（外网插件 API 不受影响）
-fn client_for(url: &str) -> &'static reqwest::Client {
-    if is_private_target(url) {
-        &HTTP_DIRECT_CLIENT
-    } else {
-        &HTTP_CLIENT
-    }
-}
-
-/// 流式客户端选择（同上）
-fn stream_client_for(url: &str) -> &'static reqwest::Client {
-    if is_private_target(url) {
-        &HTTP_DIRECT_STREAM_CLIENT
-    } else {
-        &HTTP_STREAM_CLIENT
-    }
-}
-
-/// 发起 HTTP 请求（宿主代发，支持 SSE 流式推流）
-///
-/// request_json 格式：
-/// ```json
-/// {
-///   "method": "POST",
-///   "url": "https://api.example.com/v1/chat",
-///   "headers": { "Authorization": "Bearer xxx", "Content-Type": "application/json" },
-///   "body": "{...}",
-///   "stream": true,
-///   "streamEvent": "ai-chatbox:stream:xxx"
-/// }
-/// ```
-///
-/// 流式模式：宿主 spawn tokio 任务执行 HTTP 请求，逐 chunk 通过 emit_event 推送，
-/// http_fetch 立即返回 stream_id
-/// 非流式模式：block_on 执行，返回完整响应
-///
-/// `may_prompt` 决定未记录目标怎么处理：WIT import 路径（插件主流程）传 `true`
-/// （可弹窗询问用户）；**任务单元（core-task 池线程）传 `false`**——弹窗会占住池槽位
-/// 最短 30s，且用户在错误的时机看到问题（与 fs 任务单元同款约束）。池线程侧只认授权
-/// 记录，未记录即 fail-visible 拒绝（[`NetworkAuthChecker::authorize_outbound_quiet`]）。
-pub(crate) fn http_fetch(
-    app: &dyn crate::wasm_core::host_api::context::AppHandleScope,
-    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
-    net_auth: &dyn crate::wasm_core::host_api::context::NetworkAuthScope,
-    plugin_id: &str,
-    request_json: &str,
-    may_prompt: bool,
-) -> Result<Option<String>, String> {
-    // 权限仲裁：未声明 network:http 的插件（WASM 路径）在宿主侧直接拒绝。
-    // 前端 TS 路径已 fast-fail，此处是 Rust 端最终仲裁（安全边界，AGENTS.md §8）。
-    if !super::check_permission(perm, plugin_id, PERMISSION_NETWORK_HTTP, "host_http_fetch") {
-        return Err(format!(
-            "http error: permission denied: plugin '{}' does not declare network:http",
-            plugin_id
-        ));
-    }
-    let request: serde_json::Value =
-        serde_json::from_str(request_json).map_err(|e| format!("http error: invalid request JSON: {}", e))?;
-
-    // 出站授权（票 05 / spec §6.1）：位置在声明门之后、**任何网络动作之前**——
-    // 流式与非流式两条分支都在此之前收敛，被拒的请求绝不会触达网络。
-    // 缺 `url` 的请求不在此处拦（归执行层的「Missing 'url'」错误），错误分类保持不变。
-    if let Some(url) = request.get("url").and_then(|v| v.as_str()) {
-        let checker = net_auth.net_auth();
-        let verdict = if may_prompt {
-            block_on_async(checker.authorize_outbound(plugin_id, url))
-        } else {
-            block_on_async(checker.authorize_outbound_quiet(plugin_id, url))
-        };
-        match verdict {
-            Ok(verdict) if verdict.is_allowed() => {
-                tracing::debug!(
-                    plugin_id = %plugin_id,
-                    origin = %verdict.origin(),
-                    may_prompt,
-                    "host-http: 出站授权放行"
-                );
-            }
-            Ok(verdict) => {
-                // 错误串只带归一化 origin（不带 path / query：AGENTS §8 凭据红线）
-                return Err(format!(
-                    "http error: network authorization denied ({}): plugin '{}' -> {}",
-                    verdict.reason(),
-                    plugin_id,
-                    verdict.origin()
-                ));
-            }
-            Err(e) => {
-                return Err(format!("http error: network authorization check failed: {}", e));
-            }
-        }
-    }
-
-    let is_stream = request.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
-
-    if is_stream {
-        // 流式模式：spawn 后台任务，立即返回 stream_id
-        let stream_id = uuid::Uuid::new_v4().to_string();
-        let stream_event = request
-            .get("streamEvent")
-            .and_then(|v| v.as_str())
-            .unwrap_or(&stream_id)
-            .to_string();
-
-        // 流式推送依赖前端事件通道，无头上下文不可用
-        let Some(app_handle) = app.app_handle().cloned() else {
-            return Err("http error: streaming requires app_handle".to_string());
-        };
-
-        let plugin_id_clone = plugin_id.to_string();
-        let stream_event_clone = stream_event.clone();
-        crate::system::error_boundary::spawn_with_error_boundary("streaming_http", async move {
-            if let Err(e) = execute_streaming_http(&request, &app_handle, &stream_event_clone, &plugin_id_clone).await {
-                tracing::error!(
-                    error = %e,
-                    plugin_id = %plugin_id_clone,
-                    stream_event = %stream_event_clone,
-                    "Streaming HTTP request failed"
-                );
-                // 发送错误事件通知插件
-                let _ = app_handle.emit(
-                    &stream_event_clone,
-                    serde_json::json!({ "error": e.to_string(), "done": true }),
-                );
-            }
-        });
-
-        let result_json = serde_json::json!({
-            "streamId": stream_id,
-            "streamEvent": stream_event,
-        });
-        serde_json::to_string(&result_json)
-            .map(Some)
-            .map_err(|e| format!("http error: response serialization failed: {}", e))
-    } else {
-        // 非流式模式：同步执行 HTTP 请求
-        let response = block_on_async(execute_http_request(&request)).map_err(|e| format!("http error: {}", e))?;
-        serde_json::to_string(&response)
-            .map(Some)
-            .map_err(|e| format!("http error: response serialization failed: {}", e))
-    }
-}
-
-// ==================== 服务端域（ABI v29：插件动态路由注册） ====================
-
-/// `register-endpoint` 的 config-json 契约（服务端域，camelCase）
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct EndpointRegistrationConfig {
-    /// 插件内相对端点段（宿主拼出 `/api/plugin/<plugin-id>/<path>`）
-    path: String,
-    /// 可选对外 URL 别名（支持 `{id}` 模板段）
-    #[serde(default)]
-    host: Option<String>,
-    /// host 别名的允许方法（缺省 `["GET"]`）
-    #[serde(default)]
-    methods: Vec<String>,
-    /// 认证档位："jwt"（缺省，最严）| "none"（免凭证）
-    #[serde(default)]
-    auth: Option<String>,
-}
-
-/// 注册插件 HTTP 端点（WIT `host-http.register-endpoint`，ABI v29 服务端域）
-///
-/// 权限门 `network:http`（与前端面 `http.registerEndpoint` 同权限位）；config 解析
-/// 失败 / 形状非法 / 冲突仲裁 → `Err`（fail-visible，不覆盖在位者）。
-/// 成功 → 返回端点句柄 `http-<uuid>`。
-pub(crate) fn http_register_endpoint(
-    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
-    plugin_id: &str,
-    config_json: &str,
-) -> Result<String, String> {
-    if !super::check_permission(perm, plugin_id, PERMISSION_NETWORK_HTTP, "host_http_register_endpoint") {
-        return Err("permission denied: network:http".to_string());
-    }
-    let config: EndpointRegistrationConfig =
-        serde_json::from_str(config_json).map_err(|e| format!("http register-endpoint: invalid config: {e}"))?;
-    // HTTP 面缺省档 = jwt（未声明即最严，与 manifest 声明面同一裁决）；
-    // 未定义取值报错，绝不静默降级为较宽档位
-    let auth = EndpointAuth::parse_with(config.auth.as_deref(), EndpointAuth::Jwt)
-        .map_err(|e| format!("http register-endpoint: {e}"))?;
-    let entry = bedcode_server_http::registry::register(
-        plugin_id,
-        &config.path,
-        config.host.as_deref(),
-        &config.methods,
-        auth,
-    )?;
-    Ok(entry.endpoint_id)
-}
-
-/// 注销插件 HTTP 端点（WIT `host-http.unregister-endpoint`，ABI v29 服务端域）
-///
-/// 属主仲裁：未知句柄 → `Ok(false)`（幂等）；他人句柄 → `Err`。
-/// 插件停用时的自动回收另见 [`bedcode_server_http::registry::purge_for_plugin`]。
-pub(crate) fn http_unregister_endpoint(
-    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
-    plugin_id: &str,
-    endpoint_id: &str,
-) -> Result<bool, String> {
-    if !super::check_permission(
-        perm,
-        plugin_id,
-        PERMISSION_NETWORK_HTTP,
-        "host_http_unregister_endpoint",
-    ) {
-        return Err("permission denied: network:http".to_string());
-    }
-    bedcode_server_http::registry::remove_if_owner(endpoint_id, plugin_id)
-}
-
-/// 回收指定插件的全部 HTTP 端点（插件停用/卸载时由 PluginHost 调用；只碰本人）
-pub(crate) fn purge_for_plugin(plugin_id: &str) -> usize {
-    let entries = bedcode_server_http::registry::purge_for_plugin(plugin_id);
-    entries.len()
-}
-
-// ==================== Streaming Execution ====================
-
-/// 执行非流式 HTTP 请求
-///
-/// 宿主代为执行 HTTP 请求，返回完整响应
-/// request 格式：{ "method", "url", "headers", "body" }
-/// response 格式：{ "status", "body", "headers" }
-async fn execute_http_request(request: &serde_json::Value) -> anyhow::Result<serde_json::Value> {
-    let method = request.get("method").and_then(|v| v.as_str()).unwrap_or("GET");
-    let url = request
-        .get("url")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("Missing 'url' in HTTP request"))?;
-    let headers = request.get("headers").and_then(as_string_map);
-    let body = request.get("body").and_then(|v| v.as_str());
-
-    let mut req_builder = client_for(url).request(method.parse()?, url);
-
-    if let Some(hdrs) = &headers {
-        for (key, value) in hdrs {
-            req_builder = req_builder.header(key.as_str(), value.as_str());
-        }
-    }
-
-    if let Some(b) = body {
-        req_builder = req_builder.body(b.to_string());
-    }
-
-    let response = req_builder.send().await?;
-    let status = response.status().as_u16();
-
-    let resp_headers: serde_json::Map<String, serde_json::Value> = response
-        .headers()
-        .iter()
-        .map(|(k, v)| {
-            (
-                k.to_string(),
-                serde_json::Value::String(v.to_str().unwrap_or("").to_string()),
-            )
-        })
-        .collect();
-
-    // 响应体带上限流式读取：防止无上限响应体拷入 guest 内存 + guest serde 解析
-    // 耗尽单次调用 fuel 预算（触发 trap 污染 Store）。超限立即中止连接并报错，
-    // 引导插件改用 stream:true（宿主后台任务经事件逐 chunk 推送，不经 guest 内存）。
-    let mut body_bytes = Vec::new();
-    let mut body_stream = response.bytes_stream();
-    while let Some(chunk) = body_stream.next().await {
-        let chunk = chunk.map_err(|e| anyhow::anyhow!("http error: read response body failed: {}", e))?;
-        if body_bytes.len() + chunk.len() > PLUGIN_HTTP_RESPONSE_BODY_LIMIT_BYTES {
-            return Err(anyhow::anyhow!(
-                "http error: response body exceeds {} bytes limit (use stream:true for large payloads)",
-                PLUGIN_HTTP_RESPONSE_BODY_LIMIT_BYTES
-            ));
-        }
-        body_bytes.extend_from_slice(&chunk);
-    }
-    let resp_body =
-        String::from_utf8(body_bytes).map_err(|e| anyhow::anyhow!("http error: response body is not UTF-8: {}", e))?;
-
-    Ok(serde_json::json!({
-        "status": status,
-        "body": resp_body,
-        "headers": resp_headers,
-    }))
-}
-
-/// 执行流式 HTTP 请求
-///
-/// 宿主 spawn tokio 任务执行 HTTP 请求，逐 chunk 通过 emit_event 推送到前端
-/// 插件通过监听 streamEvent 事件接收流式数据
-///
-/// `sseFormat` 不再有供应商语义（票据 02 宿主零业务语义）：空串 = raw 模式
-/// （逐网络 chunk 透传原始字节，消费侧自行切分）；非空 = 通用 SSE 模式（按事件
-/// 分隔符切分、透传 data 行原文）。OpenAI/Anthropic 等格式解析全部由插件消费侧自管。
-async fn execute_streaming_http(
-    request: &serde_json::Value,
-    app_handle: &tauri::AppHandle,
-    stream_event: &str,
-    plugin_id: &str,
-) -> anyhow::Result<()> {
-    let method = request.get("method").and_then(|v| v.as_str()).unwrap_or("POST");
-    let url = request
-        .get("url")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("Missing 'url' in streaming HTTP request"))?;
-    let headers = request.get("headers").and_then(as_string_map);
-    let body = request.get("body").and_then(|v| v.as_str());
-    let sse_format = request.get("sseFormat").and_then(|v| v.as_str()).unwrap_or("");
-
-    let mut req_builder = stream_client_for(url).request(method.parse()?, url);
-
-    if let Some(hdrs) = &headers {
-        for (key, value) in hdrs {
-            req_builder = req_builder.header(key.as_str(), value.as_str());
-        }
-    }
-
-    if let Some(b) = body {
-        req_builder = req_builder.body(b.to_string());
-    }
-
-    let response = req_builder.send().await?;
-
-    if !response.status().is_success() {
-        let status = response.status().as_u16();
-        let error_body = response.text().await.unwrap_or_default();
-        tracing::warn!(status, stream_event, "Streaming HTTP non-2xx response");
-        // 非 2xx 响应通过事件通知前端，而非 bail（因为 tokio::spawn 中的 Err 只记录日志）
-        let _ = app_handle.emit(
-            stream_event,
-            serde_json::json!({
-                "error": format!("API error {}: {}", status, error_body),
-                "done": true,
-            }),
-        );
-        return Ok(());
-    }
-
-    tracing::debug!(
-        status = response.status().as_u16(),
-        sse_format = %sse_format,
-        stream_event,
-        "Streaming HTTP connected"
-    );
-
-    let mut emitted_events: usize = 0;
-    if sse_format.is_empty() {
-        // 原始模式：逐 chunk emit 原始字节（消费侧自行切分 SSE 事件）
-        let mut stream = response.bytes_stream();
-        while let Some(chunk_result) = stream.next().await {
-            match chunk_result {
-                Ok(chunk) => {
-                    let chunk_str = String::from_utf8_lossy(&chunk).to_string();
-                    emitted_events += 1;
-                    let _ = app_handle.emit(
-                        stream_event,
-                        serde_json::json!({
-                            "chunk": chunk_str,
-                            "done": false,
-                        }),
-                    );
-                }
-                Err(e) => {
-                    tracing::error!(
-                        error = %e,
-                        plugin_id = %plugin_id,
-                        stream_event = %stream_event,
-                        "Streaming HTTP chunk read error"
-                    );
-                    break;
-                }
-            }
-        }
-    } else {
-        // 通用 SSE 模式：按事件分隔符切分、透传 data 行原文（票据 02 宿主零业务语义）。
-        // 不做任何供应商格式解析（OpenAI/Anthropic 等语义由插件消费侧自管）。
-        let mut stream = response.bytes_stream();
-        let mut buffer = String::new();
-
-        while let Some(chunk_result) = stream.next().await {
-            match chunk_result {
-                Ok(chunk) => {
-                    buffer.push_str(&String::from_utf8_lossy(&chunk));
-                    for data in extract_sse_data_lines(&mut buffer) {
-                        emitted_events += 1;
-                        let _ = app_handle.emit(stream_event, serde_json::json!({ "chunk": data, "done": false }));
-                    }
-                }
-                Err(e) => {
-                    tracing::error!(
-                        error = %e,
-                        plugin_id = %plugin_id,
-                        stream_event = %stream_event,
-                        "Streaming HTTP chunk read error"
-                    );
-                    break;
-                }
-            }
-        }
-    }
-
-    // 发送完成事件
-    let _ = app_handle.emit(stream_event, serde_json::json!({ "done": true }));
-
-    tracing::debug!(
-        emitted_events,
-        plugin_id = %plugin_id,
-        stream_event,
-        "Streaming HTTP finished"
-    );
-
-    Ok(())
-}
-
-/// 通用 SSE 事件切分与 data 提取（宿主零业务语义，票据 02）
-///
-/// SSE 规范允许 `\n\n`、`\r\n\r\n`、`\r\r` 三种事件分隔符，取缓冲区中最先出现的
-/// 切分（部分服务端使用 CRLF 行尾）；每条完整事件抽取 `data:` 行原文透传，
-/// 不做任何供应商格式解析（chunk 内容 JSON 语义由插件消费侧自管）。
-/// 跨 chunk 缓冲：未闭合的半截事件留在缓冲区，下次追加后补齐。
-/// 返回本次提取的 data 行内容列表（无完整事件时为空）。
-fn extract_sse_data_lines(buffer: &mut String) -> Vec<String> {
-    let mut out = Vec::new();
-    loop {
-        // 查找最先出现的事件分隔符：(位置, 分隔符字节长度)
-        let separator = [
-            buffer.find("\r\n\r\n").map(|p| (p, 4)),
-            buffer.find("\n\n").map(|p| (p, 2)),
-            buffer.find("\r\r").map(|p| (p, 2)),
-        ]
-        .into_iter()
-        .flatten()
-        .min_by_key(|(pos, _)| *pos);
-
-        let Some((pos, sep_len)) = separator else {
-            break;
-        };
-
-        let event_text = buffer[..pos].to_string();
-        buffer.drain(..pos + sep_len);
-
-        for line in event_text.lines() {
-            if let Some(data) = line.strip_prefix("data: ") {
-                let data = data.trim();
-                if !data.is_empty() {
-                    out.push(data.to_string());
-                }
-            }
-        }
-    }
-    out
-}
-
-/// 将 serde_json::Value 转换为 HashMap<String, String>
-fn as_string_map(value: &serde_json::Value) -> Option<std::collections::HashMap<String, String>> {
-    let obj = value.as_object()?;
-    let mut map = std::collections::HashMap::new();
-    for (k, v) in obj {
-        if let Some(s) = v.as_str() {
-            map.insert(k.clone(), s.to_string());
-        }
-    }
-    Some(map)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    /// 禁用系统代理对 loopback 的干扰（Windows 全局代理可能拦截测试请求）
-    fn disable_proxy_for_loopback() {
-        std::env::set_var("NO_PROXY", "127.0.0.1,localhost");
-    }
-
-    /// 极简 mock HTTP 服务器：返回固定 body，响应后关闭连接
-    async fn spawn_mock_server(body: Vec<u8>) -> std::net::SocketAddr {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move {
-            if let Ok((mut sock, _)) = listener.accept().await {
-                let mut buf = [0u8; 4096];
-                // 读完请求头即可响应（忽略 body）
-                let _ = sock.read(&mut buf).await;
-                let head = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                    body.len()
-                );
-                let _ = sock.write_all(head.as_bytes()).await;
-                let _ = sock.write_all(&body).await;
-            }
-        });
-        addr
-    }
-
-    /// 正常小响应体：完整返回，不受上限影响
-    #[tokio::test]
-    async fn http_fetch_small_response_ok() {
-        disable_proxy_for_loopback();
-        let addr = spawn_mock_server(b"{\"ok\":true}".to_vec()).await;
-        let resp = execute_http_request(&json!({
-            "method": "GET",
-            "url": format!("http://{}/small", addr),
-        }))
-        .await
-        .expect("small response must succeed");
-        assert_eq!(resp["status"], 200);
-        assert_eq!(resp["body"], "{\"ok\":true}");
-    }
-
-    /// 未声明 network:http 的插件调用 host-http.fetch：宿主侧直接拒绝（Rust 端最终仲裁）。
-    /// 错误消息含明确原因，与请求类错误可区分（审计 H1 修复）。
+    /// 执行器注册面不变：`http.fetch` 归本执行器，其余 kind 不归
     #[test]
-    fn http_fetch_permission_denied_rejected() {
-        let ctx = super::super::tests::build_host_ctx();
-        // 未授予任何权限（含 network:http）
-        let err = http_fetch(
-            ctx.as_ref(),
-            ctx.as_ref(),
-            ctx.as_ref(),
-            "p1",
-            r#"{"url":"http://127.0.0.1:1/x"}"#,
-            true,
-        )
-        .expect_err("unpermissioned fetch must be rejected");
-        assert!(
-            err.contains("permission denied") && err.contains("network:http"),
-            "error should state permission reason, got: {}",
-            err
-        );
-    }
-
-    /// 声明 network:http 后放行：请求进入执行阶段（此处以缺 url 的请求 JSON 验证
-    /// 错误从「权限拒绝」变为「请求错误」，证明权限检查通过且未碰网络）。
-    #[test]
-    fn http_fetch_permission_granted_passes() {
-        let ctx = super::super::tests::build_host_ctx();
-        super::super::tests::grant_permissions(&ctx, "p1", &[PERMISSION_NETWORK_HTTP]);
-        // 权限已放行 → 错误是请求解析/执行类，不再是 permission denied
-        let err = http_fetch(ctx.as_ref(), ctx.as_ref(), ctx.as_ref(), "p1", r#"{"method":"GET"}"#, true)
-            .expect_err("missing url is a request error");
-        assert!(
-            err.contains("Missing 'url'") || err.contains("http error"),
-            "after permission, error should be request-level, got: {}",
-            err
-        );
-        assert!(
-            !err.contains("permission denied"),
-            "permissioned plugin should not hit permission denial, got: {}",
-            err
-        );
-    }
-
-    /// 非法请求 JSON：权限放行后仍是解析错误（错误分类保持：权限拒绝 ≠ 请求错误）
-    #[test]
-    fn http_fetch_invalid_json_is_request_error_not_permission() {
-        let ctx = super::super::tests::build_host_ctx();
-        super::super::tests::grant_permissions(&ctx, "p1", &[PERMISSION_NETWORK_HTTP]);
-        let err = http_fetch(ctx.as_ref(), ctx.as_ref(), ctx.as_ref(), "p1", "not-json", true)
-            .expect_err("invalid JSON is a request error");
-        assert!(
-            err.contains("invalid request JSON"),
-            "error should be parse-level, got: {}",
-            err
-        );
-    }
-
-    /// 超限响应体：立即拒绝并报错引导 stream:true，绝不把大载荷交给 guest
-    /// （保证 guest 侧 serde 解析工作量有界 → 不可能耗尽 fuel 预算被 trap）
-    #[tokio::test]
-    async fn http_fetch_oversized_response_rejected() {
-        disable_proxy_for_loopback();
-        let addr = spawn_mock_server(vec![0u8; PLUGIN_HTTP_RESPONSE_BODY_LIMIT_BYTES + 1]).await;
-        let err = execute_http_request(&json!({
-            "method": "GET",
-            "url": format!("http://{}/big", addr),
-        }))
-        .await
-        .expect_err("oversized response must be rejected");
-        assert!(
-            err.to_string().contains("exceeds"),
-            "error should mention size limit, got: {}",
-            err
-        );
-        assert!(
-            err.to_string().contains("stream:true"),
-            "error should guide to streaming mode, got: {}",
-            err
-        );
-    }
-
-    /// 服务端域权限门（ABI v29）：未声明 network:http 的插件 register/unregister 一律拒绝
-    #[test]
-    fn http_register_endpoint_requires_network_http_permission() {
-        let ctx = super::super::tests::build_host_ctx();
-        let err = http_register_endpoint(ctx.as_ref(), "p1", r#"{"path":"configs"}"#)
-            .expect_err("unpermissioned register must be rejected");
-        assert!(
-            err.contains("permission denied") && err.contains("network:http"),
-            "error should state permission reason, got: {err}"
-        );
-        let err = http_unregister_endpoint(ctx.as_ref(), "p1", "http-x")
-            .expect_err("unpermissioned unregister must be rejected");
-        assert!(err.contains("permission denied"), "got: {err}");
-    }
-
-    /// 服务端域注册闭环：授权后 register 成功返回句柄，注销属主命中、他人拒绝
-    #[test]
-    fn http_register_endpoint_roundtrip_with_owner_arbitration() {
-        let ctx = super::super::tests::build_host_ctx();
-        super::super::tests::grant_permissions(&ctx, "p1", &[PERMISSION_NETWORK_HTTP]);
-        let plugin = format!("test-httpapi-{}", uuid::Uuid::new_v4());
-        super::super::tests::grant_permissions(&ctx, &plugin, &[PERMISSION_NETWORK_HTTP]);
-
-        // 缺省档 = jwt（HTTP 面未声明即最严），内部路径注册成功
-        let id = http_register_endpoint(ctx.as_ref(), &plugin, r#"{"path":"configs"}"#).expect("register");
-        assert!(id.starts_with("http-"), "句柄前缀: {id}");
-        let internal = format!("/api/plugin/{plugin}/configs");
-        let entry = bedcode_server_http::registry::find_by_internal(&internal).expect("registered");
-        assert_eq!(entry.owner, plugin);
-        assert_eq!(entry.auth, EndpointAuth::Jwt, "未声明 auth 落最严档");
-
-        // 显式 none + host 别名 + 模板
-        let id2 = http_register_endpoint(
-            ctx.as_ref(),
-            &plugin,
-            &format!(
-                r#"{{"path":"sessions/stop","host":"/api/sessions-{0}/{{id}}/stop","methods":["POST"],"auth":"none"}}"#,
-                uuid::Uuid::new_v4().simple()
-            ),
-        )
-        .expect("register alias");
-        assert!(bedcode_server_http::registry::is_owner(&id2, &plugin));
-
-        // 注销：属主命中；他人句柄 → Err 且不消费
-        let other = format!("test-httpapi-other-{}", uuid::Uuid::new_v4());
-        assert!(http_unregister_endpoint(ctx.as_ref(), &other, &id).is_err());
-        assert!(
-            bedcode_server_http::registry::is_owner(&id, &plugin),
-            "他人注销不得消费句柄"
-        );
-        assert!(http_unregister_endpoint(ctx.as_ref(), &plugin, &id).unwrap());
-        assert!(
-            !http_unregister_endpoint(ctx.as_ref(), &plugin, &id).unwrap(),
-            "重复注销幂等 false"
-        );
-        assert!(bedcode_server_http::registry::find_by_internal(&internal).is_none());
-
-        bedcode_server_http::registry::purge_for_plugin(&plugin);
-        bedcode_server_http::registry::purge_for_plugin(&other);
-    }
-
-    /// 非法 config：畸形 JSON / 空 path / 非法 auth 档位 → Err（fail-visible，零副作用）
-    #[test]
-    fn http_register_endpoint_rejects_bad_config() {
-        let ctx = super::super::tests::build_host_ctx();
-        let plugin = format!("test-httpapi-bad-{}", uuid::Uuid::new_v4());
-        super::super::tests::grant_permissions(&ctx, &plugin, &[PERMISSION_NETWORK_HTTP]);
-
-        assert!(http_register_endpoint(ctx.as_ref(), &plugin, "not json").is_err());
-        assert!(http_register_endpoint(ctx.as_ref(), &plugin, r#"{"path":""}"#).is_err());
-        let err = http_register_endpoint(ctx.as_ref(), &plugin, r#"{"path":"x","auth":"local-only"}"#)
-            .expect_err("unknown auth tier must be rejected");
-        assert!(
-            err.contains("local-only") && err.contains("jwt"),
-            "文案须点明非法取值与合法档位: {err}"
-        );
-        assert_eq!(
-            bedcode_server_http::registry::count_by_owner(&plugin),
-            0,
-            "失败零副作用"
-        );
-    }
-
-    /// 通用 SSE 事件切分（票据 02 宿主零业务语义）：三种分隔符都能切分并提取 data 行原文
-    #[test]
-    fn sse_extract_supports_all_separators() {
-        let mut buf = "data: a\n\ndata: b\r\n\r\ndata: c\r\r".to_string();
-        let events = extract_sse_data_lines(&mut buf);
-        assert_eq!(events, ["a", "b", "c"]);
-        assert!(buf.is_empty());
-    }
-
-    /// 跨 chunk 缓冲：半截事件留在缓冲区，下次追加后补齐
-    #[test]
-    fn sse_extract_buffers_across_chunks() {
-        let mut buf = "data: hel".to_string();
-        assert!(extract_sse_data_lines(&mut buf).is_empty());
-        buf.push_str("lo\n\n");
-        assert_eq!(extract_sse_data_lines(&mut buf), ["hello"]);
-        assert!(buf.is_empty());
-    }
-
-    /// 无 data 行的事件（注释/仅 event 字段）：忽略，不产出
-    #[test]
-    fn sse_extract_ignores_events_without_data() {
-        let mut buf = ": keep-alive\n\ndata: ok\n\n".to_string();
-        assert_eq!(extract_sse_data_lines(&mut buf), ["ok"]);
-    }
-
-    /// 供应商标记（如 [DONE]）按 data 原文透传，宿主不做任何供应商语义解析（票据 02）
-    #[test]
-    fn sse_extract_passes_through_vendor_markers_raw() {
-        let mut buf = "data: [DONE]\n\n".to_string();
-        assert_eq!(extract_sse_data_lines(&mut buf), ["[DONE]"]);
-    }
-
-    /// 私网目标判定：局域网/回环/链路本地 → 直连（不走系统代理）
-    ///
-    /// 文件服务对端通常是局域网 IP（RFC1918），标准库 is_private 动态判定，
-    /// 不硬编码网段；域名（外网 API）→ false 走系统代理
-    #[test]
-    fn is_private_target_classifies_correctly() {
-        // RFC1918：10/8、172.16/12、192.168/16
-        assert!(is_private_target(
-            "http://10.60.74.97:43145/com.bedcode.file-transfer/files/list"
-        ));
-        assert!(is_private_target("http://192.168.1.5:8080/"));
-        assert!(is_private_target("http://172.16.0.1/"));
-        // loopback 与链路本地
-        assert!(is_private_target("http://127.0.0.1:5173/"));
-        assert!(is_private_target("http://169.254.1.1/"));
-        // 外网域名/IP → 走代理
-        assert!(!is_private_target("https://api.example.com/v1/chat"));
-        assert!(!is_private_target("http://8.8.8.8/"));
-        // 无 host 的畸形 URL → false（默认走代理，行为保守）
-        assert!(!is_private_target("not a url"));
-    }
-
-    /// 跳转裁决：公网→私网阻断（无系统代理环境直连即 SSRF）；私网→私网放行
-    #[test]
-    fn redirect_decision_blocks_public_to_private() {
-        // 公网跳转：跟随
-        assert!(redirect_decision(
-            "https://cdn.example.com/file",
-            &["https://api.github.com/x"],
-        ));
-        // 外网 302 → 内网 / 回环 / 云元数据：Stop
-        assert!(!redirect_decision(
-            "http://192.168.1.5:8080/x",
-            &["https://api.example.com/y"],
-        ));
-        assert!(!redirect_decision(
-            "http://127.0.0.1:8000/meta",
-            &["https://api.example.com/y"],
-        ));
-        assert!(!redirect_decision(
-            "http://169.254.169.254/latest/meta-data",
-            &["https://api.example.com/y"],
-        ));
-        // 私网→私网（局域网文件服务站内跳转）：跟随
-        assert!(redirect_decision(
-            "http://192.168.1.9/x",
-            &["http://192.168.1.5:8080/a"],
-        ));
-        // 混合链（私网前序 + 公网）跳私网：Stop
-        assert!(!redirect_decision(
-            "http://192.168.1.9/x",
-            &["http://192.168.1.5:8080/a", "https://api.example.com/y"],
-        ));
-    }
-
-    // ==================== 出站授权（票 05） ====================
-
-    /// 计数型 mock 服务器：每接受一条连接 +1（用来证明「被拒的请求没触达网络」）
-    async fn spawn_counting_server(body: Vec<u8>) -> (std::net::SocketAddr, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
-        disable_proxy_for_loopback();
-        let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let counter = hits.clone();
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move {
-            while let Ok((mut sock, _)) = listener.accept().await {
-                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                let body = body.clone();
-                tokio::spawn(async move {
-                    let mut buf = [0u8; 4096];
-                    let _ = sock.read(&mut buf).await;
-                    let head = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                        body.len()
-                    );
-                    let _ = sock.write_all(head.as_bytes()).await;
-                    let _ = sock.write_all(&body).await;
-                });
-            }
-        });
-        (addr, hits)
-    }
-
-    /// 给插件落一条 network allow 记录（走生产写面：`origin` 必须已归一化）
-    async fn grant_origin(ctx: &WasmHostContext, plugin_id: &str, origin: &str) {
-        use crate::wasm_core::security::auth_policy::{AuthPolicyStore, AuthRecordSource, AuthResource};
-        AuthPolicyStore::new(ctx.database().clone())
-            .grant(plugin_id, AuthResource::Network, origin, &[], AuthRecordSource::User)
-            .await
-            .expect("seed network allow record");
-    }
-
-    /// 归一化后的回环 origin（夹具端口是动态的，测试要按实际端口拼）
-    fn loopback_origin(addr: std::net::SocketAddr) -> String {
-        format!("http://127.0.0.1:{}", addr.port())
-    }
-
-    /// 302 跳转服务器：跳到给定 `Location`（公网 → 私网 SSRF 场景的夹具）
-    ///
-    /// 绑在 127.0.0.1 上但**用例用 `http://localhost:<port>` 访问**：`is_private_target`
-    /// 按 host 能否解析成 IP 判定私网，`localhost` 解析失败即判为「公网」——正是
-    /// 公网首跳 + 私网跳转目标这一 SSRF 形态的可达替身（`NO_PROXY` 已含 localhost）。
-    async fn spawn_redirect_server(location: &str) -> std::net::SocketAddr {
-        disable_proxy_for_loopback();
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let head = Arc::new(format!(
-            "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-        ));
-        tokio::spawn(async move {
-            while let Ok((mut sock, _)) = listener.accept().await {
-                let head = head.clone();
-                tokio::spawn(async move {
-                    let mut buf = [0u8; 4096];
-                    let _ = sock.read(&mut buf).await;
-                    let _ = sock.write_all(head.as_bytes()).await;
-                });
-            }
-        });
-        addr
-    }
-
-    /// 票 05 C1：未记录的目标在**触达网络之前**被拒（无弹窗通道的无头上下文）
-    ///
-    /// 变异判据：把授权检查挪到执行之后（或只门流式分支）本条转红——mock 服务器
-    /// 会收到连接，命中数从 0 变 1。
-    #[tokio::test]
-    async fn unrecorded_origin_is_denied_before_any_network_io() {
-        let ctx = super::super::tests::build_host_ctx();
-        super::super::tests::grant_permissions(&ctx, "p1", &[PERMISSION_NETWORK_HTTP]);
-        let (addr, hits) = spawn_counting_server(b"{\"ok\":true}".to_vec()).await;
-
-        let err = http_fetch(
-            ctx.as_ref(),
-            ctx.as_ref(),
-            ctx.as_ref(),
-            "p1",
-            &json!({"method": "GET", "url": format!("http://{}/x", addr)}).to_string(),
-            true,
-        )
-        .expect_err("未记录的目标必须被拒（无头上下文 = 无弹窗通道）");
-
-        assert!(
-            err.contains("network authorization denied"),
-            "错误须是授权拒绝而非请求错误: {err}"
-        );
-        assert_eq!(
-            hits.load(std::sync::atomic::Ordering::SeqCst),
-            0,
-            "被拒的请求不得触达网络（授权检查必须在执行之前）"
-        );
-    }
-
-    /// 票 05 C1 正例：记录命中的 origin 真正放行（请求到达对端并拿到响应）
-    ///
-    /// **必须 multi_thread**：`http_fetch` 是同步函数，内部经 `block_on_async` 阻塞
-    /// 调用线程；单线程测试运行时下夹具服务的 accept 任务被一同卡死（表现为连接超时）。
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn allow_record_releases_the_request() {
-        let ctx = super::super::tests::build_host_ctx();
-        super::super::tests::grant_permissions(&ctx, "p1", &[PERMISSION_NETWORK_HTTP]);
-        let (addr, hits) = spawn_counting_server(b"{\"ok\":true}".to_vec()).await;
-        grant_origin(&ctx, "p1", &loopback_origin(addr)).await;
-
-        let response = http_fetch(
-            ctx.as_ref(),
-            ctx.as_ref(),
-            ctx.as_ref(),
-            "p1",
-            &json!({"method": "GET", "url": format!("http://{}/x", addr)}).to_string(),
-            true,
-        )
-        .expect("记录命中的 origin 必须放行")
-        .expect("fetch returns payload");
-        // 返回值是响应对象的 JSON 文本（body 字段仍是被转义的原文）
-        let parsed: serde_json::Value = serde_json::from_str(&response).expect("响应是合法 JSON");
-        assert_eq!(parsed["status"], 200);
-        assert_eq!(parsed["body"], "{\"ok\":true}", "响应体应原样返回");
-        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1, "放行的请求应真实到达对端");
-    }
-
-    /// 凭据红线（AGENTS §8）：拒绝错误串带 origin，**不带 path / query 里的 token**
-    #[tokio::test]
-    async fn denial_error_carries_origin_but_never_query() {
-        let ctx = super::super::tests::build_host_ctx();
-        super::super::tests::grant_permissions(&ctx, "p1", &[PERMISSION_NETWORK_HTTP]);
-
-        let err = http_fetch(
-            ctx.as_ref(),
-            ctx.as_ref(),
-            ctx.as_ref(),
-            "p1",
-            r#"{"method":"GET","url":"https://api.example.com/v1?access_token=SECRET_TOKEN"}"#,
-            true,
-        )
-        .expect_err("未记录 origin 必须被拒");
-
-        assert!(
-            err.contains("https://api.example.com:443"),
-            "错误须点明被拒的 origin: {err}"
-        );
-        assert!(!err.contains("SECRET_TOKEN"), "token 不得进错误串: {err}");
-        assert!(!err.contains("/v1"), "path 不得进错误串: {err}");
-    }
-
-    /// 任务单元（池线程）路径：may_prompt=false ⇒ 只能靠记录，未记录即拒
-    ///
-    /// 变异判据：把两个路径写反（或池线程也去弹窗）时 reason 会变，本条转红。
-    #[tokio::test]
-    async fn task_unit_path_denies_unrecorded_origin_with_no_record_reason() {
-        let ctx = super::super::tests::build_host_ctx();
-        super::super::tests::grant_permissions(&ctx, "p1", &[PERMISSION_NETWORK_HTTP]);
-        let (addr, hits) = spawn_counting_server(b"{}".to_vec()).await;
-
-        let err = http_fetch(
-            ctx.as_ref(),
-            ctx.as_ref(),
-            ctx.as_ref(),
-            "p1",
-            &json!({"method": "GET", "url": format!("http://{}/x", addr)}).to_string(),
-            false,
-        )
-        .expect_err("池线程不得弹窗，未记录目标必须被拒");
-
-        assert!(
-            err.contains("no-record"),
-            "池线程拒绝原因应为 no-record（而非询问侧的 user-denied）: {err}"
-        );
-        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 0, "被拒的请求不得触达网络");
-    }
-
-    /// 流式分支同样在授权之后：未记录目标不得拿到 streamId（变异：只门非流式）
-    #[tokio::test]
-    async fn streaming_mode_is_gated_too() {
-        let ctx = super::super::tests::build_host_ctx();
-        super::super::tests::grant_permissions(&ctx, "p1", &[PERMISSION_NETWORK_HTTP]);
-
-        let err = http_fetch(
-            ctx.as_ref(),
-            ctx.as_ref(),
-            ctx.as_ref(),
-            "p1",
-            r#"{"method":"POST","url":"https://api.example.com/v1/chat","stream":true,"streamEvent":"x:y"}"#,
-            true,
-        )
-        .expect_err("流式请求同样要过授权门");
-        assert!(err.contains("network authorization denied"), "流式分支必须被同一道门拦住: {err}");
-    }
-
-    /// spec §4.2 / §6.4 / §12.2：**授权层的放行放行不了 SSRF 闸门**
-    ///
-    /// 两种放行来源各试一遍（用户记录命中 / 「始终允许」档免询问放行）：它们都只回答
-    /// 「这个地址要不要问用户」，而公网 → 私网（云元数据 `169.254.169.254`）的跳转
-    /// 阻断是执行期的安全裁决，与档位正交。若某天把策略层的判定结果喂给
-    /// `redirect_decision`（=「SSRF 闸门放到策略之后」这个变异），本条转红。
-    ///
-    /// 断言形态：跳转**未被跟随** ⇒ 拿到的就是首跳的 302 本身；一旦被跟随，请求会
-    /// 打到链路本地元数据地址（多半超时或非 302）。
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn granted_origin_does_not_open_public_to_private_redirects() {
-        use crate::wasm_core::security::auth_policy::{AuthPolicyStore, AuthResource, AuthStrategy};
-
-        let ctx = super::super::tests::build_host_ctx();
-        super::super::tests::grant_permissions(&ctx, "p1", &[PERMISSION_NETWORK_HTTP]);
-        let addr = spawn_redirect_server("http://169.254.169.254/latest/meta-data").await;
-        let origin = format!("http://localhost:{}", addr.port());
-
-        // 情形一：用户确认过的 origin 有 allow 记录
-        grant_origin(&ctx, "p1", &origin).await;
-        let response = http_fetch(
-            ctx.as_ref(),
-            ctx.as_ref(),
-            ctx.as_ref(),
-            "p1",
-            &json!({"method": "GET", "url": format!("{origin}/x")}).to_string(),
-            true,
-        )
-        .expect("记录命中的 origin 本身应放行")
-        .expect("fetch returns payload");
-        let parsed: serde_json::Value = serde_json::from_str(&response).expect("响应是合法 JSON");
-        assert_eq!(
-            parsed["status"], 302,
-            "记录命中不得放行公网 → 链路本地元数据的重定向（SSRF 闸门在授权之外）"
-        );
-
-        // 情形二：「始终允许」档（免询问自动放行，同样是授权层的放行）
-        AuthPolicyStore::new(ctx.database().clone())
-            .set_strategy("p1", AuthResource::Network, AuthStrategy::AlwaysAllow)
-            .await
-            .expect("set strategy");
-        let response = http_fetch(
-            ctx.as_ref(),
-            ctx.as_ref(),
-            ctx.as_ref(),
-            "p1",
-            &json!({"method": "GET", "url": format!("{origin}/x")}).to_string(),
-            true,
-        )
-        .expect("始终允许档应放行该 origin")
-        .expect("fetch returns payload");
-        let parsed: serde_json::Value = serde_json::from_str(&response).expect("响应是合法 JSON");
-        assert_eq!(
-            parsed["status"], 302,
-            "始终允许档同样不得放行公网 → 私网重定向（档位是「不问」，不是「越闸」）"
-        );
-    }
-
-    /// 入站方向零改动：未记录任何网络授权时，`register-endpoint` 仍照旧注册成功
-    /// （策略只管出站——spec §6.4）
-    #[test]
-    fn inbound_registration_is_untouched_by_outbound_policy() {
-        let ctx = super::super::tests::build_host_ctx();
-        let plugin = format!("test-inbound-{}", uuid::Uuid::new_v4());
-        super::super::tests::grant_permissions(&ctx, &plugin, &[PERMISSION_NETWORK_HTTP]);
-
-        let id = http_register_endpoint(ctx.as_ref(), &plugin, r#"{"path":"probe"}"#).expect("inbound must not ask");
-        assert!(id.starts_with("http-"));
-        bedcode_server_http::registry::purge_for_plugin(&plugin);
+    fn unit_executor_claims_only_http_fetch_kind() {
+        let executor = HttpUnitExecutor;
+        assert!(executor.matches("http.fetch"));
+        assert!(!executor.matches("fs.read"));
+        assert!(!executor.matches("http.register-endpoint"));
     }
 }

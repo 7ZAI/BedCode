@@ -30,7 +30,10 @@ fn newest_source_mtime(dirs: &[PathBuf]) -> std::time::SystemTime {
                 continue;
             }
             // Cargo.lock / *.wasm 等非源文件不参与（会因构建自我更新而误触发重建）
-            let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
             if name == "Cargo.lock" || path.extension().is_some_and(|e| e == "wasm") {
                 continue;
             }
@@ -141,7 +144,10 @@ pub(crate) fn build_sdk_fixture(feature: &str) -> Vec<u8> {
         .args(args)
         .status()
         .expect("run cargo build for sdk fixture component");
-    assert!(status.success(), "sdk fixture ({feature}/{profile}) component WASM build failed");
+    assert!(
+        status.success(),
+        "sdk fixture ({feature}/{profile}) component WASM build failed"
+    );
 
     // cargo 产出的固定名拷贝一份到 feature+profile 专属名：下一轮构建别的 feature
     // 会覆写固定名，但不会动已归档的产物

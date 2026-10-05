@@ -91,9 +91,9 @@ impl PluginDevWatcher {
                             // 异插件事件互不干扰对方的防抖窗口
                             {
                                 let mut p = pending.lock().unwrap_or_else(|e| e.into_inner());
-                                if p.get(&plugin_id_clone).is_some_and(|t| {
-                                    t.elapsed() < Duration::from_millis(PLUGIN_RELOAD_DEBOUNCE_MS)
-                                }) {
+                                if p.get(&plugin_id_clone)
+                                    .is_some_and(|t| t.elapsed() < Duration::from_millis(PLUGIN_RELOAD_DEBOUNCE_MS))
+                                {
                                     tracing::debug!(
                                         plugin_id = %plugin_id_clone,
                                         "Plugin watcher: debounced reload"
@@ -130,9 +130,9 @@ impl PluginDevWatcher {
                         );
 
                         let mut p = pending.lock().unwrap_or_else(|e| e.into_inner());
-                        if p.get(&plugin_id).is_some_and(|t| {
-                            t.elapsed() < Duration::from_millis(PLUGIN_RELOAD_DEBOUNCE_MS)
-                        }) {
+                        if p.get(&plugin_id)
+                            .is_some_and(|t| t.elapsed() < Duration::from_millis(PLUGIN_RELOAD_DEBOUNCE_MS))
+                        {
                             tracing::debug!(plugin_id = %plugin_id, "Plugin watcher: debounced JS reload");
                             continue;
                         }

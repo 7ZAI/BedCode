@@ -37,8 +37,9 @@ impl UnitExecutor for FsUnitExecutor {
             "fs.read" => {
                 let path = params.get("path").and_then(|v| v.as_str());
                 match path {
-                    Some(p) => fs_read(host_ctx.as_ref(), owner, p)
-                        .map(|v| v.map(|c| serde_json::json!(c).to_string())),
+                    Some(p) => {
+                        fs_read(host_ctx.as_ref(), owner, p).map(|v| v.map(|c| serde_json::json!(c).to_string()))
+                    }
                     None => Err("fs.read: missing path".to_string()),
                 }
             }
@@ -59,8 +60,7 @@ impl UnitExecutor for FsUnitExecutor {
             "fs.exists" => {
                 let path = params.get("path").and_then(|v| v.as_str());
                 match path {
-                    Some(p) => fs_exists(host_ctx.as_ref(), owner, p)
-                        .map(|b| Some(serde_json::json!(b).to_string())),
+                    Some(p) => fs_exists(host_ctx.as_ref(), owner, p).map(|b| Some(serde_json::json!(b).to_string())),
                     None => Err("fs.exists: missing path".to_string()),
                 }
             }
@@ -68,8 +68,7 @@ impl UnitExecutor for FsUnitExecutor {
                 let path = params.get("path").and_then(|v| v.as_str());
                 let data = params.get("data").and_then(|v| v.as_str());
                 match (path, data) {
-                    (Some(p), Some(d)) => fs_write(host_ctx.as_ref(), owner, p, d)
-                        .map(|_| Some("null".to_string())),
+                    (Some(p), Some(d)) => fs_write(host_ctx.as_ref(), owner, p, d).map(|_| Some("null".to_string())),
                     (Some(_), None) => Err("fs.write: missing data".to_string()),
                     _ => Err("fs.write: missing path".to_string()),
                 }
@@ -96,7 +95,11 @@ fn ensure_unit_path_granted(
         return Ok(());
     }
     let needs_write = kind == "fs.write";
-    let permission = if needs_write { PERMISSION_FS_WRITE } else { PERMISSION_FS_READ };
+    let permission = if needs_write {
+        PERMISSION_FS_WRITE
+    } else {
+        PERMISSION_FS_READ
+    };
     if !host_ctx.permission().check(owner, permission) {
         return Err("permission denied".to_string());
     }
@@ -148,7 +151,10 @@ fn write_text_file(path: &str, content: &str) -> std::io::Result<()> {
 /// 授权拒绝属「可恢复异常/过滤拒绝」，按日志红线走 warn + 结构化字段。
 fn authorize_fs(
     sec: &dyn crate::wasm_core::host_api::context::SecurityScope,
-    plugin_id: &str, path: &str, operation: &str) -> Result<(), String> {
+    plugin_id: &str,
+    path: &str,
+    operation: &str,
+) -> Result<(), String> {
     let req = crate::wasm_core::security::AuthRequest {
         plugin_id,
         resource: crate::wasm_core::security::ResourceKind::Fs,
@@ -174,7 +180,12 @@ fn authorize_fs(
 /// 强行合并会改变弹窗次数与用户交互，故保留原手工链（见票据 08）。
 ///
 /// paths-json 为 JSON 字符串数组；返回是否全部同意（拒绝/超时均为 false）
-pub(crate) fn fs_request_auth(fs_auth: &dyn crate::wasm_core::host_api::context::FsAuthScope, perm: &dyn crate::wasm_core::host_api::context::PermissionScope, plugin_id: &str, paths_json: &str) -> Result<bool, String> {
+pub(crate) fn fs_request_auth(
+    fs_auth: &dyn crate::wasm_core::host_api::context::FsAuthScope,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
+    plugin_id: &str,
+    paths_json: &str,
+) -> Result<bool, String> {
     if !super::check_permission(perm, plugin_id, PERMISSION_FS_READ, "host_fs_request_auth") {
         return Err("permission denied".to_string());
     }
@@ -248,7 +259,10 @@ fn delete_file(path: &str) -> std::io::Result<()> {
 
 /// 读取文本文件（权限 + 三层访问校验）
 pub(crate) fn fs_read(
-    sec: &dyn crate::wasm_core::host_api::context::SecurityScope, plugin_id: &str, path: &str) -> Result<Option<String>, String> {
+    sec: &dyn crate::wasm_core::host_api::context::SecurityScope,
+    plugin_id: &str,
+    path: &str,
+) -> Result<Option<String>, String> {
     authorize_fs(sec, plugin_id, path, "read")?;
     read_text_file(path).map(Some).or_else(|e| {
         // SDK HostFs 契约：文件不存在返回 Ok(None)（store.rs 等插件依赖此语义处理新建文件）
@@ -262,14 +276,22 @@ pub(crate) fn fs_read(
 
 /// 写入文本文件（权限 + 三层访问校验）
 pub(crate) fn fs_write(
-    sec: &dyn crate::wasm_core::host_api::context::SecurityScope, plugin_id: &str, path: &str, data: &str) -> Result<(), String> {
+    sec: &dyn crate::wasm_core::host_api::context::SecurityScope,
+    plugin_id: &str,
+    path: &str,
+    data: &str,
+) -> Result<(), String> {
     authorize_fs(sec, plugin_id, path, "write")?;
     write_text_file(path, data).map_err(|e| format!("fs error: file write failed: {}", e))
 }
 
 /// 复制文件（读源 + 写目标双授权）
 pub(crate) fn fs_copy(
-    sec: &dyn crate::wasm_core::host_api::context::SecurityScope, plugin_id: &str, src: &str, dst: &str) -> Result<(), String> {
+    sec: &dyn crate::wasm_core::host_api::context::SecurityScope,
+    plugin_id: &str,
+    src: &str,
+    dst: &str,
+) -> Result<(), String> {
     // 双授权：源读 + 目标写（与改造前一致，逐路径经授权管线）
     authorize_fs(sec, plugin_id, src, "read")?;
     authorize_fs(sec, plugin_id, dst, "write")?;
@@ -278,14 +300,20 @@ pub(crate) fn fs_copy(
 
 /// 删除文件（权限 + 三层访问校验；文件不存在视为成功，幂等）
 pub(crate) fn fs_delete(
-    sec: &dyn crate::wasm_core::host_api::context::SecurityScope, plugin_id: &str, path: &str) -> Result<(), String> {
+    sec: &dyn crate::wasm_core::host_api::context::SecurityScope,
+    plugin_id: &str,
+    path: &str,
+) -> Result<(), String> {
     authorize_fs(sec, plugin_id, path, "write")?;
     delete_file(path).map_err(|e| format!("fs error: file delete failed: {}", e))
 }
 
 /// 检查文件是否存在（权限 + 三层访问校验，支持 WSL UNC 路径）
 pub(crate) fn fs_exists(
-    sec: &dyn crate::wasm_core::host_api::context::SecurityScope, plugin_id: &str, path: &str) -> Result<bool, String> {
+    sec: &dyn crate::wasm_core::host_api::context::SecurityScope,
+    plugin_id: &str,
+    path: &str,
+) -> Result<bool, String> {
     authorize_fs(sec, plugin_id, path, "read")?;
     // 支持 WSL UNC 路径
     if let Some((distro, wsl_path)) = wsl_fs::parse_wsl_unc_path(path) {
@@ -304,7 +332,10 @@ pub(crate) fn fs_exists(
 /// 权限 `fs:read` + fs_auth 三层校验；不支持 WSL UNC（与宿主 file_controller
 /// 的 std::fs 语义一致，working_dir 是宿主路径）。
 pub(crate) fn fs_read_dir(
-    sec: &dyn crate::wasm_core::host_api::context::SecurityScope, plugin_id: &str, path: &str) -> Result<String, String> {
+    sec: &dyn crate::wasm_core::host_api::context::SecurityScope,
+    plugin_id: &str,
+    path: &str,
+) -> Result<String, String> {
     authorize_fs(sec, plugin_id, path, "read")?;
     let read_dir = std::fs::read_dir(path).map_err(|e| format!("fs error: read dir '{}' failed: {}", path, e))?;
     let mut entries = Vec::new();
@@ -347,7 +378,10 @@ pub(crate) fn fs_canonicalize(
 ///
 /// 供文件大小上限判定（与宿主 file-content 的 `MAX_FILE_SIZE` 语义一致）。
 pub(crate) fn fs_stat(
-    sec: &dyn crate::wasm_core::host_api::context::SecurityScope, plugin_id: &str, path: &str) -> Result<Option<String>, String> {
+    sec: &dyn crate::wasm_core::host_api::context::SecurityScope,
+    plugin_id: &str,
+    path: &str,
+) -> Result<Option<String>, String> {
     authorize_fs(sec, plugin_id, path, "read")?;
     match std::fs::metadata(path) {
         Ok(meta) => Ok(Some(
@@ -389,7 +423,9 @@ mod tests {
 
         // ① 未声明 fs:read：文案必须与内层链逐字相同（否则把插件指向无关出路）
         assert_eq!(
-            executor.execute(&ctx, "test-plugin", "fs.read", &read_params).unwrap_err(),
+            executor
+                .execute(&ctx, "test-plugin", "fs.read", &read_params)
+                .unwrap_err(),
             "permission denied",
             "缺声明时不得先报目录未授权"
         );
@@ -397,22 +433,27 @@ mod tests {
         // ② 声明了但目录未授权：给出可行动出路
         ctx.permission()
             .grant_permissions("test-plugin", &[PERMISSION_FS_READ.to_string()]);
-        let err = executor.execute(&ctx, "test-plugin", "fs.read", &read_params)
+        let err = executor
+            .execute(&ctx, "test-plugin", "fs.read", &read_params)
             .expect_err("未授权路径必须被拒");
         assert!(err.contains(&path), "错误文案须点明是哪条路径: {err}");
         assert!(err.contains("request-auth"), "错误文案须给出出路: {err}");
 
         // ③ 预置持久化授权（= 用户在弹窗里点过「记住」）→ 放行并真实执行成功
         block_on_async(ctx.fs_auth().seed_legacy_granted_path("test-plugin", &path)).expect("seed grant");
-        executor.execute(&ctx, "test-plugin", "fs.read", &read_params)
+        executor
+            .execute(&ctx, "test-plugin", "fs.read", &read_params)
             .expect("已授权路径须放行");
 
         // ④ 授权不跨插件共享；写单元要的是 fs:write（读了授权也不许写）
-        executor.execute(&ctx, "test-plugin.other", "fs.read", &read_params)
+        executor
+            .execute(&ctx, "test-plugin.other", "fs.read", &read_params)
             .expect_err("授权不得跨插件共享");
         let write_params = serde_json::json!({ "path": path.clone(), "data": "x" });
         assert_eq!(
-            executor.execute(&ctx, "test-plugin", "fs.write", &write_params).unwrap_err(),
+            executor
+                .execute(&ctx, "test-plugin", "fs.write", &write_params)
+                .unwrap_err(),
             "permission denied",
             "只授 fs:read 不得让写单元过闸"
         );
@@ -420,7 +461,8 @@ mod tests {
             "test-plugin",
             &[PERMISSION_FS_READ.to_string(), PERMISSION_FS_WRITE.to_string()],
         );
-        executor.execute(&ctx, "test-plugin", "fs.write", &write_params)
+        executor
+            .execute(&ctx, "test-plugin", "fs.write", &write_params)
             .expect("声明 fs:write 后写单元须过预检");
 
         // ⑤ 非 fs 单元不属于本执行器；缺 path 的 fs 单元由 kind 分支报错，预检不插手

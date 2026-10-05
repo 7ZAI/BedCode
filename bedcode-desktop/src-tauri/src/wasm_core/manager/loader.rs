@@ -4,10 +4,10 @@
 //! 验证必填字段和权限合法性，返回已加载的插件列表
 //! 仅处理文件扫描加载，Rust+TS WASM 插件由 PluginHost 通过 WasmRuntime 加载
 
+use crate::system::constants::PLUGIN_DOWNLOAD_TEMP_DIR;
 use crate::wasm_core::manager::types::{LoadedPlugin, PluginSource};
 use crate::wasm_core::manager::validation::{validate_dir_binding, validate_plugin_id};
 use crate::wasm_core::permission::PermissionManager;
-use crate::system::constants::PLUGIN_DOWNLOAD_TEMP_DIR;
 use bedcode_plugin_api::{PluginManifest, PluginState, PluginType};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -422,8 +422,7 @@ mod tests {
         write_minimal_plugin(user_dir.path(), shared_id);
 
         let permission = PermissionManager::new();
-        let (builtin, user) =
-            PluginLoader::load_builtin_and_user(builtin_dir.path(), user_dir.path(), &permission);
+        let (builtin, user) = PluginLoader::load_builtin_and_user(builtin_dir.path(), user_dir.path(), &permission);
 
         assert!(
             builtin.contains_key(shared_id),
@@ -436,10 +435,7 @@ mod tests {
             user.keys().collect::<Vec<_>>()
         );
         assert_eq!(
-            builtin
-                .get(shared_id)
-                .expect("builtin entry")
-                .extension_path,
+            builtin.get(shared_id).expect("builtin entry").extension_path,
             builtin_dir.path().join(shared_id).to_string_lossy().to_string(),
             "胜出条目的扩展路径必须指向内置目录（用户副本不得顶替）"
         );
@@ -454,8 +450,7 @@ mod tests {
         write_minimal_plugin(user_dir.path(), "com.test.user-only");
 
         let permission = PermissionManager::new();
-        let (builtin, user) =
-            PluginLoader::load_builtin_and_user(builtin_dir.path(), user_dir.path(), &permission);
+        let (builtin, user) = PluginLoader::load_builtin_and_user(builtin_dir.path(), user_dir.path(), &permission);
 
         assert_eq!(
             builtin.keys().collect::<Vec<_>>(),
@@ -482,8 +477,7 @@ mod tests {
         let missing_user_dir = tempfile::TempDir::new().unwrap().path().join("not-created");
 
         let permission = PermissionManager::new();
-        let (builtin, user) =
-            PluginLoader::load_builtin_and_user(builtin_dir.path(), &missing_user_dir, &permission);
+        let (builtin, user) = PluginLoader::load_builtin_and_user(builtin_dir.path(), &missing_user_dir, &permission);
 
         assert!(user.is_empty(), "缺失目录不得凭空产出插件");
         assert!(

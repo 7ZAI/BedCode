@@ -76,12 +76,7 @@ pub(crate) fn aead_generate_key(
     plugin_id: &str,
     algorithm: &str,
 ) -> Result<Vec<u8>, String> {
-    if !super::check_permission(
-        perm,
-        plugin_id,
-        PERMISSION_CRYPTO_AEAD,
-        "host_crypto_aead_generate_key",
-    ) {
+    if !super::check_permission(perm, plugin_id, PERMISSION_CRYPTO_AEAD, "host_crypto_aead_generate_key") {
         return Err("permission denied: crypto:aead".to_string());
     }
     let key = resolve_aead(algorithm)

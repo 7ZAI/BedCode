@@ -210,10 +210,13 @@ fn perf_ws_terminal_output_throughput() {
                 "ws:server".to_string(),
             ],
         );
-        host_ctx.api_registry().register(
-            PLUGIN_ID,
-            &session_apis().iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-        ).unwrap();
+        host_ctx
+            .api_registry()
+            .register(
+                PLUGIN_ID,
+                &session_apis().iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+            )
+            .unwrap();
         let component = wasm_runtime
             .compile_component(&std::fs::read(&wasm_path).expect("read session artifact"))
             .expect("compile session artifact");

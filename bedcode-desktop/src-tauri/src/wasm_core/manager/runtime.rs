@@ -49,7 +49,7 @@ use std::sync::Arc;
 use tauri::Manager;
 #[cfg(test)]
 use tokio::sync::{Mutex, RwLock};
-use wasmtime::{Cache, CacheConfig, Config, Engine, ResourceLimiter, WasmBacktraceDetails};
+use wasmtime::{Cache, CacheConfig, Config, Engine, WasmBacktraceDetails};
 
 // ==================== 宿主上下文（票 04 迁移 host_api::context） ====================
 // 定义已迁 `crate::wasm_core::host_api::context`（host_api 消费方家园）；以下 re-export
@@ -62,8 +62,8 @@ pub use crate::wasm_core::host_api::context::{CapabilityProvider, PluginServices
 // Engine 构建参数与 Store 资源上限的默认值即历史生产常量（`config::defaults`），
 // 支持配置文件加载与运行时覆盖；燃料看门狗的语义说明随默认值一并迁入。
 pub(crate) use crate::wasm_core::config::plugin_debug_mode;
-use crate::wasm_core::config::{CoreConfig, StoreLimits};
-use crate::wasm_core::monitor::{LifecycleEvent, MetricsRegistry, PluginMetrics};
+use crate::wasm_core::config::CoreConfig;
+use crate::wasm_core::monitor::{LifecycleEvent, MetricsRegistry};
 use bedcode_plugin_api::{ResourceOverrides, WasiPreopenDir};
 
 /// 从 catch_unwind 的 panic 载荷提取人类可读消息（统一 panic 诊断文案）
@@ -112,136 +112,17 @@ pub struct WasmRuntime {
     monitor: Arc<MetricsRegistry>,
 }
 
-/// 实例化一个插件 Store 所需的全部配置与埋点句柄（core-config × core-monitor 交汇）
-#[derive(Clone)]
-pub(crate) struct StoreSpec {
-    /// Store 资源上限快照
-    pub(crate) limits: StoreLimits,
-    /// 燃料看门狗是否开启（Engine 级 consume_fuel 的投影；关闭时 set_fuel/get_fuel 不可用）
-    pub(crate) fuel_enabled: bool,
-    /// 插件指标句柄（core-monitor 埋点入口）
-    pub(crate) metrics: Arc<PluginMetrics>,
-}
-
-/// 单个 WASM 插件实例的状态
-///
-/// 每个插件实例化时创建独立的 Store<WasmPluginState>，
-/// state 中包含插件 ID 和宿主上下文引用
-pub struct WasmPluginState {
-    /// 插件 ID（用于权限校验和数据隔离）
-    plugin_id: String,
-    /// 宿主上下文（注入宿主能力）
-    host_ctx: Arc<WasmHostContext>,
-    /// WASI preview2 上下文（预打开目录见 component.rs `resolve_preopen_dir`；
-    /// 未开启自身文件访问的插件为空上下文，不干扰现有 host_fs 路径）
-    wasi_ctx: wasmtime_wasi::WasiCtx,
-    /// WASI 资源表（文件句柄 / 流等，随每个插件实例独立生命周期）
-    wasi_table: wasmtime::component::ResourceTable,
-    /// Store 资源上限快照（实例化时自内核配置读取，见 core-config）
-    limits: StoreLimits,
-    /// 燃料看门狗是否开启（见 [`StoreSpec::fuel_enabled`]）
-    fuel_enabled: bool,
-    /// 插件指标句柄（core-monitor 埋点入口）
-    metrics: Arc<PluginMetrics>,
-    /// v11：可选导出 `events-binary#on-message-binary` 的动态探测句柄。
-    /// 旧插件（v10 及更早）不导出该函数 → None，二进制消息对其按
-    /// 「格式不匹配」拒绝（总线侧过滤，不会到达本字段为 None 的实例）
-    on_message_binary: Option<wasmtime::component::TypedFunc<(String, String, Vec<u8>), ()>>,
-    /// v14：可选导出 `events-ws#on-message`（客户端域帧回调）的探测句柄。
-    /// 未导出 → None：宿主按 spec §2.2 降级（消息帧丢弃 + 首次 warn + 计数，
-    /// 不缓存），状态事件仍经消息总线照常投递
-    on_ws_message: Option<wasmtime::component::TypedFunc<(String, String, Vec<u8>), ()>>,
-    /// v14：可选导出 `events-ws#on-client-message`（服务端域帧回调）的探测句柄
-    on_ws_client_message: Option<wasmtime::component::TypedFunc<(String, String, String, Vec<u8>), ()>>,
-    /// v20：可选导出 `events-task#on-task-event`（宿主并发任务进度/终态回调）的
-    /// 探测句柄。未导出 → None：宿主按 spec §5.3 降级（事件丢弃 + 首次 warn +
-    /// 计数，不缓存），离线查询原语 `status`/`list-jobs` 自愈
-    on_task_event: Option<wasmtime::component::TypedFunc<(String,), ()>>,
-}
-
-impl WasmPluginState {
-    /// 构建插件状态（wasi_ctx 由调用方按插件配置构建，见 component.rs）
-    pub(crate) fn new(
-        plugin_id: String,
-        host_ctx: Arc<WasmHostContext>,
-        wasi_ctx: wasmtime_wasi::WasiCtx,
-        spec: StoreSpec,
-    ) -> Self {
-        Self {
-            plugin_id,
-            host_ctx,
-            wasi_ctx,
-            wasi_table: wasmtime::component::ResourceTable::new(),
-            limits: spec.limits,
-            fuel_enabled: spec.fuel_enabled,
-            metrics: spec.metrics,
-            // v11 / v14 / v20：可选导出在实例化后动态探测（verify_abi 内写入，见 component.rs）
-            on_message_binary: None,
-            on_ws_message: None,
-            on_ws_client_message: None,
-            on_task_event: None,
-        }
-    }
-}
-
-/// WASI preview2 视图：`p2::add_to_linker_sync` 通过此 trait 访问每个
-/// 插件实例的 WasiCtx + ResourceTable（linker 共享、ctx 每实例）
-impl wasmtime_wasi::WasiView for WasmPluginState {
-    fn ctx(&mut self) -> wasmtime_wasi::WasiCtxView<'_> {
-        wasmtime_wasi::WasiCtxView {
-            ctx: &mut self.wasi_ctx,
-            table: &mut self.wasi_table,
-        }
-    }
-}
-
-/// 插件实例资源限制器
-///
-/// 直接借用 Store 状态（`Store::limiter` 的闭包返回本状态的可变引用），
-/// 限制单插件线性内存与表大小，防止失控/恶意插件耗尽宿主内存。
-impl ResourceLimiter for WasmPluginState {
-    fn memory_growing(&mut self, _current: usize, desired: usize, _maximum: Option<usize>) -> wasmtime::Result<bool> {
-        if desired > self.limits.max_memory_bytes {
-            tracing::warn!(
-                plugin_id = %self.plugin_id,
-                desired_bytes = desired,
-                max_bytes = self.limits.max_memory_bytes,
-                "WASM memory growth denied by resource limiter"
-            );
-            Ok(false)
-        } else {
-            // core-monitor 记账：当前值/峰值（纯原子操作，不进日志）
-            self.metrics.record_memory_growth(desired);
-            Ok(true)
-        }
-    }
-
-    fn table_growing(&mut self, _current: usize, desired: usize, _maximum: Option<usize>) -> wasmtime::Result<bool> {
-        if desired > self.limits.max_table_entries {
-            tracing::warn!(
-                plugin_id = %self.plugin_id,
-                desired_entries = desired,
-                max_entries = self.limits.max_table_entries,
-                "WASM table growth denied by resource limiter"
-            );
-            Ok(false)
-        } else {
-            Ok(true)
-        }
-    }
-
-    fn instances(&self) -> usize {
-        self.limits.max_instances
-    }
-
-    fn memories(&self) -> usize {
-        self.limits.max_memories
-    }
-
-    fn tables(&self) -> usize {
-        self.limits.max_tables
-    }
-}
+// ==================== 迁往机制内核的类型（转发） ====================
+//
+// `WasmPluginState` / `StoreSpec` 连同 `WasiView` 与 `ResourceLimiter` 实现整体搬入
+// `bedcode-host-kit`（wasm-core-lib-split 票 03）：它们是**插件实例状态的机制面**，
+// 且必须与「能力 crate 能命名状态类型」这一硬约束同 crate（`add_to_linker::<S,D>`
+// 单态 ⇒ 住在宿主 bin crate 内会与能力 crate 构成 Cargo 环）。
+//
+// 可见性以 `pub use` 原样转发，既有 `runtime::WasmPluginState` 等引用路径逐字不变。
+// 唯一实质变化：状态里的宿主引用字段 `host_ctx: Arc<WasmHostContext>` 改为
+// `host: Arc<dyn HostPorts>`（见 `host_api::context::host_ctx` 向下转型辅助）。
+pub use bedcode_host_kit::state::{StoreSpec, WasmPluginState};
 
 /// 已加载的 WASM 插件（迁移阶段 C：组件形态唯一）
 ///
@@ -586,8 +467,8 @@ impl WasmRuntime {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::fixture_build::build_sdk_fixture;
+    use super::*;
 
     // A0-3 前置探针（P1/P2/P5）：async store 兼容性 + 资源限制 async 语义 + 性能基线。
     // 文档：.scratch/2026-09-21-a0-3-host-async/spec.md + report.md（只读探针，不碰生产路径）
@@ -706,11 +587,22 @@ mod tests {
             host_ctx.set_plugin_db_root(Some(plugin_db_root()));
             let host_ctx = Arc::new(host_ctx);
 
+            // 能力域实例级端口（wasm-core-lib-split 票 04 / 05 / 06）：WS、peer 与 http
+            // 域的 `impl Host for WasmPluginState` 经本上下文取回端口，使权限判定与
+            // 引擎上下文的取法落在**本用例自己的**管理器/总线上（进程级只有一格，
+            // 见 `bedcode_host_kit::ports` 模块文档「两条通道」）。生产在
+            // `PluginHost::new` 装配链里做同一件事。
+            crate::wasm_core::host_api::ws::install(Arc::clone(&host_ctx));
+            crate::wasm_core::host_api::peer::install(Arc::clone(&host_ctx));
+            crate::wasm_core::host_api::http::install(Arc::clone(&host_ctx));
+
             // 注入 host-task 执行引擎 + 单元执行器注册表（与 PluginHost 生产装配同构）：
             // host_api/task.rs 经 TaskEngine 接口调用 core-task；execute_unit 经
             // UnitExecutor 注册表分发域执行器（幂等去重，多测试共用进程级注册表）
             host_ctx
-                .set_task_engine(Arc::new(crate::wasm_core::manager::task::CoreTaskEngine))
+                .set_task_engine(Arc::new(crate::wasm_core::manager::task::CoreTaskEngine::new(
+                    host_ctx.clone(),
+                )))
                 .await;
             crate::wasm_core::manager::task::register_unit_executor(Arc::new(
                 crate::wasm_core::host_api::fs::FsUnitExecutor,

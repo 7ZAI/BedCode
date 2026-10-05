@@ -20,12 +20,20 @@
 //! 与会话/配置/文件/git 四组**仅供 `#[cfg(test)]` 黄金形状锁**的类型——锁的是
 //! 「移动端看到的字节」这一跨端 wire 契约，路由真身已在插件侧（ABI v29）；
 //! 生产路径不得构造这些类型。改它们 = 改跨端 wire 契约，必须两端同步评估。
+//!
+//! **插件绑定层（wasm-core-lib-split 票 06）**：[`plugin_binding`] 是本 crate 的
+//! `host-http` 能力域（3 条原语）——入站端点注册 / 注销两条与服务端域注册表同住，
+//! 出站 `fetch`（含 SSE 流式推流）在同 crate 的 [`plugin_binding::egress`] 模块。
+//! WIT 接线与能力模块自报都在该模块里，经 `bedcode-host-kit` 的能力模块注册表
+//! 自动装配；宿主侧只剩一个端口 adapter（宿主 host_api 域的 http 适配器）与一次
+//! 开机装配调用，不再有该域的逐接口接线。
 
 pub mod controllers;
 pub mod dtos;
 pub mod face;
 pub mod gateway;
 pub mod middleware;
+pub mod plugin_binding;
 pub mod registry;
 pub mod routes;
 

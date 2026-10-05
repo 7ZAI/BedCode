@@ -58,7 +58,10 @@ impl OwnerFailureSink for RecordingSink {
 /// **必须在 tokio 上下文内调用**（`spawn_owner` 内部 `tokio::spawn`）；
 /// 而 `setup_wasm_runtime` 自建运行时并在其中 block_on，必须在**上下文之外**调用
 /// （否则 "Cannot start a runtime from within a runtime"）——两者因此分开。
-fn spawn_test_owner(wasm_runtime: &WasmRuntime, host_ctx: Arc<WasmHostContext>) -> (Arc<RecordingSink>, Arc<OwnerHandle>) {
+fn spawn_test_owner(
+    wasm_runtime: &WasmRuntime,
+    host_ctx: Arc<WasmHostContext>,
+) -> (Arc<RecordingSink>, Arc<OwnerHandle>) {
     let component = wasm_runtime
         .compile_component(&build_test_component())
         .expect("compile component-test fixture");
@@ -227,9 +230,7 @@ fn owner_queue_full_is_explicit_failure() {
         let (_sink, owner) = spawn_test_owner(&wasm_runtime, host_ctx);
         let extra = 16usize;
 
-        let calls: Vec<_> = (0..(OWNER_QUEUE_CAP + extra))
-            .map(|i| owner.call(echo_op(i)))
-            .collect();
+        let calls: Vec<_> = (0..(OWNER_QUEUE_CAP + extra)).map(|i| owner.call(echo_op(i))).collect();
         let results = futures_util::future::join_all(calls).await;
 
         let failures: Vec<_> = results.iter().filter_map(|r| r.as_ref().err()).collect();
@@ -242,8 +243,7 @@ fn owner_queue_full_is_explicit_failure() {
         let stats = owner.stats();
         assert_eq!(stats.queue_full, extra as u64, "队列满计数");
         assert_eq!(
-            stats.started as usize,
-            OWNER_QUEUE_CAP,
+            stats.started as usize, OWNER_QUEUE_CAP,
             "入队成功的请求不得丢失（有界预算内全部服务）"
         );
 

@@ -5,17 +5,17 @@
 //! 支持静态注册（Rust 插件 via inventory）、文件扫描（TS-only 插件）和 WASM 模块（Rust+TS 插件）
 
 use crate::db::Database;
+use crate::system::constants::{
+    LIFECYCLE_SHUTDOWN, LIFECYCLE_STARTUP, PLUGIN_CALLBACK_TIMEOUT_SECS, PLUGIN_MANIFEST_FILE,
+};
 use crate::wasm_core::config::CallModel;
 use crate::wasm_core::host_api::context::CapabilityTarget;
 use crate::wasm_core::manager::loader::PluginLoader;
 use crate::wasm_core::manager::registry::PluginRegistry;
-use crate::wasm_core::storage::PluginStorage;
-use crate::wasm_core::manager::types::{DesktopPluginInfo, LoadedPlugin, PluginSource};
 use crate::wasm_core::manager::runtime::{InstanceMeta, LoadedWasmPlugin, WasmHostContext, WasmRuntime};
+use crate::wasm_core::manager::types::{DesktopPluginInfo, LoadedPlugin, PluginSource};
 use crate::wasm_core::permission::PermissionManager;
-use crate::system::constants::{
-    LIFECYCLE_SHUTDOWN, LIFECYCLE_STARTUP, PLUGIN_CALLBACK_TIMEOUT_SECS, PLUGIN_MANIFEST_FILE,
-};
+use crate::wasm_core::storage::PluginStorage;
 use bedcode_plugin_api::{PluginKind, PluginState, WasiPreopenDir, WsEndpointContribution};
 use chrono::Utc;
 use serde_json::Value;
@@ -86,11 +86,7 @@ impl WasmInstanceEntry {
             CallModel::Mutex => InstanceSlot::Mutex(Arc::new(Mutex::new(plugin))),
             CallModel::EventLoop => InstanceSlot::Owner(spawn_owner(plugin, sink)),
         };
-        Self {
-            meta,
-            call_model,
-            slot,
-        }
+        Self { meta, call_model, slot }
     }
 
     /// 实例元数据（宿主侧只读投影，不进实例）
@@ -489,8 +485,26 @@ impl PluginHost {
         // host_api/task.rs 经 TaskEngine 接口调用 core-task；execute_unit 经 UnitExecutor
         // 注册表分发——manager::task 不再直调 host_api 域函数，host_api 不再依赖 manager
         host.wasm_host_ctx()
-            .set_task_engine(Arc::new(crate::wasm_core::manager::task::CoreTaskEngine))
+            .set_task_engine(Arc::new(crate::wasm_core::manager::task::CoreTaskEngine::new(
+                host.wasm_host_ctx().clone(),
+            )))
             .await;
+        // mDNS 能力域端口装配（wasm-core-lib-split 票 03）：能力域实现已迁出
+        // wasm_core，其宿主端口实现经此装入。**必须早于任何插件激活**——浏览
+        // 事件循环一开就取端口，取不到直接 panic（fail-visible，不静默空转）。
+        crate::wasm_core::host_api::mdns::install();
+        // WS 能力域端口装配（wasm-core-lib-split 票 04）：15 条原语已迁入
+        // `bedcode_server_websocket::plugin_binding`，宿主只实现端口。同 mdns：
+        // **必须早于任何插件激活**，guest 一调原语就取端口，取不到直接 panic。
+        crate::wasm_core::host_api::ws::install(host.wasm_host_ctx().clone());
+        // 对等网络能力域端口装配（wasm-core-lib-split 票 05）：19 条原语已迁入
+        // `bedcode_server_peer_net::plugin_binding`，宿主只实现端口。同上：
+        // **必须早于任何插件激活**，guest 一调原语就取端口，取不到直接 panic。
+        crate::wasm_core::host_api::peer::install(host.wasm_host_ctx().clone());
+        // HTTP 能力域端口装配（wasm-core-lib-split 票 06）：入站 2 + 出站 1 原语已迁入
+        // WS 域所在的同一个传输面 crate（出站在其 `egress` 模块），宿主只实现端口。同上：
+        // **必须早于任何插件激活**，guest 一调原语就取端口，取不到直接 panic。
+        crate::wasm_core::host_api::http::install(host.wasm_host_ctx().clone());
         crate::wasm_core::manager::task::register_unit_executor(Arc::new(
             crate::wasm_core::host_api::fs::FsUnitExecutor,
         ));

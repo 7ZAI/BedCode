@@ -28,16 +28,14 @@ where
     // 同步调用段（返回 future 之前可能 panic）
     let invoked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(invoke));
     match invoked {
-        Ok(fut) => Box::pin(
-            std::panic::AssertUnwindSafe(fut)
-                .catch_unwind()
-                .map(|r| match r {
-                    Ok(Ok(())) => CallbackOutcome::Done,
-                    Ok(Err(e)) => CallbackOutcome::Failed(format!("{e:#}")),
-                    Err(payload) => CallbackOutcome::Panicked(panic_message(&payload)),
-                }),
-        ),
-        Err(payload) => Box::pin(futures_util::future::ready(CallbackOutcome::Panicked(panic_message(&payload)))),
+        Ok(fut) => Box::pin(std::panic::AssertUnwindSafe(fut).catch_unwind().map(|r| match r {
+            Ok(Ok(())) => CallbackOutcome::Done,
+            Ok(Err(e)) => CallbackOutcome::Failed(format!("{e:#}")),
+            Err(payload) => CallbackOutcome::Panicked(panic_message(&payload)),
+        })),
+        Err(payload) => Box::pin(futures_util::future::ready(CallbackOutcome::Panicked(panic_message(
+            &payload,
+        )))),
     }
 }
 

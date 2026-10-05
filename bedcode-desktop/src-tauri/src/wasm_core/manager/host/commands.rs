@@ -41,10 +41,7 @@ fn parse_business_marker(raw: &str) -> Option<(String, serde_json::Value)> {
         return None;
     }
     let code = obj.get("code")?.as_str()?;
-    let params = obj
-        .get("params")
-        .cloned()
-        .unwrap_or(serde_json::Value::Null);
+    let params = obj.get("params").cloned().unwrap_or(serde_json::Value::Null);
     Some((code.to_string(), params))
 }
 
@@ -72,16 +69,13 @@ impl PluginHost {
 
         let source = {
             let plugins = self.plugins.read().await;
-            plugins
-                .get(plugin_id)
-                .map(|p| p.source.clone())
-                .ok_or_else(|| {
-                    crate::AppError::user_facing(
-                        "host.plugin.not-found",
-                        serde_json::json!({ "plugin": plugin_id }),
-                        format!("plugin not found: {plugin_id} (command {command_name})"),
-                    )
-                })?
+            plugins.get(plugin_id).map(|p| p.source.clone()).ok_or_else(|| {
+                crate::AppError::user_facing(
+                    "host.plugin.not-found",
+                    serde_json::json!({ "plugin": plugin_id }),
+                    format!("plugin not found: {plugin_id} (command {command_name})"),
+                )
+            })?
         };
 
         match source {
@@ -93,7 +87,10 @@ impl PluginHost {
             PluginSource::FileScan => Err(crate::AppError::user_facing(
                 "host.plugin.not-found",
                 serde_json::json!({ "plugin": plugin_id }),
-                format!("plugin {} is TS-only, cannot invoke Rust command {}", plugin_id, command_name),
+                format!(
+                    "plugin {} is TS-only, cannot invoke Rust command {}",
+                    plugin_id, command_name
+                ),
             )),
         }
     }
@@ -380,19 +377,19 @@ mod tests {
             "cmd",
             r#"{"__bedcode_error__":true,"code":"com.bedcode.demo.simple"}"#,
         );
-        let AppError::UserFacing { params, .. } = err else { panic!("应为 UserFacing") };
+        let AppError::UserFacing { params, .. } = err else {
+            panic!("应为 UserFacing")
+        };
         assert_eq!(params, serde_json::Value::Null);
     }
 
     /// 反例：普通错误字符串（未标记）→ 兜底码 + plugin 标识参数，原文只进 detail
     #[test]
     fn plain_error_falls_back_to_host_internal() {
-        let err = plugin_command_error(
-            "com.bedcode.legacy",
-            "old.cmd",
-            "database locked at path /secret/db",
-        );
-        let AppError::UserFacing { code, params, detail } = err else { panic!("应为 UserFacing") };
+        let err = plugin_command_error("com.bedcode.legacy", "old.cmd", "database locked at path /secret/db");
+        let AppError::UserFacing { code, params, detail } = err else {
+            panic!("应为 UserFacing")
+        };
         assert_eq!(code, crate::system::error::DEFAULT_ERROR_CODE);
         assert_eq!(params, serde_json::json!({ "plugin": "com.bedcode.legacy" }));
         assert!(detail.contains("database locked"), "detail 只进日志: {detail}");
@@ -408,10 +405,7 @@ mod tests {
             r#"not json at all"#,
             r#"{"code":"x"}"#,
         ] {
-            assert!(
-                parse_business_marker(raw).is_none(),
-                "畸形标记应当拒绝: {raw}"
-            );
+            assert!(parse_business_marker(raw).is_none(), "畸形标记应当拒绝: {raw}");
         }
     }
 
@@ -423,7 +417,10 @@ mod tests {
             Some(("a.b.c".to_string(), serde_json::json!({})))
         );
         assert!(parse_business_marker(r#"{"__bedcode_error__":true,"code":"a.b","params":null}"#).is_some());
-        assert!(parse_business_marker(r#"{"__bedcode_error__":true,"code":"a.b","extra":1}"#).is_some(), "额外字段应忽略");
+        assert!(
+            parse_business_marker(r#"{"__bedcode_error__":true,"code":"a.b","extra":1}"#).is_some(),
+            "额外字段应忽略"
+        );
     }
 
     /// 机制码：未激活 → host.plugin.not-activated；Display 语义保持（既有断言兼容）

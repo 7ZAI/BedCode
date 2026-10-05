@@ -91,9 +91,9 @@ pub(crate) mod tests {
     use super::*;
     use crate::db::Database;
     use crate::wasm_core::bus::MessageBus;
-    use crate::wasm_core::storage::PluginStorage;
     use crate::wasm_core::permission::PermissionManager;
     use crate::wasm_core::security::fs_auth::FsAuthChecker;
+    use crate::wasm_core::storage::PluginStorage;
     use std::collections::HashMap;
     use std::path::Path;
     use std::sync::Arc;

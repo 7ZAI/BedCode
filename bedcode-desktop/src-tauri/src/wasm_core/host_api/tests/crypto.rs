@@ -14,7 +14,16 @@ fn aead_encrypt_decrypt_roundtrip_authorized() {
     grant_permissions(&ctx, "p1", &[PERMISSION_CRYPTO_AEAD]);
     let key = aead_generate_key(ctx.as_ref(), "p1", "aes-256-gcm").expect("key");
     let nonce = aead_generate_nonce(ctx.as_ref(), "p1", "aes-256-gcm").expect("nonce");
-    let ct = aead_encrypt(ctx.as_ref(), "p1", "aes-256-gcm", &key, &nonce, b"payload", Some(b"aad")).expect("encrypt");
+    let ct = aead_encrypt(
+        ctx.as_ref(),
+        "p1",
+        "aes-256-gcm",
+        &key,
+        &nonce,
+        b"payload",
+        Some(b"aad"),
+    )
+    .expect("encrypt");
     let pt = aead_decrypt(ctx.as_ref(), "p1", "aes-256-gcm", &key, &nonce, &ct, Some(b"aad")).expect("decrypt");
     assert_eq!(pt, b"payload");
 }

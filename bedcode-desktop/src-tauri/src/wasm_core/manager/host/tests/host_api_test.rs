@@ -1,7 +1,7 @@
 //! PluginHost 状态与访问器用例（静态注册插件 + 状态机 + 懒激活判据）。
 
-use super::*;
 use super::scaffold::*;
+use super::*;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_static_builtin_activated_notifies_startup() {

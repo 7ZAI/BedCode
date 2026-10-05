@@ -10,8 +10,10 @@ impl PluginHost {
     /// 解压校验（manifest/身份/路径安全）→ 重新扫描用户目录 → WASM 实例化 →
     /// 注册 manifest 扩展点。同 id 已安装时回滚安装目录并报错（需先卸载）。
     pub async fn install_from_zip(&self, zip_path: &str) -> crate::Result<String> {
-        let plugin_id =
-            crate::wasm_core::manager::downloader::PluginDownloader::install_from_file(zip_path, &self.user_plugins_dir)?;
+        let plugin_id = crate::wasm_core::manager::downloader::PluginDownloader::install_from_file(
+            zip_path,
+            &self.user_plugins_dir,
+        )?;
 
         if self.plugins.read().await.contains_key(&plugin_id) {
             let dir = self.user_plugins_dir.join(&plugin_id);

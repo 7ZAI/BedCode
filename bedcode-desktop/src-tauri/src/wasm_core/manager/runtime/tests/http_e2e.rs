@@ -49,30 +49,41 @@ fn test_http_route_registration_server_domain_roundtrip() {
         let internal = format!("/api/plugin/{PLUGIN_ID}/hello");
         let entry = registry::find_by_internal(&internal).expect("内部路径必须已注册");
         assert_eq!(entry.owner, PLUGIN_ID);
-        assert_eq!(entry.auth, bedcode_plugin_api::EndpointAuth::Jwt, "未声明 auth 落最严档");
+        assert_eq!(
+            entry.auth,
+            bedcode_plugin_api::EndpointAuth::Jwt,
+            "未声明 auth 落最严档"
+        );
 
         let exact = registry::find_by_host("/api/http-test/hello", "GET").expect("host 别名精确命中");
         assert_eq!(exact.entry.path, "hello");
         assert!(exact.params.is_empty(), "精确命中无模板捕获");
 
         let tpl = registry::find_by_host("/api/http-test/s-9/x", "GET").expect("模板别名命中");
-        assert_eq!(tpl.params.get("id").map(String::as_str), Some("s-9"), "模板捕获必须随请求注入");
+        assert_eq!(
+            tpl.params.get("id").map(String::as_str),
+            Some("s-9"),
+            "模板捕获必须随请求注入"
+        );
 
         // ==================== _http_endpoint 入参形状（网关转发同构） ====================
         let echoed: serde_json::Value = serde_json::from_str(
-            &plugin.lock().await.invoke_command(
-                "_http_endpoint",
-                &serde_json::json!({
-                    "method": "GET",
-                    "path": "x/{id}",
-                    "query": { "q": "1" },
-                    "params": { "id": "s-9" },
-                    "body": null,
-                    "caller": "device",
-                })
-                .to_string(),
-            )
-            .expect("_http_endpoint"),
+            &plugin
+                .lock()
+                .await
+                .invoke_command(
+                    "_http_endpoint",
+                    &serde_json::json!({
+                        "method": "GET",
+                        "path": "x/{id}",
+                        "query": { "q": "1" },
+                        "params": { "id": "s-9" },
+                        "body": null,
+                        "caller": "device",
+                    })
+                    .to_string(),
+                )
+                .expect("_http_endpoint"),
         )
         .expect("echo json");
         assert_eq!(echoed["body"]["data"]["path"], "x/{id}");
@@ -80,23 +91,32 @@ fn test_http_route_registration_server_domain_roundtrip() {
 
         // ==================== 注销：属主命中 → 幂等 false；路由随之不可查 ====================
         let unreg: serde_json::Value = serde_json::from_str(
-            &plugin.lock().await.invoke_command(
-                "http-unregister",
-                &serde_json::json!({ "endpointId": entry.endpoint_id }).to_string(),
-            )
-            .expect("http-unregister"),
+            &plugin
+                .lock()
+                .await
+                .invoke_command(
+                    "http-unregister",
+                    &serde_json::json!({ "endpointId": entry.endpoint_id }).to_string(),
+                )
+                .expect("http-unregister"),
         )
         .expect("unreg json");
         assert_eq!(unreg["hit"], true, "属主注销必须命中");
         assert!(registry::find_by_internal(&internal).is_none(), "注销后内部路径不可查");
-        assert!(registry::find_by_host("/api/http-test/hello", "GET").is_none(), "注销后别名不可查");
+        assert!(
+            registry::find_by_host("/api/http-test/hello", "GET").is_none(),
+            "注销后别名不可查"
+        );
 
         let again: serde_json::Value = serde_json::from_str(
-            &plugin.lock().await.invoke_command(
-                "http-unregister",
-                &serde_json::json!({ "endpointId": entry.endpoint_id }).to_string(),
-            )
-            .expect("http-unregister again"),
+            &plugin
+                .lock()
+                .await
+                .invoke_command(
+                    "http-unregister",
+                    &serde_json::json!({ "endpointId": entry.endpoint_id }).to_string(),
+                )
+                .expect("http-unregister again"),
         )
         .expect("unreg json");
         assert_eq!(again["hit"], false, "重复注销幂等 false");

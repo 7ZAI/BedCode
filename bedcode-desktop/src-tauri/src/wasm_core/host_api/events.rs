@@ -9,9 +9,13 @@ use tauri::Emitter;
 /// 非法 JSON 载荷直接 `Err`（H-05）：降级成字符串会让 guest 以为已投递、前端
 /// 收到形状不同的载荷、监听方按原 schema 解析运行时失败且无信号——静默降级
 /// 的断链形态。插件侧载荷错误应在来源处可见。
-pub(crate) fn emit_event(app: &dyn crate::wasm_core::host_api::context::AppHandleScope, event_name: &str, payload_json: &str) -> Result<(), String> {
-    let json_payload: serde_json::Value = serde_json::from_str(payload_json)
-        .map_err(|e| format!("event emit failed: payload is not valid JSON: {e}"))?;
+pub(crate) fn emit_event(
+    app: &dyn crate::wasm_core::host_api::context::AppHandleScope,
+    event_name: &str,
+    payload_json: &str,
+) -> Result<(), String> {
+    let json_payload: serde_json::Value =
+        serde_json::from_str(payload_json).map_err(|e| format!("event emit failed: payload is not valid JSON: {e}"))?;
     let Some(app_handle) = app.app_handle() else {
         tracing::warn!(event = %event_name, "emit_event: app_handle not available in headless context");
         return Ok(());
@@ -22,7 +26,12 @@ pub(crate) fn emit_event(app: &dyn crate::wasm_core::host_api::context::AppHandl
 }
 
 /// 通过 Tauri 事件发送到前端 toast
-pub(crate) fn notify(app: &dyn crate::wasm_core::host_api::context::AppHandleScope, plugin_id: &str, title: &str, body: &str) -> Result<(), String> {
+pub(crate) fn notify(
+    app: &dyn crate::wasm_core::host_api::context::AppHandleScope,
+    plugin_id: &str,
+    title: &str,
+    body: &str,
+) -> Result<(), String> {
     let Some(app_handle) = app.app_handle() else {
         return Err("notify error: app_handle not available in headless context".to_string());
     };
@@ -58,10 +67,7 @@ mod tests {
     fn emit_event_rejects_invalid_json() {
         let ctx = build_host_ctx();
         let err = emit_event(ctx.as_ref(), "plugin:event", "not-json").expect_err("非法 JSON 必须拒绝");
-        assert!(
-            err.contains("not valid JSON"),
-            "错误须点名 JSON 解析失败: {err}"
-        );
+        assert!(err.contains("not valid JSON"), "错误须点名 JSON 解析失败: {err}");
         // 合法 JSON 在无头上下文仍按幂等约定 Ok
         assert!(emit_event(ctx.as_ref(), "plugin:event", r#"{"ok":true}"#).is_ok());
     }

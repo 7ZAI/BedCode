@@ -273,7 +273,8 @@ mod tests {
     fn gate_allows_declared_api() {
         let ctx = build_host_ctx();
         ctx.api_registry()
-            .register("com.bedcode.scheduler", &["com.bedcode.scheduler.add".to_string()]);
+            .register("com.bedcode.scheduler", &["com.bedcode.scheduler.add".to_string()])
+            .expect("夹具登记 add api 失败：门禁未布防则本用例失去意义");
         bus_publish(
                         ctx.as_ref(),
             ctx.as_ref(),
@@ -298,7 +299,8 @@ mod tests {
     fn gate_rejects_after_unregister() {
         let ctx = build_host_ctx();
         ctx.api_registry()
-            .register("com.bedcode.scheduler", &["com.bedcode.scheduler.add".to_string()]);
+            .register("com.bedcode.scheduler", &["com.bedcode.scheduler.add".to_string()])
+            .expect("夹具登记 add api 失败：注销路径的前置条件未成立");
         ctx.api_registry().unregister("com.bedcode.scheduler");
         let err = bus_publish(ctx.as_ref(), ctx.as_ref(), "plugin-a", "bedcode.api.com.bedcode.scheduler.add", "{}").unwrap_err();
         assert!(err.contains("not declared"), "got: {}", err);
@@ -330,7 +332,8 @@ mod tests {
     fn gate_layer1_does_not_check_caller() {
         let ctx = build_host_ctx();
         ctx.api_registry()
-            .register("com.bedcode.scheduler", &["com.bedcode.scheduler.list".to_string()]);
+            .register("com.bedcode.scheduler", &["com.bedcode.scheduler.list".to_string()])
+            .expect("夹具登记 list api 失败：层 1 门禁用例失去目标声明");
         bus_publish(ctx.as_ref(), ctx.as_ref(), "any-plugin", "bedcode.api.com.bedcode.scheduler.list", "{}")
             .expect("layer 1 gate checks target declaration only");
     }

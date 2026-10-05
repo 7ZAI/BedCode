@@ -404,11 +404,9 @@ fn test_pty_exit_event_and_purge_roundtrip() {
         // 无 handle 的阻塞线程才是它的真实调用形态（同生产 deactivate 路径）
         let purged = {
             let bus = Arc::clone(&ctx_a.message_bus);
-            tokio::task::spawn_blocking(move || {
-                crate::wasm_core::host_api::pty::purge_for_plugin(PLUGIN_A, &bus)
-            })
-            .await
-            .expect("purge 任务不得 panic")
+            tokio::task::spawn_blocking(move || crate::wasm_core::host_api::pty::purge_for_plugin(PLUGIN_A, &bus))
+                .await
+                .expect("purge 任务不得 panic")
         };
         assert_eq!(purged, 1, "回收数应为 A 当前在册的 PTY 数（已终态者早被摘除）");
 
@@ -439,11 +437,9 @@ fn test_pty_exit_event_and_purge_roundtrip() {
         // 收尾：清场 B 的常驻进程（同一回收函数对 B 亦只碰本人）
         let purged_peer = {
             let bus = Arc::clone(&ctx_b.message_bus);
-            tokio::task::spawn_blocking(move || {
-                crate::wasm_core::host_api::pty::purge_for_plugin(PLUGIN_B, &bus)
-            })
-            .await
-            .expect("peer purge 任务不得 panic")
+            tokio::task::spawn_blocking(move || crate::wasm_core::host_api::pty::purge_for_plugin(PLUGIN_B, &bus))
+                .await
+                .expect("peer purge 任务不得 panic")
         };
         assert_eq!(purged_peer, 1, "B 的回收同样只清自己那一条");
     }));
@@ -764,11 +760,10 @@ fn test_pty_isolation_and_contract_matrix_roundtrip() {
 
         // 收尾：A 的在册句柄回收（B 无在册句柄）
         let bus = Arc::clone(&ctx_a.message_bus);
-        let purged = tokio::task::spawn_blocking(move || {
-            crate::wasm_core::host_api::pty::purge_for_plugin(PLUGIN_A, &bus)
-        })
-        .await
-        .expect("purge 任务不得 panic");
+        let purged =
+            tokio::task::spawn_blocking(move || crate::wasm_core::host_api::pty::purge_for_plugin(PLUGIN_A, &bus))
+                .await
+                .expect("purge 任务不得 panic");
         assert_eq!(purged, 1, "收尾回收应只剩 A 的那条常驻 PTY");
     }));
 }

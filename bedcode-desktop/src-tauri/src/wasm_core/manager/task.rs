@@ -398,25 +398,24 @@ fn truncate_json(v: String) -> (String, bool) {
 /// host_api/task.rs 做权限门（本质是门禁不是引擎），执行走本引擎；两者经两阶段注入
 /// （PluginHost 构造时 [`WasmHostContext::set_task_engine`]，PluginServices 先例）解耦——
 /// host_api 不再 import `manager::task`（spec C3「消费方定义接口」）。
-pub(crate) struct CoreTaskEngine;
+pub(crate) struct CoreTaskEngine {
+    /// 自持的宿主上下文句柄（见 [`TaskEngine::execute_batch`] 的「注入时捕获」说明）
+    host_ctx: Arc<WasmHostContext>,
+}
+
+impl CoreTaskEngine {
+    pub(crate) fn new(host_ctx: Arc<WasmHostContext>) -> Self {
+        Self { host_ctx }
+    }
+}
 
 impl TaskEngine for CoreTaskEngine {
-    fn execute_batch(
-        &self,
-        host_ctx: &Arc<WasmHostContext>,
-        owner: &str,
-        plan_json: &str,
-    ) -> Result<String, String> {
-        execute_batch(host_ctx.clone(), owner, plan_json)
+    fn execute_batch(&self, owner: &str, plan_json: &str) -> Result<String, String> {
+        execute_batch(self.host_ctx.clone(), owner, plan_json)
     }
 
-    fn submit(
-        &self,
-        host_ctx: &Arc<WasmHostContext>,
-        owner: &str,
-        plan_json: &str,
-    ) -> Result<String, String> {
-        submit(host_ctx.clone(), owner, plan_json)
+    fn submit(&self, owner: &str, plan_json: &str) -> Result<String, String> {
+        submit(self.host_ctx.clone(), owner, plan_json)
     }
 
     fn status(&self, owner: &str, job_id: &str) -> Result<Option<String>, String> {

@@ -306,7 +306,7 @@ impl SecurityFramework {
         let Some(req) = request else {
             return config.clone();
         };
-        let merged = config.apply_overrides(req);
+        let merged = crate::wasm_core::config::apply_store_overrides(config, req);
         // 双重天花板：不得突破运维配置值（配置覆盖有效），也不得突破编译期硬上限
         let granted = merged.clamped_within(config).clamped_within(&StoreLimits::default());
         if granted != merged {

@@ -1,14 +1,12 @@
 //! BedCode Desktop - Library Entry Point
 
+// 私有项单测必须留在 crate 内（集成测试只见 pub API）：
+// `mark_first_context_menu_connect` / `forget_context_menu_label` 是本文件的私有 fn。
+// 另两个源码扫描锁（能力层 / CSP 锁、热路径日志锁）不触碰任何 crate 内部符号，
+// 已下沉到 `tests/capabilities_lock.rs` / `tests/hot_path_logging_lock.rs` —— 搬得动
+// 的搬走，这里只留搬不动的。
 #[cfg(all(test, target_os = "linux"))]
 mod native_context_menu_test;
-
-#[cfg(test)]
-mod capabilities_test;
-
-// 热路径日志风暴防回接锁（AGENTS §8 日志红线②）
-#[cfg(test)]
-mod hot_path_logging_test;
 
 // ==================== Domain Modules ====================
 
@@ -208,10 +206,7 @@ fn mark_first_context_menu_connect(
 /// 只丢弃该 label 的条目，其他窗口（主窗口 / 其余终端窗口）不受影响。
 /// 锁中毒时同样取回内部值继续清理，不 panic。
 #[cfg(target_os = "linux")]
-fn forget_context_menu_label(
-    connected: &std::sync::Mutex<std::collections::HashSet<String>>,
-    label: &str,
-) {
+fn forget_context_menu_label(connected: &std::sync::Mutex<std::collections::HashSet<String>>, label: &str) {
     match connected.lock() {
         Ok(mut seen) => {
             seen.remove(label);

@@ -3,10 +3,10 @@
 //! `config_get`（权限/白名单校验 + 读取）供 Component Model 绑定
 //! （`wasm_runtime::component`）调用。
 
+use crate::system::config::AppConfig;
 #[cfg(test)]
 use crate::wasm_core::host_api::context::WasmHostContext;
 use crate::wasm_core::runtime_util::block_on_async;
-use crate::system::config::AppConfig;
 use bedcode_plugin_api::host::ConfigKey;
 
 /// 配对码有效期缺省值（与宿主命令面 `get_pairing_code_ttl` 同源常量）
@@ -18,7 +18,11 @@ const DEFAULT_QR_TOKEN_TTL_SECS: u64 = 300;
 ///
 /// `from_str` 过滤非法 key，value match 穷尽所有变体 —— 新增配置项时
 /// 编译器强制补实现，结构性杜绝"白名单声明了但实现缺失"的漂移
-pub(crate) fn config_get(db: &dyn crate::wasm_core::host_api::context::DbScope, plugin_id: &str, key: &str) -> Result<Option<String>, String> {
+pub(crate) fn config_get(
+    db: &dyn crate::wasm_core::host_api::context::DbScope,
+    plugin_id: &str,
+    key: &str,
+) -> Result<Option<String>, String> {
     // 白名单校验：仅接受 ConfigKey 枚举覆盖的 key
     let Some(config_key) = ConfigKey::from_str(key) else {
         tracing::warn!(plugin_id = %plugin_id, key = %key, "host_config_get: key not in whitelist");
@@ -75,7 +79,9 @@ pub(crate) fn config_get(db: &dyn crate::wasm_core::host_api::context::DbScope, 
 /// 读认证域设置项（`settings` 表）→ 十进制秒数字符串；缺失 / 非法回退默认值
 fn auth_setting_seconds(
     db: &dyn crate::wasm_core::host_api::context::DbScope,
-    key: &str, default: u64) -> Result<Option<String>, String> {
+    key: &str,
+    default: u64,
+) -> Result<Option<String>, String> {
     let db = db.database().clone();
     let setting_key = key.to_string();
     let stored = block_on_async(async move {
@@ -102,7 +108,7 @@ mod tests {
     /// 白名单外 key：在触达任何全局单例前被拒绝（纯校验路径）
     #[test]
     fn config_get_key_not_in_whitelist_rejected() {
-        let err = config_get(host_ctx().as_ref(),  "test-plugin", "network.password").unwrap_err();
+        let err = config_get(host_ctx().as_ref(), "test-plugin", "network.password").unwrap_err();
         assert!(err.contains("not in whitelist"), "got: {}", err);
         assert!(err.contains("network.password"));
     }
@@ -110,7 +116,7 @@ mod tests {
     /// 空 key 同样拒绝
     #[test]
     fn config_get_empty_key_rejected() {
-        let err = config_get(host_ctx().as_ref(),  "test-plugin", "").unwrap_err();
+        let err = config_get(host_ctx().as_ref(), "test-plugin", "").unwrap_err();
         assert!(err.contains("not in whitelist"), "got: {}", err);
     }
 
@@ -123,7 +129,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis();
-        let value = config_get(host_ctx().as_ref(),  "test-plugin", "system.time_ms")
+        let value = config_get(host_ctx().as_ref(), "test-plugin", "system.time_ms")
             .expect("time key ok")
             .expect("some value");
         let parsed: u128 = value.parse().expect("parse ms");
@@ -133,7 +139,7 @@ mod tests {
     /// home_dir：返回非空主目录路径
     #[test]
     fn config_get_home_dir_ok() {
-        let value = config_get(host_ctx().as_ref(),  "test-plugin", "home_dir")
+        let value = config_get(host_ctx().as_ref(), "test-plugin", "home_dir")
             .expect("home dir ok")
             .expect("some value");
         assert!(!value.is_empty());
@@ -145,7 +151,7 @@ mod tests {
     /// 平台相关逻辑依赖此值（scheduler 插件 inline 命令 sh -c vs cmd /C）
     #[test]
     fn config_get_os_platform_ok() {
-        let value = config_get(host_ctx().as_ref(),  "test-plugin", "os.platform")
+        let value = config_get(host_ctx().as_ref(), "test-plugin", "os.platform")
             .expect("platform key ok")
             .expect("some value");
         // 必须与 std 编译目标一致（当前进程的平台），插件据此分支
@@ -159,7 +165,7 @@ mod tests {
     /// 不断言具体值（其它测试可能已改变端口），只验证语义：端口 > 0
     #[tokio::test]
     async fn config_get_network_port_ok() {
-        let value = config_get(host_ctx().as_ref(),  "test-plugin", "network.port")
+        let value = config_get(host_ctx().as_ref(), "test-plugin", "network.port")
             .expect("port key ok")
             .expect("some value");
         let port: u16 = value.parse().expect("port is u16");

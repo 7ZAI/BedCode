@@ -134,7 +134,8 @@ mod tests {
     fn contains_after_register() {
         let reg = ApiRegistry::new();
         assert!(!reg.contains("com.bedcode.scheduler.add"));
-        reg.register("com.bedcode.scheduler", &["com.bedcode.scheduler.add".to_string()]).unwrap();
+        reg.register("com.bedcode.scheduler", &["com.bedcode.scheduler.add".to_string()])
+            .unwrap();
         assert!(reg.contains("com.bedcode.scheduler.add"));
         assert!(!reg.contains("com.bedcode.scheduler.none"));
     }
@@ -151,7 +152,8 @@ mod tests {
             ],
         )
         .unwrap();
-        reg.register("com.bedcode.other", &["com.bedcode.other.ping".to_string()]).unwrap();
+        reg.register("com.bedcode.other", &["com.bedcode.other.ping".to_string()])
+            .unwrap();
         reg.unregister("com.bedcode.scheduler");
         assert!(!reg.contains("com.bedcode.scheduler.add"));
         // 其他插件的 api 不受影响
@@ -171,7 +173,9 @@ mod tests {
         assert_eq!(reg.len(), 1);
 
         // 另一插件声明同名 api：必须拒绝，且错误点名两侧，原登记不受影响
-        let err = reg.register("p2", &["a.x".to_string()]).expect_err("跨插件冲突必须被拒");
+        let err = reg
+            .register("p2", &["a.x".to_string()])
+            .expect_err("跨插件冲突必须被拒");
         assert!(
             format!("{err}").contains("a.x") && format!("{err}").contains("p1"),
             "错误须点名冲突 api 与原属主: {err}"
@@ -236,7 +240,14 @@ mod tests {
     fn owner_of_keeps_first_declarer_when_conflict_rejected() {
         let reg = ApiRegistry::new();
         reg.register("p1", &["shared.api".to_string()]).unwrap();
-        assert!(reg.register("p2", &["shared.api".to_string()]).is_err(), "冲突登记必须失败");
-        assert_eq!(reg.owner_of("shared.api").as_deref(), Some("p1"), "属主必须是首个声明方");
+        assert!(
+            reg.register("p2", &["shared.api".to_string()]).is_err(),
+            "冲突登记必须失败"
+        );
+        assert_eq!(
+            reg.owner_of("shared.api").as_deref(),
+            Some("p1"),
+            "属主必须是首个声明方"
+        );
     }
 }

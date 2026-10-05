@@ -98,10 +98,7 @@ fn map_wsl_failure(action: &str, distro: &str, stderr: &[u8]) -> std::io::Error 
     } else {
         std::io::ErrorKind::Other
     };
-    std::io::Error::new(
-        kind,
-        format!("{} failed (distro={}): {}", action, distro, msg.trim()),
-    )
+    std::io::Error::new(kind, format!("{} failed (distro={}): {}", action, distro, msg.trim()))
 }
 
 /// 通过 wsl.exe 读取文本文件（等价于 std::fs::read_to_string）

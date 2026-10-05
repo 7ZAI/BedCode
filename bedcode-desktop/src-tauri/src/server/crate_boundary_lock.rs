@@ -341,6 +341,29 @@ fn find_crate_name_hits(files: &[String], crate_ident: &str) -> Vec<(String, usi
     hits
 }
 
+/// 命中里的**文件集合**，**排除**纯强制引用行（`use <crate> as _;`）
+///
+/// 为什么排除（断言 ④ 的精度修正，wasm-core-lib-split 票 06 实测触发）：
+/// `inventory` 的能力模块自报靠 linker-section 静态，**未被引用的 rlib 不进最终
+/// 二进制**⇒ 宿主必须有一行 `use <crate> as _;` 强制引用每个能力域所在的 crate。
+/// 能力域每迁出一个 crate（票 04 ws / 05 peer-net / 06 http），这行就把该 crate 名
+/// 写进了同一个文件，于是「同时认识两面」的机械扫描会把**能力模块注册面**误判成
+/// 「传输面接线」。
+///
+/// 该形态**可证明无害**：`use X as _;` 只把 crate 根绑定为匿名别名，此后无法通过它
+/// 取任何路径、类型或函数（Rust 里匿名绑定不可被引用），故它既不是「接线」也不构成
+/// 对该 crate 的任何使用——真正的接线一定表现为 `bedcode_server_x::…` 形态的代码，
+/// 那仍由本锁扫到。本函数只放行这一种逐字形态，任何别的引用照旧计入。
+fn crate_name_hit_files<'a>(hits: &'a [(String, usize, String)]) -> std::collections::BTreeSet<&'a String> {
+    hits.iter()
+        .filter(|(_, _, line)| {
+            let line = line.trim();
+            !(line.starts_with("use ") && line.ends_with(" as _;"))
+        })
+        .map(|(f, _, _)| f)
+        .collect()
+}
+
 /// 源码里「`foo::bar` 形态」的命中（判据：段 `bar` 的前一段是 `foo`）
 fn find_qualified_call_hits(files: &[String], callee: &str, owner: &str) -> Vec<(String, usize, String)> {
     let mut hits = Vec::new();
@@ -447,8 +470,8 @@ fn composition_root_is_the_only_module_knowing_both_faces() {
     let http_hits = find_crate_name_hits(&production, "bedcode_server_http");
     let ws_hits = find_crate_name_hits(&production, "bedcode_server_websocket");
 
-    let http_set: std::collections::BTreeSet<&String> = http_hits.iter().map(|(f, _, _)| f).collect();
-    let ws_set: std::collections::BTreeSet<&String> = ws_hits.iter().map(|(f, _, _)| f).collect();
+    let http_set: std::collections::BTreeSet<&String> = crate_name_hit_files(&http_hits);
+    let ws_set: std::collections::BTreeSet<&String> = crate_name_hit_files(&ws_hits);
     let both: Vec<&String> = http_set.intersection(&ws_set).copied().collect();
 
     let unexpected: Vec<&&String> = both

@@ -39,15 +39,11 @@ async fn user_copy_must_not_shadow_builtin_scan_plugin() {
         .unwrap();
     }
 
-    let db = Arc::new(Mutex::new(Database::new(&std::path::PathBuf::from(":memory:")).unwrap()));
+    let db = Arc::new(Mutex::new(
+        Database::new(&std::path::PathBuf::from(":memory:")).unwrap(),
+    ));
     db.lock().await.init_schema().unwrap();
-    let host = PluginHost::new(
-        db,
-        &builtin_dir,
-        &user_dir,
-        None,
-    )
-    .await;
+    let host = PluginHost::new(db, &builtin_dir, &user_dir, None).await;
 
     let info = host.get_plugin(shadowed_id).await.expect("plugin present");
     assert_eq!(
@@ -65,10 +61,7 @@ async fn user_copy_must_not_shadow_builtin_scan_plugin() {
         .await
         .expect("内置来源免审批，激活不得被审批门禁拒绝");
     assert_eq!(
-        host.get_plugin(shadowed_id)
-            .await
-            .expect("plugin present")
-            .state,
+        host.get_plugin(shadowed_id).await.expect("plugin present").state,
         PluginState::Activated
     );
 }

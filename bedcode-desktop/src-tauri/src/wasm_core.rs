@@ -18,33 +18,33 @@
 
 pub mod bus;
 pub mod config;
-/// 宿主→插件互调客户端（中立层，ADR 0033 从 `utils/auth/auth_center.rs` 上提）：
-/// JSON-RPC 2.0 over host-bus 的通用发起端 + 请求 id 分配
-pub mod intercall;
 /// 宿主对外接口模块：WASM 宿主能力实现（host-* 原语，权限校验 + 宿主服务调用，
 /// 由 `manager::runtime::component` 的 Host trait 绑定逐接口调用）+ 前端 Tauri
 /// 命令桥（api_bridge，权限校验后执行操作）
 pub mod host_api;
+/// 宿主→插件互调客户端（中立层，ADR 0033 从 `utils/auth/auth_center.rs` 上提）：
+/// JSON-RPC 2.0 over host-bus 的通用发起端 + 请求 id 分配
+pub mod intercall;
 pub mod manager;
 pub mod monitor;
 pub mod permission;
 /// 异步桥基础设施：`manager` / `host_api` / `security` 共用的中立层，
 /// 自身不依赖任何 wasm_core 兄弟模块（票 01）
 pub(crate) mod runtime_util;
+pub mod security;
 /// 插件存储中立层（原 manager/storage.rs 下沉，票 03）：`security` / `host_api` /
 /// `manager` 皆可引用，自身只依赖 `crate::db`
 pub mod storage;
-pub mod security;
 
 // ==================== Facade 再导出 ====================
 // 外部消费方（Tauri 命令层、system、peer 等）只经 facade 引用，
 // 不感知模块内部结构
 
 pub use bus::{BusMessageHandler, MessageBus};
-pub use manager::host::api_bridge;
 pub use manager::host;
+pub use manager::host::api_bridge;
 pub use manager::host::PluginHost;
-pub use storage::PluginStorage;
 #[cfg(debug_assertions)]
 pub use manager::watcher;
 pub use security::fs_auth::FsAuthChecker;
+pub use storage::PluginStorage;

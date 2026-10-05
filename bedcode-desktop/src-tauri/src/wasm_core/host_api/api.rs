@@ -287,7 +287,8 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             ctx.api_registry()
-                .register("com.bedcode.sdk-test", &["com.bedcode.sdk-test.echo".to_string()]);
+                .register("com.bedcode.sdk-test", &["com.bedcode.sdk-test.echo".to_string()])
+                .expect("夹具登记 echo api 失败：往返用例的前置条件未成立");
             let mut rx = setup_responder(&ctx, "bedcode.api.com.bedcode.sdk-test.echo", true, None);
 
             let reply = api_call(
@@ -338,7 +339,8 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             ctx.api_registry()
-                .register("com.bedcode.sdk-test", &["com.bedcode.sdk-test.silent".to_string()]);
+                .register("com.bedcode.sdk-test", &["com.bedcode.sdk-test.silent".to_string()])
+                .expect("夹具登记 silent api 失败：超时用例测的就��没回复");
             // 目标订阅了但静默不回复
             setup_responder(&ctx, "bedcode.api.com.bedcode.sdk-test.silent", false, None);
 
@@ -368,7 +370,8 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             ctx.api_registry()
-                .register("com.bedcode.sdk-test", &["com.bedcode.sdk-test.echo".to_string()]);
+                .register("com.bedcode.sdk-test", &["com.bedcode.sdk-test.echo".to_string()])
+                .expect("夹具登记 echo api 失败：id 错配用例的前置条件未成立");
             setup_responder(
                 &ctx,
                 "bedcode.api.com.bedcode.sdk-test.echo",
@@ -439,7 +442,8 @@ mod tests {
         rt.block_on(async {
             // 目标 api 已声明但真目标缺席：只有第三方插件在请求道上抢答
             ctx.api_registry()
-                .register("com.bedcode.sdk-test", &["com.bedcode.sdk-test.echo".to_string()]);
+                .register("com.bedcode.sdk-test", &["com.bedcode.sdk-test.echo".to_string()])
+                .expect("夹具登记 echo api 失败：真目标缺席用例的前置条件未成立");
             ctx.message_bus
                 .subscribe_static(
                     "com.bedcode.evil",
@@ -473,7 +477,8 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             ctx.api_registry()
-                .register("com.bedcode.sdk-test", &["com.bedcode.sdk-test.echo".to_string()]);
+                .register("com.bedcode.sdk-test", &["com.bedcode.sdk-test.echo".to_string()])
+                .expect("夹具登记 echo api 失败：属主回复用例的前置条件未成立");
             let mut rx = setup_responder(&ctx, "bedcode.api.com.bedcode.sdk-test.echo", true, None);
 
             let reply = api_call(
@@ -528,7 +533,8 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             ctx.api_registry()
-                .register("com.bedcode.sdk-test", &["com.bedcode.sdk-test.echo".to_string()]);
+                .register("com.bedcode.sdk-test", &["com.bedcode.sdk-test.echo".to_string()])
+                .expect("夹具登记 echo api 失败：订阅清理用例的前置条件未成立");
             setup_responder(&ctx, "bedcode.api.com.bedcode.sdk-test.echo", true, None);
 
             api_call(

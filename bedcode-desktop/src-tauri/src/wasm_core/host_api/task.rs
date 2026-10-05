@@ -24,52 +24,48 @@ use crate::wasm_core::runtime_util::block_on_async;
 use std::sync::Arc;
 
 /// 取注入的执行引擎（PluginHost 构造后两阶段注入；未注入 fail-visible，不静默降级）
-fn engine(host_ctx: &Arc<WasmHostContext>) -> Result<Arc<dyn TaskEngine>, String> {
+fn engine(host_ctx: &WasmHostContext) -> Result<Arc<dyn TaskEngine>, String> {
     block_on_async(host_ctx.task_engine())
         .ok_or_else(|| "task: engine not available (host-task 执行引擎未注入)".to_string())
 }
 
 /// `execute-batch`：同步批（扇出 → join → 一次性返回全部单元结果）。
 /// 阻塞 Store 至全部单元终态（或超时）——同 `run-sync` 语义，仅限快操作。
-pub(crate) fn execute_batch(
-    host_ctx: &Arc<WasmHostContext>,
-    plugin_id: &str,
-    plan_json: &str,
-) -> Result<String, String> {
-    if !super::check_permission(host_ctx.as_ref(), plugin_id, PERMISSION_TASK_RUN, "host_task_execute_batch") {
+pub(crate) fn execute_batch(host_ctx: &WasmHostContext, plugin_id: &str, plan_json: &str) -> Result<String, String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_TASK_RUN, "host_task_execute_batch") {
         return Err("permission denied".to_string());
     }
-    engine(host_ctx)?.execute_batch(host_ctx, plugin_id, plan_json)
+    engine(host_ctx)?.execute_batch(plugin_id, plan_json)
 }
 
 /// `submit`：异步任务，登记后立即返回 `task-<hex>` 句柄；进度/终态经
 /// `events-task#on-task-event` 回调；`cancel` 协作式取消。
-pub(crate) fn submit(host_ctx: &Arc<WasmHostContext>, plugin_id: &str, plan_json: &str) -> Result<String, String> {
-    if !super::check_permission(host_ctx.as_ref(), plugin_id, PERMISSION_TASK_RUN, "host_task_submit") {
+pub(crate) fn submit(host_ctx: &WasmHostContext, plugin_id: &str, plan_json: &str) -> Result<String, String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_TASK_RUN, "host_task_submit") {
         return Err("permission denied".to_string());
     }
-    engine(host_ctx)?.submit(host_ctx, plugin_id, plan_json)
+    engine(host_ctx)?.submit(plugin_id, plan_json)
 }
 
 /// `status`：任务状态自愈快照（事件丢失后查询）。`Ok(None)` = 不存在 / 非属主。
-pub(crate) fn status(host_ctx: &Arc<WasmHostContext>, plugin_id: &str, job_id: &str) -> Result<Option<String>, String> {
-    if !super::check_permission(host_ctx.as_ref(), plugin_id, PERMISSION_TASK_RUN, "host_task_status") {
+pub(crate) fn status(host_ctx: &WasmHostContext, plugin_id: &str, job_id: &str) -> Result<Option<String>, String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_TASK_RUN, "host_task_status") {
         return Err("permission denied".to_string());
     }
     engine(host_ctx)?.status(plugin_id, job_id)
 }
 
 /// `cancel`：协作式取消（正在执行的单元跑完或超时，未开始单元 skipped）；幂等。
-pub(crate) fn cancel(host_ctx: &Arc<WasmHostContext>, plugin_id: &str, job_id: &str) -> Result<bool, String> {
-    if !super::check_permission(host_ctx.as_ref(), plugin_id, PERMISSION_TASK_RUN, "host_task_cancel") {
+pub(crate) fn cancel(host_ctx: &WasmHostContext, plugin_id: &str, job_id: &str) -> Result<bool, String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_TASK_RUN, "host_task_cancel") {
         return Err("permission denied".to_string());
     }
     engine(host_ctx)?.cancel(plugin_id, job_id)
 }
 
 /// `list-jobs`：本插件在册任务清单（自愈快照）
-pub(crate) fn list_jobs(host_ctx: &Arc<WasmHostContext>, plugin_id: &str) -> Result<String, String> {
-    if !super::check_permission(host_ctx.as_ref(), plugin_id, PERMISSION_TASK_RUN, "host_task_list_jobs") {
+pub(crate) fn list_jobs(host_ctx: &WasmHostContext, plugin_id: &str) -> Result<String, String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_TASK_RUN, "host_task_list_jobs") {
         return Err("permission denied".to_string());
     }
     engine(host_ctx)?.list_jobs(plugin_id)

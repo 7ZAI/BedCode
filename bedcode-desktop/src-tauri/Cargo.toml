@@ -115,6 +115,16 @@ bedcode-link-crypto = { path = "../../packages/link-crypto" }
 # server-lib-split：桌面 server 基础层（错误/常量/错误边界/系统信息/网络配置/
 # 连接身份/端口 traits）与加密引擎（算法实现 + 注册表）
 bedcode-server-base = { path = "../packages/bedcode-server-base" }
+# 插件宿主机制内核（仓库根 packages/，双端共享锚点，wasm-core-lib-split 票 03）：
+# 插件实例状态 `WasmPluginState` + 能力模块契约 + 自动注册表 + Store 上限与指标值对象。
+# 它必须独立于宿主 bin crate —— 否则能力 crate 无法命名 `WasmPluginState`
+# （`add_to_linker::<S,D>` 是单态）⇒ 与宿主构成 Cargo 环。本期为**零行为变更的搬迁**：
+# StoreLimits / PluginMetrics / WasmPluginState 原位从 wasm_core 搬入，宿主留转发。
+bedcode-host-kit = { path = "../../packages/bedcode-host-kit" }
+# 组播发现能力域（mDNS，wasm-core-lib-split 票 03）：引擎 + 宿主绑定层 + 自动
+# 注册。宿主侧只剩 `host_api/mdns.rs` 的端口 adapter（~90 行），原 795 行实现
+# 已迁入该 crate。
+bedcode-discovery-engine = { path = "../packages/bedcode-discovery-engine" }
 bedcode-crypto-engine = { path = "../packages/bedcode-crypto-engine" }
 # server-lib-split 票 03：传输无关内核（supervisor/filter/link_crypto/metrics + TransportFace 组合）
 bedcode-server-core = { path = "../packages/bedcode-server-core" }

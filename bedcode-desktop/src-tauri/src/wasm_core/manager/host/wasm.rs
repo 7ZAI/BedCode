@@ -183,10 +183,7 @@ impl PluginHost {
             resource_overrides.as_ref(),
         )?;
         let new_entry = self.assemble_instance_entry(new_wasm_plugin);
-        self.wasm_plugins
-            .write()
-            .await
-            .insert(plugin_id.to_string(), new_entry);
+        self.wasm_plugins.write().await.insert(plugin_id.to_string(), new_entry);
 
         // core-plugin-manager：L1 基础服务实例重建后，能力注册表中的旧实例句柄
         // 已失效，按新实例重新装配（trap 自愈回落宿主原语的场景亦在此恢复）

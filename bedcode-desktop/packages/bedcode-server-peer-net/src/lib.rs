@@ -25,6 +25,10 @@
 //! - **生命周期**：节点 + mDNS 发现守护随 file-transfer 插件启用状态运行（幂等
 //!   装配）；命令面仅剩五条 Tauri 命令——`start_peer_node` / `stop_peer_node` /
 //!   `respond_peer_consent` / `list_trusted_peers` / `revoke_trusted_peer`。
+//! - **插件绑定层**：`plugin_binding`（wasm-core-lib-split 票 05）是 `host-peer`
+//!   19 条原语的宿主实现（句柄表 / 属主仲裁 / 自动重拨 / 载荷校验），经
+//!   [`plugin_binding::ports::PeerPorts`] 向宿主要权限门、引擎上下文与异步桥；
+//!   本 crate 对宿主组装面（`AppHandle` 与 managed state）的引用为 **0**。
 //! - **引擎接入**：`peer_engine_transfer` / `peer_engine_receive` /
 //!   `peer_engine_remote` 是对 host-peer 原语（dial / send / cancel / pause /
 //!   resume / respond / set-policy / set-download-dir / set-shared-roots / browse /
@@ -35,6 +39,9 @@
 pub mod peer_engine_receive;
 pub mod peer_engine_remote;
 pub mod peer_engine_transfer;
+/// host-peer 能力域的插件绑定层（wasm-core-lib-split 票 05：自宿主 host_api 域的
+/// peer 适配器迁入，并把其对宿主组装面的 20 处反向耦合换成端口）
+pub mod plugin_binding;
 pub mod source_collect;
 
 #[cfg(test)]
@@ -74,8 +81,8 @@ use tokio::io::AsyncReadExt;
 use bedcode_peer_net::{
     Connection, ConnectionHandler, DiscoveredPeerRecord, DiscoveryCache, DiscoveryConfig, DiscoveryDaemon, FileMeta,
     HandlerFuture, NodeId, NodeIdentity, PeerNetError, PeerNetNode, PeerNetNodeConfig, RunningNode, SharedDirEntry,
-    SharedDirHandler, SharedDirRoot, SharedDirStore, StaticPeerRecord, TerminalState, TransferConfig, TransferEvent,
-    TrustEvent, TrustStore, TrustedPeerEntry, CAP_FILE_TRANSFER,
+    SharedDirHandler, SharedDirStore, StaticPeerRecord, TerminalState, TransferConfig, TransferEvent, TrustEvent,
+    TrustStore, TrustedPeerEntry, CAP_FILE_TRANSFER,
 };
 use serde::Serialize;
 
@@ -691,7 +698,7 @@ pub fn node_owner(ctx: &PeerCtx) -> Option<String> {
 /// **他主拒绝接管**，错误文案不回带对方 id（与 `host-peer` 句柄属主门同口径，票 05）。
 pub async fn start_node_owned(ctx: Arc<PeerCtx>, caller: &str) -> Result<bool> {
     {
-        let mut guard = ctx.state.node_owner.lock().expect("node owner lock poisoned");
+        let guard = ctx.state.node_owner.lock().expect("node owner lock poisoned");
         if let Some(owner) = guard.as_ref() {
             if owner != caller {
                 return Err(AppError::Plugin(
@@ -1581,7 +1588,9 @@ mod dial_payload_tests {
 #[cfg(test)]
 mod peer_net_tests {
     use super::*;
-    use bedcode_peer_net::TrustedPeerEntry;
+    // `SharedDirRoot` 只被本组用例用到（生产面走 `SharedDirEntry` 的 serde 反序列化）：
+    // 从 crate 顶部 import 列表移到这里，避免非 test 构建报 unused import
+    use bedcode_peer_net::{SharedDirRoot, TrustedPeerEntry};
     use chrono::Utc;
 
     /// 64 位小写 hex 节点 ID（格式校验通过的最小形态）

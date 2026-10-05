@@ -8,8 +8,8 @@
 //! 入口**：`host_api::session` 里那条同判据的旧别名已随 `host-session` interface
 //! 删除（`session:read` 这把第二钥匙彻底不存在）。
 
-use crate::wasm_core::runtime_util::block_on_async;
 use crate::wasm_core::permission::PERMISSION_CONNECTION_READ;
+use crate::wasm_core::runtime_util::block_on_async;
 
 /// 连接注册表原始记录清单（票 04，权限 `connection:read`）
 ///
@@ -20,7 +20,9 @@ use crate::wasm_core::permission::PERMISSION_CONNECTION_READ;
 /// connectedAt}`。排序 / 在线判定 / 会话数 / 任务状态合并是插件侧派生视图的职责
 /// （spec D3「派生视图（在线判定 + 会话数 + 任务状态合并）」）。
 pub(crate) fn connection_list(
-    perm: &dyn crate::wasm_core::host_api::context::PermissionScope, plugin_id: &str) -> Result<String, String> {
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
+    plugin_id: &str,
+) -> Result<String, String> {
     if !super::check_permission(perm, plugin_id, PERMISSION_CONNECTION_READ, "host_connection_list") {
         return Err("permission denied".to_string());
     }
@@ -98,7 +100,9 @@ mod tests {
                 if path.ends_with("connection.rs") {
                     continue;
                 }
-                let Ok(content) = std::fs::read_to_string(&path) else { continue };
+                let Ok(content) = std::fs::read_to_string(&path) else {
+                    continue;
+                };
                 for (idx, raw_line) in content.lines().enumerate() {
                     let line = raw_line.trim_start();
                     if line.starts_with("//") {

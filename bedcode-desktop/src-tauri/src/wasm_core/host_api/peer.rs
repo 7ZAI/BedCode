@@ -1,727 +1,98 @@
-//! host-peer 逻辑层 —— 对等网络基础能力（ADR 0022 v3 终态 13 原语）
+//! host-peer 宿主侧适配器（能力域已迁出本模块）
 //!
-//! 宿主 peer-net 引擎的 WASM 投影：每个函数做权限校验后直接复用
-//! `peer_net` 引擎接入层
-//! 的既有异步实现（与 Tauri 命令同一真源），DTO 以 JSON 字符串过界。
-//! 无头上下文（app_handle = None）一律报错，不做静默降级——对等网络
-//! 能力依赖节点运行时，降级会产生「看似成功实则空列表」的假象。
+//! **本文件只剩两样东西**，原 727 行的 peer 绑定层已整体迁入
+//! `bedcode_server_peer_net::plugin_binding`（wasm-core-lib-split 票 05）：
 //!
-//! Phase 4 收紧要点（issue 13）：旧命令面全部删除；数据面四函数仅接受
-//! session 句柄寻址；句柄表升级为 `handle → {node_id, addr, port}`
-//! （拨号时记忆 endpoint），数据面失败且命中「发现缓存缺失」字样时以
-//! 记忆 endpoint 自动重拨（信任检查照走引擎握手）——这是退役
-//! DiscoveryCache 的前置条件。
+//! 1. [`HostPeerPorts`] —— 能力域端口的宿主实现；
+//! 2. [`install`] —— 开机期装配端口（供 PluginHost 装配链调用）。
+//!
+//! ## 票 05 的第二交付：反向耦合从 20 处降到 0
+//!
+//! 迁移前绑定层有 20 处 `crate::server::peer_net_cmds::peer_ctx(&app)`——
+//! 「从宿主组装面取引擎状态」。那行同时把 `tauri::AppHandle` 与 managed state
+//! 表拖进能力域（正是 `dependency_direction_lock` 禁的 `crate::server::` /
+//! `tauri::` 两种形态）。现在能力域只问 [`PeerPorts::peer_ctx`] 要「已装配好的
+//! [`PeerCtx`]」，**装配动作留在这里**——本 crate 的 `peer_net_cmds` 仍是唯一
+//! 认识 `AppHandle` 的引擎装配点（ADR 0022 §5.1.3「引擎实现」薄壳），但那是
+//! **本文件**的依赖，不是能力域的。
+//!
+//! ## 判定顺序是被断言的行为（勿调换）
+//!
+//! 属主判定刻意排在 [`PeerPorts::peer_ctx`] 之前：非属主的一次 `close` 试探
+//! 在无头 / 引擎未就绪的环境下也必须得到同一个答案（属主拒绝），否则「先报
+//! headless」会把越权探测的结果随机化。迁移前的顺序与文案逐字保留。
 
-use crate::wasm_core::permission::PERMISSION_PEER;
-use crate::wasm_core::runtime_util::block_on_async;
-use std::sync::LazyLock;
+use std::any::Any;
+use std::sync::Arc;
 
-/// 取 AppHandle（无头上下文直接报错）
-fn require_app(app: &dyn crate::wasm_core::host_api::context::AppHandleScope) -> Result<tauri::AppHandle, String> {
-    app.app_handle()
-        .map(|a| a.clone())
-        .ok_or_else(|| "peer-net unavailable in headless context (no app_handle)".to_string())
-}
+use bedcode_server_peer_net::plugin_binding::ports::{BoxedBlocked, PeerPorts};
+use bedcode_server_peer_net::PeerCtx;
 
-fn denied() -> String {
-    "permission denied: peer".to_string()
-}
+use crate::wasm_core::host_api::context::WasmHostContext;
 
-// ==================== v2 句柄路由（ADR 0022）====================
-
-/// session 句柄路由表条目：拨号时铸造 `sess-<uuid>` 并记忆 endpoint 三元组，
-/// 数据面断线自动重拨的寻址依据。
-#[derive(Debug, Clone)]
-pub(crate) struct SessionEntry {
-    pub node_id: String,
-    pub addr: String,
-    pub port: u16,
-    /// 拨号方插件 id（票 04）：句柄只有属主可继续操作
-    ///
-    /// 此前句柄表没有 owner 列——`sess-<uuid>` 虽是随机不可猜，但一旦泄露给另一插件
-    /// （日志、事件、互调参数），持有者即可断开他人连接、以他人身份读写传输。
-    /// 与 pty / ws / mdns 的 owner 列同形，判定统一在宿主侧。
-    pub owner: String,
-}
-
-/// 进程级单例（与引擎连接生命周期对齐：宿主重启即清空，插件重拨即可）。
-/// 传输句柄不进表——send/pull 返回的 batch-id 本身即唯一句柄
-/// （peer:transfer / peer:receive 事件也以它寻址），close 按「session 表 →
-/// 发送取消 → 接收取消」顺序路由，命中即停。
-#[derive(Default)]
-pub(crate) struct PeerHandleTable {
-    sessions: std::collections::HashMap<String, SessionEntry>,
-}
-
-impl PeerHandleTable {
-    /// 铸造新 session 句柄并绑定 endpoint
-    fn mint_session(&mut self, entry: SessionEntry) -> String {
-        let handle = format!("sess-{}", uuid::Uuid::new_v4());
-        self.sessions.insert(handle.clone(), entry);
-        handle
-    }
-
-    /// 解析句柄 → endpoint 条目（不移除；数据面函数按句柄寻址时用）
-    fn resolve_session(&self, handle: &str) -> Option<SessionEntry> {
-        self.sessions.get(handle).cloned()
-    }
-
-    /// 取出句柄（close 时用）
-    fn take_session(&mut self, handle: &str) -> Option<SessionEntry> {
-        self.sessions.remove(handle)
-    }
-
-    /// 放回句柄（属主判定拒绝时回滚，非属主的探测不得改变注册表状态）
-    fn restore_session(&mut self, handle: &str, entry: SessionEntry) {
-        self.sessions.insert(handle.to_string(), entry);
-    }
-}
-
-static PEER_HANDLES: LazyLock<std::sync::Mutex<PeerHandleTable>> =
-    LazyLock::new(|| std::sync::Mutex::new(PeerHandleTable::default()));
-
-fn with_handles<T>(f: impl FnOnce(&mut PeerHandleTable) -> T) -> T {
-    let mut guard = PEER_HANDLES.lock().expect("peer handle table lock poisoned");
-    f(&mut guard)
-}
-
-/// 属主判定（票 04）：非属主统一拒绝，文案与 pty / mdns 同形
-const NOT_OWNER: &str = "not owner of peer handle";
-
-fn ensure_handle_owner(entry: &SessionEntry, plugin_id: &str, handle: &str) -> Result<(), String> {
-    if entry.owner == plugin_id {
-        return Ok(());
-    }
-    tracing::warn!(plugin_id = %plugin_id, handle = %handle, "host-peer 属主校验拒绝");
-    Err(format!("{NOT_OWNER}: {handle}"))
-}
-
-/// 宿主命令返回 crate::Result<T>（AppError）——WASM 边界统一转可读字符串
-fn sync_result<T>(r: crate::Result<T>) -> Result<T, String> {
-    r.map_err(|e| e.to_string())
-}
-
-/// 数据面自动重拨包装：仅接受 session 句柄；操作报错且命中引擎「发现缓存
-/// 缺失」字样（连接已断/缓存被 TTL 清扫）时，以句柄记忆的 endpoint 重走
-/// 引擎握手后重试一次。denied/unreachable 等其他错误原样上抛。
-fn with_auto_redial<T>(
-    app: &dyn crate::wasm_core::host_api::context::AppHandleScope,
-    plugin_id: &str,
-    handle: &str,
-    op: impl Fn(&str) -> Result<T, String>,
-) -> Result<T, String> {
-    let entry =
-        with_handles(|t| t.resolve_session(handle)).ok_or_else(|| format!("invalid session handle: {handle}"))?;
-    ensure_handle_owner(&entry, plugin_id, handle)?;
-    match op(&entry.node_id) {
-        Ok(v) => Ok(v),
-        Err(e) if e.contains("discovery cache") || e.contains("not in discovery cache") => {
-            let app_handle = require_app(app)?;
-            let ctx = crate::server::peer_net_cmds::peer_ctx(&app_handle);
-            let endpoint = bedcode_server_peer_net::DialEndpoint {
-                node_id: entry.node_id.clone(),
-                addr: entry.addr.clone(),
-                port: entry.port,
-            };
-            tracing::info!(
-                node_id = %entry.node_id,
-                "peer data-plane auto-redial (handle-remembered endpoint)"
-            );
-            sync_result(block_on_async(bedcode_server_peer_net::dial_peer_endpoint(
-                ctx, endpoint,
-            )))?;
-            op(&entry.node_id)
-        }
-        Err(e) => Err(e),
-    }
-}
-
-pub(crate) fn peer_dial(
-    app: &dyn crate::wasm_core::host_api::context::AppHandleScope,
-    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
-    plugin_id: &str,
-    endpoint_json: &str,
-) -> Result<String, String> {
-    if !super::check_permission(perm, plugin_id, PERMISSION_PEER, "host_peer_dial") {
-        return Err(denied());
-    }
-    let endpoint: bedcode_server_peer_net::DialEndpoint =
-        serde_json::from_str(endpoint_json).map_err(|e| format!("dial endpoint: invalid json: {e}"))?;
-    let app = require_app(app)?;
-    let ctx = crate::server::peer_net_cmds::peer_ctx(&app);
-    // 注意：node_id 必须 clone 而非 take——take 会把 endpoint.node_id 置空，
-    // dial_peer_endpoint 对空 node_id 报 "invalid node id ''" 静默失败
-    // （2026-09-07 实机实证：桌面点连接无拨号、无任何日志）。移动端同函数因
-    // take 后重新构造 endpoint 无此 bug，两端口径保持 clone 语义对齐。
-    let node_id = endpoint.node_id.clone();
-    let addr = endpoint.addr.clone();
-    let port = endpoint.port;
-    let dto = sync_result(block_on_async(bedcode_server_peer_net::dial_peer_endpoint(
-        ctx, endpoint,
-    )))?;
-    match dto.status.as_str() {
-        "connected" => Ok(with_handles(|t| {
-            t.mint_session(SessionEntry {
-                node_id,
-                addr,
-                port,
-                owner: plugin_id.to_string(),
-            })
-        })),
-        other => Err(format!("dial endpoint failed: peer {other}")),
-    }
-}
-
-pub(crate) fn peer_close(
-    app: &dyn crate::wasm_core::host_api::context::AppHandleScope,
-    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
-    plugin_id: &str,
-    handle: &str,
-) -> Result<bool, String> {
-    if !super::check_permission(perm, plugin_id, PERMISSION_PEER, "host_peer_close") {
-        return Err(denied());
-    }
-    // ① session 句柄 → 先判属主再谈断开：属主判定刻意排在 require_app 之前，
-    //    越权探测在无头/引擎未就绪的环境下也得到同一个答案（不因先报 headless 而掩盖）
-    if let Some(entry) = with_handles(|t| t.take_session(handle)) {
-        if let Err(e) = ensure_handle_owner(&entry, plugin_id, handle) {
-            // 拒绝即放回句柄：非属主的一次 close 试探不得把别人的连接摘走
-            with_handles(|t| t.restore_session(handle, entry));
-            return Err(e);
-        }
-        let app = require_app(app)?;
-        let ctx = crate::server::peer_net_cmds::peer_ctx(&app);
-        return sync_result(block_on_async(bedcode_server_peer_net::disconnect_peer(
-            ctx,
-            entry.node_id,
-        )));
-    }
-    let app = require_app(app)?;
-    let ctx = crate::server::peer_net_cmds::peer_ctx(&app);
-    // ② 发送传输句柄（batch-id）→ 取消发送批
-    let cancelled = sync_result(block_on_async(bedcode_server_peer_net::cancel_transfer_for_plugin(
-        ctx.clone(),
-        handle.to_string(),
-    )));
-    if matches!(&cancelled, Ok(true)) {
-        return cancelled;
-    }
-    // ③ 接收侧句柄（batch-id）→ 取消/拒绝接收批（pending 即拒）
-    sync_result(block_on_async(bedcode_server_peer_net::cancel_receiving_for_plugin(
-        ctx,
-        handle.to_string(),
-    )))
-}
-
-pub(crate) fn peer_respond_consent(
-    app: &dyn crate::wasm_core::host_api::context::AppHandleScope,
-    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
-    plugin_id: &str,
-    request_id: &str,
-    accepted: bool,
-) -> Result<bool, String> {
-    if !super::check_permission(perm, plugin_id, PERMISSION_PEER, "host_peer_respond_consent") {
-        return Err(denied());
-    }
-    let app = require_app(app)?;
-    let ctx = crate::server::peer_net_cmds::peer_ctx(&app);
-    let request_id = request_id.to_string();
-    sync_result(block_on_async(bedcode_server_peer_net::respond_peer_consent(
-        ctx, request_id, accepted,
-    )))
-}
-
-pub(crate) fn peer_list_trusted(
-    app: &dyn crate::wasm_core::host_api::context::AppHandleScope,
-    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
-    plugin_id: &str,
-) -> Result<String, String> {
-    if !super::check_permission(perm, plugin_id, PERMISSION_PEER, "host_peer_list_trusted") {
-        return Err(denied());
-    }
-    let app = require_app(app)?;
-    let ctx = crate::server::peer_net_cmds::peer_ctx(&app);
-    let dtos = sync_result(block_on_async(bedcode_server_peer_net::list_trusted_peers(ctx)))?;
-    serde_json::to_string(&dtos).map_err(|e| format!("serialize trusted peers failed: {e}"))
-}
-
-pub(crate) fn peer_revoke_trusted(
-    app: &dyn crate::wasm_core::host_api::context::AppHandleScope,
-    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
-    plugin_id: &str,
-    node_id: &str,
-) -> Result<bool, String> {
-    if !super::check_permission(perm, plugin_id, PERMISSION_PEER, "host_peer_revoke_trusted") {
-        return Err(denied());
-    }
-    let app = require_app(app)?;
-    let ctx = crate::server::peer_net_cmds::peer_ctx(&app);
-    let node_id = node_id.to_string();
-    sync_result(block_on_async(bedcode_server_peer_net::revoke_trusted_peer(
-        ctx, node_id,
-    )))
-}
-
-pub(crate) fn peer_send_files(
-    app: &dyn crate::wasm_core::host_api::context::AppHandleScope,
-    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
-    plugin_id: &str,
-    session: &str,
-    paths_json: &str,
-) -> Result<String, String> {
-    if !super::check_permission(perm, plugin_id, PERMISSION_PEER, "host_peer_send_files") {
-        return Err(denied());
-    }
-    // 载荷双形态（issue 13 Phase 3 步骤 5）：纯 string 兼容保留；对象元素
-    // `{ path, encrypt? }` 携带逐文件加密意图，任一 true → 批量强制加密
-    #[derive(serde::Deserialize)]
-    #[serde(untagged)]
-    enum SendPathEntry {
-        Plain(String),
-        Detailed { path: String, encrypt: Option<bool> },
-    }
-    // v31 fail-visible（传输编排下沉票 3）：旧产物载荷携带的 `concurrency`
-    // 并发脉冲字段已随宿主并发闸门退役——serde 未知字段默认忽略，必须
-    // 显式检测并显性报错（点名 v31 重建），否则旧产物静默超并发
-    let raw: serde_json::Value =
-        serde_json::from_str(paths_json).map_err(|e| format!("send files: invalid paths json: {e}"))?;
-    if raw.as_array().is_some_and(|arr| {
-        arr.iter()
-            .any(|e| e.as_object().is_some_and(|o| o.contains_key("concurrency")))
-    }) {
-        return Err(format!(
-            "send files: payload field 'concurrency' retired in ABI v31 (host-side concurrency gate removed; \
-             concurrency is caller-controlled): rebuild plugin artifact with current SDK"
-        ));
-    }
-    let entries: Vec<SendPathEntry> =
-        serde_json::from_value(raw).map_err(|e| format!("send files: invalid paths json: {e}"))?;
-    let mut paths = Vec::with_capacity(entries.len());
-    let mut force_encrypt = false;
-    for entry in entries {
-        match entry {
-            SendPathEntry::Plain(path) => paths.push(path),
-            SendPathEntry::Detailed { path, encrypt } => {
-                if encrypt == Some(true) {
-                    force_encrypt = true;
-                }
-                paths.push(path);
-            }
-        }
-    }
-    // 返回值已收窄为传输句柄（batch-id）；v31 起一次调用 = 一个会话立即发起
-    // （宿主并发闸门删除）。断线场景由 with_auto_redial 以记忆 endpoint 重拨
-    let batch_id = with_auto_redial(app, plugin_id, session, |node_id| {
-        let app_handle = require_app(app)?;
-        let ctx = crate::server::peer_net_cmds::peer_ctx(&app_handle);
-        sync_result(block_on_async(bedcode_server_peer_net::send_files_for_plugin(
-            ctx,
-            node_id.to_string(),
-            paths.clone(),
-            if force_encrypt { Some(true) } else { None },
-        )))
-    })?;
-    Ok(batch_id)
-}
-
-pub(crate) fn peer_respond_transfer(
-    app: &dyn crate::wasm_core::host_api::context::AppHandleScope,
-    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
-    plugin_id: &str,
-    batch_id: &str,
-    accept: bool,
-) -> Result<(), String> {
-    if !super::check_permission(perm, plugin_id, PERMISSION_PEER, "host_peer_respond_transfer") {
-        return Err(denied());
-    }
-    let app = require_app(app)?;
-    let ctx = crate::server::peer_net_cmds::peer_ctx(&app);
-    let batch_id = batch_id.to_string();
-    let _hit = sync_result(block_on_async(bedcode_server_peer_net::respond_transfer_for_plugin(
-        ctx, batch_id, accept,
-    )))?;
-    Ok(())
-}
-
-pub(crate) fn peer_set_receive_policy(
-    app: &dyn crate::wasm_core::host_api::context::AppHandleScope,
-    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
-    plugin_id: &str,
-    mode: &str,
-    timeout_secs: u64,
-) -> Result<(), String> {
-    if !super::check_permission(perm, plugin_id, PERMISSION_PEER, "host_peer_set_receive_policy") {
-        return Err(denied());
-    }
-    let app = require_app(app)?;
-    let ctx = crate::server::peer_net_cmds::peer_ctx(&app);
-    let mode = mode.to_string();
-    sync_result(block_on_async(bedcode_server_peer_net::set_receive_policy_for_plugin(
-        ctx,
-        mode,
-        timeout_secs,
-    )))
-}
-
-/// 显式暂停进行中的发送批：会话数据面门控（wire Pause 帧 + 供方停推流），
-/// 任务保留（含已传字节）不落历史。本端发起的活跃会话查句柄表、serve 供流
-/// 批查 handler 注册表。
-pub(crate) fn peer_pause_transfer(
-    app: &dyn crate::wasm_core::host_api::context::AppHandleScope,
-    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
-    plugin_id: &str,
-    batch_id: &str,
-) -> Result<(), String> {
-    if !super::check_permission(perm, plugin_id, PERMISSION_PEER, "host_peer_pause_transfer") {
-        return Err(denied());
-    }
-    let app = require_app(app)?;
-    let ctx = crate::server::peer_net_cmds::peer_ctx(&app);
-    let batch_id = batch_id.to_string();
-    let hit = sync_result(block_on_async(bedcode_server_peer_net::pause_transfer_for_plugin(
-        ctx, batch_id,
-    )))?;
-    if !hit {
-        return Err("pause transfer: no running send batch with that id".to_string());
-    }
-    Ok(())
-}
-
-/// 恢复暂停的发送批：活跃会话写 Resume 帧续流；会话已中断的以句柄表记忆
-/// 的源清单重新拨号续传（v31：批量恢复编排归插件，resume-all-transfers
-/// 已退役）。
-pub(crate) fn peer_resume_transfer(
-    app: &dyn crate::wasm_core::host_api::context::AppHandleScope,
-    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
-    plugin_id: &str,
-    batch_id: &str,
-) -> Result<(), String> {
-    if !super::check_permission(perm, plugin_id, PERMISSION_PEER, "host_peer_resume_transfer") {
-        return Err(denied());
-    }
-    let app = require_app(app)?;
-    let ctx = crate::server::peer_net_cmds::peer_ctx(&app);
-    let batch_id = batch_id.to_string();
-    sync_result(block_on_async(bedcode_server_peer_net::resume_transfer_for_plugin(
-        ctx, batch_id,
-    )))?;
-    Ok(())
-}
-
-pub(crate) fn peer_set_shared_roots(
-    app: &dyn crate::wasm_core::host_api::context::AppHandleScope,
-    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
-    plugin_id: &str,
-    dirs_json: &str,
-) -> Result<(), String> {
-    if !super::check_permission(perm, plugin_id, PERMISSION_PEER, "host_peer_set_shared_roots") {
-        return Err(denied());
-    }
-    #[derive(serde::Deserialize)]
-    struct SharedRootSeed {
-        id: String,
-        name: String,
-        path: String,
-    }
-    let seeds: Vec<SharedRootSeed> =
-        serde_json::from_str(dirs_json).map_err(|e| format!("set shared roots: invalid dirs json: {e}"))?;
-    let entries = seeds
-        .into_iter()
-        .map(|s| bedcode_peer_net::SharedDirEntry {
-            id: s.id,
-            name: s.name,
-            root: bedcode_peer_net::SharedDirRoot::Fs {
-                path: std::path::PathBuf::from(s.path),
-            },
-        })
-        .collect();
-    let app = require_app(app)?;
-    let ctx = crate::server::peer_net_cmds::peer_ctx(&app);
-    sync_result(block_on_async(bedcode_server_peer_net::set_shared_roots(ctx, entries)))
-}
-
-pub(crate) fn peer_list_shared_roots(
-    app: &dyn crate::wasm_core::host_api::context::AppHandleScope,
-    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
-    plugin_id: &str,
-    session: &str,
-) -> Result<String, String> {
-    if !super::check_permission(perm, plugin_id, PERMISSION_PEER, "host_peer_list_shared_roots") {
-        return Err(denied());
-    }
-    let roots = with_auto_redial(app, plugin_id, session, |node_id| {
-        let app = require_app(app)?;
-        let ctx = crate::server::peer_net_cmds::peer_ctx(&app);
-        sync_result(block_on_async(bedcode_server_peer_net::list_remote_roots_for_plugin(
-            ctx,
-            node_id.to_string(),
-        )))
-    })?;
-    serde_json::to_string(&roots).map_err(|e| format!("serialize shared roots failed: {e}"))
-}
-
-pub(crate) fn peer_browse_directory(
-    app: &dyn crate::wasm_core::host_api::context::AppHandleScope,
-    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
-    plugin_id: &str,
-    session: &str,
-    dir_id: &str,
-    rel_path: &str,
-) -> Result<String, String> {
-    if !super::check_permission(perm, plugin_id, PERMISSION_PEER, "host_peer_browse_directory") {
-        return Err(denied());
-    }
-    let (dir_id, rel_path) = (dir_id.to_string(), rel_path.to_string());
-    let dto = with_auto_redial(app, plugin_id, session, |node_id| {
-        let app = require_app(app)?;
-        let ctx = crate::server::peer_net_cmds::peer_ctx(&app);
-        sync_result(block_on_async(bedcode_server_peer_net::browse_remote_for_plugin(
-            ctx,
-            node_id.to_string(),
-            dir_id.clone(),
-            rel_path.clone(),
-        )))
-    })?;
-    serde_json::to_string(&dto).map_err(|e| format!("serialize browse listing failed: {e}"))
-}
-
-pub(crate) fn peer_pull_files(
-    app: &dyn crate::wasm_core::host_api::context::AppHandleScope,
-    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
-    plugin_id: &str,
-    session: &str,
-    dir_id: &str,
-    files_json: &str,
-) -> Result<u32, String> {
-    if !super::check_permission(perm, plugin_id, PERMISSION_PEER, "host_peer_pull_files") {
-        return Err(denied());
-    }
-    // RemotePullFileDto 未实现 Clone：闭包内按 JSON 串重复解析（重拨场景才二次执行）
-    let dir_id = dir_id.to_string();
-    let files_json_owned = files_json.to_string();
-    with_auto_redial(app, plugin_id, session, |node_id| {
-        let files: Vec<bedcode_server_peer_net::RemotePullFileDto> =
-            serde_json::from_str(&files_json_owned).map_err(|e| format!("pull files: invalid files json: {e}"))?;
-        let app = require_app(app)?;
-        let ctx = crate::server::peer_net_cmds::peer_ctx(&app);
-        sync_result(block_on_async(bedcode_server_peer_net::pull_files_for_plugin(
-            ctx,
-            node_id.to_string(),
-            dir_id.clone(),
-            files,
-        )))
-    })
-    .map(|n| n as u32)
-}
-
-pub(crate) fn peer_set_download_dir(
-    app: &dyn crate::wasm_core::host_api::context::AppHandleScope,
-    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
-    plugin_id: &str,
-    path: &str,
-) -> Result<(), String> {
-    if !super::check_permission(perm, plugin_id, PERMISSION_PEER, "host_peer_set_download_dir") {
-        return Err(denied());
-    }
-    let app = require_app(app)?;
-    let ctx = crate::server::peer_net_cmds::peer_ctx(&app);
-    let path = if path.is_empty() { None } else { Some(path.to_string()) };
-    sync_result(block_on_async(bedcode_server_peer_net::set_download_dir_for_plugin(
-        ctx, path,
-    )))
-}
-
-/// 按需启动本机 peer 节点（审计票 12 引擎级生命周期原语）：幂等，
-/// 返回 `true` = 本次调用把节点从「未跑」带到「跑」（调用方即成为属主）。
+/// 能力模块名（必须与 `bedcode_server_peer_net::plugin_binding::DESC.name` 逐字一致）
 ///
-/// 内核侧不再持有产品 id 常量——旧 `activation.rs` 的「插件 id == file-transfer 就起节点」
-/// 外壳由本原语 + `peer_net` 的属主记账替代。他主占用时以错误上抛，
-/// 且**文案不回带对方 id**（与 `ensure_handle_owner` 同口径，票 05）
-pub(crate) fn peer_start_node(
-    app: &dyn crate::wasm_core::host_api::context::AppHandleScope,
-    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
-    plugin_id: &str,
-) -> Result<bool, String> {
-    if !super::check_permission(perm, plugin_id, PERMISSION_PEER, "host_peer_start_node") {
-        return Err(denied());
-    }
-    let app = require_app(app)?;
-    let ctx = crate::server::peer_net_cmds::peer_ctx(&app);
-    sync_result(block_on_async(bedcode_server_peer_net::start_node_owned(
-        ctx, plugin_id,
-    )))
+/// 它同时是 `component.rs` 里 `HOST_MODULES` 白名单的键——两者不同即红。
+pub const HOST_MODULE_NAME: &str = "peer-net";
+
+/// 端口的宿主实现
+///
+/// 生产路径在**开机期**捕获 `Arc<WasmHostContext>`（`PluginHost::new` 已建好），
+/// 之后每条原语两次取端口：一次权限门、一次引擎上下文。
+pub struct HostPeerPorts {
+    /// 宿主上下文（权限门 + 引擎上下文的取法都在它身上）
+    ctx: Arc<WasmHostContext>,
 }
 
-/// 属主插件让本机节点下线（审计票 12）：停广播 / 关监听 / 排水连接与入站记账。
-/// 非属主拒绝（不猜测「谁该停」，也不提供强制关停的后门）
-pub(crate) fn peer_stop_node(
-    app: &dyn crate::wasm_core::host_api::context::AppHandleScope,
-    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
-    plugin_id: &str,
-) -> Result<bool, String> {
-    if !super::check_permission(perm, plugin_id, PERMISSION_PEER, "host_peer_stop_node") {
-        return Err(denied());
+impl HostPeerPorts {
+    /// 端口（生产）：从宿主上下文取权限管理器与 `AppHandle`
+    pub fn from_ctx(ctx: Arc<WasmHostContext>) -> Self {
+        Self { ctx }
     }
-    let app = require_app(app)?;
-    let ctx = crate::server::peer_net_cmds::peer_ctx(&app);
-    sync_result(block_on_async(bedcode_server_peer_net::stop_node_owned(ctx, plugin_id)))
 }
 
-/// 活跃传输批清单（传输编排下沉票 1）：宿主会话表投影（仅引擎会话事实），
-/// 供插件事件归约状态机首屏重建。依赖节点运行时状态表——无头上下文报错
-/// （与既有 peer 原语同口径，不静默降级为空列表假象）
-pub(crate) fn peer_active_transfers(
-    app: &dyn crate::wasm_core::host_api::context::AppHandleScope,
-    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
-    plugin_id: &str,
-) -> Result<String, String> {
-    if !super::check_permission(perm, plugin_id, PERMISSION_PEER, "host_peer_active_transfers") {
-        return Err(denied());
+impl PeerPorts for HostPeerPorts {
+    fn check_permission(&self, plugin_id: &str, permission: &str, api: &str) -> bool {
+        // 权限门留宿主（AGENTS §5.1.3 四类薄壳之「安全闸门」——闸门不应可插拔）。
+        // 复用既有 `host_api::check_permission`：同一份 PermissionManager、同一条
+        // 拒绝 warn 路径（AGENTS §8 结构化字段），不另起一套判定。
+        super::check_permission(self.ctx.as_ref(), plugin_id, permission, api)
     }
-    let app = require_app(app)?;
-    let ctx = crate::server::peer_net_cmds::peer_ctx(&app);
-    sync_result(block_on_async(bedcode_server_peer_net::active_transfers_for_plugin(
-        ctx,
-    )))
+
+    fn peer_ctx(&self) -> Result<Arc<PeerCtx>, String> {
+        // 引擎上下文的**装配动作**留宿主（唯一认识 AppHandle 的引擎装配点）；
+        // 无头口径与文案由能力域定义，本处只汇报「取不到」。
+        let app = self
+            .ctx
+            .app_handle()
+            .ok_or_else(|| bedcode_server_peer_net::plugin_binding::ports::HEADLESS_UNAVAILABLE.to_string())?;
+        Ok(crate::server::peer_net_cmds::peer_ctx(app))
+    }
+
+    fn block_on_any(&self, fut: BoxedBlocked) -> Box<dyn Any + Send> {
+        // 复用宿主那份唯一的同步↔异步桥（ambient runtime + actix current_thread
+        // 自锁规避都是实测产物，能力域不得复制第二份，见 ports 模块文档）
+        crate::wasm_core::runtime_util::block_on_async(fut)
+    }
 }
 
-/// 发送源收集（传输编排下沉票 1）：目录递归 + 批内同名去重（仅元数据）。
-/// 纯文件系统枚举，不依赖节点运行时——无头上下文亦可用（require_app 口径
-/// 差异见 WIT 注释：不存在「看似成功实则空」的假成功风险面）
-pub(crate) fn peer_collect_outgoing(
-    _app: &dyn crate::wasm_core::host_api::context::AppHandleScope,
-    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
-    plugin_id: &str,
-    paths_json: &str,
-) -> Result<String, String> {
-    if !super::check_permission(perm, plugin_id, PERMISSION_PEER, "host_peer_collect_outgoing") {
-        return Err(denied());
-    }
-    let paths: Vec<String> =
-        serde_json::from_str(paths_json).map_err(|e| format!("collect outgoing: invalid paths json: {e}"))?;
-    sync_result(block_on_async(bedcode_server_peer_net::collect_outgoing_for_plugin(
-        paths,
-    )))
-}
-
-// ==================== Tests ====================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::wasm_core::host_api::tests::{build_host_ctx, grant_permissions};
-    use crate::wasm_core::permission::PERMISSION_PEER;
-
-    /// 权限门（票 01 门禁用例）：未授予 `peer` 即拒绝，且不触碰句柄表/引擎
-    #[test]
-    fn peer_denied_without_permission() {
-        let ctx = build_host_ctx();
-        assert_eq!(
-            super::peer_dial(ctx.as_ref(), ctx.as_ref(), "com.bedcode.no-peer", "{}").unwrap_err(),
-            denied()
-        );
-        assert_eq!(
-            super::peer_close(ctx.as_ref(), ctx.as_ref(), "com.bedcode.no-peer", "sess-nonexistent").unwrap_err(),
-            denied()
-        );
-    }
-
-    /// 正例（防「恒拒绝」假绿）：授予后越过权限门，报的是无头上下文不可用而非权限
-    #[test]
-    fn peer_granted_passes_permission_gate() {
-        let ctx = build_host_ctx();
-        grant_permissions(&ctx, "com.bedcode.peer-ok", &[PERMISSION_PEER]);
-        let err = super::peer_close(ctx.as_ref(), ctx.as_ref(), "com.bedcode.peer-ok", "sess-nonexistent")
-            .expect_err("无头上下文不应可断开");
-        assert!(!err.contains("permission denied"), "已授予 peer 仍被权限门拒绝: {err}");
-        assert!(err.contains("headless"), "预期无头上下文错误: {err}");
-    }
-
-    fn entry(node: &str) -> SessionEntry {
-        SessionEntry {
-            node_id: node.to_string(),
-            addr: "192.168.1.5".to_string(),
-            port: 47821,
-            owner: "com.bedcode.owner-a".to_string(),
-        }
-    }
-
-    /// 属主登记与判定（票 04）：句柄只有拨号方可继续操作
-    #[test]
-    fn session_handle_is_owner_scoped() {
-        let mut t = PeerHandleTable::default();
-        let h = t.mint_session(entry("own"));
-        let got = t.resolve_session(&h).expect("resolved");
-        assert_eq!(got.owner, "com.bedcode.owner-a", "拨号方即属主");
-        assert!(ensure_handle_owner(&got, "com.bedcode.owner-a", &h).is_ok());
-        let err = ensure_handle_owner(&got, "com.bedcode.intruder-b", &h).unwrap_err();
-        assert_eq!(err, format!("not owner of peer handle: {h}"));
-        // 错误文案不回带真实属主身份
-        assert!(!err.contains("owner-a"), "拒绝文案不得泄露属主插件 id: {err}");
-    }
-
-    /// 非属主 close 的拒绝路径零副作用：句柄仍在册，别人仍可用
-    #[test]
-    fn rejected_close_restores_handle() {
-        let mut t = PeerHandleTable::default();
-        let h = t.mint_session(entry("keep"));
-        let taken = t.take_session(&h).expect("taken");
-        assert!(ensure_handle_owner(&taken, "intruder", &h).is_err());
-        t.restore_session(&h, taken);
-        assert_eq!(t.resolve_session(&h).expect("still registered").node_id, "keep");
-    }
-
-    /// 宿主函数面（票 04 红测）：非属主调 `peer_close` 拿到的就是属主拒绝，
-    /// 而不是先撞上「无头上下文不可用」——判定顺序本身也是被断言的行为
-    #[test]
-    fn peer_close_by_non_owner_is_denied_before_app_check() {
-        let ctx = build_host_ctx();
-        grant_permissions(&ctx, "com.bedcode.intruder-b", &[PERMISSION_PEER]);
-        let h = with_handles(|t| t.mint_session(entry("victim-session")));
-        let err = peer_close(ctx.as_ref(), ctx.as_ref(), "com.bedcode.intruder-b", &h).unwrap_err();
-        assert_eq!(err, format!("{NOT_OWNER}: {h}"), "got: {err}");
-        // 句柄未被摘走，属主仍可解析
-        assert_eq!(
-            with_handles(|t| t.resolve_session(&h)).map(|e| e.node_id),
-            Some("victim-session".to_string())
-        );
-        with_handles(|t| {
-            t.take_session(&h);
-        });
-    }
-
-    #[test]
-    fn mint_and_resolve_roundtrip_keeps_endpoint() {
-        let mut t = PeerHandleTable::default();
-        let h = t.mint_session(entry("aa"));
-        assert!(h.starts_with("sess-"));
-        let got = t.resolve_session(&h).expect("resolved");
-        assert_eq!(got.node_id, "aa");
-        assert_eq!(got.addr, "192.168.1.5");
-        assert_eq!(got.port, 47821);
-    }
-
-    #[test]
-    fn take_session_removes_entry() {
-        let mut t = PeerHandleTable::default();
-        let h = t.mint_session(entry("n1"));
-        assert_eq!(t.take_session(&h).unwrap().node_id, "n1");
-        assert!(t.take_session(&h).is_none());
-        assert!(t.resolve_session(&h).is_none());
-    }
-
-    #[test]
-    fn unknown_handle_is_error_not_passthrough() {
-        // Phase 4 收紧：非句柄入参不再透传为 node-id（双态寻址退役）
-        let t = PeerHandleTable::default();
-        assert!(t.resolve_session("some-node-id").is_none());
-    }
-
-    #[test]
-    fn minted_handles_are_unique() {
-        let mut t = PeerHandleTable::default();
-        let h1 = t.mint_session(entry("n1"));
-        let h2 = t.mint_session(entry("n1"));
-        assert_ne!(h1, h2);
-    }
+/// 开机期装配能力域端口（幂等：重复装配被忽略，见 `install_ports`）
+///
+/// **两处登记**（各登一份等价对象，行为一致）：
+/// - **进程级** [`bedcode_server_peer_net::plugin_binding::install_ports`]：供插件实例
+///   之外的非实例路径使用；
+/// - **实例级** [`WasmHostContext::set_domain_ports`]：供插件实例经
+///   [`bedcode_host_kit::ports::HostPorts::domain_ports`] 取回，使权限判定落在
+///   **本实例的**权限管理器上（多上下文场景下不会读到别人的权限库）。
+///
+/// **必须早于任何插件激活**——guest 一调 `host-peer` 原语就取端口，取不到
+/// 直接 panic（fail-visible）。与 `set_services` / `set_task_engine` / `ws::install`
+/// 同属两阶段注入的装配链。
+pub fn install(ctx: Arc<WasmHostContext>) {
+    let ports: Arc<dyn PeerPorts> = Arc::new(HostPeerPorts::from_ctx(Arc::clone(&ctx)));
+    ctx.set_domain_ports(
+        bedcode_server_peer_net::plugin_binding::DOMAIN,
+        Arc::new(Arc::clone(&ports)) as Arc<dyn std::any::Any + Send + Sync>,
+    );
+    bedcode_server_peer_net::plugin_binding::install_ports(Arc::clone(&ports));
 }

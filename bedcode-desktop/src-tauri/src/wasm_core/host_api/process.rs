@@ -13,11 +13,11 @@
 //! - **权限门禁**：`process:run`（高危：执行任意命令），manifest 声明即信任，
 //!   每次执行由宿主全量审计日志（命令/参数/cwd/env/结果）。
 
-use crate::wasm_core::host_api::context::{WasmHostContext, kill_process_group};
-use crate::wasm_core::host_api::unit_executor::UnitExecutor;
-use crate::wasm_core::runtime_util::block_on_async;
-use crate::wasm_core::permission::PERMISSION_PROCESS;
 use crate::system::error_boundary::spawn_with_error_boundary;
+use crate::wasm_core::host_api::context::{kill_process_group, WasmHostContext};
+use crate::wasm_core::host_api::unit_executor::UnitExecutor;
+use crate::wasm_core::permission::PERMISSION_PROCESS;
+use crate::wasm_core::runtime_util::block_on_async;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -82,7 +82,10 @@ fn default_timeout_ms() -> u64 {
 pub(crate) fn process_run(
     proc: &dyn crate::wasm_core::host_api::context::ProcessScope,
     svc: &dyn crate::wasm_core::host_api::context::ServicesScope,
-    perm: &dyn crate::wasm_core::host_api::context::PermissionScope, plugin_id: &str, request_json: &str) -> Result<String, String> {
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
+    plugin_id: &str,
+    request_json: &str,
+) -> Result<String, String> {
     if !super::check_permission(perm, plugin_id, PERMISSION_PROCESS, "host_process_run") {
         return Err("permission denied".to_string());
     }
@@ -309,7 +312,10 @@ pub(crate) fn process_run_sync(
 /// kill 成功后执行任务侧的 `wait` 随即返回，完成事件照常分发。
 pub(crate) fn process_kill(
     proc: &dyn crate::wasm_core::host_api::context::ProcessScope,
-    perm: &dyn crate::wasm_core::host_api::context::PermissionScope, plugin_id: &str, run_id: &str) -> Result<(), String> {
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
+    plugin_id: &str,
+    run_id: &str,
+) -> Result<(), String> {
     if !super::check_permission(perm, plugin_id, PERMISSION_PROCESS, "host_process_kill") {
         return Err("permission denied".to_string());
     }
@@ -374,7 +380,14 @@ mod tests {
     fn process_run_empty_command_rejected() {
         let ctx = build_host_ctx();
         grant_permissions(&ctx, PLUGIN, &[PERMISSION_PROCESS]);
-        let err = process_run(ctx.as_ref(), ctx.as_ref(), ctx.as_ref(), PLUGIN, &request("", vec![], "/tmp/x.log")).unwrap_err();
+        let err = process_run(
+            ctx.as_ref(),
+            ctx.as_ref(),
+            ctx.as_ref(),
+            PLUGIN,
+            &request("", vec![], "/tmp/x.log"),
+        )
+        .unwrap_err();
         assert!(err.contains("empty command"), "got: {}", err);
     }
 
@@ -383,7 +396,14 @@ mod tests {
     fn process_run_empty_output_path_rejected() {
         let ctx = build_host_ctx();
         grant_permissions(&ctx, PLUGIN, &[PERMISSION_PROCESS]);
-        let err = process_run(ctx.as_ref(), ctx.as_ref(), ctx.as_ref(), PLUGIN, &request("echo", vec!["hi"], "")).unwrap_err();
+        let err = process_run(
+            ctx.as_ref(),
+            ctx.as_ref(),
+            ctx.as_ref(),
+            PLUGIN,
+            &request("echo", vec!["hi"], ""),
+        )
+        .unwrap_err();
         assert!(err.contains("empty output_path"), "got: {}", err);
     }
 
@@ -431,7 +451,14 @@ mod tests {
                 } else {
                     ("sh", vec!["-c", "echo hello-from-process"])
                 };
-                let run_id = process_run(ctx.as_ref(), ctx.as_ref(), ctx.as_ref(), PLUGIN, &request(cmd, args, out.to_str().unwrap())).expect("run ok");
+                let run_id = process_run(
+                    ctx.as_ref(),
+                    ctx.as_ref(),
+                    ctx.as_ref(),
+                    PLUGIN,
+                    &request(cmd, args, out.to_str().unwrap()),
+                )
+                .expect("run ok");
                 assert_eq!(run_id.len(), 36);
 
                 // 等待后台任务完成（输出落盘 + 注册表移除）
@@ -473,7 +500,14 @@ mod tests {
                     // sh 拉起 sleep（进程组：sh → sleep），kill 组须连带终止
                     ("sh", vec!["-c", "sleep 60"])
                 };
-                let run_id = process_run(ctx.as_ref(), ctx.as_ref(), ctx.as_ref(), PLUGIN, &request(cmd, args, out.to_str().unwrap())).expect("run ok");
+                let run_id = process_run(
+                    ctx.as_ref(),
+                    ctx.as_ref(),
+                    ctx.as_ref(),
+                    PLUGIN,
+                    &request(cmd, args, out.to_str().unwrap()),
+                )
+                .expect("run ok");
 
                 // 等待注册完成，确认进程在跑
                 let registry = ctx.process_registry().clone();

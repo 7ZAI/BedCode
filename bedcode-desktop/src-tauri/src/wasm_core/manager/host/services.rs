@@ -101,7 +101,12 @@ impl PluginServices for PluginHost {
                 return;
             }
         };
-        match self.call_guest_blocking(&plugin_id, GuestOp::OnProcessDone { payload_json: event_str }) {
+        match self.call_guest_blocking(
+            &plugin_id,
+            GuestOp::OnProcessDone {
+                payload_json: event_str,
+            },
+        ) {
             Ok(_) => {}
             Err(e) => {
                 tracing::error!(
@@ -156,7 +161,7 @@ impl PluginServices for PluginHost {
     }
 
     fn install_cli(
-                &self,
+        &self,
         plugin_id: String,
         file_name: String,
         bin_dir: String,
@@ -203,7 +208,7 @@ impl PluginServices for PluginHost {
     }
 
     fn uninstall_cli(
-                &self,
+        &self,
         plugin_id: String,
         file_name: String,
         bin_dir: String,
@@ -244,7 +249,7 @@ impl PluginServices for PluginHost {
     }
 
     fn plugin_resource_dir(
-                &self,
+        &self,
         plugin_id: String,
     ) -> Pin<Box<dyn std::future::Future<Output = Result<String, String>> + Send + '_>> {
         Box::pin(async move {
@@ -315,7 +320,11 @@ impl crate::wasm_core::bus::MessageDispatcher for PluginHost {
     ///
     /// 与 `dispatch_to_wasm` 同桥（同步门面 + `call_guest`）：trap 走自动重载恢复。
     /// 返回 `Ok(false)` = 插件未导出该接口（调用方降级）
-    fn dispatch_ws_frame(&self, plugin_id: &str, frame: &crate::wasm_core::bus::WsFrameDispatch) -> anyhow::Result<bool> {
+    fn dispatch_ws_frame(
+        &self,
+        plugin_id: &str,
+        frame: &crate::wasm_core::bus::WsFrameDispatch,
+    ) -> anyhow::Result<bool> {
         use crate::wasm_core::bus::WsFrameDispatch;
         let op = match frame {
             WsFrameDispatch::Client { handle, kind, payload } => GuestOp::WsClientMessage {
@@ -438,9 +447,6 @@ mod tests {
         let err = rt
             .block_on(host.plugin_resource_dir("com.bedcode.nonexistent".to_string()))
             .unwrap_err();
-        assert!(
-            err.contains("plugin not found"),
-            "未知插件必须显性报错，got: {err}"
-        );
+        assert!(err.contains("plugin not found"), "未知插件必须显性报错，got: {err}");
     }
 }

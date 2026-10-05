@@ -66,14 +66,13 @@ async fn probe_command(plugin: &Mutex<LoadedWasmPlugin>, name: &str, args: serde
 }
 
 /// 实例化探针 fixture（spawn 权限 + IO 权限；activate 订阅 exit 事件）
-async fn instantiate_probe_fixture(runtime: &WasmRuntime, host_ctx: &Arc<WasmHostContext>) -> Arc<Mutex<LoadedWasmPlugin>> {
+async fn instantiate_probe_fixture(
+    runtime: &WasmRuntime,
+    host_ctx: &Arc<WasmHostContext>,
+) -> Arc<Mutex<LoadedWasmPlugin>> {
     host_ctx.permission.grant_permissions(
         TERM_PERF_PLUGIN,
-        &[
-            "storage".to_string(),
-            "pty:spawn".to_string(),
-            "pty:io".to_string(),
-        ],
+        &["storage".to_string(), "pty:spawn".to_string(), "pty:io".to_string()],
     );
     let component = runtime
         .compile_component(&build_pty_test_component())
@@ -86,7 +85,10 @@ async fn instantiate_probe_fixture(runtime: &WasmRuntime, host_ctx: &Arc<WasmHos
     host_ctx
         .message_bus
         .set_dispatcher(Arc::new(TestInstanceDispatcher {
-            instances: Arc::new(RwLock::new(HashMap::from([(TERM_PERF_PLUGIN.to_string(), Arc::clone(&plugin))]))),
+            instances: Arc::new(RwLock::new(HashMap::from([(
+                TERM_PERF_PLUGIN.to_string(),
+                Arc::clone(&plugin),
+            )]))),
         }))
         .await;
     plugin

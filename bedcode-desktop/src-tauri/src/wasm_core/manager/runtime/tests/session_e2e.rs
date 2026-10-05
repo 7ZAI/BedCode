@@ -355,10 +355,13 @@ fn test_session_task_domain_closed_loop() {
         .map(|s| s.to_string())
         .collect::<Vec<_>>(),
     );
-    host_ctx.api_registry().register(
-        "com.bedcode.terminal-session",
-        &session_apis().iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-    ).unwrap();
+    host_ctx
+        .api_registry()
+        .register(
+            "com.bedcode.terminal-session",
+            &session_apis().iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+        )
+        .unwrap();
 
     // 实例化 + 总线分派器（宿主窄转发层的互调回复需经总线路由回插件实例）
     let component = wasm_runtime
@@ -1152,10 +1155,13 @@ fn test_session_task_rotation_closed_loop() {
         .map(|s| s.to_string())
         .collect::<Vec<_>>(),
     );
-    host_ctx.api_registry().register(
-        "com.bedcode.terminal-session",
-        &session_apis().iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-    ).unwrap();
+    host_ctx
+        .api_registry()
+        .register(
+            "com.bedcode.terminal-session",
+            &session_apis().iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+        )
+        .unwrap();
 
     let component = wasm_runtime
         .compile_component(&std::fs::read(&wasm_path).expect("read session artifact"))
@@ -1282,17 +1288,12 @@ fn test_session_task_rotation_closed_loop() {
             )
             .expect("session.create");
         let created: serde_json::Value = serde_json::from_str(&create_out).unwrap();
-        assert!(
-            created["error"].is_null(),
-            "session.create 不得报错, got: {create_out}"
-        );
+        assert!(created["error"].is_null(), "session.create 不得报错, got: {create_out}");
         let sid1 = created["sessionId"].as_str().expect("sessionId").to_string();
 
         // 2.5 播种一条 executed 定时任务档案关联 sid1（验证轮换时关联迁移——
         //     队列清空时最终会话仍能被无人值守关闭）
-        let db_path = plugin_db_root()
-            .join("com.bedcode.terminal-session")
-            .join("plugin.db");
+        let db_path = plugin_db_root().join("com.bedcode.terminal-session").join("plugin.db");
         {
             let conn = rusqlite::Connection::open(&db_path)
                 .unwrap_or_else(|e| panic!("打开插件私有库失败 {}: {e}", db_path.display()));
@@ -1346,7 +1347,14 @@ fn test_session_task_rotation_closed_loop() {
         let r: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert!(r["error"].is_null(), "set-auto-mode 不得报错, got: {out}");
         // 全新会话 → T1 直接下发为 executing
-        let r = http_call(&plugin, "GET", "task-queue/list", serde_json::Value::Null, serde_json::json!({ "session_id": sid1 })).await;
+        let r = http_call(
+            &plugin,
+            "GET",
+            "task-queue/list",
+            serde_json::Value::Null,
+            serde_json::json!({ "session_id": sid1 }),
+        )
+        .await;
         assert_eq!(
             r["body"]["data"]["active_task"]["id"],
             serde_json::json!(t1),
@@ -1377,16 +1385,33 @@ fn test_session_task_rotation_closed_loop() {
         // 轮换结果：sid1 队列迁空、sid2 创建（同 config）、T2 迁移为 waiting、开关复制
         let sid2 = running_session_other_than(&plugin, &sid1, &config_id).await;
         wait_stopped(&plugin, &sid1).await;
-        let r = http_call(&plugin, "GET", "task-queue/list", serde_json::Value::Null, serde_json::json!({ "session_id": sid1 })).await;
+        let r = http_call(
+            &plugin,
+            "GET",
+            "task-queue/list",
+            serde_json::Value::Null,
+            serde_json::json!({ "session_id": sid1 }),
+        )
+        .await;
         assert!(
-            r["body"]["data"]["tasks"].as_array().map(|a| a.is_empty()).unwrap_or(false),
+            r["body"]["data"]["tasks"]
+                .as_array()
+                .map(|a| a.is_empty())
+                .unwrap_or(false),
             "轮换后旧会话队列必须已迁移（sid1 无 pending）, got: {r}"
         );
         assert!(
             r["body"]["data"]["active_task"].is_null(),
             "轮换后旧会话不得残留 active 队列项, got: {r}"
         );
-        let r = http_call(&plugin, "GET", "task-queue/list", serde_json::Value::Null, serde_json::json!({ "session_id": sid2 })).await;
+        let r = http_call(
+            &plugin,
+            "GET",
+            "task-queue/list",
+            serde_json::Value::Null,
+            serde_json::json!({ "session_id": sid2 }),
+        )
+        .await;
         assert_eq!(
             r["body"]["data"]["active_task"]["id"],
             serde_json::json!(t2),
@@ -1398,14 +1423,28 @@ fn test_session_task_rotation_closed_loop() {
             "T2 必须为 waiting（等待新会话就绪）, got: {r}"
         );
         // session flags 随会话复制（新会话保持自动执行语义）
-        let r = http_call(&plugin, "GET", "session-settings", serde_json::Value::Null, serde_json::json!({ "session_id": sid2 })).await;
+        let r = http_call(
+            &plugin,
+            "GET",
+            "session-settings",
+            serde_json::Value::Null,
+            serde_json::json!({ "session_id": sid2 }),
+        )
+        .await;
         assert_eq!(
             r["body"]["data"]["auto_execute"],
             serde_json::json!(true),
             "新会话必须继承 auto_execute, got: {r}"
         );
         // 定时任务档案关联随轮换迁移（最终会话在队列清空时仍被无人值守关闭）
-        let r = http_call(&plugin, "GET", "scheduled-jobs/list", serde_json::Value::Null, serde_json::json!({})).await;
+        let r = http_call(
+            &plugin,
+            "GET",
+            "scheduled-jobs/list",
+            serde_json::Value::Null,
+            serde_json::json!({}),
+        )
+        .await;
         let rotated_job = r["body"]["data"]["jobs"]
             .as_array()
             .and_then(|jobs| jobs.iter().find(|j| j["id"].as_str() == Some("rotate-job")).cloned())
@@ -1431,7 +1470,14 @@ fn test_session_task_rotation_closed_loop() {
         )
         .await;
         assert_eq!(r["status"], 200, "task-status idle 必须 200, got: {r}");
-        let r = http_call(&plugin, "GET", "task-queue/list", serde_json::Value::Null, serde_json::json!({ "session_id": sid2 })).await;
+        let r = http_call(
+            &plugin,
+            "GET",
+            "task-queue/list",
+            serde_json::Value::Null,
+            serde_json::json!({ "session_id": sid2 }),
+        )
+        .await;
         assert_eq!(
             r["body"]["data"]["active_task"]["id"],
             serde_json::json!(t2),
@@ -1460,7 +1506,14 @@ fn test_session_task_rotation_closed_loop() {
         assert_eq!(r["status"], 200, "task-status completed(2) 必须 200, got: {r}");
         let sid3 = running_session_other_than(&plugin, &sid2, &config_id).await;
         wait_stopped(&plugin, &sid2).await;
-        let r = http_call(&plugin, "GET", "task-queue/list", serde_json::Value::Null, serde_json::json!({ "session_id": sid3 })).await;
+        let r = http_call(
+            &plugin,
+            "GET",
+            "task-queue/list",
+            serde_json::Value::Null,
+            serde_json::json!({ "session_id": sid3 }),
+        )
+        .await;
         assert_eq!(
             r["body"]["data"]["active_task"]["id"],
             serde_json::json!(t3),
@@ -1505,7 +1558,14 @@ fn test_session_task_rotation_closed_loop() {
         )
         .await;
         assert_eq!(r["status"], 200, "task-status 必须 200, got: {r}");
-        let r = http_call(&plugin, "GET", "task-queue/list", serde_json::Value::Null, serde_json::json!({ "session_id": sid3 })).await;
+        let r = http_call(
+            &plugin,
+            "GET",
+            "task-queue/list",
+            serde_json::Value::Null,
+            serde_json::json!({ "session_id": sid3 }),
+        )
+        .await;
         assert_eq!(
             r["body"]["data"]["active_task"]["id"],
             serde_json::json!(t3),
@@ -1591,10 +1651,13 @@ fn test_session_trust_and_consent_api_closed_loop() {
     // 登记目标插件声明的 api（等价 PluginHost::activate_plugin 的登记）。
     // 清单读插件工程 manifest（单一真源），不在测试里抄第二份。
     let session_api_list = session_apis();
-    host_ctx.api_registry().register(
-        session_id,
-        &session_api_list.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-    ).unwrap();
+    host_ctx
+        .api_registry()
+        .register(
+            session_id,
+            &session_api_list.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+        )
+        .unwrap();
 
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
@@ -1849,10 +1912,13 @@ fn test_business_endpoints_dual_track_closed_loop() {
             "ui:sidebar".to_string(),
         ],
     );
-    host_ctx.api_registry().register(
-        SESSION_ID,
-        &session_api_list.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-    ).unwrap();
+    host_ctx
+        .api_registry()
+        .register(
+            SESSION_ID,
+            &session_api_list.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+        )
+        .unwrap();
 
     rt.block_on(async move {
         // v32（ADR 0031）：桥接门查进程级单中心注册表 → 与闭环用例互斥（见 helper）
@@ -2202,10 +2268,13 @@ fn test_session_create_with_spec_closed_loop() {
             "storage".to_string(),
         ],
     );
-    host_ctx.api_registry().register(
-        SESSION_ID,
-        &session_apis().iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-    ).unwrap();
+    host_ctx
+        .api_registry()
+        .register(
+            SESSION_ID,
+            &session_apis().iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+        )
+        .unwrap();
 
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
@@ -2501,10 +2570,13 @@ fn test_session_actions_closed_loop() {
             "storage".to_string(),
         ],
     );
-    host_ctx.api_registry().register(
-        SESSION_ID,
-        &session_apis().iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-    ).unwrap();
+    host_ctx
+        .api_registry()
+        .register(
+            SESSION_ID,
+            &session_apis().iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+        )
+        .unwrap();
 
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
@@ -2753,10 +2825,13 @@ fn test_session_annotate_and_devices_closed_loop() {
             "storage".to_string(),
         ],
     );
-    host_ctx.api_registry().register(
-        SESSION_ID,
-        &session_apis().iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-    ).unwrap();
+    host_ctx
+        .api_registry()
+        .register(
+            SESSION_ID,
+            &session_apis().iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+        )
+        .unwrap();
 
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
@@ -2953,10 +3028,13 @@ fn test_filetransfer_consumes_session_center_closed_loop() {
         .permission
         .grant_permissions(FT_ID, &["peer".to_string(), "storage".to_string()]);
     let center_apis = session_apis();
-    host_ctx.api_registry().register(
-        session_id,
-        &center_apis.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-    ).unwrap();
+    host_ctx
+        .api_registry()
+        .register(
+            session_id,
+            &center_apis.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+        )
+        .unwrap();
 
     // wire 捕获（静态订阅，与会话中心的 wasm 订阅共存 fan-out）
     let captures: Arc<std::sync::Mutex<Vec<(String, serde_json::Value)>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -3169,10 +3247,13 @@ fn test_filetransfer_consumes_session_center_closed_loop() {
         );
 
         // ==================== 信任列表：经认证中心统一视图 ====================
-        host_ctx.api_registry().register(
-            session_id,
-            &center_apis.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-        ).unwrap();
+        host_ctx
+            .api_registry()
+            .register(
+                session_id,
+                &center_apis.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+            )
+            .unwrap();
         let result = filetransfer
             .lock()
             .await
@@ -3275,10 +3356,13 @@ fn test_session_output_ring_fetch_closed_loop() {
             "storage".to_string(),
         ],
     );
-    host_ctx.api_registry().register(
-        SESSION_ID,
-        &session_apis().iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-    ).unwrap();
+    host_ctx
+        .api_registry()
+        .register(
+            SESSION_ID,
+            &session_apis().iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+        )
+        .unwrap();
 
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
@@ -3467,10 +3551,13 @@ fn test_session_input_via_gateway_closed_loop() {
             "terminal:output".to_string(),
         ],
     );
-    host_ctx.api_registry().register(
-        SESSION_ID,
-        &session_apis().iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-    ).unwrap();
+    host_ctx
+        .api_registry()
+        .register(
+            SESSION_ID,
+            &session_apis().iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+        )
+        .unwrap();
 
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {

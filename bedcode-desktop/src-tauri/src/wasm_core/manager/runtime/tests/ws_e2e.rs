@@ -943,24 +943,31 @@ fn test_ws_two_plugin_isolation() {
         assert_eq!(clients.len(), 1, "A 的端点客户端已登记");
 
         // ==================== 零可见 ====================
+        // 能力域已迁入 `bedcode_server_websocket::plugin_binding`（票 04）：直调域函数
+        // 时用与生产同形状的**实例级端口**（每个宿主上下文一份 ⇒ 权限/总线各归其主）
+        use bedcode_server_websocket::plugin_binding as ws;
+        let ports_a: Arc<dyn ws::ports::WsPorts> =
+            Arc::new(crate::wasm_core::host_api::ws::HostWsPorts::from_ctx(ctx_a.clone()));
+        let ports_b: Arc<dyn ws::ports::WsPorts> =
+            Arc::new(crate::wasm_core::host_api::ws::HostWsPorts::from_ctx(ctx_b.clone()));
         assert_eq!(
-            crate::wasm_core::host_api::ws::ws_list_endpoints(ctx_b.as_ref(), PLUGIN_B).unwrap(),
+            ws::ws_list_endpoints(&ports_b, PLUGIN_B).unwrap(),
             "[]",
             "B 看不到 A 的端点"
         );
         assert_eq!(
-            crate::wasm_core::host_api::ws::ws_list_clients(ctx_b.as_ref(), PLUGIN_B, &endpoint_a).unwrap_err(),
+            ws::ws_list_clients(&ports_b, PLUGIN_B, &endpoint_a).unwrap_err(),
             "not owner of ws endpoint",
             "B 不得查询 A 的端点客户端"
         );
         assert_eq!(
-            crate::wasm_core::host_api::ws::ws_is_connected(ctx_a.as_ref(), PLUGIN_A, &handle_b).unwrap_err(),
+            ws::ws_is_connected(&ports_a, PLUGIN_A, &handle_b).unwrap_err(),
             "not owner of ws handle",
             "A 不得操作 B 的出站句柄"
         );
 
         // ==================== A 停用回收：零影响 B；A 的对端收到 4005 ====================
-        crate::wasm_core::host_api::ws::purge_for_plugin(PLUGIN_A);
+        ws::purge_for_plugin(PLUGIN_A, &ports_a);
         match ws_client_recv(&mut client_a, std::time::Duration::from_secs(5)).await {
             Some(Message::Close(Some(frame))) => {
                 assert_eq!(u16::from(frame.code), 4005, "属主停用关闭码 4005");
@@ -972,13 +979,12 @@ fn test_ws_two_plugin_isolation() {
             "A 的端点随停用回收"
         );
         assert!(
-            crate::wasm_core::host_api::ws::ws_is_connected(ctx_b.as_ref(), PLUGIN_B, &handle_b)
-                .expect("B 句柄仍可查询"),
+            ws::ws_is_connected(&ports_b, PLUGIN_B, &handle_b).expect("B 句柄仍可查询"),
             "A 停用不得影响 B 的外部连接"
         );
         // B 的对端仍在线：可继续发送（fail-visible 之外的正向断言）
         assert!(
-            crate::wasm_core::host_api::ws::ws_send_text(ctx_b.as_ref(), PLUGIN_B, &handle_b, "still-alive").is_ok(),
+            ws::ws_send_text(&ports_b, PLUGIN_B, &handle_b, "still-alive").is_ok(),
             "A 停用后 B 仍可发送"
         );
 
@@ -987,8 +993,8 @@ fn test_ws_two_plugin_isolation() {
         server_task.abort();
         plugin_a.lock().await.deactivate().expect("deactivate A");
         plugin_b.lock().await.deactivate().expect("deactivate B");
-        crate::wasm_core::host_api::ws::purge_for_plugin(PLUGIN_A);
-        crate::wasm_core::host_api::ws::purge_for_plugin(PLUGIN_B);
+        ws::purge_for_plugin(PLUGIN_A, &ports_a);
+        ws::purge_for_plugin(PLUGIN_B, &ports_b);
         bedcode_server_websocket::endpoint::purge_for_plugin(PLUGIN_A);
         bedcode_server_websocket::endpoint::purge_for_plugin(PLUGIN_B);
         peer.abort();
@@ -1087,10 +1093,13 @@ fn test_session_control_endpoint_direct_roundtrip() {
                 "ws:server".to_string(),
             ],
         );
-        host_ctx.api_registry().register(
-            PLUGIN_ID,
-            &session_apis().iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-        ).unwrap();
+        host_ctx
+            .api_registry()
+            .register(
+                PLUGIN_ID,
+                &session_apis().iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+            )
+            .unwrap();
         let component = wasm_runtime
             .compile_component(&std::fs::read(&wasm_path).expect("read session artifact"))
             .expect("compile session artifact");
@@ -1311,7 +1320,10 @@ fn test_session_control_endpoint_direct_roundtrip() {
             }
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
-        assert!(stopped, "stop 后会话应进入 stopped 终态（pty:exit 驱动），最后看到 {last_seen}");
+        assert!(
+            stopped,
+            "stop 后会话应进入 stopped 终态（pty:exit 驱动），最后看到 {last_seen}"
+        );
 
         // remove_session → 摘记录 → 列表清空
         client
@@ -1438,10 +1450,13 @@ fn test_terminal_stream_endpoint_closed_loop() {
                 "ws:server".to_string(),
             ],
         );
-        host_ctx.api_registry().register(
-            PLUGIN_ID,
-            &session_apis().iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-        ).unwrap();
+        host_ctx
+            .api_registry()
+            .register(
+                PLUGIN_ID,
+                &session_apis().iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+            )
+            .unwrap();
         let component = wasm_runtime
             .compile_component(&std::fs::read(&wasm_path).expect("read session artifact"))
             .expect("compile session artifact");
@@ -1754,10 +1769,13 @@ fn test_ws_device_events_and_auth_records_closed_loop() {
                 "ws:server".to_string(),
             ],
         );
-        host_ctx.api_registry().register(
-            PLUGIN_ID,
-            &session_apis().iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-        ).unwrap();
+        host_ctx
+            .api_registry()
+            .register(
+                PLUGIN_ID,
+                &session_apis().iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+            )
+            .unwrap();
         let component = wasm_runtime
             .compile_component(&std::fs::read(&wasm_path).expect("read session artifact"))
             .expect("compile session artifact");

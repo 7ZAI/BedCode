@@ -88,8 +88,7 @@ fn require_host_surface(
     denial: &str,
 ) -> crate::Result<()> {
     use crate::wasm_core::security::frontend_channel::ChannelIdentity;
-    if plugin_host.frontend_channel().resolve(webview_label, credential) != Some(ChannelIdentity::Host)
-    {
+    if plugin_host.frontend_channel().resolve(webview_label, credential) != Some(ChannelIdentity::Host) {
         tracing::warn!(
             webview = %webview_label,
             command = %command,
@@ -568,9 +567,8 @@ pub async fn plugin_auth_set_strategy(
         &credential,
         "authorization strategy must be set by the host frontend",
     )?;
-    let resource = AuthResource::parse(&resource).ok_or_else(|| {
-        crate::AppError::InvalidInput(format!("未知授权资源 '{resource}'（允许 fs / network）"))
-    })?;
+    let resource = AuthResource::parse(&resource)
+        .ok_or_else(|| crate::AppError::InvalidInput(format!("未知授权资源 '{resource}'（允许 fs / network）")))?;
     let strategy = AuthStrategy::parse_wire(&strategy).ok_or_else(|| {
         crate::AppError::InvalidInput(format!(
             "未知授权档位 '{strategy}'（允许 always_ask / default / always_allow）"
@@ -611,9 +609,8 @@ pub async fn plugin_auth_revoke(
         &credential,
         "authorization revoke must be requested by the host frontend",
     )?;
-    let resource = AuthResource::parse(&resource).ok_or_else(|| {
-        crate::AppError::InvalidInput(format!("未知授权资源 '{resource}'（允许 fs / network）"))
-    })?;
+    let resource = AuthResource::parse(&resource)
+        .ok_or_else(|| crate::AppError::InvalidInput(format!("未知授权资源 '{resource}'（允许 fs / network）")))?;
 
     let removed = AuthPolicyStore::new(db.inner().clone())
         .revoke(&plugin_id, resource, &target)
@@ -649,9 +646,8 @@ pub async fn plugin_auth_remove_record(
         &credential,
         "authorization record removal must be requested by the host frontend",
     )?;
-    let resource = AuthResource::parse(&resource).ok_or_else(|| {
-        crate::AppError::InvalidInput(format!("未知授权资源 '{resource}'（允许 fs / network）"))
-    })?;
+    let resource = AuthResource::parse(&resource)
+        .ok_or_else(|| crate::AppError::InvalidInput(format!("未知授权资源 '{resource}'（允许 fs / network）")))?;
 
     let removed = AuthPolicyStore::new(db.inner().clone())
         .remove_deny(&plugin_id, resource, &target)
@@ -808,7 +804,9 @@ mod tests {
                     if path.ends_with("dependency_direction_lock.rs") {
                         continue;
                     }
-                    let Ok(content) = std::fs::read_to_string(&path) else { continue };
+                    let Ok(content) = std::fs::read_to_string(&path) else {
+                        continue;
+                    };
                     for (idx, raw_line) in content.lines().enumerate() {
                         let line = raw_line.trim_start();
                         if line.starts_with("//") || line.starts_with('*') || line.starts_with("/*") {
@@ -816,12 +814,7 @@ mod tests {
                         }
                         for needle in needles {
                             if line.contains(needle) {
-                                violations.push(format!(
-                                    "{}:{}: {}",
-                                    path.display(),
-                                    idx + 1,
-                                    line.trim()
-                                ));
+                                violations.push(format!("{}:{}: {}", path.display(), idx + 1, line.trim()));
                             }
                         }
                     }

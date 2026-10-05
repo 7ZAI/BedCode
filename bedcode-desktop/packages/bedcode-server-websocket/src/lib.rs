@@ -22,10 +22,17 @@
 //!
 //! 认证档位词汇 `EndpointAuth` 真源在桌面 SDK（`bedcode_plugin_api`），两侧各自直连，
 //! 不建共享词汇模块。
+//!
+//! **插件绑定层（wasm-core-lib-split 票 04）**：[`plugin_binding`] 是本 crate 的
+//! `host-websocket` 能力域（15 条原语）——出站连接表 / 入站端点原语 / 帧投递 /
+//! 属主回收的实现与 WIT 接线都在这里，经 [`bedcode_host_kit`] 的能力模块注册表
+//! 自动装配。宿主侧只剩一个端口 adapter（`wasm_core::host_api::ws`）与一次开机装配
+//! 调用，不再有该域的逐接口接线。
 
 pub mod channel;
 pub mod conn;
 pub mod endpoint;
+pub mod plugin_binding;
 pub mod registry;
 pub mod routes;
 pub mod websocket_manager;

@@ -61,8 +61,8 @@ use crate::wasm_core::bus::MessageBus;
 #[cfg(test)]
 use crate::wasm_core::host_api::context::WasmHostContext;
 use crate::wasm_core::host_api::pty_output::OutputNotifySink;
-use crate::wasm_core::runtime_util::block_on_async;
 use crate::wasm_core::permission::{PERMISSION_PTY_IO, PERMISSION_PTY_SPAWN};
+use crate::wasm_core::runtime_util::block_on_async;
 use portable_pty::CommandBuilder;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -183,8 +183,12 @@ fn resolve_ring_bytes(declared: Option<u64>) -> Result<u64, String> {
 /// 创建插件私有裸 PTY：成功返回 `pty-<uuid>` 句柄并登记属主
 ///
 /// 失败只回错误、不发布任何事件（无句柄可寻址），且不留注册表项与进程。
-pub(crate) fn pty_spawn(bus: &dyn crate::wasm_core::host_api::context::BusScope,
-    perm: &dyn crate::wasm_core::host_api::context::PermissionScope, plugin_id: &str, config_json: &str) -> Result<String, String> {
+pub(crate) fn pty_spawn(
+    bus: &dyn crate::wasm_core::host_api::context::BusScope,
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
+    plugin_id: &str,
+    config_json: &str,
+) -> Result<String, String> {
     if !super::check_permission(perm, plugin_id, PERMISSION_PTY_SPAWN, "host_pty_spawn") {
         return Err(denied_spawn());
     }
@@ -279,7 +283,12 @@ pub(crate) fn pty_spawn(bus: &dyn crate::wasm_core::host_api::context::BusScope,
 /// 分块与让出节奏在引擎侧（`PtySession::write`：4000 字节分块 + 逐块 yield，避免打满
 /// PTY 内核缓冲）；本层的 [`PLUGIN_PTY_MAX_WRITE_BYTES`] 是**一次调用的准入上限**，
 /// 超限直接 `Err`——静默截断会让插件把「半条命令」喂进交互进程，比失败更糟。
-pub(crate) fn pty_write(perm: &dyn crate::wasm_core::host_api::context::PermissionScope, plugin_id: &str, pty_id: &str, data: &[u8]) -> Result<(), String> {
+pub(crate) fn pty_write(
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
+    plugin_id: &str,
+    pty_id: &str,
+    data: &[u8],
+) -> Result<(), String> {
     if !super::check_permission(perm, plugin_id, PERMISSION_PTY_IO, "host_pty_write") {
         return Err(denied_io());
     }
@@ -318,7 +327,11 @@ pub(crate) fn pty_resize(
 /// 不会翻下（只有 kill/销毁会，业务线依赖这一语义），而插件私有 PTY 释放了 slave
 /// fd，EOF 即退出信号，故两路合一才如实。定位是「bus 不缓冲不重放」下丢失
 /// `pty:exit` 后的自愈快照，不是事件替代品。
-pub(crate) fn pty_is_running(perm: &dyn crate::wasm_core::host_api::context::PermissionScope, plugin_id: &str, pty_id: &str) -> Result<bool, String> {
+pub(crate) fn pty_is_running(
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
+    plugin_id: &str,
+    pty_id: &str,
+) -> Result<bool, String> {
     if !super::check_permission(perm, plugin_id, PERMISSION_PTY_IO, "host_pty_is_running") {
         return Err(denied_io());
     }
@@ -341,7 +354,10 @@ fn running_verdict(running: bool, output_terminated: bool) -> bool {
 /// 监听在「EOF + 子进程回收」齐备时完成（见模块头的单一发布者不变量）。因此 kill 后
 /// 立刻 `ring-fetch` 仍可能取到尾帧，而后再取即 `pty handle not found`。
 pub(crate) fn pty_kill(
-    perm: &dyn crate::wasm_core::host_api::context::PermissionScope, plugin_id: &str, pty_id: &str) -> Result<(), String> {
+    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
+    plugin_id: &str,
+    pty_id: &str,
+) -> Result<(), String> {
     if !super::check_permission(perm, plugin_id, PERMISSION_PTY_SPAWN, "host_pty_kill") {
         return Err(denied_spawn());
     }

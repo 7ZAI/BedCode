@@ -1,7 +1,7 @@
 //! Rust 命令分派与终端管道用例。
 
-use super::*;
 use super::scaffold::*;
+use super::*;
 
 // ==================== Rust Command Dispatch ====================
 
@@ -91,8 +91,7 @@ async fn test_list_rust_commands_parses_namespace() {
         ("com.a", "cmd2", "Two"),
         ("com.b", "cmd3", "Three"),
     ] {
-        let cmd =
-            PluginCommand::new(cmd_name, |_args| async move { Ok(serde_json::json!(null)) }).with_title(title);
+        let cmd = PluginCommand::new(cmd_name, |_args| async move { Ok(serde_json::json!(null)) }).with_title(title);
         host.rust_command_handlers
             .write()
             .await
@@ -181,4 +180,3 @@ async fn test_message_dispatcher_is_activated() {
     );
     assert!(!MessageDispatcher::is_activated(&host, "com.bedcode.d"));
 }
-

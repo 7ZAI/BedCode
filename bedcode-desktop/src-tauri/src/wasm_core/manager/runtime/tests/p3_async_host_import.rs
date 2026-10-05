@@ -72,11 +72,7 @@ struct ProbeControl {
 }
 
 impl ProbeControl {
-    fn new(
-        instance_id: &'static str,
-        release: oneshot::Receiver<()>,
-        entered: mpsc::UnboundedSender<String>,
-    ) -> Self {
+    fn new(instance_id: &'static str, release: oneshot::Receiver<()>, entered: mpsc::UnboundedSender<String>) -> Self {
         Self {
             instance_id,
             release: TokioMutex::new(Some(release)),
@@ -153,10 +149,7 @@ async fn invoke_mode(control: Arc<ProbeControl>, mode: String) -> Result<String,
             if control.fail_once.swap(false, Ordering::SeqCst) {
                 Err(FORCED_FAILURE.to_string())
             } else {
-                Ok(format!(
-                    "{FAIL_ONCE_RECOVERED_PREFIX}{}",
-                    control.instance_id
-                ))
+                Ok(format!("{FAIL_ONCE_RECOVERED_PREFIX}{}", control.instance_id))
             }
         }
         "normal" => Ok(format!("{NORMAL_RESULT_PREFIX}{}", control.instance_id)),
@@ -224,17 +217,12 @@ async fn instantiate_probe(
     ProbeInstance { store, exports }
 }
 
-async fn call_locked(
-    instance: Arc<TokioMutex<ProbeInstance>>,
-    mode: &'static str,
-) -> Result<String, String> {
+async fn call_locked(instance: Arc<TokioMutex<ProbeInstance>>, mode: &'static str) -> Result<String, String> {
     let mut instance = instance.lock().await;
     instance.call(mode).await
 }
 
-async fn join_probe_task(
-    task: tokio::task::JoinHandle<Result<String, String>>,
-) -> Result<String, String> {
+async fn join_probe_task(task: tokio::task::JoinHandle<Result<String, String>>) -> Result<String, String> {
     tokio::time::timeout(Duration::from_secs(5), task)
         .await
         .expect("P3 probe task timed out")
@@ -298,10 +286,7 @@ fn build_p3_async_host_import_component() -> Vec<u8> {
         ])
         .status()
         .expect("run cargo shim for P3 async host import component");
-    assert!(
-        status.success(),
-        "P3 async host import component WASM build failed"
-    );
+    assert!(status.success(), "P3 async host import component WASM build failed");
 
     fs::read(&module_path).expect("read built P3 async host import component")
 }
@@ -324,9 +309,7 @@ impl HangWatchdog {
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_secs(secs));
             if !flag.load(Ordering::SeqCst) {
-                eprintln!(
-                    "[p3-probe] {label}: 超过 {secs}s 未完成（宿主实现占住执行线程 → 死锁）"
-                );
+                eprintln!("[p3-probe] {label}: 超过 {secs}s 未完成（宿主实现占住执行线程 → 死锁）");
                 std::process::exit(1);
             }
         });
@@ -349,20 +332,17 @@ async fn test_p3_async_host_import_yields_runtime() {
     let _watchdog = HangWatchdog::start("test_p3_async_host_import_yields_runtime", 20);
     let component_bytes = build_p3_async_host_import_component();
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let production_wit =
-        fs::read_to_string(manifest_dir.join("../packages/plugin-sdk-desktop/rust/wit/bedcode.wit"))
-            .expect("read production WIT");
-    let production_abi =
-        fs::read_to_string(manifest_dir.join("../packages/plugin-sdk-desktop/rust/src/abi.rs"))
-            .expect("read production ABI");
+    let production_wit = fs::read_to_string(manifest_dir.join("../packages/plugin-sdk-desktop/rust/wit/bedcode.wit"))
+        .expect("read production WIT");
+    let production_abi = fs::read_to_string(manifest_dir.join("../packages/plugin-sdk-desktop/rust/src/abi.rs"))
+        .expect("read production ABI");
     assert!(!production_wit.contains("p3-async-host-probe"));
     assert!(!production_abi.contains("P3_ASYNC_HOST_IMPORT_PROBE"));
 
     let mut config = Config::new();
     config.wasm_component_model_async(true);
     let engine = Engine::new(&config).expect("create P3 async probe engine");
-    let component = Component::from_binary(&engine, &component_bytes)
-        .expect("compile P3 async host import component");
+    let component = Component::from_binary(&engine, &component_bytes).expect("compile P3 async host import component");
 
     let mut linker = Linker::<ProbeState>::new(&engine);
     wasmtime_wasi::p3::add_to_linker(&mut linker).expect("register P3 WASI interfaces");
@@ -417,9 +397,7 @@ async fn test_p3_async_host_import_yields_runtime() {
         let instance = Arc::clone(&instance_a);
         let queued = queued.0;
         tokio::spawn(async move {
-            queued
-                .send(())
-                .expect("record second caller lock attempt");
+            queued.send(()).expect("record second caller lock attempt");
             call_locked(instance, "fail-once").await
         })
     };
@@ -447,20 +425,13 @@ async fn test_p3_async_host_import_yields_runtime() {
     assert_eq!(control_b.started.load(Ordering::SeqCst), 1);
     assert_eq!(control_b.active.load(Ordering::SeqCst), 1);
 
-    release_b_tx
-        .send(())
-        .expect("release instance B host import");
+    release_b_tx.send(()).expect("release instance B host import");
     assert_eq!(join_probe_task(first_b).await, Ok("wait-complete:b".to_string()));
     assert_eq!(control_b.active.load(Ordering::SeqCst), 0);
 
-    release_a_tx
-        .send(())
-        .expect("release instance A host import");
+    release_a_tx.send(()).expect("release instance A host import");
     assert_eq!(join_probe_task(first_a).await, Ok("wait-complete:a".to_string()));
-    assert_eq!(
-        join_probe_task(second_a).await,
-        Err(FORCED_FAILURE.to_string())
-    );
+    assert_eq!(join_probe_task(second_a).await, Err(FORCED_FAILURE.to_string()));
     assert_eq!(control_a.started.load(Ordering::SeqCst), 2);
     assert_eq!(control_a.max_active.load(Ordering::SeqCst), 1);
 
@@ -470,10 +441,7 @@ async fn test_p3_async_host_import_yields_runtime() {
         instance_a.call("fail-once").await,
         Ok("fail-once-recovered:a".to_string())
     );
-    assert_eq!(
-        instance_a.call("normal").await,
-        Ok("normal-complete:a".to_string())
-    );
+    assert_eq!(instance_a.call("normal").await, Ok("normal-complete:a".to_string()));
     assert_eq!(control_a.active.load(Ordering::SeqCst), 0);
     assert_eq!(control_a.started.load(Ordering::SeqCst), 4);
 
@@ -496,8 +464,7 @@ async fn setup_gate_probe(
     let mut config = Config::new();
     config.wasm_component_model_async(true);
     let engine = Engine::new(&config).expect("create P3 async probe engine");
-    let component =
-        Component::from_binary(&engine, &component_bytes).expect("compile P3 async host import component");
+    let component = Component::from_binary(&engine, &component_bytes).expect("compile P3 async host import component");
 
     let mut linker = Linker::<ProbeState>::new(&engine);
     wasmtime_wasi::p3::add_to_linker(&mut linker).expect("register P3 WASI interfaces");
@@ -574,9 +541,7 @@ async fn test_p3_async_import_suspension_stalls_owner_closure() {
         .await
         .expect("run_concurrent must not fail");
 
-    println!(
-        "P3 owner-stall probe: first_tick_ms={first_tick_ms}（外部释放 {RELEASE_AFTER_MS}ms）, reply={reply:?}"
-    );
+    println!("P3 owner-stall probe: first_tick_ms={first_tick_ms}（外部释放 {RELEASE_AFTER_MS}ms）, reply={reply:?}");
 
     assert!(
         first_tick_ms >= RELEASE_AFTER_MS as u128 - 100,
@@ -640,7 +605,10 @@ async fn test_p3_async_import_pending_second_explicit_call_same_instance() {
             let first = accessor
                 .with(|access| func.start_call_concurrent(access, ("wait".to_string(),)))
                 .expect("start first call");
-            eprintln!("[probe] A start#1 已启动（active={}）", control.active.load(Ordering::SeqCst));
+            eprintln!(
+                "[probe] A start#1 已启动（active={}）",
+                control.active.load(Ordering::SeqCst)
+            );
 
             // ② 同实例第二条显式调用：不等待 #1、不设人工锁
             let second = accessor
@@ -654,9 +622,7 @@ async fn test_p3_async_import_pending_second_explicit_call_same_instance() {
                 .unwrap_or_else(|e| Err(format!("finish error: {e}")));
             let second_elapsed_ms = started_at.elapsed().as_millis();
             let active_at_second_done = control.active.load(Ordering::SeqCst);
-            eprintln!(
-                "[probe] B 第二条结算 {second_elapsed_ms}ms（active={active_at_second_done}）：{second_reply:?}"
-            );
+            eprintln!("[probe] B 第二条结算 {second_elapsed_ms}ms（active={active_at_second_done}）：{second_reply:?}");
 
             // ③ 收 #1（此时应已由外部驱动释放）
             let first_after_release = func

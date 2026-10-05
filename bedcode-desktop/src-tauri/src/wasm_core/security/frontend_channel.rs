@@ -313,7 +313,10 @@ mod tests {
 
         let revoked = registry.reset(MAIN);
         assert_eq!(revoked, 1, "重置必须报告回收的令牌数");
-        assert!(!registry.verify_loader_session(MAIN, &session), "页面加载后旧 loader 密钥失效");
+        assert!(
+            !registry.verify_loader_session(MAIN, &session),
+            "页面加载后旧 loader 密钥失效"
+        );
         assert_eq!(registry.resolve(MAIN, &token), None, "页面加载后插件令牌失效");
         // 新页面加载可重新签发（dev 刷新路径）
         let fresh = registry.issue_loader_session(MAIN).expect("reissue after reset");
@@ -332,7 +335,11 @@ mod tests {
         let main_session = registry.issue_loader_session(MAIN).unwrap();
         let main_tokens: Vec<String> = ["a", "b", "c", "d"]
             .iter()
-            .map(|p| registry.issue_token(MAIN, &main_session, &format!("com.test.{p}")).unwrap())
+            .map(|p| {
+                registry
+                    .issue_token(MAIN, &main_session, &format!("com.test.{p}"))
+                    .unwrap()
+            })
             .collect();
 
         // 终端窗口加载：reset 只清 TERMINAL 域（该域此前为空 → 回收 0）
@@ -395,7 +402,10 @@ mod tests {
         // 窗口销毁重建 → 再次页面加载：域内旧凭证先被重置
         assert_eq!(registry.reset(TERMINAL), 1);
         assert_eq!(registry.resolve(TERMINAL, &first_token), None, "旧窗口令牌必须失效");
-        assert!(registry.issue_loader_session(TERMINAL).is_ok(), "重建窗口必须能重新取得密钥");
+        assert!(
+            registry.issue_loader_session(TERMINAL).is_ok(),
+            "重建窗口必须能重新取得密钥"
+        );
     }
 
     /// 宿主面凭证可操作任意目标；插件令牌只能操作自己
@@ -463,7 +473,11 @@ mod tests {
         registry.revoke_plugin("com.test.a");
 
         assert_eq!(registry.resolve(MAIN, &main_token), None, "主窗口令牌必须回收");
-        assert_eq!(registry.resolve(TERMINAL, &terminal_token), None, "终端窗口令牌必须回收");
+        assert_eq!(
+            registry.resolve(TERMINAL, &terminal_token),
+            None,
+            "终端窗口令牌必须回收"
+        );
         assert_eq!(
             registry.resolve(MAIN, &other),
             Some(ChannelIdentity::Plugin("com.test.b".into())),

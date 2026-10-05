@@ -191,7 +191,10 @@ mod tests {
         assert_eq!(StrategyStep::of(AuthStrategy::Default), StrategyStep::consult_records());
         assert_eq!(StrategyStep::of(AuthStrategy::AlwaysAllow), StrategyStep::auto_allow());
 
-        assert!(!StrategyStep::ask().reads_allow_records(), "总是询问：不读任何 allow 记录");
+        assert!(
+            !StrategyStep::ask().reads_allow_records(),
+            "总是询问：不读任何 allow 记录"
+        );
         assert!(StrategyStep::consult_records().reads_allow_records());
         assert!(
             !StrategyStep::auto_allow().reads_allow_records(),
@@ -199,7 +202,10 @@ mod tests {
         );
 
         // 审计义务：只有 always_allow 携带（S-11 防「match 后什么都不做」）
-        assert!(StrategyStep::auto_allow().must_land_auto_allow(), "始终允许必须带审计义务");
+        assert!(
+            StrategyStep::auto_allow().must_land_auto_allow(),
+            "始终允许必须带审计义务"
+        );
         assert!(!StrategyStep::ask().must_land_auto_allow());
         assert!(!StrategyStep::consult_records().must_land_auto_allow());
     }

@@ -149,11 +149,8 @@ async fn trap_error_text_and_post_trap_failure_match_across_models() {
 /// `call_capability_export` 直调，本锁立即转红。
 #[test]
 fn instance_slot_structural_lock() {
-    let host_src = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/src/wasm_core/manager/host.rs"
-    ))
-    .expect("read host.rs");
+    let host_src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/wasm_core/manager/host.rs"))
+        .expect("read host.rs");
     let owner_src = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/src/wasm_core/manager/host/owner.rs"

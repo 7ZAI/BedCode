@@ -47,11 +47,7 @@ pub fn next_host_request_id() -> String {
 ///
 /// 失败面全部 `Err`（不回退成「空结果」）：传输失败 / reply 非法 JSON / 错误信封
 /// / 缺 `result`——四种都在错误里点名 api 名，排障不靠猜。
-pub fn call_api(
-    host_ctx: &WasmHostContext,
-    api: &str,
-    params: serde_json::Value,
-) -> Result<serde_json::Value> {
+pub fn call_api(host_ctx: &WasmHostContext, api: &str, params: serde_json::Value) -> Result<serde_json::Value> {
     let request_topic = format!("bedcode.api.{api}");
     let method = api.rsplit_once('.').map(|(_, m)| m).unwrap_or(api);
     let id = next_host_request_id();
@@ -74,9 +70,10 @@ pub fn call_api(
             .to_string();
         return Err(AppError::Plugin(format!("plugin api '{api}' error: {message}")));
     }
-    reply.get("result").cloned().ok_or_else(|| {
-        AppError::Plugin(format!("plugin api '{api}' reply missing result/error"))
-    })
+    reply
+        .get("result")
+        .cloned()
+        .ok_or_else(|| AppError::Plugin(format!("plugin api '{api}' reply missing result/error")))
 }
 
 #[cfg(test)]
