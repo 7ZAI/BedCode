@@ -9,9 +9,20 @@
 # 工具链探针）都落到同一目录 `bedcode-desktop/target/wasm-apps`。
 #
 # 路径真源 = `scripts/plugin-wasm-config.mjs` 的 `WASM_TARGET_DIR`（各应用
-# build.js 用它拼产物路径并显式传 `--target-dir`；两处注释互相指认）。这里的值
-# 相对**本 `.cargo` 目录的父目录**（= `bedcode-desktop/wasm-apps/`）解析，
-# 故 `../../target/wasm-apps` 与 build.js 侧拼出的路径是同一个目录。
+# build.js 用它拼产物路径并显式传 `--target-dir`；两处注释互相指认）。
+#
+# cargo 的 config 相对路径以**本 `.cargo` 目录的父目录**（= `bedcode-desktop/wasm-apps/`）
+# 为基准解析，故这里必须写 `../target/wasm-apps`，才与 build.js 侧拼出的
+# `bedcode-desktop/target/wasm-apps` 是同一个目录。
+#
+# 历史坑（2026-10-04 修）：本行曾多写一个 `..`（`../../target/wasm-apps`），
+# 实际落到**仓库根** `target/wasm-apps`——于是「`pnpm run build` 出的 wasm 产物」
+# 与「手工 / CI 里 `cd wasm-apps/<app>/rust && cargo test` 出的产物」分裂成两个
+# 目录（实测 486M + 7.5G 各一份），而本注释、AGENTS §3 与 build-process.md 全都
+# 写着同一个目录，只有 `cargo metadata` 的 `target_directory` 字段说真话。
+# **改这一行后必须核验**：
+#   cd wasm-apps/<app-id>/rust && cargo metadata --no-deps --format-version 1
+# 其 `target_directory` 应为 `.../bedcode-desktop/target/wasm-apps`。
 #
 # 与测试夹具的共享目录（`bedcode-desktop/target/fixtures`，真源
 # `src-tauri/.../runtime/fixture_target.rs`）**刻意分开**：夹具 crate 定义了
@@ -20,4 +31,4 @@
 #
 # 决策记录：.scratch/2026-09-26-cargo-target-space/spec.md
 [build]
-target-dir = "../../target/wasm-apps"
+target-dir = "../target/wasm-apps"
