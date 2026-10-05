@@ -350,7 +350,10 @@ pub fn on_client_disconnect(client_id: &str) {
 pub fn purge_all() {
     let mut table = CONNECTIONS.lock().unwrap_or_else(|e| e.into_inner());
     if !table.is_empty() {
-        WasmHost.log_info(&format!("ws terminal: purged {} connection(s)", table.len()));
+        WasmHost.log_info(&format!(
+            "ws terminal: purged {} connection(s)",
+            table.len()
+        ));
         table.clear();
     }
 }
@@ -358,7 +361,9 @@ pub fn purge_all() {
 /// 调试留痕（断开清理）
 #[cfg(target_arch = "wasm32")]
 fn tracing_dbg_disconnect(client_id: &str) {
-    WasmHost.log_debug(&format!("ws terminal: connection state dropped (client_id={client_id})"));
+    WasmHost.log_debug(&format!(
+        "ws terminal: connection state dropped (client_id={client_id})"
+    ));
 }
 
 // ==================== 入站帧处理（events-ws 回调） ====================
@@ -383,7 +388,10 @@ struct TerminalFrame {
 ///
 /// 返回给调用方一个「是否需要 drain」标记（任何推进输出的帧之后都要 drain）。
 #[cfg(target_arch = "wasm32")]
-fn handle_text_frame(conn: &mut TerminalConnection, frame: &serde_json::Value) -> Result<bool, String> {
+fn handle_text_frame(
+    conn: &mut TerminalConnection,
+    frame: &serde_json::Value,
+) -> Result<bool, String> {
     let parsed: TerminalFrame = serde_json::from_value(frame.clone())
         .map_err(|e| format!("invalid terminal frame: {e}"))?;
     match parsed.frame_type.as_str() {
@@ -437,13 +445,17 @@ fn handle_text_frame(conn: &mut TerminalConnection, frame: &serde_json::Value) -
         // ① 推进已确认水位（让未确认窗口回落，解除抑制）；
         // ② 本身作为 drain 触发源（自时钟：每 64 KiB / 最迟 ~375 ms 一帧）。
         "ack" => {
-            let offset = parsed.offset.ok_or_else(|| "ack: missing offset".to_string())?;
+            let offset = parsed
+                .offset
+                .ok_or_else(|| "ack: missing offset".to_string())?;
             conn.watermark.note_acked_local(offset);
             Ok(true)
         }
         // 客户端已清屏重锚：游标置为客户端给的新基准（ring_resync 后的续拉点）
         "resync" => {
-            let offset = parsed.offset.ok_or_else(|| "resync: missing offset".to_string())?;
+            let offset = parsed
+                .offset
+                .ok_or_else(|| "resync: missing offset".to_string())?;
             conn.cursor = offset;
             conn.watermark.reanchor(offset);
             Ok(true)
@@ -452,7 +464,10 @@ fn handle_text_frame(conn: &mut TerminalConnection, frame: &serde_json::Value) -
             let data = parsed
                 .data
                 .ok_or_else(|| "input: missing data".to_string())?;
-            let pty_id = conn.pty_id.clone().ok_or_else(|| "input: 未订阅会话".to_string())?;
+            let pty_id = conn
+                .pty_id
+                .clone()
+                .ok_or_else(|| "input: 未订阅会话".to_string())?;
             WasmHost
                 .pty_write(&pty_id, data.as_bytes())
                 .map_err(|e| format!("host pty write failed: {}", e.message))?;
@@ -468,7 +483,10 @@ fn handle_text_frame(conn: &mut TerminalConnection, frame: &serde_json::Value) -
 /// 翻译，但客户端也可直接发送原始控制字节；这里不做二次解释）
 #[cfg(target_arch = "wasm32")]
 fn handle_binary_frame(conn: &mut TerminalConnection, payload: &[u8]) -> Result<bool, String> {
-    let pty_id = conn.pty_id.clone().ok_or_else(|| "binary input: 未订阅会话".to_string())?;
+    let pty_id = conn
+        .pty_id
+        .clone()
+        .ok_or_else(|| "binary input: 未订阅会话".to_string())?;
     WasmHost
         .pty_write(&pty_id, payload)
         .map_err(|e| format!("host pty write failed: {}", e.message))?;
@@ -477,7 +495,12 @@ fn handle_binary_frame(conn: &mut TerminalConnection, payload: &[u8]) -> Result<
 
 /// events-ws 服务端域回调（声明端点 `terminal` 的入站帧）——宿主只转原始帧
 #[cfg(target_arch = "wasm32")]
-pub fn on_client_message(endpoint_id: &str, client_id: &str, kind: &str, payload: &[u8]) -> anyhow::Result<()> {
+pub fn on_client_message(
+    endpoint_id: &str,
+    client_id: &str,
+    kind: &str,
+    payload: &[u8],
+) -> anyhow::Result<()> {
     // 未登记连接（如 auth 事件先于 client-connect 投递的竞态）→ 惰性登记
     if with_conn(client_id, |_| ()).is_none() {
         on_client_connect(client_id, endpoint_id);
@@ -601,7 +624,9 @@ fn drain_for(endpoint_id: &str, client_id: &str) -> Result<(), String> {
                     cursor = fetched.next_offset;
                 }
                 if !fetched.data.is_empty() {
-                    if let Err(e) = WasmHost.ws_send_binary_to_client(endpoint_id, client_id, &fetched.data) {
+                    if let Err(e) =
+                        WasmHost.ws_send_binary_to_client(endpoint_id, client_id, &fetched.data)
+                    {
                         // 慢客户端/队列满：只停本人（fail-visible debug 留痕），
                         // 不阻塞 PTY 产出与其他连接；游标不动，下轮续拉
                         WasmHost.log_debug(&format!(
@@ -834,7 +859,12 @@ fn send_text(endpoint_id: &str, client_id: &str, text: &str) -> Result<(), Strin
 // ==================== native：wasm 专属路径为空实现 ====================
 
 #[cfg(not(target_arch = "wasm32"))]
-pub fn on_client_message(_endpoint_id: &str, _client_id: &str, _kind: &str, _payload: &[u8]) -> anyhow::Result<()> {
+pub fn on_client_message(
+    _endpoint_id: &str,
+    _client_id: &str,
+    _kind: &str,
+    _payload: &[u8],
+) -> anyhow::Result<()> {
     anyhow::bail!("ws terminal unavailable outside wasm runtime")
 }
 
@@ -1085,7 +1115,10 @@ mod tests {
         for _ in 0..=PARK_MAX_CYCLES {
             let _ = wm.gate(0);
         }
-        assert!(wm.parked && wm.forced_drains >= 1, "前置条件：已强放行且仍驻留");
+        assert!(
+            wm.parked && wm.forced_drains >= 1,
+            "前置条件：已强放行且仍驻留"
+        );
 
         // 客户端终于追上来（未确认降到下沿以下）
         wm.note_acked_local(HIGH_WATER_BYTES * 4 - LOW_WATER_BYTES / 2);
@@ -1102,7 +1135,10 @@ mod tests {
         let payload = ring_resync_payload(1_000, 20_000);
         assert_eq!(payload["type"], "ring_resync");
         assert_eq!(payload["offset"], 20_000, "新基准 = 客户端重锚点");
-        assert_eq!(payload["gapFrom"], 1_000, "缺口起点：重锚后 offset 与本地计数不同源，缺口范围靠它才可查");
+        assert_eq!(
+            payload["gapFrom"], 1_000,
+            "缺口起点：重锚后 offset 与本地计数不同源，缺口范围靠它才可查"
+        );
     }
 
     // ==================== 结构锁（三处修复不可静默回退） ====================
@@ -1161,11 +1197,14 @@ mod tests {
     fn exit_path_reports_truncation_before_stopped_frame() {
         let body = fn_body(&source(), "pub fn on_session_terminated(");
         let fetch = body.find("pty_ring_fetch(").expect("尾帧 fetch");
-        let resync = body
-            .find("ring_resync_payload(")
-            .unwrap_or_else(|| panic!("退出路径必须检查 truncated 并发重锚帧（实测缺陷：尾帧缺口静默）"));
+        let resync = body.find("ring_resync_payload(").unwrap_or_else(|| {
+            panic!("退出路径必须检查 truncated 并发重锚帧（实测缺陷：尾帧缺口静默）")
+        });
         let tail_send = body.find("ws_send_binary_to_client(").expect("尾帧下发");
-        assert!(fetch < resync && resync < tail_send, "顺序：fetch → 重锚帧 → 尾帧 → 停止帧");
+        assert!(
+            fetch < resync && resync < tail_send,
+            "顺序：fetch → 重锚帧 → 尾帧 → 停止帧"
+        );
         // 停止帧发不出去必须留痕（客户端会一直等终态）
         assert!(
             body.contains("session_stopped 帧发送失败"),
@@ -1186,8 +1225,14 @@ mod tests {
             "旧的「解析后丢弃 ack offset」写法不得复活"
         );
         // 三个重锚/触发点
-        assert!(body.contains("conn.watermark.reset()"), "subscribe 必须归零水位");
-        assert!(body.contains("conn.watermark.reanchor(offset)"), "resync 帧必须换基准");
+        assert!(
+            body.contains("conn.watermark.reset()"),
+            "subscribe 必须归零水位"
+        );
+        assert!(
+            body.contains("conn.watermark.reanchor(offset)"),
+            "resync 帧必须换基准"
+        );
     }
 
     /// S5 宿主限频唤醒必须驱动 WS drain（否则移动端空闲期只能等 1s tick）
@@ -1236,7 +1281,8 @@ mod tests {
         // TerminalFrame 与词表分支由 serde 形状锁覆盖：
         let parsed: Result<TerminalFrame, _> = serde_json::from_value(frame("subscribe"));
         assert!(parsed.is_ok(), "subscribe 帧形状可解析");
-        let parsed: Result<TerminalFrame, _> = serde_json::from_value(serde_json::json!({"type": "ack"}));
+        let parsed: Result<TerminalFrame, _> =
+            serde_json::from_value(serde_json::json!({"type": "ack"}));
         assert!(parsed.is_ok());
         let parsed: Result<TerminalFrame, _> = serde_json::from_value(serde_json::json!({}));
         assert!(parsed.is_err(), "缺 type 字段拒绝");
@@ -1262,7 +1308,8 @@ mod tests {
     #[test]
     fn ws_terminal_has_no_host_business_types() {
         let root = env!("CARGO_MANIFEST_DIR");
-        let src = std::fs::read_to_string(format!("{root}/src/ws_terminal.rs")).expect("read ws_terminal.rs");
+        let src = std::fs::read_to_string(format!("{root}/src/ws_terminal.rs"))
+            .expect("read ws_terminal.rs");
         let implementation = src.split("#[cfg(test)]").next().unwrap_or(&src);
         let mut violations: Vec<String> = Vec::new();
         for (idx, raw) in implementation.lines().enumerate() {
@@ -1270,7 +1317,14 @@ mod tests {
             if line.starts_with("//") || line.starts_with("///") || line.starts_with("//!") {
                 continue;
             }
-            for marker in ["Message::", "SyncEvent::", "SessionControlAction", "hostBroadcastSessionId", "WatchMode", "SessionStopped"] {
+            for marker in [
+                "Message::",
+                "SyncEvent::",
+                "SessionControlAction",
+                "hostBroadcastSessionId",
+                "WatchMode",
+                "SessionStopped",
+            ] {
                 if line.contains(marker) {
                     violations.push(format!("{}:{}: {}", "ws_terminal.rs", idx + 1, line.trim()));
                 }

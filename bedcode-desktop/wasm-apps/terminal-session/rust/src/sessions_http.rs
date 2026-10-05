@@ -360,14 +360,11 @@ fn history_session(host: &WasmHost, method: &str, params: &Value, query: &Value)
         Ok(v) => {
             // 必填字段缺失/畸形 → 显性报错（伪装成空历史 = 移动端把
             // 半截屏当完整快照）；真·空 data / 0 偏移才算合法
-            let data: Vec<u8> = match v
-                .get("data")
-                .and_then(|d| d.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|b| b.as_u64().map(|b| b as u8))
-                        .collect()
-                }) {
+            let data: Vec<u8> = match v.get("data").and_then(|d| d.as_array()).map(|arr| {
+                arr.iter()
+                    .filter_map(|b| b.as_u64().map(|b| b as u8))
+                    .collect()
+            }) {
                 Some(data) => data,
                 None => {
                     let msg = format!(
@@ -378,9 +375,7 @@ fn history_session(host: &WasmHost, method: &str, params: &Value, query: &Value)
                 }
             };
             let required = |key: &str| -> Result<u64, serde_json::Value> {
-                v.get(key)
-                    .and_then(|n| n.as_u64())
-                    .ok_or_else(|| v.clone())
+                v.get(key).and_then(|n| n.as_u64()).ok_or_else(|| v.clone())
             };
             let min_offset = match required("minOffset") {
                 Ok(n) => n,

@@ -268,18 +268,16 @@ mod wasm_impl {
     /// 「读到畸形响应」当成「无账本/无表」，迁移逻辑据此做出错误决策）
     fn column(rows: Option<serde_json::Value>, key: &str) -> Result<Vec<String>, String> {
         let rows = rows.unwrap_or_else(|| serde_json::json!([]));
-        let array = rows.as_array().ok_or_else(|| {
-            format!("schema query did not return an array (key={key}): {rows}")
-        })?;
+        let array = rows
+            .as_array()
+            .ok_or_else(|| format!("schema query did not return an array (key={key}): {rows}"))?;
         array
             .iter()
             .map(|r| {
                 r.get(key)
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string())
-                    .ok_or_else(|| {
-                        format!("schema query row missing string column '{key}': {r}")
-                    })
+                    .ok_or_else(|| format!("schema query row missing string column '{key}': {r}"))
             })
             .collect()
     }
@@ -321,11 +319,8 @@ mod wasm_impl {
             // 严格白名单校验，再引号包裹拼语句
             validate_identifier(from)?;
             validate_identifier(to)?;
-            self.plugin_db_execute(&format!(
-                "ALTER TABLE \"{}\" RENAME TO \"{}\"",
-                from, to
-            ))
-            .map_err(|e| format!("rename table {} → {} failed: {}", from, to, e.message))?;
+            self.plugin_db_execute(&format!("ALTER TABLE \"{}\" RENAME TO \"{}\"", from, to))
+                .map_err(|e| format!("rename table {} → {} failed: {}", from, to, e.message))?;
             Ok(())
         }
 

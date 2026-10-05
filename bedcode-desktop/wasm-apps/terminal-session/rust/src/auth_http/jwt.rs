@@ -100,7 +100,9 @@ pub fn verify_device_token(token: &str) -> Result<serde_json::Value, String> {
 #[cfg(target_arch = "wasm32")]
 pub fn rotate_signing_key() -> Result<serde_json::Value, String> {
     use bedcode_plugin_api::host::HostLog;
-    let previous_kid = crate::pairing::keys::keyring_from_host_auth().map(|r| r.active_kid()).ok();
+    let previous_kid = crate::pairing::keys::keyring_from_host_auth()
+        .map(|r| r.active_kid())
+        .ok();
     let ring = crate::pairing::keys::rotate_from_host_auth()?;
     let kid = ring.active_kid();
     // 凭据红线：只记 kid（代次标识）不记密钥任何片段
@@ -152,9 +154,14 @@ mod tests {
     /// 签发：往返可验，claims 形状正确，`expires_in` = 7 天
     #[test]
     fn issue_then_verify_roundtrip() {
-        let (token, expires_in) =
-            issue_token_with(&key_a(), Some("g1"), "device-1", Some("Pixel 9"), Some("fp-abc"))
-                .expect("issue");
+        let (token, expires_in) = issue_token_with(
+            &key_a(),
+            Some("g1"),
+            "device-1",
+            Some("Pixel 9"),
+            Some("fp-abc"),
+        )
+        .expect("issue");
         assert_eq!(expires_in, DEFAULT_TOKEN_EXPIRY_SECS);
         let claims = verify_token_with(&[&key_a()], &token).expect("verify");
         assert_eq!(claims["sub"], "device-1");
@@ -166,8 +173,8 @@ mod tests {
     /// 空串可选字段 = 缺省（不序列化成 `""`）——迁移前的空串 = None 语义保持
     #[test]
     fn empty_optional_fields_are_omitted() {
-        let (token, _) = issue_token_with(&key_a(), Some("g1"), "device-1", Some(""), Some(""))
-            .expect("issue");
+        let (token, _) =
+            issue_token_with(&key_a(), Some("g1"), "device-1", Some(""), Some("")).expect("issue");
         let claims = verify_token_with(&[&key_a()], &token).expect("verify");
         assert!(claims.get("device_name").is_none(), "空串设备名不得出现");
         assert!(claims.get("fingerprint").is_none(), "空串指纹不得出现");
@@ -194,7 +201,8 @@ mod tests {
     /// 但**不**泄露内部细节）
     #[test]
     fn wrong_key_gives_user_facing_invalid_token() {
-        let (token, _) = issue_token_with(&key_a(), Some("g1"), "device-1", None, None).expect("issue");
+        let (token, _) =
+            issue_token_with(&key_a(), Some("g1"), "device-1", None, None).expect("issue");
         assert_eq!(
             verify_token_with(&[&key_b()], &token).unwrap_err(),
             "Invalid token"
@@ -260,8 +268,10 @@ mod tests {
     /// 轮换后：旧 token 仍验签通过（宽限期），新 token 用新密钥
     #[test]
     fn rotation_grace_window_keeps_old_tokens_valid() {
-        let (old_token, _) = issue_token_with(&key_a(), Some("g1"), "device-1", None, None).expect("issue");
-        let (new_token, _) = issue_token_with(&key_b(), Some("g2"), "device-1", None, None).expect("issue");
+        let (old_token, _) =
+            issue_token_with(&key_a(), Some("g1"), "device-1", None, None).expect("issue");
+        let (new_token, _) =
+            issue_token_with(&key_b(), Some("g2"), "device-1", None, None).expect("issue");
         // 轮换后候选 = [新代, 上一代]
         let cur = key_b();
         let prev = key_a();
@@ -275,11 +285,15 @@ mod tests {
     /// 超出宽限期：更早一代的 token 拒绝（候选集已不含该密钥）
     #[test]
     fn token_beyond_grace_window_is_rejected() {
-        let (ancient, _) = issue_token_with(&key_a(), Some("g1"), "device-1", None, None).expect("issue");
+        let (ancient, _) =
+            issue_token_with(&key_a(), Some("g1"), "device-1", None, None).expect("issue");
         let newest = vec![0x24u8; 32];
         let prev = key_b();
         let keys: Vec<&[u8]> = vec![&newest[..], &prev[..]];
-        assert_eq!(verify_token_with(&keys, &ancient).unwrap_err(), "Invalid token");
+        assert_eq!(
+            verify_token_with(&keys, &ancient).unwrap_err(),
+            "Invalid token"
+        );
     }
 
     // ==================== native 包装层 ====================
@@ -289,12 +303,21 @@ mod tests {
     #[test]
     fn native_wrappers_fail_loudly() {
         let err = issue_device_token("d1", Some("Pixel"), Some("fp")).expect_err("native 签发失败");
-        assert!(err.contains("unavailable outside wasm runtime"), "got: {err}");
+        assert!(
+            err.contains("unavailable outside wasm runtime"),
+            "got: {err}"
+        );
 
         let err = verify_device_token("a.b.c").expect_err("native 验签失败");
-        assert!(err.contains("unavailable outside wasm runtime"), "got: {err}");
+        assert!(
+            err.contains("unavailable outside wasm runtime"),
+            "got: {err}"
+        );
 
         let err = rotate_signing_key().expect_err("native 轮换失败");
-        assert!(err.contains("unavailable outside wasm runtime"), "got: {err}");
+        assert!(
+            err.contains("unavailable outside wasm runtime"),
+            "got: {err}"
+        );
     }
 }

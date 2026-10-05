@@ -54,7 +54,10 @@ pub fn is_legal(from: &SessionStatus, to: &SessionStatus) -> bool {
         SessionStatus::Idle => matches!(to, SessionStatus::Starting | SessionStatus::Stopped),
         SessionStatus::Starting => matches!(
             to,
-            SessionStatus::Running | SessionStatus::Stopping | SessionStatus::Stopped | SessionStatus::Error(_)
+            SessionStatus::Running
+                | SessionStatus::Stopping
+                | SessionStatus::Stopped
+                | SessionStatus::Error(_)
         ),
         SessionStatus::Running => matches!(
             to,
@@ -65,7 +68,10 @@ pub fn is_legal(from: &SessionStatus, to: &SessionStatus) -> bool {
         ),
         SessionStatus::WaitingInput => matches!(
             to,
-            SessionStatus::Running | SessionStatus::Stopping | SessionStatus::Stopped | SessionStatus::Error(_)
+            SessionStatus::Running
+                | SessionStatus::Stopping
+                | SessionStatus::Stopped
+                | SessionStatus::Error(_)
         ),
         SessionStatus::Stopping => matches!(to, SessionStatus::Stopped | SessionStatus::Error(_)),
         SessionStatus::Stopped | SessionStatus::Error(_) => false,
@@ -79,7 +85,11 @@ pub fn is_legal(from: &SessionStatus, to: &SessionStatus) -> bool {
 /// - `Running`：补 `started_at`（已有值不覆盖——`start = true` 的创建路径已填）
 /// - `Stopped` / `Error`：补 `stopped_at`
 /// - 任何**发生**的迁移都刷新 `updated_at`
-pub fn transition(record: &SessionRecord, to: SessionStatus, now: &str) -> Result<SessionRecord, String> {
+pub fn transition(
+    record: &SessionRecord,
+    to: SessionStatus,
+    now: &str,
+) -> Result<SessionRecord, String> {
     validate_timestamp(now)?;
     if record.status == to {
         return Ok(record.clone());
@@ -221,8 +231,12 @@ mod tests {
                 SessionStatus::Running,
                 SessionStatus::Stopping,
             ] {
-                let err = transition(&record(terminal.clone()), to.clone(), now()).expect_err("终态出向必须拒绝");
-                assert!(err.contains("illegal session status transition"), "got: {err}");
+                let err = transition(&record(terminal.clone()), to.clone(), now())
+                    .expect_err("终态出向必须拒绝");
+                assert!(
+                    err.contains("illegal session status transition"),
+                    "got: {err}"
+                );
             }
         }
     }
@@ -251,26 +265,38 @@ mod tests {
         let stopped = transition(&idle, SessionStatus::Stopped, now()).expect("Idle 直接关停合法");
         assert_eq!(stopped.status, SessionStatus::Stopped);
         assert!(stopped.stopped_at.is_some(), "直接关停必须落 stopped_at");
-        assert!(stopped.started_at.is_none(), "Idle 从未启动，started_at 保持空");
+        assert!(
+            stopped.started_at.is_none(),
+            "Idle 从未启动，started_at 保持空"
+        );
     }
 
     /// 同态幂等：不报错、不刷时间戳（避免 updatedAt 抖动）
     #[test]
     fn same_status_is_idempotent_and_does_not_touch_timestamps() {
         let before = record(SessionStatus::Running);
-        let after = transition(&before, SessionStatus::Running, "2026-09-23T11:00:00Z").expect("同态合法");
+        let after =
+            transition(&before, SessionStatus::Running, "2026-09-23T11:00:00Z").expect("同态合法");
         assert_eq!(after, before, "同态写不得改动任何字段");
     }
 
     /// 时间戳形状校验：畸形 now 在域边界显性报错，不落库（坏钟/脏数据挡在门外）
     #[test]
     fn transition_rejects_malformed_timestamp() {
-        let err = transition(&record(SessionStatus::Starting), SessionStatus::Running, "not-a-date")
-            .expect_err("畸形时间戳必须拒绝");
+        let err = transition(
+            &record(SessionStatus::Starting),
+            SessionStatus::Running,
+            "not-a-date",
+        )
+        .expect_err("畸形时间戳必须拒绝");
         assert!(err.contains("invalid RFC3339 timestamp"), "got: {err}");
         // 良构 RFC3339（20 字符、T/Z 齐备）不受影响
-        let ok = transition(&record(SessionStatus::Starting), SessionStatus::Running, now())
-            .expect("良构时间戳通过");
+        let ok = transition(
+            &record(SessionStatus::Starting),
+            SessionStatus::Running,
+            now(),
+        )
+        .expect("良构时间戳通过");
         assert_eq!(ok.status, SessionStatus::Running);
     }
 
@@ -279,9 +305,11 @@ mod tests {
     fn repeated_stopped_keeps_first_stop_timestamp() {
         let mut running = record(SessionStatus::Running);
         running.started_at = Some("2026-09-23T09:30:00Z".to_string());
-        let stopped = transition(&running, SessionStatus::Stopped, "2026-09-23T10:00:00Z").expect("停止");
+        let stopped =
+            transition(&running, SessionStatus::Stopped, "2026-09-23T10:00:00Z").expect("停止");
         assert_eq!(stopped.stopped_at.as_deref(), Some("2026-09-23T10:00:00Z"));
-        let again = transition(&stopped, SessionStatus::Stopped, "2026-09-23T12:00:00Z").expect("重复 Stopped 幂等");
+        let again = transition(&stopped, SessionStatus::Stopped, "2026-09-23T12:00:00Z")
+            .expect("重复 Stopped 幂等");
         assert_eq!(again, stopped, "重复 Stopped 不得改写首次停止时间");
     }
 
@@ -289,12 +317,14 @@ mod tests {
     #[test]
     fn transition_fills_timestamps_once_and_refreshes_updated_at() {
         let starting = record(SessionStatus::Starting);
-        let running = transition(&starting, SessionStatus::Running, "2026-09-23T10:00:00Z").expect("running");
+        let running =
+            transition(&starting, SessionStatus::Running, "2026-09-23T10:00:00Z").expect("running");
         assert_eq!(running.started_at.as_deref(), Some("2026-09-23T10:00:00Z"));
         assert_eq!(running.updated_at, "2026-09-23T10:00:00Z");
         assert!(running.stopped_at.is_none());
 
-        let stopped = transition(&running, SessionStatus::Stopped, "2026-09-23T11:00:00Z").expect("stopped");
+        let stopped =
+            transition(&running, SessionStatus::Stopped, "2026-09-23T11:00:00Z").expect("stopped");
         assert_eq!(stopped.stopped_at.as_deref(), Some("2026-09-23T11:00:00Z"));
         assert_eq!(
             stopped.started_at.as_deref(),
@@ -312,7 +342,10 @@ mod tests {
         assert!(is_active(&SessionStatus::Starting));
         assert!(is_active(&SessionStatus::Running));
         assert!(is_active(&SessionStatus::Stopping));
-        assert!(is_active(&SessionStatus::Error(None)), "Error 仍算活跃（宿主判据）");
+        assert!(
+            is_active(&SessionStatus::Error(None)),
+            "Error 仍算活跃（宿主判据）"
+        );
         assert!(!is_active(&SessionStatus::Stopped));
     }
 
@@ -351,7 +384,15 @@ mod tests {
     /// `start = true`：Running + started_at + 正统端 = 启动端（桌面 → Desktop）
     #[test]
     fn new_record_start_true_is_running_with_desktop_canonical() {
-        let rec = new_record("s1", "c1", "会话", true, None, Some("com.bedcode.terminal-session"), now());
+        let rec = new_record(
+            "s1",
+            "c1",
+            "会话",
+            true,
+            None,
+            Some("com.bedcode.terminal-session"),
+            now(),
+        );
         assert_eq!(rec.status, SessionStatus::Running);
         assert_eq!(rec.started_at.as_deref(), Some(now()));
         assert_eq!(rec.stopped_at, None);

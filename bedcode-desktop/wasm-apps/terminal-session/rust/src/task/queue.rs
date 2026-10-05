@@ -25,9 +25,7 @@
 //! SQL 一律使用参数绑定（`*_params` + `?N` 占位符），无手写转义。
 
 use bedcode_plugin_api::constants::EVENT_TASK_QUEUE_CHANGED;
-use bedcode_plugin_api::host::{
-    HostBus, HostEvents, HostLog, HostPluginDatabase,
-};
+use bedcode_plugin_api::host::{HostBus, HostEvents, HostLog, HostPluginDatabase};
 use bedcode_plugin_api::http_response;
 use bedcode_plugin_api::sql_params;
 use bedcode_plugin_api::wasm_host::WasmHost;
@@ -263,7 +261,10 @@ pub fn cancel_task(host: &WasmHost, session_id: &str, task_id: &str) -> bool {
         .ok()
         .flatten()
         .and_then(|v| v.as_array().and_then(|a| a.first().cloned()))
-        .and_then(|row| row.get("status").and_then(|v| v.as_str().map(|s| s.to_string())));
+        .and_then(|row| {
+            row.get("status")
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+        });
 
     match current_status.as_deref() {
         Some("waiting") => {
@@ -578,7 +579,11 @@ pub fn try_dispatch_next(host: &WasmHost, session_id: &str) {
         .and_then(|v| v.as_array().cloned())
         .unwrap_or_default()
         .iter()
-        .filter_map(|row| row.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()))
+        .filter_map(|row| {
+            row.get("id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })
         .collect();
     let _ = host.plugin_db_execute_params(
         "UPDATE task_queue SET status = 'done', updated_at = datetime('now') \
@@ -587,7 +592,14 @@ pub fn try_dispatch_next(host: &WasmHost, session_id: &str) {
     );
     let remaining = pending_count(host, session_id);
     for task_id in &done_ids {
-        broadcast_queue_changed(host, session_id, remaining, "done", Some(task_id), Some("done"));
+        broadcast_queue_changed(
+            host,
+            session_id,
+            remaining,
+            "done",
+            Some(task_id),
+            Some("done"),
+        );
     }
 
     // 先处理超时的 waiting 项（重试或宽限兑底下发），避免卡住后续调度
@@ -650,7 +662,11 @@ pub fn try_dispatch_next(host: &WasmHost, session_id: &str) {
     }
 
     // 确认会话仍在运行（P1-b 真源在本域登记视图；不存在/已停止时跳过）
-    if crate::session::view_via_host(session_id).ok().flatten().is_none() {
+    if crate::session::view_via_host(session_id)
+        .ok()
+        .flatten()
+        .is_none()
+    {
         host.log_warn(&format!(
             "try_dispatch_next: session {} not found or not running",
             session_id
@@ -939,7 +955,14 @@ fn dispatch_task(
         );
         // 发送失败同样广播 done（携带 task_id），移动端预设任务据此完成匹配
         let remaining = pending_count(host, session_id);
-        broadcast_queue_changed(host, session_id, remaining, "done", Some(task_id), Some("done"));
+        broadcast_queue_changed(
+            host,
+            session_id,
+            remaining,
+            "done",
+            Some(task_id),
+            Some("done"),
+        );
         return;
     }
 
@@ -991,7 +1014,11 @@ fn maybe_close_scheduled_session(host: &WasmHost, session_id: &str) {
         .to_string();
 
     // 确认会话仍在运行（已关闭/不存在时跳过，避免无效调用）；P1-b 真源在本域
-    if crate::session::view_via_host(session_id).ok().flatten().is_none() {
+    if crate::session::view_via_host(session_id)
+        .ok()
+        .flatten()
+        .is_none()
+    {
         return;
     }
 
@@ -1150,10 +1177,7 @@ fn check_waiting_timeouts(host: &WasmHost, session_id: &str) {
             .get("dispatch_attempts")
             .and_then(|v| v.as_i64())
             .unwrap_or(1);
-        let elapsed = row
-            .get("elapsed")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0);
+        let elapsed = row.get("elapsed").and_then(|v| v.as_i64()).unwrap_or(0);
         if task_id.is_empty() {
             continue;
         }
@@ -1646,7 +1670,8 @@ pub fn broadcast_queue_changed(
     task_id: Option<&str>,
     status: Option<&str>,
 ) {
-    let payload = crate::ws_events::queue_changed_payload(session_id, queue_count, action, task_id, status);
+    let payload =
+        crate::ws_events::queue_changed_payload(session_id, queue_count, action, task_id, status);
     // 队列变更经 bus + emit 发布（票 06 起不经宿主 broadcast_sync）
     let _ = host.bus_publish(EVENT_TASK_QUEUE_CHANGED, &payload);
     // 通知前端 UI 实时刷新（事件名与前端 context.events.on 监听一致）
@@ -1716,7 +1741,10 @@ mod tests {
     #[test]
     fn retrying_stall_verdict_interrupts_after_threshold() {
         assert_eq!(
-            judge_retrying_stall(RETRYING_SILENCE_TIMEOUT_SECS + 1, RETRYING_SILENCE_TIMEOUT_SECS),
+            judge_retrying_stall(
+                RETRYING_SILENCE_TIMEOUT_SECS + 1,
+                RETRYING_SILENCE_TIMEOUT_SECS
+            ),
             RetryingVerdict::Interrupt
         );
     }

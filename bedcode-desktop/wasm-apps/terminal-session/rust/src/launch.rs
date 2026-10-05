@@ -258,7 +258,9 @@ pub fn windows_to_wsl_path(path: &str) -> String {
 
     if path.starts_with("\\\\wsl.localhost\\") {
         // 新格式: \\wsl.localhost\Ubuntu\home\user -> /home/user（WSL2 1903+）
-        let rest = path.trim_start_matches('\\').trim_start_matches("wsl.localhost\\");
+        let rest = path
+            .trim_start_matches('\\')
+            .trim_start_matches("wsl.localhost\\");
         let parts: Vec<&str> = rest.splitn(2, '\\').collect();
         if parts.len() >= 2 {
             return format!("/{}", parts[1].replace('\\', "/"));
@@ -433,24 +435,45 @@ mod tests {
     /// 正例：配置名非空 → 原样（去首尾空白），不碰工作目录
     #[test]
     fn base_name_prefers_config_name() {
-        assert_eq!(resolve_session_base_name("dev", "/home/x/BedCode", "T"), "dev");
-        assert_eq!(resolve_session_base_name("  dev  ", "/home/x/BedCode", "T"), "dev");
+        assert_eq!(
+            resolve_session_base_name("dev", "/home/x/BedCode", "T"),
+            "dev"
+        );
+        assert_eq!(
+            resolve_session_base_name("  dev  ", "/home/x/BedCode", "T"),
+            "dev"
+        );
     }
 
     /// 反例：配置名为空/纯空白（表单 name 非必填）→ 退工作目录 basename
     /// （真机 2026-09-27：空名会话的窗口标题栏只剩「● 运行中」）
     #[test]
     fn base_name_falls_back_to_working_dir_basename() {
-        assert_eq!(resolve_session_base_name("", "/home/binblink/BedCode", "T"), "BedCode");
-        assert_eq!(resolve_session_base_name("   ", "/home/binblink/BedCode", "T"), "BedCode");
+        assert_eq!(
+            resolve_session_base_name("", "/home/binblink/BedCode", "T"),
+            "BedCode"
+        );
+        assert_eq!(
+            resolve_session_base_name("   ", "/home/binblink/BedCode", "T"),
+            "BedCode"
+        );
     }
 
     /// 边界：尾斜杠 / 空格目录 / Windows 路径 / 退化路径（末段 `.` `..`）
     #[test]
     fn base_name_basename_edge_cases() {
-        assert_eq!(resolve_session_base_name("", "/home/x/BedCode/", "T"), "BedCode");
-        assert_eq!(resolve_session_base_name("", "/home/x/ My Project ", "T"), "My Project");
-        assert_eq!(resolve_session_base_name("", r"C:\Users\bin\BedCode", "T"), "BedCode");
+        assert_eq!(
+            resolve_session_base_name("", "/home/x/BedCode/", "T"),
+            "BedCode"
+        );
+        assert_eq!(
+            resolve_session_base_name("", "/home/x/ My Project ", "T"),
+            "My Project"
+        );
+        assert_eq!(
+            resolve_session_base_name("", r"C:\Users\bin\BedCode", "T"),
+            "BedCode"
+        );
         // 退化路径不猜：宁可给兑底名也不报 `x`（`/home/x/..` 的真 basename 是 home）
         assert_eq!(resolve_session_base_name("", "/home/x/..", "T"), "T");
         assert_eq!(resolve_session_base_name("", "/home/x/.", "T"), "T");
@@ -469,7 +492,8 @@ mod tests {
     /// 端到端：空配置名 → basename 参与唯一化（两个同名会话 → BedCode / BedCode(1)）
     #[test]
     fn base_name_then_unique_name() {
-        let base = resolve_session_base_name("", "/home/binblink/BedCode", FALLBACK_SESSION_BASE_NAME);
+        let base =
+            resolve_session_base_name("", "/home/binblink/BedCode", FALLBACK_SESSION_BASE_NAME);
         assert_eq!(base, "BedCode");
         let sessions = vec![session("c1", "BedCode", "Running")];
         assert_eq!(generate_unique_name("c1", &base, &sessions), "BedCode(1)");
@@ -642,8 +666,7 @@ mod tests {
         assert_eq!(argv[0], "bash");
         assert_eq!(argv[1], "-lic");
         assert_eq!(
-            argv[2],
-            "cd '/home/usr/o'\\''brien' && pwd && pnpm dev",
+            argv[2], "cd '/home/usr/o'\\''brien' && pwd && pnpm dev",
             "工作目录含单引号必须闭合转义（闭合注入防护）"
         );
     }
@@ -651,12 +674,22 @@ mod tests {
     /// wsl2：wsl.exe 前缀 + distro 透传 + WSL 路径转换 + bash 脚本
     #[test]
     fn build_argv_wsl2_prefix_and_path_conversion() {
-        let argv = build_argv("wsl2", Some("Ubuntu-22.04"), r"\\wsl.localhost\Ubuntu/home/user", "zsh")
-            .expect("argv");
+        let argv = build_argv(
+            "wsl2",
+            Some("Ubuntu-22.04"),
+            r"\\wsl.localhost\Ubuntu/home/user",
+            "zsh",
+        )
+        .expect("argv");
         assert_eq!(
             argv,
             vec![
-                "wsl.exe", "-d", "Ubuntu-22.04", "--", "bash", "-lic",
+                "wsl.exe",
+                "-d",
+                "Ubuntu-22.04",
+                "--",
+                "bash",
+                "-lic",
                 "cd '/home/user' && pwd && zsh",
             ]
         );
@@ -665,7 +698,10 @@ mod tests {
         assert_eq!(argv[2], "Ubuntu", "distro 缺省 Ubuntu");
         // 正斜杠 WSL 前缀形态与反斜杠等价（宿主 wsl.rs 已随 PTY 解耦票退役，
         // 本模块自持该语义，故这里保留其票据 01 修复的回归锁）
-        assert_eq!(windows_to_wsl_path("//wsl.localhost/Ubuntu/home/user"), "/home/user");
+        assert_eq!(
+            windows_to_wsl_path("//wsl.localhost/Ubuntu/home/user"),
+            "/home/user"
+        );
         assert_eq!(windows_to_wsl_path("//wsl$/Ubuntu/home/user"), "/home/user");
     }
 
@@ -692,8 +728,14 @@ mod tests {
         assert_eq!(argv[0], "powershell.exe");
         assert!(argv.iter().any(|a| a == "-NoExit"));
         let script = argv.last().unwrap();
-        assert!(script.contains("chcp 65001 > $null"), "UTF-8 输出编码必须设置");
-        assert!(script.contains("Set-Location 'D:\\work\\it''s'"), "单引号 → '' 转义");
+        assert!(
+            script.contains("chcp 65001 > $null"),
+            "UTF-8 输出编码必须设置"
+        );
+        assert!(
+            script.contains("Set-Location 'D:\\work\\it''s'"),
+            "单引号 → '' 转义"
+        );
         assert!(script.contains("; dir"));
     }
 
@@ -708,8 +750,14 @@ mod tests {
     #[test]
     fn windows_to_wsl_path_all_forms() {
         assert_eq!(windows_to_wsl_path("C:\\Users\\test"), "/mnt/c/Users/test");
-        assert_eq!(windows_to_wsl_path("D:/Projects/my-app"), "/mnt/d/Projects/my-app");
-        assert_eq!(windows_to_wsl_path(r"\\wsl$\Ubuntu\home\user"), "/home/user");
+        assert_eq!(
+            windows_to_wsl_path("D:/Projects/my-app"),
+            "/mnt/d/Projects/my-app"
+        );
+        assert_eq!(
+            windows_to_wsl_path(r"\\wsl$\Ubuntu\home\user"),
+            "/home/user"
+        );
         assert_eq!(windows_to_wsl_path("/home/user"), "/home/user");
     }
 
@@ -804,7 +852,11 @@ pub fn create_via_host(draft_json: &serde_json::Value) -> Result<serde_json::Val
     let sessions = parse_sessions(&sessions_json);
     let unique_name = generate_unique_name(
         &request.config_id,
-        &resolve_session_base_name(&config.name, &config.working_dir, FALLBACK_SESSION_BASE_NAME),
+        &resolve_session_base_name(
+            &config.name,
+            &config.working_dir,
+            FALLBACK_SESSION_BASE_NAME,
+        ),
         &sessions,
     );
     // config→launch spec 映射 + 两阶段启动决策。**P1-b 起恒即起**（host-pty
@@ -813,18 +865,27 @@ pub fn create_via_host(draft_json: &serde_json::Value) -> Result<serde_json::Val
     // 行为（T-F20），故显性拒绝而不是假装支持
     if !request.start {
         return Err(
-            "create-with-spec: start=false not supported (host-pty spawns on create)".to_string()
+            "create-with-spec: start=false not supported (host-pty spawns on create)".to_string(),
         );
     }
     let spec = build_launch_spec(&config, request.cols, request.rows, true)?;
     // 唯一名解析后填 spec.name（T-F21）：旧实现 spec.name 在所有真实路径为空串
     // 占位——spec 若被序列化（宿主调用/事件/diagnostics）会话名为空；
     // 命名唯一化在插件侧（`generate_unique_name`），此处是唯一解析点
-    let spec = LaunchSpec { name: unique_name.clone(), ..spec };
+    let spec = LaunchSpec {
+        name: unique_name.clone(),
+        ..spec
+    };
     // 会话 id 由插件自产（宿主不再预生成，`BEDCODE_SESSION_ID` 随 env 注入）
     let session_id = crate::session::ops::new_session_id()?;
-    spawn_session(&request.config_id, &spec, &session_id, &unique_name, &request.source_device)
-        .map_err(|e| format!("会话创建失败：{e}"))?;
+    spawn_session(
+        &request.config_id,
+        &spec,
+        &session_id,
+        &unique_name,
+        &request.source_device,
+    )
+    .map_err(|e| format!("会话创建失败：{e}"))?;
     Ok(serde_json::json!({ "sessionId": session_id }))
 }
 
@@ -936,17 +997,15 @@ pub fn spawn_session(
     //    留痕，不伪造半成品通知）。websocket 业务下沉票 05：会话生命周期事件
     //    由本插件定义载荷并经 emit+bus 发布，不再走宿主 broadcast-sync。
     match crate::session::summary_for(session_id) {
-        Ok(session) => {
-            match serde_json::to_value(&session) {
-                Ok(summary_json) => crate::session::events::publish_created(
-                    &summary_json,
-                    source_device.as_deref().unwrap_or_default(),
-                ),
-                Err(e) => WasmHost.log_warn(&format!(
-                    "session created 概要序列化失败，跳过发布（不伪造半成品通知）: {e}"
-                )),
-            }
-        }
+        Ok(session) => match serde_json::to_value(&session) {
+            Ok(summary_json) => crate::session::events::publish_created(
+                &summary_json,
+                source_device.as_deref().unwrap_or_default(),
+            ),
+            Err(e) => WasmHost.log_warn(&format!(
+                "session created 概要序列化失败，跳过发布（不伪造半成品通知）: {e}"
+            )),
+        },
         Err(e) => WasmHost.log_warn(&format!(
             "session created 发布跳过（载荷不自足，生产者侧兜底）: {e}"
         )),
@@ -994,7 +1053,13 @@ fn run_creating_integration(command: &str, working_dir: &str) {
         .flatten()
         .and_then(|s| s.parse::<u16>().ok())
         .unwrap_or(8765);
-    let result = crate::task::hooks::ensure_agent_integration(&host, agent_name, working_dir, port, &resource_dir);
+    let result = crate::task::hooks::ensure_agent_integration(
+        &host,
+        agent_name,
+        working_dir,
+        port,
+        &resource_dir,
+    );
     if result.success {
         host.log_info(&format!(
             "create: integration setup for agent '{}' in {}",

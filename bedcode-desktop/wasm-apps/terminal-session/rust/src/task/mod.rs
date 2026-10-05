@@ -159,7 +159,11 @@ pub fn ensure_schema_via_host(host: &WasmHost) -> Result<(), String> {
         .and_then(|v| v.as_array().cloned())
         .unwrap_or_default()
         .iter()
-        .filter_map(|row| row.get("name").and_then(|v| v.as_str()).map(|s| s.to_string()))
+        .filter_map(|row| {
+            row.get("name")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })
         .collect();
     let unrenamed: Vec<&str> = crate::schema::TABLE_RENAMES
         .iter()
@@ -404,7 +408,12 @@ mod tests {
             "失败域之后的域必须继续执行（不得短路）"
         );
         assert_eq!(report.executed, vec![DOMAIN_QUEUE_SILENCE.to_string()]);
-        assert_eq!(report.failed.len(), 1, "只登记真正失败的域, got: {:?}", report.failed);
+        assert_eq!(
+            report.failed.len(),
+            1,
+            "只登记真正失败的域, got: {:?}",
+            report.failed
+        );
         assert_eq!(report.failed[0].domain, DOMAIN_QUEUE_DELAY_CLEAR);
         assert_eq!(report.failed[0].reason, "boom");
     }
@@ -499,7 +508,9 @@ mod tests {
     /// ——native 用例不连真库，只有这条静态护栏能挡。
     #[test]
     fn task_sources_only_use_prefixed_table_names() {
-        let keywords = ["FROM ", "INTO ", "UPDATE ", "JOIN ", "EXISTS ", "TABLE ", "ON "];
+        let keywords = [
+            "FROM ", "INTO ", "UPDATE ", "JOIN ", "EXISTS ", "TABLE ", "ON ",
+        ];
         for (file, src) in task_domain_sources() {
             for legacy in crate::schema::TABLE_RENAMES {
                 for kw in keywords {
@@ -561,7 +572,11 @@ mod tests {
         );
         assert_eq!(HTTP_ENDPOINTS.len(), 17);
         assert_eq!(crate::BUSINESS_HTTP_ENDPOINTS.len(), 2);
-        assert_eq!(crate::FILE_BROWSE_HTTP_ENDPOINTS.len(), 8, "票 03 五条 + 票 04 git 三条");
+        assert_eq!(
+            crate::FILE_BROWSE_HTTP_ENDPOINTS.len(),
+            8,
+            "票 03 五条 + 票 04 git 三条"
+        );
         assert_eq!(crate::AUTH_HTTP_ENDPOINTS.len(), 7, "票 07 认证链七端点");
         assert_eq!(crate::sessions_http::SESSIONS_HTTP_PATHS.len(), 7);
         for endpoint in crate::GIT_HTTP_ENDPOINTS {
@@ -596,13 +611,19 @@ mod tests {
         );
 
         // 「拿不到 JWT 的调用方」两批必须全部在免凭证清单里
-        for endpoint in crate::AUTH_HTTP_ENDPOINTS.iter().chain(&["task-status", "session-mode"]) {
+        for endpoint in crate::AUTH_HTTP_ENDPOINTS
+            .iter()
+            .chain(&["task-status", "session-mode"])
+        {
             assert!(
                 expected_none.contains(endpoint),
                 "{endpoint} 的调用方拿不到 JWT（hook 脚本 / 配对入口），必须声明 auth:none"
             );
         }
-        assert!(expected_none.contains(&"terminal-bg"), "terminal-bg 的调用方（CSS）拿不到 JWT");
+        assert!(
+            expected_none.contains(&"terminal-bg"),
+            "terminal-bg 的调用方（CSS）拿不到 JWT"
+        );
     }
 
     /// 票 16（对照）：path 段与旧 auto-task 的分派集合完全相同
@@ -641,7 +662,10 @@ mod tests {
     /// 票 16：三域路径分派（与旧实现同序：先队列、再定时、其余归状态域）
     #[test]
     fn http_path_classification_matches_old_plugin_order() {
-        assert_eq!(classify_http_path("task-queue/add"), HttpRoute::Queue("add"));
+        assert_eq!(
+            classify_http_path("task-queue/add"),
+            HttpRoute::Queue("add")
+        );
         assert_eq!(
             classify_http_path("scheduled-jobs/create"),
             HttpRoute::Scheduled("create")
@@ -655,14 +679,20 @@ mod tests {
         // 前缀本身（尾部斜杠）归对应域，由其 match 臂落 404——不回落状态域
         assert_eq!(classify_http_path("task-queue/"), HttpRoute::Queue(""));
         // 不带斜杠的同名裸路径不归队列域（旧实现即如此：strip_prefix 要求斜杠）
-        assert_eq!(classify_http_path("task-queue"), HttpRoute::State("task-queue"));
+        assert_eq!(
+            classify_http_path("task-queue"),
+            HttpRoute::State("task-queue")
+        );
         // 清单里每一项都必须能分派到与之匹配的域
         for path in HTTP_ENDPOINTS {
             let route = classify_http_path(path);
             if path.starts_with("task-queue/") {
                 assert!(matches!(route, HttpRoute::Queue(_)), "{path} 应归队列域");
             } else if path.starts_with("scheduled-jobs/") {
-                assert!(matches!(route, HttpRoute::Scheduled(_)), "{path} 应归定时域");
+                assert!(
+                    matches!(route, HttpRoute::Scheduled(_)),
+                    "{path} 应归定时域"
+                );
             } else {
                 assert!(matches!(route, HttpRoute::State(_)), "{path} 应归状态域");
             }
@@ -813,13 +843,13 @@ mod tests {
     /// 或反过来每轮都重写，都静默且难查，故在此逐脚本钉死。
     #[test]
     fn shipped_hook_scripts_point_at_this_plugin() {
-        use bedcode_plugin_api::constants::{
-            CODEX_HOOK_SCRIPT_NAME, HOOK_SCRIPT_NAME, OPENCODE_HOOK_SCRIPT_NAME,
-            PI_HOOK_SCRIPT_NAME,
-        };
         use super::hooks::{
             CLAUDE_HOOK_TEMPLATE_VERSION, CODEX_HOOK_TEMPLATE_VERSION,
             OPENCODE_PLUGIN_TEMPLATE_VERSION, PI_EXTENSION_TEMPLATE_VERSION,
+        };
+        use bedcode_plugin_api::constants::{
+            CODEX_HOOK_SCRIPT_NAME, HOOK_SCRIPT_NAME, OPENCODE_HOOK_SCRIPT_NAME,
+            PI_HOOK_SCRIPT_NAME,
         };
         let shipped: [(&str, &str, &str, &str); 4] = [
             (
@@ -848,7 +878,10 @@ mod tests {
             ),
         ];
         for (constant, file, content, template_version) in shipped {
-            assert_eq!(constant, file, "SDK 脚本名常量与随包文件名漂移: {constant} ≠ {file}");
+            assert_eq!(
+                constant, file,
+                "SDK 脚本名常量与随包文件名漂移: {constant} ≠ {file}"
+            );
             assert!(
                 content.contains("com.bedcode.terminal-session"),
                 "{file} 未指向合并插件 id"
@@ -952,7 +985,9 @@ mod tests {
             "pi 的 retrying 分支必须走带非重试守卫的判定（直接用可重试表会误标限额错误）"
         );
         assert!(
-            !pi.contains("isRetryableErrorMessage(lastRunFailure.errorMessage)) { void push('interrupted'"),
+            !pi.contains(
+                "isRetryableErrorMessage(lastRunFailure.errorMessage)) { void push('interrupted'"
+            ),
             "pi 不得在 agent_end 抢推终态（终态只由 agent_settled 判定，双推会与它分叉）"
         );
 

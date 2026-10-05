@@ -96,7 +96,11 @@ fn resolve_working_dir_via_host(id: &str) -> Result<String, String> {
     if !dir.is_empty() {
         match WasmHost.fs_request_auth(&[dir.clone()]) {
             Ok(true) => {}
-            Ok(false) => return Err(format!("Not authorized: workspace access not granted for {dir}")),
+            Ok(false) => {
+                return Err(format!(
+                    "Not authorized: workspace access not granted for {dir}"
+                ))
+            }
             Err(e) => {
                 return Err(format!(
                     "Not authorized: workspace access request failed for {dir}: {}",

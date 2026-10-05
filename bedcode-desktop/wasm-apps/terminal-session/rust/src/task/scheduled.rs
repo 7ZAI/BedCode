@@ -83,7 +83,12 @@ fn is_valid_trigger_at(s: &str) -> bool {
     let parse = |i: usize, n: usize| -> Option<i64> {
         seg(i, n).then(|| s[i..i + n].parse().ok()).flatten()
     };
-    if bytes[4] != b'-' || bytes[7] != b'-' || bytes[10] != b' ' || bytes[13] != b':' || bytes[16] != b':' {
+    if bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || bytes[10] != b' '
+        || bytes[13] != b':'
+        || bytes[16] != b':'
+    {
         return false;
     }
     let (y, mo, d, h, mi, se) = (
@@ -305,7 +310,11 @@ pub fn handle_scheduler_tick(host: &WasmHost, now_utc: &str) -> Result<(), Strin
             rows.and_then(|v| v.as_array().cloned())
                 .unwrap_or_default()
                 .into_iter()
-                .filter_map(|row| row.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()))
+                .filter_map(|row| {
+                    row.get("id")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                })
                 .collect()
         })
         .unwrap_or_default();
@@ -320,7 +329,10 @@ pub fn handle_scheduler_tick(host: &WasmHost, now_utc: &str) -> Result<(), Strin
             }
         }
         Ok(_) => {}
-        Err(e) => failures.push(format!("step0 creating-timeout update failed: {}", e.message)),
+        Err(e) => failures.push(format!(
+            "step0 creating-timeout update failed: {}",
+            e.message
+        )),
     }
 
     // 1. 错过判定：trigger_at <= now - 宽限期 且仍 pending → missed。
@@ -344,12 +356,15 @@ pub fn handle_scheduler_tick(host: &WasmHost, now_utc: &str) -> Result<(), Strin
             rows.and_then(|v| v.as_array().cloned())
                 .unwrap_or_default()
                 .into_iter()
-                .filter_map(|row| row.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()))
+                .filter_map(|row| {
+                    row.get("id")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                })
                 .collect()
         })
         .unwrap_or_default();
-    let missed_count = host
-        .plugin_db_execute_params(&missed_sql, &sql_params![now_utc, now_utc]);
+    let missed_count = host.plugin_db_execute_params(&missed_sql, &sql_params![now_utc, now_utc]);
     match missed_count {
         Ok(count) if count > 0 => {
             host.log_warn(&format!(
@@ -371,9 +386,7 @@ pub fn handle_scheduler_tick(host: &WasmHost, now_utc: &str) -> Result<(), Strin
          AND trigger_at > datetime(?1, ?2)",
         &sql_params![now_utc, format!("-{} seconds", MISSED_GRACE_SECONDS)],
     ) {
-        Ok(rows) => rows
-            .and_then(|v| v.as_array().cloned())
-            .unwrap_or_default(),
+        Ok(rows) => rows.and_then(|v| v.as_array().cloned()).unwrap_or_default(),
         Err(e) => {
             failures.push(format!("step2 due-job query failed: {}", e.message));
             Vec::new()
@@ -467,9 +480,7 @@ pub fn handle_scheduler_tick(host: &WasmHost, now_utc: &str) -> Result<(), Strin
         ),
         &sql_params![now_utc],
     ) {
-        Ok(rows) => rows
-            .and_then(|v| v.as_array().cloned())
-            .unwrap_or_default(),
+        Ok(rows) => rows.and_then(|v| v.as_array().cloned()).unwrap_or_default(),
         Err(e) => {
             failures.push(format!("step3 first-dispatch query failed: {}", e.message));
             Vec::new()
@@ -509,7 +520,9 @@ pub fn handle_scheduler_tick(host: &WasmHost, now_utc: &str) -> Result<(), Strin
                     .unwrap_or_default()
                     .iter()
                     .filter_map(|row| {
-                        row.get("id").and_then(|v| v.as_str()).map(|s| s.to_string())
+                        row.get("id")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string())
                     })
                     .collect();
                 for task_id in &pending_ids {
@@ -848,7 +861,10 @@ mod tests {
         assert!(!is_valid_trigger_at("2026-10-00 00:00:00"), "日 0");
         assert!(!is_valid_trigger_at("2026-10-03 24:00:00"), "时超界");
         assert!(!is_valid_trigger_at("2026-10-03 15:60:00"), "分超界");
-        assert!(!is_valid_trigger_at("2026-10-03T15:00:00"), "T 分隔不是空格");
+        assert!(
+            !is_valid_trigger_at("2026-10-03T15:00:00"),
+            "T 分隔不是空格"
+        );
         assert!(!is_valid_trigger_at("2026-10-03 15:00"), "缺秒");
         assert!(!is_valid_trigger_at("10/03/2026 15:00:00"), "斜杠分隔");
         assert!(!is_valid_trigger_at("not-a-date"), "非数字");

@@ -88,7 +88,9 @@ pub fn handle_action(
                 .and_then(|v| v.as_str())
                 .unwrap_or_default()
                 .to_string();
-            Ok(serde_json::json!({ "type": "start_session", "config_id": config_id, "session_id": session_id }))
+            Ok(
+                serde_json::json!({ "type": "start_session", "config_id": config_id, "session_id": session_id }),
+            )
         }
         "stop_session" => {
             let session_id = action
@@ -199,7 +201,12 @@ fn source_device_from_context(context_json: &str) -> Option<String> {
 /// 作为 `source_device` 透传进创建/移除编排（正统端初始归属/广播排除语义），
 /// 宿主不再解释请求关联。
 #[cfg(target_arch = "wasm32")]
-pub fn on_client_message(endpoint_id: &str, client_id: &str, kind: &str, payload: &[u8]) -> anyhow::Result<()> {
+pub fn on_client_message(
+    endpoint_id: &str,
+    client_id: &str,
+    kind: &str,
+    payload: &[u8],
+) -> anyhow::Result<()> {
     if kind != "text" {
         WasmHost.log_debug(&format!(
             "session-control: ignoring {kind} frame from {client_id} (protocol is text JSON actions)"
@@ -231,7 +238,12 @@ pub fn on_client_message(endpoint_id: &str, client_id: &str, kind: &str, payload
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub fn on_client_message(_endpoint_id: &str, _client_id: &str, _kind: &str, _payload: &[u8]) -> anyhow::Result<()> {
+pub fn on_client_message(
+    _endpoint_id: &str,
+    _client_id: &str,
+    _kind: &str,
+    _payload: &[u8],
+) -> anyhow::Result<()> {
     anyhow::bail!("ws session control unavailable outside wasm runtime")
 }
 
@@ -266,11 +278,8 @@ mod tests {
     /// 未知动作名 fail-visible：宿主不解释的词表 → 显性拒绝（不静默吞）
     #[test]
     fn handle_action_rejects_unknown_type_before_host_call() {
-        let err = handle_action(
-            &serde_json::json!({ "type": "launch_missiles" }),
-            None,
-        )
-        .expect_err("unknown action must fail");
+        let err = handle_action(&serde_json::json!({ "type": "launch_missiles" }), None)
+            .expect_err("unknown action must fail");
         assert!(err.contains("unknown session control action"), "got: {err}");
     }
 
@@ -284,7 +293,10 @@ mod tests {
             serde_json::json!({ "type": "remove_session", "session_id": "" }),
             serde_json::json!({ "type": "resize_session", "session_id": "s1", "cols": 0, "rows": 40 }),
         ] {
-            assert!(handle_action(&action, None).is_err(), "must reject: {action}");
+            assert!(
+                handle_action(&action, None).is_err(),
+                "must reject: {action}"
+            );
         }
     }
 
@@ -333,12 +345,19 @@ mod tests {
     #[test]
     fn endpoint_message_handler_resolves_identity_via_connection_context() {
         let root = env!("CARGO_MANIFEST_DIR");
-        let src = std::fs::read_to_string(format!("{root}/src/ws_control.rs")).expect("read ws_control.rs");
-        let handler = src.split("pub fn on_client_message").nth(1).expect("on_client_message 段");
+        let src = std::fs::read_to_string(format!("{root}/src/ws_control.rs"))
+            .expect("read ws_control.rs");
+        let handler = src
+            .split("pub fn on_client_message")
+            .nth(1)
+            .expect("on_client_message 段");
         let calls = handler
             .lines()
             .filter(|l| l.contains("ws_connection_context(") && !l.trim_start().starts_with("//"))
             .count();
-        assert_eq!(calls, 1, "on_client_message 必须调用一次 connection-context 解析发起者");
+        assert_eq!(
+            calls, 1,
+            "on_client_message 必须调用一次 connection-context 解析发起者"
+        );
     }
 }

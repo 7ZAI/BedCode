@@ -44,7 +44,10 @@ pub enum UpsertOutcome {
 /// 3. 逐行 `INSERT OR IGNORE`（按指纹去重；历史按 `id` 去重——宿主旧行
 ///    `id` 是自增，重复推送同一行不产生双写）
 /// 4. 落 marker
-pub fn migrate(store: &impl AuthRecordsStore, rows: &serde_json::Value) -> Result<MigrationReport, String> {
+pub fn migrate(
+    store: &impl AuthRecordsStore,
+    rows: &serde_json::Value,
+) -> Result<MigrationReport, String> {
     if let Some(_) = store.marker(MIGRATION_MARKER)? {
         return Ok(MigrationReport {
             already_migrated: true,
@@ -53,8 +56,16 @@ pub fn migrate(store: &impl AuthRecordsStore, rows: &serde_json::Value) -> Resul
     }
 
     let mut report = MigrationReport::default();
-    let pairings = rows.get("pairings").and_then(|v| v.as_array()).cloned().unwrap_or_default();
-    let history = rows.get("history").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let pairings = rows
+        .get("pairings")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let history = rows
+        .get("history")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
 
     for row in pairings {
         let record: PairingRecord = match serde_json::from_value(row.clone()) {
@@ -72,9 +83,13 @@ pub fn migrate(store: &impl AuthRecordsStore, rows: &serde_json::Value) -> Resul
             Ok(Some(_)) => {} // 已存在（幂等重推）→ 跳过
             Ok(None) => match store.pairing_put(&record) {
                 Ok(()) => report.imported_pairings += 1,
-                Err(e) => report.failed.push(format!("pairing '{}' write failed: {}", record.id, e)),
+                Err(e) => report
+                    .failed
+                    .push(format!("pairing '{}' write failed: {}", record.id, e)),
             },
-            Err(e) => report.failed.push(format!("pairing '{}' lookup failed: {}", record.id, e)),
+            Err(e) => report
+                .failed
+                .push(format!("pairing '{}' lookup failed: {}", record.id, e)),
         }
     }
 
@@ -90,7 +105,10 @@ pub fn migrate(store: &impl AuthRecordsStore, rows: &serde_json::Value) -> Resul
         let existing = store
             .history_by_device(&record.device_id)
             .map_err(|e| format!("history lookup failed: {e}"))?;
-        if existing.iter().any(|r| r.connected_at == record.connected_at && r.auth_method == record.auth_method) {
+        if existing
+            .iter()
+            .any(|r| r.connected_at == record.connected_at && r.auth_method == record.auth_method)
+        {
             continue;
         }
         match store.history_append(&record) {
@@ -137,7 +155,9 @@ pub fn upsert_record(
             updated.connect_count = existing.connect_count.saturating_add(1);
             updated.is_active = true;
             store.pairing_put(&updated)?;
-            return Ok(UpsertOutcome::Merged { id: existing.id.clone() });
+            return Ok(UpsertOutcome::Merged {
+                id: existing.id.clone(),
+            });
         }
     }
 
@@ -150,7 +170,9 @@ pub fn upsert_record(
         updated.connect_count = existing.connect_count.saturating_add(1);
         updated.is_active = true;
         store.pairing_put(&updated)?;
-        return Ok(UpsertOutcome::Upserted { id: existing.id.clone() });
+        return Ok(UpsertOutcome::Upserted {
+            id: existing.id.clone(),
+        });
     }
 
     // 3. 全新插入
@@ -378,7 +400,10 @@ mod tests {
         let rows = serde_json::json!({ "pairings": [], "history": [] });
         let first = migrate(&store, &rows).expect("migrate");
         assert_eq!(first.imported_pairings, 0);
-        assert!(store.marker(MIGRATION_MARKER).expect("marker").is_some(), "落 marker");
+        assert!(
+            store.marker(MIGRATION_MARKER).expect("marker").is_some(),
+            "落 marker"
+        );
         let second = migrate(&store, &rows).expect("migrate again");
         assert!(second.already_migrated);
     }

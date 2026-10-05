@@ -68,7 +68,11 @@ impl Registry {
     }
 
     /// 单条记录
-    pub fn get(&self, store: &impl SessionStore, id: &str) -> Result<Option<SessionRecord>, String> {
+    pub fn get(
+        &self,
+        store: &impl SessionStore,
+        id: &str,
+    ) -> Result<Option<SessionRecord>, String> {
         self.load(store)?;
         Ok(self.cache().as_ref().and_then(|m| m.get(id).cloned()))
     }
@@ -216,10 +220,8 @@ mod tests {
     /// 懒加载：库里有行、缓存未载入 → 读得到（且第二次读不再回库，靠缓存命中）
     #[test]
     fn reads_are_lazily_loaded_from_store() {
-        let store = MockSessionStore::new(vec![MockSessionStore::record(
-            "s1",
-            SessionStatus::Running,
-        )]);
+        let store =
+            MockSessionStore::new(vec![MockSessionStore::record("s1", SessionStatus::Running)]);
         let registry = Registry::new();
         let all = registry.all(&store).expect("all");
         assert_eq!(all.len(), 1);
@@ -250,7 +252,10 @@ mod tests {
         let store = MockSessionStore::new(vec![]);
         let registry = Registry::new();
         registry
-            .record(&store, &MockSessionStore::record("s1", SessionStatus::Starting))
+            .record(
+                &store,
+                &MockSessionStore::record("s1", SessionStatus::Starting),
+            )
             .expect("record");
 
         let running = registry
@@ -266,12 +271,7 @@ mod tests {
         );
 
         let err = registry
-            .set_status(
-                &store,
-                "s1",
-                SessionStatus::Stopped,
-                "2026-09-23T11:00:00Z",
-            )
+            .set_status(&store, "s1", SessionStatus::Stopped, "2026-09-23T11:00:00Z")
             .expect("stop legal")
             .expect("in registry");
         assert_eq!(err.status, SessionStatus::Stopped);
@@ -279,7 +279,10 @@ mod tests {
         let failure = registry
             .set_status(&store, "s1", SessionStatus::Running, now())
             .expect_err("Stopped → Running 必须报错");
-        assert!(failure.contains("illegal session status transition"), "got: {failure}");
+        assert!(
+            failure.contains("illegal session status transition"),
+            "got: {failure}"
+        );
         assert_eq!(
             store.get("s1").unwrap().unwrap().status,
             SessionStatus::Stopped,
@@ -301,7 +304,10 @@ mod tests {
             .set_status(&store, "ghost", SessionStatus::Running, now())
             .unwrap()
             .is_none());
-        assert!(registry.set_name(&store, "ghost", "x", now()).unwrap().is_none());
+        assert!(registry
+            .set_name(&store, "ghost", "x", now())
+            .unwrap()
+            .is_none());
         assert!(registry
             .set_canonical(&store, "ghost", &RendererSource::Desktop, now())
             .unwrap()
@@ -315,7 +321,10 @@ mod tests {
         let store = MockSessionStore::new(vec![]);
         let registry = Registry::new();
         registry
-            .record(&store, &MockSessionStore::record("s1", SessionStatus::Running))
+            .record(
+                &store,
+                &MockSessionStore::record("s1", SessionStatus::Running),
+            )
             .expect("record");
 
         let renamed = registry
@@ -343,9 +352,14 @@ mod tests {
         let store = MockSessionStore::new(vec![]);
         let registry = Registry::new();
         registry
-            .record(&store, &MockSessionStore::record("s1", SessionStatus::Running))
+            .record(
+                &store,
+                &MockSessionStore::record("s1", SessionStatus::Running),
+            )
             .expect("record");
-        assert!(registry.annotate(&store, "s1", "taskStatus", "asking").unwrap());
+        assert!(registry
+            .annotate(&store, "s1", "taskStatus", "asking")
+            .unwrap());
 
         assert!(registry.remove(&store, "s1").unwrap());
         assert!(registry.get(&store, "s1").unwrap().is_none(), "缓存已清");
@@ -354,7 +368,10 @@ mod tests {
             store.all_annotations("s1").unwrap().is_empty(),
             "注解槽连带清理"
         );
-        assert!(!registry.remove(&store, "s1").unwrap(), "重复移除幂等 false");
+        assert!(
+            !registry.remove(&store, "s1").unwrap(),
+            "重复移除幂等 false"
+        );
     }
 
     /// 注解槽：会话不在册 → false（不写孤儿键）；在册 → 覆盖写 + 稳定序读回
@@ -367,11 +384,20 @@ mod tests {
             "未知会话不得写孤儿键"
         );
         registry
-            .record(&store, &MockSessionStore::record("s1", SessionStatus::Running))
+            .record(
+                &store,
+                &MockSessionStore::record("s1", SessionStatus::Running),
+            )
             .expect("record");
-        assert!(registry.annotate(&store, "s1", "taskStatus", "asking").unwrap());
-        assert!(registry.annotate(&store, "s1", "taskStatus", "idle").unwrap());
-        assert!(registry.annotate(&store, "s1", "taskReason", "等待").unwrap());
+        assert!(registry
+            .annotate(&store, "s1", "taskStatus", "asking")
+            .unwrap());
+        assert!(registry
+            .annotate(&store, "s1", "taskStatus", "idle")
+            .unwrap());
+        assert!(registry
+            .annotate(&store, "s1", "taskReason", "等待")
+            .unwrap());
 
         let slots = registry.annotations(&store, "s1").unwrap();
         assert_eq!(slots.get("taskStatus").map(String::as_str), Some("idle"));

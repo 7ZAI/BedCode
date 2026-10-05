@@ -71,8 +71,8 @@ pub fn ttl_get_via_host() -> Result<serde_json::Value, String> {
 /// 不静默降级（键名拼错必须可见）。返回写入后的两项当前值。
 #[cfg(target_arch = "wasm32")]
 pub fn ttl_set_via_host(key: &str, value: u64) -> Result<serde_json::Value, String> {
-    let host_key = auth_setting_key(key)
-        .ok_or_else(|| format!("unknown auth setting key: {}", key))?;
+    let host_key =
+        auth_setting_key(key).ok_or_else(|| format!("unknown auth setting key: {}", key))?;
     WasmHost
         .auth_setting_set(host_key, &value.to_string())
         .map_err(|e| e.message)?;
@@ -194,7 +194,10 @@ fn qr_connection_info(
         .get("token")
         .and_then(|v| v.as_str())
         .ok_or_else(|| "qr status missing token".to_string())?;
-    let remaining = status.get("remaining").and_then(|v| v.as_u64()).unwrap_or(0);
+    let remaining = status
+        .get("remaining")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
     Ok(serde_json::json!({
         "host": resolved_host,
         "port": port,
@@ -314,9 +317,7 @@ pub fn history_clear_via_host(_device_id: &str) -> Result<serde_json::Value, Str
 #[cfg(target_arch = "wasm32")]
 fn config_seconds(key: ConfigKey, default: u64) -> Result<u64, String> {
     let raw = WasmHost.config_get(key).map_err(|e| e.message)?;
-    Ok(raw
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(default))
+    Ok(raw.and_then(|v| v.parse::<u64>().ok()).unwrap_or(default))
 }
 
 // ==================== Tests ====================

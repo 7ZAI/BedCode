@@ -38,9 +38,9 @@
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
-use bedcode_plugin_api::wasm_host::WasmHost;
 #[cfg(target_arch = "wasm32")]
 use bedcode_plugin_api::host::{HostLog, HostWebsocket};
+use bedcode_plugin_api::wasm_host::WasmHost;
 
 /// 广播目标端点路径（manifest `contributes.wsEndpoints` 声明的**既有**端点，
 /// 本票不新增端点）
@@ -81,7 +81,10 @@ pub fn parse_endpoints(listed: &str) -> HashMap<String, EndpointEntry> {
             path.to_string(),
             EndpointEntry {
                 id: id.to_string(),
-                client_count: entry.get("clientCount").and_then(|v| v.as_u64()).unwrap_or(0),
+                client_count: entry
+                    .get("clientCount")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0),
             },
         );
     }
@@ -155,7 +158,11 @@ pub fn task_status_payload(
 }
 
 /// `session:mode-changed` 载荷：bus 形（两个开关，无 camelCase 兼容键）
-pub fn session_mode_payload(session_id: &str, auto_approve: bool, auto_execute: bool) -> serde_json::Value {
+pub fn session_mode_payload(
+    session_id: &str,
+    auto_approve: bool,
+    auto_execute: bool,
+) -> serde_json::Value {
     serde_json::json!({
         "session_id": session_id,
         "auto_approve": auto_approve,
@@ -278,9 +285,11 @@ mod tests {
     /// 帧壳逐字段对齐移动端事件通道契约（`{"type":"event",...}`）
     #[test]
     fn event_frame_is_typed_event_envelope() {
-        let frame: serde_json::Value =
-            serde_json::from_str(&event_frame("session:created", &serde_json::json!({"session_id": "s1"})))
-                .expect("帧必须是合法 JSON");
+        let frame: serde_json::Value = serde_json::from_str(&event_frame(
+            "session:created",
+            &serde_json::json!({"session_id": "s1"}),
+        ))
+        .expect("帧必须是合法 JSON");
         assert_eq!(frame["type"], "event");
         assert_eq!(frame["event"], "session:created");
         assert_eq!(frame["payload"]["session_id"], "s1");
@@ -289,11 +298,20 @@ mod tests {
     /// 反例：载荷不得 flatten 到顶层（移动端按 `payload` 键取载荷）
     #[test]
     fn event_frame_keeps_payload_nested() {
-        let frame: serde_json::Value =
-            serde_json::from_str(&event_frame("task:queue-changed", &serde_json::json!({"queue_count": 3})))
-                .expect("帧必须是合法 JSON");
-        assert!(frame.get("queue_count").is_none(), "载荷字段不得出现在帧顶层");
-        assert_eq!(keys_of(&frame).len(), 3, "帧壳恒三键：type / event / payload");
+        let frame: serde_json::Value = serde_json::from_str(&event_frame(
+            "task:queue-changed",
+            &serde_json::json!({"queue_count": 3}),
+        ))
+        .expect("帧必须是合法 JSON");
+        assert!(
+            frame.get("queue_count").is_none(),
+            "载荷字段不得出现在帧顶层"
+        );
+        assert_eq!(
+            keys_of(&frame).len(),
+            3,
+            "帧壳恒三键：type / event / payload"
+        );
     }
 
     // ---------- 端点反查 ----------
@@ -333,7 +351,11 @@ mod tests {
             id: "wse-1".to_string(),
             client_count: 0,
         };
-        assert_eq!(broadcast_target(Some(&empty)), None, "clientCount=0 必须早退");
+        assert_eq!(
+            broadcast_target(Some(&empty)),
+            None,
+            "clientCount=0 必须早退"
+        );
     }
 
     /// 正例：有客户端 → 返回端点句柄
@@ -367,7 +389,12 @@ mod tests {
     #[test]
     fn task_status_payload_carries_reason_and_questions() {
         let questions = serde_json::json!([{ "id": "q1", "text": "continue?" }]);
-        let payload = task_status_payload("s1", "waiting_input", Some("needs approval"), Some(&questions));
+        let payload = task_status_payload(
+            "s1",
+            "waiting_input",
+            Some("needs approval"),
+            Some(&questions),
+        );
         assert_eq!(payload["task_status"], "waiting_input");
         assert_eq!(payload["task_reason"], "needs approval");
         assert_eq!(payload["task_questions"], questions);
@@ -378,31 +405,40 @@ mod tests {
     fn task_status_payload_treats_empty_reason_and_null_questions_as_absent() {
         let payload = task_status_payload("s1", "idle", Some(""), Some(&serde_json::Value::Null));
         assert!(payload.get("task_reason").is_none(), "空串 reason 不落键");
-        assert!(payload.get("task_questions").is_none(), "null questions 不落键");
+        assert!(
+            payload.get("task_questions").is_none(),
+            "null questions 不落键"
+        );
     }
 
     /// `session:mode-changed`：bus 形三键（无 camelCase 兼容键）
     #[test]
     fn session_mode_payload_is_snake_case_only() {
         let payload = session_mode_payload("s1", true, false);
-        assert_eq!(payload, serde_json::json!({
-            "session_id": "s1",
-            "auto_approve": true,
-            "auto_execute": false,
-        }));
+        assert_eq!(
+            payload,
+            serde_json::json!({
+                "session_id": "s1",
+                "auto_approve": true,
+                "auto_execute": false,
+            })
+        );
     }
 
     /// `task:queue-changed`：与 bus / emit 逐字同形（可选字段为 null）
     #[test]
     fn queue_changed_payload_matches_bus_shape() {
         let payload = queue_changed_payload("s1", 3, "add", None, None);
-        assert_eq!(payload, serde_json::json!({
-            "session_id": "s1",
-            "queue_count": 3,
-            "action": "add",
-            "task_id": null,
-            "status": null,
-        }));
+        assert_eq!(
+            payload,
+            serde_json::json!({
+                "session_id": "s1",
+                "queue_count": 3,
+                "action": "add",
+                "task_id": null,
+                "status": null,
+            })
+        );
         // done 广播携带关联信息（移动端预设任务完成匹配）
         let done = queue_changed_payload("s1", 0, "done", Some("t1"), Some("done"));
         assert_eq!(done["task_id"], "t1");
@@ -433,14 +469,16 @@ mod tests {
         for payload in payloads {
             for key in keys_of(&payload) {
                 assert!(
-                    key.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
+                    key.chars()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
                     "广播载荷键必须 snake_case，got: {key}"
                 );
             }
             if let Some(session) = payload.get("session") {
                 for key in keys_of(session) {
                     assert!(
-                        key.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
+                        key.chars()
+                            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
                         "内嵌 session 键必须 snake_case，got: {key}"
                     );
                 }
@@ -462,8 +500,14 @@ mod tests {
     fn delivery_note_reports_failure_with_context() {
         let note = delivery_note(&Err("endpoint not owned".to_string()), "task:queue-changed")
             .expect("失败必须留痕");
-        assert!(note.contains("task:queue-changed"), "留痕需带事件名, got: {note}");
-        assert!(note.contains("endpoint not owned"), "留痕需带宿主原因, got: {note}");
+        assert!(
+            note.contains("task:queue-changed"),
+            "留痕需带事件名, got: {note}"
+        );
+        assert!(
+            note.contains("endpoint not owned"),
+            "留痕需带宿主原因, got: {note}"
+        );
     }
 
     // ---------- 结构锁 ----------
@@ -506,7 +550,8 @@ mod tests {
         );
 
         // 本模块实现段恰好一处（多了 = 第二出口，少了 = 出口被旁路）
-        let own = std::fs::read_to_string(format!("{root}/src/ws_events.rs")).expect("read ws_events.rs");
+        let own =
+            std::fs::read_to_string(format!("{root}/src/ws_events.rs")).expect("read ws_events.rs");
         let impl_part = own.split("\n#[cfg(test)]").next().unwrap_or(&own);
         let calls = impl_part
             .lines()

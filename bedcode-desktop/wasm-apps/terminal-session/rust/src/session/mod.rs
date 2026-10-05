@@ -126,12 +126,7 @@ fn summary_view(record: &SessionRecord) -> bedcode_plugin_api::wire::SessionSumm
     let annotations = REGISTRY
         .annotations(&WasmHost, &record.id)
         .unwrap_or_default();
-    let slot = |key: &str| {
-        annotations
-            .get(key)
-            .filter(|v| !v.is_empty())
-            .cloned()
-    };
+    let slot = |key: &str| annotations.get(key).filter(|v| !v.is_empty()).cloned();
     bedcode_plugin_api::wire::SessionSummary {
         id: record.id.clone(),
         name: record.name.clone(),
@@ -164,13 +159,13 @@ fn summary_json(record: &SessionRecord) -> serde_json::Value {
 /// 不在册 / 读失败 → 显性 `Err`：创建刚刚登记过却读不到概要属真源断链，
 /// 发一条只有 id 的空概比对移动端不发的后果更坏（前端按它渲染出无名会话条目）。
 #[cfg(target_arch = "wasm32")]
-pub fn summary_for(
-    session_id: &str,
-) -> Result<bedcode_plugin_api::wire::SessionSummary, String> {
+pub fn summary_for(session_id: &str) -> Result<bedcode_plugin_api::wire::SessionSummary, String> {
     match REGISTRY.get(&WasmHost, session_id) {
         Ok(Some(record)) => Ok(summary_view(&record)),
         Ok(None) => Err(format!("会话不在册（session_id={session_id}）")),
-        Err(e) => Err(format!("session summary read failed (session_id={session_id}): {e}")),
+        Err(e) => Err(format!(
+            "session summary read failed (session_id={session_id}): {e}"
+        )),
     }
 }
 
@@ -237,25 +232,27 @@ pub fn note_restore(record: &SessionRecord) -> Result<(), String> {
 /// 改名
 #[cfg(target_arch = "wasm32")]
 pub fn note_renamed(session_id: &str, name: &str) -> Result<(), String> {
-    REGISTRY.set_name(
-        &WasmHost,
-        session_id,
-        name,
-        &crate::config::model::now_rfc3339(),
-    )
-    .map(|_| ())
+    REGISTRY
+        .set_name(
+            &WasmHost,
+            session_id,
+            name,
+            &crate::config::model::now_rfc3339(),
+        )
+        .map(|_| ())
 }
 
 /// 正统渲染端归属登记（尺寸裁决的登记事实）
 #[cfg(target_arch = "wasm32")]
 pub fn note_canonical(session_id: &str, source: &RendererSource) -> Result<(), String> {
-    REGISTRY.set_canonical(
-        &WasmHost,
-        session_id,
-        source,
-        &crate::config::model::now_rfc3339(),
-    )
-    .map(|_| ())
+    REGISTRY
+        .set_canonical(
+            &WasmHost,
+            session_id,
+            source,
+            &crate::config::model::now_rfc3339(),
+        )
+        .map(|_| ())
 }
 
 /// 注解槽写入（会话不在册 → 显性报错，不写孤儿键）
@@ -389,14 +386,12 @@ static PENDING_STOP_SOURCE: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new()
 ///   不做第二次终态处理）。
 #[cfg(target_arch = "wasm32")]
 pub fn close_via_pty(session_id: &str, source_device: Option<&str>) -> Result<(), String> {
-    let record = REGISTRY
-        .get(&WasmHost, session_id)?
-        .ok_or_else(|| {
-            user_facing_string(
-                "com.bedcode.terminal-session.session.error.sessionNotFound",
-                serde_json::json!({ "sessionId": session_id }),
-            )
-        })?;
+    let record = REGISTRY.get(&WasmHost, session_id)?.ok_or_else(|| {
+        user_facing_string(
+            "com.bedcode.terminal-session.session.error.sessionNotFound",
+            serde_json::json!({ "sessionId": session_id }),
+        )
+    })?;
     // 停止即回收输出背压水位/驻留态：进程终止后环不再产出，残留水位无意义
     // （重启会走 `note_removed` → 新 PTY 环偏移从 0 起，需与旧水位彻底解耦）
     crate::output::forget_via_host(session_id);
@@ -419,7 +414,10 @@ pub fn close_via_pty(session_id: &str, source_device: Option<&str>) -> Result<()
     PENDING_STOP_SOURCE
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .push((session_id.to_string(), source_device.unwrap_or_default().to_string()));
+        .push((
+            session_id.to_string(),
+            source_device.unwrap_or_default().to_string(),
+        ));
     match WasmHost.pty_kill(pty_id) {
         Ok(()) => Ok(()),
         Err(e) => {
@@ -443,7 +441,9 @@ pub fn close_via_pty(session_id: &str, source_device: Option<&str>) -> Result<()
 /// 取出并移除某会话的待广播来源设备名
 #[cfg(target_arch = "wasm32")]
 fn drain_pending_stop(session_id: &str) -> Option<String> {
-    let mut pending = PENDING_STOP_SOURCE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut pending = PENDING_STOP_SOURCE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let idx = pending.iter().position(|(id, _)| id == session_id)?;
     Some(pending.remove(idx).1)
 }
@@ -467,14 +467,12 @@ pub fn input_via_pty(
     data: &str,
     special_key: Option<&str>,
 ) -> Result<(), String> {
-    let record = REGISTRY
-        .get(&WasmHost, session_id)?
-        .ok_or_else(|| {
-            user_facing_string(
-                "com.bedcode.terminal-session.session.error.sessionNotFound",
-                serde_json::json!({ "sessionId": session_id }),
-            )
-        })?;
+    let record = REGISTRY.get(&WasmHost, session_id)?.ok_or_else(|| {
+        user_facing_string(
+            "com.bedcode.terminal-session.session.error.sessionNotFound",
+            serde_json::json!({ "sessionId": session_id }),
+        )
+    })?;
     let Some(pty_id) = record.pty_id.as_deref() else {
         return Err(format!("会话缺少 PTY 句柄，无法写入：{session_id}"));
     };

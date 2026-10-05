@@ -345,7 +345,11 @@ pub fn diff_file_tree(
             "--cached".to_string(),
             "--name-only".to_string(),
         ],
-        vec![ "ls-files".to_string(), "--others".to_string(), "--exclude-standard".to_string() ],
+        vec![
+            "ls-files".to_string(),
+            "--others".to_string(),
+            "--exclude-standard".to_string(),
+        ],
     ];
     let results = git.run_batch(working_dir, &batch);
 
@@ -354,7 +358,14 @@ pub fn diff_file_tree(
     // 是否被发起，不影响错误排序）；全部成功 → 按序合并去重
     let mut all_paths: std::collections::HashSet<String> = std::collections::HashSet::new();
     for (i, result) in results.into_iter().enumerate() {
-        let lines = git_result_to_lines(result, batch[i].iter().map(|s| s.as_str()).collect::<Vec<_>>().as_slice())?;
+        let lines = git_result_to_lines(
+            result,
+            batch[i]
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .as_slice(),
+        )?;
         for line in lines {
             all_paths.insert(line);
         }
@@ -691,11 +702,16 @@ pub fn resolve_working_dir(
 
 // ==================== Tests ====================
 
+// ==================== Tests ====================
+
+// 用例按功能拆至 `ops/tests/`（本内联模块的子模块路径由 rustc
+// 自动解析到该目录；模块树 `file_browse::ops::tests::<文件>` 与内联形态等价，私有项可见性不受影响）。
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::file_browse::source::tests::{MockFs, MockGit};
     use std::collections::HashMap;
+    // 跨分组共享的测试脚手架（子模块经 `use super::*` 可见）
 
     fn temp_workspace() -> (std::path::PathBuf, tempfile::TempDir) {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -703,437 +719,10 @@ mod tests {
         std::fs::create_dir_all(&root).expect("create root");
         (root, dir)
     }
-
     fn temp_root() -> std::path::PathBuf {
         temp_workspace().0
     }
-
-    // ==================== containment（安全红线，与宿主 is_within_root 对照） ====================
-
-    #[test]
-    fn traversal_via_parent_chain_rejected() {
-        let (root, _dir) = temp_workspace();
-        let sub = root.join("sub");
-        std::fs::create_dir_all(&sub).expect("create sub");
-        let outside = root.parent().unwrap().join("evil");
-        std::fs::create_dir_all(&outside).expect("create outside");
-        let fs = MockFs;
-
-        assert!(
-            !is_within_root(&fs, &root.to_string_lossy(), &outside.to_string_lossy()),
-            "同级目录越界必须拒绝"
-        );
-        let traversal = sub.join("../../evil");
-        assert!(
-            !is_within_root(&fs, &root.to_string_lossy(), &traversal.to_string_lossy()),
-            "../ 穿越必须拒绝"
-        );
-    }
-
-    #[test]
-    fn within_root_allowed() {
-        let (root, _dir) = temp_workspace();
-        let child = root.join("a").join("b.txt");
-        std::fs::create_dir_all(child.parent().unwrap()).expect("create parent");
-        std::fs::write(&child, b"x").expect("write file");
-        let fs = MockFs;
-        assert!(is_within_root(
-            &fs,
-            &root.to_string_lossy(),
-            &child.to_string_lossy()
-        ));
-        assert!(is_within_root(
-            &fs,
-            &root.to_string_lossy(),
-            &root.to_string_lossy()
-        ));
-    }
-
-    #[test]
-    fn nonexistent_path_rejected_without_panic() {
-        let root = temp_root();
-        let fs = MockFs;
-        let ghost = root.join("nope").join("ghost.txt");
-        assert!(!is_within_root(
-            &fs,
-            &root.to_string_lossy(),
-            &ghost.to_string_lossy()
-        ));
-    }
-
-    /// 组件级 starts_with（不匹配前缀相似目录）
-    #[test]
-    fn path_starts_with_is_component_aware() {
-        assert!(path_starts_with("/srv/app/src", "/srv/app"));
-        assert!(path_starts_with("/srv/app", "/srv/app"));
-        assert!(!path_starts_with("/srv/app2", "/srv/app"));
-        assert!(!path_starts_with("/srv/app2/x", "/srv/app"));
-        // Windows 反斜杠 canonical 输出
-        assert!(path_starts_with(r"C:\work\src", r"C:\work"));
-        assert!(!path_starts_with(r"C:\work2", r"C:\work"));
-    }
-
-    /// symlink 逃逸：canonicalize 解析后越界 → 拒绝
-    #[cfg(unix)]
-    #[test]
-    fn symlink_escape_rejected() {
-        let (root, _dir) = temp_workspace();
-        let outside = root.parent().unwrap().join("secret.txt");
-        std::fs::write(&outside, b"secret").expect("write outside");
-        std::os::unix::fs::symlink(&outside, root.join("link.txt")).expect("symlink");
-        let fs = MockFs;
-        assert!(
-            !is_within_root(
-                &fs,
-                &root.to_string_lossy(),
-                &root.join("link.txt").to_string_lossy()
-            ),
-            "symlink 指向 root 外 → 拒绝"
-        );
-    }
-
-    // ==================== exclude 过滤 ====================
-
-    #[test]
-    fn exclude_filters_match_host_semantics() {
-        let filters =
-            build_exclude_filters(&["node_modules".to_string(), "src/generated".to_string()]);
-        assert_eq!(filters.len(), 2);
-        // Name 匹配任意层级同名目录
-        assert!(should_exclude("", "node_modules", &filters));
-        assert!(should_exclude("a/b", "node_modules", &filters));
-        // Path 匹配 parent + name
-        assert!(should_exclude("src", "generated", &filters));
-        assert!(!should_exclude("lib", "generated", &filters));
-        assert!(!should_exclude("", "generated", &filters));
-    }
-
-    // ==================== 目录树扫描 ====================
-
-    /// 文件夹在前、文件在后；各自 name 大小写不敏感排序（与宿主一致）
-    #[test]
-    fn scan_dir_orders_folders_first_case_insensitive() {
-        let root = temp_root();
-        std::fs::create_dir_all(root.join("zeta")).unwrap();
-        std::fs::create_dir_all(root.join("Alpha")).unwrap();
-        std::fs::write(root.join("beta.txt"), "b").unwrap();
-        std::fs::write(root.join("Gamma.txt"), "g").unwrap();
-        let fs = MockFs;
-        let tree = scan_dir(
-            &fs,
-            &root.to_string_lossy(),
-            &root.to_string_lossy(),
-            &[],
-            0,
-        )
-        .unwrap();
-        let names: Vec<&str> = tree.iter().map(|n| n["name"].as_str().unwrap()).collect();
-        assert_eq!(
-            names,
-            vec!["Alpha", "zeta", "beta.txt", "Gamma.txt"],
-            "文件夹在前 + 大小写不敏感（beta < Gamma）"
-        );
-    }
-
-    /// 排除目录不进树；symlink 跳过；文件夹 children 恒有、文件 children 省略
-    #[test]
-    fn scan_dir_applies_excludes_and_node_shapes() {
-        let root = temp_root();
-        std::fs::create_dir_all(root.join("src")).unwrap();
-        std::fs::write(root.join("src").join("main.rs"), "fn main(){}").unwrap();
-        std::fs::create_dir_all(root.join("node_modules")).unwrap();
-        std::fs::write(root.join("node_modules").join("x.js"), "x").unwrap();
-        #[cfg(unix)]
-        std::os::unix::fs::symlink("/nonexistent", root.join("deadlink")).unwrap();
-
-        let fs = MockFs;
-        let filters = build_exclude_filters(&["node_modules".to_string()]);
-        let tree = scan_dir(
-            &fs,
-            &root.to_string_lossy(),
-            &root.to_string_lossy(),
-            &filters,
-            0,
-        )
-        .unwrap();
-        assert_eq!(tree.len(), 1, "node_modules 排除 + symlink 跳过");
-        let src = &tree[0];
-        assert_eq!(src["nodeType"], "folder");
-        assert_eq!(src["path"], "src");
-        assert!(src.get("children").is_some(), "文件夹 children 恒有");
-        assert_eq!(src["children"][0]["name"], "main.rs");
-        assert!(
-            src["children"][0].get("children").is_none(),
-            "文件 children 省略"
-        );
-    }
-
-    /// 深度上限（宿主 MAX_DEPTH=20 语义）：超出层返回空
-    #[test]
-    fn scan_dir_stops_at_max_depth() {
-        let root = temp_root();
-        let mut cur = root.clone();
-        for i in 0..25 {
-            cur = cur.join(format!("d{i}"));
-            std::fs::create_dir_all(&cur).unwrap();
-        }
-        let fs = MockFs;
-        let tree = scan_dir(
-            &fs,
-            &root.to_string_lossy(),
-            &root.to_string_lossy(),
-            &[],
-            0,
-        )
-        .unwrap();
-        assert_eq!(tree.len(), 1);
-        // 第 21 层起返回空（depth=20 可扫，depth=21 空）
-        assert!(scan_dir(
-            &fs,
-            &root.to_string_lossy(),
-            &root.to_string_lossy(),
-            &[],
-            21
-        )
-        .unwrap()
-        .is_empty());
-    }
-
-    /// 单层扫描：不递归、文件夹 children 省略（与 file-tree-children 形状一致）
-    #[test]
-    fn scan_dir_single_level_is_non_recursive() {
-        let root = temp_root();
-        std::fs::create_dir_all(root.join("a").join("deep")).unwrap();
-        std::fs::write(root.join("a").join("f.txt"), "x").unwrap();
-        let fs = MockFs;
-        let children = scan_dir_single_level(
-            &fs,
-            &root.to_string_lossy(),
-            &root.join("a").to_string_lossy(),
-            &[],
-        )
-        .unwrap();
-        assert_eq!(children.len(), 2, "a 下直系两项：deep 文件夹 + f.txt 文件");
-        assert_eq!(children[0]["name"], "deep");
-        assert_eq!(children[0]["nodeType"], "folder");
-        assert!(
-            children[0].get("children").is_none(),
-            "单层扫描文件夹 children 省略（未加载）"
-        );
-        assert_eq!(children[1]["name"], "f.txt");
-        assert_eq!(children[1]["path"], "a/f.txt");
-    }
-
-    // ==================== 文件内容 ====================
-
-    #[test]
-    fn read_file_content_success_and_errors() {
-        let (root, _dir) = temp_workspace();
-        let fs = MockFs;
-        let ok_file = root.join("ok.txt");
-        std::fs::write(&ok_file, "hello").unwrap();
-        let (content, name) = read_file_content(&fs, &root.to_string_lossy(), "ok.txt")
-            .unwrap()
-            .unwrap();
-        assert_eq!(content, "hello");
-        assert_eq!(name, "ok.txt");
-
-        // 不存在 → 404
-        let err = read_file_content(&fs, &root.to_string_lossy(), "ghost.txt")
-            .unwrap()
-            .unwrap_err();
-        assert_eq!(err.0, 404);
-        // 越界 → 403（先创建外部文件：宿主对「不存在路径」先答 404，越过 root 的
-        // 存在文件才落到 is_within_root 判定）
-        let outside = root.parent().unwrap().join("evil.txt");
-        std::fs::write(&outside, "evil").unwrap();
-        let err = read_file_content(&fs, &root.to_string_lossy(), "../evil.txt")
-            .unwrap()
-            .unwrap_err();
-        assert_eq!(err.0, 403);
-        // 目录 → 400
-        std::fs::create_dir_all(root.join("adir")).unwrap();
-        let err = read_file_content(&fs, &root.to_string_lossy(), "adir")
-            .unwrap()
-            .unwrap_err();
-        assert_eq!(err.0, 400);
-        assert_eq!(err.1, "Path is not a file");
-    }
-
-    // ==================== git diff 树 ====================
-
-    #[test]
-    fn diff_file_tree_merges_and_builds_tree() {
-        let root = temp_root().to_string_lossy().to_string();
-        let mut outputs = HashMap::new();
-        outputs.insert(
-            (root.clone(), "diff --name-only".to_string()),
-            "src/main.rs\nCargo.toml".to_string(),
-        );
-        outputs.insert(
-            (root.clone(), "diff --cached --name-only".to_string()),
-            "src/main.rs".to_string(),
-        );
-        outputs.insert(
-            (
-                root.clone(),
-                "ls-files --others --exclude-standard".to_string(),
-            ),
-            "src/generated/code.rs\nnew.txt".to_string(),
-        );
-        let git = MockGit::new(outputs);
-        let filters = build_exclude_filters(&["generated".to_string()]);
-        let tree = diff_file_tree(&git, &root, &filters).unwrap();
-
-        let names: Vec<&str> = tree.iter().map(|n| n["name"].as_str().unwrap()).collect();
-        // 去重 src/main.rs；generated 目录被排除；BTreeMap 字节序 + 文件夹在前
-        assert_eq!(names, vec!["src", "Cargo.toml", "new.txt"]);
-        let src = &tree[0];
-        assert_eq!(src["nodeType"], "folder");
-        assert_eq!(src["children"][0]["name"], "main.rs");
-    }
-
-    /// T-G05：git 失败路径（非零退出 / stderr 诊断）经注入后真正被测——
-    /// 旧 MockGit 恒成功，失败行为从未验证
-    #[test]
-    fn diff_file_tree_surfaces_injected_git_failure() {
-        let root = temp_root().to_string_lossy().to_string();
-        // 第一条 diff --name-only 注入非零退出 + stderr（宿主 run_git_command
-        // 失败路径：500 + Internal error 前缀）
-        let git = MockGit::fail_with(
-            &root,
-            &["diff", "--name-only"],
-            bedcode_plugin_api::host::ProcessSyncResult {
-                exit_code: Some(128),
-                stdout: String::new(),
-                stderr: "fatal: not a git repository".to_string(),
-                timed_out: false,
-            },
-        );
-        let err = diff_file_tree(&git, &root, &[]).expect_err("注入失败必须显性报错");
-        assert!(err.contains("Internal error: git command failed"), "got: {err}");
-        assert!(err.contains("fatal: not a git repository"), "stderr 透传: {err}");
-        // 未命中的命令返回成功（失败注入按条命中，不影响其余）
-        let ok = git
-            .run(&root, &["diff", "--name-only"])
-            .expect("命中失败注入");
-        assert_eq!(ok.exit_code, Some(128));
-        let ok = git
-            .run(&root, &["status", "--porcelain"])
-            .expect("未命中走默认成功");
-        assert_eq!(ok.exit_code, Some(0));
-    }
-
-    // ==================== 单文件 diff 解析（与宿主 parse_unified_diff 对照） ====================
-
-    #[test]
-    fn parse_unified_diff_matches_host_semantics() {
-        let diff = "\
-diff --git a/main.rs b/main.rs
-index 123..456 100644
---- a/main.rs
-+++ b/main.rs
-@@ -1,5 +1,6 @@
- use std::io;
-+fn new_fn() {}
--fn old_fn() {}
- fn unchanged() {}
-\\ No newline at end of file
-";
-        let lines = parse_unified_diff(diff);
-        assert_eq!(lines.len(), 4);
-        assert_eq!(lines[0]["type"], "context");
-        assert_eq!(lines[0]["content"], "use std::io;");
-        assert_eq!(lines[0]["oldLineNo"], 1);
-        assert_eq!(lines[0]["newLineNo"], 1);
-        assert_eq!(lines[1]["type"], "added");
-        assert_eq!(lines[1]["content"], "fn new_fn() {}");
-        assert_eq!(lines[1]["oldLineNo"], serde_json::Value::Null);
-        assert_eq!(lines[1]["newLineNo"], 2);
-        assert_eq!(lines[2]["type"], "removed");
-        assert_eq!(lines[2]["oldLineNo"], 2);
-        assert_eq!(lines[2]["newLineNo"], serde_json::Value::Null);
-        assert_eq!(lines[3]["type"], "context");
-        assert_eq!(lines[3]["oldLineNo"], 3);
-        assert_eq!(lines[3]["newLineNo"], 3);
-    }
-
-    #[test]
-    fn parse_hunk_header_variants() {
-        assert_eq!(parse_hunk_header("@@ -1 +1 @@"), Some((1, 1)));
-        assert_eq!(parse_hunk_header("@@ -1,5 +1,6 @@"), Some((1, 1)));
-        assert_eq!(parse_hunk_header("@@ -12 +34,2 @@"), Some((12, 34)));
-        assert_eq!(parse_hunk_header("not a hunk"), None);
-    }
-
-    // ==================== working_dir 解析 ====================
-
-    #[test]
-    fn resolve_working_dir_prefers_session_then_config() {
-        let store = crate::config::store::tests::MockConfigStore::new(vec![
-            crate::config::model::SessionConfig {
-                id: "c1".into(),
-                name: "工作台".into(),
-                environment: "linux".into(),
-                wsl_distro: None,
-                working_dir: "/srv/app".into(),
-                command: "bash".into(),
-                auto_start: false,
-                created_at: "2026-09-20T00:00:00Z".into(),
-                updated_at: "2026-09-20T00:00:00Z".into(),
-            },
-        ]);
-        let sessions = r#"[{"id":"s1","configId":"c1","name":"dev","status":"Running"}]"#;
-        // 会话路径
-        assert_eq!(
-            resolve_working_dir(&store, Some(sessions), "s1").unwrap(),
-            "/srv/app"
-        );
-        // 会话不存在 → 回退 config_id 路径
-        assert_eq!(
-            resolve_working_dir(&store, Some(sessions), "c1").unwrap(),
-            "/srv/app"
-        );
-        // 两者都无 → NotFound 文案与宿主逐字一致
-        let err = resolve_working_dir(&store, Some(sessions), "ghost").unwrap_err();
-        assert_eq!(err, "Not found: Session/Config not found: ghost");
-    }
-
-    // ==================== 辅助 ====================
-
-    #[test]
-    fn join_path_and_file_name() {
-        assert_eq!(join_path("/srv/app", "src/main.rs"), "/srv/app/src/main.rs");
-        assert_eq!(join_path("/srv/app/", "src"), "/srv/app/src");
-        assert_eq!(join_path("/srv/app", ""), "/srv/app");
-        assert_eq!(join_path("/srv/app", "."), "/srv/app/.");
-        assert_eq!(file_name_of("a/b/c.txt"), "c.txt");
-        assert_eq!(file_name_of("c.txt"), "c.txt");
-        assert_eq!(file_name_of("a\\b\\d.txt"), "d.txt");
-        assert_eq!(file_name_of(""), "");
-        assert!(is_absolute_path("/abs"));
-        assert!(is_absolute_path(r"C:\win"));
-        assert!(is_absolute_path("\\\\server\\share"));
-        assert!(!is_absolute_path("rel/path"));
-    }
-
-    /// 类型占位：FsStat 形状锁定（与宿主 stat 输出一致）
-    #[test]
-    fn stat_shape_matches_host() {
-        let (root, _dir) = temp_workspace();
-        let fs = MockFs;
-        std::fs::write(root.join("f.txt"), "12345").unwrap();
-        let stat: bedcode_plugin_api::host::FsStat = fs
-            .stat(&root.join("f.txt").to_string_lossy())
-            .unwrap()
-            .unwrap();
-        assert_eq!(stat.size, 5);
-        assert!(stat.is_file);
-        assert!(!stat.is_dir);
-    }
-
     // ==================== 工作区 git 查询域（票 04） ====================
-
     /// 非零退出的 git 双（宿主 run_git_command 失败路径：500 + Internal error 前缀）
     struct FailingGit {
         stderr: String,
@@ -1164,7 +753,6 @@ index 123..456 100644
                 .collect()
         }
     }
-
     /// 启动失败的 git 双（宿主 spawn 失败路径）
     struct BrokenGit;
     impl GitPort for BrokenGit {
@@ -1187,180 +775,14 @@ index 123..456 100644
                 .collect()
         }
     }
-
-    /// 分支名白名单（宿主 git_controller 用例逐条对齐）
-    #[test]
-    fn branch_name_whitelist_matches_host() {
-        for name in [
-            "main",
-            "feature/login",
-            "v2.0.1",
-            "hotfix_1",
-            "release/2026-09",
-            "a",
-        ] {
-            assert!(is_valid_branch_name(name), "合法分支名 {name} 应通过白名单");
-        }
-        for name in [
-            "main;rm -rf /",
-            "main && echo pwned",
-            "--upload-pack=touch /tmp/x",
-            "$(id)",
-            "main`id`",
-            "a b",
-            "feature\\login",
-            "main|sh",
-        ] {
-            assert!(!is_valid_branch_name(name), "注入形态 {name} 必须被拒绝");
-        }
-        // 空串显式拒绝（all() 对空迭代器恒真——变异点：去掉 is_empty 即假绿）
-        assert!(!is_valid_branch_name(""));
-        // 控制字符不在白名单（Unicode 字母属 alphanumeric 白名单，argv 执行无 shell 风险）
-        assert!(!is_valid_branch_name("main\u{0000}"));
-        assert!(!is_valid_branch_name("main\u{001b}"));
-    }
-
-    /// 分支列表：show-current 首行 + branch --list 剥 * 前缀滤空行
-    #[test]
-    fn git_branches_parses_host_way() {
-        let (root, _dir) = temp_workspace();
-        let cwd = root.to_string_lossy().to_string();
-        let git = MockGit::new(HashMap::from([
-            (
-                (cwd.clone(), "branch --show-current".to_string()),
-                "dev\n".to_string(),
-            ),
-            (
-                (cwd.clone(), "branch --list".to_string()),
-                "* main\ndev\n\n  feature/x  \n".to_string(),
-            ),
-        ]));
-        let v = git_branches(&git, &cwd).expect("branches");
-        assert_eq!(
-            v,
-            serde_json::json!({
-                "currentBranch": "dev",
-                "branches": ["main", "dev", "feature/x"],
-                "isGitRepo": true,
-            }),
-            "* 前缀剥离 + 空行滤除 + trim"
-        );
-        // 调用顺序：先 show-current 后 --list（宿主同序）
-        let calls = git.calls.lock().unwrap();
-        assert_eq!(calls.len(), 2);
-        assert_eq!(calls[0].1, vec!["branch", "--show-current"]);
-        assert_eq!(calls[1].1, vec!["branch", "--list"]);
-    }
-
-    /// 空 show-current（unborn HEAD / detached）→ currentBranch null（宿主同格）
-    #[test]
-    fn git_branches_empty_current_is_null() {
-        let (root, _dir) = temp_workspace();
-        let cwd = root.to_string_lossy().to_string();
-        let git = MockGit::new(HashMap::from([
-            (
-                (cwd.clone(), "branch --show-current".to_string()),
-                String::new(),
-            ),
-            ((cwd.clone(), "branch --list".to_string()), String::new()),
-        ]));
-        let v = git_branches(&git, &cwd).expect("branches");
-        assert_eq!(v["currentBranch"], serde_json::Value::Null);
-        assert_eq!(v["branches"], serde_json::json!([]));
-        assert_eq!(v["isGitRepo"], true);
-    }
-
-    /// status 计数：porcelain 非空行数 → hasChanges/changedCount
-    #[test]
-    fn git_status_counts_porcelain_lines() {
-        let (root, _dir) = temp_workspace();
-        let cwd = root.to_string_lossy().to_string();
-        let dirty = MockGit::new(HashMap::from([(
-            (cwd.clone(), "status --porcelain".to_string()),
-            " M a.rs\n?? b.txt\n".to_string(),
-        )]));
-        let v = git_status(&dirty, &cwd).expect("status");
-        assert_eq!(
-            v,
-            serde_json::json!({ "hasChanges": true, "changedCount": 2 })
-        );
-
-        let clean = MockGit::new(HashMap::new());
-        let v = git_status(&clean, &cwd).expect("status");
-        assert_eq!(
-            v,
-            serde_json::json!({ "hasChanges": false, "changedCount": 0 })
-        );
-    }
-
-    /// checkout：白名单前置拒绝（不经 git，文案逐字）→ 成功返回目标分支
-    #[test]
-    fn git_checkout_validates_then_reports_branch() {
-        let (root, _dir) = temp_workspace();
-        let cwd = root.to_string_lossy().to_string();
-        let git = MockGit::new(HashMap::new());
-
-        let err = git_checkout(&git, &cwd, "main;rm -rf /").expect_err("白名单拒绝");
-        assert_eq!(err, "Invalid input: Invalid branch name: main;rm -rf /");
-        assert!(
-            git.calls.lock().unwrap().is_empty(),
-            "白名单拒绝不得启动 git 进程"
-        );
-
-        let branch = git_checkout(&git, &cwd, "feature/x").expect("checkout");
-        assert_eq!(branch, "feature/x");
-        let calls = git.calls.lock().unwrap();
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].1, vec!["checkout", "feature/x"]);
-    }
-
-    /// 非零退出 → 500 文案与宿主 AppError::Internal Display 逐字一致
-    #[test]
-    fn git_checkout_maps_nonzero_exit_to_host_message() {
-        let (root, _dir) = temp_workspace();
-        let cwd = root.to_string_lossy().to_string();
-        let git = FailingGit {
-            stderr: "error: pathspec 'nope' did not match any file(s) known to git\n".to_string(),
-        };
-        let err = git_checkout(&git, &cwd, "nope").expect_err("非零退出");
-        assert_eq!(
-            err,
-            "Internal error: git checkout failed: error: pathspec 'nope' did not match any file(s) known to git\n",
-            "stderr 原样拼接（含尾部换行，宿主同形）"
-        );
-
-        let empty = FailingGit {
-            stderr: String::new(),
-        };
-        let err = git_checkout(&empty, &cwd, "nope").expect_err("空 stderr");
-        assert_eq!(err, "Internal error: git checkout failed");
-    }
-
-    /// diff 树命令失败 → 文案带宿主前缀（run_git_lines 映射）
-    #[test]
-    fn git_failure_messages_carry_host_internal_prefix() {
-        let (root, _dir) = temp_workspace();
-        let cwd = root.to_string_lossy().to_string();
-        let git = FailingGit {
-            stderr: "fatal: not a git repository\n".to_string(),
-        };
-        let err = run_git_lines(&git, &cwd, &["status", "--porcelain"]).expect_err("失败");
-        assert_eq!(
-            err,
-            "Internal error: git command failed: fatal: not a git repository\n"
-        );
-
-        let broken = BrokenGit;
-        let err = run_git_lines(&broken, &cwd, &["status"]).expect_err("spawn 失败");
-        assert!(
-            err.starts_with("Internal error: Failed to execute git: "),
-            "got: {err}"
-        );
-
-        let err = file_diff(&broken, &cwd, "a.rs").expect_err("diff spawn 失败");
-        assert!(
-            err.starts_with("Internal error: Failed to execute git diff: "),
-            "got: {err}"
-        );
-    }
+    mod containment_is_within_root;
+    mod diff_parse_unified_diff;
+    mod exclude;
+    mod git_04;
+    mod git_04_2;
+    mod git_diff;
+    mod join_path_and_file_name;
+    mod read_file_content_success;
+    mod scan_dir_orders_folders;
+    mod working_dir;
 }

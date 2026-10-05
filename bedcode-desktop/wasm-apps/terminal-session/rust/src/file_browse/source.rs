@@ -138,10 +138,7 @@ pub mod wasm_impl {
                     return (0..batch.len()).map(|_| Err(msg.clone())).collect();
                 }
             };
-            let results = parsed["results"]
-                .as_array()
-                .cloned()
-                .unwrap_or_default();
+            let results = parsed["results"].as_array().cloned().unwrap_or_default();
             // T-G03 防御：批次映射依赖宿主「results 顺序与输入 batch 一致 + 成功
             // payload 是 JSON 编码串」两条不变量。宿主若重排/省略/夹带，位置序
             // 映射会把错误归给错误命令——这里先做**长度对账**：短数组（宿主省略）
@@ -162,7 +159,9 @@ pub mod wasm_impl {
             for (i, args) in batch.iter().enumerate() {
                 let entry = results.get(i).cloned().unwrap_or(serde_json::Value::Null);
                 if entry["ok"] == true {
-                    match entry["value"].as_str().and_then(|v| serde_json::from_str::<bedcode_plugin_api::host::ProcessSyncResult>(v).ok()) {
+                    match entry["value"].as_str().and_then(|v| {
+                        serde_json::from_str::<bedcode_plugin_api::host::ProcessSyncResult>(v).ok()
+                    }) {
                         Some(r) => out.push(Ok(r)),
                         None => out.push(Err(format!(
                             "file browse: git batch unit {} ({}): invalid result payload",
@@ -283,12 +282,13 @@ pub(crate) mod tests {
         }
 
         /// 注入一条失败结果（exit_code != 0 / stderr / timed_out）
-        pub fn fail_with(cwd: &str, args: &[&str], result: bedcode_plugin_api::host::ProcessSyncResult) -> Self {
+        pub fn fail_with(
+            cwd: &str,
+            args: &[&str],
+            result: bedcode_plugin_api::host::ProcessSyncResult,
+        ) -> Self {
             let mut failures = HashMap::new();
-            failures.insert(
-                (cwd.to_string(), args.join(" ")),
-                result,
-            );
+            failures.insert((cwd.to_string(), args.join(" ")), result);
             Self {
                 outputs: Mutex::new(HashMap::new()),
                 calls: Mutex::new(Vec::new()),

@@ -62,8 +62,9 @@ use bedcode_plugin_api::EndpointAuth;
 use bedcode_server_base::config::NetworkConfig;
 use bedcode_server_base::identity::AuthenticatedIdentity;
 use bedcode_server_base::ports::{
-    AuthCenter, BusMessageHandler, BusPort, ConfigPort, EventSink, MdnsAdvertiserPort, MdnsPort, PathsPort,
-    PluginInvoker, PowerPort, RuntimePort, ServerLifecycleEvent, ServerLifecyclePort, ServerPorts, SystemInfoPort,
+    AuthCenter, BusMessageHandler, BusPort, ConfigPort, EventSink, MdnsAdvertiserPort, MdnsPort,
+    PathsPort, PluginInvoker, PowerPort, RuntimePort, ServerLifecycleEvent, ServerLifecyclePort,
+    ServerPorts, SystemInfoPort,
 };
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
@@ -84,7 +85,10 @@ struct ForwardLog {
 
 impl ForwardLog {
     fn record(&self, call: Value) {
-        self.calls.lock().unwrap_or_else(|e| e.into_inner()).push(call);
+        self.calls
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(call);
     }
     fn calls(&self) -> Vec<Value> {
         self.calls.lock().unwrap_or_else(|e| e.into_inner()).clone()
@@ -106,7 +110,12 @@ struct PilotInvoker {
 
 #[async_trait::async_trait]
 impl PluginInvoker for PilotInvoker {
-    async fn invoke_rust_command(&self, owner: &str, command: &str, args: Value) -> std::result::Result<Value, String> {
+    async fn invoke_rust_command(
+        &self,
+        owner: &str,
+        command: &str,
+        args: Value,
+    ) -> std::result::Result<Value, String> {
         assert_eq!(owner, PLUGIN_ID, "转发属主必须是本插件");
         assert_eq!(command, "_http_endpoint", "HTTP 面转发命令名");
         self.log.record(args.clone());
@@ -128,9 +137,15 @@ impl PluginInvoker for PilotInvoker {
 struct PilotAuthCenter;
 
 impl AuthCenter for PilotAuthCenter {
-    fn enforce_connection_policy(&self, token: &str) -> std::result::Result<AuthenticatedIdentity, String> {
+    fn enforce_connection_policy(
+        &self,
+        token: &str,
+    ) -> std::result::Result<AuthenticatedIdentity, String> {
         if token != VALID_TOKEN {
-            return Err(format!("pilot auth center: reject token len={}", token.len()));
+            return Err(format!(
+                "pilot auth center: reject token len={}",
+                token.len()
+            ));
         }
         Ok(AuthenticatedIdentity {
             device_id: "d10-pilot-device".to_string(),
@@ -175,8 +190,22 @@ impl BusPort for PilotBus {
     fn publish_binary(&self, topic: &str, _sender: &str, _payload: Vec<u8>) {
         self.guard().push((topic.to_string(), Value::Null));
     }
-    async fn subscribe_static(&self, _subscriber: &str, _topic: &str, _handler: Box<dyn BusMessageHandler>) {}
-    async fn deliver_endpoint_frame(&self, _owner: &str, _ep: &str, _client: &str, _kind: &str, _payload: Vec<u8>) {}
+    async fn subscribe_static(
+        &self,
+        _subscriber: &str,
+        _topic: &str,
+        _handler: Box<dyn BusMessageHandler>,
+    ) {
+    }
+    async fn deliver_endpoint_frame(
+        &self,
+        _owner: &str,
+        _ep: &str,
+        _client: &str,
+        _kind: &str,
+        _payload: Vec<u8>,
+    ) {
+    }
 }
 
 /// 未被本测试触及的端口：显式 panic 而不是静默 no-op
@@ -279,7 +308,11 @@ impl MdnsPort for PilotMdns {
     fn shared_daemon(&self) -> mdns_sd::ServiceDaemon {
         panic!("PilotMdns must not be used: 本测试无 peer-net 面");
     }
-    fn register_host_service(&self, _service_type: &str, _fullname: &str) -> std::result::Result<String, String> {
+    fn register_host_service(
+        &self,
+        _service_type: &str,
+        _fullname: &str,
+    ) -> std::result::Result<String, String> {
         panic!("PilotMdns must not be used: 本测试无 peer-net 面");
     }
     fn stop_host_service(&self, _advertise_id: &str) -> std::result::Result<bool, String> {
@@ -334,8 +367,15 @@ fn register_all_http_routes() -> usize {
         let auth = EndpointAuth::parse_with(Some(decl.auth), EndpointAuth::Jwt)
             .unwrap_or_else(|e| panic!("{} 的 auth 档位非法：{e}", decl.path));
         let methods: Vec<String> = decl.methods.iter().map(|m| m.to_string()).collect();
-        let entry = bedcode_server_http::registry::register(PLUGIN_ID, decl.path, decl.host, &methods, auth)
-            .unwrap_or_else(|e| panic!("注册失败（生产会降级为 warn ⇒ 该端点永久 404）：{} → {e}", decl.path));
+        let entry = bedcode_server_http::registry::register(
+            PLUGIN_ID, decl.path, decl.host, &methods, auth,
+        )
+        .unwrap_or_else(|e| {
+            panic!(
+                "注册失败（生产会降级为 warn ⇒ 该端点永久 404）：{} → {e}",
+                decl.path
+            )
+        });
         assert_eq!(entry.owner, PLUGIN_ID);
         registered += 1;
     }
@@ -363,16 +403,41 @@ const FROZEN_GATEWAY_ALIASES: &[(&str, &str, &[&str], &str)] = &[
     ("sessions", "/api/sessions", &["GET"], "jwt"),
     ("sessions/start", "/api/sessions/start", &["POST"], "jwt"),
     ("sessions/stop", "/api/sessions/{id}/stop", &["POST"], "jwt"),
-    ("sessions/remove", "/api/sessions/{id}/remove", &["DELETE"], "jwt"),
-    ("sessions/input", "/api/sessions/{id}/input", &["POST"], "jwt"),
-    ("sessions/history", "/api/sessions/{id}/history", &["GET"], "jwt"),
-    ("sessions/resize", "/api/sessions/{id}/resize", &["POST"], "jwt"),
+    (
+        "sessions/remove",
+        "/api/sessions/{id}/remove",
+        &["DELETE"],
+        "jwt",
+    ),
+    (
+        "sessions/input",
+        "/api/sessions/{id}/input",
+        &["POST"],
+        "jwt",
+    ),
+    (
+        "sessions/history",
+        "/api/sessions/{id}/history",
+        &["GET"],
+        "jwt",
+    ),
+    (
+        "sessions/resize",
+        "/api/sessions/{id}/resize",
+        &["POST"],
+        "jwt",
+    ),
     // 业务域（移动端配置页 / 快捷指令页）
     ("configs", "/api/configs", &["GET"], "jwt"),
     ("quick-actions", "/api/quick-actions", &["GET"], "jwt"),
     // 文件浏览域（移动端文件面板）
     ("file-tree", "/api/file-tree", &["POST"], "jwt"),
-    ("file-tree-children", "/api/file-tree-children", &["GET"], "jwt"),
+    (
+        "file-tree-children",
+        "/api/file-tree-children",
+        &["GET"],
+        "jwt",
+    ),
     ("file-content", "/api/file-content", &["POST"], "jwt"),
     ("file-diff", "/api/file-diff", &["POST"], "jwt"),
     ("diff-tree", "/api/diff-tree", &["POST"], "jwt"),
@@ -391,8 +456,18 @@ const FROZEN_GATEWAY_ALIASES: &[(&str, &str, &[&str], &str)] = &[
         &["POST"],
         "none",
     ),
-    ("auth/biometric-verify", "/api/auth/biometric-verify", &["POST"], "none"),
-    ("auth/biometric-bind", "/api/auth/biometric-bind", &["POST"], "none"),
+    (
+        "auth/biometric-verify",
+        "/api/auth/biometric-verify",
+        &["POST"],
+        "none",
+    ),
+    (
+        "auth/biometric-bind",
+        "/api/auth/biometric-bind",
+        &["POST"],
+        "none",
+    ),
     // 终端背景图（宿主静态路由；CSS background-image 无法携带认证头）
     ("terminal-bg", "/static/terminal-bg", &["GET"], "none"),
 ];
@@ -400,14 +475,25 @@ const FROZEN_GATEWAY_ALIASES: &[(&str, &str, &[&str], &str)] = &[
 /// 探测空闲端口：绑 `127.0.0.1:0` 由 OS 分配，立即释放后交给服务器绑定
 fn pick_free_port() -> u16 {
     let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("probe free port failed");
-    listener.local_addr().expect("read probed port failed").port()
+    listener
+        .local_addr()
+        .expect("read probed port failed")
+        .port()
 }
 
 /// 发一个请求；连接失败（服务器 worker 未就绪）时按 25ms 重试直至超时
-async fn send_until(request: reqwest::RequestBuilder, timeout: Duration) -> reqwest::Result<reqwest::Response> {
+async fn send_until(
+    request: reqwest::RequestBuilder,
+    timeout: Duration,
+) -> reqwest::Result<reqwest::Response> {
     let deadline = std::time::Instant::now() + timeout;
     loop {
-        match request.try_clone().expect("request must be cloneable").send().await {
+        match request
+            .try_clone()
+            .expect("request must be cloneable")
+            .send()
+            .await
+        {
             Ok(resp) => return Ok(resp),
             Err(_) if std::time::Instant::now() < deadline => {
                 tokio::time::sleep(Duration::from_millis(25)).await;
@@ -420,7 +506,8 @@ async fn send_until(request: reqwest::RequestBuilder, timeout: Duration) -> reqw
 
 async fn body_json(resp: reqwest::Response) -> Value {
     let bytes = resp.bytes().await.expect("read response body failed");
-    serde_json::from_slice(&bytes).unwrap_or_else(|e| panic!("response body must be valid JSON: {e}; raw={:?}", bytes))
+    serde_json::from_slice(&bytes)
+        .unwrap_or_else(|e| panic!("response body must be valid JSON: {e}; raw={:?}", bytes))
 }
 
 /// 把模板别名里的 `{name}` 段替换成具体值（与移动端实际请求同形）
@@ -462,7 +549,8 @@ fn decl_of(path: &str) -> &'static HttpRouteDecl {
 /// 共享的总线句柄必须回传给腿 B（它的正向证据在那里）；转发记账回传给腿 A
 /// （它逐条断言入参形状）。
 fn ports_once() -> (Arc<PilotBus>, Arc<ForwardLog>, PathBuf) {
-    static ONCE: std::sync::OnceLock<(Arc<PilotBus>, Arc<ForwardLog>, PathBuf)> = std::sync::OnceLock::new();
+    static ONCE: std::sync::OnceLock<(Arc<PilotBus>, Arc<ForwardLog>, PathBuf)> =
+        std::sync::OnceLock::new();
     ONCE.get_or_init(|| {
         let bus = Arc::new(PilotBus::default());
         let log = Arc::new(ForwardLog::default());
@@ -476,7 +564,9 @@ fn ports_once() -> (Arc<PilotBus>, Arc<ForwardLog>, PathBuf) {
             auth_center: Arc::new(PilotAuthCenter),
             bus: bus.clone(),
             event_sink: Arc::new(PilotEventSink),
-            paths: Arc::new(PilotPaths { data_dir: path.clone() }),
+            paths: Arc::new(PilotPaths {
+                data_dir: path.clone(),
+            }),
             system_info: Arc::new(SystemInfoProbe),
             power: Arc::new(PilotPowerPort),
             mdns_advertiser: Arc::new(PilotMdnsAdvertiser),
@@ -494,7 +584,8 @@ fn ports_once() -> (Arc<PilotBus>, Arc<ForwardLog>, PathBuf) {
     .clone()
 }
 
-static ONCE_DIR: std::sync::OnceLock<&'static std::mem::ManuallyDrop<tempfile::TempDir>> = std::sync::OnceLock::new();
+static ONCE_DIR: std::sync::OnceLock<&'static std::mem::ManuallyDrop<tempfile::TempDir>> =
+    std::sync::OnceLock::new();
 
 /// 两条腿的串行锁
 ///
@@ -602,7 +693,11 @@ async fn http_routes_reach_the_plugin_edge_with_declared_method_and_auth_tier() 
         // 四元组是 `(内部段, 别名, 方法, 档位)`：第三个是 `methods`，**档位在第四位**
         .map(|(path, alias, _, auth)| (*path, *alias, *auth))
         .collect();
-    assert_eq!(gateway_aliased.len(), 24, "网关别名数 = 业务 10 + auth 7 + sessions 7");
+    assert_eq!(
+        gateway_aliased.len(),
+        24,
+        "网关别名数 = 业务 10 + auth 7 + sessions 7"
+    );
     assert_eq!(
         static_aliased.len(),
         1,
@@ -641,7 +736,10 @@ async fn http_routes_reach_the_plugin_edge_with_declared_method_and_auth_tier() 
     let calls = log.take();
     assert_eq!(
         calls.len(),
-        gateway_aliased.iter().map(|(_, _, m)| m.len()).sum::<usize>(),
+        gateway_aliased
+            .iter()
+            .map(|(_, _, m)| m.len())
+            .sum::<usize>(),
         "每次成功转发必须恰好一条记账（多 = 重试重入；少 = 网关吞了请求）"
     );
 
@@ -655,7 +753,11 @@ async fn http_routes_reach_the_plugin_edge_with_declared_method_and_auth_tier() 
         let seen = by_path
             .get(*decl_path)
             .unwrap_or_else(|| panic!("{decl_path} 声明了别名却零转发记账"));
-        assert_eq!(seen.len(), methods.len(), "{decl_path} 转发次数与声明方法数不符");
+        assert_eq!(
+            seen.len(),
+            methods.len(),
+            "{decl_path} 转发次数与声明方法数不符"
+        );
         let mut got: Vec<&str> = seen.iter().map(|c| c["method"].as_str().unwrap()).collect();
         got.sort_unstable();
         let mut want: Vec<&str> = methods.iter().copied().collect();
@@ -720,9 +822,14 @@ async fn http_routes_reach_the_plugin_edge_with_declared_method_and_auth_tier() 
     // 这里要验的是「别名 + 档位」这一对在网关上的行为。
     let none_routes: Vec<&HttpRouteDecl> = ROUTES
         .iter()
-        .filter(|r| r.auth == "none" && r.host.is_some() && r.host.expect("is_some").starts_with("/api/"))
+        .filter(|r| {
+            r.auth == "none" && r.host.is_some() && r.host.expect("is_some").starts_with("/api/")
+        })
         .collect();
-    let jwt_routes: Vec<&HttpRouteDecl> = ROUTES.iter().filter(|r| r.auth == "jwt" && r.host.is_some()).collect();
+    let jwt_routes: Vec<&HttpRouteDecl> = ROUTES
+        .iter()
+        .filter(|r| r.auth == "jwt" && r.host.is_some())
+        .collect();
     assert!(!none_routes.is_empty() && !jwt_routes.is_empty());
     // 免凭证档必须逐条可交代（与插件内 `no_auth_routes_are_justified` 同一清单，
     // 这里从**网关行为**侧复核：标了 none 却仍要凭证 = 移动端配对链与 hook 直接断）
@@ -736,9 +843,12 @@ async fn http_routes_reach_the_plugin_edge_with_declared_method_and_auth_tier() 
     for decl in &none_routes {
         let alias = decl.host.expect("filtered by is_some");
         let url = format!("{base}{}", materialize(alias));
-        let resp = send_until(method_request(&client, decl.methods[0], &url, &json!({})), deadline)
-            .await
-            .expect("anonymous request must reach server");
+        let resp = send_until(
+            method_request(&client, decl.methods[0], &url, &json!({})),
+            deadline,
+        )
+        .await
+        .expect("anonymous request must reach server");
         assert_eq!(
             resp.status().as_u16(),
             200,
@@ -751,9 +861,12 @@ async fn http_routes_reach_the_plugin_edge_with_declared_method_and_auth_tier() 
     for decl in &jwt_routes {
         let alias = decl.host.expect("filtered by is_some");
         let url = format!("{base}{}", materialize(alias));
-        let resp = send_until(method_request(&client, decl.methods[0], &url, &json!({})), deadline)
-            .await
-            .expect("anonymous request must reach server");
+        let resp = send_until(
+            method_request(&client, decl.methods[0], &url, &json!({})),
+            deadline,
+        )
+        .await
+        .expect("anonymous request must reach server");
         assert_eq!(
             resp.status().as_u16(),
             401,
@@ -799,15 +912,25 @@ async fn http_routes_reach_the_plugin_edge_with_declared_method_and_auth_tier() 
     let internal_only: Vec<&HttpRouteDecl> = ROUTES.iter().filter(|r| r.host.is_none()).collect();
     assert!(!internal_only.is_empty(), "本插件应有只挂内部路径的端点");
     for decl in &internal_only {
-        let entry = bedcode_server_http::registry::find_by_internal(&format!("/api/plugin/{PLUGIN_ID}/{}", decl.path))
-            .unwrap_or_else(|| panic!("{} 未按内部路径登记", decl.path));
-        assert_eq!(entry.host_path, None, "{} 声明为仅内部端点，不得有对外别名", decl.path);
+        let entry = bedcode_server_http::registry::find_by_internal(&format!(
+            "/api/plugin/{PLUGIN_ID}/{}",
+            decl.path
+        ))
+        .unwrap_or_else(|| panic!("{} 未按内部路径登记", decl.path));
+        assert_eq!(
+            entry.host_path, None,
+            "{} 声明为仅内部端点，不得有对外别名",
+            decl.path
+        );
     }
     // 内部路径经插件代理前缀真可达（hook 脚本走的就是这条）
     let probe_internal = internal_only[0];
     let internal_url = format!("{base}/api/plugin/{PLUGIN_ID}/{}", probe_internal.path);
     let resp = send_until(
-        client.post(&internal_url).json(&json!({})).bearer_auth(VALID_TOKEN),
+        client
+            .post(&internal_url)
+            .json(&json!({}))
+            .bearer_auth(VALID_TOKEN),
         deadline,
     )
     .await
@@ -826,7 +949,11 @@ async fn http_routes_reach_the_plugin_edge_with_declared_method_and_auth_tier() 
     // `plugin_controller::plugin_http_auth_allowed` 按**注册表里的档位**判。档位写错
     // （该 none 写成 jwt）时这里的症状是 hook 静默 401：hook 脚本不检查响应体，
     // 于是表现为「任务面板偶尔不刷新」，极难归因。
-    let internal_none: Vec<&HttpRouteDecl> = internal_only.iter().copied().filter(|r| r.auth == "none").collect();
+    let internal_none: Vec<&HttpRouteDecl> = internal_only
+        .iter()
+        .copied()
+        .filter(|r| r.auth == "none")
+        .collect();
     assert_eq!(
         internal_none.len(),
         2,
@@ -834,9 +961,12 @@ async fn http_routes_reach_the_plugin_edge_with_declared_method_and_auth_tier() 
     );
     for decl in &internal_none {
         let url = format!("{base}/api/plugin/{PLUGIN_ID}/{}", decl.path);
-        let resp = send_until(method_request(&client, decl.methods[0], &url, &json!({})), deadline)
-            .await
-            .expect("anonymous internal request must reach server");
+        let resp = send_until(
+            method_request(&client, decl.methods[0], &url, &json!({})),
+            deadline,
+        )
+        .await
+        .expect("anonymous internal request must reach server");
         assert_eq!(
             resp.status().as_u16(),
             200,
@@ -845,7 +975,11 @@ async fn http_routes_reach_the_plugin_edge_with_declared_method_and_auth_tier() 
         );
     }
     // 反面：jwt 档的内部端点无凭证必须被拒（否则内部前缀成了免鉴权后门）
-    let internal_jwt: Vec<&HttpRouteDecl> = internal_only.iter().copied().filter(|r| r.auth == "jwt").collect();
+    let internal_jwt: Vec<&HttpRouteDecl> = internal_only
+        .iter()
+        .copied()
+        .filter(|r| r.auth == "jwt")
+        .collect();
     assert!(!internal_jwt.is_empty(), "应有 jwt 档内部端点可做反面样本");
     let jwt_internal = internal_jwt[0];
     let jwt_url = format!("{base}/api/plugin/{PLUGIN_ID}/{}", jwt_internal.path);
@@ -874,7 +1008,10 @@ async fn http_routes_reach_the_plugin_edge_with_declared_method_and_auth_tier() 
     let bg = static_aliased[0];
     let (bg_path, bg_alias, bg_auth) = bg;
     assert_eq!(bg_path, "terminal-bg");
-    assert_eq!(bg_auth, "none", "终端背景图必须是 none 档（CSS 无法携带认证头）");
+    assert_eq!(
+        bg_auth, "none",
+        "终端背景图必须是 none 档（CSS 无法携带认证头）"
+    );
     let bg_url = format!("{base}{bg_alias}");
     let bg_file = data_dir.join(format!(
         "{}.png",
@@ -908,7 +1045,10 @@ async fn http_routes_reach_the_plugin_edge_with_declared_method_and_auth_tier() 
         "{bg_alias} 数据目录有图片时必须 200（注册表门控 + 激活 + 目录解析 + 文件读取）"
     );
     assert_eq!(
-        with_file.headers().get("content-type").and_then(|v| v.to_str().ok()),
+        with_file
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok()),
         Some("image/png"),
         "{bg_alias} 必须按扩展名回 image/png"
     );
@@ -928,7 +1068,12 @@ async fn http_routes_reach_the_plugin_edge_with_declared_method_and_auth_tier() 
 ///
 /// 避开链式 `.json()`：那条 API 只在带 body 的 `post()` 上有；DELETE 等方法用
 /// `.body()` + `content-type` 逐字等效（宿主 `body_value` 只看字节与 JSON 可解析性）。
-fn method_request(client: &reqwest::Client, method: &str, url: &str, body: &Value) -> reqwest::RequestBuilder {
+fn method_request(
+    client: &reqwest::Client,
+    method: &str,
+    url: &str,
+    body: &Value,
+) -> reqwest::RequestBuilder {
     let verb = reqwest::Method::from_bytes(method.as_bytes())
         .unwrap_or_else(|e| panic!("ROUTES 声明了非法 HTTP 方法 {method}：{e}"));
     client
@@ -1039,18 +1184,25 @@ async fn manifest_ws_endpoints_mount_and_gate_on_real_websocket_face() {
     for (i, mount) in mounted.iter().enumerate() {
         let url = format!("ws://127.0.0.1:{port}{mount}");
         // --- 负例：错 token → 4001 ---
-        let (mut ws, _) = tokio::time::timeout(Duration::from_secs(10), tokio_tungstenite::connect_async(&url))
-            .await
-            .unwrap_or_else(|_| panic!("{mount} 升级探测超时（端点已挂载但连不上）"))
-            .unwrap_or_else(|e| panic!("{mount} 升级失败（已挂载的端点必须可升级）：{e}"));
+        let (mut ws, _) = tokio::time::timeout(
+            Duration::from_secs(10),
+            tokio_tungstenite::connect_async(&url),
+        )
+        .await
+        .unwrap_or_else(|_| panic!("{mount} 升级探测超时（端点已挂载但连不上）"))
+        .unwrap_or_else(|e| panic!("{mount} 升级失败（已挂载的端点必须可升级）：{e}"));
         ws.send(tokio_tungstenite::tungstenite::Message::Text(
-            json!({ "type": "auth", "token": "wrong-token" }).to_string().into(),
+            json!({ "type": "auth", "token": "wrong-token" })
+                .to_string()
+                .into(),
         ))
         .await
         .expect("send auth frame");
         let reply = tokio::time::timeout(Duration::from_secs(10), ws.next())
             .await
-            .unwrap_or_else(|_| panic!("{mount} 错 token 后服务端未在窗口内断连（闸门失效 = 无限期挂起连接）"))
+            .unwrap_or_else(|_| {
+                panic!("{mount} 错 token 后服务端未在窗口内断连（闸门失效 = 无限期挂起连接）")
+            })
             .expect("stream not closed")
             .expect("read frame");
         match reply {
@@ -1065,12 +1217,17 @@ async fn manifest_ws_endpoints_mount_and_gate_on_real_websocket_face() {
         }
 
         // --- 正例：对 token → 认证通过（接入事件是正面证据）---
-        let (mut ws, _) = tokio::time::timeout(Duration::from_secs(10), tokio_tungstenite::connect_async(&url))
-            .await
-            .expect("second upgrade probe must not hang")
-            .expect("second upgrade must succeed");
+        let (mut ws, _) = tokio::time::timeout(
+            Duration::from_secs(10),
+            tokio_tungstenite::connect_async(&url),
+        )
+        .await
+        .expect("second upgrade probe must not hang")
+        .expect("second upgrade must succeed");
         ws.send(tokio_tungstenite::tungstenite::Message::Text(
-            json!({ "type": "auth", "token": VALID_TOKEN }).to_string().into(),
+            json!({ "type": "auth", "token": VALID_TOKEN })
+                .to_string()
+                .into(),
         ))
         .await
         .expect("send valid auth frame");
@@ -1083,7 +1240,9 @@ async fn manifest_ws_endpoints_mount_and_gate_on_real_websocket_face() {
                     "{mount} 认证通过后接入事件必须标 authenticated=true"
                 );
                 assert_eq!(
-                    payload["endpointId"].as_str().is_some_and(|e| e.starts_with("wse-")),
+                    payload["endpointId"]
+                        .as_str()
+                        .is_some_and(|e| e.starts_with("wse-")),
                     true,
                     "{mount} 接入事件必须带端点句柄（wse- 前缀，插件据此定位端点）"
                 );

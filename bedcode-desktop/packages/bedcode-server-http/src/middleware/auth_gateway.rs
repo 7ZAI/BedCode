@@ -143,36 +143,15 @@ where
     Ok(ServiceResponse::new(req, response))
 }
 
+// ==================== Tests ====================
+
+// 用例按功能拆至 `auth_gateway/tests/`（本内联模块的子模块路径由 rustc
+// 自动解析到该目录；模块树 `middleware::auth_gateway::tests::<文件>` 与内联形态等价，私有项可见性不受影响）。
 #[cfg(test)]
 mod tests {
     use super::*;
     use actix_web::web;
-
-    /// 宿主自持公开端点只剩 `/api/health` 与 `/health`（历史别名）。
-    /// `/api/auth/*` 的前缀放行规则已随 ABI v29 路由下沉退役——公开判定走动态
-    /// 注册表档位（`auth: "none"` 精确匹配），不再是宿主中间件的前缀规则。
-    #[test]
-    fn host_public_paths_are_only_health() {
-        assert!(is_public_path("/api/health"));
-        assert!(is_public_path("/health"));
-        // 票 07 起 /api/auth/* 编排归插件：公开性由插件注册档位声明（none），
-        // 不再由宿主前缀规则放行
-        assert!(!is_public_path("/api/auth/pairing"));
-        assert!(!is_public_path("/api/auth/verify"));
-        assert!(!is_public_path("/api/auth/biometric-challenge"));
-        assert!(!is_public_path("/api/auth/biometric-bind"));
-    }
-
-    #[test]
-    fn non_public_paths_require_auth() {
-        assert!(!is_public_path("/api/sessions"));
-        assert!(!is_public_path("/api/settings"));
-        assert!(!is_public_path("/"));
-        // 前缀相似但路径不同，不应误放行
-        assert!(!is_public_path("/api/authx"));
-        assert!(!is_public_path("/api/authbiometric"));
-        assert!(!is_public_path("/api/healthz"));
-    }
+    // 跨分组共享的测试脚手架（子模块经 `use super::*` 可见）
 
     /// ABI v29：公开判定走注册表档位——插件登记 `auth: "none"` 的别名免验签放行
     /// （真实中间件栈：注册公开别名 → 无 token 请求通过 auth_gateway 到哨兵）
@@ -218,7 +197,6 @@ mod tests {
 
         crate::registry::purge_for_plugin(owner);
     }
-
     /// ABI v29：`jwt` 档别名 / 未登记路径无 token → 401（受保护默认，不静默放行）
     #[actix_web::test]
     async fn jwt_tier_alias_without_token_is_401() {
@@ -263,17 +241,6 @@ mod tests {
 
         crate::registry::purge_for_plugin(owner);
     }
-
-    #[test]
-    fn plugin_paths_are_recognized() {
-        assert!(is_plugin_path("/api/plugin/com.bedcode.demo/execute"));
-        assert!(is_plugin_path("/api/plugin/"));
-        // 非插件路径与仅前缀（无尾斜杠）不匹配
-        assert!(!is_plugin_path("/api/sessions"));
-        assert!(!is_plugin_path("/api/plugin"));
-        assert!(!is_plugin_path("/api/plugin2/"));
-    }
-
     // ==================== ADR 0033：认证问中心（中间件单测） ====================
     //
     // v33 起宿主**没有签发面也没有验签面**（`utils/auth/jwt.rs` 已退役），故本层
@@ -282,7 +249,6 @@ mod tests {
     // ② 无运行时上下文（无头 / 单测）时**一律拒**（fail-closed 的可观测形态之一）。
     // 「合法凭证放行」那一半在 in-crate 闭环用例里用**真实中心产物**断言
     // （`wasm_core/manager/host/tests/system_component_test.rs`）——那里才有中心。
-
     /// 构造带 Authorization: Bearer 头的 ServiceRequest
     fn srv_req_with_bearer(token: &str) -> actix_web::dev::ServiceRequest {
         use actix_web::test;
@@ -291,56 +257,6 @@ mod tests {
             .insert_header(("Authorization", format!("Bearer {}", token)))
             .to_srv_request()
     }
-
-    /// 凭证提取：Bearer scheme 逐字取出；缺头 / 非 Bearer / 畸形 scheme → None
-    #[test]
-    fn bearer_credential_extraction_matrix() {
-        let req = srv_req_with_bearer("token-abc");
-        assert_eq!(bearer_credential(&req), Some("token-abc"));
-        // 只剥前缀、不 trim：凭证原样交中心判定（空格/空串都原样透传，
-        // 判「形不对」是中心的活，提取层不猜）
-        assert_eq!(bearer_credential(&srv_req_with_bearer(" ")), Some(" "));
-        assert_eq!(bearer_credential(&srv_req_with_bearer("")), Some(""));
-
-        // 无 Authorization 头
-        let req = actix_web::test::TestRequest::get()
-            .uri("/api/sessions")
-            .to_srv_request();
-        assert_eq!(bearer_credential(&req), None, "无 Authorization 头 → None");
-
-        // 非 Bearer scheme
-        for scheme in ["Basic abc", "bearer token-abc", "Token token-abc"] {
-            let req = actix_web::test::TestRequest::get()
-                .uri("/api/sessions")
-                .insert_header(("Authorization", scheme))
-                .to_srv_request();
-            assert_eq!(bearer_credential(&req), None, "非 Bearer scheme: {scheme}");
-        }
-    }
-
-    /// 无端口注册表（无头 / 单测）时**任何**凭证都拿不到身份 → fail-closed。
-    ///
-    /// 这条不是「测试环境将就」：它锁的是「本面不得在没有中心的情况下放行」——
-    /// 中间件里已经没有任何本地验签面，凭证形如与否都不影响结论。
-    /// 前提断言取 `ports::get()`（票 04 后面不认识宿主 AppContext，
-    /// 注入与否的唯一可观测形态就是端口注册表本身）。
-    #[test]
-    fn no_runtime_context_denies_every_credential() {
-        assert!(
-            bedcode_server_base::ports::get().is_none(),
-            "本用例前提：单测上下文未注入宿主端口实现"
-        );
-        for token in ["not-a-jwt", "a.b.c", "", "eyJhbGciOiJIUzI1NiJ9.e30.x"] {
-            let req = srv_req_with_bearer(token);
-            assert!(
-                authenticate_with_center(&req).is_none(),
-                "无中心在册时凭证一律不得放行: {token}"
-            );
-        }
-        // 无 Authorization 头同样 None
-        let req = actix_web::test::TestRequest::get()
-            .uri("/api/sessions")
-            .to_srv_request();
-        assert!(authenticate_with_center(&req).is_none());
-    }
+    mod host_public_paths_are_only;
+    mod adr_0033;
 }

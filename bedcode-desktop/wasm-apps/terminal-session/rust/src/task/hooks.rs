@@ -51,9 +51,7 @@ pub fn ensure_agent_integration(
         SessionIntegration::OpenCodePlugin => {
             ensure_opencode_plugin(host, working_dir, port, resource_dir)
         }
-        SessionIntegration::CodexHooks => {
-            ensure_codex_hooks(host, working_dir, port, resource_dir)
-        }
+        SessionIntegration::CodexHooks => ensure_codex_hooks(host, working_dir, port, resource_dir),
         SessionIntegration::None => {
             host.log_debug(&format!(
                 "ensure_agent_integration: agent '{}' has no session integration, skip",
@@ -274,7 +272,12 @@ pub fn ensure_project_hooks(
     // 3. 构建 hooks 配置并写入项目 settings.json
     //    解释器按宿主平台选择：Windows 用 `python`，Linux/macOS 用 `python3`
     //    （多数 Linux 发行版不提供 `python` 命令，只有 `python3`）
-    let hooks_config = build_hooks_config(port, &hook_script_path, python_interpreter(host), host_is_windows(host));
+    let hooks_config = build_hooks_config(
+        port,
+        &hook_script_path,
+        python_interpreter(host),
+        host_is_windows(host),
+    );
 
     // 合并 hooks：保留非插件 hooks，添加插件 hooks
     let existing_hooks = settings
@@ -815,10 +818,7 @@ pub fn ensure_opencode_plugin(
 
     let target = format!(
         "{}/{}/{}/{}",
-        working_dir,
-        OPENCODE_CONFIG_DIR_NAME,
-        OPENCODE_PLUGINS_DIR_NAME,
-        OPENCODE_HOOK_SCRIPT_NAME
+        working_dir, OPENCODE_CONFIG_DIR_NAME, OPENCODE_PLUGINS_DIR_NAME, OPENCODE_HOOK_SCRIPT_NAME
     );
     let source = format!("{}/{}", resource_dir, OPENCODE_HOOK_SCRIPT_NAME);
     host.log_debug(&format!(
@@ -917,10 +917,7 @@ pub fn ensure_opencode_plugin(
 pub fn cleanup_opencode_plugin(host: &WasmHost, working_dir: &str) -> AgentIntegrationResult {
     let target = format!(
         "{}/{}/{}/{}",
-        working_dir,
-        OPENCODE_CONFIG_DIR_NAME,
-        OPENCODE_PLUGINS_DIR_NAME,
-        OPENCODE_HOOK_SCRIPT_NAME
+        working_dir, OPENCODE_CONFIG_DIR_NAME, OPENCODE_PLUGINS_DIR_NAME, OPENCODE_HOOK_SCRIPT_NAME
     );
     host.log_debug(&format!("cleanup_opencode_plugin: target={:?}", target));
 
@@ -1075,10 +1072,8 @@ pub fn ensure_codex_hooks(
     // 2. 端口与脚本模板版本均匹配 → 跳过；任一不匹配 → 重新部署
     //    （谓词接内层 `hooks` 对象——顶层是整个 hooks.json 文件，真 hooks 在
     //    `"hooks"` 键下；传顶层会让谓词恒 false，每次建会话都重拷脚本重写）
-    let inner_hooks: serde_json::Value = hooks
-        .get("hooks")
-        .cloned()
-        .unwrap_or(serde_json::json!({}));
+    let inner_hooks: serde_json::Value =
+        hooks.get("hooks").cloned().unwrap_or(serde_json::json!({}));
     let needs_update = if is_codex_hooks_configured(&inner_hooks) {
         let port_matches = codex_hooks_port_matching(&inner_hooks, port);
         let script_version_matches = match host.fs_read(&hook_script_path) {
@@ -1121,11 +1116,13 @@ pub fn ensure_codex_hooks(
     }
 
     // 4. 构建 hooks 配置并合并写入（保留用户自有 hooks 条目）
-    let hooks_config = build_codex_hooks_config(port, &hook_script_path, python_interpreter(host), host_is_windows(host));
-    let existing_hooks = hooks
-        .get("hooks")
-        .cloned()
-        .unwrap_or(serde_json::json!({}));
+    let hooks_config = build_codex_hooks_config(
+        port,
+        &hook_script_path,
+        python_interpreter(host),
+        host_is_windows(host),
+    );
+    let existing_hooks = hooks.get("hooks").cloned().unwrap_or(serde_json::json!({}));
     hooks["hooks"] = merge_codex_hooks(&existing_hooks, &hooks_config);
 
     let content = match serde_json::to_string_pretty(&hooks) {
@@ -1182,11 +1179,7 @@ pub fn cleanup_codex_hooks(host: &WasmHost, working_dir: &str) -> AgentIntegrati
         if is_codex_hooks_configured(&existing) {
             had_codex_hooks = true;
             let cleaned = remove_codex_hooks(&existing);
-            if cleaned
-                .as_object()
-                .map(|o| o.is_empty())
-                .unwrap_or(true)
-            {
+            if cleaned.as_object().map(|o| o.is_empty()).unwrap_or(true) {
                 hooks.as_object_mut().map(|o| o.remove("hooks"));
             } else {
                 hooks["hooks"] = cleaned;
@@ -1352,7 +1345,10 @@ fn build_hooks_config(
         "{}{} {} user-prompt-submit",
         env_prefix, python_cmd, quoted_script
     );
-    let pre_tool_use_cmd = format!("{}{} {} pre-tool-use", env_prefix, python_cmd, quoted_script);
+    let pre_tool_use_cmd = format!(
+        "{}{} {} pre-tool-use",
+        env_prefix, python_cmd, quoted_script
+    );
     let post_tool_use_cmd = format!(
         "{}{} {} post-tool-use",
         env_prefix, python_cmd, quoted_script
@@ -1361,7 +1357,10 @@ fn build_hooks_config(
         "{}{} {} post-tool-use-fail",
         env_prefix, python_cmd, quoted_script
     );
-    let notification_cmd = format!("{}{} {} notification", env_prefix, python_cmd, quoted_script);
+    let notification_cmd = format!(
+        "{}{} {} notification",
+        env_prefix, python_cmd, quoted_script
+    );
     let stop_cmd = format!("{}{} {} stop", env_prefix, python_cmd, quoted_script);
     let stop_failure_cmd = format!(
         "{}{} {} stop-failure",
@@ -1812,8 +1811,7 @@ fn merge_script_hooks(
                     // 去插件化——只剔除插件命令，保留同组内用户 hook（旧实现整组
                     // 有插件 hook 就整组丢，用户 hook 被连带删除）
                     for event in existing_events {
-                        let Some(hook_list) = event.get("hooks").and_then(|v| v.as_array())
-                        else {
+                        let Some(hook_list) = event.get("hooks").and_then(|v| v.as_array()) else {
                             // matcher-only 事件：不涉及命令，原样保留
                             merged_events.push(event.clone());
                             continue;
@@ -1950,18 +1948,29 @@ mod tests {
 
     #[test]
     fn build_hooks_config_linux_uses_python3() {
-        let config = build_hooks_config(8765, r"/home/u/proj/.claude/auto_task_hook.py", "python3", false);
+        let config = build_hooks_config(
+            8765,
+            r"/home/u/proj/.claude/auto_task_hook.py",
+            "python3",
+            false,
+        );
         let hooks = config.as_object().expect("hooks config must be an object");
         for (_event, groups) in hooks {
             for group in groups.as_array().expect("hook group must be array") {
                 for hook in group["hooks"].as_array().expect("hook list must be array") {
                     let cmd = hook["command"].as_str().unwrap_or_default();
                     assert!(
-                        cmd.starts_with("BEDCODE_PORT=8765 python3 \"/home/u/proj/.claude/auto_task_hook.py\""),
+                        cmd.starts_with(
+                            "BEDCODE_PORT=8765 python3 \"/home/u/proj/.claude/auto_task_hook.py\""
+                        ),
                         "command should invoke python3 on linux: {}",
                         cmd
                     );
-                    assert!(!cmd.contains(" python \""), "must not use bare python: {}", cmd);
+                    assert!(
+                        !cmd.contains(" python \""),
+                        "must not use bare python: {}",
+                        cmd
+                    );
                 }
             }
         }
@@ -1969,18 +1978,29 @@ mod tests {
 
     #[test]
     fn build_codex_hooks_config_linux_uses_python3() {
-        let config = build_codex_hooks_config(8765, r"/home/u/proj/.codex/codex_task_hook.py", "python3", false);
+        let config = build_codex_hooks_config(
+            8765,
+            r"/home/u/proj/.codex/codex_task_hook.py",
+            "python3",
+            false,
+        );
         let hooks = config.as_object().expect("hooks config must be an object");
         for (_event, groups) in hooks {
             for group in groups.as_array().expect("hook group must be array") {
                 for hook in group["hooks"].as_array().expect("hook list must be array") {
                     let cmd = hook["command"].as_str().unwrap_or_default();
                     assert!(
-                        cmd.starts_with("BEDCODE_PORT=8765 python3 \"/home/u/proj/.codex/codex_task_hook.py\""),
+                        cmd.starts_with(
+                            "BEDCODE_PORT=8765 python3 \"/home/u/proj/.codex/codex_task_hook.py\""
+                        ),
                         "command should invoke python3 on linux: {}",
                         cmd
                     );
-                    assert!(!cmd.contains(" python \""), "must not use bare python: {}", cmd);
+                    assert!(
+                        !cmd.contains(" python \""),
+                        "must not use bare python: {}",
+                        cmd
+                    );
                 }
             }
         }
@@ -1988,10 +2008,13 @@ mod tests {
 
     #[test]
     fn claude_hook_version_marker_matching() {
-        let content = format!("# @bedcode-template-version {CLAUDE_HOOK_TEMPLATE_VERSION}\nprint('ok')\n");
+        let content =
+            format!("# @bedcode-template-version {CLAUDE_HOOK_TEMPLATE_VERSION}\nprint('ok')\n");
         assert!(claude_hook_version_matches(&content));
         assert!(!claude_hook_version_matches("no marker here"));
-        assert!(!claude_hook_version_matches("# @bedcode-template-version 99999"));
+        assert!(!claude_hook_version_matches(
+            "# @bedcode-template-version 99999"
+        ));
     }
 
     #[test]
@@ -2003,12 +2026,8 @@ mod tests {
 
     #[test]
     fn build_codex_hooks_config_registers_full_state_machine() {
-        let config = build_codex_hooks_config(
-            9876,
-            r"C:\proj\.codex\codex_task_hook.py",
-            "python",
-            true,
-        );
+        let config =
+            build_codex_hooks_config(9876, r"C:\proj\.codex\codex_task_hook.py", "python", true);
         let hooks = config.as_object().expect("hooks config must be an object");
 
         for event in [
@@ -2025,10 +2044,7 @@ mod tests {
         }
 
         // compact 发生在任务运行中途，推 idle 会误伤任务状态，必须排除
-        assert_eq!(
-            hooks["SessionStart"][0]["matcher"],
-            "startup|resume|clear"
-        );
+        assert_eq!(hooks["SessionStart"][0]["matcher"], "startup|resume|clear");
         // SessionEnd 是 advisory：Codex 上限 3 秒，超时会被杀死
         assert_eq!(hooks["SessionEnd"][0]["hooks"][0]["timeout"], 3);
 
@@ -2113,7 +2129,8 @@ mod tests {
                 { "hooks": [{ "type": "command", "command": "user-end-hook" }] }
             ]
         });
-        let plugin = build_codex_hooks_config(8765, r"C:\proj\.codex\codex_task_hook.py", "python", true);
+        let plugin =
+            build_codex_hooks_config(8765, r"C:\proj\.codex\codex_task_hook.py", "python", true);
 
         let merged = merge_codex_hooks(&existing, &plugin);
         let stop = merged["Stop"].as_array().expect("Stop must remain");
@@ -2158,14 +2175,16 @@ mod tests {
         assert!(stop
             .iter()
             .any(|g| g["hooks"][0]["command"].as_str() == Some("user-stop-hook")));
-        assert!(stop
-            .iter()
-            .any(|g| g["hooks"][0]["command"].as_str().unwrap_or_default().contains("codex_task_hook.py")));
+        assert!(stop.iter().any(|g| g["hooks"][0]["command"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("codex_task_hook.py")));
     }
 
     #[test]
     fn codex_hooks_port_matching_detects_current_port() {
-        let hooks = build_codex_hooks_config(8765, r"C:\proj\.codex\codex_task_hook.py", "python", true);
+        let hooks =
+            build_codex_hooks_config(8765, r"C:\proj\.codex\codex_task_hook.py", "python", true);
         assert!(codex_hooks_port_matching(&hooks, 8765));
         assert!(!codex_hooks_port_matching(&hooks, 9000));
     }
@@ -2173,9 +2192,12 @@ mod tests {
     #[test]
     fn codex_hook_version_marker_matching() {
         // 标记取常量：bump 版本时不必再手改字面量（否则一漏改即假绿）
-        let content = format!("# @bedcode-template-version {CODEX_HOOK_TEMPLATE_VERSION}\nprint('ok')\n");
+        let content =
+            format!("# @bedcode-template-version {CODEX_HOOK_TEMPLATE_VERSION}\nprint('ok')\n");
         assert!(codex_hook_version_matches(&content));
         assert!(!codex_hook_version_matches("no marker here"));
-        assert!(!codex_hook_version_matches("# @bedcode-template-version 99999"));
+        assert!(!codex_hook_version_matches(
+            "# @bedcode-template-version 99999"
+        ));
     }
 }

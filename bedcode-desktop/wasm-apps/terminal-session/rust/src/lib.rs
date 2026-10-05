@@ -31,31 +31,33 @@
 
 /// 会话动作域（票 10）：重启 / 移除 / 改名编排 + 尺寸正统端裁决
 mod actions;
-/// 认证记录域（2026-09-22 下沉）：配对设备 + 连接历史真源 = 本插件私有库，
-/// 宿主 host-auth 记录面原语退役后本域自持（见模块文档）
-pub mod auth_records;
 /// 认证链 HTTP 编排域（票 07）：/api/auth/* 七端点 + JWT 签发 + 挑战状态机
 /// （密钥托管与信任表留宿主，经 host-auth 原语回调统一认证，见模块文档）
 pub mod auth_http;
+/// 认证记录域（2026-09-22 下沉）：配对设备 + 连接历史真源 = 本插件私有库，
+/// 宿主 host-auth 记录面原语退役后本域自持（见模块文档）
+pub mod auth_records;
 /// 会话配置域（票 08）：真源在本插件私有库，见模块文档
 pub mod config;
 mod consent;
 /// 设备与配对域命令面（票 14）：设备页前端的配对码 / QR / 网络信息 / 设备列表 /
 /// 连接历史 / 有效期设置入口（非互调 api，不进 manifest.api）
 mod device_face;
+/// 设备派生视图（票 11）：在线判定 + 真实会话数 + 任务状态合并且注解槽写面
+mod devices;
 /// 设备连接事件域（票 07）：WS 生命周期事件驱动设备派生事件 + 认证记录
 /// touch/close（宿主不再代做，见模块文档）
 mod devices_events;
-/// 设备派生视图（票 11）：在线判定 + 真实会话数 + 任务状态合并且注解槽写面
-mod devices;
 /// 执行环境平台事实（票 13）：WSL 发行版枚举（host-platform 原语）
 mod environment;
-/// HTTP 路由代码注册（ABI v29 服务端域）：activate 期注册自身全部路由，单一事实源
-mod http_routes;
-/// 会话创建编排（票 09）：命名唯一化 / config→launch spec 映射 / 两阶段启动决策
-mod launch;
 /// 文件浏览域（票 03）：文件树 / 内容 / diff（host-fs + host-process，见模块文档）
 pub mod file_browse;
+/// HTTP 路由代码注册（ABI v29 服务端域）：activate 期注册自身全部路由，单一事实源
+mod http_routes;
+/// 按键组合 → 转义字节翻译（票 06 下沉）：宿主 pty 只收裸字节，本插件自译自写
+mod keys;
+/// 会话创建编排（票 09）：命名唯一化 / config→launch spec 映射 / 两阶段启动决策
+mod launch;
 /// 终端输出拉取域（票 04）：经 host-session output-ring-fetch 原语拉取会话输出字节
 mod output;
 mod pairing;
@@ -71,15 +73,13 @@ pub mod session;
 pub mod sessions_http;
 /// 任务域（票 15-16）：Agent 集成与会话状态 + 队列/定时后端（见模块文档）
 pub mod task;
-/// 按键组合 → 转义字节翻译（票 06 下沉）：宿主 pty 只收裸字节，本插件自译自写
-mod keys;
+mod trust;
 /// WS 会话控制域（票 09b/09c）：动作词表分派 + 声明端点帧协议
 mod ws_control;
-mod ws_terminal;
 /// WS 业务事件广播出口（移动端适配专项票 02）：`session-control` 端点广播的
 /// 唯一出口 + 载荷形状真源，见模块文档
 pub mod ws_events;
-mod trust;
+mod ws_terminal;
 
 use bedcode_plugin_api::host::{HostAuth, HostBus, HostLog, HostStorage, HostTimer, HostWebsocket};
 use bedcode_plugin_api::types::PluginManifest;
@@ -732,9 +732,9 @@ fn qr_generate(ttl: u64) -> Result<serde_json::Value, String> {
     let token = manager.generate(ttl);
     // 刚生成的 token 必须活跃：若管理器实现异常（生成即不可见），显性报错而不
     // abort 整个插件（非测试路径 expect 会把 WASM 插件 trap）
-    let (_, ttl, remaining) = manager.get_active().ok_or_else(|| {
-        format!("qr token generate produced no active token (ttl={ttl})")
-    })?;
+    let (_, ttl, remaining) = manager
+        .get_active()
+        .ok_or_else(|| format!("qr token generate produced no active token (ttl={ttl})"))?;
     Ok(serde_json::json!({ "token": token, "ttl": ttl, "remaining": remaining }))
 }
 
@@ -761,7 +761,11 @@ fn resolve_endpoint_path(endpoint_id: &str) -> Option<String> {
     static CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, String>>> =
         std::sync::OnceLock::new();
     let cache = CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
-    if let Some(path) = cache.lock().unwrap_or_else(|e| e.into_inner()).get(endpoint_id) {
+    if let Some(path) = cache
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(endpoint_id)
+    {
         return Some(path.clone());
     }
     let listed = WasmHost.ws_list_endpoints().ok()?;
@@ -836,9 +840,8 @@ impl WasmPlugin for SessionPlugin {
             Ok(false) => {}
             Err(e) => host.log_warn(&format!("retired jwt.key purge failed (harmless): {}", e)),
         }
-        let keyring = pairing::keys::keyring_from_host_auth().map_err(|e| {
-            anyhow::anyhow!("auth keyring unavailable at activate: {e}")
-        })?;
+        let keyring = pairing::keys::keyring_from_host_auth()
+            .map_err(|e| anyhow::anyhow!("auth keyring unavailable at activate: {e}"))?;
         host.log_info(&format!(
             "device token signing key ready from plugin-owned keyring (kid {}, len {})",
             keyring.active_kid(),
@@ -894,9 +897,13 @@ impl WasmPlugin for SessionPlugin {
         // 继续激活只会让创建 / 停止 / 输入全线报「存储不可用」的半生不熟状态——
         // 显性失败让宿主把插件标记为不可用，用户路径立刻可见（不再降级镜像）。
         session::ensure_schema_via_host().map_err(|e| {
-            anyhow::anyhow!("session registry schema init failed at activate (session face unavailable): {e}")
+            anyhow::anyhow!(
+                "session registry schema init failed at activate (session face unavailable): {e}"
+            )
         })?;
-        host.log_info("session registry store ready (private tables sessions / session_annotations)");
+        host.log_info(
+            "session registry store ready (private tables sessions / session_annotations)",
+        );
         // 票 02：快捷指令域（第 4 域）建表（幂等）。与配置面同口径——失败只降级
         // 快捷指令面：配对 / 信任 / 会话 / 任务必须照常工作。迁移数据由宿主侧
         // handoff（quick_actions_migration）经互调 api 推送，不在此拉取。
@@ -1098,7 +1105,9 @@ impl WasmPlugin for SessionPlugin {
         // v32（ADR 0031 K1）：注销认证中心角色（仅属主本人；宿主 purge_for_plugin
         // 兜底回收）。注销失败不阻断停用流程——宿主侧回收兜底，故只留痕。
         if let Err(e) = host.auth_center_unregister() {
-            host.log_warn(&format!("auth center unregister failed (host purge backs up): {e}"));
+            host.log_warn(&format!(
+                "auth center unregister failed (host purge backs up): {e}"
+            ));
         }
         // ABI v29：路由回收依赖宿主停用 purge（同 host-websocket 先例）；
         // 此处留痕 + 状态自清（双保险）
@@ -1132,7 +1141,10 @@ impl WasmPlugin for SessionPlugin {
         // pty:exit（引擎按属主投递；topic = `<owner>::pty:exit`，payload
         // `{ ptyId, reason, exitCode? }` camelCase）→ 会话终态收尾
         if msg.topic
-            == bedcode_plugin_api::host::pty_event_topic(bedcode_plugin_api::host::PTY_EXIT, Self::ID)
+            == bedcode_plugin_api::host::pty_event_topic(
+                bedcode_plugin_api::host::PTY_EXIT,
+                Self::ID,
+            )
         {
             let pty_id = msg
                 .payload
@@ -1350,7 +1362,9 @@ impl WasmPlugin for SessionPlugin {
             // - 键盘输入 → 本插件写入管线（提交行重建 + 任务域 + `host-pty.write`，
             //   与互调 api `session-input` 同实现；特殊键走 `specialKey` 直写）
             // 身份令牌 + 激活门由 `plugin_invoke` 通道保证（迁移路由不放宽门禁）。
-            "session.list" => session::list_views_via_host(&serde_json::json!({})).map_err(anyhow::Error::msg),
+            "session.list" => {
+                session::list_views_via_host(&serde_json::json!({})).map_err(anyhow::Error::msg)
+            }
 
             // 单会话视图：不在册 → `null`（命令面恒回 JSON 值，不区分「空」与「无」）
             "session.get" => Ok(session_get_view(&args)
@@ -1557,7 +1571,9 @@ impl WasmPlugin for SessionPlugin {
             "session.task.scheduler-tick" => {
                 let now_utc = CommandArgs::new(args).str_or("now_utc", "");
                 if now_utc.is_empty() {
-                    return Err(anyhow::anyhow!("session.task.scheduler-tick: missing now_utc"));
+                    return Err(anyhow::anyhow!(
+                        "session.task.scheduler-tick: missing now_utc"
+                    ));
                 }
                 let ticked = task::tick_via_host(&WasmHost, &now_utc);
                 // 票 04：终端输出兜底 drain（live 模式订阅连接拉一轮新输出，
@@ -1650,9 +1666,8 @@ impl WasmPlugin for SessionPlugin {
             // 会话配置 + 是否受任务域支持（agent 能力 join）→ {configs}
             // 读取失败显性报错（不静默返回空列表——「无配置」与「读失败」可区分）
             "session.task.session-configs" => {
-                let configs = task::list_configs_with_support_via_host().map_err(|e| {
-                    anyhow::anyhow!("session-configs read failed: {e}")
-                })?;
+                let configs = task::list_configs_with_support_via_host()
+                    .map_err(|e| anyhow::anyhow!("session-configs read failed: {e}"))?;
                 Ok(serde_json::json!({ "configs": configs }))
             }
 
@@ -1747,7 +1762,11 @@ impl WasmPlugin for SessionPlugin {
                 }
                 let (task_id, position) = task::queue::add_task(&WasmHost, &session_id, &prompt)
                     .map_err(|e| {
-                        anyhow::anyhow!("add-task enqueue failed (session_id={}): {}", session_id, e)
+                        anyhow::anyhow!(
+                            "add-task enqueue failed (session_id={}): {}",
+                            session_id,
+                            e
+                        )
                     })?;
                 dispatch_if_eligible_and_broadcast(&session_id, "add", None, None);
                 Ok(serde_json::json!({ "task_id": task_id, "position": position }))
@@ -2015,10 +2034,16 @@ impl WasmPlugin for SessionPlugin {
                 let method = a.str_or("method", "");
                 let path = a.str_or("path", "");
                 let body = a.value_owned("body").unwrap_or(serde_json::Value::Null);
-                let query = a.value_owned("query").unwrap_or_else(|| serde_json::json!({}));
+                let query = a
+                    .value_owned("query")
+                    .unwrap_or_else(|| serde_json::json!({}));
                 // ABI v29：模板捕获参数（host 别名 `{id}` 段）与验签派生的设备上下文
-                let params = a.value_owned("params").unwrap_or_else(|| serde_json::json!({}));
-                let device = a.value_owned("device").unwrap_or_else(|| serde_json::json!({}));
+                let params = a
+                    .value_owned("params")
+                    .unwrap_or_else(|| serde_json::json!({}));
+                let device = a
+                    .value_owned("device")
+                    .unwrap_or_else(|| serde_json::json!({}));
                 Ok(handle_http_endpoint(
                     &WasmHost, &method, &path, &body, &query, &params, &device,
                 ))
@@ -2035,9 +2060,7 @@ fn qr_manager() -> &'static QrTokenManager {
 }
 
 /// 从命令参数组装任务历史查询筛选条件（CommandArgs 统一字段提取）
-fn task_history_filter_from_args(
-    args: &CommandArgs,
-) -> task::state::TaskHistoryFilter {
+fn task_history_filter_from_args(args: &CommandArgs) -> task::state::TaskHistoryFilter {
     let opt = |key: &str| -> Option<String> {
         let v = args.str_or(key, "");
         if v.is_empty() {
@@ -2171,8 +2194,8 @@ fn handle_http_endpoint(
         | "auth/biometric-bind" => auth_http::handle_http_endpoint(host, method, path, body, query),
         // 票 11 下沉收尾（ABI v29）：sessions REST 七条（host 模板别名 /api/sessions*）
         // ——内部段 + params（`{id}` 捕获）+ device（JWT claims 派生的设备名）
-        "sessions" | "sessions/start" | "sessions/stop" | "sessions/resize"
-        | "sessions/input" | "sessions/history" | "sessions/remove" => {
+        "sessions" | "sessions/start" | "sessions/stop" | "sessions/resize" | "sessions/input"
+        | "sessions/history" | "sessions/remove" => {
             sessions_http::handle_sessions_http(host, method, path, body, query, params, device)
         }
         _ => task::handle_http_via_host(host, method, path, body, query),
@@ -2286,7 +2309,10 @@ mod tests {
         let deactivate_start = src
             .find("    fn deactivate() -> anyhow::Result<()> {")
             .expect("deactivate fn found");
-        assert!(activate_start < deactivate_start, "activate 必须先于 deactivate 出现");
+        assert!(
+            activate_start < deactivate_start,
+            "activate 必须先于 deactivate 出现"
+        );
         let body = &src[activate_start..deactivate_start];
 
         let reg = body
@@ -2299,9 +2325,9 @@ mod tests {
             "ws client-disconnect subscription failed",
             "ws client-connect subscription failed",
         ] {
-            let at = body
-                .find(hard_fail_step)
-                .unwrap_or_else(|| panic!("activate 必须含硬失败步骤 `{hard_fail_step}`（否则本锁已失效）"));
+            let at = body.find(hard_fail_step).unwrap_or_else(|| {
+                panic!("activate 必须含硬失败步骤 `{hard_fail_step}`（否则本锁已失效）")
+            });
             assert!(
                 reg > at,
                 "认证中心注册必须排在硬失败步骤 `{hard_fail_step}` 之后（注册在前 = 激活失败留下半死中心）"
@@ -2501,8 +2527,7 @@ mod tests {
         assert!(v.get("error").is_none(), "未 activate 无失败原因: {v}");
 
         // 注册失败：失败原因必须透出（UI 要据此点名）
-        *CENTER_REGISTRATION.lock().expect("lock") =
-            Some(Err("permission denied".to_string()));
+        *CENTER_REGISTRATION.lock().expect("lock") = Some(Err("permission denied".to_string()));
         let v = SessionPlugin::invoke_command("session.auth.center-status", serde_json::json!({}))
             .expect("center-status");
         assert_eq!(v["registered"], false);
@@ -2561,8 +2586,9 @@ mod tests {
     /// 必须与旧插件 `agent::list_supported()` 逐项一致（此处按名钉死，改名即红）。
     #[test]
     fn task_command_face_routes_agent_registry_and_rejects_unknown() {
-        let v = SessionPlugin::invoke_command("session.task.supported-agents", serde_json::json!({}))
-            .expect("supported-agents 已接线");
+        let v =
+            SessionPlugin::invoke_command("session.task.supported-agents", serde_json::json!({}))
+                .expect("supported-agents 已接线");
         assert_eq!(
             v["agents"],
             serde_json::json!(["claude", "pi", "codex", "opencode"]),

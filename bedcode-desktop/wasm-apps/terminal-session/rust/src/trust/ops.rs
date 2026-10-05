@@ -40,9 +40,7 @@ pub fn list(h: &impl TrustRecords, peer: &impl HostPeer) -> Result<serde_json::V
                 peers = arr.clone();
                 None
             }
-            None => Some(format!(
-                "trusted peers list did not return an array: {v}"
-            )),
+            None => Some(format!("trusted peers list did not return an array: {v}")),
         },
         Err(e) => Some(e.message),
     };
@@ -58,9 +56,7 @@ pub fn list(h: &impl TrustRecords, peer: &impl HostPeer) -> Result<serde_json::V
         // 单条畸形 → 整体报错（不静默跳过——信任列表缺条目会破坏撤销寻址）
         let dto = TrustedDeviceDto::from_peer(&peer)
             .map_err(|e| format!("trusted peer dto invalid: {e}"))?;
-        devices.push(
-            serde_json::to_value(dto).map_err(|e| format!("serialize trust dto: {}", e))?,
-        );
+        devices.push(serde_json::to_value(dto).map_err(|e| format!("serialize trust dto: {}", e))?);
     }
 
     Ok(serde_json::json!({
@@ -88,7 +84,11 @@ pub fn revoke(
     id: &str,
 ) -> Result<serde_json::Value, String> {
     // 三态预判：目标 id 是否在 pairing 记录里（含软删行——撤销检测依赖可见性）
-    let pairing_state = h.records()?.iter().find(|r| r.id == id).map(|r| r.is_active);
+    let pairing_state = h
+        .records()?
+        .iter()
+        .find(|r| r.id == id)
+        .map(|r| r.is_active);
     match pairing_state {
         Some(true) => {
             // 活跃 pairing：软删（records 里的 is_active 是该记录的活跃位）
@@ -140,19 +140,23 @@ pub fn revoke_via_host(_id: &str) -> Result<serde_json::Value, String> {
 
 // ==================== Tests ====================
 
+// ==================== Tests ====================
+
+// 用例按功能拆至 `ops/tests/`（本内联模块的子模块路径由 rustc
+// 自动解析到该目录；模块树 `trust::ops::tests::<文件>` 与内联形态等价，私有项可见性不受影响）。
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::trust::source::tests::MockRecords;
     use bedcode_plugin_api::host::HostError;
     use std::sync::Mutex;
+    // 跨分组共享的测试脚手架（子模块经 `use super::*` 可见）
 
     /// mock host-peer（native 单测；peer_list_trusted 返回 TrustedPeerDto
     /// JSON 数组，与宿主 list_trusted_peers wire 形状一致）
     struct MockPeer {
         trusted: Mutex<Vec<serde_json::Value>>,
     }
-
     impl MockPeer {
         fn new(trusted: Vec<serde_json::Value>) -> Self {
             Self {
@@ -160,14 +164,12 @@ mod tests {
             }
         }
     }
-
     /// mock host-peer 的未实现方法统一 panic（本测试只消费 list / revoke 两函数）
     macro_rules! unimplemented_peer {
         () => {
             unimplemented!()
         };
     }
-
     impl HostPeer for MockPeer {
         fn peer_dial(&self, _endpoint: &serde_json::Value) -> Result<String, HostError> {
             unimplemented_peer!()
@@ -250,11 +252,13 @@ mod tests {
         fn peer_active_transfers(&self) -> Result<serde_json::Value, HostError> {
             unimplemented_peer!()
         }
-        fn peer_collect_outgoing(&self, _paths: &[serde_json::Value]) -> Result<serde_json::Value, HostError> {
+        fn peer_collect_outgoing(
+            &self,
+            _paths: &[serde_json::Value],
+        ) -> Result<serde_json::Value, HostError> {
             unimplemented_peer!()
         }
     }
-
     fn sample_peer(node_id: &str, name: &str) -> serde_json::Value {
         serde_json::json!({
             "nodeId": node_id,
@@ -263,260 +267,6 @@ mod tests {
             "addedAt": "2026-09-18T12:00:00Z",
         })
     }
-
-    // ==================== list：统一视图组装 ====================
-
-    /// 空信任列表 → 空 devices（pairing/peer 均空）
-    #[test]
-    fn list_empty_trust_returns_no_devices() {
-        let records = MockRecords::new(vec![]);
-        let peer = MockPeer::new(vec![]);
-        let r = list(&records, &peer).expect("list");
-        assert_eq!(r["devices"].as_array().unwrap().len(), 0);
-        assert!(r["peerError"].is_null());
-    }
-
-    /// pairing 段：活跃过滤 + paired_at DESC 排序（宿主 get_pairings 语义），
-    /// 字段与宿主 Pairing 公开视图对齐；软删行必须被过滤掉
-    #[test]
-    fn list_pairings_only_active_sorted_by_paired_at_desc() {
-        let mut revoked =
-            MockRecords::record("revoked", "已撤销", "fp-rev", "2026-09-10T00:00:00Z");
-        revoked.is_active = false;
-        let records = MockRecords::new(vec![
-            MockRecords::record("old", "旧设备", "fp-old", "2026-09-01T00:00:00Z"),
-            MockRecords::record("new", "新设备", "fp-new", "2026-09-19T00:00:00Z"),
-            revoked,
-        ]);
-
-        let peer = MockPeer::new(vec![]);
-        let r = list(&records, &peer).expect("list");
-        let devices = r["devices"].as_array().unwrap();
-
-        assert_eq!(devices.len(), 2, "已撤销记录不进入列表（is_active=1 过滤）");
-        assert_eq!(devices[0]["kind"], "pairing");
-        assert_eq!(devices[0]["id"], "new", "最新配对在前（paired_at DESC）");
-        assert_eq!(devices[1]["id"], "old");
-        assert_eq!(devices[0]["name"], "新设备");
-        assert_eq!(devices[0]["fingerprint"], "fp-new");
-        assert_eq!(devices[0]["addedAt"], "2026-09-19T00:00:00Z");
-        assert_eq!(devices[0]["active"], true);
-    }
-
-    /// peer 段：透传宿主 list-trusted 条目（kind=peer，条目序保留），
-    /// 与 pairing 段合并统一数组
-    #[test]
-    fn list_merges_peers_after_pairings() {
-        let records = MockRecords::new(vec![MockRecords::record(
-            "p-1",
-            "Phone",
-            "fp-1",
-            "2026-09-19T00:00:00Z",
-        )]);
-
-        let peer = MockPeer::new(vec![sample_peer("aabbccdd", "书房台式机")]);
-        let r = list(&records, &peer).expect("list");
-        let devices = r["devices"].as_array().unwrap();
-
-        assert_eq!(devices.len(), 2);
-        assert_eq!(devices[0]["kind"], "pairing");
-        assert_eq!(devices[1]["kind"], "peer");
-        assert_eq!(devices[1]["id"], "aabbccdd");
-        assert_eq!(devices[1]["name"], "书房台式机");
-        assert_eq!(devices[1]["fingerprintShort"], "aabbccdd");
-        assert_eq!(devices[1]["addedAt"], "2026-09-18T12:00:00Z");
-    }
-
-    /// peer 侧不可用（无头上下文/引擎未启动）：pairing 段照常返回，
-    /// peerError 透出错误——不静默降级为空列表
-    #[test]
-    fn list_surfaces_peer_error_without_dropping_pairings() {
-        struct PeerDown;
-        impl HostPeer for PeerDown {
-            fn peer_dial(&self, _e: &serde_json::Value) -> Result<String, HostError> {
-                unimplemented_peer!()
-            }
-            fn peer_close(&self, _h: &str) -> Result<bool, HostError> {
-                unimplemented_peer!()
-            }
-            fn peer_respond_consent(&self, _r: &str, _a: bool) -> Result<bool, HostError> {
-                unimplemented_peer!()
-            }
-            fn peer_list_trusted(&self) -> Result<serde_json::Value, HostError> {
-                Err(HostError::custom(
-                    -1,
-                    "peer-net unavailable in headless context".to_string(),
-                ))
-            }
-            fn peer_revoke_trusted(&self, _n: &str) -> Result<bool, HostError> {
-                unimplemented_peer!()
-            }
-            fn peer_send_files(
-                &self,
-                _s: &str,
-                _p: &[serde_json::Value],
-            ) -> Result<String, HostError> {
-                unimplemented_peer!()
-            }
-            fn peer_respond_transfer(&self, _b: &str, _a: bool) -> Result<(), HostError> {
-                unimplemented_peer!()
-            }
-            fn peer_set_receive_policy(&self, _m: &str, _t: u64) -> Result<(), HostError> {
-                unimplemented_peer!()
-            }
-            fn peer_pause_transfer(&self, _b: &str) -> Result<(), HostError> {
-                unimplemented_peer!()
-            }
-            fn peer_resume_transfer(&self, _b: &str) -> Result<(), HostError> {
-                unimplemented_peer!()
-            }
-            fn peer_set_shared_roots(&self, _d: &[serde_json::Value]) -> Result<(), HostError> {
-                unimplemented_peer!()
-            }
-            fn peer_list_shared_roots(&self, _s: &str) -> Result<serde_json::Value, HostError> {
-                unimplemented_peer!()
-            }
-            fn peer_browse_directory(
-                &self,
-                _s: &str,
-                _d: &str,
-                _r: &str,
-            ) -> Result<serde_json::Value, HostError> {
-                unimplemented_peer!()
-            }
-            fn peer_pull_files(
-                &self,
-                _s: &str,
-                _d: &str,
-                _f: &[serde_json::Value],
-            ) -> Result<u32, HostError> {
-                unimplemented_peer!()
-            }
-            fn peer_set_download_dir(&self, _p: &str) -> Result<(), HostError> {
-                unimplemented_peer!()
-            }
-            fn peer_start_node(&self) -> Result<bool, HostError> {
-                unimplemented_peer!()
-            }
-            fn peer_stop_node(&self) -> Result<bool, HostError> {
-                unimplemented_peer!()
-            }
-            fn peer_active_transfers(&self) -> Result<serde_json::Value, HostError> {
-                unimplemented_peer!()
-            }
-            fn peer_collect_outgoing(&self, _paths: &[serde_json::Value]) -> Result<serde_json::Value, HostError> {
-                unimplemented_peer!()
-            }
-        }
-
-        let records = MockRecords::new(vec![MockRecords::record(
-            "p-1",
-            "Phone",
-            "fp-1",
-            "2026-09-19T00:00:00Z",
-        )]);
-        let r = list(&records, &PeerDown).expect("list");
-        let devices = r["devices"].as_array().unwrap();
-        assert_eq!(devices.len(), 1, "pairing 段照常返回");
-        assert_eq!(devices[0]["id"], "p-1");
-        let err = r["peerError"].as_str().expect("peerError 必须透出");
-        assert!(err.contains("unavailable"), "peerError 内容透出: {}", err);
-    }
-
-    // ==================== revoke：撤销分派 ====================
-
-    /// 撤销 pairing：软删后列表立即消失；返回值 kind=pairing
-    #[test]
-    fn revoke_pairing_removes_from_list_immediately() {
-        let records = MockRecords::new(vec![MockRecords::record(
-            "p-1",
-            "Phone",
-            "fp-1",
-            "2026-09-19T00:00:00Z",
-        )]);
-        let peer = MockPeer::new(vec![]);
-        assert_eq!(
-            list(&records, &peer).expect("list")["devices"]
-                .as_array()
-                .unwrap()
-                .len(),
-            1
-        );
-
-        let r = revoke(&records, &peer, "p-1").expect("revoke");
-        assert_eq!(r["removed"], true);
-        assert_eq!(r["kind"], "pairing");
-
-        // 撤销后立即生效：列表不再包含
-        let devices = list(&records, &peer).expect("list after revoke")["devices"]
-            .as_array()
-            .unwrap()
-            .clone();
-        assert_eq!(devices.len(), 0, "撤销后立即从统一视图消失");
-    }
-
-    /// 撤销未命中的 id：pairing 幂等 false；peer 侧未命中也 false（宿主
-    /// revoke_trusted_peer 返回是否删除），整体不报错
-    #[test]
-    fn revoke_unknown_id_returns_removed_false() {
-        let records = MockRecords::new(vec![]);
-        let peer = MockPeer::new(vec![]);
-        let r = revoke(&records, &peer, "ghost-id").expect("revoke unknown");
-        assert_eq!(r["removed"], false);
-        assert_eq!(r["kind"], "peer", "未命中 pairing 即按 peer 寻址");
-    }
-
-    /// T-G01：已非活跃 pairing 的 id 不得落 peer 路径——即使它撞上某个 peer
-    /// node id，也不能撤销那个无关的活跃 peer（旧实现 bool false 无法区分
-    /// 「已非活跃」与「不是 pairing」，会误撤销）
-    #[test]
-    fn revoke_inactive_pairing_id_does_not_touch_peer() {
-        let mut inactive = MockRecords::record("p-stale-00", "Old", "fp-x", "2026-09-01T00:00:00Z");
-        inactive.is_active = false;
-        let records = MockRecords::new(vec![inactive]);
-        // peer 列表里恰好有个 node id = 陈旧的 pairing id：
-        // 撤销该 id 必须只报 pairing 幂等，绝不能删掉这个活跃 peer
-        let peer = MockPeer::new(vec![sample_peer("p-stale-00", "书房台式机")]);
-        let r = revoke(&records, &peer, "p-stale-00").expect("revoke stale pairing");
-        assert_eq!(r["removed"], false);
-        assert_eq!(r["kind"], "pairing", "id 在 pairing 域 → 不落 peer 路径");
-        let after = peer.trusted.lock().unwrap();
-        assert_eq!(after.len(), 1, "活跃 peer 必须原样保留");
-    }
-
-    /// 撤销 peer 目标：转发 host-peer revoke-trusted（kind=peer、removed 透传）
-    #[test]
-    fn revoke_peer_forwards_to_host_peer() {
-        let records = MockRecords::new(vec![]);
-        let node_id = "aabbccdd";
-        let peer = MockPeer::new(vec![sample_peer(node_id, "书房台式机")]);
-
-        let r = revoke(&records, &peer, node_id).expect("revoke peer");
-        assert_eq!(r["removed"], true);
-        assert_eq!(r["kind"], "peer");
-
-        // 二次撤销同一 node_id：宿主 revoke_trusted_peer 语义 removed=false
-        let r2 = revoke(&records, &peer, node_id).expect("revoke peer again");
-        assert_eq!(r2["removed"], false);
-    }
-
-    /// 数据源不可用（host-auth 原语报错）：显性上抛，不静默空列表
-    /// （空列表会被消费方读成「没有任何信任设备」，是危险的默认值）
-    #[test]
-    fn list_surfaces_record_source_failure() {
-        struct BrokenRecords;
-        impl TrustRecords for BrokenRecords {
-            fn records(&self) -> Result<Vec<crate::trust::model::PairingRecord>, String> {
-                Err("host-auth trusted-devices-list failed: permission denied".to_string())
-            }
-            fn revoke(&self, _id: &str) -> Result<bool, String> {
-                Err("host-auth trusted-device-revoke failed: permission denied".to_string())
-            }
-        }
-
-        let err = list(&BrokenRecords, &MockPeer::new(vec![])).unwrap_err();
-        assert!(err.contains("permission denied"), "got: {err}");
-        let err = revoke(&BrokenRecords, &MockPeer::new(vec![]), "p-1").unwrap_err();
-        assert!(err.contains("permission denied"), "got: {err}");
-    }
+    mod list;
+    mod revoke;
 }

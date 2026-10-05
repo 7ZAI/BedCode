@@ -51,10 +51,7 @@ pub const PLUGIN_ID: &str = "com.bedcode.terminal-session";
 /// `session` 为 `SessionSummary` 的 JSON（snake_case 键：id/name/status/
 /// created_at/started_at/session_type/config_id/task_status/task_reason——
 /// 与既有 `session_list` WS 控制面同一形状）。`source_device` 空串 = 桌面本地。
-pub fn created_payload(
-    summary: &serde_json::Value,
-    source_device: &str,
-) -> serde_json::Value {
+pub fn created_payload(summary: &serde_json::Value, source_device: &str) -> serde_json::Value {
     serde_json::json!({
         "session": summary,
         "source_device": source_device,
@@ -115,7 +112,10 @@ fn publish(event_name: &str, payload: &serde_json::Value) {
 /// 会话创建事件（创建编排 `launch::spawn_session` 唯一发布点）
 #[cfg(target_arch = "wasm32")]
 pub fn publish_created(summary: &serde_json::Value, source_device: &str) {
-    publish(EVENT_SESSION_CREATED, &created_payload(summary, source_device));
+    publish(
+        EVENT_SESSION_CREATED,
+        &created_payload(summary, source_device),
+    );
 }
 
 /// 会话停止事件（`session::on_pty_exit` 唯一发布点——终态单一发布者不变量）
@@ -163,8 +163,14 @@ mod tests {
         assert_eq!(payload["session"]["name"], "dev");
         assert_eq!(payload["source_device"], "device-A");
         // 载荷中的 session 键名与既有 session_list 形状一致（snake_case）
-        assert!(payload["session"].get("created_at").is_some(), "session 字段键名与凭证形状一致");
-        assert!(payload["session"].get("createdAt").is_none(), "不得引入第二套键名");
+        assert!(
+            payload["session"].get("created_at").is_some(),
+            "session 字段键名与凭证形状一致"
+        );
+        assert!(
+            payload["session"].get("createdAt").is_none(),
+            "不得引入第二套键名"
+        );
     }
 
     /// 桌面本地创建：source_device 空串（消费方按空=本地处理）
@@ -209,7 +215,10 @@ mod tests {
         // 属主私有 topic 形状：<owner>::session:<kind>
         #[cfg(target_arch = "wasm32")]
         {
-            assert_eq!(owned_topic(PLUGIN_ID, EVENT_SESSION_CREATED), "com.bedcode.terminal-session::session:created");
+            assert_eq!(
+                owned_topic(PLUGIN_ID, EVENT_SESSION_CREATED),
+                "com.bedcode.terminal-session::session:created"
+            );
         }
     }
 
@@ -229,8 +238,7 @@ mod tests {
         ];
         let mut violations: Vec<String> = Vec::new();
         for (name, path) in files {
-            let src = std::fs::read_to_string(&path)
-                .unwrap_or_else(|e| panic!("read {path}: {e}"));
+            let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
             for (idx, raw) in src.lines().enumerate() {
                 let line = raw.trim_start();
                 if line.starts_with("//") || line.starts_with("///") || line.starts_with("//!") {
@@ -277,7 +285,11 @@ mod tests {
         // 发布点点数：created 1（spawn_session）/ stopped 1（on_pty_exit）/
         // removed 3（重启编排 + 移除两分支：ghost 幂等 + 正常摘除）
         assert_eq!(count("::publish_created("), 1, "SessionCreated 唯一发布点");
-        assert_eq!(count("::publish_stopped("), 1, "SessionStopped 唯一发布点（终态单一发布者）");
+        assert_eq!(
+            count("::publish_stopped("),
+            1,
+            "SessionStopped 唯一发布点（终态单一发布者）"
+        );
         assert_eq!(count("::publish_removed("), 3, "SessionRemoved 三触发路径");
     }
 }

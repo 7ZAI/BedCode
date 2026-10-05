@@ -166,8 +166,7 @@ async fn recv_frame_json(stream: &mut WsRecv) -> serde_json::Value {
             .expect("WS frame error");
         match frame {
             WsMsg::Text(text) => {
-                let json: serde_json::Value =
-                    serde_json::from_str(&text).expect("control frame must be valid JSON");
+                let json: serde_json::Value = serde_json::from_str(&text).expect("control frame must be valid JSON");
                 // 事件广播帧：跳过（动作回显/响应帧的 `type` 是动作名，非 event）
                 if json.get("type").and_then(|t| t.as_str()) == Some("event") {
                     continue;

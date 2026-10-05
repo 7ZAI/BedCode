@@ -32,7 +32,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-use crate::pairing::jwt::{JWT_SECRET_KEY_LEN, JWT_SECRET_KEY_ID};
+use crate::pairing::jwt::{JWT_SECRET_KEY_ID, JWT_SECRET_KEY_LEN};
 
 #[cfg(test)]
 use std::sync::Mutex;
@@ -339,185 +339,15 @@ impl SecretStore for MockSecretStore {
     }
 }
 
+// ==================== Tests ====================
+
+// 用例按功能拆至 `keys/tests/`（本内联模块的子模块路径由 rustc
+// 自动解析到该目录；模块树 `pairing::keys::tests::<文件>` 与内联形态等价，私有项可见性不受影响）。
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // ==================== 首启 / 读回 ====================
-
-    /// 首启：随机生成 + 落库（hex 长度 = 32B × 2 = 64 字符）
-    #[test]
-    fn first_call_generates_and_persists() {
-        let store = MockSecretStore::new();
-        let ring = load_or_create(&store).expect("generate");
-        assert_eq!(ring.active, 1);
-        assert_eq!(ring.signing_key().expect("signing key").len(), JWT_SECRET_KEY_LEN);
-        let stored = store
-            .get(KEYRING_SECRET_ID)
-            .unwrap()
-            .expect("persisted");
-        // 落库的是**一个** secret 值（整环），不是多行指针
-        assert!(
-            store.get(JWT_SECRET_KEY_ID).unwrap().is_none(),
-            "新真源是 keyring，不得再写退役的 jwt.key 行"
-        );
-        let file: KeyringFile = serde_json::from_str(&stored).expect("keyring json");
-        assert_eq!(file.active, 1);
-        let hexed = file.keys.get(&1).expect("gen 1 key");
-        assert_eq!(hexed.len(), 64, "32 字节 → 64 hex 字符落库");
-        // 熵非全零（新密钥必须随机）
-        assert!(ring.signing_key().expect("key").iter().any(|b| *b != 0));
-    }
-
-    /// 二次调用：读回已持久化密钥环（重启稳定，不重新生成）
-    #[test]
-    fn second_call_reads_back_persisted_keyring() {
-        let store = MockSecretStore::new();
-        let first = load_or_create(&store).expect("first");
-        let second = load_or_create(&store).expect("second");
-        assert_eq!(first.active, second.active, "重启后代次稳定");
-        assert_eq!(
-            first.signing_key().expect("key"),
-            second.signing_key().expect("key"),
-            "重启后签发密钥必须稳定（读回持久化值）"
-        );
-    }
-
-    /// 损坏存储（非法 JSON / 非 hex / 长度不符 / active 缺密钥）→ **显性失败**，
-    /// 绝不静默生成新密钥（那会让全部已配对设备静默失效）
-    #[test]
-    fn corrupt_keyring_fails_loudly_instead_of_regenerating() {
-        let store = MockSecretStore::new();
-        let good = load_or_create(&store).expect("first");
-
-        let cases: Vec<(String, &str)> = vec![
-            ("not-json!".to_string(), "not valid"),
-            (
-                serde_json::json!({"active": 1, "keys": {"1": "zz"}}).to_string(),
-                "not hex",
-            ),
-            (
-                serde_json::json!({"active": 1, "keys": {"1": hex::encode([0u8; 16])}}).to_string(),
-                "length mismatch",
-            ),
-            (
-                serde_json::json!({"active": 7, "keys": {"1": hex::encode([0u8; 32])}}).to_string(),
-                "has no key",
-            ),
-            (
-                serde_json::json!({"active": 0, "keys": {"0": hex::encode([0u8; 32])}}).to_string(),
-                ">= 1",
-            ),
-        ];
-        for (raw, needle) in cases {
-            let s = MockSecretStore::new();
-            s.set(KEYRING_SECRET_ID, &raw).expect("seed");
-            let err = load_or_create(&s).expect_err("损坏必须报错");
-            assert!(err.contains(needle), "损坏形态 [{needle}] 报错不符: {err}");
-            // 关键：报错后**没有**被新密钥覆盖（真源未被静默改写）
-            assert_eq!(
-                s.get(KEYRING_SECRET_ID).expect("read").as_deref(),
-                Some(raw.as_str()),
-                "解析失败绝不能顺手重写密钥环"
-            );
-        }
-        // 收尾：确认正常环不受影响（对照组）
-        let s = MockSecretStore::new();
-        let ring = load_or_create(&s).expect("ok");
-        assert_eq!(ring.signing_key().expect("key").len(), JWT_SECRET_KEY_LEN);
-        assert!(good.signing_key().is_ok());
-    }
-
-    // ==================== 轮换（ADR 0033 D4） ====================
-
-    /// 轮换：新生一代成为 active，原代降为上一代（**仍可验签**——宽限期 7 天）
-    #[test]
-    fn rotate_keeps_previous_generation_for_grace_window() {
-        let store = MockSecretStore::new();
-        let before = load_or_create(&store).expect("first");
-        let old_key = before.signing_key().expect("key").to_vec();
-
-        let after = rotate(&store).expect("rotate");
-        assert_eq!(after.active, 2, "轮换推进代次");
-        assert_ne!(
-            after.signing_key().expect("key"),
-            old_key.as_slice(),
-            "新代必须换新密钥"
-        );
-        // 上一代仍在验签候选里（跨代验签是轮换的全部意义）
-        let verify_keys = after.verification_keys();
-        assert_eq!(verify_keys.len(), 2, "轮换后应有两代可验签");
-        assert!(
-            verify_keys.contains(&old_key.as_slice()),
-            "宽限期内旧代必须仍能验签"
-        );
-        // 当前代优先
-        assert_eq!(verify_keys[0], after.signing_key().expect("key"));
-        // kid 语义
-        assert_eq!(after.active_kid(), "g2");
-        assert!(after.knows_kid(Some("g2")));
-        assert!(after.knows_kid(Some("g1")), "上一代 kid 仍被接受");
-        assert!(!after.knows_kid(Some("g99")), "未知 kid 必须被识别出来");
-        assert!(after.knows_kid(None), "旧 token 无 kid → 一律走密钥尝试");
-    }
-
-    /// 连续轮换两次：环内**恒**至多两代（更老的裁掉——token 早过宽限期）
-    #[test]
-    fn rotation_is_bounded_and_drops_expired_generations() {
-        let store = MockSecretStore::new();
-        let gen1_key = load_or_create(&store).expect("g1").signing_key().expect("k").to_vec();
-        let gen2_key = rotate(&store).expect("g2").signing_key().expect("k").to_vec();
-        let ring3 = rotate(&store).expect("g3");
-        assert_eq!(ring3.active, 3);
-        assert_eq!(
-            ring3.verification_keys().len(),
-            MAX_GENERATIONS,
-            "环内代次必须有界，不无限累积"
-        );
-        let keys = ring3.verification_keys();
-        assert!(keys.contains(&gen2_key.as_slice()), "上一代保留");
-        assert!(
-            !keys.contains(&gen1_key.as_slice()),
-            "超出宽限期的最早一代必须被裁掉"
-        );
-        // 落库形状也只含两代（不是只在内存里裁）
-        let stored = store.get(KEYRING_SECRET_ID).expect("read").expect("row");
-        let file: KeyringFile = serde_json::from_str(&stored).expect("json");
-        assert_eq!(file.keys.len(), MAX_GENERATIONS);
-        assert!(!file.keys.contains_key(&1));
-    }
-
-    /// 轮换后重启：读回的是新代（轮换是持久的，不因重启回退）
-    #[test]
-    fn rotation_survives_restart() {
-        let store = MockSecretStore::new();
-        rotate(&store).expect("g2");
-        let reloaded = load_or_create(&store).expect("reload");
-        assert_eq!(reloaded.active, 2, "轮换必须落盘，重启不回退");
-    }
-
-    // ==================== 退役行清理 ====================
-
-    /// 清理 ADR 0033 前的死密钥行：存在则删、不存在则幂等成功
-    #[test]
-    fn purge_legacy_key_is_idempotent() {
-        let store = MockSecretStore::new();
-        store.set(JWT_SECRET_KEY_ID, &hex::encode([0x41u8; 32])).unwrap();
-        assert!(purge_legacy_key(&store).expect("purge"), "存在时报告已清理");
-        assert!(store.get(JWT_SECRET_KEY_ID).unwrap().is_none());
-        assert!(
-            !purge_legacy_key(&store).expect("purge again"),
-            "已清理过 → 幂等成功且不谎报"
-        );
-    }
-
-    // ==================== native 路径 ====================
-
-    /// native 路径显性失败（无宿主环境不得静默生成进程内密钥）
-    #[test]
-    fn native_paths_fail_without_host() {
-        assert!(keyring_from_host_auth().is_err());
-        assert!(rotate_from_host_auth().is_err());
-        assert!(purge_legacy_key_from_host_auth().is_err());
-    }
+    mod adr_0033_d4;
+    mod first_call_generates_and;
+    mod native;
+    mod purge_legacy_key_is;
 }

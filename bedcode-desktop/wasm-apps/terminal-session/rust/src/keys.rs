@@ -139,7 +139,9 @@ impl KeyCombo {
                 b.push(c.to_ascii_uppercase() as u8);
                 Some(b)
             }
-            KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right => arrow_key_bytes(&self.key, self.modifier_number()),
+            KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right => {
+                arrow_key_bytes(&self.key, self.modifier_number())
+            }
             KeyCode::F(n) => function_key_bytes(*n, self.modifier_number()),
             KeyCode::Tab => tab_key_bytes(self, self.modifier_number()),
             // Delete/Insert/PageUp/PageDown/Home/End
@@ -152,8 +154,12 @@ impl KeyCombo {
             KeyCode::Enter if !self.ctrl() && !self.shift() && !self.alt() => Some(vec![0x0d]),
             KeyCode::Escape if !self.ctrl() && !self.shift() && !self.alt() => Some(vec![0x1b]),
             KeyCode::Backspace if !self.ctrl() && !self.shift() && !self.alt() => Some(vec![0x7f]),
-            KeyCode::Char(c) if !self.ctrl() && !self.alt() && !self.shift() => Some(vec![*c as u8]),
-            KeyCode::Char(c) if !self.ctrl() && !self.alt() && self.shift() => Some(vec![c.to_ascii_uppercase() as u8]),
+            KeyCode::Char(c) if !self.ctrl() && !self.alt() && !self.shift() => {
+                Some(vec![*c as u8])
+            }
+            KeyCode::Char(c) if !self.ctrl() && !self.alt() && self.shift() => {
+                Some(vec![c.to_ascii_uppercase() as u8])
+            }
             _ => None,
         }
     }
@@ -323,7 +329,10 @@ fn combo_from_str(s: &str) -> Option<KeyCombo> {
             return None;
         }
         let key = KeyCode::from_str(rest)?;
-        return Some(KeyCombo { modifiers: MOD_CTRL, key });
+        return Some(KeyCombo {
+            modifiers: MOD_CTRL,
+            key,
+        });
     }
     let key = KeyCode::from_str(s)?;
     Some(KeyCombo { modifiers: 0, key })
@@ -346,7 +355,11 @@ mod tests {
             ("ctrl+space", 0x00),
         ];
         for (s, expected) in cases {
-            assert_eq!(special_key_to_pty_bytes(s), Some(vec![expected]), "case {s}");
+            assert_eq!(
+                special_key_to_pty_bytes(s),
+                Some(vec![expected]),
+                "case {s}"
+            );
         }
     }
 
@@ -362,14 +375,20 @@ mod tests {
     fn legacy_format_compat() {
         assert_eq!(special_key_to_pty_bytes("ctrl_c"), Some(vec![0x03]));
         assert_eq!(special_key_to_pty_bytes("ctrl+z"), Some(vec![0x1a]));
-        assert_eq!(special_key_to_pty_bytes("arrow_up"), Some(vec![0x1b, b'[', b'A']));
+        assert_eq!(
+            special_key_to_pty_bytes("arrow_up"),
+            Some(vec![0x1b, b'[', b'A'])
+        );
     }
 
     /// Alt / Alt+Shift
     #[test]
     fn alt_combos() {
         assert_eq!(special_key_to_pty_bytes("alt+f"), Some(vec![0x1b, b'f']));
-        assert_eq!(special_key_to_pty_bytes("alt+shift+f"), Some(vec![0x1b, b'F']));
+        assert_eq!(
+            special_key_to_pty_bytes("alt+shift+f"),
+            Some(vec![0x1b, b'F'])
+        );
     }
 
     /// 基础编辑键
@@ -385,16 +404,31 @@ mod tests {
     #[test]
     fn arrow_keys_with_modifiers() {
         assert_eq!(special_key_to_pty_bytes("up"), Some(vec![0x1b, b'[', b'A']));
-        assert_eq!(special_key_to_pty_bytes("shift+up"), Some(b"\x1b[1;2A".to_vec()));
-        assert_eq!(special_key_to_pty_bytes("ctrl+up"), Some(b"\x1b[1;5A".to_vec()));
-        assert_eq!(special_key_to_pty_bytes("alt+up"), Some(b"\x1b[1;3A".to_vec()));
+        assert_eq!(
+            special_key_to_pty_bytes("shift+up"),
+            Some(b"\x1b[1;2A".to_vec())
+        );
+        assert_eq!(
+            special_key_to_pty_bytes("ctrl+up"),
+            Some(b"\x1b[1;5A".to_vec())
+        );
+        assert_eq!(
+            special_key_to_pty_bytes("alt+up"),
+            Some(b"\x1b[1;3A".to_vec())
+        );
     }
 
     /// Shift+Tab 与传统序列
     #[test]
     fn tab_with_shift() {
-        assert_eq!(special_key_to_pty_bytes("shift+tab"), Some(b"\x1b[Z".to_vec()));
-        assert_eq!(special_key_to_pty_bytes("ctrl+tab"), Some(b"\x1b[1;5I".to_vec()));
+        assert_eq!(
+            special_key_to_pty_bytes("shift+tab"),
+            Some(b"\x1b[Z".to_vec())
+        );
+        assert_eq!(
+            special_key_to_pty_bytes("ctrl+tab"),
+            Some(b"\x1b[1;5I".to_vec())
+        );
     }
 
     /// 功能键无修饰 / 带修饰
@@ -404,19 +438,37 @@ mod tests {
         assert_eq!(special_key_to_pty_bytes("f4"), Some(b"\x1bOS".to_vec()));
         assert_eq!(special_key_to_pty_bytes("f5"), Some(b"\x1b[15~".to_vec()));
         assert_eq!(special_key_to_pty_bytes("f12"), Some(b"\x1b[24~".to_vec()));
-        assert_eq!(special_key_to_pty_bytes("ctrl+f5"), Some(b"\x1b[15;5~".to_vec()));
-        assert_eq!(special_key_to_pty_bytes("shift+f1"), Some(b"\x1b[1;2P".to_vec()));
+        assert_eq!(
+            special_key_to_pty_bytes("ctrl+f5"),
+            Some(b"\x1b[15;5~".to_vec())
+        );
+        assert_eq!(
+            special_key_to_pty_bytes("shift+f1"),
+            Some(b"\x1b[1;2P".to_vec())
+        );
     }
 
     /// 编辑键 CSI 序列
     #[test]
     fn csi_edit_keys() {
-        assert_eq!(special_key_to_pty_bytes("delete"), Some(b"\x1b[3~".to_vec()));
+        assert_eq!(
+            special_key_to_pty_bytes("delete"),
+            Some(b"\x1b[3~".to_vec())
+        );
         assert_eq!(special_key_to_pty_bytes("home"), Some(b"\x1b[H".to_vec()));
         assert_eq!(special_key_to_pty_bytes("end"), Some(b"\x1b[F".to_vec()));
-        assert_eq!(special_key_to_pty_bytes("ctrl+delete"), Some(b"\x1b[3;5~".to_vec()));
-        assert_eq!(special_key_to_pty_bytes("shift+home"), Some(b"\x1b[1;2H".to_vec()));
-        assert_eq!(special_key_to_pty_bytes("pageup"), Some(b"\x1b[5~".to_vec()));
+        assert_eq!(
+            special_key_to_pty_bytes("ctrl+delete"),
+            Some(b"\x1b[3;5~".to_vec())
+        );
+        assert_eq!(
+            special_key_to_pty_bytes("shift+home"),
+            Some(b"\x1b[1;2H".to_vec())
+        );
+        assert_eq!(
+            special_key_to_pty_bytes("pageup"),
+            Some(b"\x1b[5~".to_vec())
+        );
     }
 
     /// 普通字符（无修饰 / Shift）

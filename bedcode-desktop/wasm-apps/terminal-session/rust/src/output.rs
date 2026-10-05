@@ -443,11 +443,10 @@ pub fn watermarks_via_host(args: &serde_json::Value) -> Result<serde_json::Value
         .filter(|s| !s.is_empty());
     // `sessionId` 过滤只作用在会话级段；WS 段是连接级（一个连接一个基准），
     // 仍按同一 sessionId 过滤以便「查某会话的所有消费者」
-    let ws_rows: Vec<crate::ws_terminal::WsWatermarkRow> =
-        crate::ws_terminal::watermark_rows()
-            .into_iter()
-            .filter(|r| session_id.is_none_or(|sid| r.session_id == sid))
-            .collect();
+    let ws_rows: Vec<crate::ws_terminal::WsWatermarkRow> = crate::ws_terminal::watermark_rows()
+        .into_iter()
+        .filter(|r| session_id.is_none_or(|sid| r.session_id == sid))
+        .collect();
     Ok(render_watermark_report(
         &pump::snapshots(session_id),
         &ws_rows,

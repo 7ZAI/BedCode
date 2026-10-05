@@ -61,10 +61,7 @@ mod wasm_impl {
             id: required("id")?,
             name: required("name")?,
             content: required("content")?,
-            icon: row
-                .get("icon")
-                .and_then(|v| v.as_str())
-                .map(str::to_string),
+            icon: row.get("icon").and_then(|v| v.as_str()).map(str::to_string),
             color: row
                 .get("color")
                 .and_then(|v| v.as_str())

@@ -405,18 +405,22 @@ impl ChannelHandler for PluginChannel {
     }
 }
 
+// ==================== Tests ====================
+
+// 用例按功能拆至 `plugin/tests/`（本内联模块的子模块路径由 rustc
+// 自动解析到该目录；模块树 `channel::plugin::tests::<文件>` 与内联形态等价，私有项可见性不受影响）。
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::endpoint::{register, EndpointAuth};
     use std::net::SocketAddr;
     use std::sync::Arc;
+    // 跨分组共享的测试脚手架（子模块经 `use super::*` 可见）
 
     fn test_endpoint(seed: &str, auth: EndpointAuth) -> EndpointEntry {
         let owner = format!("test-plugin-channel-{seed}");
         register(&owner, "echo", auth, None, None, Arc::new(TestBus)).expect("register endpoint")
     }
-
     /// 测试假总线（通道只存句柄；无头/单测上下文不投递）
     struct TestBus;
     #[async_trait::async_trait]
@@ -440,87 +444,8 @@ mod tests {
         ) {
         }
     }
-
     fn addr(port: u16) -> SocketAddr {
         format!("127.0.0.1:{port}").parse().unwrap()
     }
-
-    #[test]
-    fn auth_mode_follows_endpoint_declaration() {
-        let open = PluginChannel::new(&test_endpoint("open", EndpointAuth::None), addr(41001));
-        assert_eq!(open.auth_mode(), AuthMode::None);
-        assert_eq!(open.auth_timeout_close_code(), None, "none 模式无认证窗口");
-
-        let guarded = PluginChannel::new(&test_endpoint("jwt", EndpointAuth::Jwt), addr(41002));
-        assert_eq!(guarded.auth_mode(), AuthMode::Required);
-        assert_eq!(guarded.auth_timeout_close_code(), Some(CLOSE_AUTH_FAILED));
-    }
-
-    #[test]
-    fn client_id_is_peer_addr_key() {
-        // clientId 必须与注册表会话键同源（对端地址字符串），否则 list-clients /
-        // 单发寻址对不上号
-        let channel = PluginChannel::new(&test_endpoint("cid", EndpointAuth::None), addr(41003));
-        assert_eq!(channel.client_id, "127.0.0.1:41003");
-    }
-
-    #[test]
-    fn connect_and_disconnect_guards_are_idempotent() {
-        let mut channel = PluginChannel::new(&test_endpoint("guard", EndpointAuth::None), addr(41004));
-        assert!(!channel.connected_announced);
-        // 接入守卫：重复调用只认第一次（调用方在 on_auth_ok 里）
-        channel.connected_announced = true;
-        channel.connected_announced = true;
-        assert!(!channel.disconnect_reported);
-        // 断开守卫：未接入（认证失败）时不得上报
-        channel.connected_announced = false;
-        assert!(!channel.disconnect_reported);
-    }
-
-    #[test]
-    fn auth_frame_requires_type_and_token() {
-        // 形状契约（D8）：仅接受 {"type":"auth","token":"..."}
-        let ok: AuthFrame = serde_json::from_str(r#"{"type":"auth","token":"t"}"#).unwrap();
-        assert_eq!(ok.frame_type, "auth");
-        assert_eq!(ok.token, "t");
-        assert!(
-            serde_json::from_str::<AuthFrame>(r#"{"type":"ping","token":"t"}"#).is_err()
-                || serde_json::from_str::<AuthFrame>(r#"{"type":"ping","token":"t"}"#)
-                    .map(|f| f.frame_type != "auth")
-                    .unwrap()
-        );
-        // 缺 token / 非 JSON：形状不匹配 → 走「丢弃 + warn」分支（不 panic）
-        assert!(serde_json::from_str::<AuthFrame>(r#"{"type":"auth"}"#).is_err());
-        assert!(serde_json::from_str::<AuthFrame>("not json").is_err());
-    }
-
-    #[test]
-    fn frame_queue_is_bounded_and_preserves_order() {
-        let entry = test_endpoint("queue", EndpointAuth::None);
-        let mut channel = PluginChannel::new(&entry, addr(41005));
-        let mut receiver = channel.frames_rx.take().expect("frame receiver");
-
-        for index in 0..PLUGIN_WS_SEND_QUEUE_CAPACITY {
-            assert!(channel
-                .enqueue_frame("text", format!("frame-{index}").into_bytes())
-                .is_ok());
-        }
-        assert!(matches!(
-            channel.enqueue_frame("binary", vec![0xff]),
-            Err(FrameEnqueueError::Full)
-        ));
-
-        let first = receiver.try_recv().expect("first frame");
-        assert_eq!(first.kind, "text");
-        assert_eq!(first.payload, b"frame-0");
-        let second = receiver.try_recv().expect("second frame");
-        assert_eq!(second.payload, b"frame-1");
-
-        drop(receiver);
-        assert!(matches!(
-            channel.enqueue_frame("text", b"closed".to_vec()),
-            Err(FrameEnqueueError::Closed)
-        ));
-        crate::endpoint::remove(&entry.endpoint_id);
-    }
+    mod auth_mode_follows_endpoint;
 }

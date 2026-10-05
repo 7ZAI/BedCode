@@ -11,7 +11,7 @@
 //! 下次 handoff 被 legacy 行复活」会让删除失效，与配置域迁移同一次护栏）。
 
 use super::model::{QuickAction, QuickActionRow};
-use super::store::{MIGRATION_MARKER, QuickActionStore};
+use super::store::{QuickActionStore, MIGRATION_MARKER};
 use crate::config::model::now_rfc3339;
 
 use serde::Serialize;
@@ -74,10 +74,7 @@ pub fn import(
             return Err(format!("快捷指令迁移行 content 不能为空: {}", row.id));
         }
         let action: QuickAction = row.clone().into();
-        let exists = store
-            .all()?
-            .iter()
-            .any(|a| a.id == action.id);
+        let exists = store.all()?.iter().any(|a| a.id == action.id);
         store.put(&action)?;
         if exists {
             skipped_existing += 1;
@@ -198,10 +195,7 @@ mod tests {
         let report = import(&store, &[row("qa-1", "部署", 0)]).expect("second import");
         assert!(report.already_migrated, "marker 已在 → 不得再导入");
         assert_eq!(report.imported, 0);
-        assert!(
-            store.all_rows().is_empty(),
-            "已迁移后重推不得复活被删行"
-        );
+        assert!(store.all_rows().is_empty(), "已迁移后重推不得复活被删行");
     }
 
     /// 校验：缺 name / content 显性报错且不落 marker（下次 handoff 重试）

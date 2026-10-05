@@ -79,27 +79,47 @@ mod wasm_impl {
                 .ok_or_else(|| format!("session row missing column '{}': {}", key, row))
         };
         let status_text = required("status")?;
-        let status: SessionStatus = serde_json::from_str(&status_text)
-            .map_err(|e| format!("session row has invalid status JSON ({}): {}", status_text, e))?;
+        let status: SessionStatus = serde_json::from_str(&status_text).map_err(|e| {
+            format!(
+                "session row has invalid status JSON ({}): {}",
+                status_text, e
+            )
+        })?;
         // JSON 文本列：空串 / NULL 视为缺失（不静默降级为「无归属」以外的语义）
         let canonical_renderer = match row.get("canonical_renderer").and_then(|v| v.as_str()) {
-            Some(raw) if !raw.trim().is_empty() => Some(
-                serde_json::from_str(raw)
-                    .map_err(|e| format!("session row has invalid canonicalRenderer JSON ({}): {}", raw, e))?,
-            ),
+            Some(raw) if !raw.trim().is_empty() => {
+                Some(serde_json::from_str(raw).map_err(|e| {
+                    format!(
+                        "session row has invalid canonicalRenderer JSON ({}): {}",
+                        raw, e
+                    )
+                })?)
+            }
             _ => None,
         };
         Ok(SessionRecord {
             id: required("id")?,
-            pty_id: row.get("pty_id").and_then(|v| v.as_str()).map(str::to_string),
+            pty_id: row
+                .get("pty_id")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
             config_id: required("config_id")?,
             name: required("name")?,
             status,
             created_at: required("created_at")?,
-            started_at: row.get("started_at").and_then(|v| v.as_str()).map(str::to_string),
-            stopped_at: row.get("stopped_at").and_then(|v| v.as_str()).map(str::to_string),
+            started_at: row
+                .get("started_at")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            stopped_at: row
+                .get("stopped_at")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
             canonical_renderer,
-            owner: row.get("owner").and_then(|v| v.as_str()).map(str::to_string),
+            owner: row
+                .get("owner")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
             updated_at: required("updated_at")?,
         })
     }
@@ -373,7 +393,10 @@ pub(crate) mod tests {
         store.put(&updated).expect("put update");
         assert_eq!(store.all().unwrap().len(), 1, "同 id 覆盖不新增行");
         assert_eq!(store.get("s1").unwrap().unwrap().name, "改名后");
-        assert_eq!(store.get("s1").unwrap().unwrap().status, SessionStatus::Stopped);
+        assert_eq!(
+            store.get("s1").unwrap().unwrap().status,
+            SessionStatus::Stopped
+        );
 
         assert!(store.remove("s1").unwrap());
         assert!(!store.remove("s1").unwrap(), "未知 id 幂等 false");
@@ -396,8 +419,15 @@ pub(crate) mod tests {
         store
             .put(&MockSessionStore::record("s2", SessionStatus::Running))
             .unwrap();
-        assert_eq!(store.clear_all().unwrap(), 1, "clear_all 返回删除的会话行数");
+        assert_eq!(
+            store.clear_all().unwrap(),
+            1,
+            "clear_all 返回删除的会话行数"
+        );
         assert!(store.all().unwrap().is_empty());
-        assert!(store.all_annotations("s2").unwrap().is_empty(), "注解一并清空");
+        assert!(
+            store.all_annotations("s2").unwrap().is_empty(),
+            "注解一并清空"
+        );
     }
 }

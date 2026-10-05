@@ -306,7 +306,8 @@ fn verify_with_key(key: &[u8], token: &str, now_secs: u64) -> Result<JwtClaims, 
         .map_err(|_| JwtError::InvalidSignature)?;
 
     // claims 反序列化失败 → InvalidToken（jsonwebtoken decode 同）
-    let claims: JwtClaims = serde_json::from_slice(&payload_bytes).map_err(|_| JwtError::InvalidToken)?;
+    let claims: JwtClaims =
+        serde_json::from_slice(&payload_bytes).map_err(|_| JwtError::InvalidToken)?;
 
     // required_spec_claims = {"exp"}：缺 exp → MissingRequiredClaim → 映射 VerifyError
     // （exp 类型错误在 jsonwebtoken 为 TryParse::None → 同样 MissingRequiredClaim；
@@ -329,7 +330,9 @@ fn verify_with_key(key: &[u8], token: &str, now_secs: u64) -> Result<JwtClaims, 
 /// 空密钥集 → `VerifyError`（配置错误，与「签名不对」区分开）。
 pub fn verify_with_keys(keys: &[&[u8]], token: &str, now_secs: u64) -> Result<JwtClaims, JwtError> {
     if keys.is_empty() {
-        return Err(JwtError::VerifyError("no verification key available".to_string()));
+        return Err(JwtError::VerifyError(
+            "no verification key available".to_string(),
+        ));
     }
     // 先做与密钥无关的解析（结构 / alg）——一次，失败即可短路，不必每把密钥重试
     // 完整路径（避免把「结构错」报成「签名错」）
@@ -409,9 +412,14 @@ pub fn jwt_error_message(e: &JwtError) -> &'static str {
     }
 }
 
+// ==================== Tests ====================
+
+// 用例按功能拆至 `jwt/tests/`（本内联模块的子模块路径由 rustc
+// 自动解析到该目录；模块树 `pairing::jwt::tests::<文件>` 与内联形态等价，私有项可见性不受影响）。
 #[cfg(test)]
 mod tests {
     use super::*;
+    // 跨分组共享的测试脚手架（子模块经 `use super::*` 可见）
 
     /// ADR 0033 之前的 wire 格式冻结向量（无 `kid`）
     const LEGACY_WIRE_VECTOR: &str = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJkZXZpY2UtMSIsImlzcyI6IkJlZENvZGUiLCJpYXQiOjE3MDAwMDAwMDAsImV4cCI6MTcwMDYwNDgwMCwiZGV2aWNlX25hbWUiOiJNeSBQaG9uZSIsImZpbmdlcnByaW50IjoiZnAtYWJjIn0.F_jY264ZZ74_BzyVaZBPPPF9H-4K-DYEVJj_bdTLgX8";
@@ -424,7 +432,6 @@ mod tests {
         let rest = it.next().expect("signature");
         (head, (payload, rest))
     }
-
     /// 固定对照密钥 A：RFC 7515 §A.1 官方 test vector 密钥（64 字节，即
     /// `AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow`
     /// base64url 解码结果）
@@ -437,231 +444,12 @@ mod tests {
         );
         hex::decode(hex).expect("rfc key hex")
     }
-
     /// 固定对照密钥 B：32 字节 0x00..=0x1f（HS256 最小安全长度，结构等价向量用）
     fn fixed_key_b() -> Vec<u8> {
         (0u8..=0x1f).collect()
     }
-
-    // ==================== RFC 7515 §A.1 官方 test vector ====================
-
-    /// HS256 官方 test vector（RFC 7515 §A.1.1）：给定 key/header/payload，
-    /// 签名必须等于官方输出。注意 RFC 原文 header/payload 含 `\r\n` 换行与
-    /// 缩进（为展示方便）；signing input 必须逐字节复刻 RFC 值。
-    /// 这是「宿主 jsonwebtoken 与插件自实现等价」的密码学锚点
-    /// （jsonwebtoken 的 HMAC 实现与 RFC 向量一致）。
-    #[test]
-    fn rfc7515_a1_hs256_official_vector() {
-        // RFC 7515 §A.1 原文 base64url（header: {"typ":"JWT",\r\n "alg":"HS256"}；
-        // payload: {"iss":"joe",\r\n "exp":1300819380,\r\n "http://example.com/is_root":true}）
-        let signing_input = concat!(
-            "eyJ0eXAiOiJKV1QiLA0KICJhbGciOiJIUzI1NiJ9",
-            ".",
-            "eyJpc3MiOiJqb2UiLA0KICJleHAiOjEzMDA4MTkzODAsDQogImh0dHA6Ly9leGFtcGxlLmNvbS9pc19yb290Ijp0cnVlfQ",
-        );
-
-        // 官方签名值（RFC 7515 §A.1.1，经独立 Python hmac 实现交叉验证）
-        assert_eq!(
-            sign_hs256(&rfc7515_key(), signing_input),
-            "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
-            "HS256 签名必须等于 RFC 7515 A.1 官方输出"
-        );
-    }
-
-    // ==================== wire 格式冻结向量（ADR 0033） ====================
-
-    /// **wire 格式冻结向量**：固定 key + 固定 claims（无 `kid`，注入 iat/exp）→ 固定
-    /// token 串。这是 ADR 0033 迁移期的**兼容性锚点**：该常量逐字节等于 ADR 0033
-    /// 之前宿主 `jsonwebtoken` 与本实现共同产出的 token，断言它是为了保证
-    /// 「`kid` 是纯追加的可选字段」——一旦有人调整既有字段的顺序 / 名称 / header
-    /// 序列化，本用例立即转红（存量 wire 格式破了）。
-    #[test]
-    fn legacy_wire_format_is_byte_frozen() {
-        let svc = JwtService::with_key(fixed_key_b());
-        let claims = JwtClaims::new_at(
-            "device-1".to_string(),
-            Some("My Phone".to_string()),
-            Some("fp-abc".to_string()),
-            DEFAULT_TOKEN_EXPIRY_SECS,
-            1700000000,
-        );
-        assert_eq!(claims.kid, None, "无 kid 形态的 claims 不带该字段");
-        let token = svc.encode(&claims).expect("encode");
-        assert_eq!(token, LEGACY_WIRE_VECTOR);
-    }
-
-    /// 反例：带 `kid` 的 token **只**多出一个尾字段，既有段与其余 claims 不变
-    /// （证明 `kid` 是纯追加，不是格式变更）
-    #[test]
-    fn kid_is_pure_additive_suffix() {
-        let svc = JwtService::with_kid(fixed_key_b(), "g7".to_string());
-        let with_kid = svc
-            .generate_token_at("device-1".to_string(), None, None, 1700000000)
-            .expect("encode");
-        let without = JwtService::with_key(fixed_key_b())
-            .generate_token_at("device-1".to_string(), None, None, 1700000000)
-            .expect("encode");
-        let (head_a, (payload_a_b64, _)) = split_head(&with_kid);
-        let (head_b, (payload_b_b64, _)) = split_head(&without);
-        assert_eq!(head_a, head_b, "header 段必须逐字不变");
-        // payload 段：带 kid 者恰好多一个 "kid" 键
-        let payload_a =
-            String::from_utf8(b64url_decode(payload_a_b64).expect("payload b64url"))
-                .expect("payload utf8");
-        let payload_b =
-            String::from_utf8(b64url_decode(payload_b_b64).expect("payload b64url"))
-                .expect("payload utf8");
-        assert!(payload_a.starts_with(&payload_b[..payload_b.len() - 1]), "kid 只追加在末尾: {payload_a}");
-        assert!(payload_a.ends_with(r#""kid":"g7"}"#), "kid 必须是最后一个字段: {payload_a}");
-        // 反序列化往返保留 kid
-        let decoded = svc
-            .verify_token_at(&with_kid, 1700000000)
-            .expect("verify with kid");
-        assert_eq!(decoded.kid.as_deref(), Some("g7"));
-    }
-
-    // ==================== 验签矩阵（正例 / 反例 / 边界） ====================
-
-    /// 往返：自签自验（无 `kid` 与带 `kid` 两种形态都成立）
-    #[test]
-    fn sign_verify_roundtrip_both_kid_forms() {
-        for svc in [
-            JwtService::with_key(fixed_key_b()),
-            JwtService::with_kid(fixed_key_b(), "g3".to_string()),
-        ] {
-            let token = svc
-                .generate_token("device-1".to_string(), Some("Pixel".to_string()), Some("fp".to_string()))
-                .expect("issue");
-            let claims = svc.verify_token_with_expiry(&token).expect("verify");
-            assert_eq!(claims.sub, "device-1");
-            assert_eq!(claims.iss, JWT_ISSUER);
-            assert_eq!(claims.device_name.as_deref(), Some("Pixel"));
-            assert_eq!(claims.kid, svc.kid.clone());
-        }
-    }
-
-    /// 反例：错误密钥 → `InvalidSignature`（不泄露是哪一步失败）
-    #[test]
-    fn wrong_key_is_invalid_signature() {
-        let token = JwtService::with_key(fixed_key_b())
-            .generate_token("device-1".to_string(), None, None)
-            .expect("issue");
-        let other = JwtService::with_key(vec![0x42u8; 32]);
-        assert_eq!(
-            other.verify_token_with_expiry(&token).unwrap_err(),
-            JwtError::InvalidSignature
-        );
-    }
-
-    /// 反例：过期 → `TokenExpired`（两把密钥都过期时不得退化成「签名错」）
-    #[test]
-    fn expired_token_reports_expiry_not_signature() {
-        // 过期窗口 0 + 签发时间往前推 > leeway，确保落在 leeway 之外
-        let svc = JwtService::with_key_and_expiry(fixed_key_b(), 0);
-        let token = svc
-            .generate_token_at(
-                "device-1".to_string(),
-                None,
-                None,
-                now_secs() - VERIFY_LEEWAY_SECS - 100,
-            )
-            .expect("issue");
-        let err = svc.verify_token_with_expiry(&token).unwrap_err();
-        assert_eq!(err, JwtError::TokenExpired, "过期必须是过期（文案可区分）");
-        // 多密钥路径同样短路为「过期」而不是尝试完全部密钥后报签名错
-        let signing = fixed_key_b();
-        let other = vec![0x42u8; 32];
-        let keys: Vec<&[u8]> = vec![&signing[..], &other[..]];
-        assert_eq!(
-            verify_with_keys(&keys, &token, now_secs()).unwrap_err(),
-            JwtError::TokenExpired
-        );
-    }
-
-    /// 反例：结构畸形（非三段 / 非 base64url / alg 非 HS256 / claims 非 JSON）
-    /// → `InvalidToken` / `VerifyError`，**不得**误报为签名错
-    #[test]
-    fn malformed_tokens_are_not_signature_errors() {
-        let key = fixed_key_b();
-        let keys: Vec<&[u8]> = vec![&key[..]];
-        for bad in [
-            "one.segment",
-            "",
-            "a.b.c",
-            &format!("x.{}.y", b64url_encode(b"not-json")),
-            // alg 改成 HS512（signature 段保持合法 base64url）
-            &format!(
-                "{}.{}.{}",
-                b64url_encode(br#"{"typ":"JWT","alg":"HS512"}"#),
-                b64url_encode(br#"{"sub":"d","iss":"BedCode","iat":1,"exp":9999999999}"#),
-                b64url_encode(&[0u8; 32])
-            ),
-        ] {
-            let err = verify_with_keys(&keys, bad, now_secs()).expect_err("畸形必须拒绝");
-            assert!(
-                matches!(
-                    err,
-                    JwtError::InvalidToken | JwtError::VerifyError(_)
-                ),
-                "结构类错误不得报成签名错: {bad} -> {err:?}"
-            );
-        }
-    }
-
-    /// 边界：空密钥集 = 配置错误（与「签名不对」区分，不静默当通过）
-    #[test]
-    fn empty_key_set_is_a_configuration_error() {
-        let err = verify_with_keys(&[], "a.b.c", now_secs()).expect_err("空密钥集");
-        assert!(
-            matches!(err, JwtError::VerifyError(ref m) if m.contains("no verification key")),
-            "got: {err:?}"
-        );
-    }
-
-    // ==================== 轮换跨代验签（ADR 0033 D4） ====================
-
-    /// 跨代：轮换后**新旧 token 都能验签**（宽限期内上一代仍是合法验签密钥），
-    /// 超出宽限期的更早代（已不在候选集）→ 拒。
-    #[test]
-    fn rotation_grace_window_accepts_previous_generation_only() {
-        let gen1 = JwtService::with_kid(fixed_key_b(), "g1".to_string());
-        let gen2_key = vec![0x42u8; 32];
-        let gen2 = JwtService::with_kid(gen2_key.clone(), "g2".to_string());
-        let gen3_key = vec![0x24u8; 32];
-        let gen3 = JwtService::with_kid(gen3_key.clone(), "g3".to_string());
-
-        let t1 = gen1.generate_token("d1".to_string(), None, None).expect("g1 token");
-        let t2 = gen2.generate_token("d1".to_string(), None, None).expect("g2 token");
-        let t3 = gen3.generate_token("d1".to_string(), None, None).expect("g3 token");
-
-        // 轮换两次后候选 = [g3, g2]（g1 已被裁掉）
-        let keys: Vec<&[u8]> = vec![&gen3_key[..], &gen2_key[..]];
-        assert_eq!(keys.len(), 2);
-        assert!(verify_with_keys(&keys, &t3, now_secs()).is_ok(), "当前代必须可验");
-        assert!(verify_with_keys(&keys, &t2, now_secs()).is_ok(), "上一代必须可验（宽限期）");
-        assert_eq!(
-            verify_with_keys(&keys, &t1, now_secs()).unwrap_err(),
-            JwtError::InvalidSignature,
-            "超出宽限期的最早一代必须拒绝"
-        );
-    }
-
-    /// 跨代：**无 `kid`** 的旧 token（迁移前形态）也走同一候选集——否则 D1 一上线
-    /// 存量 token 会在「有密钥但认不出 kid」时被误拒
-    #[test]
-    fn legacy_token_without_kid_still_verifies_against_previous_key() {
-        let legacy = JwtService::with_key(vec![0x42u8; 32])
-            .generate_token("d1".to_string(), None, None)
-            .expect("legacy token");
-        let err = verify_with_keys(&[], &legacy, now_secs()).expect_err("空密钥集");
-        assert!(
-            matches!(&err, JwtError::VerifyError(m) if m.contains("no verification key")),
-            "got: {err:?}"
-        );
-        // 新一代密钥 + 上一代（旧签名）同时在候选里
-        let keys: Vec<&[u8]> = vec![&[0x24u8; 32][..], &[0x42u8; 32][..]];
-        let claims = verify_with_keys(&keys, &legacy, now_secs()).expect("无 kid 旧 token 可验");
-        assert_eq!(claims.kid, None, "旧 token 的 kid 保持缺省");
-        assert_eq!(claims.sub, "d1");
-    }
+    mod adr_0033_d4;
+    mod rfc_7515_a_1_test_vector;
+    mod sign_verify_roundtrip_both;
+    mod wire_adr_0033;
 }

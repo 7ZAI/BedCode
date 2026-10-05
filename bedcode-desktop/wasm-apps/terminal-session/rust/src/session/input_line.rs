@@ -55,10 +55,7 @@ impl SubmittedLineTracker {
     /// 喂入输入块，返回该块内产生的全部提交行（可能多条；空行同样返回，
     /// 是否忽略由消费方业务逻辑决定）
     pub fn feed(&self, session_id: &str, data: &str) -> Vec<String> {
-        let mut map = self
-            .buffers
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut map = self.buffers.lock().unwrap_or_else(|e| e.into_inner());
         let buffer = map.entry(session_id.to_string()).or_default();
         buffer.feed(data)
     }
@@ -66,10 +63,7 @@ impl SubmittedLineTracker {
     /// 移除该会话的缓冲（会话终止时调用）；未提交的残余内容直接丢弃
     /// （没提交就不是提交行，不补发）
     pub fn remove_session(&self, session_id: &str) {
-        let mut map = self
-            .buffers
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut map = self.buffers.lock().unwrap_or_else(|e| e.into_inner());
         map.remove(session_id);
     }
 }
@@ -445,14 +439,22 @@ mod tests {
     #[test]
     fn test_bracketed_paste_content_not_submit() {
         let t = SubmittedLineTracker::new();
-        let out = feed_chunks(&t, "s1", &["\x1b[200~paste line1\r\npaste line2\x1b[201~\r"]);
+        let out = feed_chunks(
+            &t,
+            "s1",
+            &["\x1b[200~paste line1\r\npaste line2\x1b[201~\r"],
+        );
         assert_eq!(out, vec!["paste line1\npaste line2"]);
     }
 
     #[test]
     fn test_bracketed_paste_split_across_chunks() {
         let t = SubmittedLineTracker::new();
-        let out = feed_chunks(&t, "s1", &["pre \x1b[200", "~in\r\npaste\x1b[2", "01~ post\r"]);
+        let out = feed_chunks(
+            &t,
+            "s1",
+            &["pre \x1b[200", "~in\r\npaste\x1b[2", "01~ post\r"],
+        );
         assert_eq!(out, vec!["pre in\npaste post"]);
     }
 

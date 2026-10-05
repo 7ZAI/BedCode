@@ -112,14 +112,20 @@ mod tests {
             (SessionStatus::Idle, serde_json::json!("idle")),
             (SessionStatus::Starting, serde_json::json!("starting")),
             (SessionStatus::Running, serde_json::json!("running")),
-            (SessionStatus::WaitingInput, serde_json::json!("waitingInput")),
+            (
+                SessionStatus::WaitingInput,
+                serde_json::json!("waitingInput"),
+            ),
             (SessionStatus::Stopping, serde_json::json!("stopping")),
             (SessionStatus::Stopped, serde_json::json!("stopped")),
             (
                 SessionStatus::Error(Some("pty closed".to_string())),
                 serde_json::json!({ "error": "pty closed" }),
             ),
-            (SessionStatus::Error(None), serde_json::json!({ "error": null })),
+            (
+                SessionStatus::Error(None),
+                serde_json::json!({ "error": null }),
+            ),
         ];
         for (status, expected) in cases {
             let json = serde_json::to_value(&status).expect("serialize status");

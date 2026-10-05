@@ -54,11 +54,10 @@ pub(crate) fn evaluate(
     // 0. 密码学策略（ADR 0033：宿主不再验签，这里是**唯一**验签点）。
     //    `verify_with_keys` 内部已含结构 / alg / claims / 时效复检，故下一步的
     //    `decode_claims` 不会与它矛盾（同一段解码、同一条判据）。
-    let verified = jwt::verify_with_keys(keys, token, jwt::now_secs())
-        .map_err(|e| match e {
-            JwtError::TokenExpired => "token expired".to_string(),
-            _ => "token signature invalid".to_string(),
-        })?;
+    let verified = jwt::verify_with_keys(keys, token, jwt::now_secs()).map_err(|e| match e {
+        JwtError::TokenExpired => "token expired".to_string(),
+        _ => "token signature invalid".to_string(),
+    })?;
     // 1. 结构策略：claims 必须能独立回解（不信任任何外部传入的中间结果）
     let claims = decode_claims(token)?;
     debug_assert_eq!(
@@ -158,26 +157,28 @@ pub(crate) fn verify_device_token(_token: &str) -> Result<String, String> {
     Err("auth-policy unavailable outside wasm runtime".to_string())
 }
 
+// ==================== Tests ====================
+
+// 用例按功能拆至 `tests/`（本内联模块的子模块路径由 rustc
+// 自动解析到该目录；模块树 `policy::policy::tests::<文件>` 与内联形态等价，私有项可见性不受影响）。
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::pairing::jwt::JwtService;
+    // 跨分组共享的测试脚手架（子模块经 `use super::*` 可见）
 
     /// 测试密钥环（两代：当前 `0x42..` + 上一代 `0x24..`，`kid` 与代次对应）
     fn ring_keys() -> Vec<Vec<u8>> {
         vec![vec![0x42u8; 32], vec![0x24u8; 32]]
     }
-
     /// 候选集视图（当前代优先——与 `keys::Keyring::verification_keys` 同序）
     fn ring_refs(keys: &[Vec<u8>]) -> Vec<&[u8]> {
         keys.iter().map(|k| k.as_slice()).collect()
     }
-
     /// 构造测试 token（用**真实签发面**签名——本模块就是验签方，不能拿假签名测）
     fn token(sub: &str, iss: &str, fingerprint: Option<&str>, expires_in_secs: u64) -> String {
         token_with(sub, iss, fingerprint, expires_in_secs, Some("g1"), 0)
     }
-
     /// 指定密钥下标 + `kid` 的 token 构造（跨代 / 伪造 kid 用）
     fn token_with(
         sub: &str,
@@ -204,13 +205,11 @@ mod tests {
         };
         svc.encode(&claims).expect("encode token")
     }
-
     /// 便捷裁决：候选集 = 测试密钥环全代
     fn eval(token: &str, records: &[PairingRecord]) -> Result<String, String> {
         let keys = ring_keys();
         evaluate(token, &ring_refs(&keys), records)
     }
-
     fn revoked_record(fp: &str) -> PairingRecord {
         PairingRecord {
             id: "p-1".to_string(),
@@ -223,170 +222,13 @@ mod tests {
             is_active: false,
         }
     }
-
     fn active_record(fp: &str) -> PairingRecord {
         let mut r = revoked_record(fp);
         r.is_active = true;
         r
     }
-
-    // ==================== 放行（正例 / 边界） ====================
-
-    /// 正例：合法 token（签名有效 + iss/sub/指纹齐全 + 未过期）+ 空镜像 → 放行，
-    /// claims JSON 可回读
-    #[test]
-    fn valid_token_allows_with_claims_json() {
-        let t = token("device-1", "BedCode", Some("fp-abc"), 3600);
-        let out = eval(&t, &[]).expect("allow");
-        let claims: JwtClaims = serde_json::from_str(&out).expect("claims json");
-        assert_eq!(claims.sub, "device-1");
-        assert_eq!(claims.fingerprint.as_deref(), Some("fp-abc"));
-    }
-
-    /// 正例：指纹已信任（active=true）→ 放行
-    #[test]
-    fn trusted_fingerprint_allows() {
-        let t = token("device-1", "BedCode", Some("fp-abc"), 3600);
-        assert!(eval(&t, &[active_record("fp-abc")]).is_ok());
-    }
-
-    /// 边界：指纹存在但内核无记录（无信任锚点）→ 从宽放行
-    /// （搬迁前镜像语义的保持；收紧为「未配对即拒绝」是新协议决策，不在本批次）
-    #[test]
-    fn unknown_fingerprint_allows() {
-        let t = token("device-1", "BedCode", Some("fp-ghost"), 3600);
-        assert!(eval(&t, &[active_record("fp-abc")]).is_ok());
-    }
-
-    /// 边界：指纹缺失 → 放行（无信任锚点，仅凭验签）
-    #[test]
-    fn missing_fingerprint_allows() {
-        let t = token("device-1", "BedCode", None, 3600);
-        assert!(eval(&t, &[]).is_ok());
-    }
-
-    // ==================== 验签（ADR 0033 新增的第 0 道关） ====================
-
-    /// 反例：**签名被篡改** → 拒绝（claims 完全合法时也拒——这是 ADR 0033 把验签
-    /// 收进本模块后最核心的断言：宿主不再验签，这里是唯一防线）
-    #[test]
-    fn tampered_signature_denies_even_with_valid_claims() {
-        let t = token("device-1", "BedCode", Some("fp-abc"), 3600);
-        let tampered = format!("{}x", &t[..t.len() - 4]);
-        let err = eval(&tampered, &[]).expect_err("篡改签名必须拒绝");
-        assert!(
-            err.contains("signature"),
-            "拒绝原因必须指向签名: {err}"
-        );
-    }
-
-    /// 反例：**用别的密钥签的 token** → 拒绝（伪造者拿不到密钥环）
-    #[test]
-    fn token_signed_by_foreign_key_denies() {
-        let mut claims = JwtClaims::new_at(
-            "device-1".to_string(),
-            Some("Pixel 9".to_string()),
-            Some("fp-abc".to_string()),
-            3600,
-            jwt::now_secs(),
-        );
-        claims.kid = Some("g1".to_string());
-        let foreign = JwtService::with_kid(vec![0x77u8; 32], "g1".to_string())
-            .encode(&claims)
-            .expect("encode");
-        let err = eval(&foreign, &[]).expect_err("外来密钥签的 token 必须拒绝");
-        assert!(err.contains("signature"), "got: {err}");
-    }
-
-    /// 反例：**空候选集**（密钥环不可用）→ 拒绝，绝不放行
-    #[test]
-    fn empty_key_set_denies_rather_than_allows() {
-        let t = token("device-1", "BedCode", Some("fp-abc"), 3600);
-        let err = evaluate(&t, &[], &[]).expect_err("无密钥必须拒绝");
-        assert!(err.contains("signature"), "got: {err}");
-    }
-
-    /// 边界：轮换宽限期内，上一代密钥签的 token 仍放行（ADR 0033 D4）
-    #[test]
-    fn previous_generation_still_verifies_within_grace_window() {
-        // 上一代密钥（ring_keys 的 [1]）签的 token，kid 仍写 g1（代次标识不随密钥变）
-        let t = token_with("device-1", "BedCode", Some("fp-abc"), 3600, Some("g1"), 1);
-        assert!(eval(&t, &[]).is_ok(), "宽限期内旧代 token 必须放行");
-    }
-
-    /// 边界：无 `kid` 的迁移前形态 token → 仍可验签（不因认不出 kid 而误拒）
-    #[test]
-    fn legacy_token_without_kid_still_allows() {
-        let t = token_with("device-1", "BedCode", Some("fp-abc"), 3600, None, 0);
-        let out = eval(&t, &[]).expect("无 kid 的旧 token 必须放行");
-        let claims: JwtClaims = serde_json::from_str(&out).expect("claims json");
-        assert_eq!(claims.kid, None);
-    }
-
-    // ==================== 拒绝（策略四类，语义不变） ====================
-
-    /// 反例：iss 策略违反（非 JWT_ISSUER）→ 拒绝
-    #[test]
-    fn wrong_issuer_denies() {
-        let t = token("device-1", "Evil", Some("fp-abc"), 3600);
-        let err = eval(&t, &[]).expect_err("deny");
-        assert!(err.contains("issuer"), "拒绝原因必须可读: {}", err);
-    }
-
-    /// 反例：sub 为空 → 拒绝
-    #[test]
-    fn empty_subject_denies() {
-        let t = token("", "BedCode", Some("fp-abc"), 3600);
-        assert!(eval(&t, &[]).is_err());
-    }
-
-    /// 反例：过期 token → 拒绝
-    #[test]
-    fn expired_token_denies() {
-        // exp = now - 1（严格 `<` 判过期，exp == now 不算过期）
-        let claims = JwtClaims::new_at(
-            "device-1".to_string(),
-            Some("Pixel 9".to_string()),
-            Some("fp-abc".to_string()),
-            0,
-            jwt::now_secs() - 1,
-        );
-        let t = JwtService::with_key(vec![0x42u8; 32])
-            .encode(&claims)
-            .expect("encode token");
-        assert!(eval(&t, &[]).is_err());
-    }
-
-    /// 反例：结构非法（非三段 / payload 非 base64url / claims 不可解析）→ 拒绝
-    #[test]
-    fn malformed_tokens_deny() {
-        assert!(eval("one.segment", &[]).is_err());
-        assert!(eval("a.b.c", &[]).is_err(), "b 非 base64url");
-        // 合法 base64url 但非 claims JSON
-        let bad_payload = format!("x.{}.y", jwt::b64url_encode(b"not-json"));
-        assert!(eval(&bad_payload, &[]).is_err());
-    }
-
-    /// 边界：撤销优先于其他一切——已撤销设备的**签名有效** token 也拒绝，
-    /// 且拒绝原因指向撤销（不是签名）
-    #[test]
-    fn revocation_overrides_valid_signature() {
-        let t = token("device-1", "BedCode", Some("fp-abc"), 3600);
-        let err = eval(&t, &[revoked_record("fp-abc")]).expect_err("deny");
-        assert!(err.contains("revoked"));
-    }
-
-    /// 反例：指纹已撤销（active=false）→ 拒绝，带撤销语义
-    #[test]
-    fn revoked_fingerprint_denies() {
-        let t = token("device-1", "BedCode", Some("fp-abc"), 3600);
-        let err = eval(&t, &[revoked_record("fp-abc")]).expect_err("deny");
-        assert!(err.contains("revoked"), "拒绝原因必须可读: {}", err);
-    }
-
-    /// native 路径显性失败（无宿主环境）
-    #[test]
-    fn native_path_fails_without_host() {
-        assert!(verify_device_token("x.y.z").is_err());
-    }
+    mod adr_0033_0;
+    mod native_path_fails_without;
+    mod valid_token_allows_with;
+    mod wrong_issuer_denies;
 }

@@ -115,7 +115,10 @@ mod tests {
         assert_eq!(record.device_id, "p-1");
         assert_eq!(record.auth_method, "qr");
         assert_eq!(record.result, "success");
-        assert_eq!(record.disconnected_at.as_deref(), Some("2026-09-19T01:00:00Z"));
+        assert_eq!(
+            record.disconnected_at.as_deref(),
+            Some("2026-09-19T01:00:00Z")
+        );
     }
 
     /// 连接历史 wire：未断开时 disconnectedAt 缺省为 None（null 也不报错）

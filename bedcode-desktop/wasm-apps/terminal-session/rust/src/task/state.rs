@@ -104,21 +104,19 @@ fn session_command(_host: &WasmHost, session_id: &str) -> Option<String> {
         })?;
 
     // 2. 配置真源（插件私有库）查找对应配置的启动命令
-    crate::config::list_via_host()
-        .ok()
-        .and_then(|configs| {
-            configs
-                .as_array()
-                .and_then(|arr| {
-                    arr.iter()
-                        .find(|c| c.get("id").and_then(|v| v.as_str()) == Some(config_id.as_str()))
-                })
-                .and_then(|c| {
-                    c.get("command")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string())
-                })
-        })
+    crate::config::list_via_host().ok().and_then(|configs| {
+        configs
+            .as_array()
+            .and_then(|arr| {
+                arr.iter()
+                    .find(|c| c.get("id").and_then(|v| v.as_str()) == Some(config_id.as_str()))
+            })
+            .and_then(|c| {
+                c.get("command")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            })
+    })
 }
 
 /// 查询会话配置的工程目录（会话登记域 → configId → 配置真源匹配 workingDir）
@@ -134,21 +132,19 @@ fn session_working_dir(_host: &WasmHost, session_id: &str) -> Option<String> {
         })?;
 
     // 2. 配置真源（插件私有库）查找对应配置的工程目录
-    crate::config::list_via_host()
-        .ok()
-        .and_then(|configs| {
-            configs
-                .as_array()
-                .and_then(|arr| {
-                    arr.iter()
-                        .find(|c| c.get("id").and_then(|v| v.as_str()) == Some(config_id.as_str()))
-                })
-                .and_then(|c| {
-                    c.get("workingDir")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string())
-                })
-        })
+    crate::config::list_via_host().ok().and_then(|configs| {
+        configs
+            .as_array()
+            .and_then(|arr| {
+                arr.iter()
+                    .find(|c| c.get("id").and_then(|v| v.as_str()) == Some(config_id.as_str()))
+            })
+            .and_then(|c| {
+                c.get("workingDir")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            })
+    })
 }
 
 /// 检测会话的执行 agent（CLI 级，见 agent::detect_agent）
@@ -216,14 +212,24 @@ pub fn publish_task_slots(
     questions: Option<&Value>,
 ) {
     write_task_slot(host, session_id, SLOT_TASK_STATUS, Some(status));
-    write_task_slot(host, session_id, SLOT_TASK_REASON, reason.filter(|s| !s.is_empty()));
+    write_task_slot(
+        host,
+        session_id,
+        SLOT_TASK_REASON,
+        reason.filter(|s| !s.is_empty()),
+    );
     let updated_at = now_rfc3339(host);
     write_task_slot(host, session_id, SLOT_TASK_UPDATED_AT, Some(&updated_at));
     // questions 须为 JSON 文本（内核 `task_fields_from_slot` 按 JSON 解析，非法即弃）
     let questions_text = questions
         .filter(|q| q.as_array().map(|a| !a.is_empty()).unwrap_or(false))
         .and_then(|q| serde_json::to_string(q).ok());
-    write_task_slot(host, session_id, SLOT_TASK_QUESTIONS, questions_text.as_deref());
+    write_task_slot(
+        host,
+        session_id,
+        SLOT_TASK_QUESTIONS,
+        questions_text.as_deref(),
+    );
 }
 
 /// 单键写入：失败只记 warn（含 key 与 session_id 上下文，值不落日志）
@@ -491,7 +497,11 @@ pub fn recover_running_tasks_on_restart(host: &WasmHost) -> Result<RestartRecove
         .and_then(|v| v.as_array().cloned())
         .unwrap_or_default()
         .iter()
-        .filter_map(|row| row.get("session_id").and_then(|v| v.as_str()).map(str::to_string))
+        .filter_map(|row| {
+            row.get("session_id")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        })
         .collect();
 
     // 2. 过滤仍在册会话（P1-b 真源在本域登记视图）
@@ -527,7 +537,12 @@ pub fn recover_running_tasks_on_restart(host: &WasmHost) -> Result<RestartRecove
                 ),
                 &sql_params![RESTART_INTERRUPT_REASON, session_id],
             )
-            .map_err(|e| format!("converge task rows for {} failed: {}", session_id, e.message))?;
+            .map_err(|e| {
+                format!(
+                    "converge task rows for {} failed: {}",
+                    session_id, e.message
+                )
+            })?;
         report.queue_items += host
             .plugin_db_execute_params(
                 &format!(
@@ -538,7 +553,10 @@ pub fn recover_running_tasks_on_restart(host: &WasmHost) -> Result<RestartRecove
                 &sql_params![session_id],
             )
             .map_err(|e| {
-                format!("converge queue rows for {} failed: {}", session_id, e.message)
+                format!(
+                    "converge queue rows for {} failed: {}",
+                    session_id, e.message
+                )
             })?;
     }
     Ok(report)
@@ -624,7 +642,13 @@ pub fn create_task_from_dispatch(
 ///
 /// 返回是否成功写入了行（`Err` 或缺行 → `false`）：调用方据此短路广播——
 /// 写历史失败被当 log-only 会让「DB 无行却发 in_progress」的幻影事件溜过。
-fn insert_task_row(host: &WasmHost, session_id: &str, input: &str, agent: &str, source: &str) -> bool {
+fn insert_task_row(
+    host: &WasmHost,
+    session_id: &str,
+    input: &str,
+    agent: &str,
+    source: &str,
+) -> bool {
     let claude_sid = find_claude_sid_by_session(host, session_id);
     let (_, auto_answer) = session_flags(host, session_id);
     // 记录会话配置的工程目录：任务日志直接展示配置目录，后续配置变更不影响历史行
@@ -665,7 +689,9 @@ fn insert_task_row(host: &WasmHost, session_id: &str, input: &str, agent: &str, 
             // 缺行（0 affected）：与 Err 同待遇——写没发生，调用方不得广播
             host.log_error(&format!(
                 "Task row insert affected 0 rows: session_id={} source={} len={}",
-                session_id, source, input.len()
+                session_id,
+                source,
+                input.len()
             ));
             false
         }
@@ -854,9 +880,7 @@ fn event_time_diff_ms(row: &str, incoming: &str) -> Option<i64> {
         let doy = (153 * mp + 2) / 5 + day - 1; // [0, 365]
         let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0, 146096]
         let days = era * 146097 + doe - 719468;
-        Some(
-            days * 86_400_000 + hour * 3_600_000 + minute * 60_000 + second * 1_000 + millis,
-        )
+        Some(days * 86_400_000 + hour * 3_600_000 + minute * 60_000 + second * 1_000 + millis)
     };
     Some(parse(incoming)? - parse(row)?)
 }
@@ -891,7 +915,14 @@ fn handle_update_task_status(host: &WasmHost, body: &Value) -> Value {
     // retrying：agent 收到可重试错误（如 429）后自动重试中的过渡态，非终态——
     // 任务仍在执行（has_active_task 视为活动），重试成功由后续推送收敛到
     // in_progress/completed，重试耗尽由 agent_settled / StopFailure 收敛到 interrupted。
-    let valid_statuses = ["idle", "in_progress", "asking", "retrying", "completed", "interrupted"];
+    let valid_statuses = [
+        "idle",
+        "in_progress",
+        "asking",
+        "retrying",
+        "completed",
+        "interrupted",
+    ];
     if !valid_statuses.contains(&status) {
         host.log_warn(&format!(
             "task-status invalid status: '{}' for session_id={}",
@@ -1197,9 +1228,7 @@ fn handle_update_task_status(host: &WasmHost, body: &Value) -> Value {
     // 仅真实终态迁移（非终态行更新为终态）或无行可更新时触发：已终态行的再次
     // 终态确认（重复推送/多轮 run 的迟到确认）不重复归档——并发窗口内刚出队
     // 下发的下一项会被误归档为 done 并广播 done（2026-08-22 事故根因之一）
-    if matches!(status, "completed" | "interrupted")
-        && (!updated_row || transitioned_to_terminal)
-    {
+    if matches!(status, "completed" | "interrupted") && (!updated_row || transitioned_to_terminal) {
         crate::task::queue::try_dispatch_next(host, &resolved_session_id);
     }
 
@@ -1518,7 +1547,11 @@ impl TaskHistoryFilter {
                 if src == "queue" {
                     params.push(Value::String("queue".to_string()));
                     params.push(Value::String("preset".to_string()));
-                    clauses.push(format!("source IN (?{}, ?{})", params.len() - 1, params.len()));
+                    clauses.push(format!(
+                        "source IN (?{}, ?{})",
+                        params.len() - 1,
+                        params.len()
+                    ));
                 } else {
                     params.push(Value::String(src.clone()));
                     clauses.push(format!("source = ?{}", params.len()));

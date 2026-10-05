@@ -48,10 +48,11 @@ use bedcode_plugin_api::wasm_host::WasmHost;
 /// OnceLock（与 lib.rs QR_MANAGER 同模式）：`HashMap::new` 非常量，
 /// 不能直接作 static 初始化；首次访问经 [`connected_devices`] 初始化一次。
 static CONNECTED_DEVICES: std::sync::OnceLock<
-    std::sync::Mutex<std::collections::HashMap<String, DeviceIdentity>>
+    std::sync::Mutex<std::collections::HashMap<String, DeviceIdentity>>,
 > = std::sync::OnceLock::new();
 
-fn connected_devices() -> &'static std::sync::Mutex<std::collections::HashMap<String, DeviceIdentity>> {
+fn connected_devices(
+) -> &'static std::sync::Mutex<std::collections::HashMap<String, DeviceIdentity>> {
     CONNECTED_DEVICES.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
@@ -77,9 +78,18 @@ pub fn identity_from_context(context_json: &str) -> DeviceIdentity {
             .and_then(|v| v.as_str())
             .unwrap_or_default()
             .to_string(),
-        device_id: auth.get("subject").and_then(|v| v.as_str()).map(str::to_string),
-        device_name: auth.get("deviceName").and_then(|v| v.as_str()).map(str::to_string),
-        fingerprint: auth.get("fingerprint").and_then(|v| v.as_str()).map(str::to_string),
+        device_id: auth
+            .get("subject")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        device_name: auth
+            .get("deviceName")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        fingerprint: auth
+            .get("fingerprint")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
     }
 }
 
@@ -136,7 +146,9 @@ pub fn on_client_connected(endpoint_id: &str, client_id: &str) {
     // **幂等化**：同一 client_id 已有活条目（重复/乱序 connect）→ 只刷新记忆，
     // 不重触认证记录、不重发 device:connected（避免幽灵记忆与重复计数）
     {
-        let mut guard = connected_devices().lock().unwrap_or_else(|e| e.into_inner());
+        let mut guard = connected_devices()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if let Some(existing) = guard.get(client_id) {
             if existing.fingerprint == identity.fingerprint {
                 WasmHost.log_debug(&format!(
@@ -151,7 +163,10 @@ pub fn on_client_connected(endpoint_id: &str, client_id: &str) {
     }
     // 认证记录 touch（本插件私有库真源；失败显性留痕，不阻断事件发布）
     if let Err(e) = crate::auth_records::touch(&fp) {
-        WasmHost.log_warn(&format!("device: auth record touch failed (fingerprint len={}): {e}", fp.len()));
+        WasmHost.log_warn(&format!(
+            "device: auth record touch failed (fingerprint len={}): {e}",
+            fp.len()
+        ));
     }
     WasmHost.emit_event(EVENT_DEVICE_CONNECTED, &event_payload(&identity, true));
     WasmHost.log_info(&format!(
@@ -171,7 +186,9 @@ pub fn on_client_connected(endpoint_id: &str, client_id: &str) {
 #[cfg(target_arch = "wasm32")]
 pub fn on_client_disconnected(endpoint_id: &str, client_id: &str) {
     let remembered = {
-        let mut guard = connected_devices().lock().unwrap_or_else(|e| e.into_inner());
+        let mut guard = connected_devices()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         guard.remove(client_id)
     };
     let identity = remembered.or_else(|| resolve_identity(endpoint_id, client_id));
@@ -278,7 +295,10 @@ mod tests {
         assert_eq!(payload["deviceId"], "dev-2");
         let flat = payload.to_string();
         for forbidden in ["token", "secret", "publicKey", "private", "jwt"] {
-            assert!(!flat.to_lowercase().contains(forbidden), "载荷不得泄漏凭据: {forbidden}");
+            assert!(
+                !flat.to_lowercase().contains(forbidden),
+                "载荷不得泄漏凭据: {forbidden}"
+            );
         }
     }
 
@@ -321,7 +341,10 @@ mod tests {
         connected_devices()
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .insert("c-2".to_string(), identity_from_context(&auth_context_json("fp-4", "Pad", "dev-4")));
+            .insert(
+                "c-2".to_string(),
+                identity_from_context(&auth_context_json("fp-4", "Pad", "dev-4")),
+            );
         clear_connected();
         assert!(
             connected_devices()
@@ -338,7 +361,8 @@ mod tests {
     #[test]
     fn device_events_do_not_depend_on_host_device_dto() {
         let root = env!("CARGO_MANIFEST_DIR");
-        let src = std::fs::read_to_string(format!("{root}/src/devices_events.rs")).expect("read devices_events.rs");
+        let src = std::fs::read_to_string(format!("{root}/src/devices_events.rs"))
+            .expect("read devices_events.rs");
         let implementation = src.split("#[cfg(test)]").next().unwrap_or(&src);
         for (idx, raw) in implementation.lines().enumerate() {
             let line = raw.trim_start();
