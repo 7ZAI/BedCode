@@ -4,7 +4,6 @@ use bedcode_plugin_api::host::bus::{
     is_legacy_owner_suffix, is_reply_topic, owned_topic, topic_owner, API_TOPIC_PREFIX,
 };
 
-
 // ==================== Topic 命名空间门禁（审计票 05，P0-4） ====================
 
 /// 命名空间门禁：`<owner>::<name>` 形态的 topic 只有属主插件（与宿主）可读写
@@ -69,7 +68,11 @@ fn check_subscribe_access(plugin_id: &str, topic: &str) -> Result<(), String> {
 /// topic 的目标 api 必须命中某已激活插件的声明清单（注册表只在激活态登记）；
 /// `bedcode.api.reply.` 是响应通道（回复 topic 的调用方即为目标），免校验；
 /// 普通广播 topic 不校验，保持向后兼容。
-fn check_api_gate(sec: &dyn crate::wasm_core::host_api::context::SecurityScope, plugin_id: &str, topic: &str) -> Result<(), String> {
+fn check_api_gate(
+    sec: &dyn crate::wasm_core::host_api::context::SecurityScope,
+    plugin_id: &str,
+    topic: &str,
+) -> Result<(), String> {
     if let Some(api) = topic.strip_prefix(API_TOPIC_PREFIX) {
         if !api.starts_with("reply.") {
             // 互调门经 core-security 授权框架路由（三段管线；行为与直查注册表等价）
@@ -101,7 +104,10 @@ fn check_api_gate(sec: &dyn crate::wasm_core::host_api::context::SecurityScope, 
 /// 与 [`check_api_gate`] 读同一张注册表（`ApiCallAuthorizer` 的命中判定即
 /// `registry.contains`），故「门禁放行」与「取到属主」不会漂移。
 /// 回复道 / 公开 topic → `None`（无属主可校验）。
-pub(crate) fn api_gate_target_owner(reg: &dyn crate::wasm_core::host_api::context::ApiRegistryScope, request_topic: &str) -> Option<String> {
+pub(crate) fn api_gate_target_owner(
+    reg: &dyn crate::wasm_core::host_api::context::ApiRegistryScope,
+    request_topic: &str,
+) -> Option<String> {
     let api = request_topic.strip_prefix(API_TOPIC_PREFIX)?;
     if api.starts_with("reply.") {
         return None;
@@ -155,7 +161,11 @@ pub(crate) fn bus_publish_binary(
 ///
 /// 命名空间/回复道/legacy 门禁在 spawn **之前**同步判定：错误必须回给 guest，
 /// 不能退化成「返回 Ok 但没订阅上」。
-pub(crate) fn bus_subscribe(bus: &dyn crate::wasm_core::host_api::context::BusScope, plugin_id: &str, topic: &str) -> Result<(), String> {
+pub(crate) fn bus_subscribe(
+    bus: &dyn crate::wasm_core::host_api::context::BusScope,
+    plugin_id: &str,
+    topic: &str,
+) -> Result<(), String> {
     check_subscribe_access(plugin_id, topic)?;
     let bus = bus.message_bus().clone();
     let Ok(handle) = tokio::runtime::Handle::try_current() else {
@@ -172,7 +182,11 @@ pub(crate) fn bus_subscribe(bus: &dyn crate::wasm_core::host_api::context::BusSc
 
 /// 以二进制格式偏好订阅（v11）：只接收 publish-binary 投递，
 /// JSON 消息对其按格式不匹配拒绝（与 subscribe 同因异步投递）
-pub(crate) fn bus_subscribe_binary(bus: &dyn crate::wasm_core::host_api::context::BusScope, plugin_id: &str, topic: &str) -> Result<(), String> {
+pub(crate) fn bus_subscribe_binary(
+    bus: &dyn crate::wasm_core::host_api::context::BusScope,
+    plugin_id: &str,
+    topic: &str,
+) -> Result<(), String> {
     check_subscribe_access(plugin_id, topic)?;
     let bus = bus.message_bus().clone();
     let Ok(handle) = tokio::runtime::Handle::try_current() else {
@@ -191,7 +205,11 @@ pub(crate) fn bus_subscribe_binary(bus: &dyn crate::wasm_core::host_api::context
 ///
 /// 只过命名空间门：legacy/回复道形态在此不拦——退订是清理动作，必须幂等可用
 /// （旧产物退订它曾订阅过的串不应被新规则噎住）
-pub(crate) fn bus_unsubscribe(bus: &dyn crate::wasm_core::host_api::context::BusScope, plugin_id: &str, topic: &str) -> Result<(), String> {
+pub(crate) fn bus_unsubscribe(
+    bus: &dyn crate::wasm_core::host_api::context::BusScope,
+    plugin_id: &str,
+    topic: &str,
+) -> Result<(), String> {
     check_namespace(plugin_id, topic, "unsubscribe", "that plugin (and the host)")?;
     let bus = bus.message_bus().clone();
     let Ok(handle) = tokio::runtime::Handle::try_current() else {
@@ -258,7 +276,14 @@ mod tests {
             .subscribe_static("plugin-b", "greeting", Box::new(ChannelHandler(tx)))
             .await;
 
-        bus_publish(ctx.as_ref(), ctx.as_ref(), "plugin-a", "greeting", r#"{"hello":"world"}"#).expect("publish ok");
+        bus_publish(
+            ctx.as_ref(),
+            ctx.as_ref(),
+            "plugin-a",
+            "greeting",
+            r#"{"hello":"world"}"#,
+        )
+        .expect("publish ok");
 
         let msg = rx.recv().await.expect("subscriber must receive message");
         assert_eq!(msg.topic, "greeting");
@@ -276,7 +301,7 @@ mod tests {
             .register("com.bedcode.scheduler", &["com.bedcode.scheduler.add".to_string()])
             .expect("夹具登记 add api 失败：门禁未布防则本用例失去意义");
         bus_publish(
-                        ctx.as_ref(),
+            ctx.as_ref(),
             ctx.as_ref(),
             "plugin-a",
             "bedcode.api.com.bedcode.scheduler.add",
@@ -289,7 +314,14 @@ mod tests {
     #[test]
     fn gate_rejects_undeclared_api() {
         let ctx = build_host_ctx();
-        let err = bus_publish(ctx.as_ref(), ctx.as_ref(), "plugin-a", "bedcode.api.com.bedcode.scheduler.remove", "{}").unwrap_err();
+        let err = bus_publish(
+            ctx.as_ref(),
+            ctx.as_ref(),
+            "plugin-a",
+            "bedcode.api.com.bedcode.scheduler.remove",
+            "{}",
+        )
+        .unwrap_err();
         assert!(err.contains("not declared"), "got: {}", err);
         assert!(err.contains("com.bedcode.scheduler.remove"), "got: {}", err);
     }
@@ -302,7 +334,14 @@ mod tests {
             .register("com.bedcode.scheduler", &["com.bedcode.scheduler.add".to_string()])
             .expect("夹具登记 add api 失败：注销路径的前置条件未成立");
         ctx.api_registry().unregister("com.bedcode.scheduler");
-        let err = bus_publish(ctx.as_ref(), ctx.as_ref(), "plugin-a", "bedcode.api.com.bedcode.scheduler.add", "{}").unwrap_err();
+        let err = bus_publish(
+            ctx.as_ref(),
+            ctx.as_ref(),
+            "plugin-a",
+            "bedcode.api.com.bedcode.scheduler.add",
+            "{}",
+        )
+        .unwrap_err();
         assert!(err.contains("not declared"), "got: {}", err);
     }
 
@@ -311,7 +350,7 @@ mod tests {
     fn gate_allows_reply_topic() {
         let ctx = build_host_ctx();
         bus_publish(
-                        ctx.as_ref(),
+            ctx.as_ref(),
             ctx.as_ref(),
             "com.bedcode.scheduler",
             "bedcode.api.reply.com.bedcode.caller.req-1",
@@ -324,7 +363,8 @@ mod tests {
     #[test]
     fn gate_ignores_regular_topics() {
         let ctx = build_host_ctx();
-        bus_publish(ctx.as_ref(), ctx.as_ref(), "plugin-a", "filesrv:peer_changed", "{}").expect("regular topics must bypass gate");
+        bus_publish(ctx.as_ref(), ctx.as_ref(), "plugin-a", "filesrv:peer_changed", "{}")
+            .expect("regular topics must bypass gate");
     }
 
     /// 门禁只校验目标（层 1）：任意已激活插件声明的 api 均可调，不校验调用方身份
@@ -334,8 +374,14 @@ mod tests {
         ctx.api_registry()
             .register("com.bedcode.scheduler", &["com.bedcode.scheduler.list".to_string()])
             .expect("夹具登记 list api 失败：层 1 门禁用例失去目标声明");
-        bus_publish(ctx.as_ref(), ctx.as_ref(), "any-plugin", "bedcode.api.com.bedcode.scheduler.list", "{}")
-            .expect("layer 1 gate checks target declaration only");
+        bus_publish(
+            ctx.as_ref(),
+            ctx.as_ref(),
+            "any-plugin",
+            "bedcode.api.com.bedcode.scheduler.list",
+            "{}",
+        )
+        .expect("layer 1 gate checks target declaration only");
     }
 
     /// 总线语义：不投递给发送者自己（同一插件发布+订阅同一 topic）
@@ -420,7 +466,14 @@ mod tests {
     #[tokio::test]
     async fn publish_binary_rejects_other_namespace() {
         let ctx = build_host_ctx();
-        let err = bus_publish_binary(ctx.as_ref(), ctx.as_ref(), "com.evil", "com.victim::blob:chunk", vec![1, 2]).unwrap_err();
+        let err = bus_publish_binary(
+            ctx.as_ref(),
+            ctx.as_ref(),
+            "com.evil",
+            "com.victim::blob:chunk",
+            vec![1, 2],
+        )
+        .unwrap_err();
         assert!(err.contains("namespace"), "got: {}", err);
     }
 
@@ -428,7 +481,8 @@ mod tests {
     #[tokio::test]
     async fn publish_public_topic_unaffected_by_namespace_gate() {
         let ctx = build_host_ctx();
-        bus_publish(ctx.as_ref(), ctx.as_ref(), "com.evil", "task:status-changed", "{}").expect("public topic must pass");
+        bus_publish(ctx.as_ref(), ctx.as_ref(), "com.evil", "task:status-changed", "{}")
+            .expect("public topic must pass");
         bus_subscribe(ctx.as_ref(), "com.evil", "peer:consent").expect("public subscribe must pass");
     }
 

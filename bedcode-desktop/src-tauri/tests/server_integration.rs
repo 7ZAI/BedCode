@@ -76,7 +76,12 @@ async fn body_json(resp: reqwest::Response) -> serde_json::Value {
 #[tokio::test]
 async fn http_contract_and_server_lifecycle() {
     // 测试日志输出到 harness（失败时可查链路）；重复 init 静默跳过
-    if tracing_subscriber::fmt().with_test_writer().with_max_level(tracing::Level::DEBUG).try_init().is_err() {
+    if tracing_subscriber::fmt()
+        .with_test_writer()
+        .with_max_level(tracing::Level::DEBUG)
+        .try_init()
+        .is_err()
+    {
         tracing::debug!("tracing subscriber already initialized");
     }
 
@@ -176,11 +181,7 @@ async fn http_contract_and_server_lifecycle() {
         let resp = send_until(req, Duration::from_secs(5))
             .await
             .expect("request must reach server");
-        assert_eq!(
-            resp.status(),
-            401,
-            "无认证中心时任何凭证都不得放行（token={token:?}）"
-        );
+        assert_eq!(resp.status(), 401, "无认证中心时任何凭证都不得放行（token={token:?}）");
     }
 
     // ==================== 场景 3：优雅停机 + 端口复用 ====================

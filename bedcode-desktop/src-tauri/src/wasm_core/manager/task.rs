@@ -40,12 +40,12 @@ use std::time::{Duration, Instant};
 use serde::Deserialize;
 use tokio::sync::mpsc as tmpsc;
 
+use crate::system::constants as C;
 use crate::wasm_core::host_api::context::TaskEngine;
 use crate::wasm_core::host_api::unit_executor::UnitExecutor;
 use crate::wasm_core::manager::runtime::WasmHostContext;
 use crate::wasm_core::monitor::{MetricsRegistry, MetricsSource};
 use crate::wasm_core::runtime_util::ambient_handle;
-use crate::system::constants as C;
 
 /// execute-batch 超时后等待在途单元落盘的结果宽限期（M-02）
 ///
@@ -1138,12 +1138,22 @@ mod tests {
         };
 
         // Running + 全单元完成 → Completed / Failed
-        assert_eq!(terminal_phase_for(&inner(JobPhase::Running, 0, 0)), Some(JobPhase::Completed));
-        assert_eq!(terminal_phase_for(&inner(JobPhase::Running, 0, 1)), Some(JobPhase::Failed));
+        assert_eq!(
+            terminal_phase_for(&inner(JobPhase::Running, 0, 0)),
+            Some(JobPhase::Completed)
+        );
+        assert_eq!(
+            terminal_phase_for(&inner(JobPhase::Running, 0, 1)),
+            Some(JobPhase::Failed)
+        );
         // Running 但还有单元未完成 → 不终态
         assert_eq!(terminal_phase_for(&inner(JobPhase::Running, 1, 0)), None);
         // 已 Cancelled（cancel/超时）即使 remaining==0 也不得翻回
-        assert_eq!(terminal_phase_for(&inner(JobPhase::Cancelled, 0, 0)), None, "Cancelled 不得被覆写");
+        assert_eq!(
+            terminal_phase_for(&inner(JobPhase::Cancelled, 0, 0)),
+            None,
+            "Cancelled 不得被覆写"
+        );
         // 已 Completed / Failed 幂等保持
         assert_eq!(terminal_phase_for(&inner(JobPhase::Completed, 0, 0)), None);
         assert_eq!(terminal_phase_for(&inner(JobPhase::Failed, 0, 1)), None);
@@ -1197,11 +1207,18 @@ mod tests {
         // 事件属于 B → 归账 B（旧实现会记到迭代序第一个 = A）
         let ev = serde_json::json!({ "jobId": "task-bbb", "phase": "progress" });
         let found = job_for_drop_counting("drop-probe", &ev).expect("必须命中 B");
-        assert_eq!(found.inner.lock().unwrap_or_else(|e| e.into_inner()).owner, "drop-probe");
+        assert_eq!(
+            found.inner.lock().unwrap_or_else(|e| e.into_inner()).owner,
+            "drop-probe"
+        );
         // 直接走计数语义：给 B 记一笔
         let b = job_for_drop_counting("drop-probe", &ev).unwrap();
         b.inner.lock().unwrap_or_else(|e| e.into_inner()).dropped_events += 1;
-        assert_eq!(job_a.inner.lock().unwrap_or_else(|e| e.into_inner()).dropped_events, 0, "A 不得被错记");
+        assert_eq!(
+            job_a.inner.lock().unwrap_or_else(|e| e.into_inner()).dropped_events,
+            0,
+            "A 不得被错记"
+        );
         assert_eq!(job_b.inner.lock().unwrap_or_else(|e| e.into_inner()).dropped_events, 1);
 
         // 未知 jobId / 无 jobId / 非属主 → None（不归账）
@@ -1346,18 +1363,12 @@ mod tests {
             let mut jobs = REGISTRY.jobs.lock().unwrap_or_else(|e| e.into_inner());
             // 只操作本测试插入的条目，不依赖全局 REGISTRY 为空（其他测试如 task_e2e
             // 会经 register_job 残留真实 job）——断言只数本属主，清理只删自己的。
-            let before_others = jobs
-                .values()
-                .filter(|h| h.owner() != "gc-test")
-                .count();
+            let before_others = jobs.values().filter(|h| h.owner() != "gc-test").count();
             jobs.insert("task-gc-a".to_string(), job_terminal);
             jobs.insert("task-gc-b".to_string(), job_running);
             // 惰性 GC 语义（register_job 中的 retain 谓词）
             jobs.retain(|_, h| h.owner() != "gc-test" || h.phase() == JobPhase::Running);
-            let gc_remaining = jobs
-                .values()
-                .filter(|h| h.owner() == "gc-test")
-                .count();
+            let gc_remaining = jobs.values().filter(|h| h.owner() == "gc-test").count();
             assert_eq!(gc_remaining, 1, "终态任务被 GC，running 保留");
             assert!(jobs.contains_key("task-gc-b"));
             assert_eq!(jobs.len(), before_others + 1, "不得影响其他属主 job");

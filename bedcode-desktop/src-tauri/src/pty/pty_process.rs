@@ -11,12 +11,12 @@
 //! 构造 argv。两条消费线共用同一套读线程 / 回收 / 终态门语义。
 
 // 仅在 Windows 平台使用（kill 的 taskkill 路径），避免 Linux/macOS 编译下 unused 警告
-#[cfg(target_os = "windows")]
-use crate::system::process::create_command;
 use crate::pty::lifecycle::{PtyTerminated, PtyTerminationGate};
 use crate::pty::output_sink::PtyOutputSink;
 use crate::pty::pty_reader::PtyReader;
 use crate::system::config::AppConfig;
+#[cfg(target_os = "windows")]
+use crate::system::process::create_command;
 use crate::Result;
 
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtyPair, PtySize, SlavePty};

@@ -176,7 +176,7 @@ fn parse_approvals(value: Option<serde_json::Value>) -> crate::Result<HashMap<St
 pub fn compute_dir_hash(dir: &Path) -> crate::Result<String> {
     let mut files: Vec<(String, Vec<u8>)> = Vec::new();
 
-fn collect(dir: &Path, base: &Path, files: &mut Vec<(String, Vec<u8>)>) -> crate::Result<()> {
+    fn collect(dir: &Path, base: &Path, files: &mut Vec<(String, Vec<u8>)>) -> crate::Result<()> {
         for entry in std::fs::read_dir(dir)? {
             let entry = entry?;
             let path = entry.path();
@@ -269,7 +269,10 @@ pub fn effective_permissions(
 ///
 /// [`VALID_PERMISSIONS`]: crate::wasm_core::permission::VALID_PERMISSIONS
 pub fn known_permissions(requested: &[String]) -> Vec<String> {
-    let valid: HashSet<&str> = crate::wasm_core::permission::VALID_PERMISSIONS.iter().copied().collect();
+    let valid: HashSet<&str> = crate::wasm_core::permission::VALID_PERMISSIONS
+        .iter()
+        .copied()
+        .collect();
     let mut seen: HashSet<&str> = HashSet::new();
     requested
         .iter()
@@ -502,10 +505,7 @@ mod tests {
         }
 
         let err = compute_dir_hash(&dir).expect_err("含 symlink 的目录必须被拒绝");
-        assert!(
-            format!("{err}").contains("symlink"),
-            "错误须点名 symlink 原因: {err}"
-        );
+        assert!(format!("{err}").contains("symlink"), "错误须点名 symlink 原因: {err}");
     }
 
     /// S-08：排除规则只豁免**根级**私有库——嵌套同名 `assets/plugin.db` 参与哈希
@@ -577,14 +577,14 @@ mod tests {
         r1.unwrap();
         r2.unwrap();
         let map = store.load_all().await.unwrap();
-        assert!(map.contains_key("com.a") && map.contains_key("com.b"), "并发双写不得丢一方");
+        assert!(
+            map.contains_key("com.a") && map.contains_key("com.b"),
+            "并发双写不得丢一方"
+        );
 
         // 并发 approve C + revoke A：两者都落盘（旧形态 revoke 的 load 可覆盖 approve）
         let perms_c = vec!["storage".to_string()];
-        let (r1, r2) = tokio::join!(
-            s1.approve("com.c", &perms_c, "h3", "1.0.0"),
-            s2.revoke("com.a"),
-        );
+        let (r1, r2) = tokio::join!(s1.approve("com.c", &perms_c, "h3", "1.0.0"), s2.revoke("com.a"),);
         r1.unwrap();
         r2.unwrap();
         let map = store.load_all().await.unwrap();

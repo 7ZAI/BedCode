@@ -13,10 +13,10 @@
 //! 已自 `plugin/downloader.rs` 迁到 `plugin/manager/`，引用路径同步为
 //! `crate::wasm_core::manager::downloader`。
 
-use crate::wasm_core::manager::validation::validate_plugin_id;
 use crate::system::constants::{
     PLUGIN_DOWNLOAD_TEMP_DIR, PLUGIN_MANIFEST_FILE, PLUGIN_SOURCE_MARKER, SOURCE_FILE_INSTALL, WASM_FILE_EXT,
 };
+use crate::wasm_core::manager::validation::validate_plugin_id;
 use crate::Result;
 use sha2::{Digest, Sha256};
 use std::io::Read;
@@ -586,7 +586,10 @@ mod tests {
         const VECTOR_SHA256: &str = "93a44bbb96c751218e4c00d479e4c14358122a389acca16205b1e4d0dc5f9476";
 
         // 取文件规则同源：JS 侧 `${rustLibrary}.wasm` 用的字面量必须等于本常量
-        assert_eq!(WASM_FILE_EXT, ".wasm", "生产者按 `.wasm` 后缀取文件，改这里要同步改 wasm-hash.js");
+        assert_eq!(
+            WASM_FILE_EXT, ".wasm",
+            "生产者按 `.wasm` 后缀取文件，改这里要同步改 wasm-hash.js"
+        );
 
         let tmp = tempfile::tempdir().unwrap();
         let wasm = tmp.path().join("bedcode_plugin_vector.wasm");
@@ -610,8 +613,7 @@ mod tests {
             VECTOR_BYTES,
             "3f499bf4c9e7483e804244d5e485b3537b2135690a7ce7b3fd7cb2544217d729",
         );
-        let err =
-            PluginDownloader::install_from_file(bad_zip.to_str().unwrap(), &plugins_dir).unwrap_err();
+        let err = PluginDownloader::install_from_file(bad_zip.to_str().unwrap(), &plugins_dir).unwrap_err();
         assert!(
             err.to_string().contains("WASM content mismatch"),
             "摘要漂移必须被拒装，实际: {err}"

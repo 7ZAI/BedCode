@@ -14,11 +14,10 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 pub use bedcode_server_base::config::{
-    default_backlog, default_client_disconnect_timeout_secs,
-    default_client_request_timeout_secs, default_keep_alive_secs,
-    default_max_connections, default_metrics_enabled, default_prevent_sleep,
-    default_shutdown_timeout_secs, default_tcp_nodelay,
-    default_ws_max_frame_size_kb, default_ws_max_message_size_mb, NetworkConfig,
+    default_backlog, default_client_disconnect_timeout_secs, default_client_request_timeout_secs,
+    default_keep_alive_secs, default_max_connections, default_metrics_enabled, default_prevent_sleep,
+    default_shutdown_timeout_secs, default_tcp_nodelay, default_ws_max_frame_size_kb, default_ws_max_message_size_mb,
+    NetworkConfig,
 };
 /// 全局配置单例
 static CONFIG_INSTANCE: std::sync::OnceLock<AppConfig> = std::sync::OnceLock::new();
@@ -34,32 +33,68 @@ static PROPERTY_COMMENTS: &[(&str, &str)] = &[
     ("network.client_disconnect_timeout_secs", "客户端断开连接等待超时秒数"),
     ("network.max_connections", "每 worker 最大并发连接数"),
     ("network.backlog", "TCP 半连接队列上限"),
-    ("network.tcp_nodelay", "启用 TCP_NODELAY（禁用 Nagle 算法，降低小包延迟）"),
+    (
+        "network.tcp_nodelay",
+        "启用 TCP_NODELAY（禁用 Nagle 算法，降低小包延迟）",
+    ),
     ("network.shutdown_timeout_secs", "优雅停机超时秒数"),
     ("network.ws_max_frame_size_kb", "WebSocket 单帧最大大小（KB）"),
-    ("network.ws_max_message_size_mb", "WebSocket 单消息最大大小（MB，可跨多帧）"),
-    ("network.metrics_enabled", "服务器性能监控采集总开关（默认关闭；开启时采集 CPU/内存/WS 速率指标）"),
+    (
+        "network.ws_max_message_size_mb",
+        "WebSocket 单消息最大大小（MB，可跨多帧）",
+    ),
+    (
+        "network.metrics_enabled",
+        "服务器性能监控采集总开关（默认关闭；开启时采集 CPU/内存/WS 速率指标）",
+    ),
     ("ui.theme", "主题（light / dark / system）"),
-    ("ui.theme_palette", "主题色板（warm 暖调 / cool 冷调 / forest / ocean / sunset / violet）"),
+    (
+        "ui.theme_palette",
+        "主题色板（warm 暖调 / cool 冷调 / forest / ocean / sunset / violet）",
+    ),
     ("ui.font_size", "全局界面字体大小（终端字体在终端设置中独立配置）"),
     ("ui.terminal_font_size", "终端字体大小"),
     ("ui.terminal_font_family", "终端字体名称"),
     ("ui.terminal_theme", "终端配色主题名"),
     ("ui.language", "语言偏好（zh-CN / en）"),
-    ("ui.terminal_bg_image", "终端背景图片文件名（位于应用数据目录，留空表示不启用）"),
+    (
+        "ui.terminal_bg_image",
+        "终端背景图片文件名（位于应用数据目录，留空表示不启用）",
+    ),
     ("ui.terminal_bg_opacity", "终端背景图片不透明度（0-100，越小图片越淡）"),
-    ("ui.animations_enabled", "全局动画效果总开关（true/false，关闭后禁用所有页面过渡/动画，默认开启）"),
+    (
+        "ui.animations_enabled",
+        "全局动画效果总开关（true/false，关闭后禁用所有页面过渡/动画，默认开启）",
+    ),
     ("channels.lifecycle_capacity", "生命周期事件广播容量 - PTY 进程状态变更"),
     ("terminal.default_cols", "默认终端列数"),
     ("terminal.default_rows", "默认终端行数"),
-    ("terminal.read_buffer_size", "PTY 读取缓冲区大小（字节）- 单次读取的最大字节数"),
-    ("log.file_level", "运行时日志文件级别（trace / debug / info / warn / error）"),
-    ("log.console_filter", "控制台日志过滤器（支持 EnvFilter 语法，如 bedcode_desktop_lib=debug,actix_web=info）"),
+    (
+        "terminal.read_buffer_size",
+        "PTY 读取缓冲区大小（字节）- 单次读取的最大字节数",
+    ),
+    (
+        "log.file_level",
+        "运行时日志文件级别（trace / debug / info / warn / error）",
+    ),
+    (
+        "log.console_filter",
+        "控制台日志过滤器（支持 EnvFilter 语法，如 bedcode_desktop_lib=debug,actix_web=info）",
+    ),
     ("log.rotation", "日志文件轮转策略（daily / hourly / never）"),
     ("log.max_files", "日志文件最大保留数量（0 = 不限制）"),
-    ("log.capacity_bytes", "日志目录总容量上限（字节，0 = 不限制；超出后按修改时间删除最旧文件，当前在写文件除外）"),
-    ("log.format", "日志文件格式（text / json，默认 text；仅启动生效，改动后重启）"),
-    ("log.console_in_release", "Release 模式是否启用控制台输出（调试用，默认关闭）"),
+    (
+        "log.capacity_bytes",
+        "日志目录总容量上限（字节，0 = 不限制；超出后按修改时间删除最旧文件，当前在写文件除外）",
+    ),
+    (
+        "log.format",
+        "日志文件格式（text / json，默认 text；仅启动生效，改动后重启）",
+    ),
+    (
+        "log.console_in_release",
+        "Release 模式是否启用控制台输出（调试用，默认关闭）",
+    ),
 ];
 
 /// 配置 key 的分组顺序，控制写入文件时的排列
@@ -98,10 +133,7 @@ static PROPERTY_GROUPS: &[(&str, &[&str])] = &[
             "ui.animations_enabled",
         ],
     ),
-    (
-        "Channel 容量配置",
-        &["channels.lifecycle_capacity"],
-    ),
+    ("Channel 容量配置", &["channels.lifecycle_capacity"]),
     (
         "终端配置",
         &[
@@ -229,9 +261,7 @@ pub struct ChannelsConfig {
 
 impl Default for ChannelsConfig {
     fn default() -> Self {
-        Self {
-            lifecycle_capacity: 16,
-        }
+        Self { lifecycle_capacity: 16 }
     }
 }
 

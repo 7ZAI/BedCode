@@ -147,9 +147,8 @@ pub(crate) fn api_call(
     //    与 `notify_connection_touch`（async fire-and-forget）同根因，此处改为发布也
     //    经 `block_on_async` 搬到 ambient 多线程上下文：spawn 落在 ambient 线程池，
     //    回复自由投递。
-    let publish_result = block_on_async(async move {
-        bus::bus_publish(bus, sec, caller_id, request_topic, payload_json)
-    });
+    let publish_result =
+        block_on_async(async move { bus::bus_publish(bus, sec, caller_id, request_topic, payload_json) });
     if let Err(e) = publish_result {
         cleanup_reply_subscription(bus.message_bus(), caller_id, &reply_topic);
         return Err(e);
@@ -292,7 +291,7 @@ mod tests {
             let mut rx = setup_responder(&ctx, "bedcode.api.com.bedcode.sdk-test.echo", true, None);
 
             let reply = api_call(
-                                ctx.as_ref(),
+                ctx.as_ref(),
                 ctx.as_ref(),
                 ctx.as_ref(),
                 "com.bedcode.caller",
@@ -319,7 +318,7 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let err = api_call(
-                                ctx.as_ref(),
+                ctx.as_ref(),
                 ctx.as_ref(),
                 ctx.as_ref(),
                 "com.bedcode.caller",
@@ -346,7 +345,7 @@ mod tests {
 
             let started = std::time::Instant::now();
             let err = api_call(
-                                ctx.as_ref(),
+                ctx.as_ref(),
                 ctx.as_ref(),
                 ctx.as_ref(),
                 "com.bedcode.caller",
@@ -380,7 +379,7 @@ mod tests {
             );
 
             let err = api_call(
-                                ctx.as_ref(),
+                ctx.as_ref(),
                 ctx.as_ref(),
                 ctx.as_ref(),
                 "com.bedcode.caller",
@@ -400,7 +399,7 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let err = api_call(
-                                ctx.as_ref(),
+                ctx.as_ref(),
                 ctx.as_ref(),
                 ctx.as_ref(),
                 "com.bedcode.caller",
@@ -456,7 +455,7 @@ mod tests {
                 .await;
 
             let err = api_call(
-                                ctx.as_ref(),
+                ctx.as_ref(),
                 ctx.as_ref(),
                 ctx.as_ref(),
                 "com.bedcode.caller",
@@ -482,7 +481,7 @@ mod tests {
             let mut rx = setup_responder(&ctx, "bedcode.api.com.bedcode.sdk-test.echo", true, None);
 
             let reply = api_call(
-                                ctx.as_ref(),
+                ctx.as_ref(),
                 ctx.as_ref(),
                 ctx.as_ref(),
                 "com.bedcode.caller",
@@ -506,7 +505,7 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let err = api_call(
-                                ctx.as_ref(),
+                ctx.as_ref(),
                 ctx.as_ref(),
                 ctx.as_ref(),
                 "com.bedcode.caller",
@@ -538,7 +537,7 @@ mod tests {
             setup_responder(&ctx, "bedcode.api.com.bedcode.sdk-test.echo", true, None);
 
             api_call(
-                                ctx.as_ref(),
+                ctx.as_ref(),
                 ctx.as_ref(),
                 ctx.as_ref(),
                 "com.bedcode.caller",

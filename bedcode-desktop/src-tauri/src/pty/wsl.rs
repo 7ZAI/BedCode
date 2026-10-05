@@ -147,5 +147,4 @@ mod tests {
         let decoded = decode_wsl_output(b"* Ubuntu Running 2\n");
         assert_eq!(decoded, "* Ubuntu Running 2\n");
     }
-
 }

@@ -4,8 +4,16 @@
 //! ## 与终端链路旧 mDNS 的关系
 //!
 //! 服务类型 `_bedcode-peer._tcp.local.` 与旧 `_bedcode._tcp.local.` 刻意错开：
-//! 两套发现互不感知、可同进程共存（mdns-sd 多 ServiceDaemon 实例合法）。
-//! 本模块完全不触碰旧链路与 file_service announce（冻结区）。
+//! 两套发现靠**服务类型**隔离，彼此不会收到对方的 browse 结果。但它们**不是**
+//! 各自独立的守护进程——本模块的浏览侧（[`spawn_peer_mdns_daemon`]）已收敛到宿主
+//! 的**全局共享守护**（mDNS 基础能力服务收敛，spec v2 / ticket 04）：守护句柄由
+//! 宿主壳经 `MdnsPort` 端口层**注入**本函数，本模块不再自建 `ServiceDaemon`
+//! （端口 trait 定义见 `bedcode-server-base` 的 `MdnsPort`）。因此「多实例共存」
+//! 不是本模块可依赖的性质：新增发现服务必须走同一个共享守护，否则会出现两个守护
+//! 争抢同一组播端口。本模块不触碰旧链路与 file_service announce（冻结区）。
+//!
+//! 另：[`spawn_peer_mdns_advertiser`]（仅广告、无浏览）是本模块内**仍自建**
+//! `ServiceDaemon` 的那一个，且当前无生产调用方（仅随 `lib.rs` 导出）。
 //!
 //! ## 「同一通路」注入缝（issue 03 核心验收点）
 //!

@@ -238,8 +238,7 @@ impl ResourceAuthorizer for FsAuthorizer {
         let Some(op) = fs_op_of(req.operation) else {
             return AuthDecision::Deny(format!("未知 fs 操作 '{}'", req.operation));
         };
-        let allowed =
-            crate::wasm_core::runtime_util::block_on_async(self.fs_auth.check(req.plugin_id, req.target, op));
+        let allowed = crate::wasm_core::runtime_util::block_on_async(self.fs_auth.check(req.plugin_id, req.target, op));
         if allowed {
             AuthDecision::Allow
         } else {
@@ -770,7 +769,9 @@ mod tests {
     #[test]
     fn api_call_gate_via_framework() {
         let registry = Arc::new(ApiRegistry::new());
-        registry.register("com.bedcode.target", &["com.bedcode.target.run".to_string()]).unwrap();
+        registry
+            .register("com.bedcode.target", &["com.bedcode.target.run".to_string()])
+            .unwrap();
         let fw = SecurityFramework::new();
         fw.register(Arc::new(ApiCallAuthorizer::new(registry)));
 

@@ -261,9 +261,8 @@ pub fn register_core_lifecycle_hooks() {
     // 事件仍逐条按属主补发（见 `wasm_core/host_api/pty.rs::kill_all_registered`）。
     registry.on_shutdown("pty-engine-reclaim", 10, || async {
         let ctx = crate::system::app_context::AppContext::global();
-        let reclaimed = crate::wasm_core::host_api::pty::kill_all_registered(
-            &ctx.plugin_host().wasm_host_ctx().message_bus,
-        );
+        let reclaimed =
+            crate::wasm_core::host_api::pty::kill_all_registered(&ctx.plugin_host().wasm_host_ctx().message_bus);
         if reclaimed > 0 {
             tracing::info!(reclaimed, "PTY 已在引擎层回收（系统关停）");
         }

@@ -53,8 +53,7 @@
 //! 未授权直接 fail-visible 拒绝（见 `host_impl::task`）。
 
 use crate::wasm_core::security::auth_policy::{
-    AuthPolicyStore, AuthRecordSource, AuthResource, AuthStrategy, GrantOutcome, AUTH_EFFECT_ALLOW,
-    AUTH_EFFECT_DENY,
+    AuthPolicyStore, AuthRecordSource, AuthResource, AuthStrategy, GrantOutcome, AUTH_EFFECT_ALLOW, AUTH_EFFECT_DENY,
 };
 use crate::wasm_core::security::strategy::{self, StrategyStep, Tier};
 use crate::wasm_core::storage::PluginStorage;
@@ -554,12 +553,7 @@ impl FsAuthChecker {
     /// 三条入口（`check` / `check_batch` / `is_granted`）必须拿到**逐字相同**的结论，
     /// 否则「无弹窗面」（WASI 预打开 / 任务单元）与「弹窗面」会给出两套答案
     /// （同一目录一边可写一边被拒）。`needed` 是本次要用的能力集：记录必须覆盖它。
-    async fn decide_without_dialog(
-        &self,
-        plugin_id: &str,
-        canonical: &Path,
-        needed: FsOps,
-    ) -> NoDialogDecision {
+    async fn decide_without_dialog(&self, plugin_id: &str, canonical: &Path, needed: FsOps) -> NoDialogDecision {
         let signals = self.record_signals(plugin_id, canonical).await;
         // 0. 硬拒绝记录优先于一切放行路径（含第一方免询问目录与策略档位）：
         //    「总是询问」跳过的**只是** allow 记录，用户已说过的「以后都拒绝」
@@ -607,10 +601,7 @@ impl FsAuthChecker {
             Tier::AutoAllow => {
                 // 审计义务随档位携带（S-11）：类型上防止「match 后什么都不做」——
                 // 删除落账会让本断言（debug 测试构建）与行为测试同时转红
-                debug_assert!(
-                    step.must_land_auto_allow(),
-                    "AutoAllow 档位字段丢失审计义务（S-11）"
-                );
+                debug_assert!(step.must_land_auto_allow(), "AutoAllow 档位字段丢失审计义务（S-11）");
                 self.land_auto_allow(plugin_id, canonical, needed).await;
                 return NoDialogDecision::Allowed(FsGrantLayer::AlwaysAllow);
             }
@@ -639,11 +630,7 @@ impl FsAuthChecker {
     /// 真源读失败**不降级放行**：按「未命中」处理并显性记错（拍成放行会把安全闸门变成
     /// 「数据库一坏就全放行」）。
     async fn record_signals(&self, plugin_id: &str, canonical: &Path) -> RecordSignals {
-        let rows = match self
-            .auth_records
-            .records_for_match(plugin_id, AuthResource::Fs)
-            .await
-        {
+        let rows = match self.auth_records.records_for_match(plugin_id, AuthResource::Fs).await {
             Ok(rows) => rows,
             Err(e) => {
                 tracing::error!(
@@ -1107,13 +1094,7 @@ impl FsAuthChecker {
     }
 
     /// 弹窗请求用户授权（单路径：操作集就是本次操作；`strategy` 语义同批量入口）
-    async fn request_user_auth(
-        &self,
-        plugin_id: &str,
-        path: &str,
-        ops: FsOps,
-        strategy: AuthStrategy,
-    ) -> bool {
+    async fn request_user_auth(&self, plugin_id: &str, path: &str, ops: FsOps, strategy: AuthStrategy) -> bool {
         let request_id = uuid::Uuid::new_v4().to_string();
 
         let (reply_tx, reply_rx) = oneshot::channel();
@@ -1195,11 +1176,7 @@ impl FsAuthChecker {
     /// wasi_e2e 预打开）与 legacy 回退用例都靠它构造存量用户状态。
     /// 粒度规则与旧实现逐字一致（目录 → 自身；已存在文件 → 自身；不存在路径 → 父目录）。
     #[cfg(test)]
-    pub(crate) async fn seed_legacy_granted_path(
-        &self,
-        plugin_id: &str,
-        path: &str,
-    ) -> anyhow::Result<()> {
+    pub(crate) async fn seed_legacy_granted_path(&self, plugin_id: &str, path: &str) -> anyhow::Result<()> {
         let storage_key = "fs_granted_paths".to_string();
 
         let mut granted: Vec<serde_json::Value> = match self.storage.get(plugin_id, &storage_key).await {
@@ -1839,7 +1816,10 @@ mod tests {
 
         // 落账到目录（旧记录口径：目录前缀即覆盖整棵子树）后，兄弟文件必须免弹
         let granted = directory_scope_target(&a.to_string_lossy());
-        checker.seed_legacy_granted_path("com.bedcode.test", &granted).await.unwrap();
+        checker
+            .seed_legacy_granted_path("com.bedcode.test", &granted)
+            .await
+            .unwrap();
         assert!(
             checker
                 .is_granted("com.bedcode.test", &b.to_string_lossy(), FsOps::READ_WRITE)
@@ -1928,8 +1908,14 @@ mod tests {
         let checker = headless_checker().await;
         let dir = fixture_dir("fs-auth-pick-dedupe");
         let path = dir.to_string_lossy().to_string();
-        checker.seed_legacy_granted_path("com.bedcode.test", &path).await.unwrap();
-        checker.seed_legacy_granted_path("com.bedcode.test", &path).await.unwrap();
+        checker
+            .seed_legacy_granted_path("com.bedcode.test", &path)
+            .await
+            .unwrap();
+        checker
+            .seed_legacy_granted_path("com.bedcode.test", &path)
+            .await
+            .unwrap();
         let stored = checker
             .storage
             .get("com.bedcode.test", "fs_granted_paths")
@@ -2058,9 +2044,7 @@ mod tests {
             .await;
             checker.respond(id, decision).await;
             assert!(
-                !checker
-                    .is_granted("com.bedcode.test", &a, FsOps::READ_WRITE)
-                    .await,
+                !checker.is_granted("com.bedcode.test", &a, FsOps::READ_WRITE).await,
                 "{id}（decision={}）不得落授权",
                 decision.as_str()
             );
@@ -2090,9 +2074,7 @@ mod tests {
         // 第三方 + 任意位置的 .claude 段 → 不放开（旧实现在这里返回 true）
         let third_party = std::env::temp_dir().join(".claude").to_string_lossy().to_string();
         assert!(
-            !checker
-                .is_granted("com.bedcode.test", &third_party, FsOps::READ)
-                .await,
+            !checker.is_granted("com.bedcode.test", &third_party, FsOps::READ).await,
             "第三方插件不得经 is_granted 静默拿到 .claude 目录"
         );
         // 第一方清单内 → 放开（且不经弹窗）
@@ -2123,12 +2105,13 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.to_string_lossy().to_string();
         assert!(!checker.is_granted("com.bedcode.test", &path, FsOps::READ).await);
-        checker.seed_legacy_granted_path("com.bedcode.test", &path).await.unwrap();
+        checker
+            .seed_legacy_granted_path("com.bedcode.test", &path)
+            .await
+            .unwrap();
         assert!(checker.is_granted("com.bedcode.test", &path, FsOps::READ).await);
         assert!(
-            checker
-                .is_granted("com.bedcode.test", &path, FsOps::READ_WRITE)
-                .await,
+            checker.is_granted("com.bedcode.test", &path, FsOps::READ_WRITE).await,
             "旧记录视作读写都授权（存量用户零感知）"
         );
         assert!(!checker.is_granted("com.bedcode.other", &path, FsOps::READ).await);
@@ -2226,9 +2209,7 @@ mod tests {
         );
         // 写：记录不含写 → 免弹窗层未命中 → 弹窗（无头 → 拒）
         assert!(
-            !checker
-                .check("com.bedcode.test", &file_s, FsOp::Write)
-                .await,
+            !checker.check("com.bedcode.test", &file_s, FsOp::Write).await,
             "授权读之后写必须再问一次，不得静默放行"
         );
         assert_eq!(
@@ -2331,9 +2312,7 @@ mod tests {
             "记录覆盖读 → 读静默放行"
         );
         assert!(
-            !checker
-                .check("com.bedcode.test", &file_s, FsOp::Write)
-                .await,
+            !checker.check("com.bedcode.test", &file_s, FsOp::Write).await,
             "记录命中且不含写时不得回退旧记录（旧记录对该子树作废）"
         );
         std::fs::remove_dir_all(&dir).ok();
@@ -2563,11 +2542,7 @@ mod tests {
         );
         assert!(
             !checker
-                .check_batch(
-                    "com.bedcode.test",
-                    std::slice::from_ref(&file_s),
-                    FsOps::READ_WRITE
-                )
+                .check_batch("com.bedcode.test", std::slice::from_ref(&file_s), FsOps::READ_WRITE)
                 .await,
             "读写批次要求记录同时覆盖两种能力（覆盖关系不是「有交集即放行」）"
         );
@@ -2604,10 +2579,7 @@ mod tests {
                 .await,
             "被硬拒绝的路径不得靠批量入口放行"
         );
-        assert!(
-            checker.pending_requests.lock().await.is_empty(),
-            "硬拒绝路径不参与弹窗"
-        );
+        assert!(checker.pending_requests.lock().await.is_empty(), "硬拒绝路径不参与弹窗");
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -2779,11 +2751,7 @@ mod tests {
         );
         assert!(
             checker
-                .check(
-                    "com.bedcode.terminal-session",
-                    &target.to_string_lossy(),
-                    FsOp::Write
-                )
+                .check("com.bedcode.terminal-session", &target.to_string_lossy(), FsOp::Write)
                 .await
         );
         std::fs::remove_dir_all(&project).ok();
@@ -2792,7 +2760,10 @@ mod tests {
     // ==================== 票 04：「始终允许」档（免询问放行 + 留痕） ====================
 
     /// 某应用在文件侧的记录行（读模型投影，含来源与操作集）
-    async fn fs_records(checker: &FsAuthChecker, plugin_id: &str) -> Vec<crate::wasm_core::security::auth_policy::AuthRecord> {
+    async fn fs_records(
+        checker: &FsAuthChecker,
+        plugin_id: &str,
+    ) -> Vec<crate::wasm_core::security::auth_policy::AuthRecord> {
         checker
             .auth_records()
             .overview(plugin_id, "T")
@@ -2984,19 +2955,16 @@ mod tests {
         let file_s = file.to_string_lossy().to_string();
 
         set_fs_strategy(&checker, "com.bedcode.test", AuthStrategy::AlwaysAsk).await;
-        let (allowed, ()) = tokio::join!(
-            checker.check("com.bedcode.test", &file_s, FsOp::Read),
-            async {
-                let prompt = wait_for_prompt(&log).await;
-                assert_eq!(
-                    prompt["strategy"], "always_ask",
-                    "弹窗必须自报弹出时的档位（前端据此渲染决定集）"
-                );
-                assert_eq!(prompt["operation"], "read");
-                let request_id = prompt["requestId"].as_str().expect("requestId").to_string();
-                checker.respond(&request_id, FsDecision::AllowOnce).await;
-            }
-        );
+        let (allowed, ()) = tokio::join!(checker.check("com.bedcode.test", &file_s, FsOp::Read), async {
+            let prompt = wait_for_prompt(&log).await;
+            assert_eq!(
+                prompt["strategy"], "always_ask",
+                "弹窗必须自报弹出时的档位（前端据此渲染决定集）"
+            );
+            assert_eq!(prompt["operation"], "read");
+            let request_id = prompt["requestId"].as_str().expect("requestId").to_string();
+            checker.respond(&request_id, FsDecision::AllowOnce).await;
+        });
         assert!(allowed, "「允许本次」必须放行");
         assert!(
             checker
@@ -3007,7 +2975,10 @@ mod tests {
                 .is_empty(),
             "一次性放行不落账（记住才是落账动作）"
         );
-        assert!(checker.pending_requests.lock().await.is_empty(), "应答后 pending 必须清空");
+        assert!(
+            checker.pending_requests.lock().await.is_empty(),
+            "应答后 pending 必须清空"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -3039,9 +3010,7 @@ mod tests {
         )
         .await;
         set_fs_strategy(&checker, "com.bedcode.test", AuthStrategy::AlwaysAsk).await;
-        checker
-            .respond("req-frozen-default", FsDecision::AllowRemember)
-            .await;
+        checker.respond("req-frozen-default", FsDecision::AllowRemember).await;
         assert_eq!(
             checker
                 .auth_records()

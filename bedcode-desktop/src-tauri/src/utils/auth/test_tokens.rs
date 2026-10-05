@@ -27,11 +27,7 @@ use crate::wasm_core::manager::runtime::WasmHostContext;
 /// 种子的值就是生产形状：`{"active":1,"keys":{"1":"<hex32>"}}`（插件
 /// `pairing::keys::KeyringFile` 的 serde 形状）。种完**必须在 activate 之前**——
 /// 中心 `activate` 会读一次密钥环并校验格式，读不到或格式不对即阻断激活。
-pub(crate) fn seed_keyring(
-    host_ctx: &WasmHostContext,
-    center_plugin_id: &str,
-    key: &[u8],
-) {
+pub(crate) fn seed_keyring(host_ctx: &WasmHostContext, center_plugin_id: &str, key: &[u8]) {
     assert_eq!(key.len(), 32, "HS256 最小安全长度 32 字节");
     let value = serde_json::json!({
         "active": 1,
@@ -71,10 +67,7 @@ pub(crate) fn sign_with_seeded_key(
     claims.insert("sub".into(), serde_json::Value::String(sub.to_string()));
     claims.insert("iss".into(), serde_json::Value::String("BedCode".into()));
     claims.insert("iat".into(), serde_json::Value::from(now));
-    claims.insert(
-        "exp".into(),
-        serde_json::Value::from(now + 7 * 24 * 60 * 60),
-    );
+    claims.insert("exp".into(), serde_json::Value::from(now + 7 * 24 * 60 * 60));
     if let Some(name) = device_name {
         claims.insert("device_name".into(), serde_json::Value::String(name.into()));
     }
