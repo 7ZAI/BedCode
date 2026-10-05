@@ -115,14 +115,34 @@ jobs:
             (cd "bedcode-desktop/packages/$lib" && cargo test)
           done
 
+      - name: Verify wasm-apps target-dir (cargo metadata regression guard)
+        # B-02（2026-10-04 OCR）：`wasm-apps/.cargo/config.toml` 的 target-dir 一旦
+        # 多写一个 `..`，产物会静默落进**仓库根** `target/wasm-apps`，而 cargo test
+        # 照常全绿——唯一说真话的只有 `cargo metadata` 的 `target_directory`。
+        # 这里用 metadata 断言落点，防「多一个 ..」式回归在 CI 全绿下溜过。
+        run: |
+          EXPECTED="$GITHUB_WORKSPACE/bedcode-desktop/target/wasm-apps"
+          for app in terminal-session ai-chatbox file-transfer agent-hub; do
+            RAW=$(cd "bedcode-desktop/wasm-apps/$app/rust" && \
+              cargo metadata --no-deps --format-version 1 | python3 -c \
+              'import json,sys; print(json.load(sys.stdin)["target_directory"])')
+            # metadata 返回的路径可能带未归一化的 `..`（实测
+            # wasm-apps/../target/wasm-apps），对比前必须 realpath
+            ACTUAL=$(python3 -c "import os,sys; print(os.path.normpath(sys.argv[1]))" "$RAW")
+            if [ "$ACTUAL" != "$EXPECTED" ]; then
+              echo "target-dir 落点错误: $app -> $ACTUAL (期望 $EXPECTED)"; exit 1
+            fi
+          done
+
       - name: Cargo test (desktop wasm app crates)
         # 四个 wasm 应用的**插件侧** crate（业务代码主场）。AGENTS §3 一直列着它们的
         # 测试命令，但 test.yml 一直没跑——拆出来的层与插件 crate 在合并门禁上都没人
         # 守。票 08 的 D10 跨端契约测试（`wasm-apps/terminal-session/rust` 里把本插件
         # 的路由公理喂进真实 server 网关）也在这里才真正跑得到。
-        # **必须 cd 进 crate 根**（AGENTS §3 + 与 server-libs 步骤同理由）：各 crate 的
-        # `.cargo/config.toml` 把 target 指向仓库根 `target/wasm-apps`（相对 crate 根
-        # `../../../`），用 --manifest-path 从仓库根跑会漏掉重定向、把产物写进
+        # **必须 cd 进 crate 根**（AGENTS §3 + 与 server-libs 步骤同理由）：cargo 只从 cwd
+        # 向上找 config，上层 `wasm-apps/.cargo/config.toml`（4 个应用共用这一份）把 target
+        # 指向 `bedcode-desktop/target/wasm-apps`（该 config 的相对路径以 `.cargo` 的父目录
+        # `wasm-apps/` 为基准），用 --manifest-path 从仓库根跑会漏掉重定向、把产物写进
         # `<crate>/target`（AGENTS §3「构建产物落点」）。
         #
         # 这里跑的是 **native** 单测（不是 wasm32-wasip3）：crate-type 仍是纯 cdylib，
