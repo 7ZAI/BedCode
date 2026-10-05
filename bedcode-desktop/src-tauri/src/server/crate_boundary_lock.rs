@@ -1,4 +1,5 @@
-//! crate 边界锁（server-lib-split spec D7 / §4 票 06，由实施票 07 收口）
+//! crate 边界锁（server-lib-split spec D7 / §4 票 06，由实施票 07 收口；
+//! wasm-core-lib-split 票 09 把机制内核与两个能力域 crate 并入登记表）
 //!
 //! 票 03-05 已把结构锁逐面下沉进各自 crate（`bedcode-server-websocket` /
 //! `-peer-net` 的 `dependency_direction_lock.rs`）。那些锁有一个共同盲区：
@@ -6,16 +7,21 @@
 //! `bedcode-server-peer-net`，没有任何一把面内锁会转红——而「传输面之间零横向」
 //! 恰恰是被这些锁声称守住的不变量。
 //!
-//! 宿主 crate 是**唯一同时看得见全部六份清单**的地方（且宿主 `cargo test` 一定跑，
-//! 而六把面内锁需要逐 crate 跑），所以「全图」这一层放在宿主侧：
+//! 宿主 crate 是**唯一同时看得见全部拆分产物清单**的地方（且宿主 `cargo test`
+//! 一定跑，而六把面内锁需要逐 crate 跑），所以「全图」这一层放在宿主侧：
 //!
 //! | 断言 | 守住什么 | 逐面锁为何覆盖不到 |
 //! | --- | --- | --- |
-//! | ① 六份清单无横向 / 无反向依赖 | I1 + 「面之间零横向」的全矩阵 | 每把锁只钉自己 + 1~2 个对侧 |
+//! | ① 拆分产物清单之间零横向 / 无反向依赖 | I1 + 「面之间零横向」的全矩阵 | 每把锁只钉自己 + 1~2 个对侧 |
 //! | ② 必需的向下依赖边存在 | I2 / D1（base 是所有面的地基） | 缺边只在**使用者**侧可见 |
-//! | ③ 宿主清单声明全部六个 crate | 拆分产物没被悄悄摘掉 | 面内锁看不见宿主清单 |
+//! | ③ 宿主清单声明全部拆分产物 | 拆分产物没被悄悄摘掉 | 面内锁看不见宿主清单 |
 //! | ④ 双面认识点唯一 | I1 在宿主侧的表达（装配面收敛在组合根） | 面内锁看不见宿主源码 |
 //! | ⑤ 全局端口注册表只有一个装配点 | 组合根唯一性（票 07 的实测教训） | 无——纯宿主侧不变量 |
+//!
+//! **登记表为什么带路径**：`bedcode-host-kit`（机制内核）落仓库根 `packages/`
+//! 而非 `bedcode-desktop/packages/`（spec D6：双端共享锚点）。只登记名字的表会
+//! 默认同一个父目录，于是断言①会把它报成「拆分产物缺失」或静默跳过——锁变成
+//! 空转，而空转的锁比没有锁更危险。
 //!
 //! ## 为什么 ④ / ⑤ 值得单独锁（两次实测教训）
 //!
@@ -33,24 +39,55 @@
 
 use std::path::{Path, PathBuf};
 
-/// 拆分产物的六个 crate（server 五面 + 加密引擎）。
+/// 拆分产物清单：`(crate 名, 相对 `<desktop>/packages` 的路径)`
 ///
-/// 与 `test.yml` 的 `Cargo test (desktop server libs)` 循环、`check-target-size.js`
-/// 的 target 目录清单同源口径：这张表就是「拆出来的全部东西」的单一登记。
-pub(crate) const SERVER_LIB_CRATES: &[&str] = &[
-    "bedcode-server-base",
-    "bedcode-server-core",
-    "bedcode-server-http",
-    "bedcode-server-websocket",
-    "bedcode-server-peer-net",
-    "bedcode-crypto-engine",
+/// 这张表就是「从宿主 / server 面里拆出来的全部东西」的单一登记：
+/// server 五面 + 加密引擎（票 03-06）+ **机制内核与两个能力域 crate**
+/// （wasm-core-lib-split 票 03/07/08）。
+///
+/// **为什么带路径列**：`bedcode-host-kit` 落**仓库根** `packages/`（双端共享锚点，
+/// spec D6），其余在 `bedcode-desktop/packages/`。表只给名字时，锁必须假定同一个
+/// 父目录——那种假定正是「夹具落到第二个target 落点」那类事故的配方。
+pub(crate) const SPLIT_CRATES: &[(&str, &str)] = &[
+    ("bedcode-server-base", "bedcode-server-base"),
+    ("bedcode-server-core", "bedcode-server-core"),
+    ("bedcode-server-http", "bedcode-server-http"),
+    ("bedcode-server-websocket", "bedcode-server-websocket"),
+    ("bedcode-server-peer-net", "bedcode-server-peer-net"),
+    ("bedcode-crypto-engine", "bedcode-crypto-engine"),
+    // 机制内核（双端共享锚点，仓库根位）
+    ("bedcode-host-kit", "../../packages/bedcode-host-kit"),
+    // 能力域 crate（实现 + 插件绑定层 + 自动注册自报）
+    // ADR 0036：`bedcode-sqlite-engine` 已整体撤销——`host-database` /
+    // `host-plugin-database` / `host-storage` 三域与 SQLite 引擎面都留在宿主
+    // （`src/db/` + `wasm_core/host_api/`），故此表不再登记它。
+    ("bedcode-discovery-engine", "bedcode-discovery-engine"),
 ];
 
-/// 宿主 crate 名——出现在任何 server lib 清单里即「反向依赖宿主」，在 crate
+/// 拆分产物的 crate 名（登记表的投影）
+fn split_crate_names() -> Vec<&'static str> {
+    SPLIT_CRATES.iter().map(|(name, _)| *name).collect()
+}
+
+/// 拆分产物目录（按登记表解析路径）
+fn split_crate_dir(crate_name: &str) -> PathBuf {
+    let (_, rel) = SPLIT_CRATES
+        .iter()
+        .find(|(name, _)| *name == crate_name)
+        .unwrap_or_else(|| panic!("拆分产物清单缺 crate `{crate_name}`——新增/改名时必须同改本表"));
+    packages_dir().join(rel)
+}
+
+/// 宿主 crate 名——出现在任何拆分产物清单里即「反向依赖宿主」，在 crate
 /// 边界层面直接不成立（票 05/06 的面内锁也各自禁这一条，本锁在全矩阵上再钉一次）
 const HOST_CRATE: &str = "bedcode-desktop";
 
-/// **登记表**：允许的向下依赖边（key crate → 它可以依赖的 server lib 兄弟）
+/// **登记表**：允许的向下依赖边（key crate → 它可以依赖的拆分产物兄弟）
+///
+/// 形状即 server-lib-split spec §2 的依赖图：`base` 是叶子地基；`crypto-engine` 与
+/// `core` 向上取地基；两个传输面只向下取 base + core；`peer-net` 是**独立引擎域**
+/// （D2）——它不依赖 core，因为它对内核零引用，依赖 core 只是「同在 server 下」
+/// 的错觉。
 ///
 /// 形状即 spec §2 的依赖图：`base` 是叶子地基；`crypto-engine` 与 `core` 向上取
 /// 地基；两个传输面只向下取 base + core；`peer-net` 是**独立引擎域**（D2）——
@@ -63,19 +100,38 @@ const HOST_CRATE: &str = "bedcode-desktop";
 /// 对端密钥，生产代码一律经 core 的 `link_crypto` 取能力。判据对 `[dependencies]`
 /// 与 `[dev-dependencies]` 一视同仁（横向边在 dev 段也是横向），所以这条边必须显式
 /// 登记而不是「顺手加上去」。
+///
+/// wasm-core-lib-split 追加的边（票 03/04/05/06）：`host-kit` 不依赖任何拆分
+/// 产物（机制内核自身零内部依赖）；其余拆分产物里，**凡带插件绑定层的**都必须站在
+/// 它上面——`add_to_linker::<WasmPluginState, D>` 的单态 `S` 在 kit 里，而绑定层就是
+/// 「实现搬进 crate 后仍要被装配」的那一半。传输面（http / websocket / peer-net）
+/// 与能力域 crate（discovery）同此。票 07/08 的 sqlite 能力域 crate 已由 ADR 0036
+/// 整体撤销，故不在本表内。
+///
+/// **能力域之间、传输面之间、各域与传输面之间仍全部零横向**（各能力域之间不许互相
+/// 引用，否则会耦成一体，违背「按需组合不同核心」的前提）。
 const ALLOWED_DOWNWARD_EDGES: &[(&str, &[&str])] = &[
     ("bedcode-server-base", &[]),
     ("bedcode-crypto-engine", &["bedcode-server-base"]),
     ("bedcode-server-core", &["bedcode-server-base", "bedcode-crypto-engine"]),
     (
         "bedcode-server-http",
-        &["bedcode-server-base", "bedcode-server-core", "bedcode-crypto-engine"],
+        &[
+            "bedcode-server-base",
+            "bedcode-server-core",
+            "bedcode-crypto-engine",
+            "bedcode-host-kit",
+        ],
     ),
     (
         "bedcode-server-websocket",
-        &["bedcode-server-base", "bedcode-server-core"],
+        &["bedcode-server-base", "bedcode-server-core", "bedcode-host-kit"],
     ),
-    ("bedcode-server-peer-net", &["bedcode-server-base"]),
+    ("bedcode-server-peer-net", &["bedcode-server-base", "bedcode-host-kit"]),
+    // 机制内核：不依赖任何拆分产物（机制面零内部依赖）
+    ("bedcode-host-kit", &[]),
+    // 能力域 crate：向下只取机制内核
+    ("bedcode-discovery-engine", &["bedcode-host-kit"]),
 ];
 
 /// 必需的向下依赖边（只看生产 `[dependencies]` 段）
@@ -92,6 +148,14 @@ const REQUIRED_DOWNWARD_EDGES: &[(&str, &str)] = &[
     ("bedcode-server-websocket", "bedcode-server-base"),
     ("bedcode-server-websocket", "bedcode-server-core"),
     ("bedcode-server-peer-net", "bedcode-server-base"),
+    // 能力域 crate 必须真的站在机制内核上（`add_to_linker::<WasmPluginState, D>`
+    // 的单态 S 在 kit 里；缺这条边说明绑定层搬错了位置）
+    ("bedcode-discovery-engine", "bedcode-host-kit"),
+    // 同理：三个传输面各自持一份 `plugin_binding`（域实现 + 自报），也必须站在
+    // 机制内核上。缺边 ⇒ 绑定层要么被搬回了宿主，要么那域根本没进 crate。
+    ("bedcode-server-http", "bedcode-host-kit"),
+    ("bedcode-server-websocket", "bedcode-host-kit"),
+    ("bedcode-server-peer-net", "bedcode-host-kit"),
 ];
 
 /// 宿主源码里**允许**同时认识两个传输面 crate 的文件（断言 ④ 的登记表）
@@ -125,17 +189,17 @@ fn packages_dir() -> PathBuf {
     crate_root().join("..").join("packages")
 }
 
-/// 六个拆分产物的 `src` 扫描根（供宿主的退役面防回接锁共用）
+/// 拆分产物的 `src` 扫描根（供宿主的退役面防回接锁共用）
 ///
-/// 与 [`SERVER_LIB_CRATES`] 同源：面抽 crate 后，宿主那些「扫 `src` 树」的退役面锁
+/// 与 [`SPLIT_CRATES`] 同源：面抽 crate 后，宿主那些「扫 `src` 树」的退役面锁
 /// （`retired_kernel_session_domain_*` / `retired_peer_transfer_orchestration_*` /
 /// `retired_session_observation_*` / 会话命令面锁）必须把 crate 也扫进去，否则退役面
 /// 被回接到面 crate 里时宿主锁全绿。它们共享本表而不是各自抄一份，避免两处登记表
 /// 漂移。
 pub(crate) fn server_lib_src_roots() -> Vec<PathBuf> {
-    SERVER_LIB_CRATES
+    SPLIT_CRATES
         .iter()
-        .map(|name| packages_dir().join(name).join("src"))
+        .map(|(name, _)| split_crate_dir(name).join("src"))
         .collect()
 }
 
@@ -391,14 +455,15 @@ const ALL_DEP_SECTIONS: &[&str] = &["dependencies", "dev-dependencies", "build-d
 
 // ==================== 锁本体 ====================
 
-/// 断言①：六份清单之间零横向、零反向依赖（全矩阵）
+/// 断言①：拆分产物之间零横向、零反向依赖（全矩阵）
 #[test]
 fn server_lib_manifests_have_no_lateral_or_upward_edges() {
-    for crate_name in SERVER_LIB_CRATES {
-        let manifest_path = packages_dir().join(crate_name).join("Cargo.toml");
+    let registry = split_crate_names();
+    for crate_name in &registry {
+        let manifest_path = split_crate_dir(crate_name).join("Cargo.toml");
         assert!(
             manifest_path.exists(),
-            "拆分产物缺失：{}（{crate_name}）——服务器面被从 packages/ 摘掉了？",
+            "拆分产物缺失：{}（{crate_name}）——被从 packages/ 摘掉了？",
             manifest_path.display()
         );
         let manifest = read_file(&manifest_path);
@@ -413,7 +478,7 @@ fn server_lib_manifests_have_no_lateral_or_upward_edges() {
             if dep == crate_name {
                 continue; // 自引用（改名期过渡）不算横向边
             }
-            if !SERVER_LIB_CRATES.contains(&dep.as_str()) {
+            if !registry.contains(&dep.as_str()) {
                 continue; // 第三方 crate 不在本锁管辖面（清单里绝大多数依赖是它们）
             }
             let allowed = allowed_for(crate_name);
@@ -431,7 +496,7 @@ fn server_lib_manifests_have_no_lateral_or_upward_edges() {
 #[test]
 fn required_downward_edges_exist_in_production_deps() {
     for (crate_name, required) in REQUIRED_DOWNWARD_EDGES {
-        let manifest_path = packages_dir().join(crate_name).join("Cargo.toml");
+        let manifest_path = split_crate_dir(crate_name).join("Cargo.toml");
         let manifest = read_file(&manifest_path);
         let prod = dep_keys(&manifest, &["dependencies"]);
         assert!(
@@ -442,15 +507,15 @@ fn required_downward_edges_exist_in_production_deps() {
     }
 }
 
-/// 断言③：宿主清单声明全部六个拆分产物
+/// 断言③：宿主清单声明全部拆分产物
 #[test]
 fn host_manifest_declares_every_server_lib_crate() {
     let manifest = read_file(&crate_root().join("Cargo.toml"));
     let deps = dep_keys(&manifest, ALL_DEP_SECTIONS);
-    for crate_name in SERVER_LIB_CRATES {
+    for crate_name in split_crate_names() {
         assert!(
             deps.iter().any(|k| k == crate_name),
-            "宿主依赖清单缺少 `{crate_name}`——拆分产物没被接线（表：{SERVER_LIB_CRATES:?}）"
+            "宿主依赖清单缺少 `{crate_name}`——拆分产物没被接线（表：{SPLIT_CRATES:?}）"
         );
     }
 }

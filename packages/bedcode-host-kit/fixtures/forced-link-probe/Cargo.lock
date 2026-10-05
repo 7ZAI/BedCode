@@ -65,7 +65,6 @@ dependencies = [
 name = "bedcode-host-kit"
 version = "0.1.0"
 dependencies = [
- "bedcode-cap-forced-link-probe",
  "inventory",
  "serde",
  "tracing",

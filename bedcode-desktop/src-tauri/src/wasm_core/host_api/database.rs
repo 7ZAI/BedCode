@@ -1,11 +1,40 @@
-//! 数据库域宿主实现（主库前缀隔离 + 插件独立库）
+//! `host-database`（主库 5 条）+ `host-plugin-database`（插件私有库 5 条）能力域实现
 //!
-//! 含 SQL 表名前缀校验与 rusqlite 列 → JSON 转换辅助
+//! 含 SQLite 表名前缀校验、SQLite authorizer 纵深、语句超时 / 行数 / 字节护栏、批次
+//! 事务语义、rusqlite 列 → JSON 转换辅助。
+//!
+//! ## 为什么这段实现**留在 wasm 核心内**（ADR 0036）
+//!
+//! `wasm-core-lib-split` 票 07/08 曾把它连同 SQLite 引擎一起搬进
+//! `bedcode-sqlite-engine` 能力域 crate，2026-10-05 撤回：这三个 interface 的
+//! 权限门、表名前缀纵深、护栏与属主分区**是 wasm_core 自己设计的插件机制**，而
+//! 非与机制无关的引擎能力；机制实现与机制真源（授权记录 / 插件键值表 / 权限判定）
+//! 分处两个 crate 只会让归属出现两个答案。引擎面（连接管理 + `schema.sql`）同样
+//! 回到 `crate::db`——本 crate 整体撤销。
+//!
+//! ## 端口仍然保留（测试缝，不是架构边界）
+//!
+//! 三处取值经 [`sqlite_ports::SqlitePorts`] 而非直接摸上下文：
+//!
+//! - **权限门**：判定与落日志只在宿主一处（安全闸门属 AGENTS §5.1.3 四类薄壳之二），
+//!   本域只问结果；
+//! - **库句柄**：主库共享连接与插件私有库的懒创建策略归 [`super::sqlite`] 的
+//!   `HostSqlitePorts`，本域不复制第二份；
+//! - **同步↔异步桥**：宿主那份唯一的 `block_on_async` 经端口调用（见
+//!   [`sqlite_ports`] 模块文档）。
+//!
+//! 保留端口的唯一收益是可测性：域逻辑因此能在不构造完整 `WasmHostContext` 的前提下
+//! 用假端口跑护栏与隔离用例（见 [`sqlite_scaffold`]）。
+//!
+//! 错误串（`"permission denied"` / `"database error: …"` 等）、结构化日志字段、SQL
+//! 前缀校验与 authorizer 的判定顺序、护栏常量取值一律不动。
+//!
+//! ## 零业务代码红线（AGENTS §5.1）
+//!
+//! 本域只做引擎原语：方言白名单、表名前缀纵深、资源护栏、列 → JSON 形状。**表名
+//! 一律按 `plugin_<sanitized-id>_*` 前缀隔离**，域内不解释任何业务表语义（授权
+//! 记录 / 密钥 / 会话 …全在插件私有库）。
 
-#[cfg(test)]
-use crate::wasm_core::host_api::context::WasmHostContext;
-use crate::wasm_core::runtime_util::block_on_async;
-use crate::wasm_core::permission::{PERMISSION_DATABASE_MAIN, PERMISSION_STORAGE};
 use crate::system::constants::{
     PLUGIN_DB_EXECUTE_BATCH_MAX_STATEMENTS, PLUGIN_DB_QUERY_MAX_BYTES, PLUGIN_DB_QUERY_MAX_ROWS,
     PLUGIN_DB_STATEMENT_TIMEOUT_SECS,
@@ -15,6 +44,9 @@ use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+use crate::wasm_core::host_api::sqlite_ports::{block_on, SqlitePorts};
+use crate::wasm_core::permission::{PERMISSION_DATABASE_MAIN, PERMISSION_STORAGE};
 
 // ==================== 逻辑层（Component Model 绑定调用） ====================
 
@@ -34,7 +66,7 @@ fn parse_params_json(params_json: &str) -> Result<Vec<serde_json::Value>, String
 /// 主库是内核与全部插件共用的单一连接（全局 Mutex），慢查询会阻塞配对/会话配置/
 /// 设置等全部内核 DB 读写——本护栏是内核可用性保护（票据 05）。
 /// 超时上限不可由插件调整（安全边界）；触发记结构化 warn!（plugin_id 字段）。
-fn with_statement_timeout<T>(
+pub(crate) fn with_statement_timeout<T>(
     plugin_id: &str,
     conn: &rusqlite::Connection,
     timeout: Duration,
@@ -189,7 +221,7 @@ fn authorize_main_db_action(prefix: &str, catalog_named: bool, action: &AuthActi
 
 /// 插件在主库的表名前缀（`plugin_{sanitized_id}_`）
 fn main_db_table_prefix(plugin_id: &str) -> String {
-    let sanitized_id = plugin_id.replace('.', "_").replace('-', "_");
+    let sanitized_id = plugin_id.replace(['.', '-'], "_");
     format!("plugin_{}_", sanitized_id)
 }
 
@@ -258,17 +290,15 @@ fn strip_sql_literals_and_comments(sql: &str) -> String {
 }
 
 /// 主库执行 SQL（权限 + 表名前缀校验 + 超时护栏），返回受影响行数
-pub(crate) fn db_execute(
-    db: &dyn crate::wasm_core::host_api::context::DbScope,
-    perm: &dyn crate::wasm_core::host_api::context::PermissionScope, plugin_id: &str, sql: &str) -> Result<u32, String> {
-    if !super::check_permission(perm, plugin_id, PERMISSION_DATABASE_MAIN, "host_db_execute") {
+pub fn db_execute(ports: &dyn SqlitePorts, plugin_id: &str, sql: &str) -> Result<u32, String> {
+    if !ports.check_permission(plugin_id, PERMISSION_DATABASE_MAIN, "host_db_execute") {
         return Err("permission denied".to_string());
     }
     reject_bare_transaction_control(sql)?;
     validate_sql_table_prefix(plugin_id, sql).map_err(|e| e.to_string())?;
-    let db = db.database().clone();
+    let db = ports.main_db();
     let timeout = Duration::from_secs(PLUGIN_DB_STATEMENT_TIMEOUT_SECS);
-    block_on_async(async {
+    block_on(ports, async {
         let db = db.lock().await;
         with_main_db_guards(plugin_id, db.conn(), timeout, sql, |conn| {
             conn.execute(sql, []).map_err(|e| e.to_string())
@@ -279,16 +309,14 @@ pub(crate) fn db_execute(
 }
 
 /// 主库查询（权限 + 表名前缀校验 + 超时护栏），返回行数组 JSON 字符串
-pub(crate) fn db_query(
-    db: &dyn crate::wasm_core::host_api::context::DbScope,
-    perm: &dyn crate::wasm_core::host_api::context::PermissionScope, plugin_id: &str, sql: &str) -> Result<Option<String>, String> {
-    if !super::check_permission(perm, plugin_id, PERMISSION_DATABASE_MAIN, "host_db_query") {
+pub fn db_query(ports: &dyn SqlitePorts, plugin_id: &str, sql: &str) -> Result<Option<String>, String> {
+    if !ports.check_permission(plugin_id, PERMISSION_DATABASE_MAIN, "host_db_query") {
         return Err("permission denied".to_string());
     }
     validate_sql_table_prefix(plugin_id, sql).map_err(|e| e.to_string())?;
-    let db = db.database().clone();
+    let db = ports.main_db();
     let timeout = Duration::from_secs(PLUGIN_DB_STATEMENT_TIMEOUT_SECS);
-    let value = block_on_async(async {
+    let value = block_on(ports, async {
         let db = db.lock().await;
         with_main_db_guards(plugin_id, db.conn(), timeout, sql, |conn| {
             query_to_json(plugin_id, conn, sql)
@@ -301,17 +329,15 @@ pub(crate) fn db_query(
 }
 
 /// 插件独立库执行 SQL（权限校验 + 超时护栏，无表名前缀校验）
-pub(crate) fn plugin_db_execute(
-    db: &dyn crate::wasm_core::host_api::context::DbScope,
-    perm: &dyn crate::wasm_core::host_api::context::PermissionScope, plugin_id: &str, sql: &str) -> Result<u32, String> {
-    if !super::check_permission(perm, plugin_id, PERMISSION_STORAGE, "host_plugin_db_execute") {
+pub fn plugin_db_execute(ports: &dyn SqlitePorts, plugin_id: &str, sql: &str) -> Result<u32, String> {
+    if !ports.check_permission(plugin_id, PERMISSION_STORAGE, "host_plugin_db_execute") {
         return Err("permission denied".to_string());
     }
     reject_bare_transaction_control(sql)?;
     let timeout = Duration::from_secs(PLUGIN_DB_STATEMENT_TIMEOUT_SECS);
-    block_on_async(async {
-        let db_arc = db
-            .get_or_create_plugin_db(plugin_id)
+    block_on(ports, async {
+        let db_arc = ports
+            .plugin_db(plugin_id.to_string())
             .await
             .map_err(|e| e.to_string())?;
         let db = db_arc.lock().await;
@@ -323,19 +349,14 @@ pub(crate) fn plugin_db_execute(
 }
 
 /// 插件独立库查询（权限校验 + 超时护栏，无表名前缀校验）
-pub(crate) fn plugin_db_query(
-    db: &dyn crate::wasm_core::host_api::context::DbScope,
-    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
-    plugin_id: &str,
-    sql: &str,
-) -> Result<Option<String>, String> {
-    if !super::check_permission(perm, plugin_id, PERMISSION_STORAGE, "host_plugin_db_query") {
+pub fn plugin_db_query(ports: &dyn SqlitePorts, plugin_id: &str, sql: &str) -> Result<Option<String>, String> {
+    if !ports.check_permission(plugin_id, PERMISSION_STORAGE, "host_plugin_db_query") {
         return Err("permission denied".to_string());
     }
     let timeout = Duration::from_secs(PLUGIN_DB_STATEMENT_TIMEOUT_SECS);
-    let value = block_on_async(async {
-        let db_arc = db
-            .get_or_create_plugin_db(plugin_id)
+    let value = block_on(ports, async {
+        let db_arc = ports
+            .plugin_db(plugin_id.to_string())
             .await
             .map_err(|e| e.to_string())?;
         let db = db_arc.lock().await;
@@ -350,22 +371,21 @@ pub(crate) fn plugin_db_query(
 }
 
 /// 主库执行参数绑定 SQL（权限 + 表名前缀校验 + 超时护栏）
-pub(crate) fn db_execute_params(
-    db: &dyn crate::wasm_core::host_api::context::DbScope,
-    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
+pub fn db_execute_params(
+    ports: &dyn SqlitePorts,
     plugin_id: &str,
     sql: &str,
     params_json: &str,
 ) -> Result<u32, String> {
-    if !super::check_permission(perm, plugin_id, PERMISSION_DATABASE_MAIN, "host_db_execute_params") {
+    if !ports.check_permission(plugin_id, PERMISSION_DATABASE_MAIN, "host_db_execute_params") {
         return Err("permission denied".to_string());
     }
     reject_bare_transaction_control(sql)?;
     validate_sql_table_prefix(plugin_id, sql).map_err(|e| e.to_string())?;
     let params = parse_params_json(params_json)?;
-    let db = db.database().clone();
+    let db = ports.main_db();
     let timeout = Duration::from_secs(PLUGIN_DB_STATEMENT_TIMEOUT_SECS);
-    block_on_async(async {
+    block_on(ports, async {
         let db = db.lock().await;
         with_main_db_guards(plugin_id, db.conn(), timeout, sql, |conn| {
             execute_with_params(conn, sql, &params)
@@ -376,21 +396,20 @@ pub(crate) fn db_execute_params(
 }
 
 /// 主库参数绑定查询（权限 + 表名前缀校验 + 超时护栏）
-pub(crate) fn db_query_params(
-    db: &dyn crate::wasm_core::host_api::context::DbScope,
-    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
+pub fn db_query_params(
+    ports: &dyn SqlitePorts,
     plugin_id: &str,
     sql: &str,
     params_json: &str,
 ) -> Result<Option<String>, String> {
-    if !super::check_permission(perm, plugin_id, PERMISSION_DATABASE_MAIN, "host_db_query_params") {
+    if !ports.check_permission(plugin_id, PERMISSION_DATABASE_MAIN, "host_db_query_params") {
         return Err("permission denied".to_string());
     }
     validate_sql_table_prefix(plugin_id, sql).map_err(|e| e.to_string())?;
     let params = parse_params_json(params_json)?;
-    let db = db.database().clone();
+    let db = ports.main_db();
     let timeout = Duration::from_secs(PLUGIN_DB_STATEMENT_TIMEOUT_SECS);
-    let value = block_on_async(async {
+    let value = block_on(ports, async {
         let db = db.lock().await;
         with_main_db_guards(plugin_id, db.conn(), timeout, sql, |conn| {
             query_with_params_to_json(plugin_id, conn, sql, &params)
@@ -403,22 +422,21 @@ pub(crate) fn db_query_params(
 }
 
 /// 插件独立库执行参数绑定 SQL（权限校验 + 超时护栏，无表名前缀校验）
-pub(crate) fn plugin_db_execute_params(
-    db: &dyn crate::wasm_core::host_api::context::DbScope,
-    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
+pub fn plugin_db_execute_params(
+    ports: &dyn SqlitePorts,
     plugin_id: &str,
     sql: &str,
     params_json: &str,
 ) -> Result<u32, String> {
-    if !super::check_permission(perm, plugin_id, PERMISSION_STORAGE, "host_plugin_db_execute_params") {
+    if !ports.check_permission(plugin_id, PERMISSION_STORAGE, "host_plugin_db_execute_params") {
         return Err("permission denied".to_string());
     }
     reject_bare_transaction_control(sql)?;
     let params = parse_params_json(params_json)?;
     let timeout = Duration::from_secs(PLUGIN_DB_STATEMENT_TIMEOUT_SECS);
-    block_on_async(async {
-        let db_arc = db
-            .get_or_create_plugin_db(plugin_id)
+    block_on(ports, async {
+        let db_arc = ports
+            .plugin_db(plugin_id.to_string())
             .await
             .map_err(|e| e.to_string())?;
         let db = db_arc.lock().await;
@@ -430,21 +448,20 @@ pub(crate) fn plugin_db_execute_params(
 }
 
 /// 插件独立库参数绑定查询（权限校验 + 超时护栏，无表名前缀校验）
-pub(crate) fn plugin_db_query_params(
-    db: &dyn crate::wasm_core::host_api::context::DbScope,
-    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
+pub fn plugin_db_query_params(
+    ports: &dyn SqlitePorts,
     plugin_id: &str,
     sql: &str,
     params_json: &str,
 ) -> Result<Option<String>, String> {
-    if !super::check_permission(perm, plugin_id, PERMISSION_STORAGE, "host_plugin_db_query_params") {
+    if !ports.check_permission(plugin_id, PERMISSION_STORAGE, "host_plugin_db_query_params") {
         return Err("permission denied".to_string());
     }
     let params = parse_params_json(params_json)?;
     let timeout = Duration::from_secs(PLUGIN_DB_STATEMENT_TIMEOUT_SECS);
-    let value = block_on_async(async {
-        let db_arc = db
-            .get_or_create_plugin_db(plugin_id)
+    let value = block_on(ports, async {
+        let db_arc = ports
+            .plugin_db(plugin_id.to_string())
             .await
             .map_err(|e| e.to_string())?;
         let db = db_arc.lock().await;
@@ -473,7 +490,7 @@ fn parse_sqls_json(sqls_json: &str) -> Result<Vec<String>, String> {
 ///
 /// 尽力而为的检测：去除首尾空白与前导注释后取首/末 token 匹配白名单，
 /// 覆盖 BEGIN/COMMIT/END/ROLLBACK/SAVEPOINT/RELEASE 常见形态，不做完整 SQL 解析。
-fn reject_bare_transaction_control(sql: &str) -> Result<(), String> {
+pub(crate) fn reject_bare_transaction_control(sql: &str) -> Result<(), String> {
     let mut s = sql.trim();
     // 剥离前导注释（-- 行注释 / /* 块注释），最多剥 8 层防病态输入
     for _ in 0..8 {
@@ -531,10 +548,8 @@ fn execute_batch_on_conn(conn: &rusqlite::Connection, sqls: &[String]) -> Result
 }
 
 /// 主库事务批次执行（权限 + 表名前缀 + 语句数上限 + 超时护栏）
-pub(crate) fn db_execute_batch(
-    db: &dyn crate::wasm_core::host_api::context::DbScope,
-    perm: &dyn crate::wasm_core::host_api::context::PermissionScope, plugin_id: &str, sqls_json: &str) -> Result<u32, String> {
-    if !super::check_permission(perm, plugin_id, PERMISSION_DATABASE_MAIN, "host_db_execute_batch") {
+pub fn db_execute_batch(ports: &dyn SqlitePorts, plugin_id: &str, sqls_json: &str) -> Result<u32, String> {
+    if !ports.check_permission(plugin_id, PERMISSION_DATABASE_MAIN, "host_db_execute_batch") {
         return Err("permission denied".to_string());
     }
     let sqls = parse_sqls_json(sqls_json)?;
@@ -547,9 +562,9 @@ pub(crate) fn db_execute_batch(
     for sql in &sqls {
         validate_sql_table_prefix(plugin_id, sql).map_err(|e| e.to_string())?;
     }
-    let db = db.database().clone();
+    let db = ports.main_db();
     let timeout = Duration::from_secs(PLUGIN_DB_STATEMENT_TIMEOUT_SECS);
-    block_on_async(async {
+    block_on(ports, async {
         let db = db.lock().await;
         with_main_db_guards(plugin_id, db.conn(), timeout, &sqls.join(";"), |conn| {
             execute_batch_on_conn(conn, &sqls)
@@ -559,13 +574,8 @@ pub(crate) fn db_execute_batch(
 }
 
 /// 插件独立库事务批次执行（权限 + 语句数上限 + 超时护栏，无表名前缀校验）
-pub(crate) fn plugin_db_execute_batch(
-    db: &dyn crate::wasm_core::host_api::context::DbScope,
-    perm: &dyn crate::wasm_core::host_api::context::PermissionScope,
-    plugin_id: &str,
-    sqls_json: &str,
-) -> Result<u32, String> {
-    if !super::check_permission(perm, plugin_id, PERMISSION_STORAGE, "host_plugin_db_execute_batch") {
+pub fn plugin_db_execute_batch(ports: &dyn SqlitePorts, plugin_id: &str, sqls_json: &str) -> Result<u32, String> {
+    if !ports.check_permission(plugin_id, PERMISSION_STORAGE, "host_plugin_db_execute_batch") {
         return Err("permission denied".to_string());
     }
     let sqls = parse_sqls_json(sqls_json)?;
@@ -576,9 +586,9 @@ pub(crate) fn plugin_db_execute_batch(
         ));
     }
     let timeout = Duration::from_secs(PLUGIN_DB_STATEMENT_TIMEOUT_SECS);
-    block_on_async(async {
-        let db_arc = db
-            .get_or_create_plugin_db(plugin_id)
+    block_on(ports, async {
+        let db_arc = ports
+            .plugin_db(plugin_id.to_string())
             .await
             .map_err(|e| e.to_string())?;
         let db = db_arc.lock().await;
@@ -702,7 +712,11 @@ fn query_with_params_to_json(
 /// 主库与插件库查询共用，消除原先两份重复的列名提取 + query_map 逻辑；
 /// 逐行计数而非全量物化，超限立即截断报错（避免无上限结果集拷入 guest 内存
 /// 耗尽单次调用 fuel 预算触发 trap 污染 Store）。
-fn query_to_json(plugin_id: &str, conn: &rusqlite::Connection, sql: &str) -> Result<serde_json::Value, String> {
+pub(crate) fn query_to_json(
+    plugin_id: &str,
+    conn: &rusqlite::Connection,
+    sql: &str,
+) -> Result<serde_json::Value, String> {
     let mut stmt = conn.prepare(sql).map_err(|e| format!("prepare: {}", e))?;
 
     let column_count = stmt.column_count();
@@ -716,7 +730,7 @@ fn query_to_json(plugin_id: &str, conn: &rusqlite::Connection, sql: &str) -> Res
 
     let mut rows_out: Vec<serde_json::Value> = Vec::new();
     let mut total_bytes: usize = 0;
-    let mut rows = stmt
+    let rows = stmt
         .query_map([], |row| {
             let mut map = serde_json::Map::new();
             for (i, col_name) in column_names.iter().enumerate() {
@@ -726,7 +740,7 @@ fn query_to_json(plugin_id: &str, conn: &rusqlite::Connection, sql: &str) -> Res
             Ok(map)
         })
         .map_err(|e| format!("query_map: {}", e))?;
-    while let Some(row) = rows.next() {
+    for row in rows {
         let map = row.map_err(|e| format!("row: {}", e))?;
         push_row_capped(
             plugin_id,
@@ -750,7 +764,7 @@ fn query_to_json(plugin_id: &str, conn: &rusqlite::Connection, sql: &str) -> Res
 /// `main.` 限定、ATTACH、PRAGMA 都可能漏。真正的边界是 `with_main_db_guards` 里
 /// 由 SQLite 引擎逐动作回调的表名仲裁。这里保留的价值是**早失败 + 可读文案**
 /// （直接报出违规表名，而不是引擎的 `not authorized`）。
-fn validate_sql_table_prefix(plugin_id: &str, sql: &str) -> crate::Result<()> {
+pub(crate) fn validate_sql_table_prefix(plugin_id: &str, sql: &str) -> crate::Result<()> {
     let expected_prefix = main_db_table_prefix(plugin_id);
 
     let table_names = extract_table_names(sql);
@@ -770,7 +784,7 @@ fn validate_sql_table_prefix(plugin_id: &str, sql: &str) -> crate::Result<()> {
 /// 从 SQL 语句中提取表名
 ///
 /// 使用正则匹配常见 SQL 关键字后的表名标识符
-fn extract_table_names(sql: &str) -> Vec<String> {
+pub(crate) fn extract_table_names(sql: &str) -> Vec<String> {
     let mut tables = Vec::new();
 
     let patterns = [
@@ -847,672 +861,5 @@ fn column_to_json(row: &rusqlite::Row<'_>, col_index: usize) -> serde_json::Valu
     serde_json::Value::Null
 }
 
-// ==================== Tests ====================
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::wasm_core::host_api::tests::{build_host_ctx, grant_permissions};
-
-    /// 权限门三态（票 01 + 票 02）：主库面与私有库面是两个位，互不代持
-    ///
-    /// ① 什么都不给 → 两面都拒；② 只给 `storage` → 私有库放行、主库仍拒；
-    /// ③ 只给 `database:main` → 主库进到 SQL 校验、私有库拒。
-    /// 旧形态下 `storage` 由 SDK 无条件默认授予，主库权限门恒过——本用例锁住它已不再成立。
-    #[test]
-    fn main_db_and_private_db_faces_require_separate_bits() {
-        let ctx = build_host_ctx();
-        let sql = "SELECT value FROM plugin_secrets";
-        let own = "SELECT 1";
-
-        // ① 未授予：两面一律拒
-        assert_eq!(
-            db_query(ctx.as_ref(), ctx.as_ref(), "com.bedcode.no-db", sql).unwrap_err(),
-            "permission denied"
-        );
-        assert_eq!(
-            plugin_db_query(ctx.as_ref(), ctx.as_ref(), "com.bedcode.no-db", own).unwrap_err(),
-            "permission denied"
-        );
-        assert_eq!(
-            db_execute(ctx.as_ref(), ctx.as_ref(), "com.bedcode.no-db", sql).unwrap_err(),
-            "permission denied"
-        );
-        assert_eq!(
-            plugin_db_execute(ctx.as_ref(), ctx.as_ref(), "com.bedcode.no-db", own).unwrap_err(),
-            "permission denied"
-        );
-
-        // ② 只给 storage：私有库放行（错误来自无头上下文而非权限），主库仍按权限拒
-        grant_permissions(&ctx, "com.bedcode.kv-only", &[PERMISSION_STORAGE]);
-        let private_err = plugin_db_execute(ctx.as_ref(), ctx.as_ref(), "com.bedcode.kv-only", own).unwrap_err();
-        assert!(
-            !private_err.contains("permission denied"),
-            "持有 storage 的私有库面不应被权限门拒: {private_err}"
-        );
-        assert_eq!(
-            db_execute(ctx.as_ref(), ctx.as_ref(), "com.bedcode.kv-only", sql).unwrap_err(),
-            "permission denied",
-            "storage 不再自动可碰主库"
-        );
-
-        // ③ 只给 database:main：主库放行到 SQL 校验，私有库反而被拒
-        grant_permissions(&ctx, "com.bedcode.main-only", &[PERMISSION_DATABASE_MAIN]);
-        let main_err = db_execute(ctx.as_ref(), ctx.as_ref(), "com.bedcode.main-only", sql).unwrap_err();
-        assert!(
-            !main_err.contains("permission denied"),
-            "持有 database:main 的主库面应进到 SQL 校验: {main_err}"
-        );
-        assert_eq!(
-            plugin_db_execute(ctx.as_ref(), ctx.as_ref(), "com.bedcode.main-only", own).unwrap_err(),
-            "permission denied",
-            "database:main 不反向附带私有库/KV 能力"
-        );
-    }
-
-    // ==================== 主库隔离纵深（票 02，P0-1） ====================
-    //
-    // 断言面 = 宿主函数对**真实主库**的执行结果（`build_host_ctx` 的库跑过 init_schema，
-    // 里面就有 `plugin_secrets`），不断言 `extract_table_names` 的内部返回。
-    // 攻击者视角：插件已合法持有主库面，试图借一条语句读到/搬走别人的表。
-
-    const ATTACKER: &str = "com.bedcode.attacker";
-    const ATTACKER_PREFIX: &str = "plugin_com_bedcode_attacker_";
-    const SECRET: &str = "PLAINTEXT-HOST-MANAGED-SECRET";
-
-    /// 授予主库面（票 02：主库独立权限位）
-    fn grant_main_db(ctx: &WasmHostContext, plugin_id: &str) {
-        grant_permissions(ctx, plugin_id, &[PERMISSION_DATABASE_MAIN]);
-    }
-
-    /// 直接在宿主主库上播种（模拟「别的插件/宿主自己的数据本来就在这张库里」）
-    fn seed_main(ctx: &WasmHostContext, sql: &str) {
-        let db = Arc::clone(&ctx.db);
-        crate::wasm_core::runtime_util::block_on_async(async move {
-            let db = db.lock().await;
-            db.conn().execute_batch(sql).expect("宿主侧播种语句应成功");
-        });
-    }
-
-    /// 主库里某张表当前的行数（用于断言「拒绝不留副作用」）
-    fn main_row_count(ctx: &WasmHostContext, table: &str) -> i64 {
-        let db = Arc::clone(&ctx.db);
-        crate::wasm_core::runtime_util::block_on_async(async move {
-            let db = db.lock().await;
-            db.conn()
-                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get::<_, i64>(0))
-                .unwrap_or(-1)
-        })
-    }
-
-    /// 攻击者自己的表与一张暂存表就位（红测的前提：跨表读写的两端都真实存在）
-    fn attacker_tables_ready(ctx: &WasmHostContext) {
-        grant_main_db(ctx, ATTACKER);
-        seed_main(
-            ctx,
-            &format!(
-                "CREATE TABLE {ATTACKER_PREFIX}x (k TEXT); \
-                 CREATE TABLE {ATTACKER_PREFIX}stolen (value TEXT); \
-                 INSERT INTO {ATTACKER_PREFIX}x (k) VALUES ('own-row');"
-            ),
-        );
-    }
-
-    /// 反例①（逗号多表读）：`FROM 自己的表 a, plugin_secrets b` 只提取到第一个表名，
-    /// 校验放行后明文密钥被整行读出——本轮 P0-1 的原始攻击链
-    #[test]
-    fn main_db_comma_multitable_read_of_secrets_is_denied() {
-        let ctx = build_host_ctx();
-        seed_main(
-            &ctx,
-            &format!(
-                "INSERT OR REPLACE INTO plugin_secrets (plugin_id, key, value, updated_at) \
-                 VALUES ('com.bedcode.victim', 'jwt-key', '{SECRET}', '2026-09-21');"
-            ),
-        );
-        attacker_tables_ready(&ctx);
-
-        let sql = &format!("SELECT b.value FROM {ATTACKER_PREFIX}x a, plugin_secrets b WHERE a.k = 'own-row'");
-        let result = db_query(ctx.as_ref(), ctx.as_ref(), ATTACKER, "SELECT 1 AS one");
-        assert!(result.is_ok(), "本插件单表查询应放行: {result:?}");
-
-        let outcome = db_query(ctx.as_ref(), ctx.as_ref(), ATTACKER, sql);
-        assert!(outcome.is_err(), "逗号多表跨读主库他表必须被拒，实际放行: {outcome:?}");
-        if let Ok(Some(rows)) = &outcome {
-            panic!("跨表读放行且取回数据（密钥泄露）: {rows}");
-        }
-    }
-
-    /// 反例②（逗号多表搬数据）：把别人的表内容写进**自己**的表，绕过之后可任意读走
-    #[test]
-    fn main_db_comma_multitable_exfil_write_is_denied() {
-        let ctx = build_host_ctx();
-        seed_main(
-            &ctx,
-            &format!(
-                "INSERT OR REPLACE INTO plugin_secrets (plugin_id, key, value, updated_at) \
-                 VALUES ('com.bedcode.victim', 'jwt-key', '{SECRET}', '2026-09-21');"
-            ),
-        );
-        attacker_tables_ready(&ctx);
-
-        let sql = &format!(
-            "INSERT INTO {ATTACKER_PREFIX}stolen (value) \
-             SELECT b.value FROM {ATTACKER_PREFIX}x a, plugin_secrets b"
-        );
-        let outcome = db_execute(ctx.as_ref(), ctx.as_ref(), ATTACKER, sql);
-        assert!(outcome.is_err(), "逗号多表跨写搬运必须被拒，实际放行: {outcome:?}");
-        assert_eq!(
-            main_row_count(&ctx, &format!("{ATTACKER_PREFIX}stolen")),
-            0,
-            "被拒的语句不得留下任何副作用（暂存表必须仍为空）"
-        );
-    }
-
-    /// 反例③（引号/方括号标识符变体）：正则只吃裸标识符，带引号的他表名照样是跨表读
-    #[test]
-    fn main_db_quoted_identifier_cross_read_is_denied() {
-        let ctx = build_host_ctx();
-        attacker_tables_ready(&ctx);
-
-        for sql in [
-            &format!("SELECT b.value FROM {ATTACKER_PREFIX}x a, \"plugin_secrets\" b")[..],
-            &format!("SELECT b.value FROM {ATTACKER_PREFIX}x a, [plugin_secrets] b")[..],
-            &format!("SELECT b.value FROM {ATTACKER_PREFIX}x a, `plugin_secrets` b")[..],
-            // 库名限定：main 是宿主主库自身的 schema 名
-            "SELECT value FROM main.plugin_secrets",
-        ] {
-            let outcome = db_query(ctx.as_ref(), ctx.as_ref(), ATTACKER, sql);
-            assert!(outcome.is_err(), "跨表读变体未被拒: {sql} → {outcome:?}");
-        }
-    }
-
-    /// 反例④（ATTACH）：挂载任意数据库文件 = 既能把别处的库读进来，也能往里写
-    #[test]
-    fn main_db_attach_is_denied() {
-        let ctx = build_host_ctx();
-        attacker_tables_ready(&ctx);
-        for sql in ["ATTACH ':memory:' AS evil", "ATTACH DATABASE ':memory:' AS evil"] {
-            let outcome = db_execute(ctx.as_ref(), ctx.as_ref(), ATTACKER, sql);
-            assert!(outcome.is_err(), "ATTACH 任意库必须被拒: {sql} → {outcome:?}");
-        }
-    }
-
-    /// 反例⑤（PRAGMA）：`database_list` 直接把宿主主库文件路径交给插件
-    #[test]
-    fn main_db_pragma_is_denied() {
-        let ctx = build_host_ctx();
-        attacker_tables_ready(&ctx);
-        for sql in [
-            "PRAGMA database_list",
-            "PRAGMA writable_schema = ON",
-            "SELECT name FROM sqlite_master",
-        ] {
-            let outcome = db_query(ctx.as_ref(), ctx.as_ref(), ATTACKER, sql);
-            assert!(outcome.is_err(), "主库自省面必须被拒: {sql} → {outcome:?}");
-        }
-    }
-
-    /// 正例（纵深不得过拦）：本插件前缀对象的完整生命周期照常可用
-    #[test]
-    fn main_db_own_prefix_tables_still_work_end_to_end() {
-        let ctx = build_host_ctx();
-        attacker_tables_ready(&ctx);
-        let table = format!("{ATTACKER_PREFIX}notes");
-        db_execute(
-                        ctx.as_ref(),
-            ctx.as_ref(),
-            ATTACKER,
-            &format!("CREATE TABLE {table} (id INTEGER PRIMARY KEY, v TEXT)"),
-        )
-        .expect("建自己的表应放行");
-        db_execute(ctx.as_ref(), ctx.as_ref(), ATTACKER, &format!("INSERT INTO {table} (v) VALUES ('a')")).expect("写自己的表应放行");
-        assert_eq!(
-            db_query(ctx.as_ref(), ctx.as_ref(), ATTACKER, &format!("SELECT v FROM {table}"))
-                .expect("读自己的表应放行")
-                .as_deref(),
-            Some(r#"[{"v":"a"}]"#),
-            "查询结果应原样返回"
-        );
-        db_execute(ctx.as_ref(), ctx.as_ref(), ATTACKER, &format!("UPDATE {table} SET v = 'b' WHERE v = 'a'")).expect("更新自己的表应放行");
-        db_execute(ctx.as_ref(), ctx.as_ref(), ATTACKER, &format!("DELETE FROM {table} WHERE v = 'b'")).expect("删除自己的表应放行");
-        // 自连接（自己的表出现两次）与带引号形态都必须放行
-        db_query(ctx.as_ref(), ctx.as_ref(), ATTACKER, &format!("SELECT a.id FROM {table} a, {table} b"))
-            .expect("本插件表之间的逗号多表应放行");
-        db_query(ctx.as_ref(), ctx.as_ref(), ATTACKER, &format!("SELECT * FROM \"{table}\"")).expect("带引号标识符的本插件表应放行");
-        db_execute(ctx.as_ref(), ctx.as_ref(), ATTACKER, &format!("ALTER TABLE {table} ADD COLUMN extra TEXT")).expect("改自己的表应放行");
-        db_execute(ctx.as_ref(), ctx.as_ref(), ATTACKER, &format!("DROP TABLE {table}")).expect("删自己的表应放行");
-    }
-
-    /// 正例（DDL 记账必然触达 sqlite_master / sqlite_sequence，不得因此过拦）
-    #[test]
-    fn main_db_own_prefix_ddl_family_still_works() {
-        let ctx = build_host_ctx();
-        attacker_tables_ready(&ctx);
-        let table = format!("{ATTACKER_PREFIX}auto");
-        // AUTOINCREMENT 会写 sqlite_sequence
-        db_execute(
-                        ctx.as_ref(),
-            ctx.as_ref(),
-            ATTACKER,
-            &format!("CREATE TABLE {table} (id INTEGER PRIMARY KEY AUTOINCREMENT, v TEXT)"),
-        )
-        .expect("AUTOINCREMENT 建表应放行");
-        db_execute(ctx.as_ref(), ctx.as_ref(), ATTACKER, &format!("INSERT INTO {table} (v) VALUES ('a'), ('b')")).expect("批量插入应放行");
-        db_execute(
-                        ctx.as_ref(),
-            ctx.as_ref(),
-            ATTACKER,
-            &format!("CREATE INDEX {ATTACKER_PREFIX}ix ON {table} (v)"),
-        )
-        .expect("在自己表上建索引应放行（隐式 Reindex 不得被拒）");
-        db_execute(ctx.as_ref(), ctx.as_ref(), ATTACKER, &format!("DROP INDEX {ATTACKER_PREFIX}ix")).expect("删自己的索引应放行");
-        db_execute(
-                        ctx.as_ref(),
-            ctx.as_ref(),
-            ATTACKER,
-            &format!("CREATE VIEW {ATTACKER_PREFIX}v AS SELECT v FROM {table}"),
-        )
-        .expect("在自己表上建视图应放行");
-        assert_eq!(
-            db_query(ctx.as_ref(), ctx.as_ref(), ATTACKER, &format!("SELECT v FROM {ATTACKER_PREFIX}v"))
-                .expect("读自己的视图应放行")
-                .as_deref(),
-            Some(r#"[{"v":"a"},{"v":"b"}]"#)
-        );
-        db_execute(ctx.as_ref(), ctx.as_ref(), ATTACKER, &format!("DROP VIEW {ATTACKER_PREFIX}v")).expect("删自己的视图应放行");
-        // 触发器用例本票不覆盖：`CREATE TRIGGER ... BEGIN ... END` 以 END 结尾，
-        // 会被既有的 `reject_bare_transaction_control`（末 token 白名单）当成裸事务控制
-        // 拒掉——与本票的表名纵深无关，是启发式检测的既有误拒（已登记票 02 Comments）
-        db_execute(ctx.as_ref(), ctx.as_ref(), ATTACKER, &format!("DROP TABLE {table}")).expect("删表应放行");
-    }
-
-    /// 反例（引擎层才是边界）：正则层不认的写法必须由守卫拦下，且给出引擎的拒因
-    #[test]
-    fn main_db_authorizer_error_names_the_boundary() {
-        let ctx = build_host_ctx();
-        attacker_tables_ready(&ctx);
-        let err = db_query(ctx.as_ref(), ctx.as_ref(), ATTACKER, "SELECT * FROM plugin_settings").unwrap_err();
-        assert!(
-            err.contains("does not match required prefix"),
-            "正则层能识别的写法应保持既有文案: {err}"
-        );
-        let err = db_query(
-                        ctx.as_ref(),
-            ctx.as_ref(),
-            ATTACKER,
-            &format!("SELECT b.value FROM {ATTACKER_PREFIX}x a, plugin_secrets b"),
-        )
-        .unwrap_err();
-        assert!(
-            err.contains("prohibited") && err.contains("plugin_secrets"),
-            "正则层漏掉的写法应由引擎守卫拒绝并报出被禁对象（不是静默返回空）: {err}"
-        );
-        assert!(!err.contains(SECRET), "拒绝文案不得回带被查内容: {err}");
-    }
-
-    /// 反例（目录表）：DDL 会隐式记账到 sqlite_master，但插件自己点名一律拒
-    #[test]
-    fn main_db_schema_catalog_direct_reference_is_denied() {
-        let ctx = build_host_ctx();
-        attacker_tables_ready(&ctx);
-        for sql in [
-            "SELECT name FROM sqlite_master WHERE type = 'table'",
-            "SELECT * FROM \"sqlite_master\"",
-            "SELECT * FROM [sqlite_sequence]",
-        ] {
-            let outcome = db_query(ctx.as_ref(), ctx.as_ref(), ATTACKER, sql);
-            assert!(outcome.is_err(), "目录表直接读必须被拒: {sql} → {outcome:?}");
-        }
-        for sql in [
-            "UPDATE sqlite_master SET tbl_name = 'x' WHERE 1 = 1",
-            "INSERT INTO sqlite_sequence (name, seq) VALUES ('anything', 1)",
-            "DELETE FROM sqlite_master WHERE 1 = 1",
-        ] {
-            let outcome = db_execute(ctx.as_ref(), ctx.as_ref(), ATTACKER, sql);
-            assert!(outcome.is_err(), "目录表直接写必须被拒: {sql} → {outcome:?}");
-        }
-        // 拒了之后目录仍在：证明拒绝发生在 prepare，而不是把库改坏了
-        assert!(
-            main_row_count(&ctx, "plugin_secrets") >= 0,
-            "主库应仍可正常自省（宿主侧）"
-        );
-    }
-
-    /// 反例（RENAME TO）：把自有表改名到别的前缀 = 在前缀之外凭空造表
-    #[test]
-    fn main_db_rename_to_foreign_prefix_is_denied() {
-        let ctx = build_host_ctx();
-        attacker_tables_ready(&ctx);
-        let outcome = db_execute(
-                        ctx.as_ref(),
-            ctx.as_ref(),
-            ATTACKER,
-            &format!("ALTER TABLE {ATTACKER_PREFIX}x RENAME TO plugin_secrets"),
-        );
-        assert!(outcome.is_err(), "RENAME TO 他表名必须被拒: {outcome:?}");
-        // 自己的前缀内改名仍可用
-        db_execute(
-                        ctx.as_ref(),
-            ctx.as_ref(),
-            ATTACKER,
-            &format!("ALTER TABLE {ATTACKER_PREFIX}x RENAME TO {ATTACKER_PREFIX}y"),
-        )
-        .expect("前缀内改名应放行");
-    }
-
-    /// 正例（扫描器不过拦）：字符串字面量里出现目录表名不算插件点名
-    #[test]
-    fn main_db_catalog_name_inside_literal_is_allowed() {
-        let ctx = build_host_ctx();
-        attacker_tables_ready(&ctx);
-        db_execute(
-                        ctx.as_ref(),
-            ctx.as_ref(),
-            ATTACKER,
-            "INSERT INTO plugin_com_bedcode_attacker_x (k) VALUES ('sqlite_master')",
-        )
-        .expect("字符串字面量里的目录表名不得触发拒绝");
-        assert_eq!(
-            db_query(
-                                ctx.as_ref(),
-                ctx.as_ref(),
-                ATTACKER,
-                "SELECT k FROM plugin_com_bedcode_attacker_x WHERE k = 'sqlite_master'",
-            )
-            .expect("读回自己的数据应放行")
-            .as_deref(),
-            Some(r#"[{"k":"sqlite_master"}]"#)
-        );
-    }
-
-    /// 纵深只作用在主库面：同一条跨表 SQL，主库报前缀不符，私有库不受该约束
-    /// （无头上下文拿不到私有库句柄，因此比对的是错误归属而非执行结果）
-    #[test]
-    fn private_db_face_unaffected_by_main_db_isolation() {
-        let ctx = build_host_ctx();
-        grant_permissions(&ctx, ATTACKER, &[PERMISSION_DATABASE_MAIN, PERMISSION_STORAGE]);
-        let sql = "SELECT * FROM plugin_secrets";
-        let main_err = db_query(ctx.as_ref(), ctx.as_ref(), ATTACKER, sql).expect_err("主库跨表读必须被拒");
-        assert!(
-            main_err.contains("does not match required prefix") || main_err.contains("prohibited"),
-            "主库拒绝应给出隔离理由，got: {main_err}"
-        );
-        let private_err =
-            plugin_db_query(ctx.as_ref(), ctx.as_ref(), ATTACKER, sql).expect_err("无头上下文取不到私有库句柄（但不应因主库纵深而拒）");
-        assert!(
-            !private_err.contains("does not match required prefix") && !private_err.contains("prohibited"),
-            "私有库不该被主库表名前缀/授权仲裁拦下，got: {private_err}"
-        );
-    }
-
-    #[test]
-    fn test_sanitize_plugin_id() {
-        let sanitized = "com.example.my-plugin".replace('.', "_").replace('-', "_");
-        assert_eq!(sanitized, "com_example_my_plugin");
-    }
-
-    #[test]
-    fn test_validate_sql_table_prefix_valid() {
-        let result = validate_sql_table_prefix(
-            "com.example.my-plugin",
-            "INSERT INTO plugin_com_example_my_plugin_data (id, name) VALUES (1, 'test')",
-        );
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_validate_sql_table_prefix_invalid() {
-        let result = validate_sql_table_prefix("com.example.my-plugin", "INSERT INTO sessions (id) VALUES ('abc')");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_validate_sql_table_prefix_multiple_tables() {
-        let result = validate_sql_table_prefix(
-            "my-plugin",
-            "SELECT * FROM plugin_my_plugin_data JOIN sessions ON sessions.id = plugin_my_plugin_data.session_id",
-        );
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_validate_sql_table_prefix_create_table() {
-        let result = validate_sql_table_prefix(
-            "my-plugin",
-            "CREATE TABLE IF NOT EXISTS plugin_my_plugin_cache (key TEXT PRIMARY KEY, value TEXT)",
-        );
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_validate_sql_table_prefix_drop_table() {
-        let result = validate_sql_table_prefix("my-plugin", "DROP TABLE IF EXISTS plugin_my_plugin_cache");
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_validate_sql_table_prefix_alter_table() {
-        let result = validate_sql_table_prefix(
-            "my-plugin",
-            "ALTER TABLE plugin_my_plugin_cache ADD COLUMN updated_at TEXT",
-        );
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_extract_table_names() {
-        let tables = extract_table_names("INSERT INTO users (id) VALUES (1); SELECT * FROM orders");
-        assert!(tables.contains(&"users".to_string()));
-        assert!(tables.contains(&"orders".to_string()));
-    }
-
-    #[test]
-    fn test_extract_table_names_quoted() {
-        let tables = extract_table_names("INSERT INTO `my-table` (id) VALUES (1)");
-        assert!(tables.contains(&"my".to_string()));
-    }
-
-    // ==================== 执行护栏（票据 05）：超时 / 行数上限 / 字节上限 ====================
-
-    /// 内存连接 + n 行数据（事务内批量插入，测试用）
-    fn mem_conn_with_rows(n: usize) -> rusqlite::Connection {
-        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE t (x INTEGER)").unwrap();
-        {
-            let tx = conn.transaction().unwrap();
-            for i in 0..n {
-                tx.execute("INSERT INTO t (x) VALUES (?1)", rusqlite::params![i as i64])
-                    .unwrap();
-            }
-            tx.commit().unwrap();
-        }
-        conn
-    }
-
-    /// 慢查询（大跨连）被超时护栏硬中断：超时错误与 SQL 错误可区分
-    #[test]
-    fn statement_timeout_interrupts_slow_query() {
-        let conn = mem_conn_with_rows(5000);
-        let err = with_statement_timeout("p1", &conn, Duration::from_millis(20), |c| {
-            // 5000×5000 = 2500 万行结果，远超 20ms
-            query_to_json("p1", c, "SELECT count(*) FROM t a CROSS JOIN t b")
-        })
-        .expect_err("slow query must be interrupted by timeout guard");
-        assert!(
-            err.contains("timed out"),
-            "timeout error should be distinguishable, got: {}",
-            err
-        );
-    }
-
-    /// 约束/表缺失错误 ≠ 超时（错误分类保持：超时/超限 ≠ SQL 错误 ≠ 权限拒绝）
-    #[test]
-    fn sql_error_not_aliased_as_timeout() {
-        let conn = mem_conn_with_rows(10);
-        let err = with_statement_timeout("p1", &conn, Duration::from_secs(5), |c| {
-            query_to_json("p1", c, "SELECT * FROM nope")
-        })
-        .expect_err("missing table must surface as SQL error");
-        assert!(
-            !err.contains("timed out") && err.contains("nope"),
-            "SQL error should not be disguised as timeout, got: {}",
-            err
-        );
-    }
-
-    /// 快查询在超时窗口内放行；结果行数与字节均在上限内
-    #[test]
-    fn statement_within_timeout_and_limits_passes() {
-        let conn = mem_conn_with_rows(100);
-        let value = with_statement_timeout("p1", &conn, Duration::from_secs(5), |c| {
-            query_to_json("p1", c, "SELECT x FROM t ORDER BY x")
-        })
-        .expect("fast small query must pass");
-        assert_eq!(value.as_array().unwrap().len(), 100);
-    }
-
-    /// 结果集行数超上限：截断并报错（引导插件加 LIMIT 或分批）
-    #[test]
-    fn query_exceeding_row_limit_rejected() {
-        let conn = mem_conn_with_rows(PLUGIN_DB_QUERY_MAX_ROWS + 1);
-        let err = query_to_json("p1", &conn, "SELECT x FROM t").expect_err("result over row limit must be rejected");
-        assert!(
-            err.contains("rows limit") && err.contains("LIMIT"),
-            "error should state row limit and guidance, got: {}",
-            err
-        );
-    }
-
-    /// 结果集序列化字节超上限（单行大字段）：截断并报错
-    #[test]
-    fn query_exceeding_byte_limit_rejected() {
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE t (x TEXT)").unwrap();
-        let big = "a".repeat(PLUGIN_DB_QUERY_MAX_BYTES + 1);
-        conn.execute("INSERT INTO t (x) VALUES (?1)", rusqlite::params![big.as_str()])
-            .unwrap();
-        let err =
-            query_to_json("p1", &conn, "SELECT x FROM t").expect_err("oversized row must be rejected by byte guard");
-        assert!(
-            err.contains("bytes limit"),
-            "error should state byte limit, got: {}",
-            err
-        );
-    }
-
-    /// 入口级回归：主库 execute/query/参数绑定经护栏全链路（权限 + 前缀 + 超时/上限）
-    #[test]
-    fn db_entry_execute_and_query_with_guards() {
-        use crate::wasm_core::host_api::tests as host_tests;
-        let ctx = host_tests::build_host_ctx();
-        host_tests::grant_permissions(&ctx, "p1", &[PERMISSION_DATABASE_MAIN, PERMISSION_STORAGE]);
-        db_execute(ctx.as_ref(), ctx.as_ref(), "p1", "CREATE TABLE plugin_p1_t (x INTEGER)").expect("create table");
-        for i in 0..3i64 {
-            let params = format!("[{}]", i);
-            db_execute_params(ctx.as_ref(), ctx.as_ref(), "p1", "INSERT INTO plugin_p1_t (x) VALUES (?1)", &params)
-                .expect("insert with params");
-        }
-        let out = db_query(ctx.as_ref(), ctx.as_ref(), "p1", "SELECT x FROM plugin_p1_t ORDER BY x")
-            .expect("query")
-            .expect("query result json");
-        assert_eq!(out, "[{\"x\":0},{\"x\":1},{\"x\":2}]");
-        let out_params = db_query_params(ctx.as_ref(), ctx.as_ref(), "p1", "SELECT x FROM plugin_p1_t WHERE x >= ?1 ORDER BY x", "[1]")
-            .expect("query params")
-            .expect("query params json");
-        assert_eq!(out_params, "[{\"x\":1},{\"x\":2}]");
-    }
-
-    // ==================== 事务批次（票据 06）：execute-batch ====================
-
-    /// 事务批次语义：全部成功才提交；任一句失败整体回滚（前序语句一并回滚）
-    #[test]
-    fn execute_batch_commits_all_or_rolls_back_all() {
-        use crate::wasm_core::host_api::tests as host_tests;
-        let ctx = host_tests::build_host_ctx();
-        host_tests::grant_permissions(&ctx, "p1", &[PERMISSION_DATABASE_MAIN, PERMISSION_STORAGE]);
-        db_execute(
-                        ctx.as_ref(),
-            ctx.as_ref(),
-            "p1",
-            "CREATE TABLE plugin_p1_batch (id INTEGER PRIMARY KEY, v TEXT)",
-        )
-        .expect("create table");
-
-        // 成功批次：全部提交
-        let affected = db_execute_batch(
-                        ctx.as_ref(),
-            ctx.as_ref(),
-            "p1",
-            r#"["INSERT INTO plugin_p1_batch (id,v) VALUES (1,'a')",
-                "INSERT INTO plugin_p1_batch (id,v) VALUES (2,'b')",
-                "INSERT INTO plugin_p1_batch (id,v) VALUES (3,'c')"]"#,
-        )
-        .expect("batch must commit");
-        assert_eq!(affected, 3);
-        let out = db_query(ctx.as_ref(), ctx.as_ref(), "p1", "SELECT count(*) AS n FROM plugin_p1_batch")
-            .unwrap()
-            .unwrap();
-        assert_eq!(out, "[{\"n\":3}]");
-
-        // 失败批次（第二句主键冲突）：整体回滚，已执行的第一句也不算数
-        let err = db_execute_batch(
-                        ctx.as_ref(),
-            ctx.as_ref(),
-            "p1",
-            r#"["INSERT INTO plugin_p1_batch (id,v) VALUES (4,'d')",
-                "INSERT INTO plugin_p1_batch (id,v) VALUES (1,'dup')"]"#,
-        )
-        .expect_err("conflicting statements must roll back the whole batch");
-        assert!(err.contains("UNIQUE") || err.contains("duplicate"), "got: {}", err);
-        let out = db_query(ctx.as_ref(), ctx.as_ref(), "p1", "SELECT count(*) AS n FROM plugin_p1_batch")
-            .unwrap()
-            .unwrap();
-        assert_eq!(out, "[{\"n\":3}]", "failed batch must roll back prior statements");
-    }
-
-    /// 语句数上限：超限批次在执行前被拒（不放行）
-    #[test]
-    fn execute_batch_statement_count_capped() {
-        use crate::wasm_core::host_api::tests as host_tests;
-        let ctx = host_tests::build_host_ctx();
-        host_tests::grant_permissions(&ctx, "p1", &[PERMISSION_DATABASE_MAIN, PERMISSION_STORAGE]);
-        let many: Vec<String> = (0..PLUGIN_DB_EXECUTE_BATCH_MAX_STATEMENTS + 1)
-            .map(|i| format!("INSERT INTO plugin_p1_x VALUES ({})", i))
-            .collect();
-        let sqls = serde_json::to_string(&many).unwrap();
-        let err = db_execute_batch(ctx.as_ref(), ctx.as_ref(), "p1", &sqls).expect_err("over-limit batch must be rejected");
-        assert!(err.contains("statements limit"), "got: {}", err);
-    }
-
-    /// 跨调用裸事务被拒：execute 级 BEGIN/COMMIT/SAVEPOINT 等引导 execute-batch
-    #[test]
-    fn bare_transaction_control_rejected_at_execute() {
-        use crate::wasm_core::host_api::tests as host_tests;
-        let ctx = host_tests::build_host_ctx();
-        host_tests::grant_permissions(&ctx, "p1", &[PERMISSION_DATABASE_MAIN, PERMISSION_STORAGE]);
-        for sql in [
-            "BEGIN",
-            "BEGIN TRANSACTION",
-            "COMMIT;",
-            "ROLLBACK",
-            "SAVEPOINT sp1",
-            "RELEASE sp1",
-            "END TRANSACTION",
-        ] {
-            let err = db_execute(ctx.as_ref(), ctx.as_ref(), "p1", sql).expect_err(&format!("'{}' must be rejected", sql));
-            assert!(err.contains("execute-batch"), "'{}' err: {}", sql, err);
-        }
-    }
-
-    /// 白名单检测正反例：正常 DML/DDL 放行；前导注释/尾部 COMMIT 形态也能识别
-    #[test]
-    fn transaction_control_whitelist_allows_normal_sql() {
-        assert!(reject_bare_transaction_control("INSERT INTO t (x) VALUES ('begin')").is_ok());
-        assert!(reject_bare_transaction_control("UPDATE t SET x = 'commit' WHERE id = 1").is_ok());
-        assert!(reject_bare_transaction_control("SELECT 1").is_ok());
-        assert!(reject_bare_transaction_control("-- 注释\nBEGIN").is_err());
-        assert!(reject_bare_transaction_control("/* 注释 */ SELECT 1").is_ok());
-        assert!(reject_bare_transaction_control("INSERT INTO t VALUES (1); COMMIT").is_err());
-    }
-}
+mod tests;

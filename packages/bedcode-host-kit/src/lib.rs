@@ -7,9 +7,11 @@
 //! ## 为什么必须独立成 crate（两条硬约束，均已实测）
 //!
 //! 1. **被链接性**：`inventory::submit!` 展开为 linker-section 静态；未被任何
-//!    item 引用的 rlib 不进最终二进制，静态不执行 ⇒ 注册丢失。已实测：不引用
-//!    能力 crate 时收集结果为空，加一行强制引用后才有值（见
-//!    `tests/forced_link.rs`）。
+//!    item 引用的 rlib 不进最终二进制，静态不执行 ⇒ 注册丢失。**已固化成两个
+//!    自动化用例**（票 09）：`tests/forced_link.rs`（顶层 `use ... as _;` ⇒ 收集
+//!    结果恰好等于探针自报的那一项）与 `tests/forced_link_absent.rs`
+//!    （全文件不提及探针 crate ⇒ 收集结果为空）。两者是两个测试二进制——强制
+//!    引用是链接期属性，同进程内无法既「有」又「无」。
 //! 2. **Cargo 环路**：能力 crate 必须能命名两样东西——① `collect!` 里声明的
 //!    提交类型；② [`state::WasmPluginState`]（`add_to_linker::<S, D>` 是**单态**的，
 //!    S 不能是调用方的类型）。这两样若住在宿主 bin crate 内，能力 crate 就得依赖
@@ -72,6 +74,12 @@ pub enum HostKitError {
         source: wasmtime::Error,
     },
     /// 自动收集到的能力模块集与白名单不一致（防「模块没链上」静默漂移）
+    ///
+    /// **两个方向各有不同的修法，故错误串分别点名**（fail-visible，不静默降级）：
+    /// - `missing`（白名单有、没收集到）：该能力 crate 没进最终二进制。查
+    ///   Cargo 依赖是否还在，以及宿主那行 `use <crate> as _;` 强制引用是否被删。
+    /// - `unlisted`（收集到、白名单没有）：有 crate 未经 review 就进了能力面，
+    ///   或强制引用行旁的白名单项被漏加。
     WhitelistMismatch {
         /// 只在收集结果里、白名单里没有的模块名
         unlisted: Vec<String>,
@@ -98,7 +106,11 @@ impl std::fmt::Display for HostKitError {
             }
             Self::WhitelistMismatch { unlisted, missing } => write!(
                 f,
-                "host module whitelist mismatch: unlisted={unlisted:?}, missing={missing:?}"
+                "host module whitelist mismatch: unlisted={unlisted:?} (collected but not \
+                 declared in the host whitelist — add a reviewed whitelist entry or drop the \
+                 capability crate dependency), missing={missing:?} (declared but not \
+                 collected — the capability crate is not linked into the binary; check its \
+                 Cargo dependency and the `use <crate> as _;` forced-reference line)"
             ),
             Self::HostPortUnavailable { expected, actual } => write!(
                 f,

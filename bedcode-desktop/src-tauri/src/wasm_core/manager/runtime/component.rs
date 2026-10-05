@@ -27,7 +27,7 @@ use super::{StoreSpec, WasmHostContext, WasmPluginState};
 use crate::wasm_core::config::StoreLimits;
 use crate::wasm_core::host_api::context::HostCtxOf;
 use crate::wasm_core::host_api::{
-    api, app, auth, bus, config, connection, crypto, database, events, fs, log, platform, process, pty, status,
+    api, app, auth, bus, config, connection, crypto, database, events, fs, log, platform, process, pty, sqlite, status,
     storage, task, timer,
 };
 use crate::wasm_core::monitor::LifecycleEvent;
@@ -56,27 +56,73 @@ bindgen!({
 // 返回值映射：WIT `result<T, string>` → `Result<T, String>`，错误内容为宿主侧
 // 可读消息，跨 wasm 边界后由调用方（本模块方法）转为 AppError
 
+// ==================== host-storage / host-database / host-plugin-database ====================
+// ADR 0036：这三 interface 的实现留在 wasm 核心内（`wasm_core::host_api::{storage,
+// database}`），故 `Host` impl 也在本文件——与文件里其余各域同形。票 08 期间它们被
+// 搬进 `bedcode-sqlite-engine` 能力域 crate（provider 侧自生成同名 trait，两侧同时
+// 注册会让 linker 报 `defined twice`），随 crate 撤销一并归位。
+//
+// 端口按**本次调用**的上下文现取（`sqlite::ports_for`），无进程级单例、无实例级
+// 登记、无强制链接行——见 `host_api::sqlite_ports` 模块文档。
+
 impl bedcode::plugin::host_storage::Host for WasmPluginState {
     fn get(&mut self, key: String) -> Result<Option<String>, String> {
-        storage::storage_get(self.host_ctx(), self.host_ctx(), self.host_ctx(), &self.plugin_id, &key)
+        storage::storage_get(&sqlite::ports_for(self.host_ctx()), &self.plugin_id, &key)
             .map(|opt| opt.map(|v| v.to_string()))
     }
 
     fn set(&mut self, key: String, value: String) -> Result<(), String> {
         let json_value: serde_json::Value =
             serde_json::from_str(&value).map_err(|e| format!("invalid JSON value: {}", e))?;
-        storage::storage_set(
-            self.host_ctx(),
-            self.host_ctx(),
-            self.host_ctx(),
-            &self.plugin_id,
-            &key,
-            json_value,
-        )
+        storage::storage_set(&sqlite::ports_for(self.host_ctx()), &self.plugin_id, &key, json_value)
     }
 
     fn delete(&mut self, key: String) -> Result<(), String> {
-        storage::storage_delete(self.host_ctx(), self.host_ctx(), self.host_ctx(), &self.plugin_id, &key)
+        storage::storage_delete(&sqlite::ports_for(self.host_ctx()), &self.plugin_id, &key)
+    }
+}
+
+impl bedcode::plugin::host_database::Host for WasmPluginState {
+    fn execute(&mut self, sql: String) -> Result<u32, String> {
+        database::db_execute(&sqlite::ports_for(self.host_ctx()), &self.plugin_id, &sql)
+    }
+
+    fn query(&mut self, sql: String) -> Result<Option<String>, String> {
+        database::db_query(&sqlite::ports_for(self.host_ctx()), &self.plugin_id, &sql)
+    }
+
+    fn execute_params(&mut self, sql: String, params_json: String) -> Result<u32, String> {
+        database::db_execute_params(&sqlite::ports_for(self.host_ctx()), &self.plugin_id, &sql, &params_json)
+    }
+
+    fn query_params(&mut self, sql: String, params_json: String) -> Result<Option<String>, String> {
+        database::db_query_params(&sqlite::ports_for(self.host_ctx()), &self.plugin_id, &sql, &params_json)
+    }
+
+    fn execute_batch(&mut self, sqls_json: String) -> Result<u32, String> {
+        database::db_execute_batch(&sqlite::ports_for(self.host_ctx()), &self.plugin_id, &sqls_json)
+    }
+}
+
+impl bedcode::plugin::host_plugin_database::Host for WasmPluginState {
+    fn execute(&mut self, sql: String) -> Result<u32, String> {
+        database::plugin_db_execute(&sqlite::ports_for(self.host_ctx()), &self.plugin_id, &sql)
+    }
+
+    fn query(&mut self, sql: String) -> Result<Option<String>, String> {
+        database::plugin_db_query(&sqlite::ports_for(self.host_ctx()), &self.plugin_id, &sql)
+    }
+
+    fn execute_params(&mut self, sql: String, params_json: String) -> Result<u32, String> {
+        database::plugin_db_execute_params(&sqlite::ports_for(self.host_ctx()), &self.plugin_id, &sql, &params_json)
+    }
+
+    fn query_params(&mut self, sql: String, params_json: String) -> Result<Option<String>, String> {
+        database::plugin_db_query_params(&sqlite::ports_for(self.host_ctx()), &self.plugin_id, &sql, &params_json)
+    }
+
+    fn execute_batch(&mut self, sqls_json: String) -> Result<u32, String> {
+        database::plugin_db_execute_batch(&sqlite::ports_for(self.host_ctx()), &self.plugin_id, &sqls_json)
     }
 }
 
@@ -336,50 +382,6 @@ impl bedcode::plugin::host_config::Host for WasmPluginState {
 // 零生产消费者（P1-b 起属主判定查已清空的内核登记，对真实会话恒拒），随
 // `host-session` 同批删除。
 
-impl bedcode::plugin::host_database::Host for WasmPluginState {
-    fn execute(&mut self, sql: String) -> Result<u32, String> {
-        database::db_execute(self.host_ctx(), self.host_ctx(), &self.plugin_id, &sql)
-    }
-
-    fn query(&mut self, sql: String) -> Result<Option<String>, String> {
-        database::db_query(self.host_ctx(), self.host_ctx(), &self.plugin_id, &sql)
-    }
-
-    fn execute_params(&mut self, sql: String, params_json: String) -> Result<u32, String> {
-        database::db_execute_params(self.host_ctx(), self.host_ctx(), &self.plugin_id, &sql, &params_json)
-    }
-
-    fn query_params(&mut self, sql: String, params_json: String) -> Result<Option<String>, String> {
-        database::db_query_params(self.host_ctx(), self.host_ctx(), &self.plugin_id, &sql, &params_json)
-    }
-
-    fn execute_batch(&mut self, sqls_json: String) -> Result<u32, String> {
-        database::db_execute_batch(self.host_ctx(), self.host_ctx(), &self.plugin_id, &sqls_json)
-    }
-}
-
-impl bedcode::plugin::host_plugin_database::Host for WasmPluginState {
-    fn execute(&mut self, sql: String) -> Result<u32, String> {
-        database::plugin_db_execute(self.host_ctx(), self.host_ctx(), &self.plugin_id, &sql)
-    }
-
-    fn query(&mut self, sql: String) -> Result<Option<String>, String> {
-        database::plugin_db_query(self.host_ctx(), self.host_ctx(), &self.plugin_id, &sql)
-    }
-
-    fn execute_params(&mut self, sql: String, params_json: String) -> Result<u32, String> {
-        database::plugin_db_execute_params(self.host_ctx(), self.host_ctx(), &self.plugin_id, &sql, &params_json)
-    }
-
-    fn query_params(&mut self, sql: String, params_json: String) -> Result<Option<String>, String> {
-        database::plugin_db_query_params(self.host_ctx(), self.host_ctx(), &self.plugin_id, &sql, &params_json)
-    }
-
-    fn execute_batch(&mut self, sqls_json: String) -> Result<u32, String> {
-        database::plugin_db_execute_batch(self.host_ctx(), self.host_ctx(), &self.plugin_id, &sqls_json)
-    }
-}
-
 /// 在册连接清单（票 04）：独立 interface。
 /// **票 10 起是本面唯一入口**——`host-session` 上那条同判据的旧别名随整 interface 删除。
 impl bedcode::plugin::host_connection::Host for WasmPluginState {
@@ -584,6 +586,8 @@ const HOST_MODULES: &[&str] = &[
     crate::wasm_core::host_api::ws::HOST_MODULE_NAME,
     crate::wasm_core::host_api::peer::HOST_MODULE_NAME,
     crate::wasm_core::host_api::http::HOST_MODULE_NAME,
+    // `host-database` / `host-plugin-database` / `host-storage` 不在册：ADR 0036
+    // 撤销 sqlite 能力域 crate，三 interface 的 `Host` impl 回到本文件（见上）。
 ];
 
 // 强制引用行（inventory 的 linker-section 静态必须被真正链接才执行；见上）。
@@ -601,9 +605,18 @@ use bedcode_server_http as _;
 
 /// 收集已自报的能力模块并与白名单双向比对
 fn host_module_registry() -> crate::Result<bedcode_host_kit::ModuleRegistry> {
+    verify_host_module_registry(HOST_MODULES)
+}
+
+/// 白名单校验的可测入口（生产传入 [`HOST_MODULES`]）
+///
+/// **为什么多这一层**：失败路径本身必须可测。“能力模块没链上”唯一的信号就是这
+/// 条错误，而它只会在真实错配时才出现（平时恒绿）——若只能经 `add_to_linker`
+/// 的固定白名单触发，就永远没有用例能证明它真的会红、而且报得可读。
+fn verify_host_module_registry(whitelist: &[&str]) -> crate::Result<bedcode_host_kit::ModuleRegistry> {
     let registry = bedcode_host_kit::ModuleRegistry::collected();
     registry
-        .verify_whitelist(HOST_MODULES)
+        .verify_whitelist(whitelist)
         .map_err(|e| AppError::Plugin(format!("host capability module whitelist check failed: {e}")))?;
     Ok(registry)
 }
@@ -1581,6 +1594,8 @@ mod tests {
     /// 测试用插件 ID（与 wasm_runtime.rs 测试一致，主库表前缀校验依赖它）
     const TEST_PLUGIN_ID: &str = "com.bedcode.test";
 
+    /// 造一个**已装配 sqlite 域端口**的无头上下文
+    ///
     /// 构建测试引擎：燃料看门狗必须与生产配置一致（WasmRuntime::new）
     ///
     /// 否则 `Store::set_fuel` 在实例化时直接报错（consume_fuel 未开启）；
@@ -1647,6 +1662,56 @@ mod tests {
         );
     }
 
+    /// fail-visible 形态①：能力模块**缺失**时实例化期显性失败，并点名缺哪个
+    ///
+    /// 走的是生产入口 [`verify_host_module_registry`]（`add_to_linker` 的第一段），
+    /// 只把白名单换成一份含不存在的模块名的清单来触发失败。断言三件事：
+    /// ① 失败（不静默降级为「该能力不存在」）；
+    /// ② 错误文本点名缺失的模块（运维据此知道查哪个 crate）；
+    /// ③ 错误文本给出**两个方向各自**的修法（missing 与 unlisted 不同）。
+    ///
+    /// ③ 不能省：双向差异共用一条错误串，只写「whitelist mismatch」时，
+    /// 「依赖被删」与「能力悄悄进来了」两种事故看起来一模一样。
+    #[test]
+    fn missing_capability_module_fails_loudly_with_remediation() {
+        let err = verify_host_module_registry(&["capability-that-is-not-collected"])
+            .expect_err("a capability module that was never collected must fail the check");
+        let msg = err.to_string();
+
+        assert!(
+            msg.contains("capability-that-is-not-collected"),
+            "error must name the missing module: {msg}"
+        );
+        assert!(msg.contains("missing="), "error must say which direction failed: {msg}");
+        assert!(
+            msg.contains("forced-reference") && msg.contains("whitelist"),
+            "error must carry remediation for both directions (forced-reference line / \
+             reviewed whitelist entry): {msg}"
+        );
+    }
+
+    /// fail-visible 形态① 反向：收集到但白名单没有 ⇒ 同样显性失败（未经 review
+    /// 的能力不得进产品）
+    ///
+    /// 用空白名单触发：收集集非空 ⇒ 全部落在 unlisted 侧。
+    #[test]
+    fn unlisted_capability_module_fails_loudly_with_remediation() {
+        let err = verify_host_module_registry(&[])
+            .expect_err("collected capabilities absent from the whitelist must fail the check");
+        let msg = err.to_string();
+
+        assert!(
+            msg.contains("unlisted="),
+            "error must say which direction failed: {msg}"
+        );
+        for name in HOST_MODULES {
+            assert!(
+                msg.contains(name),
+                "every collected-but-unlisted module must be named, {name} missing from: {msg}"
+            );
+        }
+    }
+
     /// 收集到的模块名全局唯一（inventory 按静态收集，重复 `submit!` 会在此暴露）
     #[test]
     fn collected_module_names_are_unique() {
@@ -1662,11 +1727,68 @@ mod tests {
         );
     }
 
+    /// 描述符里的词段切分与命中判定（**本锁的判据本身也是被锁对象**）
+    ///
+    /// 按非字母数字切段，`-` / `_` 视作**段内连接符**（不切）：于是
+    /// `host-session` 切成 `host` + `session`、`pty-instance` 切成 `pty` + `instance`、
+    /// `ai-chatbox` 切成 `ai` + `chatbox`；而 `database:main` 切成 `database` + `main`
+    /// ——`ai` 只是 `main` 内部的子串，**不算命中**。
+    fn descriptor_haystack_has_noun(haystack: &str, noun: &str) -> bool {
+        // 先把 `_` 归一化成 `-`（两种连接符在本仓库都出现：接口路径用 `-`，
+        // 模块名 / 权限位用 `_`），再按非字母数字切成「词」。
+        let normalized = haystack.replace('_', "-");
+        let prefix = format!("{noun}-");
+        let suffix = format!("-{noun}");
+        let infix = format!("-{noun}-");
+        normalized
+            .split(|c: char| !c.is_ascii_alphanumeric() && c != '-')
+            .filter(|word| !word.is_empty())
+            // 禁用词必须**对齐到整段**：等于该词，或作为该词的完整前缀段 / 后缀段 /
+            // 中间段出现（`host-session` / `host-pty-instance` / `ai-chatbox`）。
+            .any(|word| word == noun || word.starts_with(&prefix) || word.ends_with(&suffix) || word.contains(&infix))
+    }
+
+    /// 判据自身的契约例：复合名词命中、单词内子串不命中
+    ///
+    /// 没有这条，匹配规则被改宽（回到子串）时**零红灯**——那时 `database:main` 会重新
+    /// 把纯机制权限位判成产品名词，而修法往往是「把 sqlite 从锁里摘掉」，正是本锁要
+    /// 防的那种降级。
+    #[test]
+    fn descriptor_noun_matcher_keeps_compounds_and_drops_substrings() {
+        // 正例：复合名词（连接符是段内的一部分）
+        assert!(descriptor_haystack_has_noun("bedcode:plugin/host-session", "session"));
+        assert!(descriptor_haystack_has_noun("pty-instance", "pty-instance"));
+        assert!(descriptor_haystack_has_noun("host_pty_instance", "pty-instance"));
+        assert!(descriptor_haystack_has_noun("ai-chatbox", "ai"));
+        assert!(descriptor_haystack_has_noun("bedcode:plugin/host-session", "plugin"));
+        // 正例：分号 / 斜杠权限位与接口路径的词段照样命中
+        assert!(descriptor_haystack_has_noun("[\"database:main\"]", "main"));
+        assert!(descriptor_haystack_has_noun("[\"host-session\"]", "session"));
+        // 反例：单词**内部**的子串不算命中（`database:main` 当年因这条误判）
+        assert!(!descriptor_haystack_has_noun("[\"database:main\", \"storage\"]", "ai"));
+        assert!(!descriptor_haystack_has_noun("sqlite", "ai"));
+        assert!(!descriptor_haystack_has_noun("[\"network:mdns\"]", "file"));
+        // 正例：连字符是段边界 ⇒ `m-ai-n` 里的 `ai` 是**整段**，必须命中
+        assert!(descriptor_haystack_has_noun("m-ai-n", "ai"));
+        // 反例：名词**粘在**别的字符里（没有段边界）不算命中
+        assert!(!descriptor_haystack_has_noun("mail", "ai"));
+        assert!(!descriptor_haystack_has_noun("[\"m.ain\"]", "ai"));
+        assert!(!descriptor_haystack_has_noun("[\"ptyinstance\"]", "pty-instance"));
+    }
+
     /// 描述符零产品名词（AGENTS §5.1 B1/B5 红线）
     ///
     /// 模块注册表必须是「通用注册表与寻址」（§5.1.3 明列的宿主允许薄壳），一旦
     /// 描述符里出现产品名词，它就退化成业务容器。锁住当前**已迁出**的模块集合，
     /// 新模块自动纳入。
+    ///
+    /// **匹配粒度 = 词段相等，不是子串包含**（票 08 实测修正）：`sqlite` 域的权限位
+    /// `database:main` 里，子串 `ai` 落在 `m-**ai**-n` 中间，把一个纯机制权限位判成
+    /// 「含产品名词 ai」——子串判据对任何以该词尾的机制名词都会误伤。词段判据
+    /// （按非字母数字切段，`-` / `_` 视作**段内连接符**）保住本该命中的两类：
+    /// 复合名词（`host-session` / `pty-instance` / `ai-chatbox`）与分号权限位
+    /// （`session:write`）。判据自身的契约例见
+    /// [`descriptor_noun_matcher_keeps_compounds_and_drops_substrings`]。
     #[test]
     fn capability_module_descriptors_carry_no_product_nouns() {
         const FORBIDDEN: &[&str] = &[
@@ -1691,7 +1813,7 @@ mod tests {
             .to_lowercase();
             for noun in FORBIDDEN {
                 assert!(
-                    !haystack.contains(noun),
+                    !descriptor_haystack_has_noun(&haystack, noun),
                     "capability module '{}' descriptor contains product noun '{noun}': {haystack}",
                     desc.name
                 );
@@ -1699,8 +1821,9 @@ mod tests {
         }
     }
 
-    /// 14 组 import 接口全部注册成功（add_to_linker 是纯接线代码，
-    /// 任何一组接口名冲突/接线参数错误都会在此失败）
+    /// 内核本地表里逐行列举的 import 接口全部注册成功（add_to_linker 是纯接线代码，
+    /// 任何一组接口名冲突/接线参数错误都会在此失败）。含 ADR 0036 归位的
+    /// `host-storage` / `host-database` / `host-plugin-database` 三组。
     #[test]
     fn test_add_to_linker_registers_all_interfaces() {
         let engine = test_engine();
@@ -1821,9 +1944,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         // 模拟激活时 fs_request_auth 同意后的持久化授权（storage key fs_granted_paths）
         crate::wasm_core::host_api::storage::storage_set(
-            ctx.as_ref(),
-            ctx.as_ref(),
-            ctx.as_ref(),
+            &crate::wasm_core::host_api::sqlite::ports_for(&ctx),
             plugin_id,
             "fs_granted_paths",
             serde_json::json!([dir.path().to_string_lossy()]),
@@ -1895,9 +2016,7 @@ mod tests {
         let probe = home.join(".bedcode-wasi-preopen-test");
         std::fs::create_dir_all(&probe).unwrap();
         crate::wasm_core::host_api::storage::storage_set(
-            ctx.as_ref(),
-            ctx.as_ref(),
-            ctx.as_ref(),
+            &crate::wasm_core::host_api::sqlite::ports_for(&ctx),
             pid,
             "fs_granted_paths",
             serde_json::json!([probe.to_string_lossy()]),
@@ -2099,9 +2218,7 @@ mod tests {
         let missing = base.join("ai-chatbox");
         std::fs::create_dir_all(&base).unwrap();
         crate::wasm_core::host_api::storage::storage_set(
-            ctx.as_ref(),
-            ctx.as_ref(),
-            ctx.as_ref(),
+            &crate::wasm_core::host_api::sqlite::ports_for(&ctx),
             pid,
             "fs_granted_paths",
             serde_json::json!([base.to_string_lossy()]),
@@ -2130,9 +2247,7 @@ mod tests {
         let missing = base.join("ro-child");
         std::fs::create_dir_all(&base).unwrap();
         crate::wasm_core::host_api::storage::storage_set(
-            ctx.as_ref(),
-            ctx.as_ref(),
-            ctx.as_ref(),
+            &crate::wasm_core::host_api::sqlite::ports_for(&ctx),
             pid,
             "fs_granted_paths",
             serde_json::json!([base.to_string_lossy()]),
@@ -2159,9 +2274,7 @@ mod tests {
         let base = std::env::temp_dir().join(format!("bedcode-wasi-create2-{}", std::process::id()));
         std::fs::create_dir_all(&base).unwrap();
         crate::wasm_core::host_api::storage::storage_set(
-            ctx.as_ref(),
-            ctx.as_ref(),
-            ctx.as_ref(),
+            &crate::wasm_core::host_api::sqlite::ports_for(&ctx),
             pid,
             "fs_granted_paths",
             serde_json::json!([base.to_string_lossy()]),

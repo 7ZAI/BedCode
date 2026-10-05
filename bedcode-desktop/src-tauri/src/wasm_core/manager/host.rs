@@ -189,6 +189,62 @@ impl CapabilityTarget for WasmInstanceEntry {
             Err(e) => Err(e),
         }
     }
+
+    fn mdns_browse(&self, service_type: &str) -> std::result::Result<std::result::Result<String, String>, String> {
+        match self.call_op_with_timeout(GuestOp::CapMdnsBrowse {
+            service_type: service_type.to_string(),
+        }) {
+            Ok(GuestReply::GuestStr(inner)) => Ok(inner),
+            Ok(other) => Err(format!("capability provider returned unexpected reply: {:?}", other)),
+            Err(e) => Err(e),
+        }
+    }
+
+    fn mdns_stop_browse(&self, browser_id: &str) -> std::result::Result<std::result::Result<bool, String>, String> {
+        match self.call_op_with_timeout(GuestOp::CapMdnsStopBrowse {
+            browser_id: browser_id.to_string(),
+        }) {
+            Ok(GuestReply::GuestBool(inner)) => Ok(inner),
+            Ok(other) => Err(format!("capability provider returned unexpected reply: {:?}", other)),
+            Err(e) => Err(e),
+        }
+    }
+
+    fn mdns_advertise(&self, config_json: &str) -> std::result::Result<std::result::Result<String, String>, String> {
+        match self.call_op_with_timeout(GuestOp::CapMdnsAdvertise {
+            config_json: config_json.to_string(),
+        }) {
+            Ok(GuestReply::GuestStr(inner)) => Ok(inner),
+            Ok(other) => Err(format!("capability provider returned unexpected reply: {:?}", other)),
+            Err(e) => Err(e),
+        }
+    }
+
+    fn mdns_stop_advertise(
+        &self,
+        advertise_id: &str,
+    ) -> std::result::Result<std::result::Result<bool, String>, String> {
+        match self.call_op_with_timeout(GuestOp::CapMdnsStopAdvertise {
+            advertise_id: advertise_id.to_string(),
+        }) {
+            Ok(GuestReply::GuestBool(inner)) => Ok(inner),
+            Ok(other) => Err(format!("capability provider returned unexpected reply: {:?}", other)),
+            Err(e) => Err(e),
+        }
+    }
+
+    fn mdns_is_advertising(
+        &self,
+        advertise_id: &str,
+    ) -> std::result::Result<std::result::Result<bool, String>, String> {
+        match self.call_op_with_timeout(GuestOp::CapMdnsIsAdvertising {
+            advertise_id: advertise_id.to_string(),
+        }) {
+            Ok(GuestReply::GuestBool(inner)) => Ok(inner),
+            Ok(other) => Err(format!("capability provider returned unexpected reply: {:?}", other)),
+            Err(e) => Err(e),
+        }
+    }
 }
 
 /// `mutex` 模型的一次 guest 调用（原 `PluginHost::run_guest_call` 的搬移，

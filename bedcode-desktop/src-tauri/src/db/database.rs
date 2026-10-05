@@ -17,12 +17,6 @@ impl Database {
         Ok(Self { conn })
     }
 
-    /// 测试专用：用已有 Connection 构造（迁移测试需先建旧表再跑生产迁移）
-    #[cfg(test)]
-    fn with_conn(conn: Connection) -> Self {
-        Self { conn }
-    }
-
     /// Initialize database schema
     pub fn init_schema(&self) -> crate::Result<()> {
         self.conn.execute_batch(include_str!("schema.sql"))?;

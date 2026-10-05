@@ -149,16 +149,32 @@ pub trait CapabilityProvider: Send + Sync {
 /// ——`mutex`（实例锁）与 `event-loop`（属主队列）在实现内部分派。
 /// 实现由 `manager::host::WasmInstanceEntry` 提供（超时兜底也在实现内）。
 ///
-/// 新增可路由能力时在此加方法（与 `ROUTABLE_CAPABILITIES` 同步），
-/// 保持「一个能力一组函数」的闭表设计。
+/// **闭表**：方法按能力分组，组名 = `manager::capability::ROUTABLE_CAPABILITIES`
+/// 里的「路由方法前缀」。新增可路由能力时在此加一组方法（与那张表同步），
+/// 漏加/多加由 `capability::tests::routable_capabilities_and_forward_methods_stay_in_sync`
+/// 点名（该锁在两个方向都断言：表里有而此处没有 ⇒ 红；此处有而表里没有 ⇒ 红）。
+///
+/// 层次：外层 `Result` = **传输层**失败（trap / 超时 / 属主已停），
+/// 内层 `Result` = guest 层 WIT `result<.., string>` 本体。
 pub trait CapabilityTarget: Send + Sync + 'static {
-    /// `host-storage.get`：外层 Err = 传输层失败（trap / 超时 / 属主已停），
-    /// 内层 `Result` = guest 层 WIT `result<option<string>, string>` 本体
+    /// `host-storage.get`：`result<option<string>, string>`
     fn storage_get(&self, key: &str) -> std::result::Result<std::result::Result<Option<String>, String>, String>;
     /// `host-storage.set`（层次同 [`CapabilityTarget::storage_get`]）
     fn storage_set(&self, key: &str, value: &str) -> std::result::Result<std::result::Result<(), String>, String>;
     /// `host-storage.delete`（层次同 [`CapabilityTarget::storage_get`]）
     fn storage_delete(&self, key: &str) -> std::result::Result<std::result::Result<(), String>, String>;
+    /// `host-mdns.browse`：`result<string, string>`（返回浏览句柄）
+    fn mdns_browse(&self, service_type: &str) -> std::result::Result<std::result::Result<String, String>, String>;
+    /// `host-mdns.stop-browse`：`result<bool, string>`（是否存在该句柄）
+    fn mdns_stop_browse(&self, browser_id: &str) -> std::result::Result<std::result::Result<bool, String>, String>;
+    /// `host-mdns.advertise`：`result<string, string>`（返回广播句柄）
+    fn mdns_advertise(&self, config_json: &str) -> std::result::Result<std::result::Result<String, String>, String>;
+    /// `host-mdns.stop-advertise`：`result<bool, string>`
+    fn mdns_stop_advertise(&self, advertise_id: &str)
+        -> std::result::Result<std::result::Result<bool, String>, String>;
+    /// `host-mdns.is-advertising`：`result<bool, string>`
+    fn mdns_is_advertising(&self, advertise_id: &str)
+        -> std::result::Result<std::result::Result<bool, String>, String>;
 }
 
 /// host-task 执行引擎接口（消费方定义，两阶段注入，PluginServices 先例）

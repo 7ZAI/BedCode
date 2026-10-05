@@ -1,7 +1,8 @@
 //! 授权策略与授权记录的宿主真源（2026-09-27 授权策略增强，票 01）
 //!
 //! 两张宿主主库表（`plugin_auth_policies` / `plugin_auth_records`，DDL 见
-//! `db/schema.sql`）承载两件不同的事：
+//! `src-tauri/src/db/schema.sql`——ADR 0036 撤销 SQLite 能力域 crate 后引擎面与
+//! 本模块同在宿主内）承载两件不同的事：
 //!
 //! - **授权策略**：每个 (wasm 应用, 受管资源) 至多一条，回答「遇到授权记录未覆盖的
 //!   目标时，要不要问用户」——三档 `always_ask` / `default` / `always_allow`；

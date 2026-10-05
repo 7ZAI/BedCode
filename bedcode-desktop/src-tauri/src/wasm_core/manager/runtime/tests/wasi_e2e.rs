@@ -27,9 +27,7 @@ fn test_wasi_preopen_std_fs_e2e() {
         host_ctx.permission.grant_permissions(pid, &["storage".to_string()]);
         let dir = tempfile::tempdir().expect("tempdir");
         crate::wasm_core::host_api::storage::storage_set(
-            host_ctx.as_ref(),
-            host_ctx.as_ref(),
-            host_ctx.as_ref(),
+            &crate::wasm_core::host_api::sqlite::ports_for(&host_ctx),
             pid,
             "fs_granted_paths",
             serde_json::json!([dir.path().to_string_lossy()]),
@@ -131,9 +129,7 @@ fn test_wasi_preopen_read_only_std_fs_e2e() {
         // 「挂载生效 + 读放行」，而不是「写失败顺带什么都读不到」
         std::fs::write(dir.path().join("demo.txt"), "preexisting-from-host").expect("seed host file");
         crate::wasm_core::host_api::storage::storage_set(
-            host_ctx.as_ref(),
-            host_ctx.as_ref(),
-            host_ctx.as_ref(),
+            &crate::wasm_core::host_api::sqlite::ports_for(&host_ctx),
             pid,
             "fs_granted_paths",
             serde_json::json!([dir.path().to_string_lossy()]),

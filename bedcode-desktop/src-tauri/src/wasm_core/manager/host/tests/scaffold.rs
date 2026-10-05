@@ -65,8 +65,8 @@ pub(super) async fn setup_host() -> PluginHost {
         std::env::temp_dir().join(format!("bedcode-hosttest-pluginroot-{}", std::process::id())),
     ));
 
-    // 能力域端口（wasm-core-lib-split 票 03 / 04 / 05 / 06）：迁出 `wasm_core` 的能力域
-    // （mdns / ws / peer / http）经端口取宿主能力，生产在 `PluginHost::new` 的装配链里装；
+    // 能力域端口（wasm-core-lib-split 票 03 / 04 / 05 / 06 / 08）：迁出 `wasm_core` 的能力域
+    // （mdns / ws / peer / http / sqlite）经端口取宿主能力，生产在 `PluginHost::new` 的装配链里装；
     // 本 harness 直接拼 `PluginHost` 结构体字面量，**必须**做同一件事，否则停用
     // 路径上的属主回收（`activation.rs`）会因「端口未装配」而 panic（fail-visible
     // 的代价：无头用例里表现为测试红）。

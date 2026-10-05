@@ -5,11 +5,12 @@
 //! 消费方（本 crate）声明端口，宿主实现。本 crate **不依赖 tauri、不依赖宿主
 //! bin crate**，因此移动端将来要复用时只需换一个端口实现。
 //!
-//! ## 四个方法的取舍
+//! ## 九个方法的取舍
 //!
 //! | 方法 | 为什么需要它 |
 //! | --- | --- |
 //! | [`DiscoveryPorts::check_permission`] | 权限门（`network:mdns`）是**宿主安全闸门**（AGENTS §5.1.3 四类薄壳之二），不该可插拔 ⇒ 留宿主，本 crate 只问结果 |
+//! | [`DiscoveryPorts::forward_mdns_browse`] / `_stop_browse` / `_advertise` / `_stop_advertise` / `_is_advertising` | 能力路由（core-plugin-manager）：`host-mdns` 能力由系统组件提供时按**调用方**转发到它的同形导出，否则 `None` ⇒ 走本域引擎。**返回 `Option`** 是契约的一部分（`None` = 无提供者，不是错误）。与 `plugin_binding::ports` 的 `forward_storage_*` 同形（票 08 先例） |
 //! | [`DiscoveryPorts::local_node_id`] | 自播回显过滤需要「本机节点 ID」；无宿主句柄时返回 `None` ⇒ **不拦截**（与原实现同口径：无法比对即不拦） |
 //! | [`DiscoveryPorts::publish`] | 向已拼好的完整 topic 投递发现事件；总线订阅方隔离在宿主侧 |
 //! | [`DiscoveryPorts::spawn`] | 浏览事件循环 / re-announce 续期都是后台任务，**必须挂在宿主运行时上**（本 crate 不假设 tokio runtime 上下文，见下） |
@@ -67,6 +68,44 @@ pub trait DiscoveryPorts: Send + Sync + 'static {
     /// 为什么必须经宿主：宿主调用栈不保证处于 tokio runtime 上下文
     /// （wasmtime async store 的 fiber 内直接 `tokio::spawn` 会 panic）。
     fn spawn(&self, task: BoxedTask) -> Arc<dyn DiscoveryTask>;
+
+    /// 能力路由：`host-mdns.browse` 转给系统组件提供者；无提供者返回 `None`
+    ///
+    /// `plugin_id` 是**调用方**（用于路由层判自调用与属主校验）；本 crate 只
+    /// 把它原样交给宿主，不解释其含义。
+    fn forward_mdns_browse(
+        &self,
+        plugin_id: &str,
+        service_type: &str,
+    ) -> Option<Result<String, String>>;
+
+    /// 能力路由：`host-mdns.stop-browse`（语义同 [`DiscoveryPorts::forward_mdns_browse`]）
+    fn forward_mdns_stop_browse(
+        &self,
+        plugin_id: &str,
+        browser_id: &str,
+    ) -> Option<Result<bool, String>>;
+
+    /// 能力路由：`host-mdns.advertise`（语义同 [`DiscoveryPorts::forward_mdns_browse`]）
+    fn forward_mdns_advertise(
+        &self,
+        plugin_id: &str,
+        config_json: &str,
+    ) -> Option<Result<String, String>>;
+
+    /// 能力路由：`host-mdns.stop-advertise`（语义同 [`DiscoveryPorts::forward_mdns_browse`]）
+    fn forward_mdns_stop_advertise(
+        &self,
+        plugin_id: &str,
+        advertise_id: &str,
+    ) -> Option<Result<bool, String>>;
+
+    /// 能力路由：`host-mdns.is-advertising`（语义同 [`DiscoveryPorts::forward_mdns_browse`]）
+    fn forward_mdns_is_advertising(
+        &self,
+        plugin_id: &str,
+        advertise_id: &str,
+    ) -> Option<Result<bool, String>>;
 }
 // ==================== 端口装配（进程级单例） ====================
 

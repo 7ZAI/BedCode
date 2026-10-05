@@ -40,6 +40,9 @@ use crate::wasm_core::host_api::context::CapabilityTarget;
 /// host-storage 能力（WIT `bedcode:plugin/host-storage`，装配框架首条路由能力）
 pub(crate) const CAP_HOST_STORAGE: &str = "host-storage";
 
+/// host-mdns 能力（WIT `bedcode:plugin/host-mdns`，票 09 从能力域 crate 扩表接入）
+pub(crate) const CAP_HOST_MDNS: &str = "host-mdns";
+
 /// auth-policy 能力（票 12 C3，desktop 独有——认证中心能力，双端偏离同 host-auth）：
 /// 认证中心导出 `verify-device-token` 策略，宿主 server 中间件验签后取策略。
 /// 与其他路由能力不同，本能力**不进注册表路由**（消费方是宿主中间件而非
@@ -54,8 +57,31 @@ pub(crate) const EXPORT_STORAGE_GET: &str = "bedcode:plugin/host-storage.get";
 pub(crate) const EXPORT_STORAGE_SET: &str = "bedcode:plugin/host-storage.set";
 pub(crate) const EXPORT_STORAGE_DELETE: &str = "bedcode:plugin/host-storage.delete";
 
+/// `host-mdns` 五条原语的导出函数名（同上 ItemName 语法）
+pub(crate) const EXPORT_MDNS_BROWSE: &str = "bedcode:plugin/host-mdns.browse";
+pub(crate) const EXPORT_MDNS_STOP_BROWSE: &str = "bedcode:plugin/host-mdns.stop-browse";
+pub(crate) const EXPORT_MDNS_ADVERTISE: &str = "bedcode:plugin/host-mdns.advertise";
+pub(crate) const EXPORT_MDNS_STOP_ADVERTISE: &str = "bedcode:plugin/host-mdns.stop-advertise";
+pub(crate) const EXPORT_MDNS_IS_ADVERTISING: &str = "bedcode:plugin/host-mdns.is-advertising";
+
 /// 认证策略导出函数名（`auth-policy` 接口实例形态）
 pub(crate) const EXPORT_AUTH_VERIFY_DEVICE_TOKEN: &str = "bedcode:plugin/auth-policy.verify-device-token";
+
+/// 路由方法前缀（[`ROUTABLE_CAPABILITIES`] 第二项）
+///
+/// 一个可路由能力的三层方法族统一用 `<PREFIX>` 开头，**跨三层同名**：
+///
+/// 1. 能力域端口（消费方声明，能力域 crate 内）：
+///    `SqlitePorts::forward_storage_*` / `DiscoveryPorts::forward_mdns_*`；
+/// 2. 本模块的转发函数：`forward_storage_get` / `forward_mdns_browse`；
+/// 3. 提供者窄端口 [`CapabilityTarget`]（声明形状，无 `forward_` 前缀）：
+///    `storage_get` / `mdns_browse`。
+///
+/// **为什么把前缀写进表里**：这三层是「一个能力一组函数」的闭表，靠约定维护
+/// 就是靠自觉；前缀入表后，闭表锁可机械比对「表 ↔ 三层方法」（见
+/// [`tests::routable_capabilities_and_forward_methods_stay_in_sync`]），漏改任一层即红。
+pub(crate) const FORWARD_STORAGE: &str = "storage";
+pub(crate) const FORWARD_MDNS: &str = "mdns";
 
 /// 宿主原语能力清单（**21 组** host-* WIT 接口，与 Linker 接线一一对应）
 ///
@@ -94,30 +120,50 @@ const HOST_PRIMITIVE_CAPABILITIES: &[&str] = &[
     "host-crypto",
 ];
 
-/// 可路由能力表：能力名 → 该能力接口要求组件导出的全部函数
-/// （导出存在性全命中才认定组件提供该能力）
+/// 可路由能力表（**闭表**）：`(能力名, 路由方法前缀, 该能力接口要求组件导出的全部函数)`
 ///
-/// 首条路由能力为 host-storage；后续能力随「宿主引擎逐个 WASM 化」立项
-/// 逐组加入（每组需在 host_impl 对应模块接入转发分支）。
-const ROUTABLE_CAPABILITIES: &[(&str, &[&str])] = &[(
-    CAP_HOST_STORAGE,
-    &[EXPORT_STORAGE_GET, EXPORT_STORAGE_SET, EXPORT_STORAGE_DELETE],
-)];
-
-/// 探测能力表：可路由能力 + **仅探测不路由**能力（票 12 `auth-policy`）
+/// 三个分量的关系是强制的，缺一即错：
+/// - 能力名 = 依赖检查用的能力标识（必须是 [`HOST_PRIMITIVE_CAPABILITIES`] 里的一项）
+/// - 路由方法前缀 = 三层路由方法族的共同命名前缀（见 [`FORWARD_STORAGE`]）
+/// - 导出函数表 = 组件同形导出的**全部**函数（**全命中**才认定组件提供该能力，
+///   少一个即视为未提供）
 ///
-/// `probe_exported_capabilities` 以本表探测实例导出存在性——认证中心实例化时
-/// `exported_capabilities()` 含 `auth-policy`，宿主 server 中间件据此确认策略
-/// 导出就绪（宿主中间件取策略前先探测）。仅探测不路由：SDK 默认实现使
-/// 所有新 SDK 插件都导出该接口（默认拒绝），且消费方是宿主中间件而非插件
-/// import——注册为路由提供者会让任意插件接管认证策略，语义错误。
-const PROBE_CAPABILITIES: &[(&str, &[&str])] = &[
+/// 新增一组能力 = 同时改四层（本表 · [`CapabilityTarget`] · 能力域端口 ·
+/// `GuestOp`），漏改任一层由
+/// [`tests::routable_capabilities_and_forward_methods_stay_in_sync`] 点名。
+///
+/// 现状：`host-storage`（装配框架首条路由能力）+ `host-mdns`（票 09 随能力域
+/// crate 化扩表）。其余已迁出的能力域（peer / websocket / http / database）
+/// **有意不入表**：它们的真源按调用方 `plugin_id` 分区，而转发链路当前只传参数
+/// 不传调用方身份，路由过去会串命名空间——扩表须先修身份传递
+/// （`.scratch/2026-10-04-wasm-core-lib-split/issues/10-capability-forward-caller-identity.md`）。
+const ROUTABLE_CAPABILITIES: &[(&str, &str, &[&str])] = &[
     (
         CAP_HOST_STORAGE,
+        FORWARD_STORAGE,
         &[EXPORT_STORAGE_GET, EXPORT_STORAGE_SET, EXPORT_STORAGE_DELETE],
     ),
-    (CAP_AUTH_POLICY, &[EXPORT_AUTH_VERIFY_DEVICE_TOKEN]),
+    (
+        CAP_HOST_MDNS,
+        FORWARD_MDNS,
+        &[
+            EXPORT_MDNS_BROWSE,
+            EXPORT_MDNS_STOP_BROWSE,
+            EXPORT_MDNS_ADVERTISE,
+            EXPORT_MDNS_STOP_ADVERTISE,
+            EXPORT_MDNS_IS_ADVERTISING,
+        ],
+    ),
 ];
+
+/// 仅探测不路由的能力（探测面 = 可路由 ∪ 本表）
+///
+/// `probe_exported_capabilities` 探测两张表的并集（**可路由 ⊆ 可探测**由构造保证，
+/// 不再靠两份表各写一遍——旧形态两份表都列了 `host-storage`，加能力时极易只改一处）。
+///
+/// 本表的能力**不进注册表路由**：`auth-policy` 的消费方是宿主中间件而非插件
+/// import，注册为路由提供者会让任意插件接管认证策略，语义错误。
+const PROBE_ONLY_CAPABILITIES: &[(&str, &[&str])] = &[(CAP_AUTH_POLICY, &[EXPORT_AUTH_VERIFY_DEVICE_TOKEN])];
 
 // ==================== 能力注册表 ====================
 
@@ -314,16 +360,19 @@ impl crate::wasm_core::host_api::context::CapabilityProvider for CapabilityRegis
 
 /// 能力是否可路由（系统组件可接管）
 pub(crate) fn is_routable(name: &str) -> bool {
-    ROUTABLE_CAPABILITIES.iter().any(|(cap, _)| *cap == name)
+    ROUTABLE_CAPABILITIES.iter().any(|(cap, _, _)| *cap == name)
 }
 
 /// 探测组件实例导出的可路由能力（实例化时调用，全函数命中才算提供）
 ///
-/// 以 [`PROBE_CAPABILITIES`]（可路由 + 仅探测）为准——仅探测能力（如
-/// `auth-policy`）供宿主导航消费方直查，不进入注册表路由。
+/// 以「可路由 + 仅探测」两张表的**并集**为准——仅探测能力（如 `auth-policy`）
+/// 供宿主导航消费方直查，不进入注册表路由。可路由能力恒在探测面内（构造保证），
+/// 否则宿主会在实例化期认定「本组件提供 X」，激活时却因不可路由被注册表拒绝。
 pub(crate) fn probe_exported_capabilities(instance: &Instance, store: &mut Store<WasmPluginState>) -> Vec<String> {
-    PROBE_CAPABILITIES
+    ROUTABLE_CAPABILITIES
         .iter()
+        .map(|(cap, _, exports)| (*cap, *exports))
+        .chain(PROBE_ONLY_CAPABILITIES.iter().copied())
         .filter(|(_, exports)| {
             exports.iter().all(|name| {
                 // ItemName 路径语法（见 EXPORT_* 注释）；解析失败即探测未命中
@@ -378,6 +427,79 @@ pub(crate) fn forward_storage_delete(
         .system_component_instance(CAP_HOST_STORAGE, caller_plugin_id)?;
     let result = target.storage_delete(key);
     Some(unwrap_forward_result(CAP_HOST_STORAGE, &provider_id, cap, result))
+}
+
+// ==================== host-mdns 转发（discovery 域能力端口调用） ====================
+//
+// 五条原语与 `host-storage` 同形：系统组件提供该能力时转发到它的同形导出，
+// 否则返回 `None` 由能力域走本域引擎。**句柄类返回值（`browse` / `advertise`
+// 的字符串 id）在提供者侧属于提供者自己的命名空间** —— 见
+// `issues/10-capability-forward-caller-identity.md`（身份传递修复前，本族方法
+// 只可能在「单调用方」场景下语义正确）。
+
+/// `host-mdns.browse` 路由
+pub(crate) fn forward_mdns_browse(
+    cap: &dyn crate::wasm_core::host_api::context::CapabilityScope,
+    caller_plugin_id: &str,
+    service_type: &str,
+) -> Option<Result<String, String>> {
+    let (provider_id, target) = cap
+        .capabilities()
+        .system_component_instance(CAP_HOST_MDNS, caller_plugin_id)?;
+    let result = target.mdns_browse(service_type);
+    Some(unwrap_forward_result(CAP_HOST_MDNS, &provider_id, cap, result))
+}
+
+/// `host-mdns.stop-browse` 路由（语义同 [`forward_mdns_browse`]）
+pub(crate) fn forward_mdns_stop_browse(
+    cap: &dyn crate::wasm_core::host_api::context::CapabilityScope,
+    caller_plugin_id: &str,
+    browser_id: &str,
+) -> Option<Result<bool, String>> {
+    let (provider_id, target) = cap
+        .capabilities()
+        .system_component_instance(CAP_HOST_MDNS, caller_plugin_id)?;
+    let result = target.mdns_stop_browse(browser_id);
+    Some(unwrap_forward_result(CAP_HOST_MDNS, &provider_id, cap, result))
+}
+
+/// `host-mdns.advertise` 路由（语义同 [`forward_mdns_browse`]）
+pub(crate) fn forward_mdns_advertise(
+    cap: &dyn crate::wasm_core::host_api::context::CapabilityScope,
+    caller_plugin_id: &str,
+    config_json: &str,
+) -> Option<Result<String, String>> {
+    let (provider_id, target) = cap
+        .capabilities()
+        .system_component_instance(CAP_HOST_MDNS, caller_plugin_id)?;
+    let result = target.mdns_advertise(config_json);
+    Some(unwrap_forward_result(CAP_HOST_MDNS, &provider_id, cap, result))
+}
+
+/// `host-mdns.stop-advertise` 路由（语义同 [`forward_mdns_browse`]）
+pub(crate) fn forward_mdns_stop_advertise(
+    cap: &dyn crate::wasm_core::host_api::context::CapabilityScope,
+    caller_plugin_id: &str,
+    advertise_id: &str,
+) -> Option<Result<bool, String>> {
+    let (provider_id, target) = cap
+        .capabilities()
+        .system_component_instance(CAP_HOST_MDNS, caller_plugin_id)?;
+    let result = target.mdns_stop_advertise(advertise_id);
+    Some(unwrap_forward_result(CAP_HOST_MDNS, &provider_id, cap, result))
+}
+
+/// `host-mdns.is-advertising` 路由（语义同 [`forward_mdns_browse`]）
+pub(crate) fn forward_mdns_is_advertising(
+    cap: &dyn crate::wasm_core::host_api::context::CapabilityScope,
+    caller_plugin_id: &str,
+    advertise_id: &str,
+) -> Option<Result<bool, String>> {
+    let (provider_id, target) = cap
+        .capabilities()
+        .system_component_instance(CAP_HOST_MDNS, caller_plugin_id)?;
+    let result = target.mdns_is_advertising(advertise_id);
+    Some(unwrap_forward_result(CAP_HOST_MDNS, &provider_id, cap, result))
 }
 
 /// 转发结果解包：guest 返回的 `Err(string)`（WIT result 内层）原样透传；
@@ -438,11 +560,183 @@ mod tests {
         // 未知/未接入路由的能力注册即拒绝（注册了也无人转发，属部署错误）。
         // （实例构造需真实 Store，门禁判定独立于实例，由 is_routable 单测覆盖）
         assert!(is_routable(CAP_HOST_STORAGE));
+        // 票 09：随能力域 crate 化扩表，host-mdns 同为可路由能力
+        assert!(is_routable(CAP_HOST_MDNS));
         // 票 12：auth-policy 仅探测不路由（消费方是宿主中间件，注册为路由提供者
         // 会让任意插件接管认证策略）——register 必须拒绝
         assert!(!is_routable(CAP_AUTH_POLICY));
         assert!(!is_routable("host-bus"));
         assert!(!is_routable("nonexistent-cap"));
+    }
+
+    // ==================== 闭表锁（票 09） ====================
+
+    /// 每个可路由能力声明的端口位置（相对 `src-tauri/`）
+    ///
+    /// **为什么表里带路径**：端口由各能力自己声明，宿主无法经类型系统反查「某能力的
+    /// 转发方法声明在哪」。路径入表后，端口文件改名 / 搬目录 / 删方法，本锁立刻红
+    /// （而不是等到某个能力路由用例失败）。
+    ///
+    /// ADR 0036 后两种归属并存：`host-storage` 的端口留在宿主内
+    /// （`host_api/sqlite_ports.rs`），`host-mdns` 的端口仍在能力域 crate
+    /// （`bedcode-discovery-engine/src/ports.rs`）——闭表锁按各自真实落点登记。
+    const ROUTED_CAPABILITY_PORT_SOURCES: &[(&str, &str)] = &[
+        (FORWARD_STORAGE, "src/wasm_core/host_api/sqlite_ports.rs"),
+        (FORWARD_MDNS, "../packages/bedcode-discovery-engine/src/ports.rs"),
+    ];
+
+    /// 抽出 `CapabilityTarget` trait 块内声明的方法名
+    ///
+    /// 闭表的一端是「声明」而非「调用」，Rust 无反射 ⇒ 读源码文本（与
+    /// `instance_call_model_test` 的结构锁同手法）。块边界取 trait 行到首个列零的
+    /// `}`（本文件顶层项的收尾括号都在列零）。
+    fn capability_target_methods(ctx_src: &str) -> Vec<String> {
+        let start = ctx_src
+            .find("pub trait CapabilityTarget")
+            .expect("CapabilityTarget trait must exist in context.rs");
+        let block = &ctx_src[start..];
+        let end = block.find("\n}\n").expect("CapabilityTarget trait must be closed");
+        block[..end]
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("fn "))
+            .filter_map(|rest| rest.split('(').next())
+            .map(|name| name.to_string())
+            .collect()
+    }
+
+    /// 统计文本里 `fn <prefix>_` 形态的声明数（能力域端口的转发方法族）
+    fn count_forward_decls(src: &str, prefix: &str) -> usize {
+        src.lines()
+            .filter(|line| {
+                line.trim()
+                    .strip_prefix("fn ")
+                    .map(|rest| rest.starts_with(&format!("forward_{prefix}_")))
+                    .unwrap_or(false)
+            })
+            .count()
+    }
+
+    /// 路由表与三层路由方法**同表同步**（闭表锁，双向）
+    ///
+    /// 「一个能力一组函数」在本仓库是约定，而约定不加锁等于不存在：新增一组
+    /// 能力时最容易漏掉的正是「能力域端口声明了 `forward_x_*`、但本模块没有对应
+    /// 转发函数」（或反之）——那时注册表会认为能力可路由，实际调用永远返回
+    /// `None`，能力**静默**退回宿主原语，没有任何报错。
+    ///
+    /// 四条判据：
+    /// 1. 表里每个能力名都在 [`HOST_PRIMITIVE_CAPABILITIES`]（否则依赖检查永远报缺）；
+    /// 2. 表里每组能力都有导出函数，且导出路径全部可被 `ItemName` 解析
+    ///    （拼错 ⇒ 探测永远不命中 ⇒ 能力静默不可路由）；
+    /// 3. `CapabilityTarget` 的方法族 ⊇ 表里每个能力前缀，且**不多不少**
+    ///    （多出来的是没人转发的方法，少的是调不到的声明）；
+    /// 4. 每个能力域端口里的 `forward_<prefix>_*` 方法数 == 该能力的导出函数数
+    ///    （一条导出对应一条转发方法，少一条即那条原语永远走宿主原语）。
+    #[test]
+    fn routable_capabilities_and_forward_methods_stay_in_sync() {
+        assert!(
+            !ROUTABLE_CAPABILITIES.is_empty(),
+            "routable capability table must not be empty (host-storage is the baseline)"
+        );
+
+        for (cap, prefix, exports) in ROUTABLE_CAPABILITIES {
+            // 1. 能力名必须是注册表已登记的宿主原语能力
+            assert!(
+                HOST_PRIMITIVE_CAPABILITIES.contains(cap),
+                "routable capability '{cap}' is not a registered host primitive capability: {HOST_PRIMITIVE_CAPABILITIES:?}"
+            );
+            assert!(
+                !prefix.is_empty(),
+                "routable capability '{cap}' declares an empty forward prefix"
+            );
+            // 2. 导出函数表非空且每条都能解析（探测面据此逐条命中）
+            assert!(
+                !exports.is_empty(),
+                "routable capability '{cap}' declares no export (a provider could never satisfy it)"
+            );
+            for export in *exports {
+                export
+                    .parse::<wasmtime::component::wit_parser::ItemName>()
+                    .unwrap_or_else(|e| panic!("export '{export}' of '{cap}' is not a valid ItemName: {e}"));
+            }
+            // 4. 能力域端口的转发方法族与导出数一一对应
+            let (_, port_src) = ROUTED_CAPABILITY_PORT_SOURCES
+                .iter()
+                .find(|(p, _)| p == prefix)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "forward prefix '{prefix}' (capability '{cap}') has no entry in \
+                         ROUTED_CAPABILITY_PORT_SOURCES"
+                    )
+                });
+            let port_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(port_src);
+            let port_text = std::fs::read_to_string(&port_path)
+                .unwrap_or_else(|e| panic!("read capability domain ports {}: {e}", port_path.display()));
+            let decls = count_forward_decls(&port_text, prefix);
+            assert_eq!(
+                decls,
+                exports.len(),
+                "capability '{cap}': capability domain ports {} declare {decls} \
+                 `forward_{prefix}_*` methods but the routable table lists {} exports",
+                port_path.display(),
+                exports.len()
+            );
+        }
+
+        // 3. 提供者窄端口的方法族与表**逐项对应**（不多不少）
+        let ctx_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/wasm_core/host_api/context.rs");
+        let ctx_src = std::fs::read_to_string(&ctx_path).unwrap_or_else(|e| panic!("read {}: {e}", ctx_path.display()));
+        let methods = capability_target_methods(&ctx_src);
+        for (_, prefix, exports) in ROUTABLE_CAPABILITIES {
+            let marker = format!("{prefix}_");
+            let declared: Vec<&String> = methods.iter().filter(|m| m.starts_with(&marker)).collect();
+            assert_eq!(
+                declared.len(),
+                exports.len(),
+                "CapabilityTarget declares {declared:?} for forward prefix '{prefix}' but the \
+                 routable table lists {} exports — one method per exported function, no more",
+                exports.len()
+            );
+        }
+        for method in &methods {
+            let owner = ROUTABLE_CAPABILITIES
+                .iter()
+                .find(|(_, prefix, _)| method.starts_with(&format!("{prefix}_")));
+            assert!(
+                owner.is_some(),
+                "CapabilityTarget method '{method}' belongs to no routable capability (closed table) — \
+                 add the capability to ROUTABLE_CAPABILITIES or remove the method"
+            );
+        }
+    }
+
+    /// 路由表本身的三条不变量（表形态漂移的自检）
+    #[test]
+    fn routable_table_entries_are_well_formed() {
+        // 能力名不重复（重复项会让 `is_routable` 与探测表语义含糊）
+        let mut names: Vec<&str> = ROUTABLE_CAPABILITIES.iter().map(|(cap, _, _)| *cap).collect();
+        let before = names.len();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), before, "duplicate capability in routable table: {names:?}");
+
+        // 前缀不重复：两个能力共用一个前缀 ⇒ 方法族混在一起，闭表锁的前缀判据失效
+        let mut prefixes: Vec<&str> = ROUTABLE_CAPABILITIES.iter().map(|(_, prefix, _)| *prefix).collect();
+        let before = prefixes.len();
+        prefixes.sort_unstable();
+        prefixes.dedup();
+        assert_eq!(
+            prefixes.len(),
+            before,
+            "two routable capabilities share one forward prefix: {prefixes:?}"
+        );
+
+        // 仅探测能力不得与可路由能力同名（否则「仅探测」的语义说明失真）
+        for (cap, _) in PROBE_ONLY_CAPABILITIES {
+            assert!(
+                !is_routable(cap),
+                "'{cap}' is listed as probe-only but is also routable"
+            );
+        }
     }
 
     #[test]

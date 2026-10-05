@@ -26,6 +26,8 @@ use std::sync::Arc;
 use bedcode_discovery_engine::{DiscoveryPorts, DiscoveryTask};
 use bedcode_plugin_api::permission::PERMISSION_MDNS;
 
+use crate::wasm_core::manager::capability;
+
 /// 能力模块名（必须与 `bedcode-discovery-engine::DESC.name` 逐字一致）
 ///
 /// 它同时是 `component.rs` 里 `HOST_MODULES` 白名单的键——两者不同即红。
@@ -71,6 +73,45 @@ impl DiscoveryPorts for HostDiscoveryPorts {
             handle: tauri::async_runtime::spawn(task),
         })
     }
+
+    // ==================== 能力路由（票 09 扩表） ====================
+    //
+    // 五条原语各问一次路由层：命中系统组件提供者就转发（组件侧再经 `host-mdns`
+    // 同形导出），没命中返回 `None` 让能力域走本域引擎（见 [`route_via_capability`]）。
+    fn forward_mdns_browse(&self, plugin_id: &str, service_type: &str) -> Option<Result<String, String>> {
+        route_via_capability(|cap| capability::forward_mdns_browse(cap, plugin_id, service_type))
+    }
+
+    fn forward_mdns_stop_browse(&self, plugin_id: &str, browser_id: &str) -> Option<Result<bool, String>> {
+        route_via_capability(|cap| capability::forward_mdns_stop_browse(cap, plugin_id, browser_id))
+    }
+
+    fn forward_mdns_advertise(&self, plugin_id: &str, config_json: &str) -> Option<Result<String, String>> {
+        route_via_capability(|cap| capability::forward_mdns_advertise(cap, plugin_id, config_json))
+    }
+
+    fn forward_mdns_stop_advertise(&self, plugin_id: &str, advertise_id: &str) -> Option<Result<bool, String>> {
+        route_via_capability(|cap| capability::forward_mdns_stop_advertise(cap, plugin_id, advertise_id))
+    }
+
+    fn forward_mdns_is_advertising(&self, plugin_id: &str, advertise_id: &str) -> Option<Result<bool, String>> {
+        route_via_capability(|cap| capability::forward_mdns_is_advertising(cap, plugin_id, advertise_id))
+    }
+}
+
+/// 经全局宿主上下文取能力路由作用域并转发
+///
+/// 本 adapter 是零大小类型（浏览事件循环要长期持有 `'static` 端口），故每次调用
+/// 经 `AppContext::try_global()` 取作用域——与同文件其余四个方法同款。
+///
+/// **无宿主上下文（无头 / 测试）时返回 `None`**：那是「本进程没有路由表」的真值，
+/// 与「有路由表但该能力无提供者」同形，能力域两条路径的行为一致。
+fn route_via_capability<T>(
+    forward: impl FnOnce(&dyn crate::wasm_core::host_api::context::CapabilityScope) -> Option<T>,
+) -> Option<T> {
+    let ctx = crate::system::app_context::AppContext::try_global()?;
+    let host_ctx = ctx.plugin_host().wasm_host_ctx();
+    forward(host_ctx.as_ref())
 }
 
 /// 后台任务句柄的宿主实现（`cancel` ⇒ `abort`，与原实现同款）

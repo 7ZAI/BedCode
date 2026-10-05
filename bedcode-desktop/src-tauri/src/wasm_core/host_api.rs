@@ -5,13 +5,20 @@
 //! 由 `wasm_runtime::component` 的 Host trait 绑定逐接口调用。
 //!
 //! 各功能域与 SDK `host/*` trait 一一对应：
-//! storage / database / terminal / events / http / log / fs / config /
-//! bus / peer / process / app
+//! app / bus / connection / crypto / database / events / fs / http / log / mdns /
+//! peer / platform / process / pty / storage / task / timer / unit_executor / ws
 //!
 //! v27（票 10）：**`session` 域整体退役**（`host-session` 整 interface 删除），
 //! 同域内的 `lifecycle` 子模块（两条观察面注册入口）在票 03 已降级为退役占位、
 //! 本票随 interface 一并删除。会话事实的宿主侧出口只剩 `host-pty`（PTY 引擎）
 //! 与 `host-connection`（宿主 WS 连接清单）。
+//!
+//! ADR 0036：**`database` / `plugin-database` / `storage` 三域（13 条原语）留在核心**
+//! ——wasm-core-lib-split 票 07/08 曾把它们连同 SQLite 引擎搬进
+//! `bedcode-sqlite-engine` 能力域 crate，同日撤销（机制实现与机制真源不分家）。
+//! 本目录的 `sqlite` 是三域共用的**端口实现**（权限门 / 库句柄 / 唯一那份
+//! 同步↔异步桥 / kv 与能力路由），`sqlite_ports` 是端口 trait（可测性缝，不是架构
+//! 边界），`sqlite_scaffold` 是两域共用的假端口（仅测试）。
 //!
 //! 历史：阶段 A/B 时本目录名为 `host_functions`，包含 core module 胶水层
 //! （(ptr,len) 内存搬运 + Linker 注册）；阶段 C 已删除胶水层，仅保留实现层。
@@ -19,13 +26,6 @@
 pub(super) mod api;
 pub(super) mod app;
 pub(super) mod auth;
-/// 测试夹具出口：以宿主身份往某插件属主的 secret-store 写一个键
-///
-/// `auth` 模块本身是 `pub(super)`（只在 `wasm_core` 内可见），而唯一使用方
-/// `utils::auth::test_tokens` 在 `utils` 域——故从这里定点再导出**一个**函数，
-/// 而不是把整个模块放宽到 `pub(crate)`（那会顺带放开 `auth_secret_*` 全部原语）。
-#[cfg(test)]
-pub(crate) use auth::test_seed_plugin_secret;
 pub(crate) mod auth_center;
 pub(super) mod bus;
 pub(super) mod config;
@@ -43,6 +43,8 @@ pub(super) mod platform;
 pub(crate) mod process;
 pub(crate) mod pty;
 pub(crate) mod pty_output;
+pub(crate) mod sqlite;
+pub(crate) mod sqlite_ports;
 pub(super) mod status;
 pub(super) mod storage;
 pub(crate) mod task;
@@ -50,6 +52,21 @@ pub(super) mod timer;
 pub(crate) mod unit_executor;
 pub(crate) mod ws;
 mod wsl_fs;
+
+// ==================== 测试夹具出口 ====================
+
+/// 三域共用假端口（`sqlite_scaffold` 内的项是 `pub(super)`，即
+/// `pub(in wasm_core::host_api)`，故 `database::tests` / `storage::tests` 都够得着）
+#[cfg(test)]
+pub(crate) mod sqlite_scaffold;
+
+/// 测试夹具出口：以宿主身份往某插件属主的 secret-store 写一个键
+///
+/// `auth` 模块本身是 `pub(super)`（只在 `wasm_core` 内可见），而唯一使用方
+/// `utils::auth::test_tokens` 在 `utils` 域——故从这里定点再导出**一个**函数，
+/// 而不是把整个模块放宽到 `pub(crate)`（那会顺带放开 `auth_secret_*` 全部原语）。
+#[cfg(test)]
+pub(crate) use auth::test_seed_plugin_secret;
 
 #[cfg(test)]
 use crate::wasm_core::host_api::context::WasmHostContext;

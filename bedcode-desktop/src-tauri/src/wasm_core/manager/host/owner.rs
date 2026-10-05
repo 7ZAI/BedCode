@@ -47,7 +47,8 @@ use wasmtime::component::{Accessor, ComponentNamedList, Instance, Lift, Lower};
 
 use super::LoadedWasmPlugin;
 use crate::wasm_core::manager::capability::{
-    EXPORT_AUTH_VERIFY_DEVICE_TOKEN, EXPORT_STORAGE_DELETE, EXPORT_STORAGE_GET, EXPORT_STORAGE_SET,
+    EXPORT_AUTH_VERIFY_DEVICE_TOKEN, EXPORT_MDNS_ADVERTISE, EXPORT_MDNS_BROWSE, EXPORT_MDNS_IS_ADVERTISING,
+    EXPORT_MDNS_STOP_ADVERTISE, EXPORT_MDNS_STOP_BROWSE, EXPORT_STORAGE_DELETE, EXPORT_STORAGE_GET, EXPORT_STORAGE_SET,
 };
 use crate::wasm_core::manager::runtime::{OptionalExports, WasmPluginState};
 use crate::wasm_core::monitor::{CallTimer, LifecycleEvent, PluginMetrics};
@@ -127,6 +128,16 @@ pub(crate) enum GuestOp {
     CapStorageSet { key: String, value: String },
     /// `host-storage.delete(key) -> result<_, string>`（能力转发）
     CapStorageDelete { key: String },
+    /// `host-mdns.browse(service-type) -> result<string, string>`（能力转发）
+    CapMdnsBrowse { service_type: String },
+    /// `host-mdns.stop-browse(browser-id) -> result<bool, string>`（能力转发）
+    CapMdnsStopBrowse { browser_id: String },
+    /// `host-mdns.advertise(config-json) -> result<string, string>`（能力转发）
+    CapMdnsAdvertise { config_json: String },
+    /// `host-mdns.stop-advertise(advertise-id) -> result<bool, string>`（能力转发）
+    CapMdnsStopAdvertise { advertise_id: String },
+    /// `host-mdns.is-advertising(advertise-id) -> result<bool, string>`（能力转发）
+    CapMdnsIsAdvertising { advertise_id: String },
     /// `auth-policy.verify-device-token(token) -> result<string, string>`（宿主中间件直调）
     CapAuthVerifyDeviceToken { token: String },
 }
@@ -149,6 +160,11 @@ impl GuestOp {
             Self::CapStorageGet { .. } => OpKind::CapStorageGet,
             Self::CapStorageSet { .. } => OpKind::CapStorageSet,
             Self::CapStorageDelete { .. } => OpKind::CapStorageDelete,
+            Self::CapMdnsBrowse { .. } => OpKind::CapMdnsBrowse,
+            Self::CapMdnsStopBrowse { .. } => OpKind::CapMdnsStopBrowse,
+            Self::CapMdnsAdvertise { .. } => OpKind::CapMdnsAdvertise,
+            Self::CapMdnsStopAdvertise { .. } => OpKind::CapMdnsStopAdvertise,
+            Self::CapMdnsIsAdvertising { .. } => OpKind::CapMdnsIsAdvertising,
             Self::CapAuthVerifyDeviceToken { .. } => OpKind::CapAuthVerifyDeviceToken,
         }
     }
@@ -171,6 +187,11 @@ pub(crate) enum OpKind {
     CapStorageGet,
     CapStorageSet,
     CapStorageDelete,
+    CapMdnsBrowse,
+    CapMdnsStopBrowse,
+    CapMdnsAdvertise,
+    CapMdnsStopAdvertise,
+    CapMdnsIsAdvertising,
     CapAuthVerifyDeviceToken,
 }
 
@@ -192,6 +213,11 @@ impl OpKind {
             Self::CapStorageGet => EXPORT_STORAGE_GET,
             Self::CapStorageSet => EXPORT_STORAGE_SET,
             Self::CapStorageDelete => EXPORT_STORAGE_DELETE,
+            Self::CapMdnsBrowse => EXPORT_MDNS_BROWSE,
+            Self::CapMdnsStopBrowse => EXPORT_MDNS_STOP_BROWSE,
+            Self::CapMdnsAdvertise => EXPORT_MDNS_ADVERTISE,
+            Self::CapMdnsStopAdvertise => EXPORT_MDNS_STOP_ADVERTISE,
+            Self::CapMdnsIsAdvertising => EXPORT_MDNS_IS_ADVERTISING,
             Self::CapAuthVerifyDeviceToken => EXPORT_AUTH_VERIFY_DEVICE_TOKEN,
         }
     }
@@ -211,9 +237,15 @@ impl OpKind {
             Self::WsEndpointMessage => "on_ws_client_message",
             Self::OnTaskEvent => "on_task_event",
             // 能力导出走 `capability call failed: <export> (<e>)` 文案（见 trap_error）
-            Self::CapStorageGet | Self::CapStorageSet | Self::CapStorageDelete | Self::CapAuthVerifyDeviceToken => {
-                self.export()
-            }
+            Self::CapStorageDelete
+            | Self::CapMdnsBrowse
+            | Self::CapMdnsStopBrowse
+            | Self::CapMdnsAdvertise
+            | Self::CapMdnsStopAdvertise
+            | Self::CapMdnsIsAdvertising
+            | Self::CapStorageGet
+            | Self::CapStorageSet
+            | Self::CapAuthVerifyDeviceToken => self.export(),
         }
     }
 
@@ -221,7 +253,15 @@ impl OpKind {
     pub(crate) fn is_capability(self) -> bool {
         matches!(
             self,
-            Self::CapStorageGet | Self::CapStorageSet | Self::CapStorageDelete | Self::CapAuthVerifyDeviceToken
+            Self::CapStorageGet
+                | Self::CapStorageSet
+                | Self::CapStorageDelete
+                | Self::CapMdnsBrowse
+                | Self::CapMdnsStopBrowse
+                | Self::CapMdnsAdvertise
+                | Self::CapMdnsStopAdvertise
+                | Self::CapMdnsIsAdvertising
+                | Self::CapAuthVerifyDeviceToken
         )
     }
 
@@ -312,6 +352,21 @@ pub(crate) fn dispatch_mutex_op(plugin: &mut LoadedWasmPlugin, op: GuestOp) -> c
         GuestOp::CapStorageDelete { key } => plugin
             .call_capability_export::<(String,), (Result<(), String>,)>(EXPORT_STORAGE_DELETE, (key,))
             .map(|(r,)| GuestReply::GuestUnit(r)),
+        GuestOp::CapMdnsBrowse { service_type } => plugin
+            .call_capability_export::<(String,), (Result<String, String>,)>(EXPORT_MDNS_BROWSE, (service_type,))
+            .map(|(r,)| GuestReply::GuestStr(r)),
+        GuestOp::CapMdnsStopBrowse { browser_id } => plugin
+            .call_capability_export::<(String,), (Result<bool, String>,)>(EXPORT_MDNS_STOP_BROWSE, (browser_id,))
+            .map(|(r,)| GuestReply::GuestBool(r)),
+        GuestOp::CapMdnsAdvertise { config_json } => plugin
+            .call_capability_export::<(String,), (Result<String, String>,)>(EXPORT_MDNS_ADVERTISE, (config_json,))
+            .map(|(r,)| GuestReply::GuestStr(r)),
+        GuestOp::CapMdnsStopAdvertise { advertise_id } => plugin
+            .call_capability_export::<(String,), (Result<bool, String>,)>(EXPORT_MDNS_STOP_ADVERTISE, (advertise_id,))
+            .map(|(r,)| GuestReply::GuestBool(r)),
+        GuestOp::CapMdnsIsAdvertising { advertise_id } => plugin
+            .call_capability_export::<(String,), (Result<bool, String>,)>(EXPORT_MDNS_IS_ADVERTISING, (advertise_id,))
+            .map(|(r,)| GuestReply::GuestBool(r)),
         GuestOp::CapAuthVerifyDeviceToken { token } => plugin
             .call_capability_export::<(String,), (Result<String, String>,)>(EXPORT_AUTH_VERIFY_DEVICE_TOKEN, (token,))
             .map(|(r,)| GuestReply::GuestStr(r)),
@@ -338,6 +393,8 @@ pub(crate) enum GuestReply {
     GuestUnit(Result<(), String>),
     /// 能力导出 `result<string, string>`
     GuestStr(Result<String, String>),
+    /// 能力导出 `result<bool, string>`（句柄存在性一类）
+    GuestBool(Result<bool, String>),
 }
 
 /// 门面调用失败（`mutex` / `event-loop` 两模型同构，见 [`dispatch_mutex_op`]
@@ -1100,6 +1157,66 @@ fn start_op<'a>(
                 timer,
                 |res: Result<(Result<(), String>,), wasmtime::Error>| match res {
                     Ok((guest_result,)) => OwnerOutcome::Done(GuestReply::GuestUnit(guest_result)),
+                    Err(e) => trap_outcome(e),
+                },
+            )?,
+            GuestOp::CapMdnsBrowse { service_type } => start_typed(
+                &mut access,
+                instance,
+                EXPORT_MDNS_BROWSE,
+                (service_type,),
+                owned,
+                timer,
+                |res: Result<(Result<String, String>,), wasmtime::Error>| match res {
+                    Ok((guest_result,)) => OwnerOutcome::Done(GuestReply::GuestStr(guest_result)),
+                    Err(e) => trap_outcome(e),
+                },
+            )?,
+            GuestOp::CapMdnsStopBrowse { browser_id } => start_typed(
+                &mut access,
+                instance,
+                EXPORT_MDNS_STOP_BROWSE,
+                (browser_id,),
+                owned,
+                timer,
+                |res: Result<(Result<bool, String>,), wasmtime::Error>| match res {
+                    Ok((guest_result,)) => OwnerOutcome::Done(GuestReply::GuestBool(guest_result)),
+                    Err(e) => trap_outcome(e),
+                },
+            )?,
+            GuestOp::CapMdnsAdvertise { config_json } => start_typed(
+                &mut access,
+                instance,
+                EXPORT_MDNS_ADVERTISE,
+                (config_json,),
+                owned,
+                timer,
+                |res: Result<(Result<String, String>,), wasmtime::Error>| match res {
+                    Ok((guest_result,)) => OwnerOutcome::Done(GuestReply::GuestStr(guest_result)),
+                    Err(e) => trap_outcome(e),
+                },
+            )?,
+            GuestOp::CapMdnsStopAdvertise { advertise_id } => start_typed(
+                &mut access,
+                instance,
+                EXPORT_MDNS_STOP_ADVERTISE,
+                (advertise_id,),
+                owned,
+                timer,
+                |res: Result<(Result<bool, String>,), wasmtime::Error>| match res {
+                    Ok((guest_result,)) => OwnerOutcome::Done(GuestReply::GuestBool(guest_result)),
+                    Err(e) => trap_outcome(e),
+                },
+            )?,
+            GuestOp::CapMdnsIsAdvertising { advertise_id } => start_typed(
+                &mut access,
+                instance,
+                EXPORT_MDNS_IS_ADVERTISING,
+                (advertise_id,),
+                owned,
+                timer,
+                |res: Result<(Result<bool, String>,), wasmtime::Error>| match res {
+                    Ok((guest_result,)) => OwnerOutcome::Done(GuestReply::GuestBool(guest_result)),
                     Err(e) => trap_outcome(e),
                 },
             )?,

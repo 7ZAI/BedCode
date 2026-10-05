@@ -23,3 +23,9 @@ serde = { version = "1", features = ["derive"] }
 tracing = "0.1"
 
 [dev-dependencies]
+# 强制链接实证探针（wasm-core-lib-split 票 09 第 2 项）：它自报一个空壳能力模块，
+# 而**是否被引用**决定它会不会进最终二进制。两个集成测试各占一个二进制——本
+# 探针被引用（`tests/forced_link.rs`）与不被引用（`tests/forced_link_absent.rs`）
+# 各钉一侧，证明「强制引用行漏掉 ⇒ 注册丢失」是真实失效模式而非理论担忧。
+# dev-dep 环（kit --dev--> probe --> kit）Cargo 允许（同 serde/serde_derive）。
+bedcode-cap-forced-link-probe = { path = "fixtures/forced-link-probe" }

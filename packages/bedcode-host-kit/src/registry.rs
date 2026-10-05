@@ -26,8 +26,22 @@ use crate::state::WasmPluginState;
 use crate::{HostKitError, Result};
 
 /// 宿主能力模块注册表
+/// 能力模块注册表（机制内核 crate）
+///
+/// 手工 `Debug`（不 derive）：字段是 `&dyn HostModule`，而 `HostModule` 不要求
+/// `Debug`（能力 crate 没必要为此实现它）⇒ 改按模块名与描述符输出。存在的理由：
+/// 能力模块的**错误**路径用 `expect_err` 断言需要成功类型可格式化，而注册表本身
+/// 在生产代码里不走任何 Debug 输出。
 pub struct ModuleRegistry {
     modules: Vec<&'static dyn crate::module::HostModule>,
+}
+
+impl std::fmt::Debug for ModuleRegistry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list()
+            .entries(self.modules.iter().map(|m| m.desc().name))
+            .finish()
+    }
 }
 
 impl ModuleRegistry {

@@ -117,6 +117,11 @@ pub fn browse(
     if !ports.check_permission(plugin_id, "host_mdns_browse") {
         return Err(denied());
     }
+    // 能力路由：本能力由系统组件提供时转发到它的同形导出（票 09 扩表）；
+    // 无提供者才走本域引擎。位置与 kv 域一致：**权限门之后、引擎副作用之前**。
+    if let Some(result) = ports.forward_mdns_browse(plugin_id, service_type) {
+        return result;
+    }
     let service_type = service_type.trim().to_string();
     if service_type.is_empty() {
         return Err("mdns browse: service type must not be empty".to_string());
@@ -225,6 +230,9 @@ pub fn stop_browse(
     if !ports.check_permission(plugin_id, "host_mdns_stop_browse") {
         return Err(denied());
     }
+    if let Some(result) = ports.forward_mdns_stop_browse(plugin_id, browser_id) {
+        return result;
+    }
     stop_browser_inner(plugin_id, browser_id)
 }
 
@@ -275,6 +283,9 @@ pub fn advertise(
 ) -> Result<String, String> {
     if !ports.check_permission(plugin_id, "host_mdns_advertise") {
         return Err(denied());
+    }
+    if let Some(result) = ports.forward_mdns_advertise(plugin_id, config_json) {
+        return result;
     }
     let config: AdvertiseConfig = serde_json::from_str(config_json)
         .map_err(|e| format!("mdns advertise: invalid config: {e}"))?;
@@ -377,6 +388,9 @@ pub fn stop_advertise(
     if !ports.check_permission(plugin_id, "host_mdns_stop_advertise") {
         return Err(denied());
     }
+    if let Some(result) = ports.forward_mdns_stop_advertise(plugin_id, advertise_id) {
+        return result;
+    }
     stop_advertise_inner(plugin_id, advertise_id, ports)
 }
 
@@ -428,6 +442,9 @@ pub fn is_advertising(
 ) -> Result<bool, String> {
     if !ports.check_permission(plugin_id, "host_mdns_is_advertising") {
         return Err(denied());
+    }
+    if let Some(result) = ports.forward_mdns_is_advertising(plugin_id, advertise_id) {
+        return result;
     }
     let table = ADVERTISERS
         .lock()
@@ -570,6 +587,11 @@ mod tests {
         node_id: Option<String>,
         /// 捕获到的事件投递（topic, payload）
         published: Mutex<Vec<(String, serde_json::Value)>>,
+        /// 「系统组件」代持 `host-mdns` 能力的属主（能力路由用例用）
+        routed: Vec<String>,
+        /// 「系统组件」侧收到的调用（`(原语, 参数)`，与引擎自有双表**分开**：
+        /// 两条路径必须可区分，否则「命中转发」与「走引擎」在断言里长得一样）
+        routed_calls: Mutex<Vec<(String, String)>>,
     }
 
     impl FakePorts {
@@ -578,6 +600,8 @@ mod tests {
                 granted: vec![plugin_id.to_string()],
                 node_id: None,
                 published: Mutex::new(Vec::new()),
+                routed: Vec::new(),
+                routed_calls: Mutex::new(Vec::new()),
             }
         }
         fn deny_all() -> Self {
@@ -585,7 +609,70 @@ mod tests {
                 granted: Vec::new(),
                 node_id: None,
                 published: Mutex::new(Vec::new()),
+                routed: Vec::new(),
+                routed_calls: Mutex::new(Vec::new()),
             }
+        }
+        /// 把该属主标为「`host-mdns` 由系统组件代持」（授权已在 `allow` 里给）
+        fn routed(mut self) -> Self {
+            self.routed = self.granted.clone();
+            self
+        }
+        /// 「系统组件」侧收到的调用记录
+        fn routed_calls(&self) -> Vec<(String, String)> {
+            self.routed_calls
+                .lock()
+                .expect("routed sink poisoned")
+                .clone()
+        }
+        /// 能力路由的统一判据：属主在代持集合里才转发
+        fn routes(&self, plugin_id: &str) -> bool {
+            self.routed.iter().any(|r| r == plugin_id)
+        }
+        /// 「系统组件」的应答：**刻意取与引擎相反的值**（见路由用例注释）
+        ///
+        /// `arg` 含 `route-fail` 时回 `Err`（原样透传，不吞不改写）。
+        fn provider_result(
+            &self,
+            plugin_id: &str,
+            op: &str,
+            arg: &str,
+        ) -> Option<Result<String, String>> {
+            if !self.routes(plugin_id) {
+                return None;
+            }
+            self.routed_calls
+                .lock()
+                .expect("routed sink poisoned")
+                .push((op.to_string(), arg.to_string()));
+            if arg.contains("route-fail") {
+                return Some(Err(
+                    "system component capability call failed: provider trap".to_string(),
+                ));
+            }
+            Some(Ok(format!("{op}-from-provider")))
+        }
+        /// 同上，`result<bool, string>` 形状的三条（恒 `false`——引擎在「句柄存在
+        /// 且属主相符」时会给 `true`，故 `false` 本身就是「走的不是引擎」证据）
+        fn provider_flag(
+            &self,
+            plugin_id: &str,
+            op: &str,
+            arg: &str,
+        ) -> Option<Result<bool, String>> {
+            if !self.routes(plugin_id) {
+                return None;
+            }
+            self.routed_calls
+                .lock()
+                .expect("routed sink poisoned")
+                .push((op.to_string(), arg.to_string()));
+            if arg.contains("route-fail") {
+                return Some(Err(
+                    "system component capability call failed: provider trap".to_string(),
+                ));
+            }
+            Some(Ok(false))
         }
     }
 
@@ -613,10 +700,55 @@ mod tests {
             // **不执行**：真跑要 tokio runtime + 真实守护；单测只验表与门禁语义
             Arc::new(NoopTask)
         }
+        fn forward_mdns_browse(
+            &self,
+            plugin_id: &str,
+            service_type: &str,
+        ) -> Option<Result<String, String>> {
+            self.provider_result(plugin_id, "browse", service_type)
+        }
+        fn forward_mdns_stop_browse(
+            &self,
+            plugin_id: &str,
+            browser_id: &str,
+        ) -> Option<Result<bool, String>> {
+            self.provider_flag(plugin_id, "stop-browse", browser_id)
+        }
+        fn forward_mdns_advertise(
+            &self,
+            plugin_id: &str,
+            config_json: &str,
+        ) -> Option<Result<String, String>> {
+            self.provider_result(plugin_id, "advertise", config_json)
+        }
+        fn forward_mdns_stop_advertise(
+            &self,
+            plugin_id: &str,
+            advertise_id: &str,
+        ) -> Option<Result<bool, String>> {
+            self.provider_flag(plugin_id, "stop-advertise", advertise_id)
+        }
+        fn forward_mdns_is_advertising(
+            &self,
+            plugin_id: &str,
+            advertise_id: &str,
+        ) -> Option<Result<bool, String>> {
+            self.provider_flag(plugin_id, "is-advertising", advertise_id)
+        }
     }
 
     fn ports(p: FakePorts) -> Arc<dyn DiscoveryPorts> {
         Arc::new(p)
+    }
+
+    /// 端口 + 可回查的假端口句柄（能力路由用例用）
+    ///
+    /// 与 [`ports`] 的区别：那边假端口被搬进 trait object 就再也回不来了，而
+    /// 路由用例必须能反查「提供者侧到底收到了什么」——否则只能断言返回值，
+    /// 判别力不足。
+    fn ports_handle(p: FakePorts) -> (Arc<dyn DiscoveryPorts>, Arc<FakePorts>) {
+        let arc = Arc::new(p);
+        (arc.clone(), arc)
     }
 
     /// 进程内静态表隔离（cargo test 多线程并行）：每个用例用唯一前缀 id，
@@ -949,5 +1081,140 @@ mod tests {
     #[should_panic(expected = "discovery engine ports are not installed")]
     fn uninstalled_ports_panic_loudly() {
         let _ = crate::ports::ports();
+    }
+
+    // ==================== 能力路由（host-mdns 由系统组件代持）====================
+
+    /// 代持属主的五条原语全部转发到系统组件，且**引擎侧零副作用**
+    ///
+    /// 判别力来自「两侧返回值刻意相反」：`stop-browse` / `stop-advertise` /
+    /// `is-advertising` 的引擎实现在「句柄存在且属主相符」时会给 `Ok(true)`，
+    /// 而假系统组件恒给 `Ok(false)`；`browse` / `advertise` 的引擎实现在这里会
+    /// 真起守护（单测不可接受），假系统组件返回 `*-from-provider` 这种引擎不可能
+    /// 造出的句柄。故「返回值 == 提供者的值」即证明没走引擎。
+    #[test]
+    fn routed_mdns_calls_reach_the_system_component_instead_of_the_engine() {
+        let owner = test_owner("route-all");
+        let browser_id = "mdnsbr-route-all".to_string();
+        let advertise_id = "mdnsad-route-all".to_string();
+        fake_browser(&owner, &browser_id, "_route._tcp");
+        fake_advertiser(
+            &owner,
+            &advertise_id,
+            "_route._tcp.local.",
+            "x._route._tcp.local.",
+        );
+
+        let (p, fake) = ports_handle(FakePorts::allow(&owner).routed());
+
+        assert_eq!(
+            browse(&p, &owner, "_route._tcp").expect("routed browse"),
+            "browse-from-provider"
+        );
+        assert_eq!(
+            advertise(&p, &owner, r#"{"serviceType":"_route._tcp","port":1234}"#)
+                .expect("routed advertise"),
+            "advertise-from-provider"
+        );
+        assert!(
+            !stop_browse(&p, &owner, &browser_id).expect("routed stop-browse"),
+            "provider said the handle is unknown even though the engine table has it"
+        );
+        assert!(
+            !stop_advertise(&p, &owner, &advertise_id).expect("routed stop-advertise"),
+            "provider said the handle is unknown even though the engine table has it"
+        );
+        assert!(
+            !is_advertising(&p, &owner, &advertise_id).expect("routed is-advertising"),
+            "provider said the handle is unknown even though the engine table has it"
+        );
+
+        // 提供者侧确实收到了五条调用（顺序即调用序）
+        assert_eq!(
+            fake.routed_calls(),
+            vec![
+                ("browse".to_string(), "_route._tcp".to_string()),
+                (
+                    "advertise".to_string(),
+                    r#"{"serviceType":"_route._tcp","port":1234}"#.to_string()
+                ),
+                ("stop-browse".to_string(), browser_id.clone()),
+                ("stop-advertise".to_string(), advertise_id.clone()),
+                ("is-advertising".to_string(), advertise_id.clone()),
+            ]
+        );
+        // 引擎双表未被触碰（转发是纯返回，不做引擎副作用）
+        assert!(BROWSERS.lock().unwrap().contains_key(&browser_id));
+        assert!(ADVERTISERS.lock().unwrap().contains_key(&advertise_id));
+    }
+
+    /// 未代持的属主仍走引擎原语（转发端口返回 `None` ⇒ 回落），互不串味
+    #[test]
+    fn unrouted_owner_keeps_using_the_engine_primitives() {
+        let owner = test_owner("route-none");
+        let browser_id = "mdnsbr-unrouted".to_string();
+        fake_browser(&owner, &browser_id, "_unrouted._tcp");
+
+        let (p, fake) = ports_handle(FakePorts::allow(&owner));
+
+        // 句柄存在且属主相符 ⇒ 引擎给 `true`（假提供者恒给 false，故这是判别式）
+        assert!(
+            stop_browse(&p, &owner, &browser_id).expect("engine stop-browse"),
+            "the engine path must answer `true` for a handle it owns"
+        );
+        assert!(
+            fake.routed_calls().is_empty(),
+            "an owner that is not routed must never reach the system component"
+        );
+    }
+
+    /// 提供者的失败原样透传给调用方（不吞、不改写、不回落引擎）
+    ///
+    /// 宿主路由层会把这类失败隔离为调用方可见的 `Err` 并让能力回落宿主原语
+    /// （见 `manager::capability::unwrap_forward_result`）；能力域这一侧只负责
+    /// **不篡改**——一旦这里把错误换成 `Ok` 或自己再跑一遍引擎，
+    /// 宿主的「trap 隔离 + 自愈」就永远不会触发。
+    #[test]
+    fn provider_failure_is_propagated_verbatim_without_engine_fallback() {
+        let owner = test_owner("route-fail");
+        let (p, fake) = ports_handle(FakePorts::allow(&owner).routed());
+
+        let err =
+            browse(&p, &owner, "_route._tcp?route-fail").expect_err("provider failure surfaces");
+        assert!(
+            err.contains("provider trap"),
+            "provider error must be propagated verbatim, got: {err}"
+        );
+        assert_eq!(
+            fake.routed_calls(),
+            vec![("browse".to_string(), "_route._tcp?route-fail".to_string())]
+        );
+        // 且没有偷偷回落成「引擎自己跑一遍」（browse 的引擎路径会起守护并登记句柄）
+        assert!(
+            !BROWSERS
+                .lock()
+                .unwrap()
+                .values()
+                .any(|e| e.service_type == "_route._tcp?route-fail"),
+            "no engine browser may be registered when the provider failed"
+        );
+    }
+
+    /// 权限门优先于能力路由：未授权属主即使被代持也不转发
+    ///
+    /// 顺序即语义——若有人把转发段提到权限门之前，未授权插件就能借系统组件的
+    /// 身份发起组播操作（宿主自己的权限判定被旁路）。
+    #[test]
+    fn permission_gate_precedes_capability_routing() {
+        let owner = test_owner("route-denied");
+        // `deny_all()` 不含任何授权；`routed` 以 granted 为源，故此构造下为空集
+        let (p, fake) = ports_handle(FakePorts::deny_all());
+
+        assert_eq!(
+            browse(&p, &owner, "_route._tcp").unwrap_err(),
+            denied(),
+            "unauthorized caller must be rejected before routing"
+        );
+        assert!(fake.routed_calls().is_empty());
     }
 }

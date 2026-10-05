@@ -36,8 +36,6 @@ use crate::wasm_core::runtime_util::block_on_async;
 // （mod tests 展开）经 `use super::*` 继承父作用域名字仍消费它们——cfg(test)
 // 门控恢复（生产构建不引，零 unused import 警告）
 #[cfg(test)]
-use crate::db::Database;
-#[cfg(test)]
 use crate::wasm_core::permission::PermissionManager;
 use crate::wasm_core::security::fs_auth::FsAuthChecker;
 #[cfg(test)]
@@ -587,10 +585,10 @@ mod tests {
             host_ctx.set_plugin_db_root(Some(plugin_db_root()));
             let host_ctx = Arc::new(host_ctx);
 
-            // 能力域实例级端口（wasm-core-lib-split 票 04 / 05 / 06）：WS、peer 与 http
-            // 域的 `impl Host for WasmPluginState` 经本上下文取回端口，使权限判定与
-            // 引擎上下文的取法落在**本用例自己的**管理器/总线上（进程级只有一格，
-            // 见 `bedcode_host_kit::ports` 模块文档「两条通道」）。生产在
+            // 能力域实例级端口（wasm-core-lib-split 票 04 / 05 / 06 / 08）：WS、peer、
+            // http 与 sqlite 域的 `impl Host for WasmPluginState` 经本上下文取回端口，
+            // 使权限判定与引擎上下文的取法落在**本用例自己的**管理器/总线/库上（进程级
+            // 只有一格，见 `bedcode_host_kit::ports` 模块文档「两条通道」）。生产在
             // `PluginHost::new` 装配链里做同一件事。
             crate::wasm_core::host_api::ws::install(Arc::clone(&host_ctx));
             crate::wasm_core::host_api::peer::install(Arc::clone(&host_ctx));

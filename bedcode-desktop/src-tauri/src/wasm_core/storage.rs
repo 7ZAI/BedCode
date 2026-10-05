@@ -7,8 +7,9 @@
 //! **位置纪律（票 03：wasm_core 依赖单向化）**：原定义在
 //! `crate::wasm_core::manager::storage`，使 `security` / `host_api` 只为用它就
 //! 反向依赖 manager（见 `.scratch/2026-09-24-wasm-core-decouple/spec.md` C6）。
-//! 归位到本中立层后只依赖 `crate::db`，可被 `manager` / `host_api` / `security`
-//! 任意引用，自身不依赖任何 wasm_core 兄弟模块。
+//! 归位到本中立层后只依赖 `crate::db`（SQLite 引擎，同在宿主内——ADR 0036 撤销
+//! 票 07/08 的 crate 化），可被 `manager` / `host_api` / `security` 任意引用，
+//! 自身不依赖任何 wasm_core 兄弟模块。
 
 use crate::db::Database;
 use chrono::Utc;
@@ -18,9 +19,10 @@ use tokio::sync::Mutex;
 
 /// 系统级 plugin_id，用于存储非插件私有的全局数据
 ///
-/// pub(crate)：插件面存储原语（host_api/storage.rs）据此**拒绝**插件实例
-/// 触碰系统空间（R-02 纵深防御）——插件实例的 plugin_id 由运行时从已认证
-/// 身份派生，永远不可能是它；真出现 = 实施者 bug 或被绕过，fail-closed。
+/// **本模块是真源**（系统级数据的写入方在这里：激活状态等）。同一判据的 fail-closed
+/// 消费方是插件面存储原语（`host_api::storage::ensure_not_system_space`），它经再导出
+/// 取**同一个值**——两处指同一份常量，不存在同值副本（票 08 期间真源一度在
+/// `bedcode-sqlite-engine`，ADR 0036 撤销 crate 时一并归位）。
 pub(crate) const SYSTEM_PLUGIN_ID: &str = "__system__";
 /// 插件激活状态持久化 key
 const ACTIVATION_STATE_KEY: &str = "activation_state";
