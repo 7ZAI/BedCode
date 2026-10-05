@@ -559,19 +559,32 @@ interface host-plugin-database {
     execute-batch: func(sqls-json: string) -> result<u32, string>;
 }
 
-/// 密钥托管（secret-store，v15）+ 认证记录面（v18）：凭据存取与认证原始记录
+/// 密钥托管（secret-store，v15）+ 认证编排桥接面（v17 起，desktop 独有）
 ///
-/// 认证中心语义下沉的基础原语（ADR 0022 裁剪线内：离宿主无法实现、零业务
-/// 语义）。约定与红线：
-/// - **属主隔离**：属主 = 调用方插件实例的 plugin_id（宿主自 store state 派生，
-///   guest 无法伪造/旁路）；A 不能读/改/删 B 命名空间的密钥，越权由命名空间
-///   隔离天然拒绝（权限门之外的第二道闸）
-/// - **明文不落日志**：宿主日志/告警只记密钥长度（`value.len()` 模式），
-///   禁止打印值本身；存储于主库 plugin_secrets 表（schema.sql）
-/// - 持久化：重启后密钥稳定（DB 为真源）；set 覆盖写、delete 幂等
-/// - v18 记录面（`trusted-devices-*` / `connection-history-list` /
-///   `auth-setting-set`）：真源仍是内核表（`pairings` / `connection_history` /
-///   `settings`，spec D3「不动」表），插件只做读取、撤销与设置写入，不持有第二份账本
+/// **本 interface 是编排桥接面，不是记录面**：宿主不持有任何认证记录或设备入场
+/// 密码学。真源归属（逐条对应本 interface 现有 10 条原语）：
+/// - `secret-get/set/delete/keys`（4 条，secret-store）：属主密钥托管。约定与红线：
+///   * **属主隔离**：属主 = 调用方插件实例的 plugin_id（宿主自 store state 派生，
+///     guest 无法伪造/旁路）；A 不能读/改/删 B 命名空间的密钥，越权由命名空间
+///     隔离天然拒绝（权限门之外的第二道闸）
+///   * **明文不落日志**：宿主日志/告警只记密钥长度（`value.len()` 模式），
+///     禁止打印值本身
+///   * 持久化：真源 = 宿主主库 `plugin_secrets` 表（schema.sql）；set 覆盖写、
+///     delete 幂等，重启后密钥稳定
+/// - `auth-setting-set`（1 条）：认证域设置项写入（键白名单 `pairing_code_ttl` /
+///   `qr_token_ttl`，十进制秒数）。真源 = 宿主主库 `settings` 表；读取走 `host-config`
+///   / 宿主命令面，白名单外键一律拒绝
+/// - `link-identity-parts`（1 条）：链路身份 Kd 公钥材料（只含公开材料），
+///   来自 `link_crypto::identity_parts`
+/// - `auth-center-register` / `auth-center-unregister`（2 条）：认证中心显式注册与
+///   注销（ADR 0031）。真实认证执行在认证中心插件（`com.bedcode.terminal-session`），
+///   本组只是宿主进程内的发现协议与唯一性仲裁
+/// - `auth-methods-list` / `auth-method-invoke`（2 条）：组合式认证方法（ADR 0031）
+///
+/// **已退役、不得回接**（历史注释见下方 v24 / v33 / v34 条目）：v18/v19 的记录面
+/// 七函数（`trusted-devices-*` / `connection-history-*`）、v33 的设备入场 JWT
+/// 签发验签两函数、v34 的生物凭证面三函数。旧产物仍 import 它们时在实例化期被拒，
+/// 由 `stale_artifact_rebuild_hint` 点名「按对应 ABI 重建」。
 interface host-auth {
     /// 读取属主密钥；键不存在返回 `ok(none)`
     secret-get: func(key: string) -> result<option<string>, string>;

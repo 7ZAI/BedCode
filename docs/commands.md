@@ -1,622 +1,305 @@
-# BedCode 常用命令参考
+# BedCode 命令参考
 
-项目已拆分为 `bedcode-desktop/` 和 `bedcode-mobile/` 两个独立 Tauri 项目，命令需在对应目录下执行。
+> **本文件是命令与字眼的唯一事实源**（AGENTS.md §3 只指向这里）。命令与实际不符时**先修本文件**再执行。
+
+## 速查表
+
+| 目标 | 目录 | 命令 |
+| --- | --- | --- |
+| 桌面端开发 | `bedcode-desktop` | `pnpm run tauri:dev` |
+| 桌面端打包 | `bedcode-desktop` | `pnpm run tauri:build`（`-- --bundles deb` 只出 DEB） |
+| 桌面端前端构建 | `bedcode-desktop` | `pnpm run build`（`build:fast` 跳过类型检查） |
+| Android 开发 | `bedcode-mobile` | `pnpm run tauri:android:dev`（`:dev:log` 额外落盘 logcat） |
+| Android Debug APK | `bedcode-mobile` | `pnpm run tauri:android:build`（`:build:fast` / `:build:emulator` / `:build:all`） |
+| 前端测试 | 各端根目录 | `pnpm run test:run` —— **禁 `pnpm run test`** |
+| Rust 测试 | 见 §2 | `cargo test`（**每个 crate 在自己根目录跑**） |
+| 跨端互连测试 | `cross-end-tests` | `cargo test` |
+| 桌面 wasm 应用构建 | `bedcode-desktop/wasm-apps/<app-id>` | `pnpm run build` |
+| 移动插件构建 | `bedcode-mobile/plugins/<plugin-id>` | `pnpm run build` |
+| 桌面插件全量构建 | `bedcode-desktop` | `pnpm run plugins:build` |
+| 移动插件全量构建 | `bedcode-mobile` | `pnpm run plugins:build` |
+| 代码质量 | 仓库根 / 各端 | `pnpm exec eslint .` · 各端 `pnpm run lint` · `src-tauri` 内 `cargo clippy` |
 
 ---
 
-## 自适应构建（跨平台，可选包装器）
+## 1. 通用约定
 
-构建/测试命令启动前自动采样系统资源（CPU 负载 / 可用内存 / swap 抖动），按双指标
-分档注入编译参数：CPU 空闲且内存充裕 → 并行；任一指标紧张 → 降档串行（防 OOM 优先）。
-内存为硬约束：cargo jobs 恒 ≤ min(核数, 可用内存GiB ÷ 1.5)。
+- **包管理器只有 pnpm**，全局禁止 npm。仓库根与两端各有独立 `pnpm-lock.yaml`。
+- **仓库根没有 vitest 配置**：前端测试**必须在端目录执行**（`cd bedcode-desktop && pnpm run test:run`）。
+- **Rust 无根 workspace**：没有「在根目录跑 cargo test」这种命令，每个 crate（两端宿主、wasm 应用、移动插件、`cross-end-tests`）都在**自己的根目录**执行，测试也各自跑。
+- **sccache 是全仓 Rust 构建前置**（根 `.cargo/config.toml` 强制 `rustc-wrapper`），未装则一切 cargo 命令直接失败——这是显性失败设计，装法与缓存见 `docs/knowledge/build-process.md`。
+- **可选包装器 `adaptive-run.mjs`**（仓库根 `scripts/`）：采样 CPU / 可用内存 / swap 后按档位注入 `CARGO_BUILD_JOBS`、`GRADLE_OPTS`、`NODE_OPTIONS`，防 OOM 优先；`--` 之后原样接任意命令，不改变其行为。
+
+  ```bash
+  cd bedcode-desktop && node ../scripts/adaptive-run.mjs -- pnpm run tauri:build
+  cd bedcode-desktop/src-tauri && node ../../scripts/adaptive-run.mjs -- cargo test
+  ```
+
+  档位 `parallel` / `balanced` / `serial`（默认自动）。逃生阀：`BEDCODE_BUILD_PROFILE=parallel|balanced|serial|auto` 强制档位、`BEDCODE_ADAPTIVE=0` 完全关闭、`BEDCODE_JOBS_PER_GIB=1.5` 每 GiB 内存的并发预算。
+
+---
+
+## 2. 测试
+
+### 2.1 前端（Vitest）
 
 ```bash
-# 在对应应用目录执行（脚本位于仓库根 scripts/，cwd 继承保证子命令在应用目录运行），
-# -- 之后接任意原生命令，不改变原命令行为
-cd bedcode-desktop && node ../scripts/adaptive-run.mjs -- pnpm run tauri:build
-cd bedcode-mobile && node ../scripts/adaptive-run.mjs -- pnpm run tauri:android:build
-cd bedcode-desktop/src-tauri && node ../../scripts/adaptive-run.mjs -- cargo test
+cd <端目录>            # 必须在端目录，仓库根无配置
 
-# 仓库根目录跑根测试命令
-node scripts/adaptive-run.mjs -- pnpm run test:run
+pnpm run test:run      # 单次运行（= vitest run，跑完退出）—— 唯一允许的跑法
+pnpm exec vitest run <测试文件路径>    # 开发中的针对性过滤
+pnpm run test:coverage                # 覆盖率报告
+pnpm run test:ui                      # 浏览器 UI
 ```
 
-注入的编译参数（env，自动透传给 cargo / gradle / Node）：
+**禁 `pnpm run test`**：它是 vitest watch，挂起不退出，CI / agent 环境会直接卡死。
 
-| 变量 | 说明 |
-| --- | --- |
-| `CARGO_BUILD_JOBS` | cargo 并行数（覆盖根 `.cargo/config.toml` 的 `jobs=4`） |
-| `GRADLE_OPTS` | 追加/替换 `-Dorg.gradle.workers.max=N`（gradle 工作线程） |
-| `NODE_OPTIONS` | 原位替换/追加 `--max-old-space-size`，保留其他参数 |
-
-档位：`parallel`（cargo jobs 全开 / gradle 4 worker / Node 堆 4G）、`balanced`（jobs≤2 /
-worker 2 / 堆 1.5G）、`serial`（jobs=1 / worker 1 / 堆 1G）。
-
-覆盖与逃生阀（env，`BEDCODE_*` 前缀）：
-
-| 变量 | 作用 |
-| --- | --- |
-| `BEDCODE_BUILD_PROFILE=parallel \| balanced \| serial \| auto` | 手动强制档位（默认 auto） |
-| `BEDCODE_ADAPTIVE=0` | 完全禁用自适应，行为等同原生命令 |
-| `BEDCODE_JOBS_PER_GIB=1.5` | 每 GiB 可用内存的 rustc 并发预算 |
-
-平台：Linux 完整指标（/proc）；macOS / Windows 经 `os.loadavg` /
-PowerShell `Win32_Processor.LoadPercentage`（PowerShell 不可用时仅按内存分档，多保守一档）。
-测试：`pnpm run test:run`（仓库根目录，`node --test` 零依赖）。
-
-## bedcode-desktop
-
-### 开发模式
+### 2.2 Rust
 
 ```bash
-cd bedcode-desktop
+cd bedcode-desktop/src-tauri && cargo test      # 桌面宿主
+cd bedcode-mobile/src-tauri  && cargo test      # 移动宿主
 
-# 启动前端 Vite 开发服务器（浏览器预览）
-pnpm run dev
+cd bedcode-desktop/wasm-apps/<app-id> && pnpm run test:rust   # wasm 应用（等价于 rust/ 内 cargo test）
+cd bedcode-mobile/plugins/<plugin-id>/rust && cargo test      # 移动插件
 
-# 启动 Tauri 桌面端开发模式（含热更新）
-pnpm run tauri:dev
+cargo test <名称前缀>                            # 针对性过滤，cwd = 被测 crate 根
+```
 
-# 仅 Rust 编译检查
+**宿主 `cargo test` 不覆盖** wasm 应用 / 移动插件 crate，也不覆盖未纳入 vitest include 的目录（以两端 `vitest.config.ts` 的 include 为准）——落在那些目录须自行运行并在交付说明里写明。
+
+### 2.3 跨端互连（`cross-end-tests/`）
+
+桌面真实服务器 + 移动真实客户端代码**同进程互连、零 mock**——两端各自的 mock 各自自洽，真实互连才是跨端契约的真正门禁。
+
+```bash
+cd cross-end-tests && cargo test                        # 全量
+cd cross-end-tests && cargo test --test terminal_ws_flow # 单场景（每个场景 = 独立测试二进制）
+```
+
+前置：桌面随包 wasm 产物已构建（`cd bedcode-desktop && pnpm run plugins:build`）；**缺产物时测试显性失败，不静默 skip**。
+
+### 2.4 两个必踩的坑
+
+1. **wasm fixture 构建依赖 rustup shim**：宿主 wasm 闭环用例会在测试内 `cargo build --target wasm32-wasip3` 构建 fixture 并注入 `RUSTUP_TOOLCHAIN`（真源 `scripts/wasip3-toolchain.sh`）。因此**必须用 rustup shim 的 `cargo`（`~/.cargo/bin/cargo`）**；把 `~/.rustup/toolchains/*/bin` 前置进 PATH 会让注入失效（raw toolchain cargo 忽略该变量），依赖 fixture 的用例会成批红（`Test component WASM build failed`），**与代码无关**。
+2. **跑完测试清理进程**：关闭测试开启的后台进程 / 监听端口（cargo 测试 spawn 的 mock server、vitest worker 残留、gradle daemon），否则会占端口与 CPU。
+
+---
+
+## 3. 桌面端（`bedcode-desktop/`）
+
+```bash
+pnpm run dev          # 仅前端 Vite（浏览器预览）
+pnpm run tauri:dev    # 桌面端开发（含热更新）
+pnpm run build        # 前端完整构建（vue-tsc 类型检查 + vite 打包）
+pnpm run build:fast   # 跳过类型检查
+pnpm run tauri:build  # 打包安装包；-- --bundles deb 只出 DEB
 cd src-tauri && cargo check
 ```
 
-### 前端构建
-
-```bash
-cd bedcode-desktop
-
-# 完整构建（TypeScript 类型检查 + Vite 打包）
-pnpm run build
-
-# 快速构建（跳过类型检查）
-pnpm run build:fast
-```
-
-### 桌面端打包
-
-```bash
-cd bedcode-desktop
-
-# 构建生产版本安装包（默认全部目标）
-# Windows → NSIS 安装包 (.exe)
-# macOS → DMG 镜像
-# Linux → .deb（tauri.conf.json 的 bundle.targets 为 ["nsis", "deb"]）
-pnpm run tauri:build
-
-# 自适应构建（按当前资源分档并行度，不改变默认构建行为；见「自适应构建」章节）
-node ../scripts/adaptive-run.mjs -- pnpm run tauri:build
-
-# 仅构建 Linux DEB 安装包（--bundles 后的参数原样透传给 tauri CLI）
-pnpm run tauri:build -- --bundles deb
-```
-
-**安装包输出路径：**
-```
-bedcode-desktop/src-tauri/target/release/bundle/nsis/BedCode_2.1.0_x64-setup.exe
-bedcode-desktop/src-tauri/target/release/bundle/deb/BedCode_2.1.0_amd64.deb
-```
-
-> 构建成功后 `scripts/tauri-build.js` 会把安装包重命名为带 release 标记的格式（与移动端 APK 命名风格一致）：`BedCode-2.1.0-release-x64-setup.exe` / `BedCode-2.1.0-release-amd64.deb`
-
-### 插件构建与打包
-
-插件位于 `plugins/`（ai-chatbox、file-transfer、session）。构建时各插件先自行编译前端（Vite）与 Rust 后端（WASM），再由脚本把产物复制到 `src-tauri/resources/plugins/desktop/`，随桌面端安装包一起分发。
-
-```bash
-cd bedcode-desktop
-
-# 构建全部插件（3 个：ai-chatbox / file-transfer / terminal-session）
-pnpm run plugins:build
-
-# 构建指定插件（--plugin 接插件 id）
-node scripts/plugin-build.js --plugin com.bedcode.ai-chatbox
-node scripts/plugin-build.js --plugin com.bedcode.terminal-session
-node scripts/plugin-build.js --plugin com.bedcode.file-transfer
-
-# 仅构建默认插件（com.bedcode.terminal-session）
-pnpm run plugins:build:release
-
-# 插件开发模式（watch，默认 com.bedcode.terminal-session）
-pnpm run plugins:dev
-
-# 指定插件开发模式
-node scripts/plugin-dev.js --plugin com.bedcode.terminal-session
-```
-
-**前置条件**（Rust WASM 编译目标）：
-
-```bash
-rustup target add wasm32-unknown-unknown
-```
-
-**单插件内部命令**（`cd plugins/<name>`）：
-
-```bash
-pnpm run build                 # 完整构建：Vite + cargo(WASM) + 复制产物
-pnpm run dev                   # 开发模式（build.js --watch）
-pnpm run build:frontend       # 仅前端（Vite）
-pnpm run build:rust           # 仅 Rust WASM 后端
-node scripts/build.js --frontend-only  # 仅前端并复制产物
-node scripts/build.js --rust-only      # 仅 Rust 并复制产物
-
-# 浏览器开发环境（SDK Dev Shell，前端 HMR 实时预览，无需打包）
-# 需先构建 SDK：cd bedcode-desktop/packages/plugin-sdk-desktop && pnpm run build
-pnpm exec bedcode-plugin-desktop dev   # 或 pnpm add -D @binblink/bedcode-plugin-sdk-desktop 后在插件目录运行
-# 首次运行自动安装 dev-shell 依赖，浏览器打开 http://localhost:5173
-# 详见 ../bedcode-desktop/plugin-dev-desktop.md
-```
-
-**产物输出路径**（随桌面端安装包分发）：
-
-```
-bedcode-desktop/src-tauri/resources/plugins/desktop/{plugin-id}/
-├── index.js        # 前端打包产物
-├── plugin.json     # 插件清单
-└── {lib}.wasm      # Rust WASM 后端
-```
-
-**两端插件统一打包（zip 分发包，release 独立产物）**：
-
-```bash
-# 构建两端全部插件（前端 + WASM）并为每个插件各打一个 zip（仓库根目录执行）
-node scripts/package-plugins.mjs
-
-# 只看将打包的插件清单（不构建不打包）
-node scripts/package-plugins.mjs --list
-
-# 只打包一端：--target desktop | mobile | all（默认 all）
-node scripts/package-plugins.mjs --target mobile
-
-# 只打包指定插件（--only 忽略配置列表；--plugin 追加；--exclude 排除；
-# 同名插件两端自动匹配）
-node scripts/package-plugins.mjs --only agent-hub
-node scripts/package-plugins.mjs --plugin file-transfer --exclude ai-chatbox
-
-# 跳过构建直接打包已有产物；指定 zip 版本号；只构建收集产物、不打 zip
-node scripts/package-plugins.mjs --skip-build --version 2.1.0
-node scripts/package-plugins.mjs --no-zip
-```
-
-- **插件列表**：默认 `scripts/plugin-package-list.json`
-  （desktop: `agent-hub`/`ai-chatbox`/`file-transfer`/`session`，
-  mobile: `ai-chatbox`/`auto-task`/`file-transfer`——移动端任务插件仍是独立实现），增删插件改该文件即可；
-  也可用 `--config <file>` 换列表文件
-- **产物**：`dist/plugin-packages/<target>/<plugin-id>.zip`（一个插件一个 zip，zip 根 = 插件文件，
-  与移动端 SDK `bedcode-plugin package` 分发格式一致）；`--out <dir>` 可改输出目录
-- **CI**：`.github/workflows/release.yml` 的 `package-plugins` job 构建并上传全部插件 zip
-  到 release（详见 `docs/knowledge/release-workflow.md`）
-
-**两端 SDK 统一打包（npm tarball + crates.io 产物，release 独立附件）**：
-
-```bash
-# 构建两端 SDK（TS 构建 + vitest + cargo check）并打包 npm / cargo 产物（仓库根目录执行）
-node scripts/package-sdks.mjs
-
-# 只看将打包的 SDK 与版本（不构建不打包）
-node scripts/package-sdks.mjs --list
-
-# 只打包一端：--target desktop | mobile | all（默认 all）
-node scripts/package-sdks.mjs --target desktop
-
-# 跳过 vitest / 跳过构建仅重新打包 / 追加 wasm32 guest 编译检查（CI 默认开启）
-node scripts/package-sdks.mjs --skip-tests
-node scripts/package-sdks.mjs --skip-build
-node scripts/package-sdks.mjs --rust-wasm
-```
-
-- **产物**：`dist/sdk-packages/<target>/`（按端分目录）：
-  - `*.tgz`：`pnpm pack` 的 npm 包（TS 前端 + CLI + template + dev-shell）
-  - `*.crate`：`cargo package --no-verify` 的 crates.io 包（per crate：desktop 含
-    `bedcode-plugin-api` 与 `bedcode-plugin-api-macros`，mobile 含 `bedcode-plugin-api-mobile`）
-  - `SHA256SUMS`：全部产物校验和
-  - `<sdk>-<ver>.zip`：聚合包（上述产物 + README + WIT 契约 + index.md 说明）
-- **版本**：产物以各自 SDK 自身版本命名（npm package.json 与 Cargo.toml 必须一致，
-  校验不一致即失败），与应用版本无关
-- **CI**：`.github/workflows/release.yml` 的 `package-sdks` job 构建并上传全部 SDK 产物到 release（详见 `docs/knowledge/release-workflow.md`）
-
-**桌面端加载 / 卸载插件（zip 分发包）**：
-
-```bash
-# 打包脚本产出的 zip 可直接在桌面端「插件」页安装：
-# 工具栏「加载插件」→ 选择 zip 包（产物 dist/plugin-packages/desktop/<id>.zip）
-```
-
-- 安装落盘：`app_data_dir/plugins/<id>/`（用户插件目录，独立于只读的内置目录）
-- 加载校验：manifest 必填字段 + id 反向域名 + 路径穿越防护 + wasm 存在性（声明时），拒绝覆盖已安装同 id（升级需先卸载）
-- 卸载：插件详情页「卸载」按钮（仅用户安装插件显示）→ 危险确认弹窗 → 删除插件所有数据（存储 + 激活状态 + 安装目录）
+- **`pnpm run tauri:dev -- --no-watch`**：关掉插件前端 watch。默认开着；插件 watch 会把 vite 产物复制进 `src-tauri/`，触发 Tauri 全量重启宿主并清当日日志。**必须经 pnpm 转发**（裸 `node scripts/dev-run.js` 在缺 `pnpm_execpath` 时 Linux ENOENT）。关掉后改插件前端自行 `cd wasm-apps/<app-id> && pnpm run build`。
+- **安装包输出**：`src-tauri/target/release/bundle/{nsis/*.exe,deb/*.deb}`；构建成功后 `scripts/tauri-build.js` 会重命名为 `BedCode-<版本>-release-<arch>-*`。
+- **updater 签名**：未配置 `TAURI_SIGNING_PRIVATE_KEY(_FILE)` / `.env` 时自动禁用升级包，本地构建无需私钥（发布见 `docs/knowledge/release-workflow.md`）。
 
 ---
 
-## bedcode-mobile
-
-### 开发模式
+## 4. 移动端（`bedcode-mobile/`）
 
 ```bash
-cd bedcode-mobile
-
-# 启动前端 Vite 开发服务器
-pnpm run dev
-
-# Android 热加载开发模式（真机/模拟器）
-pnpm run tauri:android:dev
-
-# Android 开发模式 + 电脑端日志落盘
-# 普通 tauri:android:dev 只打控制台；本命令额外把 Tauri CLI 转发的 logcat
-# 实时写入 .dev-logs/android-dev.YYYY-MM-DD.log（本地日期轮转，无 ANSI 码，可 grep）。
-# 每次启动清空当天日志文件；Ctrl+C 退出前 flush 落盘；退出时打印过滤统计。
-# 落盘内容默认过滤非业务噪音（wasmtime/cranelift·框架 tag·Gradle/Vite 构建进展），
-# 业务与链路日志全保留；控制台与落盘同一套过滤（BEDCODE_LOG_NO_FILTER=1 可关闭看全量）
-pnpm run tauri:android:dev:log
-
-# 仅 Rust 编译检查
+pnpm run dev                      # 仅前端 Vite
+pnpm run tauri:android:dev        # Android 热加载开发（真机 / 模拟器）
+pnpm run tauri:android:dev:log    # 同上 + logcat 落盘 .dev-logs/android-dev.YYYY-MM-DD.log
+pnpm run build                    # 前端完整构建
+pnpm run tauri:android:init       # 初始化 Android 工程（首次）
+pnpm run tauri:android:build      # Debug APK（arm64）
+pnpm run tauri:android:build:fast # 快速 Debug APK
+pnpm run tauri:android:build:emulator   # 模拟器 APK（x86_64）
+pnpm run tauri:android:build:all  # 多架构 Debug APK
+pnpm exec tauri android build --release   # Release APK（需签名）
+cd src-tauri/gen/android && ./gradlew :app:compileUniversalDebugKotlin   # 仅编译 Kotlin
 cd src-tauri && cargo check
 ```
 
-### 前端构建
+- **`:dev:log`** 每次启动清空当天日志、Ctrl+C 前 flush；默认过滤非业务噪音（wasmtime / 框架 tag / 构建进展），`BEDCODE_LOG_NO_FILTER=1` 看全量。详见 `docs/knowledge/logging.md`。
+- **APK 输出**：`src-tauri/gen/android/app/build/outputs/apk/{debug,universal/debug}/`。Android Studio 打开 `src-tauri/gen/android`。
+- **签名唯一真源 = 仓库根 `bedcode.keystore`**。
+
+### 真机安装与调试
 
 ```bash
-cd bedcode-mobile
-
-# 完整构建
-pnpm run build
-
-# 快速构建
-pnpm run build:fast
-```
-
-### Android 构建
-
-```bash
-cd bedcode-mobile
-
-# 初始化 Android 项目（首次运行）
-pnpm run tauri:android:init
-
-# 构建 Debug APK（仅 arm64）
-pnpm run tauri:android:build
-
-# 自适应构建（按当前资源分档并行度，不改变默认构建行为；见「自适应构建」章节）
-node ../scripts/adaptive-run.mjs -- pnpm run tauri:android:build
-
-# 模拟器构建（x86_64）
-pnpm run tauri:android:build:emulator
-
-# 快速构建 Debug APK（仅 arm64，不优化）
-pnpm run tauri:android:build:fast
-
-# 构建多架构 Debug APK
-pnpm run tauri:android:build:all
-
-# 构建 Release APK（需配置签名）
-pnpm exec tauri android build --release
-
-# 使用 Android Studio 打开项目
-# File → Open → bedcode-mobile/src-tauri/gen/android
-```
-
-**APK 输出路径：**
-```
-bedcode-mobile/src-tauri/gen/android/app/build/outputs/apk/
-├── debug/app-universal-debug.apk
-└── release/app-release.apk
-```
-
-### 插件构建与打包
-
-```bash
-cd bedcode-mobile
-
-# 构建全部插件（扫描 plugins/，产物复制到 APK 资源目录）
-pnpm run plugins:build
-
-# 构建指定插件
-node scripts/plugin-build.js --plugin com.bedcode.ai-chatbox
-
-# 插件 + 主应用一起构建
-pnpm run build:all
-```
-
-**单插件内部命令**（`cd plugins/<name>`，基于 `bedcode-plugin` SDK CLI）：
-
-```bash
-pnpm run dev       # = bedcode-plugin dev：浏览器开发环境（Dev Shell，HMR，无需真机）
-pnpm run build     # = bedcode-plugin build：vite + cargo wasm32
-pnpm run package   # = bedcode-plugin package：产出 dist/{id}.zip 插件包
-```
-
-> Dev Shell 用 mock 宿主 + 移动端页面骨架在浏览器预览插件前端，WASM 后端命令需真机验证；详见 `../bedcode-mobile/plugin-dev-mobile.md`。
-
-**产物输出路径**：
-
-```
-bedcode-mobile/src-tauri/resources/plugins/mobile/{plugin-id}/   # 进 APK 资源（首启解压）
-plugins/{name}/dist/{plugin-id}.zip                              # 可分发的插件包
-```
-
----
-
-### Android 真机安装与调试
-
-```bash
-# 检查已连接的设备
 adb devices
-
-# 安装 APK 到真机（arm64）
-adb install bedcode-mobile/src-tauri/gen/android/app/build/outputs/apk/arm64/debug/app-arm64-debug.apk
-            
-# 安装 APK 到模拟器
-adb install bedcode-mobile/src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
-
-# 覆盖安装（保留数据）
-adb install -r bedcode-mobile/src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
-
-# 卸载应用
+adb install <apk 路径>            # 覆盖安装加 -r
 adb uninstall com.bedcode.mobile
-
-# 获取日志
 adb logcat -s BedCode:*
-
-# 保存日志到文件
-adb logcat > bedcode_log.txt
-
-# 重启 adb 服务（设备 offline 时）
-adb kill-server && adb start-server
+adb kill-server && adb start-server   # 设备 offline 时
 ```
 
-**真机连接常见问题：**
+| 现象 | 处理 |
+| --- | --- |
+| `adb devices` 为空 | 手机开 USB 调试，换数据线 |
+| `unauthorized` | 手机上点「允许 USB 调试」 |
+| `offline` | `adb kill-server && adb start-server` |
+| `INSTALL_FAILED_UPDATE_INCOMPATIBLE` | 先 `adb uninstall` 再装 |
 
-| 现象 | 解决 |
-|------|------|
-| `adb devices` 为空 | 手机上开启 USB 调试，换根数据线 |
-| 状态显示 `unauthorized` | 手机上点"允许 USB 调试"弹窗 |
-| 状态显示 `offline` | `adb kill-server && adb start-server` |
-| 安装报 `INSTALL_FAILED_UPDATE_INCOMPATIBLE` | 先 `adb uninstall com.bedcode.mobile` 再安装 |
+移动端没有日志时的排查见 `docs/knowledge/adb-fd0-bug.md`。
 
 ---
 
-## Rust 后端编译（通用）
+## 5. wasm 应用与插件
+
+桌面是 **`wasm-apps/<app-id>/`**（4 个：`agent-hub` / `ai-chatbox` / `file-transfer` / `terminal-session`），移动端是 **`plugins/<plugin-id>/`**（3 个：`ai-chatbox` / `auto-task` / `file-transfer`）。插件 id 形如 `com.bedcode.<name>`。
+
+### 5.1 工具链（桌面 wasm32-wasip3）
+
+桌面 wasm 应用统一编译到 **`wasm32-wasip3`**（由 pin 住的 nightly 提供 std），**不是 `wasm32-unknown-unknown`**。目标与 toolchain 由 `scripts/wasip3-toolchain.sh` 单一维护（含 `rustup target add wasm32-wasip3 --toolchain <pinned>`），脚本会按需补装。背景与移动端待决策项见 `docs/knowledge/wasip3-toolchain.md`。
+
+### 5.2 构建与测试
 
 ```bash
-# 编译 Debug 模式
-cd <project>/src-tauri && cargo build
-
-# 编译 Release 模式（启用 LTO、Strip 等优化）
-cd <project>/src-tauri && cargo build --release
-
-# 仅检查语法和类型（不生成产物，速度最快）
-cd <project>/src-tauri && cargo check
-
-# 运行 Clippy 静态分析
-cd <project>/src-tauri && cargo clippy
-
-# 格式化 Rust 代码
-cd <project>/src-tauri && cargo fmt
-
-# 运行 Rust 测试
-cd <project>/src-tauri && cargo test
-
-# 更新 Rust 依赖
-cd <project>/src-tauri && cargo update
+# 端内全量构建（复制产物进 src-tauri/resources/plugins/<end>/）
+cd bedcode-desktop && pnpm run plugins:build       # ai-chatbox / file-transfer / terminal-session
+cd bedcode-desktop && node scripts/plugin-build.js --plugin com.bedcode.agent-hub
+cd bedcode-desktop && pnpm run plugins:dev         # watch 开发（默认 terminal-session）
+cd bedcode-mobile  && pnpm run plugins:build
+cd bedcode-mobile  && pnpm run build:all           # 插件 + 主应用
 ```
 
-> `<project>` 替换为 `bedcode-desktop` 或 `bedcode-mobile`
+### 5.3 单个应用内部（`cd wasm-apps/<app-id>` 或 `cd plugins/<plugin-id>`）
+
+```bash
+# 桌面：node scripts/build.js 封装前端 + wasm + 产物复制
+pnpm run build           # 完整构建
+pnpm run dev             # watch 开发
+pnpm run build:frontend  # 仅前端（vite build）
+pnpm run build:rust      # 仅 Rust WASM 后端
+node scripts/build.js --frontend-only / --rust-only
+pnpm run test:rust       # rust/ 内 cargo test
+
+# 移动：bedcode-plugin SDK CLI
+pnpm run build           # vite + cargo wasm32
+pnpm run dev             # 浏览器 Dev Shell（HMR，无需真机）
+pnpm run package         # 产出 dist/<plugin-id>.zip
+```
+
+浏览器 Dev Shell 需要先构建 SDK（`cd packages/plugin-sdk-<end> && pnpm run build`），用法见 `bedcode-desktop/plugin-dev-desktop.md` 与 `bedcode-mobile/plugin-dev-mobile.md`。Dev Shell 只验前端，WASM 后端命令仍需真机。
+
+### 5.4 产物落点
+
+```text
+bedcode-desktop/src-tauri/resources/plugins/desktop/<plugin-id>/{index.js,plugin.json,<lib>.wasm}
+bedcode-mobile/src-tauri/resources/plugins/mobile/<plugin-id>/      # 进 APK 资源（首启解压）
+bedcode-mobile/plugins/<name>/dist/<plugin-id>.zip                  # 可分发的插件包
+dist/plugin-packages/<target>/<plugin-id>.zip                       # §5.5 的 zip 分发包
+dist/sdk-packages/<target>/                                         # §5.5 的 SDK 产物
+```
+
+### 5.5 分发打包（仓库根执行）
+
+```bash
+node scripts/package-plugins.mjs     # 两端插件 zip（列表见 scripts/plugin-package-list.json）
+node scripts/package-sdks.mjs        # 两端 SDK：npm tarball + crates.io crate + 聚合 zip
+```
+
+常用 flag（两脚本通用）：`--list` 只列不构建 · `--target desktop|mobile|all`（默认 all）· `--skip-build` 跳过构建 · `--only <plugin>` / `--plugin <p>` / `--exclude <p>`（插件脚本）· `--out <dir>` 改输出目录 · `--skip-tests`（SDK 脚本，跳过 vitest）· `--version <v>`（插件脚本，指定 zip 版本）。
+
+CI 由 `.github/workflows/release.yml` 的 `package-plugins` / `package-sdks` job 执行并上传到 release，流程见 `docs/knowledge/release-workflow.md`。
+
+插件 zip 可直接在桌面端「插件」页安装（加载插件 → 选 zip），落盘 `app_data_dir/plugins/<id>/`；加载校验 manifest 必填字段 + id 反向域名 + 路径穿越防护 + wasm 存在性，拒绝覆盖同 id（升级需先卸载），卸载会删除该插件全部数据。插件开发约束见 `docs/knowledge/plugin-development-checklist.md`。
 
 ---
 
-## 代码质量
+## 6. Rust 与代码质量
 
 ```bash
-# ESLint 检查（前端）
-cd <project> && pnpm run lint
+cd <crate 根> && cargo build            # Debug
+cd <crate 根> && cargo build --release  # Release（LTO + strip 等优化）
+cd <crate 根> && cargo check            # 只查类型，不出产物，最快
+cd <crate 根> && cargo clippy           # 静态分析
+cd <crate 根> && cargo fmt              # 格式化（--check 只检查）
+cd <crate 根> && cargo update           # 更新依赖（锁文件只经包管理器变更）
 
-# Prettier 格式化（前端）
-cd <project> && pnpm run format
-
-# TypeScript 类型检查
-cd <project> && pnpm exec vue-tsc --noEmit
-
-# Rust Clippy 检查
-cd <project>/src-tauri && cargo clippy
-
-# Rust 代码格式化检查
-cd <project>/src-tauri && cargo fmt --check
+cd <端目录> && pnpm run lint            # ESLint（--fix 自动修）
+cd <端目录> && pnpm run format          # Prettier
+cd <端目录> && pnpm exec vue-tsc --noEmit   # TypeScript 类型检查
+pnpm exec eslint .                      # 全仓前端 lint（根目录，CI 门禁口径）
 ```
 
 ---
 
-## 前端测试（Vitest）
+## 7. 构建资源与 target 治理
 
 ```bash
-cd <project>
-
-# 监听模式（开发时使用）
-pnpm run test
-
-# 单次运行
-pnpm run test:run
-
-# 自适应测试（按资源调 Node 堆，见「自适应构建」章节）
-node ../scripts/adaptive-run.mjs -- pnpm run test:run
-
-# 带覆盖率报告
-pnpm run test:coverage
-
-# UI 模式（浏览器查看测试结果）
-pnpm run test:ui
+cd <端目录> && pnpm run target:size      # 各 target 落点体积（两端脚本都有）
+cd <端目录>/src-tauri && cargo clean     # 清该端编译缓存
 ```
+
+- **`src-tauri/target` 超 15GB 就 `cargo clean`**，跑全量测试前必看磁盘（峰值十几 GB，磁盘满会以 Bus error 失败）。
+- **新增 crate / 脚手架不得写死 `<crate>/target/`**：落点治理与决策见 `docs/knowledge/build-process.md`「Target 目录管理」+ 各 `.cargo/config.toml` 注释（改完用 `cargo metadata` 的 `target_directory` 核验）。
+- sccache 让 clean 后的依赖重编走缓存（命中则只需链接），缓存位置 / 上限 / 清理见同文档「sccache 编译缓存」节。
 
 ---
 
-## 端口管理
+## 8. 端口与遗留进程
+
+| 端口 | 占用者 |
+| --- | --- |
+| `1420` | 桌面 Vite（`dev` / `tauri:dev`） |
+| `1423` / `1424` | 移动 Vite（`tauri:android:dev`；真机经 `adb reverse tcp:1423 tcp:1423` 转发） |
+| `5173` / `5199` | 移动插件 Dev Shell / SDK Dev Shell |
+| `5037` / `9333` | adb server |
+| 动态 | Gradle daemon |
+
+**一键释放（Linux / WSL）**——先看占用与进程身份，再整棵杀（端口绑定未必是根进程，dev 树要连父进程一起杀，否则被 tauri CLI 看护逻辑重新拉起）：
 
 ```bash
-# Windows：查找 1420 端口被哪个进程占用
-netstat -ano | findstr :1420
-
-# Windows：终止占用 1420 端口的进程
-taskkill /PID <PID> /F
-
-# Windows PowerShell 版
-Stop-Process -Id (Get-NetTCPConnection -LocalPort 1420).OwningProcess -Force
-```
-
-### BedCode dev 端口速查与一键释放（Linux / WSL）
-
-BedCode 开发态各端口对应关系：
-
-| 端口 | 占用者 | 说明 |
-| ---- | ------ | ---- |
-| `1420` | `bedcode-desktop` Vite | `pnpm run dev` / `pnpm run tauri:dev` |
-| `1423` / `1424` | `bedcode-mobile` Vite | `pnpm run tauri:android:dev`；真机经 `adb reverse tcp:1423 tcp:1423` 转发 |
-| `5173` | 移动端插件 Dev Shell | `cd plugins/<name> && pnpm run dev`（`bedcode-plugin dev`） |
-| `5199` | `packages/plugin-sdk-mobile/dev-shell` | SDK 自带 Dev Shell |
-| `5037` / `9333` | adb server | Android 调试桥（kill 后下次 adb 命令自动重启，不影响已连设备） |
-| `36537`（动态） | Gradle daemon | Android 构建守护进程，杀掉后下次构建自动重启 |
-
-```bash
-# 1) 查看端口占用（确认 PID）
 ss -tlnp | grep -E ':(1420|1423|1424|5173|5199|5037|9333)\b'
-
-# 2) 确认进程身份（端口绑定未必是根进程，dev 树要整棵杀）
-#    例如 1420 对应的 vite 父进程是 nohup 启动脚本；移动端 tauri android dev
-#    本身不绑端口，但会拉起并看护 vite，需连父进程一起结束以免被重新拉起
 ps -eo pid,ppid,etime,cmd | grep -E 'vite|tauri.js android|dev-shell|GradleDaemon' | grep -v grep
 
-# 3) 整棵进程树温和关闭（SIGTERM → 2 秒 → SIGKILL 兜底）
-#    按实际 PID 替换；惯用组合：桌面 vite + 启动脚本、tauri android dev 子树、
-#    两个 Dev Shell 子树、adb server、Gradle daemon
 TARGETS='<PID1> <PID2> ...'
 for pid in $TARGETS; do kill -TERM "$pid" 2>/dev/null; done
 sleep 2
 for pid in $TARGETS; do ps -p "$pid" >/dev/null 2>&1 && kill -KILL "$pid"; done
 
-# 4) 复核端口已释放（无输出即干净）
 ss -tlnp | grep -E ':(1420|1423|1424|5173|5199|5037|9333)\b' || echo '全部端口已释放'
 ```
 
-**说明：**
+**Windows**：查找与终止用 `netstat -ano | findstr :1420` → `taskkill /PID <PID> /F`；PowerShell 用 `Stop-Process -Id (Get-NetTCPConnection -LocalPort 1420).OwningProcess -Force`。
 
-- 优先杀进程树根（如 `sh -c 'tauri android dev'` → `tauri.js android dev` → `vite`），避免 tauri CLI 看护逻辑把 vite 重新拉起
-- adb server 与 Gradle daemon 都是自动重启型守护进程，杀掉不会破坏环境，只为释放端口/内存
-- SIGKILL 兜底与「遗留 dev 进程清理」同因：异常退出后的进程事件循环可能已僵死，SIGTERM 不响应（见下方「遗留 dev 进程」节）
-
----
-
-## 清理
+**遗留 dev 进程 / 关不掉的黑框窗口**（`tauri:dev` 崩溃或被 kill -9 后，`target/debug/bedcode-desktop` 常被 systemd 收养继续跑，插件 `--watch` 也一起残留）：
 
 ```bash
-# 桌面端：清理 Rust 编译缓存
-cd bedcode-desktop/src-tauri && cargo clean
-
-# 移动端：清理 Rust 编译缓存
-cd bedcode-mobile/src-tauri && cargo clean
-
-# 清理前端构建产物
-cd <project> && rm -rf dist/
-
-# 清理 node_modules 重新安装
-cd <project> && rm -rf node_modules && pnpm install
-
-# 移动端：清理 Android 构建产物
-cd bedcode-mobile/src-tauri/gen/android && ./gradlew clean
-```
-
-### 遗留 dev 进程 / 黑框窗口清理
-
-`pnpm run tauri:dev` 意外退出（崩溃 / 强制关终端 / kill -9）后，`target/debug/bedcode-desktop` 主进程常常被 systemd 收养继续运行，表现为桌面上一片关不掉的黑框窗口；同时插件 `--watch` 进程也会一起残留。以下命令一次性清干净（Linux / WSL）。
-
-```bash
-# 1) 查看当前遗留（不匹配则无输出）
 ps -eo pid,ppid,etime,stat,cmd | grep -E 'bedcode-desktop|vite.*--watch' | grep -v grep
-
-# 2) 温和关闭所有遗留（先 SIGTERM，等 2 秒，未响应再 SIGKILL）
-pkill -TERM -f 'target/debug/bedcode-desktop' ; \
-pkill -TERM -f 'vite.js build --watch' ; \
-sleep 2 ; \
-pkill -KILL -f 'target/debug/bedcode-desktop' ; \
-pkill -KILL -f 'vite.js build --watch'
-
-# 3) 复核
-ps -eo pid,etime,cmd | grep -E 'bedcode-desktop|vite.*--watch' | grep -v grep
-echo "(空 = 干净)"
+pkill -TERM -f 'target/debug/bedcode-desktop'; pkill -TERM -f 'vite.js build --watch'; sleep 2
+pkill -KILL -f 'target/debug/bedcode-desktop'; pkill -KILL -f 'vite.js build --watch'
 ```
 
-如果只想处理单个已知 PID（推荐用于窗口确认阶段），把上面 `pkill -f` 替换为：
+SIGKILL 兜底是必需的：`bedcode-desktop` 的 SIGTERM 处理链依赖窗口事件循环，dev 异常退出后事件循环可能已僵死。**注意**：窗口里若挂着 Tauri 内的 pi 会话，会随父进程一并退出。
 
-```bash
-TARGET=<PID>
-kill -TERM $TARGET ; sleep 2
-ps -p $TARGET >/dev/null && kill -KILL $TARGET
-```
-
-**为什么需要 SIGKILL 兜底**：`bedcode-desktop` 的 SIGTERM 处理链依赖窗口事件循环，dev 异常退出后事件循环可能已僵死，SIGTERM 不响应，必须 KILL。
-
-**注意**：窗口里如果同时挂着 pi 子进程（Tauri 里的 pi 会话），会随父进程一并退出——**若该 pi 会话就是你要清理的目标，正常；否则先关那个终端**再杀主进程。
+其他清理：`rm -rf dist/`（前端产物）、`rm -rf node_modules && pnpm install`、`gen/android && ./gradlew clean`。
 
 ---
 
-## 依赖管理
+## 9. 依赖管理
 
 ```bash
-# 安装前端依赖
-cd <project> && pnpm install
-
-# 添加前端依赖
-cd <project> && pnpm install <package-name>
-
-# 添加开发依赖
-cd <project> && pnpm install -D <package-name>
-
-# 添加 Rust 依赖（编辑 Cargo.toml 后）
-cd <project>/src-tauri && cargo build
+cd <端目录> && pnpm install            # 安装
+cd <端目录> && pnpm install <pkg>      # 添加依赖
+cd <端目录> && pnpm install -D <pkg>   # 添加开发依赖
 ```
+
+`Cargo.lock` / `pnpm-lock.yaml` **只经包管理器变更，禁止手工编辑**。
 
 ---
 
-## 开发快速参考
+## 10. pi session 归档（`scripts/pi-session-archive.sh`）
 
-| 目标 | 目录 | 命令 | 产物 |
-|------|------|------|------|
-| 桌面端开发 | `bedcode-desktop` | `pnpm run tauri:dev` | 桌面窗口 + 热更新 |
-| 桌面端打包 | `bedcode-desktop` | `pnpm run tauri:build` | `.exe` / `.dmg` / `.deb` |
-| 桌面端打包（仅 DEB） | `bedcode-desktop` | `pnpm run tauri:build -- --bundles deb` | `.deb` |
-| 插件构建（桌面） | `bedcode-desktop` | `pnpm run plugins:build` | 产物复制到 `src-tauri/resources/plugins/desktop/` |
-| 插件构建（移动） | `bedcode-mobile` | `pnpm run plugins:build` | 产物复制到 `src-tauri/resources/plugins/mobile/` |
-| Android 开发 | `bedcode-mobile` | `pnpm run tauri:android:dev` | 真机/模拟器 + 热更新 |
-| Android 开发（日志落盘） | `bedcode-mobile` | `pnpm run tauri:android:dev:log` | logcat 写入 `.dev-logs/android-dev.*.log`（默认过滤非业务噪音，`BEDCODE_LOG_NO_FILTER=1` 关闭） |
-| Android APK | `bedcode-mobile` | `pnpm run tauri:android:build` | `.apk` |
-| Android 快速构建 | `bedcode-mobile` | `pnpm run tauri:android:build:fast` | Debug `.apk` |
-| 前端测试 | `<project>` | `pnpm run test:run` | 终端输出 |
-| Rust 测试 | `<project>/src-tauri` | `cargo test` | 终端输出 |
-| Rust 检查 | `<project>/src-tauri` | `cargo check` | 编译检查 |
-
----
-
-## pi session 归档（scripts/pi-session-archive.sh）
-
-将本项目 `.pi/sessions/` 中**距离最新 session 超过 N 天**的 session jsonl 日志（含复合 session 目录）移动到 pi 安装目录的 session 归档区。归档文件夹以项目全路径命名（`/` 替换为 `-`，前后加 `--`，与 pi 自身约定一致）：
-
-```
-项目 /home/binblink/project/tauriProject/BedCode
-  → ~/.pi/agent/sessions/--home-binblink-project-tauriProject-BedCode--
-```
-
-- **基准日期** = 本项目 `.pi/sessions/` 中最新 session 的时间戳（非今天），早于（基准 − N 天）的视为过期；默认 N=10
-- 只处理顶层 `*.jsonl` 与 `YYYY-MM-DDThh-mm-ss-msZ_<ulid>` 形式的 session 目录；`sol-pi` / `subagent-artifacts` 等非 session 目录绝不触碰
-- 目标已有同名条目时跳过并警告，绝不覆盖
-- 脚本由 `scripts/` 位置推导项目根，天然只在项目范围内生效；可在任意目录用绝对路径执行
+把本项目 `.pi/sessions/` 中**距最新 session 超过 N 天**的 session jsonl（含复合 session 目录）移到 pi 安装目录的归档区（目录名由项目绝对路径推导，`/` 换 `-`）。
 
 ```bash
-# 实际归档（默认 10 天）
-scripts/pi-session-archive.sh
-
-# 只预览不移动（推荐先跑）
-scripts/pi-session-archive.sh -n
-
-# 自定义阈值（如 30 天）
-scripts/pi-session-archive.sh -d 30
-
-# 覆盖 pi 安装目录（默认 ~/.pi/agent）
+scripts/pi-session-archive.sh -n        # 只预览（推荐先跑）
+scripts/pi-session-archive.sh           # 实际归档（默认 N=10）
+scripts/pi-session-archive.sh -d 30     # 自定义阈值
 PI_AGENT_DIR=/custom/pi scripts/pi-session-archive.sh -n
 ```
+
+基准日期 = 本项目 `.pi/sessions/` 中最新 session 的时间戳（非今天）；只处理顶层 `*.jsonl` 与 `YYYY-MM-DDThh-mm-ss-msZ_<ulid>` 形式的 session 目录，`sol-pi` / `subagent-artifacts` 等目录绝不触碰；目标已有同名条目时跳过并警告，绝不覆盖。

@@ -9,6 +9,182 @@
 
 ## [未发布]
 
+#### 桌面端：SQLite 能力域 crate 撤销——插件面数据库机制（13 条原语）留在 wasm 核心（ADR 0036；无 ABI / WIT / 协议变动）
+
+- **改了什么**：`bedcode-desktop/packages/bedcode-sqlite-engine/` 不再存在。
+  `host-database`（5）/ `host-plugin-database`（5）/ `host-storage`（3）三条原语回到
+  `wasm_core/host_api/{database,storage}.rs`，三块 `impl … Host for WasmPluginState` 回到
+  `manager/runtime/component.rs`（并回到该文件的本地 `add_to_linker` 表）；SQLite 引擎面
+  （`src-tauri/src/db.rs` + `db/{database,models,operations}.rs` + `db/schema.sql`）回到
+  `src-tauri/src/db/`。13 条原语的函数名、权限位、错误文案、结构化日志字段、表名前缀纵深、
+  超时 / 行数 / 字节护栏、批次「全成或全回」、系统空间 fail-closed 守卫、kv 属主分区逐字未变，
+  只有位置搬回
+- **为什么**：一个问题出现了两个答案。这三条原语守着的真源本来就在宿主——`schema.sql` 建出
+  `plugin_auth_policies` / `plugin_auth_records` / `plugin_secrets` / `plugin_storage` 四张表，
+  13 个宿主文件（`security/{auth_policy,approval,strategy,network_auth,fs_auth}`、
+  `wasm_core/storage.rs`、`host_api/{auth,context}`、`manager/{validation,host/api_bridge}` 等）
+  经 `Database` 直读直写；授权判定的权威也是宿主的 `PermissionManager` + `host_api::check_permission`。
+  机制面进了另一个 crate，「插件的授权信息与插件信息存在哪、谁能读写」就一半在这边、一半在那边。
+  ADR 0022 的 B3 要求机制与其真源同侧——这与仍留在 crate 的四个能力域（mdns / websocket /
+  peer / http）不同，那四域的真源是引擎里的匿名资源，宿主不留读路径
+- **消掉的实测代价**：能力 crate 无条件依赖 `wasmtime`（component-model）+ `wit-bindgen` +
+  `bedcode-host-kit` + `bedcode-plugin-api` + `inventory`，且 `plugin_binding` 无 feature 门 ⇒
+  只想要 `Database` 的消费方也被迫编组件模型栈（实测 crate 图：撤销前 387 个 vs 引擎面单独
+  293 个，多出的 ~94 个全是 `wasmtime* / cranelift* / wasm-tools / wit-bindgen* / wasmtime-wasi`）。
+  它还把一次 ABI 编辑绑成一次引擎重建，且 provider 侧 `bindgen!` 生成的 `Host` trait 与宿主
+  guest 侧同名不同类型，两侧 impl 必须同步动才不会 `defined twice`
+- **端口缝保留，但降级为可测性缝**：`host_api/sqlite_ports.rs` 保留 `SqlitePorts` trait
+  （权限门 / 库句柄 / 那唯一一份同步↔异步桥 / kv 与能力路由），`host_api/sqlite.rs` 保留宿主实现——
+  正是它让域逻辑能在**不构造完整 `WasmHostContext`** 的前提下用假端口
+  （`host_api/sqlite_scaffold.rs`）跑护栏与隔离：**40 个既有用例**（语句超时 / 行数字节上限 /
+  authorizer 纵深 / 批次原子性 / kv 隔离 / 系统空间守卫）是随实现同迁回来的，不是新写的覆盖率。
+  随 crate 一起消失的还有：进程级 `OnceLock` 单例、实例级 `domain_ports` 登记、`inventory` 自报、
+  强制引用行与白名单里的 `sqlite` 项。端口改为按**本次调用**的上下文现取
+  （`sqlite::ports_for(&ctx)`，借用、零分配；`plugin_db` 的懒创建 future 借用上下文，与既有
+  `DbScope::get_or_create_plugin_db` 同形）
+- **锁收缩但没变哑**：crate 边界锁去掉 `bedcode-sqlite-engine` 的 4 项登记，模块白名单去掉
+  `sqlite`，可路由能力闭表锁的 `host-storage` 端口来源改指
+  `src/wasm_core/host_api/sqlite_ports.rs`（不再指已删除的 crate 路径）。没有任何一把锁变成
+  「不再检查」：白名单的 missing 方向仍能逮住没链上的能力 crate，
+  `test_loaded_plugin_component_roundtrip` 仍在 import 漏注册时于实例化期显性报错
+- **验证**：桌面端 `cargo check --lib --tests` 与 `cargo clippy --lib --tests` 干净
+  （`database.rs` / `storage.rs` 的 `dead_code` 是该形态固有噪声：生产面唯一调用方是
+  `bindgen!` 生成的 trait impl，链接器在运行时调用，lint 看不见，与撤销前同形）；
+  `cargo test --lib` 中 `host_api::database`(32) / `host_api::storage`(4) / `db::`(4) /
+  `component::tests`(20，含 roundtrip) / `crate_boundary`(8) / `capability::tests`(6) /
+  `empty_dir_lock`(4) 全绿；全量 `--lib` 只余既有的
+  `session_e2e::test_session_task_domain_closed_loop` 一红（票 06/07/08 已在 CHANGELOG 记录的既存失败）
+- 未跑：`cross-end-tests`（无跨端协议改动）、wasm 应用完整构建与 `gen/android` gradlew（无插件 /
+  Kotlin 改动）、移动端（未触碰）
+
+#### 桌面端：机制内核 + mdns / websocket / peer / http 四个能力域迁出内核，装配改为自动且已上锁，运行期路由表接入首个已迁出的能力域（无 ABI / WIT / 协议变动）
+
+- **口径说明**：本条工作里的票 07/08（SQLite 能力域 crate）曾在此实施，并于**同日由
+  ADR 0036 撤销**（见上条）：`bedcode-sqlite-engine` 已删除，13 条原语与引擎面都回到
+  `wasm_core` / `src/db/`。这一对票的净留存为零，其余内容（机制内核 + 四个域 + 契约锁）成立
+- **为什么非搬不可**：能力实现的位置原本是历史偶然而不是边界。宿主把 22 个 interface 逐行
+  `add_to_linker` 硬编码，于是「实现搬出内核」与「把它接上」是同一次编辑——实现因此走不掉。
+  现在能力 crate 经机制内核的模块注册表自报（`packages/bedcode-host-kit`，双端共享锚点）：
+  `add_to_linker` 保留留内核那一列表 + 一次遍历装完自报项。新增一个能力域 = 一条依赖 + 一个
+  白名单项，宿主接线不动
+- **自动不许静默漂移**：白名单锁把收集集与树内常量**双向**比对（未经 review 的能力即红；
+  crate 没链上的能力即红），强制引用行与该常量同处；模块缺失在**实例化期显性失败**，点名缺哪个
+  模块并给出两个方向各自的修法。让这件事微妙的前提现已固化为自动化证据而非注释：
+  `inventory` 的提交是 linker-section 静态，未被引用的 rlib 一无所出——两个测试二进制各钉一侧
+  （引用探针 crate ⇒ 收集结果恰好是它；不引用 ⇒ 收集结果为空）
+- **运行期路由接入首个已迁出的能力域，闭表已上锁**：`host-mdns` 与 `host-storage` 同入可路由
+  能力表，五条转发方法跨三层齐备（能力域端口 / 宿主转发函数 / 提供者窄端口）。表里带上每组
+  能力的路由方法前缀，由一条锁**逐项**比对三层——它防的静默形态是「能力域端口声明了转发、
+  宿主没有对应函数」，此时注册表认为能力可路由、每次调用都返回 `None`、能力无声退回宿主原语，
+  全链路零报错。探测面改为派生（可路由 ∪ 仅探测），不再把可路由项抄两遍
+- **唯独刻意不开放的那一处**：转发链路从未携带调用方 `plugin_id`（该值只用于判自调用），
+  而每个能力域的真源都按调用方 `plugin_id` 分区。系统组件代持能力后会落到**自己的**分区、
+  持有调用方的句柄、收走调用方订阅的发现事件——这对**全部**能力域都成立，故本票只接通机制、
+  不开放入口：`world plugin-system` 没有增加 `export host-mdns`，没有组件能提供那五个函数，
+  路由在构造上不可达。取证、三个候选方案与「不得顺手改 WIT」的约束已立项为票 10
+- **crate 边界锁扩到九个 crate**（六个 server 拆分件 + 机制内核 + 两个能力域）并带路径列——
+  机制内核落仓库根，只登记名字的表会把它报成「拆分产物缺失」，**不检查的锁比没有锁更危险**。
+  首轮即查出一条真边：三个传输 crate 都依赖机制内核（各持一份 `plugin_binding`），现已登记为
+  允许的向下边并在生产依赖里钉为必需
+- **验证**：桌面端 `cargo test --no-fail-fast`：`--lib` 820 passed / 1 failed / 1 ignored（失败是
+  票 06/07/08 已记的既有过时断言 `session_e2e::test_session_task_domain_closed_loop`，与本票零交集；
+  与票 08 对账：816 + 4 = 820 ✅），9 个集成 target 全绿；`bedcode-host-kit` 16 绿；
+  `bedcode-discovery-engine` 18 绿（14 + 4 条路由：转发命中提供者且引擎零副作用——假提供者的
+  应答刻意取与引擎相反的值，这才让断言有判别力；未代持的属主仍走引擎；提供者失败原样透传且不
+  回落引擎；权限门先于转发）；移动端 `cargo test --no-fail-fast` 全绿（移动端零改动）；根
+  `pnpm exec eslint .` 0 error；宿主 clippy 无新增告警（`--lib` 54 条全为既有，触达区间内零命中）；
+  本票触达文件 rustfmt 干净（宿主整树剩余漂移在他人在途文件里）
+- 未跑：`cross-end-tests`（无跨端协议变动——能力路由是宿主内部面）、wasm 应用构建与
+  `gen/android` Kotlin 编译（无插件 / Kotlin 改动）；闭表锁的反向变异未实测（正向已实测：从可路由
+  表删一条导出即转红并打出计数差；反向是对同一份数据的直接扫描）
+
+#### 构建：全仓引入 sccache 作为 Rust 编译缓存（根 `.cargo/config.toml` 的 `rustc-wrapper` + `[env]`，本地与 CI 同步生效）
+
+- **改了什么**：根 cargo 配置加 `[build] rustc-wrapper = "sccache"`（cargo 按 cwd 祖先链合并 config，对所有 crate 生效——两端宿主、wasm 应用、夹具、server-libs、host-kits、cross-end），加 `[env] SCCACHE_CACHE_SIZE = { value = "20GiB", force = false }`。sccache 按 rustc 调用内容哈希缓存编译产物，独立于 target 目录，两笔反复成本消失：① 宿主 target 15G 阈值 `cargo clean` 后不再全量重编依赖（实测 `bedcode-host-kit`：wasmtime 全量编译 3m34s → clean 后缓存命中重建 37s，244 次编译 100% 命中）；② 8 个治理落点不再各自编译一份共享依赖图（server-libs 与 host-kits 各编的 wasmtime、cross-end 的并集图）
+- **与增量编译共存**（这正是 2026-09-26 target 治理决策记录否决 sccache 的理由）：cargo 只对本地 crate 开 incremental（`-Zincremental`），sccache 检测到该参数时透传不缓存；依赖 crate 的全量编译照常缓存——本地 dev 迭代速度不变
+- **CI 从此对 sccache 是硬依赖**：所有调 cargo 的 job（`test.yml` rust-desktop/rust-mobile、`release.yml` build-windows/build-android/build-linux/package-plugins/package-sdks、`sdk-publish.yml` verify/publish-crates）经 `mozilla-actions/sccache-action@v0.0.11` 安装 sccache——根 config 强制 wrapper，漏装 = cargo 直接失败（显性失败，无静默降级）。CI 不启用 sccache 的 GHA cache 后端（跨 run 缓存仍由 `Swatinem/rust-cache` 负责）；job 级 `SCCACHE_CACHE_SIZE=2GiB` 经 `force=false` 覆盖 20GiB 默认
+- **安装**：Linux/macOS 从 mozilla/sccache GitHub release 下载二进制放 `~/.cargo/bin/sccache`（本次实测 v0.18.0）；Windows `scoop install sccache`。缓存位于 `~/.cache/sccache`（清理：`sccache --stop-server && rm -rf ~/.cache/sccache`）。文档：`docs/knowledge/build-process.md`「sccache 编译缓存」节、AGENTS §2
+
+#### 桌面端：对等网络能力域（`host-peer`，19 条原语）迁出内核并解除一处反向耦合，落到 `bedcode-server-peer-net`（无 ABI / WIT / 协议变动）
+
+- **搬走了什么**：整层面向 guest 的绑定层——会话句柄表（`sess-<uuid>` 铸造 / 解析 / 取出 / 属主回滚）、数据面断线自动重拨（句柄记忆 endpoint 重走引擎握手并重试一次）、权限门位置、载荷契约校验。宿主那个模块从 727 行降到 112 行。19 条 `host_peer_*` 原语名、20 条 wire 文案、两处结构化日志（属主拒绝的 `plugin_id`/`handle`、自动重拨的 `node_id`）逐字保留
+- **本票比上一票多一件：解除一处反向耦合**。迁移前绑定层有 **20 处**「从宿主组装面取引擎状态」的调用——它要求能力 crate 反向认识宿主的 `AppHandle` 与 managed state 表，那正是 ADR 0022 裁剪线要消除的方向。现在改为经端口要「已装配好的引擎上下文」，**绑定层对宿主组装面的引用降到 0**；装配动作（从运行时状态表取四个引擎句柄）留在宿主 adapter，它仍是全仓唯一认识 `AppHandle` 的引擎装配点。**对等网络引擎自身一行未动**
+- **三个边界端口**：权限门（宿主安全闸门，复用既有判定与同一条拒绝 warn 路径）、引擎上下文、异步桥。异步桥仍**必须复用宿主那唯一一份**——它带着 actix `current_thread` 自锁规避与 ambient runtime。无头上下文的 wire 文案「peer-net unavailable in headless context (no app_handle)」逐字保留，并改为由能力域定义常量、宿主引用，单一事实源在域侧
+- **两处「判定顺序」是被锁的行为，不能调换**：① `close` 里非属主拿到的必须是属主拒绝，而不是先撞上「无头不可用」——否则越权探测的结果随机化；② `send-files` 的 v31 退役字段检测（`concurrency` 脉冲字段出现即显性报错点名重建）排在句柄寻址之前，是「传输编排下沉」的 fail-visible 行为级保险
+- **宿主侧从此「装配」而不是「硬编码」**：该 crate 与 `host-websocket` 同形——实现 `HostModule` + `inventory::submit!`，`add_to_linker` 经能力模块注册表一次收集装完。宿主本次改动只有：白名单加一项、强制引用加一行、删掉本域那一列 `Host` impl 与 `add_to_linker` 行、三处装配点各加一行（生产 / 无头测试 rig / PluginHost 测试 harness）
+- **面内依赖方向锁当场立功**：本 crate 自带的锁连**注释**里的宿主路径字面量都禁。首轮实现把「自宿主某模块迁入」这类记账性说明写进文档注释，锁直接红 14 处——处置是**改散文、不放宽锁**（锁的价值正在此处）
+- **验证**：`bedcode-server-peer-net` 48 绿（31 基线 + 17 = 9 条逐条迁入 + 8 条新增：无头文案逐字锁定、属主可达引擎侧的正例、非属主 close 后句柄仍在册、退役字段报错、双形态载荷过校验、非法 JSON 文案、未知句柄文案、属主判定先于载荷解析、以及「`collect-outgoing` 是唯一不取引擎上下文的原语」）；桌面 `cargo test`：`--lib` 874 通过 / 1 失败 / 1 忽略（唯一失败是既有的 `session_e2e` 陈旧断言；账目 = 上一票 885 − 迁走的 9 = 876 ✅ 逐条对齐）；`capabilities_lock` 7、`hot_path_logging_lock` 3、`server_integration` / `ws_auth_rules` / `broadcast_shutdown` / `http_auth_biometric` / `pty_session_chain` / `build_manifest_smoke` 各 1；`wasm_bridge_bench` 两项数量级门禁 PASS（真实 WASM 插件经新的两段式装配装载：nop 往返 64.4µs < 3000µs、总线二进制吞吐 102.9 MiB/s > 1 MiB/s）
+- 未跑：`cross-end-tests`（跨端协议零变更）与 wasm 应用完整构建（无插件侧改动）；对等网络引擎侧 3 条既有 warning（死字段 / 死函数 / 一处 `drop(&T)` 空操作）按「不动引擎自身」未修，`drop` 那处的真实意图需要引擎侧判断，应单独立票
+
+#### 桌面端：WebSocket 能力域（`host-websocket`，15 条原语）迁出内核，落到 `bedcode-server-websocket`（无 ABI / WIT / 协议变动）
+
+- **搬走了什么**：整层面向 guest 的绑定层——出站连接表（属主隔离句柄、显式拒绝 `wss://`、每连接有界发送队列）、入站插件端点（形状 / 认证校验、单发 / 广播 / 踢出 / 注销 / 清单 / 脱敏 `connection-context`）、帧读写任务、`events-ws` 投递降级计数、按属主定向的状态事件、以及插件停用回收。宿主那个模块从 1126 行降到 156 行。签名、返回形状、错误串、结构化日志字段逐字保留；原有的分节注释（客户端域 / 服务端域 / 回收 / 读写任务 / 帧投递）随代码一起迁移
+- **宿主从此「装配」而不是「硬编码」**：`bedcode-server-websocket` 实现 `HostModule` + `inventory::submit!`，`add_to_linker` 经能力模块注册表一次收集装完（白名单双向校验）。加 crate 依赖 + 一行白名单就是全部接入动作，宿主装配代码零改动——本次宿主侧唯一改动是往白名单里加 `websocket`
+- **五个边界端口替代反向依赖**：权限门（宿主安全闸门，复用既有 `check_permission` 与同一条拒绝 warn 路径）、属主私有 topic 的事件发布、端点登记要挂的 `BusPort` 对象、`events-ws` 帧投递（三态结果）、以及同步↔异步桥。异步桥**必须**复用宿主那唯一一份——它带着 actix `current_thread` 自锁规避与 ambient runtime，能力域再复制一份就是埋雷
+- **机制内核新增「实例级域端口」通道**：能力 crate 的 `impl … Host for WasmPluginState` 按设计不得向下转型回宿主上下文，只能从进程级单例取端口；但一个进程可能有多份宿主上下文（无头测试每个用例一份，WS 跨插件隔离那例就有两份且授权不同），先装者胜出会让能力域读到**别的上下文**的权限管理器与总线。新增 `HostPorts::domain_ports(domain)`（默认 `None`、只传不透明 `Arc<dyn Any>`、kit 仍不认识任何域端口类型）+ `WasmHostContext::set_domain_ports`，端口随实例绑定；域侧先问实例、再回落进程级。票 05 / 06 / 08 直接复用这条通道
+- **本次回归照出一处既有缺口**：`PluginHost` 测试 harness 直接拼结构体字面量，从未走能力域端口装配链，于是停用回收路径上「端口未装配」而 panic。已在 harness 补两行与生产同形的装配
+- **验证**：`bedcode-server-websocket` 47 绿（能力域 25 条 = 23 条逐条迁入 + 2 条新增：帧投递三态只对「未导出」计数、帧目标标识覆盖双域）；`bedcode-host-kit` 11 绿；桌面 `cargo test --lib` 883 通过 / 1 失败（唯一失败是既有的 `session_e2e` 陈旧断言：插件已多发一个任务域；账目 = 票 03 基线 906 − 迁走 23 = 883）；`capabilities_lock` 7、`hot_path_logging_lock` 3（登记表已改指 crate 路径）、`server_integration` / `ws_auth_rules` / `broadcast_shutdown` / `http_auth_biometric` / `pty_session_chain` / `build_manifest_smoke` 各 1；`wasm_bridge_bench` 两项数量级门禁 PASS（真实 WASM 插件经新的两段式装配装载：nop 往返 68.0µs < 3000µs、总线二进制吞吐 101.9 MiB/s > 1 MiB/s）；terminal-session 449 绿（它以 dev-dependency 消费该 crate 跑跨端契约测试）
+- 未跑：宿主 `cargo clippy --lib`（本会话两次撑满根分区后仅剩 1.7GiB，全量重编会触发链接期 `Bus error`；两个 crate 的 clippy 已干净，宿主构建在我改的 6 个文件上 0 warning）与 `cross-end-tests`（跨端协议零变更）
+
+#### 侧边栏排序 + 设备配对 / 终端会话的 tab 区对齐 Agent 任务 + Agent Hub「应用到」二级页重做（仅 UI，无 ABI / WIT / 协议变动）
+
+- **侧边栏：Agent Hub 移到「Agent任务」正下方**（槽位 `240` → `215`）。排序只有一个事实源：宿主 `useSidebarMenu` 把内置项与各插件贡献目录按 `order` 统一升序排布，`240` 是「紧跟 file-transfer」的旧约定，与「Agent 任务 → Agent Hub」这一期望次序不符。`215` 取 10 的倍数之间的空档（`200` 终端会话 / `210` Agent 任务 / `220` file-transfer / `230` ai-chatbox），两处真源（`plugin.json` 的 `contributes.views[0].order` 与前端 `registerSidebarPanel({ order })`）必须同值——前端那条决定侧边栏菜单顺序，宿主 Rust `register_views` 按 manifest 登记同一份视图，漂移会让两处列表错位且**没有任何运行期报错**。新增 `sidebarOrder.test.ts` 把这条双源同序 + 落点锁死
+- **设备配对 / 终端会话的 tab 区此前不是页签导航，是一对工具按钮**。两页的 tab 条是 `inline-flex` 收缩条浮在页面底色上（实测整条仅 172px / 214px、两项各 80px），且与工具栏页头之间没有任何分隔，读起来像挂在正文上的一对小药丸。现统一到 Agent 任务（`TaskHistoryView`）的规格：容器 `flex` 满宽 + 单项 `flex-1` 等分的分段控件，tab 带自身带底边线并与页头同为 `--bg-card`（两级页头、一条分隔线）。终端会话额外给 tab 条加 `max-w-5xl mx-auto`——该页内容有宽度上限，tab 条不跟着限会在宽屏下比内容列宽出一截
+- **Agent Hub「应用到」二级页**：该页整个替换供应商列表视图，因此「怎么回去」「正在写什么」都得由面板自己交代
+  - 出口从角上一个 `×` 改成页头的「← 返回供应商列表」。`×` 读起来像关弹窗，而不是回到上一层；本页唯一的出口不叫「返回」时用户不知道自己身处哪一层
+  - 页头补一行**预设速览**（方言 / Base URL / 模型数 / key 掩码）。这些决策依据在列表行里有，进入本页后全丢了，用户只能靠记忆判断在写什么
+  - 字段提示收进各自字段块（原先散在字段外，整页读成一片文字墙），表单体与动作条分离：动作条带上边线、左侧回显「将写入 N 个 CLI」、主操作落到右侧
+  - 内容列限宽 760px（`--ah-pv-apply-measure`，表单体与动作条共用），避免 1150px 宽的卡片里横一条 1150px 的文本输入框
+- **验证**：桌面 `vitest run` 全量 1583 通过 / 115 文件（含新增 `sidebarOrder` 2 条、`components.test.ts` 的 A1-c 6 条）；terminal-session 244 通过、agent-hub 508 通过；根 `pnpm exec eslint .` 0 error（115 warning 全为既有）；`vue-tsc` 与基线一致（agent-hub 2 处既有 StatsTab 报错、terminal-session 41 处既有报错，均不在本次改动文件内）；四档视口宽度（1600 / 1280 / 1024 / 860 / 700）实测标签不折行、不溢出；明暗两套主题 + 中英文四个组合实机核验
+- 未跑：`pnpm run build`（含 wasmHash 注入）与 wasm 产物构建——本次只动插件前端模板 / CSS / i18n 与 `plugin.json` 的视图槽位，未触碰 Rust；Rust / WIT / ABI / 跨端协议零改动，故未跑 `cargo test` 与 `cross-end-tests`
+
+#### 桌面端：页面过渡收敛为一套体系，四种效果代码级切换，黑屏与闪烁消除
+
+- **每次切页黑屏 + 闪烁的根因**：所有整视图切换都用 `mode="out-in"`，它会先播完退场再挂载入场；两者之间容器里没有任何东西，露出的是 `--bg-page`——五套暗色主题下它分别是 `#15130f` / `#0f172a` / `#101713` / `#0b1620` / `#1b1210`，全是近黑。满屏切换时读起来就是一次黑屏闪，而不是过渡（同一机制此前已在插件视图上造成过**永久**白屏，2026-09-25 单独修过）
+- **修复**：改用默认重叠模式，并让 `.page-leave-active` 置 `position: absolute`（带内边距的容器由 `--page-swap-pad-*` 做偏移补偿）——旧页脱离文档流退场，新页从第一帧就占位，容器永不断层
+- **统一**：页面级过渡此前散落五处且参数已各自漂移（宿主 `page`、`ah-page`、`ft-page`、三处同名不同参的 `tab-fade`、`page-fade`、`view-slide`；0.12s–0.26s、2px–14px、缓动混用）。现在只有 `src/style.css` 一处定义（`.page-*` + `.page-swap`），时长 / 缓动 / 位移幅度走 `--motion-page-*` token，过渡名恒为 `page`
+- **四种效果、一个切换点**：`fade` / `slide-up`（缺省）/ `slide-left` / `zoom`，由 `src/utils/pageTransition.ts` 的 `PAGE_TRANSITION_EFFECT` 选择（仅代码层面，不做设置项——页面动效是应用级观感而非用户偏好，做成设置项就没有单一事实源）。效果名写错时抛错而非静默回退
+- **门禁**：`src/__tests__/style/pageTransition.test.ts` 锁住命名唯一、无 `out-in`、容器必带 `page-swap`、效果变体齐全、`prefers-reduced-motion` 降级，以及四条基础类只在 `src/style.css` 定义
+- 文档：`frontend-styles/ANIMATIONS.md` 已更新为统一后的体系
+
+#### Agent Hub 供应商：codex 开放为应用目标（登记 provider + 设为当前模型，key 走 env 变量名）
+
+- **开放前的理由是“格式待校准”，而不是“格式不支持”**（`.scratch/2026-09-13-agent-hub/spec.md` 开放问题 3）。本轮在真机上校准出了三条硬约束，直接决定了实现形态
+- **codex 没有“模型清单”这个概念**。pi 是 `providers.<n>.models[]`、opencode 是 `provider.<n>.models{}`，codex 只有**全局单值** `model` / `model_provider`。实测：在 `[model_providers.<n>]` 里写 `models = [...]` 会被 codex 直接拒（`unknown configuration field`，`--strict-config` 同样拦；对照组 `totally_bogus_key` 走同一拦截机制，证明不是写法问题）。因此「应用供应商」对 codex 的语义降级为**登记 provider + 把当前模型指向预设首个模型**——这是 codex 能表达的最强含义，不是实现偷工
+- **codex 只讲 Responses**。实测 `wire_api = "chat"` → `no longer supported` 且**一个请求都不发**（对照组 `responses` 正常 POST `/v1/responses`）。于是 anthropic / gemini 方言在 codex 侧无对应写法，显性拒绝（`reason = "unsupportedDialect"`）而不是硬塞一份必然失败的配置；openai / custom 固定写 `wire_api = "responses"`
+- **凭据是间接的**。codex 配置里只写**环境变量名**（`env_key = "TOKENPLAN_API_KEY"`），真值由用户的 shell 环境提供。本实现**只写名字**，绝不读写用户的 env 文件或 shell 配置；变量名默认由预设名派生（`InkStone` → `INKSTONE_API_KEY`，以数字开头的名如「360 网关」加下划线前缀否则非法），用户可改成供应商文档里的名字
+- **新增 TOML 写入层**（`providers/codex.rs`）。仍是文本级 splice（不整文件反序列化重写），`#` 注释与用户手写内容逐字保留。三条结构性约束写在模块头：① 顶层键只能出现在**首个表头之前**（否则会被吸进某个表，变成静默改坏用户配置——`set_top_level` 天然避开）；② 追加 `[model_providers.x]` 永远合法，改已有表则只能在其 span 内（到下一个表头为止）；③ 替换整行会丢该行的行尾注释（受控字段可接受）。真实 `config.toml` 里那些带引号的表头（`[projects."/path/..."]`、`[hooks.state."/x/y.json:session_start:0:0"]`，路径里含 `/ . :`）已作为测试夹具钉住
+- **破坏性预告**。写 provider 表只是登记，真正生效要改全局单值 `model` / `model_provider`，那会**顶掉用户当前在用的模型**。面板在写入前展示「当前 → 将切换为」（切到同一个模型则不展示，无变化不制造噪音）；纯 codex 应用时隐藏 key 四选一（codex 不吃 key 值，免掉“默认 inline 未填”把本可成功的应用判失败）
+- **验证**：codex TOML splice 与计划守卫 13 条新用例（含「替换不能写成再插一行」——初版正是这么错的，被 `replaces_keys_inside_existing_table_only` 测红）；agent-hub `cargo test` 202 通过、vitest 498 通过（新增 codex 目标选择 / env 名可改 / 切换预告 / 无变化不提示 / 方言拦截 / 逐行分类文案）；根 `eslint` 0 error（agent-hub 0 warning）；`vue-tsc` 与基线一致；`rustfmt` / `clippy` 我的文件干净；`pnpm run build` 含 wasmHash 注入通过
+
+#### Agent Hub 供应商：多 CLI 一次应用、模型列表可查询，以及「0 个模型」不再静默写入
+
+- **实测缺陷：应用回执 `applied: true` 但 pi 里 0 个模型**。InkStone 预设的 `models_json` 是空数组，而 `merge_pi_entry` 只在列表非空时才写 `models` 字段，于是 `~/.pi/agent/models.json` 里多出一个只有 `api` / `baseUrl` 的供应商条目——pi 的 `/model` 只列供应商的模型，结果就是「配置写成功了，模型一个也没有」。而写入路径没有任何检查，回执一律成功
+- **根因不是写入，而是「模型列表从哪来」没有入口**：预设编辑器只有一块手动输入的 textarea，没有查询通道，空列表也能保存。本次给出两条互补路径：① **可选的模型查询 URL**（`models_url` 新列，v3 幂等迁移；可一键由 baseUrl 派生 `{base}/models`，也可直接改成网关实际路径），点「查询模型」后候选以 chip 呈现，点单个或「全部加入」写进**同一个 textarea**（手动条目不被抹掉）；② **手动输入原样保留**，查询失败（无 /models、需要鉴权、网络不通）不影响它。新命令 `agent-hub.fetch-models` 走既有 `host-http` 原语（受 `network:http` 声明门 + 出站授权闸门约束），形状识别覆盖 `data[].id`（OpenAI/Anthropic）、`models[].name`（Gemini，自动去 `models/` 前缀）与根数组；**形状不认识显性报错而非返回空列表**——空列表会被应用流程当成「这个供应商就是 0 个模型」
+- **fail-visible：合并后 0 模型的条目不再写入**。pi / opencode 目标在写入前先算合并后的模型数，为 0 则拒绝并回 `reason = "noModels"`（既有条目自带模型时仍放行，模型列表按 id 合并本就保留用户定义）；claude 不受此约束（env 块只改端点与 token）。应用面板同步提前拦一道并点名受影响目标，预设列表给 0 模型预设打「无模型」警示标
+- **应用目标从单选改为多选**：面板一次可选 claude / pi / opencode 多个 CLI，按选择顺序逐个写；`apply-provider` 收 `targets` 数组（旧的单数 `target` 仍兼容），**单个目标失败不牵连其余目标**——回执改为逐目标 `results[]`（`ok` / `files` / `reason`），面板逐行呈现结局，失败分类走 i18n（`noModels` / 桥接冲突 / 写失败），guest 的错误原文只进日志
+- **顺带修掉一处静默降级**：预设 apiStyle 只到「openai 家族」这一层，此前「重新应用一次」会把目标条目里已有的 `openai-responses`（pi）或 `@ai-sdk/openai`（opencode）改写成 completions / openai-compatible——用户已调通的端点被静默换成另一种，症状极隐蔽（能连上、行为不同）。现在同家族保留既有方言，跨家族（anthropic / gemini）仍照预设切换；同时给新建条目补上 `name` 展示名（此前从 pi / opencode 反向导入再应用会把展示名抹成空）
+- **验证**：插件 `cargo test` 189 通过（新增方言保护、多目标解析、模型形状解析、截断上限等用例）；agent-hub vitest 484 通过（新增多选/逐目标结局/0 模型警示/查询成功失败/手动不被覆盖等用例）；根 `eslint` 0 error（agent-hub 0 warning）；`vue-tsc` 与基线一致（2 处既有 StatsTab 报错）；`rustfmt` / `clippy` 我的文件干净；`pnpm run build` 完整通过（含 wasmHash 注入）
+
+#### 构建产物落点：两份 `.cargo/config.toml` 多写了一层 `..`，把每个共享 target 目录劈成两半
+
+- **全程零报错**：cargo 把 config 里的 `target-dir` 按**该 `.cargo` 目录的父目录**解析，而桌面两份 config 都多写了一个 `..`：`bedcode-desktop/wasm-apps/.cargo/config.toml`（`../../target/wasm-apps`）实际落到**仓库根** `target/wasm-apps`，`bedcode-desktop/packages/.cargo/config.toml`（`../../target/fixtures`）落到仓库根 `target/fixtures`。于是 `pnpm run build` 的产物（从应用根传 `--target-dir`）与 `cargo test` 的产物（读config）落在**两个不同目录**——实测同盘并存 478M 与 7.5G 两份。而注释、`AGENTS.md` §3、`docs/knowledge/build-process.md` 全都写着同一个目录，只有 `cargo metadata` 的 `target_directory` 字段说真话
+- **改回文档写的落点**：改为 `../target/wasm-apps` 与 `../target/fixtures`，解析后即 `bedcode-desktop/target/wasm-apps` / `bedcode-desktop/target/fixtures`——与 `WASM_TARGET_DIR`（`scripts/plugin-wasm-config.mjs`）和 `fixture_target.rs::dir()` 早已在用的路径一致。已用 `cargo metadata` 在 wasm 应用 crate、夹具 crate、server-lib crate 三处各验一次
+- **把坑本身写进文档**：`../../target/wasm-apps` 这串在两处含义不同——命令行 `--target-dir` 按**进程 cwd** 解析，config 里的 `target-dir` 按**`.cargo` 的父目录**解析；两者恰好一致只是因为基准差恰好等于写的层数。`AGENTS.md` §3 与 `build-process.md` 现在明写基准，并要求改完 `target-dir` 必须用 `cargo metadata` 核验
+- **补上一个没进文档的真实落点**：仓库根 `target/server-libs`（6 个 crate：`bedcode-server-base` / `-core` / `-http` / `-websocket` / `-peer-net` + `bedcode-crypto-engine`，由各自 `.cargo/config.toml` 重定向）一直存在却不在任何表里；已补进 `build-process.md`、`AGENTS.md` §3，并加入 `check-target-size.js` 的 `rootTargetDirs`，使 `pnpm run target:size` 能报出它
+- **回收**：删除失去写入方的仓库根 `target/wasm-apps`（7.5G）与 `cross-end-tests/target`（21G），磁盘占用 95% → 78%
+
+#### 移动端：终端链路退避收敛至共享策略 + 链路活性检测（半开）+ 重连可见性
+
+- **终端链路退避收敛到 `ReconnectManager`**（与下一条「设备级事件通道」同一来源）。此前 `terminal_link.rs` 自建一张手写表 `RECONNECT_BASE_MS = 500` / `RECONNECT_MAX_MS = 8000`，两个问题：① `500` **低于**全局下限 `MIN_RECONNECT_DELAY_MS = 1000`（2026-09-29 那次 616 次/98 秒自愈风暴正是「无退避下限」形态）；② 无 jitter，多会话同步重连构成惊群。现由 `link_io` 驱动共享策略（`max_retries = 0` 保持「无限重试」语义——终端链路随 subscribe 生命周期销毁，不做「N 次后交还用户」的裁决）。策略构造抽为 `terminal_reconnect_policy()` 独立函数以便直接断言退避序列——**内联在 `link_io` 里时无法测，「有没有人又手写了一张表」只能靠读代码，而这正是缺陷成因**
+- **节奏变化（收敛的已知代价）**：500→1000→…→8000 封顶 变为 1000→2000→…→30000 封顶。首轮更保守、封顶更长
+- **终端链路此前完全没有心跳**，死连接只能靠 `ws_rx.next()` 返回 Err 或收到 Close 发现。TCP 半开时（对端进程已死、中间 NAT 仍维持连接）`next()` 永久挂起，而 `ack_idle_tick` 分支救不了（它只回发 ack，且 `ws_tx.send` 在半开连接上照样成功）。后果：桌面端崩溃 / 手机切 WiFi→4G 时用户看到「活着但永远不出字」的终端。现复用 `HeartbeatManager`（与事件通道同一套判据）：握手后 `mark_connected()` 记基准、周期性发标准 `WsMsg::Ping`、**任意入站帧**调 `on_activity()` 刷新基准、超时即判死落回既有 `Err(Io)` 重连路径
+- **`on_activity()` 是新增语义**：只认 Pong 会把「终端空闲」误判成「连接已死」——静默 shell 不产生任何 Pong，只有业务输出帧
+- **重连对用户可见**（此前 `reconnecting` 事件只写 `logger.debug`、终端静默冻结，是 ui-ux-pro-max ux 域标记 Severity High 的「No feedback」反模式）：`SessionBuffer` 新增 `reconnecting` / `reconnectInMs`（`phase=connecting` 分不清「首次订阅中」与「断线退避中」，两者用户含义相反，必须单独建模）；Rust 新增 `reconnect_scheduled` 事件携带 `retry_in_ms`（退避封顶 30s，无倒计时用户无法区分「在重连」与「已死」）；`TerminalView` 在终端输出区顶部渲染非阻断横幅（token-bound，复用 `loading-*` 蓝图；`pointer-events: none` 以免连带阻断 xterm 的复制/选择原生交互），倒计时由组件本地 1s 粒度递减（Rust 只在每轮排期时发一次，不适合在 store 跑定时器拖住后台会话）
+- **补上「自动重连已关闭」的提示**：Rust 在 `auto_reconnect` 为假时随 `ws_unexpected_disconnect` 带上 `auto_reconnect_disabled`；此前监督任务只打一行日志就 break，前端只看到通用「连接已断开」，用户分不清「正在自愈」与「不会自愈」，只能干等 3 轮退避 + 认证超时才发现
+- **验证**：移动端 `cargo test` 365 全绿（新增 8 条：退避序列与共享策略逐轮一致、退避不击穿全局下限、封顶生效、无限重试语义不被改掉 ×4；活性检测判活基准 / 任意入站帧刷新基准 / mark_connected 复位 / 未建连不擅判 ×4）；`pnpm run test:run` 全量绿（terminalBuffer +6 条：重连标记置位、倒计时携带、恢复 live 一并撤销、首次订阅不误报、缺 `retry_in_ms` 不编造数字、新建 buffer 不继承；connection-flow +1 条自动重连关闭提示）；`cross-end-tests` 除 mDNS 外全绿（mdns 用例自身注释即声明「无组播环境无法验证」，已 stash 本次改动复现同样失败 → 与本次无关）；根 `eslint` 0 error；`cargo clippy` 警告数与基线一致
+- **变异自检 4 处**：终端退避改回 500ms 手写基线（收敛锁测红）、`on_activity` 不刷新基准（半开锁测红）、移除 `reconnecting` 置位（4 条测红）、移除 `auto_reconnect_disabled` 分支（1 条测红）。**退避的「不击穿下限」「封顶」两条在 500ms 变异下仍为绿**——它们守的是不变量（由 `MIN_RECONNECT_DELAY_MS` 钳制保证），不是配置身份；能抓住配置偏离的是序列一致那条
+
 #### 移动端 WS 断线重连：策略收敛到单一执行者，补上半开检测与关闭码三档
 
 - **退避引擎写了却从未接线**：`ReconnectManager`（605 行，含指数退避 / 10% 抖动 / 同因熔断 / 1s 下限钳制）挂在 `WsClient::reconnect()` 上，而该方法**全仓零调用者**（`rg "\.reconnect\(\)"` 无结果）。真正在跑的是 `ConnectionManager::reconnect` 里 `DEFAULT_RETRY_DELAYS_MS` 硬编码表 `[1s, 2s, 4s]` ——**无抖动、无下限钳制**，且表的第 3 项（4000）在 3 轮循环里从未被索引到。两张表内容相同、来源不同，只靠注释声称「一致」互相背书
