@@ -302,11 +302,40 @@ mod tests {
         }
     }
 
-    /// 事件名 = 前端 events.on 的 key（常量锁）
+    /// 事件名 = 前端 events.on 的 key（常量锁：断言 SDK 常量字面 + 前端订阅文件
+    /// 逐字使用冒号名——曾发生「wasm 发 `device:connected`，前端订阅旧连字符名
+    /// `device-connected`」的漂移（2026-10-06），在线/离线事件前端收不到）
     #[test]
     fn event_names_match_frontend_keys() {
         assert_eq!(EVENT_DEVICE_CONNECTED, "device:connected");
         assert_eq!(EVENT_DEVICE_DISCONNECTED, "device:disconnected");
+        // 前端订阅文件必须逐字使用冒号事件名：宿主 emit_event 原样透传事件名，
+        // 无映射；订阅 key 不一致 = 在线状态永不断链（在线恒 0 / 断开残留）
+        let root = env!("CARGO_MANIFEST_DIR");
+        for rel in [
+            "../src/composables/useDeviceCenter.ts",
+            "../src/notifications.ts",
+        ] {
+            let path = format!("{root}/{rel}");
+            let src = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("read frontend file {path}: {e}"));
+            assert!(
+                src.contains("events.on('device:connected'"),
+                "{rel} 必须订阅 device:connected（冒号）"
+            );
+            assert!(
+                src.contains("events.on('device:disconnected'"),
+                "{rel} 必须订阅 device:disconnected（冒号）"
+            );
+            assert!(
+                !src.contains("events.on('device-connected'"),
+                "{rel} 不得回退到旧连字符事件名 device-connected"
+            );
+            assert!(
+                !src.contains("events.on('device-disconnected'"),
+                "{rel} 不得回退到旧连字符事件名 device-disconnected"
+            );
+        }
     }
 
     /// 接入期记忆：断开事件消费后即删（每连接恰好一次），

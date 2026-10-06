@@ -10,9 +10,16 @@
  * （在线判定 + 排序）、网络信息（端口 + 本地 IPv4 + 用户选择的 host）全在本模块；
  * 语义真源仍在内核（配对码状态机在插件、配对记录在内核 `pairings` 表经原语读写）。
  *
- * 宿主事件（device-connected / device-disconnected / pairing-code-generated /
+ * 宿主事件（device:connected / device:disconnected / pairing-code-generated /
  * qr-token-consumed）经 `context.events.on` 订阅——该通道由宿主 `pluginEvents`
  * 同时桥接 Tauri `listen()`，是本插件感知后端事件推进的唯一路径。
+ *
+ * 事件名契约：设备上下线事件由本插件 wasm 侧自发布（`events.rs` 的
+ * `EVENT_DEVICE_CONNECTED`/`EVENT_DEVICE_DISCONNECTED`，名字带冒号与
+ * `task:status-changed` 等 SDK 常量同风格）；配对/QR/reauth 签发成功也发同名
+ * `device:connected`。**订阅 key 必须与 wasm 侧 `emit_event` 逐字一致**（宿主
+ * 原样透传事件名，无映射）——用旧连字符名 `device-connected` 会导致在线事件
+ * 永远收不到（历史连接不进在线区）且断开事件丢失（在线残留）。
  */
 import { computed, ref, type ComputedRef, type Ref } from 'vue'
 import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
@@ -98,7 +105,7 @@ export function useDeviceCenter(context: PluginContext) {
   // ==================== 设备列表 ====================
   const devices = ref<PairedDeviceInfo[]>([])
   const isLoading = ref(false)
-  /** 实时在线设备指纹（来自 device-connected / device-disconnected 事件） */
+  /** 实时在线设备指纹（来自 device:connected / device:disconnected 事件） */
   const onlineFingerprints = ref<Set<string>>(new Set())
 
   // ==================== 网络信息 ====================
@@ -348,14 +355,14 @@ export function useDeviceCenter(context: PluginContext) {
 
   /**
    * 订阅后端事件（一次性注册，deactivate 时统一释放）：
-   * - device-connected → 记在线指纹 + 刷新配对列表 + 清掉已使用的配对码
-   * - device-disconnected → 摘掉在线指纹
+   * - device:connected → 记在线指纹 + 刷新配对列表 + 清掉已使用的配对码
+   * - device:disconnected → 摘掉在线指纹
    * - pairing-code-generated → 移动端请求配对时后端生成的码，直接展示 + 提示
    * - qr-token-consumed → 自动重新生成二维码（连接成功提示由宿主全局通知负责）
    */
   function subscribeHostEvents(onPairingRequest?: (code: string) => void): void {
     disposables.push(
-      context.events.on('device-connected', (payload: DeviceEventPayload) => {
+      context.events.on('device:connected', (payload: DeviceEventPayload) => {
         const fp = payload?.fingerprint
         if (fp) {
           onlineFingerprints.value = new Set([...onlineFingerprints.value, fp])
@@ -365,7 +372,7 @@ export function useDeviceCenter(context: PluginContext) {
           void clearCode()
         }
       }),
-      context.events.on('device-disconnected', (payload: DeviceEventPayload) => {
+      context.events.on('device:disconnected', (payload: DeviceEventPayload) => {
         const fp = payload?.fingerprint
         if (!fp) return
         const next = new Set(onlineFingerprints.value)

@@ -18,8 +18,8 @@
  * - C5b 已有活跃 QR：进入页面恢复展示（不重新生成 token）
  * - C5c Tab 切走再切回：canvas 元素重建后按现有载荷重绘（不重绘 → 空白，2026-09-26 修复）
  * - C5d 路由 KeepAlive 切回（重新激活）时重绘二维码
- * - C6 在线判定：`device-connected` 事件把设备移入在线区
- * - C7 离线判定：`device-disconnected` 事件把设备移回离线区
+ * - C6 在线判定：`device:connected` 事件把设备移入在线区
+ * - C7 离线判定：`device:disconnected` 事件把设备移回离线区
  * - C8 设备接入即清除已使用配对码（后端事件驱动状态流转）
  * - C9 撤销设备：确认弹窗 → `session.devices.revoke` → 重新取列表 → 成功提示
  * - C10 撤销失败：提示错误且不重复取列表（不留下「已删除」的假象）
@@ -323,13 +323,13 @@ describe('DeviceCenterView（设备与配对页面）', () => {
     const offlineSection = () => wrapper.findAll('section')[1].text()
     expect(offlineSection()).toContain('Pixel 9')
 
-    await fireEvent('device-connected', { fingerprint: 'fp-pixel-9' })
+    await fireEvent('device:connected', { fingerprint: 'fp-pixel-9' })
     const onlineSection = () => wrapper.findAll('section')[0].text()
     expect(onlineSection()).toContain('Pixel 9')
     expect(offlineSection()).not.toContain('Pixel 9')
     expect(onlineSection()).toContain('pairing.device.connected')
 
-    await fireEvent('device-disconnected', { fingerprint: 'fp-pixel-9' })
+    await fireEvent('device:disconnected', { fingerprint: 'fp-pixel-9' })
     expect(offlineSection()).toContain('Pixel 9')
     expect(onlineSection()).not.toContain('Pixel 9')
   })
@@ -341,7 +341,7 @@ describe('DeviceCenterView（设备与配对页面）', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('123456')
 
-    await fireEvent('device-connected', { fingerprint: 'fp-new' })
+    await fireEvent('device:connected', { fingerprint: 'fp-new' })
 
     expect(commandsTo('session.pairing.clear')).toHaveLength(1)
     expect(wrapper.text()).not.toContain('123456')

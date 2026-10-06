@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+#### Desktop: device online state never closed the loop — device up/down event names drifted, so the frontend missed the WS-driven events (no ABI / WIT / protocol change)
+
+- **Symptom**: after a mobile device reconnects to the desktop WS through a saved connection (no pairing-code flow), the device list shows 0 online; after the mobile device disconnects, the desktop still shows it online
+- **Root cause (event-name drift left behind by ticket 07)**: the WS-driven path (`devices_events.rs`, driven by `ws:client-connect/disconnect`) emits the SDK event names `device:connected` / `device:disconnected` (colon style, same as `task:status-changed`); the host `emit_event` passes event names through verbatim with no mapping. The frontend still subscribed to the pre-ticket-07 hyphenated names `device-connected` / `device-disconnected`, so **online/offline events never reached it**. The pairing/QR/reauth flow (`auth_http`) emitted the hyphenated name and kept the "authentication success = online" pseudo-online working, but the disconnect event (colon) was missed — online state lingered
+- **Fix**: unify on the SDK colon constants — frontend `useDeviceCenter.ts` / `notifications.ts` subscribe to `device:connected` / `device:disconnected`; `auth_http`'s `emit_device_connected` now uses `EVENT_DEVICE_CONNECTED` with a canonical camelCase payload (same shape as `devices_events::event_payload`; frontend dedupes by fingerprint idempotently); `deviceOnlineKey` / display-name fallback accept both camelCase and snake_case payloads. The Rust structure lock (`event_names_match_frontend_keys`) now pins the frontend subscription files to the colon names verbatim so the drift cannot return
+- **Verification**: terminal-session plugin vitest **44 + 73 related cases green** (new camelCase-payload and disconnect-loop cases; mutation checks: reverting the camelCase fallback or the colon subscription turns red) + Rust **449 passed**; desktop full vitest **1618/1619** (the only failure, `terminalPreview.test.ts`, is a pre-existing xterm + real-clock flake — proven with a stash comparison that HEAD fails identically). WASM artifact rebuilt with a fresh wasmHash. Not run: `cross-end-tests` (no protocol / ABI / WIT change; the event name is a desktop server-side internal subscription surface)
+
 #### Desktop: the session-log detail pane collapsed to a single row — the height chain is unbroken across the page-transition container
 
 - **Symptom (real machine, 1560×1080)**: opening any session left 「任务记录」 at roughly 28px — one row tall with a scrollbar stub — while ~740px below sat empty

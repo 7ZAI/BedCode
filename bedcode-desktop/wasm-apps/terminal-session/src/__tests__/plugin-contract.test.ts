@@ -430,10 +430,12 @@ describe('C3 前端入口契约', () => {
     expect(rec.execute).toHaveBeenCalledWith('session.task.set-platform', { platform: 'linux' })
     // 入口自身订阅状态/模式两条留痕，常驻挂载的弹窗额外订阅队列与预设变更，
     // 设备上下线通知（宿主 useGlobalNotifications 承接）也在激活期常驻订阅——
-    // 故断言的是「激活后可观测到的话题并集」，不是入口单独那两条
+    // 故断言的是「激活后可观测到的话题并集」，不是入口单独那两条。
+    // 设备事件名 = SDK 冒号风格（`device:connected`，2026-10-06 与 wasm 发面
+    // 统一；旧连字符名 `device-connected` 已退役）
     expect([...new Set(rec.events)].sort()).toEqual([
-      'device-connected',
-      'device-disconnected',
+      'device:connected',
+      'device:disconnected',
       'session:mode-changed',
       'task:preset-changed',
       'task:queue-changed',

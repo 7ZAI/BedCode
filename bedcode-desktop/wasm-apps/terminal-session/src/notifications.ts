@@ -2,14 +2,15 @@
  * 设备连接通知 — 宿主全局通知的插件侧承接
  *
  * 背景：宿主 `useGlobalNotifications`（已退役）曾替所有业务域弹 toast。设备上下线
- * 是设备域事实，归属本插件，故在插件激活期常驻订阅宿主 `device-connected` /
- * `device-disconnected`（`server/ws/conn.rs` emit 的 snake_case 载荷），用共享
- * `vue-sonner` 实例 + 插件 i18n 展示——宿主不再替本域说话。
+ * 是设备域事实，归属本插件，故在插件激活期常驻订阅本插件 wasm 侧自发布的
+ * `device:connected` / `device:disconnected`（事件名 = SDK `EVENT_DEVICE_CONNECTED` /
+ * `EVENT_DEVICE_DISCONNECTED`，冒号风格；wasm 侧 `emit_event` 经宿主原样透传，
+ * 订阅 key 必须逐字一致——用旧连字符名 `device-connected` 会导致事件收不到）。
  *
- * 去重语义（沿用宿主原实现，防回归）：后端在 4 处发 `device-connected`
- * （配对码 / QR / reauth + 每条已认证事件 WS），「上线」只应提示一次 → 按稳定
+ * 去重语义（沿用宿主原实现，防回归）：wasm 侧在 4 处发 `device:connected`
+ * （配对码 / QR / reauth 签发成功 + WS 连接驱动），「上线」只应提示一次 → 按稳定
  * 设备身份（指纹，兜底 device_id / addr）键控，仅在 offline→online 跃迁时提示；
- * `device-disconnected` 反向守卫：不在集合内的断开视为未知状态不提示。
+ * `device:disconnected` 反向守卫：不在集合内的断开视为未知状态不提示。
  *
  * 启动期基线：应用启动时设备可能已在线（长驻事件 WS 存活），故激活时先经本插件
  * 命令面 `session.devices.connect-list`（连接注册表派生视图，含 fingerprint）
@@ -23,12 +24,21 @@
 import type { Disposable, PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 import { toast } from 'vue-sonner'
 
-/** 宿主 `device-*` 事件载荷（仅取身份字段；其余字段本模块不消费） */
+/** 设备 `device:*` 事件载荷（两个发布面同形但字段风格不同，本模块兼容两种）：
+ * - wasm WS 连接/断开驱动：camelCase `{ addr, connected, deviceId?, deviceName?, fingerprint? }`
+ * - auth_http 配对/QR/reauth 签发成功：自 2026-10-06 起与 WS 驱动同形（camelCase）；
+ *   历史版本为 snake_case `{ addr, device_id, device_name, fingerprint, event }`
+ * 仅取身份字段；其余字段本模块不消费。
+ */
 export interface DeviceEventPayload {
   addr?: string
   device_id?: string
   fingerprint?: string
   device_name?: string
+  /** camelCase 发布面（WS 驱动 / 新 auth_http）：载荷上同时携带旧 snake_case 字段以兼容 */
+  deviceId?: string
+  deviceName?: string
+  connected?: boolean
 }
 
 /** 事件方向：载荷本身不含方向，由订阅通道决定 */
@@ -60,7 +70,14 @@ export interface DeviceOnlineTracker {
  */
 export function deviceOnlineKey(payload: DeviceEventPayload | null | undefined): string {
   if (!payload) return ''
-  return payload.fingerprint || payload.device_id || payload.addr || ''
+  // 兼容两种载荷：snake_case（旧 auth_http）与 camelCase（WS 驱动 / 新 auth_http）
+  return (
+    payload.fingerprint ||
+    payload.device_id ||
+    payload.deviceId ||
+    payload.addr ||
+    ''
+  )
 }
 
 export function createDeviceOnlineTracker(): DeviceOnlineTracker {
@@ -94,9 +111,10 @@ export function createDeviceOnlineTracker(): DeviceOnlineTracker {
   }
 }
 
-/** 展示名：设备名优先，缺失回退「移动设备」（与宿主原口径一致） */
-function deviceDisplayName(payload: DeviceEventPayload, fallback: string): string {
-  return payload.device_name || fallback
+/** 展示名：设备名优先（兼容 camelCase / snake_case 两种载荷），
+ * 缺失时才求值 fallback（惰性：避免每次事件都发 i18n 调用） */
+function deviceDisplayName(payload: DeviceEventPayload, fallback: () => string): string {
+  return payload.device_name || payload.deviceName || fallback()
 }
 
 /**
@@ -122,20 +140,20 @@ export function startDeviceNotifications(context: PluginContext): Disposable {
     }
   })()
 
-  const connected = context.events.on('device-connected', (payload: DeviceEventPayload) => {
+  const connected = context.events.on('device:connected', (payload: DeviceEventPayload) => {
     if (tracker.observe(payload, 'connected') !== 'connected') return
     toast.info(
       context.i18n.t('session.notification.deviceConnected', {
-        name: deviceDisplayName(payload ?? {}, mobileDevice()),
+        name: deviceDisplayName(payload ?? {}, mobileDevice),
       }),
     )
   })
 
-  const disconnected = context.events.on('device-disconnected', (payload: DeviceEventPayload) => {
+  const disconnected = context.events.on('device:disconnected', (payload: DeviceEventPayload) => {
     if (tracker.observe(payload, 'disconnected') !== 'disconnected') return
     toast.warning(
       context.i18n.t('session.notification.deviceDisconnected', {
-        name: deviceDisplayName(payload ?? {}, mobileDevice()),
+        name: deviceDisplayName(payload ?? {}, mobileDevice),
       }),
     )
   })

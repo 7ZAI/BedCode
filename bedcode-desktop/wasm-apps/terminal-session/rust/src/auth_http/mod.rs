@@ -28,6 +28,7 @@
 pub mod biometric;
 pub mod jwt;
 
+#[cfg(target_arch = "wasm32")]
 use bedcode_plugin_api::http_response;
 use bedcode_plugin_api::wasm_host::WasmHost;
 
@@ -500,9 +501,13 @@ fn handle_biometric_bind(host: &WasmHost, body: &serde_json::Value) -> serde_jso
 
 // ==================== 宿主原语包装（wasm 运行时） ====================
 
+#[cfg(target_arch = "wasm32")]
+use bedcode_plugin_api::constants::EVENT_DEVICE_CONNECTED;
+#[cfg(target_arch = "wasm32")]
 use bedcode_plugin_api::host::{HostAuth, HostEvents, HostLog};
 
-/// host-events.emit_event：Tauri 前端事件（事件名与载荷形状 = 宿主旧 emit 逐字节一致）
+/// host-events.emit_event：Tauri 前端事件（事件名与载荷形状与 wasm 设备事件域
+/// `devices_events::event_payload` 同形：camelCase + 冒号事件名）
 #[cfg(target_arch = "wasm32")]
 fn host_events_emit(
     host: &WasmHost,
@@ -513,6 +518,14 @@ fn host_events_emit(
     Ok(())
 }
 
+/// 设备上线事件（配对/QR/reauth 签发 token 成功即时上报，不等 WS 接通——
+/// 与 WS 连接驱动的事件发布点声明同名且同形，前端按指纹去重幂等）
+///
+/// **事件名契约**：必须用 SDK `EVENT_DEVICE_CONNECTED`（`device:connected`），与
+/// `devices_events.rs` 的 WS 驱动路径一致——宿主 `emit_event` 原样透传事件名，
+/// 前端订阅 key 与之逐字匹配；曾用旧连字符名 `device-connected`（票 07 之前的
+/// 宿主旧名）导致两个发布面两个名字，前端只能收到本路径的伪上线事件、收不到
+/// WS 断开事件，在线状态无法闭环。
 #[cfg(target_arch = "wasm32")]
 fn emit_device_connected(
     host: &WasmHost,
@@ -521,17 +534,17 @@ fn emit_device_connected(
     device_name: Option<&str>,
     fingerprint: Option<&str>,
 ) -> Result<(), String> {
-    host_events_emit(
-        host,
-        "device-connected",
-        serde_json::json!({
-            "addr": addr,
-            "device_id": device_id,
-            "device_name": device_name,
-            "fingerprint": fingerprint,
-            "event": "authenticated",
-        }),
-    )
+    let mut payload = serde_json::json!({ "addr": addr, "connected": true });
+    if !device_id.is_empty() {
+        payload["deviceId"] = serde_json::json!(device_id);
+    }
+    if let Some(name) = device_name {
+        payload["deviceName"] = serde_json::json!(name);
+    }
+    if let Some(fp) = fingerprint {
+        payload["fingerprint"] = serde_json::json!(fp);
+    }
+    host_events_emit(host, EVENT_DEVICE_CONNECTED, payload)
 }
 
 #[cfg(target_arch = "wasm32")]

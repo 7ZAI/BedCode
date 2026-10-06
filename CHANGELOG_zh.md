@@ -9,6 +9,13 @@
 
 ## [未发布]
 
+#### 桌面端：设备在线状态闭环断裂 —— 设备上下线事件名漂移，前端收不到 WS 驱动事件（无 ABI / WIT / 协议变动）
+
+- **症状**：移动端经历史连接（免配对码流程）直连桌面端 WS 后，设备列表在线数恒为 0；移动端主动断开后桌面仍显示设备在线
+- **根因（事件名漂移，票 07 遗留下的断链）**：设备在线事实的 WS 驱动路径（`devices_events.rs`，`ws:client-connect/disconnect` 驱动）用 SDK 事件名 `device:connected` / `device:disconnected`（冒号，与 `task:status-changed` 同风格），宿主 `emit_event` 原样透传事件名、无映射；而前端订阅仍用票 07 之前的旧连字符名 `device-connected` / `device-disconnected` → **在线/离线事件前端永远收不到**。配对/QR/reauth（`auth_http`）另发连字符名兜住了「认证成功即显示在线」的伪上线，但断开事件（冒号）收不到 → 在线残留
+- **修法**：事件名统一到 SDK 冒号常量——前端 `useDeviceCenter.ts` / `notifications.ts` 订阅改 `device:connected` / `device:disconnected`；`auth_http` 的 `emit_device_connected` 改用 `EVENT_DEVICE_CONNECTED` 且载荷规范成 camelCase（与 `devices_events::event_payload` 同形，前端按指纹去重幂等）；`deviceOnlineKey` / 展示名兼容 camelCase 与 snake_case 两种发布面；Rust 侧结构锁强化（`event_names_match_frontend_keys` 现在逐字锁前端订阅文件的冒号名，防再漂移）
+- **验收**：terminal-session 插件 vitest **44 + 73 相关用例全绿**（新增 camelCase 载荷 / 断开闭环用例，变异杀死：删 camelCase 兼容分支 / 改回连字符订阅均转红）+ Rust **449 passed**；桌面端全量 vitest **1618/1619**（唯一失败 `terminalPreview.test.ts` 为既有 xterm+真实时钟 flake，已用 stash 对照证明 HEAD 同样失败，与本次无关）；wasm 产物重编注入新 wasmHash。**未跑**：`cross-end-tests`（未改跨端协议 / ABI / WIT，事件名是桌面端服务侧内部订阅面）
+
 #### 桌面端：会话日志二级详情的「任务记录」塔成一行 —— 高度链绕过分区过渡容器后接通
 
 - **症状（实机 1560×1080）**：打开任一会话，「任务记录」只剩约 28px——一行高、带个滚动条角，下面约 740px 全空

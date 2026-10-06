@@ -90,6 +90,15 @@ describe('deviceOnlineKey', () => {
     expect(deviceOnlineKey({ addr: '1.2.3.4' })).toBe('1.2.3.4')
   })
 
+  it('C1 camelCase 载荷（WS 驱动 / 新 auth_http）同样按指纹优先回退 deviceId / addr', () => {
+    expect(
+      deviceOnlineKey({ fingerprint: 'fp-1', deviceId: 'd-1', addr: '1.2.3.4' }),
+    ).toBe('fp-1')
+    expect(deviceOnlineKey({ deviceId: 'd-1', addr: '1.2.3.4' })).toBe('d-1')
+    // 载荷交叉（snake_case 与 camelCase 字段混存）时任意一侧有键即可
+    expect(deviceOnlineKey({ device_id: 'd-1', deviceName: 'Phone' })).toBe('d-1')
+  })
+
   it('C1 三者皆缺（含 null / undefined）→ 空键', () => {
     expect(deviceOnlineKey({})).toBe('')
     expect(deviceOnlineKey(null)).toBe('')
@@ -158,7 +167,7 @@ describe('startDeviceNotifications', () => {
     const { context, handlers, t } = makeContext()
     const disposable = startDeviceNotifications(context)
 
-    handlers.get('device-connected')!({ fingerprint: 'fp-1', device_name: 'Phone A' })
+    handlers.get('device:connected')!({ fingerprint: 'fp-1', device_name: 'Phone A' })
 
     expect(toastInfo).toHaveBeenCalledTimes(1)
     expect(t).toHaveBeenCalledWith('session.notification.deviceConnected', { name: 'Phone A' })
@@ -170,10 +179,35 @@ describe('startDeviceNotifications', () => {
     const { context, handlers, t } = makeContext()
     const disposable = startDeviceNotifications(context)
 
-    handlers.get('device-connected')!({ fingerprint: 'fp-1' })
+    handlers.get('device:connected')!({ fingerprint: 'fp-1' })
 
     expect(t).toHaveBeenCalledWith('session.notification.mobileDevice')
     expect(t).toHaveBeenCalledWith('session.notification.deviceConnected', { name: '移动设备' })
+    disposable.dispose()
+  })
+
+  it('C9a camelCase 载荷（deviceName）→ 展示 camelCase 设备名而非回退「移动设备」', async () => {
+    const { context, handlers, t } = makeContext()
+    const disposable = startDeviceNotifications(context)
+
+    // WS 连接驱动路径的载荷形状（devices_events::event_payload）
+    handlers.get('device:connected')!({ addr: '10.0.0.8:53510', connected: true, deviceName: 'Pixel 9', fingerprint: 'fp-pixel' })
+
+    expect(t).not.toHaveBeenCalledWith('session.notification.mobileDevice')
+    expect(t).toHaveBeenCalledWith('session.notification.deviceConnected', { name: 'Pixel 9' })
+    expect(String(toastInfo.mock.calls[0][0])).toContain('Pixel 9')
+    disposable.dispose()
+  })
+
+  it('C9b 断开事件（camelCase 载荷）→ 提示且移出在线集合', async () => {
+    const { context, handlers } = makeContext()
+    const disposable = startDeviceNotifications(context)
+
+    handlers.get('device:connected')!({ fingerprint: 'fp-pixel', deviceName: 'Pixel 9' })
+    handlers.get('device:disconnected')!({ connected: false, deviceId: 'dev-9', deviceName: 'Pixel 9', fingerprint: 'fp-pixel' })
+
+    expect(toastWarning).toHaveBeenCalledTimes(1)
+    expect(String(toastWarning.mock.calls[0][0])).toContain('Pixel 9')
     disposable.dispose()
   })
 
@@ -181,8 +215,8 @@ describe('startDeviceNotifications', () => {
     const { context, handlers } = makeContext()
     const disposable = startDeviceNotifications(context)
 
-    handlers.get('device-connected')!({ fingerprint: 'fp-1' })
-    handlers.get('device-connected')!({ fingerprint: 'fp-1' })
+    handlers.get('device:connected')!({ fingerprint: 'fp-1' })
+    handlers.get('device:connected')!({ fingerprint: 'fp-1' })
 
     expect(toastInfo).toHaveBeenCalledTimes(1)
     disposable.dispose()
@@ -192,11 +226,11 @@ describe('startDeviceNotifications', () => {
     const { context, handlers } = makeContext()
     const disposable = startDeviceNotifications(context)
 
-    handlers.get('device-connected')!({ fingerprint: 'fp-1', device_name: 'Phone A' })
-    handlers.get('device-disconnected')!({ fingerprint: 'fp-unknown' })
+    handlers.get('device:connected')!({ fingerprint: 'fp-1', device_name: 'Phone A' })
+    handlers.get('device:disconnected')!({ fingerprint: 'fp-unknown' })
     expect(toastWarning).not.toHaveBeenCalled()
 
-    handlers.get('device-disconnected')!({ fingerprint: 'fp-1', device_name: 'Phone A' })
+    handlers.get('device:disconnected')!({ fingerprint: 'fp-1', device_name: 'Phone A' })
     expect(toastWarning).toHaveBeenCalledTimes(1)
     disposable.dispose()
   })
@@ -209,11 +243,11 @@ describe('startDeviceNotifications', () => {
     await vi.waitFor(() => expect(execute).toHaveBeenCalledWith('session.devices.connect-list', {}))
 
     // 基线内设备重复上线静默
-    handlers.get('device-connected')!({ fingerprint: 'fp-seeded' })
+    handlers.get('device:connected')!({ fingerprint: 'fp-seeded' })
     expect(toastInfo).not.toHaveBeenCalled()
 
     // 基线内设备断开 → 提示（若未种子化会被误吞）
-    handlers.get('device-disconnected')!({ fingerprint: 'fp-seeded', device_name: 'Tablet' })
+    handlers.get('device:disconnected')!({ fingerprint: 'fp-seeded', device_name: 'Tablet' })
     expect(toastWarning).toHaveBeenCalledTimes(1)
     disposable.dispose()
   })
@@ -226,7 +260,7 @@ describe('startDeviceNotifications', () => {
     await vi.waitFor(() => expect(execute).toHaveBeenCalled())
     await vi.waitFor(() => expect(warnSpy).toHaveBeenCalled())
 
-    handlers.get('device-connected')!({ fingerprint: 'fp-1' })
+    handlers.get('device:connected')!({ fingerprint: 'fp-1' })
     expect(toastInfo).toHaveBeenCalledTimes(1)
 
     warnSpy.mockRestore()
@@ -239,7 +273,7 @@ describe('startDeviceNotifications', () => {
 
     disposable.dispose()
 
-    expect(disposedEvents.sort()).toEqual(['device-connected', 'device-disconnected'])
+    expect(disposedEvents.sort()).toEqual(['device:connected', 'device:disconnected'])
     expect(handlers.size).toBe(0)
   })
 })
