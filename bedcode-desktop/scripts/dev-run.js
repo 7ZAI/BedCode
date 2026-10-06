@@ -146,6 +146,17 @@ const PLUGIN_WATCH_CMDS = [
     // 票 03 起桌面插件统一 wasm32-wasip3（cdylib 直出 Component，免 componentize）
     wasmFile: 'rust/target/wasm32-wasip3/release/bedcode_plugin_file_transfer.wasm',
   },
+  {
+    // Agent Hub：与另三个同为桌面 wasm 应用。缺席本表时 `tauri dev` 不给它起
+    // vite watch，改前端只能手工 `build:frontend`，产物长期停在旧构建
+    // （2026-10-06 实测：dist 里残留旧 CSS，热力图渲染成整块色块）。补上后
+    // 前端改动 → vite 重建 → 复制进 resources → 宿主 emit plugin:dev-reload，
+    // 与另三个应用同一条闭环；WASM 仍走 ensurePluginWasm() 的缺失/陈旧补建。
+    dir: 'wasm-apps/agent-hub',
+    id: 'com.bedcode.agent-hub',
+    args: ['scripts/build.js', '--watch'],
+    wasmFile: 'rust/target/wasm32-wasip3/release/bedcode_plugin_agent_hub.wasm',
+  },
 ]
 
 /** 宿主插件产物目录（各插件子目录名 = 插件 id，来自 plugin.json，与构建脚本复制目标一致） */

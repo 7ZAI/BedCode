@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { generateManifest } from '../bin/manifest-gen.js'
@@ -324,6 +324,85 @@ describe('合并策略', () => {
     expect(manifest.contributes.views).toEqual([
       { id: 'test.old', type: 'sidebar', title: 'Old', component: 'OldView' },
     ])
+  })
+
+  it('component 接受标识符（符号名就是清单值），order 不接受（常量值静态不可求）', () => {
+    // 反例锁：`order: SOME_ORDER` 曾经被当字符串写回（"order": "SOME_ORDER"），
+    // 宿主读成非数字 → 侧栏排序静默失效，而清单校验无类型检查不报错，
+    // 于是每次构建静默改写受版本跟踪的 plugin.json。判据：只有 component 走标识符。
+    const withViews = JSON.parse(BASE_MANIFEST)
+    withViews.contributes = {
+      views: [{ id: 'test.sidebar', type: 'sidebar', title: 'Old', order: 215, component: 'OldView' }],
+    }
+    scaffoldPlugin({
+      'plugin.json': JSON.stringify(withViews, null, 2),
+      'src/index.ts': `const SOME_ORDER = 215
+export async function activate(context: PluginContext): Promise<void> {
+  context.ui.registerSidebarPanel({ id: 'test.sidebar', title: 'Old', order: SOME_ORDER, component: MyView })
+}`,
+    })
+    generateManifest(cwd)
+    const manifest = JSON.parse(require('node:fs').readFileSync(join(cwd, 'plugin.json'), 'utf-8'))
+    // component：标识符 → 符号名字符串（正例）
+    expect(manifest.contributes.views[0].component).toBe('MyView')
+    // order：保留清单既有数值，绝不被写成标识符字符串（反例）
+    expect(manifest.contributes.views[0].order).toBe(215)
+    expect(typeof manifest.contributes.views[0].order).toBe('number')
+  })
+
+  it('order 走标识符时构建日志点名（fail-visible，不静默保留）', () => {
+    scaffoldPlugin({
+      'plugin.json': JSON.stringify(
+        {
+          ...JSON.parse(BASE_MANIFEST),
+          contributes: { views: [{ id: 'test.sidebar', type: 'sidebar', order: 215 }] },
+        },
+        null,
+        2,
+      ),
+      'src/index.ts': `export async function activate(context: PluginContext): Promise<void> {
+  context.ui.registerSidebarPanel({ id: 'test.sidebar', order: SOME_ORDER, component: MyView })
+}`,
+    })
+    const warned: string[] = []
+    const orig = console.warn
+    console.warn = (...a: unknown[]) => warned.push(a.join(' '))
+    try {
+      generateManifest(cwd)
+    } finally {
+      console.warn = orig
+    }
+    expect(warned.some((w) => w.includes('order') && w.includes('SOME_ORDER'))).toBe(true)
+  })
+
+  it('order 走标识符时连跑两次构建第二次无改动（幂等，不反复改写清单）', () => {
+    const withViews = JSON.parse(BASE_MANIFEST)
+    withViews.contributes = {
+      views: [{ id: 'test.sidebar', type: 'sidebar', title: 'Old', order: 215, component: 'OldView' }],
+    }
+    scaffoldPlugin({
+      'plugin.json': JSON.stringify(withViews, null, 2),
+      'src/index.ts': `export async function activate(context: PluginContext): Promise<void> {
+  context.ui.registerSidebarPanel({ id: 'test.sidebar', title: 'Old', order: SOME_ORDER, component: MyView })
+}`,
+    })
+    const firstChanged = generateManifest(cwd).changed
+    const afterFirst = readFileSync(join(cwd, 'plugin.json'), 'utf-8')
+    const orig = console.warn
+    console.warn = () => {}
+    let secondChanged: boolean
+    try {
+      secondChanged = generateManifest(cwd).changed
+    } finally {
+      console.warn = orig
+    }
+    expect(readFileSync(join(cwd, 'plugin.json'), 'utf-8')).toBe(afterFirst)
+    expect(firstChanged).toBe(true) // 首次确有写入（component 改名）
+    expect(secondChanged).toBe(false) // 第二次必须无改动
+    // 幂等不等于「稳定地写错」：两次构建后 order 都必须仍是清单里的数值，
+    // 否则旧实现（把标识符当字符串写回）也能通过本用例（第二次同样「无改动」）
+    const afterSecond = JSON.parse(readFileSync(join(cwd, 'plugin.json'), 'utf-8'))
+    expect(afterSecond.contributes.views[0].order).toBe(215)
   })
 
   it('check 模式不写入', () => {

@@ -241,6 +241,18 @@ function indexById(entries) {
   return map
 }
 
+/**
+ * 允许「源码标识符直接当清单值」的字段：**只有 component**。
+ *
+ * 扫描器把裸标识符（`component: ChatView`）求值成 `{__ident}`——这类字段里
+ * 「符号名本身就是清单要的值」，写回字符串正确。但其余字段出现裸标识符
+ * （`order: SOME_CONST`）意味着源码引用了一个常量，**静态求不出数值**：曾把它
+ * 当字符串写回（`"order": "AGENT_HUB_SIDEBAR_ORDER"`），宿主读成非数字 → 侧栏
+ * 排序静默失效，且清单校验无类型检查不报错，于是每次构建静默改写受版本跟踪的
+ * plugin.json。这类字段与 null 同口径：跳过（保留清单既有值）+ 日志点名。
+ */
+const IDENT_AS_STRING_KEYS = new Set(['component'])
+
 /** 合并扫描条目与旧条目：扫描值优先，null（动态表达式）回退旧值，再回退默认值 */
 function mergeEntry(scanned, old, defaults = {}) {
   const merged = { ...defaults }
@@ -248,6 +260,12 @@ function mergeEntry(scanned, old, defaults = {}) {
   for (const [key, value] of Object.entries(scanned)) {
     if (value === null || value === undefined) continue
     if (value && typeof value === 'object' && value.__ident) {
+      if (!IDENT_AS_STRING_KEYS.has(key)) {
+        console.warn(
+          `[manifest-gen] ${key} 引用标识符 ${value.__ident}（常量值静态不可求）：保留 plugin.json 既有值`,
+        )
+        continue
+      }
       merged[key] = value.__ident
       continue
     }

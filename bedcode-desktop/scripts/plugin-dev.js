@@ -21,6 +21,10 @@ const IS_WIN = platform() === 'win32'
 
 // 插件配置 — 指向合并后的插件工程目录（wasm 应用源码目录 wasm-apps/）
 const PLUGINS = {
+  // 与 plugin-build.js 同表同序（docs/commands.md §5.2 记的 agent-hub 独立命令）
+  'com.bedcode.agent-hub': {
+    pluginDir: 'wasm-apps/agent-hub',
+  },
   'com.bedcode.ai-chatbox': {
     pluginDir: 'wasm-apps/ai-chatbox',
   },

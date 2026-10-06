@@ -160,12 +160,18 @@ adb kill-server && adb start-server   # 设备 offline 时
 
 ```bash
 # 端内全量构建（复制产物进 src-tauri/resources/plugins/<end>/）
-cd bedcode-desktop && pnpm run plugins:build       # ai-chatbox / file-transfer / terminal-session
-cd bedcode-desktop && node scripts/plugin-build.js --plugin com.bedcode.agent-hub
+# 桌面 4 个 wasm 应用一次构建完（--all 遍历 scripts/plugin-build.js 的 PLUGINS 注册表，
+# 名单单一真源，不在别处再抄一份；CI/release/test.yml 的 plugins:build 走的就是这条）
+cd bedcode-desktop && pnpm run plugins:build       # agent-hub / ai-chatbox / file-transfer / terminal-session
+cd bedcode-desktop && node scripts/plugin-build.js --plugin com.bedcode.agent-hub   # 单个应用（调试用）
 cd bedcode-desktop && pnpm run plugins:dev         # watch 开发（默认 terminal-session）
 cd bedcode-mobile  && pnpm run plugins:build
 cd bedcode-mobile  && pnpm run build:all           # 插件 + 主应用
 ```
+
+> 桌面 `pnpm tauri:dev` 会为**全部 4 个** wasm 应用起前端 watch（`scripts/dev-run.js`
+> 的 `PLUGIN_WATCH_CMDS`），改前端自动重建并热重载；WASM 改动仍走
+> `node scripts/build.js`（dev 会话启动时 `ensurePluginWasm()` 对缺失/陈旧产物自动补建）。
 
 ### 5.3 单个应用内部（`cd wasm-apps/<app-id>` 或 `cd plugins/<plugin-id>`）
 

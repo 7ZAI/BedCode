@@ -5,8 +5,9 @@
  *
  * 生产构建脚本，委托给各插件的构建系统
  *
- * 用法：node scripts/plugin-build.js [--plugin <plugin-id>]
+ * 用法：node scripts/plugin-build.js [--plugin <plugin-id> | --all]
  * 默认构建 com.bedcode.terminal-session（终端会话中心）插件
+ * --all 遍历下方 PLUGINS 注册表（名单单一真源，CI/release 的 `pnpm run plugins:build` 走这条）
  *
  * 桌面端语义（2026-09-25）：wasm 插件对外称 wasm 应用，源码目录 wasm-apps/
  * （内部代码实现与插件 ID 契约不变）。
@@ -26,6 +27,15 @@ const IS_WIN = platform() === 'win32'
 
 // 插件配置 — 指向合并后的插件工程目录（wasm 应用源码目录 wasm-apps/）
 const PLUGINS = {
+  // 名单单一真源：`--all`（= pnpm `plugins:build`，CI/release/test.yml 走这条）与
+  // `--plugin <id>`（docs/commands.md §5.2 的单应用调试命令）都从这里取。
+  // 四个 wasm 应用必须齐全：agent-hub 曾只存在于源码目录而不在本表，
+  // 于是批量构建漏掉它（CI 全新 checkout 里产物不生成）、单应用命令报
+  // Unknown plugin 直接退出，前端只能手工 vite build —— 产物长期停在旧构建，
+  // 热力图按旧 CSS 渲染成整块色块（2026-10-06 实测）。
+  'com.bedcode.agent-hub': {
+    pluginDir: 'wasm-apps/agent-hub',
+  },
   'com.bedcode.ai-chatbox': {
     pluginDir: 'wasm-apps/ai-chatbox',
   },
@@ -40,78 +50,94 @@ const PLUGINS = {
 // 解析参数
 const args = process.argv.slice(2)
 let targetPlugin = 'com.bedcode.terminal-session'
+let buildAll = false
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--plugin' && args[i + 1]) {
     targetPlugin = args[i + 1]
     i++
+  } else if (args[i] === '--all') {
+    buildAll = true
   }
 }
 
-const config = PLUGINS[targetPlugin]
-if (!config) {
-  console.error(`Unknown plugin: ${targetPlugin}`)
-  console.error(`Available: ${Object.keys(PLUGINS).join(', ')}`)
-  process.exit(1)
+// `--all` 遍历本文件的 PLUGINS 注册表（名单单一真源，package.json 的
+// `plugins:build` 只调这一条，不再另抄一份）；`--plugin <id>` 走单应用路径。
+// 两者都 fail-fast：任一应用失败即 exit(1)，不带着半份产物继续。
+if (buildAll) {
+  const ids = Object.keys(PLUGINS)
+  console.log(`\n=== Plugin Build: all (${ids.length}) ===\n  ${ids.join('\n  ')}`)
+  for (const id of ids) buildPlugin(id)
+} else {
+  buildPlugin(targetPlugin)
 }
 
-console.log(`\n=== Plugin Build: ${targetPlugin} ===\n`)
-
-// 插件调试模式提示（BEDCODE_PLUGIN_DEBUG 经 env 透传给插件构建脚本；
-// release 构建不应设置该变量，宿主以 cfg!(debug_assertions) 兜底）
-if (process.env.BEDCODE_PLUGIN_DEBUG) {
-  console.log('[plugin-build] 注意：BEDCODE_PLUGIN_DEBUG 已设置——插件将以 debug profile 构建（仅供调试）')
-}
-
-// 委托给插件的构建脚本
-const pluginDir = resolve(ROOT, config.pluginDir)
-console.log(`Running plugin build in: ${pluginDir}`)
-
-// 构建前：按源码自动填充 plugin.json 的 contributes/permissions
-// （与插件源码单一真源约定，保证产物与源码一致——一致的口径是「除构建注入的 wasmHash 外逐字一致」，
-//   wasmHash 只存在于产物目录，源清单不带；见 packages/plugin-sdk-desktop/bin/wasm-hash.js）
-try {
-  const { changed, report } = generateManifest(pluginDir)
-  if (changed) {
-    console.log('[plugin-build] plugin.json 已根据源码自动填充:')
-    for (const line of report) console.log(`  ${line}`)
-  } else {
-    console.log('[plugin-build] plugin.json 已是最新，无需更新')
+function buildPlugin(targetPlugin) {
+  const config = PLUGINS[targetPlugin]
+  if (!config) {
+    console.error(`Unknown plugin: ${targetPlugin}`)
+    console.error(`Available: ${Object.keys(PLUGINS).join(', ')}`)
+    process.exit(1)
   }
-} catch (e) {
-  console.error(`[plugin-build] manifest 自动填充失败: ${e.message}`)
-  process.exit(1)
-}
 
-// 构建前：校验 plugin.json（与 CLI `bedcode-plugin-desktop validate` 同一套规则）
-// 词汇/结构不合法的清单过去只在人工跑 CLI 时才被发现，声明了不存在的权限位会
-// 在宿主授权时被静默过滤（等于没声明），因此挂在构建链上强制拦一次。
-let validation
-try {
-  validation = validateManifest(pluginDir)
-} catch (e) {
-  console.error(`[plugin-build] manifest 校验不可用: ${e.message}`)
-  process.exit(1)
-}
-for (const w of validation.warnings) console.log(`[plugin-build] manifest ⚠ ${w}`)
-if (validation.errors.length) {
-  for (const e of validation.errors) console.error(`[plugin-build] manifest ✗ ${e}`)
-  console.error(
-    `[plugin-build] plugin.json 校验失败: ${validation.errors.length} 个错误（${pluginDir}）`,
-  )
-  process.exit(1)
-}
-console.log('[plugin-build] manifest 校验通过')
+  console.log(`\n=== Plugin Build: ${targetPlugin} ===\n`)
 
-try {
-  const pkgMgrCmd = IS_WIN ? 'pnpm.cmd' : 'pnpm'
-  execSync(`${pkgMgrCmd} run build`, {
-    cwd: pluginDir,
-    stdio: 'inherit',
-    env: { ...process.env },
-  })
-} catch (e) {
-  console.error('Plugin build failed!')
-  process.exit(1)
-}
+  // 插件调试模式提示（BEDCODE_PLUGIN_DEBUG 经 env 透传给插件构建脚本；
+  // release 构建不应设置该变量，宿主以 cfg!(debug_assertions) 兜底）
+  if (process.env.BEDCODE_PLUGIN_DEBUG) {
+    console.log('[plugin-build] 注意：BEDCODE_PLUGIN_DEBUG 已设置——插件将以 debug profile 构建（仅供调试）')
+  }
 
-console.log(`\n=== Plugin build complete: ${targetPlugin} ===\n`)
+  // 委托给插件的构建脚本
+  const pluginDir = resolve(ROOT, config.pluginDir)
+  console.log(`Running plugin build in: ${pluginDir}`)
+
+  // 构建前：按源码自动填充 plugin.json 的 contributes/permissions
+  // （与插件源码单一真源约定，保证产物与源码一致——一致的口径是「除构建注入的 wasmHash 外逐字一致」，
+  //   wasmHash 只存在于产物目录，源清单不带；见 packages/plugin-sdk-desktop/bin/wasm-hash.js）
+  try {
+    const { changed, report } = generateManifest(pluginDir)
+    if (changed) {
+      console.log('[plugin-build] plugin.json 已根据源码自动填充:')
+      for (const line of report) console.log(`  ${line}`)
+    } else {
+      console.log('[plugin-build] plugin.json 已是最新，无需更新')
+    }
+  } catch (e) {
+    console.error(`[plugin-build] manifest 自动填充失败: ${e.message}`)
+    process.exit(1)
+  }
+
+  // 构建前：校验 plugin.json（与 CLI `bedcode-plugin-desktop validate` 同一套规则）
+  // 词汇/结构不合法的清单过去只在人工跑 CLI 时才被发现，声明了不存在的权限位会
+  // 在宿主授权时被静默过滤（等于没声明），因此挂在构建链上强制拦一次。
+  let validation
+  try {
+    validation = validateManifest(pluginDir)
+  } catch (e) {
+    console.error(`[plugin-build] manifest 校验不可用: ${e.message}`)
+    process.exit(1)
+  }
+  for (const w of validation.warnings) console.log(`[plugin-build] manifest ⚠ ${w}`)
+  if (validation.errors.length) {
+    for (const e of validation.errors) console.error(`[plugin-build] manifest ✗ ${e}`)
+    console.error(
+      `[plugin-build] plugin.json 校验失败: ${validation.errors.length} 个错误（${pluginDir}）`,
+    )
+    process.exit(1)
+  }
+  console.log('[plugin-build] manifest 校验通过')
+
+  try {
+    const pkgMgrCmd = IS_WIN ? 'pnpm.cmd' : 'pnpm'
+    execSync(`${pkgMgrCmd} run build`, {
+      cwd: pluginDir,
+      stdio: 'inherit',
+      env: { ...process.env },
+    })
+  } catch (e) {
+    console.error(`Plugin build failed: ${targetPlugin}`)
+    process.exit(1)
+  }
+
+  console.log(`\n=== Plugin build complete: ${targetPlugin} ===\n`)
+}
