@@ -193,7 +193,13 @@ pub(crate) fn save_preset(h: &WasmHost, args: &Value) -> anyhow::Result<Value> {
     log_key_change(h, &name, &api_key);
     h.log_info(&format!("preset saved (name = {name}, id = {id:?})"));
     let state = build_state(h)?;
-    emit_and_return(h, &state)
+    // 回执契约：成功必须带 `saved: true`（前端按 saved/nameExists 判别成功与
+    // 同名冲突；dev-shell mock 与 9e20cf8dc 前端改造均按此契约，同名冲突分支
+    // 也一直按此返回）。此前成功路径只回 {state}，保存实际已落库却弹
+    // 「保存失败」toast——修复 2026-10-06 反馈。state 保留供旧调用方消费。
+    let mut result = emit_and_return(h, &state)?;
+    result["saved"] = json!(true);
+    Ok(result)
 }
 
 /// key 变更日志纪律：只记长度/清空，不记内容（删的是「存储面不落 key」红线，
