@@ -187,7 +187,7 @@ impl MdnsAdvertiserPort for HostMdnsAdvertiserPort {
         };
         tokio::spawn(async move {
             let advertiser = advertiser.read().await;
-            let config = crate::mdns::types::AdvertiseConfig {
+            let config = bedcode_discovery_engine::types::AdvertiseConfig {
                 service_name,
                 port,
                 txt_records,

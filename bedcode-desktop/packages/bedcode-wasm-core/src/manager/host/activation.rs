@@ -721,7 +721,7 @@ impl PluginHost {
         // PTY 基础能力服务（ABI v16，spec D2）：插件停用即 kill 并摘除其全部私有
         // PTY，逐条补发 `<owner>::pty:exit`（reason=killed）——孤儿进程不随插件消失
         // 而悬挂。必须在下方 `remove_all_subscriptions` 之前，否则补发的事件无人可投。
-        crate::host_api::pty::purge_for_plugin(plugin_id, &self.message_bus);
+        bedcode_pty_engine::plugin_binding::purge_for_plugin(plugin_id);
 
         // 并发任务域（ABI v20）：插件停用即 cancel 其全部在册任务 + 清回调队列
         // （只碰本人；运行中单元协作式跑完或超时，未开始单元 skipped）

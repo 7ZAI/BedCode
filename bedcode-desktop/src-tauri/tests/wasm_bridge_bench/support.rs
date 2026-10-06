@@ -151,7 +151,7 @@ pub async fn build_env(full: bool) -> anyhow::Result<BenchEnv> {
     let user_plugins_dir = temp_root.join("user-plugins");
     std::fs::create_dir_all(&user_plugins_dir)?;
 
-    let host = PluginHost::new(db.clone(), &plugins_dir, &user_plugins_dir, None, None).await;
+    let host = PluginHost::new(db.clone(), &plugins_dir, &user_plugins_dir, None, None, Vec::new()).await;
 
     // 消息总线分发器注入（生产由 `lib.rs` 建宿主后调；`PluginHost::new` 自身不调）
     // —— 必须在任何订阅（activate 期订阅）之前完成，否则投递无处可去

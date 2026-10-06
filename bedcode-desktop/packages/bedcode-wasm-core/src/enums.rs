@@ -6,7 +6,8 @@
 //! 已收编 SDK `bedcode-plugin-api::wire`（会话事件下沉专项票 01），本目录对应文件只
 //! re-export，保持 `crate::enums::*` 导入路径不变。`auth`（认证 wire）已随认证
 //! 编排下沉 session 插件退役删除（配对/QR/生物挑战-应答 wire 无宿主消费者，
-//! 2026-09-25）；`pty_status`（PTY 引擎枚举）仍在宿主定义（`pty` 引擎消费）。
+//! 2026-09-25）；`pty_status` 随 host-pty 能力域整面迁出本 crate（真源与消费面同在
+//! `bedcode-pty-engine`，PTY 引擎直接用 `crate::PtySessionStatus`）。
 //! **websocket 业务下沉票 08**：会话同步
 //! （`sync`/`summary`）与 WS 控制/终端帧（`control`）re-export 已随宿主 `Message`
 //! 业务协议退役删除（wire 定义在 SDK 不再被宿主消费；插件 wire 面只剩 `summary`/
@@ -16,12 +17,10 @@
 //! 任何会话业务类型。**新增跨端 wire 形状一律进 SDK，不再落在本目录。**
 
 pub mod plugin;
-pub mod pty_status;
 pub mod special_key;
 
 // Re-export all public types
 pub use plugin::{PluginQuestion, PluginQuestionOption};
-pub use pty_status::PtySessionStatus;
 pub use special_key::{KeyCode, KeyCombo};
 
 // ==================== Tests ====================
@@ -66,7 +65,9 @@ mod tests {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/enums");
         let mut violations: Vec<String> = Vec::new();
         // 票 08：sync/summary/control 三个垫片随宿主 Message 业务协议退役删除；
-        // special_key（宿主 PTY 写入面）与 plugin（共享类型）仍在
+        // special_key（宿主 PTY 写入面）与 plugin（共享类型）仍在；
+        // pty_status 垫片随 host-pty 能力域整面迁出后已删除（PTY 终态枚举的唯一
+        // 定义在 `bedcode-pty-engine`，本 crate 不再有任何 PTY 引擎面）
         for name in ["special_key.rs", "plugin.rs"] {
             let path = dir.join(name);
             let Ok(content) = std::fs::read_to_string(&path) else {

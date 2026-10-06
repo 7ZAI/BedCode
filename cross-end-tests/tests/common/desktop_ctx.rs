@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bedcode_desktop_lib::db::Database;
-use bedcode_desktop_lib::mdns::advertiser::MdnsAdvertiser;
+use bedcode_discovery_engine::advertiser::MdnsAdvertiser;
 use bedcode_server_websocket::endpoint;
 use bedcode_server_websocket::registry::{ClientSummary, WsSessionRegistry};
 // server-lib-split 票 03：内核组合入口 `server::core::app` 已下沉为
@@ -283,7 +283,7 @@ async fn init_app_context_inner(activate_center: bool) {
         let user_dir = user_plugins_dir();
         std::fs::create_dir_all(&user_dir).expect("create temp user plugins dir failed");
 
-        let plugin_host = PluginHost::new(db.clone(), &plugins_dir, &user_dir, None, None).await;
+        let plugin_host = PluginHost::new(db.clone(), &plugins_dir, &user_dir, None, None, Vec::new()).await;
         plugin_host.init_message_bus().await;
         plugin_host
             .wasm_host_ctx()

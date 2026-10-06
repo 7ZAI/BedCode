@@ -673,7 +673,7 @@ async fn test_boot_activates_system_components_before_app_plugins() {
 
     // 用户插件目录（dev 合入的第 3 参）：本用例无用户安装插件，指向空临时目录
     let user_plugins_dir = tmp_dir.path().join("user-plugins");
-    let host = PluginHost::new(db, &plugins_dir, &user_plugins_dir, None, None).await;
+    let host = PluginHost::new(db, &plugins_dir, &user_plugins_dir, None, None, Vec::new()).await;
 
     // 终态：两者均 Activated（应用插件的依赖检查在系统组件装配之后执行，
     // 激活成功即顺序成立的语义断言）
@@ -784,7 +784,7 @@ async fn setup_three_layer_host(tmp_dir: &tempfile::TempDir, l2_manifest_extra: 
         .await
         .expect("seed persisted activation state (L3 only)");
 
-    let host = PluginHost::new(db, &plugins_dir, &user_plugins_dir, None, None).await;
+    let host = PluginHost::new(db, &plugins_dir, &user_plugins_dir, None, None, Vec::new()).await;
     host
 }
 

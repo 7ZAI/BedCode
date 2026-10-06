@@ -258,11 +258,11 @@ pub fn register_core_lifecycle_hooks() {
     //
     // 会话 PTY **不能**依赖插件自己的 `purge_for_plugin`：关机时插件可能已停用 /
     // 超时 / trap，按属主回收依赖停用流程被调到。引擎自持的全量回收保证不留孤儿进程，
-    // 事件仍逐条按属主补发（见 `wasm_core/host_api/pty.rs::kill_all_registered`）。
+    // 事件仍逐条按属主补发（见 `bedcode_pty_engine::plugin_binding::kill_all_registered`）。
     registry.on_shutdown("pty-engine-reclaim", 10, || async {
-        let ctx = crate::system::app_context::AppContext::global();
-        let reclaimed =
-            crate::wasm_core::host_api::pty::kill_all_registered(&ctx.plugin_host().wasm_host_ctx().message_bus);
+        // 域回收面自持（在册表 + 事件组装都在 `bedcode-pty-engine`），关停路径只调它：
+        // 端口走进程级装配（开机期装的那一份），故这里不再取宿主上下文
+        let reclaimed = bedcode_pty_engine::plugin_binding::kill_all_registered();
         if reclaimed > 0 {
             tracing::info!(reclaimed, "PTY 已在引擎层回收（系统关停）");
         }
@@ -328,7 +328,7 @@ pub fn register_window_close_hooks() {
     let registry = lifecycle_registry();
 
     registry.on_window_close_requested("session-guard", 10, || async {
-        let engine_live = crate::wasm_core::host_api::pty::live_count() > 0;
+        let engine_live = bedcode_pty_engine::plugin_binding::live_count() > 0;
 
         if engine_live {
             tracing::warn!(engine_live, "Window close prevented: live PTYs exist");

@@ -9,6 +9,54 @@
 
 ## [未发布]
 
+#### 桌面端：第一方免弹窗归属清单出厂内核，改为宿主开机注入（ADR 0038 P0-2）
+
+- **产品数据出厂、判定逻辑留内核**：`FIRST_PARTY_TRUSTED_DIRS`（哪些插件、哪些目录免弹窗）改为单一真源 `src-tauri/src/first_party_dirs.rs`（宿主 lib），经 `PluginHost::new` 新增第 6 参 → `WasmRuntime::new`/`with_config` → `FsAuthChecker::new`/`assemble` 注入；判定逻辑（`first_party_dir_matches_with_home`）、`TrustedDir` 形态与读模型投影仍住 `bedcode-wasm-core`（`security/fs_auth.rs`）。注入空表 = 无豁免项，无头 / 测试 / 非桌面宿主语义逐字不变（无 ABI / WIT / 协议变动）
+- **清单为何不能留在 crate**：ADR 0038 定调内核只留机制，而这张表是产品决策（自家哪些应用有特权、为什么）。新文件逐条写明消费它的代码，`first_party_list_is_well_formed` 钉死已知消费方（`agent-hub` + `terminal-session`），新增条目必须交代归属
+- **授权管理读模型改读注入表**：`plugin_auth_overview` 取已注册的 `FsAuthChecker` state，把 `first_party_trusted_dirs()` 传给 `AuthPolicyStore::overview`（同名全局函数已删）。wire 形状（`FirstPartyDirEntry` = `pluginId` / `kind` / `value`）未变 ⇒ 设置页零改动，既有 overview 用例仍覆盖「特权可见」契约
+- **验收实测**：`bedcode-wasm-core` `cargo test --lib` 660 passed / 1 failed（唯一红 = 既有基线 `perf_p2_guest_ring_fetch_batch_curve` 5ms 墙钟 flake）；`src-tauri` `cargo test --lib` 69 passed / 0 failed。未跑：`cross-end-tests`（本条未涉跨端协议面）、wasm 应用完整构建与 `gen/android` gradlew（无插件 / WIT / Kotlin 改动）、移动端（零改动）
+- 本工作区 `src-tauri` 有两个集成二进制红（`ws_e2e` / `system_component_test`），原因与本条无关：票 05b 把这两个测试搬到 `src-tauri/tests/` 后，WASM 夹具（`bedcode_plugin_sdk_fixtures.ws.*.wasm` / `bedcode_plugin_system_test.wasm`）的构建器成了孤儿，属既有缺口，另行跟踪
+
+#### 桌面端：mDNS 自播面迁出宿主
+
+- **宿主 `src-tauri/src/mdns/` 整目录删除**：`MdnsAdvertiser`（自播 `_bedcode._tcp.local.` 供移动端发现）+ `AdvertiseConfig` / `SERVICE_TYPE` 迁入 `bedcode-discovery-engine`（`advertiser.rs` + `types.rs`，CRLF→LF），与 host-mdns 能力域同 crate，mDNS 机制全部归能力域、宿主侧零 mDNS 代码（无 ABI / WIT / 协议变动）
+- **零行为变更**：API 形状 / 校验语义 / 错误文案逐字保留；`crate::AppError` 换成本 crate 自持 `AdvertiserError{InvalidInput, Internal}`（依赖锁只允许 discovery-engine → host-kit，不反向依赖宿主错误类型）
+- **调用点一律改写显式路径**（不留中转垫片）：`lib.rs`（构造点）/ `system/app_context.rs` / `server/ports_impl.rs` / `src-tauri/tests/` 4 个集成测试 / `cross-end-tests`（新增该 path 依赖）
+- **合并**：`src-tauri/Cargo.toml` 删 `flume` dev-dep（仅旧 mdns 测试用，随迁 crate dev-dep）；discovery-engine tokio 补 `sync` feature、dev-dep 补 `flume`
+- **验证**：discovery-engine `cargo test --lib` 27 passed（18 既有 + 9 自播面用例）；src-tauri `cargo check --lib` 与 4 个集成测试编译全绿（lib 单测 68/69，唯一红 = 并行会话 pty-engine 锁条目在途，与本改动无关）
+
+#### 桌面端：mDNS 自播面并入共享守护 —— `MdnsAdvertiser` 收编 discovery-engine 句柄表（无 ABI / WIT / 协议变动）
+
+- **不再自建 `ServiceDaemon`**：宿主广播管理器 start/stop 改走 `engine::advertise_inner` / `stop_advertise_inner`（owner=host），与 peer-net 节点身份 / 插件 advertise 同守护、互不注销——「全仓唯一守护创建点」变为现实（消灭双 daemon 同绑 5353 病灶）
+- **新增 45s re-announce 续期**（引擎挂续期任务）：原实现注册后不续期，缓存 TTL 过后对端会看不到广播——顺带修复
+- **停播语义与插件全局统一**：表条目移除 + 续期取消即停播成功，unregister 尽力而为（失败仅 warn，靠缓存 TTL 收敛）；不 shutdown 共享守护；原「unregister 失败保留广播状态供重试」随独立守护退役（`stop_failure_keeps_state_for_retry` 降级为登记层失败的状态机防御测试）
+- **注入面换端口**：`DaemonFactory`/`FakeDaemon`/`flume` dev-dep 删除，改 `AdvertiseTarget` 登记层端口（生产包 engine + 全局 ports，测试 fake 记调用契约：owner=host / SERVICE_TYPE / 转义 fullname）；`is_advertising` 真源 = 本地登记 id（owner=host 条目只随本面 stop 消失，id ≙ 表条目）
+- **装配时序已核实**：`PluginHost::new` → `install_capability_domain_ports` → discovery PORTS，生产与 cross-end rig 皆先于 supervisor 广播装配（peer-net 同约束）；host 调用点零改动
+- **验证**：crate `cargo test --lib` 28 passed（18 engine + 10 advertiser）；`cargo fmt --check` 零漂移；src-tauri `cargo check --lib` 通过
+
+#### 桌面端：host-pty 能力域整面迁出 wasm-core —— `bedcode-pty-engine` 承接 WIT 接线（ADR 0039；无 ABI / WIT / 协议变动）
+
+- **用户裁定：不需要垫片，全部迁移所有非 wasm-core 机制的代码；WIT 接口也一并迁移，宿主侧用「声明 trait + 静态扫描」接线。**`packages/bedcode-host-kit` 早已提供这两半（`module.rs`/`registry.rs` 的 `inventory` 自报 + 白名单双向校验；`ports.rs` 的 `HostPorts::domain_ports` 端口下发），故 PTY 成为**第 5 个照抄 http / ws / peer-net / mdns 模板的能力域**——不新造任何机制
+- **`bedcode-pty-engine` 从引擎 crate 升格为能力域 crate**：自带 `bindgen!` provider 侧生成、`HostModule` 自报、6 条 `host-pty` 原语与全部域机制（句柄表 / 每插件配额 / `pty:exit` 组装 / 限频 `pty:output` 通知汇）。依赖 `bedcode-host-kit` + `wasmtime` + `bedcode-server-base`，**不依赖 wasm-core**。这**推翻了 ADR 0038 D1 给它定的「零 wasm 依赖」**（引擎模块仍零业务、可复用；只是 Cargo 粒度到 crate，此类程序现在会拖进 wasmtime，与四域同款代价）
+- **边界 = `PtyPorts` 窄端口 trait**（消费方声明、宿主实现，照 `HttpPorts`）。五件事刻意留在宿主（AGENTS §5.1.3 薄壳）：`check_permission`（安全闸门）、`publish`（总线投递面）、`config`（`AppConfig` 快照）、`block_on_any`（全仓唯一那份同步↔异步桥——ambient runtime 与 actix `current_thread` 自锁规避是实测产物，不得复制第二份）、`spawn_task`（ambient runtime 任务派生）。装配两通道：进程级供宿主生命周期动作，实例级使 guest 调用落在**本实例**的 `PermissionManager` 上
+- **wasm-core 只剩 adapter** `host_api/pty.rs`（`HostPtyPorts` + `install` + `HOST_MODULE_NAME`）；`host_api/pty_output.rs`、`src/pty.rs`（纯 `pub use` 垫片）、`src/enums/pty_status.rs`、宿主 `lib.rs` 的 `pty` 再导出**全部删除**——调用点一律写 `bedcode_pty_engine::plugin_binding::*` 显式路径；`component.rs` 同批删掉自己的 `impl host_pty::Host` 与 `add_to_linker` 行（两侧同名不同类型的 trait，否则同一 interface 注册两次）
+- **WSL 发行版列举留在 wasm-core**（`system/wsl.rs`）：属 `host-platform` 平台事实，与 PTY 正交（ADR 0038 E3 ①），只改了 `host_api/platform.rs` 的 4 处引用
+- **锁的极性翻转**（D6）：`pty_shim_file_contains_no_definitions` 随垫片退役，换成 `pty_module_must_not_return_to_wasm_core`（内核不得回接 PTY 模块 / 文件 / 垫片名）+ `wasm_core_whole_crate_lock.rs` 的反向断言。锁按**整行**比对而非子串——锁自己的文档注释与禁用名单里就含被禁形态，子串匹配会让锁判红（锁判自己 = 锁空转）
+- **测试按「谁的真源」重新归属**：39 项域行为用例（含真 PTY 产出、配额 / 环容量仲裁、退出事件形状、通知合并，以及只有 in-crate 用例才看得到的环内部视图 `watermarks()` / `chunk_count()`）迁入 pty-engine，夹具是迷你宿主（五个端口方法与真实 adapter 逐项对应）；**真总线投递语义留宿主侧**（`pty_e2e` 用真 `MessageBus` + 真组件实例化，`src-tauri/tests/pty_session_chain.rs` 端到端）；源码文本接线漂移锁留 wasm-core（`host_api/tests/pty_wiring.rs`）。夹具属主 id 由 `com.bedcode.*` 改为 `pty-test.*`，让能力域产品 id 锁继续扫这个文件，而不是把文件藏进 `tests/` 目录躲扫描
+- **验收**：`bedcode-pty-engine` `cargo test --lib` 94 通过 / 0 失败（连跑三次）；`bedcode-wasm-core` pty 相关 33 通过 / 0 失败（含 5 项真组件 `pty_e2e`）；宿主锁 `wasm_core_whole_crate_lock` 3/3、`capability_crates_no_product_ids` 6/6、`capability_crates_unit_tests_only` 5/5；`src-tauri` `cargo check --lib` 干净；`pty_session_chain_flow` 端到端通过
+- 未跑 / 不属本次：`cross-end-tests`（未改跨端协议 / 认证 / 终端面）、wasm 应用完整构建与 `gen/android` gradlew（未改插件 / WIT / Kotlin）、移动端（未触碰）；某次 wasm-core 全量里出现的 5 项 `security::fs_auth` 失败来自**并行在途会话**对 `security/*` 的编辑（本次工作期间 mtime 13:52–14:03），不在本改动范围内
+
+#### 桌面端：引擎面与宿主薄壳迁出机制内核 —— `bedcode-pty-engine` 出生，auth/session 桥接回宿主（ADR 0038；无 ABI / WIT / 协议变动）
+
+- **`bedcode-wasm-core` 现在只装 wasm 机制**（用户裁定：crate 应单一职责、可复用）。三类非机制代码迁出：
+  - **(A) PTY 引擎**（2,469 行 portable_pty 封装，零 wasm 依赖）→ 新引擎 crate `bedcode-desktop/packages/bedcode-pty-engine/`——依赖只向下（`bedcode-server-base` + 第三方），任何 Tauri 宿主 / 任何需要终端能力的程序可直接 path 依赖；host-pty WIT 绑定面留 wasm-core（`host_api/{pty,pty_output}.rs`，与 component.rs 的 impl Host 装配同侧），`src/pty.rs` 改纯 `pub use` 垫片（类型身份唯一——`PtySessionStatus` 只有一份，避免 `PtyTerminated::status` 比较处两份定义错位）。引擎的 2 处 `AppConfig::global()` 读点改为构造注入（`PtyEngineConfig`，默认 16/4096 与旧默认一致）
+  - **(B/C) 认证中心桥接**（`enforce_connection_policy` fail-closed 裁决 + `session_active` 激活门）与会话窄转发（`session_gateway.rs`）**回迁宿主 lib**——它们是宿主薄壳（ADR 0022 四类薄壳②安全闸门④窄转发，宿主自留的权利）；wasm-core 的注册表 / WIT 绑定面（`host_api/{auth,auth_center}.rs`）与 `invoke_auth_method`（并入 `auth_center.rs`）留作机制。`test_tokens.rs` 留 wasm-core 常编译（依赖 crate 内部 `test_seed_plugin_secret`；集成测试看不见依赖方的 cfg(test) 项）
+- **P0-1 随票 05 闭环**：`session_gateway` 已从「零解析窄转发」漂移成它不拥有的产品 wire（8 个硬编码 `com.bedcode.terminal-session` 互调 api 名 + 具名产品参数 + 问产品 `running` 判据）——B1/B4/B6 落在机制 crate 里。回迁后产品 api 名与参数形状归宿主，机制 crate 重新零产品 wire
+- **测试资产重构（用户裁定：wasm-core 不含任何跨 crate 集成测试）**：全部加载真实产品插件产物的 wasm-core 测试迁 `src-tauri/tests/` 独立二进制——`session_e2e`（3,720 行）、`ws_e2e`（1,953）、`ws_output_perf`、`auth_center_perf`、`system_component_test`；`task_e2e`（ai-chatbox 真实产物用例）与 `a03_probe`（产物闭环 + production 异步 store 用例）拆分迁出。只测机制本体、用本地 SDK fixture（`plugin-sdk-fixtures`）的用例留 wasm-core。迁移所需脚手架上提为**常编译公开测试基建** `src/test_support.rs`（`setup_wasm_runtime` / `plugin_db_root` / `session_plugin_db_guard` / `registry_gate` / `hold_registry_desk` / `reset` / `lock_auth_center_desk`；`host_api::ws` pub 化 + `ws::purge_for_plugin`、`LoadedWasmPlugin::call_capability_export`、`host_api::grant_permissions` 提顶层常编译 pub）——顺带成为第三方宿主如何装配本 crate 的可执行范例
+- **锁与登记表同步落地（票 06）**：`SPLIT_CRATES`（真源 `bedcode-wasm-core/src/crate_boundary_lock.rs`）登记 `bedcode-pty-engine`；lib `crate_boundary_lock` 在 `ALLOWED_DOWNWARD_EDGES` / `REQUIRED_DOWNWARD_EDGES` 各加 `pty-engine → base` 与 `wasm-core → pty-engine` 两条边；lib `Cargo.toml` 显式声明该 crate（断言③：宿主清单声明全部拆分产物——宿主代码不直接消费，经 wasm-core 垫片取用）。反双份锁补扫：`enums.rs` wire 垫片锁把 `enums/pty_status.rs`（已垫片化，真源迁 pty-engine）纳入；lib.rs 新增 `pty_shim_file_contains_no_definitions` 钉 `src/pty.rs` 只允许 re-export
+- **验证**：wasm-core `cargo test --lib` **709 passed / 1 failed**（唯一失败 = 既有基线 `perf_p2_guest_ring_fetch_batch_curve` 5ms 墙钟 flake；05c 基线 708/1，+1 为本票新增垫片锁）；`cargo check` 干净。crate + 宿主全量与 cross-end-tests 属票 07 独立验收
+- 未跑：`cross-end-tests`（无跨端协议 / 认证 / 终端面改动）、wasm app 完整构建与 `gen/android` gradlew（无插件 / WIT / Kotlin 改动）、移动端（零改动）
+
 #### 构建基建：sccache 的前提是错的，target 体积报告漏了最大的桶、且对一个有消费者的目录给出危险结论
 
 - **sccache 并没有缓存本仓假定的东西，而文档写的是「会缓存」**。根 `.cargo/config.toml` 与

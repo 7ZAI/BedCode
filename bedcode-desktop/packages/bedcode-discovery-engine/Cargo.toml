@@ -29,8 +29,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v4"] }
 tracing = "0.1"
-# re-announce 周期定时
-tokio = { version = "1", features = ["time"] }
+# re-announce 周期定时 + 自播面状态锁（`advertiser::MdnsAdvertiser` 的 tokio RwLock）
+tokio = { version = "1", features = ["time", "sync"] }
 # 能力模块自报（`submit_module!` 展开为 inventory 静态提交）
 inventory = "0.3"
 

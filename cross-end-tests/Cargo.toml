@@ -34,6 +34,9 @@ bedcode-server-websocket = { package = "bedcode-server-websocket", path = "../be
 # rig 无 AppHandle 故直调 core 的同名装配），以及**只读**加密计数器（证明信封真的
 # 加/解密过，不是“明文 200”恒真）。同样不参与任何应答生成。
 bedcode-server-core = { package = "bedcode-server-core", path = "../bedcode-desktop/packages/bedcode-server-core" }
+# mDNS 自播面真源（mdns-advertiser 迁移出宿主）：rig 与 GUI 同构地构造
+# `advertiser::MdnsAdvertiser`（宿主已零 mdns 残留，desktop_ctx 改直引本 crate）
+bedcode-discovery-engine = { package = "bedcode-discovery-engine", path = "../bedcode-desktop/packages/bedcode-discovery-engine" }
 
 [dev-dependencies]
 # tokio：测试运行时与轮询等待（与两端同版本，依赖图统一为一份）

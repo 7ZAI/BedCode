@@ -322,9 +322,10 @@ fn default_instance_name(plugin_id: &str) -> String {
     format!("{plugin_id}-{short:08x}")
 }
 
-/// 注册某广播到共享守护 + 周期 re-announce + 句柄登记（供插件 advertise 与
-/// 宿主身份登记共用——后者 owner="host"，见 [`register_host_service`]）
-fn advertise_inner(
+/// 注册某广播到共享守护 + 周期 re-announce + 句柄登记（供插件 advertise、
+/// 宿主身份登记与**自播面**共用——后两者 owner="host"，见 [`register_host_service`]
+/// 与 `crate::advertiser`）
+pub(crate) fn advertise_inner(
     ports: &Arc<dyn DiscoveryPorts>,
     owner: &str,
     service_type: String,
@@ -397,8 +398,11 @@ pub fn stop_advertise(
 /// 取出并停止单条广播（属主校验；幂等：未知句柄 false）
 ///
 /// 注销走共享守护 unregister（按实例全名，发 goodbye 对端即时移除本机）；
-/// 只注销本人句柄，其余插件广播与本机其他广播不受影响
-fn stop_advertise_inner(
+/// 只注销本人句柄，其余插件广播与本机其他广播不受影响。
+///
+/// **unregister 是尽力而为**（失败仅 warn，靠缓存 TTL 收敛）——表条目移除 + 续期
+/// 取消即停播成功；self 自播面（`advertiser::MdnsAdvertiser::stop`）同此语义
+pub(crate) fn stop_advertise_inner(
     owner: &str,
     advertise_id: &str,
     ports: &Arc<dyn DiscoveryPorts>,

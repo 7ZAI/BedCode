@@ -610,14 +610,19 @@ name = "bedcode-pty-engine"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "bedcode-host-kit",
  "bedcode-plugin-api",
  "bedcode-server-base",
  "chrono",
- "encoding_rs",
+ "inventory",
  "portable-pty",
  "serde",
+ "serde_json",
  "tokio",
  "tracing",
+ "uuid",
+ "wasmtime",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]

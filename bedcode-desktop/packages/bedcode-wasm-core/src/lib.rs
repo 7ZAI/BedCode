@@ -2,7 +2,7 @@
 //!
 //! 桌面端 `wasm_core` 整核抽出（.scratch/2026-10-06-wasm-core-whole-crate/spec.md）：
 //! 插件核心机制（`manager` / `security` / `host_api` / `bus` / `config` / `monitor` /
-//! `permission` / `runtime_util` / `intercall` / `storage`）+ 引擎面（`db` / `pty` /
+//! `permission` / `runtime_util` / `intercall` / `storage`）+ 引擎面（`db` /
 //! `enums` / `system`）+ 宿主胶水（`utils/auth` / `utils/session_gateway`）从
 //! bin crate 整体迁出，任何 Tauri 宿主可直接 path 依赖本 crate 获得插件机制。
 //!
@@ -50,8 +50,6 @@ pub mod intercall;
 pub mod manager;
 pub mod monitor;
 pub mod permission;
-/// PTY 引擎面（host-pty 引擎，零业务语义；业务会话与输出汇在插件侧）
-pub mod pty;
 /// 异步桥基础设施：`manager` / `host_api` / `security` 共用的中立层，
 /// 自身不依赖任何 wasm_core 兄弟模块（票 01）
 pub mod runtime_util;
@@ -61,7 +59,7 @@ pub mod security;
 pub mod storage;
 /// 引擎级配置 / 文件定位 / 进程创建（lib 的 `system.rs` 组合根经垫片零改动引用）
 pub mod system;
-/// 认证中心桥接 + 会话窄转发（lib 的 `utils.rs` 经垫片零改动引用）
+/// 连接身份 + 测试夹具（lib 集成测试经垫片消费；认证桥接 / 会话窄转发已回宿主 lib，票 05）
 pub mod utils;
 /// 测试基建（常编译公开，lib 集成测试消费；来源见模块头注释）
 pub mod test_support;
@@ -71,7 +69,6 @@ pub mod test_support;
 // 不感知模块内部结构
 
 pub use bus::{BusMessageHandler, MessageBus};
-pub use bedcode_pty_engine::PtyEngineConfig as PtyEngineConfig;
 pub use manager::host;
 pub use manager::host::api_bridge;
 pub use manager::host::PluginHost;
@@ -88,6 +85,55 @@ pub use bedcode_server_base::error::{AppError, Result};
 
 #[cfg(test)]
 mod tests {
+    /// 本 crate 禁止出现的模块声明形态（PTY 已整面迁出）
+    ///
+    /// 独立成函数的原因：禁用名单若内联在断言里，它自己就是一条「含 `mod pty;`
+    /// 字面量的代码行」，会被按整行比对的判据误判（锁空转）。
+    fn forbidden_module_forms() -> Vec<String> {
+        ["pty", "pty_output"]
+            .into_iter()
+            .flat_map(|name| {
+                ["mod ", "pub mod ", "pub(crate) mod ", "pub(super) mod "]
+                    .into_iter()
+                    .map(move |prefix| format!("{prefix}{name};"))
+            })
+            .collect()
+    }
+
+    /// 行归一化：剥掉 `#[…]` 属性跨度 + 压平空白
+    ///
+    /// **为什么必须剥属性**：`#[path = "…"] pub mod pty;` 写在同一行时，原始整行既不
+    /// 等于任何禁用形态、`starts_with("mod ")` 也不成立（行首是 `[`）——只按整行精确
+    /// 比对会放它过去。属性的存在与否与「PTY 模块是否回到内核」无关，故先剥掉再比。
+    /// 压平空白同理（`pub  mod pty;` 绕过逐字比对）。
+    fn normalized_module_line(line: &str) -> String {
+        let mut out = String::new();
+        let mut chars = line.trim().chars().peekable();
+        while let Some(ch) = chars.next() {
+            if ch == '#' && chars.peek() == Some(&'[') {
+                // 跳过整个属性跨度（`#[` … `]`，含嵌套括号）
+                let mut depth = 0usize;
+                for inner in chars.by_ref() {
+                    match inner {
+                        '[' => depth += 1,
+                        ']' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                continue;
+            }
+            if !ch.is_whitespace() {
+                out.push(ch);
+            }
+        }
+        out
+    }
+
     /// 整核抽出后的模块可见性锁：核心机制模块全部公开（lib 与集成测试经垫片消费）
     #[test]
     fn core_modules_are_public() {
@@ -97,6 +143,64 @@ mod tests {
         let _: fn(crate::bus::MessageBus);
         let _: fn(crate::security::fs_auth::FsAuthChecker);
         let _: fn(crate::storage::PluginStorage);
-        let _: fn(crate::pty::PtySession);
+    }
+
+    /// `src/pty.rs` **反向**防回接锁（pty-capability-domain 票 D3/D6）
+    ///
+    /// 极性翻转的原因：原来的锁守「垫片只允许 re-export」（引擎已迁出、垫片保路径）。
+    /// 能力域整面迁出后**垫片本身也删了**——本 crate 不再有任何 PTY 引擎面或
+    /// `crate::pty::*` 路径。此时「垫片被回接」有两种形态，都必须红：
+    ///
+    /// 1. 有人把 `src/pty.rs` 重新落回来（含 `pub use` 垫片或整份引擎拷贝）；
+    /// 2. 有人用 `pub mod pty;` 在本 crate 另起一个 PTY 模块。
+    ///
+    /// 空目录也算回接信号（`src/pty/` 会被 `empty_dir_lock` 单独抓住）。
+    #[test]
+    fn pty_module_must_not_return_to_wasm_core() {
+        let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let file = manifest_dir.join("src/pty.rs");
+        assert!(
+            !file.exists(),
+            "src/pty.rs 不得回到 wasm-core（PTY 引擎与 host-pty 能力域的真源是 \
+             bedcode-pty-engine；本 crate 只保留 `host_api::pty` 端口 adapter）"
+        );
+        let dir = manifest_dir.join("src/pty");
+        assert!(
+            !dir.exists()
+                || std::fs::read_dir(&dir)
+                    .map(|mut d| d.next().is_none())
+                    .unwrap_or(true),
+            "src/pty/ 不得回到 wasm-core（同上：PTY 引擎面不在内核）"
+        );
+        // **按归一化整行比对模块声明形态**（不按子串）：本锁自己的代码里就带着这些
+        // 形态的字面量（禁用名单）与文档注释（说明为什么锁），子串匹配会把它们
+        // 判红——锁自己判红 = 锁空转。归一化（剥 `#[…]` 属性 + 压平空白）见
+        // [`normalized_module_line`]：只按字面整行比对会放过
+        // `#[path = "…"] pub mod pty;` 这类带属性写法。
+        let lib_source =
+            std::fs::read_to_string(manifest_dir.join("src/lib.rs")).expect("读取 src/lib.rs 失败");
+        let forbidden: Vec<String> = forbidden_module_forms()
+            .iter()
+            .map(|f| normalized_module_line(f))
+            .collect();
+        let module_decl = lib_source
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .find(|line| {
+                forbidden
+                    .iter()
+                    .any(|form| normalized_module_line(line) == *form)
+            });
+        assert!(
+            module_decl.is_none(),
+            "lib.rs 出现 PTY 模块声明（行：{module_decl:?}）：PTY 能力域已整面迁出，\
+             内核不得回接 PTY 模块"
+        );
+        assert!(
+            !std::path::Path::new(manifest_dir)
+                .join("src/enums/pty_status.rs")
+                .exists(),
+            "enums/pty_status.rs 不得回到 wasm-core（PTY 终态枚举真源在 bedcode-pty-engine）"
+        );
     }
 }

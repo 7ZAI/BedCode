@@ -292,12 +292,13 @@ fn test_pty_exit_event_and_purge_roundtrip() {
         // 接线锁：停用路径必须调用插件 PTY 回收（本夹具没有 PluginHost，行为侧由
         // 下面的 purge 断言兜住，调用点存在性在此锁死——AGENTS §7 停用回收契约）。
         // 注意：deactivate_plugin_inner 经 P2 拆至 host/activation.rs，此处锁其源码。
-        // 断言放宽到「host_api::pty::purge_for_plugin 调用点存在」（M-13）：旧式整行
-        // 精确匹配会被参数签名/rustfmt 变动弄断且不在运行路径执行——参数形态交给
-        // 下方行为断言与编译期类型检查
+        // 断言放宽到「pty 能力域回收调用点存在」（M-13 + pty-capability-domain D1：
+        // 域机制随 host-pty 能力域迁到 `bedcode_pty_engine::plugin_binding::registry`）：
+        // 旧式整行精确匹配会被参数签名/rustfmt 变动弄断且不在运行路径执行——参数
+        // 形态交给下方行为断言与编译期类型检查
         let host_src = include_str!("../../host/activation.rs");
         assert!(
-            host_src.contains("host_api::pty::purge_for_plugin"),
+            host_src.contains("plugin_binding::purge_for_plugin"),
             "deactivate_plugin_inner 未接线 host-pty 停用回收"
         );
 
@@ -403,10 +404,15 @@ fn test_pty_exit_event_and_purge_roundtrip() {
         // 引擎），在 `rt.block_on` 的驱动线程上直接调用会撞 block_in_place 约束——
         // 无 handle 的阻塞线程才是它的真实调用形态（同生产 deactivate 路径）
         let purged = {
-            let bus = Arc::clone(&ctx_a.message_bus);
-            tokio::task::spawn_blocking(move || crate::host_api::pty::purge_for_plugin(PLUGIN_A, &bus))
-                .await
-                .expect("purge 任务不得 panic")
+            // 显式端口：事件投到 **本上下文** 的总线（进程级端口在多上下文场景下是
+            // 先装者胜出，对 B 的断言会投错总线——测试因此不走进程级那一格）
+            let ports: Arc<dyn bedcode_pty_engine::plugin_binding::ports::PtyPorts> =
+                Arc::new(crate::host_api::pty::HostPtyPorts::from_ctx(Arc::clone(&ctx_a)));
+            tokio::task::spawn_blocking(move || {
+                bedcode_pty_engine::plugin_binding::purge_for_plugin_with_ports(&ports, PLUGIN_A)
+            })
+            .await
+            .expect("purge 任务不得 panic")
         };
         assert_eq!(purged, 1, "回收数应为 A 当前在册的 PTY 数（已终态者早被摘除）");
 
@@ -436,8 +442,11 @@ fn test_pty_exit_event_and_purge_roundtrip() {
 
         // 收尾：清场 B 的常驻进程（同一回收函数对 B 亦只碰本人）
         let purged_peer = {
-            let bus = Arc::clone(&ctx_b.message_bus);
-            tokio::task::spawn_blocking(move || crate::host_api::pty::purge_for_plugin(PLUGIN_B, &bus))
+            let ports: Arc<dyn bedcode_pty_engine::plugin_binding::ports::PtyPorts> =
+                Arc::new(crate::host_api::pty::HostPtyPorts::from_ctx(Arc::clone(&ctx_b)));
+            tokio::task::spawn_blocking(move || {
+                bedcode_pty_engine::plugin_binding::purge_for_plugin_with_ports(&ports, PLUGIN_B)
+            })
                 .await
                 .expect("peer purge 任务不得 panic")
         };
@@ -759,9 +768,11 @@ fn test_pty_isolation_and_contract_matrix_roundtrip() {
         );
 
         // 收尾：A 的在册句柄回收（B 无在册句柄）
-        let bus = Arc::clone(&ctx_a.message_bus);
-        let purged =
-            tokio::task::spawn_blocking(move || crate::host_api::pty::purge_for_plugin(PLUGIN_A, &bus))
+        let ports: Arc<dyn bedcode_pty_engine::plugin_binding::ports::PtyPorts> =
+            Arc::new(crate::host_api::pty::HostPtyPorts::from_ctx(Arc::clone(&ctx_a)));
+        let purged = tokio::task::spawn_blocking(move || {
+            bedcode_pty_engine::plugin_binding::purge_for_plugin_with_ports(&ports, PLUGIN_A)
+        })
                 .await
                 .expect("purge 任务不得 panic");
         assert_eq!(purged, 1, "收尾回收应只剩 A 的那条常驻 PTY");

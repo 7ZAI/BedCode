@@ -15,6 +15,9 @@
 /// 含 `bedcode-wasm-core` 自身：整核抽出后它也是拆分产物（宿主 bin → 可复用 crate），
 /// 登记进来让 lib 侧全图断言（断言① 无横向边 / 断言③ 宿主清单声明全部拆分产物）
 /// 把它一并纳入检查——否则本 crate 的依赖清单不受边界锁管辖。
+/// 含 `bedcode-pty-engine`：wasm-core 纯净性收口票 02 从本 crate 迁出的 PTY
+/// 引擎面（wasm-core 依赖它；登记后 lib 侧断言① 会核对这条边已在
+/// ALLOWED_DOWNWARD_EDGES 登记，断言③ 要求 lib 显式声明——两边都要同改）。
 pub const SPLIT_CRATES: &[(&str, &str)] = &[
     ("bedcode-server-base", "bedcode-server-base"),
     ("bedcode-server-core", "bedcode-server-core"),
@@ -24,6 +27,11 @@ pub const SPLIT_CRATES: &[(&str, &str)] = &[
     ("bedcode-crypto-engine", "bedcode-crypto-engine"),
     ("bedcode-host-kit", "../../packages/bedcode-host-kit"),
     ("bedcode-discovery-engine", "bedcode-discovery-engine"),
+    // host-pty 能力域（票 02 迁引擎体 → ADR 0039 整面迁出）：引擎面 + WIT 接线 +
+    // 域机制全在 bedcode-pty-engine（自带 `bindgen!` + `HostModule` 自报，不依赖本
+    // crate），wasm-core 只剩 `host_api/pty.rs` 端口 adapter 并依赖它。登记入表让
+    // lib 侧全图断言把它与 wasm-core 的依赖边一并纳入检查。
+    ("bedcode-pty-engine", "bedcode-pty-engine"),
     // 本 crate 自身（wasm-core-whole-crate 票 05：拆分产物清单含整核抽出本体）
     ("bedcode-wasm-core", "bedcode-wasm-core"),
 ];

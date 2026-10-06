@@ -79,7 +79,7 @@ pub async fn setup_host() -> Arc<PluginHost> {
         std::env::temp_dir().join(format!("bedcode-hosttest-userplugins-{}", std::process::id()));
     std::fs::create_dir_all(&user_plugins_dir).expect("user plugins dir");
 
-    let host = PluginHost::new(db, &plugins_dir, &user_plugins_dir, None, None).await;
+    let host = PluginHost::new(db, &plugins_dir, &user_plugins_dir, None, None, Vec::new()).await;
 
     // 无头私有库根注入（认证中心配对/历史真源在插件私有库，无私有库则无法驱动）
     host.wasm_host_ctx().set_plugin_db_root(Some(

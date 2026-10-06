@@ -10,7 +10,9 @@
 //! 1. **宿主 `src/` 下与整核四个名字同名的源码落点不得存在**：`wasm_core/`、`db.rs`、
 //!    `pty/`、`enums/` 都是整核迁走后宿主侧的回接或双份拷贝形态（spec M1；票 02-04
 //!    执行完毕）。两个名字库共用 [`FORBIDDEN_SHIM_NAMES`] 一张表。
-//! 2. **lib.rs 的 wasm_core / db / pty / enums 必须是 `pub use` 垫片**且垫片行真的存在
+//! 2. **lib.rs 的 wasm_core / db / enums 必须是 `pub use` 垫片**且垫片行真的存在
+//!    （`pty` 已退出名单：PTY 能力域整面迁到 `bedcode-pty-engine`，锁 2 改为**反向**
+//!    断言它不得回到名单——见 `pty_capability_domain_wiring` 说明）
 //!    （防空转）。任何可见性形态的 `mod` 声明（裸 / `pub` / `pub(crate)` / `pub(super)`）
 //!    都算违规——只要名字挂在模块树上，内容就来自宿主源码目录而非 crate，垫片语义即被
 //!    替换成双份源码。
@@ -152,7 +154,7 @@ fn host_side_shim_paths_do_not_exist() {
     );
 }
 
-/// 锁 2：lib.rs 的 wasm_core / db / pty / enums 暴露必须是 `pub use` 垫片，
+/// 锁 2：lib.rs 的 wasm_core / db / enums 暴露必须是 `pub use` 垫片（`pty` 反向断言），
 /// 且垫片行必须真的存在（防空转）
 #[test]
 fn lib_shims_are_pub_use_reexports_not_modules() {
@@ -160,16 +162,25 @@ fn lib_shims_are_pub_use_reexports_not_modules() {
     let content =
         fs::read_to_string(&lib_rs).unwrap_or_else(|e| panic!("读取 lib.rs 失败：{e} —— 垫片锁失去扫描对象，锁空转"));
 
-    // 垫片必须存在：wasm_core 整体再导出 + db/enums/pty 四个名字的再导出
+    // 垫片必须存在：wasm_core 整体再导出 + db/enums 两个名字的再导出
+    //
+    // **`pty` 已从名单里删除**（pty-capability-domain 票 D3）：host-pty 能力域整面
+    // 迁到 `bedcode-pty-engine` 后，内核再无 PTY 面可垫——留着它就是一条无消费者的
+    // 兼容别名。故此处改为**反向**断言：`pty` 不得回到 lib 的再导出名单。
     assert!(
         content.contains("pub use bedcode_wasm_core as wasm_core;"),
         "lib.rs 缺少 `pub use bedcode_wasm_core as wasm_core;` 垫片——\n\
          整核垫片被删除或改写，既有 `crate::wasm_core::*` 引用将失去名字（防回接锁失效）"
     );
     assert!(
-        content.contains("pub use bedcode_wasm_core::{db, enums, pty};"),
-        "lib.rs 缺少 `pub use bedcode_wasm_core::{{db, enums, pty}};` 垫片——\n\
-         db / enums / pty 三个引擎面真源在 crate，垫片缺失即回接（防回接锁失效）"
+        content.contains("pub use bedcode_wasm_core::{db, enums};"),
+        "lib.rs 缺少 `pub use bedcode_wasm_core::{{db, enums}};` 垫片——\n\
+         db / enums 两个引擎面真源在 crate，垫片缺失即回接（防回接锁失效）"
+    );
+    assert!(
+        !content.contains("bedcode_wasm_core::{db, enums, pty}") && !content.contains("pty};"),
+        "lib.rs 的再导出名单里不得回来 `pty`——PTY 能力域真源是 bedcode-pty-engine，\
+         宿主调用点一律写显式路径（回归即垫片形态的回接）"
     );
 
     // 垫片必须只是再导出：不得以 `mod` / `pub mod` 形态把整核挂回 lib 模块树

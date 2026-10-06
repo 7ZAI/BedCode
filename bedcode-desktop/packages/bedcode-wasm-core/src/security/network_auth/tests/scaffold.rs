@@ -133,7 +133,7 @@ pub(super) async fn set_strategy(checker: &NetworkAuthChecker, plugin: &str, tie
 pub(super) async fn source_of(checker: &NetworkAuthChecker, plugin: &str, target: &str) -> Option<String> {
     checker
         .store
-        .overview(plugin, "T")
+        .overview(plugin, "T", Vec::new())
         .await
         .expect("overview")
         .records

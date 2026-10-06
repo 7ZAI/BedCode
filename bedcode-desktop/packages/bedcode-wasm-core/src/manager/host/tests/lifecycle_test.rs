@@ -275,7 +275,7 @@ async fn auth_records_survive_deactivate_and_are_purged_on_uninstall() {
 
     // 停用：记录与策略都在
     host.deactivate_plugin(TEST_PLUGIN_ID, false).await.unwrap();
-    let after_deactivate = store.overview(TEST_PLUGIN_ID, "T").await.unwrap();
+    let after_deactivate = store.overview(TEST_PLUGIN_ID, "T", Vec::new()).await.unwrap();
     assert_eq!(
         after_deactivate.records.len(),
         1,
@@ -293,7 +293,7 @@ async fn auth_records_survive_deactivate_and_are_purged_on_uninstall() {
 
     // 卸载：清空（重装即全新授权）
     host.uninstall_plugin(TEST_PLUGIN_ID).await.unwrap();
-    let after_uninstall = store.overview(TEST_PLUGIN_ID, "T").await.unwrap();
+    let after_uninstall = store.overview(TEST_PLUGIN_ID, "T", Vec::new()).await.unwrap();
     assert!(
         after_uninstall.records.is_empty(),
         "卸载必须清空授权记录：重装不该继承前一任的授权"

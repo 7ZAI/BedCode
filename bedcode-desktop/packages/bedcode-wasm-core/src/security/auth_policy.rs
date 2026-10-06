@@ -32,7 +32,7 @@
 
 use crate::db::Database;
 use crate::monitor::MetricsRegistry;
-use crate::security::fs_auth::{first_party_trusted_dirs, FirstPartyDirEntry};
+use crate::security::fs_auth::FirstPartyDirEntry;
 use std::sync::{Arc, RwLock};
 use tokio::sync::Mutex;
 
@@ -260,11 +260,20 @@ impl AuthPolicyStore {
     ///
     /// `plugin_id` 未知（无策略、无记录）不是错误：返回空记录 + 全 `default` 策略，
     /// 使设置页总览在「刚装完还没发生过任何授权」的应用上照常渲染。
-    pub async fn overview(&self, plugin_id: &str, name: &str) -> crate::Result<PluginAuthOverview> {
+    ///
+    /// `first_party_dirs`：第一方免弹窗项只读投影（**票 08/P0-2**：产品清单出厂 lib，
+    /// 读模型数据经 `FsAuthChecker::first_party_trusted_dirs()` 取——本存储不持有
+    /// 清单）；空投影 = 无免弹窗可见项。
+    pub async fn overview(
+        &self,
+        plugin_id: &str,
+        name: &str,
+        first_party_dirs: Vec<FirstPartyDirEntry>,
+    ) -> crate::Result<PluginAuthOverview> {
         let db = self.db.lock().await;
         let strategies = load_strategies(db.conn(), plugin_id)?;
         let records = load_records(db.conn(), plugin_id)?;
-        let first_party_dirs = first_party_trusted_dirs()
+        let first_party_dirs = first_party_dirs
             .into_iter()
             .filter(|entry| entry.plugin_id == plugin_id)
             .collect();
@@ -730,7 +739,7 @@ mod tests {
     async fn overview_on_empty_db_yields_default_strategies_and_no_records() {
         let store = store().await;
         let overview = store
-            .overview("com.bedcode.agent-hub", "Agent Hub")
+            .overview("com.bedcode.agent-hub", "Agent Hub", Vec::new())
             .await
             .expect("empty db overview must not fail");
 
@@ -758,7 +767,7 @@ mod tests {
         seed_strategy(&store, "com.bedcode.test", "fs", "bypass").await;
         seed_strategy(&store, "com.bedcode.test", "network", "ALWAYS_ALLOW").await;
 
-        let overview = store.overview("com.bedcode.test", "T").await.expect("overview");
+        let overview = store.overview("com.bedcode.test", "T", Vec::new()).await.expect("overview");
         assert_eq!(
             overview
                 .strategies
@@ -777,7 +786,7 @@ mod tests {
         seed_strategy(&store, "com.bedcode.test", "fs", "always_ask").await;
         seed_strategy(&store, "com.bedcode.test", "network", "always_allow").await;
 
-        let overview = store.overview("com.bedcode.test", "T").await.expect("overview");
+        let overview = store.overview("com.bedcode.test", "T", Vec::new()).await.expect("overview");
         assert_eq!(
             overview
                 .strategies
@@ -831,7 +840,7 @@ mod tests {
         )
         .await;
 
-        let overview = store.overview("com.bedcode.test", "T").await.expect("overview");
+        let overview = store.overview("com.bedcode.test", "T", Vec::new()).await.expect("overview");
         assert_eq!(overview.records.len(), 3, "allow 与 deny 都必须进读模型");
         assert_eq!(
             overview.records[0],
@@ -885,7 +894,7 @@ mod tests {
         )
         .await;
 
-        let overview = store.overview("com.bedcode.mine", "Mine").await.expect("overview");
+        let overview = store.overview("com.bedcode.mine", "Mine", Vec::new()).await.expect("overview");
         assert_eq!(overview.records.len(), 1);
         assert_eq!(overview.records[0].target, "/tmp/mine");
     }
@@ -910,7 +919,7 @@ mod tests {
         )
         .await;
         assert!(
-            store.overview("com.bedcode.test", "T").await.is_err(),
+            store.overview("com.bedcode.test", "T", Vec::new()).await.is_err(),
             "脏 ops 必须让读模型报错（fail-visible）"
         );
     }
@@ -980,7 +989,7 @@ mod tests {
         assert_eq!(rows.len(), 1, "每个 (应用, 资源, 目标) 至多一行");
         assert_eq!(rows[0].target, "/tmp/dir");
         assert_eq!(rows[0].ops, ops(&["read", "write"]), "操作集取并集且不重复");
-        let overview = store.overview("com.bedcode.test", "T").await.unwrap();
+        let overview = store.overview("com.bedcode.test", "T", Vec::new()).await.unwrap();
         assert_eq!(overview.records[0].source, "user", "用户确认的溯源不得被自动放行覆盖");
         assert!(!overview.records[0].prefix_match, "fs 记录不按 path 前缀匹配");
     }
@@ -1132,7 +1141,7 @@ mod tests {
                 .len(),
             1
         );
-        let overview = store.overview("com.bedcode.test", "T").await.unwrap();
+        let overview = store.overview("com.bedcode.test", "T", Vec::new()).await.unwrap();
         assert_eq!(overview.records[0].source, "user_deny");
     }
 
@@ -1377,11 +1386,60 @@ mod tests {
     }
 
     /// C3：第一方免询问项按归属过滤导出（读模型要能回答「这个应用有哪些免询问特权」）
+    ///
+    /// 票 08/P0-2：产品清单出厂 lib，机制侧用**测试投影**（中性 plugin_id 字面量）
+    /// 验证过滤逻辑——数据源形态 = `FsAuthChecker::first_party_trusted_dirs()` 输出。
     #[tokio::test]
     async fn first_party_dirs_are_exported_per_owner() {
         let store = store().await;
 
-        let agent_hub = store.overview("com.bedcode.agent-hub", "Agent Hub").await.unwrap();
+        let projection = vec![
+            crate::security::fs_auth::FirstPartyDirEntry {
+                plugin_id: "test.agent-hub",
+                kind: "home",
+                value: ".agents",
+            },
+            crate::security::fs_auth::FirstPartyDirEntry {
+                plugin_id: "test.agent-hub",
+                kind: "home",
+                value: ".claude/skills",
+            },
+            crate::security::fs_auth::FirstPartyDirEntry {
+                plugin_id: "test.agent-hub",
+                kind: "home",
+                value: ".pi/agent/skills",
+            },
+            crate::security::fs_auth::FirstPartyDirEntry {
+                plugin_id: "test.agent-hub",
+                kind: "home",
+                value: ".bedcode/agent-hub/runs",
+            },
+            crate::security::fs_auth::FirstPartyDirEntry {
+                plugin_id: "test.terminal-session",
+                kind: "project-segment",
+                value: ".claude",
+            },
+            crate::security::fs_auth::FirstPartyDirEntry {
+                plugin_id: "test.terminal-session",
+                kind: "project-segment",
+                value: ".codex",
+            },
+            crate::security::fs_auth::FirstPartyDirEntry {
+                plugin_id: "test.terminal-session",
+                kind: "project-segment",
+                value: ".pi",
+            },
+            crate::security::fs_auth::FirstPartyDirEntry {
+                plugin_id: "test.terminal-session",
+                kind: "project-segment",
+                value: ".opencode",
+            },
+        ];
+
+        let agent_hub = store
+            .overview("test.agent-hub", "Agent Hub", projection.clone())
+            .await
+            .unwrap();
         assert_eq!(
             agent_hub
                 .first_party_dirs
@@ -1398,7 +1456,7 @@ mod tests {
         );
 
         let session = store
-            .overview("com.bedcode.terminal-session", "Terminal Session")
+            .overview("test.terminal-session", "Terminal Session", projection)
             .await
             .unwrap();
         assert_eq!(
@@ -1416,7 +1474,7 @@ mod tests {
             "terminal-session 的是项目目录段形态"
         );
 
-        let third_party = store.overview("com.bedcode.test", "T").await.unwrap();
+        let third_party = store.overview("com.bedcode.test", "T", Vec::new()).await.unwrap();
         assert!(
             third_party.first_party_dirs.is_empty(),
             "不在第一方清单里的应用不得凭空获得免询问项"

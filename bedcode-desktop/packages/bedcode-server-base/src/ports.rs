@@ -127,7 +127,9 @@ pub trait PowerPort: Send + Sync {
 // ==================== MdnsAdvertiserPort（mDNS 广播） ====================
 
 /// mDNS 服务广播（替代 `AppContext::global().mdns_advertiser()` 的
-/// `AdvertiseConfig` 装配；txt 记录由宿主壳转成 `mdns::types::AdvertiseConfig`）
+/// `AdvertiseConfig` 装配；txt 记录由宿主壳转成
+/// `bedcode_discovery_engine::types::AdvertiseConfig`——自播面真源在
+/// bedcode-discovery-engine，宿主侧零 mDNS 代码）
 pub trait MdnsAdvertiserPort: Send + Sync {
     fn advertise(&self, service_name: String, port: u16, txt_records: std::collections::HashMap<String, String>);
     fn stop(&self);

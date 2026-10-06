@@ -221,7 +221,7 @@ impl PluginLoader {
                     // 未声明者落默认档（既有插件零迁移）。
                     // 静态注册（inventory）插件不经本函数、也不经 host-pty 原语（它们
                     // 直接用 SessionManager），故无需在 host.rs 那处授权点补登记。
-                    crate::host_api::pty::register_quota(&plugin_id, manifest.pty_quota);
+                    bedcode_pty_engine::plugin_binding::register_quota(&plugin_id, manifest.pty_quota);
 
                     // 根据 rust_library 字段判断来源：有 WASM 模块则为 Wasm，否则为 FileScan；
 

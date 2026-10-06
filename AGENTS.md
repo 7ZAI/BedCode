@@ -257,7 +257,7 @@ CI 门禁（合并到 master/uat 时）：`lint.yml`（eslint 0 error）+ `test.
 | 分支隔离 / CI | `docs/knowledge/feature-branch-isolation.md`、`github-actions-setup.md` |
 | 构建与产物治理 | `docs/knowledge/build-process.md`、`wasip3-toolchain.md` |
 | 架构路线 | `docs/knowledge/plugin-kernel-roadmap.md`、`businessless-kernel-vision.md` |
-| **宿主 / 插件边界裁决（§5 红线的单一事实源）** | `docs/adr/0022-plugin-host-interface-primitive-boundary.md`（+ 0017 互调 / 0018 移动独立契约 / 0019 双端锁版 / 0029 并发 / 0031 认证中心注册 / 0032 插件分类 / 0033 认证中心自持签发验签 / 0035 能力域 crate 化 / 0037 wasm_core 整核抽出） |
+| **宿主 / 插件边界裁决（§5 红线的单一事实源）** | `docs/adr/0022-plugin-host-interface-primitive-boundary.md`（+ 0017 互调 / 0018 移动独立契约 / 0019 双端锁版 / 0029 并发 / 0031 认证中心注册 / 0032 插件分类 / 0033 认证中心自持签发验签 / 0035 能力域 crate 化 / 0037 wasm_core 整核抽出 / 0038 wasm-core 引擎面与薄壳纯净性 / 0039 host-pty 能力域整面迁出（含 WIT 接线）） |
 | pi 工具手册 | `docs/agents/pi-tools.md` |
 
 ---

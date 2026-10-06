@@ -419,6 +419,9 @@ impl PluginHost {
         // 对等网络上下文装配端口（整核抽出 §3.3 唯一端口）：lib 实现
         // `peer_net_cmds::peer_ctx`，无头/测试传 None → HEADLESS_UNAVAILABLE 语义不变
         peer_ctx_provider: Option<Arc<crate::host_api::context::PeerCtxProvider>>,
+        // 第一方免弹窗归属清单（票 08/P0-2：宿主装配时注入——产品数据出厂 lib，
+        // 判定逻辑留 wasm-core；空表 = 无免弹窗项，无头/测试语义逐字不变）
+        first_party_dirs: Vec<(&'static str, Vec<crate::security::fs_auth::TrustedDir>)>,
     ) -> Arc<Self> {
         tracing::info!("[PluginHost] Initializing with plugins_dir: {:?}", plugins_dir);
 
@@ -427,8 +430,10 @@ impl PluginHost {
         let storage = Arc::new(PluginStorage::new(db.clone()));
 
         // 构建 WASM 运行时和宿主上下文
-        let wasm_runtime =
-            Arc::new(WasmRuntime::new(storage.clone(), app_handle.clone()).expect("Failed to initialize WASM runtime"));
+        let wasm_runtime = Arc::new(
+            WasmRuntime::new(storage.clone(), app_handle.clone(), first_party_dirs)
+                .expect("Failed to initialize WASM runtime"),
+        );
 
         // 创建消息总线（dispatcher 延迟注入，在 init_message_bus 中设置）
         let message_bus = Arc::new(crate::bus::MessageBus::new());

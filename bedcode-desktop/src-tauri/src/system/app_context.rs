@@ -3,8 +3,8 @@
 //! 全局单实例容器，集中管理桌面端所有全局服务的引用
 //! 在 lib.rs 的 run() 中一次性创建，后续通过 AppContext::global() 获取
 
+use bedcode_discovery_engine::advertiser::MdnsAdvertiser;
 use crate::db::Database;
-use crate::mdns::advertiser::MdnsAdvertiser;
 use crate::system::info::SystemInfo;
 use crate::wasm_core::PluginHost;
 use std::path::PathBuf;

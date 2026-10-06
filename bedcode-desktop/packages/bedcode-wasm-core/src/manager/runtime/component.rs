@@ -27,7 +27,7 @@ use super::{StoreSpec, WasmHostContext, WasmPluginState};
 use crate::config::StoreLimits;
 use crate::host_api::context::HostCtxOf;
 use crate::host_api::{
-    api, app, auth, bus, config, connection, crypto, database, events, fs, log, platform, process, pty, sqlite, status,
+    api, app, auth, bus, config, connection, crypto, database, events, fs, log, platform, process, sqlite, status,
     storage, task, timer,
 };
 use crate::monitor::LifecycleEvent;
@@ -193,47 +193,6 @@ impl bedcode::plugin::host_auth::Host for WasmPluginState {
 
     fn auth_method_invoke(&mut self, method: String, params: String) -> Result<String, String> {
         auth::auth_method_invoke(self.host_ctx(), self.host_ctx(), &self.plugin_id, &method, &params)
-    }
-}
-
-// ==================== host-pty（v16 插件私有伪终端） ====================
-// 属主 = 调用方插件实例的 plugin_id（自 store state 派生，guest 无法伪造）；
-// 权限两域 + 环形缓冲游标拉取全部在 host_impl/pty.rs 内实现
-
-impl bedcode::plugin::host_pty::Host for WasmPluginState {
-    fn spawn(&mut self, config_json: String) -> Result<String, String> {
-        pty::pty_spawn(self.host_ctx(), self.host_ctx(), &self.plugin_id, &config_json)
-    }
-
-    fn write(&mut self, pty_id: String, data: Vec<u8>) -> Result<(), String> {
-        pty::pty_write(self.host_ctx(), &self.plugin_id, &pty_id, &data)
-    }
-
-    fn resize(&mut self, pty_id: String, cols: u16, rows: u16) -> Result<(), String> {
-        pty::pty_resize(self.host_ctx(), &self.plugin_id, &pty_id, cols, rows)
-    }
-
-    fn kill(&mut self, pty_id: String) -> Result<(), String> {
-        pty::pty_kill(self.host_ctx(), &self.plugin_id, &pty_id)
-    }
-
-    fn ring_fetch(
-        &mut self,
-        pty_id: String,
-        from_offset: u64,
-        max_bytes: u32,
-    ) -> Result<Option<bedcode::plugin::host_pty::RingFetchResult>, String> {
-        pty::pty_ring_fetch(self.host_ctx(), &self.plugin_id, &pty_id, from_offset, max_bytes).map(|fetched| {
-            fetched.map(|ring| bedcode::plugin::host_pty::RingFetchResult {
-                data: ring.data,
-                next_offset: ring.next_offset,
-                truncated: ring.truncated,
-            })
-        })
-    }
-
-    fn is_running(&mut self, pty_id: String) -> Result<bool, String> {
-        pty::pty_is_running(self.host_ctx(), &self.plugin_id, &pty_id)
     }
 }
 
@@ -586,6 +545,7 @@ const HOST_MODULES: &[&str] = &[
     crate::host_api::ws::HOST_MODULE_NAME,
     crate::host_api::peer::HOST_MODULE_NAME,
     crate::host_api::http::HOST_MODULE_NAME,
+    crate::host_api::pty::HOST_MODULE_NAME,
     // `host-database` / `host-plugin-database` / `host-storage` 不在册：ADR 0036
     // 撤销 sqlite 能力域 crate，三 interface 的 `Host` impl 回到本文件（见上）。
 ];
@@ -602,6 +562,10 @@ use bedcode_server_peer_net as _;
 // `bedcode-server-http` 同理（宿主 HTTP 服务器面已在用它）；`host-http` 能力域
 // （入站 2 + 出站 1 原语）的自报静态靠这行进入最终二进制。
 use bedcode_server_http as _;
+// `bedcode-pty-engine` 同理（宿主命令面 / 生命周期已在用它）；`host-pty` 能力域
+// （6 原语 + WIT 接线）的自报静态靠这行进入最终二进制（pty-capability-domain 票 D1：
+// 接线随域机制一并迁出内核，宿主只剩端口 adapter）。
+use bedcode_pty_engine as _;
 
 /// 收集已自报的能力模块并与白名单双向比对
 fn host_module_registry() -> crate::Result<bedcode_host_kit::ModuleRegistry> {
@@ -643,7 +607,6 @@ pub(crate) fn add_to_linker(linker: &mut Linker<WasmPluginState>) -> crate::Resu
         bedcode::plugin::host_database::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_plugin_database::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_process::add_to_linker::<WasmPluginState, D>,
-        bedcode::plugin::host_pty::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_crypto::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_connection::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_timer::add_to_linker::<WasmPluginState, D>,

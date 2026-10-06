@@ -1,30 +1,43 @@
-//! PTY 引擎面（bedcode-pty-engine）
+//! BedCode PTY 能力域（`host-pty`，6 条原语）+ 可复用 PTY 引擎面
 //!
-//! 跨平台伪终端引擎：进程生命周期（创建 / 启动 / 终止 / 回收）、输出读取线程、
-//! 输出环形缓冲（`PtyRing`，游标拉取）、终态汇聚门、WSL 发行版列举。
+//! ## 两层结构
 //!
-//! **wasm-core 纯净性收口（票 02，.scratch/2026-10-06-wasm-core-purity/spec.md）**：
-//! 本 crate 从 `bedcode-wasm-core` 的 `pty/` 迁移而来，是「引擎面出核心」的第一步。
-//! 依赖方向：**只向下**依赖 `bedcode-server-base`（错误 / 配置快照）与第三方
-//! （portable-pty / tokio），**零 wasm 依赖、零宿主依赖**——任何 Tauri 宿主、任何
-//! 需要终端能力的程序都可直接 path 依赖本 crate。
+//! ```text
+//!   pty_process / pty_reader / pty_ring / lifecycle / output_sink   引擎面（零 wasm）
+//!   plugin_binding（primitives / registry / output / ports）        能力域（WIT 接线）
+//! ```
+//!
+//! 引擎面是**跨平台伪终端引擎**：进程生命周期（创建 / 启动 / 终止 / 回收）、输出读取
+//! 线程、输出环形缓冲（`PtyRing`，游标拉取）、终态汇聚门。引擎面只依赖
+//! `bedcode-server-base`（常量 / 错误边界）与第三方（portable-pty / tokio）——
+//! **任何宿主可复用**（不依赖 wasmtime、不依赖宿主 bin crate）。
+//!
+//! 能力域层随 [.scratch/2026-10-06-pty-capability-domain/spec.md] D1/D2 迁入：
+//! WIT 接线（`bindgen!` provider 侧生成 + 6 条原语的宿主实现 + 能力模块自报）与域
+//! 机制（句柄表 / 配额仲裁 / 退出事件 / 限频通知）一并住在这里，宿主侧只剩一个端口
+//! adapter 与一次开机装配调用——与 http / ws / peer-net / mdns 四域同形。
+//!
+//! **依赖方向**：本 crate 依赖 `bedcode-host-kit`（能力模块契约 + 插件实例状态）与
+//! `bedcode-server-base`，**不依赖 wasm-core / 不依赖宿主**。
 //!
 //! ## 零业务语义（2026-09-23 PTY 解耦票，迁移时保留）
 //!
 //! 引擎只接受调用方**算好的 argv**（`portable_pty::CommandBuilder`）——不做 shell
 //! 包装 / WSL 路径转换 / 业务环境注入。shell 包装与业务环境注入在消费侧
 //! （业务会话 = 插件 `com.bedcode.terminal-session` 的 `launch.rs`；插件私有 PTY =
-//! 插件自己）。业务输出汇实现亦不在本 crate（调用方自备 `PtyOutputSink`）。
+//! 插件自己）。业务输出汇实现亦不在引擎面（调用方自备 `PtyOutputSink`；本 crate 的
+//! 限频通知装饰器是机制，不是业务汇）。
 //!
 //! ## 引擎级配置（E1/D5：AppConfig 读点参数化）
 //!
-//! 原实现读 `wasm_core::system::config::AppConfig::global()` 两处（lifecycle 广播
-//! 容量 / 读缓冲大小）。迁移后引擎**不感知宿主配置**——这两值改由调用方在
+//! 引擎面**不感知宿主配置**——生命周期广播容量 / 读缓冲大小由调用方在
 //! [`PtySession::with_command`] / [`PtySession::with_private_command`] 时经
-//! [`PtyEngineConfig`] 传入，宿主侧从自己的配置快照取值。
+//! [`PtyEngineConfig`] 传入；能力域层则经端口向宿主要快照
+//! （[`plugin_binding::ports::PtyPorts::config`]）。
 
 pub mod lifecycle;
 pub mod output_sink;
+pub mod plugin_binding;
 pub mod pty_process;
 pub mod pty_reader;
 pub mod pty_ring;

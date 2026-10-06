@@ -22,7 +22,7 @@
 //! 迭代数可用 TERM_PERF_N 覆盖（默认每场景 1 轮全量，抑制 CI 负载）。
 
 use super::*;
-use crate::pty::pty_ring::PtyRing;
+use bedcode_pty_engine::PtyRing;
 use std::time::Instant;
 
 /// 确定性输出体量（P2 使用；1 MiB，环容量 4 MiB 下无淘汰干扰）
@@ -380,13 +380,17 @@ fn perf_p2b_host_side_primitive_call() {
             wait_produced(&plugin, &pty_id, PROBE_BYTES).await;
 
             // 宿主侧直调：权限门 + 注册表锁 + 环 fetch，全程无 WASM 往返
-            let primitive = crate::host_api::pty::pty_ring_fetch;
+            // （域机制在 `bedcode_pty_engine::plugin_binding`，端口取宿主 adapter——
+            // 基准测的是「端口 + 注册表 + 环」这条真实路径，不含 WIT 往返）
+            let primitive = bedcode_pty_engine::plugin_binding::primitives::pty_ring_fetch;
+            let ports: Arc<dyn bedcode_pty_engine::plugin_binding::ports::PtyPorts> =
+                Arc::new(crate::host_api::pty::HostPtyPorts::from_ctx(Arc::clone(&host_ctx)));
             let t0 = Instant::now();
             let mut cursor = 0u64;
             let mut calls = 0usize;
             while cursor < PROBE_BYTES {
                 calls += 1;
-                let fetched = primitive(host_ctx.as_ref(), TERM_PERF_PLUGIN, &pty_id, cursor, HOST_FETCH_MAX_BYTES)
+                let fetched = primitive(&ports, TERM_PERF_PLUGIN, &pty_id, cursor, HOST_FETCH_MAX_BYTES)
                     .expect("pty_ring_fetch")
                     .expect("数据已 settle 必有返回");
                 cursor = fetched.next_offset;

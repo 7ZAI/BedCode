@@ -94,8 +94,13 @@ impl FsGrantLayer {
 }
 
 /// 第一方免弹窗目录的形态
+///
+/// **纯净性收口票 08（P0-2）**：本类型是判定语义（机制）留在本 crate；
+/// **产品清单不在本 crate**——`FIRST_PARTY_TRUSTED_DIRS` 常量已删除，清单由
+/// 宿主 lib 装配时经 `FsAuthChecker::new` 注入（`Vec<(&'static str, Vec<TrustedDir>)>`），
+/// 空表 = 无免弹窗项（无头 / 测试 / 未装配宿主语义逐字不变）。
 #[derive(Debug, Clone, Copy)]
-enum TrustedDir {
+pub enum TrustedDir {
     /// 家目录下的相对前缀（`~/.agents/skills` 这类宿主已知位置）
     Home(&'static str),
     /// 任意项目根下的同名**目录段**（agent CLI 的项目级配置目录约定：
@@ -105,48 +110,8 @@ enum TrustedDir {
     ProjectSegment(&'static str),
 }
 
-/// 第一方插件的集成目录归属清单（票 07）
-///
-/// 逐条写明「谁、为什么必须免弹窗」，新增条目要说得出消费它的函数；说不出归属的
-/// 一律不加——让它走弹窗 + 记住，而不是往这张表里塞特权。两类合法判据：
-/// ① 目录的位置由**第三方 CLI 的约定**决定（插件无从让用户挑），且每次会话都会访问；
-/// ② 插件**自身数据目录下的瞬时产物**（运行日志回灌）：`Exact` 粒度落账无法表达
-/// 「整目录」——产物每次运行都是新文件名（`runs/skills-scan-3.log` → `-4.log`），
-/// 「记住」永远不命中，弹窗 + 记住在这里是伪出路，只能靠免询问 + 审计投影。
-const FIRST_PARTY_TRUSTED_DIRS: &[(&str, &[TrustedDir])] = &[
-    (
-        // agent-hub 技能库：规范库在 `~/.agents/skills`，分发目标由
-        // `wasm-apps/agent-hub/rust/src/skills.rs::TARGET_SEGS` 决定（claude / pi 家级私有目录）。
-        // 分发与落后检测逐文件读写这些目录，弹窗会把一次「同步技能」拆成 N 次点击。
-        "com.bedcode.agent-hub",
-        &[
-            TrustedDir::Home(".agents"),
-            TrustedDir::Home(".claude/skills"),
-            TrustedDir::Home(".pi/agent/skills"),
-            // agent-hub 数据根下的**输出目录**（判据 ②）：detect / install /
-            // skills / usage 的 host-process 产物 `runs/*.log` 都写在这，
-            // 回灌读取（handle_process_done 的 fs_read(output_path)）后即删。
-            // 范围精确到 runs/ 子目录：该插件统计库与会话数据不在这棵子树
-            // （走 host-storage / 用户授权），本豁免不含任何用户内容。
-            TrustedDir::Home(".bedcode/agent-hub/runs"),
-        ],
-    ),
-    (
-        // terminal-session 的 agent 集成面：`task/hooks.rs` 在会话启动前把 hooks / 扩展
-        // 写进项目根的 `.claude` / `.codex` / `.pi` / `.opencode`，并清理全局
-        // `~/.claude/settings.json` 里属于本插件的那段。项目根由用户选，目录段名由
-        // 各 CLI 约定——只有段名是能写进清单的那一半。
-        "com.bedcode.terminal-session",
-        &[
-            TrustedDir::ProjectSegment(".claude"),
-            TrustedDir::ProjectSegment(".codex"),
-            TrustedDir::ProjectSegment(".pi"),
-            TrustedDir::ProjectSegment(".opencode"),
-        ],
-    ),
-];
 
-/// 第一方免询问项的**只读投影**（授权管理界面的读模型用，spec §9.3 / 票 08）
+/// 第一方免弹窗项的**只读投影**（授权管理界面的读模型用，spec §9.3 / 票 08）
 ///
 /// 判定语义只有本模块一处真源（[`first_party_dir_matches_with_home`]）；这里仅把
 /// 清单翻译成可展示形状，使这批「内置免询问」在授权管理界面可见——不导出就等于
@@ -163,27 +128,6 @@ pub struct FirstPartyDirEntry {
     pub kind: &'static str,
     /// 清单里的原始值：`~/.agents` 的 `".agents"`、项目段 `".claude"`
     pub value: &'static str,
-}
-
-/// 导出清单全部条目（按清单顺序，稳定；调用方按 plugin_id 过滤归属）
-pub fn first_party_trusted_dirs() -> Vec<FirstPartyDirEntry> {
-    FIRST_PARTY_TRUSTED_DIRS
-        .iter()
-        .flat_map(|(plugin_id, dirs)| {
-            dirs.iter().map(move |dir| match dir {
-                TrustedDir::Home(rel) => FirstPartyDirEntry {
-                    plugin_id,
-                    kind: "home",
-                    value: rel,
-                },
-                TrustedDir::ProjectSegment(seg) => FirstPartyDirEntry {
-                    plugin_id,
-                    kind: "project-segment",
-                    value: seg,
-                },
-            })
-        })
-        .collect()
 }
 
 /// 文件操作类型
@@ -451,6 +395,10 @@ pub struct FsAuthChecker {
     emit: Option<PromptEmitter>,
     /// 弹窗等待上限（生产 [`PROMPT_TIMEOUT`]；测试可调小以验证超时语义）
     prompt_timeout: Duration,
+    /// 第一方免弹窗归属清单（**宿主注入**，票 08/P0-2：产品数据出厂 lib，
+    /// 判定逻辑留本 crate）。空表 = 无免弹窗项——无头 / 测试 / 未装配宿主
+    /// 语义逐字不变（无豁免表 = 无免弹窗项）。
+    first_party_dirs: Vec<(&'static str, Vec<TrustedDir>)>,
 }
 
 impl FsAuthChecker {
@@ -459,17 +407,28 @@ impl FsAuthChecker {
     /// `app_handle` 为 None 时（无头/测试上下文）弹窗授权层不可用，直接拒绝。
     /// 授权记录真源由插件存储持有的同一数据库句柄构造（不额外传参，避免 20+ 处
     /// 构造点全部改签名）。
-    pub fn new(storage: Arc<PluginStorage>, app_handle: Option<Arc<tauri::AppHandle>>) -> Self {
+    ///
+    /// `first_party_dirs`：第一方免弹窗归属清单（[`TrustedDir`] 形态），由**宿主
+    /// lib 装配时注入**（`src-tauri/src/first_party_dirs.rs`）；传空表 = 无免弹窗项。
+    pub fn new(
+        storage: Arc<PluginStorage>,
+        app_handle: Option<Arc<tauri::AppHandle>>,
+        first_party_dirs: Vec<(&'static str, Vec<TrustedDir>)>,
+    ) -> Self {
         let emit = app_handle.map(|handle| {
             let handle = handle.clone();
             Arc::new(move |event: &str, payload: serde_json::Value| {
                 handle.emit(event, payload).map_err(|e| e.to_string())
             }) as PromptEmitter
         });
-        Self::assemble(storage, emit)
+        Self::assemble(storage, emit, first_party_dirs)
     }
 
-    fn assemble(storage: Arc<PluginStorage>, emit: Option<PromptEmitter>) -> Self {
+    fn assemble(
+        storage: Arc<PluginStorage>,
+        emit: Option<PromptEmitter>,
+        first_party_dirs: Vec<(&'static str, Vec<TrustedDir>)>,
+    ) -> Self {
         let auth_records = AuthPolicyStore::new(storage.db());
         Self {
             storage,
@@ -477,13 +436,18 @@ impl FsAuthChecker {
             pending_requests: Arc::new(Mutex::new(Vec::new())),
             emit,
             prompt_timeout: PROMPT_TIMEOUT,
+            first_party_dirs,
         }
     }
 
     /// **测试专用**：以显式事件投递口装配（捕获弹窗 payload、触发超时路径）
     #[cfg(test)]
-    pub(crate) fn with_emitter(storage: Arc<PluginStorage>, emit: Option<PromptEmitter>) -> Self {
-        Self::assemble(storage, emit)
+    pub(crate) fn with_emitter(
+        storage: Arc<PluginStorage>,
+        emit: Option<PromptEmitter>,
+        first_party_dirs: Vec<(&'static str, Vec<TrustedDir>)>,
+    ) -> Self {
+        Self::assemble(storage, emit, first_party_dirs)
     }
 
     /// **测试专用**：调小弹窗等待上限（「超时按拒绝且不落任何记录」契约的验证口）
@@ -662,7 +626,37 @@ impl FsAuthChecker {
 
     /// 第一方集成目录判定（见 [`first_party_dir_matches_with_home`]）
     fn first_party_dir_matches(&self, plugin_id: &str, canonical: &Path) -> bool {
-        first_party_dir_matches_with_home(plugin_id, canonical, dirs::home_dir().as_deref())
+        first_party_dir_matches_with_home(
+            &self.first_party_dirs,
+            plugin_id,
+            canonical,
+            dirs::home_dir().as_deref(),
+        )
+    }
+
+    /// 第一方免弹窗项的**只读投影**（授权管理界面的读模型；数据源 = 宿主注入表）
+    ///
+    /// 判定语义只有本模块一处真源（[`first_party_dir_matches_with_home`]）；这里仅把
+    /// 清单翻译成可展示形状，使这批「内置免询问」在授权管理界面可见——不导出就等于
+    /// 用户看不见的特权（spec §7「必须配套」）。空表（未装配）→ 空投影。
+    pub fn first_party_trusted_dirs(&self) -> Vec<FirstPartyDirEntry> {
+        self.first_party_dirs
+            .iter()
+            .flat_map(|(plugin_id, dirs)| {
+                dirs.iter().map(move |dir| match dir {
+                    TrustedDir::Home(rel) => FirstPartyDirEntry {
+                        plugin_id,
+                        kind: "home",
+                        value: rel,
+                    },
+                    TrustedDir::ProjectSegment(seg) => FirstPartyDirEntry {
+                        plugin_id,
+                        kind: "project-segment",
+                        value: seg,
+                    },
+                })
+            })
+            .collect()
     }
 
     /// 测试访问器：授权记录真源（用例要驱动撤销 / 断言落账行；生产只经判定链读写）
@@ -1290,8 +1284,16 @@ fn strip_verbatim_prefix(path: &Path) -> PathBuf {
 ///
 /// `home = None` 时 `Home` 形态**不放开**（只剩段名形态可用）：取不到家目录就把
 /// `~/.agents` 这类清单退化成「任意位置的 `.agents` 段」是反向的降级。
-fn first_party_dir_matches_with_home(plugin_id: &str, canonical: &Path, home: Option<&Path>) -> bool {
-    let Some((_, dirs)) = FIRST_PARTY_TRUSTED_DIRS.iter().find(|(id, _)| *id == plugin_id) else {
+///
+/// **票 08（P0-2）**：清单改为参数注入（[`FsAuthChecker::new`] 第 3 参），
+/// 判定逻辑（机制）留本 crate 不变；空表 = 恒不命中。
+fn first_party_dir_matches_with_home(
+    table: &[(&'static str, Vec<TrustedDir>)],
+    plugin_id: &str,
+    canonical: &Path,
+    home: Option<&Path>,
+) -> bool {
+    let Some((_, dirs)) = table.iter().find(|(id, _)| *id == plugin_id) else {
         return false;
     };
     dirs.iter().any(|d| match d {
@@ -1331,8 +1333,44 @@ mod tests {
     }
 
     /// 内存数据库 + 无投递口（None）的校验器：无法弹窗，未授权路径应保守拒绝
+    ///
+    /// 默认空豁免表（票 08/P0-2：豁免表宿主注入，测试默认无豁免）——普通用例
+    /// 语义与旧「无清单条目插件」一致；first-party 专项用例改用
+    /// [`first_party_checker`]（注入测试表）。
     async fn headless_checker() -> FsAuthChecker {
-        FsAuthChecker::new(checker_storage(), None)
+        FsAuthChecker::new(checker_storage(), None, Vec::new())
+    }
+
+    /// first-party 专项用例的校验器：注入**测试特制**豁免表（中性 plugin_id，
+    /// 不携带产品 wire——purity 票 08：wasm-core 连测试也不得持产品清单；
+    /// 目录形态与 lib 真源清单一致，验证的是判定机制而非产品绑定）
+    async fn first_party_checker() -> FsAuthChecker {
+        FsAuthChecker::new(checker_storage(), None, test_first_party_table())
+    }
+
+    /// 测试特制豁免表（目录形态 = lib `first_party_dirs.rs` 真源清单的镜像；
+    /// 插件 id 中性化——判定逻辑与插件名无关）
+    fn test_first_party_table() -> Vec<(&'static str, Vec<TrustedDir>)> {
+        vec![
+            (
+                "test.agent-hub",
+                vec![
+                    TrustedDir::Home(".agents"),
+                    TrustedDir::Home(".claude/skills"),
+                    TrustedDir::Home(".pi/agent/skills"),
+                    TrustedDir::Home(".bedcode/agent-hub/runs"),
+                ],
+            ),
+            (
+                "test.terminal-session",
+                vec![
+                    TrustedDir::ProjectSegment(".claude"),
+                    TrustedDir::ProjectSegment(".codex"),
+                    TrustedDir::ProjectSegment(".pi"),
+                    TrustedDir::ProjectSegment(".opencode"),
+                ],
+            ),
+        ]
     }
 
     /// 捕获的弹窗事件（`(event, payload)`）
@@ -1357,7 +1395,7 @@ mod tests {
             Ok(())
         });
         (
-            FsAuthChecker::with_emitter(checker_storage(), Some(emit)).with_prompt_timeout(timeout),
+            FsAuthChecker::with_emitter(checker_storage(), Some(emit), Vec::new()).with_prompt_timeout(timeout),
             log,
         )
     }
@@ -1430,7 +1468,7 @@ mod tests {
     /// 第一方按归属清单免弹窗：terminal-session 写项目集成目录（段名形态）
     #[tokio::test]
     async fn first_party_project_integration_dirs_stay_silent() {
-        let checker = headless_checker().await;
+        let checker = first_party_checker().await;
         for seg in [".claude", ".codex", ".pi", ".opencode"] {
             let path = std::env::temp_dir()
                 .join("some-project")
@@ -1440,7 +1478,7 @@ mod tests {
                 .to_string();
             assert!(
                 checker
-                    .check_batch("com.bedcode.terminal-session", &[path.clone()], FsOps::WRITE)
+                    .check_batch("test.terminal-session", &[path.clone()], FsOps::WRITE)
                     .await,
                 "会话启动前写项目集成目录是本插件的产品面，不得弹窗: {path}"
             );
@@ -1453,13 +1491,13 @@ mod tests {
     /// 全盘可读可写；改造后它们与第三方一样只覆盖到具名目录，其余走弹窗 + 记住。
     #[tokio::test]
     async fn first_party_outside_declared_dirs_requires_grant() {
-        let checker = headless_checker().await;
+        let checker = first_party_checker().await;
         let outside = std::env::temp_dir()
             .join("home-not-declared")
             .join("secrets.env")
             .to_string_lossy()
             .to_string();
-        for plugin in ["com.bedcode.terminal-session", "com.bedcode.agent-hub"] {
+        for plugin in ["test.terminal-session", "test.agent-hub"] {
             assert!(
                 !checker.check_batch(plugin, &[outside.clone()], FsOps::READ).await,
                 "{plugin} 读清单外路径必须走授权，不得免弹窗"
@@ -1490,7 +1528,7 @@ mod tests {
     /// 否则「为什么这次没弹框」在迁移期无法回答（是旧记录在兜底还是新记录命中）。
     #[tokio::test]
     async fn matched_layer_names_the_reason_for_no_dialog() {
-        let checker = headless_checker().await;
+        let checker = first_party_checker().await;
         let base = canonical_temp_dir();
         let dir = base.join("fs-auth-layer");
         std::fs::create_dir_all(&dir).unwrap();
@@ -1543,7 +1581,7 @@ mod tests {
         let claude = base.join("proj").join(".claude").join("settings.json");
         assert_eq!(
             checker
-                .decide_without_dialog("com.bedcode.terminal-session", &claude, FsOps::WRITE)
+                .decide_without_dialog("test.terminal-session", &claude, FsOps::WRITE)
                 .await,
             NoDialogDecision::Allowed(FsGrantLayer::FirstPartyDir)
         );
@@ -1555,125 +1593,116 @@ mod tests {
     fn first_party_dir_rules_match_segments_and_home_prefixes() {
         let home = std::path::Path::new("/home/u");
         let p = |s: &str| std::path::PathBuf::from(s);
+        // 判定逻辑与插件名无关：注入测试表（中性 id，形态与 lib 真源清单一致）
+        let table = test_first_party_table();
 
         // Home 形态：家目录下按组件前缀命中，相邻命名与「别处的同名目录」都不命中
         assert!(first_party_dir_matches_with_home(
-            "com.bedcode.agent-hub",
+            &table,
+            "test.agent-hub",
             &p("/home/u/.agents/skills/x/SKILL.md"),
             Some(home)
         ));
         assert!(first_party_dir_matches_with_home(
-            "com.bedcode.agent-hub",
+            &table,
+            "test.agent-hub",
             &p("/home/u/.claude/skills/a.md"),
             Some(home)
         ));
         assert!(
             !first_party_dir_matches_with_home(
-                "com.bedcode.agent-hub",
+                &table,
+                "test.agent-hub",
                 &p("/home/u/.claude/settings.json"),
                 Some(home)
             ),
-            "agent-hub 只拿到 skills 子树，不是整个 ~/.claude"
+            "test.agent-hub 只拿到 skills 子树，不是整个 ~/.claude"
         );
         // 自身数据根下的输出目录（判据 ②）：runs 子树任一层放行，
         // 但仅限 runs/——统计库（同数据根下非 runs）不走豁免
-        assert!(first_party_dir_matches_with_home(
-            "com.bedcode.agent-hub",
+        assert!(first_party_dir_matches_with_home(&table, 
+            "test.agent-hub",
             &p("/home/u/.bedcode/agent-hub/runs/skills-scan-3.log"),
             Some(home)
         ));
-        assert!(first_party_dir_matches_with_home(
-            "com.bedcode.agent-hub",
+        assert!(first_party_dir_matches_with_home(&table, 
+            "test.agent-hub",
             &p("/home/u/.bedcode/agent-hub/runs/a/b/c.log"),
             Some(home)
         ));
         assert!(
-            !first_party_dir_matches_with_home(
-                "com.bedcode.agent-hub",
+            !first_party_dir_matches_with_home(&table, 
+                "test.agent-hub",
                 &p("/home/u/.bedcode/agent-hub/stats.db"),
                 Some(home)
             ),
             "豁免只到 runs/ 子目录，同一数据根下的其他文件不放开"
         );
-        assert!(!first_party_dir_matches_with_home(
-            "com.bedcode.agent-hub",
+        assert!(!first_party_dir_matches_with_home(&table, 
+            "test.agent-hub",
             &p("/home/u/.bedcode/agent-hubx/runs/x.log"),
             Some(home)
         ));
-        assert!(!first_party_dir_matches_with_home(
-            "com.bedcode.agent-hub",
+        assert!(!first_party_dir_matches_with_home(&table, 
+            "test.agent-hub",
             &p("/home/other/.agents/x"),
             Some(home)
         ));
         assert!(
-            !first_party_dir_matches_with_home("com.bedcode.agent-hub", &p("/home/u/.agentsx/y"), Some(home)),
+            !first_party_dir_matches_with_home(&table, "test.agent-hub", &p("/home/u/.agentsx/y"), Some(home)),
             "组件边界：前缀不得吃掉相邻目录名"
         );
         // 取不到 home → Home 形态不放开（绝不退化成「任意位置的 .agents 段」）
-        assert!(!first_party_dir_matches_with_home(
-            "com.bedcode.agent-hub",
+        assert!(!first_party_dir_matches_with_home(&table, 
+            "test.agent-hub",
             &p("/home/u/.agents/skills/x"),
             None
         ));
 
         // ProjectSegment 形态：段名全等，非子串
-        assert!(first_party_dir_matches_with_home(
-            "com.bedcode.terminal-session",
+        assert!(first_party_dir_matches_with_home(&table, 
+            "test.terminal-session",
             &p("/srv/proj/.claude/hooks/x.py"),
             None
         ));
         assert!(
-            first_party_dir_matches_with_home("com.bedcode.terminal-session", &p("/srv/proj/.claude"), None),
+            first_party_dir_matches_with_home(&table, "test.terminal-session", &p("/srv/proj/.claude"), None),
             "集成目录本身（read_dir / 建目录）也要覆盖"
         );
         assert!(
-            !first_party_dir_matches_with_home("com.bedcode.terminal-session", &p("/srv/proj/.claudex/a"), None),
+            !first_party_dir_matches_with_home(&table, "test.terminal-session", &p("/srv/proj/.claudex/a"), None),
             "子串不得放过相邻段名"
         );
-        assert!(!first_party_dir_matches_with_home(
-            "com.bedcode.terminal-session",
+        assert!(!first_party_dir_matches_with_home(&table, 
+            "test.terminal-session",
             &p("/srv/proj/x.claude/a"),
             None
         ));
         // 收紧的本体：会话项目根本身**不在**清单里（今天它免弹窗 = 全盘可读）
         assert!(
-            !first_party_dir_matches_with_home("com.bedcode.terminal-session", &p("/srv/proj/src/main.rs"), None),
+            !first_party_dir_matches_with_home(&table, "test.terminal-session", &p("/srv/proj/src/main.rs"), None),
             "项目根文件浏览须走弹窗 + 记住，不再有任意路径特权"
         );
 
         // 未列入清单的插件：一律不放开
         for id in ["com.bedcode.test", "com.bedcode.ai-chatbox", "com.example.third"] {
             assert!(
-                !first_party_dir_matches_with_home(id, &p("/home/u/.claude/settings.json"), Some(home)),
+                !first_party_dir_matches_with_home(&table, id, &p("/home/u/.claude/settings.json"), Some(home)),
                 "{id} 不在第一方清单里"
             );
         }
     }
 
-    /// 清单本身是审计面：条目非空、id 不重复、只放第一方
-    #[test]
-    fn first_party_list_is_well_formed() {
-        let mut seen: Vec<&str> = Vec::new();
-        for (id, dirs) in FIRST_PARTY_TRUSTED_DIRS {
-            assert!(!dirs.is_empty(), "{id} 占了条目却不给目录，等于回到任意路径放行");
-            assert!(id.starts_with("com.bedcode."), "清单只放第一方: {id}");
-            assert!(
-                !seen.contains(id),
-                "同一插件 id 不得出现两次（第一个会被静默忽略）: {id}"
-            );
-            seen.push(id);
-        }
-        // 已知消费者清单（增删条目必须同时交代这里与票 07 的归属注释）
-        assert_eq!(seen, vec!["com.bedcode.agent-hub", "com.bedcode.terminal-session"]);
-    }
-
-    /// 投影完备性：清单里每一条都被导出，且顺序一致
+    /// 投影完备性：注入表里每一条都被导出，且顺序一致（机制面）
     ///
     /// 少一条 = 授权管理界面看不见一项免询问特权（spec §7 的不可见特权正是要避免的）；
     /// 顺序一致 = 界面渲染顺序与审计面（清单本身）可逐行对照。
+    /// 产品清单的 well-formed 审计（条目非空 / id 不重复 / 只放第一方 / 已知消费者
+    /// 不变）随清单出厂迁移 lib（`src-tauri/src/first_party_dirs.rs` 模块测试）。
     #[test]
     fn first_party_projection_covers_every_listed_dir() {
-        let listed: Vec<(&str, &str)> = FIRST_PARTY_TRUSTED_DIRS
+        let table = test_first_party_table();
+        let listed: Vec<(&str, &str)> = table
             .iter()
             .flat_map(|(id, dirs)| {
                 dirs.iter().map(move |d| {
@@ -1687,7 +1716,8 @@ mod tests {
                 })
             })
             .collect();
-        let projected: Vec<(&str, &str)> = first_party_trusted_dirs()
+        let projected: Vec<(&str, &str)> = FsAuthChecker::new(checker_storage(), None, table)
+            .first_party_trusted_dirs()
             .iter()
             .map(|entry| (entry.plugin_id, entry.value))
             .collect();
@@ -2073,7 +2103,7 @@ mod tests {
     /// 它是 WASI 预打开与任务单元的唯一判据：这里放开一分，那两条无弹窗通道就放开一分。
     #[tokio::test]
     async fn is_granted_covers_first_party_dirs_and_persisted_grants_only() {
-        let checker = headless_checker().await;
+        let checker = first_party_checker().await;
         // 第三方 + 任意位置的 .claude 段 → 不放开（旧实现在这里返回 true）
         let third_party = std::env::temp_dir().join(".claude").to_string_lossy().to_string();
         assert!(
@@ -2084,7 +2114,7 @@ mod tests {
         assert!(
             checker
                 .is_granted(
-                    "com.bedcode.terminal-session",
+                    "test.terminal-session",
                     &std::env::temp_dir()
                         .join("proj/.claude/settings.json")
                         .to_string_lossy(),
@@ -2096,7 +2126,7 @@ mod tests {
         assert!(
             !checker
                 .is_granted(
-                    "com.bedcode.terminal-session",
+                    "test.terminal-session",
                     &std::env::temp_dir().to_string_lossy(),
                     FsOps::READ
                 )
@@ -2399,7 +2429,7 @@ mod tests {
     /// 且 deny 优先于第一方免询问目录（spec §6.1 第 1 步）
     #[tokio::test]
     async fn revoke_records_deny_that_wins_over_first_party_dir() {
-        let checker = headless_checker().await;
+        let checker = first_party_checker().await;
         let base = canonical_temp_dir();
         let project = base.join("fs-auth-revoke-proj");
         let claude = project.join(".claude");
@@ -2409,7 +2439,7 @@ mod tests {
         // 第一方清单覆盖的目录：撤销前免弹窗（否则本用例恒真）
         assert!(
             checker
-                .check("com.bedcode.terminal-session", &target_s, FsOp::Write)
+                .check("test.terminal-session", &target_s, FsOp::Write)
                 .await,
             "前置：第一方集成目录本来免弹窗"
         );
@@ -2417,7 +2447,7 @@ mod tests {
         checker
             .auth_records()
             .deny(
-                "com.bedcode.terminal-session",
+                "test.terminal-session",
                 AuthResource::Fs,
                 &claude.to_string_lossy(),
                 AuthRecordSource::UserDeny,
@@ -2427,20 +2457,20 @@ mod tests {
 
         assert!(
             !checker
-                .check("com.bedcode.terminal-session", &target_s, FsOp::Write)
+                .check("test.terminal-session", &target_s, FsOp::Write)
                 .await,
             "硬拒绝记录必须优先于第一方免询问目录（撤销后访问被直接拒绝）"
         );
         assert!(
             !checker
-                .check("com.bedcode.terminal-session", &target_s, FsOp::Read)
+                .check("test.terminal-session", &target_s, FsOp::Read)
                 .await,
             "deny 是整目标硬拒绝：读同样被拒"
         );
         let sibling = claude.join("hooks/x.py");
         assert!(
             !checker
-                .check("com.bedcode.terminal-session", &sibling.to_string_lossy(), FsOp::Read)
+                .check("test.terminal-session", &sibling.to_string_lossy(), FsOp::Read)
                 .await,
             "deny 覆盖子树"
         );
@@ -2458,7 +2488,7 @@ mod tests {
     /// 转红（恢复后仍被拒 = 用户失去「反悔」的出口）。
     #[tokio::test]
     async fn removing_the_revoke_record_restores_the_first_party_exemption() {
-        let checker = headless_checker().await;
+        let checker = first_party_checker().await;
         let project = canonical_temp_dir().join("fs-auth-revoke-restore");
         let claude = project.join(".claude");
         std::fs::create_dir_all(&claude).unwrap();
@@ -2470,18 +2500,18 @@ mod tests {
         // 撤销：走与界面完全相同的写面（`revoke` = 删 allow + 落 deny）
         assert!(
             checker
-                .check("com.bedcode.terminal-session", &target_s, FsOp::Read)
+                .check("test.terminal-session", &target_s, FsOp::Read)
                 .await,
             "前置：第一方集成目录本来免弹窗"
         );
         checker
             .auth_records()
-            .revoke("com.bedcode.terminal-session", AuthResource::Fs, &dir_s)
+            .revoke("test.terminal-session", AuthResource::Fs, &dir_s)
             .await
             .expect("revoke");
         assert!(
             !checker
-                .check("com.bedcode.terminal-session", &target_s, FsOp::Read)
+                .check("test.terminal-session", &target_s, FsOp::Read)
                 .await,
             "撤销后该目录被硬拒绝"
         );
@@ -2489,20 +2519,20 @@ mod tests {
         // 另一出口：移除撤销记录 → 回到「第一方免询问」层（而非落到弹窗）
         let removed = checker
             .auth_records()
-            .remove_deny("com.bedcode.terminal-session", AuthResource::Fs, &dir_s)
+            .remove_deny("test.terminal-session", AuthResource::Fs, &dir_s)
             .await
             .expect("remove deny");
         assert_eq!(removed, 1, "移除出口必须真删一行（0 = 界面上按钮点了没反应）");
         assert_eq!(
             checker
-                .decide_without_dialog("com.bedcode.terminal-session", &target, FsOps::READ)
+                .decide_without_dialog("test.terminal-session", &target, FsOps::READ)
                 .await,
             NoDialogDecision::Allowed(FsGrantLayer::FirstPartyDir),
             "移除撤销记录后第一方免询问必须恢复（档位 / 记录层都不是它）"
         );
         assert!(
             checker
-                .check("com.bedcode.terminal-session", &target_s, FsOp::Read)
+                .check("test.terminal-session", &target_s, FsOp::Read)
                 .await
         );
         std::fs::remove_dir_all(&project).ok();
@@ -2738,23 +2768,23 @@ mod tests {
     /// （见上一条：deny 优先于第一方层）。
     #[tokio::test]
     async fn always_ask_does_not_reopen_first_party_dirs() {
-        let checker = headless_checker().await;
+        let checker = first_party_checker().await;
         let project = canonical_temp_dir().join("fs-auth-ask-firstparty");
         let target = project.join(".claude").join("settings.json");
         std::fs::create_dir_all(target.parent().unwrap()).unwrap();
         std::fs::write(&target, b"{}").unwrap();
 
-        set_fs_strategy(&checker, "com.bedcode.terminal-session", AuthStrategy::AlwaysAsk).await;
+        set_fs_strategy(&checker, "test.terminal-session", AuthStrategy::AlwaysAsk).await;
         assert_eq!(
             checker
-                .decide_without_dialog("com.bedcode.terminal-session", &target, FsOps::WRITE)
+                .decide_without_dialog("test.terminal-session", &target, FsOps::WRITE)
                 .await,
             NoDialogDecision::Allowed(FsGrantLayer::FirstPartyDir),
             "第一方集成目录在总是询问档下仍免弹窗"
         );
         assert!(
             checker
-                .check("com.bedcode.terminal-session", &target.to_string_lossy(), FsOp::Write)
+                .check("test.terminal-session", &target.to_string_lossy(), FsOp::Write)
                 .await
         );
         std::fs::remove_dir_all(&project).ok();
@@ -2769,7 +2799,7 @@ mod tests {
     ) -> Vec<crate::security::auth_policy::AuthRecord> {
         checker
             .auth_records()
-            .overview(plugin_id, "T")
+            .overview(plugin_id, "T", Vec::new())
             .await
             .expect("overview")
             .records

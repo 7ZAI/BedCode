@@ -684,6 +684,7 @@ dependencies = [
  "bedcode-link-crypto",
  "bedcode-peer-net",
  "bedcode-plugin-api",
+ "bedcode-pty-engine",
  "bedcode-server-base",
  "bedcode-server-core",
  "bedcode-server-http",
@@ -884,6 +885,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "bedcode-pty-engine"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bedcode-host-kit",
+ "bedcode-plugin-api",
+ "bedcode-server-base",
+ "chrono",
+ "inventory",
+ "portable-pty",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "uuid",
+ "wasmtime",
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
 name = "bedcode-server-base"
 version = "0.1.0"
 dependencies = [
@@ -1010,6 +1031,7 @@ dependencies = [
  "bedcode-link-crypto",
  "bedcode-peer-net",
  "bedcode-plugin-api",
+ "bedcode-pty-engine",
  "bedcode-server-base",
  "bedcode-server-core",
  "bedcode-server-http",
@@ -1748,6 +1770,7 @@ version = "0.0.0"
 dependencies = [
  "actix-web",
  "bedcode-desktop",
+ "bedcode-discovery-engine",
  "bedcode-mobile",
  "bedcode-server-base",
  "bedcode-server-core",

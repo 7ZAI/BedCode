@@ -383,7 +383,7 @@ mod tests {
         db.lock().await.init_schema().expect("init schema");
         let dir = std::env::temp_dir().join(format!("bedcode-svc-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("temp dir");
-        let host = PluginHost::new(db, &dir, &dir, None, None).await;
+        let host = PluginHost::new(db, &dir, &dir, None, None, Vec::new()).await;
         host.init_message_bus().await;
         host
     }
@@ -419,7 +419,7 @@ mod tests {
         let host = rt.block_on(async {
             let db = Arc::new(Mutex::new(Database::new(Path::new(":memory:")).expect("in-memory db")));
             db.lock().await.init_schema().expect("init schema");
-            let host = PluginHost::new(db, &dir, &dir, None, None).await;
+            let host = PluginHost::new(db, &dir, &dir, None, None, Vec::new()).await;
             host.init_message_bus().await;
             Arc::new(host)
         });

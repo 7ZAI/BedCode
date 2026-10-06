@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use actix_web::dev::ServerHandle;
 use base64::Engine;
 use bedcode_desktop_lib::db::Database;
-use bedcode_desktop_lib::mdns::advertiser::MdnsAdvertiser;
+use bedcode_discovery_engine::advertiser::MdnsAdvertiser;
 use bedcode_desktop_lib::server::composition::start_http_server;
 use bedcode_desktop_lib::system::app_context::AppContextBuilder;
 use bedcode_desktop_lib::system::info::SystemInfo;
@@ -268,6 +268,7 @@ async fn init_test_app_context() {
             &user_plugins_dir, // 用户插件目录：独立空目录（见上方来源标注说明）
             None,
             None, // 整核抽出 §3.3：无头测试不注入 PeerCtxProvider（HEADLESS_UNAVAILABLE 语义不变）
+            Vec::new(), // 票 08/P0-2：第一方豁免表宿主注入，无头测试空表（无免弹窗项）
         )
         .await;
         plugin_host.init_message_bus().await;

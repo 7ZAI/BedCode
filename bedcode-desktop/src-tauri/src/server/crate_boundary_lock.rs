@@ -125,6 +125,12 @@ const ALLOWED_DOWNWARD_EDGES: &[(&str, &[&str])] = &[
     ("bedcode-host-kit", &[]),
     // 能力域 crate：向下只取机制内核
     ("bedcode-discovery-engine", &["bedcode-host-kit"]),
+    // host-pty 能力域（票 02 迁引擎体 → ADR 0039 整面迁出）：引擎面 + WIT 接线 +
+    // 域机制都住在本 crate（自带 `bindgen!` + `HostModule` 自报），wasm-core 只剩
+    // 端口 adapter。向下边与四域同形：基础层（错误 / 常量）+ 机制内核 host-kit
+    // （`WasmPluginState` / `HostModule` / `ModuleEntry` 是 `add_to_linker` 与自报
+    // 的前提，与 http / ws / peer-net / discovery 完全一致）。
+    ("bedcode-pty-engine", &["bedcode-server-base", "bedcode-host-kit"]),
     // 整核本体（wasm-core-whole-crate 票 05）：bedcode-wasm-core 是全部拆分产物
     // 的组装点——站在基础层（base / crypto / host-kit / server-core）与全部能力域
     // crate（mdns / ws / peer / http）之上，把四通道与四闸门装配成一个可复用的
@@ -142,6 +148,10 @@ const ALLOWED_DOWNWARD_EDGES: &[(&str, &[&str])] = &[
             "bedcode-server-websocket",
             "bedcode-server-peer-net",
             "bedcode-server-http",
+            // 票 02 + ADR 0039：PTY 引擎面与 host-pty 能力域都在 bedcode-pty-engine
+            // （钉断言①：wasm-core → pty-engine 是唯一跨「内核 → 能力域」的向下边，
+            // 反向/横向出现即红）
+            "bedcode-pty-engine",
         ],
     ),
 ];
@@ -163,6 +173,11 @@ const REQUIRED_DOWNWARD_EDGES: &[(&str, &str)] = &[
     // 能力域 crate 必须真的站在机制内核上（`add_to_linker::<WasmPluginState, D>`
     // 的单态 S 在 kit 里；缺这条边说明绑定层搬错了位置）
     ("bedcode-discovery-engine", "bedcode-host-kit"),
+    // host-pty 能力域（票 02 + ADR 0039）：生产 `[dependencies]` 必须有基础层
+    // （错误 / 常量 / 连接身份真源在 bedcode-server-base；缺边 = 引擎复制了错误
+    // 类型或清单被误删）与机制内核（host-kit：WIT 接线 + 自报的前提，同四域）
+    ("bedcode-pty-engine", "bedcode-server-base"),
+    ("bedcode-pty-engine", "bedcode-host-kit"),
     // 同理：三个传输面各自持一份 `plugin_binding`（域实现 + 自报），也必须站在
     // 机制内核上。缺边 ⇒ 绑定层要么被搬回了宿主，要么那域根本没进 crate。
     ("bedcode-server-http", "bedcode-host-kit"),
@@ -179,6 +194,9 @@ const REQUIRED_DOWNWARD_EDGES: &[(&str, &str)] = &[
     ("bedcode-wasm-core", "bedcode-server-websocket"),
     ("bedcode-wasm-core", "bedcode-server-peer-net"),
     ("bedcode-wasm-core", "bedcode-server-http"),
+    // wasm-core 纯净性收口票 02：host-pty WIT 绑定面（`host_api/pty.rs`）在
+    // wasm-core 内直接调引擎——缺边 = 引擎被复制回内核（票 02 明令禁止）
+    ("bedcode-wasm-core", "bedcode-pty-engine"),
 ];
 
 /// 宿主源码里**允许**同时认识两个传输面 crate 的文件（断言 ④ 的登记表）

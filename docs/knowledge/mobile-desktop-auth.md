@@ -58,7 +58,8 @@
 - **TXT 记录**: 包含 `platform=desktop`、`device_name=xxx` 等键值对
 - **端口**: 从配置读取，默认 `8765`
 
-源码: `bedcode-desktop/src-tauri/src/mdns/advertiser.rs`
+源码: `bedcode-desktop/packages/bedcode-discovery-engine/src/advertiser.rs`（宿主侧零 mdns 代码；
+广播经 `MdnsAdvertiserPort` 端口面由 server-core supervisor 调用）
 
 ### 2.2 移动端发现
 
@@ -552,7 +553,7 @@ Disconnected ──connect()──► Connecting ──WS握手──► Connect
 | `wasm-apps/terminal-session/rust/src/auth_http/` | HTTP 认证 API（认证中心插件，宿主经网关免验签转发） |
 | `src-tauri/src/server/websocket/terminal_ws/` + `websocket/conn.rs` | WS 终端输出端子面（control_frame / forward / subscriber）+ 连接骨架 |
 | `src-tauri/src/server/websocket/websocket_manager.rs` | WS 连接管理器（单例） |
-| `src-tauri/src/mdns/advertiser.rs` | mDNS 服务广播 |
+| `packages/bedcode-discovery-engine/src/advertiser.rs` | mDNS 服务广播（自播面；`MdnsAdvertiser`，经 `MdnsAdvertiserPort` 端口面被 supervisor 调用） |
 | ~~`src-tauri/src/enums/auth.rs`~~（已删 2026-09-25） | AuthStage / AuthPayload 定义曾在此；wire 真源现仅移动端 |
 
 ### 移动端（Mobile）

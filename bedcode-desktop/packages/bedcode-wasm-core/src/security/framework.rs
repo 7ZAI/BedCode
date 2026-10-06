@@ -485,8 +485,9 @@ mod tests {
     /// 返回 (permission, storage, authorizer, framework)——authorizer 供单阶段直调，
     /// framework 已注册同一实例供管线端到端；storage 供预置持久授权记录
     #[allow(clippy::type_complexity)]
-    /// 第一方清单里的插件 id（票 07：`fs_auth::FIRST_PARTY_TRUSTED_DIRS` 的条目）
-    const FIRST_PARTY_PLUGIN: &str = "com.bedcode.terminal-session";
+    /// 第一方清单里的插件 id（票 08/P0-2：中性测试 id——测试表由 fs_environment 注入，
+    /// 判定机制与插件名无关，wasm-core 测试不持产品清单）
+    const FIRST_PARTY_PLUGIN: &str = "test.first-party";
 
     fn fs_environment() -> (
         Arc<PermissionManager>,
@@ -500,7 +501,16 @@ mod tests {
             tokio::sync::Mutex::new(db),
         )));
         let permission = Arc::new(PermissionManager::new());
-        let fs_auth = Arc::new(FsAuthChecker::new(storage.clone(), None));
+        // 票 08/P0-2：豁免表宿主注入——本测试环境注入测试表（.claude 项目段），
+        // 使 first-party 断言成立；第三方插件不在表内 → 无豁免
+        let fs_auth = Arc::new(FsAuthChecker::new(
+            storage.clone(),
+            None,
+            vec![(
+                FIRST_PARTY_PLUGIN,
+                vec![crate::security::fs_auth::TrustedDir::ProjectSegment(".claude")],
+            )],
+        ));
         let authorizer = Arc::new(FsAuthorizer::new(permission.clone(), fs_auth));
         let fw = SecurityFramework::new();
         fw.register(authorizer.clone());
@@ -701,7 +711,7 @@ mod tests {
             AuthDecision::Allow,
             "声明补齐后未覆盖目标免询问放行"
         );
-        let overview = store.overview("com.test.p", "T").await.unwrap();
+        let overview = store.overview("com.test.p", "T", Vec::new()).await.unwrap();
         assert_eq!(overview.records.len(), 1, "免询问放行必须留痕: {overview:?}");
         assert_eq!(overview.records[0].source, "always_allow");
         assert_eq!(overview.records[0].ops, vec!["read".to_string()]);

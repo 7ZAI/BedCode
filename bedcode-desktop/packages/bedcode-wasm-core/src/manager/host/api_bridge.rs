@@ -511,6 +511,9 @@ pub async fn plugin_auth_overview(
     credential: String,
     plugin_host: State<'_, Arc<PluginHost>>,
     db: State<'_, Arc<tokio::sync::Mutex<crate::db::Database>>>,
+    // 票 08/P0-2：第一方免弹窗项的产品清单出厂 lib，读模型经宿主装配的校验器取
+    // 只读投影（与 plugin_fs_auth_respond 同一 State，已注册）
+    fs_auth: State<'_, Arc<FsAuthChecker>>,
 ) -> crate::Result<Vec<crate::security::auth_policy::PluginAuthOverview>> {
     use crate::security::auth_policy::AuthPolicyStore;
     require_host_surface(
@@ -522,6 +525,7 @@ pub async fn plugin_auth_overview(
     )?;
 
     let store = AuthPolicyStore::new(db.inner().clone());
+    let first_party_projection = fs_auth.first_party_trusted_dirs();
     let mut apps: Vec<DesktopPluginInfo> = plugin_host
         .list_plugins()
         .await
@@ -534,7 +538,11 @@ pub async fn plugin_auth_overview(
 
     let mut out = Vec::with_capacity(apps.len());
     for info in &apps {
-        out.push(store.overview(&info.id, &info.name).await?);
+        out.push(
+            store
+                .overview(&info.id, &info.name, first_party_projection.clone())
+                .await?,
+        );
     }
     tracing::debug!(
         plugin_id = plugin_id.as_deref().unwrap_or("(all)"),

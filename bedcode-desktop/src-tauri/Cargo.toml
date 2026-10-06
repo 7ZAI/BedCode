@@ -125,6 +125,13 @@ bedcode-host-kit = { path = "../../packages/bedcode-host-kit" }
 # 引擎面（db/pty/enums/system 部分）+ 宿主胶水迁入本 crate；lib.rs 经 `pub use
 # bedcode_wasm_core as wasm_core` 垫片保持既有 `crate::wasm_core::*` 路径零改动。
 bedcode-wasm-core = { path = "../packages/bedcode-wasm-core" }
+# PTY 能力域（wasm-core 纯净性收口票 02/06 → pty-capability-domain 票 D1/D3）：
+# 引擎面 + host-pty WIT 接线整面迁入本 crate（ADR 0039）。wasm-core 依赖它并只留
+# `host_api/pty.rs` 端口 adapter；lib 不再 `pub use` 垫片（`crate::pty::*` 路径随
+# 垫片一并退出名单），调用点一律写显式路径 `bedcode_pty_engine::plugin_binding::*`。
+# lib 直接声明是因为 crate_boundary_lock 断言③要求宿主清单声明全部拆分产物
+# （pty-engine 已登记 SPLIT_CRATES）；宿主代码不直接消费，经 wasm-core adapter 取用
+bedcode-pty-engine = { path = "../packages/bedcode-pty-engine" }
 # 组播发现能力域（mDNS，wasm-core-lib-split 票 03）：引擎 + 宿主绑定层 + 自动
 # 注册。宿主侧只剩 `host_api/mdns.rs` 的端口 adapter（~90 行），原 795 行实现
 # 已迁入该 crate。
@@ -187,8 +194,6 @@ reqwest = { version = "0.12", features = ["json"] }
 serde_json = "1"
 # 集成测试直连插件私有库（认证记录下沉后 pairing/历史真源在私有库，白盒断言用）
 rusqlite = { version = "0.32", features = ["bundled"] }
-# mDNS 测试 Fake 构造 flume channel（与 mdns-sd 0.20 内部使用的 flume 同源，仅测试用）
-flume = "0.12"
 
 # ==================== 桥接基准工程（bench/） ====================
 # 自带 main() 的基准驱动（非 libtest harness）：CLI 参数 / 表格报告 / JSON 导出

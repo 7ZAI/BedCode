@@ -192,7 +192,7 @@ fn sync_result<T>(r: crate::Result<T>) -> Result<T, String> {
 /// 枚举是阻塞进程调用，搬 `spawn_blocking` 以免占住 async store 所在 worker。
 pub(crate) fn platform_wsl_distros() -> Result<String, String> {
     let distros = block_on_async(async {
-        tokio::task::spawn_blocking(crate::pty::list_distributions)
+        tokio::task::spawn_blocking(crate::system::wsl::list_distributions)
             .await
             .map_err(|e| format!("wsl distro list task join failed: {e}"))?
             .map_err(|e| format!("wsl distro list failed: {e}"))
@@ -201,7 +201,7 @@ pub(crate) fn platform_wsl_distros() -> Result<String, String> {
 }
 
 /// 发行版列表 → JSON 名字数组（纯函数：只取 name、保持输入顺序）
-pub(crate) fn wsl_distro_names(distros: Vec<crate::pty::WslDistro>) -> Result<String, String> {
+pub(crate) fn wsl_distro_names(distros: Vec<crate::system::wsl::WslDistro>) -> Result<String, String> {
     let names: Vec<String> = distros.into_iter().map(|d| d.name).collect();
     serde_json::to_string(&names).map_err(|e| format!("serialize wsl distros failed: {e}"))
 }
@@ -267,8 +267,8 @@ mod tests {
 
     const PLUGIN: &str = "com.test.pick";
 
-    fn distro(name: &str, is_default: bool) -> crate::pty::WslDistro {
-        crate::pty::WslDistro {
+    fn distro(name: &str, is_default: bool) -> crate::system::wsl::WslDistro {
+        crate::system::wsl::WslDistro {
             name: name.to_string(),
             is_default,
             state: "Running".to_string(),

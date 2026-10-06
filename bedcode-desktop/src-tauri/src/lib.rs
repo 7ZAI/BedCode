@@ -12,7 +12,8 @@ mod native_context_menu_test;
 
 pub mod commands;
 pub mod crypto;
-pub mod mdns;
+// 第一方免弹窗归属清单（产品数据真源，票 08/P0-2；判定逻辑在 wasm-core）
+pub mod first_party_dirs;
 pub mod server;
 pub mod system;
 pub mod utils;
@@ -20,10 +21,14 @@ pub mod utils;
 // ==================== 整核抽出垫片（wasm-core-whole-crate） ====================
 // wasm_core / db / pty / enums 已迁入 `bedcode-wasm-core` crate（.scratch/
 // 2026-10-06-wasm-core-whole-crate/spec.md）；以下 `pub use` 垫片保持既有
-// `crate::wasm_core::*` / `crate::db::*` / `crate::pty::*` / `crate::enums::*`
+// `crate::wasm_core::*` / `crate::db::*` / `crate::enums::*`
 // 路径零改动编译通过（spec §4.3 D3）。反双份锁见 tests/（整核抽出结构锁）。
+//
+// **`pty` 不在再导出名单里**：host-pty 能力域（引擎 + WIT 接线 + 域机制）已整面迁到
+// `bedcode-pty-engine`（pty-capability-domain 票 D1/D3），内核不再有 PTY 面可垫；
+// 调用点一律写显式路径 `bedcode_pty_engine::plugin_binding::*`。
 pub use bedcode_wasm_core as wasm_core;
-pub use bedcode_wasm_core::{db, enums, pty};
+pub use bedcode_wasm_core::{db, enums};
 
 // 桥接基准工程的 Channel 传输面（**仅 debug 构建**：release 产物不含本命令面，
 // 闸门锁见本模块 tests::bench_channel_surface_stays_debug_only）
@@ -523,16 +528,22 @@ pub fn run() {
             // 读 tauri managed state + server 端口装配；无头 harness 不传 → HEADLESS_UNAVAILABLE）
             let peer_ctx_provider: Option<Arc<crate::wasm_core::host_api::context::PeerCtxProvider>> =
                 Some(Arc::new(crate::server::peer_net_cmds::peer_ctx));
+            // 票 08/P0-2：第一方免弹窗归属清单（产品数据）由 lib 装配时注入——
+            // 判定逻辑在 wasm-core（机制），清单真源在本文件即可（first_party_dirs.rs）
+            let first_party_dirs = crate::first_party_dirs::first_party_dirs();
             let plugin_host = tauri::async_runtime::block_on(wasm_core::PluginHost::new(
                 db.clone(),
                 &plugins_dir,
                 &user_plugins_dir,
                 Some(app_handle_arc.clone()),
                 peer_ctx_provider,
+                first_party_dirs,
             ));
             // 注入消息总线 dispatcher（两阶段初始化）
             tauri::async_runtime::block_on(plugin_host.init_message_bus());
-            let mdns_advertiser = Arc::new(tokio::sync::RwLock::new(mdns::advertiser::MdnsAdvertiser::new()));
+            let mdns_advertiser = Arc::new(tokio::sync::RwLock::new(
+                bedcode_discovery_engine::advertiser::MdnsAdvertiser::new(),
+            ));
 
             // 终端同步事件通道已随 websocket 业务下沉票 08 删除（插件事件改 bus+emit，
             // 宿主不再持有 HostSyncEvent / broadcast-sync 广播面）

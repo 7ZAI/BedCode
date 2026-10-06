@@ -7,9 +7,12 @@
 //! ## 分层
 //!
 //! ```text
-//!   engine.rs   机制：共享守护 + 浏览/广播双句柄表（零宿主依赖）
-//!   ports.rs    边界：宿主能力端口（权限门 / 本机节点 ID / 事件投递 / 后台任务）
-//!   lib.rs      接线：`bindgen!` 生成的 Host trait 实现 + `HostModule` 自报
+//!   engine.rs      机制：共享守护 + 浏览/广播双句柄表（零宿主依赖）
+//!   advertiser.rs  机制：宿主自播面（`MdnsAdvertiser`；登记/停播走 engine 共享守护，
+//!                   owner=host，与插件 advertise / peer-net 身份同守护）
+//!   types.rs       契约：`SERVICE_TYPE` 常量 + `AdvertiseConfig` + `AdvertiserError`（自持错误，不反向依赖宿主）
+//!   ports.rs       边界：宿主能力端口（权限门 / 本机节点 ID / 事件投递 / 后台任务）
+//!   lib.rs         接线：`bindgen!` 生成的 Host trait 实现 + `HostModule` 自报
 //! ```
 //!
 //! 判定该域「非 POSIX 原生」的依据：WASI 预览 3 只提供
@@ -31,6 +34,14 @@ use wasmtime::component::{bindgen, Linker};
 pub mod engine;
 pub mod ports;
 
+/// 自播面：宿主把本机 `_bedcode._tcp.local.` 服务广播到局域网供移动端发现
+/// （自 `src-tauri/src/mdns/` 迁入；配置校验与错误文案逐字保留，守护模型随后并入
+/// engine 共享守护——见 `advertiser` 模块头的「共享守护模型」段）
+pub mod advertiser;
+/// 自播面契约：服务类型常量 / 广播配置 / 自持错误
+pub mod types;
+
+pub use advertiser::MdnsAdvertiser;
 pub use ports::{install_ports, DiscoveryPorts, DiscoveryTask};
 
 /// 能力模块描述符（只描述机制，禁带产品名词——AGENTS §5.1 B1/B5）

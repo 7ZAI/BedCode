@@ -145,8 +145,15 @@ impl WasmRuntime {
     /// 初始化 Engine、Linker，注册所有 Host Functions。
     /// 宿主能力（db / session / permission 等）不在本结构持有，
     /// 而是通过 [`WasmHostContext`] 注入到每个插件实例的 Store state 中。
-    /// `app_handle` 为 None 时（无头/测试上下文）依赖前端事件的宿主能力降级
-    pub fn new(storage: Arc<PluginStorage>, app_handle: Option<Arc<tauri::AppHandle>>) -> crate::Result<Self> {
+    /// `app_handle` 为 None 时（无头/测试上下文）依赖前端事件的宿主能力降级。
+    ///
+    /// `first_party_dirs`：第一方免弹窗归属清单（票 08/P0-2，宿主装配时注入；空表
+    /// = 无免弹窗项）——经本构造函数直通 `FsAuthChecker`。
+    pub fn new(
+        storage: Arc<PluginStorage>,
+        app_handle: Option<Arc<tauri::AppHandle>>,
+        first_party_dirs: Vec<(&'static str, Vec<crate::security::fs_auth::TrustedDir>)>,
+    ) -> crate::Result<Self> {
         // 内核配置：编译期默认 < 配置文件 < 运行时覆盖（set_config）。
         // 配置文件缺失/非法不阻断启动——记录 warn 并回落编译期默认
         let core_config = app_handle
@@ -161,7 +168,7 @@ impl WasmRuntime {
                 }
             })
             .unwrap_or_default();
-        Self::with_config(storage, app_handle, core_config)
+        Self::with_config(storage, app_handle, core_config, first_party_dirs)
     }
 
     /// 以指定内核配置构建（测试与运行时覆盖路径；配置须先通过 [`CoreConfig::validate`]）
@@ -169,6 +176,7 @@ impl WasmRuntime {
         storage: Arc<PluginStorage>,
         app_handle: Option<Arc<tauri::AppHandle>>,
         core_config: CoreConfig,
+        first_party_dirs: Vec<(&'static str, Vec<crate::security::fs_auth::TrustedDir>)>,
     ) -> crate::Result<Self> {
         if let Err(reason) = core_config.validate() {
             return Err(crate::AppError::Config(format!("内核配置非法: {}", reason)));
@@ -249,7 +257,7 @@ impl WasmRuntime {
             }
         }
 
-        let fs_auth = Arc::new(FsAuthChecker::new(storage.clone(), app_handle));
+        let fs_auth = Arc::new(FsAuthChecker::new(storage.clone(), app_handle, first_party_dirs));
 
         // task 段快照源注册（spec 票 02 去环）：monitor 经注册回调取 host-task
         // 指标，monitor.rs 不再内联引用 manager::task。注册幂等；monitor 仅经本

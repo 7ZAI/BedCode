@@ -1,27 +1,48 @@
 [package]
 name = "bedcode-pty-engine"
 version = "0.1.0"
-description = "BedCode PTY 引擎面（host-pty 引擎 + host-platform.wsl-distros 引擎侧）：跨平台伪终端管理与输出环形缓冲（wasm-core 纯净性收口票 02，从 bedcode-wasm-core 迁出）"
+description = "BedCode PTY 能力域（host-pty 6 原语 + 插件私有伪终端引擎面）：跨平台伪终端管理与输出环形缓冲 + WIT 接线（pty-capability-domain 票 D1：引擎面与能力域同 crate）"
 authors = ["binblink"]
 edition = "2021"
 
 [dependencies]
-# 跨平台 PTY：进程生命周期 / 尺寸 / 读写（引擎本体核心）
+# 跨平台 PTY：进程生命周期 / 尺寸 / 读写（引擎面核心）
 portable-pty = "0.8"
-# 异步运行时：读线程消费任务 / 广播 / 定时（test 的 time feature 由 dev-deps 补齐）
+# 异步运行时：读线程消费任务 / 广播 / 定时
 tokio = { version = "1", features = ["sync", "rt", "macros", "time"] }
 # 引擎产物 sink 的 async 约束（PtyOutputSink 的 async_trait 化由消费侧决定，引擎本体只需基础面）
 async-trait = "0.1"
 # 输出时间戳（读线程逐块记录）
 chrono = { version = "0.4", features = ["clock"] }
-# WSL 发行版列举输出解码（UTF-16LE → UTF-8）
-encoding_rs = "0.8"
 # KeyCombo / KeyCode 特殊键 wire 形状真源（`pty_process::send_special_key` 解析面）
 bedcode-plugin-api = { path = "../plugin-sdk-desktop/rust" }
 serde = { version = "1", features = ["derive"] }
+# 退出事件 / 限频通知的载荷形状（`serde_json::json!`）
+serde_json = "1"
+# 句柄铸造（`pty-<uuid>`）
+uuid = { version = "1", features = ["v4"] }
 tracing = { version = "0.1", features = ["attributes"] }
-# 错误类型 / 通用常量（PLUGIN_PTY_* 真源 + 引擎级配置）
+# 常量真源（PLUGIN_PTY_* 限额）+ 错误边界
 bedcode-server-base = { path = "../bedcode-server-base" }
+# ==================== 能力域层（host-pty，pty-capability-domain 票 D1） ====================
+# 机制内核：插件实例状态（`add_to_linker::<S,D>` 的单态 S 必须在本 crate 可命名）
+bedcode-host-kit = { path = "../../../packages/bedcode-host-kit" }
+# WIT 契约绑定（`bindgen!` 在 src/plugin_binding.rs，本 crate 自带 provider 侧生成）
+# —— 宿主侧的 `bedcode` 模块是 **guest 视角**（import 是调用函数，不是 `Host` trait
+# + `add_to_linker`），能力 crate 要自己装配就必须跑 provider 侧 `bindgen!`。两侧生成
+# 的 `Host` trait **同名但不同类型**，故宿主必须同时删掉自己的 pty `Host` impl 与
+# `add_to_linker` 行（否则同一 interface 注册两次 → 装配期 `defined twice`）。
+wit-bindgen = { version = "=0.60.0", features = ["macros"] }
+# `Linker` / `HasSelf` / `add_to_linker::<S,D>` 的宿主侧类型与函数；
+# 版本随两端宿主锁版（ADR 0019）
+wasmtime = { version = "48", features = ["component-model"] }
+# 能力模块自报（`inventory::submit!` 展开为 linker-section 静态提交）
+inventory = "0.3"
 
 [dev-dependencies]
 tempfile = "3"
+# `#[tokio::test(flavor = "multi_thread")]` 需要多线程运行时 flavor（生产路径只用
+# `sync` / `rt`；测试的多线程 flavor 只服务通知装饰器的并发用例）
+tokio = { version = "1", features = ["rt-multi-thread"] }
+# 无任何 dev-only 内部 crate 依赖：跨 crate 集成测试一律住宿主 `src-tauri/tests/`
+# （防复发见 `src-tauri/tests/capability_crates_unit_tests_only.rs`）。

@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 
 use actix_web::dev::ServerHandle;
 use bedcode_desktop_lib::db::Database;
-use bedcode_desktop_lib::mdns::advertiser::MdnsAdvertiser;
+use bedcode_discovery_engine::advertiser::MdnsAdvertiser;
 use bedcode_desktop_lib::server::composition::start_http_server;
 use bedcode_desktop_lib::system::app_context::AppContextBuilder;
 use bedcode_desktop_lib::system::info::SystemInfo;
@@ -110,7 +110,7 @@ async fn init_test_app_context() {
         let user_plugins_dir = std::env::temp_dir().join(format!("bedcode-itest-userplugins-{}", std::process::id()));
         std::fs::create_dir_all(&user_plugins_dir).expect("create temp user plugins dir failed");
 
-        let plugin_host = PluginHost::new(db.clone(), &plugins_dir, &user_plugins_dir, None, None).await;
+        let plugin_host = PluginHost::new(db.clone(), &plugins_dir, &user_plugins_dir, None, None, Vec::new()).await;
         plugin_host.init_message_bus().await;
         // v24 认证记录下沉：配对/历史真源 = 认证中心私有库。无头上下文无
         // AppHandle，必须在 activation 前注入私有库根（activate 建表走

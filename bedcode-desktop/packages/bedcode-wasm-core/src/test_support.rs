@@ -105,7 +105,7 @@ pub fn setup_wasm_runtime_with_config(
 
         // 无头构建：不创建 AppHandle（tao 事件循环不允许在测试线程初始化）
         let mut wasm_runtime =
-            WasmRuntime::with_config(storage.clone(), None, core_config).unwrap();
+            WasmRuntime::with_config(storage.clone(), None, core_config, Vec::new()).unwrap();
         // 注入 AOT 缓存目录（生产由 app_handle 派生，测试无头上下文手动注入）
         wasm_runtime.aot_cache_dir = Some(
             std::env::temp_dir().join(format!("bedcode_aot_{}", std::process::id())),

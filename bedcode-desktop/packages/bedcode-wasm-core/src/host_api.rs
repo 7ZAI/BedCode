@@ -6,7 +6,7 @@
 //!
 //! 各功能域与 SDK `host/*` trait 一一对应：
 //! app / bus / connection / crypto / database / events / fs / http / log / mdns /
-//! peer / platform / process / pty / storage / task / timer / unit_executor / ws
+//! peer / platform / process / pty（adapter） / storage / task / timer / unit_executor / ws
 //!
 //! v27（票 10）：**`session` 域整体退役**（`host-session` 整 interface 删除），
 //! 同域内的 `lifecycle` 子模块（两条观察面注册入口）在票 03 已降级为退役占位、
@@ -42,7 +42,6 @@ pub(super) mod peer;
 pub(super) mod platform;
 pub(crate) mod process;
 pub mod pty;
-pub mod pty_output;
 pub(crate) mod sqlite;
 pub(crate) mod sqlite_ports;
 pub(super) mod status;
@@ -131,6 +130,9 @@ pub(crate) fn install_capability_domain_ports(
     ws::install(host_ctx.clone());
     peer::install(host_ctx.clone());
     http::install(host_ctx.clone());
+    // pty 能力域同理（pty-capability-domain 票 D1：域机制与 WIT 接线在
+    // `bedcode-pty-engine`，本 crate 只装端口）
+    pty::install(host_ctx.clone());
 }
 
 // ==================== Tests ====================
@@ -169,7 +171,7 @@ pub(crate) mod tests {
         let db = Arc::new(Mutex::new(db));
         let storage = Arc::new(PluginStorage::new(db.clone()));
         let permission = Arc::new(PermissionManager::new());
-        let fs_auth = Arc::new(FsAuthChecker::new(storage.clone(), None));
+        let fs_auth = Arc::new(FsAuthChecker::new(storage.clone(), None, Vec::new()));
         let message_bus = Arc::new(MessageBus::new());
         Arc::new(WasmHostContext::new(
             db,
