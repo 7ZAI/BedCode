@@ -36,11 +36,21 @@ jobs = 4
 #   1. cargo clean / 删 target 后依赖不再重编（缓存命中 → 只需链接）；
 #   2. 跨 8 个落点（server-libs / host-kits / fixtures / wasm-apps / 两端宿主 / cross-end）
 #      的重复依赖图只编译一次；
-#   3. 与增量编译共存：cargo 只对本地 crate 开 incremental，sccache 检测到
-#      `-Zincremental` 时透传不缓存（本地 dev 迭代速度不受影响），依赖 crate 的
-#      全量编译照常缓存。当初「sccache 需 CARGO_INCREMENTAL=0、dev 迭代更慢」的否决
-#      理由（build-process.md 决策记录方案 F）已随现代 sccache（透传增量 + 缓存全量）
-#      失效，2026-10-05 重新引入。
+#   3. ⚠ **2026-10-06 实测修正**：上面两条收益在本机**只部分成立**。sccache 0.18 +
+#      Rust 1.98 会对**带 `-C incremental` 的编译调用静默跳过**（计数上体现为
+#      `Compile requests` +1 而 `executed` / `hits` / `misses` 全不动的“空请求”），
+#      而 cargo 的 dev profile 对**所有** crate（含依赖 crate）都默认传 `-C incremental`
+#      ——并非注释原先写的「只对本地 crate 开」。故实际被缓存的只有**非增量单位**
+#      （proc-macro `.so` + build script）：实测 server-libs 桶里 1049 个普通 crate
+#      （含 wasmtime / tauri / actix 这些最贵的）全部跳过，仅 289 个非增量单位入缓存，
+#      覆盖率约 21%，**恰好漏掉最贵的部分**。
+#      验证方法（可复现）：`sccache --zero-stats` → `touch src/lib.rs` → `cargo build`
+#      → 看统计；再 `CARGO_INCREMENTAL=0` 跑一遍对比（后者 executed/misses 正常增长）。
+#      如需真正兑现「clean 后不重编」，须在 [env] 加
+#      `CARGO_INCREMENTAL = { value = "0", force = false }`——代价是失去 cargo 自身的
+#      增量编译（改一个文件重编整个 crate），属**全局性能取舍**，未擅自开启。
+#      当初「sccache 需 CARGO_INCREMENTAL=0、dev 迭代更慢」的否决理由（build-process.md
+#      决策记录方案 F）**至今仍然成立**，2026-10-05 的重新引入基于一个未经验证的假设。
 #
 # 安装（显性失败设计：未安装时 cargo 报「找不到 sccache」，不会静默降级）：
 #   Linux/macOS: 从 mozilla/sccache GitHub release 下载二进制放 ~/.cargo/bin/sccache

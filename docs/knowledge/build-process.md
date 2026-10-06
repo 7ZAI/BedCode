@@ -626,7 +626,7 @@ server-lib 拆出后新增仓库根 `target/server-libs`；2026-10-04 wasm-core-
 | `bedcode-desktop/target/wasm-apps/` | 桌面 4 个 wasm 应用共享 | `scripts/plugin-wasm-config.mjs`（`WASM_TARGET_DIR`）+ `wasm-apps/.cargo/config.toml` |
 | `bedcode-mobile/target/fixtures/` | 移动 2 个夹具 / 插件共享 | `bedcode-mobile/src-tauri/.../component.rs` 的 `fixture_target_dir()` |
 | `target/server-libs/`（仓库根） | 桌面 6 个 `bedcode-server-*` + `bedcode-crypto-engine` 共享 | 各 crate 的 `.cargo/config.toml`（`../../../target/server-libs`，相对**crate 根**） |
-| `target/host-kits/`（仓库根） | 「机制内核 + 能力域」同族共享：`packages/bedcode-host-kit`、`bedcode-desktop/packages/bedcode-discovery-engine`（wasm-core-lib-split 票 03；sqlite 域票 07 已由 ADR 0036 撤销，不在此桶） | 各 crate 的 `.cargo/config.toml`（根 `packages/` 下写 `../../target/host-kits`，桌面 `packages/` 下写 `../../../target/host-kits`——两者同一目录） |
+| `target/host-kits/`（仓库根） | 「机制内核 + 能力域」同族共享：`packages/bedcode-host-kit`、`bedcode-desktop/packages/bedcode-discovery-engine`（wasm-core-lib-split 票 03；sqlite 域票 07 已由 ADR 0036 撤销，不在此桶）、**整核本体 `bedcode-wasm-core`**（wasm-core-whole-crate 票 02：整核抽出后入此桶，单独 target 独立于宿主——避免把 wasmtime 栈编进宿主增量） | 各 crate 的 `.cargo/config.toml`（根 `packages/` 下写 `../../target/host-kits`，桌面 `packages/` 下写 `../../../target/host-kits`——两者同一目录） |
 | `cross-end-tests/target/` | 跨端互连测试（仓库根工程，依赖两端 lib） | cargo 默认；**刻意独立**（见下） |
 
 **`.cargo/config.toml` 里 `target-dir` 的相对路径基准 = 该 `.cargo` 目录的父目录**
@@ -644,8 +644,8 @@ cd bedcode-desktop/packages/<fixture-crate> && cargo metadata --no-deps --format
 
 两者的 `target_directory` 应分别是 `bedcode-desktop/target/wasm-apps` 与
 `bedcode-desktop/target/fixtures`；server-lib 六个 crate 应为仓库根 `target/server-libs`，
-机制内核 + 能力域两 crate（`packages/bedcode-host-kit` 与桌面 `packages/` 下的
-`bedcode-discovery-engine`）应为仓库根 `target/host-kits`。
+机制内核 + 能力域 + 整核本体三 crate（`packages/bedcode-host-kit` 与桌面 `packages/` 下的
+`bedcode-discovery-engine`、`bedcode-wasm-core`）应为仓库根 `target/host-kits`。
 
 同一串 `../../target/wasm-apps` 在两处含义不同，别混：`build.js` 把它作为
 `--target-dir` 传给 cargo，命令行参数按**进程 cwd**（应用根 `wasm-apps/<app>/`）解析；
@@ -711,7 +711,7 @@ tauri-plugin-*）——宿主侧 14G 是**活产物**（`deps/` 里几乎每个 
 | C 移动端夹具共享 target | ~0.35G → ~0.2G | **采纳**（低成本，同构） |
 | D 两端宿主共享 target | 估 2~3G | **不做**：编译期独占锁使并发构建串行化；`cargo clean` 爆炸半径覆盖全端；且去重空间有限（见上） |
 | E 单一根 workspace | 增量有限 | **不做**：单一 `Cargo.lock` 耦合 wasmtime 分叉；stable vs nightly 工具链冲突；workspace feature 统一污染 wasm 产物；`cargo build --workspace` 会按宿主三元组编译 wasm 应用 |
-| F sccache | 不省空间 | **2026-09-26 否决 → 2026-10-05 复核后引入**（见下「sccache 编译缓存」节）：当初理由「sccache 不缓存增量编译单元（需 `CARGO_INCREMENTAL=0`）、dev 迭代更慢」在现代 sccache（1.7+ 检测 `-Zincremental` 透传、依赖全量照常缓存）已不成立；引入动机不是省空间，而是**clean / 换桶后依赖不重编** |
+| F sccache | 不省空间 | **2026-09-26 否决 → 2026-10-05 复核后引入 → 2026-10-06 部分推翻**。重新引入所依据的「现代 sccache 检测 `-Zincremental` 透传、依赖全量照常缓存」**在本机不成立**：cargo dev profile 对所有 crate 都传 `-C incremental`，sccache 0.18 对其静默跳过，实测只缓存 289 个非增量单位（proc-macro + build script）而漏掉 1049 个普通 crate（含 wasmtime / tauri / actix）。详见下节。要让收益成立需 `CARGO_INCREMENTAL=0`，代价是失去 cargo 增量编译，属未决取舍 |
 | G btrfs + compress=zstd | 14G → 5~7G | **不做**：需独立分区，loop 挂载性能损失不可接受 |
 | H 定期回收 | 立即 ~4G | **采纳**（Step 0 + 监控脚本扩展） |
 
@@ -759,10 +759,28 @@ rustc-wrapper = "sccache"   # bare 名经 PATH 解析（~/.cargo/bin 已装）
 SCCACHE_CACHE_SIZE = { value = "20GiB", force = false }  # 外部变量优先（CI 设 2GiB）
 ```
 
-**与增量编译共存**（复核否决理由的关键）：cargo 只对本地 crate 开 incremental
-（`-Zincremental`），sccache 检测到该参数时透传不缓存；依赖 crate 的全量编译照常缓存。
-本地 dev 迭代速度不变，`cargo clean` / 删 target / 换桶后依赖秒级恢复（2026-10-05 实测
-`bedcode-host-kit`：wasmtime 全量编译 3m34s → clean 后缓存命中重建 37s，244 次编译 100% 命中）。
+**⚠ 与增量编译的关系（2026-10-06 实测修正，原结论已被推翻）**
+
+原文写的是「cargo 只对本地 crate 开 incremental（`-Zincremental`），sccache 检测到该参数时
+透传不缓存；依赖 crate 的全量编译照常缓存」，并附 2026-10-05 的实测（`bedcode-host-kit`
+wasmtime 全量 3m34s → clean 后 37s，244 次编译 100% 命中）。**这个实测无法在当前环境下复现**，
+原文的机制解释也不成立：
+
+- cargo 的 dev profile 对**所有** crate（含依赖 crate）都默认传 `-C incremental`，并非「只对本地 crate」；
+- sccache 0.18 + Rust 1.98 对带 `-C incremental` 的调用**静默跳过**，症状是统计里出现
+  「空请求」：`Compile requests` +1，而 `executed` / `hits` / `misses` 全部不动。
+
+实测覆盖（server-libs 桶）：普通 crate 1049 个（**含 wasmtime / tauri / actix 这些最贵的**）
+全部跳过，只有非增量单位（proc-macro `.so` 111 + build script 178 = 289 个）入缓存，
+覆盖率约 **21%**，恰好漏掉最贵的部分。复现步骤：
+`sccache --zero-stats` → `touch src/lib.rs` → `cargo build` → 看统计；再以
+`CARGO_INCREMENTAL=0` 跑同一动作对比（后者 `executed` / `misses` 正常增长）。
+
+**要真正兑现「clean 后不重编」**，须在根 config 的 `[env]` 加
+`CARGO_INCREMENTAL = { value = "0", force = false }`。代价是失去 cargo 自身的增量编译
+（改一个文件重编整个 crate），属全局性能取舍，**未擅自开启**；方案 F 当初「dev 迭代更慢」
+的否决理由至今仍然成立。**排查提示**：怀疑 sccache 失效时先看 `executed` 是否为 0——
+为 0 就是全被跳过了，而不是「没命中」。
 
 **安装（显性失败设计）**：sccache 未安装时 cargo 直接报错（找不到 wrapper），不会静默
 降级——装好即用，装法与各平台差异见根 `.cargo/config.toml` 注释。

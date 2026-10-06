@@ -9,6 +9,48 @@
 
 ## [未发布]
 
+#### 构建基建：sccache 的前提是错的，target 体积报告漏了最大的桶、且对一个有消费者的目录给出危险结论
+
+- **sccache 并没有缓存本仓假定的东西，而文档写的是「会缓存」**。根 `.cargo/config.toml` 与
+  `docs/knowledge/build-process.md` 都断言「cargo 只对本地 crate 开 incremental、sccache 透传
+  `-Zincremental`、依赖 crate 的全量编译照常缓存」，并附 2026-10-05 的实测（host-kit：wasmtime 全量
+  3m34s → clean 后 37s，244 次编译 100% 命中）。**该实测在当前工具链（sccache 0.18 + Rust 1.98）无法复现**，
+  其机制解释也从未成立：cargo 的 dev profile 对**每个** crate 都传 `-C incremental`，而 sccache 0.18
+  对这类调用**静默跳过**。症状是计数里特有的「空请求」：`Compile requests` +1，而
+  `executed` / `hits` / `misses` 全部不动
+- **实测覆盖率约 21%，且恰好漏掉最贵的部分**：`server-libs` 桶里 1049 个普通 crate（含 wasmtime /
+  tauri / actix）全部被跳过，只有 289 个非增量单位（111 个 proc-macro `.so` + 178 个 build script）
+  进了缓存。可复现的 A/B 实证（约 1 分钟）：`sccache --zero-stats` → `touch src/lib.rs` → `cargo build`
+  报 `4 requests / 0 executed`；同一动作加 `CARGO_INCREMENTAL=0` 报 `3 requests / 2 executed /
+  2 misses` 并写入缓存条目
+- **取舍摆出来而不是惄惄改掉**：真要拿到文档承诺的收益，需在 `[env]` 加
+  `CARGO_INCREMENTAL = { value = "0", force = false }`；代价是失去 cargo 自身的增量编译
+  （改一个文件重编整个 crate），属影响两端与 CI 的**全局性能决策**，故**未擅自开启**。两份文档已改为
+  记录实测行为、复现步骤与修复代价；`build-process.md` 决策记录方案 F 从「否决 → 引入」改为
+  「否决 → 引入 → 部分推翻」，并注明当初 2026-09-26 的否决理由至今仍成立
+- **补上排查提示，避免下一个人重复本轮的误判**：怀疑 sccache 失效时先看 `executed` 是否为 0——为 0 是
+  「全被跳过」，不是「没命中」。（本会话早前一轮就是把同一组计数读错，得出「wrapper 是死掉的
+  pass-through」的结论——它不是。）
+- **`check-target-size.js` 从来不报 `target/host-kits`**：它是全仓最大的桶（本轮清理前 19.7G，现
+  14.5G），自 wasm-core-lib-split 票 03/05 与 wasm-core-whole-crate 票 02 起落在那里，但
+  `rootTargetDirs` 只登记了 `target/server-libs`，于是 `pnpm run target:size` **静默漏报**。现已登记
+- **而它的「可安全删除」结论既错、又恰好指向一个有消费者的目录**：`legacyTargetParents:
+  ['packages', 'wasm-apps']` 会把找到的 `packages/<crate>/target` 一律标成「可安全删除」；另一方面
+  `packages/target` **根本不会被发现**，因为循环只探 `<parent>/<crate>/target`、从不探 parent 级落点。
+  而 `packages/target/fixtures`（533.82 MB）正被 `bedcode-wasm-core/src/test_support.rs` **按字面路径
+  引用**（夹具产物路径 `../target/fixtures`，本身也是两份 `.cargo/config.toml` 各多写一个 `..` 的历史
+  产物）。照报告的建议删就会打断在途工作。脚本现在也探 parent 级落点，并查新的 `legacyTargetLive`
+  登记表：登记在册的目录报为 `遗留·在用 ⚠ 不可删` 并点名引用方，且**从可回收总量中剔除**
+  （另起一行 `⛔` 说明被扣住了多少）
+- **移动端孪生脚本刻意未动**：`bedcode-mobile/scripts/check-target-size.js` 有同样的 parent 级盲区，
+  但移动端当前一个 target 目录都没有，修它是投机性改动——记录而未做
+- **验证**：`node --check` 通过，`pnpm run target:size` 在修复两侧各跑一次——现在 `target/host-kits`
+  排在首位，`packages/target` 报为 `遗留·在用` 且其 533.82 MB 未计入可回收；`.cargo/config.toml`
+  重新解析通过（合法、`rustc-wrapper` 完好、未新增 `CARGO_INCREMENTAL`），`cargo check` 经 wrapper
+  仍然成功
+- 未跑：`cross-end-tests`、wasm 应用完整构建与 `gen/android` gradlew、移动端（无产品 / WIT / Kotlin
+  改动，本轮只有构建工具与文档）
+
 #### 桌面端：SQLite 能力域 crate 撤销——插件面数据库机制（13 条原语）留在 wasm 核心（ADR 0036；无 ABI / WIT / 协议变动）
 
 - **改了什么**：`bedcode-desktop/packages/bedcode-sqlite-engine/` 不再存在。
