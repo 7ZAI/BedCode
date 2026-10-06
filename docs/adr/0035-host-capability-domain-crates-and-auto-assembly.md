@@ -13,6 +13,11 @@ spec：`.scratch/2026-10-04-wasm-core-lib-split/spec.md`（9 票，实施记录�
 > `wasm_core`（判据：这三 interface 的真源与授权判定本来就在宿主，机制面出内核会让
 > 归属出现两个答案）。下文「实施记录」表中 07 / 08 两行、以及「落点与纪律」里的
 > `sqlite-engine` 提及均以 ADR 0036 为准。
+>
+> **自然后继（2026-10-06）**：本 ADR 把**能力实现**出内核；[ADR 0037](./0037-wasm-core-whole-crate.md)
+> 把**机制整核本体**（`wasm_core/` 整目录 + 引擎面 db/pty/enums + 宿主胶水）整体抽出为
+> 可复用 crate `bedcode-wasm-core`（54,394 行 / 119 文件，`bedcode-desktop/packages/`），
+> 宿主只剩 `pub use` 垫片 + 组合根。边界裁决（ADR 0022）与能力域归属均不变。
 
 ## 背景
 

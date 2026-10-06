@@ -13,7 +13,7 @@
 5. **code-map / 领域文档**（含 `docs/adr/`）
 6. **通用工程经验**
 
-- **路径基准**：不带端前缀的 Rust 路径相对 `bedcode-desktop/src-tauri/src/`；`wasm-apps/`、`plugins/`、前端 `src/` 相对**所属端根目录**；`docs/`、`scripts/`、`.scratch/` 相对**仓库根**。
+- **路径基准**：不带端前缀的 Rust 路径相对 `bedcode-desktop/src-tauri/src/`（wasm_core 整核抽出后，机制与引擎面真源在 `bedcode-desktop/packages/bedcode-wasm-core/src/`，宿主侧只剩 `pub use` 垫片——spec 2026-10-06-wasm-core-whole-crate / ADR 0037）；`wasm-apps/`、`plugins/`、前端 `src/` 相对**所属端根目录**；`docs/`、`scripts/`、`.scratch/` 相对**仓库根**。
 - **文档字面 ≠ 事实**：引用任何路径 / 命令 / 锁名 / 版本前先用 `ls` / `rg` 核对；与事实不符**先修文档**再继续（命令字眼以 `docs/commands.md` 为准）。
 - **最小改动原则**：只改任务必要文件；禁止顺手重构相邻代码、擅自升级依赖（升级先做双端影响评估，如 wasmtime / SDK）；设计取舍不猜，先问用户。
 
@@ -60,7 +60,7 @@
 | 在宿主侧新增/修改任何能力、类型、状态、存储、路由 | **§5.1（六条判据 + 三问裁决 + 自检）+ ADR 0022**——先判归属再动手；越线必须停下问用户。插件分类 / 加载顺序 / 生命周期形态另读 ADR 0032 |
 | 改插件 | `docs/knowledge/plugin-development-checklist.md`（全文）+ 双端 WIT + ADR 0017/0019/0022 |
 | 改 wasm 应用 / 移动插件（业务代码主场） | 该应用自己的 crate + 自有测试命令（§3）；**不要拿宿主 `cargo test` 当它的验证** |
-| 改数据库 / schema | §9 + `bedcode-desktop/src-tauri/src/db/`（schema / 迁移真源）与 `wasm_core/host_api/{database,storage}.rs`（插件面机制） |
+| 改数据库 / schema | §9 + `bedcode-desktop/packages/bedcode-wasm-core/src/db/`（schema / 迁移真源，ADR 0037 随整核迁入 crate）与同 crate `host_api/{database,storage}.rs`（插件面机制） |
 | 改跨端协议（HTTP/WS/QR/认证） | §9 + `docs/knowledge/mobile-desktop-auth.md`，两端同步评估；改完跑 `cross-end-tests` |
 | 排查日志 / 无日志问题 | `docs/knowledge/logging.md`、`adb-fd0-bug.md` |
 | 启动多任务 / 需要规划 | `.scratch/<task>/` 记录（项目未设计 GitHub PR 流程，开发过程文档走这里） |
@@ -191,7 +191,7 @@ wasm 应用层（业务事实面：各自私有库 + 各自前端状态 + 自身
 
 ## 9. 数据、协议与产物
 
-**数据库**：主库 schema 单一事实源在 `bedcode-desktop/src-tauri/src/db/`（`db.rs` + `db/{database,models,operations}.rs` + `db/schema.sql`），迁移**必须幂等**、禁止手改生产库、改 schema 必须补幂等测试。插件面的数据库机制（`host-database` / `host-plugin-database` / `host-storage` 共 13 原语：权限门、表名前缀纵深、护栏、属主分区）**留在 wasm 核心内**（`wasm_core/host_api/`，ADR 0036）——不拆 crate，机制实现与真源同侧；两域用例随宿主 `cargo test` 跑。插件存储隔离见插件开发检查清单。测试数据走临时目录，禁止污染真实数据 / 日志目录。
+**数据库**：主库 schema 单一事实源在 `bedcode-desktop/packages/bedcode-wasm-core/src/db/`（`db.rs` + `db/{database,models,operations}.rs` + `db/schema.sql`，随整核抽出迁入 crate——ADR 0037；宿主以 `pub use` 垫片引用），迁移**必须幂等**、禁止手改生产库、改 schema 必须补幂等测试。插件面的数据库机制（`host-database` / `host-plugin-database` / `host-storage` 共 13 原语：权限门、表名前缀纵深、护栏、属主分区）**留在 wasm 核心内**（同 crate `host_api/`，ADR 0036）——不拆 crate，机制实现与真源同侧；两域用例随 crate 与宿主 `cargo test` 跑。插件存储隔离见插件开发检查清单。测试数据走临时目录，禁止污染真实数据 / 日志目录。
 
 **跨端协议**：HTTP / WS / QR / 认证改动**必须两端同步部署**，遵循「老端忽略未知字段」的增量原则，禁止破坏性替换；协议现状与端点清单见 `docs/knowledge/mobile-desktop-auth.md`。wasmtime 升级必须两端同步（ADR 0019）。
 
@@ -257,7 +257,7 @@ CI 门禁（合并到 master/uat 时）：`lint.yml`（eslint 0 error）+ `test.
 | 分支隔离 / CI | `docs/knowledge/feature-branch-isolation.md`、`github-actions-setup.md` |
 | 构建与产物治理 | `docs/knowledge/build-process.md`、`wasip3-toolchain.md` |
 | 架构路线 | `docs/knowledge/plugin-kernel-roadmap.md`、`businessless-kernel-vision.md` |
-| **宿主 / 插件边界裁决（§5 红线的单一事实源）** | `docs/adr/0022-plugin-host-interface-primitive-boundary.md`（+ 0017 互调 / 0018 移动独立契约 / 0019 双端锁版 / 0029 并发 / 0031 认证中心注册 / 0032 插件分类 / 0033 认证中心自持签发验签） |
+| **宿主 / 插件边界裁决（§5 红线的单一事实源）** | `docs/adr/0022-plugin-host-interface-primitive-boundary.md`（+ 0017 互调 / 0018 移动独立契约 / 0019 双端锁版 / 0029 并发 / 0031 认证中心注册 / 0032 插件分类 / 0033 认证中心自持签发验签 / 0035 能力域 crate 化 / 0037 wasm_core 整核抽出） |
 | pi 工具手册 | `docs/agents/pi-tools.md` |
 
 ---

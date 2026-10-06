@@ -60,6 +60,9 @@ pnpm run test:ui                      # 浏览器 UI
 cd bedcode-desktop/src-tauri && cargo test      # 桌面宿主
 cd bedcode-mobile/src-tauri  && cargo test      # 移动宿主
 
+cd bedcode-desktop/packages/bedcode-wasm-core && cargo test   # 插件机制整核 crate
+cd bedcode-desktop/packages/bedcode-server-base && cargo test # 任一面 crate 同理（无根 workspace，各自根目录）
+
 cd bedcode-desktop/wasm-apps/<app-id> && pnpm run test:rust   # wasm 应用（等价于 rust/ 内 cargo test）
 cd bedcode-mobile/plugins/<plugin-id>/rust && cargo test      # 移动插件
 
