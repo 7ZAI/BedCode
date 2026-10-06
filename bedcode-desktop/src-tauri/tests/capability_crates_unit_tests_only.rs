@@ -39,11 +39,13 @@
 //! 这是 `empty_dir_lock.rs` 的同一手法：手写名单天然是一条零成本后门（删掉一行覆盖面
 //! 少一块而锁照绿）。
 //!
-//! ## 唯一的登记例外桶
+//! ## 登记例外桶
 //!
-//! - `bedcode-wasm-core`：机制整核，另有一条在途会话正在改它，本轮明确不扫（用户裁定）。
-//!   待其票据完成后删掉本条目即自动进入本锁管辖。进本桶不是免费的——条目自带理由文本，
-//!   理由不写清楚就会变成垃圾桶。
+//! 当前为空，即治理面 = `packages/` 下**全部** `bedcode-*` 目录（9 个 crate）。
+//!
+//! `bedcode-wasm-core` 曾是唯一条目（机制整核改造在途 + 本解析当时不支持平台条件段），
+//! 两点均已消解，条目已删——删条目即自动进入本锁管辖。桶刻意保留：它是「新增 crate
+//! 忘记登记」的唯一检出点（C-4 的反向断言要求每个 `bedcode-*` 目录都在治理面内）。
 //!
 //! ## 明确不在本锁宇宙内（且**不是**遗漏）
 //!
@@ -62,14 +64,20 @@ use std::path::PathBuf;
 
 // ==================== 登记表与扫描面 ====================
 
-/// 已知但本轮**不**纳入管辖的 crate（须写明在办票据；处置完删条目即自动纳入）
+/// 已知但**不**纳入管辖的 crate（须写明在办票据；处置完删条目即自动纳入）
 ///
 /// 与目录推导出的治理面合起来构成完整覆盖：治理面 = `packages/bedcode-*` 减去本桶。
 /// 没有本桶，「把 crate 排除出管辖」就是一条零成本后门。
-const PENDING_GOVERNANCE: &[(&str, &str)] = &[(
-    "bedcode-wasm-core",
-    "机制整核由独立在途会话改造中（用户裁定本轮不扫）；票据完成后删本条目即自动纳入",
-)];
+///
+/// **当前为空**：治理面 = `packages/` 下全部 9 个 `bedcode-*` crate。`bedcode-wasm-core`
+/// 曾登记在此，两条理由均已消解——① 整核改造票据完成；② 本锁的按行切段解析当时不支持
+/// 平台条件段，而它恰是当时唯一的带平台段 crate，`read_manifest` 会直接 panic（该 panic
+/// 文案原话：「请先把本解析升级到能处理该形态，而不是让锁失守」）。解析已升级为
+/// `normalize_target_header` 归一化，自检 C-1 钉住正反两侧。
+///
+/// 空桶不是「桶可以删掉」：它是「新增 crate 忘记登记」的唯一检出点（C-4 反向断言要求每个
+/// `bedcode-*` 目录都在治理面内），且条目自带理由文本，理由不写清楚就会变成垃圾桶。
+const PENDING_GOVERNANCE: &[(&str, &str)] = &[];
 
 /// crate 根下**禁止**存在的集成测试面目录（cargo 自动发现即编译成独立测试二进制）
 ///
@@ -148,13 +156,42 @@ fn read_manifest(crate_name: &str) -> String {
 
 // ==================== 清单解析 ====================
 
+/// 平台条件段头归一化：`[target.<cfg>.<段>]` 折叠成 `[<段>]`
+///
+/// **平台条件不改变依赖的 dev / prod 归属**——一条 `[target.'cfg(windows)'.dev-dependencies]`
+/// 的内部 crate 边同样是「只为测试存在」的边，正是本锁要抓的形态。故按段名归一化，
+/// 不因它挂在 `[target.…]` 下就放过。
+///
+/// 首版对 `[target.…]` 段头一律 panic（当时解析器按行切段，会把它当新段头而静默丢掉
+/// 其下的依赖）。**该形态现已支持**——`bedcode-wasm-core` 是首个带平台段的治理 crate，
+/// panic 正是它当时进不了管辖面的直接原因（panic 文案原话：「请先把本解析升级到能处理
+/// 该形态，而不是让锁失守」）。
+///
+/// 形状不完整（`[target]` / `[target.'cfg(windows)']`，缺段名）仍 panic：那是未覆盖写法，
+/// 猜着解析等于静默漏判。
+fn normalize_target_header(inner: &str) -> Option<(String, Option<String>)> {
+    let parts: Vec<&str> = inner.split('.').collect();
+    if parts.len() < 3 {
+        panic!(
+            "`[{inner}]` 是形状不完整的平台条件段头（应为 `[target.<cfg>.<段>]`）：\n\
+             本解析按段名（第 3 段）判定依赖归属，缺段名时会把该段下的依赖静默丢掉——\
+             请升级本解析后再移开门禁，而不是让锁失守"
+        );
+    }
+    Some(match parts.get(3) {
+        Some(name) => (parts[2].to_string(), Some(name.to_string())),
+        None => (parts[2].to_string(), None),
+    })
+}
+
 /// 解析行首的 TOML 段头 → `(段种类, 子键)`
 ///
-/// 覆盖三种段头形态（不识别的直接返回 `None`，由调用方按「普通行」处理）：
+/// 覆盖四种段头形态（不识别的直接返回 `None`，由调用方按「普通行」处理）：
 /// - `[dependencies]` → `("dependencies", None)`
 /// - `[dependencies.foo]` / `[dev-dependencies.bedcode-x]` → `("dependencies", Some("foo"))`
 ///   ——**点号表形式**，`cargo` 全面支持，是 dev 内部依赖最常见的藏身处（首版解析只看
 ///   `[dev-dependencies]` 段内条目名，整条边从锁的视野里消失；由变异注入打红）
+/// - `[target.<cfg>.<段>]` → 经 [`normalize_target_header`] 折叠，归属与 `[<段>]` 相同
 /// - `[[test]]` / `[[bin]]` 等数组表 → `("test", None)` / `("bin", None)`
 fn section_header(line: &str) -> Option<(String, Option<String>)> {
     if !line.starts_with('[') || !line.ends_with(']') {
@@ -167,6 +204,9 @@ fn section_header(line: &str) -> Option<(String, Option<String>)> {
     } else {
         inner
     };
+    if inner == "target" || inner.starts_with("target.") {
+        return normalize_target_header(inner);
+    }
     Some(match inner.split_once('.') {
         Some((kind, sub)) => (kind.to_string(), Some(sub.to_string())),
         None => (inner.to_string(), None),
@@ -179,9 +219,12 @@ fn section_header(line: &str) -> Option<(String, Option<String>)> {
 /// 那种切法会把清单截断在 serde 行上（`bedcode-server-websocket` 的
 /// `dependency_direction_lock` 首版实测踩中，表现为误报「清单缺少内核依赖」）。
 ///
-/// **不支持的形态一律 panic，不静默跳过**（本锁宁可红不可绿）：
-/// - `[target.'cfg(...)'.dependencies]` 段头——按行切段会把它当成新段头而**静默丢掉**
-///   其下的依赖，那正是会让 dev 内部依赖逃过本锁的形态；
+/// **平台条件段已支持**：`[target.<cfg>.dependencies]` / `[target.<cfg>.dev-dependencies]`
+/// 经 [`normalize_target_header`] 归一化，归属与对应的无平台段相同（首版对此 panic，
+/// 见该函数注释里的来龙去脉）。
+///
+/// **其余不支持的形态一律 panic，不静默跳过**（本锁宁可红不可绿）：
+/// - 平台条件段形状不完整（缺段名）；
 /// - 条目行花括号不配平（依赖声明被折行）——续行会被当第二个条目名静默收进集合；
 /// - 条目名不是 `[A-Za-z0-9_.-]+`——其余未覆盖写法一律报错，不猜。
 fn section_deps(manifest: &str, section: &str) -> BTreeSet<String> {
@@ -190,17 +233,8 @@ fn section_deps(manifest: &str, section: &str) -> BTreeSet<String> {
     for (idx, line) in manifest.lines().enumerate() {
         let t = line.trim();
         if let Some((kind, sub)) = section_header(t) {
-            // `[target.…]` 段头**无条件**报错：它按行切段会被当成新段头，其下的依赖随之
-            // 静默丢弃，而那正是会让 dev 内部依赖逃过本锁的形态。注意判据不能挂在
-            // `in_section` 上——首版就挂错了：`[target.…]` 若出现在 `[dependencies]`
-            // 之前则永远不触发守卫（自检用例 C-1 亲手把它打红）。
-            if kind == "target" || kind.starts_with("target.") {
-                panic!(
-                    "第 {} 行出现 `[target.…]` 段头（`{t}`）：本锁的按行切段解析不支持它，\
-                     会静默丢掉该段下的依赖——请先把本解析升级到能处理该形态，而不是让锁失守",
-                    idx + 1
-                );
-            }
+            // 平台条件段已在 `section_header` 里折叠成同名段（见 normalize_target_header），
+            // 走到这里的 `kind` 已是纯粹的依赖段名。
             if kind == section {
                 match sub {
                     // 点号表形式：`[dev-dependencies.bedcode-x]` 就是一条 dev 内部依赖
@@ -341,13 +375,76 @@ version = \"1\"
         "prod 段的点号表不得被算进 dev 段，实得 {d_dev:?}"
     );
 
-    // 未覆盖写法必须 panic（fail-visible），不是静默跳过
-    let unsupported = "[target.'cfg(unix)'.dependencies]\nbedcode-server-core = \"1\"\n";
-    let panicked = std::panic::catch_unwind(|| section_deps(unsupported, "dependencies"));
+    // 平台条件段（`[target.<cfg>.<段>]`）：**必须被解析成对应的无平台段**，且归属正确
+    // （首版对此 panic，`bedcode-wasm-core` 因此进不了管辖面——panic 文案原话就是
+    // 「请先把本解析升级到能处理该形态」）。四条各自可杀的断言：
+    let targeted = "\
+[dependencies]
+serde = \"1\"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = \"0.61\"
+
+[target.'cfg(target_os = \"linux\")'.dev-dependencies]
+bedcode-pty-engine = { path = \"../bedcode-pty-engine\" }
+
+[target.'cfg(windows)'.dependencies.wx-sys]
+version = \"0.1\"
+";
+    let t_prod = section_deps(targeted, "dependencies");
+    let t_dev = section_deps(targeted, "dev-dependencies");
+
+    // 正例①：平台条件 prod 段并入 prod 集合
     assert!(
-        panicked.is_err(),
-        "出现 `[target.…]` 段头时必须 panic（按行切段会静默丢掉该段依赖）——不 panic 即锁失守"
+        t_prod.contains("windows-sys"),
+        "`[target.'cfg(windows)'.dependencies]` 必须并入 prod 集合（否则该段下的内部 crate \
+         依赖完全逃过本锁），实得 {t_prod:?}"
     );
+    // 正例②：含引号与空格的 cfg 表达式也能正确取到段名（cfg 串本身不得参与判定）
+    assert!(
+        t_dev.contains("bedcode-pty-engine"),
+        "`[target.'cfg(target_os = \"linux\")'.dev-dependencies]` 必须并入 dev 集合——平台 \
+         条件不改变 dev/prod 归属，否则这条 dev 内部边永久逃过本锁，实得 dev={t_dev:?}"
+    );
+    // 反例①：平台 dev 段不得进 prod 集合（否则 dev 内部边被当成生产依赖而放行）
+    assert!(
+        !t_prod.contains("bedcode-pty-engine"),
+        "平台 dev 段不得被算进 prod 集合（会把只服务测试的内部边当成生产依赖放行），实得 {t_prod:?}"
+    );
+    // 反例②：平台 prod 段不得进 dev 集合（否则误报一条不存在的 dev 内部依赖）
+    assert!(
+        !t_dev.contains("windows-sys"),
+        "平台 prod 段不得被算进 dev 集合（会误报不存在的 dev 内部依赖），实得 dev={t_dev:?}"
+    );
+    // 点号表形式在平台条件下同样成立（`[target.<cfg>.dependencies.<name>]`）
+    assert!(
+        t_prod.contains("wx-sys"),
+        "`[target.<cfg>.dependencies.<name>]` 点号表必须被解析成 prod 条目，实得 {t_prod:?}"
+    );
+    // 平台条件段出现在无平台段**之前**也必须生效（首版把守卫挂在 in_section 上，
+    // `[target.…]` 若排在前面则永远不触发守卫——C-1 亲手把它打红过）
+    let targeted_first = "\
+[target.'cfg(unix)'.dev-dependencies]
+bedcode-crypto-engine = { path = \"../bedcode-crypto-engine\" }
+
+[dependencies]
+serde = \"1\"
+";
+    assert!(
+        section_deps(targeted_first, "dev-dependencies").contains("bedcode-crypto-engine"),
+        "平台条件段排在 `[dependencies]` 之前时也必须生效（守卫不得挂在 `in_section` 上）"
+    );
+
+    // 形状不完整的平台条件段仍必须 panic（fail-visible），不是静默跳过
+    for malformed_target in ["[target]\n", "[target.'cfg(unix)']\n"] {
+        let panicked = std::panic::catch_unwind(|| {
+            let _ = section_deps(malformed_target, "dependencies");
+        });
+        assert!(
+            panicked.is_err(),
+            "形状不完整的 `[target.…]` 段头（缺段名）必须 panic——猜着解析等于静默丢掉该段依赖"
+        );
+    }
     let malformed = "[dependencies]\nserde = { version = \"1\",\nfeatures = [\"derive\"] }\n";
     let panicked2 = std::panic::catch_unwind(|| section_deps(malformed, "dependencies"));
     assert!(panicked2.is_err(), "多行依赖声明等未覆盖写法必须 panic——继续解析等于猜");
