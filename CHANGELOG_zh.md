@@ -16,6 +16,14 @@
 - **修法**：事件名统一到 SDK 冒号常量——前端 `useDeviceCenter.ts` / `notifications.ts` 订阅改 `device:connected` / `device:disconnected`；`auth_http` 的 `emit_device_connected` 改用 `EVENT_DEVICE_CONNECTED` 且载荷规范成 camelCase（与 `devices_events::event_payload` 同形，前端按指纹去重幂等）；`deviceOnlineKey` / 展示名兼容 camelCase 与 snake_case 两种发布面；Rust 侧结构锁强化（`event_names_match_frontend_keys` 现在逐字锁前端订阅文件的冒号名，防再漂移）
 - **验收**：terminal-session 插件 vitest **44 + 73 相关用例全绿**（新增 camelCase 载荷 / 断开闭环用例，变异杀死：删 camelCase 兼容分支 / 改回连字符订阅均转红）+ Rust **449 passed**；桌面端全量 vitest **1618/1619**（唯一失败 `terminalPreview.test.ts` 为既有 xterm+真实时钟 flake，已用 stash 对照证明 HEAD 同样失败，与本次无关）；wasm 产物重编注入新 wasmHash。**未跑**：`cross-end-tests`（未改跨端协议 / ABI / WIT，事件名是桌面端服务侧内部订阅面）
 
+#### 桌面端：修改连接端口后不生效 —— ServerView 加「保存 + 立即重启」确认流，设备连接界面端口随激活刷新（无 ABI / WIT / 协议变动）
+
+- **症状**：服务器管理页改端口后，设备连接界面的 WebSocket 端口仍显示旧值，且服务器实际监听端口未变
+- **成因**：`update_server_port` 只持久化配置 + 更新 supervisor 内存端口，**不重启监听 socket**（真实端口在服务器重启/下次启动才生效）；ServerView 此前唯一起效入口是工具栏「启动/重启」按钮顺带保存，改端口本身无保存动作、无「需要重启」的提示确认；设备连接界面（`DeviceCenterView`）被 KeepAlive 缓存，重启换端口后切回也不重拉 `network.info`
+- **修法**：① ServerView 端口行新增「保存」按钮（输入变化才可用，回车同样触发）——运行中保存弹确认「端口修改需要重启服务器后才能生效，是否立即重启？」，**立即重启** = 保存 + `restartServer`（用新端口）+ 状态刷新 + 成功提示，**稍后重启** = 仅保存、提示下次启动生效；停止态保存直接提示下次启动生效；② `DeviceCenterView` 在 `onActivated`（KeepAlive 切回）时刷新网络信息，重启换端口后界面即时显示新值
+- **验收**：新增 `ServerView.test.ts` 7 例行为契约全绿（C1 未修改不触发 / C2 运行中弹确认 / C3 立即重启链路 / C4 稍后 / C5 停止态 / C6 失败不假成功 / C7 回车触发）；i18n 双语同补；eslint 0 error；terminal-session vitest 全量绿。**未跑**：真机手工核验（需起宿主 + 移动端设备实操）
+
+
 #### 桌面端：会话日志二级详情的「任务记录」塔成一行 —— 高度链绕过分区过渡容器后接通
 
 - **症状（实机 1560×1080）**：打开任一会话，「任务记录」只剩约 28px——一行高、带个滚动条角，下面约 740px 全空

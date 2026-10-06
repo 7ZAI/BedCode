@@ -126,10 +126,17 @@
                 min="1024"
                 max="65535"
                 class="w-20 h-7 px-2 wb-mono rounded-[6px] border border-[var(--border-input)] bg-[var(--bg-input)] text-[var(--text-primary)] outline-none focus:border-[var(--color-primary)]"
+                @keyup.enter="handleSavePort"
               />
-              <span class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)]">{{
-                t('desktop.server.portHint')
-              }}</span>
+              <button
+                class="wb-btn-ghost !h-7 !px-3 !text-[calc(11.5px*var(--ui-scale))]"
+                :class="!portDirty && '!text-[var(--text-tertiary)] cursor-not-allowed'"
+                :disabled="!portDirty || loading || savingPort"
+                @click="handleSavePort"
+              >
+                {{ t('desktop.server.portSave') }}
+              </button>
+              <span class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)]">{{ t('desktop.server.portHint') }}</span>
             </div>
           </div>
           <div
@@ -262,6 +269,24 @@
       </section>
     </div>
   </div>
+
+  <!-- ==================== 端口保存确认（运行中保存后弹） ==================== -->
+  <!-- Safe-stack: Modal 自身 Teleport to body + z-50；主次按钮放 footer（既有确认弹窗同构） -->
+  <Modal v-model="portRestartVisible" :title="t('desktop.server.portRestartConfirmTitle')" :closable="!savingPort" :close-on-backdrop="true">
+    <p class="text-[calc(12.5px*var(--ui-scale))] leading-relaxed text-[var(--text-primary)]">
+      {{ t('desktop.server.portRestartConfirmBody') }}
+    </p>
+    <template #footer>
+      <div class="flex items-center justify-end gap-2">
+        <button class="wb-btn-ghost" @click="deferPortRestart">
+          {{ t('desktop.server.portRestartLater') }}
+        </button>
+        <button class="wb-btn-primary" :disabled="savingPort" @click="applyPortRestart">
+          {{ t('desktop.server.portRestartNow') }}
+        </button>
+      </div>
+    </template>
+  </Modal>
 </template>
 
 <script setup lang="ts">
@@ -274,6 +299,7 @@ import { useI18n } from 'vue-i18n'
 import { useServer } from '@/composables/useServer'
 import { useToast } from '@/composables/useToast'
 import { showUserError } from '@/utils/userError'
+import Modal from '@/components/Modal.vue'
 import VChart from 'vue-echarts'
 import PluginPageToolbar from '@/plugin/components/PluginPageToolbar.vue'
 import { use } from 'echarts/core'
@@ -321,6 +347,59 @@ const portInput = ref(8765)
 /** 后端端口刷新后同步输入框（loadStatus / updatePort 等操作完成后调用） */
 function syncPortInput() {
   portInput.value = port.value
+}
+
+/** 端口输入与后端当前端口不一致（有未保存的修改） */
+const portDirty = computed(() => portInput.value !== port.value)
+
+/** 端口保存进行中（按钮 disabled） */
+const savingPort = ref(false)
+
+/** 「端口已保存，是否立即重启」确认弹窗可见 */
+const portRestartVisible = ref(false)
+
+/**
+ * 保存端口：持久化到配置文件 + 更新 supervisor 内存端口。
+ *
+ * 生效语义（与后台 `update_server_port` 一致）：只重启服务器 / 下次启动才真正
+ * 换监昕端口（`ServerSupervisor::update_port` 只改内存，不重启 actix socket）。
+ * 故运行中保存后弹确认：立即重启 → 生效；稍后 → 下次启动生效。
+ */
+async function handleSavePort() {
+  if (!portDirty.value) return
+  savingPort.value = true
+  try {
+    await updatePort(portInput.value)
+    if (status.value === 'running') {
+      portRestartVisible.value = true
+    } else {
+      toast.success(t('desktop.server.portSavedDelayed'))
+    }
+  } catch (e) {
+    showUserError(e, { retry: handleSavePort })
+  } finally {
+    savingPort.value = false
+  }
+}
+
+/** 确认立即重启：真实端口换新（restartServer 用 supervisor 内存新端口） */
+async function applyPortRestart() {
+  portRestartVisible.value = false
+  try {
+    await restartServer()
+    await loadStatus()
+    syncPortInput()
+    startPolling()
+    toast.success(t('desktop.server.portRestartApplied'))
+  } catch (e) {
+    showUserError(e, { retry: applyPortRestart })
+  }
+}
+
+/** 稍后重启：端口已保存，下次启动生效 */
+function deferPortRestart() {
+  portRestartVisible.value = false
+  toast.success(t('desktop.server.portSavedDelayed'))
 }
 
 const statusText = computed(() => {

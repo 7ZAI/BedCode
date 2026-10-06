@@ -676,7 +676,12 @@ watch(() => qrPayload(), () => void renderQrCanvas(), { flush: 'post' })
 // canvas 元素重建（Tab 切换 / 分支重渲染）后补画：载荷不变时上面的 watch 不会触发
 watch(qrCanvasRef, () => void renderQrCanvas(), { flush: 'post' })
 // 路由切回（KeepAlive 激活）时确保图案可见
-onActivated(() => void renderQrCanvas())
+onActivated(() => {
+  void renderQrCanvas()
+  // KeepAlive 切回页面时刷新网络信息（端口）：服务器可能已在期间重启换端口，
+  // 不刷新会继续显示旧端口（与 ServerView 的「保存端口 → 立即重启」配套）
+  void loadNetwork()
+})
 
 // ==================== 交互编排 ====================
 
