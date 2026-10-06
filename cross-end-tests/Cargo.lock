@@ -679,6 +679,8 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "bedcode-crypto-engine",
+ "bedcode-discovery-engine",
+ "bedcode-host-kit",
  "bedcode-link-crypto",
  "bedcode-peer-net",
  "bedcode-plugin-api",
@@ -687,6 +689,7 @@ dependencies = [
  "bedcode-server-http",
  "bedcode-server-peer-net",
  "bedcode-server-websocket",
+ "bedcode-wasm-core",
  "chacha20poly1305",
  "chrono",
  "dbus",
@@ -738,6 +741,35 @@ dependencies = [
  "windows-sys 0.61.2",
  "x25519-dalek",
  "zip",
+]
+
+[[package]]
+name = "bedcode-discovery-engine"
+version = "0.1.0"
+dependencies = [
+ "bedcode-host-kit",
+ "bedcode-peer-net",
+ "bedcode-plugin-api",
+ "inventory",
+ "mdns-sd",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "uuid",
+ "wasmtime",
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
+name = "bedcode-host-kit"
+version = "0.1.0"
+dependencies = [
+ "inventory",
+ "serde",
+ "tracing",
+ "wasmtime",
+ "wasmtime-wasi",
 ]
 
 [[package]]
@@ -902,15 +934,21 @@ version = "0.1.0"
 dependencies = [
  "actix-service",
  "actix-web",
+ "anyhow",
+ "bedcode-host-kit",
  "bedcode-plugin-api",
  "bedcode-server-base",
  "bedcode-server-core",
  "futures-util",
+ "inventory",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "tokio",
  "tracing",
  "uuid",
+ "wasmtime",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
@@ -918,14 +956,18 @@ name = "bedcode-server-peer-net"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bedcode-host-kit",
  "bedcode-peer-net",
  "bedcode-plugin-api",
  "bedcode-server-base",
+ "inventory",
  "serde",
  "serde_json",
  "tokio",
  "tracing",
  "uuid",
+ "wasmtime",
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
@@ -937,15 +979,81 @@ dependencies = [
  "actix-web",
  "actix-web-actors",
  "async-trait",
+ "bedcode-host-kit",
  "bedcode-plugin-api",
  "bedcode-server-base",
  "bedcode-server-core",
  "chrono",
+ "futures-util",
+ "inventory",
  "serde",
  "serde_json",
  "tokio",
+ "tokio-tungstenite",
  "tracing",
  "uuid",
+ "wasmtime",
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
+name = "bedcode-wasm-core"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "bedcode-crypto-engine",
+ "bedcode-discovery-engine",
+ "bedcode-host-kit",
+ "bedcode-link-crypto",
+ "bedcode-peer-net",
+ "bedcode-plugin-api",
+ "bedcode-server-base",
+ "bedcode-server-core",
+ "bedcode-server-http",
+ "bedcode-server-peer-net",
+ "bedcode-server-websocket",
+ "chacha20poly1305",
+ "chrono",
+ "dbus",
+ "dirs 6.0.0",
+ "encoding_rs",
+ "futures-util",
+ "hex",
+ "hkdf",
+ "inventory",
+ "jsonwebtoken",
+ "libc",
+ "local-ip-address",
+ "mdns-sd",
+ "nosleep",
+ "notify",
+ "p256",
+ "portable-pty",
+ "rand 0.8.8",
+ "regex",
+ "reqwest 0.12.28",
+ "rsa",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sysinfo",
+ "tauri",
+ "tauri-plugin-dialog",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
+ "uuid",
+ "wasmtime",
+ "wasmtime-wasi",
+ "webkit2gtk",
+ "windows-sys 0.61.2",
+ "x25519-dalek",
+ "zip",
 ]
 
 [[package]]
@@ -4132,6 +4240,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "macro-string"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "59a9dbbfc75d2688ed057456ce8a3ee3f48d12eec09229f560f3643b9f275653"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "malloc_buf"
 version = "0.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5361,6 +5480,16 @@ name = "precomputed-hash"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "925383efa346730478fb4838dbe9137d2a47675ad789c546d150a6e1dd4ab31c"
+
+[[package]]
+name = "prettyplease"
+version = "0.2.37"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "479ca8adacdd7ce8f1fb39ce9ecccbfe93a3f1344b3d0d97f20bc0196208f62b"
+dependencies = [
+ "proc-macro2",
+ "syn 2.0.119",
+]
 
 [[package]]
 name = "primeorder"
@@ -8134,7 +8263,7 @@ version = "1.0.4+wasi-0.2.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b67efb37e106e55ce722a510d6b5f9c17f083e5fc79afc2badeb12cc313d9487"
 dependencies = [
- "wit-bindgen",
+ "wit-bindgen 0.57.1",
 ]
 
 [[package]]
@@ -9405,6 +9534,59 @@ name = "wit-bindgen"
 version = "0.57.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
+
+[[package]]
+name = "wit-bindgen"
+version = "0.60.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a301904d6657d6364c758d869e5389d05d393b16d5b65db60b4f03cbe71bb80d"
+dependencies = [
+ "bitflags 2.13.2",
+ "wit-bindgen-rust-macro",
+]
+
+[[package]]
+name = "wit-bindgen-core"
+version = "0.60.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "48521bb96e56cbb9e031ad306c80dc20e89e69e49ada02781ee06f60fbcb545f"
+dependencies = [
+ "anyhow",
+ "heck 0.5.0",
+ "wit-parser",
+]
+
+[[package]]
+name = "wit-bindgen-rust"
+version = "0.60.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3df3fe9b9a0066f82fd0c2f07f79d0ffc0f85c53fa5f998516d8722712479042"
+dependencies = [
+ "anyhow",
+ "heck 0.5.0",
+ "indexmap 2.14.2",
+ "prettyplease",
+ "syn 2.0.119",
+ "wasm-metadata",
+ "wit-bindgen-core",
+ "wit-component",
+]
+
+[[package]]
+name = "wit-bindgen-rust-macro"
+version = "0.60.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d689c4bc9d6af067c651cfba444766343c9a4bdef15fad1e2efab95c0c277af0"
+dependencies = [
+ "anyhow",
+ "macro-string",
+ "prettyplease",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+ "wit-bindgen-core",
+ "wit-bindgen-rust",
+]
 
 [[package]]
 name = "wit-component"

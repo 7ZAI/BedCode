@@ -9,9 +9,18 @@
 //! `biometric`（生物凭证验签/挑战管理）已随 B-downsink（2026-09-30）退役——生物
 //! 公钥托管与验签执行下沉认证中心私有库（`auth_records::biometric_key_*` + WASM 内
 //! p256）。宿主认证面只剩「问中心」这一个方向。
+//!
+//! **wasm-core 纯净性收口票 05（回迁 lib）**：`auth_center` 裁决面/桥接门从
+//! `bedcode-wasm-core` 迁回本模块（用户裁定：auth 桥接是宿主薄壳，不应留在 wasm
+//! core 中）。注册表真源仍在 wasm-core 的 `host_api::auth_center`（WIT 绑定面），
+//! 本模块 lib 单向依赖取用。
+//!
+//! `test_tokens` 测试夹具**未随之迁回**：它依赖 wasm-core 内部（种子要过
+//! `auth_secret_set` 权限门），迁回会让 wasm-core 自己的闭环测试
+//! （session_e2e / system_component_test / auth_center_perf）失去造 token 通路。
+//! lib 侧无消费点——`tests/*.rs` 是集成测试，看不到依赖方的 `cfg(test)` 项，故此处
+//! **不留垫片 `use`**：一条无人消费的再导出在 wasm-core 侧重新导出该模块前只会让
+//! lib 的 test 构建解析到不存在的路径而断链。
 
 pub mod auth_center;
 pub mod identity;
-/// 测试夹具：经认证中心签发设备入场 token（v33 起宿主无签发面，测试也不能自己造）
-#[cfg(test)]
-pub(crate) mod test_tokens;

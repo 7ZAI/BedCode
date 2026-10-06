@@ -267,6 +267,7 @@ async fn init_test_app_context() {
             &plugins_dir,
             &user_plugins_dir, // 用户插件目录：独立空目录（见上方来源标注说明）
             None,
+            None, // 整核抽出 §3.3：无头测试不注入 PeerCtxProvider（HEADLESS_UNAVAILABLE 语义不变）
         )
         .await;
         plugin_host.init_message_bus().await;

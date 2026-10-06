@@ -43,7 +43,7 @@
 
 use crate::wasm_core::intercall::call_api;
 use crate::wasm_core::manager::runtime::WasmHostContext;
-use crate::{AppError, Result};
+use crate::wasm_core::{AppError, Result};
 
 /// 插件互调 api（短名由 `#[plugin_api]` 宏按 manifest.api 比对防漂移）
 const API_LIST: &str = "com.bedcode.terminal-session.session-list";

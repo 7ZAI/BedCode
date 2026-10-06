@@ -121,6 +121,10 @@ bedcode-server-base = { path = "../packages/bedcode-server-base" }
 # （`add_to_linker::<S,D>` 是单态）⇒ 与宿主构成 Cargo 环。本期为**零行为变更的搬迁**：
 # StoreLimits / PluginMetrics / WasmPluginState 原位从 wasm_core 搬入，宿主留转发。
 bedcode-host-kit = { path = "../../packages/bedcode-host-kit" }
+# 插件机制整核（wasm-core-whole-crate，.scratch/2026-10-06）：wasm_core 整目录 +
+# 引擎面（db/pty/enums/system 部分）+ 宿主胶水迁入本 crate；lib.rs 经 `pub use
+# bedcode_wasm_core as wasm_core` 垫片保持既有 `crate::wasm_core::*` 路径零改动。
+bedcode-wasm-core = { path = "../packages/bedcode-wasm-core" }
 # 组播发现能力域（mDNS，wasm-core-lib-split 票 03）：引擎 + 宿主绑定层 + 自动
 # 注册。宿主侧只剩 `host_api/mdns.rs` 的端口 adapter（~90 行），原 795 行实现
 # 已迁入该 crate。

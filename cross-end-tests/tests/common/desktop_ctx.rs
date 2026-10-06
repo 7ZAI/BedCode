@@ -283,7 +283,7 @@ async fn init_app_context_inner(activate_center: bool) {
         let user_dir = user_plugins_dir();
         std::fs::create_dir_all(&user_dir).expect("create temp user plugins dir failed");
 
-        let plugin_host = PluginHost::new(db.clone(), &plugins_dir, &user_dir, None).await;
+        let plugin_host = PluginHost::new(db.clone(), &plugins_dir, &user_dir, None, None).await;
         plugin_host.init_message_bus().await;
         plugin_host
             .wasm_host_ctx()

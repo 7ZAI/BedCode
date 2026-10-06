@@ -41,28 +41,21 @@ use std::path::{Path, PathBuf};
 
 /// 拆分产物清单：`(crate 名, 相对 `<desktop>/packages` 的路径)`
 ///
-/// 这张表就是「从宿主 / server 面里拆出来的全部东西」的单一登记：
-/// server 五面 + 加密引擎（票 03-06）+ **机制内核与两个能力域 crate**
-/// （wasm-core-lib-split 票 03/07/08）。
+/// **单一事实源已上提 `bedcode-wasm-core` crate**（wasm-core-whole-crate 票 05
+/// 收口：lib → crate 单向引用）。本表是那张登记表的**再导出**，不是第二份拷贝——
+/// 新增/改名拆分产物只改 `bedcode_wasm_core::crate_boundary_lock::SPLIT_CRATES`
+/// 一处（曾为镜像表，两处同改的漂移风险已消除）。
+///
+/// 表内容：server 五面 + 加密引擎（票 03-06）+ 机制内核（仓库根双端共享锚点）+
+/// 能力域 crate（wasm-core-lib-split 票 03/07/08）+ **整核本体 `bedcode-wasm-core`**
+/// （wasm-core-whole-crate 票 02/05）。ADR 0036 撤销的 `bedcode-sqlite-engine`
+/// 不在表内（`host-database` / `host-plugin-database` / `host-storage` 三域与
+/// SQLite 引擎面留在核心）。
 ///
 /// **为什么带路径列**：`bedcode-host-kit` 落**仓库根** `packages/`（双端共享锚点，
 /// spec D6），其余在 `bedcode-desktop/packages/`。表只给名字时，锁必须假定同一个
-/// 父目录——那种假定正是「夹具落到第二个target 落点」那类事故的配方。
-pub(crate) const SPLIT_CRATES: &[(&str, &str)] = &[
-    ("bedcode-server-base", "bedcode-server-base"),
-    ("bedcode-server-core", "bedcode-server-core"),
-    ("bedcode-server-http", "bedcode-server-http"),
-    ("bedcode-server-websocket", "bedcode-server-websocket"),
-    ("bedcode-server-peer-net", "bedcode-server-peer-net"),
-    ("bedcode-crypto-engine", "bedcode-crypto-engine"),
-    // 机制内核（双端共享锚点，仓库根位）
-    ("bedcode-host-kit", "../../packages/bedcode-host-kit"),
-    // 能力域 crate（实现 + 插件绑定层 + 自动注册自报）
-    // ADR 0036：`bedcode-sqlite-engine` 已整体撤销——`host-database` /
-    // `host-plugin-database` / `host-storage` 三域与 SQLite 引擎面都留在宿主
-    // （`src/db/` + `wasm_core/host_api/`），故此表不再登记它。
-    ("bedcode-discovery-engine", "bedcode-discovery-engine"),
-];
+/// 父目录——那种假定正是「夹具落到第二个 target 落点」那类事故的配方。
+pub(crate) use bedcode_wasm_core::crate_boundary_lock::SPLIT_CRATES;
 
 /// 拆分产物的 crate 名（登记表的投影）
 fn split_crate_names() -> Vec<&'static str> {
@@ -132,6 +125,25 @@ const ALLOWED_DOWNWARD_EDGES: &[(&str, &[&str])] = &[
     ("bedcode-host-kit", &[]),
     // 能力域 crate：向下只取机制内核
     ("bedcode-discovery-engine", &["bedcode-host-kit"]),
+    // 整核本体（wasm-core-whole-crate 票 05）：bedcode-wasm-core 是全部拆分产物
+    // 的组装点——站在基础层（base / crypto / host-kit / server-core）与全部能力域
+    // crate（mdns / ws / peer / http）之上，把四通道与四闸门装配成一个可复用的
+    // 插件机制内核。它依赖 `bedcode-plugin-api`（SDK WIT 绑定）与根 `packages/`
+    // 的 `bedcode-peer-net` / `bedcode-link-crypto`，但后两者不在拆分产物登记表内
+    // （第三方 / 独立 crate，不归本锁管辖面）。
+    (
+        "bedcode-wasm-core",
+        &[
+            "bedcode-server-base",
+            "bedcode-server-core",
+            "bedcode-crypto-engine",
+            "bedcode-host-kit",
+            "bedcode-discovery-engine",
+            "bedcode-server-websocket",
+            "bedcode-server-peer-net",
+            "bedcode-server-http",
+        ],
+    ),
 ];
 
 /// 必需的向下依赖边（只看生产 `[dependencies]` 段）
@@ -156,6 +168,17 @@ const REQUIRED_DOWNWARD_EDGES: &[(&str, &str)] = &[
     ("bedcode-server-http", "bedcode-host-kit"),
     ("bedcode-server-websocket", "bedcode-host-kit"),
     ("bedcode-server-peer-net", "bedcode-host-kit"),
+    // 整核本体（wasm-core-whole-crate 票 05）：必须真的站在基础层与全部能力域之上
+    // （缺 host-kit ⇒ 机制内核被复制进本 crate；缺能力域 crate ⇒ 能力实现被复制进
+    // 内核——两种都是票 02 明令禁止的形态）。
+    ("bedcode-wasm-core", "bedcode-server-base"),
+    ("bedcode-wasm-core", "bedcode-host-kit"),
+    ("bedcode-wasm-core", "bedcode-crypto-engine"),
+    ("bedcode-wasm-core", "bedcode-server-core"),
+    ("bedcode-wasm-core", "bedcode-discovery-engine"),
+    ("bedcode-wasm-core", "bedcode-server-websocket"),
+    ("bedcode-wasm-core", "bedcode-server-peer-net"),
+    ("bedcode-wasm-core", "bedcode-server-http"),
 ];
 
 /// 宿主源码里**允许**同时认识两个传输面 crate 的文件（断言 ④ 的登记表）
@@ -191,16 +214,14 @@ fn packages_dir() -> PathBuf {
 
 /// 拆分产物的 `src` 扫描根（供宿主的退役面防回接锁共用）
 ///
-/// 与 [`SPLIT_CRATES`] 同源：面抽 crate 后，宿主那些「扫 `src` 树」的退役面锁
+/// **实现已收口为单向引用**（wasm-core-whole-crate 票 05）：扫描根由
+/// `bedcode_wasm_core::crate_boundary_lock` 提供（单一事源），本函数只是
+/// 薄委托——面抽 crate 后，宿主那些「扫 `src` 树」的退役面锁
 /// （`retired_kernel_session_domain_*` / `retired_peer_transfer_orchestration_*` /
 /// `retired_session_observation_*` / 会话命令面锁）必须把 crate 也扫进去，否则退役面
-/// 被回接到面 crate 里时宿主锁全绿。它们共享本表而不是各自抄一份，避免两处登记表
-/// 漂移。
+/// 被回接到面 crate 里时宿主锁全绿。它们共享登记表而不是各自抄一份，避免两处漂移。
 pub(crate) fn server_lib_src_roots() -> Vec<PathBuf> {
-    SPLIT_CRATES
-        .iter()
-        .map(|(name, _)| split_crate_dir(name).join("src"))
-        .collect()
+    bedcode_wasm_core::crate_boundary_lock::server_lib_src_roots()
 }
 
 fn read_file(path: &Path) -> String {

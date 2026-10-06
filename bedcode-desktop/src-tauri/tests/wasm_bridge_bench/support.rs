@@ -23,7 +23,8 @@ const WASM_TARGET: &str = "wasm32-wasip3";
 const WASM_PROFILE: &str = "release";
 /// 夹具 crate 名（cdylib 产物名 = 包名下划线形式）
 const FIXTURE_LIB: &str = "bedcode_plugin_bench_test";
-/// wasip3 工具链 pin（单一事实来源 = `src/wasm_core/manager/runtime.rs::WASIP3_NIGHTLY`，
+/// wasip3 工具链 pin（单一事实来源 =
+/// `../packages/bedcode-wasm-core/src/manager/runtime.rs::WASIP3_NIGHTLY`，
 /// 与 `packages/.cargo/config.toml` 注释互指；可用环境变量覆盖以便跟随工具链迁移）
 const WASIP3_TOOLCHAIN: &str = "nightly-2026-09-16";
 
@@ -150,7 +151,7 @@ pub async fn build_env(full: bool) -> anyhow::Result<BenchEnv> {
     let user_plugins_dir = temp_root.join("user-plugins");
     std::fs::create_dir_all(&user_plugins_dir)?;
 
-    let host = PluginHost::new(db.clone(), &plugins_dir, &user_plugins_dir, None).await;
+    let host = PluginHost::new(db.clone(), &plugins_dir, &user_plugins_dir, None, None).await;
 
     // 消息总线分发器注入（生产由 `lib.rs` 建宿主后调；`PluginHost::new` 自身不调）
     // —— 必须在任何订阅（activate 期订阅）之前完成，否则投递无处可去
@@ -266,7 +267,7 @@ fn desktop_root() -> PathBuf {
 }
 
 /// 夹具共享 target 目录（与宿主内联 fixture 构建器同目录：
-/// `src-tauri/src/wasm_core/manager/runtime/fixture_target.rs::dir()`）
+/// `bedcode-desktop/packages/bedcode-wasm-core/src/manager/runtime/fixture_target.rs::dir()`）
 fn fixtures_target_dir() -> PathBuf {
     desktop_root().join("target/fixtures")
 }

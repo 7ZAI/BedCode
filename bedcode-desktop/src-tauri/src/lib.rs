@@ -12,14 +12,18 @@ mod native_context_menu_test;
 
 pub mod commands;
 pub mod crypto;
-pub mod db;
-pub mod enums;
 pub mod mdns;
-pub mod pty;
 pub mod server;
 pub mod system;
 pub mod utils;
-pub mod wasm_core;
+
+// ==================== 整核抽出垫片（wasm-core-whole-crate） ====================
+// wasm_core / db / pty / enums 已迁入 `bedcode-wasm-core` crate（.scratch/
+// 2026-10-06-wasm-core-whole-crate/spec.md）；以下 `pub use` 垫片保持既有
+// `crate::wasm_core::*` / `crate::db::*` / `crate::pty::*` / `crate::enums::*`
+// 路径零改动编译通过（spec §4.3 D3）。反双份锁见 tests/（整核抽出结构锁）。
+pub use bedcode_wasm_core as wasm_core;
+pub use bedcode_wasm_core::{db, enums, pty};
 
 // 桥接基准工程的 Channel 传输面（**仅 debug 构建**：release 产物不含本命令面，
 // 闸门锁见本模块 tests::bench_channel_surface_stays_debug_only）
@@ -515,11 +519,16 @@ pub fn run() {
                 .expect("Failed to get app data dir")
                 .join("plugins");
             // PluginHost::new 返回 Arc<Self>（属主失败回报端口需要宿主弱引用）
+            // 整核抽出 §3.3：对等网络上下文装配端口由 lib 注入（peer_net_cmds::peer_ctx
+            // 读 tauri managed state + server 端口装配；无头 harness 不传 → HEADLESS_UNAVAILABLE）
+            let peer_ctx_provider: Option<Arc<crate::wasm_core::host_api::context::PeerCtxProvider>> =
+                Some(Arc::new(crate::server::peer_net_cmds::peer_ctx));
             let plugin_host = tauri::async_runtime::block_on(wasm_core::PluginHost::new(
                 db.clone(),
                 &plugins_dir,
                 &user_plugins_dir,
                 Some(app_handle_arc.clone()),
+                peer_ctx_provider,
             ));
             // 注入消息总线 dispatcher（两阶段初始化）
             tauri::async_runtime::block_on(plugin_host.init_message_bus());
@@ -566,8 +575,13 @@ pub fn run() {
             #[cfg(debug_assertions)]
             {
                 let runtime_handle = tauri::async_runtime::block_on(async { tokio::runtime::Handle::current() });
-                let _dev_watcher =
-                    wasm_core::watcher::PluginDevWatcher::start(plugins_dir.to_path_buf(), runtime_handle);
+                let _dev_watcher = wasm_core::watcher::PluginDevWatcher::start(
+                    plugins_dir.to_path_buf(),
+                    runtime_handle,
+                    // 整核抽出：watcher 不再经 AppContext::global() 取宿主，改由
+                    // bootstrap 注入弱引用（plugin_host 在此处已创建，见上）
+                    Arc::downgrade(&plugin_host),
+                );
                 // dev_watcher 需要 hold 住生命周期，存入 AppContext 或 leak
                 // 使用 Box::leak 使 watcher 生命周期与进程一致（开发模式可接受）
                 Box::leak(Box::new(_dev_watcher));

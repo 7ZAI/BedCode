@@ -1,0 +1,27 @@
+[package]
+name = "bedcode-pty-engine"
+version = "0.1.0"
+description = "BedCode PTY 引擎面（host-pty 引擎 + host-platform.wsl-distros 引擎侧）：跨平台伪终端管理与输出环形缓冲（wasm-core 纯净性收口票 02，从 bedcode-wasm-core 迁出）"
+authors = ["binblink"]
+edition = "2021"
+
+[dependencies]
+# 跨平台 PTY：进程生命周期 / 尺寸 / 读写（引擎本体核心）
+portable-pty = "0.8"
+# 异步运行时：读线程消费任务 / 广播 / 定时（test 的 time feature 由 dev-deps 补齐）
+tokio = { version = "1", features = ["sync", "rt", "macros", "time"] }
+# 引擎产物 sink 的 async 约束（PtyOutputSink 的 async_trait 化由消费侧决定，引擎本体只需基础面）
+async-trait = "0.1"
+# 输出时间戳（读线程逐块记录）
+chrono = { version = "0.4", features = ["clock"] }
+# WSL 发行版列举输出解码（UTF-16LE → UTF-8）
+encoding_rs = "0.8"
+# KeyCombo / KeyCode 特殊键 wire 形状真源（`pty_process::send_special_key` 解析面）
+bedcode-plugin-api = { path = "../plugin-sdk-desktop/rust" }
+serde = { version = "1", features = ["derive"] }
+tracing = { version = "0.1", features = ["attributes"] }
+# 错误类型 / 通用常量（PLUGIN_PTY_* 真源 + 引擎级配置）
+bedcode-server-base = { path = "../bedcode-server-base" }
+
+[dev-dependencies]
+tempfile = "3"

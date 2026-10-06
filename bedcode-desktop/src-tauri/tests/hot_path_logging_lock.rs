@@ -175,12 +175,14 @@ fn debug_log_lines(body: &str) -> Vec<usize> {
 /// `packages/bedcode-server-websocket/src/plugin_binding.rs`。
 const LOCKED_SITES: &[(&str, &str, &str)] = &[
     (
-        "src/wasm_core/bus.rs",
+        // wasm-core-whole-crate：wasm_core 整核迁入 `bedcode-wasm-core` crate，
+        // 热路径随迁，锁路径指向 crate 内文件（相对 src-tauri 根）
+        "../packages/bedcode-wasm-core/src/bus.rs",
         "dispatch_publish",
         "按消息触发：PTY 输出通知 / WS 事件流等数据面 topic 走这里",
     ),
     (
-        "src/wasm_core/security/fs_auth.rs",
+        "../packages/bedcode-wasm-core/src/security/fs_auth.rs",
         "check",
         "按文件操作触发：插件每次读写都过一次放行判定",
     ),

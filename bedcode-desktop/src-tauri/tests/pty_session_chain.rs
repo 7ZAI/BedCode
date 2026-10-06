@@ -107,7 +107,7 @@ async fn init_test_app_context() {
         let user_plugins_dir = std::env::temp_dir().join(format!("bedcode-itest-userplugins-{}", std::process::id()));
         std::fs::create_dir_all(&user_plugins_dir).expect("create temp user plugins dir failed");
 
-        let plugin_host = PluginHost::new(db.clone(), &plugins_dir, &user_plugins_dir, None).await;
+        let plugin_host = PluginHost::new(db.clone(), &plugins_dir, &user_plugins_dir, None, None).await;
         plugin_host.init_message_bus().await;
         plugin_host
             .wasm_host_ctx()

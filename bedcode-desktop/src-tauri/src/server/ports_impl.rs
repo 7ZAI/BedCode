@@ -77,69 +77,11 @@ impl AuthCenter for HostAuthCenter {
 
 // ==================== BusPort ====================
 
-/// 插件消息总线 + WS 帧投递（`wasm_core::bus::MessageBus` + 能力域 `deliver_endpoint_frame` 包装）
-pub struct HostBusPort {
-    bus: Arc<crate::wasm_core::bus::MessageBus>,
-    /// 帧投递用的能力域端口视图（**构造一次**、不逐帧分配）：能力域的帧投递函数
-    /// 收 `&Arc<dyn WsPorts>`，故此处持一份绑定到本总线的窄端口（无权限管理器）。
-    ws_ports: Arc<dyn bedcode_server_websocket::plugin_binding::ports::WsPorts>,
-}
-
-impl HostBusPort {
-    pub fn new(bus: Arc<crate::wasm_core::bus::MessageBus>) -> Self {
-        Self {
-            ws_ports: Arc::new(crate::wasm_core::host_api::ws::HostWsPorts::from_bus(bus.clone())),
-            bus,
-        }
-    }
-}
-
-/// base 侧 `BusMessageHandler` → wasm_core 侧 `BusMessageHandler` 适配
-/// （两 trait 形状逐字相同，只差 trait 路径）
-struct WasmHandlerAdapter(Box<dyn BusMessageHandler>);
-
-impl crate::wasm_core::bus::BusMessageHandler for WasmHandlerAdapter {
-    fn on_message(&self, msg: &bedcode_plugin_api::BusMessage) -> anyhow::Result<()> {
-        self.0.on_message(msg)
-    }
-}
-
-#[async_trait]
-impl BusPort for HostBusPort {
-    fn publish(&self, topic: &str, sender: &str, payload: serde_json::Value) {
-        self.bus.publish(topic, sender, payload);
-    }
-
-    fn publish_binary(&self, topic: &str, sender: &str, payload: Vec<u8>) {
-        self.bus.publish_binary(topic, sender, payload);
-    }
-
-    async fn subscribe_static(&self, subscriber: &str, topic: &str, handler: Box<dyn BusMessageHandler>) {
-        self.bus
-            .subscribe_static(subscriber, topic, Box::new(WasmHandlerAdapter(handler)))
-            .await;
-    }
-
-    async fn deliver_endpoint_frame(
-        &self,
-        owner: &str,
-        endpoint_id: &str,
-        client_id: &str,
-        kind: &str,
-        payload: Vec<u8>,
-    ) {
-        // 能力域已迁入 `bedcode_server_websocket::plugin_binding`（wasm-core-lib-split 票 04）
-        bedcode_server_websocket::plugin_binding::deliver_endpoint_frame(
-            &self.ws_ports,
-            owner,
-            endpoint_id,
-            client_id,
-            kind,
-            payload,
-        )
-        .await;
-    }
-}
+/// 插件消息总线 + WS 帧投递（整核抽出：`HostBusPort` 已迁入
+/// `bedcode_wasm_core::bus` —— 它包 `MessageBus`（crate 属物）。本文件保留路径，
+/// lib 其余代码经 `crate::server::ports_impl::HostBusPort` 引用不受影响；
+/// `assemble()` 本体留 lib（组合根唯一性）。
+pub use bedcode_wasm_core::bus::HostBusPort;
 
 // ==================== EventSink ====================
 

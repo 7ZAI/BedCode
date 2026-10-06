@@ -1,0 +1,1061 @@
+//! WASM 插件运行时
+//!
+//! 基于 wasmtime 的 WASM 组件（Component Model）加载、实例化、调用
+//! 管理 Engine/Linker/Store/Instance 生命周期
+//!
+//! 宿主能力实现位于 `crate::host_api`（权限校验 + 宿主服务调用），
+//! 组件绑定与实例化位于 [`component`] 子模块，本模块只负责运行时生命周期
+//! 管理与宿主上下文定义
+
+mod component;
+
+// 夹具共享 target 目录（测试期编译产物落点，cfg(test) 门控：生产构建不编译本模块）
+// pub(crate)：host/tests/* 下的夹具构建器与 runtime/component.rs 也要用同一落点
+#[cfg(test)]
+pub(crate) mod fixture_target;
+// 夹具构建器：runtime::tests / runtime::component::tests / host::tests::* 三处共用
+// 同一实现（`runtime::tests` 自身是私有模块，兄弟模块寻址不到它）
+#[cfg(test)]
+pub(crate) mod fixture_build;
+
+/// 声明展开（不过滤授权，preauthorize 收集弹窗候选用，见 host.rs `preauthorize_plugin`）
+pub(crate) use component::expand_preopen_declarations;
+/// WASI 预打开目录解析（激活时重建实例判定用，见 host.rs `rebuild_wasm_instance`）
+pub(crate) use component::resolve_preopen_dirs;
+pub use component::LoadedWasmPlugin;
+// 票 06：实例元数据与可选导出句柄快照（调用模型两侧共用的只读投影）
+pub(crate) use component::{InstanceMeta, OptionalExports};
+
+use crate::storage::PluginStorage;
+// 异步桥（`block_on_async`）已中立化到 core-runtime-util：本模块与它的消费者
+// （host_api / security / task 等）同为其使用方，不再由本模块定义（票 01）；
+// 本模块仅测试代码使用它，故 cfg(test) 门控（非 test 构建零 unused import）
+#[cfg(test)]
+use crate::runtime_util::block_on_async;
+use crate::security::fs_auth::FsAuthChecker;
+#[cfg(test)]
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::pin::Pin;
+use std::sync::Arc;
+use tauri::Manager;
+#[cfg(test)]
+use tokio::sync::{Mutex, RwLock};
+use wasmtime::{Cache, CacheConfig, Config, Engine, WasmBacktraceDetails};
+
+// ==================== 宿主上下文（票 04 迁移 host_api::context） ====================
+// 定义已迁 `crate::host_api::context`（host_api 消费方家园）；以下 re-export
+// 保持历史路径 `manager::runtime::WasmHostContext` 等编译绿——manager→host_api 合法
+// 方向，后续迭代按需清理（见 .scratch/2026-09-24-wasm-core-decouple/issues/04）
+pub use crate::host_api::context::{CapabilityProvider, PluginServices, ProcessRegistry, WasmHostContext};
+// ==================== Resource Limits & Interruption ====================
+
+// 运行参数单一事实源在配置模块（core-config，见 `crate::config`）：
+// Engine 构建参数与 Store 资源上限的默认值即历史生产常量（`config::defaults`），
+// 支持配置文件加载与运行时覆盖；燃料看门狗的语义说明随默认值一并迁入。
+pub(crate) use crate::config::plugin_debug_mode;
+use crate::config::CoreConfig;
+use crate::monitor::{LifecycleEvent, MetricsRegistry};
+use bedcode_plugin_api::{ResourceOverrides, WasiPreopenDir};
+
+/// 从 catch_unwind 的 panic 载荷提取人类可读消息（统一 panic 诊断文案）
+pub fn panic_payload_to_string(panic: &Box<dyn std::any::Any + Send>) -> String {
+    panic
+        .downcast_ref::<&str>()
+        .map(|s| s.to_string())
+        .or_else(|| panic.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "unknown panic".to_string())
+}
+
+/// 票 03：桌面插件与测试 fixture 统一 wasm32-wasip3 构建参数
+///
+/// 单一事实来源 = `scripts/wasip3-toolchain.sh`（WASIP3_NIGHTLY）；stable 1.99
+/// （预计 2026-10 中）发布后随工具链迁移移除 nightly pin，见
+/// `docs/knowledge/wasip3-toolchain.md`。所有宿主内联 fixture 构建（plas组件测试/
+/// SDK 测试/ws 测试/系统组件测试）与本常量保持同步。
+// non-test 构建（cargo check --lib）不编译测试使用方 → 允许 dead_code
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) const WASIP3_NIGHTLY: &str = "nightly-2026-09-16";
+
+///
+/// Engine 和 Linker 是线程安全的可复用结构：
+/// - Engine: WASM 编译器，全局单例
+/// - Linker: Host function 注册表，所有插件实例共享
+pub struct WasmRuntime {
+    engine: Engine,
+    /// Component 形态插件的 linker（阶段 C 后唯一形态）
+    ///
+    /// 已接线的 import 接口见 [`component::add_to_linker`]，实例化导入
+    /// 未接线接口的组件会报 unknown import 错误
+    linker: wasmtime::component::Linker<WasmPluginState>,
+    /// 文件系统访问校验器
+    fs_auth: Arc<FsAuthChecker>,
+    /// AOT 编译产物（`.cwasm`）缓存目录（宿主 cache 目录，非插件目录）
+    ///
+    /// 插件目录可被安装方/插件自身写入，若把反序列化产物放回插件目录，
+    /// 能写插件目录的攻击者可投放伪造产物触发宿主进程 UB
+    /// （`Component::deserialize` 是 unsafe，假定数据可信）。
+    /// 无 app_handle 时（无头/测试）为 None，禁用文件级 AOT 缓存。
+    /// pub(crate)：`crate::test_support` 的无头装配（票 05b 上提）注入临时目录；
+    /// 生产面经 `with_config` 构造时设置，无其它写者。
+    pub(crate) aot_cache_dir: Option<PathBuf>,
+    /// 内核配置（core-config）：Engine 参数构建期固化，Store 上限每次实例化读快照
+    /// （运行时覆盖只影响新建立的 Store）
+    config: Arc<std::sync::RwLock<CoreConfig>>,
+    /// 指标注册表（core-monitor）：内核运行时埋点数据中心
+    monitor: Arc<MetricsRegistry>,
+}
+
+// ==================== 迁往机制内核的类型（转发） ====================
+//
+// `WasmPluginState` / `StoreSpec` 连同 `WasiView` 与 `ResourceLimiter` 实现整体搬入
+// `bedcode-host-kit`（wasm-core-lib-split 票 03）：它们是**插件实例状态的机制面**，
+// 且必须与「能力 crate 能命名状态类型」这一硬约束同 crate（`add_to_linker::<S,D>`
+// 单态 ⇒ 住在宿主 bin crate 内会与能力 crate 构成 Cargo 环）。
+//
+// 可见性以 `pub use` 原样转发，既有 `runtime::WasmPluginState` 等引用路径逐字不变。
+// 唯一实质变化：状态里的宿主引用字段 `host_ctx: Arc<WasmHostContext>` 改为
+// `host: Arc<dyn HostPorts>`（见 `host_api::context::host_ctx` 向下转型辅助）。
+pub use bedcode_host_kit::state::{StoreSpec, WasmPluginState};
+
+/// 已加载的 WASM 插件（迁移阶段 C：组件形态唯一）
+///
+/// 类型别名 `pub use component::LoadedWasmPlugin`（见文件头）保留历史名称：
+/// 宿主各模块（host.rs 等）以 `LoadedWasmPlugin` 引用插件实例，
+/// 方法接口与迁移前枚举完全一致。
+
+/// 根据 wasm 路径生成 AOT 缓存文件名（稳定 hash，避免路径字符/长度问题）
+/// 产物 key：路径 + 源码大小双因子哈希
+///
+/// 源码大小进入 key：解压器保留旧 mtime 时，仅 mtime 比较发现不了内容
+/// 变更；大小变化必然换 key → 缓存 miss → 重新编译。产物自身长度与源码
+/// 长度无固定关系，不能作为新鲜度因子（比较会恒不等、永久禁用缓存）
+fn aot_cache_key(path: &Path, source_len: u64) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    path.hash(&mut hasher);
+    source_len.hash(&mut hasher);
+    hasher.finish()
+}
+
+impl WasmRuntime {
+    /// 创建 WASM 运行时
+    ///
+    /// 初始化 Engine、Linker，注册所有 Host Functions。
+    /// 宿主能力（db / session / permission 等）不在本结构持有，
+    /// 而是通过 [`WasmHostContext`] 注入到每个插件实例的 Store state 中。
+    /// `app_handle` 为 None 时（无头/测试上下文）依赖前端事件的宿主能力降级
+    pub fn new(storage: Arc<PluginStorage>, app_handle: Option<Arc<tauri::AppHandle>>) -> crate::Result<Self> {
+        // 内核配置：编译期默认 < 配置文件 < 运行时覆盖（set_config）。
+        // 配置文件缺失/非法不阻断启动——记录 warn 并回落编译期默认
+        let core_config = app_handle
+            .as_ref()
+            .and_then(|h| h.path().app_config_dir().ok())
+            .map(|d| d.join(CoreConfig::FILE_NAME))
+            .map(|path| match CoreConfig::load_from(&path) {
+                Ok(cfg) => cfg,
+                Err(e) => {
+                    tracing::warn!(path = %path.display(), error = %e, "内核配置加载失败，回落编译期默认");
+                    CoreConfig::default()
+                }
+            })
+            .unwrap_or_default();
+        Self::with_config(storage, app_handle, core_config)
+    }
+
+    /// 以指定内核配置构建（测试与运行时覆盖路径；配置须先通过 [`CoreConfig::validate`]）
+    pub fn with_config(
+        storage: Arc<PluginStorage>,
+        app_handle: Option<Arc<tauri::AppHandle>>,
+        core_config: CoreConfig,
+    ) -> crate::Result<Self> {
+        if let Err(reason) = core_config.validate() {
+            return Err(crate::AppError::Config(format!("内核配置非法: {}", reason)));
+        }
+        let mut config = Config::new();
+        // 票 02 宿主 async 化门禁：CM_ASYNC 引擎级异步支持（wasmtime 46+ 默认
+        // 编译进 runtime，此处开启 wasm 特性）。wasip3 组件导入 async wasi 0.3
+        // 函数，实例化后 Store 为 async-required；既有同步插件不受影响
+        // （/tmp/wasip3-probe 场景 4 实证：同步组件 sync/async 双路径均可用）。
+        // wasmtime 48 中 async_support() 配置已废弃为 no-op（异步为引擎级）。
+        config.wasm_component_model_async(true);
+        // 燃料看门狗：guest 指令计数耗尽即 trap（宿主调用阻塞不消耗，见 config FUEL_PER_CALL）
+        config.consume_fuel(core_config.engine.consume_fuel);
+        // WASM 内部调用栈：trap（panic/栈溢出/燃料耗尽/内存越界）错误串携带
+        // 插件内部函数调用链（names section 函数名，release 构建即有），随
+        // AppError::Plugin 进 error.log 与插件 Degraded 状态，AI agent 无需重跑
+        // 即可定位插件内部故障点。wasmtime 47 的 backtrace 在 default features
+        // 内（零编译成本），此处显式钉死 32 帧防止上游默认（20 帧）漂移
+        config.wasm_backtrace_max_frames(Some(
+            std::num::NonZeroUsize::new(core_config.engine.wasm_backtrace_max_frames as usize)
+                .expect("backtrace frames > 0（配置校验保证）"),
+        ));
+        // 行号解析：Environment 模式读 WASMTIME_BACKTRACE_DETAILS——无 DWARF 时
+        // 零开销回退到函数名栈（release 插件无调试信息，不硬编码强制解析）；
+        // 插件调试模式（BEDCODE_PLUGIN_DEBUG=1）下宿主先置该环境变量再构建
+        // Engine，调试产物（debug profile 保留 DWARF）即可拿到 file:line 行号
+        if plugin_debug_mode() {
+            // edition 2021 下 set_var 非 unsafe；此处单线程启动早期调用，
+            // 无并发读写风险。Environment 模式在 wasm_backtrace_details 调用
+            // 时读取该变量，必须先设置再配置
+            std::env::set_var("WASMTIME_BACKTRACE_DETAILS", "1");
+        }
+        config.wasm_backtrace_details(WasmBacktraceDetails::Environment);
+        // 线性内存预留 = 估算的最大线性内存（与 limiter 上限严格一致，见
+        // MAX_PLUGIN_MEMORY_BYTES）：实例化时一次性预留 256MiB 虚拟地址空间，
+        // 增长零系统调用、基址恒定；相比 64-bit 默认（4GiB 预留 + 32MiB guard/
+        // 内存）大幅降低 VA 占用。GC 堆未显式配置时沿用同值（wasmtime 语义：
+        // gc_heap_* 缺省继承 memory_* 配置）
+        config.memory_reservation(core_config.engine.memory_reservation_bytes);
+        // 预留即硬顶：初始分配与增长超出预留前均被 limiter 拒绝（memory_growing
+        // 在物理分配前调用），内存永不搬移；编译器可静态假设基址不变做优化，
+        // 同时杜绝任何路径触发重定位
+        config.memory_may_move(false);
+        // Wasm 执行栈深度上限：深度递归在 wasm 侧确定性栈溢出 trap，
+        // 而非打穿真实线程栈导致进程 abort（见 MAX_WASM_STACK_BYTES）
+        config.max_wasm_stack(core_config.store.max_wasm_stack_bytes);
+        // 编译缓存：跨进程复用已编译产物（初始化失败降级为不缓存，不阻断运行时）
+        if core_config.engine.compile_cache {
+            match Cache::new(CacheConfig::new()) {
+                Ok(cache) => {
+                    config.cache(Some(cache));
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "WASM compile cache disabled");
+                }
+            }
+        }
+        let engine = Engine::new(&config)
+            .map_err(|e| crate::AppError::Plugin(format!("Failed to initialize WASM engine: {}", e)))?;
+        let mut linker = wasmtime::component::Linker::new(&engine);
+
+        // 注册已接线的 Component import 接口（实现见 host_impl + component）
+        component::add_to_linker(&mut linker)?;
+
+        // AOT 缓存目录：宿主 cache 目录（非插件目录，见结构体字段注释）。
+        // 须在 app_handle move 进 FsAuthChecker 之前取出
+        let aot_cache_dir = app_handle
+            .as_ref()
+            .and_then(|h| h.path().app_cache_dir().ok())
+            .map(|d| d.join("wasm-aot"));
+        if let Some(dir) = &aot_cache_dir {
+            if let Err(e) = std::fs::create_dir_all(dir) {
+                tracing::warn!(
+                    path = %dir.display(),
+                    error = %e,
+                    "Failed to create AOT cache dir, AOT cache disabled"
+                );
+            }
+        }
+
+        let fs_auth = Arc::new(FsAuthChecker::new(storage.clone(), app_handle));
+
+        // task 段快照源注册（spec 票 02 去环）：monitor 经注册回调取 host-task
+        // 指标，monitor.rs 不再内联引用 manager::task。注册幂等；monitor 仅经本
+        // runtime 暴露，快照必在注册之后——生产路径无「未注册段降级」窗口
+        // （降级仅裸 registry 单测可观测，见 monitor.rs tests）
+        let monitor = Arc::new(MetricsRegistry::new());
+        crate::manager::task::register_task_metrics_source(&monitor);
+
+        Ok(Self {
+            engine,
+            linker,
+            fs_auth,
+            aot_cache_dir,
+            config: Arc::new(std::sync::RwLock::new(core_config)),
+            monitor,
+        })
+    }
+
+    /// 当前内核配置快照
+    pub fn config(&self) -> CoreConfig {
+        self.config.read().expect("core config lock poisoned").clone()
+    }
+
+    /// 运行时覆盖内核配置：只影响覆盖后新建立的 Store（Engine 参数构建期已固化）
+    pub fn set_config(&self, cfg: CoreConfig) -> crate::Result<()> {
+        if let Err(reason) = cfg.validate() {
+            return Err(crate::AppError::Config(format!("内核配置非法: {}", reason)));
+        }
+        *self.config.write().expect("core config lock poisoned") = cfg;
+        Ok(())
+    }
+
+    /// 指标注册表句柄（core-monitor）：生命周期事件记账与快照导出入口
+    pub fn monitor(&self) -> Arc<MetricsRegistry> {
+        self.monitor.clone()
+    }
+
+    /// 从字节流编译 WASM 组件（Component Model，迁移阶段 A）
+    pub fn compile_component(&self, bytes: &[u8]) -> crate::Result<wasmtime::component::Component> {
+        wasmtime::component::Component::from_binary(&self.engine, bytes)
+            .map_err(|e| crate::AppError::Plugin(format!("Failed to compile WASM component: {}", e)))
+    }
+
+    /// 从文件编译 WASM 组件（带 AOT 缓存，与 core 路径同构）
+    ///
+    /// 缓存文件名带 `c` 前缀区分 core module 产物（同一路径的插件切换形态
+    /// 时不会误读对方产物）；`Component::serialize` 产物与 `Module::serialize`
+    /// 不同，混用会反序列化失败。
+    pub fn compile_component_from_file(&self, path: &Path) -> crate::Result<wasmtime::component::Component> {
+        // 无 AOT 缓存目录（无头/测试上下文）时退化为纯编译
+        let Some(cache_dir) = &self.aot_cache_dir else {
+            return wasmtime::component::Component::from_file(&self.engine, path).map_err(|e| {
+                crate::AppError::Plugin(format!(
+                    "Failed to compile WASM component from '{}': {}",
+                    path.display(),
+                    e
+                ))
+            });
+        };
+
+        // 源码大小计入缓存 key（内容变化但 mtime 未更新的场景：大小变化必然换 key）；
+        // 新鲜度主判据为 mtime——同大小同 mtime 的编辑无法探测（无成本方案），
+        // 但旧产物是合法编译代码不会崩溃，仅行为漂移，属可接受残留
+        let wasm_md = std::fs::metadata(path).ok();
+        let cache_path = cache_dir.join(format!(
+            "c{:016x}.cwasm",
+            aot_cache_key(path, wasm_md.as_ref().map(|md| md.len()).unwrap_or(0))
+        ));
+
+        let cache_fresh = wasm_md
+            .and_then(|w| w.modified().ok())
+            .zip(std::fs::metadata(&cache_path).ok().and_then(|c| c.modified().ok()))
+            .map(|(wm, cm)| cm >= wm)
+            .unwrap_or(false);
+
+        if cache_fresh {
+            // unsafe：产物为本机自写缓存；Engine 版本/特性不匹配时 deserialize 失败，
+            // 回退到完整编译路径
+            if let Ok(bytes) = std::fs::read(&cache_path) {
+                if let Ok(component) = unsafe { wasmtime::component::Component::deserialize(&self.engine, &bytes) } {
+                    tracing::debug!(
+                        path = %cache_path.display(),
+                        "Loaded WASM component from AOT cache"
+                    );
+                    return Ok(component);
+                }
+            }
+        }
+
+        let component = wasmtime::component::Component::from_file(&self.engine, path).map_err(|e| {
+            crate::AppError::Plugin(format!(
+                "Failed to compile WASM component from '{}': {}",
+                path.display(),
+                e
+            ))
+        })?;
+
+        // 写回 AOT 缓存：先写临时文件再 rename（原子替换，避免崩溃留半截产物）；
+        // 失败不阻断加载（下次启动重新编译）
+        match component.serialize() {
+            Ok(bytes) => {
+                if let Err(e) = std::fs::create_dir_all(cache_dir) {
+                    tracing::warn!(
+                        path = %cache_dir.display(),
+                        error = %e,
+                        "Failed to create AOT cache dir, will recompile next time"
+                    );
+                    return Ok(component);
+                }
+                let tmp_path = cache_path.with_extension("cwasm.tmp");
+                let write_result =
+                    std::fs::write(&tmp_path, &bytes).and_then(|_| std::fs::rename(&tmp_path, &cache_path));
+                if let Err(e) = write_result {
+                    tracing::warn!(
+                        path = %cache_path.display(),
+                        error = %e,
+                        "Failed to write AOT cache, will recompile next time"
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to serialize component for AOT cache");
+            }
+        }
+
+        Ok(component)
+    }
+
+    /// 从文件加载 WASM 插件（阶段 C 起仅组件形态）
+    ///
+    /// `declared_preopen_dirs`：manifest 声明的 WASI 预打开目录（原始值，
+    /// 支持 ${home} 与只读档；实例化时经展开+授权过滤并按档位挂载，
+    /// 见 component::build_wasi_ctx）
+    pub fn load_plugin_from_file(
+        &self,
+        path: &Path,
+        plugin_id: &str,
+        host_ctx: Arc<WasmHostContext>,
+        declared_preopen_dirs: &[WasiPreopenDir],
+        resource_overrides: Option<&ResourceOverrides>,
+    ) -> crate::Result<LoadedWasmPlugin> {
+        let bytes = std::fs::read(path).map_err(|e| {
+            crate::AppError::Plugin(format!("Failed to read WASM artifact '{}': {}", path.display(), e))
+        })?;
+        let component = self.compile_component(&bytes)?;
+        self.instantiate_component(
+            &component,
+            plugin_id,
+            host_ctx,
+            declared_preopen_dirs,
+            resource_overrides,
+        )
+    }
+
+    /// 实例化 WASM 组件
+    ///
+    /// 创建 Store + WasmPluginState，通过 linker 实例化，
+    /// 校验 ABI 版本与形态字段（见 [`component::LoadedWasmPlugin::new`]）
+    ///
+    /// `resource_overrides` 为插件 manifest 的资源覆盖请求，经安全模块仲裁后
+    /// 作为本 Store 的限额（见 [`crate::security::SecurityFramework::resolve_store_limits`]）。
+    pub fn instantiate_component(
+        &self,
+        component: &wasmtime::component::Component,
+        plugin_id: &str,
+        host_ctx: Arc<WasmHostContext>,
+        declared_preopen_dirs: &[WasiPreopenDir],
+        resource_overrides: Option<&ResourceOverrides>,
+    ) -> crate::Result<LoadedWasmPlugin> {
+        let (limits, fuel_enabled) = {
+            let cfg = self.config.read().expect("core config lock poisoned");
+            (
+                host_ctx
+                    .security()
+                    .resolve_store_limits(plugin_id, &cfg.store, resource_overrides),
+                cfg.engine.consume_fuel,
+            )
+        };
+        let metrics = self.monitor.plugin(plugin_id);
+        let plugin = component::LoadedWasmPlugin::new(
+            &self.engine,
+            &self.linker,
+            component,
+            plugin_id,
+            host_ctx,
+            declared_preopen_dirs,
+            StoreSpec {
+                limits,
+                fuel_enabled,
+                metrics: metrics.clone(),
+            },
+        )?;
+        metrics.record_lifecycle(LifecycleEvent::Instantiate);
+        // 实例创建日志：启动加载与热重载均经此路径，与 LoadedWasmPlugin::drop 的
+        // 死亡日志成对，构成实例生命周期观测（plugin_id 键控）
+        tracing::info!(
+            plugin_id = %plugin_id,
+            "WASM plugin instance created (component model)"
+        );
+        Ok(plugin)
+    }
+
+    /// 获取文件系统访问校验器引用
+    pub fn fs_auth(&self) -> &Arc<FsAuthChecker> {
+        &self.fs_auth
+    }
+}
+
+// ==================== Tests ====================
+
+#[cfg(test)]
+mod tests {
+    use super::fixture_build::build_sdk_fixture;
+    use super::*;
+    // 测试基建上提（wasm-core 纯净性收口票 05b）：无头运行时装配 / 插件私有库根 /
+    // 会话中心串行锁 / 认证中心注册表闸门迁至 `crate::test_support`（常编译 pub，
+    // lib 集成测试同源消费）。本 mod 及各域测试文件（`use super::*` 继承）经此 glob
+    // 继续可见同名符号。
+    use crate::test_support::*;
+
+    // A0-3 前置探针（P1/P2/P5）：async store 兼容性 + 资源限制 async 语义 + 性能基线。
+    // 文档：.scratch/2026-09-21-a0-3-host-async/spec.md + report.md（只读探针，不碰生产路径）
+    mod a03_probe;
+    // 终端输出消费插件化性能前置验证（P1-P3，只读探针；文档 .scratch/2026-09-21-terminal-output-consumer-perf/）
+    mod terminal_output_perf;
+    // WS 终端输出路径吞吐探针（票 09 性能门禁 §9.3：插件 ring-fetch + WIT binary + WS send）
+    // 认证中心热路径性能探针（ADR 0031 v32 fail-closed 裁决的每请求成本：
+    // 宿主原生验签 vs 认证中心往返），只读探针
+    // 域拆分（P0）：测试函数自本文件拆至 wasm_runtime/tests/，共享脚手架留在下方；
+    // 各域文件 `use super::*` 复用，fixture 互斥与产物构建语义不变
+    mod component_e2e;
+    mod engine_limits;
+    mod http_e2e;
+    // 票 06 P1：属主任务（event-loop 调用模型）直接驱动测试
+    mod owner_e2e;
+    mod p3_async_host_import;
+    mod pty_e2e;
+    mod sdk_e2e;
+    mod task_e2e;
+    mod wasi_e2e;
+
+    /// 测试用插件 ID
+    const TEST_PLUGIN_ID: &str = "com.bedcode.test";
+
+    /// 校验 RFC3339 UTC 字符串格式（trust addedAt 断言用；与插件
+    /// pairing::code 的 format_rfc3339_utc 输出格式一致）
+    fn parse_rfc3339_for_test(s: &str) -> bool {
+        use chrono::{DateTime, Utc};
+        DateTime::parse_from_rfc3339(s).map(|dt| dt.with_timezone(&Utc)).is_ok()
+    }
+
+    // ==================== Component Model 测试 ====================
+
+    /// 构建测试用组件插件（合集 `packages/plugin-sdk-fixtures` `feature = "sdk"`）
+    ///
+    /// 原先指向 `packages/plugin-component-test`（手写 wit-bindgen 绑定的独立夹具），
+    /// 已被 30+ 处通用引擎测试当「随便一个可加载组件」使用。夹具删除后改用 SDK 夹具：
+    /// 宿主加载组件的代码路径与客体绑定方式无关（宿主无 `ComponentEncoder` 路径，
+    /// 两种写法都直出组件），实际依赖的只有 `test.echo` / `test.panic` /
+    /// `test.storage-get` / 启动失败注入四个可观测点，已并入 SDK 夹具。
+    ///
+    /// `BEDCODE_PLUGIN_DEBUG=1`（dev 构建下）时以 debug profile 构建（保留
+    /// DWARF 行号，供行号冒烟测试断言 trap 错误串含 file:line）——由
+    /// `fixture_build::build_sdk_fixture` 内部按 profile 分档处理。
+    fn build_test_component() -> Vec<u8> {
+        build_sdk_fixture("sdk")
+    }
+
+    // ==================== host-websocket 客户端域端到端（ABI v14） ====================
+
+    /// host-websocket fixture e2e 串行锁
+    ///
+    /// 三个用例共用 fixture 常量属主 id（`com.bedcode.ws-test`，宿主侧连接表 / 端点表 /
+    /// 事件 topic 均按属主**进程级全局**登记），彼此 `purge_for_plugin` 会清掉对方的
+    /// 连接与端点（并行时现象：握手 404、连接被回收）。libtest 并行执行下必须串行。
+    static WS_FIXTURE_E2E_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// 取得 fixture e2e 串行锁（跨用例共享全局表；中毒后取回内部值继续）
+    fn lock_ws_fixture_e2e() -> std::sync::MutexGuard<'static, ()> {
+        WS_FIXTURE_E2E_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// fixture e2e 兜底超时：把「挂起（疑似死锁）」变成明确失败
+    ///
+    /// 历史踩点：插件投递任务占住 actix arbiter → 用例无限挂起（无超时则整轮
+    /// `cargo test` 永不返回）。上限取 60s（正常用例秒级完成）。
+    const WS_E2E_TIMEOUT_SECS: u64 = 60;
+
+    /// 以兜底超时驱动 e2e 主体
+    async fn ws_e2e_guard<F>(label: &str, fut: F) -> F::Output
+    where
+        F: std::future::Future,
+    {
+        match tokio::time::timeout(std::time::Duration::from_secs(WS_E2E_TIMEOUT_SECS), fut).await {
+            Ok(out) => out,
+            Err(_) => {
+                panic!("{label}: 超过 {WS_E2E_TIMEOUT_SECS}s 未完成（疑似死锁；检查投递任务是否占住 actix arbiter）")
+            }
+        }
+    }
+
+    /// 读 fixture 的 `ws-state` 快照（锁在返回前释放，避免阻塞帧投递）
+    async fn ws_fixture_state(plugin: &Arc<Mutex<LoadedWasmPlugin>>) -> serde_json::Value {
+        let raw = {
+            let mut guard = plugin.lock().await;
+            guard.invoke_command("ws-state", "{}").expect("ws-state")
+        };
+        serde_json::from_str(&raw).expect("ws-state json")
+    }
+
+    /// 轮询快照直到谓词命中或超时（帧与事件均为异步投递，不能单次读取断言）
+    async fn ws_poll_state(
+        plugin: &Arc<Mutex<LoadedWasmPlugin>>,
+        pred: impl Fn(&serde_json::Value) -> bool,
+        timeout: std::time::Duration,
+    ) -> serde_json::Value {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            let state = ws_fixture_state(plugin).await;
+            if pred(&state) || std::time::Instant::now() >= deadline {
+                return state;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    }
+
+    /// 快照中是否含指定 kind 的帧（`text` 为 Some 时要求文本一致）
+    fn ws_has_frame(state: &serde_json::Value, kind: &str, text: Option<&str>) -> bool {
+        state["frames"]
+            .as_array()
+            .map(|frames| {
+                frames
+                    .iter()
+                    .any(|f| f["kind"] == kind && text.map(|t| f["text"] == t).unwrap_or(true))
+            })
+            .unwrap_or(false)
+    }
+
+    /// 快照中首个指定 kind 帧的载荷长度
+    fn ws_frame_len(state: &serde_json::Value, kind: &str) -> Option<u64> {
+        state["frames"]
+            .as_array()?
+            .iter()
+            .find(|f| f["kind"] == kind)?
+            .get("len")?
+            .as_u64()
+    }
+
+    /// 快照中指定 topic 的事件 payload
+    fn ws_event_payload(state: &serde_json::Value, topic: &str) -> Option<serde_json::Value> {
+        state["events"]
+            .as_array()?
+            .iter()
+            .find(|e| e["topic"] == topic)
+            .map(|e| e["payload"].clone())
+    }
+
+    // ==================== host-websocket 服务端域端到端（ABI v14，票 05） ====================
+
+    /// WS 客户端类型（tokio-tungstenite 直连 ws://，与集成测试同构）
+    type WsTestClient = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+    /// 探测空闲端口（OS 分配后立即释放，交给宿主服务器绑定）
+    fn ws_pick_free_port() -> u16 {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("probe free port");
+        listener.local_addr().expect("probed port").port()
+    }
+
+    /// 读客户端下一条业务帧（跳过心跳帧），超时返回 `None`
+    async fn ws_client_recv(
+        client: &mut WsTestClient,
+        timeout: std::time::Duration,
+    ) -> Option<tokio_tungstenite::tungstenite::Message> {
+        use futures_util::StreamExt;
+        use tokio_tungstenite::tungstenite::Message;
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                return None;
+            }
+            match tokio::time::timeout(remaining, client.next()).await {
+                Ok(Some(Ok(msg))) => match msg {
+                    Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => continue,
+                    other => return Some(other),
+                },
+                _ => return None,
+            }
+        }
+    }
+
+    /// 轮询 `ws-list-clients` 直到在线客户端数达到期望（注册表登记为异步）
+    async fn ws_wait_clients(
+        plugin: &Arc<Mutex<LoadedWasmPlugin>>,
+        endpoint_id: &str,
+        expected: usize,
+    ) -> Vec<serde_json::Value> {
+        let args = serde_json::json!({ "endpointId": endpoint_id }).to_string();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let raw = {
+                let mut guard = plugin.lock().await;
+                guard.invoke_command("ws-list-clients", &args).expect("ws-list-clients")
+            };
+            let clients: Vec<serde_json::Value> = serde_json::from_str::<serde_json::Value>(&raw)
+                .expect("ws-list-clients json")["clients"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+            if clients.len() == expected || std::time::Instant::now() >= deadline {
+                return clients;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    }
+
+    /// 构建 host-websocket fixture 插件（合集 `packages/plugin-sdk-fixtures`
+    /// `feature = "ws"`）并编码为组件
+    ///
+    /// 原先的新鲜度检查额外盯 SDK 的 `wasm_ws.rs` / `host/ws.rs` 等链路文件；合集
+    /// crate 后不再单独盯——SDK 任一文件变动会经 cargo 依赖指纹触发重建。
+    fn build_ws_test_component() -> Vec<u8> {
+        build_sdk_fixture("ws")
+    }
+
+    // ==================== host-http 服务端域端到端（ABI v29，路由注册下沉） ====================
+
+    /// host-http 服务端域 fixture（合集 `packages/plugin-sdk-fixtures` `feature = "http"`）
+    fn build_http_test_component() -> Vec<u8> {
+        build_sdk_fixture("http")
+    }
+
+    // ==================== host-pty 创建→拉取端到端（ABI v16，票 02） ====================
+
+    /// host-pty fixture e2e 串行锁
+    ///
+    /// 插件 PTY 注册表按属主**进程级全局**登记（`host_impl/pty.rs` 的 `PTYS`），
+    /// 用例间共用 fixture 常量属主 id；票 04 起停用回收会清对方句柄，故并行必须串行。
+    static PTY_FIXTURE_E2E_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// 取得 host-pty fixture e2e 串行锁（中毒后取回内部值继续）
+    fn lock_pty_fixture_e2e() -> std::sync::MutexGuard<'static, ()> {
+        PTY_FIXTURE_E2E_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// 构建 host-pty fixture 插件（合集 `packages/plugin-sdk-fixtures` `feature = "pty"`）
+    /// host-pty fixture e2e（合集 `packages/plugin-sdk-fixtures` `feature = "pty"`，ABI v16）
+    fn build_pty_test_component() -> Vec<u8> {
+        build_sdk_fixture("pty")
+    }
+
+    /// 构建 host-task fixture 插件（合集 `packages/plugin-sdk-fixtures` `feature = "task"`，ABI v20）
+    /// 构建 host-task fixture 插件（合集 `packages/plugin-sdk-fixtures` `feature = "task"`，ABI v20）
+    fn build_task_test_component() -> Vec<u8> {
+        build_sdk_fixture("task")
+    }
+
+    /// fixture 命令的 error 载荷（`wasm_entry!` 把 guest Err 编码为 `{"error": ...}`
+    /// 字符串返回，不上抛为 trap）
+    fn pty_command_error(raw: &str) -> String {
+        let value: serde_json::Value = serde_json::from_str(raw).expect("command json");
+        value["error"]
+            .as_str()
+            .unwrap_or_else(|| panic!("期望 error 载荷，got: {raw}"))
+            .to_string()
+    }
+
+    /// guest error 载荷 → `Some(错误文案)`；成功载荷 → `None`（矩阵分格自带命令名定位）
+    fn pty_error_of(raw: &str) -> Option<String> {
+        serde_json::from_str::<serde_json::Value>(raw)
+            .expect("command json")
+            .get("error")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+    }
+
+    /// `data` 字段（list<u8>）→ 文本（PTY 输出含控制字符，按 lossy 处理）
+    fn pty_fetched_text(value: &serde_json::Value) -> String {
+        let bytes: Vec<u8> = value
+            .get("data")
+            .and_then(|d| d.as_array())
+            .map(|a| a.iter().filter_map(|v| v.as_u64().map(|n| n as u8)).collect())
+            .unwrap_or_default();
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+
+    /// 经 fixture 的 `pty-ring-fetch` 命令按游标拉取一次
+    async fn pty_fixture_fetch(
+        plugin: &Arc<Mutex<LoadedWasmPlugin>>,
+        pty_id: &str,
+        from_offset: u64,
+    ) -> serde_json::Value {
+        let args = serde_json::json!({ "ptyId": pty_id, "fromOffset": from_offset, "maxBytes": 4096 }).to_string();
+        let raw = {
+            let mut guard = plugin.lock().await;
+            guard.invoke_command("pty-ring-fetch", &args).expect("pty-ring-fetch")
+        };
+        serde_json::from_str(&raw).expect("pty-ring-fetch json")
+    }
+
+    /// 轮询拉取直到输出含 `want`（真 PTY 产出异步：断言内容，不断言时序）
+    async fn pty_fetch_until(plugin: &Arc<Mutex<LoadedWasmPlugin>>, pty_id: &str, want: &str) -> serde_json::Value {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let fetched = pty_fixture_fetch(plugin, pty_id, 0).await;
+            if pty_fetched_text(&fetched).contains(want) || std::time::Instant::now() >= deadline {
+                return fetched;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    }
+
+    /// 加载并激活一个 host-pty fixture 实例（编译组件 + 接线 dispatcher + activate 订阅）
+    async fn pty_activate_fixture(
+        runtime: &WasmRuntime,
+        ctx: &Arc<WasmHostContext>,
+        plugin_id: &str,
+    ) -> Arc<Mutex<LoadedWasmPlugin>> {
+        let component = runtime
+            .compile_component(&build_pty_test_component())
+            .expect("compile pty fixture component");
+        let plugin = Arc::new(Mutex::new(
+            runtime
+                .instantiate_component(&component, plugin_id, Arc::clone(ctx), &[], None)
+                .expect("instantiate pty fixture"),
+        ));
+        ctx.message_bus
+            .set_dispatcher(Arc::new(TestInstanceDispatcher {
+                instances: Arc::new(RwLock::new(HashMap::from([(plugin_id.to_string(), plugin.clone())]))),
+            }))
+            .await;
+        plugin.lock().await.activate().expect("activate pty fixture");
+        plugin
+    }
+
+    /// fixture 命令调用（成功路径）：返回解析后的 JSON 载荷
+    async fn pty_fixture_call(
+        plugin: &Arc<Mutex<LoadedWasmPlugin>>,
+        command: &str,
+        args: serde_json::Value,
+    ) -> serde_json::Value {
+        let raw = {
+            let mut guard = plugin.lock().await;
+            guard
+                .invoke_command(command, &args.to_string())
+                .unwrap_or_else(|e| panic!("{command} 调用失败: {e}"))
+        };
+        let value: serde_json::Value = serde_json::from_str(&raw).expect("command json");
+        assert!(value.get("error").is_none(), "{command} 期望成功载荷，got: {value}");
+        value
+    }
+
+    /// 读 fixture 已收事件列表（`<owner>::pty:exit` 投递事实源）
+    async fn pty_fixture_events(plugin: &Arc<Mutex<LoadedWasmPlugin>>) -> Vec<serde_json::Value> {
+        let state = pty_fixture_call(plugin, "pty-state", serde_json::json!({})).await;
+        state["events"].as_array().cloned().unwrap_or_default()
+    }
+
+    /// 轮询 fixture 事件直至出现指定 ptyId 的退出事件（宿主→guest 投递异步）
+    async fn pty_wait_exit_event(plugin: &Arc<Mutex<LoadedWasmPlugin>>, pty_id: &str) -> serde_json::Value {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if let Some(event) = pty_fixture_events(plugin)
+                .await
+                .into_iter()
+                .find(|e| e["payload"]["ptyId"] == pty_id)
+            {
+                return event;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "属主插件必须在超时前收到 {pty_id} 的 pty:exit 事件"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    }
+
+    /// 构建 SDK 组件形态测试插件（合集 `packages/plugin-sdk-fixtures`
+    /// `feature = "sdk"`）并编码为组件
+    ///
+    /// 与 `build_test_component` 的区别：插件经真实 SDK（wasm_entry! 宏 + WasmHost）
+    /// 构建，验证 SDK 组件产物链路。
+    ///
+    /// 注：原先本 builder 的新鲜度检查额外盯 `plugin-sdk-desktop/rust/src/{wasm,
+    /// wasm_host,api_call}.rs` 与 `rust-macros/src/lib.rs`（`#[plugin_api]` 宏）。
+    /// 合集 crate 后不再单独盯——合集产物在 `plugin-sdk-desktop` 任一文件变动时
+    /// 经 cargo 自身的依赖指纹重建（feature 变更会触发），此处只需盯夹具自身源文件。
+    fn build_sdk_test_component() -> Vec<u8> {
+        build_sdk_fixture("sdk")
+    }
+
+    /// 构建 wasm32-wasip2 测试组件（WASI preopen E2E 用）
+    ///
+    /// 与其它测试组件不同：目标为 WASI preview2（std::fs 直连预打开目录），
+    /// 依赖宿主当前机器已安装 wasm32-wasip2 target（rustup target add）。
+    /// 预装的其它测试组件不依赖该 target，互不干扰。
+    fn build_wasi_test_component() -> Vec<u8> {
+        let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let packages_dir = manifest_dir.join(".."); // 整核抽出：本 crate 已在 packages/ 下，父目录即 packages 根
+        let plugin_dir = packages_dir.join("plugin-wasi-test");
+
+        let module_path = fixture_target::artifact("wasm32-wasip2", "release", "bedcode_plugin_wasi_test");
+
+        if module_path.exists() {
+            let src_files = [
+                plugin_dir.join("src/lib.rs"),
+                plugin_dir.join("plugin.json"),
+                packages_dir.join("plugin-sdk-desktop/rust/wit/bedcode.wit"),
+            ];
+            let module_modified = std::fs::metadata(&module_path)
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+
+            let needs_rebuild = src_files.iter().any(|f| {
+                std::fs::metadata(f)
+                    .and_then(|m| m.modified())
+                    .map(|t| t > module_modified)
+                    .unwrap_or(true)
+            });
+
+            if !needs_rebuild {
+                return std::fs::read(&module_path).expect("Failed to read WASI test component module");
+            }
+        }
+
+        let manifest_path = plugin_dir.join("Cargo.toml");
+        let status = std::process::Command::new("cargo")
+            .env("CARGO_TARGET_DIR", fixture_target::dir())
+            .args([
+                "build",
+                "--target",
+                "wasm32-wasip2",
+                "--release",
+                "--manifest-path",
+                manifest_path.to_str().unwrap(),
+            ])
+            .status()
+            .expect("Failed to run cargo build for WASI test component");
+        assert!(status.success(), "WASI test component WASM build failed");
+
+        // wasm32-wasip2 目标（Rust 1.85+）已内嵌 wasm-component-ld：产物直接是
+        // 组件（magic \0asm 0d），无需再经 encode_component 编码
+        //
+        // 注：preopen 目前只在 wasip2 上真正可用。曾尝试迁到 wasip3（统一夹具
+        // target 着想），但实测两个 preopen E2E 均 trap 于
+        // `filesystem_method_descriptor_open_at`——p3 linker 虽接上，预打开目录
+        // 的能力没建到 p3 filesystem 接口上。故本夹具固定 wasip2，不参与夹具
+        // 合并（合并不要求统一 target，见合并方案）。
+        // **preopen 仅 worker 类别可用**（ADR 0034）：本夹具是 worker 预留能力的
+        // 机制守门测试（在策略闸门之下，不走 manifest 校验路径）；worker 启用
+        // 专项需一并解决 wasip3 的 preopen 装配问题（见 ADR 0034 §worker 启用时需补）。
+        std::fs::read(&module_path).expect("Failed to read WASI test component after build")
+    }
+
+    /// wasip3 固定 nightly（与 scripts/wasip3-toolchain.sh WASIP3_NIGHTLY 单一
+    /// 事实来源）；stable 1.99 发布后随工具链切换，见 docs/knowledge/wasip3-toolchain.md
+    const WASIP3_NIGHTLY: &str = "nightly-2026-09-16";
+
+    /// wasip3 工具链（pinned nightly + wasm32-wasip3 target）是否可用
+    ///
+    /// CI（dtolnay stable）无该 target → 返回 false，调用侧测试值跳过；
+    /// 本地经 scripts/wasip3-toolchain.sh install 后为 true。结果惰性缓存。
+    fn wasip3_toolchain_ready() -> bool {
+        use std::sync::OnceLock;
+        static READY: OnceLock<Option<bool>> = OnceLock::new();
+        match READY.get_or_init(|| {
+            let out = std::process::Command::new("rustup")
+                .args(["run", WASIP3_NIGHTLY, "rustup", "target", "list", "--installed"])
+                .output()
+                .ok()?;
+            Some(
+                String::from_utf8_lossy(&out.stdout)
+                    .lines()
+                    .any(|l| l == "wasm32-wasip3"),
+            )
+        }) {
+            Some(ready) => *ready,
+            None => false,
+        }
+    }
+
+    /// 构建 wasm32-wasip3 测试组件（票 02 A1 async 闭环用）
+    ///
+    /// target 产物 cdylib 直接是 Component（magic \0asm 0d，免 componentize）；
+    /// pinned nightly 经 RUSTUP_TOOLCHAIN 注入（与 scripts/wasip3-toolchain.sh
+    /// health 子命令同构）。产物缺失（本地未装工具链）时返回 None，测试跳过。
+    fn build_wasip3_test_component() -> Option<Vec<u8>> {
+        if !wasip3_toolchain_ready() {
+            return None;
+        }
+        Some(build_sdk_fixture("wasip3"))
+    }
+
+    // ==================== WASI preopen E2E ====================
+
+    // ==================== host-task 闭环（ABI v20，spec `.scratch/2026-09-21-host-task-concurrency/`） ====================
+
+    /// host-task 消费派发测试替身：收集 dispatch_task_event 事件 + 真实投递到
+    /// 注册实例（验证 SDK 回调链路：dispatch → LoadedWasmPlugin::on_task_event →
+    /// WIT events-task 导出 → fixture on_task_event）
+    struct MockTaskServices {
+        events: Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+    }
+
+    impl PluginServices for MockTaskServices {
+        fn mark_plugin_error(&self, _plugin_id: String, _error: String) {}
+        fn register_plugin_timer(&self, _plugin_id: String, _interval_secs: u64, _command: String) {}
+        fn dispatch_process_done(&self, _plugin_id: String, _event: serde_json::Value) {}
+        fn dispatch_task_event(&self, plugin_id: String, event: serde_json::Value) {
+            // 收集事件序列（phase 顺序断言用）。真实投递（with_wasm_plugin_call →
+            // LoadedWasmPlugin::on_task_event）由 PluginHost 的 dispatch 实现承担，
+            // 与 dispatch_process_done 同构；SDK 回调链路在 submit 用例中手动验证
+            let _ = plugin_id;
+            self.events.lock().unwrap_or_else(|e| e.into_inner()).push(event);
+        }
+        fn install_cli(
+            &self,
+            _plugin_id: String,
+            _file_name: String,
+            _bin_dir: String,
+        ) -> Pin<Box<dyn std::future::Future<Output = Result<String, String>> + Send + '_>> {
+            Box::pin(async { Err("mock: no cli".to_string()) })
+        }
+        fn uninstall_cli(
+            &self,
+            _plugin_id: String,
+            _file_name: String,
+            _bin_dir: String,
+        ) -> Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + '_>> {
+            Box::pin(async { Ok(()) })
+        }
+        fn plugin_resource_dir(
+            &self,
+            _plugin_id: String,
+        ) -> Pin<Box<dyn std::future::Future<Output = Result<String, String>> + Send + '_>> {
+            Box::pin(async { Err("mock: no resource dir".to_string()) })
+        }
+    }
+
+    impl MockTaskServices {
+        fn new() -> Self {
+            Self {
+                events: Arc::new(std::sync::Mutex::new(Vec::new())),
+            }
+        }
+
+        fn phases(&self) -> Vec<String> {
+            self.events
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .iter()
+                .filter_map(|e| e.get("phase").and_then(|v| v.as_str()).map(str::to_string))
+                .collect()
+        }
+    }
+
+    /// 无头 setup 的 fs_auth（security 框架）默认放行：fixture 需真实 fs:read
+    /// 权限走 permission 门 + fs_auth 三层（授权语义见 host_impl/fs.rs）
+    fn task_fixture_plugin_id() -> String {
+        "com.bedcode.task-test".to_string()
+    }
+
+    // ==================== ADR 0033：认证面在无头上下文里的边界 ====================
+    //
+    // **为什么本 harness 里没有「正向认证」用例**（一次踩坑的记录，避免后人重走）：
+    //
+    // v33 之后，WS / HTTP 认证的**唯一**判定点是认证中心插件，而宿主侧两处调用
+    // （`authenticate_endpoint_connection` / `auth_gateway`）都经 `AppContext::try_global()` 取
+    // `PluginHost`——**无 AppContext ⇒ 无中心 ⇒ fail-closed 全拒**（这本身是对的：
+    // 宿主已经没有本地验签面了，不存在「本地验签通过就放行」的旁路）。
+    //
+    // 本 harness 曾试过装一个进程级 `AppContext`（`OnceCell` + 真实中心产物）来
+    // 造正向认证，三条实测阻塞把这条路堵死了：
+    // 1. **端点表是进程级全局**：那个中心一旦 `activate` 就登记了
+    //    `session-control` / `terminal` 端点，本文件里各自装载实例的 WS 用例再登记
+    //    同路径 → `path already registered` 直接 panic；
+    // 2. **端点归属与实例绑定**：端点由某个实例登记、帧投递给那个实例，于是「用
+    //    全局中心签的 token」+「用例自己的实例收帧」必然错配（认证身份与状态快照
+    //    分属两个实例）；
+    // 3. **AppContext 是 `OnceLock`**：一个用例装上后全 harness 共享，隔离性消失，
+    //    且 `PluginHost::new` 的重量级初始化被所有用例连带。
+    //
+    // **正向认证的覆盖因此落在自带真实 AppContext 的独立测试二进制**：
+    // `tests/ws_auth_rules.rs`（WS 首消息认证四规则 + 有效凭证后业务帧可达）与
+    // `tests/http_auth_biometric.rs`（中心签发 → 验签闭环）。宿主 harness 这边只锁
+    // **无中心即全拒**这条边界——它恰好是 v33 之后最该被钉住的新性质。
+
+    /// 需要**正向认证**（中心签发 → 首消息认证 → 业务帧往返）的用例在无头 harness
+    /// 里**不可达**，此处显式退出并说明去哪儿跑
+    ///
+    /// v33 之后宿主无签发面也无验签面，认证判定全在认证中心插件里，而宿主侧两处
+    /// 调用都经 `AppContext::try_global()`——本 harness 装不出隔离的 AppContext
+    /// （三条阻塞见上方「ADR 0033：认证面在无头上下文里的边界」）。故这些用例
+    /// **显式跳过并打印去向**（不是静默 skip：静默会把「未验证」伪装成「通过」）。
+    /// 正向认证的覆盖在 `tests/ws_auth_rules.rs`（WS 首消息认证四规则 + 有效
+    /// 凭证后业务帧可达）与 `tests/http_auth_biometric.rs`（中心签发闭环）。
+    fn positive_auth_needs_dedicated_binary(test: &str) -> bool {
+        eprintln!(
+            "[skip] {test}: 需要正向认证（中心签发 → 首消息认证 → 业务帧往返），\
+             但 v33 之后认证判定在认证中心插件里，宿主侧调用需要 AppContext——\
+             无头 harness 装不出隔离的 AppContext。正向认证覆盖见 \
+             tests/ws_auth_rules.rs 与 tests/http_auth_biometric.rs。"
+        );
+        true
+    }
+
+    // ==================== 会话中心互调 api 清单（已上提 test_support） ====================
+}
+

@@ -51,6 +51,40 @@
 - 未跑：`cross-end-tests`、wasm 应用完整构建与 `gen/android` gradlew、移动端（无产品 / WIT / Kotlin
   改动，本轮只有构建工具与文档）
 
+#### 桌面端：插件机制整核整体抽出宿主 bin → 可复用 crate `bedcode-wasm-core`（ADR 0037；无 ABI / WIT / 协议变动）
+
+- **改了什么**：`src-tauri/src/wasm_core/`（54,394 行 / 119 文件）连同它赖以存续的引擎面——
+  `db/`（schema.sql 单一事实源）、`pty/`、`enums/`、`system/{config,opener,process}`、
+  `utils/auth/auth_center.rs`、`utils/session_gateway.rs`、`utils/auth/test_tokens.rs`
+  与 `HostBusPort`——整体迁入新 crate `bedcode-desktop/packages/bedcode-wasm-core/`
+  （spec M1–M11，票 02–04）。宿主只留组合根 + `pub use` 垫片（`lib.rs` / `system.rs` /
+  `utils.rs` / `utils/auth.rs` / `server/ports_impl.rs`），全部既有
+  `crate::wasm_core::*` / `crate::db::*` / `crate::pty::*` / `crate::enums::*` 引用
+  （lib 9 文件 + 5 集成测试 + cross-end-tests）零改动编译通过（D3）
+- **为什么**：机制本体 5.4 万行长在 bin crate 里——不是库、不能独立编译 / 测试 / 发布，
+  且机制与宿主之间的边界从未被画过（`db` 真源在 lib、机制在 bin、引擎散落各处）。
+  ADR 0036「机制与真源同侧」在此之前有且只有两个答案。实测迁移成本远低于直觉：
+  出边里 5 类已是 packages/ 的 crate 或 shim，真正要随迁或转端口的 lib 模块只有
+  ~4,500 行
+- **边界在迁移中被画出**：**只有 1 个端口**——`PeerCtxProvider`（经 `PluginHost::new`
+  新增第 5 参注入：lib 传 `Some(peer_net_cmds::peer_ctx)`，无头测试传 `None` 且
+  `HEADLESS_UNAVAILABLE` 语义逐字不变）。不建 DbPort / PtyPort / AppHandlePort /
+  ConfigPort：`app_handle` 早已注入并存进 `WasmHostContext`，`db` / `pty` 随迁，mdns
+  adapter 的全局取用改走 crate 内宿主上下文注册表（`OnceLock<Weak<WasmHostContext>>`，
+  装配点在 `install_capability_domain_ports` 单入口，延续 2026-10-05 端口装配教训）
+- **WIT / ABI 零变动**：`world plugin` 22 个 import 未动、`ABI_VERSION` 不变——已装
+  `.wasm` 无需重建。移动端零改动（ADR 0018 契约独立）
+- **验证**：crate `cargo check --lib` 绿；crate `cargo test --lib` 784 passed / 2 failed
+  （两个失败均既有基线：`test_session_task_domain_closed_loop` 9-30 起红 + 5ms 墙钟
+  flake `perf_p2_guest_ring_fetch_batch_curve`）；src-tauri `cargo check` /
+  `cargo check --tests` 绿，lib `cargo test --lib` 76 passed / 0 failed；cross-end-tests
+  `cargo check --tests` 绿（`PluginHost::new` 第 5 参已同步）。契约收口（票 05）：
+  `SPLIT_CRATES` 登记表上提 crate 为单一事实源（lib → crate 单向引用，
+  `bedcode-wasm-core` 自身也登记入表）、`hot_path_logging_lock` `LOCKED_SITES` 路径改指
+  crate 内文件、新增结构锁 `src-tauri/tests/wasm_core_whole_crate_lock.rs`（宿主侧
+  `wasm_core/` 无实现文件 + lib.rs 垫片只允许 `pub use`）
+- 未跑：wasm 应用完整构建（无 wasm-app 改动）、`gen/android` gradlew（无 Kotlin 改动）、移动端（未触碰）
+
 #### 桌面端：SQLite 能力域 crate 撤销——插件面数据库机制（13 条原语）留在 wasm 核心（ADR 0036；无 ABI / WIT / 协议变动）
 
 - **改了什么**：`bedcode-desktop/packages/bedcode-sqlite-engine/` 不再存在。
