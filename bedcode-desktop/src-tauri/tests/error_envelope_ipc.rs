@@ -1,4 +1,5 @@
-//! 错误信封跨边界集成测试（票 01；票 05 启用；server-lib-split 票 08 迁入本 crate）
+//! 错误信封跨边界集成测试（票 01；票 05 启用；server-lib-split 票 08 曾迁入
+//! `bedcode-server-base`，crate 单测纯净性轮次迁回宿主）
 //!
 //! 验证对象：Rust `AppError` → Tauri IPC rejection 的真实序列化链路，模拟前端 `invoke`
 //! rejection 收到的形状（ADR 0030 契约单一事实源 `docs/adr/0030*`）。
@@ -12,16 +13,25 @@
 //! ② 老字符串形状（如参数解析类错误，tauri 走 `InvokeError::from_error` 的 to_string）
 //!    仍需被前端 parseInvokeError 兜底为 host.internal —— 形状矩阵锁在前端测试。
 //!
-//! ## 为什么迁到 `bedcode-server-base`（票 08 测试迁移）
+//! ## 为什么住在宿主 `tests/` 而不是 `bedcode-server-base`（crate 单测纯净性）
 //!
-//! 被测类型 `AppError` 的**定义处**在本 crate（`error.rs`），宿主 `system/error.rs`
-//! 只是 `pub use bedcode_server_base::error::{…}` 的再导出。测试住在宿主时它经
-//! `bedcode_desktop_lib::system::error` 取类型——同样是一条**只在测试里存在**的
-//! 「宿主 → server-lib」依赖方向。迁入后本文件零宿主依赖，直接打定义处。
+//! 本文件是 **Cargo 集成测试 target**（`tests/*.rs` = 独立二进制，只能经 `pub` API
+//! 访问被测 crate），锁的又是**跨越 crate 边界的契约**——`AppError`（定义在
+//! `bedcode-server-base`）× Tauri IPC 序列化层（宿主框架侧）。按「拆分产物 crate 只保留
+//! 单元测试、跨 crate 集成测试归宿主」的纯净性口径，它住在 crate 里本身就是越线形态：
+//! crate 根多一个 `tests/` 目录 = 该 crate 多一个只测对外行为的可编译面，而它的对外
+//! 行为面理应由宿主来验。
 //!
-//! `tauri` 不是新增依赖：`From<tauri::Error> for AppError` 的 impl 本就随
-//! `AppError` 迁到了本 crate（票 02），`tauri` 是本 crate 的**生产依赖**
-//! （`ipc::InvokeError` 这一侧正是它存在的理由）。
+//! 票 08 当初把它迁进 crate 的理由（宿主 `system/error.rs` 只是
+//! `pub use bedcode_server_base::error::{…}` 的再导出，经 `bedcode_desktop_lib::system::error`
+//! 取类型等于开一条「只在测试里存在」的宿主→server-lib 依赖方向）**已不成立**：宿主清单
+//! 本来就直接声明 `bedcode-server-base`，本文件直接 `use bedcode_server_base::error::AppError`
+//! 打定义处，不再经任何再导出垫片，也不再给 crate 引入一个集成测试二进制。
+//!
+//! 防复发：`tests/capability_crates_unit_tests_only.rs`（拆分产物不得有 crate 根
+//! `tests/`，也不得有 dev-only 内部依赖）。
+//!
+//! 依赖面零新增：`tauri` / `serde_json` / `bedcode-server-base` 都是宿主 `[dependencies]` 已有项。
 
 use bedcode_server_base::error::AppError;
 use serde_json::json;

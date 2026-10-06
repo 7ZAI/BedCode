@@ -53,11 +53,7 @@ tempfile = "3"
 tokio = { version = "1", features = ["net", "io-util"] }
 # http_filter 的 01 完成事件日志用例需要捕获式 subscriber（fmt layer + MakeWriter）
 tracing-subscriber = { version = "0.3", features = ["fmt", "registry"] }
-# 票 08：链路加密 HTTP 集成用例（从宿主 `src-tauri/tests/link_crypto_http.rs` 迁入，
-# 见该文件头「为什么住在 http 面」）。该用例扮演**客户端**，需要 x25519 密钥对原语
-# ——生产代码一律经 core 的 link_crypto 取能力，不直接依赖算法引擎；只有测试侧要
-# 自建对端密钥才需要直取。`base64` 随 x25519 一起来。
-bedcode-crypto-engine = { path = "../bedcode-crypto-engine" }
-base64 = "0.21"
-# 本 crate 无 `[[test]]` 段：cargo 按 `tests/*.rs` 自动发现，新增即生效（与 `src-tauri`
-# 的 `[[test]]` 手写登记不同）。
+# 无任何 dev-only 内部 crate 依赖：跨 crate 集成测试（票 08 链路加密 HTTP 全链路等）
+# 一律住宿主 `src-tauri/tests/`——那里全部依赖都是生产依赖，本 crate 不再为此开
+# `tests/` 目录（它原本的 dev-only `bedcode-crypto-engine` / `base64` 即为此役而设）。
+# 防复发见 `src-tauri/tests/capability_crates_unit_tests_only.rs`。

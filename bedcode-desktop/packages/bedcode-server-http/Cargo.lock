@@ -508,8 +508,6 @@ dependencies = [
  "actix-service",
  "actix-web",
  "anyhow",
- "base64 0.21.7",
- "bedcode-crypto-engine",
  "bedcode-host-kit",
  "bedcode-plugin-api",
  "bedcode-server-base",

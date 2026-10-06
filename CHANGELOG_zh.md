@@ -51,6 +51,105 @@
 - 未跑：`cross-end-tests`、wasm 应用完整构建与 `gen/android` gradlew、移动端（无产品 / WIT / Kotlin
   改动，本轮只有构建工具与文档）
 
+#### 桌面端：拆分 crate 只留单元测试——两个集成测试 target 迁回宿主，并加一把无法静默越过的纯净性锁（无 ABI / WIT / 协议变动）
+
+- **新锁 `src-tauri/tests/capability_crates_unit_tests_only.rs`（5 个用例）**：crate 根的 `tests/` 目录是一个
+  独立测试二进制，只能经 `pub` API 访问该 crate——等于给一个本该是「可复用引擎」的 crate 多加了一张**对外行为面**。
+  它还有依赖图代价：`tests/` 只能经 `[dev-dependencies]` 追加依赖，而 **dev 边在依赖图里就是真边**。本锁钉两条：
+  ① 治理 crate 不得有 crate 根 `tests/` / `benches/` / `examples/` 目录，也不得有 `[[test]]` / `[[bench]]` /
+  `[[example]]` 段（它们是同一形态的别名）；② 其 `[dev-dependencies]` 不得含任何 `bedcode*` crate。外部 dev 依赖
+  （`tempfile` / `tracing-subscriber` / 多余的 `tokio` feature）刻意不在此列——那些服务的是 `src/` 内的单元测试夹具，
+  不是跨 crate 组合
+- **为什么既有锁不够**：各传输面的 `dependency_direction_lock` **只解析 `[dependencies]`**（并专门断言 dev 段不得
+  污染判定），对 dev 边零覆盖；`crate_boundary_lock` 问「边合不合法」，不问「crate 是否多长出一个 `tests/`」；
+  `capability_crates_no_product_ids.rs` 按设计把 `tests` 路径文件排除在扫描面外——而那恰好是本锁要禁的形态。
+  三条互补，未删任何一条
+- **覆盖面按目录约定推导，不靠手写名单**：治理面 = `bedcode-desktop/packages/` 下每个 `bedcode-*` 目录，新增 crate
+  落地即入管辖（与 `empty_dir_lock.rs` 同一手法；手写名单天然是零成本后门——删一行覆盖面少一块而锁照绿）。
+  唯一的例外桶 `PENDING_GOVERNANCE` 只登记 `bedcode-wasm-core`（机制整核由另一条在途会话改造，用户裁定本轮不扫），
+  且要求理由非空、条目在磁盘上不存在即测红——它不能腐烂成垃圾桶
+- **C-5 从正面钉住宿主侧落点，让「把越线的测试直接删掉」不是零成本动作**：C-2 / C-3 只能禁「集成测试住在 crate 里」，
+  禁不掉「有人直接删掉」——那会让锁全绿而覆盖面静默消失。故本锁同时断言两个文件在宿主侧存在且用例数不减
+  （`tests/link_crypto_http.rs` ≥ 4、`tests/error_envelope_ipc.rs` ≥ 3）
+- **两个集成测试 target 迁回宿主，宿主侧零新增依赖**：
+  `packages/bedcode-server-http/tests/link_crypto_http.rs` → `src-tauri/tests/link_crypto_http.rs`（被测对象是**三
+  crate 组合**：`TrafficFilter` × `link_crypto` / `TrafficFilterChain` × `bedcode-crypto-engine`）；
+  `packages/bedcode-server-base/tests/error_envelope_ipc.rs` → `src-tauri/tests/error_envelope_ipc.rs`
+  （`AppError` × Tauri IPC 序列化层）。两者现在直接打定义处（`use bedcode_server_base::error::AppError`），不再绕
+  `pub use` 再导出；http 面那条只为测试存在的 `bedcode-crypto-engine` + `base64` dev 依赖已删——该 crate 现在
+  `cargo tree -e dev --depth 1` 里一个 bedcode crate 都没有。票 08 当初的裁决（「放 http 面 ⇒ 零新增横向」）把选项
+  限定在「两个被测 crate 里选一个」，于是代价被转嫁成：多一个 `tests/` 目录 + 一条测试专用内部边。宿主才是第三个
+  选项，也是唯一「全部依赖都是生产依赖」的那个
+- **变异自检查出新锁自己的清单解析器有两处真实失守**（都是「锁看不见那条依赖」= 该红却绿）：① **点号表形式**
+  `[dev-dependencies.bedcode-crypto-engine]`——cargo 全面支持，而解析器只找 `[dev-dependencies]` 段内的条目名，
+  注入的 dev 边于是从 C-3 视野里消失；② `[target.'cfg(unix)'.dependencies]` 守卫被挂在「已经处于所求段内」的前提上，
+  只要该段头出现在 `[dependencies]` 之前就永远不触发——被 C-1 夹具打红。两处均已修，`section_header` 现在归一化三种
+  TOML 段头形态，C-1 补了点号表的正向夹具（且校验归段正确、双向都验）。另修：依赖声明折行时会被当成第二个合法条目名
+  静默收进集合，现要求条目行花括号自身配平
+- **变异自检四发四杀**：crate 根 `tests/` 目录 → C-2；`[[test]]` 段 → C-2；点号表形式的 dev 内部依赖 → C-3；
+  下调已迁移文件的用例数下限 → C-5。所有变异均以精确逆替换回滚（pty-engine 清单未被 git 跟踪且属另一条线，
+  `git checkout` 本就不是选项）
+- **验证**：新锁 5 项通过；`src-tauri/tests/link_crypto_http.rs` 4 项、`src-tauri/tests/error_envelope_ipc.rs` 3 项
+  在新落点全绿；`bedcode-server-http` 81 通过 / 0 失败、`bedcode-server-base` 24 通过 / 0 失败（+1 忽略的 doc-test），
+  均在移除 dev 依赖之后；本轮所触文件 rustfmt 净
+- **明确不在范围内，且是刻意的**：`bedcode-host-kit` 位于仓库根 `packages/`（不在 `bedcode-desktop/packages/` 下），
+  它的 `tests/forced_link.rs` + `tests/forced_link_absent.rs` 是**按设计**的跨 crate 集成测试——两个测试二进制对着探针
+  fixture crate 钉「强制引用行漏掉 ⇒ 能力注册丢失」的两侧，要搬得连 fixture 一起搬（另立票据）；`peer-net` 的 5 个
+  target 与其 example 同理。两处都写进新锁的模块头，让「漏掉」读起来是一个决定而不是疏忽
+- 未跑：`cross-end-tests`（无跨端协议 / 认证 / 终端面改动）、wasm 应用完整构建与 `gen/android` gradlew（无插件 / WIT /
+  Kotlin 改动）、移动端（未触及）
+
+#### 桌面端：能力 crate 拿到语义防回接锁，`tauri` 不再经基础层渗入 server 各面，遗留 wire 形状 DTO 不再进生产构建（无 ABI / WIT / 协议变动）
+
+- **新锁 `src-tauri/tests/capability_crates_no_product_ids.rs`（6 个用例）**：仓内既有边界锁全是**结构锁**——
+  `crate_boundary_lock` 问「这条边合不合法」，两个传输面的 `dependency_direction_lock` 问「有没有横向边」，
+  `HostModuleDesc` 的产品名词词段锁问「描述符干不干净」。**没有一条问「合法边位置上装的是不是业务代码」**——
+  于是一条 `com.bedcode.terminal-session` 字面量写在能力 crate 里能通过全部既有测试绿灯。本锁扫
+  `bedcode-desktop/packages/` 下 8 个能力域 / 传输面 crate 的生产代码文本（既有 7 个 + 刚落地的
+  `bedcode-pty-engine`）。剥注释时**引号感知**（字符串字面量里的 `//` 不是注释：朴素剥离会把真命中静默丢掉，
+  等于无声解除锁），排除 `#[cfg(test)]` 区与 `tests` 路径文件（黄金形状夹具按设计要复刻产品字节），
+  两条判据：未登记的产品插件 id、AGENTS §5.3 已退役宿主面词汇（含本轮删掉的两个死常量——让「删掉」
+  升级成「删掉且锁住」）
+- **锁不能被悄悄削弱，四条各自可杀的证明**：`scanner_is_not_vacuous`（扫描器必须能认出真命中，且不许靠
+  「一刀切丢弃」冒充扫描）、`placeholder_segments_do_not_mask_real_product_segments`（占位段豁免是中性词
+  闭集，每个真实产品名逐个作反例）、`every_registered_crate_is_present_and_scan_coverage_is_complete`
+  （`packages/` 下每个 `bedcode-*` 目录必须在「已扫描 ∪ 待扫描」两桶之一——否则「从登记表删掉」是一条零成本
+  后门，锁照样绿而覆盖面少一块）、`registered_product_id_exceptions_are_pinned_by_content`（唯一登记例外按
+  **字面量内容**钉死而非按文件放行，多一条 / 少一条 / 改一条接管关系即红）。实测四个变异全部被杀：往能力
+  crate 生产代码注入产品 id → C-4 红；注入退役面词汇 → C-6 红；从登记表删 crate → C-3 红且例外交叉校验同时红；
+  把删掉的常量原样写回 → C-6 红
+- **唯一登记例外，及其归类写进代码**：`bedcode-server-http` 的 `LEGACY_HTTP_PLUGIN_ALIASES`（退役插件 id →
+  接管方 id）归 AGENTS §5.1.3 ③ 通用注册表与寻址——它是 id 对 id 的寻址，不描述会话 / 终端 / 传输的业务含义，
+  也不替插件决定业务上该怎样，接管方插件自己注册路由自己应答；插件身份属内核面，故退役 id 的接管关系属内核
+  可持有的表。本轮审查第一遍曾把它判成 B1/B5 越线，**那是过重的判断，此处自我修正**
+- **`bedcode-server-base`：`tauri` 转 optional feature（`tauri-compat`，默认开）**：本 crate 是 server 各面的
+  **叶子地基**，GUI 框架出现在地基里意味着任何非 Tauri 宿主（无头服务 / CLI / 嵌入式）都拉不动它——而它们要的
+  只是错误类型、常量与端口 traits。全 crate 唯一 tauri 用法是一个 `impl From<tauri::Error> for AppError`，
+  孤儿规则又把它钉死在定义 `AppError` 的本 crate 内，故代价明确写进 manifest：关掉 feature 后调用方须在边界
+  处显式 `map_err` 而不能用 `?`。实测 `cargo tree --no-default-features` 的 tauri 计数 0（默认 1）；
+  桌面端全部消费方走默认 feature，行为零变化
+- **遗留 wire 形状 DTO 不再进生产构建——门控即类型系统**：`dtos.rs` 把会话 / 文件 / git 三组 DTO 整组
+  `#[cfg(test)]` 门控，生产代码一旦引用就是**编译失败**，不需要另设断言锁（仓内少见的「锁即类型系统」位置）。
+  为此先删掉 `config_dto.rs` 里遗留的 `pub use … file_dto::{…}`（全仓零消费者，同时是「配置域模块转出文件
+  浏览域类型」的坏内聚，也是 `file_dto` 无法整组门控的直接阻碍）。`config_dto` 是唯一仍进生产的一组：
+  `bedcode-wasm-core` 的 `session_e2e` 用它做「插件面输出 == 宿主旧形状」的跨 crate 黄金比对，而依赖编译不带
+  `cfg(test)`——已知的方向性耦合（机制核 → 传输面的产品 DTO），两端均已注明，等对方改自持黄金形状即可收回
+- **删两个死常量、去一处按产品标定的注释**：`PLUGIN_SESSION_RING_FETCH_MAX_BYTES` 与 `ENV_BEDCODE_SESSION_ID`
+  零消费者（`wasm-apps/` 里的同名 const 是插件自持的另一份）；`PLUGIN_HTTP_MAX_ENDPOINTS_PER_PLUGIN = 64`
+  值不动，但注释去掉「terminal-session 迁移后约 41 条」这种把产品形状写进内核配额的标定
+- **顺带修好的宿主断链（不属本轮审查，但阻塞了验证）**：内核纯净性那条线把 `test_tokens` 迁回 lib 又撤销，
+  遗留 `src-tauri/src/utils/auth.rs` 里的 `pub(crate) use bedcode_wasm_core::utils::auth::test_tokens;`
+  指向已不存在的路径，宿主**测试**构建 E0432。该再导出在宿主侧零消费者（集成测试看不到依赖方的
+  `cfg(test)` 项），故删除，并把模块文档改成说明该夹具为何留在内核侧
+- **验证**：宿主 `cargo test --no-fail-fast` 105 passed / 0 failed（lib 76 + 12 个集成 target + doc-tests），
+  含加载真 wasip3 夹具组件的 `pty_session_chain` 与 `wasm_bridge_bench`（本轮夹具编译命中缓存，
+  装载步报 0.0s）；`bedcode-server-http` 81 + 4 绿、
+  `bedcode-server-base` 24 + 3 绿；`bedcode-server-base --no-default-features` 编译通过且依赖树 tauri 计数 0；
+  本轮触碰文件 rustfmt 全净；clippy 在触碰文件无新告警（`bedcode-server-base` 那 2 条是既有告警，位于
+  `src/ports.rs` 与 `tests/error_envelope_ipc.rs`）
+- 未跑：`cross-end-tests`（无跨端协议 / 认证 / 终端面改动）、wasm 应用完整构建与 `gen/android` gradlew
+  （无插件 / WIT / Kotlin 改动）、移动端（未触碰）
+
 #### 桌面端：插件机制整核整体抽出宿主 bin → 可复用 crate `bedcode-wasm-core`（ADR 0037；无 ABI / WIT / 协议变动）
 
 - **改了什么**：`src-tauri/src/wasm_core/`（54,394 行 / 119 文件）连同它赖以存续的引擎面——

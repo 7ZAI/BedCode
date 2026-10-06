@@ -172,6 +172,13 @@ impl EventEnvelope {
     }
 }
 
+/// Tauri 框架错误 → `AppError::Internal`。
+///
+/// 受 `tauri-compat` feature 门控（见 manifest `[features]`）：本 impl 是本 crate 与
+/// GUI 框架的**唯一**耦合点，关掉它，地基层就与框架彻底无关。孤儿规则要求它住在
+/// 定义 `AppError` 的本 crate 内，下游无法自行补写 —— 故关闭该 feature 的调用方
+/// 须在边界显式 `map_err`，不能靠 `?`。
+#[cfg(feature = "tauri-compat")]
 impl From<tauri::Error> for AppError {
     fn from(e: tauri::Error) -> Self {
         AppError::Internal(e.to_string())

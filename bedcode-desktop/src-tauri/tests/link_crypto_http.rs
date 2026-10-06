@@ -1,26 +1,32 @@
-//! 链路加密 HTTP 集成测试（issue 02；server-lib-split 票 08 迁入 `bedcode-server-http`）
+//! 链路加密 HTTP 集成测试（issue 02；server-lib-split 票 08 曾迁入 `bedcode-server-http`，
+//! crate 单测纯净性轮次迁回宿主）
 //!
 //! 真 TrafficFilter 中间件全链路：客户端加密请求 → 过滤器解密 → handler 收明文
 //! → 响应加密 → 客户端用 k_resp 解回。全局链为进程级单例，串行化触碰。
 //!
-//! ## 为什么住在 http 面而不是 core 面（票 08 迁移裁决）
+//! ## 为什么住在宿主 `tests/`（crate 单测纯净性）
 //!
-//! 本用例的被测单元是**组合**：`TrafficFilter`（本面 `middleware/http_filter`）×
-//! `link_crypto` / `TrafficFilterChain`（`bedcode-server-core`）。两侧都在，
-//! 所以它在「哪一侧的 tests/」这个问题上只能二选一：
+//! 被测单元**跨三个 crate**：`TrafficFilter`（`bedcode-server-http` ×
+//! `link_crypto` / `TrafficFilterChain`（`bedcode-server-core`）× `bedcode-crypto-engine`
+//! （算法原语）。拆分产物的纯净性口径是「crate 只保留单元测试，跨 crate 集成测试归宿主」
+//! ——组合测试的天然归属就是宿主：那里**全部依赖都是生产依赖**，既不需要
+//! `[dev-dependencies]`，也不需要给任何 crate 开一个只测对外行为的 `tests/` 二进制。
 //!
-//! - 放 `bedcode-server-core/tests/` ⇒ 必须 dev-depend `bedcode-server-http`，
-//!   而**横向边在 dev-dependencies 里也是横向边**（单向引用即可编译，是真实可发生的
-//!   越线形态；`server::crate_boundary_lock` 对全段清单判横向）；
-//! - 放本面 `tests/` ⇒ `bedcode-server-core` 本来就是**生产依赖**，零新增横向。
+//! 票 08 的二选一论证（放 core 面 ⇒ dev-depend 横向 / 放 http 面 ⇒ 零新增横向）漏掉了
+//! 第三个选项：**宿主**。它当时把权衡限定在「两个被测 crate 之间选一个」，于是选了
+//! 代价看起来更小的一侧，代价转嫁成了：http 面多一个 `tests/` 目录（对外行为面）+ 一条
+//! 只为测试存在的内部 dev 依赖（`bedcode-crypto-engine`）。两条都已在本次搬迁中消除。
 //!
-//! 故放本面。附带修掉一个**方向相反的测试依赖**：原文件住在宿主 `src-tauri/tests/`
-//! 并经 `bedcode_desktop_lib::utils::crypto` 取 x25519——那是 host→server-lib 的反向
-//! 路径，测试的依赖方向与 crate 依赖方向相反，等于给「面认识宿主」开了一条只在测试里
-//! 存在的口子。迁入后客户端侧直接取 `bedcode_crypto_engine`（D5 下沉后的算法真源）。
+//! 票 08 附带"修掉"的反向依赖问题（客户端侧经 `bedcode_desktop_lib::utils::crypto` 取
+//! x25519 = 给「面认识宿主」开了一条只在测试里存在的口子）依旧不成立：本文件直取
+//! `bedcode_crypto_engine`（D5 下沉后的算法真源），宿主清单本来就直接声明它。
 //!
-//! `base64` 与 `bedcode-crypto-engine` 因此是本面 **dev-dependency**：生产代码不经
-//! 它们，只有「扮演客户端的测试」需要算法原语。
+//! 依赖面：搬迁后本文件零新增依赖——`bedcode-server-http` / `bedcode-server-core` /
+//! `bedcode-crypto-engine` / `base64` / `actix-web` 全在宿主 `[dependencies]`，
+//! `tempfile` 在 `[dev-dependencies]`。
+//!
+//! 防复发：`tests/capability_crates_unit_tests_only.rs`（拆分产物不得有 crate 根
+//! `tests/`，也不得有 dev-only 内部依赖）。
 
 use std::sync::Mutex;
 
@@ -92,7 +98,7 @@ impl ClientCtx {
     }
 }
 
-/// AAD 构造是模块私有 fn，这里经 pub API 无法直接拿到——集成测试用等价字节
+/// AAD 构造是模块私有 fn，集成测试（独立二进制，只能经 `pub` API）拿不到——用等价字节
 /// 序列复刻（spec §3 固定格式：b"v1" || dir || u32be(len) || path），并断言与
 /// 单元测试一致；若协议变更此处会先红。
 mod crate_aad_shim {

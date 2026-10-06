@@ -151,8 +151,11 @@ pub const PLUGIN_HTTP_TIMEOUT_SECS: u64 = 120;
 pub const PLUGIN_HTTP_RESPONSE_BODY_LIMIT_BYTES: usize = 32 * 1024 * 1024;
 
 /// 单插件可注册 HTTP 端点数量上限（ABI v29 服务端域）：超限 `register-endpoint`
-/// 返回 `Err`，无副作用。terminal-session 迁移后约 41 条（业务域 17 + 任务域 16 +
-/// sessions REST 7 + terminal-bg 1），64 为安全上限；插件不能放宽宿主边界。
+/// 返回 `Err`，无副作用。
+///
+/// 取值 64 是**抗滥用闸门**（AGENTS §5.1.3 ② 安全闸门）：端点表是无界增长的宿主
+/// 资源，单插件占满会让其余插件无法注册。取值不按任何业务端点数量标定，也不随
+/// 插件增减调整——插件不能放宽宿主边界。
 pub const PLUGIN_HTTP_MAX_ENDPOINTS_PER_PLUGIN: usize = 64;
 
 // ==================== host-database 执行护栏（票据 05，spec `.scratch/2026-09-18-db-http-base-service/`） ====================
@@ -266,17 +269,6 @@ pub const PLUGIN_PTY_RING_FETCH_MAX_BYTES: u32 = 16 * 1024;
 /// 与引擎侧 4000 字节分块 + 逐块让出（`PtySession::write`）协调：本值是「一次调用」
 /// 的准入上限，分块是上限之内的投递节奏。取值 64 KiB ≈ 16 个分块，够一次粘贴级输入。
 pub const PLUGIN_PTY_MAX_WRITE_BYTES: usize = 64 * 1024;
-
-// ==================== host-session 输出环（票 04，output-ring-fetch） ====================
-
-/// 单次 `output-ring-fetch` 返回字节上限：限制一次 wasm 边界拷贝的量
-/// （插件传入的 `max-bytes` 超过本值即**截断**——读侧是数据面，截断不是错误，
-/// 余下字节按 `next-offset` 续拉即可；与 [`PLUGIN_PTY_RING_FETCH_MAX_BYTES`]
-/// 同档——两条环共享同一 wasm 边界成本模型，spec 票 04）
-pub const PLUGIN_SESSION_RING_FETCH_MAX_BYTES: u32 = 16 * 1024;
-
-/// 环境变量：BedCode PTY 会话 ID
-pub const ENV_BEDCODE_SESSION_ID: &str = "BEDCODE_SESSION_ID";
 
 // ==================== host-task（ABI v20，spec `.scratch/2026-09-21-host-task-concurrency/`） ====================
 

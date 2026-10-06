@@ -152,6 +152,17 @@ pub(crate) fn caller_identity(req: &actix_web::HttpRequest) -> (HttpCaller, Opti
 /// 路径打到桌面端；票 06 插件 id 改名后，旧 id 的 HTTP 前缀
 /// `/api/plugin/com.bedcode.session/*` 在双投窗口内同样兜底到新插件（票 07 验收：
 /// 旧前缀窗口内可用）；切断判定与代价评估记在票 16 Comments。
+///
+/// ## 边界归类（AGENTS §5.1.3 ③ 通用注册表与寻址，**非** B1/B5 越线）
+///
+/// 本表是**插件身份迁移映射**，判据是 id 对 id 的寻址，不含任何产品语义：它不描述
+/// 会话 / 终端 / 传输的业务含义，也不替插件决定业务上该怎样——接管方插件自己注册
+/// 路由、自己应答，宿主只把「已退役的前缀该转给谁」这件事查出来。插件身份归内核
+/// （manifest / 激活 / 注册表都是内核面），故退役 id 的接管关系属内核可持有的寻址表。
+///
+/// 因此本 crate 全域唯一的生产产品 id 字面量就是这两行，且被
+/// `src-tauri/tests/capability_crates_no_product_ids.rs` **按字面量钉死**（改内容
+/// 即红，须连带更新该锁的登记表并说明理由）。切断后从登记表删除。
 const LEGACY_HTTP_PLUGIN_ALIASES: &[(&str, &str)] = &[
     ("com.bedcode.auto-task", "com.bedcode.terminal-session"),
     ("com.bedcode.session", "com.bedcode.terminal-session"),
