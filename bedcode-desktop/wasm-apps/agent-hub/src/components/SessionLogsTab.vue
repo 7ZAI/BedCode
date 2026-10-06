@@ -25,6 +25,7 @@ import {
   formatSessionTime,
   formatTokens,
   looksTruncated,
+  RAW_LINE_COLLAPSE_CHARS,
   splitToolText,
 } from '../utils/format'
 import { markdownPlainPreview, renderMarkdown } from '../utils/markdown'
@@ -362,9 +363,55 @@ function tokenMeta(e: NormalizedEventView): string {
 // 全部行重算，数组的 includes()/filter() 在 MAX_EVENTS=5000 量级退化为 O(n²)
 const expandedIndexes = ref<Set<number>>(new Set())
 
+/**
+ * 「原始 JSONL」展开行号集合（粒度从「消息」降到「行」，理由见
+ * `RAW_LINE_COLLAPSE_CHARS`）
+ *
+ * 独立于 `expandedIndexes`（聊天行）：两个视图的展开态互不干扰，切页签回来
+ * 不该丢；同时由上面那个 `watch(opened)` 一起重置，避免换会话后残留旧下标。
+ */
+const expandedRawIndexes = ref<Set<number>>(new Set())
+
+/**
+ * 原始行视图的行模型（一次算全：预览文本 + 是否可折叠）
+ *
+ * `raw` 是 guest 直接给的整文件行，单行可达数十 KB（codex `session_meta` 的
+ * `base_instructions` 就是整份系统提示词）。不逐行折叠的话首行会把整屏占满，
+ * 用户实际看到的是「打开页签 = 一堵 JSON 墙」。折叠态**只渲染截断预览**
+ * （展开才铺全文），保证上千行时 DOM 也轻。
+ */
+const rawRows = computed(() => {
+  const lines = opened.value?.raw ?? []
+  return lines.map((line, i) => {
+    const long = line.length > RAW_LINE_COLLAPSE_CHARS
+    const expanded = long && expandedRawIndexes.value.has(i)
+    return {
+      i,
+      long,
+      expanded,
+      // **只有真被折叠的超阈值行才挂折叠类**：短行展开与否都该原样铺开，
+      // 误挂会被 `nowrap + ellipsis` 在视口宽度处截掉（本行并不长）
+      collapsed: long && !expanded,
+      text: expanded ? line : line.slice(0, RAW_LINE_COLLAPSE_CHARS),
+    }
+  })
+})
+
+/** 切换某一行原始行的展开态（整体替换而非原地 mutate，与 `toggleExpand` 同理） */
+function toggleRawExpand(i: number) {
+  const next = new Set(expandedRawIndexes.value)
+  if (next.has(i)) {
+    next.delete(i)
+  } else {
+    next.add(i)
+  }
+  expandedRawIndexes.value = next
+}
+
 watch(opened, () => {
   detailTab.value = 'chat'
   expandedIndexes.value = new Set()
+  expandedRawIndexes.value = new Set()
 })
 
 /**
@@ -891,8 +938,26 @@ function toggleExpand(i: number) {
 
         <!-- 原始 JSONL 行视图 -->
         <div v-else class="ah-card ah-lg-raw-card">
-          <div class="ah-lg-raw ah-mono">
-            <div v-for="(line, i) in opened.raw" :key="i" class="ah-lg-raw-line">{{ line }}</div>
+          <div v-if="opened.raw.length === 0" class="ah-st-empty">{{ t('hub.lg.noRaw') }}</div>
+          <div v-else class="ah-lg-raw ah-mono">
+            <div
+              v-for="row in rawRows"
+              :key="row.i"
+              class="ah-lg-raw-line"
+              :class="{ 'is-collapsed': row.collapsed }"
+            >
+              <div class="ah-lg-raw-text">{{ row.text }}</div>
+              <!-- 原始行折叠：超阈值行默认收起，点开看全文（同聊天行折叠） -->
+              <button
+                v-if="row.long"
+                type="button"
+                class="ah-lg-raw-expand"
+                :aria-expanded="row.expanded"
+                @click="toggleRawExpand(row.i)"
+              >
+                {{ row.expanded ? t('hub.lg.detail.collapse') : t('hub.lg.detail.expand') }}
+              </button>
+            </div>
           </div>
         </div>
       </div>

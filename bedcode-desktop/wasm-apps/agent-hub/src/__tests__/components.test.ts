@@ -28,7 +28,7 @@ import ProviderApply from '../components/ProviderApply.vue'
 import ProvidersTab from '../components/ProvidersTab.vue'
 import StatsTab from '../components/StatsTab.vue'
 import SessionLogsTab from '../components/SessionLogsTab.vue'
-import { COLLAPSE_THRESHOLD_CHARS, COLLAPSE_THRESHOLD_TOOL_CHARS, GUEST_TEXT_CAPS } from '../utils/format'
+import { COLLAPSE_THRESHOLD_CHARS, COLLAPSE_THRESHOLD_TOOL_CHARS, GUEST_TEXT_CAPS, RAW_LINE_COLLAPSE_CHARS } from '../utils/format'
 import SkillsTab from '../components/SkillsTab.vue'
 import InstallTab from '../components/InstallTab.vue'
 import OverviewTab from '../components/OverviewTab.vue'
@@ -2219,6 +2219,88 @@ describe('A4 SessionLogsTab：查询 / 重置 / 翻页 / 详情 / 原始页签',
     })
     await flushPromises()
     expect(w.text()).toContain('hub.auth.banner')
+    w.unmount()
+  })
+
+  // ------ 原始 JSONL 页签：逐行折叠（2026-10-06 实机：首行 21KB 的系统提示词） ------
+
+  /** 打开详情并切到「原始 JSONL」页签；夹具的 raw 由调用方给 */
+  async function mountRawTab(raw: string[]) {
+    const opened = ref<UsageSessionDetail | null>(
+      openedWithMessages([{ role: 'user', text: 'hi', ts: 1 }]),
+    )
+    ;(opened.value as UsageSessionDetail).raw = raw
+    const w = mountComponent(SessionLogsTab, { usage: usageStub({ openedSession: opened as never }) })
+    await flushPromises()
+    await w.findAll('.ah-lg-tab').at(-1)!.trigger('click')
+    await flushPromises()
+    return { w, opened }
+  }
+
+  it('超阈值原始行默认只渲染截断预览（DOM 里不放全文），点展开才铺开、再点收起', async () => {
+    // 实机形态：session_meta 首行带 base_instructions，两万字符量级
+    const huge = `{"type":"session_meta","base_instructions":"${'A'.repeat(21_000)}"}`
+    const { w } = await mountRawTab([huge, '{"type":"turn_context","model":"deepseek-v4"}'])
+
+    const texts = w.findAll('.ah-lg-raw-text')
+    expect(texts).toHaveLength(2)
+    // 默认折叠：DOM 里只有前 N 字符，全文**不在** DOM（否则上千行会先拖垮渲染）
+    expect(texts[0].text()).toHaveLength(RAW_LINE_COLLAPSE_CHARS)
+    expect(w.html()).not.toContain('A'.repeat(1000))
+    // 超阈值行有展开控件且处于收起态；短行没有
+    const btns = w.findAll('.ah-lg-raw-expand')
+    expect(btns).toHaveLength(1)
+    expect(btns[0].attributes('aria-expanded')).toBe('false')
+    expect(btns[0].text()).toContain('hub.lg.detail.expand')
+    expect(w.findAll('.ah-lg-raw-line')[0].classes()).toContain('is-collapsed')
+    expect(w.findAll('.ah-lg-raw-line')[1].classes()).not.toContain('is-collapsed')
+
+    // 展开 → 全文进 DOM + 折叠类摘掉 + aria 转 true
+    await btns[0].trigger('click')
+    await flushPromises()
+    expect(w.get('.ah-lg-raw-text').text()).toBe(huge)
+    expect(w.get('.ah-lg-raw-expand').attributes('aria-expanded')).toBe('true')
+    expect(w.get('.ah-lg-raw-expand').text()).toContain('hub.lg.detail.collapse')
+    expect(w.findAll('.ah-lg-raw-line')[0].classes()).not.toContain('is-collapsed')
+
+    // 再点收起 → 回到截断预览
+    await w.get('.ah-lg-raw-expand').trigger('click')
+    await flushPromises()
+    expect(w.get('.ah-lg-raw-text').text()).toHaveLength(RAW_LINE_COLLAPSE_CHARS)
+    w.unmount()
+  })
+
+  it('短原始行原样铺开、无展开控件（按钮在剪不到的行上是噪音）', async () => {
+    const short = '{"type":"turn_context","model":"gpt-5.4"}'
+    const { w } = await mountRawTab([short])
+    expect(w.get('.ah-lg-raw-text').text()).toBe(short)
+    expect(w.findAll('.ah-lg-raw-expand')).toHaveLength(0)
+    w.unmount()
+  })
+
+  it('展开态按会话重置（切会话不残留旧行下标）', async () => {
+    const long = 'B'.repeat(RAW_LINE_COLLAPSE_CHARS + 50)
+    const { w, opened } = await mountRawTab([long])
+    await w.get('.ah-lg-raw-expand').trigger('click')
+    await flushPromises()
+    expect(w.get('.ah-lg-raw-text').text()).toBe(long)
+
+    // 换成另一个会话：展开态必须复位，否则新会话首行凭空展开
+    opened.value = null
+    await flushPromises()
+    opened.value = openedWithMessages([{ role: 'user', text: 'hi', ts: 1 }])
+    ;(opened.value as UsageSessionDetail).raw = [long]
+    await flushPromises()
+    await w.findAll('.ah-lg-tab').at(-1)!.trigger('click')
+    await flushPromises()
+    expect(w.get('.ah-lg-raw-text').text()).toHaveLength(RAW_LINE_COLLAPSE_CHARS)
+    w.unmount()
+  })
+
+  it('原始行为空时给空态文案（SQLite 来源无「原始行」概念，不是加载失败）', async () => {
+    const { w } = await mountRawTab([])
+    expect(w.text()).toContain('hub.lg.noRaw')
+    expect(w.findAll('.ah-lg-raw-line')).toHaveLength(0)
     w.unmount()
   })
 })

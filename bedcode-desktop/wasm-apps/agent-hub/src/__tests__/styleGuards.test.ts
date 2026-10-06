@@ -597,3 +597,57 @@ describe('S14 节奏热力图：容器是「行堆叠」，不得是格子容器
     ).toEqual(['.ah-heat-row'])
   })
 })
+
+// ==================== S11 会话日志高度链（2026-10-06 实机回归） ====================
+
+/**
+ * 二级详情「任务记录」被压成约 28px 一行高。
+ *
+ * 成因是高度链中间夹了一个**非 flex 容器**：分区切换的过渡容器
+ * `.page-swap`（宿主 `src/style.css` 的全局类，只声明 `position: relative`）
+ * 位于 `.ah-view`（flex 列）与 `.ah-lg` 之间，`.ah-lg` 因此不是 flex item，
+ * 它的 `flex: 1` 空转、无可分配高度，下游 `.ah-lg-detail` / `.ah-lg-events`
+ * 的 `flex` 也就一并落空。
+ *
+ * 本护栏锁两件事：
+ * ① 链条逐跳成立（每一跳要么父级是 flex 容器，要么自身有确定高度）；
+ * ② `.ah-lg` 的高度锚点是 `height: 100%` 而**不是** `flex: 1`——父级为块盒时
+ * `flex` 无意义，写回 `flex: 1` 会静默回到本 bug（无任何编译期 / 运行期信号）。
+ */
+describe('S11 会话日志高度链不断（详情页任务记录不再塌成一行）', () => {
+  it('第 1 跳：.page-swap 取 .ah-view 的剩余高度，且 min-height: 0 允许压下去', () => {
+    // 注意：宿主全局类 `.page-swap` 本身是普通块盒，本插件只在自己作用域内
+    // 追加「作为 .ah-view 的 flex item」的规则，不改它的 display（6 个分区共用）。
+    const swap = declsOf('.ah-view > .page-swap')
+    expect(swap['flex'], '缺 flex: 1 → .page-swap 仍是内容高，整条链断在第一跳').toBe('1')
+    expect(
+      swap['min-height'],
+      '缺 min-height: 0 → flex item 的自动最小尺寸是内容高，flex:1 压不下去，详情页照样塌',
+    ).toBe('0')
+  })
+
+  it('第 2 跳：.ah-lg 用 height 锚定父级，不用 flex（父级是块盒，flex 是空转）', () => {
+    const lg = declsOf('.ah-lg')
+    expect(lg['height'], '缺 height: 100% → .ah-lg 退回内容高，详情页的 flex 无处分配').toBe('100%')
+    expect(
+      lg['flex'],
+      '.ah-lg 的 flex 是空转声明（父级 .page-swap 为块盒），留着会误导后人以为高度链已通',
+    ).toBeUndefined()
+  })
+
+  it('第 3-4 跳：详情根与事件容器各自 min-height: 0，才能在 flex 列里真正被压缩并内部滚动', () => {
+    for (const sel of ['.ah-lg-detail', '.ah-lg-events', '.ah-lg-raw-card']) {
+      const d = declsOf(sel)
+      expect(d['flex'], `${sel} 缺 flex → 拿不到父级剩余高度`).toBeTruthy()
+      expect(
+        d['min-height'],
+        `${sel} 缺 min-height: 0 → 自动最小尺寸挡压缩，内容一长就把外层顶开而不是内部滚动`,
+      ).toBe('0')
+    }
+  })
+
+  it('内部滚动容器就位（事件流与原始行各有一层 overflow-y: auto）', () => {
+    expect(declsOf('.ah-chat-scroll')['overflow-y']).toBe('auto')
+    expect(declsOf('.ah-lg-raw')['overflow-y']).toBe('auto')
+  })
+})

@@ -28,6 +28,22 @@ export const COLLAPSE_THRESHOLD_CHARS = 500
 export const COLLAPSE_THRESHOLD_TOOL_CHARS = 400
 
 /**
+ * 「原始 JSONL」单行折叠阈值（字符）。
+ *
+ * **为什么必须逐行折叠**（2026-10-06 实机）：JSONL 一行 = 一个完整 JSON 对象，
+ * 而 agent 日志把整份系统提示词塞进单行——codex 每个 rollout 的**第一行**
+ * `session_meta` 就带 `base_instructions`，实测 ~21KB/行，语料均值 3.3KB/行、
+ * 最大 62KB。容器是 `white-space: pre-wrap` + `word-break: break-all`，
+ * 于是首行折成上千个视觉行、内容全在折叠线以下：打开「原始 JSONL」只看到一堵
+ * 没法扫的 JSON 墙，等于「没显示」。
+ *
+ * 超过本阈值才给展开控件且默认收起（短行 clamp 不到，按钮是噪音）；与聊天行
+ * 折叠同款交互，只是粒度从「消息」降到「行」。**折叠时 DOM 里只放截断预览**，
+ * 展开才铺全文——否则上千行长文本会先把渲染线程拖垮。
+ */
+export const RAW_LINE_COLLAPSE_CHARS = 1000
+
+/**
  * guest 解析层的截断上限矩阵（展示层镜像，**只用于「疑似截断」提示**）
  *
  * 单一事实源在 guest `usage_parse/*.rs` 的 `truncate_text(_, cap)` 调用点：

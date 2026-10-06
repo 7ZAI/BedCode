@@ -440,6 +440,7 @@ const en: MessageSchema = {
   'hub.lg.eventsTruncated': 'Event stream too long, showing the first 5000 entries.',
   'hub.lg.rawTruncated': 'Raw lines too long, showing the first 5000 lines.',
   'hub.lg.noEvents': 'No displayable events.',
+  'hub.lg.noRaw': 'No raw JSONL for this session (SQLite sources have no raw lines).',
   'hub.lg.role.user': 'User',
   'hub.lg.role.assistant': 'Assistant',
   'hub.lg.role.tool': 'Tool',

@@ -453,6 +453,8 @@ export type MessageSchema = {
   'hub.lg.eventsTruncated': string
   'hub.lg.rawTruncated': string
   'hub.lg.noEvents': string
+  /** 「原始 JSONL」页签空态（SQLite 来源恒空，不是加载失败） */
+  'hub.lg.noRaw': string
   'hub.lg.role.user': string
   'hub.lg.role.assistant': string
   'hub.lg.role.tool': string

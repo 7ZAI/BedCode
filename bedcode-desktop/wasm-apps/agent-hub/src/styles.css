@@ -2159,14 +2159,38 @@
 }
 /* ==================== 会话日志（改版：来源 / 查询 / 分页 / 二级详情） ==================== */
 
+/*
+ * 高度链接通（一级列表与二级详情共用一条链）
+ *
+ * `.ah-view` 是 `display:flex; flex-direction:column; height:100%` 的 flex 容器，
+ * 但分区切换的过渡容器 `.page-swap`（宿主 `src/style.css` 的全局类，**普通块盒**）
+ * 夹在中间——`.ah-lg` 的父级因此不是 flex 容器，`flex:1` 空转，
+ * 二级详情的 `.ah-lg-events { flex: 1 1 0 }` 便失去可分配的高度，
+ * 被压成一条（实机：任务记录只剩约 28px 一行高）。
+ *
+ * 两步补链，**不动 `.page-swap` 本身的 display**（那是宿主全局类，6 个分区
+ * 共用；把它改成 flex 容器会让各分区根节点变成 flex item 而被压缩、影响面不可控）：
+ * ① `.page-swap` 取 `.ah-view` 的剩余高度（`min-height: 0` 必须有：否则 flex item
+ *    的自动最小尺寸是内容高，`flex:1` 压不下去，二级页照样塌）；
+ * ② `.ah-lg` 用 `height: 100%` 而不是 `flex: 1`——父级是块盒时 `flex` 无意义，
+ *    `height: 100%` 才对得上那个已确定高度的父级。
+ *
+ * 一级列表**滚动行为不变**：`.ah-lg` 是内容高的块，内容超出时仍由
+ * `.ah-view`（`overflow-y: auto`）滚（子级 overflow: visible，滚动溢出逐级上传），
+ * 常驻的 `scrollbar-gutter: stable` 槽位也照旧把宽度钉死，不引入横移抖动。
+ */
+.ah-view > .page-swap {
+  flex: 1;
+  min-height: 0;
+}
+
 .ah-lg {
-  /* 占满面板剩余高度（链：.ah-view(flex col) → .ah-lg(flex:1)），
-     一级页表格、二级页事件/原始视图内部各自滚动，外层面板不滚动 */
+  /* 占满面板剩余高度（链：.ah-view(flex col) → .page-swap(flex:1) → .ah-lg(height:100%)），
+     一级页由 .ah-view 滚动，二级页事件/原始视图内部各自滚动 */
   display: flex;
   flex-direction: column;
   gap: 12px;
-  flex: 1;
-  min-height: 0;
+  height: 100%;
 }
 
 /* ---------- 日志来源区（默认折叠） ---------- */
@@ -3120,10 +3144,51 @@
 }
 
 .ah-lg-raw-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
   border-bottom: 1px dashed var(--border);
   padding: 2px 0;
 }
 
 .ah-lg-raw-line:last-child {
   border-bottom: none;
+}
+
+/**
+ * 原始行文本（`--ah-text-data` 由 `.ah-lg-raw` 继承）
+ *
+ * 折叠态走**单行 + 省略号**而非 `pre-wrap` 逐字折行：JSONL 一行就是一条完整
+ * 记录，折成几十个视觉行会把「一行一条」的扫读节奏彻底毁掉（实测 codex 首行
+ * `session_meta` 带 `base_instructions`，~21KB/行）。展开态才逐字铺开。
+ */
+.ah-lg-raw-text {
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.ah-lg-raw-line.is-collapsed .ah-lg-raw-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/** 行内展开控件（与聊天行的 `.ah-msg-expand` 同款，只是不占整行） */
+.ah-lg-raw-expand {
+  flex-shrink: 0;
+  align-self: flex-start;
+  padding: 0 6px;
+  font-size: var(--font-size-tag);
+  color: var(--color-primary);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-button);
+  cursor: pointer;
+  transition: color 0.15s, background-color 0.15s;
+}
+
+.ah-lg-raw-expand:hover {
+  background: var(--bg-hover);
 }

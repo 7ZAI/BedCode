@@ -9,6 +9,23 @@
 
 ## [未发布]
 
+#### 桌面端：会话日志二级详情的「任务记录」塔成一行 —— 高度链绕过分区过渡容器后接通
+
+- **症状（实机 1560×1080）**：打开任一会话，「任务记录」只剩约 28px——一行高、带个滚动条角，下面约 740px 全空
+- **成因**：高度链中间夹了一个**非 flex 节点**。`.ah-view` 是 `height:100%` 的 flex 列，但分区切换的过渡容器 `.page-swap`（宿主全局类，只声明 `position: relative`）夹在它与 `.ah-lg` 之间，`.ah-lg` 的 `flex: 1` 因此打在了块盒父级上——**空转**，拿不到可分配的高度，下游 `.ah-lg-detail` / `.ah-lg-events` 的 `flex` 一并落空。`.ah-lg` 自己的注释仍写着“链：`.ah-view` → `.ah-lg`”，过渡容器加进来后这句话就不再成立了
+- **修法（两条作用域内规则，**不动 `.page-swap` 自身的 `display`）**：`.ah-view > .page-swap` 取剩余高度（`min-height: 0` 是要害——没有它，flex item 的自动最小尺寸就是内容高，`flex: 1` 压不下去）；`.ah-lg` 改用 `height: 100%` 锚定，删掉那条空转的 `flex: 1`。把 `.page-swap` 本身改成 flex 容器会让 6 个分区的根节点全都变成可压缩 flex item，影响面远大于这两条
+- **一级列表滚动行为不变**：那里 `.ah-lg` 仍是内容高，溢出保持 visible 并逐级上传到 `.ah-view`（`overflow-y: auto`），常驻的 `scrollbar-gutter: stable` 槽位照旧钉死宽度，不引入横移抖动
+- **验收**：agent-hub vitest **531 全绿**（新增样式护栏 `S11`，4 例逐跳钉链——含一条显式断言 `.ah-lg` **没有** `flex`，因为把它写回去是静默的、且直接重现本 bug）。变异自检杀死 4/4（改回 `flex:1` / 删 `.page-swap` 规则 / 删其 `min-height: 0` / 删 `.ah-lg-events` 的 `min-height: 0`）。`pnpm exec eslint` 该应用 0 error。已在运行中的应用截图确认：详情面板占满视口、内部滚动，原始 JSONL 页签也呈一行一条的可扫形态。**未跑**：wasm 应用打包构建、移动端、`cross-end-tests`（纯 CSS 改动，未动 ABI / WIT / 协议 / 跨端面）
+
+#### 桌面端：codex 会话日志认错了消息面 —— 改由权威面 `item_completed` 驱动事件与标题（无 ABI / WIT / 协议变动）
+
+- **根因（2026-10-06 实机校准，14 个 rollout / 994 行）**：codex 把每段对话**写两遍**——权威面（`event_msg.payload.type == "item_completed"`，`payload.item.type` ∈ `UserMessage` / `AgentMessage` / `CommandExecution` / `Reasoning`，**PascalCase**）与回退面（`response_item`，逐字重复前者，且**每会话多出三条合成注入**：developer `<skills_instructions>`、user `# AGENTS.md instructions for …`、user `<environment_context>`）。适配器只读回退面（模块头自承“本机未初始化过 codex 会话”），于是 **14 个会话的标题全是 `# AGENTS.md instructions for …`**，真实首问被挤到第三条气泡，96 条推理摘要整体丢失（回退面 `reasoning` 只有 `encrypted_content`）
+- **两面各归其职**：`item_completed` 为权威面（会话标题只取 `UserMessage`，助手问候不抢标题）；回退面先缓冲、末尾结算——权威面在场时其 `message` 变体整批丢弃，`function_call(_output)` 仅在 `call_id` 未命中权威面同一调用时保留（实机 `CommandExecution.id === function_call.call_id`）。权威面不投影的工具调用（`apply_patch` / `write_stdin`）因此不会整段消失
+- **新可达内容**：`Reasoning.summary_text`（**字符串数组**，与回退面的块数组不同形）渲染为系统事件；`CommandExecution` 渲染 `exec · 命令 · 输出`，`exit_code` 非零标失败。`token_usage_record` **不取**——它与 `token_count` 同源记账（实机 1:1），两处都取会让每个会话 token 翻倍；已核对不变（`sum(last_token_usage) == 末尾 total_token_usage`）
+- **「原始 JSONL」页签变得可用**：codex 每个 rollout 的**第一行**就是带 `base_instructions` 的 `session_meta`（~21KB/行，语料均值 3.3KB/行、最大 62KB），此前打开就是一块读不下去的巨物。现改为：超 1000 字符的行收成**单行省略号**并给逐行展开控件（与聊天行折叠同款），短行原样铺开，`raw` 为空时给显式空态（原先是整块白卡）
+- **验收**：agent-hub crate `cargo test --lib` 218 全绿（codex 新增 14 例，拆入 `codex/tests/{item_face_session,fallback_face_dedup}.rs`，沿用 `pi/tests/` 的拆法）；变异自检杀死 11/11。拿本机 14 个真实 rollout 重解析：标题变回真实提问、无注入噪音、推理在场、token 总数逐字不变。agent-hub vitest 527 全绿（新增 4 例原始行折叠；其中一例抓出首版实现的真缺陷——短行误挂折叠类，会在视口宽度处被省略号截断）。`pnpm exec eslint` 该应用 0 error。**未跑**：wasm 应用打包构建、移动端、`cross-end-tests`（未动 ABI / WIT / 协议 / 跨端面）；另有一处**既有红**——`wasm-apps/terminal-session/src/__tests__/terminalPreview.test.ts` 的 `vi.waitFor` 超时，单跑可复现，与本次改动无关
+- 顺带订正 `docs/commands.md`：桌面 4 个 wasm 应用里只有 `terminal-session` 有 `test:rust` 脚本，其余直接在 `rust/` 跑 `cargo test`
+
 #### 桌面端：第一方免弹窗归属清单出厂内核，改为宿主开机注入（ADR 0038 P0-2）
 
 - **产品数据出厂、判定逻辑留内核**：`FIRST_PARTY_TRUSTED_DIRS`（哪些插件、哪些目录免弹窗）改为单一真源 `src-tauri/src/first_party_dirs.rs`（宿主 lib），经 `PluginHost::new` 新增第 6 参 → `WasmRuntime::new`/`with_config` → `FsAuthChecker::new`/`assemble` 注入；判定逻辑（`first_party_dir_matches_with_home`）、`TrustedDir` 形态与读模型投影仍住 `bedcode-wasm-core`（`security/fs_auth.rs`）。注入空表 = 无豁免项，无头 / 测试 / 非桌面宿主语义逐字不变（无 ABI / WIT / 协议变动）

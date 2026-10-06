@@ -435,6 +435,7 @@ const zhCN: MessageSchema = {
   'hub.lg.eventsTruncated': '事件流过长，仅展示前 5000 条。',
   'hub.lg.rawTruncated': '原始行过长，仅展示前 5000 行。',
   'hub.lg.noEvents': '无可展示事件。',
+  'hub.lg.noRaw': '该会话无原始 JSONL（SQLite 来源没有「原始行」这个概念）。',
   'hub.lg.role.user': '用户',
   'hub.lg.role.assistant': '助手',
   'hub.lg.role.tool': '工具',
