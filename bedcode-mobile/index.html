@@ -17,25 +17,15 @@
     <!-- iOS 状态栏样式 -->
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <title>BedCode</title>
+    <!-- 启动期预渲染底色走外部文件（public/launch.css，dev/prod 一致）。
+         **不可搬回内联 <style>**：Tauri v2 会给它注入 CSP nonce，CSP3 下 style-src
+         出现 nonce-source 即令 'unsafe-inline' 失效，导致运行时注入的内联 <style>
+         （auto-task / file-transfer 插件前端样式）在 release 被 style-src-elem 拒掉。
+         机制与结构锁见 public/launch.css 头注与
+         bedcode-desktop/src-tauri/tests/capabilities_lock.rs。 -->
+    <link rel="stylesheet" href="/launch.css" />
   </head>
   <body>
-    <style>
-      /* 启动期预渲染底色：与 Android 原生开屏（windowBackground /
-         windowSplashScreenBackground = bedcode_launch_bg）同色，并跟随系统深浅色
-         （prefers-color-scheme 与 values/values-night 资源限定符同语义）。
-         消除「原生开屏（#F5F4F0 / #15130F）→ WebView 首帧」之间的白/错色闪变；
-         Vue 挂载后由应用主题接管（.mobile-app 背景与滚动条覆盖）。 */
-      html,
-      body {
-        background-color: #f5f4f0;
-      }
-      @media (prefers-color-scheme: dark) {
-        html,
-        body {
-          background-color: #15130f;
-        }
-      }
-    </style>
     <div id="app">
       <!-- 静态首屏:Vue 挂载前可见(挂载后由 SplashScreen 组件无缝接管)
            颜色与前端开屏(SplashScreen.vue)首帧同源:深色为默认,

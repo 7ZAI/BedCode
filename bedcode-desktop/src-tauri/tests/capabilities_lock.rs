@@ -11,6 +11,9 @@
 //! 2. **CSP 层（浏览器引擎强制）**：两端 `tauri.conf.json` 的 `app.security.csp` 必须
 //!    含 `connect-src 'none'`。它封的是 `fetch` / `XMLHttpRequest` / `WebSocket` /
 //!    `EventSource` / `sendBeacon` 全族，与 JS 写法无关，也不依赖 Tauri。
+//! 3. **CSP 层配套（index.html 不得有内联 <style> / 内联 <script>）**：见
+//!    `index_html_has_no_inline_style_or_script` 的机制说明——Tauri 会因这两个标签
+//!    给 `style-src` / `script-src` 注入 nonce/hash，令 `'unsafe-inline'` 失效。
 //!
 //! 两端配置一并扫：红线是双端红线，锁只写一份避免两份漂移。
 //!
@@ -222,6 +225,116 @@ fn csp_blocks_frontend_connect_sources() {
             "{end} 的 csp 被置回 null：等于把 CSP 层整个撤掉"
         );
     }
+}
+
+/// CSP 层配套：两端 index.html 都不得有**生效的**内联 `<style>` / 内联 `<script>`
+///
+/// 机制（2026-10-07 实测定位，release 专有故障）：
+/// 1. `tauri-codegen/src/context.rs` 的 `map_core_assets` 在启用 CSP 时对每个 html 资产
+///    调 `inject_nonce_token` → `tauri-utils/src/html2.rs` 的
+///    `inject_nonce(document, "style", STYLE_NONCE_TOKEN)`，给每个 `<style>` 打上 nonce 占位；
+///    另有 `inject_script_hashes` 给 `script:not(:empty)`（内联脚本）算 sha256 哈希。
+/// 2. 运行期 `tauri/src/manager/mod.rs` 的 `set_csp` → `replace_csp_nonce` 把占位符换成随机
+///    nonce 并往 `style-src` 追加 `'self'` + `'nonce-…'`（内联脚本同理进 `script-src`）。
+/// 3. CSP3 规定：directive 内一旦出现 nonce-source / hash-source，同一 directive 的
+///    `'unsafe-inline'` **被忽略**。于是配置里写好的 `style-src ... 'unsafe-inline'` 静默失效，
+///    所有**运行时用 JS 插入**的内联 `<style>` 全被 `style-src-elem` 拒掉（`style.sheet === null`）。
+///
+/// 本项目四个 wasm 应用的前端样式（`ft-*` / `ah-*` / `session-task-*` / `md-body`）都靠
+/// `document.head.appendChild(style)` 注入（宿主只加载插件 dist/index.js，插件独立 CSS
+/// 文件无人引用），所以 release 产物里这些界面样式集体失效——插件看着像"没样式"，
+/// 而 dev 完全正常（devCsp 只配 connect-src，`AppManager::csp()` 在 dev 分支不取 csp，
+/// 无 nonce 注入），极具迷惑性。
+///
+/// 只挡注释内的写法：移动端 index.html 的历史首屏样式整块被 `<!-- -->` 注释停用，
+/// HTML 注释不进 DOM，`dom_query` 的 `select("style")` 选不到它，**不触发 nonce 注入**。
+/// 因此本锁先剥注释再判定，与 Tauri 的实际判定口径对齐（移动端当前是绿的）。
+#[test]
+fn index_html_has_no_inline_style_or_script() {
+    for (end, index_html) in [
+        // desktop_root() 是 src-tauri，index.html 在其上一级（端根目录）
+        ("desktop", desktop_root().join("../index.html")),
+        (
+            "mobile",
+            desktop_root()
+                .parent()
+                .and_then(|p| p.parent())
+                .map(|repo| repo.join("bedcode-mobile/index.html"))
+                .expect("src-tauri 的两级上级应是仓库根"),
+        ),
+    ] {
+        let raw = fs::read_to_string(&index_html)
+            .unwrap_or_else(|e| panic!("读取 {end} index.html 失败：{}", index_html.display()));
+        // 剥 HTML 注释：注释内不是 DOM 节点，Tauri 的 select() 看不见它
+        let stripped = strip_html_comments(&raw);
+
+        assert!(
+            !stripped.contains("<style"),
+            "{end} index.html 出现了生效的内联 <style>（剥注释后仍命中）：{}。\n\
+             Tauri v2 会给它注入 CSP nonce，CSP3 下 style-src 出现 nonce-source 即令 \
+             'unsafe-inline' 失效 → 所有运行时注入的内联 <style>（四个 wasm 应用的前端样式）\
+             被 style-src-elem 拒掉，release 界面样式集体失效而 dev 正常。\n\
+             请改为外部 CSS（桌面首屏见 public/splash.css），机制见本测试头注。",
+            index_html.display()
+        );
+
+        // 内联 <script>：有内容、无 src —— 与 <style> 同一机制（进的是 script-src 的 sha256）
+        let mut rest = stripped.as_str();
+        while let Some(open) = rest.find("<script") {
+            let after = &rest[open + "<script".len()..];
+            let tag_end = after.find('>').expect("<script 标签未闭合：index.html 结构损坏");
+            let attrs = &after[..tag_end];
+            let body_start = open + "<script".len() + tag_end + 1;
+            let body_end = rest[body_start..].find("</script>").map(|i| body_start + i);
+            let body = body_end.map(|end| &rest[body_start..end]).unwrap_or("");
+            let has_src = attrs.contains("src=");
+            assert!(
+                has_src || body.trim().is_empty(),
+                "{end} index.html 出现了内联 <script>（有内容且无 src）：{}。\n\
+                 Tauri v2 会给它算 sha256 塞进 script-src，同 CSP3 规则令 'unsafe-inline' 失效。\n\
+                 一并移进外部模块文件。",
+                index_html.display()
+            );
+            rest = match body_end {
+                Some(end) => &rest[end + "</script>".len()..],
+                None => "",
+            };
+        }
+    }
+}
+
+/// 边界：注释内的内联样式**不算**违规（移动端历史首屏样式即停用在注释里）
+///
+/// 正例：不剥注释的裸子串检查会把移动端判红，而它对 Tauri 的 nonce 注入毫无影响——
+/// 这类假阴性会让结构锁名存实亡。
+#[test]
+fn index_html_inline_style_check_ignores_commented_blocks() {
+    let commented = "<html><body><!-- <style>.x{}</style> --></body></html>";
+    assert!(
+        !strip_html_comments(commented).contains("<style"),
+        "剥注释后不应再看到注释块里的 <style>"
+    );
+
+    let live = "<html><body><!-- <style>.x{}</style> --><style>.y{}</style></body></html>";
+    assert!(
+        strip_html_comments(live).contains("<style"),
+        "真正生效的内联 <style> 必须留在剥注释后的文本里（否则锁成假阴性）"
+    );
+}
+
+/// 剥掉 HTML 注释体（保留注释外的全部文本），供上面两条判定共用
+fn strip_html_comments(raw: &str) -> String {
+    let mut stripped = String::with_capacity(raw.len());
+    let mut rest = raw;
+    while let Some(open) = rest.find("<!--") {
+        stripped.push_str(&rest[..open]);
+        match rest[open + 4..].find("-->") {
+            Some(close) => rest = &rest[open + 4 + close + 3..],
+            None => return stripped,
+        }
+    }
+    stripped.push_str(rest);
+    stripped
 }
 
 /// 边界：permissions 提取器不能被非 permissions 字段里的字符串骗到

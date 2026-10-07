@@ -11,8 +11,14 @@
  * - C-01 浅色基块与 `html.dark` 深色覆盖块都在（缺一套 = 该主题下变量无定义）
  * - C-02 两块 `--splash-*` 变量集合完全一致（漏一个 = 另一主题沿用错色）
  * - C-03 色板块之外的规则只引用变量，不出现字面色值（token-bound）
- * - C-04 index.html 静态首屏有 prefers-color-scheme 浅色分支，且镜像的正是
- *        `style.css` 里 warm 浅色 token 的字面值（token 改了没同步镜像 → 转红）
+ * - C-04 index.html 静态首屏（现为 public/splash.css 外链，见下）有
+ *        prefers-color-scheme 浅色分支，且镜像的正是 `style.css` 里 warm 浅色 token
+ *        的字面值（token 改了没同步镜像 → 转红）
+ * - C-05 index.html 确实外链了 public/splash.css，且自身不再残留生效的内联 <style>
+ *        （样式搬出内联是 CSP 硬约束：Tauri v2 会给内联 <style> 注入 nonce，CSP3 下
+ *        style-src 出现 nonce-source 即令 'unsafe-inline' 失效，所有运行时注入的
+ *        内联 <style>——四个 wasm 应用的前端样式——在 release 被 style-src-elem 拒掉。
+ *        Rust 侧同源锁见 src-tauri/tests/capabilities_lock.rs）
  */
 
 import { describe, it, expect } from 'vitest'
@@ -20,7 +26,24 @@ import { readFileSync } from 'node:fs'
 
 const SPLASH_COMPONENT = 'src/components/SplashLoading.vue'
 const INDEX_HTML = 'index.html'
+/** 静态首屏样式：2026-10-07 从 index.html 内联 <style> 搬出（见文件头注的 CSP 原因） */
+const STATIC_SPLASH_CSS = 'public/splash.css'
 const STYLE_CSS = 'src/style.css'
+
+/** 剥掉 HTML 注释：注释内不是 DOM 节点（内联 <style> 是否生效只看剥注释后的文本） */
+function stripHtmlComments(raw: string): string {
+  let out = ''
+  let rest = raw
+  for (;;) {
+    const open = rest.indexOf('<!--')
+    if (open < 0) break
+    out += rest.slice(0, open)
+    const close = rest.slice(open + 4).indexOf('-->')
+    if (close < 0) return out
+    rest = rest.slice(open + 4 + close + 3)
+  }
+  return out + rest
+}
 
 /** 取组件 `<style scoped>` 块正文，并剥掉 CSS 注释（注释里的示例色值不参与判定） */
 function splashStyleBlock(): string {
@@ -76,7 +99,12 @@ describe('SplashLoading 浅色/深色色板对称锁', () => {
   })
 })
 
-describe('index.html 静态首屏浅色锁', () => {
+describe('静态首屏浅色锁（public/splash.css）', () => {
+  /** 静态首屏样式正文，剥掉 CSS 注释（注释里的示例色值不参与判定） */
+  function staticSplashCss(): string {
+    return readFileSync(STATIC_SPLASH_CSS, 'utf-8').replace(/\/\*[\s\S]*?\*\//g, '')
+  }
+
   /** style.css 里 warm 浅色 token 的字面值：`:root` 是文件首个声明块，exec 取到的即默认色板 */
   function lightToken(name: string): string {
     const value = new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{3,8})`).exec(
@@ -87,10 +115,10 @@ describe('index.html 静态首屏浅色锁', () => {
   }
 
   it('C-04 静态首屏浅色分支存在，且色值镜像 style.css 的 warm 浅色 token', () => {
-    const html = readFileSync(INDEX_HTML, 'utf-8')
-    const markerAt = html.indexOf('@media (prefers-color-scheme: light)')
-    expect(markerAt, 'index.html 静态首屏缺少浅色分支').toBeGreaterThan(-1)
-    const lightBranch = html.slice(markerAt)
+    const css = staticSplashCss()
+    const markerAt = css.indexOf('@media (prefers-color-scheme: light)')
+    expect(markerAt, `${STATIC_SPLASH_CSS} 静态首屏缺少浅色分支`).toBeGreaterThan(-1)
+    const lightBranch = css.slice(markerAt)
 
     expect(lightBranch).toMatch(
       new RegExp(`\\.splash\\s*\\{[^}]*background:[^}]*${lightToken('bg-page')}[^}]*\\}`),
@@ -101,5 +129,12 @@ describe('index.html 静态首屏浅色锁', () => {
     expect(lightBranch).toMatch(
       new RegExp(`\\.spinner\\s*\\{[^}]*border-top-color:\\s*${lightToken('text-primary')}`),
     )
+  })
+
+  it('C-05 index.html 外链了 splash.css，且无生效的内联 <style>', () => {
+    // 正例：外链在（否则 CSS 搬出来了，首屏却没样式——样式搬出内联的收益全丢）
+    expect(stripHtmlComments(readFileSync(INDEX_HTML, 'utf-8'))).toContain('href="/splash.css"')
+    // 反例：内联 <style> 回来 = CSP nonce 回来 = release 全站插件样式被拒（见文件头注）
+    expect(stripHtmlComments(readFileSync(INDEX_HTML, 'utf-8'))).not.toContain('<style')
   })
 })

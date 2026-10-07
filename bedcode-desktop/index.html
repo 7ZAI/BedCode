@@ -10,50 +10,20 @@
     <!-- iOS 状态栏样式 -->
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <title>BedCode</title>
+    <!-- 静态首屏样式走外部文件（public/splash.css，dev/prod 行为一致）。
+         **不可搬回内联 <style>**：Tauri v2 会给它注入 CSP nonce，而 CSP3 下
+         style-src 出现 nonce-source 即令 'unsafe-inline' 失效，导致所有运行时注入的
+         内联 <style>（四个 wasm 应用的前端样式）被 style-src-elem 拒掉——release 专有的
+         样式全失效故障。机制与结构锁见 public/splash.css 头注与
+         src-tauri/tests/capabilities_lock.rs。 -->
+    <link rel="stylesheet" href="/splash.css" />
   </head>
   <body class="bg-dark-900 text-dark-100">
     <div id="app">
       <!--
         静态首屏：Vue 挂载前（含 SplashLoading 之前）的过渡帧，随 #app 内容一起被替换掉。
-        此刻 style.css 的 token 与应用内主题设置（SQLite AppConfig）都还没加载，
-        只能跟随系统深浅色（与移动端 index.html 静态首屏同源的做法）；
-        应用内手动选的主题从 SplashLoading.vue 起才生效。
-        下面的浅色字面值是 style.css 浅色 token 的手工镜像（改 token 需同步这里），
-        深色分支保持既有 slate 配色不动（与品牌开屏深色的差异属既有状态）。
+        样式在 public/splash.css（外链；勿内联，原因见 head 注释）。
       -->
-      <style>
-        .splash {
-          display: flex;
-          height: 100vh;
-          align-items: center;
-          justify-content: center;
-          background: #0f172a;
-        }
-        .spinner {
-          width: 32px;
-          height: 32px;
-          border-radius: 50%;
-          border: 3px solid #1e293b;
-          border-top-color: #6366f1;
-          animation: spin 0.8s linear infinite;
-        }
-        /* 浅色系统：镜像 style.css 浅色 token —— 底 #f5f4f0→#efede7（--bg-page→--bg-sidebar），
-           环身 #e4e1d8（--border），前进端 #26231b（--text-primary） */
-        @media (prefers-color-scheme: light) {
-          .splash {
-            background: linear-gradient(135deg, #f5f4f0, #efede7);
-          }
-          .spinner {
-            border-color: #e4e1d8;
-            border-top-color: #26231b;
-          }
-        }
-        @keyframes spin {
-          to {
-            transform: rotate(360deg);
-          }
-        }
-      </style>
       <div class="splash"><div class="spinner"></div></div>
     </div>
     <script type="module" src="/src/main.ts"></script>
