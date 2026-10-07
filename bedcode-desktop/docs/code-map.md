@@ -235,7 +235,7 @@ path 依赖复用（D1/D2），宿主只剩组合根 + 薄壳垫片（D3），�
 | `host_api/` | 宿主能力域实现，**一个文件 = 一个 `host-*` 域**；`context.rs` 是装配面（`WasmHostContext` + 角色窄接口 + 两阶段注入） |
 | `security/` | 授权：框架（`framework.rs`）、fs 三层校验（`fs_auth.rs`）、出站授权（`network_auth.rs`）、策略与记录真源（`auth_policy.rs` + `strategy.rs`）、安装审批（`approval.rs`）、通道身份（`frontend_channel.rs`）、互调门（`api_registry.rs`） |
 | `bus.rs` | topic 总线：命名空间仲裁 `<plugin-id>::<name>`、JSON + 二进制载荷、有界队列背压 |
-| `config.rs` / `monitor.rs` | Engine / Store 运行参数（含灰度开关）／运行时指标埋点 |
+| `config.rs` / `monitor.rs` | Engine / Store 运行参数（含灰度开关）／运行时指标埋点。`config.rs` 的 `EngineConfig.tuning` 是**wasmtime 定制面**（`.scratch/2026-10-07-wasmtime-engine-config/`）：显式钉死组（`component_model_async` / `backtrace_details` / `memory_may_move`，恒调用）+ 跟随默认组（其余 `Option`，`None` = 不调用 API = 逐字继承 wasmtime 默认）；逃生舱 `manager/runtime.rs` 的 `EngineCustomizer` / `EngineSetup`，优先级链与锁定 4 项见该处注释 |
 | `runtime_util.rs` / `intercall.rs` / `storage.rs` / `permission.rs` | 中立层：同步↔异步桥／JSON-RPC 互调客户端／`PluginStorage`／权限词汇只读再导出 + 漂移锁 |
 | `db/` / `enums/` | 引擎面（ADR 0036「机制与真源同侧」）：主库 schema.sql 单一事实源／引擎枚举。**无 `pty.rs`**：PTY 引擎与 host-pty 能力域已整面迁到 `bedcode-pty-engine`（ADR 0039），垫片与 `enums/pty_status.rs` 一并删除 |
 | `system/` | AppConfig（引擎级配置）、opener、process——宿主 `system.rs` 经 `pub use` 垫片零改动消费 |

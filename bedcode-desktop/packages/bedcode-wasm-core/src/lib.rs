@@ -72,10 +72,16 @@ pub use bus::{BusMessageHandler, MessageBus};
 pub use manager::host;
 pub use manager::host::api_bridge;
 pub use manager::host::PluginHost;
+// 引擎定制面（wasmtime-engine-config A+B）：第三方宿主写 `EngineCustomizer`
+// 钩子时需要命名 `wasmtime::Config`，经此再导出即可，不必自己加 wasmtime
+// 依赖（ADR 0019 双端锁版：版本只在本 crate 锁一处）
+pub use manager::runtime::{EngineCustomizer, EngineSetup};
 #[cfg(debug_assertions)]
 pub use manager::watcher;
 pub use security::fs_auth::FsAuthChecker;
 pub use storage::PluginStorage;
+/// wasmtime 再导出（宿主定制钩子面；版本与本 crate 依赖同源，ADR 0019）
+pub use wasmtime;
 
 // 引擎级错误类型（真源 bedcode-server-base，本 crate 与 lib 共用同一份；
 // lib 侧 `system/error.rs` 垫片经 `pub use bedcode_wasm_core` 路径不变）

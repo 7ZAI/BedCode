@@ -28,7 +28,7 @@ use crate::host_api::fs::FsUnitExecutor;
 use crate::host_api::http::HttpUnitExecutor;
 use crate::host_api::process::ProcessUnitExecutor;
 use crate::manager::capability::CapabilityRegistry;
-use crate::manager::runtime::{LoadedWasmPlugin, WasmRuntime};
+use crate::manager::runtime::{EngineSetup, LoadedWasmPlugin, WasmRuntime};
 use crate::manager::task::{register_unit_executor, CoreTaskEngine};
 use crate::permission::PermissionManager;
 use crate::storage::PluginStorage;
@@ -54,6 +54,13 @@ pub fn setup_wasm_runtime() -> (WasmRuntime, Arc<WasmHostContext>) {
 pub fn setup_wasm_runtime_with_config(
     core_config: CoreConfig,
 ) -> (WasmRuntime, Arc<WasmHostContext>) {
+    setup_wasm_runtime_with_setup(EngineSetup::new(core_config))
+}
+
+/// 以完整引擎装配输入构建无头运行时（测试专用；引擎定制面 B 面钩子用例经此注入
+/// `EngineSetup::with_customizer`，与生产 `PluginHost::new` → `WasmRuntime::with_setup`
+/// 同一条装配路径）
+pub fn setup_wasm_runtime_with_setup(setup: EngineSetup) -> (WasmRuntime, Arc<WasmHostContext>) {
     // AppConfig 初始化
     static CONFIG_INIT: std::sync::Once = std::sync::Once::new();
     CONFIG_INIT.call_once(|| {
@@ -104,8 +111,7 @@ pub fn setup_wasm_runtime_with_config(
         let message_bus = Arc::new(MessageBus::new());
 
         // 无头构建：不创建 AppHandle（tao 事件循环不允许在测试线程初始化）
-        let mut wasm_runtime =
-            WasmRuntime::with_config(storage.clone(), None, core_config, Vec::new()).unwrap();
+        let mut wasm_runtime = WasmRuntime::with_setup(storage.clone(), None, setup).unwrap();
         // 注入 AOT 缓存目录（生产由 app_handle 派生，测试无头上下文手动注入）
         wasm_runtime.aot_cache_dir = Some(
             std::env::temp_dir().join(format!("bedcode_aot_{}", std::process::id())),

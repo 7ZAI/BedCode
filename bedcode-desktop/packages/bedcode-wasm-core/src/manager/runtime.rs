@@ -35,6 +35,7 @@ use crate::runtime_util::block_on_async;
 use crate::security::fs_auth::FsAuthChecker;
 #[cfg(test)]
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 #[cfg(test)]
 use std::pin::Pin;
@@ -56,6 +57,7 @@ pub use crate::host_api::context::{CapabilityProvider, PluginServices, ProcessRe
 // 支持配置文件加载与运行时覆盖；燃料看门狗的语义说明随默认值一并迁入。
 pub(crate) use crate::config::plugin_debug_mode;
 use crate::config::CoreConfig;
+use crate::config::{BacktraceDetails, EngineTuning, OptLevel, Profiling};
 use crate::monitor::{LifecycleEvent, MetricsRegistry};
 use bedcode_plugin_api::{ResourceOverrides, WasiPreopenDir};
 
@@ -139,6 +141,269 @@ fn aot_cache_key(path: &Path, source_len: u64) -> u64 {
     hasher.finish()
 }
 
+// ==================== 引擎定制面（A 面配置 + B 面逃生舱） ====================
+
+/// 引擎定制钩子：宿主在**内核自身设置之后**、`Engine::new` **之前**拿到裸
+/// [`wasmtime::Config`]，可覆盖任意**非锁定**项——配置面（[`EngineTuning`]）枚举不到的
+/// 原语都走这里（`target` / `allocation_strategy(pooling)` / 自定义内存分配器…）。
+///
+/// 返回 `Err` → Engine **构建失败**（错误带操作上下文上抛，不静默降级为一个
+/// 「看起来能用但参数不对」的 Engine）。
+///
+/// **锁定项**：资源看门狗 4 项（`consume_fuel` / `max_wasm_stack` /
+/// `memory_reservation` / `memory_may_move`）在钩子执行后被
+/// [`reassert_locked_knobs`] 重申，钩子改不动；要改走 [`CoreConfig`]（有跨字段校验）。
+///
+/// 钩子类型需命名 `&mut wasmtime::Config`——写钩子的宿主**不必自己加 wasmtime 依赖**，
+/// 经 `bedcode_wasm_core::wasmtime` 再导出即可（ADR 0019 双端锁版，宿主侧不重复锁版本）。
+pub type EngineCustomizer = Arc<dyn Fn(&mut wasmtime::Config) -> crate::Result<()> + Send + Sync>;
+
+/// 引擎装配输入（[`WasmRuntime::with_setup`] 的配置包）
+///
+/// 为什么成结构体而不是继续加位置参数：钩子 + 内核配置 + 免弹窗清单三件同属
+/// 「宿主装配期的引擎输入」，位置参数超过三个后调用点不可读（`with_config` 的四个
+/// 位置参数已经足够难核对）。
+#[derive(Default)]
+pub struct EngineSetup {
+    /// 内核配置（Engine 参数在构建期固化；`store` 部分仍可运行时覆盖）
+    pub config: CoreConfig,
+    /// 第一方免弹窗归属清单（票 08/P0-2；空表 = 无免弹窗项）
+    pub first_party_dirs: Vec<(&'static str, Vec<crate::security::fs_auth::TrustedDir>)>,
+    /// 引擎定制钩子（可选，见 [`EngineCustomizer`]）
+    pub customizer: Option<EngineCustomizer>,
+}
+
+impl EngineSetup {
+    /// 以指定内核配置装配（免弹窗清单为空、无钩子）
+    pub fn new(config: CoreConfig) -> Self {
+        Self {
+            config,
+            first_party_dirs: Vec::new(),
+            customizer: None,
+        }
+    }
+
+    /// 追加第一方免弹窗归属清单（构建器方法）
+    pub fn with_first_party_dirs(
+        mut self,
+        dirs: Vec<(&'static str, Vec<crate::security::fs_auth::TrustedDir>)>,
+    ) -> Self {
+        self.first_party_dirs = dirs;
+        self
+    }
+
+    /// 追加引擎定制钩子（构建器方法；重复调用以最后一个为准）
+    pub fn with_customizer(
+        mut self,
+        customize: impl Fn(&mut wasmtime::Config) -> crate::Result<()> + Send + Sync + 'static,
+    ) -> Self {
+        self.customizer = Some(Arc::new(customize));
+        self
+    }
+}
+
+/// 由内核配置构建 wasmtime Engine 参数（**配置面 → wasmtime 原语的唯一映射点**）
+///
+/// 纯函数（除 `plugin_debug_mode` 下设置 `WASMTIME_BACKTRACE_DETAILS` 环境变量外不触
+/// 盘、不依赖宿主状态）——单测可直接消费。逃生舱钩子在
+/// [`WasmRuntime::with_setup`] 里于本函数**之后**执行。
+fn build_engine_config(core_config: &CoreConfig, debug_mode: bool) -> Config {
+    let engine = &core_config.engine;
+    let tuning = engine.tuning.resolve(debug_mode);
+    let mut config = Config::new();
+    // 票 02 宿主 async 化门禁：CM_ASYNC 引擎级异步支持（wasmtime 46+ 默认
+    // 编译进 runtime，此处开启 wasm 特性）。wasip3 组件导入 async wasi 0.3
+    // 函数，实例化后 Store 为 async-required；既有同步插件不受影响
+    // （/tmp/wasip3-probe 场景 4 实证：同步组件 sync/async 双路径均可用）。
+    // wasmtime 48 中 async_support() 配置已废弃为 no-op（异步为引擎级）。
+    // 取值来自 A 面 `tuning.component_model_async`（默认 true；validate 硬拒 false）
+    config.wasm_component_model_async(tuning.component_model_async);
+    // 燃料看门狗：guest 指令计数耗尽即 trap（宿主调用阻塞不消耗，见 config FUEL_PER_CALL）
+    config.consume_fuel(engine.consume_fuel);
+    // WASM 内部调用栈：trap（panic/栈溢出/燃料耗尽/内存越界）错误串携带
+    // 插件内部函数调用链（names section 函数名，release 构建即有），随
+    // AppError::Plugin 进 error.log 与插件 Degraded 状态，AI agent 无需重跑
+    // 即可定位插件内部故障点。wasmtime 47 的 backtrace 在 default features
+    // 内（零编译成本），此处显式钉死 32 帧防止上游默认（20 帧）漂移
+    config.wasm_backtrace_max_frames(Some(
+        NonZeroUsize::new(engine.wasm_backtrace_max_frames as usize).expect("backtrace frames > 0（配置校验保证）"),
+    ));
+    // 行号解析：Environment 模式读 WASMTIME_BACKTRACE_DETAILS——无 DWARF 时
+    // 零开销回退到函数名栈（release 插件无调试信息，不硬编码强制解析）；
+    // 插件调试模式（BEDCODE_PLUGIN_DEBUG=1）下宿主先置该环境变量再构建
+    // Engine，并由 tuning.resolve 把 debug_info 推为 true（wasmtime 默认 false
+    // 不产 DWARF，只置环境变量拿不到 file:line）
+    if debug_mode {
+        // edition 2021 下 set_var 非 unsafe；此处单线程启动早期调用，
+        // 无并发读写风险。Environment 模式在 wasm_backtrace_details 调用
+        // 时读取该变量，必须先设置再配置
+        std::env::set_var("WASMTIME_BACKTRACE_DETAILS", "1");
+    }
+    config.wasm_backtrace_details(wasmtime_backtrace_details(tuning.backtrace_details));
+    // 线性内存预留 = 估算的最大线性内存（与 limiter 上限严格一致，见
+    // MAX_PLUGIN_MEMORY_BYTES）：实例化时一次性预留 256MiB 虚拟地址空间，
+    // 增长零系统调用、基址恒定；相比 64-bit 默认（4GiB 预留 + 32MiB guard/
+    // 内存）大幅降低 VA 占用。GC 堆未显式配置时沿用同值（wasmtime 语义：
+    // gc_heap_* 缺省继承 memory_* 配置）
+    config.memory_reservation(engine.memory_reservation_bytes);
+    // 预留即硬顶：初始分配与增长超出预留前均被 limiter 拒绝（memory_growing
+    // 在物理分配前调用），内存永不搬移；编译器可静态假设基址不变做优化，
+    // 同时杜绝任何路径触发重定位。
+    // 取值来自 A 面 `tuning.memory_may_move`（默认 false）
+    config.memory_may_move(tuning.memory_may_move);
+    // Wasm 执行栈深度上限：深度递归在 wasm 侧确定性栈溢出 trap，
+    // 而非打穿真实线程栈导致进程 abort（见 MAX_WASM_STACK_BYTES）
+    config.max_wasm_stack(core_config.store.max_wasm_stack_bytes);
+
+    // ==================== A 面：跟随默认组（Some 才调用） ====================
+    // `None` = 不调用该 API，逐字继承 wasmtime 默认（见 EngineTuning 组语义注释：
+    // 不把上游默认值变成我们的隐性依赖，锁版升级不带进行为变更）
+    if let Some(v) = tuning.debug_info {
+        config.debug_info(v);
+    }
+    if let Some(v) = tuning.native_unwind_info {
+        config.native_unwind_info(v);
+    }
+    if let Some(v) = tuning.parallel_compilation {
+        config.parallel_compilation(v);
+    }
+    if let Some(v) = tuning.opt_level {
+        config.cranelift_opt_level(wasmtime_opt_level(v));
+    }
+    if let Some(v) = tuning.profiling {
+        config.profiler(wasmtime_profiling(v));
+    }
+    if let Some(v) = tuning.epoch_interruption {
+        config.epoch_interruption(v);
+    }
+    if let Some(v) = tuning.component_model_error_context {
+        config.wasm_component_model_error_context(v);
+    }
+    if let Some(v) = tuning.wasm_threads {
+        config.wasm_threads(v);
+    }
+    if let Some(v) = tuning.wasm_simd {
+        config.wasm_simd(v);
+    }
+    if let Some(v) = tuning.wasm_bulk_memory {
+        config.wasm_bulk_memory(v);
+    }
+    if let Some(v) = tuning.wasm_multi_memory {
+        config.wasm_multi_memory(v);
+    }
+    if let Some(v) = tuning.wasm_tail_call {
+        config.wasm_tail_call(v);
+    }
+    if let Some(v) = tuning.wasm_reference_types {
+        config.wasm_reference_types(v);
+    }
+    if let Some(v) = tuning.wasm_memory64 {
+        config.wasm_memory64(v);
+    }
+
+    // 编译缓存：跨进程复用已编译产物（初始化失败降级为不缓存，不阻断运行时）
+    if engine.compile_cache {
+        match Cache::new(CacheConfig::new()) {
+            Ok(cache) => {
+                config.cache(Some(cache));
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "WASM compile cache disabled");
+            }
+        }
+    }
+    warn_incoherent_tuning(&tuning);
+    log_effective_engine_config(engine, &tuning);
+    config
+}
+
+/// 锁定项重申：钩子执行后恢复资源看门狗 4 项到配置值
+///
+/// **为什么锁定**：这 4 项在 [`CoreConfig::validate`] 里有跨字段约束（典型如
+/// `memory_reservation_bytes >= store.max_memory_bytes`：预留小于上限会让合法内存
+/// 增长退化为搬移/失败路径），而任意闭包能改 `wasmtime::Config` 且**不可回读校验**
+/// ——不锁定则「配置面已校验」的承诺在最后一步静默失效（如关掉燃料 = 唯一死循环闸门
+/// 被摘除且无任何报错）。宿主要改这 4 项走 `CoreConfig`（经 `with_setup` 传入），
+/// 配置面的 `tuning.memory_may_move` 同样可改——只是钩子改不动。
+fn reassert_locked_knobs(config: &mut Config, core_config: &CoreConfig) {
+    config.consume_fuel(core_config.engine.consume_fuel);
+    config.max_wasm_stack(core_config.store.max_wasm_stack_bytes);
+    config.memory_reservation(core_config.engine.memory_reservation_bytes);
+    config.memory_may_move(core_config.engine.tuning.memory_may_move);
+}
+
+/// 无效组合告警（不至于报错，但必须 warn——防「以为生效了」）
+///
+/// 均为**内核事实**推导的组合，不是通用 wasmtime 规则：
+/// 内核的资源看门狗是 fuel（`Store::set_fuel` + 每次导出调用重置），从不调
+/// `set_epoch_deadline`，故引擎级 epoch 中断开了也不产生任何墙钟效果。
+fn warn_incoherent_tuning(tuning: &EngineTuning) {
+    if tuning.epoch_interruption == Some(true) {
+        tracing::warn!(
+            "engine.tuning.epoch_interruption=true 无效：内核看门狗用 fuel（未调用 set_epoch_deadline），\
+             引擎级 epoch 中断不会触发任何墙钟中断"
+        );
+    }
+    if tuning.debug_info == Some(true) {
+        if tuning.backtrace_details == BacktraceDetails::Disable {
+            tracing::warn!(
+                "engine.tuning.debug_info=true 但 backtrace_details=disable：trap 错误串拿不到 file:line 行号"
+            );
+        }
+        if tuning.native_unwind_info == Some(false) {
+            tracing::warn!(
+                "engine.tuning.debug_info=true 但 native_unwind_info=false：宿主栈回溯信息缺失，\
+                 行号解析可能失败"
+            );
+        }
+    }
+}
+
+/// Engine 生效参数的结构化日志（Engine 构建后不可回读，日志是唯一的可观测面）
+fn log_effective_engine_config(engine: &crate::config::EngineConfig, tuning: &EngineTuning) {
+    tracing::info!(
+        consume_fuel = engine.consume_fuel,
+        memory_reservation_bytes = engine.memory_reservation_bytes,
+        wasm_backtrace_max_frames = engine.wasm_backtrace_max_frames,
+        compile_cache = engine.compile_cache,
+        component_model_async = tuning.component_model_async,
+        memory_may_move = tuning.memory_may_move,
+        debug_info = ?tuning.debug_info,
+        opt_level = ?tuning.opt_level,
+        profiling = ?tuning.profiling,
+        parallel_compilation = ?tuning.parallel_compilation,
+        "WASM engine configured"
+    );
+}
+
+/// 配置面 `OptLevel` → wasmtime 原语
+fn wasmtime_opt_level(level: OptLevel) -> wasmtime::OptLevel {
+    match level {
+        OptLevel::None => wasmtime::OptLevel::None,
+        OptLevel::Speed => wasmtime::OptLevel::Speed,
+        OptLevel::SpeedAndSize => wasmtime::OptLevel::SpeedAndSize,
+    }
+}
+
+/// 配置面 `Profiling` → wasmtime 原语
+fn wasmtime_profiling(profiling: Profiling) -> wasmtime::ProfilingStrategy {
+    match profiling {
+        Profiling::None => wasmtime::ProfilingStrategy::None,
+        Profiling::PerfMap => wasmtime::ProfilingStrategy::PerfMap,
+        Profiling::JitDump => wasmtime::ProfilingStrategy::JitDump,
+        Profiling::VTune => wasmtime::ProfilingStrategy::VTune,
+    }
+}
+
+/// 配置面 `BacktraceDetails` → wasmtime 原语
+fn wasmtime_backtrace_details(details: BacktraceDetails) -> WasmBacktraceDetails {
+    match details {
+        BacktraceDetails::Enable => WasmBacktraceDetails::Enable,
+        BacktraceDetails::Disable => WasmBacktraceDetails::Disable,
+        BacktraceDetails::Environment => WasmBacktraceDetails::Environment,
+    }
+}
+
 impl WasmRuntime {
     /// 创建 WASM 运行时
     ///
@@ -168,7 +433,11 @@ impl WasmRuntime {
                 }
             })
             .unwrap_or_default();
-        Self::with_config(storage, app_handle, core_config, first_party_dirs)
+        Self::with_setup(
+            storage,
+            app_handle,
+            EngineSetup::new(core_config).with_first_party_dirs(first_party_dirs),
+        )
     }
 
     /// 以指定内核配置构建（测试与运行时覆盖路径；配置须先通过 [`CoreConfig::validate`]）
@@ -178,61 +447,45 @@ impl WasmRuntime {
         core_config: CoreConfig,
         first_party_dirs: Vec<(&'static str, Vec<crate::security::fs_auth::TrustedDir>)>,
     ) -> crate::Result<Self> {
+        Self::with_setup(
+            storage,
+            app_handle,
+            EngineSetup::new(core_config).with_first_party_dirs(first_party_dirs),
+        )
+    }
+
+    /// 以完整引擎装配输入构建（A+B 面新入口；`new` / `with_config` 均经此委托）
+    ///
+    /// 引擎参数优先级链（高者胜，但锁定项除外）：
+    /// `编译期默认 < wasm-core.json（Engine 参数构建期固化，重启生效） < 本次传入的
+    /// CoreConfig < EngineCustomizer（仅构建期，最后一道）`
+    pub fn with_setup(
+        storage: Arc<PluginStorage>,
+        app_handle: Option<Arc<tauri::AppHandle>>,
+        setup: EngineSetup,
+    ) -> crate::Result<Self> {
+        let EngineSetup {
+            config: core_config,
+            first_party_dirs,
+            customizer,
+        } = setup;
         if let Err(reason) = core_config.validate() {
             return Err(crate::AppError::Config(format!("内核配置非法: {}", reason)));
         }
-        let mut config = Config::new();
-        // 票 02 宿主 async 化门禁：CM_ASYNC 引擎级异步支持（wasmtime 46+ 默认
-        // 编译进 runtime，此处开启 wasm 特性）。wasip3 组件导入 async wasi 0.3
-        // 函数，实例化后 Store 为 async-required；既有同步插件不受影响
-        // （/tmp/wasip3-probe 场景 4 实证：同步组件 sync/async 双路径均可用）。
-        // wasmtime 48 中 async_support() 配置已废弃为 no-op（异步为引擎级）。
-        config.wasm_component_model_async(true);
-        // 燃料看门狗：guest 指令计数耗尽即 trap（宿主调用阻塞不消耗，见 config FUEL_PER_CALL）
-        config.consume_fuel(core_config.engine.consume_fuel);
-        // WASM 内部调用栈：trap（panic/栈溢出/燃料耗尽/内存越界）错误串携带
-        // 插件内部函数调用链（names section 函数名，release 构建即有），随
-        // AppError::Plugin 进 error.log 与插件 Degraded 状态，AI agent 无需重跑
-        // 即可定位插件内部故障点。wasmtime 47 的 backtrace 在 default features
-        // 内（零编译成本），此处显式钉死 32 帧防止上游默认（20 帧）漂移
-        config.wasm_backtrace_max_frames(Some(
-            std::num::NonZeroUsize::new(core_config.engine.wasm_backtrace_max_frames as usize)
-                .expect("backtrace frames > 0（配置校验保证）"),
-        ));
-        // 行号解析：Environment 模式读 WASMTIME_BACKTRACE_DETAILS——无 DWARF 时
-        // 零开销回退到函数名栈（release 插件无调试信息，不硬编码强制解析）；
-        // 插件调试模式（BEDCODE_PLUGIN_DEBUG=1）下宿主先置该环境变量再构建
-        // Engine，调试产物（debug profile 保留 DWARF）即可拿到 file:line 行号
-        if plugin_debug_mode() {
-            // edition 2021 下 set_var 非 unsafe；此处单线程启动早期调用，
-            // 无并发读写风险。Environment 模式在 wasm_backtrace_details 调用
-            // 时读取该变量，必须先设置再配置
-            std::env::set_var("WASMTIME_BACKTRACE_DETAILS", "1");
-        }
-        config.wasm_backtrace_details(WasmBacktraceDetails::Environment);
-        // 线性内存预留 = 估算的最大线性内存（与 limiter 上限严格一致，见
-        // MAX_PLUGIN_MEMORY_BYTES）：实例化时一次性预留 256MiB 虚拟地址空间，
-        // 增长零系统调用、基址恒定；相比 64-bit 默认（4GiB 预留 + 32MiB guard/
-        // 内存）大幅降低 VA 占用。GC 堆未显式配置时沿用同值（wasmtime 语义：
-        // gc_heap_* 缺省继承 memory_* 配置）
-        config.memory_reservation(core_config.engine.memory_reservation_bytes);
-        // 预留即硬顶：初始分配与增长超出预留前均被 limiter 拒绝（memory_growing
-        // 在物理分配前调用），内存永不搬移；编译器可静态假设基址不变做优化，
-        // 同时杜绝任何路径触发重定位
-        config.memory_may_move(false);
-        // Wasm 执行栈深度上限：深度递归在 wasm 侧确定性栈溢出 trap，
-        // 而非打穿真实线程栈导致进程 abort（见 MAX_WASM_STACK_BYTES）
-        config.max_wasm_stack(core_config.store.max_wasm_stack_bytes);
-        // 编译缓存：跨进程复用已编译产物（初始化失败降级为不缓存，不阻断运行时）
-        if core_config.engine.compile_cache {
-            match Cache::new(CacheConfig::new()) {
-                Ok(cache) => {
-                    config.cache(Some(cache));
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "WASM compile cache disabled");
-                }
-            }
+        let mut config = build_engine_config(&core_config, plugin_debug_mode());
+
+        // 逃生舱（B 面）：宿主在内核自身设置之后拿到裸 Config，覆盖配置面枚举不到的
+        // 原语（`target` / pooling / 自定义分配器…）。返回 Err 直接让构建失败——
+        // 定制失败绝不静默降级为一个「看起来能用但参数不对」的 Engine。
+        if let Some(customize) = &customizer {
+            customize(&mut config).map_err(|e| {
+                crate::AppError::Config(format!("引擎定制钩子失败，Engine 未构建: {}", e))
+            })?;
+            // 锁定项重申：钩子能改 Config 但不可回读校验，而看门狗 4 项在配置面
+            // 有跨字段约束（见 reassert_locked_knobs）——不锁则「配置已校验」的
+            // 承诺在最后一步静默失效
+            reassert_locked_knobs(&mut config, &core_config);
+            tracing::info!("WASM engine customizer applied (locked knobs re-asserted)");
         }
         let engine = Engine::new(&config)
             .map_err(|e| crate::AppError::Plugin(format!("Failed to initialize WASM engine: {}", e)))?;
@@ -282,9 +535,23 @@ impl WasmRuntime {
     }
 
     /// 运行时覆盖内核配置：只影响覆盖后新建立的 Store（Engine 参数构建期已固化）
+    ///
+    /// **Engine 段改动会 warn 不静默**：Engine 在构建期固化，此后 `set_config` 里的
+    /// `engine` 段（含 [`crate::config::EngineTuning`] 的 17 个字段）对已建 Engine
+    /// 完全无效——不检测的话，宿主「配了没生效」会成为最难查的一类问题
+    /// （配置读回来是对的，行为却没变）。要改 Engine 参数只能重新构建
+    /// （[`Self::with_setup`] / 重启）。
     pub fn set_config(&self, cfg: CoreConfig) -> crate::Result<()> {
         if let Err(reason) = cfg.validate() {
             return Err(crate::AppError::Config(format!("内核配置非法: {}", reason)));
+        }
+        {
+            let current = self.config.read().expect("core config lock poisoned");
+            if current.engine != cfg.engine {
+                tracing::warn!(
+                    "set_config 携带了 Engine 参数变更，但 Engine 构建期已固化，本次覆盖不会生效（需重建运行时）"
+                );
+            }
         }
         *self.config.write().expect("core config lock poisoned") = cfg;
         Ok(())
@@ -464,6 +731,14 @@ impl WasmRuntime {
     pub fn fs_auth(&self) -> &Arc<FsAuthChecker> {
         &self.fs_auth
     }
+
+    /// Engine 句柄（**仅测试可见**：wasmtime `Config` 构建后不可回读，锁定项 /
+    /// 逃生舱的行为契约只能经构建出来的 Engine 观测；生产不开放该面，
+    /// 避免宿主绕过实例化路径直接用 Engine 编译产物）
+    #[cfg(test)]
+    pub(crate) fn engine(&self) -> &Engine {
+        &self.engine
+    }
 }
 
 // ==================== Tests ====================
@@ -489,6 +764,7 @@ mod tests {
     // 域拆分（P0）：测试函数自本文件拆至 wasm_runtime/tests/，共享脚手架留在下方；
     // 各域文件 `use super::*` 复用，fixture 互斥与产物构建语义不变
     mod component_e2e;
+    mod engine_config;
     mod engine_limits;
     mod http_e2e;
     // 票 06 P1：属主任务（event-loop 调用模型）直接驱动测试

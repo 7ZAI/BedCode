@@ -9,6 +9,11 @@
 //!
 //! 单插件资源覆盖的「请求 + 安全上限钳制」在票据 04（安全模块）落地；
 //! 本模块提供钳制机制 [`StoreLimits::clamped_within`]。
+//!
+//! wasmtime 定制面（票 wasmtime-engine-config A 面）：写死与走默认的 knob 全部
+//! 归入 [`EngineConfig::tuning`]（强类型 + serde + 校验），配置面够不着的原语
+//! 经逃生舱 [`crate::manager::runtime::EngineCustomizer`]；优先级链见
+//! `manager/runtime.rs` 的 `build_engine_config`。
 
 use bedcode_plugin_api::ResourceOverrides;
 use serde::{Deserialize, Serialize};
@@ -88,6 +93,152 @@ pub struct EngineConfig {
     pub memory_reservation_bytes: u64,
     /// 编译缓存开关：跨进程复用已编译产物（初始化失败降级为不缓存，不阻断运行时）
     pub compile_cache: bool,
+    /// wasmtime 定制项：此前写死或走默认的引擎参数（[`EngineTuning`]）
+    pub tuning: EngineTuning,
+}
+
+/// backtrace 细节级别（wasmtime `WasmBacktraceDetails` 的配置面镜像）
+///
+/// 不直接用 wasmtime 的类型：它是 serde 无 derive 的普通 enum，接进配置文件
+/// 就要在本面自建词汇（取值 kebab-case，与 `call_model` 同风格）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BacktraceDetails {
+    /// 无条件解析调试信息（不依赖环境变量）
+    Enable,
+    /// 关闭细节解析：trap 错误串只剩函数名栈
+    Disable,
+    /// 条件解析：读 `WASMTIME_BACKTRACE_DETAILS` 环境变量（生产默认；插件调试
+    /// 模式由宿主置该变量，见 [`EngineTuning::resolve`]）
+    #[default]
+    Environment,
+}
+
+/// Cranelift 代码生成优化等级（wasmtime `OptLevel` 的配置面镜像）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum OptLevel {
+    /// 不优化：编译最快、运行最慢（调试插件 / CI 冷编译场景）
+    None,
+    /// 优化速度（wasmtime 默认）
+    Speed,
+    /// 优化速度与产物大小（内存受限设备 / AOT 缓存体积敏感场景）
+    SpeedAndSize,
+}
+
+/// 引擎级性能剖析器（wasmtime `ProfilingStrategy` 的配置面镜像）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Profiling {
+    /// 不开剖析器（默认）
+    None,
+    /// perf-map 文件格式（Linux `perf`）
+    PerfMap,
+    /// jitdump 文件格式（Linux `perf`）
+    JitDump,
+    /// VTune ittapi
+    VTune,
+}
+
+/// wasmtime 引擎定制项（此前写死 / 从未被触碰的 knob 全部归入此节）
+///
+/// **两组语义，刻意不同**：
+///
+/// 1. **显式钉死组**（[`Self::component_model_async`] / [`Self::backtrace_details`] /
+///    [`Self::memory_may_move`]）：内核原本就在每次构建 Engine 时显式设置它们，
+///    默认值逐字等于历史字面量（零行为变更），且**恒调用** wasmtime API——不继承
+///    上游默认，防止锁版升级时默认值漂移。
+/// 2. **跟随默认组**（其余全部 `Option`）：内核从未触碰这些 knob，`None` 表示
+///    **不调用该 API**，逐字继承 wasmtime 默认。这样把「可覆盖」开放出去的同时，
+///    不把上游默认值变成我们的隐性依赖——升级（ADR 0019 双端锁版）时不会出现
+///    「没人配过却行为变了」。
+///
+/// 不含 `target` / `allocation_strategy(pooling)`：两者改地址空间布局与 target
+/// 假设，不属机制中立项，不进配置文件；宿主仍可经逃生舱自担。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EngineTuning {
+    /// 组件模型异步支持（wasip3 插件基线；关掉会让随包插件全部实例化失败，
+    /// 故 [`CoreConfig::validate`] 硬拒 false）
+    pub component_model_async: bool,
+    /// trap 错误串的调试信息细节级别
+    pub backtrace_details: BacktraceDetails,
+    /// 线性内存是否允许搬移（`true` = 放弃「预留即硬顶、基址恒定」的优化，
+    /// 增长退化为搬移路径）
+    pub memory_may_move: bool,
+
+    /// 为 JIT 产物生成 DWARF 调试信息（`None` = 不调用，跟随 wasmtime 默认 false）
+    pub debug_info: Option<bool>,
+    /// 生成原生栈展开信息（宿主栈回溯；`None` = 跟随 wasmtime 默认）
+    pub native_unwind_info: Option<bool>,
+    /// 多线程编译（`None` = 跟随 wasmtime 默认开启）
+    pub parallel_compilation: Option<bool>,
+    /// 代码生成优化等级（`None` = 跟随 wasmtime 默认 `speed`）
+    pub opt_level: Option<OptLevel>,
+    /// 引擎级剖析器（`None` = 不开）
+    pub profiling: Option<Profiling>,
+    /// 引擎级 epoch 墙钟中断（`None` = 跟随 wasmtime 默认关闭；**注意内核看门狗
+    /// 用 fuel**：开了也没人 `set_epoch_deadline`，不产生任何墙钟效果，构建期 warn）
+    pub epoch_interruption: Option<bool>,
+    /// 组件模型的 error-context 扩展（`None` = 跟随 wasmtime 默认）
+    pub component_model_error_context: Option<bool>,
+    /// Wasm 线程提案（`None` = 跟随 wasmtime 默认）
+    pub wasm_threads: Option<bool>,
+    /// Wasm SIMD 提案（`None` = 跟随 wasmtime 默认）
+    pub wasm_simd: Option<bool>,
+    /// Wasm bulk-memory 提案（`None` = 跟随 wasmtime 默认）
+    pub wasm_bulk_memory: Option<bool>,
+    /// Wasm 多线性内存提案（`None` = 跟随 wasmtime 默认）
+    pub wasm_multi_memory: Option<bool>,
+    /// Wasm tail-call 提案（`None` = 跟随 wasmtime 默认）
+    pub wasm_tail_call: Option<bool>,
+    /// Wasm 引用类型提案（`None` = 跟随 wasmtime 默认）
+    pub wasm_reference_types: Option<bool>,
+    /// Wasm 64 位线性内存提案（`None` = 跟随 wasmtime 默认）
+    pub wasm_memory64: Option<bool>,
+}
+
+impl Default for EngineTuning {
+    fn default() -> Self {
+        Self {
+            // 显式钉死组：逐字等于 runtime.rs 构建 Engine 时的历史字面量
+            component_model_async: true,
+            backtrace_details: BacktraceDetails::default(),
+            memory_may_move: false,
+            // 跟随默认组：一律不调用 wasmtime API
+            debug_info: None,
+            native_unwind_info: None,
+            parallel_compilation: None,
+            opt_level: None,
+            profiling: None,
+            epoch_interruption: None,
+            component_model_error_context: None,
+            wasm_threads: None,
+            wasm_simd: None,
+            wasm_bulk_memory: None,
+            wasm_multi_memory: None,
+            wasm_tail_call: None,
+            wasm_reference_types: None,
+            wasm_memory64: None,
+        }
+    }
+}
+
+impl EngineTuning {
+    /// 解析出实际要施加到 `wasmtime::Config` 的定制项（纯函数，可单测）
+    ///
+    /// 唯一推导规则（[`Self::debug_info`]）：**未显式配置且处于插件调试模式**
+    /// 时按 `Some(true)` 处理——让既有注释（`runtime.rs` WASMTIME_BACKTRACE_DETAILS
+    /// 段）与既有冒烟测试 `test_debug_mode_trap_includes_line_info` 的意图真正成立：
+    /// wasmtime 默认 `debug_info = false` 不产 DWARF，只置环境变量拿不到 `file:line`。
+    /// 显式配置永不被推导覆盖（含显式 `false`）。
+    pub fn resolve(&self, plugin_debug_mode: bool) -> Self {
+        let mut resolved = self.clone();
+        if resolved.debug_info.is_none() && plugin_debug_mode {
+            resolved.debug_info = Some(true);
+        }
+        resolved
+    }
 }
 
 /// Store 资源上限（转发）：真源在 `bedcode-host-kit`（wasm-core-lib-split 票 03 搬迁）。
@@ -167,6 +318,7 @@ impl Default for EngineConfig {
             wasm_backtrace_max_frames: defaults::WASM_BACKTRACE_MAX_FRAMES,
             memory_reservation_bytes: defaults::MAX_PLUGIN_MEMORY_BYTES as u64,
             compile_cache: true,
+            tuning: EngineTuning::default(),
         }
     }
 }
@@ -239,6 +391,15 @@ impl CoreConfig {
         if self.engine.wasm_backtrace_max_frames == 0 {
             return Err("engine.wasm_backtrace_max_frames 必须 > 0".to_string());
         }
+        // D5：插件基线是 wasip3 + 组件模型异步（wasmtime-wasi p3），关掉会让
+        // 随包插件全部实例化失败——灰度开关写错不得静默生效
+        if !self.engine.tuning.component_model_async {
+            return Err(
+                "engine.tuning.component_model_async 必须为 true（BedCode 插件基线为 wasip3 + 组件模型异步；\
+                 关掉会让随包插件全部实例化失败）"
+                    .to_string(),
+            );
+        }
         if self.engine.memory_reservation_bytes < self.store.max_memory_bytes as u64 {
             return Err(format!(
                 "engine.memory_reservation_bytes（{}）必须 >= store.max_memory_bytes（{}）——\
@@ -271,6 +432,120 @@ mod tests {
         assert_eq!(cfg.engine.memory_reservation_bytes, 256 * 1024 * 1024);
         assert!(cfg.engine.compile_cache);
         cfg.validate().expect("默认配置必须合法");
+    }
+
+    /// A 面回归锚点：`EngineTuning` 默认值逐字等于写死前的历史行为——
+    /// 显式钉死组 = 三个写死字面量，跟随默认组 = 一律 `None`（不调用 wasmtime API）。
+    /// 任何一个默认值漂移都会让「开放配置」变成「静默行为变更」
+    #[test]
+    fn tuning_defaults_match_current_hardcoded_behavior() {
+        let tuning = EngineTuning::default();
+        // 显式钉死组（runtime.rs 构建 Engine 时的历史字面量）
+        assert!(tuning.component_model_async);
+        assert_eq!(tuning.backtrace_details, BacktraceDetails::Environment);
+        assert!(!tuning.memory_may_move, "内存预留即硬顶：基址恒定、不允许搬移");
+        // 跟随默认组：一律不调用 wasmtime API（否则锁版升级会带进行为变更）
+        assert_eq!(tuning.debug_info, None);
+        assert_eq!(tuning.native_unwind_info, None);
+        assert_eq!(tuning.parallel_compilation, None);
+        assert_eq!(tuning.opt_level, None);
+        assert_eq!(tuning.profiling, None);
+        assert_eq!(tuning.epoch_interruption, None);
+        assert_eq!(tuning.component_model_error_context, None);
+        assert_eq!(tuning.wasm_threads, None);
+        assert_eq!(tuning.wasm_simd, None);
+        assert_eq!(tuning.wasm_bulk_memory, None);
+        assert_eq!(tuning.wasm_multi_memory, None);
+        assert_eq!(tuning.wasm_tail_call, None);
+        assert_eq!(tuning.wasm_reference_types, None);
+        assert_eq!(tuning.wasm_memory64, None);
+    }
+
+    /// `debug_info` 推导规则四分支：显式值优先 / 调试模式推导 / 非调试保持 `None` /
+    /// 显式 `false` 不被推导翻回（显式配置永不被覆盖）
+    #[test]
+    fn tuning_resolve_derives_debug_info_only_for_debug_mode() {
+        let base = EngineTuning::default();
+        // 非调试模式：不推导（逐字继承 wasmtime 默认 = 不产 DWARF）
+        assert_eq!(base.resolve(false).debug_info, None);
+        // 调试模式：推导为 true，让 WASMTIME_BACKTRACE_DETAILS 真能拿到 file:line
+        assert_eq!(base.resolve(true).debug_info, Some(true));
+        // 显式配置优先于推导
+        let explicit_true = EngineTuning {
+            debug_info: Some(true),
+            ..base.clone()
+        };
+        assert_eq!(explicit_true.resolve(false).debug_info, Some(true));
+        let explicit_false = EngineTuning {
+            debug_info: Some(false),
+            ..base.clone()
+        };
+        assert_eq!(
+            explicit_false.resolve(true).debug_info,
+            Some(false),
+            "显式 false 不得被调试模式推导翻回（显式配置永不被覆盖）"
+        );
+        // resolve 不改原值（纯函数）
+        assert_eq!(base.debug_info, None);
+        // 其余字段逐字透传
+        let tuned = EngineTuning {
+            opt_level: Some(OptLevel::None),
+            profiling: Some(Profiling::JitDump),
+            ..base
+        };
+        let resolved = tuned.resolve(true);
+        assert_eq!(resolved.opt_level, Some(OptLevel::None));
+        assert_eq!(resolved.profiling, Some(Profiling::JitDump));
+        assert!(resolved.component_model_async);
+    }
+
+    /// 配置文件接线：`wasm-core.json` 的 `engine.tuning` 节可解析（枚举按 kebab-case），
+    /// 未知取值必须报错并带文件路径 + 操作上下文（不得静默回落）
+    #[test]
+    fn tuning_loads_from_config_file_and_rejects_invalid_enum() {
+        let dir = std::env::temp_dir().join(format!("wasm-core-cfg-tuning-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("wasm-core.json");
+
+        std::fs::write(
+            &path,
+            r#"{"engine":{"tuning":{"component_model_async":true,"backtrace_details":"disable",
+                "memory_may_move":true,"debug_info":true,"opt_level":"speed-and-size",
+                "profiling":"jit-dump","parallel_compilation":false}}}"#,
+        )
+        .unwrap();
+        let cfg = CoreConfig::load_from(&path).expect("合法 tuning 配置应加载成功");
+        assert_eq!(cfg.engine.tuning.backtrace_details, BacktraceDetails::Disable);
+        assert!(cfg.engine.tuning.memory_may_move);
+        assert_eq!(cfg.engine.tuning.debug_info, Some(true));
+        assert_eq!(cfg.engine.tuning.opt_level, Some(OptLevel::SpeedAndSize));
+        assert_eq!(cfg.engine.tuning.profiling, Some(Profiling::JitDump));
+        assert_eq!(cfg.engine.tuning.parallel_compilation, Some(false));
+
+        // 缺省字段回落默认（不因新增字段破坏旧配置文件）
+        std::fs::write(&path, r#"{"engine":{"tuning":{"debug_info":true}}}"#).unwrap();
+        let cfg = CoreConfig::load_from(&path).expect("只写一个字段应回落其余默认");
+        assert_eq!(cfg.engine.tuning.debug_info, Some(true));
+        assert!(cfg.engine.tuning.component_model_async, "未写字段须回落默认");
+        assert_eq!(cfg.engine.tuning.backtrace_details, BacktraceDetails::Environment);
+
+        // 非法枚举取值：报错须带文件路径 + 操作上下文（不留「以为生效了」的静默）
+        std::fs::write(&path, r#"{"engine":{"tuning":{"opt_level":"turbo"}}}"#).unwrap();
+        let err = CoreConfig::load_from(&path).expect_err("未知枚举取值必须报错");
+        let msg = format!("{err}");
+        assert!(msg.contains("解析内核配置文件"), "错误须带操作上下文: {msg}");
+        assert!(msg.contains("wasm-core.json"), "错误须带文件路径: {msg}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// D5：`component_model_async=false` 硬拒（关掉会让随包插件全部实例化失败）
+    #[test]
+    fn validate_rejects_component_model_async_disabled() {
+        let mut cfg = CoreConfig::default();
+        cfg.engine.tuning.component_model_async = false;
+        let err = cfg.validate().expect_err("关掉组件异步必须被拒");
+        assert!(err.contains("component_model_async"), "错误须指明字段: {err}");
+        assert!(err.contains("wasip3"), "错误须说明后果: {err}");
     }
 
     /// 票 06 P1：调用模型开关——默认 mutex（回退窗口）；配置文件按 kebab-case
