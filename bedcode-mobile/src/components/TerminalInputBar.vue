@@ -500,7 +500,10 @@ const completionItems = computed(() => {
 /** 点选后关闭弹层（对齐 agent 内部补全行为）；下次输入时自动恢复 */
 const completionDismissed = ref(false)
 
-// flush:sync —— applyCompletion 写入后同步复位标记，保证点选必然关闭弹层
+// 两个 watcher，两种 flush（各管各的时序）：
+// ① sync —— applyCompletion 写入后同步复位 completionDismissed，保证点选必然
+// 关闭弹层（若改 post，watcher 晚于 applyCompletion 的置位执行，会把
+// 置位覆盖回 false → 点选后弹层重新出现，实测回归）。此 watcher 不读 DOM。
 watch(inputText, () => {
   completionDismissed.value = false
   // 用户开始打字时收起快捷键面板，避免补全弹层与面板重叠遮挡
@@ -508,12 +511,20 @@ watch(inputText, () => {
     showShortcutsPanel.value = false
     emit('shortcutsPanelToggle', 0)
   }
-  // 高度跟随换行数。不能用 @input 事件驱动：v-model 的 input 监听器注册晚于
-  // @input（指令 created 钩子在 props 之后），事件处理器里读到的是上一次的
-  // value——换行增高永远滞后一个输入事件（连按回车时表现为不增高）。
-  // watch 在 ref 更新后触发，含软键盘输入/IME 提交/程序化填充全部路径
-  adjustTextareaHeight()
 }, { flush: 'sync' })
+
+// ② post —— 高度跟随换行数。不能用 @input 事件驱动：v-model 的 input
+// 监听器注册晚于 @input（指令 created 钩子在 props 之后），事件处理器里读到
+// 的是上一次的 value——换行增高永远滞后一个输入事件（连按回车时表现为不增高）。
+// watch 在 ref 更新后触发，含软键盘输入/IME 提交/程序化填充全部路径。
+// flush: 'post'（而非 sync）：adjustTextareaHeight 读的是 textarea.scrollHeight，
+// 即 DOM 里的实际 value——程序化清空（发送/执行后 inputText=''）时 render
+// effect 写入新 value 还在调度队列里，sync watcher 先跑会读到旧多行内容，
+// 高度停留在多行不回单行（实测 bug）。post watcher 在 render effect 之后跑，
+// DOM 永远是最新值；输入路径 DOM 值本就先于事件更新，同一帧内无视觉滞后
+watch(inputText, () => {
+  adjustTextareaHeight()
+}, { flush: 'post' })
 
 const showCompletion = computed(() =>
   isInputFocused.value && !completionDismissed.value && completionItems.value.length > 0
@@ -522,7 +533,7 @@ const showCompletion = computed(() =>
 /** 点选补全项：整体填充输入框并保持焦点，由用户决定补全/发送 */
 function applyCompletion(command: string) {
   inputText.value = command
-  // 覆盖 sync watcher 的复位：点选后弹层关闭，等下一次真实输入再出现
+  // 覆盖 inputText watcher 的复位：点选后弹层关闭，等下一次真实输入再出现
   completionDismissed.value = true
   nextTick(() => {
     adjustTextareaHeight()
