@@ -142,7 +142,9 @@ export function startDeviceNotifications(context: PluginContext): Disposable {
 
   const connected = context.events.on('device:connected', (payload: DeviceEventPayload) => {
     if (tracker.observe(payload, 'connected') !== 'connected') return
-    toast.info(
+    // 设备连接成功 = 正向反馈，用 success 绿（与断连的 warning 黄对称）；
+    // 不要用 info——info 在默认主题下走中性主色，观感近似黑白
+    toast.success(
       context.i18n.t('session.notification.deviceConnected', {
         name: deviceDisplayName(payload ?? {}, mobileDevice),
       }),

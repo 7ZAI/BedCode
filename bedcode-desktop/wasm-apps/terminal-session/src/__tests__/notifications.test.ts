@@ -22,13 +22,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 
-const { toastInfo, toastWarning } = vi.hoisted(() => ({
+const { toastInfo, toastWarning, toastSuccess } = vi.hoisted(() => ({
   toastInfo: vi.fn(),
   toastWarning: vi.fn(),
+  toastSuccess: vi.fn(),
 }))
 
 vi.mock('vue-sonner', () => ({
-  toast: { info: toastInfo, warning: toastWarning, success: vi.fn(), error: vi.fn() },
+  toast: { info: toastInfo, warning: toastWarning, success: toastSuccess, error: vi.fn() },
 }))
 
 import {
@@ -76,6 +77,7 @@ function makeContext(seed: unknown = { connections: [] }, seedFails = false) {
 beforeEach(() => {
   toastInfo.mockClear()
   toastWarning.mockClear()
+  toastSuccess.mockClear()
 })
 
 // ==================== C1 身份主键 ====================
@@ -163,15 +165,16 @@ describe('createDeviceOnlineTracker', () => {
 // ==================== C7-C10 接线 ====================
 
 describe('startDeviceNotifications', () => {
-  it('C9 上线事件 → toast.info 一次，文案键与设备名参数逐字正确', async () => {
+  it('C9 上线事件 → toast.success 一次（连接成功用绿，非 info 黑白），文案键与设备名参数逐字正确', async () => {
     const { context, handlers, t } = makeContext()
     const disposable = startDeviceNotifications(context)
 
     handlers.get('device:connected')!({ fingerprint: 'fp-1', device_name: 'Phone A' })
 
-    expect(toastInfo).toHaveBeenCalledTimes(1)
+    expect(toastSuccess).toHaveBeenCalledTimes(1)
+    expect(toastInfo).not.toHaveBeenCalled()
     expect(t).toHaveBeenCalledWith('session.notification.deviceConnected', { name: 'Phone A' })
-    expect(String(toastInfo.mock.calls[0][0])).toContain('Phone A')
+    expect(String(toastSuccess.mock.calls[0][0])).toContain('Phone A')
     disposable.dispose()
   })
 
@@ -195,7 +198,7 @@ describe('startDeviceNotifications', () => {
 
     expect(t).not.toHaveBeenCalledWith('session.notification.mobileDevice')
     expect(t).toHaveBeenCalledWith('session.notification.deviceConnected', { name: 'Pixel 9' })
-    expect(String(toastInfo.mock.calls[0][0])).toContain('Pixel 9')
+    expect(String(toastSuccess.mock.calls[0][0])).toContain('Pixel 9')
     disposable.dispose()
   })
 
@@ -218,7 +221,7 @@ describe('startDeviceNotifications', () => {
     handlers.get('device:connected')!({ fingerprint: 'fp-1' })
     handlers.get('device:connected')!({ fingerprint: 'fp-1' })
 
-    expect(toastInfo).toHaveBeenCalledTimes(1)
+    expect(toastSuccess).toHaveBeenCalledTimes(1)
     disposable.dispose()
   })
 
@@ -244,7 +247,7 @@ describe('startDeviceNotifications', () => {
 
     // 基线内设备重复上线静默
     handlers.get('device:connected')!({ fingerprint: 'fp-seeded' })
-    expect(toastInfo).not.toHaveBeenCalled()
+    expect(toastSuccess).not.toHaveBeenCalled()
 
     // 基线内设备断开 → 提示（若未种子化会被误吞）
     handlers.get('device:disconnected')!({ fingerprint: 'fp-seeded', device_name: 'Tablet' })
@@ -261,7 +264,7 @@ describe('startDeviceNotifications', () => {
     await vi.waitFor(() => expect(warnSpy).toHaveBeenCalled())
 
     handlers.get('device:connected')!({ fingerprint: 'fp-1' })
-    expect(toastInfo).toHaveBeenCalledTimes(1)
+    expect(toastSuccess).toHaveBeenCalledTimes(1)
 
     warnSpy.mockRestore()
     disposable.dispose()

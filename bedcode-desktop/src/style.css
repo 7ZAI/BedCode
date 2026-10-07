@@ -97,6 +97,8 @@ html.platform-linux {
   --color-warning-light: rgba(245, 158, 11, 0.16);
   --color-danger: #ef4444;
   --color-danger-light: rgba(239, 68, 68, 0.12);
+  --color-info: #2563eb;
+  --color-info-light: rgba(37, 99, 235, 0.12);
 
   /* Radius */
   --radius-card: 10px;
@@ -153,6 +155,8 @@ html.platform-linux {
   --color-success-light: rgba(34, 197, 94, 0.15);
   --color-warning-light: rgba(245, 158, 11, 0.15);
   --color-danger-light: rgba(239, 68, 68, 0.15);
+  --color-info: #60a5fa;
+  --color-info-light: rgba(96, 165, 250, 0.14);
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.2);
   --shadow-card-hover: 0 4px 16px rgba(0, 0, 0, 0.35);
   --shadow-input-focus: 0 0 0 3px rgba(236, 232, 220, 0.12);
@@ -831,7 +835,8 @@ html[data-page-fx='zoom'] .page-leave-to {
 
 /* ==================== Toast 等级配色（vue-sonner richColors 变量覆盖） ====================
  * 覆盖 sonner 默认 HSL 色板，改用主题语义 token：
- * 成功绿 --color-success / 警告黄 --color-warning / 错误红 --color-danger / info 用 --color-primary。
+ * 成功绿 --color-success / 警告黄 --color-warning / 错误红 --color-danger / 信息蓝 --color-info
+ * （info 用独立蓝而非 --color-primary：默认主题主色是中性近黑，会呈现黑白观感）。
  * 背景取 -light 淡色、边框用 color-mix 淡化语义色、浅色模式文字加深 35% 保证对比度；
  * 深色模式文字直接用亮色语义色。default/loading 类通知保持卡片统一风格。 */
 [data-sonner-toaster][data-sonner-theme='light'] {
@@ -847,9 +852,9 @@ html[data-page-fx='zoom'] .page-leave-to {
   --error-border: color-mix(in srgb, var(--color-danger) 35%, transparent) !important;
   --error-text: color-mix(in srgb, var(--color-danger) 65%, black) !important;
 
-  --info-bg: var(--color-primary-light) !important;
-  --info-border: color-mix(in srgb, var(--color-primary) 30%, transparent) !important;
-  --info-text: color-mix(in srgb, var(--color-primary) 65%, black) !important;
+  --info-bg: var(--color-info-light) !important;
+  --info-border: color-mix(in srgb, var(--color-info) 30%, transparent) !important;
+  --info-text: color-mix(in srgb, var(--color-info) 65%, black) !important;
 }
 
 [data-sonner-toaster][data-sonner-theme='dark'] {
@@ -865,9 +870,9 @@ html[data-page-fx='zoom'] .page-leave-to {
   --error-border: color-mix(in srgb, var(--color-danger) 25%, transparent) !important;
   --error-text: var(--color-danger) !important;
 
-  --info-bg: var(--color-primary-light) !important;
-  --info-border: color-mix(in srgb, var(--color-primary) 20%, transparent) !important;
-  --info-text: var(--color-primary) !important;
+  --info-bg: var(--color-info-light) !important;
+  --info-border: color-mix(in srgb, var(--color-info) 20%, transparent) !important;
+  --info-text: var(--color-info) !important;
 }
 
 /* default/loading 类通知：卡片统一风格，随主题 token（bg-card / border / text）联动 */
