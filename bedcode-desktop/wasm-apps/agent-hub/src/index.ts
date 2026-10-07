@@ -107,12 +107,12 @@ const DATEPICKER_THEME_OVERRIDES = `
      font-family: inherit（自定义属性写 inherit 只是取父级的同名 token，
      等于没改——这是自定义属性与真实属性的关键差别） */
   --dp-border-radius: 6px;
-  --dp-font-size: 12px;
-  --dp-preview-font-size: 12px;
+  --dp-font-size: var(--font-size-label);
+  --dp-preview-font-size: var(--font-size-label);
   --dp-time-picker-height: 170px;
 }
 .dp__menu {
-  font-size: 12px;
+  font-size: var(--font-size-label);
 }
 `
 

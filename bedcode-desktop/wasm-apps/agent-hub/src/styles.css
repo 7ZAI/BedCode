@@ -2532,7 +2532,7 @@
   background: var(--color-primary-light);
   /* --color-primary 直接当文字在 sunset/light 的 primary-light 底上只有 3.42:1 */
   color: var(--ah-text-data);
-  font-size: 10px;
+  font-size: var(--font-size-sm);
   line-height: 16px;
   font-weight: 600;
 }
