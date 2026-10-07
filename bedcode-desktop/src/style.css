@@ -719,7 +719,7 @@ html.anim-disabled *::after {
 }
 
 /* 带内边距的过渡容器（替代原先散落的 Tailwind p-*，保证补偿量与内边距同源）。
-   等价 Tailwind `px-6 py-5`；新增带内边距的过渡容器时按需加一档，别把裸 px-*/py-*
+   等价 Tailwind `px-6 py-5`；新增带内边距的过渡容器时按需加一档，别把裸 px-* / py-*
    写回容器上——那样补偿量与内边距就变成两个来源。 */
 .page-swap-pad-lg {
   --page-swap-pad-x: 1.5rem;

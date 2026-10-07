@@ -10,7 +10,7 @@
 | 桌面端打包 | `bedcode-desktop` | `pnpm run tauri:build`（`-- --bundles deb` 只出 DEB） |
 | 桌面端前端构建 | `bedcode-desktop` | `pnpm run build`（`build:fast` 跳过类型检查） |
 | Android 开发 | `bedcode-mobile` | `pnpm run tauri:android:dev`（`:dev:log` 额外落盘 logcat） |
-| Android Debug APK | `bedcode-mobile` | `pnpm run tauri:android:build`（`:build:fast` / `:build:emulator` / `:build:all`） |
+| Android Debug APK | `bedcode-mobile` | `pnpm run tauri:android:build`（实际产出 **release** APK；`:build:fast` / `:build:emulator` / `:build:all`） |
 | 前端测试 | 各端根目录 | `pnpm run test:run` —— **禁 `pnpm run test`** |
 | Rust 测试 | 见 §2 | `cargo test`（**每个 crate 在自己根目录跑**） |
 | 跨端互连测试 | `cross-end-tests` | `cargo test` |
@@ -114,8 +114,8 @@ pnpm run tauri:android:dev        # Android 热加载开发（真机 / 模拟器
 pnpm run tauri:android:dev:log    # 同上 + logcat 落盘 .dev-logs/android-dev.YYYY-MM-DD.log
 pnpm run build                    # 前端完整构建
 pnpm run tauri:android:init       # 初始化 Android 工程（首次）
-pnpm run tauri:android:build      # Debug APK（arm64）
-pnpm run tauri:android:build:fast # 快速 Debug APK
+pnpm run tauri:android:build      # Release APK（arm64，默认 profile）
+pnpm run tauri:android:build:fast # 快速 Release APK
 pnpm run tauri:android:build:emulator   # 模拟器 APK（x86_64）
 pnpm run tauri:android:build:all  # 多架构 Debug APK
 pnpm exec tauri android build --release   # Release APK（需签名）

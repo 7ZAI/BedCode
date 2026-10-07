@@ -127,9 +127,6 @@ wasm 应用层（业务事实面：各自私有库 + 各自前端状态 + 自身
 
 方向：闸门与通道的具体接口、权限位、审批与回收落点见 `bedcode-desktop/docs/code-map.md` Core Modules 段与 `docs/adr/0029-plugin-concurrency-owner-and-on-demand-async.md`。宿主直调命令面（`commands.rs` / `src/composables/`）**只保留外壳**——业务面一律走插件命令面。
 
-### 5.3 已退役面 · 不得回接
-
-会话域（`src-tauri/src/session/`）、`protocol/`、`events/`、`host-session` / `host-terminal` 及其权限位、宿主主库业务表、peer 旧快照与旧参数、一次性迁移链等一律不回接；**清单与退役理由以 ADR 0022 为准**（不在本文件复制）。回接任一项 = 越 §5.1 红线。
 
 ### 5.4 双端差异（勿把桌面结论套到移动端）
 
