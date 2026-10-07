@@ -242,7 +242,11 @@ body {
  * （各视图的 flex-1 内容滚动容器、SettingsSubPage）。不要给以下形态加：
  *   - overflow:hidden 的布局包装层（含终端页整条链）——永不显示滚动条，纯死区；
  *   - 定宽的弹层/下拉（modal、输入栏补全、文件侧栏）——常驻 8px 会把面板内容挤窄。
- * 旧 WebView 不支持 scrollbar-gutter 时静默忽略（不产生布局错位，只是无防抖）。 */
+ * 旧 WebView 不支持 scrollbar-gutter 时静默忽略（不产生布局错位，只是无防抖）。
+ *
+ * 2026-10-07：移动端已整体隐藏原生滚动条（styles/mobile.css 末尾规则，width:0），
+ * 滚动条不再占位，gutter 槽位失去载体——mobile.css 对该类统一复位为 auto，
+ * 此类保留仅作「曾需要防宽度抖动」的历史标注，不再产生实际布局效果。 */
 .scrollbar-gutter-stable {
   scrollbar-gutter: stable;
 }

@@ -848,3 +848,37 @@ html:not(.dark) .mobile-ui {
   --mobile-palette-swatch-sunset: #d9532a;
   --mobile-palette-swatch-violet: #6d4fc6;
 }
+
+/* ==================== 移动端隐藏原生滚动条 ==================== */
+/* 移动端以触摸滚动为主（惯性滚动已由 WebView 提供），原生占位式滚动条
+ * （8px 参与布局）既挤窄内容区又无视觉价值：整个移动端统一隐藏。
+ *
+ * 覆盖规则（与隐藏同源冲突时，显式样式的更高特异性优先）：
+ *  - 代码查看器（FileViewerModal .viewer-body）保留 4px 细条滚动条——
+ *    其规则只覆盖 width/height，故本规则不用 display:none（display 无竞争对手
+ *    会被继承生效、连带把细条也藏掉），只用 width:0/height:0 归零，细条规则
+ *    靠更高特异性覆盖回 4px；
+ *  - 终端（terminal.css）xterm 滚动条已各自显式隐藏；
+ *  - 终端输入栏（TerminalInputBar）各面板已各自 scrollbar-width: none。
+ *
+ * 隐藏后原 scrollbar-gutter: stable 预留的 8px 槽位失去载体，会在
+ * Chromium 变体间产生不可预测的空白（部分实现仍按占位滚动条厚度预留），
+ * 一并复位为 auto——各视图的 scrollbar-gutter-stable 类保留不删，仅作
+ * 「该容器曾需要防宽度抖动」的历史标注。
+ */
+::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: transparent;
+}
+
+.scrollbar-gutter-stable {
+  scrollbar-gutter: auto;
+}
