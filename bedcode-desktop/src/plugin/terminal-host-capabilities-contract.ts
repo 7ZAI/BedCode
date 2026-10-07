@@ -21,9 +21,12 @@ export interface TerminalSettingsAccessor {
   getTheme(): string
   getBgImage(): string
   getBgOpacity(): number
+  /** 终端字间距（px，0-4；0 = 不加） */
+  getLetterSpacing(): number
   getServerPort(): number
   save(patch: {
     fontSize?: number
+    letterSpacing?: number
     theme?: string
     bgImage?: string
     bgOpacity?: number

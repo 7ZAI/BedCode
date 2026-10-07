@@ -370,7 +370,10 @@ async function handleStartSession(config: SessionConfigSummary) {
     // 网格预算前等内置 CJK 等宽字体就绪：格宽按 fallback 量（~0.6em）与按内置量
     // （0.5em）差约 20% 列，起步尺寸会明显偏小（挂载后 fit 会校准，但首帧已经错）
     await ensureTerminalFontLoaded(assistStore.settings.terminalFontSize)
-    const size = computeDeviceDefaultGridSize(assistStore.settings.terminalFontSize)
+    const size = computeDeviceDefaultGridSize(
+      assistStore.settings.terminalFontSize,
+      assistStore.settings.terminalLetterSpacing ?? 0,
+    )
     const result = await connection.startSession(config.id, size)
     if (result.sessionId) {
       // 如果返回了会话信息，添加到本地列表；否则手动加载

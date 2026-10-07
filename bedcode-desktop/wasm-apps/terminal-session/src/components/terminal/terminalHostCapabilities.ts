@@ -73,14 +73,17 @@ export function createFallbackHostCapabilities(): TerminalHostCapabilities {
   let theme = 'dracula'
   let bgImage = ''
   let bgOpacity = 30
+  let letterSpacing = 0
   const accessor: TerminalSettingsAccessor = {
     getFontSize: () => fontSize,
     getTheme: () => theme,
     getBgImage: () => bgImage,
     getBgOpacity: () => bgOpacity,
+    getLetterSpacing: () => letterSpacing,
     getServerPort: () => 8080,
     save: (patch) => {
       if (patch.fontSize != null) fontSize = patch.fontSize
+      if (patch.letterSpacing != null) letterSpacing = patch.letterSpacing
       if (patch.theme != null) theme = patch.theme
       if (patch.bgImage != null) bgImage = patch.bgImage
       if (patch.bgOpacity != null) bgOpacity = patch.bgOpacity

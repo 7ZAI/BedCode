@@ -141,6 +141,7 @@ export default {
       moreTools: '更多工具',
       terminalSettings: '终端设置',
       fontSize: '字体大小',
+      letterSpacing: '字间距',
       theme: '主题',
       shortcutCount: '快捷键数量',
       persistentToolbar: '常驻工具栏',

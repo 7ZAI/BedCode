@@ -56,6 +56,7 @@ static PROPERTY_COMMENTS: &[(&str, &str)] = &[
     ("ui.terminal_font_size", "终端字体大小"),
     ("ui.terminal_font_family", "终端字体名称"),
     ("ui.terminal_theme", "终端配色主题名"),
+    ("ui.terminal_letter_spacing", "终端字间距（px，0-4；0 = 不加，字间留白仅来自字体自身）"),
     ("ui.language", "语言偏好（zh-CN / en）"),
     (
         "ui.terminal_bg_image",
@@ -127,6 +128,7 @@ static PROPERTY_GROUPS: &[(&str, &[&str])] = &[
             "ui.terminal_font_size",
             "ui.terminal_font_family",
             "ui.terminal_theme",
+            "ui.terminal_letter_spacing",
             "ui.language",
             "ui.terminal_bg_image",
             "ui.terminal_bg_opacity",
@@ -193,6 +195,9 @@ pub struct UiConfig {
     /// 终端配色主题名
     #[serde(default = "default_terminal_theme")]
     pub terminal_theme: String,
+    /// 终端字间距（px，0-4；0 = 不加，字间留白仅来自字体自身）
+    #[serde(default = "default_terminal_letter_spacing")]
+    pub terminal_letter_spacing: u8,
     /// 语言偏好（zh-CN / en）
     #[serde(default = "default_language")]
     pub language: String,
@@ -209,6 +214,10 @@ pub struct UiConfig {
 
 fn default_terminal_theme() -> String {
     "dracula".to_string()
+}
+
+fn default_terminal_letter_spacing() -> u8 {
+    0
 }
 
 fn default_theme_palette() -> String {
@@ -240,6 +249,7 @@ impl Default for UiConfig {
             terminal_font_size: 12,
             terminal_font_family: "Consolas".to_string(),
             terminal_theme: default_terminal_theme(),
+            terminal_letter_spacing: default_terminal_letter_spacing(),
             language: default_language(),
             terminal_bg_image: None,
             terminal_bg_opacity: default_terminal_bg_opacity(),
@@ -463,6 +473,11 @@ impl AppConfig {
                 terminal_font_size: parse_value(props, "ui.terminal_font_size", 12),
                 terminal_font_family: parse_value(props, "ui.terminal_font_family", "Consolas".to_string()),
                 terminal_theme: parse_value(props, "ui.terminal_theme", default_terminal_theme()),
+                terminal_letter_spacing: parse_value(
+                    props,
+                    "ui.terminal_letter_spacing",
+                    default_terminal_letter_spacing(),
+                ),
                 language: parse_value(props, "ui.language", default_language()),
                 terminal_bg_image: parse_optional(props, "ui.terminal_bg_image"),
                 terminal_bg_opacity: parse_value(props, "ui.terminal_bg_opacity", default_terminal_bg_opacity()),
@@ -566,6 +581,10 @@ impl AppConfig {
             self.ui.terminal_font_family.clone(),
         );
         map.insert("ui.terminal_theme".to_string(), self.ui.terminal_theme.clone());
+        map.insert(
+            "ui.terminal_letter_spacing".to_string(),
+            self.ui.terminal_letter_spacing.to_string(),
+        );
         map.insert("ui.language".to_string(), self.ui.language.clone());
         map.insert(
             "ui.terminal_bg_image".to_string(),
@@ -688,6 +707,8 @@ channels.lifecycle_capacity=16
         assert_eq!(config.ui.terminal_theme, "dracula");
         assert_eq!(config.ui.terminal_bg_image, None);
         assert_eq!(config.ui.terminal_bg_opacity, 30);
+        // 字间距缺省回退 0（旧配置文件无该键不得改变既有行为）
+        assert_eq!(config.ui.terminal_letter_spacing, 0);
     }
 
     #[test]
@@ -716,6 +737,25 @@ channels.lifecycle_capacity=16
         assert_eq!(config.ui.terminal_bg_image, config2.ui.terminal_bg_image);
         assert_eq!(config.ui.terminal_bg_opacity, config2.ui.terminal_bg_opacity);
         assert_eq!(config.terminal.default_cols, config2.terminal.default_cols);
+    }
+
+    #[test]
+    fn test_terminal_letter_spacing_override_roundtrip() {
+        // 正例：配置里写 3px → 解析生效；序列化再解析保持同值
+        let mut props = HashMap::new();
+        props.insert("ui.terminal_letter_spacing".to_string(), "3".to_string());
+        let config = AppConfig::from_properties(&props);
+        assert_eq!(config.ui.terminal_letter_spacing, 3);
+
+        let content = config.to_properties_string();
+        let reparsed = AppConfig::from_properties(&parse_properties(&content));
+        assert_eq!(reparsed.ui.terminal_letter_spacing, 3);
+
+        // 反例/边界：非法值（非数字 / 越界）按缺省回退 0，不炸
+        props.insert("ui.terminal_letter_spacing".to_string(), "abc".to_string());
+        assert_eq!(AppConfig::from_properties(&props).ui.terminal_letter_spacing, 0);
+        props.insert("ui.terminal_letter_spacing".to_string(), "99".to_string());
+        assert_eq!(AppConfig::from_properties(&props).ui.terminal_letter_spacing, 99);
     }
 
     #[test]

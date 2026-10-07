@@ -61,6 +61,7 @@ const en: MessageSchema = {
   'session.terminal.settings': 'Settings',
   'session.terminal.theme': 'Terminal Theme',
   'session.terminal.fontSize': 'Font Size',
+  'session.terminal.letterSpacing': 'Letter Spacing',
   'session.terminal.clearScreen': 'Clear Screen',
   'session.terminal.refreshFormat': 'Refresh Format',
   'session.terminal.minimize': 'Minimize',

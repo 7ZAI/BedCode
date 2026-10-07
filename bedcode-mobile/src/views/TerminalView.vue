@@ -121,6 +121,7 @@
       :font-size="terminalSettings.fontSize"
       :theme="terminalSettings.theme"
       :is-theme-user-set="terminalSettings.isThemeUserSet"
+      :letter-spacing="terminalSettings.letterSpacing"
       :quick-bar-count="assistStore.settings.quickBarCount"
       :toolbar-items="assistStore.settings.headerToolbarItems || ['folder']"
       :all-toolbar-items="ALL_TOOLBAR_ITEMS"
@@ -548,11 +549,12 @@ function handleClearConfirm() {
   showClearConfirm.value = false
 }
 
-/** 设置确认：持久化 + 应用主题 + 字号变更后重排并同步 PTY */
+/** 设置确认：持久化 + 应用主题 + 字号/字间距变更后重排并同步 PTY */
 function handleSettingsConfirm(settings: TerminalSettings) {
   terminalSettings.value.fontSize = settings.fontSize
   terminalSettings.value.theme = settings.theme
   terminalSettings.value.isThemeUserSet = settings.isThemeUserSet
+  terminalSettings.value.letterSpacing = settings.letterSpacing
 
   assistStore.saveSettings({
     quickBarCount: settings.quickBarCount,
@@ -560,15 +562,18 @@ function handleSettingsConfirm(settings: TerminalSettings) {
     terminalFontSize: terminalSettings.value.fontSize,
     terminalTheme: terminalSettings.value.isThemeUserSet ? terminalSettings.value.theme : null,
     isTerminalThemeUserSet: terminalSettings.value.isThemeUserSet,
+    terminalLetterSpacing: terminalSettings.value.letterSpacing,
     terminalOnboardingPending: settings.onboardingPending,
   })
 
   applyTerminalTheme()
-  // 字号变更后重排：显式更新 xterm 字号 + 走统一口径 refit（fitWithMargin →
+  // 字号/字间距变更后重排：显式更新 xterm 选项 + 走统一口径 refit（fitWithMargin →
   // applyDprFit，DPR 感知 + 行尾安全余量），不再走裸 fitAddon.fit()；
-  // 字体度量需重新测量，延迟与原实现一致；尺寸变化须同步 PTY 重排行宽
+  // 字体度量需重新测量，延迟与原实现一致；尺寸变化须同步 PTY 重排行宽。
+  // letterSpacing 选项让格宽 = 字宽 + 间距（列数变少），网格仍严格对齐。
   if (terminalRef.value) {
     terminalRef.value.options.fontSize = settings.fontSize
+    terminalRef.value.options.letterSpacing = settings.letterSpacing
   }
   setTimeout(() => {
     if (renderer.fitWithMargin()) resize.syncTerminalSizeToHost()

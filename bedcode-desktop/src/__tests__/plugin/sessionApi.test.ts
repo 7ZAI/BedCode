@@ -119,7 +119,18 @@ describe('PluginContext.session 终端窗口原语', () => {
     const ctx = await makeContext(['session:read'])
 
     await expect(ctx.session.predictTerminalSize()).resolves.toEqual({ cols: 120, rows: 30 })
-    expect(computeDesktopInitialTerminalSize).toHaveBeenCalledWith(15, { widthRatio: 0.6 })
+    expect(computeDesktopInitialTerminalSize).toHaveBeenCalledWith(15, {
+      widthRatio: 0.6,
+      letterSpacing: 0,
+    })
+
+    // 字间距非 0 时同样传递给宿主预测（初始网格口径与渲染格宽一致）
+    settingsStore.settings.ui.terminal_letter_spacing = 2
+    await expect(ctx.session.predictTerminalSize()).resolves.toEqual({ cols: 120, rows: 30 })
+    expect(computeDesktopInitialTerminalSize).toHaveBeenLastCalledWith(15, {
+      widthRatio: 0.6,
+      letterSpacing: 2,
+    })
   })
 
   it('C5 预测不可用（null）时原样返回，由宿主兜底默认网格', async () => {

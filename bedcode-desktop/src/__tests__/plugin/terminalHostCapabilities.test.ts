@@ -120,4 +120,19 @@ describe('宿主终端能力注入：背景图端口', () => {
 
     expect(invokedCommands()).toEqual(['save_app_settings'])
   })
+
+  it('C4b 字间距保存：落盘到 terminal_letter_spacing + getter 回读一致', async () => {
+    const { settings } = mountProvider()
+    await flushPromises()
+    invokeMock.mockClear()
+
+    settings.save({ letterSpacing: 3 })
+    await flushPromises()
+
+    const payload = invokeMock.mock.calls.find(([cmd]) => cmd === 'save_app_settings')?.[1] as {
+      settings: { ui: { terminal_letter_spacing?: number } }
+    }
+    expect(payload?.settings.ui.terminal_letter_spacing).toBe(3)
+    expect(settings.getLetterSpacing()).toBe(3)
+  })
 })

@@ -332,6 +332,25 @@
             </select>
           </div>
 
+          <!-- 字间距（xterm letterSpacing 选项：格宽同步膨胀，网格保持对齐） -->
+          <div>
+            <span
+              class="block mb-1.5 text-[calc(11px*var(--ui-scale))] uppercase tracking-wider text-[var(--text-tertiary)]"
+              >{{ t('session.terminal.letterSpacing') }}</span
+            >
+            <select
+              class="w-full h-8 rounded-[6px] px-2 cursor-pointer text-[calc(12px*var(--ui-scale))] bg-[var(--bg-card)] border border-[var(--border)] text-[var(--text-primary)] focus:outline-none focus:border-brand"
+              :value="settingsLetterSpacing"
+              @change="settingsLetterSpacing = Number(($event.target as HTMLSelectElement).value)"
+              @click.stop
+              @mousedown.stop
+            >
+              <option v-for="opt in letterSpacingSelectOptions" :key="opt.value" :value="opt.value">
+                {{ opt.label }}
+              </option>
+            </select>
+          </div>
+
           <!-- 背景图片 -->
           <div class="space-y-3">
             <div>
@@ -470,6 +489,16 @@ const settingsFontSize = computed({
     if (terminalPreviewRef.value) terminalPreviewRef.value.fontSize = value
   },
 })
+
+const settingsLetterSpacing = computed({
+  get: () => terminalPreviewRef.value?.letterSpacing ?? 0,
+  set: (value: number) => {
+    if (terminalPreviewRef.value) terminalPreviewRef.value.letterSpacing = value
+  },
+})
+
+// 设置面板字间距下拉选项（px，0-4）：0 = 不加（字间留白仅来自字体自身）
+const letterSpacingSelectOptions = [0, 1, 2, 3, 4].map((v) => ({ value: v, label: `${v}px` }))
 
 // 设置面板主题/字号下拉选项（label 由共享 Select 的 label prop 渲染）
 const themeSelectOptions = computed(() => Object.entries(TERMINAL_THEME_NAMES).map(([value, label]) => ({ value, label })))

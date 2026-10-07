@@ -58,6 +58,8 @@ export interface InputAssistantSettings {
   headerToolbarItems: string[]
   /** 终端字体大小（10-24） */
   terminalFontSize: number
+  /** 终端字间距（px，0-4；0 = 不加，字间留白仅来自字体自身） */
+  terminalLetterSpacing: number
   /** 终端主题名（dark/light/dracula 等），null 表示跟随外观设置 */
   terminalTheme: string | null
   /** 用户是否手动指定了终端主题（false 时跟随外观设置） */
@@ -79,6 +81,7 @@ const DEFAULT_SETTINGS: InputAssistantSettings = {
   floatingBall: false,
   headerToolbarItems: ['folder'],
   terminalFontSize: 12,
+  terminalLetterSpacing: 0,
   terminalTheme: null,
   isTerminalThemeUserSet: false,
   terminalOnboardingPending: true,

@@ -143,6 +143,7 @@ export default {
       moreTools: 'More Tools',
       terminalSettings: 'Terminal Settings',
       fontSize: 'Font Size',
+      letterSpacing: 'Letter Spacing',
       theme: 'Theme',
       shortcutCount: 'Shortcut Count',
       persistentToolbar: 'Persistent Toolbar',

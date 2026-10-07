@@ -159,13 +159,14 @@ export async function createPluginContext(info: PluginInfo): Promise<PluginConte
   const session: SessionAPI = {
     async predictTerminalSize(): Promise<{ cols: number; rows: number } | null> {
       requirePermission('session.predictTerminalSize')
-      // 窗口几何与字体测量都在宿主（终端窗口本体留宿主，spec D3）：字体大小取自
-      // 宿主设置，widthRatio 取窗口创建规则，插件无需感知宿主设置形状
+      // 窗口几何与字体测量都在宿主（终端窗口本体留宿主，spec D3）：字体大小与
+      // 字间距取自宿主设置，widthRatio 取窗口创建规则，插件无需感知宿主设置形状
       const [{ computeDesktopInitialTerminalSize, TERMINAL_WINDOW_WIDTH_RATIO }, { useSettingsStore }] =
         await Promise.all([import('@/utils/terminalInitialSize'), import('@/stores/settings')])
-      const fontSize = useSettingsStore().settings.ui.terminal_font_size
-      return computeDesktopInitialTerminalSize(fontSize, {
+      const settings = useSettingsStore().settings.ui
+      return computeDesktopInitialTerminalSize(settings.terminal_font_size, {
         widthRatio: TERMINAL_WINDOW_WIDTH_RATIO,
+        letterSpacing: settings.terminal_letter_spacing ?? 0,
       })
     },
     async openTerminal(target: { id: string; name: string }): Promise<boolean> {

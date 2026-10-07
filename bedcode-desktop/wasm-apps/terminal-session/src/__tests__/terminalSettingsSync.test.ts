@@ -24,6 +24,7 @@ function makeSettings(overrides?: Partial<TerminalSettingsAccessor>): TerminalSe
   const theme = ref('dracula')
   const bgImage = ref('')
   const bgOpacity = ref(30)
+  const letterSpacing = ref(0)
   const port = ref(8080)
   const listeners: Array<() => void> = []
   const accessor: TerminalSettingsAccessor = {
@@ -31,9 +32,11 @@ function makeSettings(overrides?: Partial<TerminalSettingsAccessor>): TerminalSe
     getTheme: () => theme.value,
     getBgImage: () => bgImage.value,
     getBgOpacity: () => bgOpacity.value,
+    getLetterSpacing: () => letterSpacing.value,
     getServerPort: () => port.value,
     save: vi.fn((patch) => {
       if (patch.fontSize != null) fontSize.value = patch.fontSize
+      if (patch.letterSpacing != null) letterSpacing.value = patch.letterSpacing
       if (patch.theme != null) theme.value = patch.theme
       if (patch.bgImage != null) bgImage.value = patch.bgImage
       if (patch.bgOpacity != null) bgOpacity.value = patch.bgOpacity
@@ -105,6 +108,7 @@ describe('useTerminalSettingsSync（插件迁移版）', () => {
     expect(sync.terminalTheme.value).toBe('dracula')
     expect(sync.bgImage.value).toBe('')
     expect(sync.bgOpacity.value).toBe(30)
+    expect(sync.letterSpacing.value).toBe(0)
   })
 
   it('字号变化应用 + 防抖持久化（正例）：options.fontSize 更新 + 300ms 后 save', async () => {
@@ -138,6 +142,36 @@ describe('useTerminalSettingsSync（插件迁移版）', () => {
     await nextTick()
     expect(terminal.options.fontSize).toBe(14 * 1.15)
     expect(sync.effectiveFontSize.value).toBe(14 * 1.15)
+  })
+
+  it('字间距变化应用 + 防抖持久化（正例）：options.letterSpacing 更新 + fit + 300ms 后 save', async () => {
+    const terminal = makeTerminal()
+    const settings = makeSettings()
+    const ctx = makeCtx({ terminalRef: shallowRef(terminal as any) })
+    const sync = useTerminalSettingsSync(ctx, settings, logger)
+    const { fitAndRefresh } = ctx.callbacks
+
+    sync.letterSpacing.value = 2
+    await nextTick()
+    expect(terminal.options.letterSpacing).toBe(2)
+    expect(fitAndRefresh).toHaveBeenCalled()
+    expect(settings.save).not.toHaveBeenCalled() // 防抖窗口内不保存
+
+    await vi.advanceTimersByTimeAsync(300)
+    expect(settings.save).toHaveBeenCalledWith({ letterSpacing: 2 })
+  })
+
+  it('字间距外部变化同步（正例）：accessor getLetterSpacing 新值被 watch 捕获', async () => {
+    const terminal = makeTerminal()
+    const settings = makeSettings()
+    const ctx = makeCtx({ terminalRef: shallowRef(terminal as any) })
+    const sync = useTerminalSettingsSync(ctx, settings, logger)
+
+    // 模拟外部修改：save 更新 accessor 内部 letterSpacing（真实桥同路径）
+    ;(settings.save as any)({ letterSpacing: 3 })
+    await nextTick()
+    expect(sync.letterSpacing.value).toBe(3)
+    expect(terminal.options.letterSpacing).toBe(3)
   })
 
   it('主题变化应用 + 防抖持久化（正例）：options.theme 更新 + 300ms 后 save', async () => {
@@ -200,6 +234,7 @@ describe('useTerminalSettingsSync（插件迁移版）', () => {
     const sync = useTerminalSettingsSync(ctx, settings, logger)
 
     sync.fontSize.value = 14
+    sync.letterSpacing.value = 1
     await nextTick() // 让 watch 回调完成（options 更新 + 防抖 timer 挂起）
     sync.disposeSettingsSync()
     await vi.advanceTimersByTimeAsync(400)

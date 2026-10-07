@@ -229,12 +229,17 @@ export function bustFontFamilyCache(fontFamily: string): string {
  * lineHeight 与 Terminal 构造选项同源（TERMINAL_LINE_HEIGHT），测得的
  * offsetHeight 即「cell 高度 ≈ 字符高 × 行高倍率」的预估，与 xterm 渲染器
  * 的 css.cell.height 口径一致（亚像素舍入差异由 fit 收敛循环吸收）。
+ *
+ * @param letterSpacing - 终端字间距（px，与 xterm `letterSpacing` 选项同源）：
+ *   xterm 的 `device.cell.width = char.width + letterSpacing`，预估网格必须叠加
+ *   同一增量，否则「预估网格 ≠ 渲染网格」（列数多算）。默认 0 = 不加。
  * 字体未就绪时返回 0 尺寸，调用方回退默认值。
  */
 export function measureCellSize(
   fontSize: number,
   fontFamily: string,
   lineHeight: number = TERMINAL_LINE_HEIGHT,
+  letterSpacing = 0,
 ): CellSize {
   const el = document.createElement('div')
   el.style.cssText = [
@@ -252,7 +257,9 @@ export function measureCellSize(
   const width = el.offsetWidth / 32
   const height = el.offsetHeight
   el.remove()
-  return { width, height }
+  // 字体未就绪（offsetWidth = 0）时保持 0 尺寸契约：只叠加间距会得到
+  // 「间距本身」的伪格宽（>0），computeGridSize 的未就绪守卫会失守
+  return { width: width > 0 ? width + letterSpacing : 0, height }
 }
 
 /**
@@ -266,6 +273,8 @@ export function measureCellSize(
  * @param marginCols - 列尾额外预留的格数（默认 0）
  * @param marginRows - 行尾额外预留的格数（默认 1）
  * @param lineHeight - 行高倍率（默认 TERMINAL_LINE_HEIGHT，与渲染口径同源）
+ * @param letterSpacing - 终端字间距（px，与 Terminal 构造选项同源，经
+ *   measureCellSize 叠加进格宽；预估网格与渲染网格必须同一口径）
  * @returns 网格尺寸；字体未就绪（cell 尺寸为 0）时返回 { cols: 0, rows: 0 }
  */
 export function computeGridSize(
@@ -275,8 +284,9 @@ export function computeGridSize(
   marginCols = 0,
   marginRows = 1,
   lineHeight: number = TERMINAL_LINE_HEIGHT,
+  letterSpacing = 0,
 ): { cols: number; rows: number } {
-  const cell = measureCellSize(fontSize, fontFamily, lineHeight)
+  const cell = measureCellSize(fontSize, fontFamily, lineHeight, letterSpacing)
   if (cell.width <= 0 || cell.height <= 0) return { cols: 0, rows: 0 }
   const width = container.clientWidth - cell.width * marginCols
   const height = container.clientHeight - cell.height * marginRows
@@ -298,12 +308,14 @@ const FALLBACK_GRID = { cols: 80, rows: 24 }
  * resize 队列同步精确值，本估算只需消灭起步尺寸偏差窗口。
  *
  * @returns 网格尺寸；屏幕/字体不可用时回退 {80, 24}
+ *
+ * @param letterSpacing - 终端字间距（px，经 computeGridSize 叠加进格宽）
  */
-export function computeDeviceDefaultGridSize(fontSize: number): { cols: number; rows: number } {
+export function computeDeviceDefaultGridSize(fontSize: number, letterSpacing = 0): { cols: number; rows: number } {
   if (!Number.isFinite(fontSize) || fontSize <= 0) return FALLBACK_GRID
   const root = document.documentElement
   if (root.clientWidth <= 0 || root.clientHeight <= 0) return FALLBACK_GRID
-  const grid = computeGridSize(root, fontSize, FONT_FAMILY, 0, 1)
+  const grid = computeGridSize(root, fontSize, FONT_FAMILY, 0, 1, TERMINAL_LINE_HEIGHT, letterSpacing)
   if (grid.cols <= 0 || grid.rows <= 0) return FALLBACK_GRID
   return grid
 }

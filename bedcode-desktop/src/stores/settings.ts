@@ -30,6 +30,8 @@ export interface Settings {
     terminal_font_size: number
     terminal_font_family: string
     terminal_theme: string
+    // 终端字间距（px，0-4；0 = 不加，字间留白仅来自字体自身）
+    terminal_letter_spacing: number
     // 语言偏好
     language?: string
     // 终端背景图片文件名（位于应用数据目录，空/未设置表示不启用）
@@ -51,6 +53,7 @@ const defaultSettings: Settings = {
     terminal_font_size: 12,
     terminal_font_family: 'Consolas',
     terminal_theme: 'dracula',
+    terminal_letter_spacing: 0,
     language: 'zh-CN',
     terminal_bg_image: undefined,
     terminal_bg_opacity: 30,

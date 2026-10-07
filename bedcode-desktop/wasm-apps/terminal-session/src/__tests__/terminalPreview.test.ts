@@ -61,14 +61,17 @@ function makeSettings(overrides?: Partial<TerminalSettingsAccessor>): TerminalSe
   const theme = ref('dracula')
   const bgImage = ref('')
   const bgOpacity = ref(30)
+  const letterSpacing = ref(0)
   const accessor: TerminalSettingsAccessor = {
     getFontSize: () => fontSize.value,
     getTheme: () => theme.value,
     getBgImage: () => bgImage.value,
     getBgOpacity: () => bgOpacity.value,
+    getLetterSpacing: () => letterSpacing.value,
     getServerPort: () => 8080,
     save: vi.fn((patch) => {
       if (patch.fontSize != null) fontSize.value = patch.fontSize
+      if (patch.letterSpacing != null) letterSpacing.value = patch.letterSpacing
       if (patch.theme != null) theme.value = patch.theme
       if (patch.bgImage != null) bgImage.value = patch.bgImage
       if (patch.bgOpacity != null) bgOpacity.value = patch.bgOpacity

@@ -64,6 +64,8 @@ export interface TerminalDisplaySettings {
   theme: string
   /** 是否由用户手动指定（true 时不再跟随系统主题） */
   isThemeUserSet: boolean
+  /** 字间距（px，0-4）：直接映射 xterm `letterSpacing` 选项（格宽同步膨胀，网格保持对齐） */
+  letterSpacing: number
 }
 
 export interface TerminalDisplayDeps {
@@ -124,6 +126,7 @@ export function useTerminalDisplay(ctx: TerminalKernelContext, deps: TerminalDis
           : 'light'
         : (settingsStore.settings.ui.theme as string)),
     isThemeUserSet: assistStore.settings.isTerminalThemeUserSet,
+    letterSpacing: assistStore.settings.terminalLetterSpacing ?? 0,
   })
 
   const resolvedTerminalTheme = computed(() =>
@@ -169,7 +172,10 @@ export function useTerminalDisplay(ctx: TerminalKernelContext, deps: TerminalDis
     await ensureTerminalFontLoaded(terminalSettings.value.fontSize ?? 14)
 
     // 创建前预测量：直接以适配屏幕的行列值构造，不再经过默认 80x24 阶段
-    const initial = deps.renderer.computeInitialSize(terminalSettings.value.fontSize ?? 14)
+    const initial = deps.renderer.computeInitialSize(
+      terminalSettings.value.fontSize ?? 14,
+      terminalSettings.value.letterSpacing ?? 0,
+    )
 
     const term = new Terminal({
       // 渲染器：默认 DOM（xterm 内置 canvas）；USE_WEBGL_RENDERER 开启时
@@ -178,6 +184,11 @@ export function useTerminalDisplay(ctx: TerminalKernelContext, deps: TerminalDis
       rows: initial.rows,
       fontSize: terminalSettings.value.fontSize,
       fontFamily: FONT_FAMILY,
+      // 字间距（唯一真源 terminalSettings.letterSpacing → store.terminalLetterSpacing）：
+      // xterm `letterSpacing` 选项 = 格宽同步膨胀（device.cell.width = char.width +
+      // spacing），DOM 渲染器把间距摊进每字符 span，网格保持严格对齐；小屏/小字号
+      // 下 CJK 字间留白仅剩字体字怀，用户可加 1-4px 拉开。改动后 fit 按新格宽重排
+      letterSpacing: terminalSettings.value.letterSpacing ?? 0,
       // 行高倍率（唯一真源 TERMINAL_LINE_HEIGHT）：小屏 CJK 满屏输出行间呼吸感；
       // 与 measureCellSize/computeGridSize 同源，保证预估网格与渲染口径一致
       lineHeight: TERMINAL_LINE_HEIGHT,

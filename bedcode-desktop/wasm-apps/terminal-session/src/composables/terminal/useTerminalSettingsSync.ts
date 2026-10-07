@@ -41,11 +41,14 @@ export interface TerminalSettingsAccessor {
   getBgImage(): string
   /** 当前背景图片不透明度（0-100） */
   getBgOpacity(): number
+  /** 终端字间距（px，0-4；0 = 不加，字间留白仅来自字体自身） */
+  getLetterSpacing(): number
   /** 背景图 URL 的服务器端口（宿主本地服务器；0 = 未启动回退配置端口） */
   getServerPort(): number
   /** 防抖持久化写入（部分设置项） */
   save(patch: {
     fontSize?: number
+    letterSpacing?: number
     theme?: string
     bgImage?: string
     bgOpacity?: number
@@ -67,6 +70,7 @@ export function useTerminalSettingsSync(
 ) {
   const fontSize = ref(settings.getFontSize())
   const terminalTheme = ref<string>(settings.getTheme() || 'dracula')
+  const letterSpacing = ref<number>(settings.getLetterSpacing() ?? 0)
 
   // 终端视觉字号：去 zoom 后（issue 06）Linux 按 PLATFORM_UI_SCALE 放大，视觉字号
   // = 设置值 × 1.15，等效原 zoom；用户设置值（terminal_font_size）与下拉显示保持原值不乘
@@ -84,6 +88,8 @@ export function useTerminalSettingsSync(
   // 主题/字号下拉选项：与原生 <option> 一一对应，供共享 Select 使用
   const themeSelectOptions = TERMINAL_THEME_SELECT_OPTIONS
   const fontSizeSelectOptions = TERMINAL_FONT_SIZE_SELECT_OPTIONS
+  /** 字间距下拉选项（px，0-4）：0 = 不加（字间留白仅来自字体自身） */
+  const letterSpacingSelectOptions = [0, 1, 2, 3, 4].map((v) => ({ value: v, label: `${v}px` }))
 
   /** 构造当前主题：背景图片启用时终端背景设为全透明，让图片层透出 */
   function getTheme(): object {
@@ -149,6 +155,36 @@ export function useTerminalSettingsSync(
       }
     },
     { immediate: true },
+  )
+
+  // 字间距变化（用户侧）：应用 + fit（格宽 = 字宽 + 间距，列数变少）+ 同步 PTY
+  // + 防抖持久化。xterm 的 `letterSpacing` 选项让 device.cell.width 同步膨胀，
+  // DOM/WebGL 渲染器都按新格宽重排，网格保持严格对齐（不能只加 CSS 的
+  // letter-spacing，否则行尾对齐/换行崩）。
+  let letterSpacingSaveTimeout: ReturnType<typeof setTimeout> | null = null
+  watch(letterSpacing, (newSpacing) => {
+    const terminal = ctx.terminalRef.value
+    if (terminal) {
+      terminal.options.letterSpacing = newSpacing
+      if (ctx.fitAddonRef.value) {
+        ctx.callbacks.fitAndRefresh()
+      }
+      nextTick(() => ctx.callbacks.syncTerminalSize())
+    }
+    if (letterSpacingSaveTimeout) clearTimeout(letterSpacingSaveTimeout)
+    letterSpacingSaveTimeout = setTimeout(() => {
+      settings.save({ letterSpacing: newSpacing })
+    }, 300)
+  })
+
+  // 外部设置变化同步字间距
+  watch(
+    () => settings.getLetterSpacing(),
+    (newSpacing) => {
+      if (letterSpacing.value !== newSpacing) {
+        letterSpacing.value = newSpacing
+      }
+    },
   )
 
   // 主题变化（用户侧）：更新终端 + 防抖持久化
@@ -219,11 +255,15 @@ export function useTerminalSettingsSync(
     // onChange 触发时 settings.get* 的值已是新值，watch 依赖变化自动响应
   })
 
-  /** 组件卸载清理：取消字号/主题防抖持久化定时器与外部订阅 */
+  /** 组件卸载清理：取消字号/字间距/主题防抖持久化定时器与外部订阅 */
   function disposeSettingsSync() {
     if (fontSizeSaveTimeout) {
       clearTimeout(fontSizeSaveTimeout)
       fontSizeSaveTimeout = null
+    }
+    if (letterSpacingSaveTimeout) {
+      clearTimeout(letterSpacingSaveTimeout)
+      letterSpacingSaveTimeout = null
     }
     if (themeSaveTimeout) {
       clearTimeout(themeSaveTimeout)
@@ -238,12 +278,14 @@ export function useTerminalSettingsSync(
   return {
     fontSize,
     terminalTheme,
+    letterSpacing,
     effectiveFontSize,
     bgImage,
     bgOpacity,
     bgImageUrl,
     themeSelectOptions,
     fontSizeSelectOptions,
+    letterSpacingSelectOptions,
     getTheme,
     containerBgColor,
     resolveBgImageUrl,

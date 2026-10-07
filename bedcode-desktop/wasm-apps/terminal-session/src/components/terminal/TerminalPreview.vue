@@ -33,6 +33,16 @@
             {{ opt.label }}
           </option>
         </select>
+        <select
+          class="h-7 rounded-[6px] px-2 cursor-pointer text-[calc(12px*var(--ui-scale))] bg-[var(--bg-card)] border border-[var(--border)] text-[var(--text-primary)] focus:outline-none focus:border-brand"
+          :value="letterSpacing"
+          :title="t('session.terminal.letterSpacing')"
+          @change="letterSpacing = Number(($event.target as HTMLSelectElement).value)"
+        >
+          <option v-for="opt in letterSpacingSelectOptions" :key="opt.value" :value="opt.value">
+            {{ opt.label }}
+          </option>
+        </select>
         <button
           class="w-7 h-7 rounded-[6px] flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] transition-colors"
           :title="t('session.terminal.clearScreen')"
@@ -337,7 +347,7 @@ const renderer = useTerminalRenderer(kernel, console)
 const resize = useTerminalResize(kernel, requestResizeImpl, t)
 
 // 模板同名绑定（域返回值解构，template 零改动）
-const { terminalTheme, fontSize, themeSelectOptions, fontSizeSelectOptions } = settings
+const { terminalTheme, fontSize, letterSpacing, themeSelectOptions, fontSizeSelectOptions, letterSpacingSelectOptions } = settings
 const { bgImageUrl, bgOpacity, containerBgColor } = settings
 const { isUserScrolling, clearTerminal, refreshTerminal, scrollToBottomManual } = scroll
 const { rendererDecision } = renderer
@@ -701,6 +711,11 @@ function initTerminal() {
   const terminal = new Terminal({
     // 字体与尺寸
     fontSize: settings.effectiveFontSize.value,
+    // 字间距（唯一真源 settings.letterSpacing → accessor.getLetterSpacing）：
+    // xterm `letterSpacing` 选项让 device.cell.width = char.width + spacing，
+    // DOM/WebGL 渲染器都按新格宽重排（WebGL 经 atlas 键 + char.left 半距偏移），
+    // 网格保持严格对齐；小窗口/小字号下 CJK 字间留白仅剩字体字怀，可加 1-4px 拉开
+    letterSpacing: settings.letterSpacing.value,
     // Linux 用系统等宽字体栈（优先 Ubuntu Mono/DejaVu Sans Mono 等系统自带等宽字体），
     // 其余平台保持 VS Code 终端默认字体栈（Windows 11 自带 Cascadia Mono）不变
     fontFamily: kernel.isLinux.value ? LINUX_FONT_STACK : DEFAULT_FONT_STACK,
@@ -1038,6 +1053,7 @@ onUnmounted(() => {
 defineExpose({
   fontSize: settings.fontSize,
   terminalTheme: settings.terminalTheme,
+  letterSpacing: settings.letterSpacing,
   themeNames: TERMINAL_THEME_NAMES,
   isUserScrolling: scroll.isUserScrolling,
   clearTerminal: scroll.clearTerminal,

@@ -65,6 +65,7 @@ export type MessageSchema = {
   'session.terminal.settings': string
   'session.terminal.theme': string
   'session.terminal.fontSize': string
+  'session.terminal.letterSpacing': string
   'session.terminal.clearScreen': string
   'session.terminal.refreshFormat': string
   'session.terminal.minimize': string

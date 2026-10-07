@@ -45,6 +45,17 @@
           </div>
         </div>
 
+        <!-- Letter Spacing（字间距）：xterm letterSpacing 选项，格宽同步膨胀；
+             小屏/小字号下 CJK 字间留白仅剩字体字怀，可加间距拉开 -->
+        <div class="settings-section">
+          <label class="settings-label">{{ t('mobile.terminal.letterSpacing') }}</label>
+          <div class="font-size-control">
+            <button class="size-btn" :disabled="tempLetterSpacing <= 0" @click.stop="tempLetterSpacing--">-</button>
+            <span class="size-value">{{ tempLetterSpacing }}px</span>
+            <button class="size-btn" :disabled="tempLetterSpacing >= 4" @click.stop="tempLetterSpacing++">+</button>
+          </div>
+        </div>
+
         <!-- Theme -->
         <div class="settings-section">
           <label class="settings-label">{{ t('mobile.terminal.theme') }}</label>
@@ -138,6 +149,8 @@ export interface TerminalSettings {
   fontSize: number
   theme: string
   isThemeUserSet: boolean
+  /** 字间距（px，0-4）：映射 xterm letterSpacing 选项，格宽同步膨胀 */
+  letterSpacing: number
   quickBarCount: number
   toolbarItems: string[]
   /** 终端新手引导待展示：开启后下次进入终端页重新弹出 */
@@ -155,6 +168,7 @@ const props = defineProps<{
   fontSize: number
   theme: string
   isThemeUserSet: boolean
+  letterSpacing: number
   quickBarCount: number
   toolbarItems: string[]
   allToolbarItems: ToolbarItemConfig[]
@@ -171,6 +185,7 @@ const { t } = useI18n()
 const { isSystemDark } = useTheme()
 
 const tempFontSize = ref(props.fontSize)
+const tempLetterSpacing = ref(props.letterSpacing)
 const tempTheme = ref<string>(props.isThemeUserSet ? props.theme : 'system')
 const tempQuickBarCount = ref(props.quickBarCount)
 const tempToolbarItems = ref<string[]>([...props.toolbarItems])
@@ -187,6 +202,7 @@ const { onTouchStart, onTouchMove, onTouchEnd } = useSwipeTabs((dir) => {
 watch(() => props.visible, (visible) => {
   if (visible) {
     tempFontSize.value = props.fontSize
+    tempLetterSpacing.value = props.letterSpacing
     tempTheme.value = props.isThemeUserSet ? props.theme : 'system'
     tempQuickBarCount.value = props.quickBarCount
     tempToolbarItems.value = [...props.toolbarItems]
@@ -231,6 +247,7 @@ function handleConfirm() {
     fontSize: tempFontSize.value,
     theme: resolvedTheme,
     isThemeUserSet,
+    letterSpacing: tempLetterSpacing.value,
     quickBarCount: tempQuickBarCount.value,
     toolbarItems: tempToolbarItems.value,
     onboardingPending: tempOnboardingPending.value,

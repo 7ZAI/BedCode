@@ -5,12 +5,15 @@
  * - isBundledFontInLayout：判定内置字体是否真的进入了排版（不是「已下载」）
  * - bustFontFamilyCache：强制 xterm 失效重测的字体串（同字体不同串）
  */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import {
   bustFontFamilyCache,
   ensureTerminalFontLoaded,
   isBundledFontInLayout,
   TERMINAL_RIGHT_RESERVE_PX,
+  measureCellSize,
+  computeGridSize,
+  computeDeviceDefaultGridSize,
 } from '@/utils/terminalMetrics'
 
 describe('isBundledFontInLayout', () => {
@@ -61,6 +64,76 @@ describe('bustFontFamilyCache', () => {
 describe('TERMINAL_RIGHT_RESERVE_PX', () => {
   it('行尾右缘不预留（锁 0：预留即右侧竖直黑带）', () => {
     expect(TERMINAL_RIGHT_RESERVE_PX).toBe(0)
+  })
+})
+
+/**
+ * 字间距叠加（terminalLetterSpacing → xterm letterSpacing 选项）的网格口径测试
+ *
+ * 契约：预估网格必须与渲染网格同源 —— xterm 的 `device.cell.width = char.width +
+ * letterSpacing`，故 measureCellSize / computeGridSize / computeDeviceDefaultGridSize
+ * 必须在同一增量上叠加，否则列数多算（PTY 起步网格与渲染不一致）。
+ */
+describe('measureCellSize / computeGridSize（字间距叠加进格宽）', () => {
+  /** happy-dom 不做布局 → offsetWidth/Height 恒 0；注入 32 个 'W' 隐藏元素口径的测量值 */
+  function mockGlyphMeasurement(charWidth: number, charHeight: number): () => void {
+    const w = vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(charWidth * 32)
+    const h = vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(charHeight)
+    return () => {
+      w.mockRestore()
+      h.mockRestore()
+    }
+  }
+
+  function mockContainer(clientWidth: number, clientHeight: number): HTMLElement {
+    const container = document.createElement('div')
+    Object.defineProperty(container, 'clientWidth', { value: clientWidth, configurable: true })
+    Object.defineProperty(container, 'clientHeight', { value: clientHeight, configurable: true })
+    return container
+  }
+
+  it('正例：格宽 = 字宽 + letterSpacing，行高不受影响', () => {
+    const restore = mockGlyphMeasurement(6, 14.4)
+    try {
+      expect(measureCellSize(12, 'monospace', 1.2, 0)).toEqual({ width: 6, height: 14.4 })
+      expect(measureCellSize(12, 'monospace', 1.2, 2)).toEqual({ width: 8, height: 14.4 })
+      expect(measureCellSize(12, 'monospace', 1.2, 4)).toEqual({ width: 10, height: 14.4 })
+    } finally {
+      restore()
+    }
+  })
+
+  it('反例：同一容器下字间距越大列数越少（cols = floor(可用宽 / (字宽+间距))）', () => {
+    const restore = mockGlyphMeasurement(10, 20)
+    try {
+      const container = mockContainer(120, 80)
+      expect(computeGridSize(container, 12, 'monospace', 0, 0, 1, 0)).toEqual({ cols: 12, rows: 4 })
+      expect(computeGridSize(container, 12, 'monospace', 0, 0, 1, 2)).toEqual({ cols: 10, rows: 4 })
+    } finally {
+      restore()
+    }
+  })
+
+  it('边界：行数不随字间距变化（间距只横向膨胀格宽）', () => {
+    const restore = mockGlyphMeasurement(6, 14)
+    try {
+      Object.defineProperty(document.documentElement, 'clientWidth', { value: 360, configurable: true })
+      Object.defineProperty(document.documentElement, 'clientHeight', { value: 800, configurable: true })
+      const base = computeDeviceDefaultGridSize(12, 0)
+      const spaced = computeDeviceDefaultGridSize(12, 2)
+      expect(base.cols).toBe(60)
+      expect(spaced.cols).toBe(45)
+      expect(spaced.rows).toBe(base.rows)
+    } finally {
+      restore()
+    }
+  })
+
+  it('退化：字体未就绪（字宽 0）时即使带间距也返回 0 尺寸，守卫不失守', () => {
+    // 不 mock offsetWidth → happy-dom 返回 0；letterSpacing 不得把格宽变成「间距本身」
+    const container = mockContainer(100, 100)
+    expect(computeGridSize(container, 12, 'monospace', 0, 0, 1, 0)).toEqual({ cols: 0, rows: 0 })
+    expect(computeGridSize(container, 12, 'monospace', 0, 0, 1, 2)).toEqual({ cols: 0, rows: 0 })
   })
 })
 

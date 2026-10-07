@@ -108,10 +108,10 @@ export function useTerminalRenderer(ctx: TerminalKernelContext) {
    * 创建前预计算终端网格：容器尺寸 ÷ 字体网格（与 FitAddon 一致，列尾不再额外
    * 预留——见 TERMINAL_RIGHT_RESERVE_PX 的「右侧竖直黑带」实测；高度不增减）
    */
-  function computeInitialSize(fontSize: number): { cols: number; rows: number } {
+  function computeInitialSize(fontSize: number, letterSpacing = 0): { cols: number; rows: number } {
     const container = ctx.xtermContainerRef.value
     if (!container) return { cols: 80, rows: 24 }
-    const grid = computeGridSize(container, fontSize, FONT_FAMILY, 0, 0, TERMINAL_LINE_HEIGHT)
+    const grid = computeGridSize(container, fontSize, FONT_FAMILY, 0, 0, TERMINAL_LINE_HEIGHT, letterSpacing)
     // 字体未就绪（0 尺寸）时回退默认值：发送路径的 80x24 过滤 + fit 后校准兜底
     if (grid.cols <= 0 || grid.rows <= 0) return { cols: 80, rows: 24 }
     return grid

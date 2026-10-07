@@ -38,6 +38,7 @@ describe('inputAssistant store', () => {
     expect(store.settings.floatingBall).toBe(false)
     expect(store.settings.headerToolbarItems).toEqual(['folder'])
     expect(store.settings.terminalFontSize).toBe(12)
+    expect(store.settings.terminalLetterSpacing).toBe(0)
     expect(store.settings.terminalTheme).toBeNull()
     expect(store.settings.isTerminalThemeUserSet).toBe(false)
     expect(store.settings.gestures).toEqual({
@@ -101,6 +102,25 @@ describe('inputAssistant store', () => {
     const saved = JSON.parse(localStorage.getItem(KEYS.settings)!)
     expect(saved.size).toBe(56)
     expect(saved.quickBarCount).toBe(6)
+  })
+
+  it('terminalLetterSpacing 持久化与旧存档兼容（缺字段回退 0）', () => {
+    // 正例：保存字间距 → 状态 + localStorage 同步；重启后从 localStorage 恢复
+    const store = newStore()
+    store.saveSettings({ terminalLetterSpacing: 2 })
+    expect(store.settings.terminalLetterSpacing).toBe(2)
+    expect(JSON.parse(localStorage.getItem(KEYS.settings)!).terminalLetterSpacing).toBe(2)
+
+    setActivePinia(createPinia())
+    const restored = newStore()
+    expect(restored.settings.terminalLetterSpacing).toBe(2)
+
+    // 反例/边界：旧版本 localStorage 无该字段 → 合并 DEFAULT_SETTINGS 回退 0
+    localStorage.setItem(KEYS.settings, JSON.stringify({ terminalFontSize: 14 }))
+    setActivePinia(createPinia())
+    const legacy = newStore()
+    expect(legacy.settings.terminalFontSize).toBe(14)
+    expect(legacy.settings.terminalLetterSpacing).toBe(0)
   })
 
   it('resetSettings restores defaults and persists', () => {

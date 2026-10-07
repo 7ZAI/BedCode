@@ -60,6 +60,7 @@ const zhCN: MessageSchema = {
   'session.terminal.settings': '设置',
   'session.terminal.theme': '终端主题',
   'session.terminal.fontSize': '字体大小',
+  'session.terminal.letterSpacing': '字间距',
   'session.terminal.clearScreen': '清屏',
   'session.terminal.refreshFormat': '刷新格式',
   'session.terminal.minimize': '最小化',

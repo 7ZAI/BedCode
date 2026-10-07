@@ -126,12 +126,17 @@ function measureCellSize(fontSize: number, fontFamily: string): { width: number;
  * - 终端窗口内上下文（延迟启动，组件已挂载但 xterm 未就绪）：保持默认
  *   widthRatio=1，即以当前窗口实际尺寸计算。
  *
+ * @param letterSpacing - 终端字间距（px，与插件 TerminalPreview 构造选项
+ *   `letterSpacing` 同源）：xterm 的 `device.cell.width = char.width + letterSpacing`，
+ *   预测的 cell 宽必须叠加同一增量，否则字间距 > 0 时预测列数偏多（PTY 起步网格
+ *   与渲染不一致）。
+ *
  * @returns 网格尺寸；任一环节不可用（Tauri API 失败/字体未就绪/尺寸退化）
  *          返回 null，调用方不传、由服务端用配置默认值兜底。
  */
 export async function computeDesktopInitialTerminalSize(
   fontSize: number,
-  { widthRatio = 1 }: { widthRatio?: number } = {},
+  { widthRatio = 1, letterSpacing = 0 }: { widthRatio?: number; letterSpacing?: number } = {},
 ): Promise<{ cols: number; rows: number } | null> {
   if (!Number.isFinite(fontSize) || fontSize <= 0) return null
   try {
@@ -147,7 +152,7 @@ export async function computeDesktopInitialTerminalSize(
     const cell = measureCellSize(cellFont.fontSize, cellFont.fontFamily)
     // 宿主左右内边距按 rem × 根字号换算（随 --ui-scale 变化，不可写死 px）
     const rootFontSize = parseFloat(getComputedStyle(document.documentElement).fontSize)
-    return resolveTerminalGrid(termW, termH, cell.width, cell.height, resolveGutterPx(rootFontSize))
+    return resolveTerminalGrid(termW, termH, cell.width + letterSpacing, cell.height, resolveGutterPx(rootFontSize))
   } catch {
     return null
   }

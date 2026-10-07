@@ -39,8 +39,9 @@ export interface XtermScaledDimensionsInput {
  * 按 devicePixelRatio 精确计算终端网格 cols/rows。
  *
  * 换算口径与 VS Code 一致：容器宽高 × DPR 得到可用物理像素；cell 宽 × DPR
- * 得到物理字符宽度（BedCode 无 letterSpacing，缺省为 0）。列宽 floor、行数
- * floor，分别防截断与防溢出。
+ * 得到物理字符宽度（BedCode 的字间距经 xterm letterSpacing 选项叠加进格宽，
+ * 此处入参 cellWidthCss 已含增量，缺省 0 = 不加）。列宽 floor、行数 floor，
+ * 分别防截断与防溢出。
  * 行尾右缘预留宽（px）在 DPR 归一到物理像素的可用宽度内扣除（与 computeGridSize
  * 口径一致，量纲对齐；移动端当前为 0，见 TERMINAL_RIGHT_RESERVE_PX「不预留
  * 才不会在 TUI 右侧留出竖直黑带」）。余量（marginCols/rows）可额外扣除，

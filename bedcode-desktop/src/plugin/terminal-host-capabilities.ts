@@ -56,6 +56,7 @@ export function provideTerminalHostCapabilities(): void {
     getTheme: () => settingsStore.settings.ui.terminal_theme || 'dracula',
     getBgImage: () => settingsStore.settings.ui.terminal_bg_image || '',
     getBgOpacity: () => settingsStore.settings.ui.terminal_bg_opacity ?? 30,
+    getLetterSpacing: () => settingsStore.settings.ui.terminal_letter_spacing ?? 0,
     getServerPort: () => serverPort.value,
     save: (patch) => {
       // 背景图变化：先刷新端口再落盘——插件侧 watch(落盘后读到的新设置值) 会**同步**
@@ -66,6 +67,7 @@ export function provideTerminalHostCapabilities(): void {
           ui: {
             ...settingsStore.settings.ui,
             ...(patch.fontSize != null ? { terminal_font_size: patch.fontSize } : {}),
+            ...(patch.letterSpacing != null ? { terminal_letter_spacing: patch.letterSpacing } : {}),
             ...(patch.theme != null ? { terminal_theme: patch.theme } : {}),
             ...(patch.bgImage != null ? { terminal_bg_image: patch.bgImage } : {}),
             ...(patch.bgOpacity != null ? { terminal_bg_opacity: patch.bgOpacity } : {}),

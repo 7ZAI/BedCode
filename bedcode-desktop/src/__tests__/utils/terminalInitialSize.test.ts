@@ -114,6 +114,22 @@ describe('终端初始网格：宿主内边距口径', () => {
     expect(withoutGutter!.cols - withGutter!.cols).toBe(2)
   })
 
+  it('C6c 正例：字间距叠加进格宽（cellW + letterSpacing，列数变少）', () => {
+    // 与插件渲染端口径一致：xterm device.cell.width = char.width + letterSpacing。
+    // 预测必须叠加同一增量，否则字间距 > 0 时预测列数偏多 → PTY 起步网格与渲染不一致
+    const termW = 690
+    const termH = 798
+    const cellW = 10
+    const cellH = 20
+    const base = resolveTerminalGrid(termW, termH, cellW, cellH, 16)
+    const spaced = resolveTerminalGrid(termW, termH, cellW + 2, cellH, 16)
+
+    expect(base!.cols).toBe(Math.floor((690 - 16 - 14) / 10))
+    // 间距只膨胀格宽（横向）：行数不变
+    expect(spaced!.rows).toBe(base!.rows)
+    expect(spaced!.cols).toBe(Math.floor((690 - 16 - 14) / 12))
+  })
+
   it('C6b 正例：内边距随根字号缩放（--ui-scale 变化时换算跟着变）', () => {
     expect(resolveGutterPx(16)).toBe(TERMINAL_HOST_GUTTER_REM * 16)
     // 根字号带小数时取整到整像素（亚像素差异对列数无影响，但必须是整数）
