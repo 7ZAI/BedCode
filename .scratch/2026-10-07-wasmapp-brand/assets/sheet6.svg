@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="500" viewBox="0 0 880 500">
+  <rect width="880" height="500" fill="#050607"/>
+  <g font-family="DejaVu Sans" font-size="13" fill="#8B939E">
+    <g id="Wbars" stroke="#F4F6F8" stroke-width="13" stroke-linecap="butt" fill="none">
+      <line x1="23.2" y1="33" x2="36.8" y2="67"/>
+      <line x1="39.3" y1="67.1" x2="48.7" y2="46.9"/>
+      <line x1="51.3" y1="46.9" x2="60.7" y2="67.1"/>
+      <line x1="63.2" y1="67" x2="76.8" y2="33"/>
+    </g>
+
+    <!-- C1 plain 4-bar W -->
+    <g transform="translate(16,16) scale(2)">
+      <rect width="100" height="100" rx="22" fill="#0A0B0D"/>
+      <use href="#Wbars"/>
+    </g>
+    <text x="116" y="122" text-anchor="middle">C1 plain 4-bar W</text>
+
+    <!-- C2 + two instance cells in valleys -->
+    <g transform="translate(216,16) scale(2)">
+      <rect width="100" height="100" rx="22" fill="#0A0B0D"/>
+      <use href="#Wbars"/>
+      <rect x="28.5" y="49" width="10" height="10" rx="3" fill="#FF9E2C"/>
+      <rect x="61.5" y="49" width="10" height="10" rx="3" fill="#2B3138"/>
+    </g>
+    <text x="316" y="122" text-anchor="middle">C2 + instance cells</text>
+
+    <!-- C3 amber apex (the A) -->
+    <g transform="translate(416,16) scale(2)">
+      <rect width="100" height="100" rx="22" fill="#0A0B0D"/>
+      <g stroke-width="13" stroke-linecap="butt" fill="none">
+        <line x1="23.2" y1="33" x2="36.8" y2="67" stroke="#F4F6F8"/>
+        <line x1="39.3" y1="67.1" x2="48.7" y2="46.9" stroke="#F4F6F8"/>
+        <line x1="51.3" y1="46.9" x2="60.7" y2="67.1" stroke="#FF9E2C"/>
+        <line x1="63.2" y1="67" x2="76.8" y2="33" stroke="#F4F6F8"/>
+      </g>
+    </g>
+    <text x="516" y="122" text-anchor="middle">C3 amber apex</text>
+
+    <!-- C4 apex accent + cells (combined system) -->
+    <g transform="translate(616,16) scale(2)">
+      <rect width="100" height="100" rx="22" fill="#0A0B0D"/>
+      <use href="#Wbars"/>
+      <path d="M50 39.5 L56.5 47 L50 54.5 L43.5 47 Z" fill="#FF9E2C"/>
+    </g>
+    <text x="716" y="122" text-anchor="middle">C4 apex diamond</text>
+
+    <!-- C5 A-extracted gate: arch + two cells -->
+    <g transform="translate(16,166) scale(2)">
+      <rect width="100" height="100" rx="22" fill="#0A0B0D"/>
+      <g stroke="#F4F6F8" stroke-width="12" fill="none" stroke-linecap="butt">
+        <line x1="24" y1="72" x2="50" y2="28"/>
+        <line x1="76" y1="72" x2="50" y2="28"/>
+      </g>
+      <rect x="35" y="52" width="11" height="11" rx="3" fill="#F4F6F8"/>
+      <rect x="54" y="52" width="11" height="11" rx="3" fill="#FF9E2C"/>
+    </g>
+    <text x="116" y="272" text-anchor="middle">C5 arch(A)+PP</text>
+
+    <!-- C6 cells as true counters, hollow -->
+    <g transform="translate(216,166) scale(2)">
+      <rect width="100" height="100" rx="22" fill="#0A0B0D"/>
+      <use href="#Wbars"/>
+      <rect x="28.5" y="49" width="10" height="10" rx="3" fill="none" stroke="#FF9E2C" stroke-width="2.6"/>
+      <rect x="61.5" y="49" width="10" height="10" rx="3" fill="none" stroke="#5A616B" stroke-width="2.6"/>
+    </g>
+    <text x="316" y="272" text-anchor="middle">C6 hollow counters</text>
+
+    <!-- C7 solid W, amber cell left -->
+    <g transform="translate(416,166) scale(2)">
+      <rect width="100" height="100" rx="22" fill="#0A0B0D"/>
+      <path d="M24 32 L38 68 L50 45 L62 68 L76 32" fill="none" stroke="#F4F6F8" stroke-width="15" stroke-linejoin="miter"/>
+      <rect x="27" y="47" width="9" height="9" rx="2.5" fill="#FF9E2C"/>
+    </g>
+    <text x="516" y="272" text-anchor="middle">C7 solid + cell</text>
+
+    <!-- C8 R6 winner recheck: big A + P-strokes -->
+    <g transform="translate(616,166) scale(2)">
+      <rect width="100" height="100" rx="22" fill="#0A0B0D"/>
+      <g fill="none" stroke="#F4F6F8" stroke-width="10" stroke-linecap="round">
+        <path d="M24 28 L38 72"/>
+        <path d="M76 28 L62 72"/>
+      </g>
+      <g fill="none" stroke="#FF9E2C" stroke-width="10" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M50 36 L36 72"/>
+        <path d="M50 36 L64 72"/>
+        <path d="M40.5 60 L59.5 60"/>
+      </g>
+    </g>
+    <text x="716" y="272" text-anchor="middle">C8 W built from A</text>
+
+  </g>
+</svg>

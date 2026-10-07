@@ -1,21 +1,13 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-  <defs>
-    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#0EA5E9"/>
-      <stop offset="100%" stop-color="#3B82F6"/>
-    </linearGradient>
-  </defs>
-  <rect width="100" height="100" rx="20" fill="url(#bg)"/>
-  <!-- 本地设备 -->
-  <rect x="16" y="26" width="24" height="48" rx="4" fill="#FFFFFF" fill-opacity="0.95"/>
-  <circle cx="28" cy="66" r="2.5" fill="#3B82F6"/>
-  <!-- 远程对端设备 -->
-  <rect x="60" y="26" width="24" height="48" rx="4" fill="#FFFFFF" fill-opacity="0.95"/>
-  <circle cx="72" cy="66" r="2.5" fill="#3B82F6"/>
-  <!-- 上传箭头（左→右） -->
-  <path d="M42 38 L52 38" stroke="#FFFFFF" stroke-width="3.5" stroke-linecap="round" fill="none"/>
-  <path d="M48 32 L52 38 L48 44" stroke="#FFFFFF" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
-  <!-- 下载箭头（右→左） -->
-  <path d="M58 58 L48 58" stroke="#FFFFFF" stroke-width="3.5" stroke-linecap="round" fill="none"/>
-  <path d="M52 52 L48 58 L52 64" stroke="#FFFFFF" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <defs><linearGradient id="b" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#16181C"/><stop offset="100%" stop-color="#08090B"/></linearGradient></defs>
+<rect width="100" height="100" rx="20" fill="url(#b)"/>
+  <!-- 双端设备 + 双向传输：上行琥珀（进行中）/ 下行中性 -->
+  <rect x="18" y="28" width="22" height="44" rx="6" fill="none" stroke="#F5F7F9" stroke-width="5"/>
+  <rect x="60" y="28" width="22" height="44" rx="6" fill="none" stroke="#F5F7F9" stroke-width="5"/>
+  <g stroke="#FF9E2C" stroke-width="5" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="44" y1="43" x2="54" y2="43"/><polyline points="50,38 56,43 50,48"/>
+  </g>
+  <g stroke="#F5F7F9" stroke-width="5" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="56" y1="59" x2="46" y2="59"/><polyline points="50,54 44,59 50,64"/>
+  </g>
 </svg>

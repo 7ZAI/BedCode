@@ -2,7 +2,7 @@ export default {
   desktop: {
     splash: {
       status: '正在启动…',
-      tagline: '局域网远程终端工作台',
+      tagline: '多 WASM 应用运行平台',
     },
     sidebar: {
       settings: '设置',

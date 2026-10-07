@@ -20,13 +20,26 @@
                 <svg
                   class="h-11 w-11 text-[var(--splash-text)]"
                   viewBox="0 0 100 100"
-                  fill="currentColor"
+                  fill="none"
                   aria-hidden="true"
                 >
-                  <!-- 提示符箭头 -->
-                  <path d="M 24 18 L 59 50 L 24 82 L 32 74 L 51 50 L 32 26 Z" />
-                  <!-- 下划线光标：慢速硬闪烁，呼应终端光标 -->
-                  <path class="splash-glyph-caret" d="M 51 60 L 84 62 L 53 65 Z" />
+                  <!-- WasmApp 标识：W 由四段彼此分离的笔画构成（多个隔离应用） -->
+                  <g
+                    stroke="currentColor"
+                    stroke-width="13"
+                    stroke-linecap="butt"
+                  >
+                    <line x1="23.2" y1="33" x2="36.8" y2="67" />
+                    <line x1="39.3" y1="67.1" x2="48.7" y2="46.9" />
+                    <line x1="51.3" y1="46.9" x2="60.7" y2="67.1" />
+                    <line x1="63.2" y1="67" x2="76.8" y2="33" />
+                  </g>
+                  <!-- 活跃实例核心：硬闪烁，呼应终端光标（原 caret 位，现为品牌核心） -->
+                  <path
+                    class="splash-glyph-caret"
+                    d="M50 36.5 L56.5 43 L50 49.5 L43.5 43 Z"
+                    fill="var(--splash-ember)"
+                  />
                 </svg>
               </div>
             </slot>
@@ -36,7 +49,7 @@
           <div
             class="splash-rise splash-rise-1 mb-1.5 text-xl font-semibold tracking-[0.18em] text-[var(--splash-text)]"
           >
-            BedCode
+            WasmApp
           </div>
           <div
             class="splash-rise splash-rise-2 mb-10 text-xs tracking-wider text-[var(--splash-text-dim)]"
@@ -51,7 +64,7 @@
               class="splash-rise splash-rise-3 wb-mono flex h-5 items-center text-[calc(13px*var(--ui-scale))]"
             >
               <span class="text-[var(--splash-text-faint)]">$&nbsp;</span
-              ><span class="splash-typed text-[var(--splash-text)]">bedcode</span>
+              ><span class="splash-typed text-[var(--splash-text)]">wasmapp</span>
             </div>
 
             <!-- Boot log 阶段栈（可选，替代状态文本） -->
@@ -139,7 +152,7 @@ interface Props {
   segmentCount?: number
   /** 已完成段数 */
   progressSegments?: number
-  /** 底部 footer 文案；缺省时组件用运行时应用版本号动态生成（bedcode v<version> · LAN remote terminal） */
+  /** 底部 footer 文案；缺省时组件用运行时应用版本号动态生成（WasmApp v<version> · WASM app runtime） */
   footerText?: string
 }
 
@@ -173,7 +186,7 @@ onMounted(async () => {
 
 const footerText = computed(() =>
   props.footerText ||
-  (appVersion.value ? `bedcode v${appVersion.value} · LAN remote terminal` : 'bedcode · LAN remote terminal'),
+  (appVersion.value ? `WasmApp v${appVersion.value} · WASM app runtime` : 'WasmApp · WASM app runtime'),
 )
 </script>
 
@@ -209,6 +222,8 @@ const footerText = computed(() =>
   --splash-vignette: color-mix(in srgb, var(--text-primary) 8%, transparent);
   --splash-shadow: 0 12px 40px color-mix(in srgb, var(--text-primary) 14%, transparent);
   --splash-glow: transparent;
+  /* 品牌琥珀：活跃实例核心。浅色底用降饱和变体保对比（对齐 brand-spec 的 --wasm-ember-dim） */
+  --splash-ember: #c2701a;
 
   /* 三层背景：中央高光 + 底部 vignette + 主渐变 */
   background:
@@ -218,22 +233,23 @@ const footerText = computed(() =>
 }
 
 html.dark .splash-root {
-  --splash-bg-from: #2e2a22;
-  --splash-bg-to: #0a0907;
-  --splash-tile-from: #2e2a22;
-  --splash-tile-to: #0a0907;
-  --splash-text: #ece8dc;
-  --splash-text-dim: rgba(236, 232, 220, 0.55);
-  --splash-text-faint: rgba(236, 232, 220, 0.35);
-  --splash-border: rgba(236, 232, 220, 0.09);
-  --splash-track: rgba(236, 232, 220, 0.12);
+  --splash-bg-from: #16181c;
+  --splash-bg-to: #08090b;
+  --splash-tile-from: #16181c;
+  --splash-tile-to: #08090b;
+  --splash-text: #f5f7f9;
+  --splash-text-dim: rgba(245, 247, 249, 0.55);
+  --splash-text-faint: rgba(245, 247, 249, 0.35);
+  --splash-border: rgba(245, 247, 249, 0.09);
+  --splash-track: rgba(245, 247, 249, 0.12);
   --splash-success: rgba(140, 212, 138, 0.92);
-  --splash-bloom: #ece8dc;
-  --splash-ambient: #ece8dc;
+  --splash-bloom: #f5f7f9;
+  --splash-ambient: #f5f7f9;
   --splash-vignette: rgba(0, 0, 0, 0.6);
   --splash-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
-  /* 深色下的发光色：暖白霓虹，呼应终端荧光（深色文字阴影的唯一来源） */
-  --splash-glow: rgba(236, 232, 220, 0.22);
+  /* 深色下的发光色：品牌琥珀霓虹，与标识核心同色（深色文字阴影的唯一来源） */
+  --splash-glow: rgba(255, 158, 44, 0.22);
+  --splash-ember: #ff9e2c;
 }
 
 /* 呼吸辉光层：极克制（opacity 0.4 → 0.55，周期 8s），仅烘托 logo 周围；
@@ -325,7 +341,7 @@ html.dark .splash-root {
   }
 }
 
-/* "bedcode" 共 7ch，等宽字体下按字符步进打出 */
+/* "wasmapp" 共 7ch（与旧 "bedcode" 同宽），等宽字体下按字符步进打出 */
 .splash-typed {
   display: inline-block;
   overflow: hidden;

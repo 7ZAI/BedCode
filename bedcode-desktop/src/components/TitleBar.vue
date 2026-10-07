@@ -7,7 +7,7 @@
     <div class="flex items-center gap-3 px-4" data-tauri-drag-region>
       <!-- 品牌图标：内联 src-tauri/icons/icon.svg，填充色随 light/dark 主题切换（浅色=深底浅纹，夜间=浅底深纹） -->
       <svg
-        class="w-5 h-5 flex-shrink-0 [--logo-bg-start:#2E2A22] [--logo-bg-end:#0A0907] [--logo-fg:#FFFFFF] dark:[--logo-bg-start:#FAF9F7] dark:[--logo-bg-end:#E7E4DC] dark:[--logo-fg:#1C1917]"
+        class="w-5 h-5 flex-shrink-0 [--logo-bg-start:#16181C] [--logo-bg-end:#08090B] [--logo-fg:#F5F7F9] [--logo-accent:#FF9E2C] dark:[--logo-bg-start:#FAF9F7] dark:[--logo-bg-end:#E7E4DC] dark:[--logo-fg:#16181C] dark:[--logo-accent:#C2701A]"
         viewBox="0 0 100 100"
         aria-hidden="true"
       >
@@ -17,13 +17,27 @@
             <stop offset="100%" stop-color="var(--logo-bg-end)" />
           </linearGradient>
         </defs>
-        <rect width="100" height="100" rx="18" fill="url(#titlebar-logo-bg)" />
-        <path d="M 24 18 L 59 50 L 24 82 L 32 74 L 51 50 L 32 26 Z" fill="var(--logo-fg)" />
-        <path d="M 51 60 L 84 62 L 53 65 Z" fill="var(--logo-fg)" />
+        <rect width="100" height="100" rx="22" fill="url(#titlebar-logo-bg)" />
+        <!-- WasmApp 标识：W 由四段彼此分离的笔画构成（多个隔离应用），中峰嵌琥珀核心（活跃实例） -->
+        <g
+          stroke="var(--logo-fg)"
+          stroke-width="13"
+          stroke-linecap="butt"
+          fill="none"
+        >
+          <line x1="23.2" y1="33" x2="36.8" y2="67" />
+          <line x1="39.3" y1="67.1" x2="48.7" y2="46.9" />
+          <line x1="51.3" y1="46.9" x2="60.7" y2="67.1" />
+          <line x1="63.2" y1="67" x2="76.8" y2="33" />
+        </g>
+        <path
+          d="M50 36.5 L56.5 43 L50 49.5 L43.5 43 Z"
+          fill="var(--logo-accent)"
+        />
       </svg>
       <span
         class="text-[calc(13px*var(--ui-scale))] font-semibold tracking-tight text-[var(--text-primary)]"
-        >BedCode</span
+        >WasmApp</span
       >
     </div>
 

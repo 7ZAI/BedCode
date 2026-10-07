@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="520" height="120" viewBox="0 0 520 120">
+  <g transform="translate(10,10)" stroke="#F5F7F9" stroke-width="13" stroke-linecap="butt" fill="none">
+    <line x1="23.2" y1="33" x2="36.8" y2="67"/><line x1="39.3" y1="67.1" x2="48.7" y2="46.9"/>
+    <line x1="51.3" y1="46.9" x2="60.7" y2="67.1"/><line x1="63.2" y1="67" x2="76.8" y2="33"/>
+  </g>
+  <path d="M60.5 46.5 L67 53 L60.5 59.5 L54 53 Z" fill="#FF9E2C"/>
+  <text x="130" y="79" font-family="DejaVu Sans, Noto Sans, Inter, sans-serif" font-size="56" font-weight="700" letter-spacing="-1.5" fill="#F5F7F9">Wasm<tspan fill="#FF9E2C">App</tspan></text>
+</svg>

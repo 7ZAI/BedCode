@@ -2,7 +2,7 @@ export default {
   desktop: {
     splash: {
       status: 'Starting up…',
-      tagline: 'LAN remote terminal workbench',
+      tagline: 'Multi-WASM app runtime',
     },
     sidebar: {
       settings: 'Settings',

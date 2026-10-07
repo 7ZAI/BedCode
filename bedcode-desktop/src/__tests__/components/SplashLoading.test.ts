@@ -66,10 +66,10 @@ describe('SplashLoading Component', () => {
 
     const overlay = document.querySelector('.splash-root')!
     // 品牌名
-    expect(overlay.textContent).toContain('BedCode')
+    expect(overlay.textContent).toContain('WasmApp')
     // 终端启动行：$ 提示符 + 命令（Teleport 到 body，用 document 查询）
     const typed = overlay.querySelector('.splash-typed')
-    expect(typed?.textContent).toBe('bedcode')
+    expect(typed?.textContent).toBe('wasmapp')
     wrapper.unmount()
   })
 
@@ -110,7 +110,9 @@ describe('SplashLoading Component', () => {
 
     const overlay = document.querySelector('.splash-root')!
     expect(overlay.querySelector('.splash-footer')?.textContent).toContain('v9.9.9')
-    expect(overlay.querySelector('.splash-footer')?.textContent).toContain('LAN remote terminal')
+    // 品牌改版后 footer 定位语由「LAN remote terminal」改为「WASM app runtime」
+    expect(overlay.querySelector('.splash-footer')?.textContent).toContain('WasmApp')
+    expect(overlay.querySelector('.splash-footer')?.textContent).toContain('WASM app runtime')
     wrapper.unmount()
   })
 

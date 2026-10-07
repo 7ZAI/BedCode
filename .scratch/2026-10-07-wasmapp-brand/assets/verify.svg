@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="420" viewBox="0 0 900 420">
+<rect width="900" height="420" fill="#0B0C0E"/>
+<image href="out/wasmapp-icon.svg" x="30" y="30" width="180" height="180"/>
+<image href="out/wasmapp-icon-simple.svg" x="240" y="30" width="180" height="180"/>
+<image href="out/wasmapp-mark.svg" x="450" y="30" width="180" height="180"/>
+<image href="out/wasmapp-mark-amber.svg" x="660" y="30" width="180" height="180"/>
+<rect x="30" y="240" width="400" height="92" rx="10" fill="#121418"/>
+<image href="out/wasmapp-lockup.svg" x="40" y="244" width="380" height="88"/>
+<rect x="460" y="240" width="410" height="92" rx="10" fill="#F4F6F8"/>
+<image href="out/wasmapp-mark-light.svg" x="470" y="244" width="84" height="84"/>
+<text x="570" y="300" font-family="DejaVu Sans" font-size="40" font-weight="700" fill="#16181C">Wasm<tspan fill="#C2701A">App</tspan></text>
+</svg>

@@ -1,13 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-  <defs>
-    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#6366F1"/>
-      <stop offset="100%" stop-color="#8B5CF6"/>
-    </linearGradient>
-  </defs>
-  <rect width="100" height="100" rx="20" fill="url(#bg)"/>
-  <!-- 聊天气泡 -->
-  <path d="M22 34 Q22 22 34 22 L66 22 Q78 22 78 34 L78 52 Q78 64 66 64 L44 64 L32 78 L34 64 Q22 64 22 52 Z" fill="#FFFFFF" fill-opacity="0.95"/>
-  <!-- 内部 sparkle 四角星（AI 魔法感） -->
-  <path d="M50 30 L54 44 L68 48 L54 52 L50 66 L46 52 L32 48 L46 44 Z" fill="#8B5CF6"/>
+  <defs><linearGradient id="b" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#16181C"/><stop offset="100%" stop-color="#08090B"/></linearGradient></defs>
+<rect width="100" height="100" rx="20" fill="url(#b)"/>
+  <!-- 对话气泡 + 一个琥珀高光（AI 语义保留，去掉靛紫渐变底） -->
+  <path d="M26 26 h48 a10 10 0 0 1 10 10 v26 a10 10 0 0 1 -10 10 h-26 l-12 10 v-10 h-10 a10 10 0 0 1 -10 -10 v-26 a10 10 0 0 1 10 -10 z" fill="#F5F7F9"/>
+  <path d="M50 42 L54.5 54.5 L67 59 L54.5 63.5 L50 76 L45.5 63.5 L33 59 L45.5 54.5 Z" fill="#FF9E2C"/>
 </svg>

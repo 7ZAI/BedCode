@@ -9,6 +9,17 @@
 
 ## [未发布]
 
+#### 桌面端：品牌重塑为 WasmApp —— 新 logo 与标识系统（仅桌面端；移动端保持 BedCode；无 ABI / WIT / 协议变动）
+
+- **范围**：**仅桌面端**。`bedcode-mobile/` 的名称、图标、色板全部保持 BedCode。按用户决定，两端从此有意使用不同品牌：桌面端重新定位为「多 WASM 应用运行平台」，移动端仍是局域网远程终端
+- **Logo**：旧标识是 `>` 终端提示符（暖炭`#2E2A22 → #0A0907`），命名的是终端而非运行时。新标识是**四段分离笔画构成的 W**，中间峰内嵌一枚**琥珀菱形核心**。语义与架构同构而非贴装饰：四段分离笔画 = 多个隔离的 WASM 应用；笔画间接缝 = 隔离边界（插件间只经互调API 与 `host-bus` 通信）；琥珀菱形 = 活跃实例；圆角容器 = 宿主沙箱。基于渲染实证否决了四个方向（纯字母 W、模块网格、堆叠横条、A/P/P 字形拼接——旋转的 `P` 仍读作字母“PP”且碗部形似动物脸）
+- **色板**：`#08090B` / `#16181C` 作底，`#FF9E2C` 琥珀作**唯一**强调色。选琥珀而非基建品牌惯用的蓝紫，继承 BedCode 的终端磷光暖调而不复活 `>` 符号。浅色底用降饱和变体 `#C2701A`
+- **资产**：18 个桌面图标全量重生成（`icon.svg` / `icon.png` / 多尺寸 `icon.ico` 16-24-32-48-64-256 / 手工打包 `icon.icns` ic11+ic12+ic07-ic10 / 10 个 Windows `Square*Logo` + `StoreLogo` / `64x64` / `128x128` / `128x128@2x`），以及 `public/favicon.svg` + `favicon.png`
+- **产品内触点**：`productName` 与窗口 `title` → `WasmApp`；`TitleBar.vue` 内联 logo 换为新标识（经 `--logo-*` 变量适配主题，新增 `--logo-accent`）；`SplashLoading.vue` 的 logo、品牌名、打字机启动行（`bedcode` → `wasmapp`，**仍为 7 字符**故现有字符步进 CSS 无需改动）与 footer（`WASM app runtime`）；`SettingsAboutSection.vue` 品牌名；`index.html` `<title>`；favicon；deb `Keywords` 补 `wasm;wasmtime;webassembly;plugin;runtime`；`shortDescription` 改为「基于 wasmtime 的多 WASM 应用运行平台」。启动页深色品牌常量（其注释明写镜像 `icon.svg`）已从旧暖色板更新为新色板，发光色一并改为琥珀
+- **插件图标统一**：桌面端 4 个 `wasm-apps/*/icon.svg` 此前已分裂成四套视觉语言——`ai-chatbox` 靛蓝→紫渐变、`file-transfer` 天蓝→蓝渐变、`agent-hub` 用了不同 `viewBox` 但唯一接近品牌、**`terminal-session/icon.svg` 是零字节空文件**。现四者统一底板（`rx=20`、`#16181C → #08090B` 渐变、`#F5F7F9` 几何图形、最多一处 `#FF9E2C`），各自保留原有产品语义
+- **有意不改**：bundle `identifier` 保持 `com.bedcode.app` —— Tauri 的 `app_data_dir` 解析为 `data_dir/${identifier}`（见 `tauri-2/src/path/desktop.rs`），改了会把数据库与配置遗留在旧 `~/.local/share/com.bedcode.app`。同时未动：`~/.bedcode/plugins/` 安装路径（注释已标为内部实现路径）、`com.bedcode.terminal-session` 插件 ID、npm SDK / CLI 包名、GitHub 仓库 URL、`bedcode.keystore`，以及 `style.css` 的多色板主题 token（那是主题系统而非品牌色，重做主题是另一项决策）
+- **验收**：桌面端全量 vitest 除既有的 `terminalPreview.test.ts`（xterm + 真实时钟flake，本次完全未触碰）外全绿；`SplashLoading.test.ts` 两处品牌断言随产品变更同步更新。根 `pnpm exec eslint .` **0 error**（115 warning，均为既有）。图标逐档栅格化后目视验证至 16px。**未跑**：`cargo test`（无 Rust 改动，`tauri.conf.json` 品牌字段不被任何 Rust 测试读取）、`cross-end-tests`（未触及 ABI / WIT / 协议面）、macOS 打包（本机无 icns 工具）、deb/APK 全量重建
+
 #### 桌面端：设备在线状态闭环断裂 —— 设备上下线事件名漂移，前端收不到 WS 驱动事件（无 ABI / WIT / 协议变动）
 
 - **症状**：移动端经历史连接（免配对码流程）直连桌面端 WS 后，设备列表在线数恒为 0；移动端主动断开后桌面仍显示设备在线
@@ -22,7 +33,6 @@
 - **成因**：`update_server_port` 只持久化配置 + 更新 supervisor 内存端口，**不重启监听 socket**（真实端口在服务器重启/下次启动才生效）；ServerView 此前唯一起效入口是工具栏「启动/重启」按钮顺带保存，改端口本身无保存动作、无「需要重启」的提示确认；设备连接界面（`DeviceCenterView`）被 KeepAlive 缓存，重启换端口后切回也不重拉 `network.info`
 - **修法**：① ServerView 端口行新增「保存」按钮（输入变化才可用，回车同样触发）——运行中保存弹确认「端口修改需要重启服务器后才能生效，是否立即重启？」，**立即重启** = 保存 + `restartServer`（用新端口）+ 状态刷新 + 成功提示，**稍后重启** = 仅保存、提示下次启动生效；停止态保存直接提示下次启动生效；② `DeviceCenterView` 在 `onActivated`（KeepAlive 切回）时刷新网络信息，重启换端口后界面即时显示新值
 - **验收**：新增 `ServerView.test.ts` 7 例行为契约全绿（C1 未修改不触发 / C2 运行中弹确认 / C3 立即重启链路 / C4 稍后 / C5 停止态 / C6 失败不假成功 / C7 回车触发）；i18n 双语同补；eslint 0 error；terminal-session vitest 全量绿。**未跑**：真机手工核验（需起宿主 + 移动端设备实操）
-
 
 #### 桌面端：会话日志二级详情的「任务记录」塔成一行 —— 高度链绕过分区过渡容器后接通
 

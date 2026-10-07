@@ -1,5 +1,5 @@
 {
-  "productName": "BedCode",
+  "productName": "WasmApp",
   "identifier": "com.bedcode.app",
   "version": "2.1.1",
   "build": {
@@ -12,7 +12,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "BedCode",
+        "title": "WasmApp",
         "width": 1300,
         "height": 900,
         "minWidth": 800,
@@ -55,7 +55,7 @@
     "createUpdaterArtifacts": true,
     "targets": ["nsis", "deb"],
     "category": "Utility",
-    "shortDescription": "局域网远程终端——移动端控制桌面端 Claude Code 会话",
+    "shortDescription": "基于 wasmtime 的多 WASM 应用运行平台",
     "resources": [
       "resources/config.properties",
       "resources/plugins/"
