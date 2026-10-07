@@ -12,7 +12,6 @@ export default {
       confirmDisconnectMsg: '确定要断开与当前设备的连接吗？所有远程会话将终止。',
       currentConnection: '当前连接',
       connectionHistory: '连接历史',
-      noHistory: '暂无连接历史',
       scanConnect: '二维码连接',
       discoverDevices: '扫描发现',
       manualConnect: '手动连接',

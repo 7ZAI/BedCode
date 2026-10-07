@@ -47,7 +47,7 @@
     </div>
 
     <!-- Main Content（页面内容滚动容器：scrollbar-gutter-stable 防滚动条显隐引起整页横向抖动） -->
-    <div class="scrollbar-gutter-stable flex-1 overflow-y-auto overflow-x-hidden px-4 min-h-0">
+    <div ref="contentScrollRef" class="scrollbar-gutter-stable flex-1 overflow-y-auto overflow-x-hidden px-4 min-h-0">
       <!-- 连接失败提示（附加在页面区块上方，不替换列表；连接中 loading 由弹窗 LoadingDialog 承担，
           避免状态卡片与列表的快速显示/隐藏跳变闪动） -->
       <Transition name="fade">
@@ -106,23 +106,39 @@
       </div>
 
       <!-- Not Connected: mDNS 扫描发现（融合进连接页：点击页头扫描按钮展开，扫描动画+结果在此展示，区域可关闭） -->
-      <div v-else-if="showDiscovery" key="discovery" class="pb-8 pt-2">
-        <!-- 区域头部：扫描发现 + × 关闭（页面标题保持「连接配对」不变，无跳转） -->
-        <div class="flex items-center justify-between pb-2">
+      <div v-else-if="showDiscovery" key="discovery" class="pb-8">
+        <!-- 区域头部：扫描发现 + 控制（停止/重新扫描）+ × 关闭。吸顶在内容区顶部，
+            设备列表较长时滚动中控制按钮仍可达（页面标题保持「连接配对」不变，无跳转）。
+            控制按钮放在面板内而非底部按钮组：底部两枚 CTA 常驻，切换扫描零布局跳变 -->
+        <div
+          class="sticky top-0 z-10 -mx-4 px-4 pt-2 pb-2 flex items-center justify-between"
+          style="background: var(--mobile-bg-primary)"
+        >
           <span class="text-sm font-semibold text-[var(--mobile-text-muted)]">
             {{ t('mobile.discover.title') }}
             <span v-if="discoveredServices.length > 0" class="ml-1 px-1.5 py-0.5 rounded-full text-xs" style="background: var(--mobile-bg-elevated); color: var(--mobile-text-secondary)">{{ discoveredServices.length }}</span>
           </span>
-          <button
-            class="p-2 -mr-2 rounded-lg transition-colors active:opacity-80 flex-shrink-0"
-            style="color: var(--mobile-text-muted)"
-            :title="t('common.button.close')"
-            @click="closeDiscovery"
-          >
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
+          <div class="flex items-center -mr-2 flex-shrink-0">
+            <button
+              class="h-11 px-3 rounded-lg text-sm font-medium transition-colors duration-200 active:opacity-80"
+              style="color: var(--mobile-text-secondary)"
+              :disabled="connection.isConnecting.value"
+              :class="{ 'opacity-50': connection.isConnecting.value }"
+              @click="toggleMdnsScan"
+            >
+              {{ isScanning ? t('mobile.discover.stopScan') : t('mobile.discover.restartScan') }}
+            </button>
+            <button
+              class="h-11 w-11 rounded-lg flex items-center justify-center transition-colors duration-200 active:opacity-80"
+              style="color: var(--mobile-text-muted)"
+              :title="t('common.button.close')"
+              @click="closeDiscovery"
+            >
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
         </div>
 
         <!-- Scanning status（扫描动画：spinner + 状态文字 + 已发现数） -->
@@ -189,17 +205,20 @@
         </div>
       </div>
 
-      <!-- Not Connected: History + Actions -->
-      <div v-else key="history" class="pb-8">
+      <!-- Not Connected: Connection History + Scan Result。
+           历史为空时整个历史区块（标题/条数/清除/列表）不渲染——空历史只剩「连接历史」标题
+           与「暂无连接历史」文案纯属噪音，入口由底部两枚 CTA 与页头雷达按钮承担；
+           与扫码结果都为空时本分支整体不渲染，不留空内容区 -->
+      <div v-else-if="hasHistoryOrScanResult" key="history" class="pb-8">
         <div class="pt-2 space-y-3">
-          <!-- Connection History header（带条数） -->
+          <!-- Connection History（仅非空时渲染，带条数与清除入口） -->
+          <template v-if="hasConnectionHistory">
           <div class="flex items-center justify-between pt-2">
             <span class="text-sm font-semibold text-[var(--mobile-text-muted)]">
               {{ t('mobile.connection.connectionHistory') }}
-              <span v-if="connectionHistory.length > 0" class="ml-1 px-1.5 py-0.5 rounded-full text-xs" style="background: var(--mobile-bg-elevated); color: var(--mobile-text-secondary)">{{ connectionHistory.length }}</span>
+              <span class="ml-1 px-1.5 py-0.5 rounded-full text-xs" style="background: var(--mobile-bg-elevated); color: var(--mobile-text-secondary)">{{ connectionHistory.length }}</span>
             </span>
             <button
-              v-if="connectionHistory.length > 0"
               class="text-sm transition-colors active:opacity-80"
               style="color: var(--mobile-text-muted)"
               @click="showClearHistoryConfirm = true"
@@ -208,11 +227,7 @@
             </button>
           </div>
 
-          <div v-if="connectionHistory.length === 0" class="text-center py-8">
-            <p class="text-sm" style="color: var(--mobile-text-disabled)">{{ t('mobile.connection.noHistory') }}</p>
-          </div>
-
-          <TransitionGroup v-else name="config-list" tag="div" class="space-y-3">
+          <TransitionGroup name="config-list" tag="div" class="space-y-3">
             <button
               v-for="item in connectionHistory"
               :key="item.address"
@@ -245,10 +260,12 @@
               </div>
             </button>
           </TransitionGroup>
+          </template>
 
-          <!-- 扫描结果：与连接历史同级别的独立区块（识别到二维码停止扫描后出现），可关闭 -->
+          <!-- 扫描结果：与连接历史同级别的独立区块（识别到二维码停止扫描后出现），可关闭；
+               历史为空时不再让位（无 pt-4 缩进），直接贴顶 -->
           <Transition name="fade">
-          <div v-if="scanResult" class="pt-4">
+          <div v-if="scanResult" :class="hasConnectionHistory ? 'pt-4' : 'pt-0'">
             <div class="flex items-center justify-between pb-2">
               <span class="text-sm font-semibold text-[var(--mobile-text-muted)]">
                 {{ t('mobile.scan.scanResult') }}
@@ -289,26 +306,14 @@
       </Transition>
     </div>
 
-    <!-- Action Buttons (when not connected)：mDNS 扫描发现 / 二维码扫描 / 默认 三种模式互斥 -->
+    <!-- Action Buttons (when not connected)：底部两枚 CTA 常驻（扫码 / 手动），不再随 mDNS
+         开关换布局——扫描控制已移入发现面板头部，切换扫描时底部高度与内容均不跳变 -->
     <div v-if="!isConnected" class="flex-shrink-0 p-4 space-y-3" style="padding-bottom: max(1rem, var(--safe-area-bottom, 0px))">
-      <!-- 操作按钮互斥组（mDNS / 扫码 / 默认）：切换淡入淡出，避免按钮块硬切闪动 -->
+      <!-- 相机态与默认态互斥：切换淡入淡出，避免按钮块硬切闪动 -->
       <Transition name="fade" mode="out-in">
-      <!-- mDNS 扫描发现：扫描中「停止扫描」/ 已停止「重新扫描」 -->
-      <button
-        v-if="showDiscovery"
-        key="mdns"
-        class="w-full h-11 rounded-xl text-sm font-medium transition-colors active:opacity-80"
-        style="background: var(--mobile-group-bg); border: 1px solid var(--mobile-group-border); color: var(--mobile-text-secondary)"
-        :class="{ 'opacity-50': connection.isConnecting.value }"
-        :disabled="connection.isConnecting.value"
-        @click="toggleMdnsScan"
-      >
-        {{ isScanning ? t('mobile.discover.stopScan') : t('mobile.discover.restartScan') }}
-      </button>
-
       <!-- 二维码扫描：启动后按钮切换为「停止扫描」（红色） -->
       <button
-        v-else-if="showScanner"
+        v-if="showScanner"
         key="scan"
         class="w-full h-11 rounded-xl text-base font-medium transition-colors active:opacity-80 flex items-center justify-center gap-2"
         style="background: var(--mobile-chip-red-bg); color: var(--mobile-chip-red); border: 1px solid color-mix(in srgb, var(--mobile-chip-red) 25%, transparent)"
@@ -435,7 +440,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onActivated, onDeactivated, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, onActivated, onDeactivated, nextTick, watch } from 'vue'
 import { logger } from '@/utils/frontendLogger'
 import { classifyConnectionError } from '@/utils/connectionError'
 import { useI18n } from 'vue-i18n'
@@ -460,6 +465,12 @@ const { t } = useI18n()
 // 使用全局状态
 const connectionHistory = connection.connectionHistory
 
+// 连接历史非空才渲染历史区块（空历史不显示标题/清除/空态文案）
+const hasConnectionHistory = computed(() => connectionHistory.value.length > 0)
+
+// 内容区滚动容器（模式切换时复位滚动位置）
+const contentScrollRef = ref<HTMLElement | null>(null)
+
 // 内嵌扫描面板开关（扫描整合进连接页；连接成功后视图自动切换，面板随之卸载）
 const showScanner = ref(false)
 
@@ -476,6 +487,9 @@ interface QrScanResult {
   token: string
 }
 const scanResult = ref<QrScanResult | null>(null)
+
+// 历史与扫码结果都没有时整个分支不渲染（避免空内容区只剩 pb-8 空白）
+const hasHistoryOrScanResult = computed(() => hasConnectionHistory.value || scanResult.value !== null)
 
 const showManualConnect = ref(false)
 const showPairing = ref(false)
@@ -566,9 +580,10 @@ function formatLastConnected(iso?: string): string {
 // 从 Discover/终端等页面返回时重新加载连接历史（force=true，本地状态可能在其它页面更新）
 onActivated(() => {
   connection.loadConnectionHistory(true)
-  // 切回连接页时若扫描发现区仍展开，恢复扫描（keep-alive 激活时 onMounted 不会重新触发）
+  // 切回连接页时若扫描发现区仍展开，后台续扫但保留已发现设备（keepResults）——
+  // 否则每次返回都清空列表重新等一圈扫描动画，看起来像「发现区坏了」
   if (showDiscovery.value) {
-    startMdnsScan()
+    startMdnsScan({ keepResults: true })
   }
 })
 
@@ -579,6 +594,20 @@ onMounted(() => {
 // 切走连接页时停掉 mDNS 扫描（keep-alive 缓存页面，避免后台持续扫描）
 onDeactivated(() => {
   stopMdnsScan()
+})
+
+// 组件真被销毁时也停扫描：/mobile/devices 等独立路由不走 keep-alive 缓存，
+// 直接导航离开会触发卸载（此时 onDeactivated 不执行），否则 mDNS 一直跑到进程结束
+onUnmounted(() => {
+  stopMdnsScan()
+})
+
+// 模式切换（二维码/扫描发现/历史）复位内容区滚动位置：各区块高度不同，内容收缩时
+// scrollTop 会被浏览器夹到更小的值，切回长列表时停在半空中段（看起来像页面跳了一下）
+watch([showScanner, showDiscovery], async () => {
+  await nextTick()
+  const el = contentScrollRef.value
+  if (el) el.scrollTop = 0
 })
 
 // 监听连接状态变化，认证完成时加载会话数据
@@ -599,7 +628,8 @@ watch([isConnected, connection.connectionStatus], async ([connected, status], [o
 watch(isConnected, (connected) => {
   if (connected) {
     showScanner.value = false
-    showDiscovery.value = false
+    // 关闭发现区并停掉扫描：只收起面板会让 mDNS 在已连接状态下继续跑
+    closeDiscovery()
   }
 })
 
@@ -661,10 +691,10 @@ async function handleConnectManual(address: string) {
 // 切换二维码扫描：非扫描态点击「扫码连接」打开内嵌相机；扫描中点击「停止扫描」收起，
 // 若已识别到二维码则下方出现扫描结果卡片（与 mDNS 发现互斥）
 function toggleScanner() {
-  showScanner.value = !showScanner.value
-  if (showScanner.value) {
-    showDiscovery.value = false
-  }
+  const next = !showScanner.value
+  showScanner.value = next
+  // 二维码与 mDNS 发现互斥：打开相机时收起发现区，并停掉后台 mDNS 扫描
+  if (next) closeDiscovery()
 }
 
 /** ScanPanel 识别到有效二维码：关闭扫描视图，结果以卡片展示在连接历史下方 */
@@ -677,8 +707,9 @@ function handleScanResult(result: QrScanResult) {
 
 /** 切换 mDNS 扫描发现区（页头雷达按钮）：展开自动开始扫描，收起停止扫描 */
 function toggleDiscovery() {
-  showDiscovery.value = !showDiscovery.value
-  if (showDiscovery.value) {
+  const next = !showDiscovery.value
+  showDiscovery.value = next
+  if (next) {
     showScanner.value = false
     startMdnsScan()
   } else {
@@ -686,16 +717,19 @@ function toggleDiscovery() {
   }
 }
 
-/** 关闭扫描发现区（× 按钮） */
+/** 关闭扫描发现区（面板头部 × 按钮，或切换到其它模式时） */
 function closeDiscovery() {
   showDiscovery.value = false
   stopMdnsScan()
 }
 
-/** 开始/重新开始 mDNS 扫描 */
-async function startMdnsScan() {
+/**
+ * 开始/重新开始 mDNS 扫描
+ * @param options.keepResults 保留已发现列表（返回连接页时的后台续扫用）
+ */
+async function startMdnsScan(options?: { keepResults?: boolean }) {
   try {
-    await startDiscovery()
+    await startDiscovery(options)
   } catch (e) {
     logger.error('[DevicesView] mDNS start failed:', e)
   }
@@ -1095,6 +1129,18 @@ async function confirmDisconnect() {
 
 .config-list-move {
   transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* 动效降级：系统开启「减少动态效果」时，本视图的模式切换/列表动效直接呈现终态
+   （与 SplashScreen 同口径；降级后模式切换依然是瞬时状态切换，不丢功能） */
+@media (prefers-reduced-motion: reduce) {
+  .fade-enter-active,
+  .fade-leave-active,
+  .config-list-enter-active,
+  .config-list-leave-active,
+  .config-list-move {
+    transition: none !important;
+  }
 }
 
 /* ==================== mDNS 发现设备列表（融合自原扫描页 DiscoverView） ==================== */

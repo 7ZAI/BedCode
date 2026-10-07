@@ -13,7 +13,6 @@ export default {
         'Are you sure you want to disconnect? All remote sessions will be terminated.',
       currentConnection: 'Current Connection',
       connectionHistory: 'Connection History',
-      noHistory: 'No connection history',
       scanConnect: 'QR Connect',
       discoverDevices: 'Discover',
       manualConnect: 'Manual Connect',

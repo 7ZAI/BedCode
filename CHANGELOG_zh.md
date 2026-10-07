@@ -20,6 +20,12 @@
 - **有意不改**：bundle `identifier` 保持 `com.bedcode.app` —— Tauri 的 `app_data_dir` 解析为 `data_dir/${identifier}`（见 `tauri-2/src/path/desktop.rs`），改了会把数据库与配置遗留在旧 `~/.local/share/com.bedcode.app`。同时未动：`~/.bedcode/plugins/` 安装路径（注释已标为内部实现路径）、`com.bedcode.terminal-session` 插件 ID、npm SDK / CLI 包名、GitHub 仓库 URL、`bedcode.keystore`，以及 `style.css` 的多色板主题 token（那是主题系统而非品牌色，重做主题是另一项决策）
 - **验收**：桌面端全量 vitest 除既有的 `terminalPreview.test.ts`（xterm + 真实时钟flake，本次完全未触碰）外全绿；`SplashLoading.test.ts` 两处品牌断言随产品变更同步更新。根 `pnpm exec eslint .` **0 error**（115 warning，均为既有）。图标逐档栅格化后目视验证至 16px。**未跑**：`cargo test`（无 Rust 改动，`tauri.conf.json` 品牌字段不被任何 Rust 测试读取）、`cross-end-tests`（未触及 ABI / WIT / 协议面）、macOS 打包（本机无 icns 工具）、deb/APK 全量重建
 
+#### 移动端：连接历史为空不再占用连接页，mDNS 发现区进出不再清空已发现设备与布局跳变（无 ABI / WIT / 协议变动）
+
+- **症状**：① 无连接历史时页面仍渲染「连接历史」标题 +「暂无连接历史」占位，mDNS 发现又整块替换内容区，屏幕大半是无效信息；② 发现区展开时离开再返回连接页，`startDiscovery()` 每次都会清空 `discoveredServices`——已发现的设备消失、雷达动画重跑一圈，看起来像「发现区坏了」；③ 开关雷达会让底部按钮组在「单按钮 / 双按钮」间切换（约 56px 布局跳变），且连接成功或切到二维码相机时只*隐藏*发现区而没停扫描，连接后 mDNS 仍在后台跑
+- **修法**：① 历史区块（标题 / 条数徽标 / 清除入口 / 列表）仅在非空时渲染；历史与扫码结果都为空时整个分支不渲染——常驻底部的两枚 CTA（二维码连接 / 手动连接）与页头雷达按钮仍承担全部入口；② `startDiscovery(options)` 新增 `keepResults`，keep-alive 返回路径（`onActivated`）以 `keepResults: true` 续扫，已发现设备保持可点、新扫描在背后跑；③ 停止/重新扫描控制移入**吸顶**的发现面板头部，底部按钮组恒定，关闭面板一律连带停扫描（连接成功、切到二维码相机、面板 ×、雷达按钮、以及真实卸载如离开独立路由 `/mobile/devices` 均走 `stopDiscovery`）。模式切换另复位内容区滚动位置（各区块高度不同，列表收缩会把 `scrollTop` 夹在半空中段），并按 `prefers-reduced-motion` 降级本视图的模式切换动效
+- **验收**：新增 `devicesViewScanFlow.test.ts`（10 例：历史空/非空、仅扫码结果分支、底部 CTA 常驻、面板停止/关闭、连接成功收起并停扫、keep-alive 返回带 `keepResults`、滚动复位）+ 新增 `useMdnsDiscovery.test.ts`（13 例：启动选项、幂等启动、resolved 合并去重、removed、启停异常、监听重注册、refresh）全绿；变异自检 **8/8 杀死**；移动端全量 vitest **582 passed / 0 failed**；`vue-tsc --noEmit` 干净；`pnpm exec eslint .` **0 error**（`DevicesView.vue` 两条 unused-var warning 为既有）。**未跑**：真机手工核验（需实体手机 + 桌面端运行）、`cross-end-tests`（纯前端改动，未触及 ABI / WIT / 协议面）
+
 #### 桌面端：设备在线状态闭环断裂 —— 设备上下线事件名漂移，前端收不到 WS 驱动事件（无 ABI / WIT / 协议变动）
 
 - **症状**：移动端经历史连接（免配对码流程）直连桌面端 WS 后，设备列表在线数恒为 0；移动端主动断开后桌面仍显示设备在线
@@ -33,6 +39,7 @@
 - **成因**：`update_server_port` 只持久化配置 + 更新 supervisor 内存端口，**不重启监听 socket**（真实端口在服务器重启/下次启动才生效）；ServerView 此前唯一起效入口是工具栏「启动/重启」按钮顺带保存，改端口本身无保存动作、无「需要重启」的提示确认；设备连接界面（`DeviceCenterView`）被 KeepAlive 缓存，重启换端口后切回也不重拉 `network.info`
 - **修法**：① ServerView 端口行新增「保存」按钮（输入变化才可用，回车同样触发）——运行中保存弹确认「端口修改需要重启服务器后才能生效，是否立即重启？」，**立即重启** = 保存 + `restartServer`（用新端口）+ 状态刷新 + 成功提示，**稍后重启** = 仅保存、提示下次启动生效；停止态保存直接提示下次启动生效；② `DeviceCenterView` 在 `onActivated`（KeepAlive 切回）时刷新网络信息，重启换端口后界面即时显示新值
 - **验收**：新增 `ServerView.test.ts` 7 例行为契约全绿（C1 未修改不触发 / C2 运行中弹确认 / C3 立即重启链路 / C4 稍后 / C5 停止态 / C6 失败不假成功 / C7 回车触发）；i18n 双语同补；eslint 0 error；terminal-session vitest 全量绿。**未跑**：真机手工核验（需起宿主 + 移动端设备实操）
+
 
 #### 桌面端：会话日志二级详情的「任务记录」塔成一行 —— 高度链绕过分区过渡容器后接通
 
