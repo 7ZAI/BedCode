@@ -10,6 +10,7 @@ import { useI18nStore } from '@/stores/i18n'
 import { initPluginSystem } from './plugin'
 import { completeStartupTask } from '@/composables/useAppStartup'
 import { initFrontendLogger } from '@/utils/frontendLogger'
+import { presetThemeBeforeMount } from '@/composables/useTheme'
 import './style.css'
 import './styles/mobile.css'
 // 终端内置 CJK 等宽字体的 @font-face 声明（src/styles/terminal-font.css）：
@@ -45,6 +46,10 @@ Promise.all([
   completeStartupTask('platform')
   completeStartupTask('settings')
   logger.log('[Init] Platform and settings pre-loaded')
+
+  // 首次渲染前预应用主题（.dark 类 + data-palette + isSystemDark）：
+  // 消除深色用户「首帧浅色 → onMounted 后深色」的启动闪变
+  presetThemeBeforeMount()
 
   // 设置就绪后初始化插件系统
   try {

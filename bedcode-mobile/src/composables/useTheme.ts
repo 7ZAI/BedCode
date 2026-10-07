@@ -59,6 +59,24 @@ function setupTheme() {
   applyTheme(theme)
 }
 
+/**
+ * 首次渲染前预应用主题（main.ts 在 app.mount 前调用）：把 .dark 类与
+ * data-palette 提前挂到 <html>，并初始化 isSystemDark。
+ *
+ * 为什么：App.vue 的 setupTheme 在 onMounted 才执行，首帧渲染时 .dark 尚未
+ * 上树——mobile.css 的 --mobile-* token 以 html:not(.dark) 为浅色、:root 为深色，
+ * 深色用户首帧会以浅色 token 渲染一帧再翻转（启动闪变之二，与 index.html
+ * 硬编码 bg-dark-900 的错色闪变并列）。与 App.vue 的 setupTheme 幂等可重复调用。
+ */
+export function presetThemeBeforeMount() {
+  const settingsStore = useSettingsStore()
+  const theme = settingsStore.settings.ui.theme
+  if (theme === 'system') {
+    isSystemDark.value = window.matchMedia('(prefers-color-scheme: dark)').matches
+  }
+  applyTheme(theme)
+}
+
 function cleanupTheme() {
   if (systemThemeQuery) {
     systemThemeQuery.removeEventListener('change', systemThemeHandler)
