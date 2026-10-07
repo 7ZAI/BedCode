@@ -270,6 +270,8 @@ describe('连接流：useMobileConnection × useHttpApi × terminalBuffer store'
     bufferStore.markSubscribed('s1')
     expect(bufferStore.getBuffer('s1')?.subscribed).toBe(true)
 
+    vi.mocked(toast.error).mockClear()
+    vi.mocked(toast.warning).mockClear()
     await emit('ws_unexpected_disconnect', { reason: 'Connection reset' })
     await flushAsync()
 
@@ -279,6 +281,9 @@ describe('连接流：useMobileConnection × useHttpApi × terminalBuffer store'
     expect(conn.connectionStatus.value).toBe('disconnected')
     expect(conn.isConnecting.value).toBe(false)
     expect(conn.connectionError.value).toBe('common.notification.connectionDisconnected')
+    // 但 Toast 不应直接标注「连接已断开」作为最终态：可重连断开应指向正在恢复
+    expect(vi.mocked(toast.warning).mock.calls.at(-1)?.[0]).toContain('连接中断，正在自动重连')
+    expect(vi.mocked(toast.error).mock.calls.some(([message]) => String(message).includes('连接已断开'))).toBe(false)
     expect(
       bufferStore.getBuffer('s1')?.subscribed,
       '断连后订阅信念未清除：重连后的重订阅会被 skipped，终端只剩历史没实时',
@@ -365,11 +370,13 @@ describe('连接流：useMobileConnection × useHttpApi × terminalBuffer store'
     expect(conn.connectionStatus.value).toBe('connecting')
 
     // 重连成功 → 自动 JWT 重新认证（isConnecting 保持 true 直到认证完成）
+    vi.mocked(toast.success).mockClear()
     await emit('ws_reconnected')
     await flushAsync()
     expect(invokeCalls('ws_authenticate')).toEqual([[{ sessionToken: 'test-jwt-token' }]])
     expect(conn.connectionStatus.value).toBe('connected')
     expect(conn.isConnecting.value).toBe(true)
+    expect(vi.mocked(toast.success).mock.calls.at(-1)?.[0]).toBe('连接已恢复')
 
     // 认证成功 → ws_paired → 状态 paired（重连闭环完成）
     await emit('ws_paired')

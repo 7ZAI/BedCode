@@ -75,6 +75,8 @@ export default {
       sessionStoppedNoName: '"{device}" 停止了会话',
       connectionDisconnected: '连接已断开: {reason}',
       reconnectFailed: '重连失败: {reason}，请手动重新连接',
+      connectionInterrupted: '连接中断，正在自动重连: {reason}',
+      reconnected: '连接已恢复',
       // M1/ADR 0031：认证类致命关闭（4001/4003）——需重新配对/认证后再连
       authFailedRePair: '身份认证已失效，请重新配对后再连接: {reason}',
       // 协议/策略层不可重试关闭（1002/1003/1007/1008/1009/1010）——重连必然同样

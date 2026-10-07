@@ -416,9 +416,10 @@ async function init() {
     const bufferStore = useTerminalBufferStore()
     bufferStore.markAllUnsubscribed()
 
-    // 弹出 Toast 通知（手动断开不会触发此事件）
+    // 弹出 Toast 通知（手动断开不会触发此事件）。此刻不弹「连接已断开」作为
+    // 最终态：非致命断开且自动重连开启时，后续会自愈，文案必须指向正在恢复，
+    // 否则用户会看到「断开」直到重连成功后才回过神。
     const toast = useToast()
-    toast.error(i18n.global.t('common.notification.connectionDisconnected', { reason: event.payload.reason }), 5000)
 
     // 发送连接断开系统通知
     showConnectionNotification({
@@ -457,6 +458,10 @@ async function init() {
       return
     }
 
+    // 非致命且可自动重连：断开是事实，但应明确「正在自愈」，避免与后续
+    // ws_reconnected/ws_paired 出现语义矛盾。
+    toast.warning(i18n.global.t('common.notification.connectionInterrupted', { reason: event.payload.reason }), 5000)
+
     // 取消所有任务通知
     cancelAllTaskNotifications()
   })
@@ -470,6 +475,7 @@ async function init() {
       return
     }
     connectionStatus.value = 'connecting'
+    connectionError.value = null
 
     // 更新前台服务通知为重连状态
     const { updateNotification } = useForegroundService()
@@ -492,6 +498,7 @@ async function init() {
     connectionError.value = null
     // 重连成功后需要重新认证，isConnecting 保持 true 直到认证完成
     isConnecting.value = true
+    const toast = useToast()
 
     // 重连成功后重新认证
     const creds = loadAuthCredentials()
@@ -501,6 +508,7 @@ async function init() {
         const authSuccess = await wsAuthenticate(creds.sessionToken)
         if (authSuccess) {
           logger.log('[MobileConnection] Re-authenticated successfully, ws_paired event should follow')
+          toast.success(i18n.global.t('common.notification.reconnected'), 3000)
         } else {
           logger.warn('[MobileConnection] Re-auth failed, need to pair again')
           // JWT 被拒绝，必须断开 WebSocket 连接，否则 Rust 端 WsClient 仍为 Connected
