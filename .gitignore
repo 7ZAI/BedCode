@@ -162,3 +162,10 @@ release.keystore
 
 # vite config 打包临时产物（崩溃/中断时残留）
 **/vite.config.ts.timestamp-*.mjs
+
+# pi 工具产物（archify 工作目录与交付中间 json；成品 .html/.json/.png 走 docs/diagrams/ 正常入库）
+.archify/
+docs/diagrams/*.delivery.json
+docs/diagrams/*.finalize.json
+docs/diagrams/*.finalize-summary.json
+docs/diagrams/*.browser-check.json
