@@ -332,7 +332,8 @@ wasm_host.rs 拆分）、`terminal_stream_gateway.rs`（窄转发表，Tauri 命
   `src-tauri/tests/retired_mobile_peer_transfer_command_face_lock.rs`
 - **设备列表投影（票 09 收口）**：宿主**不持有**设备列表派生视图——真源是插件前端
   `composables/deviceState.ts` 状态机（host-mdns 自建 browse 的属主定向
-  `mdns:found.<id>` / `mdns:lost.<id>` 事件驱动 + last-seen 快照经
+  `<owner>::mdns:found|lost` 事件驱动——双端共享 lib spec M3 统一属主命名空间
+  终态 + last-seen 快照经
   `device_bridge` 落 host-storage）；拨号寻址显式（`dial-peer(endpoint)`，
   引擎不内藏 node-id → 地址解析表）。宿主 `DiscoveryCache` 只作**引擎事实**
   （入站连接展示名、首连确认落库元数据、endpoint 拨号的展示名兜底）。旧快照 topic

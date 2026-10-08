@@ -1,7 +1,8 @@
 # 双端共享 lib 对齐：对等网络（peer-net）+ mDNS（discovery-engine）
 
 > Date: 2026-10-08
-> Status: **spec（未实施）**——用户指令「先写 spec 先不用实现」。
+> Status: **M1–M4 已完成（2026-10-09）**——P2（discovery-engine 脱绑）+ M1 共享引擎 + M2 桌面接线（前置验证全绿）+ M3 移动端接线 + M4 peer-net 清理全部落地；M5 收口进行中（ADR 0042 已写，CHANGELOG 双语待合并）。
+> 2026-10-09 审查修订：行号/路径按最新工作区刷新（wasm-apps 改名、fork crate 迁根、票 13/15 落盘），迁移面补 Rust wasm-app 订阅真源，C4 消费方修正，ADR 0037 引用修正。
 > 用户方向指令①：「对等网络应该双端使用同一个 lib，只有前端和文件选择、文件读写不一致，其他全部一致；mdns 也一样应该使用同一个 lib；如果当前的 lib 不满足双端同时引用应该修改至满足。」
 > **用户方向指令②（2026-10-08 拍板）**：「对等网络（包括能力域等）应该使用 packages 下的；mDNS 应该解绑桌面端。」——① 对等网络及其能力域统一落根 `packages/`（现状已满足，本节做核验固化）；② mDNS 引擎从桌面 WIT 解绑（§3.1 D1 方向定案）。
 > 全部事实取自 2026-10-08 工作区实测（行号 / 依赖 / 消费者可复现），不凭记忆。
@@ -20,7 +21,7 @@
 
 ### 1.1 对等网络：已共享，差异面符合用户授权
 
-- **双端同引**：桌面 `bedcode-desktop/src-tauri/Cargo.toml:112` 与移动端 `bedcode-mobile/src-tauri/Cargo.toml:107` 均引
+- **双端同引**：桌面 `bedcode-desktop/src-tauri/Cargo.toml:112` 与移动端 `bedcode-mobile/src-tauri/Cargo.toml:112` 均引
   `bedcode-peer-net = { path = "../../packages/peer-net" }` ——**同一个 crate，零分叉**。
 - **lib 内部结构**（`packages/peer-net/src/`）：cert / discovery / error / frame / identity / node / shared /
   transfer（含 batch::DirEntry）/ transport / trust_store，全部平台无关。
@@ -37,8 +38,8 @@
 
 | 根 crate | 桌面引用 | 移动端引用 | 说明 |
 | --- | --- | --- | --- |
-| `peer-net`（线协议引擎）| ✓（Cargo.toml:112）| ✓（Cargo.toml:107）| **双端同引同一 lib**，零分叉 |
-| `link-crypto`（链路加密）| ✓（:114）| ✓（:109）| 双端同引 |
+| `peer-net`（线协议引擎）| ✓（Cargo.toml:112）| ✓（Cargo.toml:112）| **双端同引同一 lib**，零分叉 |
+| `link-crypto`（链路加密）| ✓（:114）| ✓（:114）| 双端同引 |
 | `bedcode-server-peer-net`（桌面对等网络引擎域 + host-peer WIT 绑定层）| ✓（:148）| ✗ | 桌面专用：host-peer 能力域绑定层带桌面 WIT，移动端契约独立（ADR 0018）不跟演；移动端 host-peer 原语自持 `host_impl/peer.rs`（482 行）| 
 | `bedcode-server-base/core/http/websocket`（桌面服务端域）| ✓（:117,142,144,146）| ✗ | 桌面服务端（HTTP/WS 服务端、认证中心），移动端是消费端无服务端，ADR 0018 独立 |
 | `bedcode-crypto-engine` | ✓（:140）| ✗ | 桌面认证中心密码学（ADR 0033），移动端不入场 |
@@ -49,25 +50,25 @@
 
 | 面 | 桌面 | 移动端 | 差异 |
 | --- | --- | --- | --- |
-| 引擎 lib | `packages/bedcode-discovery-engine`（engine 机制 + `bindgen!` + HostModule + inventory + Host trait 一体）| **无共享 lib**：`mdns/engine.rs`（42 行守护复刻）+ `host_impl/mdns.rs`（783 行原语复刻）| 双份持有 |
+| 引擎 lib | `packages/bedcode-discovery-engine`（**已脱绑，P2 完成**：engine 机制 + `wire.rs` 自持 topic + `ports.rs` 端口 trait + 绑定层 `#[cfg(feature="desktop-host")]`）| **无共享 lib**：`mdns/engine.rs`（62 行守护复刻）+ fork crate `host_impl/mdns.rs`（821 行原语复刻：`bedcode-mobile/packages/bedcode-wasm-core/src/manager/runtime/host_impl/mdns.rs`）| 桌面具：双份持有 |
 | 共享守护 | `engine.rs::DAEMON`（OnceLock）+ `disable_virtual_interfaces`（peer-net 提供）| `mdns/engine.rs::DAEMON`（OnceLock）+ **Android 多播锁** | 平台钩子不同 |
-| 5 原语实现 | `engine.rs::browse/stop_browse/advertise/stop_advertise/is_advertising`（经 `DiscoveryPorts` 端口）| `host_impl/mdns.rs::mdns_browse/...`（直接读 `WasmPluginState`）| 同构复刻 |
-| 双句柄表 + 属主仲裁 + purge + host service | engine.rs（BROWSERS/ADVERTISERS）| host_impl/mdns.rs（BROWSERS/ADVERTISERS）| 同构复刻 |
-| **事件 topic 格式** | `<owner>::mdns:found` / `<owner>::mdns:lost`（`owned_topic(owner, MDNS_FOUND)`，`engine.rs:563`）| `mdns:found.<owner>` / `mdns:lost.<owner>`（`host_impl/mdns.rs:441-444` 直拼字符串）| **wire 形状不同** |
-| 事件循环 | `ports.spawn` + `recv_async()`（宿主运行时）| `std::thread::spawn` + 阻塞 `recv()`（`host_impl/mdns.rs:101`）| 运行时范式不同 |
-| 权限门 | `DiscoveryPorts::check_permission(plugin_id, api)` | 直接读 `WasmPluginState`（`check_permission(state)`，host_impl/mdns.rs:64）| 端口化差异 |
+| 5 原语实现 | `engine.rs::browse/stop_browse/advertise/stop_advertise/is_advertising`（经 `DiscoveryPorts` 端口）| fork crate `host_impl/mdns.rs::mdns_browse/...`（:82,185,232,326,367，直接读 `WasmPluginState`）| 同构复刻 |
+| 双句柄表 + 属主仲裁 + purge + host service | engine.rs（BROWSERS/ADVERTISERS）| fork crate host_impl/mdns.rs（BROWSERS :55 / ADVERTISERS :56 + purge :422 + register/stop_host_service :386/:404）| 同构复刻 |
+| **事件 topic 格式** | `<owner>::mdns:found` / `<owner>::mdns:lost`（自持 `wire.rs::owned_topic`，`engine.rs:561`）| `mdns:found.<owner>` / `mdns:lost.<owner>`（fork crate `host_impl/mdns.rs:467-469` 直拼字符串）| **wire 形状不同** |
+| 事件循环 | `ports.spawn` + `recv_async()`（宿主运行时，engine.rs:141,204）| `std::thread::spawn` + 阻塞 `recv()`（fork crate `host_impl/mdns.rs:105`）| 运行时范式不同 |
+| 权限门 | `DiscoveryPorts::check_permission(plugin_id, api)` | 直接读 `WasmPluginState`（`check_permission(state)`，fork crate host_impl/mdns.rs:66）| 端口化差异 |
 | 能力路由 forward | 有（`forward_mdns_*`，票 09 扩表，系统组件提供时转发）| **无** | 移动端无该机制 |
-| 自播过滤 | `DiscoveryPorts::local_node_id()` | `crate::peer_net::current_node_id(app)` | 端口化差异 |
-| 事件发布 | `DiscoveryPorts::publish(topic, payload)` | `state::try_get_plugin_manager().message_bus().publish(topic, "host", payload)` | 端口化差异 |
-| 依赖 | mdns-sd 0.20 / serde / uuid / tokio / **bedcode_plugin_api（桌面 WIT 常量）** / wasmtime / wit-bindgen / host-kit / inventory / peer-net | mdns-sd 0.20（`bedcode-mobile/src-tauri/Cargo.toml:66`）| 移动端缺：**不能拉桌面 WIT（ADR 0037 C2）** |
+| 自播过滤 | `DiscoveryPorts::local_node_id()` | fork crate `host_impl/mdns.rs:491` `ports.current_node_id(app)` | 端口化差异 |
+| 事件发布 | `DiscoveryPorts::publish(topic, payload)` | `state.host_ctx.message_bus` + `bus.publish(topic, "host", payload)`（fork crate :102/:477）| 端口化差异 |
+| 依赖 | mdns-sd 0.20 / serde / uuid / tokio / **bedcode-plugin-api（已随 P2 移除，wire.rs 自持）** / ~~wasmtime~~（optional）/ ~~wit-bindgen~~（optional）/ ~~host-kit~~（optional）/ ~~inventory~~（optional）/ peer-net | mdns-sd 0.20（`bedcode-mobile/src-tauri/Cargo.toml:71`）| 移动端缺：**不能拉桌面 WIT（ADR 0037 D1 + ADR 0018/0040）** |
 
 ### 1.3 「不满足双端同时引用」的卡点（discovery-engine 现状）
 
-`packages/bedcode-discovery-engine/src/` 分层本身已为双端复用铺路（`ports.rs` 头注：**「本 crate 不依赖 tauri、不依赖宿主 bin crate，因此移动端将来要复用时只需换一个端口实现」**），但：
+`packages/bedcode-discovery-engine/src/` 分层本身已为双端复用铺路（`ports.rs` 头注：**「本 crate 不依赖 tauri、不依赖宿主 bin crate，因此移动端将来要复用时只需换一个端口实现」**），且 **P2 已落地**（2026-10-08，能力域脱绑 spec §3.2 票）：
 
-1. **`lib.rs` 绑定层**：`bindgen!`（桌面 WIT path）+ `HostModule`/`inventory::submit!`（host-kit 类型）+ `impl Host for WasmPluginState`（wasmtime 类型）——桌面 WIT 硬依赖，移动端整 crate 拉不动；
-2. **`engine.rs` 两处 WIT 常量**：`bedcode_plugin_api::host::bus::owned_topic` + `host::mdns::{MDNS_FOUND, MDNS_LOST}`（定义在 `bedcode-desktop/packages/plugin-sdk-desktop/rust/src/host/{bus,mdns}.rs`）——纯字符串逻辑，却挂在桌面 SDK 上；
-3. **topic 格式分叉**：移动端 SDK/宿主自持 `mdns:found.<owner>` 旧格式（`packages/plugin-sdk-mobile/rust/src/host/mdns.rs:3,11` + `abi.rs:31`），桌面已用 `<owner>::` 属主命名空间（wasm-core `host_api/bus.rs:60` 明确「legacy directed-topic form retired」）——**同一原语、两种 wire**。
+1. ~~**`lib.rs` 绑定层**：`bindgen!`（桌面 WIT path）+ `HostModule`/`inventory::submit!`（host-kit 类型）+ `impl Host for WasmPluginState`（wasmtime 类型）——桌面 WIT 硬依赖，移动端整 crate 拉不动~~ → **已解决**：绑定层整体 `#[cfg(feature = "desktop-host")]`（lib.rs），WIT 依赖全 optional；
+2. ~~**`engine.rs` 两处 WIT 常量**：`bedcode_plugin_api::host::bus::owned_topic` + `host::mdns::{MDNS_FOUND, MDNS_LOST}`（定义在 `bedcode-desktop/packages/plugin-sdk-desktop/rust/src/host/{bus,mdns}.rs`）~~ → **已解决**：`wire.rs` 自持副本（`drift_lock` 漂移锁钉死与 SDK 逐字一致）；
+3. **topic 格式分叉**（**未解决，M3/M5 迁移面**）：移动端 SDK/宿主自持 `mdns:found.<owner>` 旧格式（`bedcode-mobile/packages/plugin-sdk-mobile/rust/src/host/mdns.rs:3,11` + `abi.rs:31` + fork crate `host_impl/mdns.rs:467-469`），桌面已用 `<owner>::` 属主命名空间（wasm-core `host_api/bus.rs:60` 明确「legacy directed-topic form retired」）——**同一原语、两种 wire**。
 
 ---
 
@@ -99,37 +100,39 @@
 
 | 选项 | 做法 | 优 | 劣 |
 | --- | --- | --- | --- |
-| **A（推荐）改造 discovery-engine + feature gate** | `bedcode-discovery-engine` 默认无 WIT：`engine.rs` 的 `owned_topic`/`MDNS_FOUND`/`MDNS_LOST` 自持；`lib.rs` 绑定层整体包 `#[cfg(feature = "desktop-host")]`（wasmtime/wit-bindgen/host-kit/inventory/bedcode-plugin-api 全部 optional）；桌面 Cargo.toml 加 `features = ["desktop-host"]`，移动端默认引 | 保持「同一个 lib」字面语义（一个 crate 双端同引）；不动治理锁（SPLIT_CRATES / dependency_direction_lock）；桌面零结构变化；「解绑」落在 feature 边界上，肉眼可验（移动端视角依赖面零 WIT）| optional 依赖 + cfg 包裹增加桌面绑定层维护复杂度；crate 描述/名称仍叫 discovery-engine |
+| **A（已实施，2026-10-08 P2）改造 discovery-engine + feature gate** | `bedcode-discovery-engine` 默认无 WIT：`engine.rs` 的 `owned_topic`/`MDNS_FOUND`/`MDNS_LOST` 自持（`wire.rs`）；`lib.rs` 绑定层整体包 `#[cfg(feature = "desktop-host")]`（wasmtime/wit-bindgen/host-kit/inventory 全部 optional；bedcode-plugin-api 已随 P2 移除）；桌面 Cargo.toml 已加 `features = ["desktop-host"]`（:139），移动端默认引 | 保持「同一个 lib」字面语义（一个 crate 双端同引）；不动治理锁（SPLIT_CRATES / crate_boundary_lock，署名于 `bedcode-desktop/src-tauri/Cargo.toml:134` 注释与 code-map 文末锁索引——**锁在桌面 Cargo.toml/README,不存在 packages/.cargo/，2026-10-09 核实**）；桌面零结构变化；「解绑」落在 feature 边界上，肉眼可验（移动端视角依赖面零 WIT）| optional 依赖 + cfg 包裹增加桌面绑定层维护复杂度；crate 描述/名称仍叫 discovery-engine |
 | B 新建共享 crate | 抽 `packages/bedcode-mdns-engine`（零 WIT）；`discovery-engine` 收窄为桌面绑定壳（引共享 crate）| 依赖面物理上最干净（移动端引到的 crate 无 WIT 代码）| 新增 crate：`packages/.cargo/config.toml` SPLIT_CRATES、双端 Cargo.lock、check-target-size、依赖方向锁全动 |
 | ~~C 绑定层移回 wasm-core~~ | 已否：破坏 ADR 0035 能力域 crate 化形态（host-mdns 能力域回内核）| — | — |
 
 > **推荐 A**：改动面最小、保持「同一 lib」字面，解绑落 feature 边界；若实施中发现 cfg 包裹扩散（bindgen! 宏在 cfg 下行为异常等），退 B 不犹豫（票内记录原因）。
 
-### 3.2 topic 格式统一（**开放裁决 D2**）
+### 3.2 topic 格式统一（**开放裁决 D2 → 2026-10-09 定案：随 M3 同批**）
 
 - 统一为**桌面终态** `<owner>::mdns:found|lost`（`owned_topic` 规则，属主命名空间仲裁所需）。
-- 移动端迁移面（同批，缺一不可）：
-  1. `packages/plugin-sdk-mobile/rust/src/host/mdns.rs:3,11` 注释 + `abi.rs:31` 注释（topic 契约描述）；
-  2. `host_impl/mdns.rs::publish_dir_event` 的 topic 拼法；
-  3. 移动端插件订阅字面量（`plugins/file-transfer/src/composables/deviceState.ts` 的订阅源——实施时核对事件订阅写法）；
-  4. 移动端 SDK 事件常量若存在（`mdns_event_topic` 等）同步。
+- 移动端迁移面（同批，缺一不可，2026-10-09 审查补全）：
+  1. `bedcode-mobile/packages/plugin-sdk-mobile/rust/src/host/mdns.rs:3,11` 注释 + `abi.rs:31` 注释（topic 契约描述）；
+  2. fork crate `host_impl/mdns.rs::publish_dir_event` 的 topic 拼法（:467-469）+ 同文件单测断言（:716,735,736）；
+  3. **Rust wasm-app 订阅真源**：`bedcode-mobile/wasm-apps/file-transfer/rust/src/lib.rs:49,51`（`format!("mdns:found.{PLUGIN_ID}")` 直拼，:54,108 注释同步）——**比前端更关键，是 bus_subscribe 的真源**；
+  4. 前端 `wasm-apps/file-transfer/src/composables/deviceState.ts`：仅注释提及（:10,:42），无订阅字面量；
+  5. 移动端 SDK 无 `mdns_event_topic` 助手（桌面 SDK 有，`plugin-sdk-desktop/.../host/mdns.rs:20`）——统一后移动端 wasm-app 改 `format!("{PLUGIN_ID}::mdns:found")` 或补 SDK 助手，二选一（推荐前者，零 SDK 改动）。
 - 桌面零改动（已是终态）。属双端共有接口的移动端单向对齐（ADR 0018/0019 记录），无 ABI 变更（host-mdns WIT 函数签名不变，仅事件 topic 字符串）。
 
 ### 3.3 移动端接线（实施票 M3 主体）
 
-1. **`mdns/engine.rs` 删除**——共享 lib 接管守护（`mdns/discovery.rs`、`mdns/advertiser.rs`、`peer_net.rs:982`、`host_impl/mdns.rs:21` 改引共享 lib 出口）；防回接锁：移动端不得再 `ServiceDaemon::new()`。
-2. **`host_impl/mdns.rs` 收窄为薄转发**：5 原语 + purge 改为调共享引擎域函数（传移动端端口适配），与桌面 wasm-core `host_api/mdns.rs` 形态对齐；句柄表/事件循环/自播过滤逻辑全部进共享引擎（消灭双份）。
+1. **`mdns/engine.rs` 删除**——共享 lib（discovery-engine 已脱绑引擎）接管守护（`mdns/discovery.rs`、`mdns/advertiser.rs`、`peer_net.rs:984`、fork crate `host_impl/mdns.rs` 改引共享 lib 出口）；防回接锁：移动端不得再 `ServiceDaemon::new()`。
+2. **fork crate `host_impl/mdns.rs` 收窄为薄转发**：5 原语 + purge 改为调共享引擎域函数（传移动端端口适配），与桌面 wasm-core `host_api/mdns.rs` 形态对齐；句柄表/事件循环/自播过滤逻辑全部进共享引擎（消灭双份）。
 3. **移动端端口适配**（实现 `DiscoveryPorts`）：
    - `check_permission`：移动端 `WasmPluginState` 权限判定（语义不变）；
-   - `local_node_id`：`crate::peer_net::current_node_id`（host_impl 现有逻辑搬入适配器）；
-   - `publish`：`state::try_get_plugin_manager().message_bus().publish`（移动 bus，语义不变）；
+   - `local_node_id`：fork crate 现有 `ports.current_node_id`（host_impl 现有逻辑搬入适配器）；
+   - `publish`：`state.host_ctx.message_bus.publish(topic, "host", payload)`（移动 bus，语义不变）；
    - `spawn`：移动端运行时任务派生（tauri async_runtime，替代 `std::thread::spawn`——顺带消灭线程阻塞范式）；
    - `forward_mdns_*`：移动端无能力路由 → 恒 `None`（契约保留，语义 = 无提供者走引擎，逐字不变）。
-4. **平台钩子（D3）**：共享引擎 `init_daemon` 需可插拔平台初始化——选项 a) 端口加 `daemon_init_hook()` 方法（默认空）；b) 进程级 `set_init_hook(|| ...)` 装配（与 `install_ports` 同模式）。推荐 b（守护初始化与端口生命周期解耦；桌面传 `disable_virtual_interfaces`，移动端传 Android 多播锁）。若选 a 则桌面/移动端口各自实现即可。
+4. **平台钩子（D3，2026-10-09 定案：b 进程级 `set_init_hook`）**：共享引擎 `init_daemon` 可插拔平台初始化——端口加 `daemon_init_hook()` 方法（默认空，D3 定案 b 变体）。桌面现有 `disable_virtual_interfaces`（peer-net 提供，irange 桌面 init_daemon 已含），移动端传 Android 多播锁钩子。
 
-### 3.4 桌面侧接线（实施票 M2）
+### 3.4 桌面侧接线（实施票 M2，**已完成，待回归验证**）
 
-- 若 D1=A：`bedcode-desktop/src-tauri/Cargo.toml` 加 `features = ["desktop-host"]`；`bedcode-wasm-core` 的 mdns 装配（`install_ports` 调用点 + `HostDiscoveryPorts` 适配器）不变；`engine.rs` 常量改自持后 wasm-core 侧零改动（原 `owned_topic` 引用面仅本 crate 内 + `bedcode-server-websocket`，后者属 SDK 常量消费方，**不动**——桌面 SDK 保留 `owned_topic`/`MDNS_*` 供 ws 域用，引擎自持副本用结构锁防漂移）。
+- ~~`bedcode-desktop/src-tauri/Cargo.toml` 加 `features = ["desktop-host"]`~~ → **已加**（:139，2026-10-08 P2）；`bedcode-wasm-core` 的 mdns 装配（`install_ports` 调用点 `host_api/mdns.rs:128` + `HostDiscoveryPorts` 适配器 :37/:39）不变；`engine.rs` 常量已自持（wire.rs），wasm-core 侧零改动。
+- **消费方修正（2026-10-09 审查）**：桌面 SDK `owned_topic` 的消费 = `bedcode-server-websocket/channel/plugin.rs:29,222,397`（WS 事件）+ wasm-core `host_api/bus.rs:4`；`MDNS_FOUND/MDNS_LOST` 常量的消费 = **`bedcode-desktop/wasm-apps/file-transfer/rust/src/lib.rs:17,42-45,104-105,162-163,323-324`**（经 `mdns_event_topic`）——引擎自持副本 ≠ 删除 SDK 常量，双真源由 `wire::drift_lock` 钉死（已实现）。
 
 ### 3.5 peer-net 清理项（实施票 M4）
 
@@ -140,15 +143,15 @@
 
 ## 4. 票划分（渐进：每票一件事、可验证、可回退）
 
-> 票号独立于 `2026-10-07-mobile-wasm-core-refactor` 序列（该 spec 票 13/15 在途，避免撞号）；实施时可按需并入或顺延。
+> 票号独立于 `2026-10-07-mobile-wasm-core-refactor` 序列（该 spec 票 13/15 已落盘 `d585d5322`/`e2816bd78`）+ 票 17 已提交（fork crate 迁入 `5ce19e7db`）；实施时可按需并入或顺延。
 
 | 票 | 内容 | 门禁 |
 | --- | --- | --- |
-| **M1 · 共享引擎落地（D1 选型后）** | discovery-engine（或新 crate）去 WIT 化：`owned_topic`/`MDNS_*` 自持 + topic 常量 + 结构锁（引擎自持副本 vs 桌面 SDK 常量漂移锁）；绑定层 cfg/拆壳。**前置依赖：本 spec P2（discovery-engine 脱绑）已完成**——M1 直接消费 P2 的脱绑成果，只做 mDNS 专属接线（topic 统一预置 + 移动端引用验证）| 桌面 `cargo test` 全量绿（wasm-core 零回归）；`cargo metadata` 依赖面核对（移动端视角无 wasmtime/wit-bindgen） |
-| **M2 · 桌面接线** | Cargo.toml feature；装配点核对；`HostDiscoveryPorts` 适配器零改动回归 | 桌面 mdns 针对性测试（engine 单测 + host-api mdns 测试）全绿 |
-| **M3 · 移动端接线** | `mdns/engine.rs` 删；`host_impl/mdns.rs` 收窄薄转发 + 端口适配；`mdns/{discovery,advertiser}.rs` + `peer_net.rs` 改引；Android 多播锁钩子；topic 统一（§3.2 迁移面 4 处）| 移动端 `cargo test --lib mdns` + peer_net 回归；`component.rs` host-mdns 集成测试；防回接锁（移动端零 `ServiceDaemon::new()`）；**注：移动端全量测试被在途票 13/15 阻塞（egress 6 失败基线）——只跑针对性目标** |
-| **M4 · peer-net 清理** | `spawn_peer_mdns_advertiser` 删除 + MdnsPort 注入源统一 | peer-net crate 测试 + 双端 peer 集成回归 |
-| **M5 · 文档与锁收口** | AGENTS.md 路径基准（`packages/bedcode-mdns-engine` 或 discovery-engine 双端同引表述）、双端 code-map、ADR（修订 0035/0037 或新增「双端 mDNS 引擎共享」ADR，含 topic 统一记录）、CHANGELOG 双语、`.scratch` 本 spec 收口 | 全仓引用核对（rg `mdns:found\.` 归零）；双端文档与事实一致 |
+| **M1 · 共享引擎落地（D1=A，已完成）** | discovery-engine 去 WIT 化（P2，能力域脱绑 spec 票）：`owned_topic`/`MDNS_*` 自持（`wire.rs` + `drift_lock` 漂移锁）；绑定层 `#[cfg(feature="desktop-host")]` + optional 依赖。**2026-10-08 已落地**，M1 当前只剩 topic 统一预置（M3 前置已在 §3.2 收口）+ 移动端引用验证 | 桌面 `cargo test` 全量绿（wasm-core 零回归，P2 落地时已验证）；`cargo metadata` 依赖面核对（移动端视角无 wasmtime/wit-bindgen） |
+| **M2 · 桌面接线（已完成，回归验证）** | Cargo.toml feature（已加，:139）；装配点核对（`host_api/mdns.rs:128` `install_ports` + `HostDiscoveryPorts`）——**退化回归** | 桌面 mdns 针对性测试（engine 单测 + host-api mdns 测试）全绿 |
+| **M3 · 移动端接线（已完成）** | `mdns/engine.rs` 删；fork crate `host_impl/mdns.rs` 收窄薄转发 + `MobileDiscoveryPorts` 端口适配；`mdns/{discovery,advertiser}.rs` + `peer_net.rs:982` 改引引擎 `shared_daemon()`；Android 多播锁钩子（D3：`set_daemon_init_hook`）；topic 统一（§3.2 迁移面全收）| 移动端 fork 290 全绿 + src-tauri 245 全绿；防回接锁（移动端 `ServiceDaemon::new()` 代码层归零）；`rg mdns:found\. ` 移动端归零 |
+| **M4 · peer-net 清理（已完成）** | `spawn_peer_mdns_advertiser` + `DiscoveryAdvertiser` 删除（零消费者）；守护注入源统一到引擎 `shared_daemon()` | peer-net 101 全绿 + 双端编译回归 |
+| **M5 · 文档与锁收口（进行中）** | ADR **0042**（双端 mDNS 引擎共享，已写）；移动端 code-map（已更新）；AGENTS.md 路径基准（packages/bedcode-* 已覆盖，无需单列）；CHANGELOG 双语条目（与并行会话合并中）；`.scratch` 本 spec 收口（本表） | 全仓引用核对（rg `mdns:found\.` 移动端归零 ✓）；双端文档与事实一致 |
 
 ---
 
@@ -166,23 +169,23 @@
 
 | # | 约束/风险 | 影响 |
 | --- | --- | --- |
-| C1 | 移动端不能拉桌面 WIT（ADR 0018 / 0037 C2）| 共享引擎必须零 WIT 依赖；桌面绑定层留在桌面侧（feature/拆壳）|
+| C1 | 移动端不能拉桌面 WIT（ADR 0018 / 0037 D1 / 0040）| 共享引擎必须零 WIT 依赖；桌面绑定层留在桌面侧（feature/拆壳）|
 | C2 | 双端共有接口改 WIT 需双端同步评估（ADR 0019）；topic 格式是 wire 非 ABI | topic 统一属移动端向桌面终态的单向对齐，记录 ADR + 双端 code-map；**不影响 ABI 版本**（host-mdns 函数签名不变）|
-| C3 | **并行会话在途（票 13/15，session 01a1191e 活跃）** | M3 涉及 `bedcode-mobile/src-tauri/`（host_impl/mdns.rs、mdns/*、peer_net.rs **不在**票 13/15 文件清单内，冲突面小）；但移动端全量编译/测试被在途中间态阻塞——M3 只跑针对性目标，实施前 `git status` 认领在途文件，不碰 |
-| C4 | 桌面 `owned_topic`/`MDNS_*` 常量另有消费方（`bedcode-server-websocket/channel/plugin.rs:29,222,397`、wasm-core `host_api/bus.rs:4`）| 引擎自持副本 ≠ 删除 SDK 常量；双真源用结构锁防漂移（副本与 SDK 值逐字一致锁）|
-| C5 | mdns-sd 0.20 双端同版（桌面 discovery-engine Cargo.toml、移动端 Cargo.toml:66）| 共享后版本约束收敛到共享 crate 一处，双端锁版税降低 |
-| C6 | 移动端 `std::thread::spawn` 事件循环改为宿主运行时 spawn | 行为等价（阻塞 recv → recv_async），但线程/任务归属变化；移动端 bus publish 在任务上下文可达性需实测（`try_get_plugin_manager` 全局单例，应无碍）|
+| C3 | **并行会话（票 13/15）已落盘**（`d585d5322`/`e2816bd78`，2026-10-08 晚）——C3 旧表述「在途阻塞移动端全量」失效；但移动端 fork crate 属票 17 迁根产物，实施前 `git status` 认领在途文件，不碰 | M3 涉及 fork crate `host_impl/mdns.rs`、`mdns/*`、`peer_net.rs`（不在票 13/15 文件清单内，冲突面小）；实施前仍 `git status` 认领 |
+| C4 | 桌面 `owned_topic` 消费方：`bedcode-server-websocket/channel/plugin.rs:29,222,397`（WS 事件）+ wasm-core `host_api/bus.rs:4`；`MDNS_FOUND/LOST` 常量消费方：**桌面 wasm-app `file-transfer/rust/src/lib.rs:17,42-45,104-105,162-163,323-324`**（经 `mdns_event_topic`） | 引擎自持副本 ≠ 删除 SDK 常量；双真源由 `wire::drift_lock` 结构锁钉死（已实现）|
+| C5 | mdns-sd 0.20 双端同版（桌面 discovery-engine Cargo.toml、移动端 Cargo.toml:71）| 共享后版本约束收敛到共享 crate 一处，双端锁版税降低 |
+| C6 | 移动端 `std::thread::spawn` 事件循环改为宿主运行时 spawn | 行为等价（阻塞 recv → recv_async），但线程/任务归属变化；移动端 bus publish 走 `state.host_ctx.message_bus`（Arc clone 入端口适配器，:102 现状；`try_get_plugin_manager` 旧路径 2026-10-09 核实已不直接使用）|
 
 ---
 
-## 7. 开放裁决点（待用户拍板；每项给出推荐）
+## 7. 开放裁决点（2026-10-09 已全部定案并开始实施）
 
-- **D1 · mDNS 解绑形态（方向已定：解绑桌面端）**：A 改造 discovery-engine + feature gate（**推荐**，一个 crate 双端同引，解绑落 feature 边界）/ B 新建 bedcode-mdns-engine + 桌面绑定壳。~~C（绑定层移回 wasm-core）已否~~。
-- **D2 · topic 格式统一时机**：随 M3 同批（**推荐**，一次 ABI 窗内收口 wire）/ 单独出票后置。
-- **D3 · 平台钩子形态**：b 进程级 `set_init_hook`（**推荐**）/ a 端口方法 `daemon_init_hook`。
-- **D4 · peer-net `spawn_peer_mdns_advertiser`**：删除（**推荐**，零消费者）/ 收敛为注入。
-- **D5 · 实施窗口**：等票 13/15 提交落盘后实施 M1–M5（**推荐**）；或 M1/M2（桌面面，不受在途影响）先行。
-- **D6 · 移动端 host-peer 引擎接入层是否也解绑共享（新开放）**：`bedcode-mobile/src-tauri/src/peer_net.rs`（1862 行，节点身份/守护装配/SAF 注入）+ `host_impl/peer.rs`（482 行，移动 host-peer 原语）与桌面 `bedcode-server-peer-net` 引擎域（lib.rs + peer_engine_*，共 4,882 行含 WIT 绑定层）**同构双份**。选项：a) 按 mDNS 同法——引擎部分（无 WIT）抽根共享、双端各留 WIT 绑定/接入（**推荐**，与用户指令①「对等网络应该使用同一个 lib」的完整兑现一致）；b) 维持现状（移动端自持，契约独立 ADR 0018）；c) 仅核验不动。**待用户拍板，不并入本 spec 的 M1–M5 执行面**。
+- **D1 · mDNS 解绑形态**：**A 已实施**（P2，2026-10-08）——一个 crate 双端同引，解绑落 feature 边界。~~B / C 否~~。
+- **D2 · topic 格式统一时机**：**随 M3 同批**（2026-10-09 定案）。
+- **D3 · 平台钩子形态**：**a 端口方法 `daemon_init_hook()`（默认空）**（2026-10-09 定案；b 进程级 set_init_hook 弃——守护初始化与端口生命周期同域更契合现有 install_ports 模式）。
+- **D4 · peer-net `spawn_peer_mdns_advertiser`**：**删除**（零消费者）。
+- **D5 · 实施窗口**：票 13/15 已落盘（`d585d5322`/`e2816bd78`），**窗口已开**，M1–M5 开始实施（2026-10-09 用户指令「需要 并实施」）。
+- **D6 · 移动端 host-peer 引擎接入层是否也解绑共享（新开放）**：`bedcode-mobile/src-tauri/src/peer_net.rs`（1862 行，节点身份/守护装配/SAF 注入）+ fork crate `manager/runtime/host_impl/peer.rs`（510 行，移动 host-peer 原语）与桌面 `bedcode-server-peer-net` 引擎域（lib.rs + peer_engine_*，共 4,882 行含 WIT 绑定层）**同构双份**。选项：a) 按 mDNS 同法——引擎部分（无 WIT）抽根共享、双端各留 WIT 绑定/接入（**推荐**，与用户指令①「对等网络应该使用同一个 lib」的完整兑现一致）；b) 维持现状（移动端自持，契约独立 ADR 0018）；c) 仅核验不动。**待用户拍板，不并入本 spec 的 M1–M5 执行面**。
 
 ---
 
