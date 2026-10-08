@@ -72,7 +72,14 @@
 ///   编排（流程顺序 / 事件发射 / 状态派生）归消费插件
 ///   `com.bedcode.terminal-session` 配对域。**纯增量变更**，v15 插件二进制
 ///   不受影响；既有 v13/v14 产物无认证编排需求不受影响。
-pub const ABI_VERSION: u32 = 16;
+/// - v17: host-terminal / terminal-hooks 整面退役（票 15 阶段 B，终端 UI 域已
+///   随阶段 A 整体迁入插件前端、退役面零消费者）：import `host-terminal`
+///   （send）与导出 `terminal-hooks`（on-terminal-input / on-terminal-output）
+///   删除 + 权限位 `terminal:input` 退役。**破坏性收缩**：v16 及更早产物在
+///   v17 宿主实例化期因缺失 import interface 被点名失败（fail-visible ②），
+///   须随 SDK 重编译；内置插件随 APK 同分发无旧产物。`terminal:output` 保留
+///   （host-terminal-stream.forward-output 权限门）。
+pub const ABI_VERSION: u32 = 17;
 
 #[cfg(test)]
 mod tests {
@@ -81,10 +88,10 @@ mod tests {
     #[test]
     fn test_abi_version_is_contract() {
         // 宿主加载时与组件 abi.version() 导出比对，漂移导致拒绝加载（高 ABI 拒绝测试依赖）
-        // v16 = 认证 / 配对编排下沉（host-auth 认证引擎面 5 函数 + 权限位 auth），
-        // 叠加 v15 终端订阅协议客户端迁插件、v14 host-websocket 客户端域、
-        // v13 接收编排下沉、v12 发送编排下沉、v11 host-mdns v2、v10 总线二进制
-        // 载荷与 v9 host-peer 传输控制二原语（能力超集）
-        assert_eq!(ABI_VERSION, 16);
+        // v17 = host-terminal / terminal-hooks 整面退役（票 15 阶段 B），
+        // 叠加 v16 认证/配对编排下沉、v15 终端订阅协议客户端迁插件、
+        // v14 host-websocket 客户端域、v13 接收编排下沉、v12 发送编排下沉、
+        // v11 host-mdns v2、v10 总线二进制载荷与 v9 host-peer 传输控制二原语
+        assert_eq!(ABI_VERSION, 17);
     }
 }

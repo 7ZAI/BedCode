@@ -8,8 +8,7 @@ use tauri::{AppHandle, Manager};
 use crate::connection::event_ws;
 use crate::router::event;
 use crate::state::{
-    clear_global_token, get_auth_manager, get_connection_manager, get_global_token, get_session_manager,
-    set_global_token,
+    clear_global_token, get_auth_manager, get_connection_manager, get_global_token, set_global_token,
 };
 use crate::Result;
 
@@ -90,12 +89,9 @@ pub async fn ws_disconnect(app_handle: AppHandle) -> Result<()> {
     // 发射断开连接事件
     event::emit_disconnected(&app_handle, "User initiated disconnect");
 
-    // 清除会话状态
-    let session_mgr = get_session_manager();
-    // 停止活跃会话
-    if let Some(session) = session_mgr.get_active_session().await {
-        let _ = session_mgr.stop_session(&session.id).await;
-    }
+    // 会话状态清理已随票 13 退役：SessionManager 簿记零实际消费者（活跃会话
+    // 只在已删的 ws_start_session 死命令路径写入 ⇒ 原分支恒 None）；会话真源在
+    // 桌面端 HTTP + 同步事件，设备断开时的会话处置归插件编排
 
     Ok(())
 }

@@ -1,7 +1,9 @@
 //! Mobile-to-Desktop Request Builders
 //!
-//! 票 04：会话控制 / 终端输入 / 配置查询已迁桌面 HTTP 面（`session::http` +
-//! 前端 `useHttpApi`），`SessionRequest` / `TerminalRequest` / `ConfigRequest` /
+//! 票 04：会话控制 / 终端输入 / 配置查询已迁桌面 HTTP 面；票 13 会话控制进一步
+//! 下沉插件 `com.bedcode.terminal-session`（宿主 `SessionHttpClient` /
+//! `SessionManager` 已退役，前端经 `src/plugin/sessionCommands.ts`）。
+//! `SessionRequest` / `TerminalRequest` / `ConfigRequest` /
 //! `ResponseParser` 随之退役删除。本文件只保留认证信封构建器 `AuthRequest`——
 //! 其消费者为 `ws_protocol_integration` 的 legacy 场景（真实 WsClient→router→
 //! handler 链路的 WS 首消息 JWT 认证），生产路径零使用（认证已 HTTP 化）。

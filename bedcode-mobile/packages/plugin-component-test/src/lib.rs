@@ -23,7 +23,6 @@ use exports::bedcode::plugin::command::Guest as CommandGuest;
 use exports::bedcode::plugin::events::Guest as EventsGuest;
 use exports::bedcode::plugin::lifecycle::Guest as LifecycleGuest;
 use exports::bedcode::plugin::manifest::Guest as ManifestGuest;
-use exports::bedcode::plugin::terminal_hooks::Guest as TerminalHooksGuest;
 
 // ws-client：`plugin-binary` world 的独立绑定（events-binary 是可选导出，不在
 // plugin world 内——与 SDK `wasm_binary` 模块同款两次 generate 模式，分模块
@@ -74,10 +73,11 @@ impl AbiGuest for ComponentTestPlugin {
             return 999;
         }
         // 与 SDK bedcode_plugin_api_mobile::abi::ABI_VERSION 同步
-        // （=16，v16 = 认证 / 配对编排下沉 host-auth 5 函数 + 权限位 auth；
-        //  叠加 v15 终端订阅协议客户端迁插件、v14 host-websocket 客户端域
-        //  5 函数、v13 接收编排下沉、v12 发送编排下沉——均为纯增量变更）
-        16
+        // （=17，v17 = host-terminal / terminal-hooks 整面退役（票 15 阶段 B）；
+        //  叠加 v16 认证/配对编排下沉、v15 终端订阅协议客户端迁插件、
+        //  v14 host-websocket 客户端域 5 函数、v13 接收编排下沉、
+        //  v12 发送编排下沉）
+        17
     }
 }
 
@@ -329,16 +329,9 @@ impl EventsGuest for ComponentTestPlugin {
 }
 
 // ==================== terminal-hooks ====================
-
-impl TerminalHooksGuest for ComponentTestPlugin {
-    fn on_terminal_input(_session_id: String, _text: String) -> Option<String> {
-        None
-    }
-
-    fn on_terminal_output(_session_id: String, _data: String) -> Option<String> {
-        None
-    }
-}
+//
+// terminal-hooks 已随票 15 阶段 B 退役（ABI v17）：WIT export 删除，
+// 本 Guest impl 同批移除（组件 world 声明即契约）。
 
 // ==================== manifest ====================
 

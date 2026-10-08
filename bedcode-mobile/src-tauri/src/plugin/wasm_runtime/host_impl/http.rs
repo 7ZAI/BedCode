@@ -214,4 +214,20 @@ mod tests {
         let err = check_egress(&st, &serde_json::json!({ "method": "GET" })).unwrap_err();
         assert!(err.contains("missing 'url'"), "got: {err}");
     }
+
+    /// 权限门 fail-closed（票 13 显性锁）：未授予 `network:http` → 请求在
+    /// 权限层即拒绝（不进入 egress 判定，也不发起网络请求）
+    #[tokio::test]
+    async fn permission_denied_without_network_http() {
+        let rt = tokio::runtime::Handle::current();
+        let mut st = test_state("com.bedcode.demo", &rt);
+        st.granted_permissions.clear();
+        let err = http_fetch(
+            &st,
+            &serde_json::json!({ "method": "GET", "url": "http://192.168.1.5:4455/api/health" })
+                .to_string(),
+        )
+        .unwrap_err();
+        assert!(err.contains("permission denied"), "got: {err}");
+    }
 }

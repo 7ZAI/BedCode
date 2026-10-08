@@ -111,11 +111,8 @@ impl bedcode::plugin::host_plugin_database::Host for WasmPluginState {
     }
 }
 
-impl bedcode::plugin::host_terminal::Host for WasmPluginState {
-    fn send(&mut self, session_id: String, data: String) -> Result<(), String> {
-        super::host_impl::terminal_send(self, &session_id, &data)
-    }
-}
+// host-terminal（send）已随票 15 阶段 B 整面退役（终端 UI 域迁插件后零消费者，
+// ABI v17）：WIT import `host-terminal` 删除，Host impl 与 linker 注册同批移除。
 
 impl bedcode::plugin::host_events::Host for WasmPluginState {
     // WIT 中 emit 无错误返回，宿主侧记录日志（失败在 emit_event 内记录）
@@ -408,7 +405,6 @@ pub(crate) fn build_component_linker(engine: &wasmtime::Engine) -> crate::Result
         bedcode::plugin::host_storage::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_database::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_plugin_database::add_to_linker::<WasmPluginState, D>,
-        bedcode::plugin::host_terminal::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_events::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_http::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_fs::add_to_linker::<WasmPluginState, D>,
@@ -670,24 +666,6 @@ impl LoadedComponentPlugin {
             .map_err(|e| AppError::Plugin(format!("WASM invoke_command() call failed: {}", e)))
     }
 
-    /// 调用插件的 on_terminal_input 导出
-    pub(crate) fn on_terminal_input(&mut self, session_id: &str, text: &str) -> crate::Result<Option<String>> {
-        let exports = self.exports()?;
-        let hooks = exports.bedcode_plugin_terminal_hooks();
-        hooks
-            .call_on_terminal_input(&mut self.store, session_id, text)
-            .map_err(|e| AppError::Plugin(format!("WASM on_terminal_input() call failed: {}", e)))
-    }
-
-    /// 调用插件的 on_terminal_output 导出
-    pub(crate) fn on_terminal_output(&mut self, session_id: &str, data: &str) -> crate::Result<Option<String>> {
-        let exports = self.exports()?;
-        let hooks = exports.bedcode_plugin_terminal_hooks();
-        hooks
-            .call_on_terminal_output(&mut self.store, session_id, data)
-            .map_err(|e| AppError::Plugin(format!("WASM on_terminal_output() call failed: {}", e)))
-    }
-
     /// 调用插件的 on_startup 导出
     ///
     /// WIT `result<_, string>`：内层 Err 为插件显式失败（启动初始化未完成），
@@ -782,9 +760,9 @@ impl LoadedComponentPlugin {
     ///
     /// 映射表：AppStartup/AppShutdown → lifecycle.on-startup/on-shutdown；
     /// AuthSuccess → events.on-auth-success；Disconnect → events.on-disconnect；
-    /// SessionCreated/SessionStopped → events.on-session-created/on-session-stopped；
-    /// TerminalInput/TerminalOutput → terminal-hooks（事件经同一枚举分发，
-    /// 各导出方法直达）
+    /// SessionCreated/SessionStopped → events.on-session-created/on-session-stopped
+    /// （terminal-hooks 已随票 15 阶段 B 退役，TerminalInput/TerminalOutput
+    /// 事件变体同批删除）
     pub(crate) fn call_lifecycle_event(
         &mut self,
         event: &crate::plugin::types::PluginLifecycleEvent,
@@ -831,16 +809,6 @@ impl LoadedComponentPlugin {
                 },
                 "on_session_stopped",
             ),
-            PluginLifecycleEvent::TerminalInput { session_id, data }
-            | PluginLifecycleEvent::TerminalOutput { session_id, data } => {
-                // 终端钩子：返回文本（option<string>）仅表示插件响应成功，宿主不消费该文本
-                //（富文本回调不在本枚举，宿主只透传调用并丢弃返回值）
-                let result = match event {
-                    PluginLifecycleEvent::TerminalInput { .. } => self.on_terminal_input(session_id, data),
-                    _ => self.on_terminal_output(session_id, data),
-                };
-                result.map(|_| ())
-            }
         }
     }
 
@@ -1641,10 +1609,6 @@ pub(crate) mod tests {
                 now_ms
             );
 
-            // 终端钩子（组件契约强制实现；测试组件返回 None）
-            assert_eq!(plugin.on_terminal_input("s1", "x").unwrap(), None);
-            assert_eq!(plugin.on_terminal_output("s1", "x").unwrap(), None);
-
             // manifest
             let manifest: serde_json::Value = serde_json::from_str(&plugin.get_manifest().expect("manifest")).unwrap();
             assert_eq!(manifest["id"], "com.bedcode.component-test");
@@ -1680,12 +1644,6 @@ pub(crate) mod tests {
                     session_id: "s1".to_string(),
                 })
                 .expect("session stopped");
-            plugin
-                .call_lifecycle_event(&PluginLifecycleEvent::TerminalInput {
-                    session_id: "s1".to_string(),
-                    data: "x".to_string(),
-                })
-                .expect("terminal input event");
         });
     }
 

@@ -1048,7 +1048,7 @@ impl PluginManager {
 
         // AppStartup 的 WASM on_startup 已前置到 activate()（phase 1b），
         // 此处不再经 dispatch 二次分发（防 on_startup 被执行两次）；仅保留前端事件。
-        // 其余事件（AppShutdown/auth/disconnect/session/terminal）照常对
+        // 其余事件（AppShutdown/auth/disconnect/session）照常对
         // Activated + Degraded 插件投递 —— Degraded 实例是活的，运行期回调仍应收到。
         if !matches!(event, PluginLifecycleEvent::AppStartup) {
             // 快照：声明了该事件的已激活（或降级）WASM 插件 id + 实例句柄（短锁）
@@ -1533,7 +1533,7 @@ mod tests {
         std::fs::write(ext_dir.join("plugin.json"), r#"{"id":"x"}"#).expect("write manifest");
         let hash = crate::plugin::approval::compute_dir_hash(&ext_dir).expect("dir hash");
 
-        // 用户批准 storage + session:read；manifest 额外请求 terminal:input（未批准）
+        // 用户批准 storage + session:read；manifest 额外请求 terminal:output（未批准）
         manager
             .approvals
             .approve(
@@ -1551,7 +1551,7 @@ mod tests {
             vec![
                 "storage".to_string(),
                 "session:read".to_string(),
-                "terminal:input".to_string(),
+                "terminal:output".to_string(),
             ],
             bedcode_plugin_api_mobile::types::PluginType::TsOnly,
         )
@@ -1571,7 +1571,7 @@ mod tests {
         assert!(granted.contains("storage"), "storage 恒授予");
         assert!(granted.contains("session:read"), "批准权限应生效");
         assert!(
-            !granted.contains("terminal:input"),
+            !granted.contains("terminal:output"),
             "未批准权限不得生效（生效 = 批准 ∩ 请求）"
         );
     }

@@ -160,8 +160,13 @@ struct OpenAiSseDelta {
 /// 执行非流式 HTTP 请求
 ///
 /// 宿主代为执行 HTTP 请求，返回完整响应
-/// request 格式：{ "method", "url", "headers", "body" }
+/// request 格式：{ "method", "url", "headers", "body", "jwtAuth"? }
 /// response 格式：{ "status", "body", "headers" }
+///
+/// `jwtAuth: true`（票 13，默认 false，向后兼容）＝宿主代注
+/// `Authorization: Bearer <global token>`——token 不出宿主（C4，对齐
+/// host-websocket `jwt-auth` 首消息代发先例）；开关置位但 token 为空 →
+/// 显性 Err（fail-visible，禁静默降级为匿名请求——桌面端必 401，晚失败不如早失败）。
 pub async fn execute_http_request(request: &serde_json::Value) -> anyhow::Result<serde_json::Value> {
     let method = request.get("method").and_then(|v| v.as_str()).unwrap_or("GET");
     let url = request
@@ -170,6 +175,7 @@ pub async fn execute_http_request(request: &serde_json::Value) -> anyhow::Result
         .ok_or_else(|| anyhow::anyhow!("Missing 'url' in HTTP request"))?;
     let headers = request.get("headers").and_then(|v| as_string_map(v));
     let body = request.get("body").and_then(|v| v.as_str());
+    let jwt_auth = request.get("jwtAuth").and_then(|v| v.as_bool()).unwrap_or(false);
 
     // 连接 + 总超时：插件同步 HTTP 调用（如取消上传会话）阻塞 WASM 单线程，
     // 无总超时时对端失联最长卡 30s connect + 无限响应等待，UI 全程无响应
@@ -186,6 +192,11 @@ pub async fn execute_http_request(request: &serde_json::Value) -> anyhow::Result
         for (key, value) in hdrs {
             req_builder = req_builder.header(key.as_str(), value.as_str());
         }
+    }
+
+    // 票 13：宿主代注 JWT（token 不出宿主，C4）；置位但无 token → 显性拒绝
+    if let Some(token) = resolve_jwt_auth_header(jwt_auth, crate::state::get_global_token())? {
+        req_builder = req_builder.bearer_auth(token);
     }
 
     if let Some(b) = body {
@@ -412,6 +423,23 @@ fn parse_and_emit_sse(buffer: &mut String, format: &str, app_handle: &tauri::App
     emitted
 }
 
+/// jwtAuth 头注入裁决（票 13）：
+/// - 开关关 → `None`（不注入；请求方自带 Authorization 时不动它）
+/// - 开关开 + token 非空 → `Some(token)`（宿主代注 Bearer，token 不出宿主）
+/// - 开关开 + token 空 → 显性 Err（fail-visible：禁静默降级为匿名请求）
+///
+/// 抽为纯函数：`get_global_token()` 是进程级静态，直接内联测试会与并行用例
+/// （如 component.rs 的组件闭环）互相踩——决策分支在此无竞争锁死。
+fn resolve_jwt_auth_header(jwt_auth: bool, token: String) -> anyhow::Result<Option<String>> {
+    if !jwt_auth {
+        return Ok(None);
+    }
+    if token.is_empty() {
+        anyhow::bail!("jwtAuth requested but no global token available (not authenticated)");
+    }
+    Ok(Some(token))
+}
+
 /// 将 serde_json::Value 转换为 HashMap<String, String>
 fn as_string_map(value: &serde_json::Value) -> Option<std::collections::HashMap<String, String>> {
     let obj = value.as_object()?;
@@ -492,6 +520,68 @@ mod tests {
             err.to_string().contains("stream:true"),
             "error should guide to streaming mode, got: {}",
             err
+        );
+    }
+
+    /// 捕获原始请求（含请求头）的 mock 服务器（票 13：断言 Bearer 注入）
+    async fn spawn_header_capture_server() -> (std::net::SocketAddr, tokio::sync::oneshot::Receiver<String>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            if let Ok((mut sock, _)) = listener.accept().await {
+                let mut buf = [0u8; 8192];
+                let n = sock.read(&mut buf).await.unwrap_or(0);
+                let _ = tx.send(String::from_utf8_lossy(&buf[..n]).to_string());
+                let body = b"{\"code\":0,\"message\":\"ok\"}";
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = sock.write_all(head.as_bytes()).await;
+                let _ = sock.write_all(body).await;
+            }
+        });
+        (addr, rx)
+    }
+
+    // ==================== jwtAuth（票 13） ====================
+
+    /// 纯函数三向裁决（无全局静态竞争）：
+    /// 关 = 不注入；开 + 有 token = 注入该 token；开 + 空 token = 显性 Err
+    #[test]
+    fn resolve_jwt_auth_header_three_way() {
+        assert_eq!(resolve_jwt_auth_header(false, "any".to_string()).unwrap(), None);
+        assert_eq!(
+            resolve_jwt_auth_header(true, "tok-13".to_string()).unwrap(),
+            Some("tok-13".to_string())
+        );
+        let err = resolve_jwt_auth_header(true, String::new()).expect_err("empty token must fail visibly");
+        assert!(err.to_string().contains("no global token"), "got: {err}");
+    }
+
+    /// 端到端：jwtAuth=true 时宿主代注 `Authorization: Bearer`（值不断言——
+    /// 全局 token 是进程级静态，与并行用例共用的值可能瞬时不同；存在性即契约）
+    #[tokio::test]
+    async fn http_fetch_jwt_auth_injects_authorization_header() {
+        disable_proxy_for_loopback();
+        let (addr, rx) = spawn_header_capture_server().await;
+        crate::state::set_global_token("t13-jwt-token");
+
+        let resp = execute_http_request(&json!({
+            "method": "GET",
+            "url": format!("http://{}/api/sessions", addr),
+            "jwtAuth": true,
+        }))
+        .await
+        .expect("jwtAuth request must succeed");
+        assert_eq!(resp["status"], 200);
+
+        let raw = rx.await.expect("server must capture request").to_lowercase();
+        // 头名小写化（hyper 客户端行为）
+        assert!(
+            raw.contains("authorization: bearer "),
+            "jwtAuth=true 应注入 Bearer 头，实际请求：\n{raw}"
         );
     }
 

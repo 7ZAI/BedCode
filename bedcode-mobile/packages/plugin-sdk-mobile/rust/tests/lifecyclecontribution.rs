@@ -26,6 +26,6 @@ fn test_lifecycle_has_any_declared() {
     assert!(!lc.has_any_declared());
     // 任一钩子置位即视为有声明（宿主据此决定是否注册回调）
     let mut lc2 = LifecycleContribution::default();
-    lc2.on_terminal_input = true;
+    lc2.on_session_created = true;
     assert!(lc2.has_any_declared());
 }

@@ -156,13 +156,12 @@ pub struct SettingsContribution {
 }
 
 /// 终端扩展点
+///
+/// inputHandlers / outputParsers（terminal-hooks 声明面）已随票 15 阶段 B
+/// 整面退役——终端 UI 域在插件内闭环，宿主不再回调插件处理终端流。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TerminalContribution {
-    #[serde(default)]
-    pub input_handlers: Vec<String>,
-    #[serde(default)]
-    pub output_parsers: Vec<String>,
     #[serde(default)]
     pub toolbar_items: Vec<TerminalToolbarItemContribution>,
 }
@@ -213,10 +212,6 @@ pub struct LifecycleContribution {
     pub on_session_created: bool,
     #[serde(default)]
     pub on_session_stopped: bool,
-    #[serde(default)]
-    pub on_terminal_input: bool,
-    #[serde(default)]
-    pub on_terminal_output: bool,
 }
 
 impl LifecycleContribution {
@@ -229,8 +224,6 @@ impl LifecycleContribution {
             "onDisconnect" => self.on_disconnect,
             "onSessionCreated" => self.on_session_created,
             "onSessionStopped" => self.on_session_stopped,
-            "onTerminalInput" => self.on_terminal_input,
-            "onTerminalOutput" => self.on_terminal_output,
             _ => false,
         }
     }
@@ -243,8 +236,6 @@ impl LifecycleContribution {
             || self.on_disconnect
             || self.on_session_created
             || self.on_session_stopped
-            || self.on_terminal_input
-            || self.on_terminal_output
     }
 }
 

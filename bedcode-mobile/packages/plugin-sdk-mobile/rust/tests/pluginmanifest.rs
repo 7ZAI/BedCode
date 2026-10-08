@@ -10,7 +10,7 @@ fn test_manifest_parse_with_defaults() {
         "id": "com.bedcode.demo",
         "name": "Demo",
         "version": "0.1.0",
-        "permissions": ["storage", "terminal:input"]
+        "permissions": ["storage", "mdns"]
     });
     let m: PluginManifest = serde_json::from_value(json).unwrap();
     assert_eq!(m.id, "com.bedcode.demo");
@@ -19,7 +19,7 @@ fn test_manifest_parse_with_defaults() {
     assert_eq!(m.author, "");
     assert_eq!(m.main, "");
     assert_eq!(m.plugin_type, PluginType::TsOnly);
-    assert_eq!(m.permissions, vec!["storage", "terminal:input"]);
+    assert_eq!(m.permissions, vec!["storage", "mdns"]);
     assert_eq!(m.icon, None);
     assert_eq!(m.wasm_hash, "");
     assert_eq!(m.rust_library, "");

@@ -16,12 +16,12 @@
 use crate::host::{
     ConfigKey, HostAuth, HostBus, HostConfig, HostConnection, HostDatabase, HostError, HostEvents,
     HostFs, HostHttp, HostLog, HostMdns, HostPeer, HostPlatform, HostPluginDatabase, HostStorage,
-    HostTerminal, HostTerminalStream, HostWs,
+    HostTerminalStream, HostWs,
 };
 use crate::wasm::bedcode::plugin::{
     host_auth, host_bus, host_config, host_connection, host_database, host_events, host_fs,
     host_http, host_log, host_mdns, host_peer, host_platform, host_plugin_database, host_storage,
-    host_terminal, host_terminal_stream, host_websocket,
+    host_terminal_stream, host_websocket,
 };
 
 /// 宿主 API 绑定（WASM 插件侧）
@@ -188,14 +188,6 @@ impl HostPluginDatabase for WasmHost {
         host_plugin_database::execute_batch(&sqls_json)
             .map(|n| n as i32)
             .map_err(|e| host_err("plugin_db_execute_batch", e))
-    }
-}
-
-// ==================== HostTerminal ====================
-
-impl HostTerminal for WasmHost {
-    fn terminal_send(&self, session_id: &str, data: &str) -> Result<(), HostError> {
-        host_terminal::send(session_id, data).map_err(|e| host_err("terminal_send", e))
     }
 }
 

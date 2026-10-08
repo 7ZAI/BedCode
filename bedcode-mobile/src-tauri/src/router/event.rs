@@ -389,40 +389,6 @@ async fn forward_event(app: &AppHandle, event: MobileEvent) {
     }
 }
 
-// ==================== Terminal Output Activity ====================
-
-/// 监听前端 `terminal_output_activity` 事件（前端终端 WS 收到输出帧时发出）
-///
-/// 09 迁移后终端输出不再经 Rust 中转，插件 TerminalOutput 通知改由
-/// 前端 socket 路径在此触发（保持仅传 session_id 语义，D6）。
-/// 异步分发不 await：插件 WASM 回调串行执行，阻塞会拖慢事件处理
-static TERMINAL_OUTPUT_LISTENER_STARTED: AtomicBool = AtomicBool::new(false);
-
-pub fn init_terminal_output_listener(app: &AppHandle) {
-    if TERMINAL_OUTPUT_LISTENER_STARTED.swap(true, Ordering::SeqCst) {
-        return;
-    }
-    let pm = crate::state::get_plugin_manager();
-    let _ = app.listen("terminal_output_activity", move |event| {
-        // Tauri 事件 payload 为 JSON 字符串，解析出 session_id（仅传 session_id 语义）
-        let session_id = serde_json::from_str::<serde_json::Value>(event.payload())
-            .ok()
-            .and_then(|v| v.get("session_id").and_then(|s| s.as_str()).map(str::to_string))
-            .unwrap_or_default();
-        if session_id.is_empty() {
-            return;
-        }
-        let pm = pm.clone();
-        spawn_with_error_boundary("plugin_terminal_output_notify", async move {
-            pm.dispatch_lifecycle_event(crate::plugin::types::PluginLifecycleEvent::TerminalOutput {
-                session_id,
-                data: String::new(),
-            })
-            .await;
-        });
-    });
-}
-
 // ==================== Event Helpers ====================
 
 /// 发射连接开始事件

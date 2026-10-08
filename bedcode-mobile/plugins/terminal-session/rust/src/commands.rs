@@ -1,11 +1,13 @@
 //! 插件命令面（前端经 plugin_invoke 调用；票 12 自宿主 `terminal_*` 命令面
 //! 迁入——前端命令字从 Tauri invoke 换成本插件命名空间，语义逐项一致。
-//! 票 14 阶段 B 追加配对 / 认证编排域，自宿主 `commands::auth` 编排面迁入）
+//! 票 14 阶段 B 追加配对 / 认证编排域，自宿主 `commands::auth` 编排面迁入；
+//! 票 13 追加会话控制域，自宿主 `commands::session` + `session::http` 迁入）
 
 use bedcode_plugin_api_mobile::wasm_host::WasmHost;
 
 use crate::auth;
 use crate::link::LinkManager;
+use crate::session;
 
 fn host() -> WasmHost {
     WasmHost
@@ -86,6 +88,15 @@ pub(crate) fn dispatch(name: &str, args: &serde_json::Value) -> anyhow::Result<s
             let session_id = require_str(args, "sessionId")?;
             Ok(LinkManager::get_state(&session_id))
         }
+        // ==================== 会话控制域（票 13） ====================
+        // list / start / stop / remove / input(HTTP) 经本插件自有 HTTP 面
+        // （host-http + jwtAuth 宿主代注 Bearer）直连桌面 `/api/sessions*`；
+        // 返回形状与退役前前端 `useHttpApi` 逐字段一致（{code, message, data?}）
+        "terminal-session.list-sessions" => session::list_sessions(),
+        "terminal-session.start-session" => session::start_session(args),
+        "terminal-session.stop-session" => session::stop_session(args),
+        "terminal-session.remove-session" => session::remove_session(args),
+        "terminal-session.send-http-input" => session::send_http_input(args),
         _ => Err(anyhow::anyhow!("unknown command: {}", name)),
     }
 }

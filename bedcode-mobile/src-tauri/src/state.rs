@@ -8,7 +8,6 @@ use std::sync::OnceLock;
 use crate::auth::AuthManager;
 use crate::connection::manager::ConnectionManager;
 use crate::plugin::manager::PluginManager;
-use crate::session::SessionManager;
 use crate::system::info::SystemInfo;
 
 // ==================== Global Token ====================
@@ -46,9 +45,6 @@ static CONNECTION_MANAGER: OnceLock<Arc<ConnectionManager>> = OnceLock::new();
 /// 全局认证管理器单例
 static AUTH_MANAGER: OnceLock<Arc<AuthManager>> = OnceLock::new();
 
-/// 全局会话管理器单例
-static SESSION_MANAGER: OnceLock<Arc<SessionManager>> = OnceLock::new();
-
 /// 获取连接管理器
 pub fn get_connection_manager() -> Arc<ConnectionManager> {
     CONNECTION_MANAGER.get_or_init(|| ConnectionManager::new()).clone()
@@ -60,16 +56,6 @@ pub fn get_auth_manager() -> Arc<AuthManager> {
         .get_or_init(|| {
             let conn = get_connection_manager();
             AuthManager::new(conn)
-        })
-        .clone()
-}
-
-/// 获取会话管理器
-pub fn get_session_manager() -> Arc<SessionManager> {
-    SESSION_MANAGER
-        .get_or_init(|| {
-            let conn = get_connection_manager();
-            SessionManager::new(conn)
         })
         .clone()
 }

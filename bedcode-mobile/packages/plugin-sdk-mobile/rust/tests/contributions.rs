@@ -59,10 +59,9 @@ fn test_view_contribution_type_field() {
 }
 #[test]
 fn test_terminal_contribution_toolbar_items() {
-    // 终端扩展点含工具栏按钮（ui:input 权限对应）
+    // 终端扩展点只含工具栏按钮（ui:input 权限对应）；
+    // inputHandlers/outputParsers 已随票 15 阶段 B 退役（terminal-hooks 删面）
     let t = TerminalContribution {
-        input_handlers: vec!["in1".into()],
-        output_parsers: vec!["out1".into()],
         toolbar_items: vec![TerminalToolbarItemContribution {
             id: "tb1".into(),
             title: "Send".into(),
@@ -72,8 +71,6 @@ fn test_terminal_contribution_toolbar_items() {
     assert_eq!(
         serde_json::to_value(&t).unwrap(),
         serde_json::json!({
-            "inputHandlers": ["in1"],
-            "outputParsers": ["out1"],
             "toolbarItems": [{ "id": "tb1", "title": "Send", "icon": "send.svg" }]
         })
     );
@@ -96,7 +93,6 @@ fn test_contributes_defaults_and_full_parse() {
     let c: PluginContributes = serde_json::from_value(json).unwrap();
     assert_eq!(c.commands[0].id, "c1");
     assert_eq!(c.views[0].view_type, "toolbox");
-    assert_eq!(c.terminal.as_ref().unwrap().input_handlers, vec!["in1"]);
     assert_eq!(c.nav_tab.as_ref().unwrap().id, "t1");
     assert_eq!(c.settings.as_ref().unwrap().section, "net");
     assert_eq!(c.configuration.as_ref().unwrap().properties.len(), 1);

@@ -1,32 +1,31 @@
-//! 会话控制面 HTTP 集成测试（专项票 04 P3 / 票 07 P6 统一运行）
+//! 会话控制 HTTP wire 契约集成测试（票 13 改造）
 //!
-//! 用 actix-web 起 mock 桌面端 HTTP 服务器（移动端 crate 自带 actix-web 主依赖，
-//! 零新增），逐路由返回与桌面端 `ApiResponse` 对称的 `{code,message,data?}` 信封，
-//! 真实 `SessionHttpClient` + reqwest 打真请求，验证：
-//! - 四端点 wire shape（GET /api/sessions、POST /api/sessions/start、
-//!   POST /{id}/stop、DELETE /{id}/remove、POST /{id}/input）
-//! - JWT Bearer Authorization 头注入
-//! - 成功形状（含无 data 的 ok 信封）、业务码 1002 → AppError::Auth、
-//!   非 2xx → AppError::Internal
-//! - 输入载荷透传（data + specialKey 均原样携带；specialKey 由桌面翻译）
+//! 客户端已迁插件：原宿主 `session::http::SessionHttpClient` + `commands::session`
+//! 整体退役，会话控制（list/start/stop/remove/input）由 `com.bedcode.terminal-session`
+//! 插件经 **host-http**（`jwtAuth` 宿主代注 Bearer，token 不落插件）直连桌面
+//! `/api/sessions*`。本文件锁「宿主 host-http 执行器 + 桌面 wire 契约」：
 //!
-//! session.list / terminal.sendInput 的**权限判定**（plugin/context.ts）是前端单测面
-//! （`pluginContextHttp.test.ts` 7 例，票 04 已绿），本文件只锁 HTTP 传输层形状。
+//! - 四端点 + input 的请求形状（configId camelCase / stop POST / remove DELETE /
+//!   input `{data, specialKey}` 透传；specialKey 由桌面翻译）
+//! - jwtAuth → `Authorization: Bearer` 注入（token 与全局存储同源）
+//! - 非 2xx 与业务码信封在执行器层的透出形态（`{status, body}`）
+//!
+//! 边界：插件侧的请求构造 / 响应分类纯函数锁在插件 crate
+//! （`plugins/terminal-session/rust/src/session.rs` 单测）；无 token 的
+//! fail-visible 裁决锁在宿主 lib 单测（`resolve_jwt_auth_header` 三向）。
 
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
 use actix_web::{web, App, HttpRequest, HttpResponse, HttpServer};
-use bedcode_mobile_lib::connection::manager::ConnectionManager;
-use bedcode_mobile_lib::session::http::{SessionHttpClient, session_base_url};
+use bedcode_mobile_lib::plugin::wasm_host::execute_http_request;
 use bedcode_mobile_lib::state::{clear_global_token, set_global_token};
-use bedcode_mobile_lib::AppError;
 use serde_json::{json, Value};
 
-/// 全局串行闸：`set_global_token`（SessionHttpClient 经 bearer_auth 读取）是
-/// 进程级共享静态，用例并发会互相踩 token——与 http_auth_flow / http_proxy_flow
-/// 的 SERIAL 同构（跨 await 持锁被规则引擎判 blocker，故用单入口 suite 串行）。
+/// 全局串行闸：`set_global_token`（jwtAuth 经宿主代注读取）是进程级共享静态，
+/// 用例并发会互相踩 token——与 http_auth_flow / http_proxy_flow 的 SERIAL 同构
+/// （跨 await 持锁被规则引擎判 blocker，故用单入口 suite 串行）。
 static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 const MOCK_TOKEN: &str = "mock-jwt-token";
@@ -150,6 +149,30 @@ impl Drop for MockDesktop {
     }
 }
 
+// ==================== 请求构造（插件 host-http 契约同形） ====================
+
+/// 与插件 crate `session.rs::build_request` 同形的请求 JSON：headers 固定 JSON、
+/// `jwtAuth: true`（宿主代注 Bearer）、body 以字符串承载。此形状即 host-http
+/// 执行器契约（插件侧由纯函数单测锁定），本文件经真实 reqwest 验证落线行为。
+fn plugin_request(method: &str, url: String, body: Option<Value>) -> Value {
+    let mut req = json!({
+        "method": method,
+        "url": url,
+        "headers": { "Content-Type": "application/json" },
+        "jwtAuth": true,
+    });
+    if let Some(b) = body {
+        req["body"] = Value::String(b.to_string());
+    }
+    req
+}
+
+/// 执行器返回 `{status, body}` → 解析 body 为 JSON（信封）
+fn json_body(resp: &Value) -> Value {
+    let body = resp["body"].as_str().expect("response body is string");
+    serde_json::from_str(body).expect("body is JSON")
+}
+
 // ==================== 路由处理器 ====================
 
 fn auth_header(req: &HttpRequest) -> Option<String> {
@@ -204,27 +227,26 @@ async fn mock_input(data: web::Data<MockData>, req: HttpRequest, path: web::Path
 
 // ==================== 场景（单入口串行：全局 token 共享） ====================
 
-/// 建客户端 + 保存 target 并解析 base URL（`session_base_url` = resolve_base_url）
-async fn setup(port: u16) -> (Arc<SessionHttpClient>, String) {
-    let conn = ConnectionManager::new();
-    conn.set_target("127.0.0.1".to_string(), port, None).await;
-    let base = session_base_url(&conn).await.expect("base url from target");
-    (SessionHttpClient::new(), base)
-}
-
-async fn scenario_list_and_jwt_header() {
+async fn scenario_list_wire_and_jwt() {
     let mock = MockDesktop::start(MockMode::Happy).await;
     set_global_token(MOCK_TOKEN);
-    let (client, base) = setup(mock.addr.port()).await;
 
-    let sessions = client.list_sessions(&base).await.expect("list should succeed");
-    assert_eq!(sessions.len(), 2, "应解析出 2 条会话");
-    assert_eq!(sessions[0]["id"], "s1");
-    assert_eq!(sessions[0]["status"], "running");
+    let resp = execute_http_request(&plugin_request(
+        "GET",
+        format!("{}/api/sessions", mock.base_url()),
+        None,
+    ))
+    .await
+    .expect("list transport must succeed");
+    assert_eq!(resp["status"], 200);
+
+    let body = json_body(&resp);
+    assert_eq!(body["code"], 0);
+    assert_eq!(body["data"]["sessions"].as_array().expect("sessions array").len(), 2);
     // wire 字面量锁：桌面会话状态用 camelCase waitingInput（票 06 统一点）
-    assert_eq!(sessions[1]["status"], "waitingInput");
+    assert_eq!(body["data"]["sessions"][1]["status"], "waitingInput");
 
-    // JWT Bearer 头断言
+    // JWT Bearer 头断言（插件不持 token：宿主代注）
     let (_path, _method, auth, _body) = mock.state.last_req("/api/sessions");
     assert_eq!(auth.as_deref(), Some("Bearer mock-jwt-token"));
 
@@ -235,77 +257,103 @@ async fn scenario_list_and_jwt_header() {
 async fn scenario_start_stop_remove_input_shapes() {
     let mock = MockDesktop::start(MockMode::Happy).await;
     set_global_token(MOCK_TOKEN);
-    let (client, base) = setup(mock.addr.port()).await;
+    let base = mock.base_url();
 
-    let sid = client
-        .start_session(&base, "cfg-1", Some(120), Some(30))
-        .await
-        .expect("start should succeed");
-    assert_eq!(sid, "s-new");
+    let resp = execute_http_request(&plugin_request(
+        "POST",
+        format!("{base}/api/sessions/start"),
+        // 与插件 build_start_body 同形（cols/rows 齐备才出现）
+        Some(json!({ "configId": "cfg-1", "cols": 120, "rows": 30 })),
+    ))
+    .await
+    .expect("start transport must succeed");
+    assert_eq!(json_body(&resp)["data"]["sessionId"], "s-new");
     let (_p, _m, _a, body) = mock.state.last_req("/api/sessions/start");
     assert_eq!(body["configId"], "cfg-1", "启动载荷应带 configId（camelCase，桌面 wire）");
     assert_eq!(body["cols"], 120);
 
-    // stop / remove / input：无 data 的 ok 信封（`parse_ok_envelope` 对无 data 不违约）
-    client.stop_session(&base, &sid).await.expect("stop ok envelope");
-    client.remove_session(&base, &sid).await.expect("remove ok envelope");
-    client
-        .send_input(&base, &sid, "ls -la", None)
-        .await
-        .expect("input data");
-    client
-        .send_input(&base, &sid, "", Some("ctrl+c"))
-        .await
-        .expect("input specialKey");
+    // stop / remove / input：无 data 的 ok 信封
+    execute_http_request(&plugin_request(
+        "POST",
+        format!("{base}/api/sessions/s-new/stop"),
+        None,
+    ))
+    .await
+    .expect("stop transport");
+    execute_http_request(&plugin_request(
+        "DELETE",
+        format!("{base}/api/sessions/s-new/remove"),
+        None,
+    ))
+    .await
+    .expect("remove transport");
+    execute_http_request(&plugin_request(
+        "POST",
+        format!("{base}/api/sessions/s-new/input"),
+        Some(json!({ "data": "ls -la", "specialKey": null })),
+    ))
+    .await
+    .expect("input data transport");
+    execute_http_request(&plugin_request(
+        "POST",
+        format!("{base}/api/sessions/s-new/input"),
+        Some(json!({ "data": "", "specialKey": "ctrl+c" })),
+    ))
+    .await
+    .expect("input specialKey transport");
 
     // 输入载荷透传：data / specialKey 原样携带（specialKey 由桌面翻译，本端不解释）
     let (_p, _m, _a, body) = mock.state.last_req("/api/sessions/s-new/input");
     assert_eq!(body["data"], "");
     assert_eq!(body["specialKey"], "ctrl+c");
 
-    // remove 用 DELETE 方法
+    // remove 用 DELETE 方法；stop 用 POST
     let (_p, method, _a, _b) = mock.state.last_req("/api/sessions/s-new/remove");
     assert_eq!(method, "DELETE");
+    let (_p, method, _a, _b) = mock.state.last_req("/api/sessions/s-new/stop");
+    assert_eq!(method, "POST");
 
     clear_global_token();
     mock.shutdown().await;
 }
 
-async fn scenario_business_error_maps_to_auth() {
+async fn scenario_business_error_envelope_passes_through() {
     let mock = MockDesktop::start(MockMode::StopRejected).await;
     set_global_token(MOCK_TOKEN);
-    let (client, base) = setup(mock.addr.port()).await;
 
-    let err = client
-        .stop_session(&base, "s-missing")
-        .await
-        .expect_err("业务码应映射错误");
-    match err {
-        AppError::Auth(msg) => {
-            assert!(msg.contains("1002"), "AppError::Auth 应透传桌面业务码 1002: {msg}");
-        }
-        other => panic!("code=1002 应映射 AppError::Auth，实际 {other:?}"),
-    }
+    // 桌面错误口径：HTTP 200 + `{code:1002, message}`——执行器不解释业务码，
+    // 原样透出 body（分类归插件 session.rs：前端据此拿到 code=1002）
+    let resp = execute_http_request(&plugin_request(
+        "POST",
+        format!("{}/api/sessions/s-missing/stop", mock.base_url()),
+        None,
+    ))
+    .await
+    .expect("transport layer ok: business error rides on HTTP 200");
+    assert_eq!(resp["status"], 200);
+    let body = json_body(&resp);
+    assert_eq!(body["code"], 1002);
+    assert_eq!(body["message"], "session not found");
 
     clear_global_token();
     mock.shutdown().await;
 }
 
-async fn scenario_http_error_maps_to_internal() {
+async fn scenario_non_2xx_status_passes_through() {
     let mock = MockDesktop::start(MockMode::InputHttpError).await;
     set_global_token(MOCK_TOKEN);
-    let (client, base) = setup(mock.addr.port()).await;
 
-    let err = client
-        .send_input(&base, "s1", "x", None)
-        .await
-        .expect_err("非 2xx 应映射错误");
-    match err {
-        AppError::Internal(msg) => {
-            assert!(msg.contains("500"), "非 2xx 应映射 AppError::Internal 且带状态码: {msg}");
-        }
-        other => panic!("HTTP 500 应映射 AppError::Internal，实际 {other:?}"),
-    }
+    // 非 2xx：执行器返回 `{status:500, body}`（不 Err）——插件分类层映射前端
+    // `{code: status}`（插件 session.rs 单测锁），本层锁 status 透出
+    let resp = execute_http_request(&plugin_request(
+        "POST",
+        format!("{}/api/sessions/s1/input", mock.base_url()),
+        Some(json!({ "data": "x", "specialKey": null })),
+    ))
+    .await
+    .expect("non-2xx is a transport-level success at executor layer");
+    assert_eq!(resp["status"], 500);
+    assert!(resp["body"].as_str().unwrap().contains("boom"));
 
     clear_global_token();
     mock.shutdown().await;
@@ -317,8 +365,8 @@ async fn scenario_http_error_maps_to_internal() {
 #[tokio::test]
 async fn session_http_full_suite() {
     let _serial = SERIAL.lock().unwrap();
-    scenario_list_and_jwt_header().await;
+    scenario_list_wire_and_jwt().await;
     scenario_start_stop_remove_input_shapes().await;
-    scenario_business_error_maps_to_auth().await;
-    scenario_http_error_maps_to_internal().await;
+    scenario_business_error_envelope_passes_through().await;
+    scenario_non_2xx_status_passes_through().await;
 }

@@ -13,7 +13,6 @@ pub mod command;
 pub mod context;
 pub mod host;
 pub mod permission;
-pub mod terminal;
 pub mod traits;
 pub mod types;
 
@@ -48,9 +47,8 @@ pub mod wasm_host;
 pub use args::CommandArgs;
 pub use command::{PluginCommand, PluginCommandEntry};
 pub use context::RustPluginContext;
-pub use host::{ConfigKey, HostApi, HostBus, HostConfig, HostDatabase, HostError, HostEvents, HostFs, HostHttp, HostLog, HostStorage, HostTerminal};
+pub use host::{ConfigKey, HostApi, HostBus, HostConfig, HostDatabase, HostError, HostEvents, HostFs, HostHttp, HostLog, HostStorage};
 pub use permission::PermissionManager;
-pub use terminal::TerminalHandler;
 pub use traits::{BedcodePlugin, BedcodePluginEntry};
 pub use types::*;
 

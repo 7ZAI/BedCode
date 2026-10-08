@@ -198,10 +198,10 @@ mod tests {
 
     #[test]
     fn test_has_permission_consults_manager() {
-        let (ctx, _, _, _, _) = make_context(&["terminal:input"]);
+        let (ctx, _, _, _, _) = make_context(&["mdns"]);
         // storage 默认授予，无需显式请求
         assert!(ctx.has_permission("storage"));
-        assert!(ctx.has_permission("terminal:input"));
+        assert!(ctx.has_permission("mdns"));
         assert!(!ctx.has_permission("terminal:output"));
     }
 

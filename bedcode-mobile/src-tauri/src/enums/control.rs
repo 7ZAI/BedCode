@@ -21,7 +21,8 @@ pub struct SessionControlPayload {
 /// 会话控制动作
 ///
 /// 保留变体仅服务 `ws_protocol_integration` 的 legacy 场景（请求-响应匹配 /
-/// token 注入断言）；会话控制生产调用面已迁 HTTP（`session::http`）。
+/// token 注入断言）；会话控制生产调用面已迁插件 `com.bedcode.terminal-session`
+/// （票 13，经 host-http；宿主 SessionHttpClient / SessionManager 已退役）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SessionControlAction {

@@ -45,8 +45,9 @@ pub enum PluginLifecycleEvent {
     Disconnect { reason: String },
     SessionCreated { session_id: String },
     SessionStopped { session_id: String },
-    TerminalInput { session_id: String, data: String },
-    TerminalOutput { session_id: String, data: String },
+    // TerminalInput / TerminalOutput 已随票 15 阶段 B 退役（ABI v17：
+    // host-terminal / terminal-hooks 整面删除，终端 UI 域在插件内闭环，
+    // 零生产构造点）——WIT 为单一事实来源，编译期杜绝残存分发。
 }
 
 impl PluginLifecycleEvent {
@@ -59,8 +60,6 @@ impl PluginLifecycleEvent {
             Self::Disconnect { .. } => "onDisconnect",
             Self::SessionCreated { .. } => "onSessionCreated",
             Self::SessionStopped { .. } => "onSessionStopped",
-            Self::TerminalInput { .. } => "onTerminalInput",
-            Self::TerminalOutput { .. } => "onTerminalOutput",
         }
     }
 
@@ -73,8 +72,6 @@ impl PluginLifecycleEvent {
             Self::Disconnect { .. } => "disconnect",
             Self::SessionCreated { .. } => "sessionCreated",
             Self::SessionStopped { .. } => "sessionStopped",
-            Self::TerminalInput { .. } => "terminalInput",
-            Self::TerminalOutput { .. } => "terminalOutput",
         }
     }
 
@@ -89,9 +86,6 @@ impl PluginLifecycleEvent {
             }
             Self::SessionCreated { session_id } | Self::SessionStopped { session_id } => {
                 serde_json::json!({ "sessionId": session_id })
-            }
-            Self::TerminalInput { session_id, data } | Self::TerminalOutput { session_id, data } => {
-                serde_json::json!({ "sessionId": session_id, "data": data })
             }
         }
     }

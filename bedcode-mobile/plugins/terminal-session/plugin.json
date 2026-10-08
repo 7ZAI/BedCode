@@ -11,9 +11,9 @@
   "permissions": [
     "auth",
     "bus",
+    "network:http",
     "session:read",
     "storage",
-    "terminal:input",
     "terminal:output",
     "ui:input",
     "ui:toolbox",
@@ -64,6 +64,26 @@
       {
         "id": "terminal-session.authenticate-with-biometric",
         "title": "Authenticate With Biometric"
+      },
+      {
+        "id": "terminal-session.list-sessions",
+        "title": "List Sessions"
+      },
+      {
+        "id": "terminal-session.start-session",
+        "title": "Start Session"
+      },
+      {
+        "id": "terminal-session.stop-session",
+        "title": "Stop Session"
+      },
+      {
+        "id": "terminal-session.remove-session",
+        "title": "Remove Session"
+      },
+      {
+        "id": "terminal-session.send-http-input",
+        "title": "Send Session Input (HTTP)"
       }
     ],
     "terminal": {

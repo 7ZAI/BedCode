@@ -37,10 +37,6 @@ interface host-plugin-database {
     execute-batch: func(sqls-json: string) -> result<u32, string>;
 }
 
-interface host-terminal {
-    send: func(session-id: string, data: string) -> result<_, string>;
-}
-
 /// 事件 / 系统通知（SDK `HostEvents` trait 现状即 emit+notify 同组，如实映射）
 interface host-events {
     emit: func(event-name: string, payload-json: string);
@@ -400,11 +396,6 @@ interface events-binary {
     on-message-binary: func(topic: string, sender: string, payload: list<u8>);
 }
 
-interface terminal-hooks {
-    on-terminal-input: func(session-id: string, text: string) -> option<string>;
-    on-terminal-output: func(session-id: string, data: string) -> option<string>;
-}
-
 interface manifest {
     get: func() -> string;
 }
@@ -423,6 +414,13 @@ interface manifest {
 ///   （5 函数：request-pairing / verify-pairing-code / qr-connect /
 ///   biometric-authenticate / has-credentials，凭据零过境）+ 权限位 `auth`。
 ///   纯增量，v15 产物不受影响
+/// - v17：host-terminal / terminal-hooks 整面退役（票 15 阶段 B，终端 UI 域
+///   已随阶段 A 整体迁入插件前端、退役面零消费者）：import `host-terminal`
+///   （send）与导出 `terminal-hooks`（on-terminal-input / on-terminal-output）
+///   删除 + 权限位 `terminal:input` 退役。**破坏性收缩**：v16 及更早产物在
+///   v17 宿主实例化期因缺失 import interface 被点名失败（fail-visible ②），
+///   须随 SDK 重编译；内置插件随 APK 同分发无旧产物。`terminal:output`
+///   保留（host-terminal-stream.forward-output 权限门）
 interface abi {
     version: func() -> u32;
 }
@@ -440,7 +438,6 @@ world plugin {
     import host-storage;
     import host-database;
     import host-plugin-database;
-    import host-terminal;
     import host-events;
     import host-http;
     import host-fs;
@@ -458,7 +455,6 @@ world plugin {
     export command;
     export lifecycle;
     export events;
-    export terminal-hooks;
     export manifest;
     export abi;
 }

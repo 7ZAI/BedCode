@@ -2,10 +2,12 @@
 //!
 //! BedcodePlugin trait — 插件核心接口
 //! BedcodePluginEntry — inventory 提交类型
+//!
+//! `terminal_handlers` 扩展点已随票 15 阶段 B 退役（terminal-hooks 整面删除，
+//! native 插件面的同族钩子零消费者）。
 
 use crate::command::PluginCommand;
 use crate::context::RustPluginContext;
-use crate::terminal::TerminalHandler;
 use crate::types::PluginManifest;
 use std::future::Future;
 use std::pin::Pin;
@@ -19,7 +21,6 @@ pub trait BedcodePlugin: Send + Sync + 'static {
         Box::pin(async { Ok(()) })
     }
     fn register_commands() -> Vec<PluginCommand> { vec![] }
-    fn terminal_handlers() -> Vec<Box<dyn TerminalHandler>> { vec![] }
     fn on_startup() -> Pin<Box<dyn Future<Output = ()> + Send>> { Box::pin(async {}) }
     fn on_shutdown() -> Pin<Box<dyn Future<Output = ()> + Send>> { Box::pin(async {}) }
 }
@@ -31,7 +32,6 @@ pub struct BedcodePluginEntry {
     pub activate: fn(RustPluginContext) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>>,
     pub deactivate: fn(RustPluginContext) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>>,
     pub register_commands: fn() -> Vec<PluginCommand>,
-    pub terminal_handlers: fn() -> Vec<Box<dyn TerminalHandler>>,
     pub on_startup: fn() -> Pin<Box<dyn Future<Output = ()> + Send>>,
     pub on_shutdown: fn() -> Pin<Box<dyn Future<Output = ()> + Send>>,
 }
@@ -49,7 +49,6 @@ macro_rules! submit_plugin {
                 activate: <$plugin_type>::activate,
                 deactivate: <$plugin_type>::deactivate,
                 register_commands: <$plugin_type>::register_commands,
-                terminal_handlers: <$plugin_type>::terminal_handlers,
                 on_startup: <$plugin_type>::on_startup,
                 on_shutdown: <$plugin_type>::on_shutdown,
             }
@@ -123,9 +122,8 @@ mod tests {
         let manifest = (entry.create_manifest)();
         assert_eq!(manifest.id, "com.bedcode.test-plugin");
         assert_eq!(manifest.plugin_type, PluginType::Rust);
-        // 未覆盖的扩展点走 trait 默认实现：空命令表/空终端处理器
+        // 未覆盖的扩展点走 trait 默认实现：空命令表
         assert!((entry.register_commands)().is_empty());
-        assert!((entry.terminal_handlers)().is_empty());
         // 默认启动/关闭回调可直接执行（async 无等待点）
         block_on((entry.on_startup)());
         block_on((entry.on_shutdown)());

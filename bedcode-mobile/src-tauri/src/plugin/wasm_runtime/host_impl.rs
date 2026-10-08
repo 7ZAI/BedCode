@@ -18,7 +18,6 @@ pub(super) mod peer;
 pub(super) mod platform;
 pub(super) mod storage;
 pub(super) mod support;
-pub(super) mod terminal;
 pub(super) mod terminal_stream;
 pub(super) mod ws;
 
@@ -41,7 +40,6 @@ pub(crate) use mdns::*;
 pub(crate) use peer::*;
 pub(crate) use platform::*;
 pub(crate) use storage::*;
-pub(crate) use terminal::*;
 pub(crate) use terminal_stream::*;
 // ws 域 5 原语以别名导出供 component.rs 接线（`purge_for_plugin` 名被下方聚合函数
 // 占用，回收统一走聚合入口，无需单导出）

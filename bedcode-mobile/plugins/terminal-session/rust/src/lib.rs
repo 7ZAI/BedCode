@@ -44,6 +44,7 @@ mod commands;
 mod keys;
 mod link;
 mod protocol;
+mod session;
 
 pub(crate) use link::LINK_MANAGER;
 

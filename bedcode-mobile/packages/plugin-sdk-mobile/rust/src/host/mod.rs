@@ -6,9 +6,9 @@
 //!   便于单元测试时 mock
 //!
 //! 各子 trait 按功能域一一对应 WIT `bedcode:plugin` world 的 import 接口
-//! （storage / database / terminal / events / http / fs / log / bus / config）。
-//! session / file_service / transfer 能力已随组件迁移或旧链路切换删除
-//! （内置插件零使用）—— WIT 为单一事实来源，编译期杜绝残存调用。
+//! （storage / database / events / http / fs / log / bus / config）。
+//! host-terminal（send）与 terminal-hooks 已随票 15 阶段 B 退役（终端 UI 域
+//! 迁插件后零消费者）—— WIT 为单一事实来源，编译期杜绝残存调用。
 //!
 //! 错误语义见 [`HostError`]：仅承载状态码与通用描述，
 //! 详细错误原因记录在宿主日志（WIT `result<T, string>` 透传后含真实消息）。
@@ -26,7 +26,6 @@ pub mod mdns;
 pub mod peer;
 pub mod platform;
 pub mod storage;
-pub mod terminal;
 pub mod terminal_stream;
 pub mod ws;
 
@@ -43,7 +42,6 @@ pub use mdns::HostMdns;
 pub use peer::HostPeer;
 pub use platform::HostPlatform;
 pub use storage::HostStorage;
-pub use terminal::HostTerminal;
 pub use terminal_stream::HostTerminalStream;
 pub use ws::{
     parse_ws_frame, ws_event_topic, ws_message_topic, HostWs, WsIncomingFrame, WS_CLOSE, WS_ERROR,
@@ -156,7 +154,6 @@ pub trait HostApi:
     HostStorage
     + HostDatabase
     + HostPluginDatabase
-    + HostTerminal
     + HostTerminalStream
     + HostConnection
     + HostAuth
@@ -177,7 +174,6 @@ impl<T> HostApi for T where
     T: HostStorage
         + HostDatabase
         + HostPluginDatabase
-        + HostTerminal
         + HostTerminalStream
         + HostConnection
         + HostAuth

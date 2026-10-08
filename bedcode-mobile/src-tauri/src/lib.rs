@@ -17,7 +17,6 @@ pub mod peer_remote;
 pub mod peer_transfer;
 pub mod plugin;
 pub mod router;
-pub mod session;
 pub mod state;
 pub mod system;
 pub mod terminal_stream_gateway;
@@ -150,12 +149,6 @@ pub fn run() {
             let plugin_manager = crate::state::init_plugin_manager(Arc::new(plugin_manager));
             app.manage(plugin_manager.clone());
 
-            // 监听前端 terminal_output_activity（前端直连终端 WS 收到输出帧时触发
-            // 插件 TerminalOutput 通知；输出不再经 Rust 中转，见 ticket 09）
-            // 必须在 init_plugin_manager 之后注册：内部会取全局插件管理器，
-            // 早于初始化调用会触发 OnceLock panic（PluginManager not initialized）
-            crate::router::event::init_terminal_output_listener(app_handle);
-
             // 异步：解压内置插件 → 初始化 WASM 运行时 → 扫描加载 → 自动激活
             // 使用 tauri::async_runtime::spawn 而非 tokio::spawn，
             // 因为 setup 闭包不在 Tokio 运行时上下文中执行，tokio::spawn 会 panic
@@ -265,10 +258,9 @@ pub fn run() {
             commands::auth::ws_bind_biometric_credential,
             commands::auth::ws_unbind_biometric_credential,
             commands::auth::ws_get_biometric_key_status,
-            // Session Commands（票 04：控制面迁 HTTP；WS 信封命令随协议退役删除）
-            commands::session::ws_start_session,
-            commands::session::ws_stop_session,
-            commands::session::ws_remove_session,
+            // Session Commands（票 13：会话控制整体迁插件 com.bedcode.terminal-session——
+            // 三命令零消费者随 session.rs / commands/session.rs 退役；前端走
+            // src/plugin/sessionCommands.ts 的 plugin_invoke 命令面）
             // Settings (移动端使用 JSON 文件)
             commands::mobile_commands::get_all_db_settings_mobile,
             commands::mobile_commands::set_db_setting_mobile,

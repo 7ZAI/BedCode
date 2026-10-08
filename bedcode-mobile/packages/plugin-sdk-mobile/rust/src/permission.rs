@@ -4,7 +4,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-pub const PERMISSION_TERMINAL_INPUT: &str = "terminal:input";
+/// 终端输出流窄转发权限（host-terminal-stream.forward-output，票 12）；
+/// `terminal:input` 已随票 15 阶段 B 整面退役（host-terminal / TerminalAPI）
 pub const PERMISSION_TERMINAL_OUTPUT: &str = "terminal:output";
 pub const PERMISSION_SESSION_READ: &str = "session:read";
 pub const PERMISSION_SESSION_WRITE: &str = "session:write";
@@ -36,8 +37,9 @@ pub const PERMISSION_WS_CLIENT: &str = "ws:client";
 /// 落地，本域不向插件返回凭据材料（C4；对齐票 12「token 不落插件」先例）
 pub const PERMISSION_AUTH: &str = "auth";
 
-static VALID_PERMISSIONS: &[&str] = &[
-    PERMISSION_TERMINAL_INPUT,
+/// 权限词汇全量表（pub：宿主机制层〔wasm-core-mobile 权限漂移锁〕与生成物
+/// 校验消费；新增权限必须在此登记，否则 grant 静默丢弃）
+pub static VALID_PERMISSIONS: &[&str] = &[
     PERMISSION_TERMINAL_OUTPUT,
     PERMISSION_SESSION_READ,
     PERMISSION_SESSION_WRITE,
@@ -61,9 +63,9 @@ static VALID_PERMISSIONS: &[&str] = &[
 ];
 
 static PERMISSION_API_MAP: &[(&str, &[&str])] = &[
-    (PERMISSION_TERMINAL_INPUT, &["terminal.sendInput", "terminal.onInput"]),
-    // 票 12：terminal-stream.forwardOutput（终端输出流窄转发）复用本词汇
-    (PERMISSION_TERMINAL_OUTPUT, &["terminal.onOutput", "terminal-stream.forwardOutput"]),
+    // 票 12：terminal-stream.forwardOutput（终端输出流窄转发）复用本词汇；
+    // TerminalAPI（sendInput/onOutput）已随票 15 阶段 B 退役，terminal.onOutput 同批移除
+    (PERMISSION_TERMINAL_OUTPUT, &["terminal-stream.forwardOutput"]),
     (PERMISSION_SESSION_READ, &["session.list", "session.get", "session.onStatusChange"]),
     (PERMISSION_SESSION_WRITE, &["session.create", "session.stop"]),
     (PERMISSION_UI_TOOLBOX, &["ui.registerToolboxPage"]),
@@ -186,10 +188,10 @@ mod tests {
     fn test_grant_filters_invalid() {
         let pm = PermissionManager::new();
         let granted = pm.grant_permissions("test-plugin", &[
-            "terminal:input".to_string(),
+            "terminal:output".to_string(),
             "invalid:permission".to_string(),
         ]);
-        assert!(granted.contains("terminal:input"));
+        assert!(granted.contains("terminal:output"));
         assert!(!granted.contains("invalid:permission"));
         // storage 无条件默认授予
         assert!(granted.contains("storage"));
@@ -198,18 +200,18 @@ mod tests {
     #[test]
     fn test_check_permission() {
         let pm = PermissionManager::new();
-        pm.grant_permissions("test-plugin", &["terminal:input".to_string()]);
-        assert!(pm.check("test-plugin", "terminal:input"));
-        assert!(!pm.check("test-plugin", "terminal:output"));
+        pm.grant_permissions("test-plugin", &["terminal:output".to_string()]);
+        assert!(pm.check("test-plugin", "terminal:output"));
+        assert!(!pm.check("test-plugin", "mdns"));
         assert!(pm.check("test-plugin", "storage"));
     }
 
     #[test]
     fn test_check_api() {
         let pm = PermissionManager::new();
-        pm.grant_permissions("test-plugin", &["terminal:input".to_string()]);
-        assert!(pm.check_api("test-plugin", "terminal.sendInput"));
-        assert!(!pm.check_api("test-plugin", "terminal.onOutput"));
+        pm.grant_permissions("test-plugin", &["terminal:output".to_string()]);
+        assert!(pm.check_api("test-plugin", "terminal-stream.forwardOutput"));
+        assert!(!pm.check_api("test-plugin", "session.list"));
     }
 
     #[test]
@@ -229,7 +231,7 @@ mod tests {
         assert!(pm.check_api("p", "ui.goBack"));
         assert!(pm.check_api("p", "ui.registerTerminalToolbarItem"));
         // 未授予的权限族对应 API 一律拒绝
-        assert!(!pm.check_api("p", "terminal.sendInput"));
+        assert!(!pm.check_api("p", "terminal-stream.forwardOutput"));
         assert!(!pm.check_api("p", "session.list"));
     }
 
@@ -238,7 +240,6 @@ mod tests {
         // 白名单 = VALID_PERMISSIONS 静态表：任何新增权限必须同步登记，
         // 否则 grant 静默丢弃（此处锁死全量，含移动端特有 ui:navtab/ui:settings/ui:route）
         for p in [
-            PERMISSION_TERMINAL_INPUT,
             PERMISSION_TERMINAL_OUTPUT,
             PERMISSION_SESSION_READ,
             PERMISSION_SESSION_WRITE,
@@ -260,9 +261,9 @@ mod tests {
     #[test]
     fn test_revoke_all() {
         let pm = PermissionManager::new();
-        pm.grant_permissions("test-plugin", &["terminal:input".to_string()]);
+        pm.grant_permissions("test-plugin", &["terminal:output".to_string()]);
         pm.revoke_all("test-plugin");
-        assert!(!pm.check("test-plugin", "terminal:input"));
+        assert!(!pm.check("test-plugin", "terminal:output"));
         assert!(!pm.check("test-plugin", "storage"));
     }
 
