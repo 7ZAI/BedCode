@@ -422,6 +422,7 @@ Desktop PTY → Claude Code
 | Android 原生插件注册 | `src-tauri/src/plugin/android_plugins/` |
 | 插件系统 (Rust) | `src-tauri/src/plugin/` |
 | 插件系统 (前端) | `src/plugin/`、`src/views/`（PluginView） |
+| **移动端前端默认落点（宿主壳）** | `src/shell/`——公共组件库 `components/ui/`、平台机制副本 `composables/`（规则见 AGENTS.md §6） |
 | 插件开发 SDK | `packages/plugin-sdk-mobile/`（开发指南：仓库根 `plugin-dev-mobile.md`） |
 | 插件源码 | `plugins/*/` |
 | 系统常量 / 错误类型 | `src-tauri/src/system/`（constants/ 按领域分组） |
