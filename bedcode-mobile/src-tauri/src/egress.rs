@@ -904,8 +904,14 @@ impl EgressPolicy {
             return EgressDecision::Allow(GrantSource::L2Plugin);
         }
 
-        // 策略归属：`plugin:{id}` → 插件档位；其余（host / useUpdateChecker）→ 默认档
-        let plugin_id = source.strip_prefix("plugin:").unwrap_or(GRANT_PLUGIN_HOST);
+        // 策略归属：`plugin:{id}` 来源保留完整前缀（记录/档位存储口径 = 带 `plugin:` 前缀，
+        // 见 record_grant / set_plugin_strategy——此前 strip_prefix 去前缀导致记录永远匹配不上）；
+        // 其余（host / useUpdateChecker）归一为 GRANT_PLUGIN_HOST（宿主全局记录以 "host" 存储）
+        let plugin_id = if source.starts_with("plugin:") {
+            source
+        } else {
+            GRANT_PLUGIN_HOST
+        };
 
         // 第 3 步：硬拒绝记录优先于一切放行路径（ADR 0022 spec §6.1 第 1 步）
         if self.record_hit(&parsed.host, &parsed.path, plugin_id, AUTH_EFFECT_DENY) {
@@ -1074,6 +1080,10 @@ pub fn redirect_policy() -> reqwest::redirect::Policy {
 mod tests {
     use super::*;
 
+    /// `policy()` 是全局单例（OnceLock）：共享策略/记录/桌面目标状态的测试必须互斥执行。
+    /// Rust 测试默认并行，无锁会互相踩档位与记录（parallel-session 曾以「在途基线」挂账的 6 例失败）。
+    static POLICY_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn parse_url_lite_basic() {
         let u = parse_url_lite("https://api.github.com/repos/x/y/releases/latest?per_page=1").unwrap();
@@ -1146,6 +1156,7 @@ mod tests {
     /// L1 桌面端目标：注入后放行；未注入 → NeedConsent
     #[test]
     fn l1_desktop_target_allowed() {
+        let _guard = POLICY_LOCK.lock().unwrap();
         let p = policy();
         p.clear_desktop_targets();
         assert!(matches!(
@@ -1199,6 +1210,7 @@ mod tests {
     /// 私网合法跳转放行：已声明桌面端目标 / 同源 / 私网→私网链
     #[test]
     fn redirect_private_whitelisted() {
+        let _guard = POLICY_LOCK.lock().unwrap();
         // 已声明桌面端目标
         policy().add_desktop_target("192.168.1.5", 4455);
         assert!(redirect_decision(
@@ -1226,6 +1238,7 @@ mod tests {
     /// L2 插件声明：注册后放行；卸载后拒绝
     #[test]
     fn plugin_declarations_registered_and_removed() {
+        let _guard = POLICY_LOCK.lock().unwrap();
         let p = policy();
         p.register_plugin_urls(
             "com.bedcode.ai-chatbox",
@@ -1257,6 +1270,7 @@ mod tests {
     /// L3 授权记忆：会话级 grant 放行 + 撤销后重新需要弹窗
     #[test]
     fn session_grant_memory() {
+        let _guard = POLICY_LOCK.lock().unwrap();
         let p = policy();
         // 清空避免与持久文件互相干扰（测试环境无 init，persistent 为空）
         p.revoke_all_grants();
@@ -1326,6 +1340,7 @@ mod tests {
     /// 默认档：allow 记录命中 → 放行；未命中 → 弹窗
     #[test]
     fn default_tier_consults_records() {
+        let _guard = POLICY_LOCK.lock().unwrap();
         let p = policy();
         p.revoke_all_grants();
         p.purge_plugin("plugin:com.bedcode.demo");
@@ -1354,6 +1369,7 @@ mod tests {
     /// 总是询问档：跳过 allow 记录（有记录也弹窗）
     #[test]
     fn always_ask_tier_skips_records() {
+        let _guard = POLICY_LOCK.lock().unwrap();
         let p = policy();
         p.revoke_all_grants();
         p.purge_plugin("plugin:com.bedcode.demo");
@@ -1385,6 +1401,7 @@ mod tests {
     /// 始终允许档：免询问放行 + 落 always_allow 审计记录（界面标「未经确认」）
     #[test]
     fn always_allow_tier_lands_audit_record() {
+        let _guard = POLICY_LOCK.lock().unwrap();
         let p = policy();
         p.revoke_all_grants();
         p.purge_plugin("plugin:com.bedcode.demo");
@@ -1408,6 +1425,7 @@ mod tests {
     /// deny 记录优先于一切放行路径（含 always_allow 档）
     #[test]
     fn deny_record_beats_always_allow() {
+        let _guard = POLICY_LOCK.lock().unwrap();
         let p = policy();
         p.revoke_all_grants();
         p.purge_plugin("plugin:com.bedcode.demo");
@@ -1437,6 +1455,7 @@ mod tests {
     /// 插件隔离：A 插件的记录/策略不影响 B 插件
     #[test]
     fn plugin_records_isolated() {
+        let _guard = POLICY_LOCK.lock().unwrap();
         let p = policy();
         p.revoke_all_grants();
         p.purge_plugin("plugin:a");
@@ -1465,6 +1484,7 @@ mod tests {
     /// 生命周期：卸载插件清空策略 + 记录（重装即全新授权）
     #[test]
     fn purge_plugin_clears_strategy_and_records() {
+        let _guard = POLICY_LOCK.lock().unwrap();
         let p = policy();
         p.revoke_all_grants();
         p.purge_plugin("plugin:com.bedcode.demo");

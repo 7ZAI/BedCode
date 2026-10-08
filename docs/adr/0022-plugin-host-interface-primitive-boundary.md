@@ -567,6 +567,23 @@ serve 供流记账 / peer_name 解析 / 取消原因码映射 / pull 任务行�
 本节按**写入批次**而非时间序排列；**「当前」= 首条 v20**（对应 desktop ABI v31 / mobile 14）。其余条目标记的「（当前）」是写入当时的时点表述，已按本节实际状态移除——被后续修订取代的结论以本节对应条目为准，
 正文中被取代的时点表述均已就地加「现状 / 终态更正」标注。
 
+- **2026-10-08 移动端票 20（egress 授权策略三档对齐 · 宿主内收口 · ABI 不变）**：
+  `.scratch/2026-10-07-mobile-wasm-core-refactor/` 阶段 5 首票（详见 `ticket-20-egress-policy-alignment.md`）。
+  实施面（并行会话 2026-10-07 落地）+ 本票收口（防回接锁 / 前端测试 / 两处真实缺陷修复）。
+  ① **留宿主裁决复核（D5）**：三档（总是询问 / 默认 / 始终允许）只回答「遇到授权记录未覆盖的
+  目标时要不要问用户」，是安全闸门（薄壳②）——B1–B6 零命中；`deny` 记录优先于一切放行路径
+  （含 always_allow 档）。② **修复 plugin_id 口径 bug**（挂账 6 例根因）：`decide` 此前对
+  `plugin:` 前缀 `strip_prefix` 去前缀，而 `record_grant` / `set_plugin_strategy` 存带前缀 key →
+  记录与档位永远匹配不上；改为带前缀来源保留完整前缀、无前缀来源归 `GRANT_PLUGIN_HOST`。
+  ③ **修复前端 pathPrefix camelCase**：`AuthRecord` 序列化为 camelCase（serde rename_all），
+  `pathLabel` 原读 `path_prefix` 恒 undefined → 路径粒度丢失；interface 与读取点统一 camelCase。
+  ④ **测试并行干扰修复**：`policy()` 全局单例 + Rust 测试默认并行 → 共享策略/记录互相踩；
+  加 `POLICY_LOCK` 串行锁（18 例全绿）。⑤ **新防回接锁** `egress_tier_mapping_single_point_lock.rs`
+  （3 例 + 变异自检 3/3）：`StrategyStep::of` 映射单点旁路 / 写入面 `parse_wire` 单点 /
+  安全义务符号在场（`must_land_auto_allow` / `CONSENT_TIMEOUT` / deny 记录 ≥ 2 处消费）。
+  ⑥ **前端测试补齐** `EgressSettingsView.test.ts`（12 例：档位切换 / 记录管理 / 空态 / 异常 / 隔离）。
+  零 ABI / WIT / wire 变更（host 内部收口，cross-end-tests 不适用）。
+
 - **2026-10-08 移动端票 15 阶段 B（host-terminal / terminal-hooks 整面退役 · mobile ABI 16 → 17 · 破坏性）**：
   `.scratch/2026-10-07-mobile-wasm-core-refactor/`（详见 `ticket-15-terminal-ui-downsink.md` §2.9）。
   阶段 A 把终端消费 UI 域迁入插件前端后退役面零消费者成立（宿主 `terminal_output_activity` 链

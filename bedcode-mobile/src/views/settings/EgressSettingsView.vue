@@ -133,14 +133,14 @@ import { logger } from '@/utils/frontendLogger'
 import SettingsSubPage from '@/components/SettingsSubPage.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
 
-/** Rust egress.rs AuthRecord 形状 */
+/** Rust egress.rs AuthRecord 形状（`#[serde(rename_all = "camelCase")]`，wire 为 camelCase） */
 interface EgressRecord {
-  plugin_id: string
+  pluginId: string
   effect: string
   target: string
-  path_prefix?: string | null
+  pathPrefix?: string | null
   source: string
-  created_at: number
+  createdAt: number
 }
 
 /** 单插件策略视图（plugin_id → 当前档位） */
@@ -244,10 +244,10 @@ function recordKey(r: EgressRecord): string {
   return `${r.pluginId}|${r.target}|${r.source}`
 }
 
-/** 路径粒度 + 授权时间展示 */
+/** 路径粒度 + 授权时间展示（wire 为 camelCase：pathPrefix） */
 function pathLabel(r: EgressRecord): string {
-  const path = r.path_prefix && r.path_prefix !== '/' ? r.path_prefix : t('settings.egress.allPaths')
-  const time = r.created_at ? new Date(r.created_at * 1000).toLocaleString() : ''
+  const path = r.pathPrefix && r.pathPrefix !== '/' ? r.pathPrefix : t('settings.egress.allPaths')
+  const time = r.createdAt ? new Date(r.createdAt * 1000).toLocaleString() : ''
   return `${path} · ${time}`
 }
 
