@@ -104,7 +104,10 @@ body {
 
 button { font-family: inherit; font-size: inherit; cursor: pointer; border: none; background: none; color: inherit; }
 input { font-family: inherit; font-size: inherit; }
-svg { display: block; flex-shrink: 0; }
+/* 不要给 svg 强制 display:block —— 行内按钮里的图标会被顶到独立一行，按钮内容
+   高出自身高度后被裁切（「安装」「复制路径」都中招）。flex 容器里 align-items
+   已经能对齐，块级化没有收益。 */
+svg { flex-shrink: 0; vertical-align: middle; }
 
 /* 焦点可见：键盘导航必须看得见落点（ui-ux-pro-max pre-delivery checklist） */
 :focus-visible { outline: 2px solid var(--color-info); outline-offset: 1px; border-radius: 3px; }
@@ -366,7 +369,8 @@ svg { display: block; flex-shrink: 0; }
 .rec.unconfirmed { border-color: color-mix(in srgb, var(--color-warning) 40%, transparent); }
 .mini { height: 22px; padding: 0 8px; border-radius: 5px; font-size: var(--font-size-sm);
   border: 1px solid var(--border-strong); color: var(--text-secondary); background: var(--bg-card); flex-shrink: 0;
-  transition: background-color 0.15s, color 0.15s; white-space: nowrap; }
+  transition: background-color 0.15s, color 0.15s; white-space: nowrap;
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px; }
 .mini:hover { background: var(--bg-hover); color: var(--text-primary); }
 .mini.danger { color: var(--color-danger); border-color: color-mix(in srgb, var(--color-danger) 35%, transparent); }
 .mini.danger:hover { background: var(--color-danger-light); }
@@ -510,8 +514,10 @@ input[type=range] { accent-color: var(--color-primary); width: 100%; cursor: poi
   transition: border-color 0.15s, box-shadow 0.15s; }
 .pal-card:hover { border-color: var(--border-strong); }
 .pal-card.on { border-color: var(--color-primary); box-shadow: var(--shadow-input-focus); }
-.pal-sw { display: flex; gap: 3px; height: 22px; border-radius: 5px; overflow: hidden; border: 1px solid var(--border); }
+.pal-sw { display: flex; height: 22px; border-radius: 5px; overflow: hidden; border: 1px solid var(--border); }
 .pal-sw i { flex: 1; }
+/* page / card 两档浅色极接近，加发丝线让三块的边界显式可读 */
+.pal-sw i + i { border-left: 1px solid var(--border); }
 .pal-card .nm { font-size: var(--font-size-sm); color: var(--text-secondary); }
 .pal-card.on .nm { color: var(--text-primary); font-weight: 500; }
 .size-tags { display: flex; gap: 6px; }
@@ -990,6 +996,9 @@ const P = {
   shield: '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1 1 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1Z"/>',
   restart: '<path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/>',
   search: '<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>',
+  file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/>',
+  network: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/>',
+  exit: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/>',
   run: '<path d="m6 4 14 8-14 8Z"/>',
   grid: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
   server: '<rect x="2" y="4" width="20" height="7" rx="2"/><rect x="2" y="13" width="20" height="7" rx="2"/><path d="M6 7.5h.01M6 16.5h.01"/>',
@@ -1266,7 +1275,8 @@ function renderServerPanel() {
   const grid = [0, 0.5, 1].map(f =>
     `<line class="ax" x1="0" y1="${H - f * H}" x2="${W}" y2="${H - f * H}"/>`).join('');
 
-  return `<div class="mgmt-pane">
+  // 内部滚动：性能监控的图例与口径说明在长内容末尾，没有滚动容器就永远够不到
+  return `<div class="mgmt-pane"><div class="pane-scroll">
     <div class="blk"><div class="srv-head">
       <span class="lamp-big">
         <span class="sdot ${running ? 'running' : SERVER.status === 'starting' ? 'degraded' : 'dormant'}"></span>
@@ -1351,7 +1361,7 @@ function renderServerPanel() {
           <span style="flex:1"></span><span class="note">2s × 60 点 = 2 分钟窗口 · 单位 msg/s</span>
         </div>
       </div></div>
-  </div>`;
+  </div></div>`;
 }
 
 /* ==================== 管理中心：设置面 ====================
@@ -1398,7 +1408,7 @@ function renderSettingsPanel() {
 
     ${sec('链路加密', `
       <div class="row-sw ${lc.enabled ? '' : 'off'}"><span class="lb">启用链路加密</span>
-        <span class="sw risk"><input type="checkbox" ${lc.enabled ? 'checked' : ''} data-act="lc" data-k="enabled"
+        <span class="sw"><input type="checkbox" ${lc.enabled ? 'checked' : ''} data-act="lc" data-k="enabled"
           aria-label="启用链路加密"/><span class="track"></span><span class="knob"></span></span></div>
       ${[['encrypt_http', '加密 HTTP 载荷'], ['encrypt_ws_terminal', '加密终端通道'],
          ['encrypt_ws_event', '加密事件通道'], ['allow_plaintext_fallback', '允许明文回退']].map(([k, t]) => `
@@ -1583,11 +1593,12 @@ function renderPalette() {
 /* ==================== 全局弹窗层 ====================
    现有宿主承载 6 类弹窗/遮罩，其中两类授权弹窗用 z-[9999] 强制浮在启停
    LoadingOverlay(z-50) 之上（有回归锁）—— 本方案保留同一层级约定。 */
-function dlgShell(title, body, foot, wide) {
+function dlgShell(title, body, foot, wide, icon) {
   const el = document.createElement('div');
   el.className = 'ovl center-y';
+  // 图标随语义走：授权类用盾牌，系统类用各自符号 —— 一律用盾牌会让「退出确认」也长成授权弹窗
   el.innerHTML = `<div class="dlg ${wide ? 'wide' : ''}" role="dialog" aria-modal="true" aria-label="${title}">
-    <div class="dlg-h">${svg('shield', 16)}<span class="t">${title}</span>
+    <div class="dlg-h">${svg(icon || 'shield', 16)}<span class="t">${title}</span>
       <button class="pact" data-act="closeDlg" aria-label="关闭">${svg('x', 14)}</button></div>
     <div class="dlg-b">${body}</div>
     <div class="dlg-f">${foot}</div></div>`;
@@ -1606,14 +1617,14 @@ function renderDialog() {
       <div class="note warn">「记住」只在「按需询问」档出现；「总是询问」档下按钮变成「允许本次」。</div>`,
       f('dlgNo', '拒绝') + f('dlgDeny', '以后都拒绝')
       + `<label class="chk"><input type="checkbox" checked/> 记住此选择</label>`
-      + f('dlgYes', '允许', ''));
+      + f('dlgYes', '允许', ''), false, 'file');
   }
   if (d === 'fs-picker') {
     return dlgShell('文件系统授权', `
       <div class="note">你刚在系统选择框中选中以下路径：</div>
       <div class="dlg-path">/home/user/work/agent-configs</div>
       <div class="row-sw"><span class="lb">操作集</span><span class="chip">读取</span></div>`,
-      f('dlgNo', '拒绝') + f('dlgDeny', '以后都拒绝') + f('dlgYes', '允许', ''));
+      f('dlgNo', '拒绝') + f('dlgDeny', '以后都拒绝') + f('dlgYes', '允许', ''), false, 'file');
   }
   if (d === 'fs-batch') {
     return dlgShell('文件系统授权', `
@@ -1621,14 +1632,14 @@ function renderDialog() {
       <div class="dlg-path" style="max-height:150px;overflow:auto">
         ~/.agents/skills<br/>~/.claude/skills<br/>~/.pi/agent/skills<br/>~/.bedcode/agent-hub/runs</div>
       <div class="note">批量请求折叠为列表，避免逐路径弹窗。</div>`,
-      f('dlgNo', '拒绝') + f('dlgDeny', '以后都拒绝') + f('dlgYes', '允许全部', ''));
+      f('dlgNo', '拒绝') + f('dlgDeny', '以后都拒绝') + f('dlgYes', '允许全部', ''), false, 'file');
   }
   if (d === 'network') {
     return dlgShell('网络出站授权', `
       <div class="note">应用 <b>AI Chatbox</b> 请求访问网络。</div>
       <div class="dlg-path">https://api.deepseek.com</div>
       <div class="note">只显示归一化 origin（scheme://host:port），不投 path/query，凭据不上屏。</div>`,
-      f('dlgDeny', '以后都拒绝') + f('dlgNo', '拒绝') + f('dlgYes', '允许', ''));
+      f('dlgDeny', '以后都拒绝') + f('dlgNo', '拒绝') + f('dlgYes', '允许', ''), false, 'network');
   }
   if (d === 'approval') {
     const a = byId['agent-hub'];
@@ -1650,7 +1661,7 @@ function renderDialog() {
         <div class="rec"><span class="sdot running"></span><span class="tg">fish · ~/</span></div>
       </div>
       <div class="note">载荷由会话插件登记，宿主只读 id/name/status 三字段，不解析业务语义。</div>`,
-      f('dlgNo', '取消') + `<button class="btn danger-fill" data-act="dlgForce">强制退出</button>`);
+      f('dlgNo', '取消') + `<button class="btn danger-fill" data-act="dlgForce">强制退出</button>`, false, 'exit');
   }
   if (d === 'uninstall') {
     const a = byId[state.dlgApp || 'file-transfer'];
@@ -1659,7 +1670,7 @@ function renderDialog() {
       <div class="note danger">将删除安装目录、插件私有存储与启用状态，<b>不可恢复</b>。</div>
       <div class="row-sw"><span class="lb">当前状态</span>
         <span class="chip ${a.state === 'dormant' ? '' : 'ok'}">${STATE_TEXT[a.state]}</span></div>`,
-      f('dlgNo', '取消') + `<button class="btn danger-fill" data-act="dlgUninstall">卸载</button>`);
+      f('dlgNo', '取消') + `<button class="btn danger-fill" data-act="dlgUninstall">卸载</button>`, false, 'trash');
   }
   if (d === 'allow-confirm') {
     const a = byId[state.dlgApp];
@@ -1675,14 +1686,14 @@ function renderDialog() {
     return dlgShell('保存端口', `
       <div class="note">端口已保存到 <b>${SERVER.port}</b>，但运行中的服务仍在监听旧端口。</div>
       <div class="note">立即重启即刻生效；稍后重启则本次启动沿用旧端口。</div>`,
-      f('dlgNo', '稍后重启') + f('dlgYes', '立即重启', ''));
+      f('dlgNo', '稍后重启') + f('dlgYes', '立即重启', ''), false, 'restart');
   }
   if (d === 'install') {
     return dlgShell('加载应用', `
       <div class="note">从本地 zip 应用包安装（<code>dist/plugin-packages</code> 产物）。</div>
       <div class="dlg-path" style="text-align:center;padding:18px;border-style:dashed">从文件安装…</div>
       <div class="note">也可把应用包放入 <code>~/.bedcode/plugins/</code> 目录由宿主扫描。</div>`,
-      f('dlgNo', '取消') + f('dlgYes', '选择文件…', ''));
+      f('dlgNo', '取消') + f('dlgYes', '选择文件…', ''), false, 'plus');
   }
   if (d === 'palette-demo') {
     const dlg = [
