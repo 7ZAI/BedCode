@@ -81,6 +81,22 @@ pub fn run() {
         .plugin(crate::plugin::android_plugins::status_bar_style_plugin())
         .setup(|app| {
             tracing::info!("BedCode setup starting...");
+
+            // mDNS 共享守护平台钩子（双端共享 lib spec M3/D3）：Android 多播锁随
+            // 守护常驻获取（幂等，不随浏览句柄增删）。宿主函数可能运行于 tokio
+            // worker，禁止 block_on（运行时内阻塞反模式）——fire-and-forget spawn；
+            // 非 Android 平台 stub 立即返回，同走 spawn 保持单一代码路径（可测）。
+            // 行为与旧 crate::mdns::engine::init_daemon 一致，真源移入共享引擎
+            bedcode_discovery_engine::engine::set_daemon_init_hook(|| {
+                tauri::async_runtime::spawn(async {
+                    if let Err(e) =
+                        crate::plugin::android_plugins::multicast_lock_acquire().await
+                    {
+                        tracing::warn!("mdns daemon: multicast lock acquire failed ({e}); receive may be degraded");
+                    }
+                });
+            });
+
             tracing::info!("Plugins initialized");
 
             let app_handle = app.handle();

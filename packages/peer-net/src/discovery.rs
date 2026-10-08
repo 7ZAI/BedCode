@@ -12,9 +12,9 @@
 //! 不是本模块可依赖的性质：新增发现服务必须走同一个共享守护，否则会出现两个守护
 //! 争抢同一组播端口。本模块不触碰旧链路与 file_service announce（冻结区）。
 //!
-//! 另：[`spawn_peer_mdns_advertiser`]（仅广告、无浏览）是本模块内**仍自建**
-//! `ServiceDaemon` 的那一个，且当前无生产调用方（仅随 `lib.rs` 导出）。
-//!
+//! 另：[`spawn_peer_mdns_advertiser`]（仅广告、无浏览）曾是本模块内**仍自建**
+//! `ServiceDaemon` 的那一个，且无生产调用方——已随双端共享 lib spec M4（2026-10-09）
+//! 删除：广告面由宿主自播（owner=host）/ 插件 `host-mdns` advertise 覆盖。
 //! ## 「同一通路」注入缝（issue 03 核心验收点）
 //!
 //! mDNS 守护回调与单测喂入统一收敛到 [`DiscoveryCache::observe`]：守护任务在
@@ -40,7 +40,7 @@ use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
-use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo, ScopedIp};
+use mdns_sd::{ScopedIp, ServiceDaemon, ServiceEvent, ServiceInfo};
 use serde::Serialize;
 use tokio::sync::watch;
 
@@ -524,134 +524,6 @@ pub fn disable_virtual_interfaces(daemon: &ServiceDaemon) {
     if !disabled.is_empty() {
         tracing::info!(ifaces = ?disabled, "peer mDNS virtual interfaces disabled");
     }
-}
-
-/// mDNS 广播守护句柄（advertise-only）：仅持有注销/关停凭据
-///
-/// Phase 4（issue 13）：插件侧经 `host-mdns` 按需自建浏览，引擎侧不再常开
-/// 浏览——本句柄只负责「本机可被发现」的注册/注销（与 TLS listener 同生命周期）。
-pub struct DiscoveryAdvertiser {
-    daemon: Option<ServiceDaemon>,
-    fullname: String,
-    /// 停机标志（通知周期 re-announce 任务退出）
-    shutdown_tx: watch::Sender<bool>,
-    /// 周期 re-announce 任务句柄（join 用）
-    reannounce_task: Option<tokio::task::JoinHandle<()>>,
-}
-
-impl std::fmt::Debug for DiscoveryAdvertiser {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DiscoveryAdvertiser")
-            .field("fullname", &self.fullname)
-            .finish_non_exhaustive()
-    }
-}
-
-impl DiscoveryAdvertiser {
-    /// 优雅关停：注销广播（对端即时移除本机）→ 关停守护线程 → join 周期任务
-    pub async fn stop(mut self) -> Result<()> {
-        if self.shutdown_tx.send(true).is_err() {
-            tracing::debug!("peer mDNS re-announce loop already exited before stop");
-        }
-        let mut first_err: Option<PeerNetError> = None;
-        if let Some(daemon) = self.daemon.take() {
-            match daemon.unregister(&self.fullname) {
-                Ok(status) => match status.recv_async().await {
-                    Ok(status) => {
-                        tracing::debug!(status = ?status, "peer mDNS service unregistered")
-                    }
-                    Err(e) => tracing::warn!(
-                        "unregister status channel closed before reply: {e}"
-                    ),
-                },
-                Err(source) => {
-                    first_err.get_or_insert(PeerNetError::MdnsUnregister { source });
-                }
-            }
-            match daemon.shutdown() {
-                Ok(status) => match status.recv_async().await {
-                    Ok(_) => tracing::debug!("peer mDNS daemon shut down"),
-                    Err(e) => tracing::warn!("daemon shutdown channel closed before reply: {e}"),
-                },
-                Err(source) => {
-                    first_err.get_or_insert(PeerNetError::MdnsShutdown { source });
-                }
-            }
-        }
-        if let Some(task) = self.reannounce_task.take() {
-            match task.await {
-                Ok(()) => {}
-                Err(e) if e.is_cancelled() => {
-                    tracing::debug!("peer mDNS re-announce loop cancelled")
-                }
-                Err(e) => tracing::error!("peer mDNS re-announce loop panicked: {e}"),
-            }
-        }
-        match first_err {
-            Some(err) => Err(err),
-            None => Ok(()),
-        }
-    }
-}
-
-/// 启动 advertise-only mDNS 守护：注册自身服务供对端发现，不做任何浏览
-/// （发现事件由消费插件经 `host-mdns` browse 自行订阅）
-pub fn spawn_peer_mdns_advertiser(
-    node: &PeerNetNode,
-    running: &RunningNode,
-    config: DiscoveryConfig,
-) -> Result<DiscoveryAdvertiser> {
-    let own_node_id = node.node_id().clone();
-    let short = own_node_id.short_fingerprint();
-    let instance_name = format!("{INSTANCE_PREFIX}{short}");
-    // 全名格式由 mdns-sd 固定为 "{escaped_instance}.{service_type}"（见 ServiceInfo::new）
-    let fullname = format!("{instance_name}.{SERVICE_TYPE}");
-    let listen_port = running.local_addr().port();
-
-    let daemon =
-        ServiceDaemon::new().map_err(|source| PeerNetError::MdnsDaemon { source })?;
-    disable_virtual_interfaces(&daemon);
-
-    let properties = encode_txt_properties(
-        &own_node_id,
-        &config.device_name,
-        DISCOVERY_PROTOCOL_VERSION,
-        config.capabilities,
-    );
-    // ip 参数传空串 = 启用 addr_auto 的库约定（AsIpAddrs 对空串返回空集合）
-    let service_info = ServiceInfo::new(
-        SERVICE_TYPE,
-        &instance_name,
-        &format!("{instance_name}.local."),
-        "",
-        listen_port,
-        properties,
-    )
-    .map_err(|source| PeerNetError::MdnsServiceInfo { source })?
-    .enable_addr_auto();
-
-    daemon
-        .register(service_info.clone())
-        .map_err(|source| PeerNetError::MdnsRegister { source })?;
-    // 周期 re-announce：mdns-sd 注册后不主动周期广播，须手动续期（见常量注释）
-    let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let reannounce_task = tokio::spawn(run_reannounce_loop(
-        daemon.clone(),
-        service_info,
-        shutdown_rx,
-    ));
-    tracing::info!(
-        service = %fullname,
-        port = listen_port,
-        device = %config.device_name,
-        "peer mDNS advertiser started (browse retired to host-mdns)"
-    );
-    Ok(DiscoveryAdvertiser {
-        daemon: Some(daemon),
-        fullname,
-        shutdown_tx,
-        reannounce_task: Some(reannounce_task),
-    })
 }
 
 pub fn spawn_peer_mdns_daemon(

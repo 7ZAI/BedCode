@@ -51,9 +51,9 @@ impl MdnsDiscovery {
             return Ok(());
         }
 
-        // 浏览经全局共享守护（crate::mdns::engine，票 03）：不再自建 daemon——
+        // 浏览经全局共享守护（bedcode-discovery-engine，M3）：不再自建 daemon——
         // 消灭双 daemon 同绑 5353 互抢多播包病灶；共享守护常驻，stop 只退订不 shutdown
-        let receiver = crate::mdns::engine::daemon()
+        let receiver = bedcode_discovery_engine::engine::shared_daemon()
             .browse(SERVICE_TYPE)
             .map_err(|e| crate::AppError::Internal(format!("Failed to browse mDNS: {e}")))?;
 
@@ -191,8 +191,8 @@ impl MdnsDiscovery {
         *scanning = false;
         drop(scanning); // 释放锁，让后台任务能读到 false
 
-        // 停止守护进程（共享守护常驻不 shutdown，票 03）：只退订本浏览
-        if let Some(daemon) = crate::mdns::engine::daemon_if_initialized() {
+        // 停止守护进程（共享守护常驻不 shutdown，M3）：只退订本浏览
+        if let Some(daemon) = bedcode_discovery_engine::engine::daemon_if_initialized() {
             let _ = daemon.stop_browse(SERVICE_TYPE);
         }
 

@@ -198,20 +198,6 @@ impl HostEnginePorts for HostPorts {
         )
     }
 
-    // ==================== mdns ====================
-
-    fn mdns_daemon(&self) -> Option<mdns_sd::ServiceDaemon> {
-        Some(crate::mdns::engine::daemon().clone())
-    }
-
-    fn mdns_daemon_if_initialized(&self) -> Option<mdns_sd::ServiceDaemon> {
-        crate::mdns::engine::daemon_if_initialized().map(|d| d.clone())
-    }
-
-    fn mdns_reannounce_interval(&self) -> Duration {
-        crate::mdns::engine::REANNOUNCE_INTERVAL
-    }
-
     fn current_node_id(&self, app: &tauri::AppHandle) -> Option<String> {
         crate::peer_net::current_node_id(app)
     }

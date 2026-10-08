@@ -313,11 +313,7 @@ impl MdnsPort for HostMdnsPort {
     }
 
     fn register_host_service(&self, service_type: &str, fullname: &str) -> std::result::Result<String, String> {
-        bedcode_discovery_engine::engine::register_host_service(
-            &bedcode_discovery_engine::ports::ports(),
-            service_type,
-            fullname,
-        )
+        bedcode_discovery_engine::engine::register_host_service(service_type, fullname)
     }
 
     fn stop_host_service(&self, advertise_id: &str) -> std::result::Result<bool, String> {

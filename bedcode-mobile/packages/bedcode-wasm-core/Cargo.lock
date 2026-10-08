@@ -234,6 +234,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
+name = "bedcode-discovery-engine"
+version = "0.1.0"
+dependencies = [
+ "bedcode-peer-net",
+ "mdns-sd",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "bedcode-host-api-core"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "bedcode-host-kit"
 version = "0.1.0"
 dependencies = [
@@ -304,6 +325,8 @@ dependencies = [
  "anyhow",
  "async-trait",
  "base64 0.22.1",
+ "bedcode-discovery-engine",
+ "bedcode-host-api-core",
  "bedcode-host-kit",
  "bedcode-link-crypto",
  "bedcode-peer-net",
@@ -314,7 +337,6 @@ dependencies = [
  "futures-util",
  "hex",
  "inventory",
- "mdns-sd",
  "notify",
  "rand 0.8.8",
  "regex",

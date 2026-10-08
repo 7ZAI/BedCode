@@ -42,16 +42,18 @@ pub(crate) use peer::PLUGIN_ID;
 /// 依赖 peer-net crate，此处常量对齐 spec v2 §4.2）
 const PEER_MDNS_SERVICE_TYPE: &str = "_bedcode-peer._tcp.local.";
 
-/// 定向发现事件 topic（spec v2 §5.2：事件按属主投递，owner = 本插件 id）。
-/// LazyLock 而非 concat!：PLUGIN_ID 是 const `&str` 而非字面量，concat! 只收
-/// 字面量，故运行时拼一次（bus_subscribe / on_message 每消息复用它）
+/// 定向发现事件 topic（spec v2 §5.2 + 双端共享 lib spec M3：事件按属主投递，
+/// owner = 本插件 id；topic 用 `<owner>::` 属主命名空间终态，与桌面/SDK
+/// `owned_topic` 规则逐字一致）。LazyLock 而非 concat!：PLUGIN_ID 是 const
+/// `&str` 而非字面量，concat! 只收字面量，故运行时拼一次
+/// （bus_subscribe / on_message 每消息复用它）
 static MDNS_FOUND_TOPIC: std::sync::LazyLock<String> =
-    std::sync::LazyLock::new(|| format!("mdns:found.{PLUGIN_ID}"));
+    std::sync::LazyLock::new(|| format!("{PLUGIN_ID}::mdns:found"));
 static MDNS_LOST_TOPIC: std::sync::LazyLock<String> =
-    std::sync::LazyLock::new(|| format!("mdns:lost.{PLUGIN_ID}"));
+    std::sync::LazyLock::new(|| format!("{PLUGIN_ID}::mdns:lost"));
 
 /// 自建 browse 句柄（host-mdns，spec v2 / ticket 07：本插件自建浏览、事件
-/// 定向投递 `mdns:found.<PLUGIN_ID>`；None = 未激活/降级态）
+/// 定向投递 `<PLUGIN_ID>::mdns:found|lost`；None = 未激活/降级态）
 static MDNS_BROWSER: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 
 fn mdns_browser() -> &'static Mutex<Option<String>> {
@@ -103,9 +105,9 @@ impl WasmPlugin for FileTransferPlugin {
         let h = host();
         h.log_info("File Transfer plugin activating (self-hosted, mobile)");
         // 发现事件（mdns:*）改经 host-mdns 自建 browse 收定向 topic（spec v2 /
-        // ticket 07，D2 一期迁移）：不再订阅全局 `mdns:found` / `mdns:lost`
-        // （全局桥接已退役 D1）——本插件自建浏览、事件按属主投递到
-        // `mdns:found.<PLUGIN_ID>` / `mdns:lost.<PLUGIN_ID>`
+        // ticket 07 + M3：`<owner>::` 终态）：不再订阅全局 `mdns:found` /
+        // `mdns:lost`（全局桥接已退役 D1）——本插件自建浏览、事件按属主投递到
+        // `<PLUGIN_ID>::mdns:found|lost`
         for topic in [
             MDNS_FOUND_TOPIC.as_str(),
             MDNS_LOST_TOPIC.as_str(),

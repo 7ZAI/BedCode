@@ -91,8 +91,9 @@ interface host-bus {
 /// 发现/信任/拨号/收发/浏览的引擎全部在宿主 peer-net 层；本接口只是
 /// 命令面的 WASM 投影。DTO 一律 JSON 字符串承载（camelCase，与 Tauri
 /// 命令返回形状一致）。事件经消息总线 `peer:*` topic 推送（host-bus 订阅）：
-/// - `mdns:found.<plugin-id>` / `mdns:lost.<plugin-id>` 发现事件（host-mdns
-///   自建 browse 的属主定向投递，取代已退役的全局 `peer:devices` 快照 topic——
+/// - `<plugin-id>::mdns:found` / `<plugin-id>::mdns:lost` 发现事件（host-mdns
+///   自建 browse 的属主定向投递，`<owner>::` 属主命名空间终态——双端共享
+///   lib spec M3；取代已退役的全局 `peer:devices` 快照 topic——
 ///   设备列表真源是插件自建缓存，宿主不再持有派生视图）
 /// - `peer:connection` 节点连上/断开
 /// - `peer:consent`    首次连接确认请求
@@ -186,7 +187,7 @@ interface host-peer {
 /// 同生共死，留在 peer-net 启动流程自动完成；无插件激活时主机照样可被发现。
 interface host-mdns {
     /// 浏览某服务类型，返回 browser 句柄；重复浏览同一类型允许（各自独立生命周期）。
-    /// 事件定向投递到 `mdns:found.<plugin-id>` / `mdns:lost.<plugin-id>`（宿主实现）
+    /// 事件定向投递到 `<plugin-id>::mdns:found` / `<plugin-id>::mdns:lost`（宿主实现）
     browse: func(service-type: string) -> result<string, string>;
     /// 停止浏览并回收句柄（返回是否存在该句柄）；仅属主可停（跨插件拒绝）；
     /// 插件停用时宿主自动回收其全部句柄
@@ -405,7 +406,9 @@ interface manifest {
 ///
 /// 版本演进：
 /// - v10：host-mdns v2（advertise / stop-advertise / is-advertising 原语 +
-///   事件定向投递 `mdns:found.<owner>` / `mdns:lost.<owner>`），纯增量
+///   事件定向投递 `mdns:found.<owner>` / `mdns:lost.<owner>`），纯增量；
+///   v17 起 topic 统一到 `<owner>::mdns:found|lost`（wire 对齐桌面终态，
+///   函数签名不变无 ABI 破坏，双端共享 lib spec M3）
 /// - v15：终端输出流窄转发（host-terminal-stream.forward-output，C3 二进制
 ///   出口）+ 主连接事实读取（host-connection.primary-target，与桌面同名
 ///   不同形）+ host-websocket config 增强（jwt-auth / heartbeat-secs /

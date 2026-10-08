@@ -200,8 +200,6 @@ use std::time::Duration;
 /// 形态（Err/None/空值），override 过的方法返回测试注入值——域测试按需最小装配。
 pub struct MockPorts {
     token: String,
-    mdns_daemon: Option<mdns_sd::ServiceDaemon>,
-    mdns_daemon_initialized: Option<mdns_sd::ServiceDaemon>,
     connection: Option<Arc<dyn ConnectionEnginePort>>,
     auth: Option<Arc<dyn AuthEnginePort>>,
     egress_allow: bool,
@@ -219,8 +217,6 @@ impl MockPorts {
     pub fn new() -> Self {
         Self {
             token: String::new(),
-            mdns_daemon: None,
-            mdns_daemon_initialized: None,
             connection: None,
             auth: None,
             egress_allow: false,
@@ -231,13 +227,6 @@ impl MockPorts {
 
     pub fn with_token(mut self, token: &str) -> Self {
         self.token = token.to_string();
-        self
-    }
-
-    /// 注入共享守护（daemon 与 daemon_if_initialized 同值）
-    pub fn with_mdns_daemon(mut self, daemon: mdns_sd::ServiceDaemon) -> Self {
-        self.mdns_daemon = Some(daemon.clone());
-        self.mdns_daemon_initialized = Some(daemon);
         self
     }
 
@@ -301,18 +290,6 @@ impl HostEnginePorts for MockPorts {
 
     fn reconnect_bounds(&self) -> (u64, u64) {
         (1000, 60_000)
-    }
-
-    fn mdns_daemon(&self) -> Option<mdns_sd::ServiceDaemon> {
-        self.mdns_daemon.clone()
-    }
-
-    fn mdns_daemon_if_initialized(&self) -> Option<mdns_sd::ServiceDaemon> {
-        self.mdns_daemon_initialized.clone()
-    }
-
-    fn mdns_reannounce_interval(&self) -> Duration {
-        Duration::from_secs(60)
     }
 
     fn current_node_id(&self, _app: &tauri::AppHandle) -> Option<String> {

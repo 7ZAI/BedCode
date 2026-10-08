@@ -67,7 +67,9 @@ async-trait = "0.1"
 # WebSocket
 tokio-tungstenite = "0.24"
 
-# mDNS service discovery
+# mDNS service discovery（共享引擎驱动；命令面 browse/广播仍用 mdns-sd 类型）
+# 双端共享 lib（spec M3）：引擎机制 + 守护单例真源（零 WIT 形态）
+bedcode-discovery-engine = { path = "../../packages/bedcode-discovery-engine" }
 mdns-sd = "0.20"
 flume = "0.12"
 

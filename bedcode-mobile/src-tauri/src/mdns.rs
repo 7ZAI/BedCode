@@ -5,5 +5,4 @@
 
 pub mod advertiser;
 pub mod discovery;
-pub(crate) mod engine;
 pub mod types;

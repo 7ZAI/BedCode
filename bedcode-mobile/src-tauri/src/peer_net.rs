@@ -974,12 +974,12 @@ async fn start_locked(
     let listen_addr = running.local_addr();
 
     // ===== mDNS 基础能力服务收敛（spec v2 / ticket 06 / 票 03）=====
-    // 节点发现接入全局共享守护（crate::mdns::engine）：不再自建 daemon（消灭双
-    // daemon 同绑 5353 互抢多播包的历史病灶）。Android 多播锁已随共享守护常驻
-    // 获取（engine init，ticket 06），此处不再按节点申请；全局
+    // 节点发现接入全局共享守护（bedcode-discovery-engine，M3）：不再自建 daemon
+    // （消灭双 daemon 同绑 5353 互抢多播包的历史病灶）。Android 多播锁已随共享守护常驻
+    // 获取（引擎 init hook，D3），此处不再按节点申请；全局
     // `mdns:found` / `mdns:lost` 桥接与缓存重发通道已退役（D1）——插件发现
     // 改经 host-mdns 自建 browse 收定向事件（file-transfer 一期同迁，D2）
-    let mdns_daemon = crate::mdns::engine::shared_daemon();
+    let mdns_daemon = bedcode_discovery_engine::engine::shared_daemon();
     let daemon = bedcode_peer_net::spawn_peer_mdns_daemon(
         &node,
         &running,

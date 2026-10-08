@@ -33,9 +33,9 @@ impl MdnsAdvertiser {
             return Ok(());
         }
 
-        // 广播经全局共享守护（crate::mdns::engine，票 03）：不再自建 daemon——
+        // 广播经全局共享守护（bedcode-discovery-engine，M3）：不再自建 daemon——
         // 消灭双 daemon 同绑 5353 互抢多播包病灶；共享守护常驻，stop 只注销不 shutdown
-        let daemon = crate::mdns::engine::daemon();
+        let daemon = bedcode_discovery_engine::engine::shared_daemon();
 
         // 构造服务信息
         let service_type = SERVICE_TYPE;
@@ -79,8 +79,8 @@ impl MdnsAdvertiser {
         }
         *advertising = false;
 
-        // 共享守护常驻不 shutdown（票 03）：只注销本广播实例
-        if let Some(daemon) = crate::mdns::engine::daemon_if_initialized() {
+        // 共享守护常驻不 shutdown（M3）：只注销本广播实例
+        if let Some(daemon) = bedcode_discovery_engine::engine::daemon_if_initialized() {
             if let Some(name) = self.registered_name.write().await.take() {
                 // unregister 接受完整的全限定名
                 let fullname = format!("{}.{}", name, SERVICE_TYPE);

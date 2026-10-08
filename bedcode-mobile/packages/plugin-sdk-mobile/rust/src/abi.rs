@@ -28,8 +28,11 @@
 ///   版本，宿主能力为两者超集，声明 v9 及以下的插件二进制仍可加载
 /// - v11: host-mdns v2（mDNS 基础能力服务契约）：新增
 ///   `advertise` / `stop-advertise` / `is-advertising` 三原语 + 浏览事件
-///   定向投递 `mdns:found.<owner>` / `mdns:lost.<owner>`（payload 增
-///   serviceType / browserId 字段）。纯增量变更，v10 插件二进制不受影响
+///   定向投递 `<owner>::mdns:found` / `<owner>::mdns:lost`（payload 增
+///   serviceType / browserId 字段；v17 起 topic 从 `mdns:found.<owner>` 旧格式
+///   统一到 `<owner>::` 属主命名空间——双端共享 lib spec M3，wire 对齐桌面
+///   终态，host-mdns 函数签名不变故无 ABI 破坏）。纯增量变更，
+///   v10 插件二进制不受影响
 /// - v12: 发送编排下沉插件（票 06）：host-peer 删 `resume-all-transfers`
 ///   （批量恢复编排归插件，逐批调 `resume-transfer`）、`send-files` 收窄为
 ///   「一次调用即发一会话」并显性拒绝已退役的 `concurrency` 载荷字段；发送

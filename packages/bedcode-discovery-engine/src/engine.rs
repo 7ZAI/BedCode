@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 
 use crate::ports::{BoxedTask, DiscoveryPorts, DiscoveryTask};
-use crate::wire::{MDNS_FOUND, MDNS_LOST, owned_topic};
+use crate::wire::{owned_topic, MDNS_FOUND, MDNS_LOST};
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
 use serde::Deserialize;
 
@@ -35,6 +35,18 @@ use serde::Deserialize;
 /// 守护（保持测试与宿主机 mDNS 环境解耦）
 static DAEMON: OnceLock<ServiceDaemon> = OnceLock::new();
 
+/// 共享守护初始化平台钩子（D3，双端共享 lib spec M3）
+///
+/// `init_daemon` 创建守护后调用，宿主按平台装配：桌面无需（`disable_virtual_interfaces`
+/// 已在 `init_daemon` 内执行）；移动端注册 Android 多播锁获取（fire-and-forget，
+/// 宿主闭包内自行 spawn）。进程级装配一次；未注册 = 无操作（纯引擎零平台知识）。
+static DAEMON_INIT_HOOK: OnceLock<Box<dyn Fn() + Send + Sync>> = OnceLock::new();
+
+/// 装配守护初始化平台钩子（见 [`DAEMON_INIT_HOOK`]；重复装配取首次，静默忽略）
+pub fn set_daemon_init_hook(hook: impl Fn() + Send + Sync + 'static) {
+    let _ = DAEMON_INIT_HOOK.set(Box::new(hook));
+}
+
 fn init_daemon() -> ServiceDaemon {
     tracing::info!("mdns service daemon initializing (single shared instance)");
     let daemon = ServiceDaemon::new().expect("mdns service daemon init failed");
@@ -42,6 +54,10 @@ fn init_daemon() -> ServiceDaemon {
     // 交换机不转发组播，对端 resolve 可延迟分钟级）。仅初始化执行一次——共享
     // 守护对 peer-net 引擎与全部插件浏览一视同仁（peer-net 不再重复执行）
     bedcode_peer_net::disable_virtual_interfaces(&daemon);
+    // 平台钩子（可选）：移动端 Android 多播锁随守护常驻获取
+    if let Some(hook) = DAEMON_INIT_HOOK.get() {
+        hook();
+    }
     daemon
 }
 
@@ -51,8 +67,11 @@ fn daemon() -> &'static ServiceDaemon {
 }
 
 /// 守护若已初始化则返回（stop/query 前预防性保护：单测表操作不触网）
-fn daemon_if_initialized() -> Option<&'static ServiceDaemon> {
-    DAEMON.get()
+///
+/// `pub`：双端宿主共享化后（spec M3）stop 路径需在不拉起守护的前提下取句柄
+/// （host_ports / 命令面 stop 分支）；clone 廉价（mdns-sd 守护句柄内部 Arc）
+pub fn daemon_if_initialized() -> Option<ServiceDaemon> {
+    DAEMON.get().map(|d| d.clone())
 }
 
 /// 周期 re-announce 间隔：mdns-sd 注册后不主动周期广播，须手动续期。
@@ -460,6 +479,15 @@ pub fn is_advertising(
 
 // ==================== 宿主身份广播登记（owner=host）====================
 
+/// 空任务占位（宿主身份登记用）：本行不挂续期任务，句柄仍参与表内生命周期可见性
+///
+/// 不实际 spawn（登记上下文可能无端口 / 无运行时——移动端 peer-net 登记、桌面
+/// MdnsPort 实现均无端口对象可传），cancel 为 no-op（stop 时无事可收）。
+struct NullTask;
+impl DiscoveryTask for NullTask {
+    fn cancel(&self) {}
+}
+
 /// 登记宿主（peer-net 引擎）节点身份广播：注册动作由引擎经 [`shared_daemon`]
 /// 完成（TXT/ServiceInfo 由引擎构造——节点身份/证书/能力位是引擎语义，本
 /// 模块零业务拼装）；本函数只做 ADVERTISERS 句柄登记（owner=host），作为
@@ -467,14 +495,9 @@ pub fn is_advertising(
 ///
 /// 注意：节点身份广播的周期续期由引擎自己的 re-announce 循环负责（与
 /// [`REANNOUNCE_INTERVAL`] 同节奏），本登记行不挂续期任务，避免双续期
-pub fn register_host_service(
-    ports: &Arc<dyn DiscoveryPorts>,
-    service_type: &str,
-    fullname: &str,
-) -> Result<String, String> {
+pub fn register_host_service(service_type: &str, fullname: &str) -> Result<String, String> {
     let advertise_id = format!("mdnsad-{}", uuid::Uuid::new_v4());
-    // 空任务占位：本行不挂续期（续期归引擎），但仍登记句柄以参与表内生命周期可见性
-    let reannounce_task = ports.spawn(Box::pin(async {}));
+    let reannounce_task: Arc<dyn DiscoveryTask> = Arc::new(NullTask);
     ADVERTISERS
         .lock()
         .expect("mdns advertiser table lock poisoned")
@@ -1044,7 +1067,7 @@ mod tests {
         let plugin_aid = format!("mdnsad-{}", uuid::Uuid::new_v4());
         let p = ports(FakePorts::deny_all());
         // host 登记（register_host_service：owner=host）
-        let host_reg = register_host_service(&p, "_co._cp.local.", "h._co._cp.local.")
+        let host_reg = register_host_service("_co._cp.local.", "h._co._cp.local.")
             .expect("host registration books handle");
         fake_advertiser(&plugin, &plugin_aid, "_co._cp.local.", "p._co._cp.local.");
         {

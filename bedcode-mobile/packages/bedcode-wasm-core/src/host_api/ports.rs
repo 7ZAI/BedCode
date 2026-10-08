@@ -129,15 +129,6 @@ pub trait HostEnginePorts: Send + Sync {
 
     // ==================== mdns ====================
 
-    /// 共享 mDNS 守护（未初始化时 None；守护单例真源在宿主）
-    fn mdns_daemon(&self) -> Option<mdns_sd::ServiceDaemon>;
-
-    /// 共享守护（仅已初始化时返回——stop 路径避免无意拉起守护）
-    fn mdns_daemon_if_initialized(&self) -> Option<mdns_sd::ServiceDaemon>;
-
-    /// 广播续期节奏（引擎资产常量）
-    fn mdns_reannounce_interval(&self) -> Duration;
-
     /// 本机 peer 节点 ID（自播回显过滤；未启动 None）
     fn current_node_id(&self, app: &tauri::AppHandle) -> Option<String>;
 
@@ -295,18 +286,6 @@ impl HostEnginePorts for UnimplementedPorts {
 
     fn reconnect_bounds(&self) -> (u64, u64) {
         (1000, 60_000)
-    }
-
-    fn mdns_daemon(&self) -> Option<mdns_sd::ServiceDaemon> {
-        None
-    }
-
-    fn mdns_daemon_if_initialized(&self) -> Option<mdns_sd::ServiceDaemon> {
-        None
-    }
-
-    fn mdns_reannounce_interval(&self) -> Duration {
-        Duration::from_secs(60)
     }
 
     fn current_node_id(&self, _app: &tauri::AppHandle) -> Option<String> {
@@ -510,8 +489,6 @@ mod tests {
         let ports = UnimplementedPorts;
         assert!(ports.auth_engine().is_none());
         assert!(ports.global_token().is_empty());
-        assert!(ports.mdns_daemon().is_none());
-        assert!(ports.mdns_daemon_if_initialized().is_none());
         let (min_ms, max_ms) = ports.reconnect_bounds();
         assert!(min_ms > 0 && max_ms >= min_ms);
         assert!(

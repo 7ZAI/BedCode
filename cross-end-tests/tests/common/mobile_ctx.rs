@@ -15,7 +15,6 @@ use std::time::{Duration, Instant};
 
 use bedcode_mobile_lib::router::MobileEvent;
 use bedcode_mobile_lib::state::{clear_global_token, get_connection_manager, set_global_token};
-use bedcode_mobile_lib::terminal_link::TerminalEventSink;
 use tauri::ipc::{Channel, InvokeResponseBody};
 
 /// 单次测试的等待预算（CI 慢机放宽：spec §4 预算 5s，此处 15s）
@@ -53,7 +52,9 @@ pub fn remember_token(token: &str) {
     set_global_token(token);
 }
 
-/// 终端链路状态事件记录替身（`TerminalEventSink`）
+/// 终端链路状态事件记录替身（`TerminalEventSink`——已随终端链路退役，见
+/// 移动端票 13/15：host-terminal 整面下沉插件；本记录器保留自身快照方法供
+/// 断言，sink 接线由仍在服役的终端场景重写后恢复）
 #[derive(Default)]
 pub struct EventRecorder {
     events: Mutex<Vec<(String, serde_json::Value)>>,
@@ -94,16 +95,6 @@ impl EventRecorder {
             .rev()
             .find(|(e, p)| e == "terminal-state" && p.get("detail").and_then(|v| v.as_str()) == Some(detail))
             .map(|(_, p)| p)
-    }
-}
-
-impl TerminalEventSink for EventRecorder {
-    fn emit(&self, event: &str, payload: serde_json::Value) -> Result<(), String> {
-        self.events
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .push((event.to_string(), payload));
-        Ok(())
     }
 }
 

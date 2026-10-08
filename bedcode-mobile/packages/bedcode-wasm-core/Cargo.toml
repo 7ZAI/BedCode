@@ -33,6 +33,8 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"
 # ==================== 插件机制内核 + 移动契约 ====================
 # 机制内核（仓库根，双端共享锚点）：HostModule / WasmPluginState / HostPorts / 注册表
 bedcode-host-kit = { path = "../../../packages/bedcode-host-kit" }
+# host_api 共享实现核（票 18：无 WIT 依赖域的实现层；本 crate 只持各域 adapter）
+bedcode-host-api-core = { path = "../../../packages/bedcode-host-api-core" }
 # WIT 契约绑定（bindgen! 在 manager/runtime/component.rs，path 相对本 crate 根）
 bedcode-plugin-api-mobile = { path = "../plugin-sdk-mobile/rust" }
 # 对等网络共享基础设施（节点身份 + 自签证书；peer 域引擎注入面批次 2 重接）
@@ -80,9 +82,11 @@ dirs = "6.0.0"
 # host-websocket 客户端域出站引擎（批次 2 自宿主 wasm_runtime/host_impl/ws.rs 迁入；
 # 移动端 ws:// 明文客户端，不启 native-tls——与宿主 src-tauri 依赖同形）
 tokio-tungstenite = "0.24"
-# host-mdns 域共享守护类型（ServiceDaemon 句柄经宿主引擎端口注入；crate 持有
-# 句柄表与事件定向投递机制，守护单例真源留宿主 crate::mdns::engine）
-mdns-sd = "0.20"
+# host-mdns 域共享引擎（双端共享 lib spec M3）：引擎机制 + 端口 trait 全部在
+# 根 packages/bedcode-discovery-engine（零 WIT 形态，默认无 desktop-host feature）；
+# 本 crate 只留薄转发层（host_impl/mdns.rs）与 MobileDiscoveryPorts 端口适配。
+# 移动端守护单例真源 = 该引擎的 DAEMON（宿主 crate::mdns::engine 已随 M3 删除）
+bedcode-discovery-engine = { path = "../../../packages/bedcode-discovery-engine" }
 
 [features]
 # 测试支持面（宿主 src-tauri dev-dependencies 开启）：组件 e2e 夹具构建器 +
