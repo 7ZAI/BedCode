@@ -43,6 +43,9 @@ pub mod peer_engine_transfer;
 /// peer 适配器迁入，并把其对宿主组装面的 20 处反向耦合换成端口）
 pub mod plugin_binding;
 pub mod source_collect;
+/// wire 契约词汇自持副本（能力域脱绑 P4：权限位判据字符串，
+/// 与桌面 SDK 原版逐字一致由 `wire::drift_lock` 钉死）
+pub mod wire;
 
 #[cfg(test)]
 mod dependency_direction_lock;
@@ -1398,7 +1401,7 @@ struct DiscoveryRefreshHandler {
 }
 
 impl bedcode_server_base::ports::BusMessageHandler for DiscoveryRefreshHandler {
-    fn on_message(&self, _msg: &bedcode_plugin_api::BusMessage) -> anyhow::Result<()> {
+    fn on_message(&self, _msg: &bedcode_server_base::wire::BusMessage) -> anyhow::Result<()> {
         let ctx = Arc::clone(&self.ctx);
         bedcode_server_base::error_boundary::spawn_with_error_boundary(
             "peer_net_discovery_refresh_handler",

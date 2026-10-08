@@ -120,7 +120,10 @@ impl PluginHost {
             );
             return;
         }
-        use bedcode_plugin_api::EndpointAuth;
+        // ws 域脱绑后（能力域脱绑 P3）端点认证档位为 `bedcode_server_websocket::wire`
+        // 自持副本（与 SDK 原版漂移锁钉死）；manifest 声明面仍用 SDK 类型解析
+        // `auth_raw`，判定面（register 签名）换 ws 域 wire 版。
+        use bedcode_server_websocket::wire::EndpointAuth;
         for endpoint in endpoints {
             let path = endpoint.path().trim();
             // 与 ws host_api 同一形状校验：空 / 含 `/` / 含 `.` / 超长 → 跳过

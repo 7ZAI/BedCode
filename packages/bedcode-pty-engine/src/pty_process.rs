@@ -293,7 +293,7 @@ impl PtySession {
 
     /// 发送特殊键
     pub async fn send_special_key(&self, key: &str) -> Result<()> {
-        let combo = bedcode_plugin_api::wire::key::KeyCombo::parse(key)
+        let combo = crate::wire::key::KeyCombo::parse(key)
             .ok_or_else(|| AppError::InvalidInput(format!("Unknown special key: {}", key)))?;
 
         let bytes = combo

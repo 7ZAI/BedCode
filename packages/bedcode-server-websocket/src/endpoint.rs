@@ -27,12 +27,13 @@ pub const ENDPOINT_HANDLE_PREFIX: &str = "wse-";
 /// 插件端点挂载路径前缀：完整路径 `{PREFIX}/{plugin_id}/{path}`（spec D5）
 pub const PLUGIN_ENDPOINT_ROUTE_PREFIX: &str = "/ws/plugin";
 
-/// 端点认证档位（spec D8）——词汇表真源在 SDK（`bedcode_plugin_api::EndpointAuth`）
+/// 端点认证档位（spec D8）——本 crate 自持副本（[`crate::wire`]，能力域脱绑 P3：
+/// 与桌面 SDK 原版逐字一致由 `wire::drift_lock` 钉死，漂移即红）
 ///
 /// 票 08 起 WS 注册面与 HTTP 声明面共用这一张表，避免「两 transport 各自抄一遍
 /// `none|jwt`」的词汇漂移。缺省档位各面自己给：WS = `None`（本文件，历史行为），
 /// HTTP = `Jwt`（见 `wasm_core::manager::registry`，票 08 裁决 1「未声明即最严」）。
-pub use bedcode_plugin_api::EndpointAuth;
+pub use crate::wire::EndpointAuth;
 
 /// 已注册端点（克隆开销 = 一次 `Arc` + 三个短字符串）
 #[derive(Clone)]

@@ -509,7 +509,6 @@ dependencies = [
  "actix-web",
  "anyhow",
  "bedcode-host-kit",
- "bedcode-plugin-api",
  "bedcode-server-base",
  "bedcode-server-core",
  "futures-util",

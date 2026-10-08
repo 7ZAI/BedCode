@@ -43,8 +43,6 @@ futures-util = "0.3"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
 # ports：异步 trait
 async-trait = "0.1"
-# ports：静态订阅载荷形状
-bedcode-plugin-api = { path = "../../bedcode-desktop/packages/plugin-sdk-desktop/rust" }
 # ports：MdnsPort（peer-net 发现守护接入，ServiceDaemon 类型）
 mdns-sd = "0.20"
 # info：SystemInfo 采集

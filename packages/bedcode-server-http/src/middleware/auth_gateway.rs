@@ -116,7 +116,7 @@ where
     // 与网关的档位判定同表同源：这里放行的只是「免凭证可达」的公开档，网关仍会做
     // 属主激活与转发判定（双保险）。
     if let Some(host_match) = crate::registry::find_by_host(&path, &method) {
-        if host_match.entry.auth == bedcode_plugin_api::EndpointAuth::None {
+        if host_match.entry.auth == crate::wire::EndpointAuth::None {
             return next.call(req).await.map(|res| res.map_into_boxed_body());
         }
     }
@@ -170,7 +170,7 @@ mod tests {
             "pairing",
             Some("/api/auth/pairing"),
             &methods,
-            bedcode_plugin_api::EndpointAuth::None,
+            crate::wire::EndpointAuth::None,
         )
         .expect("register public alias");
 
@@ -218,7 +218,7 @@ mod tests {
             "jwt-guarded-alias",
             Some("/api/jwt-guarded-alias"),
             &methods,
-            bedcode_plugin_api::EndpointAuth::Jwt,
+            crate::wire::EndpointAuth::Jwt,
         )
         .expect("register jwt alias");
 

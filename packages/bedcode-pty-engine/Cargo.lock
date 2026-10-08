@@ -227,7 +227,6 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "bedcode-host-kit",
- "bedcode-plugin-api",
  "bedcode-server-base",
  "chrono",
  "inventory",

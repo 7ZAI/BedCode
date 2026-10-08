@@ -17,7 +17,7 @@
 //! 上限语义：端点数超限 → 注册返回 `Err` 且无副作用（常量
 //! [`PLUGIN_HTTP_MAX_ENDPOINTS_PER_PLUGIN`]）。
 
-use bedcode_plugin_api::EndpointAuth;
+use crate::wire::EndpointAuth;
 use bedcode_server_base::constants::PLUGIN_HTTP_MAX_ENDPOINTS_PER_PLUGIN;
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};

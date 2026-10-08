@@ -20,12 +20,10 @@
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 
-use bedcode_plugin_api::host::bus::owned_topic;
-use bedcode_plugin_api::host::mdns::{MDNS_FOUND, MDNS_LOST};
+use crate::ports::{BoxedTask, DiscoveryPorts, DiscoveryTask};
+use crate::wire::{MDNS_FOUND, MDNS_LOST, owned_topic};
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
 use serde::Deserialize;
-
-use crate::ports::{BoxedTask, DiscoveryPorts, DiscoveryTask};
 
 // ==================== 全局共享守护 ====================
 

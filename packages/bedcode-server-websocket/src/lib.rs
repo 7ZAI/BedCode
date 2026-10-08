@@ -20,8 +20,10 @@
 //! `ConfigPort`（网络配置）、`RuntimePort`（ambient AppHandle）。服务器启动所需的
 //! faces 由宿主组合根经 [`WebSocketManager::start`] 传入（本面不认识 HTTP 面）。
 //!
-//! 认证档位词汇 `EndpointAuth` 真源在桌面 SDK（`bedcode_plugin_api`），两侧各自直连，
-//! 不建共享词汇模块。
+//! 认证档位词汇 `EndpointAuth`、权限位 `ws:client` / `ws:server` 与 WS 状态事件
+//! 名 / topic 构造为本 crate **自持副本**（[`wire`] 模块；能力域脱绑 P3：能力域
+//! 默认形态零 WIT / 零桌面 SDK 依赖，任何宿主可直接引用）。副本与桌面 SDK 原版
+//! 逐字一致由 `wire::drift_lock` 钉死（漂移即红）。
 //!
 //! **插件绑定层（wasm-core-lib-split 票 04）**：[`plugin_binding`] 是本 crate 的
 //! `host-websocket` 能力域（15 条原语）——出站连接表 / 入站端点原语 / 帧投递 /
@@ -36,6 +38,7 @@ pub mod plugin_binding;
 pub mod registry;
 pub mod routes;
 pub mod websocket_manager;
+pub mod wire;
 
 use actix_web::web;
 use bedcode_server_core::TransportFace;

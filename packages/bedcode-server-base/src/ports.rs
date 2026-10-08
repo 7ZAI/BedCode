@@ -55,9 +55,11 @@ pub trait AuthCenter: Send + Sync {
 // ==================== BusPort（插件消息总线 + WS 帧投递） ====================
 
 /// 静态订阅者的消息回调（`subscribe_static` 的 handler；宿主壳实现转为
-/// `wasm_core::BusMessageHandler`，载荷形状即 `bedcode_plugin_api::BusMessage`）
+/// `wasm_core::BusMessageHandler`，载荷形状即 [`crate::wire::BusMessage`]——
+/// 本 crate 自持副本，能力域脱绑 P5：双类型在 wasm-core 的
+/// `WasmHandlerAdapter` 桥接点做值转换，形状一致由 `wire::drift_lock` 钉死）
 pub trait BusMessageHandler: Send + Sync {
-    fn on_message(&self, msg: &bedcode_plugin_api::BusMessage) -> anyhow::Result<()>;
+    fn on_message(&self, msg: &crate::wire::BusMessage) -> anyhow::Result<()>;
 }
 
 /// 插件消息总线端口（publish / 静态订阅 / WS 端点帧投递）

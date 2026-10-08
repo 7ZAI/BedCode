@@ -45,7 +45,7 @@ use crate::controllers::plugin_controller::{
 };
 use crate::dtos::{ApiResponse, CODE_INVALID_REQUEST, CODE_PLUGIN_AUTH_FAILED};
 use crate::registry;
-use bedcode_plugin_api::EndpointAuth;
+use crate::wire::EndpointAuth;
 
 // ==================== 网关判定 ====================
 

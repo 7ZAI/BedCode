@@ -19,11 +19,15 @@
 //!
 //! 宿主侧只剩一个 adapter（`wasm_core::host_api::pty::HostPtyPorts`）与一次开机装配
 //! 调用——与 http / ws / peer-net / mdns 四域同形。
+//!
+//! **脱绑（能力域脱绑 P4）**：WIT 绑定层（`DESC` / `HostModule` / `inventory::submit!` /
+//! `ports_for` / `bindgen!` / `impl Host`）以 `#[cfg(feature = "desktop-host")]` 门控——
+//! 桌面宿主开 feature 后行为逐字不变；无 feature 的宿主（移动端 / 无头）拿纯引擎：
+//! 域机制（[`primitives`] / [`registry`] / [`output`]）、端口、装配（[`install`] /
+//! [`ports::install_ports`]）默认全部可用。描述符字段值（模块名 / 接口路径 / 权限位）
+//! 拆为默认可用的纯字符串常量（[`MODULE_NAME`] 等），宿主白名单校验在无头态也能引用。
 
 use std::sync::Arc;
-
-use bedcode_host_kit::{HostModule, HostModuleDesc, ModuleEntry, WasmPluginState};
-use wasmtime::component::{bindgen, Linker};
 
 use crate::plugin_binding::ports::PtyPorts;
 
@@ -53,22 +57,46 @@ pub use registry::{
     purge_for_plugin_with_ports, register_quota,
 };
 
-// ==================== 能力模块自报 ====================
+// ==================== 能力模块自报（WIT 绑定层，`desktop-host` feature） ====================
+
+// WIT 绑定层依赖（host-kit / wasmtime）只随 `desktop-host` feature 编译：
+// 能力域默认形态 = 纯引擎机制（零 WIT 依赖），任何宿主可直接引用。
+#[cfg(feature = "desktop-host")]
+use bedcode_host_kit::{HostModule, HostModuleDesc, ModuleEntry, WasmPluginState};
+#[cfg(feature = "desktop-host")]
+use wasmtime::component::{bindgen, Linker};
+
+/// 能力模块名（`host-pty`；纯字符串，默认可用——宿主白名单校验 / 无头态引用）
+pub const MODULE_NAME: &str = "pty";
+
+/// 能力模块接口路径（与 WIT 契约逐字一致；纯字符串，默认可用）
+pub const MODULE_INTERFACES: &[&str] = &["bedcode:plugin/host-pty"];
+
+/// 能力模块权限位（`pty:spawn` / `pty:io`；纯字符串，默认可用）
+pub const MODULE_PERMISSIONS: &[&str] = &["pty:spawn", "pty:io"];
+
+/// ABI 下界：`host-pty` 的 6 条原语自 ABI v16 追加，低于该版本的插件不导入本 interface
+pub const MODULE_ABI_MIN: u32 = 16;
 
 /// 能力模块描述符（机制面：接口路径 / 权限位 / ABI 下界；**禁带产品名词**）
 ///
 /// `abi_min = 16`：`host-pty` 的 6 条原语自 ABI v16 追加，低于该版本的插件不导入
 /// 本 interface。
+///
+/// 字段值取上方默认可用的纯字符串常量（宿主无头态也能引用描述符形状）。
+#[cfg(feature = "desktop-host")]
 pub const DESC: HostModuleDesc = HostModuleDesc {
-    name: "pty",
-    interfaces: &["bedcode:plugin/host-pty"],
-    permissions: &["pty:spawn", "pty:io"],
-    abi_min: 16,
+    name: MODULE_NAME,
+    interfaces: MODULE_INTERFACES,
+    permissions: MODULE_PERMISSIONS,
+    abi_min: MODULE_ABI_MIN,
 };
 
 /// PTY 能力域模块（`host-pty`，6 条原语）
+#[cfg(feature = "desktop-host")]
 pub struct PtyModule;
 
+#[cfg(feature = "desktop-host")]
 impl HostModule for PtyModule {
     fn desc(&self) -> HostModuleDesc {
         DESC
@@ -80,20 +108,26 @@ impl HostModule for PtyModule {
 }
 
 /// getter：让 guest 侧 import 取到可变的状态引用（与宿主既有接线同款）
+#[cfg(feature = "desktop-host")]
 type HasSelf = wasmtime::component::HasSelf<WasmPluginState>;
 
 /// 静态单例（供 `inventory::submit!` 取址）
+#[cfg(feature = "desktop-host")]
 static MODULE: PtyModule = PtyModule;
 
 // 能力模块自报（linker-section 静态）
 //
 // **依赖前提**：宿主必须有一行强制引用本 crate（见 `wasm_core::manager::runtime::component`
 // 的 `use bedcode_pty_engine as _;`），否则本 rlib 不进最终二进制、静态不执行 ⇒
-// 注册丢失，且 guest 会在实例化期报「无该 import」。
+// 注册丢失，且 guest 会在实例化期报「无该 import」。无 `desktop-host` feature 的宿主
+// （移动端 / 无头）**不应**注册——它没有插件宿主机制，桌面侧强制引用行同步
+// `#[cfg(feature = "desktop-host")]`。
+#[cfg(feature = "desktop-host")]
 inventory::submit! {
     ModuleEntry { module: &MODULE }
 }
 
+#[cfg(feature = "desktop-host")]
 bindgen!({
     // provider 侧绑定：宿主自己的 `bedcode` 模块是 **guest 视角**（import 是调用
     // 函数，不是 `Host` trait + `add_to_linker`），能力 crate 要自己装配就必须生成
@@ -128,6 +162,9 @@ pub fn install<P: PtyPorts + 'static>(ports: P) {
 ///
 /// 宿主注入的是 `Arc<dyn Any>` 包着的 `Arc<dyn PtyPorts>`（能力域的端口类型只有
 /// 能力域自己认识，kit 与宿主都不能把它裸存进表），故这里向下转型后**克隆内层 Arc**。
+///
+/// 依赖 `WasmPluginState`（host-kit 类型），随 `desktop-host` feature 编译。
+#[cfg(feature = "desktop-host")]
 pub fn ports_for(state: &WasmPluginState) -> Arc<dyn PtyPorts> {
     match state
         .host
@@ -139,11 +176,12 @@ pub fn ports_for(state: &WasmPluginState) -> Arc<dyn PtyPorts> {
     }
 }
 
-// ==================== 宿主绑定层（Host trait 实现） ====================
+// ==================== 宿主绑定层（Host trait 实现，`desktop-host` feature） ====================
 //
 // 每个接口方法 = 一条 WIT 原语。权限门在 [`primitives`] 内的域函数里（随实现同迁，
 // 经端口问宿主结果），此层只做「取端口 → 转调 → 按 WIT `result` 形状返回」。
 
+#[cfg(feature = "desktop-host")]
 impl bedcode::plugin::host_pty::Host for WasmPluginState {
     fn spawn(&mut self, config_json: String) -> Result<String, String> {
         primitives::pty_spawn(&ports_for(self), &self.plugin_id, &config_json)

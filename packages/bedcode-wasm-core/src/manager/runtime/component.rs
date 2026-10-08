@@ -553,18 +553,33 @@ const HOST_MODULES: &[&str] = &[
 // 强制引用行（inventory 的 linker-section 静态必须被真正链接才执行；见上）。
 // 与 `HOST_MODULES` 同处，两者不漂移——漏掉这行 ⇒ `verify_whitelist` 的 missing
 // 方向立即变红。
+// 能力域脱绑 P2：自报只在 `desktop-host`（绑定层装配）下需要——无该 feature 的
+// 宿主（移动端 / 无头）拿纯引擎、**不应**注册（它没有插件宿主机制）。
+#[cfg(feature = "desktop-host")]
 use bedcode_discovery_engine as _;
 // `bedcode-server-websocket` 本就是宿主依赖（传输面）；此处强制引用只为让该
 // rlib 的能力模块自报静态进入最终二进制（见上）。
+// 能力域脱绑 P3：自报只在 `desktop-host`（绑定层装配）下需要——无该 feature 的
+// 宿主（移动端 / 无头）拿纯引擎、**不应**注册（它没有插件宿主机制）。
+#[cfg(feature = "desktop-host")]
 use bedcode_server_websocket as _;
 // `bedcode-server-peer-net` 同理（宿主命令面 / 生命周期已在用它）。
+// 能力域脱绑 P4：自报只在 `desktop-host`（绑定层装配）下需要——无该 feature 的
+// 宿主（移动端 / 无头）拿纯引擎、**不应**注册（它没有插件宿主机制）。
+#[cfg(feature = "desktop-host")]
 use bedcode_server_peer_net as _;
 // `bedcode-server-http` 同理（宿主 HTTP 服务器面已在用它）；`host-http` 能力域
 // （入站 2 + 出站 1 原语）的自报静态靠这行进入最终二进制。
+// 能力域脱绑 P1：自报只在 `desktop-host`（绑定层装配）下需要——无该 feature 的
+// 宿主（移动端 / 无头）拿纯引擎、**不应**注册（它没有插件宿主机制）。
+#[cfg(feature = "desktop-host")]
 use bedcode_server_http as _;
 // `bedcode-pty-engine` 同理（宿主命令面 / 生命周期已在用它）；`host-pty` 能力域
 // （6 原语 + WIT 接线）的自报静态靠这行进入最终二进制（pty-capability-domain 票 D1：
 // 接线随域机制一并迁出内核，宿主只剩端口 adapter）。
+// 能力域脱绑 P4：自报只在 `desktop-host`（绑定层装配）下需要——无该 feature 的
+// 宿主（移动端 / 无头）拿纯引擎、**不应**注册（它没有插件宿主机制）。
+#[cfg(feature = "desktop-host")]
 use bedcode_pty_engine as _;
 
 /// 收集已自报的能力模块并与白名单双向比对

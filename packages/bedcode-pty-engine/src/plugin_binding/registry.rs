@@ -23,7 +23,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex};
 
-use bedcode_plugin_api::host::bus::owned_topic;
+use crate::wire::owned_topic;
 use bedcode_server_base::constants::PLUGIN_PTY_MAX_SESSIONS_PER_PLUGIN;
 
 use crate::plugin_binding::ports::{self, PtyPorts};

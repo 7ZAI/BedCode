@@ -153,7 +153,6 @@ version = "0.1.0"
 dependencies = [
  "bedcode-host-kit",
  "bedcode-peer-net",
- "bedcode-plugin-api",
  "inventory",
  "mdns-sd",
  "serde",
@@ -202,16 +201,6 @@ dependencies = [
  "tracing",
  "x25519-dalek",
  "x509-parser",
-]
-
-[[package]]
-name = "bedcode-plugin-api"
-version = "0.1.1"
-dependencies = [
- "anyhow",
- "inventory",
- "serde",
- "serde_json",
 ]
 
 [[package]]

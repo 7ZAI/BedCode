@@ -21,3 +21,4 @@ pub mod identity;
 pub mod info;
 pub mod ports;
 pub mod process;
+pub mod wire;

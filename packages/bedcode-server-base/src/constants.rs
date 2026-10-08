@@ -101,12 +101,8 @@ pub const IP_LINK_LOCAL_PREFIX: &str = "169.254.";
 
 // ==================== 插件系统 ====================
 
-/// 共享常量定义在 SDK `bedcode-plugin-api`（单一事实来源），此处 re-export；
-/// 本模块仅保留宿主专有常量
-/// 共享常量（Claude Code 目录名 / 设置文件 / hook 脚本 / 端口环境变量）
-pub use bedcode_plugin_api::constants::{
-    CLAUDE_CONFIG_DIR_NAME, CLAUDE_SETTINGS_FILE, ENV_BEDCODE_PORT, HOOK_SCRIPT_NAME,
-};
+// 原 SDK 共享常量 re-export（CLAUDE_CONFIG_DIR_NAME 等四项）已随能力域脱绑 P5 删除：
+// 全仓零消费者（auto-task 面退役后无引用），SDK 原常量保留（另有独立消费方）。
 
 /// 插件回调超时（秒）
 ///

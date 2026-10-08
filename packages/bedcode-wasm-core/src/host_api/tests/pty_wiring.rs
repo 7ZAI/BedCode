@@ -42,7 +42,7 @@ fn permission_sync_points_all_know_pty_domains() {
     //    迁出）：每条原语都以 `ports.check_permission` 打头，域内权限三态用例即为
     //    该同步点的行为证据（`bedcode-pty-engine` 的 `plugin_binding::tests`）。
     assert_eq!(
-        bedcode_pty_engine::plugin_binding::DESC.permissions,
+        bedcode_pty_engine::plugin_binding::MODULE_PERMISSIONS,
         &["pty:spawn", "pty:io"],
         "能力域描述符的权限位必须与 SDK 合法集合逐字一致（装载期一致性核对读它）"
     );

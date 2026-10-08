@@ -130,15 +130,15 @@ mod tests {
     fn host_module_name_matches_capability_domain_desc() {
         assert_eq!(
             HOST_MODULE_NAME,
-            bedcode_pty_engine::plugin_binding::DESC.name
+            bedcode_pty_engine::plugin_binding::MODULE_NAME
         );
         assert_eq!(
-            bedcode_pty_engine::plugin_binding::DESC.interfaces,
+            bedcode_pty_engine::plugin_binding::MODULE_INTERFACES,
             &["bedcode:plugin/host-pty"],
             "接口路径必须与 WIT 契约逐字一致（改错即 guest import 失配）"
         );
         assert_eq!(
-            bedcode_pty_engine::plugin_binding::DESC.permissions,
+            bedcode_pty_engine::plugin_binding::MODULE_PERMISSIONS,
             &["pty:spawn", "pty:io"],
             "权限位必须与 `bedcode.wit` / SDK 权限表逐字一致（装载期一致性核对用）"
         );

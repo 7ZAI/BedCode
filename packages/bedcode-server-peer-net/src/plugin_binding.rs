@@ -29,11 +29,8 @@
 
 use std::sync::{Arc, LazyLock};
 
-use bedcode_host_kit::{HostModule, HostModuleDesc, ModuleEntry, WasmPluginState};
-use bedcode_plugin_api::permission::PERMISSION_PEER;
-use wasmtime::component::{bindgen, Linker};
-
 use crate::plugin_binding::ports::{block_on, PeerPorts};
+use crate::wire::PERMISSION_PEER;
 
 /// 宿主能力端口（边界层；见 [`ports`] 模块文档）
 pub mod ports;
@@ -520,9 +517,17 @@ pub fn peer_collect_outgoing(ports: &Arc<dyn PeerPorts>, plugin_id: &str, paths_
     sync_result(block_on(ports, crate::collect_outgoing_for_plugin(paths)))
 }
 
-// ==================== 能力模块自报 ====================
+// ==================== 能力模块自报（WIT 绑定层，`desktop-host` feature） ====================
+
+// WIT 绑定层依赖（host-kit / wasmtime）只随 `desktop-host` feature 编译：
+// 能力域默认形态 = 纯引擎机制（零 WIT 依赖），任何宿主可直接引用。
+#[cfg(feature = "desktop-host")]
+use bedcode_host_kit::{HostModule, HostModuleDesc, ModuleEntry, WasmPluginState};
+#[cfg(feature = "desktop-host")]
+use wasmtime::component::{bindgen, Linker};
 
 /// 能力模块描述符（机制面：接口路径 / 权限位 / ABI 下界；**禁带产品名词**，spec D4）
+#[cfg(feature = "desktop-host")]
 const DESC: HostModuleDesc = HostModuleDesc {
     name: "peer-net",
     interfaces: &["bedcode:plugin/host-peer"],
@@ -531,8 +536,10 @@ const DESC: HostModuleDesc = HostModuleDesc {
 };
 
 /// 对等网络能力域模块（`host-peer`，19 条原语）
+#[cfg(feature = "desktop-host")]
 pub struct PeerNetModule;
 
+#[cfg(feature = "desktop-host")]
 impl HostModule for PeerNetModule {
     fn desc(&self) -> HostModuleDesc {
         DESC
@@ -544,16 +551,20 @@ impl HostModule for PeerNetModule {
 }
 
 /// getter：让 guest 侧 import 取到可变的状态引用（与宿主既有接线同款）
+#[cfg(feature = "desktop-host")]
 type HasSelf = wasmtime::component::HasSelf<WasmPluginState>;
 
 /// 静态单例（供 `inventory::submit!` 取址）
+#[cfg(feature = "desktop-host")]
 static MODULE: PeerNetModule = PeerNetModule;
 
 // 能力模块自报（linker-section 静态）
 //
 // **依赖前提**：宿主必须有一行强制引用本 crate（见宿主的组件运行时接线处），
 // 否则本 rlib 不进最终二进制、静态不执行 ⇒ 注册丢失，且 guest 会在实例化期报
-// 「无该 import」。
+// 「无该 import」。无 `desktop-host` feature 的宿主（移动端 / 无头）**不应**
+// 注册——它没有插件宿主机制，桌面侧强制引用行同步 `#[cfg(feature = "desktop-host")]`。
+#[cfg(feature = "desktop-host")]
 inventory::submit! {
     ModuleEntry { module: &MODULE }
 }
@@ -579,6 +590,9 @@ pub use ports::install_ports;
 /// 宿主注入的是 `Arc<dyn Any>` 包着的 `Arc<dyn PeerPorts>`（能力域的端口类型只有
 /// 能力域自己认识，kit 与宿主都不能把它裸存进表），故这里向下转型后**克隆内层
 /// Arc**（同形对象，多个实例共享一份 adapter，无副作用）。
+///
+/// 依赖 `WasmPluginState`（host-kit 类型），随 `desktop-host` feature 编译。
+#[cfg(feature = "desktop-host")]
 fn ports_for(state: &WasmPluginState) -> Arc<dyn PeerPorts> {
     match state
         .host
@@ -590,6 +604,7 @@ fn ports_for(state: &WasmPluginState) -> Arc<dyn PeerPorts> {
     }
 }
 
+#[cfg(feature = "desktop-host")]
 bindgen!({
     // provider 侧绑定：宿主自己的 `bedcode` 模块是 **guest 视角**（import 是调用
     // 函数，不是 `Host` trait + `add_to_linker`），能力 crate 要自己装配就必须生成
@@ -605,11 +620,12 @@ bindgen!({
     exports: { default: async },
 });
 
-// ==================== 宿主绑定层（Host trait 实现） ====================
+// ==================== 宿主绑定层（Host trait 实现，`desktop-host` feature） ====================
 //
 // 每个接口方法 = 一条 WIT 原语。权限门在本文件内的域函数里（随实现同迁，
 // 经端口问宿主结果），此层只做「取端口 → 转调 → 按 WIT `result` 形状返回」。
 
+#[cfg(feature = "desktop-host")]
 impl bedcode::plugin::host_peer::Host for WasmPluginState {
     fn dial_peer(&mut self, endpoint_json: String) -> Result<String, String> {
         peer_dial(&ports_for(self), &self.plugin_id, &endpoint_json)

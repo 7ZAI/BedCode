@@ -171,7 +171,7 @@ async fn contributions_identical_across_entry_points() {
 /// 不登记——渲染侧不可达（fail-visible，不静默）。
 #[tokio::test(flavor = "multi_thread")]
 async fn registered_manifest_declared_ws_endpoints() {
-    use bedcode_plugin_api::{EndpointAuth, WsEndpointContribution};
+    use bedcode_plugin_api::WsEndpointContribution;
 
     let host = setup_host().await;
     let plugin_id = "com.test.ws-declared-positive";
@@ -190,6 +190,8 @@ async fn registered_manifest_declared_ws_endpoints() {
     host.register_declared_ws_endpoints(plugin_id, &endpoints).await;
 
     use bedcode_server_websocket::endpoint;
+    // ws 域脱绑后（能力域脱绑 P3）端点认证档位为 `wire` 自持副本（与 SDK 漂移锁钉死）
+    use bedcode_server_websocket::wire::EndpointAuth;
     let echo = endpoint::find_by_mount(&endpoint::mount_path(plugin_id, "echo"));
     assert!(echo.is_some(), "declared echo endpoint must be registered");
     assert_eq!(echo.unwrap().auth, EndpointAuth::None, "缺省档 = none");

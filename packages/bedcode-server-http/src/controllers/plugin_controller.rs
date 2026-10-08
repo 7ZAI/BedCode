@@ -6,7 +6,7 @@
 use actix_web::{web, HttpRequest, HttpResponse};
 use std::collections::HashMap;
 
-use bedcode_plugin_api::EndpointAuth;
+use crate::wire::EndpointAuth;
 
 use crate::dtos::{ApiResponse, CODE_INVALID_REQUEST, CODE_PLUGIN_AUTH_FAILED};
 use crate::middleware::auth_gateway::get_authenticated_identity;

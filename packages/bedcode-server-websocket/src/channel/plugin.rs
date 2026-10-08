@@ -26,8 +26,7 @@
 
 use actix::prelude::*;
 use actix_web_actors::ws::{CloseCode, CloseReason};
-use bedcode_plugin_api::host::bus::owned_topic;
-use bedcode_plugin_api::host::ws::{WS_CLIENT_CONNECT, WS_CLIENT_DISCONNECT};
+use crate::wire::{owned_topic, WS_CLIENT_CONNECT, WS_CLIENT_DISCONNECT};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 

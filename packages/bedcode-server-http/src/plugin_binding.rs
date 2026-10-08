@@ -15,6 +15,13 @@
 //!   ports.rs      边界：权限门 / 出站授权裁决 / 前端事件通道 / 异步桥
 //! ```
 //!
+//! **脱绑（能力域脱绑 P1）**：本文件混住机制面与 WIT 绑定层。机制面（端口 /
+//! 出站 / 端点注册与注销 / 回收 / 装配）默认编译，任何宿主可用；WIT 绑定层
+//! （`bindgen!` / `HostModule` / `inventory::submit!` / `impl Host`）以
+//! `#[cfg(feature = "desktop-host")]` 门控——桌面宿主开 feature 后行为逐字不变
+//! （ABI / WIT / 权限位 / 事件形状 / inventory 注册零变化），无 feature 的宿主
+//! （移动端 / 无头）拿纯引擎。
+//!
 //! 宿主侧只剩一个 adapter（宿主 host_api 域的 http 适配器）与一次开机装配调用。
 //!
 //! ## 入站（服务端域，ABI v29）
@@ -27,13 +34,10 @@
 
 use std::sync::Arc;
 
-use bedcode_host_kit::{HostModule, HostModuleDesc, ModuleEntry, WasmPluginState};
-use bedcode_plugin_api::permission::PERMISSION_NETWORK_HTTP;
-use bedcode_plugin_api::EndpointAuth;
 use serde::Deserialize;
-use wasmtime::component::{bindgen, Linker};
 
 use crate::plugin_binding::ports::HttpPorts;
+use crate::wire::{EndpointAuth, PERMISSION_NETWORK_HTTP};
 
 /// 宿主能力端口（边界层；见 [`ports`] 模块文档）
 pub mod ports;
@@ -108,12 +112,20 @@ pub fn purge_for_plugin(plugin_id: &str) -> usize {
     entries.len()
 }
 
-// ==================== 能力模块自报 ====================
+// ==================== 能力模块自报（WIT 绑定层，`desktop-host` feature） ====================
+
+// WIT 绑定层依赖（host-kit / wasmtime）只随 `desktop-host` feature 编译：
+// 能力域默认形态 = 纯引擎机制（零 WIT 依赖），任何宿主可直接引用。
+#[cfg(feature = "desktop-host")]
+use bedcode_host_kit::{HostModule, HostModuleDesc, ModuleEntry, WasmPluginState};
+#[cfg(feature = "desktop-host")]
+use wasmtime::component::{bindgen, Linker};
 
 /// 能力模块描述符（机制面：接口路径 / 权限位 / ABI 下界；**禁带产品名词**）
 ///
 /// `abi_min = 29`：入站服务端域两条原语在 ABI v29 追加，低于该版本的插件不导入
 /// 本 interface 的服务端段。
+#[cfg(feature = "desktop-host")]
 const DESC: HostModuleDesc = HostModuleDesc {
     name: "http",
     interfaces: &["bedcode:plugin/host-http"],
@@ -122,8 +134,10 @@ const DESC: HostModuleDesc = HostModuleDesc {
 };
 
 /// HTTP 能力域模块（`host-http`，3 条原语）
+#[cfg(feature = "desktop-host")]
 pub struct HttpModule;
 
+#[cfg(feature = "desktop-host")]
 impl HostModule for HttpModule {
     fn desc(&self) -> HostModuleDesc {
         DESC
@@ -135,24 +149,33 @@ impl HostModule for HttpModule {
 }
 
 /// getter：让 guest 侧 import 取到可变的状态引用（与宿主既有接线同款）
+#[cfg(feature = "desktop-host")]
 type HasSelf = wasmtime::component::HasSelf<WasmPluginState>;
 
 /// 静态单例（供 `inventory::submit!` 取址）
+#[cfg(feature = "desktop-host")]
 static MODULE: HttpModule = HttpModule;
 
 // 能力模块自报（linker-section 静态）
 //
 // **依赖前提**：宿主必须有一行强制引用本 crate（见宿主的组件运行时接线处），
 // 否则本 rlib 不进最终二进制、静态不执行 ⇒ 注册丢失，且 guest 会在实例化期报
-// 「无该 import」。
+// 「无该 import」。无 `desktop-host` feature 的宿主（移动端 / 无头）**不应**
+// 注册——它没有插件宿主机制，桌面侧强制引用行同步 `#[cfg(feature = "desktop-host")]`。
+#[cfg(feature = "desktop-host")]
 inventory::submit! {
     ModuleEntry { module: &MODULE }
 }
 
 /// 能力域名（宿主上下文里的键；[`bedcode_host_kit::ports::HostPorts::domain_ports`]）
+///
+/// 纯字符串常量（无 WIT 依赖），默认可用：wasm-core 的宿主 adapter 在
+/// `desktop-host` 装配路径引用它。
 pub const DOMAIN: &str = "http";
 
 /// 装配端口的便捷入口（宿主开机期调用）
+///
+/// 纯 Rust（不依赖 `WasmPluginState`），默认可用：任何宿主持有端口实现即可装配。
 pub fn install<P: HttpPorts + 'static>(ports: P) {
     ports::install_ports(Arc::new(ports));
 }
@@ -170,6 +193,9 @@ pub use ports::install_ports;
 /// 宿主注入的是 `Arc<dyn Any>` 包着的 `Arc<dyn HttpPorts>`（能力域的端口类型只有
 /// 能力域自己认识，kit 与宿主都不能把它裸存进表），故这里向下转型后**克隆内层
 /// Arc**（同形对象，多个实例共享一份 adapter，无副作用）。
+///
+/// 依赖 `WasmPluginState`（host-kit 类型），随 `desktop-host` feature 编译。
+#[cfg(feature = "desktop-host")]
 pub fn ports_for(state: &WasmPluginState) -> Arc<dyn HttpPorts> {
     match state
         .host
@@ -181,6 +207,7 @@ pub fn ports_for(state: &WasmPluginState) -> Arc<dyn HttpPorts> {
     }
 }
 
+#[cfg(feature = "desktop-host")]
 bindgen!({
     // provider 侧绑定：宿主自己的 `bedcode` 模块是 **guest 视角**（import 是调用
     // 函数，不是 `Host` trait + `add_to_linker`），能力 crate 要自己装配就必须生成
@@ -196,11 +223,12 @@ bindgen!({
     exports: { default: async },
 });
 
-// ==================== 宿主绑定层（Host trait 实现） ====================
+// ==================== 宿主绑定层（Host trait 实现，`desktop-host` feature） ====================
 //
 // 每个接口方法 = 一条 WIT 原语。权限门在本 crate 内的域函数里（随实现同迁，
 // 经端口问宿主结果），此层只做「取端口 → 转调 → 按 WIT `result` 形状返回」。
 
+#[cfg(feature = "desktop-host")]
 impl bedcode::plugin::host_http::Host for WasmPluginState {
     fn fetch(&mut self, request_json: String) -> Result<Option<String>, String> {
         // may_prompt = true：插件主流程（guest 调用栈）可弹窗询问出站授权

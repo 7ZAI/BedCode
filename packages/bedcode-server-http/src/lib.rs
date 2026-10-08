@@ -13,8 +13,10 @@
 //! `AuthCenter`（连接裁决）、`PathsPort`（应用数据目录）。端口缺席（无头 / 单测）时
 //! 各点按其自身语义 fail-visible，不静默降级成「无数据」。
 //!
-//! 认证档位词汇 `EndpointAuth` 真源在桌面 SDK（`bedcode_plugin_api`），两侧各自直连，
-//! 不建共享词汇模块。
+//! 认证档位词汇 `EndpointAuth` 与权限位 `network:http` 为本 crate **自持副本**
+//! （[`wire`] 模块；能力域脱绑 P1：能力域默认形态零 WIT / 零桌面 SDK 依赖，
+//! 任何宿主可直接引用）。副本与桌面 SDK 原版逐字一致由 `wire::drift_lock`
+//! 钉死（漂移即红）。
 //!
 //! DTO 口径（AGENTS §5.1.1 B4 合法残留）：`dtos` 进生产构建的只有 `common_dto`
 //! （通用 API 信封 + 两个业务码）。会话 / 文件 / git 三组是「移动端看到的字节」这一
@@ -36,6 +38,7 @@ pub mod face;
 pub mod gateway;
 pub mod middleware;
 pub mod plugin_binding;
+pub mod wire;
 pub mod registry;
 pub mod routes;
 

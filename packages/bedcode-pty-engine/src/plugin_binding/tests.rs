@@ -46,7 +46,7 @@ use std::collections::HashSet;
 use std::sync::{mpsc::Receiver, Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use bedcode_plugin_api::permission::{PERMISSION_PTY_IO, PERMISSION_PTY_SPAWN};
+use crate::wire::{PERMISSION_PTY_IO, PERMISSION_PTY_SPAWN};
 use bedcode_server_base::constants::{
     PLUGIN_PTY_MAX_SESSIONS_PER_PLUGIN, PLUGIN_PTY_MAX_WRITE_BYTES,
     PLUGIN_PTY_RING_FETCH_MAX_BYTES, PLUGIN_PTY_RING_MAX_BYTES,
@@ -425,13 +425,14 @@ fn every_api_without_any_permission_is_denied_before_any_lookup() {
 ///
 /// 票 05 前宿主按 `{EVENT_EXIT}.{owner}` 手拼、插件按 SDK `pty_event_topic` 订阅，
 /// 两处各写一份就会「订阅成功但永远收不到」，且这类错配在单侧测试里不可见。
-/// 现在两侧都走 `bedcode_plugin_api::host::bus::owned_topic`，形状不再有漂移面；
+/// 现在两侧都走 `crate::wire::owned_topic`（与 SDK `bus::owned_topic` 漂移锁钉死），
+/// 形状不再有漂移面；
 /// 本用例锁「事件名常量」+「SDK 域助手确实由 owned_topic 组合」，而宿主发布侧
 /// 是否真的用了它，由下方按 SDK 助手订阅的投递用例（`exit_event_delivered_once`
 /// 等）行为性地兜住——宿主退回手拼即收不到投递。
 #[test]
 fn exit_event_name_matches_sdk_subscription_helper() {
-    use bedcode_plugin_api::host as sdk;
+    use crate::wire as sdk;
     assert_eq!(EVENT_EXIT, sdk::PTY_EXIT, "宿主事件名与 SDK 常量漂移");
     assert_eq!(
         sdk::owned_topic("com.example.plugin", EVENT_EXIT),
@@ -445,7 +446,7 @@ fn exit_event_name_matches_sdk_subscription_helper() {
 /// 测试订阅侧刻意走 SDK 助手而非宿主侧拼接：宿主发布形状若与插件订阅形状分叉，
 /// 下面的投递断言直接收不到事件（票 05 命名空间的行为性漂移锁）。
 fn exit_topic(owner: &str) -> String {
-    bedcode_plugin_api::host::pty_event_topic(bedcode_plugin_api::host::PTY_EXIT, owner)
+    crate::wire::pty_event_topic(crate::wire::PTY_EXIT, owner)
 }
 
 /// 在夹具总线上订阅一个 topic（见 [`TestCtx::subscribe`]：记录投递的 topic /
@@ -772,7 +773,7 @@ fn wait_event_timeout(
 /// 现象是「订阅成功但永远收不到」（静默退化回纯轮询），单侧测试不可见。
 #[test]
 fn output_event_name_matches_sdk_subscription_helper() {
-    use bedcode_plugin_api::host as sdk;
+    use crate::wire as sdk;
     assert_eq!(EVENT_OUTPUT, sdk::PTY_OUTPUT, "宿主事件名与 SDK 常量漂移");
     assert_eq!(
         sdk::owned_topic("com.example.plugin", EVENT_OUTPUT),
@@ -783,7 +784,7 @@ fn output_event_name_matches_sdk_subscription_helper() {
 
 /// 按 SDK 订阅助手构造输出可用通知 topic（`<owner>::pty:output`，P2）
 fn output_topic(owner: &str) -> String {
-    bedcode_plugin_api::host::pty_event_topic(bedcode_plugin_api::host::PTY_OUTPUT, owner)
+    crate::wire::pty_event_topic(crate::wire::PTY_OUTPUT, owner)
 }
 
 /// 收集窗口内的全部投递（限频断言用：窗口内不得逐块推送）

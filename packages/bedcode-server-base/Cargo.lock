@@ -174,23 +174,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "bedcode-plugin-api"
-version = "0.1.1"
-dependencies = [
- "anyhow",
- "inventory",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "bedcode-server-base"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
  "bedcode-link-crypto",
- "bedcode-plugin-api",
  "futures-util",
  "local-ip-address",
  "mdns-sd",
@@ -1880,15 +1869,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "879f10e63c20629ecabbb64a8010319738c66a5cd0c29b02d63d272b03751d01"
 dependencies = [
  "generic-array",
-]
-
-[[package]]
-name = "inventory"
-version = "0.3.24"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a4f0c30c76f2f4ccee3fe55a2435f691ca00c0e4bd87abe4f4a851b1d4dac39b"
-dependencies = [
- "rustversion",
 ]
 
 [[package]]

@@ -12,6 +12,7 @@
 
 use super::*;
 use bedcode_server_http::registry;
+use bedcode_server_http::wire::EndpointAuth;
 
 #[test]
 fn test_http_route_registration_server_domain_roundtrip() {
@@ -51,7 +52,7 @@ fn test_http_route_registration_server_domain_roundtrip() {
         assert_eq!(entry.owner, PLUGIN_ID);
         assert_eq!(
             entry.auth,
-            bedcode_plugin_api::EndpointAuth::Jwt,
+            EndpointAuth::Jwt,
             "未声明 auth 落最严档"
         );
 

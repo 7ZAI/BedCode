@@ -494,12 +494,22 @@ impl HostBusPort {
 }
 
 /// base 侧 `BusMessageHandler` → 本 crate 侧 `BusMessageHandler` 适配
-/// （两 trait 形状逐字相同，只差 trait 路径）
+///
+/// P5 常量下沉后 base trait 载荷形状收 `bedcode_server_base::wire::BusMessage`
+/// （本 crate 总线内部流转保持 SDK `BusMessage`——机制层类型选择，spec §8）；
+/// 两形状逐字一致由 base 侧 `wire::drift_lock` 钉死，此处做值转换（字段逐个
+/// 克隆，零语义变化）。
 struct WasmHandlerAdapter(Box<dyn bedcode_server_base::ports::BusMessageHandler>);
 
 impl BusMessageHandler for WasmHandlerAdapter {
     fn on_message(&self, msg: &BusMessage) -> anyhow::Result<()> {
-        self.0.on_message(msg)
+        self.0.on_message(&bedcode_server_base::wire::BusMessage {
+            topic: msg.topic.clone(),
+            sender: msg.sender.clone(),
+            payload: msg.payload.clone(),
+            payload_binary: msg.payload_binary.clone(),
+            timestamp: msg.timestamp,
+        })
     }
 }
 
@@ -593,12 +603,20 @@ mod tests {
     }
 
     // 2026-10-08 补：BusPort 端口路径（HostBusPort 经 WasmHandlerAdapter 收 base trait）
-    // 需要 base 形状的 handler；两 trait 方法形状一致，TestHandler 直接双实现。
+    // 需要 base 形状的 handler；TestHandler 直接双实现。
     // （在途 BusBinding 重构新增的 late_bound 用例此前从未编译过——wasm-core 测试
     // 自整核抽出后未跑，修复仅为解除全量测试的编译阻塞）
+    // P5 常量下沉：base trait 载荷形状收 base 自持副本（`wire::BusMessage`），
+    // 转发进 SDK 形状的通道前做值转换（形状一致由 base 侧漂移锁钉死）。
     impl bedcode_server_base::ports::BusMessageHandler for TestHandler {
-        fn on_message(&self, msg: &bedcode_plugin_api::BusMessage) -> anyhow::Result<()> {
-            self.tx.send(msg.clone())?;
+        fn on_message(&self, msg: &bedcode_server_base::wire::BusMessage) -> anyhow::Result<()> {
+            self.tx.send(BusMessage {
+                topic: msg.topic.clone(),
+                sender: msg.sender.clone(),
+                payload: msg.payload.clone(),
+                payload_binary: msg.payload_binary.clone(),
+                timestamp: msg.timestamp,
+            })?;
             Ok(())
         }
     }

@@ -36,7 +36,7 @@
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
-use bedcode_plugin_api::permission::PERMISSION_NETWORK_HTTP;
+use crate::wire::PERMISSION_NETWORK_HTTP;
 use bedcode_server_base::constants::{
     PLUGIN_HTTP_CONNECT_TIMEOUT_SECS, PLUGIN_HTTP_RESPONSE_BODY_LIMIT_BYTES, PLUGIN_HTTP_TIMEOUT_SECS,
 };

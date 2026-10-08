@@ -20,6 +20,13 @@ license = "MIT"
 repository = "https://github.com/7ZAI/BedCode"
 edition = "2021"
 
+[features]
+# 桌面宿主形态为默认：能力域 `desktop-host` 绑定层随编译图进（host-http 域 WIT
+# 绑定 + inventory 静态注册）。无头 / 第三方宿主可 `default-features = false` 复用
+# 本 crate 的纯引擎面（能力域脱绑 P1；wasm-core 本身是宿主机制，绑定层随需开）。
+default = ["desktop-host"]
+desktop-host = ["bedcode-server-http/desktop-host", "bedcode-discovery-engine/desktop-host", "bedcode-server-websocket/desktop-host", "bedcode-server-peer-net/desktop-host", "bedcode-pty-engine/desktop-host"]
+
 [dependencies]
 # ==================== 宿主平台（D2：保留 tauri 依赖，不做零-tauri 反转） ====================
 tauri = { version = "2", features = ["protocol-asset", "tray-icon", "test"] }
@@ -41,12 +48,12 @@ bedcode-server-base = { path = "../bedcode-server-base" }
 # 加密引擎（算法实现 + 注册表）
 bedcode-crypto-engine = { path = "../bedcode-crypto-engine" }
 # 四个能力域 crate（实现 + 插件绑定层 + 自动注册）
-bedcode-discovery-engine = { path = "../bedcode-discovery-engine" }
-bedcode-server-websocket = { path = "../bedcode-server-websocket" }
-bedcode-server-peer-net = { path = "../bedcode-server-peer-net" }
-bedcode-server-http = { path = "../bedcode-server-http" }
+bedcode-discovery-engine = { path = "../bedcode-discovery-engine", features = ["desktop-host"] }
+bedcode-server-websocket = { path = "../bedcode-server-websocket", features = ["desktop-host"] }
+bedcode-server-peer-net = { path = "../bedcode-server-peer-net", features = ["desktop-host"] }
+bedcode-server-http = { path = "../bedcode-server-http", features = ["desktop-host"] }
 # PTY 引擎面（wasm-core 纯净性收口票 02 迁出；host-pty WIT 面随票 04 迁出）
-bedcode-pty-engine = { path = "../bedcode-pty-engine" }
+bedcode-pty-engine = { path = "../bedcode-pty-engine", features = ["desktop-host"] }
 # server 传输无关内核（ServerSupervisor，host_config 用）
 bedcode-server-core = { path = "../bedcode-server-core" }
 # WIT 契约绑定（bindgen! 在 manager/runtime/component.rs，path 相对本 crate 根）

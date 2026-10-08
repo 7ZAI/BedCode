@@ -502,23 +502,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "bedcode-plugin-api"
-version = "0.1.1"
-dependencies = [
- "anyhow",
- "inventory",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "bedcode-server-base"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
  "bedcode-link-crypto",
- "bedcode-plugin-api",
  "futures-util",
  "local-ip-address",
  "mdns-sd",
@@ -566,7 +555,6 @@ dependencies = [
  "actix-web-actors",
  "async-trait",
  "bedcode-host-kit",
- "bedcode-plugin-api",
  "bedcode-server-base",
  "bedcode-server-core",
  "chrono",

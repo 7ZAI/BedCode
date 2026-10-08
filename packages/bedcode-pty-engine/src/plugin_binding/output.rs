@@ -32,7 +32,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use bedcode_plugin_api::host::bus::owned_topic;
+use crate::wire::owned_topic;
 
 use crate::plugin_binding::ports::PtyPorts;
 use crate::PtyOutputSink;
@@ -334,9 +334,8 @@ mod tests {
 
         let published = ports.published();
         assert_eq!(published.len(), 1, "产出必须通知一次，实得 {published:?}");
-        // 订阅侧刻意走 SDK 助手：域拼的 topic 若与插件订阅形状分叉即收不到
-        let topic =
-            bedcode_plugin_api::host::pty_event_topic(bedcode_plugin_api::host::PTY_OUTPUT, owner);
+        // 订阅侧刻意走 wire 副本（与 SDK 漂移锁钉死）：域拼的 topic 若与插件订阅形状分叉即收不到
+        let topic = crate::wire::pty_event_topic(crate::wire::PTY_OUTPUT, owner);
         assert_eq!(published[0].0, topic, "topic 形状 = <owner>::pty:output");
         assert_eq!(
             published[0].1,

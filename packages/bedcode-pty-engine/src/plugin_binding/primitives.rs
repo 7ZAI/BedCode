@@ -47,7 +47,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use bedcode_plugin_api::permission::{PERMISSION_PTY_IO, PERMISSION_PTY_SPAWN};
+use crate::wire::{PERMISSION_PTY_IO, PERMISSION_PTY_SPAWN};
 use bedcode_server_base::constants::{
     PLUGIN_PTY_MAX_WRITE_BYTES, PLUGIN_PTY_RING_BYTES, PLUGIN_PTY_RING_FETCH_MAX_BYTES,
     PLUGIN_PTY_RING_MAX_BYTES,
