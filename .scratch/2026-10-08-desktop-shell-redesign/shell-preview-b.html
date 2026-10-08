@@ -137,14 +137,6 @@ svg { display: block; flex-shrink: 0; }
 .layout-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
 .layout-btn.on { background: var(--bg-card); color: var(--text-primary); box-shadow: var(--shadow-card); }
 
-.tsearch { flex: 1; max-width: 340px; display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 10px;
-  background: var(--bg-input); border: 1px solid var(--border-input); border-radius: var(--radius-input);
-  color: var(--text-tertiary); transition: border-color 0.2s, box-shadow 0.2s; }
-.tsearch:focus-within { border-color: var(--border-strong); box-shadow: var(--shadow-input-focus); }
-.tsearch input { flex: 1; min-width: 0; border: none; outline: none; background: none; color: var(--text-primary); font-size: var(--font-size-base); }
-.tsearch kbd { font-family: var(--mono); font-size: var(--font-size-xs); border: 1px solid var(--border);
-  border-radius: 4px; padding: 1px 4px; color: var(--text-tertiary); flex-shrink: 0; }
-
 .tbtns { display: flex; align-items: center; gap: 2px; margin-left: auto; flex-shrink: 0; }
 .tbtn { width: 34px; height: 28px; border-radius: 6px; color: var(--text-secondary);
   display: flex; align-items: center; justify-content: center; transition: background-color 0.15s, color 0.15s; }
@@ -153,36 +145,54 @@ svg { display: block; flex-shrink: 0; }
 /* ==================== 主体 ==================== */
 .body { display: flex; height: calc(100vh - var(--titlebar-h) - var(--statusbar-h)); }
 
-/* ---- 左：应用轨 ---- */
+/* ---- 左：导航轨（可折叠两态 + 可拖拽调宽） ----
+   折叠态 = 56px 图标轨；展开态 = 带文字列表。宽度存 --rail-w，
+   拖到 <120px 自动折叠、松手不回弹（对齐现有 Sidebar 的行为约定）。 */
 .rail {
   width: var(--rail-w); flex-shrink: 0; background: var(--bg-sidebar);
   border-right: 1px solid var(--border); display: flex; flex-direction: column;
-  align-items: center; padding: 8px 0; gap: 4px;
+  align-items: stretch; padding: 8px 6px; gap: 2px; position: relative;
+  overflow: hidden; user-select: none;
 }
-.rail-label { font-size: var(--font-size-xs); color: var(--text-tertiary); letter-spacing: 0.1em; margin: 6px 0 2px; }
-.rail-sep { width: 26px; height: 1px; background: var(--border); margin: 5px 0; }
+.rail-grab { position: absolute; top: 0; bottom: 0; right: -3px; width: 6px; cursor: col-resize; z-index: 10; }
+.rail-grab:hover, .rail-grab.dragging { background: var(--color-info); }
+.rail-label { font-size: var(--font-size-xs); color: var(--text-tertiary); letter-spacing: 0.1em;
+  padding: 8px 8px 3px; flex-shrink: 0; }
+.rail[data-collapsed='1'] .rail-label { display: none; }
+.rail-sep { height: 1px; background: var(--border); margin: 6px 8px; flex-shrink: 0; }
+.rail[data-collapsed='1'] .rail-sep { margin: 6px 13px; }
 .rail-spacer { flex: 1; }
 
 .ic-btn {
-  width: 38px; height: 38px; border-radius: var(--radius-nav); position: relative;
-  display: flex; align-items: center; justify-content: center; color: var(--text-secondary);
+  min-height: 36px; border-radius: var(--radius-nav); position: relative;
+  display: flex; align-items: center; gap: 9px; padding: 0 8px; width: 100%;
+  color: var(--text-secondary); text-align: left;
   transition: background-color 0.15s, color 0.15s;
 }
 .ic-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
 .ic-btn.on { background: var(--bg-card); color: var(--text-primary); box-shadow: var(--shadow-card); }
-.ic-btn .dot { position: absolute; right: 3px; bottom: 3px; width: 7px; height: 7px; border-radius: 50%;
+.ic-btn .ic { position: relative; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.ic-btn .rl { font-size: var(--font-size-base); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1; }
+/* 折叠态只留图标 */
+.rail[data-collapsed='1'] .ic-btn { justify-content: center; padding: 0; }
+.rail[data-collapsed='1'] .ic-btn .rl { display: none; }
+.ic-btn .ic .dot { position: absolute; right: -1px; bottom: -1px; width: 6px; height: 6px; border-radius: 50%;
   background: var(--color-success); box-shadow: 0 0 0 2px var(--bg-sidebar); }
-.ic-btn .dot.degraded { background: var(--color-warning); }
-.ic-btn .dot.dormant { background: var(--text-tertiary); }
-.ic-btn .dot.approval { background: var(--color-danger); }
-.ic-btn.dormant { color: var(--text-tertiary); }
-.ic-btn .badge-n { position: absolute; left: 1px; top: 1px; min-width: 14px; height: 14px; padding: 0 3px;
+.ic-btn .ic .dot.degraded { background: var(--color-warning); }
+.ic-btn .ic .dot.dormant { background: var(--text-tertiary); }
+.ic-btn .ic .dot.approval { background: var(--color-danger); }
+.ic-btn .ic .badge-n { position: absolute; left: -5px; top: -5px; min-width: 13px; height: 13px; padding: 0 3px;
   border-radius: 7px; background: var(--color-danger); color: var(--color-primary-contrast);
   font-size: var(--font-size-xs); font-weight: 600; display: flex; align-items: center; justify-content: center; }
-.rail-add { width: 32px; height: 32px; border-radius: var(--radius-button); border: 1px dashed var(--border-strong);
-  color: var(--text-tertiary); display: flex; align-items: center; justify-content: center;
-  transition: color 0.15s, border-color 0.15s; }
-.rail-add:hover { color: var(--text-primary); border-color: var(--text-secondary); }
+/* 服务状态灯（5s 轮询 get_server_status）——折叠态时随导航一并隐藏 */
+.rail-foot { border-top: 1px solid var(--border); margin-top: 6px; padding-top: 6px; flex-shrink: 0; }
+.rail[data-collapsed='1'] .rail-foot .lamp-txt { display: none; }
+.rail[data-collapsed='1'] .rail-foot .lamp { justify-content: center; padding: 9px 0; }
+.ic-btn.dormant { color: var(--text-tertiary); }
+.lamp { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: var(--radius-button);
+  width: 100%; color: var(--text-secondary); font-size: var(--font-size-sm); text-align: left;
+  transition: background-color 0.15s, color 0.15s; }
+.lamp:hover { background: var(--bg-hover); color: var(--text-primary); }
 
 /* ---- 中：舞台 ---- */
 .stage-wrap { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--bg-page); }
@@ -248,6 +258,9 @@ svg { display: block; flex-shrink: 0; }
   font-family: var(--mono); font-size: var(--font-size-base); line-height: 1.7;
   color: var(--text-primary); overflow: auto; }
 .term .p { color: var(--color-success); }
+/* 光标用样式块而非 ▉ 字形：等宽字体缺该字形时字形会掉成豆腐块 */
+.term .cur { display: inline-block; width: 7px; height: 1.05em; vertical-align: text-bottom;
+  background: var(--color-success); border-radius: 1px; }
 .term .c { color: var(--text-tertiary); }
 .term .w { color: var(--color-warning); }
 
@@ -262,7 +275,8 @@ svg { display: block; flex-shrink: 0; }
 .composer input:focus { border-color: var(--border-strong); box-shadow: var(--shadow-input-focus); }
 .btn { height: 28px; padding: 0 12px; border-radius: var(--radius-button); background: var(--color-primary);
   color: var(--color-primary-contrast); font-size: var(--font-size-base); font-weight: 500;
-  transition: background-color 0.15s; white-space: nowrap; }
+  transition: background-color 0.15s; white-space: nowrap; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
 .btn:hover { background: var(--color-primary-hover); }
 .btn.ghost { background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border-strong); }
 .btn.ghost:hover { background: var(--bg-hover); }
@@ -301,35 +315,77 @@ svg { display: block; flex-shrink: 0; }
   background: var(--bg-sidebar); border: 1px solid var(--border); color: var(--text-secondary); }
 .pill.risk { background: var(--color-danger-light); border-color: transparent; color: var(--color-danger); }
 
-/* ---- 宿主自有面：权限矩阵 ---- */
-.mx { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--bg-card);
-  border: 1px solid var(--border); border-radius: var(--radius-card); overflow: hidden; margin: 8px; }
-.mx-head { padding: 10px 14px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
-.mx-head .t { font-weight: 600; font-size: var(--font-size-lg); }
-.mx-scroll { flex: 1; min-height: 0; overflow: auto; }
-table.mx-tb { border-collapse: separate; border-spacing: 0; width: 100%; }
-table.mx-tb th, table.mx-tb td { padding: 0; }
-table.mx-tb thead th { position: sticky; top: 0; z-index: 2; background: var(--bg-card);
-  border-bottom: 1px solid var(--border); font-weight: 500; }
-table.mx-tb th.app-col { position: sticky; left: 0; z-index: 3; background: var(--bg-card);
-  border-right: 1px solid var(--border); text-align: left; padding: 6px 10px; min-width: 168px; }
-table.mx-tb thead th.app-col { z-index: 4; }
-.mx-app { display: flex; align-items: center; gap: 7px; padding: 6px 10px; }
-.mx-app .nm { font-weight: 500; white-space: nowrap; }
-.mx-perm { writing-mode: vertical-rl; transform: rotate(180deg); font-family: var(--mono);
-  font-size: var(--font-size-xs); color: var(--text-secondary); padding: 8px 0; height: 108px;
-  white-space: nowrap; border-left: 1px solid var(--border); }
-.mx-perm.risk { color: var(--color-danger); font-weight: 600; }
-.mx-cell { width: 26px; height: 26px; border-bottom: 1px solid var(--border); border-left: 1px solid var(--border);
-  display: flex; align-items: center; justify-content: center; transition: background-color 0.12s; }
-.mx-cell:hover { background: var(--bg-hover); }
-.mx-cell .mark { width: 7px; height: 7px; border-radius: 50%; background: var(--border-strong); }
-.mx-cell.on .mark { background: var(--color-success); }
-.mx-cell.on.risk .mark { background: var(--color-danger); }
-.mx-cell.pending .mark { background: var(--color-warning); }
-.mx-foot { padding: 8px 14px; border-top: 1px solid var(--border); display: flex; align-items: center; gap: 14px;
-  font-size: var(--font-size-sm); color: var(--text-tertiary); flex-shrink: 0; flex-wrap: wrap; }
-.lg { display: flex; align-items: center; gap: 5px; }
+/* ---- 宿主自有面：应用治理（启停 · 卸载 · 授权详情 · 授权策略） ---- */
+.gov { flex: 1; min-height: 0; display: flex; gap: 8px; padding: 8px; }
+.gov-list { width: 296px; flex-shrink: 0; display: flex; flex-direction: column; gap: 6px;
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-card); overflow: hidden; }
+.gov-list-head { padding: 10px 12px; border-bottom: 1px solid var(--border); display: flex; align-items: center;
+  gap: 8px; flex-shrink: 0; }
+.gov-list-head .t { font-weight: 600; font-size: var(--font-size-lg); flex: 1; min-width: 0; }
+.gov-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+.gov-row { display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: var(--radius-button);
+  border: 1px solid transparent; text-align: left; transition: background-color 0.15s, border-color 0.15s; }
+.gov-row:hover { background: var(--bg-hover); }
+.gov-row.on { background: var(--bg-sidebar); border-color: var(--border-strong); }
+.gov-row .nm { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.gov-row .nm b { font-size: var(--font-size-base); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gov-row .nm span { font-size: var(--font-size-sm); color: var(--text-tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.gov-detail { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 12px;
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-card); overflow: hidden; }
+.gov-detail-head { padding: 12px 14px; border-bottom: 1px solid var(--border); display: flex; align-items: center;
+  gap: 10px; flex-shrink: 0; }
+.gov-detail-head .nm { font-weight: 600; font-size: var(--font-size-xl); }
+.gov-scroll-y { flex: 1; min-height: 0; overflow-y: auto; padding: 12px 14px; display: flex; flex-direction: column; gap: 14px; }
+.blk { display: flex; flex-direction: column; gap: 7px; }
+.blk-h { display: flex; align-items: center; gap: 8px; }
+.blk-h .t { font-size: var(--font-size-xs); color: var(--text-tertiary); letter-spacing: 0.08em; text-transform: uppercase; }
+.blk-h .grow { flex: 1; }
+.blk-body { background: var(--bg-sidebar); border: 1px solid var(--border); border-radius: var(--radius-button); padding: 10px; }
+
+/* 授权策略：三档分段控件（总是询问 / 按需询问 / 始终允许） */
+.strat-row { display: flex; align-items: center; gap: 10px; padding: 7px 0; }
+.strat-row + .strat-row { border-top: 1px solid var(--border); }
+.strat-row .lb { font-size: var(--font-size-base); width: 84px; flex-shrink: 0; }
+.seg { display: flex; gap: 1px; padding: 2px; background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--radius-button); flex: 1; }
+.seg button { flex: 1; height: 24px; border-radius: 5px; font-size: var(--font-size-sm);
+  color: var(--text-tertiary); transition: background-color 0.15s, color 0.15s; white-space: nowrap; }
+.seg button:hover { background: var(--bg-hover); color: var(--text-primary); }
+.seg button.on { background: var(--color-primary-light); color: var(--text-primary); font-weight: 500; }
+.seg button.on.risky { background: var(--color-danger-light); color: var(--color-danger); }
+
+/* 授权记录行 */
+.rec { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: var(--radius-button);
+  background: var(--bg-card); border: 1px solid var(--border); }
+.rec + .rec { margin-top: 5px; }
+.rec .tg { font-family: var(--mono); font-size: var(--font-size-sm); flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rec.deny { border-color: color-mix(in srgb, var(--color-danger) 35%, transparent); }
+.rec.deny .tg { color: var(--color-danger); }
+.rec.unconfirmed { border-color: color-mix(in srgb, var(--color-warning) 40%, transparent); }
+.mini { height: 22px; padding: 0 8px; border-radius: 5px; font-size: var(--font-size-sm);
+  border: 1px solid var(--border-strong); color: var(--text-secondary); background: var(--bg-card); flex-shrink: 0;
+  transition: background-color 0.15s, color 0.15s; white-space: nowrap; }
+.mini:hover { background: var(--bg-hover); color: var(--text-primary); }
+.mini.danger { color: var(--color-danger); border-color: color-mix(in srgb, var(--color-danger) 35%, transparent); }
+.mini.danger:hover { background: var(--color-danger-light); }
+
+.op-row { display: flex; gap: 6px; }
+/* 提示块：给告警类信息一个边界，避免裸红字漂在版面上 */
+.callout { display: flex; align-items: flex-start; gap: 7px; padding: 8px 9px; font-size: var(--font-size-sm);
+  line-height: 1.5; border-radius: var(--radius-button); }
+.callout svg { margin-top: 1px; }
+.callout.danger { background: var(--color-danger-light); color: var(--color-danger);
+  border: 1px solid color-mix(in srgb, var(--color-danger) 30%, transparent); }
+.callout.warn { background: var(--color-warning-light); color: var(--color-warning);
+  border: 1px solid color-mix(in srgb, var(--color-warning) 30%, transparent); }
+/* 危险动作：与其他按钮同形状，只换语义色，不再用「纯红字无边框」 */
+.btn.danger-outline { background: var(--bg-card); color: var(--color-danger);
+  border: 1px solid color-mix(in srgb, var(--color-danger) 40%, transparent); }
+.btn.danger-outline:hover { background: var(--color-danger-light); }
+.btn.danger-outline:disabled { opacity: 0.45; cursor: not-allowed; }
+
 
 /* ---- 右：检查器 ---- */
 .inspector { width: var(--inspector-w); flex-shrink: 0; background: var(--bg-sidebar);
@@ -354,15 +410,6 @@ table.mx-tb thead th.app-col { z-index: 4; }
 .meter .tr.danger i { background: var(--color-danger); }
 .rule { height: 1px; background: var(--border); }
 
-/* 权限条目（可授予/撤销） */
-.perm { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: var(--radius-button);
-  background: var(--bg-card); border: 1px solid var(--border); transition: border-color 0.15s; }
-.perm:hover { border-color: var(--border-strong); }
-.perm .code { font-family: var(--mono); font-size: var(--font-size-sm); flex: 1; min-width: 0;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.perm.risk { border-color: color-mix(in srgb, var(--color-danger) 40%, transparent); }
-.perm.risk .code { color: var(--color-danger); }
-.perm.off { opacity: 0.55; }
 /* 开关：原生 checkbox + token 化外观，键盘可达 */
 .sw { position: relative; width: 30px; height: 17px; flex-shrink: 0; }
 .sw input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
@@ -404,8 +451,144 @@ table.mx-tb thead th.app-col { z-index: 4; }
   font-size: var(--font-size-base); animation: rise 0.2s ease-out; }
 @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 
-/* 窄屏兜底（<1180px 收起检查器，避免与布局固定元素重叠：ui-ux-pro-max Layout/Fixed Positioning） */
-@media (max-width: 1180px) { .inspector { display: none; } }
+/* ==================== 管理中心（应用 · 服务器 · 设置） ==================== */
+.mgmt { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; padding: 8px; }
+.mgmt-tabs { display: flex; gap: 2px; padding: 3px; background: var(--bg-sidebar);
+  border: 1px solid var(--border); border-radius: var(--radius-button); flex-shrink: 0; align-self: flex-start; }
+.mgmt-tabs button { height: 26px; padding: 0 14px; border-radius: 6px; font-size: var(--font-size-base);
+  color: var(--text-secondary); display: flex; align-items: center; gap: 6px;
+  transition: background-color 0.15s, color 0.15s; }
+.mgmt-tabs button:hover { background: var(--bg-hover); color: var(--text-primary); }
+.mgmt-tabs button.on { background: var(--bg-card); color: var(--text-primary); font-weight: 500; box-shadow: var(--shadow-card); }
+.mgmt-pane { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; overflow: hidden; }
+.pane-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+
+/* 服务器：状态灯 + 三格指标 */
+.srv-head { display: flex; align-items: center; gap: 12px; padding: 12px 14px; flex-shrink: 0; flex-wrap: wrap; }
+.lamp-big { display: flex; align-items: center; gap: 9px; }
+.lamp-big .t { font-size: var(--font-size-xl); font-weight: 600; }
+.lamp-big .up { font-size: var(--font-size-sm); color: var(--text-tertiary); font-family: var(--mono); }
+.stat3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-left: auto; }
+.stat3 > div { text-align: right; }
+.stat3 .n { font-size: var(--font-size-xl); font-weight: 600; font-variant-numeric: tabular-nums; }
+.stat3 .l { font-size: var(--font-size-sm); color: var(--text-tertiary); }
+.grid3 { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
+.fld { display: flex; flex-direction: column; gap: 4px; }
+.fld .lb { font-size: var(--font-size-sm); color: var(--text-secondary); }
+.fld .hint { font-size: var(--font-size-xs); color: var(--text-tertiary); }
+.inp { height: 28px; padding: 0 9px; background: var(--bg-input); border: 1px solid var(--border-input);
+  border-radius: var(--radius-input); color: var(--text-primary); outline: none; width: 100%;
+  font-family: var(--mono); font-size: var(--font-size-base); transition: border-color 0.2s, box-shadow 0.2s; }
+.inp:focus { border-color: var(--border-strong); box-shadow: var(--shadow-input-focus); }
+select.inp { font-family: var(--font); cursor: pointer; }
+input[type=range] { accent-color: var(--color-primary); width: 100%; cursor: pointer; }
+.row-sw { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--radius-button);
+  background: var(--bg-card); border: 1px solid var(--border); }
+.row-sw .lb { flex: 1; min-width: 0; font-size: var(--font-size-base); }
+.row-sw.off { opacity: 0.5; }
+/* 开关（原生 checkbox + token 外观） */
+.sw { position: relative; width: 30px; height: 17px; flex-shrink: 0; }
+.sw input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
+.sw .track { position: absolute; inset: 0; border-radius: 9px; background: var(--border-strong);
+  transition: background-color 0.2s; pointer-events: none; }
+.sw .knob { position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 50%;
+  background: var(--bg-card); transition: transform 0.2s; pointer-events: none; }
+.sw input:checked ~ .track { background: var(--color-success); }
+.sw input:checked ~ .knob { transform: translateX(13px); }
+.sw input:focus-visible ~ .track { outline: 2px solid var(--color-info); outline-offset: 1px; }
+.sw.risk input:checked ~ .track { background: var(--color-danger); }
+/* 监控折线图（颜色读 token，随主题反色） */
+.chart { width: 100%; height: 220px; display: block; }
+.chart .ax { stroke: var(--border); stroke-width: 1; }
+.chart .ln { fill: none; stroke-width: 1.6; }
+.chart .gl { font-size: 9px; fill: var(--text-tertiary); font-family: var(--mono); }
+
+/* 设置：色板卡 / 字号档位 */
+.pal-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 8px; }
+.pal-card { display: flex; flex-direction: column; gap: 6px; padding: 8px; border-radius: var(--radius-button);
+  border: 1px solid var(--border); background: var(--bg-card); text-align: left;
+  transition: border-color 0.15s, box-shadow 0.15s; }
+.pal-card:hover { border-color: var(--border-strong); }
+.pal-card.on { border-color: var(--color-primary); box-shadow: var(--shadow-input-focus); }
+.pal-sw { display: flex; gap: 3px; height: 22px; border-radius: 5px; overflow: hidden; border: 1px solid var(--border); }
+.pal-sw i { flex: 1; }
+.pal-card .nm { font-size: var(--font-size-sm); color: var(--text-secondary); }
+.pal-card.on .nm { color: var(--text-primary); font-weight: 500; }
+.size-tags { display: flex; gap: 6px; }
+.size-tag { padding: 5px 11px; border-radius: var(--radius-button); border: 1px solid var(--border-strong);
+  font-size: var(--font-size-sm); color: var(--text-secondary); transition: background-color 0.15s, color 0.15s; }
+.size-tag:hover { background: var(--bg-hover); color: var(--text-primary); }
+.size-tag.on { background: var(--color-primary); color: var(--color-primary-contrast); border-color: var(--color-primary); }
+
+/* 应用配置：布尔走行内开关，其余「标签上 / 控件下」 */
+.cfg-row { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: var(--radius-button); }
+.cfg-row + .cfg-row { border-top: 1px solid var(--border); }
+.cfg-row .lb { flex: 1; min-width: 0; font-size: var(--font-size-base); }
+.cfg-col { display: flex; flex-direction: column; gap: 4px; padding: 9px 10px; }
+.cfg-col + .cfg-col { border-top: 1px solid var(--border); }
+.cfg-col .lb { font-size: var(--font-size-sm); color: var(--text-secondary); }
+
+/* ==================== 命令面板 ==================== */
+.ovl { position: fixed; inset: 0; z-index: 50; display: flex; }
+.ovl.center-y { align-items: center; justify-content: center; background: color-mix(in srgb, black 45%, transparent); }
+.palette { width: min(440px, 92vw); max-height: 60vh; display: flex; flex-direction: column; align-self: flex-start;
+  margin-top: 18vh; background: var(--bg-card); border: 1px solid var(--border-strong);
+  border-radius: var(--radius-card); box-shadow: var(--shadow-card-hover); overflow: hidden; }
+.palette .srch { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+.palette .srch input { flex: 1; min-width: 0; border: none; outline: none; background: none;
+  color: var(--text-primary); font-size: var(--font-size-lg); }
+.palette .lst { flex: 1; min-height: 0; overflow-y: auto; padding: 6px; }
+.palette .it { display: flex; align-items: center; gap: 8px; padding: 7px 9px; border-radius: var(--radius-button);
+  width: 100%; text-align: left; font-size: var(--font-size-base); color: var(--text-secondary);
+  transition: background-color 0.12s, color 0.12s; }
+.palette .it:hover, .palette .it.cur { background: var(--color-primary-light); color: var(--text-primary); }
+.palette .grp { font-size: var(--font-size-xs); color: var(--text-tertiary); padding: 7px 9px 3px; letter-spacing: 0.08em; }
+.palette .empty { padding: 18px; text-align: center; color: var(--text-tertiary); font-size: var(--font-size-base); }
+
+/* ==================== 全局弹窗层 ==================== */
+.dlg { width: min(480px, 92vw); max-height: 82vh; display: flex; flex-direction: column;
+  background: var(--bg-card); border: 1px solid var(--border-strong); border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card-hover); overflow: hidden; }
+.dlg.wide { width: min(620px, 94vw); }
+.dlg-h { padding: 13px 16px 10px; display: flex; align-items: center; gap: 10px; flex-shrink: 0;
+  border-bottom: 1px solid var(--border); }
+.dlg-h .t { font-size: var(--font-size-lg); font-weight: 600; flex: 1; min-width: 0; }
+.dlg-b { padding: 14px 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+.dlg-f { padding: 10px 16px 13px; display: flex; justify-content: flex-end; gap: 8px; flex-shrink: 0;
+  border-top: 1px solid var(--border); }
+.dlg-path { font-family: var(--mono); font-size: var(--font-size-sm); padding: 7px 9px; border-radius: 6px;
+  background: var(--bg-sidebar); border: 1px solid var(--border); overflow-wrap: anywhere; }
+/* 弹窗里的破坏性确认：实心，让「取消 / 确认」的主次一眼分明 */
+.btn.danger-fill { background: var(--color-danger); color: var(--color-primary-contrast); }
+.btn.danger-fill:hover { filter: brightness(0.92); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.chk { display: flex; align-items: center; gap: 7px; font-size: var(--font-size-base); color: var(--text-secondary); cursor: pointer; }
+.chk input { accent-color: var(--color-primary); width: 14px; height: 14px; cursor: pointer; }
+.risk-list { display: flex; flex-direction: column; gap: 6px; }
+.risk-it { display: flex; align-items: flex-start; gap: 8px; padding: 8px 9px; border-radius: var(--radius-button);
+  background: var(--color-danger-light); border: 1px solid color-mix(in srgb, var(--color-danger) 30%, transparent); }
+.risk-it .tt { font-family: var(--mono); font-size: var(--font-size-sm); color: var(--color-danger); font-weight: 600; }
+.risk-it .dd { font-size: var(--font-size-sm); color: var(--text-secondary); }
+
+/* ==================== 启动屏 ==================== */
+.boot { position: fixed; inset: 0; z-index: 100; background: var(--bg-page);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; }
+.boot .glyph { width: 46px; height: 46px; border-radius: 12px; display: flex; align-items: center; justify-content: center;
+  background: var(--color-primary); color: var(--color-primary-contrast); font-family: var(--mono);
+  font-size: var(--font-size-xl); animation: caret 1.05s steps(1) infinite; }
+@keyframes caret { 0%, 49% { opacity: 1 } 50%, 100% { opacity: 0.35 } }
+.boot .line { font-family: var(--mono); font-size: var(--font-size-base); color: var(--text-secondary); }
+.boot .log { display: flex; flex-direction: column; gap: 3px; font-family: var(--mono);
+  font-size: var(--font-size-sm); color: var(--text-tertiary); min-width: 260px; }
+.boot .log div { display: flex; gap: 7px; }
+.boot .log .ok { color: var(--color-success); }
+.boot .bar { width: 260px; height: 3px; border-radius: 2px; background: var(--border); overflow: hidden; }
+.boot .bar i { display: block; height: 100%; background: var(--color-primary); border-radius: 2px; transition: width 0.3s; }
+
+/* 窄屏：检查器默认收起，但**始终保留入口**（标题栏切换按钮），不彻底失去
+   实例 / 授权 / 通道 三个视图的操作能力。responsive 必须是结构性的，
+   不能靠「藏起来」来消除重叠。 */
+.inspector[data-open='0'] { display: none; }
 @media (max-width: 860px) { .ws-tools { display: none; } }
 </style>
 </head>
@@ -423,7 +606,7 @@ table.mx-tb thead th.app-col { z-index: 4; }
       <path d="M50 36.5 L56.5 43 L50 49.5 L43.5 43 Z" fill="#FF9E2C"/>
     </svg>
     <b>WasmApp</b>
-    <small>方案 B · 分屏平铺工作区</small>
+    <small id="brandCtx">工作区</small>
   </div>
 
   <!-- 布局预设：多 app 同屏展示形态的主控 -->
@@ -443,7 +626,7 @@ table.mx-tb thead th.app-col { z-index: 4; }
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16M3 12h18"/></svg>
       </button>
       <button class="layout-btn" data-preset="rows" title="横排 · 上下 2×2" aria-label="横排网格布局">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16M15 4v16"/></svg>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M3 15h18"/></svg>
       </button>
     </div>
     <button class="layout-btn" id="btnUnmax" title="退出最大化，回到分屏" aria-label="退出最大化" style="display:none;border:1px solid var(--border)">
@@ -451,13 +634,19 @@ table.mx-tb thead th.app-col { z-index: 4; }
     </button>
   </div>
 
-  <label class="tsearch">
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
-    <input placeholder="搜索应用、命令、会话、文件…" aria-label="全局搜索" />
-    <kbd>Ctrl K</kbd>
-  </label>
-
   <div class="tbtns">
+    <button class="tbtn" id="btnInspector" title="显示 / 隐藏右侧检查器" aria-label="显示或隐藏右侧检查器" aria-pressed="true">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg>
+    </button>
+    <button class="tbtn" id="btnBoot" title="启动屏（最低展示 900ms）" aria-label="启动屏">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 9 3 3-3 3"/><path d="M12 15h4"/></svg>
+    </button>
+    <button class="tbtn" id="btnDialogs" title="全局弹窗目录" aria-label="全局弹窗目录">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+    </button>
+    <button class="tbtn" id="btnPalette" title="命令面板（Ctrl+Shift+P）" aria-label="命令面板">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m6 4 14 8-14 8Z"/></svg>
+    </button>
     <button class="tbtn" id="btnTheme" title="切换主题" aria-label="切换主题">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3a6.4 6.4 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
     </button>
@@ -469,24 +658,44 @@ table.mx-tb thead th.app-col { z-index: 4; }
 
 <div class="body">
   <!-- ============ 左轨：宿主自有面 + 已安装 wasm-app ============ -->
-  <nav class="rail" aria-label="工作区与应用">
+  <nav class="rail" id="rail" data-collapsed="1" aria-label="工作区与管理">
     <span class="rail-label">工作区</span>
     <button class="ic-btn" id="navWorkspace" title="分屏工作区" aria-label="分屏工作区">
-      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M13 4v16"/></svg>
+      <span class="ic"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M13 4v16"/></svg></span>
+      <span class="rl">分屏工作区</span>
     </button>
     <button class="ic-btn" id="navOverview" title="应用总览" aria-label="应用总览">
-      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+      <span class="ic"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span>
+      <span class="rl">应用总览</span>
     </button>
-    <button class="ic-btn" id="navMatrix" title="权限矩阵" aria-label="权限矩阵">
-      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1 1 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1Z"/><path d="m9.5 12 1.8 1.8 3.4-3.6"/></svg>
+    <button class="ic-btn" id="navManagement" title="管理中心：应用 · 服务器 · 设置" aria-label="管理中心">
+      <span class="ic"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M7 9h14"/></svg></span>
+      <span class="rl">管理中心</span>
     </button>
     <div class="rail-sep"></div>
     <span class="rail-label">应用</span>
-    <div id="railApps" style="display:flex;flex-direction:column;align-items:center;gap:4px"></div>
+    <div id="railApps" style="display:flex;flex-direction:column;gap:2px"></div>
     <div class="rail-spacer"></div>
-    <button class="rail-add" title="安装新 wasm-app" aria-label="安装新 wasm-app">
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 12h14M12 5v14"/></svg>
+    <button class="ic-btn" id="railInstall" title="安装新 wasm-app（本地 zip）" aria-label="安装新 wasm-app">
+      <span class="ic"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 12h14M12 5v14"/></svg></span>
+      <span class="rl">安装应用</span>
     </button>
+    <div class="rail-foot">
+      <button class="ic-btn" id="navServer" title="服务器管理（/server）" aria-label="服务器管理">
+        <span class="ic"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="2" y="4" width="20" height="7" rx="2"/><rect x="2" y="13" width="20" height="7" rx="2"/><path d="M6 7.5h.01M6 16.5h.01"/></svg></span>
+        <span class="rl">服务器管理</span>
+      </button>
+      <button class="ic-btn" id="navSettings" title="设置（Ctrl+,）" aria-label="设置">
+        <span class="ic"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1.1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></svg></span>
+        <span class="rl">设置</span>
+      </button>
+      <button class="lamp" id="btnCollapse" title="折叠 / 展开导航">
+        <span class="sdot" id="lampDot"></span>
+        <span class="lamp-txt" id="lampTxt">服务运行中</span>
+      </button>
+    </div>
+    <div class="rail-grab" id="railGrab" role="separator" aria-orientation="vertical" tabindex="0"
+      aria-label="拖拽调整导航宽度"></div>
   </nav>
 
   <!-- ============ 中：舞台 ============ -->
@@ -501,9 +710,9 @@ table.mx-tb thead th.app-col { z-index: 4; }
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 2v2M15 2v2M9 20v2M15 20v2M2 9h2M2 15h2M20 9h2M20 15h2"/></svg>
         实例
       </button>
-      <button class="insp-tab" role="tab" data-itab="perm" aria-selected="false">
+      <button class="insp-tab" role="tab" data-itab="auth" aria-selected="false">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1 1 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1Z"/></svg>
-        权限
+        授权
       </button>
       <button class="insp-tab" role="tab" data-itab="chan" aria-selected="false">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>
@@ -521,73 +730,246 @@ table.mx-tb thead th.app-col { z-index: 4; }
     <!-- 异步状态徽标：语义化整句 + role=status，不播报裸数字（ui-ux-pro-max Accessibility） -->
     <span class="it" id="sbApps" role="status" aria-atomic="true"></span>
     <span class="it" id="sbApproval"></span>
-    <span class="it">总线 <b class="mono" id="sbBus">12</b> msg/s</span>
+    <span class="it">服务 <b class="mono" id="sbConn">3</b> 连接 · <b class="mono" id="sbReq">27</b> req/s</span>
   </div>
   <div class="grp">
     <span class="it" id="sbLayout"></span>
-    <span class="it">Ctrl+K 命令面板</span>
+    <span class="it" id="sbHint" style="cursor:pointer;color:var(--text-tertiary)"
+      title="打开命令面板">Ctrl+Shift+P 命令面板 · Ctrl+, 设置</span>
     <span class="it mono">wasmtime 48 · ABI 3</span>
   </div>
 </footer>
 
+<div id="overlays"></div>
 <div class="toast-wrap" id="toasts" aria-live="polite"></div>
 
 <script>
 /* ============================================================================
-   数据：全部来自仓库真实事实（4 个 wasm-app 的 plugin.json + 生成的权限词汇表）
+   数据：全部来自仓库真实事实（4 个 wasm-app 的 plugin.json + 真实授权读模型）
    - 权限位取自 src/plugin/permission-vocabulary.ts（SDK VALID_PERMISSIONS 生成物）
    - 高危位取自 src/plugin/contributionKinds.ts 的 HIGH_RISK_PERMISSIONS
    - 状态取自 getStateKey()：Activated / Degraded / Deactivated / NeedsApproval
+   - 授权模型取自 src/utils/authPolicy.ts：strategies(fs|network × always_ask|
+     default|always_allow) + records(四分区) + firstPartyDirs
+   - 内置免询问项逐条对齐 src-tauri/src/first_party_dirs.rs 的真实清单
    ============================================================================ */
 const HIGH_RISK = ['process:run', 'pty:spawn', 'terminal:input', 'database:main'];
+const STRATEGIES = ['always_ask', 'default', 'always_allow'];
+const STRATEGY_LABEL = { always_ask: '总是询问', default: '按需询问', always_allow: '始终允许' };
+const RESOURCE_LABEL = { fs: '文件系统', network: '网络出站' };
+const RECORD_SOURCE_LABEL = { user: '用户确认', always_allow: '免询问自动放行', legacy: '旧版遗留', user_deny: '用户拒绝' };
+const APP_SOURCE_LABEL = { builtin: '内置', scanned: '已扫描', wasm: 'WASM', 'user-installed': '本地安装' };
 
 const APPS = [
   {
-    id: 'terminal-session', pid: 'com.bedcode.terminal-session', name: '终端会话', full: 'Terminal Session Center',
+    id: 'terminal-session', pid: 'com.bedcode.terminal-session', pluginType: 'rust-ts', name: '终端会话', full: 'Terminal Session Center',
     version: '1.0.0-beta', icon: 'terminal', state: 'running', cpu: 12, mem: 84, memCap: 256,
-    badge: '3 会话', views: 5, commands: 28, kind: 'term',
+    badge: '3 会话', views: 5, commands: 28, kind: 'term', source: 'builtin', size: '4.2 MB',
     // 真实 manifest permissions
     granted: ['auth','broadcast','connection:read','fs:read','fs:write','network:http','peer','process:run',
               'pty:io','pty:spawn','session:read','storage','task:run','terminal:input','timer:schedule',
               'ui:input','ui:settings','ui:sidebar','ws:server'],
     provides: ['task:status-changed','session:mode-changed','task:queue-changed','task:scheduled-changed','task:preset-changed'],
     endpoints: ['session-control (jwt)','terminal (jwt)'],
+    // 授权读模型
+    strategies: { fs: 'default', network: 'default' },
+    records: [
+      { resource: 'fs', target: '~/Documents/sessions', effect: 'allow', ops: ['read','write'], prefixMatch: true, source: 'user' },
+      { resource: 'fs', target: '~/.ssh', effect: 'allow', ops: ['read'], prefixMatch: false, source: 'user' },
+      { resource: 'network', target: 'http://127.0.0.1:8317', effect: 'deny', ops: [], prefixMatch: false, source: 'user_deny' },
+    ],
+    // 逐条对齐 first_party_dirs.rs：项目根由用户选，只有段名能进清单
+    firstPartyDirs: [
+      { kind: 'project-segment', value: '.claude' },
+      { kind: 'project-segment', value: '.codex' },
+      { kind: 'project-segment', value: '.pi' },
+      { kind: 'project-segment', value: '.opencode' },
+    ],
   },
   {
     id: 'ai-chatbox', pid: 'com.bedcode.ai-chatbox', name: 'AI 对话', full: 'AI Chatbox',
-    version: '1.0.0-beta', icon: 'ai', state: 'running', cpu: 4, mem: 42, memCap: 256,
-    badge: 'provider: local-llm', views: 1, commands: 8, kind: 'chat',
+    version: '1.0.0-beta', icon: 'ai', state: 'degraded', cpu: 4, mem: 42, memCap: 256,
+    badge: 'provider: local-llm', views: 1, commands: 8, kind: 'chat', source: 'builtin', size: '1.1 MB',
+    pluginType: 'rust-ts',
     granted: ['broadcast','fs:read','fs:write','network:http','storage','ui:sidebar'],
     provides: ['chat:session-changed'], endpoints: [],
+    strategies: { fs: 'default', network: 'always_ask' },
+    records: [
+      { resource: 'network', target: 'https://api.openai.com', effect: 'allow', ops: [], prefixMatch: true, source: 'always_allow' },
+      { resource: 'network', target: 'https://api.deepseek.com', effect: 'allow', ops: [], prefixMatch: true, source: 'user' },
+      { resource: 'network', target: 'http://127.0.0.1:11434', effect: 'allow', ops: [], prefixMatch: true, source: 'user' },
+      { resource: 'fs', target: '~/Documents/ai-chatbox', effect: 'allow', ops: ['read','write'], prefixMatch: true, source: 'user' },
+    ],
+    firstPartyDirs: [],
   },
   {
-    id: 'file-transfer', pid: 'com.bedcode.file-transfer', name: '文件传输', full: 'File Transfer',
+    id: 'file-transfer', pid: 'com.bedcode.file-transfer', pluginType: 'rust-ts', name: '文件传输', full: 'File Transfer',
     version: '1.0.0-beta', icon: 'transfer', state: 'running', cpu: 7, mem: 61, memCap: 256,
-    badge: '1 进行中', views: 1, commands: 34, kind: 'files',
+    badge: '1 进行中', views: 1, commands: 34, kind: 'files', source: 'builtin', size: '2.6 MB',
     granted: ['broadcast','fs:pick','fs:read','fs:write','mdns','network:http','peer','storage',
               'timer:schedule','ui:dialog','ui:sidebar','ui:statusbar'],
     provides: ['transfer:progress'], endpoints: [],
+    strategies: { fs: 'always_ask', network: 'default' },
+    records: [
+      { resource: 'fs', target: '~/Downloads/inbox', effect: 'allow', ops: ['read','write'], prefixMatch: true, source: 'user' },
+      { resource: 'fs', target: '~/Downloads/bedcode-received', effect: 'allow', ops: ['write'], prefixMatch: true, source: 'always_allow' },
+      { resource: 'fs', target: '/etc/shadow', effect: 'deny', ops: [], prefixMatch: false, source: 'user_deny' },
+    ],
+    firstPartyDirs: [],
   },
   {
-    id: 'agent-hub', pid: 'com.bedcode.agent-hub', name: 'Agent Hub', full: 'Agent Hub',
+    id: 'agent-hub', pid: 'com.bedcode.agent-hub', pluginType: 'rust-ts', name: 'Agent Hub', full: 'Agent Hub',
     version: '0.1.0', icon: 'hub', state: 'approval', cpu: 0, mem: 0, memCap: 256,
-    badge: '待审批', views: 1, commands: 38, kind: 'hub',
+    badge: '待审批', views: 1, commands: 38, kind: 'hub', source: 'builtin', size: '3.4 MB',
     granted: ['broadcast','fs:pick','fs:read','fs:write','network:http','process:run','storage','task:run','ui:sidebar'],
     provides: [], endpoints: [],
+    strategies: { fs: 'default', network: 'default' },
+    records: [
+      { resource: 'fs', target: '~/work/agent-configs', effect: 'allow', ops: ['read','write'], prefixMatch: true, source: 'user' },
+    ],
+    // 对齐 first_party_dirs.rs：家目录形态 + 自身产物目录（判据 ②）
+    firstPartyDirs: [
+      { kind: 'home', value: '.agents' },
+      { kind: 'home', value: '.claude/skills' },
+      { kind: 'home', value: '.pi/agent/skills' },
+      { kind: 'home', value: '.bedcode/agent-hub/runs' },
+    ],
   },
   {
-    id: 'mobile-bridge', pid: 'com.bedcode.mobile-bridge', name: '移动桥接', full: 'Mobile Bridge',
+    id: 'mobile-bridge', pid: 'com.bedcode.mobile-bridge', pluginType: 'rust-ts', name: '移动桥接', full: 'Mobile Bridge',
     version: '0.3.0', icon: 'transfer', state: 'dormant', cpu: 0, mem: 0, memCap: 128,
-    badge: '未启动', views: 0, commands: 12, kind: 'files',
+    badge: '未启动', views: 0, commands: 12, kind: 'files', source: 'user-installed', size: '0.9 MB',
     granted: ['peer','ws:client','ws:server','network:http','storage','broadcast'],
     provides: [], endpoints: [],
+    strategies: { fs: 'always_ask', network: 'default' },
+    records: [],
+    firstPartyDirs: [],
   },
 ];
+
 const byId = Object.fromEntries(APPS.map(a => [a.id, a]));
+
+
+/* ============================================================================
+   服务器面（真实命令：get_server_status / get_server_metrics /
+   get_server_network_config / update_server_* / server_{start,stop,restart}）
+   字段名逐字对齐 NetworkConfig（Rust 侧 deny_unknown_fields，snake_case）
+   ============================================================================ */
+const SERVER = {
+  status: 'running',                       // running | starting | stopped
+  uptimeSec: 7261,
+  port: 8765, portSaved: 8765, portDirty: false,
+  localIps: ['192.168.1.24:8765', '10.0.0.7:8765'],
+  autoStart: true,
+  metrics: { connections: 3, cpu: 8, mem: 142, requests: 18432, rps: 27 },
+  // 2s 一点 × 60 = 2 分钟窗口（对齐 MAX_HISTORY）
+  history: { sent: [22,25,24,28,31,29,33,30,27,26,24,22,21,23,26,29,32,35,33,30],
+             recv: [18,19,17,20,22,21,24,23,21,20,19,18,17,19,21,23,26,24,22,20] },
+  net: {
+    workers: 0, keep_alive_secs: 65, client_request_timeout_secs: 30,
+    client_disconnect_timeout_secs: 30, max_connections: 1000, backlog: 1024,
+    tcp_nodelay: true, shutdown_timeout_secs: 10,
+    ws_max_frame_size_kb: 16, ws_max_message_size_mb: 16, metrics_enabled: true,
+  },
+};
+
+/** 服务器高级配置的字段元数据（控件类型 / 范围 / 单位 / hint 逐条对齐 ServerView） */
+const NET_FIELDS = [
+  { k: 'workers', label: 'Worker 线程数', type: 'int', min: 0, max: 64, hint: '0 = 自动（CPU 核心数）' },
+  { k: 'keep_alive_secs', label: 'Keep-Alive 超时', type: 'int', min: 0, max: 300, unit: '秒', hint: '0 = 禁用' },
+  { k: 'client_request_timeout_secs', label: '请求头超时', type: 'int', min: 1, max: 120, unit: 's' },
+  { k: 'client_disconnect_timeout_secs', label: '断开超时', type: 'int', min: 1, max: 120, unit: 's' },
+  { k: 'max_connections', label: '最大连接数', type: 'int', min: 1, max: 100000, hint: '每 worker' },
+  { k: 'backlog', label: 'TCP Backlog', type: 'int', min: 64, max: 8192 },
+  { k: 'tcp_nodelay', label: 'TCP_NODELAY', type: 'bool' },
+  { k: 'shutdown_timeout_secs', label: '停机超时', type: 'int', min: 1, max: 300, unit: 's' },
+  { k: 'ws_max_frame_size_kb', label: 'WS 帧大小', type: 'int', min: 1, max: 16384, unit: 'KB' },
+  { k: 'ws_max_message_size_mb', label: 'WS 消息大小', type: 'int', min: 1, max: 512, unit: 'MB' },
+];
+
+/* 链路加密（get/set_traffic_encryption_config + get_link_crypto_fingerprint） */
+const LINK_CRYPTO = {
+  enabled: true, encrypt_http: true, encrypt_ws_terminal: true, encrypt_ws_event: true,
+  allow_plaintext_fallback: false,
+  fingerprint: 'a3f1c9e27b4d8056',          // SHA-256 前 16 hex，供双端人工比对
+};
+
+/* 设置（stores/settings.ts 的键，蛇形照抄） */
+const SETTINGS = {
+  ui: { theme: 'dark', theme_palette: 'warm', language: 'zh-CN', font_size: 12, animations_enabled: true },
+  network: { prevent_sleep: true, port: 8765 },
+};
+/** 6 张色板（settings.ts 的 ui.theme_palette 可选值；预览页展示其预览三色块） */
+/* 色板 id 与中文名逐条对齐 locales/zh-CN/settings.ts 的 appearance.palette*，
+   三色块取 style.css 里 :root[data-palette='xxx'] 的真实浅色取值（bg-page/bg-card/color-primary）。 */
+const PALETTES = [
+  { id: 'warm',   name: '暖调工作台', sw: ['#f5f4f0', '#fdfcfa', '#1d1a14'] },
+  { id: 'cool',   name: '冷灰调',     sw: ['#f3f5f7', '#fbfcfd', '#2563eb'] },
+  { id: 'forest', name: '森野绿',     sw: ['#f6f5ef', '#fdfcf7', '#3e6b4f'] },
+  { id: 'ocean',  name: '海洋青',     sw: ['#f2f7f9', '#fafcfd', '#0e7490'] },
+  { id: 'sunset', name: '落日晚霞',   sw: ['#fbf5ef', '#fefaf5', '#d9532a'] },
+  { id: 'violet', name: '星空紫',     sw: ['#f7f5fb', '#fcfbfe', '#6d4fc6'] },
+];
+/* 日志设置（整段仅 DEV 构建显示） */
+const LOG_SETTINGS = { file_level: 'info', format: 'text', max_files: 7, capacity_mb: 512 };
+const LOG_LEVELS = ['debug', 'info', 'warn', 'error'];
+
+/* ============================================================================
+   命令面板数据源（真实来源：各 manifest contributes.commands 汇总 + 宿主动作）
+   ============================================================================ */
+const HOST_COMMANDS = [
+  { id: 'host.server.restart', title: '服务器：重启', src: 'host' },
+  { id: 'host.app.update.check', title: '应用：检查更新', src: 'host' },
+  { id: 'host.settings.open', title: '设置：打开', src: 'host' },
+  { id: 'host.authorization.open', title: '应用授权总览', src: 'host' },
+  { id: 'host.workspace.single', title: '布局：单窗', src: 'host' },
+  { id: 'host.workspace.focus', title: '布局：主从', src: 'host' },
+  { id: 'host.workspace.thirds', title: '布局：三栏', src: 'host' },
+  { id: 'host.log.dir', title: '日志：打开日志目录', src: 'host' },
+];
+const PLUGIN_COMMAND_TITLES = {
+  'terminal-session': ['session.refresh', 'session.pair.new', 'session.history.open', 'task.stop-all', 'session.terminal.split'],
+  'ai-chatbox': ['chat.new', 'chat.clear', 'provider.pick', 'chat.export'],
+  'file-transfer': ['transfer.pause-all', 'transfer.retry-failed', 'roots.add', 'receive.policy.open'],
+  'agent-hub': ['agent.detect', 'agent.install', 'agent.skills.scan', 'agent.usage.stats', 'agent.providers.fetch'],
+};
+
+/* ============================================================================
+   应用配置 schema（真实来源：manifest contributes.configuration.properties）
+   现状：四个 manifest 的 properties 均为空对象，配置页会显示「无可用的配置项」。
+      下面的 schema 是**控件形态演示**用的样例数据，不是线上真值。
+   ============================================================================ */
+const CONFIG_DEMO = {
+  'terminal-session': {
+    title: 'Terminal Session Settings',
+    properties: {
+      scrollback_lines: { type: 'number', title: '回滚行数', minimum: 100, maximum: 100000, default: 5000 },
+      default_shell: { type: 'string', title: '默认 shell', default: 'bash' },
+      renderer: { type: 'string', title: '渲染器', enum: ['auto', 'dom', 'webgl'], default: 'auto' },
+      confirm_close: { type: 'boolean', title: '关闭前确认', default: true },
+      keepalive: { type: 'number', title: '会话心跳（秒）', default: 30 },
+    },
+  },
+};
 
 /* 权限位并集（按真实 manifest 排序，非手工挑拣） */
 const ALL_PERMS = [...new Set(APPS.flatMap(a => a.granted))].sort();
 const isRisk = p => HIGH_RISK.includes(p);
+
+/* ---- 授权读模型的派生助手（对齐 src/utils/authPolicy.ts 的分区口径） ---- */
+const isAllow = r => r.effect === 'allow';
+/** 用户已授权：allow 且来源非 always_allow（未知来源按保守口径也归这里，界面标「未知来源」） */
+const userGranted = a => a.records.filter(r => isAllow(r) && r.source !== 'always_allow');
+/** 免询问自动放行：allow + always_allow —— 必须带「未经确认」标记 */
+const autoAllowed = a => a.records.filter(r => isAllow(r) && r.source === 'always_allow');
+/** 硬拒绝：deny */
+const denied = a => a.records.filter(r => !isAllow(r));
+const opsLabel = ops =>
+  !ops.length ? '—' : ops.includes('read') && ops.includes('write') ? '读写' : ops.includes('write') ? '写入' : '读取';
+const fpLabel = e => e.kind === 'home' ? '~/' + e.value : '<项目>/' + e.value;
+/** 应用风险权重：两类资源取风险最高档（always_allow 风险最大，置顶） */
+const RISK_RANK = { always_allow: 0, default: 1, always_ask: 2 };
+const appRiskRank = a => Math.min(...Object.values(a.strategies).map(s => RISK_RANK[s]));
 
 /* ==================== 图标（全部 SVG，零 emoji —— ui-ux-pro-max pre-delivery checklist） ==================== */
 const P = {
@@ -599,20 +981,44 @@ const P = {
   pop: '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
   x: '<path d="M18 6 6 18M6 6l12 12"/>',
   play: '<path d="m6 4 14 8-14 8Z"/>',
-  stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
+  stop: '<rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" stroke="none"/>',
   warn: '<path d="m21.7 18-8-14a2 2 0 0 0-3.4 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3Z"/><path d="M12 9v4M12 17h.01"/>',
   file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/>',
   folder: '<path d="M4 20a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2Z"/>',
   check: '<path d="m20 6-11 11-5-5"/>',
+  plus: '<path d="M5 12h14M12 5v14"/>',
+  shield: '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1 1 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1Z"/>',
+  restart: '<path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>',
+  run: '<path d="m6 4 14 8-14 8Z"/>',
+  grid: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
+  server: '<rect x="2" y="4" width="20" height="7" rx="2"/><rect x="2" y="13" width="20" height="7" rx="2"/><path d="M6 7.5h.01M6 16.5h.01"/>',
+  gear: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/>',
+  trash: '<path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6"/>',
 };
 const svg = (k, size = 15, sw = 1.8) =>
   `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[k] || ''}</svg>`;
 
+/** 实心图标（停止方块这类符号必须填充，否则 stroke-only 画出来像空框） */
+const svgSolid = (k, size = 13) =>
+  `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">${P[k] || ''}</svg>`;
+
 const STATE_TEXT = { running: '运行中', degraded: '降级', dormant: '未启动', approval: '待审批', error: '错误' };
+const ICONS = { shield: n => svg('shield', n), server: n => svg('server', n), gear: n => svg('gear', n) };
 
 /* ==================== 状态 ==================== */
 const state = {
-  mode: 'workspace',        // workspace | overview | matrix
+  mode: 'workspace',        // workspace | overview | governance
+  mgmtTab: 'apps',           // 管理中心二级页：apps | server | settings
+  govSel: 'terminal-session', // 管理中心「应用」页当前选中的应用
+  cfgSel: null,              // 应用配置页当前应用
+  hidden: new Set(),         // 工作区里已关面板、但实例仍在运行的应用
+  paletteOpen: false,        // 命令面板开关（现有实现只有快捷键，无可见按钮）
+  paletteQ: '', paletteCur: null,
+  dialog: null, dlgApp: null, dlgRes: null,   // 当前演示的全局弹窗
+  boot: false,               // 启动屏
+  railW: 56, railCollapsed: true,
+  inspectorOpen: window.innerWidth >= 1180,   // 窄屏默认收起，标题栏按钮随时可开
   preset: 'focus',
   active: 'terminal-session',
   maximized: null,
@@ -635,7 +1041,11 @@ const split = (key, dir, defRatio, a, b) => ({
   k: 'split', dir, id: key, ratio: state.ratios[key] ?? defRatio, c: [a, b],
 });
 
-function runningIds() { return APPS.filter(a => a.state === 'running' || a.state === 'approval').map(a => a.id); }
+function runningIds() {
+  const hidden = state.hidden || new Set();
+  return APPS.filter(a => (a.state === 'running' || a.state === 'degraded' || a.state === 'approval')
+    && !hidden.has(a.id)).map(a => a.id);
+}
 
 function buildTree(preset) {
   const list = runningIds();
@@ -690,7 +1100,7 @@ function paneBody(app) {
       <div style="font-size:var(--font-size-lg);color:var(--color-warning)">等待权限审批</div>
       <div class="note">manifest 声明 ${app.granted.length} 个权限位，其中 <b style="color:var(--color-danger)">${app.granted.filter(isRisk).length}</b> 个属高危位（可执行任意命令 / 读写主库）。</div>
       <div style="display:flex;gap:6px">
-        <button class="btn ghost" data-act="matrix">查看权限矩阵</button>
+        <button class="btn ghost" data-act="governance">打开应用治理</button>
         <button class="btn" data-act="approve" data-app="${app.id}">${svg('check', 13)} 批准并启动</button>
       </div></div>`;
   }
@@ -704,7 +1114,7 @@ const MOCK = {
     <div><span class="p">user@bedcode ~ $</span> <span class="c"># 每个 app 是独立 wasm 实例，界面由宿主壳分屏承载</span></div>
     <div><span class="p">user@bedcode ~ $</span> <span class="w">cargo test</span></div>
     <div>&nbsp;&nbsp;running 42 tests ... <span class="p">ok</span></div>
-    <div><span class="p">user@bedcode ~ $</span> <span class="c">▉</span></div>
+    <div><span class="p">user@bedcode ~ $</span> <span class="cur"></span></div>
   </div>`,
   chat: () => `<div class="chat">
     <div class="chat-log">
@@ -733,10 +1143,14 @@ const MOCK = {
   </div>`,
 };
 
-function renderLeaf(node, container) {
+function renderLeaf(node) {
   const app = byId[node.app];
-  if (!app) return;
-  const el = document.createElement('section');
+  if (!app) return null;
+  // 直接产出 split 的直接子元素：.split > .node 才能命中，flex 比例才有意义。
+  // 早前这里往 container（已是 .node 的 DIV）里再塞一层 section.node，导致叶子
+  // 多出一层没被 `.split > .node` 命中的壳 —— flex 比例落在空壳上，面板按内容
+  // 高度浮动，表现为「分屏比例失灵 + 大片空白」。
+  const el = document.createElement('div');
   el.className = 'node';
   const focused = app.id === state.active;
   el.innerHTML = `<div class="pane ${focused ? 'focused' : ''}" data-app="${app.id}">
@@ -753,40 +1167,36 @@ function renderLeaf(node, container) {
     </div>
     <div class="pane-body ${app.kind === 'term' ? 'flush' : ''}">${paneBody(app)}</div>
   </div>`;
-  container.appendChild(el);
+  return el;
 }
 
 function applyRatio(el, dir, r) {
   const [a, , b] = el.children;
   a.style.flex = `${r} 1 0%`;
   b.style.flex = `${1 - r} 1 0%`;
-  a.style.flexDirection = dir === 'v' ? 'column' : 'row';
-  b.style.flexDirection = dir === 'v' ? 'column' : 'row';
+  // 槽位内部恒为 column（面板头在上 / 内容在下）。分屏方向只决定槽位之间怎么排，
+  // 不能顺着传进槽位 —— 否则叶子面板的头与内容会并排。
+  a.style.flexDirection = 'column';
+  b.style.flexDirection = 'column';
 }
 
-function renderNode(node, container) {
-  if (node.k === 'leaf') return renderLeaf(node, container);
+function renderNode(node) {
+  if (node.k === 'leaf') return renderLeaf(node);
 
   const el = document.createElement('div');
   el.className = `split dir-${node.dir}`;
   el.dataset.split = node.id;
 
-  const a = document.createElement('div');
-  a.className = 'node';
   const g = document.createElement('div');
   g.className = 'gutter';
   g.tabIndex = 0;
   g.setAttribute('role', 'separator');
   g.setAttribute('aria-orientation', node.dir === 'h' ? 'vertical' : 'horizontal');
-  const b = document.createElement('div');
-  b.className = 'node';
-
-  el.append(a, g, b);
-  renderNode(node.c[0], a);
-  renderNode(node.c[1], b);
-  applyRatio(el, node.dir, node.ratio);
   g.setAttribute('aria-label', '拖拽调整分屏比例');
-  container.appendChild(el);
+
+  el.append(renderNode(node.c[0]), g, renderNode(node.c[1]));
+  applyRatio(el, node.dir, node.ratio);
+  return el;
 }
 
 /* ==================== 舞台渲染 ==================== */
@@ -799,7 +1209,7 @@ function renderStage() {
     b.classList.toggle('on', !state.maximized && b.dataset.preset === state.preset));
 
   if (state.mode === 'overview') return stage.appendChild(renderOverview());
-  if (state.mode === 'matrix') return stage.appendChild(renderMatrix());
+  if (state.mode === 'management') return stage.appendChild(renderManagement());
 
   const tree = buildTree(state.preset);
   if (!tree) {
@@ -808,7 +1218,7 @@ function renderStage() {
       <div class="note">从左轨启动一个应用，或点击「＋」安装新的 wasm-app。</div></div>`;
     return;
   }
-  renderNode(tree, stage);
+  stage.appendChild(renderNode(tree));
   document.getElementById('sbLayout').textContent =
     state.maximized ? '最大化面板' : `布局：${PRESET_NAME[state.preset]}`;
 }
@@ -839,45 +1249,614 @@ function renderOverview() {
   return wrap;
 }
 
-/* ---- 宿主自有面 2：权限矩阵（应用 × 权限位） ---- */
-function renderMatrix() {
-  document.getElementById('sbLayout').textContent = '权限矩阵';
-  const wrap = document.createElement('div');
-  wrap.className = 'mx';
-  const pending = APPS.filter(a => a.state === 'approval');
+/* ==================== 管理中心：服务器面 ====================
+   对应现有 /server 页的四个分区（状态 / 网络 / 高级配置 / 性能监控）。
+   注意：现有实现刻意不给「服务器」一级导航入口（产品决策：服务器常驻不可开关），
+   本方案把它放进管理中心的二级页 + 导航底部图标，比 URL 直达可发现性更好。 */
+function renderServerPanel() {
+  document.getElementById('sbLayout').textContent = '服务器管理';
+  const running = SERVER.status === 'running';
+  const up = SERVER.uptimeSec;
+  const fmtUp = `${Math.floor(up / 3600)}:${String(Math.floor(up / 60) % 60).padStart(2, '0')}:${String(up % 60).padStart(2, '0')}`;
+  const m = SERVER.metrics;
 
-  wrap.innerHTML = `
-    <div class="mx-head">${svg('hub', 16)}<span class="t">权限矩阵</span>
-      <span class="chip info">${APPS.length} 个应用 × ${ALL_PERMS.length} 个权限位</span>
-      <span style="flex:1"></span>
-      ${pending.length ? `<button class="btn" data-act="approveAll">${svg('check', 13)} 批量批准 ${pending.length} 个待审批</button>` : ''}
+  // 折线图：颜色读 token，随主题反色；面积填充用 color-mix 派生
+  const W = 600, H = 180, maxY = Math.max(...SERVER.history.sent, ...SERVER.history.recv) * 1.15;
+  const pts = arr => arr.map((v, i) => `${(i / (arr.length - 1)) * W},${H - (v / maxY) * H}`).join(' ');
+  const grid = [0, 0.5, 1].map(f =>
+    `<line class="ax" x1="0" y1="${H - f * H}" x2="${W}" y2="${H - f * H}"/>`).join('');
+
+  return `<div class="mgmt-pane">
+    <div class="blk"><div class="srv-head">
+      <span class="lamp-big">
+        <span class="sdot ${running ? 'running' : SERVER.status === 'starting' ? 'degraded' : 'dormant'}"></span>
+        <span class="t">${running ? '运行中' : SERVER.status === 'starting' ? '启动中' : '已停止'}</span>
+        ${running ? `<span class="up">${fmtUp}</span>` : ''}
+      </span>
+      <span class="stat3">
+        <div><div class="n">${m.connections}</div><div class="l">连接数</div></div>
+        <div><div class="n">${m.cpu}%</div><div class="l">CPU 占用</div></div>
+        <div><div class="n">${m.mem}<span style="font-size:var(--font-size-sm)"> MB</span></div><div class="l">内存占用</div></div>
+      </span>
+      <div class="op-row">
+        <button class="btn ghost" data-act="srvRestore">还原默认</button>
+        <button class="btn ghost" data-act="srvStop" ${running ? '' : 'disabled'}>${svgSolid('stop', 13)} 停止</button>
+        <button class="btn ghost" data-act="srvRestart" ${running ? '' : 'disabled'}>${svg('restart', 13)} 重启</button>
+        <button class="btn" data-act="srvStart" ${!running ? '' : 'disabled'}>${svg('play', 13)} 启动</button>
+      </div>
+    </div></div>
+
+    <div class="blk"><div class="blk-h"><span class="t">网络</span><span class="grow"></span>
+      ${SERVER.portDirty ? `<button class="mini" data-act="srvSavePort">保存端口</button>` : ''}</div>
+      <div class="blk-body">
+        <div class="grid3">
+          <div class="fld"><span class="lb">端口</span>
+            <input class="inp" type="number" min="1024" max="65535" value="${SERVER.port}"
+              data-act="srvPortInput" aria-label="服务器端口"/>
+            <span class="hint">修改端口后需重启服务器生效</span></div>
+          <div class="fld"><span class="lb">本地 IP</span>
+            <div class="inp" style="display:flex;align-items:center">${SERVER.localIps[0]}</div>
+            ${SERVER.localIps[1] ? `<span class="hint">${SERVER.localIps[1]}</span>` : ''}</div>
+          <div class="row-sw"><span class="lb">自启动</span>
+            <span class="sw"><input type="checkbox" ${SERVER.autoStart ? 'checked' : ''} data-act="srvAutoStart"
+              aria-label="服务器自启动"/><span class="track"></span><span class="knob"></span></span></div>
+        </div>
+      </div></div>
+
+    <div class="blk"><div class="blk-h"><span class="t">高级配置</span><span class="grow"></span>
+      <span class="chip">重启时生效</span></div>
+      <div class="blk-body">
+        <div class="grid3">
+          ${NET_FIELDS.map(f => f.type === 'bool'
+            ? `<div class="row-sw"><span class="lb">${f.label}</span>
+                <span class="sw"><input type="checkbox" ${SERVER.net[f.k] ? 'checked' : ''}
+                  data-act="srvNet" data-k="${f.k}" data-v="bool" aria-label="${f.label}"/>
+                  <span class="track"></span><span class="knob"></span></span></div>`
+            : `<div class="fld"><span class="lb">${f.label}${f.unit ? `（${f.unit}）` : ''}</span>
+                <input class="inp" type="number" min="${f.min}" max="${f.max}" value="${SERVER.net[f.k]}"
+                  data-act="srvNet" data-k="${f.k}" data-v="num" aria-label="${f.label}"/>
+                ${f.hint ? `<span class="hint">${f.hint}</span>` : ''}</div>`).join('')}
+        </div>
+        <div class="row-sw" style="margin-top:8px;background:transparent;border-style:dashed">
+          <span class="lb" style="color:var(--text-secondary)">性能监控采集
+            <span class="hint">（NetworkConfig 已有字段，现状 UI 无控件 —— 本方案补上）</span></span>
+          <span class="sw"><input type="checkbox" ${SERVER.net.metrics_enabled ? 'checked' : ''}
+            data-act="srvNet" data-k="metrics_enabled" data-v="bool" aria-label="性能监控采集"/>
+            <span class="track"></span><span class="knob"></span></span>
+        </div>
+      </div></div>
+
+    <div class="blk"><div class="blk-h"><span class="t">性能监控</span></div>
+      <div class="blk-body">
+        <div class="grid3" style="margin-bottom:10px">
+          <div class="fld"><span class="lb">运行时长</span><span class="mono" style="font-size:var(--font-size-lg)">${fmtUp}</span></div>
+          <div class="fld"><span class="lb">连接数</span><span class="mono" style="font-size:var(--font-size-lg)">${m.connections}</span></div>
+          <div class="fld"><span class="lb">总请求数</span><span class="mono" style="font-size:var(--font-size-lg)">${m.requests.toLocaleString()}</span></div>
+          <div class="fld"><span class="lb">CPU 占用</span><span class="mono" style="font-size:var(--font-size-lg)">${m.cpu}%</span></div>
+          <div class="fld"><span class="lb">内存占用</span><span class="mono" style="font-size:var(--font-size-lg)">${m.mem} MB</span></div>
+          <div class="fld"><span class="lb">请求速率</span><span class="mono" style="font-size:var(--font-size-lg)">${m.rps} req/s</span></div>
+        </div>
+        <svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img"
+          aria-label="WebSocket 收发速率时序图，最近 2 分钟">
+          ${grid}
+          <polygon points="0,${H} ${pts(SERVER.history.sent)} ${W},${H}"
+            fill="color-mix(in srgb, var(--color-primary) 10%, transparent)"/>
+          <polygon points="0,${H} ${pts(SERVER.history.recv)} ${W},${H}"
+            fill="color-mix(in srgb, var(--color-success) 10%, transparent)"/>
+          <polyline class="ln" points="${pts(SERVER.history.sent)}" stroke="var(--color-primary)"/>
+          <polyline class="ln" points="${pts(SERVER.history.recv)}" stroke="var(--color-success)"/>
+        </svg>
+        <div style="display:flex;gap:14px;margin-top:6px">
+          <span class="chip">WS 发送速率</span><span class="chip ok">WS 接收速率</span>
+          <span style="flex:1"></span><span class="note">2s × 60 点 = 2 分钟窗口 · 单位 msg/s</span>
+        </div>
+      </div></div>
+  </div>`;
+}
+
+/* ==================== 管理中心：设置面 ====================
+   对应现有 /settings 的分组体系：界面 100 / 链路加密 300 / 系统 500 /
+   日志 600（仅 DEV）/ 授权 700（跳管理中心「应用」页）/ 关于 9999。
+   退役槽位 200 与 400 保留不复用；插件贡献分组由插件自己追加。 */
+function renderSettingsPanel() {
+  document.getElementById('sbLayout').textContent = '设置';
+  const ui = SETTINGS.ui;
+  const lc = LINK_CRYPTO;
+  const sec = (title, inner, note) => `<div class="blk"><div class="blk-h"><span class="t">${title}</span></div>
+    <div class="blk-body">${inner}${note ? `<div class="note" style="margin-top:8px">${note}</div>` : ''}</div></div>`;
+
+  return `<div class="mgmt-pane"><div class="pane-scroll">
+    ${sec('界面设置', `
+      <div class="cfg-col"><span class="lb">主题</span>
+        <div class="seg" role="group" aria-label="主题">
+          ${[['light', '浅色模式'], ['dark', '深色模式'], ['system', '跟随系统']].map(([v, t]) =>
+            `<button class="${ui.theme === v ? 'on' : ''}" data-act="setTheme" data-v="${v}"
+              aria-pressed="${ui.theme === v}">${t}</button>`).join('')}
+        </div></div>
+      <div class="cfg-col"><span class="lb">主题色板（${PALETTES.length}）</span>
+        <div class="pal-grid">${PALETTES.map(p => `<button class="pal-card ${ui.theme_palette === p.id ? 'on' : ''}"
+          data-act="setPalette" data-v="${p.id}" aria-pressed="${ui.theme_palette === p.id}">
+          <span class="pal-sw">${p.sw.map(c => `<i style="background:${c}"></i>`).join('')}</span>
+          <span class="nm">${p.name}</span></button>`).join('')}</div></div>
+      <div class="cfg-col"><span class="lb">语言</span>
+        <div class="seg" role="group" aria-label="语言" style="max-width:280px">
+          ${[['zh-CN', '中文'], ['en', 'English']].map(([v, t]) =>
+            `<button class="${ui.language === v ? 'on' : ''}" data-act="setLang" data-v="${v}"
+              aria-pressed="${ui.language === v}">${t}</button>`).join('')}
+        </div></div>
+      <div class="cfg-col"><span class="lb">字体大小
+        <span style="color:var(--text-tertiary);margin-left:6px">当前 ${ui.font_size}px</span></span>
+        <input type="range" min="10" max="16" step="1" value="${ui.font_size}" data-act="setFont"
+          aria-label="字体大小"/>
+        <div class="size-tags">${[[10, '小'], [12, '正常'], [14, '大'], [16, '超大']].map(([v, t]) =>
+          `<button class="size-tag ${ui.font_size === v ? 'on' : ''}" data-act="setFont" data-v="${v}"
+            aria-pressed="${ui.font_size === v}">${t}</button>`).join('')}</div>
+        <span class="hint">Linux 桌面端额外乘 1.15；不采用 zoom（会破坏 xterm 鼠标坐标系）</span></div>
+      <div class="row-sw"><span class="lb">动画效果</span>
+        <span class="sw"><input type="checkbox" ${ui.animations_enabled ? 'checked' : ''} data-act="setAnim"
+          aria-label="动画效果"/><span class="track"></span><span class="knob"></span></span></div>`)}
+
+    ${sec('链路加密', `
+      <div class="row-sw ${lc.enabled ? '' : 'off'}"><span class="lb">启用链路加密</span>
+        <span class="sw risk"><input type="checkbox" ${lc.enabled ? 'checked' : ''} data-act="lc" data-k="enabled"
+          aria-label="启用链路加密"/><span class="track"></span><span class="knob"></span></span></div>
+      ${[['encrypt_http', '加密 HTTP 载荷'], ['encrypt_ws_terminal', '加密终端通道'],
+         ['encrypt_ws_event', '加密事件通道'], ['allow_plaintext_fallback', '允许明文回退']].map(([k, t]) => `
+        <div class="row-sw ${lc.enabled ? '' : 'off'}"><span class="lb" style="font-size:var(--font-size-sm)">${t}</span>
+          <span class="sw"><input type="checkbox" ${lc[k] ? 'checked' : ''} ${lc.enabled ? '' : 'disabled'}
+            data-act="lc" data-k="${k}" aria-label="${t}"/><span class="track"></span><span class="knob"></span></span></div>`).join('')}
+      <div class="cfg-col" style="border-top:1px solid var(--border)"><span class="lb">本机指纹（供双端人工比对）</span>
+        <div class="dlg-path">${lc.fingerprint}</div></div>`,
+      '主开关关闭时 4 个子开关一起禁用 —— 粒度收窄是显式动作；关闭「允许明文回退」即强加密模式，非环回未协商请求一律拒。')}
+
+    ${sec('系统设置', `
+      <div class="row-sw"><span class="lb">防止系统休眠<span class="hint">（允许屏幕熄灭）</span></span>
+        <span class="sw"><input type="checkbox" ${SETTINGS.network.prevent_sleep ? 'checked' : ''}
+          data-act="setSleep" aria-label="防止系统休眠"/><span class="track"></span><span class="knob"></span></span></div>
+      <div class="cfg-col" style="border-top:1px solid var(--border)"><span class="lb">默认端口</span>
+        <input class="inp" type="number" min="1024" max="65535" value="${SETTINGS.network.port}"
+          data-act="setDefPort" aria-label="默认端口" style="max-width:160px"/>
+        <span class="hint">服务器启动时使用，重启后生效</span></div>`)}
+
+    ${sec('日志设置（仅开发版显示）', `
+      <div class="cfg-col"><span class="lb">日志级别（即时热调，不重启不落盘）</span>
+        <div class="seg" role="group" aria-label="日志级别" style="max-width:320px">
+          ${LOG_LEVELS.map(l => `<button class="${LOG_SETTINGS.file_level === l ? 'on' : ''}"
+            data-act="logLevel" data-v="${l}" aria-pressed="${LOG_SETTINGS.file_level === l}">${l}</button>`).join('')}
+        </div></div>
+      <div class="grid3" style="margin-top:8px">
+        <div class="fld"><span class="lb">格式（重启生效）</span>
+          <select class="inp" data-act="logFmt" aria-label="日志格式（重启生效）"><option ${LOG_SETTINGS.format === 'text' ? 'selected' : ''}>text</option>
+            <option ${LOG_SETTINGS.format === 'json' ? 'selected' : ''}>json</option></select></div>
+        <div class="fld"><span class="lb">保留文件数（0 = 不限）</span>
+          <input class="inp" type="number" min="0" value="${LOG_SETTINGS.max_files}" data-act="logMaxFiles"
+            aria-label="保留文件数"/></div>
+        <div class="fld"><span class="lb">容量上限 MB（0 = 不限）</span>
+          <input class="inp" type="number" min="0" value="${LOG_SETTINGS.capacity_mb}" data-act="logCap"
+            aria-label="容量上限"/></div>
+      </div>
+      <div class="op-row" style="margin-top:8px">
+        <button class="btn ghost" data-act="logDir">${svg('folder', 13)} 打开日志目录</button>
+        <button class="btn" data-act="logSave">保存配置</button></div>`,
+      '正式版整段隐藏（后端能力保留）；release 构建的右键菜单也已禁用，便于截图比对。')}
+
+    <div class="blk"><div class="blk-h"><span class="t">应用授权</span></div>
+      <div class="blk-body">
+        <button class="row-sw" data-act="mgmtApps" style="width:100%;text-align:left">
+          ${svg('shield', 16)}<span class="lb">应用授权记录<span class="hint">（查看每个应用的文件与网络授权，管理免询问策略）</span></span>
+          <span class="chip">管理中心 · 应用</span></button></div></div>
+
+    ${sec('关于', `
+      <div class="row-sw" style="background:transparent;border:none">
+        <span class="lb"><b style="font-size:var(--font-size-lg)">WasmApp</b>
+          <span class="hint">v1.0.0-beta · WASM app runtime</span></span>
+        <span style="flex:1"></span>
+        <button class="btn ghost" data-act="gh">GitHub 仓库</button>
+        <button class="btn" data-act="checkUpdate">${svg('restart', 13)} 检查更新</button></div>`)}
+  </div></div>`;
+}
+
+/* ==================== 管理中心容器 ====================
+   三个二级页对应现有三条独立路由的合并：
+     应用   ← /plugins + /plugins/:id + /plugins/:id/config + /settings/authorization
+     服务器 ← /server（现状无导航入口，此处收进管理中心）
+     设置   ← /settings + /settings/authorization 的策略控件
+   合并理由：四页同属「管理」语义，分屏布局下不该占用多个面板。 */
+function renderManagement() {
+  const tabs = [
+    ['apps', 'shield', '应用'],
+    ['server', 'server', '服务器'],
+    ['settings', 'gear', '设置'],
+  ];
+  document.getElementById('sbLayout').textContent = '管理中心 · ' + tabs.find(t => t[0] === state.mgmtTab)[2];
+  const wrap = document.createElement('div');
+  wrap.className = 'mgmt';
+  wrap.innerHTML = `<div class="mgmt-tabs" role="tablist">
+      ${tabs.map(([k, ic, t]) => `<button role="tab" class="${state.mgmtTab === k ? 'on' : ''}"
+        data-act="mgmtTab" data-v="${k}" aria-selected="${state.mgmtTab === k}">
+        ${ICONS[ic](14)}${t}</button>`).join('')}
     </div>
-    <div class="mx-scroll"><table class="mx-tb">
-      <thead><tr><th class="app-col">应用 \\ 权限位</th>
-        ${ALL_PERMS.map(p => `<th><div class="mx-perm ${isRisk(p) ? 'risk' : ''}" title="${p}">${p}</div></th>`).join('')}
-      </tr></thead>
-      <tbody>${APPS.map(a => `<tr>
-        <th class="app-col"><div class="mx-app">${svg(a.icon, 14)}<span class="nm">${a.name}</span>
-          <span class="sdot ${a.state}"></span></div></th>
-        ${ALL_PERMS.map(p => {
-          const on = a.granted.includes(p);
-          const pend = on && a.state === 'approval';
-          return `<td><div class="mx-cell ${on ? 'on' : ''} ${isRisk(p) ? 'risk' : ''} ${pend ? 'pending' : ''}"
-            role="button" tabindex="0"
-            aria-pressed="${on}"
-            aria-label="${a.name} ${p} ${on ? '已授予' : '未授予'}"
-            data-act="toggle" data-app="${a.id}" data-perm="${p}"><span class="mark"></span></div></td>`;
-        }).join('')}
-      </tr>`).join('')}</tbody>
-    </table></div>
-    <div class="mx-foot">
-      <span class="lg"><span class="sdot running"></span>已授予</span>
-      <span class="lg"><span class="sdot approval"></span>待审批（未放行）</span>
-      <span class="lg"><span class="sdot error"></span>高危位：授予即等于在本机执行任意命令 / 读写主库</span>
-      <span style="flex:1"></span>
-      <span>点击单元格可切换授予状态（演示态；正式实现走授权策略真源 + 实例重启生效）</span>
-    </div>`;
+    <div class="mgmt-pane">${
+      state.mgmtTab === 'apps'
+        ? (state.cfgSel ? renderConfigView() : renderGovernance())
+        : state.mgmtTab === 'server' ? renderServerPanel() : renderSettingsPanel()
+    }</div>`;
   return wrap;
+}
+
+/* ==================== 应用配置面（schema 驱动） ====================
+   控件形态与现有 PluginConfigView 一致：
+     boolean → 行内开关（布局与其他类型不同）
+     string + enum → Select；string → text input
+     number + min/max → 自绘滑杆；number 无范围 → number input
+   存储走插件私有 kv（plugin_storage_get/set），不是主库。 */
+function renderConfigView() {
+  const a = byId[state.cfgSel];
+  const schema = CONFIG_DEMO[a.id];
+  document.getElementById('sbLayout').textContent = '应用配置 · ' + a.name;
+  const bar = `<div class="srv-head" style="padding:10px 12px">
+      <button class="btn ghost" data-act="cfgBack">${svg('x', 13)} 返回</button>
+      <span class="t" style="font-weight:600">${a.full}</span>
+      <span class="chip">${a.version}</span>
+      <span style="flex:1"></span>
+      <button class="btn ghost" data-act="cfgReset">重置</button>
+      <button class="btn" data-act="cfgSave">${svg('check', 13)} 保存</button>
+    </div>`;
+  const notActive = a.state === 'dormant';
+  if (!schema || !Object.keys(schema.properties).length) {
+    return bar + `<div class="empty" style="flex:1">${svg('gear', 24, 1.5)}
+      <div style="font-size:var(--font-size-lg);color:var(--text-secondary)">${a.full} — 无可用的配置项</div>
+      <div class="note">manifest 的 <code>contributes.configuration.properties</code> 为空。
+        现状四个 manifest 全部如此，配置面接线完整但产出为空。</div></div>`;
+  }
+  if (notActive) {
+    return bar + `<div class="empty" style="flex:1">${svg('warn', 24, 1.5)}
+      <div style="font-size:var(--font-size-lg);color:var(--text-secondary)">应用未激活，无法访问配置</div></div>`;
+  }
+  const rows = Object.entries(schema.properties).map(([k, f]) => {
+    if (f.type === 'boolean') {
+      return `<div class="cfg-row"><span class="lb">${f.title}</span>
+        <span class="sw"><input type="checkbox" ${f.default ? 'checked' : ''} data-act="cfgBool"
+          data-k="${k}" aria-label="${f.title}"/><span class="track"></span><span class="knob"></span></span></div>`;
+    }
+    let ctrl;
+    if (f.enum) {
+      ctrl = `<select class="inp" style="max-width:280px" data-act="cfgSet" data-k="${k}" aria-label="${f.title}">
+        ${f.enum.map(o => `<option ${o === f.default ? 'selected' : ''}>${o}</option>`).join('')}</select>`;
+    } else if (f.type === 'number' && f.minimum != null) {
+      const span = f.maximum - f.minimum;
+      const step = span >= 5 ? 1 : 0.1;
+      ctrl = `<input type="range" min="${f.minimum}" max="${f.maximum}" step="${step}" value="${f.default}"
+        data-act="cfgNum" data-k="${k}" aria-label="${f.title}"/>
+        <span class="mono" style="font-size:var(--font-size-sm);color:var(--text-tertiary)">${f.default}</span>`;
+    } else if (f.type === 'number') {
+      ctrl = `<input class="inp" type="number" value="${f.default}" data-act="cfgNum" data-k="${k}"
+        style="max-width:200px" aria-label="${f.title}"/>`;
+    } else {
+      ctrl = `<input class="inp" style="max-width:340px" value="${f.default}" data-act="cfgSet"
+        data-k="${k}" aria-label="${f.title}"/>`;
+    }
+    return `<div class="cfg-col"><span class="lb">${f.title}</span>${ctrl}</div>`;
+  }).join('');
+  return bar + `<div class="pane-scroll"><div class="blk"><div class="blk-h"><span class="t">Config</span></div>
+    <div class="blk-body" style="padding:4px 10px">${rows}</div></div>
+    <div class="blk"><div class="blk-h"><span class="t">Info</span></div>
+      <div class="blk-body">
+        <div class="kv"><b>ID</b><span>${a.pid}</span></div>
+        <div class="kv"><b>扩展路径</b><span>~/.bedcode/plugins/${a.id}</span></div>
+        <button class="mini" data-act="copyPath">${svg('file', 12)} 复制路径</button>
+      </div></div>
+    <div class="note">存储走插件私有 kv（<code>plugin_storage_get/set</code>），不进宿主主库。
+      保存需实例在运行态。</div></div>`;
+}
+
+/* ==================== 命令面板（Ctrl+Shift+P） ====================
+   现有实现无任何可见按钮、全靠快捷键唤起，是最容易在改版里丢掉的入口。
+   数据源 = 各 manifest contributes.commands 汇总 + 宿主动作。 */
+function allCommands() {
+  const out = [...HOST_COMMANDS];
+  for (const a of APPS) {
+    for (const id of (PLUGIN_COMMAND_TITLES[a.id] || [])) {
+      out.push({ id: `${a.id}.${id}`, title: id, src: a.name });
+    }
+  }
+  return out;
+}
+function renderPalette() {
+  const q = (state.paletteQ || '').toLowerCase();
+  const list = allCommands().filter(c => !q || c.title.toLowerCase().includes(q) || c.id.toLowerCase().includes(q));
+  const el = document.createElement('div');
+  el.className = 'ovl center-y';
+  el.innerHTML = `<div class="palette" role="dialog" aria-label="命令面板">
+    <div class="srch">${svg('search', 15)}
+      <input placeholder="搜索应用命令…" value="${state.paletteQ || ''}" data-act="paletteInput"
+        aria-label="搜索命令"/><kbd style="font-family:var(--mono);font-size:var(--font-size-xs);color:var(--text-tertiary)">Esc</kbd></div>
+    <div class="lst">
+      ${list.length ? list.map(c => `<button class="it ${c.id === state.paletteCur ? 'cur' : ''}"
+        data-act="runCmd" data-id="${c.id}">${svg('run', 13)}<span style="flex:1;min-width:0;text-align:left">${c.title}</span>
+        <span class="chip">${c.src}</span></button>`).join('')
+        : '<div class="empty">没有找到匹配的命令</div>'}
+    </div></div>`;
+  return el;
+}
+
+/* ==================== 全局弹窗层 ====================
+   现有宿主承载 6 类弹窗/遮罩，其中两类授权弹窗用 z-[9999] 强制浮在启停
+   LoadingOverlay(z-50) 之上（有回归锁）—— 本方案保留同一层级约定。 */
+function dlgShell(title, body, foot, wide) {
+  const el = document.createElement('div');
+  el.className = 'ovl center-y';
+  el.innerHTML = `<div class="dlg ${wide ? 'wide' : ''}" role="dialog" aria-modal="true" aria-label="${title}">
+    <div class="dlg-h">${svg('shield', 16)}<span class="t">${title}</span>
+      <button class="pact" data-act="closeDlg" aria-label="关闭">${svg('x', 14)}</button></div>
+    <div class="dlg-b">${body}</div>
+    <div class="dlg-f">${foot}</div></div>`;
+  return el;
+}
+
+function renderDialog() {
+  const d = state.dialog;
+  const f = (act, label, cls) => `<button class="btn ${cls || 'ghost'}" data-act="${act}">${label}</button>`;
+  if (d === 'fs') {
+    return dlgShell('文件系统授权', `
+      <div class="note">应用 <b>Agent Hub</b> 请求读写文件。</div>
+      <div class="dlg-path">~/.claude/skills</div>
+      <div class="row-sw"><span class="lb">操作集</span><span class="chip">读写</span>
+        <span class="chip info">勾选记住将按所在目录授权</span></div>
+      <div class="note warn">「记住」只在「按需询问」档出现；「总是询问」档下按钮变成「允许本次」。</div>`,
+      f('dlgNo', '拒绝') + f('dlgDeny', '以后都拒绝')
+      + `<label class="chk"><input type="checkbox" checked/> 记住此选择</label>`
+      + f('dlgYes', '允许', ''));
+  }
+  if (d === 'fs-picker') {
+    return dlgShell('文件系统授权', `
+      <div class="note">你刚在系统选择框中选中以下路径：</div>
+      <div class="dlg-path">/home/user/work/agent-configs</div>
+      <div class="row-sw"><span class="lb">操作集</span><span class="chip">读取</span></div>`,
+      f('dlgNo', '拒绝') + f('dlgDeny', '以后都拒绝') + f('dlgYes', '允许', ''));
+  }
+  if (d === 'fs-batch') {
+    return dlgShell('文件系统授权', `
+      <div class="note">应用 <b>Agent Hub</b> 请求读写文件。</div>
+      <div class="dlg-path" style="max-height:150px;overflow:auto">
+        ~/.agents/skills<br/>~/.claude/skills<br/>~/.pi/agent/skills<br/>~/.bedcode/agent-hub/runs</div>
+      <div class="note">批量请求折叠为列表，避免逐路径弹窗。</div>`,
+      f('dlgNo', '拒绝') + f('dlgDeny', '以后都拒绝') + f('dlgYes', '允许全部', ''));
+  }
+  if (d === 'network') {
+    return dlgShell('网络出站授权', `
+      <div class="note">应用 <b>AI Chatbox</b> 请求访问网络。</div>
+      <div class="dlg-path">https://api.deepseek.com</div>
+      <div class="note">只显示归一化 origin（scheme://host:port），不投 path/query，凭据不上屏。</div>`,
+      f('dlgDeny', '以后都拒绝') + f('dlgNo', '拒绝') + f('dlgYes', '允许', ''));
+  }
+  if (d === 'approval') {
+    const a = byId['agent-hub'];
+    const risks = a.granted.filter(isRisk);
+    return dlgShell('权限审批', `
+      <div class="note"><b>${a.full}</b> 首次启用前需要你确认它申请的权限（共 ${a.granted.length} 项）。</div>
+      <div class="blk-h"><span class="t">高危权限位（${risks.length}）</span></div>
+      <div class="risk-list">${risks.map(p => `<div class="risk-it"><span class="tt">${p}</span>
+        <span class="dd">一旦授予，即可在你的机器上执行任意命令</span></div>`).join('')}</div>
+      <div class="note">高危位不参与批量默认放行，需整单显式批准。批准集按内容哈希钉扎：文件改动后批准自动撤销。</div>`,
+      f('dlgNo', '取消') + f('dlgYes', '批准', ''), true);
+  }
+  if (d === 'exit') {
+    return dlgShell('确认退出', `
+      <div class="note warn">以下 3 个会话仍在运行，退出后将终止所有运行中的进程：</div>
+      <div class="risk-list" style="gap:4px">
+        <div class="rec"><span class="sdot running"></span><span class="tg">bash · ~/projects/bedcode</span></div>
+        <div class="rec"><span class="sdot running"></span><span class="tg">zsh · ~/work/sandbox</span></div>
+        <div class="rec"><span class="sdot running"></span><span class="tg">fish · ~/</span></div>
+      </div>
+      <div class="note">载荷由会话插件登记，宿主只读 id/name/status 三字段，不解析业务语义。</div>`,
+      f('dlgNo', '取消') + `<button class="btn danger-fill" data-act="dlgForce">强制退出</button>`);
+  }
+  if (d === 'uninstall') {
+    const a = byId[state.dlgApp || 'file-transfer'];
+    return dlgShell('卸载应用', `
+      <div class="note">确定要卸载 <b>${a.full}</b> 吗？</div>
+      <div class="note danger">将删除安装目录、插件私有存储与启用状态，<b>不可恢复</b>。</div>
+      <div class="row-sw"><span class="lb">当前状态</span>
+        <span class="chip ${a.state === 'dormant' ? '' : 'ok'}">${STATE_TEXT[a.state]}</span></div>`,
+      f('dlgNo', '取消') + `<button class="btn danger-fill" data-act="dlgUninstall">卸载</button>`);
+  }
+  if (d === 'allow-confirm') {
+    const a = byId[state.dlgApp];
+    const res = state.dlgRes;
+    return dlgShell('切换到「始终允许」', `
+      <div class="note warn"><b>${a.full}</b> 对 <b>${RESOURCE_LABEL[res]}</b> 切换到最高风险档位。</div>
+      <div class="note">切档<b>不会一次性授予全部权限</b>：只有实际访问到的目标才会逐步累积落账。
+        你可以随时在下方记录列表逐条取消。</div>
+      <div class="note">已累积的记录不受本次切档影响，需要收紧请逐条撤销。</div>`,
+      f('dlgNo', '取消') + f('dlgYes', '确认切换', ''));
+  }
+  if (d === 'port-restart') {
+    return dlgShell('保存端口', `
+      <div class="note">端口已保存到 <b>${SERVER.port}</b>，但运行中的服务仍在监听旧端口。</div>
+      <div class="note">立即重启即刻生效；稍后重启则本次启动沿用旧端口。</div>`,
+      f('dlgNo', '稍后重启') + f('dlgYes', '立即重启', ''));
+  }
+  if (d === 'install') {
+    return dlgShell('加载应用', `
+      <div class="note">从本地 zip 应用包安装（<code>dist/plugin-packages</code> 产物）。</div>
+      <div class="dlg-path" style="text-align:center;padding:18px;border-style:dashed">从文件安装…</div>
+      <div class="note">也可把应用包放入 <code>~/.bedcode/plugins/</code> 目录由宿主扫描。</div>`,
+      f('dlgNo', '取消') + f('dlgYes', '选择文件…', ''));
+  }
+  if (d === 'palette-demo') {
+    const dlg = [
+      ['fs', '文件系统授权 · 单路径'], ['fs-picker', '文件系统授权 · 选择框来源'],
+      ['fs-batch', '文件系统授权 · 批量列表'], ['network', '网络出站授权'],
+      ['approval', '权限审批'], ['exit', '退出确认'], ['port-restart', '端口重启确认'],
+    ];
+    const el = document.createElement('div');
+    el.className = 'ovl center-y';
+    el.innerHTML = `<div class="dlg wide" role="dialog" aria-label="全局弹窗目录">
+      <div class="dlg-h">${svg('grid', 16)}<span class="t">全局弹窗目录</span>
+        <button class="pact" data-act="closeDlg" aria-label="关闭">${svg('x', 14)}</button></div>
+      <div class="dlg-b"><div class="note">现有宿主承载 6 类弹窗/遮罩；两类授权弹窗用 <code>z-[9999]</code>
+        强制浮在启停 LoadingOverlay（z-50）之上（有回归锁）。下面逐个可点开。</div>
+        <div class="grid3" style="margin-top:4px">${dlg.map(([k, t]) =>
+          `<button class="mini" data-act="dlgDemo" data-v="${k}">${t}</button>`).join('')}</div></div>
+      <div class="dlg-f">${f('closeDlg', '关闭')}</div></div>`;
+    return el;
+  }
+  return null;
+}
+
+/* ==================== 启动屏 ====================
+   现有实现最低展示 900ms、boot log 逐行延迟入场；演示态可手动开关。 */
+function renderBoot() {
+  const lines = [
+    ['$ wasmapp', 'prompt'],
+    ['✓ wasmtime 48 · 组件模型', 'ok'],
+    ['✓ 加载 5 个 wasm 应用', 'ok'],
+    ['✓ host 模块装配（pty · http · ws · peer · mdns · crypto）', 'ok'],
+    ['✓ 服务器 :8765 就绪', 'ok'],
+  ];
+  const el = document.createElement('div');
+  el.className = 'boot';
+  el.innerHTML = `<div class="glyph">W</div>
+    <div class="line">${lines[0][0]}</div>
+    <div class="log">${lines.slice(1).map(l => `<div><span class="ok">✓</span><span>${l[0].slice(2)}</span></div>`).join('')}</div>
+    <div class="bar"><i style="width:100%"></i></div>
+    <div class="line" style="color:var(--text-tertiary)">WasmApp v1.0.0-beta · WASM app runtime</div>
+    <button class="mini" data-act="bootDone" style="margin-top:8px">跳过启动屏</button>`;
+  return el;
+}
+
+/* ---- 宿主自有面 2：应用治理（启停 · 卸载 · 单应用授权详情 · 授权策略） ----
+   每个交互都对应一条真实宿主命令：
+     toggleEnable → plugin_activate / plugin_deactivate（启用方向先 plugin_preauthorize）
+     approve      → plugin_approve（返回实际授予的权限位清单）
+     uninstall    → plugin_uninstall（所有来源均可卸载）
+     setStrategy  → plugin_auth_set_strategy(pluginId, resource, strategy)
+     revoke       → plugin_auth_revoke
+     install      → plugin_install_from_file
+   列表排序按授权风险（always_allow 最宽松 = 风险最高，置顶），对齐 sortAppsByRisk。 */
+function renderGovernance() {
+  document.getElementById('sbLayout').textContent = '应用治理';
+  const sorted = [...APPS].sort((x, y) => appRiskRank(x) - appRiskRank(y) || x.name.localeCompare(y.name));
+  const sel = byId[state.govSel] || sorted[0];
+
+  const row = a => {
+    const on = a.state === 'running' || a.state === 'degraded' || a.state === 'approval';
+    return `<button class="gov-row ${a.id === sel.id ? 'on' : ''}" data-act="govSel" data-app="${a.id}"
+        aria-pressed="${a.id === sel.id}">
+      <span class="sdot ${a.state}"></span>
+      <span class="nm"><b>${a.full}</b>
+        <span>v${a.version} · ${APP_SOURCE_LABEL[a.source] || a.source} · ${a.size}</span></span>
+      <span class="sw" role="switch" aria-checked="${on}" aria-label="${a.name} 运行开关">
+        <span class="track"></span><span class="knob" style="${on ? 'transform:translateX(13px)' : ''}"></span>
+      </span>
+    </button>`;
+  };
+
+  const recRow = r => {
+    const idx = sel.records.indexOf(r);
+    const auto = r.source === 'always_allow' && r.effect === 'allow';
+    return `<div class="rec ${r.effect === 'deny' ? 'deny' : ''} ${auto ? 'unconfirmed' : ''}">
+      <span class="chip">${RESOURCE_LABEL[r.resource]}</span>
+      <span class="tg" title="${r.target}">${r.target}</span>
+      <span class="chip">${opsLabel(r.ops)}</span>
+      ${r.prefixMatch && r.effect === 'allow' ? '<span class="chip info" title="前缀匹配：子路径一并放行">前缀</span>' : ''}
+      ${auto ? '<span class="chip warn" title="策略层自动放行，用户未逐条确认">未经确认</span>' : ''}
+      <button class="mini danger" data-act="revoke" data-app="${sel.id}" data-idx="${idx}"
+        title="撤销该授权记录">撤销</button>
+    </div>`;
+  };
+
+  const groups = [
+    { t: '用户已授权', kind: 'user', list: userGranted(sel),
+      note: '用户在授权弹窗逐条确认的记录（含旧版遗留回退）。撤销后下次访问该目标会重新询问。' },
+    { t: '免询问自动放行', kind: 'auto', list: autoAllowed(sel),
+      note: '策略档位为「始终允许」时由授权层自动放行并落账，用户未逐条确认过——故标「未经确认」。' },
+    { t: '内置免询问', kind: 'fp', list: sel.firstPartyDirs,
+      note: '第一方免询问清单的只读投影（宿主数据真源，不落在授权记录表里，故无撤销入口）。' },
+    { t: '硬拒绝', kind: 'deny', list: denied(sel),
+      note: '用户明确拒绝过的目标；命中即拒，不回退到询问。' },
+  ];
+
+  return `
+  <div class="gov">
+      <div class="gov-list">
+        <div class="gov-list-head"><span class="t">已安装应用</span>
+          <span class="chip">${APPS.length}</span>
+          <button class="mini" data-act="install">${svg('plus', 12)} 安装</button>
+        </div>
+        <div class="gov-scroll">${sorted.map(row).join('')}</div>
+        <div class="gov-list-head" style="border-bottom:none;border-top:1px solid var(--border);flex-direction:column;align-items:flex-start;gap:4px">
+          <div class="note">列表按授权风险排序：「始终允许」的应用置顶。</div>
+        </div>
+      </div>
+
+      <div class="gov-detail">
+        <div class="gov-detail-head">${svg(sel.icon, 18)}
+          <span class="nm">${sel.full}</span>
+          <span class="chip ${sel.state === 'running' ? 'ok' : sel.state === 'approval' ? 'warn' : ''}">${STATE_TEXT[sel.state]}</span>
+          <span style="flex:1"></span>
+          ${sel.state === 'approval'
+            ? `<button class="btn" data-act="approve" data-app="${sel.id}">${svg('check', 13)} 批准并启动</button>`
+            : `<button class="btn ghost" data-act="toggleEnable" data-app="${sel.id}">${sel.state === 'dormant' ? svg('play', 13) + ' 启用' : svg('stop', 13) + ' 停用'}</button>`}
+          <button class="btn ghost" data-act="cfgOpen" data-app="${sel.id}">${svg('gear', 13)} 配置</button>
+          <button class="btn ghost danger-outline" data-act="uninstall" data-app="${sel.id}" ${sel.state !== 'dormant' ? 'disabled title="请先停用应用后再卸载"' : ''}>${svg('trash', 13)} 卸载</button>
+        </div>
+
+        <div class="gov-scroll-y">
+          <div class="blk"><div class="blk-h"><span class="t">应用信息</span></div>
+            <div class="blk-body">
+              <div class="kv"><b>应用 ID</b><span>${sel.id}</span></div>
+              <div class="kv"><b>插件 ID</b><span>${sel.pid}</span></div>
+              <div class="kv"><b>版本 / 来源</b><span>${sel.version} · ${APP_SOURCE_LABEL[sel.source] || sel.source}</span></div>
+              <div class="kv"><b>占用空间</b><span>${sel.size}</span></div>
+              <div class="kv"><b>扩展点</b><span>${sel.views} 视图 / ${sel.commands} 命令</span></div>
+            </div>
+          </div>
+
+          <div class="blk"><div class="blk-h"><span class="t">授权策略</span><span class="grow"></span>
+            <span class="chip info">plugin_auth_set_strategy</span></div>
+            <div class="blk-body">
+              ${Object.entries(sel.strategies).map(([res, s]) => `
+                <div class="strat-row"><span class="lb">${RESOURCE_LABEL[res]}</span>
+                  <div class="seg" role="group" aria-label="${RESOURCE_LABEL[res]} 授权策略">
+                    ${STRATEGIES.map(t => `<button class="${t === s ? 'on' : ''} ${t === s && t === 'always_allow' ? 'risky' : ''}"
+                      data-act="setStrategy" data-app="${sel.id}" data-res="${res}" data-strategy="${t}"
+                      aria-pressed="${t === s}">${STRATEGY_LABEL[t]}</button>`).join('')}
+                  </div>
+                </div>`).join('')}
+              <div class="note">策略决定「问不问 / 放不放」，真源在宿主授权策略层；前端只提交档位，不自行判定放行。
+                档位变化<b>不追溯</b>已落账记录——要收紧得按记录逐条撤销。</div>
+            </div>
+          </div>
+
+          ${groups.map(g => `
+            <div class="blk"><div class="blk-h"><span class="t">${g.t}</span>
+              <span class="chip ${g.kind === 'deny' && g.list.length ? 'danger' : g.kind === 'auto' && g.list.length ? 'warn' : ''}">${g.list.length}</span>
+              <span class="grow"></span></div>
+              <div class="blk-body">
+                ${g.list.length
+                  ? (g.kind === 'fp'
+                      ? g.list.map(e => `<div class="rec"><span class="chip">目录</span><span class="tg">${fpLabel(e)}</span>
+                          <span class="chip">${e.kind === 'home' ? '家目录前缀' : '项目目录段'}</span></div>`).join('')
+                      : g.list.map(recRow).join(''))
+                  : `<div class="note">暂无</div>`}
+                <div class="note" style="margin-top:7px">${g.note}</div>
+              </div>
+            </div>`).join('')}
+
+          <div class="blk"><div class="blk-h"><span class="t">manifest 声明的权限位</span><span class="grow"></span>
+            <span class="chip">${sel.granted.length} 位</span></div>
+            <div class="blk-body">
+              <div class="ov-perm">${sel.granted.map(p => `<span class="pill ${isRisk(p) ? 'risk' : ''}">${p}</span>`).join('')}</div>
+              ${sel.granted.filter(isRisk).length ? `<div class="note danger" style="margin-top:7px">
+                含 ${sel.granted.filter(isRisk).length} 个高危位：授予即等于在本机执行任意命令 / 向终端注入输入 / 读写主库。
+                这类权限在<b>加载期</b>由 manifest 校验与审批门整单裁决，运行期<b>没有逐位开关</b>。</div>` : ''}
+            </div>
+          </div>
+        </div>
+      </div>
+  </div>`;
 }
 
 /* ==================== 左轨 ==================== */
@@ -886,24 +1865,40 @@ function renderRail() {
   box.innerHTML = '';
   for (const a of APPS) {
     const b = document.createElement('button');
+    // pluginType === 'rust' 的应用「始终启用」：不提供开关（沿用现有约定）
+    const always = a.pluginType === 'rust';
     b.className = 'ic-btn' + (a.state === 'dormant' ? ' dormant' : '');
-    b.title = `${a.full} · ${STATE_TEXT[a.state]}`;
+    b.title = `${a.full} · ${STATE_TEXT[a.state]}${always ? ' · 始终启用' : ''}`;
     b.setAttribute('aria-label', b.title);
-    b.dataset.act = 'toggleApp'; b.dataset.app = a.id;
-    const inWs = a.state !== 'dormant' && (state.mode === 'workspace');
-    if (inWs && state.active === a.id) b.classList.add('on');
-    if (a.state === 'approval') b.innerHTML = `${svg(a.icon, 17)}<span class="dot approval"></span><span class="badge-n">!</span>`;
-    else b.innerHTML = `${svg(a.icon, 17)}<span class="dot ${a.state}"></span>`;
+    b.dataset.act = always ? 'noop' : 'toggleApp';
+    b.dataset.app = a.id;
+    if (state.mode === 'workspace' && state.active === a.id && a.state !== 'dormant') b.classList.add('on');
+    const badge = a.state === 'approval' ? '<span class="badge-n">!</span>' : '';
+    const dot = always ? '' : `<span class="dot ${a.state}"></span>`;
+    b.innerHTML = `<span class="ic">${svg(a.icon, 17)}${dot}${badge}</span><span class="rl">${a.name}</span>`;
     box.appendChild(b);
   }
-  ['navWorkspace', 'navOverview', 'navMatrix'].forEach((id, i) => {
-    const modes = ['workspace', 'overview', 'matrix'];
-    document.getElementById(id).classList.toggle('on', state.mode === modes[i]);
-  });
+  const modes = { navWorkspace: 'workspace', navOverview: 'overview', navManagement: 'management' };
+  for (const [id, m] of Object.entries(modes)) {
+    document.getElementById(id).classList.toggle('on', state.mode === m);
+  }
+  // 服务状态灯：5s 轮询 get_server_status，折叠态时随导航一并隐藏
+  const dot = document.getElementById('lampDot');
+  dot.className = 'sdot ' + (SERVER.status === 'running' ? 'running' : SERVER.status === 'starting' ? 'degraded' : 'dormant');
+  document.getElementById('lampTxt').textContent =
+    SERVER.status === 'running' ? '服务运行中' : SERVER.status === 'starting' ? '服务启动中' : '服务已停止';
+  // 导航宽度 / 折叠态
+  const rail = document.getElementById('rail');
+  rail.dataset.collapsed = state.railCollapsed ? '1' : '0';
+  document.documentElement.style.setProperty('--rail-w', (state.railCollapsed ? 56 : state.railW) + 'px');
 }
 
 /* ==================== 检查器 ==================== */
 function renderInspector() {
+  const insp = document.querySelector('.inspector');
+  insp.dataset.open = state.inspectorOpen ? '1' : '0';
+  const tb = document.getElementById('btnInspector');
+  tb.setAttribute('aria-pressed', String(state.inspectorOpen));
   document.querySelectorAll('.insp-tab').forEach(t => {
     const on = t.dataset.itab === state.inspTab;
     t.classList.toggle('on', on);
@@ -912,7 +1907,7 @@ function renderInspector() {
   const body = document.getElementById('inspBody');
   const a = byId[state.active];
   body.innerHTML = state.inspTab === 'instance' ? inspInstance(a)
-    : state.inspTab === 'perm' ? inspPerm(a) : inspChan(a);
+    : state.inspTab === 'auth' ? inspAuth(a) : inspChan(a);
 }
 
 function inspInstance(a) {
@@ -922,7 +1917,7 @@ function inspInstance(a) {
     <div><div class="sec-t">实例</div>
       <div class="kv"><b>应用</b><span>${a.id}</span></div>
       <div class="kv"><b>插件 ID</b><span>${a.pid}</span></div>
-      <div class="kv"><b>状态</b><span style="color:var(--color-${a.state === 'running' ? 'success' : a.state === 'approval' ? 'warning' : 'info'})">${STATE_TEXT[a.state]}</span></div>
+      <div class="kv"><b>状态</b><span style="color:var(--color-${a.state === 'running' ? 'success' : a.state === 'approval' || a.state === 'degraded' ? 'warning' : 'info'})">${STATE_TEXT[a.state]}</span></div>
       <div class="kv"><b>版本</b><span>${a.version}</span></div>
       <div class="kv"><b>运行时</b><span>wasmtime 48</span></div>
     </div>
@@ -944,40 +1939,72 @@ function inspInstance(a) {
     </div>
     <div class="rule"></div>
     <div style="display:flex;flex-direction:column;gap:6px">
-      <button class="btn wide" data-act="matrix">${svg('hub', 13)} 打开权限矩阵</button>
       ${a.state === 'dormant'
-        ? `<button class="btn wide ghost" data-act="start" data-app="${a.id}">${svg('play', 13)} 启动实例</button>`
-        : `<button class="btn wide ghost" data-act="pop" data-app="${a.id}">${svg('pop', 13)} 剥出独立窗口</button>
-           <button class="btn wide ghost danger" data-act="close" data-app="${a.id}">${svg('stop', 13)} 停用实例</button>`}
+        ? `<button class="btn wide" data-act="start" data-app="${a.id}">${svg('play', 13)} 启动实例</button>`
+        : `<button class="btn wide ghost" data-act="stop" data-app="${a.id}">${svgSolid('stop', 13)} 停用实例</button>`}
+      <button class="btn wide ghost" data-act="pop" data-app="${a.id}">${svg('pop', 13)} 剥出独立窗口</button>
+      <button class="btn wide ghost" data-act="governance" data-app="${a.id}">${svg('shield', 13)} 授权与治理</button>
     </div>
-    ${risk.length ? `<div class="note danger">${svg('warn', 12)} 持有 ${risk.length} 个高危权限位：${risk.join(' · ')}</div>` : ''}`;
+    ${risk.length ? `<div class="callout danger">${svg('warn', 13)}
+        <span>持有 ${risk.length} 个高危权限位：${risk.join(' · ')}</span></div>` : ''}`;
 }
 
-function inspPerm(a) {
-  const sorted = [...a.granted].sort((x, y) => (isRisk(y) - isRisk(x)) || x.localeCompare(y));
-  return `
-    <div><div class="sec-t">权限面 · ${a.name}</div>
-      <div class="note">授予/撤销演示态。正式实现：manifest 声明 → 加载期校验 → 审批门 → <code>host-*</code> 原语逐次过闸门。</div>
-    </div>
-    <div class="rule"></div>
-    <div style="display:flex;flex-direction:column;gap:5px">
-      ${sorted.map(p => `
-        <label class="perm ${isRisk(p) ? 'risk' : ''}">
-          <span class="sw ${isRisk(p) ? 'risk' : ''}">
-            <input type="checkbox" checked data-act="toggle" data-app="${a.id}" data-perm="${p}"
-              aria-label="${p} ${isRisk(p) ? '高危权限位' : ''}"/>
-            <span class="track"></span><span class="knob"></span>
-          </span>
-          <span class="code">${p}</span>
-          ${isRisk(p) ? `<span class="chip danger">高危</span>` : ''}
-        </label>`).join('')}
-    </div>
-    <div class="rule"></div>
-    <div class="note ${a.granted.filter(isRisk).length ? 'danger' : ''}">
-      高危位判据：授予即等于在本机执行任意命令（<code>pty:spawn</code> / <code>process:run</code>）、
-      向终端注入输入（<code>terminal:input</code>）或读写主库（<code>database:main</code>）。
-      高危位不参与批量默认放行，需整单显式批准。
+/**
+ * 检查器 › 授权 —— 当前活动应用的授权切面
+ *
+ * 只展示真实存在的三样东西，与 src/utils/authPolicy.ts 的读模型同构：
+ *   ① 两类资源的策略档位（可提交，走 plugin_auth_set_strategy）
+ *   ② 四分区授权记录（可撤销，走 plugin_auth_revoke）
+ *   ③ 内置免询问项（只读投影，无撤销入口）
+ * manifest 权限位是**加载期**裁决的声明，运行期不提供逐位开关——故这里只读展示。
+ */
+function inspAuth(a) {
+  const granted = userGranted(a), auto = autoAllowed(a), deny = denied(a);
+  const rec = r => {
+    const autoRec = r.source === 'always_allow' && r.effect === 'allow';
+    return `<div class="rec ${r.effect === 'deny' ? 'deny' : ''} ${autoRec ? 'unconfirmed' : ''}">
+      <span class="tg" title="${r.target}">${r.target}</span>
+      <span class="chip">${opsLabel(r.ops)}</span>
+      ${autoRec ? '<span class="chip warn">未经确认</span>' : ''}
+      <button class="mini danger" data-act="revoke" data-app="${a.id}" data-idx="${a.records.indexOf(r)}">撤销</button>
     </div>`;
+  };
+  const sec = (t, n, inner, note, tone) => `<div class="blk">
+      <div class="blk-h"><span class="t">${t}</span><span class="chip ${tone || ''}">${n}</span></div>
+      <div class="blk-body">${inner || '<div class="note">暂无</div>'}
+        ${note ? `<div class="note" style="margin-top:7px">${note}</div>` : ''}</div></div>`;
+
+  return `
+    <div class="blk"><div class="blk-h"><span class="t">授权策略</span></div>
+      <div class="blk-body">
+        ${Object.entries(a.strategies).map(([res, s]) => `
+          <div class="strat-row"><span class="lb">${RESOURCE_LABEL[res]}</span>
+            <div class="seg" role="group" aria-label="${RESOURCE_LABEL[res]} 授权策略">
+              ${STRATEGIES.map(t => `<button class="${t === s ? 'on' : ''} ${t === s && t === 'always_allow' ? 'risky' : ''}"
+                data-act="setStrategy" data-app="${a.id}" data-res="${res}" data-strategy="${t}"
+                aria-pressed="${t === s}">${STRATEGY_LABEL[t]}</button>`).join('')}
+            </div></div>`).join('')}
+      </div></div>
+
+    ${sec('用户已授权', granted.length, granted.map(rec).join(''), '逐条确认过；撤销后下次访问重新询问。')}
+    ${sec('免询问自动放行', auto.length, auto.map(rec).join(''),
+      '策略「始终允许」自动落账，用户未逐条确认。', auto.length ? 'warn' : '')}
+    ${sec('内置免询问', a.firstPartyDirs.length,
+      a.firstPartyDirs.map(e => `<div class="rec"><span class="tg">${fpLabel(e)}</span>
+        <span class="chip">${e.kind === 'home' ? '家目录前缀' : '项目目录段'}</span></div>`).join(''),
+      '第一方清单只读投影，无撤销入口。')}
+    ${sec('硬拒绝', deny.length, deny.map(rec).join(''), '命中即拒，不回退询问。', deny.length ? 'danger' : '')}
+
+    <div class="blk"><div class="blk-h"><span class="t">manifest 权限位</span></div>
+      <div class="blk-body">
+        <div class="ov-perm">${a.granted.filter(isRisk).map(p => `<span class="pill risk">${p}</span>`).join('')}
+          ${a.granted.filter(p => !isRisk(p)).slice(0, 8).map(p => `<span class="pill">${p}</span>`).join('')}
+          ${a.granted.length > 8 ? `<span class="pill">+${a.granted.length - 8 - a.granted.filter(isRisk).length}</span>` : ''}</div>
+        ${a.granted.filter(isRisk).length ? `<div class="note danger" style="margin-top:7px">
+          ${a.granted.filter(isRisk).length} 个高危位在<b>加载期</b>整单裁决，运行期无逐位开关。</div>` : ''}
+      </div></div>
+
+    <button class="btn wide ghost" data-act="governance" data-app="${a.id}">${svg('hub', 13)} 在应用治理中查看全部</button>`;
 }
 
 function inspChan(a) {
@@ -1012,7 +2039,7 @@ function inspChan(a) {
 
 /* ==================== 状态栏 ==================== */
 function renderStatus() {
-  const run = APPS.filter(a => a.state === 'running').length;
+  const run = APPS.filter(a => a.state === 'running' || a.state === 'degraded').length;
   const pend = APPS.filter(a => a.state === 'approval').length;
   const dorm = APPS.filter(a => a.state === 'dormant').length;
   document.getElementById('sbApps').textContent =
@@ -1020,13 +2047,31 @@ function renderStatus() {
   document.getElementById('sbApproval').innerHTML = pend
     ? `<span class="sdot approval"></span>${pend} 个待审批`
     : '';
-  document.getElementById('sbBus').textContent = String(6 + run * 2);
+  // 真实指标源：get_server_metrics（连接数 / 请求速率），非虚构值
+  document.getElementById('sbConn').textContent = String(SERVER.metrics.connections);
+  document.getElementById('sbReq').textContent = String(SERVER.metrics.rps);
 }
 
 const PRESET_NAME = { single: '单窗', focus: '主从', thirds: '三栏', columns: '双栏网格', rows: '横排网格' };
 
 function renderAll() {
-  renderRail(); renderStage(); renderInspector(); renderStatus();
+  renderRail(); renderStage(); renderInspector(); renderStatus(); renderOverlays();
+  // 标题栏「当前位置」指示：让用户始终知道自己在哪（评审批注不进产品栏）
+  const ctx = { workspace: '工作区', overview: '应用总览', management: '管理中心' }[state.mode];
+  document.getElementById('brandCtx').textContent =
+    state.mode === 'management' && state.mgmtTab !== 'apps'
+      ? `管理中心 · ${{ server: '服务器', settings: '设置' }[state.mgmtTab]}`
+      : (state.cfgSel ? '应用配置' : ctx);
+}
+
+/** 覆盖层：启动屏 → 命令面板 → 全局弹窗（后者 z 最高，压住前者） */
+function renderOverlays() {
+  const box = document.getElementById('overlays');
+  box.innerHTML = '';
+  if (state.boot) box.appendChild(renderBoot());
+  if (state.paletteOpen) box.appendChild(renderPalette());
+  const d = renderDialog();
+  if (d) box.appendChild(d);
 }
 
 /* ==================== 交互 ==================== */
@@ -1049,15 +2094,6 @@ function openApp(id) {
   renderAll();
 }
 
-function togglePerm(appId, perm) {
-  const a = byId[appId];
-  const i = a.granted.indexOf(perm);
-  if (i >= 0) { a.granted.splice(i, 1); toast(`已撤销 ${a.name} 的 ${perm}`); }
-  else { a.granted.push(perm); toast(`已授予 ${a.name} 的 ${perm}${isRisk(perm) ? '（高危位，需重启实例生效）' : ''}`); }
-  a.granted.sort();
-  renderAll();
-}
-
 document.addEventListener('click', e => {
   const t = e.target.closest('[data-act],[data-preset],[data-itab],[data-app]');
   if (!t) return;
@@ -1066,9 +2102,11 @@ document.addEventListener('click', e => {
   if (t.dataset.itab) { state.inspTab = t.dataset.itab; return renderInspector(); }
 
   const act = t.dataset.act, id = t.dataset.app;
+  if (act === 'noop') return;
   switch (act) {
     case 'toggleApp': {
       const a = byId[id];
+      if (state.hidden && state.hidden.has(id)) { state.hidden.delete(id); return openApp(id); }
       if (a.state === 'dormant') return openApp(id);
       if (state.active === id && state.mode === 'workspace' && state.maximized === id) {
         state.maximized = null; renderAll(); return;
@@ -1078,37 +2116,255 @@ document.addEventListener('click', e => {
     case 'open': return openApp(id);
     case 'focus': state.active = id; state.maximized = id; return renderAll();
     case 'pop': toast(`${byId[id].full} → 剥出为独立窗口（/plugin/window/:id/:viewId）`); return;
-    case 'close': {
+    case 'close': {                      // 关面板：回收工作区槽位，实例继续运行
+      const a = byId[id];
+      state.hidden = state.hidden || new Set();
+      state.hidden.add(id);
+      if (state.active === id) state.active = runningIds().find(x => x !== id) || id;
+      if (state.maximized === id) state.maximized = null;
+      toast(`${a.full} 面板已关闭（实例仍在运行）`);
+      return renderAll();
+    }
+    case 'stop': {                       // 停用实例：回收运行资源
       const a = byId[id];
       a.state = 'dormant'; a.cpu = 0; a.mem = 0;
+      state.hidden && state.hidden.delete(id);
       if (state.active === id) state.active = (runningIds()[0] || id);
       if (state.maximized === id) state.maximized = null;
       toast(`${a.full} 实例已停用`);
       return renderAll();
     }
     case 'start': return openApp(id);
-    case 'approve':
-    case 'approveAll': {
-      APPS.filter(a => a.state === 'approval').forEach(a => { a.state = 'running'; a.cpu = 3; a.mem = 38; });
-      toast('已批准并启动，实例进入运行态');
+    case 'approve': {
+      const a = byId[id];
+      if (!a || a.state !== 'approval') return;
+      a.state = 'running'; a.cpu = 3; a.mem = 38;
+      toast(`${a.full} 已批准并启动（整单批准，高危位一并生效）`);
       return renderAll();
     }
-    case 'matrix': state.mode = 'matrix'; return renderAll();
-    case 'toggle': {
-      // 矩阵单元格 / 检查器开关：拦截 label 默认行为避免双触发
-      e.preventDefault();
-      return togglePerm(id, t.dataset.perm);
+    case 'governance': case 'mgmtApps':
+      state.mode = 'management'; state.mgmtTab = 'apps'; state.cfgSel = null;
+      if (id) state.govSel = id;
+      return renderAll();
+    case 'mgmtTab': state.mode = 'management'; state.mgmtTab = t.dataset.v; state.cfgSel = null; return renderAll();
+
+    /* ---- 应用治理：生命周期 ---- */
+    case 'govSel': state.govSel = id; state.active = id; return renderAll();
+    case 'cfgOpen': state.cfgSel = id; state.mgmtTab = 'apps'; return renderAll();
+    case 'cfgBack': state.cfgSel = null; return renderAll();
+    case 'cfgReset': toast('配置已重置为默认值（未保存）'); return;
+    case 'cfgSave': toast(`${byId[state.cfgSel].full} 配置已保存`); return renderAll();
+    case 'copyPath': toast('扩展路径已复制到剪贴板'); return;
+    case 'toggleEnable': {
+      const a = byId[id];
+      if (a.pluginType === 'rust') { toast(`${a.full} 为 rust 类型，始终启用`); return; }
+      if (a.state === 'dormant') {
+        // 启用方向：先 plugin_preauthorize（授权弹窗先行，通过后才 plugin_activate）
+        a.state = 'running'; a.cpu = 3; a.mem = 38;
+        toast(`${a.full} 已启用（授权预检通过 → 实例激活）`);
+      } else {
+        a.state = 'dormant'; a.cpu = 0; a.mem = 0;
+        toast(`${a.full} 已停用，实例资源已回收`);
+      }
+      if (state.active === id) state.active = runningIds()[0] || id;
+      if (state.maximized === id) state.maximized = null;
+      return renderAll();
     }
+    case 'uninstall': {
+      const a = byId[id];
+      // 运行中（含 degraded）不可卸载：按钮禁用而非事后提示
+      if (a.state !== 'dormant') { toast('请先停用应用后再卸载'); return; }
+      state.dlgApp = id; state.dialog = 'uninstall'; return renderOverlays();
+    }
+    case 'install': state.dialog = 'install'; return renderOverlays();
+
+    /* ---- 应用治理：授权策略与记录 ---- */
+    case 'setStrategy': {
+      const a = byId[id];
+      const want = t.dataset.strategy;
+      // 最高风险档必须二次确认（沿用 AuthorizationView 的 Modal 语义）
+      if (want === 'always_allow') {
+        state.dlgApp = id; state.dlgRes = t.dataset.res; state.dialog = 'allow-confirm';
+        return renderOverlays();
+      }
+      const before = a.strategies[t.dataset.res];
+      a.strategies[t.dataset.res] = want;
+      const kept = a.records.filter(r => r.resource === t.dataset.res).length;
+      toast(`${RESOURCE_LABEL[t.dataset.res]} 策略 ${STRATEGY_LABEL[before]} → ${STRATEGY_LABEL[want]}`
+        + (kept ? `（已有 ${kept} 条记录不受影响，需逐条撤销）` : ''));
+      return renderAll();
+    }
+    case 'revoke': {
+      const a = byId[id];
+      const i = Number(t.dataset.idx);
+      const r = a.records[i];
+      if (!r) return;
+      a.records.splice(i, 1);
+      toast(`已取消授权 ${r.target}`);
+      return renderAll();
+    }
+
+    /* ---- 服务器面 ---- */
+    case 'srvStart': SERVER.status = 'running'; SERVER.uptimeSec = 0;
+      toast('服务器已启动'); return renderAll();
+    case 'srvStop': SERVER.status = 'stopped'; SERVER.metrics.connections = 0;
+      toast('服务器已停止'); return renderAll();
+    case 'srvRestart':
+      SERVER.status = 'starting';
+      toast('服务器重启中…（高级配置的脏字段会先自动提交）');
+      SERVER.status = 'running'; SERVER.port = SERVER.portSaved; SERVER.portDirty = false;
+      return renderAll();
+    case 'srvRestore': toast('高级配置已还原默认（重启后生效）'); return;
+    case 'srvSavePort': SERVER.portSaved = SERVER.port; SERVER.portDirty = false;
+      state.dialog = 'port-restart'; return renderOverlays();
+    case 'srvAutoStart': SERVER.autoStart = !SERVER.autoStart;
+      toast(`自启动已${SERVER.autoStart ? '开启' : '关闭'}`); return renderAll();
+
+    /* ---- 设置面 ---- */
+    case 'setTheme': SETTINGS.ui.theme = t.dataset.v;
+      document.documentElement.classList.toggle('dark', t.dataset.v === 'dark');
+      toast(`主题已切到「${t.textContent.trim()}」（立即落盘，不走防抖）`); return renderAll();
+    case 'setPalette': SETTINGS.ui.theme_palette = t.dataset.v;
+      toast(`色板已切到「${t.dataset.v}」`); return renderAll();
+    case 'setLang': SETTINGS.ui.language = t.dataset.v;
+      toast(`语言已切到「${t.textContent.trim()}」（400ms 淡出→换文案→双 rAF→淡入）`); return renderAll();
+    case 'setFont': SETTINGS.ui.font_size = Number(t.dataset.v);
+      toast(`字体 ${t.dataset.v}px（Linux 再乘 1.15）`); return renderAll();
+    case 'setAnim': SETTINGS.ui.animations_enabled = !SETTINGS.ui.animations_enabled;
+      toast(`动画已${SETTINGS.ui.animations_enabled ? '开启' : '关闭'}`); return renderAll();
+    case 'setSleep': SETTINGS.network.prevent_sleep = !SETTINGS.network.prevent_sleep;
+      toast(`防止休眠已${SETTINGS.network.prevent_sleep ? '开启' : '关闭'}`); return renderAll();
+    case 'gh': toast('在浏览器中打开 GitHub 仓库（http/https scheme 白名单 fail-closed）'); return;
+    case 'checkUpdate': toast('已是最新版本'); return;
+    case 'logDir': toast('在系统文件管理器中打开日志目录'); return;
+    case 'logSave': toast('日志配置已保存（格式 / 轮转重启后生效）'); return;
+
+    /* ---- 命令面板 ---- */
+    case 'runCmd': {
+      state.paletteOpen = false; state.paletteQ = '';
+      const c = allCommands().find(x => x.id === t.dataset.id);
+      toast(`执行 ${c ? c.title : t.dataset.id}`);
+      return renderAll();
+    }
+
+    /* ---- 弹窗 ---- */
+    case 'closeDlg': case 'dlgNo':
+      state.dialog = null; state.dlgApp = null; return renderOverlays();
+    case 'dlgDemo': state.dialog = t.dataset.v; return renderOverlays();
+    case 'dlgYes': {
+      const was = state.dialog;
+      state.dialog = null;
+      if (was === 'uninstall') {
+        const a = byId[state.dlgApp];
+        const i = APPS.indexOf(a);
+        if (i >= 0) APPS.splice(i, 1);
+        state.govSel = (APPS[0] || {}).id || null;
+        state.dlgApp = null;
+        toast(`${a.full} 已卸载`);
+        return renderAll();
+      }
+      if (state.dlgRes) {
+        const a = byId[state.dlgApp];
+        const res = state.dlgRes;
+        a.strategies[res] = 'always_allow';
+        const kept = a.records.filter(r => r.resource === res).length;
+        state.dlgRes = null; state.dlgApp = null;
+        toast(`${RESOURCE_LABEL[res]} 策略 → 始终允许`
+          + (kept ? `（已有 ${kept} 条记录不追溯，需逐条撤销）` : '（仅实际访问到的目标才逐步累积）'));
+      }
+      return renderAll();
+    }
+    case 'dlgDeny': state.dialog = null; toast('已记录硬拒绝，下次命中直接拒'); return renderAll();
+    case 'dlgForce': state.dialog = null; toast('已强制退出（终止所有运行中会话）'); return renderOverlays();
+    case 'dlgUninstall': return;   // 统一走 dlgYes 分支
+    case 'bootDone': state.boot = false; return renderOverlays();
+  }
+});
+
+/* ---- 需要 change 事件的控件：range / number / select ---- */
+document.addEventListener('change', e => {
+  const t = e.target.closest('[data-act]');
+  if (!t || t.tagName === 'BUTTON') return;
+  const act = t.dataset.act, k = t.dataset.k, id = t.dataset.app;
+  switch (act) {
+    case 'srvPortInput': SERVER.port = Number(t.value); SERVER.portDirty = SERVER.port !== SERVER.portSaved;
+      return renderAll();
+    case 'srvNet': SERVER.net[k] = t.dataset.v === 'bool' ? t.checked : Number(t.value); return;
+    case 'lc': LINK_CRYPTO[k] = t.checked; return renderAll();
+    case 'setDefPort': SETTINGS.network.port = Number(t.value); toast(`默认端口 ${t.value}`); return;
+    case 'setFont': SETTINGS.ui.font_size = Number(t.value); return renderAll();
+    case 'logLevel': LOG_SETTINGS.file_level = t.textContent.trim(); toast('日志级别已即时生效（不落盘）'); return renderAll();
+    case 'logFmt': LOG_SETTINGS.format = t.value; return;
+    case 'logMaxFiles': LOG_SETTINGS.max_files = Number(t.value); return;
+    case 'logCap': LOG_SETTINGS.capacity_mb = Number(t.value); return;
+    case 'cfgBool': case 'cfgNum': case 'cfgSet': return;
+  }
+});
+
+/* ---- 全局快捷键（现有实现全 App 只注册了 Ctrl+,，命令面板另有 Ctrl+Shift+P） ---- */
+document.addEventListener('keydown', e => {
+  const k = e.key.toLowerCase();
+  // Ctrl+Shift+P → 命令面板
+  if (e.ctrlKey && e.shiftKey && k === 'p') { e.preventDefault(); state.paletteOpen = true; return renderOverlays(); }
+  // Ctrl+, → 设置（唯一注册的全局快捷键）
+  if (e.ctrlKey && k === ',') { e.preventDefault(); state.mode = 'management'; state.mgmtTab = 'settings'; state.cfgSel = null; return renderAll(); }
+  // Esc 逐层退出：弹窗 → 命令面板
+  if (e.key === 'Escape') {
+    if (state.dialog) { state.dialog = null; state.dlgApp = null; return renderOverlays(); }
+    if (state.paletteOpen) { state.paletteOpen = false; state.paletteQ = ''; return renderOverlays(); }
   }
 });
 
 document.getElementById('navWorkspace').onclick = () => { state.mode = 'workspace'; renderAll(); };
 document.getElementById('navOverview').onclick = () => { state.mode = 'overview'; renderAll(); };
-document.getElementById('navMatrix').onclick = () => { state.mode = 'matrix'; renderAll(); };
+document.getElementById('navManagement').onclick = () => { state.mode = 'management'; renderAll(); };
+document.getElementById('navServer').onclick = () => { state.mode = 'management'; state.mgmtTab = 'server'; renderAll(); };
+document.getElementById('navSettings').onclick = () => { state.mode = 'management'; state.mgmtTab = 'settings'; renderAll(); };
+document.getElementById('railInstall').onclick = () => { state.dialog = 'install'; renderAll(); };
+document.getElementById('btnCollapse').onclick = () => {
+  state.railCollapsed = !state.railCollapsed;
+  if (!state.railCollapsed && state.railW < 160) state.railW = 240;
+  renderRail();
+};
+
+/* 导航宽度拖拽：<120px 自动折叠，展开态夹在 160–360px，松手不回弹 */
+(function railResize() {
+  const grab = document.getElementById('railGrab');
+  let dragging = false;
+  grab.addEventListener('mousedown', e => { e.preventDefault(); dragging = true; grab.classList.add('dragging'); });
+  window.addEventListener('mousemove', e => {
+    if (!dragging) return;
+    const w = e.clientX;
+    state.railW = Math.min(360, Math.max(120, w));
+    state.railCollapsed = state.railW < 120;
+    renderRail();
+  });
+  window.addEventListener('mouseup', () => {
+    if (!dragging) return;
+    dragging = false; grab.classList.remove('dragging');
+    if (state.railCollapsed) state.railW = 56;
+    renderRail();
+  });
+  grab.addEventListener('keydown', e => {
+    if (!['ArrowLeft', 'ArrowRight'].includes(e.key)) return;
+    e.preventDefault();
+    state.railCollapsed = false;
+    state.railW = Math.min(360, Math.max(160, state.railW + (e.key === 'ArrowRight' ? 16 : -16)));
+    renderRail();
+  });
+})();
 document.getElementById('btnUnmax').onclick = () => { state.maximized = null; renderAll(); };
 document.getElementById('btnTheme').onclick = () => {
   document.documentElement.classList.toggle('dark');
 };
+document.getElementById('btnBoot').onclick = () => { state.boot = true; renderOverlays(); };
+document.getElementById('btnInspector').onclick = () => {
+  state.inspectorOpen = !state.inspectorOpen;
+  renderInspector();
+};
+document.getElementById('btnDialogs').onclick = () => { state.dialog = 'palette-demo'; renderOverlays(); };
+document.getElementById('btnPalette').onclick = () => { state.paletteOpen = true; renderOverlays(); };
+document.getElementById('sbHint').onclick = () => { state.paletteOpen = true; renderOverlays(); };
 
 /* ---- 分屏拖拽：实时改 flex，mouseup 才提交进模型 ---- */
 let drag = null;
@@ -1153,14 +2409,6 @@ document.addEventListener('keydown', e => {
   g.setAttribute('aria-valuenow', Math.round(next * 100));
   state.ratios[splitEl.dataset.split] = next;
 });
-/* 矩阵单元格键盘操作 */
-document.addEventListener('keydown', e => {
-  const c = e.target.closest?.('.mx-cell');
-  if (!c || (e.key !== 'Enter' && e.key !== ' ')) return;
-  e.preventDefault();
-  togglePerm(c.dataset.app, c.dataset.perm);
-});
-
 renderAll();
 </script>
 </body>
