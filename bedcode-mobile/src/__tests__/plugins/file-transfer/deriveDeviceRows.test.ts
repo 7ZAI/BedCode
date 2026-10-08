@@ -8,7 +8,7 @@ import { describe, it, expect } from 'vitest'
 import {
   deriveDeviceRows,
   type DiscoveredDevice,
-} from '../../../../plugins/file-transfer/src/composables/deviceState'
+} from '../../../../wasm-apps/file-transfer/src/composables/deviceState'
 
 const NODE_A = 'a'.repeat(32)
 const NODE_B = 'b'.repeat(32)

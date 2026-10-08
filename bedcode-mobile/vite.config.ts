@@ -119,8 +119,8 @@ export default defineConfig({
     rollupOptions: {
       output: {
         chunkFileNames: (chunkInfo) => {
-          // 插件 chunk 输出到 plugins/ 目录
-          if (chunkInfo.name?.startsWith('plugins/')) {
+          // 插件 chunk 输出到 wasm-apps/ 目录
+          if (chunkInfo.name?.startsWith('wasm-apps/')) {
             return `${chunkInfo.name}.js`
           }
           return 'assets/[name]-[hash].js'

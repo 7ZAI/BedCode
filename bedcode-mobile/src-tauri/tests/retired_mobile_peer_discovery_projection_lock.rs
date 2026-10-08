@@ -104,7 +104,7 @@ fn retired_peer_devices_topic_is_neither_published_nor_subscribed() {
     let mut violations: Vec<String> = Vec::new();
     let roots = [
         mobile_src_root().join("src"),
-        mobile_src_root().join("../plugins/file-transfer/rust/src"),
+        mobile_src_root().join("../wasm-apps/file-transfer/rust/src"),
     ];
     for root in roots {
         let Ok(dir) = std::fs::read_dir(&root) else {

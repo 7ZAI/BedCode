@@ -3,9 +3,12 @@
 > Date: 2026-10-08
 > 用户指令：「检查移动端和桌面端一样，将插件的概念改为 wasm-app；同时检查有些没有下沉的业务代码」
 > 全部事实取自 2026-10-08 工作区实测（行号 / 消费者可复现），不凭记忆。
-> **执行前置警告**：并行会话（票 13 会话控制下沉 + 票 15 终端 UI 下沉，session `01a1191e` 活跃写入中）正在改动
-> `bedcode-mobile/plugins/terminal-session/` 路径下的文件。重命名**必须等该会话提交落盘后执行**（AGENTS §11 不碰
-> 在途改动），本文档的触点清单与执行步骤届时原样可用。
+> **执行前置警告（2026-10-08 审查后更新）**：原警告的票 13/15 已提交落盘（`d585d5322` / `e2816bd78`，
+> 均在 HEAD 历史）——重命名窗口已开。**当前仍存的并行在途**（不碰、不回滚，只在非重叠区做本任务改动）：
+> 票 17 批次 2b（`src-tauri/src/plugin/wasm_runtime/*` 删除中，宿主垫片已切 `plugin.rs:46`）、
+> 票 19 egress 收口（`egress.rs` / `plugin.rs` 在途）、能力域脱绑文档（根 `AGENTS.md` / `docs/code-map.md` 在途）。
+> **审查修正记录**：§1.3 #12 原路径已随票 01–16 整核抽出（`4f02a3236`）迁至 `packages/`，改为真源；
+> 触点清单补 3 项（#18 测试相对 import 8 文件、#19 第 4 把防回接锁、#20 注释类引用）。
 
 ---
 
@@ -34,14 +37,20 @@
 | 2 | `AGENTS.md:16` | 路径基准行：移动端源码目录 `plugins/` → `wasm-apps/` | 该行同时列举两端相对路径 |
 | 3 | `AGENTS.md:26` | 结构行：`移动 plugins/<plugin-id>/` → `移动 wasm-apps/<app-id>/` | 与桌面同一表述 |
 | 4 | `.github/workflows/test.yml:238,243` | `bedcode-mobile/plugins/$p` → `bedcode-mobile/wasm-apps/$p` | 插件安装循环 |
-| 5 | `.github/workflows/release.yml:491-496` | 同上 | |
+| 5 | `.github/workflows/release.yml:292-297,491-496` | 同上 | 审查补漏：**292-297 为 working-directory 相对形式的插件安装循环**（文档原只列 491-496） |
 | 6 | `bedcode-mobile/scripts/dev-run.js:166,176,186` | `dir: 'plugins/xxx'` → `'wasm-apps/xxx'` | `--resources-dir ../../src-tauri/resources/plugins/mobile` **保留** |
-| 7 | `bedcode-mobile/scripts/plugin-build.js:6,49` | 扫描 `plugins/` → `wasm-apps/`（含注释与报错文案） | 产物目标 `resources/plugins/mobile` **保留**（运行时面） |
+| 7 | `bedcode-mobile/scripts/plugin-build.js:6,28,49` | 扫描 `plugins/` → `wasm-apps/`（6 注释、**28 主扫描行**、49 报错文案） | 产物目标 `resources/plugins/mobile` **保留**（运行时面）；28 行 `resolve(ROOT, 'plugins')` 为漏列主行（审查修正） |
 | 8 | `bedcode-mobile/vitest.config.ts:12,14` | include 路径 `plugins/terminal-session/src/terminal/__tests__/` → `wasm-apps/...` | |
 | 9 | `bedcode-mobile/docs/code-map.md` | 约 15+ 处 `plugins/*` / `plugins/`（目录树、终端链路节、防回接锁索引、Quick Navigation）→ `wasm-apps/*` | 顺手把「插件源码」措辞改「wasm 应用源码」（机制节保留） |
 | 10 | `bedcode-mobile/plugin-dev-mobile.md` | 约 5 处（`plugins/terminal-session/src/task/panel.css` 等 + 327 行内置应用路径表） | |
 | 11 | 防回接锁 3 文件（`bedcode-mobile/src-tauri/tests/`）| 锁内源码扫描路径字面量 → `wasm-apps/`：`retired_mobile_auth_orchestration_command_face_lock.rs:69-73`、`retired_mobile_auto_task_plugin_lock.rs:165,178,200,214,222`、`retired_mobile_peer_discovery_projection_lock.rs:107` | 锁扫描的是**源码路径**，不改则锁逻辑指向不存在目录 = 静默失效 |
-| 12 | `bedcode-mobile/src-tauri/src/plugin/wasm_runtime/component.rs:911` | 测试构建路径 `../plugins/terminal-session` → `../wasm-apps/terminal-session` | `build_terminal_session_component` |
+| 12 | `bedcode-mobile/packages/bedcode-wasm-core/src/test_support.rs:52` | 测试构建路径 `../../plugins/terminal-session` → `../../wasm-apps/terminal-session` | 原声明 `src-tauri/src/plugin/wasm_runtime/component.rs:911` 已随票 01–16 整核抽出失效（宿主 `plugin.rs:46` 只剩垫片）；真源迁移至 packages（审查修正） |
+| 18 | `bedcode-mobile/src/__tests__/plugins/file-transfer/` **8 个测试文件** | 相对 import `../../../../plugins/file-transfer/...` → `../../../../wasm-apps/file-transfer/...` | 审查补漏：git mv 后相对路径断链（deriveDeviceRows / taskProgressColor / useConsent / usePeerDevices / useRemoteFs / useSettings / useTasks / useTrustedPeers） |
+| 19 | `bedcode-mobile/src-tauri/tests/retired_mobile_session_control_face_lock.rs:124-130` | 锁内路径对 `plugins/terminal-session/...` → `wasm-apps/terminal-session/...` | 审查补漏：文档原列 3 把锁，实为 **4 把**（session.rs / commands.rs / plugin.json 路径对） |
+| 20 | 前端 / 注释类引用（不功能断链，AGENTS §0 文档一致） | `plugins/terminal-session/...` → `wasm-apps/terminal-session/...` | 审查补漏：`src/utils/themeLabel.ts:6`、`src/views/TerminalView.vue:23`、`src/composables/useMobileConnection.ts`（注释）、`src/__tests__/integration/{session-flow,connection-flow}.test.ts` 注释、`src-tauri/src/system/constants/connection.rs:53` 注释、`src-tauri/tests/session_http_flow.rs:14` 注释、`plugins/file-transfer/rust/src/settings_store/tests/save_and_push_writes.rs:1`、`plugins/file-transfer/src/composables/useTrustedPeers.ts:11`、三 README 的路径引用 |
+| 21 | `bedcode-mobile/vite.config.ts:122-123` | chunk 前缀判断 `startsWith('plugins/')` → `'wasm-apps/'` | 审查补漏：插件 chunk 路由判断（功能逻辑，源码移目录后 chunk 名随之变） |
+| 22 | `bedcode-mobile/tailwind.config.js:8` | 内容扫描 `./plugins/**/src/**/*` → `./wasm-apps/**/src/**/*` | 审查补漏：git mv 后插件样式类不再被扫描（样式断链） |
+| 23 | `bedcode-mobile/.vscode/settings.json:8` | 注释 `plugins/*/rust` → `wasm-apps/*/rust` | 审查补漏（RA 递归发现路径） |
 | 13 | 根 `docs/commands.md:19,68,278` | `bedcode-mobile/plugins/<plugin-id>` → `<wasm-apps>` | |
 | 14 | `docs/knowledge/wasip3-toolchain.md:185` | `bedcode-mobile/plugins/*` → `wasm-apps/*` | 文档描述行 |
 | 15 | `.scratch/2026-10-07-mobile-wasm-core-refactor/*.md` | spec + 票文档的 `plugins/...` 引用 | .scratch 只在 dev 分支入库，执行批随改 |

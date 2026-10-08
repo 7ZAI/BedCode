@@ -163,7 +163,7 @@ const PKG_MGR_CLI =
 /** 插件 watch 启动项（dir 相对仓库根，args 在插件目录内执行） */
 const PLUGIN_WATCH_CMDS = [
   {
-    dir: 'plugins/ai-chatbox',
+    dir: 'wasm-apps/ai-chatbox',
     id: 'com.bedcode.ai-chatbox',
     args: [
       resolve(ROOT, 'packages/plugin-sdk-mobile/bin/cli.js'),
@@ -173,7 +173,7 @@ const PLUGIN_WATCH_CMDS = [
     wasmFile: 'rust/target/wasm32-unknown-unknown/release/bedcode_plugin_ai_chatbox.wasm',
   },
   {
-    dir: 'plugins/terminal-session',
+    dir: 'wasm-apps/terminal-session',
     id: 'com.bedcode.terminal-session',
     args: [
       resolve(ROOT, 'packages/plugin-sdk-mobile/bin/cli.js'),
@@ -183,7 +183,7 @@ const PLUGIN_WATCH_CMDS = [
     wasmFile: 'rust/target/wasm32-unknown-unknown/release/bedcode_plugin_terminal_session.wasm',
   },
   {
-    dir: 'plugins/file-transfer',
+    dir: 'wasm-apps/file-transfer',
     id: 'com.bedcode.file-transfer',
     args: [
       resolve(ROOT, 'packages/plugin-sdk-mobile/bin/cli.js'),

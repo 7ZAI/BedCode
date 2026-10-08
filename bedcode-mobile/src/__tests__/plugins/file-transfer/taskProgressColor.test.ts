@@ -12,7 +12,7 @@ import { describe, it, expect } from 'vitest'
 import {
   TASK_STATE_PROGRESS_CLASS,
   type TaskStateName,
-} from '../../../../plugins/file-transfer/src/types'
+} from '../../../../wasm-apps/file-transfer/src/types'
 
 /** 全状态清单（新增状态时必须同步配色表，本清单是漏键守卫） */
 const ALL_STATES: TaskStateName[] = [

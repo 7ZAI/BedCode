@@ -16,7 +16,7 @@
 | Rust 测试 | 见 §2 | `cargo test`（**每个 crate 在自己根目录跑**） |
 | 跨端互连测试 | `cross-end-tests` | `cargo test` |
 | 桌面 wasm 应用构建 | `bedcode-desktop/wasm-apps/<app-id>` | `pnpm run build` |
-| 移动插件构建 | `bedcode-mobile/plugins/<plugin-id>` | `pnpm run build` |
+| 移动插件构建 | `bedcode-mobile/wasm-apps/<app-id>` | `pnpm run build` |
 | 桌面插件全量构建 | `bedcode-desktop` | `pnpm run plugins:build` |
 | 移动插件全量构建 | `bedcode-mobile` | `pnpm run plugins:build` |
 | 代码质量 | 仓库根 / 各端 | `pnpm exec eslint .` · 各端 `pnpm run lint` · `src-tauri` 内 `cargo clippy` |
@@ -65,7 +65,7 @@ cd packages/bedcode-wasm-core && cargo test       # 插件机制整核 crate（2
 cd packages/bedcode-server-base && cargo test        # 任一能力域 / 传输面 crate 同理（仓库根 packages/，无根 workspace，各自根目录）
 
 cd bedcode-desktop/wasm-apps/<app-id>/rust && cargo test   # wasm 应用（仅 terminal-session 另有 test:rust 脚本，其余直接跑 cargo test）
-cd bedcode-mobile/plugins/<plugin-id>/rust && cargo test      # 移动插件
+cd bedcode-mobile/wasm-apps/<app-id>/rust && cargo test      # 移动插件
 
 cargo test <名称前缀>                            # 针对性过滤，cwd = 被测 crate 根
 ```
@@ -228,7 +228,7 @@ adb -s 192.168.1.23:5555 reverse --remove-all && adb -s 192.168.1.23:5555 revers
 
 ## 5. wasm 应用与插件
 
-桌面是 **`wasm-apps/<app-id>/`**（4 个：`agent-hub` / `ai-chatbox` / `file-transfer` / `terminal-session`），移动端是 **`plugins/<plugin-id>/`**（3 个：`ai-chatbox` / `auto-task` / `file-transfer`）。插件 id 形如 `com.bedcode.<name>`。
+桌面是 **`wasm-apps/<app-id>/`**（4 个：`agent-hub` / `ai-chatbox` / `file-transfer` / `terminal-session`），移动端是 **`wasm-apps/<app-id>/`**（3 个：`ai-chatbox` / `file-transfer` / `terminal-session`）。插件 id 形如 `com.bedcode.<name>`。
 
 ### 5.1 工具链（桌面 wasm32-wasip3）
 
@@ -251,7 +251,7 @@ cd bedcode-mobile  && pnpm run build:all           # 插件 + 主应用
 > 的 `PLUGIN_WATCH_CMDS`），改前端自动重建并热重载；WASM 改动仍走
 > `node scripts/build.js`（dev 会话启动时 `ensurePluginWasm()` 对缺失/陈旧产物自动补建）。
 
-### 5.3 单个应用内部（`cd wasm-apps/<app-id>` 或 `cd plugins/<plugin-id>`）
+### 5.3 单个应用内部（`cd wasm-apps/<app-id>`）
 
 ```bash
 # 桌面：node scripts/build.js 封装前端 + wasm + 产物复制

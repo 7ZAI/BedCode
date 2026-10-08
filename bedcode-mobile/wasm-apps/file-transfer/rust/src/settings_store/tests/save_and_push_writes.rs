@@ -1,4 +1,4 @@
-//! general — crate 内单元测试（自 bedcode-mobile/plugins/file-transfer/rust/src/settings_store.rs 迁出）
+//! general — crate 内单元测试（自 bedcode-mobile/wasm-apps/file-transfer/rust/src/settings_store.rs 迁出）
 
 use super::*;
 

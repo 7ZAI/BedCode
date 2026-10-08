@@ -7,7 +7,7 @@
  * 票 13 自宿主 HTTP 代理迁入）。
  * 终端 buffer 联动（markSessionRunning / markSessionStopped / clearBuffer）已随
  * 终端 UI 域迁终端插件（票 15），其契约测试在
- * `plugins/terminal-session/src/terminal/__tests__/`。
+ * `wasm-apps/terminal-session/src/terminal/__tests__/`。
  *
  * 测试 seam：mock invoke（http_request 按 URL 分发配置面；plugin_invoke 按
  * 命令 id 分发会话控制面）+ 脚本化 ws_sync_* 事件驱动状态联动。

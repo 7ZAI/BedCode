@@ -279,7 +279,7 @@ describe('连接流：useMobileConnection × useHttpApi × terminalBuffer store'
     expect(vi.mocked(toast.warning).mock.calls.at(-1)?.[0]).toContain('连接中断，正在自动重连')
     expect(vi.mocked(toast.error).mock.calls.some(([message]) => String(message).includes('连接已断开'))).toBe(false)
     // 订阅信念清理已迁终端插件（票 15：onSessionEvent disconnected，契约测试在
-    // plugins/terminal-session/src/terminal/__tests__/）
+    // wasm-apps/terminal-session/src/terminal/__tests__/）
   })
 
   it('认证类致命关闭（fatal）：最后一次提示是「需重新配对」而非普通断连', async () => {

@@ -182,7 +182,7 @@ linker.instantiate_async(&mut store, &component)    // 实例化走 async 入口
 
 | 票 | 内容 | 前置 |
 | --- | --- | --- |
-| B-1 工具链 | 移动端 `bedcode-mobile/plugins/*` 构建脚本 + `scripts/dev-run.js` + SDK CLI `bin/cli.js`（三处产物路径）改 `wasm32-wasip3` + `RUSTUP_TOOLCHAIN` 注入；文档同步 | 用户决策 |
+| B-1 工具链 | 移动端 `bedcode-mobile/wasm-apps/*` 构建脚本 + `scripts/dev-run.js` + SDK CLI `bin/cli.js`（三处产物路径）改 `wasm32-wasip3` + `RUSTUP_TOOLCHAIN` 注入；文档同步 | 用户决策 |
 | B-2 宿主 async 化 | 引擎 `CM_ASYNC` + `wasmtime-wasi{p3}` + `WasiView for WasmPluginState` + `bindgen!{exports:{default:async}}` + 10 处调用点 `block_on_async`；**保持 unknown-unknown 组件零回归**（本票不改产物） | B-1 |
 | B-3 产物全量切换 + 集成验证 | 3 个移动插件 wasip3 产物替换、CI nightly 步骤、夹具构建器切 target、Android 真机回归 | B-2 |
 | B-4 SDK 版本与发布 | `plugin-sdk-mobile` 的 npm + crates 版本上抬、`sdk-v*` tag 发布（`docs/knowledge/sdk-publish.md`）；或明确「旧 CLI 产物继续被宿主加载」并写入文档 | B-3 + 用户决策 |

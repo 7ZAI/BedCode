@@ -289,12 +289,12 @@ jobs:
       - name: Install plugin dependencies
         run: |
           for p in ai-chatbox terminal-session file-transfer ocr; do
-            if [ ! -d "plugins/$p" ]; then
-              echo "plugins/$p 不存在（可能仅 dev 分支开发中），跳过"
+            if [ ! -d "wasm-apps/$p" ]; then
+              echo "wasm-apps/$p 不存在（可能仅 dev 分支开发中），跳过"
               continue
             fi
-            echo "== installing plugins/$p =="
-            (cd plugins/$p && pnpm install --frozen-lockfile) || exit 1
+            echo "== installing wasm-apps/$p =="
+            (cd wasm-apps/$p && pnpm install --frozen-lockfile) || exit 1
           done
 
       - name: Build Android APK
@@ -488,12 +488,12 @@ jobs:
       - name: Install mobile plugin dependencies
         run: |
           for p in ai-chatbox terminal-session file-transfer; do
-            if [ ! -d "bedcode-mobile/plugins/$p" ]; then
-              echo "bedcode-mobile/plugins/$p 不存在（可能仅 dev 分支开发中），跳过"
+            if [ ! -d "bedcode-mobile/wasm-apps/$p" ]; then
+              echo "bedcode-mobile/wasm-apps/$p 不存在（可能仅 dev 分支开发中），跳过"
               continue
             fi
-            echo "== installing bedcode-mobile/plugins/$p =="
-            (cd bedcode-mobile/plugins/$p && pnpm install --frozen-lockfile) || exit 1
+            echo "== installing bedcode-mobile/wasm-apps/$p =="
+            (cd bedcode-mobile/wasm-apps/$p && pnpm install --frozen-lockfile) || exit 1
           done
 
       # 构建两端插件（前端 + WASM）并打 zip；插件清单默认 scripts/plugin-package-list.json

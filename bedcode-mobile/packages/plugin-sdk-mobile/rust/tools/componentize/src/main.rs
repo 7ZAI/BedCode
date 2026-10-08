@@ -6,7 +6,7 @@
 //! - 编码失败的输入（无组件元数据）给出明确错误
 //!
 //! 用法：`componentize <input.wasm> -o <output.wasm>`
-//! 插件构建脚本（plugins/*/scripts/build.js）在 cargo build 后调用本工具。
+//! 插件构建脚本（wasm-apps/*/scripts/build.js）在 cargo build 后调用本工具。
 
 use std::process::ExitCode;
 

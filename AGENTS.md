@@ -13,7 +13,7 @@
 5. **code-map / 领域文档**（含 `docs/adr/`）
 6. **通用工程经验**
 
-- **路径基准**：不带端前缀的 Rust 路径相对 `bedcode-desktop/src-tauri/src/`（wasm_core 整核抽出后，机制与引擎面真源在 `packages/bedcode-wasm-core/src/`——2026-10-08 由 `bedcode-desktop/packages/` 迁根至仓库根，宿主侧只剩 `pub use` 垫片——spec 2026-10-06-wasm-core-whole-crate / ADR 0037）；**能力域 / 传输面 / 引擎 crate（含插件机制整核）一律落仓库根 `packages/bedcode-*`**（2026-10-07 能力域迁根，2026-10-08 整核本体迁根，与机制内核 `bedcode-host-kit` 同族，ADR 0035 D6 部分撤销），`bedcode-desktop/packages/` 只剩插件契约 / 夹具 crate（`plugin-*`）；`wasm-apps/`、`plugins/`、前端 `src/` 相对**所属端根目录**；`docs/`、`scripts/`、`.scratch/` 相对**仓库根**。
+- **路径基准**：不带端前缀的 Rust 路径相对 `bedcode-desktop/src-tauri/src/`（wasm_core 整核抽出后，机制与引擎面真源在 `packages/bedcode-wasm-core/src/`——2026-10-08 由 `bedcode-desktop/packages/` 迁根至仓库根，宿主侧只剩 `pub use` 垫片——spec 2026-10-06-wasm-core-whole-crate / ADR 0037）；**能力域 / 传输面 / 引擎 crate（含插件机制整核）一律落仓库根 `packages/bedcode-*`**（2026-10-07 能力域迁根，2026-10-08 整核本体迁根，与机制内核 `bedcode-host-kit` 同族，ADR 0035 D6 部分撤销；**能力域默认形态 = 纯引擎 + 端口抽象，零 WIT / 零桌面 SDK 依赖，桌面 WIT 绑定层收进 `desktop-host` feature——ADR 0035 脱绑条目，长期门禁 `packages/bedcode-headless-host-probe`**），`bedcode-desktop/packages/` 只剩插件契约 / 夹具 crate（`plugin-*`）；`wasm-apps/`、前端 `src/` 相对**所属端根目录**（双端业务应用源码目录均名 `wasm-apps/`）；`docs/`、`scripts/`、`.scratch/` 相对**仓库根**。
 - **文档字面 ≠ 事实**：引用任何路径 / 命令 / 锁名 / 版本前先用 `ls` / `rg` 核对；与事实不符**先修文档**再继续（命令字眼以 `docs/commands.md` 为准）。
 - **最小改动原则**：只改任务必要文件；禁止顺手重构相邻代码、擅自升级依赖（升级先做双端影响评估，如 wasmtime / SDK）；设计取舍不猜，先问用户。
 
@@ -23,7 +23,7 @@
 
 **Tech Stack**：Tauri 2 + Vue 3 + TypeScript + TailwindCSS v3 + Rust (Tokio) + SQLite + vue-i18n@9 + WASM（wasmtime 48 组件模型，目标 `wasm32-wasip3`）
 
-**结构**：`bedcode-desktop/`（桌面主机）/ `bedcode-mobile/`（移动远程终端），各带独立前端 + `src-tauri/` + 独立锁文件；业务代码在端内插件工程（桌面 `wasm-apps/<app-id>/`，移动 `plugins/<plugin-id>/`），插件契约 = 双端 `packages/plugin-sdk-*/`。**Rust 无根 workspace**，构建与测试各自 crate 根跑（§3）。目录树与模块职责见两端 `docs/code-map.md`。
+**结构**：`bedcode-desktop/`（桌面主机）/ `bedcode-mobile/`（移动远程终端），各带独立前端 + `src-tauri/` + 独立锁文件；业务代码在端内插件工程（双端 `wasm-apps/<app-id>/`），插件契约 = 双端 `packages/plugin-sdk-*/`。**Rust 无根 workspace**，构建与测试各自 crate 根跑（§3）。目录树与模块职责见两端 `docs/code-map.md`。
 
 ---
 

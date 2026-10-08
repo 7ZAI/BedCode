@@ -5,7 +5,7 @@
   // ==================== rust-analyzer 项目锁定（新增） ====================
   // linkedProjects 禁用递归发现，本文件夹只编译宿主工程 src-tauri/Cargo.toml
   // （+ path 依赖 plugin-sdk-mobile、packages/peer-net、packages/link-crypto）。
-  // 若不锁定，RA 会递归发现本目录下 plugins/*/rust、packages/plugin-sdk-*、
+  // 若不锁定，RA 会递归发现本目录下 wasm-apps/*/rust、packages/plugin-sdk-*、
   // packages/plugin-*-test 等约 14 个独立组件工程并在单实例内一起索引（内存爆炸）。
   // 插件/SDK/测试组件的工程各自独立，单独开发时直接打开对应目录。
   "rust-analyzer.linkedProjects": [

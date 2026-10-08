@@ -36,7 +36,7 @@ bedcode-mobile/                       # 移动端项目 (Tauri 2.0 + Vue 3)
 │   ├── plugin-sdk-mobile/            # 移动端插件开发 SDK：Rust + TS 双侧、dev-shell 调试壳、
 │   │                                 #   插件模板（template/）、UI 子路径导出
 │   └── plugin-component-test/        # 测试用 WASM 插件 crate，供宿主测试套件做连通性验证
-├── plugins/                          # 插件源码目录（每个插件独立 package：plugin.json 元数据 +
+├── wasm-apps/                      # wasm 应用源码目录（每个 app 独立 package：plugin.json 元数据 +
 │                                     #   rust/ WASM 后端 + src/ TS 前端 + vite.config.ts 独立构建）
 │   ├── ai-chatbox/                   # AI Chatbox 插件：多供应商 OpenAI 兼容客户端
 │   ├── file-transfer/                # 文件传输插件：基于对等网络的在线对端发现与共享目录浏览、
@@ -50,11 +50,11 @@ bedcode-mobile/                       # 移动端项目 (Tauri 2.0 + Vue 3)
 ├── src/                              # Vue 3 前端（扁平化结构）
 │   ├── components/                   # UI 组件：设备卡片、文件浏览/查看、移动布局/导航/状态栏、
 │   │                                 #   滑动容器、配对、任务弹窗、图标（终端组件随票 15 迁
-│   │                                 #   plugins/terminal-session/src/terminal/components/）
+│   │                                 #   wasm-apps/terminal-session/src/terminal/components/）
 │   ├── composables/                  # 业务逻辑 composable：连接管理、HTTP API、文件树、代码高亮、
 │   │                                 #   mDNS 发现/广播、预设任务、系统通知、前台服务、边到边显示、
 │   │                                 #   屏幕方向、更新检查等（终端内核域随票 15 迁
-│   │                                 #   plugins/terminal-session/src/terminal/composables/）
+│   │                                 #   wasm-apps/terminal-session/src/terminal/composables/）
 │   ├── stores/                       # Pinia 全局状态：代码查看器、设置、i18n
 │   │                                 #   （输入助手 / 终端缓冲随票 15 迁插件）
 │   ├── views/                        # 页面：代码浏览器、设备、mDNS 发现、插件、扫码、会话、
@@ -65,7 +65,7 @@ bedcode-mobile/                       # 移动端项目 (Tauri 2.0 + Vue 3)
 │   │                                 #   共享模块运行时、对话框宿主、终端流 / 会话事件机制面（票 15）；
 │   │                                 #   components/ 下为插件 UI 宿主（导航页签/设置页/终端工具栏/
 │   │                                 #   视图宿主；任务队列面板已随票 16 归
-│   │                                 #   plugins/terminal-session/src/task/）
+│   │                                 #   wasm-apps/terminal-session/src/task/）
 │   ├── utils/                        # 工具函数（剪贴板、mock 会话开关、主题 label 等）
 │   ├── config/                       # 配置（启动闪屏等；终端主题随票 15 迁插件）
 │   ├── services/                     # 跨端复用服务（linkCrypto.ts 链路加密客户端）
@@ -92,7 +92,7 @@ bedcode-mobile/                       # 移动端项目 (Tauri 2.0 + Vue 3)
 │   │                                 #   与同目录 ui-mechanism-port.md
 │   └── __tests__/                    # 前端测试（composables/stores/utils/config/plugin/shell 子目录 +
 │                                     #   fixtures 测试数据 + integration 集成测试；终端域测试随
-│                                     #   票 15 迁 plugins/terminal-session/src/terminal/__tests__/，
+│                                     #   票 15 迁 wasm-apps/terminal-session/src/terminal/__tests__/，
 │                                     #   由本 vitest 配置统一驱动）
 └── src-tauri/                        # Rust 后端（Tokio 异步）
     └── src/                          # 模块按领域扁平组织，每领域配同名入口文件（auth.rs、commands.rs 等）
@@ -176,7 +176,7 @@ bedcode-mobile/                       # 移动端项目 (Tauri 2.0 + Vue 3)
   `ws_paired` / `ws_auth_failed`）由插件经 host-events 广播，事件名与载荷与退役前逐字一致。
   回接由 `tests/retired_mobile_auth_orchestration_command_face_lock.rs` 拦截
 
-### 终端链路（协议客户端与消费 UI 皆在插件 · 窄转发在宿主，票 12 + 票 15 阶段 A）— `plugins/terminal-session/` + `src-tauri/src/terminal_stream_gateway.rs`
+### 终端链路（协议客户端与消费 UI 皆在插件 · 窄转发在宿主，票 12 + 票 15 阶段 A）— `wasm-apps/terminal-session/` + `src-tauri/src/terminal_stream_gateway.rs`
 
 桌面端 PTY 输出的移动端消费链路（2026-09-12 迁入 Rust 取代前端直连 WS；2026-09-26 票 05
 对齐桌面插件 `ws_terminal.rs` 新协议；**2026-10-08 票 12 协议客户端整体迁入 wasm app
@@ -184,7 +184,7 @@ bedcode-mobile/                       # 移动端项目 (Tauri 2.0 + Vue 3)
 宿主 `terminal_link.rs`（1,363 行）与 `enums/special_key.rs` 退役，回接由
 `tests/retired_mobile_terminal_link_lock.rs` 拦截）：
 
-- **插件侧（`plugins/terminal-session/rust/src/`，协议事实面）**：`link.rs` 状态机
+- **插件侧（`wasm-apps/terminal-session/rust/src/`，协议事实面）**：`link.rs` 状态机
   （fresh subscribe 门控 / cursor / session_missing 三振 / pending_resync）、`protocol.rs`
   帧构造与纯函数（wire 形状真源 = 桌面 `ws_terminal.rs`，零变化）、`keys.rs` 按键翻译
   （自宿主等价移植，桌面同款先例）、`commands.rs` 命令面
@@ -212,7 +212,7 @@ bedcode-mobile/                       # 移动端项目 (Tauri 2.0 + Vue 3)
   死分支同删，回接由 `tests/retired_mobile_session_control_face_lock.rs` 拦截（原 `session/http.rs`
   三个结构锁随迁：旧信封命令名 / WS 加密零残留 / 控制面无信封引用）。resize 不在此域
   （终端 UI 经 `mobileApi.httpRequest` 直发，票 15 口径）
-- **插件前端（票 15 阶段 A：终端消费 UI 域整体迁入，`plugins/terminal-session/src/terminal/`，
+- **插件前端（票 15 阶段 A：终端消费 UI 域整体迁入，`wasm-apps/terminal-session/src/terminal/`，
   47 文件 / 约 9.6k 行）**：`TerminalView.vue`（页面编排；宿主壳经 `registry.terminalView` 渲染，
   `props.sessionId` 优先、缺省回落 `mobileApi.activeSessionId`）+ `store.ts`（订阅状态机 / 本地
   字节游标 / 背压 ack / `ring_resync` 唯一重锚；命令经 `context.commands`、事件经 `context.events`、
@@ -255,6 +255,16 @@ bedcode-mobile/                       # 移动端项目 (Tauri 2.0 + Vue 3)
 
 移动端插件系统与桌面端同架构（wasmtime 组件沙箱），并有移动端特有能力。做插件相关改动时按层定位：
 
+**插件机制整核（fork crate，批次 1+1b 落地 · 宿主未切换）— `packages/bedcode-wasm-core/`：**
+crate 名 `bedcode-wasm-core-mobile`，fork 自桌面整核（ADR 0040 选项 C 第一步，票 17）。已含：机制核
+（bus/config/db/monitor/permission/security/storage）、**移动运行时与 16 域 host 原语**
+（`manager/runtime{,/component.rs,/host_impl/}`——bindgen 绑移动 WIT v17，宿主引擎调用经
+`host_api/ports.rs` 的 `HostEnginePorts` 注入）、`host_api/{http_engine,sql_guard}`（原宿主
+wasm_host.rs 拆分）、`terminal_stream_gateway.rs`（窄转发表，Tauri 命令薄壳留宿主）、
+`test_support`（夹具构建器 + MockPorts，`any(test, feature = "test-support")` 门控）。
+**宿主 `src-tauri/src/plugin/` 仍是运行真源**（垫片切换 = 票 17 批次 2b，前置裁决见票 §6.1）；
+切换前禁止在本 crate 与宿主 plugin/ 之间做机制修改（双真源窗口期，改哪边都要记账）。
+
 **Rust 宿主侧 — `src-tauri/src/plugin/`：**
 
 - **manager / loader / registry / storage**：生命周期管理（加载/激活/停用/状态持久化）、
@@ -279,14 +289,14 @@ bedcode-mobile/                       # 移动端项目 (Tauri 2.0 + Vue 3)
 扩展点收口：`ui.registerToolboxPage` / `registerNavTab` / `registerTerminalToolbarItem` /
 `registerSettingsSection` / `registerRoute` + **`registerTerminalView`（票 15：终端主视图单实例
 槽，`/mobile/terminal/:id` 薄壳与宿主壳运行面共同消费，`ui:input` 门）**。
-任务队列面板不在宿主侧——随票 16 并入 `plugins/terminal-session/src/task/`（插件前端经 createApp 自挂载）。
+任务队列面板不在宿主侧——随票 16 并入 `wasm-apps/terminal-session/src/task/`（插件前端经 createApp 自挂载）。
 
 **插件开发 SDK — `packages/plugin-sdk-mobile/`：** Rust + TS 双侧 SDK；相比桌面端额外封装移动端专属能力
 （SAF 存储访问、对话框/系统通知、动态路由、生命周期钩子、dev-shell 演示数据协议）；含插件模板
 （`template/`）、脚手架（`bin/`）、调试壳（`dev-shell/`）、共享 UI 子路径导出（`./ui`）。
 完整开发指南见仓库根 `bedcode-mobile/plugin-dev-mobile.md`。
 
-**内置插件源码 — `plugins/*/`：** 每个插件独立 package：`plugin.json` 元数据 + `rust/` WASM 后端 +
+**内置 wasm 应用源码 — `wasm-apps/*/`：** 每个 app 独立 package：`plugin.json` 元数据 + `rust/` WASM 后端 +
 `src/` TS 前端 + `vite.config.ts` 独立构建。改插件后需重新构建并同步产物到打包资源。
 
 **典型任务入口：** 新增宿主能力 → `wasm_runtime/host_impl/` + SDK `rust/src/host/` 对应域 trait；
@@ -306,7 +316,7 @@ bedcode-mobile/                       # 移动端项目 (Tauri 2.0 + Vue 3)
   响应收不到，表现为单侧可见）；首连确认闸门经 `peer-consent-requested` 事件桥接前端确认框
 - **插件入口（真入口）— WIT `host-peer`**：同桌面端的 13 原语（见桌面 code-map 对等网络节），
   宿主实现在 `plugin/wasm_runtime/host_impl/peer.rs`（ADR 0022 v3）；插件侧经 `HostPeer` trait
-  调用（`plugins/file-transfer/rust/src/peer.rs`）
+  调用（`wasm-apps/file-transfer/rust/src/peer.rs`）
 - **命令面（注册于 `lib.rs`）：票 09 + 票 10 后为零**——`peer_net` / `peer_transfer` /
   `peer_receive` / `peer_remote` 四个模块**零 Tauri 注册**。票 09 清掉发现与连接编排面
   （设备列表查询 / 缓存解析版拨号 / 共享目录注册表 CRUD / 节点启停 / 首连应答 /
@@ -345,7 +355,7 @@ bedcode-mobile/                       # 移动端项目 (Tauri 2.0 + Vue 3)
   `useConsent` 等，经 `HostPeer` trait 调宿主原语）；双方向任务真源 = 插件
   `transfer_store::reduce_event` 事件归约（票 06 发送 / 票 07 接收）；
   `peer_migration.rs` 把引擎侧旧数据幂等迁入插件存储键
-- **回放与节流判据单点**（票 08，均在 `plugins/file-transfer/rust/src/transfer_store.rs` 纯函数）：
+- **回放与节流判据单点**（票 08，均在 `wasm-apps/file-transfer/rust/src/transfer_store.rs` 纯函数）：
   `retry_source`（终态 + 有 `retry_meta` 才可重试，三类拒绝各有文案）· `send_slot_open`
   （发送闸门，下限 1）· `push_pull_intent` / `take_pull_intent`（拉取意图队列，封顶
   `PULL_INTENT_CAP`，**入队先于 `peer-pull-files`** —— 否则 `pull-started` 事件早于入队、
@@ -414,7 +424,7 @@ Desktop PTY → Claude Code
 模式切换走 HTTP（不经过 PTY）：`POST /api/plugin/com.bedcode.terminal-session/session-mode`（JWT 认证）→ 广播回同步 UI。
 
 涉及目录：`src/composables/`（useMobileConnection/useNotification/useHttpApi/usePresetTasks）、
-`src/components/`（TaskPickerModal/TaskEditDialog）、`plugins/terminal-session/src/task/`（票 16 起任务面板在插件工程内）。
+`src/components/`（TaskPickerModal/TaskEditDialog）、`wasm-apps/terminal-session/src/task/`（票 16 起任务面板在插件工程内）。
 
 ---
 
@@ -425,7 +435,7 @@ Desktop PTY → Claude Code
 | 功能 | 目录 |
 |------|------|
 | WebSocket 客户端 / 心跳 / 重连 | `src-tauri/src/connection/` |
-| 终端链路（协议客户端在插件 `com.bedcode.terminal-session`；宿主窄转发面 `terminal_stream_gateway.rs`） | `plugins/terminal-session/` + `src-tauri/src/terminal_stream_gateway.rs` |
+| 终端链路（协议客户端在插件 `com.bedcode.terminal-session`；宿主窄转发面 `terminal_stream_gateway.rs`） | `wasm-apps/terminal-session/` + `src-tauri/src/terminal_stream_gateway.rs` |
 | 消息路由 | `src-tauri/src/router/` |
 | WS 消息处理器 | `src-tauri/src/handler/` |
 | 认证 / 配对 | `src-tauri/src/auth/` |
@@ -438,8 +448,8 @@ Desktop PTY → Claude Code
 | 移动端设置持久化 | `src-tauri/src/system/`（settings） |
 | 预设任务 / 任务弹窗 | `src/composables/`（usePresetTasks）、`src/components/`（Task* 弹窗） |
 | 任务通知 | `src/composables/`（useNotification） |
-| 任务队列面板（任务域，票 16 并入） | `plugins/terminal-session/src/task/` |
-| 文件传输 (SAF) | `plugins/file-transfer/` + `src-tauri/src/plugin/`（saf_io/saf_path）+ `src-tauri/src/file_service/` |
+| 任务队列面板（任务域，票 16 并入） | `wasm-apps/terminal-session/src/task/` |
+| 文件传输 (SAF) | `wasm-apps/file-transfer/` + `src-tauri/src/plugin/`（saf_io/saf_path）+ `src-tauri/src/file_service/` |
 | 对等网络（节点/信任/发现） | `src-tauri/src/peer_net.rs` |
 | 对等传输（发送/接收/远端浏览） | `src-tauri/src/peer_transfer.rs`、`peer_receive.rs`、`peer_remote.rs` |
 | 对等网络底座 crate | `../packages/peer-net`、`../packages/link-crypto` |
@@ -455,7 +465,7 @@ Desktop PTY → Claude Code
 | 插件系统 (前端) | `src/plugin/`、`src/views/`（PluginView） |
 | **移动端前端默认落点（宿主壳）** | `src/shell/`——公共组件库 `components/ui/`、平台机制副本 `composables/`（规则见 AGENTS.md §6） |
 | 插件开发 SDK | `packages/plugin-sdk-mobile/`（开发指南：仓库根 `plugin-dev-mobile.md`） |
-| 插件源码 | `plugins/*/` |
+| 插件源码 | `wasm-apps/*/` |
 | 系统常量 / 错误类型 | `src-tauri/src/system/`（constants/ 按领域分组） |
 | 全局状态 (Rust) | `src-tauri/src/state.rs` |
 | 国际化 | `src/locales/` |
@@ -480,7 +490,7 @@ Desktop PTY → Claude Code
 | mDNS | `src-tauri/src/mdns/*.rs` |
 | 插件系统 (Rust) | `src-tauri/src/plugin/*.rs` |
 | 插件系统 (前端) | `src/plugin/` |
-| 插件源码 | `plugins/*/` |
+| 插件源码 | `wasm-apps/*/` |
 
 ---
 
@@ -521,7 +531,7 @@ Desktop PTY → Claude Code
   `mobile_terminal_stream_retained_face_stays` 反向钉住：`host-terminal-stream.forward-output` +
   `terminal:output` 权限位 + `terminal_stream_gateway` 窄转发 + `primary-target` 在场）
 - auto-task 独立插件整体退役（票 16：并入 `com.bedcode.terminal-session`，任务域前端在
-  `plugins/terminal-session/src/task/`）→ `src-tauri/tests/retired_mobile_auto_task_plugin_lock.rs`
+  `wasm-apps/terminal-session/src/task/`）→ `src-tauri/tests/retired_mobile_auto_task_plugin_lock.rs`
   （旧 id / 视图 id / 命令 id 前缀扫描 + `merged_task_domain_and_plugin_retirement_stay` 反向断言：
   插件目录与打包资源目录不得复活、manifest 权限并集与换 id 后的扩展点必须在场）
 - 本地配对码编排面退役（票 14 阶段 A，本端不是配对码颁发方）→ `src-tauri/tests/retired_mobile_local_pairing_code_face_lock.rs`（同上三形态 + `mobile_auth_engine_face_stays`）
@@ -537,6 +547,7 @@ Desktop PTY → Claude Code
   变异自检 4/4：符号回接 → 锁1，stub+注册 → 锁1+2，前端字面量 → 锁3+4，删 `network:http` → 锁4）
 - 插件 KV 真源 = 主库 `plugin_storage` 表（票 05b 真源搬迁）→ `src-tauri/tests/plugin_storage_db_backed_lock.rs`（`plugin_storage_is_db_backed_not_file_backed`）
 - `host-websocket` 客户端子集域边界（票 11：移动 WIT 不得长出 ws **服务端**域 / 不得定义 ws 服务端权限）→ `src-tauri/tests/mobile_host_websocket_client_domain_lock.rs`
+- egress 三档策略架构不变量（票 20：档位→动作映射单点 `StrategyStep::of` / 写入面 `parse_wire` 单点 / 安全义务符号在场）→ `src-tauri/tests/egress_tier_mapping_single_point_lock.rs`（3 例 + 变异自检 3/3）
 
 > 迁移 / 抽包类任务的规格与逐票记录在 `.scratch/2026-10-07-mobile-wasm-core-refactor/` 与
 > `.scratch/2026-10-07-capability-crates-to-root-packages/`（`.scratch` 只在 uat/master 之外分支入库）。

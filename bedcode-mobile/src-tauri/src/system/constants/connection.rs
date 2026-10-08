@@ -50,7 +50,7 @@ pub const WS_DEFAULT_PATH: &str = "/";
 
 // 注：原 `WS_PLUGIN_TERMINAL_PATH`（终端流端点 `/ws/plugin/com.bedcode.terminal-session/terminal`）
 // 已随票 12 终端订阅协议客户端迁插件删除——端点 URL 的拼装真源在终端插件
-// （`plugins/terminal-session/rust/src/lib.rs` 的 TERMINAL_WS_PATH），宿主零消费。
+// （`wasm-apps/terminal-session/rust/src/lib.rs` 的 TERMINAL_WS_PATH），宿主零消费。
 
 /// 桌面 wasm 应用 `com.bedcode.terminal-session` 的 WS 端点基础路径
 ///

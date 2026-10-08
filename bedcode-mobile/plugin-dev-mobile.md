@@ -218,9 +218,9 @@ app.provide('pluginContext', context)        // 组件内经 inject 取 context
 app.mount(container)
 ```
 
-- 样式用 `?inline` 导入并在 activate 时注入 `<style>`（参见 `plugins/terminal-session/src/task/panel.css`）；
+- 样式用 `?inline` 导入并在 activate 时注入 `<style>`（参见 `wasm-apps/terminal-session/src/task/panel.css`）；
 - 组件复用宿主 Tailwind 工具类时，需把插件源码加入宿主 `tailwind.config.js` 的 `content` 扫描范围；
-- 键盘避让基于 window 级事件（`safeAreaChanged` + `visualViewport`），与终端输入一致（参见 `plugins/terminal-session/src/task/components/AutoTaskPanelHost.vue`）。
+- 键盘避让基于 window 级事件（`safeAreaChanged` + `visualViewport`），与终端输入一致（参见 `wasm-apps/terminal-session/src/task/components/AutoTaskPanelHost.vue`）。
 
 ---
 
@@ -324,7 +324,7 @@ SAF 选择器、系统通知）仍需真机验证。首次运行自动安装 dev
 | SDK 模板 | `bedcode-mobile/packages/plugin-sdk-mobile/template/` |
 | SDK 浏览器开发环境 | `bedcode-mobile/packages/plugin-sdk-mobile/dev-shell/` |
 | 插件宿主 | `bedcode-mobile/src-tauri/src/plugin/`（manager / loader / downloader / wasm_runtime / wasm_host / registry / commands / storage / transfer / saf_io / saf_path / fs_auth / approval / message_bus / validation / android_plugins） |
-| 内置插件 | `bedcode-mobile/plugins/ai-chatbox`、`plugins/file-transfer`、`plugins/terminal-session` |
+| 内置插件 | `bedcode-mobile/wasm-apps/ai-chatbox`、`wasm-apps/file-transfer`、`wasm-apps/terminal-session` |
 | 插件管理页 | `bedcode-mobile/src/views/PluginView.vue` |
 | 前端插件运行时 | `bedcode-mobile/src/plugin/`（loader / registry / context / commands / events / permission / shared-runtime / routes / dialog-host / components） |
 | Kotlin 解压桥 | `bedcode-mobile/src-tauri/gen/android/.../PluginAssetExtractor.kt` |

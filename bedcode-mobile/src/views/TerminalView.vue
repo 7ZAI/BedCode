@@ -20,7 +20,7 @@
  * TerminalView（宿主薄壳；票 15：终端 UI 域整体下沉插件）
  *
  * 终端消费 UI（渲染/输入/订阅/设置/引导等约 9.6k 行）已迁入内置 app
- * `com.bedcode.terminal-session` 前端（plugins/terminal-session/src/terminal/**）；
+ * `com.bedcode.terminal-session` 前端（wasm-apps/terminal-session/src/terminal/**）；
  * 宿主只保留三件无业务语义的事：
  * - 路由壳：`/mobile/terminal/:id` URL 形状与返回/底部导航语义零变更
  *   （旧壳将被宿主壳 `/mobile/shell` 替换，本薄壳随之退役）
