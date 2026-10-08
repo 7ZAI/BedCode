@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>WasmApp Desktop — Shell 预览方案 v0.1</title>
+<style>
+/* 设计 token：直接取自 bedcode-desktop/src/style.css（warm 默认色板，light/dark 双主题） */
+:root{
+  --bg-page:#f5f4f0; --bg-sidebar:#efede7; --bg-card:#fdfcfa; --bg-hover:#e7e4dc; --bg-input:#fdfcfa;
+  --text-primary:#26231b; --text-secondary:#7c7565; --text-tertiary:#aba492;
+  --border:#e4e1d8; --border-strong:#d6d2c4; --border-input:#d6d2c4;
+  --color-primary:#1d1a14; --color-primary-hover:#0f0d09; --color-primary-light:#efede5; --color-primary-contrast:#fdfcfa;
+  --radius-card:10px; --radius-button:8px; --radius-input:8px; --radius-tag:6px; --radius-nav:8px;
+  --shadow-card:0 1px 2px rgba(38,35,27,.04); --shadow-card-hover:0 4px 16px rgba(38,35,27,.08);
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  --mono:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;
+}
+html[data-theme='dark']{
+  --bg-page:#15130f; --bg-sidebar:#191712; --bg-card:#1d1a15; --bg-hover:#2a261e; --bg-input:#1d1a15;
+  --text-primary:#ece8dc; --text-secondary:#9c9482; --text-tertiary:#6b6455;
+  --border:#2e2a22; --border-strong:#3c372b; --border-input:#3c372b;
+  --color-primary:#ece8dc; --color-primary-hover:#f5f2ea; --color-primary-light:rgba(236,232,220,.12); --color-primary-contrast:#15130f;
+  --shadow-card:0 1px 2px rgba(0,0,0,.2); --shadow-card-hover:0 4px 16px rgba(0,0,0,.35);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--font);background:var(--bg-page);color:var(--text-primary);height:100vh;overflow:hidden;font-size:13px;transition:background-color .2s,color .2s}
+button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit}
+
+/* ===== 标题栏 ===== */
+.titlebar{height:40px;background:var(--bg-card);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:0 8px 0 16px;user-select:none}
+.brand{display:flex;align-items:center;gap:10px;font-weight:600;font-size:13px;letter-spacing:-.01em}
+.brand small{font-weight:400;color:var(--text-tertiary);font-size:11px}
+.tsearch{display:flex;align-items:center;gap:8px;background:var(--bg-input);border:1px solid var(--border-input);border-radius:var(--radius-input);height:28px;width:320px;padding:0 10px;color:var(--text-tertiary);transition:border-color .2s}
+.tsearch:focus-within{border-color:var(--border-strong)}
+.tsearch input{border:none;outline:none;background:none;color:var(--text-primary);width:100%;font-size:12px}
+.tsearch kbd{font-family:var(--mono);font-size:10px;border:1px solid var(--border);border-radius:4px;padding:1px 4px;color:var(--text-tertiary)}
+.tbtns{display:flex;align-items:center;gap:2px}
+.tbtns button{width:36px;height:28px;border-radius:6px;display:flex;align-items:center;justify-content:center;color:var(--text-secondary);transition:background-color .15s,color .15s}
+.tbtns button:hover{background:var(--bg-hover);color:var(--text-primary)}
+
+/* ===== 主体三栏 ===== */
+.body{display:flex;height:calc(100vh - 40px - 26px)}
+
+/* 左：应用轨（app rail） */
+.rail{width:56px;background:var(--bg-sidebar);border-right:1px solid var(--border);display:flex;flex-direction:column;align-items:center;padding:10px 0;gap:6px;flex-shrink:0}
+.rail-label{font-size:9px;color:var(--text-tertiary);letter-spacing:.12em;margin:2px 0 4px}
+.app-ic{width:38px;height:38px;border-radius:var(--radius-nav);display:flex;align-items:center;justify-content:center;font-size:15px;position:relative;color:var(--text-secondary);transition:background-color .15s,color .15s}
+.app-ic:hover{background:var(--bg-hover)}
+.app-ic.on{background:var(--bg-card);color:var(--text-primary);box-shadow:var(--shadow-card)}
+.app-ic .dot{position:absolute;right:2px;bottom:2px;width:7px;height:7px;border-radius:50%;background:#4d9e5f;border:2px solid var(--bg-sidebar)}
+.app-ic .dot.idle{background:var(--text-tertiary)}
+.rail-spacer{flex:1}
+.rail-add{width:32px;height:32px;border-radius:8px;border:1px dashed var(--border-strong);color:var(--text-tertiary);display:flex;align-items:center;justify-content:center;transition:color .15s,border-color .15s}
+.rail-add:hover{color:var(--text-primary);border-color:var(--text-secondary)}
+
+/* 中：主区 */
+.main{flex:1;display:flex;flex-direction:column;min-width:0;background:var(--bg-page)}
+
+/* 应用标签页：多 app 同时运行的核心可视化 */
+.tabs{height:36px;background:var(--bg-sidebar);border-bottom:1px solid var(--border);display:flex;align-items:flex-end;padding:0 8px;gap:2px;overflow-x:auto}
+.tab{display:flex;align-items:center;gap:8px;height:30px;padding:0 12px;border-radius:8px 8px 0 0;color:var(--text-secondary);font-size:12px;white-space:nowrap;border:1px solid transparent;border-bottom:none;transition:background-color .15s,color .15s}
+.tab:hover{color:var(--text-primary);background:color-mix(in srgb,var(--bg-card) 55%,transparent)}
+.tab.on{background:var(--bg-page);color:var(--text-primary);border-color:var(--border);font-weight:500;position:relative}
+.tab.on::after{content:'';position:absolute;left:0;right:0;bottom:-1px;height:1px;background:var(--bg-page)}
+.tab .state{width:6px;height:6px;border-radius:50%;background:#4d9e5f;flex-shrink:0}
+.tab .close{width:14px;height:14px;border-radius:4px;display:flex;align-items:center;justify-content:center;color:var(--text-tertiary);font-size:10px}
+.tab .close:hover{background:var(--bg-hover);color:var(--text-primary)}
+
+/* 应用内容区：当前 app 的独立界面 */
+.stage{flex:1;overflow:hidden;padding:14px;display:flex}
+.apppane{flex:1;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-card);box-shadow:var(--shadow-card);display:flex;flex-direction:column;overflow:hidden;min-width:0}
+.apppane-head{height:40px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:0 14px;flex-shrink:0}
+.apppane-head .t{font-weight:600;font-size:13px}
+.apppane-head .sub{font-size:11px;color:var(--text-tertiary);margin-left:8px}
+.badge{font-size:10px;padding:2px 8px;border-radius:var(--radius-tag);background:var(--color-primary-light);color:var(--text-secondary)}
+.apppane-body{flex:1;overflow:auto;padding:14px}
+
+/* 终端 app mock */
+.term{background:#15130f;color:#d8d3c3;border-radius:8px;padding:12px 14px;font-family:var(--mono);font-size:12px;line-height:1.7;height:100%}
+html[data-theme='light'] .term{background:#201d16;color:#e6e0cd}
+.term .p{color:#8fbf9f}.term .c{color:#8a8474}
+
+/* AI app mock */
+.msg{max-width:75%;padding:10px 12px;border-radius:10px;margin-bottom:10px;font-size:12.5px;line-height:1.6}
+.msg.u{background:var(--color-primary-light);margin-left:auto;color:var(--text-primary)}
+.msg.a{background:var(--bg-input);border:1px solid var(--border);color:var(--text-primary)}
+.composer{margin-top:auto;display:flex;gap:8px}
+.composer input{flex:1;height:34px;border:1px solid var(--border-input);background:var(--bg-input);border-radius:var(--radius-input);padding:0 12px;color:var(--text-primary);outline:none;font-size:12.5px}
+.composer button{height:34px;padding:0 14px;background:var(--color-primary);color:var(--color-primary-contrast);border-radius:var(--radius-button);font-size:12.5px;font-weight:500;transition:background-color .15s}
+.composer button:hover{background:var(--color-primary-hover)}
+
+/* 文件 app mock：列表行 */
+.frow{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:8px;transition:background-color .12s}
+.frow:hover{background:var(--bg-hover)}
+.frow .ic{width:30px;height:30px;border-radius:8px;background:var(--color-primary-light);display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.frow .n{flex:1;min-width:0;font-size:12.5px;truncate:ellipsis;overflow:hidden;white-space:nowrap}
+.frow .m{font-size:11px;color:var(--text-tertiary)}
+.bar{height:4px;border-radius:2px;background:var(--border);overflow:hidden;margin-top:4px}
+.bar i{display:block;height:100%;background:#4d9e5f;border-radius:2px}
+
+/* 右：检查器 */
+.inspector{width:264px;background:var(--bg-sidebar);border-left:1px solid var(--border);flex-shrink:0;display:flex;flex-direction:column}
+.insp-head{padding:12px 14px 8px;font-size:11px;font-weight:600;letter-spacing:.08em;color:var(--text-tertiary)}
+.insp-sec{padding:4px 14px 12px;border-bottom:1px solid var(--border)}
+.kv{display:flex;justify-content:space-between;font-size:12px;padding:4px 0}
+.kv b{font-weight:500}
+.kv span{color:var(--text-secondary)}
+.perm{display:flex;align-items:center;gap:8px;padding:5px 0;font-size:12px;color:var(--text-secondary)}
+.perm .on{color:#4d9e5f}
+.perm code{font-family:var(--mono);font-size:11px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;padding:1px 5px;color:var(--text-primary)}
+.pbar{height:5px;border-radius:3px;background:var(--border);overflow:hidden;margin:6px 0 2px}
+.pbar i{display:block;height:100%;background:var(--text-secondary);border-radius:3px}
+.insp-actions{padding:12px 14px;display:flex;flex-direction:column;gap:6px}
+.btn{height:30px;border-radius:var(--radius-button);border:1px solid var(--border-strong);background:var(--bg-card);font-size:12px;color:var(--text-primary);transition:background-color .15s}
+.btn:hover{background:var(--bg-hover)}
+.btn.danger{color:#b4543f}
+
+/* 底：状态栏 */
+.statusbar{height:26px;background:var(--bg-card);border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:0 12px;font-size:11px;color:var(--text-secondary)}
+.statusbar .grp{display:flex;align-items:center;gap:14px}
+.statusbar .it{display:flex;align-items:center;gap:5px;white-space:nowrap}
+.sd{width:6px;height:6px;border-radius:50%;background:#4d9e5f}
+</style>
+</head>
+<body>
+
+<!-- 标题栏：品牌 · 全局启动/搜索 · 插件标题栏扩展点 · 窗口控制 -->
+<div class="titlebar">
+  <div class="brand">
+    <svg width="20" height="20" viewBox="0 0 100 100"><rect width="100" height="100" rx="22" fill="#16181C"/><g stroke="#F5F7F9" stroke-width="13"><line x1="23.2" y1="33" x2="36.8" y2="67"/><line x1="39.3" y1="67.1" x2="48.7" y2="46.9"/><line x1="51.3" y1="46.9" x2="60.7" y2="67.1"/><line x1="63.2" y1="67" x2="76.8" y2="33"/></g><path d="M50 36.5 L56.5 43 L50 49.5 L43.5 43 Z" fill="#FF9E2C"/></svg>
+    WasmApp <small>Desktop Shell · v0.1 预览</small>
+  </div>
+  <div class="tsearch">
+    <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+    <input placeholder="搜索应用、命令、文件…" />
+    <kbd>Ctrl K</kbd>
+  </div>
+  <div class="tbtns">
+    <button title="切换主题" onclick="document.documentElement.dataset.theme = document.documentElement.dataset.theme==='dark'?'light':'dark'">◐</button>
+    <button title="最小化">—</button><button title="最大化">▢</button><button title="关闭">✕</button>
+  </div>
+</div>
+
+<div class="body">
+  <!-- 左栏：已安装/运行中的 wasm-app 轨 -->
+  <div class="rail">
+    <div class="rail-label">APPS</div>
+    <button class="app-ic on" title="terminal-session" onclick="switchApp('term',this)">⌘<span class="dot"></span></button>
+    <button class="app-ic" title="ai-chatbox" onclick="switchApp('ai',this)">✦<span class="dot"></span></button>
+    <button class="app-ic" title="file-transfer" onclick="switchApp('fs',this)">⇅<span class="dot"></span></button>
+    <button class="app-ic" title="agent-hub" onclick="switchApp('hub',this)">◈<span class="dot idle"></span></button>
+    <div class="rail-spacer"></div>
+    <button class="rail-add" title="安装新应用">＋</button>
+  </div>
+
+  <!-- 中栏：标签页 + 活动 app 的独立界面 -->
+  <div class="main">
+    <div class="tabs">
+      <button class="tab on"><span class="state"></span>终端会话<span class="close">✕</span></button>
+      <button class="tab"><span class="state"></span>AI 对话<span class="close">✕</span></button>
+      <button class="tab"><span class="state"></span>文件传输<span class="close">✕</span></button>
+    </div>
+    <div class="stage">
+
+      <!-- 终端 app -->
+      <div class="apppane" id="app-term">
+        <div class="apppane-head">
+          <div><span class="t">terminal-session</span><span class="sub">会话真源 · v1.4.2 · running</span></div>
+          <span class="badge">3 个会话</span>
+        </div>
+        <div class="apppane-body">
+          <div class="term">
+            <div><span class="p">user@bedcode ~ $</span> ls wasm-apps</div>
+            <div>agent-hub&nbsp;&nbsp;ai-chatbox&nbsp;&nbsp;file-transfer&nbsp;&nbsp;terminal-session</div>
+            <div><span class="p">user@bedcode ~ $</span> <span class="c">shell 通过宿主壳管理本 app 的权限与资源</span>▉</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- AI app -->
+      <div class="apppane" id="app-ai" style="display:none">
+        <div class="apppane-head">
+          <div><span class="t">ai-chatbox</span><span class="sub">OpenAI 兼容 · running</span></div>
+          <span class="badge">provider: local-llm</span>
+        </div>
+        <div class="apppane-body" style="display:flex;flex-direction:column">
+          <div class="msg a">你好！我是 AI Chatbox 插件。当前由 WasmApp 壳托管运行。</div>
+          <div class="msg u">壳需要提供哪些能力？</div>
+          <div class="msg a">运行时实例管理、权限审批、资源配额、消息总线、独立界面挂载。</div>
+          <div class="composer"><input placeholder="输入消息…"/><button>发送</button></div>
+        </div>
+      </div>
+
+      <!-- 文件 app -->
+      <div class="apppane" id="app-fs" style="display:none">
+        <div class="apppane-head">
+          <div><span class="t">file-transfer</span><span class="sub">P2P peer_* · running</span></div>
+          <span class="badge">1 个进行中任务</span>
+        </div>
+        <div class="apppane-body">
+          <div class="frow"><div class="ic">▣</div><div class="n">backup-2026-10-08.tar<div class="bar"><i style="width:64%"></i></div></div><div class="m">64% · 3.2 MB/s</div></div>
+          <div class="frow"><div class="ic">▤</div><div class="n">notes.md</div><div class="m">12 KB</div></div>
+          <div class="frow"><div class="ic">▢</div><div class="n">photos/</div><div class="m">—</div></div>
+        </div>
+      </div>
+
+      <!-- 未启动 app -->
+      <div class="apppane" id="app-hub" style="display:none">
+        <div class="apppane-head"><div><span class="t">agent-hub</span><span class="sub">未启动</span></div><span class="badge">dormant</span></div>
+        <div class="apppane-body" style="display:flex;align-items:center;justify-content:center;color:var(--text-tertiary);flex-direction:column;gap:10px">
+          <div style="font-size:28px">◈</div>
+          <div>该 wasm-app 尚未启动</div>
+          <button class="btn" style="width:120px">启动应用</button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- 右栏：运行检查器 -->
+  <div class="inspector">
+    <div class="insp-head">APP INSPECTOR</div>
+    <div class="insp-sec">
+      <div class="kv"><b>实例</b><span>term-01</span></div>
+      <div class="kv"><b>状态</b><span style="color:#4d9e5f">running</span></div>
+      <div class="kv"><b>CPU</b><span>12%</span></div>
+      <div class="pbar"><i style="width:12%"></i></div>
+      <div class="kv"><b>内存</b><span>84 MB</span></div>
+      <div class="pbar"><i style="width:28%"></i></div>
+    </div>
+    <div class="insp-sec">
+      <div class="kv"><b>权限</b><span>pty:spawn · net:egress</span></div>
+      <div class="perm"><span class="on">●</span><code>pty:spawn</code></div>
+      <div class="perm"><span class="on">●</span><code>net:egress</code></div>
+      <div class="perm"><span style="color:var(--text-tertiary)">○</span><code>fs:write-anywhere</code></div>
+    </div>
+    <div class="insp-actions">
+      <button class="btn">查看日志</button>
+      <button class="btn">权限设置</button>
+      <button class="btn danger">停止实例</button>
+    </div>
+  </div>
+</div>
+
+<!-- 底栏：宿主状态 -->
+<div class="statusbar">
+  <div class="grp">
+    <span class="it"><span class="sd"></span>运行时就绪</span>
+    <span class="it">3 / 4 应用运行中</span>
+    <span class="it">消息总线 12 条/s</span>
+  </div>
+  <div class="grp">
+    <span class="it">Ctrl+K 命令面板</span>
+    <span class="it">wasmtime 48</span>
+  </div>
+</div>
+
+<script>
+function switchApp(id, el){
+  document.querySelectorAll('.apppane').forEach(p=>p.style.display='none');
+  document.getElementById('app-'+id).style.display='flex';
+  document.querySelectorAll('.app-ic').forEach(b=>b.classList.remove('on'));
+  el.classList.add('on');
+}
+</script>
+</body>
+</html>

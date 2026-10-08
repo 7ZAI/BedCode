@@ -1,0 +1,1167 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>WasmApp Desktop — 方案 B：分屏平铺工作区</title>
+<style>
+/* ============================================================================
+   设计 token：全部取自 bedcode-desktop/src/style.css（:root warm 色板 + :root.dark）
+   零新增 hex / 零新字体族 / 零 Google Fonts（frontend-styles token-bound 铁律）
+   语义色一律用 --color-{success,warning,danger,info} + *-light 变体
+   ============================================================================ */
+:root {
+  color-scheme: light;
+
+  --font: 'Segoe UI', -apple-system, BlinkMacSystemFont, 'SF Pro Display', Inter, system-ui, sans-serif;
+  --mono: ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, Consolas, monospace;
+
+  /* 与 style.css 同源的字号档（基准 12px），此处不叠加 --ui-scale 以保证预览尺寸可读 */
+  --font-size-xs: 9px;
+  --font-size-sm: 10px;
+  --font-size-base: 12px;
+  --font-size-lg: 14px;
+  --font-size-xl: 16px;
+
+  --bg-page: #f5f4f0;
+  --bg-sidebar: #efede7;
+  --bg-card: #fdfcfa;
+  --bg-hover: #e7e4dc;
+  --bg-input: #fdfcfa;
+
+  --text-primary: #26231b;
+  --text-secondary: #7c7565;
+  --text-tertiary: #aba492;
+
+  --border: #e4e1d8;
+  --border-strong: #d6d2c4;
+  --border-input: #d6d2c4;
+
+  --color-primary: #1d1a14;
+  --color-primary-hover: #0f0d09;
+  --color-primary-light: #efede5;
+  --color-primary-contrast: #fdfcfa;
+
+  --color-success: #22c55e;
+  --color-success-light: rgba(34, 197, 94, 0.14);
+  --color-warning: #f59e0b;
+  --color-warning-light: rgba(245, 158, 11, 0.16);
+  --color-danger: #ef4444;
+  --color-danger-light: rgba(239, 68, 68, 0.12);
+  --color-info: #2563eb;
+  --color-info-light: rgba(37, 99, 235, 0.12);
+
+  --radius-card: 10px;
+  --radius-button: 8px;
+  --radius-input: 8px;
+  --radius-tag: 6px;
+  --radius-nav: 8px;
+
+  --shadow-card: 0 1px 2px rgba(38, 35, 27, 0.04);
+  --shadow-card-hover: 0 4px 16px rgba(38, 35, 27, 0.08);
+  --shadow-input-focus: 0 0 0 3px rgba(29, 26, 20, 0.08);
+
+  /* 布局尺寸（本地布局常量，非视觉 token） */
+  --rail-w: 56px;
+  --titlebar-h: 40px;
+  --statusbar-h: 26px;
+  --inspector-w: 280px;
+}
+:root.dark {
+  color-scheme: dark;
+  --bg-page: #15130f;
+  --bg-sidebar: #191712;
+  --bg-card: #1d1a15;
+  --bg-hover: #2a261e;
+  --bg-input: #1d1a15;
+  --text-primary: #ece8dc;
+  --text-secondary: #9c9482;
+  --text-tertiary: #6b6455;
+  --border: #2e2a22;
+  --border-strong: #3c372b;
+  --border-input: #3c372b;
+  --color-primary: #ece8dc;
+  --color-primary-hover: #f5f2ea;
+  --color-primary-light: rgba(236, 232, 220, 0.12);
+  --color-primary-contrast: #15130f;
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.2);
+  --shadow-card-hover: 0 4px 16px rgba(0, 0, 0, 0.35);
+  --shadow-input-focus: 0 0 0 3px rgba(236, 232, 220, 0.1);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: var(--font);
+  font-size: var(--font-size-base);
+  background: var(--bg-page);
+  color: var(--text-primary);
+  height: 100vh;
+  overflow: hidden;
+  line-height: 1.5;
+  transition: background-color 0.2s, color 0.2s, border-color 0.2s;
+}
+
+button { font-family: inherit; font-size: inherit; cursor: pointer; border: none; background: none; color: inherit; }
+input { font-family: inherit; font-size: inherit; }
+svg { display: block; flex-shrink: 0; }
+
+/* 焦点可见：键盘导航必须看得见落点（ui-ux-pro-max pre-delivery checklist） */
+:focus-visible { outline: 2px solid var(--color-info); outline-offset: 1px; border-radius: 3px; }
+:focus:not(:focus-visible) { outline: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
+}
+
+/* ==================== 标题栏 ==================== */
+.titlebar {
+  height: var(--titlebar-h); flex-shrink: 0;
+  background: var(--bg-card); border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 12px; padding: 0 8px 0 14px;
+  user-select: none;
+}
+.brand { display: flex; align-items: center; gap: 9px; flex-shrink: 0; }
+.brand b { font-size: var(--font-size-lg); font-weight: 600; letter-spacing: -0.01em; }
+.brand small { font-size: var(--font-size-sm); color: var(--text-tertiary); font-weight: 400; }
+
+/* 工作区工具条：布局预设切换（多 app 同屏展示的主控） */
+.ws-tools { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.ws-label { font-size: var(--font-size-sm); color: var(--text-tertiary); letter-spacing: 0.08em; text-transform: uppercase; }
+.layout-group { display: flex; align-items: center; gap: 1px; padding: 2px; background: var(--bg-sidebar); border: 1px solid var(--border); border-radius: var(--radius-button); }
+.layout-btn {
+  width: 28px; height: 22px; border-radius: 5px; color: var(--text-tertiary);
+  display: flex; align-items: center; justify-content: center;
+  transition: background-color 0.15s, color 0.15s;
+}
+.layout-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.layout-btn.on { background: var(--bg-card); color: var(--text-primary); box-shadow: var(--shadow-card); }
+
+.tsearch { flex: 1; max-width: 340px; display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 10px;
+  background: var(--bg-input); border: 1px solid var(--border-input); border-radius: var(--radius-input);
+  color: var(--text-tertiary); transition: border-color 0.2s, box-shadow 0.2s; }
+.tsearch:focus-within { border-color: var(--border-strong); box-shadow: var(--shadow-input-focus); }
+.tsearch input { flex: 1; min-width: 0; border: none; outline: none; background: none; color: var(--text-primary); font-size: var(--font-size-base); }
+.tsearch kbd { font-family: var(--mono); font-size: var(--font-size-xs); border: 1px solid var(--border);
+  border-radius: 4px; padding: 1px 4px; color: var(--text-tertiary); flex-shrink: 0; }
+
+.tbtns { display: flex; align-items: center; gap: 2px; margin-left: auto; flex-shrink: 0; }
+.tbtn { width: 34px; height: 28px; border-radius: 6px; color: var(--text-secondary);
+  display: flex; align-items: center; justify-content: center; transition: background-color 0.15s, color 0.15s; }
+.tbtn:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+/* ==================== 主体 ==================== */
+.body { display: flex; height: calc(100vh - var(--titlebar-h) - var(--statusbar-h)); }
+
+/* ---- 左：应用轨 ---- */
+.rail {
+  width: var(--rail-w); flex-shrink: 0; background: var(--bg-sidebar);
+  border-right: 1px solid var(--border); display: flex; flex-direction: column;
+  align-items: center; padding: 8px 0; gap: 4px;
+}
+.rail-label { font-size: var(--font-size-xs); color: var(--text-tertiary); letter-spacing: 0.1em; margin: 6px 0 2px; }
+.rail-sep { width: 26px; height: 1px; background: var(--border); margin: 5px 0; }
+.rail-spacer { flex: 1; }
+
+.ic-btn {
+  width: 38px; height: 38px; border-radius: var(--radius-nav); position: relative;
+  display: flex; align-items: center; justify-content: center; color: var(--text-secondary);
+  transition: background-color 0.15s, color 0.15s;
+}
+.ic-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.ic-btn.on { background: var(--bg-card); color: var(--text-primary); box-shadow: var(--shadow-card); }
+.ic-btn .dot { position: absolute; right: 3px; bottom: 3px; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--color-success); box-shadow: 0 0 0 2px var(--bg-sidebar); }
+.ic-btn .dot.degraded { background: var(--color-warning); }
+.ic-btn .dot.dormant { background: var(--text-tertiary); }
+.ic-btn .dot.approval { background: var(--color-danger); }
+.ic-btn.dormant { color: var(--text-tertiary); }
+.ic-btn .badge-n { position: absolute; left: 1px; top: 1px; min-width: 14px; height: 14px; padding: 0 3px;
+  border-radius: 7px; background: var(--color-danger); color: var(--color-primary-contrast);
+  font-size: var(--font-size-xs); font-weight: 600; display: flex; align-items: center; justify-content: center; }
+.rail-add { width: 32px; height: 32px; border-radius: var(--radius-button); border: 1px dashed var(--border-strong);
+  color: var(--text-tertiary); display: flex; align-items: center; justify-content: center;
+  transition: color 0.15s, border-color 0.15s; }
+.rail-add:hover { color: var(--text-primary); border-color: var(--text-secondary); }
+
+/* ---- 中：舞台 ---- */
+.stage-wrap { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--bg-page); }
+.stage { flex: 1; min-height: 0; display: flex; padding: 8px; gap: 0; }
+
+/* 分屏树 */
+.split { display: flex; flex: 1; min-width: 0; min-height: 0; gap: 0; }
+.split.dir-h { flex-direction: row; }
+.split.dir-v { flex-direction: column; }
+.split > .node { min-width: 0; min-height: 0; display: flex; }
+.gutter { flex-shrink: 0; position: relative; z-index: 5; }
+.dir-h > .gutter { width: 8px; cursor: col-resize; }
+.dir-v > .gutter { height: 8px; cursor: row-resize; }
+.gutter::after { content: ''; position: absolute; background: transparent; transition: background-color 0.15s; }
+.dir-h > .gutter::after { top: 0; bottom: 0; left: 3px; right: 3px; }
+.dir-v > .gutter::after { left: 0; right: 0; top: 3px; bottom: 3px; }
+.gutter:hover::after, .gutter:focus-visible::after, .gutter.dragging::after { background: var(--color-info); }
+.gutter:focus-visible { outline: none; }
+.gutter:focus-visible::after { background: var(--color-info); }
+
+/* 面板（= 一个 wasm-app 的独立界面承载位） */
+.pane {
+  flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column;
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card); overflow: hidden;
+  transition: box-shadow 0.2s, border-color 0.2s;
+}
+.pane.focused { border-color: var(--border-strong); box-shadow: var(--shadow-card-hover); }
+.pane-head {
+  height: 34px; flex-shrink: 0; display: flex; align-items: center; gap: 8px;
+  padding: 0 6px 0 10px; border-bottom: 1px solid var(--border); background: var(--bg-card);
+}
+.pane-head .nm { font-size: var(--font-size-base); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pane-head .meta { font-size: var(--font-size-sm); color: var(--text-tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.pane-head .grow { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
+.pane-acts { display: flex; align-items: center; gap: 1px; flex-shrink: 0; }
+.pact { width: 24px; height: 22px; border-radius: 5px; color: var(--text-tertiary);
+  display: flex; align-items: center; justify-content: center; transition: background-color 0.15s, color 0.15s; }
+.pact:hover { background: var(--bg-hover); color: var(--text-primary); }
+.pact.danger:hover { background: var(--color-danger-light); color: var(--color-danger); }
+.pane-body { flex: 1; min-height: 0; overflow: auto; padding: 12px; }
+.pane-body.flush { padding: 0; }
+
+.chip { font-size: var(--font-size-sm); padding: 2px 7px; border-radius: var(--radius-tag);
+  background: var(--color-primary-light); color: var(--text-secondary); white-space: nowrap; flex-shrink: 0; }
+.chip.ok { background: var(--color-success-light); color: var(--color-success); }
+.chip.warn { background: var(--color-warning-light); color: var(--color-warning); }
+.chip.danger { background: var(--color-danger-light); color: var(--color-danger); }
+.chip.info { background: var(--color-info-light); color: var(--color-info); }
+
+.sdot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.sdot.running { background: var(--color-success); }
+.sdot.degraded { background: var(--color-warning); }
+.sdot.dormant { background: var(--text-tertiary); }
+.sdot.approval { background: var(--color-danger); }
+.sdot.error { background: var(--color-danger); }
+
+/* ---- 各 app 独立界面 mock（证明「每个 app 有自己的界面形态」） ---- */
+/* 终端面板：底色与前景全部走 token——与真实实现一致（TerminalPreview 的 --term-bg
+   由宿主容器 backgroundColor 下发，本身不引入独立色值，见 wasm-apps/terminal-session
+   src/components/terminal/TerminalPreview.vue）。双主题靠 token 自动反色，无 dark: 覆盖。 */
+.term { height: 100%; padding: 12px 14px; border-radius: 8px; background: var(--bg-sidebar);
+  font-family: var(--mono); font-size: var(--font-size-base); line-height: 1.7;
+  color: var(--text-primary); overflow: auto; }
+.term .p { color: var(--color-success); }
+.term .c { color: var(--text-tertiary); }
+.term .w { color: var(--color-warning); }
+
+.chat { height: 100%; display: flex; flex-direction: column; gap: 8px; }
+.chat-log { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 8px; }
+.msg { max-width: 82%; padding: 8px 10px; border-radius: 9px; font-size: var(--font-size-base); line-height: 1.6; }
+.msg.u { margin-left: auto; background: var(--color-primary-light); }
+.msg.a { background: var(--bg-input); border: 1px solid var(--border); }
+.composer { display: flex; gap: 6px; flex-shrink: 0; }
+.composer input { flex: 1; min-width: 0; height: 30px; padding: 0 10px; background: var(--bg-input);
+  border: 1px solid var(--border-input); border-radius: var(--radius-input); color: var(--text-primary); outline: none; }
+.composer input:focus { border-color: var(--border-strong); box-shadow: var(--shadow-input-focus); }
+.btn { height: 28px; padding: 0 12px; border-radius: var(--radius-button); background: var(--color-primary);
+  color: var(--color-primary-contrast); font-size: var(--font-size-base); font-weight: 500;
+  transition: background-color 0.15s; white-space: nowrap; }
+.btn:hover { background: var(--color-primary-hover); }
+.btn.ghost { background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border-strong); }
+.btn.ghost:hover { background: var(--bg-hover); }
+.btn.danger { color: var(--color-danger); }
+.btn.wide { width: 100%; }
+
+.frow { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: var(--radius-button);
+  transition: background-color 0.12s; }
+.frow:hover { background: var(--bg-hover); }
+.frow .fico { width: 28px; height: 28px; border-radius: 7px; background: var(--color-primary-light);
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0; color: var(--text-secondary); }
+.frow .nm { flex: 1; min-width: 0; font-size: var(--font-size-base); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.frow .mt { font-size: var(--font-size-sm); color: var(--text-tertiary); white-space: nowrap; }
+.bar { height: 3px; border-radius: 2px; background: var(--border); overflow: hidden; margin-top: 3px; }
+.bar i { display: block; height: 100%; border-radius: 2px; background: var(--color-success); transition: width 0.25s; }
+
+.card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-card); padding: 12px; }
+
+/* 空态（面板关闭 / 未启动） */
+.empty { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px; color: var(--text-tertiary); text-align: center; padding: 16px; }
+
+/* ---- 宿主自有面：工作区总览 ---- */
+.ov-grid { flex: 1; min-height: 0; overflow: auto; display: grid; gap: 10px; padding: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); align-content: start; }
+.ov-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-card);
+  padding: 12px; display: flex; flex-direction: column; gap: 8px; text-align: left;
+  transition: border-color 0.2s, box-shadow 0.2s; }
+.ov-card:hover { border-color: var(--border-strong); box-shadow: var(--shadow-card-hover); }
+.ov-top { display: flex; align-items: center; gap: 8px; }
+.ov-top .nm { font-weight: 600; font-size: var(--font-size-lg); flex: 1; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ov-stats { display: flex; gap: 12px; font-size: var(--font-size-sm); color: var(--text-tertiary); }
+.ov-perm { display: flex; flex-wrap: wrap; gap: 4px; }
+.pill { font-family: var(--mono); font-size: var(--font-size-xs); padding: 1px 5px; border-radius: 4px;
+  background: var(--bg-sidebar); border: 1px solid var(--border); color: var(--text-secondary); }
+.pill.risk { background: var(--color-danger-light); border-color: transparent; color: var(--color-danger); }
+
+/* ---- 宿主自有面：权限矩阵 ---- */
+.mx { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--bg-card);
+  border: 1px solid var(--border); border-radius: var(--radius-card); overflow: hidden; margin: 8px; }
+.mx-head { padding: 10px 14px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.mx-head .t { font-weight: 600; font-size: var(--font-size-lg); }
+.mx-scroll { flex: 1; min-height: 0; overflow: auto; }
+table.mx-tb { border-collapse: separate; border-spacing: 0; width: 100%; }
+table.mx-tb th, table.mx-tb td { padding: 0; }
+table.mx-tb thead th { position: sticky; top: 0; z-index: 2; background: var(--bg-card);
+  border-bottom: 1px solid var(--border); font-weight: 500; }
+table.mx-tb th.app-col { position: sticky; left: 0; z-index: 3; background: var(--bg-card);
+  border-right: 1px solid var(--border); text-align: left; padding: 6px 10px; min-width: 168px; }
+table.mx-tb thead th.app-col { z-index: 4; }
+.mx-app { display: flex; align-items: center; gap: 7px; padding: 6px 10px; }
+.mx-app .nm { font-weight: 500; white-space: nowrap; }
+.mx-perm { writing-mode: vertical-rl; transform: rotate(180deg); font-family: var(--mono);
+  font-size: var(--font-size-xs); color: var(--text-secondary); padding: 8px 0; height: 108px;
+  white-space: nowrap; border-left: 1px solid var(--border); }
+.mx-perm.risk { color: var(--color-danger); font-weight: 600; }
+.mx-cell { width: 26px; height: 26px; border-bottom: 1px solid var(--border); border-left: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: center; transition: background-color 0.12s; }
+.mx-cell:hover { background: var(--bg-hover); }
+.mx-cell .mark { width: 7px; height: 7px; border-radius: 50%; background: var(--border-strong); }
+.mx-cell.on .mark { background: var(--color-success); }
+.mx-cell.on.risk .mark { background: var(--color-danger); }
+.mx-cell.pending .mark { background: var(--color-warning); }
+.mx-foot { padding: 8px 14px; border-top: 1px solid var(--border); display: flex; align-items: center; gap: 14px;
+  font-size: var(--font-size-sm); color: var(--text-tertiary); flex-shrink: 0; flex-wrap: wrap; }
+.lg { display: flex; align-items: center; gap: 5px; }
+
+/* ---- 右：检查器 ---- */
+.inspector { width: var(--inspector-w); flex-shrink: 0; background: var(--bg-sidebar);
+  border-left: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; }
+.insp-tabs { display: flex; flex-shrink: 0; border-bottom: 1px solid var(--border); padding: 0 6px; gap: 2px; }
+.insp-tab { flex: 1; height: 32px; border-radius: 6px 6px 0 0; font-size: var(--font-size-sm);
+  color: var(--text-tertiary); display: flex; align-items: center; justify-content: center; gap: 5px;
+  transition: background-color 0.15s, color 0.15s; }
+.insp-tab:hover { background: var(--bg-hover); color: var(--text-primary); }
+.insp-tab.on { color: var(--text-primary); background: var(--bg-card); box-shadow: inset 0 -1px 0 var(--border); }
+.insp-body { flex: 1; min-height: 0; overflow-y: auto; padding: 10px 12px; display: flex; flex-direction: column; gap: 12px; }
+.sec-t { font-size: var(--font-size-xs); color: var(--text-tertiary); letter-spacing: 0.08em; text-transform: uppercase; }
+.kv { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; font-size: var(--font-size-base); padding: 3px 0; }
+.kv b { font-weight: 500; flex-shrink: 0; }
+.kv span { color: var(--text-secondary); text-align: right; min-width: 0; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: var(--font-size-sm); }
+.meter { padding: 2px 0 6px; }
+.meter .lb { display: flex; justify-content: space-between; font-size: var(--font-size-sm); color: var(--text-secondary); margin-bottom: 3px; }
+.meter .tr { height: 5px; border-radius: 3px; background: var(--border); overflow: hidden; }
+.meter .tr i { display: block; height: 100%; border-radius: 3px; background: var(--color-info); transition: width 0.25s; }
+.meter .tr.warn i { background: var(--color-warning); }
+.meter .tr.danger i { background: var(--color-danger); }
+.rule { height: 1px; background: var(--border); }
+
+/* 权限条目（可授予/撤销） */
+.perm { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: var(--radius-button);
+  background: var(--bg-card); border: 1px solid var(--border); transition: border-color 0.15s; }
+.perm:hover { border-color: var(--border-strong); }
+.perm .code { font-family: var(--mono); font-size: var(--font-size-sm); flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.perm.risk { border-color: color-mix(in srgb, var(--color-danger) 40%, transparent); }
+.perm.risk .code { color: var(--color-danger); }
+.perm.off { opacity: 0.55; }
+/* 开关：原生 checkbox + token 化外观，键盘可达 */
+.sw { position: relative; width: 30px; height: 17px; flex-shrink: 0; }
+.sw input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
+.sw .track { position: absolute; inset: 0; border-radius: 9px; background: var(--border-strong);
+  transition: background-color 0.2s; pointer-events: none; }
+.sw .knob { position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 50%;
+  background: var(--bg-card); transition: transform 0.2s; pointer-events: none; }
+.sw input:checked ~ .track { background: var(--color-success); }
+.sw input:checked ~ .knob { transform: translateX(13px); }
+.sw input:focus-visible ~ .track { box-shadow: var(--shadow-input-focus); outline: 2px solid var(--color-info); outline-offset: 1px; }
+.sw.risk input:checked ~ .track { background: var(--color-danger); }
+
+.note { font-size: var(--font-size-sm); color: var(--text-tertiary); line-height: 1.5; }
+.note.warn { color: var(--color-warning); }
+.note.danger { color: var(--color-danger); }
+
+/* 通道条目 */
+.chan { display: flex; flex-direction: column; gap: 3px; padding: 7px 8px; border-radius: var(--radius-button);
+  background: var(--bg-card); border: 1px solid var(--border); }
+.chan .top { display: flex; align-items: center; gap: 6px; }
+.chan .top .t { font-size: var(--font-size-sm); font-weight: 600; flex: 1; min-width: 0; }
+.chan code { font-family: var(--mono); font-size: var(--font-size-xs); color: var(--text-secondary);
+  overflow-wrap: anywhere; }
+
+/* ==================== 状态栏 ==================== */
+.statusbar { height: var(--statusbar-h); flex-shrink: 0; background: var(--bg-card);
+  border-top: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between;
+  padding: 0 12px; font-size: var(--font-size-sm); color: var(--text-secondary); user-select: none; }
+.statusbar .grp { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.statusbar .it { display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+.statusbar .mono { font-family: var(--mono); }
+.badge-live { display: inline-flex; align-items: center; gap: 5px; }
+
+/* ==================== Toast（提交反馈：loading → success） ==================== */
+.toast-wrap { position: fixed; bottom: 38px; left: 50%; transform: translateX(-50%);
+  z-index: 50; display: flex; flex-direction: column; gap: 6px; align-items: center; pointer-events: none; }
+.toast { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: var(--radius-button);
+  background: var(--bg-card); border: 1px solid var(--border); box-shadow: var(--shadow-card-hover);
+  font-size: var(--font-size-base); animation: rise 0.2s ease-out; }
+@keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+/* 窄屏兜底（<1180px 收起检查器，避免与布局固定元素重叠：ui-ux-pro-max Layout/Fixed Positioning） */
+@media (max-width: 1180px) { .inspector { display: none; } }
+@media (max-width: 860px) { .ws-tools { display: none; } }
+</style>
+</head>
+<body>
+
+<!-- ============ 标题栏 ============ -->
+<header class="titlebar">
+  <div class="brand">
+    <svg width="20" height="20" viewBox="0 0 100 100" aria-hidden="true">
+      <rect width="100" height="100" rx="22" fill="#16181C"/>
+      <g stroke="#F5F7F9" stroke-width="13" stroke-linecap="round">
+        <line x1="23.2" y1="33" x2="36.8" y2="67"/><line x1="39.3" y1="67.1" x2="48.7" y2="46.9"/>
+        <line x1="51.3" y1="46.9" x2="60.7" y2="67.1"/><line x1="63.2" y1="67" x2="76.8" y2="33"/>
+      </g>
+      <path d="M50 36.5 L56.5 43 L50 49.5 L43.5 43 Z" fill="#FF9E2C"/>
+    </svg>
+    <b>WasmApp</b>
+    <small>方案 B · 分屏平铺工作区</small>
+  </div>
+
+  <!-- 布局预设：多 app 同屏展示形态的主控 -->
+  <div class="ws-tools" id="wsTools">
+    <span class="ws-label">布局</span>
+    <div class="layout-group" role="group" aria-label="工作区布局预设">
+      <button class="layout-btn" data-preset="single" title="单窗 · 只显示当前应用" aria-label="单窗布局">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2"/></svg>
+      </button>
+      <button class="layout-btn" data-preset="focus" title="主从 · 1 大 + 2 小" aria-label="主从布局">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M13 4v16"/></svg>
+      </button>
+      <button class="layout-btn" data-preset="thirds" title="三栏 · 并排对照" aria-label="三栏布局">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16M15 4v16"/></svg>
+      </button>
+      <button class="layout-btn" data-preset="columns" title="双栏 · 2×2 网格" aria-label="双栏网格布局">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16M3 12h18"/></svg>
+      </button>
+      <button class="layout-btn" data-preset="rows" title="横排 · 上下 2×2" aria-label="横排网格布局">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16M15 4v16"/></svg>
+      </button>
+    </div>
+    <button class="layout-btn" id="btnUnmax" title="退出最大化，回到分屏" aria-label="退出最大化" style="display:none;border:1px solid var(--border)">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M8 8h8v8H8z"/></svg>
+    </button>
+  </div>
+
+  <label class="tsearch">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+    <input placeholder="搜索应用、命令、会话、文件…" aria-label="全局搜索" />
+    <kbd>Ctrl K</kbd>
+  </label>
+
+  <div class="tbtns">
+    <button class="tbtn" id="btnTheme" title="切换主题" aria-label="切换主题">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3a6.4 6.4 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
+    </button>
+    <button class="tbtn" title="最小化" aria-label="最小化"><svg width="14" height="14" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path d="M5 12h14"/></svg></button>
+    <button class="tbtn" title="最大化" aria-label="最大化窗口"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="5" y="5" width="14" height="14" rx="1"/></svg></button>
+    <button class="tbtn" title="关闭" aria-label="关闭窗口"><svg width="14" height="14" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+  </div>
+</header>
+
+<div class="body">
+  <!-- ============ 左轨：宿主自有面 + 已安装 wasm-app ============ -->
+  <nav class="rail" aria-label="工作区与应用">
+    <span class="rail-label">工作区</span>
+    <button class="ic-btn" id="navWorkspace" title="分屏工作区" aria-label="分屏工作区">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M13 4v16"/></svg>
+    </button>
+    <button class="ic-btn" id="navOverview" title="应用总览" aria-label="应用总览">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+    </button>
+    <button class="ic-btn" id="navMatrix" title="权限矩阵" aria-label="权限矩阵">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1 1 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1Z"/><path d="m9.5 12 1.8 1.8 3.4-3.6"/></svg>
+    </button>
+    <div class="rail-sep"></div>
+    <span class="rail-label">应用</span>
+    <div id="railApps" style="display:flex;flex-direction:column;align-items:center;gap:4px"></div>
+    <div class="rail-spacer"></div>
+    <button class="rail-add" title="安装新 wasm-app" aria-label="安装新 wasm-app">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 12h14M12 5v14"/></svg>
+    </button>
+  </nav>
+
+  <!-- ============ 中：舞台 ============ -->
+  <div class="stage-wrap">
+    <div class="stage" id="stage"></div>
+  </div>
+
+  <!-- ============ 右：实例检查器 ============ -->
+  <aside class="inspector" aria-label="实例检查器">
+    <div class="insp-tabs" role="tablist">
+      <button class="insp-tab on" role="tab" data-itab="instance" aria-selected="true">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 2v2M15 2v2M9 20v2M15 20v2M2 9h2M2 15h2M20 9h2M20 15h2"/></svg>
+        实例
+      </button>
+      <button class="insp-tab" role="tab" data-itab="perm" aria-selected="false">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1 1 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1Z"/></svg>
+        权限
+      </button>
+      <button class="insp-tab" role="tab" data-itab="chan" aria-selected="false">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>
+        通道
+      </button>
+    </div>
+    <div class="insp-body" id="inspBody"></div>
+  </aside>
+</div>
+
+<!-- ============ 状态栏 ============ -->
+<footer class="statusbar">
+  <div class="grp">
+    <span class="it badge-live"><span class="sdot running"></span>运行时就绪</span>
+    <!-- 异步状态徽标：语义化整句 + role=status，不播报裸数字（ui-ux-pro-max Accessibility） -->
+    <span class="it" id="sbApps" role="status" aria-atomic="true"></span>
+    <span class="it" id="sbApproval"></span>
+    <span class="it">总线 <b class="mono" id="sbBus">12</b> msg/s</span>
+  </div>
+  <div class="grp">
+    <span class="it" id="sbLayout"></span>
+    <span class="it">Ctrl+K 命令面板</span>
+    <span class="it mono">wasmtime 48 · ABI 3</span>
+  </div>
+</footer>
+
+<div class="toast-wrap" id="toasts" aria-live="polite"></div>
+
+<script>
+/* ============================================================================
+   数据：全部来自仓库真实事实（4 个 wasm-app 的 plugin.json + 生成的权限词汇表）
+   - 权限位取自 src/plugin/permission-vocabulary.ts（SDK VALID_PERMISSIONS 生成物）
+   - 高危位取自 src/plugin/contributionKinds.ts 的 HIGH_RISK_PERMISSIONS
+   - 状态取自 getStateKey()：Activated / Degraded / Deactivated / NeedsApproval
+   ============================================================================ */
+const HIGH_RISK = ['process:run', 'pty:spawn', 'terminal:input', 'database:main'];
+
+const APPS = [
+  {
+    id: 'terminal-session', pid: 'com.bedcode.terminal-session', name: '终端会话', full: 'Terminal Session Center',
+    version: '1.0.0-beta', icon: 'terminal', state: 'running', cpu: 12, mem: 84, memCap: 256,
+    badge: '3 会话', views: 5, commands: 28, kind: 'term',
+    // 真实 manifest permissions
+    granted: ['auth','broadcast','connection:read','fs:read','fs:write','network:http','peer','process:run',
+              'pty:io','pty:spawn','session:read','storage','task:run','terminal:input','timer:schedule',
+              'ui:input','ui:settings','ui:sidebar','ws:server'],
+    provides: ['task:status-changed','session:mode-changed','task:queue-changed','task:scheduled-changed','task:preset-changed'],
+    endpoints: ['session-control (jwt)','terminal (jwt)'],
+  },
+  {
+    id: 'ai-chatbox', pid: 'com.bedcode.ai-chatbox', name: 'AI 对话', full: 'AI Chatbox',
+    version: '1.0.0-beta', icon: 'ai', state: 'running', cpu: 4, mem: 42, memCap: 256,
+    badge: 'provider: local-llm', views: 1, commands: 8, kind: 'chat',
+    granted: ['broadcast','fs:read','fs:write','network:http','storage','ui:sidebar'],
+    provides: ['chat:session-changed'], endpoints: [],
+  },
+  {
+    id: 'file-transfer', pid: 'com.bedcode.file-transfer', name: '文件传输', full: 'File Transfer',
+    version: '1.0.0-beta', icon: 'transfer', state: 'running', cpu: 7, mem: 61, memCap: 256,
+    badge: '1 进行中', views: 1, commands: 34, kind: 'files',
+    granted: ['broadcast','fs:pick','fs:read','fs:write','mdns','network:http','peer','storage',
+              'timer:schedule','ui:dialog','ui:sidebar','ui:statusbar'],
+    provides: ['transfer:progress'], endpoints: [],
+  },
+  {
+    id: 'agent-hub', pid: 'com.bedcode.agent-hub', name: 'Agent Hub', full: 'Agent Hub',
+    version: '0.1.0', icon: 'hub', state: 'approval', cpu: 0, mem: 0, memCap: 256,
+    badge: '待审批', views: 1, commands: 38, kind: 'hub',
+    granted: ['broadcast','fs:pick','fs:read','fs:write','network:http','process:run','storage','task:run','ui:sidebar'],
+    provides: [], endpoints: [],
+  },
+  {
+    id: 'mobile-bridge', pid: 'com.bedcode.mobile-bridge', name: '移动桥接', full: 'Mobile Bridge',
+    version: '0.3.0', icon: 'transfer', state: 'dormant', cpu: 0, mem: 0, memCap: 128,
+    badge: '未启动', views: 0, commands: 12, kind: 'files',
+    granted: ['peer','ws:client','ws:server','network:http','storage','broadcast'],
+    provides: [], endpoints: [],
+  },
+];
+const byId = Object.fromEntries(APPS.map(a => [a.id, a]));
+
+/* 权限位并集（按真实 manifest 排序，非手工挑拣） */
+const ALL_PERMS = [...new Set(APPS.flatMap(a => a.granted))].sort();
+const isRisk = p => HIGH_RISK.includes(p);
+
+/* ==================== 图标（全部 SVG，零 emoji —— ui-ux-pro-max pre-delivery checklist） ==================== */
+const P = {
+  terminal: '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 9 3 3-3 3"/><path d="M12 15h4"/>',
+  ai: '<path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/>',
+  transfer: '<path d="M8 3 4 7l4 4"/><path d="M4 7h16"/><path d="m16 21 4-4-4-4"/><path d="M20 17H4"/>',
+  hub: '<path d="m21 16-9 5-9-5V8l9-5 9 5Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/>',
+  max: '<path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/>',
+  pop: '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
+  x: '<path d="M18 6 6 18M6 6l12 12"/>',
+  play: '<path d="m6 4 14 8-14 8Z"/>',
+  stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
+  warn: '<path d="m21.7 18-8-14a2 2 0 0 0-3.4 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3Z"/><path d="M12 9v4M12 17h.01"/>',
+  file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/>',
+  folder: '<path d="M4 20a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2Z"/>',
+  check: '<path d="m20 6-11 11-5-5"/>',
+};
+const svg = (k, size = 15, sw = 1.8) =>
+  `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[k] || ''}</svg>`;
+
+const STATE_TEXT = { running: '运行中', degraded: '降级', dormant: '未启动', approval: '待审批', error: '错误' };
+
+/* ==================== 状态 ==================== */
+const state = {
+  mode: 'workspace',        // workspace | overview | matrix
+  preset: 'focus',
+  active: 'terminal-session',
+  maximized: null,
+  inspTab: 'instance',
+  ratios: {},               // splitId -> ratio（拖拽后持久）
+};
+
+/* ==================== 分屏树 ==================== */
+const leaf = app => ({ k: 'leaf', app });
+
+/**
+ * 分屏节点。`key` 是比例的持久槽位。
+ *
+ * 为什么 key 必须与写回方共用同一套名字：buildTree 每次重建树都从 state.ratios[key]
+ * 取比例，拖拽 / 方向键则按 DOM 上的 data-split 写回同一槽位。两边名字不一致时
+ * 拖拽结果会被静默丢弃（表现：拖完比例，切一下 app 就弹回去）。key 带布局预设名前缀，
+ * 避免「主从」与「双栏」里同名的内外层槽位互相串值。
+ */
+const split = (key, dir, defRatio, a, b) => ({
+  k: 'split', dir, id: key, ratio: state.ratios[key] ?? defRatio, c: [a, b],
+});
+
+function runningIds() { return APPS.filter(a => a.state === 'running' || a.state === 'approval').map(a => a.id); }
+
+function buildTree(preset) {
+  const list = runningIds();
+  if (!list.length) return null;
+  const i = list.indexOf(state.active);
+  if (i > 0) list.splice(i, 1), list.splice(0, 0, state.active);
+  const L = list;
+  const pick = n => L.slice(0, n);
+
+  if (state.maximized) return leaf(state.maximized);
+  if (preset === 'single' || L.length === 1) return leaf(L[0]);
+  if (L.length === 2) return split('two.h', 'h', 0.6, leaf(L[0]), leaf(L[1]));
+
+  if (preset === 'focus') {
+    const l = pick(3);
+    if (l.length === 3) {
+      const a = split('focus.inner', 'v', 0.5, leaf(l[1]), leaf(l[2]));
+      return split('focus.outer', 'h', 0.64, leaf(l[0]), a);
+    }
+  }
+  if (preset === 'thirds') {
+    const l = pick(3);
+    const r = 1 / 3;
+    return split('thirds.outer', 'h', r,
+      leaf(l[0]),
+      split('thirds.inner', 'h', r, leaf(l[1]), leaf(l[2])));
+  }
+  if (preset === 'columns' || preset === 'rows') {
+    const l = pick(4);
+    const dir = preset === 'columns' ? 'v' : 'h';   // 内层切分方向
+    const outer = preset === 'columns' ? 'h' : 'v';
+    if (l.length === 3) {
+      return split(preset + '.outer', outer, 0.5,
+        split(preset + '.left', dir, 0.5, leaf(l[0]), leaf(l[1])), leaf(l[2]));
+    }
+    return split(preset + '.outer', outer, 0.5,
+      split(preset + '.left', dir, 0.5, leaf(l[0]), leaf(l[1])),
+      split(preset + '.right', dir, 0.5, leaf(l[2]), leaf(l[3])));
+  }
+  return leaf(L[0]);
+}
+
+/* ==================== 面板渲染 ==================== */
+function paneBody(app) {
+  if (app.state === 'dormant') {
+    return `<div class="empty">${svg(app.icon, 26, 1.5)}<div style="font-size:var(--font-size-lg);color:var(--text-secondary)">${app.full} 尚未启动</div>
+      <div class="note">实例未运行，面板槽位保留。启动后按 manifest 权限清单进入审批门。</div>
+      <button class="btn" data-act="start" data-app="${app.id}">${svg('play', 13)} 启动应用</button></div>`;
+  }
+  if (app.state === 'approval') {
+    return `<div class="empty">${svg('warn', 26, 1.5)}
+      <div style="font-size:var(--font-size-lg);color:var(--color-warning)">等待权限审批</div>
+      <div class="note">manifest 声明 ${app.granted.length} 个权限位，其中 <b style="color:var(--color-danger)">${app.granted.filter(isRisk).length}</b> 个属高危位（可执行任意命令 / 读写主库）。</div>
+      <div style="display:flex;gap:6px">
+        <button class="btn ghost" data-act="matrix">查看权限矩阵</button>
+        <button class="btn" data-act="approve" data-app="${app.id}">${svg('check', 13)} 批准并启动</button>
+      </div></div>`;
+  }
+  return MOCK[app.kind](app);
+}
+
+const MOCK = {
+  term: () => `<div class="term">
+    <div><span class="p">user@bedcode ~ $</span> ls wasm-apps</div>
+    <div>agent-hub&nbsp; ai-chatbox&nbsp; file-transfer&nbsp; mobile-bridge&nbsp; terminal-session</div>
+    <div><span class="p">user@bedcode ~ $</span> <span class="c"># 每个 app 是独立 wasm 实例，界面由宿主壳分屏承载</span></div>
+    <div><span class="p">user@bedcode ~ $</span> <span class="w">cargo test</span></div>
+    <div>&nbsp;&nbsp;running 42 tests ... <span class="p">ok</span></div>
+    <div><span class="p">user@bedcode ~ $</span> <span class="c">▉</span></div>
+  </div>`,
+  chat: () => `<div class="chat">
+    <div class="chat-log">
+      <div class="msg a">你好，我是 AI Chatbox。当前由 WasmApp 壳分屏承载，宿主只提供挂载点与闸门。</div>
+      <div class="msg u">多个 app 同屏时你怎么避免抢焦点？</div>
+      <div class="msg a">每个面板是独立的挂载槽位，输入焦点由面板边界隔离；宿主不解析业务内容。</div>
+    </div>
+    <div class="composer"><input placeholder="输入消息…" aria-label="消息输入"/><button class="btn">发送</button></div>
+  </div>`,
+  files: () => `<div>
+    <div class="frow"><div class="fico">${svg('file', 14)}</div>
+      <div class="nm">backup-2026-10-08.tar<div class="bar"><i style="width:64%"></i></div></div>
+      <div class="mt">64% · 3.2 MB/s</div></div>
+    <div class="frow"><div class="fico">${svg('file', 14)}</div><div class="nm">notes.md</div><div class="mt">12 KB</div></div>
+    <div class="frow"><div class="fico">${svg('folder', 14)}</div><div class="nm">photos/</div><div class="mt">—</div></div>
+    <div class="frow"><div class="fico">${svg('file', 14)}</div><div class="nm">report.pdf</div><div class="mt">1.4 MB</div></div>
+    <div class="note" style="margin-top:10px">peer_* 对等网络通道已建立 · mDNS 广播中 · 传输策略：仅接收已知设备</div>
+  </div>`,
+  hub: () => `<div>
+    <div class="card"><div class="kv"><b>检测到的 CLI</b><span>4</span></div>
+      <div class="frow"><div class="fico">${svg('hub', 14)}</div><div class="nm">claude-code</div><div class="mt"><span class="chip ok">已安装</span></div></div>
+      <div class="frow"><div class="fico">${svg('hub', 14)}</div><div class="nm">codex</div><div class="mt"><span class="chip ok">已安装</span></div></div>
+      <div class="frow"><div class="fico">${svg('hub', 14)}</div><div class="nm">gemini-cli</div><div class="mt"><span class="chip">未安装</span></div></div>
+    </div>
+    <div class="note" style="margin-top:10px">Skills 24 · 供应商预设 3 · 本周用量 1.2M tokens</div>
+  </div>`,
+};
+
+function renderLeaf(node, container) {
+  const app = byId[node.app];
+  if (!app) return;
+  const el = document.createElement('section');
+  el.className = 'node';
+  const focused = app.id === state.active;
+  el.innerHTML = `<div class="pane ${focused ? 'focused' : ''}" data-app="${app.id}">
+    <div class="pane-head">
+      <span class="sdot ${app.state}"></span>
+      <span class="nm">${app.name}</span>
+      <span class="grow"><span class="meta">${app.version} · ${STATE_TEXT[app.state]}</span></span>
+      <span class="chip ${app.state === 'running' ? 'ok' : app.state === 'approval' ? 'warn' : ''}">${app.badge}</span>
+      <div class="pane-acts">
+        <button class="pact" data-act="focus" data-app="${app.id}" title="设为活动面板" aria-label="设为活动面板">${svg('max', 13)}</button>
+        <button class="pact" data-act="pop" data-app="${app.id}" title="剥出为独立窗口（bareWindow 路由）" aria-label="剥出独立窗口">${svg('pop', 13)}</button>
+        <button class="pact danger" data-act="close" data-app="${app.id}" title="关闭面板并停用实例" aria-label="关闭面板并停用实例">${svg('x', 13)}</button>
+      </div>
+    </div>
+    <div class="pane-body ${app.kind === 'term' ? 'flush' : ''}">${paneBody(app)}</div>
+  </div>`;
+  container.appendChild(el);
+}
+
+function applyRatio(el, dir, r) {
+  const [a, , b] = el.children;
+  a.style.flex = `${r} 1 0%`;
+  b.style.flex = `${1 - r} 1 0%`;
+  a.style.flexDirection = dir === 'v' ? 'column' : 'row';
+  b.style.flexDirection = dir === 'v' ? 'column' : 'row';
+}
+
+function renderNode(node, container) {
+  if (node.k === 'leaf') return renderLeaf(node, container);
+
+  const el = document.createElement('div');
+  el.className = `split dir-${node.dir}`;
+  el.dataset.split = node.id;
+
+  const a = document.createElement('div');
+  a.className = 'node';
+  const g = document.createElement('div');
+  g.className = 'gutter';
+  g.tabIndex = 0;
+  g.setAttribute('role', 'separator');
+  g.setAttribute('aria-orientation', node.dir === 'h' ? 'vertical' : 'horizontal');
+  const b = document.createElement('div');
+  b.className = 'node';
+
+  el.append(a, g, b);
+  renderNode(node.c[0], a);
+  renderNode(node.c[1], b);
+  applyRatio(el, node.dir, node.ratio);
+  g.setAttribute('aria-label', '拖拽调整分屏比例');
+  container.appendChild(el);
+}
+
+/* ==================== 舞台渲染 ==================== */
+function renderStage() {
+  const stage = document.getElementById('stage');
+  stage.innerHTML = '';
+  document.getElementById('wsTools').style.display = state.mode === 'workspace' ? 'flex' : 'none';
+  document.getElementById('btnUnmax').style.display = state.maximized ? 'flex' : 'none';
+  document.querySelectorAll('.layout-btn[data-preset]').forEach(b =>
+    b.classList.toggle('on', !state.maximized && b.dataset.preset === state.preset));
+
+  if (state.mode === 'overview') return stage.appendChild(renderOverview());
+  if (state.mode === 'matrix') return stage.appendChild(renderMatrix());
+
+  const tree = buildTree(state.preset);
+  if (!tree) {
+    stage.innerHTML = `<div class="empty" style="flex:1">${svg('hub', 26, 1.5)}
+      <div style="font-size:var(--font-size-lg);color:var(--text-secondary)">工作区没有运行中的 wasm-app</div>
+      <div class="note">从左轨启动一个应用，或点击「＋」安装新的 wasm-app。</div></div>`;
+    return;
+  }
+  renderNode(tree, stage);
+  document.getElementById('sbLayout').textContent =
+    state.maximized ? '最大化面板' : `布局：${PRESET_NAME[state.preset]}`;
+}
+
+/* ---- 宿主自有面 1：应用总览 ---- */
+function renderOverview() {
+  const wrap = document.createElement('div');
+  wrap.className = 'ov-grid';
+  wrap.style.flex = '1';
+  document.getElementById('sbLayout').textContent = '应用总览';
+  for (const a of APPS) {
+    const card = document.createElement('button');
+    card.className = 'ov-card';
+    card.dataset.act = 'open'; card.dataset.app = a.id;
+    const risk = a.granted.filter(isRisk);
+    card.innerHTML = `<div class="ov-top">${svg(a.icon, 17)}<span class="nm">${a.full}</span>
+        <span class="sdot ${a.state}"></span></div>
+      <div class="ov-stats"><span>v${a.version}</span><span>${a.views} 视图</span><span>${a.commands} 命令</span>
+        <span>${STATE_TEXT[a.state]}</span></div>
+      <div class="ov-perm">${a.granted.slice(0, 5).map(p => `<span class="pill ${isRisk(p) ? 'risk' : ''}">${p}</span>`).join('')}
+        ${a.granted.length > 5 ? `<span class="pill">+${a.granted.length - 5}</span>` : ''}</div>
+      <div style="display:flex;gap:6px;align-items:center">
+        <span class="chip ${risk.length ? 'danger' : 'ok'}">${risk.length ? `${risk.length} 个高危位` : '无高危位'}</span>
+        <span class="chip">${a.state === 'dormant' ? '点击启动' : '点击打开'}</span>
+      </div>`;
+    wrap.appendChild(card);
+  }
+  return wrap;
+}
+
+/* ---- 宿主自有面 2：权限矩阵（应用 × 权限位） ---- */
+function renderMatrix() {
+  document.getElementById('sbLayout').textContent = '权限矩阵';
+  const wrap = document.createElement('div');
+  wrap.className = 'mx';
+  const pending = APPS.filter(a => a.state === 'approval');
+
+  wrap.innerHTML = `
+    <div class="mx-head">${svg('hub', 16)}<span class="t">权限矩阵</span>
+      <span class="chip info">${APPS.length} 个应用 × ${ALL_PERMS.length} 个权限位</span>
+      <span style="flex:1"></span>
+      ${pending.length ? `<button class="btn" data-act="approveAll">${svg('check', 13)} 批量批准 ${pending.length} 个待审批</button>` : ''}
+    </div>
+    <div class="mx-scroll"><table class="mx-tb">
+      <thead><tr><th class="app-col">应用 \\ 权限位</th>
+        ${ALL_PERMS.map(p => `<th><div class="mx-perm ${isRisk(p) ? 'risk' : ''}" title="${p}">${p}</div></th>`).join('')}
+      </tr></thead>
+      <tbody>${APPS.map(a => `<tr>
+        <th class="app-col"><div class="mx-app">${svg(a.icon, 14)}<span class="nm">${a.name}</span>
+          <span class="sdot ${a.state}"></span></div></th>
+        ${ALL_PERMS.map(p => {
+          const on = a.granted.includes(p);
+          const pend = on && a.state === 'approval';
+          return `<td><div class="mx-cell ${on ? 'on' : ''} ${isRisk(p) ? 'risk' : ''} ${pend ? 'pending' : ''}"
+            role="button" tabindex="0"
+            aria-pressed="${on}"
+            aria-label="${a.name} ${p} ${on ? '已授予' : '未授予'}"
+            data-act="toggle" data-app="${a.id}" data-perm="${p}"><span class="mark"></span></div></td>`;
+        }).join('')}
+      </tr>`).join('')}</tbody>
+    </table></div>
+    <div class="mx-foot">
+      <span class="lg"><span class="sdot running"></span>已授予</span>
+      <span class="lg"><span class="sdot approval"></span>待审批（未放行）</span>
+      <span class="lg"><span class="sdot error"></span>高危位：授予即等于在本机执行任意命令 / 读写主库</span>
+      <span style="flex:1"></span>
+      <span>点击单元格可切换授予状态（演示态；正式实现走授权策略真源 + 实例重启生效）</span>
+    </div>`;
+  return wrap;
+}
+
+/* ==================== 左轨 ==================== */
+function renderRail() {
+  const box = document.getElementById('railApps');
+  box.innerHTML = '';
+  for (const a of APPS) {
+    const b = document.createElement('button');
+    b.className = 'ic-btn' + (a.state === 'dormant' ? ' dormant' : '');
+    b.title = `${a.full} · ${STATE_TEXT[a.state]}`;
+    b.setAttribute('aria-label', b.title);
+    b.dataset.act = 'toggleApp'; b.dataset.app = a.id;
+    const inWs = a.state !== 'dormant' && (state.mode === 'workspace');
+    if (inWs && state.active === a.id) b.classList.add('on');
+    if (a.state === 'approval') b.innerHTML = `${svg(a.icon, 17)}<span class="dot approval"></span><span class="badge-n">!</span>`;
+    else b.innerHTML = `${svg(a.icon, 17)}<span class="dot ${a.state}"></span>`;
+    box.appendChild(b);
+  }
+  ['navWorkspace', 'navOverview', 'navMatrix'].forEach((id, i) => {
+    const modes = ['workspace', 'overview', 'matrix'];
+    document.getElementById(id).classList.toggle('on', state.mode === modes[i]);
+  });
+}
+
+/* ==================== 检查器 ==================== */
+function renderInspector() {
+  document.querySelectorAll('.insp-tab').forEach(t => {
+    const on = t.dataset.itab === state.inspTab;
+    t.classList.toggle('on', on);
+    t.setAttribute('aria-selected', String(on));
+  });
+  const body = document.getElementById('inspBody');
+  const a = byId[state.active];
+  body.innerHTML = state.inspTab === 'instance' ? inspInstance(a)
+    : state.inspTab === 'perm' ? inspPerm(a) : inspChan(a);
+}
+
+function inspInstance(a) {
+  const memPct = Math.min(100, Math.round((a.mem / a.memCap) * 100));
+  const risk = a.granted.filter(isRisk);
+  return `
+    <div><div class="sec-t">实例</div>
+      <div class="kv"><b>应用</b><span>${a.id}</span></div>
+      <div class="kv"><b>插件 ID</b><span>${a.pid}</span></div>
+      <div class="kv"><b>状态</b><span style="color:var(--color-${a.state === 'running' ? 'success' : a.state === 'approval' ? 'warning' : 'info'})">${STATE_TEXT[a.state]}</span></div>
+      <div class="kv"><b>版本</b><span>${a.version}</span></div>
+      <div class="kv"><b>运行时</b><span>wasmtime 48</span></div>
+    </div>
+    <div class="rule"></div>
+    <div><div class="sec-t">资源</div>
+      <div class="meter"><div class="lb"><span>CPU</span><span>${a.cpu}%</span></div>
+        <div class="tr ${a.cpu > 70 ? 'danger' : a.cpu > 40 ? 'warn' : ''}"><i style="width:${Math.min(100, a.cpu)}%"></i></div></div>
+      <div class="meter"><div class="lb"><span>内存</span><span>${a.mem} / ${a.memCap} MB</span></div>
+        <div class="tr ${memPct > 80 ? 'danger' : memPct > 55 ? 'warn' : ''}"><i style="width:${memPct}%"></i></div></div>
+      <div class="note">配额由 manifest 声明 + 加载期仲裁，运行期不放宽。</div>
+    </div>
+    <div class="rule"></div>
+    <div><div class="sec-t">扩展点</div>
+      <div class="kv"><b>注册视图</b><span>${a.views}</span></div>
+      <div class="kv"><b>注册命令</b><span>${a.commands}</span></div>
+      <div class="kv"><b>WS 端点</b><span>${a.endpoints.length || '—'}</span></div>
+      <div class="kv"><b>对外能力</b><span>${a.provides.length || '—'}</span></div>
+      <div class="note">新扩展点只在 manifest 声明，壳的渲染分支不随之增加（注册表驱动）。</div>
+    </div>
+    <div class="rule"></div>
+    <div style="display:flex;flex-direction:column;gap:6px">
+      <button class="btn wide" data-act="matrix">${svg('hub', 13)} 打开权限矩阵</button>
+      ${a.state === 'dormant'
+        ? `<button class="btn wide ghost" data-act="start" data-app="${a.id}">${svg('play', 13)} 启动实例</button>`
+        : `<button class="btn wide ghost" data-act="pop" data-app="${a.id}">${svg('pop', 13)} 剥出独立窗口</button>
+           <button class="btn wide ghost danger" data-act="close" data-app="${a.id}">${svg('stop', 13)} 停用实例</button>`}
+    </div>
+    ${risk.length ? `<div class="note danger">${svg('warn', 12)} 持有 ${risk.length} 个高危权限位：${risk.join(' · ')}</div>` : ''}`;
+}
+
+function inspPerm(a) {
+  const sorted = [...a.granted].sort((x, y) => (isRisk(y) - isRisk(x)) || x.localeCompare(y));
+  return `
+    <div><div class="sec-t">权限面 · ${a.name}</div>
+      <div class="note">授予/撤销演示态。正式实现：manifest 声明 → 加载期校验 → 审批门 → <code>host-*</code> 原语逐次过闸门。</div>
+    </div>
+    <div class="rule"></div>
+    <div style="display:flex;flex-direction:column;gap:5px">
+      ${sorted.map(p => `
+        <label class="perm ${isRisk(p) ? 'risk' : ''}">
+          <span class="sw ${isRisk(p) ? 'risk' : ''}">
+            <input type="checkbox" checked data-act="toggle" data-app="${a.id}" data-perm="${p}"
+              aria-label="${p} ${isRisk(p) ? '高危权限位' : ''}"/>
+            <span class="track"></span><span class="knob"></span>
+          </span>
+          <span class="code">${p}</span>
+          ${isRisk(p) ? `<span class="chip danger">高危</span>` : ''}
+        </label>`).join('')}
+    </div>
+    <div class="rule"></div>
+    <div class="note ${a.granted.filter(isRisk).length ? 'danger' : ''}">
+      高危位判据：授予即等于在本机执行任意命令（<code>pty:spawn</code> / <code>process:run</code>）、
+      向终端注入输入（<code>terminal:input</code>）或读写主库（<code>database:main</code>）。
+      高危位不参与批量默认放行，需整单显式批准。
+    </div>`;
+}
+
+function inspChan(a) {
+  const others = APPS.filter(x => x.id !== a.id && x.state !== 'dormant');
+  return `
+    <div><div class="sec-t">下行通道 · host-* 原语</div>
+      <div class="note">${a.granted.length} 个权限位 → 对应 WIT 原语由宿主闸门逐次裁决，插件拿不到越权能力。</div></div>
+    <div class="rule"></div>
+    <div><div class="sec-t">上行通道</div>
+      <div style="display:flex;flex-direction:column;gap:5px">
+        <div class="chan"><div class="top"><span class="t">消息总线</span><span class="chip info">broadcast</span></div>
+          <code>&lt;plugin-id&gt;::&lt;name&gt;</code><div class="note">命名空间仲裁 + 有界队列背压</div></div>
+        <div class="chan"><div class="top"><span class="t">事件</span><span class="chip">runtime-listeners</span></div>
+          <div class="note">前端运行时事件，不经插件自建通道</div></div>
+        ${a.provides.length ? `<div class="chan"><div class="top"><span class="t">对外互调能力</span>
+            <span class="chip ok">${a.provides.length}</span></div>
+          ${a.provides.map(p => `<code>${p}</code>`).join('')}</div>` : ''}
+        ${a.endpoints.length ? `<div class="chan"><div class="top"><span class="t">WS 端点</span>
+            <span class="chip ok">jwt</span></div>${a.endpoints.map(e => `<code>${e}</code>`).join('')}</div>` : ''}
+      </div>
+    </div>
+    <div class="rule"></div>
+    <div><div class="sec-t">同工作区并存</div>
+      <div style="display:flex;flex-direction:column;gap:5px">
+        ${others.map(o => `<div class="chan"><div class="top">${svg(o.icon, 13)}<span class="t">${o.name}</span>
+          <span class="sdot ${o.state}"></span></div>
+          <div class="note">面板独立挂载 · 实例生命周期互不影响</div></div>`).join('')}
+      </div>
+      <div class="note" style="margin-top:8px">插件间禁止直接耦合：只经互调 API 与消息总线通信。</div>
+    </div>`;
+}
+
+/* ==================== 状态栏 ==================== */
+function renderStatus() {
+  const run = APPS.filter(a => a.state === 'running').length;
+  const pend = APPS.filter(a => a.state === 'approval').length;
+  const dorm = APPS.filter(a => a.state === 'dormant').length;
+  document.getElementById('sbApps').textContent =
+    `${run} 个应用运行中${dorm ? ` · ${dorm} 个未启动` : ''}`;
+  document.getElementById('sbApproval').innerHTML = pend
+    ? `<span class="sdot approval"></span>${pend} 个待审批`
+    : '';
+  document.getElementById('sbBus').textContent = String(6 + run * 2);
+}
+
+const PRESET_NAME = { single: '单窗', focus: '主从', thirds: '三栏', columns: '双栏网格', rows: '横排网格' };
+
+function renderAll() {
+  renderRail(); renderStage(); renderInspector(); renderStatus();
+}
+
+/* ==================== 交互 ==================== */
+function toast(msg) {
+  const el = document.createElement('div');
+  el.className = 'toast';
+  el.innerHTML = `${svg('check', 14)}<span>${msg}</span>`;
+  document.getElementById('toasts').appendChild(el);
+  setTimeout(() => el.remove(), 2600);
+}
+
+function openApp(id) {
+  const a = byId[id];
+  state.active = id;
+  if (a.state === 'dormant') { a.state = 'running'; toast(`${a.full} 已启动（演示态）`); }
+  state.mode = 'workspace';
+  // 最大化的是别的 app 时必须先退出最大化：否则树仍是单叶 A，而 active 已指向 B，
+  // 面板与检查器/状态栏展示的实例会各说各话（状态失同步）。
+  if (state.maximized && state.maximized !== id) state.maximized = null;
+  renderAll();
+}
+
+function togglePerm(appId, perm) {
+  const a = byId[appId];
+  const i = a.granted.indexOf(perm);
+  if (i >= 0) { a.granted.splice(i, 1); toast(`已撤销 ${a.name} 的 ${perm}`); }
+  else { a.granted.push(perm); toast(`已授予 ${a.name} 的 ${perm}${isRisk(perm) ? '（高危位，需重启实例生效）' : ''}`); }
+  a.granted.sort();
+  renderAll();
+}
+
+document.addEventListener('click', e => {
+  const t = e.target.closest('[data-act],[data-preset],[data-itab],[data-app]');
+  if (!t) return;
+
+  if (t.dataset.preset) { state.preset = t.dataset.preset; state.maximized = null; return renderAll(); }
+  if (t.dataset.itab) { state.inspTab = t.dataset.itab; return renderInspector(); }
+
+  const act = t.dataset.act, id = t.dataset.app;
+  switch (act) {
+    case 'toggleApp': {
+      const a = byId[id];
+      if (a.state === 'dormant') return openApp(id);
+      if (state.active === id && state.mode === 'workspace' && state.maximized === id) {
+        state.maximized = null; renderAll(); return;
+      }
+      return openApp(id);
+    }
+    case 'open': return openApp(id);
+    case 'focus': state.active = id; state.maximized = id; return renderAll();
+    case 'pop': toast(`${byId[id].full} → 剥出为独立窗口（/plugin/window/:id/:viewId）`); return;
+    case 'close': {
+      const a = byId[id];
+      a.state = 'dormant'; a.cpu = 0; a.mem = 0;
+      if (state.active === id) state.active = (runningIds()[0] || id);
+      if (state.maximized === id) state.maximized = null;
+      toast(`${a.full} 实例已停用`);
+      return renderAll();
+    }
+    case 'start': return openApp(id);
+    case 'approve':
+    case 'approveAll': {
+      APPS.filter(a => a.state === 'approval').forEach(a => { a.state = 'running'; a.cpu = 3; a.mem = 38; });
+      toast('已批准并启动，实例进入运行态');
+      return renderAll();
+    }
+    case 'matrix': state.mode = 'matrix'; return renderAll();
+    case 'toggle': {
+      // 矩阵单元格 / 检查器开关：拦截 label 默认行为避免双触发
+      e.preventDefault();
+      return togglePerm(id, t.dataset.perm);
+    }
+  }
+});
+
+document.getElementById('navWorkspace').onclick = () => { state.mode = 'workspace'; renderAll(); };
+document.getElementById('navOverview').onclick = () => { state.mode = 'overview'; renderAll(); };
+document.getElementById('navMatrix').onclick = () => { state.mode = 'matrix'; renderAll(); };
+document.getElementById('btnUnmax').onclick = () => { state.maximized = null; renderAll(); };
+document.getElementById('btnTheme').onclick = () => {
+  document.documentElement.classList.toggle('dark');
+};
+
+/* ---- 分屏拖拽：实时改 flex，mouseup 才提交进模型 ---- */
+let drag = null;
+document.addEventListener('mousedown', e => {
+  const g = e.target.closest('.gutter');
+  if (!g) return;
+  e.preventDefault();
+  const splitEl = g.parentElement;
+  drag = { g, splitEl, dir: splitEl.classList.contains('dir-h') ? 'h' : 'v' };
+  g.classList.add('dragging');
+});
+document.addEventListener('mousemove', e => {
+  if (!drag) return;
+  const r = drag.splitEl.getBoundingClientRect();
+  const ratio = drag.dir === 'h'
+    ? (e.clientX - r.left) / r.width
+    : (e.clientY - r.top) / r.height;
+  const c = Math.min(0.88, Math.max(0.12, ratio));
+  applyRatio(drag.splitEl, drag.dir, c);
+  drag.ratio = c;
+});
+document.addEventListener('mouseup', () => {
+  if (!drag) return;
+  drag.g.classList.remove('dragging');
+  // 提交比例：写回与 buildTree 读取同一个槽位（data-split 即 split() 的 key）
+  if (drag.ratio != null) state.ratios[drag.splitEl.dataset.split] = drag.ratio;
+  drag = null;
+});
+
+/* 键盘可达：gutter 聚焦后方向键调比例（无障碍 + 不依赖鼠标） */
+document.addEventListener('keydown', e => {
+  const g = e.target.closest?.('.gutter');
+  if (!g || !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) return;
+  e.preventDefault();
+  const splitEl = g.parentElement;
+  const dir = splitEl.classList.contains('dir-h') ? 'h' : 'v';
+  const a = splitEl.children[0], b = splitEl.children[2];
+  const cur = parseFloat(a.style.flex) / (parseFloat(a.style.flex) + parseFloat(b.style.flex));
+  const dec = (dir === 'h' && e.key === 'ArrowLeft') || (dir === 'v' && e.key === 'ArrowUp');
+  const next = Math.min(0.88, Math.max(0.12, cur + (dec ? -0.04 : 0.04)));
+  applyRatio(splitEl, dir, next);
+  g.setAttribute('aria-valuenow', Math.round(next * 100));
+  state.ratios[splitEl.dataset.split] = next;
+});
+/* 矩阵单元格键盘操作 */
+document.addEventListener('keydown', e => {
+  const c = e.target.closest?.('.mx-cell');
+  if (!c || (e.key !== 'Enter' && e.key !== ' ')) return;
+  e.preventDefault();
+  togglePerm(c.dataset.app, c.dataset.perm);
+});
+
+renderAll();
+</script>
+</body>
+</html>
