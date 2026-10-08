@@ -216,10 +216,13 @@ fork crate cargo test 全绿（新增 ports no-op 测试）→ 宿主切换后�
 
 ## 8. 批次 2b 实施记录（2026-10-08，宿主切换垫片）
 
-前置裁决三项落地：① crate bus dispatcher 保留同步形态（宿主移动版原为 async——切换时
-`message_bus` 垫片 `pub use bus::*`，宿主消费点经垫片保路径，未遇 async/sync 形态冲突面）；
+前置裁决三项落地（**纠偏**：① 的最终形态是 crate bus dispatcher **async 化**——实测宿主
+PluginManagerDispatcher 在 tokio 锁上 await，同步 trait 形态无法承接；trait `dispatch_to_wasm`
+/`is_activated` 双方法 async + 总线投递点 `.await` + 测试替身 impl 联动，属 2b 必须改写面；
 ② PluginStorage 底库 = crate Database wrapper（lib.rs 连接所有权移交 + `init_schema` 走
-`conn()`；宿主自持 db_schema.rs 不变）；③ fs_auth 不替换（宿主自持，经 `FsAuthGate` 端口注入）。
+`conn()`；宿主自持 db_schema.rs 不变；crate storage / auth_policy / fs_auth 的底锁
+tokio→std 统一为移动形状，`prompts` / `pending_requests` 弹窗锁保留 AsyncMutex）；
+③ fs_auth 不替换（宿主自持，经 `FsAuthGate` 端口注入）。
 
 宿主切换形态：`plugin.rs` 变垫片（76+ 处 `crate::plugin::` 引用零改动；wasm_host 符号面逐字
 保真 = glob re-export http_engine/sql_guard）；`plugin/host_ports.rs` 宿主真端口装配
