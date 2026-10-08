@@ -4,163 +4,192 @@
   "meta": {
     "title": "BedCode 微内核 · 业务插件真源架构",
     "locale": "zh-CN",
+    "subtitle": "ADR 0037 整核抽出 · ADR 0035/0039 能力域 crate 化 · ADR 0031/0033 认证中心 · ABI desktop v34 / mobile v16",
     "output": "docs/diagrams/bedcode-overall-architecture.html",
     "quality_profile": "showcase",
     "repository": {
       "url": "https://github.com/7ZAI/BedCode",
-      "revision": "22069511dcaba5b90ecad0fba34396f98ae51305"
-    },
-    "viewBox": [1080, 800]
+      "provider": "github",
+      "revision": "1de69c697e4a56edca1f7a2277c368b9ef477b44"
+    }
   },
   "components": [
     {
       "id": "d_ui",
       "type": "frontend",
       "label": "Desktop UI",
-      "sublabel": "Vue 3 · Tauri 2 · 终端窗口 + 插件 UI 宿主",
+      "sublabel": "Vue 3 · Tauri 2 · 侧边栏 + 终端窗口 + 插件 UI 宿主",
       "pos": [40, 56],
-      "size": [440, 76],
+      "size": [420, 76],
       "sources": [
-        { "path": "bedcode-desktop/src/App.vue", "label": "Vue 3 frontend" },
-        { "path": "bedcode-desktop/src/plugin/loader.ts", "label": "插件 UI 宿主" }
+        { "path": "bedcode-desktop/src/App.vue", "label": "Vue 3 前端" }
       ]
     },
     {
       "id": "d_api",
       "type": "backend",
       "label": "宿主接入面",
-      "sublabel": "commands.rs 命令面 + server 三层（core / http / websocket）",
+      "sublabel": "Tauri commands.rs · server 组合物 · HTTP + WS 路由",
       "tag": "只服务宿主页面与传输面",
       "pos": [40, 176],
-      "size": [440, 76],
+      "size": [420, 76],
       "sources": [
         { "path": "bedcode-desktop/src-tauri/src/commands.rs", "label": "Tauri 命令面" },
-        { "path": "bedcode-desktop/src-tauri/src/server/core/app.rs", "label": "server 组合物" },
-        { "path": "bedcode-desktop/src-tauri/src/server/websocket/routes.rs", "label": "HTTP + WS 路由" }
+        { "path": "bedcode-desktop/src-tauri/src/server/composition.rs", "label": "server 组合物" }
       ]
     },
     {
       "id": "gateway",
       "type": "backend",
       "label": "session_gateway",
-      "sublabel": "会话窄转发层 · 纯插件互调 api 7 条 · 无降级轨",
-      "tag": "宿主调会话唯一收口点",
+      "sublabel": "会话窄转发 · 7 条互调 api",
       "pos": [40, 296],
-      "size": [440, 76],
+      "size": [200, 76],
       "sources": [
         { "path": "bedcode-desktop/src-tauri/src/utils/session_gateway.rs", "label": "窄转发层" }
       ]
     },
     {
-      "id": "wc_runtime",
+      "id": "auth_bridge",
+      "type": "security",
+      "label": "auth_center 桥接",
+      "sublabel": "deny_kind 三态 · fail-closed",
+      "pos": [260, 296],
+      "size": [200, 76],
+      "sources": [
+        { "path": "bedcode-desktop/src-tauri/src/utils/auth/auth_center.rs", "label": "桥接门" },
+        { "path": "bedcode-desktop/src-tauri/src/utils/auth/identity.rs", "label": "链路身份" }
+      ]
+    },
+    {
+      "id": "wc_manager",
       "type": "backend",
-      "label": "core-plugin-manager",
-      "sublabel": "加载 · 注册 · 生命周期 · 能力装配 · 互调路由",
+      "label": "wasm-core · manager",
+      "sublabel": "加载 · 注册 · 生命周期 · 能力装配 · call_api 互调",
       "pos": [40, 416],
-      "size": [440, 76],
-      "sources": [
-        { "path": "bedcode-desktop/src-tauri/src/wasm_core/manager/host.rs", "label": "插件宿主" },
-        { "path": "bedcode-desktop/src-tauri/src/wasm_core/manager/runtime.rs", "label": "wasmtime 运行时" },
-        { "path": "bedcode-desktop/src-tauri/src/wasm_core/manager/capability.rs", "label": "能力装配" }
-      ]
-    },
-    {
-      "id": "wc_api",
-      "type": "backend",
-      "label": "host_api · security · bus",
-      "sublabel": "21 组 host-* 原语 · 权限仲裁 · 总线 · monitor",
-      "tag": "WIT 契约 · ABI desktop v25",
-      "pos": [40, 536],
-      "size": [440, 76],
-      "sources": [
-        { "path": "bedcode-desktop/src-tauri/src/wasm_core/host_api.rs", "label": "宿主能力实现域" },
-        { "path": "bedcode-desktop/src-tauri/src/wasm_core/security/framework.rs", "label": "授权框架" },
-        { "path": "bedcode-desktop/packages/plugin-sdk-desktop/rust/src/abi.rs", "label": "ABI v25" }
-      ]
-    },
-    {
-      "id": "engines",
-      "type": "backend",
-      "label": "内核引擎服务",
-      "sublabel": "pty/ · mdns/ · peer_net · db/ · crypto",
-      "tag": "引擎级 · 无产品语义",
-      "pos": [620, 296],
       "size": [420, 76],
       "sources": [
-        { "path": "bedcode-desktop/src-tauri/src/pty/pty_process.rs", "label": "PTY 引擎" },
-        { "path": "bedcode-desktop/src-tauri/src/pty/pty_ring.rs", "label": "PtyRing 输出环" },
-        { "path": "bedcode-desktop/src-tauri/src/db/schema.sql", "label": "SQLite 主库" }
+        { "path": "bedcode-desktop/packages/bedcode-wasm-core/src/manager/host.rs", "label": "插件宿主" },
+        { "path": "bedcode-desktop/packages/bedcode-wasm-core/src/manager/runtime/component.rs", "label": "wasmtime Component" }
+      ]
+    },
+    {
+      "id": "wc_host_api",
+      "type": "backend",
+      "label": "wasm-core · host_api",
+      "sublabel": "host-* 原语面 20+ 组 · 权限仲裁 · bus · monitor",
+      "tag": "WIT 契约 · ABI desktop v34",
+      "pos": [40, 536],
+      "size": [420, 76],
+      "sources": [
+        { "path": "bedcode-desktop/packages/bedcode-wasm-core/src/host_api.rs", "label": "宿主能力面" },
+        { "path": "bedcode-desktop/packages/bedcode-wasm-core/src/security/framework.rs", "label": "授权框架" },
+        { "path": "bedcode-desktop/packages/plugin-sdk-desktop/rust/src/abi.rs", "label": "ABI v34" }
+      ]
+    },
+    {
+      "id": "cap_crates",
+      "type": "backend",
+      "label": "能力域 crate 家族",
+      "sublabel": "pty · discovery · crypto · server-* · link-crypto · peer-net · host-kit",
+      "tag": "ADR 0035/0039 · Ports 端口下发",
+      "pos": [560, 416],
+      "size": [480, 160],
+      "sources": [
+        { "path": "packages/bedcode-host-kit/src/module.rs", "label": "HostModule 自报" },
+        { "path": "packages/bedcode-host-kit/src/ports.rs", "label": "Ports 下发" }
       ]
     },
     {
       "id": "m_remote",
       "type": "frontend",
       "label": "Mobile remote",
-      "sublabel": "Vue 3 / Android · WS · HTTP · Kotlin 原生 · 移动插件 ABI 11",
-      "pos": [620, 56],
-      "size": [420, 76],
+      "sublabel": "Vue 3 / Android · WS · HTTP · Kotlin 原生 · 移动 ABI v16",
+      "pos": [560, 56],
+      "size": [480, 76],
       "sources": [
-        { "path": "bedcode-mobile/src/App.vue", "label": "Vue 3 frontend" },
-        { "path": "bedcode-mobile/src-tauri/src/connection/ws_client.rs", "label": "WS 客户端" },
-        { "path": "bedcode-mobile/src-tauri/gen/android/app/src/main/java/com/bedcode/mobile/SafTransferPlugin.kt", "label": "Kotlin 原生插件" }
+        { "path": "bedcode-mobile/src/App.vue", "label": "Vue 3 前端" },
+        { "path": "bedcode-mobile/src-tauri/src/connection/ws_client.rs", "label": "WS 客户端" }
       ]
     },
     {
-      "id": "links",
+      "id": "cross_device",
       "type": "messagebus",
       "label": "跨设备链路",
-      "sublabel": "mDNS 发现 · WebSocket TB v3 · HTTP JWT · 链路加密",
-      "pos": [620, 176],
-      "size": [420, 76],
+      "sublabel": "mDNS 发现 · WebSocket TB v3 · HTTP JWT · link-crypto",
+      "pos": [560, 176],
+      "size": [480, 76],
       "sources": [
-        { "path": "bedcode-desktop/src-tauri/src/mdns.rs", "label": "mDNS 广播" },
-        { "path": "bedcode-desktop/src-tauri/src/server/websocket/terminal_ws.rs", "label": "终端通道" },
-        { "path": "bedcode-desktop/src-tauri/src/server/http/middleware.rs", "label": "认证中间件" }
+        { "path": "packages/peer-net/src/discovery.rs", "label": "mDNS 发现" },
+        { "path": "packages/peer-net/src/frame.rs", "label": "链路帧" },
+        { "path": "packages/link-crypto/src/ws.rs", "label": "WS 加密" }
       ]
     },
     {
-      "id": "plug_session",
+      "id": "m_wasm_apps",
+      "type": "cloud",
+      "label": "Mobile wasm 插件",
+      "sublabel": "auto-task · file-transfer · ai-chatbox (移动契约 ADR 0018)",
+      "pos": [560, 296],
+      "size": [480, 76],
+      "sources": [
+        { "path": "bedcode-mobile/plugins/auto-task/plugin.json", "label": "移动 auto-task" },
+        { "path": "bedcode-mobile/plugins/file-transfer/plugin.json", "label": "移动 file-transfer" }
+      ]
+    },
+    {
+      "id": "wasm_session",
       "type": "cloud",
       "label": "com.bedcode.terminal-session",
-      "sublabel": "会话 · 设备 · 配对 · 任务真源（私有 SQLite 库）",
-      "tag": "31 互调 api · 34 HTTP · ptyQuota 8",
-      "pos": [40, 656],
-      "size": [490, 96],
+      "sublabel": "会话真源 + auth-policy 实现 + 任务域 (原 auto-task 合并)",
+      "tag": "私有 SQLite · 认证唯一裁决",
+      "pos": [40, 720],
+      "size": [420, 96],
       "sources": [
-        { "path": "bedcode-desktop/plugins/terminal-session/plugin.json", "label": "插件清单" },
-        { "path": "bedcode-desktop/plugins/terminal-session/rust/src/session/mod.rs", "label": "会话登记域" },
-        { "path": "bedcode-desktop/plugins/terminal-session/rust/src/launch.rs", "label": "argv 编排" }
+        { "path": "bedcode-desktop/wasm-apps/terminal-session/plugin.json", "label": "应用清单" },
+        { "path": "bedcode-desktop/wasm-apps/terminal-session/rust/src/session/mod.rs", "label": "会话登记域" },
+        { "path": "bedcode-desktop/wasm-apps/terminal-session/rust/src/task/mod.rs", "label": "任务域" }
       ]
     },
     {
-      "id": "plug_apps",
+      "id": "wasm_apps",
       "type": "external",
-      "label": "桌面业务插件",
-      "sublabel": "ai-chatbox · file-transfer · agent-hub",
-      "pos": [550, 656],
-      "size": [490, 96],
+      "label": "桌面业务应用",
+      "sublabel": "ai-chatbox · file-transfer · agent-hub (wasm-apps/)",
+      "pos": [560, 720],
+      "size": [480, 96],
       "sources": [
-        { "path": "bedcode-desktop/plugins/ai-chatbox/plugin.json", "label": "AI Chatbox" },
-        { "path": "bedcode-desktop/plugins/file-transfer/plugin.json", "label": "文件传输" },
-        { "path": "bedcode-desktop/plugins/agent-hub/plugin.json", "label": "Agent Hub" }
+        { "path": "bedcode-desktop/wasm-apps/ai-chatbox/plugin.json", "label": "AI Chatbox" },
+        { "path": "bedcode-desktop/wasm-apps/file-transfer/plugin.json", "label": "文件传输" },
+        { "path": "bedcode-desktop/wasm-apps/agent-hub/plugin.json", "label": "Agent Hub" }
       ]
     }
   ],
   "boundaries": [
     {
       "kind": "region",
-      "label": "Desktop host",
-      "wraps": ["d_ui", "d_api", "gateway", "wc_runtime", "wc_api", "engines", "plug_session", "plug_apps"]
+      "label": "Desktop host (Tauri 宿主进程)",
+      "wraps": ["d_ui", "d_api", "gateway", "auth_bridge", "wc_manager", "wc_host_api", "cap_crates"]
     },
     {
       "kind": "region",
-      "label": "wasm_core 微内核（应用无关引擎）",
-      "wraps": ["wc_runtime", "wc_api"]
+      "label": "wasm-core 微内核 (应用无关引擎)",
+      "wraps": ["wc_manager", "wc_host_api"]
+    },
+    {
+      "kind": "security-group",
+      "label": "认证中心闸门 fail-closed",
+      "wraps": ["auth_bridge"]
     },
     {
       "kind": "region",
-      "label": "WASM plugin sandbox（wasmtime · Component Model）",
-      "wraps": ["plug_session", "plug_apps"]
+      "label": "Desktop WASM sandbox (wasmtime Component Model · wasm32-wasip3)",
+      "wraps": ["wasm_session", "wasm_apps"]
+    },
+    {
+      "kind": "region",
+      "label": "Mobile WASM sandbox (移动契约 ADR 0018)",
+      "wraps": ["m_wasm_apps"]
     }
   ],
   "connections": [
@@ -169,118 +198,139 @@
       "from": "d_ui",
       "to": "d_api",
       "label": "Tauri invoke",
-      "variant": "emphasis",
-      "labelAt": [260, 154]
+      "variant": "emphasis"
     },
     {
       "id": "api-gateway",
       "from": "d_api",
       "to": "gateway",
       "label": "会话操作收口",
-      "variant": "emphasis",
-      "labelAt": [260, 274]
+      "variant": "emphasis"
     },
     {
-      "id": "gateway-runtime",
+      "id": "api-auth-bridge",
+      "from": "d_api",
+      "to": "auth_bridge",
+      "label": "JWT 裁决",
+      "variant": "security"
+    },
+    {
+      "id": "gateway-manager",
       "from": "gateway",
-      "to": "wc_runtime",
-      "label": "插件互调 api（call_api）",
-      "variant": "emphasis",
-      "labelAt": [260, 394]
+      "to": "wc_manager",
+      "label": "call_api (7 条)",
+      "variant": "emphasis"
     },
     {
-      "id": "runtime-api",
-      "from": "wc_runtime",
-      "to": "wc_api",
-      "label": "Linker 装配 · 能力仲裁",
-      "variant": "dashed",
-      "labelAt": [260, 514]
+      "id": "auth-manager",
+      "from": "auth_bridge",
+      "to": "wc_manager",
+      "label": "call_api auth-policy",
+      "variant": "security"
+    },
+    {
+      "id": "manager-api",
+      "from": "wc_manager",
+      "to": "wc_host_api",
+      "label": "Linker 装配",
+      "variant": "dashed"
+    },
+    {
+      "id": "api-capability",
+      "from": "wc_host_api",
+      "to": "cap_crates",
+      "label": "Ports 下发",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left"
     },
     {
       "id": "api-session",
-      "from": "wc_api",
-      "to": "plug_session",
+      "from": "wc_host_api",
+      "to": "wasm_session",
       "label": "host-pty · host-session · host-auth",
       "variant": "emphasis",
       "fromSide": "bottom",
-      "toSide": "top",
-      "labelAt": [152, 620]
+      "toSide": "top"
     },
     {
       "id": "api-apps",
-      "from": "wc_api",
-      "to": "plug_apps",
+      "from": "wc_host_api",
+      "to": "wasm_apps",
       "label": "host-fs · host-http · host-peer",
       "variant": "emphasis",
       "fromSide": "bottom",
-      "toSide": "top",
-      "labelAt": [610, 646]
-    },
-    {
-      "id": "api-engines",
-      "from": "wc_api",
-      "to": "engines",
-      "label": "引擎原语转发",
-      "variant": "emphasis",
-      "fromSide": "right",
-      "toSide": "left",
-      "labelAt": [550, 454]
+      "toSide": "top"
     },
     {
       "id": "api-links",
       "from": "d_api",
-      "to": "links",
+      "to": "cross_device",
       "label": "advertise · serve",
       "fromSide": "right",
-      "toSide": "left",
-      "labelAt": [550, 214]
+      "toSide": "left"
     },
     {
       "id": "links-remote",
-      "from": "links",
+      "from": "cross_device",
       "to": "m_remote",
       "label": "discover · TB v3 · REST",
       "variant": "emphasis",
       "fromSide": "top",
-      "toSide": "bottom",
-      "labelAt": [830, 154]
+      "toSide": "bottom"
+    },
+    {
+      "id": "links-mobile",
+      "from": "cross_device",
+      "to": "m_wasm_apps",
+      "label": "插件端点转发",
+      "variant": "dashed"
     }
   ],
   "cards": [
     {
       "dot": "rose",
-      "title": "微内核裁剪线",
+      "title": "微内核裁剪线 (ADR 0022)",
       "items": [
-        "wasm_core 五模块只承载应用无关引擎：进程、网络、存储、安全、通信总线 + wasmtime 运行时",
-        "host_api 21 组原语一律无产品语义——shell 包装、会话身份、命名与任务队列全部归插件（ADR 0022）",
-        "内核引擎服务 pty/ 与 mdns/ 不 import 任何业务类型；host_api 是引擎与沙箱之间唯一的适配层"
+        "宿主只回答「机制怎么做」，不回答「这件事是什么、给谁用、怎么组织」；命中 B1–B6 一律下沉插件",
+        "wasm-core 只承载应用无关引擎：进程 · 网络 · 存储 · 安全 · 通信总线 + wasmtime 运行时",
+        "宿主允许存在的四类薄壳：① 引擎实现 ② 安全闸门 (fail-closed) ③ 通用注册表 ④ 零解析窄转发"
       ]
     },
     {
       "dot": "emerald",
       "title": "业务真源在插件",
       "items": [
-        "com.bedcode.terminal-session 私有库持有会话 / 设备 / 配对 / 连接历史 / 任务真源（sessions · auth_pairings · auth_connection_history）",
-        "宿主调会话一律经 session_gateway 纯互调 api 7 条（list / get / create / close / remove / resize / input），插件未激活显性报错、无降级轨",
-        "宿主 session/ 目录退为 wire 类型与遗留线（P4 删）；主库 pairings / connection_history / session_configs 三表已退役"
+        "terminal-session 私有库持有会话 / 设备 / 配对 / 连接历史 / 任务真源；auto-task 功能已并入",
+        "宿主调会话一律经 session_gateway 纯互调 api 7 条；插件未激活显性报错、无降级轨",
+        "auth-policy 由 terminal-session 实现；宿主桥接门只做一次问中心 + 三态裁决 (deny_kind)"
       ]
     },
     {
       "dot": "cyan",
       "title": "WASM 沙箱与 ABI",
       "items": [
-        "wasmtime Component Model；桌面 ABI v25、移动 ABI 11——桌面独有接口（host-pty / host-websocket / host-auth）移动端不跟演",
-        "会话创建经 host-pty.spawn 自产 id 并注入 BEDCODE_SESSION_ID；ptyQuota: 8 由插件声明，加载期区间仲裁不夹取",
-        "每插件实例同刻仅一个 guest 调用在执行（tokio Mutex 跨 await 持锁）；跨实例经 core-bus 属主命名空间隔离"
+        "wasmtime 48 Component Model · 目标 wasm32-wasip3 · 桌面 ABI v34 / 移动 ABI v16 (ADR 0019)",
+        "会话创建经 host-pty.spawn 自产 id 并注入 BEDCODE_SESSION_ID；ptyQuota 加载期区间仲裁",
+        "每插件实例同刻仅一个 guest 调用在执行；跨实例经 core-bus 属主命名空间隔离 (ADR 0029)"
       ]
     },
     {
       "dot": "amber",
-      "title": "跨设备链路与遗留面",
+      "title": "跨设备链路与认证中心",
       "items": [
-        "mDNS 单守护 ServiceDaemon，插件经 host-mdns browse/advertise，事件定向投递 <owner>::mdns:found",
-        "WebSocket 终端 TB v3 二进制帧已改订阅拉取模型（旧 forward_loop 推模型下线）；插件端点 /ws/plugin/<id>/<path> 走 host-websocket",
-        "HTTP REST 走 JWT + auth-policy capability 取用（策略传输失败回退放行，防认证中心故障误杀连接）"
+        "认证中心 ADR 0031：显式注册单中心 + 组合式 grant；ADR 0033：自持签发与验签，宿主零密钥接触",
+        "认证裁决 fail-closed：中心未在册 / 调用失败 / 拒绝 → 一律拒绝，无「查不到就放行」降级",
+        "mDNS 单守护 + WebSocket 终端 TB v3 (拉取模型) + HTTP REST (JWT) + link-crypto 加密链路"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "wasm-core 整核与能力域 crate",
+      "items": [
+        "ADR 0037 整核抽出：wasm_core / db / enums / host_api / manager / security 全部搬到 packages/bedcode-wasm-core",
+        "ADR 0038/0039 引擎面迁出：pty-engine 承接 host-pty WIT 接线；session_gateway 与 auth_center 桥接回宿主 lib",
+        "ADR 0035 能力域 crate 化：pty-engine · discovery-engine · crypto-engine · server-* · link-crypto · peer-net · 双端共享锚点 host-kit"
       ]
     }
   ]

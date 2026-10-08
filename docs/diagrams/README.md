@@ -21,7 +21,7 @@
 
 | 图 | 类型 | 主题 | IR 源 |
 | --- | --- | --- | --- |
-| [bedcode-overall-architecture.html](./bedcode-overall-architecture.html) | architecture | 桌面主机 · 移动端远程 · WASM 插件沙箱 · 内核边界（P1-b 后 `wasm_core` 五模块 + `host-*` 能力域 + 会话真源下沉） | [bedcode-overall-architecture.json](./bedcode-overall-architecture.json) |
+| [bedcode-overall-architecture.html](./bedcode-overall-architecture.html) | architecture | 桌面主机 · 移动端远程 · WASM 沙箱 · wasm-core 微内核与能力域 crate 家族（ADR 0037 整核抽出 + ADR 0035/0039 能力域 crate 化 + ADR 0031/0033 认证中心 fail-closed · ABI desktop v34 / mobile v16） | [bedcode-overall-architecture.json](./bedcode-overall-architecture.json) |
 
 静态预览：[bedcode-overall-architecture.png](./bedcode-overall-architecture.png)
 
@@ -39,7 +39,8 @@
 | --- | --- | --- |
 | ai-chatbox | [plugin-ai-chatbox-desktop.html](./plugin-ai-chatbox-desktop.html) | [plugin-ai-chatbox-mobile.html](./plugin-ai-chatbox-mobile.html) |
 | file-transfer | [plugin-file-transfer-desktop.html](./plugin-file-transfer-desktop.html) | [plugin-file-transfer-mobile.html](./plugin-file-transfer-mobile.html) |
-| auto-task | [plugin-auto-task-desktop.html](./plugin-auto-task-desktop.html) | [plugin-auto-task-mobile.html](./plugin-auto-task-mobile.html) |
+
+桌面端 `auto-task` 已并入 `terminal-session` 的任务域（spec D8-P4，`bedcode-desktop/wasm-apps/terminal-session/rust/src/task/`），不再有独立桌面端架构——`plugin-auto-task-desktop.html` 已随该合并删除；桌面端业务应用另含 `agent-hub`（Agent CLI 统一管理台，无独立架构图，随整体架构中的 `wasm_apps` 组块呈现）。移动端 `auto-task` 保留（独立实现，移动契约 ADR 0018）。
 
 各插件 README 的「架构图」链接均指向本目录对应文件。
 

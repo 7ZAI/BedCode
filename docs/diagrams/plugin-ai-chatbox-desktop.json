@@ -1,0 +1,176 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "AI Chatbox 应用架构 (Desktop)",
+    "locale": "zh-CN",
+    "subtitle": "协议适配层前置到 TS · Rust 只做 HTTP 透传 + JSONL 落盘 · 宿主能力面 (host-fs / host-http / host-log)",
+    "output": "docs/diagrams/plugin-ai-chatbox-desktop.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/7ZAI/BedCode",
+      "provider": "github",
+      "revision": "1de69c697e4a56edca1f7a2277c368b9ef477b44"
+    }
+  },
+  "components": [
+    {
+      "id": "user",
+      "type": "external",
+      "label": "用户",
+      "sublabel": "侧边栏 AI 对话入口",
+      "pos": [40, 40],
+      "size": [220, 60]
+    },
+    {
+      "id": "ts_frontend",
+      "type": "frontend",
+      "label": "TS 前端",
+      "sublabel": "ChatView · ProviderConfig · adapters (openai/anthropic/gemini/custom)",
+      "pos": [40, 160],
+      "size": [440, 90],
+      "sources": [
+        { "path": "bedcode-desktop/wasm-apps/ai-chatbox/src/components/ChatView.vue", "label": "ChatView" },
+        { "path": "bedcode-desktop/wasm-apps/ai-chatbox/src/adapters/registry.ts", "label": "协议适配注册" },
+        { "path": "bedcode-desktop/wasm-apps/ai-chatbox/src/adapters/sse.ts", "label": "SSE 解析" }
+      ]
+    },
+    {
+      "id": "ai_providers",
+      "type": "external",
+      "label": "AI 供应商 API",
+      "sublabel": "OpenAI · Anthropic · Gemini · Qwen · 自定义 Base URL",
+      "pos": [540, 160],
+      "size": [440, 90]
+    },
+    {
+      "id": "rust_wasm",
+      "type": "cloud",
+      "label": "Rust WASM 核心",
+      "sublabel": "client.rs 薄透传 · store.rs JSONL · commands.rs 8 条命令路由",
+      "tag": "wasm32-wasip3 · Component Model",
+      "pos": [40, 320],
+      "size": [440, 90],
+      "sources": [
+        { "path": "bedcode-desktop/wasm-apps/ai-chatbox/rust/src/client.rs", "label": "HTTP 透传" },
+        { "path": "bedcode-desktop/wasm-apps/ai-chatbox/rust/src/store.rs", "label": "JSONL 存储" },
+        { "path": "bedcode-desktop/wasm-apps/ai-chatbox/rust/src/commands.rs", "label": "命令路由" }
+      ]
+    },
+    {
+      "id": "host_apis",
+      "type": "backend",
+      "label": "宿主能力面",
+      "sublabel": "host-fs · host-http · host-log · host-storage · host-config",
+      "tag": "权限 fs:read/write · network:http",
+      "pos": [40, 480],
+      "size": [440, 90],
+      "sources": [
+        { "path": "bedcode-desktop/packages/bedcode-wasm-core/src/host_api/fs.rs", "label": "host-fs 原语" },
+        { "path": "bedcode-desktop/packages/bedcode-wasm-core/src/host_api/http.rs", "label": "host-http 原语" }
+      ]
+    },
+    {
+      "id": "data_dir",
+      "type": "database",
+      "label": "数据目录 JSONL",
+      "sublabel": "{home}/.bedcode/ai-chatbox/conversations/{id}.jsonl",
+      "pos": [40, 640],
+      "size": [440, 90],
+      "sources": [
+        { "path": "bedcode-desktop/wasm-apps/ai-chatbox/rust/src/store.rs", "label": "落盘实现" }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "WASM sandbox (wasmtime Component Model)",
+      "wraps": ["rust_wasm"]
+    },
+    {
+      "kind": "region",
+      "label": "Desktop host (Tauri 宿主进程)",
+      "wraps": ["host_apis", "data_dir"]
+    }
+  ],
+  "connections": [
+    {
+      "id": "user-chat",
+      "from": "user",
+      "to": "ts_frontend",
+      "label": "提问 / 切换会话 / 配置",
+      "variant": "emphasis"
+    },
+    {
+      "id": "ts-invoke",
+      "from": "ts_frontend",
+      "to": "rust_wasm",
+      "label": "invoke_command (8 条)",
+      "variant": "emphasis"
+    },
+    {
+      "id": "rust-host",
+      "from": "rust_wasm",
+      "to": "host_apis",
+      "label": "host-fs · host-http · host-log",
+      "variant": "emphasis"
+    },
+    {
+      "id": "host-http-ai",
+      "from": "host_apis",
+      "to": "ai_providers",
+      "label": "HTTPS / SSE 透传",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "host-fs-store",
+      "from": "host_apis",
+      "to": "data_dir",
+      "label": "JSONL 读写",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "协议适配前置 (ADR-0010)",
+      "items": [
+        "Rust 层已无任何方言知识：供应商差异 (OpenAI/Anthropic/Gemini/Qwen/自定义 Base URL) 全部收敛在 TS adapters/",
+        "Rust client.rs 只做 http_fetch 载荷最小校验 + 透传宿主 host-http；SSE 语义由前端 sse.ts 解析",
+        "streamEvent 字段为流式请求必填，非流式 (chat-complete / fetch-models) 不要求"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "数据真源在插件私有目录",
+      "items": [
+        "文件访问一律经宿主 host-fs (sync import) —— 不经 WASI preopen：WASI fs 在 p3 下是 async func，与 sync 导出冲突 (ADR 0034)",
+        "数据根固定为宿主绝对路径 {home}/.bedcode/ai-chatbox/；activate 阶段经 fs_request_auth 集中授权一次并持久化记住",
+        "JSONL 结构：conversations/{id}.jsonl (首行 meta + 逐行消息) · index.jsonl (updatedAt DESC) · providers.json"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "限流重试与错误处理",
+      "items": [
+        "限流码 (429/503/529) 按指数退避自动重试：次数 (0=关闭, 默认 3) · 初始等待 (1000ms) · 封顶 (30000ms) 均可配",
+        "思考模式 (default/enabled/disabled) 与推理强度 (low/high/max) 与展示开关独立控制",
+        "限流与错误信息透传前端，前端统一 logger 显示；不做静默降级"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "权限与命令面",
+      "items": [
+        "权限：broadcast · fs:read · fs:write · network:http · storage · ui:sidebar",
+        "8 条命令：chat-stream · chat-complete · fetch-models · list-conversations · get-messages · save-conversation · save-message · delete-conversation",
+        "前端 UI 只经 invoke_command 到 Rust，Rust 再走 host-* 原语——无前端直接网络或文件访问 (AGENTS.md §6)"
+      ]
+    }
+  ]
+}
