@@ -18,3 +18,12 @@
   （connection-context 安全上下文查询面）；移动端只暴露 1 函数 `primary-target`（主连接
   目标引擎事实，无权限门）。`host-websocket`（桌面 15 函数 / 移动客户端 5 函数子集，
   ADR 0041）之后第二个「同名接口移动子集」先例。
+- **移动端终端消费 UI 域整体迁入 `com.bedcode.terminal-session` 插件（2026-10-08，票 15 阶段 A）**：
+  终端 UI（`TerminalView` 页面编排 / `terminalBuffer` 订阅状态机 / 输入助手与快捷键配置 /
+  字号字间距主题设置 / 新手引导 / 帮助文案）约 9.6k 行 / 47 文件自宿主 `src/` 迁入内置 wasm app
+  前端（`plugins/terminal-session/src/terminal/**`）；宿主只保留 ~80 行路由薄壳
+  （`/mobile/terminal/:id` URL 形状不变）与**无业务语义的机制面**（`mobileApi.openTerminalStream`
+  页面字节通道 / `onSessionEvent` 白名单事件投影 / `useIsDark` / `mobileSettings` 只读投影 /
+  `registerTerminalView` 单实例扩展点）。双端语义对齐点：桌面 `wasm-apps/terminal-session`
+  同为「UI 在 app、宿主为窄转发」的形态，移动端此前「UI 在宿主、协议客户端在插件」的
+  半分裂形态就此收齐。阶段 B（host-terminal / terminal-hooks 整面退役 + ABI 16→17）另行落地。

@@ -9,6 +9,61 @@
 
 ## [未发布]
 
+#### 移动端：终端 UI 域下沉插件后 `host-terminal` / `terminal-hooks` 整面退役——`terminal:input` 权限位与 manifest-gen 宽推导线同批清理（mobile ABI 16 → 17，破坏性，票 15 阶段 B）
+
+- **时机**：票 15 阶段 A 已把终端消费 UI 域（视图 / store / composables / 组件 / 样式 / 文案）整体迁入
+  `com.bedcode.terminal-session` 插件前端，宿主↔插件的终端回调/写入面零消费者成立——
+  `PluginLifecycleEvent::TerminalInput` 无任何生产构造点，`TerminalAPI.onOutput` 是无宿主发射点的
+  悬挂监听（按项目裁决口径「文档承诺兑现不了即退役」处置）
+- **WIT（破坏性）**：import `host-terminal`（send）与导出 `terminal-hooks`
+  （on-terminal-input / on-terminal-output）整 interface 删除；≤v16 产物在 v17 宿主**实例化期**
+  因缺失 import interface 被点名拒绝（fail-visible ②）。内置插件随 APK 同分发，线上无旧产物
+- **SDK**：`HostTerminal` / `TerminalHandler` trait、`BedcodePlugin.terminal_handlers` 扩展点、
+  `LifecycleContribution.onTerminalInput/onTerminalOutput`、`TerminalContribution.inputHandlers/outputParsers`、
+  TS `TerminalAPI`、TS `LifecycleAPI.onTerminalInput/onTerminalOutput`、`PERMISSION_TERMINAL_INPUT`
+  权限常量整面删除；manifest-gen 的 `.terminal` 宽权限推导规则（`\.terminal\b` → `terminal:input`）
+  同批删除——否则插件源码中的 `.terminal` 子串会把退役权限自动加回 manifest
+- **宿主**：`host_impl/terminal.rs`、`component.rs` 的 `host_terminal` Host impl 与 linker 注册、
+  `PluginLifecycleEvent::TerminalInput/TerminalOutput` 变体、`router/event.rs` 的
+  `terminal_output_activity` listener、前端插件上下文的 `LifecycleAPI` terminal 两条全部移除
+- **保留面**（新锁反向断言钉住）：`host-terminal-stream.forward-output` + `terminal:output` 权限位
+  （C3 二进制出口，票 12）、`terminal_stream_gateway` 零解析窄转发、`host-connection.primary-target`
+  （票 13 地基）原样在场——本批只退役回调/写入面，不碰输出传输面
+- **新锁**：`retired_mobile_host_terminal_hooks_lock.rs`（4 例：WIT 缺席 / SDK+宿主 Rust 接线缺席 /
+  前端词汇缺席（排除 `__tests__`）/ 保留面在场）
+
+#### 移动端：会话控制客户端下沉 `com.bedcode.terminal-session` 插件——宿主 `SessionHttpClient` / `SessionManager` / 三命令退役，插件会话域经 host-http（宿主代注 JWT）直连桌面 `/api/sessions*`（零 ABI / 零 wire 变更，票 13）
+
+- **迁移内容**：list / start / stop / remove / input(HTTP) 整面会话控制迁入插件 `rust/src/session.rs`，
+  以五条 `terminal-session.*` 命令（`list-sessions` / `start-session` / `stop-session` /
+  `remove-session` / `send-http-input`）经 `host-http.fetch`（`jwtAuth: true`）执行；宿主
+  `execute_http_request` 增 `jwtAuth` 配置（纯函数 `resolve_jwt_auth_header` 三向裁决：关=不注入 /
+  开+有 token=注入 Bearer / 开+空 token=显性 Err——token 不落插件，C4，对齐票 12 `jwt-auth`
+  首消息代发先例）；base URL 来自 `host-connection.primary-target`（票 12 地基）。宿主退役面：
+  `session/http.rs`（`SessionHttpClient` + 信封解析 + 3 结构锁）、`session.rs`（`SessionManager`
+  簿记——活跃会话只在零消费者的死命令路径写入）、`commands/session.rs`（三死命令，票 04 前端改走
+  宿主 HTTP 代理后零调用方）、`SESSION_MANAGER` 单例、`ws_disconnect` 停活跃会话死分支、
+  `SESSION_NAME_ID_PREFIX_LEN`
+- **前端**：新增 `plugin/sessionCommands.ts`（5 封装，`ApiResult` 形状与退役前 `useHttpApi` 逐字段
+  一致，插件命令失败归一 `{code:-1, message}`）；调用点切换：`useMobileConnection`（列表/起停删/
+  sendInput）、`SessionsView`（stop/remove）、`usePresetTasks`（任务下发/执行）、`plugin/context.ts`
+  （`session.list` / `terminal.sendInput`——权限判定不变）；`useHttpApi` 只余 resize（票 15 终端
+  UI 经 `mobileApi.httpRequest` 消费）
+- **边界保留**（票文档 §3）：resize 不迁（票 15 既定设计）；插件前端终端域保留 `mobileApi.httpRequest`
+  路径（票 15 阶段 A 并行在途，不碰）；`host-terminal.send` 内联 HTTP 实现存续（零插件消费，
+  整面退役随票 15）
+- **防回接锁**：`retired_mobile_session_control_face_lock.rs`（7 例）——退役符号 12 needle /
+  注册面零 3 项 / 前端零退役字面量 / 新面反向断言 + 原 `session/http.rs` 三结构锁随迁（旧信封
+  命令名 / WS 帧级加密 / 控制面信封引用）。**变异自检 4/4**（符号注入 → 锁1；stub+注册 → 锁1+2；
+  前端字面量 → 锁3+4；删 `network:http` → 锁4；还原后 7/7 绿、git diff 零漂移）
+- **门禁**：插件 native `cargo test` 50/50（既有 40 + 会话域 10）；wasm32 真门禁经 SDK CLI 通过
+  （产物刷新——wasm 522 KB / index.js 911 KB，manifest `network:http` 并集核对一致）；宿主定向
+  （锁 7/7 + 改造后 `session_http_flow` wire 测试 1/1——真实 reqwest 打 mock actix 桌面，断言四
+  端点形状 / Bearer 注入 / 业务码与非 2xx 透出）；宿主全量 `cargo test --no-fail-fast` lib
+  314 passed / 6 failed（6 个为 `egress.rs` 在途基线，与票 12/14/16 同数同款）+ 16 个集成 target
+  全绿；前端定向 31/31、全量 66 文件 / 720 用例全绿；根 `pnpm exec eslint .` 0 error。未跑：
+  `cross-end-tests`（零 wire 变更——票 21 回归）、真机往返（票 21）
+
 #### 移动端前端：旧公共组件与平台机制复制进宿主壳 +「重构优先对接新壳」强制规则（新界面自足化起步）
 
 - **内容**：宿主壳（`bedcode-mobile/src/shell/**`，路由 `/mobile/shell`）新增两层自足面——公共组件库 `components/ui/`（Button / Toggle / Modal / ConfirmDialog / PromptDialog / LoadingDialog / CollapseSection / QuickActionButton / LetterAvatar，9 件）与平台机制副本 `composables/`（useToast / usePlatform / useOrientation / useSwipeTabs / useViewportPanGuard，5 件）。全部是旧前端对应实现的**壳内副本**，契约（props / emits / 插槽 / 行为）逐字一致，旧页面迁移只换 import 路径；壳内消费方（应用详情 / 应用管理 / 状态条 / 我的）已切换，`src/shell/**` 对 `@/components|@/composables|@/views` 的 import 归零

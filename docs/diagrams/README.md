@@ -25,6 +25,16 @@
 
 静态预览：[bedcode-overall-architecture.png](./bedcode-overall-architecture.png)
 
+### wasm-core 模块架构与扩展点（ADR 0022 · ADR 0037）
+
+`bedcode-wasm-core` 引擎内核的模块拓扑与 5 个扩展点。内核只做机制（应用无关的通用引擎：进程 / 网络 / 存储 / 安全 / 通信 + wasmtime 48），业务事实真源全部下沉插件（ADR 0022 无业务内核红线）。4 闸门（能力 / 身份 / 隔离 / 生命周期）4 通道（WIT host-* / bus / events / 互调）构成宿主↔插件边界；5 个扩展点（引擎钩子 / 能力 crate / 权限词汇 / 插件贡献 / SystemComponent）是插件与内核的契约面：
+
+| 图 | 类型 | 覆盖范围 | IR 源 |
+| --- | --- | --- | --- |
+| [wasm-core-modules-extension.html](./wasm-core-modules-extension.html) | architecture | 引擎内核 9 模块（PluginHost / WasmRuntime / API 桥接 / LoaderRegistry / host_api 实现 / CapabilityRegistry / 引擎真源 / 安全框架 / 能力安装）+ 依赖底座 4 crate（runtime SDK / plugin-api-wasm / bedcode-host-kit / server-base）+ 扩展点 5 面（引擎钩子 / 能力 crate / 权限词汇 / 插件贡献 / SystemComponent）· 13 条关系线覆盖装配 / 实例化 / 加载 / impl Host / check_permission / 授权 / wasmtime 48 / Ports 下发 / on_load / check_permission / submit_module! 全链路 | [wasm-core-modules-extension.json](./wasm-core-modules-extension.json) |
+
+关键代码锚点：`packages/bedcode-wasm-core/src/`（`manager.rs` PluginManager + `manager/loader.rs` 加载器 + `manager/runtime.rs` WasmRuntime + `manager/host.rs` Host 装配 + `manager/registry.rs` 注册表 + `manager/capability.rs` 能力注册/安装 + `host_api.rs` 命令路由 + `host_api/http.rs` + `host_api/pty.rs` + `host_api/storage.rs` + `host_api/auth.rs` 授权 + `permission.rs` 权限门禁 + `security.rs` 安全框架 + `db.rs` 主库 + `storage.rs` 存储 + `system.rs` SystemComponent）
+
 ### 会话真源下沉（ADR 0022）
 
 会话登记 / 状态机 / 生命周期分发 / 输入输出编排从宿主迁入 `com.bedcode.terminal-session` 私有登记域，宿主侧只剩 PTY 引擎、`host-pty` 原语与 `utils/session_gateway.rs` 窄转发层：

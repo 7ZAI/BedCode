@@ -173,6 +173,7 @@ harness `host_harness::start_http_server`（`#[cfg(test)]`，§4.5——顺带�
 
 ## Comments
 
+- 2026-10-08：**模块架构图与扩展点见 [`docs/diagrams/wasm-core-modules-extension.html`](../diagrams/wasm-core-modules-extension.html)**——引擎内核 9 模块 + 依赖底座 4 crate + 5 个扩展点（引擎钩子 / 能力 crate / 权限词汇 / 插件贡献 / SystemComponent）的完整拓扑，13 条关系线覆盖装配 / 实例化 / 加载 / impl Host / check_permission / 授权 / wasmtime 48 / Ports 下发 / on_load / submit_module! 全链路。
 - 2026-10-07：**移动端复用形态另立 ADR 0040**。本 ADR D1「移动端拉不动」的桌面基础层反对点
   （依赖边）已随 `capability-crates-to-root-packages`（同批次上提根 packages）部分消解；剩余阻塞
   （WIT 绑定 / host_api 桌面域 / PluginKind）由 ADR 0040「各端自持绑定面」处置。正文不动。

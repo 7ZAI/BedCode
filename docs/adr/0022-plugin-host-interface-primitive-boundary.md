@@ -567,6 +567,25 @@ serve 供流记账 / peer_name 解析 / 取消原因码映射 / pull 任务行�
 本节按**写入批次**而非时间序排列；**「当前」= 首条 v20**（对应 desktop ABI v31 / mobile 14）。其余条目标记的「（当前）」是写入当时的时点表述，已按本节实际状态移除——被后续修订取代的结论以本节对应条目为准，
 正文中被取代的时点表述均已就地加「现状 / 终态更正」标注。
 
+- **2026-10-08 移动端票 15 阶段 B（host-terminal / terminal-hooks 整面退役 · mobile ABI 16 → 17 · 破坏性）**：
+  `.scratch/2026-10-07-mobile-wasm-core-refactor/`（详见 `ticket-15-terminal-ui-downsink.md` §2.9）。
+  阶段 A 把终端消费 UI 域迁入插件前端后退役面零消费者成立（宿主 `terminal_output_activity` 链
+  无生产构造点、`TerminalAPI.onOutput` 是无发射点的悬挂监听——「文档承诺兑现不了即退役」）。
+  ① **WIT 删面**：import `host-terminal`（send）与导出 `terminal-hooks`
+  （on-terminal-input / on-terminal-output）整 interface 删除；旧产物在 v17 宿主**实例化期**
+  因缺失 import interface 被点名失败（fail-visible ②），内置插件随 APK 同分发无旧产物。
+  ② **SDK 删面**：`HostTerminal` trait / `TerminalHandler` trait / `BedcodePlugin.terminal_handlers`
+  扩展点 / `LifecycleContribution.onTerminal*` / `TerminalContribution.inputHandlers|outputParsers` /
+  TS `TerminalAPI`（sendInput / onOutput）/ `LifecycleAPI.onTerminal*` / `PERMISSION_TERMINAL_INPUT`
+  权限位（manifest-gen 的 `.terminal` 宽推导线同批清理——否则插件源码 `.terminal` 子串会把退役
+  权限自动加回 manifest）。③ **宿主删面**：`host_impl/terminal.rs`、`component.rs` 的
+  `host_terminal` Host impl 与 linker 注册、`PluginLifecycleEvent::TerminalInput/TerminalOutput`
+  变体、`router/event.rs` 的 `terminal_output_activity` listener、前端 `LifecycleAPI` terminal 两条。
+  ④ **保留面**（防回接锁反向断言）：`host-terminal-stream.forward-output` + `terminal:output`
+  权限位 + `terminal_stream_gateway` 窄转发 + `host-connection.primary-target` 原样在场
+  （C3 二进制出口与票 13 地基不随回调面退役）。⑤ 新锁
+  `retired_mobile_host_terminal_hooks_lock.rs`（4 例：WIT / Rust 接线 / 前端词汇 / 保留面）。
+
 - **2026-10-08 移动端票 16（auto-task 插件并入 terminal-session app · mobile ABI 16 不变 · 零 WIT 变更）**：
   `.scratch/2026-10-07-mobile-wasm-core-refactor/` 阶段 3 收口票（详见 `ticket-16-auto-task-merge.md`），
   spec D6 选项 A：`com.bedcode.auto-task`（TS 面板 + 极简 rust 壳）整体并入 `com.bedcode.terminal-session`
