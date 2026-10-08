@@ -15,7 +15,12 @@ import { pluginLoader } from './loader'
 import { pluginDialogHost } from './dialog-host'
 import { usePresetTasks } from '@/composables/usePresetTasks'
 import { useMobileConnection } from '@/composables/useMobileConnection'
+import { useMobileSettings } from '@/composables/useMobileSettings'
+import { useIsDark } from '@/composables/useTheme'
 import { httpRequest } from '@/composables/useHttpApi'
+import { MOCK_SESSION_ID } from '@binblink/bedcode-plugin-sdk-mobile'
+import { subscribeHostSessionEvents } from './host-events'
+import { openTerminalStream } from './terminal-stream'
 
 /**
  * 初始化插件系统
@@ -33,6 +38,7 @@ export async function initPluginSystem(
   // 供插件前端经 SDK getMobileApi() 访问；具体业务端点（任务队列/任务历史/定时任务等）
   // 由各插件基于 httpRequest 自行封装，宿主不感知插件领域细节
   const connection = useMobileConnection()
+  const mobileSettings = useMobileSettings()
   await initSharedRuntime(
     app,
     pinia,
@@ -46,6 +52,16 @@ export async function initPluginSystem(
       sessionConfigs: connection.sessionConfigs,
       isConnected: connection.isConnected,
       httpRequest,
+      loadActiveSessions: connection.loadActiveSessions,
+      loadSessionConfigs: connection.loadSessionConfigs,
+      hasLoadedConfigs: connection.hasLoadedConfigs,
+      isLoadingConfigs: connection.isLoadingConfigs,
+      // 票 15：终端 UI 域下沉所需宿主机制面（见 SDK MobileHostApi 注释）
+      openTerminalStream,
+      isDark: useIsDark(),
+      mobileSettings: mobileSettings.settings,
+      onSessionEvent: subscribeHostSessionEvents,
+      mockSessionId: import.meta.env.DEV ? MOCK_SESSION_ID : null,
     },
   )
 

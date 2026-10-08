@@ -18,9 +18,10 @@
 //! | ④ 双面认识点唯一 | I1 在宿主侧的表达（装配面收敛在组合根） | 面内锁看不见宿主源码 |
 //! | ⑤ 全局端口注册表只有一个装配点 | 组合根唯一性（票 07 的实测教训） | 无——纯宿主侧不变量 |
 //!
-//! **登记表为什么带路径**：`bedcode-host-kit`（机制内核）落仓库根 `packages/`
-//! 而非 `bedcode-desktop/packages/`（spec D6：双端共享锚点）。只登记名字的表会
-//! 默认同一个父目录，于是断言①会把它报成「拆分产物缺失」或静默跳过——锁变成
+//! **登记表为什么带路径**：机制内核 `bedcode-host-kit`、八个能力域 / 传输面 crate
+//! （2026-10-07 能力域 lib 迁根）与整核本体 `bedcode-wasm-core`（2026-10-08 迁根）
+//! 全部落**仓库根** `packages/`。只登记名字的表会
+//! 默认同一个父目录，于是断言①会把它们报成「拆分产物缺失」或静默跳过——锁变成
 //! 空转，而空转的锁比没有锁更危险。
 //!
 //! ## 为什么 ④ / ⑤ 值得单独锁（两次实测教训）
@@ -39,7 +40,7 @@
 
 use std::path::{Path, PathBuf};
 
-/// 拆分产物清单：`(crate 名, 相对 `<desktop>/packages` 的路径)`
+/// 拆分产物清单：`(crate 名, 相对仓库根 `packages/` 的路径)`
 ///
 /// **单一事实源已上提 `bedcode-wasm-core` crate**（wasm-core-whole-crate 票 05
 /// 收口：lib → crate 单向引用）。本表是那张登记表的**再导出**，不是第二份拷贝——
@@ -48,12 +49,13 @@ use std::path::{Path, PathBuf};
 ///
 /// 表内容：server 五面 + 加密引擎（票 03-06）+ 机制内核（仓库根双端共享锚点）+
 /// 能力域 crate（wasm-core-lib-split 票 03/07/08）+ **整核本体 `bedcode-wasm-core`**
-/// （wasm-core-whole-crate 票 02/05）。ADR 0036 撤销的 `bedcode-sqlite-engine`
+/// （wasm-core-whole-crate 票 02/05；2026-10-08 迁根）。ADR 0036 撤销的 `bedcode-sqlite-engine`
 /// 不在表内（`host-database` / `host-plugin-database` / `host-storage` 三域与
 /// SQLite 引擎面留在核心）。
 ///
-/// **为什么带路径列**：`bedcode-host-kit` 落**仓库根** `packages/`（双端共享锚点，
-/// spec D6），其余在 `bedcode-desktop/packages/`。表只给名字时，锁必须假定同一个
+/// **为什么带路径列**：机制内核、能力域 / 传输面 crate 与整核本体
+/// `bedcode-wasm-core` 全部落**仓库根** `packages/`（2026-10-07 迁 8 个能力域 +
+/// 2026-10-08 迁整核本体）。表只给名字时，锁必须假定同一个
 /// 父目录——那种假定正是「夹具落到第二个 target 落点」那类事故的配方。
 pub(crate) use bedcode_wasm_core::crate_boundary_lock::SPLIT_CRATES;
 
@@ -225,9 +227,10 @@ fn crate_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf()
 }
 
-/// 拆分产物目录（`<desktop>/packages`）
+/// 拆分产物基准目录（仓库根 `packages/`；2026-10-08 整核本体迁根后全部拆分产物
+/// 同落此处，登记表内条目即裸 crate 名）
 fn packages_dir() -> PathBuf {
-    crate_root().join("..").join("packages")
+    crate_root().join("..").join("..").join("packages")
 }
 
 /// 拆分产物的 `src` 扫描根（供宿主的退役面防回接锁共用）
@@ -630,6 +633,40 @@ fn server_ports_registry_has_exactly_one_install_call_site() {
     assert!(
         PORTS_INIT_CALL_SITE_ALLOWLIST.contains(&"src/server/composition.rs"),
         "登记表缺组合根本身——`install_server_ports` 被摘掉或改名时必须同改本表"
+    );
+}
+
+/// peer 上下文的**兜底装配**必须带宿主句柄（2026-10-07 实机回归的结构锁）
+///
+/// 端口注册表在 `PluginHost::new` **之后**才装，而插件激活发生在 `PluginHost::new`
+/// 内部——file-transfer 的 `host-peer.start-node` 正落在那个窗口。兜底装配若不带句柄，
+/// 路径面只能读尚未注册的 `AppContext` → `resolve app data dir failed: no runtime
+/// context` → peer 节点起不来 → 桌面端不广播 → 移动端发现不到桌面。
+#[test]
+fn peer_ctx_fallback_assembly_carries_app_handle() {
+    let rel = "src/server/peer_net_cmds.rs";
+    let src = read_file(&crate_root().join(rel));
+    let calls: Vec<(usize, String)> = find_segment_positions(&src, "assemble")
+        .into_iter()
+        .map(|pos| (line_number(&src, pos), line_content(&src, pos)))
+        // 注释行不算调用点（只判真实代码行，避免文档里提到装配就被误伤）
+        .filter(|(_, line)| {
+            let trimmed = line.trim_start();
+            !trimmed.starts_with("//")
+        })
+        .collect();
+    assert!(!calls.is_empty(), "结构锁空转：`{rel}` 里找不到 `assemble` 调用");
+
+    let handle_less: Vec<(String, usize, String)> = calls
+        .into_iter()
+        .filter(|(_, line)| !line.contains("Some("))
+        .map(|(line, content)| (rel.to_string(), line, content))
+        .collect();
+    assert!(
+        handle_less.is_empty(),
+        "`{rel}` 的兜底装配必须传句柄（`assemble(Some(app.clone()))`）——\
+         不传时窗口内的路径解析恒定失败，peer 节点起不来：\n{}",
+        format_hits(&handle_less)
     );
 }
 

@@ -622,11 +622,11 @@ server-lib 拆出后新增仓库根 `target/server-libs`；2026-10-04 wasm-core-
 | --- | --- | --- |
 | `bedcode-desktop/src-tauri/target/` | 桌面宿主（含 15G 阈值治理） | Tauri / cargo 默认 |
 | `bedcode-mobile/src-tauri/target/` | 移动端宿主（含 15G 阈值治理） | Tauri / cargo 默认 |
-| `bedcode-desktop/target/fixtures/` | 桌面 9 个测试夹具共享 | `src-tauri/.../runtime/fixture_target.rs` + `packages/.cargo/config.toml` |
+| `bedcode-desktop/target/fixtures/` | 桌面 9 个测试夹具共享 | `packages/bedcode-wasm-core/src/manager/runtime/fixture_target.rs`（2026-10-08 随整核本体迁根）+ `packages/.cargo/config.toml` |
 | `bedcode-desktop/target/wasm-apps/` | 桌面 4 个 wasm 应用共享 | `scripts/plugin-wasm-config.mjs`（`WASM_TARGET_DIR`）+ `wasm-apps/.cargo/config.toml` |
 | `bedcode-mobile/target/fixtures/` | 移动 2 个夹具 / 插件共享 | `bedcode-mobile/src-tauri/.../component.rs` 的 `fixture_target_dir()` |
-| `target/server-libs/`（仓库根） | 桌面 6 个 `bedcode-server-*` + `bedcode-crypto-engine` 共享 | 各 crate 的 `.cargo/config.toml`（`../../../target/server-libs`，相对**crate 根**） |
-| `target/host-kits/`（仓库根） | 「机制内核 + 能力域」同族共享：`packages/bedcode-host-kit`、`bedcode-desktop/packages/bedcode-discovery-engine`（wasm-core-lib-split 票 03；sqlite 域票 07 已由 ADR 0036 撤销，不在此桶）、**整核本体 `bedcode-wasm-core`**（wasm-core-whole-crate 票 02：整核抽出后入此桶，单独 target 独立于宿主——避免把 wasmtime 栈编进宿主增量） | 各 crate 的 `.cargo/config.toml`（根 `packages/` 下写 `../../target/host-kits`，桌面 `packages/` 下写 `../../../target/host-kits`——两者同一目录） |
+| `target/server-libs/`（仓库根） | 桌面 6 个 `bedcode-server-*` + `bedcode-crypto-engine` 共享（均落**仓库根** `packages/`） | 各 crate 的 `.cargo/config.toml`（`../../target/server-libs`，相对 **crate 根**；2026-10-07 能力域 lib 迁根时从 `../../../` 改为 `../../`） |
+| `target/host-kits/`（仓库根） | 「机制内核 + 能力域」同族共享：`packages/bedcode-host-kit`、`packages/bedcode-discovery-engine`（wasm-core-lib-split 票 03；sqlite 域票 07 已由 ADR 0036 撤销，不在此桶）、**整核本体 `bedcode-wasm-core`**（wasm-core-whole-crate 票 02：整核抽出后入此桶，单独 target 独立于宿主——避免把 wasmtime 栈编进宿主增量；2026-10-08 迁根至根 `packages/`） | 各 crate 的 `.cargo/config.toml`（根 `packages/` 下写 `../../target/host-kits`；2026-10-07 能力域迁根与 2026-10-08 整核迁根均从 `../../../` 改为 `../../`——同一目录） |
 | `cross-end-tests/target/` | 跨端互连测试（仓库根工程，依赖两端 lib） | cargo 默认；**刻意独立**（见下） |
 
 **`.cargo/config.toml` 里 `target-dir` 的相对路径基准 = 该 `.cargo` 目录的父目录**
@@ -644,8 +644,16 @@ cd bedcode-desktop/packages/<fixture-crate> && cargo metadata --no-deps --format
 
 两者的 `target_directory` 应分别是 `bedcode-desktop/target/wasm-apps` 与
 `bedcode-desktop/target/fixtures`；server-lib 六个 crate 应为仓库根 `target/server-libs`，
-机制内核 + 能力域 + 整核本体三 crate（`packages/bedcode-host-kit` 与桌面 `packages/` 下的
-`bedcode-discovery-engine`、`bedcode-wasm-core`）应为仓库根 `target/host-kits`。
+机制内核 + 能力域 + 整核本体四 crate（仓库根 `packages/bedcode-host-kit` 与
+`packages/bedcode-discovery-engine`，以及 2026-10-07/10-08 迁根的
+`packages/bedcode-pty-engine` / `packages/bedcode-wasm-core`）
+应为仓库根 `target/host-kits`。
+
+**2026-10-07「能力域 lib 迁根」实测复现了这条坑**：八个 crate 从
+`bedcode-desktop/packages/` 上移到仓库根 `packages/`，深度少了一层，所有
+`target-dir` 的 `../../../` 必须同时改 `../../`——不改**不报错**，只是安静地落到仓库根的
+**上级**目录（`/home/binblink/project/tauriProject/target/…`）。改完逐个
+`cargo metadata` 核验是最快的自检。
 
 同一串 `../../target/wasm-apps` 在两处含义不同，别混：`build.js` 把它作为
 `--target-dir` 传给 cargo，命令行参数按**进程 cwd**（应用根 `wasm-apps/<app>/`）解析；

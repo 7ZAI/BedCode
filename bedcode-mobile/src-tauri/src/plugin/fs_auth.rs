@@ -470,9 +470,7 @@ mod tests {
     /// 常规文件系统路径：canonicalize 可成功，路径前缀匹配生效
     #[tokio::test]
     async fn prefix_matches_real_path_uses_canonical_prefix() {
-        // 独立临时目录避免测试间共享 storage 状态
-        let dir = std::env::temp_dir().join(format!("fs-auth-test-real-{}", std::process::id()));
-        let checker = FsAuthChecker::new(Arc::new(PluginStorage::new(&dir)), None);
+        let checker = FsAuthChecker::new(PluginStorage::test_storage(), None);
         // 已授权前缀是真实存在的父目录，canonicalize 后按路径前缀命中
         let prefix = "/";
         let canonical = PathBuf::from("/").canonicalize().unwrap();
@@ -483,8 +481,7 @@ mod tests {
     /// 这是授权弹窗与 loading 同现根因的回归测试——已授权 SAF 树 URI 必须命中。
     #[test]
     fn prefix_matches_saf_uri_falls_back_to_string_prefix() {
-        let dir = std::env::temp_dir().join(format!("fs-auth-test-saf-{}", std::process::id()));
-        let checker = FsAuthChecker::new(Arc::new(PluginStorage::new(&dir)), None);
+        let checker = FsAuthChecker::new(PluginStorage::test_storage(), None);
         let uri = "content://com.android.externalstorage.documents/tree/primary%3AShareX";
         let canonical = Path::new(uri);
         // 完整 URI 授权前缀（save_granted_path 对 content:// 存完整 URI）
@@ -502,8 +499,7 @@ mod tests {
     /// save_granted_path：content:// URI 存完整 URI（非父级），保证后续前缀命中
     #[test]
     fn save_granted_path_keeps_full_saf_uri() {
-        let dir = std::env::temp_dir().join(format!("fs-auth-test-save-{}", std::process::id()));
-        let storage = Arc::new(PluginStorage::new(&dir));
+        let storage = PluginStorage::test_storage();
         let checker = FsAuthChecker::new(storage.clone(), None);
         let uri = "content://com.android.externalstorage.documents/tree/primary%3AShareX";
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -517,8 +513,7 @@ mod tests {
     /// 常规文件系统路径：仍存父目录前缀（旧语义不变）
     #[test]
     fn save_granted_path_keeps_parent_for_real_path() {
-        let dir = std::env::temp_dir().join(format!("fs-auth-test-parent-{}", std::process::id()));
-        let storage = Arc::new(PluginStorage::new(&dir));
+        let storage = PluginStorage::test_storage();
         let checker = FsAuthChecker::new(storage.clone(), None);
         let rt = tokio::runtime::Runtime::new().unwrap();
         // 独立 plugin_id，避免与前一个测试共享 storage 数据

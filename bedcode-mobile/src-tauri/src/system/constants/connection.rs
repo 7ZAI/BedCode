@@ -48,10 +48,9 @@ pub const PLACEHOLDER_CLIENT_ADDR: &str = "0.0.0.0:0";
 /// WebSocket 默认路径（WsClientConfig 默认值）
 pub const WS_DEFAULT_PATH: &str = "/";
 
-/// 终端流端点（票 05：新协议 `/ws/plugin/{plugin-id}/terminal`，对齐桌面插件
-/// `ws_terminal.rs` 的订阅/输入/流控/重锚/停止帧；旧 `/ws/terminal/session/{id}`
-/// 直连路径已随桌面 WS 硬切退役 → 404）
-pub const WS_PLUGIN_TERMINAL_PATH: &str = "/ws/plugin/com.bedcode.terminal-session/terminal";
+// 注：原 `WS_PLUGIN_TERMINAL_PATH`（终端流端点 `/ws/plugin/com.bedcode.terminal-session/terminal`）
+// 已随票 12 终端订阅协议客户端迁插件删除——端点 URL 的拼装真源在终端插件
+// （`plugins/terminal-session/rust/src/lib.rs` 的 TERMINAL_WS_PATH），宿主零消费。
 
 /// 桌面 wasm 应用 `com.bedcode.terminal-session` 的 WS 端点基础路径
 ///

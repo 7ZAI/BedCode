@@ -27,6 +27,7 @@ import type {
   TerminalToolbarItemDescriptor,
   SettingsSectionDescriptor,
   PluginRouteDescriptor,
+  TerminalViewContribution,
   PluginDialogOptions,
   PluginDialogHandle,
 } from './types'
@@ -184,6 +185,13 @@ export function createPluginContext(info: PluginInfo): PluginContext {
       requirePermission('ui.registerTerminalToolbarItem')
       const registry = getPluginRegistry()
       const disposable = registry.registerTerminalToolbarItem(info.id, item)
+      disposables.push(disposable)
+      return disposable
+    },
+    registerTerminalView(view: TerminalViewContribution): Disposable {
+      requirePermission('ui.registerTerminalView')
+      const registry = getPluginRegistry()
+      const disposable = registry.registerTerminalView(info.id, view)
       disposables.push(disposable)
       return disposable
     },

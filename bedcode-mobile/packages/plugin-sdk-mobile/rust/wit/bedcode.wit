@@ -17,10 +17,24 @@ interface host-storage {
     delete: func(key: string) -> result<_, string>;
 }
 
-/// 主数据库（rusqlite 直连；无 params 变体、无插件独立库——移动端现状）
+/// 主数据库（rusqlite；表名前缀纵深 + 属主隔离，与桌面 13 原语同构——票 05）
 interface host-database {
     execute: func(sql: string) -> result<u32, string>;
     query: func(sql: string) -> result<option<string>, string>;
+    execute-params: func(sql: string, params-json: string) -> result<u32, string>;
+    query-params: func(sql: string, params-json: string) -> result<option<string>, string>;
+    /// 事务内顺序执行多语句（sqls-json 为 SQL 字符串数组），返回受影响行数合计
+    execute-batch: func(sqls-json: string) -> result<u32, string>;
+}
+
+/// 插件私有库（每插件属主分区；仅本插件可访问，停用回收）——票 05 新增
+interface host-plugin-database {
+    execute: func(sql: string) -> result<u32, string>;
+    query: func(sql: string) -> result<option<string>, string>;
+    execute-params: func(sql: string, params-json: string) -> result<u32, string>;
+    query-params: func(sql: string, params-json: string) -> result<option<string>, string>;
+    /// 事务内顺序执行多语句（sqls-json 为 SQL 字符串数组），返回受影响行数合计
+    execute-batch: func(sqls-json: string) -> result<u32, string>;
 }
 
 interface host-terminal {
@@ -81,11 +95,18 @@ interface host-bus {
 /// 发现/信任/拨号/收发/浏览的引擎全部在宿主 peer-net 层；本接口只是
 /// 命令面的 WASM 投影。DTO 一律 JSON 字符串承载（camelCase，与 Tauri
 /// 命令返回形状一致）。事件经消息总线 `peer:*` topic 推送（host-bus 订阅）：
-/// - `peer:devices`    发现缓存全量列表变化
+/// - `mdns:found.<plugin-id>` / `mdns:lost.<plugin-id>` 发现事件（host-mdns
+///   自建 browse 的属主定向投递，取代已退役的全局 `peer:devices` 快照 topic——
+///   设备列表真源是插件自建缓存，宿主不再持有派生视图）
 /// - `peer:connection` 节点连上/断开
 /// - `peer:consent`    首次连接确认请求
-/// - `peer:transfer`   发送任务列表变化（含进度与终态）
-/// - `peer:receive`    接收侧变化（待应答批/进行中接收）
+/// - `peer:transfer-event` 发送方向引擎原始事件（ABI v12：kind ∈ progress /
+///   terminal / paused / resumed / pull-served；取代旧快照 topic
+///   `peer:transfer`——发送任务真源已下沉插件归约）
+/// - `peer:receive-event` 接收方向引擎原始事件（ABI v13：kind ∈ offer-pending /
+///   pull-started / progress / terminal / paused / resumed / node-stopped；
+///   取代旧快照 topic `peer:receive`——接收任务真源已下沉插件归约。
+///   `node-stopped` 无 batchId：节点下线后在册进行中条目一律标注 interrupted）
 interface host-peer {
     /// 按 endpoint 拨号连接（ADR 0022 v2 终态，原 dial-peer-endpoint 转正）：
     /// endpoint = `{ nodeId, addr, port }`（camelCase JSON，插件从自身设备缓存/
@@ -108,7 +129,10 @@ interface host-peer {
     ///
     /// 仅接受 session 句柄寻址；paths 元素双形态：纯 string 或 `{ path, encrypt? }`
     /// 对象（任一元素 encrypt=true → 本批强制加密）。连接已断时以句柄记忆的
-    /// endpoint 自动重拨（信任检查照走引擎握手）
+    /// endpoint 自动重拨（信任检查照走引擎握手）。
+    ///
+    /// ABI v12：一次调用 = 一个会话立即发起（宿主并发闸门已退役，节流归调用方
+    /// 插件侧闸门自控）；载荷携带已退役的 `concurrency` 字段将被显性拒绝
     send-files: func(session-handle: string, paths-json: string) -> result<string, string>;
     /// 接收批应答：accept=false 或超时视为拒绝
     respond-transfer: func(batch-id: string, accept: bool) -> result<_, string>;
@@ -117,7 +141,6 @@ interface host-peer {
     set-receive-policy: func(mode: string, timeout-secs: u64) -> result<_, string>;
     pause-transfer: func(batch-id: string) -> result<_, string>;
     resume-transfer: func(batch-id: string) -> result<_, string>;
-    resume-all-transfers: func() -> result<u32, string>;
     /// 全量幂等替换引擎广播源（ADR 0022 v2）：条目 `[{ id, name, path }]`
     /// （camelCase JSON；移动端 SAF 树以 `safTreeUri` 字段替代 `path`）。
     /// 注册表 CRUD 真源在插件侧，本函数只同步暴露面镜像；任一条目非法整批拒绝
@@ -130,6 +153,29 @@ interface host-peer {
     /// 拉取对端文件（files = RemotePullFileDto JSON 数组）→ 入队文件数
     /// （仅 session 句柄寻址；重拨语义同上）
     pull-files: func(session-handle: string, dir-id: string, files-json: string) -> result<u32, string>;
+    /// 设置接收落点目录（空串 = 恢复默认 Downloads\BedCode\；引擎落盘配置原语，
+    /// ADR 0022 v3）
+    set-download-dir: func(path: string) -> result<_, string>;
+    /// 按需启动本机 peer 节点（引擎级生命周期原语，审计票 12）：数据目录与设备名
+    /// 由宿主解析，起来后开始广播与监听。幂等——节点已在跑时返回 false（未改变状态）。
+    ///
+    /// 属主语义：把节点从「未跑」带到「跑」的那次调用，其调用方成为节点属主；
+    /// 已被别的插件起着的节点**不可被本调用接管**（报错，且文案不回带他方身份）。
+    /// 谁起谁停：内核不再按硬编码插件 id 猜测节点归属
+    start-node: func() -> result<bool, string>;
+    /// 让本机节点下线（幂等；节点未跑为 no-op）：停广播 / 关监听 / 排水连接与
+    /// 入站记账。仅节点属主可关停——非属主报错，文案不回带属主身份
+    stop-node: func() -> result<bool, string>;
+    /// 活跃传输批清单：`[{ batchId, direction, status, totalBytes, transferredBytes,
+    /// rateBps, updatedAtMs }]`（camelCase JSON 数组）。仅引擎会话事实——不含
+    /// peerName / 文件清单 / 原因码等业务字段（展示名与业务视图由插件自持）；
+    /// 供插件事件归约状态机首屏重建（激活晚于事件时的兜底查询）
+    active-transfers: func() -> result<string, string>;
+    /// 收集发送源：paths = string[] JSON，目录递归展开 + 批内同名去重
+    /// （「名称 (2).ext」编号——批内 remote 路径唯一性属 wire 协议正确性）
+    /// → `[{ path, size }]` JSON（path 为相对落位形状，size 为字节）。
+    /// 仅读元数据不读内容；路径应来自 host-platform pick-* 用户选择（选择即授权）
+    collect-outgoing: func(paths-json: string) -> result<string, string>;
 }
 
 /// mDNS 浏览纯能力（ADR 0022 v2）：browse-only，发现/离开事件原样透传
@@ -168,6 +214,158 @@ interface host-platform {
     pick-files: func() -> result<string, string>;
     /// 系统文件夹选择器（SAF 目录树选择器）→ 树 URI；用户取消返回空串
     pick-folder: func() -> result<string, string>;
+}
+
+/// WebSocket 出站连接能力（WIT `host-websocket` **客户端域**，ABI v14 新增）
+///
+/// 与桌面端同名接口的**客户端子集**（桌面另有服务端域 9 函数 +
+/// `connection-context`）：移动端不跑 WS 服务器（ADR 0018 移动端是消费端），
+/// 服务端域与「插件入站端点」语义在本端**不存在**，不跟演（ADR 0019 双端偏离）。
+///
+/// 纯传输原语，零业务语义（ADR 0022）：连接生命周期 + 帧收发 + 断连事实。
+/// 订阅协议 / 心跳 / 退避重连 / ack-resync 等编排**一律归插件**。
+///
+/// 权限位 `ws:client`（fail-closed，未声明即拒）：出站连接是 SSRF 面
+/// （插件可代宿主访问任意 ws:// 地址），故独立成位、不与未来服务端能力混位。
+///
+/// **两条投递通道（务必按此订阅）**：
+/// 1. 状态事件走消息总线属主私有 topic（JSON，`host-bus` 的 `subscribe`）：
+///    - `<plugin-id>:ws:open`  payload `{ handle, url, protocol? }`
+///    - `<plugin-id>:ws:error` payload `{ handle, message }`
+///    - `<plugin-id>:ws:close` payload `{ handle, code?, reason?, wasClean }`
+///    宿主不缓冲、不重放：必须在 `activate` 期（首次 `connect` 之前）完成订阅，
+///    晚订阅期间的事件永久丢失（不报错）；丢失后的自愈靠 `is-connected`。
+/// 2. 消息帧走**二进制**属主私有 topic `<plugin-id>:ws:message`
+///    （`host-bus` 的 `subscribe-binary` 订阅，零 JSON 编解码，见 C3 性能红线）。
+///    载荷为帧信封：`[0]=kind（1 文本 / 2 二进制）` +
+///    `[1..3]=handle 长度 u16 BE` + `[3..3+n]=handle` + 其余为原始帧字节。
+///    同一连接内帧按到达序投递（保序）。未订阅二进制 topic ⇒ 帧被丢弃并
+///    记一次 `warn`（宿主不缓存、不补发）。
+///
+/// **两条通道都经消息总线 ⇒ manifest 须同时声明 `bus` 权限位**：
+/// 仅 `ws:client` 时 `host-bus` 订阅被权限门拒绝，事件与帧静默不可达
+/// （订阅失败不报错，排查先查权限声明）。
+interface host-websocket {
+    /// 建立出站 WS 连接：**同步阻塞至握手完成**（上限 `connect-timeout-secs`，
+    /// 超限按超时错误返回，不长时间挂起实例）。config-json（camelCase）纯引擎参数：
+    /// `{ url, headers?, protocols?, connect-timeout-secs?, max-message-bytes?,
+    ///    jwt-auth?, heartbeat-secs?, auto-reconnect? }`
+    /// url **仅接受 `ws://`**（`wss://` 本期不支持，返回明确错误）。
+    /// 成功 → 返回连接句柄 `wsc-<uuid>` 并发布 `<plugin-id>:ws:open`；
+    /// 失败 → 错误上抛且**不发布任何事件**（无句柄可寻址）。
+    ///
+    /// ABI v15 新增可选参数（缺省行为不变，纯 config 契约演进，零 WIT 形状变化）：
+    /// - `jwt-auth: bool`：宿主在握手完成后**代发首消息认证帧**
+    ///   `{"type":"auth","token":"<jwt>"}`（token 取自宿主全局认证状态，
+    ///   **不落插件**——C4：JWT 持有留宿主引擎；auth 帧形状是两端宿主的
+    ///   传输面认证契约，与桌面端插件端点 `auth:"jwt"` 首消息校验对称）。
+    ///   宿主当前无 token（未认证）→ connect 直接 Err（fail-visible）。
+    ///   声明本参数的连接由宿主代发 auth，插件在 `ws:open` 后直接发业务帧。
+    /// - `heartbeat-secs: u64`：连接级心跳周期（传输面活性，引擎参数）。
+    ///   缺省 30s（判死 = 3× 周期静默无入站）；0 = 禁用。宿主周期发 Ping
+    ///   （对端自动 Pong），静默超判死窗口 → 主动关闭并上报
+    ///   `<plugin-id>:ws:close`（code=1006、`wasClean=false`、reason=
+    ///   "heartbeat timeout"）。对齐桌面服务器侧骨架级心跳（conn.rs）。
+    /// - `auto-reconnect: { base-ms: u64, max-ms: u64 }`：断线自动重连
+    ///   （TCP 重建 = 传输面；订阅协议 / 重订阅编排归插件）。意外断开
+    ///   （非插件 `close`）后宿主按指数退避 + 抖动 + 1s 下限钳制自动重建，
+    ///   每轮退避排期发布 `<plugin-id>:ws:reconnect-scheduled`
+    ///   `{ handle, retryInMs }`（handle 为旧句柄），成功后发布
+    ///   `<plugin-id>:ws:open`（**新句柄**）——插件按新句柄重新订阅。
+    ///   取消：对旧句柄调 `close`（命中重连会话即取消）或宿主停用回收。
+    ///   数值越界被钳制（base 下限 1s、max 上限 30s，对齐全局重连常量）。
+    connect: func(config-json: string) -> result<string, string>;
+    /// 发送文本帧（UTF-8）；连接不存在 / 非属主 / 已关闭 / 发送队列满 → 错误
+    send-text: func(handle: string, text: string) -> result<_, string>;
+    /// 发送二进制帧；错误语义同 send-text
+    send-binary: func(handle: string, payload: list<u8>) -> result<_, string>;
+    /// 主动关闭连接（close-json：`{ code?, reason? }`，缺省 1000）；返回是否命中。
+    /// 该连接的 `<plugin-id>:ws:close` 随即上报（`wasClean=true` 当且仅当
+    /// 对端主动 Close 且 code ∈ {1000, 1001}）
+    close: func(handle: string, close-json: string) -> result<bool, string>;
+    /// 查询连接是否处于 open 态（握手完成且未关闭）；仅属主可查。
+    /// 供插件在丢失状态事件后自愈
+    is-connected: func(handle: string) -> result<bool, string>;
+}
+
+/// 终端输出流窄转发（ABI v15 新增，票 12）
+///
+/// 把插件消费到的终端输出**裸字节**交宿主转发到已登记的前端页面通道
+/// （Tauri Channel 由前端创建、经宿主命令 `terminal_page_subscribe` 登记，
+/// 宿主零解析持有会话 → 通道表）。宿主**只按 session-id 寻址投递**：
+/// 不读字节内容、不识别协议、不缓存——ADR 0022 四类薄壳④「零解析窄转发」
+/// （与桌面 `utils/session_gateway.rs` 同款形态）。
+///
+/// **C3 性能红线落点**：输出字节禁止经 JSON 命令通道搬运——本原语是
+/// 「插件 → 前端」唯一的二进制出口；经 host-events.emit 走 JSON（base64）
+/// 是违规路径。字节经 `list<u8>` 进出 WASM 与 Tauri Raw 通道，全程零
+/// base64 / 零 JSON。
+///
+/// 权限位 `terminal:output`（既有词汇复用，fail-closed）。
+/// 插件停用时登记的通道随宿主窄转发层 purge 回收。
+///
+/// 消费者：`com.bedcode.terminal-session`（终端订阅协议客户端，票 12）。
+interface host-terminal-stream {
+    /// 转发一段输出字节到 session-id 对应的前端页面通道（裸字节原样投递）。
+    /// 通道未登记（页面未订阅 / 已卸载）→ Err：字节由调用方丢弃（页面重进
+    /// 时经重订阅回放补齐，与退役前宿主门控丢弃语义一致），宿主不缓存
+    forward-output: func(session-id: string, data: list<u8>) -> result<_, string>;
+}
+
+/// 主连接事实读取（ABI v15 新增，票 12；票 13 会话控制迁插件复用同一地基）
+///
+/// **与桌面 `host-connection` 同名不同形**：桌面是 15 函数连接上下文域，
+/// 移动端只暴露 1 函数引擎事实（C8 同款「同名 ≠ 契约同一」，须登记
+/// ADR 0018 双端偏离表）。**无权限门**（对齐 host-platform 例外先例）：
+/// 返回的是局域网服务地址等连接事实（非凭据、非隐私），地址不入日志
+/// 明文红线不受影响；真正的风险面是连接行为本身，已由 `ws:client` /
+/// `network:http` 等权限位门控。
+interface host-connection {
+    /// 当前主连接目标设备（camelCase JSON）：`{ address, port, connected }`。
+    /// `address` / `port` 是最后一次成功配置的目标（与宿主 HTTP / WS 面
+    /// 同源），`connected` 反映主连接当前状态。
+    /// 从未配置过任何目标 → Err（fail-visible，禁「返回空对象」）
+    primary-target: func() -> result<string, string>;
+}
+
+/// 设备入场认证引擎面（ABI v16 新增，票 14 阶段 B：认证 / 配对编排下沉）
+///
+/// **编排在本域的调用方插件，密码学与凭据在宿主**（C4 红线）：设备身份文件 /
+/// JWT 持有 / `AuthHttpClient` / 生物凭证绑定与 Keystore 签名全部留在宿主
+/// auth 引擎；本域只是把「对桌面端 `/api/auth/*` 六端点的引擎调用」投影给
+/// 插件，流程顺序（请求配对 → 等码 → 验码 / QR / 生物挑战）由插件编排。
+///
+/// **凭据零过境**：认证成功后 JWT 由宿主 `apply_auth_success` 落地（global
+/// token + 凭据表），本域**不向插件返回任何凭据材料**（对齐票 12「token 不
+/// 落插件」先例）；前端持久化镜像经宿主窄读命令 `ws_get_auth_credentials`
+/// 直接读引擎，不经插件。
+///
+/// 同步阻塞语义（与 `host-websocket.connect` 同款裁决）：host fn 在同步
+/// 上下文执行，HTTP 往返会阻塞本插件实例直至完成或超时。
+///
+/// 权限位 `auth`（fail-closed，未声明即拒）：本域触发设备入场认证与凭据
+/// 落地，是安全敏感面，不与任何既有能力混位。
+///
+/// 消费者：`com.bedcode.terminal-session`（配对 / 认证编排域，票 14 阶段 B）。
+interface host-auth {
+    /// 请求配对（HTTP `POST /api/auth/request-pairing`）：桌面端生成一次性
+    /// 配对码并展示。Ok(()) = 桌面端受理（进入等码态）；Err = 网络故障 /
+    /// 桌面端拒绝（透传原因）
+    request-pairing: func() -> result<_, string>;
+    /// 验证配对码（HTTP `POST /api/auth/verify-pairing-code`）。
+    /// Ok(true) = 受理且凭据已落地宿主；Ok(false) = 桌面端业务拒绝
+    /// （码无效 / 过期等）；Err = 网络故障（透传原因）
+    verify-pairing-code: func(code: string) -> result<bool, string>;
+    /// QR token 认证（HTTP `POST /api/auth/qr-connect`）。结果语义同
+    /// verify-pairing-code
+    qr-connect: func(token: string) -> result<bool, string>;
+    /// 生物认证登录（HTTP 挑战-应答握手 + Keystore 签名，全在宿主执行）。
+    /// Ok(false) = 本地生物验证未通过 / 用户取消；Ok(true) = 受理。
+    /// 结果语义同 verify-pairing-code
+    biometric-authenticate: func() -> result<bool, string>;
+    /// 引擎事实：宿主当前是否持有认证凭据（JWT）。供插件激活期对账
+    /// （事件不重放，状态以引擎事实为准）
+    has-credentials: func() -> result<bool, string>;
 }
 
 // ==================== 插件导出 ====================
@@ -217,6 +415,14 @@ interface manifest {
 /// 版本演进：
 /// - v10：host-mdns v2（advertise / stop-advertise / is-advertising 原语 +
 ///   事件定向投递 `mdns:found.<owner>` / `mdns:lost.<owner>`），纯增量
+/// - v15：终端输出流窄转发（host-terminal-stream.forward-output，C3 二进制
+///   出口）+ 主连接事实读取（host-connection.primary-target，与桌面同名
+///   不同形）+ host-websocket config 增强（jwt-auth / heartbeat-secs /
+///   auto-reconnect，零 WIT 形状变化）。纯增量，v14 产物不受影响
+/// - v16：认证 / 配对编排下沉（票 14 阶段 B）：新增 host-auth 认证引擎面
+///   （5 函数：request-pairing / verify-pairing-code / qr-connect /
+///   biometric-authenticate / has-credentials，凭据零过境）+ 权限位 `auth`。
+///   纯增量，v15 产物不受影响
 interface abi {
     version: func() -> u32;
 }
@@ -233,6 +439,7 @@ world plugin-binary {
 world plugin {
     import host-storage;
     import host-database;
+    import host-plugin-database;
     import host-terminal;
     import host-events;
     import host-http;
@@ -243,6 +450,10 @@ world plugin {
     import host-peer;
     import host-mdns;
     import host-platform;
+    import host-websocket;
+    import host-terminal-stream;
+    import host-connection;
+    import host-auth;
 
     export command;
     export lifecycle;

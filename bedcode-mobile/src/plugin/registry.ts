@@ -5,7 +5,7 @@
  * 响应式数据供宿主 UI 组件消费
  */
 
-import type { Disposable, PluginContext, ToolboxPageDescriptor, NavTabDescriptor, TerminalToolbarItemDescriptor, SettingsSectionDescriptor, PluginRouteDescriptor } from './types'
+import type { Disposable, PluginContext, ToolboxPageDescriptor, NavTabDescriptor, TerminalToolbarItemDescriptor, SettingsSectionDescriptor, PluginRouteDescriptor, TerminalViewContribution } from './types'
 import { ref, markRaw, type Ref } from 'vue'
 
 /** 注册的工具箱视图 */
@@ -58,6 +58,12 @@ interface RegisteredPluginRoute {
   removeRoute?: () => void
 }
 
+/** 注册的终端主视图（票 15：终端 UI 域全部在插件内，宿主 /mobile/terminal/:id 壳只提供挂载点） */
+interface RegisteredTerminalView {
+  pluginId: string
+  component: any
+}
+
 /** 前端插件注册表 */
 class PluginRegistryClass {
   private toolboxViewsMap = new Map<string, RegisteredToolboxView>()
@@ -65,6 +71,7 @@ class PluginRegistryClass {
   private terminalToolbarMap = new Map<string, RegisteredTerminalToolbarItem>()
   private settingsSectionsMap = new Map<string, RegisteredSettingsSection>()
   private routesMap = new Map<string, RegisteredPluginRoute>()
+  private terminalViewsMap = new Map<string, RegisteredTerminalView>()
   private contexts = new Map<string, PluginContext>()
 
   /** 响应式数据供 Vue 组件使用 */
@@ -73,6 +80,8 @@ class PluginRegistryClass {
   readonly terminalToolbarItems: Ref<RegisteredTerminalToolbarItem[]> = ref([])
   readonly settingsSections: Ref<RegisteredSettingsSection[]> = ref([])
   readonly routes: Ref<RegisteredPluginRoute[]> = ref([])
+  /** 终端主视图（单实例语义：终端 app 只有一个运行面注册者，按先注册优先解析） */
+  readonly terminalView: Ref<RegisteredTerminalView | null> = ref(null)
 
   /** 注册工具箱页面 */
   registerToolboxPage(pluginId: string, page: ToolboxPageDescriptor): Disposable {
@@ -170,6 +179,21 @@ class PluginRegistryClass {
     return rec
   }
 
+  /** 注册终端主视图（票 15：宿主壳只提供挂载点，终端 UI 全部在插件内实现） */
+  registerTerminalView(pluginId: string, view: TerminalViewContribution): Disposable {
+    this.terminalViewsMap.set(pluginId, {
+      pluginId,
+      component: markRaw(view.component),
+    })
+    this.updateReactiveTerminalView()
+    return {
+      dispose: () => {
+        this.terminalViewsMap.delete(pluginId)
+        this.updateReactiveTerminalView()
+      },
+    }
+  }
+
   /** 撤销插件路由记录（动态路由摘除由调用方负责 removeRoute） */
   unregisterPluginRoute(pluginId: string, routeId: string): void {
     this.routesMap.delete(`${pluginId}:${routeId}`)
@@ -228,6 +252,9 @@ class PluginRegistryClass {
       }
     }
     this.updateReactiveRoutes()
+
+    this.terminalViewsMap.delete(pluginId)
+    this.updateReactiveTerminalView()
   }
 
   private updateReactiveToolboxViews() {
@@ -250,6 +277,10 @@ class PluginRegistryClass {
 
   private updateReactiveRoutes() {
     this.routes.value = [...this.routesMap.values()]
+  }
+
+  private updateReactiveTerminalView() {
+    this.terminalView.value = this.terminalViewsMap.values().next().value ?? null
   }
 }
 

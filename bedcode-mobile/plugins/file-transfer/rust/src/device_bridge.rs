@@ -101,6 +101,14 @@ pub(crate) fn session_of(node_id: &str) -> Option<String> {
     sessions().lock().expect("sessions lock").get(node_id).cloned()
 }
 
+/// 测试串行锁：进程级静态表（SESSIONS / ENDPOINTS）跨并行用例互清，
+/// 跨模块共用同一把（票 08：redial 场景用例也要驱动这两张表）
+#[cfg(test)]
+pub(crate) fn statics_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
 // ==================== 快照持久化 ====================
 
 /// 单条设备快照（前端缓存条目的落盘形状；lastSeenMs 由前端 Date.now 盖章）
@@ -150,14 +158,10 @@ pub(crate) fn save_snapshot(
 mod tests {
     use super::*;
     use bedcode_plugin_api_mobile::host::HostError;
-    use std::sync::OnceLock;
 
     /// 静态态互斥：drain_sessions / remember_session 操作进程级静态表，
-    /// 并行测试线程间必须串行化，避免互清对方断言数据
-    fn statics_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-    }
+    /// 并行测试线程间必须串行化，避免互清对方断言数据（锁定义见
+    /// `super::statics_lock`，与跨模块用例共用同一把）
 
     #[test]
     fn endpoint_roundtrips_camel_case() {

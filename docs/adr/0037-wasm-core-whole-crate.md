@@ -30,13 +30,21 @@ ADR 0035 把**能力实现**（mdns / websocket / peer / http 四域，55 条原
 
 ## 决策
 
-### D1 · 整核 crate 命名 `bedcode-wasm-core`，落 `bedcode-desktop/packages/`
+### D1 · 整核 crate 命名 `bedcode-wasm-core`，落仓库根 `packages/`（2026-10-08 由
+`bedcode-desktop/packages/` 迁根）
 
-不放仓库根 `packages/`：本 crate 必然依赖桌面基础层（`bedcode-server-base` 的错误/常量、
+原裁决不放仓库根 `packages/`：本 crate 必然依赖桌面基础层（`bedcode-server-base` 的错误/常量、
 `bedcode-plugin-api` 桌面 WIT、四个桌面能力 crate）——放根 `packages/` 会让移动端误以为
 可直接复用（ADR 0018 契约独立，移动端永远拉不动）。**双端共享锚点仍是
 `bedcode-host-kit`**（仓库根，双端共享机制）。命名对齐 `bedcode-host-kit` /
 `bedcode-server-*`。
+
+**2026-10-08 迁根修正**：能力域 / 传输面 crate 迁根（ADR 0035 D6 部分撤销）后，桌面基础层
+自己也已在仓库根 `packages/`，原顾虑（根目录 crate 反向拉桌面基础层）不复存在；
+`bedcode-wasm-core` 随之迁根，与全部引擎 / lib crate 同族同处。移动端不误用的语义改由
+路径写清：本 crate 对桌面 WIT 的依赖显式写 `../../bedcode-desktop/packages/
+plugin-sdk-desktop/rust`（跨树边方向单一且可见），且移动端 fork 对齐走 ADR 0040 的
+`bedcode-mobile/packages/bedcode-wasm-core`，并不依赖本 crate。
 
 ### D2 · crate 保留 tauri 依赖，不做零-tauri 反转
 
@@ -105,7 +113,7 @@ mdns adapter 按调用取 `WasmHostContext` 的零大小类型改走 **crate 内
 
 ## 迁移清单（M1-M11，票 02-04 合并执行）
 
-| # | 源（`bedcode-desktop/src-tauri/src/`） | 落点（`bedcode-desktop/packages/bedcode-wasm-core/src/`） | 行数 |
+| # | 源（`bedcode-desktop/src-tauri/src/`） | 落点（`packages/bedcode-wasm-core/src/`，2026-10-08 迁根） | 行数 |
 | --- | --- | --- | --- |
 | M1 | `wasm_core/`（整目录） | 根（`crate::wasm_core::` → `crate::` 批量改写 546 处） | 54,394 |
 | M2 | `db/` | `db/`（schema.sql 真源随迁） | 387 + schema(73) |
@@ -165,6 +173,9 @@ harness `host_harness::start_http_server`（`#[cfg(test)]`，§4.5——顺带�
 
 ## Comments
 
+- 2026-10-07：**移动端复用形态另立 ADR 0040**。本 ADR D1「移动端拉不动」的桌面基础层反对点
+  （依赖边）已随 `capability-crates-to-root-packages`（同批次上提根 packages）部分消解；剩余阻塞
+  （WIT 绑定 / host_api 桌面域 / PluginKind）由 ADR 0040「各端自持绑定面」处置。正文不动。
 - 2026-10-06：规格成稿 + 实施。全部量测取自工作区实测（`dev` 分支），未凭记忆书写。
 - 2026-10-06：初稿曾设想 4+ 个端口（DbPort / PtyPort / AppHandlePort / ConfigPort），
   实测后砍到 **1 个**：`app_handle` 早已注入 `PluginHost::new` 并存进

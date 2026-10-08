@@ -20,8 +20,8 @@
       </router-view>
     </main>
 
-    <!-- Bottom Navigation (hide on terminal view) -->
-    <MobileNav v-if="!isTerminalRoute" />
+    <!-- Bottom Navigation（终端视图与宿主壳各自有底部导航/手势条，平台导航需让位） -->
+    <MobileNav v-if="!hideBottomNav" />
   </div>
   <!-- 安全区域初始化前的占位，避免内容在状态栏下闪现 -->
   <div v-else class="h-[100dvh] mobile-app mobile-ui bg-[var(--mobile-bg-primary)]" />
@@ -34,8 +34,11 @@ import MobileNav from '@/components/MobileNav.vue'
 
 const route = useRoute()
 
-const isTerminalRoute = computed(() => {
-  return route.name === 'mobile-terminal'
+/** 自带底部导航 / 手势条的路由：平台底部导航需要让位，否则出现两层导航 */
+const HIDE_BOTTOM_NAV_ROUTES = new Set(['mobile-terminal', 'mobile-shell'])
+
+const hideBottomNav = computed(() => {
+  return HIDE_BOTTOM_NAV_ROUTES.has(String(route.name))
 })
 
 // 从 App.vue inject 的安全区域信息

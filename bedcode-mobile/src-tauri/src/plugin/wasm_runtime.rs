@@ -194,6 +194,9 @@ pub struct WasmHostContext {
     ///
     /// 由 PluginManager 注入：置 Error 状态 + 持久化未启用 + 前端通知
     pub status_reporter: Arc<dyn Fn(&str, &str) + Send + Sync>,
+    /// 插件私有库连接表（host-plugin-database，票 05）：按 plugin_id 惰性打开，
+    /// 属主分区；停用回收（purge）时摘除（Drop 关闭连接）。无头上下文内存库
+    pub plugin_dbs: Arc<std::sync::Mutex<std::collections::HashMap<String, Arc<Mutex<rusqlite::Connection>>>>>,
 }
 
 /// 根据 wasm 路径生成 AOT 缓存文件名（稳定 hash，避免路径字符/长度问题）
@@ -287,6 +290,7 @@ impl WasmHostContext {
             fs_auth,
             message_bus,
             status_reporter,
+            plugin_dbs: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         }
     }
 }

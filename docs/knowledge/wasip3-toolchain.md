@@ -73,7 +73,7 @@ RUSTUP_TOOLCHAIN=nightly-2026-09-16 cargo build \
 
 | 类别 | 共享目录 | 路径真源 |
 | --- | --- | --- |
-| 测试夹具（9 个 crate） | `bedcode-desktop/target/fixtures/` | `src-tauri/.../runtime/fixture_target.rs`（宿主测试经 `CARGO_TARGET_DIR` 注入）+ `packages/.cargo/config.toml`（手工 / 工具链探针） |
+| 测试夹具（9 个 crate） | `bedcode-desktop/target/fixtures/` | `packages/bedcode-wasm-core/src/manager/runtime/fixture_target.rs`（2026-10-08 迁根；宿主测试经 `CARGO_TARGET_DIR` 注入）+ `packages/.cargo/config.toml`（手工 / 工具链探针） |
 | wasm 应用（4 个） | `bedcode-desktop/target/wasm-apps/` | `scripts/plugin-wasm-config.mjs` 的 `WASM_TARGET_DIR`（`build.js` 显式传 `--target-dir`）+ `wasm-apps/.cargo/config.toml` |
 
 因此上面两条手动命令的产物分别落在

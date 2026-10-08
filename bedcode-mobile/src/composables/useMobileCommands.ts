@@ -13,7 +13,6 @@ import type {
   RemoteDevice,
   AuthCredentials,
   ConnectionInfo,
-  AuthState,
   SessionInfo,
   RemoteSession,
 } from './model'
@@ -23,7 +22,6 @@ export type {
   RemoteDevice,
   AuthCredentials,
   ConnectionInfo,
-  AuthState,
   SessionInfo,
   RemoteSession,
 }
@@ -98,13 +96,19 @@ export async function wsClearToken(): Promise<void> {
   return await invoke('ws_clear_token')
 }
 
-// ==================== Auth Commands ====================
+// ==================== Auth Commands（票 14 阶段 B：配对 / 认证编排迁插件） ====================
+// 配对 / QR / 生物挑战流程归 `com.bedcode.terminal-session` 插件（WIT host-auth
+// 触达宿主引擎，凭据零过境——插件拿不到 token，JWT 由宿主落地 global token +
+// 凭据表）。流程事件（ws_pairing_request / ws_pairing_verified / ws_paired /
+// ws_auth_failed）由插件经 host-events 广播，事件名与载荷与退役前逐字一致，
+// initMobileEventListeners 的监听零改动。前端 localStorage 持久化镜像在受理后
+// 经宿主窄读命令 `ws_get_auth_credentials` 取数（C4：凭据持有与读取面都在
+// 宿主引擎，不经插件）。`ws_authenticate`（重启 / 重连后的 JWT 换新）与生物
+// 凭证绑定面（Keystore，C4）保留为宿主命令。
 
-/**
- * 获取认证状态
- */
-export async function wsGetAuthStatus(): Promise<AuthState> {
-  return await invoke('ws_get_auth_status')
+/** 插件命令结果形状：accepted = 桌面端受理且凭据已落地宿主 */
+interface PluginAuthOutcome {
+  accepted: boolean
 }
 
 /**
@@ -115,31 +119,50 @@ export async function wsAuthenticate(sessionToken: string): Promise<boolean> {
 }
 
 /**
- * 请求配对
+ * 请求配对（桌面端生成一次性配对码并展示）
  */
 export async function wsRequestPairing(): Promise<void> {
-  return await invoke('ws_request_pairing')
+  await invoke('plugin_invoke', {
+    pluginId: TERMINAL_PLUGIN_ID,
+    command: 'terminal-session.request-pairing',
+    args: {},
+  })
 }
 
 /**
- * 验证配对码，成功后返回凭据（含 JWT token）
+ * 验证配对码，成功后返回凭据（含 JWT token，宿主引擎窄读）
  */
 export async function wsVerifyPairingCode(code: string): Promise<AuthCredentials | null> {
-  return await invoke('ws_verify_pairing_code', { code })
+  const outcome = await invoke<PluginAuthOutcome>('plugin_invoke', {
+    pluginId: TERMINAL_PLUGIN_ID,
+    command: 'terminal-session.verify-pairing-code',
+    args: { code },
+  })
+  return outcome.accepted ? await invoke('ws_get_auth_credentials') : null
 }
 
 /**
- * 使用 QR token 认证
+ * 使用 QR token 认证，成功后返回凭据（含 JWT token，宿主引擎窄读）
  */
 export async function wsAuthenticateWithQr(token: string): Promise<AuthCredentials | null> {
-  return await invoke('ws_authenticate_with_qr', { token })
+  const outcome = await invoke<PluginAuthOutcome>('plugin_invoke', {
+    pluginId: TERMINAL_PLUGIN_ID,
+    command: 'terminal-session.authenticate-with-qr',
+    args: { token },
+  })
+  return outcome.accepted ? await invoke('ws_get_auth_credentials') : null
 }
 
 /**
- * 生物认证登录（挑战-应答握手，弹系统生物识别）
+ * 生物认证登录（挑战-应答握手，弹系统生物识别），成功后返回凭据（宿主引擎窄读）
  */
 export async function wsAuthenticateWithBiometric(): Promise<AuthCredentials | null> {
-  return await invoke('ws_authenticate_with_biometric')
+  const outcome = await invoke<PluginAuthOutcome>('plugin_invoke', {
+    pluginId: TERMINAL_PLUGIN_ID,
+    command: 'terminal-session.authenticate-with-biometric',
+    args: {},
+  })
+  return outcome.accepted ? await invoke('ws_get_auth_credentials') : null
 }
 
 /**
@@ -348,7 +371,7 @@ export async function initMobileEventListeners(callbacks: {
     })
   }
 
-  // 任务队列变更转发：无条件监听并转发为 window CustomEvent，供插件（auto-task 面板）
+  // 任务队列变更转发：无条件监听并转发为 window CustomEvent，供插件（任务域面板）
   // 订阅完成广播（action='done' + task_id）更新预设任务执行状态。插件不直接依赖
   // @tauri-apps/api，经宿主转发保持插件/宿主边界（dev-shell 可手动 dispatch 模拟）
   unlistenSyncTaskQueueChanged = await listen<{ session_id: string; queue_count: number; action: string; task_id?: string | null; status?: string | null }>('ws_sync_task_queue_changed', (event) => {
@@ -403,8 +426,8 @@ export function useMobileCommands() {
     wsGetToken,
     wsClearToken,
 
-    // Auth
-    wsGetAuthStatus,
+    // Auth（票 14 阶段 B：配对 / QR / 生物挑战编排已迁插件，wsGetAuthStatus
+    // 零消费者退役）
     wsAuthenticate,
     wsRequestPairing,
     wsVerifyPairingCode,
@@ -456,24 +479,35 @@ export function clearAuthCredentials() {
   localStorage.removeItem('auth_fingerprint')
   localStorage.removeItem('auth_session_token')
 }
-// ==================== Terminal Link（会话级终端 WS，Rust 后端持有；票 05 新协议） ====================
-// 订阅 = 建连 + 认证 + fresh subscribe（插件回放环窗口，历史与实时同一条流）；
-// 离开终端页 = terminalUnsubscribe（关闭连接，不得后台常拉）；重进 = 重新订阅回放。
-// 输出帧 = 段2 页面级 Channel 的**裸字节**（无 TB v3 帧头/offset）；状态与重锚走
-// terminal-state / terminal-resync 全局事件。
+// ==================== Terminal Link（票 12：订阅协议客户端已迁插件） ====================
+// 协议面（订阅/退订/输入/ack/状态）走 `com.bedcode.terminal-session` 插件命令面
+// （plugin_invoke）；段2 页面 Channel 登记（terminal_page_subscribe/unsubscribe）
+// 是 Tauri 传输机制，保留为宿主命令。插件未激活时 plugin_invoke 显性报错
+// （fail-visible，对齐「插件未激活时前端命令面显性报错」）。
+
+/** 终端订阅协议客户端所在插件的命令 id（D6 选项 A：与桌面同名，职责不同） */
+const TERMINAL_PLUGIN_ID = 'com.bedcode.terminal-session'
 
 /**
  * 订阅会话终端输出（进入终端页 / 预加载触发）。fresh subscribe 语义：链路已在
- * 运行时发 subscribe 帧重播环窗口；未建立时建连 + 认证 + 订阅。Rust 管理意外
- * 断开重连（重连后重新订阅，无续传语义）
+ * 运行时发 subscribe 帧重播环窗口；未建立时建连 + 订阅（认证由宿主代发）。
+ * 意外断开由宿主自动重连，插件重连恢复后重新订阅（无续传语义）
  */
 export async function terminalSubscribe(sessionId: string): Promise<void> {
-  return invoke('terminal_subscribe', { sessionId })
+  return invoke('plugin_invoke', {
+    pluginId: TERMINAL_PLUGIN_ID,
+    command: 'terminal-session.subscribe',
+    args: { sessionId },
+  })
 }
 
-/** 取消订阅（离开终端页 / 会话停止 / 手动断开）：关闭 Rust 侧连接不再重连 */
+/** 取消订阅（离开终端页 / 会话停止 / 手动断开）：关闭连接不再重连 */
 export async function terminalUnsubscribe(sessionId: string): Promise<void> {
-  return invoke('terminal_unsubscribe', { sessionId })
+  return invoke('plugin_invoke', {
+    pluginId: TERMINAL_PLUGIN_ID,
+    command: 'terminal-session.unsubscribe',
+    args: { sessionId },
+  })
 }
 
 /**
@@ -499,30 +533,46 @@ export async function terminalPageUnsubscribe(sessionId: string): Promise<void> 
 
 /** 全部取消订阅（设备手动断开 / 连接关闭） */
 export async function terminalUnsubscribeAll(): Promise<void> {
-  return invoke('terminal_unsubscribe_all')
+  return invoke('plugin_invoke', {
+    pluginId: TERMINAL_PLUGIN_ID,
+    command: 'terminal-session.unsubscribe-all',
+    args: {},
+  })
 }
 
-/** 会话删除：清理 Rust 侧链路与订阅态 */
+/** 会话删除：清理插件侧链路与订阅态 */
 export async function terminalRemove(sessionId: string): Promise<void> {
-  return invoke('terminal_remove', { sessionId })
+  return invoke('plugin_invoke', {
+    pluginId: TERMINAL_PLUGIN_ID,
+    command: 'terminal-session.remove',
+    args: { sessionId },
+  })
 }
 
 /**
- * 发送终端输入（前端 → Rust → WS 帧 → 桌面端 PTY）。双形态：可打印文本
+ * 发送终端输入（前端 → 插件 → WS 帧 → 桌面端 PTY）。双形态：可打印文本
  * （data）→ `{"type":"input","data":"<UTF-8>"}`；特殊键（specialKey）→
- * KeyCombo::to_pty_bytes() → binary 帧原始字节
+ * 插件 keys 翻译 → binary 帧原始字节（投递失败上抛：半截输入护栏）
  */
 export async function terminalSendInput(
   sessionId: string,
   data: string,
   specialKey?: string | null,
 ): Promise<void> {
-  return invoke('terminal_send_input', { sessionId, data, specialKey: specialKey ?? null })
+  return invoke('plugin_invoke', {
+    pluginId: TERMINAL_PLUGIN_ID,
+    command: 'terminal-session.send-input',
+    args: { sessionId, data, specialKey: specialKey ?? null },
+  })
 }
 
-/** 渲染背压 ack：本地已渲染字节数推进 Rust 侧 ack 水位（节流回发桌面端） */
+/** 渲染背压 ack：本地已渲染字节数推进插件侧 ack 水位（64KB 阈值节流回发桌面端） */
 export async function terminalAckRendered(sessionId: string, offset: number): Promise<void> {
-  return invoke('terminal_ack_rendered', { sessionId, offset })
+  return invoke('plugin_invoke', {
+    pluginId: TERMINAL_PLUGIN_ID,
+    command: 'terminal-session.ack-rendered',
+    args: { sessionId, offset },
+  })
 }
 
 /** Rust 侧链路状态（诊断/轮询） */
@@ -539,5 +589,9 @@ export interface TerminalLinkState {
 }
 
 export async function terminalGetState(sessionId: string): Promise<TerminalLinkState> {
-  return invoke('terminal_get_state', { sessionId })
+  return invoke('plugin_invoke', {
+    pluginId: TERMINAL_PLUGIN_ID,
+    command: 'terminal-session.get-state',
+    args: { sessionId },
+  })
 }

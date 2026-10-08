@@ -51,7 +51,7 @@ import { useTerminalBuffer } from '@/composables/useTerminalBuffer'
 import type { Terminal } from '@xterm/xterm'
 
 function emitState(sessionId: string, phase: string, detail?: string, retryInMs?: number) {
-  eventHandlers['terminal-state']!({
+  eventHandlers['plugin:com.bedcode.terminal-session:terminal-state']!({
     payload: { session_id: sessionId, phase, detail, retry_in_ms: retryInMs },
   })
 }
@@ -69,7 +69,7 @@ describe('useTerminalBuffer（票 05：新协议）', () => {
     store = useTerminalBufferStore()
     terminalBuffer = useTerminalBuffer()
     vi.clearAllMocks()
-    eventHandlers['terminal-state'] = null
+    eventHandlers['plugin:com.bedcode.terminal-session:terminal-state'] = null
     ;(vi.mocked(listenMock).mockImplementation as any)(async (name: string, cb: (p: unknown) => void) => {
       eventHandlers[name] = cb
       return () => {}

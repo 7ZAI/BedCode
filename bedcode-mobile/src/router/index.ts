@@ -97,6 +97,14 @@ const router = createRouter({
       component: () => import('@/views/PluginView.vue'),
       meta: { standAlone: true },
     },
+    {
+      // 宿主壳（WASM 应用运行平台）：与既有 /mobile/** 实现并存的新入口，
+      // 内部流转由壳自己的屏幕栈管理（src/shell/），不占用路由表
+      path: '/mobile/shell',
+      name: 'mobile-shell',
+      component: () => import('@/shell/views/ShellView.vue'),
+      meta: { standAlone: true },
+    },
   ],
 })
 

@@ -20,14 +20,20 @@
  *     Vite 与插件 watch 重建的重复进展行（构建/编译错误不匹配这些行，天然保留）
  *   业务日志（bedcode_mobile_lib::*、bedcode_peer_net::*、[plugin:xxx]、前端 relay、
  *   Kotlin 侧 BedCode-*）与链路排障日志（reqwest::connect 等）全部保留。
- *   完整关闭过滤（行为同旧版全量；控制台不再带 ANSI 颜色，统一纯文本管线）：
+ *   完整关闭过滤（行为同旧版全量）：
  *   BEDCODE_LOG_NO_FILTER=1 pnpm run tauri:android:dev:log
+ *
+ * 颜色：控制台原样透传子进程输出（ANSI 颜色、\r 进度条覆盖都保留），
+ * 只有落盘文件是纯文本（grep / cat 友好）。子进程 stdout 是管道不是 TTY，
+ * 想让上游真的产色可加 FORCE_COLOR=1 / CLICOLOR_FORCE=1 / CARGO_TERM_COLOR=always。
  */
 import { spawn } from 'node:child_process'
 import { createWriteStream, mkdirSync, readdirSync, statSync, unlinkSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { StringDecoder } from 'node:string_decoder'
+
+import { createLineRouter } from './lib/dev-log-router.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const LOG_DIR = join(__dirname, '..', '.dev-logs')
@@ -71,18 +77,11 @@ const stream = createWriteStream(logFile, { flags: 'w' })
 // 否则多字节 UTF-8 字符在 chunk 边界被截断会产生替换符（U+FFFD）损坏日志
 const decoders = { stdout: new StringDecoder('utf8'), stderr: new StringDecoder('utf8') }
 
-// 去掉 ANSI 转义序列：控制台保留彩色，文件存纯文本便于 grep/cat
-// - CSI 序列：颜色 \x1b[38;5;123m、清屏 \x1b[2J、光标 \x1b[1A、行擦除 \x1b[2K、光标显隐 \x1b[?25l 等
-// - OSC 序列：如终端标题 \x1b]0;...\x07
-// - 进度条覆盖用的 \r（纯文本里覆盖不生效，只会把多次进度拼成长行）
-const stripAnsi = (s) =>
-  s
-    .replace(/\x1b\[[0-9;?]*[ -\/]*[@-~]/g, '')
-    .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, '')
-    .replace(/\r/g, '')
+// 行缓冲与双写形态（raw 控制台 / clean 落盘+过滤判定）见 lib/dev-log-router.js：
+// 剥色只发生在落盘与过滤判定路径，控制台拿原文，颜色与 \r 覆盖不受影响。
 
 // ==================== 非业务日志过滤（控制台 + 落盘同一套过滤） ====================
-// 规则详解见文件头注释；BEDCODE_LOG_NO_FILTER=1 时完全关闭过滤（全量，纯文本无 ANSI）。
+// 规则详解见文件头注释；BEDCODE_LOG_NO_FILTER=1 时完全关闭过滤（全量输出）。
 const NO_LOG_FILTER = process.env.BEDCODE_LOG_NO_FILTER === '1'
 
 // —— 行内容模式判定丢弃（覆盖 logcat 的 BedCode tag 内部与主机侧输出）——
@@ -182,6 +181,8 @@ function isKeepLogcatTag(tag) {
 // —— 过滤执行：行缓冲（chunk 可能跨行边界，必须按完整行判定）+ 续行规则 + 统计 ——
 // 完整行统一判定：保留行同时写控制台与落盘文件（同一套规则，避免控制台仍刷
 // cranelift 等洪水噪音）；BEDCODE_LOG_NO_FILTER=1 时全量不过滤。
+// 判定与落盘都用 clean（剥色）形态，控制台用 raw 形态——过滤口径两路一致，
+// 但只有落盘是纯文本。
 const isContinuation = (line) => /^\s+\S/.test(line) // 缩继续行（栈帧 \tat / gradle 详情等）
 let prevLineDropped = false
 const filterStats = { total: 0, kept: 0, dropped: 0, droppedContinuation: 0 }
@@ -194,26 +195,29 @@ function isNoiseLine(line) {
   return prevLineDropped && isContinuation(line)
 }
 
-const lineBuf = { stdout: '', stderr: '' }
-function flushLine(line, fd) {
-  if (line === '') return
+const router = createLineRouter(['stdout', 'stderr'])
+function flushLine(row, fd) {
+  // 剥色后为空的行仍要原样透传控制台：行内可能只有清屏 / 擦行序列（\x1b[2J、\x1b[2K），
+  // 丢掉会让终端残留上一行内容；但不计过滤统计、不落盘。
+  if (row.clean === '') {
+    if (row.raw !== '') process[fd].write(row.raw + '\n')
+    return
+  }
   filterStats.total += 1
-  const noise = isNoiseLine(line)
+  const noise = isNoiseLine(row.clean) // 判定跑在 clean 上：ANSI 会破坏正则匹配
   prevLineDropped = noise
   if (noise) {
     filterStats.dropped += 1
-    if (isContinuation(line)) filterStats.droppedContinuation += 1
+    if (isContinuation(row.clean)) filterStats.droppedContinuation += 1
     return
   }
   filterStats.kept += 1
-  process[fd].write(line + '\n') // 控制台（与来源 fd 一致）
-  stream.write(line + '\n') // 落盘
+  process[fd].write(row.raw + '\n') // 控制台（原文：保留颜色与 \r 覆盖）
+  stream.write(row.clean + '\n') // 落盘（纯文本）
 }
 function flushPendingLines(fd) {
-  if (lineBuf[fd]) {
-    flushLine(lineBuf[fd], fd)
-    lineBuf[fd] = ''
-  }
+  const row = router.flush(fd)
+  if (row) flushLine(row, fd)
 }
 function printFilterStats() {
   if (!filterStats.total || NO_LOG_FILTER) return
@@ -246,10 +250,7 @@ const child = spawn(IS_WIN ? 'pnpm.cmd' : 'pnpm', ['run', 'tauri:android:dev'], 
 
 for (const fd of ['stdout', 'stderr']) {
   child[fd]?.on('data', (chunk) => {
-    lineBuf[fd] += stripAnsi(decoders[fd].write(chunk))
-    const lines = lineBuf[fd].split('\n')
-    lineBuf[fd] = lines.pop() ?? '' // 末段可能是半行，留到下一个 chunk 或进程退出时再判
-    lines.forEach((line) => flushLine(line, fd))
+    router.push(fd, decoders[fd].write(chunk)).forEach((row) => flushLine(row, fd))
   })
 }
 

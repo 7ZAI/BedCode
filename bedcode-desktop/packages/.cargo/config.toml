@@ -9,9 +9,9 @@
 # 手工 `cd packages/plugin-*-test && cargo build`、以及 clippy / rust-analyzer
 # 之类的工具链探针）都落到同一目录 `bedcode-desktop/target/fixtures`。
 #
-# 路径真源 = `src-tauri/src/wasm_core/manager/runtime/fixture_target.rs`
-# （`dir()` / `artifact()`，由宿主测试的 12 处夹具构建器经 `CARGO_TARGET_DIR`
-# 显式注入；env 优先级高于本文件，两处必须指向同一目录，注释互相指认）。
+# 路径真源 = `packages/bedcode-wasm-core/src/manager/runtime/fixture_target.rs`
+# （`dir()` / `artifact()`，2026-10-08 随整核本体迁根；由宿主测试的 12 处夹具构建器经
+# `CARGO_TARGET_DIR` 显式注入；env 优先级高于本文件，两处必须指向同一目录，注释互相指认）。
 #
 # cargo 的 config 相对路径以**本 `.cargo` 目录的父目录**（= `bedcode-desktop/packages/`）
 # 为基准解析，故这里必须写 `../target/fixtures`，才等于 `fixture_target.rs` 的

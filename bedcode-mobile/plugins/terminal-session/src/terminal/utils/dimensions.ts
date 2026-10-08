@@ -1,0 +1,102 @@
+/**
+ * 终端网格行列数 DPR 感知计算（对齐桌面端 terminalDimensions /
+ * VS Code getXtermScaledDimensions 语义）
+ *
+ * 为什么需要：fit addon 用「容器 CSS 尺寸 / 字体 cell CSS 尺寸」做整数地板，
+ * 不感知 devicePixelRatio。高分屏（Android 2.x/3.x 物理 DPR、系统字体缩放）下
+ * 行列数会因 CSS 像素与物理像素换算偏差而不精确，导致文字模糊或行尾截断。
+ *
+ * 纯逻辑模块（Seam A）：零 DOM/零 GPU 依赖，仅数值计算；cols/rows 的换算
+ * 完全可单测（100%/150%/200% 缩放）。列宽 floor 防行尾截断；行高不做向上
+ * 取整（xterm 画布按原始 cell×dpr 渲染，ceil 会让高 DPR 下少算行数、网格
+ * 贴底对齐时顶部露出空带，详见函数头注释），rows×cell ≤ 容器高恒成立。
+ *
+ * 移动端口径与 fitWithMargin 对齐（FitAddon 裸 fit：行尾不额外预留）：默认 marginCols=0 /
+ * marginRows=0。余量参数保留供需要时自定义。
+ */
+
+// 纯数值常量导入不破坏本模块零 DOM 依赖（terminalMetrics 模块加载无副作用）
+import { TERMINAL_RIGHT_RESERVE_PX } from './metrics'
+
+export interface XtermScaledDimensionsInput {
+  /** 容器 CSS 宽度（px） */
+  containerWidthCss: number
+  /** 容器 CSS 高度（px） */
+  containerHeightCss: number
+  /** xterm 实测 cell CSS 宽度（px，来自渲染服务 dimensions.css.cell） */
+  cellWidthCss: number
+  /** xterm 实测 cell CSS 高度（px） */
+  cellHeightCss: number
+  /** window.devicePixelRatio（1/1.25/1.5/2/…） */
+  devicePixelRatio: number
+  /** 行尾额外预留的格数（移动端对齐 FitAddon 裸 fit，默认 0） */
+  marginCols?: number
+  /** 行尾额外预留的格数（移动端对齐 FitAddon 裸 fit，默认 0） */
+  marginRows?: number
+}
+
+/**
+ * 按 devicePixelRatio 精确计算终端网格 cols/rows。
+ *
+ * 换算口径与 VS Code 一致：容器宽高 × DPR 得到可用物理像素；cell 宽 × DPR
+ * 得到物理字符宽度（BedCode 的字间距经 xterm letterSpacing 选项叠加进格宽，
+ * 此处入参 cellWidthCss 已含增量，缺省 0 = 不加）。列宽 floor、行数 floor，
+ * 分别防截断与防溢出。
+ * 行尾右缘预留宽（px）在 DPR 归一到物理像素的可用宽度内扣除（与 computeGridSize
+ * 口径一致，量纲对齐；移动端当前为 0，见 TERMINAL_RIGHT_RESERVE_PX「不预留
+ * 才不会在 TUI 右侧留出竖直黑带」）。余量（marginCols/rows）可额外扣除，
+ * 默认对齐 FitAddon 裸 fit 为 0。
+ *
+ * 行高为什么不做 ceil（修正）：实测 xterm 渲染器的画布/屏幕高度 = rows ×
+ * cellHeightCss（原始 cell，非向上取整的物理行高）——高 DPR 下 ceil 会把每行
+ * 成本高估最多 1 物理像素（如 cell×dpr=37.02→38），整数 floor 后整屏少算
+ * 1~2 行，网格贴底对齐时缺额暴露为顶部空带（真机/模拟器实测 30~40px）。
+ * floor(H×dpr / (cell×dpr)) 恒有 rows×cell ≤ 容器高，最后一行不会被裁。
+ *
+ * @returns 恒为合法维度（≥1）；入参退化（≤0/非有限数）时返回 {1,1} 兜底，
+ *          与调用方 applyDprFit 的优雅降级（回退 fitAddon.fit()）互补。
+ */
+export function getXtermScaledDimensions(
+  input: XtermScaledDimensionsInput,
+): { cols: number; rows: number } {
+  const {
+    containerWidthCss,
+    containerHeightCss,
+    cellWidthCss,
+    cellHeightCss,
+    devicePixelRatio,
+    marginCols = 0,
+    marginRows = 0,
+  } = input
+  if (
+    !isFinite(containerWidthCss) ||
+    !isFinite(containerHeightCss) ||
+    !isFinite(cellWidthCss) ||
+    !isFinite(cellHeightCss) ||
+    containerWidthCss <= 0 ||
+    containerHeightCss <= 0 ||
+    cellWidthCss <= 0 ||
+    cellHeightCss <= 0
+  ) {
+    return { cols: 1, rows: 1 }
+  }
+
+  const dpr = devicePixelRatio <= 0 ? 1 : devicePixelRatio
+
+  // 物理字符宽度：cell 宽 × DPR（+ letterSpacing，BedCode 为 0）
+  const scaledCharWidth = cellWidthCss * dpr
+  // 物理字符高度：cell 高 × DPR（原始值，不做 ceil——见函数头注释）
+  const scaledCharHeight = cellHeightCss * dpr
+
+  // 可用物理像素 = CSS 像素 × DPR；扣除行尾右缘预留宽与行列余量（全部归一物理像素）
+  const rightReserveScaled = TERMINAL_RIGHT_RESERVE_PX * dpr
+  const scaledWidthAvailable =
+    containerWidthCss * dpr - rightReserveScaled - marginCols * scaledCharWidth
+  const scaledHeightAvailable = containerHeightCss * dpr - marginRows * scaledCharHeight
+
+  // 列宽向下取整防行尾截断；行数线性 floor 防溢出（rows × cell ≤ 容器高恒成立）
+  const cols = Math.max(Math.floor(scaledWidthAvailable / scaledCharWidth), 1)
+  const rows = Math.max(Math.floor(scaledHeightAvailable / scaledCharHeight), 1)
+
+  return { cols, rows }
+}

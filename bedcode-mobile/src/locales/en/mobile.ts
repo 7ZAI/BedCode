@@ -441,7 +441,7 @@ export default {
       repeatable: 'Repeatable',
       repeatableOn: 'Repeatable',
       repeatableOff: 'One-shot',
-      repeatableOnHint: 'Can be re-added to the auto-task queue, not limited by execution history',
+      repeatableOnHint: 'Can be re-added to the task queue, not limited by execution history',
       repeatableOffHint: 'Locked after being executed once (including manual), cannot be re-added',
     },
     notification: {
@@ -534,6 +534,7 @@ export default {
         requestByUnknown: '{source} requests access to the following external address',
         targetUrl: 'Target address',
         remember: "Don't ask again (remember this host)",
+        denyForever: "Don't ask again (always deny this host)",
         allow: 'Allow',
         deny: 'Deny',
       },

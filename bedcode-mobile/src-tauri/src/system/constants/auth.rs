@@ -1,8 +1,5 @@
 //! 认证相关常量
 
-/// 配对码位数
-pub const PAIRING_CODE_DIGITS: usize = 6;
-
 /// 默认设备名称
 ///
 /// 未设置设备名时的 fallback

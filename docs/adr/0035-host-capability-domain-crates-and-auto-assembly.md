@@ -16,8 +16,29 @@ spec：`.scratch/2026-10-04-wasm-core-lib-split/spec.md`（9 票，实施记录�
 >
 > **自然后继（2026-10-06）**：本 ADR 把**能力实现**出内核；[ADR 0037](./0037-wasm-core-whole-crate.md)
 > 把**机制整核本体**（`wasm_core/` 整目录 + 引擎面 db/pty/enums + 宿主胶水）整体抽出为
-> 可复用 crate `bedcode-wasm-core`（54,394 行 / 119 文件，`bedcode-desktop/packages/`），
+> 可复用 crate `bedcode-wasm-core`（54,394 行 / 119 文件，`bedcode-desktop/packages/`；
+> 2026-10-08 迁根至仓库根 `packages/`），
 > 宿主只剩 `pub use` 垫片 + 组合根。边界裁决（ADR 0022）与能力域归属均不变。
+>
+> **部分撤销（2026-10-07，用户指令「能力域 lib 迁到 packages 下」）**：**D6 的前半句
+> 被推翻**——八个能力域 / 传输面 crate（`bedcode-server-{base,core,http,websocket,peer-net}` /
+> `bedcode-{crypto,discovery,pty}-engine`）自 `bedcode-desktop/packages/` 迁到**仓库根
+> `packages/`**，与机制内核 `bedcode-host-kit` 同族同处。**D6 的两条理由同时消解**：
+> 它们依赖的「桌面基础层」`bedcode-server-base` 也一并迁根，于是「根目录 crate 反向拉
+> 桌面基础层」这一陷阱的成因不再存在；保留在桌面端的那条跨树依赖只有一条，且方向单一
+> （能力域 crate → `bedcode-desktop/packages/plugin-sdk-desktop/rust` 的 WIT 契约），
+> 它恰好把「本 crate 绑死桌面 WIT」这一事实写在路径上而非藏在文档里。
+> 布局后果：`bedcode-desktop/packages/` 只剩插件契约 / 夹具 crate（`plugin-*`）与整核本体
+> `bedcode-wasm-core`；仓库根 `packages/` 成为**全部引擎 / lib crate** 的单一落点。
+> **边界裁决（ADR 0022）、ABI / WIT / world 均未动**；spec：`.scratch/2026-10-07-capability-crates-to-root-packages/spec.md`。
+>
+> **部分撤销（2026-10-08，用户指令「wasm-core 也迁出来」）**：**整核本体 `bedcode-wasm-core`**
+> 自 `bedcode-desktop/packages/` 迁至仓库根 `packages/`，与全部能力域 / 传输面 crate 同族同处。
+> `bedcode-desktop/packages/` 至此只剩插件契约 / 夹具 crate（`plugin-*`）；仓库根 `packages/`
+> 成为**全部引擎 / lib crate（含插件机制整核）**的单一落点。D6 的剩余顾虑（整核绑死桌面
+> WIT）改由路径显式写清：本 crate 对 WIT 的依赖经
+> `../../bedcode-desktop/packages/plugin-sdk-desktop/rust`，跨树边方向单一且可见。
+> **ABI / WIT / world 均未动**；spec：`.scratch/2026-10-08-wasm-core-to-root-packages/spec.md`。
 
 ## 背景
 
@@ -77,13 +98,17 @@ interface 就静默从插件 import 集消失，而 guest 编译期照常 import
 删掉自己的该域 `Host` impl 与 `add_to_linker` 行，否则同一 interface 注册两次。
 代价是每域一份 `bindgen!`；收益是绑定层与实现在同一 crate 内、装配自报在同一处。
 
-**D6｜落地位置：机制内核在仓库根 `packages/`（双端共享锚点），能力域 crate 在
-`bedcode-desktop/packages/`。**
+**D6｜落地位置：机制内核与能力域 crate 一律在仓库根 `packages/`。**
+（原决议：机制内核在根 `packages/`，能力域 crate 在 `bedcode-desktop/packages/`；
+**前半句已于 2026-10-07 被推翻**，见状态段的「部分撤销」。）
 
-前者是「双端将来的共用对象」，放根 `packages/` 有先例（`peer-net` / `link-crypto`）。
-后者**必须**绑死桌面 WIT 且依赖 `bedcode-server-base` 的共享错误类型——一个必然依赖
-桌面基础层的 crate 放根 `packages/` 是陷阱（移动端永远拉不动，读者还会误以为可直接复用）。
-这是 spec 初稿被实测推翻的一处（记此以免再犯）。
+机制内核放根 `packages/` 的理由不变：它是「双端将来的共用对象」，有先例（`peer-net` /
+`link-crypto`）。能力域 crate 当初留在 `bedcode-desktop/packages/` 的理由有两条——① 必须
+绑死桌面 WIT 且依赖 `bedcode-server-base` 的共享错误类型；② 「一个必然依赖桌面基础层的
+crate 放根 `packages/` 是陷阱」。**两条在迁根后都不成立**：`bedcode-server-base` 自己也在
+根 `packages/`，陷阱的成因（跨树反向依赖）消失；剩下的唯一跨树依赖是能力域 crate →
+`bedcode-desktop/packages/plugin-sdk-desktop/rust`，而那不是「陷阱」而是**契约面的正确
+显式化**——它让「此 crate 绑定桌面 WIT 契约」写在 Cargo 清单里，读者不必猜。
 
 **D7｜本期不动移动端，且不推翻 ADR 0018 的「能力面有意不对称」。**
 
@@ -136,11 +161,15 @@ host-mdns`，任何组件都无法提供那五个函数，路由在构造上不�
 
 ### 落点与纪律（后续接手者必读）
 
-- **target 落点跟依赖图对齐，不跟架构族谱对齐**：`host-kit` + `discovery-engine` 落仓库根
-  `target/host-kits`。（`sqlite-engine` 曾落 `target/server-libs`——与六个 server crate
-  同桶；该 crate 已由 ADR 0036 撤销，此桶不再有它。）
+- **target 落点跟依赖图对齐，不跟架构族谱对齐**：`host-kit` + `discovery-engine` + 整核
+  `bedcode-wasm-core` 落仓库根 `target/host-kits`。（`sqlite-engine` 曾落
+  `target/server-libs`——与六个 server crate 同桶；该 crate 已由 ADR 0036 撤销，此桶不再有它。）
   当初把「机制内核 + 能力域」当一族放进 `host-kits`，结果 GTK 栈要在这只桶重编一遍、
   把磁盘打到 0 字节（`No space left` + 链接期 `Bus error`）。
+  **2026-10-07 迁根后**：八个能力域 crate 的 `.cargo/config.toml` 里相对路径从
+  `../../../target/*` 改为 `../../target/*`（crate 深度少了一层，不改就静默落到仓库根的
+  **上级**目录）——每处都要求 `cargo metadata` 核验 `target_directory`，与本文「多一个 `..`
+  就换一个桶」的教训同源。
 - **「白名单锁存在」不等于「强制引用行有效」**：前者只保证表与收集集一致，后者依赖链接期
   属性 ⇒ 必须有跨 crate 实证（票 09 第 2 项），否则「漏一行注释」这类事故只能靠读代码发现。
 - **能力域迁移的隐性回归面是测试装配链**：域的 host function 取宿主能力改经实例级端口，

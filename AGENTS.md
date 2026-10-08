@@ -13,7 +13,7 @@
 5. **code-map / 领域文档**（含 `docs/adr/`）
 6. **通用工程经验**
 
-- **路径基准**：不带端前缀的 Rust 路径相对 `bedcode-desktop/src-tauri/src/`（wasm_core 整核抽出后，机制与引擎面真源在 `bedcode-desktop/packages/bedcode-wasm-core/src/`，宿主侧只剩 `pub use` 垫片——spec 2026-10-06-wasm-core-whole-crate / ADR 0037）；`wasm-apps/`、`plugins/`、前端 `src/` 相对**所属端根目录**；`docs/`、`scripts/`、`.scratch/` 相对**仓库根**。
+- **路径基准**：不带端前缀的 Rust 路径相对 `bedcode-desktop/src-tauri/src/`（wasm_core 整核抽出后，机制与引擎面真源在 `packages/bedcode-wasm-core/src/`——2026-10-08 由 `bedcode-desktop/packages/` 迁根至仓库根，宿主侧只剩 `pub use` 垫片——spec 2026-10-06-wasm-core-whole-crate / ADR 0037）；**能力域 / 传输面 / 引擎 crate（含插件机制整核）一律落仓库根 `packages/bedcode-*`**（2026-10-07 能力域迁根，2026-10-08 整核本体迁根，与机制内核 `bedcode-host-kit` 同族，ADR 0035 D6 部分撤销），`bedcode-desktop/packages/` 只剩插件契约 / 夹具 crate（`plugin-*`）；`wasm-apps/`、`plugins/`、前端 `src/` 相对**所属端根目录**；`docs/`、`scripts/`、`.scratch/` 相对**仓库根**。
 - **文档字面 ≠ 事实**：引用任何路径 / 命令 / 锁名 / 版本前先用 `ls` / `rg` 核对；与事实不符**先修文档**再继续（命令字眼以 `docs/commands.md` 为准）。
 - **最小改动原则**：只改任务必要文件；禁止顺手重构相邻代码、擅自升级依赖（升级先做双端影响评估，如 wasmtime / SDK）；设计取舍不猜，先问用户。
 
@@ -55,12 +55,13 @@
 | 任务 | 动手前必读 |
 | --- | --- |
 | 改前端 UI / 样式 / 布局（组件、CSS、token、动画、主题、响应式） | **先加载 `frontend-styles` skill**（强制）+ 对应端 code-map |
+| 改移动端前端（新功能 / 重构 / 样式，含宿主壳） | **§6「移动端前端：优先对接宿主壳」（强制）**——默认落点 `bedcode-mobile/src/shell/**`（新界面）；旧 `src/{components,views,composables,stores}` 只接受缺陷修复 |
 | 写 / 改 / 审查单元测试 | **先加载 `unit-test-discipline` skill**（强制） |
 | 改 Rust 后端 | 对应端 code-map → 模块目录 → §6 Rust 规范 + 相关 ADR |
 | 在宿主侧新增/修改任何能力、类型、状态、存储、路由 | **§5.1（六条判据 + 三问裁决 + 自检）+ ADR 0022**——先判归属再动手；越线必须停下问用户。插件分类 / 加载顺序 / 生命周期形态另读 ADR 0032 |
 | 改插件 | `docs/knowledge/plugin-development-checklist.md`（全文）+ 双端 WIT + ADR 0017/0019/0022 |
 | 改 wasm 应用 / 移动插件（业务代码主场） | 该应用自己的 crate + 自有测试命令（§3）；**不要拿宿主 `cargo test` 当它的验证** |
-| 改数据库 / schema | §9 + `bedcode-desktop/packages/bedcode-wasm-core/src/db/`（schema / 迁移真源，ADR 0037 随整核迁入 crate）与同 crate `host_api/{database,storage}.rs`（插件面机制） |
+| 改数据库 / schema | §9 + `packages/bedcode-wasm-core/src/db/`（schema / 迁移真源，ADR 0037 随整核迁入 crate）与同 crate `host_api/{database,storage}.rs`（插件面机制） |
 | 改跨端协议（HTTP/WS/QR/认证） | §9 + `docs/knowledge/mobile-desktop-auth.md`，两端同步评估；改完跑 `cross-end-tests` |
 | 排查日志 / 无日志问题 | `docs/knowledge/logging.md`、`adb-fd0-bug.md` |
 | 启动多任务 / 需要规划 | `.scratch/<task>/` 记录（项目未设计 GitHub PR 流程，开发过程文档走这里） |
@@ -152,6 +153,19 @@ wasm 应用层（业务事实面：各自私有库 + 各自前端状态 + 自身
 - **错误处理**：统一 `logger`（真源 `src/utils/frontendLogger.ts`，带上下文），禁止静默 `catch`；用户可见文案一律走 i18n，禁止硬编码中文。
 - **i18n**：两端 `src/locales/{zh-CN,en}/`；新增 / 修改 key 必须**同步**出现在 zh-CN 与 en 两文件，命名跟随既有分组。
 
+### 移动端前端：优先对接宿主壳（强制）
+
+**移动端前端的新功能 / 重构 / 样式调整，默认在宿主壳（新界面）里实现；旧界面只接受缺陷修复——直到旧界面被彻底替换。**
+
+- **新界面（默认落点）** = 宿主壳 `bedcode-mobile/src/shell/**`（路由 `/mobile/shell`）。壳自带两层自足面：公共组件库 `src/shell/components/ui/**`、平台机制 `src/shell/composables/**`——两者都是旧组件 / 旧机制的**壳内副本**，契约逐字一致，迁移映射见 `src/shell/components/ui/index.ts` 头注。
+- **旧界面（只接受缺陷修复）** = `bedcode-mobile/src/{components,views,composables,stores}/**` 的既有页面与其 `/mobile/**` 路由。新功能、重构、样式统一不进旧目录。
+- **缺什么先复制进壳**：壳内需要旧目录的组件 / 机制时，复制进 `src/shell/**` 再按需改造，**禁止**把壳直接接到旧目录——防回接锁 L7 拦截 `@/components` / `@/composables` / `@/views` 的 import（`src/__tests__/shell/shellConstraintLocks.test.ts`，确需桥接必须在锁内白名单登记并写明理由）。旧目录也不得为了方便壳复用而改造共用形状。
+- **业务不落壳**：终端 / 文件 / 会话 / 设备 / AI 等业务页面按 §5.1 归各 wasm-app（`registerSurface` / `registerSlot` 注册运行面），壳只提供挂载、生命周期与权限闸门，壳内不实现业务。
+- **共享基础设施例外**：日志 `src/utils/frontendLogger.ts` 与全局设置 store 暂为跨新旧共用（复制会导致双写 / 双攒批），退役旧界面时随批迁入壳；新增第三份共用件前先问用户。
+- **迁移面不许缩水**：L7 正面钉住壳内复制面文件在场；新增复制件必须同步登记该清单与两端 code-map 的防回接锁索引。
+- **退役顺序**：旧页面只有在其新壳等价物可用之后才可删；新旧入口并存期以新壳为主入口。
+- 本规则在旧目录的界面代码归零（彻底替换完成）后自动失效。
+
 ### 单元测试
 
 规范来源为 `unit-test-discipline` skill（§4 强制加载）：从需求与实现推导行为契约 → 测试矩阵 → 实际运行 → 变异自检。**禁止交付**无断言 / 恒真断言 / 只测 mock / 快照替代行为断言 / 只为覆盖率的用例。时机见 §10。
@@ -188,7 +202,7 @@ wasm 应用层（业务事实面：各自私有库 + 各自前端状态 + 自身
 
 ## 9. 数据、协议与产物
 
-**数据库**：主库 schema 单一事实源在 `bedcode-desktop/packages/bedcode-wasm-core/src/db/`（`db.rs` + `db/{database,models,operations}.rs` + `db/schema.sql`，随整核抽出迁入 crate——ADR 0037；宿主以 `pub use` 垫片引用），迁移**必须幂等**、禁止手改生产库、改 schema 必须补幂等测试。插件面的数据库机制（`host-database` / `host-plugin-database` / `host-storage` 共 13 原语：权限门、表名前缀纵深、护栏、属主分区）**留在 wasm 核心内**（同 crate `host_api/`，ADR 0036）——不拆 crate，机制实现与真源同侧；两域用例随 crate 与宿主 `cargo test` 跑。插件存储隔离见插件开发检查清单。测试数据走临时目录，禁止污染真实数据 / 日志目录。
+**数据库**：主库 schema 单一事实源在 `packages/bedcode-wasm-core/src/db/`（`db.rs` + `db/{database,models,operations}.rs` + `db/schema.sql`，随整核抽出迁入 crate——ADR 0037；宿主以 `pub use` 垫片引用），迁移**必须幂等**、禁止手改生产库、改 schema 必须补幂等测试。插件面的数据库机制（`host-database` / `host-plugin-database` / `host-storage` 共 13 原语：权限门、表名前缀纵深、护栏、属主分区）**留在 wasm 核心内**（同 crate `host_api/`，ADR 0036）——不拆 crate，机制实现与真源同侧；两域用例随 crate 与宿主 `cargo test` 跑。插件存储隔离见插件开发检查清单。测试数据走临时目录，禁止污染真实数据 / 日志目录。
 
 **跨端协议**：HTTP / WS / QR / 认证改动**必须两端同步部署**，遵循「老端忽略未知字段」的增量原则，禁止破坏性替换；协议现状与端点清单见 `docs/knowledge/mobile-desktop-auth.md`。wasmtime 升级必须两端同步（ADR 0019）。
 

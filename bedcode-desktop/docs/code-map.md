@@ -30,33 +30,9 @@ bedcode-desktop/                      # 桌面端项目 (Tauri 2.0 + Vue 3)
 │                                     #   签名密钥解析）、插件构建与热重载（plugin-build/plugin-dev/plugin-watch）、
 │                                     #   产物大小检查（check-target-size）、图标生成（generate-icons 等）、
 │                                     #   Linux 依赖安装（install-tauri-deps.sh）；含 README
-├── packages/                         # 共享包：能力域 / 传输面 / 引擎 crate（ADR 0035 crate 化）+ 插件 SDK 与夹具
-│   ├── bedcode-server-base/          # server 基础层：错误 / 常量 / 错误边界 / 系统信息 / 网络配置形状 /
-│   │                                 #   连接身份 + 端口 traits（各面反向需要宿主能力的契约面）
-│   ├── bedcode-server-core/          # server 内核层：TransportFace + serve、生命周期、跨传输过滤链、
-│   │                                 #   链路加密、指标（不反向引用任何传输面）
-│   ├── bedcode-server-http/          # HTTP 传输面 + host-http 能力域（入站端点注册 / 出站 fetch）
-│   ├── bedcode-server-websocket/     # WS 传输面 + host-websocket 能力域（通用连接骨架 / 插件端点）
-│   ├── bedcode-server-peer-net/      # 对等网络引擎控制面 + host-peer 能力域
-│   ├── bedcode-crypto-engine/        # 加密算法引擎：注册表 + AES-GCM / ChaCha20 / 混合 / RSA / X25519 / KDF
-│   ├── bedcode-discovery-engine/     # 组播发现引擎 + host-mdns 能力域（5 原语）+ 宿主自播面（advertiser：
-│   │                                 #   桌面 `_bedcode._tcp.local.` 广播，供移动端发现；自宿主 mdns/ 迁入，
-│   │                                 #   收编 engine 共享守护（owner=host，与 peer-net / 插件 advertise 同守护））
-│   ├── bedcode-pty-engine/           # host-pty 能力域 crate（ADR 0039，wasm-core-纯净性票 02 → 能力域票 D1）：
-│   │                                 #   ① 引擎面（进程生命周期/输出读取/游标环/终态门）零业务、可复用；
-│   │                                 #   ② 能力域层 `src/plugin_binding.rs` 自带 `bindgen!` + `HostModule` 自报，
-│   │                                 #      域机制（primitives/registry/output）与边界（`PtyPorts` 窄端口）同 crate；
-│   │                                 #   依赖 bedcode-host-kit + wasmtime + server-base，**不依赖 wasm-core**；
-│   │                                 #   宿主侧只剩 `host_api/pty.rs` 端口 adapter（反向锁见
-│   │                                 #   wasm-core lib.rs tests::pty_module_must_not_return_to_wasm_core）
-│   ├── bedcode-wasm-core/            # 插件机制整核 crate（wasm-core-whole-crate 票 02/05）：wasm_core 整目录
-│   │                                 #   （manager/security/host_api/bus/config/monitor/permission/runtime_util/
-│   │                                 #   intercall/storage）+ 引擎面（db/enums）+ 引擎级配置
-│   │                                 #   （system/{config,opener,process}、HostBusPort）整体迁入；
-│   │                                 #   auth_center/session_gateway 已回宿主 lib（纯净性收口票 05：
-│   │                                 #   宿主薄壳）；任何 Tauri 宿主 path 依赖即可复用插件机制；
-│   │                                 #   lib 侧以 `pub use` 垫片保持 `crate::wasm_core::*` 路径零改动
-│   │                                 #   （反双份锁：src-tauri/tests/wasm_core_whole_crate_lock.rs）
+│                                     #   ⚠ 插件机制整核 crate bedcode-wasm-core 已随能力域迁至仓库根
+│                                     #   packages/（2026-10-08，见仓库根 packages/ 树；bedcode-desktop/packages/
+│                                     #   只剩 plugin-* 契约与夹具 crate）
 │   ├── plugin-sdk-desktop/           # 插件开发工具包，Rust + TS 双侧 SDK（含 dev-shell 调试壳、
 │   │   │                             #   插件模板 template/、脚手架 bin/）
 │   │   ├── rust/                     # bedcode-plugin-api crate：WASM ABI 契约（单一事实来源）、
@@ -156,13 +132,16 @@ bedcode-desktop/                      # 桌面端项目 (Tauri 2.0 + Vue 3)
         └── main.rs                   # 二进制入口（panic hook）
 ```
 
-**整核抽出后的结构要点**（wasm-core-whole-crate 票 02/05 + ADR 0039）：插件机制真源已不在
+**整核抽出后的结构要点**（wasm-core-whole-crate 票 02/05 + ADR 0039 + 2026-10-07 能力域
+lib 迁根 + 2026-10-08 整核本体迁根）：插件机制真源已不在
 `src-tauri/src/`——`wasm_core/`、`db/`、`enums/` 三者在
-`packages/bedcode-wasm-core/`，宿主侧只保留 `pub use` 垫片（lib.rs）与组合根
-（`pty` 另有归属：`bedcode-pty-engine`，ADR 0039）
-（system/app_context.rs、server/）。导航时先看本节 packages 树的
-`bedcode-wasm-core` 条目与 §2；改宿主侧任何「机制 / 引擎面」代码前先确认落点
-是 crate（改错侧会被 `tests/wasm_core_whole_crate_lock.rs` 直接测红）。
+`packages/bedcode-wasm-core/`（2026-10-08 由 `bedcode-desktop/packages/` 迁根至仓库根），宿主侧只保留 `pub use` 垫片（lib.rs）与组合根
+（`pty` 另有归属：`packages/bedcode-pty-engine`，ADR 0039）
+（system/app_context.rs、server/）。**能力域 / 传输面 / 引擎 crate、机制内核
+`bedcode-host-kit` 与整核本体 `bedcode-wasm-core` 同落仓库根 `packages/`**（迁根前在 `bedcode-desktop/packages/`，故本文
+正文里裸写的 `packages/bedcode-*` 现在是仓库根路径）。
+导航时先看本节 packages 树与仓库根 `packages/` 目录；改宿主侧任何「机制 / 引擎面」代码前
+先确认落点是 crate（改错侧会被 `tests/wasm_core_whole_crate_lock.rs` 直接测红）。
 
 ---
 
@@ -249,7 +228,7 @@ path 依赖复用（D1/D2），宿主只剩组合根 + 薄壳垫片（D3），�
 
 ### 3 · 机制内核与能力域 crate
 
-**落点**：仓库根 `packages/bedcode-host-kit`（机制内核）+ `bedcode-desktop/packages/*`（能力域 / 传输面 / 引擎）。
+**落点**：**仓库根 `packages/`**——`bedcode-host-kit`（机制内核）+ `bedcode-server-{base,core,http,websocket,peer-net}` / `bedcode-{crypto,discovery,pty}-engine`（能力域 / 传输面 / 引擎，2026-10-07 自 `bedcode-desktop/packages/` 迁根）。
 **为什么不能合回宿主**：`inventory::submit!` 依赖被链接性，且能力 crate 必须能命名 `WasmPluginState` ⇒ Cargo 环路（ADR 0035）。
 
 | 能力域 | 能力域 crate | 宿主端口 adapter |
@@ -268,7 +247,7 @@ path 依赖复用（D1/D2），宿主只剩组合根 + 薄壳垫片（D3），�
 
 ### 4 · server 面族
 
-**落点**：`bedcode-desktop/packages/bedcode-server-{base,core,http,websocket,peer-net}/`
+**落点**：仓库根 `packages/bedcode-server-{base,core,http,websocket,peer-net}/`
 **依赖方向不变量**：传输面只向下依赖 base / core，面与面零横向 import；反依赖经端口 traits 倒置；唯一双面认识点是 `server/composition.rs`。
 
 | crate | 职责 |
@@ -377,7 +356,7 @@ path 依赖复用（D1/D2），宿主只剩组合根 + 薄壳垫片（D3），�
 | 改了什么 | 必跑（cwd = 该 crate / 工程根） |
 | --- | --- |
 | 宿主 Rust | `cd bedcode-desktop/src-tauri && cargo test` |
-| 任一 `bedcode-*` crate | `cd bedcode-desktop/packages/<crate> && cargo test`（机制内核 `cd packages/bedcode-host-kit`） |
+| 任一 `bedcode-*` crate | 能力域 / 传输面 / 机制内核 / 插件机制整核：`cd packages/<crate> && cargo test`（2026-10-08 整核本体已与能力域同落仓库根 `packages/`） |
 | 仓库根共享引擎（`packages/peer-net` `packages/link-crypto`） | `cd packages/<crate> && cargo test` |
 | wasm 应用 | `cd bedcode-desktop/wasm-apps/<id>/rust && cargo test` |
 | 前端 | `cd bedcode-desktop && pnpm run test:run`；仓库根 `pnpm exec eslint .`（0 error 门禁） |

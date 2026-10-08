@@ -1,5 +1,5 @@
 # ==================== 测试夹具共享 target 目录 ====================
-# 移动端的 2 个夹具构建目标（`packages/plugin-component-test` 与 `plugins/auto-task`）
+# 移动端的 2 个夹具构建目标（`packages/plugin-component-test` 与 `plugins/terminal-session`）
 # 原本各写各自 `target/`，把 SDK / wit-bindgen / serde 这份相同依赖图编译两遍
 # （2026-09-26 实测各 ~170M）。现已收敛到单一共享目录 `bedcode-mobile/target/fixtures`。
 #

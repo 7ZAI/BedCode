@@ -2,20 +2,20 @@
  * Terminal Buffer Store（票 05：终端流新协议 + 本地字节计数）
  *
  * 移动端终端输出订阅（对齐桌面插件 `ws_terminal.rs` 新协议，spec §3.3）：
- * - 订阅由 Rust 后端管理、前端触发：进入终端页 → `terminalSubscribe`（fresh
+ * - 订阅由终端插件管理、前端触发（票 12）：进入终端页 → `terminalSubscribe`（fresh
  *   subscribe = 插件回放环窗口，历史与实时同一条流）；离开终端页 →
- *   `terminalUnsubscribe`（关闭连接，不得后台常拉）；意外断开 → Rust 自动
+ *   `terminalUnsubscribe`（关闭连接，不得后台常拉）；意外断开 → 宿主自动
  *   退避重连并重新订阅（无续传语义；环淘汰由 `ring_resync` 如实告知）
  * - 输出帧 = **裸字节**（无 TB v3 16B 头、无 per-frame offset）：段2 页面级
  *   Channel 的原始字节消息，按到达序直接渲染；本地接收字节计数（
  *   `lastRenderedOffset`）**仅用于 ack 水位**（`terminalAckRendered` → Rust
  *   节流回发 `{"type":"ack","offset":<本地已渲染字节数>}`）
- * - `ring_resync` 是**唯一**重锚信号（Rust 发 `terminal-resync` 事件）：
+ * - `ring_resync` 是**唯一**重锚信号（终端插件发 `terminal-resync` 事件，票 12）：
  *   清屏 + 本地计数基准重置 + 一次性提示；重锚后到达的重播帧从新基准续
  * - 无缺口判定 / 无去重 / 无跨帧裁剪：字节连续性由 WS 帧序保证，缺口只经
  *   `ring_resync` 显性表达（缺口号不再误报）
- * - live 门控：收 `subscribed`（Rust `terminal-state` phase=live）即进入 live；
- *   `subscribed` 之前的帧 Rust 侧已丢弃（fresh subscribe 前旧流残留），
+ * - live 门控：收 `subscribed`（`terminal-state` phase=live）即进入 live；
+ *   `subscribed` 之前的帧插件侧已丢弃（fresh subscribe 前旧流残留），
  *   前端无需缓冲拼接——「回放（历史）→ 实时」次序由 Channel FIFO 天然保证
  *
  * 状态机（对齐 Rust terminal_state 事件）：
@@ -59,7 +59,7 @@ export interface RealtimeHandler {
 
 /** 单会话订阅状态 */
 export interface SessionBuffer {
-  /** 连接/订阅阶段（Rust terminal-state 事件同步）：idle/connecting/auth/live */
+  /** 连接/订阅阶段（terminal-state 事件同步）：idle/connecting/auth/live */
   phase: 'idle' | 'connecting' | 'auth' | 'live'
   /** 已订阅后端（phase=live；供视图判断） */
   subscribed: boolean
@@ -70,7 +70,7 @@ export interface SessionBuffer {
   /** 会话是否已停止 */
   sessionStopped: boolean
   /**
-   * 链路断开且正在退避重试（Rust `terminal-state` detail=reconnecting）
+   * 链路断开且正在退避重试（`terminal-state` detail=reconnecting）
    *
    * **为什么要显式建模**：phase 在退避期间恒为 `connecting`，与「首次订阅中」
    * 无法区分；两者的用户含义完全相反（前者是连接挂了正在自愈，后者是
@@ -115,6 +115,11 @@ const PHASE_RANK: Record<SessionBuffer['phase'], number> = {
 }
 
 // ==================== Store ====================
+
+/** 终端状态事件名（票 12：事件源 = `com.bedcode.terminal-session` 插件 emit） */
+const TERMINAL_STATE_EVENT = 'plugin:com.bedcode.terminal-session:terminal-state'
+/** 重锚事件名（ring_resync / 重订阅回包） */
+const TERMINAL_RESYNC_EVENT = 'plugin:com.bedcode.terminal-session:terminal-resync'
 
 export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
   // ==================== State ====================
@@ -184,7 +189,7 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     return s
   }
 
-  /** 周期打点（5s 且游标有推进才打）：与 Rust terminal_link 收帧统计对账，
+  /** 周期打点（5s 且游标有推进才打）：与终端插件收帧统计对账（票 12），
    * bytesReceived ≈ bytesRendered + noHandler 差值即无丢帧 */
   function maybeLogFrameStats(sessionId: string) {
     const s = frameStats.get(sessionId)
@@ -205,7 +210,8 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
   // ==================== 事件监听（Rust → 前端） ====================
 
   /**
-   * 惰性注册全局事件监听（terminal-state / terminal-resync）。
+   * 惰性注册全局事件监听（终端状态 / 重锚，票 12 起事件源 = 插件 emit，
+   * 事件名带插件命名空间前缀；payload 形状与退役前宿主事件逐字段一致）。
    *
    * 输出帧不在此列：段2 帧经页面级 Tauri Channel 投递（见 `pageChannels`），
    * 全局事件只承载低频的状态机迁移与重锚信号——两者解耦后互不影响
@@ -213,7 +219,7 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
   async function ensureEventListeners() {
     if (stateUnlisten && resyncUnlisten) return
     if (!stateUnlisten) {
-      stateUnlisten = await listen('terminal-state', (event) => {
+      stateUnlisten = await listen(TERMINAL_STATE_EVENT, (event) => {
         const payload = event.payload as {
           session_id?: string
           phase?: string
@@ -224,7 +230,7 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
       })
     }
     if (!resyncUnlisten) {
-      resyncUnlisten = await listen('terminal-resync', (event) => {
+      resyncUnlisten = await listen(TERMINAL_RESYNC_EVENT, (event) => {
         const payload = event.payload as { session_id?: string; offset?: number }
         if (!payload.session_id) return
         onResyncEvent(payload as { session_id: string; offset: number })

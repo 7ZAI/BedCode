@@ -14,7 +14,6 @@ use std::path::PathBuf;
 
 /// file-transfer 插件 ID（双端一致）
 const PLUGIN_ID: &str = "com.bedcode.file-transfer";
-
 /// FNV-1a 64-bit —— 与插件 roots_registry::fnv1a 算法保持一致（勿单方面改动）
 fn fnv1a(data: &str) -> u64 {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
@@ -27,12 +26,14 @@ fn fnv1a(data: &str) -> u64 {
 
 /// 迁移入口（setup 阶段调用一次；任何失败仅记日志不阻断启动——迁移是
 /// best-effort 兼容路径，用户始终可在插件设置里手动重建）
-pub(crate) fn migrate_legacy_peer_data(app_data_dir: &PathBuf) {
-    let storage = PluginStorage::new(app_data_dir);
-    if let Err(e) = migrate_settings(&storage, app_data_dir) {
+///
+/// 票 05b：storage 为 DB-backed（主库 plugin_storage 表），由 lib.rs 在
+/// 旧文件 KV 迁移（[`PluginStorage::migrate_file_store_to_db`]）之后注入
+pub(crate) fn migrate_legacy_peer_data(storage: &PluginStorage, app_data_dir: &PathBuf) {
+    if let Err(e) = migrate_settings(storage, app_data_dir) {
         tracing::warn!(error = %e, "transfer settings migration failed");
     }
-    if let Err(e) = migrate_shared_roots(&storage, app_data_dir) {
+    if let Err(e) = migrate_shared_roots(storage, app_data_dir) {
         tracing::warn!(error = %e, "shared roots migration failed");
     }
 }
@@ -135,7 +136,6 @@ fn migrate_shared_roots(storage: &PluginStorage, dir: &PathBuf) -> anyhow::Resul
         return Ok(());
     }
     block_on(storage.set(PLUGIN_ID, KEY, json!(entries)))?;
-    block_on(storage.flush(PLUGIN_ID))?;
     tracing::info!(count = entries.len(), "legacy shared roots migrated to plugin storage");
     Ok(())
 }

@@ -114,7 +114,7 @@ bedcode-peer-net = { path = "../../packages/peer-net" }
 bedcode-link-crypto = { path = "../../packages/link-crypto" }
 # server-lib-split：桌面 server 基础层（错误/常量/错误边界/系统信息/网络配置/
 # 连接身份/端口 traits）与加密引擎（算法实现 + 注册表）
-bedcode-server-base = { path = "../packages/bedcode-server-base" }
+bedcode-server-base = { path = "../../packages/bedcode-server-base" }
 # 插件宿主机制内核（仓库根 packages/，双端共享锚点，wasm-core-lib-split 票 03）：
 # 插件实例状态 `WasmPluginState` + 能力模块契约 + 自动注册表 + Store 上限与指标值对象。
 # 它必须独立于宿主 bin crate —— 否则能力 crate 无法命名 `WasmPluginState`
@@ -124,27 +124,28 @@ bedcode-host-kit = { path = "../../packages/bedcode-host-kit" }
 # 插件机制整核（wasm-core-whole-crate，.scratch/2026-10-06）：wasm_core 整目录 +
 # 引擎面（db/pty/enums/system 部分）+ 宿主胶水迁入本 crate；lib.rs 经 `pub use
 # bedcode_wasm_core as wasm_core` 垫片保持既有 `crate::wasm_core::*` 路径零改动。
-bedcode-wasm-core = { path = "../packages/bedcode-wasm-core" }
+# 2026-10-08 迁根：整核本体与能力域同落仓库根 packages/。
+bedcode-wasm-core = { path = "../../packages/bedcode-wasm-core" }
 # PTY 能力域（wasm-core 纯净性收口票 02/06 → pty-capability-domain 票 D1/D3）：
 # 引擎面 + host-pty WIT 接线整面迁入本 crate（ADR 0039）。wasm-core 依赖它并只留
 # `host_api/pty.rs` 端口 adapter；lib 不再 `pub use` 垫片（`crate::pty::*` 路径随
 # 垫片一并退出名单），调用点一律写显式路径 `bedcode_pty_engine::plugin_binding::*`。
 # lib 直接声明是因为 crate_boundary_lock 断言③要求宿主清单声明全部拆分产物
 # （pty-engine 已登记 SPLIT_CRATES）；宿主代码不直接消费，经 wasm-core adapter 取用
-bedcode-pty-engine = { path = "../packages/bedcode-pty-engine" }
+bedcode-pty-engine = { path = "../../packages/bedcode-pty-engine" }
 # 组播发现能力域（mDNS，wasm-core-lib-split 票 03）：引擎 + 宿主绑定层 + 自动
 # 注册。宿主侧只剩 `host_api/mdns.rs` 的端口 adapter（~90 行），原 795 行实现
 # 已迁入该 crate。
-bedcode-discovery-engine = { path = "../packages/bedcode-discovery-engine" }
-bedcode-crypto-engine = { path = "../packages/bedcode-crypto-engine" }
+bedcode-discovery-engine = { path = "../../packages/bedcode-discovery-engine" }
+bedcode-crypto-engine = { path = "../../packages/bedcode-crypto-engine" }
 # server-lib-split 票 03：传输无关内核（supervisor/filter/link_crypto/metrics + TransportFace 组合）
-bedcode-server-core = { path = "../packages/bedcode-server-core" }
+bedcode-server-core = { path = "../../packages/bedcode-server-core" }
 # server-lib-split 票 04：HTTP 传输面（registry/gateway/controllers/middleware/dtos + HttpTransportFace）
-bedcode-server-http = { path = "../packages/bedcode-server-http" }
+bedcode-server-http = { path = "../../packages/bedcode-server-http" }
 # server-lib-split 票 05：WebSocket 传输面（conn/channel/registry/endpoint/routes/manager）
-bedcode-server-websocket = { path = "../packages/bedcode-server-websocket" }
+bedcode-server-websocket = { path = "../../packages/bedcode-server-websocket" }
 # server-lib-split 票 06：对等网络引擎域（节点身份/节点与发现守护生命周期/host-peer 引擎转发）
-bedcode-server-peer-net = { path = "../packages/bedcode-server-peer-net" }
+bedcode-server-peer-net = { path = "../../packages/bedcode-server-peer-net" }
 inventory = "0.3"
 
 # Power management (prevent system sleep)

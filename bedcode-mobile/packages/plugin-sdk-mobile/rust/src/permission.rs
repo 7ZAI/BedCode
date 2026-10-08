@@ -27,6 +27,14 @@ pub const PERMISSION_SYSTEM_OPEN: &str = "system:open";
 pub const PERMISSION_PEER: &str = "peer";
 /// mDNS 基础能力服务（host-mdns v2）：浏览 + 广播原语，事件按属主定向投递
 pub const PERMISSION_MDNS: &str = "mdns";
+/// WebSocket 出站连接（WIT `host-websocket` 客户端域）：出站是 SSRF 面
+/// （插件可代宿主访问任意 ws:// 地址），故独立成位、fail-closed。移动端不跑
+/// WS 服务器，**没有** `ws:server` 位（不跟演桌面，ADR 0018/0019）
+pub const PERMISSION_WS_CLIENT: &str = "ws:client";
+/// 设备入场认证编排（WIT `host-auth`，票 14 阶段 B）：触发设备入场认证与
+/// 凭据落地是安全敏感面，独立成位、fail-closed。凭据零过境——JWT 由宿主
+/// 落地，本域不向插件返回凭据材料（C4；对齐票 12「token 不落插件」先例）
+pub const PERMISSION_AUTH: &str = "auth";
 
 static VALID_PERMISSIONS: &[&str] = &[
     PERMISSION_TERMINAL_INPUT,
@@ -48,11 +56,14 @@ static VALID_PERMISSIONS: &[&str] = &[
     PERMISSION_SYSTEM_OPEN,
     PERMISSION_PEER,
     PERMISSION_MDNS,
+    PERMISSION_WS_CLIENT,
+    PERMISSION_AUTH,
 ];
 
 static PERMISSION_API_MAP: &[(&str, &[&str])] = &[
     (PERMISSION_TERMINAL_INPUT, &["terminal.sendInput", "terminal.onInput"]),
-    (PERMISSION_TERMINAL_OUTPUT, &["terminal.onOutput"]),
+    // 票 12：terminal-stream.forwardOutput（终端输出流窄转发）复用本词汇
+    (PERMISSION_TERMINAL_OUTPUT, &["terminal.onOutput", "terminal-stream.forwardOutput"]),
     (PERMISSION_SESSION_READ, &["session.list", "session.get", "session.onStatusChange"]),
     (PERMISSION_SESSION_WRITE, &["session.create", "session.stop"]),
     (PERMISSION_UI_TOOLBOX, &["ui.registerToolboxPage"]),
@@ -104,6 +115,21 @@ static PERMISSION_API_MAP: &[(&str, &[&str])] = &[
         "mdns.advertise",
         "mdns.stopAdvertise",
         "mdns.isAdvertising",
+    ]),
+    (PERMISSION_WS_CLIENT, &[
+        "ws.connect",
+        "ws.sendText",
+        "ws.sendBinary",
+        "ws.close",
+        "ws.isConnected",
+    ]),
+    // 票 14 阶段 B：认证编排域（host-auth）——编排在插件，凭据零过境（C4）
+    (PERMISSION_AUTH, &[
+        "auth.requestPairing",
+        "auth.verifyPairingCode",
+        "auth.qrConnect",
+        "auth.biometricAuthenticate",
+        "auth.hasCredentials",
     ]),
 ];
 

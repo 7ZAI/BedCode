@@ -529,6 +529,7 @@ export default {
         requestByUnknown: '来源 {source} 请求访问以下外部地址',
         targetUrl: '访问地址',
         remember: '不再询问（记住此域名）',
+        denyForever: '以后都拒绝（不再弹窗）',
         allow: '允许',
         deny: '拒绝',
       },

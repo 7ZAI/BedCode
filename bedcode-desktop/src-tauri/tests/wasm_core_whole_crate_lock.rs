@@ -1,7 +1,8 @@
 //! 整核抽出结构锁（wasm-core-whole-crate 票 05）
 //!
 //! `wasm_core/`（119 文件 / 54,394 行）已整体迁入
-//! `bedcode-desktop/packages/bedcode-wasm-core/`（spec M1；票 02-04 执行完毕）。
+//! `packages/bedcode-wasm-core/`（spec M1；票 02-04 执行完毕；2026-10-08 由
+//! `bedcode-desktop/packages/` 迁根至仓库根 `packages/`）。
 //! lib 侧只剩 `pub use` 垫片保持既有 `crate::wasm_core::*` / `crate::db::*`
 //! 路径零改动编译通过。
 //!
@@ -143,7 +144,7 @@ fn host_side_shim_paths_do_not_exist() {
     assert!(
         present.is_empty(),
         "整核迁走后宿主侧出现与垫片同名的源码落点：\n  {}\n\
-         真源在 bedcode-desktop/packages/bedcode-wasm-core/src/，宿主侧同名落点是回接或\
+         真源在 packages/bedcode-wasm-core/src/（2026-10-08 迁根），宿主侧同名落点是回接或\
          双份拷贝（AGENTS §5.1.4 fail-visible）。同名目录也不允许存在——git 不跟踪空目录，\
          它的存在本身就意味着里面有东西",
         present

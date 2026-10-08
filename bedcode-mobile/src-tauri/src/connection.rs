@@ -10,7 +10,6 @@ pub mod heartbeat;
 pub mod io;
 pub mod lifecycle;
 pub mod manager;
-pub mod pairing_service;
 pub mod reconnect;
 pub mod request;
 pub mod request_response;
@@ -38,7 +37,6 @@ pub use ws_connection::{WsClientConfig, WsConnectionManager};
 
 // Re-export from business layer
 pub use manager::ConnectionManager;
-pub use pairing_service::PairingService;
 pub use request::AuthRequest;
 
 /// WebSocket 客户端事件（对外暴露的事件）

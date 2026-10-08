@@ -11,6 +11,7 @@
 | 桌面端前端构建 | `bedcode-desktop` | `pnpm run build`（`build:fast` 跳过类型检查） |
 | Android 开发 | `bedcode-mobile` | `pnpm run tauri:android:dev`（`:dev:log` 额外落盘 logcat） |
 | Android Debug APK | `bedcode-mobile` | `pnpm run tauri:android:build`（实际产出 **release** APK；`:build:fast` / `:build:emulator` / `:build:all`） |
+| 真机无线调试 | `bedcode-mobile` | `adb pair` / `adb connect` 后 `pnpm run tauri:android:dev`——详见 §4「无线 ADB 真机调试」 |
 | 前端测试 | 各端根目录 | `pnpm run test:run` —— **禁 `pnpm run test`** |
 | Rust 测试 | 见 §2 | `cargo test`（**每个 crate 在自己根目录跑**） |
 | 跨端互连测试 | `cross-end-tests` | `cargo test` |
@@ -60,8 +61,8 @@ pnpm run test:ui                      # 浏览器 UI
 cd bedcode-desktop/src-tauri && cargo test      # 桌面宿主
 cd bedcode-mobile/src-tauri  && cargo test      # 移动宿主
 
-cd bedcode-desktop/packages/bedcode-wasm-core && cargo test   # 插件机制整核 crate
-cd bedcode-desktop/packages/bedcode-server-base && cargo test # 任一面 crate 同理（无根 workspace，各自根目录）
+cd packages/bedcode-wasm-core && cargo test       # 插件机制整核 crate（2026-10-08 迁根至仓库根 packages/）
+cd packages/bedcode-server-base && cargo test        # 任一能力域 / 传输面 crate 同理（仓库根 packages/，无根 workspace，各自根目录）
 
 cd bedcode-desktop/wasm-apps/<app-id>/rust && cargo test   # wasm 应用（仅 terminal-session 另有 test:rust 脚本，其余直接跑 cargo test）
 cd bedcode-mobile/plugins/<plugin-id>/rust && cargo test      # 移动插件
@@ -124,6 +125,7 @@ cd src-tauri && cargo check
 ```
 
 - **`:dev:log`** 每次启动清空当天日志、Ctrl+C 前 flush；默认过滤非业务噪音（wasmtime / 框架 tag / 构建进展），`BEDCODE_LOG_NO_FILTER=1` 看全量。详见 `docs/knowledge/logging.md`。
+- **`:dev:log` 的颜色**：控制台**原样透传**子进程输出（ANSI 颜色与 `\r` 进度条覆盖都保留），只有落盘文件是纯文本。但子进程 stdout 接的是管道不是 TTY，tauri CLI / cargo / Gradle 会判定「非交互」而不产色——想让上游真的吐色，加 `FORCE_COLOR=1 CLICOLOR_FORCE=1 CARGO_TERM_COLOR=always pnpm run tauri:android:dev:log`（管道透明、过滤与落盘行为不变）。
 - **APK 输出**：`src-tauri/gen/android/app/build/outputs/apk/{debug,universal/debug}/`。Android Studio 打开 `src-tauri/gen/android`。
 - **签名唯一真源 = 仓库根 `bedcode.keystore`**。
 
@@ -145,6 +147,82 @@ adb kill-server && adb start-server   # 设备 offline 时
 | `INSTALL_FAILED_UPDATE_INCOMPATIBLE` | 先 `adb uninstall` 再装 |
 
 移动端没有日志时的排查见 `docs/knowledge/adb-fd0-bug.md`。
+
+### 无线 ADB 真机调试（免数据线）
+
+走的是 adb 通道，**开发命令与 USB 完全一致**（不换端口、不改配置），只多了配对这一步。
+
+前置：**手机与电脑同一局域网**（手机 WiFi 必须开着、不能只有移动数据；企业网/访客 WiFi 常开 AP 隔离，连不上）；手机开「开发者选项 → USB 调试 + 无线调试」。先确认宿主机放行 adb server——设备是**主动回连**电脑的 `5037`（不是反向），挡住就永远 `failed to connect`：
+
+```bash
+ss -tlnp | grep 5037
+sudo ufw allow 5037/tcp        # Debian/Ubuntu；firewalld 用 sudo firewall-cmd --add-port=5037/tcp
+```
+
+**方式 A：Android 11+ 无线调试**（推荐）
+
+手机：关于手机页连点版本号 7 次 → 开发者选项 → 打开「USB 调试」「无线调试」→ 无线调试 →「使用配对码配对设备」，记下 **IP:配对端口** 与 6 位配对码；`adb pair` 后回无线调试主界面取 **IP 地址和端口**（与配对端口**不同**）：
+
+```bash
+adb pair 192.168.1.23:37123        # 提示时输入手机上的 6 位配对码（一次有效，约 60 秒过期）
+adb connect 192.168.1.23:40561     # 用主界面那个端口，不是配对端口
+adb devices                        # 期望 192.168.1.23:40561  device
+adb mdns services                  # 可选：局域网自动发现无线调试端点（mDNS 被拦时用不了）
+```
+
+**方式 B：`adb tcpip 5555`**（Android 10 及以下、或机型没有无线调试开关）
+
+```bash
+adb devices                                   # 先用数据线连上并在手机上点授权
+adb tcpip 5555
+adb shell ip route                            # 从 wlan0 行的 src 读手机局域网 IP
+adb shell ifconfig wlan0 | grep 'inet '       # 老 Android 没有 ip route 时用
+# 拔掉数据线后
+adb connect 192.168.1.23:5555
+adb devices
+```
+
+**跑起来**（无线下热更新照常生效，无需把 vite 暴露到局域网）：
+
+```bash
+cd bedcode-mobile
+adb devices                     # 先确认无线设备在册
+pnpm run tauri:android:dev      # 每次启动预检：装 adb fd0 shim + 查 devUrl 端口 + 重建 adb reverse
+pnpm run tauri:android:dev:log  # 同上 + logcat 落盘 .dev-logs/
+```
+
+生效原因：`scripts/dev-run.js` 给 CLI 传 `--host 127.0.0.1`，devUrl 固定成设备回环的 `http://localhost:1423`，再由它自己的 `precheckAdbReverse()` 建 `adb reverse tcp:1423 tcp:1423`——隧道跑在 adb 连接上（无线同样是 adb），因此不依赖宿主机 IP、不怕 DHCP 换地址。
+
+**USB 与无线同时在册时选设备**：`tauri android dev` 支持位置参数 `[DEVICE]`，但 `dev-run.js` 固定了参数、不透传位置参数。二选一：
+
+```bash
+adb disconnect 192.168.1.23:5555     # 最省事：只留一台设备在册
+# 或用 dev-run.js 的定制入口把序列号钉死（--host-cmd 字符串按空格切分，要自带完整子命令）：
+pnpm run tauri:android:dev -- --host-cmd "pnpm run tauri android dev --host 127.0.0.1 192.168.1.23:5555"
+```
+
+> `:dev:log` 内部固定调 `pnpm run tauri:android:dev`，不透传 `--host-cmd`；要钉死设备就用 `:dev` + 另开 `adb logcat`。
+
+**多设备并行操作**用 `-s` 钉序列号：
+
+```bash
+adb -s 192.168.1.23:5555 shell getprop ro.product.model     # 确认是哪台
+adb -s 192.168.1.23:5555 logcat -s BedCode:*
+adb -s 192.168.1.23:5555 reverse --list                    # 看热更新隧道
+adb -s 192.168.1.23:5555 install -r <apk 路径>
+adb -s 192.168.1.23:5555 reverse --remove-all && adb -s 192.168.1.23:5555 reverse tcp:1423 tcp:1423
+```
+
+| 现象 | 处理 |
+| --- | --- |
+| `adb pair` / `adb connect` 报 `failed to connect`、超时 | 宿主机防火墙挡了 `5037`（见上）；或不同网段 / AP 隔离 / 电脑挂着 VPN |
+| `adb connect` 成功但 `adb devices` 显示 `offline` | `adb kill-server && adb start-server` 后重新 `adb connect`（server 重启会清掉所有无线连接）；手机锁屏休眠会断无线调试，调试期关掉「锁屏后休眠」或保持常亮 |
+| `adb pair` 提示失败 / 端口拒绝连接 | 配对码与配对端口约 60 秒过期，回「无线调试」主界面重新取一对 |
+| 手机重启后连不上 | 无线调试开关与端口会变（多数 ROM 重启即关），重新开启并 `adb pair` + `adb connect` |
+| 真机白屏 / `Failed to request http://localhost:1423` | `adb reverse` 隧道丢了（设备重连、切 WiFi、重启手机都不自动恢复）：重跑 `pnpm run tauri:android:dev`，或用上面 `reverse` 命令手工重建 |
+| 改前端代码不热更 | 同上，隧道断了 |
+| `INSTALL_FAILED_UPDATE_INCOMPATIBLE` | `adb -s <serial> uninstall com.bedcode.mobile` 后重装 |
+| dev 会话没有日志 | 见 `docs/knowledge/adb-fd0-bug.md`；fd0 shim 由 `dev-run.js` 每次自愈，platform-tools 升级后重跑一次 dev 即可 |
 
 ---
 

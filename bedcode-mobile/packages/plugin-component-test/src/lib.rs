@@ -25,7 +25,45 @@ use exports::bedcode::plugin::lifecycle::Guest as LifecycleGuest;
 use exports::bedcode::plugin::manifest::Guest as ManifestGuest;
 use exports::bedcode::plugin::terminal_hooks::Guest as TerminalHooksGuest;
 
+// ws-client：`plugin-binary` world 的独立绑定（events-binary 是可选导出，不在
+// plugin world 内——与 SDK `wasm_binary` 模块同款两次 generate 模式，分模块
+// 避免两个 `export!` 宏重名）
+#[cfg(feature = "ws-client")]
+mod binary_bindings {
+    wit_bindgen::generate!({
+        path: "../plugin-sdk-mobile/rust/wit/bedcode.wit",
+        world: "plugin-binary",
+        pub_export_macro: true,
+        default_bindings_module: "binary_bindings",
+    });
+}
+
 struct ComponentTestPlugin;
+
+// ==================== ws-client 观测记录 ====================
+
+/// guest 侧观测记录（连接事件 + 下行帧），宿主经 `ws-collect` op 读取
+///
+/// wit-bindgen guest 是单线程环境，std Mutex 仅满足 API 形状
+#[cfg(feature = "ws-client")]
+mod ws_probe {
+    use std::sync::Mutex;
+
+    pub static RECORDS: Mutex<Vec<serde_json::Value>> = Mutex::new(Vec::new());
+
+    pub fn record(value: serde_json::Value) {
+        if let Ok(mut guard) = RECORDS.lock() {
+            guard.push(value);
+        }
+    }
+
+    pub fn drain() -> Vec<serde_json::Value> {
+        RECORDS
+            .lock()
+            .map(|mut guard| std::mem::take(&mut *guard))
+            .unwrap_or_default()
+    }
+}
 
 // ==================== abi ====================
 
@@ -36,8 +74,10 @@ impl AbiGuest for ComponentTestPlugin {
             return 999;
         }
         // 与 SDK bedcode_plugin_api_mobile::abi::ABI_VERSION 同步
-        // （=11，v11 = mDNS 基础能力服务，叠加 v10 总线二进制载荷）
-        11
+        // （=16，v16 = 认证 / 配对编排下沉 host-auth 5 函数 + 权限位 auth；
+        //  叠加 v15 终端订阅协议客户端迁插件、v14 host-websocket 客户端域
+        //  5 函数、v13 接收编排下沉、v12 发送编排下沉——均为纯增量变更）
+        16
     }
 }
 
@@ -68,6 +108,136 @@ impl CommandGuest for ComponentTestPlugin {
                 .to_string();
         }
 
+        // ws-client：ws 原语驱动面（宿主集成测试经 command.invoke 编排真实闭环）
+        #[cfg(feature = "ws-client")]
+        if name == "ws-op" {
+            let args: serde_json::Value = serde_json::from_str(&args_json).unwrap_or_default();
+            match args["op"].as_str() {
+                Some("ws-connect") => {
+                    let config = serde_json::json!({ "url": args["url"] }).to_string();
+                    match bedcode::plugin::host_websocket::connect(&config) {
+                        Ok(handle) => {
+                            return serde_json::json!({ "ok": true, "handle": handle }).to_string()
+                        }
+                        Err(e) => return serde_json::json!({ "ok": false, "error": e }).to_string(),
+                    }
+                }
+                Some("ws-send-text") => {
+                    let handle = args["handle"].as_str().unwrap_or_default();
+                    let text = args["text"].as_str().unwrap_or_default();
+                    match bedcode::plugin::host_websocket::send_text(handle, text) {
+                        Ok(()) => return serde_json::json!({ "ok": true }).to_string(),
+                        Err(e) => return serde_json::json!({ "ok": false, "error": e }).to_string(),
+                    }
+                }
+                Some("ws-close") => {
+                    let handle = args["handle"].as_str().unwrap_or_default();
+                    match bedcode::plugin::host_websocket::close(handle, "{}") {
+                        Ok(hit) => {
+                            return serde_json::json!({ "ok": true, "hit": hit }).to_string()
+                        }
+                        Err(e) => return serde_json::json!({ "ok": false, "error": e }).to_string(),
+                    }
+                }
+                Some("ws-is-connected") => {
+                    let handle = args["handle"].as_str().unwrap_or_default();
+                    match bedcode::plugin::host_websocket::is_connected(handle) {
+                        Ok(open) => {
+                            return serde_json::json!({ "ok": true, "open": open }).to_string()
+                        }
+                        Err(e) => return serde_json::json!({ "ok": false, "error": e }).to_string(),
+                    }
+                }
+                Some("ws-collect") => {
+                    return serde_json::json!({ "ok": true, "records": ws_probe::drain() }).to_string();
+                }
+                _ => return serde_json::json!({ "ok": false, "error": "unknown ws op" }).to_string(),
+            }
+        }
+
+        // terminal-session：票 12 ABI v15 面驱动（真实组件闭环用）
+        #[cfg(feature = "terminal-session")]
+        if name == "terminal-op" {
+            let args: serde_json::Value = serde_json::from_str(&args_json).unwrap_or_default();
+            match args["op"].as_str() {
+                // connect：jwt-auth（宿主代发首消息认证帧——token 不落插件，C4）
+                // + auto-reconnect（R1）；url 由宿主测试注入
+                Some("ts-connect") => {
+                    let config = serde_json::json!({
+                        "url": args["url"],
+                        "jwtAuth": true,
+                        "autoReconnect": { "baseMs": 1000, "maxMs": 30000 },
+                    })
+                    .to_string();
+                    match bedcode::plugin::host_websocket::connect(&config) {
+                        Ok(handle) => {
+                            // 订阅帧（协议编排在 guest——终端协议事实源 = 桌面
+                            // ws_terminal.rs；本夹具模拟真插件的调用序）
+                            let sid = args["sessionId"].as_str().unwrap_or_default();
+                            let frame = serde_json::json!({
+                                "type": "subscribe", "sessionId": sid, "mode": "live"
+                            })
+                            .to_string();
+                            let send = bedcode::plugin::host_websocket::send_text(&handle, &frame);
+                            return serde_json::json!({
+                                "ok": send.is_ok(),
+                                "handle": handle,
+                                "error": send.err(),
+                            })
+                            .to_string();
+                        }
+                        Err(e) => return serde_json::json!({ "ok": false, "error": e }).to_string(),
+                    }
+                }
+                // ack 帧（64KB 阈值节流由真插件持有，夹具直发一帧供对端断言）
+                Some("ts-ack") => {
+                    let handle = args["handle"].as_str().unwrap_or_default();
+                    let frame = serde_json::json!({ "type": "ack", "offset": args["offset"] })
+                        .to_string();
+                    match bedcode::plugin::host_websocket::send_text(handle, &frame) {
+                        Ok(()) => return serde_json::json!({ "ok": true }).to_string(),
+                        Err(e) => return serde_json::json!({ "ok": false, "error": e }).to_string(),
+                    }
+                }
+                // close（取消 auto-reconnect 的显式关闭路径）
+                Some("ts-close") => {
+                    let handle = args["handle"].as_str().unwrap_or_default();
+                    match bedcode::plugin::host_websocket::close(handle, "{}") {
+                        Ok(hit) => return serde_json::json!({ "ok": true, "hit": hit }).to_string(),
+                        Err(e) => return serde_json::json!({ "ok": false, "error": e }).to_string(),
+                    }
+                }
+                // 输出窄转发（C3 二进制出口）：无头测试无登记 Channel → 宿主
+                // 显性 Err（fail-visible）→ 记录错误文本供宿主断言转发被驱动
+                Some("ts-forward") => {
+                    let sid = args["sessionId"].as_str().unwrap_or_default();
+                    let data: Vec<u8> = args["data"]
+                        .as_array()
+                        .map(|a| a.iter().filter_map(|v| v.as_u64().map(|n| n as u8)).collect())
+                        .unwrap_or_default();
+                    match bedcode::plugin::host_terminal_stream::forward_output(sid, &data) {
+                        Ok(()) => ws_probe::record(serde_json::json!({ "kind": "forward", "ok": true })),
+                        Err(e) => {
+                            ws_probe::record(serde_json::json!({ "kind": "forward", "ok": false, "error": e }))
+                        }
+                    }
+                    return serde_json::json!({ "ok": true }).to_string();
+                }
+                // 主连接事实读取（票 13 复用同一原语；无头测试断言其可调用性）
+                Some("ts-primary-target") => {
+                    match bedcode::plugin::host_connection::primary_target() {
+                        Ok(json) => {
+                            return serde_json::json!({ "ok": true, "target": json }).to_string()
+                        }
+                        Err(e) => return serde_json::json!({ "ok": false, "error": e }).to_string(),
+                    }
+                }
+                Some("ws-collect") => {
+                    return serde_json::json!({ "ok": true, "records": ws_probe::drain() }).to_string();
+                }
+                _ => return serde_json::json!({ "ok": false, "error": "unknown terminal op" }).to_string(),
+            }
+        }
 
         // 正常形态：host-storage 往返 + host-log 埋点 + host-config 读取
         // （03 全量接线验证：storage/log/config 三组 import 同时活跃）
@@ -96,6 +266,19 @@ impl CommandGuest for ComponentTestPlugin {
 
 impl LifecycleGuest for ComponentTestPlugin {
     fn activate() -> Result<(), String> {
+        // ws-client：activate 期完成三通道订阅（WIT 契约：宿主不缓冲不重放，
+        // 晚订阅事件永久丢失——本夹具因此把订阅放在 activate）
+        #[cfg(feature = "ws-client")]
+        {
+            const PID: &str = "com.bedcode.test";
+            let _ = bedcode::plugin::host_bus::subscribe(&format!("{PID}:ws:open"));
+            let _ = bedcode::plugin::host_bus::subscribe(&format!("{PID}:ws:close"));
+            // 票 12（R1）：auto-reconnect 退避排期事件（宿主每轮退避前发布）
+            let _ = bedcode::plugin::host_bus::subscribe(&format!(
+                "{PID}:ws:reconnect-scheduled"
+            ));
+            let _ = bedcode::plugin::host_bus::subscribe_binary(&format!("{PID}:ws:message"));
+        }
         Ok(())
     }
 
@@ -119,7 +302,12 @@ impl LifecycleGuest for ComponentTestPlugin {
 // ==================== events ====================
 
 impl EventsGuest for ComponentTestPlugin {
-    fn on_bus_message(_topic: String, _payload_json: String) -> Result<(), String> {
+    fn on_bus_message(topic: String, payload_json: String) -> Result<(), String> {
+        // ws-client：属主状态事件（ws:open / ws:close）原样入观测记录
+        #[cfg(feature = "ws-client")]
+        ws_probe::record(serde_json::json!({ "kind": "event", "topic": topic, "payload": payload_json }));
+        #[cfg(not(feature = "ws-client"))]
+        let _ = (topic, payload_json);
         Ok(())
     }
 
@@ -165,3 +353,37 @@ impl ManifestGuest for ComponentTestPlugin {
 }
 
 export!(ComponentTestPlugin);
+
+// ws-client：导出 events-binary（宿主实例化后动态探测；探测命中 ⇒ 二进制帧
+// 可投递回 guest——下行帧闭环的前提）
+#[cfg(feature = "ws-client")]
+impl binary_bindings::exports::bedcode::plugin::events_binary::Guest for ComponentTestPlugin {
+    fn on_message_binary(topic: String, _sender: String, payload: Vec<u8>) {
+        // 帧信封（宿主 host_impl::ws::frame_envelope）：kind(1) + handle 长度
+        // u16 BE(2) + handle + 原始字节。载荷只记头 16 字节，断言 echo 内容够用
+        let record = if payload.len() >= 3 {
+            let frame_kind = payload[0];
+            let handle_len = u16::from_be_bytes([payload[1], payload[2]]) as usize;
+            if 3 + handle_len <= payload.len() {
+                let handle = String::from_utf8_lossy(&payload[3..3 + handle_len]).into_owned();
+                let body = &payload[3 + handle_len..];
+                serde_json::json!({
+                    "kind": "frame",
+                    "topic": topic,
+                    "frame_kind": frame_kind,
+                    "handle": handle,
+                    "payload_len": body.len(),
+                    "payload_head": body.iter().take(16).copied().collect::<Vec<u8>>(),
+                })
+            } else {
+                serde_json::json!({ "kind": "frame", "topic": topic, "error": "handle length overflow" })
+            }
+        } else {
+            serde_json::json!({ "kind": "frame", "topic": topic, "error": "envelope too short" })
+        };
+        ws_probe::record(record);
+    }
+}
+
+#[cfg(feature = "ws-client")]
+binary_bindings::export!(ComponentTestPlugin);

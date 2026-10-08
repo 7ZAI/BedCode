@@ -1,0 +1,765 @@
+<template>
+  <div
+    ref="terminalViewRef"
+    class="terminal-view"
+    :style="terminalViewStyle"
+  >
+    <!-- Loading Overlay -->
+    <transition name="loading-fade">
+      <div v-if="!isTerminalReady" class="loading-overlay">
+        <div class="loading-spinner"></div>
+        <p class="loading-text">{{ t('terminal.preparing') }}</p>
+      </div>
+    </transition>
+
+    <!-- Header - 固定位置，不随键盘移动 -->
+    <TerminalHeader
+      :session-name="sessionName"
+      :is-selection-mode="isSelectionMode"
+      :visible-items="visibleToolbarItems"
+      :all-items="ALL_TOOLBAR_ITEMS"
+      :show-sidebar="showSidebar"
+      @back="router.back()"
+      @action="handleToolbarAction"
+    />
+
+    <!-- 裁剪容器：限制上移区域不突破 Header 底部 -->
+    <div class="movable-clip">
+      <!-- 可移动区域：终端内容 + 输入栏，随键盘弹出整体上移（lift 语义避让，
+           位移量 = 实测键盘高度，见 keyboard.movableAreaStyle）——终端网格尺寸
+           不变，键盘弹/收不触发重排、fit 与 PTY resize -->
+      <div class="movable-area" :style="movableAreaStyle">
+        <!-- Main Content: Terminal + Sidebar overlay -->
+        <div class="main-content">
+          <div class="terminal-output-area">
+            <!-- 链路重连提示：非阻断横幅（不遮输出、不抢焦点）。
+                 pointer-events:none —— 断线期间输入本就会被 sendInput 拒绝
+                 （logger.warn），加拦截层会连带阻断 xterm 的复制/选中原生交互。 -->
+            <transition name="reconnect-fade">
+              <div v-if="reconnecting" class="reconnect-banner" role="status" aria-live="polite">
+                <span class="reconnect-banner-spinner" aria-hidden="true"></span>
+                <span class="reconnect-banner-text">{{ reconnectBannerText }}</span>
+              </div>
+            </transition>
+            <div
+              ref="scrollContainer"
+              class="terminal-scroll-container"
+              :class="{ 'selection-mode': isSelectionMode }"
+            >
+              <div
+                ref="xtermContainer"
+                class="xterm-container"
+                :style="xtermContainerStyle"
+              ></div>
+              <!-- TUI 模式下隐藏滚动条：alt buffer 无 scrollback，全满 thumb 是误导 -->
+              <div v-if="!isTuiMode" class="scrollbar-track">
+                <div
+                  class="scrollbar-thumb"
+                  :class="{ visible: scrollbarVisible }"
+                  :style="scrollbarThumbStyle"
+                ></div>
+              </div>
+              <transition name="scroll-indicator">
+                <button
+                  v-if="isUserScrolling && !isSelectionMode"
+                  class="scroll-to-bottom-btn"
+                  @click="scrollToBottomManual"
+                  :title="t('terminal.scrollToBottom')"
+                >
+                  <svg class="scroll-to-bottom-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+                  </svg>
+                </button>
+              </transition>
+              <transition name="selection-bar">
+                <div v-if="isSelectionMode && hasSelection && selectionTouchEnded" class="selection-action-bar" :style="selectionBarStyle">
+                  <button class="selection-action-btn" @click="copySelection">
+                    {{ t('common.button.copy') }}
+                  </button>
+                  <button class="selection-action-btn" @click="selectAllText">
+                    {{ t('terminal.selectAll') }}
+                  </button>
+                  <button class="selection-action-btn cancel" @click="exitSelectionMode">
+                    {{ t('common.button.cancel') }}
+                  </button>
+                </div>
+              </transition>
+            </div>
+          </div>
+
+          <component
+            :is="hostComponents.FileSidebar"
+            v-if="hostComponents.FileSidebar"
+            class="sidebar-overlay"
+            :class="{ 'sidebar-hidden': !showSidebar }"
+            :session-id="sessionId"
+            ref-insert
+            @settings-input-focus="handleSettingsInputFocus"
+            @insert-ref="handleInsertRef"
+          />
+          <div v-if="showSidebar" class="sidebar-backdrop" @click="showSidebar = false"></div>
+        </div>
+
+        <!-- Input Bar -->
+        <TerminalInputBar
+          ref="inputBarRef"
+          :disabled="!isSessionActive"
+          :is-connected="isConnected"
+          :placeholder="inputPlaceholder"
+          :is-landscape="isLandscape"
+          :pending-ref="pendingRefPath"
+          @submit="handleInputSubmit"
+          @execute="handleInputExecute"
+          @special-key="handleSpecialKey"
+          @shortcuts-panel-toggle="handleShortcutsPanelToggle"
+          @ref-consumed="pendingRefPath = null"
+        />
+      </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <TerminalSettingsModal
+      :visible="showSettings"
+      :font-size="terminalSettings.fontSize"
+      :theme="terminalSettings.theme"
+      :is-theme-user-set="terminalSettings.isThemeUserSet"
+      :letter-spacing="terminalSettings.letterSpacing"
+      :quick-bar-count="assistStore.settings.quickBarCount"
+      :toolbar-items="assistStore.settings.headerToolbarItems || ['folder']"
+      :all-toolbar-items="ALL_TOOLBAR_ITEMS"
+      :onboarding-pending="assistStore.settings.terminalOnboardingPending"
+      :safe-area-style="settingsModalStyle"
+      @confirm="handleSettingsConfirm"
+      @cancel="showSettings = false"
+    />
+
+    <!-- Clear Confirm Modal -->
+    <TerminalConfirmModal
+      :visible="showClearConfirm"
+      :message="t('terminal.clearScreen') + '?'"
+      :safe-area-style="confirmModalStyle"
+      @confirm="handleClearConfirm"
+      @cancel="showClearConfirm = false"
+    />
+
+    <!-- 正统渲染端覆盖确认：服务端裁决本端非正统（另一端正渲染输出）时弹出，
+         确认后 force 重发覆盖，取消则抑制同尺寸后续请求 -->
+    <ConfirmDialog
+      v-model="showRendererOverrideDialog"
+      :title="t('terminal.rendererOverrideTitle')"
+      :message="
+        rendererOverrideTarget
+          ? t('terminal.rendererOverrideBody', {
+              renderer: rendererOverrideTarget.rendererName,
+            })
+          : ''
+      "
+      :confirm-text="t('terminal.rendererOverrideConfirm')"
+      :cancel-text="t('terminal.rendererOverrideCancel')"
+      variant="warning"
+      :close-on-backdrop="false"
+      @confirm="confirmRendererOverride"
+      @cancel="cancelRendererOverride"
+    />
+  </div>
+
+  <!-- Task Picker -->
+  <TaskPickerModal
+    :visible="showTaskPicker"
+    :tasks="presetTasks"
+    :session-id="sessionId"
+    @send="onTaskSend"
+    @execute="onTaskExecute"
+    @close="showTaskPicker = false"
+  />
+
+  <!-- Shortcut Config -->
+  <ShortcutConfigModal :visible="showShortcutConfig" @close="showShortcutConfig = false" />
+  <!-- 便捷功能教程弹窗（标题栏 ? 入口） -->
+  <TerminalHelpModal :visible="showHelp" @close="showHelp = false" />
+  <!-- 新手引导（聚光灯分步导览：首次进入自动展示；「查看完整教程」接帮助弹窗） -->
+  <TerminalOnboardingTour
+    :visible="showOnboarding"
+    @close="handleOnboardingClose"
+    @open-help="handleOnboardingOpenHelp"
+  />
+</template>
+
+<script setup lang="ts">
+/**
+ * 终端视图（移动端）— 编排层：Vue 生命周期接线（onMounted / onUnmounted / watch）
+ *
+ * 业务函数按**大颗粒度主题**拆分到 `src/composables/terminal/`（范式参考桌面端
+ * `bedcode-desktop/src/composables/terminal/`），共享实例与跨域回调经 terminalKernel
+ * 交换（回调在调用时解析，域创建顺序无关）：
+ * - **useTerminalDisplay**（终端显示）：xterm 实例装配与销毁、主题解析与网格重排、
+ *   清屏 / 手动刷新 / 合成层强制重绘、选择操作栏定位
+ * - **useTerminalInput**（终端输入）：输入栏回传（文本/执行/特殊键）、预设任务
+ *   发送与执行、命令面板预设识别、侧栏「插入引用」填充
+ * - **useTerminalPanels**（功能栏）：标题栏/侧边栏/弹窗开关状态、工具栏动作分发、
+ *   新手引导
+ * - useTerminalRenderer（渲染器）/ useTerminalResize（PTY 尺寸裁决与正统端确认）/
+ *   useTerminalKeyboardAvoidance（键盘避让）/ useTerminalSubscription（订阅重试与
+ *   历史门控）——2026-09-18 首轮拆出，职责与边界见各自文件头
+ * 写入管线（useTerminalBuffer / writeCoalescer）与触摸滚动（useTerminalScroll）
+ * 保持既有拆分不变。
+ *
+ * 渲染与滚动架构对齐桌面端 TerminalPreview.vue（VS Code 终端体验）：
+ * - 写入管线：同帧输出经 rAF 合并 + 64KB 拆块（writeCoalescer），
+ *   高频输出无撕裂/重影、超大块不卡主线程
+ * - 渲染：默认 DOM 渲染器（xterm 内置 canvas，移动端 TUI 场景稳定无闪烁）；
+ *   可选 WebGL addon（USE_WEBGL_RENDERER 开关，context loss 自动回退恢复）
+ * - 滚动：onScroll 推导"是否在底部"（位置即状态），回到底部自动跟随输出
+ * - 尺寸：ResizeObserver + rAF 节流 fit，cols/rows 实际变化才同步 PTY
+ *
+ * 移动端特殊处理：
+ * - disableStdin：禁用 xterm 原生输入（桌面键盘输入流无法在移动端复现），
+ *   输入统一由底部 TerminalInputBar 承担（命令/特殊键/快捷键面板）
+ * - 触摸滚动接管：自定义触摸滚动 + 惯性 + 长按选择复制（useTerminalScroll）
+ * - 键盘避让：visualViewport 优先 + 插件 safeAreaChanged 兜底双通道检测，
+ *   终端区 + 输入栏整体 translateY 上移一个键盘高度（lift 语义，与快捷键
+ *   面板避让同法）——行列数/PTY 尺寸不变，键盘弹收零重排（配合
+ *   AndroidManifest adjustNothing）
+ * - Unicode11 addon：TUI 应用 box-drawing 字符列宽计算正确性
+ * - 内置 CJK 严格等宽字体（styles/terminal-font.css）：CJK 2 格/行尾对齐，
+ *   首次测量前等字体就绪（ensureTerminalFontLoaded）
+ */
+defineOptions({ name: 'TerminalView' })
+
+import { ref, computed, inject, type Ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { getMobileApi, getPresetTasks, getRouter } from '@binblink/bedcode-plugin-sdk-mobile'
+import { logger, t } from './host'
+// xterm.css / terminal.css 由域 activate 统一注入（?inline 运行时挂载）
+import { isMockSession, useMockTerminal } from './composables/useMockTerminal'
+import { useTerminalBuffer } from './composables/useTerminalBuffer'
+import ConfirmDialog from './components/ConfirmDialog.vue'
+import { useOrientation } from './composables/useOrientation'
+import { useInputAssistantStore } from './inputAssistant'
+import { useTerminalScroll } from './composables/useTerminalScroll'
+import { useTuiCompat } from './composables/useTuiCompat'
+import { createTerminalKernel } from './composables/terminalKernel'
+import { useTerminalRenderer } from './composables/useTerminalRenderer'
+import { useTerminalResize } from './composables/useTerminalResize'
+import { useTerminalKeyboardAvoidance } from './composables/useTerminalKeyboardAvoidance'
+import { useTerminalSubscription } from './composables/useTerminalSubscription'
+import { useTerminalDisplay } from './composables/useTerminalDisplay'
+import { useTerminalInput } from './composables/useTerminalInput'
+import { useTerminalPanels } from './composables/useTerminalPanels'
+import { nextPaintFrame } from './utils/nextPaintFrame'
+import { reconnectDisplaySeconds } from './utils/reconnectCountdown'
+import type { ToolbarItemConfig, TerminalSettings } from './components/TerminalSettingsModal.vue'
+import TerminalHeader from './components/TerminalHeader.vue'
+import TerminalSettingsModal from './components/TerminalSettingsModal.vue'
+import TerminalConfirmModal from './components/TerminalConfirmModal.vue'
+import TerminalInputBar from './components/TerminalInputBar.vue'
+import TaskPickerModal from './components/TaskPickerModal.vue'
+import ShortcutConfigModal from './components/ShortcutConfigModal.vue'
+import TerminalHelpModal from './components/TerminalHelpModal.vue'
+import TerminalOnboardingTour from './components/TerminalOnboardingTour.vue'
+import { selectionFrameColor } from './config/themes'
+
+// ==================== Props & 会话选取 ====================
+
+/** 宿主壳透传的会话 id（`/mobile/terminal/:id` 薄壳与壳内运行面都经此进入） */
+const props = defineProps<{ sessionId?: string }>()
+
+/** 宿主路由实例（插件不静态依赖 vue-router，经 SDK 共享模块取） */
+const router = getRouter()
+const connection = getMobileApi()
+const mockTerminal = useMockTerminal()
+const { isLandscape } = useOrientation()
+const { store: bufferStore, registerRealtimeHandler, unregisterRealtimeHandler, subscribeSession, unsubscribeSession, handleDisconnect, handleSessionStopped, markSessionRunning, sendInput } = useTerminalBuffer()
+const assistStore = useInputAssistantStore()
+
+/** 宿主壳 provide 的通用组件（FileSidebar 属代码浏览域，不随终端域迁移） */
+const hostComponents = inject<{ FileSidebar?: any }>('bedcodeHostComponents', {})
+
+/** 当前会话 id：props 优先，缺省取宿主活动会话（壳内运行面路径） */
+const sessionId = computed(() => props.sessionId || connection.activeSessionId.value || '')
+// 挂载时固定会话 ID：卸载时宿主壳可能已切走会话（props/活动会话都已变化），
+// 若仍读 sessionId.value 会导致 unsubscribe 调用错会话 → 桌面端订阅泄漏 →
+// 重进会话时旧订阅流干扰游标连续性（violation 循环，终端多次进入才渲染完整）
+const mountedSessionId = sessionId.value
+
+// ==================== 链路重连提示（2026-10-04） ====================
+//
+// 终端链路断线时终端插件发 `terminal-state` detail=reconnecting / reconnect_scheduled（票 12）
+// （后者带 retry_in_ms）。此前这两个 detail 前端只写 logger.debug、无任何呈现——
+// 终端静默冻结，用户无从判断该不该等，正是 ui-ux-pro-max ux 域标记 Severity
+// High 的「No feedback」反模式。
+//
+// 倒计时在组件本地递减：Rust 只在每轮排期时发一次，不适合在 store 里跑定时器
+// （后台会话也会被计时器拖住）。基准 = store 记录的排期到达时刻
+// `reconnectReceivedAt`：倒计时 = `reconnectInMs − (now − reconnectReceivedAt)`，
+// 而不是每秒重读同一个毫秒数（2026-10-04 OCR M-02——读静态值导致显示秒数
+// 恒定不递减）。
+const reconnecting = computed(() => bufferStore.getBuffer(mountedSessionId)?.reconnecting ?? false)
+const reconnectSeconds = ref<number | null>(null)
+let reconnectTicker: ReturnType<typeof setInterval> | null = null
+
+function stopReconnectTicker() {
+  if (reconnectTicker !== null) {
+    clearInterval(reconnectTicker)
+    reconnectTicker = null
+  }
+}
+
+watch(reconnecting, (active) => {
+  stopReconnectTicker()
+  if (!active) {
+    reconnectSeconds.value = null
+    return
+  }
+  const sync = () => {
+    const buffer = bufferStore.getBuffer(mountedSessionId)
+    if (!buffer?.reconnecting || buffer.reconnectInMs == null || buffer.reconnectReceivedAt == null) {
+      // 未拿到排期（仅收到 reconnecting、或已恢复）：不编造数字，直接收掉
+      reconnectSeconds.value = null
+      stopReconnectTicker()
+      return
+    }
+    // 从排期到达时刻起算剩余毫秒（M-02：读静态 reconnectInMs 会让显示秒数
+    // 恒定不递减）；纯函数便于注入时钟做行为断言
+    reconnectSeconds.value = reconnectDisplaySeconds(
+      buffer.reconnectInMs,
+      buffer.reconnectReceivedAt,
+      Date.now(),
+    )
+  }
+  sync()
+  // 1s 粒度足够（退避以秒计）
+  reconnectTicker = setInterval(sync, 1000)
+})
+
+onUnmounted(stopReconnectTicker)
+
+const reconnectBannerText = computed(() =>
+  reconnectSeconds.value === null
+    ? t('terminal.reconnecting')
+    : t('terminal.reconnectingIn', { seconds: reconnectSeconds.value }),
+)
+
+// 安全区域从 App.vue inject
+const safeArea = inject<Ref<{ top: number; bottom: number }>>('safeArea')!
+
+const { tasks: presetTasks } = getPresetTasks()
+
+// ==================== Header Toolbar Config ====================
+
+const ALL_TOOLBAR_ITEMS: ToolbarItemConfig[] = [
+  { key: 'task', label: 'terminal.toolbarTask', icon: 'task' },
+  { key: 'shortcut', label: 'terminal.toolbarShortcut', icon: 'shortcut' },
+  { key: 'clear', label: 'terminal.toolbarClear', icon: 'clear' },
+  { key: 'refresh', label: 'terminal.toolbarRefresh', icon: 'refresh' },
+  { key: 'settings', label: 'terminal.toolbarSettings', icon: 'settings' },
+  { key: 'folder', label: 'terminal.toolbarFolder', icon: 'folder' },
+]
+
+const visibleToolbarItems = computed(() => {
+  const items = assistStore.settings.headerToolbarItems || ['folder']
+  return ALL_TOOLBAR_ITEMS.filter(item => items.includes(item.key))
+})
+
+// ==================== State（模板 ref 与页面级开关） ====================
+
+const xtermContainer = ref<HTMLDivElement | null>(null)
+const scrollContainer = ref<HTMLDivElement | null>(null)
+const isTerminalReady = ref(false)
+// 根容器模板 ref：安全区 padding / 键盘避让高度收缩 / 页面 pan 守卫（keyboard 域消费）
+const terminalViewRef = ref<HTMLElement | null>(null)
+
+// ==================== Computed（会话与连接投影） ====================
+
+const isConnected = computed(() => connection.isConnected.value)
+
+const session = computed(() => {
+  if (isMockSession(sessionId.value)) {
+    return { id: sessionId.value, name: t('session.mockName'), status: 'running', is_active: true }
+  }
+  return connection.activeSessions.value.find(s => s.id === sessionId.value)
+})
+
+// 会话的 config_id：WS 事件推送的会话对象为 camelCase（configId），
+// HTTP /api/sessions 响应为 snake_case（config_id），两端来源需兼容（同 DevicesView 等）
+const sessionConfigId = computed(() => session.value?.config_id ?? session.value?.configId)
+
+const sessionName = computed(() => session.value?.name || sessionId.value || t('terminal.titleDesktop'))
+
+const isSessionActive = computed(() => isMockSession(sessionId.value) || (session.value?.status || 'stopped') === 'running')
+
+const inputPlaceholder = computed(() => {
+  // mock 会话与标题（mockName）不再重复：直接使用通用命令占位文案
+  if (isMockSession(sessionId.value)) return t('input.commandPlaceholder')
+  if (!isConnected.value) return t('input.disconnected') + '...'
+  if (!isSessionActive.value) return t('connection.connectFailed')
+  return t('input.commandPlaceholder')
+})
+
+const safeAreaTop = computed(() => safeArea.value.top || 0)
+
+// 弹窗安全区域样式
+const settingsModalStyle = computed(() => ({
+  paddingTop: `${safeArea.value.top}px`,
+  paddingBottom: `${safeArea.value.bottom}px`,
+}))
+
+const confirmModalStyle = computed(() => ({
+  paddingTop: `${safeArea.value.top}px`,
+  paddingBottom: `${safeArea.value.bottom}px`,
+}))
+
+// ==================== 终端内核与域 ====================
+// 共享内核：xterm 实例 / addon 实例 / 模板挂载点经 ctx 交换，跨域回调在调用时
+// 解析（域创建顺序无关；详见 composables/terminal/terminalKernel.ts）
+const kernel = createTerminalKernel(
+  xtermContainer,
+  () => sessionId.value,
+  () => isConnected.value,
+  () => isSessionActive.value,
+)
+const { terminalRef } = kernel
+const renderer = useTerminalRenderer(kernel)
+const resize = useTerminalResize(kernel)
+const subscription = useTerminalSubscription(kernel, { bufferStore, subscribeSession })
+
+// 模板同名绑定（域返回值解构，template 零改动）
+const {
+  rendererOverrideTarget,
+  showRendererOverrideDialog,
+  confirmRendererOverride,
+  cancelRendererOverride,
+} = resize
+
+// TUI 兼容：alt screen + SGR 鼠标上报双条件门控（嗅探器持有检测/发送，
+// useTerminalScroll 仅注入模式门控分流）
+const { isTuiMode, attach: attachTuiCompat, feedOutput: feedTuiOutput, sendWheel: sendTuiWheel, dispose: disposeTuiCompat } = useTuiCompat(sessionId.value)
+
+// 触摸滚动接管（含惯性/长按选择/自绘滚动条）
+const {
+  currentLine,
+  isSelectionMode,
+  hasSelection,
+  selectionTouchEnded,
+  scrollbarVisible,
+  scrollbarThumbStyle,
+  xtermContainerStyle,
+  shortcutsPanelHeight,
+  isUserScrolling,
+  cellHeight,
+  scrollToBottomManual,
+  setupViewportScroll,
+  exitSelectionMode,
+  copySelection,
+  selectAllText,
+  handleShortcutsPanelToggle,
+  dispose: disposeScroll,
+  longPressTriggerPos,
+  selectionViewportRange,
+} = useTerminalScroll(terminalRef, scrollContainer, { isTuiMode, sendWheel: sendTuiWheel })
+
+// 终端显示域（实例装配/销毁 + 主题 + 清屏/刷新/重绘 + 选择操作栏定位）
+const {
+  terminalSettings,
+  resolvedTerminalTheme,
+  applyTerminalTheme,
+  initTerminal,
+  disposeTerminal,
+  forceCompositorRepaint,
+  clearTerminal,
+  refreshTerminal,
+  selectionBarStyle,
+} = useTerminalDisplay(kernel, {
+  renderer,
+  resize,
+  subscription,
+  bufferStore,
+  registerRealtimeHandler,
+  unregisterRealtimeHandler,
+  setupViewportScroll,
+  attachTuiCompat,
+  feedTuiOutput,
+  disposeTuiCompat,
+  disposeScroll,
+  currentLine,
+  isUserScrolling,
+  cellHeight,
+  selectionViewportRange,
+  longPressTriggerPos,
+  scrollContainerRef: scrollContainer,
+  mountedSessionId,
+  setReady: (ready) => { isTerminalReady.value = ready },
+})
+
+// 终端输入域（输入回传 + 预设任务 + 命令面板预设识别 + 侧栏引用填充）
+const {
+  pendingRefPath,
+  handleInputSubmit,
+  handleInputExecute,
+  handleSpecialKey,
+  onTaskSend,
+  onTaskExecute,
+  applyAgentPreset,
+  handleInsertRef: fillPendingRef,
+} = useTerminalInput(kernel, { sendInput, getConfigId: () => sessionConfigId.value })
+
+// 功能栏域（弹窗/侧边栏开关 + 工具栏动作分发 + 新手引导）
+const {
+  showSettings,
+  showClearConfirm,
+  showSidebar,
+  showTaskPicker,
+  showShortcutConfig,
+  showHelp,
+  showOnboarding,
+  handleToolbarAction,
+  closeSidebar,
+  handleOnboardingClose,
+  handleOnboardingOpenHelp,
+} = useTerminalPanels({ refreshTerminal })
+
+// 键盘避让域（移动端特有）：visualViewport 优先 + 插件 safeAreaChanged 兜底双通道
+// 检测，movable-area 整体 translateY 上移（lift 语义，网格尺寸不变、零重排）。
+// onKeyboardHide 在键盘收起（偏移从可见归零）瞬间回调：先退出输入编辑态
+// （光标消失、输入框收缩回单行、命令补全弹层关闭），再滚回最新行（键盘弹出期间
+// 用户可能已上翻历史）。回调体内引用的 inputBarRef / scrollToBottomManual 由
+// watch 在 setup 完成后触发解析，无 TDZ 问题
+const inputBarRef = ref<InstanceType<typeof TerminalInputBar> | null>(null)
+const keyboard = useTerminalKeyboardAvoidance({
+  rootRef: terminalViewRef,
+  safeAreaTop: () => safeAreaTop.value,
+  canvasBackground: () => resolvedTerminalTheme.value.background,
+  selectionFrame: () => selectionFrameColor(resolvedTerminalTheme.value),
+  onKeyboardHide: () => {
+    if (inputBarRef.value?.isFocused()) inputBarRef.value.blurInput()
+    scrollToBottomManual()
+  },
+})
+const { terminalViewStyle, movableAreaStyle } = keyboard
+
+// ==================== 模板事件接线（薄封装：跨两个域的一步操作） ====================
+
+/** 侧栏「插入引用」：填充输入条 + 收起侧栏露出输入区 */
+function handleInsertRef(path: string) {
+  fillPendingRef(path)
+  closeSidebar()
+}
+
+/** 清屏确认：清屏 + 关闭确认弹窗 */
+function handleClearConfirm() {
+  clearTerminal()
+  showClearConfirm.value = false
+}
+
+/** 设置确认：持久化 + 应用主题 + 字号/字间距变更后重排并同步 PTY */
+function handleSettingsConfirm(settings: TerminalSettings) {
+  terminalSettings.value.fontSize = settings.fontSize
+  terminalSettings.value.theme = settings.theme
+  terminalSettings.value.isThemeUserSet = settings.isThemeUserSet
+  terminalSettings.value.letterSpacing = settings.letterSpacing
+
+  assistStore.saveSettings({
+    quickBarCount: settings.quickBarCount,
+    headerToolbarItems: settings.toolbarItems,
+    terminalFontSize: terminalSettings.value.fontSize,
+    terminalTheme: terminalSettings.value.isThemeUserSet ? terminalSettings.value.theme : null,
+    isTerminalThemeUserSet: terminalSettings.value.isThemeUserSet,
+    terminalLetterSpacing: terminalSettings.value.letterSpacing,
+    terminalOnboardingPending: settings.onboardingPending,
+  })
+
+  applyTerminalTheme()
+  // 字号/字间距变更后重排：显式更新 xterm 选项 + 走统一口径 refit（fitWithMargin →
+  // applyDprFit，DPR 感知 + 行尾安全余量），不再走裸 fitAddon.fit()；
+  // 字体度量需重新测量，延迟与原实现一致；尺寸变化须同步 PTY 重排行宽。
+  // letterSpacing 选项让格宽 = 字宽 + 间距（列数变少），网格仍严格对齐。
+  if (terminalRef.value) {
+    terminalRef.value.options.fontSize = settings.fontSize
+    terminalRef.value.options.letterSpacing = settings.letterSpacing
+  }
+  setTimeout(() => {
+    if (renderer.fitWithMargin()) resize.syncTerminalSizeToHost()
+  }, 50)
+  showSettings.value = false
+}
+
+/** 侧边栏设置面板输入框聚焦/失焦时，控制键盘避让 */
+function handleSettingsInputFocus(focused: boolean) {
+  keyboard.setSettingsInputFocused(focused)
+}
+
+// ==================== Watchers ====================
+
+// 命令面板预设：session/config 任一就绪或切换即重新识别
+// （deep：SyncConfigCreated push 也能触发）
+watch(
+  [() => sessionConfigId.value, () => connection.sessionConfigs.value],
+  () => { applyAgentPreset() },
+  { immediate: true, deep: true },
+)
+
+// 快捷键面板收起 / 键盘避让还原后强制重绘：两处都用 translate 上移 xterm 画布
+// （面板在 .xterm-container，键盘在 .movable-area），真机 WebView 合成层在 transform
+// 还原后会残留旧帧分块（错位/露出主题背景色，实测表现为终端区出现米白横带与右侧
+// 竖带、底部“间隔”）。动画（面板 250ms / 键盘跟手）结束后强制 xterm 重绘
+// 全部行 + 合成器重合成，清除残留（与入场渲染收尾同模式）
+let panelRepaintTimer: ReturnType<typeof setTimeout> | null = null
+watch([shortcutsPanelHeight, keyboard.keyboardOffset], ([panelHeight, kbOffset]) => {
+  // 仅上移量全部归零时需要清理；上移中由合成器处理
+  if (panelHeight > 0 || kbOffset > 0) return
+  if (panelRepaintTimer) clearTimeout(panelRepaintTimer)
+  panelRepaintTimer = setTimeout(() => {
+    panelRepaintTimer = null
+    if (terminalRef.value && terminalRef.value.rows > 0) {
+      terminalRef.value.refresh(0, terminalRef.value.rows - 1)
+    }
+    forceCompositorRepaint()
+  }, 320)
+})
+
+watch(isSessionActive, async (active, prevActive) => {
+  if (!sessionId.value || isMockSession(sessionId.value)) return
+  if (active && !prevActive) {
+    // 会话恢复运行（含同 id 重启）：复位 sessionStopped，否则 ws_output
+    // 监听器会永久丢弃新流帧（事件路径 SyncSessionStatusChanged 已复位，
+    // 此处兜底防事件丢失场景）
+    markSessionRunning(sessionId.value)
+    // 会话停止/重启后重新订阅：fresh subscribe → 回放环窗口（重播在屏内容
+    // 前先经 Rust 重锚事件清屏，旧内容不与新流重叠）
+    await subscription.subscribeWithRetry()
+    // 会话激活（含重连后）时 PTY 可能仍是默认尺寸，主动同步一次
+    resize.syncTerminalSizeToHost()
+  } else if (!active && prevActive) {
+    await handleSessionStopped(sessionId.value)
+  }
+})
+
+watch(isConnected, async (connected) => {
+  if (!sessionId.value || isMockSession(sessionId.value)) return
+  if (!connected) {
+    handleDisconnect()
+    subscription.clearSubscribeRetry()
+  } else {
+    if (isSessionActive.value) {
+      // 重连成功后 PTY 重建为默认 80x24，需主动同步当前尺寸
+      await subscription.subscribeWithRetry()
+    }
+    // 无论会话状态是否 stale 都重发尺寸（服务端 404 无害），
+    // 避免 PTY 停留在桌面端宽度导致移动端行尾截断
+    resize.syncTerminalSizeToHost()
+  }
+})
+
+// ==================== Lifecycle ====================
+
+onMounted(async () => {
+  // 链路调试（布局/渲染排查）：挂载起点 + 视口基线（与 fit 日志对照定位布局异常）
+  logger.debug(
+    `[TerminalView] mounted (session=${sessionId.value}): dpr=${window.devicePixelRatio}, ` +
+      `viewport=${window.innerWidth}x${window.innerHeight}`,
+  )
+  // 键盘避让双通道监听（visualViewport / 插件 safeAreaChanged）+ 页面 pan 守卫
+  keyboard.attach()
+
+  // 兜底加载会话配置：DevicesView 之外的进入路径（通知跳转/路由恢复）从未调用过
+  // loadSessionConfigs，预设识别需要其中的启动命令；加载完成后由上方 watch 触发识别。
+  // 会话列表（activeSessions）不在此兜底——由 applyAgentPreset 按 sessionId 按需反查。
+  if (!connection.hasLoadedConfigs.value && !connection.isLoadingConfigs.value) {
+    connection.loadSessionConfigs().catch(() => {})
+  }
+  // 会话列表兜底：直接进入终端页（通知跳转/路由恢复）时 activeSessions 可能为空，
+  // 会使 isSessionActive=false → 输入条禁用、输入被丢弃。主动拉一次会话列表。
+  if (!connection.activeSessions.value.some(s => s.id === sessionId.value)) {
+    connection.loadActiveSessions().catch(() => {})
+  }
+
+  await nextTick()
+
+  // 历史渲染就绪门控布防：先于 initTerminal（回放完成信号在 handler 注册时
+  // 即接线）与订阅路径（phase 监听需捕获 subscribe_ok 后 history 段全程）
+  subscription.armGate()
+
+  // 进入终端页 = 全量重播：xterm 每次进入都是全新实例；本地计数基准归零
+  // 必须早于 initTerminal——其内部 registerRealtimeHandler 只登记通道与渲染入口，
+  // 重播由挂载后的 fresh subscribe 提供（无独立历史拼接；缺口号不再误报）
+  bufferStore.resetCursor(sessionId.value)
+
+  await initTerminal()
+
+  // DEV 前缀：生产构建常量折叠为 false，整个 mock 分支（含 startOutput 调用）被 tree-shake
+  if (import.meta.env.DEV && isMockSession(sessionId.value) && mockTerminal.isDev) {
+    // mock 会话无服务端历史段：立即放行该门控条件（否则只能等超时兜底）
+    subscription.settleServerHistoryNow()
+    if (terminalRef.value) {
+      mockTerminal.startOutput(terminalRef.value)
+    }
+  } else if (isSessionActive.value && isConnected.value) {
+    // 进入终端页 = fresh subscribe（回放环窗口：历史与实时同一条流）——
+    // 无论会话页是否预加载过都重新订阅一次，确保渲染入口挂好后的完整回放
+    await subscription.subscribeWithRetry()
+  } else {
+    // 非活跃/未连接：本次挂载不会发起订阅，无回放可等，立即放行；
+    // 重试/恢复由订阅监听（isSessionActive / isConnected watch）承担
+    subscription.settleServerHistoryNow()
+  }
+
+  // 无条件同步一次尺寸（内部按 isConnected 门控）：会话状态 stale 时
+  // 上方 isSessionActive 分支可能被跳过，不兜底会令 PTY 停留在桌面端
+  // 宽度 → 移动端行尾截断；活跃时也由此处统一发送（避免重复调用）
+  resize.syncTerminalSizeToHost()
+
+  // 等渲染就绪再撤遮罩：subscribed（回放已到达） + 首次 fit 三条件中的两项
+  // 全部满足（回放随流即时渲染，无独立拼接信号）；任一环节卡死由
+  // HISTORY_SETTLE_TIMEOUT_MS 超时兜底。
+  // 放行后再让出一帧渲染，末批内容 commit 上屏后才淡出遮罩，
+  // 避免遮罩半透明期间透出逐批写入的闪烁过程
+  const gateResult = await subscription.waitForHistoryGate()
+  await nextPaintFrame()
+  isTerminalReady.value = true
+  // 新手引导：终端就绪后按持久化标记展示一次（关闭或打开完整教程即清除）
+  if (assistStore.settings.terminalOnboardingPending) {
+    showOnboarding.value = true
+  }
+  // 链路调试（布局/渲染排查）：就绪路径（gate 正常 or 超时兜底）+ 终端网格尺寸，
+  // 超时兜底说明订阅/历史/fit 某环节卡死（对照 terminalBuffer/useTerminalBuffer 日志）
+  logger.debug(
+    `[TerminalView] ready (session=${sessionId.value}): ` +
+      `${gateResult === 'timeout' ? 'gate TIMEOUT fallback' : 'gate settled'}, ` +
+      `term=${terminalRef.value?.cols ?? '?'}x${terminalRef.value?.rows ?? '?'}`,
+  )
+
+  // 入场渲染收尾（等价手动刷新按钮的渲染半段）：首次 fit/历史回放/遮罩淡出
+  // 过渡期间真机 WebView 合成器可能缓存旧帧分块，表现为终端区底部与输入栏
+  // 之间出现一段背景色空白间隔（点击刷新后消失的现场）。全量重绘 + 强制
+  // 重合成一次清除（仅此一次，幂等低成本）
+  if (terminalRef.value && terminalRef.value.rows > 0) {
+    terminalRef.value.refresh(0, terminalRef.value.rows - 1)
+  }
+  forceCompositorRepaint()
+})
+
+onUnmounted(async () => {
+  // 链路调试：渲染管线卸载（writeCoalescer dispose 汇总日志随后输出）
+  logger.debug(`[TerminalView] unmounted (session=${mountedSessionId})`)
+  // 订阅重试定时器 + 门控兜底定时器（遮罩已放行时为 null，防御未走完 onMounted 的卸载竞态）
+  subscription.disposeSubscription()
+
+  if (panelRepaintTimer) {
+    clearTimeout(panelRepaintTimer)
+    panelRepaintTimer = null
+  }
+  // 键盘避让双通道监听 + 页面 pan 守卫
+  keyboard.dispose()
+
+  if (isMockSession(mountedSessionId)) {
+    mockTerminal.stopOutput()
+  }
+  disposeTerminal()
+
+  // 页面卸载：停止前端消费 + 切 batch 传播（Rust 订阅保持，会话未停——
+  // 后台期间的输出由服务端队列 + Rust 缓存保留）；重新进入时由
+  // onMounted 的 resetCursor（全量重播）+ registerRealtimeHandler 拼接历史
+  if (!isMockSession(mountedSessionId)) {
+    await unsubscribeSession(mountedSessionId)
+  }
+})
+</script>

@@ -14,9 +14,7 @@ pub mod session;
 
 // Re-export all commands for easy registration
 pub use android::{keep_screen_awake, open_url_in_browser, set_screen_orientation};
-pub use auth::{
-    ws_authenticate, ws_authenticate_with_qr, ws_get_auth_status, ws_request_pairing, ws_verify_pairing_code,
-};
+pub use auth::{ws_authenticate, ws_get_auth_credentials};
 pub use connection::{
     ws_clear_token, ws_connect, ws_disconnect, ws_get_status, ws_get_token, ws_is_connected, ws_reconnect, ws_set_token,
 };

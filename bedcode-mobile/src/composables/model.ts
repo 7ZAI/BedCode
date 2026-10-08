@@ -55,12 +55,6 @@ export interface ConnectionInfo {
   status: string
 }
 
-/** 认证状态 */
-export interface AuthState {
-  status: string
-  is_authenticated: boolean
-}
-
 // ==================== Session Types ====================
 
 /** 会话信息 */

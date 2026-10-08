@@ -471,25 +471,7 @@ pub fn emit_paired(app: &AppHandle) {
     let _ = app.emit("ws_paired", ());
 }
 
-/// 发射配对请求事件
-pub fn emit_pairing_request(app: &AppHandle) {
-    tracing::info!("[EventHelper] Emitting ws_pairing_request");
-    let _ = app.emit("ws_pairing_request", ());
-}
-
-/// 发射配对验证成功事件
-pub fn emit_pairing_verified(app: &AppHandle) {
-    tracing::info!("[EventHelper] Emitting ws_pairing_verified");
-    let _ = app.emit("ws_pairing_verified", ());
-}
-
-/// 发射认证失败事件
-pub fn emit_auth_failed(app: &AppHandle, reason: &str) {
-    tracing::error!("[EventHelper] Emitting ws_auth_failed: {}", reason);
-    let _ = app.emit(
-        "ws_auth_failed",
-        serde_json::json!({
-            "reason": reason,
-        }),
-    );
-}
+// 票 14 阶段 B：ws_pairing_request / ws_pairing_verified / ws_auth_failed 的
+// 发射点已随配对编排迁 `com.bedcode.terminal-session` 插件（经 host-events
+// emit，事件名不变——前端监听零改动）；宿主侧同名 helper 退役，防回接见
+// retired_mobile_auth_orchestration_command_face_lock

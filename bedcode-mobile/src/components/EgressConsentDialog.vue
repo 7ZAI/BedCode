@@ -55,8 +55,9 @@
             </div>
 
             <!-- 不再询问（持久授权，落 Rust 持久层） -->
-            <div class="pt-1">
+            <div class="pt-1 space-y-2">
               <Toggle v-model="persist" :label="t('mobile.egress.remember')" />
+              <Toggle v-model="denyForever" :label="t('mobile.egress.denyForever')" />
             </div>
           </div>
 
@@ -95,7 +96,7 @@
  * 持久层（egress_grants.json），不落 localStorage（§8 安全红线）。
  * 由 App.vue 全局挂载一次（与 FsAuthDialog 并列）。
  */
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
@@ -122,6 +123,16 @@ const queue = ref<EgressConsentRequest[]>([])
 const current = computed(() => queue.value[0] ?? null)
 /** 「不再询问」勾选（持久授权；每次弹出复位） */
 const persist = ref(false)
+/** 「以后都拒绝」勾选（落 deny 记录；每次弹出复位；与 persist 互斥） */
+const denyForever = ref(false)
+
+// 互斥：勾了「以后都拒绝」就取消「不再询问」（deny 优先，两个同时勾语义冲突）
+watch(denyForever, (v) => {
+  if (v) persist.value = false
+})
+watch(persist, (v) => {
+  if (v) denyForever.value = false
+})
 
 /** 请求方描述：宿主调用 / 插件调用 / 未知来源兜底 */
 const requestDescription = computed(() => {
@@ -155,6 +166,7 @@ function enqueue(req: EgressConsentRequest) {
   queue.value.push(req)
   if (queue.value.length === 1) {
     persist.value = false
+    denyForever.value = false
     startDismissTimer()
   }
 }
@@ -163,6 +175,7 @@ function enqueue(req: EgressConsentRequest) {
 function advance() {
   queue.value.shift()
   persist.value = false
+  denyForever.value = false
   if (dismissTimer) {
     clearTimeout(dismissTimer)
     dismissTimer = null
@@ -189,6 +202,7 @@ async function allow() {
       requestId: req.request_id,
       allow: true,
       persist: remember,
+      deny: false,
     })
   } catch (e) {
     logger.error('[EgressConsent] Resolve allow failed:', e)
@@ -198,12 +212,14 @@ async function allow() {
 async function deny() {
   const req = current.value
   if (!req) return
+  const forever = denyForever.value
   advance()
   try {
     await invoke('egress_consent_resolve', {
       requestId: req.request_id,
       allow: false,
       persist: false,
+      deny: forever,
     })
   } catch (e) {
     logger.error('[EgressConsent] Resolve deny failed:', e)

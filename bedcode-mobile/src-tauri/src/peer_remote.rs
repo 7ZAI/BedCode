@@ -2,17 +2,20 @@
 //!
 //! 浏览为单请求会话——每次操作对对端新拨号（线协议「单连接单请求」契约），
 //! 返回引擎排好序的条目与「可能被权限过滤」提示位；拉取按文件逐条独立会话
-//! （免协商、断点续传复用 issue 05/06 数据面），任务行在会话发起前预登记进
-//! 接收表（[`super::peer_receive`]），进度/终态/取消因此完全复用任务体系。
+//! （免协商、断点续传复用 issue 05/06 数据面），会话发起事实经
+//! `pull-started` 事件回灌（[`super::peer_receive`] 事件桥），进度/终态与
+//! push 接收批共用同一接收事件通道。
 //!
-//! 只读约束：本模块命令面只有列目录与拉取，无任何指向暴露端的写语义。
+//! 只读约束：本模块能力面只有列目录与拉取，无任何指向暴露端的写语义；票 10
+//! 起无前端命令面（真入口 = host-peer `list-shared-roots` / `browse-directory` /
+//! `pull-files`）。
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use bedcode_peer_net::{
-    CancelToken, NodeId, PeerNetError, PauseCmd, PauseSlot, TransferEvent, browse_shared_dir, list_shared_roots,
-    pull_shared_file,
+    browse_shared_dir, list_shared_roots, pull_shared_file, CancelToken, NodeId, PauseCmd, PauseSlot, PeerNetError,
+    TransferEvent,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
@@ -63,7 +66,7 @@ pub struct RemotePullFileDto {
 
 /// 单个节点代际的拉取会话上下文（装配时建立，停止时取消）
 struct SessionCtx {
-    /// 接收侧事件通道发送端快照（拉取会话经它入账任务表）
+    /// 接收侧事件通道发送端快照（拉取会话经它把进度/终态送进事件桥）
     events: mpsc::Sender<TransferEvent>,
     /// 本代全部拉取令牌的父源：节点停止时 cancel 即中止所有在途/后续会话
     cancel_root: CancelToken,
@@ -86,6 +89,37 @@ struct PullSession {
 pub struct PeerRemoteState {
     pulls: Mutex<HashMap<String, PullSession>>,
     session: tokio::sync::Mutex<Option<SessionCtx>>,
+}
+
+/// 活跃拉取批投影（host-peer `active-transfers` 的 pull 段，票 04）：拉取会话表
+/// 投影——仅引擎会话事实（batchId/status="running"）。移动端 pulls 表不持有字节
+/// 计数（桌面同款），显性给 0；方向与桌面一致归入 receive
+pub(crate) fn active_pull_rows(app: &AppHandle) -> Vec<serde_json::Value> {
+    let state = app.state::<PeerRemoteState>();
+    let pulls = state.pulls.lock().expect("peer remote pulls lock poisoned");
+    let now = now_ms();
+    pulls
+        .keys()
+        .map(|batch_id| {
+            serde_json::json!({
+                "batchId": batch_id,
+                "direction": "receive",
+                "status": "running",
+                "totalBytes": 0,
+                "transferredBytes": 0,
+                "rateBps": 0.0,
+                "updatedAtMs": now,
+            })
+        })
+        .collect()
+}
+
+/// 当前毫秒时间戳（与 peer_transfer / peer_receive 同款）
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 /// 节点装配期登记拉取会话上下文（start_locked 调用）
@@ -181,29 +215,23 @@ pub(crate) async fn resume_pull(app: &AppHandle, batch_id: &str) -> bool {
 ///
 /// denied/unreachable 以带上下文的错误上抛——入口仅在已连接态展示，
 /// 到达此处仍被拒说明信任关系已变化，如实呈现给调用方。
-async fn dial_peer(
-    app: &AppHandle,
-    node_id: &NodeId,
-    action: &str,
-) -> crate::Result<bedcode_peer_net::Connection> {
-    let (node, cache) = runtime_snapshot(app).await.ok_or_else(|| {
-        crate::AppError::Internal(format!("peer-net {action} failed: node not started"))
-    })?;
+async fn dial_peer(app: &AppHandle, node_id: &NodeId, action: &str) -> crate::Result<bedcode_peer_net::Connection> {
+    let (node, cache) = runtime_snapshot(app)
+        .await
+        .ok_or_else(|| crate::AppError::Internal(format!("peer-net {action} failed: node not started")))?;
     let record = cache.get(node_id).ok_or_else(|| {
         crate::AppError::Internal(format!(
             "peer-net {action} failed: peer {} not in discovery cache (offline or unknown)",
             node_id.as_str()
         ))
     })?;
-    node.dial(&record.to_static_peer_record())
-        .await
-        .map_err(|e| match e {
-            PeerNetError::DialDeniedByPeer { .. } => crate::AppError::Internal(format!(
-                "peer-net {action} failed: not trusted by peer {}",
-                node_id.as_str()
-            )),
-            other => map_peer_net_error(other),
-        })
+    node.dial(&record.to_static_peer_record()).await.map_err(|e| match e {
+        PeerNetError::DialDeniedByPeer { .. } => crate::AppError::Internal(format!(
+            "peer-net {action} failed: not trusted by peer {}",
+            node_id.as_str()
+        )),
+        other => map_peer_net_error(other),
+    })
 }
 
 // ==================== 命令面 ====================
@@ -219,11 +247,9 @@ pub struct PeerSharedRootDto {
 }
 
 /// 列可信对端暴露中的共享根（浏览入口：先取根清单再逐根下钻）
-#[tauri::command]
-pub async fn list_peer_shared_roots(
-    app: AppHandle,
-    node_id: String,
-) -> crate::Result<Vec<PeerSharedRootDto>> {
+///
+/// 真入口 = host-peer `list-shared-roots`
+pub(crate) async fn list_peer_shared_roots(app: AppHandle, node_id: String) -> crate::Result<Vec<PeerSharedRootDto>> {
     let parsed = parse_node_id(&node_id)?;
     let conn = dial_peer(&app, &parsed, "roots").await?;
     let roots = list_shared_roots(conn)
@@ -237,13 +263,17 @@ pub async fn list_peer_shared_roots(
     );
     Ok(roots
         .into_iter()
-        .map(|root| PeerSharedRootDto { id: root.id, name: root.name })
+        .map(|root| PeerSharedRootDto {
+            id: root.id,
+            name: root.name,
+        })
         .collect())
 }
 
 /// 浏览可信对端的共享目录（单请求会话；每操作新拨号）
-#[tauri::command]
-pub async fn browse_peer_directory(
+///
+/// 真入口 = host-peer `browse-directory`
+pub(crate) async fn browse_peer_directory(
     app: AppHandle,
     node_id: String,
     dir_id: String,
@@ -252,9 +282,7 @@ pub async fn browse_peer_directory(
     let parsed = parse_node_id(&node_id)?;
     let conn = dial_peer(&app, &parsed, "browse").await?;
     let listing = browse_shared_dir(conn, &dir_id, &rel_path).await.map_err(|e| {
-        crate::AppError::Internal(format!(
-            "peer-net browse '{rel_path}' in dir '{dir_id}' failed: {e}"
-        ))
+        crate::AppError::Internal(format!("peer-net browse '{rel_path}' in dir '{dir_id}' failed: {e}"))
     })?;
     // 诊断插桩：目录浏览结果可见性（dir_id 形状/条目数）
     tracing::info!(
@@ -283,8 +311,9 @@ pub async fn browse_peer_directory(
 /// 免协商直取（用户主动获取即放行）；每个文件预登记一条接收任务行，
 /// 进度/终态/取消复用 issue 10 任务体系；中断后重试同一文件自动断点续传。
 /// 返回成功入队的文件数。
-#[tauri::command]
-pub async fn pull_peer_files(
+///
+/// 真入口 = host-peer `pull-files`
+pub(crate) async fn pull_peer_files(
     app: AppHandle,
     node_id: String,
     dir_id: String,
@@ -318,10 +347,9 @@ pub async fn pull_peer_files(
 
     let parsed = parse_node_id(&node_id)?;
     // 会话参数在锁外解析快照：拨号可达秒级，不阻塞 start/stop
-    let (_, config) =
-        super::peer_receive::handler_and_config(&app).await.ok_or_else(|| {
-            crate::AppError::Internal("peer-net pull failed: node not started".to_string())
-        })?;
+    let (_, config) = super::peer_receive::handler_and_config(&app)
+        .await
+        .ok_or_else(|| crate::AppError::Internal("peer-net pull failed: node not started".to_string()))?;
     let (events, cancel_root) = {
         let state = app.state::<PeerRemoteState>();
         let guard = state.session.lock().await;
@@ -334,9 +362,9 @@ pub async fn pull_peer_files(
             }
         }
     };
-    let (node, cache) = runtime_snapshot(&app).await.ok_or_else(|| {
-        crate::AppError::Internal("peer-net pull failed: node not started".to_string())
-    })?;
+    let (node, cache) = runtime_snapshot(&app)
+        .await
+        .ok_or_else(|| crate::AppError::Internal("peer-net pull failed: node not started".to_string()))?;
     let record = cache.get(&parsed).ok_or_else(|| {
         crate::AppError::Internal(format!(
             "peer-net pull failed: peer {node_id} not in discovery cache (offline or unknown)"
@@ -361,10 +389,10 @@ pub async fn pull_peer_files(
     Ok(count)
 }
 
-/// 并发执行拉取队列：每文件独立 batch_id + 独立连接 + 预登记任务行；
-/// 全部任务行先于会话登记（多选下载时 UI 同时呈现所有任务），并发度受
-/// 设置 concurrency（默认 3，1..=8，与发送方向共用）约束；单文件失败
-/// 不阻断其余（任务行如实落 failed，重试即断点续传）
+/// 并发执行拉取队列：每文件独立 batch_id + 独立连接 + 会话发起事实先回灌；
+/// 全部批次先经 `pull-started` 事件呈现（多选下载时 UI 同时看到所有批次），
+/// 并发度受设置 concurrency（默认 3，1..=8，引擎侧拉取闸门）约束；单文件失败
+/// 不阻断其余（事件桥直推 failed 终态，重试即断点续传）
 ///
 /// 取消令牌为本代会话根令牌的 child——节点停止（clear_state）时全部
 /// 未启动与在途拉取一并中止。
@@ -382,8 +410,7 @@ async fn run_pull_queue(
 ) {
     let state = app.state::<PeerRemoteState>();
     // 并发上限：拉取方向与发送方向共用设置（默认 3，1..=8）
-    let concurrency =
-        super::peer_receive::ensure_settings_loaded(&app).await.concurrency as usize;
+    let concurrency = super::peer_receive::ensure_settings_loaded(&app).await.concurrency as usize;
     let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(concurrency.max(1)));
     let mut set = tokio::task::JoinSet::new();
     for (index, file) in files.into_iter().enumerate() {
@@ -398,28 +425,18 @@ async fn run_pull_queue(
         let batch_id = format!("pull-{nanos}-{index}");
         let token = CancelToken::child(&cancel_root);
         let pause = PauseSlot::new();
-        state
-            .pulls
-            .lock()
-            .expect("peer remote pulls lock poisoned")
-            .insert(
-                batch_id.clone(),
-                PullSession {
-                    token: token.clone(),
-                    pause: Some(Arc::clone(&pause)),
-                },
-            );
-
-        // 任务行先于会话登记：全部任务行同步呈现，首个 Progress 到达前
-        // UI 即显示进行中（并发编排下不再随传输逐条出现）
-        super::peer_receive::register_remote_pull(
-            &app,
-            peer.clone(),
+        state.pulls.lock().expect("peer remote pulls lock poisoned").insert(
             batch_id.clone(),
-            file.rel_path.clone(),
-            file.size,
-        )
-        .await;
+            PullSession {
+                token: token.clone(),
+                pause: Some(Arc::clone(&pause)),
+            },
+        );
+
+        // 建行事实先于会话登记：全部任务同步呈现（`pull-started` 事件经
+        // peer_receive 事件桥回流，插件据此自建行），首个 Progress 到达前
+        // UI 即显示进行中（并发编排下不再随传输逐条出现）
+        super::peer_receive::announce_remote_pull_started(peer.clone(), &batch_id, &file.rel_path, file.size);
 
         let sem = std::sync::Arc::clone(&semaphore);
         let node = node.clone();
@@ -454,7 +471,7 @@ async fn run_pull_queue(
                 }
                 Err(e) => {
                     tracing::warn!(batch_id = %batch_id, rel = %file.rel_path, "pull dial failed: {e}");
-                    super::peer_receive::fail_task(&app, &batch_id, format!("dial failed: {e}"));
+                    super::peer_receive::announce_local_failure(&batch_id, &format!("dial failed: {e}"));
                 }
             }
             app.state::<PeerRemoteState>()

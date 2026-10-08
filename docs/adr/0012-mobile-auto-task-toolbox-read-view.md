@@ -22,3 +22,15 @@ status: accepted
 - 任务队列仍由终端悬浮面板管理（会话级、可操作），不进工具箱页，避免双入口双状态。
 - 刷新订阅 3 个 Tauri 事件：`ws_sync_task_scheduled_changed`、`ws_sync_task_queue_changed`、`ws_sync_task_status_changed`，500ms 去抖合并突发；连接重连（`isConnected` 变 true）时重拉当前页签。
 - 定时自动任务创建是唯一写操作，提交到桌面端由桌面端调度执行——"手机看，桌面管"的远程终端定位。
+
+---
+
+## 补记（2026-10-08，票 16）
+
+移动端 `com.bedcode.auto-task` 已整体并入 `com.bedcode.terminal-session`（spec D6 选项 A，见
+`.scratch/2026-10-07-mobile-wasm-core-refactor/ticket-16-auto-task-merge.md`）：本文所述工具箱
+两页签、悬浮队列面板与 HTTP 数据面不变，仅标识随合并切换——app id 换 `com.bedcode.terminal-session`、
+工具箱视图 id 换 `terminal-session.toolbox`、HTTP 基址换 `/api/plugin/com.bedcode.terminal-session`
+（旧前缀由桌面端 `LEGACY_HTTP_PLUGIN_ALIASES` 继续兜底）；三条 WS 刷新事件
+（`ws_sync_task_scheduled_changed` / `ws_sync_task_queue_changed` / `ws_sync_task_status_changed`）
+与只读投影语义逐字保留；旧 `auto-task.*` 命令 id 随极简 rust 壳退役（TS 从未 invoke）。

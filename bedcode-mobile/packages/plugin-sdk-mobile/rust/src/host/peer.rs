@@ -39,7 +39,6 @@ pub trait HostPeer {
     fn peer_set_receive_policy(&self, mode: &str, timeout_secs: u64) -> Result<(), HostError>;
     fn peer_pause_transfer(&self, batch_id: &str) -> Result<(), HostError>;
     fn peer_resume_transfer(&self, batch_id: &str) -> Result<(), HostError>;
-    fn peer_resume_all_transfers(&self) -> Result<u32, HostError>;
     /// 全量幂等替换引擎广播源：条目 `[{ id, name, safTreeUri }]`（SAF 树 URI）
     fn peer_set_shared_roots(&self, dirs: &[serde_json::Value]) -> Result<(), HostError>;
     /// 浏览对端共享根清单（仅 session 句柄寻址；断线自动重拨）
@@ -59,4 +58,18 @@ pub trait HostPeer {
         dir_id: &str,
         files: &[serde_json::Value],
     ) -> Result<u32, HostError>;
+    /// 设置接收落点目录（空串 = 恢复默认）；引擎落盘配置原语
+    fn peer_set_download_dir(&self, path: &str) -> Result<(), HostError>;
+    /// 按需启动本机 peer 节点（引擎级生命周期原语）：幂等，false = 未改变状态；
+    /// 调用方成为节点属主（谁起谁停）
+    fn peer_start_node(&self) -> Result<bool, HostError>;
+    /// 属主插件让节点下线（幂等）；非属主拒绝
+    fn peer_stop_node(&self) -> Result<bool, HostError>;
+    /// 活跃传输批清单（引擎会话事实投影，供插件事件归约首屏重建）
+    fn peer_active_transfers(&self) -> Result<serde_json::Value, HostError>;
+    /// 发送源收集：目录递归 + 批内同名去重 → `[{ path, size }]` JSON
+    fn peer_collect_outgoing(
+        &self,
+        paths: &[serde_json::Value],
+    ) -> Result<serde_json::Value, HostError>;
 }

@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WasmApp · 移动端品牌板 v1.0</title>
+<style>
+/* ============================================================================
+   WasmApp 移动端品牌板（3×3）
+   ----------------------------------------------------------------------------
+   真源：
+     ../brand-spec.md           品牌策略 / 标志构造 / 命名裁决
+     ../brand-spec-mobile.md    移动端适配规范（本板的文字依据，含实测对比度）
+     ./build-assets.py          标志几何与全部资产的生成器
+   本板的色值取自品牌色阶；文字色全部实测 >=4.5:1，见 §2.1。
+   ============================================================================ */
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  /* 品牌色阶 */
+  --ink:#08090B;        /* 主深底 */
+  --ink-2:#16181C;      /* 抬升面 */
+  --ink-3:#101216;      /* 小尺寸图标底 */
+  --paper:#F5F7F9;      /* 主前景 */
+  --ember:#FF9E2C;      /* 琥珀：深底唯一彩色 */
+  --ember-700:#9F621B;  /* 浅底琥珀 */
+  /* 品牌板自身的展示色（实测：见文件末尾注释） */
+  --board:#0B0C0E;
+  --panel:#16181C;
+  --panel-2:#111316;
+  --hair:rgba(245,247,249,.10);
+  --hair-soft:rgba(245,247,249,.06);
+  --grid:rgba(245,247,249,.045);
+  --label:#8B939E;
+  --label-dim:#7C848F;
+  --sans:Inter,"Geist","Helvetica Neue",Arial,"PingFang SC","Noto Sans SC",sans-serif;
+  --mono:ui-monospace,"SF Mono","JetBrains Mono","Cascadia Code",Consolas,monospace;
+  --gut:14px;
+}
+/* 品牌板自身的展示色全部实测（WCAG 2.1 相对亮度），避免复现原型那次的对比度问题：
+     paper      #F5F7F9 / panel #16181C = 16.55:1
+     label      #8B939E / panel         =  5.73:1
+     label-dim  #7C848F / panel         =  4.70:1  / base #0B0C0E = 5.18:1
+     ember      #FF9E2C / panel         =  8.62:1  / ink  #08090B = 9.49:1
+     term 注释  #7C848F / ink-3 #101216 =  4.96:1
+   面板边框与网格线刻意低对比（1.08 到 1.49:1）：它们是排版分隔装饰，不承担信息，
+   与 --mobile-border 的处理一致。 */
+body{
+  background:var(--board);color:var(--paper);font-family:var(--sans);
+  -webkit-font-smoothing:antialiased;padding:26px 22px 60px;line-height:1.5;
+}
+.wrap{max-width:1560px;margin:0 auto}
+
+/* ---------- 板头 ---------- */
+.board-head{
+  display:flex;align-items:flex-end;justify-content:space-between;gap:24px;
+  padding-bottom:16px;margin-bottom:var(--gut);border-bottom:1px solid var(--hair);
+}
+.board-head .l{display:flex;align-items:center;gap:16px}
+.board-head .l svg{width:38px;height:38px;flex-shrink:0}
+.board-head h1{font-size:21px;font-weight:700;letter-spacing:-.3px;line-height:1.2}
+.board-head h1 em{font-style:normal;color:var(--ember)}
+.board-head .sub{font-size:11.5px;color:var(--label);margin-top:4px;letter-spacing:.2px}
+.board-head .meta{text-align:right;font-size:10.5px;color:var(--label-dim);font-family:var(--mono);line-height:1.7}
+
+/* ---------- 3x3 网格 ---------- */
+.board{
+  display:grid;grid-template-columns:repeat(3,1fr);gap:var(--gut);
+}
+@media (max-width:1080px){.board{grid-template-columns:repeat(2,1fr)}}
+@media (max-width:700px){.board{grid-template-columns:1fr}}
+
+.panel{
+  position:relative;background:var(--panel);border:1px solid var(--hair);
+  border-radius:14px;padding:16px 17px 15px;min-height:236px;
+  display:flex;flex-direction:column;overflow:hidden;
+}
+.panel.span2{grid-column:span 2}
+.panel.flat{background:var(--panel-2)}
+/* 面板页脚标签：品牌板的「小字与页码」细节，克制使用 */
+.panel .tag{
+  margin-top:auto;padding-top:13px;display:flex;align-items:center;
+  justify-content:space-between;gap:10px;
+  font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--label-dim);font-family:var(--mono);
+}
+.panel .tag .idx{color:var(--label)}
+.panel h2{
+  font-size:10px;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--label);font-weight:600;margin-bottom:13px;
+}
+.panel .note{font-size:11px;color:var(--label);line-height:1.6}
+
+/* ---------- P1 标志 ---------- */
+.p-logo{align-items:center;justify-content:center;text-align:center}
+.p-logo .mark{width:108px;height:108px}
+.p-logo .word{
+  margin-top:18px;font-size:32px;font-weight:700;letter-spacing:-1.2px;
+}
+.p-logo .word em{font-style:normal;color:var(--ember)}
+.p-logo .claim{font-size:10.5px;color:var(--label);letter-spacing:.18em;text-transform:uppercase;margin-top:7px}
+.p-logo .tag{position:absolute;left:17px;right:17px;bottom:15px}
+
+/* ---------- P2 构造 ---------- */
+.construct{display:flex;gap:16px;align-items:flex-start;flex:1}
+.construct .fig{width:150px;flex-shrink:0}
+.construct dl{flex:1;min-width:0;display:grid;gap:9px}
+.construct dt{font-size:11px;font-weight:600;display:flex;align-items:center;gap:7px}
+.construct dt i{width:7px;height:7px;border-radius:2px;flex-shrink:0;font-style:normal}
+.construct dd{font-size:10.5px;color:var(--label);line-height:1.55;margin-top:2px}
+
+/* ---------- P3 图标系统 ---------- */
+.iconrows{display:grid;gap:11px;flex:1}
+.irow{display:grid;grid-template-columns:64px 1fr;gap:13px;align-items:center}
+.irow .strip{display:flex;align-items:center;gap:9px}
+.irow .strip img{display:block;border-radius:5px}
+.irow .strip img.r2{border-radius:9px}
+.irow .strip img.r3{border-radius:13px}
+.irow .cap{font-size:10.5px;color:var(--label);line-height:1.5}
+.irow .cap b{color:var(--paper);font-weight:600;font-size:11px;display:block;margin-bottom:1px}
+.irow .cap .warn{color:var(--ember)}
+
+/* ---------- P4 UI 应用 ---------- */
+.appshot{
+  background:var(--ink);border:1px solid var(--hair);border-radius:11px;
+  overflow:hidden;flex:1;display:flex;flex-direction:column;
+}
+.appshot .bar{
+  display:flex;align-items:center;gap:7px;padding:8px 11px;
+  border-bottom:1px solid var(--hair-soft);background:var(--panel-2);
+}
+.appshot .bar .d{width:6px;height:6px;border-radius:50%;background:rgba(245,247,249,.18)}
+.appshot .bar .addr{
+  margin-left:6px;font-family:var(--mono);font-size:9.5px;color:var(--label);
+}
+.appshot .body{padding:13px;display:flex;flex-direction:column;gap:10px;flex:1}
+.chiprow{display:flex;gap:7px;flex-wrap:wrap}
+.chip{
+  font-size:9.5px;font-family:var(--mono);padding:3px 8px;border-radius:999px;
+  border:1px solid var(--hair);color:var(--label);white-space:nowrap;
+}
+.chip.on{border-color:rgba(255,158,44,.45);color:var(--ember)}
+.chip.acc{border-color:rgba(245,247,249,.26);color:var(--paper)}
+.appshot .term{
+  font-family:var(--mono);font-size:10px;line-height:1.75;color:var(--paper);
+  background:var(--ink-3);border-radius:7px;padding:9px 10px;
+}
+.appshot .term .c{color:#7C848F}
+.appshot .term .a{color:var(--ember)}
+
+/* ---------- P5 品牌主张 ---------- */
+.p-essence{justify-content:center;background:var(--ink);text-align:left}
+.p-essence .big{font-size:30px;font-weight:700;letter-spacing:-.9px;line-height:1.16}
+.p-essence .big em{font-style:normal;color:var(--ember)}
+.p-essence .zh{font-size:11.5px;color:var(--label);margin-top:12px;line-height:1.7;max-width:34ch}
+.p-essence .who{display:flex;gap:7px;flex-wrap:wrap;margin-top:14px}
+
+/* ---------- P6 色阶 ---------- */
+.swatches{display:grid;gap:8px;flex:1}
+.sw{display:flex;align-items:center;gap:11px}
+.sw .chipbox{
+  width:44px;height:26px;border-radius:7px;flex-shrink:0;
+  border:1px solid rgba(245,247,249,.14);
+}
+.sw .info{min-width:0;flex:1}
+.sw .nm{font-size:10.5px;font-weight:600}
+.sw .hex{font-family:var(--mono);font-size:9.5px;color:var(--label);margin-top:1px}
+.sw .use{font-size:9.5px;color:var(--label-dim);text-align:right;line-height:1.4;max-width:19ch}
+.ratio{
+  margin-top:11px;padding-top:10px;border-top:1px solid var(--hair-soft);
+  font-family:var(--mono);font-size:9.5px;color:var(--label);line-height:1.75;
+}
+.ratio b{color:var(--paper);font-weight:600}
+.ratio .no{color:#FF9B9B}
+
+/* ---------- P7 字体 ---------- */
+.specimen{flex:1;display:flex;flex-direction:column;gap:11px}
+.specimen .row1{display:flex;align-items:baseline;gap:14px}
+.specimen .aa{font-size:46px;font-weight:700;letter-spacing:-2px;line-height:1}
+.specimen .aa em{font-style:normal;color:var(--ember)}
+.specimen .set{font-size:11px;color:var(--label);line-height:1.8;font-family:var(--mono);word-break:break-all}
+.specimen .pair{border-top:1px solid var(--hair-soft);padding-top:10px}
+.specimen .pair .k{font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--label-dim);font-family:var(--mono)}
+.specimen .pair .v{font-size:11.5px;color:var(--paper);margin-top:3px}
+
+/* ---------- P8 影像方向 ---------- */
+.p-image{padding:0;background:var(--ink);border-color:var(--hair)}
+.p-image svg{display:block;width:100%;height:100%;position:absolute;inset:0}
+.p-image .over{
+  position:relative;z-index:2;margin-top:auto;padding:15px 17px;
+  background:linear-gradient(180deg,transparent,rgba(8,9,11,.92) 62%);
+}
+.p-image .over .k{font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--ember);font-family:var(--mono)}
+.p-image .over .t{font-size:14px;font-weight:600;margin-top:5px;letter-spacing:-.2px}
+.p-image .over .d{font-size:10.5px;color:var(--label);margin-top:5px;line-height:1.6;max-width:38ch}
+
+/* ---------- P9 系统细节 ---------- */
+.sys{display:grid;gap:12px;flex:1}
+.sysrow .k{
+  font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--label-dim);font-family:var(--mono);margin-bottom:7px;
+}
+.badges{display:flex;gap:7px;flex-wrap:wrap;align-items:center}
+.bdg{
+  display:inline-flex;align-items:center;gap:5px;font-size:9.5px;font-weight:600;
+  padding:3px 8px;border-radius:6px;border:1px solid var(--hair);color:var(--label);
+}
+.bdg.ember{border-color:rgba(255,158,44,.4);color:var(--ember)}
+.bdg .d{width:5px;height:5px;border-radius:50%;background:currentColor}
+.iconrow{display:flex;gap:9px;align-items:center;flex-wrap:wrap}
+.iconrow .ib{
+  width:28px;height:28px;border-radius:8px;border:1px solid var(--hair);
+  display:flex;align-items:center;justify-content:center;color:var(--label);
+}
+.iconrow .ib svg{width:15px;height:15px}
+.iconrow .ib.act{color:var(--ember);border-color:rgba(255,158,44,.4)}
+.imgrow{display:flex;gap:10px;align-items:center}
+.imgrow img{width:52px;height:52px;border-radius:13px;display:block}
+
+/* ---------- 板尾 ---------- */
+.board-foot{
+  margin-top:var(--gut);padding-top:14px;border-top:1px solid var(--hair);
+  display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap;
+  font-size:10px;color:var(--label-dim);font-family:var(--mono);line-height:1.7;
+}
+.board-foot b{color:var(--label);font-weight:600}
+@media (prefers-reduced-motion:no-preference){
+  .panel{transition:border-color .2s ease,background-color .2s ease}
+  .panel:hover{border-color:rgba(245,247,249,.18)}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="board-head">
+    <div class="l">
+      <svg viewBox="16 26 68 48" fill="none" aria-label="WasmApp 标志">
+        <g stroke="#F5F7F9" stroke-width="13" stroke-linecap="butt">
+          <line x1="23.2" y1="33" x2="36.8" y2="67"/><line x1="39.3" y1="67.1" x2="48.7" y2="46.9"/>
+          <line x1="51.3" y1="46.9" x2="60.7" y2="67.1"/><line x1="63.2" y1="67" x2="76.8" y2="33"/>
+        </g>
+        <path d="M50 36.5 L56.5 43 L50 49.5 L43.5 43 Z" fill="#FF9E2C"/>
+      </svg>
+      <div>
+        <h1>Wasm<em>App</em> · 移动端品牌规范</h1>
+        <div class="sub">Mobile brand system · 应用图标 / 小尺寸降级 / 双色层架构</div>
+      </div>
+    </div>
+    <div class="meta">
+      wasmapp · brand sheet 01<br>
+      v1.0 / 2026-10-08 / 3 × 3<br>
+      source: brand-spec-mobile.md
+    </div>
+  </header>
+
+  <div class="board">
+
+    <!-- ============ 1. 标志封面 ============ -->
+    <section class="panel p-logo">
+      <svg class="mark" viewBox="16 26 68 48" fill="none" aria-label="WasmApp 标志">
+        <g stroke="#F5F7F9" stroke-width="13" stroke-linecap="butt">
+          <line x1="23.2" y1="33" x2="36.8" y2="67"/><line x1="39.3" y1="67.1" x2="48.7" y2="46.9"/>
+          <line x1="51.3" y1="46.9" x2="60.7" y2="67.1"/><line x1="63.2" y1="67" x2="76.8" y2="33"/>
+        </g>
+        <path d="M50 36.5 L56.5 43 L50 49.5 L43.5 43 Z" fill="#FF9E2C"/>
+      </svg>
+      <div class="word">Wasm<em>App</em></div>
+      <div class="claim">One host. Many apps.</div>
+      <div class="tag"><span class="idx">01</span><span>primary mark</span></div>
+    </section>
+
+    <!-- ============ 2. 标志构造 ============ -->
+    <section class="panel">
+      <h2>Construction</h2>
+      <div class="construct">
+        <svg class="fig" viewBox="0 0 150 116" fill="none" aria-hidden="true">
+          <!-- 构造网格：只作为比例参照，不参与标志本身 -->
+          <g stroke="rgba(245,247,249,.10)" stroke-width="1">
+            <line x1="10" y1="24" x2="140" y2="24"/><line x1="10" y1="58" x2="140" y2="58"/>
+            <line x1="10" y1="92" x2="140" y2="92"/>
+            <line x1="30" y1="10" x2="30" y2="106"/><line x1="75" y1="10" x2="75" y2="106"/>
+            <line x1="120" y1="10" x2="120" y2="106"/>
+          </g>
+          <g transform="translate(8,10) scale(1.34)">
+            <g stroke="#F5F7F9" stroke-width="13" stroke-linecap="butt">
+              <line x1="23.2" y1="33" x2="36.8" y2="67"/><line x1="39.3" y1="67.1" x2="48.7" y2="46.9"/>
+              <line x1="51.3" y1="46.9" x2="60.7" y2="67.1"/><line x1="63.2" y1="67" x2="76.8" y2="33"/>
+            </g>
+            <path d="M50 36.5 L56.5 43 L50 49.5 L43.5 43 Z" fill="#FF9E2C"/>
+          </g>
+          <g stroke="#FF9E2C" stroke-width="1" opacity=".55">
+            <line x1="8" y1="10" x2="8" y2="108"/><line x1="6" y1="108" x2="10" y2="108"/>
+          </g>
+        </svg>
+        <dl>
+          <div>
+            <dt><i style="background:#F5F7F9"></i>四段分离笔画</dt>
+            <dd>多个 WASM 应用，各自持有私有库与状态</dd>
+          </div>
+          <div>
+            <dt><i style="background:rgba(245,247,249,.34)"></i>笔画之间的接缝</dt>
+            <dd>隔离边界。插件之间只经互调 API 与 host-bus 通信</dd>
+          </div>
+          <div>
+            <dt><i style="background:#FF9E2C"></i>琥珀核心菱形</dt>
+            <dd>正在运行的那个活跃实例。全系统唯一的彩色元素</dd>
+          </div>
+          <div>
+            <dt><i style="background:none;border:1px solid rgba(245,247,249,.34)"></i>视觉外框</dt>
+            <dd>66.6 × 47.1，中心 (50, 50)</dd>
+          </div>
+        </dl>
+      </div>
+      <div class="tag"><span class="idx">02</span><span>symbol logic</span></div>
+    </section>
+
+    <!-- ============ 3. 图标系统 ============ -->
+    <section class="panel">
+      <h2>Icon system</h2>
+      <div class="iconrows">
+        <div class="irow">
+          <div class="strip">
+            <img class="r2" src="mobile/png/app-icon-256.png" width="46" height="46" alt="WasmApp 应用图标">
+          </div>
+          <div class="cap"><b>≥48px · 完整标志</b>四段接缝 + 菱形核心。应用网格 / 商店</div>
+        </div>
+        <div class="irow">
+          <div class="strip">
+            <img src="mobile/png/app-icon-48.png" width="34" height="34" alt="48px">
+            <img src="mobile/png/app-icon-32.png" width="26" height="26" alt="32px">
+            <img src="mobile/png/app-icon-24.png" width="22" height="22" alt="24px">
+            <img src="mobile/png/app-icon-16.png" width="16" height="16" alt="16px">
+          </div>
+          <div class="cap"><b>48 / 32 / 24 / 16</b>32px 以下改用合并笔画版，避免接缝糊掉</div>
+        </div>
+        <div class="irow">
+          <div class="strip">
+            <img class="r2" src="mobile/png/app-icon-light-256.png" width="46" height="46" alt="浅色主题图标">
+          </div>
+          <div class="cap"><b>浅色主题变体</b>核心换 <span class="mono" style="font-family:var(--mono)">ember-700</span>：琥珀在浅底只有 1.87:1</div>
+        </div>
+        <div class="irow">
+          <div class="strip">
+            <img src="mobile/svg/app-icon-adaptive-foreground.svg" width="40" height="40" alt="Android 自适应前景" style="background:#08090B">
+          </div>
+          <div class="cap"><b>Android 自适应</b>108dp 画布，内容限制在居中 66dp 安全区</div>
+        </div>
+      </div>
+      <div class="tag"><span class="idx">03</span><span>app icon</span></div>
+    </section>
+
+    <!-- ============ 4. 数字应用 ============ -->
+    <section class="panel">
+      <h2>Application · in app</h2>
+      <div class="appshot">
+        <div class="bar">
+          <span class="d"></span><span class="d"></span><span class="d"></span>
+          <span class="addr">wasmapp.local / apps</span>
+        </div>
+        <div class="body">
+          <div style="display:flex;align-items:center;gap:9px">
+            <svg viewBox="16 26 68 48" width="26" height="26" fill="none" aria-hidden="true">
+              <g stroke="#F5F7F9" stroke-width="13" stroke-linecap="butt">
+                <line x1="23.2" y1="33" x2="36.8" y2="67"/><line x1="39.3" y1="67.1" x2="48.7" y2="46.9"/>
+                <line x1="51.3" y1="46.9" x2="60.7" y2="67.1"/><line x1="63.2" y1="67" x2="76.8" y2="33"/>
+              </g>
+              <path d="M50 36.5 L56.5 43 L50 49.5 L43.5 43 Z" fill="#FF9E2C"/>
+            </svg>
+            <div class="word" style="font-size:15px;letter-spacing:-.5px;font-weight:700">Wasm<em style="font-style:normal;color:var(--ember)">App</em></div>
+          </div>
+          <div class="chiprow">
+            <span class="chip on">4 installed</span>
+            <span class="chip">2 running</span>
+            <span class="chip acc">128 MB</span>
+          </div>
+          <div class="term">
+            <div><span class="c">$</span> wasmapp apps --status</div>
+            <div>terminal-session  <span class="a">running</span></div>
+            <div>file-transfer     <span class="a">running</span></div>
+            <div class="c">ai-chatbox        idle</div>
+          </div>
+        </div>
+      </div>
+      <div class="tag"><span class="idx">04</span><span>product surface</span></div>
+    </section>
+
+    <!-- ============ 5. 品牌主张 ============ -->
+    <section class="panel p-essence">
+      <div class="big">One host.<br>Many apps.<br><em>Zero bleed.</em></div>
+      <div class="zh">一个宿主，多个互相隔离的实例。这句主张直接对应能力闸门与隔离边界，不是口号。</div>
+      <div class="who">
+        <span class="chip">platform engineers</span>
+        <span class="chip">plugin authors</span>
+      </div>
+      <div class="tag"><span class="idx">05</span><span>essence</span></div>
+    </section>
+
+    <!-- ============ 6. 色阶 ============ -->
+    <section class="panel">
+      <h2>Colour</h2>
+      <div class="swatches">
+        <div class="sw">
+          <span class="chipbox" style="background:#FF9E2C"></span>
+          <div class="info"><div class="nm">ember</div><div class="hex">#FF9E2C</div></div>
+          <div class="use">深底唯一彩色<br>8.41 到 8.99:1</div>
+        </div>
+        <div class="sw">
+          <span class="chipbox" style="background:#9F621B"></span>
+          <div class="info"><div class="nm">ember-700</div><div class="hex">#9F621B</div></div>
+          <div class="use">浅底琥珀<br>4.50 / 4.83:1</div>
+        </div>
+        <div class="sw">
+          <span class="chipbox" style="background:#764914"></span>
+          <div class="info"><div class="nm">ember-800</div><div class="hex">#764914</div></div>
+          <div class="use">浅底小字<br>6.98 到 7.49:1</div>
+        </div>
+        <div class="sw">
+          <span class="chipbox" style="background:#F5F7F9"></span>
+          <div class="info"><div class="nm">paper</div><div class="hex">#F5F7F9</div></div>
+          <div class="use">主前景<br>14.0 到 18.2:1</div>
+        </div>
+        <div class="sw">
+          <span class="chipbox" style="background:#16181C"></span>
+          <div class="info"><div class="nm">ink-2</div><div class="hex">#16181C</div></div>
+          <div class="use">抬升面 / 图标底板上端</div>
+        </div>
+        <div class="sw">
+          <span class="chipbox" style="background:#08090B"></span>
+          <div class="info"><div class="nm">ink</div><div class="hex">#08090B</div></div>
+          <div class="use">主深底</div>
+        </div>
+      </div>
+      <div class="ratio">
+        <div>ember on light ground <b class="no">1.87:1</b> · never</div>
+        <div>ember on dark card <b>8.41:1</b> · always ok</div>
+      </div>
+      <div class="tag"><span class="idx">06</span><span>palette</span></div>
+    </section>
+
+    <!-- ============ 7. 字体 ============ -->
+    <section class="panel">
+      <h2>Type</h2>
+      <div class="specimen">
+        <div class="row1">
+          <div class="aa">W<em>a</em></div>
+          <div class="set">Inter / Geist<br>system sans stack<br>no webfont added</div>
+        </div>
+        <div class="set" style="font-size:10px;line-height:1.9">
+          ABCDEFGHIJKLMNOPQRSTUVWXYZ<br>
+          abcdefghijklmnopqrstuvwxyz<br>
+          0123456789 · one host. many apps.
+        </div>
+        <div class="pair">
+          <div class="k">wordmark</div>
+          <div class="v">Wasm<span style="color:var(--ember)">App</span> · 700 · -1.2 tracking</div>
+        </div>
+        <div class="pair">
+          <div class="k">mono · abi and capability names</div>
+          <div class="v" style="font-family:var(--mono);font-size:11px">terminal:input · host-bus · wasm32-wasip3</div>
+        </div>
+      </div>
+      <div class="tag"><span class="idx">07</span><span>typography</span></div>
+    </section>
+
+    <!-- ============ 8. 影像方向 ============ -->
+    <section class="panel p-image">
+      <svg viewBox="0 0 400 240" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+        <defs>
+          <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="#0B0C0E"/><stop offset=".45" stop-color="#1A1D22"/>
+            <stop offset=".72" stop-color="#2A2E35"/><stop offset="1" stop-color="#101216"/>
+          </linearGradient>
+          <linearGradient id="glow" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="#FF9E2C" stop-opacity="0"/>
+            <stop offset="1" stop-color="#FF9E2C" stop-opacity=".22"/>
+          </linearGradient>
+          <pattern id="dots" width="7" height="7" patternUnits="userSpaceOnUse">
+            <circle cx="1.4" cy="1.4" r="0.85" fill="#F5F7F9" fill-opacity=".22"/>
+          </pattern>
+        </defs>
+        <rect width="400" height="240" fill="url(#sky)"/>
+        <!-- 地平线上的实例灯带：每一格是一个隔离实例，只有一格亮着 -->
+        <g fill="#F5F7F9" fill-opacity=".30">
+          <rect x="34" y="150" width="5" height="5" rx="1"/>
+          <rect x="52" y="150" width="5" height="5" rx="1"/>
+          <rect x="70" y="150" width="5" height="5" rx="1"/>
+          <rect x="88" y="150" width="5" height="5" rx="1"/>
+          <rect x="106" y="150" width="5" height="5" rx="1"/>
+        </g>
+        <rect x="215" y="150" width="5" height="5" rx="1" fill="#FF9E2C"/>
+        <g fill="#F5F7F9" fill-opacity=".30">
+          <rect x="233" y="150" width="5" height="5" rx="1"/>
+          <rect x="251" y="150" width="5" height="5" rx="1"/>
+          <rect x="269" y="150" width="5" height="5" rx="1"/>
+          <rect x="287" y="150" width="5" height="5" rx="1"/>
+          <rect x="305" y="150" width="5" height="5" rx="1"/>
+          <rect x="323" y="150" width="5" height="5" rx="1"/>
+        </g>
+        <rect x="217" y="151" width="60" height="3" fill="url(#glow)"/>
+        <!-- 底图纹理 -->
+        <rect y="168" width="400" height="72" fill="url(#dots)"/>
+        <rect y="168" width="400" height="72" fill="#0B0C0E" fill-opacity=".45"/>
+      </svg>
+      <div class="over">
+        <div class="k">image direction</div>
+        <div class="t">一个宿主，多处微光</div>
+        <div class="d">低照度、几何、无人物。用「地平线上排布的实例灯位」表达多实例共存，只亮一盏。</div>
+      </div>
+      <div class="tag" style="position:relative;z-index:2"><span class="idx">08</span><span>atmosphere</span></div>
+    </section>
+
+    <!-- ============ 9. 系统细节 ============ -->
+    <section class="panel">
+      <h2>System detail</h2>
+      <div class="sys">
+        <div class="sysrow">
+          <div class="k">status chips</div>
+          <div class="badges">
+            <span class="bdg"><span class="d"></span>running</span>
+            <span class="bdg">idle</span>
+            <span class="bdg ember"><span class="d"></span>active instance</span>
+          </div>
+        </div>
+        <div class="sysrow">
+          <div class="k">capability icons</div>
+          <div class="iconrow">
+            <span class="ib act">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 4.5-3.2 7.6-8 9-4.8-1.4-8-4.5-8-9V6l8-3z"/></svg>
+            </span>
+            <span class="ib">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.6"/><rect x="14" y="3" width="7" height="7" rx="1.6"/><rect x="3" y="14" width="7" height="7" rx="1.6"/><rect x="14" y="14" width="7" height="7" rx="1.6"/></svg>
+            </span>
+            <span class="ib">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h16M12 4v16"/></svg>
+            </span>
+            <span class="ib">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v5l3.5 2"/></svg>
+            </span>
+          </div>
+        </div>
+        <div class="sysrow">
+          <div class="k">mark variants</div>
+          <div class="imgrow">
+            <img src="mobile/svg/mark.svg" alt="mark on dark" style="background:#08090B">
+            <img src="mobile/svg/mark-light.svg" alt="mark on light" style="background:#F5F4F0">
+            <img src="mobile/svg/mark-ember.svg" alt="mark monochrome ember" style="background:#08090B">
+            <img src="mobile/svg/icon-mono-paper.svg" alt="monochrome paper icon">
+          </div>
+        </div>
+        <div class="sysrow">
+          <div class="k">pattern · 8 × 8 isolated instances</div>
+          <img src="mobile/svg/pattern-grid.svg" alt="grid pattern" style="width:100%;max-width:132px;border-radius:8px;display:block">
+        </div>
+      </div>
+      <div class="tag"><span class="idx">09</span><span>component strip</span></div>
+    </section>
+
+  </div>
+
+  <footer class="board-foot">
+    <div>
+      <b>WasmApp mobile brand sheet 01</b> · 3 × 3 · 2026-10-08<br>
+      assets: mobile/svg (19) · mobile/png (11) · generator: mobile/build-assets.py
+    </div>
+    <div style="text-align:right">
+      ember is fixed, the platform palette is switchable<br>
+      small sizes use the merged-stroke mark, not a shrunk one
+    </div>
+  </footer>
+
+</div>
+</body>
+</html>

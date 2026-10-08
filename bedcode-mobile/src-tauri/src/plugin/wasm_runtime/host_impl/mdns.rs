@@ -1,9 +1,11 @@
 //! host-mdns v2 逻辑层 —— mDNS 基础能力服务（spec v2：
 //! `.scratch/2026-09-10-mdns-service-plugin/spec-basic-capability-service.md`）
 //!
-//! 与桌面端同构（ticket 06）：全局唯一 `ServiceDaemon`（LazyLock 单例）+ 双句柄
-//! 表（每条带属主）+ browse 事件定向投递 + advertise 原语 + 双表 purge；peer-net
-//! 引擎与全部插件浏览/广播共享同一守护。移动端差异：
+//! 与桌面端同构（ticket 06）：**全局唯一 `ServiceDaemon` 定义在
+//! [`crate::mdns::engine`]（票 03 提升——守护是引擎资产，宿主命令面 / 插件面 /
+//! peer-net 引擎三方共用）**，本模块持有双句柄表（每条带属主）+ browse 事件定向
+//! 投递 + advertise 原语 + 双表 purge；peer-net 引擎与全部插件浏览/广播经 engine
+//! 共享同一守护。移动端差异：
 //!
 //! - Android 多播锁随单守护首次使用获取、常驻持有（幂等，不再随浏览句柄增删——
 //!   落地 spec v2 §8 注释计划「主动释放暂不做，随守护常开退役一并落地」）：宿主
@@ -16,47 +18,17 @@
 //!   同语义。
 
 use super::super::WasmPluginState;
-use crate::plugin::android_plugins::multicast_lock_acquire;
+use crate::mdns::engine::{daemon, daemon_if_initialized, REANNOUNCE_INTERVAL};
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::sync::{Arc, LazyLock, Mutex, OnceLock};
+use std::sync::{Arc, LazyLock, Mutex};
 
-/// 全局唯一 mDNS 守护（本进程共享同一实例；mdns-sd 设计即为单守护多服务共享，
-/// browse / register 各自独立订阅，互不干扰）。
-///
-/// `OnceLock`：首次任一原语访问时初始化（browse / advertise / shared_daemon）；
-/// stop/query 路径只在「守护已初始化」时触网（单测表操作不强制拉起真实守护）
-static DAEMON: OnceLock<ServiceDaemon> = OnceLock::new();
+// ==================== 全局共享守护（定义在 crate::mdns::engine，票 03） ====================
+// 单例守护/初始化/Android 多播锁/shared_daemon 出口全部在 crate::mdns::engine；
+// 本模块只消费，不持有。REANNOUNCE_INTERVAL 为引擎资产（插件 advertise 续期节奏）。
 
-fn init_daemon() -> ServiceDaemon {
-    tracing::info!("mdns service daemon initializing (single shared instance)");
-    let daemon = ServiceDaemon::new().expect("mdns service daemon init failed");
-    // Android：多播锁随守护常驻获取（幂等，不随浏览句柄增删）。宿主函数可能
-    // 运行于 tokio worker，此处 block_on 属运行时内阻塞反模式——fire-and-forget
-    // spawn；非 Android 平台 stub 立即返回，同走 spawn 保持单一代码路径（可测）
-    tauri::async_runtime::spawn(async {
-        if let Err(e) = multicast_lock_acquire().await {
-            tracing::warn!("mdns daemon: multicast lock acquire failed ({e}); receive may be degraded");
-        }
-    });
-    daemon
-}
-
-/// 取全局守护（首次访问触发初始化）
-fn daemon() -> &'static ServiceDaemon {
-    DAEMON.get_or_init(init_daemon)
-}
-
-/// 守护若已初始化则返回（stop/query 前预防性保护：单测表操作不触网）
-fn daemon_if_initialized() -> Option<&'static ServiceDaemon> {
-    DAEMON.get()
-}
-
-/// 周期 re-announce 间隔：mdns-sd 注册后不主动周期广播，须手动续期。
-/// 与 peer-net `REANNOUNCE_INTERVAL`（45s）同节奏——宿主身份广播的续期由
-/// 引擎自己的 re-announce 循环负责（ticket 04/06），本间隔只服务插件句柄
-const REANNOUNCE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(45);
+// ==================== 句柄表 ====================
 
 /// 单条浏览订阅：共享守护 + 服务类型（stop_browse 按类型退订）+ 属主。
 /// 事件透传线程独立 std 线程（detached），随 channel 断连自行收尾
@@ -95,11 +67,8 @@ fn check_permission(state: &WasmPluginState) -> bool {
         .contains(bedcode_plugin_api_mobile::permission::PERMISSION_MDNS)
 }
 
-/// 取全局共享守护句柄（clone 廉价）：peer-net 引擎接线用（ticket 06）
-pub(crate) fn shared_daemon() -> ServiceDaemon {
-    daemon().clone()
-}
-
+// 取全局共享守护句柄：定义在 crate::mdns::engine（票 03）——peer-net 引擎接线
+// 直接用 crate::mdns::engine::shared_daemon()，本模块不再持有守护出口
 // ==================== 浏览原语 ====================
 
 /// 浏览某服务类型：铸造 browser-id（`mdnsbr-<uuid>`）并启动事件定向投递线程
@@ -510,8 +479,7 @@ mod tests {
         let db = Arc::new(std::sync::Mutex::new(
             rusqlite::Connection::open_in_memory().expect("open in-memory db"),
         ));
-        let tmp = Box::leak(Box::new(tempfile::tempdir().expect("tempdir")));
-        let storage = Arc::new(PluginStorage::new(&tmp.path().to_path_buf()));
+        let storage = PluginStorage::test_storage();
         let fs_auth = Arc::new(FsAuthChecker::new(storage.clone(), None));
         let status_reporter: Arc<dyn Fn(&str, &str) + Send + Sync> = Arc::new(|_, _| {});
         WasmPluginState {

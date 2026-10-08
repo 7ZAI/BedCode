@@ -561,8 +561,12 @@ pub fn run() {
 
             // server-lib-split：装配服务器端口（宿主壳实现注入；supervisor /
             // ws / http / peer-net 的「无 AppContext」保守分支依赖本注册表）。
-            // 走组合根的单一装配点：无头 harness（cross-end-tests）调同一函数
-            crate::server::composition::install_server_ports();
+            // 走组合根的单一装配点：无头 harness（cross-end-tests）调同一函数。
+            // 句柄直传：插件激活发生在上面的 `PluginHost::new` 内部，早于 AppContext
+            // 注册，提前装配的端口面靠它解析路径（2026-10-07 修：此前窗口内的
+            // `host-peer.start-node` 恒定报 `resolve app data dir failed: no runtime
+            // context`，peer 节点起不来 → 桌面端不广播 → 移动端发现不到）
+            crate::server::composition::install_server_ports_with(Some(app_handle_arc.clone()));
 
             // 同时注册到 Tauri State（前端 invoke 可用）
             app.manage(db.clone());

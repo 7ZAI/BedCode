@@ -139,7 +139,9 @@ impl PluginManager {
         plugin_db: Arc<std::sync::Mutex<rusqlite::Connection>>,
         app_handle: Option<Arc<tauri::AppHandle>>,
     ) -> Self {
-        let storage = Arc::new(PluginStorage::new(app_data_dir));
+        // 票 05b：插件 KV 真源 = 主库 plugin_storage 表（共享 plugin_db 连接；
+        // 旧文件落盘路径已随 05b 移除，启动迁移见 lib.rs setup）
+        let storage = Arc::new(PluginStorage::new(plugin_db.clone()));
         let approvals = Arc::new(PluginApprovalStore::new(storage.clone()));
         let plugins_dir = app_data_dir.join(PLUGIN_DATA_DIR);
 
@@ -975,8 +977,8 @@ impl PluginManager {
         // 移除 WASM 实例与插件记录
         self.wasm_plugins.write().await.remove(plugin_id);
         self.plugins.write().await.remove(plugin_id);
-        // Egress L2：移除插件 URL 声明
-        crate::egress::policy().unregister_plugin_urls(plugin_id);
+        // Egress：卸载清策略 + 记录 + URL 声明（重装即全新授权，ADR 0022 §8 生命周期）
+        crate::egress::policy().purge_plugin(plugin_id);
 
         // 清理启用偏好、审批记录与插件存储
         let enabled_key = format!("{}{}", PLUGIN_ENABLED_KEY_PREFIX, plugin_id);
@@ -1217,6 +1219,8 @@ mod tests {
         let plugin_db = StdArc::new(std::sync::Mutex::new(
             rusqlite::Connection::open_in_memory().expect("in-memory sqlite"),
         ));
+        // 票 05b：镜像生产启动顺序——DB 开库后 init_schema（plugin_storage 表）
+        crate::plugin::db_schema::init_schema(&plugin_db.lock().expect("schema lock")).expect("init plugin db schema");
 
         let manager = PluginManager::new(
             &app_data_dir,
@@ -1284,13 +1288,8 @@ mod tests {
     }
 
     /// 用真组件实例化一个 LoadedComponentPlugin 并塞入 manager.wasm_plugins
-    async fn attach_wasm(
-        manager: &PluginManager,
-        tmp: &TempDir,
-        pid: &str,
-        features: &[&str],
-    ) {
-        let host_ctx = build_host_ctx(tmp);
+    async fn attach_wasm(manager: &PluginManager, pid: &str, features: &[&str]) {
+        let host_ctx = build_host_ctx();
         let runtime = manager.wasm_runtime.get().expect("wasm runtime initialized");
         let component = Component::from_binary(runtime.engine(), &build_test_component(features))
             .expect("compile test component");
@@ -1308,7 +1307,7 @@ mod tests {
     async fn test_activate_on_startup_failure_enters_degraded() {
         let (manager, tmp) = setup_manager().await;
         seed_plugin(&manager, TEST_PID_DEGRADED, PluginState::Loaded).await;
-        attach_wasm(&manager, &tmp, TEST_PID_DEGRADED, &["on-startup-fail"]).await;
+        attach_wasm(&manager, TEST_PID_DEGRADED, &["on-startup-fail"]).await;
 
         // phase 1: activate() 自身 Ok → 继续 phase 1b on_startup
         // phase 1b: on_startup 返回 Err("startup init failed (test)")
@@ -1339,7 +1338,7 @@ mod tests {
     async fn test_activate_degraded_retry_to_activated() {
         let (manager, tmp) = setup_manager().await;
         seed_plugin(&manager, TEST_PID_RETRY, PluginState::Loaded).await;
-        attach_wasm(&manager, &tmp, TEST_PID_RETRY, &["on-startup-fail"]).await;
+        attach_wasm(&manager, TEST_PID_RETRY, &["on-startup-fail"]).await;
 
         // 首次激活：on_startup 失败 → Degraded
         manager.activate(TEST_PID_RETRY).await.expect("first activate");
@@ -1351,7 +1350,7 @@ mod tests {
         // 要重试必须先 deactivate 干净回落，再换 Ok 形态组件 activate
         manager.deactivate(TEST_PID_RETRY).await.expect("deactivate to reset");
         // 替换 wasm 实例为 Ok 形态（不破坏 Deactivated 终态约束，仅换实例）
-        attach_wasm(&manager, &tmp, TEST_PID_RETRY, &[]).await;
+        attach_wasm(&manager, TEST_PID_RETRY, &[]).await;
 
         // 把状态显式置 Loaded（deactivate 已落 Deactivated，activate 仍会从
         // Deactivated 走完整 phase 1b——manager.rs:586 仅守卫 Activated|Degraded）
@@ -1374,7 +1373,7 @@ mod tests {
     async fn test_deactivate_degraded_falls_back_to_deactivated() {
         let (manager, tmp) = setup_manager().await;
         seed_plugin(&manager, TEST_PID_DEACTIVATE, PluginState::Loaded).await;
-        attach_wasm(&manager, &tmp, TEST_PID_DEACTIVATE, &["on-startup-fail"]).await;
+        attach_wasm(&manager, TEST_PID_DEACTIVATE, &["on-startup-fail"]).await;
 
         manager.activate(TEST_PID_DEACTIVATE).await.expect("activate to degraded");
         let info = manager.get_info(TEST_PID_DEACTIVATE).await.expect("info");
@@ -1394,7 +1393,7 @@ mod tests {
     async fn test_dispatch_lifecycle_app_startup_skips_wasm_side() {
         let (manager, tmp) = setup_manager().await;
         seed_plugin(&manager, TEST_PID_DISPATCH, PluginState::Loaded).await;
-        attach_wasm(&manager, &tmp, TEST_PID_DISPATCH, &[]).await;
+        attach_wasm(&manager, TEST_PID_DISPATCH, &[]).await;
 
         manager.activate(TEST_PID_DISPATCH).await.expect("activate");
         let info = manager.get_info(TEST_PID_DISPATCH).await.expect("info");

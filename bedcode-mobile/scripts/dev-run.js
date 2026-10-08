@@ -173,14 +173,14 @@ const PLUGIN_WATCH_CMDS = [
     wasmFile: 'rust/target/wasm32-unknown-unknown/release/bedcode_plugin_ai_chatbox.wasm',
   },
   {
-    dir: 'plugins/auto-task',
-    id: 'com.bedcode.auto-task',
+    dir: 'plugins/terminal-session',
+    id: 'com.bedcode.terminal-session',
     args: [
       resolve(ROOT, 'packages/plugin-sdk-mobile/bin/cli.js'),
       'build', '--watch',
       '--resources-dir', '../../src-tauri/resources/plugins/mobile',
     ],
-    wasmFile: 'rust/target/wasm32-unknown-unknown/release/bedcode_plugin_auto_task.wasm',
+    wasmFile: 'rust/target/wasm32-unknown-unknown/release/bedcode_plugin_terminal_session.wasm',
   },
   {
     dir: 'plugins/file-transfer',

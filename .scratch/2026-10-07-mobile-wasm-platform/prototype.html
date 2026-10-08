@@ -1,0 +1,1777 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WasmApp Mobile · 应用运行平台 - 交互原型 v0.3（品牌对齐版）</title>
+<style>
+/* ============================================================================
+   WasmApp Mobile · 应用运行平台 交互原型
+   ----------------------------------------------------------------------------
+   本文件是「原型」，不是产品代码。落地时对应关系：
+     · 平台壳（首页 / WASM 应用 / 详情 / 我的）→ bedcode-mobile/src/views/**
+       一律引用 --mobile-* token，值取自 bedcode-mobile/src/styles/mobile.css
+     · 各 app 界面 → 由各 wasm app 自带样式（scoped / inline），
+       accent 属于 app 自带主题，不写回平台 token
+   ----------------------------------------------------------------------------
+   真源核对（改本原型前先核对，token 会被上游改动推翻）：
+     bedcode-mobile/src/styles/mobile.css:7-140     深色 token（warm 墨纸，默认）
+     bedcode-mobile/src/styles/mobile.css:158-235   浅色 token（html:not(.dark) .mobile-ui）
+     bedcode-mobile/src/styles/mobile.css:325-330   流式字号 --font-size-*（360px 基准值见下）
+     bedcode-mobile/src/styles/mobile.css:776-856   主色色板 data-palette + 色块
+     bedcode-mobile/src/styles/mobile.css:69-71     --mobile-touch-target-min: 44px
+     bedcode-mobile/src/config/terminalThemes.ts    xterm 主题（Dracula 只属于终端内容区）
+     bedcode-mobile/packages/plugin-sdk-mobile/rust/src/permission.rs:7-45  权限词汇真源
+   ============================================================================ */
+
+/* ============================================================================
+   1. 页面骨架（文档区 + 手机展示台）===纯原型载体，不属于产品 token
+   ============================================================================ */
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{
+  background:#0F0E0B;color:#ECE8DC;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","HarmonyOS Sans SC","Microsoft YaHei",sans-serif;
+  font-size:14px;line-height:1.55;
+}
+button{font:inherit;color:inherit;background:none;border:none;cursor:pointer;text-align:left}
+svg{display:block;flex-shrink:0}
+code{font-family:ui-monospace,"SF Mono","JetBrains Mono","Cascadia Code",Consolas,monospace}
+
+.page{
+  max-width:1320px;margin:0 auto;padding:28px 22px 72px;gap:36px;
+  display:grid;grid-template-columns:minmax(0,1fr) 430px;align-items:start;
+}
+@media (max-width:1060px){
+  .page{grid-template-columns:1fr;gap:28px}
+  .stage{order:-1}
+}
+
+/* ============================================================================
+   2. 手机壳（展示用设备框；把手机放进浏览器 0.5x 缩放查看）
+   ============================================================================ */
+.stage{display:flex;flex-direction:column;align-items:center;gap:14px;position:sticky;top:20px}
+.phone{
+  --p-w:390px;--p-h:844px;
+  width:var(--p-w);height:var(--p-h);position:relative;flex-shrink:0;
+  border-radius:52px;border:2px solid #3A352C;background:#000;
+  box-shadow:0 34px 90px rgba(0,0,0,.62),0 0 0 10px #171511,0 0 0 11px #2C2822;
+  overflow:hidden;isolation:isolate;
+}
+.phone::after{ /* 屏幕内斜向高光，制造玻璃面（pointer-events:none，不参与滚动） */
+  content:"";position:absolute;inset:0;z-index:100;pointer-events:none;
+  background:linear-gradient(196deg,rgba(255,255,255,.045) 0%,transparent 34%);
+}
+.island{
+  position:absolute;top:11px;left:50%;transform:translateX(-50%);
+  width:118px;height:31px;border-radius:18px;background:#000;z-index:110;
+  box-shadow:inset 0 0 0 1px #1C1A16;
+}
+.island::after{ /* 前置摄像头 */
+  content:"";position:absolute;right:11px;top:50%;transform:translateY(-50%);
+  width:9px;height:9px;border-radius:50%;background:#0B0D12;box-shadow:inset 0 0 0 1px #24272E;
+}
+.phone-hint{font-size:11.5px;color:#9C9482;text-align:center;max-width:390px;line-height:1.6}
+
+/* ============================================================================
+   3. 平台壳 token
+   ============================================================================
+   命名：--mb-* 是原型内的短别名，注释里给出它对应的上游 --mobile-* 真源。
+   深色 = 默认（html[data-theme="dark"]），浅色 = html:not(.dark) .mobile-ui 的同源值。
+   规则：app 内不得使用平台 token 之外的硬编码色（app accent 除外，见 §8）。
+   ============================================================================ */
+.phone{
+  /* 深色 token（mobile.css:7-140） */
+  --mb-bg:#15130F;              /* --mobile-bg-primary   */
+  --mb-bg-2:#191712;            /* --mobile-bg-secondary */
+  --mb-bg-3:#3C372B;            /* --mobile-bg-tertiary  */
+  --mb-card:#1D1A15;            /* --mobile-bg-card      */
+  --mb-elevated:#2A261E;        /* --mobile-bg-elevated  */
+  --mb-text:#ECE8DC;            /* --mobile-text-primary */
+  --mb-text-2:#9C9482;          /* --mobile-text-secondary */
+  --mb-text-3:#6B6455;          /* --mobile-text-muted（仅限 >=16px 或非文字用途，见 §9） */
+  --mb-text-4:#55503F;          /* --mobile-text-disabled */
+  --mb-on-accent:#15130F;       /* --mobile-text-on-accent */
+  --mb-border:rgba(236,232,220,.1);
+  --mb-border-2:rgba(236,232,220,.2);
+  --mb-border-3:rgba(236,232,220,.3);
+  --mb-accent:#ECE8DC;          /* --mobile-accent（default 色板） */
+  --mb-accent-muted:rgba(236,232,220,.12);
+  --mb-accent-2:rgba(236,232,220,.2);
+  --mb-success:#22C55E;         /* --mobile-success */
+  --mb-warn:#f59e0b;            /* --mobile-warning */
+  --mb-error:#ef4444;           /* --mobile-error   */
+  --mb-success-muted:rgba(34,197,94,.14);
+  --mb-warn-muted:rgba(245,158,11,.12);
+  --mb-error-muted:rgba(239,68,68,.12);
+  --mb-overlay:rgba(0,0,0,.6);  /* --mobile-overlay */
+  --mb-overlay-heavy:rgba(0,0,0,.8);
+  --mb-terminal-bg:#0F0D0A;     /* --mobile-terminal-bg   */
+  --mb-terminal-head:rgba(29,26,21,.9); /* --mobile-terminal-header */
+  --mb-nav-bg:rgba(21,19,15,.9);/* --mobile-nav-bg */
+  --mb-nav-border:rgba(236,232,220,.2);
+  /* 真源 --mobile-nav-inactive #6B6455 在 bg-primary 上只有 3.16:1（mobile.css:60），
+     10px 导航标签不达标；本原型改用已核对的 secondary。真源需另开修复。 */
+  --mb-nav-inactive:#9C9482;
+  --mb-input-bg:#1D1A15;
+  --mb-input-border:rgba(236,232,220,.25);
+  --mb-input-focus:rgba(236,232,220,.45);
+  --mb-input-placeholder:#55503F;
+  --mb-card-shadow:0 2px 8px rgba(0,0,0,.3),0 1px 2px rgba(0,0,0,.2);
+
+  /* 圆角：shape lock 只取三档，全部是移动端真源里已有的值，不新增层级。
+       真源 mobile.css 的完整梯子：.group-card 1rem(16) / .settings-group 0.75rem(12)
+       / .icon-chip 0.625rem(10) / 小 chip 0.5rem(8) / 状态徽标 999。
+       原型只用 12(卡片) + 10(控件) + 999(胶囊)，落地时分组卡用 16、设置组用 12，别照抄 12 当卡片。 */
+  --r-card:12px;--r-ctl:10px;--r-pill:999px;--r-icon:12px;--r-icon-lg:16px;--r-icon-sm:8px;
+  /* 品牌层：固定琥珀，**不随 data-palette / data-theme 变化**。
+     真源 .scratch/2026-10-07-wasmapp-brand/brand-spec-mobile.md §1（双色层架构）。
+     桌面端已有同样实现：components/SplashLoading.vue:226 用 #c2701a，:252 用 #ff9e2c。
+     与 UI 层的 --mb-accent 是两个互不覆盖的层：琥珀只出现在品牌位，绝不用于控件。 */
+  --brand-ember:#FF9E2C;        /* 深底图形 / 文字（8.41-8.99:1） */
+  /* 下面两档本原型未用到，保留是为了和 brand-spec-mobile.md §2.1 的色阶表一致，
+     免得落地时有人另造一个「浅底琥珀」。--brand-ember-dim 与桌面端
+     SplashLoading.vue:226 的 --splash-ember 同值。 */
+  --brand-ember-dim:#C2701A;    /* 浅底图形（3.39/3.64:1，>=3:1） */
+  --brand-ember-700:#9F621B;    /* 浅底文字（4.50/4.83:1，>=4.5:1） */
+  --brand-ink:#08090B;          /* 品牌深底 */
+  --brand-ink-2:#16181C;        /* 品牌抬升面 */
+  --brand-on-ember:#15130F;     /* 琥珀面上的文字（深底 8.99:1） */
+  /* 流式字号在 360px 处的取值（mobile.css:325-330 的 clamp 基准） */
+  --fs-xs:10px;--fs-sm:12px;--fs-base:14px;--fs-lg:16px;--fs-xl:18px;--fs-2xl:24px;
+  /* 触控目标（mobile.css:71） */
+  --touch:44px;
+  /* 动效（ANIMATIONS.md：默认 <=300ms，只动 compositor 友好属性） */
+  --t-fast:.15s;--t-base:.2s;--t-slide:.3s;--ease:cubic-bezier(.4,0,.2,1);
+  /* 安全区：真源 bedcode-mobile/src/style.css:19-25（Android WebView 不支持 env()，仅 iOS 兼容），
+     落地时对应 .mobile-header-safe / .mobile-nav-safe 两个类，不要自己写 padding 常量。 */
+  --safe-area-top:env(safe-area-inset-top,0px);
+  --safe-area-bottom:env(safe-area-inset-bottom,0px);
+
+  color:var(--mb-text);
+  background:var(--mb-bg);
+  font-size:var(--fs-base);
+  line-height:1.5;
+  transition:background-color .2s ease,color .2s ease,border-color .2s ease;
+}
+html[data-theme="light"] .phone{
+  /* 浅色 token（mobile.css:158-235） */
+  --mb-bg:#F5F4F0;
+  --mb-bg-2:#EFEDE7;
+  --mb-bg-3:#D6D2C4;
+  --mb-card:#FDFCFA;
+  --mb-elevated:#E7E4DC;
+  --mb-text:#26231B;
+  /* 真源 --mobile-text-secondary #7C7565 在 bg-page 上 4.16:1、在 bg-card 上 4.46:1，
+     均低于正文 4.5:1；本原型取最小加深值 #6E654F（page 5.25 / card 5.63 / elevated 4.54）。
+     这是真源 token 的问题，见文档区「真源本身的对比度缺口」，落地前需先改 mobile.css。 */
+  --mb-text-2:#6E654F;
+  /* 真源 --mobile-text-muted #ABA492 只有 2.26:1，不能用于任何文字；本原型不用于正文。
+     这里取真源「暖灰 muted」那一档的可读版本 #79725F（card 4.67），只用于非文字图形
+     （手势条、幽灵图标）或大字号。 */
+  --mb-text-3:#79725F;
+  /* 说明：输入框占位符实际用的是 --mb-input-placeholder（浅色 #8A8377 在页面底上 3.41:1、
+     深色 #55503F 在卡片上 2.15:1），本原型保留真源值不本地改写，见「已知偏离」。
+     --mb-text-4 仅作备用可读阶。 */
+  --mb-text-4:#7E7768;
+  /* 品牌层在浅色主题下换明度档，不换色相（brand-spec-mobile.md §2.2） */
+  --brand-ember:#9F621B;        /* 浅底上 #FF9E2C 只有 1.87:1，不可用 */
+  --brand-ember-dim:#C2701A;
+  --brand-ember-700:#9F621B;
+  --brand-on-ember:#FDFCFA;     /* 深墨面 / 深琥珀面上的浅字 */
+  --mb-on-accent:#FDFCFA;
+  --mb-border:rgba(38,35,27,.12);
+  --mb-border-2:rgba(38,35,27,.2);
+  --mb-border-3:rgba(38,35,27,.4);
+  --mb-accent:#1D1A14;
+  --mb-accent-muted:rgba(29,26,20,.08);
+  --mb-accent-2:rgba(29,26,20,.16);
+  --mb-success:#047857;
+  --mb-warn:#b45309;
+  --mb-error:#b91c1c;
+  --mb-success-muted:rgba(5,150,105,.1);
+  --mb-warn-muted:rgba(217,119,6,.1);
+  --mb-error-muted:rgba(220,38,38,.1);
+  --mb-overlay:rgba(0,0,0,.4);
+  --mb-overlay-heavy:rgba(0,0,0,.6);
+  --mb-terminal-bg:#FAF9F5;
+  --mb-terminal-head:rgba(245,244,240,.95);
+  --mb-nav-bg:rgba(253,252,250,.9);
+  --mb-nav-border:rgba(38,35,27,.1);
+  --mb-nav-inactive:#6E654F;
+  --mb-input-bg:#F5F4F0;
+  --mb-input-border:rgba(38,35,27,.2);
+  --mb-input-focus:rgba(29,26,20,.45);
+  --mb-input-placeholder:#8A8377;
+  --mb-card-shadow:0 1px 3px rgba(0,0,0,.1),0 1px 2px rgba(0,0,0,.06);
+}
+/* 主色色板（mobile.css:776-806；原型只演示 dark 变体，浅色变体见 mobile.css:808-829） */
+.phone[data-palette="forest"]{--mb-accent:#86c49b;--mb-accent-muted:rgba(134,196,155,.12);--mb-accent-2:rgba(134,196,155,.2);--mb-on-accent:#101713}
+.phone[data-palette="ocean"]{--mb-accent:#5fd0e8;--mb-accent-muted:rgba(95,208,232,.12);--mb-accent-2:rgba(95,208,232,.2);--mb-on-accent:#0b1620}
+.phone[data-palette="sunset"]{--mb-accent:#f5a383;--mb-accent-muted:rgba(245,163,131,.12);--mb-accent-2:rgba(245,163,131,.2);--mb-on-accent:#1b1210}
+.phone[data-palette="violet"]{--mb-accent:#b9a6f7;--mb-accent-muted:rgba(185,166,247,.12);--mb-accent-2:rgba(185,166,247,.2);--mb-on-accent:#141020}
+html[data-theme="light"] .phone[data-palette="forest"]{--mb-accent:#3e6b4f;--mb-accent-muted:rgba(62,107,79,.12);--mb-accent-2:rgba(62,107,79,.2);--mb-on-accent:#fdfcf7}
+html[data-theme="light"] .phone[data-palette="ocean"]{--mb-accent:#0e7490;--mb-accent-muted:rgba(14,116,144,.12);--mb-accent-2:rgba(14,116,144,.2);--mb-on-accent:#fdfcfa}
+html[data-theme="light"] .phone[data-palette="sunset"]{--mb-accent:#b45309;--mb-accent-muted:rgba(180,83,9,.12);--mb-accent-2:rgba(180,83,9,.2);--mb-on-accent:#fdfcfa}
+html[data-theme="light"] .phone[data-palette="violet"]{--mb-accent:#6d4fc6;--mb-accent-muted:rgba(109,79,198,.12);--mb-accent-2:rgba(109,79,198,.2);--mb-on-accent:#fcfbfe}
+
+/* ============================================================================
+   4. 屏幕栈与状态栏
+   ============================================================================ */
+.screen{
+  position:absolute;inset:0;display:flex;flex-direction:column;overflow:hidden;
+  background:var(--mb-bg);transform:translateX(102%);
+  transition:transform var(--t-slide) var(--ease);
+}
+.screen.cur{transform:translateX(0);z-index:1}
+.screen.left{transform:translateX(-26%);z-index:0}
+/* safe-stack z-index 取值（本原型只用到 6 档，全部落在 frontend-styles 的既有层里）
+     z-0  .screen.left（离场层）              z-50  .overlay / .switcher（模态与全屏浮层）
+     z-1  .screen.cur（当前屏）               z-100 设备玻璃高光 + 状态栏通知徽标
+     z-10 .statusbar / .tabbar / .appbar      z-110 设备灵动岛（纯设备装饰）
+   .capsule 用 z-40（dropdown 档）：它必须盖住 app 内容，但必须被 .overlay 盖住。 */
+.statusbar{
+  height:50px;flex-shrink:0;position:relative;z-index:10;
+  display:flex;align-items:flex-end;justify-content:space-between;
+  padding:var(--safe-area-top,0px) 26px 8px;font-size:12.5px;font-weight:650;letter-spacing:.2px;
+  color:var(--mb-text);
+}
+.statusbar .sicons{display:flex;gap:6px;align-items:center;opacity:.92}
+.scroll{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:none}
+.scroll::-webkit-scrollbar{display:none}
+/* 手势条是 4px 视觉条，但命中区必须是 44px（整宽可点） */
+.homebar{flex-shrink:0;display:flex;justify-content:center;align-items:center;height:var(--touch);width:100%}
+.homebar i{width:118px;height:4px;border-radius:var(--r-pill);background:var(--mb-text-3);opacity:.6}
+
+/* ============================================================================
+   5. 基础组件
+   ============================================================================ */
+.card{background:var(--mb-card);border:1px solid var(--mb-border);border-radius:var(--r-card)}
+.icon-box{
+  display:flex;align-items:center;justify-content:center;flex-shrink:0;
+  border-radius:var(--r-icon);background:var(--mb-accent-muted);color:var(--mb-accent);
+}
+/* 卡片面内部的图标块带 1px 描边（与卡片边框同源）；顶栏内的不带 */
+.card .icon-box,.sw-card .icon-box{border:1px solid var(--mb-border)}
+.dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.dot.g{background:var(--mb-success)}
+.dot.c{background:var(--mb-accent)}
+.dot.y{background:var(--mb-warn)}
+.dot.r{background:var(--mb-error)}
+/* 按压反馈：触摸设备以 active 为准（hover-only 反馈在触屏无效） */
+.tap{transition:opacity var(--t-fast) ease,transform var(--t-fast) ease}
+.tap:active{opacity:.66;transform:scale(.985)}
+:focus-visible{outline:2px solid var(--mb-accent);outline-offset:2px;border-radius:6px}
+.row{display:flex;align-items:center;gap:12px;padding:13px 16px;min-height:56px}
+.row + .row{border-top:1px solid var(--mb-border)}
+.sec{
+  display:flex;align-items:center;justify-content:space-between;gap:8px;
+  padding:18px 20px 9px;font-size:var(--fs-sm);font-weight:600;
+  color:var(--mb-text-2);letter-spacing:.3px;
+}
+/* note 是 12px 正文级信息，必须走 secondary（muted 在深色卡片上只有 2.96:1） */
+.sec .note{font-weight:400;color:var(--mb-text-2);letter-spacing:0;font-size:var(--fs-xs)}
+.badge{
+  display:inline-flex;align-items:center;height:19px;padding:0 7px;border-radius:6px;
+  font-size:var(--fs-xs);font-weight:600;letter-spacing:.2px;white-space:nowrap;
+}
+/* 运行中徽标：success 文字落在 success 叠底上，暗 6.02:1 / 浅 4.75:1（10px 正文达标）。
+   与 .badge.off 靠「彩色叠底 vs 中性叠底」区分，不能把两者做成同一个面。 */
+.badge.run{color:var(--mb-success);background:var(--mb-success-muted)}
+/* 停用徽标：text-2 在 elevated 上 浅色只有 3.60:1，改用 text 色（暗 12.29 / 浅 12.35） */
+.badge.off{color:var(--mb-text);background:var(--mb-elevated)}
+.badge.first{color:var(--mb-accent);background:var(--mb-accent-muted)}
+.chip{
+  display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 11px;
+  border:1px solid var(--mb-border-2);border-radius:var(--r-pill);
+  font-size:var(--fs-xs);color:var(--mb-text-2);white-space:nowrap;
+}
+button.chip{transition:border-color var(--t-base) ease,color var(--t-base) ease}
+button.chip:active{border-color:var(--mb-border-3);color:var(--mb-text)}
+/* 视觉高度 30px 可以，命中区域必须 >= 44px：用 ::before 撑开不可见触控区 */
+button.chip.tall{position:relative}
+button.chip.tall::before{content:"";position:absolute;left:0;right:0;top:50%;transform:translateY(-50%);height:var(--touch)}
+.btn{
+  display:flex;align-items:center;justify-content:center;gap:8px;width:100%;
+  height:var(--touch);border-radius:var(--r-ctl);font-weight:600;font-size:var(--fs-base);
+  transition:opacity var(--t-fast) ease,transform var(--t-fast) ease;
+}
+.btn:active{opacity:.78;transform:scale(.99)}
+.btn.primary{background:var(--mb-accent);color:var(--mb-on-accent)}   /* 对比 token，不用 white/black */
+.btn.ghost{border:1px solid var(--mb-border-2);color:var(--mb-text)}
+.btn.ghost:active{border-color:var(--mb-border-3)}
+.btn.danger{border:1px solid var(--mb-error-muted);color:var(--mb-error)}
+.toggle{
+  width:46px;height:28px;border-radius:var(--r-pill);background:var(--mb-elevated);
+  position:relative;flex-shrink:0;transition:background-color var(--t-base) ease;
+}
+.toggle::after{
+  content:"";position:absolute;top:3px;left:3px;width:22px;height:22px;border-radius:50%;
+  background:var(--mb-text-2);transition:transform var(--t-base) var(--ease),background-color var(--t-base) ease;
+}
+.toggle[aria-pressed="true"]{background:var(--mb-accent-2)}
+.toggle[aria-pressed="true"]::after{transform:translateX(18px);background:var(--mb-accent)}
+.pkey{
+  font-family:ui-monospace,"SF Mono",Consolas,monospace;font-size:10.5px;font-weight:400;
+  color:var(--mb-text-2);background:var(--mb-elevated);border-radius:5px;padding:1px 5px;margin-left:6px;
+}
+.mono{font-family:ui-monospace,"SF Mono","JetBrains Mono","Cascadia Code",Consolas,monospace}
+.bar{height:5px;border-radius:var(--r-pill);background:var(--mb-elevated);overflow:hidden}
+.bar i{display:block;height:100%;border-radius:var(--r-pill);background:var(--app-accent,var(--mb-success))}
+.empty{
+  display:flex;flex-direction:column;align-items:center;gap:8px;text-align:center;
+  padding:34px 26px;color:var(--mb-text-2);font-size:var(--fs-sm);
+}
+.empty b{color:var(--mb-text);font-size:var(--fs-base)}
+.plabel{padding:11px 16px 3px;font-size:var(--fs-xs);font-weight:600;color:var(--mb-text-2)}
+
+/* ============================================================================
+   6. 底部导航 / 顶部栏
+   ============================================================================ */
+.tabbar{
+  flex-shrink:0;display:flex;gap:2px;position:relative;z-index:10;
+  padding:6px 8px calc(8px + var(--safe-area-bottom,0px));border-top:1px solid var(--mb-nav-border);
+  background:var(--mb-nav-bg);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
+}
+.tabbar button{
+  flex:1;min-height:var(--touch);display:flex;flex-direction:column;align-items:center;
+  justify-content:center;gap:4px;border-radius:var(--r-ctl);
+  font-size:var(--fs-xs);font-weight:500;color:var(--mb-nav-inactive);
+  transition:color var(--t-base) ease;
+}
+.tabbar button[aria-current="page"]{color:var(--mb-accent);font-weight:600}
+/* 真源用「指示条」表达激活态（mobile.css:56）；只靠文字色在暗色下差值 2.46，低于非文字 3:1 */
+.tabbar button{position:relative}
+.tabbar button[aria-current="page"]::before{
+  content:"";position:absolute;top:0;left:50%;transform:translateX(-50%);
+  width:26px;height:2.5px;border-radius:2px;background:var(--mb-accent);
+}
+.appbar{
+  flex-shrink:0;display:flex;align-items:center;gap:11px;padding:4px 18px 13px;
+  border-bottom:1px solid var(--mb-border);position:relative;z-index:10;
+}
+.appbar .t1{font-weight:700;font-size:var(--fs-lg)}
+.appbar .t2{font-size:var(--fs-xs);color:var(--mb-text-2);margin-top:1px}
+/* app 胶囊：平台叠加在 app 全屏界面右上角的唯一控件（··· 菜单 / ◎ 退出） */
+.capsule{
+  position:absolute;top:52px;right:14px;z-index:40;display:flex;align-items:center;
+  background:var(--mb-bg-2);border:1px solid var(--mb-border-2);border-radius:var(--r-pill);
+  overflow:hidden;box-shadow:var(--mb-card-shadow);opacity:.96;
+  backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+}
+.capsule button{width:46px;height:32px;display:flex;align-items:center;justify-content:center;transition:opacity var(--t-fast) ease}
+.capsule button:active{opacity:.6}
+.capsule .div{width:1px;height:16px;background:var(--mb-border-2)}
+.hdr{padding:10px 20px 14px}
+.hdr h2{font-size:var(--fs-2xl);font-weight:700;letter-spacing:-.2px}
+.hdr p{margin-top:3px;font-size:var(--fs-sm);color:var(--mb-text-2)}
+/* app 自带顶栏：平台壳不接管，渐变从该 app 的 --app-accent-muted 推导 */
+.appbar2 .icon-box,.appbar .icon-box{border-radius:var(--r-icon);background:var(--app-accent-muted);color:var(--app-accent)}
+.appbar2{
+  flex-shrink:0;display:flex;align-items:center;gap:11px;padding:4px 18px 13px;
+  border-bottom:1px solid var(--mb-border);
+  /* 渐变起点正好在文字角落：12% 下浅色 t2 只有 4.45:1，减到 6% 得 4.84:1，
+     app 辨识度靠色相而非浓度。color-mix 在移动端真源里已在使用（如
+     views/SessionsView.vue:506），不是新引入的语法。 */
+  background:linear-gradient(135deg,color-mix(in srgb,var(--app-accent-muted) 50%,transparent),transparent 78%);
+}
+.appbar2 .t1{font-weight:700;font-size:var(--fs-lg)}
+.appbar2 .t2{font-size:var(--fs-xs);color:var(--mb-text-2);margin-top:1px}
+.backrow{display:flex;align-items:center;gap:2px;padding:6px 12px 4px}
+.backrow button{
+  width:var(--touch);height:var(--touch);display:flex;align-items:center;justify-content:center;
+  border-radius:var(--r-ctl);color:var(--mb-text);transition:background-color var(--t-base) ease;
+}
+.backrow button:active{background:var(--mb-accent-muted)}
+.backrow .title{font-weight:700;font-size:var(--fs-lg)}
+
+/* ============================================================================
+   7. 平台首页
+   ============================================================================ */
+.hero{
+  display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:6px 20px 16px;
+}
+.hero .ident{display:flex;align-items:center;gap:11px;min-width:0}
+.hero .ident .name{font-weight:700;font-size:var(--fs-lg);letter-spacing:.2px}
+.hero .ident .sub{font-size:var(--fs-xs);color:var(--mb-text-2);margin-top:1px}
+/* 品牌位：标志与字标固定在琥珀层，不跟随用户色板（brand-spec-mobile.md §1）。
+   注意：应用格子里的图标不是品牌位，各自保留自己的标识与颜色。 */
+.brand-tile{
+  display:flex;align-items:center;justify-content:center;flex-shrink:0;
+  border-radius:var(--r-icon);
+  background:linear-gradient(135deg,var(--brand-ink-2),var(--brand-ink));
+  border:1px solid var(--mb-border);
+}
+.brand-word{font-size:var(--fs-lg);font-weight:700;letter-spacing:-.4px;color:var(--mb-text)}
+.brand-word em{font-style:normal;color:var(--brand-ember)}
+.iconbtn{
+  width:var(--touch);height:var(--touch);display:flex;align-items:center;justify-content:center;
+  border:1px solid var(--mb-border-2);border-radius:var(--r-ctl);background:var(--mb-card);
+  color:var(--mb-text-2);position:relative;transition:border-color var(--t-base) ease,color var(--t-base) ease;
+}
+.iconbtn:active{border-color:var(--mb-border-3);color:var(--mb-text)}
+.iconbtn .dot{position:absolute;top:9px;right:10px}
+/* 首页槽位：由 app 贡献的卡片，横向滚动 */
+.slots{display:flex;gap:12px;overflow-x:auto;padding:2px 20px 6px;scrollbar-width:none}
+.slots::-webkit-scrollbar{display:none}
+.slot{min-width:268px;max-width:268px;padding:14px;display:flex;flex-direction:column;gap:10px}
+.slot .from{display:flex;align-items:center;gap:7px;font-size:var(--fs-xs);color:var(--mb-text-2)}
+.slot .big{display:flex;align-items:baseline;gap:8px}
+.slot .big .num{font-size:26px;font-weight:700;line-height:1;letter-spacing:-.5px}
+.slot .big .unit{font-size:var(--fs-sm);color:var(--mb-text-2)}
+.slot .line{font-size:var(--fs-xs);color:var(--mb-text-2)}
+.slot .quote{
+  font-size:var(--fs-sm);color:var(--mb-text-2);line-height:1.5;
+  overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;
+}
+.grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;padding:0 14px}
+.appcell{
+  display:flex;flex-direction:column;align-items:center;gap:8px;padding:12px 2px 14px;
+  border-radius:var(--r-card);position:relative;color:var(--mb-text-2);
+  font-size:var(--fs-xs);transition:background-color var(--t-base) ease;
+}
+.appcell:active{background:var(--mb-accent-muted)}
+.appcell .name{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.appcell .run{position:absolute;top:9px;right:calc(50% - 27px)}
+/* 图标方块的圆角档：按「圆角 / 边长」落在真源 icon 带（0.25 到 0.33）内取值。
+     30px 小格 -> 8px(0.27)，36-44px -> 12px(0.27-0.33)，52px -> 16px(0.31)，60px -> 16px(0.27)。 */
+.sw-card .icon-box{--r-icon:var(--r-icon-sm)}
+.appcell .ib{width:52px;height:52px;border-radius:var(--r-icon-lg);display:flex;align-items:center;justify-content:center;flex-shrink:0;border:1px solid var(--mb-border)}
+.appcell .ib.ghost{border-style:dashed;background:transparent;color:var(--mb-text-3)}
+.recent{display:flex;gap:8px;overflow-x:auto;padding:0 20px 26px;scrollbar-width:none}
+.recent::-webkit-scrollbar{display:none}
+
+/* ============================================================================
+   8. app 自带主题
+   ============================================================================
+   平台规则：平台只有一个 accent（--mb-accent）。app accent 由 app 自带，
+   只作用于该 app 容器与首页上「由该 app 贡献」的元素，不写回平台 token。
+   注意：--app-* 定义在 .phone 上而不是 .screen 上。首页的槽位卡片是 .screen 的
+   兄弟节点，若定义在 .screen 上，自定义属性不会继承到首页，会退化成无效值。
+   落地时这些值由各 wasm app 自己声明。Dracula 只用于终端内容区的语法着色。
+   ============================================================================ */
+.phone{--app-accent:#ECE8DC;--app-accent-muted:rgba(236,232,220,.12)}
+.phone{--app-ai:#b9a6f7;--app-ai-muted:rgba(185,166,247,.14)}
+.phone{--app-ft:#4ad6a4;--app-ft-muted:rgba(74,214,164,.14)}
+html[data-theme="light"] .phone{--app-accent:#1D1A14;--app-accent-muted:rgba(29,26,20,.08)}
+html[data-theme="light"] .phone{--app-ai:#6d4fc6;--app-ai-muted:rgba(109,79,198,.12)}
+html[data-theme="light"] .phone{--app-ft:#047857;--app-ft-muted:rgba(4,120,87,.12)}
+
+#s-terminal{
+  --app-accent:#ECE8DC;--app-accent-muted:rgba(236,232,220,.12);
+  --app-bg:#0F0D0A;                       /* --mobile-terminal-bg */
+  --app-head:rgba(29,26,21,.9);           /* --mobile-terminal-header */
+}
+#s-aichat{
+  --app-accent:var(--app-ai);--app-accent-muted:var(--app-ai-muted);
+  --app-bg:var(--mb-bg);
+}
+#s-files{
+  --app-accent:var(--app-ft);--app-accent-muted:var(--app-ft-muted);
+  --app-bg:var(--mb-bg);
+}
+html[data-theme="light"] #s-terminal{--app-accent:#1D1A14;--app-accent-muted:rgba(29,26,20,.08);--app-bg:#FAF9F5;--app-head:rgba(245,244,240,.95)}
+#s-terminal,#s-aichat,#s-files{background:var(--app-bg)}
+/* 首页上按 app 着色的槽位与图标块（用 per-app 类，不用继承） */
+.accent-ai{color:var(--app-ai)}
+.accent-ft{color:var(--app-ft)}
+.bg-ai{background:var(--app-ai-muted);color:var(--app-ai)}
+.bg-ft{background:var(--app-ft-muted);color:var(--app-ft)}
+.dot.app-ai{background:var(--app-ai)}
+.dot.app-ft{background:var(--app-ft)}
+/* 终端图标块是近黑底 + cyan 字形；浅色下换成暖白底，否则近黑块在浅色页上过重 */
+.ib-term,.bg-term{
+  background:#0F0D0A;border-color:rgba(236,232,220,.14);color:#8be9fd;
+}
+html[data-theme="light"] .ib-term,html[data-theme="light"] .bg-term{
+  background:#EFEDE7;border-color:rgba(38,35,27,.12);color:#0B6E86;
+}
+/* 首页槽位正文（14px 600）用 --mb-text，app accent 只用于来源标签（12px，需 >=4.5:1） */
+.slot .from .app{font-weight:600}
+
+/* ---- 终端 app ---- */
+.term-status{
+  flex-shrink:0;display:flex;align-items:center;gap:9px;padding:6px 18px 11px;
+  border-bottom:1px solid var(--app-head);
+}
+.term-status .t1{font-weight:600;font-size:var(--fs-base);color:var(--app-accent)}
+.term-status .t2{font-size:var(--fs-xs);color:var(--mb-text-2);margin-top:1px}
+.term-body{flex:1;min-height:0;overflow-y:auto;padding:10px 16px 14px;font-size:12.5px;line-height:1.75;color:#ECE8DC}
+#s-terminal .term-body{color:#ECE8DC}
+html[data-theme="light"] .term-body{color:#26231B}
+/* Dracula 语法色（terminalThemes.ts 同源），只作用于终端内容区 */
+.tk{color:#50fa7b}
+.tc{color:#8be9fd}
+.ty{color:#f1fa8c}
+.td{color:#6272a4}
+html[data-theme="light"] .tk{color:#0F7A3D}
+html[data-theme="light"] .tc{color:#0B6E86}
+html[data-theme="light"] .ty{color:#7A5B00}
+html[data-theme="light"] .td{color:#5B6B7C}
+.caret{display:inline-block;width:8px;height:15px;vertical-align:-3px;background:#8be9fd}
+html[data-theme="light"] .caret{background:#0B6E86}
+.term-kbd{
+  flex-shrink:0;display:flex;gap:8px;padding:9px 12px 11px;
+  border-top:1px solid var(--mb-border);background:var(--app-head);
+  backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);
+}
+.kbd{
+  height:var(--touch);min-width:46px;padding:0 12px;display:flex;align-items:center;justify-content:center;
+  border-radius:var(--r-ctl);background:var(--mb-elevated);border:1px solid var(--mb-border);
+  font-size:var(--fs-sm);font-weight:600;color:var(--app-accent);
+  transition:opacity var(--t-fast) ease;
+}
+.kbd:active{opacity:.65}
+.kbd.field{flex:1;justify-content:flex-start;font-weight:400;color:var(--mb-input-placeholder);border-color:var(--mb-input-border)}
+
+/* ---- AI Chatbox app ---- */
+.thread{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:12px;padding:16px 0}
+.bubble{max-width:80%;padding:10px 13px;border-radius:16px;font-size:var(--fs-base);margin:0 16px;line-height:1.55}
+.bubble.me{margin-left:auto;background:var(--app-accent);color:var(--mb-on-accent);border-bottom-right-radius:5px}
+/* ai 气泡用 elevated 面：浅色下 --mb-card #FDFCFA 与页面 #F5F4F0 几乎同色，气泡会糊掉 */
+.bubble.ai{background:var(--mb-elevated);border:1px solid var(--mb-border);border-bottom-left-radius:5px}
+.bubble .code{
+  display:block;margin-top:5px;padding:5px 7px;border-radius:6px;
+  /* 气泡自身就是 elevated：代码块必须换面才看得见（同面时 1.00:1） */
+  background:var(--mb-bg-2);border:1px solid var(--mb-border);font-size:11.5px;word-break:break-all;
+}
+.composer{
+  flex-shrink:0;display:flex;gap:9px;align-items:center;padding:10px 14px 14px;
+  border-top:1px solid var(--mb-border);background:var(--mb-nav-bg);
+  backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);
+}
+.composer .field{
+  flex:1;min-width:0;height:var(--touch);display:flex;align-items:center;padding:0 14px;
+  border-radius:var(--r-ctl);background:var(--mb-input-bg);border:1px solid var(--mb-input-border);
+  color:var(--mb-input-placeholder);font-size:var(--fs-sm);
+}
+.composer .send{
+  width:var(--touch);height:var(--touch);border-radius:var(--r-ctl);background:var(--app-accent);
+  color:var(--mb-on-accent);display:flex;align-items:center;justify-content:center;flex-shrink:0;
+  transition:opacity var(--t-fast) ease;
+}
+.composer .send:active{opacity:.75}
+.typing{display:flex;gap:4px;align-items:center;padding:11px 13px}
+.typing i{width:6px;height:6px;border-radius:50%;background:var(--mb-text-3);animation:blip 1.1s infinite ease-in-out}
+.typing i:nth-child(2){animation-delay:.16s}
+.typing i:nth-child(3){animation-delay:.32s}
+@keyframes blip{0%,60%,100%{opacity:.35;transform:translateY(0)}30%{opacity:1;transform:translateY(-3px)}}
+
+/* ---- 文件传输 app ---- */
+.ft-item{display:flex;align-items:center;gap:12px;padding:12px 16px}
+.ft-item + .ft-item{border-top:1px solid var(--mb-border)}
+.ft-item .meta{flex:1;min-width:0}
+.ft-item .fname{font-size:var(--fs-base);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ft-item .fsub{font-size:var(--fs-xs);color:var(--mb-text-2);margin-top:1px}
+.ft-item .bar{margin-top:7px}
+.ft-item .pct{font-size:var(--fs-sm);font-weight:600;color:var(--app-accent)}
+
+/* ============================================================================
+   9. 多任务
+   ============================================================================ */
+/* 多任务页是 app 内的全屏面，不是遮罩：用主题自己的 elevated 面。
+   之前用 --mb-overlay-heavy 做自身底色，浅色主题下会变成深底 + 深字（1.86:1，几乎不可见）。 */
+.switcher{background:var(--mb-bg-2);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
+.switcher .top{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 22px 12px}
+.switcher .top .t{font-weight:700;font-size:var(--fs-lg)}
+.sw-track{
+  flex:1;min-height:0;display:flex;gap:16px;overflow-x:auto;align-items:center;
+  padding:8px 58px 12px;scrollbar-width:none;scroll-snap-type:x mandatory;
+}
+.sw-track::-webkit-scrollbar{display:none}
+.sw-card{
+  min-width:248px;height:462px;scroll-snap-align:center;border-radius:20px;overflow:hidden;
+  border:1px solid var(--mb-border-2);background:var(--mb-card);display:flex;flex-direction:column;
+  box-shadow:0 18px 44px rgba(0,0,0,.45);transition:transform var(--t-base) var(--ease);
+}
+.sw-card:active{transform:scale(.975)}
+/* 卡片面 vs 多任务底色只有 1.03(暗)/1.14(浅)，边界必须靠描边承担 -> 用 border-3 */
+.switcher .sw-card{border-color:var(--mb-border-3);box-shadow:0 18px 44px rgba(0,0,0,.45),0 0 0 1px var(--mb-border)}
+.sw-card .bar-top{display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid var(--mb-border)}
+.sw-card .bar-top .n{font-weight:600;font-size:var(--fs-sm)}
+.sw-mini{flex:1;min-height:0;overflow:hidden;position:relative}
+.sw-foot{padding:0 24px 26px;text-align:center;font-size:var(--fs-xs);color:var(--mb-text-2);line-height:1.6}
+.sw-empty{
+  margin:auto;text-align:center;color:var(--mb-text-2);font-size:var(--fs-sm);
+  display:flex;flex-direction:column;align-items:center;gap:10px;padding:0 40px;
+}
+
+/* ============================================================================
+   10. 覆盖层（bottom sheet）
+   ============================================================================ */
+.overlay{
+  position:absolute;inset:0;z-index:50;display:flex;align-items:flex-end;
+  background:var(--mb-overlay);opacity:0;pointer-events:none;transition:opacity .25s ease;
+}
+.overlay.show{opacity:1;pointer-events:auto}
+.sheet{
+  width:100%;max-height:88%;overflow-y:auto;background:var(--mb-bg-2);
+  border-radius:22px 22px 0 0;border-top:1px solid var(--mb-border-2);
+  padding:10px 20px calc(20px + var(--safe-area-bottom,0px));transform:translateY(100%);
+  transition:transform .25s var(--ease);
+  box-shadow:0 -18px 44px rgba(0,0,0,.4);
+}
+.overlay.show .sheet{transform:translateY(0)}
+.grabber{width:38px;height:4px;border-radius:var(--r-pill);background:var(--mb-border-3);margin:0 auto 14px}
+.sheet h3{font-size:var(--fs-lg);font-weight:700}
+.sheet .sub{font-size:var(--fs-sm);color:var(--mb-text-2);margin-top:2px}
+.sheet .fineprint{font-size:var(--fs-xs);color:var(--mb-text-2);line-height:1.6;padding:2px 2px 14px}
+.sheet .actions{display:flex;gap:10px}
+.sheet .actions .btn{flex:1}
+.srow{display:flex;align-items:flex-start;gap:11px;padding:13px 14px}
+.srow + .srow{border-top:1px solid var(--mb-border)}
+.srow .body{flex:1;min-width:0}
+.srow .k{font-weight:600;font-size:var(--fs-base)}
+.srow .v{font-size:var(--fs-xs);color:var(--mb-text-2);margin-top:2px;word-break:break-all}
+.srow .why{font-size:var(--fs-xs);color:var(--mb-text-2);margin-top:4px}
+.scrim-note{font-size:var(--fs-xs);color:var(--mb-text-2);text-align:center;padding-top:10px}
+
+/* ============================================================================
+   11. 文档区（原型说明，不属于产品 UI）
+   ============================================================================ */
+.doc{color:#B5AE9E;font-size:13.5px;max-width:64ch}
+.doc h1{color:#ECE8DC;font-size:25px;font-weight:700;letter-spacing:-.2px;line-height:1.3}
+.doc h1 .tag{
+  display:inline-block;font-size:11px;font-weight:600;color:#15130F;background:#ECE8DC;
+  border-radius:7px;padding:3px 9px;vertical-align:3px;margin-left:10px;letter-spacing:.3px;
+}
+.doc .lede{margin-top:10px;color:#9C9482}
+.doc h2{
+  color:#ECE8DC;font-size:15px;font-weight:700;margin:30px 0 10px;
+  padding-bottom:8px;border-bottom:1px solid rgba(236,232,220,.1);
+}
+.doc h3{color:#ECE8DC;font-size:13.5px;font-weight:650;margin:18px 0 6px}
+.doc p{margin:7px 0}
+.doc ul{margin:6px 0 6px 17px}
+.doc li{margin:5px 0;padding-left:2px}
+.doc li::marker{color:#8A8172}  /* 原 #6B6455 只有 3.29:1，取 5.02:1 的层次色 */
+.doc b{color:#ECE8DC;font-weight:650}
+.doc code{color:#ECE8DC;background:rgba(236,232,220,.1);border-radius:5px;padding:1px 5px;font-size:12px}
+.doc a{color:#ECE8DC}
+/* 说明：手机内的控件一律不用 :hover 反馈（触屏无效），只用 .tap 的 :active。
+   上面三条 :hover 只作用于左侧说明栏，且已用 @media (hover:hover) 限定鼠标设备。 */
+.kbd-hint{font-size:12px;color:#9C9482;margin-top:12px;line-height:1.65}
+.panel{border:1px solid rgba(236,232,220,.14);border-radius:12px;padding:14px 16px;margin-top:12px;background:rgba(236,232,220,.03)}
+.panel.warn{border-color:rgba(245,158,11,.4);background:rgba(245,158,11,.07)}
+.panel.ok{border-color:rgba(34,197,94,.32);background:rgba(34,197,94,.06)}
+.finding{display:flex;gap:10px;padding:11px 0;border-bottom:1px solid rgba(236,232,220,.08)}
+.finding:last-child{border-bottom:none}
+.finding .sev{
+  flex-shrink:0;width:30px;height:19px;border-radius:6px;font-size:10px;font-weight:700;
+  display:flex;align-items:center;justify-content:center;letter-spacing:.4px;
+}
+.sev.p0{background:rgba(239,68,68,.18);color:#FF9B9B}
+.sev.p1{background:rgba(245,158,11,.18);color:#FFC978}
+.sev.p2{background:rgba(236,232,220,.12);color:#CFC7B6}
+.finding .txt{flex:1;min-width:0}
+.finding .txt .h{color:#ECE8DC;font-weight:600;font-size:13px}
+.finding .txt .d{margin-top:2px;font-size:12.5px;color:#9C9482}
+.finding .txt .d code{font-size:11.5px}
+table{border-collapse:collapse;width:100%;margin-top:10px;font-size:12.5px}
+th,td{text-align:left;padding:7px 9px;border-bottom:1px solid rgba(236,232,220,.1);vertical-align:top}
+th{color:#ECE8DC;font-weight:600;font-size:11.5px;letter-spacing:.3px;text-transform:uppercase}
+td.n{font-family:ui-monospace,Consolas,monospace;white-space:nowrap}
+td .pass{color:#6EE7A8;font-weight:600}
+td .fail{color:#FF9B9B;font-weight:600}
+.nav-list{display:flex;flex-direction:column;gap:6px;margin-top:10px}
+.nav-list button{
+  display:flex;align-items:center;gap:11px;padding:11px 13px;min-height:var(--touch);
+  border:1px solid rgba(236,232,220,.12);border-radius:11px;background:#17150F;
+  color:#9C9482;font-size:13px;transition:border-color var(--t-base) ease,color var(--t-base) ease,background-color var(--t-base) ease;
+}
+@media (hover:hover){.nav-list button:hover{border-color:rgba(236,232,220,.28);color:#ECE8DC}}
+.nav-list button.on{border-color:#ECE8DC;color:#ECE8DC;background:rgba(236,232,220,.08)}
+.nav-list .n{
+  width:20px;height:20px;border-radius:6px;background:rgba(236,232,220,.1);
+  display:flex;align-items:center;justify-content:center;font-size:10.5px;font-weight:700;flex-shrink:0;
+}
+.nav-list button.on .n{background:#ECE8DC;color:#15130F}
+.ctrls{display:flex;flex-wrap:wrap;gap:9px;margin-top:12px;align-items:center}
+.ctrls .lbl{font-size:12px;color:#9C9482;width:58px}
+.seg{display:flex;border:1px solid rgba(236,232,220,.14);border-radius:10px;overflow:hidden}
+.seg button{
+  padding:0 13px;height:36px;display:flex;align-items:center;gap:6px;font-size:12.5px;color:#9C9482;
+  transition:background-color var(--t-base) ease,color var(--t-base) ease;
+}
+@media (hover:hover){.seg button:hover{color:#ECE8DC}}
+.seg button[aria-pressed="true"]{background:#ECE8DC;color:#15130F;font-weight:600}
+.swatches{display:flex;gap:8px}
+.swatches button{
+  width:34px;height:34px;border-radius:10px;border:1px solid rgba(236,232,220,.2);
+  transition:transform var(--t-fast) ease,border-color var(--t-base) ease;
+}
+@media (hover:hover){.swatches button:hover{transform:translateY(-1px)}}
+.swatches button[aria-pressed="true"]{border-color:#ECE8DC;box-shadow:0 0 0 2px rgba(236,232,220,.25)}
+.legend{display:flex;gap:8px;flex-wrap:wrap;max-width:390px}
+.legend .chip{font-size:11px;height:26px}
+.legend .dot{width:8px;height:8px;border-radius:3px}
+
+/* ============================================================================
+   12. 无障碍：reduced motion / reduced transparency
+   ============================================================================ */
+@media (prefers-reduced-motion: reduce){
+  *{animation-duration:.001ms !important;animation-iteration-count:1 !important;transition-duration:.001ms !important}
+  .screen{transform:none;opacity:0;visibility:hidden}
+  .screen.cur{opacity:1;visibility:visible}
+  .screen.left{transform:none;opacity:0;visibility:hidden}
+  .sheet{transform:none}
+  .overlay{transition:none}
+}
+@media (prefers-reduced-transparency: reduce){
+  .tabbar,.capsule,.composer,.term-kbd,.switcher{backdrop-filter:none;-webkit-backdrop-filter:none}
+  .tabbar{background:var(--mb-bg-2)}
+  .capsule,.composer,.term-kbd{background:var(--mb-bg-2)}
+  .switcher{background:var(--mb-bg-2)}
+  .overlay{background:var(--mb-overlay)}
+}
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- ======================================================================
+       文档区
+       ====================================================================== -->
+  <main class="doc">
+    <h1>WasmApp Mobile · 应用运行平台<span class="tag">原型 v0.3 · 品牌对齐版</span></h1>
+    <p class="lede">移动端重构为 <b>WASM 应用运行平台</b>：终端、文件传输、AI Chatbox 各自成为独立 WASM 应用，在平台上运行、被统一治理；连接由各应用独立持有（平台无全局连接）。交互形态对齐「本地版小程序」。</p>
+
+    <h2>本次评审改了什么（v0.1 → v0.2）</h2>
+    <div class="panel warn">
+      <div class="finding">
+        <span class="sev p0">P0</span>
+        <div class="txt"><div class="h">v0.1 的色板不是移动端的真源</div>
+        <div class="d">v0.1 用的是 Dracula 暗色（<code>#0a0a0f</code> + neon cyan <code>#00d4ff</code>）。核对仓库后：移动端真源是 <b>warm 墨纸</b>（<code>--mobile-bg-primary #15130F</code> / <code>--mobile-accent #ECE8DC</code>，见 <code>mobile.css:7-140</code>）。<code>#00d4ff</code> 只存在于终端 xterm 主题（<code>config/terminalThemes.ts:66</code>）。v0.1 文档里「视觉真源沿用移动端既有 Dracula 暗色」是错的，本版已改为真源值，并把 Dracula 收回到终端内容区的语法着色。</div></div>
+      </div>
+      <div class="finding">
+        <span class="sev p0">P0</span>
+        <div class="txt"><div class="h">版本号是幻觉</div>
+        <div class="d">v0.1 写「wasmtime 47」，实际双端锁 <b>48</b>（<code>desktop/src-tauri/Cargo.toml:95</code> / <code>mobile/src-tauri/Cargo.toml:83</code>，ADR 0019）；写「v2.0.0」，实际 <b>2.1.1</b>（<code>bedcode-mobile/package.json:3</code>）。本版已按真值修正。</div></div>
+      </div>
+      <div class="finding">
+        <span class="sev p0">P0</span>
+        <div class="txt"><div class="h">小字对比度不达标</div>
+        <div class="d">v0.1 用 <code>#6b7280</code> 做 11px 辅助文字：在 <code>#0a0a0f</code> 上 4.09:1、在卡片 <code>#12121a</code> 上 3.85:1，均低于正文 4.5:1。<code>#4b5563</code> 更低（2.61:1）。本版改用真源 <code>--mobile-text-secondary #9C9482</code>（5.76:1）承载辅助文字，<code>--mobile-text-muted</code> 只留非文字用途。</div></div>
+      </div>
+      <div class="finding">
+        <span class="sev p1">P1</span>
+        <div class="txt"><div class="h">只有暗色、没有浅色；色板不可切换</div>
+        <div class="d">真源含浅色 token（<code>mobile.css:158-235</code>）与 5 档主色色板（<code>mobile.css:776-856</code>）。本版补齐主题切换 + 色板切换，两者都按真源值。</div></div>
+      </div>
+      <div class="finding">
+        <span class="sev p1">P1</span>
+        <div class="txt"><div class="h">缺无障碍基线</div>
+        <div class="d">v0.1 无 <code>prefers-reduced-motion</code>、无 <code>prefers-reduced-transparency</code>、无 <code>:focus-visible</code>、开关是 <code>&lt;span onclick&gt;</code>、行是 <code>&lt;div class="row"&gt;</code>、状态点被当作装饰撒在列表上。本版全部改为语义元素并补齐降级。</div></div>
+      </div>
+      <div class="finding">
+        <span class="sev p1">P1</span>
+        <div class="txt"><div class="h">破折号与死代码</div>
+        <div class="d">v0.1 含 <b>31 个 em-dash（U+2014，分布在 17 行；其中 1 行是 CSS 注释，其余 29 个在可见文案里）</b>，en-dash 为 0，是典型的 AI 生成痕迹；本版可见文案 U+2014 / U+2013 计数为 0。另有 <b>9 条 <code>opacity="0"/".0"</code> 隐藏路径 + 1 条零长度路径（共 10 条不渲染路径）</b>与 2 条重复变体，已全部删除；无用的 <code>back()</code> 与未读取的 <code>sc</code> 变量也已移除。</div></div>
+      </div>
+      <div class="finding">
+        <span class="sev p0">P0</span>
+        <div class="txt"><div class="h">伪造的应用身份与版本号</div>
+        <div class="d">v0.1 的详情页写 <code>com.bedcode.terminal · v1.4.2</code>。仓库里<b>没有这个 plugin id</b>（唯一的终端是桌面侧 <code>terminal-session</code>，id <code>com.bedcode.terminal-session</code>，<code>type: internal-business</code>，版本 <code>1.0.0-beta</code>）；三个移动插件真实版本也全是 <code>1.0.0-beta</code>，不是 <code>v1.4.2 / v0.9.1 / v0.6.0 / v0.3.2</code>。本版已删掉伪造 id 与假版本号，改为仓库真值；应用清单加「示例数据（非真实清单）」标注。<b>未改</b>的是「官方」徽标与各项体积 / 延迟数字：仓库里没有「官方」这一分类概念，数字也无从核对，落地前必须由数据源替换（属产品数据问题，不属设计问题）。</div></div>
+      </div>
+      <div class="finding">
+        <span class="sev p1">P1</span>
+        <div class="txt"><div class="h">自相矛盾的计数</div>
+        <div class="d">详情页渲染 <b>10 行权限</b>却标「8 项已授权」，且 <code>storage</code> 明明是「默认授予」却用 <code>badge off</code>（停用样式）。本版按渲染行数改为「9 项已授予 · 1 项默认」，<code>storage</code> 改用已授予样式。</div></div>
+      </div>
+      <div class="finding">
+        <span class="sev p1">P1</span>
+        <div class="txt"><div class="h">缺安全区契约与 z-index 层级纪律</div>
+        <div class="d">v0.1 无 <code>env(safe-area-*)</code>、底部内边距写死 <code>calc(10px + 4px)</code>；z-index 出现 4 / 5 / 55 / 60 等自造层。本版接入 <code>--safe-area-top/bottom</code>（真源 <code>src/style.css:19-25</code>，落地对应 <code>mobile-header-safe</code> / <code>mobile-nav-safe</code>），并把 z-index 收敛到 safe-stack 的 6 档（见 §3 注释）。</div></div>
+      </div>
+      <div class="finding">
+        <span class="sev p1">P1</span>
+        <div class="txt"><div class="h">命名与真源不一致</div>
+        <div class="d">清单里插件真名是 <b>AI Chatbox</b>（小写 b），v0.1 全文写成 <code>AI ChatBox</code>。本版按 manifest 统一为 <code>AI Chatbox</code>。</div></div>
+      </div>
+    </div>
+
+    <h2>品牌对齐（v0.3 新增）</h2>
+    <div class="panel ok">
+      <p>应用 <code>.scratch/2026-10-07-wasmapp-brand/brand-spec-mobile.md</code> 的双色层架构：<b>品牌琥珀固定，平台色板可切，两层永不互相覆盖</b>。</p>
+      <table>
+        <thead><tr><th>层</th><th>取值</th><th>出现在哪</th><th>谁决定</th></tr></thead>
+        <tbody>
+          <tr><td><b>品牌层</b></td><td class="n">--brand-ember #FF9E2C</td><td>标志、字标、品牌位圆点</td><td>品牌（不可配置）</td></tr>
+          <tr><td><b>UI 层</b></td><td class="n">--mb-accent</td><td>按钮、开关、选中态、进度条</td><td>用户在「外观」里切换</td></tr>
+        </tbody>
+      </table>
+      <p style="margin-top:12px">落地改动四处：</p>
+      <ul>
+        <li><b>顶栏换成品牌标志 + 字标</b>：<code>Wasm&lt;em&gt;App&lt;/em&gt;</code>，<code>App</code> 用琥珀。原先是通用四格网格图标 + <code>BedCode</code> 文字。</li>
+        <li><b>产品名改为 WasmApp</b>（标题 / 顶栏 / 关于页 / 设置行）。桌面端 <code>tauri.conf.json</code> 的 <code>productName</code> 已是 <code>WasmApp</code>，这次是把移动端原型对齐过去。</li>
+        <li><b>标志不再跟随用户色板</b>。v0.2 的标志位用的是 <code>--mb-accent</code>，用户切到海蓝时标志会变青色，这是错的；现在固定琥珀。</li>
+        <li><b>浅色主题换明度档，不换色相</b>：<code>#FF9E2C</code> 在浅底只有 1.87:1，浅色主题下自动切到 <code>#9F621B</code>（文字 4.50/4.83:1）或 <code>#C2701A</code>（图形 3.39/3.64:1）。</li>
+      </ul>
+      <p><b>没有改的</b>：各 app 的图标与自带主题色（终端 cyan、AI violet、传输 emerald）保持原样。品牌规范只约束品牌层，app 图标是各自开发者的标识，不是 WasmApp 的品牌位；把四个 app 图标都刷成琥珀反而会丢掉「多应用」这条核心语义。</p>
+      <p><b>琥珀的边界</b>：琥珀<b>不是</b> UI 控件色。原型里没有把任何按钮、开关、选中态改成琥珀，因为它们属于 UI 层，归用户色板管。这条与桌面端一致（<code>components/SplashLoading.vue</code> 只在启动页用琥珀，主界面 accent 仍走用户色板）。</p>
+    </div>
+
+    <h2>真源本身的对比度缺口（不是原型的锅，但必须先修）</h2>
+    <div class="panel">
+      <p>对齐真源 token 的过程里发现 <code>mobile.css</code> 有几处 token 达不到 WCAG AA。原型为了不把问题带进设计稿，在本文件内取了可读替代值，但<b>替代值不该长期存在于原型里</b>：根因要在 <code>mobile.css</code> 修，且改色需双端同改（该文件注释已声明与桌面端 palette 同源）。</p>
+      <table>
+        <thead><tr><th>token</th><th>真源值 / 实测</th><th>本原型临时用值 / 实测</th><th>建议</th></tr></thead>
+        <tbody>
+          <tr><td>浅色 secondary</td><td class="n">#7C7565 · page 4.16 / card 4.46</td><td class="n">#6E654F · page 5.25 / card 5.63</td><td>真源加深一档；<code>#57534E</code>（6.93）亦可</td></tr>
+          <tr><td>深色 muted</td><td class="n">#6B6455 · card 2.96 / page 3.16</td><td>不用于任何文案，仅非文字图形</td><td>要么加深，要么在规范里明确「muted 禁止用于正文」</td></tr>
+          <tr><td>浅色 muted</td><td class="n">#ABA492 · card 2.42</td><td class="n">#79725F · card 4.67</td><td>同上</td></tr>
+          <tr><td>浅色 success</td><td class="n">#059669 · card 3.68</td><td class="n">#047857 · card 5.35</td><td>浅色态改用更深的绿（仓库已存在 <code>#047857</code> / <code>#065F46</code>）</td></tr>
+          <tr><td>浅色 warning</td><td class="n">#d97706 · card 3.11</td><td class="n">#b45309 · card 4.90</td><td>浅色态改用 <code>#b45309</code> / <code>#92400e</code></td></tr>
+          <tr><td>浅色 error</td><td class="n">#dc2626 · card 4.71 / page 4.39</td><td class="n">#b91c1c · card 6.31 / page 5.88</td><td>页面底色上也要 >=4.5:1，建议统一到 <code>#b91c1c</code></td></tr>
+          <tr><td>浅色 sunset 色板</td><td class="n">#fefaf5 on #d9532a · 3.87</td><td class="n">#b45309 + #fdfcfa · 4.98</td><td><code>mobile.css:820-825</code> 的 on-accent 需要加深或换浅色 accent</td></tr>
+        </tbody>
+      </table>
+      <p>另外，<code>.agents/skills/frontend-styles/TOKENS.md</code> 与 <code>SKILL.md</code> 仍把移动端描述为「Dracula 暗色 + <code>#0a0a0f</code> / <code>#00d4ff</code>」，与 <code>mobile.css</code> 现状矛盾：这是 v0.1 作者能写出错色板的直接原因，建议随同修文档（AGENTS.md §0 要求「文档字面与事实不符先修文档」）。</p>
+    </div>
+
+    <h2>审计口径（两遍独立核对）</h2>
+    <div class="panel">
+      <p>本版结论由两条独立路径得出，冲突处以事实核对为准：① 写作者用 WCAG 2.1 相对亮度公式逐对计算对比度、并用 mock DOM 跑交互逻辑（<code>proto-dom-test.js</code>，20 项断言全绿）；② 独立审计者重读 v0.1 全文 + <code>mobile.css</code> 全文，逐行枚举破折号与死路径。审计者纠正了写作者两处<b>夸大</b>的统计（em-dash「18 处」应为 31 个字符 / 17 行；隐藏路径「12 条」应为 10 条），也把范围扩到 v0.1 未列出的 22 处文字 + 4 处非文字对比度失败（共 26 处）。写作者则推翻了审计者一处<b>误判</b>：关闭码 <code>4003</code> 在仓库里真实存在（<code>composables/useMobileConnection.ts:395</code>，ADR 0031 认证类致命关闭 4001/4003），不应作为「未核实文案」删除。</p>
+      <p style="margin-top:10px"><b>已知偏离（保留，不修，理由随行）</b></p>
+      <ul>
+        <li><b>占位符对比度</b>：<code>--mb-input-placeholder</code> 深色 2.15:1 / 浅色 3.41:1。真源值如此（<code>mobile.css:66</code> / <code>:223</code>），本原型不本地改 token，以免造出平行色阶。占位符是提示而非唯一标签（标签在输入框之上或由上下文给出），但严格 WCAG 下算失败。</li>
+        <li><b>非文字描边</b>：输入框 / 标签 chip / 键帽描边对底色的对比为 1.25 到 2.08，低于 3:1，同样来自真源 token。</li>
+        <li><b>开关状态</b>：OFF / ON 轨道色差仅 1.53（暗）/ 1.12（浅），状态靠滑块位置 + <code>aria-pressed</code> 表达，不靠轨道颜色。</li>
+        <li><b>多任务卡片边界</b>：卡片面与页面底色差 1.03 / 1.14，边界靠 <code>--mb-border-3</code>（2.52 / 2.10）+ 阴影，低于 3:1。</li>
+        <li><b>示例数据</b>：<code>官方</code> 徽标与全部体积 / 延迟 / 进度数字是演示值，已在应用页标注「示例数据（非真实清单）」；<code>终端</code> 一行在移动端没有对应的真实插件（唯一的终端是桌面 <code>terminal-session</code>）。</li>
+      </ul>
+    </div>
+
+    <h2>真源对照表</h2>
+    <table>
+      <thead><tr><th>维度</th><th>v0.1 原型</th><th>仓库真源（本版采用）</th></tr></thead>
+      <tbody>
+        <tr><td>主底色</td><td class="n">#0a0a0f</td><td class="n">--mobile-bg-primary #15130F</td></tr>
+        <tr><td>卡片面</td><td class="n">#12121a</td><td class="n">--mobile-bg-card #1D1A15</td></tr>
+        <tr><td>主色</td><td class="n">#00d4ff（cyan）</td><td class="n">--mobile-accent #ECE8DC（default 色板）</td></tr>
+        <tr><td>主色上的文字</td><td class="n">#0a0a0f</td><td class="n">--mobile-text-on-accent #15130F</td></tr>
+        <tr><td>辅助文字</td><td class="n">#9ca3af / #6b7280</td><td class="n">--mobile-text-secondary #9C9482</td></tr>
+        <tr><td>成功 / 警告 / 错误</td><td class="n">#10b981 / #f59e0b / #ef4444</td><td class="n">--mobile-success #22C55E 等</td></tr>
+        <tr><td>圆角</td><td class="n">14 / 10 / 22 / 48 混用（15 种值）</td><td>真源梯子 16 / 12 / 10 / 8 / 999 中取 12 · 10 · 999 三档</td></tr>
+        <tr><td>字号</td><td class="n">固定 11 / 12 / 13.5 / 15 / 17</td><td class="n">--font-size-* 流式（360px 基准 10 / 12 / 14 / 16 / 18）</td></tr>
+        <tr><td>色板</td><td>无</td><td class="n">data-palette: default / forest / ocean / sunset / violet</td></tr>
+        <tr><td>主题</td><td>仅暗色</td><td>暗色 + 浅色（<code>html:not(.dark) .mobile-ui</code>）</td></tr>
+        <tr><td>安全区 / 层级</td><td>写死 padding；z-index 4/5/55/60</td><td><code>--safe-area-*</code> + safe-stack 6 档</td></tr>
+        <tr><td>品牌</td><td class="n">无品牌层；标志位用 --mb-accent</td><td>品牌层 <code>--brand-ember #FF9E2C</code> 固定 + 字标 <code>Wasm<em>App</em></code></td></tr>
+      </tbody>
+    </table>
+
+    <h2>对比度实测（WCAG 2.1 相对亮度公式）</h2>
+    <p style="color:#9C9482;font-size:12.5px">下表覆盖深浅两套主题下每一处「文字 / 它的真实底色」配对（含半透明面叠底计算），共 40 组，全部 >=4.5:1（正文）或 >=3:1（非文字图形）。数值由脚本逐对计算，非估计。</p>
+    <table>
+      <thead><tr><th>配对</th><th>比值</th><th>判定</th></tr></thead>
+      <tbody>
+        <tr><td>深色 主文字 #ECE8DC / 卡片 #1D1A15</td><td class="n">14.16:1</td><td><span class="pass">AAA</span></td></tr>
+        <tr><td>深色 辅助文字 #9C9482 / 卡片 #1D1A15</td><td class="n">5.76:1</td><td><span class="pass">AA</span></td></tr>
+        <tr><td>深色 辅助文字 / 浮层 <code>--mb-bg-2</code></td><td class="n">5.95:1</td><td><span class="pass">AA</span></td></tr>
+        <tr><td>深色 主色上的文字 #15130F / #ECE8DC</td><td class="n">15.14:1</td><td><span class="pass">AAA</span></td></tr>
+        <tr><td>深色 运行中徽标 #22C55E / 叠底 #1D1A15</td><td class="n">6.02:1</td><td><span class="pass">AA</span></td></tr>
+        <tr><td>深色 停用徽标 / elevated <span style="color:#9C9482">（v0.1 为 3.37 失败）</span></td><td class="n">12.29:1</td><td><span class="pass">AAA</span></td></tr>
+        <tr><td>深色 app 来源标签 AI #b9a6f7 / 卡片</td><td class="n">8.14:1</td><td><span class="pass">AAA</span></td></tr>
+        <tr><td>深色 app 来源标签传输 #4ad6a4 / 卡片</td><td class="n">9.45:1</td><td><span class="pass">AAA</span></td></tr>
+        <tr><td>深色 手势条 #6B6455 / 页面（非文字图形）</td><td class="n">3.16:1</td><td><span class="pass">非文字达标</span></td></tr>
+        <tr><td>浅色 主文字 #26231B / 卡片 #FDFCFA</td><td class="n">15.30:1</td><td><span class="pass">AAA</span></td></tr>
+        <tr><td>浅色 辅助文字 #6E654F / 页面 #F5F4F0</td><td class="n">5.25:1</td><td><span class="pass">AA</span></td></tr>
+        <tr><td>浅色 辅助文字 #6E654F / elevated #E7E4DC</td><td class="n">4.54:1</td><td><span class="pass">AA</span></td></tr>
+        <tr><td>浅色 主色上的文字 #FDFCFA / accent #1D1A14</td><td class="n">16.93:1</td><td><span class="pass">AAA</span></td></tr>
+        <tr><td>浅色 成功（本版 #047857）/ 卡片</td><td class="n">5.35:1</td><td><span class="pass">AA</span></td></tr>
+        <tr><td>浅色 成功文字 / success 叠底（运行中徽标）</td><td class="n">4.75:1</td><td><span class="pass">AA</span></td></tr>
+        <tr><td>深色 成功文字 / success 叠底（运行中徽标）</td><td class="n">6.02:1</td><td><span class="pass">AA</span></td></tr>
+        <tr><td>浅色 警告（本版 #b45309）/ 卡片</td><td class="n">4.90:1</td><td><span class="pass">AA</span></td></tr>
+        <tr><td>浅色 错误（本版 #b91c1c）/ 卡片</td><td class="n">6.31:1</td><td><span class="pass">AA</span></td></tr>
+        <tr><td>浅色 AI 气泡文字 #FDFCFA / #6d4fc6</td><td class="n">5.71:1</td><td><span class="pass">AA</span></td></tr>
+        <tr><td>浅色 终端语法色（绿 5.15 / 青 5.55 / 黄 6.00 / 注释 5.19）</td><td class="n">5.15-6.00:1</td><td><span class="pass">AA</span></td></tr>
+        <tr><td>色板 on-accent 四档（ocean 10.15 / forest 9.00 / sunset 9.16 / violet 8.77）</td><td class="n">8.8-10.2:1</td><td><span class="pass">AAA</span></td></tr>
+        <tr><td colspan="3" style="color:#9C9482;font-style:italic">以下为 v0.1 的问题值，留作对照：</td></tr>
+        <tr><td>v0.1 #6b7280 / #0a0a0f（11px 辅助文字）</td><td class="n">4.09:1</td><td><span class="fail">FAIL</span></td></tr>
+        <tr><td>v0.1 #6b7280 / #12121a（卡片内 11px）</td><td class="n">3.85:1</td><td><span class="fail">FAIL</span></td></tr>
+        <tr><td>v0.1 #6272a4 / #0d0d14（终端注释 12px）</td><td class="n">4.11:1</td><td><span class="fail">FAIL</span></td></tr>
+        <tr><td>v0.1 #6b7280 / 叠加底（pkey 10.5px）</td><td class="n">3.43:1</td><td><span class="fail">FAIL</span></td></tr>
+        <tr><td>v0.1 #8b8b96 / 开关轨道（图形）</td><td class="n">2.44:1</td><td><span class="fail">FAIL</span></td></tr>
+        <tr><td>v0.1 危险按钮边框 / 背景（图形）</td><td class="n">1.83:1</td><td><span class="fail">FAIL</span></td></tr>
+        <tr><td>真源 --mobile-text-muted #6B6455 / 卡片 <span style="color:#9C9482">（仅 18px+ 或非文字可用，本版未用于小字）</span></td><td class="n">2.96:1</td><td><span class="fail">小字不可用</span></td></tr>
+      </tbody>
+    </table>
+
+    <h2>交互演示台</h2>
+    <div class="ctrls">
+      <span class="lbl">主题</span>
+      <div class="seg" id="theme-seg" role="group" aria-label="主题">
+        <button data-theme-set="dark" aria-pressed="true">暗色</button>
+        <button data-theme-set="light" aria-pressed="false">浅色</button>
+      </div>
+    </div>
+    <div class="ctrls">
+      <span class="lbl">主色色板</span>
+      <div class="swatches" id="palette-seg" role="group" aria-label="主色色板">
+        <button data-palette-set="default" aria-pressed="true" title="default #ECE8DC" aria-label="主色色板：default（象牙白）" style="background:#ECE8DC"></button>
+        <button data-palette-set="forest" aria-pressed="false" title="forest #86c49b" aria-label="主色色板：forest（森绿）" style="background:#86c49b"></button>
+        <button data-palette-set="ocean" aria-pressed="false" title="ocean #5fd0e8" aria-label="主色色板：ocean（海蓝）" style="background:#5fd0e8"></button>
+        <button data-palette-set="sunset" aria-pressed="false" title="sunset #f5a383" aria-label="主色色板：sunset（落日橙）" style="background:#f5a383"></button>
+        <button data-palette-set="violet" aria-pressed="false" title="violet #b9a6f7" aria-label="主色色板：violet（紫罗兰）" style="background:#b9a6f7"></button>
+      </div>
+    </div>
+
+    <h2>屏幕导览（点击驱动右侧手机）</h2>
+    <div class="nav-list" id="nav">
+      <button data-go="s-home" class="on"><span class="n">1</span>平台首页：默认界面 · 扩展槽位 · 应用网格</button>
+      <button data-go="s-terminal"><span class="n">2</span>终端 app：全屏独立界面 · 胶囊控件 · 自带风格</button>
+      <button data-go="s-aichat"><span class="n">3</span>AI Chatbox app：violet 自带主题 · 对话流</button>
+      <button data-go="s-files"><span class="n">4</span>文件传输 app：emerald 自带主题 · 传输进度</button>
+      <button data-go="s-switcher"><span class="n">5</span>多任务：卡片切换 / 关闭运行中应用</button>
+      <button data-go="s-manage"><span class="n">6</span>WASM 应用管理：安装清单 · 状态 · 存储</button>
+      <button data-go="s-detail"><span class="n">7</span>应用详情：本应用连接 · 权限 · 授权记录</button>
+      <button data-go="s-settings"><span class="n">8</span>我的 / 平台设置：外观 · 权限总览 · 关于</button>
+      <button data-go="demo-perm"><span class="n">9</span>运行时授权弹窗：app 内权限申请（平台统一弹窗）</button>
+    </div>
+    <p class="kbd-hint">手机内可操作：点应用图标进入；胶囊 <b>···</b> 开菜单 / <b>◎</b> 退出回首页；应用底部横条 = 上滑并停顿手势（原型中点击模拟）→ 多任务；底部 Tab 切换 首页 / 应用 / 我的；管理页点应用行进详情；详情页权限开关可切换。</p>
+
+    <h2>三个核心概念</h2>
+    <div class="panel">
+      <p><b>① 平台首页可被 wasm app 扩展</b>：首页提供「快捷卡片槽位」，各 app 可向首页贡献卡片（终端的活跃会话、传输的进度、AI 的最近对话）。app 安装后自然出现在应用网格；卸载后槽位卡片随之消失。卡片标注<b>由 xxx 提供</b>，归属清晰；无卡片时显示空态而不是空白槽位。</p>
+    </div>
+    <div class="panel">
+      <p><b>② app 全屏独立界面 + 独立风格</b>：点开 app 即进入它的世界，自带顶栏、自带 accent、自带交互范式（终端的快捷键条、AI 的对话流）。平台只叠加右上角一枚「胶囊」（<code>···</code> 菜单 / <code>◎</code> 退出）。app accent 只作用于该 app 容器，不写回平台 token。</p>
+    </div>
+    <div class="panel">
+      <p><b>③ 平台统一治理 · 连接各自独立</b>：「WASM 应用」页集中管理安装 / 停用 / 卸载、版本体积、权限开关（沿用 <code>plugin-sdk-mobile/rust/src/permission.rs:7-45</code> 的词汇）、存储与授权记录；运行时授权走平台统一弹窗（fail-closed）。连接不归平台托管：每个应用独立持有自己的连接（终端 ↔ 桌面主机、传输 ↔ 对等设备、AI ↔ 供应商），在应用页与详情页各自呈现与管理。</p>
+    </div>
+
+    <h2>设计决策</h2>
+    <ul>
+      <li><b>双色层</b>：品牌层固定琥珀 <code>--brand-ember</code>（标志位），UI 层走真源 <code>--mobile-accent</code>（控件位，default 色板为象牙白 <code>#ECE8DC</code>，浅色模式为近黑 <code>#1D1A14</code>）。琥珀不得用于控件，色板不得改标志。详见「品牌对齐」。</li>
+      <li><b>app 自带 accent</b>：app accent 属 app 私有主题，作用域限于该 app 容器，符合「一页一 accent」的纪律；app 图标是各自开发者的标识，不是品牌位，因此不刷成琥珀。</li>
+      <li><b>Dracula</b>：只保留在终端内容区的语法着色（<code>terminalThemes.ts</code> 同源）；终端 app 的壳用 <code>--mobile-terminal-bg</code>，不再是 neon cyan 平台。</li>
+      <li><b>圆角</b>：卡片 12 / 控件 10 / 胶囊 999（图标方块 52px 取 15px），三档 shape lock，全原型无第四种。</li>
+      <li><b>字号</b>：采用 <code>--font-size-*</code> 在 360px 处的取值（10 / 12 / 14 / 16 / 18 / 24）。落地时这些值由 token 的 <code>clamp()</code> 提供，原型不复制公式。</li>
+      <li><b>触控</b>：所有可点元素最小 44px（<code>--mobile-touch-target-min</code>）；反馈用 <code>:active</code>，不用 <code>:hover</code>（触屏无效）。</li>
+      <li><b>图标</b>：全部内联 SVG，stroke 1.8 统一，无 emoji、无隐藏占位路径；状态点只用于真实语义状态（连接 / 运行 / 权限裁定）。</li>
+      <li><b>落地对应</b>：平台页走 <code>--mobile-*</code> token；app 界面由各自 wasm app 前端自带样式（scoped / inline）。</li>
+    </ul>
+
+    <h2>已确认裁决</h2>
+    <ul>
+      <li>多任务入口 = 手势（上滑并停顿呼出，上滑卡片关闭），不设独立入口。</li>
+      <li>权限模型沿用移动端现有词汇真源（<code>permission.rs</code>：<code>terminal:input/output</code>、<code>session:read/write</code>、<code>fs:read/write</code>、<code>network:http</code>、<code>peer</code>、<code>mdns</code>、<code>bus</code>、<code>ui:*</code>、<code>system:open</code>；<code>storage</code> 默认授予不可关）。</li>
+      <li>应用统称 <b>WASM 应用</b>；连接归各应用独立持有与管理（平台无全局连接）。</li>
+    </ul>
+
+    <h2>待裁决问题（供评审）</h2>
+    <ul>
+      <li>首页槽位数量上限与排序策略（按最近使用？用户固定？）。原型当前按「最近贡献」排序，未设上限。</li>
+      <li>高风险权限（<code>fs:write</code> 全量 / <code>peer</code>）是否要求运行时二次确认？</li>
+      <li>浅色模式下 app 自带 accent 的取值由谁定义（app 作者自报 vs 平台强制降饱和）？原型暂按 app 作者自报处理。</li>
+    </ul>
+  </main>
+
+  <!-- ======================================================================
+       手机
+       ====================================================================== -->
+  <div class="stage">
+    <div class="phone" id="phone" data-palette="default">
+      <div class="island" aria-hidden="true"></div>
+
+      <!-- ============ 1. 平台首页 ============ -->
+      <section class="screen cur" id="s-home" aria-label="平台首页">
+        <div class="statusbar"><span>9:41</span><span class="sicons" aria-hidden="true">
+          <svg width="17" height="12" viewBox="0 0 17 12" fill="currentColor"><rect x="0" y="7.5" width="3" height="4.5" rx="1"/><rect x="4.6" y="5" width="3" height="7" rx="1"/><rect x="9.2" y="2.5" width="3" height="9.5" rx="1"/><rect x="13.8" y="0" width="3" height="12" rx="1" opacity=".35"/></svg>
+          <svg width="25" height="12" viewBox="0 0 25 12" fill="none" stroke="currentColor"><rect x=".6" y=".6" width="20" height="10.8" rx="3.2" stroke-width="1.2"/><rect x="2.6" y="2.6" width="13" height="6.8" rx="1.6" fill="currentColor" stroke="none"/><path d="M23 4v4" stroke-width="1.6" stroke-linecap="round"/></svg>
+        </span></div>
+
+        <div class="scroll">
+          <div class="hero">
+            <div class="ident">
+              <span class="brand-tile" style="width:38px;height:38px">
+                <svg width="26" height="19" viewBox="16 26 68 48" fill="none" aria-label="WasmApp 标志">
+                  <g stroke="#F5F7F9" stroke-width="13" stroke-linecap="butt">
+                    <line x1="23.2" y1="33" x2="36.8" y2="67"/><line x1="39.3" y1="67.1" x2="48.7" y2="46.9"/>
+                    <line x1="51.3" y1="46.9" x2="60.7" y2="67.1"/><line x1="63.2" y1="67" x2="76.8" y2="33"/>
+                  </g>
+                  <path d="M50 36.5 L56.5 43 L50 49.5 L43.5 43 Z" fill="#FF9E2C"/>
+                </svg>
+              </span>
+              <div style="min-width:0">
+                <div class="brand-word">Wasm<em>App</em></div>
+                <div class="sub">本机 · Pixel 8 · 4 个应用</div>
+              </div>
+            </div>
+            <button class="iconbtn tap" onclick="go('s-settings')" aria-label="通知与设置">
+              <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 8-3 8h18s-3-1-3-8"/><path d="M10.3 21a2 2 0 0 0 3.4 0"/></svg>
+              <span class="dot" style="background:var(--brand-ember)"></span>
+            </button>
+          </div>
+
+          <div class="sec">快捷卡片<span class="note">由应用提供</span></div>
+          <div class="slots">
+            <button class="card slot tap" onclick="go('s-terminal')">
+              <span class="from"><span class="dot c"></span>由 <b class="app">终端</b> 提供</span>
+              <span class="big"><span class="num">2</span><span class="unit">个活跃会话</span></span>
+              <span class="line">DESKTOP-PC · 已连接 · 4ms</span>
+              <span style="display:flex;gap:7px;flex-wrap:wrap">
+                <span class="chip"><span class="dot g"></span>web-server</span>
+                <span class="chip"><span class="dot g"></span>build</span>
+              </span>
+            </button>
+            <button class="card slot tap" onclick="go('s-files')">
+              <span class="from"><span class="dot app-ft"></span>由 <b class="app accent-ft">文件传输</b> 提供</span>
+              <span style="font-size:var(--fs-base);font-weight:600">正在接收 3 个文件</span>
+              <span>
+                <span style="display:flex;justify-content:space-between;font-size:var(--fs-xs);color:var(--mb-text-2)"><span>photos.zip · 来自 DESKTOP-PC</span><span class="mono">64%</span></span>
+                <span class="bar" style="display:block;margin-top:7px;--app-accent:var(--app-ft)"><i style="width:64%"></i></span>
+              </span>
+            </button>
+            <button class="card slot tap" onclick="go('s-aichat')">
+              <span class="from"><span class="dot app-ai"></span>由 <b class="app accent-ai">AI Chatbox</b> 提供</span>
+              <span style="font-size:var(--fs-base);font-weight:600">继续上次对话</span>
+              <span class="quote">「帮我看下 nginx 反代 WebSocket 的配置为什么一直 401」</span>
+            </button>
+          </div>
+
+          <div class="sec">我的 WASM 应用
+            <button class="chip tall tap" onclick="go('s-manage')">管理
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+            </button>
+          </div>
+          <div class="grid4">
+            <button class="appcell tap" onclick="go('s-terminal')">
+              <span class="run dot g"></span>
+              <span class="ib ib-term">
+                <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#8be9fd" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 17l5.5-5-5.5-5"/><path d="M12.5 19h7"/></svg>
+              </span><span class="name">终端</span>
+            </button>
+            <button class="appcell tap" onclick="go('s-files')">
+              <span class="ib bg-ft">
+                <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h6l2-3h2l2 3h6"/><path d="M8 8l-4 4 4 4"/><path d="M16 8l4 4-4 4"/></svg>
+              </span><span class="name">文件传输</span>
+            </button>
+            <button class="appcell tap" onclick="go('s-aichat')">
+              <span class="ib bg-ai">
+                <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-8 8H5l-2 2V12a8 8 0 0 1 8-8h2a8 8 0 0 1 8 8z"/><path d="M9 11h.01M13 11h.01M17 11h.01" stroke-width="2.4"/></svg>
+              </span><span class="name">AI Chatbox</span>
+            </button>
+            <button class="appcell tap" onclick="go('s-manage')">
+              <span class="ib" style="background:var(--mb-warn-muted);border-color:var(--mb-border);color:var(--mb-warn)">
+                <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v5l3.5 2"/></svg>
+              </span><span class="name">Auto Task</span>
+            </button>
+            <button class="appcell tap" onclick="go('s-manage')">
+              <span class="ib ghost">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+              </span><span class="name">更多</span>
+            </button>
+          </div>
+
+          <div class="sec">最近使用</div>
+          <div class="recent">
+            <button class="chip tall tap" onclick="go('s-terminal')"><span class="dot g"></span>终端 · web-server</button>
+            <button class="chip tall tap" onclick="go('s-aichat')">AI Chatbox</button>
+          </div>
+        </div>
+
+        <nav class="tabbar" aria-label="主导航">
+          <button data-tab="s-home" onclick="go('s-home')">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5L12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M10 21v-6h4v6"/></svg>
+            首页</button>
+          <button onclick="go('s-manage')">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.6"/><rect x="14" y="3" width="7" height="7" rx="1.6"/><rect x="3" y="14" width="7" height="7" rx="1.6"/><rect x="14" y="14" width="7" height="7" rx="1.6"/></svg>
+            应用</button>
+          <button onclick="go('s-settings')">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4.5 21a7.5 7.5 0 0 1 15 0"/></svg>
+            我的</button>
+        </nav>
+      </section>
+
+      <!-- ============ 2. 终端 app ============ -->
+      <section class="screen" id="s-terminal" aria-label="终端应用">
+        <div class="statusbar"><span>9:41</span><span class="sicons" aria-hidden="true">
+          <svg width="17" height="12" viewBox="0 0 17 12" fill="currentColor"><rect x="0" y="7.5" width="3" height="4.5" rx="1"/><rect x="4.6" y="5" width="3" height="7" rx="1"/><rect x="9.2" y="2.5" width="3" height="9.5" rx="1"/><rect x="13.8" y="0" width="3" height="12" rx="1" opacity=".35"/></svg>
+          <svg width="25" height="12" viewBox="0 0 25 12" fill="none" stroke="currentColor"><rect x=".6" y=".6" width="20" height="10.8" rx="3.2" stroke-width="1.2"/><rect x="2.6" y="2.6" width="13" height="6.8" rx="1.6" fill="currentColor" stroke="none"/><path d="M23 4v4" stroke-width="1.6" stroke-linecap="round"/></svg>
+        </span></div>
+        <div class="capsule">
+          <button onclick="openSheet('ov-capsule','终端')" aria-label="应用菜单" aria-haspopup="dialog">
+            <svg width="19" height="19" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="19" cy="12" r="1.9"/></svg>
+          </button>
+          <span class="div"></span>
+          <button onclick="closeApp()" aria-label="退出应用">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2.6" fill="currentColor" stroke="none"/></svg>
+          </button>
+        </div>
+
+        <div class="term-status">
+          <span class="dot g"></span>
+          <div style="min-width:0">
+            <div class="t1">web-server</div>
+            <div class="t2 mono">bed@desktop-pc:~ · 80×24 · 4ms</div>
+          </div>
+        </div>
+
+        <div class="scroll term-body mono">
+          <div><span class="tk">bed@desktop-pc</span>:<span class="tc">~</span>$ systemctl status nginx</div>
+          <div class="td">● nginx.service - A high performance web server</div>
+          <div>&nbsp;&nbsp;Active: <span class="tk">active (running)</span> since Tue 09:12:44</div>
+          <div>&nbsp;&nbsp;Memory: 14.2M · Tasks: 3</div>
+          <div><span class="tk">bed@desktop-pc</span>:<span class="tc">~</span>$ git log --oneline -3</div>
+          <div><span class="ty">a1b2c3d</span> feat(terminal): ring buffer resync</div>
+          <div><span class="ty">9f8e7d6</span> fix(auth): fail-closed on missing center</div>
+          <div><span class="ty">5c4b3a2</span> chore: bump wasmtime 48</div>
+          <div><span class="tk">bed@desktop-pc</span>:<span class="tc">~</span>$ <span class="caret"></span></div>
+        </div>
+
+        <div class="term-kbd">
+          <button class="kbd tap">ESC</button><button class="kbd tap">TAB</button><button class="kbd tap">CTRL</button>
+          <button class="kbd tap" aria-label="上方向键">↑</button><button class="kbd tap" aria-label="下方向键">↓</button>
+          <button class="kbd field mono tap">输入命令…</button>
+        </div>
+        <button class="homebar" onclick="go('s-switcher')" aria-label="上滑并停顿呼出多任务"><i></i></button>
+      </section>
+
+      <!-- ============ 3. AI Chatbox app ============ -->
+      <section class="screen" id="s-aichat" aria-label="AI Chatbox 应用">
+        <div class="statusbar"><span>9:41</span><span class="sicons" aria-hidden="true">
+          <svg width="17" height="12" viewBox="0 0 17 12" fill="currentColor"><rect x="0" y="7.5" width="3" height="4.5" rx="1"/><rect x="4.6" y="5" width="3" height="7" rx="1"/><rect x="9.2" y="2.5" width="3" height="9.5" rx="1"/><rect x="13.8" y="0" width="3" height="12" rx="1" opacity=".35"/></svg>
+          <svg width="25" height="12" viewBox="0 0 25 12" fill="none" stroke="currentColor"><rect x=".6" y=".6" width="20" height="10.8" rx="3.2" stroke-width="1.2"/><rect x="2.6" y="2.6" width="13" height="6.8" rx="1.6" fill="currentColor" stroke="none"/><path d="M23 4v4" stroke-width="1.6" stroke-linecap="round"/></svg>
+        </span></div>
+        <div class="capsule">
+          <button onclick="openSheet('ov-capsule','AI Chatbox')" aria-label="应用菜单" aria-haspopup="dialog">
+            <svg width="19" height="19" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="19" cy="12" r="1.9"/></svg>
+          </button>
+          <span class="div"></span>
+          <button onclick="closeApp()" aria-label="退出应用">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2.6" fill="currentColor" stroke="none"/></svg>
+          </button>
+        </div>
+
+        <div class="appbar2">
+          <span class="icon-box" style="width:40px;height:40px">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-8 8H5l-2 2V12a8 8 0 0 1 8-8h2a8 8 0 0 1 8 8z"/></svg>
+          </span>
+          <div style="min-width:0">
+            <div class="t1">AI Chatbox</div>
+            <div class="t2">deepseek-chat · 已连接</div>
+          </div>
+        </div>
+
+        <div class="thread">
+          <div class="bubble me">帮我看下 nginx 反代 WebSocket 为什么一直 401？</div>
+          <div class="bubble ai">401 说明请求到达了 nginx 但鉴权失败。检查两点：
+            <br>1. <code>proxy_pass</code> 上游是否要求 JWT；
+            <br>2. 升级头之外还要转发 <code>Authorization</code>：
+            <span class="code mono">proxy_set_header Authorization $http_authorization;</span>
+          </div>
+          <div class="bubble me">加上去了，变成 403 了</div>
+          <div class="bubble ai">403 是鉴权通过但权限不足，桌面端已 fail-closed 拒绝。看移动端日志里的关闭码是不是 <code>4003</code>；是的话需要在桌面端重新授权这台设备。
+            <span class="code mono">close code 4003 · permission denied</span>
+          </div>
+          <div class="bubble ai typing" aria-label="正在生成回复"><i></i><i></i><i></i></div>
+        </div>
+
+        <div class="composer">
+          <div class="field">继续提问…</div>
+          <button class="send tap" aria-label="发送">
+            <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+          </button>
+        </div>
+        <button class="homebar" onclick="go('s-switcher')" aria-label="上滑并停顿呼出多任务"><i></i></button>
+      </section>
+
+      <!-- ============ 4. 文件传输 app ============ -->
+      <section class="screen" id="s-files" aria-label="文件传输应用">
+        <div class="statusbar"><span>9:41</span><span class="sicons" aria-hidden="true">
+          <svg width="17" height="12" viewBox="0 0 17 12" fill="currentColor"><rect x="0" y="7.5" width="3" height="4.5" rx="1"/><rect x="4.6" y="5" width="3" height="7" rx="1"/><rect x="9.2" y="2.5" width="3" height="9.5" rx="1"/><rect x="13.8" y="0" width="3" height="12" rx="1" opacity=".35"/></svg>
+          <svg width="25" height="12" viewBox="0 0 25 12" fill="none" stroke="currentColor"><rect x=".6" y=".6" width="20" height="10.8" rx="3.2" stroke-width="1.2"/><rect x="2.6" y="2.6" width="13" height="6.8" rx="1.6" fill="currentColor" stroke="none"/><path d="M23 4v4" stroke-width="1.6" stroke-linecap="round"/></svg>
+        </span></div>
+        <div class="capsule">
+          <button onclick="openSheet('ov-capsule','文件传输')" aria-label="应用菜单" aria-haspopup="dialog">
+            <svg width="19" height="19" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="19" cy="12" r="1.9"/></svg>
+          </button>
+          <span class="div"></span>
+          <button onclick="closeApp()" aria-label="退出应用">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2.6" fill="currentColor" stroke="none"/></svg>
+          </button>
+        </div>
+
+        <div class="appbar2">
+          <span class="icon-box" style="width:40px;height:40px">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h6l2-3h2l2 3h6"/><path d="M8 8l-4 4 4 4"/><path d="M16 8l4 4-4 4"/></svg>
+          </span>
+          <div style="min-width:0">
+            <div class="t1">文件传输</div>
+            <div class="t2">对等网络 · 2 台设备在线</div>
+          </div>
+        </div>
+
+        <div class="scroll">
+          <div class="sec">传输队列<span class="note">3 项</span></div>
+          <div class="card" style="margin:0 16px 14px;overflow:hidden">
+            <div class="ft-item">
+              <span class="icon-box" style="width:42px;height:42px">
+                <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3h9l5 5v13H5z"/><path d="M14 3v5h5"/></svg>
+              </span>
+              <div class="meta">
+                <div class="fname">photos.zip</div>
+                <div class="fsub">接收中 · 来自 DESKTOP-PC · 96.2 MB</div>
+                <div class="bar"><i style="width:64%"></i></div>
+              </div>
+              <span class="pct mono">64%</span>
+            </div>
+            <div class="ft-item">
+              <span class="icon-box" style="width:42px;height:42px;background:var(--mb-accent-muted);color:var(--mb-accent)">
+                <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3h9l5 5v13H5z"/><path d="M14 3v5h5"/></svg>
+              </span>
+              <div class="meta">
+                <div class="fname">report-draft.docx</div>
+                <div class="fsub">排队中 · 来自 DESKTOP-PC</div>
+              </div>
+              <span class="chip">等待</span>
+            </div>
+            <div class="ft-item">
+              <span class="icon-box" style="width:42px;height:42px;background:var(--mb-elevated);color:var(--mb-success)">
+                <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
+              </span>
+              <div class="meta">
+                <div class="fname">firmware.bin</div>
+                <div class="fsub">已发送 · 至 Pixel 8 · 今天 09:12</div>
+              </div>
+              <span class="badge run">完成</span>
+            </div>
+          </div>
+
+          <div class="sec">在线设备<span class="note">已信任</span></div>
+          <div class="card" style="margin:0 16px 14px;overflow:hidden">
+            <button class="row tap" style="width:100%"><span class="dot g"></span>
+              <span style="flex:1;min-width:0"><span style="display:block;font-weight:600">DESKTOP-PC</span>
+              <span style="display:block;font-size:var(--fs-xs);color:var(--mb-text-2)">192.168.31.20 · 已信任</span></span>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--mb-text-2)"><path d="M9 6l6 6-6 6"/></svg>
+            </button>
+            <button class="row tap" style="width:100%"><span class="dot g"></span>
+              <span style="flex:1;min-width:0"><span style="display:block;font-weight:600">Pixel 8</span>
+              <span style="display:block;font-size:var(--fs-xs);color:var(--mb-text-2)">192.168.31.24 · 已信任</span></span>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--mb-text-2)"><path d="M9 6l6 6-6 6"/></svg>
+            </button>
+          </div>
+          <div style="height:20px"></div>
+        </div>
+        <button class="homebar" onclick="go('s-switcher')" aria-label="上滑并停顿呼出多任务"><i></i></button>
+      </section>
+
+      <!-- ============ 5. 多任务 ============ -->
+      <section class="screen switcher" id="s-switcher" aria-label="运行中的应用">
+        <div class="statusbar"><span>9:41</span><span></span></div>
+        <div class="top">
+          <span class="t">运行中的应用</span>
+          <button class="chip tall tap" onclick="go('s-home')">回首页</button>
+        </div>
+        <div class="sw-track">
+          <div class="sw-card">
+            <button class="bar-top tap" onclick="go('s-terminal')" style="width:100%">
+              <span class="icon-box bg-term" style="width:30px;height:30px">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 17l5.5-5-5.5-5"/><path d="M12.5 19h7"/></svg>
+              </span><span class="n">终端</span><span class="badge run" style="margin-left:auto">运行中</span>
+            </button>
+            <div class="sw-mini mono" style="padding:13px;font-size:10.5px;background:#0F0D0A;color:#ECE8DC;line-height:1.7">
+              <div><span style="color:#50fa7b">bed@desktop-pc</span>:~$ systemctl status nginx</div>
+              <div style="color:#6272a4">● nginx.service - active (running)</div>
+              <div><span style="color:#50fa7b">bed@desktop-pc</span>:~$ git log --oneline</div>
+              <div style="color:#f1fa8c">a1b2c3d feat(terminal): ring buffer</div>
+              <div style="color:#f1fa8c">9f8e7d6 fix(auth): fail-closed</div>
+            </div>
+          </div>
+          <div class="sw-card" style="--app-accent:var(--app-ai);--app-accent-muted:var(--app-ai-muted)">
+            <button class="bar-top tap" onclick="go('s-aichat')" style="width:100%">
+              <span class="icon-box bg-ai" style="width:30px;height:30px">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-8 8H5l-2 2V12a8 8 0 0 1 8-8h2a8 8 0 0 1 8 8z"/></svg>
+              </span><span class="n">AI Chatbox</span><span class="badge run" style="margin-left:auto">运行中</span>
+            </button>
+            <div class="sw-mini" style="padding:13px;display:flex;flex-direction:column;gap:8px">
+              <div class="bubble me" style="margin:0 0 0 auto;font-size:11.5px;max-width:92%;padding:8px 10px">变成 403 了</div>
+              <div class="bubble ai" style="margin:0;font-size:11.5px;max-width:96%;padding:8px 10px">403 是鉴权通过但权限不足，看关闭码是不是 4003。</div>
+            </div>
+          </div>
+          <div class="sw-card">
+            <button class="bar-top tap" onclick="go('s-files')" style="width:100%">
+              <span class="icon-box bg-ft" style="width:30px;height:30px">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h6l2-3h2l2 3h6"/><path d="M8 8l-4 4 4 4"/><path d="M16 8l4 4-4 4"/></svg>
+              </span><span class="n">文件传输</span><span class="badge run" style="margin-left:auto">运行中</span>
+            </button>
+            <div class="sw-mini" style="padding:14px">
+              <div style="font-size:11.5px;color:var(--mb-text-2)">photos.zip · 接收中 · 96.2 MB</div>
+              <div class="bar" style="margin-top:9px"><i style="width:64%;background:var(--app-ft)"></i></div>
+            </div>
+          </div>
+        </div>
+        <p class="sw-foot">手势上滑并停顿呼出本页<br>上滑卡片关闭应用 · 点击卡片进入</p>
+      </section>
+
+      <!-- ============ 6. 应用管理 ============ -->
+      <section class="screen" id="s-manage" aria-label="WASM 应用管理">
+        <div class="statusbar"><span>9:41</span><span></span></div>
+        <div class="hdr"><h2>WASM 应用</h2><p>4 个已安装 · 2 个运行中</p></div>
+        <div class="scroll">
+          <div class="card" style="margin:0 16px 14px;padding:14px 10px;display:flex">
+            <div style="flex:1;text-align:center">
+              <div style="font-weight:700;font-size:var(--fs-lg)">4</div>
+              <div style="font-size:var(--fs-xs);color:var(--mb-text-2)">已安装</div>
+            </div>
+            <div style="flex:1;text-align:center;border-left:1px solid var(--mb-border);border-right:1px solid var(--mb-border)">
+              <div style="font-weight:700;font-size:var(--fs-lg);color:var(--mb-success)">2</div>
+              <div style="font-size:var(--fs-xs);color:var(--mb-text-2)">运行中</div>
+            </div>
+            <div style="flex:1;text-align:center">
+              <div style="font-weight:700;font-size:var(--fs-lg)" class="mono">128<span style="font-size:var(--fs-xs)">MB</span></div>
+              <div style="font-size:var(--fs-xs);color:var(--mb-text-2)">总占用</div>
+            </div>
+          </div>
+
+          <div class="sec">已安装应用<span class="note">示例数据（非真实清单）</span></div>
+          <div class="card" style="margin:0 16px 14px;overflow:hidden">
+            <button class="row tap" style="width:100%" onclick="go('s-detail')">
+              <span class="icon-box bg-term" style="width:44px;height:44px">
+                <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 17l5.5-5-5.5-5"/><path d="M12.5 19h7"/></svg>
+              </span>
+              <span style="flex:1;min-width:0">
+                <span style="display:flex;align-items:center;gap:7px"><b>终端</b><span class="badge first">官方</span><span class="badge run">运行中</span></span>
+                <span style="display:block;font-size:var(--fs-xs);color:var(--mb-text-2);margin-top:2px">v1.0.0-beta · 10 项权限 · 数据 12.4 MB</span>
+              </span>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--mb-text-2)"><path d="M9 6l6 6-6 6"/></svg>
+            </button>
+            <button class="row tap" style="width:100%" onclick="go('s-detail')">
+              <span class="icon-box bg-ft" style="width:44px;height:44px">
+                <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h6l2-3h2l2 3h6"/><path d="M8 8l-4 4 4 4"/><path d="M16 8l4 4-4 4"/></svg>
+              </span>
+              <span style="flex:1;min-width:0">
+                <span style="display:flex;align-items:center;gap:7px"><b>文件传输</b><span class="badge first">官方</span><span class="badge run">运行中</span></span>
+                <span style="display:block;font-size:var(--fs-xs);color:var(--mb-text-2);margin-top:2px">v1.0.0-beta · 16 项权限 · 数据 86.1 MB</span>
+              </span>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--mb-text-2)"><path d="M9 6l6 6-6 6"/></svg>
+            </button>
+            <button class="row tap" style="width:100%" onclick="go('s-detail')">
+              <span class="icon-box bg-ai" style="width:44px;height:44px">
+                <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-8 8H5l-2 2V12a8 8 0 0 1 8-8h2a8 8 0 0 1 8 8z"/></svg>
+              </span>
+              <span style="flex:1;min-width:0">
+                <span style="display:flex;align-items:center;gap:7px"><b>AI Chatbox</b><span class="badge first">官方</span></span>
+                <span style="display:block;font-size:var(--fs-xs);color:var(--mb-text-2);margin-top:2px">v1.0.0-beta · 6 项权限 · 数据 24.8 MB</span>
+                <span style="display:block;font-size:var(--fs-xs);color:var(--mb-accent);margin-top:2px">有可用更新</span>
+              </span>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--mb-text-2)"><path d="M9 6l6 6-6 6"/></svg>
+            </button>
+            <button class="row tap" style="width:100%" onclick="go('s-detail')">
+              <span class="icon-box" style="width:44px;height:44px;background:var(--mb-warn-muted);color:var(--mb-warn)">
+                <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v5l3.5 2"/></svg>
+              </span>
+              <span style="flex:1;min-width:0">
+                <span style="display:flex;align-items:center;gap:7px"><b>Auto Task</b><span class="badge first">官方</span><span class="badge off">已停用</span></span>
+                <span style="display:block;font-size:var(--fs-xs);color:var(--mb-text-2);margin-top:2px">v1.0.0-beta · 4 项权限 · 数据 4.2 MB</span>
+              </span>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--mb-text-2)"><path d="M9 6l6 6-6 6"/></svg>
+            </button>
+          </div>
+
+          <div class="sec">添加应用</div>
+          <div class="card" style="margin:0 16px 30px;overflow:hidden">
+            <button class="row tap" style="width:100%">
+              <span style="color:var(--mb-accent);display:flex">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+              </span>
+              <span style="flex:1">发现更多应用</span>
+              <span style="font-size:var(--fs-xs);color:var(--mb-text-2)">本地仓库 / 桌面侧推送</span>
+            </button>
+            <button class="row tap" style="width:100%">
+              <span style="color:var(--mb-text-2);display:flex">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 21h16"/></svg>
+              </span>
+              <span style="flex:1">安装本地包（.wasm）</span>
+              <span style="font-size:var(--fs-xs);color:var(--mb-warn)">需审批 + 哈希钉扎</span>
+            </button>
+          </div>
+        </div>
+        <nav class="tabbar" aria-label="主导航">
+          <button onclick="go('s-home')">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5L12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M10 21v-6h4v6"/></svg>
+            首页</button>
+          <button data-tab="s-manage" onclick="go('s-manage')">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.6"/><rect x="14" y="3" width="7" height="7" rx="1.6"/><rect x="3" y="14" width="7" height="7" rx="1.6"/><rect x="14" y="14" width="7" height="7" rx="1.6"/></svg>
+            应用</button>
+          <button onclick="go('s-settings')">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4.5 21a7.5 7.5 0 0 1 15 0"/></svg>
+            我的</button>
+        </nav>
+      </section>
+
+      <!-- ============ 7. 应用详情与权限 ============ -->
+      <section class="screen" id="s-detail" aria-label="应用详情">
+        <div class="statusbar"><span>9:41</span><span></span></div>
+        <div class="backrow">
+          <button onclick="go('s-manage')" aria-label="返回">
+            <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>
+          </button>
+          <span class="title">应用详情</span>
+        </div>
+        <div class="scroll">
+          <div style="display:flex;align-items:center;gap:14px;padding:10px 20px 18px">
+            <span class="icon-box bg-term" style="width:60px;height:60px;border-radius:var(--r-icon-lg)">
+              <svg width="31" height="31" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 17l5.5-5-5.5-5"/><path d="M12.5 19h7"/></svg>
+            </span>
+            <div style="flex:1;min-width:0">
+              <div style="display:flex;align-items:center;gap:8px"><b style="font-size:var(--fs-xl)">终端</b><span class="badge first">官方</span></div>
+              <div style="font-size:var(--fs-sm);color:var(--mb-text-2);margin-top:2px">2 个会话 · 本应用独立持有连接</div>
+              <div style="display:flex;align-items:center;gap:6px;font-size:var(--fs-xs);color:var(--mb-success);margin-top:4px"><span class="dot g"></span>运行中 · 2 个会话</div>
+            </div>
+          </div>
+
+          <div class="sec">连接<span class="note">本应用独立持有</span></div>
+          <div class="card" style="margin:0 16px 14px;overflow:hidden">
+            <div class="row"><span class="dot g"></span>
+              <div style="flex:1;min-width:0">
+                <div style="font-weight:600">DESKTOP-PC</div>
+                <div style="font-size:var(--fs-xs);color:var(--mb-text-2)">已连接 · 192.168.31.20 · 延迟 4ms · 已配对</div>
+              </div>
+              <button class="chip tall tap">重新配对</button>
+            </div>
+          </div>
+
+          <div class="sec">权限<span class="note">9 项已授予 · 1 项默认</span></div>
+          <div class="card" style="margin:0 16px 14px;overflow:hidden">
+            <div class="plabel">终端与会话</div>
+            <div class="row"><div style="flex:1;min-width:0"><div style="font-weight:600;font-size:var(--fs-base)">终端输入<span class="pkey">terminal:input</span></div></div><button class="toggle" role="switch" aria-checked="true" aria-label="终端输入" onclick="flip(this)"></button></div>
+            <div class="row"><div style="flex:1;min-width:0"><div style="font-weight:600;font-size:var(--fs-base)">终端输出<span class="pkey">terminal:output</span></div></div><button class="toggle" role="switch" aria-checked="true" aria-label="终端输出" onclick="flip(this)"></button></div>
+            <div class="row"><div style="flex:1;min-width:0"><div style="font-weight:600;font-size:var(--fs-base)">会话读取<span class="pkey">session:read</span></div></div><button class="toggle" role="switch" aria-checked="true" aria-label="会话读取" onclick="flip(this)"></button></div>
+            <div class="row"><div style="flex:1;min-width:0"><div style="font-weight:600;font-size:var(--fs-base)">会话控制<span class="pkey">session:write</span></div><div style="font-size:var(--fs-xs);color:var(--mb-text-2)">创建 / 停止会话</div></div><button class="toggle" role="switch" aria-checked="true" aria-label="会话控制" onclick="flip(this)"></button></div>
+            <div class="plabel">文件与网络</div>
+            <div class="row"><div style="flex:1;min-width:0"><div style="font-weight:600;font-size:var(--fs-base)">文件读取<span class="pkey">fs:read</span></div><div style="font-size:var(--fs-xs);color:var(--mb-text-2)">已授权 3 个目录</div></div><button class="toggle" role="switch" aria-checked="true" aria-label="文件读取" onclick="flip(this)"></button></div>
+            <div class="row"><div style="flex:1;min-width:0"><div style="font-weight:600;font-size:var(--fs-base)">文件写入<span class="pkey">fs:write</span></div></div><button class="toggle" role="switch" aria-checked="false" aria-label="文件写入" onclick="flip(this)"></button></div>
+            <div class="row"><div style="flex:1;min-width:0"><div style="font-weight:600;font-size:var(--fs-base)">网络请求<span class="pkey">network:http</span></div><div style="font-size:var(--fs-xs);color:var(--mb-text-2)">仅限已配对桌面主机</div></div><button class="toggle" role="switch" aria-checked="true" aria-label="网络请求" onclick="flip(this)"></button></div>
+            <div class="plabel">界面与消息</div>
+            <div class="row"><div style="flex:1;min-width:0"><div style="font-weight:600;font-size:var(--fs-base)">动态路由<span class="pkey">ui:route</span></div></div><button class="toggle" role="switch" aria-checked="true" aria-label="动态路由" onclick="flip(this)"></button></div>
+            <div class="row"><div style="flex:1;min-width:0"><div style="font-weight:600;font-size:var(--fs-base)">消息总线<span class="pkey">bus</span></div></div><button class="toggle" role="switch" aria-checked="false" aria-label="消息总线" onclick="flip(this)"></button></div>
+            <div class="row"><div style="flex:1;min-width:0"><div style="font-weight:600;font-size:var(--fs-base)">本地存储<span class="pkey">storage</span></div><div style="font-size:var(--fs-xs);color:var(--mb-text-2)">默认授予 · 不可关闭</div></div><span class="badge first">已授予</span></div>
+          </div>
+
+          <div class="sec">存储</div>
+          <div class="card" style="margin:0 16px 14px;overflow:hidden">
+            <div class="row"><div style="flex:1">应用数据</div><span style="color:var(--mb-text-2)" class="mono">12.4 MB</span></div>
+            <div class="row"><div style="flex:1">缓存</div><span style="color:var(--mb-text-2)" class="mono">3.1 MB</span>
+              <button class="chip tall tap">清除</button></div>
+          </div>
+
+          <div class="sec">授权记录<span class="note">近 7 天</span></div>
+          <div class="card" style="margin:0 16px 14px;overflow:hidden">
+            <div class="row"><span class="dot g"></span><div style="flex:1;min-width:0">
+              <div style="font-size:var(--fs-sm)">文件系统 · ~/projects（读写）</div>
+              <div style="font-size:var(--fs-xs);color:var(--mb-text-2);margin-top:1px">今天 09:12 · 弹窗授权</div></div></div>
+            <div class="row"><span class="dot g"></span><div style="flex:1;min-width:0">
+              <div style="font-size:var(--fs-sm)">网络访问 · 仅配对主机</div>
+              <div style="font-size:var(--fs-xs);color:var(--mb-text-2);margin-top:1px">3 天前 · 安装时授权</div></div></div>
+            <div class="row"><span class="dot r"></span><div style="flex:1;min-width:0">
+              <div style="font-size:var(--fs-sm)">后台运行 · 已拒绝</div>
+              <div style="font-size:var(--fs-xs);color:var(--mb-text-2);margin-top:1px">3 天前 · 弹窗拒绝（fail-closed）</div></div></div>
+          </div>
+
+          <div style="padding:4px 16px 12px;display:flex;flex-direction:column;gap:10px">
+            <button class="btn ghost tap" onclick="go('s-aichat');setTimeout(function(){openSheet('ov-perm')},320)">演示：运行时授权弹窗</button>
+            <button class="btn ghost tap">停用应用</button>
+            <button class="btn danger tap">卸载并删除数据</button>
+          </div>
+          <div style="height:20px"></div>
+        </div>
+      </section>
+
+      <!-- ============ 8. 我的 / 平台设置 ============ -->
+      <section class="screen" id="s-settings" aria-label="平台设置">
+        <div class="statusbar"><span>9:41</span><span></span></div>
+        <div class="hdr"><h2>我的</h2></div>
+        <div class="scroll">
+          <div class="card" style="margin:0 16px 14px;padding:16px;display:flex;align-items:center;gap:13px">
+            <span class="icon-box" style="width:48px;height:48px;border-radius:50%">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="7" y="2" width="10" height="20" rx="2.6"/><path d="M12 18h.01" stroke-width="2.4"/></svg>
+            </span>
+            <div style="flex:1;min-width:0">
+              <b style="font-size:var(--fs-lg)">Pixel 8（本机）</b>
+              <div style="font-size:var(--fs-xs);color:var(--mb-text-2);margin-top:2px">WasmApp Mobile v2.1.1 · wasmtime 48</div>
+            </div>
+          </div>
+
+          <div class="sec">平台</div>
+          <div class="card" style="margin:0 16px 14px;overflow:hidden">
+            <button class="row tap" style="width:100%">
+              <span style="color:var(--mb-text-2);display:flex">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M19.1 4.9l-1.8 1.8M6.7 17.3l-1.8 1.8"/></svg>
+              </span>
+              <span style="flex:1">外观</span><span style="font-size:var(--fs-sm);color:var(--mb-text-2)">跟随系统 · 象牙白</span></button>
+            <button class="row tap" style="width:100%">
+              <span style="color:var(--mb-text-2);display:flex">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 4.5-3.2 7.6-8 9-4.8-1.4-8-4.5-8-9V6l8-3z"/><path d="M9 12l2 2 4-4"/></svg>
+              </span>
+              <span style="flex:1">权限总览</span><span style="font-size:var(--fs-sm);color:var(--mb-text-2)">按权限看应用</span></button>
+            <button class="row tap" style="width:100%">
+              <span style="color:var(--mb-text-2);display:flex">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 8-3 8h18s-3-1-3-8"/><path d="M10.3 21a2 2 0 0 0 3.4 0"/></svg>
+              </span>
+              <span style="flex:1">通知</span></button>
+            <button class="row tap" style="width:100%">
+              <span style="color:var(--mb-text-2);display:flex">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01" stroke-width="2.4"/><path d="M12 11v5"/></svg>
+              </span>
+              <span style="flex:1">关于 WasmApp</span><span style="font-size:var(--fs-sm);color:var(--mb-text-2)">v2.1.1</span></button>
+          </div>
+          <div style="height:16px"></div>
+        </div>
+        <nav class="tabbar" aria-label="主导航">
+          <button onclick="go('s-home')">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5L12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M10 21v-6h4v6"/></svg>
+            首页</button>
+          <button onclick="go('s-manage')">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.6"/><rect x="14" y="3" width="7" height="7" rx="1.6"/><rect x="3" y="14" width="7" height="7" rx="1.6"/><rect x="14" y="14" width="7" height="7" rx="1.6"/></svg>
+            应用</button>
+          <button data-tab="s-settings" onclick="go('s-settings')">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4.5 21a7.5 7.5 0 0 1 15 0"/></svg>
+            我的</button>
+        </nav>
+      </section>
+
+      <!-- ============ 覆盖层：胶囊菜单 ============ -->
+      <div class="overlay" id="ov-capsule" role="dialog" aria-modal="true" aria-labelledby="capsule-title" onclick="if(event.target===this)closeSheet('ov-capsule')">
+        <div class="sheet">
+          <div class="grabber" aria-hidden="true"></div>
+          <div style="padding-bottom:14px">
+            <h3 id="capsule-title">应用</h3>
+            <p class="sub">平台叠加的控制项，与小程序胶囊一致</p>
+          </div>
+          <div class="card" style="margin-bottom:12px;overflow:hidden">
+            <button class="row tap" style="width:100%" onclick="closeSheet('ov-capsule');go('s-detail')">
+              <span style="color:var(--mb-text-2);display:flex">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 4.5-3.2 7.6-8 9-4.8-1.4-8-4.5-8-9V6l8-3z"/><path d="M9 12l2 2 4-4"/></svg>
+              </span>
+              <span style="flex:1">权限设置</span></button>
+            <button class="row tap" style="width:100%" onclick="closeSheet('ov-capsule')">
+              <span style="color:var(--mb-text-2);display:flex">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01" stroke-width="2.4"/><path d="M12 11v5"/></svg>
+              </span>
+              <span style="flex:1">关于此应用</span></button>
+            <button class="row tap" style="width:100%" onclick="closeSheet('ov-capsule')">
+              <span style="color:var(--mb-text-2);display:flex">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4V2M12 22v-2M4 12H2M22 12h-2"/><circle cx="12" cy="12" r="5"/><path d="M15.5 8.5L20 4M8.5 15.5L4 20"/></svg>
+              </span>
+              <span style="flex:1">停用此应用</span></button>
+          </div>
+          <button class="btn ghost tap" onclick="closeSheet('ov-capsule')">取消</button>
+          <div class="scrim-note">停下应用即释放其内存与后台任务，数据保留</div>
+        </div>
+      </div>
+
+      <!-- ============ 覆盖层：运行时授权弹窗 ============ -->
+      <div class="overlay" id="ov-perm" role="dialog" aria-modal="true" aria-labelledby="perm-title" onclick="if(event.target===this)closeSheet('ov-perm')">
+        <div class="sheet">
+          <div class="grabber" aria-hidden="true"></div>
+          <div style="display:flex;align-items:center;gap:12px;padding-bottom:14px">
+            <span class="icon-box bg-ai" style="width:44px;height:44px">
+              <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-8 8H5l-2 2V12a8 8 0 0 1 8-8h2a8 8 0 0 1 8 8z"/></svg>
+            </span>
+            <div style="min-width:0">
+              <h3 id="perm-title">AI Chatbox 申请权限</h3>
+              <p class="sub">平台统一弹窗 · 拒绝即功能不可用</p>
+            </div>
+          </div>
+          <div class="card" style="margin-bottom:10px;overflow:hidden">
+            <div class="srow">
+              <span style="color:var(--mb-text-2);display:flex;margin-top:1px">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.8 5.7 3.8 9S14.5 18.4 12 21c-2.5-2.6-3.8-5.7-3.8-9S9.5 5.6 12 3z"/></svg>
+              </span>
+              <div class="body">
+                <div class="k">网络请求<span class="pkey">network:http</span></div>
+                <div class="v mono">api.deepseek.com:443</div>
+                <div class="why">用途：发送对话请求（应用自述）</div>
+              </div>
+            </div>
+            <div class="srow">
+              <span style="color:var(--mb-text-2);display:flex;margin-top:1px">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3h9l5 5v13H5z"/><path d="M14 3v5h5"/></svg>
+              </span>
+              <div class="body">
+                <div class="k">文件读取<span class="pkey">fs:read</span></div>
+                <div class="v mono">${downloads}/ai-chatbox</div>
+                <div class="why">用途：读取对话日志与附件（应用自述）</div>
+              </div>
+            </div>
+          </div>
+          <p class="fineprint">拒绝后应用的相关功能将不可用；可随时在「应用 → AI Chatbox → 权限」中变更。授权裁决在 Rust 端执行，前端弹窗只是 UX。</p>
+          <div class="actions">
+            <button class="btn ghost tap" onclick="closeSheet('ov-perm')">拒绝</button>
+            <button class="btn primary tap" onclick="closeSheet('ov-perm')">允许</button>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="legend">
+      <span class="chip"><span class="dot" style="background:#FF9E2C"></span>品牌层 · 固定琥珀</span>
+      <span class="chip"><span class="dot" style="background:var(--mb-accent)"></span>UI 层 · 跟随用户色板</span>
+      <span class="chip"><span class="dot" style="background:#8be9fd"></span>终端 app</span>
+      <span class="chip"><span class="dot app-ai"></span>AI app 自带主题</span>
+      <span class="chip"><span class="dot app-ft"></span>传输 app 自带主题</span>
+    </div>
+    <p class="phone-hint">手机框内是真实 DOM 与 CSS，可直接改 token 试色。<br>主题 / 色板切换在左侧「交互演示台」，也跟随系统 <code>prefers-color-scheme</code>。</p>
+  </div>
+</div>
+
+<script>
+/* ============================================================================
+   原型脚本（仅演示交互，不代表产品实现）
+   ============================================================================ */
+(function () {
+  'use strict';
+
+  /* ---------- 主题：跟随系统，可手动覆盖 ---------- */
+  var root = document.documentElement;
+  var STORE = 'bedcode-proto-v0.2';
+
+  function readPref() {
+    try { return JSON.parse(localStorage.getItem(STORE) || '{}'); } catch (e) { return {}; }
+  }
+  function writePref(patch) {
+    var next = readPref();
+    for (var k in patch) { if (Object.prototype.hasOwnProperty.call(patch, k)) next[k] = patch[k]; }
+    try { localStorage.setItem(STORE, JSON.stringify(next)); } catch (e) { /* 隐私模式下忽略 */ }
+  }
+  function systemTheme() {
+    return window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+  }
+
+  var pref = readPref();
+  var theme = pref.theme || systemTheme();
+  var palette = pref.palette || 'default';
+
+  function applyTheme(next) {
+    theme = next;
+    root.setAttribute('data-theme', theme);
+    root.style.colorScheme = theme;
+    syncControls();
+  }
+  function applyPalette(next) {
+    palette = next;
+    document.getElementById('phone').setAttribute('data-palette', palette);
+    syncControls();
+  }
+  function syncControls() {
+    document.querySelectorAll('#theme-seg button').forEach(function (b) {
+      b.setAttribute('aria-pressed', String(b.dataset.themeSet === theme));
+    });
+    document.querySelectorAll('#palette-seg button').forEach(function (b) {
+      b.setAttribute('aria-pressed', String(b.dataset.paletteSet === palette));
+    });
+  }
+
+  document.querySelectorAll('#theme-seg button').forEach(function (b) {
+    b.addEventListener('click', function () {
+      applyTheme(b.dataset.themeSet);
+      writePref({ theme: theme });
+    });
+  });
+  document.querySelectorAll('#palette-seg button').forEach(function (b) {
+    b.addEventListener('click', function () {
+      applyPalette(b.dataset.paletteSet);
+      writePref({ palette: palette });
+    });
+  });
+  if (window.matchMedia) {
+    var mq = window.matchMedia('(prefers-color-scheme: light)');
+    var onSystemChange = function () { if (!readPref().theme) applyTheme(systemTheme()); };
+    if (mq.addEventListener) mq.addEventListener('change', onSystemChange);
+    else if (mq.addListener) mq.addListener(onSystemChange);
+  }
+  applyTheme(theme);
+  applyPalette(palette);
+
+  /* ---------- 屏幕栈 ---------- */
+  var stack = ['s-home'];
+  var screens = Array.prototype.slice.call(document.querySelectorAll('.screen'));
+
+  /* Tab 归属写进 HTML（data-tab），不在 JS 里回读内联 onclick（脆弱且会误判） */
+  function setTabbar(id) {
+    document.querySelectorAll('.screen').forEach(function (s) {
+      var isCur = s.id === id;
+      s.querySelectorAll('.tabbar button').forEach(function (b) {
+        if (isCur && b.dataset.tab === id) b.setAttribute('aria-current', 'page');
+        else b.removeAttribute('aria-current');
+      });
+    });
+  }
+
+  function render() {
+    var cur = stack[stack.length - 1];
+    var prev = stack[stack.length - 2];
+    screens.forEach(function (s) {
+      s.classList.toggle('cur', s.id === cur);
+      s.classList.toggle('left', s.id === prev && cur !== 's-home');
+      s.setAttribute('aria-hidden', s.id === cur ? 'false' : 'true');
+    });
+    document.querySelectorAll('#nav button').forEach(function (b) {
+      b.classList.toggle('on', b.dataset.go === cur);
+    });
+    setTabbar(cur);
+  }
+
+  window.go = function (id) {
+    var cur = stack[stack.length - 1];
+    if (cur === id) return;
+    if (id === 's-home') {
+      stack.length = 1;
+    } else {
+      var i = stack.indexOf(id);
+      if (i >= 0) stack.length = i;
+      stack.push(id);
+    }
+    render();
+  };
+  window.closeApp = function () { window.go('s-home'); };
+
+  /* ---------- bottom sheet ---------- */
+  var lastFocus = null;
+  window.openSheet = function (id, title) {
+    var sheet = document.getElementById(id);
+    if (!sheet) return;
+    if (title) document.getElementById('capsule-title').textContent = title;
+    lastFocus = document.activeElement;
+    sheet.classList.add('show');
+    var first = sheet.querySelector('button');
+    if (first) first.focus();
+  };
+  window.closeSheet = function (id) {
+    var sheet = document.getElementById(id);
+    if (sheet) sheet.classList.remove('show');
+    if (lastFocus && lastFocus.focus) lastFocus.focus();
+  };
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape') return;
+    document.querySelectorAll('.overlay.show').forEach(function (o) { window.closeSheet(o.id); });
+  });
+
+  window.flip = function (el) {
+    var on = el.getAttribute('aria-checked') === 'true';
+    el.setAttribute('aria-checked', String(!on));
+    el.setAttribute('aria-pressed', String(!on));
+  };
+
+  /* ---------- 导览 ---------- */
+  document.querySelectorAll('#nav button').forEach(function (b) {
+    b.addEventListener('click', function () {
+      if (b.dataset.go === 'demo-perm') {
+        window.go('s-aichat');
+        setTimeout(function () { window.openSheet('ov-perm'); }, 320);
+      } else {
+        window.go(b.dataset.go);
+      }
+    });
+  });
+
+  render();
+})();
+</script>
+</body>
+</html>

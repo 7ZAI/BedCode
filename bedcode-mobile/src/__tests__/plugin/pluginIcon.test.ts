@@ -13,7 +13,7 @@ const SVG_PATH = 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2
 
 function mountIcon(icon: string) {
   return mount(PluginIcon, {
-    props: { icon, name: 'Auto Task', pluginId: 'com.bedcode.auto-task' },
+    props: { icon, name: 'Auto Task', pluginId: 'com.bedcode.terminal-session' },
     global: {
       stubs: { LetterAvatar: { template: '<div class="letter-avatar" />' } },
     },

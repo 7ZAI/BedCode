@@ -35,12 +35,13 @@ const CONFIG = {
   // （与 `packages/.cargo/config.toml` 的 `../target/fixtures` 落到两处——历史坑见
   // build-process.md「Target 目录管理」）。当时的报告把它标成「可安全删除」，
   // 照做就会打断在途工作。故名单内的目录只报「有消费者」并排除出可回收统计。
+  // **2026-10-08 已消解**：整核本体迁根时把读路径归一为
+  // `../../bedcode-desktop/target/fixtures`（与 config / bench / 工具链同一目录），
+  // `packages/target` 不再有消费者，回归可回收。
   legacyTargetParents: ['packages', 'wasm-apps'],
   // 已知**仍被代码引用**的遗留落点：路径 → 引用方。命中即不标「可删」、不计可回收。
   // 新增遗留目录时若被任何构建脚本 / 测试夹具按字面路径引用，必须登记到这里。
-  legacyTargetLive: {
-    'packages/target': 'bedcode-wasm-core/src/test_support.rs（夹具产物路径 ../target/fixtures）',
-  },
+  legacyTargetLive: {},
   // 仓库根级 target 目录（在两端目录之外，故只报告不自动处理）：
   // `cross-end-tests/` 的依赖图是两端 lib 的**并集** + 自己的 dev 依赖，
   // 跟任何一端都不相同——并入端内目录会驱逐该端缓存，且端内 target 有 15G

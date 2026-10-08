@@ -7,7 +7,7 @@
   ],
   "mobile": [
     "ai-chatbox",
-    "auto-task",
-    "file-transfer"
+    "file-transfer",
+    "terminal-session"
   ]
 }

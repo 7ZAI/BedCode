@@ -10,6 +10,7 @@ pub mod handler;
 pub mod mdns;
 pub mod model;
 pub mod peer_migration;
+pub mod peer_events;
 pub mod peer_net;
 pub mod peer_receive;
 pub mod peer_remote;
@@ -19,7 +20,7 @@ pub mod router;
 pub mod session;
 pub mod state;
 pub mod system;
-pub mod terminal_link;
+pub mod terminal_stream_gateway;
 
 /// 假插件端点夹具（票 01 基线与夹具）：本地 WS server 模拟桌面插件
 /// `com.bedcode.terminal-session` 的 session-control / terminal 端点。
@@ -35,7 +36,6 @@ pub use system::config;
 pub use system::error::{AppError, Result};
 
 use android_logger::Config;
-use connection::PairingService;
 use log::LevelFilter;
 use std::sync::Arc;
 use tauri::Manager;
@@ -108,9 +108,6 @@ pub fn run() {
             // 错误经 ? 上抛走既有启动失败路径——静默换身份会让对端可信列表全部失效
             crate::peer_net::init_node_identity(&app_data_dir)?;
 
-            // 旧版对等网络数据一次性迁移（issue 13 Phase 4 步骤 9；幂等，失败不阻断）
-            crate::peer_migration::migrate_legacy_peer_data(&app_data_dir);
-
             // 对等网络节点状态容器 + 自动启动（ticket 03，决策 D7）：异步装配节点
             // 与 mDNS 发现守护；启动前经 Kotlin MulticastLockPlugin 申请多播锁
             // （Android 收包前提，D6）
@@ -127,6 +124,21 @@ pub fn run() {
             let plugin_db = Arc::new(std::sync::Mutex::new(
                 rusqlite::Connection::open(&db_path).map_err(|e| anyhow::anyhow!("Failed to open plugin DB: {}", e))?,
             ));
+            // 主库 schema 幂等建表（票 05：settings / plugin_storage / plugin_secrets /
+            // plugin_auth_policies / plugin_auth_records——宿主机制数据 + 插件数据入库，
+            // 与桌面 wasm-core db/schema.sql 同构；见 plugin/db_schema.rs）
+            crate::plugin::db_schema::init_schema(&plugin_db.lock().expect("plugin db lock poisoned"))
+                .map_err(|e| anyhow::anyhow!("Failed to init plugin DB schema: {}", e))?;
+
+            // 票 05b：旧文件落盘 KV（plugins/*.json）→ 主库 plugin_storage 表一次性迁移；
+            // 随后旧版对等网络数据迁移（写入 DB-backed 插件存储；幂等，失败均不阻断启动）
+            {
+                let storage = crate::plugin::storage::PluginStorage::new(plugin_db.clone());
+                if let Err(e) = storage.migrate_file_store_to_db(&app_data_dir) {
+                    tracing::warn!(error = %e, "legacy plugin storage file migration failed");
+                }
+                crate::peer_migration::migrate_legacy_peer_data(&storage, &app_data_dir);
+            }
 
             // 创建插件管理器（WASM 运行时延迟初始化）
             let plugin_manager = crate::plugin::manager::PluginManager::new(
@@ -184,10 +196,11 @@ pub fn run() {
                     }
 
                     // 种子内置受信任插件白名单（幂等：已存在则跳过）
-                    // - auto-task: 自动化任务插件
+                    // - terminal-session: 远程终端控制端（终端订阅 + 任务域面板，
+                    //   票 16 由 com.bedcode.auto-task 合并且换 id）
                     // - file-transfer: 内网文件传输插件，共享目录由用户在插件设置页
                     //   显式配置，信任模型 = 配对 + 用户显式目录白名单
-                    for trusted_plugin in &["com.bedcode.auto-task", "com.bedcode.file-transfer"] {
+                    for trusted_plugin in &["com.bedcode.terminal-session", "com.bedcode.file-transfer"] {
                         if let Err(e) = pm.fs_auth().add_plugin_whitelist(trusted_plugin).await {
                             tracing::warn!(plugin_id = %trusted_plugin, error = %e, "Failed to seed plugin whitelist");
                         }
@@ -197,9 +210,6 @@ pub fn run() {
                     pm.load_all(&ah).await;
                 });
             }
-
-            let pairing_service = Arc::new(PairingService::new());
-            app.manage(pairing_service);
 
             // 初始化 mDNS 管理器（内部字段级锁，实例不可变，无需外层 RwLock）
             let mdns_discovery = Arc::new(crate::mdns::discovery::MdnsDiscovery::new());
@@ -222,6 +232,12 @@ pub fn run() {
             commands::egress::egress_list_grants,
             commands::egress::egress_revoke_grants,
             commands::egress::egress_declare_desktop_target,
+            // Egress 三档策略 + 记录管理（票 19：ADR 0022 2026-09-28 对齐）
+            commands::egress::egress_get_strategy,
+            commands::egress::egress_set_strategy,
+            commands::egress::egress_list_records,
+            commands::egress::egress_revoke_record,
+            commands::egress::egress_purge_plugin,
             // HTTP 代理（ticket 03：统一请求出口，request_id 多路复用）
             commands::http_proxy::http_request,
             commands::http_proxy::http_cancel,
@@ -234,27 +250,18 @@ pub fn run() {
             commands::connection::set_auto_reconnect,
             commands::connection::get_ws_token,
             commands::connection::get_ws_url,
-            // Terminal Link（会话级终端 WS，Rust 后端持有；票 05 新插件端点协议）
-            // 订阅/退订：进入终端页建连订阅（fresh subscribe 回放环窗口），
-            // 离开终端页关闭连接（不得后台常拉）
-            terminal_link::terminal_subscribe,
-            terminal_link::terminal_unsubscribe,
-            // 段2：前端 ↔ Rust（页面级）
-            terminal_link::terminal_page_subscribe,
-            terminal_link::terminal_page_unsubscribe,
-            terminal_link::terminal_unsubscribe_all,
-            terminal_link::terminal_remove,
-            terminal_link::terminal_send_input,
-            terminal_link::terminal_ack_rendered,
-            terminal_link::terminal_get_history,
-            terminal_link::terminal_get_state,
-            // Auth Commands
-            commands::auth::ws_get_auth_status,
+            // Terminal Link（票 12 协议客户端已迁插件 com.bedcode.terminal-session）：
+            // terminal_subscribe / unsubscribe / unsubscribe_all / remove /
+            // send_input / ack_rendered / get_history / get_state 八命令已随
+            // terminal_link.rs 退役，前端走插件命令面（plugin_invoke）；
+            // 段2 页面 Channel 登记是 Tauri 传输机制，保留在宿主窄转发层
+            // （terminal_stream_gateway——ADR 0022 四类薄壳④）
+            terminal_stream_gateway::terminal_page_subscribe,
+            terminal_stream_gateway::terminal_page_unsubscribe,
+            // Auth Commands（票 14 阶段 B：配对 / QR / 生物挑战编排已迁
+            // com.bedcode.terminal-session 插件，宿主只余引擎事实面）
             commands::auth::ws_authenticate,
-            commands::auth::ws_request_pairing,
-            commands::auth::ws_verify_pairing_code,
-            commands::auth::ws_authenticate_with_qr,
-            commands::auth::ws_authenticate_with_biometric,
+            commands::auth::ws_get_auth_credentials,
             commands::auth::ws_bind_biometric_credential,
             commands::auth::ws_unbind_biometric_credential,
             commands::auth::ws_get_biometric_key_status,
@@ -262,11 +269,6 @@ pub fn run() {
             commands::session::ws_start_session,
             commands::session::ws_stop_session,
             commands::session::ws_remove_session,
-            // Pairing
-            system::commands::generate_pairing_code,
-            system::commands::get_current_pairing_code,
-            system::commands::verify_pairing_code,
-            system::commands::clear_pairing_code,
             // Settings (移动端使用 JSON 文件)
             commands::mobile_commands::get_all_db_settings_mobile,
             commands::mobile_commands::set_db_setting_mobile,
@@ -292,41 +294,15 @@ pub fn run() {
             commands::mdns::mdns_get_discovered_services,
             commands::mdns::mdns_start_advertise,
             commands::mdns::mdns_stop_advertise,
-            // Peer Net
-            peer_net::start_peer_node,
-            peer_net::stop_peer_node,
-            peer_net::list_discovered_peers,
-            peer_net::dial_peer,
-            peer_net::disconnect_peer,
-            peer_net::respond_peer_consent,
-            peer_net::list_trusted_peers,
-            peer_net::revoke_trusted_peer,
-            peer_net::list_shared_directories,
-            peer_net::add_shared_directory_saf,
-            peer_net::remove_shared_directory,
-            // Peer Transfer (issue 09 发送侧)
-            peer_transfer::send_files_to_peer,
-            peer_transfer::cancel_peer_transfer,
-            peer_transfer::pause_peer_transfer,
-            peer_transfer::resume_peer_transfer,
-            peer_transfer::resume_all_peer_transfers,
-            peer_transfer::retry_peer_transfer,
-            peer_transfer::list_peer_transfers,
-            peer_transfer::clear_peer_transfer_history,
-            peer_transfer::peer_pick_files,
-            // Peer Receive (issue 10 接收侧)
-            peer_receive::list_peer_receiving,
-            peer_receive::respond_peer_transfer,
-            peer_receive::cancel_peer_receiving,
-            peer_receive::get_peer_receive_settings,
-            peer_receive::set_peer_receive_policy,
-            peer_receive::set_peer_transfer_encryption,
-            peer_receive::set_peer_transfer_concurrency,
-            peer_receive::clear_peer_receiving_history,
-            // Peer Remote (issue 11 远端浏览/拉取)
-            peer_remote::list_peer_shared_roots,
-            peer_remote::browse_peer_directory,
-            peer_remote::pull_peer_files,
+            // 对等网络传输 / 接收 / 远端浏览 —— 票 09 + 票 10 后**前端命令面为零**：
+            // ① 票 09 摘掉发现投影与连接编排面（设备列表 / 缓存解析拨号 / 共享目录
+            //    注册表 CRUD / 节点启停 / 首连应答 / 信任管理）；
+            // ② 票 10 摘掉传输调度面（取消 / 暂停 / 恢复 / 选源 / 接收设置读面 /
+            //    加密开关 / 并发上限 / 浏览 / 拉取）。
+            // 真入口只有两条：① 插件 activate-deactivate 外壳（节点生命周期）
+            // ② WIT host-peer 原语（拨号 / 发送 / 暂停恢复 / 应答 / 策略 / 落点 /
+            //    共享根镜像 / 浏览 / 拉取）与 host-platform 选源原语。
+            // 防回接锁：tests/retired_mobile_peer_transfer_command_face_lock.rs
             // Plugin Commands
             crate::plugin::commands::plugin_list_loaded,
             crate::plugin::commands::plugin_get_info,

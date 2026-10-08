@@ -39,6 +39,9 @@ pub const CONSENT_TIMEOUT: Duration = Duration::from_secs(30);
 /// 授权记忆持久文件（app_data_dir 下）
 const GRANTS_FILE: &str = "egress_grants.json";
 
+/// 三档策略持久文件（app_data_dir 下；`{ plugin_id: 档位 }`）
+const STRATEGY_FILE: &str = "egress_policy.json";
+
 // ==================== URL 轻量解析（仅 Egress 匹配用） ====================
 
 /// 轻量解析后的 URL 成分（HTTP/HTTPS 场景足够）
@@ -230,9 +233,194 @@ pub enum EgressDecision {
     Deny(EgressError),
 }
 
+// ==================== 授权策略（三档，ADR 0022 2026-09-28 节对齐） ====================
+
+/// 授权策略档位（每插件 × network 资源；与桌面 `security::auth_policy::AuthStrategy` 同形）
+///
+/// 裁决要点（ADR 0022）：策略只回答一件事——遇到授权记录**未覆盖**的目标时，
+/// 要不要问用户。它不是业务默认值（B5 不命中），是安全闸门（薄壳②）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthStrategy {
+    /// 总是询问：跳过全部 allow 记录，每次判定都问（deny 记录仍优先）
+    AlwaysAsk,
+    /// 默认：记录命中即放行，未命中才问
+    Default,
+    /// 始终允许：不问直接放行，并以 `source='always_allow'` 落账（免询问也留痕）
+    AlwaysAllow,
+}
+
+impl AuthStrategy {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::AlwaysAsk => "always_ask",
+            Self::Default => "default",
+            Self::AlwaysAllow => "always_allow",
+        }
+    }
+
+    /// 解析 wire 值；未知值返回 `None`（**写入面**用显性报错，不猜档位）
+    ///
+    /// 与读面 [`AuthStrategy::parse`] 的兜底方向相反：`always_allow` 手误成
+    /// `always_allowed` 若被判成默认档存下去，用户看到的是「设置成功」而实际
+    /// 档位没生效——策略界面骗人比报错严重得多。
+    pub fn parse_wire(raw: &str) -> Option<Self> {
+        match raw {
+            "always_ask" => Some(Self::AlwaysAsk),
+            "default" => Some(Self::Default),
+            "always_allow" => Some(Self::AlwaysAllow),
+            _ => None,
+        }
+    }
+
+    /// 解析库值：**未知值一律回落 [`AuthStrategy::Default`]**
+    ///
+    /// fail-safe 方向的单点：不认识的档位绝不能等价于「免询问自动放行」，
+    /// 也不能等价于「跳过记录」——两者都比默认档更宽松。取值词汇表只有
+    /// [`AuthStrategy::parse_wire`] 一处，两处各拼一套必然漂移。
+    pub fn parse(raw: &str) -> Self {
+        Self::parse_wire(raw).unwrap_or(Self::Default)
+    }
+}
+
+/// 档位本体（动作语义；副作用标志见 [`StrategyStep`] 字段）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tier {
+    /// 总是询问：**跳过全部 allow 记录**，每次判定都问
+    Ask,
+    /// 默认：读 allow 记录，命中即放行，未命中才问
+    ConsultRecords,
+    /// 始终允许：免询问直接放行，并以 `source='always_allow'` 落账
+    AutoAllow,
+}
+
+/// 策略层给出的下一步（档位 → 动作映射的**单点**；票 19 防回接锁目标）
+///
+/// struct 而非 unit enum：档位副作用（读不读 allow 记录、是否必须落
+/// always_allow 审计）是随档位携带的一等字段，消费方无需在注释里记住义务——
+/// `must_land_auto_allow()` 就在结构体上。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StrategyStep {
+    tier: Tier,
+    /// 判定时是否读 allow 记录（镜像：弹窗给不给「记住」；`Ask` 恒 false）
+    reads_allow_records: bool,
+    /// 是否必须落 always_allow 审计记录（`AutoAllow` 恒 true；审计是档位义务，
+    /// 不是可选项——不留痕的管理界面在最高风险档上出现不可见空洞）
+    must_land_auto_allow: bool,
+}
+
+impl StrategyStep {
+    /// 档位 → 动作（**唯一**映射点）
+    pub const fn of(strategy: AuthStrategy) -> Self {
+        match strategy {
+            AuthStrategy::AlwaysAsk => Self::ask(),
+            AuthStrategy::Default => Self::consult_records(),
+            AuthStrategy::AlwaysAllow => Self::auto_allow(),
+        }
+    }
+
+    pub const fn ask() -> Self {
+        Self {
+            tier: Tier::Ask,
+            reads_allow_records: false,
+            must_land_auto_allow: false,
+        }
+    }
+
+    pub const fn consult_records() -> Self {
+        Self {
+            tier: Tier::ConsultRecords,
+            reads_allow_records: true,
+            must_land_auto_allow: false,
+        }
+    }
+
+    pub const fn auto_allow() -> Self {
+        Self {
+            tier: Tier::AutoAllow,
+            reads_allow_records: false,
+            must_land_auto_allow: true,
+        }
+    }
+
+    /// 档位本体（match 分派用）
+    pub const fn tier(&self) -> Tier {
+        self.tier
+    }
+
+    /// 该步是否「读授权记录」——判定时读不读 allow 记录、询问层给不给「记住」
+    ///
+    /// 两者必须同向："总是询问"档既然跳过记录，就不能再让弹窗落一条以后不会被
+    /// 读到的记录。`AutoAllow` 不读记录但**仍写审计**——读/写是两个独立义务。
+    pub const fn reads_allow_records(self) -> bool {
+        self.reads_allow_records
+    }
+
+    /// 是否必须落 always_allow 审计记录（`AutoAllow` 恒 true）
+    pub const fn must_land_auto_allow(self) -> bool {
+        self.must_land_auto_allow
+    }
+
+    /// 日志用的层名（排障要能一眼看出这次判定走的是哪一支）
+    pub const fn as_str(self) -> &'static str {
+        match self.tier {
+            Tier::Ask => "always-ask",
+            Tier::ConsultRecords => "default",
+            Tier::AutoAllow => "always-allow",
+        }
+    }
+}
+
+/// 授权记录来源（写入口径的单点：来源取值只在这里拼）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthRecordSource {
+    /// 用户在弹窗里确认并「记住」
+    User,
+    /// `always_allow` 档免询问自动放行（界面标「未经确认」）
+    AlwaysAllow,
+    /// 用户显式拒绝（弹窗「以后都拒绝」或管理界面撤销）
+    UserDeny,
+}
+
+impl AuthRecordSource {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::AlwaysAllow => "always_allow",
+            Self::UserDeny => "user_deny",
+        }
+    }
+}
+
+/// 记录效果取值（写入口径单点）
+///
+/// `deny` 记录优先于一切放行路径（含策略档位与 allow 记录，ADR 0022 spec §6.1）。
+pub const AUTH_EFFECT_ALLOW: &str = "allow";
+pub const AUTH_EFFECT_DENY: &str = "deny";
+
+/// 一条授权记录（设置页展示 + 判定匹配；与桌面 `security::auth_policy::AuthRecord` 同形）
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthRecord {
+    /// 所属插件（`plugin:{id}` 归一化；`host` = 宿主调用）
+    pub plugin_id: String,
+    /// `allow` | `deny`
+    pub effect: String,
+    /// 归一化 host（精确；小写）
+    pub target: String,
+    /// 可选 path 前缀（None = 全部路径）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path_prefix: Option<String>,
+    /// `user` | `always_allow` | `user_deny`
+    pub source: String,
+    /// unix 秒
+    pub created_at: u64,
+}
+
 // ==================== 授权记忆 ====================
 
 /// 持久授权条目（egress_grants.json；「不再询问」勾选落盘）
+///
+/// 字段演进兼容：旧文件只有 host/path_prefix/allowed_at，新字段一律 serde default。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PersistentGrant {
     /// 授权的 host（精确；小写）
@@ -242,6 +430,28 @@ pub struct PersistentGrant {
     pub path_prefix: Option<String>,
     /// 授权时间（unix 秒；设置页展示）
     pub allowed_at: u64,
+    /// 所属插件（旧文件缺省 → 视为宿主全局授权，[`GRANT_PLUGIN_HOST`]）
+    #[serde(default = "default_grant_plugin_host")]
+    pub plugin_id: String,
+    /// `allow` | `deny`（旧文件缺省 → allow）
+    #[serde(default = "default_grant_effect_allow")]
+    pub effect: String,
+    /// 记录来源（旧文件缺省 → user）
+    #[serde(default = "default_grant_source_user")]
+    pub source: String,
+}
+
+/// 宿主全局调用方（`http_request` kind=external 的 `source="host"`；无策略档位）
+const GRANT_PLUGIN_HOST: &str = "host";
+
+fn default_grant_plugin_host() -> String {
+    GRANT_PLUGIN_HOST.to_string()
+}
+fn default_grant_effect_allow() -> String {
+    AUTH_EFFECT_ALLOW.to_string()
+}
+fn default_grant_source_user() -> String {
+    AuthRecordSource::User.as_str().to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -256,6 +466,8 @@ pub struct ConsentVerdict {
     pub allow: bool,
     /// 用户勾选「不再询问」→ 持久记忆
     pub persist: bool,
+    /// 用户勾选「以后都拒绝」→ 落 deny 记录（fail-safe：显式拒绝优先于一切）
+    pub deny: bool,
 }
 
 // ==================== Egress 策略引擎 ====================
@@ -270,8 +482,12 @@ pub struct EgressPolicy {
     session_grants: StdRwLock<HashMap<String, PersistentGrant>>,
     /// L3：持久授权（加载自 GRANTS_FILE；「不再询问」落盘）
     persistent_grants: StdRwLock<Vec<PersistentGrant>>,
+    /// 三档策略：plugin_id → 档位（缺省 = [`AuthStrategy::Default`]，fail-safe）
+    plugin_strategies: StdRwLock<HashMap<String, AuthStrategy>>,
     /// 持久文件路径（init 时设置）
     grants_path: StdRwLock<Option<PathBuf>>,
+    /// 策略文件路径（init 时设置；egress_policy.json）
+    strategy_path: StdRwLock<Option<PathBuf>>,
     /// 弹窗桥：request_id → 前端回执通道
     pending_consents: tokio::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<ConsentVerdict>>>,
 }
@@ -283,7 +499,9 @@ impl EgressPolicy {
             plugin_patterns: StdRwLock::new(HashMap::new()),
             session_grants: StdRwLock::new(HashMap::new()),
             persistent_grants: StdRwLock::new(Vec::new()),
+            plugin_strategies: StdRwLock::new(HashMap::new()),
             grants_path: StdRwLock::new(None),
+            strategy_path: StdRwLock::new(None),
             pending_consents: tokio::sync::Mutex::new(HashMap::new()),
         }
     }
@@ -337,22 +555,106 @@ impl EgressPolicy {
         tracing::debug!(plugin_id = %plugin_id, "egress: plugin url declarations removed");
     }
 
-    // ---------- L3：授权记忆 ----------
+    // ---------- 三档策略（每插件 × network） ----------
 
-    /// 记忆命中判定（host + 可选 path 前缀；先持久后会话）
-    fn memory_hit(&self, host: &str, path: &str) -> bool {
+    /// 读取插件策略档位（缺省 = 默认档；未识别的库值回落默认档，fail-safe）
+    pub fn strategy_for(&self, plugin_id: &str) -> AuthStrategy {
+        self.plugin_strategies
+            .read()
+            .unwrap()
+            .get(plugin_id)
+            .copied()
+            .unwrap_or(AuthStrategy::Default)
+    }
+
+    /// 设置插件策略档位（写入面：未知值显性报错，不猜档位——见 [`AuthStrategy::parse_wire`]）
+    pub fn set_plugin_strategy(&self, plugin_id: &str, strategy: AuthStrategy) {
+        self.plugin_strategies
+            .write()
+            .unwrap()
+            .insert(plugin_id.to_string(), strategy);
+        self.save_plugin_strategies();
+        tracing::info!(
+            plugin_id = %plugin_id,
+            strategy = %strategy.as_str(),
+            "egress: plugin strategy updated"
+        );
+    }
+
+    /// 卸载插件：清策略 + 清记录（重装即全新授权，ADR 0022 §8 生命周期）
+    pub fn purge_plugin(&self, plugin_id: &str) {
+        self.plugin_strategies.write().unwrap().remove(plugin_id);
+        self.save_plugin_strategies();
+        self.persistent_grants
+            .write()
+            .unwrap()
+            .retain(|g| g.plugin_id != plugin_id);
+        self.session_grants
+            .write()
+            .unwrap()
+            .retain(|_, g| g.plugin_id != plugin_id);
+        self.save_persistent_grants();
+        self.unregister_plugin_urls(plugin_id);
+        tracing::info!(plugin_id = %plugin_id, "egress: plugin strategy and records purged");
+    }
+
+    /// 策略持久文件（egress_policy.json）：`{ "plugins": { id: "always_ask" | "default" | "always_allow" } }`
+    fn save_plugin_strategies(&self) {
+        let path = match self.strategy_path.read().unwrap().clone() {
+            Some(p) => p,
+            None => return,
+        };
+        let strategies = self.plugin_strategies.read().unwrap().clone();
+        let map: HashMap<String, &str> = strategies
+            .iter()
+            .map(|(k, v)| (k.clone(), v.as_str()))
+            .collect();
+        let content = match serde_json::to_string_pretty(&map) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!("egress: serialize strategies failed: {}", e);
+                return;
+            }
+        };
+        if let Some(parent) = path.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                tracing::error!(error = %e, "egress: create strategy dir failed");
+                return;
+            }
+        }
+        if let Err(e) = std::fs::write(&path, content) {
+            tracing::error!(error = %e, path = %path.display(), "egress: save strategies failed");
+        }
+    }
+
+    // ---------- L3：授权记忆（allow / deny 记录） ----------
+
+    /// 记录命中判定（host + 可选 path 前缀；只匹配指定 effect）
+    fn record_hit(&self, host: &str, path: &str, plugin_id: &str, effect: &str) -> bool {
         let hit = |g: &PersistentGrant| {
-            g.host == host
+            g.effect == effect
+                && g.plugin_id == plugin_id
+                && g.host == host
                 && match &g.path_prefix {
                     Some(prefix) => path.starts_with(prefix),
                     None => true,
                 }
         };
-        self.persistent_grants.read().unwrap().iter().any(hit) || self.session_grants.read().unwrap().values().any(hit)
+        self.persistent_grants.read().unwrap().iter().any(hit)
+            || self.session_grants.read().unwrap().values().any(hit)
     }
 
-    /// 记忆授权（L3 命中后调用）：persist=true 落盘（「不再询问」），否则会话级
-    fn record_grant(&self, host: &str, path_prefix: Option<String>, persist: bool) {
+    /// 记忆授权（L3 命中后调用）：persist=true 落盘（「不再询问」），否则会话级。
+    /// `source`：`user` | `always_allow` | `user_deny`（写入口径单点）。
+    fn record_grant(
+        &self,
+        host: &str,
+        path_prefix: Option<String>,
+        persist: bool,
+        plugin_id: &str,
+        effect: &str,
+        source: AuthRecordSource,
+    ) {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
@@ -361,6 +663,9 @@ impl EgressPolicy {
             host: host.to_string(),
             path_prefix,
             allowed_at: now,
+            plugin_id: plugin_id.to_string(),
+            effect: effect.to_string(),
+            source: source.as_str().to_string(),
         };
         if persist {
             self.persistent_grants.write().unwrap().push(grant.clone());
@@ -368,7 +673,14 @@ impl EgressPolicy {
         } else {
             self.session_grants.write().unwrap().insert(host.to_string(), grant);
         }
-        tracing::info!(host = %host, persist = %persist, "egress: url granted");
+        tracing::info!(
+            host = %host,
+            plugin_id = %plugin_id,
+            effect = %effect,
+            source = %source.as_str(),
+            persist = %persist,
+            "egress: record landed"
+        );
     }
 
     /// 撤销全部授权（设置页「撤销」；清会话 + 清持久文件）
@@ -379,11 +691,62 @@ impl EgressPolicy {
         tracing::info!("egress: all grants revoked");
     }
 
+    /// 撤销单条记录（设置页逐条撤销；deny 与 allow 都可移除）
+    pub fn revoke_grant(&self, host: &str, plugin_id: &str) -> bool {
+        let mut removed_persistent = false;
+        {
+            let mut grants = self.persistent_grants.write().unwrap();
+            if grants.iter().any(|g| g.host == host && g.plugin_id == plugin_id) {
+                grants.retain(|g| !(g.host == host && g.plugin_id == plugin_id));
+                removed_persistent = true;
+            }
+        }
+        let mut removed_session = false;
+        {
+            let mut grants = self.session_grants.write().unwrap();
+            if grants.values().any(|g| g.host == host && g.plugin_id == plugin_id) {
+                grants.retain(|_, g| !(g.host == host && g.plugin_id == plugin_id));
+                removed_session = true;
+            }
+        }
+        if removed_persistent {
+            self.save_persistent_grants();
+        }
+        tracing::info!(host = %host, plugin_id = %plugin_id, "egress: grant revoked");
+        removed_persistent || removed_session
+    }
+
     /// 列出全部授权（会话 + 持久；设置页展示）
     pub fn list_grants(&self) -> Vec<PersistentGrant> {
         let mut grants: Vec<PersistentGrant> = self.session_grants.read().unwrap().values().cloned().collect();
         grants.extend(self.persistent_grants.read().unwrap().iter().cloned());
         grants
+    }
+
+    /// 列出全部授权记录（会话 + 持久；设置页展示，含来源/效果/插件维度）
+    pub fn list_records(&self) -> Vec<AuthRecord> {
+        let mut records: Vec<AuthRecord> = self
+            .session_grants
+            .read()
+            .unwrap()
+            .values()
+            .chain(self.persistent_grants.read().unwrap().iter())
+            .map(|g| AuthRecord {
+                plugin_id: g.plugin_id.clone(),
+                effect: g.effect.clone(),
+                target: g.host.clone(),
+                path_prefix: g.path_prefix.clone(),
+                source: g.source.clone(),
+                created_at: g.allowed_at,
+            })
+            .collect();
+        // 稳定排序：插件 → 时间（设置页展示顺序稳定，不依赖 HashMap 遍历序）
+        records.sort_by(|a, b| {
+            a.plugin_id
+                .cmp(&b.plugin_id)
+                .then(a.created_at.cmp(&b.created_at))
+        });
+        records
     }
 
     /// 持久授权落盘（egress_grants.json；失败仅告警，不阻断放行）
@@ -439,8 +802,27 @@ impl EgressPolicy {
         match tokio::time::timeout(CONSENT_TIMEOUT, rx).await {
             Ok(Ok(verdict)) => {
                 if verdict.allow {
-                    self.record_grant(&request.host, None, verdict.persist);
+                    self.record_grant(
+                        &request.host,
+                        None,
+                        verdict.persist,
+                        &request.source,
+                        AUTH_EFFECT_ALLOW,
+                        AuthRecordSource::User,
+                    );
                     Ok(true)
+                } else if verdict.deny {
+                    // 用户显式「以后都拒绝」→ 落 deny 记录（fail-safe：deny 优先于一切放行）
+                    self.record_grant(
+                        &request.host,
+                        None,
+                        true,
+                        &request.source,
+                        AUTH_EFFECT_DENY,
+                        AuthRecordSource::UserDeny,
+                    );
+                    tracing::warn!(request_id = %request.id, "egress: consent denied by user (persistent deny)");
+                    Ok(false)
                 } else {
                     tracing::warn!(request_id = %request.id, "egress: consent denied by user");
                     Ok(false)
@@ -456,11 +838,11 @@ impl EgressPolicy {
     }
 
     /// 前端回执（egress_consent_resolve 命令调用）；request_id 不存在返回 false
-    pub async fn resolve_consent(&self, request_id: &str, allow: bool, persist: bool) -> bool {
+    pub async fn resolve_consent(&self, request_id: &str, allow: bool, persist: bool, deny: bool) -> bool {
         let mut pending = self.pending_consents.lock().await;
         match pending.remove(request_id) {
             Some(tx) => {
-                let _ = tx.send(ConsentVerdict { allow, persist });
+                let _ = tx.send(ConsentVerdict { allow, persist, deny });
                 true
             }
             None => false,
@@ -469,10 +851,20 @@ impl EgressPolicy {
 
     // ---------- 核心判定 ----------
 
-    /// 三层判定（同步；L1/L2/记忆命中 → Allow；未命中 → NeedConsent / Deny）
+    /// 判定管线（同步；对齐 ADR 0022 2026-09-28 spec §6.1 顺序）：
     ///
-    /// `source`：调用方来源描述（宿主 useUpdateChecker / 插件 ai-chatbox 等），
-    /// 弹窗展示与日志使用。
+    /// ```text
+    /// 0. manifest 声明门（权限位）      —— 资源侧（host_impl/http.rs 已先于本函数执行）
+    /// 1. L1 桌面端目标                   —— 固定层（优先于策略档位）
+    /// 2. L2 声明（宿主内置 + 插件 preauthUrls）—— 固定层
+    /// 3. 硬拒绝记录命中                  —— deny 优先于一切放行路径
+    /// 4. 策略层（三档；实时读取）        —— 本模块 StrategyStep::of
+    /// 5. allow 记录命中（仅默认档读）     —— 总是询问档已跳过
+    /// 6. 询问用户                         —— 未命中 → NeedConsent（fail-closed）
+    /// ```
+    ///
+    /// `source`：调用方来源描述（宿主 useUpdateChecker / 插件 `plugin:{id}` 等）。
+    /// 插件来源按 `plugin:` 前缀取策略档位；宿主来源恒默认档（L2 固定层已覆盖其主流）。
     pub fn decide(&self, url: &str, source: &str) -> EgressDecision {
         let parsed = match parse_url_lite(url) {
             Some(p) => p,
@@ -481,7 +873,7 @@ impl EgressPolicy {
             }
         };
 
-        // L1：桌面端目标（配对/会话内，无需声明）
+        // 第 1 步：L1 桌面端目标（配对/会话内，无需声明）
         {
             let targets = self.desktop_targets.read().unwrap();
             if let Some(port) = parsed.port {
@@ -491,7 +883,7 @@ impl EgressPolicy {
             }
         }
 
-        // L2：宿主内置声明
+        // 第 2 步：L2 宿主内置声明
         let builtin_hit = HOST_BUILTIN_URL_PATTERNS
             .iter()
             .filter_map(|p| UrlPattern::parse(p))
@@ -500,7 +892,7 @@ impl EgressPolicy {
             return EgressDecision::Allow(GrantSource::L2Builtin);
         }
 
-        // L2：插件 preauthUrls 声明
+        // 第 2 步：L2 插件 preauthUrls 声明
         let plugin_hit = self
             .plugin_patterns
             .read()
@@ -512,12 +904,55 @@ impl EgressPolicy {
             return EgressDecision::Allow(GrantSource::L2Plugin);
         }
 
-        // L3：授权记忆命中
-        if self.memory_hit(&parsed.host, &parsed.path) {
+        // 策略归属：`plugin:{id}` → 插件档位；其余（host / useUpdateChecker）→ 默认档
+        let plugin_id = source.strip_prefix("plugin:").unwrap_or(GRANT_PLUGIN_HOST);
+
+        // 第 3 步：硬拒绝记录优先于一切放行路径（ADR 0022 spec §6.1 第 1 步）
+        if self.record_hit(&parsed.host, &parsed.path, plugin_id, AUTH_EFFECT_DENY) {
+            tracing::info!(
+                plugin_id = %plugin_id,
+                host = %parsed.host,
+                "egress: deny record hit, not prompting"
+            );
+            return EgressDecision::Deny(EgressError::denied(url));
+        }
+
+        // 第 4 步：策略层（三档；实时读取）
+        let step = StrategyStep::of(self.strategy_for(plugin_id));
+        match step.tier() {
+            // 始终允许：免询问放行 + 以 `source='always_allow'` 落账（审计是档位义务）
+            Tier::AutoAllow => {
+                debug_assert!(
+                    step.must_land_auto_allow(),
+                    "AutoAllow 档位字段丢失审计义务"
+                );
+                self.record_grant(
+                    &parsed.host,
+                    None,
+                    true,
+                    plugin_id,
+                    AUTH_EFFECT_ALLOW,
+                    AuthRecordSource::AlwaysAllow,
+                );
+                return EgressDecision::Allow(GrantSource::L3Memory);
+            }
+            // 总是询问：跳过全部 allow 记录直接进询问
+            Tier::Ask => {
+                tracing::debug!(
+                    plugin_id = %plugin_id,
+                    host = %parsed.host,
+                    "egress: always-ask tier, skipping allow records"
+                );
+            }
+            Tier::ConsultRecords => {}
+        }
+
+        // 第 5 步：allow 记录命中（**仅默认档读记录**——总是询问在此之前已跳过）
+        if step.reads_allow_records() && self.record_hit(&parsed.host, &parsed.path, plugin_id, AUTH_EFFECT_ALLOW) {
             return EgressDecision::Allow(GrantSource::L3Memory);
         }
 
-        // 未命中 → 需弹窗（fail-closed：调用方不弹则拒绝）
+        // 第 6 步：未命中 → 需弹窗（fail-closed：调用方不弹则拒绝）
         EgressDecision::NeedConsent(ConsentRequest {
             id: String::new(), // 调用方填充 request_id
             url: url.to_string(),
@@ -553,8 +988,28 @@ pub fn init(app_data_dir: PathBuf) {
     };
     *p.grants_path.write().unwrap() = Some(path);
     *p.persistent_grants.write().unwrap() = loaded;
+
+    // 三档策略：egress_policy.json（`{ plugin_id: "always_ask" | "default" | "always_allow" }`）
+    let strategy_path = app_data_dir.join(STRATEGY_FILE);
+    let loaded_strategies = match std::fs::read_to_string(&strategy_path) {
+        Ok(content) => match serde_json::from_str::<HashMap<String, String>>(&content) {
+            Ok(map) => map
+                .into_iter()
+                // 读面：未知档位回落默认档（fail-safe，绝不猜成更宽松的档位）
+                .map(|(k, v)| (k, AuthStrategy::parse(&v)))
+                .collect(),
+            Err(e) => {
+                tracing::warn!(error = %e, path = %strategy_path.display(), "egress: strategy file malformed, start empty");
+                HashMap::new()
+            }
+        },
+        Err(_) => HashMap::new(),
+    };
+    *p.strategy_path.write().unwrap() = Some(strategy_path);
+    *p.plugin_strategies.write().unwrap() = loaded_strategies;
     tracing::info!(
         grants = %p.persistent_grants.read().unwrap().len(),
+        strategies = %p.plugin_strategies.read().unwrap().len(),
         "egress: policy initialized"
     );
 }
@@ -809,7 +1264,7 @@ mod tests {
             p.decide("https://custom.example.com/api", "host"),
             EgressDecision::NeedConsent(_)
         ));
-        p.record_grant("custom.example.com", None, false);
+        p.record_grant("custom.example.com", None, false, GRANT_PLUGIN_HOST, AUTH_EFFECT_ALLOW, AuthRecordSource::User);
         assert!(matches!(
             p.decide("https://custom.example.com/api", "host"),
             EgressDecision::Allow(GrantSource::L3Memory)
@@ -829,5 +1284,212 @@ mod tests {
             EgressDecision::Deny(e) => assert_eq!(e.code, ERROR_URL_NOT_DECLARED),
             other => panic!("expected Deny, got {other:?}"),
         }
+    }
+
+    // ==================== 三档策略（ADR 0022 2026-09-28） ====================
+
+    /// 档位 → 动作映射单点：AlwaysAsk 不读记录；Default 读记录；AutoAllow 必须落账
+    #[test]
+    fn strategy_step_single_mapping() {
+        assert_eq!(
+            StrategyStep::of(AuthStrategy::AlwaysAsk),
+            StrategyStep::ask()
+        );
+        assert!(!StrategyStep::of(AuthStrategy::AlwaysAsk).reads_allow_records());
+        assert!(!StrategyStep::of(AuthStrategy::AlwaysAsk).must_land_auto_allow());
+
+        assert_eq!(
+            StrategyStep::of(AuthStrategy::Default),
+            StrategyStep::consult_records()
+        );
+        assert!(StrategyStep::of(AuthStrategy::Default).reads_allow_records());
+        assert!(!StrategyStep::of(AuthStrategy::Default).must_land_auto_allow());
+
+        assert_eq!(
+            StrategyStep::of(AuthStrategy::AlwaysAllow),
+            StrategyStep::auto_allow()
+        );
+        assert!(!StrategyStep::of(AuthStrategy::AlwaysAllow).reads_allow_records());
+        assert!(StrategyStep::of(AuthStrategy::AlwaysAllow).must_land_auto_allow());
+    }
+
+    /// 未知档位值回落默认档（fail-safe，绝不猜成更宽松档位）
+    #[test]
+    fn unknown_strategy_parse_falls_back_to_default() {
+        assert_eq!(AuthStrategy::parse("always_allowed"), AuthStrategy::Default);
+        assert_eq!(AuthStrategy::parse(""), AuthStrategy::Default);
+        // 写入面：未知值显性报错（None）
+        assert_eq!(AuthStrategy::parse_wire("always_allowed"), None);
+        assert_eq!(AuthStrategy::parse_wire("always_ask"), Some(AuthStrategy::AlwaysAsk));
+    }
+
+    /// 默认档：allow 记录命中 → 放行；未命中 → 弹窗
+    #[test]
+    fn default_tier_consults_records() {
+        let p = policy();
+        p.revoke_all_grants();
+        p.purge_plugin("plugin:com.bedcode.demo");
+        // 未命中 → NeedConsent
+        assert!(matches!(
+            p.decide("https://custom.example.com/api", "plugin:com.bedcode.demo"),
+            EgressDecision::NeedConsent(_)
+        ));
+        // 落 allow 记录 → 放行
+        p.record_grant(
+            "custom.example.com",
+            None,
+            true,
+            "plugin:com.bedcode.demo",
+            AUTH_EFFECT_ALLOW,
+            AuthRecordSource::User,
+        );
+        assert!(matches!(
+            p.decide("https://custom.example.com/api", "plugin:com.bedcode.demo"),
+            EgressDecision::Allow(GrantSource::L3Memory)
+        ));
+        p.revoke_all_grants();
+        p.purge_plugin("plugin:com.bedcode.demo");
+    }
+
+    /// 总是询问档：跳过 allow 记录（有记录也弹窗）
+    #[test]
+    fn always_ask_tier_skips_records() {
+        let p = policy();
+        p.revoke_all_grants();
+        p.purge_plugin("plugin:com.bedcode.demo");
+        // 先落记录（默认档下会放行）
+        p.record_grant(
+            "custom.example.com",
+            None,
+            true,
+            "plugin:com.bedcode.demo",
+            AUTH_EFFECT_ALLOW,
+            AuthRecordSource::User,
+        );
+        // 切到总是询问 → 记录被跳过，仍弹窗
+        p.set_plugin_strategy("plugin:com.bedcode.demo", AuthStrategy::AlwaysAsk);
+        assert!(matches!(
+            p.decide("https://custom.example.com/api", "plugin:com.bedcode.demo"),
+            EgressDecision::NeedConsent(_)
+        ));
+        // 切回默认 → 记录生效
+        p.set_plugin_strategy("plugin:com.bedcode.demo", AuthStrategy::Default);
+        assert!(matches!(
+            p.decide("https://custom.example.com/api", "plugin:com.bedcode.demo"),
+            EgressDecision::Allow(GrantSource::L3Memory)
+        ));
+        p.revoke_all_grants();
+        p.purge_plugin("plugin:com.bedcode.demo");
+    }
+
+    /// 始终允许档：免询问放行 + 落 always_allow 审计记录（界面标「未经确认」）
+    #[test]
+    fn always_allow_tier_lands_audit_record() {
+        let p = policy();
+        p.revoke_all_grants();
+        p.purge_plugin("plugin:com.bedcode.demo");
+        p.set_plugin_strategy("plugin:com.bedcode.demo", AuthStrategy::AlwaysAllow);
+        // 未命中任何记录也直接放行
+        assert!(matches!(
+            p.decide("https://custom.example.com/api", "plugin:com.bedcode.demo"),
+            EgressDecision::Allow(GrantSource::L3Memory)
+        ));
+        // 落账：source = always_allow
+        let grants = p.list_grants();
+        assert!(grants.iter().any(|g| {
+            g.host == "custom.example.com"
+                && g.effect == AUTH_EFFECT_ALLOW
+                && g.source == AuthRecordSource::AlwaysAllow.as_str()
+        }));
+        p.revoke_all_grants();
+        p.purge_plugin("plugin:com.bedcode.demo");
+    }
+
+    /// deny 记录优先于一切放行路径（含 always_allow 档）
+    #[test]
+    fn deny_record_beats_always_allow() {
+        let p = policy();
+        p.revoke_all_grants();
+        p.purge_plugin("plugin:com.bedcode.demo");
+        p.set_plugin_strategy("plugin:com.bedcode.demo", AuthStrategy::AlwaysAllow);
+        p.record_grant(
+            "custom.example.com",
+            None,
+            true,
+            "plugin:com.bedcode.demo",
+            AUTH_EFFECT_DENY,
+            AuthRecordSource::UserDeny,
+        );
+        // always_allow 也放行不了 deny 记录
+        assert!(matches!(
+            p.decide("https://custom.example.com/api", "plugin:com.bedcode.demo"),
+            EgressDecision::Deny(_)
+        ));
+        // 另一 host 不受影响（仍 always_allow 放行）
+        assert!(matches!(
+            p.decide("https://other.example.com/api", "plugin:com.bedcode.demo"),
+            EgressDecision::Allow(_)
+        ));
+        p.revoke_all_grants();
+        p.purge_plugin("plugin:com.bedcode.demo");
+    }
+
+    /// 插件隔离：A 插件的记录/策略不影响 B 插件
+    #[test]
+    fn plugin_records_isolated() {
+        let p = policy();
+        p.revoke_all_grants();
+        p.purge_plugin("plugin:a");
+        p.purge_plugin("plugin:b");
+        p.record_grant(
+            "custom.example.com",
+            None,
+            true,
+            "plugin:a",
+            AUTH_EFFECT_ALLOW,
+            AuthRecordSource::User,
+        );
+        assert!(matches!(
+            p.decide("https://custom.example.com/api", "plugin:a"),
+            EgressDecision::Allow(GrantSource::L3Memory)
+        ));
+        assert!(matches!(
+            p.decide("https://custom.example.com/api", "plugin:b"),
+            EgressDecision::NeedConsent(_)
+        ));
+        p.revoke_all_grants();
+        p.purge_plugin("plugin:a");
+        p.purge_plugin("plugin:b");
+    }
+
+    /// 生命周期：卸载插件清空策略 + 记录（重装即全新授权）
+    #[test]
+    fn purge_plugin_clears_strategy_and_records() {
+        let p = policy();
+        p.revoke_all_grants();
+        p.purge_plugin("plugin:com.bedcode.demo");
+        p.set_plugin_strategy("plugin:com.bedcode.demo", AuthStrategy::AlwaysAllow);
+        p.record_grant(
+            "custom.example.com",
+            None,
+            true,
+            "plugin:com.bedcode.demo",
+            AUTH_EFFECT_ALLOW,
+            AuthRecordSource::AlwaysAllow,
+        );
+        // 卸载前：always_allow 放行
+        assert!(matches!(
+            p.decide("https://custom.example.com/api", "plugin:com.bedcode.demo"),
+            EgressDecision::Allow(_)
+        ));
+        // 卸载：策略 + 记录清空
+        p.purge_plugin("plugin:com.bedcode.demo");
+        assert_eq!(p.strategy_for("plugin:com.bedcode.demo"), AuthStrategy::Default);
+        assert!(p.list_grants().is_empty());
+        assert!(matches!(
+            p.decide("https://custom.example.com/api", "plugin:com.bedcode.demo"),
+            EgressDecision::NeedConsent(_)
+        ));
+        p.revoke_all_grants();
     }
 }

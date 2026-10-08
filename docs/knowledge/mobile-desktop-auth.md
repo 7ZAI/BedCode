@@ -58,7 +58,7 @@
 - **TXT 记录**: 包含 `platform=desktop`、`device_name=xxx` 等键值对
 - **端口**: 从配置读取，默认 `8765`
 
-源码: `bedcode-desktop/packages/bedcode-discovery-engine/src/advertiser.rs`（宿主侧零 mdns 代码；
+源码: `packages/bedcode-discovery-engine/src/advertiser.rs`（仓库根 `packages/`，宿主侧零 mdns 代码；
 广播经 `MdnsAdvertiserPort` 端口面由 server-core supervisor 调用）
 
 ### 2.2 移动端发现

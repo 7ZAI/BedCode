@@ -84,7 +84,7 @@ BEDCODE_DEV_PLUGINS="<插件目录>[::<入口文件>]" pnpm exec vite --config <
 
 | 字段 | 消费方 | 插件 |
 |---|---|---|
-| `queueSeed` | `mobileApi` 初始任务队列（localStorage 无缓存时） | auto-task |
+| `queueSeed` | `mobileApi` 初始任务队列（localStorage 无缓存时） | terminal-session（任务域） |
 | `safTree` | `fileService.saf.listTree` 目录树 | file-transfer |
 | `listDirEntries` | `fileService.listDir` 返回条目（uri 由 mock 宿主拼装） | file-transfer |
 

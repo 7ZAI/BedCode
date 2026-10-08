@@ -75,6 +75,40 @@ impl bedcode::plugin::host_database::Host for WasmPluginState {
     fn query(&mut self, sql: String) -> Result<Option<String>, String> {
         super::host_impl::db_query(self, &sql)
     }
+
+    fn execute_params(&mut self, sql: String, params_json: String) -> Result<u32, String> {
+        super::host_impl::db_execute_params(self, &sql, &params_json)
+    }
+
+    fn query_params(&mut self, sql: String, params_json: String) -> Result<Option<String>, String> {
+        super::host_impl::db_query_params(self, &sql, &params_json)
+    }
+
+    fn execute_batch(&mut self, sqls_json: String) -> Result<u32, String> {
+        super::host_impl::db_execute_batch(self, &sqls_json)
+    }
+}
+
+impl bedcode::plugin::host_plugin_database::Host for WasmPluginState {
+    fn execute(&mut self, sql: String) -> Result<u32, String> {
+        super::host_impl::plugin_db_execute(self, &sql)
+    }
+
+    fn query(&mut self, sql: String) -> Result<Option<String>, String> {
+        super::host_impl::plugin_db_query(self, &sql)
+    }
+
+    fn execute_params(&mut self, sql: String, params_json: String) -> Result<u32, String> {
+        super::host_impl::plugin_db_execute_params(self, &sql, &params_json)
+    }
+
+    fn query_params(&mut self, sql: String, params_json: String) -> Result<Option<String>, String> {
+        super::host_impl::plugin_db_query_params(self, &sql, &params_json)
+    }
+
+    fn execute_batch(&mut self, sqls_json: String) -> Result<u32, String> {
+        super::host_impl::plugin_db_execute_batch(self, &sqls_json)
+    }
 }
 
 impl bedcode::plugin::host_terminal::Host for WasmPluginState {
@@ -211,10 +245,6 @@ impl bedcode::plugin::host_peer::Host for WasmPluginState {
         super::host_impl::peer_resume_transfer(self, &batch_id)
     }
 
-    fn resume_all_transfers(&mut self) -> Result<u32, String> {
-        super::host_impl::peer_resume_all_transfers(self)
-    }
-
     fn set_shared_roots(&mut self, dirs_json: String) -> Result<(), String> {
         super::host_impl::peer_set_shared_roots(self, &dirs_json)
     }
@@ -229,6 +259,26 @@ impl bedcode::plugin::host_peer::Host for WasmPluginState {
 
     fn pull_files(&mut self, session: String, dir_id: String, files_json: String) -> Result<u32, String> {
         super::host_impl::peer_pull_files(self, &session, &dir_id, &files_json)
+    }
+
+    fn set_download_dir(&mut self, path: String) -> Result<(), String> {
+        super::host_impl::peer_set_download_dir(self, &path)
+    }
+
+    fn start_node(&mut self) -> Result<bool, String> {
+        super::host_impl::peer_start_node(self)
+    }
+
+    fn stop_node(&mut self) -> Result<bool, String> {
+        super::host_impl::peer_stop_node(self)
+    }
+
+    fn active_transfers(&mut self) -> Result<String, String> {
+        super::host_impl::peer_active_transfers(self)
+    }
+
+    fn collect_outgoing(&mut self, paths_json: String) -> Result<String, String> {
+        super::host_impl::peer_collect_outgoing(self, &paths_json)
     }
 }
 
@@ -266,6 +316,84 @@ impl bedcode::plugin::host_platform::Host for WasmPluginState {
     }
 }
 
+// ==================== host-websocket（客户端域，ABI v14 · 票 11） ====================
+//
+// 只接客户端 5 函数：移动端不跑 WS 服务器，服务端域 9 函数与
+// `connection-context` 不跟演（ADR 0018/0019）。帧与状态事件走属主私有 topic，
+// 详见 host_impl::ws 模块头。
+
+impl bedcode::plugin::host_websocket::Host for WasmPluginState {
+    fn connect(&mut self, config_json: String) -> Result<String, String> {
+        super::host_impl::ws_connect(self, &config_json)
+    }
+
+    fn send_text(&mut self, handle: String, text: String) -> Result<(), String> {
+        super::host_impl::ws_send_text(self, &handle, &text)
+    }
+
+    fn send_binary(&mut self, handle: String, payload: Vec<u8>) -> Result<(), String> {
+        super::host_impl::ws_send_binary(self, &handle, payload)
+    }
+
+    fn close(&mut self, handle: String, close_json: String) -> Result<bool, String> {
+        super::host_impl::ws_close(self, &handle, &close_json)
+    }
+
+    fn is_connected(&mut self, handle: String) -> Result<bool, String> {
+        super::host_impl::ws_is_connected(self, &handle)
+    }
+}
+
+// ==================== host-terminal-stream（终端输出流窄转发，ABI v15 · 票 12） ====================
+//
+// 零解析窄转发（ADR 0022 四类薄壳④）：把插件交来的输出裸字节按 session-id
+// 转发到前端页面 Channel；宿主不读内容、不缓存。表与命令面见
+// terminal_stream_gateway.rs。
+
+impl bedcode::plugin::host_terminal_stream::Host for WasmPluginState {
+    fn forward_output(&mut self, session_id: String, data: Vec<u8>) -> Result<(), String> {
+        super::host_impl::terminal_stream_forward_output(self, &session_id, data)
+    }
+}
+
+// ==================== host-connection（主连接事实读取，ABI v15 · 票 12） ====================
+//
+// 与桌面同名不同形（C8）：移动端只暴露 primary-target 一函数引擎事实；
+// 无权限门（对齐 host-platform 例外先例），理由见 WIT 注释与票 12 §4。
+
+impl bedcode::plugin::host_connection::Host for WasmPluginState {
+    fn primary_target(&mut self) -> Result<String, String> {
+        super::host_impl::connection_primary_target(self)
+    }
+}
+
+// ==================== host-auth（认证引擎面，ABI v16 · 票 14 阶段 B） ====================
+//
+// 编排在消费插件（com.bedcode.terminal-session 配对域），密码学与凭据在宿主
+// （C4）；凭据零过境——本域任何函数都不向插件返回凭据材料。
+
+impl bedcode::plugin::host_auth::Host for WasmPluginState {
+    fn request_pairing(&mut self) -> Result<(), String> {
+        super::host_impl::auth_request_pairing(self)
+    }
+
+    fn verify_pairing_code(&mut self, code: String) -> Result<bool, String> {
+        super::host_impl::auth_verify_pairing_code(self, &code)
+    }
+
+    fn qr_connect(&mut self, token: String) -> Result<bool, String> {
+        super::host_impl::auth_qr_connect(self, &token)
+    }
+
+    fn biometric_authenticate(&mut self) -> Result<bool, String> {
+        super::host_impl::auth_biometric_authenticate(self)
+    }
+
+    fn has_credentials(&mut self) -> Result<bool, String> {
+        super::host_impl::auth_has_credentials(self)
+    }
+}
+
 // ==================== Component Linker 组装 ====================
 
 /// 构建组件侧 Linker（注册已接线的 import 接口）
@@ -279,6 +407,7 @@ pub(crate) fn build_component_linker(engine: &wasmtime::Engine) -> crate::Result
         bedcode::plugin::host_log::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_storage::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_database::add_to_linker::<WasmPluginState, D>,
+        bedcode::plugin::host_plugin_database::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_terminal::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_events::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_http::add_to_linker::<WasmPluginState, D>,
@@ -288,6 +417,10 @@ pub(crate) fn build_component_linker(engine: &wasmtime::Engine) -> crate::Result
         bedcode::plugin::host_peer::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_mdns::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_platform::add_to_linker::<WasmPluginState, D>,
+        bedcode::plugin::host_websocket::add_to_linker::<WasmPluginState, D>,
+        bedcode::plugin::host_terminal_stream::add_to_linker::<WasmPluginState, D>,
+        bedcode::plugin::host_connection::add_to_linker::<WasmPluginState, D>,
+        bedcode::plugin::host_auth::add_to_linker::<WasmPluginState, D>,
     ] {
         iface(&mut linker, |s| s)
             .map_err(|e| AppError::Plugin(format!("Failed to register component host interface: {}", e)))?;
@@ -752,7 +885,7 @@ pub(crate) mod tests {
 
     /// 夹具共享 target 目录（`bedcode-mobile/target/fixtures`）
     ///
-    /// 与桌面端同构：auto-task 插件与 plugin-component-test 夹具原本各写各自
+    /// 与桌面端同构：terminal-session 插件与 plugin-component-test 夹具原本各写各自
     /// `target/`，把 SDK / wit-bindgen / serde 这份相同依赖图编译两遍
     /// （2026-09-26 实测各 ~170M）。共享后只编译一遍。
     /// 桌面端对应实现见 `src-tauri/.../runtime/fixture_target.rs`，
@@ -761,20 +894,21 @@ pub(crate) mod tests {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../target/fixtures")
     }
 
-    /// 构建真实插件组件：SDK `wasm_entry!` 宏产物（迁移 ticket 04 验收用）
+    /// 构建真实插件组件：SDK `wasm_entry!` 宏产物（票 16 起样本 = 合并后的
+    /// `com.bedcode.terminal-session`（终端域 + 任务域），迁移 ticket 04 验收沿用）
     ///
     /// 与 `build_test_component` 同链路：cargo build（wasm32，wasm feature）→
     /// wit-component 编码。被测对象是 SDK 宏生成的组件（区别于手写 Guest impl
     /// 的 plugin-component-test）——宏展开错误 / export! 接线错误在此暴露。
-    pub(crate) fn build_auto_task_component() -> Vec<u8> {
+    pub(crate) fn build_terminal_session_component() -> Vec<u8> {
         let cache = COMPONENT_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-        const KEY: &str = "auto-task";
+        const KEY: &str = "terminal-session";
         if let Some(bytes) = cache.lock().unwrap().get(KEY) {
             return bytes.clone();
         }
 
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let plugin_dir = manifest_dir.join("../plugins/auto-task");
+        let plugin_dir = manifest_dir.join("../plugins/terminal-session");
         let target_dir = fixture_target_dir().to_str().unwrap().to_string();
         let manifest_path = plugin_dir.join("rust/Cargo.toml").to_str().unwrap().to_string();
         let status = std::process::Command::new("cargo")
@@ -792,12 +926,12 @@ pub(crate) mod tests {
                 &manifest_path,
             ])
             .status()
-            .expect("Failed to run cargo build for auto-task component");
-        assert!(status.success(), "auto-task WASM build failed");
+            .expect("Failed to run cargo build for terminal-session component");
+        assert!(status.success(), "terminal-session WASM build failed");
 
         let core =
-            std::fs::read(fixture_target_dir().join("wasm32-unknown-unknown/release/bedcode_plugin_auto_task.wasm"))
-                .expect("Failed to read auto-task module after build");
+            std::fs::read(fixture_target_dir().join("wasm32-unknown-unknown/release/bedcode_plugin_terminal_session.wasm"))
+                .expect("Failed to read terminal-session module after build");
         // 宏产物必经 componentize（等效本函数内编码）；SDK 构建链已内置该步骤。
         // 此处直接编码 core module（若传入已组件化产物，编码器会拒绝）
         let component = wit_component::ComponentEncoder::default()
@@ -809,12 +943,12 @@ pub(crate) mod tests {
         assert_eq!(
             &component[..4],
             [0x00, 0x61, 0x73, 0x6d],
-            "auto-task 组件应以 core module 段起始"
+            "terminal-session 组件应以 core module 段起始"
         );
         assert_eq!(
             &component[4..8],
             [0x0d, 0x00, 0x01, 0x00],
-            "auto-task 组件头应为 0d 00 01 00"
+            "terminal-session 组件头应为 0d 00 01 00"
         );
 
         cache.lock().unwrap().insert(KEY.to_string(), component.clone());
@@ -885,12 +1019,12 @@ pub(crate) mod tests {
         component
     }
 
-    /// 构造最小宿主上下文（db 内存库 + tempdir storage；app_handle=None 无头形态）
-    pub(crate) fn build_host_ctx(tmp: &tempfile::TempDir) -> Arc<WasmHostContext> {
+    /// 构造最小宿主上下文（db 内存库 + 内存 storage；app_handle=None 无头形态）
+    pub(crate) fn build_host_ctx() -> Arc<WasmHostContext> {
         let db = Arc::new(Mutex::new(
             rusqlite::Connection::open_in_memory().expect("open in-memory db"),
         ));
-        let storage = Arc::new(PluginStorage::new(&tmp.path().to_path_buf()));
+        let storage = PluginStorage::test_storage();
         // 无头/测试上下文：fs_auth 的 app_handle 亦为 None（桌面端 build_host_ctx 同形态）
         let fs_auth = Arc::new(FsAuthChecker::new(storage.clone(), None));
         let status_reporter: Arc<dyn Fn(&str, &str) + Send + Sync> = Arc::new(|_, _| {});
@@ -912,7 +1046,7 @@ pub(crate) mod tests {
         rt.block_on(async move {
             // 预写 storage：验证 host_storage Host impl 读回（JSON 值往返）
             let tmp = tempfile::tempdir().expect("tempdir");
-            let host_ctx = build_host_ctx(&tmp);
+            let host_ctx = build_host_ctx();
             host_ctx
                 .storage
                 .set(TEST_PLUGIN_ID, "test-key", serde_json::json!({"k": "v"}))
@@ -988,6 +1122,448 @@ pub(crate) mod tests {
         });
     }
 
+    // ==================== host-websocket 客户端域 · 真实组件闭环（票 11 §7.3） ====================
+
+    use bedcode_plugin_api_mobile::permission::PERMISSION_WS_CLIENT;
+
+    /// 捕获型投递器：记录总线消息，不进 guest
+    ///
+    /// 测试线程直调 `exports.call_invoke` **绕过** manager 的单插件锁（ADR 0029
+    /// 的实例门在 manager 层），若用真实 dispatcher（也调 guest 回调）会与测试
+    /// 线程并发进同一 Store——wasmtime Store 非 Sync，并发即 UB。捕获型投递器
+    /// 让「宿主 → 总线」段真实投递、断言在测试线程侧完成，不触碰 Store。
+    struct CapturingDispatcher {
+        captured: Arc<std::sync::Mutex<Vec<bedcode_plugin_api_mobile::BusMessage>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::plugin::message_bus::MessageDispatcher for CapturingDispatcher {
+        async fn dispatch_to_wasm(
+            &self,
+            _plugin_id: &str,
+            msg: &bedcode_plugin_api_mobile::BusMessage,
+        ) -> anyhow::Result<()> {
+            self.captured.lock().unwrap().push(msg.clone());
+            Ok(())
+        }
+
+        async fn is_activated(&self, _plugin_id: &str) -> bool {
+            true
+        }
+    }
+
+    /// host-websocket 客户端域全链路（真实 WASM 组件闭环）：guest 经 bindgen
+    /// import 调宿主原语——activate 期订阅 → connect（真实握手）→ send-text
+    /// （对端收到）→ 对端回帧（帧信封出现在属主二进制 topic）→ close（对端回
+    /// Close 1000 → `ws:close` 事件 wasClean=true）→ is-connected 翻 false。
+    /// 权限门（ws:client 已授权）与帧信封形状在闭环内被真实驱动
+    #[test]
+    fn ws_client_domain_full_loop_with_real_component() {
+        use futures_util::{SinkExt, StreamExt};
+        use tokio::net::TcpListener;
+        use tokio_tungstenite::tungstenite::protocol::Message as WsMsg;
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async move {
+            // ---- echo 服务器：记录收到的文本帧；首条文本后回二进制 echo 帧；Close 结束 ----
+            let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind echo server");
+            let addr = listener.local_addr().expect("addr");
+            let server = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.expect("accept");
+                let ws = tokio_tungstenite::accept_async(stream).await.expect("server handshake");
+                let (mut sink, mut source) = ws.split();
+                let mut texts = Vec::new();
+                let mut echoed = false;
+                while let Some(Ok(msg)) = source.next().await {
+                    match msg {
+                        WsMsg::Text(t) => {
+                            texts.push(t.to_string());
+                            if !echoed {
+                                echoed = true;
+                                sink.send(WsMsg::Binary(b"echo-payload".to_vec())).await.expect("echo send");
+                            }
+                        }
+                        WsMsg::Close(_) => break,
+                        _ => {}
+                    }
+                }
+                let _ = sink.close().await;
+                texts
+            });
+
+            // ---- 捕获型投递器 + 真实组件实例化（权限 = ws:client）----
+            let host_ctx = build_host_ctx();
+            let captured: Arc<std::sync::Mutex<Vec<bedcode_plugin_api_mobile::BusMessage>>> =
+                Arc::new(std::sync::Mutex::new(Vec::new()));
+            host_ctx
+                .message_bus
+                .set_dispatcher(Arc::new(CapturingDispatcher { captured: Arc::clone(&captured) }))
+                .await;
+
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let runtime = WasmRuntime::new(Some(tmp.path().join("aot"))).expect("create wasm runtime");
+            let component = Component::from_binary(runtime.engine(), &build_test_component(&["ws-client"]))
+                .expect("compile ws component");
+            let mut plugin = runtime
+                .instantiate_component(
+                    &component,
+                    TEST_PLUGIN_ID,
+                    host_ctx,
+                    // ws 消费需要两个权限位：ws:client（连接面）+ bus（事件与帧都
+                    // 走消息总线属主 topic——订阅总线本体要求 bus 权限）
+                    HashSet::from([
+                        PERMISSION_WS_CLIENT.to_string(),
+                        bedcode_plugin_api_mobile::permission::PERMISSION_BUS.to_string(),
+                    ]),
+                )
+                .expect("instantiate ws component");
+
+            // activate（guest 订阅 <PID>:ws:open / :ws:close / :ws:message）+ connect（真实握手）
+            let handle = {
+                let exports = plugin.exports().expect("exports");
+                exports
+                    .bedcode_plugin_lifecycle()
+                    .call_activate(&mut plugin.store)
+                    .expect("call activate")
+                    .expect("activate guest err");
+                let args = serde_json::json!({ "op": "ws-connect", "url": format!("ws://{addr}") }).to_string();
+                let out = exports
+                    .bedcode_plugin_command()
+                    .call_invoke(&mut plugin.store, "ws-op", &args)
+                    .expect("call invoke");
+                let v: serde_json::Value = serde_json::from_str(&out).expect("invoke json");
+                assert!(v["ok"].as_bool().unwrap(), "connect failed: {out}");
+                let h = v["handle"].as_str().expect("handle").to_string();
+                assert!(h.starts_with("wsc-"), "handle shape: {h}");
+                h
+            };
+
+            // send-text：guest → 宿主 → echo 服务器（上行闭环）
+            {
+                let exports = plugin.exports().expect("exports");
+                let args = serde_json::json!({ "op": "ws-send-text", "handle": handle, "text": "hello-ws-loop" })
+                    .to_string();
+                let out = exports
+                    .bedcode_plugin_command()
+                    .call_invoke(&mut plugin.store, "ws-op", &args)
+                    .expect("call invoke");
+                let v: serde_json::Value = serde_json::from_str(&out).expect("invoke json");
+                assert!(v["ok"].as_bool().unwrap(), "send-text failed: {out}");
+            }
+
+            // 等 ws:open 事件与 echo 回帧出现在总线（属主 topic）
+            async fn wait_for(mut cond: impl FnMut() -> bool, what: &str) {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+                while !cond() {
+                    assert!(std::time::Instant::now() < deadline, "timed out waiting for {what}");
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+            }
+            wait_for(
+                || {
+                    let cap = captured.lock().unwrap();
+                    cap.iter().any(|m| m.topic.ends_with(":ws:open"))
+                        && cap.iter().any(|m| m.topic.ends_with(":ws:message"))
+                },
+                "bus ws:open + ws:message",
+            )
+            .await;
+
+            // open 事件：payload 含连接事实（handle + url），sender 恒为 host
+            {
+                let cap = captured.lock().unwrap();
+                let open = cap.iter().find(|m| m.topic.ends_with(":ws:open")).expect("open event");
+                assert_eq!(open.sender, "host", "状态事件 sender 恒为 host");
+                assert_eq!(open.payload["handle"], handle.as_str(), "open payload 携带句柄");
+                assert!(
+                    open.payload["url"].as_str().unwrap().contains(&addr.port().to_string()),
+                    "open payload 携带连接目标"
+                );
+            }
+            // 帧信封：kind=binary(2) + handle + 原始 echo 字节（宿主 → 插件下行形状）
+            {
+                let cap = captured.lock().unwrap();
+                let frame = cap.iter().find(|m| m.topic.ends_with(":ws:message")).expect("frame");
+                let bin = frame.payload_binary.as_deref().expect("binary payload");
+                assert_eq!(bin[0], 2, "echo 回帧 kind=binary(2)");
+                let hl = u16::from_be_bytes([bin[1], bin[2]]) as usize;
+                assert_eq!(&bin[3..3 + hl], handle.as_bytes(), "信封 handle 段");
+                assert_eq!(&bin[3 + hl..], b"echo-payload", "信封载荷段 = 对端原始字节");
+            }
+
+            // close：对端回 Close 1000 → ws:close 事件（wasClean=true）
+            {
+                let exports = plugin.exports().expect("exports");
+                let args = serde_json::json!({ "op": "ws-close", "handle": handle }).to_string();
+                let out = exports
+                    .bedcode_plugin_command()
+                    .call_invoke(&mut plugin.store, "ws-op", &args)
+                    .expect("call invoke");
+                let v: serde_json::Value = serde_json::from_str(&out).expect("invoke json");
+                assert_eq!(v["hit"], true, "close 命中: {out}");
+            }
+            wait_for(
+                || captured.lock().unwrap().iter().any(|m| m.topic.ends_with(":ws:close")),
+                "ws:close event",
+            )
+            .await;
+            {
+                let cap = captured.lock().unwrap();
+                let close = cap.iter().find(|m| m.topic.ends_with(":ws:close")).expect("close event");
+                assert_eq!(close.payload["wasClean"], true, "对端回 1000 → wasClean=true");
+                assert_eq!(close.payload["code"], 1000, "close 事件携带对端关闭码");
+            }
+
+            // 服务器侧：上行文本帧内容正确（exactly 一次）
+            let texts = tokio::time::timeout(std::time::Duration::from_secs(3), server)
+                .await
+                .expect("server join timeout")
+                .expect("server task");
+            assert_eq!(texts, vec!["hello-ws-loop".to_string()], "对端收到的文本帧");
+
+            // is-connected：条目已由 reader 摘除 → false（真实查询链路）
+            {
+                let exports = plugin.exports().expect("exports");
+                let args = serde_json::json!({ "op": "ws-is-connected", "handle": handle }).to_string();
+                let out = exports
+                    .bedcode_plugin_command()
+                    .call_invoke(&mut plugin.store, "ws-op", &args)
+                    .expect("call invoke");
+                let v: serde_json::Value = serde_json::from_str(&out).expect("invoke json");
+                assert_eq!(v["open"], false, "关闭后 is-connected 为 false");
+            }
+        });
+    }
+
+    /// host-terminal-stream / host-connection / jwt-auth 全链路（票 12 · ABI v15，
+    /// 真实 WASM 组件闭环）：guest 经 bindgen import 走终端协议客户端的宿主面——
+    /// connect 带 `jwt-auth`（宿主代发首消息认证帧，token 不落插件）→ subscribe
+    /// 帧到 mock terminal 端点 → 回 subscribed（下行 text 帧经 ws:message 信封
+    /// 回流 guest 观测）→ `ts-forward` 驱动 forward-output（无头无登记 Channel →
+    /// 宿主显性 Err = fail-visible）→ ack 帧上行 → close 命中。权限门
+    /// （terminal:output）与 primary-target fail-visible 在闭环内被真实驱动。
+    /// 终端协议状态机（订阅门控/ack 节流/resync）的 native 单测在插件 crate
+    /// （bedcode_plugin_terminal_session），本用例不重复
+    #[test]
+    fn terminal_session_domain_full_loop_with_real_component() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async move {
+            use crate::state::set_global_token;
+
+            // mock 桌面插件端点（terminal 端点 = 真协议形状夹具；session-control
+            // 端点在本用例闲置）
+            let mock = crate::mock_plugin_ws::MockPluginWsServer::start().await;
+            set_global_token("t12-loop-token");
+
+            // 捕获型投递器（下行帧/事件观测）+ 真实组件实例化
+            let host_ctx = build_host_ctx();
+            let captured: Arc<std::sync::Mutex<Vec<bedcode_plugin_api_mobile::BusMessage>>> =
+                Arc::new(std::sync::Mutex::new(Vec::new()));
+            host_ctx
+                .message_bus
+                .set_dispatcher(Arc::new(CapturingDispatcher { captured: Arc::clone(&captured) }))
+                .await;
+
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let runtime = WasmRuntime::new(Some(tmp.path().join("aot"))).expect("create wasm runtime");
+            let component =
+                Component::from_binary(runtime.engine(), &build_test_component(&["terminal-session"]))
+                    .expect("compile terminal-session component");
+            let mut plugin = runtime
+                .instantiate_component(
+                    &component,
+                    TEST_PLUGIN_ID,
+                    host_ctx,
+                    // 终端协议客户端三权限位：ws:client（连接面）+ bus（事件与帧
+                    // 走消息总线属主 topic）+ terminal:output（输出窄转发出口）
+                    HashSet::from([
+                        PERMISSION_WS_CLIENT.to_string(),
+                        bedcode_plugin_api_mobile::permission::PERMISSION_BUS.to_string(),
+                        bedcode_plugin_api_mobile::permission::PERMISSION_TERMINAL_OUTPUT.to_string(),
+                    ]),
+                )
+                .expect("instantiate terminal-session component");
+
+            // activate（guest 订阅 ws:* 四 topic + ws:message 二进制）→
+            // connect(jwt-auth) + subscribe 帧一次到位
+            let handle = {
+                let exports = plugin.exports().expect("exports");
+                exports
+                    .bedcode_plugin_lifecycle()
+                    .call_activate(&mut plugin.store)
+                    .expect("call activate")
+                    .expect("activate guest err");
+                let args = serde_json::json!({
+                    "op": "ts-connect",
+                    "url": mock.url(crate::mock_plugin_ws::ENDPOINT_TERMINAL),
+                    "sessionId": "s-t12",
+                })
+                .to_string();
+                let out = exports
+                    .bedcode_plugin_command()
+                    .call_invoke(&mut plugin.store, "terminal-op", &args)
+                    .expect("call invoke");
+                let v: serde_json::Value = serde_json::from_str(&out).expect("invoke json");
+                assert!(v["ok"].as_bool().unwrap(), "ts-connect failed: {out}");
+                v["handle"].as_str().expect("handle").to_string()
+            };
+
+            // 对端侧：首帧 = 宿主代发的 auth 帧（token 从宿主认证状态取——
+            // guest 全程无 token 可见），随后是 subscribe 帧
+            mock.wait_for_text(
+                crate::mock_plugin_ws::ENDPOINT_TERMINAL,
+                |f| f["type"] == "subscribe",
+                std::time::Duration::from_secs(3),
+            )
+            .await;
+            {
+                let texts = mock.received_text(crate::mock_plugin_ws::ENDPOINT_TERMINAL).await;
+                assert_eq!(texts[0]["type"], "auth", "首帧必为宿主代发的 auth 帧");
+                let token = texts[0]["token"].as_str().expect("auth token");
+                assert_eq!(token, "t12-loop-token", "代发 token 与宿主认证状态同源");
+                assert_eq!(texts[1]["type"], "subscribe", "次帧为 subscribe（协议编排在 guest）");
+                assert_eq!(texts[1]["sessionId"], "s-t12");
+                assert_eq!(texts[1]["mode"], "live", "移动端固定 live 模式");
+            }
+
+            // 下行：mock 回 subscribed（text 控制帧）→ 帧信封经 ws:message 回流
+            mock.send_raw_text(
+                crate::mock_plugin_ws::ENDPOINT_TERMINAL,
+                &crate::mock_plugin_ws::subscribed_frame("s-t12", "live").to_string(),
+            )
+            .await;
+            {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+                loop {
+                    let got = captured
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .any(|m| {
+                            m.topic.ends_with(":ws:message")
+                                && m.payload_binary
+                                    .as_deref()
+                                    .map(|b| b.windows(10).any(|w| w == b"subscribed"))
+                                    .unwrap_or(false)
+                        });
+                    if got {
+                        break;
+                    }
+                    if std::time::Instant::now() >= deadline {
+                        let topics: Vec<String> = captured
+                            .lock()
+                            .unwrap()
+                            .iter()
+                            .map(|m| format!("{} (bin={})", m.topic, m.payload_binary.is_some()))
+                            .collect();
+                        panic!(
+                            "timed out waiting for subscribed frame on ws:message; captured topics: {topics:?}"
+                        );
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+            }
+
+            // forward-output：无头测试无登记 Channel → 宿主显性 Err（fail-visible
+            // 形态①，禁「成功但没人收到」）；错误文本回读 guest 观测记录断言
+            {
+                let exports = plugin.exports().expect("exports");
+                let args = serde_json::json!({
+                    "op": "ts-forward",
+                    "sessionId": "s-t12",
+                    "data": [0x1b, 0x5b, 0x33, 0x31, 0x6d], // ANSI 红色转义序列（任意裸字节）
+                })
+                .to_string();
+                exports
+                    .bedcode_plugin_command()
+                    .call_invoke(&mut plugin.store, "terminal-op", &args)
+                    .expect("call invoke");
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+                loop {
+                    let ok = {
+                        let exports = plugin.exports().expect("exports");
+                        let out = exports
+                            .bedcode_plugin_command()
+                            .call_invoke(&mut plugin.store, "terminal-op", r#"{"op":"ws-collect"}"#)
+                            .expect("call invoke");
+                        out.contains("no page channel")
+                    };
+                    if ok {
+                        break;
+                    }
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "timed out waiting for forward-output fail-visible error"
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+            }
+
+            // ack 帧上行（对端断言帧形状——节流判据本身在插件 crate native 单测）
+            {
+                let exports = plugin.exports().expect("exports");
+                let args = serde_json::json!({
+                    "op": "ts-ack", "handle": handle, "offset": 65536u64,
+                })
+                .to_string();
+                let out = exports
+                    .bedcode_plugin_command()
+                    .call_invoke(&mut plugin.store, "terminal-op", &args)
+                    .expect("call invoke");
+                let v: serde_json::Value = serde_json::from_str(&out).expect("invoke json");
+                assert!(v["ok"].as_bool().unwrap(), "ts-ack failed: {out}");
+            }
+            mock.wait_for_text(
+                crate::mock_plugin_ws::ENDPOINT_TERMINAL,
+                |f| f["type"] == "ack",
+                std::time::Duration::from_secs(3),
+            )
+            .await;
+            {
+                let texts = mock.received_text(crate::mock_plugin_ws::ENDPOINT_TERMINAL).await;
+                let ack = texts.iter().find(|f| f["type"] == "ack").expect("ack frame");
+                assert_eq!(ack["offset"], 65536, "ack offset 水位形状");
+            }
+
+            // primary-target：宿主无主连接目标 → 显性 Err（无头单例态；
+            // fail-visible，禁空对象）——fail path 同样证明原语被真实驱动
+            {
+                let exports = plugin.exports().expect("exports");
+                let out = exports
+                    .bedcode_plugin_command()
+                    .call_invoke(&mut plugin.store, "terminal-op", r#"{"op":"ts-primary-target"}"#)
+                    .expect("call invoke");
+                let v: serde_json::Value = serde_json::from_str(&out).expect("invoke json");
+                // 测试进程可能已配 target（单例全局）——两种结果都合法，但形态
+                // 必须二选一：合法 JSON 事实 或 显性 Err（禁第三种）
+                assert!(
+                    (v["ok"].as_bool().unwrap() && v["target"].as_str().is_some())
+                        || (!v["ok"].as_bool().unwrap() && v["error"].as_str().is_some()),
+                    "primary-target 必须返回事实或显性错误: {out}"
+                );
+            }
+
+            // close：显式关闭命中（宿主 auto-reconnect 会话一并取消）
+            {
+                let exports = plugin.exports().expect("exports");
+                let args = serde_json::json!({ "op": "ts-close", "handle": handle }).to_string();
+                let out = exports
+                    .bedcode_plugin_command()
+                    .call_invoke(&mut plugin.store, "terminal-op", &args)
+                    .expect("call invoke");
+                let v: serde_json::Value = serde_json::from_str(&out).expect("invoke json");
+                assert_eq!(v["hit"], true, "close 命中: {out}");
+            }
+            mock.wait_for_text(
+                crate::mock_plugin_ws::ENDPOINT_TERMINAL,
+                |f| f["type"] == "auth",
+                std::time::Duration::from_secs(1),
+            )
+            .await; // 连接已在（wait_for_text 复用为握手收敛窗口）
+            crate::state::clear_global_token();
+        });
+    }
+
     /// 11 组 import 接口全部注册成功（build_component_linker 是纯接线代码，
     /// 任何一组接口名冲突/接线参数错误都会在此失败）
     #[test]
@@ -1025,7 +1601,7 @@ pub(crate) mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
             let tmp = tempfile::tempdir().expect("tempdir");
-            let host_ctx = build_host_ctx(&tmp);
+            let host_ctx = build_host_ctx();
             host_ctx
                 .storage
                 .set(TEST_PLUGIN_ID, "test-key", serde_json::json!({"k": "v"}))
@@ -1119,7 +1695,7 @@ pub(crate) mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
             let tmp = tempfile::tempdir().expect("tempdir");
-            let host_ctx = build_host_ctx(&tmp);
+            let host_ctx = build_host_ctx();
             let runtime = WasmRuntime::new(Some(tmp.path().join("aot"))).expect("wasm runtime");
             let component = Component::from_binary(runtime.engine(), &build_test_component(&["high-abi"]))
                 .expect("compile test component");
@@ -1139,7 +1715,7 @@ pub(crate) mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
             let tmp = tempfile::tempdir().expect("tempdir");
-            let host_ctx = build_host_ctx(&tmp);
+            let host_ctx = build_host_ctx();
             let runtime = WasmRuntime::new(Some(tmp.path().join("aot"))).expect("wasm runtime");
             let component = Component::from_binary(runtime.engine(), &build_test_component(&["spin-loop"]))
                 .expect("compile test component");
@@ -1169,7 +1745,7 @@ pub(crate) mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
             let tmp = tempfile::tempdir().expect("tempdir");
-            let host_ctx = build_host_ctx(&tmp);
+            let host_ctx = build_host_ctx();
 
             // 单元层：阈值语义（256MB 内放行、超限拒绝）
             let mut state = WasmPluginState {
@@ -1220,20 +1796,36 @@ pub(crate) mod tests {
     /// 迁移 ticket 04 验收：SDK `wasm_entry!` 宏生成的组件能被宿主加载，
     /// 完成 ABI 协商（version=ABI_VERSION）、激活、命令调用（含错误 JSON 透传）
     ///
-    /// 被测对象是真实插件（auto-task）经新 SDK 编译的产物 —— 宏展开正确性、
+    /// 被测对象是真实插件（terminal-session，票 16 合并后的终端 + 任务域
+    /// app）经新 SDK 编译的产物 —— 宏展开正确性、
     /// `export!` 跨 crate 接线、8 组接口全量导出的最终证明（插件业务代码零改动）。
     #[test]
     fn test_sdk_macro_component_loads_and_activates() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
             let tmp = tempfile::tempdir().expect("tempdir");
-            let host_ctx = build_host_ctx(&tmp);
+            let host_ctx = build_host_ctx();
             let runtime = WasmRuntime::new(Some(tmp.path().join("aot"))).expect("wasm runtime");
-            let component = Component::from_binary(runtime.engine(), &build_auto_task_component())
-                .expect("compile auto-task component");
+            let component =
+                Component::from_binary(runtime.engine(), &build_terminal_session_component())
+                .expect("compile terminal-session component");
+            // 生产 manifest 权限集（activate 期 ws 属主 topic 订阅 + 认证状态探测按声明放行）
+            let granted: HashSet<String> = [
+                bedcode_plugin_api_mobile::permission::PERMISSION_AUTH,
+                bedcode_plugin_api_mobile::permission::PERMISSION_BUS,
+                bedcode_plugin_api_mobile::permission::PERMISSION_SESSION_READ,
+                bedcode_plugin_api_mobile::permission::PERMISSION_STORAGE,
+                bedcode_plugin_api_mobile::permission::PERMISSION_TERMINAL_OUTPUT,
+                bedcode_plugin_api_mobile::permission::PERMISSION_UI_INPUT,
+                bedcode_plugin_api_mobile::permission::PERMISSION_UI_TOOLBOX,
+                bedcode_plugin_api_mobile::permission::PERMISSION_WS_CLIENT,
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
             let mut plugin = runtime
-                .instantiate_component(&component, "com.bedcode.auto-task", host_ctx, HashSet::new())
-                .expect("instantiate auto-task component");
+                .instantiate_component(&component, "com.bedcode.terminal-session", host_ctx, granted)
+                .expect("instantiate terminal-session component");
 
             // ABI 协商：与 SDK abi::ABI_VERSION 同步（宏内 `abi.version()` 输出）
             let exports = plugin.exports().expect("world exports");
@@ -1242,19 +1834,19 @@ pub(crate) mod tests {
                 bedcode_plugin_api_mobile::abi::ABI_VERSION
             );
 
-            // 激活/停用（auto-task 仅日志，无权限依赖）
+            // 激活/停用（terminal-session：activate 期订阅 ws 属主 topic + 认证状态探测）
             assert_eq!(plugin.activate().expect("activate"), 0);
             assert_eq!(plugin.deactivate().expect("deactivate"), 0);
 
             // manifest（宏内 `manifest()` 序列化 plugin.json）
             let manifest: serde_json::Value = serde_json::from_str(&plugin.get_manifest().expect("manifest")).unwrap();
-            assert_eq!(manifest["id"], "com.bedcode.auto-task");
+            assert_eq!(manifest["id"], "com.bedcode.terminal-session");
 
-            // 命令调用：auto-task 对未知命令返回 Err → 宏序列化为 {"error": ...} JSON
+            // 命令调用：terminal-session 对未知命令返回 Err → 宏序列化为 {"error": ...} JSON
             let result = plugin.invoke_command("no.such.cmd", "{}").expect("invoke_command");
             let v: serde_json::Value = serde_json::from_str(&result).unwrap();
             assert!(
-                v["error"].as_str().is_some_and(|s| s.contains("Unknown command")),
+                v["error"].as_str().is_some_and(|s| s.contains("unknown command")),
                 "命令错误应经宏转义为 error JSON，实际: {}",
                 result
             );

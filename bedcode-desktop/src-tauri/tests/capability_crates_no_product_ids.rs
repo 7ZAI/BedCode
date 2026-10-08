@@ -12,8 +12,8 @@
 //!
 //! ## 扫描面与排除面（排除必须显式、可审计）
 //!
-//! - **扫**：`bedcode-desktop/packages/` 下 8 个能力域 / 传输面 crate 的 `src/`
-//!   （含 2026-10-06 从 wasm-core 迁出的 `bedcode-pty-engine`）。
+//! - **扫**：`bedcode-*` 能力域 / 传输面 crate 的 `src/`（8 个，均在**仓库根
+//!   `packages/`**，2026-10-07 从 `bedcode-desktop/packages/` 迁根）。
 //! - **不扫注释**：`//`、`///`、`//!` 一律剥掉。注释里点名产品（解释「为什么」）是
 //!   正常且必要的，把注释当代码判会产出噪音锁，噪音锁会被忽略，忽略的锁等于没有。
 //! - **不扫测试区**：路径含 `tests` 段的独立测试文件、以及文件内首个
@@ -50,7 +50,7 @@ use std::path::{Path, PathBuf};
 
 // ==================== 登记表（唯一事实源） ====================
 
-/// 纳入扫描的能力域 / 传输面 crate（`bedcode-desktop/packages/` 下的目录名）
+/// 纳入扫描的能力域 / 传输面 crate（crate 名；落点见 [`crate_dir`]）
 ///
 /// 新增能力 crate 必须登记进来——**不登记 = 不受本锁管辖**，故登记动作本身是
 /// 「承认它进入语义管辖范围」的一次显式决定。
@@ -69,15 +69,23 @@ const SCANNED_CRATES: &[&str] = &[
 
 /// 已知的、暂未纳入扫描的 `bedcode-*` crate（各有明确在办票据）
 ///
-/// 与 `SCANNED_CRATES` 合起来构成**完整覆盖**：`packages/` 下每个 `bedcode-*`
+/// 与 `SCANNED_CRATES` 合起来构成**完整覆盖**：两个根目录下每个 `bedcode-*`
 /// 目录必须在两者之一里（C-3 反向断言）。没有这个桶，「把 crate 从登记表里删掉」
-/// 就是一条零成本的后门——锁照样绿，覆盖面悄悄少一块。进本桶同样不是免费的：处置
+/// 就是一条零成本后门——锁照样绿，覆盖面悄悄少一块。进本桶同样不是免费的：处置
 /// 完成后删掉本条目即自动进入扫描面。
-const PENDING_SCAN_CRATES: &[(&str, &str)] = &[(
-    "bedcode-wasm-core",
-    "机制整核仍有的产品 id 泄漏（fs_auth.rs 的 FIRST_PARTY_TRUSTED_DIRS 第一方豁免表 / \
-     activation.rs 的 LEGACY_API_PLUGIN_ALIASES 退役别名表）由独立票据处置，处置完删本条目",
-)];
+const PENDING_SCAN_CRATES: &[(&str, &str)] = &[
+    (
+        "bedcode-wasm-core",
+        "机制整核仍有的产品 id 泄漏（fs_auth.rs 的 FIRST_PARTY_TRUSTED_DIRS 第一方豁免表 / \
+         activation.rs 的 LEGACY_API_PLUGIN_ALIASES 退役别名表）由独立票据处置，处置完删本条目",
+    ),
+    (
+        "bedcode-host-kit",
+        "机制内核（ADR 0035 D1：组件状态 / 能力模块契约 / 自动注册表），不是能力域 crate；\
+         它自 2026-10-07 起与能力域 crate 同落仓库根 packages/，本锁过去因分处两端而天然不在\
+         扫描面。纳入语义扫描另立票据",
+    ),
+];
 
 /// 产品 id 形状：反向域名 + 插件 id 段
 ///
@@ -137,12 +145,51 @@ fn desktop_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
-/// `bedcode-desktop/packages/`
-fn packages_dir() -> PathBuf {
+/// 桌面端 `packages/`（2026-10-08 起仅剩 `plugin-*` 契约与夹具 crate，无 `bedcode-*`；
+/// 保留枚举是为了 C-3 反向断言面不缩水——未来若再落回一个 `bedcode-*` 目录会被抓到）
+fn desktop_packages_dir() -> PathBuf {
     desktop_root()
         .parent()
         .map(|p| p.join("packages"))
         .expect("src-tauri 的上级应是 bedcode-desktop")
+}
+
+/// 仓库根 `packages/`（机制内核 `bedcode-host-kit`、8 个能力域 / 传输面 crate
+/// 自 2026-10-07 起、整核本体 `bedcode-wasm-core` 自 2026-10-08 起落此处；
+/// 迁根前能力域 crate 在 `bedcode-desktop/packages/`）
+fn repo_packages_dir() -> PathBuf {
+    desktop_root()
+        .parent()
+        .and_then(Path::parent)
+        .map(|p| p.join("packages"))
+        .expect("bedcode-desktop 的上级应是仓库根")
+}
+
+/// 扫描面根目录全集（**两个** packages/ 都要枚举，C-3 反向断言才有完整覆盖面）
+fn packages_dirs() -> Vec<PathBuf> {
+    vec![repo_packages_dir(), desktop_packages_dir()]
+}
+
+/// 按 crate 名解析它的目录：逐个根找，**找不到即 panic**——
+///
+/// 登记表指向一个不存在的目录时，扫描器会静默扫不到任何文件（假绿灯）；
+/// 这正是本锁最危险的失守形态，故做成 fail-visible。
+fn crate_dir(crate_name: &str) -> PathBuf {
+    for root in packages_dirs() {
+        let candidate = root.join(crate_name);
+        if candidate.is_dir() {
+            return candidate;
+        }
+    }
+    panic!(
+        "crate `{crate_name}` 在两个根下都找不到（{}）—— crate 改名或移出必须同改登记表，\
+         否则扫描器空转、本锁失效",
+        packages_dirs()
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(" / ")
+    )
 }
 
 /// 逐文件递归收集 `.rs`（目录序稳定，便于报错可复现）
@@ -300,7 +347,7 @@ fn product_literals_in(text: &str) -> BTreeSet<String> {
 
 /// 扫一个 crate 的全部生产代码
 fn scan_crate(crate_name: &str) -> Vec<ProdSource> {
-    let crate_root = packages_dir().join(crate_name);
+    let crate_root = crate_dir(crate_name);
     let src = crate_root.join("src");
     let mut files = Vec::new();
     collect_rs_files(&src, &mut files);
@@ -438,7 +485,7 @@ fn every_registered_crate_is_present_and_scan_coverage_is_complete() {
         "登记表为空 ⇒ 本锁无管辖面，必须立即失效报错而非静默通过"
     );
     for crate_name in SCANNED_CRATES {
-        let src = packages_dir().join(crate_name).join("src");
+        let src = crate_dir(crate_name).join("src");
         assert!(
             src.is_dir(),
             "登记表列了 `{crate_name}` 但 {} 不存在 —— crate 改名/移出必须同改登记表",
@@ -457,20 +504,21 @@ fn every_registered_crate_is_present_and_scan_coverage_is_complete() {
         );
     }
 
-    // 反向：packages/ 下每个 bedcode-* 目录都必须有归属
+    // 反向：两个 packages/ 下每个 bedcode-* 目录都必须有归属
     let mut unregistered: Vec<String> = Vec::new();
-    let Ok(entries) = fs::read_dir(packages_dir()) else {
-        panic!("读不到 {} —— 扫描器空转，本锁失效", packages_dir().display());
-    };
-    for entry in entries.filter_map(|e| e.ok()) {
-        let name = entry.file_name().to_string_lossy().to_string();
-        if !name.starts_with("bedcode-") {
-            continue;
+    for root in packages_dirs() {
+        let entries =
+            fs::read_dir(&root).unwrap_or_else(|e| panic!("读不到 {} —— 扫描器空转，本锁失效：{e}", root.display()));
+        for entry in entries.filter_map(|e| e.ok()) {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !name.starts_with("bedcode-") {
+                continue;
+            }
+            if SCANNED_CRATES.contains(&name.as_str()) || PENDING_SCAN_CRATES.iter().any(|(n, _)| *n == name) {
+                continue;
+            }
+            unregistered.push(format!("{}/{name}", root.display()));
         }
-        if SCANNED_CRATES.contains(&name.as_str()) || PENDING_SCAN_CRATES.iter().any(|(n, _)| *n == name) {
-            continue;
-        }
-        unregistered.push(name);
     }
     assert!(
         unregistered.is_empty(),

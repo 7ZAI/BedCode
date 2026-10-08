@@ -236,8 +236,7 @@ mod tests {
     use super::*;
 
     fn test_store() -> PluginApprovalStore {
-        let tmp = tempfile::TempDir::new().unwrap();
-        PluginApprovalStore::new(Arc::new(PluginStorage::new(&tmp.path().to_path_buf())))
+        PluginApprovalStore::new(PluginStorage::test_storage())
     }
 
     fn write_plugin_dir(dir: &Path, files: &[(&str, &str)]) {

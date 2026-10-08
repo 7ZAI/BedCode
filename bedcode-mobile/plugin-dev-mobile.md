@@ -98,7 +98,7 @@ pnpm run package     # = bedcode-plugin package：产出 dist/{id}.zip
 
 ```bash
 cd bedcode-mobile && pnpm run plugins:build          # 全部
-cd bedcode-mobile && pnpm run plugins:build -- --plugin com.bedcode.auto-task
+cd bedcode-mobile && pnpm run plugins:build -- --plugin com.bedcode.terminal-session
 ```
 
 ---
@@ -204,7 +204,7 @@ bedcode-plugin create com.example.ui-only "UI Only" --ts-only
 
 ### 自渲染浮层（createApp 模式）
 
-插件需弹出自定义面板/弹窗时，可像内置 auto-task 插件一样自行挂载 Vue 应用（宿主只负责注册入口按钮，不承载插件 UI）：
+插件需弹出自定义面板/弹窗时，可像内置 terminal-session 插件（任务域）一样自行挂载 Vue 应用（宿主只负责注册入口按钮，不承载插件 UI）：
 
 ```ts
 import { createApp } from 'vue'
@@ -218,9 +218,9 @@ app.provide('pluginContext', context)        // 组件内经 inject 取 context
 app.mount(container)
 ```
 
-- 样式用 `?inline` 导入并在 activate 时注入 `<style>`（参见 `plugins/auto-task/src/panel.css`）；
+- 样式用 `?inline` 导入并在 activate 时注入 `<style>`（参见 `plugins/terminal-session/src/task/panel.css`）；
 - 组件复用宿主 Tailwind 工具类时，需把插件源码加入宿主 `tailwind.config.js` 的 `content` 扫描范围；
-- 键盘避让基于 window 级事件（`safeAreaChanged` + `visualViewport`），与终端输入一致（参见 `plugins/auto-task/src/components/AutoTaskPanelHost.vue`）。
+- 键盘避让基于 window 级事件（`safeAreaChanged` + `visualViewport`），与终端输入一致（参见 `plugins/terminal-session/src/task/components/AutoTaskPanelHost.vue`）。
 
 ---
 
@@ -324,7 +324,7 @@ SAF 选择器、系统通知）仍需真机验证。首次运行自动安装 dev
 | SDK 模板 | `bedcode-mobile/packages/plugin-sdk-mobile/template/` |
 | SDK 浏览器开发环境 | `bedcode-mobile/packages/plugin-sdk-mobile/dev-shell/` |
 | 插件宿主 | `bedcode-mobile/src-tauri/src/plugin/`（manager / loader / downloader / wasm_runtime / wasm_host / registry / commands / storage / transfer / saf_io / saf_path / fs_auth / approval / message_bus / validation / android_plugins） |
-| 内置插件 | `bedcode-mobile/plugins/ai-chatbox`、`plugins/auto-task`、`plugins/file-transfer` |
+| 内置插件 | `bedcode-mobile/plugins/ai-chatbox`、`plugins/file-transfer`、`plugins/terminal-session` |
 | 插件管理页 | `bedcode-mobile/src/views/PluginView.vue` |
 | 前端插件运行时 | `bedcode-mobile/src/plugin/`（loader / registry / context / commands / events / permission / shared-runtime / routes / dialog-host / components） |
 | Kotlin 解压桥 | `bedcode-mobile/src-tauri/gen/android/.../PluginAssetExtractor.kt` |

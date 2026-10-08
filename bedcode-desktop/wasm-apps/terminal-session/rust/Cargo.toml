@@ -57,10 +57,10 @@ rand = "0.8"
 # 集成目标需要 crate-type 可链接（rlib），而加 rlib 会连带构建 x86_64 cdylib 并
 # 因 WIT 导出名在 ELF 下非法而链接失败（见 `[lib]` 注释）。单测 harness 不需要。
 # 收益不变：dev-deps 不参与 wasm 构建，`pnpm run build` 的产物链零影响。
-bedcode-server-base = { path = "../../../packages/bedcode-server-base" }
-bedcode-server-core = { path = "../../../packages/bedcode-server-core" }
-bedcode-server-http = { path = "../../../packages/bedcode-server-http" }
-bedcode-server-websocket = { path = "../../../packages/bedcode-server-websocket" }
+bedcode-server-base = { path = "../../../../packages/bedcode-server-base" }
+bedcode-server-core = { path = "../../../../packages/bedcode-server-core" }
+bedcode-server-http = { path = "../../../../packages/bedcode-server-http" }
+bedcode-server-websocket = { path = "../../../../packages/bedcode-server-websocket" }
 # 真实 HTTP 客户端（与宿主 `src-tauri` 同版本 0.12，依赖图统一为一份）
 reqwest = { version = "0.12", features = ["json"] }
 # 真实 WS 客户端（裸升级探测 + 认证帧 A/B；与 `cross-end-tests` 同选型）

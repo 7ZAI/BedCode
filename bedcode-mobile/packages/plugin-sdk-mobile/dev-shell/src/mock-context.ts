@@ -39,6 +39,7 @@ import {
   registerRoute,
   registerSettingsSection,
   registerTerminalToolbarItem,
+  registerTerminalView,
   registerToolboxPage,
   routes as routeEntries,
 } from './registry'
@@ -118,6 +119,9 @@ export function createMockContext(pluginId: string): PluginContext {
     },
     registerTerminalToolbarItem(item) {
       return track(registerTerminalToolbarItem(pluginId, item))
+    },
+    registerTerminalView(view) {
+      return track(registerTerminalView(pluginId, view))
     },
     registerSettingsSection(section) {
       return track(registerSettingsSection(pluginId, section))

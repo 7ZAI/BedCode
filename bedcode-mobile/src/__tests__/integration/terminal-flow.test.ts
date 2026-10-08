@@ -88,7 +88,7 @@ function emitRaw(sessionId: string, data: string) {
 
 /** 模拟移动端 Rust 链路状态事件 */
 function emitState(sessionId: string, phase: string, detail?: string) {
-  for (const h of eventHandlers['terminal-state'] ?? []) {
+  for (const h of eventHandlers['plugin:com.bedcode.terminal-session:terminal-state'] ?? []) {
     h({ payload: { session_id: sessionId, phase, detail } })
   }
 }
@@ -168,7 +168,7 @@ describe('终端流：terminalBuffer store × useTerminalBuffer × xterm × 输�
     expect(store.getBuffer('s1')!.lastRenderedOffset).toBe(5)
 
     // 环淘汰重锚：清屏 + 计数归零；重播继续
-    for (const h of eventHandlers['terminal-resync'] ?? []) {
+    for (const h of eventHandlers['plugin:com.bedcode.terminal-session:terminal-resync'] ?? []) {
       h({ payload: { session_id: 's1', offset: 4096 } })
     }
     expect(terminal.clear).toHaveBeenCalledTimes(1)
@@ -203,7 +203,7 @@ describe('终端流：terminalBuffer store × useTerminalBuffer × xterm × 输�
     expect(store.getBuffer('s1')!.lastRenderedOffset).toBeNull()
   })
 
-  it('输入回传：sendInput → terminal_send_input 命令（Rust → WS → 桌面 PTY）', async () => {
+  it('输入回传：sendInput → 插件命令 terminal-session.send-input（票 12：协议客户端迁插件）', async () => {
     const store = useTerminalBufferStore()
 
     // 订阅 + 链路 live
@@ -214,19 +214,37 @@ describe('终端流：terminalBuffer store × useTerminalBuffer × xterm × 输�
     const ok = store.sendInput('s1', 'ls -la\n', 'enter')
     expect(ok).toBe(true)
     await flushAsync()
-    expect(invokeCalls('terminal_send_input')).toContainEqual([
-      { sessionId: 's1', data: 'ls -la\n', specialKey: 'enter' },
-    ])
-    // 旧链路不再被使用：无 HTTP POST / WS socket 通道
+    // 票 12：命令面走 plugin_invoke → com.bedcode.terminal-session 插件
+    const pluginSendArgs = pluginInvokeCalls('terminal-session.send-input')
+    expect(pluginSendArgs.length).toBeGreaterThan(0)
+    expect(pluginSendArgs.at(-1)).toMatchObject({
+      pluginId: 'com.bedcode.terminal-session',
+      command: 'terminal-session.send-input',
+      args: { sessionId: 's1', data: 'ls -la\n', specialKey: 'enter' },
+    })
+    // 旧链路不再被使用：无 HTTP POST / WS socket 通道（旧终端协议命令字面量
+    // 不在本文件出现——退役锁 retired_mobile_terminal_link_lock 零容忍拦截，
+    // 「旧命令零调用」由上方 pluginInvokeCalls 命中新命令面间接证明）
     expect(invokeCalls('http_request')).toHaveLength(0)
 
     // 未订阅会话输入被拒（不发送）
     const rejected = store.sendInput('s2', 'x')
     expect(rejected).toBe(false)
-    expect(invokeCalls('terminal_send_input')).toHaveLength(1)
+    expect(pluginInvokeCalls('terminal-session.send-input')).toHaveLength(
+      pluginSendArgs.length,
+    )
   })
 })
 
+/** Tauri 命令调用（按命令名过滤） */
 function invokeCalls(cmd: string): unknown[][] {
   return mockInvoke.mock.calls.filter(([c]) => c === cmd).map((call) => call.slice(1))
+}
+
+/** 插件命令调用（plugin_invoke 的 args 按命令 id 过滤；票 12 命令面） */
+function pluginInvokeCalls(command: string): unknown[] {
+  return mockInvoke.mock.calls
+    .filter(([c]) => c === 'plugin_invoke')
+    .map(([, args]) => args as { command?: string })
+    .filter((args) => args.command === command)
 }

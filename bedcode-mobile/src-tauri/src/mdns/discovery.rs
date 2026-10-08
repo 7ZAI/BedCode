@@ -7,15 +7,13 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::RwLock;
 
-use mdns_sd::{ServiceDaemon, ServiceEvent};
+use mdns_sd::ServiceEvent;
 
 use super::types::{DiscoveredService, SERVICE_TYPE};
 use crate::system::constants::mdns::RECV_TIMEOUT_SECS;
 
 /// mDNS 发现管理器
 pub struct MdnsDiscovery {
-    /// mdns-sd 守护进程
-    daemon: Arc<RwLock<Option<ServiceDaemon>>>,
     /// 已发现的服务缓存
     services: Arc<RwLock<HashMap<String, DiscoveredService>>>,
     /// 是否正在扫描
@@ -26,7 +24,6 @@ impl MdnsDiscovery {
     /// 创建新的发现管理器
     pub fn new() -> Self {
         Self {
-            daemon: Arc::new(RwLock::new(None)),
             services: Arc::new(RwLock::new(HashMap::new())),
             scanning: Arc::new(RwLock::new(false)),
         }
@@ -54,14 +51,12 @@ impl MdnsDiscovery {
             return Ok(());
         }
 
-        let daemon = ServiceDaemon::new()
-            .map_err(|e| crate::AppError::Internal(format!("Failed to create mDNS daemon: {}", e)))?;
-
-        let receiver = daemon
+        // 浏览经全局共享守护（crate::mdns::engine，票 03）：不再自建 daemon——
+        // 消灭双 daemon 同绑 5353 互抢多播包病灶；共享守护常驻，stop 只退订不 shutdown
+        let receiver = crate::mdns::engine::daemon()
             .browse(SERVICE_TYPE)
-            .map_err(|e| crate::AppError::Internal(format!("Failed to browse mDNS: {}", e)))?;
+            .map_err(|e| crate::AppError::Internal(format!("Failed to browse mDNS: {e}")))?;
 
-        *self.daemon.write().await = Some(daemon);
         *scanning = true;
 
         tracing::info!("[MdnsDiscovery] Started browsing {}", SERVICE_TYPE);
@@ -196,10 +191,9 @@ impl MdnsDiscovery {
         *scanning = false;
         drop(scanning); // 释放锁，让后台任务能读到 false
 
-        // 停止守护进程
-        if let Some(daemon) = self.daemon.write().await.take() {
+        // 停止守护进程（共享守护常驻不 shutdown，票 03）：只退订本浏览
+        if let Some(daemon) = crate::mdns::engine::daemon_if_initialized() {
             let _ = daemon.stop_browse(SERVICE_TYPE);
-            let _ = daemon.shutdown();
         }
 
         self.services.write().await.clear();

@@ -24,3 +24,10 @@ spin-loop = []
 big-alloc = []
 # on-startup-fail — on_startup 返回 Err（宿主 Degraded 状态机测试用）
 on-startup-fail = []
+# ws-client — activate 订阅 ws 属主 topic，invoke 提供 ws-connect/send-text/close/is-connected/collect 操作，
+#        并导出 events-binary（宿主动态探测命中⇒ 帧投递回流 guest）
+ws-client = []
+# terminal-session — 票 12 ABI v15 面驱动：connect 带 jwt-auth（宿主代发认证帧）、
+#        terminal-stream.forward-output（输出窄转发）、connection.primary-target 读取；
+#        导出 events-binary 复用 ws-client 的帧回流通道（下行帧 → forward-output）
+terminal-session = ["ws-client"]

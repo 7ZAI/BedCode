@@ -139,8 +139,7 @@ mod tests {
         let db = Arc::new(std::sync::Mutex::new(
             rusqlite::Connection::open_in_memory().expect("open in-memory db"),
         ));
-        let tmp = Box::leak(Box::new(tempfile::tempdir().expect("tempdir")));
-        let storage = Arc::new(PluginStorage::new(&tmp.path().to_path_buf()));
+        let storage = PluginStorage::test_storage();
         let fs_auth = Arc::new(FsAuthChecker::new(storage.clone(), None));
         let status_reporter: Arc<dyn Fn(&str, &str) + Send + Sync> = Arc::new(|_, _| {});
         WasmPluginState {

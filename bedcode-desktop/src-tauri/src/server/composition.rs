@@ -26,14 +26,26 @@ use crate::db::Database;
 
 /// 装配全局 server 端口（宿主壳实现注入进 `bedcode_server_base::ports`）
 ///
-/// 必须在 `AppContext` 注册**之后**调用：`ports_impl::assemble` 取消息总线
-/// 走 `AppContext::try_global()`，缺失时会装一个占位空总线——占位总线与
-/// `PluginHost` 真实总线不同一，插件的 `bus-subscribe` 将永收不到请求
-/// （表现为互调 5s 超时，而非订阅竞态）。
+/// 无头 / 单测装配面（无 `AppHandle`）：路径面回退 `AppContext::try_global()`，
+/// 总线面 late-bound（见 [`crate::server::ports_impl::assemble`]）。
 ///
 /// 幂等语义沿用 `ports::init`：重复装配 panic（装配点唯一，重复即装配面分裂）。
 pub fn install_server_ports() {
-    bedcode_server_base::ports::init(crate::server::ports_impl::assemble());
+    install_server_ports_with(None);
+}
+
+/// 装配全局 server 端口并带上宿主句柄（GUI bootstrap 调用）
+///
+/// 句柄直取给路径面：端口**可能早于 `AppContext` 注册**被装配——插件激活发生在
+/// `PluginHost::new` 内部（激活期 guest 立刻调 `host-*` 原语），而组合根在其返回后
+/// 才注册 `AppContext`。只靠全局取句柄会让这段窗口内的路径解析恒定失败
+/// （2026-10-07 实机：file-transfer 的 `host-peer.start-node` 落在窗口内，
+/// peer 节点起不来 → 桌面端不广播 → 移动端发现不到桌面）。
+///
+/// 仍然保留 late-bound 的总线面：真实总线在 `PluginHost` 构造时创建，早于端口装配
+/// 但晚于部分端口使用方，钉死会指向占位总线。
+pub fn install_server_ports_with(app_handle: Option<Arc<tauri::AppHandle>>) {
+    bedcode_server_base::ports::init(crate::server::ports_impl::assemble(app_handle));
 }
 
 // ==================== 传输面装配 ====================

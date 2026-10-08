@@ -81,6 +81,10 @@ impl AuthCenter for HostAuthCenter {
 /// `bedcode_wasm_core::bus` —— 它包 `MessageBus`（crate 属物）。本文件保留路径，
 /// lib 其余代码经 `crate::server::ports_impl::HostBusPort` 引用不受影响；
 /// `assemble()` 本体留 lib（组合根唯一性）。
+///
+/// 装配走 **late-bound** 形态而非钉死某条总线：真实总线在 `PluginHost` 构造时创建，
+/// 而端口可能在它之前就被装配（见 [`HostPathsPort`] 的窗口说明）。钉死会让提前装配
+/// 的端口永远指向占位总线——插件订阅永收不到消息。
 pub use bedcode_wasm_core::bus::HostBusPort;
 
 // ==================== EventSink ====================
@@ -105,11 +109,35 @@ impl EventSink for HostEventSink {
 // ==================== PathsPort ====================
 
 /// 路径解析（`app_handle.path()` 包装；无 AppContext / AppHandle → 错误）
-pub struct HostPathsPort;
+///
+/// **句柄随装配传入而不是逐次读全局**：端口可能在 `AppContext` 注册**之前**被装配
+/// ——宿主组合根的顺序是「建 `PluginHost`（内部即激活插件，激活期 guest 会立刻调
+/// `host-peer.start-node` 等原语）→ 注册 AppContext → 装端口」，而 AppHandle 在
+/// `PluginHost::new` 之前就已就位。逐次读全局会让提前装配的端口在窗口内恒定解析
+/// 失败（2026-10-07 实机：file-transfer 起 peer 节点报 `resolve app data dir
+/// failed: no runtime context`，节点起不来 → 桌面端不广播 → 移动端发现不到）。
+pub struct HostPathsPort {
+    /// 装配期捕获的句柄；`None` = 无头 / 单测装配面，回退 `AppContext` 取用
+    handle: Option<Arc<tauri::AppHandle>>,
+}
+
+impl HostPathsPort {
+    pub fn new(handle: Option<Arc<tauri::AppHandle>>) -> Self {
+        Self { handle }
+    }
+
+    /// 当前可用句柄：装配期捕获优先，缺失时回退全局（`AppContext` 注册之后的装配面）
+    fn handle(&self) -> Option<Arc<tauri::AppHandle>> {
+        match &self.handle {
+            Some(handle) => Some(handle.clone()),
+            None => AppContext::try_global()?.app_handle().clone(),
+        }
+    }
+}
 
 impl PathsPort for HostPathsPort {
     fn app_data_dir(&self) -> Result<PathBuf> {
-        let Some(handle) = app_handle() else {
+        let Some(handle) = self.handle() else {
             return Err(AppError::Internal(
                 "resolve app data dir failed: no runtime context".to_string(),
             ));
@@ -121,7 +149,7 @@ impl PathsPort for HostPathsPort {
     }
 
     fn download_dir(&self) -> Result<PathBuf> {
-        let Some(handle) = app_handle() else {
+        let Some(handle) = self.handle() else {
             return Err(AppError::Internal(
                 "resolve downloads dir failed: no runtime context".to_string(),
             ));
@@ -133,12 +161,6 @@ impl PathsPort for HostPathsPort {
     }
 }
 
-/// 取当前 AppHandle（`AppContext::try_global()` + `app_handle()` 的合并便捷面）
-fn app_handle() -> Option<Arc<tauri::AppHandle>> {
-    let ctx = AppContext::try_global()?;
-    ctx.app_handle().clone()
-}
-
 // ==================== SystemInfoPort ====================
 
 /// 系统信息（`SystemInfo` / `local_ipv4_addresses` / 宿主版本号）
@@ -148,7 +170,10 @@ impl SystemInfoPort for HostSystemInfoPort {
     fn device_name(&self) -> String {
         match AppContext::try_global() {
             Some(ctx) => ctx.system_info().device_name.clone(),
-            None => "BedCode Desktop".to_string(),
+            // 注册前窗口：现采一次真实设备名（与 bootstrap 的 `SystemInfo::collect()`
+            // 同源），**不回退硬编码名**——peer 节点把它写进 mDNS TXT，落占位名会让
+            // 对端显示成「BedCode Desktop」
+            None => crate::system::info::SystemInfo::collect().device_name,
         }
     }
 
@@ -183,6 +208,13 @@ pub struct HostMdnsAdvertiserPort;
 impl MdnsAdvertiserPort for HostMdnsAdvertiserPort {
     fn advertise(&self, service_name: String, port: u16, txt_records: std::collections::HashMap<String, String>) {
         let Some(advertiser) = AppContext::try_global().map(|ctx| ctx.mdns_advertiser().clone()) else {
+            // 静默返回会让「广播没起来」无处可查（对端只看到设备凭空消失）：
+            // 显性 warn，调用方为 server 启停（非热路径，不会成日志风暴）
+            tracing::warn!(
+                service_name = %service_name,
+                port = port,
+                "[ServerSupervisor] mDNS advertisement skipped: app context not initialized"
+            );
             return;
         };
         tokio::spawn(async move {
@@ -200,6 +232,7 @@ impl MdnsAdvertiserPort for HostMdnsAdvertiserPort {
 
     fn stop(&self) {
         let Some(advertiser) = AppContext::try_global().map(|ctx| ctx.mdns_advertiser().clone()) else {
+            tracing::warn!("[ServerSupervisor] mDNS advertisement stop skipped: app context not initialized");
             return;
         };
         tokio::spawn(async move {
@@ -296,15 +329,15 @@ impl MdnsPort for HostMdnsPort {
 
 /// 宿主壳标准装配（bootstrap 调用；全部实现均为上述 Host* 单态包装）
 ///
-/// `device_name` 参数保留给 txt 记录（与 supervisor 侧读取同一来源，避免
-/// 装配期再查一次 AppContext）
-pub fn assemble() -> ServerPorts {
+/// `app_handle` 随装配传入供 [`HostPathsPort`] 直取（注册前的窗口也能解析路径）；
+/// `None` = 无头 / 单测装配面（无句柄，路径面回退全局）。
+pub fn assemble(app_handle: Option<Arc<tauri::AppHandle>>) -> ServerPorts {
     ServerPorts {
         plugin_invoker: Arc::new(HostPluginInvoker),
         auth_center: Arc::new(HostAuthCenter),
-        bus: Arc::new(HostBusPort::new(bus_handle())),
+        bus: Arc::new(HostBusPort::late_bound(current_bus)),
         event_sink: Arc::new(HostEventSink),
-        paths: Arc::new(HostPathsPort),
+        paths: Arc::new(HostPathsPort::new(app_handle)),
         system_info: Arc::new(HostSystemInfoPort),
         power: Arc::new(HostPowerPort),
         mdns_advertiser: Arc::new(HostMdnsAdvertiserPort),
@@ -315,13 +348,19 @@ pub fn assemble() -> ServerPorts {
     }
 }
 
-/// 取宿主消息总线（bootstrap 期 AppContext 已注册；缺失时给空总线占位——
-/// 装配期之后 server 面才真正使用，占位只防构造 panic）
-fn bus_handle() -> Arc<crate::wasm_core::bus::MessageBus> {
+/// 当前插件消息总线（late-bound 解析面：端口可能早于 `AppContext` 注册被装配）
+fn current_bus() -> Arc<crate::wasm_core::bus::MessageBus> {
     match AppContext::try_global() {
         Some(ctx) => ctx.plugin_host().message_bus().clone(),
-        None => Arc::new(crate::wasm_core::bus::MessageBus::new()),
+        // 注册前窗口：占位总线（进程内同一实例，注册后就位即被真实总线取代）
+        None => standby_bus(),
     }
+}
+
+/// 占位总线（`AppContext` 注册前的那一小段窗口用；注册后不再被取到）
+fn standby_bus() -> Arc<crate::wasm_core::bus::MessageBus> {
+    static STANDBY: std::sync::OnceLock<Arc<crate::wasm_core::bus::MessageBus>> = std::sync::OnceLock::new();
+    STANDBY.get_or_init(|| Arc::new(crate::wasm_core::bus::MessageBus::new())).clone()
 }
 
 #[cfg(test)]
@@ -331,6 +370,48 @@ mod tests {
     /// 装配面可用性：未初始化 AppContext 时 `assemble()` 不 panic（占位总线）
     #[test]
     fn assemble_never_panics_without_app_context() {
-        let _ports = assemble();
+        let _ports = assemble(None);
+    }
+
+    /// 占位总线在同一进程内是**同一实例**（late-bound 解析面在注册前反复取到它，
+    /// 不能每次新建——否则注册前注册的静态订阅会散到不同总线上去）
+    #[test]
+    fn standby_bus_is_a_single_instance_per_process() {
+        let first = standby_bus();
+        let second = standby_bus();
+        assert!(Arc::ptr_eq(&first, &second), "占位总线必须是进程级单例");
+        assert!(Arc::ptr_eq(&current_bus(), &first), "无 AppContext 时 late-bound 解析面应返回占位总线");
+    }
+
+    /// 无 AppContext 时设备名取**真实**采集值，不得回退到硬编码占位名
+    ///
+    /// 契约来源：peer 节点把它写进 mDNS TXT（对端展示名）。回退占位名会让移动端
+    /// 把桌面显示成「BedCode Desktop」，且没有一行日志能解释。
+    #[test]
+    fn device_name_without_app_context_is_real_collected_name() {
+        let collected = crate::system::info::SystemInfo::collect().device_name;
+        let actual = HostSystemInfoPort.device_name();
+        assert!(!actual.is_empty(), "设备名不得为空（空串会让 TXT 记录失去意义）");
+        assert_eq!(actual, collected, "无 AppContext 时设备名应与 bootstrap 同源现采，不得落占位名");
+    }
+
+    /// 无头装配面（无句柄、无 AppContext）：路径面显性报错而非 panic
+    ///
+    /// 生产窗口内的失败文案就是这个（修复前 `host-peer.start-node` 正是撞上它而
+    /// 起不来节点）；这里钉住「报错文案不变、无头面仍可用」。
+    #[test]
+    fn headless_paths_port_reports_missing_runtime_context() {
+        let port = HostPathsPort::new(None);
+        assert!(port.handle().is_none(), "无头装配面不得凭空造出句柄");
+        let app_data_err = port.app_data_dir().expect_err("无头面必须报错而不是 panic");
+        assert!(
+            app_data_err.to_string().contains("no runtime context"),
+            "错误文案必须指向缺失的运行期上下文，实际：{app_data_err}"
+        );
+        let download_err = port.download_dir().expect_err("无头面必须报错而不是 panic");
+        assert!(
+            download_err.to_string().contains("no runtime context"),
+            "错误文案必须指向缺失的运行期上下文，实际：{download_err}"
+        );
     }
 }

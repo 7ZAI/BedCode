@@ -71,7 +71,7 @@ describe('useTerminalSubscription（票 05：subscribed 门控 + 超时兜底 + 
     setActivePinia(createPinia())
     store = useTerminalBufferStore()
     vi.clearAllMocks()
-    eventHandlers['terminal-state'] = null
+    eventHandlers['plugin:com.bedcode.terminal-session:terminal-state'] = null
     ;(vi.mocked(listenMock).mockImplementation as any)(async (name: string, cb: (p: unknown) => void) => {
       eventHandlers[name] = cb
       return () => {}
@@ -103,7 +103,7 @@ describe('useTerminalSubscription（票 05：subscribed 门控 + 超时兜底 + 
       })
 
       // 收 subscribed → phase=live
-      eventHandlers['terminal-state']!({ payload: { session_id: 's1', phase: 'live', detail: 'subscribed' } })
+      eventHandlers['plugin:com.bedcode.terminal-session:terminal-state']!({ payload: { session_id: 's1', phase: 'live', detail: 'subscribed' } })
       const result = await Promise.race([p, Promise.resolve('__pending')])
       expect(result === 'settled' || (await p) === undefined).toBe(true)
       await p
@@ -117,7 +117,7 @@ describe('useTerminalSubscription（票 05：subscribed 门控 + 超时兜底 + 
       sub.markReplayDone()
       sub.markFirstFitDone()
 
-      eventHandlers['terminal-state']!({ payload: { session_id: 's1', phase: 'connecting' } })
+      eventHandlers['plugin:com.bedcode.terminal-session:terminal-state']!({ payload: { session_id: 's1', phase: 'connecting' } })
       let gate: string | null = null
       const p = sub.waitForHistoryGate().then((r) => (gate = r))
 
@@ -157,7 +157,7 @@ describe('useTerminalSubscription（票 05：subscribed 门控 + 超时兜底 + 
       // 重试窗口到期：Rust 恢复 → 订阅成功 → subscribed 事件收敛
       cmd.terminalSubscribe.mockResolvedValue(undefined)
       await vi.advanceTimersByTimeAsync(SUBSCRIBE_RETRY_INTERVAL_MS + 100)
-      eventHandlers['terminal-state']!({ payload: { session_id: 's1', phase: 'live', detail: 'subscribed' } })
+      eventHandlers['plugin:com.bedcode.terminal-session:terminal-state']!({ payload: { session_id: 's1', phase: 'live', detail: 'subscribed' } })
       await vi.advanceTimersByTimeAsync(0)
 
       // 收敛后不再发起新 subscribe（fresh subscribe 翻转保护：重试不再重播）
@@ -171,7 +171,7 @@ describe('useTerminalSubscription（票 05：subscribed 门控 + 超时兜底 + 
 
     it('已订阅期间触发 subscribeWithRetry：仍发起一次 fresh subscribe（页面挂载语义）', async () => {
       // 预加载后进入终端页：belief 已真，仍需重播一次
-      eventHandlers['terminal-state']!({ payload: { session_id: 's1', phase: 'live', detail: 'subscribed' } })
+      eventHandlers['plugin:com.bedcode.terminal-session:terminal-state']!({ payload: { session_id: 's1', phase: 'live', detail: 'subscribed' } })
       const sub = useTerminalSubscription(makeCtx(), { bufferStore: store, subscribeSession: store.subscribeSession })
       await sub.subscribeWithRetry()
       expect(cmd.terminalSubscribe).toHaveBeenCalledWith('s1')

@@ -164,7 +164,7 @@ Date: 2026-09-10
 
 | # | 受损项 | 触发条件 | 状态（2026-09-24） | 未来适配动作 |
 | --- | --- | --- | --- | --- |
-| M1 | 移动端任务面板全部 HTTP 调用（task-status / session-mode / session-settings / task-history / supported-agents / task-queue / scheduled-jobs）整体 404 | 桌面端**将来**切断 `com.bedcode.auto-task` 旧前缀 | **未触发**——票 17 判定保留 `LEGACY_HTTP_PLUGIN_ALIASES` 兜底，移动端零改动继续可用 | 改移动端 api 基址常量一处 + 插件重打包，**同批**删宿主别名表与 `resolve_http_owner` |
+| M1 | 移动端任务面板全部 HTTP 调用（task-status / session-mode / session-settings / task-history / supported-agents / task-queue / scheduled-jobs）整体 404 | 桌面端**将来**切断 `com.bedcode.auto-task` 旧前缀 | **已解除（2026-10-08 票 16 移动端专项）**：api 基址已切 `/api/plugin/com.bedcode.terminal-session`（auto-task 并入终端 app 同批），桌面 `LEGACY_HTTP_PLUGIN_ALIASES` 仍保留兜底 | ~~改移动端 api 基址常量一处 + 插件重打包~~ **已完成**；别名表与 `resolve_http_owner` 的切断列双端同批另立项 |
 | M2 | 会话列表 `taskStatus` 等字段值变空或延迟 | 合并插件未激活 / error 态，注解槽无人写 | 已可能发生（这是 D7 故障半径的移动端侧表现），桌面端不修 | 移动端对空注解做降级显示（不阻塞连接） |
 | M3 | 配对码 / QR 有效期展示与实际 TTL 不一致 | TTL 真源进了插件贡献设置分组，未激活时走宿主兜底默认 | 已可能发生 | 移动端读认证域设置项的取值路径复核一次 |
 | M4 | 移动端插件无法调用 `host-session` v19 批次新函数 | 移动端 SDK 不跟演（WIT 无该接口，ABI 11） | 既定偏离（ADR 0022「双端偏离」节） | 移动端真要接同类能力时补该端 interface + host_impl + 计数对齐 |

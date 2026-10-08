@@ -288,7 +288,7 @@ jobs:
       # 部分插件仅存在于 dev 分支（发布分支未必包含），对不存在的目录跳过
       - name: Install plugin dependencies
         run: |
-          for p in ai-chatbox auto-task file-transfer ocr; do
+          for p in ai-chatbox terminal-session file-transfer ocr; do
             if [ ! -d "plugins/$p" ]; then
               echo "plugins/$p 不存在（可能仅 dev 分支开发中），跳过"
               continue
@@ -487,7 +487,7 @@ jobs:
       # 部分插件仅存在于 dev 分支（发布分支未必包含），对不存在的目录跳过
       - name: Install mobile plugin dependencies
         run: |
-          for p in ai-chatbox auto-task file-transfer; do
+          for p in ai-chatbox terminal-session file-transfer; do
             if [ ! -d "bedcode-mobile/plugins/$p" ]; then
               echo "bedcode-mobile/plugins/$p 不存在（可能仅 dev 分支开发中），跳过"
               continue

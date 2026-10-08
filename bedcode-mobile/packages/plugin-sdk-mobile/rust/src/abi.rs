@@ -30,7 +30,49 @@
 ///   `advertise` / `stop-advertise` / `is-advertising` 三原语 + 浏览事件
 ///   定向投递 `mdns:found.<owner>` / `mdns:lost.<owner>`（payload 增
 ///   serviceType / browserId 字段）。纯增量变更，v10 插件二进制不受影响
-pub const ABI_VERSION: u32 = 11;
+/// - v12: 发送编排下沉插件（票 06）：host-peer 删 `resume-all-transfers`
+///   （批量恢复编排归插件，逐批调 `resume-transfer`）、`send-files` 收窄为
+///   「一次调用即发一会话」并显性拒绝已退役的 `concurrency` 载荷字段；发送
+///   方向进度/终态经新 topic `peer:transfer-event` 引擎原始事件回流（取代旧
+///   快照 topic `peer:transfer`）。破坏性收缩，v11 插件二进制须重编译
+/// - v13: 接收编排下沉插件（票 07）：WIT 接口函数集不变（host-peer 仍 19
+///   函数），变的是**事件回流契约**——接收方向改经新 topic `peer:receive-event`
+///   引擎原始事件（offer-pending / pull-started / progress / terminal / paused /
+///   resumed / node-stopped），旧快照 topic `peer:receive` 退役。
+///   **须重编译**：v12 插件仍只订阅 `peer:receive`，事件永不回流（接收列表空、
+///   待应答弹窗不弹）——注意协商是单向的（仅拒绝高于宿主的版本），
+///   低 ABI 产物不会在加载期被拒，故重编译依赖构建流程而非协商兜底
+/// - v14: WebSocket 出站连接（WIT `host-websocket` **客户端域**，票 11）：新增
+///   接口 5 函数（`connect` / `send-text` / `send-binary` / `close` /
+///   `is-connected`）+ 权限位 `ws:client`（SSRF 面，fail-closed）+ 两条属主
+///   私有投递通道（状态事件 JSON topic `<plugin-id>:ws:open|error|close`、
+///   入站帧二进制 topic `<plugin-id>:ws:message`，帧信封 = kind + handle +
+///   原始字节，零 JSON 编解码）。**纯增量变更**（新增接口，既有函数集不动），
+///   v13 插件二进制不受影响；**不跟演桌面服务端域** 9 函数与
+///   `connection-context`（移动端不跑 WS 服务器，ADR 0018/0019），
+///   **不引入 `ws:server` 权限位**。
+///   注：协商单向（仅拒绝高于宿主的版本），v13 产物在 v14 宿主上照常加载但
+///   **没有 ws 能力**且不报错——票 12（终端迁插件）同批处置：terminal-session
+///   为 v15 首发新 id（无旧产物、与宿主同 APK 分发），v15 产物在 v14 宿主
+///   实例化期 import 缺失点名失败（fail-visible ②），既有 v13/v14 产物零
+///   ws 需求不受影响；无需运行期能力探测（票 12 §6.4 论证）。
+/// - v15: 终端订阅协议客户端迁插件（票 12）：新增
+///   `host-terminal-stream.forward-output`（输出裸字节宿主零解析窄转发到
+///   前端页面 Channel——C3 二进制出口，权限复用 `terminal:output`）与
+///   `host-connection.primary-target`（主连接目标事实，无权限门，与桌面
+///   同名不同形——C8 登记 ADR 0018 偏离表）；host-websocket config 增强
+///   `jwt-auth`（宿主代发首消息认证帧，token 不落插件）/ `heartbeat-secs`
+///   （连接级心跳）/ `auto-reconnect`（断线自动重连 + reconnect-scheduled
+///   事件），零 WIT 形状变化。**纯增量变更**，v14 插件二进制不受影响。
+/// - v16: 认证 / 配对编排下沉（票 14 阶段 B）：新增 `host-auth` 认证引擎面
+///   5 函数（`request-pairing` / `verify-pairing-code` / `qr-connect` /
+///   `biometric-authenticate` / `has-credentials`）+ 权限位 `auth`
+///   （fail-closed）。**凭据零过境**：JWT 由宿主落地（global token + 凭据表），
+///   本域不向插件返回凭据材料（对齐 v15 `jwt-auth`「token 不落插件」先例）；
+///   编排（流程顺序 / 事件发射 / 状态派生）归消费插件
+///   `com.bedcode.terminal-session` 配对域。**纯增量变更**，v15 插件二进制
+///   不受影响；既有 v13/v14 产物无认证编排需求不受影响。
+pub const ABI_VERSION: u32 = 16;
 
 #[cfg(test)]
 mod tests {
@@ -39,8 +81,10 @@ mod tests {
     #[test]
     fn test_abi_version_is_contract() {
         // 宿主加载时与组件 abi.version() 导出比对，漂移导致拒绝加载（高 ABI 拒绝测试依赖）
-        // v11 = host-mdns v2（advertise 三原语 + 浏览事件定向投递），
-        // 叠加 v10 总线二进制载荷与 v9 host-peer 传输控制三原语（能力超集）
-        assert_eq!(ABI_VERSION, 11);
+        // v16 = 认证 / 配对编排下沉（host-auth 认证引擎面 5 函数 + 权限位 auth），
+        // 叠加 v15 终端订阅协议客户端迁插件、v14 host-websocket 客户端域、
+        // v13 接收编排下沉、v12 发送编排下沉、v11 host-mdns v2、v10 总线二进制
+        // 载荷与 v9 host-peer 传输控制二原语（能力超集）
+        assert_eq!(ABI_VERSION, 16);
     }
 }

@@ -12,7 +12,7 @@ import type {
   MobileHttpRequestOptions,
   MobileHttpResult,
 } from '../../../src/types'
-import { activeSessionId, connected, sessions } from './session'
+import { activeSessionId, connected, onDevEvent, sessions } from './session'
 import { getAllDevMocks } from '../registry'
 
 /** 活跃会话列表（响应式，MobileHostApi.activeSessions） */
@@ -116,7 +116,7 @@ function boolField(body: JsonBody, key: string): boolean | undefined {
   return typeof v === 'boolean' ? v : undefined
 }
 
-/** 通用 HTTP 请求路由：按对端 AutoTask 端点路径模拟（dev-shell 宿主能力 mock） */
+/** 通用 HTTP 请求路由：按对端任务域（terminal-session app）端点路径模拟（dev-shell 宿主能力 mock） */
 async function routeHttpRequest(
   path: string,
   method: string,
@@ -126,7 +126,7 @@ async function routeHttpRequest(
   const query = new URLSearchParams(queryString || '')
   const sessionId = query.get('session_id') || strField(body, 'session_id') || ''
 
-  const BASE = '/api/plugin/com.bedcode.auto-task'
+  const BASE = '/api/plugin/com.bedcode.terminal-session'
 
   if (pathname === `${BASE}/task-queue/list`) {
     if (!sessionId) return fail('missing sessionId')
@@ -255,6 +255,12 @@ async function routeHttpRequest(
   return fail(`dev-shell mock: unhandled endpoint ${method} ${path}`)
 }
 
+/** dev-shell 主题（无真机主题系统；如需验证深色路径可手动置 true） */
+const isDark = ref(false)
+
+/** dev-shell 本地设置投影（vibrate 无意义置 false；档位与宿主 MobileSettings 同形） */
+const mobileSettings = ref({ vibrate: false, maxOpenTerminals: 5 })
+
 /** 暴露到 window.__BEDCODE_SHARED__.mobileApi */
 export const mobileApi: MobileHostApi = {
   activeSessionId,
@@ -269,6 +275,43 @@ export const mobileApi: MobileHostApi = {
       MobileHttpResult<T>
     >
   },
+
+  // dev-shell：列表已是内存真源（mock 会话），拉取即 no-op
+  async loadActiveSessions(): Promise<void> {},
+  async loadSessionConfigs(): Promise<void> {},
+  hasLoadedConfigs: ref(true),
+  isLoadingConfigs: ref(false),
+
+  // 票 15：终端 UI 域下沉所需机制面 —— dev-shell 接 mock 会话输出（字符串 → UTF-8 字节），
+  // 真机为宿主页面 Channel 裸字节投递
+  async openTerminalStream(sessionId: string, onBytes: (bytes: Uint8Array) => void) {
+    const encoder = new TextEncoder()
+    const un = onDevEvent('terminal:output', (payload: { sessionId: string; data: string }) => {
+      if (payload.sessionId === sessionId) onBytes(encoder.encode(payload.data))
+    })
+    return {
+      dispose() {
+        un.dispose()
+      },
+    }
+  },
+  isDark,
+  mobileSettings,
+  onSessionEvent(handler) {
+    // dev-shell：桥接 mock 会话生命周期（断线 / 会话停止）；像素级状态流不在浏览器模拟
+    const d1 = onDevEvent('plugin:lifecycle:disconnect', () => handler({ type: 'disconnected' }))
+    const d2 = onDevEvent('plugin:lifecycle:sessionStopped', (p: any) =>
+      handler({ type: 'session_stopped', sessionId: p?.sessionId }),
+    )
+    return {
+      dispose() {
+        d1.dispose()
+        d2.dispose()
+      },
+    }
+  },
+  // dev-shell 的会话流走真实渲染路径（非宿主 DEV mock 会话），故无 mockSessionId
+  mockSessionId: null,
 }
 
 /** 供 MockTerminalView 展示队列 */

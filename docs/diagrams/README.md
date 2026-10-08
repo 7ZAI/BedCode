@@ -40,7 +40,7 @@
 | ai-chatbox | [plugin-ai-chatbox-desktop.html](./plugin-ai-chatbox-desktop.html) | [plugin-ai-chatbox-mobile.html](./plugin-ai-chatbox-mobile.html) |
 | file-transfer | [plugin-file-transfer-desktop.html](./plugin-file-transfer-desktop.html) | [plugin-file-transfer-mobile.html](./plugin-file-transfer-mobile.html) |
 
-桌面端 `auto-task` 已并入 `terminal-session` 的任务域（spec D8-P4，`bedcode-desktop/wasm-apps/terminal-session/rust/src/task/`），不再有独立桌面端架构——`plugin-auto-task-desktop.html` 已随该合并删除；桌面端业务应用另含 `agent-hub`（Agent CLI 统一管理台，无独立架构图，随整体架构中的 `wasm_apps` 组块呈现）。移动端 `auto-task` 保留（独立实现，移动契约 ADR 0018）。
+桌面端 `auto-task` 已并入 `terminal-session` 的任务域（spec D8-P4，`bedcode-desktop/wasm-apps/terminal-session/rust/src/task/`），不再有独立桌面端架构——`plugin-auto-task-desktop.html` 已随该合并删除；桌面端业务应用另含 `agent-hub`（Agent CLI 统一管理台，无独立架构图，随整体架构中的 `wasm_apps` 组块呈现）。移动端 `auto-task` 已于 2026-10-08 并入移动端 `terminal-session`（D6 选项 A，`bedcode-mobile/plugins/terminal-session/src/task/`），`plugin-auto-task-mobile.html` 保留为合并前快照（移动契约 ADR 0018）。
 
 各插件 README 的「架构图」链接均指向本目录对应文件。
 
@@ -53,7 +53,7 @@
 | [pty-output-flow-desktop.html](./pty-output-flow-desktop.html) | dataflow | 桌面端：shell → `PtySession` master fd → `PtyReader`（独立读线程）→ `PtyRing`（有界环形 · `min_offset`）→ `host-pty` 原语（16 KiB 钳位 · 属主仲裁）→ `terminal-session` 输出域 → 前端拉取循环（100 ms / 500 ms 双档）→ `xterm.js` | [pty-output-flow-desktop.json](./pty-output-flow-desktop.json) |
 | [pty-output-flow-mobile.html](./pty-output-flow-mobile.html) | dataflow | 移动端：`TerminalLink`（TB v3 解析 + ack 节流）→ `SessionCache`（16MB LRU）→ `terminalBuffer` → `writeCoalescer` → `xterm.js`，含 ack 反馈环 | [pty-output-flow-mobile.json](./pty-output-flow-mobile.json) |
 
-关键代码锚点：`bedcode-desktop/src-tauri/src/pty/pty_reader.rs` + `pty/pty_ring.rs`（输出环）、`bedcode-desktop/src-tauri/src/plugin/` 下 `host-pty` 原语实现、`bedcode-desktop/wasm-apps/terminal-session/rust/src/output.rs`（拉取接口 `session.output.pull`）、`bedcode-desktop/wasm-apps/terminal-session/src/components/terminal/TerminalPreview.vue`（轮询档位）、`bedcode-desktop/src-tauri/src/server/websocket/subscription.rs` + `terminal_ws/`（远程订阅，同为拉取模型执行体 + 流代数门控）、`bedcode-desktop/src-tauri/src/utils/session_gateway.rs`（宿主↔插件窄转发层）、`bedcode-mobile/src-tauri/src/terminal_link.rs`、`bedcode-mobile/src/composables/useTerminalBuffer.ts`、`bedcode-mobile/src/composables/writeCoalescer.ts`、`bedcode-mobile/src/stores/terminalBuffer.ts`
+关键代码锚点：`bedcode-desktop/src-tauri/src/pty/pty_reader.rs` + `pty/pty_ring.rs`（输出环）、`bedcode-desktop/src-tauri/src/plugin/` 下 `host-pty` 原语实现、`bedcode-desktop/wasm-apps/terminal-session/rust/src/output.rs`（拉取接口 `session.output.pull`）、`bedcode-desktop/wasm-apps/terminal-session/src/components/terminal/TerminalPreview.vue`（轮询档位）、`bedcode-desktop/src-tauri/src/server/websocket/subscription.rs` + `terminal_ws/`（远程订阅，同为拉取模型执行体 + 流代数门控）、`bedcode-desktop/src-tauri/src/utils/session_gateway.rs`（宿主↔插件窄转发层）、`bedcode-mobile/plugins/terminal-session/rust/src/link.rs`（订阅协议客户端，自退役的 `terminal_link.rs` 迁入）+ `bedcode-mobile/src-tauri/src/terminal_stream_gateway.rs`（输出窄转发）、`bedcode-mobile/src/composables/useTerminalBuffer.ts`、`bedcode-mobile/src/composables/writeCoalescer.ts`、`bedcode-mobile/src/stores/terminalBuffer.ts`
 
 ## 相关
 

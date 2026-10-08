@@ -18,6 +18,7 @@
 | 桌面端 | 始终写文件 `%LOCALAPPDATA%\com.bedcode.app\logs\`：`runtime.*.log` 全级别（dev 强制 debug）/ `error.*.log` 仅 ERROR / `frontend.*.log` 仅 dev，按天轮转 |
 | 移动端 | `pnpm run tauri:android:dev:log` 落盘 `bedcode-mobile/.dev-logs/android-dev.YYYY-MM-DD.log`（可 grep）；release 走 logcat |
 | 移动端落盘过滤 | `:dev:log` 脚本默认过滤非业务噪音：wasmtime/cranelift JIT 内部、`mdns_sd::`、Android 框架 tag（按本方 tag 白名单，`BedCode*` 前缀 + 崩溃关键 tag 保留）、主机侧 Gradle/Vite 构建进展；业务与链路日志（`bedcode_mobile_lib::*`、`reqwest::connect` 等）全保留；控制台与落盘同一套过滤；退出时打印过滤统计；`BEDCODE_LOG_NO_FILTER=1` 关闭过滤 |
+| 移动端控制台颜色 | `:dev:log` 下控制台保留子进程原始 ANSI（颜色与 `\r` 覆盖），**只有落盘文件是纯文本**；但子进程 stdout 是管道非 TTY，上游默认不产色，需 `FORCE_COLOR=1` / `CLICOLOR_FORCE=1` / `CARGO_TERM_COLOR=always` 才看得到色。行级双写通路（raw 控制台 / clean 判定与落盘）在 `scripts/lib/dev-log-router.js`，单测 `src/__tests__/scripts/dev-log-router.test.ts` |
 
 **前端 console 日志（仅 debug）**：`logger.*` → `report_frontend_log` → tracing（target=`frontend`），release 自动剥离。
 

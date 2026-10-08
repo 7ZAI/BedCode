@@ -13,6 +13,12 @@ use serde::{Deserialize, Serialize};
 /// storage 键（双端一致）
 pub(crate) const SETTINGS_KEY: &str = "transfer_settings";
 
+/// 发送并发缺省值（UI 未设置 / 旧 storage 缺字段时）
+///
+/// 闸门判据（`send_slot_available`）与设置读面共用此缺省口径——两处各写一个
+/// `3` 就是「设置显示 3、闸门按别的数放行」的老 bug 温床。
+pub(crate) const DEFAULT_CONCURRENCY: u8 = 3;
+
 /// 设置 wire 形状（沿用 SettingsPanel 契约；桌面 downloadDir 可选）
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -32,7 +38,7 @@ pub(crate) struct TransferSettings {
 }
 
 fn default_concurrency() -> u8 {
-    3
+    DEFAULT_CONCURRENCY
 }
 
 impl Default for TransferSettings {
@@ -159,11 +165,16 @@ mod tests {
         }
         fn peer_pause_transfer(&self, _batch_id: &str) -> Result<(), bedcode_plugin_api_mobile::host::HostError> { unimplemented!() }
         fn peer_resume_transfer(&self, _batch_id: &str) -> Result<(), bedcode_plugin_api_mobile::host::HostError> { unimplemented!() }
-        fn peer_resume_all_transfers(&self) -> Result<u32, bedcode_plugin_api_mobile::host::HostError> { unimplemented!() }
         fn peer_set_shared_roots(&self, _dirs: &[serde_json::Value]) -> Result<(), bedcode_plugin_api_mobile::host::HostError> { unimplemented!() }
         fn peer_list_shared_roots(&self, _session: &str) -> Result<serde_json::Value, bedcode_plugin_api_mobile::host::HostError> { unimplemented!() }
         fn peer_browse_directory(&self, _session: &str, _dir_id: &str, _rel_path: &str) -> Result<serde_json::Value, bedcode_plugin_api_mobile::host::HostError> { unimplemented!() }
         fn peer_pull_files(&self, _session: &str, _dir_id: &str, _files: &[serde_json::Value]) -> Result<u32, bedcode_plugin_api_mobile::host::HostError> { unimplemented!() }
+        // 票 04 新增 5 原语（票 06 补齐 mock：trait 扩容后 mock 必须同步）
+        fn peer_set_download_dir(&self, _path: &str) -> Result<(), bedcode_plugin_api_mobile::host::HostError> { unimplemented!() }
+        fn peer_start_node(&self) -> Result<bool, bedcode_plugin_api_mobile::host::HostError> { unimplemented!() }
+        fn peer_stop_node(&self) -> Result<bool, bedcode_plugin_api_mobile::host::HostError> { unimplemented!() }
+        fn peer_active_transfers(&self) -> Result<serde_json::Value, bedcode_plugin_api_mobile::host::HostError> { unimplemented!() }
+        fn peer_collect_outgoing(&self, _paths: &[serde_json::Value]) -> Result<serde_json::Value, bedcode_plugin_api_mobile::host::HostError> { unimplemented!() }
     }
     mod save_and_push_writes;
 }

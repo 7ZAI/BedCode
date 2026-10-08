@@ -4,14 +4,24 @@
 //!
 //! - 设备缓存：前端 deviceState.ts 自持（found/lost/TTL/cap 位），本 crate 只做
 //!   browse 生命周期、`mdns:*` 透传与快照持久化（见 device_bridge）；
-//! - 共享根注册表：plugin-database 真源 + `set-shared-roots` 全量推送（roots_registry）；
-//! - 任务队列与历史：`peer:transfer`/`peer:receive` 快照驱动的自有存储
-//!   （transfer_store），终态归档 + 200 封顶 + 重启 interrupted 标注 + retryMeta 回放；
+//! - 共享根注册表：host-storage 单键真源（票 05b 后落主库插件存储表）
+//!   + `set-shared-roots` 全量推送（roots_registry）；
+//! - 任务真源与历史（票 06 / 票 07 / 票 08）：双方向均以引擎原始事件归约——
+//!   发送方向吃 `peer:transfer-event`，接收方向吃 `peer:receive-event`
+//!   （offer-pending / pull-started 建行 + progress / terminal / paused /
+//!   resumed 推进 + node-stopped 标注中断）；终态归档 + 200 封顶 + 重启
+//!   interrupted 标注；重试回放判据（终态 + 有回放凭证）与发送闸门判据同在
+//!   transfer_store 纯函数单点，回放前判据与闸门前置（不铸无主会话）；排队
+//!   发送批派发失败落终态行、拉取意图先于引擎调用入队（见 peer.rs）；
+//! - 发送并发闸门：插件自控（`PENDING_SENDS` 队列 + 设置 `concurrency`），
+//!   宿主 `send-files` 收窄为「一次调用即发一会话」；
 //! - 接收策略：插件 storage 真源，auto 分支在 on_message 自动应答，
 //!   ask 弹窗留在前端；配置经保留原语推送宿主闸门（settings_store，A1）；
 //! - 加密参数化：send 载荷元素级 `{path, encrypt}`（步骤 5，零 ABI）。
 //!
-//! 双写期（Phase 3）：旧命令面保持可用；`peer:devices` 订阅降级为日志对账源。
+//! 设备列表与设置面全量在插件命令面内闭环；双写期（Phase 3）存活至今的
+//! `peer:devices` 订阅已随票 09 整条删除：宿主已无任何发布者（设备列表事件
+//! `peer-devices-changed` 早已退役），留着只是把死 topic 写进两端文档。
 
 use bedcode_plugin_api_mobile::host::{HostBus, HostEvents, HostLog, HostMdns, HostPeer, HostPlatform};
 use bedcode_plugin_api_mobile::types::PluginManifest;
@@ -99,9 +109,8 @@ impl WasmPlugin for FileTransferPlugin {
         for topic in [
             MDNS_FOUND_TOPIC.as_str(),
             MDNS_LOST_TOPIC.as_str(),
-            "peer:devices",
-            "peer:transfer",
-            "peer:receive",
+            "peer:receive-event",
+            "peer:transfer-event",
             "peer:consent",
             "peer:connection",
         ] {
@@ -112,6 +121,9 @@ impl WasmPlugin for FileTransferPlugin {
         ensure_mdns_browse(&h);
         // 引擎电源：节点/mDNS 生命周期由宿主 activate/deactivate 外壳直接驱动
         // （plugin/manager.rs 接线 ensure_node_started），插件侧无需声明
+        // 首屏兜底（票 06）：激活晚于事件时经 active-transfers 原语查询宿主
+        // 在册活跃批补占位行；节点未起等场景内部降级日志，不阻断激活
+        peer::rebuild_from_active_transfers(&h);
         Ok(())
     }
 
@@ -129,12 +141,19 @@ impl WasmPlugin for FileTransferPlugin {
             }
         }
         device_bridge::clear_peer_state();
+        // 进程内意图随停用作废（票 08）：排队发送批 / 待挂载拉取凭证都只存在
+        // 内存，无行可查、用户无从重试——留到下次激活就是凭空冒出的旧任务
+        let (queued, intents) = peer::reset_volatile_intents();
+        if queued > 0 || intents > 0 {
+            h.log_info(&format!(
+                "deactivate: dropped {queued} queued sends, {intents} pending pull intents"
+            ));
+        }
         for topic in [
             MDNS_FOUND_TOPIC.as_str(),
             MDNS_LOST_TOPIC.as_str(),
-            "peer:devices",
-            "peer:transfer",
-            "peer:receive",
+            "peer:receive-event",
+            "peer:transfer-event",
             "peer:consent",
             "peer:connection",
         ] {
@@ -287,27 +306,16 @@ impl WasmPlugin for FileTransferPlugin {
             return Ok(());
         }
 
-        // 双写期对账源：宿主发现快照 vs 前端自建缓存规模差异仅记日志
-        if msg.topic == "peer:devices" {
-            if let Some(n) = msg.payload.as_array().map(|a| a.len()) {
-                h.log_info(&format!("reconcile: host discovery cache size = {n}"));
-            }
+        // 引擎原始事件归约：peer:transfer-event = send 方向（本端发起批 +
+        // 供流记账批），peer:receive-event = receive 方向（入站询问批 + 本端
+        // 拉取批 + 节点停止）。事件归约是 store 主写——双方向唯一真源；旧快照
+        // topic `peer:transfer` / `peer:receive` 已随宿主任务表退役（票 06/07）
+        if msg.topic == "peer:transfer-event" {
+            peer::reduce_and_emit(&h, "send", &msg.payload);
             return Ok(());
         }
-
-        if msg.topic == "peer:transfer" {
-            if let Some(arr) = msg.payload.as_array() {
-                peer::merge_and_emit(&h, arr, "send");
-            }
-            return Ok(());
-        }
-
-        if msg.topic == "peer:receive" {
-            if let Some(arr) = msg.payload.as_array() {
-                // auto 分支先应答（accept/reject 策略下无弹窗；ask 留给前端倒计时）
-                peer::auto_answer_pending(&h, arr);
-                peer::merge_and_emit(&h, arr, "receive");
-            }
+        if msg.topic == "peer:receive-event" {
+            peer::on_receive_event(&h, &msg.payload);
             return Ok(());
         }
 

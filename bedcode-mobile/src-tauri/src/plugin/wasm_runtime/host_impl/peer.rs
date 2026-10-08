@@ -221,41 +221,42 @@ pub(crate) fn peer_send_files(
     #[serde(untagged)]
     enum SendPathEntry {
         Plain(String),
-        Detailed {
-            path: String,
-            encrypt: Option<bool>,
-            /// 发送方向并发上限脉冲（插件设置真源，批级一致；首元素取值）
-            concurrency: Option<u8>,
-        },
+        Detailed { path: String, encrypt: Option<bool> },
     }
-    let entries: Vec<SendPathEntry> = serde_json::from_str(paths_json)
+    // 票 06 fail-visible：旧产物载荷携带的 `concurrency` 并发脉冲字段已随宿主
+    // 并发闸门退役——serde 未知字段默认忽略，必须显式检测并显性报错（点名
+    // ABI v12 重建），否则旧产物静默超并发（宿主已无闸门可拦）
+    let raw: serde_json::Value = serde_json::from_str(paths_json)
+        .map_err(|e| format!("send files: invalid paths json: {e}"))?;
+    if raw.as_array().is_some_and(|arr| {
+        arr.iter()
+            .any(|e| e.as_object().is_some_and(|o| o.contains_key("concurrency")))
+    }) {
+        return Err(
+            "send files: payload field 'concurrency' retired in ABI v12 (host-side concurrency gate removed; \
+             concurrency is caller-controlled): rebuild plugin artifact with current SDK"
+                .to_string(),
+        );
+    }
+    let entries: Vec<SendPathEntry> = serde_json::from_value(raw)
         .map_err(|e| format!("send files: invalid paths json: {e}"))?;
     let mut paths = Vec::with_capacity(entries.len());
     let mut force_encrypt = false;
-    let mut concurrency: Option<u8> = None;
     for entry in entries {
         match entry {
             SendPathEntry::Plain(path) => paths.push(path),
-            SendPathEntry::Detailed { path, encrypt, concurrency: c } => {
+            SendPathEntry::Detailed { path, encrypt } => {
                 if encrypt == Some(true) {
                     force_encrypt = true;
-                }
-                if concurrency.is_none() {
-                    concurrency = c;
                 }
                 paths.push(path);
             }
         }
     }
-    // 并发上限脉冲：插件设置真源，随发送载荷同步宿主并发闸门（若变化）
-    if let Some(n) = concurrency {
-        let _ = run(
-            state,
-            "host_peer_set_concurrency",
-            crate::peer_receive::set_peer_transfer_concurrency(require_app(state)?, n),
-        );
-    }
-    let dto = with_auto_redial(state, session, |node_id| {
+    // 返回值收窄为传输句柄（batch-id）：v12 起一次调用 = 一个会话立即发起
+    // （宿主并发闸门删除，节流归插件侧闸门）。断线场景由 with_auto_redial
+    // 以记忆 endpoint 重拨
+    let batch_id = with_auto_redial(state, session, |node_id| {
         run(
             state,
             "host_peer_send_files",
@@ -267,7 +268,7 @@ pub(crate) fn peer_send_files(
             ),
         )
     })?;
-    Ok(dto.batch_id)
+    Ok(batch_id)
 }
 
 pub(crate) fn peer_respond_transfer(
@@ -323,17 +324,6 @@ pub(crate) fn peer_resume_transfer(state: &WasmPluginState, batch_id: &str) -> R
         return Err("resume transfer: no paused send batch with that id".to_string());
     }
     Ok(())
-}
-
-/// 恢复全部暂停的发送批，返回入队数。
-pub(crate) fn peer_resume_all_transfers(state: &WasmPluginState) -> Result<u32, String> {
-    require_peer_permission(state)?;
-    let n = run(
-        state,
-        "host_peer_resume_all_transfers",
-        crate::peer_transfer::resume_all_peer_transfers(require_app(state)?),
-    )?;
-    Ok(n as u32)
 }
 
 /// 全量幂等替换引擎广播源：条目 `[{ id, name, safTreeUri }]`（camelCase JSON，
@@ -426,4 +416,67 @@ pub(crate) fn peer_pull_files(
         )
     })
     .map(|n| n as u32)
+}
+
+// ==================== host-peer 对齐 19（票 04 新增 5 原语） ====================
+// 对齐桌面 v34 形状：set-download-dir / start-node / stop-node / active-transfers /
+// collect-outgoing。`resume-all-transfers` 随票 06（批量恢复编排下沉插件）整面退役。
+
+/// 设置接收落点目录（空串 = 恢复默认；引擎落盘配置原语，ADR 0022 v3）
+pub(crate) fn peer_set_download_dir(state: &WasmPluginState, path: &str) -> Result<(), String> {
+    require_peer_permission(state)?;
+    let path = if path.is_empty() { None } else { Some(path.to_string()) };
+    let app = require_app(state)?;
+    run(
+        state,
+        "host_peer_set_download_dir",
+        crate::peer_receive::set_peer_download_dir(&app, path),
+    )
+}
+
+/// 按需启动本机 peer 节点（引擎级生命周期原语，审计票 12）：幂等，
+/// false = 未改变状态；调用方成为节点属主（谁起谁停）
+pub(crate) fn peer_start_node(state: &WasmPluginState) -> Result<bool, String> {
+    require_peer_permission(state)?;
+    let caller = state.plugin_id.clone();
+    run(
+        state,
+        "host_peer_start_node",
+        crate::peer_net::start_node_owned(&require_app(state)?, &caller),
+    )
+}
+
+/// 属主插件让节点下线（幂等）；非属主拒绝（文案不回带属主 id）
+pub(crate) fn peer_stop_node(state: &WasmPluginState) -> Result<bool, String> {
+    require_peer_permission(state)?;
+    let caller = state.plugin_id.clone();
+    run(
+        state,
+        "host_peer_stop_node",
+        crate::peer_net::stop_node_owned(&require_app(state)?, &caller),
+    )
+}
+
+/// 活跃传输批清单（引擎会话事实投影，供插件事件归约状态机首屏重建）：
+/// send 句柄表 + receive pending 询问表 + pull 会话表三表聚合投影
+pub(crate) fn peer_active_transfers(state: &WasmPluginState) -> Result<String, String> {
+    require_peer_permission(state)?;
+    let app = require_app(state)?;
+    let mut rows = crate::peer_transfer::active_send_transfer_rows(&app);
+    rows.extend(crate::peer_receive::active_receive_rows(&app));
+    rows.extend(crate::peer_remote::active_pull_rows(&app));
+    serde_json::to_string(&rows).map_err(|e| format!("serialize active transfers failed: {e}"))
+}
+
+/// 发送源收集（目录递归 + 批内同名去重 → `[{ path, size }]` JSON）：
+/// 仅读元数据不读内容；路径应来自 pick-* 用户选择（选择即授权）
+pub(crate) fn peer_collect_outgoing(state: &WasmPluginState, paths_json: &str) -> Result<String, String> {
+    require_peer_permission(state)?;
+    let paths: Vec<String> =
+        serde_json::from_str(paths_json).map_err(|e| format!("collect outgoing: invalid paths json: {e}"))?;
+    run(
+        state,
+        "host_peer_collect_outgoing",
+        crate::peer_transfer::collect_outgoing_for_plugin(paths),
+    )
 }

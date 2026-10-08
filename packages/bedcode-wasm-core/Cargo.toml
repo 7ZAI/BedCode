@@ -1,0 +1,136 @@
+# ==================== bedcode-wasm-core：插件机制整核（可复用 crate） ====================
+# 桌面端 wasm_core 整核抽出（.scratch/2026-10-06-wasm-core-whole-crate/spec.md）：
+# 插件核心机制（manager/security/host_api/bus/config/monitor/permission/
+# runtime_util/intercall/storage）+ 引擎面（db/pty/enums）+ 宿主胶水
+# （system/{config,opener,process}、auth_center、session_gateway、HostBusPort）
+# 从 bin crate 整体迁出。任何 Tauri 宿主可直接 path 依赖本 crate 获得插件机制。
+#
+# 位置（仓库根 packages/，2026-10-08 由 bedcode-desktop/packages/ 迁根）：
+# 桌面插件机制整核，必然依赖桌面基础层（bedcode-server-base / bedcode-plugin-api 桌面 WIT /
+# 四个桌面能力 crate）；移动端契约独立（ADR 0018）且不复用本 crate（移动 fork 对齐走
+# ADR 0040 的 bedcode-mobile/packages/bedcode-wasm-core）。双端共享锚点是
+# 仓库根 packages/bedcode-host-kit。
+
+[package]
+name = "bedcode-wasm-core"
+version = "0.1.0"
+description = "BedCode 桌面插件机制整核：wasmtime 组件模型宿主 + host-* 原语 + 安全闸门 + 引擎面（pty/db）"
+authors = ["binblink"]
+license = "MIT"
+repository = "https://github.com/7ZAI/BedCode"
+edition = "2021"
+
+[dependencies]
+# ==================== 宿主平台（D2：保留 tauri 依赖，不做零-tauri 反转） ====================
+tauri = { version = "2", features = ["protocol-asset", "tray-icon", "test"] }
+# 文件选择对话框（host-platform `fs:pick` 引擎面；与 lib 同版本锁步）
+tauri-plugin-dialog = "2"
+
+# ==================== WASM 运行时（wasmtime 48，双端锁版 ADR 0019） ====================
+wasmtime = { version = "48", features = ["component-model"] }
+wasmtime-wasi = { version = "48", features = ["p3"] }
+
+# ==================== 异步 / 并发 ====================
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util", "process", "test-util"] }
+
+# ==================== 插件机制内核 + 能力域（前作资产，不搬不重写） ====================
+# 机制内核（仓库根，双端共享锚点）：HostModule / WasmPluginState / HostPorts / 注册表
+bedcode-host-kit = { path = "../bedcode-host-kit" }
+# 桌面基础层（错误/常量/错误边界/系统信息/网络配置/连接身份/端口 traits）
+bedcode-server-base = { path = "../bedcode-server-base" }
+# 加密引擎（算法实现 + 注册表）
+bedcode-crypto-engine = { path = "../bedcode-crypto-engine" }
+# 四个能力域 crate（实现 + 插件绑定层 + 自动注册）
+bedcode-discovery-engine = { path = "../bedcode-discovery-engine" }
+bedcode-server-websocket = { path = "../bedcode-server-websocket" }
+bedcode-server-peer-net = { path = "../bedcode-server-peer-net" }
+bedcode-server-http = { path = "../bedcode-server-http" }
+# PTY 引擎面（wasm-core 纯净性收口票 02 迁出；host-pty WIT 面随票 04 迁出）
+bedcode-pty-engine = { path = "../bedcode-pty-engine" }
+# server 传输无关内核（ServerSupervisor，host_config 用）
+bedcode-server-core = { path = "../bedcode-server-core" }
+# WIT 契约绑定（bindgen! 在 manager/runtime/component.rs，path 相对本 crate 根）
+bedcode-plugin-api = { path = "../../bedcode-desktop/packages/plugin-sdk-desktop/rust" }
+# 对等网络共享基础设施（节点身份 + 自签证书）
+bedcode-peer-net = { path = "../peer-net" }
+# 链路报文加密协议核心（link_crypto 算法）
+bedcode-link-crypto = { path = "../link-crypto" }
+
+# 能力模块自报（inventory::submit! / collect!）
+inventory = "0.3"
+# 序列化
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# UUID
+uuid = { version = "1", features = ["v4", "serde"] }
+# 日期/时间
+chrono = { version = "0.4", features = ["serde"] }
+# 日志
+tracing = { version = "0.1", features = ["attributes"] }
+# 错误处理
+anyhow = "1"
+thiserror = "1"
+# 文件监听（dev watcher）
+notify = "6"
+# 正则
+regex = "1"
+# 异步 trait（dyn 兼容）
+async-trait = "0.1"
+# WebSocket（host-ws 引擎面）
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
+# 目录定位
+dirs = "6.0.0"
+# 组播发现（host-mdns 引擎面）
+mdns-sd = "0.20"
+# 系统信息
+sysinfo = "0.33"
+# 网络工具
+local-ip-address = "0.6"
+# HTTP 客户端（host-http 出站代理）
+reqwest = { version = "0.12", features = ["stream"] }
+# 数据库
+rusqlite = { version = "0.32", features = ["bundled", "hooks"] }
+# 用户插件 zip 解压安装
+zip = "4.6"
+# 加密原语（pty 无关；crypto 域经 bedcode-crypto-engine）
+rand = "0.8"
+# PTY 管理（host-pty 引擎面）
+portable-pty = "0.8"
+# 密码学（宿主侧部分算法；与 src-tauri 同版本锁步）
+p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
+aes-gcm = "0.10"
+chacha20poly1305 = "0.10"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+rsa = { version = "0.9", features = ["sha2", "pem"] }
+sha2 = "0.10"
+hkdf = "0.12"
+jsonwebtoken = "9"
+# 编码
+base64 = "0.22"
+hex = "0.4"
+encoding_rs = "0.8"
+# 系统休眠抑制
+nosleep = "0.2"
+# 进程组信号
+libc = "0.2"
+
+# Windows：文件定位 COM API（opener）+ 电源唤醒监听
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_Com", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_System_Registry", "Win32_System_LibraryLoader"] }
+
+# Linux：systemd-logind 休眠抑制
+[target.'cfg(target_os = "linux")'.dependencies]
+dbus = "0.9"
+webkit2gtk = { version = "=2.0.2", features = ["v2_38"] }
+
+[dev-dependencies]
+tempfile = "3"
+# 测试 harness（§4.5）起 HTTP+WS 服务器（actix-web dev::ServerHandle 返回类型）
+actix-web = "4"
+# 测试夹具构建器（manager/runtime/fixture_build.rs）
+flume = "0.12"
+
+[profile.release]
+# 与 src-tauri 同口径：panic 可被 catch_unwind 捕获（错误边界）
+panic = "unwind"

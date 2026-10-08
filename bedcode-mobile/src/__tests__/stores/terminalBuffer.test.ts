@@ -51,6 +51,11 @@ vi.mock('@/composables/useMobileCommands', () => cmd)
 
 import { useTerminalBufferStore } from '@/stores/terminalBuffer'
 
+// 票 12：事件源 = com.bedcode.terminal-session 插件 emit（事件名带插件命名空间）。
+// 与 store 内常量保持字面同步（store 不导出这两个常量，此处按事件名字面锁）
+const TERMINAL_STATE_EVENT = 'plugin:com.bedcode.terminal-session:terminal-state'
+const TERMINAL_RESYNC_EVENT = 'plugin:com.bedcode.terminal-session:terminal-resync'
+
 /** 取会话最近一次经 terminal_page_subscribe 交给 Rust 的页面通道 */
 function pageChannel(sessionId: string) {
   const call = cmd.terminalPageSubscribe.mock.calls
@@ -70,14 +75,14 @@ function emitRaw(sessionId: string, data: string) {
 
 /** 模拟 Rust 推送链路状态事件 */
 function emitState(sessionId: string, phase: string, detail?: string) {
-  eventHandlers['terminal-state']!({
+  eventHandlers[TERMINAL_STATE_EVENT]!({
     payload: { session_id: sessionId, phase, detail },
   })
 }
 
 /** 模拟 Rust 推送重锚事件（ring_resync / 重订阅回包） */
 function emitResync(sessionId: string, offset: number) {
-  eventHandlers['terminal-resync']!({
+  eventHandlers[TERMINAL_RESYNC_EVENT]!({
     payload: { session_id: sessionId, offset },
   })
 }
@@ -93,8 +98,8 @@ describe('terminalBuffer store（票 05：新协议 + 本地字节计数）', ()
     setActivePinia(createPinia())
     store = useTerminalBufferStore()
     vi.clearAllMocks()
-    eventHandlers['terminal-state'] = null
-    eventHandlers['terminal-resync'] = null
+    eventHandlers[TERMINAL_STATE_EVENT] = null
+    eventHandlers[TERMINAL_RESYNC_EVENT] = null
     listenMock.mockImplementation(async (name: string, cb: (p: unknown) => void) => {
       eventHandlers[name] = cb
       return () => {}

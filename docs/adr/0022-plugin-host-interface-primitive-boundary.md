@@ -19,7 +19,7 @@ WIT 契约中各宿主能力接口的函数数对比悬殊：`host-storage` 3 �
 
 > **阅读约定**：本文按**决策批次**累积，多数小节记录的是当时的中间态。已被后续修订取代的结论
 > 均在原地加「现状 / 终态更正」标注，**当前形态以各小节的更正标注 + 末节「修订记录」首条
-> （desktop ABI v31 / mobile 11）为准**。文中出现的旧路径 `host_impl/` = 现
+> （desktop ABI v31 / mobile 14）为准**。文中出现的旧路径 `host_impl/` = 现
 > `wasm_core/host_api/`；`SessionComponents` / `GlobalOutputManager` / `src/session/` /
 > `protocol/` / `src/events/` / `server/websocket/{message.rs,services/,terminal_ws/,subscription.rs}`
 > 均已删除（v27 / v28）。
@@ -427,7 +427,7 @@ roadmap 阶段 3（`.scratch/2026-09-10-plugin-kernel-roadmap/spec.md`）把「�
 
 ## 双端偏离（host-websocket / host-pty 等桌面独有接口）
 
-- 移动端是**远程终端控制端**，不承载 PTY / mDNS 广播 / WS 服务端等主机侧引擎，故 `host-websocket`（desktop v14）、`host-auth`（v15 密钥托管；v18 追加认证记录面四函数，其中三函数已于 v24 随删表退役、`auth-setting-set` 保留）、`host-pty`（v16）、`auth-policy` 导出（v17，认证能力——宿主 server 中间件验签后取策略）、**会话语义下沉批次（v18 / v19：`host-session` 配置面 + 创建与动作面 + 注解槽 + 连接清单、`host-platform.wsl-distros`）** 均为**桌面独有接口**：mobile 的 WIT / ABI / SDK 不跟演也不投影（ADR 0018 双端各自演进的文档化偏离，同 wasmtime 桌面先行 48 / 移动暂留 47 的分叉先例——该分叉已于 2026-09-26 关闭，双端均为 48，见 ADR 0019）。当前 **desktop v31 / mobile 11**（v23 = host-session 配置面写原语退役，见 v10 登记；v24 认证记录下沉、v25 host-peer 节点生命周期原语、v26 host-crypto 契约面、**v27 = 会话原语域整 interface 退役**、**v28 = websocket 业务下沉：新增 `host-websocket.connection-context` + 破坏性退役 `host-events.broadcast-sync` / `host-pty.spawn` 的 `hostBroadcastSessionId`**、**v29 = HTTP 路由代码注册下沉：新增 `host-http` 服务端域（register-endpoint / unregister-endpoint，函数级追加，旧产物仍可实例化但不具备注册能力）**、**v30 = 传输编排下沉票 1：host-peer 追加 `active-transfers` / `collect-outgoing`（纯增量）+ 引擎原始事件桥双写**、**v31 = 传输编排下沉票 3：破坏性删除 `resume-all-transfers` + `send-files` 语义收窄「即发即会话」（`concurrency` 载荷字段退役）+ 旧快照 topic 退役**；desktop 独有接口持续演进不要求移动端跟演，但 v27 / v28 / v31 都是**删 import / 删 export / 删函数**的破坏性变更，旧产物在实例化期即失败，须按对应版本 SDK 重建）。**移动端不在 v28/v29 兼容范围**：websocket 业务下沉与 HTTP 路由代码注册两个专项只改桌面端，移动端旧 WS 客户端 / 路由 / wire 形状不动、不承诺兼容（见 `.scratch/2026-09-25-websocket-business-downsink/spec.md` 与 `.scratch/2026-09-25-http-route-registration-downsink/spec.md`）。
+- 移动端是**远程终端控制端**，不承载 PTY / mDNS 广播 / WS 服务端等主机侧引擎，故 `host-websocket`（desktop v14；**2026-10-08 mobile v14 起以客户端 5 函数子集引入**——服务端域 9 函数与 `connection-context` 仍是桌面独有，见 ADR 0041）、`host-auth`（v15 密钥托管；v18 追加认证记录面四函数，其中三函数已于 v24 随删表退役、`auth-setting-set` 保留）、`host-pty`（v16）、`auth-policy` 导出（v17，认证能力——宿主 server 中间件验签后取策略）、**会话语义下沉批次（v18 / v19：`host-session` 配置面 + 创建与动作面 + 注解槽 + 连接清单、`host-platform.wsl-distros`）** 均为**桌面独有接口**：mobile 的 WIT / ABI / SDK 不跟演也不投影（ADR 0018 双端各自演进的文档化偏离，同 wasmtime 桌面先行 48 / 移动暂留 47 的分叉先例——该分叉已于 2026-09-26 关闭，双端均为 48，见 ADR 0019）。当前 **desktop v31 / mobile 11**（v23 = host-session 配置面写原语退役，见 v10 登记；v24 认证记录下沉、v25 host-peer 节点生命周期原语、v26 host-crypto 契约面、**v27 = 会话原语域整 interface 退役**、**v28 = websocket 业务下沉：新增 `host-websocket.connection-context` + 破坏性退役 `host-events.broadcast-sync` / `host-pty.spawn` 的 `hostBroadcastSessionId`**、**v29 = HTTP 路由代码注册下沉：新增 `host-http` 服务端域（register-endpoint / unregister-endpoint，函数级追加，旧产物仍可实例化但不具备注册能力）**、**v30 = 传输编排下沉票 1：host-peer 追加 `active-transfers` / `collect-outgoing`（纯增量）+ 引擎原始事件桥双写**、**v31 = 传输编排下沉票 3：破坏性删除 `resume-all-transfers` + `send-files` 语义收窄「即发即会话」（`concurrency` 载荷字段退役）+ 旧快照 topic 退役**；desktop 独有接口持续演进不要求移动端跟演，但 v27 / v28 / v31 都是**删 import / 删 export / 删函数**的破坏性变更，旧产物在实例化期即失败，须按对应版本 SDK 重建）。**移动端不在 v28/v29 兼容范围**：websocket 业务下沉与 HTTP 路由代码注册两个专项只改桌面端，移动端旧 WS 客户端 / 路由 / wire 形状不动、不承诺兼容（见 `.scratch/2026-09-25-websocket-business-downsink/spec.md` 与 `.scratch/2026-09-25-http-route-registration-downsink/spec.md`）。
 - **偏离不止 WIT 面**：本批次同时经用户 2026-09-19 授权**豁免 AGENTS.md §9「协议改动必须两端同步部署」**，豁免范围严格限于该 spec（`.scratch/2026-09-19-terminal-session-plugin/spec.md` D1）。自守边界：线协议**形状**（会话 DTO 字段、同步事件、WS 控制帧、认证握手报文）保持不变——保持它并不需要移动端改一行代码，且它是后置适配专项的成本基线。移动端受损面 M1–M5 已挂进路线图（`.scratch/2026-09-10-plugin-kernel-roadmap/spec.md`），桌面端不为其负责（spec Out of Scope）。
 - **恢复条件**：当移动端需要同类能力（例如本地跑交互进程）时，再在该端 WIT 增补对应 interface 并对齐 ABI 计数；在此之前「改 WIT 必须双端同步」这一硬约束的适用范围限于**双端共有的接口**（host-peer / host-fs / host-http 等）。
 - SDK 双端独立包（`plugin-sdk-desktop` / `plugin-sdk-mobile`），互不影响；宿主侧 `version > 当前 → 拒绝` 的兼容语义只保证「不高于当前 ABI」的产物不被版本门拦下；**「旧插件（≤v16）零迁移仍可加载」的口径已被 v27 / v28 / v31 三次破坏性变更取代**——这三种产物在**实例化期**即被点名拒绝并要求按对应 SDK 重建（`LoadedWasmPlugin::stale_artifact_rebuild_hint`），见上段与修订记录 v16 / v19 / v20。
@@ -564,8 +564,83 @@ serve 供流记账 / peer_name 解析 / 取消原因码映射 / pull 任务行�
 
 ## 修订记录
 
-本节按**写入批次**而非时间序排列；**「当前」= 首条 v20**（对应 desktop ABI v31 / mobile 11）。其余条目标记的「（当前）」是写入当时的时点表述，已按本节实际状态移除——被后续修订取代的结论以本节对应条目为准，
+本节按**写入批次**而非时间序排列；**「当前」= 首条 v20**（对应 desktop ABI v31 / mobile 14）。其余条目标记的「（当前）」是写入当时的时点表述，已按本节实际状态移除——被后续修订取代的结论以本节对应条目为准，
 正文中被取代的时点表述均已就地加「现状 / 终态更正」标注。
+
+- **2026-10-08 移动端票 16（auto-task 插件并入 terminal-session app · mobile ABI 16 不变 · 零 WIT 变更）**：
+  `.scratch/2026-10-07-mobile-wasm-core-refactor/` 阶段 3 收口票（详见 `ticket-16-auto-task-merge.md`），
+  spec D6 选项 A：`com.bedcode.auto-task`（TS 面板 + 极简 rust 壳）整体并入 `com.bedcode.terminal-session`
+  （移动版 app，与桌面同名不同职责，C8 登记见 ADR 0018）。① **随迁即删**（D6 强制①）：极简 rust 壳
+  （`invoke_command` 显式全拒、TS 从未 invoke）与 `contributes.commands` 4 条 `auto-task.*` 命令退役；
+  `contributes.lifecycle` 四钩子（未注册 handler、宿主 dispatch 空转）不再声明；任务域前端按域重组进
+  `plugins/terminal-session/src/task/`（activate / api / i18n / devMock / components / composables，
+  i18n 前缀随插件 id 自动切换）。② **B1–B6 零命中**：合并属插件间整合，宿主零新增能力；本票零 WIT /
+  ABI 变更（mobile 停 v16）。③ **HTTP 基址切换**：`/api/plugin/com.bedcode.auto-task` →
+  `/api/plugin/com.bedcode.terminal-session`（消解 roadmap M1 受损项），桌面
+  `LEGACY_HTTP_PLUGIN_ALIASES` 别名表保留不动（桌面改动 Out of scope，切断列双端同批另立项）。
+  ④ **fail-visible 三形态**：插件目录 / 打包资源目录删除（①）、退役 id / 视图 id / 命令 id 全量清退
+  （③）+ 防回接锁 `retired_mobile_auto_task_plugin_lock.rs`（4 例 + 变异自检 4/4）；零 ABI 变更故无
+  第二形态判据扩展。⑤ 硬引用同批换 id：宿主 fs_auth 白名单 / 根插件清单 / dev 注册表 / dev-shell
+  mock 基址 / 开发文档；CI 插件安装列表补 terminal-session。终端订阅 / 认证编排域（票 12 / 14）零改动。
+
+- **2026-10-08 移动端票 11（host-websocket 客户端域 · mobile ABI 13 → 14 · 纯增量）**：
+  `.scratch/2026-10-07-mobile-wasm-core-refactor/` 阶段 3 首票（票 12 终端订阅迁插件的铺路票），
+  落 ADR 0041：新增 `host-websocket` 客户端 5 函数（connect / send-text / send-binary / close /
+  is-connected）——**桌面 15 函数的真子集**，服务端域 9 函数与 `connection-context` 不存在于移动端
+  （ADR 0018 不跑 WS 服务器；边界锁 `mobile_host_websocket_client_domain_lock` 锁 WIT 函数名与
+  权限词汇，变异自检 2/2）。权限位只加 `ws:client`（SSRF 面 fail-closed，移动端四同步点）；
+  投递双通道 = 状态事件 JSON 属主 topic（`<owner>:ws:open|error|close`）+ 下行帧二进制属主 topic
+  （`<owner>:ws:message`，帧信封 `kind + handle 长度 + handle + payload`，复用 v9 `events-binary`
+  导出——与 spec 的 events-ws 方案偏差，见 ADR 0041 D4）；消费插件须同时持有 `bus` 权限位
+  （订阅总线本体要求，集成测试实证）。引擎 = 移动端自建 `host_impl/ws.rs`（桌面
+  `bedcode-server-websocket` 客户端段与 actix 服务器栈耦合不可复用，同构但分叉，条件触发转共享
+  子 crate）；不做 wss / 重连编排（退避重连 / 心跳 / 订阅协议归插件，票 12）；`connect` 同步阻塞
+  握手、timeout 上限 5s（host fn 同步上下文，ADR 0029 不长挂实例）。纯增量：v13 产物照常加载但
+  无 ws 能力（单向协商，票 12 须同批处理能力探测）。
+
+- **2026-10-08 移动端票 12（终端订阅协议客户端迁插件 · mobile ABI 14 → 15 · 纯增量 + config 增强）**：
+  `.scratch/2026-10-07-mobile-wasm-core-refactor/` 阶段 3 第二票（详见 `ticket-12-terminal-link-downsink.md`）。
+  ① **B2/B4 下沉兑现**：宿主 `terminal_link.rs`（1,363 行）与 `enums/special_key.rs` 整体退役，
+  终端订阅协议状态机（fresh subscribe 门控 / 本地字节计数 / ack 节流 / ring_resync 重锚 /
+  session_missing 三振 / 文本+特殊键共存输入计划）迁入新建内置 wasm app
+  `com.bedcode.terminal-session`（id 沿用桌面同名 = spec D6 选项 A——**两端同 id 职责不同**，
+  本端是远程终端控制端，ADR 0018 契约独立，C8「同名 ≠ 契约同一」在本条与 ADR 0018 登记）。
+  ② **两个新接口**：`host-terminal-stream.forward-output`（插件把输出**裸字节**交宿主转发到
+  已登记前端页面 Channel——**C3 二进制出口的最终形态**，宿主零解析按 session-id 寻址，
+  四类薄壳④；权限复用既有 `terminal:output` 词汇）与 `host-connection.primary-target`
+  （主连接目标引擎事实读取，**无权限门**对齐 host-platform 例外先例；与桌面 `host-connection`
+  同名不同形——桌面 15 函数连接上下文域，移动端 1 函数；票 13 会话控制迁插件复用同一地基）。
+  ③ **host-websocket config 原地增强**（零 WIT 形状变化）：`jwt-auth`（宿主代发首消息认证帧，
+  token 从宿主认证状态取、零过境插件——C4；auth 帧形状是两端宿主传输面契约，与桌面
+  `PluginChannel` AuthFrame 对称）、`heartbeat-secs`（连接级心跳 + 3× 静默判死，对齐桌面
+  服务器骨架心跳——「心跳归引擎」）、`auto-reconnect`（断线自动重连复用宿主
+  `connection::reconnect::ReconnectManager` 全局单一事实源——杜绝第二张退避表；重建连接
+  `ws:open` 携带 `reconnectedFrom` 旧句柄供插件把新句柄接回等待中的订阅，每轮退避发布
+  `ws:reconnect-scheduled` 事件保留倒计时 UX；取消 = 插件对句柄 close 或停用 purge）。
+  ④ **宿主保留面**：`terminal_stream_gateway.rs` 页面 Channel 表 + 窄转发（Channel 是 Tauri
+  传输机制插件无法持有，`terminal_page_subscribe/unsubscribe` 命令迁至该层），其余 8 个
+  `terminal_*` 命令注销、前端协议面走 `plugin_invoke`。WASM 插件无时钟——terminal_link 的
+  三处时间驱动面（重连 / 心跳 / ack 空闲轮询）按 ③ 归位，ack 空闲轮询退役改由前端
+  onWriteParsed 持续驱动（偏差记录于票文档 §6.3）。⑤ 纯增量：v14 产物照常加载；票 11 的
+  「v13 产物无 ws 能力」暴露面以分析销账（terminal-session 为 v15 首发新 id、与宿主同 APK
+  分发、版本错位窗口 = 0；v15 产物在 v14 宿主实例化期点名缺失接口 = fail-visible ②）。
+  防回接锁 `retired_mobile_terminal_link_lock.rs`（4 例 + 变异自检 4/4）。
+
+- **2026-10-07 移动端票 06（发送编排下沉 file-transfer 插件 · mobile ABI 11 → 12 · 破坏性）**：
+  `.scratch/2026-10-07-mobile-wasm-core-refactor/` 阶段 2 首票，处置同本节 v20–v31 桌面口径
+  （移动端自有演进，ADR 0018 契约独立；ADR 0022 判据同源适用）：
+  ① host-peer 删 `resume-all-transfers`（批量恢复编排归插件——插件遍历自身 paused 条目逐个调
+  `resume-transfer`）；② `send-files` 语义收窄「即发即会话」（一次调用 = 一个会话立即发起，
+  返回值即传输句柄），`concurrency` 载荷字段**运行期显性拒绝并点名 ABI v12 重建**（宿主并发闸门
+  删除后无第二道拦截）；③ 发送方向回流改走新公开 topic `peer:transfer-event` 引擎原始事件
+  （progress 150ms 节流 / terminal / paused / resumed / pull-served），旧快照 topic
+  `peer:transfer` 与其前端事件 `peer-transfer-changed` 的总线桥接映射一并退役。
+  宿主 `peer_transfer.rs` 收敛为「`SendSessionHandle` 句柄表 + 事件桥」——任务表、发送并发闸门与
+  队列泵、终态历史文件（`transfer_history.json` 读写路径删除）、serve 供流记账、原因码映射
+  全部下沉插件 `transfer_store::reduce_event`（唯一任务真源）+ 插件侧 `PENDING_SENDS` 并发闸门。
+  防回接：`retired_mobile_send_orchestration_is_not_reintroduced`（结构面）+ 载荷字段检测
+  （行为面）双保险，均已变异自检。接收方向（`peer_receive.rs` 任务表 + `peer:receive` 快照）
+  属同阶段票 07，**本批不动**。
 
 - **2026-09-28（授权策略 = 安全闸门；ABI 不变，desktop 仍 v31 / mobile 11；不占 v 编号）**：见上方
   「授权策略 = 安全闸门」节。三档策略（总是询问 / 默认 / 始终允许）× 授权记录真源落在宿主，

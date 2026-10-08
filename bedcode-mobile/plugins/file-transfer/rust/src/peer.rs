@@ -62,12 +62,10 @@ pub(crate) fn remove_preauth_path(h: &impl HostStorage, path: &str) -> anyhow::R
 static STORE: OnceLock<Mutex<Vec<TransferEntry>>> = OnceLock::new();
 static STORE_LOADED: OnceLock<()> = OnceLock::new();
 
-/// 待挂载拉取元数据队列：(nodeId, spec)。pull-files 入队时压入，新接收条目
-/// 首次出现在快照中且文件集匹配时消费挂载（引擎按文件逐批铸造 batchId，
-/// 调用点拿不到 id，只能事后匹配）。
+/// 待挂载拉取元数据队列：(nodeId, spec)。`pull-files` **入队在前**、调
+/// `peer-pull-files` 在后（票 08：引擎铸造 batchId 后`pull-started` 事件即
+/// 回流，事后入队会错过挂载窗口）；新接收条目按 node × rel_path 匹配消费。
 static PENDING_PULLS: OnceLock<Mutex<Vec<(String, RetryMeta)>>> = OnceLock::new();
-
-const PENDING_PULLS_CAP: usize = 8;
 
 fn store() -> &'static Mutex<Vec<TransferEntry>> {
     STORE.get_or_init(|| Mutex::new(Vec::new()))
@@ -84,13 +82,11 @@ fn ensure_loaded(h: &WasmHost) -> std::sync::MutexGuard<'static, Vec<TransferEnt
     if STORE_LOADED.set(()).is_ok() {
         match load_entries(h) {
             Ok(mut entries) => {
-                let marked = transfer_store::mark_interrupted_on_load(&mut entries);
-                if marked > 0 {
-                    h.log_info(&format!("restored {} transfers, {} marked interrupted", entries.len(), marked));
-                    persist_entries(h, &entries);
-                } else {
-                    h.log_info(&format!("restored {} transfers", entries.len()));
-                }
+                let restored = entries.len();
+                let marked = restore_entries(h, &mut entries);
+                h.log_info(&format!(
+                    "restored {restored} transfers, {marked} marked interrupted"
+                ));
                 *guard = entries;
             }
             Err(e) => h.log_info(&format!("transfer store load deferred: {e}")),
@@ -103,15 +99,16 @@ fn ensure_loaded(h: &WasmHost) -> std::sync::MutexGuard<'static, Vec<TransferEnt
 /// 历史封顶 200 + 设备缓存 ≤50，整读改整写规模可控）
 const ENTRIES_KEY: &str = "transfer_entries";
 
-fn load_entries(h: &WasmHost) -> Result<Vec<TransferEntry>> {
+fn load_entries(h: &impl HostStorage) -> Result<Vec<TransferEntry>> {
     let Some(v) = h.storage_get(ENTRIES_KEY)? else {
         return Ok(vec![]);
     };
     Ok(serde_json::from_value(v).unwrap_or_default())
 }
 
-/// 全量回写（封顶 200 条，KV 整读改整写）
-fn persist_entries(h: &WasmHost, entries: &[TransferEntry]) {
+/// 全量回写（封顶 200 条，KV 整读改整写）。失败只记日志不向上抛：持久化
+/// 退化不应打断数据面编排（下次变更会整读改整写重试）。
+fn persist_entries(h: &(impl HostStorage + HostLog), entries: &[TransferEntry]) {
     let value = match serde_json::to_value(entries) {
         Ok(v) => v,
         Err(e) => {
@@ -122,6 +119,20 @@ fn persist_entries(h: &WasmHost, entries: &[TransferEntry]) {
     if let Err(e) = h.storage_set(ENTRIES_KEY, &value) {
         h.log_info(&format!("transfer entries persist failed: {e}"));
     }
+}
+
+/// 重启恢复：把在册进行中条目标注 `interrupted` 并回写（票 08 抽出为可测
+/// seam——「载入 → 标注 → 落盘」三步此前只存在于 `OnceLock` 守卫内，
+/// cargo test 无法驱动）。
+///
+/// 标注是**如实呈现**：原批随宿主进程消亡，保留 running 会让历史里永远挂着
+/// 「正在传」的死条目。返回标注数量。
+fn restore_entries(h: &(impl HostStorage + HostLog), entries: &mut [TransferEntry]) -> usize {
+    let marked = transfer_store::mark_active_interrupted(entries);
+    if marked > 0 {
+        persist_entries(h, entries);
+    }
+    marked
 }
 
 /// 变更后统一出口：持久化 + 四路视图派发（tasks/receiving 仅进行中，
@@ -152,74 +163,143 @@ fn flush(h: &WasmHost, mut guard: std::sync::MutexGuard<'static, Vec<TransferEnt
 
 // ==================== 事件编排 ====================
 
-/// 快照合并入口（peer:transfer / peer:receive 共用）：缺席剪枝 → 拉取元数据
-/// 挂载 → 合并 → 持久化派发
-pub(crate) fn merge_and_emit(h: &WasmHost, snapshot: &[serde_json::Value], direction: &str) {
-    let mut guard = ensure_loaded(h);
-    let ids: Vec<String> = snapshot
-        .iter()
-        .filter_map(|d| d.get("batchId").and_then(|v| v.as_str()))
-        .map(|s| s.to_string())
-        .collect();
-    let mut changed = transfer_store::prune_absent(&mut guard, &ids, direction) > 0;
-    let known_before: std::collections::HashSet<String> =
-        guard.iter().map(|e| e.batch_id.clone()).collect();
-    changed |= transfer_store::merge_snapshot(&mut guard, snapshot);
-    changed |= attach_pending_pull_meta(&mut guard, &known_before);
-    flush(h, guard, changed);
+/// 展示名解析（票 06）：设备快照（前端落盘的 device_snapshot）广播名优先，
+/// 短指纹兜底——宿主不再解析展示名（发送侧 peerName 派生随任务表退役）
+fn resolve_peer_name(h: &WasmHost, node_id: &str) -> String {
+    let fallback = node_id.get(..8).unwrap_or(node_id).to_string();
+    device_bridge::load_snapshot(h)
+        .ok()
+        .and_then(|entries| {
+            entries
+                .iter()
+                .find(|d| d.node_id == node_id)
+                .map(|d| d.device_name.clone())
+                .filter(|n| !n.is_empty())
+        })
+        .unwrap_or(fallback)
 }
 
-/// 新出现条目 × 待挂载队列的文件集匹配
-fn attach_pending_pull_meta(
-    store: &mut [TransferEntry],
-    known_before: &std::collections::HashSet<String>,
-) -> bool {
-    let mut attached = false;
-    let mut consumed: Vec<usize> = vec![];
-    {
-        let mut pending = pending_pulls().lock().expect("pending pulls lock");
-        for (idx, (node_id, meta)) in pending.iter().enumerate() {
-            let RetryMeta::Pull { files, .. } = meta else { continue };
-            let spec_paths: std::collections::HashSet<&str> =
-                files.iter().map(|f| f.rel_path.as_str()).collect();
-            for entry in store.iter_mut() {
-                if known_before.contains(&entry.batch_id)
-                    || entry.node_id != *node_id
-                    || entry.retry_meta.is_some()
-                {
-                    continue;
-                }
-                let entry_paths: std::collections::HashSet<&str> = entry
-                    .files
-                    .iter()
-                    .filter_map(|f| f.get("path").and_then(|v| v.as_str()))
-                    .collect();
-                if !spec_paths.is_empty() && entry_paths == spec_paths {
-                    entry.retry_meta = Some(meta.clone());
-                    attached = true;
-                    consumed.push(idx);
-                    break;
-                }
-            }
-        }
-        // 后进先出地移除已消费项（索引从大到小删避免位移）
-        consumed.sort_unstable();
-        consumed.dedup();
-        for idx in consumed.into_iter().rev() {
-            pending.remove(idx);
-        }
-        // 队列封顶：最旧先出
-        while pending.len() > PENDING_PULLS_CAP {
-            pending.remove(0);
-        }
+/// 引擎原始事件归约入口（`peer:transfer-event` / `peer:receive-event`）：
+/// 事件 → store 状态推进（建行/进度/终态/暂停同步），变更后统一 flush。建行
+/// 锚点事件的展示名在此解析（I/O 锁外）。store 自此为双方向唯一任务真源。
+pub(crate) fn reduce_and_emit(h: &WasmHost, direction: &str, event: &serde_json::Value) {
+    let peer_name = event
+        .get("nodeId")
+        .and_then(|v| v.as_str())
+        .map(|nid| resolve_peer_name(h, nid))
+        .unwrap_or_default();
+    let is_pull_started = event.get("kind").and_then(|v| v.as_str()) == Some("pull-started");
+    let changed = {
+        let mut guard = ensure_loaded(h);
+        let changed = transfer_store::reduce_event(&mut guard, direction, event, &peer_name);
+        // 拉取批次挂重试元数据：batch_id 由引擎铸造（pull-files 调用点拿不到），
+        // 按 rel_path 匹配本插件发起的拉取意图
+        changed | (is_pull_started && attach_pull_meta(&mut guard, event))
+    };
+    if !changed {
+        return;
     }
-    attached
+    // send 方向终态/暂停会空出发送槽位：放行插件侧排队批（并发闸门自控）
+    dispatch_pending_sends(h);
+    let guard = ensure_loaded(h);
+    flush(h, guard, true);
 }
 
-/// auto 分支自动应答（accept/reject 策略）：对快照中的 pending 批立即
+/// 接收方向事件入口（`peer:receive-event`，票 07）：引擎原始事件归约 +
+/// auto 策略即时应答 + 节点停止的在册中断标注
+///
+/// `node-stopped` 额外清空 session 句柄表（票 08）：引擎通道关闭即节点下线，
+/// 陈旧句柄会让后续数据面命令全打在死会话上（重拨路径 `ensure_target` 因此
+/// 永远走不到）；endpoint memo 保留 —— 重启后按memo 重拨即可。
+pub(crate) fn on_receive_event(h: &WasmHost, event: &serde_json::Value) {
+    match event.get("kind").and_then(|v| v.as_str()) {
+        Some("node-stopped") => {
+            let marked = {
+                let mut guard = ensure_loaded(h);
+                transfer_store::mark_active_interrupted(&mut guard)
+            };
+            let stale: Vec<String> = device_bridge::drain_sessions();
+            if marked > 0 || !stale.is_empty() {
+                h.log_info(&format!(
+                    "peer-net stopped: {marked} in-flight transfers marked interrupted, \
+                     {} stale session handles dropped (endpoints kept for redial)",
+                    stale.len()
+                ));
+            }
+            let guard = ensure_loaded(h);
+            flush(h, guard, marked > 0);
+        }
+        Some("offer-pending") => {
+            // 先归约建行（视图出现待应答批），再按策略自动应答
+            reduce_and_emit(h, "receive", event);
+            auto_answer_offer(h, event);
+        }
+        _ => reduce_and_emit(h, "receive", event),
+    }
+}
+
+/// 首屏兜底（票 06）：激活晚于事件时经 active-transfers 原语查询宿主在册
+/// 活跃批，补最小占位行（peer_name/files 缺失，progress 事件随后补全）。
+/// 原语不可用（节点未起）降级日志不阻断激活。
+pub(crate) fn rebuild_from_active_transfers(h: &WasmHost) {
+    let rows = match h.peer_active_transfers() {
+        Ok(v) => v,
+        Err(e) => {
+            h.log_info(&format!("active-transfers bootstrap deferred (non-fatal): {e}"));
+            return;
+        }
+    };
+    let Some(arr) = rows.as_array() else { return };
+    let inserted = {
+        let mut guard = ensure_loaded(h);
+        transfer_store::insert_active_projections(&mut guard, arr, "")
+    };
+    if inserted > 0 {
+        h.log_info(&format!("active-transfers bootstrap: +{inserted} rows"));
+        let guard = ensure_loaded(h);
+        flush(h, guard, true);
+    }
+}
+
+/// 拉取批次的重试元数据挂载（票 07 建锚点，票 08 收窄为「凭证取出」）：
+/// `pull-started` 事件的 rel_path × 待挂载意图队列匹配——命中即把该单文件
+/// 规格与共享根 id 写入 retryMeta 并消费队列项（多选拉取逐文件成批，故按
+/// 单文件匹配而非整批文件集相等）
+fn attach_pull_meta(store: &mut [TransferEntry], event: &serde_json::Value) -> bool {
+    let Some(batch_id) = event.get("batchId").and_then(|v| v.as_str()) else { return false };
+    let Some(node_id) = event.get("nodeId").and_then(|v| v.as_str()) else { return false };
+    let rel_path = event
+        .get("files")
+        .and_then(|v| v.as_array())
+        .and_then(|files| files.first())
+        .and_then(|f| f.get("path"))
+        .and_then(|v| v.as_str());
+    let Some(rel_path) = rel_path else { return false };
+    let Some(entry) = store
+        .iter_mut()
+        .find(|e| e.batch_id == batch_id && e.retry_meta.is_none())
+    else {
+        return false;
+    };
+    let intent = transfer_store::take_pull_intent(
+        &mut pending_pulls().lock().expect("pending pulls lock"),
+        node_id,
+        rel_path,
+    );
+    match intent {
+        Some(meta) => {
+            entry.retry_meta = Some(meta);
+            true
+        }
+        // 未命中：引擎铸造的批不属于本插件（如对端发起的入站供流），如实不挂
+        None => false,
+    }
+}
+
+/// auto 分支自动应答（accept/reject 策略）：入站询问批建行后立即
 /// respond-transfer。ask 分支不动作（弹窗编排在 UI 层，倒计时到点由前端
 /// 主动应答；宿主闸门 sweeper 兜底不变）。
-pub(crate) fn auto_answer_pending(h: &WasmHost, snapshot: &[serde_json::Value]) {
+fn auto_answer_offer(h: &WasmHost, event: &serde_json::Value) {
     let policy = match settings_store::load(h) {
         Ok(p) => p,
         Err(_) => return,
@@ -227,16 +307,9 @@ pub(crate) fn auto_answer_pending(h: &WasmHost, snapshot: &[serde_json::Value]) 
     let Some(answer) = settings_store::auto_answer(&policy) else {
         return;
     };
-    for dto in snapshot {
-        let is_pending = dto.get("status").and_then(|v| v.as_str()) == Some("pending");
-        if !is_pending {
-            continue;
-        }
-        if let Some(batch_id) = dto.get("batchId").and_then(|v| v.as_str()) {
-            if h.peer_respond_transfer(batch_id, answer).is_ok() {
-                h.log_info(&format!("auto-answer ({answer}) batch {batch_id}"));
-            }
-        }
+    let Some(batch_id) = event.get("batchId").and_then(|v| v.as_str()) else { return };
+    if h.peer_respond_transfer(batch_id, answer).is_ok() {
+        h.log_info(&format!("auto-answer ({answer}) batch {batch_id}"));
     }
 }
 
@@ -307,14 +380,139 @@ pub(crate) fn disconnect_peer(h: &WasmHost, args: &serde_json::Value) -> Result<
 
 // ==================== 发送命令 ====================
 
-/// 元素级载荷构造：`{ path, encrypt }`（加密默认值取插件设置）
+/// 元素级载荷构造：`{ path, encrypt }`（加密默认值取插件设置）。
+/// `concurrency` 并发脉冲字段已随宿主闸门退役（票 06：载荷携带即被宿主
+/// 显性拒绝）——发送节流完全由插件侧闸门自控
 fn send_payload(settings: &TransferSettings, paths: &[String]) -> Vec<serde_json::Value> {
     paths
         .iter()
-        .map(|p| {
-            serde_json::json!({ "path": p, "encrypt": settings.encryption, "concurrency": settings.concurrency })
-        })
+        .map(|p| serde_json::json!({ "path": p, "encrypt": settings.encryption }))
         .collect()
+}
+
+/// 发送批发起（闸门放行后的公共路径）：解析目标 → send-files → 入店占位
+fn launch_send(
+    h: &WasmHost,
+    node_id: &str,
+    endpoint: Option<DialEndpoint>,
+    paths: Vec<String>,
+) -> Result<serde_json::Value> {
+    let target = ensure_target(h, node_id, endpoint)?;
+    let settings = settings_store::load(h)?;
+    let batch_id = h.peer_send_files(&target, &send_payload(&settings, &paths))?;
+    // 返回已收窄为传输句柄；先入店最小条目占位，引擎事件随即补全明细
+    insert_send_entry(h, node_id, &batch_id, RetryMeta::Send { paths })
+}
+
+/// 发送方向 running 批数（插件并发闸门的槽位口径；与宿主闸门同语义：
+/// 只数本端发起的 running，serve 供流记账行不计——它无 retryMeta 且属
+/// 响应式供流）
+fn running_send_count(guard: &[TransferEntry]) -> usize {
+    guard
+        .iter()
+        .filter(|e| e.direction == "send" && e.status == "running" && e.retry_meta.is_some())
+        .count()
+}
+
+/// 插件侧排队中的发送批（并发槽位满时压入；终态/暂停归约空出槽位后放行）
+struct PendingSend {
+    node_id: String,
+    endpoint: Option<DialEndpoint>,
+    paths: Vec<String>,
+    /// 已派发失败次数（票 08：失败不再静默丢弃，见 [`MAX_SEND_ATTEMPTS`]）
+    attempts: u8,
+}
+
+static PENDING_SENDS: OnceLock<Mutex<Vec<PendingSend>>> = OnceLock::new();
+
+fn pending_sends() -> &'static Mutex<Vec<PendingSend>> {
+    PENDING_SENDS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// 排队上限（防失控积累；超出即拒绝新任务——与 `PULL_INTENT_CAP` 同风格）
+const PENDING_SENDS_CAP: usize = 32;
+
+/// 排队批最大派发尝试次数（票 08）
+///
+/// 排队批在 store 里**没有行**（引擎未铸造 batchId），失败即静默丢用户意图。
+/// 故给有限次重试（对端临时不可达 / 句柄陈旧时重拨可能成功），用尽后落一条
+/// 带 `retry_meta` 的终态失败行——用户从历史看得见、能重试。
+const MAX_SEND_ATTEMPTS: u8 = 2;
+
+/// 发送槽位是否空出（插件闸门唯一判据；设置真源 = 插件 storage 的
+/// `concurrency`，缺省 3）
+fn send_slot_available(h: &WasmHost) -> bool {
+    let guard = ensure_loaded(h);
+    let limit = settings_store::load(h)
+        .map(|s| settings_store::clamp_concurrency(s.concurrency))
+        .unwrap_or(settings_store::DEFAULT_CONCURRENCY);
+    transfer_store::send_slot_open(running_send_count(&guard), limit)
+}
+
+/// 并发闸门放行：running < 设置并发上限时逐个出队发起（每次发起后槽位
+/// 再检查）。派发失败按 [`MAX_SEND_ATTEMPTS`] 重排队，用尽后落终态失败行
+/// （票 08：排队批不再静默消失）。
+fn dispatch_pending_sends(h: &WasmHost) {
+    loop {
+        if !send_slot_available(h) {
+            return;
+        }
+        let Some(job) = pending_sends().lock().expect("pending sends lock").pop() else {
+            return;
+        };
+        match launch_send(h, &job.node_id, job.endpoint.clone(), job.paths.clone()) {
+            Ok(_) => h.log_info("pending send dispatched (plugin-side gate)"),
+            Err(e) => {
+                let detail = e.to_string();
+                if job.attempts + 1 < MAX_SEND_ATTEMPTS {
+                    h.log_error(&format!(
+                        "pending send dispatch failed (attempt {}/{}), requeued: {detail}",
+                        job.attempts + 1,
+                        MAX_SEND_ATTEMPTS
+                    ));
+                    let mut queue = pending_sends().lock().expect("pending sends lock");
+                    queue.push(PendingSend {
+                        attempts: job.attempts + 1,
+                        ..job
+                    });
+                    return;
+                }
+                // 用尽尝试：落终态行（带回放凭证），用户从历史可见可重试
+                h.log_error(&format!(
+                    "pending send dispatch abandoned after {} attempts: {detail}",
+                    MAX_SEND_ATTEMPTS
+                ));
+                if let Err(write_err) =
+                    insert_failed_send_entry(h, &job.node_id, job.paths, &detail)
+                {
+                    h.log_error(&format!(
+                        "pending send failure row persist failed: {write_err}"
+                    ));
+                }
+                // 本批已落终态，槽位仍空 → 继续放行下一批
+            }
+        }
+    }
+}
+
+/// 清空进程内意图（插件下线，票 08）：排队发送批与待挂载拉取意图随停用作废
+///
+/// 两者都只存在于内存：无行可查、用户无从重试，留到下次激活就是「凭空冒出
+/// 的旧任务」。任务真源（store）不在此列——它由持久层承接，停用不丢历史。
+pub(crate) fn reset_volatile_intents() -> (usize, usize) {
+    let queued = {
+        let mut queue = pending_sends().lock().expect("pending sends lock");
+        let n = queue.len();
+        queue.clear();
+        n
+    };
+    let intents = {
+        let mut pending = pending_pulls().lock().expect("pending pulls lock");
+        let n = pending.len();
+        pending.clear();
+        n
+    };
+    (queued, intents)
 }
 
 pub(crate) fn enqueue(
@@ -337,45 +535,100 @@ pub(crate) fn enqueue(
     if paths.is_empty() {
         anyhow::bail!("enqueue: no files to send");
     }
-
     let endpoint = parse_endpoint(args.get("endpoint"))?;
-    let target = ensure_target(h, &node_id, endpoint)?;
-    let settings = settings_store::load(h)?;
-    let batch_id = h.peer_send_files(&target, &send_payload(&settings, &paths))?;
-    // 返回已收窄为传输句柄；先入店最小条目占位，引擎快照事件随即补全明细
-    insert_send_entry(
-        h,
-        &node_id,
-        &batch_id,
-        RetryMeta::Send { paths },
-    )
+
+    // 并发闸门自控（票 06）：发送编排归插件——running 批满额时新任务进
+    // 本地队列（不调 send-files），槽位空出后 dispatch 放行
+    if send_slot_available(h) {
+        launch_send(h, &node_id, endpoint, paths)
+    } else {
+        let mut queue = pending_sends().lock().expect("pending sends lock");
+        if queue.len() >= PENDING_SENDS_CAP {
+            anyhow::bail!("send queue full ({} pending): raise concurrency or retry later", PENDING_SENDS_CAP);
+        }
+        queue.push(PendingSend {
+            node_id,
+            endpoint,
+            paths,
+            attempts: 0,
+        });
+        h.log_info("send queued by plugin-side concurrency gate");
+        Ok(serde_json::json!({ "queued": true }))
+    }
 }
 
-/// 发送入店（Phase 4：宿主只回传输句柄）——最小条目占位 + retryMeta，
-/// 引擎快照事件到达后按 batchId 合并补全文件清单/大小/时间戳
+/// 发送入店（宿主只回传输句柄）——最小条目占位 + retryMeta，
+/// 引擎事件到达后按 batchId 补全文件清单/大小/时间戳
 fn insert_send_entry(
     h: &WasmHost,
     node_id: &str,
     batch_id: &str,
     meta: RetryMeta,
 ) -> Result<serde_json::Value> {
-    let entry = TransferEntry {
+    insert_send_row(h, send_row(node_id, batch_id, "running", meta, None))
+}
+
+/// 本端发起的 send 行构造（发起与「排队批派发失败落终态」共用一个形状单点）
+fn send_row(
+    node_id: &str,
+    batch_id: &str,
+    status: &str,
+    meta: RetryMeta,
+    detail: Option<String>,
+) -> TransferEntry {
+    TransferEntry {
         batch_id: batch_id.to_string(),
         node_id: node_id.to_string(),
         peer_name: String::new(),
         direction: "send".to_string(),
-        status: "running".to_string(),
+        status: status.to_string(),
         files: vec![],
         total_bytes: 0,
         transferred_bytes: 0,
         rate_bps: 0.0,
-        detail: None,
+        detail,
         reject_reason: None,
+        // wasm32 无本地时钟（禁std::time）：时间戳由引擎事件补全；
+        // 本地终态行以 0 落历史末尾（排序口径见 history_view）
         created_at_ms: 0,
         updated_at_ms: 0,
         retry_meta: Some(meta),
         local_path: None,
-    };
+    }
+}
+
+/// 排队发送批派发失败后的终态行（票 08）
+///
+/// batchId 由本地序号铸造（引擎从未见过这批——它连`send-files` 都没调通）；
+/// 携带 retryMeta 故用户可从历史直接重试。返回落库后的行 JSON。
+fn insert_failed_send_entry(
+    h: &WasmHost,
+    node_id: &str,
+    paths: Vec<String>,
+    detail: &str,
+) -> Result<serde_json::Value> {
+    let batch_id = next_local_failure_id();
+    insert_send_row(
+        h,
+        send_row(
+            node_id,
+            &batch_id,
+            "failed",
+            RetryMeta::Send { paths },
+            Some(format!("send dispatch failed: {detail}")),
+        ),
+    )
+}
+
+/// 本地终态行序号（wasm32 无时钟，用进程内自增序号保证 batchId 唯一）
+fn next_local_failure_id() -> String {
+    static SEQ: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    format!("local-fail-{n}")
+}
+
+/// 行入店统一出口（幂等 upsert + 封顶 + 持久化 + 视图派发）
+fn insert_send_row(h: &WasmHost, entry: TransferEntry) -> Result<serde_json::Value> {
     let out = serde_json::to_value(&entry)?;
     let mut guard = ensure_loaded(h);
     let changed = transfer_store::merge_snapshot(&mut guard, &[out.clone()]);
@@ -414,24 +667,45 @@ pub(crate) fn pause_task(h: &WasmHost, args: &serde_json::Value) -> Result<serde
     Ok(serde_json::json!({ "ok": true }))
 }
 
-/// 恢复单个暂停任务：宿主入队并经并发闸门启动（接收端按已写偏移续传）。
+/// 恢复单个暂停任务：宿主按句柄表续流或重拨（接收端按已写偏移续传）。
 pub(crate) fn resume_task(h: &WasmHost, args: &serde_json::Value) -> Result<serde_json::Value> {
     let batch_id =
         args.get("taskId").and_then(|v| v.as_str()).unwrap_or_default().to_string();
     h.peer_resume_transfer(&batch_id)?;
-    // 状态推进由引擎快照事件（pending → running）接管，本地无需乐观改写
+    // 状态推进由引擎事件归约接管，本地无需乐观改写
     Ok(serde_json::json!({ "ok": true }))
 }
 
-/// 恢复全部暂停任务，返回入队数。
+/// 恢复全部暂停任务（票 06：批量恢复编排归插件——遍历自身暂停批逐个调
+/// resume-transfer；宿主 `resume-all-transfers` 原语已退役，并发节流由
+/// 插件侧闸门自控）。返回实际恢复数。
 pub(crate) fn resume_all_tasks(h: &WasmHost) -> Result<serde_json::Value> {
-    let n = h.peer_resume_all_transfers()?;
-    Ok(serde_json::json!({ "resumed": n }))
+    let paused_ids: Vec<String> = {
+        let guard = ensure_loaded(h);
+        guard
+            .iter()
+            .filter(|e| e.direction == "send" && e.status == "paused")
+            .map(|e| e.batch_id.clone())
+            .collect()
+    };
+    let mut resumed = 0usize;
+    for batch_id in paused_ids {
+        if h.peer_resume_transfer(&batch_id).is_ok() {
+            resumed += 1;
+        }
+    }
+    Ok(serde_json::json!({ "resumed": resumed }))
 }
 
-/// 重试 = 批元数据回放重调原语（issue 13 步骤 3）：
-/// - send 条目：回放 send-files，返回 DTO 的新 batchId 回填原条目（同一条历史）；
+/// 重试 = 批元数据回放重调原语：
+/// - send 条目：回放 send-files，新 batchId 顶替原条目（同一条历史）；
 /// - pull 条目：回放 pull-files（逐文件新批自然入账），原失败记录保留为历史。
+///
+/// 票 08 重排了次序——**判据与闸门前置到调引擎之前**：
+/// ① [`transfer_store::retry_source`] 先判可重试（终态 + 有回放凭证）；
+/// ② send 方向先过插件并发闸门。原实现先 `send-files` 再 `apply_retry`，
+/// 对不可重试条目会铸出无主会话：send 方向没有引擎建行事件（行由插件发起
+/// 时自建），该会话永不入店、进度事件打不中行，并永久占死一个发送槽位。
 pub(crate) fn retry_task(
     h: &WasmHost,
     args: &serde_json::Value,
@@ -442,28 +716,31 @@ pub(crate) fn retry_task(
 
     let (node_id, meta) = {
         let guard = ensure_loaded(h);
-        let entry = guard
-            .iter()
-            .find(|e| e.batch_id == task_id)
-            .ok_or_else(|| anyhow::anyhow!("task not found: {task_id}"))?;
-        match &entry.retry_meta {
-            Some(m) => (entry.node_id.clone(), m.clone()),
-            None => anyhow::bail!("task not retryable (initiator metadata missing): {task_id}"),
-        }
+        transfer_store::retry_source(&guard, &task_id)
+            .map_err(|why| anyhow::anyhow!(why.message(&task_id)))?
     };
+    // send 方向回放也占发送槽位：闸门满时显性拒绝（不排队——重试是用户对
+    // 特定历史行的显式操作，排队会让「点了没反应」无从追因）
+    if matches!(meta, RetryMeta::Send { .. }) && !send_slot_available(h) {
+        anyhow::bail!(
+            "retry rejected: send concurrency full, wait for a running transfer to finish"
+        );
+    }
     let target = ensure_target(h, &node_id, endpoint)?;
 
     match meta {
         RetryMeta::Send { paths } => {
             let settings = settings_store::load(h)?;
             let new_batch = h.peer_send_files(&target, &send_payload(&settings, &paths))?;
-            let now = 0u64; // 时间戳由引擎快照事件补全（updated_at_ms 单调性由 merge 保证）
+            let now = 0u64; // 时间戳由引擎事件补全（updated_at_ms 单调性由 merge 保证）
             let mut guard = ensure_loaded(h);
+            // retryMeta 由 apply_retry 保留（新批仍是本端发起，仍可再重试）
             let changed = transfer_store::apply_retry(&mut guard, &task_id, &new_batch, now);
-            if let Some(slot) = guard.iter_mut().find(|e| e.batch_id == new_batch) {
-                slot.retry_meta = Some(RetryMeta::Send { paths });
+            if !changed {
+                // 判据已前置，理论上不可达；显性报错而非静默留无主会话
+                anyhow::bail!("retry replay lost its entry (concurrent mutation?): {task_id}");
             }
-            flush(h, guard, changed);
+            flush(h, guard, true);
             let guard = ensure_loaded(h);
             let updated = guard
                 .iter()
@@ -477,11 +754,17 @@ pub(crate) fn retry_task(
                 .iter()
                 .map(|f| serde_json::json!({ "relPath": f.rel_path, "size": f.size }))
                 .collect();
+            // 意图先于引擎调用入队（票 08）：`pull-started` 事件随引擎铸造
+            // batchId 即回流，事后入队会错过挂载窗口 → 新行永不可重试
+            transfer_store::push_pull_intent(
+                &mut pending_pulls().lock().expect("pending pulls lock"),
+                &node_id,
+                RetryMeta::Pull {
+                    dir_id: dir_id.clone(),
+                    files: files.clone(),
+                },
+            );
             let n = h.peer_pull_files(&target, &dir_id, &values)?;
-            pending_pulls().lock().expect("pending pulls lock").push((
-                node_id,
-                RetryMeta::Pull { dir_id, files },
-            ));
             Ok(serde_json::json!({ "requeued": n }))
         }
     }
@@ -629,11 +912,17 @@ pub(crate) fn pull_files(
         .map(|f| serde_json::json!({ "relPath": f.rel_path, "size": f.size }))
         .collect();
 
+    // 意图先于引擎调用入队（票 08）：`pull-started` 事件随引擎铸造 batchId
+    // 即回流，事后入队会错过挂载窗口 → 新行永不可重试
+    transfer_store::push_pull_intent(
+        &mut pending_pulls().lock().expect("pending pulls lock"),
+        &node_id,
+        RetryMeta::Pull {
+            dir_id: dir_id.clone(),
+            files: specs.clone(),
+        },
+    );
     let n = h.peer_pull_files(&target, &dir_id, &values)?;
-    pending_pulls().lock().expect("pending pulls lock").push((
-        node_id,
-        RetryMeta::Pull { dir_id, files: specs },
-    ));
     Ok(serde_json::json!({ "count": n }))
 }
 
@@ -801,6 +1090,8 @@ mod tests {
     use super::{load_preauth_paths, percent_decode, push_preauth_path, tree_uri_display_name, update_roots};
     use bedcode_plugin_api_mobile::host::{HostError, HostPeer, HostPlatform, HostStorage};
     use std::cell::RefCell;
+    // 票 08 新增分组（redial 场景链 / 终态历史持久化往返）拆至`peer/tests/`
+    mod redial_and_history;
 
     /// 历史视图口径：仅终态条目、按 updatedAtMs 降序（list-history 初始快照与
     /// flush 的 history-changed 派发共用本函数，防两路口径漂移）
@@ -844,6 +1135,7 @@ mod tests {
     struct MockHost {
         kv: RefCell<std::collections::HashMap<String, serde_json::Value>>,
         pushed_roots: RefCell<Vec<serde_json::Value>>,
+        logs: RefCell<Vec<String>>,
     }
 
     impl MockHost {
@@ -851,6 +1143,7 @@ mod tests {
             MockHost {
                 kv: RefCell::new(std::collections::HashMap::new()),
                 pushed_roots: RefCell::new(vec![]),
+                logs: RefCell::new(vec![]),
             }
         }
 
@@ -901,9 +1194,6 @@ mod tests {
         fn peer_resume_transfer(&self, _batch_id: &str) -> Result<(), HostError> {
             unimplemented!()
         }
-        fn peer_resume_all_transfers(&self) -> Result<u32, HostError> {
-            unimplemented!()
-        }
         fn peer_set_receive_policy(&self, _mode: &str, _timeout_secs: u64) -> Result<(), HostError> {
             unimplemented!()
         }
@@ -921,6 +1211,23 @@ mod tests {
         fn peer_pull_files(&self, _session: &str, _dir_id: &str, _files: &[serde_json::Value]) -> Result<u32, HostError> {
             unimplemented!()
         }
+        // 票 04 新增 5 原语（票 06 补齐 mock：trait 扩容后 mock 必须同步，
+        // 否则测试编译不过——缺方法的 mock 会把真实调用点挡在编译期之外）
+        fn peer_set_download_dir(&self, _path: &str) -> Result<(), HostError> {
+            unimplemented!()
+        }
+        fn peer_start_node(&self) -> Result<bool, HostError> {
+            unimplemented!()
+        }
+        fn peer_stop_node(&self) -> Result<bool, HostError> {
+            unimplemented!()
+        }
+        fn peer_active_transfers(&self) -> Result<serde_json::Value, HostError> {
+            unimplemented!()
+        }
+        fn peer_collect_outgoing(&self, _paths: &[serde_json::Value]) -> Result<serde_json::Value, HostError> {
+            unimplemented!()
+        }
     }
 
     impl HostPlatform for MockHost {
@@ -930,6 +1237,23 @@ mod tests {
         fn platform_pick_folder(&self) -> Result<String, HostError> {
             unimplemented!()
         }
+    }
+
+    /// 票 08：持久化 seam（`persist_entries` / `restore_entries`）要求
+    /// `HostStorage + HostLog`——恢复路径要落盘也要记「标注了几条」。
+    /// 日志收进`logs` 供断言（如实呈现而非静默）。
+    impl bedcode_plugin_api_mobile::host::HostLog for MockHost {
+        fn log_info(&self, message: &str) {
+            self.logs.borrow_mut().push(message.to_string());
+        }
+        fn log_debug(&self, _message: &str) {}
+        fn log_warn(&self, message: &str) {
+            self.logs.borrow_mut().push(message.to_string());
+        }
+        fn log_error(&self, message: &str) {
+            self.logs.borrow_mut().push(message.to_string());
+        }
+        fn mark_plugin_error(&self, _error: &str) {}
     }
 
     /// mount-local（SAF URI）追加预授权路径；重复挂载幂等
@@ -1013,5 +1337,33 @@ mod tests {
         assert_eq!(percent_decode("%GG"), "%GG");
         assert_eq!(percent_decode("100%"), "100%");
         assert_eq!(percent_decode("%E4%B8%AD%E6%96%87"), "中文");
+    }
+
+    /// 插件并发闸门的槽位口径（票 06）：只数「本端发起且 running 且带
+    /// retryMeta」的批——serve 供流记账行（无 retryMeta）、paused/pending/
+    /// 终态行、以及接收方向都不占发送槽
+    #[test]
+    fn running_send_count_counts_only_initiated_running_sends() {
+        let mk = |id: &str, direction: &str, status: &str, retry: bool| {
+            let mut e: super::TransferEntry = serde_json::from_value(serde_json::json!({
+                "batchId": id, "direction": direction, "status": status,
+            }))
+            .unwrap();
+            if retry {
+                e.retry_meta = Some(super::RetryMeta::Send { paths: vec!["C:/a.txt".into()] });
+            }
+            e
+        };
+        let store = vec![
+            mk("run-1", "send", "running", true),
+            mk("run-2", "send", "running", true),
+            // serve 供流记账行：无 retryMeta（响应式供流，不占发起方向槽位）
+            mk("serve", "send", "running", false),
+            mk("paused", "send", "paused", true),
+            mk("pend", "send", "pending", true),
+            mk("done", "send", "completed", true),
+            mk("recv", "receive", "running", true),
+        ];
+        assert_eq!(super::running_send_count(&store), 2);
     }
 }

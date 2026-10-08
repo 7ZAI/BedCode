@@ -13,7 +13,7 @@ const PERMISSION_API_MAP: Record<string, string[]> = {
   'ui:toolbox': ['ui.registerToolboxPage'],
   'ui:navtab': ['ui.registerNavTab'],
   'ui:settings': ['ui.registerSettingsSection'],
-  'ui:input': ['ui.registerTerminalToolbarItem'],
+  'ui:input': ['ui.registerTerminalToolbarItem', 'ui.registerTerminalView'],
   'ui:route': ['ui.registerRoute', 'ui.openPage', 'ui.goBack'],
   'ui:back': ['ui.onBackPressed'],
   'ui:dialog': ['ui.showDialog'],

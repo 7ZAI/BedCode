@@ -5,6 +5,7 @@
 pub mod android_plugins;
 pub mod approval;
 pub mod commands;
+pub mod db_schema;
 pub mod downloader;
 pub mod fs_auth;
 pub mod loader;

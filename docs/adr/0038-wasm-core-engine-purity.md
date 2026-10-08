@@ -47,7 +47,8 @@ api 名（B1）+ 具名产品参数（B4）+ 问产品判据（B6）——**已�
 ### D1 · PTY 引擎体迁出为 `bedcode-pty-engine`（引擎 crate，非完整能力域 crate）
 
 引擎本体（`pty_process` / `pty_ring` / `pty_reader` / `output_sink` / `lifecycle` /
-WSL 列举 + `PtySessionStatus` 词汇）迁入 `bedcode-desktop/packages/bedcode-pty-engine/`。
+WSL 列举 + `PtySessionStatus` 词汇）迁入 `bedcode-desktop/packages/bedcode-pty-engine/`
+（2026-10-07 随能力域 lib 迁根，现居仓库根 `packages/bedcode-pty-engine/`）。
 **依赖方向只向下**：`bedcode-server-base`（错误 / 常量）+ 第三方（portable-pty / tokio /
 encoding_rs…），**零 wasm 依赖、零宿主依赖**——任何 Tauri 宿主、任何需要终端能力的
 程序都可直接 path 依赖。**host-pty WIT 绑定面留 wasm-core**（`host_api/{pty,

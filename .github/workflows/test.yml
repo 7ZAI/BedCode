@@ -119,12 +119,12 @@ jobs:
       # 迁出宿主 crate（票 06 起 peer-net 再 +28），src-tauri 的 cargo test 不再执行它们——
       # 不补这一步，拆出来的层在合并门禁上无人看守。
       # **必须 cd 进 crate 根**（AGENTS §3）：各 crate 的 .cargo/config.toml 把 target 指向
-      # 仓库根 target/server-libs（相对 crate 根 `../../../`），而 cargo 只从 cwd 向上找 config——
+      # 仓库根 target/server-libs（相对 crate 根 `../../`），而 cargo 只从 cwd 向上找 config——
       # 用 --manifest-path 从仓库根跑会漏掉重定向、把产物写进 `<crate>/target`。
       - name: Cargo test (desktop server libs)
         run: |
           for lib in bedcode-server-base bedcode-crypto-engine bedcode-server-core bedcode-server-http bedcode-server-websocket bedcode-server-peer-net; do
-            (cd "bedcode-desktop/packages/$lib" && cargo test)
+            (cd "packages/$lib" && cargo test)
           done
 
       - name: Verify wasm-apps target-dir (cargo metadata regression guard)
@@ -234,7 +234,7 @@ jobs:
       # mobile 插件是独立目录（无 workspace），plugins:build 的 CLI 需要各插件自己的依赖（vite 等）
       - name: Install plugin dependencies
         run: |
-          for p in ai-chatbox auto-task file-transfer ocr; do
+          for p in ai-chatbox terminal-session file-transfer ocr; do
             if [ ! -d "bedcode-mobile/plugins/$p" ]; then
               echo "plugins/$p 不存在（可能仅 dev 分支开发中），跳过"
               continue

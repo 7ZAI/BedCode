@@ -13,8 +13,10 @@
 //! 错误语义见 [`HostError`]：仅承载状态码与通用描述，
 //! 详细错误原因记录在宿主日志（WIT `result<T, string>` 透传后含真实消息）。
 
+pub mod auth;
 pub mod bus;
 pub mod config;
+pub mod connection;
 pub mod database;
 pub mod events;
 pub mod fs;
@@ -25,10 +27,14 @@ pub mod peer;
 pub mod platform;
 pub mod storage;
 pub mod terminal;
+pub mod terminal_stream;
+pub mod ws;
 
+pub use auth::HostAuth;
 pub use bus::HostBus;
 pub use config::{ConfigKey, HostConfig};
-pub use database::HostDatabase;
+pub use connection::HostConnection;
+pub use database::{HostDatabase, HostPluginDatabase};
 pub use events::HostEvents;
 pub use fs::HostFs;
 pub use http::HostHttp;
@@ -38,6 +44,11 @@ pub use peer::HostPeer;
 pub use platform::HostPlatform;
 pub use storage::HostStorage;
 pub use terminal::HostTerminal;
+pub use terminal_stream::HostTerminalStream;
+pub use ws::{
+    parse_ws_frame, ws_event_topic, ws_message_topic, HostWs, WsIncomingFrame, WS_CLOSE, WS_ERROR,
+    WS_MESSAGE, WS_OPEN, WS_RECONNECT_SCHEDULED,
+};
 
 /// 宿主调用错误
 ///
@@ -144,7 +155,11 @@ mod tests {
 pub trait HostApi:
     HostStorage
     + HostDatabase
+    + HostPluginDatabase
     + HostTerminal
+    + HostTerminalStream
+    + HostConnection
+    + HostAuth
     + HostEvents
     + HostHttp
     + HostFs
@@ -154,13 +169,18 @@ pub trait HostApi:
     + HostMdns
     + HostPlatform
     + HostConfig
+    + HostWs
 {
 }
 
 impl<T> HostApi for T where
     T: HostStorage
         + HostDatabase
+        + HostPluginDatabase
         + HostTerminal
+        + HostTerminalStream
+        + HostConnection
+        + HostAuth
         + HostEvents
         + HostHttp
         + HostFs
@@ -170,5 +190,6 @@ impl<T> HostApi for T where
         + HostMdns
         + HostPlatform
         + HostConfig
+        + HostWs
 {
 }

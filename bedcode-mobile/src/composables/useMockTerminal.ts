@@ -8,11 +8,12 @@
 
 import { ref, readonly } from 'vue'
 import type { Terminal } from '@xterm/xterm'
+// 单一事实源在 SDK（宿主 SessionsView / 终端插件 UI 共用；票 15 下沉常量）
+import { MOCK_SESSION_ID } from '@binblink/bedcode-plugin-sdk-mobile'
 
 // ==================== Constants ====================
 
-/** 模拟会话 ID，TerminalView 据此识别 */
-export const MOCK_SESSION_ID = '__mock_terminal__'
+export { MOCK_SESSION_ID }
 
 /** localStorage 开关键 */
 const STORAGE_KEY = 'mock_terminal_enabled'

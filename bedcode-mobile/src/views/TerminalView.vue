@@ -279,7 +279,7 @@ const mountedSessionId = sessionId.value
 
 // ==================== 链路重连提示（2026-10-04） ====================
 //
-// 终端链路断线时 Rust 发 `terminal-state` detail=reconnecting / reconnect_scheduled
+// 终端链路断线时终端插件发 `terminal-state` detail=reconnecting / reconnect_scheduled（票 12）
 // （后者带 retry_in_ms）。此前这两个 detail 前端只写 logger.debug、无任何呈现——
 // 终端静默冻结，用户无从判断该不该等，正是 ui-ux-pro-max ux 域标记 Severity
 // High 的「No feedback」反模式。

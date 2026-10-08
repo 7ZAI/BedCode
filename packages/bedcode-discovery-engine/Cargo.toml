@@ -1,0 +1,38 @@
+[package]
+name = "bedcode-discovery-engine"
+version = "0.1.0"
+description = "BedCode 组播发现能力域：mDNS 共享守护 + 浏览/广播句柄表（宿主插件绑定层 + 自动注册）"
+authors = ["binblink"]
+license = "MIT"
+repository = "https://github.com/7ZAI/BedCode"
+edition = "2021"
+
+[dependencies]
+# 机制内核：插件实例状态（`add_to_linker::<S,D>` 的单态 S 必须在此 crate 可命名）
+bedcode-host-kit = { path = "../bedcode-host-kit" }
+# WIT 契约绑定（`bindgen!` 在 src/lib.rs，本 crate 自带 provider 侧生成）
+# —— spec D8「不自带 generate!」的前提在本 crate 不成立：宿主侧 `bedcode` 模块是
+# **guest 视角**（import 是调用函数，不是 `Host` trait + `add_to_linker`），
+# 能力 crate 要自己装配就必须跑 provider 侧 `bindgen!`。两侧生成的是同名但
+# **不同类型**的 trait，故宿主必须同时删掉自己的 mdns `Host` impl（否则重复注册）。
+wit-bindgen = { version = "=0.60.0", features = ["macros"] }
+# `Linker` / `HasSelf` / `add_to_linker::<S,D>` 的宿主侧类型与函数；
+# 版本随两端宿主锁版（ADR 0019）
+wasmtime = { version = "48", features = ["component-model"] }
+# 权限词汇（`network:mdns`）+ topic 命名 + mdns 事件名常量
+bedcode-plugin-api = { path = "../../bedcode-desktop/packages/plugin-sdk-desktop/rust" }
+# 虚拟网卡过滤（共享守护初始化一次，peer-net 提供）
+bedcode-peer-net = { path = "../peer-net" }
+# 组播 DNS 协议；版本严格对齐两端宿主 Cargo.lock（0.20.x），避免同进程版本分叉
+mdns-sd = { version = "0.20", features = ["async"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
+tracing = "0.1"
+# re-announce 周期定时 + 自播面状态锁（`advertiser::MdnsAdvertiser` 的 tokio RwLock）
+tokio = { version = "1", features = ["time", "sync"] }
+# 能力模块自报（`submit_module!` 展开为 inventory 静态提交）
+inventory = "0.3"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }

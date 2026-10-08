@@ -15,15 +15,22 @@ use tauri::{AppHandle, Manager};
 
 /// 从 AppHandle 装配 peer-net 操作上下文
 ///
-/// 生产运行期四个状态均已 `app.manage(Arc::new(..))`、端口已装配；
-/// `app.state::<Arc<T>>()` 在未 manage 时 panic（与既有 `app.state::<T>()`
-/// 行为一致——命令面只存在于真实运行时）。端口缺失（理论不可达）时以
-/// `ports_impl::assemble()` 占位兜底，避免装配面 panic。
+/// 生产运行期四个状态均已 `app.manage(Arc::new(..))`；端口缺失只可能出现在
+/// 「插件激活早于端口装配」的窗口（激活发生在 `PluginHost::new` 内部）——此时按
+/// 句柄就地装配一份等价端口面（late-bound 总线 + 句柄直取的路径面），而不是装一份
+/// 只会静默失效的端口：这份 `PeerCtx` 会被节点引擎**长期持有**（2026-10-07 实机：
+/// 此前窗口内装配的端口既无句柄（`peer_start_node` 报 `resolve app data dir failed:
+/// no runtime context`）又钉死了占位总线）。
 pub fn peer_ctx(app: &AppHandle) -> Arc<PeerCtx> {
+    let ports = match bedcode_server_base::ports::get().cloned() {
+        Some(ports) => ports,
+        None => {
+            tracing::warn!("server ports not installed yet; assembling an equivalent instance for peer ctx");
+            Arc::new(crate::server::ports_impl::assemble(Some(Arc::new(app.clone()))))
+        }
+    };
     Arc::new(PeerCtx {
-        ports: bedcode_server_base::ports::get()
-            .cloned()
-            .unwrap_or_else(|| Arc::new(crate::server::ports_impl::assemble())),
+        ports,
         state: app.state::<Arc<PeerNetState>>().inner().clone(),
         transfer: app.state::<Arc<PeerTransferState>>().inner().clone(),
         receive: app.state::<Arc<PeerReceiveState>>().inner().clone(),

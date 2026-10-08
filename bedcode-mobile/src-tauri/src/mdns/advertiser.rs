@@ -2,7 +2,7 @@
 //!
 //! 广播本设备的 _bedcode._tcp.local. 服务
 
-use mdns_sd::{ServiceDaemon, ServiceInfo};
+use mdns_sd::ServiceInfo;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -10,8 +10,6 @@ use super::types::{AdvertiseConfig, SERVICE_TYPE};
 
 /// mDNS 广播管理器
 pub struct MdnsAdvertiser {
-    /// mdns-sd 守护进程
-    daemon: Arc<RwLock<Option<ServiceDaemon>>>,
     /// 已注册的服务名
     registered_name: Arc<RwLock<Option<String>>>,
     /// 是否正在广播
@@ -22,7 +20,6 @@ impl MdnsAdvertiser {
     /// 创建新的广播管理器
     pub fn new() -> Self {
         Self {
-            daemon: Arc::new(RwLock::new(None)),
             registered_name: Arc::new(RwLock::new(None)),
             advertising: Arc::new(RwLock::new(false)),
         }
@@ -36,8 +33,9 @@ impl MdnsAdvertiser {
             return Ok(());
         }
 
-        let daemon = ServiceDaemon::new()
-            .map_err(|e| crate::AppError::Internal(format!("Failed to create mDNS daemon: {}", e)))?;
+        // 广播经全局共享守护（crate::mdns::engine，票 03）：不再自建 daemon——
+        // 消灭双 daemon 同绑 5353 互抢多播包病灶；共享守护常驻，stop 只注销不 shutdown
+        let daemon = crate::mdns::engine::daemon();
 
         // 构造服务信息
         let service_type = SERVICE_TYPE;
@@ -61,7 +59,6 @@ impl MdnsAdvertiser {
             .register(service_info)
             .map_err(|e| crate::AppError::Internal(format!("Failed to register mDNS service: {}", e)))?;
 
-        *self.daemon.write().await = Some(daemon);
         *self.registered_name.write().await = Some(instance_name.clone());
         *advertising = true;
 
@@ -82,13 +79,13 @@ impl MdnsAdvertiser {
         }
         *advertising = false;
 
-        if let Some(daemon) = self.daemon.write().await.take() {
+        // 共享守护常驻不 shutdown（票 03）：只注销本广播实例
+        if let Some(daemon) = crate::mdns::engine::daemon_if_initialized() {
             if let Some(name) = self.registered_name.write().await.take() {
                 // unregister 接受完整的全限定名
                 let fullname = format!("{}.{}", name, SERVICE_TYPE);
                 let _ = daemon.unregister(&fullname);
             }
-            let _ = daemon.shutdown();
         }
 
         tracing::info!("[MdnsAdvertiser] Stopped advertising");

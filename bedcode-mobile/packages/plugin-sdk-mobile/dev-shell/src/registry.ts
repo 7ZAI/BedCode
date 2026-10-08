@@ -17,6 +17,7 @@ import type {
   PluginRouteDescriptor,
   SettingsSectionDescriptor,
   TerminalToolbarItemDescriptor,
+  TerminalViewContribution,
   ToolboxPageDescriptor,
 } from '../../src/types'
 
@@ -127,11 +128,16 @@ export interface RouteEntry {
   /** router 路由名（registerRoute 时 addRoute，dispose 时 removeRoute） */
   routeName: string
 }
+export interface TerminalViewEntry {
+  pluginId: string
+  view: TerminalViewContribution
+}
 const toolboxPages = ref<ToolboxPageEntry[]>([])
 const navTabs = ref<NavTabEntry[]>([])
 const terminalToolbarItems = ref<TerminalToolbarEntry[]>([])
 const settingsSections = ref<SettingsSectionEntry[]>([])
 const routes = ref<RouteEntry[]>([])
+const terminalViews = ref<TerminalViewEntry[]>([])
 
 /** 从列表中移除条目（dispose 回调） */
 function makeDisposable<T>(list: { value: T[] }, entry: T): Disposable {
@@ -165,6 +171,16 @@ export function registerTerminalToolbarItem(
   terminalToolbarItems.value.push(entry)
   pushLog('debug', pluginId, `注册终端工具栏项: ${item.label}`)
   return makeDisposable(terminalToolbarItems, entry)
+}
+
+export function registerTerminalView(
+  pluginId: string,
+  view: TerminalViewContribution,
+): Disposable {
+  const entry: TerminalViewEntry = { pluginId, view }
+  terminalViews.value.push(entry)
+  pushLog('debug', pluginId, '注册终端主视图')
+  return makeDisposable(terminalViews, entry)
 }
 
 export function registerSettingsSection(
@@ -226,4 +242,4 @@ export function goBackView(): void {
   activeView.value = viewStack.value[viewStack.value.length - 1] ?? null
 }
 
-export { activeView, logs, plugins, toolboxPages, navTabs, terminalToolbarItems, settingsSections, routes }
+export { activeView, logs, plugins, toolboxPages, navTabs, terminalToolbarItems, settingsSections, routes, terminalViews }

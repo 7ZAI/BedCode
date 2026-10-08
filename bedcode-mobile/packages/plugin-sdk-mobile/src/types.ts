@@ -149,6 +149,12 @@ export interface ToolboxPageDescriptor {
   entry?: any
 }
 
+/** 终端主视图描述符（票 15：终端 UI 域全部在插件内实现；宿主 /mobile/terminal/:id 壳渲染本组件） */
+export interface TerminalViewContribution {
+  /** 主视图组件；宿主壳可透传 props.sessionId（当前会话 id），缺省时组件自取宿主活动会话 */
+  component: any
+}
+
 /** 导航 Tab 描述符 */
 export interface NavTabDescriptor {
   id: string
@@ -209,9 +215,25 @@ export interface MobileHttpRequestOptions {
   headers?: Record<string, string>
 }
 
+/** 终端输出流句柄（openTerminalStream 返回；dispose = 注销页面通道） */
+export interface TerminalStreamHandle {
+  dispose(): void
+}
+
+/** 宿主会话/连接生命周期事件（onSessionEvent 投递；宿主白名单封装，插件不裸听 Tauri 事件名） */
+export interface MobileHostSessionEvent {
+  /** disconnected：连接断开（含意外断开）；session_status：会话状态变化；session_stopped：会话停止；session_removed：会话移除 */
+  type: 'disconnected' | 'session_status' | 'session_stopped' | 'session_removed'
+  /** 会话相关事件携带的会话 id（disconnected 无） */
+  sessionId?: string
+  /** session_status 的新状态（如 'running'） */
+  newStatus?: string
+}
+
 /** 移动端宿主连接/HTTP 能力（共享运行时 mobileApi 模块）
  *
- * 通用能力层：连接状态 + 对端桌面端 REST 请求通道。
+ * 通用能力层：连接状态 + 对端桌面端 REST 请求通道 + 终端流/主题/本地设置只读投影
+ * （票 15 扩展：openTerminalStream / isDark / mobileSettings / onSessionEvent / mockSessionId）。
  * 具体插件业务端点（任务队列 / 会话模式 / 任务历史 / 定时任务等）
  * 由各插件基于 httpRequest 自行封装，SDK 不感知插件领域细节。
  */
@@ -226,6 +248,25 @@ export interface MobileHostApi {
   isConnected: import('vue').Ref<boolean>
   /** 通用对端 REST 请求；返回 { code, message, data } 形状 */
   httpRequest<T = any>(path: string, options?: MobileHttpRequestOptions): Promise<MobileHttpResult<T>>
+  /** 拉取/刷新活跃会话列表（宿主连接域机制；结果写入 activeSessions ref） */
+  loadActiveSessions(): Promise<void>
+  /** 拉取/刷新会话配置列表（结果写入 sessionConfigs ref） */
+  loadSessionConfigs(): Promise<void>
+  /** 会话配置是否已加载过（宿主连接域状态投影） */
+  hasLoadedConfigs: import('vue').Ref<boolean>
+  /** 会话配置是否加载中（宿主连接域状态投影） */
+  isLoadingConfigs: import('vue').Ref<boolean>
+  /** 打开终端输出字节流：宿主创建页面 Channel 并登记（terminal_page_subscribe），输出按序裸字节回调；
+   *  返回句柄，dispose 注销（terminal_page_unsubscribe）。链路订阅由插件命令面负责，本通道只承载页面接收 */
+  openTerminalStream(sessionId: string, onBytes: (bytes: Uint8Array) => void): Promise<TerminalStreamHandle>
+  /** 当前 App 是否深色（响应式 ref；终端主题解析依据） */
+  isDark: import('vue').Ref<boolean>
+  /** 移动端本地设置只读投影（vibrate / maxOpenTerminals 等；由宿主设置页写入） */
+  mobileSettings: import('vue').Ref<Record<string, any>>
+  /** 会话/连接生命周期事件（断线 / 会话状态 / 停止 / 移除）；Disposable.dispose = 取消订阅 */
+  onSessionEvent(handler: (event: MobileHostSessionEvent) => void): Disposable
+  /** DEV mock 会话 id（生产为 null；终端 UI 据此进入本地 mock 渲染） */
+  mockSessionId: string | null
 }
 
 // ==================== 对话框 ====================
@@ -372,6 +413,9 @@ export interface UIRegistry {
   registerToolboxPage(page: ToolboxPageDescriptor): Disposable
   registerNavTab(tab: NavTabDescriptor): Disposable
   registerTerminalToolbarItem(item: TerminalToolbarItemDescriptor): Disposable
+  /** 注册终端主视图（票 15：终端 UI 全部在插件内实现，宿主 /mobile/terminal/:id 壳只提供挂载点；
+   *  单实例语义——终端 app 只有一个运行面注册者） */
+  registerTerminalView(view: TerminalViewContribution): Disposable
   registerSettingsSection(section: SettingsSectionDescriptor): Disposable
   /** 动态注册插件路由（宿主 addRoute 至 /mobile/plugins/{pluginId}/{id}；Disposable.dispose = removeRoute 撤销） */
   registerRoute(route: PluginRouteDescriptor): Disposable

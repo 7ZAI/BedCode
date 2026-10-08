@@ -267,7 +267,7 @@ fn desktop_root() -> PathBuf {
 }
 
 /// 夹具共享 target 目录（与宿主内联 fixture 构建器同目录：
-/// `bedcode-desktop/packages/bedcode-wasm-core/src/manager/runtime/fixture_target.rs::dir()`）
+/// `packages/bedcode-wasm-core/src/manager/runtime/fixture_target.rs::dir()`）
 fn fixtures_target_dir() -> PathBuf {
     desktop_root().join("target/fixtures")
 }

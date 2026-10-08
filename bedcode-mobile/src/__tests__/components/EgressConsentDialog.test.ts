@@ -151,7 +151,7 @@ describe('EgressConsentDialog', () => {
     expect(text).toContain('插件 com.bedcode.ai-chatbox 请求访问以下外部地址')
   })
 
-  it('允许 → egress_consent_resolve(allow=true, persist=false)', async () => {
+  it('允许 → egress_consent_resolve(allow=true, persist=false, deny=false)', async () => {
     await flushPromises()
     await emitConsent()
     await clickButton('允许')
@@ -159,6 +159,7 @@ describe('EgressConsentDialog', () => {
       requestId: 'req-1',
       allow: true,
       persist: false,
+      deny: false,
     })
     expect(panel()).toBeNull()
   })
@@ -174,10 +175,11 @@ describe('EgressConsentDialog', () => {
       requestId: 'req-1',
       allow: true,
       persist: true,
+      deny: false,
     })
   })
 
-  it('拒绝 → egress_consent_resolve(allow=false, persist=false)', async () => {
+  it('拒绝 → egress_consent_resolve(allow=false, persist=false, deny=false)', async () => {
     await flushPromises()
     await emitConsent()
     await clickButton('拒绝')
@@ -185,6 +187,7 @@ describe('EgressConsentDialog', () => {
       requestId: 'req-1',
       allow: false,
       persist: false,
+      deny: false,
     })
     expect(panel()).toBeNull()
   })
@@ -199,6 +202,7 @@ describe('EgressConsentDialog', () => {
       requestId: 'req-1',
       allow: false,
       persist: false,
+      deny: false,
     })
   })
 
@@ -215,6 +219,7 @@ describe('EgressConsentDialog', () => {
       requestId: 'req-1',
       allow: false,
       persist: false,
+      deny: false,
     })
     // 队列推进 → 展示第二个
     expect(panel()!.textContent).toContain('second.example.com')
@@ -223,6 +228,7 @@ describe('EgressConsentDialog', () => {
       requestId: 'req-2',
       allow: true,
       persist: false,
+      deny: false,
     })
   })
 

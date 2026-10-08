@@ -14,12 +14,14 @@
 //! trait 签名（`host/*` 定义）保持不变，插件业务代码零改动。
 
 use crate::host::{
-    ConfigKey, HostBus, HostConfig, HostDatabase, HostError, HostEvents, HostFs,
-    HostHttp, HostLog, HostMdns, HostPeer, HostPlatform, HostStorage, HostTerminal,
+    ConfigKey, HostAuth, HostBus, HostConfig, HostConnection, HostDatabase, HostError, HostEvents,
+    HostFs, HostHttp, HostLog, HostMdns, HostPeer, HostPlatform, HostPluginDatabase, HostStorage,
+    HostTerminal, HostTerminalStream, HostWs,
 };
 use crate::wasm::bedcode::plugin::{
-    host_bus, host_config, host_database, host_events, host_fs, host_http,
-    host_log, host_mdns, host_peer, host_platform, host_storage, host_terminal,
+    host_auth, host_bus, host_config, host_connection, host_database, host_events, host_fs,
+    host_http, host_log, host_mdns, host_peer, host_platform, host_plugin_database, host_storage,
+    host_terminal, host_terminal_stream, host_websocket,
 };
 
 /// 宿主 API 绑定（WASM 插件侧）
@@ -104,6 +106,89 @@ impl HostDatabase for WasmHost {
             None => Ok(None),
         }
     }
+
+    fn db_execute_params(
+        &self,
+        sql: &str,
+        params: &[serde_json::Value],
+    ) -> Result<i32, HostError> {
+        let params_json = to_json_string("db_execute_params", &serde_json::to_value(params).unwrap_or_default())?;
+        host_database::execute_params(sql, &params_json)
+            .map(|n| n as i32)
+            .map_err(|e| host_err("db_execute_params", e))
+    }
+
+    fn db_query_params(
+        &self,
+        sql: &str,
+        params: &[serde_json::Value],
+    ) -> Result<Option<serde_json::Value>, HostError> {
+        let params_json = to_json_string("db_query_params", &serde_json::to_value(params).unwrap_or_default())?;
+        match host_database::query_params(sql, &params_json)
+            .map_err(|e| host_err("db_query_params", e))?
+        {
+            Some(s) => parse_json("db_query_params", s).map(Some),
+            None => Ok(None),
+        }
+    }
+
+    fn db_execute_batch(&self, sqls: &[String]) -> Result<i32, HostError> {
+        let sqls_json = serde_json::to_string(sqls)
+            .map_err(|e| host_err("db_execute_batch", e.to_string()))?;
+        host_database::execute_batch(&sqls_json)
+            .map(|n| n as i32)
+            .map_err(|e| host_err("db_execute_batch", e))
+    }
+}
+
+// ==================== HostPluginDatabase ====================
+
+impl HostPluginDatabase for WasmHost {
+    fn plugin_db_execute(&self, sql: &str) -> Result<i32, HostError> {
+        host_plugin_database::execute(sql)
+            .map(|n| n as i32)
+            .map_err(|e| host_err("plugin_db_execute", e))
+    }
+
+    fn plugin_db_query(&self, sql: &str) -> Result<Option<serde_json::Value>, HostError> {
+        match host_plugin_database::query(sql).map_err(|e| host_err("plugin_db_query", e))? {
+            Some(s) => parse_json("plugin_db_query", s).map(Some),
+            None => Ok(None),
+        }
+    }
+
+    fn plugin_db_execute_params(
+        &self,
+        sql: &str,
+        params: &[serde_json::Value],
+    ) -> Result<i32, HostError> {
+        let params_json = to_json_string("plugin_db_execute_params", &serde_json::to_value(params).unwrap_or_default())?;
+        host_plugin_database::execute_params(sql, &params_json)
+            .map(|n| n as i32)
+            .map_err(|e| host_err("plugin_db_execute_params", e))
+    }
+
+    fn plugin_db_query_params(
+        &self,
+        sql: &str,
+        params: &[serde_json::Value],
+    ) -> Result<Option<serde_json::Value>, HostError> {
+        let params_json = to_json_string("plugin_db_query_params", &serde_json::to_value(params).unwrap_or_default())?;
+        match host_plugin_database::query_params(sql, &params_json)
+            .map_err(|e| host_err("plugin_db_query_params", e))?
+        {
+            Some(s) => parse_json("plugin_db_query_params", s).map(Some),
+            None => Ok(None),
+        }
+    }
+
+    fn plugin_db_execute_batch(&self, sqls: &[String]) -> Result<i32, HostError> {
+        let sqls_json = serde_json::to_string(sqls)
+            .map_err(|e| host_err("plugin_db_execute_batch", e.to_string()))?;
+        host_plugin_database::execute_batch(&sqls_json)
+            .map(|n| n as i32)
+            .map_err(|e| host_err("plugin_db_execute_batch", e))
+    }
 }
 
 // ==================== HostTerminal ====================
@@ -111,6 +196,47 @@ impl HostDatabase for WasmHost {
 impl HostTerminal for WasmHost {
     fn terminal_send(&self, session_id: &str, data: &str) -> Result<(), HostError> {
         host_terminal::send(session_id, data).map_err(|e| host_err("terminal_send", e))
+    }
+}
+
+// ==================== HostTerminalStream（ABI v15，票 12） ====================
+
+impl HostTerminalStream for WasmHost {
+    fn terminal_stream_forward_output(&self, session_id: &str, data: &[u8]) -> Result<(), HostError> {
+        host_terminal_stream::forward_output(session_id, data)
+            .map_err(|e| host_err("terminal_stream_forward_output", e))
+    }
+}
+
+// ==================== HostConnection（ABI v15，票 12；票 13 复用） ====================
+
+impl HostConnection for WasmHost {
+    fn connection_primary_target(&self) -> Result<String, HostError> {
+        host_connection::primary_target().map_err(|e| host_err("connection_primary_target", e))
+    }
+}
+
+// ==================== HostAuth（ABI v16，票 14 阶段 B；凭据零过境） ====================
+
+impl HostAuth for WasmHost {
+    fn auth_request_pairing(&self) -> Result<(), HostError> {
+        host_auth::request_pairing().map_err(|e| host_err("auth_request_pairing", e))
+    }
+
+    fn auth_verify_pairing_code(&self, code: &str) -> Result<bool, HostError> {
+        host_auth::verify_pairing_code(code).map_err(|e| host_err("auth_verify_pairing_code", e))
+    }
+
+    fn auth_qr_connect(&self, token: &str) -> Result<bool, HostError> {
+        host_auth::qr_connect(token).map_err(|e| host_err("auth_qr_connect", e))
+    }
+
+    fn auth_biometric_authenticate(&self) -> Result<bool, HostError> {
+        host_auth::biometric_authenticate().map_err(|e| host_err("auth_biometric_authenticate", e))
+    }
+
+    fn auth_has_credentials(&self) -> Result<bool, HostError> {
+        host_auth::has_credentials().map_err(|e| host_err("auth_has_credentials", e))
     }
 }
 
@@ -315,10 +441,6 @@ impl HostPeer for WasmHost {
         host_peer::resume_transfer(batch_id).map_err(|e| host_err("peer_resume_transfer", e))
     }
 
-    fn peer_resume_all_transfers(&self) -> Result<u32, HostError> {
-        host_peer::resume_all_transfers().map_err(|e| host_err("peer_resume_all_transfers", e))
-    }
-
     fn peer_set_shared_roots(&self, dirs: &[serde_json::Value]) -> Result<(), HostError> {
         let dirs_json =
             to_json_string("peer_set_shared_roots", &serde_json::to_value(dirs).unwrap_or_default())?;
@@ -351,6 +473,40 @@ impl HostPeer for WasmHost {
         let files_json =
             to_json_string("peer_pull_files", &serde_json::to_value(files).unwrap_or_default())?;
         host_peer::pull_files(session, dir_id, &files_json).map_err(|e| host_err("peer_pull_files", e))
+    }
+
+    fn peer_set_download_dir(&self, path: &str) -> Result<(), HostError> {
+        host_peer::set_download_dir(path).map_err(|e| host_err("peer_set_download_dir", e))
+    }
+
+    fn peer_start_node(&self) -> Result<bool, HostError> {
+        host_peer::start_node().map_err(|e| host_err("peer_start_node", e))
+    }
+
+    fn peer_stop_node(&self) -> Result<bool, HostError> {
+        host_peer::stop_node().map_err(|e| host_err("peer_stop_node", e))
+    }
+
+    fn peer_active_transfers(&self) -> Result<serde_json::Value, HostError> {
+        peer_json(
+            "peer_active_transfers",
+            host_peer::active_transfers().map_err(|e| host_err("peer_active_transfers", e))?,
+        )
+    }
+
+    fn peer_collect_outgoing(
+        &self,
+        paths: &[serde_json::Value],
+    ) -> Result<serde_json::Value, HostError> {
+        let paths_json = to_json_string(
+            "peer_collect_outgoing",
+            &serde_json::to_value(paths).unwrap_or_default(),
+        )?;
+        peer_json(
+            "peer_collect_outgoing",
+            host_peer::collect_outgoing(&paths_json)
+                .map_err(|e| host_err("peer_collect_outgoing", e))?,
+        )
     }
 }
 
@@ -390,5 +546,29 @@ impl HostPlatform for WasmHost {
 
     fn platform_pick_folder(&self) -> Result<String, HostError> {
         host_platform::pick_folder().map_err(|e| host_err("platform_pick_folder", e))
+    }
+}
+
+// ==================== host-websocket（客户端域，ABI v14） ====================
+
+impl HostWs for WasmHost {
+    fn ws_connect(&self, config_json: &str) -> Result<String, HostError> {
+        host_websocket::connect(config_json).map_err(|e| host_err("ws_connect", e))
+    }
+
+    fn ws_send_text(&self, handle: &str, text: &str) -> Result<(), HostError> {
+        host_websocket::send_text(handle, text).map_err(|e| host_err("ws_send_text", e))
+    }
+
+    fn ws_send_binary(&self, handle: &str, payload: &[u8]) -> Result<(), HostError> {
+        host_websocket::send_binary(handle, payload).map_err(|e| host_err("ws_send_binary", e))
+    }
+
+    fn ws_close(&self, handle: &str, close_json: &str) -> Result<bool, HostError> {
+        host_websocket::close(handle, close_json).map_err(|e| host_err("ws_close", e))
+    }
+
+    fn ws_is_connected(&self, handle: &str) -> Result<bool, HostError> {
+        host_websocket::is_connected(handle).map_err(|e| host_err("ws_is_connected", e))
     }
 }

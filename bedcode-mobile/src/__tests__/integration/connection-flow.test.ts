@@ -86,7 +86,8 @@ function installInvokeMock() {
         return Promise.resolve(false)
       case 'ws_authenticate':
         return Promise.resolve(true)
-      case 'ws_verify_pairing_code':
+      case 'ws_get_auth_credentials':
+        // 票 14 阶段 B：凭据零过境，受理后由前端从宿主引擎窄读
         return Promise.resolve(makeAuthCredentials())
       case 'egress_declare_desktop_target':
         return Promise.resolve(null)

@@ -1,24 +1,43 @@
-//! 对等网络接收侧（issue 10，移动端镜像）：询问应答回流 + 接收任务登记 +
-//! 接收策略设置。
+//! 对等网络接收侧引擎接入（票 07：询问回执表 + 引擎事件桥 + 策略闸门）。
 //!
-//! 与桌面端 peer_receive 同构但无落点设置：移动端接收落点恒为 app 私有
-//! 下载目录（MediaLanding 尽力提升进 MediaStore 公共下载，issue 07 语义），
-//! 设置面仅暴露接收策略（ask/always_accept/always_deny）与询问超时。
+//! **口径（票 07）**：本模块不再持有任何任务状态机——旧版所持的接收任务表
+//! （`PeerReceiveState.inner.tasks`）、进度入账与终态结算（`update_progress` /
+//! `settle_terminal`）、暂停状态同步（`set_receive_pause_status`）、终态封顶
+//! （`RECEIVE_TERMINAL_CAP`）、原因码映射与全量快照推送（`peer-receive-changed`
+//! → 总线 `peer:receive`）已随接收编排整体下沉 `file-transfer` 插件（事件归约
+//! 状态机，真源在其私有存储）。宿主只保留「离宿主无法实现、且无业务语义」的
+//! 引擎控制面：
 //!
-//! 与发送侧（[`super::peer_transfer`]）零侵入：接收任务复用
-//! [`PeerTransferDto`] 形状经独立的 `peer-receive-changed` 事件全量推送，
-//! 前端按 batchId 合并双源列表后统一分组。
+//! - **询问回执表** `batch_id → oneshot::Sender<bool>`：入站 offer 的应答闸门
+//!   （安全闸门，ADR 0022 薄壳②）——回执不在册即视为超时/未知，不放行；
+//! - **策略闸门**：`ask` / `always_accept` / `always_deny` + 询问超时 + 接收落点，
+//!   以 `TransferConfig` 热更新推进引擎（产品真源在插件侧，经 host-peer
+//!   `set-receive-policy` / `set-download-dir` 推送）；
+//! - **引擎事件桥**：`TransferEvent` 逐条直推 `peer:receive-event`（Progress 复用
+//!   150ms 节流窗口——纯性能无业务），不经任何状态机加工（原因码/终态判定/
+//!   任务行建行归插件归约）。
+//!
+//! 防回接锁 `retired_mobile_receive_orchestration_is_not_reintroduced`
+//! （移动版）钉住本口径：谁把接收任务表 / 快照推送加回来，谁就要先推翻票 07 裁决。
+//!
+//! 引擎落点说明：移动端接收落点恒为 app 私有下载目录（MediaLanding 尽力提升进
+//! MediaStore 公共下载，issue 07 语义），策略设置面仅暴露接收策略与询问超时。
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use bedcode_peer_net::transfer::{batch::validate_ask_timeout_secs, FileMeta, DEFAULT_ASK_TIMEOUT_SECS};
-use bedcode_peer_net::{NodeId, ReceivePolicy, SharedDirHandler, TerminalState, TransferConfig, TransferEvent};
+use bedcode_peer_net::transfer::batch::validate_ask_timeout_secs;
+use bedcode_peer_net::transfer::DEFAULT_ASK_TIMEOUT_SECS;
+use bedcode_peer_net::{NodeId, ReceivePolicy, SharedDirHandler, TransferConfig, TransferEvent};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 use tokio::sync::mpsc;
 
-use super::peer_transfer::{PeerTransferDto, PeerTransferFileDto};
+use super::peer_events::{
+    engine_node_stopped_payload, engine_offer_pending_payload, engine_pause_payload, engine_progress_payload,
+    engine_pull_started_payload, engine_terminal_payload, publish_engine_event, PROGRESS_EMIT_INTERVAL,
+    TOPIC_RECEIVE_EVENT,
+};
 
 // ==================== 常量 ====================
 
@@ -26,10 +45,6 @@ use super::peer_transfer::{PeerTransferDto, PeerTransferFileDto};
 const SETTINGS_FILE: &str = "transfer_settings.json";
 /// 设置文件格式版本（未来字段演进时 fail-fast）
 const SETTINGS_FORMAT_VERSION: u32 = 1;
-/// 进度事件最小发射间隔（与发送侧转发层同值：低于人眼感知阈值）
-const PROGRESS_EMIT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(150);
-/// 接收侧内存终态封顶（会话内追溯用；活跃任务不受影响）
-const RECEIVE_TERMINAL_CAP: usize = 100;
 
 // ==================== 数据模型 ====================
 
@@ -38,7 +53,8 @@ pub const POLICY_ASK: &str = "ask";
 pub const POLICY_ALWAYS_ACCEPT: &str = "always_accept";
 pub const POLICY_ALWAYS_DENY: &str = "always_deny";
 
-/// 接收设置磁盘形态（移动端无落点字段：落点恒为 app 私有下载目录）
+/// 接收设置磁盘形态（落点缺省 = app 私有下载目录；host-peer `set-download-dir`
+/// 可更换，票 04）
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub(crate) struct PeerTransferSettings {
@@ -49,8 +65,11 @@ pub(crate) struct PeerTransferSettings {
     /// 传输加密开关（发送侧新批生效；接收侧自动适配，默认关）。
     /// pub(crate)：发送侧（peer_transfer）发起批前读取
     pub(crate) encryption_enabled: bool,
-    /// 发送方向并发上限（1..=8；插件设置真源，随发送载荷脉冲推送闸门）
+    /// 拉取方向并发上限（1..=8；`peer_remote` 拉取队列并发闸门读值。
+    /// 发送方向并发真源已随票 06 迁插件，本字段只服务引擎侧拉取编排）
     pub(crate) concurrency: u8,
+    /// 接收落点目录（None = 缺省 app 私有下载目录；`set-download-dir` 写入，票 04）
+    download_dir: Option<String>,
 }
 
 impl Default for PeerTransferSettings {
@@ -60,6 +79,7 @@ impl Default for PeerTransferSettings {
             ask_timeout_secs: DEFAULT_ASK_TIMEOUT_SECS,
             encryption_enabled: false,
             concurrency: DEFAULT_CONCURRENCY,
+            download_dir: None,
         }
     }
 }
@@ -95,48 +115,19 @@ impl PeerTransferSettings {
     }
 }
 
-/// 设置读取 DTO
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PeerReceiveSettingsDto {
-    pub policy_mode: String,
-    pub ask_timeout_secs: u64,
-    /// 传输加密开关（发送侧语义；接收侧自动适配）
-    pub encryption_enabled: bool,
-    /// 发送方向并发上限
-    pub concurrency: u8,
-}
+// 注（票 10）：设置读面 DTO `PeerReceiveSettingsDto` 随 `get_peer_receive_settings`
+// 一并退役——插件侧读自己的 settings store，宿主不再有前端读面。
 
 // ==================== 状态容器 ====================
 
-#[derive(Default)]
-struct ReceiveInner {
-    settings: Option<PeerTransferSettings>,
-    tasks: Vec<PeerTransferDto>,
-    last_emit: Option<tokio::time::Instant>,
-}
-
-/// Tauri 托管的接收侧状态容器（语义与桌面端一致，见桌面 peer_receive 文档）
+/// 接收侧引擎控制面状态（询问回执表 + 设置缓存 + 处理器句柄；任务表已随票 07 退役）
 #[derive(Default)]
 pub struct PeerReceiveState {
-    inner: Mutex<ReceiveInner>,
+    settings: Mutex<Option<PeerTransferSettings>>,
+    /// 入站 offer 应答回执表：`batch_id → 引擎侧等待中的应答通道`。
+    /// 应答不在册（超时/已终态/ID 未知）一律不写通道——闸门 fail-safe 语义
     pending: Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>,
     runtime: tokio::sync::Mutex<Option<(Arc<SharedDirHandler>, TransferConfig)>>,
-}
-
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
-}
-
-fn short_fingerprint(node_id: &str) -> String {
-    node_id.get(..8).unwrap_or(node_id).to_string()
-}
-
-fn is_terminal(task: &PeerTransferDto) -> bool {
-    !matches!(task.status.as_str(), "pending" | "running" | "paused")
 }
 
 // ==================== 设置持久化 ====================
@@ -144,7 +135,12 @@ fn is_terminal(task: &PeerTransferDto) -> bool {
 /// 惰性加载设置（进程内一次；损坏文件按缺省重建并告警）
 pub(crate) async fn ensure_settings_loaded(app: &AppHandle) -> PeerTransferSettings {
     let state = app.state::<PeerReceiveState>();
-    if let Some(settings) = state.inner.lock().expect("peer receive lock poisoned").settings.clone() {
+    if let Some(settings) = state
+        .settings
+        .lock()
+        .expect("peer receive settings lock poisoned")
+        .clone()
+    {
         return settings;
     }
     let loaded = match super::peer_net::app_data_dir(app) {
@@ -168,11 +164,11 @@ pub(crate) async fn ensure_settings_loaded(app: &AppHandle) -> PeerTransferSetti
         }
         None => PeerTransferSettings::default(),
     };
-    let mut inner = state.inner.lock().expect("peer receive lock poisoned");
-    if inner.settings.is_none() {
-        inner.settings = Some(settings.clone());
+    let mut guard = state.settings.lock().expect("peer receive settings lock poisoned");
+    if guard.is_none() {
+        *guard = Some(settings.clone());
     }
-    inner.settings.clone().unwrap_or_default()
+    guard.clone().unwrap_or_default()
 }
 
 /// 设置落盘（tmp+rename 原子替换；失败只记日志不阻断策略热更新）
@@ -248,7 +244,7 @@ pub(crate) async fn clear_handler(app: &AppHandle) {
     *state.runtime.lock().await = None;
 }
 
-/// 处理器与配置快照句柄（issue 11 远端拉取用：配置为落点/策略热更新基底）
+/// 处理器与配置快照句柄（远端拉取用：配置为落点/策略热更新基底）
 pub(crate) async fn handler_and_config(app: &AppHandle) -> Option<(Arc<SharedDirHandler>, TransferConfig)> {
     let snapshot = {
         let state = app.state::<PeerReceiveState>();
@@ -258,8 +254,18 @@ pub(crate) async fn handler_and_config(app: &AppHandle) -> Option<(Arc<SharedDir
     snapshot
 }
 
-/// 引擎事件消费主循环（替换日志占位消费者）
+// ==================== 引擎事件桥（接收方向） ====================
+
+/// 接收侧事件消费主循环（纯直推 + 询问回执表维护）：
+/// - `OfferPending`：登记应答回执闸门 + 直推建行事件（插件自建待应答行）；
+/// - `Progress`：150ms 节流后直推（纯性能）；
+/// - `Terminal`：摘除回执表条目（引擎超时自动拒时通道在此失效）+ 直推终态；
+/// - `Paused` / `Resumed`：直推（插件归约落态）。
+///
+/// 通道关闭 = 引擎节点下线：清空回执表（未应答询问随之失效——闸门 fail-safe）
+/// 并直推 `node-stopped`，插件把在册进行中条目标注 `interrupted`。
 pub(crate) async fn drive_receive_events(app: AppHandle, mut rx: mpsc::Receiver<TransferEvent>) {
+    let mut last_emit = tokio::time::Instant::now() - PROGRESS_EMIT_INTERVAL;
     while let Some(event) = rx.recv().await {
         match event {
             TransferEvent::OfferPending {
@@ -269,7 +275,23 @@ pub(crate) async fn drive_receive_events(app: AppHandle, mut rx: mpsc::Receiver<
                 total_size,
                 reply,
             } => {
-                register_offer(&app, remote, batch_id, files, total_size, reply).await;
+                {
+                    let state = app.state::<PeerReceiveState>();
+                    state
+                        .pending
+                        .lock()
+                        .expect("peer receive pending lock poisoned")
+                        .insert(batch_id.clone(), reply);
+                }
+                publish_engine_event(
+                    TOPIC_RECEIVE_EVENT,
+                    engine_offer_pending_payload(&remote, &batch_id, &files, total_size),
+                );
+                tracing::info!(
+                    batch_id = %batch_id,
+                    remote = %remote,
+                    "incoming peer transfer offer pending user reply"
+                );
             }
             TransferEvent::Progress {
                 batch_id,
@@ -278,380 +300,98 @@ pub(crate) async fn drive_receive_events(app: AppHandle, mut rx: mpsc::Receiver<
                 rate_bps,
                 ..
             } => {
-                tracing::debug!(
-                    batch_id = %batch_id,
-                    transferred,
-                    total,
-                    rate_bps,
-                    "receive progress event (drive_receive_events)"
-                );
-                update_progress(&app, &batch_id, transferred, total, rate_bps);
-                throttle_publish(&app);
+                if last_emit.elapsed() >= PROGRESS_EMIT_INTERVAL {
+                    last_emit = tokio::time::Instant::now();
+                    publish_engine_event(
+                        TOPIC_RECEIVE_EVENT,
+                        engine_progress_payload(&batch_id, transferred, total, rate_bps),
+                    );
+                } else {
+                    // 诊断插桩：节流跳帧（排查接收进度不更新时确认事件流活跃）
+                    tracing::debug!(batch_id = %batch_id, "receive progress throttled (within emit interval)");
+                }
             }
             TransferEvent::Terminal { batch_id, state, .. } => {
-                settle_terminal(&app, &batch_id, state);
+                // 回执表清理：批已终态（引擎超时自拒 / 用户应答后传输失败），
+                // 迟到的应答不再写通道
+                {
+                    let state = app.state::<PeerReceiveState>();
+                    state
+                        .pending
+                        .lock()
+                        .expect("peer receive pending lock poisoned")
+                        .remove(&batch_id);
+                }
+                publish_engine_event(TOPIC_RECEIVE_EVENT, engine_terminal_payload(&batch_id, &state));
+                tracing::info!(batch_id = %batch_id, state = ?state, "peer receive session ended");
             }
             // 数据供方暂停/恢复：本端接收任务状态同步（对端门控推流）
             TransferEvent::Paused { batch_id, .. } => {
-                set_receive_pause_status(&app, &batch_id, true).await;
+                publish_engine_event(TOPIC_RECEIVE_EVENT, engine_pause_payload("paused", &batch_id));
             }
             TransferEvent::Resumed { batch_id, .. } => {
-                set_receive_pause_status(&app, &batch_id, false).await;
+                publish_engine_event(TOPIC_RECEIVE_EVENT, engine_pause_payload("resumed", &batch_id));
             }
             // 服务侧拉取事件走独立 serve 通道（peer_transfer::drive_serve_events），
             // 本接收通道理论上收不到；防御性忽略
             TransferEvent::PullServed { .. } => {}
         }
     }
-    fail_active_transfers(&app, "peer-net node stopped");
-}
-
-/// 对端展示名解析：发现缓存广播名优先，短指纹兜底
-/// 远端拉取任务预登记（issue 11）：pull 会话发起前插入 running 行，使后续
-/// Progress/Terminal 事件与按批取消入口命中既有任务表（免协商无 pending 阶段）
-pub(crate) async fn register_remote_pull(
-    app: &AppHandle,
-    remote: NodeId,
-    batch_id: String,
-    rel_path: String,
-    total_size: u64,
-) {
-    let peer_name = resolve_peer_name(app, &remote).await;
-    let now = now_ms();
-    let dto = PeerTransferDto {
-        batch_id: batch_id.clone(),
-        node_id: remote.to_string(),
-        peer_name,
-        direction: "receive".to_string(),
-        status: "running".to_string(),
-        files: vec![PeerTransferFileDto {
-            path: rel_path,
-            size: total_size,
-        }],
-        total_bytes: total_size,
-        transferred_bytes: 0,
-        rate_bps: 0.0,
-        detail: None,
-        reject_reason: None,
-        created_at_ms: now,
-        updated_at_ms: now,
-    };
     {
         let state = app.state::<PeerReceiveState>();
-        let mut inner = state.inner.lock().expect("peer receive lock poisoned");
-        inner.tasks.insert(0, dto);
-    }
-    publish(app);
-    tracing::info!(batch_id = %batch_id, remote = %remote, "remote pull task registered");
-}
-
-/// 会话发起前的拨号等失败落终态：pull 队列中连接未能建立时任务行不得悬挂 running
-pub(crate) fn fail_task(app: &AppHandle, batch_id: &str, detail: String) {
-    {
-        let state = app.state::<PeerReceiveState>();
-        let mut inner = state.inner.lock().expect("peer receive lock poisoned");
-        if let Some(task) = inner
-            .tasks
-            .iter_mut()
-            .find(|t| t.batch_id == batch_id && !is_terminal(t))
-        {
-            task.status = "failed".to_string();
-            task.detail = Some(detail);
-            task.updated_at_ms = now_ms();
+        let dropped = {
+            let mut pending = state.pending.lock().expect("peer receive pending lock poisoned");
+            let dropped = pending.len();
+            pending.clear();
+            dropped
+        };
+        if dropped > 0 {
+            tracing::warn!(
+                dropped,
+                "peer-net stopped with unanswered receive offers, replies dropped (gate fail-safe)"
+            );
         }
     }
-    publish(app);
+    publish_engine_event(TOPIC_RECEIVE_EVENT, engine_node_stopped_payload());
+    tracing::warn!("peer-net node stopped: receive event channel closed");
 }
 
-/// 对端展示名解析：发现缓存广播名优先，短指纹兜底
-///
-/// 必须 async：本函数只在 Tokio 运行时内被调用（pull 队列 / 事件消费循环，
-/// 均经 tokio::spawn），不可 block_on——嵌套 runtime 会 panic
-/// （"Cannot start a runtime from within a runtime"）。
-async fn resolve_peer_name(app: &AppHandle, remote: &NodeId) -> String {
-    let fallback = || short_fingerprint(remote.as_str());
-    match super::peer_net::runtime_snapshot(app).await {
-        Some((_, cache)) => cache
-            .get(remote)
-            .map(|record| record.device_name)
-            .unwrap_or_else(fallback),
-        None => fallback(),
-    }
-}
-
-async fn register_offer(
-    app: &AppHandle,
-    remote: NodeId,
-    batch_id: String,
-    files: Vec<FileMeta>,
-    total_size: u64,
-    reply: tokio::sync::oneshot::Sender<bool>,
-) {
-    let peer_name = resolve_peer_name(app, &remote).await;
-    let now = now_ms();
-    let dto = PeerTransferDto {
-        batch_id: batch_id.clone(),
-        node_id: remote.to_string(),
-        peer_name,
-        direction: "receive".to_string(),
-        status: "pending".to_string(),
-        files: files
-            .into_iter()
-            .map(|f| PeerTransferFileDto {
-                path: f.path,
-                size: f.size,
-            })
-            .collect(),
-        total_bytes: total_size,
-        transferred_bytes: 0,
-        rate_bps: 0.0,
-        detail: None,
-        reject_reason: None,
-        created_at_ms: now,
-        updated_at_ms: now,
-    };
-    {
-        let state = app.state::<PeerReceiveState>();
-        state
-            .pending
-            .lock()
-            .expect("peer receive pending lock poisoned")
-            .insert(batch_id.clone(), reply);
-        let mut inner = state.inner.lock().expect("peer receive lock poisoned");
-        inner.tasks.insert(0, dto);
-    }
-    publish(app);
+/// 拉取会话发起事实回灌（票 07）：pull 的 batch_id 由引擎铸造、调用方（插件）
+/// 事前拿不到，故经 `pull-started` 事件把建行事实推给插件——否则首条 Progress
+/// 无处归约（插件归约不凭空建行）。引擎侧进度/终态仍走同一 receive 事件通道。
+pub(crate) fn announce_remote_pull_started(remote: NodeId, batch_id: &str, rel_path: &str, size: u64) {
+    publish_engine_event(
+        TOPIC_RECEIVE_EVENT,
+        engine_pull_started_payload(&remote, batch_id, rel_path, size),
+    );
     tracing::info!(
         batch_id = %batch_id,
         remote = %remote,
-        "incoming peer transfer offer pending user reply"
+        "remote pull session started (accounting owned by plugin)"
     );
 }
 
-/// 纯函数：暂停/恢复状态迁移判定（running/pending → paused；paused → running）。
-/// 返回目标状态；状态无需改变（已处于目标态/终态）时返回 None。
-/// 恢复必须命中 paused——否则对端 Resume 帧到达后任务卡在 paused。
-fn receive_pause_target(status: &str, paused: bool) -> Option<&'static str> {
-    if paused {
-        matches!(status, "running" | "pending").then_some("paused")
-    } else if status == "paused" {
-        Some("running")
-    } else {
-        None
-    }
-}
-
-/// 纯函数：传输是否已完成（字节已满且总量已知；total==0 视为未知不可判）
-fn receive_transfer_complete(total: u64, transferred: u64) -> bool {
-    total > 0 && transferred >= total
-}
-
-/// 纯函数：暂停中的任务是否实为已完成（UI 滞后场景：状态 paused 但字节已满），
-/// 用于 settle_terminal 结算 completed 而非 kept for resume
-fn receive_full_completed(status: &str, transferred: u64, total: u64, terminal_completed: bool) -> bool {
-    status == "paused" && terminal_completed && receive_transfer_complete(total, transferred)
-}
-
-/// 纯函数：进度入账（paused 不覆盖为 running——残留 Progress 事件会把按钮
-/// 从「恢复」弹回「暂停」；字节/速率照常更新供恢复后进度衔接）
-fn apply_receive_progress(task: &mut PeerTransferDto, transferred: u64, total: u64, rate_bps: f64, ts: u64) {
-    if task.status != "paused" {
-        task.status = "running".to_string();
-    }
-    task.transferred_bytes = transferred;
-    if total > 0 {
-        task.total_bytes = total;
-    }
-    task.rate_bps = rate_bps;
-    task.updated_at_ms = ts;
-}
-
-/// 进度入账（pending → running：AlwaysAccept 策略无询问阶段直接进数据面）
-///
-/// `total` 为引擎批内总大小真源：远端拉取任务预登记时大小未知（pull spec
-/// size 恒 0），首个 Progress 即补正 total_bytes——否则 totalBytes 恒 0，
-/// 前端进度条永远停在 0%。
-fn update_progress(app: &AppHandle, batch_id: &str, transferred: u64, total: u64, rate_bps: f64) {
-    let state = app.state::<PeerReceiveState>();
-    let mut inner = state.inner.lock().expect("peer receive lock poisoned");
-    if let Some(task) = inner
-        .tasks
-        .iter_mut()
-        .find(|t| t.batch_id == batch_id && !is_terminal(t))
-    {
-        apply_receive_progress(task, transferred, total, rate_bps, now_ms());
-    }
-}
-
-/// 终态结算（状态映射与发送侧同构；Cancelled 的对端语义为 sender）
-fn settle_terminal(app: &AppHandle, batch_id: &str, terminal: TerminalState) {
-    let (status, detail, reject_reason) = match &terminal {
-        TerminalState::Completed => ("completed".to_string(), None, None),
-        TerminalState::Rejected { reason } => ("rejected".to_string(), None, Some(reason.as_str().to_string())),
-        TerminalState::Cancelled { by_peer } => (
-            "cancelled".to_string(),
-            // 机器可读原因码（前端 i18n 映射；兼容映射旧本地化文本），
-            // 禁止把人类文案直接落 wire
-            Some(if *by_peer {
-                "cancelled-by-sender".to_string()
-            } else {
-                "cancelled-by-self".to_string()
-            }),
-            None,
+/// 本端侧失败落终态（拉取队列拨号失败等）：直推 failed 终态事件——插件归约结算，
+/// 宿主无任务表可写
+pub(crate) fn announce_local_failure(batch_id: &str, detail: &str) {
+    publish_engine_event(
+        TOPIC_RECEIVE_EVENT,
+        engine_terminal_payload(
+            batch_id,
+            &bedcode_peer_net::TerminalState::Failed {
+                detail: detail.to_string(),
+            },
         ),
-        TerminalState::Failed { detail } => ("failed".to_string(), Some(detail.clone()), None),
-    };
-    {
-        let state = app.state::<PeerReceiveState>();
-        state
-            .pending
-            .lock()
-            .expect("peer receive pending lock poisoned")
-            .remove(batch_id);
-        let mut inner = state.inner.lock().expect("peer receive lock poisoned");
-        if let Some(task) = inner
-            .tasks
-            .iter_mut()
-            .find(|t| t.batch_id == batch_id && !is_terminal(t))
-        {
-            // 用户暂停分支：会话终态只是中断确认——不落终态、不覆盖进度展示。
-            // 例外：Completed 且字节已满（UI 滞后时点暂停的已完成任务）——
-            // 结算 completed 而不是卡在 paused（真机现象：已传完仍可点暂停）
-            let full_completed = receive_full_completed(
-                &task.status,
-                task.transferred_bytes,
-                task.total_bytes,
-                matches!(terminal, TerminalState::Completed),
-            );
-            if task.status == "paused" && !full_completed {
-                tracing::info!(batch_id = %batch_id, state = ?terminal, "receive session ended while paused (kept for resume)");
-                return;
-            }
-            task.status = status;
-            // 完成结算：最后一条 Progress 可能略低于总量，归整为满额
-            if task.status == "completed" {
-                task.transferred_bytes = task.total_bytes;
-            }
-            task.detail = detail;
-            task.reject_reason = reject_reason;
-            task.updated_at_ms = now_ms();
-        }
-        evict_terminal_cap_locked(&mut inner.tasks);
-    }
-    tracing::info!(batch_id = %batch_id, state = ?terminal, "peer receive session ended");
-    publish(app);
+    );
+    tracing::info!(batch_id = %batch_id, detail, "peer receive session failed locally");
 }
 
-/// 接收任务暂停/恢复状态同步（对端 Pause/Resume 帧到达，或本端命令置位）
-pub(crate) async fn set_receive_pause_status(app: &AppHandle, batch_id: &str, paused: bool) {
-    {
-        let state = app.state::<PeerReceiveState>();
-        let mut inner = state.inner.lock().expect("peer receive lock poisoned");
-        if let Some(task) = inner
-            .tasks
-            .iter_mut()
-            .find(|t| t.batch_id == batch_id && !is_terminal(t))
-        {
-            // 暂停：running/pending → paused；恢复：paused → running。
-            // 恢复必须命中 paused——否则对端 Resume 帧到达后任务卡在 paused
-            // （真机现象：移动端恢复后桌面端任务状态不再同步）
-            if let Some(target) = receive_pause_target(&task.status, paused) {
-                task.status = target.to_string();
-                task.rate_bps = 0.0;
-                task.updated_at_ms = now_ms();
-            }
-        }
-    }
-    publish(app);
-}
+// ==================== 闸门操作面（host-peer 原语入口） ====================
 
-/// 节点停止收尾：全部活跃接收落 failed 并推送
-fn fail_active_transfers(app: &AppHandle, detail: &str) {
-    let had_active = {
-        let state = app.state::<PeerReceiveState>();
-        state
-            .pending
-            .lock()
-            .expect("peer receive pending lock poisoned")
-            .clear();
-        let mut inner = state.inner.lock().expect("peer receive lock poisoned");
-        let mut changed = false;
-        for task in inner.tasks.iter_mut().filter(|t| !is_terminal(t)) {
-            task.status = "failed".to_string();
-            task.detail = Some(detail.to_string());
-            task.updated_at_ms = now_ms();
-            changed = true;
-        }
-        changed
-    };
-    if had_active {
-        tracing::warn!("peer-net stopped with active receiving transfers, marked failed");
-        publish(app);
-    }
-}
-
-/// 终态封顶：最新在前保序保留前 CAP 条终态，活跃任务不受影响
-fn evict_terminal_cap_locked(tasks: &mut Vec<PeerTransferDto>) {
-    let mut kept = 0usize;
-    tasks.retain(|t| {
-        if !is_terminal(t) {
-            return true;
-        }
-        kept += 1;
-        kept <= RECEIVE_TERMINAL_CAP
-    });
-}
-
-// ==================== 发布 ====================
-
-fn snapshot(app: &AppHandle) -> Vec<PeerTransferDto> {
-    let state = app.state::<PeerReceiveState>();
-    let inner = state.inner.lock().expect("peer receive lock poisoned");
-    inner.tasks.clone()
-}
-
-/// 全量列表推送（与发送侧 peer-transfer-changed 平行的独立通道）
-fn publish(app: &AppHandle) {
-    let payload = serde_json::to_value(snapshot(app)).unwrap_or_default();
-    {
-        let state = app.state::<PeerReceiveState>();
-        let mut inner = state.inner.lock().expect("peer receive lock poisoned");
-        inner.last_emit = Some(tokio::time::Instant::now());
-    }
-    super::peer_net::emit_json(app, "peer-receive-changed", payload);
-}
-
-/// 进度节流推送：距上次发射不足间隔则跳过
-fn throttle_publish(app: &AppHandle) {
-    let due = {
-        let state = app.state::<PeerReceiveState>();
-        let inner = state.inner.lock().expect("peer receive lock poisoned");
-        match inner.last_emit {
-            Some(last) if last.elapsed() < PROGRESS_EMIT_INTERVAL => false,
-            _ => true,
-        }
-    };
-    if due {
-        publish(app);
-    } else {
-        // 诊断插桩：节流跳帧（排查接收进度不更新时确认事件流活跃）
-        tracing::debug!("receive progress throttled (within emit interval)");
-    }
-}
-
-// ==================== 命令面 ====================
-
-/// 当前接收任务列表（活跃 + 会话内终态，最新在前）
-#[tauri::command]
-pub async fn list_peer_receiving(app: AppHandle) -> crate::Result<Vec<PeerTransferDto>> {
-    ensure_settings_loaded(&app).await;
-    Ok(snapshot(&app))
-}
-
-/// 应答传输询问（接受全部 / 拒绝全部）。返回是否成功送达回执——false 表示
-/// 批已超时被引擎自动拒或 ID 未知（前端应关闭对应弹窗）。
-#[tauri::command]
-pub async fn respond_peer_transfer(app: AppHandle, batch_id: String, accepted: bool) -> crate::Result<bool> {
+/// 接收批应答（host-peer `respond-transfer`）：回执表取出通道并写应答——不在册
+/// （超时/已终态/ID 未知）视为不送达，插件侧据此关闭弹窗。不改任何任务状态
+/// （任务行真源在插件侧，由 Progress/Terminal 事件推进）。
+pub(crate) async fn respond_peer_transfer(app: AppHandle, batch_id: String, accepted: bool) -> crate::Result<bool> {
     let state = app.state::<PeerReceiveState>();
     let reply = state
         .pending
@@ -663,33 +403,14 @@ pub async fn respond_peer_transfer(app: AppHandle, batch_id: String, accepted: b
         return Ok(false);
     };
     let delivered = reply.send(accepted).is_ok();
-    {
-        let mut inner = state.inner.lock().expect("peer receive lock poisoned");
-        if let Some(task) = inner
-            .tasks
-            .iter_mut()
-            .find(|t| t.batch_id == batch_id && t.status == "pending")
-        {
-            if accepted {
-                task.status = "running".to_string();
-            } else {
-                task.status = "rejected".to_string();
-                task.reject_reason = Some("user-rejected".to_string());
-            }
-            task.updated_at_ms = now_ms();
-        }
-    }
     tracing::info!(batch_id = %batch_id, accepted, delivered, "peer transfer offer answered");
-    publish(&app);
     Ok(delivered)
 }
 
-/// 取消接收任务：pending 批视同拒绝；running 批经 handler 按批取消令牌中止。
-/// 返回是否命中任务。
-#[tauri::command]
-pub async fn cancel_peer_receiving(app: AppHandle, batch_id: String) -> crate::Result<bool> {
+/// 取消接收批：pending 批视同拒绝（回执表闸门）；其余经拉取会话表 / 接收
+/// 会话表按批中止。返回是否命中。
+pub(crate) async fn cancel_peer_receiving(app: AppHandle, batch_id: String) -> crate::Result<bool> {
     let state = app.state::<PeerReceiveState>();
-
     let reply = state
         .pending
         .lock()
@@ -698,18 +419,6 @@ pub async fn cancel_peer_receiving(app: AppHandle, batch_id: String) -> crate::R
     if let Some(reply) = reply {
         tracing::info!(batch_id = %batch_id, "pending receive dismissed as rejected");
         let _ = reply.send(false);
-        let mut inner = state.inner.lock().expect("peer receive lock poisoned");
-        if let Some(task) = inner
-            .tasks
-            .iter_mut()
-            .find(|t| t.batch_id == batch_id && t.status == "pending")
-        {
-            task.status = "rejected".to_string();
-            task.reject_reason = Some("user-rejected".to_string());
-            task.updated_at_ms = now_ms();
-        }
-        drop(inner);
-        publish(&app);
         return Ok(true);
     }
 
@@ -724,74 +433,26 @@ pub async fn cancel_peer_receiving(app: AppHandle, batch_id: String) -> crate::R
     Ok(hit)
 }
 
-/// 清空接收侧终态记录（活跃任务不受影响）；返回清除条数
-#[tauri::command]
-pub async fn clear_peer_receiving_history(app: AppHandle) -> crate::Result<usize> {
-    ensure_settings_loaded(&app).await;
-    let removed = {
-        let state = app.state::<PeerReceiveState>();
-        let mut inner = state.inner.lock().expect("peer receive lock poisoned");
-        let before = inner.tasks.len();
-        inner.tasks.retain(|t| !is_terminal(t));
-        before - inner.tasks.len()
-    };
-    if removed > 0 {
-        publish(&app);
-    }
-    tracing::info!(count = removed, "peer receiving history cleared");
-    Ok(removed)
-}
-
-/// 暂停接收任务：两条路径都经 wire Pause 帧请求对端数据供方门控推流
-/// （连接保持、断点不丢），任务置 paused 不落终态：
+/// 暂停接收批：两条路径都经 wire Pause 帧请求对端数据供方门控推流
+/// （连接保持、断点不丢）；任务行的 paused 落态由插件归约 Paused 事件完成。
 ///
 /// - 拉取会话（本端是拉取发起方，对端 serve 供流）：经 pull 暂停句柄下发；
 /// - push 接收批（对端是发送方）：经接收会话暂停句柄下发。
-///
-/// 双端对同一传输任务对称：本端收/本端供两个视角都能本地暂停。返回是否命中。
-#[tauri::command]
-pub async fn pause_peer_receiving(app: AppHandle, batch_id: String) -> crate::Result<bool> {
-    // 顺序关键：先把任务落 paused 再下发 wire 命令。引擎终态事件（对端中断/
-    // 会话失败）可能在命令生效前后到达，若任务仍是 running，settle_terminal
-    // 会把它结算成 failed 并归档历史——真机现象「点暂停，任务直接变历史」。
-    // 已完成校验：字节已满的任务不允许暂停（UI 可能滞后显示未完成，实际已
-    // 传完落盘），直接结算 completed，避免误标 paused 卡住后续恢复
-    let already_complete = {
-        let state = app.state::<PeerReceiveState>();
-        let inner = state.inner.lock().expect("peer receive lock poisoned");
-        inner.tasks.iter().any(|t| {
-            t.batch_id == batch_id && !is_terminal(t) && receive_transfer_complete(t.total_bytes, t.transferred_bytes)
-        })
-    };
-    if already_complete {
-        settle_terminal(&app, &batch_id, TerminalState::Completed);
-        tracing::debug!(batch_id = %batch_id, "pause skipped: receive transfer already complete");
-        return Ok(true);
-    }
-    set_receive_pause_status(&app, &batch_id, true).await;
-    // 拉取会话：经 pull 暂停句柄写 Pause 帧（对端 serve 会话门控推流）
+pub(crate) async fn pause_peer_receiving(app: AppHandle, batch_id: String) -> crate::Result<bool> {
     let mut hit = super::peer_remote::pause_pull(&app, &batch_id).await;
     if !hit {
         // push 接收批：经接收会话暂停句柄写 Pause 帧（对端发送会话门控推流）
         hit = pause_receive_session(&app, &batch_id, true).await;
     }
-    if !hit {
-        // 无活动会话（已终态/会话未建立）：还原状态，避免呈现假暂停
-        set_receive_pause_status(&app, &batch_id, false).await;
-    }
     tracing::debug!(batch_id = %batch_id, hit, "pause receiving requested");
     Ok(hit)
 }
 
-/// 恢复暂停的接收任务：写 Resume 帧续流（对端数据供方解除门控）
-#[tauri::command]
-pub async fn resume_peer_receiving(app: AppHandle, batch_id: String) -> crate::Result<bool> {
+/// 恢复暂停的接收批：写 Resume 帧续流（对端数据供方解除门控）
+pub(crate) async fn resume_peer_receiving(app: AppHandle, batch_id: String) -> crate::Result<bool> {
     let mut hit = super::peer_remote::resume_pull(&app, &batch_id).await;
     if !hit {
         hit = pause_receive_session(&app, &batch_id, false).await;
-    }
-    if hit {
-        set_receive_pause_status(&app, &batch_id, false).await;
     }
     tracing::debug!(batch_id = %batch_id, hit, "resume receiving requested");
     Ok(hit)
@@ -811,46 +472,17 @@ async fn pause_receive_session(app: &AppHandle, batch_id: &str, paused: bool) ->
     }
 }
 
-/// 恢复全部暂停的接收任务（逐条经 wire Resume 帧续流；无活动会话的保持
-/// paused 等待取消/重试）。返回实际恢复数。由「全部继续」入口调用，使该
-/// 按钮对发送/接收两方向的任务一致生效。
-pub(crate) async fn resume_all_peer_receiving(app: &AppHandle) -> usize {
-    let ids: Vec<String> = {
-        let state = app.state::<PeerReceiveState>();
-        let inner = state.inner.lock().expect("peer receive lock poisoned");
-        inner
-            .tasks
-            .iter()
-            .filter(|t| t.status == "paused")
-            .map(|t| t.batch_id.clone())
-            .collect()
-    };
-    let mut resumed = 0usize;
-    for batch_id in ids {
-        if resume_peer_receiving(app.clone(), batch_id).await.unwrap_or(false) {
-            resumed += 1;
-        }
-    }
-    resumed
-}
+// 注（票 06）：原 `resume_all_peer_receiving`（宿主侧「全部继续」编排）随发送
+// 侧 `resume_all_peer_transfers` 一并退役——批量恢复编排归插件（逐条调
+// `resume-transfer` 原语），宿主不再持有跨方向的产品编排。
 
-// ==================== 设置命令面 ====================
-
-/// 当前接收设置
-#[tauri::command]
-pub async fn get_peer_receive_settings(app: AppHandle) -> crate::Result<PeerReceiveSettingsDto> {
-    let settings = ensure_settings_loaded(&app).await;
-    Ok(PeerReceiveSettingsDto {
-        policy_mode: settings.policy_mode,
-        ask_timeout_secs: settings.ask_timeout_secs,
-        encryption_enabled: settings.encryption_enabled,
-        concurrency: settings.concurrency,
-    })
-}
+// ==================== 策略闸门设置面 ====================
 
 /// 更新接收策略与询问超时（校验后持久化 + 运行中节点热生效）
-#[tauri::command]
-pub async fn set_peer_receive_policy(app: AppHandle, mode: String, timeout_secs: u64) -> crate::Result<()> {
+///
+/// 真入口 = host-peer `set-receive-policy`（票 10 起无前端命令面；设置真源在
+/// 插件侧 settings store，本函数只写引擎闸门副本）
+pub(crate) async fn set_peer_receive_policy(app: AppHandle, mode: String, timeout_secs: u64) -> crate::Result<()> {
     if !matches!(mode.as_str(), POLICY_ASK | POLICY_ALWAYS_ACCEPT | POLICY_ALWAYS_DENY) {
         return Err(crate::AppError::InvalidInput(format!(
             "set receive policy: unknown mode '{mode}'"
@@ -870,52 +502,84 @@ pub async fn set_peer_receive_policy(app: AppHandle, mode: String, timeout_secs:
     Ok(())
 }
 
-/// 设置发送加密开关（应用层 AES-256-GCM；接收端经 Offer 加密头自动解密）。
-/// 仅持久化：发送会话在发起时读开关，无需热更新接收侧运行时配置。
-#[tauri::command]
-pub async fn set_peer_transfer_encryption(app: AppHandle, enabled: bool) -> crate::Result<()> {
-    let mut settings = ensure_settings_loaded(&app).await;
-    settings.encryption_enabled = enabled;
-    apply_settings(&app, &settings).await;
-    tracing::info!(enabled, "transfer encryption toggled");
-    Ok(())
-}
-
-/// 设置发送方向并发上限（持久化；仅影响后续排队调度，无需热更新运行时）
-#[tauri::command]
-pub async fn set_peer_transfer_concurrency(app: AppHandle, concurrency: u8) -> crate::Result<()> {
-    validate_concurrency(concurrency).map_err(crate::AppError::InvalidInput)?;
-    let mut settings = ensure_settings_loaded(&app).await;
-    if settings.concurrency == concurrency {
-        return Ok(());
-    }
-    settings.concurrency = concurrency;
-    apply_settings(&app, &settings).await;
-    tracing::info!(concurrency, "transfer concurrency updated");
-    Ok(())
-}
+// 注（票 10）：`get_peer_receive_settings` / `set_peer_transfer_encryption` /
+// `set_peer_transfer_concurrency` 三个前端命令面随本票退役——设置真源在插件
+// settings store，宿主副本只服务引擎闸门（策略 / 落点）与引擎侧拉取编排：
+// - 加密开关的裁决权在插件（`send-files` 载荷逐项带 `encrypt`），宿主字段只
+//   作为「载荷未带 encrypt 时的兜底」，退役写入侧后该兜底恒为 false；
+// - 拉取并发上限的写入侧同时消失（拉取编排本身仍是宿主 B2 遗留，见 spec
+//   票 09 §5.2），引擎读值退化为「磁盘既有值或缺省 3」，无用户可见回退
+//   （票 06/07 后前端已无该命令的消费者）。
+// 两个字段本身保留：它们仍被引擎侧读取，且是旧安装的持久化兼容位。
 
 /// 应用新设置：持久化 + 运行中处理器热更新（以装配快照为基底只换策略）
 async fn apply_settings(app: &AppHandle, settings: &PeerTransferSettings) {
     let state = app.state::<PeerReceiveState>();
-    state.inner.lock().expect("peer receive lock poisoned").settings = Some(settings.clone());
+    *state.settings.lock().expect("peer receive settings lock poisoned") = Some(settings.clone());
     persist_settings(app, settings).await;
 
     let mut runtime = state.runtime.lock().await;
     if let Some((handler, base)) = runtime.as_ref() {
         let mut config = base.clone();
         config.policy = settings.build_policy();
+        // 下载落点热生效：None = 恢复装配时缺省（app 私有下载目录），票 04
+        config.download_dir = settings
+            .download_dir
+            .as_deref()
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| base.download_dir.clone());
         handler.update_transfer_config(config.clone());
         *runtime = Some((Arc::clone(handler), config));
     }
 }
 
+/// 更换接收落点目录（host-peer `set-download-dir` 引擎入口，票 04；None = 恢复
+/// 缺省 app 私有下载目录）。目录即时创建；运行中节点热生效（经 apply_settings）
+pub(crate) async fn set_peer_download_dir(app: &AppHandle, path: Option<String>) -> crate::Result<()> {
+    let dir = match path.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+        Some(d) => {
+            tokio::fs::create_dir_all(d).await.map_err(|e| {
+                crate::AppError::Io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("create download dir '{d}' failed: {e}"),
+                ))
+            })?;
+            Some(d.to_string())
+        }
+        None => None,
+    };
+    let mut settings = ensure_settings_loaded(app).await;
+    settings.download_dir = dir;
+    apply_settings(app, &settings).await;
+    tracing::info!(dir = ?settings.download_dir, "receive download dir updated");
+    Ok(())
+}
+
+/// 活跃接收批投影（host-peer `active-transfers` 的 receive 段，票 04）：pending
+/// 询问表投影——仅引擎会话事实（batchId/status="pending"）。移动端 pending 表
+/// 不持有 total_size（桌面 offer 有），显性给 0
+pub(crate) fn active_receive_rows(app: &AppHandle) -> Vec<serde_json::Value> {
+    let state = app.state::<PeerReceiveState>();
+    let pending = state.pending.lock().expect("peer receive pending lock poisoned");
+    let now = super::peer_events::now_ms();
+    pending
+        .keys()
+        .map(|batch_id| {
+            serde_json::json!({
+                "batchId": batch_id,
+                "direction": "receive",
+                "status": "pending",
+                "totalBytes": 0,
+                "transferredBytes": 0,
+                "rateBps": 0.0,
+                "updatedAtMs": now,
+            })
+        })
+        .collect()
+}
+
 // ==================== 测试 ====================
 
-// ==================== Tests ====================
-
-// 用例按功能拆至 `peer_receive/tests/`（本内联模块的子模块路径由 rustc
-// 自动解析到该目录；模块树 `peer_receive::tests::<文件>` 与内联形态等价，私有项可见性不受影响）。
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -927,8 +591,10 @@ mod tests {
             ask_timeout_secs: timeout,
             encryption_enabled: false,
             concurrency: DEFAULT_CONCURRENCY,
+            download_dir: None,
         }
     }
+
+    mod gate;
     mod settings_default_is_ask;
-    mod bug;
 }

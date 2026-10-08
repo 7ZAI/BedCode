@@ -118,3 +118,17 @@ export function useTheme() {
     cleanupTheme,
   }
 }
+
+/**
+ * 当前 App 是否深色（响应式：settings.ui.theme + 系统主题跟随）
+ *
+ * 供插件共享面（mobileApi.isDark，票 15）与终端主题解析使用；无副作用——
+ * 不安装监视器，系统主题监听由 setupTheme 建立（isSystemDark 由其驱动）。
+ */
+export function useIsDark() {
+  const settingsStore = useSettingsStore()
+  return computed(() => {
+    const theme = settingsStore.settings.ui.theme
+    return theme === 'system' ? isSystemDark.value : theme === 'dark'
+  })
+}

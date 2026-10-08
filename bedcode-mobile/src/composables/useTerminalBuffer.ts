@@ -2,7 +2,7 @@
  * Terminal Buffer Composable
  *
  * TerminalView 用的 composable — 管理会话终端输出订阅与实时输出写入。
- * 订阅由 Rust 链路持有（src-tauri/src/terminal_link.rs，票 05 新插件端点协议）：
+ * 订阅协议由终端插件持有（com.bedcode.terminal-session，票 12 迁入）：
  * 进入终端页 fresh subscribe → 插件回放环窗口（历史与实时同一条流，裸字节）；
  * 离开关闭连接。前端只消费段2 Channel 的裸字节并按本地计数回发 ack；
  * `ring_resync`（terminal-resync 事件）是唯一重锚信号（清屏 + 基准重置）。
@@ -117,7 +117,7 @@ export function useTerminalBuffer() {
     writeParsedDisposables.get(sessionId)?.dispose()
     writeParsedDisposables.set(sessionId, terminal.onWriteParsed(() => {
       // 链路调试（背压对账）：onWriteParsed 触发即回发 ack——计数 + 节流打点，
-      // offset 与 Rust terminal_link ack 回发日志对照验证反馈环
+      // offset 与终端插件 ack 回发日志对照验证反馈环（票 12）
       const stats = ackStats.get(sessionId) ?? { count: 0, lastLogAt: 0 }
       stats.count++
       const now = Date.now()
@@ -209,7 +209,7 @@ export function useTerminalBuffer() {
 
   /**
    * 订阅会话 — fresh subscribe（链路已在运行时重播环窗口）；
-   * 逻辑收敛到 store（Rust 命令驱动 + terminal-state 事件同步）
+   * 逻辑收敛到 store（插件命令驱动 + terminal-state 事件同步，票 12）
    *
    * @param sessionId - 会话 ID
    * @returns 始终 null（订阅确认经事件/对账异步到达）

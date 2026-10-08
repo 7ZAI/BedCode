@@ -2,7 +2,8 @@
 //!
 //! ## 判据（一条规则，两个可测形态）
 //!
-//! 拆分产物（`bedcode-desktop/packages/bedcode-*`）是**可复用引擎 crate**，不是应用。
+//! 拆分产物（仓库根 `packages/bedcode-*` 与 `bedcode-desktop/packages/bedcode-*`）是
+//! **可复用引擎 crate**，不是应用。
 //! 一个 crate 根的 `tests/` 目录 = 一个独立测试二进制 = 一个只能经 `pub` API 访问的
 //! **对外行为面**。它带来两重代价：
 //!
@@ -35,49 +36,54 @@
 //!
 //! ## 覆盖面按**目录约定**推导，不靠手写名单
 //!
-//! 治理面 = `bedcode-desktop/packages/` 下每个 `bedcode-*` 目录，**新增 crate 自动纳入**。
+//! 治理面 = **两个** `packages/`（仓库根 + `bedcode-desktop/packages/`）下每个
+//! `bedcode-*` 目录，**新增 crate 自动纳入**。2026-10-07 八个能力域 / 传输面 crate
+//! 从 `bedcode-desktop/packages/` 迁到仓库根 `packages/` 后，只扫单根会让另一半覆盖面
+//! 静默归零而锁照绿——故两个根都要枚举。
 //! 这是 `empty_dir_lock.rs` 的同一手法：手写名单天然是一条零成本后门（删掉一行覆盖面
 //! 少一块而锁照绿）。
 //!
 //! ## 登记例外桶
 //!
-//! 当前为空，即治理面 = `packages/` 下**全部** `bedcode-*` 目录（9 个 crate）。
-//!
+//! 当前 1 个条目：`bedcode-host-kit`（机制内核，自 2026-10-07 起与能力域 crate 同落
+//! 仓库根 `packages/`）——它的 `tests/forced_link.rs` + `tests/forced_link_absent.rs`
+//! 是**按设计**的跨 crate 集成测试（探针 fixture crate + 链接器二进制两个 target 钉「强制
+//! 引用行漏掉 ⇒ 注册丢失」两侧），搬迁要连 fixture 一起搬，另立票据。
 //! `bedcode-wasm-core` 曾是唯一条目（机制整核改造在途 + 本解析当时不支持平台条件段），
 //! 两点均已消解，条目已删——删条目即自动进入本锁管辖。桶刻意保留：它是「新增 crate
 //! 忘记登记」的唯一检出点（C-4 的反向断言要求每个 `bedcode-*` 目录都在治理面内）。
 //!
 //! ## 明确不在本锁宇宙内（且**不是**遗漏）
 //!
-//! - `bedcode-host-kit`（仓库根 `packages/`，不在 `bedcode-desktop/packages/` 下，与
-//!   `cross-end-tests` 等共享）：它的 `tests/forced_link.rs` + `tests/forced_link_absent.rs`
-//!   是**按设计**的跨 crate 集成测试（探针 fixture crate + 链接器二进制两个 target 钉「强制
-//!   引用行漏掉 ⇒ 注册丢失」两侧），搬迁要连 fixture 一起搬，另立票据。
 //! - `plugin-sdk-*` / `plugin-*-test` / `plugin-sdk-fixtures`：契约与夹具 crate，按设计
-//!   非 `bedcode-` 前缀。
+//!   非 `bedcode-` 前缀（迁根后它们是 `bedcode-desktop/packages/` 下的全部内容）。
 //! - `bedcode-server-base/src/` 内的 `#[cfg(test)]` 单元测试模块：**本锁要的就是它们**，
 //!   不在禁列。
 
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 // ==================== 登记表与扫描面 ====================
 
 /// 已知但**不**纳入管辖的 crate（须写明在办票据；处置完删条目即自动纳入）
 ///
-/// 与目录推导出的治理面合起来构成完整覆盖：治理面 = `packages/bedcode-*` 减去本桶。
-/// 没有本桶，「把 crate 排除出管辖」就是一条零成本后门。
+/// 与目录推导出的治理面合起来构成完整覆盖：治理面 = 两个 `packages/` 下全部
+/// `bedcode-*` 减去本桶。没有本桶，「把 crate 排除出管辖」就是一条零成本后门。
 ///
-/// **当前为空**：治理面 = `packages/` 下全部 9 个 `bedcode-*` crate。`bedcode-wasm-core`
-/// 曾登记在此，两条理由均已消解——① 整核改造票据完成；② 本锁的按行切段解析当时不支持
-/// 平台条件段，而它恰是当时唯一的带平台段 crate，`read_manifest` 会直接 panic（该 panic
-/// 文案原话：「请先把本解析升级到能处理该形态，而不是让锁失守」）。解析已升级为
-/// `normalize_target_header` 归一化，自检 C-1 钉住正反两侧。
-///
-/// 空桶不是「桶可以删掉」：它是「新增 crate 忘记登记」的唯一检出点（C-4 反向断言要求每个
-/// `bedcode-*` 目录都在治理面内），且条目自带理由文本，理由不写清楚就会变成垃圾桶。
-const PENDING_GOVERNANCE: &[(&str, &str)] = &[];
+/// **1 个条目**：`bedcode-host-kit`——机制内核 crate 的 `tests/forced_link.rs` +
+/// `tests/forced_link_absent.rs` 是**按设计**的跨 crate 集成测试（链接期属性只能经独立
+/// 测试二进制实证），与本锁「crate 根不得有对外测试面」的判据直接冲突。
+/// `bedcode-wasm-core` 曾登记在此，两条理由均已消解——① 整核改造票据完成；② 本锁的
+/// 按行切段解析当时不支持平台条件段，而它恰是当时唯一的带平台段 crate，`read_manifest`
+/// 会直接 panic（该 panic 文案原话：「请先把本解析升级到能处理该形态，而不是让锁失守」）。
+/// 解析已升级为 `normalize_target_header` 归一化，自检 C-1 钉住正反两侧。
+const PENDING_GOVERNANCE: &[(&str, &str)] = &[(
+    "bedcode-host-kit",
+    "机制内核：tests/forced_link.rs + forced_link_absent.rs 是按设计的跨 crate 集成测试\\n\\
+     （链接器二进制是唯一能实证 inventory 强制引用行的载体），crate 根测试面在此是\\n\\
+     机制的一部分；把它改造成经 pub API 的组合测试会丢掉链接期证据",
+)];
 
 /// crate 根下**禁止**存在的集成测试面目录（cargo 自动发现即编译成独立测试二进制）
 ///
@@ -122,7 +128,8 @@ fn crate_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
-/// `bedcode-desktop/packages/`
+/// 桌面端 `packages/`（2026-10-08 起仅剩 `plugin-*` 契约与夹具 crate，无 `bedcode-*`；
+/// 保留枚举是为了推导面不缩水——未来若再落回一个 `bedcode-*` 目录会被治理面抓到）
 fn packages_dir() -> PathBuf {
     crate_root()
         .parent()
@@ -130,27 +137,55 @@ fn packages_dir() -> PathBuf {
         .join("packages")
 }
 
-/// 推导治理面：`packages/` 下每个 `bedcode-*` 目录，减去 `PENDING_GOVERNANCE`
+/// 仓库根 `packages/`（机制内核 `bedcode-host-kit`、8 个能力域 / 传输面 crate
+/// 自 2026-10-07 起、整核本体 `bedcode-wasm-core` 自 2026-10-08 起落此处）
+fn repo_packages_dir() -> PathBuf {
+    crate_root()
+        .parent()
+        .and_then(Path::parent)
+        .expect("bedcode-desktop 的上级应是仓库根")
+        .join("packages")
+}
+
+/// 治理面推导所枚举的根目录（**两个**都要：只扫一个 ⇒ 另一半覆盖面静默归零）
+fn packages_dirs() -> Vec<PathBuf> {
+    vec![repo_packages_dir(), packages_dir()]
+}
+
+/// 按 crate 名解析目录：逐根找，**找不到即 panic**（推导面静默空转是本锁最坏的形态）
+fn crate_dir(crate_name: &str) -> PathBuf {
+    for root in packages_dirs() {
+        let candidate = root.join(crate_name);
+        if candidate.is_dir() {
+            return candidate;
+        }
+    }
+    panic!("crate `{crate_name}` 在两个根下都找不到 —— crate 改名或移出必须同改本锁的推导规则")
+}
+
+/// 推导治理面：两个 `packages/` 下每个 `bedcode-*` 目录，减去 `PENDING_GOVERNANCE`
 fn governed_crates() -> Vec<String> {
     let mut out = Vec::new();
-    let entries = fs::read_dir(packages_dir())
-        .unwrap_or_else(|e| panic!("读不到 {} —— 扫描器空转，本锁失效：{e}", packages_dir().display()));
-    for entry in entries.filter_map(|e| e.ok()) {
-        let name = entry.file_name().to_string_lossy().to_string();
-        if !name.starts_with(INTERNAL_CRATE_PREFIX) || !entry.path().is_dir() {
-            continue;
+    for root in packages_dirs() {
+        let entries =
+            fs::read_dir(&root).unwrap_or_else(|e| panic!("读不到 {} —— 扫描器空转，本锁失效：{e}", root.display()));
+        for entry in entries.filter_map(|e| e.ok()) {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !name.starts_with(INTERNAL_CRATE_PREFIX) || !entry.path().is_dir() {
+                continue;
+            }
+            if PENDING_GOVERNANCE.iter().any(|(n, _)| *n == name) {
+                continue;
+            }
+            out.push(name);
         }
-        if PENDING_GOVERNANCE.iter().any(|(n, _)| *n == name) {
-            continue;
-        }
-        out.push(name);
     }
     out.sort();
     out
 }
 
 fn read_manifest(crate_name: &str) -> String {
-    let path = packages_dir().join(crate_name).join("Cargo.toml");
+    let path = crate_dir(crate_name).join("Cargo.toml");
     fs::read_to_string(&path).unwrap_or_else(|e| panic!("读不到 {} —— 扫描器空转，本锁失效：{e}", path.display()))
 }
 
@@ -473,7 +508,7 @@ fn governed_crates_have_no_crate_level_integration_test_surfaces() {
 
     let mut violations: Vec<String> = Vec::new();
     for crate_name in &crates {
-        let root = packages_dir().join(crate_name);
+        let root = crate_dir(crate_name);
         for dir in FORBIDDEN_CRATE_TEST_DIRS {
             let path = root.join(dir);
             if path.is_dir() {
@@ -549,16 +584,21 @@ fn governed_crates_have_no_dev_only_internal_crate_dependencies() {
 /// ② `PENDING_GOVERNANCE` 变成垃圾桶（条目不再需要却留着 = 覆盖面静默少一块）。
 #[test]
 fn governance_coverage_is_derived_and_pending_bucket_cannot_rot() {
-    let discovered: Vec<String> = fs::read_dir(packages_dir())
-        .unwrap_or_else(|e| panic!("读不到 {}：{e}", packages_dir().display()))
-        .filter_map(|e| e.ok())
-        .map(|e| e.file_name().to_string_lossy().to_string())
-        .filter(|n| n.starts_with(INTERNAL_CRATE_PREFIX) && packages_dir().join(n).is_dir())
+    let discovered: Vec<String> = packages_dirs()
+        .iter()
+        .flat_map(|root| {
+            fs::read_dir(root)
+                .unwrap_or_else(|e| panic!("读不到 {}：{e}", root.display()))
+                .filter_map(|e| e.ok())
+                .map(|e| e.file_name().to_string_lossy().to_string())
+                .filter(|n| n.starts_with(INTERNAL_CRATE_PREFIX) && root.join(n).is_dir())
+                .collect::<Vec<_>>()
+        })
         .collect();
 
     assert!(
         !discovered.is_empty(),
-        "`packages/` 下没有任何 `bedcode-*` 目录 —— 目录推导落空，本锁必须失效报错"
+        "两个 `packages/` 下没有任何 `bedcode-*` 目录 —— 目录推导落空，本锁必须失效报错"
     );
     for (name, reason) in PENDING_GOVERNANCE {
         assert!(
@@ -572,12 +612,12 @@ fn governance_coverage_is_derived_and_pending_bucket_cannot_rot() {
     }
 
     for crate_name in governed_crates() {
-        let manifest_path = packages_dir().join(&crate_name).join("Cargo.toml");
+        let manifest_path = crate_dir(&crate_name).join("Cargo.toml");
         assert!(
             manifest_path.is_file(),
             "`{crate_name}` 没有 Cargo.toml —— 清单解析会 panic，本锁对该 crate 失效"
         );
-        let src = packages_dir().join(&crate_name).join("src");
+        let src = crate_dir(&crate_name).join("src");
         assert!(
             src.is_dir(),
             "`{crate_name}` 没有 src/ 目录 —— crate 被搬走或改名，必须同改本锁的推导规则"
