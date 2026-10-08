@@ -10,7 +10,6 @@ import type {
   PluginInfo,
   Disposable,
   CommandRegistry,
-  TerminalAPI,
   SessionAPI,
   UIRegistry,
   EventAPI,
@@ -120,33 +119,13 @@ export function createPluginContext(info: PluginInfo): PluginContext {
     },
   }
 
-  // ==================== TerminalAPI ====================
-  const terminal: TerminalAPI = {
-    async sendInput(sessionId: string, text: string): Promise<void> {
-      requirePermission('terminal.sendInput')
-      // 票 04：输入迁桌面 HTTP（`POST /api/sessions/{id}/input`，桌面端翻译
-      // specialKey）；权限判定不变，旧 WS `Message` 信封链路已退役
-      const { httpSendSessionInput } = await import('@/composables/useHttpApi')
-      const result = await httpSendSessionInput(sessionId, text)
-      if (result.code !== 0) {
-        throw new Error(result.message || 'Send input failed')
-      }
-    },
-    onOutput(handler: (sessionId: string, data: string) => void): Disposable {
-      requirePermission('terminal.onOutput')
-      const disposable = pluginEvents.on(info.id, 'terminal:output', handler)
-      disposables.push(disposable)
-      return disposable
-    },
-  }
-
   // ==================== SessionAPI ====================
   const session: SessionAPI = {
     async list(): Promise<any[]> {
       requirePermission('session.list')
       // 票 04：会话列表迁桌面 HTTP（`GET /api/sessions`）；权限判定不变
-      const { httpListSessions } = await import('@/composables/useHttpApi')
-      const result = await httpListSessions()
+      const { listSessions } = await import('@/plugin/sessionCommands')
+      const result = await listSessions()
       if (result.code === 0 && result.data) {
         return result.data.sessions || []
       }
@@ -359,16 +338,6 @@ export function createPluginContext(info: PluginInfo): PluginContext {
       disposables.push(disposable)
       return disposable
     },
-    onTerminalInput(handler: (sessionId: string, data: string) => void): Disposable {
-      const disposable = pluginEvents.on(info.id, 'plugin:lifecycle:terminalInput', (payload: any) => handler(payload.sessionId, payload.data))
-      disposables.push(disposable)
-      return disposable
-    },
-    onTerminalOutput(handler: (sessionId: string, data: string) => void): Disposable {
-      const disposable = pluginEvents.on(info.id, 'plugin:lifecycle:terminalOutput', (payload: any) => handler(payload.sessionId, payload.data))
-      disposables.push(disposable)
-      return disposable
-    },
   }
 
   // ==================== LoggerAPI ====================
@@ -427,7 +396,6 @@ export function createPluginContext(info: PluginInfo): PluginContext {
   context = {
     id: info.id,
     commands,
-    terminal,
     session,
     ui,
     events,

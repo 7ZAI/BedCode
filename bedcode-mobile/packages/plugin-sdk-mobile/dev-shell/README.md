@@ -58,7 +58,7 @@ BEDCODE_DEV_PLUGINS="<插件目录>[::<入口文件>]" pnpm exec vite --config <
 | 手机框 | 390×844 手机尺寸（工作台右上角开关），关闭后全宽便于 DevTools 模拟 |
 | 底部导航 | 内置三项 + 插件 `ui.registerNavTab` 动态追加 |
 | 工具箱 | 插件 `registerToolboxPage` 入口网格（含自定义 entry 卡片） |
-| 模拟终端 | 输入发送（触发 `onTerminalInput`）、模拟输出（触发 `onOutput`/`onTerminalOutput`）、新建/停止会话、连接/断开、认证成功（触发对应 lifecycle）；插件终端工具栏项渲染在顶部；底部展示 mobileApi 任务队列 mock |
+| 模拟终端 | 输入发送（记录到会话输入行）、模拟输出（触发 `terminal:output` 事件，供 `openTerminalStream` mock 消费）、新建/停止会话、连接/断开、认证成功（触发对应 lifecycle）；插件终端工具栏项渲染在顶部；底部展示 mobileApi 任务队列 mock |
 | 插件页 | 状态徽章（激活/错误）、激活/停用、设置区/路由/文件服务挂载一览 |
 | 日志面板 | `context.logger` + 生命周期 + 加载错误，右下角浮层，warn/error 过滤 |
 | 对话框 | `context.dialogs` 全量实现（dialog/confirm/prompt/toast），移动端样式 |
@@ -68,7 +68,7 @@ BEDCODE_DEV_PLUGINS="<插件目录>[::<入口文件>]" pnpm exec vite --config <
 | API | 浏览器行为 |
 |---|---|
 | `commands.execute` | 仅执行插件内 `register` 的前端 handler；**WASM 后端命令不可用**（记 warn 日志），需真机验证 |
-| `terminal` / `session` / `lifecycle` | 由模拟终端页面驱动，事件名与宿主一致 |
+| `session` / `lifecycle` | 由模拟终端页面驱动，事件名与宿主一致（`terminal` API 已随票 15 阶段 B 退役） |
 | `storage` | localStorage 持久化（`bedcode-dev-shell:{pluginId}:{key}`） |
 | `fileService` | mount 为内存注册表（插件页可见）；pick 系列弹输入框返回模拟路径；`getPeerInfo` 返回 null |
 | `notifications` | 浏览器 Notification（未授权时降级 toast） |

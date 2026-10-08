@@ -84,9 +84,7 @@
  * 底部弹出式确认对话框，支持 danger/warning/info 变体、loading 状态
  * 使用 Teleport + Transition，遵循 z-50 层级规范
  */
-import { t } from '../host'
-
-
+// 文案全部由 props 注入（本组件无内建 t 调用）
 
 const props = withDefaults(defineProps<{
   modelValue: boolean

@@ -95,10 +95,8 @@ export interface RouteContribution {
   component: string
 }
 
-/** 终端扩展点 */
+/** 终端扩展点（inputHandlers/outputParsers 已随票 15 阶段 B 退役——terminal-hooks 删面） */
 export interface TerminalContribution {
-  inputHandlers: string[]
-  outputParsers: string[]
   toolbarItems: TerminalToolbarItemContribution[]
 }
 
@@ -123,7 +121,7 @@ export interface ConfigProperty {
   default?: any
 }
 
-/** 生命周期声明 */
+/** 生命周期声明（onTerminalInput/onTerminalOutput 已随票 15 阶段 B 退役） */
 export interface LifecycleContribution {
   onStartup?: boolean
   onShutdown?: boolean
@@ -131,8 +129,6 @@ export interface LifecycleContribution {
   onDisconnect?: boolean
   onSessionCreated?: boolean
   onSessionStopped?: boolean
-  onTerminalInput?: boolean
-  onTerminalOutput?: boolean
 }
 
 // ==================== UI 描述符 ====================
@@ -330,12 +326,6 @@ export interface CommandRegistry {
   execute(id: string, ...args: any[]): Promise<any>
 }
 
-/** 终端 API */
-export interface TerminalAPI {
-  sendInput(sessionId: string, text: string): Promise<void>
-  onOutput(handler: (sessionId: string, data: string) => void): Disposable
-}
-
 /** 会话 API */
 export interface SessionAPI {
   list(): Promise<any[]>
@@ -492,7 +482,7 @@ export interface I18nAPI {
   t(key: string, params?: Record<string, unknown>): string
 }
 
-/** 生命周期 API */
+/** 生命周期 API（onTerminalInput/onTerminalOutput 已随票 15 阶段 B 退役） */
 export interface LifecycleAPI {
   onAppStartup(handler: () => void): Disposable
   onAppShutdown(handler: () => void): Disposable
@@ -500,15 +490,12 @@ export interface LifecycleAPI {
   onDisconnect(handler: (reason: string) => void): Disposable
   onSessionCreated(handler: (sessionId: string) => void): Disposable
   onSessionStopped(handler: (sessionId: string) => void): Disposable
-  onTerminalInput(handler: (sessionId: string, data: string) => void): Disposable
-  onTerminalOutput(handler: (sessionId: string, data: string) => void): Disposable
 }
 
 /** 插件上下文 */
 export interface PluginContext {
   readonly id: string
   readonly commands: CommandRegistry
-  readonly terminal: TerminalAPI
   readonly session: SessionAPI
   readonly ui: UIRegistry
   readonly events: EventAPI

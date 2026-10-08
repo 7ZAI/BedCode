@@ -27,7 +27,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import type { RemoteDevice } from '@/composables/model'
 import { flushAsync, loadFreshModule, resetLocalStorage, clearEventHandlers } from './helpers'
 import { makeAuthCredentials, makeSessionSummary } from '@/__tests__/fixtures/index'
-import { useTerminalBufferStore } from '@/stores/terminalBuffer'
+
 
 // ==================== mock Tauri 边界 ====================
 
@@ -264,13 +264,6 @@ describe('连接流：useMobileConnection × useHttpApi × terminalBuffer store'
     await flushAsync()
     expect(conn.connectionStatus.value).toBe('connected')
 
-    // 订阅信念必须清除：服务端订阅随连接关闭，不清则重连后的重订阅会被
-    // subscribed=true 跳过，桌面端新连接无订阅 → 终端只有历史没有实时
-    const bufferStore = useTerminalBufferStore()
-    bufferStore.ensureBuffer('s1')
-    bufferStore.markSubscribed('s1')
-    expect(bufferStore.getBuffer('s1')?.subscribed).toBe(true)
-
     vi.mocked(toast.error).mockClear()
     vi.mocked(toast.warning).mockClear()
     await emit('ws_unexpected_disconnect', { reason: 'Connection reset' })
@@ -285,10 +278,8 @@ describe('连接流：useMobileConnection × useHttpApi × terminalBuffer store'
     // 但 Toast 不应直接标注「连接已断开」作为最终态：可重连断开应指向正在恢复
     expect(vi.mocked(toast.warning).mock.calls.at(-1)?.[0]).toContain('连接中断，正在自动重连')
     expect(vi.mocked(toast.error).mock.calls.some(([message]) => String(message).includes('连接已断开'))).toBe(false)
-    expect(
-      bufferStore.getBuffer('s1')?.subscribed,
-      '断连后订阅信念未清除：重连后的重订阅会被 skipped，终端只剩历史没实时',
-    ).toBe(false)
+    // 订阅信念清理已迁终端插件（票 15：onSessionEvent disconnected，契约测试在
+    // plugins/terminal-session/src/terminal/__tests__/）
   })
 
   it('认证类致命关闭（fatal）：最后一次提示是「需重新配对」而非普通断连', async () => {
@@ -485,31 +476,25 @@ describe('连接流：useMobileConnection × useHttpApi × terminalBuffer store'
     expect(conn.isConnecting.value).toBe(false)
   })
 
-  it('事件通道就绪：ws_event_channel_ready → 触发一次 HTTP 对账（重连期间变化靠全量拉取补齐，票 03）', async () => {
+  it('事件通道就绪：ws_event_channel_ready → 触发一次会话对账（重连期间变化靠全量拉取补齐，票 03）', async () => {
     // 通道就绪 = session-control 极简认证首帧发出（Rust 发射）；事件不重放，
-    // 对账 = 拉 /api/sessions 全量 → store 收敛（消费端按 id 去重/状态收敛）
+    // 对账 = 拉会话全量 → store 收敛（消费端按 id 去重/状态收敛）。
+    // 票 13：会话控制面迁插件命令（plugin_invoke → com.bedcode.terminal-session）
     const sessions = [
       makeSessionSummary({ id: 's1', name: 'dev', status: 'running' }),
       makeSessionSummary({ id: 's2', name: 'itest', status: 'stopped' }),
     ]
 
-    // 先建立连接：setApiBaseUrl 在 fresh 模块实例上生效（基址是 request() 前置）
     await conn.connect(DEVICE)
     await flushAsync()
 
     // 通道就绪后换装 sessions 响应（默认 mock 只答 /api/health 探测波形）
     mockInvoke.mockImplementation((cmd: string, args?: any) => {
-      if (cmd === 'http_request') {
-        const url: string = args?.request?.url || ''
-        if (url.endsWith('/api/sessions')) {
-          return Promise.resolve({
-            status: 200,
-            statusText: 'OK',
-            headers: {},
-            bodyText: JSON.stringify({ code: 0, data: { sessions } }),
-          })
+      if (cmd === 'plugin_invoke') {
+        if (args?.command === 'terminal-session.list-sessions') {
+          return Promise.resolve({ code: 0, message: 'ok', data: { sessions } })
         }
-        return Promise.resolve({ status: 404, statusText: 'Not Found', headers: {}, bodyText: '' })
+        return Promise.resolve(undefined)
       }
       return Promise.resolve(undefined)
     })
@@ -517,64 +502,44 @@ describe('连接流：useMobileConnection × useHttpApi × terminalBuffer store'
     await emit('ws_event_channel_ready')
     await flushAsync()
 
-    // 恰好一次 HTTP 全量拉取 → 列表落入 activeSessions
-    const sessionCalls = invokeCalls('http_request').filter((c) =>
-      String((c[0] as any)?.request?.url ?? '').endsWith('/api/sessions'),
+    // 恰好一次插件命令全量拉取 → 列表落入 activeSessions
+    const sessionCalls = mockInvoke.mock.calls.filter(
+      ([c, a]: any[]) => c === 'plugin_invoke' && a?.command === 'terminal-session.list-sessions',
     )
     expect(sessionCalls).toHaveLength(1)
     expect(conn.activeSessions.value.map((s: any) => s.id)).toEqual(['s1', 's2'])
   })
 
-  it('sendInput 经 HTTP 输入面：成功形状 + 载荷透传（data/specialKey 原样携带）', async () => {
-    // 控制面迁 HTTP 后输入走 POST /api/sessions/{id}/input（票 04）；
-    // specialKey 原样透传（桌面端翻译），本端不解释
-    const { setApiBaseUrl } = await import('@/composables/useHttpApi')
-    setApiBaseUrl(DEVICE.address, DEVICE.port)
-
+  it('sendInput 经插件命令输入面：成功形状 + 载荷透传（data/specialKey 原样携带）', async () => {
+    // 票 13：HTTP 输入通道随会话控制迁插件（terminal-session.send-http-input，
+    // 插件经 host-http + jwtAuth 直发桌面）；specialKey 原样透传（桌面端翻译），
+    // 本端不解释
     mockInvoke.mockImplementation((cmd: string, args?: any) => {
-      if (cmd === 'http_request') {
-        const url: string = args?.request?.url || ''
-        if (url.endsWith('/api/sessions/s1/input')) {
-          return Promise.resolve({
-            status: 200,
-            statusText: 'OK',
-            headers: {},
-            bodyText: JSON.stringify({ code: 0, message: 'ok' }),
-          })
+      if (cmd === 'plugin_invoke') {
+        if (args?.command === 'terminal-session.send-http-input') {
+          return Promise.resolve({ code: 0, message: 'ok' })
         }
-        return Promise.resolve({ status: 404, statusText: 'Not Found', headers: {}, bodyText: '' })
+        return Promise.resolve(undefined)
       }
       return Promise.resolve(undefined)
     })
 
     await conn.sendInput('s1', 'ls -la', 'ctrl+c')
 
-    const calls = invokeCalls('http_request').filter((c) =>
-      String((c[0] as any)?.request?.url ?? '').endsWith('/api/sessions/s1/input'),
+    const calls = mockInvoke.mock.calls.filter(
+      ([c, a]: any[]) => c === 'plugin_invoke' && a?.command === 'terminal-session.send-http-input',
     )
     expect(calls).toHaveLength(1)
-    const req = (calls[0][0] as any).request
-    expect(req.method).toBe('POST')
-    expect(req.url).toBe('http://192.168.1.100:8765/api/sessions/s1/input')
-    expect(JSON.parse(req.body)).toEqual({ data: 'ls -la', specialKey: 'ctrl+c' })
+    expect((calls[0][1] as any).args).toEqual({ sessionId: 's1', data: 'ls -la', specialKey: 'ctrl+c' })
   })
 
-  it('sendInput 业务错误：HTTP 200 + {code:1002} → sendInput throw（不静默吞错）', async () => {
-    const { setApiBaseUrl } = await import('@/composables/useHttpApi')
-    setApiBaseUrl(DEVICE.address, DEVICE.port)
-
+  it('sendInput 业务错误：code!=0 → sendInput throw（不静默吞错）', async () => {
     mockInvoke.mockImplementation((cmd: string, args?: any) => {
-      if (cmd === 'http_request') {
-        const url: string = args?.request?.url || ''
-        if (url.endsWith('/api/sessions/s1/input')) {
-          return Promise.resolve({
-            status: 200,
-            statusText: 'OK',
-            headers: {},
-            bodyText: JSON.stringify({ code: 1002, message: 'session not found' }),
-          })
+      if (cmd === 'plugin_invoke') {
+        if (args?.command === 'terminal-session.send-http-input') {
+          return Promise.resolve({ code: 1002, message: 'session not found' })
         }
-        return Promise.resolve({ status: 404, statusText: 'Not Found', headers: {}, bodyText: '' })
+        return Promise.resolve(undefined)
       }
       return Promise.resolve(undefined)
     })

@@ -8,7 +8,8 @@
  */
 
 import { ref } from 'vue'
-import { httpSendSessionInput, httpTaskQueueList } from '@/composables/useHttpApi'
+import { httpTaskQueueList } from '@/composables/useHttpApi'
+import { sendHttpInput } from '@/plugin/sessionCommands'
 import {
   enqueue,
   taskDone,
@@ -99,7 +100,7 @@ export async function deleteTask(id: string) {
 
 /** 发送任务内容到终端（不按回车）——不改变执行状态（未真正执行） */
 export async function sendTask(task: PresetTask, sessionId: string) {
-  const result = await httpSendSessionInput(sessionId, task.content)
+  const result = await sendHttpInput(sessionId, task.content)
   if (result.code !== 0) {
     throw new Error('mobile.toolbox.sendFailed')
   }
@@ -107,7 +108,7 @@ export async function sendTask(task: PresetTask, sessionId: string) {
 
 /** 执行任务内容到终端（按回车）；成功即本地标记已执行（manualExecute） */
 export async function executeTask(task: PresetTask, sessionId: string) {
-  const result = await httpSendSessionInput(sessionId, task.content, 'enter')
+  const result = await sendHttpInput(sessionId, task.content, 'enter')
   if (result.code !== 0) {
     throw new Error('mobile.toolbox.sendFailed')
   }

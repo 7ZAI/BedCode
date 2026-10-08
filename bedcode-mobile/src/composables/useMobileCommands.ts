@@ -433,8 +433,8 @@ export function useMobileCommands() {
     wsVerifyPairingCode,
     wsAuthenticateWithQr,
 
-    // Session（票 04：会话控制/终端输入已迁 HTTP，旧 WS 信封命令退役删除——
-    // 会话列表经 httpListSessions，输入经 httpSendSessionInput）
+    // Session（票 13：会话控制整体迁插件 com.bedcode.terminal-session——
+    // 列表/起停删/直发输入经 src/plugin/sessionCommands.ts 的 plugin_invoke 命令面）
 
     // Android-specific
     setScreenOrientation,
@@ -479,43 +479,20 @@ export function clearAuthCredentials() {
   localStorage.removeItem('auth_fingerprint')
   localStorage.removeItem('auth_session_token')
 }
-// ==================== Terminal Link（票 12：订阅协议客户端已迁插件） ====================
-// 协议面（订阅/退订/输入/ack/状态）走 `com.bedcode.terminal-session` 插件命令面
-// （plugin_invoke）；段2 页面 Channel 登记（terminal_page_subscribe/unsubscribe）
-// 是 Tauri 传输机制，保留为宿主命令。插件未激活时 plugin_invoke 显性报错
-// （fail-visible，对齐「插件未激活时前端命令面显性报错」）。
+// ==================== 终端页面通道（票 15 收敛：协议面已入插件内部） ====================
+// 订阅协议面（订阅/退订/输入/ack/状态）随终端 UI 域迁入
+// `com.bedcode.terminal-session` 插件前端（插件内部经 context.commands 调用）；
+// 宿主只保留**页面 Channel 传输机制**——`terminal_page_subscribe/unsubscribe`
+// 是 Tauri 传输登记面，由宿主 `plugin/terminal-stream.ts`
+// （mobileApi.openTerminalStream）封装给插件消费。
 
-/** 终端订阅协议客户端所在插件的命令 id（D6 选项 A：与桌面同名，职责不同） */
+/** 终端能力所在插件的命令 id（D6 选项 A：与桌面同名，职责不同；票 14 认证编排亦经此插件） */
 const TERMINAL_PLUGIN_ID = 'com.bedcode.terminal-session'
 
 /**
- * 订阅会话终端输出（进入终端页 / 预加载触发）。fresh subscribe 语义：链路已在
- * 运行时发 subscribe 帧重播环窗口；未建立时建连 + 订阅（认证由宿主代发）。
- * 意外断开由宿主自动重连，插件重连恢复后重新订阅（无续传语义）
- */
-export async function terminalSubscribe(sessionId: string): Promise<void> {
-  return invoke('plugin_invoke', {
-    pluginId: TERMINAL_PLUGIN_ID,
-    command: 'terminal-session.subscribe',
-    args: { sessionId },
-  })
-}
-
-/** 取消订阅（离开终端页 / 会话停止 / 手动断开）：关闭连接不再重连 */
-export async function terminalUnsubscribe(sessionId: string): Promise<void> {
-  return invoke('plugin_invoke', {
-    pluginId: TERMINAL_PLUGIN_ID,
-    command: 'terminal-session.unsubscribe',
-    args: { sessionId },
-  })
-}
-
-/**
- * 段2：订阅（进入终端页）— 携带页面级 Tauri Channel，Rust 经它以**裸字节**
- * 推送输出（帧的唯一出口；状态/重锚仍走全局事件）。
+ * 段2：登记页面级 Tauri Channel（输出帧唯一出口，裸字节推送）。
  *
  * 幂等，且不依赖链路是否已建立（通道与订阅意愿先于链路记录，链路建立后即生效）。
- *
  * 为什么用 Channel 而非全局事件：per-page 通道没有全局广播与事件名匹配开销，负载走
  * Raw 字节省掉 base64（-33% 体积）与 JSON 序列化/解析（与桌面端终端输出同路径）
  */
@@ -526,72 +503,7 @@ export async function terminalPageSubscribe(
   return invoke('terminal_page_subscribe', { sessionId, channel })
 }
 
-/** 段2：取消订阅（退出终端页）— 清空推送通道 */
+/** 段2：取消登记（退出终端页）— 清空推送通道 */
 export async function terminalPageUnsubscribe(sessionId: string): Promise<void> {
   return invoke('terminal_page_unsubscribe', { sessionId })
-}
-
-/** 全部取消订阅（设备手动断开 / 连接关闭） */
-export async function terminalUnsubscribeAll(): Promise<void> {
-  return invoke('plugin_invoke', {
-    pluginId: TERMINAL_PLUGIN_ID,
-    command: 'terminal-session.unsubscribe-all',
-    args: {},
-  })
-}
-
-/** 会话删除：清理插件侧链路与订阅态 */
-export async function terminalRemove(sessionId: string): Promise<void> {
-  return invoke('plugin_invoke', {
-    pluginId: TERMINAL_PLUGIN_ID,
-    command: 'terminal-session.remove',
-    args: { sessionId },
-  })
-}
-
-/**
- * 发送终端输入（前端 → 插件 → WS 帧 → 桌面端 PTY）。双形态：可打印文本
- * （data）→ `{"type":"input","data":"<UTF-8>"}`；特殊键（specialKey）→
- * 插件 keys 翻译 → binary 帧原始字节（投递失败上抛：半截输入护栏）
- */
-export async function terminalSendInput(
-  sessionId: string,
-  data: string,
-  specialKey?: string | null,
-): Promise<void> {
-  return invoke('plugin_invoke', {
-    pluginId: TERMINAL_PLUGIN_ID,
-    command: 'terminal-session.send-input',
-    args: { sessionId, data, specialKey: specialKey ?? null },
-  })
-}
-
-/** 渲染背压 ack：本地已渲染字节数推进插件侧 ack 水位（64KB 阈值节流回发桌面端） */
-export async function terminalAckRendered(sessionId: string, offset: number): Promise<void> {
-  return invoke('plugin_invoke', {
-    pluginId: TERMINAL_PLUGIN_ID,
-    command: 'terminal-session.ack-rendered',
-    args: { sessionId, offset },
-  })
-}
-
-/** Rust 侧链路状态（诊断/轮询） */
-export interface TerminalLinkState {
-  sessionId: string
-  phase: string
-  /** 本地已收字节（统计；重锚后归零） */
-  cursor: number
-  /** 前端已渲染字节（本地计数，ack 帧 offset 值） */
-  acked: number
-  stopped: boolean
-  /** 已收 subscribed（门控） */
-  subscribed: boolean
-}
-
-export async function terminalGetState(sessionId: string): Promise<TerminalLinkState> {
-  return invoke('plugin_invoke', {
-    pluginId: TERMINAL_PLUGIN_ID,
-    command: 'terminal-session.get-state',
-    args: { sessionId },
-  })
 }

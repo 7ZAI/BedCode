@@ -14,8 +14,6 @@ import { logger, t, toast } from '../host'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { writeClipboardText } from '../utils/clipboard'
-import { useToast } from '@/composables/useToast'
-import i18n from '@/locales'
 
 /// 长按阈值（毫秒）
 const LONG_PRESS_DURATION = 500

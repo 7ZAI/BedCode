@@ -213,28 +213,10 @@ export async function httpReauth(data: {
 }
 
 // ==================== Session API ====================
-
-export async function httpListSessions() {
-  return request<{ sessions: any[] }>('/api/sessions')
-}
-
-export async function httpStartSession(
-  configId: string,
-  size?: { cols: number; rows: number }
-) {
-  return request<{ sessionId: string; status: string }>(
-    '/api/sessions/start',
-    {
-      method: 'POST',
-      // size：本端终端组件按设备屏幕预算的默认网格，主机 PTY 以此为初始尺寸
-      body: JSON.stringify({ configId, cols: size?.cols, rows: size?.rows })
-    }
-  )
-}
-
-export async function httpStopSession(sessionId: string) {
-  return request(`/api/sessions/${sessionId}/stop`, { method: 'POST' })
-}
+// 票 13：list / start / stop / remove / input 已迁插件 `com.bedcode.terminal-session`
+// （见 `src/plugin/sessionCommands.ts`，经 host-http + jwtAuth 直连桌面）。
+// 本文件只保留 resize——终端 UI 域（票 15）经 `mobileApi.httpRequest` 消费，
+// 届时随该票收口。
 
 export async function httpResizeSession(
   sessionId: string,
@@ -245,18 +227,6 @@ export async function httpResizeSession(
   return request(`/api/sessions/${sessionId}/resize`, {
     method: 'POST',
     body: JSON.stringify({ cols, rows, force }),
-  })
-}
-
-export async function httpRemoveSession(sessionId: string) {
-  return request(`/api/sessions/${sessionId}/remove`, { method: 'DELETE' })
-}
-
-/** 通过 HTTP API 发送终端输入（绕过 WebSocket 阻塞） */
-export async function httpSendSessionInput(sessionId: string, data: string, specialKey?: string) {
-  return request(`/api/sessions/${sessionId}/input`, {
-    method: 'POST',
-    body: JSON.stringify({ data, specialKey: specialKey || null }),
   })
 }
 
@@ -664,13 +634,8 @@ export function useHttpApi() {
     httpVerifyPairingCode,
     httpQrConnect,
     httpReauth,
-    // Session
-    httpListSessions,
-    httpStartSession,
-    httpStopSession,
+    // Session（票 13：list/start/stop/remove/input 已迁插件，见 plugin/sessionCommands.ts）
     httpResizeSession,
-    httpRemoveSession,
-    httpSendSessionInput,
     // Config
     httpListConfigs,
     httpListQuickActions,

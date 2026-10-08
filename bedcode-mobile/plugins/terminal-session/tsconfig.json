@@ -19,5 +19,5 @@
     }
   },
   "include": ["src/**/*.ts", "src/**/*.vue"],
-  "exclude": ["node_modules", "rust"]
+  "exclude": ["node_modules", "rust", "src/**/__tests__/**"]
 }

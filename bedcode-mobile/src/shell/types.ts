@@ -35,7 +35,7 @@ export type ShellAppState =
 
 /** 单条权限的授予情况 */
 export interface ShellPermissionGrant {
-  /** 权限词，与移动端权限词汇真源一致（如 terminal:input / fs:write / bus） */
+  /** 权限词，与移动端权限词汇真源一致（如 terminal:output / fs:write / bus） */
   key: string
   /** 是否已授予 */
   granted: boolean

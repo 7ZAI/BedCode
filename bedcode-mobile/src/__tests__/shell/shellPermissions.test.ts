@@ -19,8 +19,14 @@ function grant(key: string, granted = true): ShellPermissionGrant {
 
 describe('权限文案映射', () => {
   it('should_mapToExistingI18nKey_when_permissionKnown', () => {
-    expect(permissionTitleKey('terminal:input')).toBe('mobile.plugin.perm.terminalInput.title')
+    expect(permissionTitleKey('terminal:output')).toBe('mobile.plugin.perm.terminalOutput.title')
     expect(permissionDescKey('fs:write')).toBe('mobile.plugin.perm.fsWrite.desc')
+  })
+
+  it('should_notMapRetiredTerminalInput_when_permissionRetired', () => {
+    // 票 15 阶段 B：terminal:input 权限位整面退役，文案映射一并移除
+    expect(permissionTitleKey('terminal:input')).toBeUndefined()
+    expect(permissionDescKey('terminal:input')).toBeUndefined()
   })
 
   it('should_returnUndefined_when_permissionUnknown', () => {
@@ -40,12 +46,12 @@ describe('锁定权限', () => {
 describe('权限分组', () => {
   it('should_groupByCapabilityDomain_when_permissionsMixed', () => {
     const groups = groupPermissions(
-      [grant('terminal:input'), grant('fs:read'), grant('bus'), grant('session:write')],
+      [grant('terminal:output'), grant('fs:read'), grant('bus'), grant('session:write')],
       'shell.permission.group.other',
     )
 
     expect(groups.map((g) => g.id)).toEqual(['terminal', 'data', 'interface'])
-    expect(groups[0].items.map((i) => i.key)).toEqual(['terminal:input', 'session:write'])
+    expect(groups[0].items.map((i) => i.key)).toEqual(['terminal:output', 'session:write'])
     expect(groups[1].items.map((i) => i.key)).toEqual(['fs:read'])
     expect(groups[2].items.map((i) => i.key)).toEqual(['bus'])
   })
@@ -83,7 +89,6 @@ describe('权限分组', () => {
         'session:read',
         'session:write',
         'storage',
-        'terminal:input',
         'terminal:output',
         'ui:input',
         'ui:navtab',

@@ -450,7 +450,6 @@ const inputBarStyle = computed(() => {
 // ==================== State ====================
 
 const assistStore = useInputAssistantStore()
-const toast = useToast()
 
 const inputRef = ref<HTMLTextAreaElement | null>(null)
 const shortcutsPanelRef = ref<HTMLElement | null>(null)

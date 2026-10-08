@@ -2,12 +2,15 @@
  * 会话流组合集成测试（L2 场景 4）
  *
  * 协作实体：真实 useMobileConnection（配置加载 / 会话启停 / sync 事件状态
- * 联动） + useHttpApi（HTTP REST：/api/configs、/api/sessions/*） +
- * terminalBuffer store（状态变更时的 buffer 联动：markSessionRunning /
- * markSessionStopped / clearBuffer）。
+ * 联动） + useHttpApi（配置 HTTP REST：/api/configs） +
+ * plugin/sessionCommands（会话控制：plugin_invoke → com.bedcode.terminal-session，
+ * 票 13 自宿主 HTTP 代理迁入）。
+ * 终端 buffer 联动（markSessionRunning / markSessionStopped / clearBuffer）已随
+ * 终端 UI 域迁终端插件（票 15），其契约测试在
+ * `plugins/terminal-session/src/terminal/__tests__/`。
  *
- * 测试 seam：mock invoke（http_request 按 URL 分发）+ 脚本化
- * ws_sync_* 事件驱动状态联动。
+ * 测试 seam：mock invoke（http_request 按 URL 分发配置面；plugin_invoke 按
+ * 命令 id 分发会话控制面）+ 脚本化 ws_sync_* 事件驱动状态联动。
  *
  * 契约注意：HTTP API 响应为 camelCase（wslDistro / workingDir，来自桌面端
  * HTTP 层），ws_sync_* 事件内嵌 DTO 为 snake_case（Rust serde）——两套形状
@@ -15,15 +18,14 @@
  * 手写 camelCase 对象）。
  *
  * 覆盖：配置加载（HTTP → sessionConfigs 映射）；启动会话 + sync created
- * 联动；状态变更（markSessionRunning）；停止（HTTP 本地状态 + sync stopped
- * 双通道）；删除（本地 + sync removed + buffer 清理）；配置同步增改删。
+ * 联动；状态变更（activeSessions 更新）；停止（HTTP 本地状态 + sync stopped
+ * 双通道）；删除（本地 + sync removed）；配置同步增改删。
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import type { RemoteDevice } from '@/composables/model'
 import { flushAsync, loadFreshModule, resetLocalStorage, clearEventHandlers, mockProxyResponse } from './helpers'
-import { useTerminalBufferStore } from '@/stores/terminalBuffer'
 import {
   makeSessionSummary,
   makeSessionConfigSummary,
@@ -82,6 +84,14 @@ function invokeCalls(cmd: string): unknown[][] {
   return mockInvoke.mock.calls.filter(([c]) => c === cmd).map((call) => call.slice(1))
 }
 
+/** 插件命令调用（plugin_invoke 的 args 按命令 id 过滤；票 13 会话控制面） */
+function pluginInvokeCalls(command: string): unknown[] {
+  return mockInvoke.mock.calls
+    .filter(([c]) => c === 'plugin_invoke')
+    .map(([, args]) => args)
+    .filter((args) => (args as { command?: string }).command === command)
+}
+
 /** HTTP API 响应形状（camelCase，桌面端 HTTP 层契约） */
 function httpConfig(cfg: ReturnType<typeof makeSessionConfigSummary>) {
   return {
@@ -94,7 +104,7 @@ function httpConfig(cfg: ReturnType<typeof makeSessionConfigSummary>) {
   }
 }
 
-/** http_request 按 URL 分发（invoke；返回 HttpProxyResponse 形状） */
+/** invoke 分发：http_request 按 URL（配置面）+ plugin_invoke 按命令 id（会话控制面，票 13） */
 function installProxyMock(): void {
   mockInvoke.mockImplementation((cmd: string, args: any) => {
     if (cmd === 'egress_declare_desktop_target') return Promise.resolve(null)
@@ -105,23 +115,25 @@ function installProxyMock(): void {
       if (url.endsWith('/api/health')) {
         return Promise.resolve(mockProxyResponse({ status: 'ok', port: 8765, uptime_secs: 120 }))
       }
-      // 会话列表 / 配置列表
+      // 配置列表（会话控制面已迁插件命令，票 13）
       if (url.endsWith('/api/configs') && method === 'GET') {
         return Promise.resolve(mockProxyResponse({ code: 0, message: 'ok', data: { configs: [httpConfig(makeSessionConfigSummary())] } }))
       }
-      if (url.endsWith('/api/sessions') && method === 'GET') {
-        return Promise.resolve(mockProxyResponse({ code: 0, message: 'ok', data: { sessions: [] } }))
-      }
-      if (url.endsWith('/api/sessions/start') && method === 'POST') {
-        return Promise.resolve(mockProxyResponse({ code: 0, message: 'ok', data: { sessionId: 'session-1', status: 'running' } }))
-      }
-      if (url.includes('/stop') && method === 'POST') {
-        return Promise.resolve(mockProxyResponse({ code: 0, message: 'ok' }))
-      }
-      if (url.includes('/remove') && method === 'DELETE') {
-        return Promise.resolve(mockProxyResponse({ code: 0, message: 'ok' }))
-      }
       return Promise.resolve(mockProxyResponse({ code: 0, message: 'ok' }))
+    }
+    if (cmd === 'plugin_invoke') {
+      // 会话控制命令面（com.bedcode.terminal-session；返回形状与退役前 HTTP 信封一致）
+      const command: string = args?.command || ''
+      if (command === 'terminal-session.list-sessions') {
+        return Promise.resolve({ code: 0, message: 'ok', data: { sessions: [] } })
+      }
+      if (command === 'terminal-session.start-session') {
+        return Promise.resolve({ code: 0, message: 'ok', data: { sessionId: 'session-1', status: 'running' } })
+      }
+      if (command === 'terminal-session.stop-session' || command === 'terminal-session.remove-session') {
+        return Promise.resolve({ code: 0, message: 'ok' })
+      }
+      return Promise.resolve(undefined)
     }
     return Promise.resolve(undefined)
   })
@@ -187,17 +199,19 @@ describe('会话流：useMobileConnection 会话管理 × useHttpApi × sync 事
   it('启动会话：HTTP /api/sessions/start → sync created 事件 → activeSessions 联动', async () => {
     await connectAndPair()
 
-    // 启动会话（HTTP 返回 sessionId）
+    // 启动会话（插件命令面返回 sessionId）
     const result = await conn.startSession('config-1')
     await flushAsync()
     expect(result.sessionId).toBe('session-1')
-    const startCall = invokeCalls('http_request').find(([args]) =>
-      (args as { request: { url: string } }).request.url.endsWith('/api/sessions/start'),
-    )!
-    expect((startCall[0] as { request: { method: string } }).request.method).toBe('POST')
-    expect((startCall[0] as { request: { body: string } }).request.body).toBe(
-      JSON.stringify({ configId: 'config-1' }),
-    )
+    // 票 13：会话控制经 plugin_invoke → com.bedcode.terminal-session（不再经 http_request）
+    const startCall = pluginInvokeCalls('terminal-session.start-session')[0] as
+      | { pluginId: string; args: { configId: string } }
+      | undefined
+    expect(startCall?.pluginId).toBe('com.bedcode.terminal-session')
+    expect(startCall?.args).toEqual({ configId: 'config-1' })
+    expect(invokeCalls('http_request').filter(([a]) =>
+      (a as { request: { url: string } }).request.url.includes('/api/sessions'),
+    )).toHaveLength(0)
 
     // 桌面端广播会话创建（sync 事件）→ 活跃会话列表联动
     const session = makeSessionSummary({ id: 'session-1', status: 'running' })
@@ -213,12 +227,8 @@ describe('会话流：useMobileConnection 会话管理 × useHttpApi × sync 事
     expect(conn.activeSessions.value).toHaveLength(1)
   })
 
-  it('状态变更联动：ws_sync_session_status_changed → activeSessions 状态更新 + buffer markSessionRunning', async () => {
+  it('状态变更联动：ws_sync_session_status_changed → activeSessions 状态更新（buffer 联动已迁终端插件，票 15）', async () => {
     await connectAndPair()
-    const bufferStore = useTerminalBufferStore()
-    bufferStore.ensureBuffer('session-1')
-    bufferStore.markSessionStopped('session-1')
-    expect(bufferStore.getBuffer('session-1')!.sessionStopped).toBe(true)
 
     // 预置活跃会话
     await emit('ws_sync_session_created', makeSyncSessionCreated(makeSessionSummary({ id: 'session-1', status: 'running' })))
@@ -233,7 +243,7 @@ describe('会话流：useMobileConnection 会话管理 × useHttpApi × sync 事
     await flushAsync()
     expect(conn.activeSessions.value[0].status).toBe('waiting')
 
-    // 重新运行（waiting → running）→ buffer 的 sessionStopped 复位（停止→重启同 id）
+    // 重新运行（waiting → running）→ 列表状态更新
     await emit('ws_sync_session_status_changed', makeSyncSessionStatusChanged({
       session_id: 'session-1',
       old_status: 'waiting',
@@ -241,59 +251,52 @@ describe('会话流：useMobileConnection 会话管理 × useHttpApi × sync 事
     }))
     await flushAsync()
     expect(conn.activeSessions.value[0].status).toBe('running')
-    expect(bufferStore.getBuffer('session-1')!.sessionStopped).toBe(false)
   })
 
-  it('停止会话：HTTP stop + sync stopped 事件 → 状态 stopped + buffer markSessionStopped', async () => {
+  it('停止会话：HTTP stop + sync stopped 事件 → 状态 stopped（buffer 联动已迁终端插件，票 15）', async () => {
     await connectAndPair()
-    const bufferStore = useTerminalBufferStore()
-    bufferStore.ensureBuffer('session-1')
 
     await emit('ws_sync_session_created', makeSyncSessionCreated(makeSessionSummary({ id: 'session-1', status: 'running' })))
     await flushAsync()
 
-    // HTTP 停止（本地立即置 stopped）
+    // 插件命令停止（本地立即置 stopped）
     await conn.stopSession('session-1')
     await flushAsync()
     expect(conn.activeSessions.value[0].status).toBe('stopped')
-    const stopCall = invokeCalls('http_request').find(([args]) =>
-      (args as { request: { url: string } }).request.url.endsWith('/api/sessions/session-1/stop'),
-    )!
-    expect((stopCall[0] as { request: { method: string } }).request.method).toBe('POST')
+    const stopCall = pluginInvokeCalls('terminal-session.stop-session')[0] as
+      | { pluginId: string; args: { sessionId: string } }
+      | undefined
+    expect(stopCall?.args).toEqual({ sessionId: 'session-1' })
 
-    // 桌面端广播停止事件（另一条通道）→ 保留记录显示灰色 + buffer 停止标记
+    // 桌面端广播停止事件（另一条通道）→ 保留记录显示灰色
     await emit('ws_sync_session_stopped', makeSyncSessionStopped({ session_id: 'session-1' }))
     await flushAsync()
     expect(conn.activeSessions.value).toHaveLength(1)
     expect(conn.activeSessions.value[0].status).toBe('stopped')
-    expect(bufferStore.getBuffer('session-1')!.sessionStopped).toBe(true)
   })
 
-  it('删除会话：HTTP remove + sync removed 事件 → 列表移除 + buffer 清理', async () => {
+  it('删除会话：HTTP remove + sync removed 事件 → 列表移除（buffer 清理已迁终端插件，票 15）', async () => {
     await connectAndPair()
-    const bufferStore = useTerminalBufferStore()
-    bufferStore.ensureBuffer('session-1')
 
     await emit('ws_sync_session_created', makeSyncSessionCreated(makeSessionSummary({ id: 'session-1', status: 'running' })))
     await flushAsync()
     expect(conn.activeSessions.value).toHaveLength(1)
 
-    // HTTP 删除（本地立即移除）
+    // 插件命令删除（本地立即移除）
     await conn.removeSession('session-1')
     await flushAsync()
     expect(conn.activeSessions.value).toHaveLength(0)
-    const removeCall = invokeCalls('http_request').find(([args]) =>
-      (args as { request: { url: string } }).request.url.endsWith('/api/sessions/session-1/remove'),
-    )!
-    expect((removeCall[0] as { request: { method: string } }).request.method).toBe('DELETE')
+    const removeCall = pluginInvokeCalls('terminal-session.remove-session')[0] as
+      | { pluginId: string; args: { sessionId: string } }
+      | undefined
+    expect(removeCall?.args).toEqual({ sessionId: 'session-1' })
 
-    // 桌面端广播删除事件 → buffer 清理（会话记录不残留）
+    // 桌面端广播删除事件 → 列表不残留
     await emit('ws_sync_session_created', makeSyncSessionCreated(makeSessionSummary({ id: 'session-1' })))
     await flushAsync()
     await emit('ws_sync_session_removed', makeSyncSessionRemoved({ session_id: 'session-1' }))
     await flushAsync()
     expect(conn.activeSessions.value).toHaveLength(0)
-    expect(bufferStore.getBuffer('session-1')).toBeUndefined()
   })
 
   it('配置同步事件：created / updated / removed → sessionConfigs 增改删', async () => {

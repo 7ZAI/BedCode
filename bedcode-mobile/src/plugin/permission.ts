@@ -4,10 +4,10 @@
  * 前端权限检查 — 调用 API 前快速失败
  */
 
-/** 权限到 API 方法的映射（与 SDK Rust permission.rs 单一事实来源一致） */
+/** 权限到 API 方法的映射（与 SDK Rust permission.rs 单一事实来源一致；
+ *  terminal:input 与 terminal.sendInput/onOutput 已随票 15 阶段 B 退役） */
 const PERMISSION_API_MAP: Record<string, string[]> = {
-  'terminal:input': ['terminal.sendInput', 'terminal.onInput'],
-  'terminal:output': ['terminal.onOutput'],
+  'terminal:output': ['terminal-stream.forwardOutput'],
   'session:read': ['session.list', 'session.get', 'session.onStatusChange'],
   'session:write': ['session.create', 'session.stop'],
   'ui:toolbox': ['ui.registerToolboxPage'],

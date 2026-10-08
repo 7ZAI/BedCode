@@ -10,7 +10,7 @@
       <div class="terminal-help-modal relative bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-t-2xl w-full max-w-lg max-h-[85vh] flex flex-col shadow-xl modal-panel">
         <!-- Header -->
         <div class="flex items-center justify-between p-4 border-b border-[var(--mobile-border)]">
-          <span class="font-semibold text-[var(--mobile-text-primary)] text-base">{{ $t('terminalHelp.title') }}</span>
+          <span class="font-semibold text-[var(--mobile-text-primary)] text-base">{{ t('terminalHelp.title') }}</span>
           <button
             class="p-1.5 rounded-lg hover:bg-[var(--mobile-accent-muted)] active:opacity-70 transition-colors"
             @click="emit('close')"

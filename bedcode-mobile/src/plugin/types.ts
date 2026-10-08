@@ -33,7 +33,6 @@ export type {
   PluginDialogOptions,
   PluginDialogHandle,
   CommandRegistry,
-  TerminalAPI,
   SessionAPI,
   UIRegistry,
   EventAPI,

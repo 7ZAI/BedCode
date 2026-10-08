@@ -1,27 +1,28 @@
 /**
- * Plugin Context 会话 API 单测（票 04：控制面迁 HTTP）
+ * Plugin Context 会话 API 单测（票 13：会话控制迁插件；票 15 阶段 B：TerminalAPI 退役）
  *
- * 验证 `terminal.sendInput` / `session.list` 从 WS `Message` 信封迁到桌面 HTTP
- * 面后：
+ * 验证 `session.list` 自宿主 HTTP 代理换插件命令面
+ * （`@/plugin/sessionCommands` → plugin_invoke `com.bedcode.terminal-session`）后：
  * 1. 权限判定不变（缺权限快速失败，抛「lacks permission」）
- * 2. 有权限时经 `useHttpApi`（httpSendSessionInput / httpListSessions）发请求，
+ * 2. 有权限时经 `sessionCommands`（listSessions）发请求，
  *    不再经 useMobileCommands 的 WS 信封命令
- * 3. 失败语义：HTTP `code!=0` → 抛 Error(message)（前端归一化口径）
+ * 3. 失败语义：`code!=0` → 抛 Error(message)（前端归一化口径不变）
+ * 4. `context.terminal`（TerminalAPI）已随票 15 阶段 B 整面退役：
+ *    PluginContext 不再有 terminal 字段（外部插件输入改走
+ *    `terminal-session.send-http-input` HTTP 通道 / 订阅帧直写）
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createPluginContext } from '@/plugin/context'
 import type { PluginInfo } from '@/plugin/types'
 
 // Mock HTTP 通道：断言调用参数而不真正发请求
-const mockHttpSendInput = vi.fn(async () => ({ code: 0, message: 'ok' }))
-const mockHttpListSessions = vi.fn(async () => ({
+const mockListSessions = vi.fn(async () => ({
   code: 0,
   message: 'ok',
   data: { sessions: [{ id: 's1', status: 'running' }] },
 }))
-vi.mock('@/composables/useHttpApi', () => ({
-  httpSendSessionInput: (...args: any[]) => mockHttpSendInput(...args),
-  httpListSessions: (...args: any[]) => mockHttpListSessions(...args),
+vi.mock('@/plugin/sessionCommands', () => ({
+  listSessions: (...args: any[]) => mockListSessions(...args),
 }))
 
 function makeInfo(permissions: string[]): PluginInfo {
@@ -41,46 +42,32 @@ function makeInfo(permissions: string[]): PluginInfo {
   } as PluginInfo
 }
 
-describe('plugin context session APIs (HTTP, 票 04)', () => {
+describe('plugin context session APIs (plugin commands, 票 13)', () => {
   beforeEach(() => {
-    mockHttpSendInput.mockClear()
-    mockHttpListSessions.mockClear()
+    mockListSessions.mockClear()
   })
 
-  it('terminal.sendInput 缺权限快速失败（权限判定不变）', async () => {
+  it('context.terminal 已退役（TerminalAPI 整面删除，票 15 阶段 B）', () => {
     const ctx = createPluginContext(makeInfo([]))
-    await expect(ctx.terminal.sendInput('s1', 'ls')).rejects.toThrow('lacks permission for terminal.sendInput')
-    expect(mockHttpSendInput).not.toHaveBeenCalled()
-  })
-
-  it('terminal.sendInput 有权限时走 HTTP（httpSendSessionInput），不再经 WS 信封', async () => {
-    const ctx = createPluginContext(makeInfo(['terminal:input']))
-    await ctx.terminal.sendInput('s1', 'ls -la')
-    expect(mockHttpSendInput).toHaveBeenCalledTimes(1)
-    expect(mockHttpSendInput.mock.calls[0]).toEqual(['s1', 'ls -la'])
-  })
-
-  it('terminal.sendInput HTTP 业务失败（code!=0）→ 抛 Error(message)', async () => {
-    mockHttpSendInput.mockResolvedValueOnce({ code: 1002, message: 'session not found' })
-    const ctx = createPluginContext(makeInfo(['terminal:input']))
-    await expect(ctx.terminal.sendInput('s1', 'x')).rejects.toThrow('session not found')
+    // PluginContext 契约不再含 terminal 字段——悬挂 API 不允许以 undefined 形态残存
+    expect((ctx as Record<string, unknown>).terminal).toBeUndefined()
   })
 
   it('session.list 缺权限快速失败（权限判定不变）', async () => {
     const ctx = createPluginContext(makeInfo([]))
     await expect(ctx.session.list()).rejects.toThrow('lacks permission for session.list')
-    expect(mockHttpListSessions).not.toHaveBeenCalled()
+    expect(mockListSessions).not.toHaveBeenCalled()
   })
 
-  it('session.list 有权限时走 HTTP（httpListSessions），返回 data.sessions', async () => {
+  it('session.list 有权限时走插件命令面（listSessions），返回 data.sessions', async () => {
     const ctx = createPluginContext(makeInfo(['session:read']))
     const sessions = await ctx.session.list()
-    expect(mockHttpListSessions).toHaveBeenCalledTimes(1)
+    expect(mockListSessions).toHaveBeenCalledTimes(1)
     expect(sessions).toEqual([{ id: 's1', status: 'running' }])
   })
 
   it('session.list HTTP 业务失败（code!=0）→ 抛 Error(message)', async () => {
-    mockHttpListSessions.mockResolvedValueOnce({ code: 1001, message: 'invalid token' })
+    mockListSessions.mockResolvedValueOnce({ code: 1001, message: 'invalid token' })
     const ctx = createPluginContext(makeInfo(['session:read']))
     await expect(ctx.session.list()).rejects.toThrow('invalid token')
   })

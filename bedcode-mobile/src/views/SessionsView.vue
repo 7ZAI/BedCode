@@ -8,11 +8,11 @@
         </div>
         <div class="flex items-center gap-2">
           <button
-            v-if="mockTerminal.isDev"
+            v-if="isMockSessionDev"
             class="w-11 h-11 flex items-center justify-center rounded-lg transition-colors active:opacity-80"
-            :class="mockTerminal.enabled.value ? 'chip-cyan' : ''"
+            :class="mockSessionEnabled ? 'chip-cyan' : ''"
             style="color: var(--mobile-text-muted)"
-            @click="mockTerminal.toggle()"
+            @click="toggleMockSession()"
             :title="t('mobile.session.mockToggle')"
           >
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -131,7 +131,7 @@
           </div>
 
           <!-- Mock Terminal Session (DEV only) -->
-          <div v-if="mockTerminal.isDev && mockTerminal.enabled.value" class="group-card mt-3">
+          <div v-if="isMockSessionDev && mockSessionEnabled" class="group-card mt-3">
             <SessionCard
               :session="mockSession"
               @click="handleMockSessionClick"
@@ -152,7 +152,7 @@
 
           <!-- 运行中会话空态 -->
           <div
-            v-if="realSessions.length === 0 && !(mockTerminal.isDev && mockTerminal.enabled.value)"
+            v-if="realSessions.length === 0 && !(isMockSessionDev && mockSessionEnabled)"
             class="min-h-[20vh] flex flex-col items-center justify-center text-center"
           >
             <svg class="w-12 h-12 mb-4" style="color: var(--mobile-text-disabled)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -202,12 +202,10 @@ import { logger } from '@/utils/frontendLogger'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useMobileConnection } from '@/composables/useMobileConnection'
-import { useTerminalBuffer } from '@/composables/useTerminalBuffer'
-import { httpStopSession, httpRemoveSession } from '@/composables/useHttpApi'
+import { stopSession as pluginStopSession, removeSession as pluginRemoveSession } from '@/plugin/sessionCommands'
 import { useToast } from '@/composables/useToast'
-import { useMockTerminal, MOCK_SESSION_ID } from '@/composables/useMockTerminal'
-import { computeDeviceDefaultGridSize, ensureTerminalFontLoaded } from '@/utils/terminalMetrics'
-import { useInputAssistantStore } from '@/stores/inputAssistant'
+import { MOCK_SESSION_ID, isMockSessionDev, mockSessionEnabled, toggleMockSession } from '@/utils/mockSession'
+import { pluginInvoke } from '@/plugin/commands'
 import SessionCard from '@/components/SessionCard.vue'
 import SessionConfigCard, { type SessionConfigSummary } from '@/components/SessionConfigCard.vue'
 import Modal from '@/components/Modal.vue'
@@ -216,13 +214,8 @@ import LoadingDialog from '@/components/LoadingDialog.vue'
 
 const router = useRouter()
 const connection = useMobileConnection()
-const { prepareSession } = useTerminalBuffer()
-const assistStore = useInputAssistantStore()
 const toast = useToast()
 const { t } = useI18n()
-
-// 模拟终端（DEV）
-const mockTerminal = useMockTerminal()
 
 // 连接状态
 const isConnected = computed(() => connection.connectionStatus.value === 'connected' || connection.connectionStatus.value === 'paired')
@@ -274,10 +267,12 @@ async function handleSessionClick(session: any) {
   isNavigating.value = true
   connection.activeSessionId.value = session.id
 
-  // 终端准备：预热连接（订阅 = fresh subscribe，回放随流；终端页挂载时
-  // 再次订阅触发完整回放）；失败/超时不阻塞跳转，由终端页走订阅重试路径
+  // 终端准备（预热订阅）：转发终端插件内部命令（fresh subscribe，回放随流；
+  // 终端页挂载时再次订阅触发完整回放）。不等待就绪——链路建立异步进行，
+  // 失败不阻塞跳转，由终端页订阅重试路径兜底（票 15 行为说明见票文档）
   if (session.status === 'running' || session.status === 'waitingInput') {
-    await prepareSession(session.id)
+    void pluginInvoke('com.bedcode.terminal-session', 'terminal-session.subscribe', { sessionId: session.id })
+      .catch((e) => logger.warn('[SessionsView] terminal pre-subscribe failed:', e))
   }
 
   router.push({
@@ -295,7 +290,7 @@ async function confirmStop() {
   if (!pendingSession.value) return
   isStopping.value = true
   try {
-    const result = await httpStopSession(pendingSession.value.id)
+    const result = await pluginStopSession(pendingSession.value.id)
     if (result.code !== 0) {
       toast.error(result.message || t('mobile.session.stopFailed'))
       return
@@ -321,7 +316,7 @@ async function confirmDelete() {
   if (!pendingSession.value) return
   isDeleting.value = true
   try {
-    const result = await httpRemoveSession(pendingSession.value.id)
+    const result = await pluginRemoveSession(pendingSession.value.id)
     if (result.code !== 0) {
       toast.error(result.message || t('mobile.session.deleteFailed'))
       return
@@ -360,21 +355,15 @@ async function refreshConfigs() {
   }
 }
 
-// 从会话配置启动会话（携带按设备屏幕预算的默认网格：主机 PTY 以此为初始尺寸创建，
-// 避免 120x40 主机桌面缺省起步的首帧回绕；挂载后 fit 校准精确值）
+// 从会话配置启动会话（票 15：屏幕网格预算随终端域迁插件，本端不再预计算尺寸——
+// 主机以缺省尺寸创建 PTY，终端页挂载后 fit 校准；精确预算待票 13 会话控制
+// 迁插件后在插件内闭环）
 async function handleStartSession(config: SessionConfigSummary) {
   if (!isConnected.value || startingConfigId.value) return
 
   startingConfigId.value = config.id
   try {
-    // 网格预算前等内置 CJK 等宽字体就绪：格宽按 fallback 量（~0.6em）与按内置量
-    // （0.5em）差约 20% 列，起步尺寸会明显偏小（挂载后 fit 会校准，但首帧已经错）
-    await ensureTerminalFontLoaded(assistStore.settings.terminalFontSize)
-    const size = computeDeviceDefaultGridSize(
-      assistStore.settings.terminalFontSize,
-      assistStore.settings.terminalLetterSpacing ?? 0,
-    )
-    const result = await connection.startSession(config.id, size)
+    const result = await connection.startSession(config.id)
     if (result.sessionId) {
       // 如果返回了会话信息，添加到本地列表；否则手动加载
       if (result.session) {

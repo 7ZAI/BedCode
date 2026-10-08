@@ -20,10 +20,10 @@ export interface ShellPermissionGroup {
   keys: string[]
 }
 
-/** 权限词 → 既有本地化文案 key 的后缀（前缀统一 mobile.plugin.perm.） */
+/** 权限词 → 既有本地化文案 key 的后缀（前缀统一 mobile.plugin.perm.；
+ *  terminal:input 已随票 15 阶段 B 整面退役，不在展示词表） */
 const PERMISSION_I18N_KEY: Record<string, string> = {
   storage: 'storage',
-  'terminal:input': 'terminalInput',
   'terminal:output': 'terminalOutput',
   'session:read': 'sessionRead',
   'session:write': 'sessionWrite',
@@ -42,7 +42,7 @@ export const SHELL_PERMISSION_GROUPS: ShellPermissionGroup[] = [
   {
     id: 'terminal',
     titleKey: 'shell.permission.group.terminal',
-    keys: ['terminal:input', 'terminal:output', 'session:read', 'session:write'],
+    keys: ['terminal:output', 'session:read', 'session:write'],
   },
   {
     id: 'data',

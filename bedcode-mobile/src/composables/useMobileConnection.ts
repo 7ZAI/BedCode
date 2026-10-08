@@ -27,10 +27,10 @@ import {
   type RemoteDevice,
   type AuthCredentials,
 } from './useMobileCommands'
-import { useHttpApi, httpSendSessionInput, httpProbe } from './useHttpApi'
+import { useHttpApi, httpProbe } from './useHttpApi'
+import * as sessionCommands from '@/plugin/sessionCommands'
 import { useForegroundService } from './useForegroundService'
 import { useNotification } from './useNotification'
-import { useTerminalBufferStore } from '@/stores/terminalBuffer'
 
 // Re-export types
 export type { ConnectionStatus, RemoteDevice, AuthCredentials } from './useMobileCommands'
@@ -201,10 +201,8 @@ async function init() {
       isConnecting.value = false
       logger.log('[MobileConnection] Disconnected')
       autoStopForegroundService()
-
-      // 标记所有 buffer 未订阅（重连后按字节游标重新订阅）
-      const bufferStore = useTerminalBufferStore()
-      bufferStore.markAllUnsubscribed()
+      // 终端订阅信念清理已迁终端插件（票 15：onSessionEvent 的 disconnected +
+      // isConnected 翻转双路径，语义与迁移前 markAllUnsubscribed 一致）
     },
     onPaired: () => {
       clearConnectionTimeout()
@@ -334,18 +332,8 @@ async function init() {
       if (index !== -1) {
         activeSessions.value[index].status = data.new_status
       }
-      // 会话重新运行：复位 buffer 的 sessionStopped（停止→重启同 id 场景，
-      // 不复位则 ws_output 监听器永久丢弃新流帧 → 终端只有旧历史、无实时）。
-      // 只处理「未跟踪 / 已停止」的会话：running 广播可能重复且无状态迁移，
-      // 对存活 buffer 执行复位会清零订阅信念与游标 → 输入被门控永久拒绝、
-      // 历史以 from=0 叠加重播（P0-1 现场：运行中输入无反应 + 格式错乱）
-      if (data.new_status === 'running') {
-        const bufferStore = useTerminalBufferStore()
-        const buffer = bufferStore.getBuffer(data.session_id)
-        if (!buffer || buffer.sessionStopped) {
-          bufferStore.markSessionRunning(data.session_id)
-        }
-      }
+      // 会话 running 时复位终端订阅信念的联动已迁终端插件（票 15：插件侧
+      // onSessionEvent 保留同款「仅未跟踪/已停止才复位」条件，防 P0-1 复现）
     },
     onSyncSessionStopped: (data) => {
       logger.log('[MobileConnection] SyncSessionStopped:', data.session_id, data.session_name)
@@ -356,9 +344,7 @@ async function init() {
       }
       // 取消该会话的任务通知
       cancelTaskNotification(data.session_id)
-      // 标记 buffer 会话停止
-      const bufferStore = useTerminalBufferStore()
-      bufferStore.markSessionStopped(data.session_id)
+      // 终端 buffer 的会话停止标记已迁终端插件（票 15：onSessionEvent session_stopped）
     },
     onSyncSessionRemoved: (data) => {
       logger.log('[MobileConnection] SyncSessionRemoved:', data.session_id, data.session_name)
@@ -366,9 +352,7 @@ async function init() {
       activeSessions.value = activeSessions.value.filter(s => s.id !== data.session_id)
       // 取消该会话的任务通知
       cancelTaskNotification(data.session_id)
-      // 清理 buffer
-      const bufferStore = useTerminalBufferStore()
-      bufferStore.clearBuffer(data.session_id)
+      // 终端 buffer 清理已迁终端插件（票 15：onSessionEvent session_removed）
     },
     onSyncTaskStatusChanged: (data) => {
       logger.log('[MobileConnection] SyncTaskStatusChanged:', data.session_id, data.task_status)
@@ -410,11 +394,7 @@ async function init() {
     isConnecting.value = false
     clearConnectionTimeout()
 
-    // 与 ws_disconnected 路径（onDisconnected）对齐：断连即清理订阅信念——
-    // 服务端订阅已随连接关闭清理，若这里不清，重连后的 onPaired 重订阅会
-    // 被 subscribed=true 跳过，桌面端新连接无订阅 → 终端只有历史没有实时
-    const bufferStore = useTerminalBufferStore()
-    bufferStore.markAllUnsubscribed()
+    // 断连清理订阅信念的联动已迁终端插件（票 15：onSessionEvent disconnected）
 
     // 弹出 Toast 通知（手动断开不会触发此事件）。此刻不弹「连接已断开」作为
     // 最终态：非致命断开且自动重连开启时，后续会自愈，文案必须指向正在恢复，
@@ -633,9 +613,6 @@ export async function connect(device: RemoteDevice): Promise<void> {
   // 确保前端状态也重置干净，无论之前是什么状态
   connectionStatus.value = 'disconnected'
   isConnecting.value = false
-  const bufferStore = useTerminalBufferStore()
-  bufferStore.markAllUnsubscribed()
-
   currentDevice.value = device
   connectionError.value = null
   isConnecting.value = true
@@ -775,9 +752,7 @@ export async function disconnect(): Promise<void> {
     isConnecting.value = false
     currentDevice.value = null
 
-    // 手动断开不触发 Rust 端 ws_disconnected 事件，需显式重置 buffer 订阅状态
-    const bufferStore = useTerminalBufferStore()
-    bufferStore.markAllUnsubscribed()
+    // 手动断开的订阅信念重置已迁终端插件（票 15：isConnected 翻转路径覆盖）
   }
 }
 
@@ -910,8 +885,7 @@ function maxOpenTerminalsLimit(): number {
  * 有丢弃时 toast 通知用户
  */
 export async function loadActiveSessions(): Promise<any[]> {
-  const { httpListSessions } = useHttpApi()
-  const result = await httpListSessions()
+  const result = await sessionCommands.listSessions()
   if (result.code === 0 && result.data) {
     const sessions = result.data.sessions || []
     const limit = maxOpenTerminalsLimit()
@@ -955,8 +929,7 @@ export async function startSession(
     throw new Error(i18n.global.t('mobile.session.maxReached', { max: limit }))
   }
 
-  const { httpStartSession } = useHttpApi()
-  const result = await httpStartSession(configId, size)
+  const result = await sessionCommands.startSession(configId, size)
   if (result.code === 0 && result.data) {
     const sessionId = result.data.sessionId
     // 终端订阅由页面驱动（进入终端页时 fresh subscribe 回放环窗口）：
@@ -970,8 +943,7 @@ export async function startSession(
  * 停止会话：通过 HTTP API 发送停止请求，成功后更新本地状态
  */
 export async function stopSession(sessionId: string): Promise<void> {
-  const { httpStopSession } = useHttpApi()
-  const result = await httpStopSession(sessionId)
+  const result = await sessionCommands.stopSession(sessionId)
   if (result.code === 0) {
     const index = activeSessions.value.findIndex(s => s.id === sessionId)
     if (index !== -1) {
@@ -986,8 +958,7 @@ export async function stopSession(sessionId: string): Promise<void> {
  * 删除会话：通过 HTTP API 发送删除请求，成功后更新本地状态
  */
 export async function removeSession(sessionId: string): Promise<void> {
-  const { httpRemoveSession } = useHttpApi()
-  const result = await httpRemoveSession(sessionId)
+  const result = await sessionCommands.removeSession(sessionId)
   if (result.code === 0) {
     activeSessions.value = activeSessions.value.filter(s => s.id !== sessionId)
   } else {
@@ -1164,7 +1135,7 @@ export function clearActiveSessions(): void {
  * 发送输入到会话（通过 HTTP API，绕过 WebSocket 阻塞）
  */
 export async function sendInput(sessionId: string, data: string, specialKey?: string): Promise<void> {
-  const result = await httpSendSessionInput(sessionId, data, specialKey)
+  const result = await sessionCommands.sendHttpInput(sessionId, data, specialKey)
   if (result.code !== 0) {
     throw new Error(result.message || 'Send input failed')
   }

@@ -782,10 +782,10 @@ function getContributionChips(plugin: PluginInfo): ContributionChip[] {
   return chips
 }
 
-/** 权限元数据：emoji + 本地化标题/说明（未知权限回退原始字符串） */
+/** 权限元数据：emoji + 本地化标题/说明（未知权限回退原始字符串；
+ *  terminal:input 已随票 15 阶段 B 退役，不在展示映射） */
 const PERMISSION_META: Record<string, { emoji: string; titleKey: string; descKey: string }> = {
   storage: { emoji: '💾', titleKey: 'mobile.plugin.perm.storage.title', descKey: 'mobile.plugin.perm.storage.desc' },
-  'terminal:input': { emoji: '⌨️', titleKey: 'mobile.plugin.perm.terminalInput.title', descKey: 'mobile.plugin.perm.terminalInput.desc' },
   'terminal:output': { emoji: '📺', titleKey: 'mobile.plugin.perm.terminalOutput.title', descKey: 'mobile.plugin.perm.terminalOutput.desc' },
   'session:read': { emoji: '📄', titleKey: 'mobile.plugin.perm.sessionRead.title', descKey: 'mobile.plugin.perm.sessionRead.desc' },
   'session:write': { emoji: '✏️', titleKey: 'mobile.plugin.perm.sessionWrite.title', descKey: 'mobile.plugin.perm.sessionWrite.desc' },

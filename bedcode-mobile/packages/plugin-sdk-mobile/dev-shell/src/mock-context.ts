@@ -5,7 +5,8 @@
  * 但全部后端通道替换为浏览器实现：
  * - commands.execute：仅执行前端注册 handler；WASM 后端不在浏览器运行，未注册命令记日志
  * - storage：localStorage 持久化
- * - terminal/session/lifecycle：接 mock/session.ts 的模拟会话
+ * - session/lifecycle：接 mock/session.ts 的模拟会话
+ *   （terminal：TerminalAPI 已随票 15 阶段 B 整面退役，本 mock 同批移除）
  * - 权限检查跳过（dev-shell 视为全部授权，README 已说明与真机的差异）
  */
 import type {
@@ -26,7 +27,6 @@ import { openGlobalDialog } from '../../src/global-dialog'
 import {
   emitDevEvent,
   onDevEvent,
-  sendInputToSession,
   sessions,
 } from './mock/session'
 import { dialogService } from './mock/dialog-service'
@@ -82,16 +82,6 @@ export function createMockContext(pluginId: string): PluginContext {
         `command "${id}" 未注册前端 handler——WASM 后端不在浏览器运行，请注册前端 handler 或到真机验证`,
       )
       return undefined
-    },
-  }
-
-  // ==================== TerminalAPI ====================
-  const terminal = {
-    async sendInput(sessionId: string, text: string): Promise<void> {
-      sendInputToSession(sessionId, text)
-    },
-    onOutput(handler: (sessionId: string, data: string) => void): Disposable {
-      return track(onDevEvent('terminal:output', (payload: any) => handler(payload.sessionId, payload.data)))
     },
   }
 
@@ -231,12 +221,6 @@ export function createMockContext(pluginId: string): PluginContext {
     onSessionStopped(handler) {
       return track(onDevEvent('plugin:lifecycle:sessionStopped', (payload: any) => handler(payload.sessionId)))
     },
-    onTerminalInput(handler) {
-      return track(onDevEvent('plugin:lifecycle:terminalInput', (payload: any) => handler(payload.sessionId, payload.data)))
-    },
-    onTerminalOutput(handler) {
-      return track(onDevEvent('plugin:lifecycle:terminalOutput', (payload: any) => handler(payload.sessionId, payload.data)))
-    },
   }
 
   // ==================== LoggerAPI ====================
@@ -323,7 +307,6 @@ export function createMockContext(pluginId: string): PluginContext {
   const context: PluginContext = {
     id: pluginId,
     commands,
-    terminal,
     session,
     ui,
     events,

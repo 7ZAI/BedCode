@@ -95,13 +95,12 @@ export async function deactivate(): Promise<void> {
 | API | 说明 | 所需权限 |
 |-----|------|----------|
 | `context.commands` | 注册 / 执行命令 | 默认授予 |
-| `context.terminal` | 向会话发送输入、订阅输出 | `terminal:input` / `terminal:output` |
 | `context.session` | 会话列表、状态变更订阅 | `session:read` / `session:write` |
-| `context.ui` | 工具箱页面、底部导航 Tab、终端工具栏、设置区、动态路由 | `ui:toolbox` / `ui:navtab` / `ui:settings` / `ui:input` / `ui:route` / `ui:back` |
+| `context.ui` | 工具箱页面、底部导航 Tab、终端工具栏、终端主视图、设置区、动态路由 | `ui:toolbox` / `ui:navtab` / `ui:settings` / `ui:input` / `ui:route` / `ui:back` |
 | `context.events` | 宿主事件订阅与发布（`on` / `emit`） | 默认授予 |
 | `context.storage` | 键值存储（`get` / `set` / `delete`） | `storage`（默认附带） |
 | `context.fileService` | 文件服务挂载、SAF 存储访问、系统选择器 | `fileservice` |
-| `context.lifecycle` | 应用生命周期钩子（启动 / 连接 / 会话 / 终端输入输出） | 默认授予 |
+| `context.lifecycle` | 应用生命周期钩子（启动 / 连接 / 会话） | 默认授予 |
 | `context.dialogs` | 对话框（`showDialog` / `showConfirm` / `showPrompt` / `showToast`） | 默认授予 |
 | `context.notifications` | 系统通知 | 默认授予 |
 | `context.status` | 生命周期状态上报（`reportReady` / `reportError`） | 默认授予 |

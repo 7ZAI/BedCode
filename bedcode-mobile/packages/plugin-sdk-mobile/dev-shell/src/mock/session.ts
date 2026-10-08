@@ -3,7 +3,8 @@
  *
  * 浏览器中不存在真实 WS 连接，这里提供可交互的假会话：
  * - MockTerminalView 的输入/输出、会话生命周期按钮都驱动本模块
- * - context.terminal / context.session / context.lifecycle / mobileApi 全部接本模块
+ * - context.session / context.lifecycle / mobileApi 全部接本模块
+ *   （context.terminal 已随票 15 阶段 B 退役——TerminalAPI 整面删除）
  * 事件经全局 emitter 分发（key 与宿主 plugin/events.ts 一致，插件无感知）。
  */
 import { reactive, ref } from 'vue'
@@ -63,18 +64,16 @@ export function emitDevEvent(event: string, ...args: any[]): void {
 
 // ==================== 会话模拟操作 ====================
 
-/** 发送终端输入（触发插件 lifecycle onTerminalInput） */
+/** 发送终端输入（记录到会话输入行；terminalInput lifecycle 事件已随票 15 阶段 B 退役） */
 export function sendInputToSession(sessionId: string, text: string): void {
   if (!text.trim()) return
   ;(inputs[sessionId] ||= []).push(text)
-  emitDevEvent('plugin:lifecycle:terminalInput', { sessionId, data: text })
 }
 
-/** 模拟终端输出（触发插件 terminal.onOutput + lifecycle onTerminalOutput） */
+/** 模拟终端输出（terminal:output 事件供 TerminalAPI 消费者/openTerminalStream mock 使用） */
 export function sendOutput(sessionId: string, data: string): void {
   ;(outputs[sessionId] ||= []).push(data)
   emitDevEvent('terminal:output', { sessionId, data })
-  emitDevEvent('plugin:lifecycle:terminalOutput', { sessionId, data })
 }
 
 /** 新建会话（触发 session:statusChange + lifecycle onSessionCreated） */

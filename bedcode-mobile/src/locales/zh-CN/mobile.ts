@@ -656,8 +656,7 @@ export default {
       perm: {
         unknown: '未知权限',
         storage: { title: '本地存储', desc: '读写插件专属键值存储与数据库' },
-        terminalInput: { title: '终端输入', desc: '向会话终端发送命令' },
-        terminalOutput: { title: '终端输出', desc: '监听会话终端输出内容' },
+        terminalOutput: { title: '终端输出流', desc: '转发终端输出字节到前端页面' },
         sessionRead: { title: '会话读取', desc: '读取会话列表与状态' },
         sessionWrite: { title: '会话写入', desc: '创建或修改会话' },
         uiToolbox: { title: '工具箱 UI', desc: '在工具箱中添加插件页面' },

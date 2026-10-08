@@ -3,7 +3,10 @@
  *
  * 单一事实来源是插件源码：前端 register* 调用推导 UI 扩展点，
  * 前端 context API 使用 + Rust host 调用推导权限，
- * Rust invoke_command 匹配臂推导 commands，wasm 导出推导 terminal handlers。
+ * Rust invoke_command 匹配臂推导 commands。
+ * （terminal handlers 推导线已随票 15 阶段 B 删除——terminal-hooks 退役，
+ *  `terminal:input` 权限位同步退役；`.terminal` 宽推导规则一并移除，
+ *  否则终端 UI 域源码里的 `.terminal` 子串会把退役权限自动加回 manifest）
  *
  * 合并策略（保守，避免误删导致运行时拒绝）：
  * - permissions：派生结果与手工声明取并集
@@ -21,16 +24,12 @@ import { join } from 'node:path'
 /** 前端 context API 使用 → 权限（正则按合并后的前端源码匹配） */
 const FRONTEND_PERMISSION_RULES = [
   { re: /\.(storage)\b/, perm: 'storage' },
-  { re: /\.terminal\s*\.\s*sendInput\b/, perm: 'terminal:input' },
-  { re: /\.terminal\s*\.\s*onOutput\b/, perm: 'terminal:output' },
-  { re: /\.terminal\b/, perm: 'terminal:input' },
   { re: /\.(session)\b/, perm: 'session:read' },
 ]
 
 /** Rust host API 调用 → 权限（与 SDK permission 常量一一对应） */
 const RUST_PERMISSION_RULES = [
   { re: /\b(storage_get|storage_set|storage_delete|db_execute|db_query)\b/, perm: 'storage' },
-  { re: /\bterminal_send\b/, perm: 'terminal:input' },
   { re: /\b(session_list|session_get)\b/, perm: 'session:read' },
   { re: /\bhttp_fetch\b/, perm: 'network:http' },
   { re: /\b(fs_read|fs_copy)\b/, perm: 'fs:read' },
@@ -195,14 +194,6 @@ function extractRustCommands(rustSource) {
   return [...new Set(ids)]
 }
 
-/** 检测 rust 源码是否实现了终端处理导出 */
-function extractTerminalHandlers(rustSource) {
-  const handlers = []
-  if (/\bfn\s+on_terminal_input\b/.test(rustSource)) handlers.push('on_terminal_input')
-  if (/\bfn\s+on_terminal_output\b/.test(rustSource)) handlers.push('on_terminal_output')
-  return handlers
-}
-
 // ==================== 主入口 ====================
 
 /**
@@ -303,17 +294,6 @@ export function generateManifest(cwd, { check = false } = {}) {
         mergeEntry({ id }, old.get(id), { id, title: id })
       )
       report.push(`contributes.commands ← ${commandIds.length} 个`)
-    }
-
-    const handlers = extractTerminalHandlers(rustSource)
-    if (handlers.length > 0) {
-      const terminal = { ...(contributes.terminal || {}) }
-      const inputHandlers = handlers.filter((h) => h === 'on_terminal_input')
-      const outputParsers = handlers.filter((h) => h === 'on_terminal_output')
-      if (inputHandlers.length > 0) terminal.inputHandlers = inputHandlers
-      if (outputParsers.length > 0) terminal.outputParsers = outputParsers
-      contributes.terminal = terminal
-      report.push(`contributes.terminal handlers ← ${handlers.join(', ')}`)
     }
   }
 

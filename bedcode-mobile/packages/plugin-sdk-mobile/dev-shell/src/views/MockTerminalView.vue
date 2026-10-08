@@ -2,9 +2,9 @@
 /**
  * MockTerminalView — 模拟终端
  *
- * 驱动 mock/session.ts：输入发送（触发插件 onTerminalInput）、模拟输出
- * （触发 onOutput / onTerminalOutput）、会话创建/停止、连接/断开、认证成功
- * （触发对应 lifecycle 钩子）。插件注册的终端工具栏项渲染在顶部。
+ * 驱动 mock/session.ts：输入发送（记录到会话输入行）、模拟输出
+ * （触发 terminal:output 事件供 openTerminalStream mock 消费）、会话创建/停止、
+ * 连接/断开、认证成功（触发对应 lifecycle 钩子）。插件注册的终端工具栏项渲染在顶部。
  * 底部展示 mobileApi 任务队列 mock（任务域类插件的调试入口）。
  */
 import { computed, ref } from 'vue'
