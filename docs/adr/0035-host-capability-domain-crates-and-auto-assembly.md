@@ -174,3 +174,28 @@ host-mdns`，任何组件都无法提供那五个函数，路由在构造上不�
   属性 ⇒ 必须有跨 crate 实证（票 09 第 2 项），否则「漏一行注释」这类事故只能靠读代码发现。
 - **能力域迁移的隐性回归面是测试装配链**：域的 host function 取宿主能力改经实例级端口，
   任何裸造 `WasmHostContext` 的脚手架都会 panic（fail-visible）。票 08 因此首轮全量 29 红。
+
+## 能力域脱绑（2026-10-08，spec `.scratch/2026-10-08-capability-crates-unbind-desktop`）
+
+五个带桌面 WIT 绑定面的能力域 crate（`discovery-engine` / `server-http` / `server-websocket` /
+`server-peer-net` / `pty-engine`）与地基 `server-base` 从桌面端解绑——能力域 crate 默认形态 =
+**纯引擎机制 + 端口抽象（零 WIT / 零桌面 SDK 依赖）**，任何宿主（移动端 / 无头 / 第三方）可直接引用：
+
+- **feature 门控**：绑定层（`bindgen!` / `HostModule` / `inventory::submit!` / `impl Host`）收进
+  `desktop-host` feature（wasmtime / wit-bindgen / inventory / host-kit 转 optional，依赖按各域
+  实际面收窄）。spec C2 风险（cfg 下 `bindgen!` / `inventory::submit!` 是否照常展开）实测解除：
+  P1 样板（server-http）双态编译 + 双态测试全绿即证，其后各域同法。
+- **wire 契约自持**：各域 / server-base 引用的 plugin-api 词汇（权限位 / WS 事件名 / topic 构造 /
+  `EndpointAuth` / `BusMessage`）改为**自持副本 + 漂移锁**（锁读 SDK 源文件按文本块 / 行级比对，
+  漂移即红）；SDK 原定义**不删除**（另有消费方：wasm-core host_api 总线 / WIT 契约面）。
+  server-base 四个 Claude 常量的死 re-export（全仓零消费者）直接删除。
+- **双类型桥接**：`server-base::wire::BusMessage` 自持后与 SDK 原型并存；wasm-core 总线内部流转
+  保持 SDK 类型（机制层类型选择，本 ADR「不做什么」不变），`WasmHandlerAdapter`（base handler →
+  wasm handler 唯一桥接点）做字段级值转换，形状一致由漂移锁钉死。
+- **桌面接线**：wasm-core `default = ["desktop-host"]` 级联各域 feature；`component.rs` 五行强制
+  引用逐行 `#[cfg(feature = "desktop-host")]`（无 feature 宿主不注册——它没有插件宿主机制）；
+  桌面 src-tauri 五能力域依赖行显式 `features = ["desktop-host"]`。
+- **长期门禁**：`packages/bedcode-headless-host-probe`（无头测试宿主探针，非拆分产物、不进宿主
+  清单、受 `capability_crates_unit_tests_only` 锁自动治理）以非桌面形态默认引用全部能力域——
+  `cargo tree` 零 wasmtime / wit-bindgen / inventory / host-kit / plugin-api；六 crate（五域 +
+  server-base）源码非注释行 `rg bedcode_plugin_api` 归零。

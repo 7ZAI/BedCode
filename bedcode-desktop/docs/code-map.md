@@ -159,7 +159,7 @@ lib 迁根 + 2026-10-08 整核本体迁根）：插件机制真源已不在
 wasm-apps/<app-id>/rust/src/**      业务真源：会话 / 传输任务 / 配对 / Agent 任务 / 对话
         │ 四条下行通道：WIT host-* · host-bus · host-events · 互调 api（ADR 0017）
         ▼
-能力域 crate（机制 + WIT 接线 + HostModule 自报）   packages/bedcode-{server-*,discovery-engine,crypto-engine}
+能力域 crate（机制默认；`desktop-host` feature 装配 WIT 接线 + HostModule 自报——脱绑 ADR 0035）   packages/bedcode-{server-*,discovery-engine,crypto-engine}
         │ 端口 traits（bedcode-server-base::ports + 各能力域自己的 ports.rs）
         ▼
 机制内核 packages/bedcode-host-kit（组件状态 / 能力模块契约 / 自动注册表）

@@ -1,7 +1,11 @@
 # 能力域脱绑桌面端：根 packages 各能力域独立可被任何宿主引用（实施前置条件）
 
 > Date: 2026-10-08
-> Status: **spec（未实施）**——用户指令「先写 spec 先不用实现」。
+> Status: **P1–P6 已实施（2026-10-08 当日完成）**——P1（server-http 样板）/ P2（discovery）/
+> P3（server-websocket）/ P4（peer-net + pty-engine）并行推进；P5（server-base 下沉 + 桌面接线）
+> 与 P6（验证矩阵 + 文档/锁收口）随后收口。实施记录见 ADR 0035「能力域脱绑」条目与 CHANGELOG
+> 双语条目；长期门禁 = `packages/bedcode-headless-host-probe`。改动均未提交（与在途票 13/15
+> 同工作区）。
 > 用户方向指令：「package 下各个能力域的脱离绑定桌面端，应该独立可以被任何宿主引用才对」——
 > 本 spec 是 `.scratch/2026-10-08-dual-end-shared-libs/spec.md`（双端共享 mDNS/对等网络）的**实施前置条件**：
 > 先让能力域脱绑，下游的 mDNS 解绑（M1/M2）与移动端 host-peer 解绑（D6）才有地基。
