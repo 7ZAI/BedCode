@@ -354,12 +354,12 @@ mod tests {
             // 真实 SDK 宏产物（wasm_entry! 8 组导出），组件形态字节已在 build 助手断言
             std::fs::write(
                 plugin_dir.join("bedcode_plugin_terminal_session.wasm"),
-                &crate::plugin::wasm_runtime::component::tests::build_terminal_session_component(),
+                &bedcode_wasm_core_mobile::test_support::build_terminal_session_component(),
             )
             .expect("write component wasm");
 
             let runtime = WasmRuntime::new(Some(tmp.path().join("aot"))).expect("wasm runtime");
-            let host_ctx = crate::plugin::wasm_runtime::component::tests::build_host_ctx();
+            let host_ctx = bedcode_wasm_core_mobile::test_support::build_host_ctx();
 
             let (plugins, wasm_plugins) = PluginLoader::load_all(tmp.path(), &runtime, &host_ctx);
 

@@ -346,3 +346,35 @@ pub async fn plugin_open_download_dir(plugin_id: String) -> Result<()> {
     tracing::debug!(plugin_id = %plugin_id, "open system download dir");
     crate::plugin::android_plugins::open_download_dir().await
 }
+
+
+// ==================== 终端输出流窄转发登记（票 12 · 批次 2b 命令薄壳） ====================
+//
+// 表本体已随批次 1b 迁 fork crate（`terminal_stream_gateway`，纯机制）；
+// Channel 是 Tauri IPC 机制，WASM 插件无法持有——命令薄壳留宿主，转调 crate
+// 全局单例（与 WIT `host-terminal-stream.forward-output` 共用同一张表）。
+
+/// 段2 订阅（进入终端页）：登记页面通道并开启输出推送。幂等
+#[tauri::command]
+pub async fn terminal_page_subscribe(
+    session_id: String,
+    channel: tauri::ipc::Channel<tauri::ipc::InvokeResponseBody>,
+) -> std::result::Result<(), String> {
+    if session_id.is_empty() {
+        return Err("session_id is empty".to_string());
+    }
+    bedcode_wasm_core_mobile::terminal_stream_gateway::terminal_stream_gateway()
+        .page_subscribe(&session_id, channel);
+    Ok(())
+}
+
+/// 段2 取消订阅（退出终端页）：清空页面通道并停止推送
+#[tauri::command]
+pub async fn terminal_page_unsubscribe(session_id: String) -> std::result::Result<(), String> {
+    if session_id.is_empty() {
+        return Err("session_id is empty".to_string());
+    }
+    bedcode_wasm_core_mobile::terminal_stream_gateway::terminal_stream_gateway()
+        .page_unsubscribe(&session_id);
+    Ok(())
+}

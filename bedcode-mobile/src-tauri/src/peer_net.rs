@@ -1583,7 +1583,7 @@ fn spawn_discovery_refresh_subscriber(app: tauri::AppHandle) {
                         .subscribe_static(
                             DISCOVERY_REFRESH_SUBSCRIBER,
                             DISCOVERY_REFRESH_TOPIC,
-                            Arc::new(DiscoveryRefreshHandler { app }),
+                            Box::new(DiscoveryRefreshHandler { app }),
                         )
                         .await;
                     tracing::info!("peer discovery refresh subscriber registered");

@@ -19,7 +19,6 @@ pub mod plugin;
 pub mod router;
 pub mod state;
 pub mod system;
-pub mod terminal_stream_gateway;
 
 /// 假插件端点夹具（票 01 基线与夹具）：本地 WS server 模拟桌面插件
 /// `com.bedcode.terminal-session` 的 session-control / terminal 端点。
@@ -120,13 +119,18 @@ pub fn run() {
             // 创建插件数据库连接（WASM Host Function 使用；
             // std Mutex：SQL 为同步操作，host fn 同步取锁，避免 block_on 绕行）
             let db_path = app_data_dir.join("bedcode_plugins.db");
+            // 批次 2b：连接所有权移交 fork crate Database wrapper（schema 真源
+            // 仍在宿主 db_schema.rs；crate Database 只持连接）
             let plugin_db = Arc::new(std::sync::Mutex::new(
-                rusqlite::Connection::open(&db_path).map_err(|e| anyhow::anyhow!("Failed to open plugin DB: {}", e))?,
+                bedcode_wasm_core_mobile::db::Database::from_connection(
+                    rusqlite::Connection::open(&db_path)
+                        .map_err(|e| anyhow::anyhow!("Failed to open plugin DB: {}", e))?,
+                ),
             ));
             // 主库 schema 幂等建表（票 05：settings / plugin_storage / plugin_secrets /
             // plugin_auth_policies / plugin_auth_records——宿主机制数据 + 插件数据入库，
             // 与桌面 wasm-core db/schema.sql 同构；见 plugin/db_schema.rs）
-            crate::plugin::db_schema::init_schema(&plugin_db.lock().expect("plugin db lock poisoned"))
+            crate::plugin::db_schema::init_schema(&plugin_db.lock().expect("plugin db lock poisoned").conn())
                 .map_err(|e| anyhow::anyhow!("Failed to init plugin DB schema: {}", e))?;
 
             // 票 05b：旧文件落盘 KV（plugins/*.json）→ 主库 plugin_storage 表一次性迁移；
@@ -249,8 +253,8 @@ pub fn run() {
             // terminal_link.rs 退役，前端走插件命令面（plugin_invoke）；
             // 段2 页面 Channel 登记是 Tauri 传输机制，保留在宿主窄转发层
             // （terminal_stream_gateway——ADR 0022 四类薄壳④）
-            terminal_stream_gateway::terminal_page_subscribe,
-            terminal_stream_gateway::terminal_page_unsubscribe,
+            plugin::commands::terminal_page_subscribe,
+            plugin::commands::terminal_page_unsubscribe,
             // Auth Commands（票 14 阶段 B：配对 / QR / 生物挑战编排已迁
             // com.bedcode.terminal-session 插件，宿主只余引擎事实面）
             commands::auth::ws_authenticate,

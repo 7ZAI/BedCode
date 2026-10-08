@@ -2,6 +2,8 @@
 //!
 //! 插件生命周期管理 — WASM 动态加载、激活、停用、状态持久化
 
+use bedcode_wasm_core_mobile::db::Database;
+
 use crate::plugin::approval::{
     compute_dir_hash, effective_permissions, verify_approval, ApprovalStatus, PluginApprovalStore,
 };
@@ -112,8 +114,9 @@ pub struct PluginManager {
     settings: Arc<SettingsManager>,
     /// 插件数据目录
     plugins_dir: PathBuf,
-    /// 插件数据库连接（WASM Host Function 使用；std Mutex，见 lib.rs 创建处注释）
-    plugin_db: Arc<std::sync::Mutex<rusqlite::Connection>>,
+    /// 插件数据库连接（WASM Host Function 使用；std Mutex，见 lib.rs 创建处注释；
+    /// 批次 2b：底库类型 = fork crate Database wrapper）
+    plugin_db: Arc<std::sync::Mutex<Database>>,
     /// Tauri AppHandle
     ///
     /// Option 化以允许 `#[cfg(test)]` 模块构造无头 PluginManager（不走
@@ -136,7 +139,7 @@ impl PluginManager {
     pub fn new(
         app_data_dir: &PathBuf,
         settings: Arc<SettingsManager>,
-        plugin_db: Arc<std::sync::Mutex<rusqlite::Connection>>,
+        plugin_db: Arc<std::sync::Mutex<Database>>,
         app_handle: Option<Arc<tauri::AppHandle>>,
     ) -> Self {
         // 票 05b：插件 KV 真源 = 主库 plugin_storage 表（共享 plugin_db 连接；
@@ -272,6 +275,7 @@ impl PluginManager {
             self.fs_auth.clone(),
             self.message_bus.clone(),
             status_reporter,
+            Arc::new(crate::plugin::host_ports::HostPorts), // 批次 2b：宿主引擎端口装配
         ));
 
         // 组件路径无启动期签名表校验：契约由 WIT 编译期保证，
@@ -820,7 +824,7 @@ impl PluginManager {
     async fn deactivate_inner(&self, plugin_id: &str) -> Result<()> {
         // mDNS 基础能力服务（spec v2 §5.1）：插件停用即回收其全部浏览 + 广播
         // 句柄（host-mdns v2 生命周期随属主；只碰本人，宿主/它插件登记不受影响）
-        crate::plugin::wasm_runtime::host_impl::purge_for_plugin(plugin_id);
+        crate::plugin::wasm_runtime::host_impl::purge_for_plugin(self.wasm_host_ctx(), plugin_id);
 
         // 1. 检查状态与插件类型（短锁）
         let plugin_type = {
@@ -988,7 +992,7 @@ impl PluginManager {
         if let Err(e) = self.approvals.revoke(plugin_id).await {
             tracing::warn!(plugin_id = %plugin_id, error = %e, "Failed to revoke approval on uninstall");
         }
-        if let Err(e) = self.storage().clear_plugin(plugin_id).await {
+        if let Err(e) = self.storage().clear_all(plugin_id).await {
             tracing::warn!(plugin_id = %plugin_id, error = %e, "Failed to clear plugin storage on uninstall");
         }
 
@@ -1195,7 +1199,7 @@ impl crate::plugin::message_bus::MessageDispatcher for PluginManagerDispatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugin::wasm_runtime::component::tests::{build_host_ctx, build_test_component};
+    use bedcode_wasm_core_mobile::test_support::{build_host_ctx, build_test_component};
     use crate::plugin::wasm_runtime::LoadedComponentPlugin;
     use std::collections::HashSet;
     use std::sync::Arc as StdArc;
@@ -1216,11 +1220,13 @@ mod tests {
         let tmp = TempDir::new().expect("tempdir");
         let app_data_dir = tmp.path().to_path_buf();
         let settings = StdArc::new(SettingsManager::new(&app_data_dir).expect("settings"));
-        let plugin_db = StdArc::new(std::sync::Mutex::new(
+        let plugin_db = StdArc::new(std::sync::Mutex::new(Database::from_connection(
             rusqlite::Connection::open_in_memory().expect("in-memory sqlite"),
-        ));
-        // 票 05b：镜像生产启动顺序——DB 开库后 init_schema（plugin_storage 表）
-        crate::plugin::db_schema::init_schema(&plugin_db.lock().expect("schema lock")).expect("init plugin db schema");
+        )));
+        // 票 05b：镜像生产启动顺序——DB 开库后 init_schema（plugin_storage 表；
+        // schema 真源在宿主 db_schema.rs，Database 只接管连接所有权）
+        crate::plugin::db_schema::init_schema(&plugin_db.lock().expect("schema lock").conn())
+            .expect("init plugin db schema");
 
         let manager = PluginManager::new(
             &app_data_dir,
@@ -1473,9 +1479,9 @@ mod tests {
         // 而不是静默继续（变异：删除 ok_or_else 守卫 → 本测试失败）
         let tmp = TempDir::new().expect("tempdir");
         let settings = StdArc::new(SettingsManager::new(&tmp.path().to_path_buf()).expect("settings"));
-        let plugin_db = StdArc::new(std::sync::Mutex::new(
+        let plugin_db = StdArc::new(std::sync::Mutex::new(Database::from_connection(
             rusqlite::Connection::open_in_memory().expect("in-memory sqlite"),
-        ));
+        )));
         let manager = PluginManager::new(
             &tmp.path().to_path_buf(),
             settings,

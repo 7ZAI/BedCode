@@ -1,0 +1,36 @@
+//! host_notify — 系统通知（逻辑层）
+//!
+//! 移动端特有能力：组件路径归属 WIT `host-events.notify`（SDK HostEvents trait 现状即
+//! emit+notify 同组，spec §3.1 如实映射）
+
+use super::super::WasmPluginState;
+
+/// 逻辑层：发送系统通知（title/body → Kotlin TaskNotificationPlugin）
+///
+/// 非 Android 平台（桌面 dev 场景）不支持，返回 Err（与旧 func_wrap 同语义）
+pub(crate) fn notify(state: &WasmPluginState, title: &str, body: &str) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        use super::support::guarded_host_call;
+
+        guarded_host_call(
+            &state.plugin_id,
+            "host_notify",
+            Err("host_notify panicked".to_string()),
+            || {
+                tokio::task::block_in_place(|| {
+                    state
+                        .runtime_handle
+                        .block_on(state.host_ctx.ports.notify_show(&state.plugin_id, &state.runtime_handle, title, body))
+                })
+            },
+        )
+        .map_err(|e| format!("notification failed: {}", e))
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (title, body);
+        let _ = state;
+        Err("only supported on Android".to_string())
+    }
+}

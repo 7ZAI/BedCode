@@ -114,20 +114,22 @@ const RETIRED_WS_CRYPTO: [&str; 8] = [
 /// 会话控制新面必须仍在（迁移正确性 + fail-visible 的前提）。
 /// 注：`host_impl/terminal.rs`（host-terminal 过渡实现）原在保留面——票 15 阶段 B
 /// 已整面退役该文件（ABI 17），其归属归票 15 的锁，不再由本锁钉住。
+/// 票 17 批次 2b：jwtAuth 代注裁决真源迁入 fork crate（wasm_host.rs → host_api/http_engine.rs），
+/// 锁改钉新真源位置。
 const KEEP_HOST_FACE: [(&str, &str); 2] = [
-    ("src/plugin/wasm_host.rs", "request.get(\"jwtAuth\")"),
-    ("src/plugin/wasm_host.rs", "fn resolve_jwt_auth_header("),
+    ("../packages/bedcode-wasm-core/src/host_api/http_engine.rs", "request.get(\"jwtAuth\")"),
+    ("../packages/bedcode-wasm-core/src/host_api/http_engine.rs", "fn resolve_jwt_auth_header("),
 ];
 
 /// 插件会话控制域（同仓库 plugins/，相对 bedcode-mobile 根）
 const PLUGIN_SESSION_FACE: [(&str, &str); 7] = [
-    ("plugins/terminal-session/rust/src/session.rs", "fn list_sessions("),
-    ("plugins/terminal-session/rust/src/session.rs", "fn send_http_input("),
-    ("plugins/terminal-session/rust/src/session.rs", "\"jwtAuth\": true"),
-    ("plugins/terminal-session/rust/src/commands.rs", "\"terminal-session.list-sessions\""),
-    ("plugins/terminal-session/rust/src/commands.rs", "\"terminal-session.send-http-input\""),
-    ("plugins/terminal-session/plugin.json", "\"network:http\""),
-    ("plugins/terminal-session/plugin.json", "\"terminal-session.start-session\""),
+    ("wasm-apps/terminal-session/rust/src/session.rs", "fn list_sessions("),
+    ("wasm-apps/terminal-session/rust/src/session.rs", "fn send_http_input("),
+    ("wasm-apps/terminal-session/rust/src/session.rs", "\"jwtAuth\": true"),
+    ("wasm-apps/terminal-session/rust/src/commands.rs", "\"terminal-session.list-sessions\""),
+    ("wasm-apps/terminal-session/rust/src/commands.rs", "\"terminal-session.send-http-input\""),
+    ("wasm-apps/terminal-session/plugin.json", "\"network:http\""),
+    ("wasm-apps/terminal-session/plugin.json", "\"terminal-session.start-session\""),
 ];
 
 /// 宿主前端命令面封装必须仍在

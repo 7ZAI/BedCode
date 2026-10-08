@@ -16,7 +16,7 @@
 //! - **引擎**（C4）：`auth/manager.rs` 的 HTTP 认证方法与凭据落地；
 //! - **投影**：`host_impl/auth.rs` 的 `host-auth` 5 原语（凭据零过境）+
 //!   宿主窄读命令 `ws_get_auth_credentials`（前端持久化镜像唯一取数口）；
-//! - **插件编排域**：`plugins/terminal-session` 的 `auth.rs` 流程编排 +
+//! - **插件编排域**：`wasm-apps/terminal-session` 的 `auth.rs` 流程编排 +
 //!   命令分派 + manifest `auth` 权限位声明（权限门 fail-closed 的前提）。
 //!
 //! 只扫非注释行：模块头「为什么迁」的记账段落与本锁自身的说明不算回接。
@@ -59,18 +59,20 @@ const KEEP_FACE: [(&str, &str); 7] = [
     ("src/auth/manager.rs", "pub async fn verify_pairing_code("),
     ("src/auth/manager.rs", "pub async fn authenticate_with_qr("),
     ("src/auth/manager.rs", "pub async fn authenticate_with_biometric("),
-    ("src/plugin/wasm_runtime/host_impl/auth.rs", "fn auth_verify_pairing_code("),
-    ("src/plugin/wasm_runtime/host_impl/auth.rs", "fn auth_has_credentials("),
+    // 票 17 批次 2b：auth 域真源迁入 fork crate（host_impl/auth.rs → manager/runtime/host_impl），
+    // 锁改钉新真源（host-auth 5 原语凭据零过境面仍在，只是换文件）
+    ("../packages/bedcode-wasm-core/src/manager/runtime/host_impl/auth.rs", "fn auth_verify_pairing_code("),
+    ("../packages/bedcode-wasm-core/src/manager/runtime/host_impl/auth.rs", "fn auth_has_credentials("),
     ("src/commands/auth.rs", "fn ws_get_auth_credentials("),
 ];
 
 /// 插件编排域（同仓库 plugins/，相对 bedcode-mobile 根）
 const PLUGIN_AUTH_FACE: [(&str, &str); 5] = [
-    ("plugins/terminal-session/rust/src/auth.rs", "fn request_pairing("),
-    ("plugins/terminal-session/rust/src/auth.rs", "fn verify_pairing_code("),
-    ("plugins/terminal-session/rust/src/commands.rs", "\"terminal-session.verify-pairing-code\""),
-    ("plugins/terminal-session/rust/src/commands.rs", "\"terminal-session.authenticate-with-biometric\""),
-    ("plugins/terminal-session/plugin.json", "\"auth\""),
+    ("wasm-apps/terminal-session/rust/src/auth.rs", "fn request_pairing("),
+    ("wasm-apps/terminal-session/rust/src/auth.rs", "fn verify_pairing_code("),
+    ("wasm-apps/terminal-session/rust/src/commands.rs", "\"terminal-session.verify-pairing-code\""),
+    ("wasm-apps/terminal-session/rust/src/commands.rs", "\"terminal-session.authenticate-with-biometric\""),
+    ("wasm-apps/terminal-session/plugin.json", "\"auth\""),
 ];
 
 fn mobile_root() -> PathBuf {

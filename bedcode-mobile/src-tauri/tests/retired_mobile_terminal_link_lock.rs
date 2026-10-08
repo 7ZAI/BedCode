@@ -65,30 +65,31 @@ const RETIRED_FRONTEND_LITERALS: [&str; 8] = [
     "'terminal_get_state'",
 ];
 
-/// 宿主保留面（窄转发 + ABI v15 原语）必须仍在：本票只摘协议编排，不摘传输面
+/// 宿主保留面（窄转发 + ABI v15 原语）必须仍在：本票只摘协议编排，不摘传输面。
+/// 票 17 批次 2b 后真源迁入 fork crate（bedcode-wasm-core-mobile），锁改钉新真源。
 const RETAINED_FACE: [(&str, &str); 6] = [
     (
-        "src/terminal_stream_gateway.rs",
+        "../packages/bedcode-wasm-core/src/terminal_stream_gateway.rs",
         "pub fn forward_output(",
     ),
     (
-        "src/terminal_stream_gateway.rs",
+        "../packages/bedcode-wasm-core/src/terminal_stream_gateway.rs",
         "pub fn page_subscribe(",
     ),
     (
-        "src/plugin/wasm_runtime/host_impl/terminal_stream.rs",
+        "../packages/bedcode-wasm-core/src/manager/runtime/host_impl/terminal_stream.rs",
         "fn terminal_stream_forward_output(",
     ),
     (
-        "src/plugin/wasm_runtime/host_impl/ws.rs",
+        "../packages/bedcode-wasm-core/src/manager/runtime/host_impl/ws.rs",
         "jwt_auth == Some(true)",
     ),
     (
-        "src/plugin/wasm_runtime/host_impl/ws.rs",
+        "../packages/bedcode-wasm-core/src/manager/runtime/host_impl/ws.rs",
         "fn run_reconnect(",
     ),
     (
-        "src/plugin/wasm_runtime/host_impl/connection.rs",
+        "../packages/bedcode-wasm-core/src/manager/runtime/host_impl/connection.rs",
         "fn connection_primary_target(",
     ),
 ];

@@ -11,7 +11,7 @@
 //! - 非 2xx 与业务码信封在执行器层的透出形态（`{status, body}`）
 //!
 //! 边界：插件侧的请求构造 / 响应分类纯函数锁在插件 crate
-//! （`plugins/terminal-session/rust/src/session.rs` 单测）；无 token 的
+//! （`wasm-apps/terminal-session/rust/src/session.rs` 单测）；无 token 的
 //! fail-visible 裁决锁在宿主 lib 单测（`resolve_jwt_auth_header` 三向）。
 
 use std::net::SocketAddr;
@@ -22,6 +22,15 @@ use actix_web::{web, App, HttpRequest, HttpResponse, HttpServer};
 use bedcode_mobile_lib::plugin::wasm_host::execute_http_request;
 use bedcode_mobile_lib::state::{clear_global_token, set_global_token};
 use serde_json::{json, Value};
+
+/// 执行器包装（批次 2b：execute_http_request 增端口参数——用宿主真端口，
+/// jwtAuth 用例的 set_global_token / redirect 策略语义与迁移前一致）
+async fn exec(request: &serde_json::Value) -> anyhow::Result<serde_json::Value> {
+    let ports: std::sync::Arc<dyn bedcode_wasm_core_mobile::host_api::ports::HostEnginePorts> =
+        std::sync::Arc::new(bedcode_mobile_lib::plugin::host_ports::HostPorts);
+    execute_http_request(request, &ports).await
+}
+
 
 /// 全局串行闸：`set_global_token`（jwtAuth 经宿主代注读取）是进程级共享静态，
 /// 用例并发会互相踩 token——与 http_auth_flow / http_proxy_flow 的 SERIAL 同构
@@ -231,7 +240,7 @@ async fn scenario_list_wire_and_jwt() {
     let mock = MockDesktop::start(MockMode::Happy).await;
     set_global_token(MOCK_TOKEN);
 
-    let resp = execute_http_request(&plugin_request(
+    let resp = exec(&plugin_request(
         "GET",
         format!("{}/api/sessions", mock.base_url()),
         None,
@@ -259,7 +268,7 @@ async fn scenario_start_stop_remove_input_shapes() {
     set_global_token(MOCK_TOKEN);
     let base = mock.base_url();
 
-    let resp = execute_http_request(&plugin_request(
+    let resp = exec(&plugin_request(
         "POST",
         format!("{base}/api/sessions/start"),
         // 与插件 build_start_body 同形（cols/rows 齐备才出现）
@@ -273,28 +282,28 @@ async fn scenario_start_stop_remove_input_shapes() {
     assert_eq!(body["cols"], 120);
 
     // stop / remove / input：无 data 的 ok 信封
-    execute_http_request(&plugin_request(
+    exec(&plugin_request(
         "POST",
         format!("{base}/api/sessions/s-new/stop"),
         None,
     ))
     .await
     .expect("stop transport");
-    execute_http_request(&plugin_request(
+    exec(&plugin_request(
         "DELETE",
         format!("{base}/api/sessions/s-new/remove"),
         None,
     ))
     .await
     .expect("remove transport");
-    execute_http_request(&plugin_request(
+    exec(&plugin_request(
         "POST",
         format!("{base}/api/sessions/s-new/input"),
         Some(json!({ "data": "ls -la", "specialKey": null })),
     ))
     .await
     .expect("input data transport");
-    execute_http_request(&plugin_request(
+    exec(&plugin_request(
         "POST",
         format!("{base}/api/sessions/s-new/input"),
         Some(json!({ "data": "", "specialKey": "ctrl+c" })),
@@ -323,7 +332,7 @@ async fn scenario_business_error_envelope_passes_through() {
 
     // 桌面错误口径：HTTP 200 + `{code:1002, message}`——执行器不解释业务码，
     // 原样透出 body（分类归插件 session.rs：前端据此拿到 code=1002）
-    let resp = execute_http_request(&plugin_request(
+    let resp = exec(&plugin_request(
         "POST",
         format!("{}/api/sessions/s-missing/stop", mock.base_url()),
         None,
@@ -345,7 +354,7 @@ async fn scenario_non_2xx_status_passes_through() {
 
     // 非 2xx：执行器返回 `{status:500, body}`（不 Err）——插件分类层映射前端
     // `{code: status}`（插件 session.rs 单测锁），本层锁 status 透出
-    let resp = execute_http_request(&plugin_request(
+    let resp = exec(&plugin_request(
         "POST",
         format!("{}/api/sessions/s1/input", mock.base_url()),
         Some(json!({ "data": "x", "specialKey": null })),

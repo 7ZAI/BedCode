@@ -87,11 +87,13 @@ const RETAINED_FACE: [(&str, &str); 6] = [
         "pub const PERMISSION_TERMINAL_OUTPUT",
     ),
     (
-        "src/terminal_stream_gateway.rs",
+        // 票 17 批次 2b：真源随 wasm-core fork 迁入 crate（terminal_stream_gateway → crate 根；
+        // host_impl/terminal_stream → manager/runtime/host_impl），锁改钉新真源位置
+        "../packages/bedcode-wasm-core/src/terminal_stream_gateway.rs",
         "pub fn forward_output(",
     ),
     (
-        "src/plugin/wasm_runtime/host_impl/terminal_stream.rs",
+        "../packages/bedcode-wasm-core/src/manager/runtime/host_impl/terminal_stream.rs",
         "fn terminal_stream_forward_output(",
     ),
 ];

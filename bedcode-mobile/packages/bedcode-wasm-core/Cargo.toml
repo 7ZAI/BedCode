@@ -1,0 +1,99 @@
+# ==================== bedcode-wasm-core-mobile：移动端插件机制整核（fork 对齐） ====================
+# 票 17（.scratch/2026-10-07-mobile-wasm-core-refactor/ticket-17-mobile-wasm-core-fork.md）：
+# 以仓库根 packages/bedcode-wasm-core（桌面整核，ADR 0037）为源 fork（ADR 0040 D1
+# 选项 C 第一步）：bindgen 换绑移动 WIT（v17，16 import / 5 export + 可选 events-binary）、
+# 删桌面独有域（host_api 桌面 21 域 / system / utils / crypto / manager 装配层 / host-task /
+# L1 能力路由）、host_api 移动 16 域自持（宿主 plugin/wasm_runtime/host_impl/ 迁入）。
+#
+# 与桌面的关系：机制同源、契约独立（ADR 0018）——**同名 ≠ 契约同一**，WIT / ABI /
+# 权限集不因 fork 互相约束；fork 面收缩（抽共享核）走票 18/19。
+# 双端共享锚点：仓库根 packages/bedcode-host-kit（机制内核 traits）。
+
+[package]
+name = "bedcode-wasm-core-mobile"
+version = "0.1.0"
+description = "BedCode 移动端插件机制整核：wasmtime 组件模型宿主 + host-* 原语 + 安全闸门 + 存储引擎面（fork 自桌面 wasm-core，ADR 0040）"
+authors = ["binblink"]
+license = "MIT"
+repository = "https://github.com/7ZAI/BedCode"
+edition = "2021"
+
+[dependencies]
+# ==================== 宿主平台（移动宿主 tauri 2，ADR 0019 双端锁版） ====================
+tauri = { version = "2", features = ["protocol-asset"] }
+
+# ==================== WASM 运行时（wasmtime 48，双端锁版 ADR 0019） ====================
+# 移动插件产物为 wasm32-unknown-unknown 组件（非 wasip3，无 WASI import）——
+# 不依赖 wasmtime-wasi（桌面 fork 面差异，见票 17 §3.3）
+wasmtime = { version = "48", features = ["component-model"] }
+
+# ==================== 异步 / 并发 ====================
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "io-util", "test-util"] }
+
+# ==================== 插件机制内核 + 移动契约 ====================
+# 机制内核（仓库根，双端共享锚点）：HostModule / WasmPluginState / HostPorts / 注册表
+bedcode-host-kit = { path = "../../../packages/bedcode-host-kit" }
+# WIT 契约绑定（bindgen! 在 manager/runtime/component.rs，path 相对本 crate 根）
+bedcode-plugin-api-mobile = { path = "../plugin-sdk-mobile/rust" }
+# 对等网络共享基础设施（节点身份 + 自签证书；peer 域引擎注入面批次 2 重接）
+bedcode-peer-net = { path = "../../../packages/peer-net" }
+# 链路报文加密协议核心（link_crypto 算法）
+bedcode-link-crypto = { path = "../../../packages/link-crypto" }
+
+# 能力模块自报（inventory::submit! / collect!；移动面用途随裁剪评估）
+inventory = "0.3"
+# 序列化
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# UUID
+uuid = { version = "1", features = ["v4", "serde"] }
+# 日期/时间
+chrono = { version = "0.4", features = ["serde"] }
+# 日志
+tracing = { version = "0.1", features = ["attributes"] }
+# 错误处理
+anyhow = "1"
+thiserror = "1"
+# 文件监听（dev watcher）
+notify = "6"
+# 正则
+regex = "1"
+# 异步 trait（dyn 兼容）
+async-trait = "0.1"
+futures-util = "0.3"
+# HTTP 客户端（host-http 域出站；移动走 rustls，无 native-tls）
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+# 数据库
+rusqlite = { version = "0.32", features = ["bundled"] }
+# 用户插件 zip 解压安装
+zip = "4.6"
+rand = "0.8"
+# 编码
+base64 = "0.22"
+hex = "0.4"
+encoding_rs = "0.8"
+# 测试夹具组件编码（test-support feature；与宿主 src-tauri 精确锁版一致）
+wit-component = { version = "=0.256.0", optional = true }
+sha2 = "0.10"
+# 目录定位（fs_auth 授权目录默认值 / auth_policy 记录定位；与桌面 fork 面同用途）
+dirs = "6.0.0"
+# host-websocket 客户端域出站引擎（批次 2 自宿主 wasm_runtime/host_impl/ws.rs 迁入；
+# 移动端 ws:// 明文客户端，不启 native-tls——与宿主 src-tauri 依赖同形）
+tokio-tungstenite = "0.24"
+# host-mdns 域共享守护类型（ServiceDaemon 句柄经宿主引擎端口注入；crate 持有
+# 句柄表与事件定向投递机制，守护单例真源留宿主 crate::mdns::engine）
+mdns-sd = "0.20"
+
+[features]
+# 测试支持面（宿主 src-tauri dev-dependencies 开启）：组件 e2e 夹具构建器 +
+# mock WS 服务器。生产构建零影响（cfg(feature) 门控）
+test-support = ["dep:wit-component"]
+
+[dev-dependencies]
+tempfile = "3"
+# 无头 AppHandle 构造（tauri::test::mock_app）——端口占位实现的 fail-visible 断言
+tauri = { version = "2", features = ["test"] }
+
+[profile.release]
+# 与 src-tauri 同口径：panic 可被 catch_unwind 捕获（错误边界）
+panic = "unwind"
