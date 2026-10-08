@@ -9,6 +9,57 @@
 
 ## [未发布]
 
+#### 桌面+移动：双端共享 mDNS 引擎（ADR 0042，M1–M4）
+
+- **共享引擎** `packages/bedcode-discovery-engine` 成为双端唯一的 mDNS 引擎（引擎机制 + 双句柄表
+  + 属主仲裁；`desktop-host` feature 门控 WIT 绑定层，默认形态零 WIT）。新增 `set_daemon_init_hook`
+  平台钩子 / `pub daemon_if_initialized`；`register_host_service` 去掉端口参数（NullTask 占位——
+  桌面 `MdnsPort` 实现同步简化）
+- **移动端** fork crate `host_impl/mdns.rs`（821→~230 行）重写为薄转发层 + `MobileDiscoveryPorts`
+  （权限门 = manifest / 总线发布 / 节点 ID 自播回显过滤 / 宿主运行时任务派生，替换历史
+  std-thread 阻塞 recv 循环）；宿主 `mdns/engine.rs` **删除**——守护单例真源移入共享引擎（Android
+  多播锁经宿主 setup 装配的 init 钩子获取）；`HostEnginePorts::{mdns_daemon, mdns_daemon_if_initialized,
+  mdns_reannounce_interval}` 退役；mdns 事件 topic wire 统一为 `<owner>::mdns:found|lost`
+  （ABI 不变；file-transfer 插件 Rust 订阅字面量与 SDK/WIT 注释同步迁移）
+- **peer-net**：`spawn_peer_mdns_advertiser` + `DiscoveryAdvertiser` 删除（零生产消费者；广告面由
+  宿主自播 / 插件 advertise 在共享守护上覆盖）
+- 门禁：移动端 fork crate `cargo test --features test-support --lib` **290 全绿**（清偿上一条票 18
+  的「暂挂」注记）、移动端宿主 245 绿、桌面 discovery-engine 31 绿、peer-net 101 绿；移动端
+  `ServiceDaemon::new()` 代码层归零；旧 `mdns:found.<owner>` 字面量扫描归零
+
+#### 桌面+移动：host_api 共享实现核批次 2——bus 域语义（票 18）
+
+- **bus 语义抽取**至 `packages/bedcode-host-api-core::bus`：topic 形态机制（`owned_topic` /
+  `topic_owner` / 回复道 / legacy 形态识别——宿主侧单点，guest 侧拷贝留在桌面 SDK；票 19 Part B
+  对照锁将钉住两份一致）+ 审计票 05 三道门禁（命名空间 / 订阅面 / 互调门）+ 发布判定链
+  （权限位 → 严格 JSON → 命名空间 → 互调门 → 投递）。队列与订阅簿留各端
+- **两端策略分叉由端口承载**：桌面无权限位（topic 形态即 ACL）→ `Option<&PermissionGate>` 传
+  `None`；移动查 `PERMISSION_BUS`；桌面互调门走 core-security 授权框架，移动恒放行（WIT v17
+  无 host-api-call）
+- **移动行为对齐**（此前移动总线无任何门禁——双份漂移税实例）：发布/订阅过命名空间门、回复道
+  + legacy 形态订阅显性拒绝、退订仅命名空间门（清理幂等）、非法 JSON 发布由「降级原始串」改为
+  显性拒绝（既有移动插件经 SDK `serde_json::Value` 走公开道——实测 file-transfer 零回归）
+- **桌面** adapter 重写，绑定层与测试套件逐字保真（已对 HEAD 核验）；门禁：`cargo test` 全量
+  677 绿（+1 既有 perf 红基线）、无头编译过、ABI / WIT / world 零字节变动
+- **移动**：fork crate lib 编译通过；全量测试门禁待并行「双端共享 lib M3」会话收口后补跑
+  （其在途夹具面当前使 crate 测试构建编译红）
+
+#### 桌面+移动：host_api 共享实现核批次 1——storage 域（票 18）
+
+- **新建 crate** `packages/bedcode-host-api-core`（ADR 0040 第二步）：无 WIT 依赖域的 host_api
+  机制实现层，「实现层 + 各端 adapter」两层化；仅机制级依赖（serde_json / tracing——禁 SDK /
+  tauri / tokio），由新建 crate 边界锁强制（变异自检 2/2）
+- **storage 域抽取**：权限门（权限词汇经参数传入）→ 系统空间纵深守卫 → 能力路由（桌面独有，
+  端口默认 `None`）→ 键值原语（serde_json 规范形）；`SYSTEM_PLUGIN_ID` 真源随实现层上移，
+  双端经 re-export 保既有路径
+- **桌面** `bedcode-wasm-core`：`host_api/storage.rs` 变薄 adapter（`SqlitePorts` → 共享核端口），
+  域函数签名与 guest 可见错误文本逐字保留。门禁：`cargo test` 全量 677 绿（+1 既有 perf 红基线）、
+  `--no-default-features` 无头编译通过、ABI / WIT / world 零字节变动
+- **移动** fork crate：`host_impl/storage.rs` 同形 adapter；**行为对齐**——系统空间纵深守卫自本批
+  起对移动端生效（此前移动缺该守卫，双份漂移税实例）；`set()` 的 JSON 解析移到权限门之前
+  （仅边缘入参错误文本变化，授权路径零变化）。移动全量门禁暂挂：并行在途「双端共享 lib M3」
+  （mdns → discovery-engine）使 fork crate 处中间态；storage 侧 3 文件在该基线下名字解析零报错
+
 #### 移动端：egress 三档访问策略对齐 + 闸门锁（票 20）
 
 - **收口**：egress 安全闸门（`src-tauri/src/egress.rs`，留宿主裁决 ADR 0022 D5——三档只回答

@@ -19,11 +19,10 @@ use tokio::sync::Mutex;
 
 /// 系统级 plugin_id，用于存储非插件私有的全局数据
 ///
-/// **本模块是真源**（系统级数据的写入方在这里：激活状态等）。同一判据的 fail-closed
-/// 消费方是插件面存储原语（`host_api::storage::ensure_not_system_space`），它经再导出
-/// 取**同一个值**——两处指同一份常量，不存在同值副本（票 08 期间真源一度在
-/// `bedcode-sqlite-engine`，ADR 0036 撤销 crate 时一并归位）。
-pub(crate) const SYSTEM_PLUGIN_ID: &str = "__system__";
+/// **真源随 host-storage 实现层上移共享核**（`bedcode-host-api-core::storage`，
+/// 票 18 起双端单点，fail-closed 消费方 `ensure_not_system_space` 同侧）；本模块仍是
+/// 系统级数据的写入方（激活状态等），经再导出保既有路径（ADR 0037 垫片先例）。
+pub(crate) use bedcode_host_api_core::storage::SYSTEM_PLUGIN_ID;
 /// 插件激活状态持久化 key
 const ACTIVATION_STATE_KEY: &str = "activation_state";
 

@@ -1,62 +1,77 @@
-//! `host-storage` 能力域实现（插件键值存储，3 条原语，按 `plugin_id` 隔离）
+//! `host-storage` 能力域 adapter（实现层已上移共享核，票 18）
 //!
-//! 每条原语三段式：
+//! 机制语义（权限门 / 系统空间纵深守卫 / 能力路由 / 键值原语）在
+//! `bedcode-host-api-core::storage`（双端单点，机制修复一次生效）；本文件只剩
+//! 「[`SqlitePorts`] → 共享核 [`StoragePorts`] 端口」的 adapter 与既有域函数签名
+//! ——`component.rs` 绑定层与 `tests/kv.rs` 的调用面零改动（桌面零回归门禁）。
 //!
-//! 1. **权限门** `storage`（经端口问宿主结果——判定与落日志只在宿主一处）；
-//! 2. **系统空间纵深守卫**（[`SYSTEM_PLUGIN_ID`] fail-closed，R-02 纵深防御）；
-//! 3. **能力路由**（core-plugin-manager：该能力由系统组件提供时，按**调用方**命名空间
-//!    转发到它的同形导出）→ 未命中才走宿主原语（[`SqlitePorts::storage_get`] 等）。
+//! 端口接线：权限判定委托 [`SqlitePorts::check_permission`]（PermissionManager
+//! 单点）；键值委托宿主原语；能力路由（core-plugin-manager，桌面独有）委托
+//! `forward_storage_*`——移动端同名端口走共享核默认实现（`None` = 无提供者）。
 //!
-//! 真源仍是数据库（`plugin_storage` 表，schema 在 `crate::db`），本域**不另立真源**。
-//!
-//! ## 为什么这段实现**留在 wasm 核心内**（ADR 0036）
-//!
-//! 与 [`super::database`] 同理：`host-storage` 的属主分区与系统空间守卫是
-//! wasm_core 自己的插件机制（宿主激活状态、审批记录都落在这张表里），机制实现与
-//! 机制真源不分家。
-//!
-//! ## 零业务代码红线（AGENTS §5.1）
-//!
-//! 本域只做「按属主分区的键值原语 + 路由」，不解释任何键的含义（激活状态、审批记录、
-//! 预授权路径 …全归宿主/插件各自解释）。
+//! 零业务代码红线（AGENTS §5.1）：本域只做「按属主分区的键值原语 + 路由」，
+//! 不解释任何键的含义（激活状态、审批记录、预授权路径 …全归宿主/插件各自解释）。
 
 use crate::host_api::sqlite_ports::SqlitePorts;
 use crate::permission::PERMISSION_STORAGE;
+use bedcode_host_api_core::storage as core_storage;
+use bedcode_host_api_core::storage::{PermissionGate, StoragePorts};
 
-/// 系统级 `plugin_id`：非插件私有的全局数据命名空间（`plugin_storage` 表内按
-/// `plugin_id` 分区，故系统空间与插件空间天然隔离）
+/// 系统级 `plugin_id`：非插件私有的全局数据命名空间（真源在共享核
+/// `bedcode_host_api_core::storage`，经 `crate::storage` 再导出取同一个值）
 ///
-/// **真源是 [`crate::storage::SYSTEM_PLUGIN_ID`]**（插件激活状态与系统级
-/// 数据的写入方在那里）；本域是它的 fail-closed 消费方（[`ensure_not_system_space`]），
-/// 经再导出取同一个值——两处都指同一份常量，不存在同值副本。
+/// 本再导出仅供 `tests/kv.rs` 既有路径消费（lib 代码不再直接引用——守卫已随
+/// 实现层上移共享核），故 cfg(test) 门控。
+#[cfg(test)]
 pub(crate) use crate::storage::SYSTEM_PLUGIN_ID;
 
-/// 插件面存储原语的系统空间守卫（R-02 纵深防御）
-///
-/// 插件实例的 `plugin_id` 由运行时从已认证身份派生（`component.rs` 内
-/// `&self.plugin_id`），guest 无法伪造；但若真出现 `__system__`（实施者 bug /
-/// 未来某条宽松入径），必须 fail-closed——系统空间是宿主激活状态/审批记录等的
-/// 真源，任何插件写它就是越权。
-fn ensure_not_system_space(plugin_id: &str) -> Result<(), String> {
-    if plugin_id == SYSTEM_PLUGIN_ID {
-        return Err("storage: plugin may not access system storage space".to_string());
-    }
-    Ok(())
+/// [`SqlitePorts`] → 共享核 [`StoragePorts`] 的桌面 adapter
+struct SqliteStoragePorts<'a> {
+    ports: &'a dyn SqlitePorts,
 }
 
-/// 获取值（权限校验 + 服务调用）
-pub fn storage_get(ports: &dyn SqlitePorts, plugin_id: &str, key: &str) -> Result<Option<serde_json::Value>, String> {
-    if !ports.check_permission(plugin_id, PERMISSION_STORAGE, "host_storage_get") {
-        return Err("permission denied".to_string());
+impl StoragePorts for SqliteStoragePorts<'_> {
+    fn check_permission(&self, plugin_id: &str, permission: &str, api: &str) -> bool {
+        self.ports.check_permission(plugin_id, permission, api)
     }
-    ensure_not_system_space(plugin_id)?;
-    // 能力路由：系统组件提供者命中时转发（组件间不共享内存，WIT 边界序列化）
-    if let Some(result) = ports.forward_storage_get(plugin_id, key) {
-        return result.map(|opt| opt.map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::String(s))));
+
+    fn kv_get(&self, plugin_id: &str, key: &str) -> Result<Option<serde_json::Value>, String> {
+        self.ports.storage_get(plugin_id, key)
     }
-    ports
-        .storage_get(plugin_id, key)
-        .map_err(|e| format!("storage error: {}", e))
+
+    fn kv_set(&self, plugin_id: &str, key: &str, value: serde_json::Value) -> Result<(), String> {
+        self.ports.storage_set(plugin_id, key, value)
+    }
+
+    fn kv_delete(&self, plugin_id: &str, key: &str) -> Result<(), String> {
+        self.ports.storage_delete(plugin_id, key)
+    }
+
+    fn forward_kv_get(&self, plugin_id: &str, key: &str) -> Option<Result<Option<String>, String>> {
+        self.ports.forward_storage_get(plugin_id, key)
+    }
+
+    fn forward_kv_set(&self, plugin_id: &str, key: &str, value: &str) -> Option<Result<(), String>> {
+        self.ports.forward_storage_set(plugin_id, key, value)
+    }
+
+    fn forward_kv_delete(&self, plugin_id: &str, key: &str) -> Option<Result<(), String>> {
+        self.ports.forward_storage_delete(plugin_id, key)
+    }
+}
+
+/// 获取值（实现层：权限门 → 系统空间守卫 → 能力路由 → 键值原语）
+pub fn storage_get(
+    ports: &dyn SqlitePorts,
+    plugin_id: &str,
+    key: &str,
+) -> Result<Option<serde_json::Value>, String> {
+    core_storage::storage_get(
+        &SqliteStoragePorts { ports },
+        plugin_id,
+        key,
+        &PermissionGate { permission: PERMISSION_STORAGE, api: "host_storage_get", deny_error: "permission denied" },
+    )
 }
 
 /// 设置值（权限校验 + 服务调用）
@@ -66,30 +81,27 @@ pub fn storage_set(
     key: &str,
     value: serde_json::Value,
 ) -> Result<(), String> {
-    if !ports.check_permission(plugin_id, PERMISSION_STORAGE, "host_storage_set") {
-        return Err("permission denied".to_string());
-    }
-    ensure_not_system_space(plugin_id)?;
-    if let Some(result) = ports.forward_storage_set(plugin_id, key, &value.to_string()) {
-        return result;
-    }
-    ports
-        .storage_set(plugin_id, key, value)
-        .map_err(|e| format!("storage error: {}", e))
+    core_storage::storage_set(
+        &SqliteStoragePorts { ports },
+        plugin_id,
+        key,
+        value,
+        &PermissionGate { permission: PERMISSION_STORAGE, api: "host_storage_set", deny_error: "permission denied" },
+    )
 }
 
 /// 删除值（权限校验 + 服务调用）
 pub fn storage_delete(ports: &dyn SqlitePorts, plugin_id: &str, key: &str) -> Result<(), String> {
-    if !ports.check_permission(plugin_id, PERMISSION_STORAGE, "host_storage_delete") {
-        return Err("permission denied".to_string());
-    }
-    ensure_not_system_space(plugin_id)?;
-    if let Some(result) = ports.forward_storage_delete(plugin_id, key) {
-        return result;
-    }
-    ports
-        .storage_delete(plugin_id, key)
-        .map_err(|e| format!("storage error: {}", e))
+    core_storage::storage_delete(
+        &SqliteStoragePorts { ports },
+        plugin_id,
+        key,
+        &PermissionGate {
+            permission: PERMISSION_STORAGE,
+            api: "host_storage_delete",
+            deny_error: "permission denied",
+        },
+    )
 }
 
 #[cfg(test)]

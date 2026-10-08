@@ -7,6 +7,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+#### Desktop+Mobile: dual-end shared mDNS engine (ADR 0042, M1–M4)
+
+- **Shared engine** `packages/bedcode-discovery-engine` is now THE single dual-end mDNS engine
+  (engine mechanism + dual handle tables + owner arbitration; `desktop-host` feature gates the WIT
+  binding layer, default form is WIT-free). New `set_daemon_init_hook` platform hook +
+  `pub daemon_if_initialized`; `register_host_service` drops the ports parameter (NullTask
+  placeholder — desktop `MdnsPort` implementation updated)
+- **Mobile** fork crate `host_impl/mdns.rs` (821→~230 lines) rewritten as a thin forwarding layer
+  over `MobileDiscoveryPorts` (permission gate from manifest / bus publish / node-id echo filter /
+  host-runtime spawn, replacing the std-thread blocking-recv loop); host `mdns/engine.rs` **deleted**
+  — the daemon single-truth moved into the shared engine (Android multicast lock via init hook, set
+  in host setup); `HostEnginePorts::{mdns_daemon, mdns_daemon_if_initialized, mdns_reannounce_interval}`
+  retired; mdns event topic wire unified to `<owner>::mdns:found|lost` (ABI unchanged; the
+  file-transfer plugin Rust subscription literal migrated, SDK/WIT comments synced)
+- **peer-net**: `spawn_peer_mdns_advertiser` + `DiscoveryAdvertiser` deleted (zero production
+  consumers; advertising covered by host self-advertise / plugin advertise on the shared daemon)
+- Gates: mobile fork crate `cargo test --features test-support --lib` **290 green** (clears the
+  ticket-18 deferred note above), mobile host 245 green, desktop discovery-engine 31 green,
+  peer-net 101 green; mobile `ServiceDaemon::new()` code-level zero; old `mdns:found.<owner>`
+  literal scan zero
+
+#### Desktop+Mobile: host_api shared implementation core, batch 2 — bus domain semantics (Ticket 18)
+
+- **bus semantics extracted** to `packages/bedcode-host-api-core::bus`: topic-form mechanism
+  (`owned_topic` / `topic_owner` / reply-lane / legacy-form recognition — host-side single point,
+  guest-side copy stays in the desktop SDK; ticket 19 Part B cross-copy lock will pin equality)
+  plus the three audit-ticket-05 gates (namespace / subscribe-face / inter-plugin-call) and the
+  publish gate chain (permission → strict JSON → namespace → API gate → delivery). Queues and
+  subscription books stay per-end
+- **Two-end policy fork carried by ports**: desktop has no permission bit (topic form IS the ACL)
+  → `Option<&PermissionGate>` = `None`; mobile checks `PERMISSION_BUS`; desktop routes the API
+  gate through the core-security framework, mobile allows (no host-api-call in WIT v17)
+- **Mobile behavior alignment** (previously the mobile bus had no gates at all — an instance of
+  the dual-copy drift tax): namespace gate on publish/subscribe, reply-lane + legacy-form
+  subscribe rejection, unsubscribe gated by namespace only (idempotent cleanup), and invalid-JSON
+  publishes now fail visibly instead of degrading to a raw string (existing mobile plugins publish
+  via SDK `serde_json::Value` on public topics — zero regression, verified against file-transfer)
+- **Desktop** adapter rewrite keeps the binding layer and the test suite byte-identical (verified
+  against HEAD); gates: full `cargo test` 677 green (+1 known perf-red baseline), headless compile
+  passes, zero ABI / WIT / world change
+- **Mobile**: fork-crate lib compiles clean; full test gate deferred until the parallel
+  "dual-end shared libs M3" session settles (its in-flight fixture face currently breaks the
+  crate's test build)
+
+#### Desktop+Mobile: host_api shared implementation core, batch 1 — storage domain (Ticket 18)
+
+- **New crate** `packages/bedcode-host-api-core` (ADR 0040 step 2): the mechanism implementation
+  layer of WIT-free host_api domains, shaped as "one implementation layer + per-end adapters";
+  mechanism-grade deps only (serde_json / tracing — no SDK / tauri / tokio), enforced by a new
+  crate boundary lock (mutation self-check 2/2)
+- **storage domain extracted**: permission gate (permission vocabulary passed as a parameter) →
+  system-space defense guard → capability routing (desktop-only, port defaults to `None`) → kv
+  primitives (serde_json canonical form); `SYSTEM_PLUGIN_ID` truth source moved with the
+  implementation layer, both ends re-export to keep existing paths
+- **Desktop** `bedcode-wasm-core`: `host_api/storage.rs` is now a thin adapter (`SqlitePorts` →
+  shared-core port); domain signatures and guest-visible error texts byte-identical. Gates: full
+  `cargo test` 677 green (+1 known perf-red baseline), `--no-default-features` headless compile
+  passes, zero ABI / WIT / world change
+- **Mobile** fork crate: `host_impl/storage.rs` becomes the same adapter; **behavior alignment** —
+  the system-space guard now also applies on mobile (previously missing, an instance of the
+  dual-copy drift tax); `set()` now parses JSON before the permission gate (edge-case error text
+  only, authorized path unchanged). Mobile full-suite gates deferred: a parallel in-flight
+  "dual-end shared libs M3" (mdns → discovery-engine) leaves the fork crate mid-flight; the three
+  storage-side files resolve cleanly against that baseline
+
 #### Mobile: egress three-tier access strategy alignment + gate lock (Ticket 20)
 
 - **Landed**: the egress security gate (`src-tauri/src/egress.rs`, host-side per ADR 0022 D5 —

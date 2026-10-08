@@ -750,7 +750,6 @@ version = "0.1.0"
 dependencies = [
  "bedcode-host-kit",
  "bedcode-peer-net",
- "bedcode-plugin-api",
  "inventory",
  "mdns-sd",
  "serde",
@@ -760,6 +759,14 @@ dependencies = [
  "uuid",
  "wasmtime",
  "wit-bindgen 0.60.0",
+]
+
+[[package]]
+name = "bedcode-host-api-core"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "tracing",
 ]
 
 [[package]]
@@ -796,9 +803,11 @@ dependencies = [
  "anyhow",
  "async-trait",
  "base64 0.22.1",
+ "bedcode-discovery-engine",
  "bedcode-link-crypto",
  "bedcode-peer-net",
  "bedcode-plugin-api-mobile",
+ "bedcode-wasm-core-mobile",
  "bytes",
  "chrono",
  "encoding_rs",
@@ -890,7 +899,6 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "bedcode-host-kit",
- "bedcode-plugin-api",
  "bedcode-server-base",
  "chrono",
  "inventory",
@@ -911,7 +919,6 @@ dependencies = [
  "anyhow",
  "async-trait",
  "bedcode-link-crypto",
- "bedcode-plugin-api",
  "futures-util",
  "local-ip-address",
  "mdns-sd",
@@ -957,7 +964,6 @@ dependencies = [
  "actix-web",
  "anyhow",
  "bedcode-host-kit",
- "bedcode-plugin-api",
  "bedcode-server-base",
  "bedcode-server-core",
  "futures-util",
@@ -979,7 +985,6 @@ dependencies = [
  "anyhow",
  "bedcode-host-kit",
  "bedcode-peer-net",
- "bedcode-plugin-api",
  "bedcode-server-base",
  "inventory",
  "serde",
@@ -1001,7 +1006,6 @@ dependencies = [
  "actix-web-actors",
  "async-trait",
  "bedcode-host-kit",
- "bedcode-plugin-api",
  "bedcode-server-base",
  "bedcode-server-core",
  "chrono",
@@ -1027,6 +1031,7 @@ dependencies = [
  "base64 0.22.1",
  "bedcode-crypto-engine",
  "bedcode-discovery-engine",
+ "bedcode-host-api-core",
  "bedcode-host-kit",
  "bedcode-link-crypto",
  "bedcode-peer-net",
@@ -1075,6 +1080,43 @@ dependencies = [
  "webkit2gtk",
  "windows-sys 0.61.2",
  "x25519-dalek",
+ "zip",
+]
+
+[[package]]
+name = "bedcode-wasm-core-mobile"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "bedcode-discovery-engine",
+ "bedcode-host-api-core",
+ "bedcode-host-kit",
+ "bedcode-link-crypto",
+ "bedcode-peer-net",
+ "bedcode-plugin-api-mobile",
+ "chrono",
+ "dirs 6.0.0",
+ "encoding_rs",
+ "futures-util",
+ "hex",
+ "inventory",
+ "notify",
+ "rand 0.8.8",
+ "regex",
+ "reqwest 0.12.28",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tauri",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
+ "uuid",
+ "wasmtime",
  "zip",
 ]
 

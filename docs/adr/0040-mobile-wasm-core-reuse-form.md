@@ -94,3 +94,9 @@ ADR 0037 D1 的「移动端拉不动」理由，其桌面基础层反对点（�
 - 2026-10-07：本 ADR 落档于 `.scratch/2026-10-07-mobile-wasm-core-refactor/spec.md`
   阶段 0；同批产票 02 ABI 规划表（`.scratch/.../ticket-02-mobile-abi-plan.md`，
   桌面 ABI 实测 34、移动 11）。
+- 2026-10-09：票 18 开工，共享核落点裁决 = **新建 `packages/bedcode-host-api-core`**
+  （票 18 §4 选项 A；D2 草案「并入 host-kit 或新建 bedcode-plugin-mechanism」收敛为
+  此形态——host-kit 保持装配期机制锚点最小面，新 crate 承载 host_api 运行期实现层，
+  依赖纪律 serde_json / tracing + 边界锁）。批次 1 = host-storage 域（实现层上移 +
+  双端 adapter + `SYSTEM_PLUGIN_ID` 真源随迁 re-export），桌面门禁全绿；移动门禁因
+  并行「双端共享 lib M3」在途暂挂（实施记录见票 18 §8）。

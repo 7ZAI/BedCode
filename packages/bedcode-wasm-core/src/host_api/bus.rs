@@ -1,156 +1,88 @@
-//! 消息总线域宿主实现（插件间 Topic 发布/订阅）
+//! 消息总线域 adapter（实现层已上移共享核，票 18 批次 2）
+//!
+//! 门禁语义（topic 形态机制 / 命名空间门 / 订阅面门 / 互调门 / 发布判定链）在
+//! `bedcode-host-api-core::bus`（双端单点，机制修复一次生效）；本文件只剩
+//! 「BusScope + SecurityScope → 共享核 [`BusPorts`]」的 adapter、域函数签名与
+//! 投递机制（订阅/退订的异步 spawn——队列与订阅簿是各端形状，票 18 §2「抽语义，
+//! 队列留各端」）。
+//!
+//! 桌面策略：**总线无权限位**（审计票 05：topic 形态即 ACL）——端口
+//! `check_permission` 恒 `true`；互调门经 core-security 授权框架（ADR 0017 层 1）。
+//! guest 可见错误文本与 warn 结构化字段逐字保留（`component.rs` 绑定层与本文件
+//! 测试调用面零改动）。
 
-use bedcode_plugin_api::host::bus::{
-    is_legacy_owner_suffix, is_reply_topic, owned_topic, topic_owner, API_TOPIC_PREFIX,
-};
+use bedcode_host_api_core::bus as core_bus;
+use bedcode_host_api_core::bus::BusPorts;
+use bedcode_host_api_core::gate::PermissionGate;
 
-// ==================== Topic 命名空间门禁（审计票 05，P0-4） ====================
+use crate::host_api::context::{ApiRegistryScope, BusScope, SecurityScope};
 
-/// 命名空间门禁：`<owner>::<name>` 形态的 topic 只有属主插件（与宿主）可读写
-///
-/// 形态即边界——判定只看串，不查激活表、不看安装表，因此与「属主是否已激活 /
-/// 是否已安装」无关，抢在属主之前订阅或伪发布都进不去（这是选命名空间而非
-/// 「解析 owner 段」的根本原因：后者的边界会随时序漏）。
-fn check_namespace(plugin_id: &str, topic: &str, action: &str, target: &str) -> Result<(), String> {
-    let owner = match topic_owner(topic) {
-        Some(owner) => owner,
-        None => return Ok(()),
-    };
-    if owner == plugin_id {
-        return Ok(());
-    }
-    tracing::warn!(
-        plugin_id = %plugin_id,
-        topic = %topic,
-        namespace_owner = %owner,
-        "bus {action}: cross-namespace topic rejected (topic namespace gate, audit ticket 05)"
-    );
-    Err(format!(
-        "bus error: topic '{topic}' is in the namespace of plugin '{owner}' — only {target} may {action} it"
-    ))
+/// [`BusScope`] + [`SecurityScope`] → 共享核 [`BusPorts`] 的桌面 adapter
+struct HostBusPorts<'a> {
+    bus: &'a dyn BusScope,
+    sec: &'a dyn SecurityScope,
 }
 
-/// 订阅面门禁（`subscribe` / `subscribe-binary`）：命名空间 + 两条订阅专属形态规则
-///
-/// - 回复道 `bedcode.api.reply.*`：caller 的收件箱，订阅由宿主在 `host-api-call`
-///   内静态注册（见 host_impl/api.rs），对 WASM 一律关闭——此前任意插件可订阅他人
-///   回复道窃听互调结果，且 correlation id 是可猜的单调计数器（`req-1`、`req-2`…）；
-/// - legacy 定向形态 `<base>.<own-id>`：票 05 迁移前 SDK 助手产出的串，宿主已改投
-///   命名空间 topic，放行会让旧产物**静默断流**（订阅得到、永远收不到），故显式拒绝
-///   并回带新形态。
-fn check_subscribe_access(plugin_id: &str, topic: &str) -> Result<(), String> {
-    check_namespace(plugin_id, topic, "subscribe", "that plugin (and the host)")?;
-    if is_reply_topic(topic) {
-        tracing::warn!(
-            plugin_id = %plugin_id,
-            topic = %topic,
-            "bus subscribe: reply lane is host-managed, rejected (audit ticket 05)"
-        );
-        return Err(format!(
-            "bus error: topic '{topic}' is on the inter-plugin reply lane (bedcode.api.reply.*) \u{2014} reply subscriptions are host-managed by host-api-call"
-        ));
+impl BusPorts for HostBusPorts<'_> {
+    fn check_permission(&self, _plugin_id: &str, _permission: &str, _api: &str) -> bool {
+        // 桌面总线无权限位（审计票 05：topic 形态即 ACL）；移动端权限位经同一端口注入
+        true
     }
-    if is_legacy_owner_suffix(topic, plugin_id) {
-        tracing::warn!(
-            plugin_id = %plugin_id,
-            topic = %topic,
-            "bus subscribe: legacy owner-suffix directed topic form rejected (audit ticket 05)"
-        );
-        return Err(format!(
-            "bus error: legacy directed-topic form '{topic}' is retired, subscribe '{new_form}' instead (SDK owned_topic / *_event_topic)",
-            new_form = owned_topic(plugin_id, &topic[..topic.len() - plugin_id.len() - 1])
-        ));
+
+    fn authorize_api_call(&self, plugin_id: &str, api: &str) -> bool {
+        // 互调门经 core-security 授权框架路由（三段管线；行为与直查注册表等价）
+        let req = crate::security::AuthRequest {
+            plugin_id,
+            resource: crate::security::ResourceKind::ApiCall,
+            operation: "invoke",
+            target: api,
+        };
+        self.sec.security().authorize(&req) == crate::security::AuthDecision::Allow
     }
-    Ok(())
+
+    fn publish_json(&self, topic: &str, sender: &str, payload: serde_json::Value) {
+        self.bus.message_bus().clone().publish(topic, sender, payload);
+    }
+
+    fn publish_binary(&self, topic: &str, sender: &str, payload: Vec<u8>) {
+        self.bus.message_bus().clone().publish_binary(topic, sender, payload);
+    }
 }
 
-/// 互调门禁（ADR-0017 层 1，JSON 与二进制发布共用）：`bedcode.api.<api>` 请求
-/// topic 的目标 api 必须命中某已激活插件的声明清单（注册表只在激活态登记）；
-/// `bedcode.api.reply.` 是响应通道（回复 topic 的调用方即为目标），免校验；
-/// 普通广播 topic 不校验，保持向后兼容。
-fn check_api_gate(
-    sec: &dyn crate::host_api::context::SecurityScope,
-    plugin_id: &str,
-    topic: &str,
-) -> Result<(), String> {
-    if let Some(api) = topic.strip_prefix(API_TOPIC_PREFIX) {
-        if !api.starts_with("reply.") {
-            // 互调门经 core-security 授权框架路由（三段管线；行为与直查注册表等价）
-            let req = crate::security::AuthRequest {
-                plugin_id,
-                resource: crate::security::ResourceKind::ApiCall,
-                operation: "invoke",
-                target: api,
-            };
-            if sec.security().authorize(&req) != crate::security::AuthDecision::Allow {
-                tracing::warn!(
-                    plugin_id = %plugin_id,
-                    topic = %topic,
-                    api = %api,
-                    "bus publish: api call to undeclared api rejected (inter-plugin call gate, ADR-0017)"
-                );
-                return Err(format!(
-                    "bus error: api '{}' is not declared by any activated plugin (gate)",
-                    api
-                ));
-            }
-        }
-    }
-    Ok(())
-}
-
-/// 请求 topic 的目标 api **声明属主**（票 05 回复道 sender 校验依据）
-///
-/// 与 [`check_api_gate`] 读同一张注册表（`ApiCallAuthorizer` 的命中判定即
-/// `registry.contains`），故「门禁放行」与「取到属主」不会漂移。
-/// 回复道 / 公开 topic → `None`（无属主可校验）。
-pub(crate) fn api_gate_target_owner(
-    reg: &dyn crate::host_api::context::ApiRegistryScope,
-    request_topic: &str,
-) -> Option<String> {
-    let api = request_topic.strip_prefix(API_TOPIC_PREFIX)?;
-    if api.starts_with("reply.") {
-        return None;
-    }
-    // 走 `gate`（单读锁内同时返回存在性与属主，S-05）：门禁判定与回复道
-    // sender 校验读同一把锁同一份快照，不被 register/unregister 插缝漂移
-    reg.api_registry().gate(api)
-}
-
-/// 发布 JSON 消息到 Topic（同步投递，总线内部异步派发）
+/// 发布 JSON 消息到 Topic（门禁链在共享核；同步投递，总线内部异步派发）
 pub(crate) fn bus_publish(
-    bus: &dyn crate::host_api::context::BusScope,
-    sec: &dyn crate::host_api::context::SecurityScope,
+    bus: &dyn BusScope,
+    sec: &dyn SecurityScope,
     plugin_id: &str,
     topic: &str,
     payload_json: &str,
 ) -> Result<(), String> {
-    let payload: serde_json::Value =
-        serde_json::from_str(payload_json).map_err(|e| format!("bus error: invalid JSON payload: {}", e))?;
-
-    check_namespace(plugin_id, topic, "publish", "that plugin (and the host)")?;
-    check_api_gate(sec, plugin_id, topic)?;
-
-    let bus = bus.message_bus().clone();
-    bus.publish(topic, plugin_id, payload);
-    Ok(())
+    core_bus::bus_publish(
+        &HostBusPorts { bus, sec },
+        plugin_id,
+        topic,
+        payload_json,
+        // 桌面无权限位策略（topic 形态即 ACL）
+        None::<&PermissionGate<'_>>,
+    )
 }
 
 /// 发布二进制消息到 Topic（v11）：字节列原样透传（零 JSON 编解码，
 /// 可传非 UTF-8 与大载荷）；互调门禁语义与 JSON 发布一致（防绕过）
 pub(crate) fn bus_publish_binary(
-    bus: &dyn crate::host_api::context::BusScope,
-    sec: &dyn crate::host_api::context::SecurityScope,
+    bus: &dyn BusScope,
+    sec: &dyn SecurityScope,
     plugin_id: &str,
     topic: &str,
     payload: Vec<u8>,
 ) -> Result<(), String> {
-    check_namespace(plugin_id, topic, "publish", "that plugin (and the host)")?;
-    check_api_gate(sec, plugin_id, topic)?;
-
-    let bus = bus.message_bus().clone();
-    bus.publish_binary(topic, plugin_id, payload);
-    Ok(())
+    core_bus::bus_publish_binary(
+        &HostBusPorts { bus, sec },
+        plugin_id,
+        topic,
+        payload,
+        None::<&PermissionGate<'_>>,
+    )
 }
 
 /// 订阅 topic
@@ -159,14 +91,10 @@ pub(crate) fn bus_publish_binary(
 /// bus 派发路径持 subscribers 读锁执行插件回调（on_message / on_session_lifecycle 等），
 /// 若插件在这些回调中订阅/退订，同步等待写锁会与派发任务形成同任务重入死锁。
 ///
-/// 命名空间/回复道/legacy 门禁在 spawn **之前**同步判定：错误必须回给 guest，
-/// 不能退化成「返回 Ok 但没订阅上」。
-pub(crate) fn bus_subscribe(
-    bus: &dyn crate::host_api::context::BusScope,
-    plugin_id: &str,
-    topic: &str,
-) -> Result<(), String> {
-    check_subscribe_access(plugin_id, topic)?;
+/// 门禁（命名空间/回复道/legacy）在共享核、于 spawn **之前**同步判定：错误必须回给
+/// guest，不能退化成「返回 Ok 但没订阅上」。
+pub(crate) fn bus_subscribe(bus: &dyn BusScope, plugin_id: &str, topic: &str) -> Result<(), String> {
+    core_bus::check_subscribe_access(plugin_id, topic)?;
     let bus = bus.message_bus().clone();
     let Ok(handle) = tokio::runtime::Handle::try_current() else {
         tracing::warn!(plugin_id = %plugin_id, topic = %topic, "bus_subscribe: no runtime context, subscription dropped");
@@ -182,12 +110,8 @@ pub(crate) fn bus_subscribe(
 
 /// 以二进制格式偏好订阅（v11）：只接收 publish-binary 投递，
 /// JSON 消息对其按格式不匹配拒绝（与 subscribe 同因异步投递）
-pub(crate) fn bus_subscribe_binary(
-    bus: &dyn crate::host_api::context::BusScope,
-    plugin_id: &str,
-    topic: &str,
-) -> Result<(), String> {
-    check_subscribe_access(plugin_id, topic)?;
+pub(crate) fn bus_subscribe_binary(bus: &dyn BusScope, plugin_id: &str, topic: &str) -> Result<(), String> {
+    core_bus::check_subscribe_access(plugin_id, topic)?;
     let bus = bus.message_bus().clone();
     let Ok(handle) = tokio::runtime::Handle::try_current() else {
         tracing::warn!(plugin_id = %plugin_id, topic = %topic, "bus_subscribe_binary: no runtime context, subscription dropped");
@@ -205,12 +129,8 @@ pub(crate) fn bus_subscribe_binary(
 ///
 /// 只过命名空间门：legacy/回复道形态在此不拦——退订是清理动作，必须幂等可用
 /// （旧产物退订它曾订阅过的串不应被新规则噎住）
-pub(crate) fn bus_unsubscribe(
-    bus: &dyn crate::host_api::context::BusScope,
-    plugin_id: &str,
-    topic: &str,
-) -> Result<(), String> {
-    check_namespace(plugin_id, topic, "unsubscribe", "that plugin (and the host)")?;
+pub(crate) fn bus_unsubscribe(bus: &dyn BusScope, plugin_id: &str, topic: &str) -> Result<(), String> {
+    core_bus::check_namespace(plugin_id, topic, "unsubscribe", "that plugin (and the host)")?;
     let bus = bus.message_bus().clone();
     let Ok(handle) = tokio::runtime::Handle::try_current() else {
         tracing::warn!(plugin_id = %plugin_id, topic = %topic, "bus_unsubscribe: no runtime context, unsubscribe dropped");
@@ -222,6 +142,21 @@ pub(crate) fn bus_unsubscribe(
         bus.unsubscribe(&pid, &t).await;
     });
     Ok(())
+}
+
+/// 请求 topic 的目标 api **声明属主**（票 05 回复道 sender 校验依据）
+///
+/// 与共享核互调门读同一张注册表（`ApiCallAuthorizer` 的命中判定即
+/// `registry.contains`），故「门禁放行」与「取到属主」不会漂移。
+/// 回复道 / 公开 topic → `None`（无属主可校验）。
+pub(crate) fn api_gate_target_owner(reg: &dyn ApiRegistryScope, request_topic: &str) -> Option<String> {
+    let api = request_topic.strip_prefix(core_bus::API_TOPIC_PREFIX)?;
+    if api.starts_with("reply.") {
+        return None;
+    }
+    // 走 `gate`（单读锁内同时返回存在性与属主，S-05）：门禁判定与回复道
+    // sender 校验读同一把锁同一份快照，不被 register/unregister 插缝漂移
+    reg.api_registry().gate(api)
 }
 
 // ==================== Tests ====================

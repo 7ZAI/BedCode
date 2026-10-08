@@ -43,6 +43,8 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"
 # ==================== 插件机制内核 + 能力域（前作资产，不搬不重写） ====================
 # 机制内核（仓库根，双端共享锚点）：HostModule / WasmPluginState / HostPorts / 注册表
 bedcode-host-kit = { path = "../bedcode-host-kit" }
+# host_api 共享实现核（票 18：无 WIT 依赖域的实现层；本 crate 只持各域 adapter）
+bedcode-host-api-core = { path = "../bedcode-host-api-core" }
 # 桌面基础层（错误/常量/错误边界/系统信息/网络配置/连接身份/端口 traits）
 bedcode-server-base = { path = "../bedcode-server-base" }
 # 加密引擎（算法实现 + 注册表）

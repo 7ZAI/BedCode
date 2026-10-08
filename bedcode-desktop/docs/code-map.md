@@ -228,12 +228,12 @@ path 依赖复用（D1/D2），宿主只剩组合根 + 薄壳垫片（D3），�
 
 ### 3 · 机制内核与能力域 crate
 
-**落点**：**仓库根 `packages/`**——`bedcode-host-kit`（机制内核）+ `bedcode-server-{base,core,http,websocket,peer-net}` / `bedcode-{crypto,discovery,pty}-engine`（能力域 / 传输面 / 引擎，2026-10-07 自 `bedcode-desktop/packages/` 迁根）。
+**落点**：**仓库根 `packages/`**——`bedcode-host-kit`（机制内核）+ `bedcode-host-api-core`（host_api 共享实现层，票 18 起）+ `bedcode-server-{base,core,http,websocket,peer-net}` / `bedcode-{crypto,discovery,pty}-engine`（能力域 / 传输面 / 引擎，2026-10-07 自 `bedcode-desktop/packages/` 迁根）。
 **为什么不能合回宿主**：`inventory::submit!` 依赖被链接性，且能力 crate 必须能命名 `WasmPluginState` ⇒ Cargo 环路（ADR 0035）。
 
 | 能力域 | 能力域 crate | 宿主端口 adapter |
 | --- | --- | --- |
-| `host-storage` + `host-database` + `host-plugin-database` | **无**（ADR 0036：机制留在核心内） | 同域即宿主：`packages/bedcode-wasm-core/src/host_api/{storage,database,sqlite,sqlite_ports}.rs` |
+| `host-storage` + `host-database` + `host-plugin-database` | `bedcode-host-api-core`（实现层，票 18：批次 1 storage 已抽、database 待续；ADR 0036 端口机制仍留核心） | 同域即宿主 adapter：`packages/bedcode-wasm-core/src/host_api/{storage,database,sqlite,sqlite_ports}.rs` |
 | `host-http`（入站端点 + 出站 fetch） | `bedcode-server-http`（`plugin_binding{.rs,/egress.rs}`） | `packages/bedcode-wasm-core/src/host_api/http.rs` |
 | `host-websocket`（客户端域 + 服务端域） | `bedcode-server-websocket`（`plugin_binding.rs` `ports.rs` `endpoint.rs`） | `packages/bedcode-wasm-core/src/host_api/ws.rs` |
 | `host-peer` | `bedcode-server-peer-net`（`plugin_binding{.rs,/ports.rs}`） | `packages/bedcode-wasm-core/src/host_api/peer.rs` |

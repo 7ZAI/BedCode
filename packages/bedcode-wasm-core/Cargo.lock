@@ -541,6 +541,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "bedcode-host-api-core"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "bedcode-host-kit"
 version = "0.1.0"
 dependencies = [
@@ -743,6 +751,7 @@ dependencies = [
  "base64 0.22.1",
  "bedcode-crypto-engine",
  "bedcode-discovery-engine",
+ "bedcode-host-api-core",
  "bedcode-host-kit",
  "bedcode-link-crypto",
  "bedcode-peer-net",

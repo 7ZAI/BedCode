@@ -1,6 +1,7 @@
 # 票 18 · host_api 实现层共享（无 WIT 依赖域「实现层 + 各端 adapter」两层化）
 
-Status: **计划已定稿（2026-10-08）；实施窗口 = 票 17 批次 2b（宿主切换）+ 桌面 P5 落地后**——抽取对象双端均在并行在途，禁现在动手术
+Status: **实施中——批次 1（storage）+ 批次 2（bus）已完成（2026-10-09）：桌面门禁全绿；移动 lib 编译过、测试门禁因并行 M3 在途暂挂（§8/§9）**
+专项: `.scratch/2026-10-07-mobile-wasm-core-refactor`（阶段 4 第二票）
 专项: `.scratch/2026-10-07-mobile-wasm-core-refactor`（阶段 4 第二票）
 依据: spec §5 票 18 + ADR 0040（选项 C 第二步：fork 面收缩到「WIT 绑定 + host_api 移动域」）+ 票 17 §7（范式统一留本票）+ ADR 0035/0037（能力域/机制核抽取先例）。
 依赖: **票 17 批次 2b**（宿主切换后移动 host_impl 形态稳定）· **桌面 P5**（能力域脱绑收尾，`packages/bedcode-wasm-core` 在途）。
@@ -88,3 +89,70 @@ WIT 绑定层（各自）：  component.rs 的 bindgen trait impl 调各端 adap
 | 桌面抽取破坏零回归 | 每域独立一步 + ABI/WIT 零变动门禁 + crate 边界锁先行 |
 | http/fs/bus 域端口分叉面大（egress/fs_auth/队列） | 这些域降级为「抽骨架 + 端口」形态，不追求逐行同构 |
 | 共享核与 host-kit 边界模糊 | §4 裁决 + 文档边界清单（§2 判据）钉住 |
+
+## 8. 批次 1 实施记录（2026-10-09，storage 域）
+
+**裁决落定**：§4 共享核落点 = **选项 A**——新建 `packages/bedcode-host-api-core`（与 host-kit 同族不合并：host-kit 保持装配期机制锚点最小面，新 crate 承载 host_api 运行期实现层）；用户「继续实施」拍板（2026-10-09），并补记 ADR 0040 Comments。迁移顺序按 §3 桌面先行。
+
+**新增 `packages/bedcode-host-api-core`**（机制级最小依赖 serde_json + tracing；零 tauri / tokio / SDK）：
+
+1. `src/storage.rs`——host-storage 实现层：权限门（`PermissionGate`，权限词汇经参数传入）→ 系统空间纵深守卫 → 能力路由（`forward_kv_*` 端口默认 `None`；桌面 adapter 委托 `forward_storage_*`，移动端默认直通）→ 键值原语（serde_json 规范形，`kv_get/set/delete`）。`SYSTEM_PLUGIN_ID` 真源随实现层上移本模块（原双端各一份），双端 `storage.rs` 经 re-export 保既有路径（ADR 0037 垫片先例）。6 个实现层单测（mock 端口：门禁与词汇透传 / 往返隔离幂等 / 纵深守卫 / 路由短路两向隔离 / 非 JSON 降级 / 错误包装与转发透传）。
+2. `tests/boundary_lock.rs`——crate 边界锁（§6 门禁）：needle `plugin_api` / `wasm_core` / `tauri` / `tokio` 扫描（跳注释行）+ 域文件在场断言。**变异自检 2/2**：代码行注入禁词 → 红 / 还原 → 绿；required 清单注入幽灵路径 → 红 / 还原 → 绿；注释豁免由 lib.rs 文档注释天然实证（其大量提及 tauri/tokio 而锁绿）。
+
+**桌面 `packages/bedcode-wasm-core`**（零 WIT / ABI / world 变动；`component.rs` 绑定层与 `tests/kv.rs` 调用面零改动）：
+
+- `host_api/storage.rs` → adapter（`SqlitePorts` → 共享核 `StoragePorts` 端口），域函数签名不变；权限拒绝文案（`permission denied`）与 `storage error: {}` 包装逐字保留——`PermissionGate.deny_error` 双端自持（桌面 / 移动文案不同是既有行为面，强行统一属行为变更，另走裁决）。
+
+**移动 fork crate `bedcode-mobile/packages/bedcode-wasm-core`**（3 文件）：
+
+- `manager/runtime/host_impl/storage.rs` → adapter（`WasmPluginState` → 共享核端口：granted 集权限判定 + `block_in_place` 驱动 + `guarded_host_call` panic 守卫，fallback 文本逐字一致）+ 3 个 adapter 单测（往返 wire 形 / 权限文案逐字 / 纵深守卫生效）；逻辑层签名零改动（`component.rs` 不动）。
+- **行为对齐**：共享核系统空间纵深守卫自本批起对移动端生效（此前移动缺该守卫——双份漂移税实例，桌面一直有）；set 的 JSON 解析从「权限门后」移到「权限门前」（共享层签名为规范形，与桌面 component.rs 既有形态一致）——未授权 + 非法 JSON 的边缘入参错误文本由权限文案变为解析文案，授权路径零变化。
+
+**门禁**：
+
+| 项 | 结果 |
+| --- | --- |
+| 共享核 `cargo test` | 6 实现层 + 2 锁全绿 |
+| 桌面 wasm-core `cargo test` 全量 | **677 绿 + 1 既有 perf 红基线**（`terminal_output_perf::perf_p2`，§6 明文豁免） |
+| 桌面 wasm-core `--no-default-features` 无头编译 | 通过（3 warnings 均在 server-* 依赖 crate，非本改动） |
+| 桌面 ABI / WIT / world | 零字节变动（git diff 仅 storage 面；`Cargo.lock` 经包管理器变更） |
+| 移动 fork crate / 移动宿主 `cargo test` | **暂挂**——并行会话「双端共享 lib M3」（mdns 域迁 `bedcode-discovery-engine`，`.scratch/2026-10-08-dual-end-shared-libs/`）在途使 fork crate 处中间态（Cargo.toml 的 mdns-sd 已换 discovery-engine、`ports.rs`/`test_support.rs` 已改、`host_impl/mdns.rs` 未改完，编译红全在其面）；本批移动侧 3 文件在该基线下名字解析零报错，门禁待 M3 落地后补跑 |
+| 变异自检 | 边界锁 2/2（见上） |
+
+**后续批次**（本票剩余域，按 §3 顺序）：database → config / events / log / fs / http 骨架；票 19 Part B 双端对照锁联动（批次 2 的 topic 形态机制已产生「共享核 + 桌面 SDK」两份拷贝，对照锁锁定三方逐字一致）。
+
+## 9. 批次 2 实施记录（2026-10-09，bus 域语义）
+
+**抽取面**（§2「⚠️ 抽语义，队列留各端」落地）：topic 形态机制（`TOPIC_NS_SEP` / `API_TOPIC_PREFIX` / `REPLY_TOPIC_PREFIX` / `owned_topic` / `topic_owner` / `is_reply_topic` / `is_legacy_owner_suffix`——自桌面 SDK `host/bus.rs` 上移，**宿主侧单点**，guest 侧拷贝留双端 SDK）+ 三道门禁（命名空间 / 订阅面：回复道 + legacy / 互调门）+ 发布判定链（权限位 → 严格 JSON → 命名空间 → 互调门 → 投递）。队列与订阅簿（背压 / 派发形状）留各端。
+
+**两端策略分叉由端口承载**（`BusPorts`）：
+
+| 策略 | 桌面 | 移动 |
+| --- | --- | --- |
+| 权限位 | **无**（审计票 05：topic 形态即 ACL）→ 发布/订阅函数收 `Option<&PermissionGate>`（None） | 有（`PERMISSION_BUS` granted 集）→ `Some(gate)`，deny 文案逐字保留 |
+| 互调门 | core-security 授权框架（ADR 0017 层 1） | 恒放行（WIT v17 无 host-api-call，= 既有行为） |
+| 投递 | `Handle::spawn` 异步投递（无运行时上下文显性拒绝） | `block_in_place` + `guarded_host_call` |
+
+**共享核 `bus.rs`**（+ `gate.rs`：`PermissionGate` 自 storage 提升为独立模块，两域共用）：7 实现层单测（形态闭环 / 发布门禁链逐段文本 / 无权限位跳过 / 二进制同门禁+字节透传 / 订阅面门 / 退订仅命名空间门）；边界锁 required 清单 + `src/bus.rs`。
+
+**桌面 adapter**（`host_api/bus.rs` 重写，`component.rs` 绑定层与测试调用面零改动；`api_gate_target_owner` 留桌面——其消费者 `host_api/api.rs`（host-api-call 桌面独有域）不跟抽）：测试块经拼接保真（**与 HEAD 逐字一致已验证**），52 bus 相关用例全绿。
+
+**移动 adapter**（`host_impl/bus.rs` 重写，逻辑层签名零改动）+ 5 个 adapter 单测。**行为对齐（移动端自本批起与桌面同文同语义，此前移动无任何总线门禁——双份漂移税实例）**：
+
+1. 命名空间门：`<owner>::<name>` 只有属主（与宿主）可发布/订阅；
+2. 订阅面门：回复道对 WASM 关闭 + legacy 定向形态显式拒绝并回带新形态；退订只过命名空间门（清理幂等）；
+3. 互调门：恒放行（无 host-api-call 域，既有行为不变）；
+4. JSON 严格解析：发布载荷非法 JSON 由「降级原始串 + warn」改为显性拒绝（SDK 侧收 `serde_json::Value` 序列化恒合法，实测 file-transfer 唯一 bus 消费面走公开道 `peer:discovery-refresh`——既有插件零回归）。
+
+**门禁**：
+
+| 项 | 结果 |
+| --- | --- |
+| 共享核 `cargo test` | 13 实现层（storage 6 + bus 7）+ 2 锁全绿 |
+| 桌面 wasm-core `cargo test` 全量 | **677 绿 + 1 既有 perf 红基线**（另 1 例 `engine_config::incoherent_tuning` 单跑即绿——与 M3 会话并行编译争抢 CPU 的负载型 flaky，非本改动） |
+| 桌面 `--no-default-features` 无头编译 | 通过 |
+| 桌面 ABI / WIT / world | 零字节变动 |
+| 移动 fork crate | **lib 编译通过**（adapter 面完整）；`cargo test` 暂挂——M3 会话夹具面（`component.rs` 引用其已删的 `build_test_component` 等测试构建器）编译红，门禁待其收口补跑 |
+| 移动宿主 `cargo test` | 同上暂挂（同一编译图） |
+
+**遗留与联动**：① 移动测试门禁 + 插件三方案例回归待 M3 收口后补跑（批次 1+2 一并）；② 行为对齐项（移动命名空间/订阅面门 + JSON 严格化）建议真机复验后随批转默认；③ 票 19 Part B 对照锁需覆盖 topic 形态机制三方（共享核 / 桌面 SDK / 移动 SDK 无助手——只锁共享核 ↔ 桌面 SDK）。
