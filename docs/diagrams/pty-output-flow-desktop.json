@@ -2,52 +2,39 @@
   "schema_version": 1,
   "diagram_type": "dataflow",
   "meta": {
-    "title": "BedCode 桌面端终端输出数据流（拉取模型）",
+    "title": "BedCode 桌面端终端输出数据流（拉取模型 · 双水位背压）",
     "locale": "zh-CN",
     "quality_profile": "showcase",
-    "viewBox": [
-      1080,
-      640
-    ],
+    "viewBox": [1076, 620],
     "output": "docs/diagrams/pty-output-flow-desktop.html"
   },
   "stages": [
-    {
-      "label": "进程与伪终端"
-    },
-    {
-      "label": "读线程与输出环"
-    },
-    {
-      "label": "host 原语面"
-    },
-    {
-      "label": "插件编排"
-    },
-    {
-      "label": "前端渲染"
-    }
+    { "label": "进程与伪终端" },
+    { "label": "读线程与输出环" },
+    { "label": "host-pty 能力域" },
+    { "label": "会话插件数据面" },
+    { "label": "消费端" }
   ],
   "nodes": [
     {
       "id": "shell",
       "type": "external",
-      "label": "shell 子进程",
-      "sublabel": "bash · git",
+      "label": "shell / agent CLI",
+      "sublabel": "bash · git · agent",
       "tag": "ANSI 输出源",
       "stage": 0,
       "row": 0,
-      "width": 132
+      "width": 142
     },
     {
-      "id": "pty_master",
+      "id": "pty_session",
       "type": "backend",
       "label": "PtySession",
       "sublabel": "PTY master fd",
       "tag": "argv 由插件自产",
       "stage": 0,
       "row": 3,
-      "width": 132
+      "width": 142
     },
     {
       "id": "pty_reader",
@@ -57,132 +44,142 @@
       "tag": "单生产者",
       "stage": 1,
       "row": 0,
-      "width": 132
+      "width": 142
     },
     {
       "id": "pty_ring",
       "type": "database",
       "label": "PtyRing",
       "sublabel": "有界环形 · min_offset",
-      "tag": "spawn 声明容量",
+      "tag": "插件声明容量",
       "stage": 1,
       "row": 3,
-      "width": 132
+      "width": 142
     },
     {
       "id": "host_pty",
       "type": "backend",
-      "label": "host-pty 原语",
-      "sublabel": "pty_id 属主仲裁",
+      "label": "host-pty 能力域",
+      "sublabel": "6 原语 · pty_id 属主仲裁",
       "tag": "16 KiB 钳位",
       "stage": 2,
-      "row": 3,
-      "width": 140
+      "row": 1,
+      "width": 160
     },
     {
-      "id": "plugin_bridge",
+      "id": "plugin_output",
       "type": "cloud",
-      "label": "terminal-session 输出域",
-      "sublabel": "session_id → pty_id",
+      "label": "输出域",
+      "sublabel": "pull / ack 双水位迟滞",
       "tag": "无状态透传",
       "stage": 3,
-      "row": 3,
-      "width": 150
+      "row": 0,
+      "width": 168
     },
     {
-      "id": "poller",
+      "id": "plugin_ws",
+      "type": "cloud",
+      "label": "WS 终端流端点",
+      "sublabel": "每连接独立游标",
+      "tag": "有界 drain",
+      "stage": 3,
+      "row": 2,
+      "width": 168
+    },
+    {
+      "id": "local_poller",
       "type": "frontend",
       "label": "前端拉取循环",
-      "sublabel": "100 ms 快档 · 500 ms 慢档",
-      "tag": "outputCursor 自持",
+      "sublabel": "50 ms 快档 / 250 ms 空闲",
+      "tag": "游标自持 · ack 64 KiB",
       "stage": 4,
       "row": 0,
-      "width": 150
+      "width": 168
     },
     {
       "id": "xterm",
       "type": "frontend",
       "label": "xterm.js",
       "sublabel": "写入管线 sink · 屏幕缓冲",
-      "tag": "渲染端",
+      "tag": "桌面本地渲染",
+      "stage": 4,
+      "row": 1,
+      "width": 168
+    },
+    {
+      "id": "mobile_ws",
+      "type": "external",
+      "label": "移动端 terminal-session",
+      "sublabel": "xterm · ack 渲染水位",
+      "tag": "WS 二进制帧",
       "stage": 4,
       "row": 3,
-      "width": 132
+      "width": 168
     }
   ],
   "flows": [
     {
       "id": "shell-to-pty",
       "from": "shell",
-      "to": "pty_master",
-      "label": "ANSI 字节流",
-      "labelAt": [
-        100,
-        328
-      ]
+      "to": "pty_session",
+      "label": "ANSI 字节",
+      "labelAt": [100, 201]
     },
     {
       "id": "pty-to-reader",
-      "from": "pty_master",
+      "from": "pty_session",
       "to": "pty_reader",
-      "label": "read() 读取",
-      "labelAt": [
-        207,
-        328
-      ]
+      "label": "read 循环"
     },
     {
       "id": "reader-to-ring",
       "from": "pty_reader",
       "to": "pty_ring",
       "label": "push 字节块",
-      "variant": "emphasis",
-      "labelAt": [
-        315,
-        328
-      ]
+      "labelAt": [315, 201],
+      "variant": "emphasis"
     },
     {
       "id": "ring-to-api",
       "from": "pty_ring",
       "to": "host_pty",
-      "label": "fetch(offset, 16 KiB)",
-      "labelAt": [
-        421,
-        458
-      ]
+      "label": "ring-fetch(offset, 16 KiB)"
     },
     {
-      "id": "api-to-plugin",
+      "id": "api-to-output",
       "from": "host_pty",
-      "to": "plugin_bridge",
+      "to": "plugin_output",
       "label": "list<u8> 直传",
-      "variant": "emphasis",
-      "labelAt": [
-        635,
-        458
-      ]
+      "variant": "emphasis"
     },
     {
-      "id": "plugin-to-poller",
-      "from": "plugin_bridge",
-      "to": "poller",
+      "id": "api-to-ws",
+      "from": "host_pty",
+      "to": "plugin_ws",
+      "label": "ring-fetch · 每连接游标",
+      "variant": "emphasis"
+    },
+    {
+      "id": "output-to-poller",
+      "from": "plugin_output",
+      "to": "local_poller",
       "label": "session.output.pull",
-      "variant": "emphasis",
-      "labelAt": [
-        852,
-        328
-      ]
+      "labelAt": [853, 201],
+      "variant": "emphasis"
+    },
+    {
+      "id": "ws-to-mobile",
+      "from": "plugin_ws",
+      "to": "mobile_ws",
+      "label": "二进制输出帧",
+      "variant": "emphasis"
     },
     {
       "id": "poller-to-xterm",
-      "from": "poller",
+      "from": "local_poller",
       "to": "xterm",
       "label": "onData → write",
-      "labelAt": [
-        960,
-        328
-      ]
+      "labelAt": [960, 201]
     }
   ],
   "cards": [
@@ -190,36 +187,45 @@
       "dot": "cyan",
       "title": "字节连续性",
       "items": [
-        "PtyRing 是每 PTY 句柄一条的有界环形缓冲，min_offset 标记驻留最旧字节；单生产者（读线程）写入，多消费者按游标拉取",
-        "拉取区间为 [游标, next_offset)，所有路径都返回可用 next_offset——续拉只拿到新增字节，不重复已消费段",
-        "容量是 host-pty.spawn 的插件声明参数（terminal-session 声明 ptyQuota 8 与环容量），加载期区间仲裁，不夹取"
+        "PtyRing 每个 PTY 句柄一条有界环：单生产者（PtyReader）写入、多消费者按游标拉取；容量是 `host-pty.spawn` 的插件声明参数（terminal-session 声明 4 MiB，未声明取内核默认 256 KiB，上限 4 MiB）",
+        "拉取区间为 [游标, next_offset)，续拉只拿新增字节不重复已消费段；`min_offset` 标记驻留最旧字节，环满淘汰最旧而不阻塞写入",
+        "游标落后于 `min_offset` 即如实上报 `truncated` + `resync`——不静默补洞、不假装连续，前端清屏重锚后从现存段起播"
       ]
     },
     {
       "dot": "amber",
-      "title": "背压不向产出端回传",
+      "title": "背压不回传产出端",
       "items": [
-        "慢消费者只能看到自己的历史被截断（truncated = true），读线程永不等待、永不被暂停——2026-09-17 pull 模型的既有裁定",
-        "旧推模型三件套已整体下线：UnifiedOutputQueue 50 MB 队列 · SubscriberState try_send 丢弃 · forward_loop 合并窗口",
-        "旧前端 Tauri Channel 桥（caps.output.attachSink）与 4ms/64KB 合并窗口同步删除；旧 ack 反馈环（on_ack 记账 + should_pause 滞回）随之消失"
+        "PtyReader 是纯单生产者：零等待、零暂停判定、零配额回压；慢消费者只损失自己的环历史（2026-09-17 拉取模型裁定）",
+        "旧推模型三件套整体下线：UnifiedOutputQueue（50 MB）· SubscriberState try_send 丢弃 · forward_loop 合并窗口；前端 Tauri Channel 桥与 /ws/terminal/local 环回链路同步删除",
+        "宿主不再持有会话级订阅表与输出句柄；会话输出只经插件自持游标拉取，宿主 PTY 引擎不认 session id"
       ]
     },
     {
       "dot": "emerald",
-      "title": "重锚与退避",
+      "title": "双水位迟滞回环（收敛到插件）",
       "items": [
-        "游标落后于 min_offset 说明中间字节已被淘汰：返回段从 min_offset 起，truncated = true，前端 onReset 清屏 + onTruncated 重锚后从现存段起播",
-        "空段（含 truncated 但无驻留字节）表示游标已追平产出端，宿主返回 null，前端计一次空闲",
-        "空段或不满批即让出，少一次 invoke 往返；连续 5 次追平降为 500 ms 慢档，任一 tick 有数据立即回 100 ms 快档"
+        "消费端把 ack 打回输出域形成闭环：本地前端累计 64 KiB 或最迟 ~375 ms 调一次 `session.output.ack`；移动端在渲染水位处回发 `ack` 帧",
+        "未确认积压 ≥ 128 KiB 进入驻留（抑制下发，数据留环内），降到 64 KiB 以下才解除驻留；上沿与下沿之间的 64 KiB 迟滞带保证一次驻留至少跨过一个 ack 周期，避免逐格推进时反复进出震荡",
+        "两条消费路径共用同一对常量与同一裁决函数 `output::decide_pull_gate`——本地 `session.output.pull` 与 WS 端点 `ack` 帧的背压口径必须一致，任何一侧改阈值都要两侧同改"
       ]
     },
     {
       "dot": "violet",
-      "title": "边界与替代通道",
+      "title": "节奏与预算",
       "items": [
-        "输出字节禁止经 JSON-RPC 命令通道搬运（实测 ~75 ms/MB），经 WIT 二进制原语 list<u8> 直传可进 WASM（~2.6 ms/MB）——ADR 0022 性能红线修订",
-        "宿主↔插件边界直传；插件前端收到的是 Rust 侧转出的 JSON 数组（插件内部通道，非契约面）",
-        "远程移动端仍走 /ws/terminal/session/{id}，但该通道同样是拉取模型订阅者执行体（环上按游标拉取 + 合帧 + 流代数门控），不再是 forward_loop 推送"
+        "本地前端轮询 50 ms 快档 / 250 ms 空闲档（连续 5 次追平才降档，任一 tick 有数据立即回快档）——只降延迟不动吞吐",
+        "单 tick 预算 4 × 16 KiB = 64 KiB（对齐迁移前引擎 FETCH_BUDGET），满批即让出主线程、下一 tick 续拉，稳态吞吐上限 1.28 MB/s",
+        "WS 端点有界 drain：单次 16 KiB、每轮最多 8 次（≈128 KiB）；三路唤醒——客户端入站帧 / 宿主 50 ms 限频 `pty:output` / 1 s tick 兜底"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "真源与边界",
+      "items": [
+        "`host-pty` 6 条原语（spawn / write / resize / is_running / kill / ring-fetch）整面住在能力域 crate `packages/bedcode-pty-engine`（ADR 0039）；wasm-core 只剩权限门与端口装配薄壳",
+        "会话 ↔ pty 映射真源在插件私有库；插件会话创建 `host-pty.spawn` 同步可见——spawn 失败直接 Err 不留幽灵会话，登记失败立即 `pty_kill` 回收",
+        "输出字节禁止经 JSON-RPC 命令通道搬运（实测 ~75 ms/MB），走 WIT `list<u8>` 二进制直传（~2.6 ms/MB）——ADR 0022 性能红线"
       ]
     }
   ]

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="generator" content="archify 3.0.1">
   <meta name="archify-reader-contract" content="declared-wide-v1">
-  <title>BedCode 桌面端终端输出数据流（拉取模型 · 双水位背压）</title>
+  <title>自动任务链路：terminal-session 任务域 → Agent 执行 → 真源与广播</title>
   <script>
     // Resolve the theme before first paint so light-preference users don't
     // see a dark flash. The toolbar script below re-applies with UI state.
@@ -4978,7 +4978,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
            data-preset-badge-blueprint="蓝图 / 修订 01"
            data-preset-badge-editorial="编辑风格 / 现场笔记">
         <div class="pulse-dot"></div>
-        <h1>BedCode 桌面端终端输出数据流（拉取模型 · 双水位背压）</h1>
+        <h1>自动任务链路：terminal-session 任务域 → Agent 执行 → 真源与广播</h1>
       </div>
     </div>
 
@@ -4987,8 +4987,8 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
     <!-- Main Diagram -->
     <div class="diagram-container" data-detail-level="read"
          data-preset-badge-editorial-plate="ARCHIFY / 图版 04">
-      <svg viewBox="0 0 1076 620" role="img" lang="zh-CN" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="showcase">
-        <title id="archify-diagram-title">BedCode 桌面端终端输出数据流（拉取模型 · 双水位背压）</title>
+      <svg viewBox="0 0 1080 620" role="img" lang="zh-CN" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="showcase">
+        <title id="archify-diagram-title">自动任务链路：terminal-session 任务域 → Agent 执行 → 真源与广播</title>
         <desc id="archify-diagram-description">由 Archify 生成的数据流图。</desc>
         <!-- Definitions -->
         <defs>
@@ -5014,197 +5014,213 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
 
         <!-- Data Stages -->
         <rect data-graph-role="structural-frame" data-composition-frame-kind="stage" data-composition-frame-id="0" x="16" y="46" width="168" height="500" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="100" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle">01 / 进程与伪终端</text>
+        <text x="100" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle">01 / 入口面</text>
 
         <rect data-graph-role="structural-frame" data-composition-frame-kind="stage" data-composition-frame-id="1" x="231" y="46" width="168" height="500" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="315" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle">02 / 读线程与输出环</text>
+        <text x="315" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle">02 / 插件 HTTP 接口</text>
 
         <rect data-graph-role="structural-frame" data-composition-frame-kind="stage" data-composition-frame-id="2" x="446" y="46" width="168" height="500" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="530" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle">03 / host-pty 能力域</text>
+        <text x="530" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle">03 / 任务域调度</text>
 
         <rect data-graph-role="structural-frame" data-composition-frame-kind="stage" data-composition-frame-id="3" x="661" y="46" width="168" height="500" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="745" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle">04 / 会话插件数据面</text>
+        <text x="745" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle">04 / 会话编排与执行</text>
 
         <rect data-graph-role="structural-frame" data-composition-frame-kind="stage" data-composition-frame-id="4" x="876" y="46" width="168" height="500" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="960" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle">05 / 消费端</text>
+        <text x="960" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle">05 / Agent 集成与真源</text>
 
         <!-- Flow paths -->
-        <path data-edge-from="shell" data-edge-to="pty_session" data-edge-label="ANSI 字节" data-edge-key="0" data-edge-id="shell-to-pty" data-composition-points="100,186;100,470" d="M 100 186 L 100 470" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="pty_session" data-edge-to="pty_reader" data-edge-label="read 循环" data-edge-key="1" data-edge-id="pty-to-reader" data-composition-points="171,499;207.5,499;207.5,157;244,157" d="M 171 499 L 207.5 499 L 207.5 157 L 244 157" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="pty_reader" data-edge-to="pty_ring" data-edge-label="push 字节块" data-edge-key="2" data-edge-id="reader-to-ring" data-composition-points="315,186;315,470" d="M 315 186 L 315 470" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="pty_ring" data-edge-to="host_pty" data-edge-label="ring-fetch(offset, 16 KiB)" data-edge-key="3" data-edge-id="ring-to-api" data-composition-points="386,499;418,499;418,271;450,271" d="M 386 499 L 418 499 L 418 271 L 450 271" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="host_pty" data-edge-to="plugin_output" data-edge-label="list&lt;u8&gt; 直传" data-edge-key="4" data-edge-id="api-to-output" data-composition-points="610,264;635.5,264;635.5,157;661,157" d="M 610 264 L 635.5 264 L 635.5 157 L 661 157" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="host_pty" data-edge-to="plugin_ws" data-edge-label="ring-fetch · 每连接游标" data-edge-key="5" data-edge-id="api-to-ws" data-composition-points="610,278;635.5,278;635.5,385;661,385" d="M 610 278 L 635.5 278 L 635.5 385 L 661 385" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="plugin_output" data-edge-to="local_poller" data-edge-label="session.output.pull" data-edge-key="6" data-edge-id="output-to-poller" data-composition-points="829,157;876,157" d="M 829 157 L 876 157" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="plugin_ws" data-edge-to="mobile_ws" data-edge-label="二进制输出帧" data-edge-key="7" data-edge-id="ws-to-mobile" data-composition-points="829,385;852.5,385;852.5,499;876,499" d="M 829 385 L 852.5 385 L 852.5 499 L 876 499" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="local_poller" data-edge-to="xterm" data-edge-label="onData → write" data-edge-key="8" data-edge-id="poller-to-xterm" data-composition-points="960,186;960,242" d="M 960 186 L 960 242" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="ts_ui" data-edge-to="http_face" data-edge-label="入队 / 定时 / 重拉" data-edge-key="0" data-edge-id="ui-http" data-composition-points="170,157;203.5,157;203.5,264;237,264" d="M 170 157 L 203.5 157 L 203.5 264 L 237 264" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="mobile_ui" data-edge-to="http_face" data-edge-label="HTTP 全量重拉" data-edge-key="1" data-edge-id="mobile-http" data-composition-points="170,385;203.5,385;203.5,278;237,278" d="M 170 385 L 203.5 385 L 203.5 278 L 237 278" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="http_face" data-edge-to="sched" data-edge-label="scheduled-jobs/create" data-edge-key="2" data-edge-id="http-sched" data-composition-points="393,264;423.5,264;423.5,157;454,157" d="M 393 264 L 423.5 264 L 423.5 157 L 454 157" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="http_face" data-edge-to="queue" data-edge-label="task-queue/add · remove" data-edge-key="3" data-edge-id="http-queue" data-composition-points="393,278;423.5,278;423.5,385;454,385" d="M 393 278 L 423.5 278 L 423.5 385 L 454 385" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="sched" data-edge-to="launch" data-edge-label="到期 → prompts 入队" data-edge-key="4" data-edge-id="sched-launch" data-composition-points="606,157;640.5,157;640.5,264;675,264" d="M 606 157 L 640.5 157 L 640.5 264 L 675 264" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="queue" data-edge-to="launch" data-edge-label="出队 → 轮换会话" data-edge-key="5" data-edge-id="queue-launch" data-composition-points="606,385;640.5,385;640.5,278;675,278" d="M 606 385 L 640.5 385 L 640.5 278 L 675 278" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="launch" data-edge-to="host_pty" data-edge-label="host-pty.spawn" data-edge-key="6" data-edge-id="launch-pty" data-composition-points="745,300;745,356" d="M 745 300 L 745 356" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="host_pty" data-edge-to="agent_pty" data-edge-label="PTY 进程" data-edge-key="7" data-edge-id="pty-agent" data-composition-points="745,414;745,470" d="M 745 414 L 745 470" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="agent_pty" data-edge-to="hooks" data-edge-label="hooks 回调" data-edge-key="8" data-edge-id="agent-hooks" data-composition-points="815,499;890,499" d="M 815 499 L 890 499" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="hooks" data-edge-to="state" data-edge-label="POST 任务状态" data-edge-key="9" data-edge-id="hooks-state" data-composition-points="960,470;960,414" d="M 960 470 L 960 414" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="state" data-edge-to="bus" data-edge-label="TaskQueue / Status Changed" data-edge-key="10" data-edge-id="state-bus" data-composition-points="960,356;960,300" d="M 960 356 L 960 300" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
 
         <!-- Nodes -->
-        <g id="node-shell" data-node-id="shell" data-node-label="shell / agent CLI" tabindex="0" role="button" aria-label="聚焦shell / agent CLI，bash · git · agent, 01 / 进程与伪终端" aria-pressed="false" data-node-kind="external" data-node-sublabel="bash · git · agent" data-node-tag="ANSI 输出源" data-node-context="01 / 进程与伪终端">
-          <title>shell / agent CLI · bash · git · agent · 01 / 进程与伪终端 · ANSI 输出源</title>
-          <rect x="29" y="128" width="142" height="58" rx="6" class="c-mask"/>
-          <rect x="29" y="128" width="142" height="58" rx="6" class="c-external" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(35 134) scale(0.6875)">
+        <g id="node-ts_ui" data-node-id="ts_ui" data-node-label="桌面任务面板" tabindex="0" role="button" aria-label="聚焦桌面任务面板，队列 · 定时任务 · 记录, 01 / 入口面" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="队列 · 定时任务 · 记录" data-node-context="01 / 入口面">
+          <title>桌面任务面板 · 队列 · 定时任务 · 记录 · 01 / 入口面</title>
+          <rect x="30" y="128" width="140" height="58" rx="6" class="c-mask"/>
+          <rect x="30" y="128" width="140" height="58" rx="6" class="c-frontend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(36 134) scale(0.6875)">
+            <rect x="2" y="3" width="12" height="10" rx="2"/>
+            <path d="M2 6.5h12"/>
+            <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
+            <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="100" y="149" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">桌面任务面板</text>
+          <text data-detail="context" x="100" y="165" class="t-muted" font-size="7" text-anchor="middle">队列 · 定时任务 · 记录</text>
+        </g>
+
+        <g id="node-mobile_ui" data-node-id="mobile_ui" data-node-label="移动端任务视图" tabindex="0" role="button" aria-label="聚焦移动端任务视图，只读 · 500 ms 去抖重拉, 01 / 入口面" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="只读 · 500 ms 去抖重拉" data-node-tag="零本地状态" data-node-context="01 / 入口面">
+          <title>移动端任务视图 · 只读 · 500 ms 去抖重拉 · 01 / 入口面 · 零本地状态</title>
+          <rect x="30" y="356" width="140" height="58" rx="6" class="c-mask"/>
+          <rect x="30" y="356" width="140" height="58" rx="6" class="c-frontend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(36 362) scale(0.6875)">
+            <rect x="2" y="3" width="12" height="10" rx="2"/>
+            <path d="M2 6.5h12"/>
+            <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
+            <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="100" y="377" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">移动端任务视图</text>
+          <text data-detail="context" x="100" y="393" class="t-muted" font-size="7" text-anchor="middle">只读 · 500 ms 去抖重拉</text>
+        <text data-detail="fine" x="100" y="403" class="t-frontend" font-size="7" text-anchor="middle">零本地状态</text>
+        </g>
+
+        <g id="node-http_face" data-node-id="http_face" data-node-label="插件 HTTP 端点" tabindex="0" role="button" aria-label="聚焦插件 HTTP 端点，task-queue · scheduled-jobs, 02 / 插件 HTTP 接口" aria-pressed="false" data-node-kind="backend" data-node-sublabel="task-queue · scheduled-jobs" data-node-context="02 / 插件 HTTP 接口">
+          <title>插件 HTTP 端点 · task-queue · scheduled-jobs · 02 / 插件 HTTP 接口</title>
+          <rect x="237" y="242" width="156" height="58" rx="6" class="c-mask"/>
+          <rect x="237" y="242" width="156" height="58" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(243 248) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="315" y="263" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">插件 HTTP 端点</text>
+          <text data-detail="context" x="315" y="279" class="t-muted" font-size="7" text-anchor="middle">task-queue · scheduled-jobs</text>
+        </g>
+
+        <g id="node-sched" data-node-id="sched" data-node-label="定时任务域" tabindex="0" role="button" aria-label="聚焦定时任务域，pending → creating → executed, 03 / 任务域调度" aria-pressed="false" data-node-kind="cloud" data-node-sublabel="pending → creating → executed" data-node-context="03 / 任务域调度">
+          <title>定时任务域 · pending → creating → executed · 03 / 任务域调度</title>
+          <rect x="454" y="128" width="152" height="58" rx="6" class="c-mask"/>
+          <rect x="454" y="128" width="152" height="58" rx="6" class="c-cloud" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="cloud" class="semantic-sigil s-cloud" transform="translate(460 134) scale(0.6875)">
+            <path d="M4.3 12.5h7.3a2.4 2.4 0 0 0 .2-4.8 4 4 0 0 0-7.5-1.3A3.1 3.1 0 0 0 4.3 12.5Z"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="530" y="149" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">定时任务域</text>
+          <text data-detail="context" x="530" y="165" class="t-muted" font-size="7" text-anchor="middle">pending → creating → executed</text>
+        </g>
+
+        <g id="node-queue" data-node-id="queue" data-node-label="队列调度域" tabindex="0" role="button" aria-label="聚焦队列调度域，pending → waiting → executing, 03 / 任务域调度" aria-pressed="false" data-node-kind="cloud" data-node-sublabel="pending → waiting → executing" data-node-context="03 / 任务域调度">
+          <title>队列调度域 · pending → waiting → executing · 03 / 任务域调度</title>
+          <rect x="454" y="356" width="152" height="58" rx="6" class="c-mask"/>
+          <rect x="454" y="356" width="152" height="58" rx="6" class="c-cloud" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="cloud" class="semantic-sigil s-cloud" transform="translate(460 362) scale(0.6875)">
+            <path d="M4.3 12.5h7.3a2.4 2.4 0 0 0 .2-4.8 4 4 0 0 0-7.5-1.3A3.1 3.1 0 0 0 4.3 12.5Z"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="530" y="377" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">队列调度域</text>
+          <text data-detail="context" x="530" y="393" class="t-muted" font-size="7" text-anchor="middle">pending → waiting → executing</text>
+        </g>
+
+        <g id="node-launch" data-node-id="launch" data-node-label="launch 编排" tabindex="0" role="button" aria-label="聚焦launch 编排，config → spec · 自产 id, 04 / 会话编排与执行" aria-pressed="false" data-node-kind="backend" data-node-sublabel="config → spec · 自产 id" data-node-context="04 / 会话编排与执行">
+          <title>launch 编排 · config → spec · 自产 id · 04 / 会话编排与执行</title>
+          <rect x="675" y="242" width="140" height="58" rx="6" class="c-mask"/>
+          <rect x="675" y="242" width="140" height="58" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(681 248) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="745" y="263" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">launch 编排</text>
+          <text data-detail="context" x="745" y="279" class="t-muted" font-size="7" text-anchor="middle">config → spec · 自产 id</text>
+        </g>
+
+        <g id="node-host_pty" data-node-id="host_pty" data-node-label="host-pty.spawn" tabindex="0" role="button" aria-label="聚焦host-pty.spawn，PTY 引擎 · 属主仲裁, 04 / 会话编排与执行" aria-pressed="false" data-node-kind="backend" data-node-sublabel="PTY 引擎 · 属主仲裁" data-node-context="04 / 会话编排与执行">
+          <title>host-pty.spawn · PTY 引擎 · 属主仲裁 · 04 / 会话编排与执行</title>
+          <rect x="675" y="356" width="140" height="58" rx="6" class="c-mask"/>
+          <rect x="675" y="356" width="140" height="58" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(681 362) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="745" y="377" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">host-pty.spawn</text>
+          <text data-detail="context" x="745" y="393" class="t-muted" font-size="7" text-anchor="middle">PTY 引擎 · 属主仲裁</text>
+        </g>
+
+        <g id="node-agent_pty" data-node-id="agent_pty" data-node-label="Agent CLI 会话" tabindex="0" role="button" aria-label="聚焦Agent CLI 会话，claude · pi · opencode · codex, 04 / 会话编排与执行" aria-pressed="false" data-node-kind="external" data-node-sublabel="claude · pi · opencode · codex" data-node-context="04 / 会话编排与执行">
+          <title>Agent CLI 会话 · claude · pi · opencode · codex · 04 / 会话编排与执行</title>
+          <rect x="675" y="470" width="140" height="58" rx="6" class="c-mask"/>
+          <rect x="675" y="470" width="140" height="58" rx="6" class="c-external" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(681 476) scale(0.6875)">
             <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
             <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="100" y="149" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">shell / agent CLI</text>
-          <text data-detail="context" x="100" y="165" class="t-muted" font-size="7" text-anchor="middle">bash · git · agent</text>
-        <text data-detail="fine" x="100" y="175" class="t-external" font-size="7" text-anchor="middle">ANSI 输出源</text>
+          <text data-node-label="" data-detail-anchor="" x="745" y="491" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">Agent CLI 会话</text>
+          <text data-detail="context" x="745" y="507" class="t-muted" font-size="7" text-anchor="middle">claude · pi · opencode · codex</text>
         </g>
 
-        <g id="node-pty_session" data-node-id="pty_session" data-node-label="PtySession" tabindex="0" role="button" aria-label="聚焦PtySession，PTY master fd, 01 / 进程与伪终端" aria-pressed="false" data-node-kind="backend" data-node-sublabel="PTY master fd" data-node-tag="argv 由插件自产" data-node-context="01 / 进程与伪终端">
-          <title>PtySession · PTY master fd · 01 / 进程与伪终端 · argv 由插件自产</title>
-          <rect x="29" y="470" width="142" height="58" rx="6" class="c-mask"/>
-          <rect x="29" y="470" width="142" height="58" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(35 476) scale(0.6875)">
-            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+        <g id="node-hooks" data-node-id="hooks" data-node-label="Agent hooks" tabindex="0" role="button" aria-label="聚焦Agent hooks，SessionStart · 终态, 05 / Agent 集成与真源" aria-pressed="false" data-node-kind="external" data-node-sublabel="SessionStart · 终态" data-node-context="05 / Agent 集成与真源">
+          <title>Agent hooks · SessionStart · 终态 · 05 / Agent 集成与真源</title>
+          <rect x="890" y="470" width="140" height="58" rx="6" class="c-mask"/>
+          <rect x="890" y="470" width="140" height="58" rx="6" class="c-external" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(896 476) scale(0.6875)">
+            <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
+            <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="100" y="491" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">PtySession</text>
-          <text data-detail="context" x="100" y="507" class="t-muted" font-size="7" text-anchor="middle">PTY master fd</text>
-        <text data-detail="fine" x="100" y="517" class="t-backend" font-size="7" text-anchor="middle">argv 由插件自产</text>
+          <text data-node-label="" data-detail-anchor="" x="960" y="491" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">Agent hooks</text>
+          <text data-detail="context" x="960" y="507" class="t-muted" font-size="7" text-anchor="middle">SessionStart · 终态</text>
         </g>
 
-        <g id="node-pty_reader" data-node-id="pty_reader" data-node-label="PtyReader" tabindex="0" role="button" aria-label="聚焦PtyReader，独立读线程 · 缓冲读, 02 / 读线程与输出环" aria-pressed="false" data-node-kind="backend" data-node-sublabel="独立读线程 · 缓冲读" data-node-tag="单生产者" data-node-context="02 / 读线程与输出环">
-          <title>PtyReader · 独立读线程 · 缓冲读 · 02 / 读线程与输出环 · 单生产者</title>
-          <rect x="244" y="128" width="142" height="58" rx="6" class="c-mask"/>
-          <rect x="244" y="128" width="142" height="58" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(250 134) scale(0.6875)">
-            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
-          </g>
-          <text data-node-label="" data-detail-anchor="" x="315" y="149" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">PtyReader</text>
-          <text data-detail="context" x="315" y="165" class="t-muted" font-size="7" text-anchor="middle">独立读线程 · 缓冲读</text>
-        <text data-detail="fine" x="315" y="175" class="t-backend" font-size="7" text-anchor="middle">单生产者</text>
-        </g>
-
-        <g id="node-pty_ring" data-node-id="pty_ring" data-node-label="PtyRing" tabindex="0" role="button" aria-label="聚焦PtyRing，有界环形 · min_offset, 02 / 读线程与输出环" aria-pressed="false" data-node-kind="database" data-node-sublabel="有界环形 · min_offset" data-node-tag="插件声明容量" data-node-context="02 / 读线程与输出环">
-          <title>PtyRing · 有界环形 · min_offset · 02 / 读线程与输出环 · 插件声明容量</title>
-          <rect x="244" y="470" width="142" height="58" rx="6" class="c-mask"/>
-          <rect x="244" y="470" width="142" height="58" rx="6" class="c-database" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(250 476) scale(0.6875)">
+        <g id="node-state" data-node-id="state" data-node-label="状态机 + 真源" tabindex="0" role="button" aria-label="聚焦状态机 + 真源，task_history · 幂等去重, 05 / Agent 集成与真源" aria-pressed="false" data-node-kind="database" data-node-sublabel="task_history · 幂等去重" data-node-context="05 / Agent 集成与真源">
+          <title>状态机 + 真源 · task_history · 幂等去重 · 05 / Agent 集成与真源</title>
+          <rect x="890" y="356" width="140" height="58" rx="6" class="c-mask"/>
+          <rect x="890" y="356" width="140" height="58" rx="6" class="c-database" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(896 362) scale(0.6875)">
             <ellipse cx="8" cy="4" rx="5" ry="2"/>
             <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="315" y="491" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">PtyRing</text>
-          <text data-detail="context" x="315" y="507" class="t-muted" font-size="7" text-anchor="middle">有界环形 · min_offset</text>
-        <text data-detail="fine" x="315" y="517" class="t-database" font-size="7" text-anchor="middle">插件声明容量</text>
+          <text data-node-label="" data-detail-anchor="" x="960" y="377" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">状态机 + 真源</text>
+          <text data-detail="context" x="960" y="393" class="t-muted" font-size="7" text-anchor="middle">task_history · 幂等去重</text>
         </g>
 
-        <g id="node-host_pty" data-node-id="host_pty" data-node-label="host-pty 能力域" tabindex="0" role="button" aria-label="聚焦host-pty 能力域，6 原语 · pty_id 属主仲裁, 03 / host-pty 能力域" aria-pressed="false" data-node-kind="backend" data-node-sublabel="6 原语 · pty_id 属主仲裁" data-node-tag="16 KiB 钳位" data-node-context="03 / host-pty 能力域">
-          <title>host-pty 能力域 · 6 原语 · pty_id 属主仲裁 · 03 / host-pty 能力域 · 16 KiB 钳位</title>
-          <rect x="450" y="242" width="160" height="58" rx="6" class="c-mask"/>
-          <rect x="450" y="242" width="160" height="58" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(456 248) scale(0.6875)">
-            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+        <g id="node-bus" data-node-id="bus" data-node-label="host-events 广播" tabindex="0" role="button" aria-label="聚焦host-events 广播，Queue / Status / Scheduled, 05 / Agent 集成与真源" aria-pressed="false" data-node-kind="messagebus" data-node-sublabel="Queue / Status / Scheduled" data-node-tag="→ 移动端重拉" data-node-context="05 / Agent 集成与真源">
+          <title>host-events 广播 · Queue / Status / Scheduled · 05 / Agent 集成与真源 · → 移动端重拉</title>
+          <rect x="882" y="242" width="156" height="58" rx="6" class="c-mask"/>
+          <rect x="882" y="242" width="156" height="58" rx="6" class="c-messagebus" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="messagebus" class="semantic-sigil s-messagebus" transform="translate(888 248) scale(0.6875)">
+            <path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11"/>
+            <circle cx="5" cy="4.5" r="1" class="sigil-fill"/>
+            <circle cx="10.5" cy="8" r="1" class="sigil-fill"/>
+            <circle cx="7" cy="11.5" r="1" class="sigil-fill"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="530" y="263" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">host-pty 能力域</text>
-          <text data-detail="context" x="530" y="279" class="t-muted" font-size="7" text-anchor="middle">6 原语 · pty_id 属主仲裁</text>
-        <text data-detail="fine" x="530" y="289" class="t-backend" font-size="7" text-anchor="middle">16 KiB 钳位</text>
-        </g>
-
-        <g id="node-plugin_output" data-node-id="plugin_output" data-node-label="输出域" tabindex="0" role="button" aria-label="聚焦输出域，pull / ack 双水位迟滞, 04 / 会话插件数据面" aria-pressed="false" data-node-kind="cloud" data-node-sublabel="pull / ack 双水位迟滞" data-node-tag="无状态透传" data-node-context="04 / 会话插件数据面">
-          <title>输出域 · pull / ack 双水位迟滞 · 04 / 会话插件数据面 · 无状态透传</title>
-          <rect x="661" y="128" width="168" height="58" rx="6" class="c-mask"/>
-          <rect x="661" y="128" width="168" height="58" rx="6" class="c-cloud" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="cloud" class="semantic-sigil s-cloud" transform="translate(667 134) scale(0.6875)">
-            <path d="M4.3 12.5h7.3a2.4 2.4 0 0 0 .2-4.8 4 4 0 0 0-7.5-1.3A3.1 3.1 0 0 0 4.3 12.5Z"/>
-          </g>
-          <text data-node-label="" data-detail-anchor="" x="745" y="149" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">输出域</text>
-          <text data-detail="context" x="745" y="165" class="t-muted" font-size="7" text-anchor="middle">pull / ack 双水位迟滞</text>
-        <text data-detail="fine" x="745" y="175" class="t-cloud" font-size="7" text-anchor="middle">无状态透传</text>
-        </g>
-
-        <g id="node-plugin_ws" data-node-id="plugin_ws" data-node-label="WS 终端流端点" tabindex="0" role="button" aria-label="聚焦WS 终端流端点，每连接独立游标, 04 / 会话插件数据面" aria-pressed="false" data-node-kind="cloud" data-node-sublabel="每连接独立游标" data-node-tag="有界 drain" data-node-context="04 / 会话插件数据面">
-          <title>WS 终端流端点 · 每连接独立游标 · 04 / 会话插件数据面 · 有界 drain</title>
-          <rect x="661" y="356" width="168" height="58" rx="6" class="c-mask"/>
-          <rect x="661" y="356" width="168" height="58" rx="6" class="c-cloud" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="cloud" class="semantic-sigil s-cloud" transform="translate(667 362) scale(0.6875)">
-            <path d="M4.3 12.5h7.3a2.4 2.4 0 0 0 .2-4.8 4 4 0 0 0-7.5-1.3A3.1 3.1 0 0 0 4.3 12.5Z"/>
-          </g>
-          <text data-node-label="" data-detail-anchor="" x="745" y="377" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">WS 终端流端点</text>
-          <text data-detail="context" x="745" y="393" class="t-muted" font-size="7" text-anchor="middle">每连接独立游标</text>
-        <text data-detail="fine" x="745" y="403" class="t-cloud" font-size="7" text-anchor="middle">有界 drain</text>
-        </g>
-
-        <g id="node-local_poller" data-node-id="local_poller" data-node-label="前端拉取循环" tabindex="0" role="button" aria-label="聚焦前端拉取循环，50 ms 快档 / 250 ms 空闲, 05 / 消费端" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="50 ms 快档 / 250 ms 空闲" data-node-tag="游标自持 · ack 64 KiB" data-node-context="05 / 消费端">
-          <title>前端拉取循环 · 50 ms 快档 / 250 ms 空闲 · 05 / 消费端 · 游标自持 · ack 64 KiB</title>
-          <rect x="876" y="128" width="168" height="58" rx="6" class="c-mask"/>
-          <rect x="876" y="128" width="168" height="58" rx="6" class="c-frontend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(882 134) scale(0.6875)">
-            <rect x="2" y="3" width="12" height="10" rx="2"/>
-            <path d="M2 6.5h12"/>
-            <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
-            <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
-          </g>
-          <text data-node-label="" data-detail-anchor="" x="960" y="149" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">前端拉取循环</text>
-          <text data-detail="context" x="960" y="165" class="t-muted" font-size="7" text-anchor="middle">50 ms 快档 / 250 ms 空闲</text>
-        <text data-detail="fine" x="960" y="175" class="t-frontend" font-size="7" text-anchor="middle">游标自持 · ack 64 KiB</text>
-        </g>
-
-        <g id="node-xterm" data-node-id="xterm" data-node-label="xterm.js" tabindex="0" role="button" aria-label="聚焦xterm.js，写入管线 sink · 屏幕缓冲, 05 / 消费端" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="写入管线 sink · 屏幕缓冲" data-node-tag="桌面本地渲染" data-node-context="05 / 消费端">
-          <title>xterm.js · 写入管线 sink · 屏幕缓冲 · 05 / 消费端 · 桌面本地渲染</title>
-          <rect x="876" y="242" width="168" height="58" rx="6" class="c-mask"/>
-          <rect x="876" y="242" width="168" height="58" rx="6" class="c-frontend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(882 248) scale(0.6875)">
-            <rect x="2" y="3" width="12" height="10" rx="2"/>
-            <path d="M2 6.5h12"/>
-            <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
-            <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
-          </g>
-          <text data-node-label="" data-detail-anchor="" x="960" y="263" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">xterm.js</text>
-          <text data-detail="context" x="960" y="279" class="t-muted" font-size="7" text-anchor="middle">写入管线 sink · 屏幕缓冲</text>
-        <text data-detail="fine" x="960" y="289" class="t-frontend" font-size="7" text-anchor="middle">桌面本地渲染</text>
-        </g>
-
-        <g id="node-mobile_ws" data-node-id="mobile_ws" data-node-label="移动端 terminal-session" tabindex="0" role="button" aria-label="聚焦移动端 terminal-session，xterm · ack 渲染水位, 05 / 消费端" aria-pressed="false" data-node-kind="external" data-node-sublabel="xterm · ack 渲染水位" data-node-tag="WS 二进制帧" data-node-context="05 / 消费端">
-          <title>移动端 terminal-session · xterm · ack 渲染水位 · 05 / 消费端 · WS 二进制帧</title>
-          <rect x="876" y="470" width="168" height="58" rx="6" class="c-mask"/>
-          <rect x="876" y="470" width="168" height="58" rx="6" class="c-external" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(882 476) scale(0.6875)">
-            <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
-            <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
-          </g>
-          <text data-node-label="" data-detail-anchor="" x="964" y="491" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">移动端 terminal-session</text>
-          <text data-detail="context" x="960" y="507" class="t-muted" font-size="7" text-anchor="middle">xterm · ack 渲染水位</text>
-        <text data-detail="fine" x="960" y="517" class="t-external" font-size="7" text-anchor="middle">WS 二进制帧</text>
+          <text data-node-label="" data-detail-anchor="" x="960" y="263" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">host-events 广播</text>
+          <text data-detail="context" x="960" y="279" class="t-muted" font-size="7" text-anchor="middle">Queue / Status / Scheduled</text>
+        <text data-detail="fine" x="960" y="289" class="t-messagebus" font-size="7" text-anchor="middle">→ 移动端重拉</text>
         </g>
 
         <!-- Flow labels -->
-        <g data-detail="context" data-edge-from="shell" data-edge-to="pty_session" data-edge-label="ANSI 字节" data-edge-key="0" data-edge-id="shell-to-pty">
-          <rect x="71.95" y="190" width="56.1" height="16" rx="4" class="c-mask"/>
-          <text x="100" y="201" class="t-edge-default" font-size="8" text-anchor="middle">ANSI 字节</text>
+        <g data-detail="context" data-edge-from="ts_ui" data-edge-to="http_face" data-edge-label="入队 / 定时 / 重拉" data-edge-key="0" data-edge-id="ui-http">
+          <rect x="153.4" y="189.5" width="100.2" height="16" rx="4" class="c-mask"/>
+          <text x="203.5" y="200.5" class="t-edge-default" font-size="8" text-anchor="middle">入队 / 定时 / 重拉</text>
         </g>
-        <g data-detail="context" data-edge-from="pty_session" data-edge-to="pty_reader" data-edge-label="read 循环" data-edge-key="1" data-edge-id="pty-to-reader">
-          <rect x="179.45" y="307" width="56.1" height="16" rx="4" class="c-mask"/>
-          <text x="207.5" y="318" class="t-edge-default" font-size="8" text-anchor="middle">read 循环</text>
+        <g data-detail="context" data-edge-from="mobile_ui" data-edge-to="http_face" data-edge-label="HTTP 全量重拉" data-edge-key="1" data-edge-id="mobile-http">
+          <rect x="165.65" y="310.5" width="75.7" height="16" rx="4" class="c-mask"/>
+          <text x="203.5" y="321.5" class="t-edge-default" font-size="8" text-anchor="middle">HTTP 全量重拉</text>
         </g>
-        <g data-detail="context" data-edge-from="pty_reader" data-edge-to="pty_ring" data-edge-label="push 字节块" data-edge-key="2" data-edge-id="reader-to-ring">
-          <rect x="282.05" y="190" width="65.9" height="16" rx="4" class="c-mask"/>
-          <text x="315" y="201" class="t-edge-emphasis" font-size="8" text-anchor="middle">push 字节块</text>
+        <g data-detail="context" data-edge-from="http_face" data-edge-to="sched" data-edge-label="scheduled-jobs/create" data-edge-key="2" data-edge-id="http-sched">
+          <rect x="366.05" y="189.5" width="114.9" height="16" rx="4" class="c-mask"/>
+          <text x="423.5" y="200.5" class="t-edge-default" font-size="8" text-anchor="middle">scheduled-jobs/create</text>
         </g>
-        <g data-detail="context" data-edge-from="pty_ring" data-edge-to="host_pty" data-edge-label="ring-fetch(offset, 16 KiB)" data-edge-key="3" data-edge-id="ring-to-api">
-          <rect x="348.3" y="364" width="139.4" height="16" rx="4" class="c-mask"/>
-          <text x="418" y="375" class="t-edge-default" font-size="8" text-anchor="middle">ring-fetch(offset, 16 KiB)</text>
+        <g data-detail="context" data-edge-from="http_face" data-edge-to="queue" data-edge-label="task-queue/add · remove" data-edge-key="3" data-edge-id="http-queue">
+          <rect x="361.15" y="310.5" width="124.7" height="16" rx="4" class="c-mask"/>
+          <text x="423.5" y="321.5" class="t-edge-default" font-size="8" text-anchor="middle">task-queue/add · remove</text>
         </g>
-        <g data-detail="context" data-edge-from="host_pty" data-edge-to="plugin_output" data-edge-label="list&lt;u8&gt; 直传" data-edge-key="4" data-edge-id="api-to-output">
-          <rect x="597.65" y="189.5" width="75.7" height="16" rx="4" class="c-mask"/>
-          <text x="635.5" y="200.5" class="t-edge-emphasis" font-size="8" text-anchor="middle">list&lt;u8&gt; 直传</text>
+        <g data-detail="context" data-edge-from="sched" data-edge-to="launch" data-edge-label="到期 → prompts 入队" data-edge-key="4" data-edge-id="sched-launch">
+          <rect x="587.95" y="189.5" width="105.1" height="16" rx="4" class="c-mask"/>
+          <text x="640.5" y="200.5" class="t-edge-emphasis" font-size="8" text-anchor="middle">到期 → prompts 入队</text>
         </g>
-        <g data-detail="context" data-edge-from="host_pty" data-edge-to="plugin_ws" data-edge-label="ring-fetch · 每连接游标" data-edge-key="5" data-edge-id="api-to-ws">
-          <rect x="573.15" y="310.5" width="124.7" height="16" rx="4" class="c-mask"/>
-          <text x="635.5" y="321.5" class="t-edge-emphasis" font-size="8" text-anchor="middle">ring-fetch · 每连接游标</text>
+        <g data-detail="context" data-edge-from="queue" data-edge-to="launch" data-edge-label="出队 → 轮换会话" data-edge-key="5" data-edge-id="queue-launch">
+          <rect x="597.75" y="310.5" width="85.5" height="16" rx="4" class="c-mask"/>
+          <text x="640.5" y="321.5" class="t-edge-emphasis" font-size="8" text-anchor="middle">出队 → 轮换会话</text>
         </g>
-        <g data-detail="context" data-edge-from="plugin_output" data-edge-to="local_poller" data-edge-label="session.output.pull" data-edge-key="6" data-edge-id="output-to-poller">
-          <rect x="800.45" y="190" width="105.1" height="16" rx="4" class="c-mask"/>
-          <text x="853" y="201" class="t-edge-emphasis" font-size="8" text-anchor="middle">session.output.pull</text>
+        <g data-detail="context" data-edge-from="launch" data-edge-to="host_pty" data-edge-label="host-pty.spawn" data-edge-key="6" data-edge-id="launch-pty">
+          <rect x="704.7" y="304" width="80.6" height="16" rx="4" class="c-mask"/>
+          <text x="745" y="315" class="t-edge-default" font-size="8" text-anchor="middle">host-pty.spawn</text>
         </g>
-        <g data-detail="context" data-edge-from="plugin_ws" data-edge-to="mobile_ws" data-edge-label="二进制输出帧" data-edge-key="7" data-edge-id="ws-to-mobile">
-          <rect x="817.1" y="421" width="70.8" height="16" rx="4" class="c-mask"/>
-          <text x="852.5" y="432" class="t-edge-emphasis" font-size="8" text-anchor="middle">二进制输出帧</text>
+        <g data-detail="context" data-edge-from="host_pty" data-edge-to="agent_pty" data-edge-label="PTY 进程" data-edge-key="7" data-edge-id="pty-agent">
+          <rect x="719.4" y="418" width="51.2" height="16" rx="4" class="c-mask"/>
+          <text x="745" y="429" class="t-edge-default" font-size="8" text-anchor="middle">PTY 进程</text>
         </g>
-        <g data-detail="context" data-edge-from="local_poller" data-edge-to="xterm" data-edge-label="onData → write" data-edge-key="8" data-edge-id="poller-to-xterm">
-          <rect x="919.7" y="190" width="80.6" height="16" rx="4" class="c-mask"/>
-          <text x="960" y="201" class="t-edge-default" font-size="8" text-anchor="middle">onData → write</text>
+        <g data-detail="context" data-edge-from="agent_pty" data-edge-to="hooks" data-edge-label="hooks 回调" data-edge-key="8" data-edge-id="agent-hooks">
+          <rect x="822" y="478" width="61" height="16" rx="4" class="c-mask"/>
+          <text x="852.5" y="489" class="t-edge-default" font-size="8" text-anchor="middle">hooks 回调</text>
+        </g>
+        <g data-detail="context" data-edge-from="hooks" data-edge-to="state" data-edge-label="POST 任务状态" data-edge-key="9" data-edge-id="hooks-state">
+          <rect x="922.15" y="449" width="75.7" height="16" rx="4" class="c-mask"/>
+          <text x="960" y="460" class="t-edge-emphasis" font-size="8" text-anchor="middle">POST 任务状态</text>
+        </g>
+        <g data-detail="context" data-edge-from="state" data-edge-to="bus" data-edge-label="TaskQueue / Status Changed" data-edge-key="10" data-edge-id="state-bus">
+          <rect x="890.3" y="335" width="139.4" height="16" rx="4" class="c-mask"/>
+          <text x="960" y="346" class="t-edge-emphasis" font-size="8" text-anchor="middle">TaskQueue / Status Changed</text>
         </g>
 
         <!-- Legend -->
@@ -5401,61 +5417,65 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
     <div class="cards">
       <div class="card">
         <div class="card-header">
-          <div class="card-dot cyan"></div>
-          <h3>字节连续性</h3>
+          <div class="card-dot emerald"></div>
+          <h3>编排反转：插件是会话编排方</h3>
         </div>
         <ul>
-          <li>PtyRing 每个 PTY 句柄一条有界环：单生产者（PtyReader）写入、多消费者按游标拉取；容量是 `host-pty.spawn` 的插件声明参数（terminal-session 声明 4 MiB，未声明取内核默认 256 KiB，上限 4 MiB）</li>
-          <li>拉取区间为 [游标, next_offset)，续拉只拿新增字节不重复已消费段；`min_offset` 标记驻留最旧字节，环满淘汰最旧而不阻塞写入</li>
-          <li>游标落后于 `min_offset` 即如实上报 `truncated` + `resync`——不静默补洞、不假装连续，前端清屏重锚后从现存段起播</li>
+          <li>任务域自 `com.bedcode.auto-task` 并入 com.bedcode.terminal-session（spec D8-P4，桌面 2026-09-20 · 移动 2026-10-08）——不再有独立的 auto-task 插件</li>
+          <li>会话创建由本插件经 `launch::create_via_host` 发起（互调 api `session-create` 的同一入口）：读配置真源（插件私有库）→ 命名唯一化 → config 映射 launch spec → `host-pty.spawn` 同步可见</li>
+          <li>集成注入由插件自己驱动：activate 注册生命周期监听，`on-session-lifecycle(Creating)` 即调 `hooks::ensure_agent_integration`（resource_dir 经 `host-app.plugin-resource-dir` 自取）</li>
+          <li>不再经 legacy `host-session.create(config-id)`：那条链要读主库配置投影，而票 08 之后新建的配置本就创建不出会话（伪可用），投影与 legacy 通道随之退役</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-dot cyan"></div>
+          <h3>双调度状态机</h3>
+        </div>
+        <ul>
+          <li>队列：pending →（全新会话直接下发）executing → done；pending →（已有上下文：关闭旧会话 + 同配置新建）waiting →（idle 到达 / 宽限耗尽）executing —— 任务间上下文隔离不再靠 /clear 命令，改为轮换会话</li>
+          <li>waiting 态最多 3 次重试（3s / 5s / 8s 递增窗口）：agent CLI 完整启动（spawn shell → 加载 hooks → SessionStart）通常 2~5s；仍无 idle 信号按宽限直接下发（不取消），覆盖 opencode 这类首个 prompt 才建会话的 agent</li>
+          <li>定时：pending →（到期受理成功）creating →（Created 事件到达，prompts 入队）executed；创建失败 → failed；超 120 s 宽限仍未执行 → missed（不补跑，覆盖应用关闭期间的调度空洞）</li>
+          <li>executing 态静默看门狗 12 h：以「会话最新任务行事件时间静默时长」为判据而非总执行时长，长任务不受影响；终态推送链路断裂时靠关闭会话或手动取消兜底</li>
         </ul>
       </div>
 
       <div class="card">
         <div class="card-header">
           <div class="card-dot amber"></div>
-          <h3>背压不回传产出端</h3>
+          <h3>真源与幂等</h3>
         </div>
         <ul>
-          <li>PtyReader 是纯单生产者：零等待、零暂停判定、零配额回压；慢消费者只损失自己的环历史（2026-09-17 拉取模型裁定）</li>
-          <li>旧推模型三件套整体下线：UnifiedOutputQueue（50 MB）· SubscriberState try_send 丢弃 · forward_loop 合并窗口；前端 Tauri Channel 桥与 /ws/terminal/local 环回链路同步删除</li>
-          <li>宿主不再持有会话级订阅表与输出句柄；会话输出只经插件自持游标拉取，宿主 PTY 引擎不认 session id</li>
-        </ul>
-      </div>
-
-      <div class="card">
-        <div class="card-header">
-          <div class="card-dot emerald"></div>
-          <h3>双水位迟滞回环（收敛到插件）</h3>
-        </div>
-        <ul>
-          <li>消费端把 ack 打回输出域形成闭环：本地前端累计 64 KiB 或最迟 ~375 ms 调一次 `session.output.ack`；移动端在渲染水位处回发 `ack` 帧</li>
-          <li>未确认积压 ≥ 128 KiB 进入驻留（抑制下发，数据留环内），降到 64 KiB 以下才解除驻留；上沿与下沿之间的 64 KiB 迟滞带保证一次驻留至少跨过一个 ack 周期，避免逐格推进时反复进出震荡</li>
-          <li>两条消费路径共用同一对常量与同一裁决函数 `output::decide_pull_gate`——本地 `session.output.pull` 与 WS 端点 `ack` 帧的背压口径必须一致，任何一侧改阈值都要两侧同改</li>
+          <li>task_queue · task_scheduled（旧 scheduled_jobs，幂等改名迁移）· task_history 全部落在插件私有库，SQL 一律参数绑定（`*_params` + `?N`）</li>
+          <li>`handle_update_task_status`：event_time 丢弃过期事件；终态 completed / interrupted 不可被 running / waiting 回退；重复 POST 去重——乱序与重投都不污染真源</li>
+          <li>WASM 无系统时钟，所有到期比较用宿主 tick 回调注入的 `now_utc`（与 SQLite datetime(&#39;now&#39;) 同格式，字符串可直接比较）</li>
+          <li>长循环统一经 `yield_guard`（每 64 次调一次廉价宿主原语）制造 await 点——wasip3 async store 下纯 guest 计算不触发让出，会阻塞同实例的配对回调</li>
         </ul>
       </div>
 
       <div class="card">
         <div class="card-header">
           <div class="card-dot violet"></div>
-          <h3>节奏与预算</h3>
+          <h3>广播回环：跨端零本地队列状态</h3>
         </div>
         <ul>
-          <li>本地前端轮询 50 ms 快档 / 250 ms 空闲档（连续 5 次追平才降档，任一 tick 有数据立即回快档）——只降延迟不动吞吐</li>
-          <li>单 tick 预算 4 × 16 KiB = 64 KiB（对齐迁移前引擎 FETCH_BUDGET），满批即让出主线程、下一 tick 续拉，稳态吞吐上限 1.28 MB/s</li>
-          <li>WS 端点有界 drain：单次 16 KiB、每轮最多 8 次（≈128 KiB）；三路唤醒——客户端入站帧 / 宿主 50 ms 限频 `pty:output` / 1 s tick 兜底</li>
+          <li>广播终点即图中 `bus` 的 `→ 移动端重拉`：真源变更经 `host-events` 发 TaskQueue / TaskStatus / TaskScheduled Changed → 宿主同步链 → 移动端 WS SyncData → `app.emit` 三类事件（`ws_sync_task_{queue,status,scheduled}_changed`）</li>
+          <li>回环不在图内画线：跨 4 段回流线会与入口面所有前向边共走廊，故以节点标注 + 本卡承载；链路语义是「事件触发全量 HTTP 重拉」，不是把真源复制一份到移动端</li>
+          <li>移动端只订阅事件、不落任何本地状态：三路事件共用 500 ms 去抖后全量 HTTP 重拉；下拉刷新与重连重拉兜底断线期丢失的事件</li>
+          <li>HTTP 端点 path 段（task-queue/* · scheduled-jobs/*）一个不改，改的只是基址前缀所属的插件 id（`/api/plugin/com.bedcode.terminal-session/...`）——移动端无需改协议</li>
         </ul>
       </div>
 
       <div class="card">
         <div class="card-header">
           <div class="card-dot rose"></div>
-          <h3>真源与边界</h3>
+          <h3>让出、隔离与宿主红线</h3>
         </div>
         <ul>
-          <li>`host-pty` 6 条原语（spawn / write / resize / is_running / kill / ring-fetch）整面住在能力域 crate `packages/bedcode-pty-engine`（ADR 0039）；wasm-core 只剩权限门与端口装配薄壳</li>
-          <li>会话 ↔ pty 映射真源在插件私有库；插件会话创建 `host-pty.spawn` 同步可见——spawn 失败直接 Err 不留幽灵会话，登记失败立即 `pty_kill` 回收</li>
-          <li>输出字节禁止经 JSON-RPC 命令通道搬运（实测 ~75 ms/MB），走 WIT `list&lt;u8&gt;` 二进制直传（~2.6 ms/MB）——ADR 0022 性能红线</li>
+          <li>三域（配对/信任、会话/配置、任务）各自 `Result` 边界、禁止跨域持锁；定时器回调按命令名分域计数失败，失败只降级本域</li>
+          <li>任务域只经宿主 `host-*` 基础服务取能力（host-fs · host-plugin-database · host-events/host-bus · host-config · host-timer）——不新增任何宿主命令（spec D2 红线）</li>
+          <li>反向回调兼容面（terminal-hooks / on-session-lifecycle / on-input-submitted）保留在 SDK，但本插件不再依赖它驱动主流程——回调只是资源目录与其它创建路径（移动端 HTTP）的传输载体</li>
         </ul>
       </div>
     </div>
