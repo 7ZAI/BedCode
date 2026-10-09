@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+#### Mobile: host UI migrated into wasm-apps — shell default entry, three standalone pages, old host mechanisms applied
+
+- **New default entry is the host shell (`/mobile/shell`)**: `/` redirects to the shell; the old
+  four-page host (`MobileSwipeContainer`) stays reachable via `/mobile` during transition (its
+  retirement is a separate ticket, pending real-device review)
+- **Three wasm-apps are standalone pages in the shell**: `file-transfer` / `ai-chatbox` dropped
+  their toolbox-page / nav-tab embedding and register shell surfaces (`context.ui.registerSurface`);
+  manifests aligned (stale `views` / `navTab` contributes and the now-unused `ui:toolbox` /
+  `ui:navtab` permissions removed)
+- **The old host's main flow now lives in `terminal-session`** (`wasm-apps/terminal-session/src/host/**`):
+  device discovery (mDNS / manual / connection history) → pairing (code / biometric / **QR**) →
+  session list (start / stop / remove) → terminal, reachable as the app's shell surface plus a
+  home quick-card (`host-sessions`); the task page is reachable in the shell too (route + capsule
+  item, new `ui:route` permission bit)
+- **Engine facts projected into the plugin (no WIT / ABI change)**: connection status & history via
+  `mobileApi`, a whitelist of 6 connection lifecycle events (`ws_reconnecting` …), raw mDNS
+  discoveries, and biometric credential **status only** (credentials stay in the host, C4)
+- **Old frontend mechanisms applied to the new UI**: a plugin-domain error-code mechanism
+  (`classifyConnectionError` + `ensureCommandOk`; error slots hold an i18n key or raw server text and
+  render through `t()`), every catch logs through `context.logger`, and there are no hard-coded
+  user-visible strings (bilingual `hub.*` / `hub.qr*` key sets pinned by tests)
+- **Bug fix**: the two host-page sections referenced nine undeclared template bindings — Vue warned
+  at runtime and rendered nothing for the mDNS button, connection history, pairing, disconnect and
+  biometric entries; fixed with explicit `computed` wrappers and locked by new component mount tests
+- **Gates**: mobile `pnpm run test:run` green (77 files / 831 tests incl. 9 new gate files), root
+  `eslint .` 0 error, plugin `vue-tsc --noEmit` 0 error, plugins rebuilt; **real-device verification
+  not run** (Rust core refactor in progress) — device checklist recorded in
+  `.scratch/2026-10-09-mobile-host-into-wasm-apps/`
+
+#### Mobile: old frontend host retired — legacy views / shell layout / plugin embedding face removed, with anti-reintroduction locks
+
+- **Old four-page host deleted**: `MobileSwipeContainer` / `MobileNav` / `MobileLayout` /
+  `MobileStatusBar` and `src/views/{DevicesView,SessionsView,TerminalView,PluginView,
+  SettingsView,PresetTasksView,ToolboxView}` removed, along with the orphaned components they
+  owned (`ScanPanel` / `BiometricAuthDialog` / `PairingInput` / `PresetTaskCard` /
+  `SessionConfigCard` / `SessionCard`) and the now-dead test files / fixtures for those faces
+- **`App.vue` renders `<router-view />`**: the shell owns the layout frame (100dvh / safe-area /
+  ancestor classes in `ShellView.vue`); legacy host routes removed from the router, keeping only
+  `/` → `/mobile/shell`, `/mobile/files/:id` (CodeExplorer home undecided, kept for now) and
+  `/mobile/settings/*` sub-pages (shell settings links accept them)
+- **`registerSettingsSection` retired end-to-end** (no consumer left in the old host settings
+  area): SDK types, `src/plugin/{context,registry,permission,types}.ts`, dev-shell
+  (`registry` / `mock-context` / `PluginsView.vue`), fixture `mockLifecyclePlugin.ts`,
+  `pluginReactivate.test.ts`, and `file-transfer`'s settings section (now
+  `registerSettingsEntry` → `ui.openPage('settings')`)
+- **Anti-reintroduction locks (new)**: `src/__tests__/shell/retiredHostUIRetirementLocks.test.ts` —
+  R1 retired route names, R2 retired view/component symbols (word-boundary, comment-skipping,
+  self-file excluded), R3 positive pin that the shell equivalents (`ShellView` / `ShellHost` /
+  `ShellTabbar` / `ShellSettingsScreen` + `mobile-shell` route) stay in place
+- **Gates**: mobile `pnpm run test:run` green (72 files / 812 tests; the 835→812 delta is the
+  six retired-face test files removed), root `eslint .` 0 error, plugin `vue-tsc --noEmit` 0
+  error, SDK dist rebuilt, all three plugin artifacts rebuilt; the one previously flaky
+  `useMdnsDiscovery` failure did not reproduce (confirmed load-flake, not a regression);
+  **real-device verification not run**
+
 #### Mobile: Android native notification / vibration / sound surface — `host-notify` domain (ABI 18)
 
 - **New mobile-only domain `host-notify` (5 functions)**: `notify` (title/body +

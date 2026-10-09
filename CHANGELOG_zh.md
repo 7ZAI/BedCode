@@ -9,6 +9,53 @@
 
 ## [未发布]
 
+#### 移动端：宿主前端迁移进 wasm-app——壳为默认入口、三应用独立页面、旧前端机制落地新界面
+
+- **默认入口改为宿主壳（`/mobile/shell`）**：`/` 重定向到壳；旧四页宿主（`MobileSwipeContainer`）
+  过渡期仍经 `/mobile` 可达（退役另票，待真机复核）
+- **三个 wasm-app 成为壳内独立页面**：`file-transfer` / `ai-chatbox` 停掉工具箱页 / 导航 Tab
+  嵌入，改为注册壳运行面（`context.ui.registerSurface`）；manifest 同步对齐（清掉失效的
+  `views` / `navTab` 贡献块与不再使用的 `ui:toolbox` / `ui:navtab` 权限位）
+- **旧宿主主流程下沉到 `terminal-session`**（`wasm-apps/terminal-session/src/host/**`）：
+  设备发现（mDNS / 手动 / 连接历史）→ 配对（配对码 / 生物 / **二维码**）→ 会话列表
+  （启动 / 停止 / 删除）→ 终端，作为该应用的壳运行面 + 首页快捷卡片（`host-sessions`）；
+  任务页也在壳内可达（动态路由 + 胶囊菜单项，新增 `ui:route` 权限位）
+- **引擎事实投影进插件（零 WIT / ABI 变更）**：`mobileApi` 的连接态与连接历史、6 个连接生命周期
+  事件白名单（`ws_reconnecting` …）、mDNS 原始发现事实、生物凭证**仅状态**（凭据留宿主，C4）
+- **旧前端机制落地新界面**：插件域错误码机制（`classifyConnectionError` + `ensureCommandOk`；
+  错误槽位存 i18n key 或服务端原文、一律经 `t()` 渲染）、所有 catch 经 `context.logger` 记录、
+  无硬编码用户可见文案（双语 `hub.*` / `hub.qr*` 键集合由测试钉住）
+- **缺陷修复**：宿主页两个区块的模板引用了九个未声明的绑定——运行期 Vue 告警且 mDNS 按钮、
+  连接历史、配对区、断开按钮、生物入口整块不渲染；改为显式 `computed` 收口，并新增组件挂载
+  测试锁住
+- **门禁**：移动端 `pnpm run test:run` 全绿（77 文件 / 831 用例，含新增 9 个门禁文件）；根
+  `eslint .` 0 error；插件 `vue-tsc --noEmit` 0 error；插件产物已重建。**真机核验未跑**
+  （Rust 核心重构中），核验清单见 `.scratch/2026-10-09-mobile-host-into-wasm-apps/`
+
+#### 移动端：旧前端宿主退役——旧视图 / 壳布局 / 插件嵌入面删除，并加防回接锁
+
+- **旧四页宿主已删**：`MobileSwipeContainer` / `MobileNav` / `MobileLayout` /
+  `MobileStatusBar` 与 `src/views/{DevicesView,SessionsView,TerminalView,PluginView,
+  SettingsView,PresetTasksView,ToolboxView}`，以及它们独占的孤儿组件（`ScanPanel` /
+  `BiometricAuthDialog` / `PairingInput` / `PresetTaskCard` / `SessionConfigCard` /
+  `SessionCard`）与对应失效的测试 / 夹具
+- **`App.vue` 改为渲染 `<router-view />`**：布局框由壳自承（`ShellView.vue` 的
+  100dvh / 安全区 / 祖先类）；router 删旧宿主路由，仅保留 `/` → `/mobile/shell`、
+  `/mobile/files/:id`（CodeExplorer 归属待定，暂留）与 `/mobile/settings/*` 子页
+  （壳设置跳转链接受）
+- **`registerSettingsSection` 全链路退役**（旧宿主设置区已无消费方）：SDK 类型、
+  `src/plugin/{context,registry,permission,types}.ts`、dev-shell（`registry` /
+  `mock-context` / `PluginsView.vue`）、夹具 `mockLifecyclePlugin.ts`、
+  `pluginReactivate.test.ts`、file-transfer 的设置区块（改 `registerSettingsEntry` →
+  `ui.openPage('settings')`）
+- **新增防回接锁**：`src/__tests__/shell/retiredHostUIRetirementLocks.test.ts`——R1 退役路由名、
+  R2 退役视图 / 组件符号（词边界、跳注释、排除锁文件自身）、R3 正面钉壳等价物
+  （`ShellView` / `ShellHost` / `ShellTabbar` / `ShellSettingsScreen` + 路由 `mobile-shell`）在场
+- **门禁**：移动端 `pnpm run test:run` 全绿（72 文件 / 812 用例；835→812 系六个退役面测试
+  文件删除的预期差）；根 `eslint .` 0 error；插件 `vue-tsc --noEmit` 0 error；SDK dist 重建；
+  三插件产物全部重建；此前偶发的 `useMdnsDiscovery` 失败未复现（确认重负载 flaky，非回归）；
+  **真机核验未跑**
+
 #### 移动端：Android 原生通知/震动/声音能力封装——`host-notify` 域（ABI 18）
 
 - **新增移动特有域 `host-notify`（5 函数）**：`notify`（title/body + `options-json` 的

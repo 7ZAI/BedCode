@@ -532,6 +532,30 @@ Desktop PTY → Claude Code
   `@/components|@/composables|@/views`：新界面缺件先复制进 `src/shell/**`，确需桥接在
   `BRIDGE_ALLOWLIST` 登记并写理由；同锁正面钉住复制面文件在场，防「删文件绕过依赖锁」）。
   新增壳锁**同步登记本索引**
+- **壳注册桥与插件域机制锁**（票 2026-10-09，测试期门禁，`pnpm run test:run` 必跑）：
+  - 插件上下文 → 壳注册表（运行面 appId 代填 / `PluginViewHost` 补 `provide('pluginContext')` /
+    dispose 入 `_disposables` / 运行面免 `ui:*` 权限门而旧嵌入面仍受门 / slot·capsule·settings 三面）
+    → `src/__tests__/plugin/pluginContextShell.test.ts`
+  - 运行面解析优先级（① 应用自带 surface → ② 数据源延迟解析 → ③ 空态；组件按引用透传）
+    → `src/__tests__/shell/useShellAppsSurface.test.ts`
+  - 壳设置门类齐全（连接 / 认证 / 出站 / 外观 / 权限 / 通知 / 关于七项在场；新增三项跳既有设置页路由，
+    既有项口径不漂移；设置项文案双语在场）—— **旧宿主退役的前置**（壳不覆盖全部设置门类就不许删旧设置）
+    → `src/__tests__/shell/shellSettingsScreen.test.ts`
+  - 连接生命周期事件白名单投影（6 个 `ws_*` 事件 / 载荷映射 / dispose 幂等 / 非 Tauri 降级 / 在途注销）
+    → `src/__tests__/plugin/connectionEvents.test.ts`
+  - 插件域机制与登记（错误分类表 + `ensureCommandOk` + 机制键双语在场 / 二维码载荷解析 /
+    **宿主页两区块真实挂载**（防「模板绑定未声明」这类只会在渲染期暴露的缺陷）/ 宿主页域激活回收 /
+    任务域壳内任务页注册）→ `wasm-apps/terminal-session/src/{host,task}/__tests__/**`
+- **旧宿主 UI 退役面不回接（票 2026-10-09 阶段 B）** → `src/__tests__/shell/retiredHostUIRetirementLocks.test.ts`：
+  R1 退役路由名（`mobile-devices` / `mobile-sessions` / `mobile-terminal` / `mobile-toolbox` /
+  `mobile-preset-tasks` / `mobile-plugins` / `mobile-home-alt`，带引号字面量锁定，不误伤
+  `--mobile-terminal-bg` 类 CSS 变量）不得在 `src/` 出现；R2 退役视图 / 组件符号
+  （`MobileSwipeContainer` / `MobileNav` / `MobileLayout` / `MobileStatusBar` / `DevicesView` /
+  `SessionsView` / `ToolboxView` / `PluginView` / `SettingsView` / `PresetTasksView` /
+  `TerminalView` / `registerSettingsSection`，词边界锁定，不误伤服役面 `PluginViewHost` /
+  `EgressSettingsView` / `registerTerminalView`）不得在 `src/` 出现；R3 正面钉壳等价物在场
+  （`ShellView` / `ShellHost` / `ShellTabbar` / `ShellSettingsScreen` + 路由 `mobile-shell`），
+  防「删新面绕过退役锁」。扫描跳注释，覆盖整个 `src/`（含测试文件）
 - 发送编排退役面（票 06）→ `src-tauri/tests/retired_mobile_send_orchestration_lock.rs`（`retired_mobile_send_orchestration_is_not_reintroduced`）
 - 接收编排退役面（票 07）→ `src-tauri/tests/retired_mobile_receive_orchestration_lock.rs`（`retired_mobile_receive_orchestration_is_not_reintroduced`）
 - 传输 / 接收 / 远端浏览调度与设置命令面退役（票 10）→ `src-tauri/tests/retired_mobile_peer_transfer_command_face_lock.rs`（`retired_peer_transfer_settings_command_face_is_not_reintroduced` + `peer_transfer_scheduling_entrypoints_stay_engine_only`；同文件另钉 peer 宿主模块不得带 `#[tauri::command]` / 不得进 `invoke_handler`）
