@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+#### Mobile: WS outbound-connection engine extracted into `packages/bedcode-ws-client-engine` (ADR 0043)
+
+- **New capability crate `packages/bedcode-ws-client-engine`**: the mobile host-websocket
+  client-domain mechanics (~1,350 lines: handle table with owner arbitration / reader-writer
+  task pair / heartbeat with silence death-detection / backoff auto-reconnect / frame
+  envelope / purge-on-deactivate) are extracted from the fork crate
+  (`bedcode-mobile/packages/bedcode-wasm-core/.../host_impl/ws.rs`) into a generic crate
+  whose default form is **pure engine + port abstraction** — zero WIT / zero SDK / zero
+  platform (tauri) / zero host-kit dependencies. Platform-specific surfaces are injected
+  through 7 port methods (`WsClientPorts`): permission gate (`ws:client`, fail-closed) /
+  bus JSON + binary publish (topics pre-assembled by the engine) / host-runtime task spawn
+  (cancellable `WsTask`, runtime handle never leaks) / jwt token for the host-injected auth
+  frame (credential stays out of plugins) / reconnect policy + clamped bounds (global
+  backoff single source of truth stays in the host)
+- **Mobile side shrinks to a thin adapter + `MobileWsClientPorts`**: the 5 primitives
+  (`connect` / `send-text` / `send-binary` / `close` / `is-connected`) and
+  `purge_for_plugin` keep their exact signatures and error texts; the sync↔async bridge
+  (`guarded_host_call` + `block_on_async`) stays on the host side. **Zero ABI / zero WIT
+  change** (this task does not touch `bedcode.wit` or the SDK `abi.rs`) **and zero behavior
+  change**: event topics, frame envelope shape,
+  permission bit, fail-closed semantics and purge semantics are preserved verbatim
+- **Wire contract self-held + drift lock**: `src/wire.rs` carries the copy (event names /
+  owner-private topic spelling / frame kind + header length / `ws:client` literal) and
+  `wire::drift_lock` compares it textually against the mobile SDK source files
+  (`host/ws.rs`, `permission.rs`) — either side drifting turns the lock red; the plugin
+  consumption surface (`parse_ws_frame` / `HostWs`) stays in the mobile SDK
+- **Governance & anti-back-drift**: in-crate `boundary_lock.rs` (production source free of
+  platform / SDK / wasm-core / host-kit / WIT-binding needles, production manifest free of
+  internal crates, unit tests confined to `src/`); registered in the desktop
+  `capability_crates_no_product_ids` scan set; fork boundary lock shared-anchor whitelist
+  4 → 5 (`bedcode-ws-client-engine`, same rationale as ADR 0042's discovery-engine); mobile
+  ws-domain lock's stale implementation path fixed and its scan surface extended to the
+  engine crate with file-existence assertions (a stale path would silently scan nothing)
+- **Gates**: new crate `cargo test` 20 green (engine 13 + drift 3 + boundary 4); fork crate
+  `cargo test --features test-support` 285 + 4 + 4 green (incl. the real-component
+  `ws_client_domain_full_loop_with_real_component` regression); mobile host `cargo test`
+  full suite; mutation self-check 3/3 (drift / boundary / adapter mapping)
+
+
 #### Desktop+Mobile: dual-end shared mDNS engine (ADR 0042, M1–M4)
 
 - **Shared engine** `packages/bedcode-discovery-engine` is now THE single dual-end mDNS engine

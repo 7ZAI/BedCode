@@ -232,22 +232,28 @@ bedcode-mobile/                       # 移动端项目 (Tauri 2.0 + Vue 3)
   `.scratch/2026-10-07-mobile-wasm-core-refactor/ticket-12-terminal-link-downsink.md` +
   `ticket-15-terminal-ui-downsink.md`（阶段 B：host-terminal / terminal-hooks 退役待实施）
 
-### 宿主 WS 出站连接域 — `host-websocket`（客户端子集，ABI v14 · 票 11）
+### 宿主 WS 出站连接域 — `host-websocket`（客户端子集，ABI v14 起 · 票 11 · 引擎抽根 ADR 0043）
 
 为票 12（终端订阅协议客户端迁插件）铺路的通用出站连接原语（ADR 0041；终端链路消费方详见
 下一节）：
 
-- **客户端 5 函数**（connect / send-text / send-binary / close / is-connected）：宿主实现
-  `src-tauri/src/plugin/wasm_runtime/host_impl/ws.rs`（句柄表 + reader/writer 任务 + 属主仲裁 +
-  停用 purge 回收），SDK trait 与帧信封解析在 `packages/plugin-sdk-mobile/rust/src/host/ws.rs`
+- **客户端 5 函数**（connect / send-text / send-binary / close / is-connected）：**引擎机制全部
+  在通用能力 crate `packages/bedcode-ws-client-engine`**（句柄表 / reader-writer 双任务 / 心跳 /
+  退避重连 / 帧信封 / 停用回收；零 WIT / 零 SDK / 零平台形态，平台差异面经端口
+  `WsClientPorts` 注入）；移动端只剩薄适配器
+  `packages/bedcode-wasm-core/src/manager/runtime/host_impl/ws.rs`（5 原语转发 +
+  `MobileWsClientPorts`：权限门读 manifest / 总线投递 / 宿主运行时任务 / jwt 代发 token /
+  全局退避钳制），SDK trait 与帧信封解析在 `packages/plugin-sdk-mobile/rust/src/host/ws.rs`
 - **服务端域不跟演**：桌面 15 函数里的服务端域 9 函数与 `connection-context` 不存在于移动端
   （ADR 0018/0041）；边界锁 `src-tauri/tests/mobile_host_websocket_client_domain_lock.rs`
   锁 WIT 服务端函数名与 `ws:server` 权限词汇
 - **事件与帧走属主私有总线 topic**：`<plugin-id>:ws:open|error|close`（JSON 状态事件）+
   `<plugin-id>:ws:message`（二进制帧信封：kind + handle 长度 + handle + 原始字节，零 JSON
   编解码）；订阅须在 activate 期完成，且 **manifest 须同时声明 `ws:client` + `bus` 两个权限位**
-- **不做 wss / 重连编排**：`connect` 仅接受 `ws://`、同步阻塞至握手完成（timeout 上限 5s）；
-  退避重连 / 心跳 / 订阅协议编排归插件（票 12 迁 `terminal_link` 时自带）
+- **不做 wss；心跳与退避重连为引擎参数**：`connect` 仅接受 `ws://`、同步阻塞至握手完成
+  （timeout 上限 5s）；`heartbeatSecs` / `autoReconnect` 为 config 可选面（断线按宿主退避策略
+  重建 + 新句柄 `ws:open` 携带 `reconnectedFrom`，取消 = 对句柄 close 或停用回收）；
+  订阅协议 / 重订阅编排归插件
 - 真实 WASM 组件全链路集成测试：`component.rs` tests 的 `ws_client_domain_full_loop_with_real_component`
   （component-test 插件 `ws-client` feature：connect → send-text → 对端回帧 → close 事件闭环）
 

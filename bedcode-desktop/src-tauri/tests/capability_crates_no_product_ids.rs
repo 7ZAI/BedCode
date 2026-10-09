@@ -12,8 +12,9 @@
 //!
 //! ## 扫描面与排除面（排除必须显式、可审计）
 //!
-//! - **扫**：`bedcode-*` 能力域 / 传输面 crate 的 `src/`（8 个，均在**仓库根
-//!   `packages/`**，2026-10-07 从 `bedcode-desktop/packages/` 迁根）。
+//! - **扫**：`bedcode-*` 能力域 / 传输面 crate 的 `src/`（9 个，均在**仓库根
+//!   `packages/`**，2026-10-07 从 `bedcode-desktop/packages/` 迁根；`bedcode-ws-client-engine`
+//!   随 ADR 0043 抽根入面）。
 //! - **不扫注释**：`//`、`///`、`//!` 一律剥掉。注释里点名产品（解释「为什么」）是
 //!   正常且必要的，把注释当代码判会产出噪音锁，噪音锁会被忽略，忽略的锁等于没有。
 //! - **不扫测试区**：路径含 `tests` 段的独立测试文件、以及文件内首个
@@ -65,6 +66,9 @@ const SCANNED_CRATES: &[&str] = &[
     // 自 wasm-core 迁出的 pty 引擎面（引擎无产品语义：PTY 生命周期 / 环形缓冲 /
     // 特殊键 wire 形状）。迁出即入扫描面——新 crate 的默认状态就该受管辖。
     "bedcode-pty-engine",
+    // 自移动端 fork crate 抽根的 WS 出站连接引擎（ADR 0043）：句柄表 / 心跳 /
+    // 退避重连 / 帧信封，全是传输机制，无任何产品语义。与上者同理——抽根即入扫描面。
+    "bedcode-ws-client-engine",
 ];
 
 /// 已知的、暂未纳入扫描的 `bedcode-*` crate（各有明确在办票据）

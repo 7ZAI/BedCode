@@ -79,14 +79,21 @@ wit-component = { version = "=0.256.0", optional = true }
 sha2 = "0.10"
 # 目录定位（fs_auth 授权目录默认值 / auth_policy 记录定位；与桌面 fork 面同用途）
 dirs = "6.0.0"
-# host-websocket 客户端域出站引擎（批次 2 自宿主 wasm_runtime/host_impl/ws.rs 迁入；
-# 移动端 ws:// 明文客户端，不启 native-tls——与宿主 src-tauri 依赖同形）
-tokio-tungstenite = "0.24"
 # host-mdns 域共享引擎（双端共享 lib spec M3）：引擎机制 + 端口 trait 全部在
 # 根 packages/bedcode-discovery-engine（零 WIT 形态，默认无 desktop-host feature）；
 # 本 crate 只留薄转发层（host_impl/mdns.rs）与 MobileDiscoveryPorts 端口适配。
 # 移动端守护单例真源 = 该引擎的 DAEMON（宿主 crate::mdns::engine 已随 M3 删除）
 bedcode-discovery-engine = { path = "../../../packages/bedcode-discovery-engine" }
+# host-websocket 客户端域出站引擎（ADR 0043 抽根）：句柄表 / reader-writer 双任务 /
+# 心跳 / 退避重连 / 帧信封 / 停用回收全部在该通用能力 crate（零 WIT / 零 SDK /
+# 零平台形态）；本 crate 只留薄转发层（host_impl/ws.rs）与 MobileWsClientPorts
+# 端口适配。握手所需的 WS 协议栈由引擎自带（锁 0.24，与本 crate 原依赖同版本）
+bedcode-ws-client-engine = { path = "../../../packages/bedcode-ws-client-engine" }
+# 生产面已不再直接用 WS 协议栈（抽根后归引擎）；此处保留在生产依赖段是因为
+# test-support feature 下的 mock WS 服务器（插件端 WS 端点回显夹具）要用它，
+# 而宿主 src-tauri 以**普通依赖**方式开启该 feature（dev 依赖对宿主不生效）。
+# 移动端 ws:// 明文客户端，不启 native-tls——与宿主 src-tauri 依赖同形
+tokio-tungstenite = "0.24"
 
 [features]
 # 测试支持面（宿主 src-tauri dev-dependencies 开启）：组件 e2e 夹具构建器 +

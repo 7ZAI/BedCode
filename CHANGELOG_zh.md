@@ -9,6 +9,36 @@
 
 ## [未发布]
 
+#### 移动端：WS 出站连接引擎抽根为 `packages/bedcode-ws-client-engine` 能力 crate（ADR 0043）
+
+- **新能力 crate `packages/bedcode-ws-client-engine`**：移动端 `host-websocket` 客户端域机制
+  （约 1,350 行：句柄表 + 属主仲裁 / reader-writer 双任务 / 心跳与静默判死 / 退避自动重连 /
+  帧信封 / 停用回收）自 fork crate（`bedcode-mobile/packages/bedcode-wasm-core/.../host_impl/ws.rs`）
+  抽出为通用 crate，默认形态 = **纯引擎 + 端口抽象**——零 WIT / 零 SDK / 零平台（tauri）/
+  零机制内核（host-kit）依赖。平台差异面经 7 方法端口 `WsClientPorts` 注入：权限门
+  （`ws:client`，fail-closed）/ 总线 JSON 与二进制投递（topic 由引擎拼好）/ 宿主运行时任务
+  派生（可取消 `WsTask`，运行期句柄不外泄）/ jwt 代发 token（凭据不落插件）/ 重连策略与
+  钳制边界（全局退避单一事实源仍在宿主）
+- **移动端收窄为薄适配器 + `MobileWsClientPorts`**：5 原语（connect / send-text / send-binary /
+  close / is-connected）与 `purge_for_plugin` 签名及错误文案逐字保留；同步↔异步桥
+  （`guarded_host_call` + `block_on_async`）留在宿主侧。**零 ABI / 零 WIT 变更**（本任务不触碰
+  `bedcode.wit` 与 SDK `abi.rs`）**且行为零变化**：事件 topic、帧信封形状、权限位、fail-closed
+  与停用回收语义逐字保留
+- **wire 契约自持 + 漂移锁**：`src/wire.rs` 自持副本（事件名 / 属主私有 topic 拼法 / 帧 kind
+  与头长 / `ws:client` 字面量），`wire::drift_lock` 与移动 SDK 源文件（`host/ws.rs` /
+  `permission.rs`）文本级比对——任一侧漂移即测红；插件消费面（`parse_ws_frame` / `HostWs`）
+  仍住移动 SDK
+- **治理与防回接**：crate 内 `boundary_lock.rs`（生产源码零平台 / SDK / wasm-core / host-kit /
+  WIT 绑定层针脚，生产清单零内部 crate，单测限 `src/` 内）；登记进桌面
+  `capability_crates_no_product_ids` 扫描面；fork 边界锁共享锚点白名单 4 家 → 5 家
+  （+ `bedcode-ws-client-engine`，与 ADR 0042 的 discovery-engine 同理由）；移动 ws 域边界锁
+  修陈旧实现路径 + 扫描面扩到引擎 crate，并加目标文件存在性断言（陈旧路径会让锁静默空转）
+- **门禁**：新 crate `cargo test` **20 绿**（引擎 13 + 漂移锁 3 + 边界锁 4）；fork crate
+  `cargo test --features test-support` **285 + 4 + 4 绿**（含真实组件
+  `ws_client_domain_full_loop_with_real_component` 全链路回归）；移动宿主 `cargo test`
+  全量；变异自检 3/3（漂移锁 / 边界锁 / 适配器映射）
+
+
 #### 桌面+移动：双端共享 mDNS 引擎（ADR 0042，M1–M4）
 
 - **共享引擎** `packages/bedcode-discovery-engine` 成为双端唯一的 mDNS 引擎（引擎机制 + 双句柄表

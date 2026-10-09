@@ -116,8 +116,10 @@ const RETIRED_WS_CRYPTO: [&str; 8] = [
 /// 已整面退役该文件（ABI 17），其归属归票 15 的锁，不再由本锁钉住。
 /// 票 17 批次 2b：jwtAuth 代注裁决真源迁入 fork crate（wasm_host.rs → host_api/http_engine.rs），
 /// 锁改钉新真源位置。
+/// 针脚取 `.get("jwtAuth")` 而非整行 `request.get("jwtAuth")`：后者在 rustfmt 把链式调用
+/// 折成多行后即失效（假红——语义面仍在，只是行形态变了；本锁判据是「保留面在场」）。
 const KEEP_HOST_FACE: [(&str, &str); 2] = [
-    ("../packages/bedcode-wasm-core/src/host_api/http_engine.rs", "request.get(\"jwtAuth\")"),
+    ("../packages/bedcode-wasm-core/src/host_api/http_engine.rs", ".get(\"jwtAuth\")"),
     ("../packages/bedcode-wasm-core/src/host_api/http_engine.rs", "fn resolve_jwt_auth_header("),
 ];
 
