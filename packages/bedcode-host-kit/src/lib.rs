@@ -25,6 +25,9 @@
 //!     ├── state      插件实例状态（机制字段）
 //!     ├── ports      宿主能力端口（marker + 向下转型出口）
 //!     ├── module     能力模块契约（HostModule / 描述符 / 提交类型）
+//!     ├── lifecycle  能力域生命周期钩子（装载 / 停用回调；内核不点名能力域）
+//!     ├── assembly   宿主装配侧自报（期望模块清单 / 能力域端口装配器；同上）
+//!     ├── route      能力路由词汇自报（能力名 / 方法族前缀 / 导出函数名；同上）
 //!     ├── registry   自动注册表（收集 → 排序 → 白名单校验 → linker 装配）
 //!     ├── limits     Store 资源上限 + 编译期默认值
 //!     └── metrics    单插件指标值对象（原子记账）
@@ -41,13 +44,21 @@
 
 #![deny(missing_docs)]
 
+pub mod assembly;
 pub mod limits;
+pub mod lifecycle;
 pub mod metrics;
 pub mod module;
 pub mod ports;
 pub mod registry;
+pub mod route;
 pub mod state;
 
+pub use assembly::{
+    expected_host_modules, install_domain_ports, DomainPortsInstaller, DomainPortsInstallerEntry,
+    ExpectedModuleEntry,
+};
+pub use lifecycle::{DomainHooks, DomainHooksEntry, DomainHooksRegistry};
 pub use limits::{defaults, StoreLimits};
 pub use metrics::{
     AuthzDecisionKind, CallTimer, LifecycleEvent, PluginMetrics, PluginMetricsSnapshot,
@@ -55,6 +66,7 @@ pub use metrics::{
 pub use module::{HostModule, HostModuleDesc, ModuleEntry};
 pub use ports::HostPorts;
 pub use registry::ModuleRegistry;
+pub use route::{collected_routable_capabilities, RoutableCapability, RoutableCapabilityEntry};
 pub use state::WasmPluginState;
 
 /// 本 crate 统一结果类型（机制面错误）

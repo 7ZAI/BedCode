@@ -226,6 +226,39 @@ fn install_all_into_fresh_linkers_succeeds_each_time() {
     }
 }
 
+/// 白名单差异的 **Display 文案**必须给出两个方向各自的修法（运维据此定位）
+///
+/// 与 [`whitelist_rejects_unlisted_module_and_names_it`]（只判变体字段）互补：本用例
+/// 钉的是**人读的串**——`unlisted=` / `missing=` 两个方向标记、以及 forced-reference
+/// （漏强制引用行）与 whitelist（未经 review 的白名单项）两条修法关键词。缺任一项，
+/// 「依赖被删」与「能力悄悄进来」两种事故在日志里看起来一模一样。
+///
+/// 本用例在 host-kit 侧测（探针模块保证收集集非空）；wasm-core 侧只保留 missing
+/// 方向（其测试二进制的收集集随能力域迁出收缩至空，依赖「非空」的用例会失效）。
+#[test]
+fn whitelist_mismatch_message_carries_remediation_for_both_directions() {
+    let registry = ModuleRegistry::collected();
+    let err = registry
+        .verify_whitelist(&["alpha", "ghost"])
+        .expect_err("双侧差异必须失败");
+    let msg = err.to_string();
+
+    assert!(msg.contains("unlisted="), "文案必须标出 unlisted 方向：{msg}");
+    assert!(msg.contains("missing="), "文案必须标出 missing 方向：{msg}");
+    // 两侧的名字都要点名（unlisted=[mid, zeta]，missing=[ghost]）
+    for name in ["mid", "zeta", "ghost"] {
+        assert!(msg.contains(name), "文案必须点名 {name}：{msg}");
+    }
+    assert!(
+        msg.contains("forced-reference"),
+        "文案必须给出「漏强制引用行」的修法：{msg}"
+    );
+    assert!(
+        msg.contains("whitelist"),
+        "文案必须给出「白名单项需 review」的修法：{msg}"
+    );
+}
+
 /// 错误串含期望/实际类型名（向下转型失败时必须能定位，fail-visible 的前提）
 #[test]
 fn host_port_unavailable_error_names_both_types() {
