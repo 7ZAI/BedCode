@@ -37,6 +37,8 @@ use std::sync::Arc;
 
 pub mod engine;
 pub mod ports;
+/// 能力路由词汇自持（票 02 批次 03：能力名 / 方法族前缀 / 提供者导出表；内核零字面量）
+pub mod routing;
 /// wire 契约词汇自持副本（能力域脱绑 P2：发现事件名 / topic 命名规则，
 /// 与桌面 SDK 原版逐字一致由 `wire::drift_lock` 钉死）
 pub mod wire;
@@ -51,6 +53,20 @@ pub mod types;
 pub use advertiser::MdnsAdvertiser;
 pub use ports::{install_ports, DiscoveryPorts, DiscoveryTask};
 
+// ==================== 模块描述符词汇（常编译 pub：宿主 adapter 引用） ====================
+//
+// wasm-core 纯净性收口票 02 批次 03：宿主侧 adapter（`src-tauri/src/plugin/mdns.rs`）
+// 用 `expect_host_module!(MODULE_NAME)` 声明白名单条目，并断言接口路径 / 权限位与
+// 本 crate 逐字一致——三个常量必须**常编译 pub**（与 pty-engine 先例同形），且
+// `DESC` 直接取自它们（结构上不可能漂移）。
+
+/// 能力模块名（白名单键；`HostModuleDesc::name` 的真源）
+pub const MODULE_NAME: &str = "discovery";
+/// 本模块提供的 guest interface 路径
+pub const MODULE_INTERFACES: &[&str] = &["bedcode:plugin/host-mdns"];
+/// 本模块读写的权限位
+pub const MODULE_PERMISSIONS: &[&str] = &["network:mdns"];
+
 // ==================== 能力模块自报（WIT 绑定层，`desktop-host` feature） ====================
 
 // WIT 绑定层依赖（host-kit / wasmtime）只随 `desktop-host` feature 编译：
@@ -63,9 +79,9 @@ use wasmtime::component::{bindgen, Linker};
 /// 能力模块描述符（只描述机制，禁带产品名词——AGENTS §5.1 B1/B5）
 #[cfg(feature = "desktop-host")]
 const DESC: HostModuleDesc = HostModuleDesc {
-    name: "discovery",
-    interfaces: &["bedcode:plugin/host-mdns"],
-    permissions: &["network:mdns"],
+    name: MODULE_NAME,
+    interfaces: MODULE_INTERFACES,
+    permissions: MODULE_PERMISSIONS,
     abi_min: 1,
 };
 
@@ -156,3 +172,33 @@ impl bedcode::plugin::host_mdns::Host for WasmPluginState {
 pub fn install<P: DiscoveryPorts + 'static>(ports: P) {
     install_ports(Arc::new(ports));
 }
+
+// ==================== 生命周期钩子自报（`desktop-host`） ====================
+
+/// 停用期回调：回收该插件在本域的全部浏览 / 广播句柄
+///
+/// 回收实现自持（句柄表在 [`engine`]）：本钩子只做形状适配——域内返回回收计数，
+/// 钩子契约是 `fn(&str)`，计数就地 `debug!` 吸收（不让返回值反向污染通用契约）。
+///
+/// **为什么经钩子而不是内核直调**（wasm-core 纯净性收口票 02 批次 03）：宿主侧
+/// adapter 迁出内核后，内核不再点名本域（`host_api/mdns.rs` 与它的
+/// `purge_for_plugin` 转发一并删除）；停用路径经
+/// `bedcode_host_kit::DomainHooksRegistry::on_plugin_purge` 遍历（与 pty 同款）。
+#[cfg(feature = "desktop-host")]
+fn on_plugin_purge(plugin_id: &str) {
+    let reclaimed = engine::purge_for_plugin(plugin_id, &ports::ports());
+    if reclaimed > 0 {
+        tracing::debug!(plugin_id = %plugin_id, reclaimed, "mDNS 句柄随插件停用回收");
+    }
+}
+
+/// 本域生命周期钩子（自报静态；白名单键与 [`MODULE_NAME`] 同源）
+#[cfg(feature = "desktop-host")]
+pub static HOOKS: bedcode_host_kit::DomainHooks = bedcode_host_kit::DomainHooks {
+    name: MODULE_NAME,
+    on_manifest_load: None,
+    on_plugin_purge: Some(on_plugin_purge),
+};
+
+#[cfg(feature = "desktop-host")]
+bedcode_host_kit::submit_hooks!(HOOKS);
