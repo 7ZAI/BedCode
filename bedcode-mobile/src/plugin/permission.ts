@@ -25,6 +25,9 @@ const PERMISSION_API_MAP: Record<string, string[]> = {
   'system:open': ['system.openFile', 'system.revealInDir', 'system.revealReceivedFileLocation', 'system.requestAllFilesAccess', 'system.openDownloadDir'],
   // peer 为 WASM-only 权限，无前端 API 方法映射；宿主在 host fn 层仲裁
   'peer': [],
+  // notify（ABI v18 host-notify 域：通知/震动/声音）同为 WASM-only 权限，
+  // 无前端 API 方法映射；宿主在 host fn 层仲裁
+  'notify': [],
 }
 
 /** 检查权限列表是否允许调用指定 API 方法 */

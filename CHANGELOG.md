@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+#### Mobile: Android native notification / vibration / sound surface — `host-notify` domain (ABI 18)
+
+- **New mobile-only domain `host-notify` (5 functions)**: `notify` (title/body +
+  `options-json` with `{ vibrate?, sound? }` switches, both defaulting to true) /
+  `check-permission` / `request-permission` (Android 13+ POST_NOTIFICATIONS) /
+  `vibrate` (milliseconds, bypasses notification channels and needs no notification
+  permission) / `play-sound` (system default notification tone, stops the previous
+  instance before replaying); new permission bit `notify` (fail-closed —
+  notifications/vibration/sound are a user-disturbance surface, independent bit)
+- **`host-events.notify` is absorbed into the new domain**: `host-events` returns to
+  pure event semantics (only `emit`); this is a **breaking shrink** — v17-and-earlier
+  artifacts that reference `host-events.notify` are named and rejected at instantiation
+  (fail-visible ②) and must be rebuilt; built-in plugins have zero consumers and ship
+  with the APK, artifacts rebuilt with this version
+- **Implementation**: fork crate `host_impl/notify.rs` (permission gate + strict
+  options-json parsing + Android branch), host `plugin/host_ports.rs` ports wired to
+  Kotlin `TaskNotificationPlugin` / `TaskNotificationManager` (parameterized
+  `showPluginNotification` + `pluginVibrate` / `pluginPlaySound`; `vibrateOnce` /
+  `playSoundOnce` extracted); `android-backup/app-java/` recovery copies synced
+- **Gates**: fork crate `cargo test --features test-support` green (incl. A1/A3 lock
+  updates: 17 imports / 22 interfaces / ABI 18, host-events shrink + host-notify row) ·
+  mobile host full suite · Kotlin `./gradlew :app:compileUniversalDebugKotlin`
+
 #### Mobile: anti-back-drift & drift locks — SDK contract locks Part A + symmetric structure lock Part B (Ticket 19)
 
 - **Part A** (`packages/bedcode-wasm-core/tests/sdk_wit_contract_locks.rs`, 4 locks): A1 WIT

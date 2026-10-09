@@ -58,8 +58,18 @@ pub struct PrimaryTarget {
 
 /// SAF 桥面（Android MediaStore / 保存对话框；宿主 `saf_io::SafIo` 的窄投影）
 pub trait SafIoPort: Send + Sync {
-    fn write_media_downloads(&self, src: &str, display_name: &str, mime_type: &str) -> std::result::Result<(), String>;
-    fn save_to_document(&self, src: &str, suggested_name: &str, mime_type: &str) -> std::result::Result<(), String>;
+    fn write_media_downloads(
+        &self,
+        src: &str,
+        display_name: &str,
+        mime_type: &str,
+    ) -> std::result::Result<(), String>;
+    fn save_to_document(
+        &self,
+        src: &str,
+        suggested_name: &str,
+        mime_type: &str,
+    ) -> std::result::Result<(), String>;
 }
 
 /// WS 自动重连策略面（票 12 R1：全局退避单一事实源 `connection::reconnect`
@@ -101,7 +111,12 @@ pub trait HostEnginePorts: Send + Sync {
 
     /// 外网出口三层判定 + 需授权时弹窗回执，一次完成（decide + consent 编排
     /// 是宿主安全闸门的内聚实现，crate 侧只见「放行 / 拒绝（含错误码文本）」）
-    async fn egress_check(&self, app: &tauri::AppHandle, url: &str, source: &str) -> std::result::Result<(), String>;
+    async fn egress_check(
+        &self,
+        app: &tauri::AppHandle,
+        url: &str,
+        source: &str,
+    ) -> std::result::Result<(), String>;
 
     /// 跳转重校验策略（302 → 内网 / 云元数据须过同源 / 桌面目标 / 私网链白名单）
     fn egress_redirect_policy(&self) -> reqwest::redirect::Policy;
@@ -122,7 +137,12 @@ pub trait HostEnginePorts: Send + Sync {
     // ==================== ws 重连 ====================
 
     /// 重连退避策略（参数钳制已在域内完成，宿主实现只出策略对象）
-    fn reconnect_policy(&self, max_retries: u32, base_ms: u64, max_ms: u64) -> Box<dyn WsReconnectPolicyPort>;
+    fn reconnect_policy(
+        &self,
+        max_retries: u32,
+        base_ms: u64,
+        max_ms: u64,
+    ) -> Box<dyn WsReconnectPolicyPort>;
 
     /// 重连退避钳制边界 `(min_delay_ms, max_delay_ms)`（宿主全局常量的投影）
     fn reconnect_bounds(&self) -> (u64, u64);
@@ -147,7 +167,12 @@ pub trait HostEnginePorts: Send + Sync {
     async fn peer_disconnect(&self, app: &tauri::AppHandle, node_id: String) -> Result<bool>;
 
     /// 首连应答
-    async fn peer_respond_consent(&self, app: &tauri::AppHandle, request_id: String, accepted: bool) -> Result<bool>;
+    async fn peer_respond_consent(
+        &self,
+        app: &tauri::AppHandle,
+        request_id: String,
+        accepted: bool,
+    ) -> Result<bool>;
 
     /// 信任列表（JSON 序列化由实现方完成）
     async fn peer_list_trusted(&self, app: &tauri::AppHandle) -> Result<String>;
@@ -156,7 +181,11 @@ pub trait HostEnginePorts: Send + Sync {
     async fn peer_revoke_trusted(&self, app: &tauri::AppHandle, node_id: String) -> Result<bool>;
 
     /// 全量幂等替换引擎广播源（`[{ id, name, safTreeUri }]` JSON，camelCase）
-    async fn peer_set_shared_roots(&self, app: &tauri::AppHandle, entries_json: String) -> Result<()>;
+    async fn peer_set_shared_roots(
+        &self,
+        app: &tauri::AppHandle,
+        entries_json: String,
+    ) -> Result<()>;
 
     /// 按需启动本机节点（幂等；caller = 属主）
     async fn peer_start_node(&self, app: &tauri::AppHandle, caller: &str) -> Result<bool>;
@@ -170,7 +199,8 @@ pub trait HostEnginePorts: Send + Sync {
     async fn peer_cancel_transfer(&self, app: &tauri::AppHandle, batch_id: String) -> Result<bool>;
 
     /// 取消/拒绝接收批（pending 即拒；`close` 统一资源关闭的接收侧路由）
-    async fn peer_cancel_receiving(&self, app: &tauri::AppHandle, batch_id: String) -> Result<bool>;
+    async fn peer_cancel_receiving(&self, app: &tauri::AppHandle, batch_id: String)
+        -> Result<bool>;
 
     /// 发送一批文件（paths 已由域内完成双形态解析与并发脉冲字段拒绝）
     async fn peer_send_files_with_policy(
@@ -182,10 +212,20 @@ pub trait HostEnginePorts: Send + Sync {
     ) -> Result<String>;
 
     /// 接收批应答
-    async fn peer_respond_transfer(&self, app: &tauri::AppHandle, batch_id: String, accept: bool) -> Result<()>;
+    async fn peer_respond_transfer(
+        &self,
+        app: &tauri::AppHandle,
+        batch_id: String,
+        accept: bool,
+    ) -> Result<()>;
 
     /// 接收策略
-    async fn peer_set_receive_policy(&self, app: &tauri::AppHandle, mode: String, timeout_secs: u64) -> Result<()>;
+    async fn peer_set_receive_policy(
+        &self,
+        app: &tauri::AppHandle,
+        mode: String,
+        timeout_secs: u64,
+    ) -> Result<()>;
 
     /// 暂停发送批（返回是否命中）
     async fn peer_pause_transfer(&self, app: &tauri::AppHandle, batch_id: String) -> Result<bool>;
@@ -194,10 +234,18 @@ pub trait HostEnginePorts: Send + Sync {
     async fn peer_resume_transfer(&self, app: &tauri::AppHandle, batch_id: String) -> Result<bool>;
 
     /// 设置接收落点（None = 恢复默认）
-    async fn peer_set_download_dir(&self, app: &tauri::AppHandle, path: Option<String>) -> Result<()>;
+    async fn peer_set_download_dir(
+        &self,
+        app: &tauri::AppHandle,
+        path: Option<String>,
+    ) -> Result<()>;
 
     /// 远端共享根列表（JSON 由实现方序列化）
-    async fn peer_list_shared_roots(&self, app: &tauri::AppHandle, node_id: String) -> Result<String>;
+    async fn peer_list_shared_roots(
+        &self,
+        app: &tauri::AppHandle,
+        node_id: String,
+    ) -> Result<String>;
 
     /// 远端目录浏览（JSON 由实现方序列化）
     async fn peer_browse_directory(
@@ -223,7 +271,7 @@ pub trait HostEnginePorts: Send + Sync {
     /// 发送源收集（`[{ path, size }]` JSON；无 app 依赖——纯元数据面）
     async fn peer_collect_outgoing(&self, paths: Vec<String>) -> Result<String>;
 
-    // ==================== platform / fs / config / db / notify ====================
+    // ==================== platform / fs / config / db ====================
 
     /// 系统多文件选择器（返回路径列表；用户取消为空）
     async fn platform_pick_files(&self, app: &tauri::AppHandle) -> Result<Vec<String>>;
@@ -238,7 +286,8 @@ pub trait HostEnginePorts: Send + Sync {
     async fn delete_file_android(&self, path: String) -> Result<()>;
 
     /// 写入落点越界校验（src 必须在宿主解析的 app 下载目录内）
-    async fn is_within_app_downloads_dir(&self, app: &tauri::AppHandle, path: &str) -> Result<bool>;
+    async fn is_within_app_downloads_dir(&self, app: &tauri::AppHandle, path: &str)
+        -> Result<bool>;
 
     /// SAF 桥句柄（None = 未装配）
     fn saf_io(&self, app: &tauri::AppHandle) -> Option<Arc<dyn SafIoPort>>;
@@ -246,8 +295,33 @@ pub trait HostEnginePorts: Send + Sync {
     /// 应用数据目录（插件私有库落点解析）
     async fn app_data_dir(&self, app: &tauri::AppHandle) -> Result<PathBuf>;
 
-    /// Android 系统通知（TaskNotificationPlugin；非 Android 平台实现方返回 Err）
-    async fn notify_show(&self, plugin_id: &str, handle: &tokio::runtime::Handle, title: &str, body: &str) -> std::result::Result<(), String>;
+    // ==================== notify（系统通知与提醒反馈，ABI v18） ====================
+    //
+    // 全部经 Kotlin TaskNotificationPlugin；非 Android 平台实现方返回 Err
+    // （与退役前 host_notify 同语义）。权限门 `notify` 在域内（notify.rs），
+    // 端口只承载平台调用形状。
+
+    /// 发送系统通知（vibrate/sound 由域内 options 解析后传入）
+    async fn notify_show(
+        &self,
+        plugin_id: &str,
+        title: &str,
+        body: &str,
+        vibrate: bool,
+        sound: bool,
+    ) -> std::result::Result<(), String>;
+
+    /// 通知权限是否已授予（POST_NOTIFICATIONS + 系统通知总开关）
+    async fn notify_check_permission(&self) -> std::result::Result<bool, String>;
+
+    /// 请求通知权限（弹系统授权框，阻塞至用户响应）
+    async fn notify_request_permission(&self) -> std::result::Result<bool, String>;
+
+    /// 立即震动一次（毫秒；域内已钳制 [1, 5000]）
+    async fn notify_vibrate(&self, duration_ms: u32) -> std::result::Result<(), String>;
+
+    /// 播放系统默认通知提示音
+    async fn notify_play_sound(&self) -> std::result::Result<(), String>;
 }
 
 // ==================== 无头默认实现 ====================
@@ -260,7 +334,12 @@ pub struct UnimplementedPorts;
 
 #[async_trait]
 impl HostEnginePorts for UnimplementedPorts {
-    async fn egress_check(&self, _app: &tauri::AppHandle, _url: &str, _source: &str) -> std::result::Result<(), String> {
+    async fn egress_check(
+        &self,
+        _app: &tauri::AppHandle,
+        _url: &str,
+        _source: &str,
+    ) -> std::result::Result<(), String> {
         Err(PORT_NOT_WIRED.to_string())
     }
 
@@ -280,7 +359,12 @@ impl HostEnginePorts for UnimplementedPorts {
         Arc::new(UnimplementedConnectionEngine)
     }
 
-    fn reconnect_policy(&self, _max_retries: u32, _base_ms: u64, _max_ms: u64) -> Box<dyn WsReconnectPolicyPort> {
+    fn reconnect_policy(
+        &self,
+        _max_retries: u32,
+        _base_ms: u64,
+        _max_ms: u64,
+    ) -> Box<dyn WsReconnectPolicyPort> {
         Box::new(UnimplementedReconnectPolicy)
     }
 
@@ -306,7 +390,12 @@ impl HostEnginePorts for UnimplementedPorts {
         Err(port_err("peer_disconnect"))
     }
 
-    async fn peer_respond_consent(&self, _app: &tauri::AppHandle, _request_id: String, _accepted: bool) -> Result<bool> {
+    async fn peer_respond_consent(
+        &self,
+        _app: &tauri::AppHandle,
+        _request_id: String,
+        _accepted: bool,
+    ) -> Result<bool> {
         Err(port_err("peer_respond_consent"))
     }
 
@@ -318,7 +407,11 @@ impl HostEnginePorts for UnimplementedPorts {
         Err(port_err("peer_revoke_trusted"))
     }
 
-    async fn peer_set_shared_roots(&self, _app: &tauri::AppHandle, _entries_json: String) -> Result<()> {
+    async fn peer_set_shared_roots(
+        &self,
+        _app: &tauri::AppHandle,
+        _entries_json: String,
+    ) -> Result<()> {
         Err(port_err("peer_set_shared_roots"))
     }
 
@@ -330,11 +423,19 @@ impl HostEnginePorts for UnimplementedPorts {
         Err(port_err("peer_stop_node"))
     }
 
-    async fn peer_cancel_transfer(&self, _app: &tauri::AppHandle, _batch_id: String) -> Result<bool> {
+    async fn peer_cancel_transfer(
+        &self,
+        _app: &tauri::AppHandle,
+        _batch_id: String,
+    ) -> Result<bool> {
         Err(port_err("peer_cancel_transfer"))
     }
 
-    async fn peer_cancel_receiving(&self, _app: &tauri::AppHandle, _batch_id: String) -> Result<bool> {
+    async fn peer_cancel_receiving(
+        &self,
+        _app: &tauri::AppHandle,
+        _batch_id: String,
+    ) -> Result<bool> {
         Err(port_err("peer_cancel_receiving"))
     }
 
@@ -348,27 +449,53 @@ impl HostEnginePorts for UnimplementedPorts {
         Err(port_err("peer_send_files_with_policy"))
     }
 
-    async fn peer_respond_transfer(&self, _app: &tauri::AppHandle, _batch_id: String, _accept: bool) -> Result<()> {
+    async fn peer_respond_transfer(
+        &self,
+        _app: &tauri::AppHandle,
+        _batch_id: String,
+        _accept: bool,
+    ) -> Result<()> {
         Err(port_err("peer_respond_transfer"))
     }
 
-    async fn peer_set_receive_policy(&self, _app: &tauri::AppHandle, _mode: String, _timeout_secs: u64) -> Result<()> {
+    async fn peer_set_receive_policy(
+        &self,
+        _app: &tauri::AppHandle,
+        _mode: String,
+        _timeout_secs: u64,
+    ) -> Result<()> {
         Err(port_err("peer_set_receive_policy"))
     }
 
-    async fn peer_pause_transfer(&self, _app: &tauri::AppHandle, _batch_id: String) -> Result<bool> {
+    async fn peer_pause_transfer(
+        &self,
+        _app: &tauri::AppHandle,
+        _batch_id: String,
+    ) -> Result<bool> {
         Err(port_err("peer_pause_transfer"))
     }
 
-    async fn peer_resume_transfer(&self, _app: &tauri::AppHandle, _batch_id: String) -> Result<bool> {
+    async fn peer_resume_transfer(
+        &self,
+        _app: &tauri::AppHandle,
+        _batch_id: String,
+    ) -> Result<bool> {
         Err(port_err("peer_resume_transfer"))
     }
 
-    async fn peer_set_download_dir(&self, _app: &tauri::AppHandle, _path: Option<String>) -> Result<()> {
+    async fn peer_set_download_dir(
+        &self,
+        _app: &tauri::AppHandle,
+        _path: Option<String>,
+    ) -> Result<()> {
         Err(port_err("peer_set_download_dir"))
     }
 
-    async fn peer_list_shared_roots(&self, _app: &tauri::AppHandle, _node_id: String) -> Result<String> {
+    async fn peer_list_shared_roots(
+        &self,
+        _app: &tauri::AppHandle,
+        _node_id: String,
+    ) -> Result<String> {
         Err(port_err("peer_list_shared_roots"))
     }
 
@@ -416,7 +543,11 @@ impl HostEnginePorts for UnimplementedPorts {
         Err(port_err("delete_file_android"))
     }
 
-    async fn is_within_app_downloads_dir(&self, _app: &tauri::AppHandle, _path: &str) -> Result<bool> {
+    async fn is_within_app_downloads_dir(
+        &self,
+        _app: &tauri::AppHandle,
+        _path: &str,
+    ) -> Result<bool> {
         Err(port_err("is_within_app_downloads_dir"))
     }
 
@@ -431,10 +562,27 @@ impl HostEnginePorts for UnimplementedPorts {
     async fn notify_show(
         &self,
         _plugin_id: &str,
-        _handle: &tokio::runtime::Handle,
         _title: &str,
         _body: &str,
+        _vibrate: bool,
+        _sound: bool,
     ) -> std::result::Result<(), String> {
+        Err(PORT_NOT_WIRED.to_string())
+    }
+
+    async fn notify_check_permission(&self) -> std::result::Result<bool, String> {
+        Err(PORT_NOT_WIRED.to_string())
+    }
+
+    async fn notify_request_permission(&self) -> std::result::Result<bool, String> {
+        Err(PORT_NOT_WIRED.to_string())
+    }
+
+    async fn notify_vibrate(&self, _duration_ms: u32) -> std::result::Result<(), String> {
+        Err(PORT_NOT_WIRED.to_string())
+    }
+
+    async fn notify_play_sound(&self) -> std::result::Result<(), String> {
         Err(PORT_NOT_WIRED.to_string())
     }
 }
@@ -491,23 +639,16 @@ mod tests {
         assert!(ports.global_token().is_empty());
         let (min_ms, max_ms) = ports.reconnect_bounds();
         assert!(min_ms > 0 && max_ms >= min_ms);
-        assert!(
-            ports
-                .peer_collect_outgoing(vec!["/tmp/x".into()])
-                .await
-                .is_err()
-        );
-        assert!(
-            ports
-                .platform_pick_shared_directory()
-                .await
-                .is_err()
-        );
-        assert!(
-            ports
-                .notify_show("t", &tokio::runtime::Handle::current(), "a", "b")
-                .await
-                .is_err()
-        );
+        assert!(ports
+            .peer_collect_outgoing(vec!["/tmp/x".into()])
+            .await
+            .is_err());
+        assert!(ports.platform_pick_shared_directory().await.is_err());
+        assert!(ports.notify_show("t", "a", "b", true, true).await.is_err());
+        // ABI v18：notify 域 4 个新增无 app 参数方法同属 fail-visible 断言面
+        assert!(ports.notify_check_permission().await.is_err());
+        assert!(ports.notify_request_permission().await.is_err());
+        assert!(ports.notify_vibrate(100).await.is_err());
+        assert!(ports.notify_play_sound().await.is_err());
     }
 }

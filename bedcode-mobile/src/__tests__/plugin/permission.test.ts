@@ -75,6 +75,11 @@ describe('hasPermissionForApi 权限仲裁', () => {
     expect(hasPermissionForApi(['peer'], 'bus.publish')).toBe(false)
   })
 
+  it('notify 权限无前端 API 映射（WASM-only，ABI v18 host-notify 域）→ 任何前端方法拒绝', () => {
+    expect(hasPermissionForApi(['notify'], 'notify.show')).toBe(false)
+    expect(hasPermissionForApi(['notify'], 'notification.notify')).toBe(false)
+  })
+
   it('大小写敏感：权限与 API 名按字面精确匹配', () => {
     expect(hasPermissionForApi(['Storage'], 'storage.get')).toBe(false)
     expect(hasPermissionForApi(['storage'], 'Storage.Get')).toBe(false)

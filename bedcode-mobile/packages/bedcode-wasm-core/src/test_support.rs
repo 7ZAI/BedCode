@@ -33,8 +33,9 @@ pub fn test_engine() -> wasmtime::Engine {
 
 /// 测试组件字节缓存（按 features key），跨用例复用避免重复 cargo build
 #[cfg(feature = "test-support")]
-static COMPONENT_CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, Vec<u8>>>> =
-    std::sync::OnceLock::new();
+static COMPONENT_CACHE: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashMap<String, Vec<u8>>>,
+> = std::sync::OnceLock::new();
 
 #[cfg(feature = "test-support")] // 需 wit-component（宿主 dev-deps / crate test --features test-support）
 /// 构建真实插件组件：SDK `wasm_entry!` 宏产物（票 16 起样本 = 合并后的
@@ -44,7 +45,8 @@ static COMPONENT_CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::H
 /// wit-component 编码。被测对象是 SDK 宏生成的组件（区别于手写 Guest impl
 /// 的 plugin-component-test）——宏展开错误 / export! 接线错误在此暴露。
 pub fn build_terminal_session_component() -> Vec<u8> {
-    let cache = COMPONENT_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    let cache =
+        COMPONENT_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
     const KEY: &str = "terminal-session";
     if let Some(bytes) = cache.lock().unwrap().get(KEY) {
         return bytes.clone();
@@ -53,7 +55,11 @@ pub fn build_terminal_session_component() -> Vec<u8> {
     let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let plugin_dir = manifest_dir.join("../../wasm-apps/terminal-session");
     let target_dir = fixture_target_dir().to_str().unwrap().to_string();
-    let manifest_path = plugin_dir.join("rust/Cargo.toml").to_str().unwrap().to_string();
+    let manifest_path = plugin_dir
+        .join("rust/Cargo.toml")
+        .to_str()
+        .unwrap()
+        .to_string();
     let status = std::process::Command::new("cargo")
         .args([
             "build",
@@ -73,7 +79,8 @@ pub fn build_terminal_session_component() -> Vec<u8> {
     assert!(status.success(), "terminal-session WASM build failed");
 
     let core = std::fs::read(
-        fixture_target_dir().join("wasm32-unknown-unknown/release/bedcode_plugin_terminal_session.wasm"),
+        fixture_target_dir()
+            .join("wasm32-unknown-unknown/release/bedcode_plugin_terminal_session.wasm"),
     )
     .expect("Failed to read terminal-session module after build");
     // 宏产物必经 componentize（等效本函数内编码）；SDK 构建链已内置该步骤。
@@ -95,14 +102,18 @@ pub fn build_terminal_session_component() -> Vec<u8> {
         "terminal-session 组件头应为 0d 00 01 00"
     );
 
-    cache.lock().unwrap().insert(KEY.to_string(), component.clone());
+    cache
+        .lock()
+        .unwrap()
+        .insert(KEY.to_string(), component.clone());
     component
 }
 
 /// 构建并编码测试组件：cargo build（指定 features）→ wit-component 编码
 #[cfg(feature = "test-support")] // 需 wit-component
 pub fn build_test_component(features: &[&str]) -> Vec<u8> {
-    let cache = COMPONENT_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    let cache =
+        COMPONENT_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
     let key = if features.is_empty() {
         "default".to_string()
     } else {
@@ -139,7 +150,8 @@ pub fn build_test_component(features: &[&str]) -> Vec<u8> {
     assert!(status.success(), "Test component WASM build failed");
 
     let core = std::fs::read(
-        fixture_target_dir().join("wasm32-unknown-unknown/release/bedcode_plugin_component_test.wasm"),
+        fixture_target_dir()
+            .join("wasm32-unknown-unknown/release/bedcode_plugin_component_test.wasm"),
     )
     .expect("Failed to read test component module after build");
     let component = wit_component::ComponentEncoder::default()
@@ -174,7 +186,11 @@ pub fn build_host_ctx() -> std::sync::Arc<crate::host_api::WasmHostContext> {
     let storage = crate::storage::PluginStorage::test_storage();
     // 无头/测试上下文：fs_auth 的 app_handle 亦为 None（桌面端 build_host_ctx 同形态）
     // first_party_dirs 空 = 移动形态（桌面 first-party 概念不启用）
-    let fs_auth = Arc::new(crate::security::fs_auth::FsAuthChecker::new(storage.clone(), None, Vec::new()));
+    let fs_auth = Arc::new(crate::security::fs_auth::FsAuthChecker::new(
+        storage.clone(),
+        None,
+        Vec::new(),
+    ));
     let status_reporter: Arc<dyn Fn(&str, &str) + Send + Sync> = Arc::new(|_, _| {});
     Arc::new(crate::host_api::WasmHostContext::new_headless(
         db,
@@ -257,7 +273,12 @@ impl MockPorts {
 
 #[async_trait::async_trait]
 impl HostEnginePorts for MockPorts {
-    async fn egress_check(&self, app: &tauri::AppHandle, url: &str, source: &str) -> Result<(), String> {
+    async fn egress_check(
+        &self,
+        app: &tauri::AppHandle,
+        url: &str,
+        source: &str,
+    ) -> Result<(), String> {
         if self.egress_allow {
             Ok(())
         } else {
@@ -278,10 +299,17 @@ impl HostEnginePorts for MockPorts {
     }
 
     fn connection_engine(&self) -> Arc<dyn ConnectionEnginePort> {
-        self.connection.clone().unwrap_or_else(|| Arc::new(NoTargetConn))
+        self.connection
+            .clone()
+            .unwrap_or_else(|| Arc::new(NoTargetConn))
     }
 
-    fn reconnect_policy(&self, max_retries: u32, base_ms: u64, max_ms: u64) -> Box<dyn WsReconnectPolicyPort> {
+    fn reconnect_policy(
+        &self,
+        max_retries: u32,
+        base_ms: u64,
+        max_ms: u64,
+    ) -> Box<dyn WsReconnectPolicyPort> {
         match &self.reconnect {
             Some(f) => f(max_retries, base_ms, max_ms),
             None => Box::new(StaticBackoff::new(base_ms)),
@@ -296,13 +324,24 @@ impl HostEnginePorts for MockPorts {
         None
     }
 
-    async fn peer_dial_endpoint(&self, app: &tauri::AppHandle, n: String, a: String, p: u16) -> crate::Result<String> {
+    async fn peer_dial_endpoint(
+        &self,
+        app: &tauri::AppHandle,
+        n: String,
+        a: String,
+        p: u16,
+    ) -> crate::Result<String> {
         self.base.peer_dial_endpoint(app, n, a, p).await
     }
     async fn peer_disconnect(&self, app: &tauri::AppHandle, n: String) -> crate::Result<bool> {
         self.base.peer_disconnect(app, n).await
     }
-    async fn peer_respond_consent(&self, app: &tauri::AppHandle, r: String, ok: bool) -> crate::Result<bool> {
+    async fn peer_respond_consent(
+        &self,
+        app: &tauri::AppHandle,
+        r: String,
+        ok: bool,
+    ) -> crate::Result<bool> {
         self.base.peer_respond_consent(app, r, ok).await
     }
     async fn peer_list_trusted(&self, app: &tauri::AppHandle) -> crate::Result<String> {
@@ -323,7 +362,11 @@ impl HostEnginePorts for MockPorts {
     async fn peer_cancel_transfer(&self, app: &tauri::AppHandle, b: String) -> crate::Result<bool> {
         self.base.peer_cancel_transfer(app, b).await
     }
-    async fn peer_cancel_receiving(&self, app: &tauri::AppHandle, b: String) -> crate::Result<bool> {
+    async fn peer_cancel_receiving(
+        &self,
+        app: &tauri::AppHandle,
+        b: String,
+    ) -> crate::Result<bool> {
         self.base.peer_cancel_receiving(app, b).await
     }
     async fn peer_send_files_with_policy(
@@ -333,12 +376,24 @@ impl HostEnginePorts for MockPorts {
         paths: Vec<String>,
         e: Option<bool>,
     ) -> crate::Result<String> {
-        self.base.peer_send_files_with_policy(app, n, paths, e).await
+        self.base
+            .peer_send_files_with_policy(app, n, paths, e)
+            .await
     }
-    async fn peer_respond_transfer(&self, app: &tauri::AppHandle, b: String, ok: bool) -> crate::Result<()> {
+    async fn peer_respond_transfer(
+        &self,
+        app: &tauri::AppHandle,
+        b: String,
+        ok: bool,
+    ) -> crate::Result<()> {
         self.base.peer_respond_transfer(app, b, ok).await
     }
-    async fn peer_set_receive_policy(&self, app: &tauri::AppHandle, m: String, t: u64) -> crate::Result<()> {
+    async fn peer_set_receive_policy(
+        &self,
+        app: &tauri::AppHandle,
+        m: String,
+        t: u64,
+    ) -> crate::Result<()> {
         self.base.peer_set_receive_policy(app, m, t).await
     }
     async fn peer_pause_transfer(&self, app: &tauri::AppHandle, b: String) -> crate::Result<bool> {
@@ -347,16 +402,36 @@ impl HostEnginePorts for MockPorts {
     async fn peer_resume_transfer(&self, app: &tauri::AppHandle, b: String) -> crate::Result<bool> {
         self.base.peer_resume_transfer(app, b).await
     }
-    async fn peer_set_download_dir(&self, app: &tauri::AppHandle, p: Option<String>) -> crate::Result<()> {
+    async fn peer_set_download_dir(
+        &self,
+        app: &tauri::AppHandle,
+        p: Option<String>,
+    ) -> crate::Result<()> {
         self.base.peer_set_download_dir(app, p).await
     }
-    async fn peer_list_shared_roots(&self, app: &tauri::AppHandle, n: String) -> crate::Result<String> {
+    async fn peer_list_shared_roots(
+        &self,
+        app: &tauri::AppHandle,
+        n: String,
+    ) -> crate::Result<String> {
         self.base.peer_list_shared_roots(app, n).await
     }
-    async fn peer_browse_directory(&self, app: &tauri::AppHandle, n: String, d: String, r: String) -> crate::Result<String> {
+    async fn peer_browse_directory(
+        &self,
+        app: &tauri::AppHandle,
+        n: String,
+        d: String,
+        r: String,
+    ) -> crate::Result<String> {
         self.base.peer_browse_directory(app, n, d, r).await
     }
-    async fn peer_pull_files(&self, app: &tauri::AppHandle, n: String, d: String, f: String) -> crate::Result<u32> {
+    async fn peer_pull_files(
+        &self,
+        app: &tauri::AppHandle,
+        n: String,
+        d: String,
+        f: String,
+    ) -> crate::Result<u32> {
         self.base.peer_pull_files(app, n, d, f).await
     }
     async fn peer_active_transfers(&self, app: &tauri::AppHandle) -> crate::Result<String> {
@@ -368,7 +443,9 @@ impl HostEnginePorts for MockPorts {
     async fn platform_pick_files(&self, app: &tauri::AppHandle) -> crate::Result<Vec<String>> {
         self.base.platform_pick_files(app).await
     }
-    async fn platform_pick_shared_directory(&self) -> crate::Result<Option<(String, String, String)>> {
+    async fn platform_pick_shared_directory(
+        &self,
+    ) -> crate::Result<Option<(String, String, String)>> {
         self.base.platform_pick_shared_directory().await
     }
     async fn resolve_downloads_dir(&self, app: &tauri::AppHandle) -> crate::Result<String> {
@@ -377,7 +454,11 @@ impl HostEnginePorts for MockPorts {
     async fn delete_file_android(&self, path: String) -> crate::Result<()> {
         self.base.delete_file_android(path).await
     }
-    async fn is_within_app_downloads_dir(&self, app: &tauri::AppHandle, path: &str) -> crate::Result<bool> {
+    async fn is_within_app_downloads_dir(
+        &self,
+        app: &tauri::AppHandle,
+        path: &str,
+    ) -> crate::Result<bool> {
         self.base.is_within_app_downloads_dir(app, path).await
     }
     fn saf_io(&self, app: &tauri::AppHandle) -> Option<Arc<dyn SafIoPort>> {
@@ -389,11 +470,30 @@ impl HostEnginePorts for MockPorts {
     async fn notify_show(
         &self,
         plugin_id: &str,
-        handle: &tokio::runtime::Handle,
         title: &str,
         body: &str,
+        vibrate: bool,
+        sound: bool,
     ) -> Result<(), String> {
-        self.base.notify_show(plugin_id, handle, title, body).await
+        self.base
+            .notify_show(plugin_id, title, body, vibrate, sound)
+            .await
+    }
+
+    async fn notify_check_permission(&self) -> Result<bool, String> {
+        self.base.notify_check_permission().await
+    }
+
+    async fn notify_request_permission(&self) -> Result<bool, String> {
+        self.base.notify_request_permission().await
+    }
+
+    async fn notify_vibrate(&self, duration_ms: u32) -> Result<(), String> {
+        self.base.notify_vibrate(duration_ms).await
+    }
+
+    async fn notify_play_sound(&self) -> Result<(), String> {
+        self.base.notify_play_sound().await
     }
 }
 
@@ -430,18 +530,26 @@ impl WsReconnectPolicyPort for StaticBackoff {
 }
 
 /// 带自定义端口的宿主上下文构造（测试夹具）
-pub fn build_host_ctx_with(ports: impl crate::host_api::HostEnginePorts + 'static) -> Arc<crate::host_api::WasmHostContext> {
+pub fn build_host_ctx_with(
+    ports: impl crate::host_api::HostEnginePorts + 'static,
+) -> Arc<crate::host_api::WasmHostContext> {
     build_host_ctx_with_arc(Arc::new(ports))
 }
 
 /// [`build_host_ctx_with`] 的 Arc 形态（跨域测试共享同一端口替身实例）
-pub fn build_host_ctx_with_arc(ports: Arc<dyn crate::host_api::HostEnginePorts>) -> Arc<crate::host_api::WasmHostContext> {
+pub fn build_host_ctx_with_arc(
+    ports: Arc<dyn crate::host_api::HostEnginePorts>,
+) -> Arc<crate::host_api::WasmHostContext> {
     use std::sync::Mutex;
     let db = Arc::new(Mutex::new(crate::db::Database::from_connection(
-            rusqlite::Connection::open_in_memory().expect("open in-memory db")
-        )));
+        rusqlite::Connection::open_in_memory().expect("open in-memory db"),
+    )));
     let storage = crate::storage::PluginStorage::test_storage();
-    let fs_auth = Arc::new(crate::security::fs_auth::FsAuthChecker::new(storage.clone(), None, Vec::new()));
+    let fs_auth = Arc::new(crate::security::fs_auth::FsAuthChecker::new(
+        storage.clone(),
+        None,
+        Vec::new(),
+    ));
     let status_reporter: Arc<dyn Fn(&str, &str) + Send + Sync> = Arc::new(|_, _| {});
     Arc::new(crate::host_api::WasmHostContext::new(
         db,

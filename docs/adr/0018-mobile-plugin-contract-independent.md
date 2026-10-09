@@ -18,6 +18,14 @@
   （connection-context 安全上下文查询面）；移动端只暴露 1 函数 `primary-target`（主连接
   目标引擎事实，无权限门）。`host-websocket`（桌面 15 函数 / 移动客户端 5 函数子集，
   ADR 0041）之后第二个「同名接口移动子集」先例。
+- **`host-notify` 移动端特有域（2026-10-09，ABI v18）**：桌面无此接口（桌面插件通知继续走
+  桌面 `host-events.notify`）。移动端新增移动特有域 5 函数（`notify` 带 options-json
+  震动/声音分控 / `check-permission` / `request-permission` / `vibrate` / `play-sound`）
+  + 权限位 `notify`（fail-closed），并**收编**原 `host-events.notify`——移动 host-events
+  回归纯事件语义（只剩 emit），破坏性收缩（同 v17 先例：**引用该函数的** v17 及更早产物
+  实例化期点名失败，须随 SDK 重编译；组件 import 按实际使用面声明，未引用者不受影响）。
+  Android 原生桥（TaskNotificationPlugin 三档通知渠道 + Vibrator / Ringtone）实现，
+  全部为「离宿主无法实现」的平台交互原语（ADR 0022）。
 - **移动端终端消费 UI 域整体迁入 `com.bedcode.terminal-session` 插件（2026-10-08，票 15 阶段 A）**：
   终端 UI（`TerminalView` 页面编排 / `terminalBuffer` 订阅状态机 / 输入助手与快捷键配置 /
   字号字间距主题设置 / 新手引导 / 帮助文案）约 9.6k 行 / 47 文件自宿主 `src/` 迁入内置 wasm app

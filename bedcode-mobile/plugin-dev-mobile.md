@@ -227,8 +227,8 @@ app.mount(container)
 ## 8. WASM 后端（rust）
 
 插件后端编译为 **WASM 组件（Component Model）**，契约定义在 SDK 的
-`packages/plugin-sdk-mobile/rust/wit/bedcode.wit`（宿主导入 11 接口 / 插件导出 8 接口，
-单一事实来源，wit-bindgen 编译期校验）。`rust/src/lib.rs` 实现 `WasmPlugin` trait 后以
+`packages/plugin-sdk-mobile/rust/wit/bedcode.wit`（宿主导入 17 接口 / 插件导出 5 接口，
+另有可选导出 events-binary；单一事实来源，wit-bindgen 编译期校验）。`rust/src/lib.rs` 实现 `WasmPlugin` trait 后以
 `wasm_entry!` 宏生成组件导出（manifest / activate / deactivate / invoke_command / 生命周期
 钩子 / 事件 / 上传与传输钩子 / abi.version）；宿主按 `rustLibrary` 查找 `{crate}.wasm`
 （组件产物）编译实例化。自研 ABI（`__bedcode_*` 导出、`(ptr,len)` 内存搬运、签名表）
@@ -242,10 +242,11 @@ wasm 构建开启 `--features wasm`（`wasm_entry!` / `WasmHost` / `WasmPlugin` 
 
 | 项 | 桌面端 | 移动端 | 说明 |
 |----|--------|--------|------|
-| import 接口 | 17 组 | 11 组 | 无 session/api-call/timer/process/app/plugin-database |
-| host-database | 4 函数 | 2 函数 | 无 params 变体、无插件独立库 |
-| host-fs | 6 函数 | 8 函数 | 移动端新增 download/document 保存（SAF/MediaStore） |
-| host-events | emit/broadcast-sync/notify | emit/notify | 无 broadcast |
+| import 接口 | 22 组 | 17 组 | 移动无 session/api-call/timer/process/app/file-service/transfer/host-pty/host-task/host-crypto；移动特有 host-notify / host-terminal-stream |
+| host-database | 5 函数 | 5 函数 | 表名前缀纵深 + 属主隔离（与桌面同构）；移动另有 host-plugin-database（私有库） |
+| host-fs | 9 函数 | 8 函数 | 移动新增 MediaStore 入库 / SaveAs（SAF）；无 read-dir/canonicalize/stat |
+| host-events | emit/notify | emit | v18 起移动端 notify 独立成 host-notify 域（纯事件语义） |
+| host-notify | — | 5 函数 | 移动特有（ABI v18）：通知（震动/声音分控）+ 权限查询/请求 + 震动 + 提示音 |
 | host-log | 5 函数 | 5 函数 | mark-plugin-error 语义对齐 |
 | events 导出 | 4 个 | 5 个 | 移动端 WS 认证生命周期事件 |
 | abi | version + form | 仅 version | 无 core 共存形态 |

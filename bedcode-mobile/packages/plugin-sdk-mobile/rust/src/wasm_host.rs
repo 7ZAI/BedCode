@@ -15,13 +15,13 @@
 
 use crate::host::{
     ConfigKey, HostAuth, HostBus, HostConfig, HostConnection, HostDatabase, HostError, HostEvents,
-    HostFs, HostHttp, HostLog, HostMdns, HostPeer, HostPlatform, HostPluginDatabase, HostStorage,
-    HostTerminalStream, HostWs,
+    HostFs, HostHttp, HostLog, HostMdns, HostNotify, HostPeer, HostPlatform, HostPluginDatabase,
+    HostStorage, HostTerminalStream, HostWs, NotifyOptions,
 };
 use crate::wasm::bedcode::plugin::{
     host_auth, host_bus, host_config, host_connection, host_database, host_events, host_fs,
-    host_http, host_log, host_mdns, host_peer, host_platform, host_plugin_database, host_storage,
-    host_terminal_stream, host_websocket,
+    host_http, host_log, host_mdns, host_notify, host_peer, host_platform, host_plugin_database,
+    host_storage, host_terminal_stream, host_websocket,
 };
 
 /// 宿主 API 绑定（WASM 插件侧）
@@ -239,9 +239,31 @@ impl HostEvents for WasmHost {
         let payload_str = serde_json::to_string(payload).unwrap_or_default();
         host_events::emit(event_name, &payload_str);
     }
+}
 
-    fn notify(&self, title: &str, body: &str) -> Result<(), HostError> {
-        host_events::notify(title, body).map_err(|e| host_err("notify", e))
+// ==================== HostNotify（ABI v18） ====================
+
+impl HostNotify for WasmHost {
+    fn notify(&self, title: &str, body: &str, options: &NotifyOptions) -> Result<(), HostError> {
+        let options_json = serde_json::to_string(options)
+            .map_err(|e| host_err("notify", format!("serialize options failed: {e}")))?;
+        host_notify::notify(title, body, &options_json).map_err(|e| host_err("notify", e))
+    }
+
+    fn notify_check_permission(&self) -> Result<bool, HostError> {
+        host_notify::check_permission().map_err(|e| host_err("notify_check_permission", e))
+    }
+
+    fn notify_request_permission(&self) -> Result<bool, HostError> {
+        host_notify::request_permission().map_err(|e| host_err("notify_request_permission", e))
+    }
+
+    fn notify_vibrate(&self, duration_ms: u32) -> Result<(), HostError> {
+        host_notify::vibrate(duration_ms).map_err(|e| host_err("notify_vibrate", e))
+    }
+
+    fn notify_play_sound(&self) -> Result<(), HostError> {
+        host_notify::play_sound().map_err(|e| host_err("notify_play_sound", e))
     }
 }
 

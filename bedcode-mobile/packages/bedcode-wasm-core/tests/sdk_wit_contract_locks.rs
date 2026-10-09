@@ -3,12 +3,12 @@
 //! 「双端机制双份 = 每次机制修复 / ABI 演进两处同步」的漂移税，用源码扫描锁钉死。
 //! 数据底座 = **WIT / SDK 源文件本身**（运行时读源解析，不手抄清单——手抄即第二真源）。
 //!
-//! - **A1 · WIT 接口清单锁**：16 import / 5 export / `events-binary` 可选 /
-//!   2 world / ABI 17——增删改名接口即红，ABI bump 必须显式走 ADR 0019 流程先改锁；
+//! - **A1 · WIT 接口清单锁**：17 import / 5 export / `events-binary` 可选 /
+//!   2 world / ABI 18——增删改名接口即红，ABI bump 必须显式走 ADR 0019 流程先改锁；
 //! - **A2 · 权限词汇五同步锁**：SDK `VALID_PERMISSIONS` 静态表（真源）↔ fork crate
 //!   re-export 可见集逐字一致 + **无第二份白名单**（五同步点②③的口径是「不另立」
 //!   而非「同步维护」）；
-//! - **A3 · WIT ↔ host_impl 接线对照**（票 17 批次 2b 后全量启用）：16 接口逐函数
+//! - **A3 · WIT ↔ host_impl 接线对照**（票 17 批次 2b 后全量启用）：17 接口逐函数
 //!   显式对照表（WIT 函数名 ↔ host_impl 实现函数名 ↔ component.rs 委托行），三方
 //!   缺一即红；
 //! - **A4 · wire 形状单源防副本锁**（`mobile_parallel_copy_shape_lock` 兑现，**口径
@@ -60,7 +60,7 @@ fn read(path: &Path) -> String {
 fn world_plugin_block(wit: &str) -> String {
     let start = wit
         .find("world plugin {")
-        .expect("WIT 缺 world plugin（v17 结构漂移？）");
+        .expect("WIT 缺 world plugin（v18 结构漂移？）");
     let rest = &wit[start..];
     let end = rest
         .lines()
@@ -72,19 +72,25 @@ fn world_plugin_block(wit: &str) -> String {
 /// 全文件 `interface <name> {` 名集合（按行首解析，不做语法分析）
 fn all_interfaces(wit: &str) -> Vec<String> {
     wit.lines()
-        .filter_map(|l| l.trim().strip_prefix("interface ")?.trim_end().strip_suffix("{"))
+        .filter_map(|l| {
+            l.trim()
+                .strip_prefix("interface ")?
+                .trim_end()
+                .strip_suffix("{")
+        })
         .map(|n| n.trim().to_string())
         .collect()
 }
 
 // ==================== A1 · WIT 接口清单锁（ABI 漂移早发现） ====================
 
-/// WIT v17 结构声明表（增删/改名接口 = ABI 演进，先改本表再动 WIT，走 ADR 0019）
-const DECLARED_IMPORTS: [&str; 16] = [
+/// WIT v18 结构声明表（增删/改名接口 = ABI 演进，先改本表再动 WIT，走 ADR 0019）
+const DECLARED_IMPORTS: [&str; 17] = [
     "host-storage",
     "host-database",
     "host-plugin-database",
     "host-events",
+    "host-notify",
     "host-http",
     "host-fs",
     "host-config",
@@ -101,13 +107,14 @@ const DECLARED_IMPORTS: [&str; 16] = [
 
 const DECLARED_EXPORTS: [&str; 5] = ["command", "lifecycle", "events", "manifest", "abi"];
 
-/// 全文件接口名集合 = 16 import + 5 export + `events-binary`（可选导出，
+/// 全文件接口名集合 = 17 import + 5 export + `events-binary`（可选导出，
 /// 宿主实例化后动态探测，不进 plugin world）
-const DECLARED_ALL_INTERFACES: [&str; 22] = [
+const DECLARED_ALL_INTERFACES: [&str; 23] = [
     "host-storage",
     "host-database",
     "host-plugin-database",
     "host-events",
+    "host-notify",
     "host-http",
     "host-fs",
     "host-config",
@@ -129,7 +136,7 @@ const DECLARED_ALL_INTERFACES: [&str; 22] = [
 ];
 
 #[test]
-fn a1_wit_interface_inventory_matches_declared_v17() {
+fn a1_wit_interface_inventory_matches_declared_v18() {
     let wit = read(&wit_path());
 
     // ① world plugin 的 import / export 集合逐名点名
@@ -151,7 +158,7 @@ fn a1_wit_interface_inventory_matches_declared_v17() {
     declared_imports.sort();
     assert_eq!(
         sorted_imports, declared_imports,
-        "world plugin import 集合与 v17 声明表不一致——ABI 演进必须先改本锁（ADR 0019 双端同步流程），禁静默增删"
+        "world plugin import 集合与 v18 声明表不一致——ABI 演进必须先改本锁（ADR 0019 双端同步流程），禁静默增删"
     );
     let mut sorted_exports = exports.clone();
     sorted_exports.sort();
@@ -159,7 +166,7 @@ fn a1_wit_interface_inventory_matches_declared_v17() {
     declared_exports.sort();
     assert_eq!(
         sorted_exports, declared_exports,
-        "world plugin export 集合与 v17 声明表不一致——同上，先改锁再改 WIT"
+        "world plugin export 集合与 v19 声明表不一致——同上，先改锁再改 WIT"
     );
 
     // ② 全文件接口集合：含可选 events-binary，且桌面独有面（events-ws / events-task /
@@ -171,7 +178,7 @@ fn a1_wit_interface_inventory_matches_declared_v17() {
     declared_all.sort();
     assert_eq!(
         interfaces, declared_all,
-        "WIT 全文件接口集合与 v17 声明表不一致（含可选导出面）——先改锁再改 WIT"
+        "WIT 全文件接口集合与 v19 声明表不一致（含可选导出面）——先改锁再改 WIT"
     );
 
     // ③ events-binary 专用 world（SDK 绑定用；宿主动态探测不进 plugin world）
@@ -180,12 +187,12 @@ fn a1_wit_interface_inventory_matches_declared_v17() {
         "world plugin-binary / events-binary 可选导出结构漂移"
     );
 
-    // ④ ABI 版本真源：SDK abi.rs 常量与 v17 一致（abi interface 无 form 字段——
+    // ④ ABI 版本真源：SDK abi.rs 常量与 v18 一致（abi interface 无 form 字段——
     //    一次性切割，不存在 core 形态共存）
     let abi = read(&sdk_src().join("abi.rs"));
     assert!(
-        abi.contains("pub const ABI_VERSION: u32 = 17"),
-        "SDK ABI_VERSION 与 v17 声明不符（ABI bump 走 ADR 0019：先双端同步、再改本锁）"
+        abi.contains("pub const ABI_VERSION: u32 = 18"),
+        "SDK ABI_VERSION 与 v18 声明不符（ABI bump 走 ADR 0019：先双端同步、再改本锁）"
     );
     let abi_iface = wit[base_index(&wit, "interface abi {")..].to_string();
     assert!(
@@ -195,7 +202,9 @@ fn a1_wit_interface_inventory_matches_declared_v17() {
 }
 
 fn base_index(haystack: &str, needle: &str) -> usize {
-    haystack.find(needle).unwrap_or_else(|| panic!("WIT 缺 `{needle}`"))
+    haystack
+        .find(needle)
+        .unwrap_or_else(|| panic!("WIT 缺 `{needle}`"))
 }
 
 // ==================== A2 · 权限词汇五同步锁 ====================
@@ -260,6 +269,15 @@ fn a2_permission_vocabulary_single_source_and_no_second_whitelist() {
         "fork crate 可见词汇集与 SDK 真源不一致（glob re-export 断裂 / 词汇漂移）"
     );
 
+    // ② 注册完备性：SDK 每个 `pub const PERMISSION_*` 定义都必须登记进
+    //    VALID_PERMISSIONS 表——「定义了常量却未登记表」= 新权限被 grant 静默
+    //    丢弃（五同步点①↔⑤断链，permission.rs 表注释点名的失效模式）
+    let consts: std::collections::BTreeSet<String> = const_values.keys().cloned().collect();
+    assert_eq!(
+        consts, sdk_perms,
+        "SDK 权限常量定义集与 VALID_PERMISSIONS 登记表不一致——新增权限必须登记进表，否则 grant 静默丢弃"
+    );
+
     // ② 无第二份白名单（五同步点②③口径）：移动侧打包脚本 / 宿主 / dev-shell
     //    出现独立的 `PERMISSION_*` 常量定义或 `VALID_PERMISSIONS` 集合即红——
     //    词汇只允许从 SDK re-export，不允许另立集合（出现 = 五同步点被拆成两真源）
@@ -276,7 +294,8 @@ fn a2_permission_vocabulary_single_source_and_no_second_whitelist() {
                 if line.starts_with("//") || line.starts_with("/*") || line.starts_with('*') {
                     continue;
                 }
-                let is_def = (line.contains("const PERMISSION_") || line.contains("static VALID_PERMISSIONS"))
+                let is_def = (line.contains("const PERMISSION_")
+                    || line.contains("static VALID_PERMISSIONS"))
                     && (line.contains(':') || line.contains('='));
                 if is_def {
                     violations.push(format!("{rel}:{}: {line}", idx + 1));
@@ -293,7 +312,7 @@ fn a2_permission_vocabulary_single_source_and_no_second_whitelist() {
 
 // ==================== A3 · WIT ↔ host_impl 接线对照（2b 后全量启用） ====================
 
-/// 16 接口逐函数显式对照表：`(WIT 接口, 实现文件, [(WIT 函数名, host_impl 实现名)])`
+/// 17 接口逐函数显式对照表：`(WIT 接口, 实现文件, [(WIT 函数名, host_impl 实现名)])`
 ///
 /// 显式全表（不派生命名）：`dial-peer → peer_dial` 一类特例靠表逐字钉住；
 /// `host-log` 是 component.rs 内联域（tracing 直发 + status_reporter），实现文件
@@ -326,7 +345,18 @@ const WIRING_TABLE: &[(&str, &str, &[(&str, &str)])] = &[
             ("execute-batch", "plugin_db_execute_batch"),
         ],
     ),
-    ("host-events", "event.rs", &[("emit", "emit_event"), ("notify", "notify")]),
+    ("host-events", "event.rs", &[("emit", "emit_event")]),
+    (
+        "host-notify",
+        "notify.rs",
+        &[
+            ("notify", "notify"),
+            ("check-permission", "notify_check_permission"),
+            ("request-permission", "notify_request_permission"),
+            ("vibrate", "notify_vibrate"),
+            ("play-sound", "notify_play_sound"),
+        ],
+    ),
     ("host-http", "http.rs", &[("fetch", "http_fetch")]),
     (
         "host-fs",
@@ -404,7 +434,10 @@ const WIRING_TABLE: &[(&str, &str, &[(&str, &str)])] = &[
     (
         "host-platform",
         "platform.rs",
-        &[("pick-files", "platform_pick_files"), ("pick-folder", "platform_pick_folder")],
+        &[
+            ("pick-files", "platform_pick_files"),
+            ("pick-folder", "platform_pick_folder"),
+        ],
     ),
     (
         "host-websocket",
@@ -422,7 +455,11 @@ const WIRING_TABLE: &[(&str, &str, &[(&str, &str)])] = &[
         "terminal_stream.rs",
         &[("forward-output", "terminal_stream_forward_output")],
     ),
-    ("host-connection", "connection.rs", &[("primary-target", "connection_primary_target")]),
+    (
+        "host-connection",
+        "connection.rs",
+        &[("primary-target", "connection_primary_target")],
+    ),
     (
         "host-auth",
         "auth.rs",
@@ -449,13 +486,18 @@ fn impl_file_for(iface: &str, wit_fn: &str, default_file: &str) -> String {
 }
 
 /// 解析 WIT：每 interface 块内的函数名集合（`name: func` 行首形态，不做语法分析）
-fn wit_functions_per_interface(wit: &str) -> std::collections::BTreeMap<String, std::collections::BTreeSet<String>> {
+fn wit_functions_per_interface(
+    wit: &str,
+) -> std::collections::BTreeMap<String, std::collections::BTreeSet<String>> {
     let mut map = std::collections::BTreeMap::new();
     let mut current: Option<String> = None;
     for line in wit.lines() {
         let t = line.trim_start();
         if let Some(rest) = t.strip_prefix("interface ") {
-            current = rest.trim_end().strip_suffix('{').map(|n| n.trim().to_string());
+            current = rest
+                .trim_end()
+                .strip_suffix('{')
+                .map(|n| n.trim().to_string());
             continue;
         }
         if t.starts_with('}') {
@@ -488,7 +530,7 @@ fn a3_wit_to_host_impl_wiring_matches_full_table() {
     declared.sort();
     assert_eq!(
         table_ifaces, declared,
-        "A3 接线表接口面与 v17 import 声明不一致（新接口漏登记 / 多登记）"
+        "A3 接线表接口面与 v18 import 声明不一致（新接口漏登记 / 多登记）"
     );
 
     for (iface, file, fns) in WIRING_TABLE {
@@ -496,7 +538,8 @@ fn a3_wit_to_host_impl_wiring_matches_full_table() {
         let wit_fns = parsed
             .get(*iface)
             .unwrap_or_else(|| panic!("WIT 缺 interface {iface}（A1 应已红；两锁须同改）"));
-        let table_fns: std::collections::BTreeSet<String> = fns.iter().map(|(w, _)| w.to_string()).collect();
+        let table_fns: std::collections::BTreeSet<String> =
+            fns.iter().map(|(w, _)| w.to_string()).collect();
         assert_eq!(
             wit_fns, &table_fns,
             "interface {iface} 的 WIT 函数集与 A3 对照表不一致——ABI 演进先改锁（ADR 0019）"
@@ -506,8 +549,9 @@ fn a3_wit_to_host_impl_wiring_matches_full_table() {
         //    Rust 模块名 snake_case）
         let rust_iface = iface.replace('-', "_");
         assert!(
-            component
-                .contains(&format!("impl bedcode::plugin::{rust_iface}::Host for WasmPluginState")),
+            component.contains(&format!(
+                "impl bedcode::plugin::{rust_iface}::Host for WasmPluginState"
+            )),
             "component.rs 缺 {iface} 的 Host impl（WIT 接口在、接线断）"
         );
 
@@ -575,7 +619,10 @@ fn a4_scan_roots() -> Vec<(PathBuf, &'static str)> {
 fn struct_fields(content: &str, name: &str) -> Option<std::collections::BTreeSet<String>> {
     let start = content.find(&format!("struct {name} {{"))?;
     let body = &content[start..];
-    let end = body.lines().position(|l| l.trim() == "}").expect("struct 无收口}");
+    let end = body
+        .lines()
+        .position(|l| l.trim() == "}")
+        .expect("struct 无收口}");
     let mut fields = std::collections::BTreeSet::new();
     for line in body.lines().take(end) {
         let t = line.trim_start();
@@ -590,7 +637,10 @@ fn struct_fields(content: &str, name: &str) -> Option<std::collections::BTreeSet
 
 /// 在根目录下**按形状定位** `struct <name>`（桌面 SDK 正被共享 lib M3 重组
 /// wire/ 目录——对照锁钉形状与字段集，不钉文件路径，抗搬家）
-fn find_struct_fields(root: &Path, name: &str) -> Option<(PathBuf, std::collections::BTreeSet<String>)> {
+fn find_struct_fields(
+    root: &Path,
+    name: &str,
+) -> Option<(PathBuf, std::collections::BTreeSet<String>)> {
     let found = std::sync::Mutex::new(None);
     visit_rs(root, &mut |rel, content| {
         let mut guard = found.lock().unwrap();

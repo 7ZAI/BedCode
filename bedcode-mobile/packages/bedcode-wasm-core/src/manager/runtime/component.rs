@@ -4,7 +4,7 @@
 //! - 契约定义在 `packages/plugin-sdk-mobile/rust/wit/bedcode.wit`（单一事实来源），
 //!   本模块用 wasmtime 48 自带的 `bindgen!`（wasmtime-internal-wit-bindgen 48.0.3 /
 //!   wit-parser 0.254，spike 已实证可与 0.60 产物互通）生成绑定：
-//!   - import 接口 → `Host` trait（11 组全量接线，ticket 02/03）
+//!   - import 接口 → `Host` trait（17 组全量接线，v18）
 //!   - export 接口 → `Plugin` world struct，宿主侧调用组件
 //! - 安全机制：燃料看门狗（每次调用重置）、ResourceLimiter（256MB/1M）、
 //!   `abi.version()` 协商、granted_permissions 校验；AOT `.cwasm` 缓存
@@ -119,9 +119,28 @@ impl bedcode::plugin::host_events::Host for WasmPluginState {
     fn emit(&mut self, event_name: String, payload_json: String) {
         super::host_impl::emit_event(self, &event_name, &payload_json);
     }
+}
 
-    fn notify(&mut self, title: String, body: String) -> Result<(), String> {
-        super::host_impl::notify(self, &title, &body)
+// host-notify 域（ABI v18：收编原 host-events.notify + 新增震动/声音/权限面）
+impl bedcode::plugin::host_notify::Host for WasmPluginState {
+    fn notify(&mut self, title: String, body: String, options_json: String) -> Result<(), String> {
+        super::host_impl::notify(self, &title, &body, &options_json)
+    }
+
+    fn check_permission(&mut self) -> Result<bool, String> {
+        super::host_impl::notify_check_permission(self)
+    }
+
+    fn request_permission(&mut self) -> Result<bool, String> {
+        super::host_impl::notify_request_permission(self)
+    }
+
+    fn vibrate(&mut self, duration_ms: u32) -> Result<(), String> {
+        super::host_impl::notify_vibrate(self, duration_ms)
+    }
+
+    fn play_sound(&mut self) -> Result<(), String> {
+        super::host_impl::notify_play_sound(self)
     }
 }
 
@@ -166,7 +185,12 @@ impl bedcode::plugin::host_fs::Host for WasmPluginState {
         super::host_impl::fs_write_media_downloads(self, &src_path, &display_name, &mime_type)
     }
 
-    fn save_to_document(&mut self, src_path: String, display_name: String, mime_type: String) -> Result<(), String> {
+    fn save_to_document(
+        &mut self,
+        src_path: String,
+        display_name: String,
+        mime_type: String,
+    ) -> Result<(), String> {
         super::host_impl::fs_save_to_document(self, &src_path, &display_name, &mime_type)
     }
 }
@@ -250,11 +274,21 @@ impl bedcode::plugin::host_peer::Host for WasmPluginState {
         super::host_impl::peer_list_shared_roots(self, &session)
     }
 
-    fn browse_directory(&mut self, session: String, dir_id: String, rel_path: String) -> Result<String, String> {
+    fn browse_directory(
+        &mut self,
+        session: String,
+        dir_id: String,
+        rel_path: String,
+    ) -> Result<String, String> {
         super::host_impl::peer_browse_directory(self, &session, &dir_id, &rel_path)
     }
 
-    fn pull_files(&mut self, session: String, dir_id: String, files_json: String) -> Result<u32, String> {
+    fn pull_files(
+        &mut self,
+        session: String,
+        dir_id: String,
+        files_json: String,
+    ) -> Result<u32, String> {
         super::host_impl::peer_pull_files(self, &session, &dir_id, &files_json)
     }
 
@@ -397,7 +431,9 @@ impl bedcode::plugin::host_auth::Host for WasmPluginState {
 ///
 /// 02：host-log / host-storage 两组；ticket 03 追加其余接口
 /// （未注册接口被组件 import 时实例化报 unknown import——02 的缺接口可读报错依据）
-pub(crate) fn build_component_linker(engine: &wasmtime::Engine) -> crate::Result<Linker<WasmPluginState>> {
+pub(crate) fn build_component_linker(
+    engine: &wasmtime::Engine,
+) -> crate::Result<Linker<WasmPluginState>> {
     let mut linker = Linker::new(engine);
     type D = wasmtime::component::HasSelf<WasmPluginState>;
     for iface in [
@@ -406,6 +442,7 @@ pub(crate) fn build_component_linker(engine: &wasmtime::Engine) -> crate::Result
         bedcode::plugin::host_database::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_plugin_database::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_events::add_to_linker::<WasmPluginState, D>,
+        bedcode::plugin::host_notify::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_http::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_fs::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_config::add_to_linker::<WasmPluginState, D>,
@@ -418,8 +455,12 @@ pub(crate) fn build_component_linker(engine: &wasmtime::Engine) -> crate::Result
         bedcode::plugin::host_connection::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_auth::add_to_linker::<WasmPluginState, D>,
     ] {
-        iface(&mut linker, |s| s)
-            .map_err(|e| AppError::Plugin(format!("Failed to register component host interface: {}", e)))?;
+        iface(&mut linker, |s| s).map_err(|e| {
+            AppError::Plugin(format!(
+                "Failed to register component host interface: {}",
+                e
+            ))
+        })?;
     }
     Ok(linker)
 }
@@ -452,14 +493,19 @@ impl super::WasmRuntime {
 
         let cache_fresh = wasm_md
             .and_then(|w| w.modified().ok())
-            .zip(std::fs::metadata(&cache_path).ok().and_then(|c| c.modified().ok()))
+            .zip(
+                std::fs::metadata(&cache_path)
+                    .ok()
+                    .and_then(|c| c.modified().ok()),
+            )
             .map(|(wm, cm)| cm >= wm)
             .unwrap_or(false);
 
         if cache_fresh {
             // unsafe：产物为本机自写缓存；Engine 版本/特性不匹配时 deserialize 失败，
             // 回退到完整编译路径
-            if let Ok(component) = unsafe { Component::deserialize_file(&self.engine, &cache_path) } {
+            if let Ok(component) = unsafe { Component::deserialize_file(&self.engine, &cache_path) }
+            {
                 tracing::debug!(
                     path = %cache_path.display(),
                     "Loaded WASM component from AOT cache"
@@ -489,8 +535,8 @@ impl super::WasmRuntime {
                     return Ok(component);
                 }
                 let tmp_path = cache_path.with_extension("cwasm.tmp");
-                let write_result =
-                    std::fs::write(&tmp_path, &bytes).and_then(|_| std::fs::rename(&tmp_path, &cache_path));
+                let write_result = std::fs::write(&tmp_path, &bytes)
+                    .and_then(|_| std::fs::rename(&tmp_path, &cache_path));
                 if let Err(e) = write_result {
                     tracing::warn!(
                         path = %cache_path.display(),
@@ -531,16 +577,22 @@ impl super::WasmRuntime {
         let mut store = Store::new(&self.engine, state);
         store.limiter(|state| state as &mut dyn ResourceLimiter);
         // 实例化可能执行 guest 代码（静态构造器等），先注入单次调用燃料
-        store
-            .set_fuel(FUEL_PER_CALL)
-            .map_err(|e| AppError::Plugin(format!("Failed to set fuel for plugin '{}': {}", plugin_id, e)))?;
-
-        let instance = self.linker.instantiate(&mut store, component).map_err(|e| {
+        store.set_fuel(FUEL_PER_CALL).map_err(|e| {
             AppError::Plugin(format!(
-                "Failed to instantiate WASM component for plugin '{}': {}",
+                "Failed to set fuel for plugin '{}': {}",
                 plugin_id, e
             ))
         })?;
+
+        let instance = self
+            .linker
+            .instantiate(&mut store, component)
+            .map_err(|e| {
+                AppError::Plugin(format!(
+                    "Failed to instantiate WASM component for plugin '{}': {}",
+                    plugin_id, e
+                ))
+            })?;
 
         LoadedComponentPlugin::verify_abi(&mut store, &instance)?;
 
@@ -595,16 +647,19 @@ impl LoadedComponentPlugin {
     /// - `abi.version()` 语义与 `bedcode_plugin_api_mobile::abi::ABI_VERSION` 一致
     /// - 移动端 WIT 无 `abi.form()`（项目未发布、一次性切割，无 core 共存形态）
     fn verify_abi(store: &mut Store<WasmPluginState>, instance: &Instance) -> crate::Result<()> {
-        store
-            .set_fuel(FUEL_PER_CALL)
-            .map_err(|e| AppError::Plugin(format!("Failed to set fuel for ABI verification: {}", e)))?;
+        store.set_fuel(FUEL_PER_CALL).map_err(|e| {
+            AppError::Plugin(format!("Failed to set fuel for ABI verification: {}", e))
+        })?;
         // Plugin::new 即导出完整性校验：world 声明的 8 组导出接口全量必须存在
-        let exports = Plugin::new(&mut *store, instance)
-            .map_err(|e| AppError::Plugin(format!("WASM component missing required exports: {}", e)))?;
+        let exports = Plugin::new(&mut *store, instance).map_err(|e| {
+            AppError::Plugin(format!("WASM component missing required exports: {}", e))
+        })?;
         let version = exports
             .bedcode_plugin_abi()
             .call_version(&mut *store)
-            .map_err(|e| AppError::Plugin(format!("WASM component abi.version() call failed: {}", e)))?;
+            .map_err(|e| {
+                AppError::Plugin(format!("WASM component abi.version() call failed: {}", e))
+            })?;
         if version > bedcode_plugin_api_mobile::abi::ABI_VERSION {
             return Err(AppError::Plugin(format!(
                 "Plugin requires ABI v{} but host supports v{} — please upgrade BedCode",
@@ -646,7 +701,10 @@ impl LoadedComponentPlugin {
         match lifecycle.call_activate(&mut self.store) {
             Ok(Ok(())) => Ok(0),
             Ok(Err(msg)) => Err(AppError::Plugin(format!("WASM activate() failed: {}", msg))),
-            Err(e) => Err(AppError::Plugin(format!("WASM activate() call failed: {}", e))),
+            Err(e) => Err(AppError::Plugin(format!(
+                "WASM activate() call failed: {}",
+                e
+            ))),
         }
     }
 
@@ -656,8 +714,14 @@ impl LoadedComponentPlugin {
         let lifecycle = exports.bedcode_plugin_lifecycle();
         match lifecycle.call_deactivate(&mut self.store) {
             Ok(Ok(())) => Ok(0),
-            Ok(Err(msg)) => Err(AppError::Plugin(format!("WASM deactivate() failed: {}", msg))),
-            Err(e) => Err(AppError::Plugin(format!("WASM deactivate() call failed: {}", e))),
+            Ok(Err(msg)) => Err(AppError::Plugin(format!(
+                "WASM deactivate() failed: {}",
+                msg
+            ))),
+            Err(e) => Err(AppError::Plugin(format!(
+                "WASM deactivate() call failed: {}",
+                e
+            ))),
         }
     }
 
@@ -678,8 +742,14 @@ impl LoadedComponentPlugin {
         let lifecycle = exports.bedcode_plugin_lifecycle();
         match lifecycle.call_on_startup(&mut self.store) {
             Ok(Ok(())) => Ok(()),
-            Ok(Err(msg)) => Err(AppError::Plugin(format!("WASM on_startup() failed: {}", msg))),
-            Err(e) => Err(AppError::Plugin(format!("WASM on_startup() call failed: {}", e))),
+            Ok(Err(msg)) => Err(AppError::Plugin(format!(
+                "WASM on_startup() failed: {}",
+                msg
+            ))),
+            Err(e) => Err(AppError::Plugin(format!(
+                "WASM on_startup() call failed: {}",
+                e
+            ))),
         }
     }
 
@@ -689,8 +759,14 @@ impl LoadedComponentPlugin {
         let lifecycle = exports.bedcode_plugin_lifecycle();
         match lifecycle.call_on_shutdown(&mut self.store) {
             Ok(Ok(())) => Ok(()),
-            Ok(Err(msg)) => Err(AppError::Plugin(format!("WASM on_shutdown() failed: {}", msg))),
-            Err(e) => Err(AppError::Plugin(format!("WASM on_shutdown() call failed: {}", e))),
+            Ok(Err(msg)) => Err(AppError::Plugin(format!(
+                "WASM on_shutdown() failed: {}",
+                msg
+            ))),
+            Err(e) => Err(AppError::Plugin(format!(
+                "WASM on_shutdown() call failed: {}",
+                e
+            ))),
         }
     }
 
@@ -710,12 +786,18 @@ impl LoadedComponentPlugin {
                 tracing::warn!("WASM {}() failed: {}", export_name, msg);
                 Ok(())
             }
-            Err(e) => Err(AppError::Plugin(format!("WASM {}() call failed: {}", export_name, e))),
+            Err(e) => Err(AppError::Plugin(format!(
+                "WASM {}() call failed: {}",
+                export_name, e
+            ))),
         }
     }
 
     /// 调用插件的消息总线消息接收导出（移动端 WIT events.on-bus-message）
-    pub fn on_bus_message(&mut self, msg: &bedcode_plugin_api_mobile::BusMessage) -> crate::Result<()> {
+    pub fn on_bus_message(
+        &mut self,
+        msg: &bedcode_plugin_api_mobile::BusMessage,
+    ) -> crate::Result<()> {
         let payload_str = serde_json::to_string(&msg.payload).unwrap_or_default();
         self.call_event_export(
             |s| {
@@ -734,7 +816,12 @@ impl LoadedComponentPlugin {
     /// 仅当实例在实例化时探测到 `events-binary#on-message-binary` 导出才可调用；
     /// 总线侧已按订阅者格式偏好过滤，正常不会对无导出的实例发起本调用，
     /// 此处防御性拒绝（旧插件二进制 → 格式不匹配拒绝的语义由总线保证）
-    pub fn on_message_binary(&mut self, topic: &str, sender: &str, payload: &[u8]) -> crate::Result<()> {
+    pub fn on_message_binary(
+        &mut self,
+        topic: &str,
+        sender: &str,
+        payload: &[u8],
+    ) -> crate::Result<()> {
         // TypedFunc 先 clone 再调用，避免与 &mut self.store 的借用冲突
         let Some(func) = self.store.data().on_message_binary.clone() else {
             return Err(AppError::Plugin(format!(
@@ -778,7 +865,9 @@ impl LoadedComponentPlugin {
                 |s| {
                     let exports = s.exports().map_err(|e| e.to_string())?;
                     let events = exports.bedcode_plugin_events();
-                    events.call_on_auth_success(&mut s.store).map_err(|e| e.to_string())
+                    events
+                        .call_on_auth_success(&mut s.store)
+                        .map_err(|e| e.to_string())
                 },
                 "on_auth_success",
             ),
@@ -817,7 +906,9 @@ impl LoadedComponentPlugin {
 
     /// 测试访问器：直接获取 Store（燃料断言用）
     #[allow(dead_code)]
-    pub(crate) fn raw_store(&mut self) -> (&mut Store<WasmPluginState>, &wasmtime::component::Instance) {
+    pub(crate) fn raw_store(
+        &mut self,
+    ) -> (&mut Store<WasmPluginState>, &wasmtime::component::Instance) {
         (&mut self.store, &self.instance)
     }
 }
@@ -834,14 +925,14 @@ pub(crate) mod tests {
     use super::super::{WasmHostContext, WasmRuntime};
     use super::*;
     use crate::test_support::{
-        build_host_ctx, build_host_ctx_with, build_test_component,
-        build_terminal_session_component, test_engine, MockPorts, TEST_PLUGIN_ID,
+        build_host_ctx, build_host_ctx_with, build_terminal_session_component,
+        build_test_component, test_engine, MockPorts, TEST_PLUGIN_ID,
     };
 
     /// 测试用权限位（夹具 manifest 权限并集的对齐面）
     const PERMISSION_STORAGE: &str = bedcode_plugin_api_mobile::permission::PERMISSION_STORAGE;
-    use crate::security::fs_auth::FsAuthChecker;
     use crate::bus::MessageBus;
+    use crate::security::fs_auth::FsAuthChecker;
     use crate::storage::PluginStorage;
     use std::collections::HashMap;
     use std::path::PathBuf;
@@ -862,10 +953,11 @@ pub(crate) mod tests {
                 .await
                 .expect("preset storage key");
 
-            let runtime = WasmRuntime::new(Some(tmp.path().join("aot"))).expect("create wasm runtime");
+            let runtime =
+                WasmRuntime::new(Some(tmp.path().join("aot"))).expect("create wasm runtime");
             // 组件必须用 runtime 自身 Engine 编译（跨 Engine 实例化被 wasmtime 拒绝）
-            let component =
-                Component::from_binary(runtime.engine(), &build_test_component(&[])).expect("compile test component");
+            let component = Component::from_binary(runtime.engine(), &build_test_component(&[]))
+                .expect("compile test component");
             let mut plugin = runtime
                 .instantiate_component(
                     &component,
@@ -883,11 +975,15 @@ pub(crate) mod tests {
                 granted_permissions: HashSet::from([PERMISSION_STORAGE.to_string()]),
                 on_message_binary: None,
             };
-            let got =
-                bedcode::plugin::host_storage::Host::get(&mut state, "test-key".into()).expect("host_storage.get");
+            let got = bedcode::plugin::host_storage::Host::get(&mut state, "test-key".into())
+                .expect("host_storage.get");
             assert_eq!(got.as_deref(), Some(r#"{"k":"v"}"#));
-            bedcode::plugin::host_storage::Host::set(&mut state, "roundtrip-key".into(), r#"{"n":1}"#.into())
-                .expect("host_storage.set");
+            bedcode::plugin::host_storage::Host::set(
+                &mut state,
+                "roundtrip-key".into(),
+                r#"{"n":1}"#.into(),
+            )
+            .expect("host_storage.set");
             let got2 = bedcode::plugin::host_storage::Host::get(&mut state, "roundtrip-key".into())
                 .expect("host_storage.get #2");
             assert_eq!(got2.as_deref(), Some(r#"{"n":1}"#));
@@ -905,7 +1001,10 @@ pub(crate) mod tests {
             // abi.version() 协商：测试组件版本与 SDK ABI_VERSION 同步
             let exports = plugin.exports().expect("world exports");
             assert_eq!(
-                exports.bedcode_plugin_abi().call_version(&mut plugin.store).unwrap(),
+                exports
+                    .bedcode_plugin_abi()
+                    .call_version(&mut plugin.store)
+                    .unwrap(),
                 bedcode_plugin_api_mobile::abi::ABI_VERSION
             );
 
@@ -1369,7 +1468,7 @@ pub(crate) mod tests {
         });
     }
 
-    /// 11 组 import 接口全部注册成功（build_component_linker 是纯接线代码，
+    /// 17 组 import 接口全部注册成功（build_component_linker 是纯接线代码，
     /// 任何一组接口名冲突/接线参数错误都会在此失败）
     #[test]
     fn test_component_linker_registers_all_interfaces() {
@@ -1388,8 +1487,9 @@ pub(crate) mod tests {
         type D = wasmtime::component::HasSelf<WasmPluginState>;
         bedcode::plugin::host_storage::add_to_linker::<WasmPluginState, D>(&mut linker, |s| s)
             .expect("first registration");
-        let err = bedcode::plugin::host_storage::add_to_linker::<WasmPluginState, D>(&mut linker, |s| s)
-            .expect_err("duplicate registration should fail");
+        let err =
+            bedcode::plugin::host_storage::add_to_linker::<WasmPluginState, D>(&mut linker, |s| s)
+                .expect_err("duplicate registration should fail");
         // wasmtime 对已注册的同名 interface instance 报 "defined twice"
         assert!(
             err.to_string().contains("defined twice"),
@@ -1414,8 +1514,8 @@ pub(crate) mod tests {
                 .expect("preset storage key");
 
             let runtime = WasmRuntime::new(Some(tmp.path().join("aot"))).expect("wasm runtime");
-            let component =
-                Component::from_binary(runtime.engine(), &build_test_component(&[])).expect("compile test component");
+            let component = Component::from_binary(runtime.engine(), &build_test_component(&[]))
+                .expect("compile test component");
             let mut plugin = runtime
                 .instantiate_component(
                     &component,
@@ -1447,7 +1547,8 @@ pub(crate) mod tests {
             );
 
             // manifest
-            let manifest: serde_json::Value = serde_json::from_str(&plugin.get_manifest().expect("manifest")).unwrap();
+            let manifest: serde_json::Value =
+                serde_json::from_str(&plugin.get_manifest().expect("manifest")).unwrap();
             assert_eq!(manifest["id"], "com.bedcode.component-test");
 
             // bus 事件回调（组件返回 Ok）
@@ -1492,14 +1593,24 @@ pub(crate) mod tests {
             let tmp = tempfile::tempdir().expect("tempdir");
             let host_ctx = build_host_ctx();
             let runtime = WasmRuntime::new(Some(tmp.path().join("aot"))).expect("wasm runtime");
-            let component = Component::from_binary(runtime.engine(), &build_test_component(&["high-abi"]))
-                .expect("compile test component");
-            let err = match runtime.instantiate_component(&component, TEST_PLUGIN_ID, host_ctx, HashSet::new()) {
+            let component =
+                Component::from_binary(runtime.engine(), &build_test_component(&["high-abi"]))
+                    .expect("compile test component");
+            let err = match runtime.instantiate_component(
+                &component,
+                TEST_PLUGIN_ID,
+                host_ctx,
+                HashSet::new(),
+            ) {
                 Err(e) => e,
                 Ok(_) => panic!("高版本 ABI 组件必须被拒绝"),
             };
             let msg = err.to_string();
-            assert!(msg.contains("ABI v999"), "应报告组件要求的版本，实际: {}", msg);
+            assert!(
+                msg.contains("ABI v999"),
+                "应报告组件要求的版本，实际: {}",
+                msg
+            );
             assert!(msg.contains("upgrade"), "应提示升级 BedCode，实际: {}", msg);
         });
     }
@@ -1512,8 +1623,9 @@ pub(crate) mod tests {
             let tmp = tempfile::tempdir().expect("tempdir");
             let host_ctx = build_host_ctx();
             let runtime = WasmRuntime::new(Some(tmp.path().join("aot"))).expect("wasm runtime");
-            let component = Component::from_binary(runtime.engine(), &build_test_component(&["spin-loop"]))
-                .expect("compile test component");
+            let component =
+                Component::from_binary(runtime.engine(), &build_test_component(&["spin-loop"]))
+                    .expect("compile test component");
             let mut plugin = runtime
                 .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx, HashSet::new())
                 .expect("实例化正常（死循环在调用期，不在构造器）");
@@ -1550,9 +1662,14 @@ pub(crate) mod tests {
                 granted_permissions: HashSet::new(),
                 on_message_binary: None,
             };
-            assert_eq!(state.memory_growing(0, 256 * 1024 * 1024, None).unwrap(), true);
             assert_eq!(
-                state.memory_growing(0, 256 * 1024 * 1024 + 1, None).unwrap(),
+                state.memory_growing(0, 256 * 1024 * 1024, None).unwrap(),
+                true
+            );
+            assert_eq!(
+                state
+                    .memory_growing(0, 256 * 1024 * 1024 + 1, None)
+                    .unwrap(),
                 false,
                 "超过 256MB 的内存增长必须被拒绝"
             );
@@ -1561,15 +1678,17 @@ pub(crate) mod tests {
 
             // 集成层：guest 直接 memory.grow 300MB → limiter 拒绝 → 返回 {"grow":"failed"}
             let runtime = WasmRuntime::new(Some(tmp.path().join("aot"))).expect("wasm runtime");
-            let component = Component::from_binary(runtime.engine(), &build_test_component(&["big-alloc"]))
-                .expect("compile test component");
+            let component =
+                Component::from_binary(runtime.engine(), &build_test_component(&["big-alloc"]))
+                    .expect("compile test component");
             let mut plugin = runtime
                 .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx, HashSet::new())
                 .expect("实例化正常（分配发生在调用期）");
             let exports = plugin.exports().expect("world exports");
-            let result = exports
-                .bedcode_plugin_command()
-                .call_invoke(&mut plugin.store, "alloc", "{}");
+            let result =
+                exports
+                    .bedcode_plugin_command()
+                    .call_invoke(&mut plugin.store, "alloc", "{}");
             match result {
                 Err(e) => {
                     // 也可能是 trap 形式拒绝，同样视为 limiter 生效
@@ -1603,7 +1722,7 @@ pub(crate) mod tests {
             let runtime = WasmRuntime::new(Some(tmp.path().join("aot"))).expect("wasm runtime");
             let component =
                 Component::from_binary(runtime.engine(), &build_terminal_session_component())
-                .expect("compile terminal-session component");
+                    .expect("compile terminal-session component");
             // 生产 manifest 权限集（activate 期 ws 属主 topic 订阅 + 认证状态探测按声明放行）
             let granted: HashSet<String> = [
                 bedcode_plugin_api_mobile::permission::PERMISSION_AUTH,
@@ -1619,13 +1738,21 @@ pub(crate) mod tests {
             .map(|s| s.to_string())
             .collect();
             let mut plugin = runtime
-                .instantiate_component(&component, "com.bedcode.terminal-session", host_ctx, granted)
+                .instantiate_component(
+                    &component,
+                    "com.bedcode.terminal-session",
+                    host_ctx,
+                    granted,
+                )
                 .expect("instantiate terminal-session component");
 
             // ABI 协商：与 SDK abi::ABI_VERSION 同步（宏内 `abi.version()` 输出）
             let exports = plugin.exports().expect("world exports");
             assert_eq!(
-                exports.bedcode_plugin_abi().call_version(&mut plugin.store).unwrap(),
+                exports
+                    .bedcode_plugin_abi()
+                    .call_version(&mut plugin.store)
+                    .unwrap(),
                 bedcode_plugin_api_mobile::abi::ABI_VERSION
             );
 
@@ -1634,14 +1761,19 @@ pub(crate) mod tests {
             assert_eq!(plugin.deactivate().expect("deactivate"), 0);
 
             // manifest（宏内 `manifest()` 序列化 plugin.json）
-            let manifest: serde_json::Value = serde_json::from_str(&plugin.get_manifest().expect("manifest")).unwrap();
+            let manifest: serde_json::Value =
+                serde_json::from_str(&plugin.get_manifest().expect("manifest")).unwrap();
             assert_eq!(manifest["id"], "com.bedcode.terminal-session");
 
             // 命令调用：terminal-session 对未知命令返回 Err → 宏序列化为 {"error": ...} JSON
-            let result = plugin.invoke_command("no.such.cmd", "{}").expect("invoke_command");
+            let result = plugin
+                .invoke_command("no.such.cmd", "{}")
+                .expect("invoke_command");
             let v: serde_json::Value = serde_json::from_str(&result).unwrap();
             assert!(
-                v["error"].as_str().is_some_and(|s| s.contains("unknown command")),
+                v["error"]
+                    .as_str()
+                    .is_some_and(|s| s.contains("unknown command")),
                 "命令错误应经宏转义为 error JSON，实际: {}",
                 result
             );
@@ -1664,7 +1796,9 @@ pub(crate) mod tests {
             std::fs::write(&src, &component_bytes).expect("write source component");
 
             // 首次编译：产物落缓存
-            runtime.compile_component_from_file(&src).expect("first compile");
+            runtime
+                .compile_component_from_file(&src)
+                .expect("first compile");
             let cache_files: Vec<_> = std::fs::read_dir(&cache_dir)
                 .expect("cache dir")
                 .filter_map(|e| e.ok())
@@ -1695,7 +1829,10 @@ pub(crate) mod tests {
             let cache_mtime2 = std::fs::metadata(&cache_file)
                 .and_then(|m| m.modified())
                 .expect("cache mtime after second compile");
-            assert_eq!(cache_mtime, cache_mtime2, "二次编译未命中缓存（缓存文件被重写）");
+            assert_eq!(
+                cache_mtime, cache_mtime2,
+                "二次编译未命中缓存（缓存文件被重写）"
+            );
 
             // 产物不写回源目录：源目录无 .wasm/.cwasm 残留
             let src_dir: Vec<_> = std::fs::read_dir(tmp.path())

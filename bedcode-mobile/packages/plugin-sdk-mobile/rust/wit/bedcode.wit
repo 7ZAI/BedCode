@@ -1,8 +1,9 @@
 // 移动端插件契约（Plugin Contract）——单一事实来源
 //
 // 与桌面端 WIT 的差异维护在 docs/implementation-plans/mobile-wasmtime-component-migration.md §3.2：
-// - import 接口 9 组（无 session/api-call/timer/process/app/plugin-database/file-service/transfer）
+// - import 接口 17 组（无 session/api-call/timer/process/app/file-service/transfer）
 // - host-fs 含移动端特有 SAF/下载目录能力（write-media-downloads / save-to-document）
+// - host-notify 为移动端特有域（v18：通知/震动/声音，桌面不跟演——ADR 0018）
 // - abi 仅 version（无 form：项目未发布、一次性切割，不存在 core 形态共存）
 //
 // 命名空间约定与桌面端一致：宿主能力 import 前缀 `host-`，插件导出为普通名；
@@ -17,7 +18,6 @@ interface host-storage {
     delete: func(key: string) -> result<_, string>;
 }
 
-/// 主数据库（rusqlite；表名前缀纵深 + 属主隔离，与桌面 13 原语同构——票 05）
 interface host-database {
     execute: func(sql: string) -> result<u32, string>;
     query: func(sql: string) -> result<option<string>, string>;
@@ -37,10 +37,47 @@ interface host-plugin-database {
     execute-batch: func(sqls-json: string) -> result<u32, string>;
 }
 
-/// 事件 / 系统通知（SDK `HostEvents` trait 现状即 emit+notify 同组，如实映射）
+/// 事件推送（v18 起纯事件语义：原 `notify` 已收编迁入 `host-notify` 域）
 interface host-events {
     emit: func(event-name: string, payload-json: string);
-    notify: func(title: string, body: string) -> result<_, string>;
+}
+
+/// 系统通知与提醒反馈（移动端特有，ABI v18 新增——桌面不跟演，ADR 0018）
+///
+/// 覆盖 Android 原生桥的三类「触达用户」原语：系统通知（震动 / 声音可分别
+/// 控制）、即时震动反馈、提示音播放；另含 Android 13+ 通知权限
+/// （POST_NOTIFICATIONS）状态查询与请求。全部是「离宿主无法实现」的平台
+/// 交互原语，零业务语义（ADR 0022）：文案 / 时机 / 触发条件由插件决定，
+/// 宿主只负责投递。
+///
+/// 本域 v18 收编原 `host-events.notify`（旧形震动/声音硬编码 true）——
+/// **破坏性收缩**：**引用了 `host-events.notify` 的** v17 及更早产物在 v18
+/// 宿主实例化期因缺失 import 函数被点名失败（fail-visible ②），须随 SDK
+/// 重编译（组件 import 按实际使用面声明，未引用者不受影响）；内置插件零
+/// 消费者且随 APK 同分发，产物随本版全量重建。
+///
+/// 权限位 `notify`（fail-closed，未声明即拒）：通知 / 震动 / 声音是用户打扰面
+/// （高频弹通知或狂震会骚扰用户），独立成位，不与既有能力混位。
+interface host-notify {
+    /// 发送系统通知（文案由插件 i18n 构建、原样透传，宿主不做文案加工）。
+    /// options-json（camelCase，字段可省）：`{ vibrate?: bool, sound?: bool }`，
+    /// 两者缺省均为 true（与退役前 `host-events.notify` 行为一致）；
+    /// 非法 JSON / 字段类型错误 → Err（严格解析，禁静默降级）
+    notify: func(title: string, body: string, options-json: string) -> result<_, string>;
+    /// 通知权限是否已授予（Android 13+ 需 POST_NOTIFICATIONS 且系统通知总开关
+    /// 开启；Android 12 及以下恒 true）。供插件在发通知前对账；发送本身不因
+    /// 无权限而报错（系统静默丢弃，宿主不代为降级）
+    check-permission: func() -> result<bool, string>;
+    /// 请求通知权限：未授权时弹系统授权框并阻塞至用户响应，返回最新状态；
+    /// 已授权 / 低版本立即返回 true。须在用户交互语境调用（后台触发可能被
+    /// 系统忽略）
+    request-permission: func() -> result<bool, string>;
+    /// 立即震动一次（毫秒，直接走 Vibrator 服务、不经通知渠道，无需通知权限）。
+    /// 用于「无需可见通知的轻量触觉反馈」。时长钳制到 [1, 5000] ms
+    vibrate: func(duration-ms: u32) -> result<_, string>;
+    /// 播放系统默认通知提示音（USAGE_NOTIFICATION 流；重复触发先停上一次，
+    /// 避免叠音）。用于「无需可见通知的听觉反馈」
+    play-sound: func() -> result<_, string>;
 }
 
 interface host-http {
@@ -424,6 +461,13 @@ interface manifest {
 ///   v17 宿主实例化期因缺失 import interface 被点名失败（fail-visible ②），
 ///   须随 SDK 重编译；内置插件随 APK 同分发无旧产物。`terminal:output`
 ///   保留（host-terminal-stream.forward-output 权限门）
+/// - v18：通知 / 震动 / 声音整族封装（新增移动特有域 `host-notify`，5 函数：
+///   notify 带 options-json 震动/声音开关 / check-permission /
+///   request-permission / vibrate / play-sound）+ 权限位 `notify`
+///   （fail-closed）。原 `host-events.notify` 收编迁入（host-events 回归
+///   纯事件语义，只剩 emit）。**破坏性收缩**：v17 及更早产物在 v18 宿主
+///   实例化期因缺失 import 函数被点名失败（fail-visible ②），须随 SDK
+///   重编译；内置插件随 APK 同分发无旧产物
 interface abi {
     version: func() -> u32;
 }
@@ -442,6 +486,7 @@ world plugin {
     import host-database;
     import host-plugin-database;
     import host-events;
+    import host-notify;
     import host-http;
     import host-fs;
     import host-config;

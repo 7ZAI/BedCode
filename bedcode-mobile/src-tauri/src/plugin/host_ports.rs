@@ -379,38 +379,130 @@ impl HostEnginePorts for HostPorts {
         crate::peer_net::app_data_dir(app)
     }
 
+    // ==================== notify（系统通知与提醒反馈，ABI v18） ====================
+    //
+    // 全部经 Kotlin TaskNotificationPlugin（`run_mobile_plugin_async` 直接
+    // await 驱动——端口方法是 async fn，被 host_impl 的
+    // `block_in_place + block_on` 驱动，内部不再嵌套 block_on）。
+
     async fn notify_show(
         &self,
         plugin_id: &str,
-        handle: &tokio::runtime::Handle,
         title: &str,
         body: &str,
+        vibrate: bool,
+        sound: bool,
     ) -> std::result::Result<(), String> {
-        // Android 系统通知（TaskNotificationPlugin；原 host_impl/notify.rs
-        // android 分支逻辑整体收口在此）
         #[cfg(target_os = "android")]
         {
             use crate::plugin::android_plugins::notification_plugin_handle;
 
-            let _ = handle; // block_on 由 run_mobile_plugin_async 的 async 形态消化
             let Some(h) = notification_plugin_handle() else {
                 return Err("TaskNotificationPlugin not registered".to_string());
             };
-            let payload = serde_json::json!({ "title": title, "body": body });
-            let plugin_id = plugin_id.to_string();
-            tokio::task::block_in_place(|| {
-                handle
-                    .block_on(async {
-                        h.run_mobile_plugin_async("showPluginNotification", payload)
-                            .await
-                    })
-                    .map(|_| ())
-                    .map_err(|e| format!("notification failed: {e}"))
-            })
+            let payload = serde_json::json!({
+                "title": title,
+                "body": body,
+                "vibrate": vibrate,
+                "sound": sound,
+            });
+            let _response: serde_json::Value = h
+                .run_mobile_plugin_async("showPluginNotification", payload)
+                .await
+                .map_err(|e| format!("notification failed: {e}"))?;
+            Ok(())
         }
         #[cfg(not(target_os = "android"))]
         {
-            let _ = (plugin_id, handle, title, body);
+            let _ = (plugin_id, title, body, vibrate, sound);
+            Err("only supported on Android".to_string())
+        }
+    }
+
+    async fn notify_check_permission(&self) -> std::result::Result<bool, String> {
+        #[cfg(target_os = "android")]
+        {
+            use crate::plugin::android_plugins::notification_plugin_handle;
+
+            let Some(h) = notification_plugin_handle() else {
+                return Err("TaskNotificationPlugin not registered".to_string());
+            };
+            let response: serde_json::Value = h
+                .run_mobile_plugin_async("checkNotificationPermission", serde_json::json!({}))
+                .await
+                .map_err(|e| format!("notification permission check failed: {e}"))?;
+            Ok(response
+                .get("granted")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false))
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            Err("only supported on Android".to_string())
+        }
+    }
+
+    async fn notify_request_permission(&self) -> std::result::Result<bool, String> {
+        #[cfg(target_os = "android")]
+        {
+            use crate::plugin::android_plugins::notification_plugin_handle;
+
+            let Some(h) = notification_plugin_handle() else {
+                return Err("TaskNotificationPlugin not registered".to_string());
+            };
+            let response: serde_json::Value = h
+                .run_mobile_plugin_async("requestNotificationPermission", serde_json::json!({}))
+                .await
+                .map_err(|e| format!("notification permission request failed: {e}"))?;
+            Ok(response
+                .get("granted")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false))
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            Err("only supported on Android".to_string())
+        }
+    }
+
+    async fn notify_vibrate(&self, duration_ms: u32) -> std::result::Result<(), String> {
+        #[cfg(target_os = "android")]
+        {
+            use crate::plugin::android_plugins::notification_plugin_handle;
+
+            let Some(h) = notification_plugin_handle() else {
+                return Err("TaskNotificationPlugin not registered".to_string());
+            };
+            let payload = serde_json::json!({ "durationMs": duration_ms });
+            let _response: serde_json::Value = h
+                .run_mobile_plugin_async("pluginVibrate", payload)
+                .await
+                .map_err(|e| format!("vibrate failed: {e}"))?;
+            Ok(())
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            let _ = duration_ms;
+            Err("only supported on Android".to_string())
+        }
+    }
+
+    async fn notify_play_sound(&self) -> std::result::Result<(), String> {
+        #[cfg(target_os = "android")]
+        {
+            use crate::plugin::android_plugins::notification_plugin_handle;
+
+            let Some(h) = notification_plugin_handle() else {
+                return Err("TaskNotificationPlugin not registered".to_string());
+            };
+            let _response: serde_json::Value = h
+                .run_mobile_plugin_async("pluginPlaySound", serde_json::json!({}))
+                .await
+                .map_err(|e| format!("play sound failed: {e}"))?;
+            Ok(())
+        }
+        #[cfg(not(target_os = "android"))]
+        {
             Err("only supported on Android".to_string())
         }
     }

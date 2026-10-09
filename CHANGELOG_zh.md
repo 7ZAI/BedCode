@@ -9,6 +9,24 @@
 
 ## [未发布]
 
+#### 移动端：Android 原生通知/震动/声音能力封装——`host-notify` 域（ABI 18）
+
+- **新增移动特有域 `host-notify`（5 函数）**：`notify`（title/body + `options-json` 的
+  `{ vibrate?, sound? }` 开关，两者缺省均 true）/ `check-permission` / `request-permission`
+  （Android 13+ POST_NOTIFICATIONS）/ `vibrate`（毫秒，直接走 Vibrator 不经通知渠道、
+  无需通知权限）/ `play-sound`（系统默认通知提示音，重复触发先停上一次防叠音）；
+  新增权限位 `notify`（fail-closed——通知/震动/声音是用户打扰面，独立成位）
+- **`host-events.notify` 收编入新域**：host-events 回归纯事件语义（只剩 emit）；
+  **破坏性收缩**——引用了 `host-events.notify` 的 v17 及更早产物在实例化期被点名失败
+  （fail-visible ②）须重编译；内置插件零消费者且随 APK 分发，产物随本版重建
+- **实现**：fork crate `host_impl/notify.rs`（权限门 + options-json 严格解析 + Android 分支）、
+  宿主 `plugin/host_ports.rs` 端口接 Kotlin `TaskNotificationPlugin` / `TaskNotificationManager`
+  （showPluginNotification 参数化 + pluginVibrate / pluginPlaySound；vibrateOnce /
+  playSoundOnce 抽取）；`android-backup/app-java/` 恢复副本同步
+- **门禁**：fork crate `cargo test --features test-support` 全绿（含 A1/A3 锁更新：17 import /
+  22 interfaces / ABI 18，host-events 收缩 + host-notify 行）· 移动宿主全量 · Kotlin
+  `./gradlew :app:compileUniversalDebugKotlin`
+
 #### 移动端：防回接与漂移锁——SDK 契约对照锁 Part A + 对称结构锁 Part B（票 19）
 
 - **Part A**（`packages/bedcode-wasm-core/tests/sdk_wit_contract_locks.rs`，4 例）：A1 WIT 接口

@@ -82,7 +82,16 @@
 ///   v17 宿主实例化期因缺失 import interface 被点名失败（fail-visible ②），
 ///   须随 SDK 重编译；内置插件随 APK 同分发无旧产物。`terminal:output` 保留
 ///   （host-terminal-stream.forward-output 权限门）。
-pub const ABI_VERSION: u32 = 17;
+/// - v18: 通知 / 震动 / 声音整族封装（新增移动特有域 `host-notify`，5 函数：
+///   notify 带 options-json 震动/声音开关 / check-permission /
+///   request-permission / vibrate / play-sound）+ 权限位 `notify`
+///   （fail-closed，用户打扰面独立成位）。原 `host-events.notify` 收编迁入
+///   （host-events 回归纯事件语义）。**破坏性收缩**：**引用了
+///   `host-events.notify` 的** v17 及更早产物在 v18 宿主实例化期因缺失
+///   import 函数被点名失败（fail-visible ②），须随 SDK 重编译（组件 import
+///   按实际使用面声明，未引用者不受影响）；内置插件零消费者且随 APK
+///   同分发，产物随本版全量重建。
+pub const ABI_VERSION: u32 = 18;
 
 #[cfg(test)]
 mod tests {
@@ -91,10 +100,11 @@ mod tests {
     #[test]
     fn test_abi_version_is_contract() {
         // 宿主加载时与组件 abi.version() 导出比对，漂移导致拒绝加载（高 ABI 拒绝测试依赖）
-        // v17 = host-terminal / terminal-hooks 整面退役（票 15 阶段 B），
-        // 叠加 v16 认证/配对编排下沉、v15 终端订阅协议客户端迁插件、
-        // v14 host-websocket 客户端域、v13 接收编排下沉、v12 发送编排下沉、
+        // v18 = 通知/震动/声音整族封装（host-notify 域收编 host-events.notify），
+        // 叠加 v17 host-terminal/terminal-hooks 整面退役、v16 认证/配对编排下沉、
+        // v15 终端订阅协议客户端迁插件、v14 host-websocket 客户端域、
+        // v13 接收编排下沉、v12 发送编排下沉、
         // v11 host-mdns v2、v10 总线二进制载荷与 v9 host-peer 传输控制二原语
-        assert_eq!(ABI_VERSION, 17);
+        assert_eq!(ABI_VERSION, 18);
     }
 }

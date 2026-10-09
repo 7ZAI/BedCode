@@ -135,10 +135,11 @@ bedcode-mobile/                       # 移动端项目 (Tauri 2.0 + Vue 3)
 ```
 
 > **Android 原生层**：`src-tauri/gen/android/app/src/main/java/com/bedcode/mobile/` 下有大量自定义 Kotlin 插件
-> （ForegroundService/ForegroundServicePlugin、TaskNotificationPlugin/Manager、SafPicker/SafTransfer、
-> BiometricKey、AllFilesAccess、DownloadsDir、FileDelete、DeviceInfo、MulticastLock、
-> StatusBarStyle（App 主题 → 系统栏图标外观同步）、PluginAssetExtractor 等）
-> 及 AndroidManifest、res/xml 配置。
+> （ForegroundService/ForegroundServicePlugin、TaskNotificationPlugin/Manager（v18 起为插件面
+> `host-notify` 域桥：showPluginNotification 震动/声音分控 + pluginVibrate / pluginPlaySound）、
+> SafPicker/SafTransfer、BiometricKey、AllFilesAccess、DownloadsDir、FileDelete、DeviceInfo、
+> MulticastLock、StatusBarStyle（App 主题 → 系统栏图标外观同步）、PluginAssetExtractor 等）
+> 及 AndroidManifest、res/xml 配置；改 Kotlin 后同步 `src-tauri/android-backup/app-java/` 恢复副本。
 > 改动 Kotlin 后必须跑 `./gradlew :app:compileUniversalDebugKotlin` 验证（见 AGENTS.md）。gen/android 重建后需恢复清单见 AGENTS.md。
 
 ---
@@ -268,9 +269,10 @@ bedcode-mobile/                       # 移动端项目 (Tauri 2.0 + Vue 3)
 
 **插件机制整核（fork crate，批次 1+1b 落地 · 宿主未切换）— `packages/bedcode-wasm-core/`：**
 crate 名 `bedcode-wasm-core-mobile`，fork 自桌面整核（ADR 0040 选项 C 第一步，票 17）。已含：机制核
-（bus/config/db/monitor/permission/security/storage）、**移动运行时与 16 域 host 原语**
-（`manager/runtime{,/component.rs,/host_impl/}`——bindgen 绑移动 WIT v17，宿主引擎调用经
-`host_api/ports.rs` 的 `HostEnginePorts` 注入）、`host_api/{http_engine,sql_guard}`（原宿主
+（bus/config/db/monitor/permission/security/storage）、**移动运行时与 17 域 host 原语**
+（`manager/runtime{,/component.rs,/host_impl/}`——bindgen 绑移动 WIT v18，宿主引擎调用经
+`host_api/ports.rs` 的 `HostEnginePorts` 注入；v18 新增 `host-notify`：通知/震动/声音，
+收编原 host-events.notify，权限位 `notify` fail-closed）、`host_api/{http_engine,sql_guard}`（原宿主
 wasm_host.rs 拆分）、`terminal_stream_gateway.rs`（窄转发表，Tauri 命令薄壳留宿主）、
 `test_support`（夹具构建器 + MockPorts，`any(test, feature = "test-support")` 门控）。
 **宿主 `src-tauri/src/plugin/` 仍是运行真源**（垫片切换 = 票 17 批次 2b，前置裁决见票 §6.1）；

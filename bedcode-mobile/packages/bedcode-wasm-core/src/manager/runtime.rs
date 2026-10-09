@@ -21,7 +21,7 @@
 //!
 //! 与桌面端差异：
 //! - WasmHostContext 无 session_manager 和 permission
-//! - 新增 host_notify（移动端系统通知）
+//! - host-notify 域（移动特有，ABI v18：通知/震动/声音——收编原 host-events.notify）
 //! - host-terminal（send）已随票 15 阶段 B 退役（ABI v17，终端 UI 域迁插件）
 //! - 无 session/plugin-database/params/api-call/timer/process 接口
 //! - 新增 host_mark_plugin_error（插件生命周期失败上报，置 Error + 持久化未启用）
@@ -34,7 +34,7 @@ use wasmtime::{Cache, CacheConfig, Config, Engine, ResourceLimiter};
 // ==================== Component Model 路径 ====================
 //
 // 组件形态加载/校验/调用全部在子模块 component（wasm_runtime/component.rs）：
-// - bindgen! 绑定（wasmtime 48 自带宏）、11 组 Host trait 接线（ticket 02/03）
+// - bindgen! 绑定（wasmtime 48 自带宏）、17 组 Host trait 接线（v18）
 // - LoadedComponentPlugin 业务方法（ticket 03）
 // - 自研 ABI core 路径（`__bedcode_*` 导出、(ptr,len) 内存搬运、签名表校验）
 //   已在 ticket 09 删除，本文件为组件单路径

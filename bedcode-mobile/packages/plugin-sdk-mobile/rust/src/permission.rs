@@ -36,6 +36,10 @@ pub const PERMISSION_WS_CLIENT: &str = "ws:client";
 /// 凭据落地是安全敏感面，独立成位、fail-closed。凭据零过境——JWT 由宿主
 /// 落地，本域不向插件返回凭据材料（C4；对齐票 12「token 不落插件」先例）
 pub const PERMISSION_AUTH: &str = "auth";
+/// 系统通知与提醒反馈（WIT `host-notify`，ABI v18）：通知 / 震动 / 声音是
+/// 用户打扰面（高频弹通知或狂震会骚扰用户），独立成位、fail-closed。
+/// 无前端 API 面（WASM-only 权限，宿主在 host fn 层仲裁）
+pub const PERMISSION_NOTIFY: &str = "notify";
 
 /// 权限词汇全量表（pub：宿主机制层〔wasm-core-mobile 权限漂移锁〕与生成物
 /// 校验消费；新增权限必须在此登记，否则 grant 静默丢弃）
@@ -60,6 +64,7 @@ pub static VALID_PERMISSIONS: &[&str] = &[
     PERMISSION_MDNS,
     PERMISSION_WS_CLIENT,
     PERMISSION_AUTH,
+    PERMISSION_NOTIFY,
 ];
 
 static PERMISSION_API_MAP: &[(&str, &[&str])] = &[
@@ -133,6 +138,10 @@ static PERMISSION_API_MAP: &[(&str, &[&str])] = &[
         "auth.biometricAuthenticate",
         "auth.hasCredentials",
     ]),
+    // ABI v18：系统通知与提醒反馈（host-notify 域，notify/vibrate/play-sound）——
+    // WASM-only 权限（插件经 WasmHost trait 调用，无前端 API 面），
+    // 宿主在 host fn 层仲裁；空映射同前端表 peer 先例
+    (PERMISSION_NOTIFY, &[]),
 ];
 
 pub struct PermissionManager {

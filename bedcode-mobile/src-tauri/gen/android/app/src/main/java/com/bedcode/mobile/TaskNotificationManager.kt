@@ -181,13 +181,13 @@ class TaskNotificationManager(private val context: Context) {
     }
 
     /**
-     * 显示插件自主通知（host_notify）
+     * 显示插件自主通知（WIT host-notify.notify，ABI v18）
      *
      * 插件系统发起的通用通知，不与会话绑定，固定 ID [PLUGIN_NOTIFICATION_ID]，
-     * 使用默认渠道（声音+震动），不参与设置页开关控制
+     * 震动/声音由插件经 options-json 分控（缺省 true/true），不参与设置页开关控制
      */
-    fun showPluginNotification(title: String, body: String) {
-        notify(PLUGIN_NOTIFICATION_ID, title, body, vibrate = true, sound = true)
+    fun showPluginNotification(title: String, body: String, vibrate: Boolean, sound: Boolean) {
+        notify(PLUGIN_NOTIFICATION_ID, title, body, vibrate, sound)
     }
 
     /**
