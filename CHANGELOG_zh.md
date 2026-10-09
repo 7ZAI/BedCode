@@ -9,6 +9,23 @@
 
 ## [未发布]
 
+#### 移动端：防回接与漂移锁——SDK 契约对照锁 Part A + 对称结构锁 Part B（票 19）
+
+- **Part A**（`packages/bedcode-wasm-core/tests/sdk_wit_contract_locks.rs`，4 例）：A1 WIT 接口
+  清单锁（world import/export 集合 + ABI 版本，先改锁再改 WIT）· A2 权限词汇五同步锁
+  （SDK 表 ↔ fork re-export 可见集逐字一致 + 「定义了未登记表 = grant 静默丢弃」完备性检查）·
+  A3 WIT↔host_impl 接线全表（接口×函数三方对照：WIT 名 / 实现名 / component.rs 委托行）·
+  A4 wire 形状对照对 + 单源防副本锁（3 对真实双份逐字段钉住；9 个宿主自持单源形状双侧零副本）
+- **Part B**：`fork_boundary_lock.rs` 新增对称结构锁——21 个机制核模块路径必须同时在桌面整核
+  与 fork 双侧在场（`src/error.rs` 不入对称面：移动 AppError 是自持形状，桌面真源在
+  `bedcode-server-base`）；共享锚点白名单扩入 `bedcode-discovery-engine`（ADR 0042）与
+  `bedcode-ws-client-engine`（ADR 0043）——两者都是纯引擎能力 crate
+- **事实修正（ADR 0022）**：历史声明的 `mobile_parallel_copy_shape_lock` 此前不存在，且移动
+  宿主 `enums/` 并非 SDK wire 的平行副本（12 形状中 9 个为宿主自持单源，真实双份仅 3 对）——
+  锁按 A4 双层落地，「平行副本」前提按事实修正
+- **门禁**：fork crate 303 绿 + 移动宿主全量（22 测试目标）零失败；变异自检 3/3（WIT 增接口 /
+  权限常量未登记表 / 宿主 enum 字段改名均测红）
+
 #### 文件传输：双端共享业务核 `packages/bedcode-file-transfer-core`（ADR 0044）
 
 - **新建双端共享业务核 crate**：文件传输业务实现（任务台账归约 / 重试 + 发送闸门 + 拉取意图判据 /

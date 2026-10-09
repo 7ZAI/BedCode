@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+#### Mobile: anti-back-drift & drift locks — SDK contract locks Part A + symmetric structure lock Part B (Ticket 19)
+
+- **Part A** (`packages/bedcode-wasm-core/tests/sdk_wit_contract_locks.rs`, 4 locks): A1 WIT
+  interface inventory lock (world import/export sets + ABI version, change-first discipline) ·
+  A2 permission-vocabulary five-point sync lock (SDK table ↔ fork re-export visible set, plus
+  "defined but not registered = silently dropped grant" completeness check) · A3 WIT↔host_impl
+  wiring full table (interface × function triples, impl presence + component.rs delegation
+  lines) · A4 wire-shape comparison pairs + single-source anti-copy lock (3 real dual copies
+  pinned field-by-field; 9 host-owned single-source shapes verified copy-free on both sides)
+- **Part B**: `fork_boundary_lock.rs` gains the symmetric structure lock — 21 mechanism-core
+  module paths must exist in BOTH the desktop whole-core and the fork (`src/error.rs` excluded:
+  the mobile AppError is a self-owned shape, the desktop source lives in `bedcode-server-base`);
+  shared-anchor whitelist grows with `bedcode-discovery-engine` (ADR 0042) and
+  `bedcode-ws-client-engine` (ADR 0043) — both are pure-engine capability crates
+- **Recorded fact correction (ADR 0022)**: the historically declared
+  `mobile_parallel_copy_shape_lock` did not exist, and the mobile host `enums/` is not a
+  parallel copy of the SDK wire shapes (9 of 12 are host-owned single sources; only 3 pairs
+  are real dual copies) — the lock lands as A4 two-layer, the "parallel-copy" premise is
+  corrected to fact
+- **Gates**: fork crate 303 green + mobile host full suite (22 targets) zero failures;
+  mutation self-checks 3/3 (WIT interface add / permission constant without table entry /
+  host enum field rename all turn locks red)
+
 #### File transfer: cross-end shared business core `packages/bedcode-file-transfer-core` (ADR 0044)
 
 - **New shared business core crate `packages/bedcode-file-transfer-core`**: the file-transfer

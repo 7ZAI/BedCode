@@ -560,6 +560,8 @@ Desktop PTY → Claude Code
 - 插件 KV 真源 = 主库 `plugin_storage` 表（票 05b 真源搬迁）→ `src-tauri/tests/plugin_storage_db_backed_lock.rs`（`plugin_storage_is_db_backed_not_file_backed`）
 - `host-websocket` 客户端子集域边界（票 11：移动 WIT 不得长出 ws **服务端**域 / 不得定义 ws 服务端权限）→ `src-tauri/tests/mobile_host_websocket_client_domain_lock.rs`
 - egress 三档策略架构不变量（票 20：档位→动作映射单点 `StrategyStep::of` / 写入面 `parse_wire` 单点 / 安全义务符号在场）→ `src-tauri/tests/egress_tier_mapping_single_point_lock.rs`（3 例 + 变异自检 3/3）
+- 移动 SDK ↔ fork crate 契约对照（票 19 Part A，4 例：A1 WIT 接口清单 / A2 权限词汇五同步 / A3 WIT↔host_impl 接线全表 / A4 wire 形状对照对 + 单源防副本）→ `packages/bedcode-wasm-core/tests/sdk_wit_contract_locks.rs`（ABI 演进先改锁再改 WIT）
+- 双端机制核对称结构 + 共享引擎白名单（票 19 Part B：21 个机制核模块路径在桌面整核与 fork 双侧在场 / `src/error.rs` 移动自持形状不入对称面 / 共享锚点白名单含 ADR 0042 discovery-engine 与 ADR 0043 ws-client-engine）→ `packages/bedcode-wasm-core/tests/fork_boundary_lock.rs`
 
 > 迁移 / 抽包类任务的规格与逐票记录在 `.scratch/2026-10-07-mobile-wasm-core-refactor/` 与
 > `.scratch/2026-10-07-capability-crates-to-root-packages/`（`.scratch` 只在 uat/master 之外分支入库）。

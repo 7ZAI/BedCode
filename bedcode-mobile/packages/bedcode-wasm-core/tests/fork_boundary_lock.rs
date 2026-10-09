@@ -4,10 +4,12 @@
 //! 1. **不绑桌面契约**：`bedcode_plugin_api::`（桌面 SDK 包名）不得出现——
 //!    bindgen 与类型引用一律走 `bedcode_plugin_api_mobile`（ADR 0018 契约独立；
 //!    needle 带双冒号后缀，`bedcode_plugin_api_mobile::` 不含该子串不误伤）
-//! 2. **不依赖桌面能力域/基础层**：桌面 8 个 crate（server-base/core/http/
-//!    websocket/peer-net/pty-engine/discovery-engine/crypto-engine）不得出现
-//!    （双端共享锚点只有 `bedcode-host-kit` / `bedcode-peer-net` /
-//!    `bedcode-link-crypto` 三者白名单）
+//! 2. **不依赖桌面能力域/基础层**：桌面 7 个 crate（server-base/core/http/
+//!    websocket/peer-net/pty-engine/crypto-engine）不得出现
+//!    （双端共享锚点白名单 = `bedcode-host-kit` / `bedcode-peer-net` /
+//!    `bedcode-link-crypto` / `bedcode-discovery-engine` / `bedcode-ws-client-engine`
+//!    ——末两者是双端共享的**纯引擎能力 crate**（ADR 0042 mDNS 引擎、ADR 0043
+//!    WS 出站连接引擎，均零 WIT 默认形态），随抽根自禁入名单移入白名单）
 //! 3. **不复活桌面独有域文件**：host_api 桌面 21 域 / system 桌面引擎面 /
 //!    utils 宿主胶水 / manager 装配层 / host-task / L1 能力路由 / intercall
 //!    （移动 WIT 无 host-api-call）——文件级缺席断言（lib.rs 内嵌锁的独立复核）
@@ -35,7 +37,6 @@ fn fork_does_not_bind_desktop_sdk_or_capability_crates() {
         "bedcode_server_websocket",
         "bedcode_server_peer_net",
         "bedcode_pty_engine",
-        "bedcode_discovery_engine",
         "bedcode_crypto_engine",
     ];
     let mut violations: Vec<String> = Vec::new();
@@ -143,6 +144,54 @@ fn mechanism_core_files_stay_present() {
             "机制核文件缺失（fork 面被过度裁剪）：{rel}"
         );
     }
+}
+
+/// 双端对称结构锁（票 19 Part B）：机制核模块路径在**桌面整核与本 fork** 双侧
+/// 同时在场——一侧以「裁剪」为名删机制（或另一侧结构性重组丢失机制）即红。
+///
+/// 名单 = 机制核在场面去掉 `src/error.rs`（移动 AppError 自持形状，非双端对称面；
+/// 桌面 AppError 真源在 `bedcode-server-base`）。
+#[test]
+fn mechanism_core_modules_symmetric_with_desktop_core() {
+    let desktop_src =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../packages/bedcode-wasm-core/src");
+    let symmetric = [
+        "bus.rs",
+        "config.rs",
+        "monitor.rs",
+        "permission.rs",
+        "runtime_util.rs",
+        "storage.rs",
+        "host_context_registry.rs",
+        "db.rs",
+        "db/schema.sql",
+        "manager.rs",
+        "manager/loader.rs",
+        "manager/registry.rs",
+        "manager/validation.rs",
+        "manager/downloader.rs",
+        "manager/types.rs",
+        "security.rs",
+        "security/fs_auth.rs",
+        "security/approval.rs",
+        "host_api.rs",
+        "host_api/context.rs",
+        "system.rs",
+    ];
+    let mut missing: Vec<String> = Vec::new();
+    for rel in symmetric {
+        if !desktop_src.join(rel).exists() {
+            missing.push(rel.to_string());
+        }
+        assert!(
+            src_dir().join(rel).exists(),
+            "fork crate 机制核文件缺失（对称锁锚点失效）：{rel}"
+        );
+    }
+    assert!(
+        missing.is_empty(),
+        "桌面整核机制模块缺失（双端对称结构被破坏——机制修复必须双端生效，票 18/19）：{missing:?}"
+    );
 }
 
 /// 递归访问 src 下全部 .rs 文件（相对 src/ 的路径 + 内容）

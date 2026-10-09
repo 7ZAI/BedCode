@@ -1,6 +1,6 @@
 # 票 19 · 防回接与漂移锁（SDK 对照锁 Part A 可与票 17 批次 2 并行）
 
-Status: **未实施；Part A（SDK 对照锁）已定稿可与票 17 批次 2 并行；Part B（双端结构锁）挂 17b 之后**
+Status: **已实施（2026-10-09）：Part A 4 锁 + Part B 对称结构锁/白名单更新/索引登记全落地；变异自检 3/3；fork crate 303 绿 + 移动宿主全量零失败（§8）**
 专项: `.scratch/2026-10-07-mobile-wasm-core-refactor`（阶段 4 第三票）
 依据: spec §5 票 19 + ADR 0022（双端偏离 / wire 形状单真源）+ ADR 0040（fork 面收缩路线）+ 票 02（五同步点口径）。
 依赖: Part A 零依赖（只碰 `packages/plugin-sdk-mobile/rust/` + fork crate `tests/` + 文档）；Part B 依赖票 17 批次 2 结构定稿。
@@ -103,3 +103,62 @@ Status: **未实施；Part A（SDK 对照锁）已定稿可与票 17 批次 2 �
 | A3 骨架先落、17b 后才启用 → 空锁嫌疑 | 骨架锁仍断言接口清单与 SDK ABI_VERSION（A1 已覆盖）不悬空；A3 的域映射断言 17b 后补，文档明示 |
 | 锁误伤合法 ABI bump | 锁是点名式清单：ABI 演进 = 先改锁再改代码（ADP 0019 双端同步口径不变） |
 | Part A 与 17b 同时改 fork crate `tests/` | 文件所有权分配（§5）——Part A 只新增 `sdk_wit_contract_locks.rs`，17b 的 `fork_boundary_lock` 不动 |
+
+## 8. 实施记录（2026-10-09，Part A + Part B 一次落地）
+
+实施窗口说明：票 17 批次 2b 已入库（`5ce19e7db`）→ A3 全量启用条件成立；M3 并行会话
+（双端共享 mDNS 引擎，ADR 0042）已提交（`0c5572d65`）→ 对称锁与白名单更新按已提交态做。
+
+**§1.1 口径修正兑现**：`mobile_parallel_copy_shape_lock` 此前确实不存在；且 §3 锁 A4 的
+「平行副本」前提实测**不成立**——宿主 `enums/` 12 形状中 9 个为宿主自持单源（`AuthStage`
+/`AuthPayload`/`CryptoProposal`/`SessionControlPayload`/`SessionControlAction`/`SessionStatus`
+/`TaskStatus`/`SessionConfigSummary`/`QuickActionSummary`，全仓唯一副本），真实双份仅 3 对
+（`PluginQuestion`/`PluginQuestionOption`：宿主 `enums/plugin.rs` ↔ 桌面 SDK `events.rs`；
+`SessionSummary`：宿主 `enums/sumary.rs` ↔ 桌面 SDK `wire/summary.rs`）。A4 按事实落为
+**双层锁**（见下），ADR 0022 修订段 + CHANGELOG 双语已同步修正口径（「逐变体一致」按实测
+兑现，「平行副本」前提按事实修正）。
+
+**Part A**（`bedcode-mobile/packages/bedcode-wasm-core/tests/sdk_wit_contract_locks.rs`，4 例）：
+
+- **A1 WIT 接口清单锁**：运行时解析 `bedcode.wit`（world plugin 的 16 import / 5 export
+  逐名点名、全文件 22 接口集合含 `events-binary`、`world plugin-binary` 在场、SDK
+  `ABI_VERSION: u32 = 17`、abi interface 无 `form:` 字段）——增删改名接口即红，ABI bump
+  先改锁（ADR 0019）
+- **A2 权限词汇五同步锁**：SDK 表条目（常量名）经常量定义表换算成**权限值集** ↔ fork
+  crate re-export 可见值集逐字一致；**常量↔表登记完备性**（定义了 `PERMISSION_*` 却未登记
+  进 `VALID_PERMISSIONS` = grant 静默丢弃，即红）；宿主 `src-tauri/src` / `scripts/` /
+  `dev-shell/src` 无第二份白名单定义
+- **A3 WIT↔host_impl 接线对照**（2b 后全量启用）：16 接口 / 73 函数**显式全表**
+  （wit 函数名 ↔ host_impl 实现名 ↔ component.rs 委托行；`host-log` 为 component.rs 内联
+  域，`host-events.notify` 经 `FN_FILE_OVERRIDES` 指向 `notify.rs`）——WIT 函数集与表双向
+  一致 + impl 在场 + 委托行在场，三方缺一即红
+- **A4 wire 形状对照对 + 单源防副本锁**（`mobile_parallel_copy_shape_lock` 兑现）：3 对照对
+  双侧在场 + 字段名集逐字一致（桌面侧按形状**定位不钉路径**——M3 正重组 wire/ 目录）；9
+  单源形状在双端 SDK + 双端 wasm-core 无第二副本定义
+
+**Part B**：
+
+- `fork_boundary_lock.rs` **+1 例**：双端机制核对称结构锁（21 个模块路径在桌面整核与 fork
+  双侧在场；`src/error.rs` 为移动自持 AppError 形状不入对称面）
+- 锁 1 白名单更新：`bedcode_discovery_engine` 自禁入 needle 移入共享锚点白名单（ADR 0042
+  双端共享 mDNS 引擎，零 WIT 形态）——M3 提交后 HEAD 的锁 1 遗留红由本票收口
+- 移动 code-map 文末防回接锁索引登记：`fork_boundary_lock`（4 例）+ `sdk_wit_contract_locks`
+  （4 例）+ 与票 20 egress 锁并列
+
+**变异自检 3/3**（全部精确还原，`git diff` 干净）：① WIT 增 `interface host-zzz` → A1 红；
+② SDK 加 `PERMISSION_ZZZ` 常量未登记表 → A2 红（注：变异形状经实测修正——「表+常量同加」
+会被 glob re-export 自洽传播测不出，「定义未登记表」才是 A2 的真实防呆面）；③ 宿主 enum
+字段改名 → A4 字段集漂移红。
+
+**门禁**：
+
+| 项 | 结果 |
+| --- | --- |
+| fork crate `cargo test --features test-support` | **303 绿**（295 lib + fork_boundary_lock 4 + sdk_wit_contract_locks 4）——注：M3 提交把组件构建器改为 feature 门控（wit-component 移出 dev-deps），fork crate 测试命令自此带 `--features test-support` |
+| 移动宿主 `cargo test` 全量 | **22 个测试目标零失败**（12 把退役锁 + session_http_flow 等回归在内）——同时补齐票 18 批次 1/2 的移动端遗留门禁 |
+| 桌面 wasm-core | 零改动 |
+| 移动宿主 `src-tauri/src` | 零改动（变异③已精确还原） |
+| 文档联动 | ADR 0022 修订段（口径修正 + 锁登记）、CHANGELOG 双语、移动 code-map 锁索引 |
+
+**遗留**：锁 A4 的对照对（3 对）为跨端 wire 真双份——收口方向（单侧退役或迁 SDK 单真源）
+留票 21 文档联动；票 18 批次 1/2 行为对齐项（移动总线门禁 + JSON 严格化）真机复验仍挂。

@@ -976,3 +976,16 @@ interface、不改裁剪线，只改归属与契约面。
 - 依据（§5.1.2 三问）：生物凭证是产品概念（设备绑定事实），且 host-crypto 原语面
   只有 aead/kdf/x25519 无 ECDSA 验签——认证全归中心的纯粹性优先于「中性验签原语留
   宿主」的替代方案（用户裁定选 B）
+
+## 防回接与漂移锁的契约面登记（2026-10-09，票 19）
+
+- **`mobile_parallel_copy_shape_lock` 兑现口径修正**：本 ADR 历史声明「移动端保留平行
+  副本并由 `mobile_parallel_copy_shape_lock` 逐变体钉住」——票 19 实测该锁此前不存在，
+  且移动宿主 `enums/` 并非 SDK wire 的平行副本（`AuthStage` / `AuthPayload` 等 9 形状
+  为宿主自持单源；真实双份仅 `PluginQuestion` / `PluginQuestionOption` /
+  `SessionSummary` 三对）。锁已落地为双层（fork crate
+  `tests/sdk_wit_contract_locks.rs` A4）：三对照对逐变体锁 + 单源形状防副本锁——
+  「逐变体一致」承诺按实测兑现，「平行副本」前提按事实修正
+- 同批落 Part A（WIT v17 接口清单锁 / 权限词汇五同步锁 / WIT↔host_impl 73 函数接线
+  对照锁）与 Part B（双端机制核对称结构锁 + 移动 code-map 防回接锁索引登记）——
+  票 18 抽共享核后 fork 面收缩的防回接与漂移防线（ABI 演进先改锁再改 WIT，ADR 0019）
