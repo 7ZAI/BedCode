@@ -109,6 +109,13 @@ export default {
       appearanceHint: '主题与色板',
       permissions: '权限总览',
       permissionsHint: '按权限看应用',
+      // 连接/认证/出站：壳内入口补齐（旧宿主的设置在退役前仍复用其实现页，功能不回归）
+      connection: '连接',
+      connectionHint: '端口与自动重连',
+      authentication: '认证',
+      authenticationHint: '配对与凭据',
+      egress: '出站策略',
+      egressHint: '安全出口档位',
       notifications: '通知',
       about: '关于 WasmApp',
       appSettings: '应用设置',

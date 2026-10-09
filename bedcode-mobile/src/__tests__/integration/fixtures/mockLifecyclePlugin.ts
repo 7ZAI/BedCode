@@ -2,7 +2,7 @@
  * 重新激活循环测试用 mock 插件前端模块（忠实复刻版）
  *
  * 经 loader 动态 import 加载。activate 忠实复刻 file-transfer 的注册顺序：
- * 经 context.ui 走 registerToolboxPage + registerRoute + registerSettingsSection
+ * 经 context.ui 走 registerToolboxPage + registerRoute + registerSettingsEntry
  * （而非直接调 registry），覆盖权限层 + disposable 入 _disposables + registerRoute
  * 经 getSharedModule('router') 的真实路径。若任一步在再激活时抛，
  * loadFrontend catch 的 clearPlugin 会摘除刚注册的入口 → 测试能捕获。
@@ -35,12 +35,10 @@ export async function activate(context: PluginContext): Promise<void> {
     component: {},
     header: false,
   })
-  // 3. 设置区
-  context.ui.registerSettingsSection({
+  // 3. 壳内设置入口（旧宿主「设置区」已随阶段 B 退役）
+  context.ui.registerSettingsEntry({
     id: `${context.id}.settings`,
-    pluginId: context.id,
-    section: 'mock',
-    component: {},
+    label: 'Settings',
   })
 }
 

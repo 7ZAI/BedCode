@@ -2,7 +2,7 @@
   "id": "com.bedcode.ai-chatbox",
   "name": "AI Chatbox",
   "version": "1.0.0-beta",
-  "description": "AI 大模型对话：支持 OpenAI 兼容 / Anthropic / Gemini 多供应商\n· 多供应商管理：Base URL、API Key、模型均可配置\n· 流式输出，思考模式与推理强度可调\n· 会话管理：历史会话保存、恢复、删除\n· 对话日志 JSONL 落盘，可追溯审计\n使用：在底部导航「AI」页对话；首次使用先进设置添加供应商并选择模型，随后即可开始聊天。",
+  "description": "AI 大模型对话：支持 OpenAI 兼容 / Anthropic / Gemini 多供应商\n· 多供应商管理：Base URL、API Key、模型均可配置\n· 流式输出，思考模式与推理强度可调\n· 会话管理：历史会话保存、恢复、删除\n· 对话日志 JSONL 落盘，可追溯审计\n使用：在宿主壳应用列表打开「AI Chatbox」独立页面；首次使用先在应用内配置供应商与模型，随后即可开始聊天。",
   "author": "BedCode",
   "icon": "icon.svg",
   "main": "index.js",
@@ -18,7 +18,7 @@
     "https://api.anthropic.com/*",
     "https://generativelanguage.googleapis.com/*"
   ],
-  "permissions": ["fs:read", "fs:write", "network:http", "storage", "ui:navtab", "ui:toolbox"],
+  "permissions": ["fs:read", "fs:write", "network:http", "storage"],
   "contributes": {
     "commands": [
       {
@@ -54,21 +54,7 @@
         "title": "Delete Conversation"
       }
     ],
-    "views": [
-      {
-        "type": "toolbox",
-        "id": "ai-chatbox.toolbox",
-        "title": "AI 对话",
-        "component": "ChatView"
-      }
-    ],
-    "navTab": {
-      "id": "ai-chatbox.navtab",
-      "title": "AI",
-      "icon": "M8 10h.01M12 10h.01M16 10h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z",
-      "component": "ChatView",
-      "order": 150
-    },
+    "views": [],
     "configuration": {
       "title": "AI Chatbox 设置",
       "properties": {

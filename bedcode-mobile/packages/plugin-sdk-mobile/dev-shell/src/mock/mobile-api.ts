@@ -11,9 +11,15 @@ import type {
   MobileHostApi,
   MobileHttpRequestOptions,
   MobileHttpResult,
+  MobileConnectionStatus,
+  MobileDeviceTarget,
+  MobileMdnsService,
 } from '../../../src/types'
 import { activeSessionId, connected, onDevEvent, sessions } from './session'
 import { getAllDevMocks } from '../registry'
+
+/** 连接历史（dev-shell mock：演示种子为空列表） */
+const connectionHistory = ref<{ address: string; name: string; lastConnected?: string }[]>([])
 
 /** 活跃会话列表（响应式，MobileHostApi.activeSessions） */
 const activeSessions = computed(() => sessions.value.map((s) => ({ ...s })))
@@ -309,6 +315,38 @@ export const mobileApi: MobileHostApi = {
         d2.dispose()
       },
     }
+  },
+  // ── 连接引擎面（票 2026-10-09：宿主页下沉；dev-shell 提供静默 no-op 替身）──
+  connectionStatus: ref<MobileConnectionStatus>('disconnected'),
+  isConnecting: ref(false),
+  currentDevice: ref<MobileDeviceTarget | null>(null),
+  connectionHistory,
+  async connectDevice() {},
+  async cancelConnection() {},
+  async disconnect() {},
+  async loadConnectionHistory() {},
+  async clearConnectionHistory() {
+    connectionHistory.value = []
+  },
+  async removeFromConnectionHistory() {},
+  onConnectionEvent() {
+    return { dispose() {} }
+  },
+  // ── mDNS 引擎事实（dev-shell 无 mDNS，静默空列表）──
+  mdnsServices: ref<MobileMdnsService[]>([]),
+  mdnsScanning: ref(false),
+  async mdnsStart() {},
+  async mdnsStop() {},
+  async mdnsRefresh() {},
+  // ── 生物凭证引擎面（dev-shell 视为不支持）──
+  async getBiometricKeyStatus() {
+    return { deviceSupported: false, deviceReason: 12, hasKey: false }
+  },
+  async bindBiometricCredential() {
+    return false
+  },
+  async unbindBiometricCredential() {
+    return false
   },
   // dev-shell 的会话流走真实渲染路径（非宿主 DEV mock 会话），故无 mockSessionId
   mockSessionId: null,

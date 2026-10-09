@@ -44,8 +44,8 @@ function makePluginInfo(overrides: Partial<PluginInfo> = {}): PluginInfo {
     author: 'test',
     main: 'index.js',
     pluginType: 'frontend',
-    // 覆盖 context.ui.registerToolboxPage/registerRoute/registerSettingsSection 权限
-    permissions: ['ui:toolbox', 'ui:route', 'ui:settings'],
+    // 覆盖 context.ui.registerToolboxPage/registerRoute（壳设置入口免权限）
+    permissions: ['ui:toolbox', 'ui:route'],
     state: 'Loaded',
     contributes: {},
     source: 'builtin',

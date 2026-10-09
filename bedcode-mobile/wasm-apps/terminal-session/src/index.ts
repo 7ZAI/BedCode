@@ -15,6 +15,7 @@
  * 权威；任务域数据面是桌面任务域的只读投影，UI 文案不得自称权威。
  */
 import type { Disposable, PluginContext } from '@binblink/bedcode-plugin-sdk-mobile'
+import { activateHostPageDomain } from './host/activate'
 import { activateTaskDomain, deactivateTaskDomain } from './task/activate'
 import { activateTerminalDomain } from './terminal/activate'
 
@@ -22,15 +23,19 @@ import { activateTerminalDomain } from './terminal/activate'
 export { devMock } from './task/devMock'
 
 let terminalDomain: Disposable | null = null
+let hostDomain: Disposable | null = null
 
 export async function activate(context: PluginContext): Promise<void> {
   context.logger.info('Terminal Session plugin activating (remote-terminal-consumer, mobile)')
+  hostDomain = activateHostPageDomain(context)
   terminalDomain = activateTerminalDomain(context)
   await activateTaskDomain(context)
   context.logger.info('Terminal Session plugin activated')
 }
 
 export function deactivate(): void {
+  hostDomain?.dispose()
+  hostDomain = null
   terminalDomain?.dispose()
   terminalDomain = null
   deactivateTaskDomain()

@@ -111,6 +111,14 @@ export default {
       appearanceHint: 'Theme and palette',
       permissions: 'Permission overview',
       permissionsHint: 'Group apps by permission',
+      // Connection / authentication / egress: shell-side entries (reuse the legacy
+      // settings pages until the old host is retired — no functional regression)
+      connection: 'Connection',
+      connectionHint: 'Port and auto-reconnect',
+      authentication: 'Authentication',
+      authenticationHint: 'Pairing and credentials',
+      egress: 'Egress policy',
+      egressHint: 'Security egress tiers',
       notifications: 'Notifications',
       about: 'About WasmApp',
       appSettings: 'App settings',

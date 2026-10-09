@@ -284,6 +284,10 @@ async function syncToolbarEntry(context: PluginContext) {
 
 let toolbarDisposable: { dispose(): void } | null = null
 let toolboxDisposable: { dispose(): void } | null = null
+/** 壳内任务页动态路由（旧宿主工具箱退役后的正路；需 manifest `ui:route` 权限） */
+let routeDisposable: { dispose(): void } | null = null
+/** 壳内胶囊菜单项：从应用菜单直达任务页 */
+let capsuleDisposable: { dispose(): void } | null = null
 let stopSessionWatch: (() => void) | null = null
 let stopConnectionWatch: (() => void) | null = null
 
@@ -311,7 +315,8 @@ export async function activateTaskDomain(context: PluginContext): Promise<void> 
         supportedAgents = result.data.agents || []
       }
     } catch (e) {
-      console.warn('[TerminalSession:task] Failed to load supported agents:', e)
+      // 机制对齐：失败必须经 logger（禁止 console/静默吞错）
+      context.logger.warn(`[task] load supported agents failed: ${e instanceof Error ? e.message : e}`)
     }
   }
 
@@ -359,6 +364,30 @@ export async function activateTaskDomain(context: PluginContext): Promise<void> 
     toolboxDisposable = null
   }
 
+  // 壳内任务页：动态路由（host 页头模式自带返回）+ 应用胶囊菜单入口。
+  // 权限未授予时注册抛错，不影响插件其余能力（与工具箱页同一口径）。
+  try {
+    routeDisposable = context.ui.registerRoute({
+      id: 'tasks',
+      title: context.i18n.t('toolboxTitle'),
+      component: AutoTaskToolboxView,
+      header: true,
+    })
+    capsuleDisposable = context.ui.registerCapsuleItem({
+      id: 'task-page',
+      label: context.i18n.t('capsuleTitle'),
+      icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 7l2 2 4-4',
+      order: 20,
+      onSelect: () => {
+        void context.ui.openPage('tasks')
+      },
+    })
+  } catch (e) {
+    context.logger.warn(`Shell task page registration failed: ${e}`)
+    routeDisposable = null
+    capsuleDisposable = null
+  }
+
   context.logger.info('Task domain activated')
 }
 
@@ -372,6 +401,10 @@ export function deactivateTaskDomain(): void {
   toolbarDisposable = null
   toolboxDisposable?.dispose()
   toolboxDisposable = null
+  routeDisposable?.dispose()
+  routeDisposable = null
+  capsuleDisposable?.dispose()
+  capsuleDisposable = null
   unmountPanel()
   document.getElementById('terminal-session-task-panel-style')?.remove()
   document.getElementById('terminal-session-task-toolbox-style')?.remove()

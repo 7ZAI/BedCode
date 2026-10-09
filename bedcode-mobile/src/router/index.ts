@@ -3,56 +3,18 @@ import { pluginLoader } from '@/plugin/loader'
 
 const router = createRouter({
   history: createWebHistory(),
+  // 阶段 B（票 2026-10-09）：旧宿主四页容器与其页面已退役删除，
+  // 唯一入口 = 宿主壳 /mobile/shell；设置子页与文件浏览器沿用（壳/插件尚未承接的过渡面）。
+  // 退役面不得回接 —— 见 src/__tests__/views/retiredMobileHostUiFace.test.ts
   routes: [
     {
       path: '/',
-      name: 'mobile-home',
-      component: () => import('@/components/MobileSwipeContainer.vue'),
-    },
-    {
-      path: '/mobile',
-      name: 'mobile-home-alt',
-      component: () => import('@/components/MobileSwipeContainer.vue'),
-    },
-    {
-      path: '/mobile/devices',
-      name: 'mobile-devices',
-      component: () => import('@/views/DevicesView.vue'),
-      meta: { standAlone: true },
-    },
-    {
-      path: '/mobile/sessions',
-      name: 'mobile-sessions',
-      component: () => import('@/views/SessionsView.vue'),
-      meta: { standAlone: true },
-    },
-    {
-      path: '/mobile/terminal/:id',
-      name: 'mobile-terminal',
-      component: () => import('@/views/TerminalView.vue'),
-    },
-    {
-      path: '/mobile/toolbox',
-      name: 'mobile-toolbox',
-      component: () => import('@/views/ToolboxView.vue'),
-      meta: { standAlone: true },
-    },
-    {
-      path: '/mobile/toolbox/preset-tasks',
-      name: 'mobile-preset-tasks',
-      component: () => import('@/views/PresetTasksView.vue'),
-      meta: { standAlone: true },
+      redirect: '/mobile/shell',
     },
     {
       path: '/mobile/files/:id',
       name: 'mobile-files',
       component: () => import('@/views/CodeExplorerView.vue'),
-      meta: { standAlone: true },
-    },
-    {
-      path: '/mobile/settings',
-      name: 'mobile-settings',
-      component: () => import('@/views/SettingsView.vue'),
       meta: { standAlone: true },
     },
     {
@@ -92,13 +54,7 @@ const router = createRouter({
       meta: { standAlone: true },
     },
     {
-      path: '/mobile/plugins',
-      name: 'mobile-plugins',
-      component: () => import('@/views/PluginView.vue'),
-      meta: { standAlone: true },
-    },
-    {
-      // 宿主壳（WASM 应用运行平台）：与既有 /mobile/** 实现并存的新入口，
+      // 宿主壳（WASM 应用运行平台）：应用默认入口，
       // 内部流转由壳自己的屏幕栈管理（src/shell/），不占用路由表
       path: '/mobile/shell',
       name: 'mobile-shell',

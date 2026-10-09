@@ -8,7 +8,7 @@
  * 事件经全局 emitter 分发（key 与宿主 plugin/events.ts 一致，插件无感知）。
  */
 import { reactive, ref } from 'vue'
-import type { Disposable } from '../../src/types'
+import type { Disposable } from '../../../src/types'
 
 export interface MockSession {
   id: string

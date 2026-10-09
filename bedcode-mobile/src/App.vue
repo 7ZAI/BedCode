@@ -1,6 +1,8 @@
 <template>
   <div :class="themeClasses.container">
-    <MobileLayout />
+    <!-- 路由出口：旧宿主布局（MobileLayout + MobileNav）随阶段 B 退役，
+         壳自行承担布局框与安全区（见 src/shell/views/ShellView.vue） -->
+    <router-view />
 
     <!-- Global Toast Container（vue-sonner，richColors 区分等级） -->
     <Toaster
@@ -38,7 +40,6 @@
 import { provide, computed, onMounted, onUnmounted } from 'vue'
 import { logger } from '@/utils/frontendLogger'
 import { Toaster } from 'vue-sonner'
-import MobileLayout from '@/components/MobileLayout.vue'
 // 开屏组件已禁用（恢复说明见模板注释块）
 // import SplashScreen from '@/components/SplashScreen.vue'
 // import SplashScreenNative from '@/components/SplashScreenNative.vue'

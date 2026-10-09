@@ -61,7 +61,7 @@ defineProps<{
 
 const emit = defineEmits<{ close: [] }>()
 
-// 安全区由 App.vue 注入（与 MobileNav 同一来源），缺省 0 不影响桌面预览。
+// 安全区由 App.vue 注入（与 ShellView 同一来源），缺省 0 不影响桌面预览。
 // 用 computed 而非 setup 期快照：安全区在 App 挂载后才就绪，快照会恒为 0
 const safeArea = inject<Ref<{ top: number; bottom: number; navigationBar?: number }> | undefined>(
   'safeArea',

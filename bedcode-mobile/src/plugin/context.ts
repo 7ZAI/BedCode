@@ -24,18 +24,24 @@ import type {
   ToolboxPageDescriptor,
   NavTabDescriptor,
   TerminalToolbarItemDescriptor,
-  SettingsSectionDescriptor,
   PluginRouteDescriptor,
   TerminalViewContribution,
   PluginDialogOptions,
   PluginDialogHandle,
+  ShellSurfaceContribution,
+  ShellSlotContribution,
+  ShellCapsuleItem,
+  ShellSettingsEntry,
 } from './types'
 import { hasPermissionForApi } from './permission'
 import * as pluginCmds from './commands'
 import * as pluginEvents from './events'
+import { defineComponent, h } from 'vue'
 import { getPluginRegistry } from './registry'
+import PluginViewHost from './components/PluginViewHost.vue'
 import { registerPluginRoute, openPluginRoute } from './routes'
 import { getSharedModule } from './shared-runtime'
+import { getShellRegistry } from '@/shell/registry'
 import { invoke } from '@tauri-apps/api/core'
 // 全局弹窗控制器：必须经包说明符解析（与 App.vue 挂载的 PluginGlobalDialog.vue 同源）。
 // 移动端 file: 依赖是快照拷贝，若直连源码相对路径会与组件产生两个模块实例，
@@ -174,10 +180,41 @@ export function createPluginContext(info: PluginInfo): PluginContext {
       disposables.push(disposable)
       return disposable
     },
-    registerSettingsSection(section: SettingsSectionDescriptor): Disposable {
-      requirePermission('ui.registerSettingsSection')
-      const registry = getPluginRegistry()
-      const disposable = registry.registerSettingsSection(info.id, section)
+    registerSurface(surface: ShellSurfaceContribution): Disposable {
+      // 宿主壳运行面：应用自持 UI 的挂载位，无特权动作——不做 requirePermission
+      // 快速失败（真源仲裁仍在 Rust host 原语层；本面不触发任何宿主能力）。
+      // appId 一律 = 插件 id（壳内应用模型与该插件同 id）。
+      //
+      // 壳直渲染运行面（不经旧插件 UI 宿主路径），但插件组件靠 inject('pluginContext')
+      // 取上下文——在此套 PluginViewHost 包装补 provide；与 pluginAppSource.resolveSurface
+      // 的旧路径同款（插件形态细节收在插件系统内，壳不认识插件）。
+      const wrapped = defineComponent({
+        name: `ShellSurface-${info.id}`,
+        // 壳透传 { app } prop：声明吞掉，避免作为未知 attr 落到根节点
+        props: { app: { type: Object, default: null } },
+        setup() {
+          return () => h(PluginViewHost, { pluginId: info.id, component: surface.component })
+        },
+      })
+      const disposable = getShellRegistry().registerSurface(info.id, {
+        ...surface,
+        component: wrapped,
+      })
+      disposables.push(disposable)
+      return disposable
+    },
+    registerSlot(slot: ShellSlotContribution): Disposable {
+      const disposable = getShellRegistry().registerSlot(info.id, slot)
+      disposables.push(disposable)
+      return disposable
+    },
+    registerCapsuleItem(item: ShellCapsuleItem): Disposable {
+      const disposable = getShellRegistry().registerCapsuleItem(info.id, item)
+      disposables.push(disposable)
+      return disposable
+    },
+    registerSettingsEntry(entry: ShellSettingsEntry): Disposable {
+      const disposable = getShellRegistry().registerSettingsEntry(info.id, entry)
       disposables.push(disposable)
       return disposable
     },

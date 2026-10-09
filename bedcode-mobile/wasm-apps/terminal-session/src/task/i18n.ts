@@ -52,6 +52,8 @@ const zhCN: Record<string, string> = {
   // ==================== 工具箱入口 ====================
   toolboxTitle: '自动任务',
   'toolbox.title': '自动任务',
+  // 壳内入口：胶囊菜单项（打开任务页；旧宿主退役后任务页的唯一入口）
+  capsuleTitle: '任务',
   'toolbox.tabs.history': '任务记录',
   'toolbox.tabs.scheduled': '定时任务',
   // ==================== 任务记录页 ====================
@@ -166,6 +168,8 @@ const en: Record<string, string> = {
   // ==================== Toolbox entries ====================
   toolboxTitle: 'Auto Tasks',
   'toolbox.title': 'Auto Tasks',
+  // 壳内入口：胶囊菜单项（任务页入口）
+  capsuleTitle: 'Tasks',
   'toolbox.tabs.history': 'Task History',
   'toolbox.tabs.scheduled': 'Scheduled Jobs',
   // ==================== Task History tab ====================

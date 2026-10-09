@@ -5,7 +5,7 @@
  * 响应式数据供宿主 UI 组件消费
  */
 
-import type { Disposable, PluginContext, ToolboxPageDescriptor, NavTabDescriptor, TerminalToolbarItemDescriptor, SettingsSectionDescriptor, PluginRouteDescriptor, TerminalViewContribution } from './types'
+import type { Disposable, PluginContext, ToolboxPageDescriptor, NavTabDescriptor, TerminalToolbarItemDescriptor, PluginRouteDescriptor, TerminalViewContribution } from './types'
 import { ref, markRaw, type Ref } from 'vue'
 
 /** 注册的工具箱视图 */
@@ -39,14 +39,6 @@ interface RegisteredTerminalToolbarItem {
   onClick?: () => void
 }
 
-/** 注册的设置区域 */
-interface RegisteredSettingsSection {
-  pluginId: string
-  id: string
-  section: string
-  component: any
-}
-
 /** 注册的插件路由（宿主 addRoute 至 /mobile/plugins/{pluginId}/{routeId}） */
 interface RegisteredPluginRoute {
   pluginId: string
@@ -69,7 +61,6 @@ class PluginRegistryClass {
   private toolboxViewsMap = new Map<string, RegisteredToolboxView>()
   private navTabsMap = new Map<string, RegisteredNavTab>()
   private terminalToolbarMap = new Map<string, RegisteredTerminalToolbarItem>()
-  private settingsSectionsMap = new Map<string, RegisteredSettingsSection>()
   private routesMap = new Map<string, RegisteredPluginRoute>()
   private terminalViewsMap = new Map<string, RegisteredTerminalView>()
   private contexts = new Map<string, PluginContext>()
@@ -78,7 +69,6 @@ class PluginRegistryClass {
   readonly toolboxViews: Ref<RegisteredToolboxView[]> = ref([])
   readonly navTabs: Ref<RegisteredNavTab[]> = ref([])
   readonly terminalToolbarItems: Ref<RegisteredTerminalToolbarItem[]> = ref([])
-  readonly settingsSections: Ref<RegisteredSettingsSection[]> = ref([])
   readonly routes: Ref<RegisteredPluginRoute[]> = ref([])
   /** 终端主视图（单实例语义：终端 app 只有一个运行面注册者，按先注册优先解析） */
   readonly terminalView: Ref<RegisteredTerminalView | null> = ref(null)
@@ -142,24 +132,6 @@ class PluginRegistryClass {
       dispose: () => {
         this.terminalToolbarMap.delete(key)
         this.updateReactiveTerminalToolbar()
-      },
-    }
-  }
-
-  /** 注册设置区域 */
-  registerSettingsSection(pluginId: string, section: SettingsSectionDescriptor): Disposable {
-    const key = `${pluginId}:${section.id}`
-    this.settingsSectionsMap.set(key, {
-      pluginId,
-      id: section.id,
-      section: section.section,
-      component: markRaw(section.component),
-    })
-    this.updateReactiveSettingsSections()
-    return {
-      dispose: () => {
-        this.settingsSectionsMap.delete(key)
-        this.updateReactiveSettingsSections()
       },
     }
   }
@@ -239,10 +211,7 @@ class PluginRegistryClass {
     }
     this.updateReactiveTerminalToolbar()
 
-    for (const key of [...this.settingsSectionsMap.keys()]) {
-      if (key.startsWith(`${pluginId}:`)) this.settingsSectionsMap.delete(key)
-    }
-    this.updateReactiveSettingsSections()
+
 
     // 插件路由：摘除宿主动态路由（removeRoute）并清理记录
     for (const [key, rec] of [...this.routesMap.entries()]) {
@@ -269,10 +238,6 @@ class PluginRegistryClass {
 
   private updateReactiveTerminalToolbar() {
     this.terminalToolbarItems.value = [...this.terminalToolbarMap.values()]
-  }
-
-  private updateReactiveSettingsSections() {
-    this.settingsSections.value = [...this.settingsSectionsMap.values()]
   }
 
   private updateReactiveRoutes() {

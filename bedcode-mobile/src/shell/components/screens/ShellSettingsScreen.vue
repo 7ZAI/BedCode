@@ -124,6 +124,28 @@ const deviceLabel = computed(() => {
 
 const platformEntries = computed<PlatformEntry[]>(() => [
   {
+    id: 'connection',
+    label: t('shell.settings.connection'),
+    hint: t('shell.settings.connectionHint'),
+    icon: 'M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71 M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71',
+    // 连接 / 认证 / 出站沿用既有设置页：壳不重复实现一套引擎设置（退役旧宿主前保持同源）
+    onSelect: () => router.push({ name: 'mobile-settings-connection' }),
+  },
+  {
+    id: 'authentication',
+    label: t('shell.settings.authentication'),
+    hint: t('shell.settings.authenticationHint'),
+    icon: 'M7 11V8a5 5 0 0110 0v3 M5 11h14v10H5z',
+    onSelect: () => router.push({ name: 'mobile-settings-authentication' }),
+  },
+  {
+    id: 'egress',
+    label: t('shell.settings.egress'),
+    hint: t('shell.settings.egressHint'),
+    icon: 'M14 5h6v6 M20 5l-8 8 M18 14v4a2 2 0 01-2 2H6a2 2 0 01-2-2V8a2 2 0 012-2h4',
+    onSelect: () => router.push({ name: 'mobile-settings-egress' }),
+  },
+  {
     id: 'appearance',
     label: t('shell.settings.appearance'),
     hint: t('shell.settings.appearanceHint'),

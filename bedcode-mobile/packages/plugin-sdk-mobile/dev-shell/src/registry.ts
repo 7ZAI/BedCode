@@ -9,13 +9,16 @@
  *
  * 与宿主 plugin/registry.ts 的职责对应，但只服务浏览器 dev-shell 场景。
  */
-import { reactive, ref } from 'vue'
+import { ref } from 'vue'
 import type {
   Disposable,
   NavTabDescriptor,
   PluginDevMock,
   PluginRouteDescriptor,
-  SettingsSectionDescriptor,
+  ShellCapsuleItem,
+  ShellSettingsEntry,
+  ShellSlotContribution,
+  ShellSurfaceContribution,
   TerminalToolbarItemDescriptor,
   TerminalViewContribution,
   ToolboxPageDescriptor,
@@ -89,7 +92,7 @@ export type DevPluginState = 'loaded' | 'activated' | 'deactivated' | 'error'
 export interface DevPluginRecord {
   id: string
   name: string
-  manifest: Record<string, any>
+  manifest: Record<string, unknown>
   entry: any
   state: DevPluginState
   error?: string
@@ -118,10 +121,6 @@ export interface TerminalToolbarEntry {
   pluginId: string
   item: TerminalToolbarItemDescriptor
 }
-export interface SettingsSectionEntry {
-  pluginId: string
-  section: SettingsSectionDescriptor
-}
 export interface RouteEntry {
   pluginId: string
   route: PluginRouteDescriptor
@@ -132,12 +131,33 @@ export interface TerminalViewEntry {
   pluginId: string
   view: TerminalViewContribution
 }
+// 壳注册桥四面（与宿主 context.ts / types.ts 同形状；dev-shell 无壳 UI，注册只记录 + 回收，
+// 供 dev-shell 后续按需渲染与插件开发自检）
+export interface SurfaceEntry {
+  pluginId: string
+  surface: ShellSurfaceContribution
+}
+export interface SlotEntry {
+  pluginId: string
+  slot: ShellSlotContribution
+}
+export interface CapsuleEntry {
+  pluginId: string
+  item: ShellCapsuleItem
+}
+export interface SettingsEntry {
+  pluginId: string
+  entry: ShellSettingsEntry
+}
 const toolboxPages = ref<ToolboxPageEntry[]>([])
 const navTabs = ref<NavTabEntry[]>([])
 const terminalToolbarItems = ref<TerminalToolbarEntry[]>([])
-const settingsSections = ref<SettingsSectionEntry[]>([])
 const routes = ref<RouteEntry[]>([])
 const terminalViews = ref<TerminalViewEntry[]>([])
+const surfaces = ref<SurfaceEntry[]>([])
+const slots = ref<SlotEntry[]>([])
+const capsules = ref<CapsuleEntry[]>([])
+const settingsEntries = ref<SettingsEntry[]>([])
 
 /** 从列表中移除条目（dispose 回调） */
 function makeDisposable<T>(list: { value: T[] }, entry: T): Disposable {
@@ -183,14 +203,33 @@ export function registerTerminalView(
   return makeDisposable(terminalViews, entry)
 }
 
-export function registerSettingsSection(
-  pluginId: string,
-  section: SettingsSectionDescriptor,
-): Disposable {
-  const entry: SettingsSectionEntry = { pluginId, section }
-  settingsSections.value.push(entry)
-  pushLog('debug', pluginId, `注册设置区: ${section.section}`)
-  return makeDisposable(settingsSections, entry)
+export function registerSurface(pluginId: string, surface: ShellSurfaceContribution): Disposable {
+  const entry: SurfaceEntry = { pluginId, surface }
+  surfaces.value.push(entry)
+  // ShellSurfaceContribution 无 id（只有 component + 可选 accent），日志用 pluginId 区分
+  pushLog('debug', pluginId, '注册壳运行面')
+  return makeDisposable(surfaces, entry)
+}
+
+export function registerSlot(pluginId: string, slot: ShellSlotContribution): Disposable {
+  const entry: SlotEntry = { pluginId, slot }
+  slots.value.push(entry)
+  pushLog('debug', pluginId, `注册壳快捷卡片: ${slot.id}`)
+  return makeDisposable(slots, entry)
+}
+
+export function registerCapsuleItem(pluginId: string, item: ShellCapsuleItem): Disposable {
+  const entry: CapsuleEntry = { pluginId, item }
+  capsules.value.push(entry)
+  pushLog('debug', pluginId, `注册胶囊菜单项: ${item.label}`)
+  return makeDisposable(capsules, entry)
+}
+
+export function registerSettingsEntry(pluginId: string, entry: ShellSettingsEntry): Disposable {
+  const registered: SettingsEntry = { pluginId, entry }
+  settingsEntries.value.push(registered)
+  pushLog('debug', pluginId, `注册设置入口: ${entry.id}`)
+  return makeDisposable(settingsEntries, registered)
 }
 
 export function registerRoute(pluginId: string, route: PluginRouteDescriptor): Disposable {
@@ -242,4 +281,4 @@ export function goBackView(): void {
   activeView.value = viewStack.value[viewStack.value.length - 1] ?? null
 }
 
-export { activeView, logs, plugins, toolboxPages, navTabs, terminalToolbarItems, settingsSections, routes, terminalViews }
+export { activeView, logs, plugins, toolboxPages, navTabs, terminalToolbarItems, routes, terminalViews }

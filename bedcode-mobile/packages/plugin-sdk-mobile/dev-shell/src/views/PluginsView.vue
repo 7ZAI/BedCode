@@ -8,13 +8,18 @@ import {
   openActiveView,
   plugins,
   routes,
-  settingsSections,
   terminalToolbarItems,
 } from '../registry'
 import { deactivatePlugin, loadPlugins } from '../loader'
 import { isSvgIcon } from '../utils/icon'
 
 const { t } = useI18n()
+
+/** manifest 为 `Record<string, unknown>`（DevPluginRecord）；取字符串字段需显式收窄 */
+function manifestStr(manifest: Record<string, unknown>, key: string): string | undefined {
+  const v = manifest[key]
+  return typeof v === 'string' ? v : undefined
+}
 
 const stateLabel: Record<string, string> = {
   activated: 'devshell.plugins.state.activated',
@@ -28,19 +33,6 @@ const stateClass: Record<string, string> = {
   loaded: 'bg-[var(--mobile-accent-muted)] text-[var(--mobile-accent)]',
   deactivated: 'bg-[var(--mobile-bg-tertiary)] text-[var(--mobile-text-muted)]',
   error: 'bg-[var(--mobile-error-muted)] text-[var(--mobile-error)]',
-}
-
-function openSettings(pluginId: string, section: string) {
-  const entry = settingsSections.value.find(
-    (s) => s.pluginId === pluginId && s.section.section === section,
-  )
-  if (!entry) return
-  openActiveView({
-    kind: 'settings',
-    pluginId,
-    title: entry.section.section,
-    component: entry.section.component,
-  })
 }
 
 function openRoute(pluginId: string, routeId: string) {
@@ -77,15 +69,15 @@ async function toggle(pluginId: string) {
     <div v-for="record in plugins" :key="record.id" class="rounded-xl bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] p-4 space-y-3">
       <!-- 头部：图标 + 名称 + 状态 -->
       <div class="flex items-center gap-3">
-        <span v-if="isSvgIcon(record.manifest.icon)" class="w-8 h-8 flex items-center justify-center text-[var(--mobile-accent)]">
+        <span v-if="isSvgIcon(manifestStr(record.manifest, 'icon'))" class="w-8 h-8 flex items-center justify-center text-[var(--mobile-accent)]">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-8 h-8">
-            <path :d="record.manifest.icon" />
+            <path :d="manifestStr(record.manifest, 'icon')" />
           </svg>
         </span>
-        <span v-else class="text-2xl leading-none">{{ record.manifest.icon || '🧩' }}</span>
+        <span v-else class="text-2xl leading-none">{{ manifestStr(record.manifest, 'icon') || '🧩' }}</span>
         <div class="flex-1 min-w-0">
           <p class="text-sm font-semibold text-[var(--mobile-text-primary)] truncate">{{ record.name }}</p>
-          <p class="text-[11px] text-[var(--mobile-text-muted)] truncate">{{ record.id }} · v{{ record.manifest.version || '-' }}</p>
+          <p class="text-[11px] text-[var(--mobile-text-muted)] truncate">{{ record.id }} · v{{ manifestStr(record.manifest, 'version') || '-' }}</p>
         </div>
         <span class="px-2 py-0.5 rounded-full text-[11px] flex-shrink-0" :class="stateClass[record.state]">
           {{ t(stateLabel[record.state]) }}
@@ -114,20 +106,6 @@ async function toggle(pluginId: string) {
 
       <!-- 注册项一览 -->
       <div class="space-y-2 text-xs">
-        <div v-if="settingsSections.filter((s) => s.pluginId === record.id).length">
-          <p class="text-[var(--mobile-text-muted)] mb-1">{{ t('devshell.plugins.settings') }}</p>
-          <div class="flex flex-wrap gap-1.5">
-            <button
-              v-for="s in settingsSections.filter((x) => x.pluginId === record.id)"
-              :key="s.section.section"
-              class="px-2 py-1 rounded-md bg-[var(--mobile-bg-tertiary)] text-[var(--mobile-text-secondary)] hover:text-[var(--mobile-accent)] transition-colors duration-200"
-              @click="openSettings(record.id, s.section.section)"
-            >
-              {{ s.section.section }}
-            </button>
-          </div>
-        </div>
-
         <div v-if="routes.filter((r) => r.pluginId === record.id).length">
           <p class="text-[var(--mobile-text-muted)] mb-1">{{ t('devshell.plugins.routes') }}</p>
           <div class="flex flex-wrap gap-1.5">

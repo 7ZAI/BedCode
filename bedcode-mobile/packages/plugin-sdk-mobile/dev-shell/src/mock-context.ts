@@ -35,9 +35,12 @@ import {
   goBackView,
   openActiveView,
   pushLog,
+  registerCapsuleItem,
   registerNavTab,
   registerRoute,
-  registerSettingsSection,
+  registerSettingsEntry,
+  registerSlot,
+  registerSurface,
   registerTerminalToolbarItem,
   registerTerminalView,
   registerToolboxPage,
@@ -113,8 +116,17 @@ export function createMockContext(pluginId: string): PluginContext {
     registerTerminalView(view) {
       return track(registerTerminalView(pluginId, view))
     },
-    registerSettingsSection(section) {
-      return track(registerSettingsSection(pluginId, section))
+    registerSurface(surface) {
+      return track(registerSurface(pluginId, surface))
+    },
+    registerSlot(slot) {
+      return track(registerSlot(pluginId, slot))
+    },
+    registerCapsuleItem(item) {
+      return track(registerCapsuleItem(pluginId, item))
+    },
+    registerSettingsEntry(entry) {
+      return track(registerSettingsEntry(pluginId, entry))
     },
     registerRoute(route) {
       const disposable = track(registerRoute(pluginId, route))
