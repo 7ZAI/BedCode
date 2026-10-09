@@ -40,7 +40,7 @@ use crate::PtyOutputSink;
 // ==================== 事件名与限频常量 ====================
 
 /// 输出可用事件名（topic = `<owner>::pty:output`；与 SDK `PTY_OUTPUT` 常量逐字一致，
-/// 漂移锁见宿主侧 `wasm_core::host_api::tests::pty_wiring`）
+/// 漂移锁见宿主侧 `src-tauri/tests/pty_wiring.rs`）
 pub const EVENT_OUTPUT: &str = "pty:output";
 
 /// 通知限频间隔（ms）：同一句柄两次通知的最小间隔

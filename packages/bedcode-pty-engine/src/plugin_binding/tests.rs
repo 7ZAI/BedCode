@@ -10,7 +10,7 @@
 //!
 //! ## 夹具：迷你宿主（[`TestCtx`]）
 //!
-//! 宿主侧的等价物是 `wasm_core::host_api::pty::HostPtyPorts`（真 PermissionManager +
+//! 宿主侧的等价物是 `src-tauri/src/plugin/pty.rs` 的 `HostPtyPorts`（真 PermissionManager +
 //! 真 MessageBus + 真 AppConfig）。本 crate 不能依赖宿主（那会造环），故夹具逐项对应：
 //!
 //! | 端口方法 | 宿主实现 | 本夹具 |

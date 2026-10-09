@@ -6,10 +6,12 @@
 //! 真源。属主隔离（`with_entry`）与配额判据（`registered_count_for`）都在这里。
 //!
 //! ② **配额表**（`QUOTAS`：属主 → 生效条数）：真源是 manifest 的 `ptyQuota` 声明，
-//! 登记点在插件加载漏斗（宿主侧 `manager::loader`），区间合法性在解析期已由宿主
-//! 的 `validate_pty_quota` 把关，故本模块只取不判。表内无记录 = 未声明（既有插件、
-//! 无头测试上下文）→ 取内核默认档 [`PLUGIN_PTY_MAX_SESSIONS_PER_PLUGIN`]，与引入
-//! 声明字段之前的行为逐字一致。
+//! 登记点在插件加载漏斗（域侧 `plugin_binding::on_manifest_load`，宿主的
+//! `manager::loader` 只下发 manifest 原文）；区间合法性由**同一处**仲裁（越界即拒绝
+//! 装载，票 02 批次 03 从内核 `validate_pty_quota` 迁来），故本模块只取不判。
+//! 表内无记录 = 未声明（既有插件、无头测试上下文）→ 取默认档
+//! [`PLUGIN_PTY_MAX_SESSIONS_PER_PLUGIN`]（真源 `bedcode-server-base::constants`），
+//! 与引入声明字段之前的行为逐字一致。
 //!
 //! ③ **回收面**（停用回收 / 引擎层全量回收 / 在册计数）：宿主生命周期动作，**不经
 //! 权限门、不取参数**——停用时插件已不可调用任何原语。

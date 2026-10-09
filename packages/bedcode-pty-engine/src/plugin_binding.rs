@@ -17,8 +17,10 @@
 //!   ports.rs     边界：权限门 / 总线投递 / 配置快照 / 异步桥 / 任务派生
 //! ```
 //!
-//! 宿主侧只剩一个 adapter（`wasm_core::host_api::pty::HostPtyPorts`）与一次开机装配
-//! 调用——与 http / ws / peer-net / mdns 四域同形。
+//! 宿主侧只剩一个 adapter（票 02 批次 02 起住宿主
+//! `bedcode-desktop/src-tauri/src/plugin/pty.rs` 的 `HostPtyPorts`，原
+//! `wasm_core::host_api::pty`）与一次开机装配调用——与 http / ws / peer-net / mdns
+//! 四域同形。
 //!
 //! **脱绑（能力域脱绑 P4）**：WIT 绑定层（`DESC` / `HostModule` / `inventory::submit!` /
 //! `ports_for` / `bindgen!` / `impl Host`）以 `#[cfg(feature = "desktop-host")]` 门控——
@@ -62,7 +64,7 @@ pub use registry::{
 // WIT 绑定层依赖（host-kit / wasmtime）只随 `desktop-host` feature 编译：
 // 能力域默认形态 = 纯引擎机制（零 WIT 依赖），任何宿主可直接引用。
 #[cfg(feature = "desktop-host")]
-use bedcode_host_kit::{HostModule, HostModuleDesc, ModuleEntry, WasmPluginState};
+use bedcode_host_kit::{DomainHooks, HostModule, HostModuleDesc, ModuleEntry, WasmPluginState};
 #[cfg(feature = "desktop-host")]
 use wasmtime::component::{bindgen, Linker};
 
@@ -125,6 +127,117 @@ static MODULE: PtyModule = PtyModule;
 #[cfg(feature = "desktop-host")]
 inventory::submit! {
     ModuleEntry { module: &MODULE }
+}
+
+/// 装载期回调：从 manifest **原文**解析本域配额（`ptyQuota`）并**仲裁区间**
+///
+/// **为什么内核只下发原文**：manifest 字段的解释权属于能力域——内核一旦解释
+/// 「pty 配额是多少」就是在解释产品声明（AGENTS §5.1 B6）。字段名随 SDK 演进时
+/// 只改本函数，内核与 host-kit 都不动。
+///
+/// **区间仲裁也归本域（票 02 批次 03）**：`1..=PLUGIN_PTY_SESSIONS_CEILING_PER_PLUGIN`
+/// 这条判据原在内核 `manager/validation.rs::validate_pty_quota`（内核为此要读 SDK
+/// manifest 的 `pty_quota` 字段，等于替本域解释声明语义）。判据落在装载期而不是
+/// `spawn`：配额是自我声明的静态事实，装载时就能判定，拖到运行期等于把配置错误
+/// 转嫁成「第 N+1 条会话创建失败」的产品故障。越界与 0 一律 `Err` ⇒ 内核不装载该
+/// 插件，**不夹取**到上限（同 `PLUGIN_PTY_RING_MAX_BYTES` 口径：静默降级会让插件按
+/// 自己声明的并发数规划业务、实际却少得多）。
+///
+/// 解析失败（字段缺失 / 类型不符）落默认档（`register_quota` 的 `None` 分支），
+/// 与「未声明」同形——既有插件零迁移。
+#[cfg(feature = "desktop-host")]
+use bedcode_server_base::constants::{
+    PLUGIN_PTY_MAX_SESSIONS_PER_PLUGIN, PLUGIN_PTY_SESSIONS_CEILING_PER_PLUGIN,
+};
+
+#[cfg(feature = "desktop-host")]
+fn on_manifest_load(plugin_id: &str, manifest_json: &str) -> Result<(), String> {
+    let declared: Option<usize> = serde_json::from_str::<serde_json::Value>(manifest_json)
+        .ok()
+        .and_then(|value| value.get("ptyQuota").cloned())
+        .and_then(|value| serde_json::from_value::<Option<usize>>(value).ok().flatten());
+    if let Some(quota) = declared {
+        if quota == 0 || quota > PLUGIN_PTY_SESSIONS_CEILING_PER_PLUGIN {
+            // 先判后动：拒绝时不登记（不让越界值残留在配额表）
+            return Err(format!(
+                "plugin.json ptyQuota out of range ({quota}); allowed 1..={PLUGIN_PTY_SESSIONS_CEILING_PER_PLUGIN}, omit the field for the default {PLUGIN_PTY_MAX_SESSIONS_PER_PLUGIN}"
+            ));
+        }
+    }
+    registry::register_quota(plugin_id, declared);
+    Ok(())
+}
+
+/// 停用期回调：回收本插件的全部私有 PTY
+///
+/// 适配器：域内 `purge_for_plugin` 返回回收计数（关停面要用），而钩子契约是
+/// `fn(&str)`——回收计数对「单个插件停用」没有消费者，在此处就地记 debug 日志
+/// 吸收，不让返回值形状反向污染通用契约。
+#[cfg(feature = "desktop-host")]
+fn on_plugin_purge(plugin_id: &str) {
+    let reclaimed = registry::purge_for_plugin(plugin_id);
+    tracing::debug!(
+        plugin_id = %plugin_id,
+        count = reclaimed,
+        "host-pty: 停用回收完成"
+    );
+}
+
+/// 生命周期钩子自报（票 02 批次 01 机制）
+///
+/// 内核侧改为遍历 `DomainHooksRegistry`，**不再点名本域**——这是内核能去掉对本
+/// crate 依赖的前提（批次 02 第三步摘依赖）。
+#[cfg(feature = "desktop-host")]
+pub static HOOKS: DomainHooks = DomainHooks {
+    name: MODULE_NAME,
+    on_manifest_load: Some(on_manifest_load),
+    on_plugin_purge: Some(on_plugin_purge),
+};
+
+#[cfg(feature = "desktop-host")]
+bedcode_host_kit::submit_hooks!(HOOKS);
+
+/// 装载期配额仲裁的域侧单测（原内核 `manager/validation.rs` 两条用例迁此，
+/// 票 02 批次 03：判据随真源一起搬离内核）
+#[cfg(all(test, feature = "desktop-host"))]
+mod manifest_quota_tests {
+    use super::*;
+    use crate::plugin_binding::registry::quota_of;
+    use bedcode_server_base::constants::PLUGIN_PTY_MAX_SESSIONS_PER_PLUGIN as DEFAULT_MAX;
+    use bedcode_server_base::constants::PLUGIN_PTY_SESSIONS_CEILING_PER_PLUGIN as CEILING;
+
+    /// 带 `ptyQuota` 声明的 manifest 原文（键名就是 SDK 的 camelCase `ptyQuota`）
+    fn manifest(quota: &str) -> String {
+        format!(
+            r#"{{"id":"com.bedcode.quota","name":"quota","version":"1.0.0","ptyQuota":{quota}}}"#
+        )
+    }
+
+    /// 正例：缺省（= 默认档，既有插件零迁移）与区间两端；
+    /// 反例：0 与越上限——一律拒绝装载，且不夹取、不登记
+    #[test]
+    fn quota_accepts_absent_and_in_range_rejects_out_of_range() {
+        let owner = "pty-test.manifest-quota";
+        on_manifest_load(owner, r#"{"id":"com.bedcode.quota","name":"quota","version":"1.0.0"}"#)
+            .expect("缺省即默认档，不得拒绝");
+        assert_eq!(quota_of(owner), DEFAULT_MAX, "未声明 ⇒ 默认档");
+
+        on_manifest_load(owner, &manifest("1")).expect("声明下界可装载");
+        assert_eq!(quota_of(owner), 1, "声明值必须原样生效");
+        on_manifest_load(owner, &manifest(&CEILING.to_string())).expect("声明上界可装载");
+        assert_eq!(quota_of(owner), CEILING);
+
+        for bad in [0, CEILING + 1, 10_000] {
+            let err = on_manifest_load(owner, &manifest(&bad.to_string()))
+                .err()
+                .unwrap_or_else(|| panic!("ptyQuota={bad} 必须被拒绝"));
+            assert!(
+                err.contains(&bad.to_string()) && err.contains("ptyQuota"),
+                "错误必须点名越界值与字段名，got: {err}"
+            );
+        }
+        assert_eq!(quota_of(owner), CEILING, "被拒的声明不得改写在册配额（先判后动）");
+    }
 }
 
 #[cfg(feature = "desktop-host")]

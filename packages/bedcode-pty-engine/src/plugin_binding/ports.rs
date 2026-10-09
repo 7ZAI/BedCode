@@ -67,7 +67,8 @@ pub struct PtyHostConfig {
 
 /// 宿主能力端口
 ///
-/// 实现方是各端宿主的适配器（桌面端见 `wasm_core::host_api::pty::HostPtyPorts`）。
+/// 实现方是各端宿主的适配器（桌面端见 `bedcode-desktop/src-tauri/src/plugin/pty.rs`
+/// 的 `HostPtyPorts`；票 02 批次 02 从 wasm-core `host_api/pty.rs` 整文件迁入）。
 pub trait PtyPorts: Send + Sync + 'static {
     /// 权限判定（`pty:spawn` / `pty:io`）
     ///
