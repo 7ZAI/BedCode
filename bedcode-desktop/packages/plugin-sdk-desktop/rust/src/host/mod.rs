@@ -41,7 +41,7 @@ pub use bus::{
 pub use config::{ConfigKey, HostConfig};
 pub use connection::HostConnection;
 pub use crypto::{CryptoKeypair, HostCrypto};
-pub use database::{HostDatabase, HostPluginDatabase};
+pub use database::HostPluginDatabase;
 pub use events::HostEvents;
 pub use fs::{FsDirEntry, FsNodeType, FsStat, HostFs};
 pub use http::HostHttp;
@@ -160,7 +160,6 @@ mod tests {
 /// blanket impl：任何实现了全部子 trait 的类型自动获得此 trait。
 pub trait HostApi:
     HostStorage
-    + HostDatabase
     + HostPluginDatabase
     + HostEvents
     + HostHttp
@@ -180,7 +179,6 @@ pub trait HostApi:
 
 impl<T> HostApi for T where
     T: HostStorage
-        + HostDatabase
         + HostPluginDatabase
         + HostEvents
         + HostHttp

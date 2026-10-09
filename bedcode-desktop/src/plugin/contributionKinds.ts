@@ -97,7 +97,6 @@ export const HIGH_RISK_PERMISSIONS: readonly string[] = [
   'process:run',
   'pty:spawn',
   'terminal:input',
-  'database:main',
 ]
 
 /** 权限元数据注册表（覆盖 SDK 词汇表全部条目；未知权限回退原始串，见 getPermissionMeta） */
@@ -178,12 +177,6 @@ const PERMISSION_META: Record<string, PermissionMeta> = {
     emoji: '🌐',
     titleKey: 'desktop.plugin.perm.network:http.title',
     descKey: 'desktop.plugin.perm.network:http.desc',
-  },
-  'database:main': {
-    emoji: '🗄️',
-    titleKey: 'desktop.plugin.perm.database:main.title',
-    descKey: 'desktop.plugin.perm.database:main.desc',
-    riskKey: 'desktop.plugin.perm.database:main.risk',
   },
   'fs:read': {
     emoji: '📂',

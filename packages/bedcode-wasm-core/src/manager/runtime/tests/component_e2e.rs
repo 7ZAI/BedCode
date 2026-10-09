@@ -54,17 +54,13 @@ fn test_component_roundtrip() {
             "guest 侧 bus_publish 必须成功"
         );
 
-        // 主库 + 插件私有库往返（走专用命令 `test.db-roundtrip`——不挂在 `test.echo`
-        // 上是因后者被燃料/性能探针高频调用，不宜背两次建表+插入+查询的开销）
+        // 插件私有库往返（走专用命令 `test.db-roundtrip`——不挂在 `test.echo`
+        // 上是因后者被燃料/性能探针高频调用，不宜背两次建表+插入+查询的开销。
+        // 2026-10-09：主库段随 host-database 退役，本命令只回私有库往返）
         let db_result = plugin
             .invoke_command("test.db-roundtrip", r#"{}"#)
             .expect("db roundtrip command");
         let db_json: serde_json::Value = serde_json::from_str(&db_result).unwrap();
-
-        // 主库往返：前缀校验通过 + 建表 + 插入 + 查询
-        let db_rows = db_json["dbRows"].as_array().expect("dbRows array");
-        assert_eq!(db_rows.len(), 1);
-        assert_eq!(db_rows[0]["val"], "hello");
 
         // 插件独立库：**票 08 起无头测试也走真实私有库**——`WasmHostContext`
         // 新增 `plugin_db_root` 注入（`aot_cache_dir` 同模式），不再退化为

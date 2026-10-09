@@ -231,6 +231,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
+name = "bedcode-host-api-core"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "rusqlite",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "bedcode-host-kit"
 version = "0.1.0"
 dependencies = [
@@ -290,6 +300,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "bedcode-host-api-core",
  "bedcode-link-crypto",
  "futures-util",
  "local-ip-address",

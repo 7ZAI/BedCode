@@ -73,11 +73,12 @@ impl AbiGuest for ComponentTestPlugin {
             return 999;
         }
         // 与 SDK bedcode_plugin_api_mobile::abi::ABI_VERSION 同步
-        // （=18，v18 = host-notify 域收编 host-events.notify（通知/震动/声音，
-        //  移动特有域）；叠加 v17 host-terminal / terminal-hooks 整面退役（票 15 阶段 B）、
+        // （=19，v19 = host-database（主库）整面退役——主库由 wasm-core 管理、
+        //  不给插件直接调用，2026-10-09 双端机制决策；叠加 v18 host-notify 域收编、
+        //  v17 host-terminal / terminal-hooks 整面退役（票 15 阶段 B）、
         //  v16 认证/配对编排下沉、v15 终端订阅协议客户端迁插件、
         //  v14 host-websocket 客户端域 5 函数）
-        18
+        19
     }
 }
 

@@ -9,13 +9,20 @@ use tauri::Emitter;
 /// 非法 JSON 载荷直接 `Err`（H-05）：降级成字符串会让 guest 以为已投递、前端
 /// 收到形状不同的载荷、监听方按原 schema 解析运行时失败且无信号——静默降级
 /// 的断链形态。插件侧载荷错误应在来源处可见。
+/// 发送 Tauri 事件到前端
+///
+/// 无头上下文（测试）没有 AppHandle，事件无处投递，返回 Ok 保持幂等
+///
+/// 非法 JSON 载荷直接 `Err`（H-05）：降级成字符串会让 guest 以为已投递、前端
+/// 收到形状不同的载荷、监听方按原 schema 解析运行时失败且无信号——静默降级
+/// 的断链形态。插件侧载荷错误应在来源处可见。实现层（严格解析语义）在共享核
+/// `bedcode-host-api-core::events`（票 18 批次 4）。
 pub(crate) fn emit_event(
     app: &dyn crate::host_api::context::AppHandleScope,
     event_name: &str,
     payload_json: &str,
 ) -> Result<(), String> {
-    let json_payload: serde_json::Value =
-        serde_json::from_str(payload_json).map_err(|e| format!("event emit failed: payload is not valid JSON: {e}"))?;
+    let json_payload = bedcode_host_api_core::events::parse_event_payload(payload_json)?;
     let Some(app_handle) = app.app_handle() else {
         tracing::warn!(event = %event_name, "emit_event: app_handle not available in headless context");
         return Ok(());

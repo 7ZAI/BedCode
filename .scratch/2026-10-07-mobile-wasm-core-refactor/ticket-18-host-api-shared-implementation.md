@@ -1,6 +1,6 @@
 # 票 18 · host_api 实现层共享（无 WIT 依赖域「实现层 + 各端 adapter」两层化）
 
-Status: **实施中——批次 1（storage）+ 批次 2（bus）已完成（2026-10-09）：桌面门禁全绿；移动 lib 编译过、测试门禁因并行 M3 在途暂挂（§8/§9）**
+Status: **实施完成（2026-10-09 批次 3+4 收口 + 主库收归）：storage/bus/database/log/events 五域上移共享核；config/fs/http 判定不抽（§10）；主库由 wasm-core 管理、不给插件直接调用（`host-database` 双端退役，A1/A3 锁更新至 v19，§11）；全链路门禁绿**
 专项: `.scratch/2026-10-07-mobile-wasm-core-refactor`（阶段 4 第二票）
 专项: `.scratch/2026-10-07-mobile-wasm-core-refactor`（阶段 4 第二票）
 依据: spec §5 票 18 + ADR 0040（选项 C 第二步：fork 面收缩到「WIT 绑定 + host_api 移动域」）+ 票 17 §7（范式统一留本票）+ ADR 0035/0037（能力域/机制核抽取先例）。
@@ -156,3 +156,130 @@ WIT 绑定层（各自）：  component.rs 的 bindgen trait impl 调各端 adap
 | 移动宿主 `cargo test` | 同上暂挂（同一编译图） |
 
 **遗留与联动**：① 移动测试门禁 + 插件三方案例回归待 M3 收口后补跑（批次 1+2 一并）；② 行为对齐项（移动命名空间/订阅面门 + JSON 严格化）建议真机复验后随批转默认；③ 票 19 Part B 对照锁需覆盖 topic 形态机制三方（共享核 / 桌面 SDK / 移动 SDK 无助手——只锁共享核 ↔ 桌面 SDK）。
+
+## 10. 批次 3 + 4 实施记录（2026-10-09，database / log / events + config-fs-http 不抽裁决）
+
+**方向裁决（2026-10-09 用户指令）**：「以目前 wasm-core 具有的机制为准 重构移动端」——
+共享核承载**桌面完整机制**（非双端共性子集），移动端 adapter 接入后自动补齐缺失机制；
+前两批「行为对齐」先例（移动获得系统空间守卫 / 总线门禁）推广到全部剩余域。
+
+### 批次 3 · database 域（以桌面机制为完整基准）
+
+**共享核 `src/database.rs`**（机制级依赖新增 rusqlite 0.32 hooks + regex）：
+
+1. **权限门参数化**：`PermissionGate`（permission 位 / api / deny_error）随调用传入；
+2. **表名前缀校验**（正则层，尽力而为 + 可读文案）：`validate_sql_table_prefix` 返回
+   核心文案（`SQL table name … does not match …`），各端 adapter 补前缀
+   （桌面/移动统一 `Plugin error: `）；`extract_table_names` 合并双端正则
+   （移动版字符类支持引号连字符标识符完整提取 + 桌面版 `RENAME TO` 补丁）——
+   **行为修正**：引号标识符 `my-table` 提取完整名而非旧桌面版截断的 `my`（判定结果
+   不变，桌面 sql_parse 测试断言同步更新并注明）；
+3. **SQLite authorizer 引擎层纵深**：`with_main_db_guards` + `authorize_main_db_action` +
+   `is_schema_catalog` / `names_schema_catalog` / `strip_sql_literals_and_comments` 全套上移；
+4. **语句超时护栏**：`with_statement_timeout`（progress handler 硬中断，
+   `PLUGIN_DB_STATEMENT_TIMEOUT_SECS = 120`）上移；
+5. **结果集护栏**（行数 10_000 / 字节 32MB 双上限）+ **批次事务**（`execute_batch_on_conn`，
+   内部每句裸事务拒绝 = 双端统一为更严语义）；
+6. **常量真源上移**：`PLUGIN_DB_*` 四常量 → 共享核；桌面 `bedcode-server-base::constants`
+   改 re-export（保 `crate::system::constants::*` 路径零改动）；
+7. **实现层单测 12 例**（绑定往返 / 行字节护栏 / 列转换 / 前缀正反例 / 裸事务 /
+   批次全提交回滚与内部拒绝 / authorizer 规则 / 超时触发与卸载 / 目录表检测）。
+
+**桌面 adapter**（`host_api/database.rs` 865→≈300 行）：域函数签名零改动（component.rs
+零回归）；机制 re-export 保 tests 路径；错误文案逐字保留（`database error: {}` /
+`Plugin error: ` 前缀）。
+
+**移动 adapter**（`host_impl/db.rs` 573→≈400 行）——**机制补齐（此前缺失项）**：
+
+| 补齐面 | 此前（双份漂移税实例） | 接入后（桌面形态） |
+| --- | --- | --- |
+| 权限位分离 | host-database 与 host-plugin-database 同挂 `storage` | 主库 `database:main`（SDK 新词汇 `PERMISSION_DATABASE_MAIN`，2026-10-09 加，纯增量——移动 3 插件实测零 host-database 消费者，无 manifest 迁移负担）；插件库仍 `storage` |
+| 引擎层纵深 | 仅正则尽力而为校验 | SQLite authorizer 逐动作仲裁（`with_main_db_guards`） |
+| 语句超时 | 无（rusqlite 未开 hooks） | progress handler 硬中断 120s（`with_statement_timeout`） |
+| 错误文案 | `SQL execution failed: {e}` / `table name validation failed: …` | 桌面 `database error: {e}` / `Plugin error: …` |
+
+`sql_guard.rs` 变 re-export 垫片（保宿主 `plugin::wasm_host` 转发符号面；返回形态
+`Result<(), String>`，实际消费者已改走共享核）。移动本地常量删除（共享核常量）。
+
+### 批次 4 · log / events 域
+
+**log（共享核 `src/log.rs`，桌面 421 行全套上移）**：统一 callsite + 按调用点缓存的
+`'static` Metadata + per-plugin 级别阈值（`BEDCODE_PLUGIN_LOG=id=level`，thread_local
+缓存）+ `[plugin:xxx]` 前缀格式化。target 统一为共享核中性名
+`bedcode_host_api_core::plugin_log`（原桌面 target 无过滤消费者，实测）。测试基建
+`capture` 随迁共享核（桌面 `log::capture` re-export 保 engine_config/engine_limits 路径）。
+**移动接入**：component.rs 内联 host-log（此前裸 `tracing::*!`）改调共享核 4 函数——
+获得 callsite 缓存 + 阈值过滤全套机制。
+
+**events（共享核 `src/events.rs`，语义薄模块）**：事件载荷严格 JSON 解析
+（`parse_event_payload`，H-05 fail-visible，文案与桌面逐字一致）。**移动行为对齐**：
+此前非法载荷宽松降级为字符串投递（断链形态）→ 拒绝投递 + warn（WIT `host-events.emit`
+无错误返回，拒绝以 warn 落日志与既有失败语义一致）。notify 不抽（桌面 = 前端事件
+JSON 载荷，移动 = Android 原生通知 Kotlin 桥，语义不同属各端平台能力）。
+
+### config / fs / http —— **判定不抽**（逐域按 §2 判据核对）
+
+| 域 | 判据核对 | 裁决 |
+| --- | --- | --- |
+| `config` | 实现层直接引用各端 SDK `ConfigKey` 枚举（match 穷尽各端变体）——判据「实现层不得引用 SDK 类型」不满足；每项取值是各端平台/引擎读取（桌面 ServerSupervisor/dirs/AppConfig vs 移动下载目录解析） | 不抽（留各端） |
+| `fs` | 桌面 = WSL UNC 桥 / 任务单元执行器 / core-security 三层框架（777 行）；移动 = SAF 平台 / fs_auth 端口（365 行）——各端平台接入，无共享机制语义 | 不抽（留各端） |
+| `http` | 桌面已抽能力域 crate（`bedcode-server-http::plugin_binding`，宿主只剩端口 + 装配）；移动 = crate 内 `http_engine` + egress 端口——出站授权闸门双端均已留各自宿主/引擎（安全闸门四类薄壳②） | 不抽（保持已抽形态） |
+
+### 门禁（批次 3+4 全量）
+
+| 项 | 结果 |
+| --- | --- |
+| 共享核 `cargo test` | **34 实现层 + 2 边界锁全绿**（storage 6 + bus 7 + database 12 + log 8 + events 2 + 锁 2） |
+| 桌面 wasm-core `cargo test` 全量 | **669 绿 + 1 既有 perf 红基线**（`perf_p2`，§6 明文豁免；log 8 测试迁共享核，数字差合理；`--no-default-features` 无头编译通过） |
+| 桌面 ABI / WIT / world | 零字节变动（component.rs 零改动；`bedcode-server-base` 仅常量 re-export + Cargo.toml 依赖） |
+| 移动 fork crate `cargo test --features test-support` | **285 lib + fork_boundary_lock 4 + sdk_wit_contract_locks 4 全绿**（A2 权限词汇锁随 `PERMISSION_DATABASE_MAIN` 新增自动通过：fork crate glob re-export 自动可见） |
+| 移动宿主 `cargo test` | **245 lib + 全部集成目标全绿**（12 退役锁 + 既有回归） |
+| 变异/锁 | 无新锁（不抽裁决以文档记录替代锁；permission 词汇新增由既有 A2 锁覆盖） |
+
+**遗留**：① 移动端 `database:main` 权限位新增为纯增量，3 内置插件零消费者——未来
+插件用主库时 manifest 须声明该位（记入插件开发检查清单）；② 移动 log/events 行为
+对齐（阈值过滤 / JSON 严格拒绝）建议真机复验；③ 票 19 Part B 对照锁覆盖面（topic
+形态三方）已由并行会话（ADR 0043 + ABI v18）联动推进；④ 批次 5 原计划 fs/http 骨架
+因判定不抽而取消——「同一个 wasm-core」机制面收口于 storage/bus/database/log/events
+五域 + 不抽裁决（config/fs/http 属平台接入）。
+
+## 11. 主库收归 wasm-core（2026-10-09 双端统一机制决策，批次 3 收缩）
+
+**用户指令**：「机制完善 manifest 不再需要声明和 wasm-core 机制相关的 database:main
+权限 默认拥有 但是插件或者 wasm-app 自身需要数据库能力 需要声明」「主库由 wasm-core
+管理 不给任何 wasm-app 和插件直接调用的方法」「不仅仅是移动端 是对于 wasm-core
+双端机制的补充」。
+
+**终态语义**：插件**无法**直接 SQL 主库（`host-database` 接口自双端 WIT 面移除）；
+插件数据库能力 = **插件私有库**（`host-plugin-database`，声明 `storage` 位）。
+`database:main` 不再存在（无接口可声明；「默认拥有」自然成立——主库是 wasm-core
+机制内部真源：激活状态 / 审批记录 / 授权记录 / plugin_storage）。
+
+### 改动面（双端）
+
+| 面 | 动作 |
+| --- | --- |
+| WIT（桌面 / 移动） | `host-database` 接口 + world import 删除 |
+| SDK（双端） | `HostDatabase` trait + `db_*` 方法删除（保留 `HostPluginDatabase`）；`PERMISSION_DATABASE_MAIN` 词汇删除（桌面原高位 / 移动批次 3 新增位同删）；ABI 桌面 34→35 / 移动 18→19（破坏性，fail-visible：旧产物实例化期 import 缺失点名重建） |
+| wasm-core（双端） | `host_database::Host` impl + `add_to_linker` 删除；`host_api/database.rs`（桌面）/ `host_impl/db.rs`（移动）收缩为纯插件库 adapter |
+| 共享核 `database` | 收缩为插件库面（权限门 storage / 超时护栏 / 行字节护栏 / 批次事务）；`with_main_db_guards` / `authorize_main_db_action` / `is_schema_catalog` / `names_schema_catalog` / `validate_sql_table_prefix` / `extract_table_names` 删除（regex 依赖随之移除） |
+| 前端生成物 / 元数据（桌面） | `permission-vocabulary.ts/json`、`contributionKinds.ts`、locales zh/en、`plugin-sdk-fixtures/plugin.json` 的 `database:main` 条目删除 |
+| 测试 | 桌面 `db_isolation`（authorizer 纵深）/ `sql_parse`（前缀校验）整文件删除；`db_faces` 改插件库单门；`db_guards` / `db_batch` 入口改插件库（scaffold 注入 `set_plugin_db`）；夹具 `test_db` 命令删除 / `test.db-roundtrip` 主库段删除；sdk_e2e 断言主库命令面退役；移动组件夹具 `version()` 18→19 |
+| 锁 | 移动 A1（接口清单 17→16 import / 23→22 interfaces / ABI 18→19）/ A3（接线表删 host-database 5 函数）更新至 v19；桌面权限三副本锁 / approval 测试随词汇同步 |
+
+**零插件迁移负担**（双端插件生态实测零主库消费者）：桌面 agent-hub 全部用
+`plugin_db_*`（私有库）；移动 3 插件零 `host-database` 引用。
+
+### 门禁（主库收归全量）
+
+| 项 | 结果 |
+| --- | --- |
+| 共享核 `cargo test` | 31 实现层 + 2 边界锁全绿（database 收缩后 8 例） |
+| 桌面 wasm-core `cargo test` 全量 | 648 绿 + 1 既有 perf 红基线 |
+| 移动 fork crate `--features test-support` | 284 lib + fork_boundary_lock 4 + sdk_wit_contract_locks 4 全绿（A1/A3 更新至 v19） |
+| 移动宿主 `cargo test` | 245 lib + 全部集成目标全绿 |
+
+**遗留**：① 桌面 `component.rs` 词元锁测试示例仍含 `database:main`（测匹配算法，
+非权限引用，保留）；② `database:main` 历史出现于文档/注释处保留为退役记录；
+③ 插件开发检查清单补「数据库能力 = 插件私有库（storage 位）声明」条目；
+④ CHANGELOG 双语条目留统一提交时补（工作区与并行会话 ADR 0043/ABI v18 改动混杂）。

@@ -35,12 +35,11 @@ fn test_sdk_plugin_component_roundtrip() {
         let r: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(r["got"]["k"], "v");
 
-        // 主库往返（权限 + 表名前缀校验）
+        // 主库面（test_db）已随 host-database 退役（2026-10-09 双端机制决策：
+        // 主库由 wasm-core 管理、不给插件直接调用）——命令落夹具兜底分支
         let result = plugin.invoke_command("test_db", "{}").expect("test_db");
         let r: serde_json::Value = serde_json::from_str(&result).unwrap();
-        let rows = r["rows"].as_array().expect("rows array");
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0]["val"], "sdk-db");
+        assert!(r.get("rows").is_none(), "主库命令面已退役, got: {r}");
 
         // 配置读取（AppConfig 测试初始化 port=8765）
         let result = plugin.invoke_command("test_config", "{}").expect("test_config");

@@ -44,6 +44,29 @@
 - **门禁**：fork crate 303 绿 + 移动宿主全量（22 测试目标）零失败；变异自检 3/3（WIT 增接口 /
   权限常量未登记表 / 宿主 enum 字段改名均测红）
 
+#### 核心：host-api 共享实现核——database / log / events 三域 + 主库收归（票 18 批次 3+4，ADR 0040）
+
+- **共享核再收三域**（`packages/bedcode-host-api-core/src/{database,log,events}.rs`）：
+  database = 权限门化的插件私有库机制（SQLite authorizer 引擎层纵深 / 语句超时护栏 /
+  行+字节结果集护栏 / 批次事务，机制级依赖 rusqlite hooks + regex）· log = 桌面全套
+  （callsite 缓存 / per-plugin 级别阈值 / `[plugin:xxx]` 前缀，thread_local 缓存）·
+  events = 载荷严格 JSON 解析（非法载荷拒绝投递 + warn，对齐桌面 fail-visible）。
+  config / fs / http 三域**判定不抽**（实现层引用各端 SDK 枚举或属各端平台接入，
+  票 18 §10 记录在案）
+- **移动 fork 补齐此前缺失的桌面机制**：host-plugin-database 获得语句超时护栏 /
+  错误文案对齐（`database error: {}`）；host-log 从裸 `tracing::*!` 切换为共享核
+  callsite 缓存实现；host-events 拒绝畸形载荷而非宽松降级为字符串投递
+- **主库双端退役（用户裁决，ABI 桌面 34→35 / 移动 18→19）**：`host-database` 接口、
+  `HostDatabase` SDK trait 与 `database:main` 权限位自双端 WIT / SDK 移除；主库是
+  wasm-core 机制内部真源（激活状态 / 审批记录 / 授权记录 / plugin_storage）——
+  **插件数据库能力 = 插件私有库**（`host-plugin-database`，`storage` 位）。双端插件
+  生态实测零主库消费者（零迁移负担）；旧产物实例化期 import 缺失点名失败、须重建
+- **桌面 adapter 收缩**（`host_api/database.rs` 865→约 300 行，组件绑定零签名变化）；
+  `bedcode-server-base::constants` 改 re-export 保 `PLUGIN_DB_*` 常量真源单点；
+  能力注册表删 `host-database`（20 组）
+- **门禁**：共享核 34+2 全绿；桌面 wasm-core 669 绿 + 1 既有 perf 基线；移动 fork
+  284 + 锁 8 绿（A1/A3 更新至 v19）；移动宿主全量；桌面 ABI/WIT/world 零漂移
+
 #### 文件传输：双端共享业务核 `packages/bedcode-file-transfer-core`（ADR 0044）
 
 - **新建双端共享业务核 crate**：文件传输业务实现（任务台账归约 / 重试 + 发送闸门 + 拉取意图判据 /

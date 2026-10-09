@@ -227,7 +227,7 @@ app.mount(container)
 ## 8. WASM 后端（rust）
 
 插件后端编译为 **WASM 组件（Component Model）**，契约定义在 SDK 的
-`packages/plugin-sdk-mobile/rust/wit/bedcode.wit`（宿主导入 17 接口 / 插件导出 5 接口，
+`packages/plugin-sdk-mobile/rust/wit/bedcode.wit`（宿主导入 16 接口 / 插件导出 5 接口，
 另有可选导出 events-binary；单一事实来源，wit-bindgen 编译期校验）。`rust/src/lib.rs` 实现 `WasmPlugin` trait 后以
 `wasm_entry!` 宏生成组件导出（manifest / activate / deactivate / invoke_command / 生命周期
 钩子 / 事件 / 上传与传输钩子 / abi.version）；宿主按 `rustLibrary` 查找 `{crate}.wasm`
@@ -242,8 +242,8 @@ wasm 构建开启 `--features wasm`（`wasm_entry!` / `WasmHost` / `WasmPlugin` 
 
 | 项 | 桌面端 | 移动端 | 说明 |
 |----|--------|--------|------|
-| import 接口 | 22 组 | 17 组 | 移动无 session/api-call/timer/process/app/file-service/transfer/host-pty/host-task/host-crypto；移动特有 host-notify / host-terminal-stream |
-| host-database | 5 函数 | 5 函数 | 表名前缀纵深 + 属主隔离（与桌面同构）；移动另有 host-plugin-database（私有库） |
+| import 接口 | 21 组 | 16 组 | 移动无 session/api-call/timer/process/app/file-service/transfer/host-pty/host-task/host-crypto；移动特有 host-notify / host-terminal-stream。`host-database` 双端已退役（ABI 桌面 35 / 移动 19，主库收归 wasm-core） |
+| host-database | 已退役 | 已退役 | 主库收归 wasm-core、不给插件直接调用（2026-10-09 双端机制决策）；插件数据库能力 = host-plugin-database（私有库，`storage` 位） |
 | host-fs | 9 函数 | 8 函数 | 移动新增 MediaStore 入库 / SaveAs（SAF）；无 read-dir/canonicalize/stat |
 | host-events | emit/notify | emit | v18 起移动端 notify 独立成 host-notify 域（纯事件语义） |
 | host-notify | — | 5 函数 | 移动特有（ABI v18）：通知（震动/声音分控）+ 权限查询/请求 + 震动 + 提示音 |

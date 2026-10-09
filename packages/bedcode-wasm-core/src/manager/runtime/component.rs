@@ -82,28 +82,6 @@ impl bedcode::plugin::host_storage::Host for WasmPluginState {
     }
 }
 
-impl bedcode::plugin::host_database::Host for WasmPluginState {
-    fn execute(&mut self, sql: String) -> Result<u32, String> {
-        database::db_execute(&sqlite::ports_for(self.host_ctx()), &self.plugin_id, &sql)
-    }
-
-    fn query(&mut self, sql: String) -> Result<Option<String>, String> {
-        database::db_query(&sqlite::ports_for(self.host_ctx()), &self.plugin_id, &sql)
-    }
-
-    fn execute_params(&mut self, sql: String, params_json: String) -> Result<u32, String> {
-        database::db_execute_params(&sqlite::ports_for(self.host_ctx()), &self.plugin_id, &sql, &params_json)
-    }
-
-    fn query_params(&mut self, sql: String, params_json: String) -> Result<Option<String>, String> {
-        database::db_query_params(&sqlite::ports_for(self.host_ctx()), &self.plugin_id, &sql, &params_json)
-    }
-
-    fn execute_batch(&mut self, sqls_json: String) -> Result<u32, String> {
-        database::db_execute_batch(&sqlite::ports_for(self.host_ctx()), &self.plugin_id, &sqls_json)
-    }
-}
-
 impl bedcode::plugin::host_plugin_database::Host for WasmPluginState {
     fn execute(&mut self, sql: String) -> Result<u32, String> {
         database::plugin_db_execute(&sqlite::ports_for(self.host_ctx()), &self.plugin_id, &sql)
@@ -529,30 +507,58 @@ impl bedcode::plugin::host_platform::Host for WasmPluginState {
 
 // ==================== 能力模块注册 ====================
 
-/// 能力模块白名单（wasm-core-lib-split 票 03）
+/// 内建在册的能力模块白名单（仍随本 crate 链接的能力域，wasm-core-lib-split 票 03）
 ///
-/// **强制引用行与本常量必须同处**，且四步缺一即红（新增能力域流程）：
+/// **本常量随迁移批次收缩**（wasm-core 纯净性收口票 02）：批次 02 已把 pty 移出
+/// （其「强制引用行 + 白名单条目」随端口 adapter 一并迁宿主 `src/plugin/pty.rs`），
+/// 批次 03 起 http / ws / peer / mdns 逐个移出，最终为空——那时本 crate 只剩核心
+/// 机制，白名单全部来自宿主自报（见 [`host_module_whitelist`]）。
+///
+/// 仍在本表里的域，四步缺一即红（新增能力域流程）：
 /// ① 能力 crate 实现 `HostModule` + `inventory::submit!`
 /// ② 宿主加一行强制引用 `use <crate> as _;`（本节）
-/// ③ 本常量加模块名 ④ `capability_registry_matches_whitelist` 绿
+/// ③ 白名单加模块名 ④ `capability_registry_matches_whitelist` 绿
 ///
 /// 为什么②必需：`inventory` 的注册靠 linker-section 静态，**未被引用的 rlib 不进
 /// 最终二进制，静态不执行 ⇒ 注册丢失**。漏掉②会让该能力域静默从插件 import 集
 /// 消失；③ 的 missing 方向断言会立即变红，不拖到插件实例化才炸。
-///
-const HOST_MODULES: &[&str] = &[
+const IN_CRATE_HOST_MODULES: &[&str] = &[
     crate::host_api::mdns::HOST_MODULE_NAME,
     crate::host_api::ws::HOST_MODULE_NAME,
     crate::host_api::peer::HOST_MODULE_NAME,
     crate::host_api::http::HOST_MODULE_NAME,
-    crate::host_api::pty::HOST_MODULE_NAME,
     // `host-database` / `host-plugin-database` / `host-storage` 不在册：ADR 0036
     // 撤销 sqlite 能力域 crate，三 interface 的 `Host` impl 回到本文件（见上）。
 ];
 
+/// 白名单合并（纯函数）：内建在册 ∪ 宿主自报期望
+///
+/// 排序 + 去重是**集合语义**的口径：`verify_whitelist` 两侧都排序后整体比较，
+/// 重复项不影响判定（宿主侧同一模块被两处声明不构成漂移）。
+fn merge_host_module_whitelist(
+    in_crate: &[&'static str],
+    host_expected: &[&'static str],
+) -> Vec<&'static str> {
+    let mut whitelist: Vec<&'static str> = in_crate.to_vec();
+    whitelist.extend_from_slice(host_expected);
+    whitelist.sort_unstable();
+    whitelist.dedup();
+    whitelist
+}
+
+/// 生效白名单：内建在册（本 crate 仍链接的域）∪ 宿主自报期望
+///
+/// 宿主侧来源 = `bedcode_host_kit::expect_host_module!` 自报（与强制引用行同处，
+/// 见 host-kit `assembly` 模块文档）。**常编译 pub**：宿主侧集成锁
+/// （`src-tauri/tests/pty_wiring.rs`）要用同一份合并结果做双向比对——两侧各拼一份
+/// 就是第二真源。
+pub fn host_module_whitelist() -> Vec<&'static str> {
+    merge_host_module_whitelist(IN_CRATE_HOST_MODULES, &bedcode_host_kit::expected_host_modules())
+}
+
 // 强制引用行（inventory 的 linker-section 静态必须被真正链接才执行；见上）。
-// 与 `HOST_MODULES` 同处，两者不漂移——漏掉这行 ⇒ `verify_whitelist` 的 missing
-// 方向立即变红。
+// 与 `IN_CRATE_HOST_MODULES` 同处，两者不漂移——漏掉这行 ⇒ `verify_whitelist` 的
+// missing 方向立即变红。
 // 能力域脱绑 P2：自报只在 `desktop-host`（绑定层装配）下需要——无该 feature 的
 // 宿主（移动端 / 无头）拿纯引擎、**不应**注册（它没有插件宿主机制）。
 #[cfg(feature = "desktop-host")]
@@ -574,17 +580,13 @@ use bedcode_server_peer_net as _;
 // 宿主（移动端 / 无头）拿纯引擎、**不应**注册（它没有插件宿主机制）。
 #[cfg(feature = "desktop-host")]
 use bedcode_server_http as _;
-// `bedcode-pty-engine` 同理（宿主命令面 / 生命周期已在用它）；`host-pty` 能力域
-// （6 原语 + WIT 接线）的自报静态靠这行进入最终二进制（pty-capability-domain 票 D1：
-// 接线随域机制一并迁出内核，宿主只剩端口 adapter）。
-// 能力域脱绑 P4：自报只在 `desktop-host`（绑定层装配）下需要——无该 feature 的
-// 宿主（移动端 / 无头）拿纯引擎、**不应**注册（它没有插件宿主机制）。
-#[cfg(feature = "desktop-host")]
-use bedcode_pty_engine as _;
+// 票 02 批次 02：`bedcode-pty-engine` 的强制引用行与白名单条目已随端口 adapter
+// 迁宿主 `src-tauri/src/plugin/pty.rs`（两者同处——host-kit `assembly` 模块的纪律）。
+// 本 crate 不再依赖该 crate，也不再出现它的任何路径。
 
 /// 收集已自报的能力模块并与白名单双向比对
 fn host_module_registry() -> crate::Result<bedcode_host_kit::ModuleRegistry> {
-    verify_host_module_registry(HOST_MODULES)
+    verify_host_module_registry(&host_module_whitelist())
 }
 
 /// 白名单校验的可测入口（生产传入 [`HOST_MODULES`]）
@@ -619,7 +621,6 @@ pub(crate) fn add_to_linker(linker: &mut Linker<WasmPluginState>) -> crate::Resu
         bedcode::plugin::host_storage::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_log::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_config::add_to_linker::<WasmPluginState, D>,
-        bedcode::plugin::host_database::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_plugin_database::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_process::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_crypto::add_to_linker::<WasmPluginState, D>,
@@ -1629,21 +1630,37 @@ mod tests {
     fn capability_registry_matches_whitelist() {
         let registry = bedcode_host_kit::ModuleRegistry::collected();
         registry
-            .verify_whitelist(HOST_MODULES)
+            .verify_whitelist(&host_module_whitelist())
             .unwrap_or_else(|e| panic!("capability module whitelist must match collected set: {e}"));
     }
 
-    /// 白名单含重复模块名即自检失败（防同一能力域被登记两次）
+    /// 内建在册清单含重复模块名即自检失败（防同一能力域被登记两次）
     #[test]
-    fn host_module_whitelist_has_no_duplicates() {
-        let mut seen = HOST_MODULES.to_vec();
+    fn in_crate_host_module_list_has_no_duplicates() {
+        let mut seen = IN_CRATE_HOST_MODULES.to_vec();
         seen.sort_unstable();
         let before = seen.len();
         seen.dedup();
         assert_eq!(
             seen.len(),
             before,
-            "host module whitelist contains duplicates: {HOST_MODULES:?}"
+            "in-crate host module list contains duplicates: {IN_CRATE_HOST_MODULES:?}"
+        );
+    }
+
+    /// 合并判据：并集 + 去重 + 字典序（两侧来源各贡献自己的名字）
+    #[test]
+    fn merge_whitelist_unions_and_dedups_both_sources() {
+        let merged = merge_host_module_whitelist(&["beta", "alpha"], &["gamma", "alpha"]);
+        assert_eq!(
+            merged,
+            vec!["alpha", "beta", "gamma"],
+            "合并必须去重且字典序（集合语义）"
+        );
+        // 空的一侧不改语义：宿主未自报任何期望时白名单 = 内建在册
+        assert_eq!(
+            merge_host_module_whitelist(&["beta", "alpha"], &[]),
+            vec!["alpha", "beta"]
         );
     }
 
@@ -1675,27 +1692,14 @@ mod tests {
         );
     }
 
-    /// fail-visible 形态① 反向：收集到但白名单没有 ⇒ 同样显性失败（未经 review
-    /// 的能力不得进产品）
-    ///
-    /// 用空白名单触发：收集集非空 ⇒ 全部落在 unlisted 侧。
-    #[test]
-    fn unlisted_capability_module_fails_loudly_with_remediation() {
-        let err = verify_host_module_registry(&[])
-            .expect_err("collected capabilities absent from the whitelist must fail the check");
-        let msg = err.to_string();
-
-        assert!(
-            msg.contains("unlisted="),
-            "error must say which direction failed: {msg}"
-        );
-        for name in HOST_MODULES {
-            assert!(
-                msg.contains(name),
-                "every collected-but-unlisted module must be named, {name} missing from: {msg}"
-            );
-        }
-    }
+    // fail-visible 形态① 反向（收集到但白名单没有）**不在本文件测**：本 crate 的
+    // 测试二进制收集集随迁移批次收缩（票 02 批次 03 起 http / ws / peer / mdns 陆续
+    // 移出本 crate，最终为空），任何依赖「收集集非空」的用例都会在后续批次变成
+    // 恒真或必红。该方向的判据由两处承担：
+    // ① `bedcode-host-kit/tests/registry.rs`（探针模块保证收集集非空；含
+    //    `unlisted=` / `missing=` 与两个方向修法文案的断言）；
+    // ② 宿主侧集成锁 `src-tauri/tests/pty_wiring.rs`（宿主真实白名单的双向比对，
+    //    即原先本用例在宿主侧的对偶）。
 
     /// 收集到的模块名全局唯一（inventory 按静态收集，重复 `submit!` 会在此暴露）
     #[test]

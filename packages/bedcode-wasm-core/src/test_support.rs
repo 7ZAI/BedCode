@@ -71,7 +71,6 @@ pub fn setup_wasm_runtime_with_setup(setup: EngineSetup) -> (WasmRuntime, Arc<Wa
 
     let all_permissions: &[&str] = &[
         "storage",
-        "database:main",
         "broadcast",
         "terminal:input",
         "terminal:output",

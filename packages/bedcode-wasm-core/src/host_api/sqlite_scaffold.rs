@@ -41,6 +41,8 @@ pub(super) struct FakePorts {
     /// 「系统组件」侧的存储空间（**与 `kv` 分开**：两条路径必须可区分，否则
     /// 「命中转发」与「走宿主原语」在断言里长得一样）
     forwarded: StdMutex<HashMap<(String, String), serde_json::Value>>,
+    /// 插件私有库（`plugin_db` 域函数测试注入；未登记 = 无头缺席形态）
+    plugin_dbs: StdMutex<HashMap<String, Arc<tokio::sync::Mutex<Database>>>>,
 }
 
 impl FakePorts {
@@ -54,6 +56,7 @@ impl FakePorts {
             kv: StdMutex::new(HashMap::new()),
             kv_forwarded: StdMutex::new(HashSet::new()),
             forwarded: StdMutex::new(HashMap::new()),
+            plugin_dbs: StdMutex::new(HashMap::new()),
         })
     }
 
@@ -89,6 +92,18 @@ impl FakePorts {
             .lock()
             .expect("kv_forwarded lock")
             .insert(plugin_id.to_string());
+    }
+
+    /// 注入某插件的私有库（内存库；`host-plugin-database` 域函数测试用）。
+    /// 未注入 = 无头上下文私有库缺席形态（与生产无 app_handle 一致）。
+    pub(super) fn set_plugin_db(&self, plugin_id: &str) -> Arc<tokio::sync::Mutex<Database>> {
+        let db = Database::new(std::path::Path::new(":memory:")).expect("open in-memory plugin db");
+        let arc = Arc::new(tokio::sync::Mutex::new(db));
+        self.plugin_dbs
+            .lock()
+            .expect("plugin_dbs lock")
+            .insert(plugin_id.to_string(), Arc::clone(&arc));
+        arc
     }
 }
 
@@ -133,9 +148,17 @@ impl SqlitePorts for FakePorts {
         Arc::clone(&self.db)
     }
 
-    fn plugin_db<'a>(&'a self, _plugin_id: String) -> PluginDbFuture<'a> {
-        // 无头形状：私有库缺席（见模块头「与迁移前宿主测试上下文的形状差异」）
-        Box::pin(async { Err(HEADLESS_NO_PLUGIN_DB.to_string()) })
+    fn plugin_db<'a>(&'a self, plugin_id: String) -> PluginDbFuture<'a> {
+        let hit = self
+            .plugin_dbs
+            .lock()
+            .expect("plugin_dbs lock")
+            .get(&plugin_id)
+            .cloned();
+        match hit {
+            Some(arc) => Box::pin(async move { Ok(arc) }),
+            None => Box::pin(async { Err(HEADLESS_NO_PLUGIN_DB.to_string()) }),
+        }
     }
 
     fn block_on_any(&self, fut: BoxedBlocked<'_>) -> Box<dyn Any + Send> {

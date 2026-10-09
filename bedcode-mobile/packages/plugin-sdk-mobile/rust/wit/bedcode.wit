@@ -1,7 +1,8 @@
 // 移动端插件契约（Plugin Contract）——单一事实来源
 //
 // 与桌面端 WIT 的差异维护在 docs/implementation-plans/mobile-wasmtime-component-migration.md §3.2：
-// - import 接口 17 组（无 session/api-call/timer/process/app/file-service/transfer）
+// - import 接口 16 组（无 session/api-call/timer/process/app/file-service/transfer；
+//   `host-database` 主库面已随 v19 双端退役——主库由 wasm-core 管理、不给插件直接调用）
 // - host-fs 含移动端特有 SAF/下载目录能力（write-media-downloads / save-to-document）
 // - host-notify 为移动端特有域（v18：通知/震动/声音，桌面不跟演——ADR 0018）
 // - abi 仅 version（无 form：项目未发布、一次性切割，不存在 core 形态共存）
@@ -16,15 +17,6 @@ interface host-storage {
     get: func(key: string) -> result<option<string>, string>;
     set: func(key: string, value: string) -> result<_, string>;
     delete: func(key: string) -> result<_, string>;
-}
-
-interface host-database {
-    execute: func(sql: string) -> result<u32, string>;
-    query: func(sql: string) -> result<option<string>, string>;
-    execute-params: func(sql: string, params-json: string) -> result<u32, string>;
-    query-params: func(sql: string, params-json: string) -> result<option<string>, string>;
-    /// 事务内顺序执行多语句（sqls-json 为 SQL 字符串数组），返回受影响行数合计
-    execute-batch: func(sqls-json: string) -> result<u32, string>;
 }
 
 /// 插件私有库（每插件属主分区；仅本插件可访问，停用回收）——票 05 新增
@@ -483,7 +475,6 @@ world plugin-binary {
 
 world plugin {
     import host-storage;
-    import host-database;
     import host-plugin-database;
     import host-events;
     import host-notify;

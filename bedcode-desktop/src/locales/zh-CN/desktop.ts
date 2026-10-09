@@ -230,11 +230,6 @@ export default {
         'ui:pageToolbar': { title: '页面工具栏', desc: '在页面工具栏注册操作按钮' },
         'ui:fileHandler': { title: '文件处理器', desc: '注册按扩展名打开文件的处理器' },
         'network:http': { title: 'HTTP 网络', desc: '发起 HTTP 请求' },
-        'database:main': {
-          title: '主数据库',
-          desc: '读写宿主主数据库',
-          risk: '可直接读写宿主主库，其中包含设备、信任关系与设置等其它数据',
-        },
         'fs:read': { title: '文件读取', desc: '读取本地文件系统' },
         'fs:write': { title: '文件写入', desc: '写入本地文件系统' },
         'fs:pick': {

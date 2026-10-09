@@ -8,10 +8,11 @@ use std::time::Duration;
 
 use crate::system::constants::{PLUGIN_DB_QUERY_MAX_BYTES, PLUGIN_DB_QUERY_MAX_ROWS};
 use crate::host_api::database::{
-    db_execute, db_execute_params, db_query, db_query_params, query_to_json, with_statement_timeout,
+    plugin_db_execute, plugin_db_execute_params, plugin_db_query, plugin_db_query_params,
+    query_to_json, with_statement_timeout,
 };
 use crate::host_api::sqlite_scaffold::*;
-use crate::permission::{PERMISSION_DATABASE_MAIN, PERMISSION_STORAGE};
+use crate::permission::PERMISSION_STORAGE;
 
 // ==================== 执行护栏（票据 05）：超时 / 行数上限 / 字节上限 ====================
 
@@ -100,22 +101,24 @@ fn query_exceeding_byte_limit_rejected() {
     );
 }
 
-/// 入口级回归：主库 execute/query/参数绑定经护栏全链路（权限 + 前缀 + 超时/上限）
+/// 入口级回归：插件私有库 execute/query/参数绑定经护栏全链路（权限 + 超时/上限；
+/// 私有库无前缀约束——整库属主）
 #[test]
-fn db_entry_execute_and_query_with_guards() {
+fn plugin_db_entry_execute_and_query_with_guards() {
     let fake = FakePorts::new();
     let ports = as_ports(&fake);
-    fake.grant("p1", &[PERMISSION_DATABASE_MAIN, PERMISSION_STORAGE]);
-    db_execute(ports, "p1", "CREATE TABLE plugin_p1_t (x INTEGER)").expect("create table");
+    fake.grant("p1", &[PERMISSION_STORAGE]);
+    fake.set_plugin_db("p1");
+    plugin_db_execute(ports, "p1", "CREATE TABLE t (x INTEGER)").expect("create table");
     for i in 0..3i64 {
         let params = format!("[{}]", i);
-        db_execute_params(ports, "p1", "INSERT INTO plugin_p1_t (x) VALUES (?1)", &params).expect("insert with params");
+        plugin_db_execute_params(ports, "p1", "INSERT INTO t (x) VALUES (?1)", &params).expect("insert with params");
     }
-    let out = db_query(ports, "p1", "SELECT x FROM plugin_p1_t ORDER BY x")
+    let out = plugin_db_query(ports, "p1", "SELECT x FROM t ORDER BY x")
         .expect("query")
         .expect("query result json");
     assert_eq!(out, "[{\"x\":0},{\"x\":1},{\"x\":2}]");
-    let out_params = db_query_params(ports, "p1", "SELECT x FROM plugin_p1_t WHERE x >= ?1 ORDER BY x", "[1]")
+    let out_params = plugin_db_query_params(ports, "p1", "SELECT x FROM t WHERE x >= ?1 ORDER BY x", "[1]")
         .expect("query params")
         .expect("query params json");
     assert_eq!(out_params, "[{\"x\":1},{\"x\":2}]");

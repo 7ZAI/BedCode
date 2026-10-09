@@ -16,12 +16,12 @@
 
 use crate::host::{
     ConfigKey, CryptoKeypair, FsDirEntry, FsStat, HostApp, HostAuth, HostBus, HostConfig,
-    HostConnection, HostCrypto, HostDatabase, HostError, HostEvents, HostFs, HostHttp, HostLog,
+    HostConnection, HostCrypto, HostError, HostEvents, HostFs, HostHttp, HostLog,
     HostMdns, HostPeer, HostPlatform, HostPluginDatabase, HostProcess, HostPty, HostStorage,
     HostTask, HostWebsocket, ProcessSyncResult, PtyRingFetch,
 };
 use crate::wasm::bedcode::plugin::{
-    host_app, host_auth, host_bus, host_config, host_connection, host_crypto, host_database,
+    host_app, host_auth, host_bus, host_config, host_connection, host_crypto,
     host_events, host_fs, host_http, host_log, host_mdns, host_peer, host_platform,
     host_plugin_database, host_process, host_pty, host_storage, host_task, host_timer,
     host_websocket,
@@ -156,52 +156,7 @@ impl HostStorage for WasmHost {
     }
 }
 
-// ==================== HostDatabase / HostPluginDatabase ====================
-
-impl HostDatabase for WasmHost {
-    fn db_execute(&self, sql: &str) -> Result<i32, HostError> {
-        host_database::execute(sql)
-            .map(|n| n as i32)
-            .map_err(|e| host_err("db_execute", e))
-    }
-
-    fn db_query(&self, sql: &str) -> Result<Option<serde_json::Value>, HostError> {
-        match host_database::query(sql).map_err(|e| host_err("db_query", e))? {
-            Some(s) => parse_json("db_query", s).map(Some),
-            None => Ok(None),
-        }
-    }
-
-    fn db_execute_params(&self, sql: &str, params: &[serde_json::Value]) -> Result<i32, HostError> {
-        let params_str = serde_json::to_string(params).unwrap_or_else(|_| "[]".to_string());
-        host_database::execute_params(sql, &params_str)
-            .map(|n| n as i32)
-            .map_err(|e| host_err("db_execute_params", e))
-    }
-
-    fn db_query_params(
-        &self,
-        sql: &str,
-        params: &[serde_json::Value],
-    ) -> Result<Option<serde_json::Value>, HostError> {
-        let params_str = serde_json::to_string(params).unwrap_or_else(|_| "[]".to_string());
-        match host_database::query_params(sql, &params_str)
-            .map_err(|e| host_err("db_query_params", e))?
-        {
-            Some(s) => parse_json("db_query_params", s).map(Some),
-            None => Ok(None),
-        }
-    }
-
-    fn db_execute_batch(&self, sqls: &[String]) -> Result<i32, HostError> {
-        let sqls_str = serde_json::to_string(sqls).map_err(|e| {
-            HostError::custom(-1, format!("db_execute_batch: serialize failed: {}", e))
-        })?;
-        host_database::execute_batch(&sqls_str)
-            .map(|n| n as i32)
-            .map_err(|e| host_err("db_execute_batch", e))
-    }
-}
+// ==================== HostPluginDatabase ====================
 
 impl HostPluginDatabase for WasmHost {
     fn plugin_db_execute(&self, sql: &str) -> Result<i32, HostError> {

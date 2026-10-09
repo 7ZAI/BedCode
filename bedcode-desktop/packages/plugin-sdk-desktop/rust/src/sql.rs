@@ -1,6 +1,6 @@
 //! SQL 参数绑定辅助
 //!
-//! 配合 `HostDatabase` / `HostPluginDatabase` 的 `*_params` 方法使用，
+//! 配合 `HostPluginDatabase` 的 `*_params` 方法使用，
 //! 将多个 Rust 值一次性转为 JSON 绑定参数数组，杜绝手写
 //! `replace('\'', "''")` 转义（易错且不可组合）。
 

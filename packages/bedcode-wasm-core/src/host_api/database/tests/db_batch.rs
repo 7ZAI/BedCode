@@ -4,9 +4,11 @@
 //! 持有事务会占住全局连接锁，必须引导到批次原语。
 
 use crate::system::constants::PLUGIN_DB_EXECUTE_BATCH_MAX_STATEMENTS;
-use crate::host_api::database::{db_execute, db_execute_batch, db_query, reject_bare_transaction_control};
+use crate::host_api::database::{
+    plugin_db_execute, plugin_db_execute_batch, plugin_db_query, reject_bare_transaction_control,
+};
 use crate::host_api::sqlite_scaffold::*;
-use crate::permission::{PERMISSION_DATABASE_MAIN, PERMISSION_STORAGE};
+use crate::permission::PERMISSION_STORAGE;
 
 // ==================== 事务批次（票据 06）：execute-batch ====================
 
@@ -15,41 +17,33 @@ use crate::permission::{PERMISSION_DATABASE_MAIN, PERMISSION_STORAGE};
 fn execute_batch_commits_all_or_rolls_back_all() {
     let fake = FakePorts::new();
     let ports = as_ports(&fake);
-    fake.grant("p1", &[PERMISSION_DATABASE_MAIN, PERMISSION_STORAGE]);
-    db_execute(
-        ports,
-        "p1",
-        "CREATE TABLE plugin_p1_batch (id INTEGER PRIMARY KEY, v TEXT)",
-    )
-    .expect("create table");
+    fake.grant("p1", &[PERMISSION_STORAGE]);
+    fake.set_plugin_db("p1");
+    plugin_db_execute(ports, "p1", "CREATE TABLE batch (id INTEGER PRIMARY KEY, v TEXT)").expect("create table");
 
     // 成功批次：全部提交
-    let affected = db_execute_batch(
+    let affected = plugin_db_execute_batch(
         ports,
         "p1",
-        r#"["INSERT INTO plugin_p1_batch (id,v) VALUES (1,'a')",
-            "INSERT INTO plugin_p1_batch (id,v) VALUES (2,'b')",
-            "INSERT INTO plugin_p1_batch (id,v) VALUES (3,'c')"]"#,
+        r#"["INSERT INTO batch (id,v) VALUES (1,'a')",
+            "INSERT INTO batch (id,v) VALUES (2,'b')",
+            "INSERT INTO batch (id,v) VALUES (3,'c')"]"#,
     )
     .expect("batch must commit");
     assert_eq!(affected, 3);
-    let out = db_query(ports, "p1", "SELECT count(*) AS n FROM plugin_p1_batch")
-        .unwrap()
-        .unwrap();
+    let out = plugin_db_query(ports, "p1", "SELECT count(*) AS n FROM batch").unwrap().unwrap();
     assert_eq!(out, "[{\"n\":3}]");
 
     // 失败批次（第二句主键冲突）：整体回滚，已执行的第一句也不算数
-    let err = db_execute_batch(
+    let err = plugin_db_execute_batch(
         ports,
         "p1",
-        r#"["INSERT INTO plugin_p1_batch (id,v) VALUES (4,'d')",
-            "INSERT INTO plugin_p1_batch (id,v) VALUES (1,'dup')"]"#,
+        r#"["INSERT INTO batch (id,v) VALUES (4,'d')",
+            "INSERT INTO batch (id,v) VALUES (1,'dup')"]"#,
     )
     .expect_err("conflicting statements must roll back the whole batch");
     assert!(err.contains("UNIQUE") || err.contains("duplicate"), "got: {}", err);
-    let out = db_query(ports, "p1", "SELECT count(*) AS n FROM plugin_p1_batch")
-        .unwrap()
-        .unwrap();
+    let out = plugin_db_query(ports, "p1", "SELECT count(*) AS n FROM batch").unwrap().unwrap();
     assert_eq!(out, "[{\"n\":3}]", "failed batch must roll back prior statements");
 }
 
@@ -58,12 +52,13 @@ fn execute_batch_commits_all_or_rolls_back_all() {
 fn execute_batch_statement_count_capped() {
     let fake = FakePorts::new();
     let ports = as_ports(&fake);
-    fake.grant("p1", &[PERMISSION_DATABASE_MAIN, PERMISSION_STORAGE]);
+    fake.grant("p1", &[PERMISSION_STORAGE]);
+    fake.set_plugin_db("p1");
     let many: Vec<String> = (0..PLUGIN_DB_EXECUTE_BATCH_MAX_STATEMENTS + 1)
-        .map(|i| format!("INSERT INTO plugin_p1_x VALUES ({})", i))
+        .map(|i| format!("INSERT INTO batch VALUES ({})", i))
         .collect();
     let sqls = serde_json::to_string(&many).unwrap();
-    let err = db_execute_batch(ports, "p1", &sqls).expect_err("over-limit batch must be rejected");
+    let err = plugin_db_execute_batch(ports, "p1", &sqls).expect_err("over-limit batch must be rejected");
     assert!(err.contains("statements limit"), "got: {}", err);
 }
 
@@ -72,7 +67,8 @@ fn execute_batch_statement_count_capped() {
 fn bare_transaction_control_rejected_at_execute() {
     let fake = FakePorts::new();
     let ports = as_ports(&fake);
-    fake.grant("p1", &[PERMISSION_DATABASE_MAIN, PERMISSION_STORAGE]);
+    fake.grant("p1", &[PERMISSION_STORAGE]);
+    fake.set_plugin_db("p1");
     for sql in [
         "BEGIN",
         "BEGIN TRANSACTION",
@@ -82,7 +78,7 @@ fn bare_transaction_control_rejected_at_execute() {
         "RELEASE sp1",
         "END TRANSACTION",
     ] {
-        let err = db_execute(ports, "p1", sql).expect_err(&format!("'{}' must be rejected", sql));
+        let err = plugin_db_execute(ports, "p1", sql).expect_err(&format!("'{}' must be rejected", sql));
         assert!(err.contains("execute-batch"), "'{}' err: {}", sql, err);
     }
 }

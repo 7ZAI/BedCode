@@ -14,12 +14,12 @@
 //! trait 签名（`host/*` 定义）保持不变，插件业务代码零改动。
 
 use crate::host::{
-    ConfigKey, HostAuth, HostBus, HostConfig, HostConnection, HostDatabase, HostError, HostEvents,
+    ConfigKey, HostAuth, HostBus, HostConfig, HostConnection, HostError, HostEvents,
     HostFs, HostHttp, HostLog, HostMdns, HostNotify, HostPeer, HostPlatform, HostPluginDatabase,
     HostStorage, HostTerminalStream, HostWs, NotifyOptions,
 };
 use crate::wasm::bedcode::plugin::{
-    host_auth, host_bus, host_config, host_connection, host_database, host_events, host_fs,
+    host_auth, host_bus, host_config, host_connection, host_events, host_fs,
     host_http, host_log, host_mdns, host_notify, host_peer, host_platform, host_plugin_database,
     host_storage, host_terminal_stream, host_websocket,
 };
@@ -88,56 +88,6 @@ impl HostStorage for WasmHost {
 
     fn storage_delete(&self, key: &str) -> Result<(), HostError> {
         host_storage::delete(key).map_err(|e| host_err("storage_delete", e))
-    }
-}
-
-// ==================== HostDatabase ====================
-
-impl HostDatabase for WasmHost {
-    fn db_execute(&self, sql: &str) -> Result<i32, HostError> {
-        host_database::execute(sql)
-            .map(|n| n as i32)
-            .map_err(|e| host_err("db_execute", e))
-    }
-
-    fn db_query(&self, sql: &str) -> Result<Option<serde_json::Value>, HostError> {
-        match host_database::query(sql).map_err(|e| host_err("db_query", e))? {
-            Some(s) => parse_json("db_query", s).map(Some),
-            None => Ok(None),
-        }
-    }
-
-    fn db_execute_params(
-        &self,
-        sql: &str,
-        params: &[serde_json::Value],
-    ) -> Result<i32, HostError> {
-        let params_json = to_json_string("db_execute_params", &serde_json::to_value(params).unwrap_or_default())?;
-        host_database::execute_params(sql, &params_json)
-            .map(|n| n as i32)
-            .map_err(|e| host_err("db_execute_params", e))
-    }
-
-    fn db_query_params(
-        &self,
-        sql: &str,
-        params: &[serde_json::Value],
-    ) -> Result<Option<serde_json::Value>, HostError> {
-        let params_json = to_json_string("db_query_params", &serde_json::to_value(params).unwrap_or_default())?;
-        match host_database::query_params(sql, &params_json)
-            .map_err(|e| host_err("db_query_params", e))?
-        {
-            Some(s) => parse_json("db_query_params", s).map(Some),
-            None => Ok(None),
-        }
-    }
-
-    fn db_execute_batch(&self, sqls: &[String]) -> Result<i32, HostError> {
-        let sqls_json = serde_json::to_string(sqls)
-            .map_err(|e| host_err("db_execute_batch", e.to_string()))?;
-        host_database::execute_batch(&sqls_json)
-            .map(|n| n as i32)
-            .map_err(|e| host_err("db_execute_batch", e))
     }
 }
 

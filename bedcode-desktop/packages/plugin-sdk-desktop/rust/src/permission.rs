@@ -40,15 +40,6 @@ pub const PERMISSION_UI_INPUT: &str = "ui:input";
 pub const PERMISSION_UI_FILE_HANDLER: &str = "ui:fileHandler";
 pub const PERMISSION_NETWORK_HTTP: &str = "network:http";
 pub const PERMISSION_STORAGE: &str = "storage";
-/// 宿主主库 SQL 面（host-database 的 `db_*`，票 02 / P0-1）
-///
-/// 与 `storage`（插件自有 KV 存储 + `host-plugin-database` 私有库）**分域**：
-/// 主库是内核与全部插件共用的库，里面有 `plugin_secrets`（明文宿主托管密钥）、
-/// `pairings`、`connection_history`、`settings` 等他人数据。旧形态下所有插件
-/// 自动持有 `storage`，主库面又只靠正则表名隔离（逗号多表即可读穿）——
-/// 现在主库面要显式声明本位，且访问受 SQLite 引擎层表名白名单仲裁。
-/// 当前生产插件零消费者，改判为第一方按需申请的高危位（见 AGENTS §7、票 03 逐位确认）。
-pub const PERMISSION_DATABASE_MAIN: &str = "database:main";
 pub const PERMISSION_FS_READ: &str = "fs:read";
 pub const PERMISSION_FS_WRITE: &str = "fs:write";
 /// 系统文件选择器（WIT `host-platform` 的 `pick-files` / `pick-folder` /
@@ -142,7 +133,6 @@ pub const PERMISSION_VOCABULARY: &[(&str, &str)] = &[
     (stringify!(PERMISSION_UI_FILE_HANDLER), PERMISSION_UI_FILE_HANDLER),
     (stringify!(PERMISSION_NETWORK_HTTP), PERMISSION_NETWORK_HTTP),
     (stringify!(PERMISSION_STORAGE), PERMISSION_STORAGE),
-    (stringify!(PERMISSION_DATABASE_MAIN), PERMISSION_DATABASE_MAIN),
     (stringify!(PERMISSION_FS_READ), PERMISSION_FS_READ),
     (stringify!(PERMISSION_FS_WRITE), PERMISSION_FS_WRITE),
     (stringify!(PERMISSION_FS_PICK), PERMISSION_FS_PICK),
@@ -401,7 +391,6 @@ mod tests {
         let pm = PermissionManager::new();
         pm.grant_permissions("quiet-plugin", &[]);
         assert!(!pm.check("quiet-plugin", PERMISSION_STORAGE));
-        assert!(!pm.check("quiet-plugin", PERMISSION_DATABASE_MAIN));
         assert!(!pm.check_api("quiet-plugin", "storage.get"));
 
         pm.grant_permissions("loud-plugin", &[PERMISSION_STORAGE.to_string()]);
@@ -410,24 +399,6 @@ mod tests {
     }
 
     /// 票 02：主库面与私有库面是两个位，互不代持
-    #[test]
-    fn main_db_bit_is_separate_from_plugin_storage_bit() {
-        let pm = PermissionManager::new();
-        pm.grant_permissions("one-faced", &[PERMISSION_STORAGE.to_string()]);
-        assert!(pm.check("one-faced", PERMISSION_STORAGE));
-        assert!(
-            !pm.check("one-faced", PERMISSION_DATABASE_MAIN),
-            "持有 storage 不等于可碰宿主主库"
-        );
-
-        pm.grant_permissions("two-faced", &[PERMISSION_DATABASE_MAIN.to_string()]);
-        assert!(pm.check("two-faced", PERMISSION_DATABASE_MAIN));
-        assert!(
-            !pm.check("two-faced", PERMISSION_STORAGE),
-            "主库位不应反向附带私有库/KV 能力"
-        );
-    }
-
     #[test]
     fn test_check_permission() {
         let pm = PermissionManager::new();

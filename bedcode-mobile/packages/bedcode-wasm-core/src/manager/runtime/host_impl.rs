@@ -28,9 +28,8 @@ pub(crate) use bus::*;
 pub(crate) use config::*;
 pub(crate) use connection::*;
 pub(crate) use db::{
-    db_execute, db_query, db_execute_params, db_query_params, db_execute_batch,
-    plugin_db_execute, plugin_db_query, plugin_db_execute_params, plugin_db_query_params,
-    plugin_db_execute_batch,
+    plugin_db_execute, plugin_db_execute_batch, plugin_db_execute_params, plugin_db_query,
+    plugin_db_query_params,
 };
 pub(crate) use event::*;
 pub(crate) use fs::*;

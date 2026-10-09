@@ -651,7 +651,7 @@ pub mod pty {
 #[cfg(feature = "sdk")]
 pub mod sdk {
     use bedcode_plugin_api::host::{
-        ConfigKey, HostBus, HostConfig, HostDatabase, HostEvents, HostLog, HostPluginDatabase,
+        ConfigKey, HostBus, HostConfig, HostEvents, HostLog, HostPluginDatabase,
         HostStorage,
     };
     use bedcode_plugin_api::types::PluginManifest;
@@ -765,21 +765,9 @@ pub mod sdk {
                 // 默认分支里做，拆分出来是因为它带两次建表+插入+查询，而 `test.echo`
                 // 被燃料/性能探针高频调用，不宜背这份开销）
                 "test.db-roundtrip" => {
-                    // 表名带插件前缀（宿主侧前缀校验，防跨插件数据访问）
-                    let table = "plugin_com_bedcode_test_component_roundtrip";
+                    // 插件私有库往返（2026-10-09 双端机制决策：主库由 wasm-core 管理、
+                    // 不给插件直接调用，主库段随 host-database 退役）
                     let mut out = serde_json::json!({ "name": name });
-                    if let Err(e) = WasmHost.db_execute(&format!(
-                        "CREATE TABLE IF NOT EXISTS {table} (id INTEGER PRIMARY KEY, val TEXT)"
-                    )) {
-                        out["dbCreateError"] = serde_json::json!(e.to_string());
-                    }
-                    let _ = WasmHost.db_execute(&format!(
-                        "INSERT INTO {table} (val) VALUES ('hello')"
-                    ));
-                    out["dbRows"] = WasmHost
-                        .db_query(&format!("SELECT val FROM {table} ORDER BY id"))?
-                        .unwrap_or(serde_json::Value::Null);
-                    // 插件私有库：无需表名前缀校验（整个库都是插件的）
                     if let Err(e) =
                         WasmHost.plugin_db_execute("CREATE TABLE IF NOT EXISTS t (id INTEGER PRIMARY KEY, val TEXT)")
                     {
@@ -816,23 +804,6 @@ pub mod sdk {
                     host.storage_set(key, &value)?;
                     let got = host.storage_get(key)?.unwrap_or(serde_json::Value::Null);
                     Ok(serde_json::json!({ "set": value, "got": got }))
-                }
-                // 主库：表名带插件前缀（宿主侧前缀校验，防跨插件数据访问）。
-                // 宿主测试以 TEST_PLUGIN_ID（com.bedcode.test）实例化，前缀按此派生
-                "test_db" => {
-                    let table = "plugin_com_bedcode_test_sdk_data";
-                    host.db_execute(&format!(
-                        "CREATE TABLE IF NOT EXISTS {} (id INTEGER PRIMARY KEY, val TEXT)",
-                        table
-                    ))?;
-                    host.db_execute(&format!(
-                        "INSERT OR REPLACE INTO {} (id, val) VALUES (1, 'sdk-db')",
-                        table
-                    ))?;
-                    let rows = host
-                        .db_query(&format!("SELECT val FROM {} WHERE id = 1", table))?
-                        .unwrap_or(serde_json::Value::Null);
-                    Ok(serde_json::json!({ "rows": rows }))
                 }
                 "test_config" => {
                     let port = host.config_get(ConfigKey::NetworkPort)?.unwrap_or_default();

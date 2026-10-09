@@ -37,6 +37,9 @@ tauri = { version = "2", features = [], optional = true }
 notify = "6"
 # From<bedcode_link_crypto::LinkCryptoError>（链路加密共享 crate）
 bedcode-link-crypto = { path = "../link-crypto" }
+# host-database 执行护栏常量真源（票 18 批次 3：PLUGIN_DB_* 四常量上移共享核，
+# 本 crate 经 re-export 保既有 `bedcode_server_base::constants::*` 路径）
+bedcode-host-api-core = { path = "../bedcode-host-api-core" }
 # error_boundary（futures FutureExt::catch_unwind）
 futures-util = "0.3"
 # error_boundary 测试

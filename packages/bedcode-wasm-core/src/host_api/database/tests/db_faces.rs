@@ -1,66 +1,41 @@
-//! 权限门三态：主库面（`database:main`）与私有库 / kv 面（`storage`）是两个权限位，互不代持
+//! 权限门：插件私有库（`host-plugin-database`）挂 `storage` 位——未授权拒；
+//! 授权后进到执行（注入私有库）/ 无头私有库缺席
 //!
-//! 迁移自宿主 `wasm_core::host_api::database.rs` 的同名用例（票 08），断言的**错误归属**
-//! 逐字保留：未授权 → 两面都拒；只给 `storage` → 私有库面进到「私有库缺席」而非权限拒；
-//! 只给 `database:main` → 主库面进到 SQL 校验、私有库面反而被权限拒。
+//! **2026-10-09 双端机制决策**：主库面（`host-database` / `database:main`）已随
+//! 「主库由 wasm-core 管理、不给插件直接调用方法」整体退役——插件数据库能力 =
+//! 插件私有库（声明 `storage` 位）。
 
-use crate::host_api::database::{db_execute, db_query, plugin_db_execute, plugin_db_query};
+use crate::host_api::database::{plugin_db_execute, plugin_db_query};
 use crate::host_api::sqlite_scaffold::*;
-use crate::permission::{PERMISSION_DATABASE_MAIN, PERMISSION_STORAGE};
+use crate::permission::PERMISSION_STORAGE;
 
-/// 权限门三态（票 01 + 票 02）：主库面与私有库面是两个位，互不代持
-///
-/// ① 什么都不给 → 两面都拒；② 只给 `storage` → 私有库放行、主库仍拒；
-/// ③ 只给 `database:main` → 主库进到 SQL 校验、私有库拒。
-/// 旧形态下 `storage` 由 SDK 无条件默认授予，主库权限门恒过——本用例锁住它已不再成立。
+/// 权限门：未授予 `storage` → 私有库面一律拒；授权后进到执行路径
 #[test]
-fn main_db_and_private_db_faces_require_separate_bits() {
+fn plugin_db_requires_storage_permission() {
     let fake = FakePorts::new();
     let ports = as_ports(&fake);
-    let sql = "SELECT value FROM plugin_secrets";
-    let own = "SELECT 1";
+    let sql = "CREATE TABLE kv (k TEXT)";
 
-    // ① 未授予：两面一律拒
+    // ① 未授予：拒绝
     assert_eq!(
-        db_query(ports, "com.bedcode.no-db", sql).unwrap_err(),
+        plugin_db_execute(ports, "com.bedcode.no-db", sql).unwrap_err(),
         "permission denied"
     );
     assert_eq!(
-        plugin_db_query(ports, "com.bedcode.no-db", own).unwrap_err(),
-        "permission denied"
-    );
-    assert_eq!(
-        db_execute(ports, "com.bedcode.no-db", sql).unwrap_err(),
-        "permission denied"
-    );
-    assert_eq!(
-        plugin_db_execute(ports, "com.bedcode.no-db", own).unwrap_err(),
+        plugin_db_query(ports, "com.bedcode.no-db", "SELECT 1").unwrap_err(),
         "permission denied"
     );
 
-    // ② 只给 storage：私有库放行（错误来自无头上下文而非权限），主库仍按权限拒
+    // ② 授予 storage 但未注入私有库：进到「私有库缺席」而非权限拒（无头形状）
     fake.grant("com.bedcode.kv-only", &[PERMISSION_STORAGE]);
-    let private_err = plugin_db_execute(ports, "com.bedcode.kv-only", own).unwrap_err();
+    let private_err = plugin_db_execute(ports, "com.bedcode.kv-only", sql).unwrap_err();
     assert!(
         !private_err.contains("permission denied"),
         "持有 storage 的私有库面不应被权限门拒: {private_err}"
     );
-    assert_eq!(
-        db_execute(ports, "com.bedcode.kv-only", sql).unwrap_err(),
-        "permission denied",
-        "storage 不再自动可碰主库"
-    );
 
-    // ③ 只给 database:main：主库放行到 SQL 校验，私有库反而被拒
-    fake.grant("com.bedcode.main-only", &[PERMISSION_DATABASE_MAIN]);
-    let main_err = db_execute(ports, "com.bedcode.main-only", sql).unwrap_err();
-    assert!(
-        !main_err.contains("permission denied"),
-        "持有 database:main 的主库面应进到 SQL 校验: {main_err}"
-    );
-    assert_eq!(
-        plugin_db_execute(ports, "com.bedcode.main-only", own).unwrap_err(),
-        "permission denied",
-        "database:main 不反向附带私有库/KV 能力"
-    );
+    // ③ 授予 + 注入私有库：执行成功
+    fake.set_plugin_db("com.bedcode.full");
+    fake.grant("com.bedcode.full", &[PERMISSION_STORAGE]);
+    plugin_db_execute(ports, "com.bedcode.full", "CREATE TABLE kv (k TEXT PRIMARY KEY, v TEXT)").expect("create ok");
 }

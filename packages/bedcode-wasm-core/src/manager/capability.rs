@@ -88,14 +88,16 @@ pub(crate) const FORWARD_MDNS: &str = "mdns";
 /// 注册表启动即全量登记为宿主原语提供者：能力对依赖检查恒可用，
 /// 系统组件激活时可按名替换为 WASM 提供者。
 ///
-/// 计数口径（票 10 复核）：v26 清单为 23 组，本票删 **2 组**——`host-session`
+/// 计数口径（票 10 复核）：v26 清单为 23 组，票 10 删 **2 组**——`host-session`
 /// （会话原语域整 interface 退役）与 `host-terminal`（「宿主替插件往交互终端注入
-/// 按键」的最后一处业务面入口：零消费者，且实现 100% 依赖会话域）——故为 **21 组**：
+/// 按键」的最后一处业务面入口：零消费者，且实现 100% 依赖会话域）——为 **21 组**；
+/// 2026-10-09 主库收归再删 **1 组** `host-database`（主库由 wasm-core 管理、不给插件
+/// 直接调用，双端 WIT 面退役）——故为 **20 组**：
 /// 进程 3（host-pty / host-process / host-task）+ 网络 5（host-http / host-websocket /
-/// host-mdns / host-peer / host-connection）+ 存储 4（host-database / host-plugin-database /
+/// host-mdns / host-peer / host-connection）+ 存储 3（host-plugin-database /
 /// host-storage / host-fs）+ 宿主面 7（host-events / host-config / host-log /
 /// host-timer / host-app / host-platform / host-crypto）+ 互调 2
-/// （host-bus / host-api-call）。**只减不加**：本票不新增任何组。
+/// （host-bus / host-api-call）。**只减不加**。
 const HOST_PRIMITIVE_CAPABILITIES: &[&str] = &[
     "host-storage",
     "host-database",

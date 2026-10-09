@@ -254,11 +254,6 @@ export default {
         'ui:pageToolbar': { title: 'Page Toolbar', desc: 'Register action buttons in page toolbars' },
         'ui:fileHandler': { title: 'File Handler', desc: 'Register handlers that open files by extension' },
         'network:http': { title: 'HTTP Network', desc: 'Make HTTP requests' },
-        'database:main': {
-          title: 'Main Database',
-          desc: 'Read/write the host main database',
-          risk: 'Direct access to the host database, including devices, trust records and settings',
-        },
         'fs:read': { title: 'File Read', desc: 'Read local file system' },
         'fs:write': { title: 'File Write', desc: 'Write to local file system' },
         'fs:pick': {

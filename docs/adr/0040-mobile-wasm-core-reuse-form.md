@@ -100,3 +100,20 @@ ADR 0037 D1 的「移动端拉不动」理由，其桌面基础层反对点（�
   依赖纪律 serde_json / tracing + 边界锁）。批次 1 = host-storage 域（实现层上移 +
   双端 adapter + `SYSTEM_PLUGIN_ID` 真源随迁 re-export），桌面门禁全绿；移动门禁因
   并行「双端共享 lib M3」在途暂挂（实施记录见票 18 §8）。
+- 2026-10-09：批次 3（database）+ 批次 4（log / events）实施完成，**方向修正 = 以
+  桌面 wasm-core 的机制为完整基准**（用户指令「以目前 wasm-core 具有的机制为准
+  重构移动端」）：共享核承载全套桌面机制（authorizer 引擎层纵深 / 语句超时护栏 /
+  `database:main` 权限位分离 / callsite 缓存与 per-plugin 阈值 / JSON 严格解析），
+  移动 adapter 接入后自动补齐此前缺失项。config / fs / http 三域**判定不抽**（实现层
+  引用各端 SDK 枚举或属各端平台接入，票 18 §10 记录）。门禁：共享核 34+2、桌面
+  669+1 基线、移动 fork 285+8、移动宿主全绿（含并行 ADR 0043 + ABI v18 收口后的
+  回归）。「同一个 wasm-core」机制面收口于五域 + 不抽裁决。
+- 2026-10-09（同日第二批）：**主库收归 wasm-core（双端统一机制决策）**——
+  `host-database`（主库 5 原语）自双端 WIT 面移除（桌面 ABI 34→35 / 移动 18→19，
+  破坏性），`database:main` 权限位与主库 authorizer 纵深 / 前缀校验随之退役；
+  **插件数据库能力 = 插件私有库**（`host-plugin-database`，`storage` 位声明）。
+  双端插件生态实测零主库消费者（桌面 agent-hub 用 plugin_db_*，移动 3 插件零
+  引用）——零迁移负担。共享核 `database` 收缩为插件库面（权限门 storage /
+  超时护栏 / 行字节护栏 / 批次事务）；`with_main_db_guards` / `authorize_*` /
+  `validate_sql_table_prefix` 删除。门禁：共享核 31+2、桌面 648+1 基线、移动
+  fork 284+8、移动宿主全绿（A1/A3 锁更新至 v19）。

@@ -267,7 +267,7 @@ bedcode-mobile/                       # 移动端项目 (Tauri 2.0 + Vue 3)
 
 移动端插件系统与桌面端同架构（wasmtime 组件沙箱），并有移动端特有能力。做插件相关改动时按层定位：
 
-**插件机制整核（fork crate，批次 1+1b 落地 · 宿主未切换）— `packages/bedcode-wasm-core/`：**
+**插件机制整核（fork crate，宿主已切换）— `packages/bedcode-wasm-core/`：**
 crate 名 `bedcode-wasm-core-mobile`，fork 自桌面整核（ADR 0040 选项 C 第一步，票 17）。已含：机制核
 （bus/config/db/monitor/permission/security/storage）、**移动运行时与 17 域 host 原语**
 （`manager/runtime{,/component.rs,/host_impl/}`——bindgen 绑移动 WIT v18，宿主引擎调用经

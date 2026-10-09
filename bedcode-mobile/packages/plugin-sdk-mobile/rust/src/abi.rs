@@ -91,7 +91,14 @@
 ///   import 函数被点名失败（fail-visible ②），须随 SDK 重编译（组件 import
 ///   按实际使用面声明，未引用者不受影响）；内置插件零消费者且随 APK
 ///   同分发，产物随本版全量重建。
-pub const ABI_VERSION: u32 = 18;
+/// - v19: `host-database`（主库）整面退役（2026-10-09 双端统一机制决策）：主库是
+///   wasm-core 机制内部真源（激活状态 / 审批记录 / 授权记录 / plugin_storage），
+///   **不给任何 wasm-app / 插件直接调用的方法**——接口与 `database:main` 权限位
+///   自双端 WIT / SDK 面移除（桌面 ABI 34→35 / 移动 18→19，破坏性）。**插件数据库
+///   能力 = 插件私有库**（`host-plugin-database`，声明 `storage` 位）。引用主库
+///   原语的 v18 及更早产物在实例化期因缺失 import 函数被点名失败（fail-visible ②）。
+
+pub const ABI_VERSION: u32 = 19;
 
 #[cfg(test)]
 mod tests {
@@ -100,11 +107,12 @@ mod tests {
     #[test]
     fn test_abi_version_is_contract() {
         // 宿主加载时与组件 abi.version() 导出比对，漂移导致拒绝加载（高 ABI 拒绝测试依赖）
+        // v19 = host-database（主库）整面退役（主库收归 wasm-core，双端同步）、
         // v18 = 通知/震动/声音整族封装（host-notify 域收编 host-events.notify），
         // 叠加 v17 host-terminal/terminal-hooks 整面退役、v16 认证/配对编排下沉、
         // v15 终端订阅协议客户端迁插件、v14 host-websocket 客户端域、
         // v13 接收编排下沉、v12 发送编排下沉、
         // v11 host-mdns v2、v10 总线二进制载荷与 v9 host-peer 传输控制二原语
-        assert_eq!(ABI_VERSION, 18);
+        assert_eq!(ABI_VERSION, 19);
     }
 }

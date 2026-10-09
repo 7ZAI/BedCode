@@ -250,6 +250,7 @@ dependencies = [
 name = "bedcode-host-api-core"
 version = "0.1.0"
 dependencies = [
+ "rusqlite",
  "serde_json",
  "tracing",
 ]

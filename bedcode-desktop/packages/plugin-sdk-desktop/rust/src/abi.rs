@@ -208,7 +208,7 @@
 //!   点名「按 v34 SDK 重建」，不是 trap 不是静默降级。wire 流程逐字节不变
 //!   （移动端仍走 HTTP /api/auth/biometric-*，零改动）。**desktop 独有**，移动端
 //!   WIT/ABI/SDK 不跟演不投影（mobile ABI 保持 11）。
-pub const ABI_VERSION: u32 = 34;
+pub const ABI_VERSION: u32 = 35;
 
 /// 组件形态标识：`abi.form() == FORM_COMPONENT`（WIT `abi` 接口的 form() 声明）
 ///
@@ -255,7 +255,7 @@ mod tests {
         // （同批次之一）、v17 认证策略导出（auth-policy）、v16 插件私有伪终端原语
         // （host-pty）、v15 密钥托管（host-auth / secret-store）、v14 host-websocket、
         // v13 host-mdns v2、v12 总线二进制载荷与 v11 host-peer 传输控制三原语
-        assert_eq!(ABI_VERSION, 34);
+        assert_eq!(ABI_VERSION, 35);
     }
 
     #[test]

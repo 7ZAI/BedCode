@@ -46,7 +46,15 @@ fn impl_layer_has_no_sdk_wasm_core_host_platform_or_runtime_deps() {
 #[test]
 fn domain_impl_files_stay_present() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let required = ["src/lib.rs", "src/gate.rs", "src/storage.rs", "src/bus.rs"];
+    let required = [
+        "src/lib.rs",
+        "src/gate.rs",
+        "src/storage.rs",
+        "src/bus.rs",
+        "src/database.rs",
+        "src/log.rs",
+        "src/events.rs",
+    ];
     for rel in required {
         assert!(
             root.join(rel).exists(),

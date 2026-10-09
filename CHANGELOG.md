@@ -53,6 +53,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mutation self-checks 3/3 (WIT interface add / permission constant without table entry /
   host enum field rename all turn locks red)
 
+#### Core: host-api shared implementation core — database / log / events domains + main-DB retirement (Ticket 18 batch 3+4, ADR 0040)
+
+- **Shared core grows three more domains** (`packages/bedcode-host-api-core/src/{database,log,events}.rs`):
+  database = permission-gated plugin library (SQLite authorizer depth / statement timeout /
+  row+byte result caps / batch transactions, mechanics-level deps rusqlite hooks + regex) ·
+  log = desktop full stack (callsite cache / per-plugin level threshold /
+  `[plugin:xxx]` prefix, thread-local cache) · events = strict JSON payload parsing
+  (invalid payload is refused with a warn, matching desktop fail-visible semantics).
+  config / fs / http ruled **not to extract** (implementation layers reference each end's
+  SDK enums or are per-end platform integration — decision record in ticket 18 §10)
+- **Mobile fork gains the missing desktop mechanics**: host-plugin-database gets the
+  authorizer-depth-free equivalent of guards it lacked (permission gate separation,
+  statement timeout, error wording aligned to desktop `database error: {}`);
+  host-log switches from bare `tracing::*!` to the shared callsite-cached implementation;
+  host-events refuses malformed payloads instead of leniently string-casting them
+- **Main database retired on both ends (user ruling, ABI desktop 34→35 / mobile 18→19)**:
+  `host-database` interface, `HostDatabase` SDK trait and the `database:main` permission
+  bit are removed from both ends' WIT / SDK; the main DB is wasm-core-internal state only
+  (activation / approvals / authorizations / plugin_storage) — **plugins use the
+  per-plugin private library** (`host-plugin-database`, `storage` bit) instead. Both
+  plugin ecosystems have zero main-DB consumers (measured), so migration burden is zero;
+  old artifacts fail visibly at instantiation (missing import) and must be rebuilt
+- **Desktop adapter shrinks** (`host_api/database.rs` 865→~300 lines) with zero signature
+  change on the component binding; `bedcode-server-base::constants` re-exports the
+  `PLUGIN_DB_*` single sources; capability registry drops `host-database` (20 groups)
+- **Gates**: shared core 34+2 green; desktop wasm-core 669 green + 1 pre-existing perf
+  baseline; mobile fork 284 + lock 8 green (A1/A3 updated to v19); mobile host full suite;
+  desktop ABI/WIT/world zero drift beyond the retirement itself
+
 #### File transfer: cross-end shared business core `packages/bedcode-file-transfer-core` (ADR 0044)
 
 - **New shared business core crate `packages/bedcode-file-transfer-core`**: the file-transfer

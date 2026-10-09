@@ -3,12 +3,12 @@
 //! 「双端机制双份 = 每次机制修复 / ABI 演进两处同步」的漂移税，用源码扫描锁钉死。
 //! 数据底座 = **WIT / SDK 源文件本身**（运行时读源解析，不手抄清单——手抄即第二真源）。
 //!
-//! - **A1 · WIT 接口清单锁**：17 import / 5 export / `events-binary` 可选 /
-//!   2 world / ABI 18——增删改名接口即红，ABI bump 必须显式走 ADR 0019 流程先改锁；
+//! - **A1 · WIT 接口清单锁**：16 import / 5 export / `events-binary` 可选 /
+//!   2 world / ABI 19——增删改名接口即红，ABI bump 必须显式走 ADR 0019 流程先改锁；
 //! - **A2 · 权限词汇五同步锁**：SDK `VALID_PERMISSIONS` 静态表（真源）↔ fork crate
 //!   re-export 可见集逐字一致 + **无第二份白名单**（五同步点②③的口径是「不另立」
 //!   而非「同步维护」）；
-//! - **A3 · WIT ↔ host_impl 接线对照**（票 17 批次 2b 后全量启用）：17 接口逐函数
+//! - **A3 · WIT ↔ host_impl 接线对照**（票 17 批次 2b 后全量启用）：16 接口逐函数
 //!   显式对照表（WIT 函数名 ↔ host_impl 实现函数名 ↔ component.rs 委托行），三方
 //!   缺一即红；
 //! - **A4 · wire 形状单源防副本锁**（`mobile_parallel_copy_shape_lock` 兑现，**口径
@@ -60,7 +60,7 @@ fn read(path: &Path) -> String {
 fn world_plugin_block(wit: &str) -> String {
     let start = wit
         .find("world plugin {")
-        .expect("WIT 缺 world plugin（v18 结构漂移？）");
+        .expect("WIT 缺 world plugin（v19 结构漂移？）");
     let rest = &wit[start..];
     let end = rest
         .lines()
@@ -84,10 +84,9 @@ fn all_interfaces(wit: &str) -> Vec<String> {
 
 // ==================== A1 · WIT 接口清单锁（ABI 漂移早发现） ====================
 
-/// WIT v18 结构声明表（增删/改名接口 = ABI 演进，先改本表再动 WIT，走 ADR 0019）
-const DECLARED_IMPORTS: [&str; 17] = [
+/// WIT v19 结构声明表（增删/改名接口 = ABI 演进，先改本表再动 WIT，走 ADR 0019）
+const DECLARED_IMPORTS: [&str; 16] = [
     "host-storage",
-    "host-database",
     "host-plugin-database",
     "host-events",
     "host-notify",
@@ -109,9 +108,8 @@ const DECLARED_EXPORTS: [&str; 5] = ["command", "lifecycle", "events", "manifest
 
 /// 全文件接口名集合 = 17 import + 5 export + `events-binary`（可选导出，
 /// 宿主实例化后动态探测，不进 plugin world）
-const DECLARED_ALL_INTERFACES: [&str; 23] = [
+const DECLARED_ALL_INTERFACES: [&str; 22] = [
     "host-storage",
-    "host-database",
     "host-plugin-database",
     "host-events",
     "host-notify",
@@ -136,7 +134,7 @@ const DECLARED_ALL_INTERFACES: [&str; 23] = [
 ];
 
 #[test]
-fn a1_wit_interface_inventory_matches_declared_v18() {
+fn a1_wit_interface_inventory_matches_declared_v19() {
     let wit = read(&wit_path());
 
     // ① world plugin 的 import / export 集合逐名点名
@@ -158,7 +156,7 @@ fn a1_wit_interface_inventory_matches_declared_v18() {
     declared_imports.sort();
     assert_eq!(
         sorted_imports, declared_imports,
-        "world plugin import 集合与 v18 声明表不一致——ABI 演进必须先改本锁（ADR 0019 双端同步流程），禁静默增删"
+        "world plugin import 集合与 v19 声明表不一致——ABI 演进必须先改本锁（ADR 0019 双端同步流程），禁静默增删"
     );
     let mut sorted_exports = exports.clone();
     sorted_exports.sort();
@@ -191,8 +189,8 @@ fn a1_wit_interface_inventory_matches_declared_v18() {
     //    一次性切割，不存在 core 形态共存）
     let abi = read(&sdk_src().join("abi.rs"));
     assert!(
-        abi.contains("pub const ABI_VERSION: u32 = 18"),
-        "SDK ABI_VERSION 与 v18 声明不符（ABI bump 走 ADR 0019：先双端同步、再改本锁）"
+        abi.contains("pub const ABI_VERSION: u32 = 19"),
+        "SDK ABI_VERSION 与 v19 声明不符（ABI bump 走 ADR 0019：先双端同步、再改本锁）"
     );
     let abi_iface = wit[base_index(&wit, "interface abi {")..].to_string();
     assert!(
@@ -312,7 +310,7 @@ fn a2_permission_vocabulary_single_source_and_no_second_whitelist() {
 
 // ==================== A3 · WIT ↔ host_impl 接线对照（2b 后全量启用） ====================
 
-/// 17 接口逐函数显式对照表：`(WIT 接口, 实现文件, [(WIT 函数名, host_impl 实现名)])`
+/// 16 接口逐函数显式对照表：`(WIT 接口, 实现文件, [(WIT 函数名, host_impl 实现名)])`
 ///
 /// 显式全表（不派生命名）：`dial-peer → peer_dial` 一类特例靠表逐字钉住；
 /// `host-log` 是 component.rs 内联域（tracing 直发 + status_reporter），实现文件
@@ -321,17 +319,10 @@ const WIRING_TABLE: &[(&str, &str, &[(&str, &str)])] = &[
     (
         "host-storage",
         "storage.rs",
-        &[("get", "storage_get"), ("set", "storage_set"), ("delete", "storage_delete")],
-    ),
-    (
-        "host-database",
-        "db.rs",
         &[
-            ("execute", "db_execute"),
-            ("query", "db_query"),
-            ("execute-params", "db_execute_params"),
-            ("query-params", "db_query_params"),
-            ("execute-batch", "db_execute_batch"),
+            ("get", "storage_get"),
+            ("set", "storage_set"),
+            ("delete", "storage_delete"),
         ],
     ),
     (
@@ -473,9 +464,9 @@ const WIRING_TABLE: &[(&str, &str, &[(&str, &str)])] = &[
     ),
 ];
 
-/// 逐函数实现文件覆盖（默认用行内 `file` 列；跨文件域在此登记——host-events
-/// 的 emit 在 event.rs、notify 在 notify.rs）
-const FN_FILE_OVERRIDES: &[(&str, &str, &str)] = &[("host-events", "notify", "notify.rs")];
+/// 逐函数实现文件覆盖（默认用行内 `file` 列；跨文件域在此登记）。
+/// v19 起 host-database 退役（主库收归 wasm-core）；v18 起 notify 独立成域（host-notify → notify.rs 默认列），当前无跨文件域。
+const FN_FILE_OVERRIDES: &[(&str, &str, &str)] = &[];
 
 fn impl_file_for(iface: &str, wit_fn: &str, default_file: &str) -> String {
     FN_FILE_OVERRIDES
@@ -530,7 +521,7 @@ fn a3_wit_to_host_impl_wiring_matches_full_table() {
     declared.sort();
     assert_eq!(
         table_ifaces, declared,
-        "A3 接线表接口面与 v18 import 声明不一致（新接口漏登记 / 多登记）"
+        "A3 接线表接口面与 v19 import 声明不一致（新接口漏登记 / 多登记）"
     );
 
     for (iface, file, fns) in WIRING_TABLE {

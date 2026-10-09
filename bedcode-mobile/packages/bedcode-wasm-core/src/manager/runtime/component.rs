@@ -33,19 +33,21 @@ bindgen!({
 
 impl bedcode::plugin::host_log::Host for WasmPluginState {
     fn info(&mut self, message: String) {
-        tracing::info!("[plugin:{}] {}", self.plugin_id, message);
+        // 实现层在共享核（票 18 批次 4）：callsite 缓存 + per-plugin 级别阈值
+        // 过滤 + `[plugin:{}]` 前缀——移动端由此获得桌面全套日志机制
+        bedcode_host_api_core::log::log_info(&self.plugin_id, &message, "", 0);
     }
 
     fn debug(&mut self, message: String) {
-        tracing::debug!("[plugin:{}] {}", self.plugin_id, message);
+        bedcode_host_api_core::log::log_debug(&self.plugin_id, &message, "", 0);
     }
 
     fn warn(&mut self, message: String) {
-        tracing::warn!("[plugin:{}] {}", self.plugin_id, message);
+        bedcode_host_api_core::log::log_warn(&self.plugin_id, &message, "", 0);
     }
 
     fn error(&mut self, message: String) {
-        tracing::error!("[plugin:{}] {}", self.plugin_id, message);
+        bedcode_host_api_core::log::log_error(&self.plugin_id, &message, "", 0);
     }
 
     fn mark_plugin_error(&mut self, error: String) {
@@ -64,28 +66,6 @@ impl bedcode::plugin::host_storage::Host for WasmPluginState {
 
     fn delete(&mut self, key: String) -> Result<(), String> {
         super::host_impl::storage_delete(self, &key)
-    }
-}
-
-impl bedcode::plugin::host_database::Host for WasmPluginState {
-    fn execute(&mut self, sql: String) -> Result<u32, String> {
-        super::host_impl::db_execute(self, &sql)
-    }
-
-    fn query(&mut self, sql: String) -> Result<Option<String>, String> {
-        super::host_impl::db_query(self, &sql)
-    }
-
-    fn execute_params(&mut self, sql: String, params_json: String) -> Result<u32, String> {
-        super::host_impl::db_execute_params(self, &sql, &params_json)
-    }
-
-    fn query_params(&mut self, sql: String, params_json: String) -> Result<Option<String>, String> {
-        super::host_impl::db_query_params(self, &sql, &params_json)
-    }
-
-    fn execute_batch(&mut self, sqls_json: String) -> Result<u32, String> {
-        super::host_impl::db_execute_batch(self, &sqls_json)
     }
 }
 
@@ -439,7 +419,6 @@ pub(crate) fn build_component_linker(
     for iface in [
         bedcode::plugin::host_log::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_storage::add_to_linker::<WasmPluginState, D>,
-        bedcode::plugin::host_database::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_plugin_database::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_events::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_notify::add_to_linker::<WasmPluginState, D>,

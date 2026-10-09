@@ -416,12 +416,11 @@ mod tests {
             "process:run".to_string(),
             "not:a:real:permission".to_string(),
             "process:run".to_string(),
-            "database:main".to_string(),
             "".to_string(),
         ];
         assert_eq!(
             known_permissions(&requested),
-            vec!["process:run".to_string(), "database:main".to_string()],
+            vec!["process:run".to_string()],
             "词汇内位按声明顺序保留（去重），装饰词汇被丢弃"
         );
         assert!(known_permissions(&[]).is_empty());
