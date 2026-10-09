@@ -1,0 +1,11 @@
+[package]
+name = "wit-slice-bindgen-poc"
+version = "0.1.0"
+edition = "2021"
+
+# 票 01 P1：验证「能力域自持 WIT 分片（world cap-pty）」bindgen 出的 provider 侧
+# `Host` trait 与「整份端 WIT（world plugin）」版本对等。
+# 基准签名取自生产代码 packages/bedcode-pty-engine/src/plugin_binding.rs:185
+# （那份 impl 正是对整份 world 绑定的实现，编译通过 ⇒ 其签名即整份版签名）。
+[dependencies]
+wasmtime = { version = "48", features = ["component-model"] }

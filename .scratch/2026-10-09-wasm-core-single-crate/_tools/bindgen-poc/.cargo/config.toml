@@ -1,0 +1,5 @@
+# POC crate 的 target 落点：复用仓库根 target/host-kits（与 packages/bedcode-wasm-core 同桶）
+# ⇒ wasmtime 48 / component-model 的既有编译产物可命中，本 crate 只编自己。
+# 相对本 crate 根解析：_tools/bindgen-poc → _tools → 2026-10-09-... → .scratch → 仓库根
+[build]
+target-dir = "../../../../target/host-kits"
