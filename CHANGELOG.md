@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+#### File transfer: cross-end shared business core `packages/bedcode-file-transfer-core` (ADR 0044)
+
+- **New shared business core crate `packages/bedcode-file-transfer-core`**: the file-transfer
+  business implementation (task-ledger reduction / retry + send-gate + pull-intent judgements /
+  shared-root registry / receive settings / session table, ~70% of the per-end code) converges
+  into a **single copy shared by both ends**; every end-specific difference is expressed as a
+  port trait (`ports.rs`, the only place for differences: SQL-table vs KV persistence, `path` vs
+  `safTreeUri` wire shapes, node power, download-dir policy, platform pickers, consent path)
+  — zero SDK / zero WIT / zero platform dependency, and **zero product-identity literals** (the
+  plugin id is injected at runtime through `PluginIdentity`; in-crate `boundary_lock.rs`)
+- **Both ends become thin layers**: each wasm app keeps `adapters.rs` (1:1 delegation from its
+  own SDK traits to the core ports — no extra judgements) plus module wrappers whose signatures
+  are unchanged, so `peer.rs` and all front-end code are untouched (the mobile page is unchanged,
+  as required); a wiring anti-drift lock (`src/wiring_lock.rs`, 5 tests + 4/4 mutation checks)
+  pins the boundary between core and end apps
+- **Desktop behavior alignment (user ruling B)**: the desktop `peer.rs` follows the mobile
+  ticket-08 corrected semantics — `pull-started` ledger anchoring on the engine event,
+  retry-source check first, send gate, failed queued-batch dispatch lands a terminal row;
+  the legacy snapshot path (`merge_snapshot` / `prune_absent` / `reconcile_diff`) is preserved
+  for reconciliation
+- **Gates**: core crate 72 green (incl. boundary + wiring locks); function-level equivalence
+  check (23 core functions vs end baselines) PASS; desktop plugin crate 47 green; mobile plugin
+  crate 29 green with wasm artifact rebuilt and its host-import set verified identical to before
+  (no new imports); desktop artifact rebuild deferred (blocked by an in-flight
+  `manifest-gen` permission table + missing wasip3 toolchain on this machine)
+
 #### Mobile: WS outbound-connection engine extracted into `packages/bedcode-ws-client-engine` (ADR 0043)
 
 - **New capability crate `packages/bedcode-ws-client-engine`**: the mobile host-websocket

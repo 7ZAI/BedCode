@@ -69,6 +69,13 @@ bedcode-desktop/                      # 桌面端项目 (Tauri 2.0 + Vue 3)
 │   ├── file-transfer/                # 文件传输插件：基于对等网络（peer_* 宿主模块）的在线对端发现与
 │                                     #   切换、共享目录浏览、多任务并发传输（暂停/恢复/取消/重试，同批 ID
 │                                     #   重发即断点续传）、接收策略与历史归档、本地目录挂载供对端访问
+│                                     #   **rust/ 已是薄层**：业务实现（台账归约 / 判据 / 注册表 /
+│                                     #   设置 / 会话表）在共享核 `packages/bedcode-file-transfer-core`
+│                                     #   （ADR 0044），端内只剩 `adapters.rs`（端口实现：plugin-db
+│                                     #   注册表 / `path` 载荷 / 节点电源 / 多选与 reveal / 落点可自定义）
+│                                     #   + 模块包装 + `peer.rs` 编排；编排已对齐移动端票 08（重试判据
+│                                     #   前置 / 发送闸门 / 排队批派发失败落终态行 / 拉取意图先入队 +
+│                                     #   事件通路挂载 / 停用清空进程内意图）；接线防漂移锁见文末索引
 │   ├── terminal-session/             # 终端会话中心插件：**会话真源**（登记 / 状态机 / 生命周期分发 /
 │   │                                 #   输入输出编排 / wire 形状）+ 配对与认证（编排 / 签发 / 验签 / 密钥环 /
 │   │                                 #   设备信任）+ sessions REST 与其它 HTTP 端点注册 + 自动化任务域 +
@@ -289,7 +296,7 @@ path 依赖复用（D1/D2），宿主只剩组合根 + 薄壳垫片（D3），�
 ### 7 · 对等网络（peer-net）
 
 **落点**：`packages/peer-net`（身份 / 证书 / TLS / 信任存储 / 专用 mDNS 发现 / 传输引擎）+ `packages/link-crypto`（链路密码学，双端共享）；引擎控制面与能力域在 `packages/bedcode-server-peer-net`；宿主命令壳 `src-tauri/src/server/peer_net_cmds.rs`。
-**业务真源在插件**：`wasm-apps/file-transfer/rust/src/{transfer_store,settings_store,roots_registry}.rs`。
+**业务真源在插件**：`wasm-apps/file-transfer/rust/src/{transfer_store,settings_store,roots_registry}.rs`（**实现已迁双端共享核** `packages/bedcode-file-transfer-core/src/{transfer,settings,roots,sessions}.rs`，ADR 0044；端内文件现为薄包装 + `adapters.rs`，`transfer_store.rs` 是纯转出）。
 
 **改前注意**：宿主不持传输任务 / 设置 / 历史真源（防回接锁 `retired_peer_transfer_orchestration_is_not_reintroduced`）。
 
@@ -332,7 +339,7 @@ path 依赖复用（D1/D2），宿主只剩组合根 + 薄壳垫片（D3），�
 | 配对 / 认证 / 密钥环 / 设备信任 | `terminal-session/rust/src/{pairing/,auth_http/,auth_records/,keys.rs,trust/,devices.rs}` |
 | sessions REST 与其它 HTTP 端点（激活期注册） | `terminal-session/rust/src/{sessions_http.rs,http_routes.rs}` |
 | 自动化任务域 | `terminal-session/rust/src/task/` |
-| 传输任务 / 接收策略 / 共享根 / 历史 | `file-transfer/rust/src/{transfer_store,settings_store,roots_registry}.rs` |
+| 传输任务 / 接收策略 / 共享根 / 历史 | 共享核 `packages/bedcode-file-transfer-core/src/`（端内 `file-transfer/rust/src/` 为包装 + `adapters.rs`） |
 | Agent CLI / Skills / 供应商 / 用量 | `agent-hub/rust/src/` |
 | 多供应商对话 | `ai-chatbox/rust/src/` |
 
@@ -405,9 +412,10 @@ path 依赖复用（D1/D2），宿主只剩组合根 + 薄壳垫片（D3），�
 - PTY **反向**防回接锁（wasm-core 不得再有 `src/pty.rs` / `mod pty;` / `enums/pty_status.rs`——ADR 0039 D6）→ `packages/bedcode-wasm-core/src/lib.rs`（`pty_module_must_not_return_to_wasm_core`）+ lib 侧 `tests/wasm_core_whole_crate_lock.rs` 的 `pty` 反向断言
 - 机制内核 fail-visible 三形态 → `packages/bedcode-host-kit/tests/registry.rs`；跨 crate 强制引用须两个测试二进制 `forced_link.rs` / `forced_link_absent.rs`
 - 跨端 wire 形状 → `packages/bedcode-server-http/src/gateway/tests/`
-- **能力 crate 的产品插件 id / 退役面词汇**（结构锁管不到的那一面：合法边位置上装的是不是业务代码）→ `src-tauri/tests/capability_crates_no_product_ids.rs`（扫 `packages/` 下能力 crate 的生产文本；登记表 `SCANNED_CRATES` + `PENDING_SCAN_CRATES` 两桶构成完整覆盖，新增能力 crate 必须归桶；`bedcode-pty-engine` 已入桶）
-- **拆分 crate 不得长 `tests/` 目录 / `[dev-dependencies]` 不得拉入 bedcode crate**（crate 根 tests/ 是独立测试二进制 = 额外对外行为面 + 图上的真实 dev 边）→ `src-tauri/tests/capability_crates_unit_tests_only.rs`
-- **拆分产物 crate 的单测纯净性**（crate 根不得有 `tests/` / `benches/` / `examples/` 与 `[[test]]` 段；`[dev-dependencies]` 不得含任何内部 crate）→ `src-tauri/tests/capability_crates_unit_tests_only.rs`（治理面按 `packages/bedcode-*` 目录约定推导，新增 crate 自动纳入；`PENDING_GOVERNANCE` 只登记 `bedcode-wasm-core`，处置完删条目即自动纳入；含 C-5 正面钉住宿主侧迁移落点防“直接删掉”）。已迁走的两个集成测试落宿主：`src-tauri/tests/link_crypto_http.rs`（原 `bedcode-server-http/tests/`）、`src-tauri/tests/error_envelope_ipc.rs`（原 `bedcode-server-base/tests/`）
+- **能力 crate 的产品插件 id / 退役面词汇**（结构锁管不到的那一面：合法边位置上装的是不是业务代码）→ `src-tauri/tests/capability_crates_no_product_ids.rs`（扫 `packages/` 下能力 crate 的生产文本；登记表 `SCANNED_CRATES` + `PENDING_SCAN_CRATES` 两桶构成完整覆盖，新增能力 crate 必须归桶；`bedcode-pty-engine` / `bedcode-ws-client-engine`〔ADR 0043 抽根即入〕已入桶）
+- **file-transfer 双端共享核的边界与接线防漂移**（ADR 0044）→ `packages/bedcode-file-transfer-core/src/boundary_lock.rs`（核内零 SDK / 零平台 needle + 零产品身份字面量 + `[dependencies]` 白名单 + 锁定面文件在场）+ 同目录 `src/wiring_lock.rs`（**接线防漂移** 5 例：端内不得复活核内 23 个判据函数 · 双端 `transfer_store.rs` 必须纯转出 · 双端 `adapters.rs` 必须实现已消费端口 · 核 `ports.rs` 的 `pub trait` 集合与登记清单精确相等；变异自检 5/5）
+- **拆分 crate 不得长 `tests/` 目录 / `[dev-dependencies]` 不得拉入 bedcode crate**（crate 根 tests/ 是独立测试二进制 = 额外对外行为面 + 图上的真实 dev 边）→ `src-tauri/tests/capability_crates_unit_tests_only.rs`（**注意：该锁的治理面按 `packages/bedcode-*` 目录约定自动推导** ⇒ 新 crate 必须把锁写在 `src/` 并由 `#[cfg(test)] mod` 引入；`bedcode-file-transfer-core` 即如此，`bedcode-host-api-core` 的 crate 根 `tests/` 属在途红）
+- **拆分产物 crate 的单测纯净性**（crate 根不得有 `tests/` / `benches/` / `examples/` 与 `[[test]]` 段；`[dev-dependencies]` 不得含任何内部 crate）→ `src-tauri/tests/capability_crates_unit_tests_only.rs`（治理面按 `packages/bedcode-*` 目录约定推导，新增 crate 自动纳入；`PENDING_GOVERNANCE` 现只登记 `bedcode-host-kit`——其链接期集成测试按设计保留，处置完删条目即自动纳入；含 C-5 正面钉住宿主侧迁移落点防“直接删掉”）。已迁走的两个集成测试落宿主：`src-tauri/tests/link_crypto_http.rs`（原 `bedcode-server-http/tests/`）、`src-tauri/tests/error_envelope_ipc.rs`（原 `bedcode-server-base/tests/`）
 - 权限词汇三副本漂移 → `packages/bedcode-wasm-core/src/permission.rs`（真源 SDK `permission.rs`）
 - 前端零资源访问三层封锁 → `src-tauri/tests/capabilities_lock.rs`；热路径日志 → `hot_path_logging_lock.rs`（`LOCKED_SITES` 随热路径迁至 `packages/bedcode-wasm-core`）
 - 空目录残留（`foo.rs` + 空 `foo/` 双壳，git 与 CI 都看不见，会无声堆积）→ `src-tauri/tests/empty_dir_lock.rs`；覆盖面按**目录约定**（`*/src`）推导，新增 crate 自动纳入，不靠枚举名单

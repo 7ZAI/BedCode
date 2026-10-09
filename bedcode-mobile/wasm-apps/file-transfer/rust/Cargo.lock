@@ -9,6 +9,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
+name = "bedcode-file-transfer-core"
+version = "1.0.0-beta"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "bedcode-plugin-api-mobile"
 version = "0.1.1"
 dependencies = [
@@ -24,6 +32,7 @@ name = "bedcode_plugin_file_transfer"
 version = "1.0.0-beta"
 dependencies = [
  "anyhow",
+ "bedcode-file-transfer-core",
  "bedcode-plugin-api-mobile",
  "serde",
  "serde_json",

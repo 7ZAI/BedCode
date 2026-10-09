@@ -30,6 +30,7 @@ use bedcode_plugin_api_mobile::{BusMessage, WasmPlugin};
 use std::sync::Mutex;
 use std::sync::OnceLock;
 
+mod adapters;
 mod device_bridge;
 mod peer;
 mod roots_registry;
@@ -211,10 +212,9 @@ impl WasmPlugin for FileTransferPlugin {
                         .map_err(|e| anyhow::anyhow!("invalid endpoint: {e}"))?;
                 // 空 node_id 拒绝：写入污染 memo（后续任意 node_id 查询均不命中但
                 // 长期驻留静态表）且掩盖前端缺字段 bug
-                if endpoint.node_id.is_empty() {
-                    return Err(anyhow::anyhow!("remember-peer-endpoint: empty node_id rejected"));
-                }
-                device_bridge::remember_endpoint(&endpoint);
+                // 空 node_id 拒绝的判据单点在核内（SessionTable::remember_endpoint_checked），
+                // 前端/桌面/移动共用一份，端内不再自带副本
+                device_bridge::remember_endpoint(&endpoint)?;
                 Ok(serde_json::json!({ "ok": true }))
             }
 

@@ -41,6 +41,11 @@ bedcode-mobile/                       # 移动端项目 (Tauri 2.0 + Vue 3)
 │   ├── ai-chatbox/                   # AI Chatbox 插件：多供应商 OpenAI 兼容客户端
 │   ├── file-transfer/                # 文件传输插件：基于对等网络的在线对端发现与共享目录浏览、
 │                                     #   多选批量传输、接收策略、SAF 自选保存位置与历史记录
+│                                     #   **rust/ 已是薄层**：业务实现（台账归约 / 判据 / 注册表 /
+│                                     #   设置 / 会话表）在共享核 `packages/bedcode-file-transfer-core`
+│                                     #   （ADR 0044），端内只剩 `adapters.rs`（端口实现，差异面唯一
+│                                     #   落点）+ 模块包装 + `peer.rs` 编排（防漂移锁
+│                                     #   `wiring_lock.rs` 钉住「端内不得复活核内判据」）
 │                                     #   （OCR 插件已随 feature/ocr-plugin 隔离，本分支无）
 │   └── terminal-session/             # 远程终端控制端内置 app（与桌面同名不同职责，ADR 0018/C8，
 │                                     #   票 12/14/15/16）：终端消费 UI 前端（票 15 迁入：

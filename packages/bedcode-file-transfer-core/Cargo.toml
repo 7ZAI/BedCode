@@ -1,0 +1,13 @@
+[package]
+name = "bedcode-file-transfer-core"
+version = "1.0.0-beta"
+description = "File Transfer 双端共享业务核：可共享面收敛为一份，双端差异面全部落到端口 trait"
+authors = ["BedCode"]
+edition = "2021"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"

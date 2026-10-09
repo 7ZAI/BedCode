@@ -22,6 +22,7 @@ use bedcode_plugin_api::{BusMessage, WasmPlugin};
 use std::sync::Mutex;
 use std::sync::OnceLock;
 
+mod adapters;
 mod auth_center;
 mod device_bridge;
 mod peer;
@@ -158,6 +159,14 @@ impl WasmPlugin for FileTransferPlugin {
         // endpoint memo 随会话一并清空（与移动端同构）：跨启停残留旧地址会在
         // 对端换 IP/端口后让数据面重拨命中过期 memo
         device_bridge::clear_peer_state();
+        // 进程内意图随停用作废（票 08）：排队发送批 / 待挂载拉取凭证都只存在
+        // 内存，无行可查、用户无从重试——留到下次激活就是凭空冒出的旧任务
+        let (queued, intents) = peer::reset_volatile_intents();
+        if queued > 0 || intents > 0 {
+            h.log_info(&format!(
+                "deactivate: dropped {queued} queued sends, {intents} pending pull intents"
+            ));
+        }
         for topic in [
             MDNS_FOUND_TOPIC.as_str(),
             MDNS_LOST_TOPIC.as_str(),
@@ -225,10 +234,9 @@ impl WasmPlugin for FileTransferPlugin {
                         .map_err(|e| anyhow::anyhow!("invalid endpoint: {e}"))?;
                 // 空 node_id 拒绝：写入污染 memo（后续任意 node_id 查询均不命中但
                 // 长期驻留静态表）且掩盖前端缺字段 bug
-                if endpoint.node_id.is_empty() {
-                    return Err(anyhow::anyhow!("remember-peer-endpoint: empty node_id rejected"));
-                }
-                device_bridge::remember_endpoint(&endpoint);
+                // 空 node_id 拒绝的判据单点在核内（SessionTable::remember_endpoint_checked），
+                // 前端/桌面/移动共用一份，端内不再自带副本
+                device_bridge::remember_endpoint(&endpoint)?;
                 Ok(serde_json::json!({ "ok": true }))
             }
 

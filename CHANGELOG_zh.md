@@ -9,6 +9,23 @@
 
 ## [未发布]
 
+#### 文件传输：双端共享业务核 `packages/bedcode-file-transfer-core`（ADR 0044）
+
+- **新建双端共享业务核 crate**：文件传输业务实现（任务台账归约 / 重试 + 发送闸门 + 拉取意图判据 /
+  共享根注册表 / 接收设置 / 会话表，约占两端各端代码 70%）收敛为**双端同一份**；每个端差异
+  都表达为端口 trait（`ports.rs`，差异面唯一落点：SQL 表 vs KV 持久化、`path` vs `safTreeUri`
+  wire 形状、节点电源、落点策略、平台选择、信任决策路径）——零 SDK / 零 WIT / 零平台依赖，
+  **零产品身份字面量**（插件 id 经 `PluginIdentity` 运行期注入；核内 `boundary_lock.rs`）
+- **双端退化为薄层**：各 wasm app 保留 `adapters.rs`（自家 SDK trait → 核端口的 1:1 委派，
+  零额外判据）+ 签名不变的模块包装，`peer.rs` 与全部前端代码零改动（移动端页面按要求不动）；
+  接线防漂移锁（`src/wiring_lock.rs`，5 例 + 变异自检 4/4）钉住核与端 app 的边界
+- **桌面行为对齐（用户裁决 B）**：桌面 `peer.rs` 按移动端票 08 修正语义演进——引擎事件即
+  `pull-started` 建行锚点、重试判据前置、发送闸门、排队批派发失败落终态行；旧快照通路
+  （`merge_snapshot` / `prune_absent` / `reconcile_diff`）保留承担对账校正
+- **门禁**：核 crate 72 全绿（含边界锁 + 接线锁）；函数级等价校验（核内 23 函数 vs 两端基线）PASS；
+  桌面插件 crate 47 全绿；移动插件 crate 29 全绿 + 产物重建且 host import 集合与改动前同集合
+  （未新增 import）；桌面产物重建被在途 `manifest-gen` 权限表阻塞 + 本机缺 wasip3 工具链，留 T6
+
 #### 移动端：WS 出站连接引擎抽根为 `packages/bedcode-ws-client-engine` 能力 crate（ADR 0043）
 
 - **新能力 crate `packages/bedcode-ws-client-engine`**：移动端 `host-websocket` 客户端域机制
