@@ -1,6 +1,6 @@
 # wasm-core 单一 crate + WIT 分片组合（能力域扫描装配）
 
-Status: **planning（票 01 POC **完成**：P1 / P2 / P4 **已证**，P3 **不成立**（编译绿、依赖图 28 处红）⇒ 新增票 02 依赖图脱桌面；记录见 `ticket-01-pty-wit-slice-poc.md` §6）**
+Status: **✅ 全落地（2026-10-10）**——票 01（POC：P1/P2/P4 已证，P3 不成立 ⇒ 派生票 02）、票 02（依赖图脱桌面，批 01–06 落地；批 07–09 由票 03/06 承载：内核 bindgen path 目录化 + 平台依赖门控 + tree 门禁）、票 03（core.wit + compose-wit.mjs + 端清单）、票 04（交集切片 + 双端 ABI 37/20 + 产物重建）、票 05（五域自持分片 bindgen）、票 06（单一 crate 双形态 + fork 删除）、票 07（漂移锁 CI 化 + 防回接锁 + 文档收口，ADR 0045 accepted）全部 done（各票实施记录见票内 §；遗留欠账见 `ticket-07-locks-and-docs-closeout.md` §5.6）
 Date: 2026-10-09
 前置：ADR 0035（能力域 crate 化 + 自动装配）、ADR 0037（wasm-core 整核抽出）、ADR 0038/0039（引擎面外迁 + pty 域整面迁出）、ADR 0040（移动 fork 两步走）、ADR 0018（移动契约独立）、ADR 0019（双端锁版）、ADR 0022（边界裁决）
 

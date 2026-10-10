@@ -121,6 +121,6 @@ compose 流水线按**整文件**复制 caps 条目为生成物 `cap-<key>.wit`�
 
 ### 6.8 欠账（如实记）
 
-- **pty / ws fixture 构建者缺位（票 02 迁移欠账，本票顺带补了 pty）**：内核 fixture keeper 只有 crypto / task 两个，宿主 `build_pty_test_component()` 只读不建——pty_e2e 实跑前产物缺失。本票按 `fixture_build.rs` 同款命令（`RUSTUP_TOOLCHAIN=nightly-2026-09-16`、`CARGO_TARGET_DIR=bedcode-desktop/target/fixtures`、wasm32-wasip3 release + `--features pty`）手动构建并归档 `bedcode_plugin_sdk_fixtures.pty.release.wasm`。ws fixture 同样缺位（本票未用到，未补）。建议票 07 收口时把 pty/ws keeper 补进 `fixture_keeper.rs`。
+- **pty / ws fixture 构建者缺位（票 02 迁移欠账，本票顺带补了 pty）**：内核 fixture keeper 只有 crypto / task 两个，宿主 `build_pty_test_component()` 只读不建——pty_e2e 实跑前产物缺失。本票按 `fixture_build.rs` 同款命令（`RUSTUP_TOOLCHAIN=nightly-2026-09-16`、`CARGO_TARGET_DIR=bedcode-desktop/target/fixtures`、wasm32-wasip3 release + `--features pty`）手动构建并归档 `bedcode_plugin_sdk_fixtures.pty.release.wasm`。ws fixture 同样缺位（本票未用到，未补）。建议票 07 收口时把 pty/ws keeper 补进 `fixture_keeper.rs`。**✅ 票 07 已补（2026-10-10）**：`fixture_keeper.rs` 增 `pty_fixture_artifact_is_built_for_host_e2e` / `ws_fixture_artifact_is_built_for_host_e2e`，keeper 4/4 实跑绿、pty（383KB）/ ws（397KB）产物实际生成——宿主只读场景的产物缺位闭合。
 - **每域一个提交（票面 §2）**：按仓库惯例留待用户统一裁决提交切分，改动面见 6.2。
 - **文档联动**（CHANGELOG / code-map / ADR 0045 accepted / 漂移锁 CI 化）：随票 07 统一收口（与票 03 §7.5 同口径）。
