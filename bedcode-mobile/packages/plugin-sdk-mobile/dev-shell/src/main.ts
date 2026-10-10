@@ -22,7 +22,9 @@ import { dialogService } from './mock/dialog-service'
 import { zhCN, en } from './locales'
 import { readSavedLocale } from './locale'
 import './styles/main.css'
-import './styles/mobile.css'
+// token 走单一真源：monorepo 内指向宿主 src/styles/mobile.css（见 vite.config.ts），
+// npm 包内回落到 dev-shell 自带副本
+import '@bedcode/mobile-styles/mobile.css'
 
 const app = createApp(App)
 const pinia = createPinia()

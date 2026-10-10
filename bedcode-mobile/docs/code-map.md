@@ -312,6 +312,10 @@ wasm_host.rs 拆分）、`terminal_stream_gateway.rs`（窄转发表，Tauri 命
 调试壳内置**与宿主壳同构的 mini 壳**（`dev-shell/src/shell/**`：types → registry → composables →
 components/screens，数据源 `adapters/devAppSource.ts` 把「内置应用 + 被调试插件」投影成壳应用），
 与宿主 `src/shell/**` 的契约漂移由 `dev-shell/__tests__/shell/contractDrift.test.ts` 钉住；
+**视觉层**（设计 token / Tailwind 主题）走单一真源：monorepo 内调试壳直接 import 宿主
+`src/styles/mobile.css`（`dev-shell/vite.config.ts` 的 `@bedcode/mobile-styles` 别名，npm 包内
+回落到自带副本），副本与宿主的一致性由 `dev-shell/__tests__/visualParity.test.ts` 钉住——插件 UI
+几乎只靠 `var(--mobile-*)` 上色，token 副本分叉会让预览呈现与真机不同的配色；
 模拟终端等内置页已降为**内置应用**（`dev-shell/src/apps/mock-terminal/`，与被调试插件同一条
 加载与渲染路径），不再有壳自带的调试页签。
 完整开发指南见仓库根 `bedcode-mobile/plugin-dev-mobile.md`。

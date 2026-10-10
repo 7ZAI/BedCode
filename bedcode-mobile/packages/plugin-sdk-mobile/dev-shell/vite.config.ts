@@ -12,11 +12,29 @@
  */
 import { defineConfig, type Plugin } from 'vite'
 import vue from '@vitejs/plugin-vue'
-import { realpathSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { existsSync, realpathSync } from 'node:fs'
+import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const DEV_SHELL_ROOT = fileURLToPath(new URL('.', import.meta.url))
+
+/**
+ * 设计 token 的单一真源
+ *
+ * 插件 UI 几乎只靠 `var(--mobile-*)` 上色（file-transfer 一个插件就引用 130 处），
+ * token 一旦与宿主分叉，预览里看到的就是另一套配色——而这正是 dev-shell 唯一不该
+ * 发生的事（同型壳的价值就是所见即真机）。
+ *
+ * monorepo 内 dev-shell 与宿主同仓，直接指向宿主 `src/styles/`（跟随宿主更新，零维护）；
+ * npm 包内没有宿主，退回自带副本（`files` 白名单携带），副本与宿主的一致性由
+ * `dev-shell/__tests__/visualParity.test.ts` 钉住。
+ */
+const TOKEN_STYLE_ALIAS = '@bedcode/mobile-styles'
+const HOST_STYLE_DIR = resolve(DEV_SHELL_ROOT, '../../../src/styles')
+const BUNDLED_STYLE_DIR = resolve(DEV_SHELL_ROOT, 'src/styles')
+const TOKEN_STYLE_DIR = existsSync(join(HOST_STYLE_DIR, 'mobile.css'))
+  ? HOST_STYLE_DIR
+  : BUNDLED_STYLE_DIR
 
 /** 单个被调试插件 */
 export interface DevPluginSpec {
@@ -82,8 +100,8 @@ function devPluginsVirtual(plugins: DevPluginSpec[]): Plugin {
 export default defineConfig(() => {
   const plugins = parseDevPlugins()
 
-  // fs.allow：dev-shell 自身 + 插件目录（file: SDK 依赖为软链，需放行真实路径）
-  const allow = new Set<string>([DEV_SHELL_ROOT])
+  // fs.allow：dev-shell 自身 + 插件目录（file: SDK 依赖为软链，需放行真实路径）+ token 目录
+  const allow = new Set<string>([DEV_SHELL_ROOT, TOKEN_STYLE_DIR])
   for (const p of plugins) {
     allow.add(p.dir)
     try {
@@ -98,6 +116,7 @@ export default defineConfig(() => {
     resolve: {
       // 强制插件源码与 dev-shell 共用同一份 vue 实例（provide/inject、响应式共享依赖它）
       dedupe: ['vue', 'vue-i18n', 'pinia', 'vue-router'],
+      alias: { [TOKEN_STYLE_ALIAS]: TOKEN_STYLE_DIR },
     },
     // main.ts 使用 top-level await 串行初始化共享运行时 → 加载插件 → 挂载
     build: {
