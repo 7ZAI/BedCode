@@ -23,7 +23,7 @@ use std::sync::{Arc, RwLock};
 // `bedcode-host-kit` 持有本模块的**值对象层**（单插件原子计数器 + 生命周期/授权
 // 维度枚举 + 计时器 + 快照形状），本模块只留**注册表与诊断面**（`MetricsRegistry` /
 // `MetricsSource` / JSON 拼装）。拆的理由：值对象是 `WasmPluginState` 的字段类型，
-// 机制内核不依赖宿主，就必须能命名它们（wasm-core-lib-split 票 03）。
+// 机制内核不依赖宿主，就必须能命名它们（能力域脱绑，见 2026-10-07 拆分系）。
 //
 // 可见性以 `pub use` 原样转发，既有 `monitor::PluginMetrics` 等引用路径逐字不变。
 pub use bedcode_host_kit::metrics::{
@@ -32,7 +32,7 @@ pub use bedcode_host_kit::metrics::{
 
 // ==================== 系统维度快照源（注册制） ====================
 
-/// 系统维度指标快照源（spec 票 02 去环：Observer + Registry 模式）
+/// 系统维度指标快照源（去环：Observer + Registry 模式）
 ///
 /// monitor 不主动 import 兄弟模块——各维度数据属主（如 host-task 的 `task` 段）
 /// 实现本 trait，并在 runtime 初始化时经 [`MetricsRegistry::register_source`]
@@ -119,7 +119,7 @@ impl MetricsRegistry {
     /// `plugins` 段为插件维度指标；其余段来自已注册的 [`MetricsSource`]。
     /// host-task 的 `task` 段由 `manager::task` 经 [`Self::register_source`] 注册，
     /// 内容见 [`crate::manager::task::task_metrics_snapshot`]：任务提交/拒绝
-    /// 计数、单元完成累计、并发高水位、回调丢弃计数（spec §5.1）——各段均纯原子
+    /// 计数、单元完成累计、并发高水位、回调丢弃计数——各段均纯原子
     /// 记账、快照导出是唯一消费口。未注册段在快照中缺失而非 panic（确定性降级，
     /// fail-visible；生产路径 runtime 初始化即注册，无此窗口）。
     ///
@@ -225,7 +225,7 @@ mod tests {
         assert_eq!(snap.authz["require_approval"], 3);
     }
 
-    /// 授权记录容量丢弃计数与决策计数互不串台（spec §8.2）
+    /// 授权记录容量丢弃计数与决策计数互不串台
     ///
     /// 变异判据：把 `record_authz_record_dropped` 记到 `authz_decisions` 的某个槽位，
     /// 本条的 allow 计数或 dropped 计数必有一侧转红。
@@ -243,7 +243,7 @@ mod tests {
     }
 
     /// 总线计数：队列满丢弃与格式不匹配拒绝分别累计，互不影响
-    /// （票据 05 背压/格式过滤的监控落点）
+    /// （背压/格式过滤的监控落点）
     #[test]
     fn bus_dropped_and_format_rejected_counted_separately() {
         let m = PluginMetrics::default();
@@ -303,7 +303,7 @@ mod tests {
         assert_eq!(plugin["lifecycle"]["instantiate"], 1);
     }
 
-    /// 全量快照顶层结构逐字节对照（spec 票 02 行为零变化锁）：
+    /// 全量快照顶层结构逐字节对照（行为零变化锁）：
     /// `{"plugins":…,"task":…}` 两段与字段形状与旧内联实现一致
     /// （serde_json Map 无 preserve_order，键字母序 plugins < task）。
     /// task 段枚举字段沿用 host-task 既有 camelCase 键名。

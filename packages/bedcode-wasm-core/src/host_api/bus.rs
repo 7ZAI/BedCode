@@ -1,12 +1,11 @@
-//! 消息总线域 adapter（实现层已上移共享核，票 18 批次 2）
+//! 消息总线域 adapter（实现层已上移共享核）
 //!
 //! 门禁语义（topic 形态机制 / 命名空间门 / 订阅面门 / 互调门 / 发布判定链）在
 //! `bedcode-host-api-core::bus`（双端单点，机制修复一次生效）；本文件只剩
 //! 「BusScope + SecurityScope → 共享核 [`BusPorts`]」的 adapter、域函数签名与
-//! 投递机制（订阅/退订的异步 spawn——队列与订阅簿是各端形状，票 18 §2「抽语义，
-//! 队列留各端」）。
+//! 投递机制（订阅/退订的异步 spawn——队列与订阅簿是各端形状）。
 //!
-//! 桌面策略：**总线无权限位**（审计票 05：topic 形态即 ACL）——端口
+//! 桌面策略：**总线无权限位**（topic 形态即 ACL）——端口
 //! `check_permission` 恒 `true`；互调门经 core-security 授权框架（ADR 0017 层 1）。
 //! guest 可见错误文本与 warn 结构化字段逐字保留（`component.rs` 绑定层与本文件
 //! 测试调用面零改动）。
@@ -25,7 +24,7 @@ struct HostBusPorts<'a> {
 
 impl BusPorts for HostBusPorts<'_> {
     fn check_permission(&self, _plugin_id: &str, _permission: &str, _api: &str) -> bool {
-        // 桌面总线无权限位（审计票 05：topic 形态即 ACL）；移动端权限位经同一端口注入
+        // 桌面总线无权限位（topic 形态即 ACL）；移动端权限位经同一端口注入
         true
     }
 
@@ -143,7 +142,7 @@ pub(crate) fn bus_unsubscribe(bus: &dyn BusScope, plugin_id: &str, topic: &str) 
     Ok(())
 }
 
-/// 请求 topic 的目标 api **声明属主**（票 05 回复道 sender 校验依据）
+/// 请求 topic 的目标 api **声明属主**（回复道 sender 校验依据）
 ///
 /// 与共享核互调门读同一张注册表（`ApiCallAuthorizer` 的命中判定即
 /// `registry.contains`），故「门禁放行」与「取到属主」不会漂移。
@@ -362,7 +361,7 @@ mod tests {
         bus_unsubscribe(ctx.as_ref(), "plugin-a", "topic").expect("unsubscribe ok");
     }
 
-    // ==================== topic 命名空间门禁（审计票 05，P0-4） ====================
+    // ==================== topic 命名空间门禁 ====================
 
     /// 他人命名空间 topic（跨属主订阅 = 窃听他人定向事件流）：拒绝
     #[tokio::test]

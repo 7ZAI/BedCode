@@ -1,13 +1,13 @@
 //! `host-bus` 实现层（topic 形态机制 + 命名空间/订阅面/互调门禁 + 发布门禁链）
 //!
-//! 自桌面 `host_api/bus.rs` 与桌面 SDK `host/bus.rs` 上移（票 18 批次 2）：
-//! **topic 形态即 ACL**（审计票 05）——判定只看串，不查激活表，形态边界无时序漏。
+//! 自桌面 `host_api/bus.rs` 与桌面 SDK `host/bus.rs` 上移：
+//! **topic 形态即 ACL**——判定只看串，不查激活表，形态边界无时序漏。
 //! 队列与订阅簿（背压 / 派发形状）留各端；本模块只承载门禁语义与发布判定链。
 //!
 //! ## topic 形态机制的真源位置
 //!
 //! 本模块是**宿主侧单点**；guest 侧拷贝仍在双端 SDK（`host::bus`，桌面有 / 移动
-//! 无）。三方逐字一致由票 19 Part B 双端对照锁钉住（本票先落宿主侧）。
+//! 无）。三方逐字一致由双端对照锁钉住。
 //!
 //! ## 两端策略分叉的端口承载
 //!
@@ -21,7 +21,7 @@
 //! ## 错误文本纪律
 //!
 //! 桌面 guest 可见错误文本**逐字承自桌面**（trap 文本是既有行为面）；移动端自本批
-//! 起对齐同文（此前移动无任何门禁——双份漂移税实例，见票 18 §9）。
+//! 起对齐同文（此前移动无任何门禁——双份漂移税）。
 
 use serde_json::Value;
 
@@ -150,7 +150,7 @@ fn check_api_gate(ports: &dyn BusPorts, plugin_id: &str, topic: &str) -> Result<
 // ==================== 发布 / 订阅访问（投递机制留各端） ====================
 
 /// 权限位判定（两端策略分叉的统一入口：`None` = 该端无权限位，如桌面——
-/// 审计票 05 形态即 ACL）。发布链内部已含本步骤；订阅/退订由 adapter 显式调用
+/// 形态即 ACL）。发布链内部已含本步骤；订阅/退订由 adapter 显式调用
 /// （其投递机制各端自持，门禁步骤在投递之前）。
 pub fn check_gate(ports: &dyn BusPorts, plugin_id: &str, gate: Option<&PermissionGate<'_>>) -> Result<(), String> {
     match gate {
@@ -168,8 +168,8 @@ pub fn check_gate(ports: &dyn BusPorts, plugin_id: &str, gate: Option<&Permissio
 /// 发布 JSON 消息（权限位[如有] → JSON 严格解析 → 命名空间 → 互调门 → 投递）
 ///
 /// JSON 解析**严格拒绝**（fail-visible）：降级成字符串会让 guest 以为已投递、
-/// 订阅方收到形状不同的载荷——移动端自本批起对齐该语义（此前降级为原始串，
-/// 见票 18 §9 行为对齐记录；SDK 侧 `bus_publish` 收 `serde_json::Value`，序列化
+/// 订阅方收到形状不同的载荷——移动端自本批起对齐该语义（此前降级为原始串；
+/// SDK 侧 `bus_publish` 收 `serde_json::Value`，序列化
 /// 恒为合法 JSON，既有插件不受影响）。
 pub fn bus_publish(
     ports: &dyn BusPorts,
