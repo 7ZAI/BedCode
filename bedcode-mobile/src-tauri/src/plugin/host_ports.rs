@@ -336,11 +336,9 @@ impl HostEnginePorts for HostPorts {
     }
 
     async fn peer_active_transfers(&self, app: &tauri::AppHandle) -> bedcode_wasm_core_mobile::Result<String> {
-        // 三表聚合投影（send 句柄表 + receive pending 询问表 + pull 会话表）
-        let mut rows = crate::peer_transfer::active_send_transfer_rows(app);
-        rows.extend(crate::peer_receive::active_receive_rows(app));
-        rows.extend(crate::peer_remote::active_pull_rows(app));
-        serde_json::to_string(&rows).map_err(|e| crate::AppError::Serialization(e))
+        // 三表聚合投影（send 句柄表 + receive pending 询问表 + pull 会话表）——
+        // 真源在共享能力域 crate（Engine 集中化 2026-10-10）
+        crate::peer_transfer::active_transfers_json(app).await
     }
 
     async fn peer_collect_outgoing(&self, paths: Vec<String>) -> bedcode_wasm_core_mobile::Result<String> {
