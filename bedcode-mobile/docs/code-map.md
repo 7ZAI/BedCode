@@ -645,6 +645,8 @@ Desktop PTY → Claude Code
 - `host-websocket` 客户端子集域边界（票 11：移动 WIT 不得长出 ws **服务端**域 / 不得定义 ws 服务端权限）→ `src-tauri/tests/mobile_host_websocket_client_domain_lock.rs`
 - egress 三档策略架构不变量（票 20：档位→动作映射单点 `StrategyStep::of` / 写入面 `parse_wire` 单点 / 安全义务符号在场）→ `src-tauri/tests/egress_tier_mapping_single_point_lock.rs`（3 例 + 变异自检 3/3）
 - **移动 fork crate 退役面**（票 06 批次 04 / 票 07 批次 02）：fork 目录不得复活 / `bedcode-wasm-core-mobile` 只能当依赖键别名（不得作包名）/ 移动构建面不得出现 fork 形态路径（`"../packages/bedcode-wasm-core"`）/ `src-tauri` 别名必须指向仓库根 crate（package rename + mobile-host）→ `src-tauri/tests/retired_mobile_wasm_core_fork_lock.rs`（四判据；变异自检 2/2）
+- **对等网络能力域集中化**（2026-10-10，ADR 0048）：移动宿主不得重新持有引擎控制面（节点装配 / 生命周期闸门 / 会话句柄表 / 载荷构造 / 接收设置落盘）→ `src-tauri/tests/peer_engine_consolidation_lock.rs`（三面判据：退役面缺席 / 适配面在场 / 共享依赖在场；变异自检 1/1）
+- **mDNS 广播死面退役**（2026-10-10，ADR 0048）：`MdnsAdvertiser` / 广播命令 / 前端死 composable / 自建 `ServiceDaemon::new` 不得回到移动宿主与前端 → `src-tauri/tests/retired_mobile_mdns_advertise_lock.rs`（退役面缺席 / browse 薄壳在场 / 共享守护复用锚点；变异自检 1/1）
 - **移动 WIT 分片拼装组合**（票 03/07）：`compose.json` 的 `abi.version` == SDK `abi.rs` 的 `ABI_VERSION` / 生成物 `bedcode.wit` include 集 == `core` + 各 caps 键 / `worlds` 列表在生成物目录有声明 → `src-tauri/tests/mobile_wit_composition_lock.rs`（变异自检 1/1）。生成物逐字漂移面另有仓库根 `node scripts/compose-wit.mjs --all --check`（CI `wit-drift-lock.yml` + husky pre-commit）
 - 票 19 Part A/B 的 A1–A4 契约锁与 fork 对称结构锁（`bedcode-mobile/packages/bedcode-wasm-core/tests/{sdk_wit_contract_locks,fork_boundary_lock}.rs`）**随移动 fork crate 一并退役**（票 06 批次 04，目录删除 = 旧读路径消失）：A1 的结构/计数面由 `mobile_wit_composition_lock.rs` 承接，A2/A3/A4 的语义面由「移动 SDK 为唯一真源 + `stale_artifact_rebuild_hint` 旧产物点名 + 双端 ABI 锁步（ADR 0019）」承接；重建需求见 `.scratch/2026-10-09-wasm-core-single-crate/ticket-07-locks-and-docs-closeout.md` §5 遗留欠账
 
