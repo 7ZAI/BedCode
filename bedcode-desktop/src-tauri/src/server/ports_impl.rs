@@ -154,9 +154,12 @@ impl PathsPort for HostPathsPort {
                 "resolve downloads dir failed: no runtime context".to_string(),
             ));
         };
+        // 落点子目录归桌面端自定（能力域只消费端口结果，不拼平台路径）：
+        // 系统 Downloads/BedCode
         handle
             .path()
             .download_dir()
+            .map(|dir| dir.join("BedCode"))
             .map_err(|e| AppError::Internal(format!("resolve downloads dir failed: {e}")))
     }
 }
@@ -179,6 +182,11 @@ impl SystemInfoPort for HostSystemInfoPort {
 
     fn local_ipv4_addresses(&self) -> Vec<String> {
         crate::system::info::local_ipv4_addresses()
+    }
+
+    /// 空值兜底产品名归各端（能力域不硬编码）；与迁移前 crate 内常量逐字一致
+    fn device_name_fallback(&self) -> String {
+        "BedCode Desktop".to_string()
     }
 
     fn app_version(&self) -> String {

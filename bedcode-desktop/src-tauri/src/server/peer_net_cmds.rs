@@ -29,8 +29,19 @@ pub fn peer_ctx(app: &AppHandle) -> Arc<PeerCtx> {
             Arc::new(crate::server::ports_impl::assemble(Some(Arc::new(app.clone()))))
         }
     };
+    // 窄端口装配（能力域自持端口面）：peer 引擎只消费 bus / event_sink /
+    // paths / system_info / mdns 五个端口，从全量 `ServerPorts` 取子集
+    let engine_ports = Arc::new(bedcode_server_peer_net::engine_ports::PeerEnginePorts {
+        bus: Arc::clone(&ports.bus),
+        event_sink: Arc::clone(&ports.event_sink),
+        paths: Arc::clone(&ports.paths),
+        system_info: Arc::clone(&ports.system_info),
+        mdns: Arc::clone(&ports.mdns),
+        // 桌面无平台缝（默认路径直读 / 无落点提升 / 无内置条目）——行为逐字不变
+        platform: None,
+    });
     Arc::new(PeerCtx {
-        ports,
+        ports: engine_ports,
         state: app.state::<Arc<PeerNetState>>().inner().clone(),
         transfer: app.state::<Arc<PeerTransferState>>().inner().clone(),
         receive: app.state::<Arc<PeerReceiveState>>().inner().clone(),
