@@ -273,28 +273,45 @@ bedcode-mobile/                       # 移动端项目 (Tauri 2.0 + Vue 3)
 双端共用单一 crate（ADR 0045 D1；移动 fork crate 已随票 06 批次 04 退役，目录删除）。
 移动形态依赖形态（`src-tauri/Cargo.toml`）：
 `bedcode-wasm-core-mobile = { package = "bedcode-wasm-core", path = "../../packages/bedcode-wasm-core",
-default-features = false, features = ["mobile-host"] }`——package rename 别名，源码
-`bedcode_wasm_core_mobile::` 导入路径零改动。`mobile-host` 面含：机制核（bus/config/db/monitor/
-permission/security/storage，与桌面**同一份源码**）、**移动运行时与 host 原语**
-（`manager/runtime/mobile/**`——bindgen 绑移动 WIT v20 生成物目录 `wit/`〔core.wit + cap-mobile.wit
-+ bedcode.wit 分片拼装，票 03/06〕，宿主引擎调用经 `host_api/ports.rs` 的 `HostEnginePorts` 注入；
-v18 起 `host-notify`：通知/震动/声音，收编原 host-events.notify，权限位 `notify` fail-closed）、
-`host_api/{http_engine,sql_guard}`、`terminal_stream_gateway.rs`（窄转发表，Tauri 命令薄壳留宿主）、
-`test_support`（夹具构建器 + MockPorts，`any(test, feature = "test-support")` 门控）。
+default-features = false, features = ["bare-host"] }`——package rename 别名，源码
+`bedcode_wasm_core_mobile::` 导入路径零改动。`bare-host` 面（2026-10-10
+`wasm-core-mobile-purity` 票 02–05 收口后，ADR 0047）分四层：
+
+- **机制核**（bus / config / db / monitor / permission / security / storage /
+  `terminal_stream_gateway.rs`）：与 `common-host` 面**同一份源码**；
+- **运行时与装配**（`manager/runtime/bare/**`）：bindgen 绑移动 WIT 生成物目录 `wit/`
+  〔core.wit + cap-mobile.wit + `bedcode.wit` 分片拼装〕；`component.rs` 的 linker 装配 =
+  双端共有机制域的**本端壳** + 移动独有域的 **cfg(test) 替身**（生产装配在宿主 adapter，
+  见下节 `plugin/bindings.rs`）；
+- **共有机制域壳**（`manager/runtime/bare/host_impl/`，11 域 + `support.rs`）：**纯转发 /
+  端口接线**，域逻辑在共享 crate——peer → `bedcode-server-peer-net::plugin_binding`（票 03）、
+  http → `bedcode-server-http::plugin_binding::egress`（票 05）、fs →
+  `bedcode-host-api-core::fs`（票 05）、db·storage·bus·events·log → `bedcode-host-api-core`；
+  Android 等平台差经端口注入（`FsHostPorts::platform_delete` 一类）；壳行数由纯净性锁封顶；
+- **端口与适配**：`host_api/ports.rs`（`HostEnginePorts`，宿主引擎调用入口）+
+  `host_api/sql_guard.rs`（SQL 表名前缀护栏）+ `host_api/bare_context.rs` +
+  `test_support`（夹具构建器 + MockPorts，`any(test, feature = "test-support")` 门控）。
 
 **防回接**：`src-tauri/tests/retired_mobile_wasm_core_fork_lock.rs`（fork 目录 / 包名 /
-路径字形 / 别名指向四判据）；WIT 生成物由仓库根 `node scripts/compose-wit.mjs mobile --check`
+路径字形 / 别名指向四判据）+ `src-tauri/tests/mobile_wasm_core_purity_lock.rs`
+（移动独有域不回流 / 壳不含域逻辑 / 共享核在场 / 行数上限 / 退役引擎不复活；见锁索引）；
+WIT 生成物由仓库根 `node scripts/compose-wit.mjs mobile --check`
 （CI `wit-drift-lock.yml` + husky）盯住，手改生成物即红。
 
 **Rust 宿主侧 — `src-tauri/src/plugin/`：**
 
 - **manager / loader / registry / storage**：生命周期管理（加载/激活/停用/状态持久化）、
   APK assets 内置插件解压 + app_data_dir 扫描、注册表、存储
-- **wasm_runtime + wasm_runtime/host_impl/**：wasmtime Engine/Store/Instance 管理（`component.rs`
-  为 WASM 组件模式接线）；宿主能力实现按功能域拆分于 host_impl/
-  （storage/db/fs/http/mdns/terminal/event/bus/config/notify/peer/support/platform/ws）
-- **wasm_host**：WASM Host Function 通用工具函数（SQL 表名前缀校验、数据库列类型转换、
-  HTTP 代理执行），从原 `host_context.rs` 迁移的核心逻辑
+- **bindings.rs**：宿主自带 `bindgen!`（移动 WIT）+ `expect_host_module!` 白名单双向校验
+  —— 解孤儿规则 E0117、给 linker 提供宿主侧装配点（ADR 0047 D5，与桌面同形装配面）
+- **移动独有域 adapter**（票 04 落点，自带 `impl Host` + 域逻辑 + android 桥）：
+  `notify.rs`（host-notify 5 原语）/ `terminal_stream.rs`（host-terminal-stream 1）/
+  `fs_mobile.rs`（host-fs-mobile 2，SAF 与媒体落盘）/ `connection.rs`
+  （host-connection.primary-target 1）/ `auth.rs`（host-auth 5）
+- **端口接线**：`host_ports.rs`（`HostEnginePorts` 宿主引擎端口实现，含 egress_check /
+  global_token 等）/ `peer_ports.rs`（`PeerPorts`，票 03）
+- **wasm_host**：SQL 表名前缀校验与列类型转换（原宿主 `wasm_host.rs` 的 SQL 半部；
+  HTTP 执行半部已随票 05 上移能力域 crate `bedcode-server-http`）
 - **downloader**：插件远程下载 + SHA256 校验 + 安装到 app_data_dir
 - **approval / validation**：权限审批与内容钉扎、插件身份校验（目录名与 manifest id 一致性，防冒名）
 - **saf_io / saf_path**：SAF 存储访问抽象（`SafIo` trait 主 seam，Kotlin `SafTransferPlugin` 实现）
@@ -644,7 +661,8 @@ Desktop PTY → Claude Code
 - 插件 KV 真源 = 主库 `plugin_storage` 表（票 05b 真源搬迁）→ `src-tauri/tests/plugin_storage_db_backed_lock.rs`（`plugin_storage_is_db_backed_not_file_backed`）
 - `host-websocket` 客户端子集域边界（票 11：移动 WIT 不得长出 ws **服务端**域 / 不得定义 ws 服务端权限）→ `src-tauri/tests/mobile_host_websocket_client_domain_lock.rs`
 - egress 三档策略架构不变量（票 20：档位→动作映射单点 `StrategyStep::of` / 写入面 `parse_wire` 单点 / 安全义务符号在场）→ `src-tauri/tests/egress_tier_mapping_single_point_lock.rs`（3 例 + 变异自检 3/3）
-- **移动 fork crate 退役面**（票 06 批次 04 / 票 07 批次 02）：fork 目录不得复活 / `bedcode-wasm-core-mobile` 只能当依赖键别名（不得作包名）/ 移动构建面不得出现 fork 形态路径（`"../packages/bedcode-wasm-core"`）/ `src-tauri` 别名必须指向仓库根 crate（package rename + mobile-host）→ `src-tauri/tests/retired_mobile_wasm_core_fork_lock.rs`（四判据；变异自检 2/2）
+- **移动 fork crate 退役面**（票 06 批次 04 / 票 07 批次 02）：fork 目录不得复活 / `bedcode-wasm-core-mobile` 只能当依赖键别名（不得作包名）/ 移动构建面不得出现 fork 形态路径（`"../packages/bedcode-wasm-core"`）/ `src-tauri` 别名必须指向仓库根 crate（package rename + bare-host）→ `src-tauri/tests/retired_mobile_wasm_core_fork_lock.rs`（四判据；变异自检 2/2）
+- **wasm-core 纯净性防回接**（票 2026-10-10 `wasm-core-mobile-purity` 票 06-①；ADR 0047 D4/D5）：移动独有域不得回流 wasm-core（5 个域文件不得复现 + 生产装配段不得出现其 `Host` impl）/ 形态壳不得含域逻辑（http 执行本体、fs 系统调用、peer 时代句柄表与重拨符号）/ 三条共享实现核必须在场（`server-http::plugin_binding::egress` · `host-api-core::fs` · `server-peer-net::plugin_binding`）/ 壳文件与目录行数双重上限 / 已退役的 `host_api/http_engine.rs` 不得复活 → `src-tauri/tests/mobile_wasm_core_purity_lock.rs`（6 例；变异自检 **4/4**）。**改 wasm-core `runtime/bare/host_impl/*` 或移动 `src/plugin/{notify,auth,terminal_stream,connection,fs_mobile}.rs` 前先看它**
 - **对等网络能力域集中化**（2026-10-10，ADR 0048）：移动宿主不得重新持有引擎控制面（节点装配 / 生命周期闸门 / 会话句柄表 / 载荷构造 / 接收设置落盘）→ `src-tauri/tests/peer_engine_consolidation_lock.rs`（三面判据：退役面缺席 / 适配面在场 / 共享依赖在场；变异自检 1/1）
 - **mDNS 广播死面退役**（2026-10-10，ADR 0048）：`MdnsAdvertiser` / 广播命令 / 前端死 composable / 自建 `ServiceDaemon::new` 不得回到移动宿主与前端 → `src-tauri/tests/retired_mobile_mdns_advertise_lock.rs`（退役面缺席 / browse 薄壳在场 / 共享守护复用锚点；变异自检 1/1）
 - **移动 WIT 分片拼装组合**（票 03/07）：`compose.json` 的 `abi.version` == SDK `abi.rs` 的 `ABI_VERSION` / 生成物 `bedcode.wit` include 集 == `core` + 各 caps 键 / `worlds` 列表在生成物目录有声明 → `src-tauri/tests/mobile_wit_composition_lock.rs`（变异自检 1/1）。生成物逐字漂移面另有仓库根 `node scripts/compose-wit.mjs --all --check`（CI `wit-drift-lock.yml` + husky pre-commit）

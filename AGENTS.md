@@ -135,6 +135,8 @@ wasm 应用层（业务事实面：各自私有库 + 各自前端状态 + 自身
 
 **wasm-core 是单一 crate**（ADR 0045 accepted，2026-10-10）：`packages/bedcode-wasm-core` 双端共用——桌面形态 = 默认 feature `common-host`，移动形态 = `default-features = false, features = ["bare-host"]`（移动 `src-tauri` 以 `bedcode-wasm-core-mobile` 作 package rename 别名消费；移动 fork crate 已删除，回接由 `bedcode-mobile/src-tauri/tests/retired_mobile_wasm_core_fork_lock.rs` 拦截）。**双端差异只来自「组合了哪些能力域 + 契约分片」**：核心 WIT 真源 = `packages/bedcode-wasm-core/wit/core.wit`（17 个双端全等 interface），端差异在各端 `compose.json` 驱动的 cap 分片（桌面 cap-desktop / cap-pty / cap-http / cap-ws，移动 cap-mobile）；能力域 crate 自持 `wit/<domain>.wit`（`world cap-<domain>`），可被任意端组合。**但契约仍独立**（ADR 0018）：移动 WIT / ABI 与桌面各自演进，移动**不跟演**桌面部分 ABI 破坏性变更；跨端协议改动仍必须两端同步部署（§9）。
 
+**形态命名与落点纪律**（ADR 0047，2026-10-10 收口）：wasm-core 内**自持标识符零端名**（desktop / mobile）、零机制名（`wasi` / `wasip3` / `wasm32`）——形态只取中立词 `common` / `bare`，机制差写注释与文档；域落点三则：① **域逻辑进共享 crate**（WIT-无关函数 + 端口 trait），形态壳只做端口接线与薄转发（peer → `server-peer-net`、http → `server-http`、fs → `host-api-core::fs`、db/storage/bus/events → `host-api-core`）；② **移动独有域整面落移动宿主**（notify / terminal_stream / fs_mobile / connection.primary-target / auth / 移动 events 在 `bedcode-mobile/src-tauri/src/plugin/*`，wasm-core 只留 `#[cfg(test)]` 替身）；③ 三条一起由 `bedcode-mobile/src-tauri/tests/mobile_wasm_core_purity_lock.rs` 钉住（改 wasm-core 形态壳或移动域 adapter 前先看它）。
+
 ---
 
 ## 6. 代码规范

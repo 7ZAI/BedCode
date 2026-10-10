@@ -28,6 +28,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   face present / shared dependency present, mutation 1/1) + `retired_mobile_mdns_advertise_lock.rs`
   (advertise face absent / browse shell present / shared-daemon reuse anchor, mutation 1/1).
 
+#### wasm-core purity closeout: neutral form naming, mobile-only domains moved to the mobile host, domain logic sunk into shared crates (ADR 0047)
+
+- **Neutral form naming (zero behavior change)**: no more end-name / mechanism-name identifiers inside
+  wasm-core — features `desktop-host` / `mobile-host` → **`common-host` / `bare-host`**, modules
+  `runtime/{desktop,mobile}*` → `runtime/{common,bare}*`, `test_support/{desktop,mobile}*` →
+  `{common,bare}*`, `host_api/mobile_context.rs` → `host_api/bare_context.rs`; the assembling feature of
+  the six capability crates renamed in the same batch. (Follow-up fixes in this round:
+  `bedcode_host_kit::limits::defaults::*` paths, `StoreSpec` re-export for the bare form.)
+- **Mobile-only domains now live in the mobile host** (user directive: mobile-only capabilities must not
+  sit in wasm-core): the WIT shells, logic and ports of `host-notify` / `host-terminal-stream` /
+  `host-fs-mobile` / `host-connection.primary-target` / `host-auth` / mobile events moved to
+  `bedcode-mobile/src-tauri/src/plugin/*`; the mobile assembly chain now uses host-kit
+  `WasmPluginState` + `HostPorts` + `ModuleRegistry` (host-side `bindgen!` resolves the orphan rule,
+  `expect_host_module!` whitelist checked both ways); wasm-core keeps only `#[cfg(test)]` stand-ins.
+- **Logic-carrying domains narrowed / sunk**: the `host-http` outbound executor (non-streaming, SSE
+  streaming, byte caps, redirect re-validation) sunk into the capability crate
+  `bedcode-server-http::plugin_binding::egress` (the mobile-owned engine retired, one implementation for
+  both ends; the host-injected `jwtAuth` bearer became an **optional port**
+  `HttpPorts::jwt_auth_token`, defaulting to `Ok(None)` so desktop behavior is unchanged); the six
+  `host-fs` intersection primitives (permission gate → access decision → path-shape guards) moved up to
+  `bedcode-host-api-core::fs` (Android/SAF deletion injected through a port); `host-plugin-database` was
+  judged already at target (mechanism semantics in `host-api-core::database`, only the per-end private-db
+  handle resolution remains).
+- **Anti-back-drift lock**: `bedcode-mobile/src-tauri/tests/mobile_wasm_core_purity_lock.rs` with six
+  criteria (mobile-only domains must not return / no their `Host` impl in the production assembly section /
+  form shells must not regrow domain logic / shared implementation cores must stay addressable / double
+  line ceilings on shells / retired engine must stay retired), mutation self-check **4/4**.
+- **Zero ABI / WIT / SDK / wire / permission changes** ⇒ existing plugin artifacts need no rebuild (pure
+  Rust-side relocation and renaming).
+
 #### Single wasm-core crate: mobile fork retired, dependency graph unbound from desktop (ticket 06)
 
 - **One `bedcode-wasm-core` serves both ends** (ADR 0045 D1): the mobile fork crate

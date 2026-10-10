@@ -26,6 +26,29 @@
   共享依赖在场，变异自检 1/1）+ `retired_mobile_mdns_advertise_lock.rs`（广播面缺席 /
   browse 薄壳在场 / 共享守护复用锚点，变异自检 1/1）
 
+#### wasm-core 纯净性收口：形态命名中立化 + 移动独有域落移动宿主 + 域逻辑进共享 crate（ADR 0047）
+
+- **形态命名中立化（零行为变化）**：wasm-core 内不再出现端名 / 机制名标识符——feature
+  `desktop-host` / `mobile-host` → **`common-host` / `bare-host`**，模块 `runtime/{desktop,mobile}*` →
+  `runtime/{common,bare}*`，`test_support/{desktop,mobile}*` → `{common,bare}*`，
+  `host_api/mobile_context.rs` → `host_api/bare_context.rs`；能力域 6 crate 的装配 feature 同步改名。
+  （本轮小改：`bedcode_host_kit::limits::defaults::*` 路径、`StoreSpec` 形态 re-export 补齐）
+- **移动独有域整体落移动宿主**（用户指令：移动独有能力不进 wasm-core）：`host-notify` /
+  `host-terminal-stream` / `host-fs-mobile` / `host-connection.primary-target` / `host-auth` /
+  移动 events 的 WIT 壳 + 逻辑 + 端口迁 `bedcode-mobile/src-tauri/src/plugin/*`；移动装配链改接
+  host-kit `WasmPluginState` + `HostPorts` + `ModuleRegistry`（宿主自带 `bindgen!` 解孤儿规则，
+  `expect_host_module!` 白名单双向校验）；wasm-core 只保留 `#[cfg(test)]` 替身
+- **含逻辑域收窄 / 下沉**：`host-http` 出站执行本体（非流式 / SSE 流 / 字节上限 / 重定向再校验）
+  下沉能力域 crate `bedcode-server-http::plugin_binding::egress`（移动自持引擎退役，两域共用一份；
+  `jwtAuth` 宿主代注改为**可选端口** `HttpPorts::jwt_auth_token`，默认 `Ok(None)` ⇒ 桌面行为零变化）；
+  `host-fs` 交集 6 原语的机制面（权限门 → 访问裁决 → 路径形状守卫）上移
+  `bedcode-host-api-core::fs`（Android/SAF 删除经端口注入）；`host-plugin-database` 判定已在目标形态
+  （机制语义在 `host-api-core::database`，本端只留私有库句柄解析）
+- **防回接锁**：`bedcode-mobile/src-tauri/tests/mobile_wasm_core_purity_lock.rs` 六判据
+  （移动独有域不回流 / 生产装配段无其 `Host` impl / 形态壳不含域逻辑 / 共享实现核在场 /
+  壳行数双上限 / 退役引擎不复活），变异自检 **4/4**
+- **零 ABI / WIT / SDK / wire / 权限位变更** ⇒ 既有插件产物无需重建（纯 Rust 侧落点搬迁与改名）
+
 #### wasm-core 单一 crate：移动 fork 退役 + 依赖图脱桌面（票 06）
 
 - **双端共用一份 `bedcode-wasm-core`**（ADR 0045 D1）：移动 fork crate
