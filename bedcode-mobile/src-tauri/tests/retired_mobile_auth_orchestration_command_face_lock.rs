@@ -59,10 +59,12 @@ const KEEP_FACE: [(&str, &str); 7] = [
     ("src/auth/manager.rs", "pub async fn verify_pairing_code("),
     ("src/auth/manager.rs", "pub async fn authenticate_with_qr("),
     ("src/auth/manager.rs", "pub async fn authenticate_with_biometric("),
-    // 票 17 批次 2b：auth 域真源迁入 fork crate（host_impl/auth.rs → manager/runtime/host_impl），
-    // 锁改钉新真源（host-auth 5 原语凭据零过境面仍在，只是换文件）
-    ("../packages/bedcode-wasm-core/src/manager/runtime/host_impl/auth.rs", "fn auth_verify_pairing_code("),
-    ("../packages/bedcode-wasm-core/src/manager/runtime/host_impl/auth.rs", "fn auth_has_credentials("),
+    // 票 17 批次 2b：auth 域真源迁入 fork crate（host_impl/auth.rs → manager/runtime/host_impl）；
+    // 2026-10-10 wasm-core-mobile-purity 票 02/04：形态改名（mobile → bare）后该域随
+    // **移动独有域整迁移动宿主**（D2′/D3，用户指令⑥）——锁改钉宿主 adapter
+    // （`impl host_auth::Host for WasmPluginState`，5 原语凭据零过境面仍在，只是换 crate）
+    ("src/plugin/auth.rs", "fn verify_pairing_code("),
+    ("src/plugin/auth.rs", "fn has_credentials("),
     ("src/commands/auth.rs", "fn ws_get_auth_credentials("),
 ];
 

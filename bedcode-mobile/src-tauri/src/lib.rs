@@ -10,7 +10,6 @@ pub mod handler;
 pub mod mdns;
 pub mod model;
 pub mod peer_migration;
-pub mod peer_events;
 pub mod peer_net;
 pub mod peer_receive;
 pub mod peer_remote;
@@ -122,13 +121,12 @@ pub fn run() {
             // 错误经 ? 上抛走既有启动失败路径——静默换身份会让对端可信列表全部失效
             crate::peer_net::init_node_identity(&app_data_dir)?;
 
-            // 对等网络节点状态容器 + 自动启动（ticket 03，决策 D7）：异步装配节点
-            // 与 mDNS 发现守护；启动前经 Kotlin MulticastLockPlugin 申请多播锁
-            // （Android 收包前提，D6）
-            app.manage(crate::peer_net::PeerNetState::default());
-            app.manage(crate::peer_transfer::PeerTransferState::default());
-            app.manage(crate::peer_receive::PeerReceiveState::default());
-            app.manage(crate::peer_remote::PeerRemoteState::default());
+            // 对等网络节点状态容器（Engine 集中化 2026-10-10：状态类型真源在共享
+            // 能力域 crate，与桌面同形以 `Arc` 托管——适配层持 Arc 句柄跨 await 存活）
+            app.manage(Arc::new(crate::peer_net::PeerNetState::default()));
+            app.manage(Arc::new(crate::peer_transfer::PeerTransferState::default()));
+            app.manage(Arc::new(crate::peer_receive::PeerReceiveState::default()));
+            app.manage(Arc::new(crate::peer_remote::PeerRemoteState::default()));
             // 节点自启已退役：peer-net 生命周期随文件传输插件启停
             // （插件管理器 activate/deactivate 外壳接线，见 peer_net::ensure_node_started）
 

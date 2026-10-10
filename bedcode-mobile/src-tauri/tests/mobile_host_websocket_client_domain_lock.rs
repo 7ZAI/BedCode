@@ -76,7 +76,7 @@ fn mobile_wit_never_grows_websocket_server_domain() {
 /// 引擎 crate）
 ///
 /// 覆盖面随 ADR 0043 抽根更新：ws 域实现的真源自 2026-10-09 起在移动 fork crate
-/// （`packages/bedcode-wasm-core/src/manager/runtime/host_impl/ws.rs`），引擎机制在
+/// （`packages/bedcode-wasm-core/src/manager/runtime/bare/host_impl/ws.rs`），引擎机制在
 /// 根 `packages/bedcode-ws-client-engine`（其 `wire.rs` 自持 `ws:client` 权限字面量
 /// 副本——服务端词汇若出现在那里，等于给通用引擎装了个「WS 服务器」概念）。
 #[test]
@@ -84,11 +84,12 @@ fn mobile_never_defines_ws_server_permission() {
     let targets = [
         // 权限词汇真源（SDK）
         mobile_root().join("packages/plugin-sdk-mobile/rust/src/permission.rs"),
-        // ws 域实现（移动 fork crate；原指向 `src/plugin/wasm_runtime/host_impl/ws.rs`
-        // 的路径自 host_impl 迁入 fork crate 后即陈旧——陈旧路径会让本锁静默扫不到
-        // 任何文件，故必须随迁移同步更新）
-        mobile_root().join("packages/bedcode-wasm-core/src/manager/runtime/host_impl/ws.rs"),
-        // WS 客户端引擎 crate（通用能力域；wire 词汇自持副本 + 引擎主体）
+        // ws 域实现（wasm-core `bare-host` 面；票 06 批次 04 fork 退役后真源在
+        // 仓库根 crate 的 mobile 运行时目录——陈旧路径会让本锁静默扫不到任何文件，
+        // 故必须随迁移同步更新）
+        mobile_root().join("../packages/bedcode-wasm-core/src/manager/runtime/bare/host_impl/ws.rs"),
+        // WS 客户端引擎 crate（通用能力域，自 ADR 0043 抽根至仓库根 `packages/`；
+        // wire 词汇自持副本 + 引擎主体）
         mobile_root().join("../packages/bedcode-ws-client-engine/src/wire.rs"),
         mobile_root().join("../packages/bedcode-ws-client-engine/src/engine.rs"),
     ];

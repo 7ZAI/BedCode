@@ -116,11 +116,23 @@ const RETIRED_WS_CRYPTO: [&str; 8] = [
 /// 已整面退役该文件（ABI 17），其归属归票 15 的锁，不再由本锁钉住。
 /// 票 17 批次 2b：jwtAuth 代注裁决真源迁入 fork crate（wasm_host.rs → host_api/http_engine.rs），
 /// 锁改钉新真源位置。
+/// 2026-10-10 wasm-core-mobile-purity 票 05：执行本体再上移能力域 crate
+/// （`http_engine.rs` 退役），代注开关与令牌端口契约在能力域、`host-http` 的
+/// fail-visible 拒绝文案在移动 adapter——锁按新真源位置各钉一条，覆盖不缩水：
+/// 旧两条中的 `fn resolve_jwt_auth_header(` 消解为「开关读取 + 端口契约 + 缺 token 拒绝」
+/// 三点（裁决链更长了，不是变短了）。
 /// 针脚取 `.get("jwtAuth")` 而非整行 `request.get("jwtAuth")`：后者在 rustfmt 把链式调用
 /// 折成多行后即失效（假红——语义面仍在，只是行形态变了；本锁判据是「保留面在场」）。
-const KEEP_HOST_FACE: [(&str, &str); 2] = [
-    ("../packages/bedcode-wasm-core/src/host_api/http_engine.rs", ".get(\"jwtAuth\")"),
-    ("../packages/bedcode-wasm-core/src/host_api/http_engine.rs", "fn resolve_jwt_auth_header("),
+const KEEP_HOST_FACE: [(&str, &str); 3] = [
+    ("../../packages/bedcode-server-http/src/plugin_binding/egress.rs", ".get(\"jwtAuth\")"),
+    (
+        "../../packages/bedcode-server-http/src/plugin_binding/ports.rs",
+        "fn jwt_auth_token(&self, _plugin_id: &str) -> Result<Option<String>, String>",
+    ),
+    (
+        "../../packages/bedcode-wasm-core/src/manager/runtime/bare/host_impl/http.rs",
+        "no global token available (not authenticated)",
+    ),
 ];
 
 /// 插件会话控制域（同仓库 plugins/，相对 bedcode-mobile 根）
