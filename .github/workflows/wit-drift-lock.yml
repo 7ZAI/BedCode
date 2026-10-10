@@ -1,0 +1,49 @@
+name: WIT Slice Drift Lock
+
+# 契约分片拼装漂移锁（spec .scratch/2026-10-09-wasm-core-single-crate 票 07 批次 01）。
+#
+# 端 `packages/plugin-sdk-*/rust/wit/` 是**生成物**（真源 = `packages/bedcode-wasm-core/wit/core.wit`
+# + 能力域 / 端 cap 分片，端清单 `compose.json` 驱动拼装）。本 workflow 只读比对：
+# 生成物与真源逐字一致、生成物在场、幂等——手改生成物或改真源不重拼即红。
+#
+# 独立于 test.yml / lint.yml 的原因：那两个 workflow 的 paths 过滤不含 `packages/**` 与
+# `scripts/**`（真源恰在此两处），挂进去会出现「真源改了但 CI 不触发」的静默窗口。
+on:
+  push:
+    branches-ignore:
+      - 'dev'
+    paths:
+      - 'packages/**'
+      - 'bedcode-desktop/packages/plugin-sdk-desktop/**'
+      - 'bedcode-mobile/packages/plugin-sdk-mobile/**'
+      - 'scripts/compose-wit.mjs'
+      - '.github/workflows/wit-drift-lock.yml'
+  pull_request:
+    branches-ignore:
+      - 'dev'
+    paths:
+      - 'packages/**'
+      - 'bedcode-desktop/packages/plugin-sdk-desktop/**'
+      - 'bedcode-mobile/packages/plugin-sdk-mobile/**'
+      - 'scripts/compose-wit.mjs'
+      - '.github/workflows/wit-drift-lock.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  compose-wit-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      # 脚本只用 node 内置模块（crypto / fs / path），无需 pnpm install。
+      # 失败信息点名漂移文件与「真源已改 / 生成物被手改」两种方向；修复 = 仓库根
+      # `node scripts/compose-wit.mjs --all` 重拼后重新提交。
+      - name: Compose WIT drift check (desktop + mobile)
+        run: node scripts/compose-wit.mjs --all --check
