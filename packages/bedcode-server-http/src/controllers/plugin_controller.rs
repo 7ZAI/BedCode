@@ -144,56 +144,17 @@ pub(crate) fn caller_identity(req: &actix_web::HttpRequest) -> (HttpCaller, Opti
     (caller, device)
 }
 
-/// 旧插件 id → 接管方 id（票 16 D1「桌面侧可选兜底」的落点；票 07 B2 追加 id 改名项）
-///
-/// 语义是「旧前缀的 HTTP 面改由新插件应答」，不是两个插件共享请求：只在旧插件
-/// **未激活**且接管方**已激活**时生效（见 [`resolve_http_owner`]）。合并插件退役
-/// 旧 auto-task 后端（票 17）后，移动端与已部署在项目里的旧 hook 脚本仍能按原
-/// 路径打到桌面端；票 06 插件 id 改名后，旧 id 的 HTTP 前缀
-/// `/api/plugin/com.bedcode.session/*` 在双投窗口内同样兜底到新插件（票 07 验收：
-/// 旧前缀窗口内可用）；切断判定与代价评估记在票 16 Comments。
-///
-/// ## 边界归类（AGENTS §5.1.3 ③ 通用注册表与寻址，**非** B1/B5 越线）
-///
-/// 本表是**插件身份迁移映射**，判据是 id 对 id 的寻址，不含任何产品语义：它不描述
-/// 会话 / 终端 / 传输的业务含义，也不替插件决定业务上该怎样——接管方插件自己注册
-/// 路由、自己应答，宿主只把「已退役的前缀该转给谁」这件事查出来。插件身份归内核
-/// （manifest / 激活 / 注册表都是内核面），故退役 id 的接管关系属内核可持有的寻址表。
-///
-/// 因此本 crate 全域唯一的生产产品 id 字面量就是这两行，且被
-/// `src-tauri/tests/capability_crates_no_product_ids.rs` **按字面量钉死**（改内容
-/// 即红，须连带更新该锁的登记表并说明理由）。切断后从登记表删除。
-const LEGACY_HTTP_PLUGIN_ALIASES: &[(&str, &str)] = &[
-    ("com.bedcode.auto-task", "com.bedcode.terminal-session"),
-    ("com.bedcode.session", "com.bedcode.terminal-session"),
-];
-
-/// 查旧前缀的接管方 id（无声明即 None）
-pub(crate) fn legacy_http_alias(requested: &str) -> Option<&'static str> {
-    LEGACY_HTTP_PLUGIN_ALIASES
-        .iter()
-        .find(|(from, _)| *from == requested)
-        .map(|(_, to)| *to)
-}
-
 /// 该由哪个插件应答本次请求（纯决策，供测试）
 ///
-/// 顺序即优先级：**请求前缀自身已激活时绝不抢占**——双轨并存期旧 auto-task 仍在
-/// 写它自己的私有库，若把它的请求转给新插件，同一份数据会出现两个写者且回包来自
-/// 空库（读到的队列永远是空的）。只有旧插件确实不在位（停用/未激活/error）时，
-/// 兜底才把请求交给接管方；接管方也不在位则 None（保持原「未激活」错误响应）。
+/// 只认请求前缀自身：已激活 → 本人应答；未激活 → None（「未激活」错误响应）。
 pub(crate) fn resolve_http_owner<'a>(
     requested: &'a str,
     requested_activated: bool,
-    alias: Option<&'a str>,
-    alias_activated: bool,
 ) -> Option<&'a str> {
     if requested_activated {
-        return Some(requested);
-    }
-    match alias {
-        Some(target) if alias_activated => Some(target),
-        _ => None,
+        Some(requested)
+    } else {
+        None
     }
 }
 
@@ -340,9 +301,9 @@ pub async fn plugin_http_endpoint(
     // 中间件只对带凭证的请求问认证中心；本路由无凭证的请求（环回 hook、局域网匿名）
     // 放行到这里，由下面的端点级档位判定决定是否真的到达插件。
 
-    // 检查插件是否已激活；未激活时旧前缀可兜底转给接管方（票 16，见 resolve_http_owner）
-    // 宿主壳注入的 PluginInvoker 端口；无端口（无头/单测）→ 无从判定 → 视为未激活
-    // （fail-closed：不把请求交给不存在的插件）
+    // 检查插件是否已激活：未激活 → 未激活错误响应（fail-closed，不把请求交给
+    // 不存在的插件；宿主壳注入的 PluginInvoker 端口，无端口（无头/单测）→ 无从
+    // 判定 → 视为未激活）
     let Some(ports) = bedcode_server_base::ports::get() else {
         return HttpResponse::Ok().json(ApiResponse::<()>::error(
             CODE_PLUGIN_AUTH_FAILED,
@@ -350,12 +311,7 @@ pub async fn plugin_http_endpoint(
         ));
     };
     let requested_activated = ports.plugin_invoker.is_activated(&plugin_id).await;
-    let alias = legacy_http_alias(&plugin_id);
-    let alias_activated = match alias {
-        Some(target) if !requested_activated => ports.plugin_invoker.is_activated(target).await,
-        _ => false,
-    };
-    let owner = match resolve_http_owner(&plugin_id, requested_activated, alias, alias_activated) {
+    let owner = match resolve_http_owner(&plugin_id, requested_activated) {
         Some(owner) => owner,
         None => {
             return HttpResponse::Ok().json(ApiResponse::<()>::error(
@@ -368,8 +324,8 @@ pub async fn plugin_http_endpoint(
     // 端点注册治理（ABI v29 动态路由）：只认插件经 host-http.register-endpoint 登记
     // 的内部路径（含 manifest 声明面退役后由插件激活期代码注册的全部端点），未注册
     // 路径 404——「未声明清单 → 前缀内 ANY 放行」的过渡策略已退役，未登记的插件
-    // 没有 HTTP 面。声明按**属主插件**查（旧前缀兜底时按接管方的登记判定），
-    // full_path 同样按属主拼——插件侧收到的 `path` 字段保持请求原样。
+    // 没有 HTTP 面。声明按**属主插件**查，full_path 同样按属主拼——插件侧收到
+    // 的 `path` 字段保持请求原样。
     let full_path = format!("/api/plugin/{}/{}", owner, endpoint_path);
     let Some(entry) = crate::registry::find_by_internal(&full_path) else {
         tracing::warn!(
@@ -384,7 +340,7 @@ pub async fn plugin_http_endpoint(
         ));
     };
 
-    // 认证档位（票 08 / ABI v29）：按属主登记档位判定，未声明 auth 即要求宿主已验签
+    // 认证档位（ABI v29）：按属主登记档位判定，未声明 auth 即要求宿主已验签
     let (caller, device) = caller_identity(&req);
     if !plugin_http_auth_allowed(entry.auth, matches!(caller, HttpCaller::Device)) {
         tracing::warn!(
@@ -395,14 +351,6 @@ pub async fn plugin_http_endpoint(
             "plugin http endpoint requires an authenticated caller"
         );
         return plugin_http_unauthenticated_response(&full_path);
-    }
-
-    if owner != plugin_id {
-        tracing::debug!(
-            requested_plugin_id = %plugin_id,
-            plugin_id = %owner,
-            "legacy plugin http prefix served by successor plugin (D1 desktop-side fallback)"
-        );
     }
 
     // 构造请求参数：method、path、白名单 headers、body、query、调用方身份
@@ -636,51 +584,16 @@ mod tests {
         );
     }
 
-    /// 票 16：旧前缀别名表——只登记已退役/在退役的那一条，且必须指向合并插件
+    /// 属主解析：只认前缀自身——已激活 → 本人应答；未激活 → None
     #[test]
-    fn legacy_http_alias_maps_only_retired_plugin_prefix() {
+    fn http_owner_only_serves_activated_prefix() {
+        let plugin = "com.bedcode.terminal-session";
+        assert_eq!(resolve_http_owner(plugin, true), Some(plugin));
+        assert_eq!(resolve_http_owner(plugin, false), None);
         assert_eq!(
-            legacy_http_alias("com.bedcode.auto-task"),
-            Some("com.bedcode.terminal-session")
-        );
-        // 票 07 B2：改名前的旧 id 前缀同样兜底到新插件（双投窗口）
-        assert_eq!(
-            legacy_http_alias("com.bedcode.session"),
-            Some("com.bedcode.terminal-session")
-        );
-        // 新 id 自身、其它在位插件、未知 id 都没有接管方
-        assert_eq!(legacy_http_alias("com.bedcode.terminal-session"), None);
-        assert_eq!(legacy_http_alias("com.bedcode.file-transfer"), None);
-        assert_eq!(legacy_http_alias(""), None);
-    }
-
-    /// 票 16：属主解析的优先级——旧插件在位时绝不抢占（双写者/空库回包红线）
-    #[test]
-    fn http_owner_never_preempts_an_activated_plugin() {
-        let old = "com.bedcode.auto-task";
-        let new = "com.bedcode.terminal-session";
-        // 旧插件仍激活：请求留在旧插件（合并插件不得改写成另一份私有库的数据）
-        assert_eq!(
-            resolve_http_owner(old, true, Some(new), true),
-            Some(old),
-            "双轨并存期不得抢占"
-        );
-        // 旧插件不在位 + 接管方已激活 → 兜底转给接管方
-        assert_eq!(resolve_http_owner(old, false, Some(new), true), Some(new));
-        // 两者都不在位 → None（保持原「未激活」错误响应，不凭空造插件）
-        assert_eq!(resolve_http_owner(old, false, Some(new), false), None);
-        // 未在别名表里的插件（alias = None）没有兜底可走：未激活就是未激活
-        assert_eq!(
-            resolve_http_owner("com.bedcode.file-transfer", false, None, true),
+            resolve_http_owner("com.bedcode.file-transfer", false),
             None,
-            "接管方在位也不得把无别名插件的请求转出去"
-        );
-        // 新前缀自身没有别名条目 → 不被别名回环（别名表是唯一 gate）
-        assert_eq!(legacy_http_alias(new), None, "接管方自己不得有别名");
-        assert_eq!(
-            resolve_http_owner(new, false, legacy_http_alias(new), true),
-            None,
-            "新插件未激活时不得借旧插件兜底"
+            "未激活就是未激活，无兜底可走"
         );
     }
 }

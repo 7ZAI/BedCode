@@ -36,16 +36,6 @@
 //! 2. **退役宿主面词汇**：`host-session` / `host-terminal` / `output-ring-fetch` 等。
 //!    AGENTS §5.3 已把它们连同权限位整体退役；即便形态是常量或注释里的引用名，
 //!    留着也是回接磁铁。
-//!
-//! ## 唯一的登记例外，以及它为什么合法
-//!
-//! `bedcode-server-http` 的 `LEGACY_HTTP_PLUGIN_ALIASES`（退役插件 id → 接管方 id）。
-//! 它归类为 AGENTS §5.1.3 ③「通用注册表与寻址」：判据是 **id 对 id 的寻址**，不含
-//! 产品语义——不描述会话 / 终端 / 传输的业务含义，也不替插件决定业务上该怎样，接管方
-//! 插件自己注册路由自己应答。插件身份属内核面，故退役 id 的接管关系属内核可持有的表。
-//!
-//! 本锁对它做**内容钉死**而非整文件放行：登记表里写死它当前的全部产品 id 字面量，
-//! 表里多一条、少一条、改一条接管关系，全部测红——改动必须回到这张锁前说明理由。
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -137,17 +127,9 @@ struct ProductIdException {
     expected_ids: &'static [&'static str],
 }
 
-const PRODUCT_ID_EXCEPTIONS: &[ProductIdException] = &[ProductIdException {
-    crate_name: "bedcode-server-http",
-    file_rel: "src/controllers/plugin_controller.rs",
-    reason: "LEGACY_HTTP_PLUGIN_ALIASES：退役插件 id → 接管方 id 的迁移映射，属 \
-             AGENTS §5.1.3 ③ 通用注册表与寻址（id 对 id，不含产品语义）；切断后删除本例外",
-    expected_ids: &[
-        "com.bedcode.auto-task",
-        "com.bedcode.session",
-        "com.bedcode.terminal-session",
-    ],
-}];
+/// 产品 id 登记例外（当前为空：唯一的历史例外 `LEGACY_HTTP_PLUGIN_ALIASES`
+/// 已随研发期兼容退役删除，无继承者）
+const PRODUCT_ID_EXCEPTIONS: &[ProductIdException] = &[];
 
 // ==================== 扫描器 ====================
 
