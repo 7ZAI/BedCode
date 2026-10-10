@@ -58,6 +58,7 @@
 | 改移动端前端（新功能 / 重构 / 样式，含宿主壳） | **§6「移动端前端：优先对接宿主壳」（强制）**——默认落点 `bedcode-mobile/src/shell/**`（新界面）；旧 `src/{components,views,composables,stores}` 只接受缺陷修复 |
 | 写 / 改 / 审查单元测试 | **先加载 `unit-test-discipline` skill**（强制） |
 | 改 Rust 后端 | 对应端 code-map → 模块目录 → §6 Rust 规范 + 相关 ADR |
+| 改 wasm-core 机制 / 核心 WIT / 契约分片 | **ADR 0045（accepted）+ `.scratch/2026-10-09-wasm-core-single-crate/spec.md`**——单一 crate 双形态（`desktop-host` / `mobile-host`）；WIT 改动只改真源（`packages/bedcode-wasm-core/wit/core.wit` 或能力域 `wit/<domain>.wit`），**禁止手改**端生成物 `rust/wit/`，改完重拼并跑 `pnpm run check:wit`（CI + husky 同判据） |
 | 在宿主侧新增/修改任何能力、类型、状态、存储、路由 | **§5.1（六条判据 + 三问裁决 + 自检）+ ADR 0022**——先判归属再动手；越线必须停下问用户。插件分类 / 加载顺序 / 生命周期形态另读 ADR 0032 |
 | 改插件 | `docs/knowledge/plugin-development-checklist.md`（全文）+ 双端 WIT + ADR 0017/0019/0022 |
 | 改 wasm 应用 / 移动插件（业务代码主场） | 该应用自己的 crate + 自有测试命令（§3）；**不要拿宿主 `cargo test` 当它的验证** |
@@ -131,7 +132,7 @@ wasm 应用层（业务事实面：各自私有库 + 各自前端状态 + 自身
 
 ### 5.4 双端差异（勿把桌面结论套到移动端）
 
-桌面是「无业务内核 + wasm 应用承载业务」；移动端仍是自持业务 App，插件契约独立（ADR 0018），**不跟演**桌面部分 ABI 破坏性变更。但**判据同源**，跨端协议改动必须两端同步部署（§9）。
+**wasm-core 是单一 crate**（ADR 0045 accepted，2026-10-10）：`packages/bedcode-wasm-core` 双端共用——桌面形态 = 默认 feature `desktop-host`，移动形态 = `default-features = false, features = ["mobile-host"]`（移动 `src-tauri` 以 `bedcode-wasm-core-mobile` 作 package rename 别名消费；移动 fork crate 已删除，回接由 `bedcode-mobile/src-tauri/tests/retired_mobile_wasm_core_fork_lock.rs` 拦截）。**双端差异只来自「组合了哪些能力域 + 契约分片」**：核心 WIT 真源 = `packages/bedcode-wasm-core/wit/core.wit`（17 个双端全等 interface），端差异在各端 `compose.json` 驱动的 cap 分片（桌面 cap-desktop / cap-pty / cap-http / cap-ws，移动 cap-mobile）；能力域 crate 自持 `wit/<domain>.wit`（`world cap-<domain>`），可被任意端组合。**但契约仍独立**（ADR 0018）：移动 WIT / ABI 与桌面各自演进，移动**不跟演**桌面部分 ABI 破坏性变更；跨端协议改动仍必须两端同步部署（§9）。
 
 ---
 
@@ -270,12 +271,3 @@ CI 门禁（合并到 master/uat 时）：`lint.yml`（eslint 0 error）+ `test.
 | 构建与产物治理 | `docs/knowledge/build-process.md`、`wasip3-toolchain.md` |
 | 架构路线 | `docs/knowledge/plugin-kernel-roadmap.md`、`businessless-kernel-vision.md` |
 | **宿主 / 插件边界裁决（§5 红线的单一事实源）** | `docs/adr/0022-plugin-host-interface-primitive-boundary.md`（+ 0017 互调 / 0018 移动独立契约 / 0019 双端锁版 / 0029 并发 / 0031 认证中心注册 / 0032 插件分类 / 0033 认证中心自持签发验签 / 0035 能力域 crate 化 / 0037 wasm_core 整核抽出 / 0038 wasm-core 引擎面与薄壳纯净性 / 0039 host-pty 能力域整面迁出（含 WIT 接线）） |
-| pi 工具手册 | `docs/agents/pi-tools.md` |
-
----
-
-## 附录：pi 工具专属（仅 pi agent）
-
-pi-lens 代码查询纪律（三阶段漏斗、符号级查询、诊断收尾）、subagents 编排、vision 视觉 subagent、scipq Rust 精确引用 —— 完整手册见 **`docs/agents/pi-tools.md`**。非 pi agent（Claude Code / Codex / Gemini / OpenCode）按 §12 code-map 默认规范执行。
-
-pi agent 专属 DoD：**收尾 `lens_diagnostics mode=all` 无 blocker**（🔴 blocker 未清前不算 done）。
