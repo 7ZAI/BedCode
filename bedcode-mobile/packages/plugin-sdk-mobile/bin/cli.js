@@ -91,6 +91,38 @@ function run(cmd, args, cwd) {
   }
 }
 
+/** dev-shell 的 vite 入口（存在即代表该 dev-shell 目录已装好依赖） */
+const DEV_SHELL_VITE = 'node_modules/vite/bin/vite.js'
+
+/**
+ * 定位可用的 dev-shell 目录：优先已装依赖的仓库内 SDK 检出。
+ *
+ * 内置插件用 `file:` 说明符依赖 SDK 时，pnpm 把 SDK 硬链注入插件 node_modules：
+ * 注入副本带 dev-shell 源码但不带其 node_modules，直接用它等于每次 dev 都重装一遍。
+ * 插件 package.json 的 `file:` 说明符能指回仓库内 SDK 检出，检出已装依赖时优先用它。
+ * 外部脚手架（npm 发布的 SDK）没有 file: 说明符，走 SDK 自带 dev-shell 自行安装。
+ */
+function resolveDevShellDir(pluginDir) {
+  const bundled = join(SDK_ROOT, 'dev-shell')
+  const installed = (dir) => existsSync(join(dir, DEV_SHELL_VITE))
+  if (installed(bundled)) return bundled
+  // 尽力探测：读不到就退回自带 dev-shell，缺失时由调用方报错（此处不能用 readJson，
+  // 它遇解析失败直接 process.exit，会把 doctor 这类自检命令一起带走）
+  const readPkg = (path) => JSON.parse(readFileSync(path, 'utf-8'))
+  try {
+    const sdkName = readPkg(join(SDK_ROOT, 'package.json')).name
+    const deps = readPkg(join(pluginDir, 'package.json'))
+    const spec = deps.dependencies?.[sdkName] ?? deps.devDependencies?.[sdkName]
+    if (typeof spec === 'string' && spec.startsWith('file:')) {
+      const checkout = join(resolve(pluginDir, spec.slice('file:'.length)), 'dev-shell')
+      if (installed(checkout)) return checkout
+    }
+  } catch {
+    // 忽略：非 file: 依赖（npm 发布包）或读不到说明符
+  }
+  return bundled
+}
+
 /** 递归收集目录下所有文件 */
 function walk(dir) {
   const out = []
@@ -305,17 +337,21 @@ function cmdDev(positional, flags) {
     process.exit(1)
   }
 
-  const devShellDir = join(SDK_ROOT, 'dev-shell')
+  const devShellDir = resolveDevShellDir(pluginDir)
   if (!existsSync(devShellDir)) {
     console.error(`[bedcode-plugin] dev-shell 不存在: ${devShellDir}（SDK 包不完整）`)
     process.exit(1)
   }
 
-  // dev-shell 首次运行需要安装自身依赖（vue / vite / tailwind 等）
-  const viteBin = join(devShellDir, 'node_modules/vite/bin/vite.js')
+  // dev-shell 首次运行需要安装自身依赖（vue / vite / tailwind 等）。
+  // 不加任何 pnpm 参数：dev-shell 自带 pnpm-workspace.yaml（packages: - .）既锚定安装
+  // 目录又是 allowBuilds 白名单的载体，而 --ignore-workspace 会连白名单一起忽略，
+  // 导致依赖构建脚本被跳过、pnpm 以 ERR_PNPM_IGNORED_BUILDS 非零退出（pnpm 12 已无
+  // --no-audit / --no-fund，传了直接报未知参数）
+  const viteBin = join(devShellDir, DEV_SHELL_VITE)
   if (!existsSync(viteBin)) {
     console.log('[bedcode-plugin] dev-shell 依赖缺失，正在安装（仅首次）…')
-    run('pnpm', ['install', '--ignore-workspace', '--no-audit', '--no-fund'], devShellDir)
+    run('pnpm', ['install'], devShellDir)
   }
 
   const args = [
@@ -324,6 +360,10 @@ function cmdDev(positional, flags) {
     join(devShellDir, 'vite.config.ts'),
     '--port',
     String(flags.port || 5173),
+    // --force：依赖预构建缓存（dev-shell/node_modules/.vite）会残留插件改名 / 搬目录前的
+    // 绝对路径，vite 重跑优化器时读到即ENOENT，且只对前端返 504、页面空白且不自愈；
+    // 强制忽略缓存重建是唯一自愈手段（dev-shell 启动成本可接受）
+    '--force',
   ]
   // --host：监听局域网（vite 默认仅 localhost），手机浏览器可访问查看页面
   if (flags.host) args.push('--host', typeof flags.host === 'string' ? flags.host : '0.0.0.0')
@@ -795,11 +835,11 @@ function cmdDoctor() {
   }
 
   // dev-shell 依赖（dev 命令就绪性）
-  const devVite = join(SDK_ROOT, 'dev-shell/node_modules/vite/bin/vite.js')
+  const devShellVite = join(resolveDevShellDir(process.cwd()), DEV_SHELL_VITE)
   add(
     'dev-shell 依赖（dev 命令）',
-    existsSync(devVite),
-    existsSync(devVite) ? '已安装' : '首次运行 dev 命令时自动安装',
+    existsSync(devShellVite),
+    existsSync(devShellVite) ? '已安装' : '首次运行 dev 命令时自动安装',
   )
 
   // SDK dist（file: 依赖的插件需要）
