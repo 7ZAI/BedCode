@@ -154,8 +154,9 @@ pub trait CapabilityProvider: Send + Sync {
 /// ——`mutex`（实例锁）与 `event-loop`（属主队列）在实现内部分派。
 /// 实现由 `manager::host::WasmInstanceEntry` 提供（超时兜底也在实现内）。
 ///
-/// **闭表**：方法按能力分组，组名 = `manager::capability::ROUTABLE_CAPABILITIES`
-/// 里的「路由方法前缀」。新增可路由能力时在此加一组方法（与那张表同步），
+/// **闭表**：方法按能力分组，组名 = `manager::capability::routable_capabilities()`
+/// 里的「路由方法前缀」（内建行内核自持；能力域行的词汇由该域自报，票 02 批次 03）。
+/// 新增可路由能力时在此加一组方法（与那张表同步），
 /// 漏加/多加由 `capability::tests::routable_capabilities_and_forward_methods_stay_in_sync`
 /// 点名（该锁在两个方向都断言：表里有而此处没有 ⇒ 红；此处有而表里没有 ⇒ 红）。
 ///
@@ -343,7 +344,11 @@ impl ProcessRegistry {
 /// - Windows：`taskkill /F /T /PID`（/T 连带子进程树）
 ///
 /// 返回是否成功发起（进程已退出 / pid 无效返回 false，属预期内竞态）。
-pub(crate) async fn kill_process_group(pid: u32) -> bool {
+///
+/// **pub（票 02 批次 05）**：host-process 域函数随域迁宿主
+/// （`src-tauri/src/plugin/process.rs`）后经本公开面复用同一条终止路径——
+/// 两份实现会让「杀整组」的语义漂移（与 `check_permission` 提公开同款理由）。
+pub async fn kill_process_group(pid: u32) -> bool {
     if pid == 0 {
         return false;
     }
@@ -626,7 +631,11 @@ impl WasmHostContext {
     /// 字段。此前那条路走 `AppContext::try_global()`，但 boot 装配期全局尚未注册，
     /// 「插件在 activate 里起了节点、随后激活失败」这个窗口就拿不到句柄去收，
     /// 所以直接从上下文字段取（它在 `PluginHost::new` 之前就已就位）
-    pub(crate) fn app_handle(&self) -> Option<&tauri::AppHandle> {
+    ///
+    /// **常编译 pub（票 02 批次 03 起）**：宿主侧 adapter（`src/plugin/mdns.rs`
+    /// 的 `local_node_id`——取对等网络上下文比对自播）经本访问器读句柄；同批次
+    /// `host_context_registry` 退役后，这是 adapter 侧唯一的句柄来源。
+    pub fn app_handle(&self) -> Option<&tauri::AppHandle> {
         self.app_handle.as_deref()
     }
 

@@ -566,15 +566,13 @@ impl PluginHost {
         // `host_api::install_capability_domain_ports`（两个测试夹具共用同一条链，
         // 免得再出现「只在生产装了」的漏装）。
         crate::host_api::install_capability_domain_ports(host.wasm_host_ctx());
-        crate::manager::task::register_unit_executor(Arc::new(
-            crate::host_api::fs::FsUnitExecutor,
-        ));
-        crate::manager::task::register_unit_executor(Arc::new(
-            crate::host_api::process::ProcessUnitExecutor,
-        ));
-        crate::manager::task::register_unit_executor(Arc::new(
-            crate::host_api::http::HttpUnitExecutor,
-        ));
+        // 任务单元执行器（票 02 批次 05）：域实现 `submit_unit_executor!` 自报
+        // （fs / http 在内核域文件，process 随 host-process 域住宿主
+        // `src/plugin/process.rs`），装配点遍历注册——本处不点名任何执行器，
+        // 宿主侧执行器迁入后零改动。幂等去重按具体类型（与测试装配共用注册表）。
+        for entry in crate::host_api::unit_executor::collected_unit_executors() {
+            crate::manager::task::register_unit_executor((entry.make)());
+        }
 
         // 注册所有已加载插件的 manifest contributes 到 registry
         host.register_manifest_contributions().await;

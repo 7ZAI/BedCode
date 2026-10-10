@@ -362,7 +362,7 @@ mod tests {
                     "version": "1.0.0-beta",
                     "pluginType": "wasm",
                     "rustLibrary": "bedcode_plugin_terminal_session",
-                    "permissions": ["auth", "bus", "session:read", "terminal:output", "ui:input", "ui:toolbox", "ws:client"]
+                    "permissions": ["auth", "bus", "network:http", "session:read", "storage", "terminal:output", "ui:route", "ws:client"]
                 }"#,
             )
             .expect("write plugin.json");

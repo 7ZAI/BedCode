@@ -8,10 +8,12 @@
 //!
 //! ## 锁什么
 //!
-//! 1. **宿主 `src/` 下与整核四个名字同名的源码落点不得存在**：`wasm_core/`、`db.rs`、
+//! 1. **宿主 `src/` 下与禁词表名字同名的源码落点不得存在**：`wasm_core/`、`db.rs`、
 //!    `pty/`、`enums/` 都是整核迁走后宿主侧的回接或双份拷贝形态（spec M1；票 02-04
-//!    执行完毕）。两个名字库共用 [`FORBIDDEN_SHIM_NAMES`] 一张表。
-//! 2. **lib.rs 的 wasm_core / db / enums 必须是 `pub use` 垫片**且垫片行真的存在
+//!    执行完毕）。两个名字库共用 [`FORBIDDEN_SHIM_NAMES`] 一张表。其中 `enums` 是
+//!    **退役面**：crate 侧 enums 垫片已随无消费者整体删除（2026-10-10，线协议真源在
+//!    SDK `bedcode-plugin-api::wire`），名字保留在禁词表只为挡宿主侧回建同名落点。
+//! 2. **lib.rs 的 wasm_core / db 必须是 `pub use` 垫片**且垫片行真的存在
 //!    （`pty` 已退出名单：PTY 能力域整面迁到 `bedcode-pty-engine`，锁 2 改为**反向**
 //!    断言它不得回到名单——见 `pty_capability_domain_wiring` 说明）
 //!    （防空转）。任何可见性形态的 `mod` 声明（裸 / `pub` / `pub(crate)` / `pub(super)`）
@@ -24,9 +26,10 @@
 //! ## 与既有反双份锁的关系
 //!
 //! `bedcode-wasm-core/src/enums.rs` 的 `wire_shim_files_contain_no_definitions`
-//! 锁的是 crate 侧 enums 垫片只允许 `pub use`；本锁是它在 **lib 侧** 的对偶：
-//! 锁整核垫片（wasm_core / db / pty / enums 四者 + 目录无实现文件）。两者各守
-//! 一侧，中间隔着 crate 边界——一边被改坏另一边照常红。
+//! 曾是 crate 侧 enums 垫片只允许 `pub use` 的对偶锁；该锁与整组 enums 垫片
+//! 已随无消费者整体退役（2026-10-10），lib 侧 `enums` 名字的防回接现由锁 1 的
+//! 禁词表独立承担（宿主 `src/enums/` 落点 / `mod enums` 声明一律红）。本锁其余
+//! 部分锁整核垫片（wasm_core / db / pty 三者 + 目录无实现文件）。
 //!
 //! ## 为什么是测试而不是文档
 //!
@@ -42,8 +45,9 @@ fn desktop_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
-/// 锁 1 + 锁 2 的禁词表：整核四个名字（`db` / `pty` / `enums` 以**精确**相等匹配，
-/// 避免误中 `bench_channel` 之类含同名子串的模块）
+/// 锁 1 + 锁 2 的禁词表：`wasm_core` / `db` / `pty` / `enums` 以**精确**相等匹配，
+/// 避免误中 `bench_channel` 之类含同名子串的模块。`enums` 为退役面（2026-10-10
+/// 垫片整体删除），保留在禁词表只为挡宿主侧回建同名落点 / `mod enums` 声明。
 ///
 /// **单一事实源**：两把锁与防空转自检都引用它。首版两处各写一份字面量表——改锁不动自检
 /// 时，自检验证的是一份**已经不再生效**的副本，形同虚设。
@@ -94,7 +98,7 @@ fn forbidden_module_decls(content: &str) -> Vec<(usize, String)> {
     out
 }
 
-/// 锁 1：宿主 `src/` 下与整核四个名字同名的**源码落点**（文件或目录）一律不得存在
+/// 锁 1：宿主 `src/` 下与禁词表名字同名的**源码落点**（文件或目录）一律不得存在
 ///
 /// 整核迁走后，宿主侧 `src/wasm_core/`、`src/db.rs`、`src/pty/`、`src/enums/` 都是回接或
 /// 双份拷贝的形态。锁 2 只看**声明**，看不出「声明被改用 `#[path]` 指到别处」或「残留文件
@@ -155,15 +159,16 @@ fn host_side_shim_paths_do_not_exist() {
     );
 }
 
-/// 锁 2：lib.rs 的 wasm_core / db / enums 暴露必须是 `pub use` 垫片（`pty` 反向断言），
-/// 且垫片行必须真的存在（防空转）
+/// 锁 2：lib.rs 的 wasm_core / db 暴露必须是 `pub use` 垫片（`pty` 反向断言；
+/// enums 已随无消费者退役，不在垫片名单），且垫片行必须真的存在（防空转）
 #[test]
 fn lib_shims_are_pub_use_reexports_not_modules() {
     let lib_rs = desktop_root().join("src/lib.rs");
     let content =
         fs::read_to_string(&lib_rs).unwrap_or_else(|e| panic!("读取 lib.rs 失败：{e} —— 垫片锁失去扫描对象，锁空转"));
 
-    // 垫片必须存在：wasm_core 整体再导出 + db/enums 两个名字的再导出
+    // 垫片必须存在：wasm_core 整体再导出 + db 名字的再导出（enums 已随无消费者
+    // 整体退役，2026-10-10——线协议真源在 SDK bedcode-plugin-api::wire）
     //
     // **`pty` 已从名单里删除**（pty-capability-domain 票 D3）：host-pty 能力域整面
     // 迁到 `bedcode-pty-engine` 后，内核再无 PTY 面可垫——留着它就是一条无消费者的
@@ -174,9 +179,9 @@ fn lib_shims_are_pub_use_reexports_not_modules() {
          整核垫片被删除或改写，既有 `crate::wasm_core::*` 引用将失去名字（防回接锁失效）"
     );
     assert!(
-        content.contains("pub use bedcode_wasm_core::{db, enums};"),
-        "lib.rs 缺少 `pub use bedcode_wasm_core::{{db, enums}};` 垫片——\n\
-         db / enums 两个引擎面真源在 crate，垫片缺失即回接（防回接锁失效）"
+        content.contains("pub use bedcode_wasm_core::db;"),
+        "lib.rs 缺少 `pub use bedcode_wasm_core::db;` 垫片——\n\
+         db 引擎面真源在 crate，垫片缺失即回接（防回接锁失效；enums 垫片已随无消费者退役）"
     );
     assert!(
         !content.contains("bedcode_wasm_core::{db, enums, pty}") && !content.contains("pty};"),

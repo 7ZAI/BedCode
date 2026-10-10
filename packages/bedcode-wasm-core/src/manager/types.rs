@@ -3,7 +3,11 @@
 //! 桌面端插件类型 — 仅保留桌面端特有的内部模型
 //! 共享类型（PluginManifest, PluginContributes, PluginState 等）迁移到 bedcode-plugin-api
 
+// 双端 SDK 同名类型（形状 fork 对齐逐字一致）——按形态取对应 SDK
+#[cfg(feature = "desktop-host")]
 use bedcode_plugin_api::{PluginContributes, PluginManifest, PluginState, PluginType};
+#[cfg(feature = "mobile-host")]
+use bedcode_plugin_api_mobile::{PluginContributes, PluginManifest, PluginState, PluginType};
 use chrono::{DateTime, Utc};
 use std::path::Path;
 
@@ -150,7 +154,11 @@ fn manifest_installed_at(extension_path: &str) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // 双端 SDK 同名类型——按形态取对应 SDK（测试段，票 06 批次 03）
+    #[cfg(feature = "desktop-host")]
     use bedcode_plugin_api::{PluginManifest, PluginState, PluginType};
+    #[cfg(feature = "mobile-host")]
+    use bedcode_plugin_api_mobile::{PluginManifest, PluginState, PluginType};
 
     /// 构造带完整字段的测试 manifest
     ///
@@ -285,5 +293,65 @@ mod tests {
         assert_eq!(info.size_bytes, 102, "plugin.json(2) + main.js(100)");
         assert!(info.installed_at.is_some());
         assert_eq!(info.source, "wasm");
+    }
+}
+
+// ==================== 移动装配面事件（fork 迁入，票 06 批次 03） ====================
+
+#[cfg(feature = "mobile-host")]
+
+/// 插件生命周期事件
+///
+/// 统一的事件枚举，供 PluginManager::dispatch_lifecycle_event() 使用。
+/// 每个变体携带触发点传入的上下文数据。
+#[derive(Debug, Clone)]
+pub enum PluginLifecycleEvent {
+    AppStartup,
+    AppShutdown,
+    AuthSuccess,
+    Disconnect { reason: String },
+    SessionCreated { session_id: String },
+    SessionStopped { session_id: String },
+}
+
+#[cfg(feature = "mobile-host")]
+impl PluginLifecycleEvent {
+    /// 返回声明字段名（用于 is_declared 检查）
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::AppStartup => "onStartup",
+            Self::AppShutdown => "onShutdown",
+            Self::AuthSuccess => "onAuthSuccess",
+            Self::Disconnect { .. } => "onDisconnect",
+            Self::SessionCreated { .. } => "onSessionCreated",
+            Self::SessionStopped { .. } => "onSessionStopped",
+        }
+    }
+
+    /// 返回前端 Tauri 事件名（不含 plugin:lifecycle: 前缀）
+    pub fn tauri_event_name(&self) -> &'static str {
+        match self {
+            Self::AppStartup => "appStartup",
+            Self::AppShutdown => "appShutdown",
+            Self::AuthSuccess => "authSuccess",
+            Self::Disconnect { .. } => "disconnect",
+            Self::SessionCreated { .. } => "sessionCreated",
+            Self::SessionStopped { .. } => "sessionStopped",
+        }
+    }
+
+    /// 转为前端 Tauri 事件 payload
+    pub fn to_payload(&self) -> serde_json::Value {
+        match self {
+            Self::AppStartup | Self::AppShutdown | Self::AuthSuccess => {
+                serde_json::json!({})
+            }
+            Self::Disconnect { reason } => {
+                serde_json::json!({ "reason": reason })
+            }
+            Self::SessionCreated { session_id } | Self::SessionStopped { session_id } => {
+                serde_json::json!({ "sessionId": session_id })
+            }
+        }
     }
 }

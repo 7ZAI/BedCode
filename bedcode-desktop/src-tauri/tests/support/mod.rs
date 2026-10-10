@@ -23,14 +23,16 @@ use tokio::sync::{Mutex, RwLock};
 
 // 夹具读取 re-export：所有经 `mod support; use support::*;` 的测试文件直接用
 pub use bedcode_desktop_lib::wasm_core::test_support::{
-    sdk_fixture_artifact_bytes, system_test_artifact_bytes,
+    sdk_fixture_artifact_bytes, setup_wasm_runtime, system_test_artifact_bytes, TestInstanceDispatcher,
 };
-// 常用类型 re-export（05c 批量迁移文件的公共面）
+// 常用类型 re-export（05c 批量迁移文件的公共面；pty 一族见文末 host-pty 段）
 pub use bedcode_desktop_lib::db::Database;
+pub use bedcode_desktop_lib::plugin::pty::HostPtyPorts;
 pub use bedcode_desktop_lib::wasm_core::config::CallModel;
+pub use bedcode_desktop_lib::wasm_core::host_api::context::WasmHostContext;
 pub use bedcode_desktop_lib::wasm_core::manager::host::PluginHost;
 pub use bedcode_desktop_lib::wasm_core::manager::host::{GuestOp, GuestReply};
-pub use bedcode_desktop_lib::wasm_core::manager::runtime::LoadedWasmPlugin;
+pub use bedcode_desktop_lib::wasm_core::manager::runtime::{LoadedWasmPlugin, WasmRuntime};
 pub use bedcode_desktop_lib::wasm_core::manager::types::{LoadedPlugin, PluginSource};
 pub use bedcode_desktop_lib::wasm_core::storage::PluginStorage;
 pub use bedcode_desktop_lib::wasm_core::system::config::AppConfig;
@@ -75,8 +77,7 @@ pub async fn setup_host() -> Arc<PluginHost> {
     db.lock().await.init_schema().expect("init schema");
 
     let plugins_dir = bundled_plugins_dir();
-    let user_plugins_dir =
-        std::env::temp_dir().join(format!("bedcode-hosttest-userplugins-{}", std::process::id()));
+    let user_plugins_dir = std::env::temp_dir().join(format!("bedcode-hosttest-userplugins-{}", std::process::id()));
     std::fs::create_dir_all(&user_plugins_dir).expect("user plugins dir");
 
     let host = PluginHost::new(db, &plugins_dir, &user_plugins_dir, None, None, Vec::new()).await;
@@ -348,4 +349,149 @@ pub fn positive_auth_needs_dedicated_binary(test: &str) -> bool {
          tests/ws_auth_rules.rs 与 tests/http_auth_biometric.rs。"
     );
     true
+}
+
+// ==================== host-pty 域测试基建（票 02 批次 02 自 wasm-core runtime.rs 迁入） ====================
+//
+// 一族用例（`pty_e2e` / `terminal_output_perf`）共用：fixture 常量属主 id
+// （`com.bedcode.pty-test` / `com.bedcode.term-perf`）在宿主侧 PTY 注册表按属主
+// **进程级全局**登记，彼此 purge 会清对方句柄 ⇒ 用例并行必须串行（libtest 默认并行）。
+// 迁宿主的理由：这些用例跨 crate（wasm-core 运行时 + pty-engine 域 + 宿主 adapter），
+// 跨 crate 集成测试一律住宿主 `src-tauri/tests/`（wasm-core 已不依赖 pty-engine）。
+
+/// host-pty fixture e2e 串行锁（中毒后取回内部值继续）
+static PTY_FIXTURE_E2E_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// 取得 host-pty fixture e2e 串行锁
+pub fn lock_pty_fixture_e2e() -> std::sync::MutexGuard<'static, ()> {
+    PTY_FIXTURE_E2E_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// 构建 host-pty fixture 插件（合集 `packages/plugin-sdk-fixtures` `feature = "pty"`，ABI v16）
+///
+/// **只读不建**：产物由 wasm-core 测试（component_e2e / sdk_e2e 等）构建到共享夹具目录
+/// `bedcode-desktop/target/fixtures/wasm32-wasip3/`；缺失即 panic 并提示先跑 wasm-core 测试
+/// （与 `sdk_fixture_artifact_bytes` 同口径——宿主测试不承担 fixture 构建）。
+pub fn build_pty_test_component() -> Vec<u8> {
+    sdk_fixture_artifact_bytes("pty")
+}
+
+/// fixture 命令的 error 载荷（`wasm_entry!` 把 guest Err 编码为 `{"error": ...}`
+/// 字符串返回，不上抛为 trap）
+pub fn pty_command_error(raw: &str) -> String {
+    let value: serde_json::Value = serde_json::from_str(raw).expect("command json");
+    value["error"]
+        .as_str()
+        .unwrap_or_else(|| panic!("期望 error 载荷，got: {raw}"))
+        .to_string()
+}
+
+/// guest error 载荷 → `Some(错误文案)`；成功载荷 → `None`（矩阵分格自带命令名定位）
+pub fn pty_error_of(raw: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(raw)
+        .expect("command json")
+        .get("error")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+}
+
+/// `data` 字段（list<u8>）→ 文本（PTY 输出含控制字符，按 lossy 处理）
+pub fn pty_fetched_text(value: &serde_json::Value) -> String {
+    let bytes: Vec<u8> = value
+        .get("data")
+        .and_then(|d| d.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_u64().map(|n| n as u8)).collect())
+        .unwrap_or_default();
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
+/// 经 fixture 的 `pty-ring-fetch` 命令按游标拉取一次
+pub async fn pty_fixture_fetch(
+    plugin: &Arc<Mutex<LoadedWasmPlugin>>,
+    pty_id: &str,
+    from_offset: u64,
+) -> serde_json::Value {
+    let args = serde_json::json!({ "ptyId": pty_id, "fromOffset": from_offset, "maxBytes": 4096 }).to_string();
+    let raw = {
+        let mut guard = plugin.lock().await;
+        guard.invoke_command("pty-ring-fetch", &args).expect("pty-ring-fetch")
+    };
+    serde_json::from_str(&raw).expect("pty-ring-fetch json")
+}
+
+/// 轮询拉取直到输出含 `want`（真 PTY 产出异步：断言内容，不断言时序）
+pub async fn pty_fetch_until(plugin: &Arc<Mutex<LoadedWasmPlugin>>, pty_id: &str, want: &str) -> serde_json::Value {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let fetched = pty_fixture_fetch(plugin, pty_id, 0).await;
+        if pty_fetched_text(&fetched).contains(want) || std::time::Instant::now() >= deadline {
+            return fetched;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+}
+
+/// 加载并激活一个 host-pty fixture 实例（编译组件 + 接线 dispatcher + activate 订阅）
+pub async fn pty_activate_fixture(
+    runtime: &WasmRuntime,
+    ctx: &Arc<WasmHostContext>,
+    plugin_id: &str,
+) -> Arc<Mutex<LoadedWasmPlugin>> {
+    let component = runtime
+        .compile_component(&build_pty_test_component())
+        .expect("compile pty fixture component");
+    let plugin = Arc::new(Mutex::new(
+        runtime
+            .instantiate_component(&component, plugin_id, Arc::clone(ctx), &[], None)
+            .expect("instantiate pty fixture"),
+    ));
+    ctx.message_bus
+        .set_dispatcher(Arc::new(TestInstanceDispatcher {
+            instances: Arc::new(RwLock::new(HashMap::from([(plugin_id.to_string(), plugin.clone())]))),
+        }))
+        .await;
+    plugin.lock().await.activate().expect("activate pty fixture");
+    plugin
+}
+
+/// fixture 命令调用（成功路径）：返回解析后的 JSON 载荷
+pub async fn pty_fixture_call(
+    plugin: &Arc<Mutex<LoadedWasmPlugin>>,
+    command: &str,
+    args: serde_json::Value,
+) -> serde_json::Value {
+    let raw = {
+        let mut guard = plugin.lock().await;
+        guard
+            .invoke_command(command, &args.to_string())
+            .unwrap_or_else(|e| panic!("{command} 调用失败: {e}"))
+    };
+    let value: serde_json::Value = serde_json::from_str(&raw).expect("command json");
+    assert!(value.get("error").is_none(), "{command} 期望成功载荷，got: {value}");
+    value
+}
+
+/// 读 fixture 已收事件列表（`<owner>::pty:exit` 投递事实源）
+pub async fn pty_fixture_events(plugin: &Arc<Mutex<LoadedWasmPlugin>>) -> Vec<serde_json::Value> {
+    let state = pty_fixture_call(plugin, "pty-state", serde_json::json!({})).await;
+    state["events"].as_array().cloned().unwrap_or_default()
+}
+
+/// 轮询 fixture 事件直至出现指定 ptyId 的退出事件（宿主→guest 投递异步）
+pub async fn pty_wait_exit_event(plugin: &Arc<Mutex<LoadedWasmPlugin>>, pty_id: &str) -> serde_json::Value {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if let Some(event) = pty_fixture_events(plugin)
+            .await
+            .into_iter()
+            .find(|e| e["payload"]["ptyId"] == pty_id)
+        {
+            return event;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "属主插件必须在超时前收到 {pty_id} 的 pty:exit 事件"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
 }

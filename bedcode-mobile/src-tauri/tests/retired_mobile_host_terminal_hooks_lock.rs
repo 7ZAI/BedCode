@@ -68,17 +68,19 @@ const RETIRED_FRONTEND_LITERALS: [&str; 8] = [
 
 /// 保留面必须仍在：本票只摘「宿主↔插件终端回调/写入面」，不摘输出传输面
 const RETAINED_FACE: [(&str, &str); 6] = [
-    // WIT 保留接口（票 12 的 C3 二进制出口与连接事实原语）
+    // WIT 保留接口（票 12 的 C3 二进制出口与连接事实原语）。
+    // 票 03 分片拼装后：移动接口定义从手写 `bedcode.wit` 迁到生成物 `cap-mobile.wit`
+    // （`bedcode.wit` 只剩 `include core; include cap-mobile;`）——needle 随真源落点走。
     (
-        "../packages/plugin-sdk-mobile/rust/wit/bedcode.wit",
+        "../packages/plugin-sdk-mobile/rust/wit/cap-mobile.wit",
         "interface host-terminal-stream ",
     ),
     (
-        "../packages/plugin-sdk-mobile/rust/wit/bedcode.wit",
+        "../packages/plugin-sdk-mobile/rust/wit/cap-mobile.wit",
         "forward-output: func(",
     ),
     (
-        "../packages/plugin-sdk-mobile/rust/wit/bedcode.wit",
+        "../packages/plugin-sdk-mobile/rust/wit/cap-mobile.wit",
         "primary-target: func(",
     ),
     // SDK 权限词汇：terminal:output 保留（窄转发权限门复用）
@@ -87,13 +89,14 @@ const RETAINED_FACE: [(&str, &str); 6] = [
         "pub const PERMISSION_TERMINAL_OUTPUT",
     ),
     (
-        // 票 17 批次 2b：真源随 wasm-core fork 迁入 crate（terminal_stream_gateway → crate 根；
-        // host_impl/terminal_stream → manager/runtime/host_impl），锁改钉新真源位置
-        "../packages/bedcode-wasm-core/src/terminal_stream_gateway.rs",
+        // 票 06 批次 03：真源随 wasm-core fork 退役迁入根 crate `mobile-host` 面
+        // （terminal_stream_gateway → crate 根；host_impl/terminal_stream →
+        // manager/runtime/mobile/host_impl），锁改钉新真源位置
+        "../../packages/bedcode-wasm-core/src/terminal_stream_gateway.rs",
         "pub fn forward_output(",
     ),
     (
-        "../packages/bedcode-wasm-core/src/manager/runtime/host_impl/terminal_stream.rs",
+        "../../packages/bedcode-wasm-core/src/manager/runtime/mobile/host_impl/terminal_stream.rs",
         "fn terminal_stream_forward_output(",
     ),
 ];

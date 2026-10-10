@@ -221,3 +221,72 @@ where
 pub fn ambient_handle() -> tokio::runtime::Handle {
     AMBIENT_RT.handle().clone()
 }
+
+// ==================== Error Boundary（移动装配面，fork 迁入，票 06 批次 03） ====================
+//
+// WS 读写任务 / 重连任务在 crate 侧 spawn 的 panic 防护（宿主 system/error_boundary.rs
+// 同形状副本；桌面侧消费面在宿主 src-tauri，本 crate 桌面分支不含）。
+
+// block_on_ambient / ambient_handle 双端同名同形（root 既有段已提供，fork 段不重复——
+// 票 06 批次 03 迁入时去重；见上方 root 段的同名函数）
+
+// ==================== Error Boundary（宿主 system/error_boundary.rs 同形状副本） ====================
+//
+// 票 17 批次 2：WS 读写任务 / 重连任务迁入 crate 后在 crate 侧 spawn，需要
+// 同款 panic 防护。宿主保留原文件（宿主引擎面多处消费），双份形状由
+// fork_boundary_lock 的机制核在场断言钉住；票 19 抽共享核时随机制一并上提。
+
+/// 使用错误边界包装 tokio::spawn（当前线程必须有 runtime 上下文）
+///
+/// 捕获 spawned 任务中的 panic 并记录日志，防止任务静默终止。
+#[cfg(feature = "mobile-host")]
+pub fn spawn_with_error_boundary<F>(task_name: &'static str, future: F) -> tokio::task::JoinHandle<()>
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    tokio::spawn(wrap_with_error_boundary(task_name, future))
+}
+
+/// 带显式运行时句柄的错误边界 spawn
+///
+/// 与 [`spawn_with_error_boundary`] 同一防护，但提交目标由调用方指定：
+/// 调用线程可能**没有**当前 runtime 上下文（spawn_blocking / 纯 std 线程上的
+/// host fn），此时裸 `tokio::spawn` 直接 panic——句柄版在任意线程均合法。
+#[cfg(feature = "mobile-host")]
+pub fn spawn_with_error_boundary_on<F>(
+    handle: &tokio::runtime::Handle,
+    task_name: &'static str,
+    future: F,
+) -> tokio::task::JoinHandle<()>
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    handle.spawn(wrap_with_error_boundary(task_name, future))
+}
+
+/// 防护包装（共用内部：panic → error! 日志，任务自身吞掉不外泄）
+#[cfg(feature = "mobile-host")]
+async fn wrap_with_error_boundary<F>(task_name: &'static str, future: F)
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    let result = std::panic::AssertUnwindSafe(future).catch_unwind().await;
+
+    if let Err(panic_err) = result {
+        let msg = if let Some(s) = panic_err.downcast_ref::<&str>() {
+            s.to_string()
+        } else if let Some(s) = panic_err.downcast_ref::<String>().cloned() {
+            s.clone()
+        } else {
+            "Unknown panic".to_string()
+        };
+        tracing::error!(
+            target: "error_boundary",
+            task = %task_name,
+            error = %msg,
+            "Task panicked and was caught by error boundary",
+        );
+    }
+}
+
+use futures_util::FutureExt;

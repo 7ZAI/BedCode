@@ -293,7 +293,7 @@ impl Clone for PluginHost {
 // ==================== MessageDispatcher Implementation ====================
 
 impl crate::bus::MessageDispatcher for PluginHost {
-    fn dispatch_to_wasm(&self, plugin_id: &str, msg: &bedcode_plugin_api::BusMessage) -> anyhow::Result<()> {
+    fn dispatch_to_wasm(&self, plugin_id: &str, msg: &crate::bus::BusMessage) -> anyhow::Result<()> {
         // v11：按载荷格式路由——二进制消息走可选导出 on_message_binary
         // （总线已按订阅者格式偏好过滤，不会对无导出的旧插件发二进制消息）
         let op = if let Some(bytes) = &msg.payload_binary {

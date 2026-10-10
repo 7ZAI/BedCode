@@ -61,11 +61,8 @@ const FRONTEND_PERMISSION_RULES = [
 const RUST_PERMISSION_RULES = [
   // 插件私有 KV（host-storage）
   { re: /\b(storage_get|storage_set|storage_delete)\b/, perm: 'storage' },
-  // 主库 SQL 面（票 02 高危位）：内核 `db_*` 与插件私有库 `plugin_db_*` 分域——
-  // 主库位只按需授予第一方，故这里必须映射 `database:main` 而非 `storage`
-  // （映射成 storage 会让插件「声明成功、运行时被拒」）。负向后视排除
-  // `plugin_db_execute` / `plugin_db_query` 这类私有库形态（其前置字符是 `_`）。
-  { re: /(?<![_\w])db_(execute|query)\w*/, perm: 'database:main' },
+  // 主库 SQL 面已随 host-database 退役（票 18 主库收归：内核不再有插件主库
+  // 原语，`database:main` 权限位从 permission.rs 移除）——不再映射 `db_*`。
   { re: /\bterminal_send\b/, perm: 'terminal:input' },
   // host-pty 两域（与权限词汇表 apiMap 逐字对应）：spawn/kill 属高风险面，
   // 数据面（write/resize/ring_fetch/is_running）归 pty:io

@@ -166,7 +166,7 @@ mod tests {
     use super::*;
     use crate::bus::{BusMessageHandler, MessageDispatcher};
     use crate::host_api::tests::build_host_ctx;
-    use bedcode_plugin_api::BusMessage;
+    use crate::bus::BusMessage;
     use std::sync::Arc;
     use tokio::sync::mpsc;
 

@@ -1,7 +1,7 @@
 # 票 07 · 防回接 / 漂移锁 + 文档收口（終态确定性）
 
-Status: **todo**（spec §4 票 07；本 spec 序列的收口票）
-依赖：票 03–06 全部落地（锁的锚点文件才存在）
+Status: **✅ done（2026-10-10 落地；与票 06 批次 04/05 一并收口——实施记录见 §5）**（spec §4 票 07；本 spec 序列的收口票）
+依赖：票 03–06 全部落地（锁的锚点文件才存在）——本次实施时票 06 批次 04/05 尚未落地，已顺带打通（fork 删除 + 移动全量绿）
 前置：票 03–06 各自的实施记录已回填（本票从真实落点取锚，不猜）
 
 ## 1. 现状（2026-10-10 实测）
@@ -56,4 +56,80 @@ Status: **todo**（spec §4 票 07；本 spec 序列的收口票）
 
 ## 5. 实施记录
 
-（待执行后回填：每条锁的变异自检记录；ADR 0045 定稿 diff；code-map 索引核对结果；eslint / cargo 门禁实跑输出；遗留欠账汇总表。）
+**状态：✅ 落地（2026-10-10；与票 06 批次 04/05 一并收口——fork 删除见 ticket-06 §7.4/§7.5）。**
+
+### 5.1 批次 01 · 漂移锁收口 ✅
+
+- **接入点**：根 `package.json` 新脚本 `check:wit` = `node scripts/compose-wit.mjs --all --check`；husky `.husky/pre-commit` 增漂移锁段（置于 eslint 早退分支之前；node 缺失时跳过并提示）；新增 CI `.github/workflows/wit-drift-lock.yml`（paths 覆盖 `packages/**` / 双端 SDK / `scripts/compose-wit.mjs`——既有 test.yml / lint.yml 的 paths 不含这些真源位置，挂进去会出现「真源改了 CI 不触发」的静默窗口）。
+- **变异自检（双方向 2/2，均还原核 sha256）**：
+  - 手改生成物一字节（`bedcode-desktop/.../rust/wit/core.wit` 尾部追加换行）→ `--check` 红：`[desktop] core.wit 漂移: 期望 c05ee71b… 实际 f8f58137…（真源已改或生成物被手改）`，exit=1 → 还原 → 绿（sha256 复原 `c05ee71b…`）。
+  - 改真源（`packages/bedcode-wasm-core/wit/core.wit` 尾部追加换行）→ 生成物变陈 → 双端红（desktop + mobile `core.wit 漂移`）→ 还原 → 绿。
+  - husky 实跑：`sh .husky/pre-commit` → 9 文件 `ok`，exit 0（git index 未被改动）。
+
+### 5.2 批次 02 · 防回接锁补全 ✅
+
+| 条目 | 落点 | 变异自检 |
+| --- | --- | --- |
+| 4 · 移动 fork 退役锁（四判据：目录 / 包名 / 路径字形 / 别名指向） | `bedcode-mobile/src-tauri/tests/retired_mobile_wasm_core_fork_lock.rs` | **2/2**：探针 A（fork 目录+包名+fork 形态路径注入）→ ①②③ 三判据红；探针 B（别名 `package =` 形态破坏，同语义可解析）→ 别名判据红；均还原绿 |
+| 5 · 能力域自持分片 bindgen 锁（pty/http/ws/peer/mdns 五域） | 宿主 `src/plugin/bindings.rs::capability_domains_bind_their_own_wit_slices` | **1/1**：pty `path` 指回端 SDK WIT（可编译，同一 package）→ 红点名；还原 `diff` 一致 → 绿 |
+| 6 · 宿主侧旧绑定面核对 | 既有锁实跑 + 登记表复核（见下） | — |
+| 7 · 端清单↔装配面动态对照（票 03 §4.4 静态版加深） | 同文件 `compose_caps_and_host_module_interfaces_cover_each_other` | **1/1**：cap-desktop 世界注入 `import host-nonexistent-probe;` → 红点名「组合面与装配面脱节」；还原 → 绿 |
+| 附 · 移动 WIT 组合锁（承接随 fork 退役的 A1 结构/计数面） | `bedcode-mobile/src-tauri/tests/mobile_wit_composition_lock.rs` | **1/1**：compose `abi.version` 20→21 → 红（点名与 SDK abi.rs 漂移）；还原 → 绿 |
+
+**第 6 条核对结论**：
+
+- `IN_CRATE_HOST_MODULES`（内核在册 ws / peer / http 三域引擎面条目）↔ 收集集双向：内核 `capability_registry_matches_whitelist`（lib）+ 宿主 `pty_wiring.rs::host_whitelist_matches_collected_capability_modules`（跨 crate 对偶）在场；内核反向锁 7 例实跑绿（`cargo test --lib must_not_return_to_wasm_core` 7/7）。
+- `defined twice` 防线的锁化文本锚 = v36/v37 切片域反向锁（`desktop_sliced_interfaces_must_not_return_to_wasm_core`）+ 路径 B 五域反向锁 + 能力域 bindgen 白名单双向（上表第 5/7 条新增两把补强）。
+- `crate_boundary_lock.rs` 表按票 03–06 终态复核：**ALLOWED 补 `bedcode-wasm-core → bedcode-discovery-engine`**（票 06 批次 03 mobile-host 面新边：桌面形态该域 adapter 在宿主、内核无边；移动形态 fork 迁入的域 impl 在 crate 内消费），**REQUIRED 不动**（该边 optional / 仅移动形态，尾注改写）。复核后边界锁 **9/9 绿**。
+- 顺带修复（均为在途基线红，非本票引入）：桌面形态 lib `E0433`×7——`fs_auth.rs` 移动面 `impl FsAuthGate for FsAuthChecker` 缺 `mobile-host` 门控（test-support 收口引入）→ 补门控 + 合并重复注释；内核 `l2_gating_test::internal_business_host_dependency_stays_gated` 红——test-support 拆分后白名单条目 `src/test_support.rs` 悬空、`src/test_support/desktop.rs` 漏登 → 条目随真源改指 `desktop.rs`。
+
+### 5.3 批次 03 · 文档收口 ✅
+
+- **ADR 0045**：proposed → **accepted**；新增「实施记录」段（POC 四命题实际结论 / D3 复评 = 拆分执行 / D4·D5·D6 落地 / 与 ADR 0035·0036·0037·0040 衔接）；Comments 补 2026-10-10 转正记录（含被误删的「事实底座」行恢复）。
+- **双端 code-map**：桌面 §3 登记核心 WIT（`core.wit`）/ 能力域分片 / 端清单三处 + 拼装漂移锁与组合面锁；「新增能力域三处同改」扩为五处（+ 自持分片 + 端清单重拼）；锁索引新增 `bindings.rs` 两把 + 漂移锁，`crate_boundary_lock` 条目更新（discovery 边）；移动 code-map fork 章节改写为单一 crate + `mobile-host` 面，锁索引新增退役锁 / 组合锁，A1–A4 与 fork 对称锁标注「随 fork 退役」及承接面。
+- **CHANGELOG 双语**：`CHANGELOG.md` + `CHANGELOG_zh.md` 各增两条（票 06 单一 crate；本序列综述），版本号未 bump（无版本变更，走未发布条目——§4 风险表口径）。
+- **AGENTS.md**：§5.4 改写（单一 crate 双形态 + 差异只来自能力域组合 + 契约仍独立）；§4 任务路由表新增「改 wasm-core 机制 / 核心 WIT / 契约分片」行（先读 ADR 0045 + spec；禁手改生成物）。
+- **docs/commands.md**：速查表 + §5.6 新增 WIT 分片拼装小节（真源 / 禁手改 / 改动流程 / ABI 锁步）。
+- **plugin-development-checklist.md**：契约边界条改为分片真源口径；ABI 计数更新为 v37/v20 + 切片影响面（旧产物 import 集合变化 ⇒ 全量重建）。
+- **票 06 记录**：§7.4（批次 04 前置 4 红根因表 + 三形态实证）/ §7.5（批次 05 门禁 + 欠账）回填，Status 转 done。
+
+### 5.4 门禁实跑汇总
+
+| 项 | 结果 |
+| --- | --- |
+| 锁变异自检 | 漂移锁 2/2（双向）+ 退役锁 2/2 + 能力域 bindgen 1/1 + 清单对照 1/1 + 移动组合 1/1（全部注入→红→还原→绿，证据见 §5.1/§5.2） |
+| 漂移锁（CI 形态） | `node scripts/compose-wit.mjs --all --check` 双端绿；husky 实跑 exit 0 |
+| 文档 | ADR 0045 accepted；双端 code-map 索引与锁一一对应（新增 5 条锁登记无孤儿）；CHANGELOG 双语同步 |
+| 移动全量 | `bedcode-mobile/src-tauri` **334 passed / 0 failed**（fork 删除后复跑） |
+| 内核 lib 全量 | `packages/bedcode-wasm-core` 桌面形态 **593 passed / 0 failed**（含 fixture_keeper 4/4：crypto / task / **pty** / **ws**，pty+ws 产物 383KB / 397KB 实际生成） |
+| 桌面宿主 lib 全量 | **155 passed / 0 failed**（零回归） |
+| 桌面宿主边界锁 | 9/9 绿（表更新后） |
+| 前端两端 `test:run` | 见 §5.5 回填 |
+| 根 `pnpm exec eslint .` | **0 error**（97 warning 不计入） |
+| fmt 自查 | 本票新增文件 rustfmt-clean（2/2）；存量触碰文件逐一对照 HEAD 判定为**存量不净**（不动，守仓库纪律） |
+| clippy | 见 §5.5 回填 |
+
+### 5.5 未跑 / 手工项（逐项写明）
+
+- **`cross-end-tests`**：未跑——票 04 已记项目级决策「延后至重构波次稳定后统一验证」；本票未改跨端协议 / WIT 语义（纯锁与文档）。
+- **桌面宿主集成测试二进制**（`pty_e2e` / `task_e2e` / `terminal_output_perf` / `system_component_test` 等）：未跑——wasmtime 重链接成本 + `ws_e2e.rs`(3)/`ws_output_perf.rs`(1) 为 HEAD 既有编译红（`EndpointAuth` 同名不同源，非本序列引入）；记录为延续欠账。
+- **Android target 编译级实证**：未跑（需 NDK）；tree 级全零门禁保持（批次 01 双实证）。
+- **真机 / 浏览器核验**：未跑——本票无 UI / 行为改动（锁 + 文档 + 测试夹具）；行为面未变更。
+- **wasm 应用完整构建（含 wasmHash 注入）**：未跑——本票未改 WIT 语义与插件代码（生成物逐字未变，`--check` 为证）。
+- **前端两端 `test:run` / clippy**：见 §5.5 补充记录。
+
+### 5.6 遗留欠账（本序列汇总，供后续补跑）
+
+| # | 项 | 原因 | 回补位 |
+| --- | --- | --- | --- |
+| 1 | `cross-end-tests` 全量 | 项目级延后决策（重构波次统一验证） | 本序列各票 + `cross-end-tests/` |
+| 2 | 桌面宿主集成测试全量（pty_e2e / task_e2e / terminal_output_perf / system_component_test / ws_e2e 基线编译红修复） | 磁盘 + 重链接成本；`EndpointAuth` 同名不同源为 HEAD 既有红 | 桌面 `src-tauri/tests/` |
+| 3 | 内核 **mobile-host 形态**全量测试（移动 fork crate 原测试面随删除；`test-support` 面已在移动 src-tauri 全量覆盖） | fork 删除后原 fork 单测无宿主；等价面 = src-tauri 全量 | 如有新需求，落根 crate `mobile-host` cfg(test) |
+| 4 | 票 19 A1–A4 契约锁的完整重建（A1 结构面已由 `mobile_wit_composition_lock` 承接；A2/A3/A4 语义面暂无源码锁） | 随 fork 退役，未逐条重宿 | 移动 src-tauri tests 或根 crate mobile-host cfg(test) |
+| 5 | Android 编译级实证（NDK） | 环境缺失 | CI / 本地 NDK |
+| 6 | `wasm-apps` 完整构建 + wasmHash 注入（本序列末次在票 04 已做，之后无 WIT 语义变更） | 无变更故未复跑 | 发布前全量 |
+
+### 5.7 收尾核对
+
+- `git status`：本票新增 3 文件（CI workflow / 两把新锁测试）/ 修改面 = 票 06+07 登记的锁 / 文档 / 记录（详见交付说明）；无未登记的在途新文件。
+- 收尾清理：测试进程与端口已自然退出（cargo test / vitest 均跑完退出）；残留产物 `.dev-logs/ticket07-*.log`（gitignored 调试日志）。

@@ -15,7 +15,7 @@
 //! **幂等**：`OnceLock::set`，重复装配忽略而非替换（与
 //! `install_capability_domain_ports` 同款语义）。
 
-use crate::host_api::context::WasmHostContext;
+use crate::host_api::mobile_context::WasmHostContext;
 use std::sync::Arc;
 use std::sync::Weak;
 

@@ -1,6 +1,7 @@
 //! 宿主引擎端口装配（票 17 批次 2b）——[`HostEnginePorts`] 的宿主侧唯一实现
 //!
-//! 插件机制面（fork crate `bedcode-wasm-core-mobile`）的所有「离宿主无法实现」
+//! 插件机制面（单一 wasm-core `bedcode-wasm-core` 的 `mobile-host` 面；
+//! `bedcode-wasm-core-mobile` 为 package rename 别名，fork crate 已退役）的所有「离宿主无法实现」
 //! 引擎调用经此注入：auth 引擎（C4 凭据零过境）/ egress 安全闸门（D5，判定 +
 //! 弹窗编排整体在宿主）/ 主连接事实 / WS 重连策略 / peer 四模块 / mDNS 共享
 //! 守护 / android 平台桥（android_plugins + SAF）。DTO 以原始值 / JSON 过界，

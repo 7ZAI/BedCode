@@ -99,7 +99,7 @@ async fn test_system_component_capability_routing_end_to_end() {
 /// **查注册表**（ADR 0031，不再是「能力探测 + 排序取首个」）找到中心，调中心
 /// `auth-policy` capability 导出；**验签在中心内部**（ADR 0033：入场密钥自持，
 /// 宿主 `utils/auth/jwt.rs` 已退役）——故 token 一律经
-/// `bedcode_desktop_lib::wasm_core::utils::auth::test_tokens::issue` 从中心签出（走生产 `auth-grant` 路径）。
+/// `bedcode_desktop_lib::utils::auth::test_tokens::issue` 从中心签出（走生产 `auth-grant` 路径）。
 /// 覆盖：
 /// - 无中心在册 → **拒绝**（`no auth center registered`，fail-closed K3）
 /// - 激活 + 注册中心 + 私有库无配对记录 → 放行（无信任锚点，仅凭验签）
@@ -183,7 +183,7 @@ async fn test_server_auth_policy_closed_loop() {
         &["auth".to_string(), "peer".to_string(), "storage".to_string()],
     );
     const TEST_KEY: [u8; 32] = [0x5a; 32];
-    bedcode_desktop_lib::wasm_core::utils::auth::test_tokens::seed_keyring(host.wasm_host_ctx(), session_id, &TEST_KEY);
+    bedcode_desktop_lib::utils::auth::test_tokens::seed_keyring(host.wasm_host_ctx(), session_id, &TEST_KEY);
     host.activate_plugin(session_id, false).await.expect("activate session");
 
     // 注册中心：新 SDK 产物 activate 内已自注册；旧产物（v31）未注册 → 手动
@@ -205,7 +205,7 @@ async fn test_server_auth_policy_closed_loop() {
     // ============ 激活会话中心 → 验签 + 策略取中心（注册表） ============
     // token 只能从中心签出（v33）：走生产 `auth-grant` / `jwt` / `issue`
     let valid_token =
-        bedcode_desktop_lib::wasm_core::utils::auth::test_tokens::sign_with_seeded_key(&TEST_KEY, "device-1", Some("Pixel 9"), Some("fp-abc"));
+        bedcode_desktop_lib::utils::auth::test_tokens::sign_with_seeded_key(&TEST_KEY, "device-1", Some("Pixel 9"), Some("fp-abc"));
 
     // 私有库无配对记录 → 放行（无信任锚点，仅凭验签；搬迁前语义）
     let decision = bridge::enforce_connection_policy(host.as_ref(), &valid_token).expect("私有库无记录 → 放行（中心验签通过）");
@@ -272,7 +272,7 @@ async fn test_server_auth_policy_closed_loop() {
 
     // 未撤销记录的其他设备 token → 放行（未命中从宽，搬迁前语义）
     let other_token =
-        bedcode_desktop_lib::wasm_core::utils::auth::test_tokens::sign_with_seeded_key(&TEST_KEY, "device-2", Some("Phone 2"), Some("fp-xyz"));
+        bedcode_desktop_lib::utils::auth::test_tokens::sign_with_seeded_key(&TEST_KEY, "device-2", Some("Phone 2"), Some("fp-xyz"));
     ensure_center();
     assert!(
         bridge::enforce_connection_policy(host.as_ref(), &other_token).is_ok(),
@@ -358,7 +358,7 @@ async fn test_auth_center_multi_candidate_registration_lock() {
         //  init_message_bus 时等不到回复）。种入要过 `auth` 权限门
         host.permission().grant_permissions(id, &["auth".to_string()]);
         const TEST_KEY: [u8; 32] = [0x5a; 32];
-        bedcode_desktop_lib::wasm_core::utils::auth::test_tokens::seed_keyring(host.wasm_host_ctx(), id, &TEST_KEY);
+        bedcode_desktop_lib::utils::auth::test_tokens::seed_keyring(host.wasm_host_ctx(), id, &TEST_KEY);
         if let Err(e) = host.activate_plugin(id, false).await {
             eprintln!("[warn] activate {id} failed (proceed with installed instance): {e}");
         }
@@ -380,7 +380,7 @@ async fn test_auth_center_multi_candidate_registration_lock() {
     // 它既没有这把密钥也验不过 → 裁决必错，与本用例要锁的「注册表说了算」同向
     const TEST_KEY: [u8; 32] = [0x5a; 32];
     let token =
-        bedcode_desktop_lib::wasm_core::utils::auth::test_tokens::sign_with_seeded_key(&TEST_KEY, "device-t", Some("Phone"), Some("fp-t"));
+        bedcode_desktop_lib::utils::auth::test_tokens::sign_with_seeded_key(&TEST_KEY, "device-t", Some("Phone"), Some("fp-t"));
     // 私有库无撤销记录 → 放行（若旧逻辑选中 agent-hub 的默认拒绝，这里会是 Err）
     // 失败信息带裁决原文：三类拒因（no_center / unavailable / policy）排障路径完全不同，
     // 只报「assert is_ok」会把「注册表被并发清台」与「guest 调用超时」混成一个症状

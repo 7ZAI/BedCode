@@ -246,7 +246,7 @@ fn hot_path_functions_do_not_log_per_operation() {
          1) 正常路径不打日志，只在异常分支 warn / error（队列满、格式不匹配、拒绝、失败）；\n\
          2) 计数型可观测性走 core-monitor 指标（PluginMetrics），不靠日志——\n\
             bus 有 dropped / format_rejected，ws 有 dropped_frame_count，授权决策有 record_authz_decision；\n\
-         3) 确实要留痕就降频到「首次 warn + 累计量」，参照 host_api::ws::record_dropped_frame 的 warn-once 形状。",
+         3) 确实要留痕就降频到「首次 warn + 累计量」，参照 bedcode_server_websocket 侧的 record_dropped_frame 的 warn-once 形状。",
         violations.join("\n  ")
     );
 }

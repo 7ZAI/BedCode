@@ -8,7 +8,11 @@ use crate::system::constants::PLUGIN_DOWNLOAD_TEMP_DIR;
 use crate::manager::types::{LoadedPlugin, PluginSource};
 use crate::manager::validation::{validate_dir_binding, validate_plugin_id};
 use crate::permission::PermissionManager;
+// 双端 SDK 同名类型（形状 fork 对齐逐字一致，票 17）——按形态取对应 SDK
+#[cfg(feature = "desktop-host")]
 use bedcode_plugin_api::{PluginManifest, PluginState, PluginType};
+#[cfg(feature = "mobile-host")]
+use bedcode_plugin_api_mobile::{PluginManifest, PluginState, PluginType};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -209,19 +213,44 @@ impl PluginLoader {
                         // 保留 manifest 中的 plugin_type，若未指定则默认 TsOnly
                     }
 
+                    // 非核心能力域的装载期回调（票 02 批次 02 / 批次 03）：manifest
+                    // **原文**下发，解析权与**声明仲裁权**都在能力域——内核不解释
+                    // manifest 字段（AGENTS §5.1 B6）。`Err` = 该域拒绝此 manifest ⇒
+                    // **不装载**（fail-visible，不静默降级；如 host-pty 的 `ptyQuota`
+                    // 越界）。故本回调**必须先于任何副作用**（授权登记在下一条）执行：
+                    // 被拒插件不留半成品状态（权限 / 配额登记都不该发生）。
+                    // 原文重读失败不阻断装载（域侧声明落各自默认档），但必须留痕。
+                    match std::fs::read_to_string(&manifest_path) {
+                        Ok(raw) => {
+                            if let Err(reason) = bedcode_host_kit::DomainHooksRegistry::collected()
+                                .on_manifest_load(&plugin_id, &raw)
+                            {
+                                tracing::error!(
+                                    plugin_id = %plugin_id,
+                                    reason = %reason,
+                                    "[PluginLoader] Rejecting plugin: capability domain refused its manifest declaration"
+                                );
+
+                                continue;
+                            }
+                        }
+                        Err(error) => tracing::warn!(
+                            plugin_id = %plugin_id,
+                            error = %error,
+                            "manifest 原文重读失败：能力域装载期回调跳过，域侧声明落默认档"
+                        ),
+                    }
+
                     // 授权并过滤非法权限
 
                     // 授权结果只落在 PermissionManager（唯一真源）；LoadedPlugin 不再
                     // 镜像一份 granted 列表（票 11 第 4 项：镜像字段只写不读）
                     permission_mgr.grant_permissions(&plugin_id, &manifest.permissions);
 
-                    // PTY 配额与权限同点登记（会话引擎下沉 P1 / H1）：manifest
-                    // `ptyQuota` → host-pty 生效上限。放在同一漏斗里是为了让「声明面」
-                    // 只有一个入口——区间合法性已在解析期由 validate_pty_quota 把关，
-                    // 未声明者落默认档（既有插件零迁移）。
+                    // 配额登记（会话引擎下沉 P1 / H1）：manifest `ptyQuota` → host-pty
+                    // 生效上限，已在上面的域侧回调内完成（同一漏斗，声明面只有一个入口）。
                     // 静态注册（inventory）插件不经本函数、也不经 host-pty 原语（它们
                     // 直接用 SessionManager），故无需在 host.rs 那处授权点补登记。
-                    bedcode_pty_engine::plugin_binding::register_quota(&plugin_id, manifest.pty_quota);
 
                     // 根据 rust_library 字段判断来源：有 WASM 模块则为 Wasm，否则为 FileScan；
 

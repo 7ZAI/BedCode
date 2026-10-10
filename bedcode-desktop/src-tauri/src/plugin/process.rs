@@ -1,0 +1,660 @@
+//! host-process 宿主侧接线（路径 B：WIT 绑定 + `Host` impl + 域函数 + 自报，四件同处）
+//!
+//! wasm-core 纯净性收口票 02 批次 05 自内核迁出（`host_api/process.rs` 整文件删除，
+//! 内核反向锁 `path_b_domains_must_not_return_to_wasm_core` 防回接）。与 auth /
+//! crypto 同款：**没有独立能力 crate**——装配方就是宿主本 crate（孤儿规则见
+//! [`super::bindings`] 模块文档）。
+//!
+//! 语义（逐字保留）：调度框架类插件（如计划任务）经 `process_run` 在桌面端宿主进程内
+//! spawn 外部命令/脚本：异步执行立即返回 run-id，进程结束后宿主经
+//! `PluginServices::dispatch_process_done` 回调插件（携带 exit_code / 超时标记）。
+//!
+//! 架构要点：
+//! - **Child 由执行任务独占持有**：进程注册表（`ProcessRegistry`，内核
+//!   `host_api/context.rs`）只记录 pid 而非 Child 句柄 —— `Child::wait` 在整个进程
+//!   生命周期内独占 `&mut self`，若注册表同时持 Child 句柄，kill 路径将阻塞到进程
+//!   自然退出（死锁）。按 pid 杀进程组（unix `kill -9 -pgid` / Windows
+//!   `taskkill /T /F /PID`）与 wait 天然无冲突，且能连带终止子进程树。
+//! - **权限门禁**：`process:run`（高危：执行任意命令），manifest 声明即信任，
+//!   每次执行由宿主全量审计日志（命令/参数/cwd/env/结果）。
+//! - **任务单元执行器**：`ProcessUnitExecutor`（kind `process.run-sync`）随域迁入，
+//!   经 `submit_unit_executor!` 自报注册——内核装配点（`manager/host.rs` /
+//!   `test_support.rs`）遍历收集，内核不点名本域。
+
+use bedcode_host_kit::ports::downcast_host;
+use bedcode_host_kit::{HostModule, HostModuleDesc, ModuleEntry, WasmPluginState};
+use bedcode_plugin_api::permission::PERMISSION_PROCESS;
+use bedcode_wasm_core::host_api::check_permission;
+use bedcode_wasm_core::host_api::context::{PermissionScope, ProcessScope, ServicesScope, WasmHostContext};
+use bedcode_wasm_core::host_api::unit_executor::UnitExecutor;
+use bedcode_wasm_core::runtime_util::block_on_async;
+use bedcode_wasm_core::system::error_boundary::spawn_with_error_boundary;
+use std::sync::Arc;
+use uuid::Uuid;
+
+use crate::plugin::bindings::bedcode;
+
+// 能力模块白名单条目（宿主自报；生效白名单 = 内核 IN_CRATE ∪ 宿主自报，见
+// `host_module_whitelist`）。路径 B 域的自报静态住在本 crate（宿主 lib 即最终
+// 二进制）⇒ 无需能力 crate 那样的 `use <crate> as _;` 强制引用行。
+bedcode_host_kit::expect_host_module!(MODULE_NAME);
+
+/// 能力模块名（白名单键即装载期日志与错误文案里的模块名）
+pub const MODULE_NAME: &str = "process";
+
+/// 本域提供的 WIT 接口（必须与 `bedcode.wit` 逐字一致；改错即 guest import 失配）
+pub const MODULE_INTERFACES: &[&str] = &["bedcode:plugin/host-process"];
+
+/// 本域的权限位（必须与 `bedcode.wit` / SDK 权限表逐字一致）
+pub const MODULE_PERMISSIONS: &[&str] = &["process:run"];
+
+/// 能力模块描述符（机制面：接口路径 / 权限位 / ABI 下界；**禁带产品名词**）
+///
+/// `abi_min = 8`：host-process 在 ABI v8 引入。
+const DESC: HostModuleDesc = HostModuleDesc {
+    name: MODULE_NAME,
+    interfaces: MODULE_INTERFACES,
+    permissions: MODULE_PERMISSIONS,
+    abi_min: 8,
+};
+
+/// host-process 能力模块
+pub struct ProcessModule;
+
+impl HostModule for ProcessModule {
+    fn desc(&self) -> HostModuleDesc {
+        DESC
+    }
+
+    fn register(&self, linker: &mut wasmtime::component::Linker<WasmPluginState>) -> wasmtime::Result<()> {
+        bedcode::plugin::host_process::add_to_linker::<WasmPluginState, HasSelf>(linker, |s| s)
+    }
+}
+
+/// getter：让 guest 侧 import 取到可变的状态引用（与内核接线同款）
+type HasSelf = wasmtime::component::HasSelf<WasmPluginState>;
+
+/// 静态单例（供 `inventory::submit!` 取址）
+static MODULE: ProcessModule = ProcessModule;
+
+// 能力模块自报（linker-section 静态；收集点在 host-kit）
+inventory::submit! {
+    ModuleEntry { module: &MODULE }
+}
+
+// ==================== 任务单元执行器（C4：core-task 经注册表分发到域实现） ====================
+
+/// 执行器自报（票 02 批次 05）：内核装配点经 `collected_unit_executors` 遍历注册
+/// ——内核不再点名本域；内核测试二进制不含本自报（process 单元由宿主 e2e 覆盖）。
+fn make_process_executor() -> Arc<dyn UnitExecutor> {
+    Arc::new(ProcessUnitExecutor)
+}
+
+bedcode_wasm_core::submit_unit_executor!("process.run-sync", make_process_executor);
+
+/// process 单元执行器（kind `process.run-sync`）
+///
+/// 直调 `process_run_sync`（域权限门在函数内部再把守；阻塞型单元的超时由
+/// 被调用方自带参数负责——spec §6，与既有同步语义一致）。
+pub(crate) struct ProcessUnitExecutor;
+
+impl UnitExecutor for ProcessUnitExecutor {
+    fn matches(&self, kind: &str) -> bool {
+        kind == "process.run-sync"
+    }
+
+    fn execute(
+        &self,
+        host_ctx: &Arc<WasmHostContext>,
+        owner: &str,
+        _kind: &str,
+        params: &serde_json::Value,
+    ) -> Result<Option<String>, String> {
+        process_run_sync(host_ctx.as_ref(), owner, &params.to_string()).map(Some)
+    }
+}
+
+// ==================== 域函数（自 `host_api/process.rs` 迁入，语义逐字保留） ====================
+
+/// 默认超时：10 分钟（SDK 契约与插件侧默认值一致）
+const DEFAULT_TIMEOUT_MS: u64 = 600_000;
+
+/// process_run 请求（对应 SDK `HostProcess::process_run` 的 request JSON）
+///
+/// 字段语义见 SDK `host/process.rs` 文档；未知字段忽略（serde 默认行为）。
+#[derive(Debug, serde::Deserialize)]
+struct ProcessRequest {
+    /// 必填：可执行程序（含路径或 PATH 查找）
+    command: String,
+    /// 可选：参数列表
+    #[serde(default)]
+    args: Vec<String>,
+    /// 可选：工作目录（缺省继承宿主进程）
+    #[serde(default)]
+    cwd: Option<String>,
+    /// 可选：附加环境变量（合并到继承的 env）
+    #[serde(default)]
+    env: std::collections::HashMap<String, String>,
+    /// 可选：超时（毫秒），超时 kill 并标记 timed_out
+    #[serde(default = "default_timeout_ms")]
+    timeout_ms: u64,
+    /// 必填：stdout/stderr 合并落盘文件路径
+    output_path: String,
+}
+
+fn default_timeout_ms() -> u64 {
+    DEFAULT_TIMEOUT_MS
+}
+
+/// 启动进程（权限 + 校验 + 注册 + 异步执行），立即返回 run-id
+///
+/// 异步执行模式与 `session_create` 相同：wasm 调用栈内同步等待子进程会
+/// 阻塞 Store；此处 spawn 后台任务执行，wasm 调用立即返回。
+pub(crate) fn process_run(
+    proc: &dyn ProcessScope,
+    svc: &dyn ServicesScope,
+    perm: &dyn PermissionScope,
+    plugin_id: &str,
+    request_json: &str,
+) -> Result<String, String> {
+    if !check_permission(perm, plugin_id, PERMISSION_PROCESS, "host_process_run") {
+        return Err("permission denied".to_string());
+    }
+    let request: ProcessRequest =
+        serde_json::from_str(request_json).map_err(|e| format!("process error: invalid request JSON: {}", e))?;
+    if request.command.trim().is_empty() {
+        return Err("process error: empty command".to_string());
+    }
+    if request.output_path.trim().is_empty() {
+        return Err("process error: empty output_path".to_string());
+    }
+
+    // stdout/stderr 合并写同一文件：两个句柄共享同一文件偏移，可交错追加
+    // （顺序不保证，但调度脚本日志场景可接受，避免管道缓冲丢尾部输出）
+    // 父目录不存在时自动创建：插件按 exec_id 命名输出文件（如
+    // <home>/.bedcode/scheduler/<exec_id>.log），目录通常需首次创建。
+    // 安全上无新增面：拥有 process:run 的插件本就可执行任意命令
+    if let Some(parent) = std::path::Path::new(&request.output_path).parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("process error: create output dir '{}' failed: {}", parent.display(), e))?;
+        }
+    }
+    let output_file = std::fs::File::create(&request.output_path).map_err(|e| {
+        format!(
+            "process error: create output file '{}' failed: {}",
+            request.output_path, e
+        )
+    })?;
+    let stderr_file = output_file
+        .try_clone()
+        .map_err(|e| format!("process error: clone output file handle failed: {}", e))?;
+
+    let mut cmd = tokio::process::Command::new(&request.command);
+    cmd.args(&request.args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::from(output_file))
+        .stderr(std::process::Stdio::from(stderr_file));
+    if let Some(cwd) = &request.cwd {
+        cmd.current_dir(cwd);
+    }
+    cmd.envs(&request.env);
+
+    // 独立进程组：kill 时连带子进程树（超时 / 插件取消共用同一语义）
+    #[cfg(unix)]
+    {
+        cmd.process_group(0);
+    }
+    #[cfg(windows)]
+    {
+        // CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW：
+        // 前者与 taskkill /T 配合整树终止；后者抑制控制台窗口——任务多为
+        // cmd /C、.bat、python 等控制台程序，无标志会弹出黑窗一闪而过
+        cmd.creation_flags(0x0000_0200 | 0x0800_0000);
+    }
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("process error: spawn '{}' failed: {}", request.command, e))?;
+    // process_group(0) 后 pgid == pid；spawn 成功即应有 pid（极端情况兜底 0）
+    let pid = child.id().unwrap_or(0);
+    let run_id = Uuid::new_v4().to_string();
+
+    let registry = proc.process_registry().clone();
+    registry.register(run_id.clone(), plugin_id.to_string(), pid);
+
+    let pid_str = plugin_id.to_string();
+    let rid = run_id.clone();
+    let timeout_ms = request.timeout_ms.max(1);
+    // 提前捕获 services（进程运行时宿主必然已完成注入；测试/无头为 None）：
+    // 避免把 &WasmHostContext 引用送入 'static 任务（无法克隆 Arc）
+    let services = block_on_async(svc.services());
+    spawn_with_error_boundary("host_process_run", async move {
+        let timeout = std::time::Duration::from_millis(timeout_ms);
+        let (exit_code, timed_out) = match tokio::time::timeout(timeout, child.wait()).await {
+            Ok(Ok(status)) => (status.code(), false),
+            Ok(Err(e)) => {
+                tracing::error!(
+                    plugin_id = %pid_str,
+                    run_id = %rid,
+                    error = %e,
+                    "host_process_run: wait failed"
+                );
+                (None, false)
+            }
+            Err(_) => {
+                // 超时：先杀进程组（连带子进程），再 kill + wait 回收防僵尸
+                tracing::warn!(
+                    plugin_id = %pid_str,
+                    run_id = %rid,
+                    timeout_ms = timeout_ms,
+                    "host_process_run: timed out, killing process group"
+                );
+                bedcode_wasm_core::host_api::context::kill_process_group(pid).await;
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+                (None, true)
+            }
+        };
+        registry.remove(&rid);
+
+        // 事件回灌插件；services 为 None（测试/无头环境）仅记日志
+        let event = serde_json::json!({
+            "run_id": rid,
+            "exit_code": exit_code,
+            "timed_out": timed_out,
+        });
+        match services {
+            Some(services) => services.dispatch_process_done(pid_str, event),
+            None => {
+                tracing::debug!(
+                    plugin_id = %pid_str,
+                    "host_process_run: no PluginServices, done event skipped"
+                );
+            }
+        }
+    });
+
+    tracing::info!(
+        plugin_id = %plugin_id,
+        run_id = %run_id,
+        command = %request.command,
+        "host_process_run: started"
+    );
+    Ok(run_id)
+}
+
+/// run-sync 请求（v19 追加）：与 `ProcessRequest` 同构但**无 output_path**——
+/// stdout/stderr 由宿主捕获进内存返回给调用方。
+#[derive(Debug, serde::Deserialize)]
+struct SyncProcessRequest {
+    command: String,
+    #[serde(default)]
+    args: Vec<String>,
+    #[serde(default)]
+    cwd: Option<String>,
+    #[serde(default)]
+    env: std::collections::HashMap<String, String>,
+    #[serde(default = "default_timeout_ms")]
+    timeout_ms: u64,
+}
+
+/// 同步执行并捕获输出（v19 追加，票 03/04 工作区 git 域）
+///
+/// 与 [`process_run`] 同一命令构造语义（进程组 / 超时 kill），差异：
+/// - stdout/stderr 走管道捕获（不进文件），同步阻塞等待进程结束；
+/// - 返回 `{exitCode, stdout, stderr, timedOut}`（JSON 字符串）。
+///
+/// 适用：插件同步路径（HTTP 端点命令面）一次性拿命令结果（如 git diff）；
+/// 长时任务仍用 [`process_run`]（异步事件模型）。
+///
+/// 阻塞说明：wasm 调用栈内同步等待子进程会阻塞 Store 的执行线程，对 git
+/// 这类百毫秒级命令可接受；若未来出现长时命令需求，应改用异步 `run`。
+pub(crate) fn process_run_sync(
+    perm: &dyn PermissionScope,
+    plugin_id: &str,
+    request_json: &str,
+) -> Result<String, String> {
+    if !check_permission(perm, plugin_id, PERMISSION_PROCESS, "host_process_run_sync") {
+        return Err("permission denied".to_string());
+    }
+    let request: SyncProcessRequest =
+        serde_json::from_str(request_json).map_err(|e| format!("process error: invalid request JSON: {}", e))?;
+    if request.command.trim().is_empty() {
+        return Err("process error: empty command".to_string());
+    }
+
+    let mut cmd = tokio::process::Command::new(&request.command);
+    cmd.args(&request.args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    if let Some(cwd) = &request.cwd {
+        cmd.current_dir(cwd);
+    }
+    cmd.envs(&request.env);
+    // 独立进程组：超时 kill 连带子进程树（与 process_run 同一语义）
+    #[cfg(unix)]
+    {
+        cmd.process_group(0);
+    }
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(0x0000_0200 | 0x0800_0000);
+    }
+
+    let timeout_ms = request.timeout_ms.max(1);
+    let command = request.command.clone();
+    let result = block_on_async(async move {
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| format!("process error: spawn '{}' failed: {}", command, e))?;
+        // process_group(0) 后 pgid == pid；spawn 成功即应有 pid（极端情况兜底 0）
+        let pid = child.id().unwrap_or(0);
+        let timeout = std::time::Duration::from_millis(timeout_ms);
+        match tokio::time::timeout(timeout, child.wait_with_output()).await {
+            Ok(Ok(output)) => Ok(serde_json::json!({
+                "exitCode": output.status.code(),
+                "stdout": String::from_utf8_lossy(&output.stdout),
+                "stderr": String::from_utf8_lossy(&output.stderr),
+                "timedOut": false,
+            })),
+            Ok(Err(e)) => Err(format!("process error: wait failed: {}", e)),
+            Err(_) => {
+                // 超时：杀整个进程组（连带子进程）。child 句柄已被 wait_with_output
+                // 消费，tokio 内部 reaper 会在进程退出后回收（不会留永久僵尸）。
+                bedcode_wasm_core::host_api::context::kill_process_group(pid).await;
+                Ok(serde_json::json!({
+                    "exitCode": null,
+                    "stdout": "",
+                    "stderr": "",
+                    "timedOut": true,
+                }))
+            }
+        }
+    });
+    let json = result?;
+    Ok(json.to_string())
+}
+
+/// 终止进程（权限 + 注册表查找 + 进程组 kill）
+///
+/// 尽力而为：进程可能已结束/未被找到（SDK 契约约定此时返回 Ok）。
+/// kill 成功后执行任务侧的 `wait` 随即返回，完成事件照常分发。
+pub(crate) fn process_kill(
+    proc: &dyn ProcessScope,
+    perm: &dyn PermissionScope,
+    plugin_id: &str,
+    run_id: &str,
+) -> Result<(), String> {
+    if !check_permission(perm, plugin_id, PERMISSION_PROCESS, "host_process_kill") {
+        return Err("permission denied".to_string());
+    }
+    if run_id.is_empty() {
+        return Err("process error: empty run_id".to_string());
+    }
+    let registry = proc.process_registry().clone();
+    let rid = run_id.to_string();
+    let found = block_on_async(registry.kill(&rid));
+    if !found {
+        // 进程已结束/已移除属预期内（kill 与完成事件竞态），仅记 debug
+        tracing::debug!(
+            plugin_id = %plugin_id,
+            run_id = %run_id,
+            "host_process_kill: run not found, best-effort ok"
+        );
+    }
+    Ok(())
+}
+
+// ==================== WIT 层（import 接口 → 域函数转发） ====================
+
+/// 取本实例的宿主上下文（与内核 `HostCtxOf::host_ctx` 同一转型；类型不符即 panic
+/// ——装配期编程错误，fail-visible，不静默降级）
+fn ctx_of(state: &WasmPluginState) -> &WasmHostContext {
+    downcast_host::<WasmHostContext>(state.host.as_ref())
+}
+
+impl bedcode::plugin::host_process::Host for WasmPluginState {
+    fn run(&mut self, request_json: String) -> Result<String, String> {
+        process_run(ctx_of(self), ctx_of(self), ctx_of(self), &self.plugin_id, &request_json)
+    }
+
+    fn kill(&mut self, run_id: String) -> Result<(), String> {
+        process_kill(ctx_of(self), ctx_of(self), &self.plugin_id, &run_id)
+    }
+
+    /// v19 追加（票 03/04 工作区 git 域）：同步执行并捕获输出
+    fn run_sync(&mut self, request_json: String) -> Result<String, String> {
+        process_run_sync(ctx_of(self), &self.plugin_id, &request_json)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bedcode_wasm_core::host_api::grant_permissions;
+    use bedcode_wasm_core::test_support::build_host_ctx_at;
+
+    const PLUGIN: &str = "test-plugin";
+
+    /// 测试体兜底超时：整个测试在限时内完成，超时按失败处理并 panic（缺省 panic
+    /// 消息携带模块路径，便于定位）。无法拦截测试体内的同步阻塞（如无超时的 std
+    /// channel recv——同步阻塞会连 runtime 线程一起堵死，超时无从触发），但能兜住
+    /// 所有 await 挂点（轮询循环 / 通道等待 / IO）。
+    async fn with_test_timeout<T>(fut: impl std::future::Future<Output = T> + Send, secs: u64) -> T {
+        tokio::time::timeout(std::time::Duration::from_secs(secs), fut)
+            .await
+            .unwrap_or_else(|_| panic!("test exceeded {secs}s deadline (possible deadlock)"))
+    }
+
+    fn request(command: &str, args: Vec<&str>, output_path: &str) -> String {
+        let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+        serde_json::json!({
+            "command": command,
+            "args": args,
+            "output_path": output_path,
+            "timeout_ms": 10_000,
+        })
+        .to_string()
+    }
+
+    /// 无 process:run 权限：run 被拒绝
+    #[test]
+    fn process_run_permission_denied() {
+        let ctx = build_host_ctx_at(None);
+        let err = process_run(ctx.as_ref(), ctx.as_ref(), ctx.as_ref(), PLUGIN, "{}").unwrap_err();
+        assert_eq!(err, "permission denied");
+    }
+
+    /// 空 command：权限通过后参数校验拒绝
+    #[test]
+    fn process_run_empty_command_rejected() {
+        let ctx = build_host_ctx_at(None);
+        grant_permissions(&ctx, PLUGIN, &[PERMISSION_PROCESS]);
+        let err = process_run(
+            ctx.as_ref(),
+            ctx.as_ref(),
+            ctx.as_ref(),
+            PLUGIN,
+            &request("", vec![], "/tmp/x.log"),
+        )
+        .unwrap_err();
+        assert!(err.contains("empty command"), "got: {}", err);
+    }
+
+    /// 空 output_path：权限通过后参数校验拒绝
+    #[test]
+    fn process_run_empty_output_path_rejected() {
+        let ctx = build_host_ctx_at(None);
+        grant_permissions(&ctx, PLUGIN, &[PERMISSION_PROCESS]);
+        let err = process_run(
+            ctx.as_ref(),
+            ctx.as_ref(),
+            ctx.as_ref(),
+            PLUGIN,
+            &request("echo", vec!["hi"], ""),
+        )
+        .unwrap_err();
+        assert!(err.contains("empty output_path"), "got: {}", err);
+    }
+
+    /// 非法请求 JSON：拒绝并给出可读错误
+    #[test]
+    fn process_run_invalid_json_rejected() {
+        let ctx = build_host_ctx_at(None);
+        grant_permissions(&ctx, PLUGIN, &[PERMISSION_PROCESS]);
+        let err = process_run(ctx.as_ref(), ctx.as_ref(), ctx.as_ref(), PLUGIN, "not-json").unwrap_err();
+        assert!(err.contains("invalid request JSON"), "got: {}", err);
+    }
+
+    /// 无 process:run 权限：kill 被拒绝
+    #[test]
+    fn process_kill_permission_denied() {
+        let ctx = build_host_ctx_at(None);
+        let err = process_kill(ctx.as_ref(), ctx.as_ref(), PLUGIN, "r1").unwrap_err();
+        assert_eq!(err, "permission denied");
+    }
+
+    /// 空 run_id：权限通过后参数校验拒绝（防误杀全量）
+    #[test]
+    fn process_kill_empty_run_id_rejected() {
+        let ctx = build_host_ctx_at(None);
+        grant_permissions(&ctx, PLUGIN, &[PERMISSION_PROCESS]);
+        let err = process_kill(ctx.as_ref(), ctx.as_ref(), PLUGIN, "").unwrap_err();
+        assert!(err.contains("empty run_id"), "got: {}", err);
+    }
+
+    /// 真实 spawn：stdout 落盘（父目录不存在时宿主自动创建）+ 注册表移除
+    ///
+    /// services 为 None（测试上下文）→ 完成事件仅记日志，不影响结果。
+    /// 输出目录故意不预创建：验证 host-process 对嵌套路径的自动建目录。
+    #[tokio::test]
+    /// 兜底超时时限 30s：子进程/文件 IO 均为毫秒级，超时即视为死锁
+    async fn process_run_spawns_and_writes_output() {
+        with_test_timeout(
+            async move {
+                let ctx = build_host_ctx_at(None);
+                grant_permissions(&ctx, PLUGIN, &[PERMISSION_PROCESS]);
+                let dir = std::env::temp_dir().join(format!("bedcode-proc-run-{}", Uuid::new_v4()));
+                let out = dir.join("nested").join("deeper").join("out.log");
+                let (cmd, args) = if cfg!(target_os = "windows") {
+                    ("cmd", vec!["/C", "echo hello-from-process"])
+                } else {
+                    ("sh", vec!["-c", "echo hello-from-process"])
+                };
+                let run_id = process_run(
+                    ctx.as_ref(),
+                    ctx.as_ref(),
+                    ctx.as_ref(),
+                    PLUGIN,
+                    &request(cmd, args, out.to_str().unwrap()),
+                )
+                .expect("run ok");
+                assert_eq!(run_id.len(), 36);
+
+                // 等待后台任务完成（输出落盘 + 注册表移除）
+                let registry = ctx.process_registry().clone();
+                for _ in 0..200 {
+                    if registry.running_count() == 0 {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+                assert_eq!(registry.running_count(), 0, "registry entry not removed");
+
+                let content = std::fs::read_to_string(&out).expect("read output file");
+                assert!(content.contains("hello-from-process"), "output: {}", content);
+                let _ = std::fs::remove_dir_all(&dir);
+            },
+            30,
+        )
+        .await
+    }
+
+    /// kill 路径：spawn 长跑进程 → process_kill → 进程组被终止 → 注册表移除
+    #[tokio::test]
+    /// 兜底超时时限 30s：spawn/kill 均为毫秒级，超时即视为死锁（历史：
+    /// block_on_async 跨线程驱动 IO future 曾在此永久挂起）
+    async fn process_kill_terminates_process_group() {
+        with_test_timeout(
+            async move {
+                let ctx = build_host_ctx_at(None);
+                grant_permissions(&ctx, PLUGIN, &[PERMISSION_PROCESS]);
+                let dir = std::env::temp_dir().join(format!("bedcode-proc-kill-{}", Uuid::new_v4()));
+                std::fs::create_dir_all(&dir).expect("create temp dir");
+                let out = dir.join("out.log");
+                let (cmd, args) = if cfg!(target_os = "windows") {
+                    // ping 阻塞 60s，由 cmd /C 拉起（进程树：cmd → ping）
+                    ("cmd", vec!["/C", "ping -n 60 127.0.0.1 >nul"])
+                } else {
+                    // sh 拉起 sleep（进程组：sh → sleep），kill 组须连带终止
+                    ("sh", vec!["-c", "sleep 60"])
+                };
+                let run_id = process_run(
+                    ctx.as_ref(),
+                    ctx.as_ref(),
+                    ctx.as_ref(),
+                    PLUGIN,
+                    &request(cmd, args, out.to_str().unwrap()),
+                )
+                .expect("run ok");
+
+                // 等待注册完成，确认进程在跑
+                let registry = ctx.process_registry().clone();
+                for _ in 0..100 {
+                    if registry.running_count() == 1 {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+                assert_eq!(registry.running_count(), 1, "process not registered");
+
+                process_kill(ctx.as_ref(), ctx.as_ref(), PLUGIN, &run_id).expect("kill ok");
+
+                // 进程组被终止 → 执行任务 wait 返回并移除注册表项
+                for _ in 0..200 {
+                    if registry.running_count() == 0 {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+                assert_eq!(registry.running_count(), 0, "process group not killed");
+                let _ = std::fs::remove_dir_all(&dir);
+            },
+            30,
+        )
+        .await
+    }
+
+    // ==================== 白名单 / 自报三件一致（与 crypto/auth 样板同款） ====================
+
+    /// 白名单声明、接口路径、权限位三件与本域常量逐字一致
+    #[test]
+    fn host_module_declaration_matches_domain_constants() {
+        assert!(
+            bedcode_host_kit::expected_host_modules().contains(&MODULE_NAME),
+            "能力模块白名单缺 {MODULE_NAME}（expect_host_module! 行被删 / 未收集）"
+        );
+        assert_eq!(MODULE_NAME, "process", "白名单键即装载期日志与错误文案里的模块名");
+        assert_eq!(
+            MODULE_INTERFACES,
+            &["bedcode:plugin/host-process"],
+            "接口路径必须与 WIT 契约逐字一致（改错即 guest import 失配）"
+        );
+        assert_eq!(
+            MODULE_PERMISSIONS,
+            &["process:run"],
+            "权限位必须与 `bedcode.wit` / SDK 权限表逐字一致（装载期一致性核对用）"
+        );
+    }
+
+    /// 执行器自报契约：本域执行器只认 `process.run-sync`
+    #[test]
+    fn unit_executor_claims_only_process_run_sync() {
+        let executor = ProcessUnitExecutor;
+        assert!(executor.matches("process.run-sync"));
+        assert!(!executor.matches("fs.read"));
+        assert!(!executor.matches("http.fetch"));
+    }
+}

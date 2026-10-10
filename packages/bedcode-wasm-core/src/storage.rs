@@ -15,7 +15,14 @@ use crate::db::Database;
 use chrono::Utc;
 use std::collections::HashMap;
 use std::sync::Arc;
+// db 锁形态按宿主分支分叉（票 06 批次 03）：桌面 = tokio Mutex（宿主 async 面
+// .lock().await）；移动 = std Mutex（fork 架构裁决：移动 host fn 是同步上下文，
+// SQL 亦同步，std 锁免 block_on 绕行——mobile_context.rs 头注同款）。方法体内
+// 只有锁**获取行**随形态分叉，Database 操作双端一致。
+#[cfg(feature = "desktop-host")]
 use tokio::sync::Mutex;
+#[cfg(feature = "mobile-host")]
+use std::sync::Mutex;
 
 /// 系统级 plugin_id，用于存储非插件私有的全局数据
 ///
@@ -28,12 +35,34 @@ const ACTIVATION_STATE_KEY: &str = "activation_state";
 
 /// 插件存储管理器
 pub struct PluginStorage {
+    #[cfg(feature = "desktop-host")]
+    db: Arc<Mutex<Database>>,
+    #[cfg(feature = "mobile-host")]
     db: Arc<Mutex<Database>>,
 }
 
 impl PluginStorage {
+    #[cfg(feature = "desktop-host")]
     pub fn new(db: Arc<Mutex<Database>>) -> Self {
         Self { db }
+    }
+
+    #[cfg(feature = "mobile-host")]
+    pub fn new(db: Arc<Mutex<Database>>) -> Self {
+        Self { db }
+    }
+
+    /// 测试构造（内存库 + 生产 schema 初始化）——跨模块测试共用夹具
+    /// （迁移自宿主 plugin/storage.rs 同名函数；底库 = crate Database）。
+    /// 可见性 = crate 测试 + 宿主 test-support feature（下游 dev-dependencies）
+    #[cfg(all(feature = "mobile-host", any(test, feature = "test-support")))]
+    pub fn test_storage() -> Arc<PluginStorage> {
+        let db = Arc::new(Mutex::new({
+            let db = Database::new(std::path::Path::new(":memory:")).expect("open in-memory db");
+            db.init_schema().expect("init schema");
+            db
+        }));
+        Arc::new(PluginStorage::new(db))
     }
 
     /// 共享底层数据库句柄（只给需要**直接查宿主主库表**的宿主组件用）
@@ -52,7 +81,11 @@ impl PluginStorage {
 
     /// 获取插件存储值
     pub async fn get(&self, plugin_id: &str, key: &str) -> crate::Result<Option<serde_json::Value>> {
+        // 锁获取形态随分支分叉（票 06 批次 03：桌面 tokio / 移动 std）
+        #[cfg(feature = "desktop-host")]
         let db = self.db.lock().await;
+        #[cfg(feature = "mobile-host")]
+        let db = self.db.lock().expect("plugin storage db lock poisoned");
         let conn = db.conn();
         let mut stmt = conn.prepare("SELECT value FROM plugin_storage WHERE plugin_id = ?1 AND key = ?2")?;
 
@@ -70,7 +103,11 @@ impl PluginStorage {
 
     /// 设置插件存储值
     pub async fn set(&self, plugin_id: &str, key: &str, value: serde_json::Value) -> crate::Result<()> {
+        // 锁获取形态随分支分叉（票 06 批次 03：桌面 tokio / 移动 std）
+        #[cfg(feature = "desktop-host")]
         let db = self.db.lock().await;
+        #[cfg(feature = "mobile-host")]
+        let db = self.db.lock().expect("plugin storage db lock poisoned");
         let json_str = serde_json::to_string(&value)?;
         let now = Utc::now().to_rfc3339();
 
@@ -86,7 +123,11 @@ impl PluginStorage {
 
     /// 删除插件存储值
     pub async fn delete(&self, plugin_id: &str, key: &str) -> crate::Result<()> {
+        // 锁获取形态随分支分叉（票 06 批次 03：桌面 tokio / 移动 std）
+        #[cfg(feature = "desktop-host")]
         let db = self.db.lock().await;
+        #[cfg(feature = "mobile-host")]
+        let db = self.db.lock().expect("plugin storage db lock poisoned");
         db.conn().execute(
             "DELETE FROM plugin_storage WHERE plugin_id = ?1 AND key = ?2",
             rusqlite::params![plugin_id, key],
@@ -107,7 +148,11 @@ impl PluginStorage {
     where
         F: FnOnce(Option<serde_json::Value>) -> crate::Result<serde_json::Value>,
     {
+        // 锁获取形态随分支分叉（票 06 批次 03：桌面 tokio / 移动 std）
+        #[cfg(feature = "desktop-host")]
         let db = self.db.lock().await;
+        #[cfg(feature = "mobile-host")]
+        let db = self.db.lock().expect("plugin storage db lock poisoned");
         let conn = db.conn();
         let previous = {
             let mut stmt = conn.prepare("SELECT value FROM plugin_storage WHERE plugin_id = ?1 AND key = ?2")?;
@@ -131,7 +176,11 @@ impl PluginStorage {
 
     /// 清空插件所有存储（插件卸载时使用）
     pub async fn clear_all(&self, plugin_id: &str) -> crate::Result<()> {
+        // 锁获取形态随分支分叉（票 06 批次 03：桌面 tokio / 移动 std）
+        #[cfg(feature = "desktop-host")]
         let db = self.db.lock().await;
+        #[cfg(feature = "mobile-host")]
+        let db = self.db.lock().expect("plugin storage db lock poisoned");
         db.conn().execute(
             "DELETE FROM plugin_storage WHERE plugin_id = ?1",
             rusqlite::params![plugin_id],
@@ -169,6 +218,79 @@ impl PluginStorage {
             },
             None => Ok(HashMap::new()),
         }
+    }
+// ==================== 旧 JSON 文件存储迁移（移动装配面，fork 迁入，票 06 批次 03） ====================
+
+#[cfg(feature = "mobile-host")]
+    /// 旧版 JSON 文件存储 → 主库一次性迁移（批次 2b 自宿主 plugin/storage.rs 迁入；
+    /// 旧 `app_data_dir/plugins/{plugin_id}.json` 导入 `plugin_storage` 表后删除，
+    /// 旧读路径删除 = fail-visible 三形态①）
+    ///
+    /// - 幂等：逐 key `INSERT OR IGNORE`——DB 已有值优先（文件数据一律先于 DB
+    ///   写入，绝不可能更新更新的值），重复执行无副作用；
+    /// - 单文件全部成功导入后才删除 `.json`（中途失败不丢数据、不删文件）；
+    /// - 只挑 `.json` 后缀（插件私有库 `plugins/<sanitized_id>.db` 不碰）；
+    /// - 任一文件解析失败仅记日志跳过（best-effort，与 peer_migration 同款口径）。
+    pub fn migrate_file_store_to_db(&self, app_data_dir: &std::path::Path) -> crate::Result<()> {
+        let plugins_dir = app_data_dir.join(crate::system::constants::PLUGIN_STORAGE_DIR);
+        if !plugins_dir.exists() {
+            return Ok(());
+        }
+        #[cfg(feature = "mobile-host")]
+        let db = self.db.lock().expect("plugin storage db lock poisoned");
+        let entries = match std::fs::read_dir(&plugins_dir) {
+            Ok(entries) => entries,
+            Err(e) => {
+                tracing::warn!(dir = %plugins_dir.display(), error = %e, "legacy plugin storage scan skipped");
+                return Ok(());
+            }
+        };
+        for entry in entries.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            let is_json = path
+                .extension()
+                .map(|ext| ext == std::ffi::OsStr::new("json"))
+                .unwrap_or(false);
+            if !is_json || !path.is_file() {
+                continue;
+            }
+            let plugin_id = match path.file_stem().and_then(|s| s.to_str()) {
+                Some(id) if !id.is_empty() => id.to_string(),
+                _ => continue,
+            };
+            let content = match std::fs::read_to_string(&path) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!(plugin_id = %plugin_id, error = %e, "legacy storage file read skipped");
+                    continue;
+                }
+            };
+            let map: std::collections::HashMap<String, serde_json::Value> = match serde_json::from_str(&content) {
+                Ok(m) => m,
+                Err(e) => {
+                    tracing::warn!(plugin_id = %plugin_id, error = %e, "legacy storage file parse skipped");
+                    continue;
+                }
+            };
+            if map.is_empty() {
+                continue;
+            }
+            let now = chrono::Utc::now().to_rfc3339();
+            for (key, value) in &map {
+                let json_str = serde_json::to_string(value)?;
+                db.conn().execute(
+                    "INSERT OR IGNORE INTO plugin_storage (plugin_id, key, value, updated_at) \
+                     VALUES (?1, ?2, ?3, ?4)",
+                    rusqlite::params![plugin_id, key, json_str, now],
+                )?;
+            }
+            // 全部成功导入后才删除旧文件（旧读路径彻底移除，fail-visible ①）
+            if let Err(e) = std::fs::remove_file(&path) {
+                tracing::warn!(plugin_id = %plugin_id, error = %e, "legacy storage file removal failed");
+            }
+            tracing::info!(plugin_id = %plugin_id, count = map.len(), "legacy plugin storage file migrated to db");
+        }
+        Ok(())
     }
 }
 

@@ -43,7 +43,7 @@
         feature = "sdk",
         feature = "ws",
         feature = "wasip3",
-        feature = "wasip3"
+        feature = "crypto"
     )
 ))]
 compile_error!(
@@ -58,10 +58,11 @@ compile_error!(
     feature = "pty",
     feature = "sdk",
     feature = "ws",
-    feature = "wasip3"
+    feature = "wasip3",
+    feature = "crypto"
 )))]
 compile_error!(
-    "至少启用一个夹具 feature：http / task / pty / sdk / ws / wasip3\
+    "至少启用一个夹具 feature：http / task / pty / sdk / ws / wasip3 / crypto\
      （bench 性能基准夹具是独立 crate，不在本合集内）"
 );
 
@@ -312,12 +313,11 @@ pub mod wasip3 {
                 name: "wasip3-test".to_string(),
                 version: "0.1.0".to_string(),
                 description: "wasip3 编译链测试插件".to_string(),
-                // host-crypto 探针需要三权限域（票 04 端到端）
-                permissions: vec![
-                    "crypto:aead".to_string(),
-                    "crypto:kdf".to_string(),
-                    "crypto:asym".to_string(),
-                ],
+                // 本夹具只验 wasip3 async 机制（wasi:clocks / random + host-log），
+                // 无宿主能力权限——host-crypto 探针已随票 02 批次 04 拆往 crypto 夹具
+                // （host-crypto 的 WIT 实现迁宿主后，内核测试二进制不再注册该 interface，
+                // 携带其 import 的夹具无法在内核测试里实例化）。
+                permissions: vec![],
                 plugin_type: PluginType::Rust,
                 // 其余字段一律取 Default：SDK 追加可选字段不再连带本夹具编译红（票 14）
                 ..Default::default()
@@ -392,10 +392,67 @@ pub mod wasip3 {
                     let hex: String = buf.iter().map(|b| format!("{:02x}", b)).collect();
                     Ok(serde_json::json!({ "ok": true, "hex": hex }))
                 }
-                // host-crypto 探针（host-crypto-business-downsink 票 04 端到端）：
-                // 插件从 wasm 侧按名调用宿主加密引擎原语（AEAD 往返 + X25519 双端共享密钥）
-                //
-                // —— 验证「插件真正用起来了」而非仅 SDK 绑定可编译。
+                // host-crypto 探针已随票 02 批次 04 拆往独立 crypto 夹具（见下方
+                // `crypto_probe` 模块）——host-crypto 的 WIT 实现迁宿主后，本夹具
+                // 不得再携带其 import（内核测试二进制不再注册该 interface）。
+                _ => Err(anyhow::anyhow!("unknown command: {}", name)),
+            }
+        }
+    }
+
+    wasm_entry!(Wasip3TestPlugin);
+}
+
+// ==================== crypto（host-crypto 端到端探针；票 02 批次 04 自 wasip3 夹具拆出） ====================
+
+/// host-crypto 端到端探针插件
+///
+/// **为什么独立成夹具**：host-crypto 的 WIT 实现随票 02 批次 04 迁宿主
+/// （`src-tauri/src/plugin/crypto.rs`，路径 B）后，内核测试二进制不再注册该
+/// interface ⇒ 携带其 import 的夹具无法在内核测试里实例化（wasip3 夹具因此摘除
+/// 本探针）。探针原样随域走宿主 e2e（`src-tauri/tests/host_crypto_e2e.rs`），
+/// 保留「插件真正用起来了」的最高 seam 验证：wasm 侧按名调用宿主加密引擎原语
+/// （AEAD 往返 + 未知名 fail-visible + X25519 双端共享 + KDF 派生）。
+#[cfg(feature = "crypto")]
+pub mod crypto_probe {
+    use bedcode_plugin_api::types::{PluginManifest, PluginType};
+    use bedcode_plugin_api::wasm::WasmPlugin;
+    use bedcode_plugin_api::wasm_entry;
+    use bedcode_plugin_api::wasm_host::WasmHost;
+
+    pub struct CryptoProbePlugin;
+
+    impl WasmPlugin for CryptoProbePlugin {
+        const ID: &'static str = "com.bedcode.crypto-test";
+
+        fn manifest() -> PluginManifest {
+            PluginManifest {
+                id: Self::ID.to_string(),
+                name: "crypto-test".to_string(),
+                version: "0.1.0".to_string(),
+                description: "host-crypto 端到端探针插件".to_string(),
+                // 探针覆盖三权限域；权限门与域隔离的否定路径由宿主单测另行断言
+                permissions: vec![
+                    "crypto:aead".to_string(),
+                    "crypto:kdf".to_string(),
+                    "crypto:asym".to_string(),
+                ],
+                plugin_type: PluginType::Rust,
+                ..Default::default()
+            }
+        }
+
+        fn activate() -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn deactivate() -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn invoke_command(name: &str, _args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+            match name {
+                // 插件从 wasm 侧按名调用宿主加密引擎原语（自 wasip3 夹具原样迁入）
                 "host-crypto.roundtrip" => {
                     use bedcode_plugin_api::host::HostCrypto;
                     let host = WasmHost;
@@ -445,7 +502,7 @@ pub mod wasip3 {
         }
     }
 
-    wasm_entry!(Wasip3TestPlugin);
+    wasm_entry!(CryptoProbePlugin);
 }
 
 // ==================== pty（ABI v16 host-pty 真 PTY 域） ====================

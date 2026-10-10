@@ -634,7 +634,7 @@ fn test_ws_endpoint_server_domain_roundtrip() {
         assert_eq!(clients.len(), 1, "client C 已登记");
         let client_c_id = clients[0]["clientId"].as_str().expect("clientId").to_string();
 
-        bedcode_desktop_lib::wasm_core::host_api::ws::purge_for_plugin(PLUGIN_ID);
+        bedcode_desktop_lib::plugin::ws::purge_for_plugin(PLUGIN_ID);
 
         match ws_client_recv(&mut client_c, std::time::Duration::from_secs(5)).await {
             Some(Message::Close(Some(frame))) => {
@@ -957,9 +957,9 @@ fn test_ws_two_plugin_isolation() {
         // 时用与生产同形状的**实例级端口**（每个宿主上下文一份 ⇒ 权限/总线各归其主）
         use bedcode_server_websocket::plugin_binding as ws;
         let ports_a: Arc<dyn ws::ports::WsPorts> =
-            Arc::new(bedcode_desktop_lib::wasm_core::host_api::ws::HostWsPorts::from_ctx(ctx_a.clone()));
+            Arc::new(bedcode_desktop_lib::plugin::ws::HostWsPorts::from_ctx(ctx_a.clone()));
         let ports_b: Arc<dyn ws::ports::WsPorts> =
-            Arc::new(bedcode_desktop_lib::wasm_core::host_api::ws::HostWsPorts::from_ctx(ctx_b.clone()));
+            Arc::new(bedcode_desktop_lib::plugin::ws::HostWsPorts::from_ctx(ctx_b.clone()));
         assert_eq!(
             ws::ws_list_endpoints(&ports_b, PLUGIN_B).unwrap(),
             "[]",
@@ -1142,6 +1142,8 @@ fn test_session_control_endpoint_direct_roundtrip() {
             None,
             Arc::new(bedcode_desktop_lib::wasm_core::bus::HostBusPort::new(
                 host_ctx.message_bus.clone(),
+                // 帧投递窄端口：必须与本总线同源（票 02 批次 03 的注入缝）
+                Arc::new(bedcode_desktop_lib::plugin::ws::HostWsPorts::from_bus(host_ctx.message_bus.clone())),
             )),
         )
         .expect("register declared session/control endpoint");
@@ -1498,6 +1500,8 @@ fn test_terminal_stream_endpoint_closed_loop() {
             None,
             Arc::new(bedcode_desktop_lib::wasm_core::bus::HostBusPort::new(
                 host_ctx.message_bus.clone(),
+                // 帧投递窄端口：必须与本总线同源（票 02 批次 03 的注入缝）
+                Arc::new(bedcode_desktop_lib::plugin::ws::HostWsPorts::from_bus(host_ctx.message_bus.clone())),
             )),
         )
         .expect("register declared terminal endpoint");
@@ -1817,6 +1821,8 @@ fn test_ws_device_events_and_auth_records_closed_loop() {
             None,
             Arc::new(bedcode_desktop_lib::wasm_core::bus::HostBusPort::new(
                 host_ctx.message_bus.clone(),
+                // 帧投递窄端口：必须与本总线同源（票 02 批次 03 的注入缝）
+                Arc::new(bedcode_desktop_lib::plugin::ws::HostWsPorts::from_bus(host_ctx.message_bus.clone())),
             )),
         )
         .expect("register declared session/control endpoint");

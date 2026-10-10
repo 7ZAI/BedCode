@@ -124,6 +124,15 @@ pub const SOURCE_FILE_INSTALL: &str = "file-install";
 /// zip 安装临时目录（用户插件目录下，安装失败/完成后清理）
 pub const PLUGIN_DOWNLOAD_TEMP_DIR: &str = "plugins/_download_tmp";
 
+/// 插件数据目录（app_data_dir 下；插件私有库落点；真源宿主
+/// `system/constants/plugin.rs` 逐字对齐）。
+/// 票 06 批次 03 超集化：移动 host_impl/db 域消费，桌面侧零消费零影响
+pub const PLUGIN_DATA_DIR: &str = "plugins";
+
+/// 插件存储文件子目录名（旧 JSON 文件存储迁移扫描面；真源宿主
+/// `system/constants/plugin.rs` 同值）。票 06 批次 03 超集化同上
+pub const PLUGIN_STORAGE_DIR: &str = "plugins";
+
 /// 插件热重载防抖时间（毫秒）
 ///
 /// 同一插件在防抖窗口内只触发一次重载，避免 cargo build 连续写入多次触发

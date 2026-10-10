@@ -305,7 +305,10 @@ pub fn verify_approval(approval: Option<&PluginApproval>, dir: &Path) -> crate::
     Ok((status, current_hash))
 }
 
-#[cfg(test)]
+// 权限词汇漂移锁测试的样本词汇 = 桌面 SDK 词表（process:run 等）——移动形态
+// 词表为 SDK 子集（fork 测试样本用 bus/mdns），测试面按形态分叉（票 06 批次 03；
+// 移动测试面等价形态见 fork security/approval.rs tests，随批次 03 收口对齐）
+#[cfg(all(test, feature = "desktop-host"))]
 mod tests {
     use super::*;
     use crate::db::Database;

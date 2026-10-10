@@ -24,7 +24,11 @@ use std::sync::{Arc, RwLock};
 use crate::config::StoreLimits;
 use crate::monitor::{AuthzDecisionKind, MetricsRegistry};
 use crate::permission::{PermissionManager, PERMISSION_FS_READ, PERMISSION_FS_WRITE};
+// ResourceOverrides：桌面取 SDK，移动取 crate 自持副本（config.rs，票 06 批次 03）
+#[cfg(feature = "desktop-host")]
 use bedcode_plugin_api::ResourceOverrides;
+#[cfg(feature = "mobile-host")]
+use crate::config::ResourceOverrides;
 
 use super::api_registry::ApiRegistry;
 use super::fs_auth::{FsAuthChecker, FsOp, FsOps};

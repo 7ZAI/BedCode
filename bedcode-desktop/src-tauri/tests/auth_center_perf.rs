@@ -102,7 +102,7 @@ fn auth_center_hotpath_cost_probe() {
     // （`host-auth secret-get`），链路更短且与被测的热路径无关（热路径是
     // `verify-device-token`，不是签发）。
     const PROBE_KEY: [u8; 32] = [0x5a; 32];
-    bedcode_desktop_lib::wasm_core::utils::auth::test_tokens::seed_keyring(&host_ctx, "com.bedcode.terminal-session", &PROBE_KEY);
+    bedcode_desktop_lib::utils::auth::test_tokens::seed_keyring(&host_ctx, "com.bedcode.terminal-session", &PROBE_KEY);
 
     let mut plugin = wasm_runtime
         .load_plugin_from_file(
@@ -119,7 +119,7 @@ fn auth_center_hotpath_cost_probe() {
     }
 
     let n = perf_rounds();
-    let token = bedcode_desktop_lib::wasm_core::utils::auth::test_tokens::sign_with_seeded_key(
+    let token = bedcode_desktop_lib::utils::auth::test_tokens::sign_with_seeded_key(
         &PROBE_KEY,
         "perf-probe-device",
         Some("Perf Probe"),

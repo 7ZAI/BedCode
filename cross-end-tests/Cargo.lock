@@ -765,6 +765,7 @@ dependencies = [
 name = "bedcode-host-api-core"
 version = "0.1.0"
 dependencies = [
+ "rusqlite",
  "serde_json",
  "tracing",
 ]
@@ -918,6 +919,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "bedcode-host-api-core",
  "bedcode-link-crypto",
  "futures-util",
  "local-ip-address",
@@ -1030,13 +1032,11 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "bedcode-crypto-engine",
- "bedcode-discovery-engine",
  "bedcode-host-api-core",
  "bedcode-host-kit",
  "bedcode-link-crypto",
  "bedcode-peer-net",
  "bedcode-plugin-api",
- "bedcode-pty-engine",
  "bedcode-server-base",
  "bedcode-server-core",
  "bedcode-server-http",
@@ -1053,12 +1053,10 @@ dependencies = [
  "inventory",
  "jsonwebtoken",
  "libc",
- "local-ip-address",
  "mdns-sd",
  "nosleep",
  "notify",
  "p256",
- "portable-pty",
  "rand 0.8.8",
  "regex",
  "reqwest 0.12.28",
@@ -1096,6 +1094,7 @@ dependencies = [
  "bedcode-link-crypto",
  "bedcode-peer-net",
  "bedcode-plugin-api-mobile",
+ "bedcode-ws-client-engine",
  "chrono",
  "dirs 6.0.0",
  "encoding_rs",
@@ -1118,6 +1117,20 @@ dependencies = [
  "uuid",
  "wasmtime",
  "zip",
+]
+
+[[package]]
+name = "bedcode-ws-client-engine"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "futures-util",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

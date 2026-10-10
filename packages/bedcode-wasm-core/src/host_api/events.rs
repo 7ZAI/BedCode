@@ -32,29 +32,9 @@ pub(crate) fn emit_event(
         .map_err(|e| format!("event emit failed: {}", e))
 }
 
-/// 通过 Tauri 事件发送到前端 toast
-pub(crate) fn notify(
-    app: &dyn crate::host_api::context::AppHandleScope,
-    plugin_id: &str,
-    title: &str,
-    body: &str,
-) -> Result<(), String> {
-    let Some(app_handle) = app.app_handle() else {
-        return Err("notify error: app_handle not available in headless context".to_string());
-    };
-    app_handle
-        .emit(
-            "plugin:notify",
-            serde_json::json!({
-                "plugin_id": plugin_id,
-                "title": title,
-                "body": body,
-            }),
-        )
-        .map_err(|e| format!("notify error: emit failed: {}", e))
-}
-
-// ==================== Tests ====================
+/// 通过 Tauri 事件发送到前端 toast 的实现（`host-events-desktop.notify`）已随
+/// WIT impl 迁宿主 `src-tauri/src/plugin/events.rs`（票 02 批次 06 / v36 交集切片：
+/// 域函数 + 单测随域走宿主，内核不再持有 `plugin:notify` 事件发射面）。
 
 #[cfg(test)]
 mod tests {
@@ -77,13 +57,5 @@ mod tests {
         assert!(err.contains("not valid JSON"), "错误须点名 JSON 解析失败: {err}");
         // 合法 JSON 在无头上下文仍按幂等约定 Ok
         assert!(emit_event(ctx.as_ref(), "plugin:event", r#"{"ok":true}"#).is_ok());
-    }
-
-    /// notify 与 emit 的降级约定不同：无头上下文明确报错（弹窗是强需求能力）
-    #[test]
-    fn notify_headless_rejected() {
-        let ctx = build_host_ctx();
-        let err = notify(ctx.as_ref(), "test-plugin", "title", "body").unwrap_err();
-        assert!(err.contains("app_handle not available"), "got: {}", err);
     }
 }

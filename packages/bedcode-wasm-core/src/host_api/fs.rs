@@ -13,6 +13,14 @@ use std::sync::Arc;
 
 // ==================== 任务单元执行器（C4：core-task 经注册表分发到域实现） ====================
 
+/// 执行器自报（票 02 批次 05）：内核装配点经 `collected_unit_executors` 遍历注册
+/// ——manager 不点名本域；执行器随 fs 域（核心子集）留内核，自报静态随之常编译。
+fn make_fs_executor() -> Arc<dyn UnitExecutor> {
+    Arc::new(FsUnitExecutor)
+}
+
+crate::submit_unit_executor!("fs.", make_fs_executor);
+
 /// fs 单元执行器（kind 前缀 `fs.`）
 ///
 /// 执行前按管线顺序预检声明闸门 + fs_auth 已授权（判据同源、**绝不从池线程触发
@@ -323,6 +331,13 @@ pub(crate) fn fs_exists(
 }
 
 // ==================== v19 追加（票 03 文件浏览域） ====================
+//
+// 票 02 批次 06（v36 交集切片）：三个函数拆入 `host-fs-desktop` interface，其
+// **WIT impl 迁宿主**（`src-tauri/src/plugin/fs.rs` 路径 B）。实现本体留内核作
+// **机制**（与 `check_permission` 提 pub 同款先例）：① 内核 `FsUnitExecutor`
+// （`fs.read-dir` / `fs.stat` task 单元）仍消费同一条实现；② 宿主 WIT impl 经
+// 公开面复用，行为逐字不变。函数签名（`SecurityScope` + 权限判据 + 错误文案）
+// 不随迁改变。
 
 /// 目录直读（v19 追加）：`[{name, nodeType}]`（JSON 字符串）
 ///
@@ -331,7 +346,7 @@ pub(crate) fn fs_exists(
 /// 「跳过非目录非文件条目」的语义对齐（symlink 不进文件树）。
 /// 权限 `fs:read` + fs_auth 三层校验；不支持 WSL UNC（与宿主 file_controller
 /// 的 std::fs 语义一致，working_dir 是宿主路径）。
-pub(crate) fn fs_read_dir(
+pub fn fs_read_dir(
     sec: &dyn crate::host_api::context::SecurityScope,
     plugin_id: &str,
     path: &str,
@@ -361,7 +376,7 @@ pub(crate) fn fs_read_dir(
 ///
 /// 供 `../` 穿越与 symlink 逃逸的 containment 判定（宿主 file_controller
 /// 的 `is_within_root` 同语义：canonicalize 后 `starts_with`）。
-pub(crate) fn fs_canonicalize(
+pub fn fs_canonicalize(
     sec: &dyn crate::host_api::context::SecurityScope,
     plugin_id: &str,
     path: &str,
@@ -377,7 +392,7 @@ pub(crate) fn fs_canonicalize(
 /// 文件元数据（v19 追加）：`{size, isFile, isDir}`；路径不存在返回 `Ok(None)`
 ///
 /// 供文件大小上限判定（与宿主 file-content 的 `MAX_FILE_SIZE` 语义一致）。
-pub(crate) fn fs_stat(
+pub fn fs_stat(
     sec: &dyn crate::host_api::context::SecurityScope,
     plugin_id: &str,
     path: &str,

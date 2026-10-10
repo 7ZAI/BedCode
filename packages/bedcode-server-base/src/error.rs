@@ -55,6 +55,12 @@ pub enum AppError {
     #[error("Internal error: {0}")]
     Internal(String),
 
+    /// 出站策略闸门（egress）：移动 host_impl/conn 域的出站策略拒绝/失败
+    /// （票 06 批次 03 超集化——fork 自持 error.rs 的唯一独有 variant 对齐共享真源，
+    /// 桌面侧零消费零影响）
+    #[error("Egress error: {0}")]
+    Egress(String),
+
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     #[error("PTY error: {0}")]
     Pty(String),

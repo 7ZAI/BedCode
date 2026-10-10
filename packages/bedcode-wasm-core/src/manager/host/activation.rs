@@ -701,27 +701,27 @@ impl PluginHost {
             }
         }
 
-        // mDNS 基础能力服务（spec v2 §5.1）：插件停用即回收其全部浏览 + 广播
-        // 句柄（host-mdns v2 生命周期随属主；只碰本人，宿主/它插件登记不受影响）
-        crate::host_api::mdns::purge_for_plugin(plugin_id);
+        // mDNS 基础能力服务（spec v2 §5.1）：插件停用即回收其全部浏览 + 广播句柄
+        // （只碰本人）。**票 02 批次 03 起走自报钩子**（见下方
+        // `DomainHooksRegistry::on_plugin_purge`；域侧钩子在
+        // `bedcode-discovery-engine::HOOKS`）——adapter 迁出内核后内核不再点名该域。
 
         // 认证中心注册表（ADR 0031）：属主停用即回收其认证中心角色——认证面随之
         // fail-closed（无中心 = 拒绝），不静默降级成“无认证放行”（只碰本人）
         crate::host_api::auth_center::purge_for_plugin(plugin_id);
 
-        // WS 基础能力服务（ABI v14，spec §2.3）：插件停用即回收其全部出站连接
-        // （只碰本人；服务端端点双表回收随票 05 一并接入）
-        crate::host_api::ws::purge_for_plugin(plugin_id);
-
-        // HTTP 动态路由（ABI v29 服务端域）：插件停用即清空其全部注册路由（含对外
-        // URL 别名与内部路径，只碰本人）——别名随属主消失，未激活插件的 host 别名
-        // 不再可达（404，fail-visible，不静默占用对外 URL 空间）
-        crate::host_api::http::purge_for_plugin(plugin_id);
-
-        // PTY 基础能力服务（ABI v16，spec D2）：插件停用即 kill 并摘除其全部私有
-        // PTY，逐条补发 `<owner>::pty:exit`（reason=killed）——孤儿进程不随插件消失
-        // 而悬挂。必须在下方 `remove_all_subscriptions` 之前，否则补发的事件无人可投。
-        bedcode_pty_engine::plugin_binding::purge_for_plugin(plugin_id);
+        // 非核心能力域的停用回收（票 02 批次 01 机制）：遍历**自报**的生命周期钩子。
+        // 内核不点名任何能力域 crate——这是内核能摘掉对应依赖的前提。
+        //
+        // 已接入的域（批次 02/03）：pty（kill 全部私有 PTY 并逐条补发
+        // `<owner>::pty:exit`，reason=killed——本遍历必须在下方 `remove_all_subscriptions`
+        // 之前，否则补发的事件无人可投）、mdns（浏览 / 广播句柄）、ws（出站连接 +
+        // 服务端端点 + 在线客户端）、http（动态路由含对外 URL 别名——别名随属主消失，
+        // 未激活插件的 host 别名不再可达 404，fail-visible，不静默占用对外 URL 空间）。
+        //
+        // 尚未自报的域（auth_center / task）仍走各自直接调用，随各自批次迁到钩子后
+        // 两类入口合一。
+        bedcode_host_kit::DomainHooksRegistry::collected().on_plugin_purge(plugin_id);
 
         // 并发任务域（ABI v20）：插件停用即 cancel 其全部在册任务 + 清回调队列
         // （只碰本人；运行中单元协作式跑完或超时，未开始单元 skipped）

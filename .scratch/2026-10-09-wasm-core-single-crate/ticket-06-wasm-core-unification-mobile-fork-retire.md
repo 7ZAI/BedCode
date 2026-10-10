@@ -1,6 +1,6 @@
 # 票 06 · wasm-core 单一化：移动 fork 退役 + 平台形态端口化 + 移动侧依赖切换
 
-Status: **批次 01 + 02 + 03 主体 ✅（2026-10-10，双形态编译绿）；批次 03 收口（test-support 移动面 / 移动全量测试）+ 批次 04–05 todo**（spec §4 票 06；ADR 0045 D1 / D6 的落地票——「只有一份 wasm-core，双端核心机制完全一致」的终局）
+Status: **✅ done（2026-10-10：批次 01–03 双形态编译绿 + test-support 收口；批次 04 fork 删除（三形态实证，退役锁变异 2/2）；批次 05 移动全量 334/0 + 桌面零回归——实施记录见 §7.4 / §7.5）**（spec §4 票 06；ADR 0045 D1 / D6 的落地票——「只有一份 wasm-core，双端核心机制完全一致」的终局）
 依赖：票 02（依赖图脱桌面——批 08 平台依赖、批 09 `cargo tree` 门禁归零是硬前置）、票 03（core.wit 与移动端清单）、票 04（若含切片则移动契约面相应更新）、票 05（能力域可在移动侧组合）
 前置：ADR 0040（移动 fork 两步走）第一步共享核已抽（票 18/19 落地，`bedcode-host-api-core` 在根）；**本票完成后 `bedcode-mobile/packages/bedcode-wasm-core` 删除（不可逆提交，§5 有强制前置条件）**
 
@@ -169,3 +169,35 @@ packages/bedcode-wasm-core：
 **批次 03 终态门禁（全实跑）**：root desktop check 0 + test --lib 591/0；mobile-host check 0；mobile-host+test-support check 0；移动 src-tauri check 0 + test 编译 0；桌面宿主 check 0；互斥双开红；tree 双门禁保持。**批次 04 前置缺口 = 上述 1 失败调试修复。**
 
 **批次 04/05 维持原计划**（fork 删除的强制前置 = 批次 03 完整收口 + 移动全量测试绿 + 桌面零回归绿）。
+
+### 7.4 批次 04 · fork 退役（fail-visible 三形态）✅（2026-10-10，随票 07 收口）
+
+**前置达标（移动 4 在途红全修复——全量从未复跑的欠账暴露，逐条根因）**：
+
+| # | 红 | 根因 | 修复 |
+| --- | --- | --- | --- |
+| 1 | `plugin::loader::tests::test_load_all_loads_component_plugin`（loader.rs:382 `contains_key`） | 夹具内联 manifest 仍带 C2 整面退役权限位 `ui:input` / `ui:toolbox` ⇒ 装载期 `check_retired_permissions` 显式拒载（产品代码正确，夹具陈旧） | 夹具权限集对齐真实 `plugin.json`（`network:http` / `ui:route` 等） |
+| 2 | `retired_mobile_auto_task_plugin_lock::merged_task_domain_and_plugin_retirement_stay` | 判据按全文 `contains` 扫 `activate.ts`，把 C2 退役**记账注释**（「registerToolboxPage 已整面退役…」）误判为回接 | 判据改逐行跳注释（与本文件头注「只扫非注释行」纪律一致） |
+| 3 | `retired_mobile_host_terminal_hooks_lock::mobile_terminal_stream_retained_face_stays` | needle 指旧手写 `bedcode.wit`——票 03 分片后接口定义迁到生成物 `cap-mobile.wit`；另 2 条指 fork 路径 | 改钉 `cap-mobile.wit` 与根 crate `mobile-host` 面路径 |
+| 4 | `retired_mobile_terminal_link_lock`（5 条保留面） | 全部指 fork 路径（`../packages/bedcode-wasm-core/...`），fork 删除后必红 | 改钉 `../../packages/bedcode-wasm-core/src/manager/runtime/mobile/...` |
+
+**三形态实证**：
+
+1. **① 旧读路径删除**：`rm -rf bedcode-mobile/packages/bedcode-wasm-core`（1.4M / 72 文件；目录内在途改动 = 票 03/04 已记录变更，随退役丢弃，git 历史为恢复源）。移动 `src-tauri` 别名（library + dev 两处）指向仓库根 crate（package rename），残留引用编译期即红。
+2. **② 旧 ABI 产物实例化期点名**：v37 / v20 `stale_artifact_rebuild_hint`（票 04 已扩展，本票不新增；移动旧产物按 v20 SDK 重建）。
+3. **③ 退役锁**：`bedcode-mobile/src-tauri/tests/retired_mobile_wasm_core_fork_lock.rs`（四判据：fork 目录不存在 / 无 `bedcode-wasm-core-mobile` 包名 / 移动构建面无 fork 形态路径 / 别名指根 crate + mobile-host）。**变异自检 2/2**：探针 A（fork 目录 + 包名 + fork 形态路径注入）→ ① ② ③ 三判据红；探针 B（别名 `package =` 形态破坏，同语义可解析）→ 别名判据红；均还原绿。
+
+**退役后回归**：移动全量 **334 passed / 0 failed**（22 测试目标，`.dev-logs/ticket07-mobile-post-deletion.log`）；桌面零回归（宿主 lib 全量 155/0）；边界锁表复核 9/9、内核反向锁 7/7（详见票 07 记录）。
+
+### 7.5 批次 05 · 门禁收口（实测 + 欠账）
+
+| 门禁 | 结果 |
+| --- | --- |
+| 移动编译 | `bedcode-mobile/src-tauri` 编译绿（随全量测试） |
+| 移动全量测试 | **334/0**（fork 删除后复跑；含新退役锁 + 新组合锁） |
+| 桌面零回归 | 宿主 lib 全量 **155/0**；宿主 `cargo check` 绿；内核桌面形态 lib 全量见票 07 |
+| 依赖图门禁 | 批次 01 双实证保持（Linux host 能力域命中 0 / Android target 全零；webkit/dbus 经 tauri 传递已登记） |
+| 退役三形态 | ① 目录删除 + 残留编译期红 ② v37/v20 hint ③ 退役锁变异 2/2 |
+| 跨端 | `cross-end-tests` **延后**（票 04 已记项目级决策：重构波次稳定后统一验证，非本票门禁） |
+
+**遗留欠账**：Android target **编译级**实证需 NDK 环境（tree 级已全零）；桌面宿主集成测试（`pty_e2e` / `terminal_output_perf` / `ws_e2e` 编译红基线）未在本序列复跑；`ws_e2e.rs`(3)/`ws_output_perf.rs`(1) 的 `EndpointAuth` 同名不同源为 HEAD 既有编译红（非本序列引入）。

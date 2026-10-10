@@ -32,6 +32,9 @@ pty = []
 sdk = []
 ws = []
 wasip3 = ["dep:getrandom"]
+# host-crypto 端到端探针（票 02 批次 04 自 wasip3 夹具拆出：host-crypto WIT 实现迁宿主后，
+# 内核测试二进制不再注册该 interface，探针夹具随域走宿主 e2e）
+crypto = []
 
 [profile.release]
 # 与各原夹具对齐：wasm 产物尺寸优先（宿主测试加载）

@@ -65,7 +65,7 @@ pub trait BusMessageHandler: Send + Sync {
 /// 插件消息总线端口（publish / 静态订阅 / WS 端点帧投递）
 ///
 /// 宿主壳实现包装 `wasm_core::bus::MessageBus` 与
-/// `wasm_core::host_api::ws::deliver_endpoint_frame`；无头/单测可用假实现。
+/// `bedcode_server_websocket::plugin_binding::deliver_endpoint_frame`；无头/单测可用假实现。
 /// `deliver_endpoint_frame` 是 spec 端口表的 `FrameDeliverer`（裁决见模块头）。
 #[async_trait]
 pub trait BusPort: Send + Sync {

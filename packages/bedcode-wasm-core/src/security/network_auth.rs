@@ -6,7 +6,8 @@
 //! ## 判定管线（spec §6.1，网络侧）
 //!
 //! ```text
-//! 0. manifest 声明门（network:http）        —— 硬闸门，在 host_api::http 上一层
+//! 0. manifest 声明门（network:http）        —— 硬闸门，在 host-http 端口权限门上一层
+//!    （端口 adapter 已迁宿主 `src-tauri/src/plugin/http.rs`，票 02 批次 03）
 //! 1. 硬拒绝记录（deny 命中）               —— 硬闸门，优先于一切放行路径
 //! 2. 策略层（三档，共用 super::strategy）    —— 票 06 起三档全部接线
 //! 3. 授权记录命中（origin + path 前缀段边界）—— 仅「默认」档读记录
@@ -19,7 +20,7 @@
 //! 形态是安全语义级的（spec §12.2 的变异清单里有一条就是「两档语义不同」）。
 //!
 //! 硬闸门的位置与本模块**正交**：SSRF 防护（`redirect_decision`：公网 → 私网/回环/
-//! 链路本地重定向阻断，锁在 `host_api::http` 自己的用例里）留在请求执行期，授权层
+//! 链路本地重定向阻断，锁在 `bedcode-server-http` 自己的用例里）留在请求执行期，授权层
 //! 放行不改变它——「记录命中」从来不是「越过网络栈的安全裁决」（spec §6.4 / §4.2）。
 //!
 //! ## 为什么询问走「新事件 + 新命令」而不是复用 fs 那套双布尔
@@ -58,6 +59,12 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tauri::Emitter;
 use tokio::sync::{oneshot, Mutex};
+// db 锁形态按宿主分支分叉（票 06 批次 03，与 storage.rs / auth_policy.rs 同款裁决）：
+// db 参数 = 桌面 tokio / 移动 std；prompts 锁恒 tokio（本模块内部状态，双端一致）
+#[cfg(feature = "desktop-host")]
+use tokio::sync::Mutex as DbMutex;
+#[cfg(feature = "mobile-host")]
+use std::sync::Mutex as DbMutex;
 
 /// 出站询问的等待上限（与 fs 侧一致）
 ///
@@ -283,7 +290,7 @@ impl NetworkAuthChecker {
     /// 创建校验器（与 [`super::fs_auth::FsAuthChecker::new`] 同一形态）
     ///
     /// `app_handle` 为 `None`（无头 / 测试上下文）时询问层不可用，直接拒绝。
-    pub fn new(db: Arc<Mutex<Database>>, app_handle: Option<Arc<tauri::AppHandle>>) -> Self {
+    pub fn new(db: Arc<DbMutex<Database>>, app_handle: Option<Arc<tauri::AppHandle>>) -> Self {
         let emit = app_handle.map(|handle| {
             let handle = handle.clone();
             Arc::new(move |event: &str, payload: serde_json::Value| {
@@ -294,11 +301,11 @@ impl NetworkAuthChecker {
     }
 
     /// 以显式事件投递口装配（测试注入点；`None` 语义同「无头上下文」）
-    pub fn with_emitter(db: Arc<Mutex<Database>>, emit: Option<PromptEmitter>) -> Self {
+    pub fn with_emitter(db: Arc<DbMutex<Database>>, emit: Option<PromptEmitter>) -> Self {
         Self::assemble(db, emit)
     }
 
-    fn assemble(db: Arc<Mutex<Database>>, emit: Option<PromptEmitter>) -> Self {
+    fn assemble(db: Arc<DbMutex<Database>>, emit: Option<PromptEmitter>) -> Self {
         Self {
             store: AuthPolicyStore::new(db),
             emit,

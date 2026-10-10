@@ -28,7 +28,7 @@
 use crate::wasm_core::manager::host::PluginHost;
 use crate::wasm_core::manager::runtime::WasmHostContext;
 use crate::wasm_core::runtime_util::block_on_async;
-use crate::wasm_core::utils::auth::identity::AuthenticatedIdentity;
+use bedcode_server_base::identity::AuthenticatedIdentity;
 
 /// 认证中心插件 id（互通面常量：注册 / 停用 / 互调目标）
 pub const SESSION_PLUGIN_ID: &str = "com.bedcode.terminal-session";

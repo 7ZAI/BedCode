@@ -159,7 +159,13 @@ impl PluginHost {
                 auth,
                 None,
                 None,
-                Arc::new(crate::bus::HostBusPort::new(self.message_bus.clone())),
+                Arc::new(crate::bus::HostBusPort::new(
+                    self.message_bus.clone(),
+                    // 帧投递窄端口：必须与本总线同源（多上下文下错绑会把帧投进别的实例）。
+                    // 本处仍是内核侧构造 —— 批次 03 第 4 步 adapter 迁宿主后由宿主注入，
+                    // 见票面「批次 03 · 第 2–4 步设计定稿」。
+                    Arc::new(crate::bus::BusBoundWsPorts::new(self.message_bus.clone())),
+                )),
             ) {
                 Ok(entry) => {
                     tracing::info!(

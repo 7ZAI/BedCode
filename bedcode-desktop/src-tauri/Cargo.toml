@@ -127,15 +127,15 @@ bedcode-host-kit = { path = "../../packages/bedcode-host-kit" }
 # 2026-10-08 迁根：整核本体与能力域同落仓库根 packages/。
 bedcode-wasm-core = { path = "../../packages/bedcode-wasm-core" }
 # PTY 能力域（wasm-core 纯净性收口票 02/06 → pty-capability-domain 票 D1/D3）：
-# 引擎面 + host-pty WIT 接线整面迁入本 crate（ADR 0039）。wasm-core 依赖它并只留
-# `host_api/pty.rs` 端口 adapter；lib 不再 `pub use` 垫片（`crate::pty::*` 路径随
-# 垫片一并退出名单），调用点一律写显式路径 `bedcode_pty_engine::plugin_binding::*`。
-# lib 直接声明是因为 crate_boundary_lock 断言③要求宿主清单声明全部拆分产物
-# （pty-engine 已登记 SPLIT_CRATES）；宿主代码不直接消费，经 wasm-core adapter 取用
+# 引擎面 + host-pty WIT 接线整面迁入能力 crate（ADR 0039）。票 02 批次 02 起宿主
+# **直接消费**：端口 adapter + 强制引用行 + 白名单条目同落 `src/plugin/pty.rs`
+# （wasm-core 已不再依赖本 crate，也不再出现它的任何路径）。
+# lib 声明同时满足 crate_boundary_lock 断言③「宿主清单声明全部拆分产物」
+# （pty-engine 已登记 SPLIT_CRATES）。
 bedcode-pty-engine = { path = "../../packages/bedcode-pty-engine", features = ["desktop-host"] }
 # 组播发现能力域（mDNS，wasm-core-lib-split 票 03）：引擎 + 宿主绑定层 + 自动
-# 注册。宿主侧只剩 `host_api/mdns.rs` 的端口 adapter（~90 行），原 795 行实现
-# 已迁入该 crate。
+# 注册。票 02 批次 03 起宿主**直接消费**：端口 adapter 在 `src/plugin/mdns.rs`
+# （wasm-core 已不再依赖本 crate，`host_context_registry` 随其退役）。
 bedcode-discovery-engine = { path = "../../packages/bedcode-discovery-engine", features = ["desktop-host"] }
 bedcode-crypto-engine = { path = "../../packages/bedcode-crypto-engine" }
 # server-lib-split 票 03：传输无关内核（supervisor/filter/link_crypto/metrics + TransportFace 组合）

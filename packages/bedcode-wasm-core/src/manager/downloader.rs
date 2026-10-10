@@ -87,6 +87,11 @@ impl PluginDownloader {
             .read_to_string(&mut manifest_str)
             .map_err(|e| crate::AppError::Plugin(format!("Failed to read plugin.json: {}", e)))?;
         // 解析与必填字段校验走唯一真源（票 11 第 6 项）
+        //
+        // 注意：**域侧声明仲裁不在本入口**（票 02 批次 03 起，如 host-pty 的
+        // `ptyQuota` 区间）——它挂在装载漏斗的 `DomainHooks::on_manifest_load` 上，
+        // 故越界声明在安装期可通过、**装载期被该域拒绝**（fail-visible：插件不装载，
+        // 错误日志点名越界值与字段名）。安装期只保证结构性必填字段成立。
         let manifest = crate::manager::validation::parse_manifest_json(&manifest_str)?;
         // 身份校验：id 必须为反向域名格式（防伪造 id 冒名顶替/路径注入）——安装入口独有的一道
         if !validate_plugin_id(&manifest.id) {

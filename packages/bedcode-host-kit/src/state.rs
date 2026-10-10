@@ -12,7 +12,9 @@
 
 use std::sync::Arc;
 
-use wasmtime::component::{ResourceTable, TypedFunc};
+use wasmtime::component::TypedFunc;
+#[cfg(feature = "wasi-store")]
+use wasmtime::component::ResourceTable;
 
 use crate::limits::StoreLimits;
 use crate::metrics::PluginMetrics;
@@ -56,9 +58,12 @@ pub struct WasmPluginState {
     /// 宿主上下文（注入宿主能力；见 [`HostPorts`]）
     pub host: Arc<dyn HostPorts>,
     /// WASI 预览 3 上下文（预打开目录由宿主装配面解析；
-    /// 未开启自身文件访问的插件为空上下文，不干扰 host 文件域路径）
+    /// 未开启自身文件访问的插件为空上下文，不干扰 host 文件域路径）。
+    /// 仅 `wasi-store` 形态（桌面宿主；票 06 批次 02 Store 装配端口化）
+    #[cfg(feature = "wasi-store")]
     pub wasi_ctx: wasmtime_wasi::WasiCtx,
-    /// WASI 资源表（文件句柄 / 流等，随每个插件实例独立生命周期）
+    /// WASI 资源表（文件句柄 / 流等，随每个插件实例独立生命周期）。仅 `wasi-store`
+    #[cfg(feature = "wasi-store")]
     pub wasi_table: ResourceTable,
     /// Store 资源上限快照（实例化时自内核配置读取）
     pub limits: StoreLimits,
@@ -83,7 +88,8 @@ pub struct WasmPluginState {
 }
 
 impl WasmPluginState {
-    /// 构建插件状态（`wasi_ctx` 由调用方按插件配置构建）
+    /// 构建插件状态（`wasi_ctx` 由调用方按插件配置构建；`wasi-store` 形态）
+    #[cfg(feature = "wasi-store")]
     pub fn new(
         plugin_id: String,
         host: Arc<dyn HostPorts>,
@@ -105,10 +111,29 @@ impl WasmPluginState {
             on_task_event: None,
         }
     }
+
+    /// 构建插件状态（无 WASI 形态：移动宿主 / 无头第三方宿主，票 06 批次 02）
+    #[cfg(not(feature = "wasi-store"))]
+    pub fn new(plugin_id: String, host: Arc<dyn HostPorts>, spec: StoreSpec) -> Self {
+        Self {
+            plugin_id,
+            host,
+            limits: spec.limits,
+            fuel_enabled: spec.fuel_enabled,
+            metrics: spec.metrics,
+            // 可选导出在实例化后动态探测（verify_abi 内写入）
+            on_message_binary: None,
+            on_ws_message: None,
+            on_ws_client_message: None,
+            on_task_event: None,
+        }
+    }
 }
 
 /// WASI 预览 3 视图：`add_to_linker_sync` / `add_to_linker` 通过此 trait 访问每个
-/// 插件实例的 `WasiCtx` + `ResourceTable`（linker 共享、ctx 每实例）
+/// 插件实例的 `WasiCtx` + `ResourceTable`（linker 共享、ctx 每实例）。
+/// 仅 `wasi-store` 形态（桌面装配的 p2/p3 linker 需要；移动形态无 WASI linker）
+#[cfg(feature = "wasi-store")]
 impl wasmtime_wasi::WasiView for WasmPluginState {
     fn ctx(&mut self) -> wasmtime_wasi::WasiCtxView<'_> {
         wasmtime_wasi::WasiCtxView {

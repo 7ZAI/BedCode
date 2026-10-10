@@ -331,7 +331,15 @@ pub fn assemble(app_handle: Option<Arc<tauri::AppHandle>>) -> ServerPorts {
     ServerPorts {
         plugin_invoker: Arc::new(HostPluginInvoker),
         auth_center: Arc::new(HostAuthCenter),
-        bus: Arc::new(HostBusPort::late_bound(current_bus)),
+        bus: Arc::new(HostBusPort::late_bound(
+            current_bus,
+            // 帧投递窄端口工厂（票 02 批次 03）：晚绑形态下按**当下的总线**现造——
+            // 端口与总线必须同源（多上下文下错绑会把帧投进别的实例）。
+            // 第 4 步 adapter 迁宿主后，此处的构造改由本目录 `src/plugin/ws.rs` 提供。
+            Arc::new(|bus| {
+                Arc::new(crate::plugin::ws::HostWsPorts::from_bus(Arc::clone(bus)))
+            }),
+        )),
         event_sink: Arc::new(HostEventSink),
         paths: Arc::new(HostPathsPort::new(app_handle)),
         system_info: Arc::new(HostSystemInfoPort),

@@ -1,4 +1,10 @@
-//! 插件互调宿主原语（ADR-0017）：`host-api-call` 的实现
+//! 插件互调回复道编排（ADR-0017）——`host-api-call` 的**机制面**
+//!
+//! **WIT impl 已迁宿主**（票 02 批次 05，`src-tauri/src/plugin/api_call.rs` 路径 B
+//! 薄转发：无权限门，互调门禁在注册表）。本文件**留内核**的判据与 peer/ws/http
+//! 「内核仍消费引擎面」同源：内核 `intercall`（通用互调客户端）、`auth_center`
+//! 桥接（注册表真源留内核裁决）与 `WasmHostContext::call_plugin_api_host` 消费
+//! 同一条回复道编排——编排是「通信」引擎原语（零产品语义），不是域 adapter。
 //!
 //! 语义：发布 JSON-RPC 请求到 `bedcode.api.<api>` topic（经 [`super::bus`]
 //! 的门禁校验），然后阻塞等待回复。回复 topic 为
@@ -63,7 +69,7 @@ struct ReplyHandler {
 }
 
 impl BusMessageHandler for ReplyHandler {
-    fn on_message(&self, msg: &bedcode_plugin_api::BusMessage) -> anyhow::Result<()> {
+    fn on_message(&self, msg: &crate::bus::BusMessage) -> anyhow::Result<()> {
         if msg.sender != self.expected_sender {
             tracing::warn!(
                 expected = %self.expected_sender,
@@ -89,7 +95,11 @@ impl BusMessageHandler for ReplyHandler {
 /// 返回回复 JSON 字符串（`{ jsonrpc, id, result | error }`），并校验回复
 /// `id` 与请求一致（防错配回复串台）与 `sender` 属主一致（防抢答）。
 /// 超时/门禁拒绝返回 Err。
-pub(crate) fn api_call(
+///
+/// **pub（票 02 批次 05）**：WIT impl 迁宿主后，宿主薄转发层以调用方
+/// `plugin_id` 为 caller 经本公开面复用同一条编排（`call_plugin_api_host`
+/// 的宿主身份快捷入口保留不动——两者是同一编排的两个 caller）。
+pub fn api_call(
     bus: &dyn crate::host_api::context::BusScope,
     reg: &dyn crate::host_api::context::ApiRegistryScope,
     sec: &dyn crate::host_api::context::SecurityScope,
@@ -229,7 +239,7 @@ mod tests {
     }
 
     impl BusMessageHandler for Responder {
-        fn on_message(&self, msg: &bedcode_plugin_api::BusMessage) -> anyhow::Result<()> {
+        fn on_message(&self, msg: &crate::bus::BusMessage) -> anyhow::Result<()> {
             let _ = self.request_tx.send(msg.payload.to_string());
             if !self.respond {
                 return Ok(());
@@ -420,7 +430,7 @@ mod tests {
     }
 
     impl BusMessageHandler for Spoofer {
-        fn on_message(&self, msg: &bedcode_plugin_api::BusMessage) -> anyhow::Result<()> {
+        fn on_message(&self, msg: &crate::bus::BusMessage) -> anyhow::Result<()> {
             let req: Value = serde_json::from_str(&msg.payload.to_string()).unwrap();
             let reply = serde_json::json!({
                 "jsonrpc": "2.0",

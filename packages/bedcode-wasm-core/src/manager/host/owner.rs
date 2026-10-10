@@ -80,7 +80,9 @@ pub(crate) const OWNER_STOP_GRACE: Duration = Duration::from_millis(500);
 /// 闭集而非泛型的依据（票 03 §5.2）：`start_call_concurrent` 的 `Params/Return` 是
 /// 编译期类型，泛型 erase 会退化成动态 `Val` 编解码（多一层手工 canonical ABI +
 /// 丢掉类型检查）。现存调用面本就有限：世界导出 10 个 + 能力转发 4 个具体实例化。
-/// **新增可路由能力时必须同步加 op**（`capability::ROUTABLE_CAPABILITIES` 对应关系）。
+/// **新增可路由能力时必须同步加 op**（`capability::routable_capabilities()` 对应关系；
+/// 导出名的词汇真源在能力域自报侧，本文件的 `const EXPORT_*` 是编译期具名的调用面对偶，
+/// 值相等由 `capability` 模块的单测钉住）。
 #[derive(Debug)]
 pub enum GuestOp {
     /// `command.invoke(name, args-json) -> string`（前端命令面 / HTTP `_http_endpoint` / 定时器 tick）

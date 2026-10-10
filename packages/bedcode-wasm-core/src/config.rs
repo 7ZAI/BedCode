@@ -15,7 +15,36 @@
 //! 经逃生舱 [`crate::manager::runtime::EngineCustomizer`]；优先级链见
 //! `manager/runtime.rs` 的 `build_engine_config`。
 
+// 双端 SDK 同名类型（形状 fork 对齐逐字一致）——移动 SDK 无 `ResourceOverrides`，
+// 移动形态 crate 内自持（fork 逐字副本，见下方 cfg(mobile-host) 定义）
+#[cfg(feature = "desktop-host")]
 use bedcode_plugin_api::ResourceOverrides;
+
+// ==================== 资源覆盖声明（纯钳制数据，移动形态 crate 内自持） ====================
+
+/// 单插件资源上限覆盖请求（原桌面 SDK 类型逐字 fork——与 WIT 无关的纯 serde
+/// 数据，属安全钳制机制的一部分；移动 manifest 现无 `resourceOverrides` 声明面，
+/// 机制保留供批次 2 宿主与未来 manifest 演进复用）
+///
+/// 四类上限（与 [`StoreLimits`] 同域：内存字节 / 表元素 / 实例数 / 内存数 /
+/// 表数；燃料在 [`EngineConfig::tuning`]）。
+#[cfg(feature = "mobile-host")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ResourceOverrides {
+    /// 单次导出调用燃料预算（指令数）；None = 继承
+    pub fuel_per_call: Option<u64>,
+    /// 线性内存上限（字节）；None = 继承
+    pub max_memory_bytes: Option<usize>,
+    /// 表元素上限；None = 继承
+    pub max_table_entries: Option<usize>,
+    /// 单 Store 核心实例数上限；None = 继承
+    pub max_instances: Option<usize>,
+    /// 单 Store 线性内存数量上限；None = 继承
+    pub max_memories: Option<usize>,
+    /// 单 Store 表数量上限；None = 继承
+    pub max_tables: Option<usize>,
+}
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 

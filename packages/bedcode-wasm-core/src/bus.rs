@@ -5,7 +5,14 @@
 
 use crate::monitor::{MetricsRegistry, PluginMetrics};
 use async_trait::async_trait;
-use bedcode_plugin_api::BusMessage;
+// 双端 SDK 的同名 wire 副本（形状逐字一致，server-base wire/drift_lock 钉住）：
+// 机制面载荷类型按形态取对应 SDK（票 06 批次 03；真源统一留票 07）。
+// **crate 内引用一律走 `crate::bus::BusMessage`**（此处 pub use 是单点切换），
+// 禁止直引 SDK 路径（否则双形态签名漂移）
+#[cfg(feature = "desktop-host")]
+pub use bedcode_plugin_api::BusMessage;
+#[cfg(feature = "mobile-host")]
+pub use bedcode_plugin_api_mobile::BusMessage;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -51,7 +58,34 @@ pub enum WsFrameDispatch {
 
 /// 消息投递器 — MessageBus 通过此 trait 将消息投递给插件
 ///
-/// 由 PluginHost 实现，避免 MessageBus 与 PluginHost 循环引用
+/// 由 PluginHost 实现，避免 MessageBus 与 PluginHost 循环引用。
+///
+/// **投递形态按宿主分支分叉（票 06 批次 03）**：桌面宿主的投递器实现是同步
+/// 调用（PluginHost 直驱实例调用）；移动装配面（fork 票 17）投递器 async 化
+/// （`dispatch_to_wasm` / `is_activated` 为 async fn，host fn 上下文经
+/// block_on 桥进入）——同一 trait 双形态签名，实现方按形态对应。
+#[cfg(feature = "mobile-host")]
+#[async_trait::async_trait]
+pub trait MessageDispatcher: Send + Sync + 'static {
+    /// 投递消息给 WASM 插件（调用 __bedcode_on_message）
+    async fn dispatch_to_wasm(&self, plugin_id: &str, msg: &BusMessage) -> anyhow::Result<()>;
+    /// 检查插件是否已激活
+    async fn is_activated(&self, plugin_id: &str) -> bool;
+
+    /// 投递 WS 帧给插件的 `events-ws` 可选导出（ABI v14）
+    ///
+    /// 返回 `Ok(true)` = 已投递；`Ok(false)` = 插件未导出该接口
+    /// （调用方按 spec §2.2 降级：丢弃 + 首次 warn + 计数，宿主不缓存）；
+    /// `Err` = 投递失败（trap / 实例不可用）。
+    ///
+    /// 默认实现返回 `Ok(false)`：非生产投递器（测试替身）未接 WS 通道时
+    /// 视为「无导出」，不影响既有实现与用例。
+    fn dispatch_ws_frame(&self, _plugin_id: &str, _frame: &WsFrameDispatch) -> anyhow::Result<bool> {
+        Ok(false)
+    }
+}
+
+#[cfg(feature = "desktop-host")]
 pub trait MessageDispatcher: Send + Sync + 'static {
     /// 投递消息给 WASM 插件（调用 __bedcode_on_message）
     fn dispatch_to_wasm(&self, plugin_id: &str, msg: &BusMessage) -> anyhow::Result<()>;
@@ -337,12 +371,28 @@ impl MessageBus {
                     tracing::warn!(plugin_id = %pid, "MessageBus: dispatcher not set, WASM message skipped");
                     continue;
                 };
-                if !dispatcher.is_activated(&pid) {
-                    tracing::warn!(plugin_id = %pid, "MessageBus: subscriber not activated, skipping");
-                    continue;
+                // 投递调用形态随 trait 分叉（票 06 批次 03：移动 async / 桌面同步）
+                #[cfg(feature = "mobile-host")]
+                {
+                    if !dispatcher.is_activated(&pid).await {
+                        tracing::warn!(plugin_id = %pid, "MessageBus: subscriber not activated, skipping");
+                        continue;
+                    }
+                    if let Err(e) = dispatcher.dispatch_to_wasm(&pid, &msg).await {
+                        tracing::error!(plugin_id = %pid, error = %e, "MessageBus: dispatch to WASM plugin failed");
+                        continue;
+                    }
                 }
-                if let Err(e) = dispatcher.dispatch_to_wasm(&pid, &msg) {
-                    tracing::error!(plugin_id = %pid, error = %e, "MessageBus: dispatch to WASM plugin failed");
+                #[cfg(feature = "desktop-host")]
+                {
+                    if !dispatcher.is_activated(&pid) {
+                        tracing::warn!(plugin_id = %pid, "MessageBus: subscriber not activated, skipping");
+                        continue;
+                    }
+                    if let Err(e) = dispatcher.dispatch_to_wasm(&pid, &msg) {
+                        tracing::error!(plugin_id = %pid, error = %e, "MessageBus: dispatch to WASM plugin failed");
+                        continue;
+                    }
                 }
             }
         });
@@ -425,71 +475,186 @@ impl MessageBus {
 }
 
 // ==================== HostBusPort（wasm-core-whole-crate 票 M11，从 lib server/ports_impl.rs 抽入） ====================
+//
+// 桌面装配面（票 06 批次 03）：HostBusPort 打包 MessageBus + 能力域 WsPorts 帧投递，
+// 依赖 `bedcode-server-websocket`（desktop-host optional 依赖）——移动形态无 WS
+// 服务端域，整段不编译（mobile 装配面无此端口）。
 
 /// 插件消息总线 + WS 帧投递（`bus::MessageBus` + 能力域 `deliver_endpoint_frame` 包装）
 ///
 /// 原属 lib 的 `server/ports_impl.rs`（包 `MessageBus`——crate 属物），随整核抽出
 /// 迁入本 crate；lib 的 `server/ports_impl.rs` 经 `pub use` 垫片再导出，`assemble()`
 /// 本体留 lib（组合根唯一性）。
+#[cfg(feature = "desktop-host")]
 pub struct HostBusPort {
     binding: BusBinding,
 }
 
 /// 总线绑定形态：装配期钉死 / 逐次调用解析（late-bound）
+#[cfg(feature = "desktop-host")]
 enum BusBinding {
     /// 装配期即持有真实总线（bootstrap 之后装配的端口走这一支）
     Fixed {
         bus: Arc<MessageBus>,
         /// 帧投递用的能力域端口视图（**构造一次**、不逐帧分配）：能力域的帧投递函数
         /// 收 `&Arc<dyn WsPorts>`，故此处持一份绑定到本总线的窄端口（无权限管理器）。
+        ///
+        /// **由构造方喂入**（票 02 批次 03）：内核不再自建该端口——它是能力域 adapter
+        /// 的产物（`WsPorts` 的宿主实现），本模块只接收。
         ws_ports: Arc<dyn bedcode_server_websocket::plugin_binding::ports::WsPorts>,
     },
     /// 逐次调用解析当前总线（装配可能早于总线就位，见 [`HostBusPort::late_bound`]）
-    LateBound(Arc<dyn Fn() -> Arc<MessageBus> + Send + Sync>),
+    ///
+    /// 第二分量 = 帧投递端口工厂：late-bound 形态必须能按**当下的**总线现造窄端口
+    /// （端口与总线必须同源，见 [`HostBusPort::ws_ports`]）。
+    LateBound(
+        Arc<dyn Fn() -> Arc<MessageBus> + Send + Sync>,
+        Arc<dyn Fn(&Arc<MessageBus>) -> Arc<dyn bedcode_server_websocket::plugin_binding::ports::WsPorts> + Send + Sync>,
+    ),
 }
 
+#[cfg(feature = "desktop-host")]
 impl HostBusPort {
-    pub fn new(bus: Arc<MessageBus>) -> Self {
+    /// 钉死构造：`ws_ports` 由**构造方**给出（绑定到 `bus` 的窄端口）
+    ///
+    /// 为什么必须由构造方给：该端口是能力域 adapter 的产物，内核不构造它（票 02
+    /// 批次 03）；且它必须绑定到**本实例的**那条总线——多上下文场景下端口错绑会把
+    /// 帧投进别的实例。
+    pub fn new(
+        bus: Arc<MessageBus>,
+        ws_ports: Arc<dyn bedcode_server_websocket::plugin_binding::ports::WsPorts>,
+    ) -> Self {
         Self {
-            binding: BusBinding::Fixed {
-                ws_ports: Arc::new(crate::host_api::ws::HostWsPorts::from_bus(bus.clone())),
-                bus,
-            },
+            binding: BusBinding::Fixed { bus, ws_ports },
         }
     }
 
-    /// late-bound 构造：每次调用经 `resolve` 取当前总线
+    /// late-bound 构造：每次调用经 `resolve` 取当前总线，经 `ws_ports_for` 现造窄端口
     ///
     /// 为什么需要这一支：端口装配**可能早于真实总线就位**——宿主组合根的顺序是
     /// 「建 PluginHost（内部即激活插件，激活期 guest 会立刻调 host-* 原语）→ 注册
     /// AppContext → 装端口」，而总线在 `PluginHost` 构造时创建。装配期把总线钉死
     /// 的话，提前装配出来的那套端口会永远指向占位总线（插件订阅永收不到消息）；
     /// late-bound 让「早装的」与「晚装的」在总线就位后行为一致。
-    pub fn late_bound<F>(resolve: F) -> Self
+    pub fn late_bound<F>(resolve: F, ws_ports_for: Arc<dyn Fn(&Arc<MessageBus>) -> Arc<dyn bedcode_server_websocket::plugin_binding::ports::WsPorts> + Send + Sync>) -> Self
     where
         F: Fn() -> Arc<MessageBus> + Send + Sync + 'static,
     {
         Self {
-            binding: BusBinding::LateBound(Arc::new(resolve)),
+            binding: BusBinding::LateBound(Arc::new(resolve), ws_ports_for),
         }
     }
 
     fn bus(&self) -> Arc<MessageBus> {
         match &self.binding {
             BusBinding::Fixed { bus, .. } => bus.clone(),
-            BusBinding::LateBound(resolve) => resolve(),
+            BusBinding::LateBound(resolve, _) => resolve(),
         }
     }
 
     /// 帧投递窄端口：钉死形态复用构造期那一份（不逐帧分配）；late-bound 形态
-    /// 逐次构造（每帧一个 `Arc`，相对 JSON 编码可忽略）
+    /// 按**当下的**总线现造（每帧一个 `Arc`，相对 JSON 编码可忽略）
     fn ws_ports(&self) -> Arc<dyn bedcode_server_websocket::plugin_binding::ports::WsPorts> {
         match &self.binding {
             BusBinding::Fixed { ws_ports, .. } => ws_ports.clone(),
-            BusBinding::LateBound(_) => {
-                Arc::new(crate::host_api::ws::HostWsPorts::from_bus(self.bus()))
-            }
+            BusBinding::LateBound(_, ws_ports_for) => ws_ports_for(&self.bus()),
         }
+    }
+}
+
+// ==================== 总线绑定的帧投递窄端口（总线侧 plumbing） ====================
+
+/// 绑定到某条总线的帧投递窄端口（**总线侧 plumbing，不是能力域适配器**）
+///
+/// ## 为什么住在总线侧（票 02 批次 03 的裁决 ①）
+///
+/// 它要的两件事都由**总线**提供：往这条总线投 `events-ws` 帧、以及造一个 `BusPort`
+/// 给端点登记。它不需要宿主上下文，也**不做权限判定**（`check_permission` 恒 `false`
+/// ——与迁移前 `HostWsPorts::from_bus` 的 fail-safe 口径逐字一致）。因此它的语义是
+/// 「总线接到能力域 trait 上的适配器」，属机制，留在内核；能力域的**完整端口**
+/// （带权限管理器 / 实例绑定）在宿主 adapter `src-tauri/src/plugin/ws.rs`。
+///
+/// ## 谁在用
+///
+/// - [`HostBusPort`] 的帧回灌路径（`ws_ports()` 未注入时的兜底不存在——注入由构造方
+///   提供；本类型是**内核侧构造方**用的那一份）；
+/// - `manager/host/register.rs` 的 WS 端点登记（需要 `bus_port()`）。
+#[cfg(feature = "desktop-host")]
+pub(crate) struct BusBoundWsPorts {
+    bus: Arc<MessageBus>,
+}
+
+#[cfg(feature = "desktop-host")]
+impl BusBoundWsPorts {
+    /// 绑定到给定总线（窄端口：无宿主上下文 ⇒ 权限门恒拒）
+    pub(crate) fn new(bus: Arc<MessageBus>) -> Self {
+        Self { bus }
+    }
+}
+
+#[cfg(feature = "desktop-host")]
+impl bedcode_server_websocket::plugin_binding::ports::WsPorts for BusBoundWsPorts {
+    fn check_permission(&self, _plugin_id: &str, _permission: &str, _api: &str) -> bool {
+        // 窄端口没有权限管理器 ⇒ 拒绝（fail-safe）。消费它的两条路径（帧回灌 / 端点登记）
+        // 本就不做权限判定，真正的权限门在能力域原语入口与完整端口上。
+        false
+    }
+
+    fn publish(&self, topic: &str, payload: serde_json::Value) {
+        self.bus.publish(topic, "host", payload);
+    }
+
+    fn bus_port(&self) -> Arc<dyn bedcode_server_base::ports::BusPort> {
+        Arc::new(HostBusPort::new(
+            Arc::clone(&self.bus),
+            Arc::new(Self::new(Arc::clone(&self.bus))),
+        ))
+    }
+
+    fn dispatch_frame(
+        &self,
+        plugin_id: &str,
+        target: bedcode_server_websocket::plugin_binding::ports::WsFrameTarget<'_>,
+        kind: &str,
+        payload: Vec<u8>,
+    ) -> bedcode_server_websocket::plugin_binding::ports::FrameDispatch {
+        use bedcode_server_websocket::plugin_binding::ports::FrameDispatch;
+        let Some(dispatcher) = crate::runtime_util::block_on_async({
+            let bus = Arc::clone(&self.bus);
+            async move { bus.dispatcher().await }
+        }) else {
+            return FrameDispatch::Unavailable;
+        };
+        let frame = match target {
+            bedcode_server_websocket::plugin_binding::ports::WsFrameTarget::Client(handle) => {
+                WsFrameDispatch::Client {
+                    handle: handle.to_string(),
+                    kind: kind.to_string(),
+                    payload,
+                }
+            }
+            bedcode_server_websocket::plugin_binding::ports::WsFrameTarget::EndpointClient {
+                endpoint_id,
+                client_id,
+            } => WsFrameDispatch::EndpointClient {
+                endpoint_id: endpoint_id.to_string(),
+                client_id: client_id.to_string(),
+                kind: kind.to_string(),
+                payload,
+            },
+        };
+        match dispatcher.dispatch_ws_frame(plugin_id, &frame) {
+            Ok(true) => FrameDispatch::Delivered,
+            Ok(false) => FrameDispatch::NotExported,
+            Err(e) => FrameDispatch::Failed(e.to_string()),
+        }
+    }
+
+    fn block_on_any(
+        &self,
+        fut: bedcode_server_websocket::plugin_binding::ports::BoxedBlocked,
+    ) -> Box<dyn std::any::Any + Send> {
+        crate::runtime_util::block_on_async(fut)
     }
 }
 
@@ -514,6 +679,7 @@ impl BusMessageHandler for WasmHandlerAdapter {
 }
 
 #[async_trait]
+#[cfg(feature = "desktop-host")]
 impl bedcode_server_base::ports::BusPort for HostBusPort {
     fn publish(&self, topic: &str, sender: &str, payload: serde_json::Value) {
         self.bus().publish(topic, sender, payload);
@@ -556,6 +722,20 @@ impl bedcode_server_base::ports::BusPort for HostBusPort {
 mod tests {
     use super::*;
     use std::sync::mpsc::{Receiver, Sender};
+
+    /// 测试用帧投递端口工厂：真实能力域窄端口（绑定传入的总线、无权限管理器）
+    ///
+    /// 生产路径这份由宿主 adapter 喂入（票 02 批次 03）；内核测试二进制里 adapter 仍在，
+    /// 直接复用其 `from_bus` 构造。
+    fn test_ws_ports_factory() -> Arc<
+        dyn Fn(&Arc<MessageBus>) -> Arc<dyn bedcode_server_websocket::plugin_binding::ports::WsPorts>
+            + Send
+            + Sync,
+    > {
+        Arc::new(|bus: &Arc<MessageBus>| {
+            Arc::new(crate::bus::BusBoundWsPorts::new(Arc::clone(bus)))
+        })
+    }
     use std::time::Duration;
 
     /// 测试用消息投递器 — 记录投递到 std mpsc 通道
@@ -1011,7 +1191,10 @@ mod tests {
 
         let slot = switchable_bus(bus_a.clone());
         let port_slot = slot.clone();
-        let port = HostBusPort::late_bound(move || port_slot.lock().expect("bus slot lock").clone());
+        let port = HostBusPort::late_bound(
+            move || port_slot.lock().expect("bus slot lock").clone(),
+            test_ws_ports_factory(),
+        );
 
         // 第一次：仍解析到 A
         port.publish("topic:late", "sender-x", serde_json::json!({"phase": 1}));
@@ -1039,7 +1222,10 @@ mod tests {
         let bus_b = Arc::new(MessageBus::new());
         let slot = switchable_bus(bus_a.clone());
         let port_slot = slot.clone();
-        let port = HostBusPort::late_bound(move || port_slot.lock().expect("bus slot lock").clone());
+        let port = HostBusPort::late_bound(
+            move || port_slot.lock().expect("bus slot lock").clone(),
+            test_ws_ports_factory(),
+        );
 
         let (handler, rx) = test_base_handler();
         port.subscribe_static("sub", "topic:sub", handler).await;
@@ -1075,7 +1261,10 @@ mod tests {
 
         let slot = switchable_bus(bus_a.clone());
         let port_slot = slot.clone();
-        let port = HostBusPort::late_bound(move || port_slot.lock().expect("bus slot lock").clone());
+        let port = HostBusPort::late_bound(
+            move || port_slot.lock().expect("bus slot lock").clone(),
+            test_ws_ports_factory(),
+        );
 
         *slot.lock().expect("bus slot lock") = bus_b.clone();
         let bytes: Vec<u8> = vec![0x00, 0xFF, 0x80];
@@ -1098,7 +1287,10 @@ mod tests {
         bus_a.subscribe_static("sub", "topic:fixed", handler_a).await;
         bus_b.subscribe_static("sub", "topic:fixed", handler_b).await;
 
-        let port = HostBusPort::new(bus_a.clone());
+        let port = HostBusPort::new(
+            bus_a.clone(),
+            Arc::new(crate::bus::BusBoundWsPorts::new(bus_a.clone())),
+        );
         port.publish("topic:fixed", "sender-x", serde_json::json!({"n": 1}));
 
         let msg = wait_delivery(&rx_a, Duration::from_secs(2)).expect("钉死形态应投给构造时那条总线");

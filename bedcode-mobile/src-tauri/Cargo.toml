@@ -17,7 +17,10 @@ tauri-build = { version = "2", features = [] }
 # 插件机制整核（fork crate，票 17 批次 2b：运行时/16 域/绑定层真源迁移至此，
 # 宿主 plugin/ 经垫片转发；路径基准 = AGENTS「能力域/引擎 crate 落仓库根 packages」
 # 的移动形态——本 crate 落 bedcode-mobile/packages/）
-bedcode-wasm-core-mobile = { path = "../packages/bedcode-wasm-core" }
+# 票 06 批次 03（ADR 0045 D6）：移动 fork 退役——单一 wasm-core（仓库根 packages/）
+# 的移动形态装配树（mobile-host feature）。package rename 保持源码
+# `bedcode_wasm_core_mobile::` 导入路径零改动；fork 自持 crate 随批次 04 删除。
+bedcode-wasm-core-mobile = { package = "bedcode-wasm-core", path = "../../packages/bedcode-wasm-core", default-features = false, features = ["mobile-host"] }
 tauri = { version = "2", features = ["protocol-asset", "test"] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
@@ -118,8 +121,10 @@ p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
 
 [dev-dependencies]
 
-# fork crate 测试支持面（夹具构建器 + MockPorts；批次 2b 宿主集成测试消费）
-bedcode-wasm-core-mobile = { path = "../packages/bedcode-wasm-core", features = ["test-support"] }
+# fork crate 测试支持面（夹具构建器 + MockPorts；批次 2b 宿主集成测试消费）。
+# 票 06 批次 03：随主依赖切根 crate——`test-support` feature 的移动面
+# （test_support/mobile.rs = fork test_support.rs 迁入）已就位
+bedcode-wasm-core-mobile = { package = "bedcode-wasm-core", path = "../../packages/bedcode-wasm-core", default-features = false, features = ["mobile-host", "test-support"] }
 tempfile = "3"
 # 组件测试编码（ticket 02 宿主单测：测试组件 core module → 组件；spike 实证 0.256）
 wit-component = "=0.256.0"

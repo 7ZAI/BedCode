@@ -214,17 +214,31 @@ fn merged_task_domain_and_plugin_retirement_stay() {
 
     let activate = std::fs::read_to_string(repo.join("wasm-apps/terminal-session/src/task/activate.ts"))
         .expect("读取任务域 activate.ts 失败");
-    for retired in [
-        "registerToolboxPage",
-        "registerTerminalToolbarItem",
-        "registerTerminalView",
-        "registerNavTab",
-    ] {
-        assert!(
-            !activate.contains(retired),
-            "任务域 activate.ts 仍调用退役扩展点 `{retired}`（票 2026-10-10 C2 整面退役）"
-        );
+    // 只扫非注释行（本文件头注纪律：模块头「为什么退役」的记账段落不算回接）——
+    // C2 的退役说明以「记名某 API 已退役」形式写在注释里，按全文 contains 会把
+    // 记账本身判红（锁空转的变体：锁对着免责声明恒红）。
+    let mut activate_violations: Vec<String> = Vec::new();
+    for (idx, raw_line) in activate.lines().enumerate() {
+        let line = raw_line.trim_start();
+        if line.starts_with("//") {
+            continue;
+        }
+        for retired in [
+            "registerToolboxPage",
+            "registerTerminalToolbarItem",
+            "registerTerminalView",
+            "registerNavTab",
+        ] {
+            if line.contains(retired) {
+                activate_violations.push(format!("activate.ts:{}: {}", idx + 1, line.trim()));
+            }
+        }
     }
+    assert!(
+        activate_violations.is_empty(),
+        "任务域 activate.ts 仍调用退役扩展点（票 2026-10-10 C2 整面退役）：\n{}",
+        activate_violations.join("\n")
+    );
 
     let api = std::fs::read_to_string(repo.join("wasm-apps/terminal-session/src/task/api.ts"))
         .expect("读取任务域 api.ts 失败");

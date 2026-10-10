@@ -13,9 +13,15 @@
 //! 生成物；这里断言「三副本集合相等 + 每条词汇都有门禁落点 + 生产 manifest 无死词汇」。
 //! 词汇一旦漂移，「manifest 声明了却被宿主静默过滤」与「前端放行宿主拒绝」都会无声发生。
 
+// 权限词汇再导出：双端 SDK 各自的 permission 模块（词汇真源 = SDK `permission.rs`，
+// `gen:permissions` 流水线同步四点）。词汇面双端独立演进（ADR 0018 契约独立）——
+// 桌面 394 行词汇集 vs 移动子集，按形态取对应 SDK（票 06 批次 03）
+#[cfg(feature = "desktop-host")]
 pub use bedcode_plugin_api::permission::*;
+#[cfg(feature = "mobile-host")]
+pub use bedcode_plugin_api_mobile::permission::*;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "desktop-host"))]
 mod tests {
     use super::*;
     use std::collections::{BTreeMap, BTreeSet};
@@ -263,12 +269,14 @@ mod tests {
     /// 两者皆无 = 声明了也不会被任何一处执行，正是本轮审计发现的漂移形态。
     #[test]
     fn every_permission_has_an_enforcement_point() {
-        // 整核抽出：原扫描 `src-tauri/src/wasm_core`，现 wasm_core 整核在本 crate
-        let plugin_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("src")
-            .to_path_buf();
+        // 整核抽出：原扫描 `src-tauri/src/wasm_core`，现 wasm_core 整核在本 crate；
+        // 票 02 批次 04：迁宿主的域（路径 B，plugin/auth.rs 的 `auth` 门等）其权限门
+        // 落点在宿主 src——**扫描面必须跟着代码走**（`l2_gating_test::L2_SCAN_ROOTS`
+        // 同款判据），否则每次域迁移都会把该词汇的落点扫丢（本锁曾因此红）。
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let mut files = Vec::new();
-        collect_rs(&plugin_dir, &mut files);
+        collect_rs(&manifest_dir.join("src"), &mut files);
+        collect_rs(&manifest_dir.join("../../bedcode-desktop/src-tauri/src"), &mut files);
         assert!(files.len() > 20, "宿主插件源码文件数异常，扫描未生效");
 
         let mut referenced: BTreeSet<String> = BTreeSet::new();

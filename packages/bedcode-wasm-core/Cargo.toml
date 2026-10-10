@@ -6,10 +6,17 @@
 # 从 bin crate 整体迁出。任何 Tauri 宿主可直接 path 依赖本 crate 获得插件机制。
 #
 # 位置（仓库根 packages/，2026-10-08 由 bedcode-desktop/packages/ 迁根）：
-# 桌面插件机制整核，必然依赖桌面基础层（bedcode-server-base / bedcode-plugin-api 桌面 WIT /
-# 四个桌面能力 crate）；移动端契约独立（ADR 0018）且不复用本 crate（移动 fork 对齐走
-# ADR 0040 的 bedcode-mobile/packages/bedcode-wasm-core）。双端共享锚点是
-# 仓库根 packages/bedcode-host-kit。
+# **双端单一 wasm-core**（ADR 0045 D1）：桌面形态（default / desktop-host）依赖桌面
+# 基础层（bedcode-server-base / bedcode-plugin-api 桌面 WIT / 桌面能力 crate）；
+# 移动形态（default-features = false + mobile-host）依赖移动 SDK / discovery-engine /
+# ws-client-engine——移动 fork crate 已随票 06 批次 04 整面退役，双端机制面与真源同侧
+# （ADR 0018 移动契约独立不变；`bedcode-wasm-core-mobile` 仅存 package rename 别名）。
+# 双端共享锚点是仓库根 packages/bedcode-host-kit。
+#
+# 依赖图脱桌面进行中（wasm-core 纯净性收口票 02，.scratch/2026-10-09-wasm-core-single-crate/）：
+# 批次 02 已移出 pty——`bedcode-pty-engine` 依赖与 `portable-pty` 不再出现在本 crate，
+# host-pty 的端口 adapter / 强制引用行 / 白名单条目都住在宿主
+# （`bedcode-desktop/src-tauri/src/plugin/pty.rs`，经 host-kit 装配自报面接入）。
 
 [package]
 name = "bedcode-wasm-core"
@@ -24,18 +31,63 @@ edition = "2021"
 # 桌面宿主形态为默认：能力域 `desktop-host` 绑定层随编译图进（host-http 域 WIT
 # 绑定 + inventory 静态注册）。无头 / 第三方宿主可 `default-features = false` 复用
 # 本 crate 的纯引擎面（能力域脱绑 P1；wasm-core 本身是宿主机制，绑定层随需开）。
+#
+# 票 06（wasm-core 单一化，ADR 0045 D6）：桌面独有依赖全部 optional + 本 feature
+# 门控——移动形态 `default-features = false, features = ["mobile-host"]` 复用同一
+# 份机制面（移动 fork crate 已随票 06 批次 04 删除；`bedcode-wasm-core-mobile`
+# 仅存 package rename 别名，回接由退役锁 tests/retired_mobile_wasm_core_fork_lock.rs 拦截）。
+# `desktop-host` / `mobile-host` 互斥开启（两套 bindgen 生成同名 `bedcode` 模块，
+# cfg 互斥下只编译其一）。
 default = ["desktop-host"]
-desktop-host = ["bedcode-server-http/desktop-host", "bedcode-discovery-engine/desktop-host", "bedcode-server-websocket/desktop-host", "bedcode-server-peer-net/desktop-host", "bedcode-pty-engine/desktop-host"]
+desktop-host = [
+    "bedcode-host-kit/wasi-store",
+    "dep:bedcode-plugin-api",
+    "bedcode-server-http/desktop-host",
+    "bedcode-server-websocket/desktop-host",
+    "bedcode-server-peer-net/desktop-host",
+    "dep:bedcode-server-http",
+    "dep:bedcode-server-websocket",
+    "dep:bedcode-server-peer-net",
+    "dep:bedcode-server-core",
+    "dep:wasmtime-wasi",
+    "dep:tauri-plugin-dialog",
+    "dep:aes-gcm",
+    "dep:chacha20poly1305",
+    "dep:x25519-dalek",
+    "dep:rsa",
+    "dep:p256",
+    "dep:hkdf",
+    "dep:jsonwebtoken",
+]
+# 移动宿主形态（票 06 批次 03：移动 WIT 绑定 + host_impl 16 域 + 移动 ports
+# + 无头/测试夹具体系自 fork 迁入；无 WASI 装配——移动插件 wasm32-unknown-unknown）。
+# 移动 SDK / discovery-engine（移动 host-mdns 域引擎）/ ws-client-engine（移动
+# host-websocket 客户端域引擎）均为跨端 path 依赖（packages/ ↔ bedcode-mobile/
+# packages/ 双向，ADR 0045 D6 单一 crate 形态的必然；桌面分支不引用）
+mobile-host = [
+    "dep:bedcode-plugin-api-mobile",
+    "dep:bedcode-discovery-engine",
+    "dep:bedcode-ws-client-engine",
+]
+# 移动形态测试支持面（test_support/mobile.rs：MockPorts / 夹具组件构建器 /
+# mock_plugin_ws）——移动 src-tauri 的 dev-dependencies 开启（fork 原语义）；
+# wit-component = 测试组件编码（core module → 组件，fork 原依赖）
+test-support = ["dep:wit-component"]
 
 [dependencies]
 # ==================== 宿主平台（D2：保留 tauri 依赖，不做零-tauri 反转） ====================
+# tauri 内部对各 target 的 webview 后端 cfg 正确（Linux 桌面 = webkit2gtk /
+# Android = 系统 WebView），不构成 Android 撞车点。
 tauri = { version = "2", features = ["protocol-asset", "tray-icon", "test"] }
-# 文件选择对话框（host-platform `fs:pick` 引擎面；与 lib 同版本锁步）
-tauri-plugin-dialog = "2"
+# 文件选择对话框（host-platform `fs:pick` 引擎面；与 lib 同版本锁步）。
+# 桌面独有（移动 pick 走 host_impl/platform 的宿主引擎端口）——票 06 批次 01 optional 化
+tauri-plugin-dialog = { version = "2", optional = true }
 
 # ==================== WASM 运行时（wasmtime 48，双端锁版 ADR 0019） ====================
 wasmtime = { version = "48", features = ["component-model"] }
-wasmtime-wasi = { version = "48", features = ["p3"] }
+# 桌面 WASI p3 装配面（StorePorts 实现，批次 02 端口化）——移动无 WASI
+# （移动插件 wasm32-unknown-unknown，无 WASI import；票 17 §3.3 fork 面差异）
+wasmtime-wasi = { version = "48", features = ["p3"], optional = true }
 
 # ==================== 异步 / 并发 ====================
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util", "process", "test-util"] }
@@ -45,24 +97,39 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"
 bedcode-host-kit = { path = "../bedcode-host-kit" }
 # host_api 共享实现核（票 18：无 WIT 依赖域的实现层；本 crate 只持各域 adapter）
 bedcode-host-api-core = { path = "../bedcode-host-api-core" }
-# 桌面基础层（错误/常量/错误边界/系统信息/网络配置/连接身份/端口 traits）
+# 桌面基础层（错误/常量/错误边界/系统信息/网络配置/连接身份/端口 traits）。
+# 票 06 裁决：**双端共享基础层，无条件保留**——移动 fork 自持的 error.rs 是
+# fork 漂移（ADR 0040 D1 收缩面），批次 03 机制面合一正向对齐本 crate 真源
 bedcode-server-base = { path = "../bedcode-server-base" }
-# 加密引擎（算法实现 + 注册表）
-bedcode-crypto-engine = { path = "../bedcode-crypto-engine" }
-# 四个能力域 crate（实现 + 插件绑定层 + 自动注册）
-bedcode-discovery-engine = { path = "../bedcode-discovery-engine", features = ["desktop-host"] }
-bedcode-server-websocket = { path = "../bedcode-server-websocket", features = ["desktop-host"] }
-bedcode-server-peer-net = { path = "../bedcode-server-peer-net", features = ["desktop-host"] }
-bedcode-server-http = { path = "../bedcode-server-http", features = ["desktop-host"] }
-# PTY 引擎面（wasm-core 纯净性收口票 02 迁出；host-pty WIT 面随票 04 迁出）
-bedcode-pty-engine = { path = "../bedcode-pty-engine", features = ["desktop-host"] }
-# server 传输无关内核（ServerSupervisor，host_config 用）
-bedcode-server-core = { path = "../bedcode-server-core" }
+# 三个能力域 crate（实现 + 插件绑定层 + 自动注册）
+# （第四域 discovery 自票 02 批次 03 起宿主直接依赖：adapter 在 src/plugin/mdns.rs；
+#  本 crate 已不再引用它，`cargo tree` 无该分支）
+# 票 06 批次 01：optional 化——移动形态经 mobile-host 组合能力域
+# （移动 host-mdns impl 用 discovery-engine，批次 03 随 mobile-host feature 接入）
+bedcode-server-websocket = { path = "../bedcode-server-websocket", optional = true }
+bedcode-server-peer-net = { path = "../bedcode-server-peer-net", optional = true }
+bedcode-server-http = { path = "../bedcode-server-http", optional = true }
+# server 传输无关内核（ServerSupervisor，host_config 用）——桌面独有
+bedcode-server-core = { path = "../bedcode-server-core", optional = true }
+# 加密引擎（算法实现 + 注册表；桌面 auth_center / 会话身份消费）——桌面独有
+bedcode-crypto-engine = { path = "../bedcode-crypto-engine", optional = true }
 # WIT 契约绑定（bindgen! 在 manager/runtime/component.rs，path 相对本 crate 根）
-bedcode-plugin-api = { path = "../../bedcode-desktop/packages/plugin-sdk-desktop/rust" }
-# 对等网络共享基础设施（节点身份 + 自签证书）
+# 桌面 SDK；移动形态 bindgen 绑移动生成物（批次 03，mobile-host feature）
+bedcode-plugin-api = { path = "../../bedcode-desktop/packages/plugin-sdk-desktop/rust", optional = true }
+# 移动 SDK（跨端 path 依赖：bedcode-mobile/packages/，票 06 批次 03）——
+# 机制面类型（BusMessage/PluginManifest/PermissionManager 等同名 wire 副本）的
+# mobile-host 来源
+bedcode-plugin-api-mobile = { path = "../../bedcode-mobile/packages/plugin-sdk-mobile/rust", optional = true }
+# 组播发现引擎（移动 host-mdns 域 impl 的引擎面；桌面形态该域在宿主 adapter——
+# src-tauri/src/plugin/mdns.rs，本 crate 桌面分支不引用）
+bedcode-discovery-engine = { path = "../bedcode-discovery-engine", optional = true }
+# WS 客户端引擎（ADR 0043，双端共享 crate；移动 host-websocket 客户端域 impl 用）
+bedcode-ws-client-engine = { path = "../bedcode-ws-client-engine", optional = true }
+# 测试组件编码（core module → 组件；test-support feature，fork 原依赖同版本）
+wit-component = { version = "=0.256.0", optional = true }
+# 对等网络共享基础设施（节点身份 + 自签证书）——双端共享（移动 fork 同依赖）
 bedcode-peer-net = { path = "../peer-net" }
-# 链路报文加密协议核心（link_crypto 算法）
+# 链路报文加密协议核心（link_crypto 算法）——双端共享
 bedcode-link-crypto = { path = "../link-crypto" }
 
 # 能力模块自报（inventory::submit! / collect!）
@@ -90,52 +157,48 @@ tokio-tungstenite = "0.24"
 futures-util = "0.3"
 # 目录定位
 dirs = "6.0.0"
-# 组播发现（host-mdns 引擎面）
-mdns-sd = "0.20"
-# 系统信息
-sysinfo = "0.33"
-# 网络工具
-local-ip-address = "0.6"
-# HTTP 客户端（host-http 出站代理）
+# HTTP 客户端（host-http 出站代理）——双端共有（移动 http_engine 同用）
 reqwest = { version = "0.12", features = ["stream"] }
 # 数据库
 rusqlite = { version = "0.32", features = ["bundled", "hooks"] }
 # 用户插件 zip 解压安装
 zip = "4.6"
-# 加密原语（pty 无关；crypto 域经 bedcode-crypto-engine）
+# 随机数 / 编码（通用原语，随整核保留）
 rand = "0.8"
-# PTY 管理（host-pty 引擎面）
-portable-pty = "0.8"
-# 密码学（宿主侧部分算法；与 src-tauri 同版本锁步）
-p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
-aes-gcm = "0.10"
-chacha20poly1305 = "0.10"
-x25519-dalek = { version = "2", features = ["static_secrets"] }
-rsa = { version = "0.9", features = ["sha2", "pem"] }
-sha2 = "0.10"
-hkdf = "0.12"
-jsonwebtoken = "9"
 # 编码
 base64 = "0.22"
 hex = "0.4"
 encoding_rs = "0.8"
-# 系统休眠抑制
-nosleep = "0.2"
-# 进程组信号
+# 进程组信号（Android 同有 libc，无条件保留无害）
 libc = "0.2"
+
+# 密码学套件（桌面独有：auth_center 签发验签 / 会话身份 / db 加密面）。
+# 移动侧凭据面走 link-crypto 共享核（ADR 0033 认证中心自持签发验签）
+aes-gcm = { version = "0.10", optional = true }
+chacha20poly1305 = { version = "0.10", optional = true }
+x25519-dalek = { version = "2", features = ["static_secrets"], optional = true }
+rsa = { version = "0.9", features = ["sha2", "pem"], optional = true }
+p256 = { version = "0.13", features = ["ecdsa", "pkcs8"], optional = true }
+hkdf = { version = "0.12", optional = true }
+jsonwebtoken = { version = "9", optional = true }
+sha2 = "0.10"
 
 # Windows：文件定位 COM API（opener）+ 电源唤醒监听
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_Com", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_System_Registry", "Win32_System_LibraryLoader"] }
 
-# Linux：systemd-logind 休眠抑制
-[target.'cfg(target_os = "linux")'.dependencies]
+# Linux 桌面：systemd-logind 休眠抑制 + webkit 类型引用。
+# 票 06 批次 01（spec D5）：Android 与桌面同 `target_os = "linux"`——不加
+# `not(target_os = "android")` 会在 Android 编译时拉入桌面库（唯一撞车点；
+# tauri 自身的 webview target cfg 正确，见上）
+[target.'cfg(all(target_os = "linux", not(target_os = "android")))'.dependencies]
 dbus = "0.9"
 webkit2gtk = { version = "=2.0.2", features = ["v2_38"] }
 
 [dev-dependencies]
 tempfile = "3"
 # 测试 harness（§4.5）起 HTTP+WS 服务器（actix-web dev::ServerHandle 返回类型）
+# dev-deps 无 optional 机制；依赖图门禁跑 `--edges no-dev` 口径（生产图不含）
 actix-web = "4"
 # 测试夹具构建器（manager/runtime/fixture_build.rs）
 flume = "0.12"

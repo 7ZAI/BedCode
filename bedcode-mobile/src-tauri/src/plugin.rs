@@ -2,10 +2,12 @@
 //!
 //! 插件系统入口 — WASM 动态加载 + 前端插件管理
 //!
-//! **票 17 批次 2b（垫片形态）**：机制面真源已迁移至 fork crate
-//! `bedcode-wasm-core-mobile`（manager::runtime / host_api / bus / storage /
-//! security::fs_auth / manager::{types,validation,downloader} /
-//! terminal_stream_gateway）——本模块对 `crate::plugin::*` 的历史路径做
+//! **票 17 批次 2b（垫片形态）+ 票 06 批次 03/04（单一 crate）**：机制面真源在
+//! 仓库根单一 wasm-core `packages/bedcode-wasm-core` 的 `mobile-host` 面
+//! （manager::runtime / host_api / bus / storage / security::fs_auth /
+//! manager::{types,validation,downloader} / terminal_stream_gateway；
+//! `bedcode-wasm-core-mobile` 只是 package rename 别名，fork crate 已退役）
+//! ——本模块对 `crate::plugin::*` 的历史路径做
 //! 转发垫片（76+ 处宿主引用零改动）；宿主自持面（android_plugins / saf_io /
 //! saf_path / commands / db_schema / loader / manager / registry / approval /
 //! fs_auth / types / host_ports）仍在宿主。

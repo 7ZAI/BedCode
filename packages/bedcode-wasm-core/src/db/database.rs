@@ -17,6 +17,14 @@ impl Database {
         Ok(Self { conn })
     }
 
+    /// 从既有连接构造（移动装配面：宿主主库连接已由宿主侧打开并跑过 schema
+    /// 初始化，本 crate 只接管所有权——schema 真源仍在宿主 db_schema.rs）。
+    /// 移动 host_impl/db 域消费（票 06 批次 03）
+    #[cfg(feature = "mobile-host")]
+    pub fn from_connection(conn: Connection) -> Self {
+        Self { conn }
+    }
+
     /// Initialize database schema
     pub fn init_schema(&self) -> crate::Result<()> {
         self.conn.execute_batch(include_str!("schema.sql"))?;

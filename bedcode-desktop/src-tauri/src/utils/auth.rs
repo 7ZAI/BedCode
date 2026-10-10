@@ -15,12 +15,11 @@
 //! core 中）。注册表真源仍在 wasm-core 的 `host_api::auth_center`（WIT 绑定面），
 //! 本模块 lib 单向依赖取用。
 //!
-//! `test_tokens` 测试夹具**未随之迁回**：它依赖 wasm-core 内部（种子要过
-//! `auth_secret_set` 权限门），迁回会让 wasm-core 自己的闭环测试
-//! （session_e2e / system_component_test / auth_center_perf）失去造 token 通路。
-//! lib 侧无消费点——`tests/*.rs` 是集成测试，看不到依赖方的 `cfg(test)` 项，故此处
-//! **不留垫片 `use`**：一条无人消费的再导出在 wasm-core 侧重新导出该模块前只会让
-//! lib 的 test 构建解析到不存在的路径而断链。
+//! **wasm-core 纯净性收口票 02 批次 04**：host-auth 域（含 `test_seed_plugin_secret`
+//! 种子函数）自 wasm-core 迁宿主 `src/plugin/auth.rs`（路径 B）后，`test_tokens`
+//! 测试夹具随依赖**迁回本模块**——旧理由（依赖 wasm-core 内部函数）失效。消费方 =
+//! lib 集成测试（session_e2e / system_component_test / auth_center_perf）。
 
 pub mod auth_center;
 pub mod identity;
+pub mod test_tokens;

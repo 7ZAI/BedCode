@@ -257,6 +257,8 @@ fn perf_ws_terminal_output_throughput() {
             None,
             Arc::new(bedcode_desktop_lib::wasm_core::bus::HostBusPort::new(
                 host_ctx.message_bus.clone(),
+                // 帧投递窄端口：必须与本总线同源（票 02 批次 03 的注入缝）
+                Arc::new(bedcode_desktop_lib::plugin::ws::HostWsPorts::from_bus(host_ctx.message_bus.clone())),
             )),
         )
         .expect("register declared terminal endpoint");

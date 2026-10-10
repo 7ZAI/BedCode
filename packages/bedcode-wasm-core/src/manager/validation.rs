@@ -13,9 +13,13 @@
 //! 保证 id 不可歧义（一个 id 只对应一个目录、一份 manifest），为审批
 //! 门禁（approval.rs）提供可钉扎的身份锚点。完整模型见 docs/adr/。
 
+// 双端 SDK 同名类型——`InstanceLifecycle` 移动 SDK 无（移动 manifest 无 lifecycle
+// 声明面，fork 票 17 §3.2：该校验不 fork），随 desktop-host
+#[cfg(feature = "desktop-host")]
 use bedcode_plugin_api::{InstanceLifecycle, PluginManifest};
+#[cfg(feature = "mobile-host")]
+use bedcode_plugin_api_mobile::PluginManifest;
 
-use crate::system::constants::{PLUGIN_PTY_MAX_SESSIONS_PER_PLUGIN, PLUGIN_PTY_SESSIONS_CEILING_PER_PLUGIN};
 use crate::security::auth_policy::AuthStrategy;
 
 /// 校验 manifest 必填字段
@@ -37,9 +41,17 @@ pub fn validate_manifest_required(manifest: &PluginManifest) -> crate::Result<()
     if manifest.version.is_empty() {
         return Err(crate::AppError::Plugin("plugin.json missing version field".to_string()));
     }
-    validate_pty_quota(manifest.pty_quota)?;
-    validate_lifecycle(manifest)?;
-    validate_preopen_category(manifest)?;
+    // `ptyQuota` 区间仲裁**不在此处**（票 02 批次 03）：判据与常量真源都在能力域，
+    // 装载期经 `DomainHooks::on_manifest_load` 由 `bedcode-pty-engine` 自解析、自仲裁，
+    // 越界即拒绝装载（`Err` ⇒ 不装载）——内核不再解释该字段（AGENTS §5.1 B6）。
+    // 本函数只保住两处入口（目录扫描 / zip 安装）共用的结构性必填字段。
+    // 生命周期 / preopen 校验为桌面 manifest 专属面（移动 manifest 无这两个字段，
+    // fork 票 17 §3.2）——随 desktop-host
+    #[cfg(feature = "desktop-host")]
+    {
+        validate_lifecycle(manifest)?;
+        validate_preopen_category(manifest)?;
+    }
     Ok(())
 }
 
@@ -53,6 +65,7 @@ pub fn validate_manifest_required(manifest: &PluginManifest) -> crate::Result<()
 /// 单实例限额（`runtime.rs::memory_growing` 拒绝增长 → guest trap）且不重启进程
 /// 好不了。静默降级会让作者以为 worker 生效了，实际既没省内存又没省限额。
 /// 拒绝时点名缺什么（缺调度方 + 传参协议 + 配额），便于对着清单补齐后再启用。
+#[cfg(feature = "desktop-host")]
 pub fn validate_lifecycle(manifest: &PluginManifest) -> crate::Result<()> {
     if manifest.lifecycle != InstanceLifecycle::Persistent {
         return Err(crate::AppError::Plugin(format!(
@@ -75,6 +88,7 @@ pub fn validate_lifecycle(manifest: &PluginManifest) -> crate::Result<()> {
 /// worker 未实现期间（ADR 0032 §6 双侧拒绝）`ephemeral` 本身被 [`validate_lifecycle`]
 /// 拒绝，故本字段当前对一切 manifest 不可达——此处的类别闸门是取值域层面的落死，
 /// worker 启用（ephemeral 放行）后 preopen 即恢复为 worker 专属能力。
+#[cfg(feature = "desktop-host")]
 pub fn validate_preopen_category(manifest: &PluginManifest) -> crate::Result<()> {
     if !manifest.wasi_preopen_dirs.is_empty() && manifest.lifecycle != InstanceLifecycle::Ephemeral {
         return Err(crate::AppError::Plugin(
@@ -83,27 +97,6 @@ pub fn validate_preopen_category(manifest: &PluginManifest) -> crate::Result<()>
              目录经 fs_request_auth / preauth 授权并持久化），见 ADR 0034"
                 .to_string(),
         ));
-    }
-    Ok(())
-}
-
-/// 校验 manifest 声明的 `ptyQuota` 落在内核允许区间
-///
-/// 会话引擎下沉 P1 / H1：业务会话改由插件经 `host-pty.spawn` 自持 PTY 后，每插件在册
-/// 条数上限不能再是单一内核常量（8 条不是「用户可开多少终端」的产品档位），改为
-/// manifest 声明 + 宿主区间仲裁。
-///
-/// 判据之所以落在**加载期**而不是 `spawn`：配额是自我声明的静态事实，装载时就能判定，
-/// 拖到运行期等于把配置错误转嫁成「第 N+1 条会话创建失败」的产品故障。
-/// 越界与 0 一律拒绝、**不夹取到上限**（与 `ringBytes` 同一口径：静默降级会让插件按
-/// 自己声明的并发数规划业务、实际却少得多）。
-pub fn validate_pty_quota(declared: Option<usize>) -> crate::Result<()> {
-    if let Some(quota) = declared {
-        if quota == 0 || quota > PLUGIN_PTY_SESSIONS_CEILING_PER_PLUGIN {
-            return Err(crate::AppError::Plugin(format!(
-                "plugin.json ptyQuota out of range ({quota}); allowed 1..={PLUGIN_PTY_SESSIONS_CEILING_PER_PLUGIN}, omit the field for the default {PLUGIN_PTY_MAX_SESSIONS_PER_PLUGIN}"
-            )));
-        }
     }
     Ok(())
 }
@@ -322,63 +315,17 @@ mod tests {
         }
     }
 
-    /// `ptyQuota` 区间仲裁（会话引擎下沉 P1 / H1）
-    ///
-    /// 正例：缺省（未声明 = 内核默认档，既有插件零迁移）与区间两端；
-    /// 反例：0 与越上限——两者都必须加载期失败，且不夹取（越界被钳回上限等于
-    /// 让插件按自己声明的并发数规划业务、实际却少得多）。
-    #[test]
-    fn pty_quota_accepts_absent_and_in_range_rejects_out_of_range() {
-        assert!(validate_pty_quota(None).is_ok(), "缺省即默认档，不得拒绝");
-        assert!(validate_pty_quota(Some(1)).is_ok());
-        assert!(validate_pty_quota(Some(PLUGIN_PTY_SESSIONS_CEILING_PER_PLUGIN)).is_ok());
-        for bad in [0, PLUGIN_PTY_SESSIONS_CEILING_PER_PLUGIN + 1, 10_000] {
-            let err = validate_pty_quota(Some(bad))
-                .err()
-                .unwrap_or_else(|| panic!("ptyQuota={bad} 必须被拒绝"));
-            let text = err.to_string();
-            assert!(
-                text.contains(&bad.to_string()) && text.contains("ptyQuota"),
-                "错误必须点名越界值与字段名，got: {text}"
-            );
-        }
-    }
-
-    /// 配额判据经 `validate_manifest_required` 生效（两条装载入口共用该漏斗），
-    /// 且 manifest 的 JSON 键名就是 camelCase 的 `ptyQuota`
-    #[test]
-    fn manifest_required_check_propagates_quota_rejection() {
-        let parse = |quota: &str| -> crate::Result<PluginManifest> {
-            parse_manifest_json(&format!(
-                r#"{{"id":"com.bedcode.quota","name":"quota","version":"1.0.0","ptyQuota":{quota}}}"#
-            ))
-        };
-        let err = parse(&(PLUGIN_PTY_SESSIONS_CEILING_PER_PLUGIN + 1).to_string())
-            .err()
-            .expect("越界声明必拒");
-        assert!(err.to_string().contains("ptyQuota"), "got: {err}");
-        assert_eq!(
-            parse("9").expect("区间内声明可加载").pty_quota,
-            Some(9),
-            "声明值必须原样抵达宿主（键名写错会静默降级为默认档）"
-        );
-        assert_eq!(
-            parse_without_quota().pty_quota,
-            None,
-            "未声明 = 默认档（既有插件零迁移）"
-        );
-    }
-
-    fn parse_without_quota() -> PluginManifest {
-        parse_manifest_json(r#"{"id":"com.bedcode.quota","name":"quota","version":"1.0.0"}"#)
-            .expect("无 ptyQuota 的既有 manifest 必须照常加载")
-    }
+    // `ptyQuota` 区间仲裁的两条用例随判据迁往能力域（票 02 批次 03）：
+    // `bedcode-pty-engine::plugin_binding::manifest_quota_tests`。内核不再拥有该判据，
+    // 在此留同名用例只会要求内核继续解释 manifest 字段（AGENTS §5.1 B6）。
 
     /// 角色维度（ADR 0032）：`lifecycle` 声明的校验在**加载期**生效
     ///
     /// 正例：缺省与显式 `persistent` 都照常加载（旧产物零迁移）；
     /// 反例：`ephemeral` 必须加载期失败并点名缺什么——静默当常驻处理会让作者
     /// 以为 worker 已生效，而常驻恰好是 worker 存在理由的反面（线性内存只增不减）。
+    // 生命周期声明面 = 桌面 manifest 专属（移动 SDK 无 InstanceLifecycle，fork 票 17 §3.2）
+    #[cfg(feature = "desktop-host")]
     #[test]
     fn lifecycle_ephemeral_is_rejected_at_load_persistent_and_absent_pass() {
         let parse = |extra: &str| -> crate::Result<PluginManifest> {

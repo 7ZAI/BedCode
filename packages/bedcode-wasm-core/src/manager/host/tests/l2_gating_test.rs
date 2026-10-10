@@ -51,43 +51,49 @@ use super::*;
 ///   认证中间件（唯一正当的裁决消费方）；两个面抽 crate 后它们都经 `base::ports` 的
 ///   `AuthCenter` 端口字段取裁决，**扫描面必须跟着代码走**（见 `L2_SCAN_ROOTS`）：
 ///   只扫宿主 `src` 会让这些白名单悬空、并把 crate 里新长出的越界消费点静默放行；
-/// - `wasm_core/host_api/auth.rs`：**组合式认证原语**（ADR 0031 K1/K6）——权限门 +
+/// - `src-tauri/src/plugin/auth.rs`（**宿主 adapter，票 02 批次 04 自 wasm-core
+///   `host_api/auth.rs` 迁入**）：**组合式认证原语**（ADR 0031 K1/K6）——权限门 +
 ///   唯一性仲裁的调用方 + 零解析窄转发，属安全闸门；（注册表本体
 ///   `wasm_core/host_api/auth_center.rs` 不在本表：它是 L2 侧的**注册表**，
 ///   不消费桥接面，不需要被桥接面白名单授权）
-/// - `wasm_core/manager/runtime/component.rs`：ABI v32 的 `host-auth` 新导出接线
-///   （权限门与派发，实现体在 `host_api/auth.rs`）；
 /// - `wasm_core/manager/host/boot.rs` / `activation.rs`：生命周期闸门接线——
 ///   停用时 `purge_for_plugin` 回收中心句柄、启动期按在册中心做对账
-///   （同 pty / ws / http / task 停用回收一组）。
-/// - `utils/auth/test_tokens.rs`（**仅 `#[cfg(test)]`**）：ADR 0033 后宿主没有签发面，
-///   测试也不能自己造「合法 token」——唯一诚实的造法是走生产 `auth-grant` /
-///   `jwt` / `issue`。它只经 `invoke_auth_method` 零解析转发，**零解释**（约束③），
-///   产出只给测试断言用（不产产品事实，约束②不适用），且不参与生产构建。
+///   （同 pty / ws / http / task 停用回收一组；注册表真源留内核的裁决见宿主
+///   adapter 模块文档）。
+/// - `src-tauri/src/utils/auth/test_tokens.rs`（票 02 批次 04 随域自 wasm-core 迁入）：
+///   ADR 0033 后宿主没有签发面，测试也不能自己造「合法 token」——唯一诚实的造法是
+///   走生产 `auth-grant` / `jwt` / `issue`。它只经 `invoke_auth_method` 零解析转发，
+///   **零解释**（约束③），产出只给测试断言用（不产产品事实，约束②不适用）。
 ///
 /// **纯模块声明文件不在表内**（`utils/auth.rs` / `host_api.rs` 的 `mod auth_center;`）：
 /// 扫描器对 `mod X;` / `pub mod X;` 声明行直接跳过——声明不是「消费」。
 ///
-/// **wasm-core 纯净性收口（票 05/05b，2026-10-06）路径随迁**：
+/// **wasm-core 纯净性收口（票 05/05b，2026-10-06；票 02 批次 04，2026-10-09）路径随迁**：
 /// - `src/utils/auth/auth_center.rs` / `src/utils/session_gateway.rs` 已回宿主 lib
 ///   （`../../src-tauri/src/utils/`）——白名单条目随真源迁移，不再登记 wasm-core 内
 ///   已删路径（悬空条目会被反向自检抓红）；
-/// - `src/test_support.rs`：票 05b 上提的常编译测试基建（非 `tests/` 目录、非
-///   `_test.rs`，扫描器按生产代码对待）——其 `pub use crate::host_api::auth_center::…`
-///   re-export 命中 `auth_center` needle。消费的是**注册表机制面**（test_support 即
-///   协调层，非 L2 业务读取），登记并注释理由。
+/// - `src/host_api/auth.rs` 已迁宿主（条目改指宿主 adapter 新落点）；
+///   `src/utils/auth/test_tokens.rs` 随域迁宿主 lib（条目同改）；
+///   `src/manager/runtime/component.rs` 的 `host-auth` 接线随迁后不再命中 needle
+///   （条目删除）；
+/// - `src/test_support/desktop.rs`：票 05b 上提的常编译测试基建（非 `tests/` 目录、
+///   非 `_test.rs`，扫描器按生产代码对待）；票 06 批次 03 的 test-support 收口把
+///   原 `src/test_support.rs` 拆成壳（仅 `mod` 声明，不命中）+ 桌面本体 `desktop.rs`
+///   + 移动本体 `mobile.rs`——`pub use crate::host_api::auth_center::…` re-export 与
+///   `lock_auth_center_desk` 随之落 `desktop.rs`，条目跟着真源走（悬空/漏登都被
+///   本锁的双向断言抓红）。消费的是**注册表机制面**（test_support 即协调层，
+///   非 L2 业务读取），登记并注释理由。
 const L2_CONSUMER_ALLOWLIST: &[&str] = &[
     "../../bedcode-desktop/src-tauri/src/utils/auth/auth_center.rs",
     "../../bedcode-desktop/src-tauri/src/utils/session_gateway.rs",
-    "src/test_support.rs",
-    "src/utils/auth/test_tokens.rs",
+    "src/test_support/desktop.rs",
+    "../../bedcode-desktop/src-tauri/src/utils/auth/test_tokens.rs",
     "../bedcode-server-http/src/middleware/auth_gateway.rs",
     "../bedcode-server-websocket/src/channel/plugin.rs",
     "../../bedcode-desktop/src-tauri/src/server/ports_impl.rs",
-    "src/host_api/auth.rs",
+    "../../bedcode-desktop/src-tauri/src/plugin/auth.rs",
     "src/manager/host/boot.rs",
     "src/manager/host/activation.rs",
-    "src/manager/runtime/component.rs",
 ];
 
 /// L2 桥接门的导出面（函数 / 常量 / `pub use` 别名）—— 锁 1b 的登记表
@@ -446,7 +452,8 @@ fn l2_bridge_public_surface_is_pinned() {
     );
 
     // 父模块不得把桥接面转发出去（`pub use auth_center …` / `pub use auth_center::…`）
-    for parent in ["src/utils/auth.rs", "src/host_api.rs"] {
+    // `src/utils/auth.rs` 已随无消费者整体退役（2026-10-10），parent 检查只剩 host_api.rs
+    for parent in ["src/host_api.rs"] {
         let content = std::fs::read_to_string(base.join(parent)).expect("read parent module");
         let forwards: Vec<String> = production_code_lines(&content)
             .into_iter()
