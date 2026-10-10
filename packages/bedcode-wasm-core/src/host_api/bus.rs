@@ -91,7 +91,7 @@ pub(crate) fn bus_publish_binary(
 /// bus 派发路径持 subscribers 读锁执行插件回调（on_message / on_session_lifecycle 等），
 /// 若插件在这些回调中订阅/退订，同步等待写锁会与派发任务形成同任务重入死锁。
 ///
-/// 门禁（命名空间/回复道/legacy）在共享核、于 spawn **之前**同步判定：错误必须回给
+/// 门禁（命名空间/回复道）在共享核、于 spawn **之前**同步判定：错误必须回给
 /// guest，不能退化成「返回 Ok 但没订阅上」。
 pub(crate) fn bus_subscribe(bus: &dyn BusScope, plugin_id: &str, topic: &str) -> Result<(), String> {
     core_bus::check_subscribe_access(plugin_id, topic)?;
@@ -127,8 +127,7 @@ pub(crate) fn bus_subscribe_binary(bus: &dyn BusScope, plugin_id: &str, topic: &
 
 /// 取消订阅（与 subscribe 同因异步投递）
 ///
-/// 只过命名空间门：legacy/回复道形态在此不拦——退订是清理动作，必须幂等可用
-/// （旧产物退订它曾订阅过的串不应被新规则噎住）
+/// 只过命名空间门：回复道形态在此不拦——退订是清理动作，必须幂等可用
 pub(crate) fn bus_unsubscribe(bus: &dyn BusScope, plugin_id: &str, topic: &str) -> Result<(), String> {
     core_bus::check_namespace(plugin_id, topic, "unsubscribe", "that plugin (and the host)")?;
     let bus = bus.message_bus().clone();
@@ -419,16 +418,6 @@ mod tests {
         bus_publish(ctx.as_ref(), ctx.as_ref(), "com.evil", "task:status-changed", "{}")
             .expect("public topic must pass");
         bus_subscribe(ctx.as_ref(), "com.evil", "peer:consent").expect("public subscribe must pass");
-    }
-
-    /// legacy 定向形态（`<base>.<自身 id>`，SDK 旧助手产出的串）：显式拒绝并回带新形态，
-    /// 不得退化成「订阅成功但永远收不到」的静默断流
-    #[tokio::test]
-    async fn subscribe_rejects_legacy_owner_suffix() {
-        let ctx = build_host_ctx();
-        let err = bus_subscribe(ctx.as_ref(), "com.victim", "pty:exit.com.victim").unwrap_err();
-        assert!(err.contains("legacy"), "got: {}", err);
-        assert!(err.contains("com.victim::pty:exit"), "错误须给出新形态: got: {}", err);
     }
 
     /// 退订同样受门禁约束（他人命名空间不可寻址）

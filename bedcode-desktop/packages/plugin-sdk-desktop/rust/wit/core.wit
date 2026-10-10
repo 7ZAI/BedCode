@@ -46,8 +46,6 @@ interface host-events {
 ///   刻意留在公开道形态（响应者是他人，必须能发布进来）。窃听由「订阅面 host-only」
 ///   堵（回复订阅由宿主在 `host-api-call` 内静态注册），抢答由「宿主校验回复 `sender`
 ///   == api 声明属主」堵（`sender` 由宿主按 Caller state 落章，guest 不可自报）。
-/// - **退役形态** `<base>.<own-plugin-id>`（旧 SDK 助手产出的定向串）：订阅面显式
-///   拒绝并回带新形态，避免旧产物静默断流。
 ///
 /// 载荷格式：
 /// - `publish`（JSON 文本，v1 起）：结构化载荷，现有订阅方零回归；

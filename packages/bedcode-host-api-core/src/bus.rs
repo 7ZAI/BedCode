@@ -57,19 +57,6 @@ pub fn is_reply_topic(topic: &str) -> bool {
     topic.starts_with(REPLY_TOPIC_PREFIX)
 }
 
-/// 是否旧版定向事件形态（`<base>.<own-plugin-id>`，无命名空间）
-///
-/// 票 05 迁移前的 SDK 助手产出的串（如 `pty:exit.com.x`）。宿主订阅面对其
-/// **显式拒绝**而非放行：放行会让旧产物静默断流（订阅得到、永远收不到），
-/// 而该形态公开后又可能被他人伪发布打进旧订阅者。
-pub fn is_legacy_owner_suffix(topic: &str, plugin_id: &str) -> bool {
-    if topic.contains(TOPIC_NS_SEP) {
-        return false;
-    }
-    let suffix = format!(".{plugin_id}");
-    topic.len() > suffix.len() && topic.ends_with(&suffix)
-}
-
 // ==================== 端口 ====================
 
 /// 宿主服务端口（门禁层只认端口，不认任何一端的宿主类型）
@@ -119,35 +106,21 @@ pub fn check_namespace(plugin_id: &str, topic: &str, action: &str, target: &str)
     ))
 }
 
-/// 订阅面门禁（`subscribe` / `subscribe-binary`）：命名空间 + 两条订阅专属形态规则
+/// 订阅面门禁（`subscribe` / `subscribe-binary`）：命名空间 + 回复道形态规则
 ///
 /// - 回复道 `bedcode.api.reply.*`：caller 的收件箱，订阅由宿主在 `host-api-call`
 ///   内静态注册，对 WASM 一律关闭——此前任意插件可订阅他人回复道窃听互调结果，
 ///   且 correlation id 是可猜的单调计数器；
-/// - legacy 定向形态 `<base>.<own-id>`：票 05 迁移前 SDK 助手产出的串，宿主已改投
-///   命名空间 topic，放行会让旧产物**静默断流**（订阅得到、永远收不到），故显式拒绝
-///   并回带新形态。
 pub fn check_subscribe_access(plugin_id: &str, topic: &str) -> Result<(), String> {
     check_namespace(plugin_id, topic, "subscribe", "that plugin (and the host)")?;
     if is_reply_topic(topic) {
         tracing::warn!(
             plugin_id = %plugin_id,
             topic = %topic,
-            "bus subscribe: reply lane is host-managed, rejected (audit ticket 05)"
+            "bus subscribe: reply lane is host-managed, rejected"
         );
         return Err(format!(
             "bus error: topic '{topic}' is on the inter-plugin reply lane (bedcode.api.reply.*) \u{2014} reply subscriptions are host-managed by host-api-call"
-        ));
-    }
-    if is_legacy_owner_suffix(topic, plugin_id) {
-        tracing::warn!(
-            plugin_id = %plugin_id,
-            topic = %topic,
-            "bus subscribe: legacy owner-suffix directed topic form rejected (audit ticket 05)"
-        );
-        return Err(format!(
-            "bus error: legacy directed-topic form '{topic}' is retired, subscribe '{new_form}' instead (SDK owned_topic / *_event_topic)",
-            new_form = owned_topic(plugin_id, &topic[..topic.len() - plugin_id.len() - 1])
         ));
     }
     Ok(())
@@ -314,17 +287,11 @@ mod tests {
         assert_eq!(topic_owner("::x"), Some(""));
     }
 
-    /// 回复道判定 + legacy 形态识别（含 `.id` 边界防误判）
+    /// 回复道判定（含 `.id` 边界防误判）
     #[test]
-    fn reply_and_legacy_form_recognition() {
+    fn reply_form_recognition() {
         assert!(is_reply_topic("bedcode.api.reply.com.x.req-1"));
         assert!(!is_reply_topic("bedcode.api.com.x.echo"));
-        assert!(is_legacy_owner_suffix("pty:exit.com.x", "com.x"));
-        assert!(!is_legacy_owner_suffix("pty:exit.com.y", "com.x"));
-        assert!(!is_legacy_owner_suffix("com.x::pty:exit", "com.x"));
-        assert!(!is_legacy_owner_suffix(".com.x", "com.x"));
-        assert!(!is_legacy_owner_suffix("com.x", "com.x"));
-        assert!(!is_legacy_owner_suffix("pty:exitnot-com.x", "com.x"));
     }
 
     // ==================== 发布门禁链 ====================
@@ -402,19 +369,15 @@ mod tests {
         assert!(err.contains("reply"), "got: {err}");
         let err = check_subscribe_access("com.victim", "bedcode.api.reply.com.victim.req-1").unwrap_err();
         assert!(err.contains("reply"), "自身回复道亦不对 WASM 开放: {err}");
-        let err = check_subscribe_access("com.victim", "pty:exit.com.victim").unwrap_err();
-        assert!(err.contains("legacy") && err.contains("com.victim::pty:exit"), "须回带新形态: {err}");
         check_subscribe_access("com.victim", "com.victim::pty:exit").expect("own ns ok");
         check_subscribe_access("com.victim", "bedcode.api.com.victim.echo").expect("request lane ok");
         check_subscribe_access("com.evil", "peer:consent").expect("public ok");
     }
 
-    /// 退订只过命名空间门：legacy / 回复道不拦（清理动作幂等可用）
+    /// 退订只过命名空间门：回复道不拦（清理动作幂等可用）
     #[test]
     fn unsubscribe_gate_is_namespace_only() {
         assert!(check_namespace("com.evil", "com.victim::t", "unsubscribe", "that plugin (and the host)").is_err());
-        check_namespace("com.victim", "pty:exit.com.victim", "unsubscribe", "that plugin (and the host)")
-            .expect("legacy 退订放行");
         check_namespace(
             "com.victim",
             "bedcode.api.reply.com.victim.req-1",
