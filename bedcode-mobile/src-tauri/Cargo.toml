@@ -115,6 +115,13 @@ android_logger = "0.14"
 bedcode-plugin-api-mobile = { path = "../packages/plugin-sdk-mobile/rust" }
 # 对等网络共享基础设施（节点身份 + 自签证书，issue peer-network/01）
 bedcode-peer-net = { path = "../../packages/peer-net" }
+# 对等网络能力域（双端共享纯引擎形态：节点装配 / 会话控制面 / 引擎事件桥 +
+# 端口 + 平台缝；WIT 绑定层在 common-host feature，移动形态不引）——
+# 2026-10-10 能力域集中化：移动宿主引擎控制面下沉至此，宿主只留适配层
+bedcode-server-peer-net = { path = "../../packages/bedcode-server-peer-net" }
+# 端口 trait 词汇（BusPort / EventSink / PathsPort / SystemInfoPort / MdnsPort）
+# ——能力域端口面与宿主适配层共用同一套 trait，不新造第二套
+bedcode-server-base = { path = "../../packages/bedcode-server-base" }
 # 链路报文加密协议核心（issue 09 共享 crate，与桌面 server 共同消费）
 bedcode-link-crypto = { path = "../../packages/link-crypto" }
 p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
