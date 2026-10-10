@@ -1,77 +1,62 @@
 <script setup lang="ts">
 /**
- * ToolboxView — 插件工具箱入口网格（与宿主同款卡片：图标 + 标题 + 插件名）
+ * ToolboxView — 已注册运行面的应用入口列表
  *
- * 支持插件自定义入口卡片（ToolboxPageDescriptor.entry，宿主内联渲染）；
- * 点击进入插件视图（activeView → PluginView 渲染）。
+ * 票 2026-10-10 批次 C2：`registerToolboxPage` 退役后，dev-shell 的应用入口
+ * 改由 `registerSurface` 一处提供——与宿主壳「只认 surface 一种运行面形态」同口径。
+ * 点击打开应用运行面（activeView → PluginView 渲染）。
  */
 import { useI18n } from 'vue-i18n'
-import { openActiveView, toolboxPages } from '../registry'
-import { isSvgIcon } from '../utils/icon'
-import PluginComponent from '../components/PluginComponent.vue'
+import { openActiveView, surfaces } from '../registry'
 
 const { t } = useI18n()
 
-function openPage(pluginId: string, pageId: string) {
-  const entry = toolboxPages.value.find((p) => p.pluginId === pluginId && p.page.id === pageId)
+function openSurface(pluginId: string) {
+  const entry = surfaces.value.find((s) => s.pluginId === pluginId)
   if (!entry) return
   openActiveView({
-    kind: 'toolbox',
+    kind: 'surface',
     pluginId,
-    title: entry.page.title,
-    component: entry.page.component,
-    // header: false — 与 navTab 约定一致：由 AppShell 全局页头统一提供
-    // back + 标题，避免 PluginView 再渲染一个页头造成重复
+    title: pluginId,
+    component: entry.surface.component,
+    // header: false — 运行面自持完整界面（含自己的头部/底部导航），
+    // 由 AppShell 全局页头统一提供 back + 标题，避免 PluginView 再渲染一个页头造成重复
     header: false,
   })
 }
 </script>
 
 <template>
-  <!-- 与宿主 ToolboxView 同款：全宽入口卡片列表（无重复页面标题，标题由 AppShell 页头提供） -->
   <div class="px-4 py-3">
-    <!-- 空态：无任何插件时展示 -->
-    <div v-if="toolboxPages.length === 0" class="py-16 flex flex-col items-center gap-2 text-center">
+    <!-- 空态：无任何应用注册运行面时展示 -->
+    <div v-if="surfaces.length === 0" class="py-16 flex flex-col items-center gap-2 text-center">
       <span class="text-3xl">🧰</span>
       <p class="text-sm text-[var(--mobile-text-secondary)]">{{ t('devshell.toolbox.empty') }}</p>
       <p class="text-xs text-[var(--mobile-text-muted)] px-8">{{ t('devshell.toolbox.emptyHint') }}</p>
     </div>
 
     <div v-else class="space-y-3">
-      <template v-for="entry in toolboxPages" :key="entry.pluginId + entry.page.id">
-        <!-- 插件自定义入口卡片：宿主内联渲染，自带交互；按压反馈与宿主一致 -->
-        <div
-          v-if="entry.page.entry"
-          class="rounded-xl bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] overflow-hidden cursor-pointer transition-[border-color,opacity] duration-300 hover:border-[var(--mobile-border-hover)] active:opacity-90"
-          @click="openPage(entry.pluginId, entry.page.id)"
-        >
-          <PluginComponent :plugin-id="entry.pluginId" :component="entry.page.entry" />
-        </div>
-        <!-- 默认统一卡片：与宿主同款横向行（图标 chip + 标题 + 插件名 + chevron） -->
-        <button
-          v-else
-          class="w-full flex items-center gap-3 p-4 text-left rounded-xl bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] cursor-pointer transition-[border-color,opacity] duration-300 hover:border-[var(--mobile-border-hover)] active:opacity-90"
-          @click="openPage(entry.pluginId, entry.page.id)"
-        >
-          <span class="icon-chip chip-cyan flex-shrink-0">
-            <svg v-if="isSvgIcon(entry.page.icon)" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" :d="entry.page.icon" />
-            </svg>
-            <span v-else class="text-xl">{{ entry.page.icon || '🧩' }}</span>
+      <button
+        v-for="entry in surfaces"
+        :key="entry.pluginId"
+        class="w-full flex items-center gap-3 p-4 text-left rounded-xl bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] cursor-pointer transition-[border-color,opacity] duration-300 hover:border-[var(--mobile-border-hover)] active:opacity-90"
+        @click="openSurface(entry.pluginId)"
+      >
+        <span class="icon-chip chip-cyan flex-shrink-0">
+          <span class="text-xl">🧩</span>
+        </span>
+        <span class="flex-1 min-w-0">
+          <span class="block text-sm font-medium text-[var(--mobile-text-primary)] truncate">
+            {{ entry.pluginId }}
           </span>
-          <span class="flex-1 min-w-0">
-            <span class="block text-sm font-medium text-[var(--mobile-text-primary)] truncate">
-              {{ entry.page.title }}
-            </span>
-            <span class="block mt-0.5 text-xs text-[var(--mobile-text-muted)] truncate">
-              {{ entry.pluginId }}
-            </span>
+          <span class="block mt-0.5 text-xs text-[var(--mobile-text-muted)] truncate">
+            {{ t('devshell.toolbox.surface') }}
           </span>
-          <svg class="w-4 h-4 flex-shrink-0" style="color: var(--mobile-row-sub)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
-          </svg>
-        </button>
-      </template>
+        </span>
+        <svg class="w-4 h-4 flex-shrink-0" style="color: var(--mobile-row-sub)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+        </svg>
+      </button>
     </div>
   </div>
 </template>

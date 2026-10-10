@@ -15,7 +15,7 @@ import { pluginLoader } from './loader'
 import { pluginDialogHost } from './dialog-host'
 import { usePresetTasks } from '@/composables/usePresetTasks'
 import { useMobileConnection } from '@/composables/useMobileConnection'
-import { useMobileSettings } from '@/composables/useMobileSettings'
+import { useMobileSettings, readAllSettings, writeSetting } from '@/composables/useMobileSettings'
 import { useMdnsDiscovery } from '@/composables/useMdnsDiscovery'
 import {
   wsGetBiometricKeyStatus,
@@ -69,6 +69,10 @@ export async function initPluginSystem(
       openTerminalStream,
       isDark: useIsDark(),
       mobileSettings: mobileSettings.settings,
+      // 票 2026-10-10：通用设置 KV 桥——业务设置项的 UI 与真源归各 wasm app 自持
+      // （§5.1 B3：宿主不持有产品事实），宿主只提供持久化通道（ADR 0022 ① 引擎实现）
+      readAllSettings,
+      writeSetting,
       onSessionEvent: subscribeHostSessionEvents,
       mockSessionId: import.meta.env.DEV ? MOCK_SESSION_ID : null,
       // ── 连接引擎面（票 2026-10-09：宿主页下沉 terminal-session，引擎事实与动作）──

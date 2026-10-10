@@ -36,14 +36,10 @@ import {
   openActiveView,
   pushLog,
   registerCapsuleItem,
-  registerNavTab,
   registerRoute,
   registerSettingsEntry,
   registerSlot,
   registerSurface,
-  registerTerminalToolbarItem,
-  registerTerminalView,
-  registerToolboxPage,
   routes as routeEntries,
 } from './registry'
 
@@ -104,18 +100,6 @@ export function createMockContext(pluginId: string): PluginContext {
 
   // ==================== UIRegistry ====================
   const ui: UIRegistry = {
-    registerToolboxPage(page) {
-      return track(registerToolboxPage(pluginId, page))
-    },
-    registerNavTab(tab) {
-      return track(registerNavTab(pluginId, tab))
-    },
-    registerTerminalToolbarItem(item) {
-      return track(registerTerminalToolbarItem(pluginId, item))
-    },
-    registerTerminalView(view) {
-      return track(registerTerminalView(pluginId, view))
-    },
     registerSurface(surface) {
       return track(registerSurface(pluginId, surface))
     },

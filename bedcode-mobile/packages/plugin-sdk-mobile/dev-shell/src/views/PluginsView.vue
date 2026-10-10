@@ -1,15 +1,12 @@
 <script setup lang="ts">
 /**
- * PluginsView — 插件管理（骨架）：状态徽章、激活/停用、设置区、路由、
- * 终端工具栏一览（全部由 dev-shell mock 驱动）。
+ * PluginsView — 插件管理（骨架）：状态徽章、激活/停用、路由一览
+ * （全部由 dev-shell mock 驱动）。
+ *
+ * 票 2026-10-10 批次 C2：终端工具栏一览随 registerTerminalToolbarItem 退役删除。
  */
 import { useI18n } from 'vue-i18n'
-import {
-  openActiveView,
-  plugins,
-  routes,
-  terminalToolbarItems,
-} from '../registry'
+import { openActiveView, plugins, routes } from '../registry'
 import { deactivatePlugin, loadPlugins } from '../loader'
 import { isSvgIcon } from '../utils/icon'
 
@@ -117,19 +114,6 @@ async function toggle(pluginId: string) {
             >
               /{{ r.route.id }}
             </button>
-          </div>
-        </div>
-
-        <div v-if="terminalToolbarItems.filter((x) => x.pluginId === record.id).length">
-          <p class="text-[var(--mobile-text-muted)] mb-1">{{ t('devshell.plugins.toolbar') }}</p>
-          <div class="flex flex-wrap gap-1.5">
-            <span
-              v-for="item in terminalToolbarItems.filter((x) => x.pluginId === record.id)"
-              :key="item.item.id"
-              class="px-2 py-1 rounded-md bg-[var(--mobile-bg-tertiary)] text-[var(--mobile-text-secondary)]"
-            >
-              {{ item.item.label }}
-            </span>
           </div>
         </div>
       </div>

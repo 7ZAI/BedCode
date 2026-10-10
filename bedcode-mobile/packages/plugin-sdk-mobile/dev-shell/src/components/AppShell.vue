@@ -2,12 +2,15 @@
 /**
  * AppShell — 移动端页面骨架（与宿主一致的结构与 token）
  *
- * 状态栏 → 页头 → 内容区 → 底部导航；底部导航 = 内置三项 + 插件 navTab 注册项。
- * 插件工具箱页/路由/设置区经 activeView 在内容区渲染（PluginView）。
+ * 状态栏 → 页头 → 内容区 → 底部导航；底部导航 = 内置三项。
+ * 插件运行面 / 路由 / 设置区经 activeView 在内容区渲染（PluginView）。
+ *
+ * 票 2026-10-10 批次 C2：底部导航不再拼接插件 navTab 注册项——插件导航已随
+ * 旧嵌入扩展点整面退役，应用在壳内的导航由应用自己的运行面（registerSurface）自持。
  */
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { activeView, goBackView, navTabs, openActiveView, plugins } from '../registry'
+import { activeView, goBackView, openActiveView, plugins } from '../registry'
 import { deactivateAll } from '../loader'
 import PluginView from '../views/PluginView.vue'
 import MockTerminalView from '../views/MockTerminalView.vue'
@@ -29,10 +32,10 @@ const baseTabs = computed(() => [
   { key: 'plugins' as const, label: t('devshell.nav.plugins'), icon: 'M19.439 7.85c-.049.322.059.648.289.878l1.568 1.568c.47.47.706 1.087.706 1.704s-.235 1.233-.706 1.704l-1.611 1.611a.98.98 0 01-.837.276c-.47-.07-.802-.48-.968-.925a2.501 2.501 0 10-3.214 3.214c.446.166.855.497.925.968a.979.979 0 01-.276.837l-1.61 1.61a2.404 2.404 0 01-1.705.707 2.402 2.402 0 01-1.704-.706l-1.568-1.568a1.026 1.026 0 00-.877-.29c-.493.074-.84.504-1.02.968a2.5 2.5 0 11-3.237-3.237c.464-.18.894-.527.967-1.02a1.026 1.026 0 00-.289-.877l-1.568-1.568A2.402 2.402 0 011.841 11.7a2.402 2.402 0 01.706-1.704l1.611-1.61a.98.98 0 01.837-.277c.47.07.802.48.968.925a2.501 2.501 0 103.214-3.214c-.446-.166-.855-.497-.925-.968a.979.979 0 01.276-.837l1.61-1.61c.454-.454 1.068-.706 1.704-.706.636 0 1.25.252 1.705.706z' },
 ])
 
-/** 内置 tab 激活判定：插件工具箱页打开时工具箱 tab 保持高亮（导航归属不变） */
+/** 内置 tab 激活判定：插件视图打开时底 tab 保持高亮（导航归属不变） */
 function isBaseTabActive(key: BaseTab): boolean {
   if (activeTab.value === key && !activeView.value) return true
-  return key === 'toolbox' && activeView.value?.kind === 'toolbox'
+  return key === 'toolbox' && activeView.value?.kind === 'surface'
 }
 
 const pageTitle = computed(() => {
@@ -43,7 +46,7 @@ const pageTitle = computed(() => {
 /**
  * 全局页头显隐：
  * - 无插件视图：显示（当前 tab 名）
- * - toolbox / navTab 视图（header:false，插件无自渲染页头）：由本页头接管 back + 标题
+ * - surface / settings 视图（header:false，插件无自渲染页头）：由本页头接管 back + 标题
  * - route 视图：插件自渲染页头（SettingsPage 自带 header），不再叠加全局页头，避免双标题
  */
 const showGlobalHeader = computed(
@@ -54,33 +57,6 @@ const showGlobalHeader = computed(
 function switchTab(tab: BaseTab) {
   openActiveView(null)
   activeTab.value = tab
-}
-
-function openNavTab(pluginId: string, tabId: string) {
-  const entry = navTabs.value.find((n) => n.pluginId === pluginId && n.tab.id === tabId)
-  if (!entry) return
-  // 再次点击已打开的 navTab → 关闭
-  if (
-    activeView.value?.kind === 'navtab' &&
-    activeView.value.pluginId === pluginId &&
-    (activeView.value as any)._tabId === tabId
-  ) {
-    openActiveView(null)
-    return
-  }
-  openActiveView({
-    kind: 'navtab',
-    pluginId,
-    title: entry.tab.title,
-    component: entry.tab.component,
-    header: false,
-    _tabId: tabId,
-  } as any)
-}
-
-function isNavTabActive(pluginId: string, tabId: string): boolean {
-  const v = activeView.value
-  return v?.kind === 'navtab' && v.pluginId === pluginId && (v as any)._tabId === tabId
 }
 
 function tick() {
@@ -145,7 +121,7 @@ function onBeforeUnload() {
       <PluginsView v-else />
     </div>
 
-    <!-- 底部导航（内置 + 插件 navTab） -->
+    <!-- 底部导航（内置三项；插件导航由应用自己的运行面自持） -->
     <nav
       class="bottom-nav mobile-nav-safe flex-shrink-0 flex items-stretch border-t border-[var(--mobile-border)] bg-[var(--mobile-bg-secondary)]/95 backdrop-blur-xl"
     >
@@ -165,25 +141,6 @@ function onBeforeUnload() {
         <span class="truncate max-w-full">{{ tab.label }}</span>
         <span
           v-if="isBaseTabActive(tab.key)"
-          class="absolute bottom-0.5 left-1/2 -translate-x-1/2 w-4 h-0.5 rounded-full bg-[var(--mobile-accent)]"
-        ></span>
-      </button>
-      <button
-        v-for="entry in navTabs"
-        :key="entry.pluginId + entry.tab.id"
-        class="relative flex-1 min-w-0 flex flex-col items-center justify-center gap-1 pt-2.5 pb-2 text-[var(--font-size-sm)] transition-colors duration-200"
-        :class="isNavTabActive(entry.pluginId, entry.tab.id) ? 'text-[var(--mobile-accent)]' : 'text-[var(--mobile-text-muted)]'"
-        @click="openNavTab(entry.pluginId, entry.tab.id)"
-      >
-        <span v-if="isSvgIcon(entry.tab.icon)" class="w-6 h-6 flex items-center justify-center">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-6 h-6">
-            <path :d="entry.tab.icon" />
-          </svg>
-        </span>
-        <span v-else class="text-base leading-none">{{ entry.tab.icon || '🧩' }}</span>
-        <span class="truncate max-w-full">{{ entry.tab.title }}</span>
-        <span
-          v-if="isNavTabActive(entry.pluginId, entry.tab.id)"
           class="absolute bottom-0.5 left-1/2 -translate-x-1/2 w-4 h-0.5 rounded-full bg-[var(--mobile-accent)]"
         ></span>
       </button>

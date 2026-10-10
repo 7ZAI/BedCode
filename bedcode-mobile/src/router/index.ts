@@ -24,12 +24,6 @@ const router = createRouter({
       meta: { standAlone: true },
     },
     {
-      path: '/mobile/settings/notifications',
-      name: 'mobile-settings-notifications',
-      component: () => import('@/views/settings/NotificationSettingsView.vue'),
-      meta: { standAlone: true },
-    },
-    {
       path: '/mobile/settings/authentication',
       name: 'mobile-settings-authentication',
       component: () => import('@/views/settings/AuthenticationSettingsView.vue'),

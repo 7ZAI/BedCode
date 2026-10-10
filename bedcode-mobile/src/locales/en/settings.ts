@@ -1,11 +1,10 @@
 export default {
   settings: {
     title: 'Settings',
-    general: 'General',
-    dangerZone: 'Reset',
+    // 票 2026-10-10：`general` / `dangerZone` 随 `actions` 组一并退役（零 UI 调用；
+    // 危险区标题改用 `shell.settings.dangerZone`）
     groups: {
       connection: 'Connection',
-      notification: 'Notifications',
       security: 'Security',
       system: 'System',
     },
@@ -47,20 +46,16 @@ export default {
       fontNormal: 'Normal',
       fontLarge: 'Large',
       fontXLarge: 'Extra Large',
-      maxOpenTerminals: 'Max Open Terminals',
-      maxOpenTerminalsDesc: 'Max concurrently running terminals; excess sessions are dropped when syncing',
       generalSection: 'General',
       displaySection: 'Display',
-      terminalSection: 'Terminal',
     },
     connection: {
       title: 'Connection Settings',
-      subtitle: 'Auto reconnect, port and other connection options',
-      autoReconnect: 'Auto Reconnect',
-      keepAlive: 'Keep Alive',
-      defaultPort: 'Default Port',
-      reconnectSection: 'Reconnect',
-      networkSection: 'Network',
+      subtitle: 'Link encryption and transport security',
+      // Ticket 2026-10-10 C4: autoReconnect / keepAlive / defaultPort are business
+      // settings, now owned by the terminal-session app's settings page.
+      businessElsewhere:
+        'Auto reconnect, keep-alive and default port now live in the Terminal Session app settings.',
       linkCryptoSection: 'Link Encryption',
       linkCryptoMaster: 'Enable Link Encryption',
       linkEncryptHttp: 'Encrypt HTTP Payloads',
@@ -73,10 +68,9 @@ export default {
     },
     authentication: {
       title: 'Authentication Settings',
-      subtitle: 'Pairing method and biometric credentials',
-      preferredMethod: 'Preferred Auth Method',
-      pairingCode: 'Pairing Code',
-      biometric: 'Biometric',
+      subtitle: 'Biometric credential',
+      // Ticket 2026-10-10 C4: preferred auth method is a business setting, now owned
+      // by the terminal-session app.
       biometricSection: 'Biometric Credential',
       biometricDesc: 'The key is stored in system secure hardware and can only sign after fingerprint/face authentication. The private key never leaves the device.',
       bind: 'Bind Biometric Auth',
@@ -97,19 +91,10 @@ export default {
       unbindSuccess: 'Biometric credential unbound',
       unbindFailed: 'Unbind failed, please retry',
       notConnected: 'Not connected, cannot bind',
-      degradeHint: 'Falls back to pairing code when not bound',
     },
-    notification: {
-      title: 'Notification Settings',
-      subtitle: 'Notification timing, vibration and sounds',
-      notifyOnWaiting: 'Notify on Waiting Input',
-      notifyOnConnection: 'Notify on Connection Change',
-      vibrate: 'Vibrate',
-      notifyInBackground: 'Notify in Background',
-      soundOnTaskComplete: 'Sound on Task Complete',
-      pushSection: 'Push',
-      feedbackSection: 'Feedback',
-    },
+    // Ticket 2026-10-10 C4: the whole `notification` group is retired — every entry is a
+    // business setting, now owned by the terminal-session app; the
+    // `mobile-settings-notifications` route retires with it.
     egress: {
       title: 'Network Access',
       subtitle: 'View and revoke external network grants',
@@ -154,12 +139,10 @@ export default {
       downloadUpdate: 'Update Now',
       currentVersion: 'Current Version',
     },
-    actions: {
-      resetSettings: 'Reset Settings',
-      resetSettingsConfirm: 'Are you sure you want to reset all settings to defaults?',
-      clearAllData: 'Clear All Data',
-      clearDataConfirm: 'Are you sure you want to clear all data? This includes preset tasks, connection history, paired devices, etc. This action cannot be undone.',
-    },
+    // 票 2026-10-10：`actions` 组整组退役。两个 action 已按归属分流：
+    // 「重置设置」→ wasm-apps/terminal-session/src/settings/i18n.ts（重置业务设置项）；
+    // 「清除所有数据」→ src/locales/*/shell.ts 的 shell.settings.clearAllData*（设备级擦除，
+    // 留宿主危险区）。留在宿主会造成同一串文案两份真源，改一处漏一处。
     browser: {
       confirmOpen: 'Are you sure you want to open this link in a browser?',
     },

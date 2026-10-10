@@ -31,7 +31,7 @@ function disposable(counters: Record<string, number>, key: string) {
 }
 
 function makeFakeContext() {
-  const counters: Record<string, number> = { route: 0, capsule: 0, toolbox: 0, toolbar: 0 }
+  const counters: Record<string, number> = { route: 0, capsule: 0 }
   const calls = { openPage: [] as string[] }
   const ctx = {
     i18n: {
@@ -41,8 +41,6 @@ function makeFakeContext() {
     ui: {
       registerRoute: vi.fn(() => disposable(counters, 'route')),
       registerCapsuleItem: vi.fn(() => disposable(counters, 'capsule')),
-      registerToolboxPage: vi.fn(() => disposable(counters, 'toolbox')),
-      registerTerminalToolbarItem: vi.fn(() => disposable(counters, 'toolbar')),
       openPage: vi.fn((id: string) => {
         calls.openPage.push(id)
       }),
@@ -121,6 +119,5 @@ describe('C-T4 停用回收', () => {
 
     expect(fake.counters.route).toBe(1)
     expect(fake.counters.capsule).toBe(1)
-    expect(fake.counters.toolbox).toBe(1)
   })
 })

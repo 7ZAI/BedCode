@@ -9,6 +9,58 @@
 
 ## [未发布]
 
+#### 移动端：壳只按 surface 形态加载应用——旧嵌入扩展点整面退役（ADR 0046）
+
+- **壳只解析一种运行面形态**：`pluginAppSource.resolveSurface` 删掉四级回退链
+  （`terminalView → toolbox → navTab → route`），只读 `ShellRegistry.contributions.surface`。
+  这条回退链正是「壳用旧宿主的插件形式加载页面」的实际代码；留着它还等于「四个独立权限位里
+  最弱的那个也能打开应用主面」。未注册 surface 的应用改为显示「该应用尚未提供运行面」空态并
+  写明原因，不再静默找替代面
+- **四个旧嵌入扩展点整面退役**（ADR 0046 D2）：`registerToolboxPage` / `registerNavTab` /
+  `registerTerminalToolbarItem` / `registerTerminalView`，连同描述符类型、宿主注册表存储面、
+  宿主 UI 组件（`PluginNavTabHost` / `PluginSettingsHost` / `PluginTerminalBar`）、dev-shell
+  对应面与 SDK 模板一并删除。四者在运行期**本就全是死代码**——逐个核实零活消费者
+  （其中工具栏组件的宿主注入从未 provide，`v-if` 恒假）。
+  `registerRoute` / `openPage` / `goBack` / `onBackPressed` **保留**：应用内子页仍需跳转与返回
+- **退役权限位加载即抛**（§5.1.3 形态③）：`ui:toolbox` / `ui:navtab` / `ui:input` 从 SDK 白名单
+  与 API 映射表移除，并登记进新增的 `RETIRED_PERMISSIONS` 表 + `check_retired_permissions()`；
+  `PluginLoader::load_all` 对声明了它们的 manifest **直接拒载**，报错指名权限位与迁移出路；
+  manifest-gen 幂等剔除退役位与退役的 `contributes.views` / `navTab` / `terminal.toolbarItems`。
+  理由：不在白名单的权限位会被 `grant_permissions` **静默丢弃**，旧插件会「加载成功但能力
+  凭空消失」，把排查方向带偏
+- **保留显性抛错桩让断链可见**：四个退役方法仍留在 `context.ui` 上，调用即抛错并指名扩展点 +
+  指向 `registerSurface`；但**不进 `UIRegistry` 类型**——类型面必须让旧调用点编译期就红
+- **业务设置按归属切分**（ADR 0046 D4）：宿主设置子页只留平台项（链路加密 / 生物凭证 / 出站授权 /
+  外观 / 关于），业务设置（自动重连 / 保持连接 / 默认端口 / 通知三开关 / 震动 / 声音 / 终端上限 /
+  首选认证）归 terminal-session 应用内设置页。`NotificationSettingsView` 与
+  `mobile-settings-notifications` 路由整页退役——每一行都是业务项
+- **业务设置真源下沉出宿主**（修正 AGENTS.md §5.1 **B3** 越线形态）：「有哪些设置项 / 默认值 /
+  取值范围」是产品事实，现由应用自持（`wasm-apps/terminal-session/src/settings/settingsModel.ts`）；
+  宿主只提供不绑定任何业务形状的通用 KV 通道（`readAllSettings()` / `writeSetting()`）。
+  键名**刻意**沿用 `MobileSettings` 字段名，使宿主消费者经写穿路径仍读到真值
+- **文件浏览器留宿主作公共组件且恢复可达**：`App.vue` `provide('bedcodeHostComponents',
+  { FileExplorer, FileSidebar })`，激活终端域早已写好却一直无人 provide 的两个挂载位——
+  文件浏览器因此获得一条不占宿主路由的入口，长期恒假的 `v-if` 也转为生效
+- **删除 7 个宿主死文件**：组件 `DeviceCard` / `InputBar` / `PluginIcon` / `RepeatableToggle` /
+  `SessionListItem` 与 composable `useAndroidFeatures` / `useRunTime`（各自在 `wasm-apps` 下
+  有自持副本）；`PluginIcon` 的测试随之删除
+- **补回票 2026-10-09 阶段 B 造成的回归**——该票点名两个丢失 action 并要求都补回，
+  二者按设计落在**不同归属**：
+  - 「重置设置」重置的是**业务设置项**，落在 terminal-session 应用设置页（ADR 0046 D4）
+  - 「清除所有数据」是**设备级擦除**，刻意留在宿主危险区
+    （`src/composables/useClearAllData.ts`）。其清理对象含设备入场凭据（认证中心托管）
+    与宿主连接态；按 §8 凭据零过境 + ADR 0033，插件不得持有或擦除凭据，
+    放进应用设置页属 §5.1 越线而非归属选择。执行序固定为
+    「先断连 + 停前台服务 → 再清本地 → 最后 reload」；**断连失败不阻断清理**
+    （用户目标是清数据，中断只会让凭据留在盘上）但如实标记 `disconnected: false`；
+    **清理失败不 reload、不吞错**，以 `completed: false` + 原因返回并提示——
+    「清了一半」的设备绝不能被呈现为已清干净
+- **防回接锁扩展**——`retiredHostUIRetirementLocks.test.ts` 新增 R4（退役扩展点与其宿主组件
+  不得回接；`resolveSurface` 不得有回退链）、R4b（已下沉设置路由不得回接）、R5（已删孤儿不得
+  回接且文件确已不在盘）
+- 移动端插件契约独立（ADR 0018）：本次退役**不波及**桌面端，也未触发 wasmtime 版本变更
+  （ADR 0019）。ADR：`docs/adr/0046-mobile-shell-surface-only-and-retired-embed-extension-points.md`
+
 #### 移动端：宿主前端迁移进 wasm-app——壳为默认入口、三应用独立页面、旧前端机制落地新界面
 
 - **默认入口改为宿主壳（`/mobile/shell`）**：`/` 重定向到壳；旧四页宿主（`MobileSwipeContainer`）

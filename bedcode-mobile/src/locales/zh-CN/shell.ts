@@ -116,8 +116,14 @@ export default {
       authenticationHint: '配对与凭据',
       egress: '出站策略',
       egressHint: '安全出口档位',
-      notifications: '通知',
       about: '关于 WasmApp',
+      // 票 2026-10-10：通知入口随业务设置下沉 terminal-session 退役；
+      // 「擦除本机数据」是设备生命周期动作（清理对象含入场凭据与宿主连接态），
+      // 按 §8 凭据零过境留壳，见 src/composables/useClearAllData.ts。
+      dangerZone: '危险操作',
+      clearAllData: '清除所有数据',
+      clearAllDataHint: '断开连接并清空预设任务、连接历史、配对设备、会话配置与本机缓存，无法撤销。',
+      clearAllDataFailed: '清除未完成，部分数据可能仍在，请重试或重启应用。',
       appSettings: '应用设置',
       runtime: 'WasmApp Mobile {version}',
     },

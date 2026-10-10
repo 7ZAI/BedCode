@@ -132,41 +132,10 @@ export interface LifecycleContribution {
 }
 
 // ==================== UI 描述符 ====================
-
-/** 工具箱页面描述符 */
-export interface ToolboxPageDescriptor {
-  id: string
-  title: string
-  /** 入口图标：emoji 或 SVG path d 字符串（Heroicons outline 风格，viewBox=0 0 24 24），缺省 🧩 */
-  icon?: string
-  component: any
-  /** 可选：插件自定义入口卡片组件（宿主 ToolboxView 在入口列表内联渲染，
-   *  需自带实时状态角标；缺省时宿主用统一卡片）。宿主经 PluginViewHost provide pluginContext。 */
-  entry?: any
-}
-
-/** 终端主视图描述符（票 15：终端 UI 域全部在插件内实现；宿主 /mobile/terminal/:id 壳渲染本组件） */
-export interface TerminalViewContribution {
-  /** 主视图组件；宿主壳可透传 props.sessionId（当前会话 id），缺省时组件自取宿主活动会话 */
-  component: any
-}
-
-/** 导航 Tab 描述符 */
-export interface NavTabDescriptor {
-  id: string
-  title: string
-  icon: string
-  component: any
-  order: number
-}
-
-/** 终端工具栏项描述符 */
-export interface TerminalToolbarItemDescriptor {
-  id: string
-  label: string
-  icon?: string
-  onClick?: () => void
-}
+//
+// 票 2026-10-10 批次 C2：`ToolboxPageDescriptor` / `TerminalViewContribution` /
+// `NavTabDescriptor` / `TerminalToolbarItemDescriptor` 及其对应注册方法已整面退役
+// （宿主壳只认 `registerSurface` 一种运行面形态）。保留位仅供旧版本插件对照报错。
 
 /** 插件路由描述符：整体路由由插件决定（openPage 跳转）；id 即路径段，可含 '/' 支持深路径 */
 export interface PluginRouteDescriptor {
@@ -343,8 +312,13 @@ export interface MobileHostApi {
   openTerminalStream(sessionId: string, onBytes: (bytes: Uint8Array) => void): Promise<TerminalStreamHandle>
   /** 当前 App 是否深色（响应式 ref；终端主题解析依据） */
   isDark: import('vue').Ref<boolean>
-  /** 移动端本地设置只读投影（vibrate / maxOpenTerminals 等；由宿主设置页写入） */
+  /** 移动端本地设置只读投影（vibrate / maxOpenTerminals 等；平台项由宿主设置页写入，
+   *  业务项由插件设置面经下方 KV 桥写入后反映到此） */
   mobileSettings: import('vue').Ref<Record<string, unknown>>
+  /** 读全部设置键值（扁平表 `{ key: value }`；通用机制，插件自持哪些键是自己的设置项） */
+  readAllSettings(): Promise<Record<string, string>>
+  /** 写单个设置键（通用机制面：命中宿主已知键写穿其响应式单例，未命中直落 KV） */
+  writeSetting(key: string, value: string): Promise<void>
   /** 会话/连接生命周期事件（断线 / 会话状态 / 停止 / 移除）；Disposable.dispose = 取消订阅 */
   onSessionEvent(handler: (event: MobileHostSessionEvent) => void): Disposable
   // ── 连接引擎面（票 2026-10-09：宿主页下沉 terminal-session，引擎事实与动作）──
@@ -528,16 +502,18 @@ export interface PluginDialogHandle {
   update(options: Partial<PluginDialogOptions>): void
 }
 
-/** UI 注册表 */
+/**
+ * UI 注册表
+ *
+ * 票 2026-10-10 批次 C2 整面退役：`registerToolboxPage` / `registerNavTab` /
+ * `registerTerminalToolbarItem` / `registerTerminalView` 及其描述符类型已删除。
+ * 应用在宿主壳内**只有一种运行面形态**——`registerSurface`；应用内页签与子页走本表
+ * 保留的 `registerRoute` + `openPage`，不占宿主导航形态。旧插件若仍调用已退役方法，
+ * 宿主在调用点显式抛错（fail-visible），不做「查不到就静默忽略」。
+ */
 export interface UIRegistry {
-  registerToolboxPage(page: ToolboxPageDescriptor): Disposable
-  registerNavTab(tab: NavTabDescriptor): Disposable
-  registerTerminalToolbarItem(item: TerminalToolbarItemDescriptor): Disposable
-  /** 注册终端主视图（票 15：终端 UI 全部在插件内实现，宿主 /mobile/terminal/:id 壳只提供挂载点；
-   *  单实例语义——终端 app 只有一个运行面注册者） */
-  registerTerminalView(view: TerminalViewContribution): Disposable
-  /** 宿主壳运行面（新设计界面 /mobile/shell 的应用运行屏；appId = 插件 id 由宿主代填）
-   *  与旧嵌入面（toolbox/navTab/terminalView）互斥：注册后壳内优先渲染本运行面 */
+  /** 宿主壳运行面（/mobile/shell 的应用运行屏；appId = 插件 id 由宿主代填）。
+   *  应用自持整个运行面——含底部导航与页签，壳不向其内加壳 chrome。 */
   registerSurface(surface: ShellSurfaceContribution): Disposable
   /** 宿主壳首页快捷卡片（应用自持内容；壳 Home 屏渲染，appId 由宿主代填） */
   registerSlot(slot: ShellSlotContribution): Disposable

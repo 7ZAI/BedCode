@@ -8,9 +8,7 @@
   "main": "index.js",
   "pluginType": "wasm",
   "rustLibrary": "bedcode_plugin_ai_chatbox",
-  "preauthDirs": [
-    "${downloads}/ai-chatbox"
-  ],
+  "preauthDirs": ["${downloads}/ai-chatbox"],
   "preauthUrls": [
     "https://api.deepseek.com/*",
     "https://dashscope.aliyuncs.com/*",
@@ -54,7 +52,6 @@
         "title": "Delete Conversation"
       }
     ],
-    "views": [],
     "configuration": {
       "title": "AI Chatbox 设置",
       "properties": {

@@ -16,9 +16,12 @@
 //!
 //! 合并后的正向面（反向断言钉住，防「顺手清光」）：
 //! - `wasm-apps/terminal-session/`：权限并集（auth/bus/session:read/storage/
-//!   terminal:output/ui:input/ui:toolbox/ws:client）+ 视图 id `terminal-session.toolbox`
-//!   + 工具栏 id `terminal-session.task-toolbar` + 任务域基址
+//!   terminal:output/ws:client）+ 任务域基址 + 任务路由
 //! - 宿主 fs_auth 白名单条目换为 `com.bedcode.terminal-session`
+//!
+//! 票 2026-10-10 批次 C2 的退役追加：`ui:toolbox` / `ui:navtab` / `ui:input` 三个权限位
+//! 与 `registerToolboxPage` / `registerTerminalToolbarItem` 两处调用**从正向面转为退役面**
+//! ——原先钉住它们「必须在场」的断言已反转为「不得再出现」，退役不可逆。
 
 use std::path::{Path, PathBuf};
 
@@ -185,11 +188,8 @@ fn merged_task_domain_and_plugin_retirement_stay() {
         "\"session:read\"",
         "\"storage\"",
         "\"terminal:output\"",
-        "\"ui:input\"",
-        "\"ui:toolbox\"",
+        "\"ui:route\"",
         "\"ws:client\"",
-        "\"terminal-session.toolbox\"",
-        "\"terminal-session.task-toolbar\"",
     ] {
         assert!(
             manifest.contains(needle),
@@ -197,17 +197,32 @@ fn merged_task_domain_and_plugin_retirement_stay() {
         );
     }
 
-    let activate = std::fs::read_to_string(repo.join("wasm-apps/terminal-session/src/task/activate.ts"))
-        .expect("读取任务域 activate.ts 失败");
-    for needle in [
-        "registerToolboxPage",
-        "registerTerminalToolbarItem",
+    // 票 2026-10-10 C2 fail-visible③：退役权限位与退役扩展点不得再出现在 manifest
+    // （出现即会被宿主装载期闸门直接拒载——这里提前钉死，别等运行时才发现）
+    for retired in [
+        "\"ui:toolbox\"",
+        "\"ui:navtab\"",
+        "\"ui:input\"",
         "terminal-session.toolbox",
         "terminal-session.task-toolbar",
     ] {
         assert!(
-            activate.contains(needle),
-            "任务域 activate.ts 缺失 `{needle}`（任务域并入后必须仍在场）"
+            !manifest.contains(retired),
+            "terminal-session manifest 仍带退役面 `{retired}`（票 2026-10-10 C2 整面退役）"
+        );
+    }
+
+    let activate = std::fs::read_to_string(repo.join("wasm-apps/terminal-session/src/task/activate.ts"))
+        .expect("读取任务域 activate.ts 失败");
+    for retired in [
+        "registerToolboxPage",
+        "registerTerminalToolbarItem",
+        "registerTerminalView",
+        "registerNavTab",
+    ] {
+        assert!(
+            !activate.contains(retired),
+            "任务域 activate.ts 仍调用退役扩展点 `{retired}`（票 2026-10-10 C2 整面退役）"
         );
     }
 

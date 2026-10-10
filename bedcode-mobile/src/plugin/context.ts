@@ -21,11 +21,7 @@ import type {
   NotificationAPI,
   StatusAPI,
   SystemAPI,
-  ToolboxPageDescriptor,
-  NavTabDescriptor,
-  TerminalToolbarItemDescriptor,
   PluginRouteDescriptor,
-  TerminalViewContribution,
   PluginDialogOptions,
   PluginDialogHandle,
   ShellSurfaceContribution,
@@ -151,35 +147,12 @@ export function createPluginContext(info: PluginInfo): PluginContext {
   }
 
   // ==================== UIRegistry ====================
+  //
+  // 票 2026-10-10 批次 C2：`registerToolboxPage` / `registerNavTab` /
+  // `registerTerminalToolbarItem` / `registerTerminalView` 四个旧嵌入扩展点整面退役
+  // （宿主壳只认 registerSurface 一种运行面形态）。退役清单的防回接锁见
+  // src/__tests__/shell/retiredHostUIRetirementLocks.test.ts（R4）。
   const ui: UIRegistry = {
-    registerToolboxPage(page: ToolboxPageDescriptor): Disposable {
-      requirePermission('ui.registerToolboxPage')
-      const registry = getPluginRegistry()
-      const disposable = registry.registerToolboxPage(info.id, page)
-      disposables.push(disposable)
-      return disposable
-    },
-    registerNavTab(tab: NavTabDescriptor): Disposable {
-      requirePermission('ui.registerNavTab')
-      const registry = getPluginRegistry()
-      const disposable = registry.registerNavTab(info.id, tab)
-      disposables.push(disposable)
-      return disposable
-    },
-    registerTerminalToolbarItem(item: TerminalToolbarItemDescriptor): Disposable {
-      requirePermission('ui.registerTerminalToolbarItem')
-      const registry = getPluginRegistry()
-      const disposable = registry.registerTerminalToolbarItem(info.id, item)
-      disposables.push(disposable)
-      return disposable
-    },
-    registerTerminalView(view: TerminalViewContribution): Disposable {
-      requirePermission('ui.registerTerminalView')
-      const registry = getPluginRegistry()
-      const disposable = registry.registerTerminalView(info.id, view)
-      disposables.push(disposable)
-      return disposable
-    },
     registerSurface(surface: ShellSurfaceContribution): Disposable {
       // 宿主壳运行面：应用自持 UI 的挂载位，无特权动作——不做 requirePermission
       // 快速失败（真源仲裁仍在 Rust host 原语层；本面不触发任何宿主能力）。
@@ -253,6 +226,25 @@ export function createPluginContext(info: PluginInfo): PluginContext {
       return openGlobalDialog({ ...options, pluginContext: context! })
     },
   }
+
+  // 已退役扩展点的显性抛错桩（§5.1.3 fail-visible 形态①：旧读路径不得静默降级）
+  //
+  // 为什么保留同名桩而不是直接删干净：旧插件调用时若拿到 undefined，
+  // 崩点会落在插件自己的调用处，报错只说「不是函数」，开发者会误判成自己写错。
+  // 这里当场抛出并指名扩展点 + 迁移出路，让断链可见、可定位。
+  // 桩不进 UIRegistry 类型——类型面必须让旧调用点**编译期**就红。
+  const retiredUi = (api: string): never => {
+    throw new Error(
+      `[plugin] ui.${api} 已于票 2026-10-10 整面退役：宿主壳只认 ui.registerSurface 一种运行面形态。` +
+        `请改用 registerSurface（应用自持整个运行面，含底部导航与页签），应用内子页用 registerRoute + openPage。`,
+    )
+  }
+  Object.assign(ui, {
+    registerToolboxPage: () => retiredUi('registerToolboxPage'),
+    registerNavTab: () => retiredUi('registerNavTab'),
+    registerTerminalToolbarItem: () => retiredUi('registerTerminalToolbarItem'),
+    registerTerminalView: () => retiredUi('registerTerminalView'),
+  })
 
   // ==================== EventAPI ====================
   const events: EventAPI = {

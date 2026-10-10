@@ -1,11 +1,10 @@
 export default {
   settings: {
     title: '设置',
-    general: '通用',
-    dangerZone: '重置',
+    // 票 2026-10-10：`general` / `dangerZone` 随 `actions` 组一并退役（零 UI 调用；
+    // 危险区标题改用 `shell.settings.dangerZone`）
     groups: {
       connection: '连接',
-      notification: '通知',
       security: '安全',
       system: '系统',
     },
@@ -47,20 +46,17 @@ export default {
       fontNormal: '正常',
       fontLarge: '大',
       fontXLarge: '超大',
-      maxOpenTerminals: '最大可打开终端数量',
-      maxOpenTerminalsDesc: '同时运行的终端会话上限；桌面端同步时超出部分丢弃',
       generalSection: '通用',
       displaySection: '显示',
-      terminalSection: '终端',
+      // 票 2026-10-10 C4：terminalSection / maxOpenTerminals 随「终端上限」这一业务项
+      // 下沉 terminal-session，外观页只留平台项。
     },
     connection: {
       title: '连接设置',
-      subtitle: '自动重连、端口等连接参数',
-      autoReconnect: '自动重连',
-      keepAlive: '保持连接',
-      defaultPort: '默认端口',
-      reconnectSection: '重连',
-      networkSection: '网络',
+      subtitle: '链路加密与传输安全',
+      // 票 2026-10-10 C4：自动重连 / 保持连接 / 默认端口是业务项，已下沉
+      // terminal-session 的应用内设置页；此处只留平台项（链路加密）。
+      businessElsewhere: '自动重连、保持连接与默认端口等连接设置已移至「终端会话」应用的设置页。',
       linkCryptoSection: '链路加密',
       linkCryptoMaster: '启用链路加密',
       linkEncryptHttp: '加密 HTTP 载荷',
@@ -72,10 +68,8 @@ export default {
     },
     authentication: {
       title: '认证设置',
-      subtitle: '配对方式与生物凭证',
-      preferredMethod: '优先认证方式',
-      pairingCode: '配对码',
-      biometric: '生物认证',
+      subtitle: '生物凭证绑定',
+      // 票 2026-10-10 C4：首选认证方式是业务项，已下沉 terminal-session。
       biometricSection: '生物认证密钥',
       biometricDesc: '密钥存储于系统安全硬件，仅通过指纹/人脸认证后可签名，私钥永不出设备。',
       bind: '绑定生物认证',
@@ -96,19 +90,9 @@ export default {
       unbindSuccess: '生物认证已解绑',
       unbindFailed: '解绑失败，请重试',
       notConnected: '未连接，无法绑定',
-      degradeHint: '未绑定时将自动使用配对码认证',
     },
-    notification: {
-      title: '通知设置',
-      subtitle: '通知时机、振动与提示音',
-      notifyOnWaiting: '等待输入时通知',
-      notifyOnConnection: '连接状态变化通知',
-      vibrate: '振动反馈',
-      notifyInBackground: '后台运行时通知',
-      soundOnTaskComplete: '任务完成提示音',
-      pushSection: '通知',
-      feedbackSection: '反馈',
-    },
+    // 票 2026-10-10 C4：notification 整组退役——通知三开关 / 振动 / 提示音皆业务项，
+    // 已下沉 terminal-session 的应用内设置页，`mobile-settings-notifications` 路由同批退役。
     egress: {
       title: '网络访问授权',
       subtitle: '查看与撤销外网访问授权',
@@ -153,12 +137,10 @@ export default {
       downloadUpdate: '立即更新',
       currentVersion: '当前版本',
     },
-    actions: {
-      resetSettings: '重置设置',
-      resetSettingsConfirm: '确定要重置所有设置为默认值吗？',
-      clearAllData: '清除所有数据',
-      clearDataConfirm: '确定要清除所有数据吗？包括预设任务、连接历史、配对设备等，此操作无法撤销。',
-    },
+    // 票 2026-10-10：`actions` 组整组退役。两个 action 已按归属分流：
+    // 「重置设置」→ wasm-apps/terminal-session/src/settings/i18n.ts（重置业务设置项）；
+    // 「清除所有数据」→ src/locales/*/shell.ts 的 shell.settings.clearAllData*（设备级擦除，
+    // 留宿主危险区）。留在宿主会造成同一串文案两份真源，改一处漏一处。
     browser: {
       confirmOpen: '确定要在浏览器中打开此链接吗？',
     },

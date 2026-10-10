@@ -19,6 +19,14 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
 const mockInvoke = vi.fn()
 
+// 挡掉日志转发：frontendLogger 在 dev 分支起 400ms 攒批定时器，到点调
+// invoke('report_frontend_log')。本文件每个用例都 resetModules，那只定时器随旧模块
+// 实例一起被遗弃却仍在跑，会在后续用例的 mockInvoke 上留下与被测契约无关的调用，
+// 让「未扫描时不 invoke」这类全局断言偶发红。日志不是本文件的被测对象，直接替身挡掉。
+vi.mock('@/utils/frontendLogger', () => ({
+  logger: { trace: vi.fn(), debug: vi.fn(), log: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}))
+
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: (...args: unknown[]) => mockInvoke(...args),
 }))

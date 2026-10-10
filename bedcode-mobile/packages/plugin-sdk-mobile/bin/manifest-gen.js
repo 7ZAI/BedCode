@@ -10,9 +10,11 @@
  *
  * 合并策略（保守，避免误删导致运行时拒绝）：
  * - permissions：派生结果与手工声明取并集
- * - contributes.views/navTab/terminal.toolbarItems/settings/commands：
+ * - contributes.routes/settings/commands：
  *   扫描到注册调用时以扫描结果为准（按 id 从旧条目继承无法静态求值的字段，
  *   如 i18n.t() 动态 title）；未扫描到时保留原值
+ * - contributes.views/navTab/terminal.toolbarItems：票 2026-10-10 批次 C2 起不再派生
+ *   （对应扩展点整面退役）；存量字段按「退役残留」处理，由 manifest 清理落掉
  * - configuration/lifecycle/icon 等手工字段永不覆盖
  */
 
@@ -36,13 +38,27 @@ const RUST_PERMISSION_RULES = [
   { re: /\bfs_write\b/, perm: 'fs:write' },
 ]
 
-/** UI 注册调用 → 权限 */
+/**
+ * UI 注册调用 → 权限
+ *
+ * 票 2026-10-10 批次 C2：`registerToolboxPage` / `registerNavTab` /
+ * `registerTerminalToolbarItem` / `registerTerminalView` 四个旧嵌入扩展点已随宿主壳
+ * 改纯 surface 形态整面退役，对应权限位（ui:toolbox / ui:navtab / ui:input）同时失效。
+ * 本生成器不再为它们产出 `contributes` 与权限位——继续产出等于让 manifest 声明
+ * 退役权限，装载期会被 fail-visible 闸门直接拒绝（见 SDK permission::RETIRED_PERMISSIONS）。
+ */
 const REGISTER_PERMISSIONS = {
-  registerToolboxPage: 'ui:toolbox',
-  registerNavTab: 'ui:navtab',
   registerSettingsSection: 'ui:settings',
   registerRoute: 'ui:route',
 }
+
+/**
+ * 已退役权限位（票 2026-10-10 批次 C2）
+ *
+ * 与 SDK `permission::RETIRED_PERMISSIONS` 逐字一致；生成期剔除，宿主装载期拒载，
+ * 两道闸门都认这张表（见 SDK permission.rs 的同名常量与装载期校验）。
+ */
+const RETIRED_PERMISSIONS = ['ui:toolbox', 'ui:navtab', 'ui:input']
 
 // ==================== 文件收集 ====================
 
@@ -217,39 +233,8 @@ export function generateManifest(cwd, { check = false } = {}) {
     .map((f) => readFileSync(f, 'utf-8'))
     .join('\n')
 
-  const toolboxPages = findRegisterCalls(frontendSource, 'registerToolboxPage')
-  const navTabs = findRegisterCalls(frontendSource, 'registerNavTab')
-  const toolbarItems = findRegisterCalls(frontendSource, 'registerTerminalToolbarItem')
   const settingsSections = findRegisterCalls(frontendSource, 'registerSettingsSection')
 
-  if (toolboxPages.length > 0) {
-    const old = indexById(contributes.views)
-    contributes.views = toolboxPages.map((s) =>
-      mergeEntry(s, old.get(s.id), { type: 'toolbox' })
-    )
-    permissions.add(REGISTER_PERMISSIONS.registerToolboxPage)
-    report.push(`contributes.views ← ${contributes.views.map((v) => v.id).join(', ')}`)
-  }
-  if (navTabs.length > 0) {
-    const old = contributes.navTab && contributes.navTab.id ? contributes.navTab : null
-    contributes.navTab = mergeEntry(navTabs[0], old && old.id === navTabs[0].id ? old : null)
-    permissions.add(REGISTER_PERMISSIONS.registerNavTab)
-    report.push(`contributes.navTab ← ${contributes.navTab.id}`)
-  }
-  if (toolbarItems.length > 0) {
-    const old = indexById(contributes.terminal?.toolbarItems)
-    const items = toolbarItems.map((s) => {
-      const merged = mergeEntry(s, old.get(s.id))
-      // 前端用 label 字段，manifest 用 title
-      if (merged.label !== undefined) {
-        merged.title = merged.title ?? merged.label
-        delete merged.label
-      }
-      return merged
-    })
-    contributes.terminal = { ...(contributes.terminal || {}), toolbarItems: items }
-    report.push(`contributes.terminal.toolbarItems ← ${items.map((v) => v.id).join(', ')}`)
-  }
   if (settingsSections.length > 0) {
     const old = contributes.settings && contributes.settings.id ? contributes.settings : null
     contributes.settings = mergeEntry(
@@ -294,6 +279,29 @@ export function generateManifest(cwd, { check = false } = {}) {
         mergeEntry({ id }, old.get(id), { id, title: id })
       )
       report.push(`contributes.commands ← ${commandIds.length} 个`)
+    }
+  }
+
+  // ---------- 退役面清理（票 2026-10-10 批次 C2） ----------
+  //
+  // 上面不再派生 contributes.views / navTab / terminal.toolbarItems，但存量 manifest
+  // 里还留着它们；按上面的「未扫描到则保留」策略会被原样保留——那等于每次重新生成
+  // 都把退役面原样带回，且 permissions 里的退役位会让宿主装载期直接拒载。
+  // 这里显式剔除：退役是不可逆的，生成器必须幂等地把它落干净。
+  for (const key of ['views', 'navTab']) {
+    if (contributes[key] !== undefined) {
+      delete contributes[key]
+      report.push(`contributes.${key} - 退役面（票 2026-10-10 C2）已剔除`)
+    }
+  }
+  if (contributes.terminal?.toolbarItems) {
+    delete contributes.terminal.toolbarItems
+    report.push('contributes.terminal.toolbarItems - 退役面（票 2026-10-10 C2）已剔除')
+    if (Object.keys(contributes.terminal).length === 0) delete contributes.terminal
+  }
+  for (const perm of RETIRED_PERMISSIONS) {
+    if (permissions.delete(perm)) {
+      report.push(`permissions - ${perm}（票 2026-10-10 C2 退役位）已剔除`)
     }
   }
 

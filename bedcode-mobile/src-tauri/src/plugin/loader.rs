@@ -163,6 +163,21 @@ impl PluginLoader {
                         continue;
                     }
 
+                    // ==================== 退役权限位闸门 ====================
+                    // 票 2026-10-10 批次 C2：宿主壳改纯 surface 形态后，`ui:toolbox` /
+                    // `ui:navtab` / `ui:input` 三个权限位随对应扩展点整面退役。
+                    // 这里**显式拒绝装载**而不是让它落进 grant 的静默丢弃分支——
+                    // 否则旧插件会「加载成功但功能凭空消失」，排查方向被带偏
+                    // （§5.1.3 fail-visible 形态③）。
+                    if let Err(e) = bedcode_plugin_api_mobile::permission::check_retired_permissions(
+                        &plugin_id,
+                        &manifest.permissions,
+                    ) {
+                        tracing::error!("[PluginLoader] Rejecting plugin {:?}: {}", plugin_id, e);
+                        seen_ids.remove(&plugin_id);
+                        continue;
+                    }
+
                     let source = Self::detect_source(&path);
 
                     // WASM 插件：编译 + 实例化（组件路径；core module 在此编译失败，

@@ -35,6 +35,7 @@ import { open as dialogOpen } from '@tauri-apps/plugin-dialog'
 import * as cmds from '@/plugin/commands'
 import { pluginLoader } from '@/plugin/loader'
 import { getPluginRegistry } from '@/plugin/registry'
+import { getShellRegistry } from '@/shell/registry'
 import type { PluginInfo, PluginState } from '@/plugin/types'
 import { createPluginAppSource, PLUGIN_APP_SOURCE_ID, toShellApp } from '@/shell/adapters/pluginAppSource'
 
@@ -59,10 +60,12 @@ function info(state: PluginState, patch: Partial<PluginInfo> = {}): PluginInfo {
 }
 
 const registry = getPluginRegistry()
+const shellRegistry = getShellRegistry()
 
 beforeEach(() => {
   vi.clearAllMocks()
   registry.clearPlugin('com.test.app')
+  shellRegistry.clearApp('com.test.app')
 })
 
 describe('插件状态 → 壳运行态', () => {
@@ -118,21 +121,33 @@ describe('权限映射', () => {
   })
 })
 
-describe('运行面解析', () => {
-  it('should_returnUndefined_when_pluginRegisteredNoUi', () => {
+describe('运行面解析（票 2026-10-10 C1：只认 registerSurface）', () => {
+  it('should_returnUndefined_when_appRegisteredNoSurface', () => {
     const surface = createPluginAppSource()
     expect(surface.resolveSurface?.('com.test.app')).toBeUndefined()
   })
 
-  it('should_returnComponent_when_pluginRegisteredToolboxPage', () => {
-    registry.registerToolboxPage('com.test.app', {
-      id: 'page',
-      title: '页面',
-      component: defineComponent({ name: 'ToolboxPage', setup: () => () => h('div') }),
-    })
+  it('should_returnSurfaceComponent_when_appRegisteredSurface', () => {
+    const component = defineComponent({ name: 'AppSurface', setup: () => () => h('div') })
+    // 生产顺序：list() 先把应用写进壳注册表，激活后才 registerSurface
+    shellRegistry.upsertApps(PLUGIN_APP_SOURCE_ID, [toShellApp(info({ state: 'Activated' }))])
+    shellRegistry.registerSurface('com.test.app', { component })
 
-    const surface = createPluginAppSource().resolveSurface?.('com.test.app')
-    expect(surface).toBeDefined()
+    expect(createPluginAppSource().resolveSurface?.('com.test.app')).toBe(component)
+  })
+
+  it('should_returnUndefined_when_appNotInRegistryAtAll', () => {
+    // 反例面：应用从未被 list() 写入壳注册表（未安装 / 已卸载）时不得凭空解析出运行面
+    expect(createPluginAppSource().resolveSurface?.('com.not.installed')).toBeUndefined()
+  })
+
+  it('should_notRequireSurface_when_appRegisteredOnlyLegacyUi', () => {
+    // 反例面（退役锁）：旧嵌入扩展点（工具箱页 / 终端主视图）的注册面已整面退役，
+    // 应用即使注册了它们也不得被壳当成整个应用的运行面——这里只能有 surface 一条路。
+    // 退役扩展点本身的存在性由 context.ts 的显性抛错与 R4 退役锁钉住。
+    shellRegistry.upsertApps(PLUGIN_APP_SOURCE_ID, [toShellApp(info({ state: 'Activated' }))])
+
+    expect(createPluginAppSource().resolveSurface?.('com.test.app')).toBeUndefined()
   })
 })
 

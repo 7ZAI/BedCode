@@ -209,86 +209,10 @@ function injectPanelStyle() {
   }
 }
 
-// ==================== 工具栏入口可见性（仅适配的 agent 会话） ====================
-
-// 异步同步序号：会话快速切换时丢弃过期结果，避免旧会话的 agent 覆盖新状态
-let toolbarSyncSeq = 0
-
-// 从后端获取的适配 agent 列表（权威来源：桌面端 Rust AGENT_PROFILES），activate 时缓存
-let supportedAgents: string[] = []
-
-/** 按当前活动会话的 agent 动态注册/注销工具栏入口 */
-async function syncToolbarEntry(context: PluginContext) {
-  const seq = ++toolbarSyncSeq
-  const mobileApi = getMobileApi()
-  const sessionId = mobileApi.activeSessionId?.value
-  if (!sessionId) {
-    if (toolbarDisposable) {
-      toolbarDisposable.dispose()
-      toolbarDisposable = null
-    }
-    return
-  }
-
-  // 从会话配置命令识别 agent，再用后端返回的 supportedAgents 白名单判断
-  const sessions = mobileApi.activeSessions?.value || []
-  const session = sessions.find((s: any) => s.id === sessionId)
-  const configId = session?.config_id || session?.configId
-  if (!configId) {
-    if (toolbarDisposable) {
-      toolbarDisposable.dispose()
-      toolbarDisposable = null
-    }
-    return
-  }
-
-  const configs = mobileApi.sessionConfigs?.value || []
-  const config = configs.find((c: any) => c.id === configId)
-  if (!config?.command) {
-    if (toolbarDisposable) {
-      toolbarDisposable.dispose()
-      toolbarDisposable = null
-    }
-    return
-  }
-
-  if (seq !== toolbarSyncSeq) return // 过期结果丢弃
-
-  // 识别 agent 并判断是否在后端白名单中
-  const lower = config.command.toLowerCase()
-  let agent = 'unknown'
-  if (lower.includes('claude')) agent = 'claude'
-  else if (lower.includes('codex')) agent = 'codex'
-  else if (lower.includes('opencode')) agent = 'opencode'
-  else {
-    const firstToken = lower.split(/\s+/)[0] || ''
-    const basename = firstToken.split(/[\\/]/).pop() || ''
-    if (basename.replace(/\.exe$/i, '') === 'pi') agent = 'pi'
-  }
-
-  const shouldShow = supportedAgents.includes(agent)
-  if (shouldShow && !toolbarDisposable) {
-    toolbarDisposable = context.ui.registerTerminalToolbarItem({
-      id: 'terminal-session.task-toolbar',
-      label: context.i18n.t('title'),
-      icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 7l2 2 4-4',
-      onClick: () => {
-        autoTaskPanelVisible.value = !autoTaskPanelVisible.value
-      },
-    })
-  } else if (!shouldShow && toolbarDisposable) {
-    toolbarDisposable.dispose()
-    toolbarDisposable = null
-  }
-}
-
-let toolbarDisposable: { dispose(): void } | null = null
-let toolboxDisposable: { dispose(): void } | null = null
-/** 壳内任务页动态路由（旧宿主工具箱退役后的正路；需 manifest `ui:route` 权限） */
+/** 壳内任务页动态路由（票 2026-10-10 批次 C2：这是应用内子页的正路，需 manifest `ui:route` 权限） */
 let routeDisposable: { dispose(): void } | null = null
 /** 壳内胶囊菜单项：从应用菜单直达任务页 */
 let capsuleDisposable: { dispose(): void } | null = null
-let stopSessionWatch: (() => void) | null = null
 let stopConnectionWatch: (() => void) | null = null
 
 // ==================== 激活 ====================
@@ -303,7 +227,7 @@ export async function activateTaskDomain(context: PluginContext): Promise<void> 
     context.i18n.registerMessages(locale, msgs)
   }
 
-  // 从后端获取适配 agent 白名单（权威来源桌面端 Rust AGENT_PROFILES），缓存后供 syncToolbarEntry 使用
+  // 从后端获取适配 agent 白名单（权威来源桌面端 Rust AGENT_PROFILES），缓存后供任务面板判定使用
   const mobileApi = getMobileApi()
   const api = getAutoTaskApi()
 
@@ -326,43 +250,23 @@ export async function activateTaskDomain(context: PluginContext): Promise<void> 
     await refreshSupportedAgents()
   }
 
-  // 连接建立后白名单才有意义：监听连接状态，连上时拉取并重算工具栏入口
-  // （避免 connect 后 supportedAgents 仍为空导致适配 agent 入口永远不显示）
+  // 连接建立后白名单才有意义：监听连接状态，连上时拉取
+  // （避免 connect 后 supportedAgents 仍为空）
   stopConnectionWatch = watch(
     () => mobileApi.isConnected?.value,
     (connected) => {
       if (!connected) return
-      void (async () => {
-        await refreshSupportedAgents()
-        syncToolbarEntry(context)
-      })()
+      void refreshSupportedAgents()
     },
-  )
-
-  // 工具栏入口仅对适配的 agent 会话显示：监听活动会话变化动态注册/注销
-  stopSessionWatch = watch(
-    () => mobileApi.activeSessionId?.value,
-    () => syncToolbarEntry(context),
-    { immediate: true },
   )
 
   // 挂载面板（i18n 已注册，组件 setup 可正常取文案）
   injectPanelStyle()
   mountPanel(context)
 
-  // 工具箱页（任务记录 + 定时任务两页签）：manifest-gen 扫描 registerToolboxPage 自动补全
-  // contributes.views 与 ui:toolbox 权限；权限未授予时注册抛错，不影响插件其余能力
-  try {
-    toolboxDisposable = context.ui.registerToolboxPage({
-      id: 'terminal-session.toolbox',
-      title: context.i18n.t('toolboxTitle'),
-      icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 7l2 2 4-4',
-      component: AutoTaskToolboxView,
-    })
-  } catch (e) {
-    context.logger.warn(`Toolbox page registration failed: ${e}`)
-    toolboxDisposable = null
-  }
+  // 票 2026-10-10 批次 C2：`registerToolboxPage` 已整面退役。工具箱界面（任务记录 +
+  // 定时任务两页签）改由 app 域运行面的「工具箱」页签直接渲染 AutoTaskToolboxView
+  // （见 ../app/AppRoot.vue），不再作为独立扩展点注册。
 
   // 壳内任务页：动态路由（host 页头模式自带返回）+ 应用胶囊菜单入口。
   // 权限未授予时注册抛错，不影响插件其余能力（与工具箱页同一口径）。
@@ -395,12 +299,6 @@ export async function activateTaskDomain(context: PluginContext): Promise<void> 
 export function deactivateTaskDomain(): void {
   stopConnectionWatch?.()
   stopConnectionWatch = null
-  stopSessionWatch?.()
-  stopSessionWatch = null
-  toolbarDisposable?.dispose()
-  toolbarDisposable = null
-  toolboxDisposable?.dispose()
-  toolboxDisposable = null
   routeDisposable?.dispose()
   routeDisposable = null
   capsuleDisposable?.dispose()

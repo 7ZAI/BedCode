@@ -10,9 +10,10 @@ const PERMISSION_API_MAP: Record<string, string[]> = {
   'terminal:output': ['terminal-stream.forwardOutput'],
   'session:read': ['session.list', 'session.get', 'session.onStatusChange'],
   'session:write': ['session.create', 'session.stop'],
-  'ui:toolbox': ['ui.registerToolboxPage'],
-  'ui:navtab': ['ui.registerNavTab'],
-  'ui:input': ['ui.registerTerminalToolbarItem', 'ui.registerTerminalView'],
+  // 票 2026-10-10 批次 C2：`ui:toolbox` / `ui:navtab` / `ui:input` 三个权限位
+  // 随对应扩展点（registerToolboxPage / registerNavTab / registerTerminalToolbarItem
+  // / registerTerminalView）整面退役，已从本表删除。退役的权限位在 Rust 装载期
+  // 直接抛错（§5.1.3 fail-visible 形态③），不会走到前端这张表。
   'ui:route': ['ui.registerRoute', 'ui.openPage', 'ui.goBack'],
   'ui:back': ['ui.onBackPressed'],
   'ui:dialog': ['ui.showDialog'],

@@ -58,7 +58,9 @@ bedcode-mobile/                       # 移动端项目 (Tauri 2.0 + Vue 3)
 │   │                                 #   wasm-apps/terminal-session/src/terminal/components/）
 │   ├── composables/                  # 业务逻辑 composable：连接管理、HTTP API、文件树、代码高亮、
 │   │                                 #   mDNS 发现/广播、预设任务、系统通知、前台服务、边到边显示、
-│   │                                 #   屏幕方向、更新检查等（终端内核域随票 15 迁
+│   │                                 #   屏幕方向、更新检查、设备数据擦除（useClearAllData，票
+│   │                                 #   2026-10-10：设备级动作，凭据与宿主连接态不可由插件触碰，
+│   │                                 #   入口在壳设置屏危险区）等（终端内核域随票 15 迁
 │   │                                 #   wasm-apps/terminal-session/src/terminal/composables/）
 │   ├── stores/                       # Pinia 全局状态：代码查看器、设置、i18n
 │   │                                 #   （输入助手 / 终端缓冲随票 15 迁插件）
@@ -309,6 +311,13 @@ wasm_host.rs 拆分）、`terminal_stream_gateway.rs`（窄转发表，Tauri 命
 （`template/`）、脚手架（`bin/`）、调试壳（`dev-shell/`）、共享 UI 子路径导出（`./ui`）。
 完整开发指南见仓库根 `bedcode-mobile/plugin-dev-mobile.md`。
 
+**端 WIT 生成物（票 03）：** `packages/plugin-sdk-mobile/rust/wit/` = `core.wit`（共享核心真源
+`packages/bedcode-wasm-core/wit/core.wit`）+ `cap-mobile.wit`（真源 `rust/wit-src/cap-mobile.wit`）+
+`bedcode.wit`（package + `world plugin { include core; include cap-mobile; }`），由根
+`scripts/compose-wit.mjs` 按 `packages/plugin-sdk-mobile/compose.json` 拼装（`--check` 漂移锁）。
+移动 fork 的 bindgen（`packages/bedcode-wasm-core/src/manager/runtime/component.rs`）path 指
+`../plugin-sdk-mobile/rust/wit` 目录（push_dir 加载合成 package）。
+
 **内置 wasm 应用源码 — `wasm-apps/*/`：** 每个 app 独立 package：`plugin.json` 元数据 + `rust/` WASM 后端 +
 `src/` TS 前端 + `vite.config.ts` 独立构建。改插件后需重新构建并同步产物到打包资源。
 
@@ -546,6 +555,10 @@ Desktop PTY → Claude Code
   - 插件域机制与登记（错误分类表 + `ensureCommandOk` + 机制键双语在场 / 二维码载荷解析 /
     **宿主页两区块真实挂载**（防「模板绑定未声明」这类只会在渲染期暴露的缺陷）/ 宿主页域激活回收 /
     任务域壳内任务页注册）→ `wasm-apps/terminal-session/src/{host,task}/__tests__/**`
+  - 应用壳域（底部导航页签状态机 + 嵌套横滑区仲裁 + 运行面注册唯一性，票 2026-10-10 A）
+    → `wasm-apps/terminal-session/src/app/__tests__/**`
+  - 业务设置域（定义表 ↔ 归一函数 ↔ KV 桥读写；越界值夹回区间、非法值回落默认、写失败不更新本地值）
+    → `wasm-apps/terminal-session/src/settings/__tests__/**`
 - **旧宿主 UI 退役面不回接（票 2026-10-09 阶段 B）** → `src/__tests__/shell/retiredHostUIRetirementLocks.test.ts`：
   R1 退役路由名（`mobile-devices` / `mobile-sessions` / `mobile-terminal` / `mobile-toolbox` /
   `mobile-preset-tasks` / `mobile-plugins` / `mobile-home-alt`，带引号字面量锁定，不误伤
@@ -556,6 +569,16 @@ Desktop PTY → Claude Code
   `EgressSettingsView` / `registerTerminalView`）不得在 `src/` 出现；R3 正面钉壳等价物在场
   （`ShellView` / `ShellHost` / `ShellTabbar` / `ShellSettingsScreen` + 路由 `mobile-shell`），
   防「删新面绕过退役锁」。扫描跳注释，覆盖整个 `src/`（含测试文件）
+  - **票 2026-10-10 C1/C2/C4/D1 追加（ADR 0046）**（同一文件新增四把锁）：
+    R4 旧嵌入扩展点（`registerToolboxPage` / `registerNavTab` / `registerTerminalToolbarItem` /
+    `registerTerminalView`）与其宿主 UI 组件（`PluginNavTabHost` / `PluginSettingsHost` /
+    `PluginTerminalBar`）不得在 `src/` 出现；运行面解析（`pluginAppSource.resolveSurface`）
+    不得再有 `toolboxViews` / `navTabs` / `terminalView` 回退链；
+    R4b 已下沉的 `mobile-settings-notifications` 路由 / `NotificationSettingsView` 不得回接；
+    R5 已删宿主孤儿（`DeviceCard` / `SessionListItem` / `useAndroidFeatures` / `useRunTime`）
+    不得重新出现在 `src/` 且文件确已不在盘。
+    白名单仅 `src/plugin/context.ts`（fail-visible 抛错桩）+ 两个钉死其行为的测试文件，
+    逐条登记不做通配
 - 发送编排退役面（票 06）→ `src-tauri/tests/retired_mobile_send_orchestration_lock.rs`（`retired_mobile_send_orchestration_is_not_reintroduced`）
 - 接收编排退役面（票 07）→ `src-tauri/tests/retired_mobile_receive_orchestration_lock.rs`（`retired_mobile_receive_orchestration_is_not_reintroduced`）
 - 传输 / 接收 / 远端浏览调度与设置命令面退役（票 10）→ `src-tauri/tests/retired_mobile_peer_transfer_command_face_lock.rs`（`retired_peer_transfer_settings_command_face_is_not_reintroduced` + `peer_transfer_scheduling_entrypoints_stay_engine_only`；同文件另钉 peer 宿主模块不得带 `#[tauri::command]` / 不得进 `invoke_handler`）

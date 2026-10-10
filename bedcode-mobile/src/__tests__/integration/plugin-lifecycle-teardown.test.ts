@@ -3,7 +3,7 @@
  *
  * 被测不变量：「前端注册表为空 ⇔ 后端非存活」，重启用从干净状态重启。
  *
- * - 连续 activate/deactivate 交替 N 次：registry.toolboxViews 该插件入口 0/1
+ * - 连续 activate/deactivate 交替 N 次：壳注册表该应用运行面 0/1
  *   严格跟随，无残留旧引用、无重复（issue 03 验收）；
  * - 前端模块加载失败：plugin_deactivate 必须先于 plugin_mark_error（后端
  *   deactivate 仅对 Activated/Degraded 生效，顺序颠倒实例将无法拆解），
@@ -73,7 +73,7 @@ function makeFrontendInfo(overrides: { extensionPath?: string; state?: unknown }
     author: 'test',
     main: 'index.js',
     pluginType: 'wasm',
-    permissions: ['ui:toolbox', 'ui:route', 'ui:settings'],
+    permissions: ['ui:route'],
     state: { state: 'Activated' },
     contributes: {},
     source: 'builtin',
@@ -112,6 +112,10 @@ describe('loader activate/deactivate 对称拆解', () => {
     vi.resetModules()
     const { pluginLoader } = await import('@/plugin/loader')
     const { getPluginRegistry } = await import('@/plugin/registry')
+    const { getShellRegistry } = await import('@/shell/registry')
+    const { toShellApp, PLUGIN_APP_SOURCE_ID } = await import('@/shell/adapters/pluginAppSource')
+    // 生产顺序：壳先 list() 把应用写进注册表，之后激活才有运行面可挂
+    getShellRegistry().upsertApps(PLUGIN_APP_SOURCE_ID, [toShellApp(info)])
     const mockModule = await import('@/__tests__/integration/fixtures/mockLifecyclePlugin')
     mockModule._resetCounts()
 
@@ -119,16 +123,18 @@ describe('loader activate/deactivate 对称拆解', () => {
     for (let cycle = 0; cycle < 3; cycle++) {
       await pluginLoader.activate('mock-plugin')
       await flushAsync(3)
-      const views = getPluginRegistry().toolboxViews.value
-      expect(views, `cycle ${cycle}: enabled`).toHaveLength(1)
-      expect(views[0].pluginId).toBe('mock-plugin')
-      seenEntries.push(views[0])
+      const surface = getShellRegistry().getApp('mock-plugin')?.contributions.surface
+      expect(surface, `cycle ${cycle}: enabled`).toBeTruthy()
+      seenEntries.push(surface)
       expect(pluginLoader.getActivePlugin('mock-plugin')).toBeDefined()
       expect(mockModule.activateCallCount).toBe(cycle + 1)
 
       await pluginLoader.deactivate('mock-plugin')
       await flushAsync(3)
-      expect(getPluginRegistry().toolboxViews.value, `cycle ${cycle}: disabled`).toHaveLength(0)
+      expect(
+        getShellRegistry().getApp('mock-plugin')?.contributions.surface,
+        `cycle ${cycle}: disabled`,
+      ).toBeUndefined()
       expect(pluginLoader.getActivePlugin('mock-plugin')).toBeUndefined()
     }
 
@@ -149,6 +155,7 @@ describe('loader activate/deactivate 对称拆解', () => {
     vi.resetModules()
     const { pluginLoader } = await import('@/plugin/loader')
     const { getPluginRegistry } = await import('@/plugin/registry')
+    const { getShellRegistry } = await import('@/shell/registry')
 
     // plugin_activate（默认 mock）成功 → loadFrontend 动态 import 失败
     await pluginLoader.activate('mock-plugin')
@@ -164,7 +171,7 @@ describe('loader activate/deactivate 对称拆解', () => {
     // 前端注册表为空 ⇔ 后端非存活：Map 无残留、context/入口已摘除
     expect(pluginLoader.getActivePlugin('mock-plugin')).toBeUndefined()
     expect(getPluginRegistry().getContext('mock-plugin')).toBeUndefined()
-    expect(getPluginRegistry().toolboxViews.value).toHaveLength(0)
+    expect(getShellRegistry().getApp('mock-plugin')?.contributions.surface).toBeUndefined()
   })
 
   it('deactivate 在前端模块未加载时仍停用后端，且重复调用幂等', async () => {

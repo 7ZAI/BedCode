@@ -88,48 +88,9 @@
         </div>
       </section>
 
-      <!-- 终端：最大打开数量 -->
-      <section class="space-y-2">
-        <h2 class="settings-section-title">{{ $t('settings.appearance.terminalSection') }}</h2>
-        <div class="settings-group">
-          <div class="settings-row">
-            <div class="min-w-0">
-              <div class="settings-label">{{ $t('settings.appearance.maxOpenTerminals') }}</div>
-              <div class="settings-desc">{{ $t('settings.appearance.maxOpenTerminalsDesc') }}</div>
-            </div>
-            <div class="settings-stepper shrink-0">
-              <button
-                type="button"
-                class="settings-stepper-btn"
-                :disabled="Number(settings.maxOpenTerminals) <= 1"
-                @click="stepMaxOpenTerminals(-1)"
-                :aria-label="t('common.button.decrease')"
-              >
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M20 12H4" /></svg>
-              </button>
-              <input
-                v-model.number="settings.maxOpenTerminals"
-                type="number"
-                inputmode="numeric"
-                min="1"
-                max="20"
-                class="settings-number-input"
-                @change="clampMaxOpenTerminals"
-                @blur="clampMaxOpenTerminals"
-              />
-              <button
-                type="button"
-                class="settings-stepper-btn"
-                :disabled="Number(settings.maxOpenTerminals) >= 20"
-                @click="stepMaxOpenTerminals(1)"
-                :aria-label="t('common.button.increase')"
-              >
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4" /></svg>
-              </button>
-            </div>
-          </div>
-        </div>
-      </section>
+      <!-- 票 2026-10-10 批次 C4：「最大可打开终端数量」是**业务项**（终端域事实），
+           真源与 UI 已下沉 terminal-session 的应用内设置页（spec §2）。此处删除，
+           避免同一上限在外观页与终端设置页各存一份、用户改了一处却不知另一处不动。 -->
     </div>
   </SettingsSubPage>
 </template>
@@ -142,7 +103,7 @@
 import { onMounted, computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import SettingsSubPage from '@/components/SettingsSubPage.vue'
-import { useMobileSettings, defaultMobileSettings } from '@/composables/useMobileSettings'
+import { useMobileSettings } from '@/composables/useMobileSettings'
 
 const { t } = useI18n()
 
@@ -216,20 +177,6 @@ function onFontSliderPointerDown(e: PointerEvent) {
   }
   window.addEventListener('pointermove', onMove)
   window.addEventListener('pointerup', onUp)
-}
-
-/** 将最大可打开终端数量限制在 1-20，非法输入回退默认值 */
-function clampMaxOpenTerminals() {
-  const v = Number(settings.value.maxOpenTerminals)
-  settings.value.maxOpenTerminals = Number.isFinite(v) && v > 0
-    ? Math.min(20, Math.round(v))
-    : defaultMobileSettings.maxOpenTerminals
-}
-
-/** −/+ 步进：按档位增减并钳制到 1-20 */
-function stepMaxOpenTerminals(delta: number) {
-  const next = Number(settings.value.maxOpenTerminals) + delta
-  settings.value.maxOpenTerminals = Math.max(1, Math.min(20, Number.isFinite(next) ? next : 1))
 }
 
 onMounted(loadSettings)

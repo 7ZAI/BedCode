@@ -23,7 +23,6 @@ import {
   stopSession,
 } from '../mock/session'
 import { queueTasks } from '../mock/mobile-api'
-import { terminalToolbarItems } from '../registry'
 import { isSvgIcon } from '../utils/icon'
 
 const { t } = useI18n()
@@ -52,26 +51,6 @@ function resetQueue() {
 
 <template>
   <div class="h-full flex flex-col min-h-0">
-    <!-- 插件终端工具栏项 -->
-    <div
-      v-if="terminalToolbarItems.length"
-      class="flex items-center gap-2 px-4 py-2 border-b border-[var(--mobile-border)] bg-[var(--mobile-bg-secondary)]/60 overflow-x-auto flex-shrink-0"
-    >
-      <button
-        v-for="entry in terminalToolbarItems"
-        :key="entry.pluginId + entry.item.id"
-        class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[var(--mobile-accent-muted)] text-[var(--mobile-accent)] text-xs whitespace-nowrap hover:bg-[var(--mobile-accent-secondary)] transition-colors duration-200"
-        @click="entry.item.onClick?.()"
-      >
-        <span v-if="isSvgIcon(entry.item.icon)" class="w-3.5 h-3.5">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-3.5 h-3.5">
-            <path :d="entry.item.icon" />
-          </svg>
-        </span>
-        <span v-else>{{ entry.item.icon || '' }}</span>
-        {{ entry.item.label }}
-      </button>
-    </div>
 
     <div class="flex-1 min-h-0 flex flex-col md:flex-row">
       <!-- 会话列表 -->

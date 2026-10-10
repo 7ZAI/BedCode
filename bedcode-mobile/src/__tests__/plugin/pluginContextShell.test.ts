@@ -144,10 +144,40 @@ describe('C-S4 运行面免权限快速失败', () => {
 
     // 运行面不触发宿主能力 ⇒ 不设权限门
     expect(() => ctx.ui.registerSurface({ component: CtxProbe })).not.toThrow()
-    // 对照组：同上下文注册旧嵌入面（terminalView）仍受 ui:input 权限门约束
-    expect(() => ctx.ui.registerTerminalView({ component: CtxProbe })).toThrow(
-      'lacks permission for ui.registerTerminalView',
-    )
+  })
+})
+
+describe('C-S6 已退役扩展点显性抛错（票 2026-10-10 C2 fail-visible）', () => {
+  /** 退役方法不在 UIRegistry 类型面上（编译期就该红），测试只能按运行时形状取 */
+  function retiredUiOf(permissions: string[] = []): Record<string, (...a: never[]) => unknown> {
+    return makeContext(permissions).ui as unknown as Record<string, (...a: never[]) => unknown>
+  }
+
+  it('should_throwNamingTheApi_when_retiredExtensionPointCalled', () => {
+    // 断链必须当场可见且指名扩展点 + 给出迁移出路；
+    // 拿 undefined 会在插件内部炸成「不是函数」，把作者的排查方向带偏
+    const ui = retiredUiOf()
+
+    for (const api of [
+      'registerToolboxPage',
+      'registerNavTab',
+      'registerTerminalToolbarItem',
+      'registerTerminalView',
+    ]) {
+      expect(() => ui[api]({} as never), `${api} 应显性抛错`).toThrow(api)
+      // 报错必须指向迁移出路，否则作者只知道「没了」不知道「改成什么」
+      expect(() => ui[api]({} as never), `${api} 报错应指向 registerSurface`).toThrow(
+        'registerSurface',
+      )
+    }
+  })
+
+  it('should_throwRegardlessOfPermissions_when_retiredExtensionPointCalled', () => {
+    // 权限不是退役扩展点的准入条件：即便声明了对应权限位也照样抛——
+    // 否则「有权限就能用旧面」会让人以为退役只是权限收紧
+    const ui = retiredUiOf(['ui:toolbox', 'ui:navtab', 'ui:input'])
+    expect(() => ui.registerToolboxPage({} as never)).toThrow('registerToolboxPage')
+    expect(() => ui.registerTerminalView({} as never)).toThrow('registerTerminalView')
   })
 })
 

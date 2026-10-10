@@ -119,8 +119,16 @@ export default {
       authenticationHint: 'Pairing and credentials',
       egress: 'Egress policy',
       egressHint: 'Security egress tiers',
-      notifications: 'Notifications',
       about: 'About WasmApp',
+      // Ticket 2026-10-10: the notification entry retired with its business settings
+      // moving to terminal-session. "Clear all data" is a device-lifecycle action (its
+      // targets include entry credentials and host connection state), so it stays in the
+      // host per the credential-zero-transit rule. See src/composables/useClearAllData.ts.
+      dangerZone: 'Danger Zone',
+      clearAllData: 'Clear All Data',
+      clearAllDataHint:
+        'Disconnects and wipes preset tasks, connection history, paired devices, session configs and local cache. This cannot be undone.',
+      clearAllDataFailed: 'Cleanup did not finish; some data may remain. Retry or restart the app.',
       appSettings: 'App settings',
       runtime: 'WasmApp Mobile {version}',
     },

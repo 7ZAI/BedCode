@@ -1,0 +1,45 @@
+/**
+ * 应用页签面板停靠过渡（票 2026-10-10：全量 UI 下沉 —— app 域页签容器）
+ *
+ * 与任务工具箱的双面板停靠同一形态（task/panel.css::att-tab-panel-*）：
+ * 当前页居中、已过页停左侧、未到页停右侧，切页时新页从停靠侧滑入。
+ * 三个面板常驻挂载——切页不重挂载，滚动位置与事件订阅得以保留
+ * （与旧宿主 MobileSwipeContainer 的常驻语义一致）。
+ */
+
+.app-tab-panel {
+  position: absolute;
+  inset: 0;
+  transition:
+    transform 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  will-change: transform, opacity;
+}
+
+.app-tab-panel--active {
+  transform: translateX(0);
+  opacity: 1;
+  z-index: 1;
+  pointer-events: auto;
+}
+
+.app-tab-panel--left {
+  transform: translateX(-24%);
+  opacity: 0.55;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.app-tab-panel--right {
+  transform: translateX(24%);
+  opacity: 0.55;
+  z-index: 0;
+  pointer-events: none;
+}
+
+/* 尊重系统减弱动效偏好：停靠仍在位，只去掉滑动与淡入 */
+@media (prefers-reduced-motion: reduce) {
+  .app-tab-panel {
+    transition: none;
+  }
+}

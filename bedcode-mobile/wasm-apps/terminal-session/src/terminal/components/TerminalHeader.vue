@@ -52,8 +52,6 @@
         </svg>
       </button>
     </template>
-    <!-- 插件工具栏项（宿主壳渲染：跨插件扩展点归宿主注册表） -->
-    <component :is="hostComponents.PluginTerminalBar" v-if="hostComponents.PluginTerminalBar" />
     <!-- 溢出菜单按钮 -->
     <div v-if="overflowItems.length > 0" class="overflow-menu-wrapper">
       <button class="overflow-btn" :class="{ active: showOverflowMenu }" @click.stop="showOverflowMenu = !showOverflowMenu" :title="t('terminal.moreTools')">
@@ -103,7 +101,7 @@
  */
 defineOptions({ name: 'TerminalHeader' })
 
-import { ref, computed, inject } from 'vue'
+import { ref, computed } from 'vue'
 import type { ToolbarItemConfig } from './TerminalSettingsModal.vue'
 import { t } from '../host'
 
@@ -120,8 +118,6 @@ const emit = defineEmits<{
   action: [key: string]
 }>()
 
-/** 宿主壳 provide 的通用组件（插件工具栏渲染属宿主注册表面，不随终端域迁移） */
-const hostComponents = inject<{ PluginTerminalBar?: any }>('bedcodeHostComponents', {})
 const showOverflowMenu = ref(false)
 
 const overflowItems = computed(() => {

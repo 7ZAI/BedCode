@@ -3,25 +3,25 @@
  *
  * 模块级响应式状态（跨组件共享单例）：
  * - 插件记录（state / error / context）
- * - 插件 UI 注册项（toolbox 页 / navTab / 终端工具栏 / 设置区 / 路由 / 挂载点）
+ * - 插件 UI 注册项（壳运行面 / 快捷卡片 / 胶囊项 / 设置入口 / 路由）
  * - 日志面板数据
  * - 当前打开的插件视图（activeView，由 AppShell 渲染）
  *
  * 与宿主 plugin/registry.ts 的职责对应，但只服务浏览器 dev-shell 场景。
+ *
+ * 票 2026-10-10 批次 C2：工具箱页 / 底部导航 Tab / 终端工具栏项 / 终端主视图
+ * 四个旧嵌入扩展点已随宿主壳改纯 surface 形态整面退役，dev-shell 与宿主同口径——
+ * 否则插件在 dev-shell 里能跑通、在真机宿主上却报错，两种形态必须一致。
  */
 import { ref } from 'vue'
 import type {
   Disposable,
-  NavTabDescriptor,
   PluginDevMock,
   PluginRouteDescriptor,
   ShellCapsuleItem,
   ShellSettingsEntry,
   ShellSlotContribution,
   ShellSurfaceContribution,
-  TerminalToolbarItemDescriptor,
-  TerminalViewContribution,
-  ToolboxPageDescriptor,
 } from '../../src/types'
 
 // ==================== 插件 devMock（领域数据注册） ====================
@@ -109,27 +109,11 @@ export function getPluginRecord(pluginId: string): DevPluginRecord | undefined {
 
 // ==================== UI 注册项 ====================
 
-export interface ToolboxPageEntry {
-  pluginId: string
-  page: ToolboxPageDescriptor
-}
-export interface NavTabEntry {
-  pluginId: string
-  tab: NavTabDescriptor
-}
-export interface TerminalToolbarEntry {
-  pluginId: string
-  item: TerminalToolbarItemDescriptor
-}
 export interface RouteEntry {
   pluginId: string
   route: PluginRouteDescriptor
   /** router 路由名（registerRoute 时 addRoute，dispose 时 removeRoute） */
   routeName: string
-}
-export interface TerminalViewEntry {
-  pluginId: string
-  view: TerminalViewContribution
 }
 // 壳注册桥四面（与宿主 context.ts / types.ts 同形状；dev-shell 无壳 UI，注册只记录 + 回收，
 // 供 dev-shell 后续按需渲染与插件开发自检）
@@ -149,11 +133,7 @@ export interface SettingsEntry {
   pluginId: string
   entry: ShellSettingsEntry
 }
-const toolboxPages = ref<ToolboxPageEntry[]>([])
-const navTabs = ref<NavTabEntry[]>([])
-const terminalToolbarItems = ref<TerminalToolbarEntry[]>([])
 const routes = ref<RouteEntry[]>([])
-const terminalViews = ref<TerminalViewEntry[]>([])
 const surfaces = ref<SurfaceEntry[]>([])
 const slots = ref<SlotEntry[]>([])
 const capsules = ref<CapsuleEntry[]>([])
@@ -167,40 +147,6 @@ function makeDisposable<T>(list: { value: T[] }, entry: T): Disposable {
       if (idx !== -1) list.value.splice(idx, 1)
     },
   }
-}
-
-export function registerToolboxPage(pluginId: string, page: ToolboxPageDescriptor): Disposable {
-  const entry: ToolboxPageEntry = { pluginId, page }
-  toolboxPages.value.push(entry)
-  pushLog('debug', pluginId, `注册工具箱页: ${page.title || page.id}`)
-  return makeDisposable(toolboxPages, entry)
-}
-
-export function registerNavTab(pluginId: string, tab: NavTabDescriptor): Disposable {
-  const entry: NavTabEntry = { pluginId, tab }
-  navTabs.value.push(entry)
-  pushLog('debug', pluginId, `注册底部导航 Tab: ${tab.title}`)
-  return makeDisposable(navTabs, entry)
-}
-
-export function registerTerminalToolbarItem(
-  pluginId: string,
-  item: TerminalToolbarItemDescriptor,
-): Disposable {
-  const entry: TerminalToolbarEntry = { pluginId, item }
-  terminalToolbarItems.value.push(entry)
-  pushLog('debug', pluginId, `注册终端工具栏项: ${item.label}`)
-  return makeDisposable(terminalToolbarItems, entry)
-}
-
-export function registerTerminalView(
-  pluginId: string,
-  view: TerminalViewContribution,
-): Disposable {
-  const entry: TerminalViewEntry = { pluginId, view }
-  terminalViews.value.push(entry)
-  pushLog('debug', pluginId, '注册终端主视图')
-  return makeDisposable(terminalViews, entry)
 }
 
 export function registerSurface(pluginId: string, surface: ShellSurfaceContribution): Disposable {
@@ -251,14 +197,12 @@ export function registerRoute(pluginId: string, route: PluginRouteDescriptor): D
 // ==================== 当前打开的插件视图（视图栈，与宿主路由栈语义一致） ====================
 
 export interface ActiveView {
-  kind: 'toolbox' | 'navtab' | 'settings' | 'route'
+  kind: 'surface' | 'settings' | 'route'
   pluginId: string
   title?: string
   /** 是否渲染宿主页头（back + title），缺省 true */
   header?: boolean
   component: any
-  /** navTab 去重标记（内部） */
-  _tabId?: string
 }
 
 const viewStack = ref<ActiveView[]>([])
@@ -281,4 +225,4 @@ export function goBackView(): void {
   activeView.value = viewStack.value[viewStack.value.length - 1] ?? null
 }
 
-export { activeView, logs, plugins, toolboxPages, navTabs, terminalToolbarItems, routes, terminalViews }
+export { activeView, logs, plugins, routes, surfaces, slots, capsules, settingsEntries }

@@ -181,6 +181,57 @@ async function resetSettings(): Promise<void> {
 // 设置变更自动保存
 watch(settings, saveSettings, { deep: true })
 
+// ==================== 通用设置 KV 桥（插件设置面） ====================
+//
+// 通用机制面（ADR 0022 ① 引擎实现）：任意键值读写，不绑定任何业务设置形状。
+// 票 2026-10-10 起业务设置项的 UI 与真源归各 wasm app 自持，宿主只提供持久化通道；
+// 「有哪些设置项 / 默认值 / 校验」一律不进宿主（否则宿主持有产品事实，命中 §5.1 B3）。
+//
+// 写穿规则：命中宿主已知键（mobile.* 且在 MobileSettings 形状内）时写穿响应式单例，
+// 由既有 watch 落盘并触发副作用同步（字号缩放 CSS 变量 / settingsStore），宿主消费者
+// （自动重连 / 通知 / 终端字号 / 上限）立即可见；未命中则直落 KV，不干扰宿主单例。
+
+/** 按默认值类型把 KV 字符串还原为对应类型（DB 存串，UI 要真类型） */
+function coerceLikeDefault(raw: string, fallback: unknown): unknown {
+  if (typeof fallback === 'boolean') return raw === 'true'
+  if (typeof fallback === 'number') {
+    const n = Number(raw)
+    return Number.isNaN(n) ? fallback : n
+  }
+  return raw
+}
+
+/** 读全部设置键值（`{ key: value }` 扁平表） */
+export async function readAllSettings(): Promise<Record<string, string>> {
+  const rows = await invoke<Array<{ key: string; value: string }>>('get_all_db_settings')
+  const out: Record<string, string> = {}
+  for (const row of rows ?? []) {
+    if (row?.key) out[row.key] = row.value
+  }
+  return out
+}
+
+/**
+ * 写单个设置键
+ *
+ * @param key 完整键名（如 `mobile.autoReconnect` 或插件自有键）
+ * @throws invoke 拒绝时向上抛（调用方负责落日志，禁止静默吞错）
+ */
+export async function writeSetting(key: string, value: string): Promise<void> {
+  const mobileKey = key.startsWith('mobile.') ? key : `mobile.${key}`
+  const field = mobileKey.slice('mobile.'.length)
+  if (field in settings.value) {
+    // 已知键：写穿响应式单例，watch 自动落盘 + 触发副作用同步
+    ;(settings.value as Record<string, unknown>)[field] = coerceLikeDefault(
+      value,
+      defaultMobileSettings[field as keyof MobileSettings],
+    )
+    return
+  }
+  // 插件自有键：直落 KV，不经宿主单例
+  await invoke('set_db_setting', { key, value })
+}
+
 export function useMobileSettings() {
   const settingsStore = useSettingsStore()
   const i18nStore = useI18nStore()
@@ -225,5 +276,8 @@ export function useMobileSettings() {
     loadSettings,
     saveSettings,
     resetSettings,
+    // 通用设置 KV 桥（插件设置面；模块级函数，此处透传便于共享运行时一处装配）
+    readAllSettings,
+    writeSetting,
   }
 }

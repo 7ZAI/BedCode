@@ -7,6 +7,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+#### Mobile: shell loads apps as surfaces only — old embed extension points retired wholesale (ADR 0046)
+
+- **The shell now resolves one running-surface form only**: `pluginAppSource.resolveSurface` lost its
+  four-step fallback chain (`terminalView → toolbox → navTab → route`) and reads
+  `ShellRegistry.contributions.surface` alone. That chain was the actual code behind "the shell loads
+  pages in the old host's plugin form"; keeping it would also mean the weakest of four independent
+  permission bits could open an app's main surface. Apps without a surface now get an explicit
+  "this app has not provided a running surface" empty state instead of a silent substitute
+- **Four embed extension points retired wholesale** (ADR 0046 D2): `registerToolboxPage` /
+  `registerNavTab` / `registerTerminalToolbarItem` / `registerTerminalView`, together with their
+  descriptor types, host registry storage, host UI components (`PluginNavTabHost` /
+  `PluginSettingsHost` / `PluginTerminalBar`), the dev-shell equivalents and the SDK template.
+  All four were already dead at runtime — verified zero live consumers (including a toolbar component
+  whose host-side injection was never provided, so its `v-if` was permanently false).
+  `registerRoute` / `openPage` / `goBack` / `onBackPressed` are **kept**: in-app sub-pages still
+  need navigation and back
+- **Retired permission bits fail visibly at load** (§5.1.3 form ③): `ui:toolbox` / `ui:navtab` /
+  `ui:input` are removed from the SDK whitelist and API map, and registered in a new
+  `RETIRED_PERMISSIONS` table with `check_retired_permissions()`. `PluginLoader::load_all` now
+  **refuses to load** a manifest declaring one, naming the bit and the migration path; manifest-gen
+  strips them plus the retired `contributes.views` / `navTab` / `terminal.toolbarItems` idempotently.
+  Rationale: bits outside the whitelist are dropped *silently* by `grant_permissions`, so an old
+  plugin would load fine and simply lose a capability — pointing debugging the wrong way
+- **Stubs that throw keep the break visible**: the four retired methods remain on `context.ui` as
+  stubs that throw on call, naming the extension point and pointing at `registerSurface` — but they
+  are **absent from the `UIRegistry` type**, so old call sites fail at compile time
+- **Business settings split by ownership** (ADR 0046 D4): the shell's settings subpages now carry
+  platform items only (link encryption, biometric credentials, egress, appearance, about), while
+  business settings (auto-reconnect / keep-alive / default port / the three notification toggles /
+  vibrate / sound / terminal limit / preferred auth method) move to the terminal-session app's own
+  settings page. `NotificationSettingsView` and its `mobile-settings-notifications` route retired
+  wholesale — every row was a business item
+- **Business-settings truth source moved out of the host** (fixes an AGENTS.md §5.1 **B3** violation):
+  which settings exist, their defaults and ranges are product facts, now owned by the app
+  (`wasm-apps/terminal-session/src/settings/settingsModel.ts`). The host provides only a generic KV
+  channel (`readAllSettings()` / `writeSetting()`) that binds no business shape; keys deliberately
+  keep their `MobileSettings` field names so host consumers still read real values through the
+  write-through path
+- **File browser stays a host common component and is now reachable**: `App.vue` provides
+  `bedcodeHostComponents = { FileExplorer, FileSidebar }`, activating the two injection points the
+  terminal domain had already written but that no host code ever provided — the file browser gets an
+  entry that does not consume a host route, and long-dead `v-if`s become live
+- **Seven dead host files deleted**: components `DeviceCard` / `InputBar` / `PluginIcon` /
+  `RepeatableToggle` / `SessionListItem` and composables `useAndroidFeatures` / `useRunTime`
+  (each has a self-owned copy in `wasm-apps`); `PluginIcon`'s test went with it
+- **Regression from ticket 2026-10-09 stage B closed** — the ticket flagged both lost actions and
+  required both back; they landed in *different* owners by design:
+  - "reset settings" resets **business** settings and lives in the terminal-session app's settings
+    page (ADR 0046 D4)
+  - "clear all data" is a **device-level wipe** and deliberately stays in the host's danger zone
+    (`src/composables/useClearAllData.ts`). Its targets include device entry credentials (held by
+    the auth center) and host connection state; per the credential-zero-transit rule and ADR 0033 a
+    plugin must not hold or erase credentials, so placing it in the app settings page would be a
+    boundary violation rather than an ownership choice. Execution order is fixed (disconnect +
+    stop service → clear local → reload); a failed disconnect does **not** block cleanup (the user
+    wants data gone, and aborting would leave credentials on disk) but is reported honestly; a
+    failed cleanup does not reload and surfaces the reason, so a half-cleared device is never
+    presented as clean
+- **Anti-reintroduction locks extended** — `retiredHostUIRetirementLocks.test.ts` gains R4 (retired
+  extension points + their host components must not reappear; `resolveSurface` must have no fallback
+  chain), R4b (the retired settings route must not return) and R5 (deleted orphans must not return,
+  and their files must be gone from disk)
+- Mobile plugin contract is independent (ADR 0018): the desktop end is **not** touched by this
+  retirement, and no wasmtime version change is triggered (ADR 0019). ADR:
+  `docs/adr/0046-mobile-shell-surface-only-and-retired-embed-extension-points.md`
+
 #### Mobile: host UI migrated into wasm-apps — shell default entry, three standalone pages, old host mechanisms applied
 
 - **New default entry is the host shell (`/mobile/shell`)**: `/` redirects to the shell; the old

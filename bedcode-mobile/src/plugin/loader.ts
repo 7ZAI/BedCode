@@ -207,8 +207,8 @@ class PluginLoaderClass {
       const module = await this.importWithTimeout(this.convertFileUrl(manifest.extensionPath, manifest.main))
 
       const context = createPluginContext(manifest)
-      // 关键：先注册 context 再激活 —— activate 内 registerToolboxPage 等会立即更新响应式
-      // 注册表，宿主可能随之渲染插件组件（如 ToolboxView 入口卡），必须保证
+      // 关键：先注册 context 再激活 —— activate 内 registerSurface / registerSlot 等会立即
+      // 更新壳注册表的响应式状态，宿主可能随之渲染插件组件，必须保证
       // PluginViewHost provide 能取到 context，否则插件组件 inject 得到 undefined 崩溃
       getPluginRegistry().setContext(manifest.id, context)
       await this.activateWithTimeout(module, context)

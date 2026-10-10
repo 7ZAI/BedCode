@@ -15,9 +15,7 @@
     "session:read",
     "storage",
     "terminal:output",
-    "ui:input",
     "ui:route",
-    "ui:toolbox",
     "ws:client"
   ],
   "contributes": {
@@ -85,24 +83,6 @@
       {
         "id": "terminal-session.send-http-input",
         "title": "Send Session Input (HTTP)"
-      }
-    ],
-    "terminal": {
-      "toolbarItems": [
-        {
-          "id": "terminal-session.task-toolbar",
-          "title": "Auto Task",
-          "icon": "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 7l2 2 4-4"
-        }
-      ]
-    },
-    "views": [
-      {
-        "type": "toolbox",
-        "id": "terminal-session.toolbox",
-        "title": "自动任务",
-        "icon": "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 7l2 2 4-4",
-        "component": "AutoTaskToolboxView"
       }
     ],
     "routes": [
