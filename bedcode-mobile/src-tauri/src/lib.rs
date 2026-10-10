@@ -225,8 +225,6 @@ pub fn run() {
             // 初始化 mDNS 管理器（内部字段级锁，实例不可变，无需外层 RwLock）
             let mdns_discovery = Arc::new(crate::mdns::discovery::MdnsDiscovery::new());
             app.manage(mdns_discovery);
-            let mdns_advertiser = Arc::new(crate::mdns::advertiser::MdnsAdvertiser::new());
-            app.manage(mdns_advertiser);
 
             tracing::info!("BedCode Mobile started successfully!");
             Ok(())
@@ -302,8 +300,6 @@ pub fn run() {
             commands::mdns::mdns_start_discovery,
             commands::mdns::mdns_stop_discovery,
             commands::mdns::mdns_get_discovered_services,
-            commands::mdns::mdns_start_advertise,
-            commands::mdns::mdns_stop_advertise,
             // 对等网络传输 / 接收 / 远端浏览 —— 票 09 + 票 10 后**前端命令面为零**：
             // ① 票 09 摘掉发现投影与连接编排面（设备列表 / 缓存解析拨号 / 共享目录
             //    注册表 CRUD / 节点启停 / 首连应答 / 信任管理）；
