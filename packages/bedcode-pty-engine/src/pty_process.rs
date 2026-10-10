@@ -362,7 +362,7 @@ impl PtySession {
         };
 
         // 先尝试优雅退出（失败属预期：进程可能已自行结束）
-        if let Err(e) = self.send_special_key("ctrl_c").await {
+        if let Err(e) = self.send_special_key("ctrl+c").await {
             tracing::debug!(session_id = %self.id, error = %e, "优雅终止首选手法不可用，继续强杀");
         }
         if let Err(e) = self.write_str("\nexit\n").await {

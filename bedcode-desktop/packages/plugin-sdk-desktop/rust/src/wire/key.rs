@@ -49,10 +49,10 @@ impl KeyCode {
     /// 从字符串解析键名
     fn from_str(s: &str) -> Option<Self> {
         match s {
-            "up" | "arrow_up" => Some(KeyCode::Up),
-            "down" | "arrow_down" => Some(KeyCode::Down),
-            "left" | "arrow_left" => Some(KeyCode::Left),
-            "right" | "arrow_right" => Some(KeyCode::Right),
+            "up" => Some(KeyCode::Up),
+            "down" => Some(KeyCode::Down),
+            "left" => Some(KeyCode::Left),
+            "right" => Some(KeyCode::Right),
             "tab" => Some(KeyCode::Tab),
             "enter" => Some(KeyCode::Enter),
             "escape" | "esc" => Some(KeyCode::Escape),
@@ -152,9 +152,7 @@ impl KeyCombo {
 
     /// 解析按键组合字符串
     ///
-    /// 支持两种格式：
-    /// - 新格式：`"ctrl+a"`、`"shift+up"`、`"ctrl+shift+f1"`、`"alt+f"`
-    /// - 旧格式：`"ctrl_c"`、`"ctrl_z"`、`"arrow_up"`（向后兼容）
+    /// 格式：`"ctrl+a"`、`"shift+up"`、`"ctrl+shift+f1"`、`"alt+f"`（+ 分隔）
     pub fn parse(s: &str) -> Option<Self> {
         let s = s.trim();
         if s.is_empty() {
@@ -178,19 +176,6 @@ impl KeyCombo {
                 }
             }
             return Some(KeyCombo { modifiers, key });
-        }
-
-        // 旧格式兼容：ctrl_c、ctrl_z、arrow_up 等
-        // "ctrl_x" → Ctrl + 字母x
-        if let Some(rest) = s.strip_prefix("ctrl_").or_else(|| s.strip_prefix("ctrl")) {
-            if rest.is_empty() {
-                return None;
-            }
-            let key = KeyCode::from_str(rest)?;
-            return Some(KeyCombo {
-                modifiers: MOD_CTRL,
-                key,
-            });
         }
 
         // 无修饰键
@@ -487,20 +472,6 @@ mod tests {
         assert!(!combo.shift());
         assert!(!combo.alt());
         assert_eq!(combo.key, KeyCode::Char('a'));
-    }
-
-    #[test]
-    fn test_parse_ctrl_legacy_format() {
-        let combo = KeyCombo::parse("ctrl_c").unwrap();
-        assert!(combo.ctrl());
-        assert_eq!(combo.key, KeyCode::Char('c'));
-    }
-
-    #[test]
-    fn test_parse_ctrl_legacy_no_underscore() {
-        let combo = KeyCombo::parse("ctrlc").unwrap();
-        assert!(combo.ctrl());
-        assert_eq!(combo.key, KeyCode::Char('c'));
     }
 
     #[test]
