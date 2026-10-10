@@ -19,6 +19,7 @@
 | 移动插件构建 | `bedcode-mobile/wasm-apps/<app-id>` | `pnpm run build` |
 | 桌面插件全量构建 | `bedcode-desktop` | `pnpm run plugins:build` |
 | 移动插件全量构建 | `bedcode-mobile` | `pnpm run plugins:build` |
+| WIT 分片拼装 / 漂移锁 | 仓库根 | `pnpm run check:wit`（只读锁；拼装 = `node scripts/compose-wit.mjs --all`） |
 | 代码质量 | 仓库根 / 各端 | `pnpm exec eslint .` · 各端 `pnpm run lint` · `src-tauri` 内 `cargo clippy` |
 
 ---
@@ -292,6 +293,22 @@ node scripts/package-sdks.mjs        # 两端 SDK：npm tarball + crates.io crat
 CI 由 `.github/workflows/release.yml` 的 `package-plugins` / `package-sdks` job 执行并上传到 release，流程见 `docs/knowledge/release-workflow.md`。
 
 插件 zip 可直接在桌面端「插件」页安装（加载插件 → 选 zip），落盘 `app_data_dir/plugins/<id>/`；加载校验 manifest 必填字段 + id 反向域名 + 路径穿越防护 + wasm 存在性，拒绝覆盖同 id（升级需先卸载），卸载会删除该插件全部数据。插件开发约束见 `docs/knowledge/plugin-development-checklist.md`。
+
+### 5.6 WIT 分片拼装（契约生成物，ADR 0045）
+
+端 SDK 的 `rust/wit/` 是**生成物**（核心真源 + 能力域 / 端 cap 分片按端清单拼装合成 package）：
+
+```bash
+# 仓库根执行
+node scripts/compose-wit.mjs desktop            # 桌面端拼装（写 plugin-sdk-desktop/rust/wit/）
+node scripts/compose-wit.mjs mobile             # 移动端拼装
+node scripts/compose-wit.mjs --all              # 双端拼装
+pnpm run check:wit                              # 只读漂移锁（= 双端 --check）
+```
+
+- **真源**：`packages/bedcode-wasm-core/wit/core.wit`（核心交集，17 全等 interface）+ 能力域 `packages/bedcode-*/wit/*.wit`（pty/http/ws/peer/mdns）+ 端 `packages/plugin-sdk-*/rust/wit-src/cap-*.wit`；端清单 `packages/plugin-sdk-*/compose.json`（caps / worlds / abi.version）是「这一端组合了什么」的唯一答案。
+- **禁止手改生成物**：CI（`.github/workflows/wit-drift-lock.yml`）与 husky pre-commit 都跑 `--check`——手改生成物、或真源改了没重拼，即红并点名漂移文件。
+- **契约改动流程**：改真源 → `node scripts/compose-wit.mjs --all` 重拼 → 重编 SDK / 宿主（bindgen path 指生成物目录）；ABI 破坏性变更走 ADR 0019 双端锁步（双端各自 bump + 产物重建 + CHANGELOG 双语）。
 
 ---
 

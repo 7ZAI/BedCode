@@ -9,6 +9,67 @@
 
 ## [未发布]
 
+#### wasm-core 单一 crate：移动 fork 退役 + 依赖图脱桌面（票 06）
+
+- **双端共用一份 `bedcode-wasm-core`**（ADR 0045 D1）：移动 fork crate
+  `bedcode-mobile/packages/bedcode-wasm-core`（`bedcode-wasm-core-mobile`，约 2.4 万行）**已删除**。
+  移动 `src-tauri` 改为经 package rename 别名依赖仓库根 crate
+  （`bedcode-wasm-core-mobile = { package = "bedcode-wasm-core", path = "../../packages/bedcode-wasm-core",
+  default-features = false, features = ["mobile-host"] }`），`bedcode_wasm_core_mobile::` 导入路径零改动。
+  桌面形态 = 默认 `desktop-host`；两形态编译互斥（`compile_error!`）
+- **依赖图脱桌面**：桌面独有依赖（plugin-api / server-{core,http,ws,peer} / 加密套件 7 项 /
+  wasmtime-wasi / tauri-plugin-dialog）全部 optional + `desktop-host` 门控；
+  `cfg(all(target_os = "linux", not(target_os = "android")))` 把 dbus / webkit2gtk 挡在 Android 外；
+  零引用依赖删除。门禁：`cargo tree --no-default-features --edges no-dev` 能力域命中 0
+  （余 webkit/dbus 全经 tauri 传递，如实登记），Android target tree 全零
+- **Store 装配分形态**：host-kit `wasi-store` feature 门控（桌面 WASI p3 vs 移动无 WASI）
+- **退役 fail-visible**：① 旧读路径删除（目录删除 + 别名指根 crate，残留引用编译期红）
+  ② 旧产物实例化期点名（v37/v20 `stale_artifact_rebuild_hint`）③ 新退役锁
+  `bedcode-mobile/src-tauri/tests/retired_mobile_wasm_core_fork_lock.rs`（目录 / 包名 / 路径字形 /
+  别名指向四判据，变异自检 2/2）；fork 时代移动锁改钉根 crate 路径
+  （`retired_mobile_terminal_link_lock.rs`、`retired_mobile_host_terminal_hooks_lock.rs`）
+- **门禁**：移动全量测试绿（22 个测试目标）；桌面零回归（宿主 check + lib 测试）；内核桌面形态 lib 591/0
+
+#### 单一 wasm-core + WIT 分片组合：锁与文档收口（票 07）
+
+- **契约生成物端到端漂移锁**：`scripts/compose-wit.mjs --check` 双端接入独立 CI workflow
+  （`.github/workflows/wit-drift-lock.yml`）与 husky pre-commit；仓库根 `pnpm run check:wit`
+  为可复跑入口。变异双向自检：手改生成物 → 红（点名文件）；改分片真源没重拼 → 红（双端）
+- **新增防回接锁**（每条均变异自检）：能力域自持分片 bindgen 锁 + 端清单↔装配面双向动态对照锁
+  （宿主 `src/plugin/bindings.rs` cfg(test)）；移动 fork 退役锁 + 移动 WIT 组合锁
+  （`bedcode-mobile/src-tauri/tests/`）
+- **边界锁登记表复核**：`crate_boundary_lock.rs` ALLOWED 表补票 06 mobile-host 新边
+  （`bedcode-wasm-core → bedcode-discovery-engine`）；REQUIRED 不动（该边仅移动形态）
+- **文档收口**：ADR 0045 转 accepted（实施记录：POC 四命题结论 / D3 复评 = 拆分执行 /
+  D6 fork 退役证据 / 与 ADR 0035·0036·0037·0040 衔接）；双端 code-map 登记核心 world /
+  能力域分片 / 端清单三处 + 新锁索引条目；AGENTS §4/§5.4 按单一 crate 改写；
+  `docs/commands.md` 增 WIT 拼装小节；插件开发检查清单更新（分片真源 / 生成物禁手改 /
+  v37·v20 产物重建口径）
+
+#### 核心 WIT 交集切片收拢 ws / fs / http（票 04）：双端 ABI bump + 产物重建
+
+- **三个交集接口收拢进共享核心**（`packages/bedcode-wasm-core/wit/core.wit`）：
+  `host-websocket`（客户端域 5）、`host-fs`（交集 6）、`host-http`（出站 fetch 1）。
+  核心 WIT 现有 17 个全等接口；各端 `cap-*.wit` 只留扩展与端独有面
+- **桌面扩展拆出**（破坏性）：`host-websocket-server`（服务端域 10）与
+  `host-http-endpoint`（入站路由 2）为能力域分片里的新接口
+  （`server-websocket/wit/ws.wit`、`server-http/wit/http.wit`）；WIT impl 留在能力域
+  crate（desktop-host），经同一模块自报装配路径注册
+- **移动扩展拆出**（破坏性）：`host-fs-mobile`（2：save-to-document /
+  write-media-downloads）为 `cap-mobile.wit` 新接口，由移动 fork 实现
+- **双端 ABI bump**：桌面 36 → **37**、移动 19 → **20**（断言 + WIT/abi.rs 历史注释联动）。
+  旧产物（v36/v19 SDK 构建）在实例化期被 `stale_artifact_rebuild_hint` 点名缺失接口与
+  重建版本——正向（重建）与反向（升级 BedCode）两分支都有新判据与测试；原 v29 反向
+  判据退役（其锚 `host-http.register-endpoint` 现归 v37 正向分支所有——v28- 宿主在
+  当前代码库不存在）
+- **bindgen path 目录化补齐**：`plugin-component-test`（移动）与 `plugin-system-test`
+  （桌面）改指生成物 `wit/` 目录（push_dir）而非合成后的 bedcode.wit 单文件——票 03
+  十五条目清单漏掉的两位消费者
+- **插件产物全量重建 + wasmHash 注入**（桌面 4 + 移动 3）；双端 SDK `cargo check --features
+  wasm` 绿；内核 `cargo test --lib` 593/593、移动 fork 284/284、桌面宿主 `plugin::*` 75/75。
+  `cross-end-tests` 延后至重构波次稳定后统一验证（项目级决策，非本票门禁）
+
+
 #### 移动端：壳只按 surface 形态加载应用——旧嵌入扩展点整面退役（ADR 0046）
 
 - **壳只解析一种运行面形态**：`pluginAppSource.resolveSurface` 删掉四级回退链

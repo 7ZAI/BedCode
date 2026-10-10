@@ -7,6 +7,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+#### Single wasm-core crate: mobile fork retired, dependency graph unbound from desktop (ticket 06)
+
+- **One `bedcode-wasm-core` serves both ends** (ADR 0045 D1): the mobile fork crate
+  `bedcode-mobile/packages/bedcode-wasm-core` (`bedcode-wasm-core-mobile`, ~24k lines) is
+  **deleted**. Mobile `src-tauri` now depends on the repo-root crate through a package-rename alias
+  (`bedcode-wasm-core-mobile = { package = "bedcode-wasm-core", path = "../../packages/bedcode-wasm-core",
+  default-features = false, features = ["mobile-host"] }`), so `bedcode_wasm_core_mobile::` imports are
+  unchanged. Desktop form = default `desktop-host`; the two forms are compile-mutex (`compile_error!`)
+- **Dependency graph unbound from desktop**: desktop-only deps (plugin-api, server-{core,http,ws,peer},
+  the seven crypto suites, wasmtime-wasi, tauri-plugin-dialog) are optional + `desktop-host` gated;
+  `cfg(all(target_os = "linux", not(target_os = "android")))` keeps dbus / webkit2gtk off Android;
+  zero-reference deps removed. Gate: `cargo tree --no-default-features --edges no-dev` = zero
+  capability-domain hits on the Linux host and on the Android target (remaining webkit/dbus hits are
+  tauri-transitive and registered as such)
+- **Store assembly split by form**: host-kit `wasi-store` feature (desktop WASI p3 vs mobile no-WASI)
+- **Fail-visible retirement**: ① old read path deleted (directory gone + alias to the root crate;
+  stale references fail at compile time) ② old artifacts still named at instantiation by the
+  v37/v20 `stale_artifact_rebuild_hint` ③ new lock
+  `bedcode-mobile/src-tauri/tests/retired_mobile_wasm_core_fork_lock.rs` (fork directory / package
+  name / path shape / alias target; mutation checks 2/2). Fork-era mobile locks were re-pinned to the
+  root crate (`retired_mobile_terminal_link_lock.rs`, `retired_mobile_host_terminal_hooks_lock.rs`)
+- **Gates**: mobile full suite green (22 test targets); desktop zero regression (host check + lib
+  tests); desktop-form core lib 591/0
+
+#### Single-crate wasm-core + WIT slice composition: locks and docs closeout (ticket 07)
+
+- **Generated WIT artifacts are drift-locked end to end**: `scripts/compose-wit.mjs --check` for both
+  ends now runs in a dedicated CI workflow (`.github/workflows/wit-drift-lock.yml`) and in the husky
+  pre-commit hook; repo-root `pnpm run check:wit` is the rerunnable entry. Mutation-verified in both
+  directions: hand-editing a generated file → red (names the file); editing a slice source without
+  re-composing → red (both ends)
+- **New anti-regression locks** (each mutation-checked): capability-domain bindgen slice lock +
+  compose↔whitelist bidirectional lock (host `src/plugin/bindings.rs` cfg(test)); mobile fork
+  retirement lock + mobile WIT composition lock (`bedcode-mobile/src-tauri/tests/`)
+- **Boundary table refreshed**: `crate_boundary_lock.rs` ALLOWED gains the ticket-06 mobile-host edge
+  (`bedcode-wasm-core → bedcode-discovery-engine`); REQUIRED unchanged (that edge is mobile-form only)
+- **Docs closeout**: ADR 0045 accepted (implementation record: POC conclusions, D3 re-evaluation =
+  slicing executed, D6 fork-retirement evidence, ADR 0035/0036/0037/0040 linkage); both code-maps
+  register the core world / slices / end manifest and the new lock index entries; AGENTS §4/§5.4
+  rewritten for the single crate; `docs/commands.md` gains the compose-wit section; the plugin
+  development checklist now states slice truth sources, the generated-artifact rule and the v37/v20
+  artifact rebuild path
+
+#### Core WIT intersection slicing closes ws / fs / http (ticket 04): dual-end ABI bump + artifact rebuild
+
+- **Three more intersection interfaces now live in the shared core** (`packages/bedcode-wasm-core/wit/core.wit`):
+  `host-websocket` (client domain 5), `host-fs` (intersection 6), `host-http` (outbound fetch 1).
+  Core WIT now carries 17 fully-equal interfaces; per-end `cap-*.wit` files keep only extensions
+  and end-unique surfaces
+- **Desktop extensions sliced out** (breaking): `host-websocket-server` (server domain 10) and
+  `host-http-endpoint` (inbound routing 2) are new interfaces in the capability-domain slices
+  (`server-websocket/wit/ws.wit`, `server-http/wit/http.wit`); their WIT impls stay in the
+  capability crates (desktop-host) and are registered via the same module self-report path
+- **Mobile extension sliced out** (breaking): `host-fs-mobile` (2: save-to-document /
+  write-media-downloads) is a new interface in `cap-mobile.wit`, implemented in the mobile fork
+- **Dual-end ABI bump**: desktop 36 → **37**, mobile 19 → **20** (assertions + WIT/abi.rs history notes
+  updated). Old artifacts (v36/v19 SDK builds) are rejected at instantiation with
+  `stale_artifact_rebuild_hint` naming the missing interface and the rebuild version — forward
+  (rebuild) and reverse (upgrade BedCode) branches both covered by new needles and tests. The
+  legacy v29-reverse hint branch was retired: its anchor (`host-http.register-endpoint`) is now
+  owned by the v37 forward branch (v28- hosts do not exist in the current codebase)
+- **bindgen path directory-ization completed**: `plugin-component-test` (mobile) and
+  `plugin-system-test` (desktop) now point at the generated `wit/` directory (push_dir) instead of
+  the composed `bedcode.wit` file — the two consumers missed by ticket 03's 15-path list
+- **All plugin artifacts rebuilt with wasmHash injection** (desktop 4 + mobile 3); both SDKs
+  `cargo check --features wasm` green; core `cargo test --lib` 593/593, mobile fork 284/284,
+  desktop host `plugin::*` 75/75. `cross-end-tests` deferred until the refactor wave settles
+  (project-wide decision, not a per-ticket gate)
+
+
 #### Mobile: shell loads apps as surfaces only — old embed extension points retired wholesale (ADR 0046)
 
 - **The shell now resolves one running-surface form only**: `pluginAppSource.resolveSurface` lost its

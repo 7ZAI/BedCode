@@ -269,16 +269,21 @@ bedcode-mobile/                       # 移动端项目 (Tauri 2.0 + Vue 3)
 
 移动端插件系统与桌面端同架构（wasmtime 组件沙箱），并有移动端特有能力。做插件相关改动时按层定位：
 
-**插件机制整核（fork crate，宿主已切换）— `packages/bedcode-wasm-core/`：**
-crate 名 `bedcode-wasm-core-mobile`，fork 自桌面整核（ADR 0040 选项 C 第一步，票 17）。已含：机制核
-（bus/config/db/monitor/permission/security/storage）、**移动运行时与 17 域 host 原语**
-（`manager/runtime{,/component.rs,/host_impl/}`——bindgen 绑移动 WIT v18，宿主引擎调用经
-`host_api/ports.rs` 的 `HostEnginePorts` 注入；v18 新增 `host-notify`：通知/震动/声音，
-收编原 host-events.notify，权限位 `notify` fail-closed）、`host_api/{http_engine,sql_guard}`（原宿主
-wasm_host.rs 拆分）、`terminal_stream_gateway.rs`（窄转发表，Tauri 命令薄壳留宿主）、
+**插件机制整核（单一 wasm-core，仓库根 crate）— `packages/bedcode-wasm-core/`：**
+双端共用单一 crate（ADR 0045 D1；移动 fork crate 已随票 06 批次 04 退役，目录删除）。
+移动形态依赖形态（`src-tauri/Cargo.toml`）：
+`bedcode-wasm-core-mobile = { package = "bedcode-wasm-core", path = "../../packages/bedcode-wasm-core",
+default-features = false, features = ["mobile-host"] }`——package rename 别名，源码
+`bedcode_wasm_core_mobile::` 导入路径零改动。`mobile-host` 面含：机制核（bus/config/db/monitor/
+permission/security/storage，与桌面**同一份源码**）、**移动运行时与 host 原语**
+（`manager/runtime/mobile/**`——bindgen 绑移动 WIT v20 生成物目录 `wit/`〔core.wit + cap-mobile.wit
++ bedcode.wit 分片拼装，票 03/06〕，宿主引擎调用经 `host_api/ports.rs` 的 `HostEnginePorts` 注入；
+v18 起 `host-notify`：通知/震动/声音，收编原 host-events.notify，权限位 `notify` fail-closed）、
+`host_api/{http_engine,sql_guard}`、`terminal_stream_gateway.rs`（窄转发表，Tauri 命令薄壳留宿主）、
 `test_support`（夹具构建器 + MockPorts，`any(test, feature = "test-support")` 门控）。
-**宿主 `src-tauri/src/plugin/` 仍是运行真源**（垫片切换 = 票 17 批次 2b，前置裁决见票 §6.1）；
-切换前禁止在本 crate 与宿主 plugin/ 之间做机制修改（双真源窗口期，改哪边都要记账）。
+**防回接**：`src-tauri/tests/retired_mobile_wasm_core_fork_lock.rs`（fork 目录 / 包名 /
+路径字形 / 别名指向四判据）；WIT 生成物由仓库根 `node scripts/compose-wit.mjs mobile --check`
+（CI `wit-drift-lock.yml` + husky）盯住，手改生成物即红。
 
 **Rust 宿主侧 — `src-tauri/src/plugin/`：**
 
@@ -321,11 +326,18 @@ components/screens，数据源 `adapters/devAppSource.ts` 把「内置应用 + �
 完整开发指南见仓库根 `bedcode-mobile/plugin-dev-mobile.md`。
 
 **端 WIT 生成物（票 03）：** `packages/plugin-sdk-mobile/rust/wit/` = `core.wit`（共享核心真源
-`packages/bedcode-wasm-core/wit/core.wit`）+ `cap-mobile.wit`（真源 `rust/wit-src/cap-mobile.wit`）+
+`packages/bedcode-wasm-core/wit/core.wit`）+ 同 `cap-mobile.wit`（真源 `rust/wit-src/cap-mobile.wit`）+
 `bedcode.wit`（package + `world plugin { include core; include cap-mobile; }`），由根
 `scripts/compose-wit.mjs` 按 `packages/plugin-sdk-mobile/compose.json` 拼装（`--check` 漂移锁）。
 移动 fork 的 bindgen（`packages/bedcode-wasm-core/src/manager/runtime/component.rs`）path 指
 `../plugin-sdk-mobile/rust/wit` 目录（push_dir 加载合成 package）。
+
+**票 04 交集切片收拢（ABI 19→20）：** 共享核心 core.wit 收拢 `host-websocket`（客户端 5 =
+交集完整）/ `host-http`（fetch）/ `host-fs`（交集 6）；本端独有 SAF/媒体下载目录
+`save-to-document` / `write-media-downloads` 拆入新接口 `host-fs-mobile`（fork
+`component.rs` 拆分 `impl host_fs::Host` → `impl host_fs_mobile::Host`，add_to_linker 同行）；
+旧产物（v19）import `host-fs.write-media-downloads` 等在实例化期被拒，
+`stale_artifact_rebuild_hint` 点名按 v20 SDK 重建。
 
 **内置 wasm 应用源码 — `wasm-apps/*/`：** 每个 app 独立 package：`plugin.json` 元数据 + `rust/` WASM 后端 +
 `src/` TS 前端 + `vite.config.ts` 独立构建。改插件后需重新构建并同步产物到打包资源。
@@ -618,8 +630,9 @@ Desktop PTY → Claude Code
 - 插件 KV 真源 = 主库 `plugin_storage` 表（票 05b 真源搬迁）→ `src-tauri/tests/plugin_storage_db_backed_lock.rs`（`plugin_storage_is_db_backed_not_file_backed`）
 - `host-websocket` 客户端子集域边界（票 11：移动 WIT 不得长出 ws **服务端**域 / 不得定义 ws 服务端权限）→ `src-tauri/tests/mobile_host_websocket_client_domain_lock.rs`
 - egress 三档策略架构不变量（票 20：档位→动作映射单点 `StrategyStep::of` / 写入面 `parse_wire` 单点 / 安全义务符号在场）→ `src-tauri/tests/egress_tier_mapping_single_point_lock.rs`（3 例 + 变异自检 3/3）
-- 移动 SDK ↔ fork crate 契约对照（票 19 Part A，4 例：A1 WIT 接口清单 / A2 权限词汇五同步 / A3 WIT↔host_impl 接线全表 / A4 wire 形状对照对 + 单源防副本）→ `packages/bedcode-wasm-core/tests/sdk_wit_contract_locks.rs`（ABI 演进先改锁再改 WIT）
-- 双端机制核对称结构 + 共享引擎白名单（票 19 Part B：21 个机制核模块路径在桌面整核与 fork 双侧在场 / `src/error.rs` 移动自持形状不入对称面 / 共享锚点白名单含 ADR 0042 discovery-engine 与 ADR 0043 ws-client-engine）→ `packages/bedcode-wasm-core/tests/fork_boundary_lock.rs`
+- **移动 fork crate 退役面**（票 06 批次 04 / 票 07 批次 02）：fork 目录不得复活 / `bedcode-wasm-core-mobile` 只能当依赖键别名（不得作包名）/ 移动构建面不得出现 fork 形态路径（`"../packages/bedcode-wasm-core"`）/ `src-tauri` 别名必须指向仓库根 crate（package rename + mobile-host）→ `src-tauri/tests/retired_mobile_wasm_core_fork_lock.rs`（四判据；变异自检 2/2）
+- **移动 WIT 分片拼装组合**（票 03/07）：`compose.json` 的 `abi.version` == SDK `abi.rs` 的 `ABI_VERSION` / 生成物 `bedcode.wit` include 集 == `core` + 各 caps 键 / `worlds` 列表在生成物目录有声明 → `src-tauri/tests/mobile_wit_composition_lock.rs`（变异自检 1/1）。生成物逐字漂移面另有仓库根 `node scripts/compose-wit.mjs --all --check`（CI `wit-drift-lock.yml` + husky pre-commit）
+- 票 19 Part A/B 的 A1–A4 契约锁与 fork 对称结构锁（`bedcode-mobile/packages/bedcode-wasm-core/tests/{sdk_wit_contract_locks,fork_boundary_lock}.rs`）**随移动 fork crate 一并退役**（票 06 批次 04，目录删除 = 旧读路径消失）：A1 的结构/计数面由 `mobile_wit_composition_lock.rs` 承接，A2/A3/A4 的语义面由「移动 SDK 为唯一真源 + `stale_artifact_rebuild_hint` 旧产物点名 + 双端 ABI 锁步（ADR 0019）」承接；重建需求见 `.scratch/2026-10-09-wasm-core-single-crate/ticket-07-locks-and-docs-closeout.md` §5 遗留欠账
 
 > 迁移 / 抽包类任务的规格与逐票记录在 `.scratch/2026-10-07-mobile-wasm-core-refactor/` 与
 > `.scratch/2026-10-07-capability-crates-to-root-packages/`（`.scratch` 只在 uat/master 之外分支入库）。
