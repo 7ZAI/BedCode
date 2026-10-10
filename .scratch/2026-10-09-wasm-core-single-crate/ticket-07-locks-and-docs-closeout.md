@@ -104,10 +104,10 @@ Status: **✅ done（2026-10-10 落地；与票 06 批次 04/05 一并收口—�
 | 内核 lib 全量 | `packages/bedcode-wasm-core` 桌面形态 **593 passed / 0 failed**（含 fixture_keeper 4/4：crypto / task / **pty** / **ws**，pty+ws 产物 383KB / 397KB 实际生成） |
 | 桌面宿主 lib 全量 | **155 passed / 0 failed**（零回归） |
 | 桌面宿主边界锁 | 9/9 绿（表更新后） |
-| 前端两端 `test:run` | 见 §5.5 回填 |
+| 前端两端 `test:run` | 移动 **895/895 绿**（78 文件）；桌面 **1623/1624**——唯一红 `wasm-apps/terminal-session/src/__tests__/terminalPreview.test.ts > resize 命令首次失败自动重试` 为**在途基线**（相关源文件与测试文件在 HEAD 零差异、本会话未触碰桌面前端；单独复跑仍红 2/2 ⇒ 非 flaky、非本序列引入），如实记账见 §5.5 |
 | 根 `pnpm exec eslint .` | **0 error**（97 warning 不计入） |
 | fmt 自查 | 本票新增文件 rustfmt-clean（2/2）；存量触碰文件逐一对照 HEAD 判定为**存量不净**（不动，守仓库纪律） |
-| clippy | 见 §5.5 回填 |
+| clippy | 桌面 / 内核两 crate `cargo clippy --lib` **0 error**（桌面 10 warning / 内核 54 warning 均存量，改动文件无新告警命中；非 CI 门禁） |
 
 ### 5.5 未跑 / 手工项（逐项写明）
 
@@ -116,7 +116,8 @@ Status: **✅ done（2026-10-10 落地；与票 06 批次 04/05 一并收口—�
 - **Android target 编译级实证**：未跑（需 NDK）；tree 级全零门禁保持（批次 01 双实证）。
 - **真机 / 浏览器核验**：未跑——本票无 UI / 行为改动（锁 + 文档 + 测试夹具）；行为面未变更。
 - **wasm 应用完整构建（含 wasmHash 注入）**：未跑——本票未改 WIT 语义与插件代码（生成物逐字未变，`--check` 为证）。
-- **前端两端 `test:run` / clippy**：见 §5.5 补充记录。
+- **桌面前端 1 红（在途基线，非本序列引入，未修）**：`wasm-apps/terminal-session/src/__tests__/terminalPreview.test.ts > resize 命令首次失败自动重试（竞态加固）：重试结果进入裁决链路 → 覆盖确认弹窗`（:518 `vi.waitFor` 3s 内未见 `session.terminal.rendererOverrideTitle` 弹窗）。判定证据：① 相关实现文件（`components/terminal/TerminalPreview.vue` / `composables/terminal/useTerminalResize.ts`）与测试文件对 HEAD **零差异**（`git status` 干净），本会话只改 Rust / 文档 / 锁，未触碰桌面前端；② 单独复跑仍红（非高负载 flaky）；③ 弹窗渲染链本身自洽（i18n key 三份在场、`v-if="showRendererOverrideModal"` 正常）⇒ 断点在「首次失败 → 300ms 重试 → needsConfirmation」的触发链（嫌疑：挂载期网格/RO 未触发 resize 或在途对组件依赖面的改动），需专项定位。记入基线，本票不改他人任务面。
+- **clippy（非 CI 门禁）**：桌面 / 内核两 crate `cargo clippy --lib` 均 0 error（见 §5.4 表）。
 
 ### 5.6 遗留欠账（本序列汇总，供后续补跑）
 
