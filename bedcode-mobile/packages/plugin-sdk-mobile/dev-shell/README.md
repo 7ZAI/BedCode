@@ -1,7 +1,22 @@
 # BedCode Dev Shell（移动端插件浏览器开发环境）
 
-空壳宿主 + 移动端页面骨架：在浏览器中运行插件前端源码，支持 HMR，
+浏览器里的**宿主壳**：在浏览器中运行插件前端源码，支持 HMR，
 无需构建、打包、真机安装即可迭代 UI 与前端逻辑。
+
+## 形态：与真机宿主壳同构
+
+调试壳内置一层 mini 宿主壳（`src/shell/**`），与真机
+`bedcode-mobile/src/shell/**` 同构——同样的屏幕栈（首页 / 应用 / 详情 / 运行面 /
+多任务 / 权限总览 / 我的）、同样的「只认 `registerSurface` 一种运行面形态」、同样的
+胶囊与平台覆盖层。因此：
+
+- 插件在 dev-shell 里看到的挂载方式、导航层级与真机一致，不会出现
+  「浏览器里好好的、装到手机上白屏」。
+- npm 包必须自包含（外部用户装不到 app 源码），所以这里是**同构实现**而非共享组件；
+  契约漂移由 `__tests__/shell/contractDrift.test.ts` 钉住（字段集 / 状态集 /
+  屏幕集与宿主逐项比对）。
+- 内置页（模拟终端）已降为**内置应用**（`src/apps/mock-terminal/`），与被调试插件
+  走同一条加载与渲染路径——预览环境里始终有一个形态正确的应用在场。
 
 ## 使用
 
@@ -56,10 +71,15 @@ BEDCODE_DEV_PLUGINS="<插件目录>[::<入口文件>]" pnpm exec vite --config <
 | 区域 | 说明 |
 |---|---|
 | 手机框 | 390×844 手机尺寸（工作台右上角开关），关闭后全宽便于 DevTools 模拟 |
-| 底部导航 | 内置三项 + 插件 `ui.registerNavTab` 动态追加 |
-| 工具箱 | 插件 `registerToolboxPage` 入口网格（含自定义 entry 卡片） |
-| 模拟终端 | 输入发送（记录到会话输入行）、模拟输出（触发 `terminal:output` 事件，供 `openTerminalStream` mock 消费）、新建/停止会话、连接/断开、认证成功（触发对应 lifecycle）；插件终端工具栏项渲染在顶部；底部展示 mobileApi 任务队列 mock |
-| 插件页 | 状态徽章（激活/错误）、激活/停用、设置区/路由/文件服务挂载一览 |
+| 壳 · 首页 | 品牌区 + 应用贡献的快捷卡片（`registerSlot`，未贡献则平台兜底卡）+ 应用宫格 + 最近使用 |
+| 壳 · 应用 | 内置应用与被调试插件并列；启动/停用、错误原因、权限项数、数据占用 |
+| 壳 · 应用详情 | Hero + 权限（按能力域分组，storage 锁定）+ 存储 + 运行时授权弹窗演示 + 停用 |
+| 壳 · 运行面 | 胶囊（权限设置 / 停用 / 应用贡献项）+ 应用自持界面 + homebar 呼出多任务；**未注册运行面时显式空态**，不回退其它形态 |
+| 壳 · 多任务 | 运行中应用列表：进入 / 停止 |
+| 壳 · 权限总览 | 按权限词反查持有它的应用 |
+| 壳 · 我的 | 权限总览入口、调试对象概览、外观（主题三档）、语言、应用贡献的设置项、清理调试数据 |
+| 模拟终端（内置应用） | 输入发送（记录到会话输入行）、模拟输出（触发 `terminal:output` 事件，供 `openTerminalStream` mock 消费）、新建/停止会话、连接/断开、认证成功（触发对应 lifecycle）；底部展示 mobileApi 任务队列 mock；并贡献一张首页快捷卡片 |
+| 插件动态路由 | `registerRoute` + `openPage` 走 vue-router 整页跳转（`/plugin/{pluginId}/{id}`），页头由 `header` 描述符决定 |
 | 日志面板 | `context.logger` + 生命周期 + 加载错误，右下角浮层，warn/error 过滤 |
 | 对话框 | `context.dialogs` 全量实现（dialog/confirm/prompt/toast），移动端样式 |
 
@@ -92,6 +112,27 @@ BEDCODE_DEV_PLUGINS="<插件目录>[::<入口文件>]" pnpm exec vite --config <
 - 真实宿主忽略 `devMock` 导出（`PluginModule` 多余字段对 `activate` 无影响），无需条件编译
 - 停用插件时 devMock 随 `registerDevMock` 的 Disposable 一并清理
 
+## 目录结构
+
+```
+dev-shell/src/
+├── App.vue                 # 舞台（工作台 + 手机框）；插件路由页与壳二选一渲染
+├── main.ts                 # 入口：pinia → router → i18n → 共享运行时 → 加载 → mount
+├── loader.ts               # 调试对象加载器：内置应用 + 被调试插件同一条路径
+├── registry.ts             # 调试记录 / 日志 / 插件路由注册表（壳贡献项不在这里）
+├── mock-context.ts         # mock PluginContext（UI 注册面写进壳注册表）
+├── apps/mock-terminal/     # 内置应用「模拟终端」（自持运行面 + 首页卡片）
+├── locales/                # devshell.* 工作台文案 + shell.* 宿主壳文案（双语）
+└── shell/                  # 与宿主壳同构的 mini 壳
+    ├── types.ts            # 契约（贡献描述符复用 SDK types，不重定义）
+    ├── registry.ts         # 应用清单 + 贡献合并 + 响应式发布
+    ├── permissions.ts utils.ts logger.ts
+    ├── composables/        # useShellApps / Navigation / Overlays / Recent / Open / Toast
+    ├── components/         # ShellHost · Tabbar · Capsule · PermissionPrompt · 屏幕栈
+    ├── adapters/           # devAppSource：调试记录 → 壳应用（数据源）
+    └── styles/shell.css
+```
+
 ## 常见问题
 
 - **插件样式缺失**：插件 SFC 使用宿主 Tailwind 工具类，dev-shell 的
@@ -103,3 +144,7 @@ BEDCODE_DEV_PLUGINS="<插件目录>[::<入口文件>]" pnpm exec vite --config <
   SDK 包（file: 或 npm），其 `dist` 需存在（`pnpm run build` 一次）。
 - **真机专属能力**（WASM 命令、真实 WS、SAF 文件选择、系统通知）无法在
   浏览器模拟，发布前仍按 `../../../plugin-dev-mobile.md` 验证清单过真机。
+- **应用在「应用」页点启动没反应**：dev-shell 的启动即重新跑一次插件 `activate()`；
+  若插件在 activate 期抛错，详情页会显示错误原因，日志面板同步记 error。
+- **权限开关是灰的**：预览环境没有可写的权限真源（`setPermissionGrant` 恒返回 false），
+  权限逻辑请到真机验证。

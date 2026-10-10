@@ -1,11 +1,18 @@
 <script setup lang="ts">
 /**
- * MockTerminalView — 模拟终端
+ * 模拟终端（内置应用运行面）
  *
- * 驱动 mock/session.ts：输入发送（记录到会话输入行）、模拟输出
- * （触发 terminal:output 事件供 openTerminalStream mock 消费）、会话创建/停止、
- * 连接/断开、认证成功（触发对应 lifecycle 钩子）。插件注册的终端工具栏项渲染在顶部。
- * 底部展示 mobileApi 任务队列 mock（任务域类插件的调试入口）。
+ * dev-shell 的模拟终端：输入发送（记录到会话输入行）、模拟输出（触发 terminal:output
+ * 事件供 openTerminalStream mock 消费）、会话创建/停止、连接/断开、认证成功
+ * （触发对应 lifecycle 钩子）。底部展示 mobileApi 任务队列 mock。
+ *
+ * 归属变更：原先它是壳的一个调试页签（`views/MockTerminalView.vue` + 底部导航一项），
+ * 现在降为**内置应用**——自持运行面、经壳的 registerSurface 挂载、与被调试插件走
+ * 同一条加载与渲染路径。理由：应用自持界面是新宿主壳的核心形态，预览环境里必须
+ * 有一个真实应用在场，否则「壳怎么渲染别人的界面」这件事在 dev-shell 里无法验证。
+ *
+ * 与真机的差异见 README「Mock 边界」：WASM 后端不在浏览器运行，这里驱动的是
+ * mock/session.ts 的模拟会话。
  */
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -21,9 +28,8 @@ import {
   sessions,
   setConnected,
   stopSession,
-} from '../mock/session'
-import { queueTasks } from '../mock/mobile-api'
-import { isSvgIcon } from '../utils/icon'
+} from '../../mock/session'
+import { queueTasks } from '../../mock/mobile-api'
 
 const { t } = useI18n()
 
@@ -50,7 +56,7 @@ function resetQueue() {
 </script>
 
 <template>
-  <div class="h-full flex flex-col min-h-0">
+  <div class="h-full flex flex-col min-h-0 mobile-ui mobile-app">
 
     <div class="flex-1 min-h-0 flex flex-col md:flex-row">
       <!-- 会话列表 -->
@@ -129,12 +135,12 @@ function resetQueue() {
 
     <!-- 任务队列 mock（mobileApi） -->
     <div class="flex-shrink-0 border-t border-[var(--mobile-border)] px-4 py-2 flex items-center gap-2 text-xs">
-      <span class="text-[var(--mobile-text-muted)]">队列(mock):</span>
+      <span class="text-[var(--mobile-text-muted)]">{{ t('devshell.terminal.queueMock') }}</span>
       <span class="text-[var(--mobile-text-secondary)] truncate min-w-0">
-        {{ queueTasks.length ? queueTasks.map((task) => task.prompt).join(' / ') : '空' }}
+        {{ queueTasks.length ? queueTasks.map((task) => task.prompt).join(' / ') : t('devshell.terminal.queueEmpty') }}
       </span>
       <button class="ml-auto flex-shrink-0 text-[var(--mobile-text-muted)] hover:text-[var(--mobile-error)] transition-colors duration-200" @click="resetQueue()">
-        清空
+        {{ t('devshell.terminal.queueClear') }}
       </button>
     </div>
   </div>
@@ -149,7 +155,7 @@ function resetQueue() {
   color: var(--mobile-text-secondary);
   background: var(--mobile-bg-tertiary);
   border: 1px solid var(--mobile-border);
-  transition: all 0.2s;
+  transition: color 0.2s, border-color 0.2s;
 }
 .chip:hover:not(:disabled) {
   color: var(--mobile-text-primary);

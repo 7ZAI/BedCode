@@ -61,6 +61,36 @@
 - 移动端插件契约独立（ADR 0018）：本次退役**不波及**桌面端，也未触发 wasmtime 版本变更
   （ADR 0019）。ADR：`docs/adr/0046-mobile-shell-surface-only-and-retired-embed-extension-points.md`
 
+#### 移动端：dev-shell 调试壳改用新宿主壳形态——内置 mini 壳 + 内置应用降级
+
+- **调试壳不再自造一套导航形态**：`dev-shell` 原先是「三页签骨架 + 全局 activeView 视图栈」，
+  与真机宿主壳形态不同，插件在浏览器里跑通并不能说明真机上也跑通。现内置与宿主
+  `src/shell/**` **同构的 mini 壳**（`dev-shell/src/shell/**`：types → registry → composables →
+  components/screens，数据源 `adapters/devAppSource.ts`），屏幕栈（首页 / 应用 / 详情 / 运行面 /
+  多任务 / 权限总览 / 我的）、胶囊、平台覆盖层与「只认 `registerSurface` 一种运行面形态」逐项对齐
+- **npm 自包含边界不变**：SDK 的 `files` 白名单整份打包 dev-shell，外部用户装不到 app 源码，
+  因此这里是同构实现而非共享组件；契约漂移由 `contractDrift.test.ts` 钉住
+  （`ShellApp` / `ShellPermissionGrant` / `ShellAppState` / `ShellAppSource` 字段集与
+  屏幕 id 集合逐项比对宿主源文件，宿主源不在场时整组跳过）
+- **内置页降为内置应用**：模拟终端不再是壳的调试页签，而是自持运行面 + 首页快捷卡片的
+  **内置应用**（`dev-shell/src/apps/mock-terminal/`），与被调试插件走同一条加载与渲染路径——
+  预览环境里始终有一个形态正确的应用在场，壳的挂载路径因此可被真实验证
+- **插件动态路由改走 vue-router**：`registerRoute` / `openPage` 与宿主同构为整页跳转
+  （`/plugin/{pluginId}/{id}`），不再塞进壳内视图栈；运行面容器仍套 `PluginContextHost`
+  补 `provide('pluginContext')`，插件形态细节不外泄到壳
+- **顺带修两处真实缺陷**：`toShellApp` 漏投影 `error`（详情页只剩「启动失败」徽标、无原因）；
+  `activatePlugin` 在停用后再启动会追加同 id 第二条记录（`getPluginRecord` 命中旧记录 →
+  插件 inject 到已释放 context，应用列表出现同一应用两行）
+- **i18n 双语同步**：壳文案按宿主 `locales/*/shell.ts` 同键同义迁入
+  （`dev-shell/src/locales/`），随旧页签退役的 `devshell.*` key 整面删除
+- **测试**：SDK 根 vitest 纳入 `dev-shell/__tests__/**`（逻辑层，不挂载 SFC——组件渲染由宿主
+  `bedcode-mobile/src/__tests__/shell/**` 负责），5 文件 61 例；漂移锁经突变验证（加一个多余
+  字段 / 删一个屏幕 id 均测红）。dev-shell 与三个移动 wasm-app（terminal-session / ai-chatbox /
+  file-transfer）`vite build` 全绿，移动端 `pnpm run test:run` 895 例全绿
+- 未覆盖：`src/loader.ts` 无自动化测试（依赖 vite 虚拟模块与 SFC 链，接进 vitest 需引入与 vitest
+  内置 vite 主版本不一致的 `@vitejs/plugin-vue`，改用真实 wasm-app 的 `vite build` 冒烟覆盖）；
+  壳内组件渲染不在此重复测；真机/浏览器人工核验未跑
+
 #### 移动端：宿主前端迁移进 wasm-app——壳为默认入口、三应用独立页面、旧前端机制落地新界面
 
 - **默认入口改为宿主壳（`/mobile/shell`）**：`/` 重定向到壳；旧四页宿主（`MobileSwipeContainer`）

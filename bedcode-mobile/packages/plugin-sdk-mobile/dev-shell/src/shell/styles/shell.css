@@ -1,0 +1,102 @@
+/* ============================================================================
+   宿主壳（Host Shell）层样式
+   ----------------------------------------------------------------------------
+   纪律：本文件**不新增任何颜色**。除品牌层（固定琥珀，不随用户色板变化）外，
+   所有视觉值都引用 --mobile-* token，主题切换由既有 token 负责。
+
+   品牌层真源：.scratch/2026-10-07-wasmapp-brand/brand-spec-mobile.md §2.1
+     · ember     #FF9E2C —— 深底唯一彩色（bg-card 上 8.41:1）
+     · ember-700 #9F621B —— 浅底品牌色（bg-card 上 4.83:1）
+     · ember 绝不出现在浅底上（1.87:1，不可见）
+   品牌琥珀只出现在品牌位（标志 / 品牌名 / 品牌说明），不用于任何可点击控件。
+   ============================================================================ */
+
+.shell-ui {
+  --shell-brand-ember: #ff9e2c;
+  /* 品牌深底恒定：标志底板不随主题翻转，否则浅色主题下琥珀落在浅底上（1.87:1 不可见） */
+  --shell-brand-ink: #08090b;
+  /* 壳内结构 token：只定义与平台 token 无关的几何量，避免各处硬编码同一数值 */
+  --shell-radius-card: 12px;
+  --shell-radius-control: 10px;
+  --shell-radius-pill: 999px;
+  /* 快捷磁贴 hover 光晕：由强调色派生，随主题与色板变化（原为硬编码青色 rgba） */
+  --shell-action-glow: 0 0 15px color-mix(in srgb, var(--mobile-accent) 12%, transparent);
+}
+
+html:not(.dark) .shell-ui {
+  /* 浅色主题换明度档不换色相（brand-spec-mobile.md §2.2 规则 2/3） */
+  --shell-brand-ember: #9f621b;
+}
+
+/* ============================================================================
+   屏幕栈过渡
+   ----------------------------------------------------------------------------
+   只动 transform / opacity（compositor 友好），时长 ≤300ms。
+   横向位移用 26% 而非 100%：与移动端系统「上一级屏幕轻微后退」的手感一致，
+   全屏位移在低端机上容易掉帧。
+   ============================================================================ */
+.shell-screen-enter-active,
+.shell-screen-leave-active {
+  transition:
+    transform 0.28s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.shell-screen-forward-enter-from {
+  transform: translateX(100%);
+  opacity: 0;
+}
+.shell-screen-forward-leave-to {
+  transform: translateX(-26%);
+  opacity: 0;
+}
+
+.shell-screen-backward-enter-from {
+  transform: translateX(-26%);
+  opacity: 0;
+}
+.shell-screen-backward-leave-to {
+  transform: translateX(100%);
+  opacity: 0;
+}
+
+/* 屏幕层叠：进出场期间两屏共存，用绝对定位避免父容器被撑高 */
+.shell-screen-leave-active {
+  position: absolute;
+  inset: 0;
+}
+
+/* ============================================================================
+   底部抽屉（胶囊菜单 / 授权弹窗共用）
+   ============================================================================ */
+.shell-sheet-enter-active,
+.shell-sheet-leave-active {
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.shell-sheet-enter-from,
+.shell-sheet-leave-to {
+  transform: translateY(100%);
+}
+
+.shell-scrim-enter-active,
+.shell-scrim-leave-active {
+  transition: opacity 0.2s ease;
+}
+.shell-scrim-enter-from,
+.shell-scrim-leave-to {
+  opacity: 0;
+}
+
+/* ============================================================================
+   字母头像渐变档位（LetterAvatar 用）
+   ----------------------------------------------------------------------------
+   迁移自旧 `components/LetterAvatar.vue` 的六组硬编码渐变：颜色落点收归本文件
+   （唯一允许出现字面色值的落点），组件只按 seed 哈希选档。档位固定不随主题
+   反转——头像底不是主题语义面，因此不做深浅两套。
+   ============================================================================ */
+.shell-avatar-g0 { background: linear-gradient(135deg, #7c3aed, #4f46e5); }
+.shell-avatar-g1 { background: linear-gradient(135deg, #0ea5e9, #6366f1); }
+.shell-avatar-g2 { background: linear-gradient(135deg, #10b981, #0d9488); }
+.shell-avatar-g3 { background: linear-gradient(135deg, #f59e0b, #ef4444); }
+.shell-avatar-g4 { background: linear-gradient(135deg, #ec4899, #8b5cf6); }
+.shell-avatar-g5 { background: linear-gradient(135deg, #06b6d4, #3b82f6); }

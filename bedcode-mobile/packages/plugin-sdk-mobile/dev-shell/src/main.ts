@@ -2,7 +2,11 @@
  * Dev Shell 入口
  *
  * 初始化顺序与宿主一致：pinia → router → i18n → 共享运行时（必须在导入插件前）→
- * 加载插件（async）→ 挂载应用。mount 前先渲染 loading 骨架，插件就绪后展示真实内容。
+ * 加载调试对象（async）→ 挂载应用。mount 前先渲染 loading 骨架，对象就绪后展示真实内容。
+ *
+ * router 的职责收敛为一件事：承载**插件动态路由**（`/plugin/{pluginId}/{routeId}`，
+ * 由 mock-context 的 registerRoute 动态 addRoute）。宿主壳自己不走路由——它是一层
+ * 屏幕栈平台，路由只负责「进插件声明的整页跳转」，与宿主同构。
  */
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
@@ -34,12 +38,7 @@ const i18n = createI18n({
 
 const router = createRouter({
   history: createWebHashHistory(),
-  routes: [
-    { path: '/', redirect: '/toolbox' },
-    { path: '/toolbox', component: () => import('./views/ToolboxView.vue') },
-    { path: '/terminal', component: () => import('./views/MockTerminalView.vue') },
-    { path: '/plugins', component: () => import('./views/PluginsView.vue') },
-  ],
+  routes: [{ path: '/', component: { template: '<span />' } }],
 })
 
 app.use(pinia)
@@ -59,7 +58,7 @@ await initSharedRuntime({
   mobileApi,
 })
 
-// 插件激活完成后挂载（ToolboxView 依赖注册结果）
+// 调试对象就绪后挂载（壳的应用清单依赖注册结果）
 await loadPlugins()
 
 app.mount('#app')

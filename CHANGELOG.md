@@ -73,6 +73,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   retirement, and no wasmtime version change is triggered (ADR 0019). ADR:
   `docs/adr/0046-mobile-shell-surface-only-and-retired-embed-extension-points.md`
 
+#### Mobile: dev-shell rebuilt on the new host shell form — built-in mini shell + built-in app demotion
+
+- **The debug shell no longer invents its own navigation form**: dev-shell used to be a
+  "three-tab skeleton + global activeView stack", whose form differs from the real host shell —
+  an app working in the browser proved nothing about the device. It now ships a mini shell
+  **isomorphic to** the host `src/shell/**` (`dev-shell/src/shell/**`: types → registry →
+  composables → components/screens, data source `adapters/devAppSource.ts`): the screen stack
+  (home / apps / detail / run / switcher / permissions / me), capsule, platform overlays and the
+  "one running-surface form only (`registerSurface`)" rule all line up
+- **The npm self-containment boundary is unchanged**: the SDK `files` allowlist ships all of
+  dev-shell, and external users cannot install app source — hence an isomorphic implementation
+  rather than shared components. Contract drift is pinned by `contractDrift.test.ts`
+  (`ShellApp` / `ShellPermissionGrant` / `ShellAppState` / `ShellAppSource` field sets and the
+  screen-id set are compared against the host sources item by item; the group skips when the host
+  sources are absent)
+- **Built-in pages demoted to a built-in app**: the mock terminal is no longer a shell debug tab
+  but a **built-in app** owning its own surface + home quick card
+  (`dev-shell/src/apps/mock-terminal/`), loaded and rendered through the same path as the plugin
+  under debug — a correctly shaped app is always present in the preview, so the shell's mounting
+  path is genuinely exercised
+- **Plugin dynamic routes moved to vue-router**: `registerRoute` / `openPage` are whole-page
+  navigations (`/plugin/{pluginId}/{id}`) as on the host, no longer pushed into the shell's view
+  stack; the surface container still wraps components in `PluginContextHost` to
+  `provide('pluginContext')`, keeping plugin-form details out of the shell
+- **Two real defects fixed along the way**: `toShellApp` dropped the `error` projection (the detail
+  screen showed a bare "failed to start" badge with no reason); `activatePlugin` appended a second
+  record with the same id when restarting after deactivation (`getPluginRecord` then hit the stale
+  record → plugins injected a released context and the app list showed the same app twice)
+- **Bilingual i18n kept in sync**: shell copy moved over with the same keys and meanings as the
+  host `locales/*/shell.ts` (`dev-shell/src/locales/`); `devshell.*` keys describing the retired
+  tabs are removed wholesale
+- **Tests**: the SDK-root vitest now includes `dev-shell/__tests__/**` (logic layer, no SFC mounting —
+  component rendering is covered by the host `bedcode-mobile/src/__tests__/shell/**`), 5 files /
+  61 cases; the drift lock was mutation-checked (adding a stray field / dropping a screen id both
+  turn it red). dev-shell and the three mobile wasm-apps (terminal-session / ai-chatbox /
+  file-transfer) all pass `vite build`; the mobile `pnpm run test:run` suite is green at 895 cases
+- Not covered: `src/loader.ts` has no automated test (it depends on the vite virtual module and the
+  SFC chain; testing it needs `@vitejs/plugin-vue`, whose vite major differs from vitest's bundled
+  one — real wasm-app `vite build` smoke checks cover it instead); shell component rendering is
+  deliberately not duplicated here; no manual device/browser verification was run
+
 #### Mobile: host UI migrated into wasm-apps — shell default entry, three standalone pages, old host mechanisms applied
 
 - **New default entry is the host shell (`/mobile/shell`)**: `/` redirects to the shell; the old
