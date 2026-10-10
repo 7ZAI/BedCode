@@ -230,8 +230,12 @@ pub(crate) async fn drive_receive_events(ctx: Arc<PeerCtx>, mut rx: mpsc::Receiv
         }
     }
     // 通道关闭 = 节点停止：pending 回执弃置即自动拒（回执 drop 触发引擎
-    // 询问结算失败路径），在途接收的终态由插件按 interrupted 语义呈现
+    // 询问结算失败路径）；同时直推 `node-stopped` 事实——在途批已全部中止，
+    // 插件据此把在册进行中条目标注 `interrupted`（共享核
+    // `mark_active_interrupted`；宿主无任务表可写终态）
     discard_all_pending_offers(&ctx);
+    super::publish_engine_event(&ctx, super::TOPIC_RECEIVE_EVENT, super::engine_node_stopped_payload());
+    tracing::warn!("peer-net node stopped: receive event channel closed");
 }
 
 async fn register_offer(

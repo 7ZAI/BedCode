@@ -8,9 +8,9 @@
 //! 任务行预登记（register_remote_pull / fail_task）属产品编排，已随编排整体
 //! 下沉 `file-transfer` 插件——`pull-files` 收窄为「逐文件会话立即发起，
 //! 并发节流归调用方分批调用自控」；每个拉取会话发起时直推 `pull-started`
-//! 引擎事实事件（batchId/nodeId/relPath/size/tsMs），任务行由插件事件归约
-//! 自建。宿主只保留拉取会话句柄表（batch_id → CancelToken/PauseSlot）——
-//! 按批取消与 wire 暂停/恢复的引擎控制面。
+//! 引擎事实事件（建行锚点同构：batchId/nodeId/files[]/totalSize/tsMs），
+//! 任务行由插件事件归约自建。宿主只保留拉取会话句柄表
+//! （batch_id → CancelToken/PauseSlot）——按批取消与 wire 暂停/恢复的引擎控制面。
 //!
 //! 只读约束：本模块只有列目录与拉取，无任何指向暴露端的写语义。
 

@@ -667,6 +667,14 @@ mod tests {
         assert!(state.cancel_token_of("b").is_none());
         assert!(state.pause_slot_of("b").is_none());
         assert!(!state.session_is_current("b", 0), "已摘除会话一切事件视为陈旧");
+
+        // 未知批：句柄表一切查询落空（fail-safe——未知 ID 不得命中任何在册会话）
+        assert!(!state.has_session("never-registered"));
+        assert!(state.cancel_token_of("never-registered").is_none());
+        assert!(state.pause_slot_of("never-registered").is_none());
+        assert!(state.sources_of("never-registered").is_none());
+        assert!(state.encrypt_of("never-registered").is_none());
+        assert!(!state.session_is_current("never-registered", 0));
     }
 
     // ==================== 引擎事实投影（active-transfers） ====================

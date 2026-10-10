@@ -12,8 +12,9 @@ fn granted() -> Arc<dyn PeerPorts> {
     FakePorts::with(&[("com.bedcode.owner-a", PERMISSION_PEER)])
 }
 
-/// v31 fail-visible：`concurrency` 并发脉冲字段已退役——serde 默认忽略未知字段，
-/// 必须显性检测并点名重建，否则旧产物静默超并发
+/// fail-visible：`concurrency` 并发脉冲字段已退役——serde 默认忽略未知字段，
+/// 必须显性检测并点名重建，否则旧产物静默超并发。文案不点名 ABI 版本号
+/// （两端 ABI 序列编号不同，单点实现下不误导任一端）
 #[test]
 fn send_files_rejects_retired_concurrency_field() {
     let ports = granted();
@@ -25,7 +26,7 @@ fn send_files_rejects_retired_concurrency_field() {
         r#"[{"path":"/tmp/a.bin","concurrency":4}]"#,
     )
     .expect_err("退役字段必须显性报错");
-    assert!(err.contains("'concurrency' retired in ABI v31"), "got: {err}");
+    assert!(err.contains("'concurrency' retired"), "got: {err}");
     assert!(err.contains("rebuild plugin artifact with current SDK"), "got: {err}");
     drop_handle(&h);
 }
@@ -121,4 +122,30 @@ fn collect_outgoing_still_requires_permission() {
         super::peer_collect_outgoing(&ports, "com.bedcode.no-peer", "[]").unwrap_err(),
         denied()
     );
+}
+
+/// set-shared-roots 双形态根（WIT 注释承诺的形状）：桌面 `path`（本地路径 →
+/// Fs 根）与移动 `safTreeUri`（SAF 树 URI → Saf 根）均过域内解析——用例停在
+/// 引擎之前，解析/构建失败会是 "missing 'path' or 'safTreeUri'"，通过则落到
+/// 无头口径
+#[test]
+fn set_shared_roots_accepts_both_root_shapes_past_validation() {
+    let ports = granted();
+    for payload in [
+        r#"[{"id":"a","name":"n1","path":"/srv/share"}]"#,
+        r#"[{"id":"b","name":"n2","safTreeUri":"content://tree/1"}]"#,
+    ] {
+        let err = super::peer_set_shared_roots(&ports, "com.bedcode.owner-a", payload)
+            .expect_err("无头上下文取不到引擎");
+        assert_eq!(err, ports::HEADLESS_UNAVAILABLE, "载荷 {payload} 应过解析: {err}");
+    }
+}
+
+/// 两个根字段都缺：任一条目非法整批拒绝，显性点名（不作静默跳过）
+#[test]
+fn set_shared_roots_rejects_entry_without_root_field() {
+    let ports = granted();
+    let err = super::peer_set_shared_roots(&ports, "com.bedcode.owner-a", r#"[{"id":"x","name":"n"}]"#)
+        .expect_err("缺根字段必须显性报错");
+    assert!(err.contains("missing 'path' or 'safTreeUri'"), "got: {err}");
 }

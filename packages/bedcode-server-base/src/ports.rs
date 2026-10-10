@@ -79,6 +79,16 @@ pub trait BusPort: Send + Sync {
     /// + 消费任务，handler 在任务内独占调用）
     async fn subscribe_static(&self, subscriber: &str, topic: &str, handler: Box<dyn BusMessageHandler>);
 
+    /// 真实总线是否已就绪（可注册静态订阅）：默认 `true`。
+    ///
+    /// **宿主装配顺序可能早于真实总线就位**（桌面 `HostBusPort` 是 late-bound，
+    /// AppContext 注册前解析到占位总线——此时注册的订阅永远收不到消息）；
+    /// 各端在此报告自己的就绪判据（桌面 = 端口已装配；移动 = 插件管理器就绪），
+    /// 能力域只负责「未就绪则轮询等待」的循环，不假设任何端的装配面。
+    fn is_ready(&self) -> bool {
+        true
+    }
+
     /// 投递 WS 帧给插件的 `events-ws` 可选导出（保序由调用方串行保证）
     async fn deliver_endpoint_frame(
         &self,
@@ -103,8 +113,9 @@ pub trait EventSink: Send + Sync {
 pub trait PathsPort: Send + Sync {
     /// 应用数据目录；解析失败返回错误（调用方按其语义处置）
     fn app_data_dir(&self) -> Result<PathBuf>;
-    /// 系统下载目录（peer-net 接收落点 `Downloads/BedCode`；替代
-    /// `app_handle.path().download_dir()`）；解析失败返回错误
+    /// 对等网络接收落点根目录（各端自定：桌面实现 = 系统下载目录下 `BedCode`
+    /// 子目录；移动实现 = app 私有下载目录）。消费方直接落文件，**不再自行拼子目录**；
+    /// 解析失败返回错误
     fn download_dir(&self) -> Result<PathBuf>;
 }
 
@@ -112,7 +123,13 @@ pub trait PathsPort: Send + Sync {
 
 /// 引擎级系统信息（设备名 / 本地 IPv4；替代 `SystemInfo` / `local_ipv4_addresses`）
 pub trait SystemInfoPort: Send + Sync {
+    /// 节点 mDNS 广播设备名（各端实现**应保证非空**：桌面实现现采真实设备名）
     fn device_name(&self) -> String;
+    /// 设备名空值兜底（异常初始化顺序才用得到）：各端自持（桌面 "BedCode Desktop" /
+    /// 移动 "BedCode Mobile"）。默认给中立名，避免能力域硬编码某端产品名
+    fn device_name_fallback(&self) -> String {
+        "BedCode".to_string()
+    }
     fn local_ipv4_addresses(&self) -> Vec<String>;
     /// 应用版本（mDNS txt 记录 `version` 等；宿主壳代理 CARGO_PKG_VERSION）
     fn app_version(&self) -> String;

@@ -36,6 +36,9 @@
 //!   传输任务快照经 `publish_bus_only` 只推 `peer:transfer` / `peer:receive`
 //!   总线 topic，插件按 batchId 归并持久化业务视图。
 
+/// 引擎端口面（窄聚合）：引擎实际消费的五个宿主端口（bus / event_sink /
+/// paths / system_info / mdns）——宿主按端装配；trait 词汇复用 server-base
+pub mod engine_ports;
 pub mod peer_engine_receive;
 pub mod peer_engine_remote;
 pub mod peer_engine_transfer;
@@ -51,7 +54,8 @@ pub mod wire;
 mod dependency_direction_lock;
 
 use bedcode_server_base::error::{AppError, Result};
-use bedcode_server_base::ports::ServerPorts;
+
+use crate::engine_ports::PeerEnginePorts;
 
 /// peer-net 操作上下文（宿主壳注入的全部依赖的聚合）
 ///
@@ -62,8 +66,9 @@ use bedcode_server_base::ports::ServerPorts;
 /// 托管（`Arc<PeerNetState>` 等），进程内单实例；拆 lib 后插件侧集成测试
 /// 可自建实例。
 pub struct PeerCtx {
-    /// 宿主注入端口（bus / event_sink / paths / system_info / mdns）
-    pub ports: Arc<ServerPorts>,
+    /// 宿主注入端口（窄聚合 [`PeerEnginePorts`]：bus / event_sink / paths /
+    /// system_info / mdns 五个；桌面从 `ServerPorts` 取子集装配，移动端直接装配）
+    pub ports: Arc<PeerEnginePorts>,
     /// 节点/连接状态（Tauri managed：`Arc<PeerNetState>`）
     pub state: Arc<PeerNetState>,
     /// 发送会话状态（`Arc<PeerTransferState>`）
@@ -930,8 +935,12 @@ async fn start_locked(ctx: Arc<PeerCtx>, data_dir: &Path, device_name: String) -
         drive_gate(events_rx, Arc::clone(&cache), ctx.clone()),
     );
 
-    // 共享目录注册表 + 接收落点（issue 07）：桌面端缺省 Downloads\BedCode\
-    let shared = shared_handle_at(&data_dir).await?;
+    // 共享目录注册表 + 接收落点（issue 07）：落点根目录由端口给（各端自定）；
+    // 平台内置免授权条目（移动 = app 私有下载目录）经平台缝注入
+    let shared = Arc::new(crate::engine_ports::decorate_shared_store(
+        shared_handle_at(&data_dir).await?,
+        ctx.ports.platform.as_ref(),
+    ));
     *ctx.state.shared.lock().await = Some(Arc::clone(&shared));
     let download_dir = resolve_download_dir(&ctx)?;
     if let Err(e) = tokio::fs::create_dir_all(&download_dir).await {
@@ -944,17 +953,21 @@ async fn start_locked(ctx: Arc<PeerCtx>, data_dir: &Path, device_name: String) -
     // 供流方要在自己的传输列表展示 send 任务，与 push 接收通道分流）
     let (transfer_tx, transfer_rx) = tokio::sync::mpsc::channel::<TransferEvent>(256);
     let (serve_tx, serve_rx) = tokio::sync::mpsc::channel::<TransferEvent>(64);
+    // 平台缝注入：落点提升钩子（移动 = MediaStore 尽力提升；桌面 None）
+    let landing = ctx.ports.platform.as_ref().and_then(|seam| seam.file_landing());
     let config = TransferConfig {
         policy: bedcode_peer_net::ReceivePolicy::Ask {
             timeout: std::time::Duration::from_secs(60),
         },
         download_dir,
         chunk_size: 64 * 1024,
-        landing: None,
+        landing,
     };
+    // 平台缝注入：SAF 共享目录访问（移动 = Android SAF 树桥；桌面 None 走默认路径直读）
+    let saf_access = ctx.ports.platform.as_ref().and_then(|seam| seam.shared_saf_access());
     let handler = Arc::new(SharedDirHandler::new(
         shared,
-        None,
+        saf_access,
         config.clone(),
         transfer_tx,
         serve_tx,
@@ -1194,29 +1207,33 @@ async fn shared_handle(ctx: &PeerCtx) -> Result<Arc<SharedDirStore>> {
     }
     let data_dir = app_data_dir(ctx)?;
     let store = shared_handle_at(&data_dir).await?;
+    let store = Arc::new(crate::engine_ports::decorate_shared_store(
+        store,
+        ctx.ports.platform.as_ref(),
+    ));
     *guard = Some(Arc::clone(&store));
     Ok(store)
 }
 
-/// 按数据目录加载共享目录注册表（start 路径与惰性路径共用）
-async fn shared_handle_at(data_dir: &Path) -> Result<Arc<SharedDirStore>> {
+/// 按数据目录加载共享目录注册表（start 路径与惰性路径共用；返回未包 `Arc` 的
+/// 值，供调用方注入平台内置条目后再包 `Arc`）
+async fn shared_handle_at(data_dir: &Path) -> Result<SharedDirStore> {
     let dir = data_dir.to_path_buf();
     // crate 的 load_or_create 为同步阻塞 IO：移出异步上下文
-    let store = tokio::task::spawn_blocking(move || SharedDirStore::load_or_create(&dir))
+    tokio::task::spawn_blocking(move || SharedDirStore::load_or_create(&dir))
         .await
         .map_err(|e| AppError::Internal(format!("join shared dirs load failed: {e}")))?
-        .map_err(map_peer_net_error)?;
-    Ok(Arc::new(store))
+        .map_err(map_peer_net_error)
 }
 
-/// 接收落点解析：系统 Downloads\BedCode\（解析失败回退应用数据目录内 downloads/）
+/// 接收落点解析：由端口给出**各端自定的落点根目录**（桌面实现 = 系统下载目录下
+/// `BedCode` 子目录；移动实现 = app 私有下载目录）——子目录归属由各端端口实现决定，
+/// 能力域不硬编码平台路径
 pub(crate) fn resolve_download_dir(ctx: &PeerCtx) -> Result<PathBuf> {
-    let base = ctx
-        .ports
+    ctx.ports
         .paths
         .download_dir()
-        .map_err(|e| AppError::Internal(format!("resolve downloads dir failed: {e}")))?;
-    Ok(base.join("BedCode"))
+        .map_err(|e| AppError::Internal(format!("resolve downloads dir failed: {e}")))
 }
 
 /// PeerNetError → AppError 映射：crate 错误链保留完整文案（本票宿主侧只打日志不细分）
@@ -1359,7 +1376,12 @@ pub(crate) fn engine_pull_served_payload(
 
 /// 引擎拉取会话发起事件载荷（pull-started，票 3）：本端向对端发起的单文件
 /// 拉取会话事实——插件据此自建 receive 任务行（编排下沉后宿主不再预登记
-/// 任务行）。形状与 offer-pended 同形（batchId/nodeId/relPath/size/tsMs）
+/// 任务行）。
+///
+/// **形状 = 建行锚点同构（files[] + totalSize）**：与 `offer-pending` /
+/// `pull-served` 同形——归约方（双端共享核 `bedcode-file-transfer-core`
+/// `reduce_event` 的三锚点分支）按 `files[]` 建行、`totalSize` 落总量，
+/// 不得再回退 `relPath/size` 的私有形状
 pub(crate) fn engine_pull_started_payload(
     remote: &NodeId,
     batch_id: &str,
@@ -1370,10 +1392,17 @@ pub(crate) fn engine_pull_started_payload(
         "kind": "pull-started",
         "batchId": batch_id,
         "nodeId": remote.as_str(),
-        "relPath": rel_path,
-        "size": size,
+        "files": [{ "path": rel_path, "size": size }],
+        "totalSize": size,
         "tsMs": event_now_ms(),
     })
+}
+
+/// 节点下线事实载荷（node-stopped）：接收事件通道关闭 = 引擎节点停止，
+/// 在飞批全部中止；插件据此把在册进行中条目标注 `interrupted`
+/// （共享核 `mark_active_interrupted`；宿主无任务表可写终态）
+pub(crate) fn engine_node_stopped_payload() -> serde_json::Value {
+    serde_json::json!({ "kind": "node-stopped", "tsMs": event_now_ms() })
 }
 
 /// 引擎原始事件直推插件总线（票 1）：不经宿主状态机加工，Progress 节流由
@@ -1406,7 +1435,7 @@ impl bedcode_server_base::ports::BusMessageHandler for DiscoveryRefreshHandler {
         bedcode_server_base::error_boundary::spawn_with_error_boundary(
             "peer_net_discovery_refresh_handler",
             async move {
-                handle_discovery_refresh(ctx).await;
+                request_discovery_refresh(ctx).await;
             },
         );
         Ok(())
@@ -1416,7 +1445,11 @@ impl bedcode_server_base::ports::BusMessageHandler for DiscoveryRefreshHandler {
 /// 处理刷新请求：① 触发即时重查（查询→应答是本环境唯一可靠发现路径）；
 /// ② 当前发现缓存逐条以 `mdns:found` 重发——插件前端激活晚于发现事件时
 /// （引擎启动即发现对端，插件订阅在秒级之后）按钮/首屏仍有完整设备列表
-async fn handle_discovery_refresh(ctx: Arc<PeerCtx>) {
+///
+/// **公开入口**（2026-10-10 能力域集中化）：宿主可自持 `peer:discovery-refresh`
+/// 订阅（如移动端——其订阅就绪判据是自身插件管理器而非 `ServerPorts`），
+/// 收到刷新请求后就是调本函数；订阅注册与就绪等待属宿主装配面。
+pub async fn request_discovery_refresh(ctx: Arc<PeerCtx>) {
     let state = &ctx.state;
     let guard = state.runtime.lock().await;
     let Some(runtime) = guard.as_ref() else {
@@ -1469,9 +1502,13 @@ async fn handle_discovery_refresh(ctx: Arc<PeerCtx>) {
     tracing::info!("peer discovery requery + connection state republished after refresh request");
 }
 
-/// 挂载刷新请求静态订阅：节点由插件激活驱动启动，注册时插件管理器可能
-/// 尚未进全局态，轮询等就绪后再注册（进程内仅注册一次）
-/// 注册护栏：peer 节点重启会重入 start_locked，静态订阅只挂一次
+/// 挂载刷新请求静态订阅：节点由插件激活驱动启动（进程内仅注册一次；
+/// peer 节点重启会重入 start_locked，静态订阅只挂一次）。
+///
+/// **就绪等待下移到各端 `BusPort::subscribe_static` 实现**（2026-10-10 能力域
+/// 集中化）：桌面端口是 late-bound（总线句柄调用期解析，装配前注册也有效），
+/// 移动端端口实现内部轮询自身插件管理器——能力域不再假设 `ServerPorts`
+/// 全局注册表存在（那是桌面装配面）。
 static DISCOVERY_REFRESH_SUBSCRIBED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn spawn_discovery_refresh_subscriber(ctx: Arc<PeerCtx>) {
@@ -1482,10 +1519,11 @@ fn spawn_discovery_refresh_subscriber(ctx: Arc<PeerCtx>) {
     bedcode_server_base::error_boundary::spawn_with_error_boundary(
         "peer_net_discovery_refresh_subscriber",
         async move {
+            // 就绪判据由各端 bus 端口给（`BusPort::is_ready`）：未就绪轮询等待——
+            // 早注册在 late-bound 总线上会落到占位总线，订阅永远收不到消息
             loop {
-                // 端口已装配（bootstrap 完成）即注册；此前轮询等就绪（进程内仅一次）
-                if let Some(ports) = bedcode_server_base::ports::get() {
-                    ports
+                if ctx.ports.bus.is_ready() {
+                    ctx.ports
                         .bus
                         .subscribe_static(
                             DISCOVERY_REFRESH_SUBSCRIBER,
@@ -1564,11 +1602,12 @@ pub(crate) fn app_data_dir(ctx: &PeerCtx) -> Result<PathBuf> {
         .map_err(|e| AppError::Internal(format!("resolve app data dir failed: {e}")))
 }
 
-/// 设备名解析：宿主壳经 SystemInfoPort 注入；缺省名仅兜底异常初始化顺序
+/// 设备名解析：宿主壳经 SystemInfoPort 注入；空值兜底名由端口给（各端自持产品名，
+/// 能力域不硬编码某端名）
 fn resolve_device_name(ctx: &PeerCtx) -> String {
     let name = ctx.ports.system_info.device_name();
     if name.is_empty() {
-        "BedCode Desktop".to_string()
+        ctx.ports.system_info.device_name_fallback()
     } else {
         name
     }
@@ -1666,6 +1705,48 @@ mod peer_net_tests {
         assert_eq!(bus_topic_for(""), None);
     }
 
+    // ==================== 节点 ID 解析与错误映射（审计 P0 契约） ====================
+
+    const VALID_NODE_ID: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    /// 合法形态：64 位小写 hex 原样通过
+    #[test]
+    fn parse_node_id_accepts_64_lowercase_hex() {
+        let id = parse_node_id(VALID_NODE_ID).expect("合法 node id 应解析成功");
+        assert_eq!(id.as_str(), VALID_NODE_ID);
+    }
+
+    /// 非法形态全拒（错误文案带 `invalid node id` 上下文）：空串 / 长度不足 /
+    /// 大写 hex / 非 hex 字符
+    #[test]
+    fn parse_node_id_rejects_invalid_formats() {
+        let err = parse_node_id("").expect_err("空串必须拒绝");
+        assert!(err.to_string().contains("invalid node id"), "err: {err}");
+        let err = parse_node_id(&VALID_NODE_ID[..63]).expect_err("长度不足必须拒绝");
+        assert!(err.to_string().contains("invalid node id"), "err: {err}");
+        let err = parse_node_id(&VALID_NODE_ID.to_uppercase()).expect_err("大写 hex 必须拒绝");
+        assert!(err.to_string().contains("invalid node id"), "err: {err}");
+        let bad = format!("{}g", &VALID_NODE_ID[..63]);
+        let err = parse_node_id(&bad).expect_err("非 hex 字符必须拒绝");
+        assert!(err.to_string().contains("invalid node id"), "err: {err}");
+    }
+
+    /// 错误映射保留 crate 错误链完整文案（握手期错误必须带对端指纹，便于排障）
+    #[test]
+    fn map_peer_net_error_keeps_crate_context() {
+        let err = map_peer_net_error(PeerNetError::InvalidNodeId { value: "zz".into() });
+        assert!(err.to_string().contains("peer-net operation failed"), "err: {err}");
+        assert!(err.to_string().contains("invalid node id"), "err: {err}");
+
+        let node = NodeId::parse(VALID_NODE_ID).expect("parse node id");
+        let err = map_peer_net_error(PeerNetError::DialDeniedByPeer { node_id: node.clone() });
+        assert!(err.to_string().contains("dial denied by peer"), "err: {err}");
+        let err = map_peer_net_error(PeerNetError::ConfirmTimeout { node_id: node.clone() });
+        assert!(err.to_string().contains("confirmation timed out"), "err: {err}");
+        let err = map_peer_net_error(PeerNetError::UnknownPeer { node_id: node });
+        assert!(err.to_string().contains("unexpected peer node"), "err: {err}");
+    }
+
     // ==================== 引擎原始事件载荷（传输编排下沉票 1） ====================
 
     /// Progress 载荷：字段即引擎事实（camelCase 直译），无业务加工
@@ -1754,6 +1835,31 @@ mod peer_net_tests {
         assert_eq!(p["batchId"], "b-5");
         let p = engine_pause_payload("resumed", "b-6");
         assert_eq!(p["kind"], "resumed");
+    }
+
+    /// pull-started 载荷：建行锚点同构（files[] + totalSize）——与双端共享核
+    /// `reduce_event` 的三锚点建行分支形状一致；`relPath/size` 私有形状不得回退
+    #[test]
+    fn engine_pull_started_payload_matches_anchor_shape() {
+        let id = node_id(4);
+        let p = engine_pull_started_payload(&id, "pull-1-0", "docs/a.txt", 12);
+        assert_eq!(p["kind"], "pull-started");
+        assert_eq!(p["batchId"], "pull-1-0");
+        assert_eq!(p["nodeId"], id.as_str());
+        assert_eq!(p["files"][0]["path"], "docs/a.txt");
+        assert_eq!(p["files"][0]["size"], 12);
+        assert_eq!(p["totalSize"], 12);
+        assert!(p.get("relPath").is_none(), "私有形状字段不得回退（共享核不识别）");
+        assert!(p["tsMs"].as_u64().is_some());
+    }
+
+    /// node-stopped 载荷：节点下线是全方向事实（无 batchId），插件按 interrupted 标注
+    #[test]
+    fn engine_node_stopped_payload_has_no_batch_scope() {
+        let p = engine_node_stopped_payload();
+        assert_eq!(p["kind"], "node-stopped");
+        assert!(p.get("batchId").is_none());
+        assert!(p["tsMs"].as_u64().is_some());
     }
 
     // ==================== 可信列表 CRUD（TrustStore，tempdir 隔离） ====================

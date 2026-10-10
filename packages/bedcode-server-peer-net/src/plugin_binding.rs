@@ -262,8 +262,9 @@ pub fn peer_send_files(
         arr.iter()
             .any(|e| e.as_object().is_some_and(|o| o.contains_key("concurrency")))
     }) {
+        // 文案不点名版本号（两端 ABI 序列编号不同——两端同集单点实现下不误导任一端）
         return Err(
-            "send files: payload field 'concurrency' retired in ABI v31 (host-side concurrency gate removed; \
+            "send files: payload field 'concurrency' retired (host-side concurrency gate removed; \
              concurrency is caller-controlled): rebuild plugin artifact with current SDK"
                 .to_string(),
         );
@@ -337,14 +338,25 @@ pub fn peer_set_receive_policy(
 
 /// 显式暂停进行中的发送批：会话数据面门控（wire Pause 帧 + 供方停推流），
 /// 任务保留（含已传字节）不落历史。本端发起的活跃会话查句柄表、serve 供流
-/// 批查 handler 注册表。
+/// 批查 handler 注册表。**发送批未命中回落接收方向**（拉取会话 / push 接收批
+/// 的 Pause 帧下发）——两端同集 19 原语下「单一原语管双向」的统一语义
+/// （移动端历史组合语义由 crate 单点承载）；两向都未命中返回错误（原文案逐字保留）。
 pub fn peer_pause_transfer(ports: &Arc<dyn PeerPorts>, plugin_id: &str, batch_id: &str) -> Result<(), String> {
     if !ports.check_permission(plugin_id, PERMISSION_PEER, "host_peer_pause_transfer") {
         return Err(denied());
     }
     let ctx = ports.peer_ctx()?;
     let batch_id = batch_id.to_string();
-    let hit = sync_result(block_on(ports, crate::pause_transfer_for_plugin(ctx, batch_id)))?;
+    if sync_result(block_on(
+        ports,
+        crate::pause_transfer_for_plugin(ctx.clone(), batch_id.clone()),
+    ))? {
+        return Ok(());
+    }
+    let hit = sync_result(block_on(
+        ports,
+        crate::peer_engine_receive::pause_peer_receiving(ctx, batch_id),
+    ))?;
     if !hit {
         return Err("pause transfer: no running send batch with that id".to_string());
     }
@@ -353,14 +365,27 @@ pub fn peer_pause_transfer(ports: &Arc<dyn PeerPorts>, plugin_id: &str, batch_id
 
 /// 恢复暂停的发送批：活跃会话写 Resume 帧续流；会话已中断的以句柄表记忆
 /// 的源清单重新拨号续传（v31：批量恢复编排归插件，resume-all-transfers
-/// 已退役）。
+/// 已退役）。**发送批未命中回落接收方向**（同 pause 的统一语义）；两向都
+/// 未命中返回错误（WIT 契约「无命中返回错误」，文案与移动历史版逐字一致）。
 pub fn peer_resume_transfer(ports: &Arc<dyn PeerPorts>, plugin_id: &str, batch_id: &str) -> Result<(), String> {
     if !ports.check_permission(plugin_id, PERMISSION_PEER, "host_peer_resume_transfer") {
         return Err(denied());
     }
     let ctx = ports.peer_ctx()?;
     let batch_id = batch_id.to_string();
-    sync_result(block_on(ports, crate::resume_transfer_for_plugin(ctx, batch_id)))?;
+    if sync_result(block_on(
+        ports,
+        crate::resume_transfer_for_plugin(ctx.clone(), batch_id.clone()),
+    ))? {
+        return Ok(());
+    }
+    let hit = sync_result(block_on(
+        ports,
+        crate::peer_engine_receive::resume_peer_receiving(ctx, batch_id),
+    ))?;
+    if !hit {
+        return Err("resume transfer: no paused send batch with that id".to_string());
+    }
     Ok(())
 }
 
@@ -368,24 +393,42 @@ pub fn peer_set_shared_roots(ports: &Arc<dyn PeerPorts>, plugin_id: &str, dirs_j
     if !ports.check_permission(plugin_id, PERMISSION_PEER, "host_peer_set_shared_roots") {
         return Err(denied());
     }
+    // 双形态条目（WIT 注释承诺的形状）：桌面 `{ id, name, path }`（本地文件系统
+    // 路径 → Fs 根）；移动 `{ id, name, safTreeUri }`（SAF 树 URI → Saf 根）。
+    // 两端同集 19 原语下由本域单点解析；两条目形态互斥，`path` 缺席时才认
+    // `safTreeUri`（首见非空者胜）。
     #[derive(serde::Deserialize)]
     struct SharedRootSeed {
         id: String,
         name: String,
-        path: String,
+        #[serde(default)]
+        path: Option<String>,
+        #[serde(default, rename = "safTreeUri")]
+        saf_tree_uri: Option<String>,
     }
     let seeds: Vec<SharedRootSeed> =
         serde_json::from_str(dirs_json).map_err(|e| format!("set shared roots: invalid dirs json: {e}"))?;
-    let entries = seeds
-        .into_iter()
-        .map(|s| bedcode_peer_net::SharedDirEntry {
+    let mut entries = Vec::with_capacity(seeds.len());
+    for s in seeds {
+        // 任一条目非法整批拒绝（WIT 契约）——缺两字段都缺时显性点名，不作静默跳过
+        let root = match (s.path, s.saf_tree_uri) {
+            (Some(path), _) => bedcode_peer_net::SharedDirRoot::Fs {
+                path: std::path::PathBuf::from(path),
+            },
+            (None, Some(tree_uri)) => bedcode_peer_net::SharedDirRoot::Saf { tree_uri },
+            (None, None) => {
+                return Err(format!(
+                    "set shared roots: entry '{}' missing 'path' or 'safTreeUri'",
+                    s.id
+                ))
+            }
+        };
+        entries.push(bedcode_peer_net::SharedDirEntry {
             id: s.id,
             name: s.name,
-            root: bedcode_peer_net::SharedDirRoot::Fs {
-                path: std::path::PathBuf::from(s.path),
-            },
-        })
-        .collect();
+            root,
+        });
+    }
     let ctx = ports.peer_ctx()?;
     sync_result(block_on(ports, crate::set_shared_roots(ctx, entries)))
 }
@@ -517,13 +560,13 @@ pub fn peer_collect_outgoing(ports: &Arc<dyn PeerPorts>, plugin_id: &str, paths_
     sync_result(block_on(ports, crate::collect_outgoing_for_plugin(paths)))
 }
 
-// ==================== 能力模块自报（WIT 绑定层，`desktop-host` feature） ====================
+// ==================== 能力模块自报（WIT 绑定层，`common-host` feature） ====================
 
-// WIT 绑定层依赖（host-kit / wasmtime）只随 `desktop-host` feature 编译：
+// WIT 绑定层依赖（host-kit / wasmtime）只随 `common-host` feature 编译：
 // 能力域默认形态 = 纯引擎机制（零 WIT 依赖），任何宿主可直接引用。
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 use bedcode_host_kit::{HostModule, HostModuleDesc, ModuleEntry, WasmPluginState};
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 use wasmtime::component::{bindgen, Linker};
 
 /// 能力模块名（宿主白名单键 = 装载期日志与错误文案里的模块名）
@@ -543,7 +586,7 @@ pub const MODULE_PERMISSIONS: &[&str] = &["peer"];
 ///
 /// 三个字符串字段取自上面三常量：描述符是机制面唯一真源，宿主白名单与一致性核对
 /// 引用同一组常量 ⇒ 两处不可能漂移。
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 const DESC: HostModuleDesc = HostModuleDesc {
     name: MODULE_NAME,
     interfaces: MODULE_INTERFACES,
@@ -552,10 +595,10 @@ const DESC: HostModuleDesc = HostModuleDesc {
 };
 
 /// 对等网络能力域模块（`host-peer`，19 条原语）
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 pub struct PeerNetModule;
 
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 impl HostModule for PeerNetModule {
     fn desc(&self) -> HostModuleDesc {
         DESC
@@ -567,20 +610,20 @@ impl HostModule for PeerNetModule {
 }
 
 /// getter：让 guest 侧 import 取到可变的状态引用（与宿主既有接线同款）
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 type HasSelf = wasmtime::component::HasSelf<WasmPluginState>;
 
 /// 静态单例（供 `inventory::submit!` 取址）
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 static MODULE: PeerNetModule = PeerNetModule;
 
 // 能力模块自报（linker-section 静态）
 //
 // **依赖前提**：宿主必须有一行强制引用本 crate（见宿主的组件运行时接线处），
 // 否则本 rlib 不进最终二进制、静态不执行 ⇒ 注册丢失，且 guest 会在实例化期报
-// 「无该 import」。无 `desktop-host` feature 的宿主（移动端 / 无头）**不应**
-// 注册——它没有插件宿主机制，桌面侧强制引用行同步 `#[cfg(feature = "desktop-host")]`。
-#[cfg(feature = "desktop-host")]
+// 「无该 import」。无 `common-host` feature 的宿主（移动端 / 无头）**不应**
+// 注册——它没有插件宿主机制，桌面侧强制引用行同步 `#[cfg(feature = "common-host")]`。
+#[cfg(feature = "common-host")]
 inventory::submit! {
     ModuleEntry { module: &MODULE }
 }
@@ -607,8 +650,8 @@ pub use ports::install_ports;
 /// 能力域自己认识，kit 与宿主都不能把它裸存进表），故这里向下转型后**克隆内层
 /// Arc**（同形对象，多个实例共享一份 adapter，无副作用）。
 ///
-/// 依赖 `WasmPluginState`（host-kit 类型），随 `desktop-host` feature 编译。
-#[cfg(feature = "desktop-host")]
+/// 依赖 `WasmPluginState`（host-kit 类型），随 `common-host` feature 编译。
+#[cfg(feature = "common-host")]
 fn ports_for(state: &WasmPluginState) -> Arc<dyn PeerPorts> {
     match state
         .host
@@ -620,7 +663,7 @@ fn ports_for(state: &WasmPluginState) -> Arc<dyn PeerPorts> {
     }
 }
 
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 bindgen!({
     // provider 侧绑定：宿主自己的 `bedcode` 模块是 **guest 视角**（import 是调用
     // 函数，不是 `Host` trait + `add_to_linker`），能力 crate 要自己装配就必须生成
@@ -640,12 +683,12 @@ bindgen!({
     exports: { default: async },
 });
 
-// ==================== 宿主绑定层（Host trait 实现，`desktop-host` feature） ====================
+// ==================== 宿主绑定层（Host trait 实现，`common-host` feature） ====================
 //
 // 每个接口方法 = 一条 WIT 原语。权限门在本文件内的域函数里（随实现同迁，
 // 经端口问宿主结果），此层只做「取端口 → 转调 → 按 WIT `result` 形状返回」。
 
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 impl bedcode::plugin::host_peer::Host for WasmPluginState {
     fn dial_peer(&mut self, endpoint_json: String) -> Result<String, String> {
         peer_dial(&ports_for(self), &self.plugin_id, &endpoint_json)
