@@ -208,13 +208,36 @@
 //!   点名「按 v34 SDK 重建」，不是 trap 不是静默降级。wire 流程逐字节不变
 //!   （移动端仍走 HTTP /api/auth/biometric-*，零改动）。**desktop 独有**，移动端
 //!   WIT/ABI/SDK 不跟演不投影（mobile ABI 保持 11）。
-pub const ABI_VERSION: u32 = 35;
+//!
+//! - **v35（沿用序号，未单独占 bump note）**：桌面 host-websocket 服务端域 10 函数
+//!   随 ADR 0039 域整面迁出期间保持形状，未引入新接口名。
+//!
+//! - **v36: 交集接口切片（2026-10-10，票 02 批次 06 / 票 04，破坏性）**——桌面 WIT
+//!   四个交集接口拆出桌面独有函数为新 interface：`host-fs` 拆出 `host-fs-desktop`
+//!   （read-dir / canonicalize / stat）、`host-platform` 拆出 `host-platform-desktop`
+//!   （pick-folders / wsl-distros / local-ipv4-addresses / reveal-in-dir）、
+//!   `host-events` 拆出 `host-events-desktop`（notify）、`abi` 拆出 `abi-form`
+//!   （form）。旧产物（v35 SDK 构建）仍 import / export 旧接口内的这些函数 →
+//!   **实例化期**即被拒，`stale_artifact_rebuild_hint` 点名「按 v36 SDK 重建」。
+//!   WIT 绑定与插件产物全量重建。**desktop 独有**，移动端 WIT/ABI/SDK 不跟演
+//!   不投影（mobile ABI 保持当前值）。
+//!
+//! - **v37: 交集切片收拢（2026-10-10，票 04，破坏性）**——双端共享核心再收拢
+//!   三个交集接口：`host-websocket` 拆出桌面扩展 `host-websocket-server`（服务端
+//!   10 函数：register-endpoint / send-text-to-client / send-binary-to-client /
+//!   broadcast-text / broadcast-binary / close-client / unregister-endpoint /
+//!   list-clients / list-endpoints / connection-context）、`host-http` 拆出桌面
+//!   扩展 `host-http-endpoint`（register-endpoint / unregister-endpoint）。旧产物
+//!   （v36 SDK 构建）仍 import 旧接口内的这些函数 → **实例化期**即被拒，
+//!   `stale_artifact_rebuild_hint` 点名「按 v37 SDK 重建」。WIT 绑定与插件产物
+//!   全量重建。**desktop 独有**，移动端不跟演（mobile ABI 另走 v20，见移动 SDK）。
+pub const ABI_VERSION: u32 = 37;
 
-/// 组件形态标识：`abi.form() == FORM_COMPONENT`（WIT `abi` 接口的 form() 声明）
+/// 组件形态标识：`abi-form.form() == FORM_COMPONENT`（WIT `abi-form` 接口的 form() 声明）
 ///
-/// 组件通过 WIT `abi` 接口的 `form()` 声明形态，语义与 ABI_VERSION 解耦：
-/// 不 bump ABI 大版本，仅区分加载路径（core module vs component，
-/// 后者为迁移后唯一形态；FORM_CORE=0 已在阶段 C 删除）
+/// 组件通过 WIT `abi-form` 接口的 `form()` 声明形态（v36 自 `abi` 拆出；`abi`
+/// 只剩 `version`），语义与 ABI_VERSION 解耦：不 bump ABI 大版本，仅区分加载
+/// 路径（core module vs component，后者为迁移后唯一形态；FORM_CORE=0 已在阶段 C 删除）
 pub const FORM_COMPONENT: u32 = 1;
 
 #[cfg(test)]
@@ -222,7 +245,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_abi_version_is_v34() {
+    fn test_abi_version_is_v36() {
         // 版本号序列与历史 core ABI 共用：v26 = host-crypto 宿主加密引擎原语面
         // （并发批次先落地，占 26）；**v27 = 会话原语域整 interface 退役**
         // （会话引擎下沉票 10：host-session 12 函数 + terminal-hooks + events 两个导出）；
@@ -254,8 +277,14 @@ mod tests {
         // 配置面与创建/动作面（会话语义下沉批次之二）、v18 host-auth 认证记录面
         // （同批次之一）、v17 认证策略导出（auth-policy）、v16 插件私有伪终端原语
         // （host-pty）、v15 密钥托管（host-auth / secret-store）、v14 host-websocket、
-        // v13 host-mdns v2、v12 总线二进制载荷与 v11 host-peer 传输控制三原语
-        assert_eq!(ABI_VERSION, 35);
+        // v13 host-mdns v2、v12 总线二进制载荷与 v11 host-peer 传输控制三原语；
+        // **v36 = 交集接口切片**（2026-10-10：桌面 host-fs / host-platform /
+        // host-events / abi 四接口各自拆出桌面独有函数为新 interface，见本文件头部
+        // v36 条目；desktop 独有，移动端不跟演）；
+        // **v37 = 交集切片收拢**（2026-10-10：host-websocket 拆出 host-websocket-server、
+        // host-http 拆出 host-http-endpoint，见本文件头部 v37 条目；desktop 独有，
+        // 移动端不跟演）
+        assert_eq!(ABI_VERSION, 37);
     }
 
     #[test]

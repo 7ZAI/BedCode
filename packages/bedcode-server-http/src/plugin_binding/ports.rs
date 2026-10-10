@@ -73,7 +73,8 @@ pub enum OutboundAuth {
 
 /// 宿主能力端口
 ///
-/// 实现方是各端宿主的适配器（桌面端见 `wasm_core::host_api::http::HostHttpPorts`）。
+/// 实现方是各端宿主的适配器（桌面端见宿主 adapter `src-tauri/src/plugin/http.rs`
+/// 的 `HostHttpPorts`——票 02 批次 03 自 `wasm_core::host_api::http` 迁出）。
 pub trait HttpPorts: Send + Sync + 'static {
     /// 权限判定（`network:http`）
     ///

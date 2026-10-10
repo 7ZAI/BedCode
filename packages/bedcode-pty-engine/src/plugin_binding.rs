@@ -250,9 +250,13 @@ bindgen!({
     // `bedcode::plugin::host_pty::Host` 是**同名但不同类型**的 trait。宿主必须
     // 同时删掉自己的 pty `Host` impl 与 `add_to_linker` 行，否则同一个 interface
     // 被注册两次 → 装配期 `defined twice`（本次迁移同批删除，见 spec §3.2）。
-    path: "../../bedcode-desktop/packages/plugin-sdk-desktop/rust/wit/bedcode.wit",
-    world: "plugin",
-    // 与宿主同款：全部导出绑定生成 async 变体（wasmtime async store 要求）
+    // 票 05：契约面脱端——bindgen 改指本 crate 自持分片 `wit/pty.wit`
+    // （`world cap-pty`，票 03 起兼作端组合的 cap 真源，compose.json caps.pty 指向它），
+    // 不再读桌面 SDK 生成物目录（桌面宿主绑整 world 是端组合根的本分，ADR 0045）。
+    path: "wit/pty.wit",
+    world: "cap-pty",
+    // 与宿主同款：全部导出绑定生成 async 变体（wasmtime async store 要求）。
+    // cap-pty 无 export 成员，此配置无生效对象（实测编译绿，票 05 实施记录）
     exports: { default: async },
 });
 

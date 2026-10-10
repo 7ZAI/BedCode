@@ -70,7 +70,7 @@ pub enum FrameDispatch {
 
 /// 宿主能力端口
 ///
-/// 实现方是各端宿主的适配器（桌面端见 `wasm_core::host_api::ws::HostWsPorts`）。
+/// 实现方是各端宿主的适配器（桌面端见 `宿主 adapter（src-tauri/src/plugin/ws.rs）的 HostWsPorts`）。
 /// 实现应尽量轻——出站读任务会长期持有一份 `'static` 端口。
 pub trait WsPorts: Send + Sync + 'static {
     /// 权限判定（`ws:client` / `ws:server`）

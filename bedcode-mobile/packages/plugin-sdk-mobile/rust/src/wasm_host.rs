@@ -20,8 +20,8 @@ use crate::host::{
 };
 use crate::wasm::bedcode::plugin::{
     host_auth, host_bus, host_config, host_connection, host_events, host_fs,
-    host_http, host_log, host_mdns, host_notify, host_peer, host_platform, host_plugin_database,
-    host_storage, host_terminal_stream, host_websocket,
+    host_fs_mobile, host_http, host_log, host_mdns, host_notify, host_peer, host_platform,
+    host_plugin_database, host_storage, host_terminal_stream, host_websocket,
 };
 
 /// 宿主 API 绑定（WASM 插件侧）
@@ -269,7 +269,7 @@ impl HostFs for WasmHost {
         display_name: &str,
         mime_type: &str,
     ) -> Result<(), HostError> {
-        host_fs::write_media_downloads(src_path, display_name, mime_type)
+        host_fs_mobile::write_media_downloads(src_path, display_name, mime_type)
             .map_err(|e| host_err("fs_write_media_downloads", e))
     }
 
@@ -279,7 +279,7 @@ impl HostFs for WasmHost {
         suggested_name: &str,
         mime_type: &str,
     ) -> Result<(), HostError> {
-        host_fs::save_to_document(src_path, suggested_name, mime_type)
+        host_fs_mobile::save_to_document(src_path, suggested_name, mime_type)
             .map_err(|e| host_err("fs_save_to_document", e))
     }
 }

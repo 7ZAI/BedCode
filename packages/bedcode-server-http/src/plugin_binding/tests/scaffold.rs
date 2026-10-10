@@ -1,6 +1,6 @@
 //! `plugin_binding` 的跨分组测试脚手架（用例文件经 `use super::scaffold::*` 引用）
 //!
-//! **为什么自带假端口**：本域的端口实现属宿主（`wasm_core::host_api::http::HostHttpPorts`），
+//! **为什么自带假端口**：本域的端口实现属宿主（桌面端见宿主 adapter `src-tauri/src/plugin/http.rs`），
 //! crate 内不能引用宿主 bin crate ⇒ 单测必须在 crate 内造一份假实现。
 //! 假端口同时是「机制自持」的可测性证据：权限门、出站授权三态、事件通道缺席、
 //! 响应体上限、跳转裁决、SSE 切分、端点属主仲裁的断言全在本域内闭环，不经宿主上下文。

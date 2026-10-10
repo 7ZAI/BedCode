@@ -1,7 +1,7 @@
 //! host-websocket 能力域 —— WS 基础能力服务（ABI v14）
 //!
 //! spec：`.scratch/2026-09-18-ws-base-service/spec.md`；票据 04（客户端域闭环）；
-//! wasm-core-lib-split 票 04（自宿主 `wasm_core::host_api::ws` 整体迁入本 crate）。
+//! wasm-core-lib-split 票 04（自宿主 `src-tauri/src/plugin/ws.rs` 整体迁入本 crate）。
 //!
 //! **零业务代码红线（D1）**：本模块只做引擎原语——连接生命周期、帧收发、句柄
 //! 登记、属主仲裁、按属主回收、事件定向投递；不拼装、不解读任何业务字段
@@ -29,7 +29,7 @@
 //!   ports.rs      边界：宿主能力端口（权限门 / 事件发布 / 总线端口 / 帧投递 / 异步桥）
 //! ```
 //!
-//! 宿主侧只剩一个 adapter（`wasm_core::host_api::ws`）与一次开机装配调用。
+//! 宿主侧只剩一个 adapter（`src-tauri/src/plugin/ws.rs`）与一次开机装配调用。
 //!
 //! **脱绑（能力域脱绑 P3）**：本文件混住机制面与 WIT 绑定层。机制面（连接表 /
 //! 端点原语 / 帧投递 / 回收 / 装配入口）默认编译，任何宿主可用；WIT 绑定层
@@ -1062,19 +1062,34 @@ fn max_message_bytes() -> usize {
 
 // ==================== 能力模块装配（wasm-core-lib-split 票 04） ====================
 //
-// 宿主侧对应物：`wasm_core::host_api::ws`（adapter + 开机装配）与
+// 宿主侧对应物：`src-tauri/src/plugin/ws.rs`（adapter + 开机装配）与
 // `component.rs` 的 `HOST_MODULES` 白名单 + 强制引用行。
+
+/// 能力模块名（宿主白名单键 = 装载期日志与错误文案里的模块名）
+///
+/// **常编译 pub**（票 02 批次 03）：adapter 迁宿主后白名单条目
+/// （`expect_host_module!`）与装载期一致性核对改在宿主侧引用本常量。
+pub const MODULE_NAME: &str = "websocket";
+
+/// 本域提供的 WIT 接口（必须与 `bedcode.wit` 逐字一致；改错即 guest import 失配）
+///
+/// 票 04：`host-websocket` 拆为双端交集客户端域（core.wit）+ 桌面扩展服务端域
+/// （`host-websocket-server`，本分片）——一个能力域模块持两个 interface。
+pub const MODULE_INTERFACES: &[&str] = &["bedcode:plugin/host-websocket", "bedcode:plugin/host-websocket-server"];
+
+/// 本域的权限位（必须与 `bedcode.wit` / SDK 权限表逐字一致）
+pub const MODULE_PERMISSIONS: &[&str] = &["ws:client", "ws:server"];
 
 /// 能力模块描述符（只描述机制，禁带产品名词——AGENTS §5.1 B1/B5）
 #[cfg(feature = "desktop-host")]
 const DESC: HostModuleDesc = HostModuleDesc {
-    name: "websocket",
-    interfaces: &["bedcode:plugin/host-websocket"],
-    permissions: &["ws:client", "ws:server"],
+    name: MODULE_NAME,
+    interfaces: MODULE_INTERFACES,
+    permissions: MODULE_PERMISSIONS,
     abi_min: 14,
 };
 
-/// WS 能力域模块（`host-websocket`，15 条原语）
+/// WS 能力域模块（`host-websocket` 客户端域 5 + `host-websocket-server` 服务端域 10）
 #[cfg(feature = "desktop-host")]
 pub struct WebsocketModule;
 
@@ -1085,7 +1100,8 @@ impl HostModule for WebsocketModule {
     }
 
     fn register(&self, linker: &mut Linker<WasmPluginState>) -> wasmtime::Result<()> {
-        bedcode::plugin::host_websocket::add_to_linker::<WasmPluginState, HasSelf>(linker, |s| s)
+        bedcode::plugin::host_websocket::add_to_linker::<WasmPluginState, HasSelf>(linker, |s| s)?;
+        bedcode::plugin::host_websocket_server::add_to_linker::<WasmPluginState, HasSelf>(linker, |s| s)
     }
 }
 
@@ -1111,9 +1127,40 @@ inventory::submit! {
 
 /// 能力域名（宿主上下文里的键；[`bedcode_host_kit::ports::HostPorts::domain_ports`]）
 ///
-/// 纯字符串常量（无 WIT 依赖），默认可用：wasm-core 的宿主 adapter 在
-/// `desktop-host` 装配路径引用它。
+/// 纯字符串常量（无 WIT 依赖），默认可用：宿主 adapter 在 `desktop-host` 装配路径
+/// 引用它。
 pub const DOMAIN: &str = "websocket";
+
+/// 停用期回调：回收本插件的全部 WS 资源（出站连接 + 服务端端点 + 在线客户端）
+///
+/// 适配器：域内 [`purge_for_plugin`] 返回回收计数（关停面要用），而钩子契约是
+/// `fn(&str)`——计数对「单个插件停用」没有消费者，此处就地记 debug 日志吸收。
+///
+/// **端口取自进程级装配**（宿主 adapter 开机期装入；未装配即 panic —— fail-visible，
+/// 与 guest 首次调本域原语同口径）。
+#[cfg(feature = "desktop-host")]
+fn on_plugin_purge(plugin_id: &str) {
+    let reclaimed = purge_for_plugin(plugin_id, &ports::ports());
+    tracing::debug!(
+        plugin_id = %plugin_id,
+        count = reclaimed,
+        "host-websocket: 停用回收完成"
+    );
+}
+
+/// 生命周期钩子自报（票 02 批次 01 机制，批次 03 本域接入）
+///
+/// 接入后内核 `manager/host/activation.rs` 不再直调本域回收入口——这是内核摘掉本域
+/// adapter 的前提之一（另一处是 `bus.rs` 的帧投递窄端口，见票面「ws / http 实测」节）。
+#[cfg(feature = "desktop-host")]
+pub static HOOKS: bedcode_host_kit::DomainHooks = bedcode_host_kit::DomainHooks {
+    name: MODULE_NAME,
+    on_manifest_load: None,
+    on_plugin_purge: Some(on_plugin_purge),
+};
+
+#[cfg(feature = "desktop-host")]
+bedcode_host_kit::submit_hooks!(HOOKS);
 
 /// 装配端口的便捷入口（宿主开机期调用）
 ///
@@ -1160,9 +1207,14 @@ bindgen!({
     // `bedcode::plugin::host_websocket::Host` 是**同名但不同类型**的 trait。宿主必须
     // 同时删掉自己的 ws `Host` impl 与 `add_to_linker` 行，否则同一个 interface
     // 被注册两次 → 装配期 `defined twice`。
-    path: "../../bedcode-desktop/packages/plugin-sdk-desktop/rust/wit/bedcode.wit",
-    world: "plugin",
-    // 与宿主同款：全部导出绑定生成 async 变体（wasmtime async store 要求）
+    // 票 05：契约面脱端——bindgen 改指本 crate 自持分片 `wit/ws.wit`
+    // （`world cap-ws` 同时 import 客户端 `host-websocket` 与服务端
+    // `host-websocket-server`），不再读桌面 SDK 生成物目录（端组合改用 wit-src
+    // 真源，与本分片是不同 package 实例的同名定义，票 05 §3 摆法）。
+    path: "wit/ws.wit",
+    world: "cap-ws",
+    // 与宿主同款：全部导出绑定生成 async 变体（wasmtime async store 要求）。
+    // cap-ws 无 export 成员，此配置无生效对象（实测编译绿，票 05 实施记录）
     exports: { default: async },
 });
 
@@ -1194,7 +1246,12 @@ impl bedcode::plugin::host_websocket::Host for WasmPluginState {
     fn is_connected(&mut self, handle: String) -> Result<bool, String> {
         ws_is_connected(&ports_for(self), &self.plugin_id, &handle)
     }
+}
 
+/// v36/v37：`host-websocket` 拆为双端交集（客户端域）+ 桌面扩展服务端域（票 04）——
+/// 服务端 10 条原语落在 `host-websocket-server` interface 的 Host trait。
+#[cfg(feature = "desktop-host")]
+impl bedcode::plugin::host_websocket_server::Host for WasmPluginState {
     // ==================== 服务端域（入站端点） ====================
 
     fn register_endpoint(&mut self, config_json: String) -> Result<String, String> {

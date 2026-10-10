@@ -17,7 +17,8 @@
 //! plugin-component-test 同一策略）。
 
 wit_bindgen::generate!({
-    path: "../plugin-sdk-desktop/rust/wit/bedcode.wit",
+    // 票 04：端 `wit/` 是生成物目录（同 package 拼装），path 指目录 push_dir 加载
+    path: "../plugin-sdk-desktop/rust/wit",
     world: "plugin-system",
 });
 

@@ -25,7 +25,9 @@
 use crate::types::PluginManifest;
 
 wit_bindgen::generate!({
-    path: "wit/bedcode.wit",
+    // 票 03：端 `wit/` 是生成物目录（core.wit + cap-mobile.wit + bedcode.wit 同
+    // package 拼装），path 指目录让 wit-bindgen 以 push_dir 加载合成 package。
+    path: "wit",
     world: "plugin",
     pub_export_macro: true,
     default_bindings_module: "$crate::wasm",

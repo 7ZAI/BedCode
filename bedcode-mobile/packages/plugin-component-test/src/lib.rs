@@ -12,7 +12,8 @@
 //! encode（源码/产物新鲜度检测策略一致）。
 
 wit_bindgen::generate!({
-    path: "../plugin-sdk-mobile/rust/wit/bedcode.wit",
+    // 票 04：端 `wit/` 是生成物目录（同 package 拼装），path 指目录 push_dir 加载
+    path: "../plugin-sdk-mobile/rust/wit",
     world: "plugin",
 });
 
@@ -29,8 +30,10 @@ use exports::bedcode::plugin::manifest::Guest as ManifestGuest;
 // 避免两个 `export!` 宏重名）
 #[cfg(feature = "ws-client")]
 mod binary_bindings {
+    // 票 04：端 `wit/` 是生成物目录（同 package 拼装），path 指目录 push_dir 加载
+    // （单文件 push_file 不加载同目录的 core.wit → `world core does not exist`）。
     wit_bindgen::generate!({
-        path: "../plugin-sdk-mobile/rust/wit/bedcode.wit",
+        path: "../plugin-sdk-mobile/rust/wit",
         world: "plugin-binary",
         pub_export_macro: true,
         default_bindings_module: "binary_bindings",
@@ -73,12 +76,13 @@ impl AbiGuest for ComponentTestPlugin {
             return 999;
         }
         // 与 SDK bedcode_plugin_api_mobile::abi::ABI_VERSION 同步
-        // （=19，v19 = host-database（主库）整面退役——主库由 wasm-core 管理、
-        //  不给插件直接调用，2026-10-09 双端机制决策；叠加 v18 host-notify 域收编、
-        //  v17 host-terminal / terminal-hooks 整面退役（票 15 阶段 B）、
-        //  v16 认证/配对编排下沉、v15 终端订阅协议客户端迁插件、
+        // （=20，v20 = 交集切片收拢——host-fs 交集 6 进共享 core + host-fs-mobile
+        //  拆分，2026-10-10 票 04；叠加 v19 host-database（主库）整面退役——主库由
+        //  wasm-core 管理、不给插件直接调用，2026-10-09 双端机制决策；再叠加 v18
+        //  host-notify 域收编、v17 host-terminal / terminal-hooks 整面退役（票 15
+        //  阶段 B）、v16 认证/配对编排下沉、v15 终端订阅协议客户端迁插件、
         //  v14 host-websocket 客户端域 5 函数）
-        19
+        20
     }
 }
 

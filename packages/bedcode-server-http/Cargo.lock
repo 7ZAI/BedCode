@@ -421,6 +421,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "bedcode-host-api-core"
+version = "0.1.0"
+dependencies = [
+ "rusqlite",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "bedcode-host-kit"
 version = "0.1.0"
 dependencies = [
@@ -447,23 +456,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "bedcode-plugin-api"
-version = "0.1.1"
-dependencies = [
- "anyhow",
- "inventory",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "bedcode-server-base"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "bedcode-host-api-core",
  "bedcode-link-crypto",
- "bedcode-plugin-api",
  "futures-util",
  "local-ip-address",
  "mdns-sd",

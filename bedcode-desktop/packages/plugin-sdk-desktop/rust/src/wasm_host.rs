@@ -16,15 +16,16 @@
 
 use crate::host::{
     ConfigKey, CryptoKeypair, FsDirEntry, FsStat, HostApp, HostAuth, HostBus, HostConfig,
-    HostConnection, HostCrypto, HostError, HostEvents, HostFs, HostHttp, HostLog,
-    HostMdns, HostPeer, HostPlatform, HostPluginDatabase, HostProcess, HostPty, HostStorage,
-    HostTask, HostWebsocket, ProcessSyncResult, PtyRingFetch,
+    HostConnection, HostCrypto, HostError, HostEvents, HostFs, HostHttp, HostLog, HostMdns,
+    HostPeer, HostPlatform, HostPluginDatabase, HostProcess, HostPty, HostStorage, HostTask,
+    HostWebsocket, ProcessSyncResult, PtyRingFetch,
 };
 use crate::wasm::bedcode::plugin::{
-    host_app, host_auth, host_bus, host_config, host_connection, host_crypto,
-    host_events, host_fs, host_http, host_log, host_mdns, host_peer, host_platform,
-    host_plugin_database, host_process, host_pty, host_storage, host_task, host_timer,
-    host_websocket,
+    host_app, host_auth, host_bus, host_config, host_connection, host_crypto, host_events,
+    host_events_desktop, host_fs, host_fs_desktop, host_http, host_http_endpoint, host_log,
+    host_mdns, host_peer, host_platform, host_platform_desktop, host_plugin_database,
+    host_process, host_pty, host_storage, host_task, host_timer, host_websocket,
+    host_websocket_server,
 };
 
 /// 宿主 API 绑定（WASM 插件侧）
@@ -312,7 +313,7 @@ impl HostEvents for WasmHost {
     }
 
     fn notify(&self, title: &str, body: &str) -> Result<(), HostError> {
-        host_events::notify(title, body).map_err(|e| host_err("notify", e))
+        host_events_desktop::notify(title, body).map_err(|e| host_err("notify", e))
     }
 }
 
@@ -333,12 +334,13 @@ impl HostHttp for WasmHost {
 
     /// v29 服务端域：注册插件 HTTP 端点（config-json 原样透传宿主）
     fn http_register_endpoint(&self, config_json: &str) -> Result<String, HostError> {
-        host_http::register_endpoint(config_json).map_err(|e| host_err("http_register_endpoint", e))
+        host_http_endpoint::register_endpoint(config_json)
+            .map_err(|e| host_err("http_register_endpoint", e))
     }
 
     /// v29 服务端域：注销本插件 HTTP 端点
     fn http_unregister_endpoint(&self, endpoint_id: &str) -> Result<bool, HostError> {
-        host_http::unregister_endpoint(endpoint_id)
+        host_http_endpoint::unregister_endpoint(endpoint_id)
             .map_err(|e| host_err("http_unregister_endpoint", e))
     }
 }
@@ -376,17 +378,17 @@ impl HostFs for WasmHost {
     // ==================== v19 追加（票 03 文件浏览域） ====================
 
     fn fs_read_dir(&self, path: &str) -> Result<Vec<FsDirEntry>, HostError> {
-        let json = host_fs::read_dir(path).map_err(|e| host_err("fs_read_dir", e))?;
+        let json = host_fs_desktop::read_dir(path).map_err(|e| host_err("fs_read_dir", e))?;
         serde_json::from_str(&json)
             .map_err(|e| HostError::custom(-1, format!("fs_read_dir: decode failed: {}", e)))
     }
 
     fn fs_canonicalize(&self, path: &str) -> Result<Option<String>, HostError> {
-        host_fs::canonicalize(path).map_err(|e| host_err("fs_canonicalize", e))
+        host_fs_desktop::canonicalize(path).map_err(|e| host_err("fs_canonicalize", e))
     }
 
     fn fs_stat(&self, path: &str) -> Result<Option<FsStat>, HostError> {
-        let json = match host_fs::stat(path).map_err(|e| host_err("fs_stat", e))? {
+        let json = match host_fs_desktop::stat(path).map_err(|e| host_err("fs_stat", e))? {
             Some(json) => json,
             None => return Ok(None),
         };
@@ -652,7 +654,7 @@ impl HostWebsocket for WasmHost {
     }
 
     fn ws_register_endpoint(&self, config_json: &str) -> Result<String, HostError> {
-        host_websocket::register_endpoint(config_json)
+        host_websocket_server::register_endpoint(config_json)
             .map_err(|e| host_err("ws_register_endpoint", e))
     }
 
@@ -662,7 +664,7 @@ impl HostWebsocket for WasmHost {
         client_id: &str,
         text: &str,
     ) -> Result<(), HostError> {
-        host_websocket::send_text_to_client(endpoint_id, client_id, text)
+        host_websocket_server::send_text_to_client(endpoint_id, client_id, text)
             .map_err(|e| host_err("ws_send_text_to_client", e))
     }
 
@@ -672,17 +674,17 @@ impl HostWebsocket for WasmHost {
         client_id: &str,
         payload: &[u8],
     ) -> Result<(), HostError> {
-        host_websocket::send_binary_to_client(endpoint_id, client_id, payload)
+        host_websocket_server::send_binary_to_client(endpoint_id, client_id, payload)
             .map_err(|e| host_err("ws_send_binary_to_client", e))
     }
 
     fn ws_broadcast_text(&self, endpoint_id: &str, text: &str) -> Result<u32, HostError> {
-        host_websocket::broadcast_text(endpoint_id, text)
+        host_websocket_server::broadcast_text(endpoint_id, text)
             .map_err(|e| host_err("ws_broadcast_text", e))
     }
 
     fn ws_broadcast_binary(&self, endpoint_id: &str, payload: &[u8]) -> Result<u32, HostError> {
-        host_websocket::broadcast_binary(endpoint_id, payload)
+        host_websocket_server::broadcast_binary(endpoint_id, payload)
             .map_err(|e| host_err("ws_broadcast_binary", e))
     }
 
@@ -692,21 +694,21 @@ impl HostWebsocket for WasmHost {
         client_id: &str,
         close_json: &str,
     ) -> Result<bool, HostError> {
-        host_websocket::close_client(endpoint_id, client_id, close_json)
+        host_websocket_server::close_client(endpoint_id, client_id, close_json)
             .map_err(|e| host_err("ws_close_client", e))
     }
 
     fn ws_unregister_endpoint(&self, endpoint_id: &str) -> Result<bool, HostError> {
-        host_websocket::unregister_endpoint(endpoint_id)
+        host_websocket_server::unregister_endpoint(endpoint_id)
             .map_err(|e| host_err("ws_unregister_endpoint", e))
     }
 
     fn ws_list_clients(&self, endpoint_id: &str) -> Result<String, HostError> {
-        host_websocket::list_clients(endpoint_id).map_err(|e| host_err("ws_list_clients", e))
+        host_websocket_server::list_clients(endpoint_id).map_err(|e| host_err("ws_list_clients", e))
     }
 
     fn ws_list_endpoints(&self) -> Result<String, HostError> {
-        host_websocket::list_endpoints().map_err(|e| host_err("ws_list_endpoints", e))
+        host_websocket_server::list_endpoints().map_err(|e| host_err("ws_list_endpoints", e))
     }
 
     fn ws_connection_context(
@@ -714,7 +716,7 @@ impl HostWebsocket for WasmHost {
         endpoint_id: &str,
         client_id: &str,
     ) -> Result<String, HostError> {
-        host_websocket::connection_context(endpoint_id, client_id)
+        host_websocket_server::connection_context(endpoint_id, client_id)
             .map_err(|e| host_err("ws_connection_context", e))
     }
 }
@@ -861,7 +863,8 @@ impl HostPlatform for WasmHost {
     fn platform_pick_folders(&self) -> Result<Vec<String>, HostError> {
         let v = peer_json(
             "platform_pick_folders",
-            host_platform::pick_folders().map_err(|e| host_err("platform_pick_folders", e))?,
+            host_platform_desktop::pick_folders()
+                .map_err(|e| host_err("platform_pick_folders", e))?,
         )?;
         serde_json::from_value(v).map_err(|e| {
             HostError::custom(
@@ -874,7 +877,8 @@ impl HostPlatform for WasmHost {
     fn platform_wsl_distros(&self) -> Result<Vec<String>, HostError> {
         let v = peer_json(
             "platform_wsl_distros",
-            host_platform::wsl_distros().map_err(|e| host_err("platform_wsl_distros", e))?,
+            host_platform_desktop::wsl_distros()
+                .map_err(|e| host_err("platform_wsl_distros", e))?,
         )?;
         serde_json::from_value(v).map_err(|e| {
             HostError::custom(
@@ -887,7 +891,7 @@ impl HostPlatform for WasmHost {
     fn platform_local_ipv4_addresses(&self) -> Result<Vec<String>, HostError> {
         let v = peer_json(
             "platform_local_ipv4_addresses",
-            host_platform::local_ipv4_addresses()
+            host_platform_desktop::local_ipv4_addresses()
                 .map_err(|e| host_err("platform_local_ipv4_addresses", e))?,
         )?;
         serde_json::from_value(v).map_err(|e| {
@@ -899,6 +903,7 @@ impl HostPlatform for WasmHost {
     }
 
     fn platform_reveal_in_dir(&self, path: &str) -> Result<(), HostError> {
-        host_platform::reveal_in_dir(path).map_err(|e| host_err("platform_reveal_in_dir", e))
+        host_platform_desktop::reveal_in_dir(path)
+            .map_err(|e| host_err("platform_reveal_in_dir", e))
     }
 }

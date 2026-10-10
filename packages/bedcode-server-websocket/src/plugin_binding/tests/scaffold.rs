@@ -1,6 +1,6 @@
 //! `plugin_binding` 的跨分组测试脚手架（用例文件经 `use super::scaffold::*` 引用）
 //!
-//! **为什么自带假端口**：本域的端口实现属宿主（`wasm_core::host_api::ws::HostWsPorts`），
+//! **为什么自带假端口**：本域的端口实现属宿主（`宿主 adapter（src-tauri/src/plugin/ws.rs）的 HostWsPorts`），
 //! crate 内不能引用宿主 bin crate ⇒ 单测必须在 crate 内造一份假实现。
 //! 假端口同时是「机制自持」的可测性证据：权限门、事件寻址、帧投递三态的断言
 //! 全在本域内闭环，不经宿主上下文。

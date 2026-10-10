@@ -526,12 +526,28 @@ use bedcode_host_kit::{HostModule, HostModuleDesc, ModuleEntry, WasmPluginState}
 #[cfg(feature = "desktop-host")]
 use wasmtime::component::{bindgen, Linker};
 
+/// 能力模块名（宿主白名单键 = 装载期日志与错误文案里的模块名）
+///
+/// **常编译 pub**（票 02 批次 03）：内核不再点名本域（`host_api/peer.rs` 迁宿主
+/// `src-tauri/src/plugin/peer.rs`），白名单条目（`expect_host_module!`）与装载期
+/// 一致性核对改在宿主侧引用本常量。
+pub const MODULE_NAME: &str = "peer-net";
+
+/// 本域提供的 WIT 接口（必须与 `bedcode.wit` 逐字一致；改错即 guest import 失配）
+pub const MODULE_INTERFACES: &[&str] = &["bedcode:plugin/host-peer"];
+
+/// 本域的权限位（必须与 `bedcode.wit` / SDK 权限表逐字一致）
+pub const MODULE_PERMISSIONS: &[&str] = &["peer"];
+
 /// 能力模块描述符（机制面：接口路径 / 权限位 / ABI 下界；**禁带产品名词**，spec D4）
+///
+/// 三个字符串字段取自上面三常量：描述符是机制面唯一真源，宿主白名单与一致性核对
+/// 引用同一组常量 ⇒ 两处不可能漂移。
 #[cfg(feature = "desktop-host")]
 const DESC: HostModuleDesc = HostModuleDesc {
-    name: "peer-net",
-    interfaces: &["bedcode:plugin/host-peer"],
-    permissions: &["peer"],
+    name: MODULE_NAME,
+    interfaces: MODULE_INTERFACES,
+    permissions: MODULE_PERMISSIONS,
     abi_min: 31,
 };
 
@@ -614,9 +630,13 @@ bindgen!({
     // `bedcode::plugin::host_peer::Host` 是**同名但不同类型**的 trait。宿主必须
     // 同时删掉自己的 peer `Host` impl 与 `add_to_linker` 行，否则同一个 interface
     // 被注册两次 → 装配期 `defined twice`。
-    path: "../../bedcode-desktop/packages/plugin-sdk-desktop/rust/wit/bedcode.wit",
-    world: "plugin",
-    // 与宿主同款：全部导出绑定生成 async 变体（wasmtime async store 要求）
+    // 票 05：契约面脱端——bindgen 改指本 crate 自持分片 `wit/peer.wit`
+    // （`world cap-peer`，host-peer 从 core.wit 逐字复制的另一 package 实例副本，
+    // 票 05 §3 摆法），不再读桌面 SDK 生成物目录。
+    path: "wit/peer.wit",
+    world: "cap-peer",
+    // 与宿主同款：全部导出绑定生成 async 变体（wasmtime async store 要求）。
+    // cap-peer 无 export 成员，此配置无生效对象（实测编译绿，票 05 实施记录）
     exports: { default: async },
 });
 

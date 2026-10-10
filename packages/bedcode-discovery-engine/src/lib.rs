@@ -131,9 +131,13 @@ bindgen!({
     // `bedcode::plugin::host_mdns::Host` 是**同名但不同类型**的 trait。宿主必须
     // 同时删掉自己的 mdns `Host` impl 与 `add_to_linker` 行，否则同一个
     // interface 被注册两次 → 装配期 `defined twice`。
-    path: "../../bedcode-desktop/packages/plugin-sdk-desktop/rust/wit/bedcode.wit",
-    world: "plugin",
-    // 与宿主同款：全部导出绑定生成 async 变体（wasmtime async store 要求）
+    // 票 05：契约面脱端——bindgen 改指本 crate 自持分片 `wit/mdns.wit`
+    // （`world cap-mdns`，host-mdns 从 core.wit 逐字复制的另一 package 实例副本，
+    // 票 05 §3 摆法），不再读桌面 SDK 生成物目录。
+    path: "wit/mdns.wit",
+    world: "cap-mdns",
+    // 与宿主同款：全部导出绑定生成 async 变体（wasmtime async store 要求）。
+    // cap-mdns 无 export 成员，此配置无生效对象（实测编译绿，票 05 实施记录）
     exports: { default: async },
 });
 

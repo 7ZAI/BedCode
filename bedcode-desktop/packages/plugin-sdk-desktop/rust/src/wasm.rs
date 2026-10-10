@@ -25,7 +25,9 @@ use crate::types::PluginManifest;
 use crate::BusMessage;
 
 wit_bindgen::generate!({
-    path: "wit/bedcode.wit",
+    // 票 03：端 `wit/` 是生成物目录（core.wit + cap-*.wit + bedcode.wit 同 package
+    // 拼装），path 指目录让 wit-bindgen 以 push_dir 加载合成 package。
+    path: "wit",
     world: "plugin",
     pub_export_macro: true,
     default_bindings_module: "$crate::wasm",
@@ -419,14 +421,18 @@ macro_rules! wasm_entry {
             }
         }
 
-        // ==================== abi（原 __bedcode_abi_version + form 形态字段） ====================
+        // ==================== abi（原 __bedcode_abi_version；v36 切片后只剩 version） ====================
 
         impl $crate::wasm::exports::bedcode::plugin::abi::Guest for $plugin_type {
             /// ABI 版本：语义与 `abi::ABI_VERSION` 完全一致
             fn version() -> u32 {
                 $crate::abi::ABI_VERSION as u32
             }
+        }
 
+        // ==================== abi-form（v36 自 abi 拆出：产物形态声明） ====================
+
+        impl $crate::wasm::exports::bedcode::plugin::abi_form::Guest for $plugin_type {
             /// 产物形态：组件（Component Model），宿主按 `form()==1` 识别
             fn form() -> u32 {
                 $crate::abi::FORM_COMPONENT as u32

@@ -121,19 +121,34 @@ use bedcode_host_kit::{HostModule, HostModuleDesc, ModuleEntry, WasmPluginState}
 #[cfg(feature = "desktop-host")]
 use wasmtime::component::{bindgen, Linker};
 
+/// 能力模块名（宿主白名单键 = 装载期日志与错误文案里的模块名）
+///
+/// **常编译 pub**（票 02 批次 03）：adapter 迁宿主后白名单条目
+/// （`expect_host_module!`）与装载期一致性核对改在宿主侧引用本常量。
+pub const MODULE_NAME: &str = "http";
+
+/// 本域提供的 WIT 接口（必须与 `bedcode.wit` 逐字一致；改错即 guest import 失配）
+///
+/// 票 04：`host-http` 拆为双端交集出站域（core.wit）+ 桌面扩展服务端域
+/// （`host-http-endpoint`，本分片）——一个能力域模块持两个 interface。
+pub const MODULE_INTERFACES: &[&str] = &["bedcode:plugin/host-http", "bedcode:plugin/host-http-endpoint"];
+
+/// 本域的权限位（必须与 `bedcode.wit` / SDK 权限表逐字一致）
+pub const MODULE_PERMISSIONS: &[&str] = &["network:http"];
+
 /// 能力模块描述符（机制面：接口路径 / 权限位 / ABI 下界；**禁带产品名词**）
 ///
 /// `abi_min = 29`：入站服务端域两条原语在 ABI v29 追加，低于该版本的插件不导入
 /// 本 interface 的服务端段。
 #[cfg(feature = "desktop-host")]
 const DESC: HostModuleDesc = HostModuleDesc {
-    name: "http",
-    interfaces: &["bedcode:plugin/host-http"],
-    permissions: &["network:http"],
+    name: MODULE_NAME,
+    interfaces: MODULE_INTERFACES,
+    permissions: MODULE_PERMISSIONS,
     abi_min: 29,
 };
 
-/// HTTP 能力域模块（`host-http`，3 条原语）
+/// HTTP 能力域模块（`host-http` 出站 fetch 1 + `host-http-endpoint` 服务端域 2）
 #[cfg(feature = "desktop-host")]
 pub struct HttpModule;
 
@@ -144,7 +159,8 @@ impl HostModule for HttpModule {
     }
 
     fn register(&self, linker: &mut Linker<WasmPluginState>) -> wasmtime::Result<()> {
-        bedcode::plugin::host_http::add_to_linker::<WasmPluginState, HasSelf>(linker, |s| s)
+        bedcode::plugin::host_http::add_to_linker::<WasmPluginState, HasSelf>(linker, |s| s)?;
+        bedcode::plugin::host_http_endpoint::add_to_linker::<WasmPluginState, HasSelf>(linker, |s| s)
     }
 }
 
@@ -169,9 +185,37 @@ inventory::submit! {
 
 /// 能力域名（宿主上下文里的键；[`bedcode_host_kit::ports::HostPorts::domain_ports`]）
 ///
-/// 纯字符串常量（无 WIT 依赖），默认可用：wasm-core 的宿主 adapter 在
-/// `desktop-host` 装配路径引用它。
+/// 纯字符串常量（无 WIT 依赖），默认可用：宿主 adapter 在 `desktop-host` 装配路径
+/// 引用它。
 pub const DOMAIN: &str = "http";
+
+/// 停用期回调：清空本插件的全部动态路由（含对外 URL 别名与内部路径，只碰本人）
+///
+/// 适配器：域内 [`purge_for_plugin`] 返回回收计数（关停面要用），而钩子契约是
+/// `fn(&str)`——计数对「单个插件停用」没有消费者，此处就地记 debug 日志吸收。
+#[cfg(feature = "desktop-host")]
+fn on_plugin_purge(plugin_id: &str) {
+    let reclaimed = purge_for_plugin(plugin_id);
+    tracing::debug!(
+        plugin_id = %plugin_id,
+        count = reclaimed,
+        "host-http: 停用回收完成"
+    );
+}
+
+/// 生命周期钩子自报（票 02 批次 01 机制，批次 03 本域接入）
+///
+/// 接入后内核 `manager/host/activation.rs` 不再直调本域回收入口——这是内核摘掉本域
+/// adapter 的前提（另一处是 `HttpUnitExecutor` 的消费点，见票面「ws / http 实测」节）。
+#[cfg(feature = "desktop-host")]
+pub static HOOKS: bedcode_host_kit::DomainHooks = bedcode_host_kit::DomainHooks {
+    name: MODULE_NAME,
+    on_manifest_load: None,
+    on_plugin_purge: Some(on_plugin_purge),
+};
+
+#[cfg(feature = "desktop-host")]
+bedcode_host_kit::submit_hooks!(HOOKS);
 
 /// 装配端口的便捷入口（宿主开机期调用）
 ///
@@ -217,9 +261,14 @@ bindgen!({
     // `bedcode::plugin::host_http::Host` 是**同名但不同类型**的 trait。宿主必须
     // 同时删掉自己的 http `Host` impl 与 `add_to_linker` 行，否则同一个 interface
     // 被注册两次 → 装配期 `defined twice`。
-    path: "../../bedcode-desktop/packages/plugin-sdk-desktop/rust/wit/bedcode.wit",
-    world: "plugin",
-    // 与宿主同款：全部导出绑定生成 async 变体（wasmtime async store 要求）
+    // 票 05：契约面脱端——bindgen 改指本 crate 自持分片 `wit/http.wit`
+    // （`world cap-http` 同时 import 出站 `host-http` 与服务端 `host-http-endpoint`），
+    // 不再读桌面 SDK 生成物目录（端组合改用 wit-src 真源，与本分片是不同 package
+    // 实例的同名定义，票 05 §3 摆法）。
+    path: "wit/http.wit",
+    world: "cap-http",
+    // 与宿主同款：全部导出绑定生成 async 变体（wasmtime async store 要求）。
+    // cap-http 无 export 成员，此配置无生效对象（实测编译绿，票 05 实施记录）
     exports: { default: async },
 });
 
@@ -234,7 +283,12 @@ impl bedcode::plugin::host_http::Host for WasmPluginState {
         // may_prompt = true：插件主流程（guest 调用栈）可弹窗询问出站授权
         egress::http_fetch(&ports_for(self), &self.plugin_id, &request_json, true)
     }
+}
 
+/// v37：`host-http` 拆为双端交集出站域 + 桌面扩展服务端域（票 04）——入站路由
+/// 注册两条原语落在 `host-http-endpoint` interface 的 Host trait。
+#[cfg(feature = "desktop-host")]
+impl bedcode::plugin::host_http_endpoint::Host for WasmPluginState {
     // v29 服务端域：插件动态 HTTP 路由注册（权限门 + 注册表仲裁在同 crate 内）
     fn register_endpoint(&mut self, config_json: String) -> Result<String, String> {
         http_register_endpoint(&ports_for(self), &self.plugin_id, &config_json)

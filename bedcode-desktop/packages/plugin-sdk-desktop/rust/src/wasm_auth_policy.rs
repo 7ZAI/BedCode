@@ -15,7 +15,8 @@
 //! `pub_export_macro` 生成的 `export!` 宏在 `crate::wasm` 模块内重名。
 
 wit_bindgen::generate!({
-    path: "wit/bedcode.wit",
+    // 票 03：生成物目录（同 package 拼装，push_dir 加载）
+    path: "wit",
     world: "plugin-auth-policy",
     pub_export_macro: true,
     default_bindings_module: "$crate::wasm_auth_policy",
