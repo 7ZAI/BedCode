@@ -9,6 +9,23 @@
 
 ## [未发布]
 
+#### 对等网络能力域集中化：移动端接入共享 peer 能力域 crate + mDNS 复用（ADR 0048）
+
+- **双端唯一 peer 引擎**（用户指令：基础服务能力化集中，宿主装配端口、wasm app 编排）：移动宿主的
+  对等网络引擎控制面（约 4.4k 行：节点装配 / 生命周期闸门 / 会话句柄表 / 接收台账与设置落盘 /
+  事件翻译 / 远端拉取编排）整体下沉双端共享能力域 `packages/bedcode-server-peer-net`
+  （`default = []` 纯引擎形态，WIT 绑定留在 `common-host`）；移动 `peer_*.rs` 只剩**适配层**
+  （`PeerEnginePorts` 五端口实现 + 平台缝 + `peer_ctx` 装配 + 委托）。桌面经窄端口集装配——
+  **零行为变化，零 ABI / WIT / wire / 权限位变更**
+- **mDNS 一律复用（不造第二份）**：引擎广播走共享 `bedcode-discovery-engine` 守护；移动宿主
+  `MdnsAdvertiser` 死面（零活消费者）、`mdns_start_advertise` / `mdns_stop_advertise` 命令与
+  前端死 composable **退役**；browse 薄壳保留（活消费者：terminal-session 宿主页）
+- **平台缝按端注入**：SAF 共享访问 / MediaStore 落点提升 / 内置 `"下载"` 条目 / 下载目录语义为
+  `PeerPlatformSeam` 参数——桌面传 `None`，行为逐字不变
+- **防回接锁**：`peer_engine_consolidation_lock.rs`（退役引擎面缺席 / 适配面在场 /
+  共享依赖在场，变异自检 1/1）+ `retired_mobile_mdns_advertise_lock.rs`（广播面缺席 /
+  browse 薄壳在场 / 共享守护复用锚点，变异自检 1/1）
+
 #### wasm-core 单一 crate：移动 fork 退役 + 依赖图脱桌面（票 06）
 
 - **双端共用一份 `bedcode-wasm-core`**（ADR 0045 D1）：移动 fork crate
