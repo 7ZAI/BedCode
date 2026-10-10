@@ -465,11 +465,7 @@ impl AppConfig {
             ui: UiConfig {
                 theme: parse_value(props, "ui.theme", "system".to_string()),
                 theme_palette: parse_value(props, "ui.theme_palette", default_theme_palette()),
-                // 旧版本无 ui.font_size 键（当时共用 terminal_font_size），缺失时以其值迁移兜底
-                font_size: props
-                    .contains_key("ui.font_size")
-                    .then(|| parse_value(props, "ui.font_size", default_font_size()))
-                    .unwrap_or(parse_value(props, "ui.terminal_font_size", default_font_size())),
+                font_size: parse_value(props, "ui.font_size", default_font_size()),
                 terminal_font_size: parse_value(props, "ui.terminal_font_size", 12),
                 terminal_font_family: parse_value(props, "ui.terminal_font_family", "Consolas".to_string()),
                 terminal_theme: parse_value(props, "ui.terminal_theme", default_terminal_theme()),
