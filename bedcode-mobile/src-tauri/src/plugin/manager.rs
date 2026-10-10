@@ -278,6 +278,11 @@ impl PluginManager {
             Arc::new(crate::plugin::host_ports::HostPorts), // 批次 2b：宿主引擎端口装配
         ));
 
+        // host-peer 端口（wasm-core-mobile-purity 票 03）：wasm-core bare 面 19 条
+        // 原语的薄转发经 crate `ports::ports()` 取本端口——权限判定 / 引擎上下文 /
+        // 同步桥三面在此与宿主衔接（幂等，重复 init 首装胜出）
+        crate::plugin::peer_ports::install(self.app_handle.as_ref().cloned());
+
         // 组件路径无启动期签名表校验：契约由 WIT 编译期保证，
         // 插件侧 `abi.version()` 协商在 instantiate_component 内逐实例校验
 

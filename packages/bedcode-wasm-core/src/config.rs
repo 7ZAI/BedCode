@@ -16,8 +16,8 @@
 //! `manager/runtime.rs` 的 `build_engine_config`。
 
 // 双端 SDK 同名类型（形状 fork 对齐逐字一致）——移动 SDK 无 `ResourceOverrides`，
-// 移动形态 crate 内自持（fork 逐字副本，见下方 cfg(mobile-host) 定义）
-#[cfg(feature = "desktop-host")]
+// 移动形态 crate 内自持（fork 逐字副本，见下方 cfg(bare-host) 定义）
+#[cfg(feature = "common-host")]
 use bedcode_plugin_api::ResourceOverrides;
 
 // ==================== 资源覆盖声明（纯钳制数据，移动形态 crate 内自持） ====================
@@ -28,7 +28,7 @@ use bedcode_plugin_api::ResourceOverrides;
 ///
 /// 四类上限（与 [`StoreLimits`] 同域：内存字节 / 表元素 / 实例数 / 内存数 /
 /// 表数；燃料在 [`EngineConfig::tuning`]）。
-#[cfg(feature = "mobile-host")]
+#[cfg(feature = "bare-host")]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ResourceOverrides {

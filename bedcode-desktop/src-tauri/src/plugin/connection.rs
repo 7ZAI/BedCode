@@ -54,7 +54,7 @@ impl HostModule for ConnectionModule {
     }
 
     fn register(&self, linker: &mut wasmtime::component::Linker<WasmPluginState>) -> wasmtime::Result<()> {
-        bedcode::plugin::host_connection::add_to_linker::<WasmPluginState, HasSelf>(linker, |s| s)
+        bedcode::plugin::host_connection_registry::add_to_linker::<WasmPluginState, HasSelf>(linker, |s| s)
     }
 }
 
@@ -77,7 +77,7 @@ fn ctx_of(state: &WasmPluginState) -> &WasmHostContext {
     downcast_host::<WasmHostContext>(state.host.as_ref())
 }
 
-impl bedcode::plugin::host_connection::Host for WasmPluginState {
+impl bedcode::plugin::host_connection_registry::Host for WasmPluginState {
     fn connections_list(&mut self) -> Result<String, String> {
         connection_list(ctx_of(self), &self.plugin_id)
     }

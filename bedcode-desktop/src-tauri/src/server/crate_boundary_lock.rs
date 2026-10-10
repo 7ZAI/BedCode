@@ -158,7 +158,7 @@ const ALLOWED_DOWNWARD_EDGES: &[(&str, &[&str])] = &[
             // 内核继续消费这些 crate 的**引擎面**（peer 的 `release_node_for` / ws / http
             // 的帧投递与连接清单）——摘边要把那些消费点一并搬出内核，属另一件事。
             //
-            // **票 06 批次 03 新增 `bedcode-discovery-engine` 边（mobile-host 面）**：
+            // **票 06 批次 03 新增 `bedcode-discovery-engine` 边（bare-host 面）**：
             // 桌面形态该域 adapter 在宿主 `src/plugin/mdns.rs`（内核无边）；移动形态无
             // 宿主 adapter——fork 迁入的 `mobile/host_impl` 域 impl 在 crate 内直接消费
             // discovery-engine 引擎面（装配形态差异，非桌面回接）。此后再出现
@@ -207,7 +207,7 @@ const REQUIRED_DOWNWARD_EDGES: &[(&str, &str)] = &[
     ("bedcode-wasm-core", "bedcode-server-http"),
     // 票 02 批次 02：wasm-core → pty-engine 必须边已摘除（连同内核侧 adapter 一起
     // 消失）；ws / peer-net / http 三条边因内核仍用其引擎面（bus 帧投递 / 连接清单 /
-    // 端点登记）保留。discovery-engine 不进必填段：它是 mobile-host 形态的可选边
+    // 端点登记）保留。discovery-engine 不进必填段：它是 bare-host 形态的可选边
     // （桌面形态走宿主 adapter，不上该依赖；见上方 ALLOWED 表注释）。
 ];
 

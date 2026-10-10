@@ -50,43 +50,43 @@
 
 // ==================== 域子模块（形态分叉，票 06 批次 03） ====================
 //
-// 桌面 WIT impl 域（`desktop-host`）：由 `runtime/desktop/component.rs` 的
+// 桌面 WIT impl 域（`common-host`）：由 `runtime/common/component.rs` 的
 // Host trait 绑定逐接口调用。移动形态的对应实现在 `manager::runtime::host_impl`
 // 16 域（fork 迁入），本目录不重复。
-// 移动 adapter（`mobile-host`）：http_engine / ports / sql_guard / mobile_context
+// 移动 adapter（`bare-host`）：http_engine / ports / sql_guard / bare_context
 // 自 fork `host_api/` 迁入（fork 的 context.rs 与桌面同名不同物，改名消歧）。
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 pub mod api;
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 pub mod auth_center;
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 pub(super) mod bus;
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 pub(super) mod config;
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 pub mod context;
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 pub(super) mod database;
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 pub(super) mod events;
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 pub(crate) mod fs;
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 pub(crate) mod http;
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 pub(super) mod log;
 
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 pub(super) mod platform;
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 pub(crate) mod sqlite;
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 pub(crate) mod sqlite_ports;
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 pub(super) mod status;
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 pub(super) mod storage;
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 pub mod unit_executor;
 
 // v36 交集接口切片（票 02 批次 06）：`host-fs-desktop`（桌面扩展 3 函数）的 WIT
@@ -95,28 +95,31 @@ pub mod unit_executor;
 // `check_permission` 提 pub 同款裁决）——此处显式公开三个函数供宿主经
 // `bedcode_wasm_core::host_api::fs::{fs_read_dir, fs_canonicalize, fs_stat}` 引用
 // （fs 模块本体保持 `pub(crate)`，不整模块曝面）。
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 pub use crate::host_api::fs::{fs_canonicalize, fs_read_dir, fs_stat};
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 mod wsl_fs;
 
-// ==================== 移动 adapter（mobile-host，fork 迁入） ====================
+// ==================== 移动 adapter（bare-host，fork 迁入） ====================
+//
+// `http_engine` 已于 2026-10-10 票 05 退役（出站执行并入能力域 crate
+// `bedcode-server-http::plugin_binding::egress`；移动形态经
+// `runtime/bare/host_impl/http.rs` 薄转发）——宿主侧 `plugin.rs` 的对接解释_builder
+// 随同收口（再 re-export 会表现为「看起来能用」的假入口）。
 
-#[cfg(feature = "mobile-host")]
-pub mod http_engine;
-#[cfg(feature = "mobile-host")]
+#[cfg(feature = "bare-host")]
 pub mod ports;
-#[cfg(feature = "mobile-host")]
+#[cfg(feature = "bare-host")]
 pub mod sql_guard;
-#[cfg(feature = "mobile-host")]
-pub mod mobile_context;
+#[cfg(feature = "bare-host")]
+pub mod bare_context;
 // 移动装配面的宿主上下文再导出：fork 面路径 `crate::host_api::WasmHostContext`
 // 零改动解析（host_impl.rs / host_context_registry 等迁入文件的原引用形态）
-#[cfg(feature = "mobile-host")]
-pub use mobile_context::WasmHostContext;
+#[cfg(feature = "bare-host")]
+pub use bare_context::WasmHostContext;
 // ports 端口符号集过 host_api 顶层（fork host_api.rs:24 同款清单）：
-// test_support/mobile.rs 的 MockPorts impl / host_impl 域经此路径引用
-#[cfg(feature = "mobile-host")]
+// test_support/bare.rs 的 MockPorts impl / host_impl 域经此路径引用
+#[cfg(feature = "bare-host")]
 pub use ports::{
     AuthEnginePort, ConnectionEnginePort, FsAuthGate, FsAuthOp, HostEnginePorts, PrimaryTarget,
     SafIoPort, UnimplementedPorts, WsReconnectPolicyPort, PORT_NOT_WIRED,
@@ -135,7 +138,7 @@ pub(crate) mod sqlite_scaffold;
 // 票 05c：顶层 `grant_permissions`（常编译 pub）签名需要 WasmHostContext，
 // 本 use 提常编译（不再 cfg(test)）。桌面装配面（移动形态的权限模型是
 // granted_permissions state 内仲裁，无此守卫——fork host_api.rs 无本段）
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 use crate::host_api::context::WasmHostContext;
 // ==================== Shared Guards ====================
 
@@ -155,7 +158,7 @@ use crate::host_api::context::WasmHostContext;
 ///
 /// **常编译 pub（票 02 批次 02 起）**：迁到宿主侧的域端口 adapter（首个 pty）
 /// 复用同一条拒绝路径——两处各写一份会让「拒绝必须留痕」变成两份实现。
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 #[must_use]
 pub fn check_permission(
     scope: &dyn crate::host_api::context::PermissionScope,
@@ -181,7 +184,7 @@ pub fn check_permission(
 ///
 /// **`capability` 参数由调用方给**（取值 `bedcode_discovery_engine::routing::CAPABILITY`）：
 /// 能力名字面量的真源在该域自报的词汇里（票 02 批次 03），内核侧零字面量。
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 pub use crate::manager::capability::{
     forward_mdns_advertise, forward_mdns_browse, forward_mdns_is_advertising,
     forward_mdns_stop_advertise, forward_mdns_stop_browse,
@@ -203,7 +206,7 @@ pub use crate::manager::capability::{
 /// 域（host-kit 装配自报面，票 02 批次 02 起——域实现迁出内核后内核不点名该域）。
 ///
 /// 幂等：各域 `install_ports` 是 `OnceLock::set`，重复装配被忽略而非替换。
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 pub(crate) fn install_capability_domain_ports(
     host_ctx: &std::sync::Arc<crate::host_api::context::WasmHostContext>,
 ) {
@@ -234,13 +237,13 @@ pub(crate) fn install_capability_domain_ports(
 /// （wasm-core 内部测试可见）；lib 集成测试（task_e2e 等，独立测试二进制）
 /// 看不到 cfg(test) 项，提为常编译 pub 供 `bedcode_desktop_lib::wasm_core::
 /// host_api::grant_permissions` 消费（调用点形态与原名一致，零逻辑改动）。
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 pub fn grant_permissions(ctx: &WasmHostContext, plugin_id: &str, perms: &[&str]) {
     let requested: Vec<String> = perms.iter().map(|s| s.to_string()).collect();
     ctx.permission.grant_permissions(plugin_id, &requested);
 }
 
-#[cfg(all(test, feature = "desktop-host"))]
+#[cfg(all(test, feature = "common-host"))]
 pub(crate) mod tests {
     use super::*;
     use crate::db::Database;

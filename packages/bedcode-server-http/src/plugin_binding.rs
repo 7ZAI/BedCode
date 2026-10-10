@@ -18,7 +18,7 @@
 //! **脱绑（能力域脱绑 P1）**：本文件混住机制面与 WIT 绑定层。机制面（端口 /
 //! 出站 / 端点注册与注销 / 回收 / 装配）默认编译，任何宿主可用；WIT 绑定层
 //! （`bindgen!` / `HostModule` / `inventory::submit!` / `impl Host`）以
-//! `#[cfg(feature = "desktop-host")]` 门控——桌面宿主开 feature 后行为逐字不变
+//! `#[cfg(feature = "common-host")]` 门控——桌面宿主开 feature 后行为逐字不变
 //! （ABI / WIT / 权限位 / 事件形状 / inventory 注册零变化），无 feature 的宿主
 //! （移动端 / 无头）拿纯引擎。
 //!
@@ -112,13 +112,13 @@ pub fn purge_for_plugin(plugin_id: &str) -> usize {
     entries.len()
 }
 
-// ==================== 能力模块自报（WIT 绑定层，`desktop-host` feature） ====================
+// ==================== 能力模块自报（WIT 绑定层，`common-host` feature） ====================
 
-// WIT 绑定层依赖（host-kit / wasmtime）只随 `desktop-host` feature 编译：
+// WIT 绑定层依赖（host-kit / wasmtime）只随 `common-host` feature 编译：
 // 能力域默认形态 = 纯引擎机制（零 WIT 依赖），任何宿主可直接引用。
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 use bedcode_host_kit::{HostModule, HostModuleDesc, ModuleEntry, WasmPluginState};
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 use wasmtime::component::{bindgen, Linker};
 
 /// 能力模块名（宿主白名单键 = 装载期日志与错误文案里的模块名）
@@ -140,7 +140,7 @@ pub const MODULE_PERMISSIONS: &[&str] = &["network:http"];
 ///
 /// `abi_min = 29`：入站服务端域两条原语在 ABI v29 追加，低于该版本的插件不导入
 /// 本 interface 的服务端段。
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 const DESC: HostModuleDesc = HostModuleDesc {
     name: MODULE_NAME,
     interfaces: MODULE_INTERFACES,
@@ -149,10 +149,10 @@ const DESC: HostModuleDesc = HostModuleDesc {
 };
 
 /// HTTP 能力域模块（`host-http` 出站 fetch 1 + `host-http-endpoint` 服务端域 2）
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 pub struct HttpModule;
 
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 impl HostModule for HttpModule {
     fn desc(&self) -> HostModuleDesc {
         DESC
@@ -165,27 +165,27 @@ impl HostModule for HttpModule {
 }
 
 /// getter：让 guest 侧 import 取到可变的状态引用（与宿主既有接线同款）
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 type HasSelf = wasmtime::component::HasSelf<WasmPluginState>;
 
 /// 静态单例（供 `inventory::submit!` 取址）
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 static MODULE: HttpModule = HttpModule;
 
 // 能力模块自报（linker-section 静态）
 //
 // **依赖前提**：宿主必须有一行强制引用本 crate（见宿主的组件运行时接线处），
 // 否则本 rlib 不进最终二进制、静态不执行 ⇒ 注册丢失，且 guest 会在实例化期报
-// 「无该 import」。无 `desktop-host` feature 的宿主（移动端 / 无头）**不应**
-// 注册——它没有插件宿主机制，桌面侧强制引用行同步 `#[cfg(feature = "desktop-host")]`。
-#[cfg(feature = "desktop-host")]
+// 「无该 import」。无 `common-host` feature 的宿主（移动端 / 无头）**不应**
+// 注册——它没有插件宿主机制，桌面侧强制引用行同步 `#[cfg(feature = "common-host")]`。
+#[cfg(feature = "common-host")]
 inventory::submit! {
     ModuleEntry { module: &MODULE }
 }
 
 /// 能力域名（宿主上下文里的键；[`bedcode_host_kit::ports::HostPorts::domain_ports`]）
 ///
-/// 纯字符串常量（无 WIT 依赖），默认可用：宿主 adapter 在 `desktop-host` 装配路径
+/// 纯字符串常量（无 WIT 依赖），默认可用：宿主 adapter 在 `common-host` 装配路径
 /// 引用它。
 pub const DOMAIN: &str = "http";
 
@@ -193,7 +193,7 @@ pub const DOMAIN: &str = "http";
 ///
 /// 适配器：域内 [`purge_for_plugin`] 返回回收计数（关停面要用），而钩子契约是
 /// `fn(&str)`——计数对「单个插件停用」没有消费者，此处就地记 debug 日志吸收。
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 fn on_plugin_purge(plugin_id: &str) {
     let reclaimed = purge_for_plugin(plugin_id);
     tracing::debug!(
@@ -207,14 +207,14 @@ fn on_plugin_purge(plugin_id: &str) {
 ///
 /// 接入后内核 `manager/host/activation.rs` 不再直调本域回收入口——这是内核摘掉本域
 /// adapter 的前提（另一处是 `HttpUnitExecutor` 的消费点，见票面「ws / http 实测」节）。
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 pub static HOOKS: bedcode_host_kit::DomainHooks = bedcode_host_kit::DomainHooks {
     name: MODULE_NAME,
     on_manifest_load: None,
     on_plugin_purge: Some(on_plugin_purge),
 };
 
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 bedcode_host_kit::submit_hooks!(HOOKS);
 
 /// 装配端口的便捷入口（宿主开机期调用）
@@ -238,8 +238,8 @@ pub use ports::install_ports;
 /// 能力域自己认识，kit 与宿主都不能把它裸存进表），故这里向下转型后**克隆内层
 /// Arc**（同形对象，多个实例共享一份 adapter，无副作用）。
 ///
-/// 依赖 `WasmPluginState`（host-kit 类型），随 `desktop-host` feature 编译。
-#[cfg(feature = "desktop-host")]
+/// 依赖 `WasmPluginState`（host-kit 类型），随 `common-host` feature 编译。
+#[cfg(feature = "common-host")]
 pub fn ports_for(state: &WasmPluginState) -> Arc<dyn HttpPorts> {
     match state
         .host
@@ -251,7 +251,7 @@ pub fn ports_for(state: &WasmPluginState) -> Arc<dyn HttpPorts> {
     }
 }
 
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 bindgen!({
     // provider 侧绑定：宿主自己的 `bedcode` 模块是 **guest 视角**（import 是调用
     // 函数，不是 `Host` trait + `add_to_linker`），能力 crate 要自己装配就必须生成
@@ -272,12 +272,12 @@ bindgen!({
     exports: { default: async },
 });
 
-// ==================== 宿主绑定层（Host trait 实现，`desktop-host` feature） ====================
+// ==================== 宿主绑定层（Host trait 实现，`common-host` feature） ====================
 //
 // 每个接口方法 = 一条 WIT 原语。权限门在本 crate 内的域函数里（随实现同迁，
 // 经端口问宿主结果），此层只做「取端口 → 转调 → 按 WIT `result` 形状返回」。
 
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 impl bedcode::plugin::host_http::Host for WasmPluginState {
     fn fetch(&mut self, request_json: String) -> Result<Option<String>, String> {
         // may_prompt = true：插件主流程（guest 调用栈）可弹窗询问出站授权
@@ -287,7 +287,7 @@ impl bedcode::plugin::host_http::Host for WasmPluginState {
 
 /// v37：`host-http` 拆为双端交集出站域 + 桌面扩展服务端域（票 04）——入站路由
 /// 注册两条原语落在 `host-http-endpoint` interface 的 Host trait。
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 impl bedcode::plugin::host_http_endpoint::Host for WasmPluginState {
     // v29 服务端域：插件动态 HTTP 路由注册（权限门 + 注册表仲裁在同 crate 内）
     fn register_endpoint(&mut self, config_json: String) -> Result<String, String> {

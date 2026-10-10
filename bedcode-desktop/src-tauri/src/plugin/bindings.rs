@@ -235,7 +235,7 @@ mod tests {
         let descs = registry.descs();
         assert!(
             descs.len() >= 10,
-            "能力模块收集面过小（{} 个），锁可能空转（能力 crate 未链接 / 编译面缺 desktop-host）",
+            "能力模块收集面过小（{} 个），锁可能空转（能力 crate 未链接 / 编译面缺 common-host）",
             descs.len()
         );
         let mut module_ifaces: Vec<(String, String)> = Vec::new();

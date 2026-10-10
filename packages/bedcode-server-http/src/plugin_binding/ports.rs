@@ -93,6 +93,18 @@ pub trait HttpPorts: Send + Sync + 'static {
     /// 流式推送所需的前端事件通道；`None` = 无头上下文（本域据此显性报错）
     fn event_sink(&self) -> Option<Arc<dyn HttpEventSink>>;
 
+    /// 请求级 Bearer 代注的 token 源（请求 JSON 里 `"jwtAuth": true` 时取）
+    ///
+    /// **默认实现 `Ok(None)`** = 本宿主没有「全局会话 token」这个概念（桌面侧形态），
+    /// guest 自带 `Authorization` 头即可，能力域行为零变化。覆写方的不变式：
+    /// - 有 token → `Ok(Some(token))`：由本域代注 `Authorization: Bearer`
+    ///   （token 不落插件，C4；与 ws 域 `jwt-auth` 首帧代发同款凭据红线）；
+    /// - 要求代注但当前无 token → `Err`（fail-visible：匿名请求在对端必 401，
+    ///   晚失败不如早失败，**禁止**静默降级为匿名请求）。
+    fn jwt_auth_token(&self, _plugin_id: &str) -> Result<Option<String>, String> {
+        Ok(None)
+    }
+
     /// 在宿主运行时上**同步驱动**一段异步计算（guest host function 是同步的）
     ///
     /// 实现即宿主那份唯一的同步↔异步桥（多线程运行时走 `block_in_place`、

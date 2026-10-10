@@ -10,7 +10,7 @@ edition = "2021"
 [features]
 # WASI store 形态（票 06 批次 02，spec D5 Store 装配端口化）：`WasmPluginState`
 # 携带 `wasi_ctx` / `wasi_table` 字段 + `WasiView` 实现——仅桌面宿主形态开启
-# （wasm-core `desktop-host` feature 传递）。移动形态（mobile-host）无 WASI
+# （wasm-core `common-host` feature 传递）。移动形态（bare-host）无 WASI
 # （移动插件 wasm32-unknown-unknown，无 WASI import），不开即字段/impl 不编译、
 # wasmtime-wasi 出依赖图。
 wasi-store = ["dep:wasmtime-wasi"]

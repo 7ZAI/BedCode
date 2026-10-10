@@ -14,10 +14,10 @@
 //! 门禁（approval.rs）提供可钉扎的身份锚点。完整模型见 docs/adr/。
 
 // 双端 SDK 同名类型——`InstanceLifecycle` 移动 SDK 无（移动 manifest 无 lifecycle
-// 声明面，fork 票 17 §3.2：该校验不 fork），随 desktop-host
-#[cfg(feature = "desktop-host")]
+// 声明面，fork 票 17 §3.2：该校验不 fork），随 common-host
+#[cfg(feature = "common-host")]
 use bedcode_plugin_api::{InstanceLifecycle, PluginManifest};
-#[cfg(feature = "mobile-host")]
+#[cfg(feature = "bare-host")]
 use bedcode_plugin_api_mobile::PluginManifest;
 
 use crate::security::auth_policy::AuthStrategy;
@@ -46,8 +46,8 @@ pub fn validate_manifest_required(manifest: &PluginManifest) -> crate::Result<()
     // 越界即拒绝装载（`Err` ⇒ 不装载）——内核不再解释该字段（AGENTS §5.1 B6）。
     // 本函数只保住两处入口（目录扫描 / zip 安装）共用的结构性必填字段。
     // 生命周期 / preopen 校验为桌面 manifest 专属面（移动 manifest 无这两个字段，
-    // fork 票 17 §3.2）——随 desktop-host
-    #[cfg(feature = "desktop-host")]
+    // fork 票 17 §3.2）——随 common-host
+    #[cfg(feature = "common-host")]
     {
         validate_lifecycle(manifest)?;
         validate_preopen_category(manifest)?;
@@ -65,7 +65,7 @@ pub fn validate_manifest_required(manifest: &PluginManifest) -> crate::Result<()
 /// 单实例限额（`runtime.rs::memory_growing` 拒绝增长 → guest trap）且不重启进程
 /// 好不了。静默降级会让作者以为 worker 生效了，实际既没省内存又没省限额。
 /// 拒绝时点名缺什么（缺调度方 + 传参协议 + 配额），便于对着清单补齐后再启用。
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 pub fn validate_lifecycle(manifest: &PluginManifest) -> crate::Result<()> {
     if manifest.lifecycle != InstanceLifecycle::Persistent {
         return Err(crate::AppError::Plugin(format!(
@@ -88,7 +88,7 @@ pub fn validate_lifecycle(manifest: &PluginManifest) -> crate::Result<()> {
 /// worker 未实现期间（ADR 0032 §6 双侧拒绝）`ephemeral` 本身被 [`validate_lifecycle`]
 /// 拒绝，故本字段当前对一切 manifest 不可达——此处的类别闸门是取值域层面的落死，
 /// worker 启用（ephemeral 放行）后 preopen 即恢复为 worker 专属能力。
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 pub fn validate_preopen_category(manifest: &PluginManifest) -> crate::Result<()> {
     if !manifest.wasi_preopen_dirs.is_empty() && manifest.lifecycle != InstanceLifecycle::Ephemeral {
         return Err(crate::AppError::Plugin(
@@ -325,7 +325,7 @@ mod tests {
     /// 反例：`ephemeral` 必须加载期失败并点名缺什么——静默当常驻处理会让作者
     /// 以为 worker 已生效，而常驻恰好是 worker 存在理由的反面（线性内存只增不减）。
     // 生命周期声明面 = 桌面 manifest 专属（移动 SDK 无 InstanceLifecycle，fork 票 17 §3.2）
-    #[cfg(feature = "desktop-host")]
+    #[cfg(feature = "common-host")]
     #[test]
     fn lifecycle_ephemeral_is_rejected_at_load_persistent_and_absent_pass() {
         let parse = |extra: &str| -> crate::Result<PluginManifest> {

@@ -34,15 +34,15 @@
 //! **脱绑（能力域脱绑 P3）**：本文件混住机制面与 WIT 绑定层。机制面（连接表 /
 //! 端点原语 / 帧投递 / 回收 / 装配入口）默认编译，任何宿主可用；WIT 绑定层
 //! （`bindgen!` / `HostModule` / `inventory::submit!` / `impl Host`）以
-//! `#[cfg(feature = "desktop-host")]` 门控——桌面宿主开 feature 后行为逐字不变
+//! `#[cfg(feature = "common-host")]` 门控——桌面宿主开 feature 后行为逐字不变
 //! （ABI / WIT / 权限位 / 事件形状 / inventory 注册零变化），无 feature 的宿主
 //! （移动端 / 无头）拿纯引擎。wire 词汇（权限位 / 事件名 / topic 构造 /
 //! `EndpointAuth`）改自持副本（[`crate::wire`] + 漂移锁），本 crate 零桌面 SDK
 //! 直接依赖。
 
-// 绑定层专属依赖（`HostModule` 装配 + wasmtime `Linker`）：只随 `desktop-host`
+// 绑定层专属依赖（`HostModule` 装配 + wasmtime `Linker`）：只随 `common-host`
 // feature 进编译图——无 feature 的宿主（移动端 / 无头）拿纯引擎，不装配 WIT 绑定层。
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 use bedcode_host_kit::{HostModule, HostModuleDesc, ModuleEntry, WasmPluginState};
 use crate::wire::{
     owned_topic, PERMISSION_WS_CLIENT, PERMISSION_WS_SERVER, WS_CLOSE, WS_ERROR, WS_OPEN,
@@ -63,7 +63,7 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::protocol::{CloseFrame, WebSocketConfig};
 use tokio_tungstenite::tungstenite::Message;
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 use wasmtime::component::{bindgen, Linker};
 
 use crate::endpoint::EndpointAuth;
@@ -1081,7 +1081,7 @@ pub const MODULE_INTERFACES: &[&str] = &["bedcode:plugin/host-websocket", "bedco
 pub const MODULE_PERMISSIONS: &[&str] = &["ws:client", "ws:server"];
 
 /// 能力模块描述符（只描述机制，禁带产品名词——AGENTS §5.1 B1/B5）
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 const DESC: HostModuleDesc = HostModuleDesc {
     name: MODULE_NAME,
     interfaces: MODULE_INTERFACES,
@@ -1090,10 +1090,10 @@ const DESC: HostModuleDesc = HostModuleDesc {
 };
 
 /// WS 能力域模块（`host-websocket` 客户端域 5 + `host-websocket-server` 服务端域 10）
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 pub struct WebsocketModule;
 
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 impl HostModule for WebsocketModule {
     fn desc(&self) -> HostModuleDesc {
         DESC
@@ -1106,11 +1106,11 @@ impl HostModule for WebsocketModule {
 }
 
 /// getter：让 guest 侧 import 取到可变的状态引用（与宿主既有接线同款）
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 type HasSelf = wasmtime::component::HasSelf<WasmPluginState>;
 
 /// 静态单例（供 `submit_module!` 取址）
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 static MODULE: WebsocketModule = WebsocketModule;
 
 // 能力模块自报（linker-section 静态）
@@ -1118,16 +1118,16 @@ static MODULE: WebsocketModule = WebsocketModule;
 // **依赖前提**：宿主必须有一行 `use bedcode_server_websocket as _;` 强制引用
 // （见 `wasm_core::manager::runtime::component`），否则本 rlib 不进最终二进制、
 // 静态不执行 ⇒ 注册丢失，且 guest 会在实例化期报「无该 import」。无
-// `desktop-host` feature 的宿主（移动端 / 无头）**不应**注册——它没有插件宿主
-// 机制，桌面侧强制引用行同步 `#[cfg(feature = "desktop-host")]`。
-#[cfg(feature = "desktop-host")]
+// `common-host` feature 的宿主（移动端 / 无头）**不应**注册——它没有插件宿主
+// 机制，桌面侧强制引用行同步 `#[cfg(feature = "common-host")]`。
+#[cfg(feature = "common-host")]
 inventory::submit! {
     ModuleEntry { module: &MODULE }
 }
 
 /// 能力域名（宿主上下文里的键；[`bedcode_host_kit::ports::HostPorts::domain_ports`]）
 ///
-/// 纯字符串常量（无 WIT 依赖），默认可用：宿主 adapter 在 `desktop-host` 装配路径
+/// 纯字符串常量（无 WIT 依赖），默认可用：宿主 adapter 在 `common-host` 装配路径
 /// 引用它。
 pub const DOMAIN: &str = "websocket";
 
@@ -1138,7 +1138,7 @@ pub const DOMAIN: &str = "websocket";
 ///
 /// **端口取自进程级装配**（宿主 adapter 开机期装入；未装配即 panic —— fail-visible，
 /// 与 guest 首次调本域原语同口径）。
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 fn on_plugin_purge(plugin_id: &str) {
     let reclaimed = purge_for_plugin(plugin_id, &ports::ports());
     tracing::debug!(
@@ -1152,14 +1152,14 @@ fn on_plugin_purge(plugin_id: &str) {
 ///
 /// 接入后内核 `manager/host/activation.rs` 不再直调本域回收入口——这是内核摘掉本域
 /// adapter 的前提之一（另一处是 `bus.rs` 的帧投递窄端口，见票面「ws / http 实测」节）。
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 pub static HOOKS: bedcode_host_kit::DomainHooks = bedcode_host_kit::DomainHooks {
     name: MODULE_NAME,
     on_manifest_load: None,
     on_plugin_purge: Some(on_plugin_purge),
 };
 
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 bedcode_host_kit::submit_hooks!(HOOKS);
 
 /// 装配端口的便捷入口（宿主开机期调用）
@@ -1183,8 +1183,8 @@ pub use ports::install_ports;
 /// 能力域自己认识，kit 与宿主都不能把它裸存进表），故这里向下转型后**克隆内层
 /// Arc**（同形对象，多个实例共享一份 adapter，无副作用）。
 ///
-/// 依赖 `WasmPluginState`（host-kit 类型），随 `desktop-host` feature 编译。
-#[cfg(feature = "desktop-host")]
+/// 依赖 `WasmPluginState`（host-kit 类型），随 `common-host` feature 编译。
+#[cfg(feature = "common-host")]
 fn ports_for(state: &WasmPluginState) -> Arc<dyn WsPorts> {
     match state
         .host
@@ -1196,7 +1196,7 @@ fn ports_for(state: &WasmPluginState) -> Arc<dyn WsPorts> {
     }
 }
 
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 bindgen!({
     // provider 侧绑定：spec D8「能力 crate 不自带 generate!」的前提在本 crate
     // 不成立——宿主自己的 `bedcode` 模块是 **guest 视角**（import 是调用函数，
@@ -1223,7 +1223,7 @@ bindgen!({
 // 每个接口方法 = 一条 WIT 原语。权限门在本文件内的域函数里（随实现同迁，
 // 经端口问宿主结果），此层只做「取端口 → 转调 → 按 WIT `result` 形状返回」。
 
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 impl bedcode::plugin::host_websocket::Host for WasmPluginState {
     // ==================== 客户端域（出站） ====================
 
@@ -1250,7 +1250,7 @@ impl bedcode::plugin::host_websocket::Host for WasmPluginState {
 
 /// v36/v37：`host-websocket` 拆为双端交集（客户端域）+ 桌面扩展服务端域（票 04）——
 /// 服务端 10 条原语落在 `host-websocket-server` interface 的 Host trait。
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 impl bedcode::plugin::host_websocket_server::Host for WasmPluginState {
     // ==================== 服务端域（入站端点） ====================
 

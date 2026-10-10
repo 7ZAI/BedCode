@@ -76,17 +76,17 @@ use super::*;
 ///   `src/utils/auth/test_tokens.rs` 随域迁宿主 lib（条目同改）；
 ///   `src/manager/runtime/component.rs` 的 `host-auth` 接线随迁后不再命中 needle
 ///   （条目删除）；
-/// - `src/test_support/desktop.rs`：票 05b 上提的常编译测试基建（非 `tests/` 目录、
+/// - `src/test_support/common.rs`：票 05b 上提的常编译测试基建（非 `tests/` 目录、
 ///   非 `_test.rs`，扫描器按生产代码对待）；票 06 批次 03 的 test-support 收口把
-///   原 `src/test_support.rs` 拆成壳（仅 `mod` 声明，不命中）+ 桌面本体 `desktop.rs`
-///   + 移动本体 `mobile.rs`——`pub use crate::host_api::auth_center::…` re-export 与
-///   `lock_auth_center_desk` 随之落 `desktop.rs`，条目跟着真源走（悬空/漏登都被
+///   原 `src/test_support.rs` 拆成壳（仅 `mod` 声明，不命中）+ 宿主本体 `common.rs`
+///   + 非默认形态本体 `bare.rs`——`pub use crate::host_api::auth_center::…` re-export 与
+///   `lock_auth_center_desk` 随之落 `common.rs`，条目跟着真源走（悬空/漏登都被
 ///   本锁的双向断言抓红）。消费的是**注册表机制面**（test_support 即协调层，
 ///   非 L2 业务读取），登记并注释理由。
 const L2_CONSUMER_ALLOWLIST: &[&str] = &[
     "../../bedcode-desktop/src-tauri/src/utils/auth/auth_center.rs",
     "../../bedcode-desktop/src-tauri/src/utils/session_gateway.rs",
-    "src/test_support/desktop.rs",
+    "src/test_support/common.rs",
     "../../bedcode-desktop/src-tauri/src/utils/auth/test_tokens.rs",
     "../bedcode-server-http/src/middleware/auth_gateway.rs",
     "../bedcode-server-websocket/src/channel/plugin.rs",

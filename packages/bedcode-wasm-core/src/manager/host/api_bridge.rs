@@ -4,7 +4,7 @@
 //! Rust 端做权限校验后执行操作
 
 use super::PluginHost;
-use crate::manager::types::DesktopPluginInfo;
+use crate::manager::types::HostPluginInfo;
 use crate::security::fs_auth::FsAuthChecker;
 use std::sync::Arc;
 use tauri::State;
@@ -115,7 +115,7 @@ fn authorize_plugin_call(
 
 /// 获取所有已加载插件列表
 #[tauri::command]
-pub async fn plugin_list_loaded(plugin_host: State<'_, Arc<PluginHost>>) -> crate::Result<Vec<DesktopPluginInfo>> {
+pub async fn plugin_list_loaded(plugin_host: State<'_, Arc<PluginHost>>) -> crate::Result<Vec<HostPluginInfo>> {
     tracing::debug!("[API] plugin_list_loaded called");
     let result = plugin_host.list_plugins().await;
     tracing::debug!("[API] plugin_list_loaded returning {} plugin(s)", result.len());
@@ -127,7 +127,7 @@ pub async fn plugin_list_loaded(plugin_host: State<'_, Arc<PluginHost>>) -> crat
 pub async fn plugin_get_info(
     plugin_id: String,
     plugin_host: State<'_, Arc<PluginHost>>,
-) -> crate::Result<Option<DesktopPluginInfo>> {
+) -> crate::Result<Option<HostPluginInfo>> {
     tracing::debug!(plugin_id = %plugin_id, "[API] plugin_get_info");
     Ok(plugin_host.get_plugin(&plugin_id).await)
 }
@@ -526,7 +526,7 @@ pub async fn plugin_auth_overview(
 
     let store = AuthPolicyStore::new(db.inner().clone());
     let first_party_projection = fs_auth.first_party_trusted_dirs();
-    let mut apps: Vec<DesktopPluginInfo> = plugin_host
+    let mut apps: Vec<HostPluginInfo> = plugin_host
         .list_plugins()
         .await
         .into_iter()
@@ -756,10 +756,10 @@ mod tests {
         // 三个源码面：宿主 Rust（整核抽出后 = 本 crate 的 src，且注册表与命令桥
         // 路径经 lib 垫片不变）、宿主前端（含 .vue）、插件前端。前两个根随整核
         // 迁到 crate（manifest_dir = 本 crate 根），前端/插件根仍属 lib 组合根
-        // （`<desktop>/src-tauri/src` 与 `<desktop>/plugins`；2026-10-08 迁根后
+        // （`bedcode-desktop/src-tauri/src` 与 `bedcode-desktop/plugins`；2026-10-08 迁根后
         // 本 crate 在根 `packages/`，须回两级再进 `bedcode-desktop`），按相对本 crate
         // 根的路径取。
-        // 注：`<desktop>/plugins` 2026-09-25 改名 `wasm-apps` 后该面已空转（wasm
+        // 注：`bedcode-desktop/plugins` 2026-09-25 改名 `wasm-apps` 后该面已空转（wasm
         // 应用前端含同名命令属插件自有命令面，恢复扫描须先厘清判据，另立票据）。
         let mut scan_roots: Vec<std::path::PathBuf> = vec![
             manifest_dir.join("src"),

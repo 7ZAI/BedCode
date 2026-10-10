@@ -9,7 +9,7 @@
 //! 引用它的常量都做不到。
 //!
 //! 处置与 [`crate::module`] / [`crate::lifecycle`] / [`crate::assembly`] 同范式：
-//! **域自报、内核收集**。能力域（开 `desktop-host` feature 时）用
+//! **域自报、内核收集**。能力域（开 `common-host` feature 时）用
 //! [`submit_routable_capability!`] 提交一条 [`RoutableCapability`]；内核经
 //! [`collected_routable_capabilities`] 取回，与自己的内建行（如 `host-storage`——
 //! 它的端口与真源确实在内核）合并成路由表。

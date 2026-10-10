@@ -24,13 +24,13 @@
 //! 禁止新增横向耦合；[`permission`] 为共享词汇（bedcode-plugin-api 再导出），
 //! 所有模块可用。
 
-// 形态互斥守卫（票 06 批次 03）：desktop-host 与 mobile-host 各挂一套 bindgen
-// （`manager/runtime/desktop/component.rs` 绑桌面生成物 / `mobile/component.rs`
+// 形态互斥守卫（票 06 批次 03）：common-host 与 bare-host 各挂一套 bindgen
+// （`manager/runtime/common/component.rs` 绑桌面生成物 / `bare/component.rs`
 // 绑移动生成物），两套都开会在同 crate 生成同名 `bedcode` 模块冲突——编译期
 // 显性拒绝，禁止静默双开。
-#[cfg(all(feature = "desktop-host", feature = "mobile-host"))]
+#[cfg(all(feature = "common-host", feature = "bare-host"))]
 compile_error!(
-    "features `desktop-host` and `mobile-host` are mutually exclusive: \
+    "features `common-host` and `bare-host` are mutually exclusive: \
      each mounts its own WIT bindgen (same `bedcode` module name)"
 );
 
@@ -50,14 +50,15 @@ pub mod crate_boundary_lock;
 /// 宿主对外接口模块：WASM 宿主能力实现（host-* 原语，权限校验 + 宿主服务调用，
 /// 由 `manager::runtime::component` 的 Host trait 绑定逐接口调用）+ 前端 Tauri
 /// 命令桥（api_bridge，权限校验后执行操作）。
-/// 子模块按形态 cfg 分叉（票 06 批次 03）：桌面 WIT impl 域随 `desktop-host`，
-/// 移动 adapter（http_engine / ports / sql_guard / mobile_context）随 `mobile-host`
+/// 子模块按形态 cfg 分叉（票 06 批次 03）：桌面 WIT impl 域随 `common-host`，
+/// 移动 adapter（ports / sql_guard / bare_context）随 `bare-host`
+/// （`http_engine` 已于票 05 上移能力域 crate，见 `host_api.rs` 分叉段落）
 pub mod host_api;
 /// 宿主→插件互调客户端（中立层，ADR 0033 从 `utils/auth/auth_center.rs` 上提）：
 /// JSON-RPC 2.0 over host-bus 的通用发起端 + 请求 id 分配。
 /// 桌面装配面（互调回复道编排留内核，票 02 批次 05；移动形态的互调经
-/// `mobile_runtime` 的 host_impl/conn 域——fork 无本模块）
-#[cfg(feature = "desktop-host")]
+/// `runtime::bare` 的 host_impl/conn 域——fork 无本模块）
+#[cfg(feature = "common-host")]
 pub mod intercall;
 pub mod manager;
 pub mod monitor;
@@ -73,22 +74,22 @@ pub mod storage;
 pub mod system;
 /// 测试基建（常编译公开，lib 集成测试消费；来源见模块头注释）。
 /// 桌面主体（setup_wasm_runtime / build_host_ctx_at / TestInstanceDispatcher…）
-/// 随 `desktop-host`；移动面（test_support/mobile.rs = fork test_support.rs 迁入）
-/// 随 `mobile-host` + `test-support`
+/// 随 `common-host`；移动面（test_support/bare.rs = fork test_support.rs 迁入）
+/// 随 `bare-host` + `test-support`
 #[cfg(any(
-    feature = "desktop-host",
-    all(feature = "mobile-host", feature = "test-support")
+    feature = "common-host",
+    all(feature = "bare-host", feature = "test-support")
 ))]
 pub mod test_support;
 
-// ==================== 移动装配面（mobile-host，fork 迁入，票 06 批次 03） ====================
+// ==================== 移动装配面（bare-host，fork 迁入，票 06 批次 03） ====================
 
 /// 宿主上下文注册表（fork 迁入）：移动装配面的 AppHandle / 端口注册面
-#[cfg(feature = "mobile-host")]
+#[cfg(feature = "bare-host")]
 pub(crate) mod host_context_registry;
 /// 终端输出流网关（fork 迁入）：`host-terminal-stream` 域的流转发闸门
 /// （移动独有 interface，桌面无此域——ADR 0018）
-#[cfg(feature = "mobile-host")]
+#[cfg(feature = "bare-host")]
 pub mod terminal_stream_gateway;
 /// 错误类型垫片（票 06 批次 03）：双端 AppError 真源统一到
 /// `bedcode-server-base::error`（fork 自持 error.rs 退役）。移动装配面迁入文件
@@ -102,18 +103,18 @@ pub mod error {
 // 不感知模块内部结构
 
 pub use bus::{BusMessageHandler, MessageBus};
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 pub use manager::host;
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 pub use manager::host::api_bridge;
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 pub use manager::host::PluginHost;
 // 引擎定制面（wasmtime-engine-config A+B）：第三方宿主写 `EngineCustomizer`
 // 钩子时需要命名 `wasmtime::Config`，经此再导出即可，不必自己加 wasmtime
 // 依赖（ADR 0019 双端锁版：版本只在本 crate 锁一处）
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 pub use manager::runtime::{EngineCustomizer, EngineSetup};
-#[cfg(all(debug_assertions, feature = "desktop-host"))]
+#[cfg(all(debug_assertions, feature = "common-host"))]
 pub use manager::watcher;
 pub use security::fs_auth::FsAuthChecker;
 pub use storage::PluginStorage;
@@ -442,12 +443,12 @@ mod tests {
     /// 模块文档）。
     ///
     /// 回接形态 = 域文件再现桌面扩展 interface 词汇。**合法残余（不在判据内）**：
-    /// `manager/runtime/component.rs` 的 `#[cfg(test)]` 三接口替身（只进内核测试
+    /// `manager/runtime/common/component.rs` 的 `#[cfg(test)]` 三接口替身（只进内核测试
     /// 二进制——SDK 夹具静态 import 整个 world，替身以 headless 显性拒绝顶上；
     /// 生产二进制的唯一注册来源仍是宿主 impl）；`system/wsl.rs` 已删（发行版列举
     /// 迁宿主 `src-tauri/src/system/wsl.rs`），`system.rs` 只留说明注释。
     #[test]
-    fn desktop_sliced_interfaces_must_not_return_to_wasm_core() {
+    fn sliced_interfaces_must_not_return_to_wasm_core() {
         let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         // 正面锚点（防空转）：交集核心实现必须在场，否则锁对着空文件恒绿
         let fs_src = std::fs::read_to_string(manifest_dir.join("src/host_api/fs.rs"))

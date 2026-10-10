@@ -3214,10 +3214,10 @@ mod tests {
 //
 // crate 内机制面（approval / 域测试夹具）经端口 trait 消费授权判定；宿主
 // 切换后宿主 FsAuthChecker（白名单 / 弹窗真源）另行实现同一 trait 注入。
-// **必须 mobile-host 门控**：`host_api::ports`（含本 trait）是移动 adapter 面，
+// **必须 bare-host 门控**：`host_api::ports`（含本 trait）是移动 adapter 面，
 // 桌面形态不编译——无门控即桌面 lib 编译红（E0433，票 07 收口实测抓到）。
 
-#[cfg(feature = "mobile-host")]
+#[cfg(feature = "bare-host")]
 #[async_trait::async_trait]
 impl crate::host_api::ports::FsAuthGate for FsAuthChecker {
     async fn check(&self, plugin_id: &str, path: &str, op: crate::host_api::ports::FsAuthOp) -> bool {

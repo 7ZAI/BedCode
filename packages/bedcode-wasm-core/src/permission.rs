@@ -1,9 +1,9 @@
-//! Permission Manager (Desktop)
+//! Permission Manager (Host)
 //!
 //! 桌面端权限管理 — re-export bedcode-plugin-api 的 PermissionManager
 //! 保留此文件以避免大范围修改导入路径
 
-//! Permission Manager (Desktop)
+//! Permission Manager (Host)
 //!
 //! 桌面端权限管理 — re-export bedcode-plugin-api 的 PermissionManager
 //! 保留此文件以避免大范围修改导入路径
@@ -16,12 +16,12 @@
 // 权限词汇再导出：双端 SDK 各自的 permission 模块（词汇真源 = SDK `permission.rs`，
 // `gen:permissions` 流水线同步四点）。词汇面双端独立演进（ADR 0018 契约独立）——
 // 桌面 394 行词汇集 vs 移动子集，按形态取对应 SDK（票 06 批次 03）
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 pub use bedcode_plugin_api::permission::*;
-#[cfg(feature = "mobile-host")]
+#[cfg(feature = "bare-host")]
 pub use bedcode_plugin_api_mobile::permission::*;
 
-#[cfg(all(test, feature = "desktop-host"))]
+#[cfg(all(test, feature = "common-host"))]
 mod tests {
     use super::*;
     use std::collections::{BTreeMap, BTreeSet};
@@ -30,7 +30,7 @@ mod tests {
 
     /// `bedcode-desktop` 根目录（2026-10-08 迁根：本 crate 在根 `packages/bedcode-wasm-core`，
     /// 上两级即仓库根，再进 `bedcode-desktop`）
-    fn desktop_root() -> PathBuf {
+    fn sdk_root() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../bedcode-desktop")
     }
 
@@ -204,7 +204,7 @@ mod tests {
     /// 意义是**手改任一份生成物即转红**，以及生成物缺文件/解析空转不再静默通过。
     #[test]
     fn permission_vocabulary_is_equal_across_all_three_copies() {
-        let root = desktop_root();
+        let root = sdk_root();
         let ts = read(&root.join("src/plugin/permission-vocabulary.ts"));
         let json = read(&root.join("packages/plugin-sdk-desktop/bin/permission-vocabulary.json"));
 
@@ -241,7 +241,7 @@ mod tests {
     /// 漂移锁②：两份生成物自称生成物，且宿主前端确实 import 生成物（不再手抄清单）
     #[test]
     fn generated_copies_are_marked_and_consumed_not_copied() {
-        let root = desktop_root();
+        let root = sdk_root();
         let ts = read(&root.join("src/plugin/permission-vocabulary.ts"));
         let json = read(&root.join("packages/plugin-sdk-desktop/bin/permission-vocabulary.json"));
         assert!(ts.contains("生成物，勿手改"), "前端生成物缺少生成物标注");
@@ -324,7 +324,7 @@ mod tests {
     /// `tsconfig.json` 无 `id` 字段，天然被跳过。
     #[test]
     fn production_manifests_declare_only_known_vocabulary() {
-        let root = desktop_root();
+        let root = sdk_root();
         let mut checked = 0usize;
         // 桌面 wasm 应用源码目录 2026-09-25 起为 `wasm-apps/`（旧 `plugins/` rename）
         for dir in ["wasm-apps", "packages"] {
@@ -376,7 +376,7 @@ mod tests {
     /// 落后 SDK 8 项正因为它长期不在任何链路上）。
     #[test]
     fn manifest_validation_runs_in_the_plugin_build_chain() {
-        let root = desktop_root();
+        let root = sdk_root();
         // 剥注释再断言调用（R-12）：`validateManifest(` 若只出现在注释/字符串里
         // 不算挂在链上——注释里的调用点不能当作强制执行证据
         let build = strip_comment_lines(&read(&root.join("scripts/plugin-build.js")));

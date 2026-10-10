@@ -18,9 +18,9 @@ tauri-build = { version = "2", features = [] }
 # 宿主 plugin/ 经垫片转发；路径基准 = AGENTS「能力域/引擎 crate 落仓库根 packages」
 # 的移动形态——本 crate 落 bedcode-mobile/packages/）
 # 票 06 批次 03（ADR 0045 D6）：移动 fork 退役——单一 wasm-core（仓库根 packages/）
-# 的移动形态装配树（mobile-host feature）。package rename 保持源码
+# 的移动形态装配树（bare-host feature）。package rename 保持源码
 # `bedcode_wasm_core_mobile::` 导入路径零改动；fork 自持 crate 随批次 04 删除。
-bedcode-wasm-core-mobile = { package = "bedcode-wasm-core", path = "../../packages/bedcode-wasm-core", default-features = false, features = ["mobile-host"] }
+bedcode-wasm-core-mobile = { package = "bedcode-wasm-core", path = "../../packages/bedcode-wasm-core", default-features = false, features = ["bare-host"] }
 tauri = { version = "2", features = ["protocol-asset", "test"] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
@@ -122,6 +122,12 @@ bedcode-server-peer-net = { path = "../../packages/bedcode-server-peer-net" }
 # 端口 trait 词汇（BusPort / EventSink / PathsPort / SystemInfoPort / MdnsPort）
 # ——能力域端口面与宿主适配层共用同一套 trait，不新造第二套
 bedcode-server-base = { path = "../../packages/bedcode-server-base" }
+# 插件机制内核（统一 state / HostModule / ModuleRegistry）——移动独有域 adapter
+# 自带 bindgen 需 host-kit 的 state 与自报面（wasm-core-mobile-purity 票 04，
+# 与桌面 src-tauri 同形）
+bedcode-host-kit = { path = "../../packages/bedcode-host-kit" }
+# 能力模块自报（ModuleEntry / expect_host_module! 的 linker-section 静态）
+inventory = "0.3"
 # 链路报文加密协议核心（issue 09 共享 crate，与桌面 server 共同消费）
 bedcode-link-crypto = { path = "../../packages/link-crypto" }
 p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
@@ -131,7 +137,7 @@ p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
 # fork crate 测试支持面（夹具构建器 + MockPorts；批次 2b 宿主集成测试消费）。
 # 票 06 批次 03：随主依赖切根 crate——`test-support` feature 的移动面
 # （test_support/mobile.rs = fork test_support.rs 迁入）已就位
-bedcode-wasm-core-mobile = { package = "bedcode-wasm-core", path = "../../packages/bedcode-wasm-core", default-features = false, features = ["mobile-host", "test-support"] }
+bedcode-wasm-core-mobile = { package = "bedcode-wasm-core", path = "../../packages/bedcode-wasm-core", default-features = false, features = ["bare-host", "test-support"] }
 tempfile = "3"
 # 组件测试编码（ticket 02 宿主单测：测试组件 core module → 组件；spike 实证 0.256）
 wit-component = "=0.256.0"
@@ -141,6 +147,10 @@ actix-web = { version = "4", default-features = false }
 # 仅测试用：X25519 公钥推导（crypto_envelope_roundtrip 的 mock 侧密钥；生产
 # 依赖同版本，锁文件不变）
 x25519-dalek = "2"
+# 出站 HTTP 能力域（票 05：移动 host-http 执行本体已迁入该 crate）——
+# `session_http_flow` 集成测试经它驱动真执行器（与生产同一条链路，默认零 feature
+# 形态 = 纯引擎；生产侧由 wasm-core `bare-host` 依赖引入，此处只是测试目标可见性）
+bedcode-server-http = { path = "../../packages/bedcode-server-http" }
 
 [profile.release]
 # unwind：panic 可被 catch_unwind（错误边界/插件宿主）捕获，插件业务 panic

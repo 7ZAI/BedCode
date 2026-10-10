@@ -1,12 +1,12 @@
-//! Plugin Types (Desktop)
+//! Plugin Types (Host)
 //!
 //! 桌面端插件类型 — 仅保留桌面端特有的内部模型
 //! 共享类型（PluginManifest, PluginContributes, PluginState 等）迁移到 bedcode-plugin-api
 
 // 双端 SDK 同名类型（形状 fork 对齐逐字一致）——按形态取对应 SDK
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 use bedcode_plugin_api::{PluginContributes, PluginManifest, PluginState, PluginType};
-#[cfg(feature = "mobile-host")]
+#[cfg(feature = "bare-host")]
 use bedcode_plugin_api_mobile::{PluginContributes, PluginManifest, PluginState, PluginType};
 use chrono::{DateTime, Utc};
 use std::path::Path;
@@ -65,10 +65,10 @@ impl PluginSource {
 
 /// 插件信息（返回给前端的精简版本）
 ///
-/// 从 bedcode_plugin_api::PluginInfo 扩展，添加桌面端特有字段
+/// 从 bedcode_plugin_api::PluginInfo 扩展，添加宿主特有字段
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DesktopPluginInfo {
+pub struct HostPluginInfo {
     pub id: String,
     pub name: String,
     pub version: String,
@@ -94,9 +94,9 @@ pub struct DesktopPluginInfo {
     pub installed_at: Option<i64>,
 }
 
-impl From<&LoadedPlugin> for DesktopPluginInfo {
+impl From<&LoadedPlugin> for HostPluginInfo {
     fn from(p: &LoadedPlugin) -> Self {
-        DesktopPluginInfo {
+        HostPluginInfo {
             id: p.manifest.id.clone(),
             name: p.manifest.name.clone(),
             version: p.manifest.version.clone(),
@@ -155,9 +155,9 @@ fn manifest_installed_at(extension_path: &str) -> Option<i64> {
 mod tests {
     use super::*;
     // 双端 SDK 同名类型——按形态取对应 SDK（测试段，票 06 批次 03）
-    #[cfg(feature = "desktop-host")]
+    #[cfg(feature = "common-host")]
     use bedcode_plugin_api::{PluginManifest, PluginState, PluginType};
-    #[cfg(feature = "mobile-host")]
+    #[cfg(feature = "bare-host")]
     use bedcode_plugin_api_mobile::{PluginManifest, PluginState, PluginType};
 
     /// 构造带完整字段的测试 manifest
@@ -198,11 +198,11 @@ mod tests {
         assert_eq!(PluginSource::Wasm.as_str(), "wasm");
     }
 
-    /// LoadedPlugin → DesktopPluginInfo 字段一一映射（期望值为手写字面量）
+    /// LoadedPlugin → HostPluginInfo 字段一一映射（期望值为手写字面量）
     #[test]
-    fn test_loaded_plugin_to_desktop_info_mapping() {
+    fn test_loaded_plugin_to_host_info_mapping() {
         let plugin = sample_loaded(PluginSource::Wasm);
-        let info = DesktopPluginInfo::from(&plugin);
+        let info = HostPluginInfo::from(&plugin);
 
         assert_eq!(info.id, "com.bedcode.test");
         assert_eq!(info.name, "Test Plugin");
@@ -223,9 +223,9 @@ mod tests {
 
     /// icon 与 source 的序列化形态：icon=None 时省略字段，source 原样输出
     #[test]
-    fn test_desktop_info_serialization_omit_icon() {
+    fn test_host_info_serialization_omit_icon() {
         let plugin = sample_loaded(PluginSource::FileScan);
-        let info = DesktopPluginInfo::from(&plugin);
+        let info = HostPluginInfo::from(&plugin);
         let json = serde_json::to_value(&info).unwrap();
         assert_eq!(json["source"], "scanned");
         assert_eq!(json["pluginType"], "rust-ts", "PluginType 序列化为 kebab-case");
@@ -235,10 +235,10 @@ mod tests {
 
     /// icon 有值时透传并在序列化中保留
     #[test]
-    fn test_desktop_info_serialization_with_icon() {
+    fn test_host_info_serialization_with_icon() {
         let mut plugin = sample_loaded(PluginSource::StaticRegistry);
         plugin.manifest.icon = Some("icon.svg".to_string());
-        let info = DesktopPluginInfo::from(&plugin);
+        let info = HostPluginInfo::from(&plugin);
         assert_eq!(info.icon.as_deref(), Some("icon.svg"));
         assert_eq!(info.source, "builtin");
         let json = serde_json::to_value(&info).unwrap();
@@ -281,14 +281,14 @@ mod tests {
 
     /// From 转换在真实扩展目录上的端到端表现：size_bytes 与 installed_at 来自磁盘
     #[test]
-    fn test_desktop_info_from_real_extension_dir() {
+    fn test_host_info_from_real_extension_dir() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("plugin.json"), b"{}").unwrap();
         std::fs::write(dir.path().join("main.js"), vec![7u8; 100]).unwrap();
 
         let mut plugin = sample_loaded(PluginSource::Wasm);
         plugin.extension_path = dir.path().to_string_lossy().to_string();
-        let info = DesktopPluginInfo::from(&plugin);
+        let info = HostPluginInfo::from(&plugin);
 
         assert_eq!(info.size_bytes, 102, "plugin.json(2) + main.js(100)");
         assert!(info.installed_at.is_some());
@@ -298,7 +298,7 @@ mod tests {
 
 // ==================== 移动装配面事件（fork 迁入，票 06 批次 03） ====================
 
-#[cfg(feature = "mobile-host")]
+#[cfg(feature = "bare-host")]
 
 /// 插件生命周期事件
 ///
@@ -314,7 +314,7 @@ pub enum PluginLifecycleEvent {
     SessionStopped { session_id: String },
 }
 
-#[cfg(feature = "mobile-host")]
+#[cfg(feature = "bare-host")]
 impl PluginLifecycleEvent {
     /// 返回声明字段名（用于 is_declared 检查）
     pub fn name(&self) -> &'static str {

@@ -54,6 +54,7 @@ fn domain_impl_files_stay_present() {
         "src/database.rs",
         "src/log.rs",
         "src/events.rs",
+        "src/fs.rs",
     ];
     for rel in required {
         assert!(

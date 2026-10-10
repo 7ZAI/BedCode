@@ -17,7 +17,7 @@
 //! ```
 //!
 //! **脱绑（能力域脱绑 P2）**：WIT 绑定层（`bindgen!` / `HostModule` / `inventory::submit!` /
-//! `impl Host`）以 `#[cfg(feature = "desktop-host")]` 门控——桌面宿主开 feature 后行为
+//! `impl Host`）以 `#[cfg(feature = "common-host")]` 门控——桌面宿主开 feature 后行为
 //! 逐字不变（ABI / WIT / 权限位 / 事件形状 / inventory 注册零变化），无 feature 的宿主
 //! （移动端 / 无头）拿纯引擎：机制（engine/advertiser/types）、端口（ports）、装配
 //! （`install` / `install_ports`）默认全部可用。
@@ -67,17 +67,17 @@ pub const MODULE_INTERFACES: &[&str] = &["bedcode:plugin/host-mdns"];
 /// 本模块读写的权限位
 pub const MODULE_PERMISSIONS: &[&str] = &["network:mdns"];
 
-// ==================== 能力模块自报（WIT 绑定层，`desktop-host` feature） ====================
+// ==================== 能力模块自报（WIT 绑定层，`common-host` feature） ====================
 
-// WIT 绑定层依赖（host-kit / wasmtime）只随 `desktop-host` feature 编译：
+// WIT 绑定层依赖（host-kit / wasmtime）只随 `common-host` feature 编译：
 // 能力域默认形态 = 纯引擎机制（零 WIT 依赖），任何宿主可直接引用。
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 use bedcode_host_kit::{HostModule, HostModuleDesc, ModuleEntry, WasmPluginState};
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 use wasmtime::component::{bindgen, Linker};
 
 /// 能力模块描述符（只描述机制，禁带产品名词——AGENTS §5.1 B1/B5）
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 const DESC: HostModuleDesc = HostModuleDesc {
     name: MODULE_NAME,
     interfaces: MODULE_INTERFACES,
@@ -86,10 +86,10 @@ const DESC: HostModuleDesc = HostModuleDesc {
 };
 
 /// mDNS 能力域模块
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 pub struct DiscoveryModule;
 
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 impl HostModule for DiscoveryModule {
     fn desc(&self) -> HostModuleDesc {
         DESC
@@ -101,11 +101,11 @@ impl HostModule for DiscoveryModule {
 }
 
 /// getter：让 guest 侧 import 取到可变的状态引用（与宿主既有接线同款）
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 type HasSelf = wasmtime::component::HasSelf<WasmPluginState>;
 
 /// 静态单例（供 `submit_module!` 取址）
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 static MODULE: DiscoveryModule = DiscoveryModule;
 
 // 能力模块自报（linker-section 静态）
@@ -113,14 +113,14 @@ static MODULE: DiscoveryModule = DiscoveryModule;
 // **依赖前提**：宿主必须有一行 `use bedcode_discovery_engine as _;` 强制引用
 // （见 `wasm_core::manager::runtime::component`），否则本 rlib 不进最终二进制、
 // 静态不执行 ⇒ 注册丢失，且 guest 会在实例化期报「无该 import」。
-// 无 `desktop-host` feature 的宿主（移动端 / 无头）**不应**注册——它没有插件宿主
-// 机制，桌面侧强制引用行同步 `#[cfg(feature = "desktop-host")]`。
-#[cfg(feature = "desktop-host")]
+// 无 `common-host` feature 的宿主（移动端 / 无头）**不应**注册——它没有插件宿主
+// 机制，桌面侧强制引用行同步 `#[cfg(feature = "common-host")]`。
+#[cfg(feature = "common-host")]
 inventory::submit! {
     ModuleEntry { module: &MODULE }
 }
 
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 bindgen!({
     // provider 侧绑定：spec D8「能力 crate 不自带 generate!」的前提在本 crate
     // 不成立——宿主自己的 `bedcode` 模块是 **guest 视角**（import 是调用函数，
@@ -141,12 +141,12 @@ bindgen!({
     exports: { default: async },
 });
 
-// ==================== 宿主绑定层（Host trait 实现，`desktop-host` feature） ====================
+// ==================== 宿主绑定层（Host trait 实现，`common-host` feature） ====================
 //
 // 每个接口方法 = 一条 WIT 原语。权限门在 [`engine`] 内的域函数里（随实现
 // 同迁），此层只做「拿端口 → 转调 → 按 WIT `result` 形状返回」。
 
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 impl bedcode::plugin::host_mdns::Host for WasmPluginState {
     fn browse(&mut self, service_type: String) -> Result<String, String> {
         engine::browse(&ports::ports(), &self.plugin_id, &service_type)
@@ -177,7 +177,7 @@ pub fn install<P: DiscoveryPorts + 'static>(ports: P) {
     install_ports(Arc::new(ports));
 }
 
-// ==================== 生命周期钩子自报（`desktop-host`） ====================
+// ==================== 生命周期钩子自报（`common-host`） ====================
 
 /// 停用期回调：回收该插件在本域的全部浏览 / 广播句柄
 ///
@@ -188,7 +188,7 @@ pub fn install<P: DiscoveryPorts + 'static>(ports: P) {
 /// adapter 迁出内核后，内核不再点名本域（`host_api/mdns.rs` 与它的
 /// `purge_for_plugin` 转发一并删除）；停用路径经
 /// `bedcode_host_kit::DomainHooksRegistry::on_plugin_purge` 遍历（与 pty 同款）。
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 fn on_plugin_purge(plugin_id: &str) {
     let reclaimed = engine::purge_for_plugin(plugin_id, &ports::ports());
     if reclaimed > 0 {
@@ -197,12 +197,12 @@ fn on_plugin_purge(plugin_id: &str) {
 }
 
 /// 本域生命周期钩子（自报静态；白名单键与 [`MODULE_NAME`] 同源）
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 pub static HOOKS: bedcode_host_kit::DomainHooks = bedcode_host_kit::DomainHooks {
     name: MODULE_NAME,
     on_manifest_load: None,
     on_plugin_purge: Some(on_plugin_purge),
 };
 
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 bedcode_host_kit::submit_hooks!(HOOKS);

@@ -278,7 +278,12 @@ interface host-app {
 /// 认证前为 null；`connectedAt` 为 epoch 毫秒）。
 ///
 /// 注：WIT 中 `list` 是关键字，故函数名沿用 `connections-list`。
-interface host-connection {
+///
+/// **为什么叫 registry**：移动分片曾声明同名 `host-connection`，两者函数集**零交集**
+/// ——本 interface 是「在册连接清单」角色，移动侧是「主连接目标」角色
+/// （`host-connection-target`）。统一契约（并集 world）下同名会撞 duplicate
+/// definition，故按角色定名。
+interface host-connection-registry {
     connections-list: func() -> result<string, string>;
 }
 /// 密钥托管（secret-store，v15）+ 认证编排桥接面（v17 起，desktop 独有）
@@ -307,7 +312,12 @@ interface host-connection {
 /// 七函数（`trusted-devices-*` / `connection-history-*`）、v33 的设备入场 JWT
 /// 签发验签两函数、v34 的生物凭证面三函数。旧产物仍 import 它们时在实例化期被拒，
 /// 由 `stale_artifact_rebuild_hint` 点名「按对应 ABI 重建」。
-interface host-auth {
+/// **为什么叫 center**：移动分片曾声明同名 `host-auth`，但两者函数集**零交集**——
+/// 移动侧是「设备入场客户端」（配对 / QR / 生物凭证 / 凭据事实），本 interface 是
+/// 「认证中心角色」（密钥托管 + 中心注册 + 组合式认证发现）。同名不同角色会在统一
+/// 契约（并集 world）里撞 duplicate definition，故按角色定名：本侧 `-center`，
+/// 移动那侧 `host-auth-client`；两端各自注册自己承担的角色，Core 不做端点判定。
+interface host-auth-center {
     /// 读取属主密钥；键不存在返回 `ok(none)`
     secret-get: func(key: string) -> result<option<string>, string>;
     /// 写入/覆盖属主密钥
@@ -583,8 +593,8 @@ world cap-desktop {
     import host-timer;
     import host-process;
     import host-app;
-    import host-connection;
-    import host-auth;
+    import host-connection-registry;
+    import host-auth-center;
     import host-task;
     import host-crypto;
 

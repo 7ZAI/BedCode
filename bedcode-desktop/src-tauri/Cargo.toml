@@ -132,20 +132,20 @@ bedcode-wasm-core = { path = "../../packages/bedcode-wasm-core" }
 # （wasm-core 已不再依赖本 crate，也不再出现它的任何路径）。
 # lib 声明同时满足 crate_boundary_lock 断言③「宿主清单声明全部拆分产物」
 # （pty-engine 已登记 SPLIT_CRATES）。
-bedcode-pty-engine = { path = "../../packages/bedcode-pty-engine", features = ["desktop-host"] }
+bedcode-pty-engine = { path = "../../packages/bedcode-pty-engine", features = ["common-host"] }
 # 组播发现能力域（mDNS，wasm-core-lib-split 票 03）：引擎 + 宿主绑定层 + 自动
 # 注册。票 02 批次 03 起宿主**直接消费**：端口 adapter 在 `src/plugin/mdns.rs`
 # （wasm-core 已不再依赖本 crate，`host_context_registry` 随其退役）。
-bedcode-discovery-engine = { path = "../../packages/bedcode-discovery-engine", features = ["desktop-host"] }
+bedcode-discovery-engine = { path = "../../packages/bedcode-discovery-engine", features = ["common-host"] }
 bedcode-crypto-engine = { path = "../../packages/bedcode-crypto-engine" }
 # server-lib-split 票 03：传输无关内核（supervisor/filter/link_crypto/metrics + TransportFace 组合）
 bedcode-server-core = { path = "../../packages/bedcode-server-core" }
 # server-lib-split 票 04：HTTP 传输面（registry/gateway/controllers/middleware/dtos + HttpTransportFace）
-bedcode-server-http = { path = "../../packages/bedcode-server-http", features = ["desktop-host"] }
+bedcode-server-http = { path = "../../packages/bedcode-server-http", features = ["common-host"] }
 # server-lib-split 票 05：WebSocket 传输面（conn/channel/registry/endpoint/routes/manager）
-bedcode-server-websocket = { path = "../../packages/bedcode-server-websocket", features = ["desktop-host"] }
+bedcode-server-websocket = { path = "../../packages/bedcode-server-websocket", features = ["common-host"] }
 # server-lib-split 票 06：对等网络引擎域（节点身份/节点与发现守护生命周期/host-peer 引擎转发）
-bedcode-server-peer-net = { path = "../../packages/bedcode-server-peer-net", features = ["desktop-host"] }
+bedcode-server-peer-net = { path = "../../packages/bedcode-server-peer-net", features = ["common-host"] }
 inventory = "0.3"
 
 # Power management (prevent system sleep)

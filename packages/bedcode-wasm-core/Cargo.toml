@@ -6,9 +6,9 @@
 # 从 bin crate 整体迁出。任何 Tauri 宿主可直接 path 依赖本 crate 获得插件机制。
 #
 # 位置（仓库根 packages/，2026-10-08 由 bedcode-desktop/packages/ 迁根）：
-# **双端单一 wasm-core**（ADR 0045 D1）：桌面形态（default / desktop-host）依赖桌面
+# **双端单一 wasm-core**（ADR 0045 D1）：桌面形态（default / common-host）依赖桌面
 # 基础层（bedcode-server-base / bedcode-plugin-api 桌面 WIT / 桌面能力 crate）；
-# 移动形态（default-features = false + mobile-host）依赖移动 SDK / discovery-engine /
+# 移动形态（default-features = false + bare-host）依赖移动 SDK / discovery-engine /
 # ws-client-engine——移动 fork crate 已随票 06 批次 04 整面退役，双端机制面与真源同侧
 # （ADR 0018 移动契约独立不变；`bedcode-wasm-core-mobile` 仅存 package rename 别名）。
 # 双端共享锚点是仓库根 packages/bedcode-host-kit。
@@ -21,30 +21,30 @@
 [package]
 name = "bedcode-wasm-core"
 version = "0.1.0"
-description = "BedCode 桌面插件机制整核：wasmtime 组件模型宿主 + host-* 原语 + 安全闸门 + 引擎面（pty/db）"
+description = "BedCode 插件机制整核（单一 crate 双形态：common-host / bare-host）：wasmtime 组件模型宿主 + host-* 原语 + 安全闸门 + 引擎面（pty/db）"
 authors = ["binblink"]
 license = "MIT"
 repository = "https://github.com/7ZAI/BedCode"
 edition = "2021"
 
 [features]
-# 桌面宿主形态为默认：能力域 `desktop-host` 绑定层随编译图进（host-http 域 WIT
+# 桌面宿主形态为默认：能力域 `common-host` 绑定层随编译图进（host-http 域 WIT
 # 绑定 + inventory 静态注册）。无头 / 第三方宿主可 `default-features = false` 复用
 # 本 crate 的纯引擎面（能力域脱绑 P1；wasm-core 本身是宿主机制，绑定层随需开）。
 #
 # 票 06（wasm-core 单一化，ADR 0045 D6）：桌面独有依赖全部 optional + 本 feature
-# 门控——移动形态 `default-features = false, features = ["mobile-host"]` 复用同一
+# 门控——移动形态 `default-features = false, features = ["bare-host"]` 复用同一
 # 份机制面（移动 fork crate 已随票 06 批次 04 删除；`bedcode-wasm-core-mobile`
 # 仅存 package rename 别名，回接由退役锁 tests/retired_mobile_wasm_core_fork_lock.rs 拦截）。
-# `desktop-host` / `mobile-host` 互斥开启（两套 bindgen 生成同名 `bedcode` 模块，
+# `common-host` / `bare-host` 互斥开启（两套 bindgen 生成同名 `bedcode` 模块，
 # cfg 互斥下只编译其一）。
-default = ["desktop-host"]
-desktop-host = [
+default = ["common-host"]
+common-host = [
     "bedcode-host-kit/wasi-store",
     "dep:bedcode-plugin-api",
-    "bedcode-server-http/desktop-host",
-    "bedcode-server-websocket/desktop-host",
-    "bedcode-server-peer-net/desktop-host",
+    "bedcode-server-http/common-host",
+    "bedcode-server-websocket/common-host",
+    "bedcode-server-peer-net/common-host",
     "dep:bedcode-server-http",
     "dep:bedcode-server-websocket",
     "dep:bedcode-server-peer-net",
@@ -64,12 +64,19 @@ desktop-host = [
 # 移动 SDK / discovery-engine（移动 host-mdns 域引擎）/ ws-client-engine（移动
 # host-websocket 客户端域引擎）均为跨端 path 依赖（packages/ ↔ bedcode-mobile/
 # packages/ 双向，ADR 0045 D6 单一 crate 形态的必然；桌面分支不引用）
-mobile-host = [
+bare-host = [
     "dep:bedcode-plugin-api-mobile",
     "dep:bedcode-discovery-engine",
     "dep:bedcode-ws-client-engine",
+    # host-peer 域逻辑在能力域 crate（19 条 WIT-无关函数 + PeerPorts 端口，
+    # 无 feature 门控）——移动形态只薄转发，不再自持第二份（2026-10-10
+    # wasm-core-mobile-purity 票 03）
+    "dep:bedcode-server-peer-net",
+    # host-http 同款：出站执行 + SSE 流 + jwtAuth 代注（`jwt_auth_token` 端口默认
+    # 实现保桌面零变化）在能力域 crate，移动形态只薄转发（同流水线票 05）
+    "dep:bedcode-server-http",
 ]
-# 移动形态测试支持面（test_support/mobile.rs：MockPorts / 夹具组件构建器 /
+# 移动形态测试支持面（test_support/bare.rs：MockPorts / 夹具组件构建器 /
 # mock_plugin_ws）——移动 src-tauri 的 dev-dependencies 开启（fork 原语义）；
 # wit-component = 测试组件编码（core module → 组件，fork 原依赖）
 test-support = ["dep:wit-component"]
@@ -104,8 +111,8 @@ bedcode-server-base = { path = "../bedcode-server-base" }
 # 三个能力域 crate（实现 + 插件绑定层 + 自动注册）
 # （第四域 discovery 自票 02 批次 03 起宿主直接依赖：adapter 在 src/plugin/mdns.rs；
 #  本 crate 已不再引用它，`cargo tree` 无该分支）
-# 票 06 批次 01：optional 化——移动形态经 mobile-host 组合能力域
-# （移动 host-mdns impl 用 discovery-engine，批次 03 随 mobile-host feature 接入）
+# 票 06 批次 01：optional 化——移动形态经 bare-host 组合能力域
+# （移动 host-mdns impl 用 discovery-engine，批次 03 随 bare-host feature 接入）
 bedcode-server-websocket = { path = "../bedcode-server-websocket", optional = true }
 bedcode-server-peer-net = { path = "../bedcode-server-peer-net", optional = true }
 bedcode-server-http = { path = "../bedcode-server-http", optional = true }
@@ -114,11 +121,11 @@ bedcode-server-core = { path = "../bedcode-server-core", optional = true }
 # 加密引擎（算法实现 + 注册表；桌面 auth_center / 会话身份消费）——桌面独有
 bedcode-crypto-engine = { path = "../bedcode-crypto-engine", optional = true }
 # WIT 契约绑定（bindgen! 在 manager/runtime/component.rs，path 相对本 crate 根）
-# 桌面 SDK；移动形态 bindgen 绑移动生成物（批次 03，mobile-host feature）
+# 桌面 SDK；移动形态 bindgen 绑移动生成物（批次 03，bare-host feature）
 bedcode-plugin-api = { path = "../../bedcode-desktop/packages/plugin-sdk-desktop/rust", optional = true }
 # 移动 SDK（跨端 path 依赖：bedcode-mobile/packages/，票 06 批次 03）——
 # 机制面类型（BusMessage/PluginManifest/PermissionManager 等同名 wire 副本）的
-# mobile-host 来源
+# bare-host 来源
 bedcode-plugin-api-mobile = { path = "../../bedcode-mobile/packages/plugin-sdk-mobile/rust", optional = true }
 # 组播发现引擎（移动 host-mdns 域 impl 的引擎面；桌面形态该域在宿主 adapter——
 # src-tauri/src/plugin/mdns.rs，本 crate 桌面分支不引用）

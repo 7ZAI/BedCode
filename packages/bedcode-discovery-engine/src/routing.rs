@@ -48,14 +48,14 @@ pub const EXPORTS: &[&str] = &[
 /// 漏 `submit!` 行 / 漏宿主的强制引用行 ⇒ 内核路由表里没有本能力 ⇒ **系统组件再也
 /// 接管不了 `host-mdns`**（探测永远不命中，静默回落本域引擎）。宿主侧由
 /// `tests/mdns_wiring.rs` 的对偶锁点名。
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 static ROUTE: bedcode_host_kit::RoutableCapability = bedcode_host_kit::RoutableCapability {
     capability: CAPABILITY,
     forward_prefix: FORWARD_PREFIX,
     exports: EXPORTS,
 };
 
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 bedcode_host_kit::submit_routable_capability!(ROUTE);
 
 #[cfg(test)]
@@ -115,7 +115,7 @@ mod tests {
     }
 
     /// 自报项真的进了全局注册表（漏 `submit!` ⇒ 内核路由表缺本能力）
-    #[cfg(feature = "desktop-host")]
+    #[cfg(feature = "common-host")]
     #[test]
     fn route_is_self_reported_into_the_registry() {
         let routes = bedcode_host_kit::collected_routable_capabilities();

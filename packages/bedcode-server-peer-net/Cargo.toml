@@ -1,7 +1,7 @@
 [package]
 name = "bedcode-server-peer-net"
 version = "0.1.0"
-description = "BedCode 桌面对等网络引擎域：节点身份/节点与发现守护生命周期/host-peer 引擎转发 + host-peer 能力域的插件绑定层（server-lib-split 票 06 / wasm-core-lib-split 票 05）。默认形态 = 纯引擎机制 + 端口抽象（零 WIT 依赖，仅保留 base 契约的 BusMessage 类型依赖——P4 记录），任何宿主可直接引用；`desktop-host` feature 装配 WIT 绑定层（bindgen!/HostModule/inventory/impl Host）——能力域脱绑 P4"
+description = "BedCode 桌面对等网络引擎域：节点身份/节点与发现守护生命周期/host-peer 引擎转发 + host-peer 能力域的插件绑定层（server-lib-split 票 06 / wasm-core-lib-split 票 05）。默认形态 = 纯引擎机制 + 端口抽象（零 WIT 依赖，仅保留 base 契约的 BusMessage 类型依赖——P4 记录），任何宿主可直接引用；`common-host` feature 装配 WIT 绑定层（bindgen!/HostModule/inventory/impl Host）——能力域脱绑 P4"
 authors = ["binblink"]
 edition = "2021"
 
@@ -11,7 +11,7 @@ default = []
 # 桌面宿主 WIT 绑定层（bindgen!/HostModule/inventory::submit!/impl Host）；
 # 语义 = 装配桌面 WIT 依赖，行为与开 feature 前逐字不变
 # （ABI / WIT / 权限位 / 事件形状 / inventory 注册零变化）。
-desktop-host = ["dep:bedcode-host-kit", "dep:wasmtime", "dep:wit-bindgen", "dep:inventory"]
+common-host = ["dep:bedcode-host-kit", "dep:wasmtime", "dep:wit-bindgen", "dep:inventory"]
 
 [dependencies]
 # 异步运行时（节点运行时 tokio::Mutex/Semaphore、会话表 watch/mpsc、派生任务、
@@ -31,7 +31,7 @@ bedcode-server-base = { path = "../bedcode-server-base" }
 # 对等网络共享引擎 crate（节点身份 / 信任库 / 共享目录 / 传输引擎 / mDNS 守护）
 bedcode-peer-net = { path = "../peer-net" }
 # ==================== 插件绑定层（host-peer 能力域，wasm-core-lib-split 票 05） ====================
-# 全部 optional：只随 `desktop-host` feature 进编译图（能力域脱绑 P4）——
+# 全部 optional：只随 `common-host` feature 进编译图（能力域脱绑 P4）——
 # 无 feature 时 `cargo tree` 不出现以下 crate（纯引擎形态）。
 # 机制内核：插件实例状态（`add_to_linker::<S,D>` 的单态 S 必须在本 crate 可命名）
 bedcode-host-kit = { path = "../bedcode-host-kit", optional = true }

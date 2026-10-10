@@ -61,9 +61,9 @@ use tauri::Emitter;
 use tokio::sync::{oneshot, Mutex};
 // db 锁形态按宿主分支分叉（票 06 批次 03，与 storage.rs / auth_policy.rs 同款裁决）：
 // db 参数 = 桌面 tokio / 移动 std；prompts 锁恒 tokio（本模块内部状态，双端一致）
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 use tokio::sync::Mutex as DbMutex;
-#[cfg(feature = "mobile-host")]
+#[cfg(feature = "bare-host")]
 use std::sync::Mutex as DbMutex;
 
 /// 出站询问的等待上限（与 fs 侧一致）

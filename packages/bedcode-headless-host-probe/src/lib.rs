@@ -4,14 +4,14 @@
 //!
 //! 能力域脱绑（P1–P5）之后，根 `packages/` 的能力域 crate 默认形态 = 纯引擎
 //! 机制 + 端口抽象（零 WIT 依赖），**任何宿主**可直接引用。本 crate 就是那个
-//! 「任何宿主」的最小实证：以非桌面宿主形态（永不开 `desktop-host` feature）
+//! 「任何宿主」的最小实证：以非桌面宿主形态（永不开 `common-host` feature）
 //! 引用全部五个带桌面 WIT 绑定面的能力域 + server 地基，编译通过 + 引擎面
 //! smoke 断言即门禁。
 //!
 //! ## 钉住的三件事
 //!
 //! 1. **链接自足**：五行 `use … as _;` 强制引用让五个 rlib 进本 crate 的编译图
-//!    ——`desktop-host` 未开 ⇒ `inventory::submit!` 静态不存在 ⇒ 无任何注册，
+//!    ——`common-host` 未开 ⇒ `inventory::submit!` 静态不存在 ⇒ 无任何注册，
 //!    链接成功即证明纯引擎形态不需要插件宿主机制。
 //! 2. **零桌面依赖**：配套 `cargo tree -i bedcode-plugin-api` 与
 //!    `cargo tree | grep -E "wasmtime|wit-bindgen|inventory|bedcode-host-kit"`
@@ -30,7 +30,7 @@
 // ==================== 强制引用（rlib 进编译图的最小面） ====================
 //
 // 五行缺一不可：少一行 = 该 crate 未被链接 = 「可引用」断言静默缩水。
-// `desktop-host` 未开 ⇒ 这些引用不触发任何 inventory 注册（非桌面宿主
+// `common-host` 未开 ⇒ 这些引用不触发任何 inventory 注册（非桌面宿主
 // 不应注册——它没有插件宿主机制，语义见各能力域 plugin_binding 模块头）。
 use bedcode_discovery_engine as _;
 use bedcode_pty_engine as _;

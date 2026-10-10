@@ -1,19 +1,156 @@
 //! 出站原语的闸门用例组：声明门 → 出站授权门 → 执行（迁移前同属一个内联 `mod tests`）
 
+use std::net::SocketAddr;
+use std::sync::Arc;
+
 use serde_json::json;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::scaffold::*;
 use crate::plugin_binding::egress::{execute_http_request, http_fetch};
+use crate::plugin_binding::ports::{HttpEventSink, HttpPorts, OutboundAuth};
+
+// ==================== jwtAuth 代注（2026-10-10 票 05：移动侧能力上移到本 crate） ====================
+
+/// 只覆写 [`HttpPorts::jwt_auth_token`] 的端口包装器（其余方法委托给内层端口）
+///
+/// 为什么包一层而不是改 `FakePorts`：代注是**可选能力**（默认实现 `Ok(None)`），
+/// 用例要覆盖的是「宿主给了 token / 宿主当下无 token」两种宿主态，而不是把这份
+/// 开关焊进通用夹具（会让别的用例读到无关状态）。
+struct JwtPorts {
+    inner: Arc<dyn HttpPorts>,
+    token: Result<Option<String>, String>,
+}
+
+impl HttpPorts for JwtPorts {
+    fn check_permission(&self, plugin_id: &str, permission: &str, api: &str) -> bool {
+        self.inner.check_permission(plugin_id, permission, api)
+    }
+    fn authorize_outbound(&self, plugin_id: &str, url: &str, may_prompt: bool) -> OutboundAuth {
+        self.inner.authorize_outbound(plugin_id, url, may_prompt)
+    }
+    fn event_sink(&self) -> Option<Arc<dyn HttpEventSink>> {
+        self.inner.event_sink()
+    }
+    fn block_on_any(
+        &self,
+        fut: crate::plugin_binding::ports::BoxedBlocked,
+    ) -> Box<dyn std::any::Any + Send> {
+        self.inner.block_on_any(fut)
+    }
+    fn jwt_auth_token(&self, _plugin_id: &str) -> Result<Option<String>, String> {
+        self.token.clone()
+    }
+}
+
+/// 回显请求头的夹具服务器（`spawn_*` 家族没有这个形态：验证 Bearer 注入要看请求头）
+async fn spawn_echo_server() -> SocketAddr {
+    disable_proxy_for_loopback();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        while let Ok((mut sock, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let mut buf = [0u8; 4096];
+                let n = sock.read(&mut buf).await.unwrap_or(0);
+                let head = String::from_utf8_lossy(&buf[..n]).to_string();
+                let response = format!("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", head.len(), head);
+                let _ = sock.write_all(response.as_bytes()).await;
+                let _ = sock.flush().await;
+            });
+        }
+    });
+    addr
+}
+
+/// 宿主给了 token ⇒ 调用方不带 Authorization 也能拿到 Bearer（token 不落插件，C4）
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn jwt_auth_injects_host_managed_bearer() {
+    let addr = spawn_echo_server().await;
+    let ports: Arc<dyn HttpPorts> = Arc::new(JwtPorts {
+        // 授权层一律放行：本条用例锁的是代注语义（授权三态另有专门用例组），
+        // 且夹具服务绑在 loopback——授权放行后仍要过执行期的私网跳转闸门，不冲突
+        inner: as_ports(&granting().with_auth(AuthScript::Allow)),
+        token: Ok(Some("tok-13".to_string())),
+    });
+    let response = http_fetch(
+        &ports,
+        "p1",
+        &json!({"method": "GET", "url": format!("http://{}/x", addr), "jwtAuth": true}).to_string(),
+        true,
+    )
+    .expect("jwtAuth 请求必须放行")
+    .expect("fetch returns payload");
+    let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
+    let echo_body = parsed["body"].as_str().unwrap().to_ascii_lowercase();
+    assert!(
+        echo_body.contains("authorization: bearer tok-13"),
+        "宿主代注的 Bearer 必须出现在请求头里，got: {echo_body}"
+    );
+}
+
+/// 开关关 ⇒ 不得注入 Authorization（C4：token 只在显式请求时代注，避免把会话凭据
+/// 撒到插件自己都不知道的外部目标上）
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn jwt_auth_off_sends_no_authorization() {
+    let addr = spawn_echo_server().await;
+    let ports: Arc<dyn HttpPorts> = Arc::new(JwtPorts {
+        // 授权层一律放行：本条用例锁的是代注语义（授权三态另有专门用例组），
+        // 且夹具服务绑在 loopback——授权放行后仍要过执行期的私网跳转闸门，不冲突
+        inner: as_ports(&granting().with_auth(AuthScript::Allow)),
+        token: Ok(Some("tok-13".to_string())),
+    });
+    let response = http_fetch(
+        &ports,
+        "p1",
+        &json!({"method": "GET", "url": format!("http://{}/x", addr), "jwtAuth": false}).to_string(),
+        true,
+    )
+    .expect("未开 jwtAuth 的请求照常放行")
+    .expect("fetch returns payload");
+    let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
+    let echo_body = parsed["body"].as_str().unwrap().to_ascii_lowercase();
+    assert!(!echo_body.contains("authorization:"), "got: {echo_body}");
+}
+
+/// 要求代注但宿主无 token ⇒ **触达网络之前**拒绝（fail-visible：匿名在对端必 401，
+/// 晚失败不如早失败，禁止静默降级为匿名）
+#[tokio::test]
+async fn jwt_auth_without_token_is_rejected_before_network() {
+    let (addr, hits) = spawn_counting_server(b"{\"ok\":true}".to_vec()).await;
+    let ports: Arc<dyn HttpPorts> = Arc::new(JwtPorts {
+        // 授权层一律放行：本条用例锁的是代注语义（授权三态另有专门用例组），
+        // 且夹具服务绑在 loopback——授权放行后仍要过执行期的私网跳转闸门，不冲突
+        inner: as_ports(&granting().with_auth(AuthScript::Allow)),
+        token: Err("jwtAuth requested but no global token available (not authenticated)".to_string()),
+    });
+    let err = http_fetch(
+        &ports,
+        "p1",
+        &json!({"method": "GET", "url": format!("http://{}/x", addr), "jwtAuth": true}).to_string(),
+        true,
+    )
+    .expect_err("无 token 的 jwtAuth 请求必须被拒");
+    assert!(err.contains("no global token available"), "got: {err}");
+    assert_eq!(
+        hits.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "缺 token 的请求不得触达网络（代注裁决必须在执行之前）"
+    );
+}
 
 /// 正常小响应体：完整返回，不受上限影响
 #[tokio::test]
 async fn http_fetch_small_response_ok() {
     disable_proxy_for_loopback();
     let addr = spawn_mock_server(b"{\"ok\":true}".to_vec()).await;
-    let resp = execute_http_request(&json!({
-        "method": "GET",
-        "url": format!("http://{}/small", addr),
-    }))
+    let resp = execute_http_request(
+        &json!({
+            "method": "GET",
+            "url": format!("http://{}/small", addr),
+        }),
+        None,
+    )
     .await
     .expect("small response must succeed");
     assert_eq!(resp["status"], 200);
@@ -79,10 +216,13 @@ async fn http_fetch_oversized_response_rejected() {
             + 1
     ])
     .await;
-    let err = execute_http_request(&json!({
-        "method": "GET",
-        "url": format!("http://{}/big", addr),
-    }))
+    let err = execute_http_request(
+        &json!({
+            "method": "GET",
+            "url": format!("http://{}/big", addr),
+        }),
+        None,
+    )
     .await
     .expect_err("oversized response must be rejected");
     assert!(

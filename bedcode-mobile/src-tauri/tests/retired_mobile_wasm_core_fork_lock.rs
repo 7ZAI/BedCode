@@ -3,7 +3,7 @@
 //!
 //! 票 06 把移动 fork crate `bedcode-mobile/packages/bedcode-wasm-core`
 //! （package `bedcode-wasm-core-mobile`）整面退役：移动 `src-tauri` 改为依赖**仓库根
-//! 单一 wasm-core**（`packages/bedcode-wasm-core` + `mobile-host` feature），
+//! 单一 wasm-core**（`packages/bedcode-wasm-core` + `bare-host` feature），
 //! `bedcode-wasm-core-mobile` 只作为 **package rename 别名**保留（`package =`
 //! "bedcode-wasm-core"），源码 `bedcode_wasm_core_mobile::` 导入路径零改动。
 //!
@@ -19,7 +19,7 @@
 //! 3. 移动侧构建面文件不得出现 fork 形态路径（上跳一级 / 裸引用
 //!    `"../packages/bedcode-wasm-core"`；根 crate 的合法形态是上跳两级
 //!    `"../../packages/bedcode-wasm-core"`）；
-//! 4. 移动 `src-tauri` 的别名必须指向根 crate（package rename + `mobile-host`）。
+//! 4. 移动 `src-tauri` 的别名必须指向根 crate（package rename + `bare-host`）。
 
 use std::path::{Path, PathBuf};
 
@@ -81,7 +81,7 @@ fn mobile_wasm_core_fork_directory_is_retired() {
     assert!(
         !fork_dir.exists(),
         "移动 fork crate 目录复活：{}（票 06 批次 04 已整面退役——单一 wasm-core 在仓库根 \
-         `packages/bedcode-wasm-core`，移动侧经 `mobile-host` feature 消费）",
+         `packages/bedcode-wasm-core`，移动侧经 `bare-host` feature 消费）",
         fork_dir.display()
     );
 }
@@ -158,7 +158,7 @@ fn mobile_build_files_never_reference_the_fork_path() {
     );
 }
 
-/// ④ 移动 src-tauri 的别名必须指向根 crate（package rename + mobile-host）
+/// ④ 移动 src-tauri 的别名必须指向根 crate（package rename + bare-host）
 #[test]
 fn mobile_wasm_core_alias_points_at_the_root_crate() {
     let manifest = std::fs::read_to_string(mobile_root().join("Cargo.toml"))
@@ -186,9 +186,9 @@ fn mobile_wasm_core_alias_points_at_the_root_crate() {
                 idx + 1
             ));
         }
-        if !t.contains("mobile-host") {
+        if !t.contains("bare-host") {
             violations.push(format!(
-                "Cargo.toml:{}: 别名未走 mobile-host feature（移动形态必须 default-features=false）：{t}",
+                "Cargo.toml:{}: 别名未走 bare-host feature（移动形态必须 default-features=false）：{t}",
                 idx + 1
             ));
         }

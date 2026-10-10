@@ -9,9 +9,9 @@ use crate::manager::types::{LoadedPlugin, PluginSource};
 use crate::manager::validation::{validate_dir_binding, validate_plugin_id};
 use crate::permission::PermissionManager;
 // 双端 SDK 同名类型（形状 fork 对齐逐字一致，票 17）——按形态取对应 SDK
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 use bedcode_plugin_api::{PluginManifest, PluginState, PluginType};
-#[cfg(feature = "mobile-host")]
+#[cfg(feature = "bare-host")]
 use bedcode_plugin_api_mobile::{PluginManifest, PluginState, PluginType};
 use std::collections::{HashMap, HashSet};
 use std::fs;

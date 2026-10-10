@@ -9,7 +9,7 @@
 //!    WASM 插件无法持有。命令薄壳留宿主（`lib.rs` 注册面不变），登记与转发
 //!    共用的这张表（本模块）归 crate 机制面。
 //! 2. **裸字节转发**：插件经 WIT `host-terminal-stream.forward-output`
-//!    （`manager::runtime::host_impl::terminal_stream`）把输出字节交进来，
+//!    （域 impl 已迁移动宿主 adapter `plugin/terminal_stream.rs`；票 04）把输出字节交进来，
 //!    本层按 session-id 寻址找通道、以 `InvokeResponseBody::Raw` 推给前端——
 //!    **零解析**：不读字节内容、不识别终端协议、不缓存（C3 红线：字节全程
 //!    不经 JSON）。

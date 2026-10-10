@@ -1,7 +1,7 @@
 [package]
 name = "bedcode-server-http"
 version = "0.1.0"
-description = "BedCode 桌面 HTTP 传输面：动态端点注册表/协议网关/插件代理控制器/认证与流量过滤中间件/DTO 形状锚点 + host-http 能力域的插件绑定层（入站 2 + 出站 1 原语，wasm-core-lib-split 票 06）。默认形态 = 纯引擎机制 + 端口抽象（零 WIT 依赖），任何宿主可直接引用；`desktop-host` feature 装配 WIT 绑定层（bindgen!/HostModule/inventory/impl Host）——能力域脱绑 P1"
+description = "BedCode 桌面 HTTP 传输面：动态端点注册表/协议网关/插件代理控制器/认证与流量过滤中间件/DTO 形状锚点 + host-http 能力域的插件绑定层（入站 2 + 出站 1 原语，wasm-core-lib-split 票 06）。默认形态 = 纯引擎机制 + 端口抽象（零 WIT 依赖），任何宿主可直接引用；`common-host` feature 装配 WIT 绑定层（bindgen!/HostModule/inventory/impl Host）——能力域脱绑 P1"
 authors = ["binblink"]
 edition = "2021"
 
@@ -11,7 +11,7 @@ default = []
 # 桌面宿主 WIT 绑定层（bindgen!/HostModule/inventory::submit!/impl Host）；
 # 语义 = 装配桌面 WIT 依赖，行为与开 feature 前逐字不变
 # （ABI / WIT / 权限位 / 事件形状 / inventory 注册零变化）。
-desktop-host = ["dep:bedcode-host-kit", "dep:wasmtime", "dep:wit-bindgen", "dep:inventory"]
+common-host = ["dep:bedcode-host-kit", "dep:wasmtime", "dep:wit-bindgen", "dep:inventory"]
 
 [dependencies]
 # Actix Web（HTTP 路由 + 中间件 + 测试 harness）
@@ -36,7 +36,7 @@ bedcode-server-base = { path = "../bedcode-server-base" }
 # 链路加密 NEGOTIATION_HEADER、supervisor 状态）
 bedcode-server-core = { path = "../bedcode-server-core" }
 # ==================== 插件绑定层（host-http 能力域，wasm-core-lib-split 票 06） ====================
-# 全部 optional：只随 `desktop-host` feature 进编译图（能力域脱绑 P1）——
+# 全部 optional：只随 `common-host` feature 进编译图（能力域脱绑 P1）——
 # 无 feature 时 `cargo tree` 不出现以下任何 crate（纯引擎形态）。
 # 机制内核：插件实例状态（`add_to_linker::<S,D>` 的单态 S 必须在本 crate 可命名）
 bedcode-host-kit = { path = "../bedcode-host-kit", optional = true }

@@ -1,7 +1,7 @@
 [package]
 name = "bedcode-discovery-engine"
 version = "0.1.0"
-description = "BedCode 组播发现能力域：mDNS 共享守护 + 浏览/广播句柄表。默认形态 = 纯引擎机制 + 端口抽象（零 WIT 依赖），任何宿主可直接引用；`desktop-host` feature 装配 WIT 绑定层（bindgen!/HostModule/inventory/impl Host）——能力域脱绑 P2"
+description = "BedCode 组播发现能力域：mDNS 共享守护 + 浏览/广播句柄表。默认形态 = 纯引擎机制 + 端口抽象（零 WIT 依赖），任何宿主可直接引用；`common-host` feature 装配 WIT 绑定层（bindgen!/HostModule/inventory/impl Host）——能力域脱绑 P2"
 authors = ["binblink"]
 license = "MIT"
 repository = "https://github.com/7ZAI/BedCode"
@@ -13,7 +13,7 @@ default = []
 # 桌面宿主 WIT 绑定层（bindgen!/HostModule/inventory::submit!/impl Host）；
 # 语义 = 装配桌面 WIT 依赖，行为与开 feature 前逐字不变
 # （ABI / WIT / 权限位 / 事件形状 / inventory 注册零变化）。
-desktop-host = ["dep:bedcode-host-kit", "dep:wasmtime", "dep:wit-bindgen", "dep:inventory"]
+common-host = ["dep:bedcode-host-kit", "dep:wasmtime", "dep:wit-bindgen", "dep:inventory"]
 
 [dependencies]
 # 虚拟网卡过滤（共享守护初始化一次，peer-net 提供）
@@ -26,8 +26,8 @@ uuid = { version = "1", features = ["v4"] }
 tracing = "0.1"
 # re-announce 周期定时 + 自播面状态锁（`advertiser::MdnsAdvertiser` 的 tokio RwLock）
 tokio = { version = "1", features = ["time", "sync"] }
-# ==================== 插件绑定层（WIT 绑定，desktop-host feature） ====================
-# 全部 optional：只随 `desktop-host` feature 进编译图（能力域脱绑 P2）——
+# ==================== 插件绑定层（WIT 绑定，common-host feature） ====================
+# 全部 optional：只随 `common-host` feature 进编译图（能力域脱绑 P2）——
 # 无 feature 时 `cargo tree` 不出现以下任何 crate（纯引擎形态）。
 # 机制内核：插件实例状态（`add_to_linker::<S,D>` 的单态 S 必须在此 crate 可命名）
 bedcode-host-kit = { path = "../bedcode-host-kit", optional = true }

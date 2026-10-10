@@ -89,15 +89,16 @@ const RETAINED_FACE: [(&str, &str); 6] = [
         "pub const PERMISSION_TERMINAL_OUTPUT",
     ),
     (
-        // 票 06 批次 03：真源随 wasm-core fork 退役迁入根 crate `mobile-host` 面
-        // （terminal_stream_gateway → crate 根；host_impl/terminal_stream →
-        // manager/runtime/mobile/host_impl），锁改钉新真源位置
+        // 票 06 批次 03：真源随 wasm-core fork 退役迁入根 crate `bare-host` 面
+        // （terminal_stream_gateway → crate 根）；2026-10-10 wasm-core-mobile-purity
+        // 票 04：该域属**移动独有** ⇒ 整面迁移动宿主 adapter（ADR 0047 D5），
+        // 锁改钉宿主 adapter（网关仍留 wasm-core，窄转发表由两端共有机制消费）
         "../../packages/bedcode-wasm-core/src/terminal_stream_gateway.rs",
         "pub fn forward_output(",
     ),
     (
-        "../../packages/bedcode-wasm-core/src/manager/runtime/mobile/host_impl/terminal_stream.rs",
-        "fn terminal_stream_forward_output(",
+        "src/plugin/terminal_stream.rs",
+        "fn forward_output(",
     ),
 ];
 

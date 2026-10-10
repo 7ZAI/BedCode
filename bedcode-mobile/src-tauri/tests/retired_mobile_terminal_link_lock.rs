@@ -68,7 +68,7 @@ const RETIRED_FRONTEND_LITERALS: [&str; 8] = [
 ];
 
 /// 宿主保留面（窄转发 + ABI v15 原语）必须仍在：本票只摘协议编排，不摘传输面。
-/// 票 06 批次 03/04 后真源随 fork 退役迁入**仓库根**单一 wasm-core 的 `mobile-host`
+/// 票 06 批次 03/04 后真源随 fork 退役迁入**仓库根**单一 wasm-core 的 `bare-host`
 /// 面（`bedcode_wasm_core_mobile` 现为 package rename 别名），锁钉根 crate 路径。
 const RETAINED_FACE: [(&str, &str); 7] = [
     (
@@ -80,12 +80,14 @@ const RETAINED_FACE: [(&str, &str); 7] = [
         "pub fn page_subscribe(",
     ),
     (
-        "../../packages/bedcode-wasm-core/src/manager/runtime/mobile/host_impl/terminal_stream.rs",
-        "fn terminal_stream_forward_output(",
+        // 票 04：host-terminal-stream 属移动独有域 ⇒ 整面迁移动宿主 adapter
+        // （WIT 方法名即 `forward_output`，不再有 `terminal_stream_` 前缀的壳函数）
+        "src/plugin/terminal_stream.rs",
+        "fn forward_output(",
     ),
     (
         // 薄适配器侧保留面：宿主 token 投影（C4：凭据只经端口交给引擎）
-        "../../packages/bedcode-wasm-core/src/manager/runtime/mobile/host_impl/ws.rs",
+        "../../packages/bedcode-wasm-core/src/manager/runtime/bare/host_impl/ws.rs",
         "fn global_token(&self) -> String",
     ),
     (
@@ -100,8 +102,9 @@ const RETAINED_FACE: [(&str, &str); 7] = [
         "fn run_reconnect(",
     ),
     (
-        "../../packages/bedcode-wasm-core/src/manager/runtime/mobile/host_impl/connection.rs",
-        "fn connection_primary_target(",
+        // 票 04：host-connection（primary-target 1 函数）同属移动独有域 ⇒ 迁移动宿主
+        "src/plugin/connection.rs",
+        "fn primary_target(",
     ),
 ];
 

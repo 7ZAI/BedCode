@@ -264,8 +264,19 @@ pub fn http_fetch(
         //
         // `request` 先取有主副本再进 future：端口的异步桥是类型擦除的（要求
         // `'static` future），借用形式过不去。语义与迁移前逐字相同。
+        //
+        // `jwtAuth` 代注：token 由宿主经端口给（不给 = 本宿主无此概念，见
+        // [`HttpPorts::jwt_auth_token`] 的默认实现），本域只做一次头注入。
+        let jwt_auth = request.get("jwtAuth").and_then(|v| v.as_bool()).unwrap_or(false);
+        let bearer = if jwt_auth {
+            ports
+                .jwt_auth_token(plugin_id)
+                .map_err(|e| format!("http error: {}", e))?
+        } else {
+            None
+        };
         let request = request.clone();
-        let response = block_on(ports, async move { execute_http_request(&request).await })
+        let response = block_on(ports, async move { execute_http_request(&request, bearer).await })
             .map_err(|e| format!("http error: {}", e))?;
         serde_json::to_string(&response)
             .map(Some)
@@ -278,9 +289,15 @@ pub fn http_fetch(
 /// 执行非流式 HTTP 请求
 ///
 /// 宿主代为执行 HTTP 请求，返回完整响应
-/// request 格式：{ "method", "url", "headers", "body" }
+/// request 格式：{ "method", "url", "headers", "body", "jwtAuth"?: bool }
 /// response 格式：{ "status", "body", "headers" }
-pub(crate) async fn execute_http_request(request: &serde_json::Value) -> anyhow::Result<serde_json::Value> {
+///
+/// `bearer` = 宿主代注的 Bearer token（由 [`http_fetch`] 经端口取来；`None` =
+/// 本宿主无全局 token 概念，也不替 guest 改写自带头）。
+pub(crate) async fn execute_http_request(
+    request: &serde_json::Value,
+    bearer: Option<String>,
+) -> anyhow::Result<serde_json::Value> {
     let method = request.get("method").and_then(|v| v.as_str()).unwrap_or("GET");
     let url = request
         .get("url")
@@ -295,6 +312,11 @@ pub(crate) async fn execute_http_request(request: &serde_json::Value) -> anyhow:
         for (key, value) in hdrs {
             req_builder = req_builder.header(key.as_str(), value.as_str());
         }
+    }
+
+    // 宿主代注 Bearer（顺序同请求自带头之后：代注优先，且不多生产一个头）
+    if let Some(token) = bearer {
+        req_builder = req_builder.bearer_auth(token);
     }
 
     if let Some(b) = body {

@@ -83,7 +83,7 @@ impl HostModule for AuthModule {
         &self,
         linker: &mut wasmtime::component::Linker<WasmPluginState>,
     ) -> wasmtime::Result<()> {
-        bedcode::plugin::host_auth::add_to_linker::<WasmPluginState, HasSelf>(linker, |s| s)
+        bedcode::plugin::host_auth_center::add_to_linker::<WasmPluginState, HasSelf>(linker, |s| s)
     }
 }
 
@@ -102,7 +102,7 @@ inventory::submit! {
 
 /// 属主 = 调用方插件实例的 plugin_id（本 impl 自 store state 派生，guest 无法伪造）；
 /// 权限门 + 主库持久化 + 明文不落日志 + 记录面白名单全部在下方域函数内实现。
-impl bedcode::plugin::host_auth::Host for WasmPluginState {
+impl bedcode::plugin::host_auth_center::Host for WasmPluginState {
     fn secret_get(&mut self, key: String) -> Result<Option<String>, String> {
         auth_secret_get(ctx_of(self), ctx_of(self), ctx_of(self), &self.plugin_id, &key)
     }

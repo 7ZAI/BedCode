@@ -27,10 +27,13 @@ package bedcode:plugin;
 ///   v17 起 topic 统一到 `<owner>::mdns:found|lost`（wire 对齐桌面终态，
 ///   函数签名不变无 ABI 破坏，双端共享 lib 同源）
 /// - v15：终端输出流窄转发（host-terminal-stream.forward-output，C3 二进制
-///   出口）+ 主连接事实读取（host-connection.primary-target，与桌面同名
-///   不同形）+ host-websocket config 增强（jwt-auth / heartbeat-secs /
+///   出口）+ 主连接事实读取（`host-connection-target.primary-target`；
+///   v15 当时名为 `host-connection`，2026-10-11 统一契约时按角色改名为 `-target`，
+///   与桌面同名不同角色的 `host-connection-registry` 区隔）+
+///   host-websocket config 增强（jwt-auth / heartbeat-secs /
 ///   auto-reconnect，零 WIT 形状变化）。纯增量，v14 产物不受影响
-/// - v16：认证 / 配对编排下沉：新增 host-auth 认证引擎面
+/// - v16：认证 / 配对编排下沉：新增 `host-auth-client` 入场客户端认证引擎面
+///   （原名 `host-auth`，2026-10-11 按角色改名，见该 interface 头注）
 ///   （5 函数：request-pairing / verify-pairing-code / qr-connect /
 ///   biometric-authenticate / has-credentials，凭据零过境）+ 权限位 `auth`。
 ///   纯增量，v15 产物不受影响
@@ -118,13 +121,15 @@ interface host-terminal-stream {
 }
 /// 主连接事实读取（ABI v15 新增；会话控制迁插件复用同一地基）
 ///
-/// **与桌面 `host-connection` 同名不同形**：桌面是 15 函数连接上下文域，
-/// 移动端只暴露 1 函数引擎事实（与桌面 `host-connection` 同名不同形的
-/// 双端偏离，须登记 ADR 0018 双端偏离表）。**无权限门**（对齐 host-platform 例外先例）：
+/// **曾与桌面同名不同角色**：本 interface 曾是 `host-connection`（桌面同名），
+/// 但桌面是「在册连接清单」角色（`connections-list`）、移动端是「主连接目标」
+/// 角色（`primary-target`），函数集零交集；2026-10-11 统一契约（并集 world）
+/// 时按角色改名为 `-target`，桌面那侧为 `host-connection-registry`。
+/// **无权限门**（对齐 host-platform 例外先例）：
 /// 返回的是局域网服务地址等连接事实（非凭据、非隐私），地址不入日志
 /// 明文红线不受影响；真正的风险面是连接行为本身，已由 `ws:client` /
 /// `network:http` 等权限位门控。
-interface host-connection {
+interface host-connection-target {
     /// 当前主连接目标设备（camelCase JSON）：`{ address, port, connected }`。
     /// `address` / `port` 是最后一次成功配置的目标（与宿主 HTTP / WS 面
     /// 同源），`connected` 反映主连接当前状态。
@@ -149,7 +154,12 @@ interface host-connection {
 /// 落地，是安全敏感面，不与任何既有能力混位。
 ///
 /// 消费者：`com.bedcode.terminal-session`（配对 / 认证编排域）。
-interface host-auth {
+/// **为什么叫 client**：桌面分片曾声明同名 `host-auth`，但两者函数集**零交集**——
+/// 桌面侧是「认证中心角色」（密钥托管 / 中心注册 / 组合式认证发现），本 interface 是
+/// 「设备入场客户端」（配对 / 配对码 / QR / 生物凭证 / 凭据事实）。同名不同角色会在
+/// 统一契约（并集 world）里撞 duplicate definition，故按角色定名：本侧 `-client`，
+/// 桌面那侧 `host-auth-center`；两端各自注册自己承担的角色，Core 不做端点判定。
+interface host-auth-client {
     /// 请求配对（HTTP `POST /api/auth/request-pairing`）：桌面端生成一次性
     /// 配对码并展示。Ok(()) = 桌面端受理（进入等码态）；Err = 网络故障 /
     /// 桌面端拒绝（透传原因）
@@ -186,8 +196,8 @@ world cap-mobile {
     import host-notify;
     import host-fs-mobile;
     import host-terminal-stream;
-    import host-connection;
-    import host-auth;
+    import host-connection-target;
+    import host-auth-client;
 
     export events;
     export abi;

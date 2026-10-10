@@ -9,9 +9,9 @@ use async_trait::async_trait;
 // 机制面载荷类型按形态取对应 SDK（票 06 批次 03；真源统一留票 07）。
 // **crate 内引用一律走 `crate::bus::BusMessage`**（此处 pub use 是单点切换），
 // 禁止直引 SDK 路径（否则双形态签名漂移）
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 pub use bedcode_plugin_api::BusMessage;
-#[cfg(feature = "mobile-host")]
+#[cfg(feature = "bare-host")]
 pub use bedcode_plugin_api_mobile::BusMessage;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -64,7 +64,7 @@ pub enum WsFrameDispatch {
 /// 调用（PluginHost 直驱实例调用）；移动装配面（fork 票 17）投递器 async 化
 /// （`dispatch_to_wasm` / `is_activated` 为 async fn，host fn 上下文经
 /// block_on 桥进入）——同一 trait 双形态签名，实现方按形态对应。
-#[cfg(feature = "mobile-host")]
+#[cfg(feature = "bare-host")]
 #[async_trait::async_trait]
 pub trait MessageDispatcher: Send + Sync + 'static {
     /// 投递消息给 WASM 插件（调用 __bedcode_on_message）
@@ -85,7 +85,7 @@ pub trait MessageDispatcher: Send + Sync + 'static {
     }
 }
 
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 pub trait MessageDispatcher: Send + Sync + 'static {
     /// 投递消息给 WASM 插件（调用 __bedcode_on_message）
     fn dispatch_to_wasm(&self, plugin_id: &str, msg: &BusMessage) -> anyhow::Result<()>;
@@ -372,7 +372,7 @@ impl MessageBus {
                     continue;
                 };
                 // 投递调用形态随 trait 分叉（票 06 批次 03：移动 async / 桌面同步）
-                #[cfg(feature = "mobile-host")]
+                #[cfg(feature = "bare-host")]
                 {
                     if !dispatcher.is_activated(&pid).await {
                         tracing::warn!(plugin_id = %pid, "MessageBus: subscriber not activated, skipping");
@@ -383,7 +383,7 @@ impl MessageBus {
                         continue;
                     }
                 }
-                #[cfg(feature = "desktop-host")]
+                #[cfg(feature = "common-host")]
                 {
                     if !dispatcher.is_activated(&pid) {
                         tracing::warn!(plugin_id = %pid, "MessageBus: subscriber not activated, skipping");
@@ -477,21 +477,21 @@ impl MessageBus {
 // ==================== HostBusPort（wasm-core-whole-crate 票 M11，从 lib server/ports_impl.rs 抽入） ====================
 //
 // 桌面装配面（票 06 批次 03）：HostBusPort 打包 MessageBus + 能力域 WsPorts 帧投递，
-// 依赖 `bedcode-server-websocket`（desktop-host optional 依赖）——移动形态无 WS
-// 服务端域，整段不编译（mobile 装配面无此端口）。
+// 依赖 `bedcode-server-websocket`（common-host optional 依赖）——移动形态无 WS
+// 服务端域，整段不编译（bare 装配面无此端口）。
 
 /// 插件消息总线 + WS 帧投递（`bus::MessageBus` + 能力域 `deliver_endpoint_frame` 包装）
 ///
 /// 原属 lib 的 `server/ports_impl.rs`（包 `MessageBus`——crate 属物），随整核抽出
 /// 迁入本 crate；lib 的 `server/ports_impl.rs` 经 `pub use` 垫片再导出，`assemble()`
 /// 本体留 lib（组合根唯一性）。
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 pub struct HostBusPort {
     binding: BusBinding,
 }
 
 /// 总线绑定形态：装配期钉死 / 逐次调用解析（late-bound）
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 enum BusBinding {
     /// 装配期即持有真实总线（bootstrap 之后装配的端口走这一支）
     Fixed {
@@ -513,7 +513,7 @@ enum BusBinding {
     ),
 }
 
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 impl HostBusPort {
     /// 钉死构造：`ws_ports` 由**构造方**给出（绑定到 `bus` 的窄端口）
     ///
@@ -579,12 +579,12 @@ impl HostBusPort {
 /// - [`HostBusPort`] 的帧回灌路径（`ws_ports()` 未注入时的兜底不存在——注入由构造方
 ///   提供；本类型是**内核侧构造方**用的那一份）；
 /// - `manager/host/register.rs` 的 WS 端点登记（需要 `bus_port()`）。
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 pub(crate) struct BusBoundWsPorts {
     bus: Arc<MessageBus>,
 }
 
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 impl BusBoundWsPorts {
     /// 绑定到给定总线（窄端口：无宿主上下文 ⇒ 权限门恒拒）
     pub(crate) fn new(bus: Arc<MessageBus>) -> Self {
@@ -592,7 +592,7 @@ impl BusBoundWsPorts {
     }
 }
 
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 impl bedcode_server_websocket::plugin_binding::ports::WsPorts for BusBoundWsPorts {
     fn check_permission(&self, _plugin_id: &str, _permission: &str, _api: &str) -> bool {
         // 窄端口没有权限管理器 ⇒ 拒绝（fail-safe）。消费它的两条路径（帧回灌 / 端点登记）
@@ -679,7 +679,7 @@ impl BusMessageHandler for WasmHandlerAdapter {
 }
 
 #[async_trait]
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 impl bedcode_server_base::ports::BusPort for HostBusPort {
     fn publish(&self, topic: &str, sender: &str, payload: serde_json::Value) {
         self.bus().publish(topic, sender, payload);
@@ -693,6 +693,13 @@ impl bedcode_server_base::ports::BusPort for HostBusPort {
         self.bus()
             .subscribe_static(subscriber, topic, Box::new(WasmHandlerAdapter(handler)))
             .await;
+    }
+
+    /// 就绪判据 = 端口已装配（bootstrap 完成）——与迁移前能力域内联的就绪等待
+    /// 逐字一致；late-bound 形态在 AppContext 注册前会解析到占位总线，此时
+    /// 注册的订阅永远收不到消息，故必须等真实装配完成
+    fn is_ready(&self) -> bool {
+        bedcode_server_base::ports::get().is_some()
     }
 
     async fn deliver_endpoint_frame(

@@ -32,7 +32,8 @@
 //! | `database` | 已抽（批次 3，2026-10-09）——**双端机制决策收缩（同日用户指令）**：主库由 wasm-core 管理、不给任何 wasm-app / 插件直接调用的方法，`host-database` 接口自双端 WIT 面移除（ABI 桌面 34→35 / 移动 18→19），authorizer 纵深 / 主库前缀校验 / `database:main` 权限位随之退役；本层收缩为**插件私有库面**（`host-plugin-database`）：权限门（`storage`）→ 语句超时护栏 → 结果集护栏 → 批次事务 |
 //! | `log` | 已抽（批次 4，2026-10-09）——callsite 缓存 + 按调用点 `'static` Metadata + per-plugin 级别阈值（`BEDCODE_PLUGIN_LOG`）+ `[plugin:xxx]` 前缀，全套上移；移动端 host-log 接入后获得桌面全套日志机制（此前仅裸 tracing 输出） |
 //! | `events` | 已抽（批次 4，2026-10-09）——事件载荷严格 JSON 解析语义（H-05 fail-visible）；移动端 emit 接入后行为对齐（非法载荷不再宽松降级） |
-//! | `config` / `fs` / `http` | **判定不抽**（2026-10-09，逐域按 §2 判据核对）：config 实现层直接引用各端 SDK `ConfigKey` 枚举（判据「不得引用 SDK 类型」不满足）；fs 桌面为 WSL 桥 / 任务单元 / 三层框架、移动为 SAF 平台接入；http 桌面已抽能力域 crate（`bedcode-server-http::plugin_binding`）+ 端口、移动为 crate 内引擎 + 端口——均各端平台接入，无共享机制面 |
+//! | `fs` | **已抽（2026-10-10，wasm-core-mobile-purity 票 05）**——交集 6 原语的机制面（权限门 → 访问裁决 → 路径形状守卫）自移动 wasm-core `runtime/bare/host_impl/fs.rs` 上移；平台差（Android MediaStore/SAF 删除）经 [`fs::FsHostPorts::platform_delete`] 端口注入。**桌面侧的 WSL 桥 / 任务单元消费面不在本次抽取范围**，其实现体仍在桌面 wasm-core `host_api/fs.rs`——后续是否改用本层另票，不影响本层成立 |
+//! | `config` / `http` | **判定不抽**（2026-10-09，逐域按 §2 判据核对；票 05 复核维持）：config 实现层直接引用各端 SDK `ConfigKey` 枚举（判据「不得引用 SDK 类型」不满足）；http 桌面已抽能力域 crate（`bedcode-server-http::plugin_binding`）+ 端口、移动同为能力域 crate 形态（票 05）——两端都各自接第八方端口，无第二份共享实现层 |
 //!
 //! ## 与 `bedcode-host-kit` 的边界
 //!
@@ -45,6 +46,7 @@
 pub mod bus;
 pub mod database;
 pub mod events;
+pub mod fs;
 pub mod gate;
 pub mod log;
 pub mod storage;

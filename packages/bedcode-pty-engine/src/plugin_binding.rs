@@ -23,7 +23,7 @@
 //! 四域同形。
 //!
 //! **脱绑（能力域脱绑 P4）**：WIT 绑定层（`DESC` / `HostModule` / `inventory::submit!` /
-//! `ports_for` / `bindgen!` / `impl Host`）以 `#[cfg(feature = "desktop-host")]` 门控——
+//! `ports_for` / `bindgen!` / `impl Host`）以 `#[cfg(feature = "common-host")]` 门控——
 //! 桌面宿主开 feature 后行为逐字不变；无 feature 的宿主（移动端 / 无头）拿纯引擎：
 //! 域机制（[`primitives`] / [`registry`] / [`output`]）、端口、装配（[`install`] /
 //! [`ports::install_ports`]）默认全部可用。描述符字段值（模块名 / 接口路径 / 权限位）
@@ -59,13 +59,13 @@ pub use registry::{
     purge_for_plugin_with_ports, register_quota,
 };
 
-// ==================== 能力模块自报（WIT 绑定层，`desktop-host` feature） ====================
+// ==================== 能力模块自报（WIT 绑定层，`common-host` feature） ====================
 
-// WIT 绑定层依赖（host-kit / wasmtime）只随 `desktop-host` feature 编译：
+// WIT 绑定层依赖（host-kit / wasmtime）只随 `common-host` feature 编译：
 // 能力域默认形态 = 纯引擎机制（零 WIT 依赖），任何宿主可直接引用。
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 use bedcode_host_kit::{DomainHooks, HostModule, HostModuleDesc, ModuleEntry, WasmPluginState};
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 use wasmtime::component::{bindgen, Linker};
 
 /// 能力模块名（`host-pty`；纯字符串，默认可用——宿主白名单校验 / 无头态引用）
@@ -86,7 +86,7 @@ pub const MODULE_ABI_MIN: u32 = 16;
 /// 本 interface。
 ///
 /// 字段值取上方默认可用的纯字符串常量（宿主无头态也能引用描述符形状）。
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 pub const DESC: HostModuleDesc = HostModuleDesc {
     name: MODULE_NAME,
     interfaces: MODULE_INTERFACES,
@@ -95,10 +95,10 @@ pub const DESC: HostModuleDesc = HostModuleDesc {
 };
 
 /// PTY 能力域模块（`host-pty`，6 条原语）
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 pub struct PtyModule;
 
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 impl HostModule for PtyModule {
     fn desc(&self) -> HostModuleDesc {
         DESC
@@ -110,21 +110,21 @@ impl HostModule for PtyModule {
 }
 
 /// getter：让 guest 侧 import 取到可变的状态引用（与宿主既有接线同款）
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 type HasSelf = wasmtime::component::HasSelf<WasmPluginState>;
 
 /// 静态单例（供 `inventory::submit!` 取址）
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 static MODULE: PtyModule = PtyModule;
 
 // 能力模块自报（linker-section 静态）
 //
 // **依赖前提**：宿主必须有一行强制引用本 crate（见 `wasm_core::manager::runtime::component`
 // 的 `use bedcode_pty_engine as _;`），否则本 rlib 不进最终二进制、静态不执行 ⇒
-// 注册丢失，且 guest 会在实例化期报「无该 import」。无 `desktop-host` feature 的宿主
+// 注册丢失，且 guest 会在实例化期报「无该 import」。无 `common-host` feature 的宿主
 // （移动端 / 无头）**不应**注册——它没有插件宿主机制，桌面侧强制引用行同步
-// `#[cfg(feature = "desktop-host")]`。
-#[cfg(feature = "desktop-host")]
+// `#[cfg(feature = "common-host")]`。
+#[cfg(feature = "common-host")]
 inventory::submit! {
     ModuleEntry { module: &MODULE }
 }
@@ -145,12 +145,12 @@ inventory::submit! {
 ///
 /// 解析失败（字段缺失 / 类型不符）落默认档（`register_quota` 的 `None` 分支），
 /// 与「未声明」同形——既有插件零迁移。
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 use bedcode_server_base::constants::{
     PLUGIN_PTY_MAX_SESSIONS_PER_PLUGIN, PLUGIN_PTY_SESSIONS_CEILING_PER_PLUGIN,
 };
 
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 fn on_manifest_load(plugin_id: &str, manifest_json: &str) -> Result<(), String> {
     let declared: Option<usize> = serde_json::from_str::<serde_json::Value>(manifest_json)
         .ok()
@@ -173,7 +173,7 @@ fn on_manifest_load(plugin_id: &str, manifest_json: &str) -> Result<(), String> 
 /// 适配器：域内 `purge_for_plugin` 返回回收计数（关停面要用），而钩子契约是
 /// `fn(&str)`——回收计数对「单个插件停用」没有消费者，在此处就地记 debug 日志
 /// 吸收，不让返回值形状反向污染通用契约。
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 fn on_plugin_purge(plugin_id: &str) {
     let reclaimed = registry::purge_for_plugin(plugin_id);
     tracing::debug!(
@@ -187,19 +187,19 @@ fn on_plugin_purge(plugin_id: &str) {
 ///
 /// 内核侧改为遍历 `DomainHooksRegistry`，**不再点名本域**——这是内核能去掉对本
 /// crate 依赖的前提（批次 02 第三步摘依赖）。
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 pub static HOOKS: DomainHooks = DomainHooks {
     name: MODULE_NAME,
     on_manifest_load: Some(on_manifest_load),
     on_plugin_purge: Some(on_plugin_purge),
 };
 
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 bedcode_host_kit::submit_hooks!(HOOKS);
 
 /// 装载期配额仲裁的域侧单测（原内核 `manager/validation.rs` 两条用例迁此，
 /// 票 02 批次 03：判据随真源一起搬离内核）
-#[cfg(all(test, feature = "desktop-host"))]
+#[cfg(all(test, feature = "common-host"))]
 mod manifest_quota_tests {
     use super::*;
     use crate::plugin_binding::registry::quota_of;
@@ -240,7 +240,7 @@ mod manifest_quota_tests {
     }
 }
 
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 bindgen!({
     // provider 侧绑定：宿主自己的 `bedcode` 模块是 **guest 视角**（import 是调用
     // 函数，不是 `Host` trait + `add_to_linker`），能力 crate 要自己装配就必须生成
@@ -280,8 +280,8 @@ pub fn install<P: PtyPorts + 'static>(ports: P) {
 /// 宿主注入的是 `Arc<dyn Any>` 包着的 `Arc<dyn PtyPorts>`（能力域的端口类型只有
 /// 能力域自己认识，kit 与宿主都不能把它裸存进表），故这里向下转型后**克隆内层 Arc**。
 ///
-/// 依赖 `WasmPluginState`（host-kit 类型），随 `desktop-host` feature 编译。
-#[cfg(feature = "desktop-host")]
+/// 依赖 `WasmPluginState`（host-kit 类型），随 `common-host` feature 编译。
+#[cfg(feature = "common-host")]
 pub fn ports_for(state: &WasmPluginState) -> Arc<dyn PtyPorts> {
     match state
         .host
@@ -293,12 +293,12 @@ pub fn ports_for(state: &WasmPluginState) -> Arc<dyn PtyPorts> {
     }
 }
 
-// ==================== 宿主绑定层（Host trait 实现，`desktop-host` feature） ====================
+// ==================== 宿主绑定层（Host trait 实现，`common-host` feature） ====================
 //
 // 每个接口方法 = 一条 WIT 原语。权限门在 [`primitives`] 内的域函数里（随实现同迁，
 // 经端口问宿主结果），此层只做「取端口 → 转调 → 按 WIT `result` 形状返回」。
 
-#[cfg(feature = "desktop-host")]
+#[cfg(feature = "common-host")]
 impl bedcode::plugin::host_pty::Host for WasmPluginState {
     fn spawn(&mut self, config_json: String) -> Result<String, String> {
         primitives::pty_spawn(&ports_for(self), &self.plugin_id, &config_json)

@@ -11,24 +11,84 @@
 //! - 非 2xx 与业务码信封在执行器层的透出形态（`{status, body}`）
 //!
 //! 边界：插件侧的请求构造 / 响应分类纯函数锁在插件 crate
-//! （`wasm-apps/terminal-session/rust/src/session.rs` 单测）；无 token 的
-//! fail-visible 裁决锁在宿主 lib 单测（`resolve_jwt_auth_header` 三向）。
+//! （`wasm-apps/terminal-session/rust/src/session.rs` 单测）；jwtAuth 的
+//! 「注入 / 未开不注入 / 缺 token 即拒」三向锁在能力域 crate
+//! （`bedcode-server-http` egress 用例组），移动 adapter 的 token 取值口径
+//! 见 `bedcode-wasm-core` 的 `bare/host_impl/http.rs`。
+//!
+//! 2026-10-10 票 05：宿主自持的 `http_engine` 退役，出站执行并入能力域 crate
+//! （`bedcode-server-http::plugin_binding::egress::http_fetch`）。本文件因此改为
+//! 用一个**测试就地端口 impl** 驱动能力域真执行器：权限门 / 出站授权放行、
+//! 事件通道缺席（本套件不测流式）、token 取宿主全局态（`HostPorts::global_token`，
+//! 与生产同源）——即「宿主级调用者」形态，与插件调用共用同一执行本体。
 
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
 use actix_web::{web, App, HttpRequest, HttpResponse, HttpServer};
-use bedcode_mobile_lib::plugin::wasm_host::execute_http_request;
+use bedcode_server_http::plugin_binding::egress::http_fetch;
+use bedcode_server_http::plugin_binding::ports::{
+    BoxedBlocked, HttpEventSink, HttpPorts, OutboundAuth,
+};
+use bedcode_wasm_core_mobile::host_api::ports::HostEnginePorts;
 use bedcode_mobile_lib::state::{clear_global_token, set_global_token};
 use serde_json::{json, Value};
 
-/// 执行器包装（批次 2b：execute_http_request 增端口参数——用宿主真端口，
-/// jwtAuth 用例的 set_global_token / redirect 策略语义与迁移前一致）
-async fn exec(request: &serde_json::Value) -> anyhow::Result<serde_json::Value> {
-    let ports: std::sync::Arc<dyn bedcode_wasm_core_mobile::host_api::ports::HostEnginePorts> =
-        std::sync::Arc::new(bedcode_mobile_lib::plugin::host_ports::HostPorts);
-    execute_http_request(request, &ports).await
+/// 宿主级端口：能力域要求的三件宿主服务在本套件里都取「放行」形态
+///
+/// - 权限门：宿主自身发起（非插件 wasm 路径）→ 恒放行；
+/// - 出站授权：本套件锁的是 wire 契约与代注语义，目标为本地 loopback mock
+///   → 直接放行（生产里的三层判定 + 弹窗在 egress 引擎，另有其锁）；
+/// - 事件通道：缺席（本套件不覆盖流式）。
+struct HostLevelPorts;
+
+impl HttpPorts for HostLevelPorts {
+    fn check_permission(&self, _plugin_id: &str, _permission: &str, _api: &str) -> bool {
+        true
+    }
+
+    fn authorize_outbound(&self, _plugin_id: &str, url: &str, _may_prompt: bool) -> OutboundAuth {
+        OutboundAuth::Allowed {
+            origin: url.split(['/', '?']).take(3).collect::<Vec<_>>().join("/"),
+        }
+    }
+
+    fn event_sink(&self) -> Option<Arc<dyn HttpEventSink>> {
+        None
+    }
+
+    fn block_on_any(&self, fut: BoxedBlocked) -> Box<dyn std::any::Any + Send> {
+        // 用例体是 async：能力域的同步桥由 `tokio::task::block_in_place` 提供
+        // 阻塞上下文后，再用当前 runtime 句柄驱动（与适配器侧同法）。
+        // 直接返回端口要求的 `Box<dyn Any + Send>`——**不得再包一层 Box**
+        // （能力域按输出类型 downcast，多包一层即 panic 点名类型不符）。
+        tokio::runtime::Handle::current().block_on(fut)
+    }
+
+    /// token 与生产同源：读宿主全局态（`HostPorts::global_token`），
+    /// 空 = 未认证 ⇒ 显错（fail-visible，与生产 adapter 同文案）
+    fn jwt_auth_token(&self, _plugin_id: &str) -> Result<Option<String>, String> {
+        let token = bedcode_mobile_lib::plugin::host_ports::HostPorts.global_token();
+        if token.is_empty() {
+            Err("jwtAuth requested but no global token available (not authenticated)".to_string())
+        } else {
+            Ok(Some(token))
+        }
+    }
+}
+
+/// 执行器包装：源起能力域真执行器（同步接口），在异步用例里经 block_in_place 驱动
+async fn exec(request: &serde_json::Value) -> Result<Value, String> {
+    let request_json = request.to_string();
+    let plugin_id = "com.bedcode.terminal-session";
+    let ports: Arc<dyn HttpPorts> = Arc::new(HostLevelPorts);
+    tokio::task::block_in_place(|| {
+        // 非流式请求必带 `{status, body, headers}` 响应 JSON；解码失败 = 契约破损
+        let raw = http_fetch(&ports, plugin_id, &request_json, false)?
+            .expect("非流式请求必须返回响应体（None 是流式 ack 的形态）");
+        serde_json::from_str(&raw).map_err(|e| format!("response is not JSON: {e}"))
+    })
 }
 
 
@@ -371,7 +431,10 @@ async fn scenario_non_2xx_status_passes_through() {
 // ==================== 全文件串行入口 ====================
 
 /// 全局 token 共享静态：本二进制内场景必须串行（单入口按序驱动）。
-#[tokio::test]
+///
+/// `multi_thread` 为必需：能力域执行器走同步桥（`block_in_place`），current_thread
+/// runtime 上该调用直接 panic（tokio 语义），与生产「宿主从非异步调用点发起」同形。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn session_http_full_suite() {
     let _serial = SERIAL.lock().unwrap();
     scenario_list_wire_and_jwt().await;

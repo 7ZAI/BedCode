@@ -13,7 +13,7 @@ use crate::host_api::context::CapabilityTarget;
 use crate::manager::loader::PluginLoader;
 use crate::manager::registry::PluginRegistry;
 use crate::manager::runtime::{InstanceMeta, LoadedWasmPlugin, WasmHostContext, WasmRuntime};
-use crate::manager::types::{DesktopPluginInfo, LoadedPlugin, PluginSource};
+use crate::manager::types::{HostPluginInfo, LoadedPlugin, PluginSource};
 use crate::permission::PermissionManager;
 use crate::storage::PluginStorage;
 use bedcode_plugin_api::{PluginKind, PluginState, WasiPreopenDir, WsEndpointContribution};
@@ -856,9 +856,9 @@ impl PluginHost {
     // ==================== Lifecycle ====================
 
     /// 获取所有已加载插件的信息列表
-    pub async fn list_plugins(&self) -> Vec<DesktopPluginInfo> {
+    pub async fn list_plugins(&self) -> Vec<HostPluginInfo> {
         let plugins = self.plugins.read().await;
-        let list: Vec<DesktopPluginInfo> = plugins.values().map(DesktopPluginInfo::from).collect();
+        let list: Vec<HostPluginInfo> = plugins.values().map(HostPluginInfo::from).collect();
         tracing::debug!("[PluginHost] list_plugins() returning {} plugin(s)", list.len());
         for info in &list {
             tracing::debug!(
@@ -872,9 +872,9 @@ impl PluginHost {
     }
 
     /// 获取单个插件信息
-    pub async fn get_plugin(&self, plugin_id: &str) -> Option<DesktopPluginInfo> {
+    pub async fn get_plugin(&self, plugin_id: &str) -> Option<HostPluginInfo> {
         let plugins = self.plugins.read().await;
-        plugins.get(plugin_id).map(DesktopPluginInfo::from)
+        plugins.get(plugin_id).map(HostPluginInfo::from)
     }
 }
 

@@ -45,7 +45,7 @@ use crate::host_api::context::CapabilityTarget;
 /// 再出现任何能力域的字面量。
 pub(crate) const CAP_HOST_STORAGE: &str = "host-storage";
 
-/// auth-policy 能力（票 12 C3，desktop 独有——认证中心能力，双端偏离同 host-auth）：
+/// auth-policy 能力（票 12 C3，桌面独有——认证中心能力，双端偏离同 host-auth）：
 /// 认证中心导出 `verify-device-token` 策略，宿主 server 中间件验签后取策略。
 /// 与其他路由能力不同，本能力**不进注册表路由**（消费方是宿主中间件而非
 /// 插件 import）——中间件按插件 ID 直查认证中心实例，见

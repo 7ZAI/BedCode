@@ -230,7 +230,7 @@ impl CommandGuest for ComponentTestPlugin {
                 }
                 // 主连接事实读取（票 13 复用同一原语；无头测试断言其可调用性）
                 Some("ts-primary-target") => {
-                    match bedcode::plugin::host_connection::primary_target() {
+                    match bedcode::plugin::host_connection_target::primary_target() {
                         Ok(json) => {
                             return serde_json::json!({ "ok": true, "target": json }).to_string()
                         }

@@ -1,7 +1,7 @@
 [package]
 name = "bedcode-server-websocket"
 version = "0.1.0"
-description = "BedCode 桌面 WebSocket 传输面：连接骨架/插件端点通道/连接与端点注册表/生命周期与优雅停机 + host-websocket 能力域的插件绑定层（server-lib-split 票 05 / wasm-core-lib-split 票 04）。默认形态 = 纯引擎机制 + 端口抽象（零 WIT 依赖），任何宿主可直接引用；`desktop-host` feature 装配 WIT 绑定层（bindgen!/HostModule/inventory/impl Host）——能力域脱绑 P3"
+description = "BedCode 桌面 WebSocket 传输面：连接骨架/插件端点通道/连接与端点注册表/生命周期与优雅停机 + host-websocket 能力域的插件绑定层（server-lib-split 票 05 / wasm-core-lib-split 票 04）。默认形态 = 纯引擎机制 + 端口抽象（零 WIT 依赖），任何宿主可直接引用；`common-host` feature 装配 WIT 绑定层（bindgen!/HostModule/inventory/impl Host）——能力域脱绑 P3"
 authors = ["binblink"]
 edition = "2021"
 
@@ -11,7 +11,7 @@ default = []
 # 桌面宿主 WIT 绑定层（bindgen!/HostModule/inventory::submit!/impl Host）；
 # 语义 = 装配桌面 WIT 依赖，行为与开 feature 前逐字不变
 # （ABI / WIT / 权限位 / 事件形状 / inventory 注册零变化）。
-desktop-host = ["dep:bedcode-host-kit", "dep:wasmtime", "dep:wit-bindgen", "dep:inventory"]
+common-host = ["dep:bedcode-host-kit", "dep:wasmtime", "dep:wit-bindgen", "dep:inventory"]
 
 [dependencies]
 # Actix：WS actor（conn 骨架）、actix-web-actors 握手、actix-rt 独立 runtime 线程
@@ -33,7 +33,7 @@ bedcode-server-base = { path = "../bedcode-server-base" }
 # 内核层（流量过滤链 / 链路加密 / 指标 / 组合装配 serve + TransportFace）
 bedcode-server-core = { path = "../bedcode-server-core" }
 # ==================== 插件绑定层（host-websocket 能力域，wasm-core-lib-split 票 04） ====================
-# 全部 optional：只随 `desktop-host` feature 进编译图（能力域脱绑 P3）——
+# 全部 optional：只随 `common-host` feature 进编译图（能力域脱绑 P3）——
 # 无 feature 时 `cargo tree` 不出现以下任何 crate（纯引擎形态）。
 # 机制内核：插件实例状态（`add_to_linker::<S,D>` 的单态 S 必须在本 crate 可命名）
 bedcode-host-kit = { path = "../bedcode-host-kit", optional = true }
