@@ -1,23 +1,22 @@
 package bedcode:plugin;
 // ======================================================================
-// 对等网络能力域自持 bindgen 分片（票 05 · 能力域 crate 改 bindgen 自持分片）
+// 对等网络能力域自持 bindgen 分片
 //
 // 本文件是 `bedcode-server-peer-net` 为**自己 bindgen** 的契约分片
-// （`world cap-peer { import host-peer; }`）——契约面不再绑端 WIT
-// （spec §1.2 第一性问题的最终解决）。
+// （`world cap-peer { import host-peer; }`）——契约面不绑端 WIT：
+// 宿主能力接口由能力域 crate 自己持有，端生成物由 compose.json 驱动。
 //
-// 与端组合的关系（票 03 §2 / 票 05 §3 摆法）：`host-peer` 是双端全等交集，
-// 权威定义在 `wasm-core/wit/core.wit`（端生成物由 core 并入，端组合**不用本
-// 文件**）；本文件是**另一 package 实例的同名定义**（不同目录 = 不同 package，
-// 二者不冲突）——两处函数集必须逐字一致，漂移即红（票 03 漂移锁守护 core.wit
-// 侧；本票实施记录留显式 diff 证据）。
+// 与端组合的关系：`host-peer` 是双端全等交集，权威定义在
+// `wasm-core/wit/core.wit`（端生成物由 core 并入，端组合**不用本文件**）；
+// 本文件是**另一 package 实例的同名定义**（不同目录 = 不同 package，
+// 二者不冲突）——两处函数集必须逐字一致，漂移即红。
 //
 // 分片只换绑定源、不换装配语义：`impl Host` / `HostModule` / `MODULE_*` / `DESC`
-// 与 WIT 契约的函数集逐字一致（票 05 票面 §1 步骤 3）。
+// 与 WIT 契约的函数集逐字一致。
 // ======================================================================
 
-/// 对等网络基础能力（issue 12 切换后：宿主只提供能力原语，
-/// file-transfer 插件是首个上层消费者）
+/// 对等网络基础能力：宿主只提供能力原语，
+/// file-transfer 插件是首个上层消费者
 ///
 /// 发现/信任/拨号/收发/浏览的引擎全部在宿主 peer-net 层；本接口只是
 /// 命令面的 WASM 投影。DTO 一律 JSON 字符串承载（camelCase，与 Tauri
@@ -68,12 +67,14 @@ interface host-peer {
     /// 中断的以句柄表记忆的源清单重新拨号续传（断点真源在接收端落盘侧）。
     /// 无命中返回错误
     resume-transfer: func(batch-id: string) -> result<_, string>;
-    /// 恢复全部暂停的发送批：「全部」编排归插件——遍历自己的暂停批逐个调
-    /// resume-transfer（并发节流由插件侧闸门自控），宿主句柄表不再承担批量
-    /// 调度。旧产物 import 本函数在实例化期被拒（fail-visible 三形态②）
-    /// 全量幂等替换引擎广播源（ADR 0022 v2）：条目 `[{ id, name, path }]`
-    /// （camelCase JSON；移动端 SAF 树以 `safTreeUri` 字段替代 `path`）。
-    /// 注册表 CRUD 真源在插件侧，本函数只同步暴露面镜像；任一条目非法整批拒绝
+    /// 批量恢复暂停的发送批：**本接口不提供**——「全部」编排归插件自己
+    /// 完成（遍历暂停批逐个调 [`resume-transfer`]，并发节流由插件侧闸门
+    /// 自控），宿主句柄表不做批量调度。该批量函数已删除：旧产物 import
+    /// 它在实例化期因缺失 interface 显性失败（按当前 SDK 重建）
+    /// 全量幂等替换本插件声明的共享根清单（ADR 0022 v2）：
+    /// 条目 `[{ id, name, path }]`（camelCase JSON；移动端 SAF 树以
+    /// `safTreeUri` 字段替代 `path`）。注册表 CRUD 真源在插件侧，本函数
+    /// 只同步暴露面镜像；任一条目非法整批拒绝
     set-shared-roots: func(dirs-json: string) -> result<_, string>;
     /// 浏览对端共享根清单 → PeerSharedRootDto JSON 数组（仅 session 句柄寻址；
     /// 连接已断时以句柄记忆的 endpoint 自动重拨）
@@ -89,7 +90,7 @@ interface host-peer {
     /// 设置接收落点目录（空串 = 恢复默认 Downloads\BedCode\；引擎落盘配置原语，
     /// ADR 0022 v3）
     set-download-dir: func(path: string) -> result<_, string>;
-    /// 按需启动本机 peer 节点（引擎级生命周期原语，审计票 12）：数据目录与设备名
+    /// 按需启动本机 peer 节点（引擎级生命周期原语）：数据目录与设备名
     /// 由宿主解析，起来后开始广播与监听。幂等——节点已在跑时返回 false（未改变状态）。
     ///
     /// 属主语义：把节点从「未跑」带到「跑」的那次调用，其调用方成为节点属主；

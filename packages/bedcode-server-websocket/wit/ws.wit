@@ -1,21 +1,20 @@
 package bedcode:plugin;
 // ======================================================================
-// WebSocket 能力域自持 bindgen 分片（票 05 · 能力域 crate 改 bindgen 自持分片）
+// WebSocket 能力域自持 bindgen 分片
 //
 // 本文件是 `bedcode-server-websocket` 为**自己 bindgen** 的契约分片
 // （`world cap-ws` 同时 import 客户端 `host-websocket` 与服务端
-// `host-websocket-server`，crate 的 `Host` impl 覆盖两者）——契约面不再绑端
-// WIT（spec §1.2 第一性问题的最终解决）。
+// `host-websocket-server`，crate 的 `Host` impl 覆盖两者）——契约面不绑端
+// WIT：宿主能力接口由能力域 crate 自己持有，端生成物由 compose.json 驱动。
 //
-// 与端组合的关系（票 05 §3 摆法）：本文件与端 cap 真源
+// 与端组合的关系：本文件与端 cap 真源
 // `plugin-sdk-desktop/rust/wit-src/cap-ws.wit` 是**不同 package 实例的同名定义**
 // （不同目录 = 不同 package，二者不冲突）。`host-websocket`（双端交集切片）在
 // 本文件的段落是 `wasm-core/wit/core.wit` 的逐字副本——两处函数集必须逐字一致，
-// 漂移即红（票 03 漂移锁守护 core.wit 侧；本票实施记录留显式 diff 证据）。
-// 端组合**不用本文件**：端生成物由 compose.json caps.ws（→ wit-src 真源）拼装。
+// 漂移即红；端组合**不用本文件**：端生成物由 compose.json caps.ws（→ wit-src 真源）拼装。
 //
 // 分片只换绑定源、不换装配语义：`impl Host` / `HostModule` / `MODULE_*` / `DESC`
-// 与 WIT 契约的函数集逐字一致（票 05 票面 §1 步骤 3）。
+// 与 WIT 契约的函数集逐字一致。
 // ======================================================================
 
 /// WebSocket 基础能力（v14 起；双端交集切片 = 客户端域 5 函数）
@@ -47,7 +46,7 @@ interface host-websocket {
     is-connected: func(handle: string) -> result<bool, string>;
 }
 // ======================================================================
-/// WebSocket 服务端域（桌面扩展分片，票 04 自 `host-websocket` 拆出）
+/// WebSocket 服务端域（桌面扩展分片，自 `host-websocket` 拆出）
 ///
 /// 双端交集切片：客户端域（出站连接 5 函数）已收拢进共享核心
 /// `wasm-core/wit/core.wit` 的 `host-websocket`；本 interface 只剩桌面独有
@@ -55,12 +54,12 @@ interface host-websocket {
 /// 移动端不跑 WS 服务器（ADR 0018 移动端是消费端），服务端域与「插件入站
 /// 端点」语义在本端**不存在**，不跟演（ADR 0019 双端偏离）。
 ///
-/// 属主隔离（spec §2.3 / D6）：**全部函数仅属主可调**（他人句柄/端点 → Err，
+/// 属主隔离：**全部函数仅属主可调**（他人句柄/端点 → Err，
 /// `not owner of ws handle`）；插件停用时宿主自动回收其全部句柄与端点。
 /// 权限：服务端域需 `ws:server`。
 ///
-/// 事件投递（D2/D3）：状态事件经 host-bus 订阅，走**属主私有命名空间**
-/// （`<owner>::…`，票 05：跨属主订阅在宿主侧显式拒绝，他人既订不到也伪投递不进；
+/// 事件投递：状态事件经 host-bus 订阅，走**属主私有命名空间**
+/// （`<owner>::…`，跨属主订阅在宿主侧显式拒绝，他人既订不到也伪投递不进；
 /// 构造一律用 SDK `ws_event_topic`，勿手拼），标识在 payload：
 ///   服务端域  `<owner>::ws:client-connect` / `<owner>::ws:client-disconnect`
 /// 插件**须在 activate 期（或首次 register-endpoint 之前）完成订阅**：
@@ -70,20 +69,20 @@ interface host-websocket {
 interface host-websocket-server {
     // ==================== 服务端域（入站端点） ====================
     /// 在宿主 WS 服务器挂载插件端点（实际路径 `/ws/plugin/<plugin-id>/<path>`，
-    /// 命名空间段由宿主注入，插件只提供后缀，D5）。
+    /// 命名空间段由宿主注入，插件只提供后缀）。
     /// config-json（camelCase）纯引擎参数：
     /// `{ path, auth?, max-message-bytes?, max-clients? }`
     /// auth = "none"（默认：跳过首消息认证状态机，插件自管认证）
-    ///      | "jwt"（宿主校验首消息 `{"type":"auth","token":"<jwt>"}`，D8）。
+    ///      | "jwt"（宿主校验首消息 `{"type":"auth","token":"<jwt>"}`）。
     /// path 非法（空、含 `/`、含 `.`、超长）或与本插件已注册端点冲突 → 错误
     /// （跨插件不冲突：路径含 plugin-id 段）。返回端点句柄 `wse-<uuid>`。
-    /// 端点存在期间的每一帧都经宿主流过滤器链（D9）
+    /// 端点存在期间的每一帧都经宿主流过滤器链
     register-endpoint: func(config-json: string) -> result<string, string>;
-    /// 向端点的指定客户端发文本帧；客户端不存在/队列满 → 错误（D10）
+    /// 向端点的指定客户端发文本帧；客户端不存在/队列满 → 错误
     send-text-to-client: func(endpoint-id: string, client-id: string, text: string) -> result<_, string>;
     /// 向端点的指定客户端发二进制帧
     send-binary-to-client: func(endpoint-id: string, client-id: string, payload: list<u8>) -> result<_, string>;
-    /// 向端点全部客户端广播文本帧 → 成功入队客户端数（部分失败不回滚，D10）
+    /// 向端点全部客户端广播文本帧 → 成功入队客户端数（部分失败不回滚）
     broadcast-text: func(endpoint-id: string, text: string) -> result<u32, string>;
     /// 向端点全部客户端广播二进制帧 → 成功入队客户端数
     broadcast-binary: func(endpoint-id: string, payload: list<u8>) -> result<u32, string>;
@@ -94,7 +93,7 @@ interface host-websocket-server {
     unregister-endpoint: func(endpoint-id: string) -> result<bool, string>;
     /// 端点在线的客户端清单 → JSON 数组
     /// `[{ clientId, addr, authenticated, connectedAt }]`（camelCase）；
-    /// 供插件在丢失 client-connect 事件后自愈（D3）；仅属主可查
+    /// 供插件在丢失 client-connect 事件后自愈；仅属主可查
     list-clients: func(endpoint-id: string) -> result<string, string>;
     /// 本插件已注册端点清单 → JSON 数组 `[{ endpointId, path, clientCount }]`；
     /// 仅属主可查
@@ -102,10 +101,10 @@ interface host-websocket-server {
 
     // ==================== v28：连接上下文（安全/连接事实，零业务派生） ====================
 
-    /// 查询端点指定客户端的**已脱敏**连接/认证上下文（websocket 业务下沉专项票 02）。
+    /// 查询端点指定客户端的**已脱敏**连接/认证上下文。
     ///
     /// 返回值只含连接/认证**事实**，不包含会话、设备在线判定、配对记录或任何业务
-    /// 派生字段（spec §3.1）：
+    /// 派生字段：
     ///
     /// ```json
     /// {

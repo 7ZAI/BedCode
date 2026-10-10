@@ -1,6 +1,6 @@
 package bedcode:plugin;
 
-// 移动端插件契约——**端扩展分片**（票 03：共享核心 interface 在 `wasm-core/wit/core.wit`，
+// 移动端插件契约——**端扩展分片**（共享核心 interface 在 `wasm-core/wit/core.wit`，
 // 本文件只承载移动独有 / 非等接口；端 `wit/` 目录由 `scripts/compose-wit.mjs` 拼装生成）
 //
 // 与桌面端 WIT 的差异维护在 docs/implementation-plans/mobile-wasmtime-component-migration.md §3.2：
@@ -25,20 +25,20 @@ package bedcode:plugin;
 /// - v10：host-mdns v2（advertise / stop-advertise / is-advertising 原语 +
 ///   事件定向投递 `mdns:found.<owner>` / `mdns:lost.<owner>`），纯增量；
 ///   v17 起 topic 统一到 `<owner>::mdns:found|lost`（wire 对齐桌面终态，
-///   函数签名不变无 ABI 破坏，双端共享 lib spec M3）
+///   函数签名不变无 ABI 破坏，双端共享 lib 同源）
 /// - v15：终端输出流窄转发（host-terminal-stream.forward-output，C3 二进制
 ///   出口）+ 主连接事实读取（host-connection.primary-target，与桌面同名
 ///   不同形）+ host-websocket config 增强（jwt-auth / heartbeat-secs /
 ///   auto-reconnect，零 WIT 形状变化）。纯增量，v14 产物不受影响
-/// - v16：认证 / 配对编排下沉（票 14 阶段 B）：新增 host-auth 认证引擎面
+/// - v16：认证 / 配对编排下沉：新增 host-auth 认证引擎面
 ///   （5 函数：request-pairing / verify-pairing-code / qr-connect /
 ///   biometric-authenticate / has-credentials，凭据零过境）+ 权限位 `auth`。
 ///   纯增量，v15 产物不受影响
-/// - v17：host-terminal / terminal-hooks 整面退役（票 15 阶段 B，终端 UI 域
+/// - v17：host-terminal / terminal-hooks 整面退役（终端 UI 域
 ///   已随阶段 A 整体迁入插件前端、退役面零消费者）：import `host-terminal`
 ///   （send）与导出 `terminal-hooks`（on-terminal-input / on-terminal-output）
 ///   删除 + 权限位 `terminal:input` 退役。**破坏性收缩**：v16 及更早产物在
-///   v17 宿主实例化期因缺失 import interface 被点名失败（fail-visible ②），
+///   v17 宿主实例化期因缺失 import interface 被点名失败，
 ///   须随 SDK 重编译；内置插件随 APK 同分发无旧产物。`terminal:output`
 ///   保留（host-terminal-stream.forward-output 权限门）
 /// - v18：通知 / 震动 / 声音整族封装（新增移动特有域 `host-notify`，5 函数：
@@ -46,7 +46,7 @@ package bedcode:plugin;
 ///   request-permission / vibrate / play-sound）+ 权限位 `notify`
 ///   （fail-closed）。原 `host-events.notify` 收编迁入（host-events 回归
 ///   纯事件语义，只剩 emit）。**破坏性收缩**：v17 及更早产物在 v18 宿主
-///   实例化期因缺失 import 函数被点名失败（fail-visible ②），须随 SDK
+///   实例化期因缺失 import 函数被点名失败，须随 SDK
 ///   重编译；内置插件随 APK 同分发无旧产物
 
 /// 系统通知与提醒反馈（移动端特有，ABI v18 新增——桌面不跟演，ADR 0018）
@@ -59,7 +59,7 @@ package bedcode:plugin;
 ///
 /// 本域 v18 收编原 `host-events.notify`（旧形震动/声音硬编码 true）——
 /// **破坏性收缩**：**引用了 `host-events.notify` 的** v17 及更早产物在 v18
-/// 宿主实例化期因缺失 import 函数被点名失败（fail-visible ②），须随 SDK
+/// 宿主实例化期因缺失 import 函数被点名失败，须随 SDK
 /// 重编译（组件 import 按实际使用面声明，未引用者不受影响）；内置插件零
 /// 消费者且随 APK 同分发，产物随本版全量重建。
 ///
@@ -93,7 +93,7 @@ interface host-fs-mobile {
     /// 移动端特有：弹系统保存对话框把已授权文件存入用户选择的位置
     save-to-document: func(src-path: string, display-name: string, mime-type: string) -> result<_, string>;
 }
-/// 终端输出流窄转发（ABI v15 新增，票 12）
+/// 终端输出流窄转发（ABI v15 新增）
 ///
 /// 把插件消费到的终端输出**裸字节**交宿主转发到已登记的前端页面通道
 /// （Tauri Channel 由前端创建、经宿主命令 `terminal_page_subscribe` 登记，
@@ -109,18 +109,18 @@ interface host-fs-mobile {
 /// 权限位 `terminal:output`（既有词汇复用，fail-closed）。
 /// 插件停用时登记的通道随宿主窄转发层 purge 回收。
 ///
-/// 消费者：`com.bedcode.terminal-session`（终端订阅协议客户端，票 12）。
+/// 消费者：`com.bedcode.terminal-session`（终端订阅协议客户端）。
 interface host-terminal-stream {
     /// 转发一段输出字节到 session-id 对应的前端页面通道（裸字节原样投递）。
     /// 通道未登记（页面未订阅 / 已卸载）→ Err：字节由调用方丢弃（页面重进
     /// 时经重订阅回放补齐，与退役前宿主门控丢弃语义一致），宿主不缓存
     forward-output: func(session-id: string, data: list<u8>) -> result<_, string>;
 }
-/// 主连接事实读取（ABI v15 新增，票 12；票 13 会话控制迁插件复用同一地基）
+/// 主连接事实读取（ABI v15 新增；会话控制迁插件复用同一地基）
 ///
 /// **与桌面 `host-connection` 同名不同形**：桌面是 15 函数连接上下文域，
-/// 移动端只暴露 1 函数引擎事实（C8 同款「同名 ≠ 契约同一」，须登记
-/// ADR 0018 双端偏离表）。**无权限门**（对齐 host-platform 例外先例）：
+/// 移动端只暴露 1 函数引擎事实（与桌面 `host-connection` 同名不同形的
+/// 双端偏离，须登记 ADR 0018 双端偏离表）。**无权限门**（对齐 host-platform 例外先例）：
 /// 返回的是局域网服务地址等连接事实（非凭据、非隐私），地址不入日志
 /// 明文红线不受影响；真正的风险面是连接行为本身，已由 `ws:client` /
 /// `network:http` 等权限位门控。
@@ -131,7 +131,7 @@ interface host-connection {
     /// 从未配置过任何目标 → Err（fail-visible，禁「返回空对象」）
     primary-target: func() -> result<string, string>;
 }
-/// 设备入场认证引擎面（ABI v16 新增，票 14 阶段 B：认证 / 配对编排下沉）
+/// 设备入场认证引擎面（ABI v16 新增：认证 / 配对编排下沉）
 ///
 /// **编排在本域的调用方插件，密码学与凭据在宿主**（C4 红线）：设备身份文件 /
 /// JWT 持有 / `AuthHttpClient` / 生物凭证绑定与 Keystore 签名全部留在宿主
@@ -139,8 +139,7 @@ interface host-connection {
 /// 插件，流程顺序（请求配对 → 等码 → 验码 / QR / 生物挑战）由插件编排。
 ///
 /// **凭据零过境**：认证成功后 JWT 由宿主 `apply_auth_success` 落地（global
-/// token + 凭据表），本域**不向插件返回任何凭据材料**（对齐票 12「token 不
-/// 落插件」先例）；前端持久化镜像经宿主窄读命令 `ws_get_auth_credentials`
+/// token + 凭据表），本域**不向插件返回任何凭据材料**（token 不落插件）；前端持久化镜像经宿主窄读命令 `ws_get_auth_credentials`
 /// 直接读引擎，不经插件。
 ///
 /// 同步阻塞语义（与 `host-websocket.connect` 同款裁决）：host fn 在同步
@@ -149,7 +148,7 @@ interface host-connection {
 /// 权限位 `auth`（fail-closed，未声明即拒）：本域触发设备入场认证与凭据
 /// 落地，是安全敏感面，不与任何既有能力混位。
 ///
-/// 消费者：`com.bedcode.terminal-session`（配对 / 认证编排域，票 14 阶段 B）。
+/// 消费者：`com.bedcode.terminal-session`（配对 / 认证编排域）。
 interface host-auth {
     /// 请求配对（HTTP `POST /api/auth/request-pairing`）：桌面端生成一次性
     /// 配对码并展示。Ok(()) = 桌面端受理（进入等码态）；Err = 网络故障 /
@@ -180,7 +179,7 @@ interface events {
 }
 // 端扩展 world：import/export 并入合成后的 `plugin` world（include cap-mobile）
 //
-// 票 04：`host-fs` 交集 6、`host-http`（fetch）、`host-websocket`（客户端 5 =
+// `host-fs` 交集 6、`host-http`（fetch）、`host-websocket`（客户端 5 =
 // 交集完整）已收拢进共享核心 core.wit，本 world 不再 import 它们；本端独有
 // `host-fs-mobile` 2 函数（SAF/媒体下载目录）留在本文件。
 world cap-mobile {

@@ -2,7 +2,7 @@ package bedcode:plugin;
 
 /// BedCode 插件 Component Model 契约
 ///
-/// 桌面端插件契约——**端扩展分片**（票 03：共享核心在 `wasm-core/wit/core.wit`，
+/// 桌面端插件契约——**端扩展分片**（共享核心在 `wasm-core/wit/core.wit`，
 /// 本文件只承载桌面独有 / 非等接口与附加 world；端 `wit/` 目录由
 /// `scripts/compose-wit.mjs` 拼装生成，本文件是其真源）。
 ///
@@ -39,7 +39,7 @@ package bedcode:plugin;
 ///   + 可选导出 events-binary（宿主动态探测，旧插件不受影响）
 /// - v13：host-mdns v2（advertise / stop-advertise / is-advertising 原语 +
 ///   事件定向投递 `mdns:found.<owner>` / `mdns:lost.<owner>`——当时形态，
-///   票 05 起为 `<owner>::mdns:found|lost`），纯增量
+///   后改为 `<owner>::mdns:found|lost`），纯增量
 /// - v14：host-websocket 基础能力服务（客户端域 connect/send/close/
 ///   is-connected + 服务端域 register-endpoint/收发/广播/踢出/注销/清单）
 ///   + 可选导出 events-ws（宿主动态探测），纯增量，v13 插件不受影响
@@ -47,7 +47,7 @@ package bedcode:plugin;
 ///   持久化），纯增量，v14 插件不受影响
 /// - v16：host-pty 插件私有伪终端原语（spawn/write/resize/kill/ring-fetch/
 ///   is-running 六函数 + `<owner>::pty:exit` 事件），纯增量新接口，
-///   v15 及更早插件不受影响。**2026-09-24 票 05**：spawn config-json 追加可选字段
+///   v15 及更早插件不受影响。**2026-09-24**：spawn config-json 追加可选字段
 ///   `hostBroadcastSessionId`（宿主只读订阅声明，字段级追加不 bump——同 v19 惯例；
 ///   **该字段已于 v28 退役**，见下方 v28 条目）
 /// - v17：认证策略导出 auth-policy（verify-device-token，desktop 独有——认证中心
@@ -57,8 +57,8 @@ package bedcode:plugin;
 ///   宿主侧追加批次），既有 interface 的函数级追加，v17 及更早插件不受影响
 /// - v19：host-session 配置面（config-upsert / config-get / config-delete，
 ///   desktop 独有——会话语义下沉批次之二，权限 `session:config`），既有
-///   interface 的函数级追加，v18 及更早插件不受影响。票 11 同 v19 再加两函数：
-///   `annotate`（会话注解槽写入，权限 `session:write`——spec D5 内核去业务化：
+///   interface 的函数级追加，v18 及更早插件不受影响。v19 同批再加两函数：
+///   `annotate`（会话注解槽写入，权限 `session:write`——内核去业务化：
 ///   旧任务字段的 expand 期并行写入面）+ `connections-list`（连接注册表原始
 ///   记录清单，无排序无解读，权限 `session:read`——设备派生视图真源）
 /// - v20：host-task 宿主并发任务域（execute-batch / submit / status / cancel /
@@ -94,11 +94,11 @@ package bedcode:plugin;
 ///   路由：内部端点段 + 可选对外 URL 别名 + 方法 + `jwt`/`none` 认证档位；
 ///   命名空间由插件名承载，激活期同名拒绝 fail-visible）。函数级追加，旧产物仍可
 ///   实例化但不具备注册能力。权威记账在 SDK `rust/src/abi.rs`
-/// - **v30（传输编排下沉专项票 1，2026-09-25）**：host-peer 函数级追加
+/// - **v30（传输编排下沉，2026-09-25）**：host-peer 函数级追加
 ///   `active-transfers`（会话表投影查询，事件归约首屏兜底）+ `collect-outgoing`
 ///   （发送源枚举：目录递归 + 批内同名去重，仅元数据）。纯增量，v29 及更早
 ///   插件不受影响。权威记账在 SDK `rust/src/abi.rs`
-/// - **v31（传输编排下沉专项票 3，2026-09-25，破坏性）**：host-peer 删
+/// - **v31（传输编排下沉，2026-09-25，破坏性）**：host-peer 删
 ///   `resume-all-transfers`（“全部恢复”编排归插件逐批调 `resume-transfer`）、
 ///   `send-files` 语义收窄为“一次调用 = 一个会话立即发起”（载荷 `concurrency` 字段
 ///   退役，运行期显性报错），旧快照 topic `peer:transfer` / `peer:receive` 退役。
@@ -111,13 +111,13 @@ package bedcode:plugin;
 ///   点明 v33 重建）。token wire 格式逐字节不变，移动端零改动。**desktop 独有**，
 ///   移动端 WIT/ABI/SDK 不跟演不投影（mobile ABI 保持 11）。
 ///
-/// **不 bump 版本号的语义变更（审计票 05，落在 v22 批次内）**：host-bus topic 命名空间。
+/// **不 bump 版本号的语义变更（落在 v22 批次内）**：host-bus topic 命名空间。
 /// 函数签名零变化，故不动版本号；但**定向事件的 topic 串**由 `<base>.<owner>` 改为
 /// `<owner>::<base>`，且跨属主的订阅/伪发布由「无人拦截」改为**宿主显式拒绝**。
 /// 旧产物不兼容且不会静默断流：按旧形态订阅会在 activate 期拿到点明新形态的错误，
 /// 必须按 v22 SDK（`owned_topic` / `*_event_topic`）重建。宿主独有能力面
 /// （host-pty / host-websocket / host-mdns 的定向事件）；移动端 host-mdns 仍用旧形态，
-/// 双端偏离登记见 ADR 0022「双端偏离」口径与 `.scratch/2026-09-21-wasm-core-audit/issues/05-bus-topic-acl.md`
+/// 双端偏离登记见 ADR 0022「双端偏离」口径。
 ///
 /// **同样不 bump 的第二例（系统文件选择器权限门，2026-09-27）**：`host-platform` 的
 /// `pick-files` / `pick-folder` / `pick-folders` 由「选择即授权、不设门」改为
@@ -141,10 +141,9 @@ package bedcode:plugin;
 /// 与上一例的权限门同型。入站方向 `register-endpoint` 零改动（策略只管出站）。
 /// 旧插件不会被静默断流：它若访问新 origin，会拿到显式的授权拒绝 `Err`（错误分类与
 /// 文案同 fs 侧授权拒绝），用户在弹窗点一次允许即恢复——不兼容但可自愈，故不 bump。
-/// 权威记账在 ADR 0022「授权策略 = 安全闸门」节与
-/// `.scratch/2026-09-27-host-authorization-policy/`。
+/// 权威记账在 ADR 0022「授权策略 = 安全闸门」节。
 /// **双端偏离**：移动端是自持业务 App，出站授权由其自身 SAF / 网络策略承担，不跟演本条。
-/// v36 切片（票 02 批次 06）：`form`（桌面独有形态声明）拆入 [`abi-form`]，
+/// v36 切片：`form`（桌面独有形态声明）拆入 [`abi-form`]，
 /// 本接口只剩双端交集 `version`。
 
 /// 通知（v36 自 `host-events` 拆出，双端交集切片——桌面独有；移动端收编在
@@ -156,7 +155,7 @@ interface host-events-desktop {
 /// 文件浏览域桌面扩展（v36 自 `host-fs` 拆出，双端交集切片——桌面独有 3 函数；
 /// `host-fs` 交集 6 函数已收拢进共享核心 core.wit）
 interface host-fs-desktop {
-    /// v19 函数级追加（票 03 文件浏览域）：目录直读。
+    /// v19 函数级追加（文件浏览域）：目录直读。
     /// 返回 JSON 数组 `[{name, nodeType}]`——`nodeType` ∈ `"folder" | "file" |
     /// "other"`（宿主 `DirEntry::file_type` 语义：symlink / 特殊条目为 "other"，
     /// 与宿主 scan_dir 跳过「非目录非文件」条目一致）。权限 `fs:read` + fs_auth。
@@ -175,13 +174,13 @@ interface host-platform-desktop {
     /// 系统多目录选择器 → string[] JSON（用户取消为空数组）。
     /// 权限 `fs:pick` + 选择后授权校验，口径同 `host-platform` 的 `pick-files`
     pick-folders: func() -> result<string, string>;
-    /// WSL 发行版名枚举（v19 函数级追加，票 13）：`string[]` JSON，顺序即
+    /// WSL 发行版名枚举（v19 函数级追加）：`string[]` JSON，顺序即
     /// `wsl --list --verbose` 输出顺序。宿主无 WSL（非 Windows / 未安装 /
     /// 命令不可用）时**显性报错**而非空数组——空数组会被消费方读成「装了 0 个
     /// 发行版」，与「本机没有 WSL」不可区分（会话配置表单据此决定渲染下拉还是
     /// 「未检测到 WSL」提示）。平台事实、无业务语义（ADR 0022 裁剪线）。
     wsl-distros: func() -> result<string, string>;
-    /// 本机可访问的 IPv4 地址枚举（v19 函数级追加，票 14）：`string[]` JSON，
+    /// 本机可访问的 IPv4 地址枚举（v19 函数级追加）：`string[]` JSON，
     /// 已排除回环与链路本地（与会话中心设备页原宿主命令 `get_local_ip_addresses`
     /// 同口径），顺序即网卡枚举顺序。设备页据此渲染「移动端可访问的 IP」下拉。
     /// 平台事实、无业务语义（ADR 0022 裁剪线）；地址为空（无可用网卡）时返回
@@ -197,7 +196,7 @@ interface host-platform-desktop {
     /// 与 `pick-*` 同口径：定位是**平台交互动作、不读取任何数据**（路径本就由调用方
     /// 提供），故**不叠加权限门**（ADR 0022 裁剪线）；原先挂在宿主命令
     /// `plugin_reveal_in_dir` + `system:open` 权限上的形态是「能力已存在但没有原语」
-    /// 的遗留形态（见 `.scratch/2026-09-21-host-rust-residue/issues/04`）。
+    /// 的遗留形态（宿主命令面有授能力、但插件侧无原语可调）。
     reveal-in-dir: func(path: string) -> result<_, string>;
 }
 /// 插件互调（ADR-0017）：发布 JSON-RPC 请求 + 同步等待回复
@@ -221,7 +220,7 @@ interface host-timer {
 interface host-process {
     run: func(request-json: string) -> result<string, string>;
     kill: func(run-id: string) -> result<_, string>;
-    /// v19 函数级追加（票 03/04 工作区 git 域）：**同步**执行并捕获输出。
+    /// v19 函数级追加（工作区 git 域）：**同步**执行并捕获输出。
     /// request-json 同 `run`（command / args / cwd / env / timeout_ms，无
     /// output_path——输出由宿主捕获）；返回
     /// `{exitCode, stdout, stderr, timedOut}`。同步阻塞等待进程结束，供插件
@@ -257,29 +256,28 @@ interface host-app {
     /// 插件未加载 / 宿主服务不可用 → `Err`（不静默返回空串）。
     plugin-resource-dir: func() -> result<string, string>;
 }
-/// 宿主 server 的在册连接清单（票 04，自 `host-session.connections-list` 迁出）
+/// 宿主 server 的在册连接清单（自 `host-session.connections-list` 迁出）
 ///
 /// **为什么单独成 interface**：这份事实的主语是宿主 WS 服务的连接注册表
 /// （`WsSessionRegistry`），不是插件自己开的 socket（那是 `host-websocket` 的
 /// `ws:client` / `ws:server`），也不是会话（会话真源已在 `com.bedcode.terminal-session`
 /// 登记域）。它历史上住进 `host-session` 只是当时顺手——而 `host-session` 整 interface
-/// 已在 v27 退役（票 10），这份**只有宿主机进程知道、且零会话语义**的事实因此必须
+/// 已在 v27 退役，这份**只有宿主机进程知道、且零会话语义**的事实因此必须
 /// 换个家活下来（ADR 0022 v12 裁决 5「迁独立原语」）；**迁出后唯一的调用入口就是本
 /// interface**（旧别名随 `host-session` 一起删除，不留第二把钥匙）。
 ///
-/// 权限 `connection:read`（票 04 新位，替代原 `session:read`；迁移期两条入口共用
+/// 权限 `connection:read`（新位，替代原 `session:read`；迁移期两条入口共用
 /// 这一判据，`host-session` 侧那一条已随 v27 删除）。
 ///
 /// **无排序无解读**：返回内核 WS 连接注册表的全部原始条目，按注册表存储序
 /// （HashMap 迭代序，不保证稳定），不做过滤（含未认证连接）、不做合并（不关联配对记录）、
-/// 不加派生字段（无会话数 / 在线判定——那些是插件侧派生视图的职责，spec D3/D4）。
+/// 不加派生字段（无会话数 / 在线判定——那些是插件侧派生视图的职责）。
 /// JSON 数组，元素（原始字段名，camelCase）：
 /// `{ clientId, deviceName?, fingerprint?, addr, authenticated, connectedAt }`
 /// （`clientId` = 注册表键 = 连接地址串；`deviceName` / `fingerprint` 来自 JWT claims，
 /// 认证前为 null；`connectedAt` 为 epoch 毫秒）。
 ///
-/// 注：WIT 中 `list` 是关键字，故函数名沿用 `connections-list`——迁出未改名，
-/// 插件侧调用点与回归用例断言零改动（票 04 验收第 2 条的「只能来自改名」因此不触发）。
+/// 注：WIT 中 `list` 是关键字，故函数名沿用 `connections-list`。
 interface host-connection {
     connections-list: func() -> result<string, string>;
 }
@@ -412,7 +410,7 @@ interface host-auth {
 ///
 /// 属主隔离：句柄 `task-<uuid>` 仅创建者插件可调（沿 pty- / wsc- 先例）；
 /// 插件停用时宿主回收其全部任务（cancel 全部在册任务、清注册表、清回调队列）。
-/// 事件丢失自愈：`status` / `list-jobs` 是权威快照（回调是尽力投递，F7 范式）。
+/// 事件丢失自愈：`status` / `list-jobs` 是权威快照（回调是尽力投递）。
 interface host-task {
     /// 同步批：并发执行 plan 全部单元并 join。
     /// plan-json（camelCase）：
@@ -448,7 +446,7 @@ interface host-task {
 ///
 /// 算法名白名单在宿主注册表（`crypto/registry`），未知名返回错误（fail-visible）；
 /// 首版最小子集：aead（aes-256-gcm / chacha20-poly1305）、kdf（hkdf-sha256）、
-/// key-exchange（x25519）。rsa / hybrid 按需扩展（spec O5）。
+/// key-exchange（x25519）。rsa / hybrid 按需扩展。
 /// 权限三域（风险拆分，对齐 ws:client/ws:server 先例）：`crypto:aead` /
 /// `crypto:asym` / `crypto:kdf`（各自域入口门禁）。
 interface host-crypto {
@@ -515,7 +513,7 @@ interface abi-form {
 /// 消息帧丢弃并首次 `warn!` + 计数（宿主不缓存）。
 /// kind = "text" | "binary"，payload 统一列表（text 为 UTF-8 字节——零 JSON 转义、
 /// 非 UTF-8 直通）。分片 / 压缩 / opcode 已在宿主侧归一，**同一连接内的帧按到达序
-/// 投递**（保序，D2）。
+/// 投递**（保序）。
 /// 无返回值（观察型回调，同 terminal-hooks / events-binary）：插件处理失败经
 /// host-log 记录；宿主仅 `error!` 记录 trap（含 endpoint-id / client-id 字段）并计数，
 /// 不断开连接、不中断后续帧投递。
@@ -553,7 +551,7 @@ interface events-task {
 /// v17：认证策略导出（**desktop 独有，双端偏离**——认证中心能力，同
 /// host-auth/host-pty 先例，ADR 0022「双端偏离」节：桌面独有接口不要求移动端跟演）
 ///
-/// 消费方 = 宿主 server 认证中间件（票 12 C3）：连接建立的**验签与策略裁决收为
+/// 消费方 = 宿主 server 认证中间件：连接建立的**验签与策略裁决收为
 /// 一次调用**（v33 / ADR 0033：验签执行移入认证中心，密码学引擎随入场密钥一同
 /// 下沉；宿主不再持有任何设备 JWT 密码学），本导出内部先验签再做策略裁决
 /// （claims 结构/时效策略 + 信任撤销检查）；该插件未激活 / 调用失败时
@@ -563,7 +561,7 @@ interface events-task {
 /// 宿主实例化后动态探测 `bedcode:plugin/auth-policy#verify-device-token`；未导出
 /// 的插件（旧 SDK 产物 / 非权威插件）不提供策略，宿主中间件仅对**在册认证中心**
 /// （`com.bedcode.terminal-session`，经 `auth-center-register` 显式登记）调用本导出——
-/// 独立认证中心插件已整体退役（票 06），不存在第二个候选。
+/// 独立认证中心插件已整体退役，不存在第二个候选。
 ///
 /// 入参 = 设备入场 JWT token（**中心自持密钥并自行验签**，ADR 0033：宿主不再持有
 /// 任何设备 JWT 密码学，验签与本导出是同一次调用内的两步——先验签再策略裁决）；
@@ -574,7 +572,7 @@ interface auth-policy {
 }
 // 端扩展 world：import/export 并入合成后的 `plugin` world（include cap-desktop）
 //
-// 票 04：`host-fs`（交集 6）已收拢进共享核心 core.wit，本 world 不再 import 它
+// `host-fs`（交集 6）已收拢进共享核心 core.wit，本 world 不再 import 它
 // （只留桌面扩展 host-fs-desktop）；host-websocket / host-http 的桌面扩展在各自
 // 能力域分片（cap-ws / cap-http），客户端/出站交集在 core。
 world cap-desktop {
@@ -634,7 +632,7 @@ world plugin-auth-policy {
 }
 /// 系统组件 world（**仅供系统组件构建绑定，宿主仍以 `plugin` world 实例化**）
 ///
-/// 系统组件（manifest `type: "system"`，core-plugin-manager 票据 06）在
+/// 系统组件（manifest `type: "system"`）在
 /// `plugin` world 标准导出之外，追加导出其提供的能力接口——能力接口与宿主
 /// import 同形（复用 host-* 接口定义，不引入新的组件组合 world）。宿主按
 /// `plugin` world 实例化后动态探测能力接口导出（同 events-binary 模式），

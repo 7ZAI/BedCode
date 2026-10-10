@@ -1,7 +1,7 @@
 /// BedCode 插件 Component Model 契约——**双端共享核心（single source of truth）**
 ///
-/// 本文件是 wasm-core 单一 crate（ADR 0037 / spec 2026-10-09-wasm-core-single-crate）
-/// 的核心 WIT 真源：只承载**双端函数集完全一致**的 interface（交集切片），
+/// 本文件是 wasm-core 单一 crate 的核心 WIT 真源（ADR 0037）：
+/// 只承载**双端函数集完全一致**的 interface（交集切片），
 /// 端独有 / 端扩展接口一律在各端 `cap-*.wit`（`package bedcode:plugin;` 同 package 拼装）。
 ///
 /// 迁移约定（与桌面端原 bedcode.wit 头注释一致）：
@@ -31,7 +31,7 @@ interface host-events {
 }
 /// 消息总线（原 bus.rs：bus_publish/subscribe/unsubscribe）
 ///
-/// ## topic 命名空间（审计票 05：总线是强制边界，不只是约定）
+/// ## topic 命名空间（总线是强制边界，不只是约定）
 ///
 /// - **私有命名空间** `<plugin-id>::<name>`：某插件的收件箱。宿主按属主定向投递
 ///   生命周期事件（`<owner>::pty:exit`、`<owner>::ws:*`、`<owner>::mdns:found|lost`）。
@@ -64,8 +64,8 @@ interface host-bus {
     subscribe-binary: func(topic: string) -> result<_, string>;
     unsubscribe: func(topic: string) -> result<_, string>;
 }
-/// 对等网络基础能力（issue 12 切换后：宿主只提供能力原语，
-/// file-transfer 插件是首个上层消费者）
+/// 对等网络基础能力：宿主只提供能力原语，
+/// file-transfer 插件是首个上层消费者
 ///
 /// 发现/信任/拨号/收发/浏览的引擎全部在宿主 peer-net 层；本接口只是
 /// 命令面的 WASM 投影。DTO 一律 JSON 字符串承载（camelCase，与 Tauri
@@ -116,12 +116,14 @@ interface host-peer {
     /// 中断的以句柄表记忆的源清单重新拨号续传（断点真源在接收端落盘侧）。
     /// 无命中返回错误
     resume-transfer: func(batch-id: string) -> result<_, string>;
-    /// 恢复全部暂停的发送批：「全部」编排归插件——遍历自己的暂停批逐个调
-    /// resume-transfer（并发节流由插件侧闸门自控），宿主句柄表不再承担批量
-    /// 调度。旧产物 import 本函数在实例化期被拒（fail-visible 三形态②）
-    /// 全量幂等替换引擎广播源（ADR 0022 v2）：条目 `[{ id, name, path }]`
-    /// （camelCase JSON；移动端 SAF 树以 `safTreeUri` 字段替代 `path`）。
-    /// 注册表 CRUD 真源在插件侧，本函数只同步暴露面镜像；任一条目非法整批拒绝
+    /// 批量恢复暂停的发送批：**本接口不提供**——「全部」编排归插件自己
+    /// 完成（遍历暂停批逐个调 [`resume-transfer`]，并发节流由插件侧闸门
+    /// 自控），宿主句柄表不做批量调度。该批量函数已删除：旧产物 import
+    /// 它在实例化期因缺失 interface 显性失败（按当前 SDK 重建）
+    /// 全量幂等替换本插件声明的共享根清单（ADR 0022 v2）：
+    /// 条目 `[{ id, name, path }]`（camelCase JSON；移动端 SAF 树以
+    /// `safTreeUri` 字段替代 `path`）。注册表 CRUD 真源在插件侧，本函数
+    /// 只同步暴露面镜像；任一条目非法整批拒绝
     set-shared-roots: func(dirs-json: string) -> result<_, string>;
     /// 浏览对端共享根清单 → PeerSharedRootDto JSON 数组（仅 session 句柄寻址；
     /// 连接已断时以句柄记忆的 endpoint 自动重拨）
@@ -137,7 +139,7 @@ interface host-peer {
     /// 设置接收落点目录（空串 = 恢复默认 Downloads\BedCode\；引擎落盘配置原语，
     /// ADR 0022 v3）
     set-download-dir: func(path: string) -> result<_, string>;
-    /// 按需启动本机 peer 节点（引擎级生命周期原语，审计票 12）：数据目录与设备名
+    /// 按需启动本机 peer 节点（引擎级生命周期原语）：数据目录与设备名
     /// 由宿主解析，起来后开始广播与监听。幂等——节点已在跑时返回 false（未改变状态）。
     ///
     /// 属主语义：把节点从「未跑」带到「跑」的那次调用，其调用方成为节点属主；
@@ -161,7 +163,7 @@ interface host-peer {
 }
 /// mDNS 浏览纯能力（ADR 0022 v2）：browse-only，发现/离开事件原样透传
 ///
-/// 发现/离开经消息总线**属主私有 topic** 推送（host-bus 订阅，票 05）：
+/// 发现/离开经消息总线**属主私有 topic** 推送（host-bus 订阅）：
 /// `<owner>::mdns:found` / `<owner>::mdns:lost`（构造用 SDK `mdns_event_topic`，
 /// 跨属主订阅被宿主拒绝），
 /// payload 原样透传：`{ instanceName, addresses: string[], port, txtRecords:
@@ -190,9 +192,10 @@ interface host-mdns {
 }
 /// 通用平台能力域（ADR 0022 v2）：系统对话框/授权等与领域无关的平台交互
 ///
-/// v36 切片（票 02 批次 06）：`pick-folders` / `wsl-distros` /
-/// `local-ipv4-addresses` / `reveal-in-dir`（桌面独有）拆入
-/// [`host-platform-desktop`]，本接口只剩双端交集 `pick-files` / `pick-folder`。
+/// 双端交集切片：桌面独有 `pick-folders` / `wsl-distros` /
+/// `local-ipv4-addresses` / `reveal-in-dir` 拆入
+/// [`host-platform-desktop`]（cap-desktop 分片），本接口只剩双端交集
+/// `pick-files` / `pick-folder`。
 interface host-platform {
     /// 系统多文件选择器 → string[] JSON（用户取消为空数组）。
     ///
@@ -251,10 +254,10 @@ interface host-websocket {
 }
 /// 文件系统访问（原 fs.rs：fs_read/write/copy/delete/exists；双端交集 6 函数）
 ///
-/// v36 切片（票 02 批次 06 / 票 04）：桌面独有 `read-dir` / `canonicalize` /
-/// `stat`（文件浏览域）拆入 [`host-fs-desktop`]，移动端独有
+/// 双端交集切片：桌面独有 `read-dir` / `canonicalize` / `stat`
+/// （文件浏览域）拆入 [`host-fs-desktop`]（cap-desktop 分片），移动端独有
 /// `save-to-document` / `write-media-downloads` 拆入 [`host-fs-mobile`]
-/// （cap-mobile），本接口只剩双端交集。
+/// （cap-mobile 分片），本接口只剩双端交集。
 interface host-fs {
     read: func(path: string) -> result<option<string>, string>;
     write: func(path: string, data: string) -> result<_, string>;
@@ -311,9 +314,9 @@ interface lifecycle {
 /// 二进制消息接收（可选导出，**不进 `plugin` world 的必选导出列表**）
 ///
 /// 宿主在实例化后动态探测 `bedcode:plugin/events-binary#on-message-binary`：
-/// - 旧插件（未用新 SDK 编译）不导出本接口 → 探测为 None，只接收 JSON 消息；
-///   二进制消息对其按「格式不匹配」拒绝，不影响加载；
-/// - 新 SDK 产物由 `wasm_entry!` 宏无条件导出（默认空实现），订阅方以
+/// - 未导出本接口的插件 → 探测为 None，只接收 JSON 消息；二进制消息对其
+///   按「格式不匹配」拒绝，不影响加载；
+/// - 导出者由 `wasm_entry!` 宏无条件导出（默认空实现），订阅方以
 ///   `host-bus.subscribe-binary` 声明偏好后即可接收二进制投递
 ///
 /// 无返回值（观察型回调，语义同 terminal-hooks）：guest 内部处理失败经
