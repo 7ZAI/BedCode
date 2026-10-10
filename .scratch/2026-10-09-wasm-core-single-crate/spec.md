@@ -144,7 +144,12 @@ world plugin {
 
 **代价（必须显式接受）**：拆 interface 会改变桌面插件产物的 import 集合 ⇒ **双端 ABI bump + 插件产物全量重建**（走既有 `stale_artifact_rebuild_hint` fail-visible 形态②：旧产物实例化期点名缺失 interface 与重建版本）。
 
-> **POC 后复评点（票 04 前置）**：若拆分带来的重建面评估后不可接受，退回「核心 = 仅 11 个全等 interface」方案（`host-websocket` / `host-fs` / `host-platform` 整块归端扩展，核心更小但零拆分）。该复评在票 01 POC 绿之后、票 04 开工之前做。
+> **POC 后复评点（票 04 前置）✅ 已执行（2026-10-10）**：拆分执行，回退方案作废——批 06
+> 先验证链路顺畅（桌面四接口拆分 + ABI 35→36 + 产物重建全绿），重建面实测可接受
+> （桌面 4 + 移动 3 插件 <30s/插件）。落地形态 = 核心 17 全等 + 桌面扩展（
+> host-websocket-server / host-http-endpoint / host-fs-desktop / host-platform-desktop /
+> host-events-desktop / abi-form）+ 移动扩展（host-fs-mobile 等端独有面）。
+> 完整实施记录见 ticket-04 §6。
 
 ### D4 · 能力域 crate 改为 bindgen 自持分片
 
