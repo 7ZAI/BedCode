@@ -1,0 +1,14 @@
+{
+  "package": "package bedcode:plugin;",
+  "world": "plugin",
+  "core": "packages/bedcode-wasm-core/wit/core.wit",
+  "out": "bedcode-desktop/packages/plugin-sdk-desktop/rust/wit",
+  "caps": {
+    "pty": "packages/bedcode-pty-engine/wit/pty.wit",
+    "http": "bedcode-desktop/packages/plugin-sdk-desktop/rust/wit-src/cap-http.wit",
+    "ws": "bedcode-desktop/packages/plugin-sdk-desktop/rust/wit-src/cap-ws.wit",
+    "desktop": "bedcode-desktop/packages/plugin-sdk-desktop/rust/wit-src/cap-desktop.wit"
+  },
+  "worlds": ["plugin", "plugin-binary", "plugin-ws", "plugin-task", "plugin-auth-policy", "plugin-system"],
+  "abi": { "version": 37 }
+}

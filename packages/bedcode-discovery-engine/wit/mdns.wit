@@ -1,0 +1,50 @@
+package bedcode:plugin;
+// ======================================================================
+// mDNS 能力域自持 bindgen 分片（票 05 · 能力域 crate 改 bindgen 自持分片）
+//
+// 本文件是 `bedcode-discovery-engine` 为**自己 bindgen** 的契约分片
+// （`world cap-mdns { import host-mdns; }`）——契约面不再绑端 WIT
+// （spec §1.2 第一性问题的最终解决）。
+//
+// 与端组合的关系（票 03 §2 / 票 05 §3 摆法）：`host-mdns` 是双端全等交集，
+// 权威定义在 `wasm-core/wit/core.wit`（端生成物由 core 并入，端组合**不用本
+// 文件**）；本文件是**另一 package 实例的同名定义**（不同目录 = 不同 package，
+// 二者不冲突）——两处函数集必须逐字一致，漂移即红（票 03 漂移锁守护 core.wit
+// 侧；本票实施记录留显式 diff 证据）。
+//
+// 分片只换绑定源、不换装配语义：`impl Host` / `HostModule` / `MODULE_*` / `DESC`
+// 与 WIT 契约的函数集逐字一致（票 05 票面 §1 步骤 3）。
+// ======================================================================
+
+/// mDNS 浏览纯能力（ADR 0022 v2）：browse-only，发现/离开事件原样透传
+///
+/// 发现/离开经消息总线**属主私有 topic** 推送（host-bus 订阅，票 05）：
+/// `<owner>::mdns:found` / `<owner>::mdns:lost`（构造用 SDK `mdns_event_topic`，
+/// 跨属主订阅被宿主拒绝），
+/// payload 原样透传：`{ instanceName, addresses: string[], port, txtRecords:
+/// Record<string,string> }`，宿主不做任何加工。设备列表（去重/TTL 过期/展示名
+/// 解读）是发现事件的派生视图，由消费插件自建缓存。
+///
+/// 自我广播（register/advertise）不进本接口：「本机是谁」与宿主 TLS 监听器
+/// 同生共死，留在 peer-net 启动流程自动完成；无插件激活时主机照样可被发现。
+interface host-mdns {
+    /// 浏览某服务类型，返回 browser 句柄；重复浏览同一类型允许（各自独立生命周期）。
+    /// 事件定向投递到 `<plugin-id>::mdns:found` / `<plugin-id>::mdns:lost`（宿主实现）
+    browse: func(service-type: string) -> result<string, string>;
+    /// 停止浏览并回收句柄（返回是否存在该句柄）；仅属主可停（跨插件拒绝）；
+    /// 插件停用时宿主自动回收其全部句柄
+    stop-browse: func(browser-id: string) -> result<bool, string>;
+
+    /// 广播某服务类型（v2 新增）：返回 advertise 句柄。
+    /// config-json 为纯引擎参数（服务类型 / 实例名 / 端口 / TXT 键值），
+    /// 宿主零业务拼装；实例名省略时宿主按 `{plugin}-{短指纹}` 默认。
+    advertise: func(config-json: string) -> result<string, string>;
+    /// 停止广播并回收句柄（返回是否存在该句柄）；仅属主可停；
+    /// 插件停用时宿主自动回收其全部广播句柄。
+    stop-advertise: func(advertise-id: string) -> result<bool, string>;
+    /// 查询广播状态（返回是否存在该句柄）；仅属主可查。
+    is-advertising: func(advertise-id: string) -> result<bool, string>;
+}
+world cap-mdns {
+    import host-mdns;
+}

@@ -1,0 +1,11 @@
+{
+  "package": "package bedcode:plugin;",
+  "world": "plugin",
+  "core": "packages/bedcode-wasm-core/wit/core.wit",
+  "out": "bedcode-mobile/packages/plugin-sdk-mobile/rust/wit",
+  "caps": {
+    "mobile": "bedcode-mobile/packages/plugin-sdk-mobile/rust/wit-src/cap-mobile.wit"
+  },
+  "worlds": ["plugin", "plugin-binary"],
+  "abi": { "version": 20 }
+}

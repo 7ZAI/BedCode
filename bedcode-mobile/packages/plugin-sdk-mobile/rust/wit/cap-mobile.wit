@@ -1,0 +1,204 @@
+package bedcode:plugin;
+
+// 移动端插件契约——**端扩展分片**（票 03：共享核心 interface 在 `wasm-core/wit/core.wit`，
+// 本文件只承载移动独有 / 非等接口；端 `wit/` 目录由 `scripts/compose-wit.mjs` 拼装生成）
+//
+// 与桌面端 WIT 的差异维护在 docs/implementation-plans/mobile-wasmtime-component-migration.md §3.2：
+// - import 接口 14 组（无 session/api-call/timer/process/app/file-service/transfer；
+//   `host-database` 主库面已随 v19 双端退役——主库由 wasm-core 管理、不给插件直接调用）
+// - host-fs-mobile 为移动端特有域（v20 自共享核心 host-fs 拆出：交集 6 函数进
+//   core.wit，SAF/下载目录能力 write-media-downloads / save-to-document 留在本端）
+// - host-notify 为移动端特有域（v18：通知/震动/声音，桌面不跟演——ADR 0018）
+// - abi 仅 version（无 form：项目未发布、一次性切割，不存在 core 形态共存）
+//
+// 命名空间约定与桌面端一致：宿主能力 import 前缀 `host-`，插件导出为普通名；
+// serde_json 载荷一律用 `string` 承载；错误一律 `result<T, string>`。
+//
+// 移动端差异注记（interface 定义在共享 core.wit，移动特有行为在此保全）：
+// - host-mdns（Android）：MulticastLock 按 browser 句柄引用计数，插件停用时
+//   宿主自动回收其全部句柄
+
+/// ABI 版本协商（无 form 字段：项目未发布、一次性切割，不存在 core 形态共存；
+/// 将来若需兼容旧产物，按桌面端模式补 form=0/1 即可）
+///
+/// 版本演进：
+/// - v10：host-mdns v2（advertise / stop-advertise / is-advertising 原语 +
+///   事件定向投递 `mdns:found.<owner>` / `mdns:lost.<owner>`），纯增量；
+///   v17 起 topic 统一到 `<owner>::mdns:found|lost`（wire 对齐桌面终态，
+///   函数签名不变无 ABI 破坏，双端共享 lib spec M3）
+/// - v15：终端输出流窄转发（host-terminal-stream.forward-output，C3 二进制
+///   出口）+ 主连接事实读取（host-connection.primary-target，与桌面同名
+///   不同形）+ host-websocket config 增强（jwt-auth / heartbeat-secs /
+///   auto-reconnect，零 WIT 形状变化）。纯增量，v14 产物不受影响
+/// - v16：认证 / 配对编排下沉（票 14 阶段 B）：新增 host-auth 认证引擎面
+///   （5 函数：request-pairing / verify-pairing-code / qr-connect /
+///   biometric-authenticate / has-credentials，凭据零过境）+ 权限位 `auth`。
+///   纯增量，v15 产物不受影响
+/// - v17：host-terminal / terminal-hooks 整面退役（票 15 阶段 B，终端 UI 域
+///   已随阶段 A 整体迁入插件前端、退役面零消费者）：import `host-terminal`
+///   （send）与导出 `terminal-hooks`（on-terminal-input / on-terminal-output）
+///   删除 + 权限位 `terminal:input` 退役。**破坏性收缩**：v16 及更早产物在
+///   v17 宿主实例化期因缺失 import interface 被点名失败（fail-visible ②），
+///   须随 SDK 重编译；内置插件随 APK 同分发无旧产物。`terminal:output`
+///   保留（host-terminal-stream.forward-output 权限门）
+/// - v18：通知 / 震动 / 声音整族封装（新增移动特有域 `host-notify`，5 函数：
+///   notify 带 options-json 震动/声音开关 / check-permission /
+///   request-permission / vibrate / play-sound）+ 权限位 `notify`
+///   （fail-closed）。原 `host-events.notify` 收编迁入（host-events 回归
+///   纯事件语义，只剩 emit）。**破坏性收缩**：v17 及更早产物在 v18 宿主
+///   实例化期因缺失 import 函数被点名失败（fail-visible ②），须随 SDK
+///   重编译；内置插件随 APK 同分发无旧产物
+
+/// 系统通知与提醒反馈（移动端特有，ABI v18 新增——桌面不跟演，ADR 0018）
+///
+/// 覆盖 Android 原生桥的三类「触达用户」原语：系统通知（震动 / 声音可分别
+/// 控制）、即时震动反馈、提示音播放；另含 Android 13+ 通知权限
+/// （POST_NOTIFICATIONS）状态查询与请求。全部是「离宿主无法实现」的平台
+/// 交互原语，零业务语义（ADR 0022）：文案 / 时机 / 触发条件由插件决定，
+/// 宿主只负责投递。
+///
+/// 本域 v18 收编原 `host-events.notify`（旧形震动/声音硬编码 true）——
+/// **破坏性收缩**：**引用了 `host-events.notify` 的** v17 及更早产物在 v18
+/// 宿主实例化期因缺失 import 函数被点名失败（fail-visible ②），须随 SDK
+/// 重编译（组件 import 按实际使用面声明，未引用者不受影响）；内置插件零
+/// 消费者且随 APK 同分发，产物随本版全量重建。
+///
+/// 权限位 `notify`（fail-closed，未声明即拒）：通知 / 震动 / 声音是用户打扰面
+/// （高频弹通知或狂震会骚扰用户），独立成位，不与既有能力混位。
+interface host-notify {
+    /// 发送系统通知（文案由插件 i18n 构建、原样透传，宿主不做文案加工）。
+    /// options-json（camelCase，字段可省）：`{ vibrate?: bool, sound?: bool }`，
+    /// 两者缺省均为 true（与退役前 `host-events.notify` 行为一致）；
+    /// 非法 JSON / 字段类型错误 → Err（严格解析，禁静默降级）
+    notify: func(title: string, body: string, options-json: string) -> result<_, string>;
+    /// 通知权限是否已授予（Android 13+ 需 POST_NOTIFICATIONS 且系统通知总开关
+    /// 开启；Android 12 及以下恒 true）。供插件在发通知前对账；发送本身不因
+    /// 无权限而报错（系统静默丢弃，宿主不代为降级）
+    check-permission: func() -> result<bool, string>;
+    /// 请求通知权限：未授权时弹系统授权框并阻塞至用户响应，返回最新状态；
+    /// 已授权 / 低版本立即返回 true。须在用户交互语境调用（后台触发可能被
+    /// 系统忽略）
+    request-permission: func() -> result<bool, string>;
+    /// 立即震动一次（毫秒，直接走 Vibrator 服务、不经通知渠道，无需通知权限）。
+    /// 用于「无需可见通知的轻量触觉反馈」。时长钳制到 [1, 5000] ms
+    vibrate: func(duration-ms: u32) -> result<_, string>;
+    /// 播放系统默认通知提示音（USAGE_NOTIFICATION 流；重复触发先停上一次，
+    /// 避免叠音）。用于「无需可见通知的听觉反馈」
+    play-sound: func() -> result<_, string>;
+}
+interface host-fs-mobile {
+    /// 移动端特有：把已授权文件拷入系统媒体下载目录（SAF/MediaStore；
+    /// 参数与 core ABI 一致：源文件路径 + 显示名 + MIME）
+    write-media-downloads: func(src-path: string, display-name: string, mime-type: string) -> result<_, string>;
+    /// 移动端特有：弹系统保存对话框把已授权文件存入用户选择的位置
+    save-to-document: func(src-path: string, display-name: string, mime-type: string) -> result<_, string>;
+}
+/// 终端输出流窄转发（ABI v15 新增，票 12）
+///
+/// 把插件消费到的终端输出**裸字节**交宿主转发到已登记的前端页面通道
+/// （Tauri Channel 由前端创建、经宿主命令 `terminal_page_subscribe` 登记，
+/// 宿主零解析持有会话 → 通道表）。宿主**只按 session-id 寻址投递**：
+/// 不读字节内容、不识别协议、不缓存——ADR 0022 四类薄壳④「零解析窄转发」
+/// （与桌面 `utils/session_gateway.rs` 同款形态）。
+///
+/// **C3 性能红线落点**：输出字节禁止经 JSON 命令通道搬运——本原语是
+/// 「插件 → 前端」唯一的二进制出口；经 host-events.emit 走 JSON（base64）
+/// 是违规路径。字节经 `list<u8>` 进出 WASM 与 Tauri Raw 通道，全程零
+/// base64 / 零 JSON。
+///
+/// 权限位 `terminal:output`（既有词汇复用，fail-closed）。
+/// 插件停用时登记的通道随宿主窄转发层 purge 回收。
+///
+/// 消费者：`com.bedcode.terminal-session`（终端订阅协议客户端，票 12）。
+interface host-terminal-stream {
+    /// 转发一段输出字节到 session-id 对应的前端页面通道（裸字节原样投递）。
+    /// 通道未登记（页面未订阅 / 已卸载）→ Err：字节由调用方丢弃（页面重进
+    /// 时经重订阅回放补齐，与退役前宿主门控丢弃语义一致），宿主不缓存
+    forward-output: func(session-id: string, data: list<u8>) -> result<_, string>;
+}
+/// 主连接事实读取（ABI v15 新增，票 12；票 13 会话控制迁插件复用同一地基）
+///
+/// **与桌面 `host-connection` 同名不同形**：桌面是 15 函数连接上下文域，
+/// 移动端只暴露 1 函数引擎事实（C8 同款「同名 ≠ 契约同一」，须登记
+/// ADR 0018 双端偏离表）。**无权限门**（对齐 host-platform 例外先例）：
+/// 返回的是局域网服务地址等连接事实（非凭据、非隐私），地址不入日志
+/// 明文红线不受影响；真正的风险面是连接行为本身，已由 `ws:client` /
+/// `network:http` 等权限位门控。
+interface host-connection {
+    /// 当前主连接目标设备（camelCase JSON）：`{ address, port, connected }`。
+    /// `address` / `port` 是最后一次成功配置的目标（与宿主 HTTP / WS 面
+    /// 同源），`connected` 反映主连接当前状态。
+    /// 从未配置过任何目标 → Err（fail-visible，禁「返回空对象」）
+    primary-target: func() -> result<string, string>;
+}
+/// 设备入场认证引擎面（ABI v16 新增，票 14 阶段 B：认证 / 配对编排下沉）
+///
+/// **编排在本域的调用方插件，密码学与凭据在宿主**（C4 红线）：设备身份文件 /
+/// JWT 持有 / `AuthHttpClient` / 生物凭证绑定与 Keystore 签名全部留在宿主
+/// auth 引擎；本域只是把「对桌面端 `/api/auth/*` 六端点的引擎调用」投影给
+/// 插件，流程顺序（请求配对 → 等码 → 验码 / QR / 生物挑战）由插件编排。
+///
+/// **凭据零过境**：认证成功后 JWT 由宿主 `apply_auth_success` 落地（global
+/// token + 凭据表），本域**不向插件返回任何凭据材料**（对齐票 12「token 不
+/// 落插件」先例）；前端持久化镜像经宿主窄读命令 `ws_get_auth_credentials`
+/// 直接读引擎，不经插件。
+///
+/// 同步阻塞语义（与 `host-websocket.connect` 同款裁决）：host fn 在同步
+/// 上下文执行，HTTP 往返会阻塞本插件实例直至完成或超时。
+///
+/// 权限位 `auth`（fail-closed，未声明即拒）：本域触发设备入场认证与凭据
+/// 落地，是安全敏感面，不与任何既有能力混位。
+///
+/// 消费者：`com.bedcode.terminal-session`（配对 / 认证编排域，票 14 阶段 B）。
+interface host-auth {
+    /// 请求配对（HTTP `POST /api/auth/request-pairing`）：桌面端生成一次性
+    /// 配对码并展示。Ok(()) = 桌面端受理（进入等码态）；Err = 网络故障 /
+    /// 桌面端拒绝（透传原因）
+    request-pairing: func() -> result<_, string>;
+    /// 验证配对码（HTTP `POST /api/auth/verify-pairing-code`）。
+    /// Ok(true) = 受理且凭据已落地宿主；Ok(false) = 桌面端业务拒绝
+    /// （码无效 / 过期等）；Err = 网络故障（透传原因）
+    verify-pairing-code: func(code: string) -> result<bool, string>;
+    /// QR token 认证（HTTP `POST /api/auth/qr-connect`）。结果语义同
+    /// verify-pairing-code
+    qr-connect: func(token: string) -> result<bool, string>;
+    /// 生物认证登录（HTTP 挑战-应答握手 + Keystore 签名，全在宿主执行）。
+    /// Ok(false) = 本地生物验证未通过 / 用户取消；Ok(true) = 受理。
+    /// 结果语义同 verify-pairing-code
+    biometric-authenticate: func() -> result<bool, string>;
+    /// 引擎事实：宿主当前是否持有认证凭据（JWT）。供插件激活期对账
+    /// （事件不重放，状态以引擎事实为准）
+    has-credentials: func() -> result<bool, string>;
+}
+/// 事件回调（移动端子集：保留 auth/disconnect/session 生命周期事件）
+interface events {
+    on-bus-message: func(topic: string, payload-json: string) -> result<_, string>;
+    on-auth-success: func() -> result<_, string>;
+    on-disconnect: func(reason: string) -> result<_, string>;
+    on-session-created: func(session-id: string) -> result<_, string>;
+    on-session-stopped: func(session-id: string) -> result<_, string>;
+}
+// 端扩展 world：import/export 并入合成后的 `plugin` world（include cap-mobile）
+//
+// 票 04：`host-fs` 交集 6、`host-http`（fetch）、`host-websocket`（客户端 5 =
+// 交集完整）已收拢进共享核心 core.wit，本 world 不再 import 它们；本端独有
+// `host-fs-mobile` 2 函数（SAF/媒体下载目录）留在本文件。
+world cap-mobile {
+    import host-notify;
+    import host-fs-mobile;
+    import host-terminal-stream;
+    import host-connection;
+    import host-auth;
+
+    export events;
+    export abi;
+}
+
+/// v9：二进制消息接收专用 world（**仅 SDK 绑定用，宿主不实例化它**）
+///
+/// 宿主对 `plugin` world 的导出全部按必选实例化，旧插件（v8 及更早）不导出
+/// `events-binary`，因此它不能声明进 `plugin` world（否则旧插件无法加载）；
+/// 宿主改为实例化后动态探测。本 world 让 SDK 生成 events-binary 的 guest 绑定
+world plugin-binary {
+    export events-binary;
+}

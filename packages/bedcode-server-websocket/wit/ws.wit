@@ -1,0 +1,138 @@
+package bedcode:plugin;
+// ======================================================================
+// WebSocket 能力域自持 bindgen 分片（票 05 · 能力域 crate 改 bindgen 自持分片）
+//
+// 本文件是 `bedcode-server-websocket` 为**自己 bindgen** 的契约分片
+// （`world cap-ws` 同时 import 客户端 `host-websocket` 与服务端
+// `host-websocket-server`，crate 的 `Host` impl 覆盖两者）——契约面不再绑端
+// WIT（spec §1.2 第一性问题的最终解决）。
+//
+// 与端组合的关系（票 05 §3 摆法）：本文件与端 cap 真源
+// `plugin-sdk-desktop/rust/wit-src/cap-ws.wit` 是**不同 package 实例的同名定义**
+// （不同目录 = 不同 package，二者不冲突）。`host-websocket`（双端交集切片）在
+// 本文件的段落是 `wasm-core/wit/core.wit` 的逐字副本——两处函数集必须逐字一致，
+// 漂移即红（票 03 漂移锁守护 core.wit 侧；本票实施记录留显式 diff 证据）。
+// 端组合**不用本文件**：端生成物由 compose.json caps.ws（→ wit-src 真源）拼装。
+//
+// 分片只换绑定源、不换装配语义：`impl Host` / `HostModule` / `MODULE_*` / `DESC`
+// 与 WIT 契约的函数集逐字一致（票 05 票面 §1 步骤 3）。
+// ======================================================================
+
+/// WebSocket 基础能力（v14 起；双端交集切片 = 客户端域 5 函数）
+///
+/// 桌面独有服务端域（入站端点 10 函数，v14/v28 追加）拆入
+/// [`host-websocket-server`]（cap-ws 分片，移动端不跑 WS 服务器、不跟演）；
+/// 本接口只剩双端交集（出站连接域）。
+///
+/// 事件投递（双端偏离见各端 cap 注释）：状态事件经 host-bus 属主私有 topic
+/// 推送（`<owner>::ws:open|error|close`），消息帧经可选导出 events-ws 回调。
+interface host-websocket {
+    /// 建立出站 WS 连接：**同步阻塞至握手完成**（上限 connect-timeout-secs，
+    /// 与 host-http 非流式模式同款 block_on 语义）。
+    /// config-json（camelCase）纯引擎参数：
+    /// `{ url, headers?, protocols?, connect-timeout-secs?, max-message-bytes? }`
+    /// url **仅接受 `ws://`**（`wss://` 本期不支持，返回明确错误）。
+    /// 成功 → 返回连接句柄 `wsc-<uuid>` 并发布 `<owner>::ws:open`；
+    /// 失败 → 错误上抛且**不发布任何事件**（无句柄可寻址）。
+    connect: func(config-json: string) -> result<string, string>;
+    /// 发送文本帧（UTF-8）；连接不存在/已关闭/发送队列满 → 错误
+    send-text: func(handle: string, text: string) -> result<_, string>;
+    /// 发送二进制帧；错误语义同 send-text
+    send-binary: func(handle: string, payload: list<u8>) -> result<_, string>;
+    /// 主动关闭连接（close-json：`{ code?, reason? }`，缺省 1000）；返回是否命中。
+    /// 该连接的 `ws:close.<owner>` 随即上报（wasClean=true 当且仅当 code ∈ {1000,1001}）
+    close: func(handle: string, close-json: string) -> result<bool, string>;
+    /// 查询连接是否处于 open 态（握手完成且未关闭）；仅属主可查。
+    /// 供插件在丢失状态事件后自愈
+    is-connected: func(handle: string) -> result<bool, string>;
+}
+// ======================================================================
+/// WebSocket 服务端域（桌面扩展分片，票 04 自 `host-websocket` 拆出）
+///
+/// 双端交集切片：客户端域（出站连接 5 函数）已收拢进共享核心
+/// `wasm-core/wit/core.wit` 的 `host-websocket`；本 interface 只剩桌面独有
+/// 服务端域（入站端点 10 函数，v14 起 + v28 `connection-context`）。
+/// 移动端不跑 WS 服务器（ADR 0018 移动端是消费端），服务端域与「插件入站
+/// 端点」语义在本端**不存在**，不跟演（ADR 0019 双端偏离）。
+///
+/// 属主隔离（spec §2.3 / D6）：**全部函数仅属主可调**（他人句柄/端点 → Err，
+/// `not owner of ws handle`）；插件停用时宿主自动回收其全部句柄与端点。
+/// 权限：服务端域需 `ws:server`。
+///
+/// 事件投递（D2/D3）：状态事件经 host-bus 订阅，走**属主私有命名空间**
+/// （`<owner>::…`，票 05：跨属主订阅在宿主侧显式拒绝，他人既订不到也伪投递不进；
+/// 构造一律用 SDK `ws_event_topic`，勿手拼），标识在 payload：
+///   服务端域  `<owner>::ws:client-connect` / `<owner>::ws:client-disconnect`
+/// 插件**须在 activate 期（或首次 register-endpoint 之前）完成订阅**：
+/// 宿主不缓冲、不重放，晚订阅期间的事件永久丢失；丢失自愈靠
+/// `list-clients` / `list-endpoints` 查询原语。
+/// 消息帧（text + binary）经可选导出 `events-ws` 回调投递。
+interface host-websocket-server {
+    // ==================== 服务端域（入站端点） ====================
+    /// 在宿主 WS 服务器挂载插件端点（实际路径 `/ws/plugin/<plugin-id>/<path>`，
+    /// 命名空间段由宿主注入，插件只提供后缀，D5）。
+    /// config-json（camelCase）纯引擎参数：
+    /// `{ path, auth?, max-message-bytes?, max-clients? }`
+    /// auth = "none"（默认：跳过首消息认证状态机，插件自管认证）
+    ///      | "jwt"（宿主校验首消息 `{"type":"auth","token":"<jwt>"}`，D8）。
+    /// path 非法（空、含 `/`、含 `.`、超长）或与本插件已注册端点冲突 → 错误
+    /// （跨插件不冲突：路径含 plugin-id 段）。返回端点句柄 `wse-<uuid>`。
+    /// 端点存在期间的每一帧都经宿主流过滤器链（D9）
+    register-endpoint: func(config-json: string) -> result<string, string>;
+    /// 向端点的指定客户端发文本帧；客户端不存在/队列满 → 错误（D10）
+    send-text-to-client: func(endpoint-id: string, client-id: string, text: string) -> result<_, string>;
+    /// 向端点的指定客户端发二进制帧
+    send-binary-to-client: func(endpoint-id: string, client-id: string, payload: list<u8>) -> result<_, string>;
+    /// 向端点全部客户端广播文本帧 → 成功入队客户端数（部分失败不回滚，D10）
+    broadcast-text: func(endpoint-id: string, text: string) -> result<u32, string>;
+    /// 向端点全部客户端广播二进制帧 → 成功入队客户端数
+    broadcast-binary: func(endpoint-id: string, payload: list<u8>) -> result<u32, string>;
+    /// 主动踢出端点的单个客户端（close-json：`{ code?, reason? }`，缺省 4004）；
+    /// 返回是否命中；随后该客户端经 `ws:client-disconnect.<owner>` 上报
+    close-client: func(endpoint-id: string, client-id: string, close-json: string) -> result<bool, string>;
+    /// 关闭端点并回收句柄（含下线全部客户端，close code 4005）；返回是否存在该端点
+    unregister-endpoint: func(endpoint-id: string) -> result<bool, string>;
+    /// 端点在线的客户端清单 → JSON 数组
+    /// `[{ clientId, addr, authenticated, connectedAt }]`（camelCase）；
+    /// 供插件在丢失 client-connect 事件后自愈（D3）；仅属主可查
+    list-clients: func(endpoint-id: string) -> result<string, string>;
+    /// 本插件已注册端点清单 → JSON 数组 `[{ endpointId, path, clientCount }]`；
+    /// 仅属主可查
+    list-endpoints: func() -> result<string, string>;
+
+    // ==================== v28：连接上下文（安全/连接事实，零业务派生） ====================
+
+    /// 查询端点指定客户端的**已脱敏**连接/认证上下文（websocket 业务下沉专项票 02）。
+    ///
+    /// 返回值只含连接/认证**事实**，不包含会话、设备在线判定、配对记录或任何业务
+    /// 派生字段（spec §3.1）：
+    ///
+    /// ```json
+    /// {
+    ///   "clientId": "c-123",
+    ///   "endpointId": "wse-456",
+    ///   "owner": "com.example.plugin",
+    ///   "addr": "192.168.1.10:54321",
+    ///   "authenticated": true,
+    ///   "connectedAt": 1730000000000,
+    ///   "authContext": {
+    ///     "subject": "device-or-client-subject",
+    ///     "deviceName": "optional-name",
+    ///     "fingerprint": "optional-fingerprint"
+    ///   }
+    /// }
+    /// ```
+    ///
+    /// 约束：
+    /// - 仅**端点属主**可调（权限 `ws:server` + 属主仲裁，跨插件查询显式拒绝）；
+    /// - 客户端不存在/不在该端点名下 → `Err`（`client not found in endpoint`）；
+    /// - **永不返回 JWT、token、公钥、私钥或配对记录**（凭据红线，AGENTS §8）；
+    /// - `auth: "none"` 时 `authenticated=false`，`authContext` 省略（不伪造身份）；
+    /// - 该原语是安全上下文查询，**不是**设备列表/在线判定/会话查询接口——
+    ///   设备派生视图由插件自 `list-clients` 与本原语组合建立。
+    connection-context: func(endpoint-id: string, client-id: string) -> result<string, string>;
+}
+world cap-ws {
+    import host-websocket;
+    import host-websocket-server;
+}
