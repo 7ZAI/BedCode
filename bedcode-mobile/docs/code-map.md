@@ -281,6 +281,7 @@ permission/security/storage，与桌面**同一份源码**）、**移动运行�
 v18 起 `host-notify`：通知/震动/声音，收编原 host-events.notify，权限位 `notify` fail-closed）、
 `host_api/{http_engine,sql_guard}`、`terminal_stream_gateway.rs`（窄转发表，Tauri 命令薄壳留宿主）、
 `test_support`（夹具构建器 + MockPorts，`any(test, feature = "test-support")` 门控）。
+
 **防回接**：`src-tauri/tests/retired_mobile_wasm_core_fork_lock.rs`（fork 目录 / 包名 /
 路径字形 / 别名指向四判据）；WIT 生成物由仓库根 `node scripts/compose-wit.mjs mobile --check`
 （CI `wit-drift-lock.yml` + husky）盯住，手改生成物即红。
@@ -347,19 +348,32 @@ components/screens，数据源 `adapters/devAppSource.ts` 把「内置应用 + �
 插件 UI/存储问题 → 先分清前端（`src/plugin/`）还是 Rust 侧（`commands.rs` / `manager.rs`
   对应的 host_impl 域）。
 
-### 对等网络 — `src-tauri/src/peer_*.rs` + `packages/peer-net`
+### 对等网络 — 宿主适配层 `src-tauri/src/peer_*.rs` + 共享能力域 `packages/bedcode-server-peer-net`
 
-与桌面端镜像的跨设备可信直连底座，与终端链路（`_bedcode._tcp`）完全独立：
+与桌面端镜像的跨设备可信直连底座，与终端链路（`_bedcode._tcp`）完全独立。
+
+**2026-10-10 能力域集中化（`.scratch/2026-10-10-peer-capability-consolidation/`）**：
+引擎控制面（节点装配 / 生命周期 / 发送-接收-远端控制面 / 引擎事件桥）真源在**双端共享
+能力域 crate** `packages/bedcode-server-peer-net`（`default = []` 纯引擎形态，
+`common-host` 才装桌面 WIT 绑定）；移动 `peer_*.rs` 只剩**适配层**（端口 + 平台缝 +
+装配 + 委托）。防回接锁 `tests/peer_engine_consolidation_lock.rs`（三面判据）。
 
 - **底座 crate**：`packages/peer-net`（identity / cert / transport / trust_store / discovery / transfer）
-  与 `packages/link-crypto`，双端共享
-- **peer_net.rs**：`NodeIdentity` 首启纯随机生成、与 `DeviceIdentity` / `device_identity.json`
-  刻意分离（不做 ANDROID_ID 等设备标识派生）；setup 阶段自动启动节点 + 发现守护；
-  **Android 专属**启动守护前经 Kotlin MulticastLockPlugin 申请多播锁、关停时释放（不持锁则 mDNS
-  响应收不到，表现为单侧可见）；首连确认闸门经 `peer-consent-requested` 事件桥接前端确认框
-- **插件入口（真入口）— WIT `host-peer`**：同桌面端的 13 原语（见桌面 code-map 对等网络节），
-  宿主实现在 `plugin/wasm_runtime/host_impl/peer.rs`（ADR 0022 v3）；插件侧经 `HostPeer` trait
-  调用（`wasm-apps/file-transfer/rust/src/peer.rs`）
+  与 `packages/link-crypto`，双端共享；能力域 = `packages/bedcode-server-peer-net`
+- **peer_net.rs（适配层）**：5 端口实现（bus / event_sink / paths / system_info / mdns——
+  mdns 直接复用 `bedcode-discovery-engine::engine` 共享守护三函数）+ `PeerPlatformSeam`
+  平台缝（SAF 共享访问 / MediaStore 落点提升 / 内置 `"下载"` 条目）+ `peer_ctx` 装配 +
+  平台预热（设备名轮询 / 下载目录缓存）+ 生命周期薄壳（`FILE_TRANSFER_PLUGIN_ID` 归本层）；
+  `NodeIdentity` 首启纯随机生成、与 `DeviceIdentity` 刻意分离（不做 ANDROID_ID 派生）；
+  Android 多播锁随共享守护常驻（setup init hook）
+- **插件入口（真入口）— WIT `host-peer`**：同桌面端**逐字一致的 19 函数**（`core.wit`
+  的 `host-peer` 为双端全等接口：dial-peer / close / send-files / cancel 族 / 应答族 /
+  共享根 / 浏览 / 拉取 / 节点启停 / active-transfers / collect-outgoing），宿主实现在
+  wasm-core `bare-host` 面 `manager/runtime/bare/host_impl/peer.rs`（ADR 0022 v3）；
+  插件侧经 `HostPeer` trait 调用（`wasm-apps/file-transfer/rust/src/peer.rs`）。
+  **对齐方向**：能力域 crate 的 19 个 `plugin_binding::peer_*` 域函数已是 WIT-无关
+  （`&Arc<dyn PeerPorts>`），移动可直接复用（补移动 `PeerPorts` + 薄转发）——见
+  `.scratch/2026-10-10-peer-capability-consolidation/`
 - **命令面（注册于 `lib.rs`）：票 09 + 票 10 后为零**——`peer_net` / `peer_transfer` /
   `peer_receive` / `peer_remote` 四个模块**零 Tauri 注册**。票 09 清掉发现与连接编排面
   （设备列表查询 / 缓存解析版拨号 / 共享目录注册表 CRUD / 节点启停 / 首连应答 /
