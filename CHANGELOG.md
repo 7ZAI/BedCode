@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+#### Peer capability engine consolidation: mobile adopts the shared peer-net capability crate (ADR 0048)
+
+- **One peer engine for both ends** (user directive: basic services concentrated as capability crates,
+  hosts assemble ports, wasm apps orchestrate): the mobile host's peer engine control plane
+  (~4.4k lines: node assembly / lifecycle gates / session handle tables / receive ledger & settings
+  persistence / event translation / remote-pull orchestration) moved into the dual-end capability crate
+  `packages/bedcode-server-peer-net` (default `[]` pure engine, WIT binding stays behind `common-host`);
+  mobile `peer_*.rs` is now an **adapter layer only** (5-port `PeerEnginePorts` implementation + platform
+  seam + `peer_ctx` assembly + delegation). Desktop adapts through a narrowed port set — **zero behavior
+  change, zero ABI / WIT / wire / permission changes**.
+- **mDNS reuse (no second implementation)**: engine advertising goes through the shared
+  `bedcode-discovery-engine` daemon; the mobile host's `MdnsAdvertiser` dead face (zero live consumers),
+  the `mdns_start_advertise` / `mdns_stop_advertise` commands and the dead front-end composable were
+  **retired**; the browse shell stays (live consumer: terminal-session host page).
+- **Platform seams injected per end**: SAF shared access / MediaStore landing promotion / built-in
+  `"下载"` entry / downloads-dir semantics are `PeerPlatformSeam` parameters — desktop passes `None`,
+  behavior byte-identical.
+- **Anti-back-drift locks**: `peer_engine_consolidation_lock.rs` (retired engine face absent / adapter
+  face present / shared dependency present, mutation 1/1) + `retired_mobile_mdns_advertise_lock.rs`
+  (advertise face absent / browse shell present / shared-daemon reuse anchor, mutation 1/1).
+
 #### Single wasm-core crate: mobile fork retired, dependency graph unbound from desktop (ticket 06)
 
 - **One `bedcode-wasm-core` serves both ends** (ADR 0045 D1): the mobile fork crate
