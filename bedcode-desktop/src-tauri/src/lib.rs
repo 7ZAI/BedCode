@@ -553,6 +553,16 @@ pub fn run() {
             // 终端同步事件通道已随 websocket 业务下沉票 08 删除（插件事件改 bus+emit，
             // 宿主不再持有 HostSyncEvent / broadcast-sync 广播面）
 
+            // ==================== guest 事件派发器注入（票 03 / ADR 0022） ====================
+            // `events` 导出的调用契约是端专属事实（桌面 on-message / on-process-done），
+            // 机制留 wasm-core、契约面由本宿主用自有绑定实现——与 peer_ctx_provider /
+            // domain_ports 同范式（`&self` + RwLock，宿主只拿到不可变 Arc）。
+            // **必须在任何插件实例化之前**：已加载实例持有创建时的派发器快照，
+            // 漏注入则事件派发 fail-visible 报错（不是静默丢消息）。
+            plugin_host.wasm_runtime().set_guest_events(std::sync::Arc::new(
+                crate::plugin::guest_events::DesktopGuestEvents,
+            ));
+
             // ==================== 注册到 AppContext 全局容器 ====================
 
             let _ctx = system::app_context::AppContextBuilder::new()

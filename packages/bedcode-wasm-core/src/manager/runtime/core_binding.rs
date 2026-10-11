@@ -313,6 +313,32 @@ pub(crate) fn abi_version(
 }
 
 
+/// ABI 形态探测（`bedcode:plugin/abi-form#form` → `u32`，桌面独有 cap 导出）
+///
+/// 与 [`abi_version`] 同手法的原生探测：`() -> u32` **无 `result` 返回**，因此能
+/// 用 `TypedFunc` 表达（带 `result` 的导出如 `events.*` 不能，见 ticket-03 §9.6）。
+/// 语义上 `form` 只判「component 形态 vs core 形态」这一跨端一致的事实，具体
+/// 期望值是端策略（桌面 `FORM_COMPONENT = 1`），由调用方比对。
+pub(crate) fn abi_form(
+    store: &mut wasmtime::Store<WasmPluginState>,
+    instance: &wasmtime::component::Instance,
+) -> crate::Result<Option<u32>> {
+    let Some(item) = "bedcode:plugin/abi-form.form"
+        .parse::<wasmtime::component::wit_parser::ItemName>()
+        .ok()
+    else {
+        return Ok(None);
+    };
+    let func = match instance.get_typed_func::<(), (u32,)>(&mut *store, &item) {
+        Ok(f) => f,
+        Err(_) => return Ok(None),
+    };
+    crate::runtime_util::block_on_async(func.call_async(&mut *store, ()))
+        .map(|(form,)| Some(form))
+        .map_err(|e| AppError::Plugin(format!("Failed to call abi-form.form(): {}", e)))
+}
+
+
 // ==================== Linker 装配（交集段） ====================
 
 /// 把 core 交集 interface 注册到 component linker（双端唯一一份）

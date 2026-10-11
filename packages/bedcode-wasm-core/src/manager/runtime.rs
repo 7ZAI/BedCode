@@ -34,6 +34,12 @@ pub(crate) mod engine;
 // 不进本模块。
 pub(crate) mod core_binding;
 
+// ==================== Guest 事件派发契约面（票 03 / ADR 0022） ====================
+//
+// 事件循环机制留内核，`events` 导出的调用契约由各端宿主实现本 trait 并注入
+// （双端 `events` 词汇完全不同，且带 `result` 返回无法原生探测，见模块文档）。
+pub mod guest_events;
+
 // ==================== 桌面装配树（common-host） ====================
 
 #[cfg(feature = "common-host")]
@@ -48,6 +54,12 @@ pub(crate) use common::fixture_target;
 // `crate::manager::runtime::X` 路径不变（宿主与 crate 内引用零改动）
 #[cfg(feature = "common-host")]
 pub use common::*;
+
+/// 内核测试用的 guest 事件派发替身（票 03）——`test_support` 侧注入点
+///
+/// 与生产派发器同一契约、逐字同语义；生产二进制不含（`cfg(test)`）。
+#[cfg(feature = "common-host")]
+pub(crate) use common::TestGuestEvents;
 
 // ==================== 移动装配树（bare-host，fork 迁入） ====================
 

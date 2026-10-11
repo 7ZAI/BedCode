@@ -109,6 +109,11 @@ pub fn setup_wasm_runtime_with_setup(setup: EngineSetup) -> (WasmRuntime, Arc<Wa
 
         // 无头构建：不创建 AppHandle（tao 事件循环不允许在测试线程初始化）
         let mut wasm_runtime = WasmRuntime::with_setup(storage.clone(), None, setup).unwrap();
+        // guest 事件派发器（票 03）：生产由宿主注入，内核测试二进制不链宿主 lib ⇒
+        // 用与生产逐字同语义的 `TestGuestEvents` 替身（`component.rs` cfg(test) 区）
+        wasm_runtime.set_guest_events(Arc::new(
+            crate::manager::runtime::TestGuestEvents,
+        ));
         // 注入 AOT 缓存目录（生产由 app_handle 派生，测试无头上下文手动注入）
         wasm_runtime.aot_cache_dir = Some(
             std::env::temp_dir().join(format!("bedcode_aot_{}", std::process::id())),

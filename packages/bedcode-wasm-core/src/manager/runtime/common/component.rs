@@ -29,9 +29,10 @@ use crate::config::StoreLimits;
 // ——生产注册来自宿主自报，壳内无 impl 消费它
 #[cfg(test)]
 use crate::host_api::context::HostCtxOf;
-// core 8 域的 `Host` impl 已迁 `runtime/core_binding.rs`（票 03 Option A，双端单份）；
-// 本壳只留桌面专属面：WASI 预打开装配 / 导出调用面 / 桌面 cap 引用。
 use crate::manager::runtime::engine;
+// guest 事件派发契约面（票 03 / ADR 0022）：`events` 导出双端词汇不同、且带
+// `result` 返回（原生 TypedFunc 表达不了），调用契约由宿主实现并注入，本壳只转发。
+use crate::manager::runtime::guest_events::GuestEventDispatcher;
 
 /// `add_to_linker` 的 getter 形态别名（`HasSelf<T>` 让 getter 返回 `&mut T`）
 ///
@@ -306,6 +307,60 @@ impl bedcode::plugin::host_api_call::Host for WasmPluginState {
     }
 }
 
+// ==================== 内核测试替身：guest 事件派发（仅 cfg(test)） ====================
+//
+// 生产派发器由**桌面宿主**实现并注入（票 03 / ADR 0022：`events` 导出双端词汇不同、
+// 带 `result` 返回无法原生探测，故内核不持有其绑定）。内核测试二进制不链宿主 lib，
+// 因此在此用本文件已有的全 world 绑定提供等价实现——与 `host-api-call` /
+// `host-{events,fs,platform}-desktop` 三个替身同一范式、同一隔离保证
+//（生产二进制不含 `cfg(test)` 分支）。
+//
+// 行为口径与生产逐字一致：guest 自报失败记 warn 后返回 Ok（事件投递是
+// fire-and-forget，不让单个处理器失败拖垮整条分发链），trap 上抛。
+pub(crate) struct TestGuestEvents;
+
+impl GuestEventDispatcher for TestGuestEvents {
+    fn on_message(
+        &self,
+        store: &mut Store<WasmPluginState>,
+        instance: Instance,
+        topic: &str,
+        sender: &str,
+        payload_json: &str,
+    ) -> crate::Result<()> {
+        let exports = Plugin::new(&mut *store, &instance)
+            .map_err(|e| AppError::Plugin(format!("WASM component exports access failed: {}", e)))?;
+        let events = exports.bedcode_plugin_events();
+        match block_on_async(events.call_on_message(&mut *store, topic, sender, payload_json)) {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(msg)) => {
+                tracing::warn!("WASM on_message() failed: {}", msg);
+                Ok(())
+            }
+            Err(e) => Err(engine::trapped(store, "on_message", e)),
+        }
+    }
+
+    fn on_process_done(
+        &self,
+        store: &mut Store<WasmPluginState>,
+        instance: Instance,
+        payload_json: &str,
+    ) -> crate::Result<()> {
+        let exports = Plugin::new(&mut *store, &instance)
+            .map_err(|e| AppError::Plugin(format!("WASM component exports access failed: {}", e)))?;
+        let events = exports.bedcode_plugin_events();
+        match block_on_async(events.call_on_process_done(&mut *store, payload_json)) {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(msg)) => {
+                tracing::warn!("WASM on_process_done() failed: {}", msg);
+                Ok(())
+            }
+            Err(e) => Err(engine::trapped(store, "on_process_done", e)),
+        }
+    }
+}
+
 // ==================== 内核测试替身：v36 切片桌面扩展三接口（仅 cfg(test)） ====================
 //
 // 票 02 批次 06 把四个交集接口的桌面独有函数拆为新 interface 并迁宿主（
@@ -428,6 +483,11 @@ pub struct LoadedWasmPlugin {
     meta: InstanceMeta,
     instance: Instance,
     store: Store<WasmPluginState>,
+    /// 端专属 guest 事件派发器（票 03 / ADR 0022：机制留内核、契约面上移）
+    ///
+    /// 由 `WasmRuntime` 在实例化时透传——本壳不知道 `events` 导出在各端长什么样，
+    /// 只把 `(Store, Instance)` 与消息交给宿主侧实现。
+    guest_events: Arc<dyn GuestEventDispatcher>,
 }
 
 impl Drop for LoadedWasmPlugin {
@@ -452,6 +512,7 @@ impl LoadedWasmPlugin {
         host_ctx: Arc<WasmHostContext>,
         declared_preopen_dirs: &[WasiPreopenDir],
         spec: StoreSpec,
+        guest_events: Arc<dyn GuestEventDispatcher>,
     ) -> crate::Result<Self> {
         // WASI 上下文：按 manifest 声明（wasiPreopenDirs，展开+授权过滤）预打开
         // 目录 /data…；无声明/未授权时为空上下文
@@ -509,6 +570,7 @@ impl LoadedWasmPlugin {
             },
             instance,
             store,
+            guest_events,
         })
     }
 
@@ -609,12 +671,6 @@ impl LoadedWasmPlugin {
     fn verify_abi(store: &mut Store<WasmPluginState>, instance: &Instance) -> crate::Result<()> {
         // 本路径不经 exports()（实例化后立即校验），独立重置燃料
         engine::inject_call_fuel(store)?;
-        let exports = Plugin::new(&mut *store, instance)
-            .map_err(|e| AppError::Plugin(format!("WASM component missing required exports: {}", e)))?;
-        // v36（票 02 批次 06）：`form` 自 `abi` 拆入独立接口 `abi-form`（桌面独有
-        // cap 导出），SDK 按新契约导出两接口（旧 v35 产物缺 abi-form 导出 ⇒ 此处
-        // 实例化期被拒，fail-visible 形态②，见 stale_artifact_rebuild_hint 判据扩展）
-        let abi_form_guest = exports.bedcode_plugin_abi_form();
 
         // `abi.version` 走 core 绑定的原生探测（票 03）：`abi` 虽在 core.wit 却是
         // cap 追加的导出，不在 `world core` 表内 —— 绑进内核等于让内核对「谁的
@@ -628,8 +684,21 @@ impl LoadedWasmPlugin {
                         .to_string(),
                 )
             })?;
-        let form = block_on_async(async { abi_form_guest.call_form(&mut *store).await })
-            .map_err(|e| AppError::Plugin(format!("WASM component abi-form.form() call failed: {}", e)))?;
+
+        // v36（票 02 批次 06）：`form` 自 `abi` 拆入独立接口 `abi-form`（桌面独有
+        // cap 导出），SDK 按新契约导出两接口（旧 v35 产物缺 abi-form 导出 ⇒ 此处
+        // 实例化期被拒，fail-visible 形态②，见 stale_artifact_rebuild_hint 判据扩展）。
+        // `abi-form.form()` 无 `result` 返回（`() -> u32`），**可以**原生探测——
+        // 与 `events.*` 那类带 `result` 的导出不同（`Result` 不实现
+        // `ComponentNamedList`，原生 TypedFunc 表达不了，见 ticket-03 §9.6）。
+        let form = crate::manager::runtime::core_binding::abi_form(store, instance)?
+            .ok_or_else(|| {
+                AppError::Plugin(
+                    "WASM component missing required export `abi-form.form` \
+                     （该产物由其他插件协议（ABI）的插件 SDK 构建，请用当前 SDK 重建插件产物）"
+                        .to_string(),
+                )
+            })?;
 
         if form != abi::FORM_COMPONENT {
             return Err(AppError::Plugin(format!(
@@ -874,25 +943,16 @@ impl LoadedWasmPlugin {
     }
 
     /// 调用插件的消息总线消息接收导出
+    ///
+    /// 派发委托给宿主注入的 [`GuestEventDispatcher`]（票 03 / ADR 0022）：本壳不
+    /// 持有 `events` 绑定。调用计时与燃料续费仍留机制侧。
     pub(crate) fn on_message(&mut self, topic: &str, sender: &str, payload: &serde_json::Value) -> crate::Result<()> {
         let _timer = self.track_call();
         let payload_str = serde_json::to_string(payload).unwrap_or_default();
-        let exports = self.exports()?;
-        let events = exports.bedcode_plugin_events();
-        match block_on_async(async {
-            events
-                .call_on_message(&mut self.store, topic, sender, &payload_str)
-                .await
-        }) {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(msg)) => {
-                tracing::warn!("WASM on_message() failed: {}", msg);
-                Ok(())
-            }
-            Err(e) => {
-                Err(engine::trapped(&self.store, "on_message", e))
-            }
-        }
+        self.refill_call_fuel()?;
+        let instance = self.instance;
+        self.guest_events
+            .on_message(&mut self.store, instance, topic, sender, &payload_str)
     }
 
     /// 调用插件的消息总线二进制消息接收导出（v11，可选导出动态探测）
@@ -1006,18 +1066,10 @@ impl LoadedWasmPlugin {
     /// 调用插件的进程执行完成事件导出（host-process，v8）
     pub(crate) fn on_process_done(&mut self, payload_json: &str) -> crate::Result<()> {
         let _timer = self.track_call();
-        let exports = self.exports()?;
-        let events = exports.bedcode_plugin_events();
-        match block_on_async(async { events.call_on_process_done(&mut self.store, payload_json).await }) {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(msg)) => {
-                tracing::warn!("WASM on_process_done() failed: {}", msg);
-                Ok(())
-            }
-            Err(e) => {
-                Err(engine::trapped(&self.store, "on_process_done", e))
-            }
-        }
+        self.refill_call_fuel()?;
+        let instance = self.instance;
+        self.guest_events
+            .on_process_done(&mut self.store, instance, payload_json)
     }
 
     /// 获取插件的 manifest JSON

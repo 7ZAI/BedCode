@@ -28,6 +28,9 @@ pub mod api_call;
 pub mod app;
 pub mod auth;
 pub mod bindings;
+
+/// 桌面 guest 事件派发器（票 03 / ADR 0022）：`events` 导出的调用契约面
+pub mod guest_events;
 pub mod connection;
 pub mod crypto;
 pub mod events;

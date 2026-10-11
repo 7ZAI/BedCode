@@ -23,6 +23,10 @@ pub(crate) use component::expand_preopen_declarations;
 /// WASI 预打开目录解析（激活时重建实例判定用，见 host.rs `rebuild_wasm_instance`）
 pub(crate) use component::resolve_preopen_dirs;
 pub use component::LoadedWasmPlugin;
+
+/// 内核测试用 guest 事件派发替身（票 03）——经本壳转出供 `test_support` 注入
+#[cfg(feature = "common-host")]
+pub(crate) use component::TestGuestEvents;
 // 票 02 批次 02：生效能力模块白名单（内建在册 ∪ 宿主自报）——宿主侧集成锁
 // （`src-tauri/tests/pty_wiring.rs` 的双向比对）必须用同一份合并结果，不得各拼一份。
 pub use component::host_module_whitelist;
@@ -122,6 +126,13 @@ pub struct WasmRuntime {
     config: Arc<std::sync::RwLock<CoreConfig>>,
     /// 指标注册表（core-monitor）：内核运行时埋点数据中心
     monitor: Arc<MetricsRegistry>,
+    /// 端专属 guest 事件派发器（票 03 / ADR 0022）
+    ///
+    /// 缺省 `UnwiredGuestEvents`（派发即 fail-visible）；生产由 `PluginHost::new`
+    /// 与 monitor / peer_ctx_provider 同构地注入桌面实现（宿主自带 `bindgen!`）。
+    guest_events: Arc<
+        std::sync::RwLock<Arc<dyn crate::manager::runtime::guest_events::GuestEventDispatcher>>,
+    >,
 }
 
 // ==================== 迁往机制内核的类型（转发） ====================
@@ -325,7 +336,22 @@ impl WasmRuntime {
             aot_cache_dir,
             config: Arc::new(std::sync::RwLock::new(core_config)),
             monitor,
+            guest_events: Arc::new(std::sync::RwLock::new(Arc::new(
+                crate::manager::runtime::guest_events::UnwiredGuestEvents,
+            )
+                as Arc<dyn crate::manager::runtime::guest_events::GuestEventDispatcher>)),
         })
+    }
+
+    /// 注入端专属 guest 事件派发器（生产在 `PluginHost::new`，与 monitor 同范式）
+    ///
+    /// **必须在首次 `instantiate_component` 之前调用**：已加载实例持有创建时的派发器
+    /// 快照。漏注入的后果是事件派发 fail-visible 报错（不是静默丢消息）。
+    pub fn set_guest_events(
+        &self,
+        dispatcher: Arc<dyn crate::manager::runtime::guest_events::GuestEventDispatcher>,
+    ) {
+        *self.guest_events.write().unwrap_or_else(|e| e.into_inner()) = dispatcher;
     }
 
     /// 当前内核配置快照
@@ -438,6 +464,10 @@ impl WasmRuntime {
                 fuel_enabled,
                 metrics: metrics.clone(),
             },
+            self.guest_events
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone(),
         )?;
         metrics.record_lifecycle(LifecycleEvent::Instantiate);
         // 实例创建日志：启动加载与热重载均经此路径，与 LoadedWasmPlugin::drop 的
