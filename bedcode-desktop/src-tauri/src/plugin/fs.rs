@@ -111,8 +111,7 @@ mod tests {
     fn granted_temp_root(name: &str, ctx: &WasmHostContext) -> (tempfile::TempDir, std::path::PathBuf) {
         let (dir, root) = bare_temp_root(name);
         let checker = ctx
-            .fs_auth_checker()
-            .expect("test context requires FsAuthChecker gate");
+            .fs_auth_checker();
         block_on_async(checker.seed_legacy_granted_path(PLUGIN, &root.to_string_lossy()))
             .expect("seed persisted grant");
         (dir, root)

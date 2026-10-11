@@ -27,6 +27,13 @@
 // 明确不成立：移动契约独立演进，不跟演桌面 ABI 破坏性变更）。
 pub(crate) mod engine;
 
+// ==================== Core 交集绑定层（双端唯一一份，票 03 Option A） ====================
+//
+// 绑契约真源 `wit/core.wit` 的 `world core`（双端全等的交集），cap 组合面由各端宿主
+// 自有绑定 + `HostModule` 自报汇入同一个 Linker。形态差异（cap / WASI / 端 SDK 类型）
+// 不进本模块。
+pub(crate) mod core_binding;
+
 // ==================== 桌面装配树（common-host） ====================
 
 #[cfg(feature = "common-host")]

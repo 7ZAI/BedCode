@@ -32,7 +32,7 @@ use std::sync::{Arc, RwLock};
 use wasmtime::component::Instance;
 use wasmtime::Store;
 
-use super::runtime::WasmPluginState;
+use bedcode_host_kit::WasmPluginState;
 use crate::host_api::context::CapabilityTarget;
 
 // ==================== 能力名与导出探测表 ====================

@@ -16,7 +16,6 @@
 // （capability / host / task / watcher + runtime 桌面分支）随 `common-host`；移动
 // 装配树（fork 迁入的 runtime/bare.rs + component + host_impl 16 域）随
 // `bare-host`。机制面（downloader / loader / registry / types / validation）双端共享。
-#[cfg(feature = "common-host")]
 pub(crate) mod capability;
 // 插件 zip 分发包解压安装：core-plugin-manager 的安装职责，已自 `plugin/downloader`
 // 归位到此（票 11 第 5 项），引用方改为 `crate::manager::downloader`。

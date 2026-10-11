@@ -121,8 +121,7 @@ fn ensure_unit_path_granted(
     // 票 02 B5：`is_granted` 是 FsAuthChecker 具体机制方法（不在窄 FsAuthGate trait
     // 上）——经下转型访问器取回（桌面装配形态恒 Some）
     let checker = host_ctx
-        .fs_auth_checker()
-        .expect("fs unit pre-check requires FsAuthChecker gate");
+        .fs_auth_checker();
     if block_on_async(checker.is_granted(owner, path, needed)) {
         return Ok(());
     }
@@ -208,8 +207,7 @@ pub(crate) fn fs_request_auth(
         return Ok(true);
     }
     let fs_auth = fs_auth
-        .fs_auth_checker()
-        .expect("fs request-auth requires FsAuthChecker gate");
+        .fs_auth_checker();
     // 操作集 = 读 + 写：`request-auth` 的 WIT 签名没有操作维度，插件的用途（fs 单元
     // 可读可写）决定这里要申请两种能力——与改造前「无操作维度 = 读写等价」逐字一致
     // （票 02 只做拆分与落账，不动这条原语的契约；将来要收窄需 WIT 加参）
@@ -464,8 +462,7 @@ mod tests {
 
         // ③ 预置持久化授权（= 用户在弹窗里点过「记住」）→ 放行并真实执行成功
         let checker = ctx
-            .fs_auth_checker()
-            .expect("test context requires FsAuthChecker gate");
+            .fs_auth_checker();
         block_on_async(checker.seed_legacy_granted_path("test-plugin", &path)).expect("seed grant");
         executor
             .execute(&ctx, "test-plugin", "fs.read", &read_params)
@@ -514,8 +511,7 @@ mod tests {
     fn granted_temp_root(name: &str, ctx: &WasmHostContext) -> (tempfile::TempDir, std::path::PathBuf) {
         let (dir, root) = bare_temp_root(name);
         let checker = ctx
-            .fs_auth_checker()
-            .expect("test context requires FsAuthChecker gate");
+            .fs_auth_checker();
         block_on_async(checker.seed_legacy_granted_path(PLUGIN, &root.to_string_lossy()))
             .expect("seed persisted grant");
         (dir, root)

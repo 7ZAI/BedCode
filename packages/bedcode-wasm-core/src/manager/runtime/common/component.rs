@@ -25,10 +25,8 @@ use super::plugin_debug_mode;
 use super::{StoreSpec, WasmHostContext, WasmPluginState};
 #[cfg(test)]
 use crate::config::StoreLimits;
-use crate::host_api::context::HostCtxOf;
-use crate::host_api::{bus, config, database, events, fs, log, platform, sqlite, status, storage};
-// 组件引擎机制（Store 装配 / 实例化 / 燃料 / 实例生死观测）双端唯一一份；
-// 本文件只留 WIT 绑定层（bindgen / Host impl / linker 装配 / 导出调用面）
+// core 8 域的 `Host` impl 已迁 `runtime/core_binding.rs`（票 03 Option A，双端单份）；
+// 本壳只留桌面专属面：WASI 预打开装配 / 导出调用面 / 桌面 cap 引用。
 use crate::manager::runtime::engine;
 use crate::monitor::LifecycleEvent;
 use crate::runtime_util::block_on_async;
@@ -59,96 +57,6 @@ bindgen!({
 // 返回值映射：WIT `result<T, string>` → `Result<T, String>`，错误内容为宿主侧
 // 可读消息，跨 wasm 边界后由调用方（本模块方法）转为 AppError
 
-// ==================== host-storage / host-database / host-plugin-database ====================
-// ADR 0036：这三 interface 的实现留在 wasm 核心内（`wasm_core::host_api::{storage,
-// database}`），故 `Host` impl 也在本文件——与文件里其余各域同形。票 08 期间它们被
-// 搬进 `bedcode-sqlite-engine` 能力域 crate（provider 侧自生成同名 trait，两侧同时
-// 注册会让 linker 报 `defined twice`），随 crate 撤销一并归位。
-//
-// 端口按**本次调用**的上下文现取（`sqlite::ports_for`），无进程级单例、无实例级
-// 登记、无强制链接行——见 `host_api::sqlite_ports` 模块文档。
-
-impl bedcode::plugin::host_storage::Host for WasmPluginState {
-    fn get(&mut self, key: String) -> Result<Option<String>, String> {
-        storage::storage_get(&sqlite::ports_for(self.host_ctx()), &self.plugin_id, &key)
-            .map(|opt| opt.map(|v| v.to_string()))
-    }
-
-    fn set(&mut self, key: String, value: String) -> Result<(), String> {
-        let json_value: serde_json::Value =
-            serde_json::from_str(&value).map_err(|e| format!("invalid JSON value: {}", e))?;
-        storage::storage_set(&sqlite::ports_for(self.host_ctx()), &self.plugin_id, &key, json_value)
-    }
-
-    fn delete(&mut self, key: String) -> Result<(), String> {
-        storage::storage_delete(&sqlite::ports_for(self.host_ctx()), &self.plugin_id, &key)
-    }
-}
-
-impl bedcode::plugin::host_plugin_database::Host for WasmPluginState {
-    fn execute(&mut self, sql: String) -> Result<u32, String> {
-        database::plugin_db_execute(&sqlite::ports_for(self.host_ctx()), &self.plugin_id, &sql)
-    }
-
-    fn query(&mut self, sql: String) -> Result<Option<String>, String> {
-        database::plugin_db_query(&sqlite::ports_for(self.host_ctx()), &self.plugin_id, &sql)
-    }
-
-    fn execute_params(&mut self, sql: String, params_json: String) -> Result<u32, String> {
-        database::plugin_db_execute_params(&sqlite::ports_for(self.host_ctx()), &self.plugin_id, &sql, &params_json)
-    }
-
-    fn query_params(&mut self, sql: String, params_json: String) -> Result<Option<String>, String> {
-        database::plugin_db_query_params(&sqlite::ports_for(self.host_ctx()), &self.plugin_id, &sql, &params_json)
-    }
-
-    fn execute_batch(&mut self, sqls_json: String) -> Result<u32, String> {
-        database::plugin_db_execute_batch(&sqlite::ports_for(self.host_ctx()), &self.plugin_id, &sqls_json)
-    }
-}
-
-// ==================== host-auth（v15 secret-store + v18 认证记录面） ====================
-// host-auth 已迁宿主（票 02 批次 04，`src-tauri/src/plugin/auth.rs` 路径 B：宿主自带
-// bindgen + `Host` impl + 域函数同处）。**注册表真源 `host_api/auth_center.rs` 留在
-// 内核**——内核 `boot.rs` 的 L2 启动门与 `activation.rs` 停用回收同表消费（裁决见
-// 宿主 adapter 模块文档）；本 impl 消费点随迁，内核对注册表的其余消费不变。
-
-// v20：宿主并发任务域（host-task）已迁宿主（票 02 批次 05，`src-tauri/src/plugin/task.rs`
-// 路径 B：宿主自带 bindgen + `Host` impl + 域函数同处）。内核保留：`TaskEngine` 接口
-// （`host_api/context.rs`，消费方定义）与留内核的任务引擎（`manager/task.rs`）——
-// 域侧入口只做权限门 + 引擎转发，引擎不迁则接口不迁（C4）。
-
-// v26：宿主加密引擎（host-crypto）已迁宿主（票 02 批次 04，`src-tauri/src/plugin/crypto.rs`
-// 路径 B：宿主自带 bindgen + `Host` impl + 域函数同处）。内核 `host_api/crypto.rs` 已删，
-// `crate::crypto` shim（bedcode-crypto-engine 再导出）保留——它是机制真源的路径垫片。
-
-impl bedcode::plugin::host_log::Host for WasmPluginState {
-    fn info(&mut self, message: String) {
-        log::log_info(&self.plugin_id, &message, "", 0);
-    }
-
-    fn debug(&mut self, message: String) {
-        log::log_debug(&self.plugin_id, &message, "", 0);
-    }
-
-    fn warn(&mut self, message: String) {
-        log::log_warn(&self.plugin_id, &message, "", 0);
-    }
-
-    fn error(&mut self, message: String) {
-        log::log_error(&self.plugin_id, &message, "", 0);
-    }
-
-    fn mark_plugin_error(&mut self, error: String) {
-        status::mark_plugin_error(self.host_ctx(), self.plugin_id.clone(), error);
-    }
-}
-
-impl bedcode::plugin::host_config::Host for WasmPluginState {
-    fn get(&mut self, key: String) -> Result<Option<String>, String> {
-        config::config_get(self.host_ctx(), &self.plugin_id, &key)
-    }
-}
 
 // v27（票 10 删除的 `impl bedcode::plugin::host_terminal::Host`）：
 // `host-terminal.send` 是「宿主替插件往交互终端注入按键」的最后一处业务面入口，
@@ -170,71 +78,6 @@ impl bedcode::plugin::host_config::Host for WasmPluginState {
 // `src-tauri/src/plugin/{process,app,timer}.rs` 路径 B：宿主自带 bindgen + `Host` impl +
 // 域函数同处；`ProcessUnitExecutor` 随域走宿主并经 `submit_unit_executor!` 自报注册）。
 
-impl bedcode::plugin::host_events::Host for WasmPluginState {
-    // WIT 中 emit 无错误返回，宿主侧记录日志（与 core 胶水一致）
-    fn emit(&mut self, event_name: String, payload_json: String) {
-        if let Err(e) = events::emit_event(self.host_ctx(), &event_name, &payload_json) {
-            tracing::error!(error = %e, event = %event_name, "host_events.emit failed");
-        }
-    }
-}
-
-// v36：`host-events.notify` 拆入 `host-events-desktop`（桌面独有交集切片），WIT
-// impl 已迁宿主 `src-tauri/src/plugin/events.rs`（票 02 批次 06）。
-
-impl bedcode::plugin::host_fs::Host for WasmPluginState {
-    fn read(&mut self, path: String) -> Result<Option<String>, String> {
-        fs::fs_read(self.host_ctx(), &self.plugin_id, &path)
-    }
-
-    fn write(&mut self, path: String, data: String) -> Result<(), String> {
-        fs::fs_write(self.host_ctx(), &self.plugin_id, &path, &data)
-    }
-
-    fn copy(&mut self, src: String, dst: String) -> Result<(), String> {
-        fs::fs_copy(self.host_ctx(), &self.plugin_id, &src, &dst)
-    }
-
-    fn delete(&mut self, path: String) -> Result<(), String> {
-        fs::fs_delete(self.host_ctx(), &self.plugin_id, &path)
-    }
-
-    fn exists(&mut self, path: String) -> Result<bool, String> {
-        fs::fs_exists(self.host_ctx(), &self.plugin_id, &path)
-    }
-
-    fn request_auth(&mut self, paths_json: String) -> Result<bool, String> {
-        fs::fs_request_auth(self.host_ctx(), self.host_ctx(), &self.plugin_id, &paths_json)
-    }
-}
-
-// v36：`host-fs.read-dir / canonicalize / stat` 拆入 `host-fs-desktop`（桌面独有
-// 交集切片，文件浏览域），WIT impl 已迁宿主 `src-tauri/src/plugin/fs.rs`
-// （票 02 批次 06）。
-
-impl bedcode::plugin::host_bus::Host for WasmPluginState {
-    fn publish(&mut self, topic: String, payload_json: String) -> Result<(), String> {
-        bus::bus_publish(self.host_ctx(), self.host_ctx(), &self.plugin_id, &topic, &payload_json)
-    }
-
-    /// v11：二进制载荷发布（零 JSON 编解码，可传非 UTF-8 与大载荷）
-    fn publish_binary(&mut self, topic: String, payload: Vec<u8>) -> Result<(), String> {
-        bus::bus_publish_binary(self.host_ctx(), self.host_ctx(), &self.plugin_id, &topic, payload)
-    }
-
-    fn subscribe(&mut self, topic: String) -> Result<(), String> {
-        bus::bus_subscribe(self.host_ctx(), &self.plugin_id, &topic)
-    }
-
-    /// v11：以二进制格式偏好订阅（只接收 publish-binary 投递）
-    fn subscribe_binary(&mut self, topic: String) -> Result<(), String> {
-        bus::bus_subscribe_binary(self.host_ctx(), &self.plugin_id, &topic)
-    }
-
-    fn unsubscribe(&mut self, topic: String) -> Result<(), String> {
-        bus::bus_unsubscribe(self.host_ctx(), &self.plugin_id, &topic)
-    }
-}
 
 // host-api-call（互调，ADR-0017）的 **WIT impl** 已迁宿主（票 02 批次 05，
 // `src-tauri/src/plugin/api_call.rs` 路径 B 薄转发：无权限门，互调门禁在注册表）。
@@ -247,17 +90,6 @@ impl bedcode::plugin::host_bus::Host for WasmPluginState {
 // host-mdns / host-peer 两个 interface 已随 wasm-core-lib-split 票 03 / 05 迁为
 // 能力域（经 `inventory` 自报装配，见下节），本节只剩留 core 的 POSIX / 机制面。
 
-impl bedcode::plugin::host_platform::Host for WasmPluginState {
-    // `pick-*` 需三件 scope：权限门（`fs:pick`）+ AppHandle（弹系统原生对话框）
-    // + fs_auth（选择结果授权校验）
-    fn pick_files(&mut self) -> Result<String, String> {
-        platform::platform_pick_files(self.host_ctx(), self.host_ctx(), self.host_ctx(), &self.plugin_id)
-    }
-
-    fn pick_folder(&mut self) -> Result<String, String> {
-        platform::platform_pick_folder(self.host_ctx(), self.host_ctx(), self.host_ctx(), &self.plugin_id)
-    }
-}
 
 // v36：`host-platform.pick-folders / wsl-distros / local-ipv4-addresses /
 // reveal-in-dir` 拆入 `host-platform-desktop`（桌面独有交集切片），WIT impl 已迁
@@ -389,26 +221,9 @@ fn verify_host_module_registry(whitelist: &[&str]) -> crate::Result<bedcode_host
 ///
 /// 每个接口一个 `add_to_linker`（`HasSelf<T>` 让 getter 返回 `&mut T`）。
 pub(crate) fn add_to_linker(linker: &mut Linker<WasmPluginState>) -> crate::Result<()> {
-    type D = wasmtime::component::HasSelf<WasmPluginState>;
-    for iface in [
-        // host-auth 已迁宿主（票 02 批次 04，`src-tauri/src/plugin/auth.rs`）——本域
-        // 的 `add_to_linker` 随 impl 一起走路径 B（宿主自带 bindgen + HostModule 自报）。
-        bedcode::plugin::host_storage::add_to_linker::<WasmPluginState, D>,
-        bedcode::plugin::host_log::add_to_linker::<WasmPluginState, D>,
-        bedcode::plugin::host_config::add_to_linker::<WasmPluginState, D>,
-        bedcode::plugin::host_plugin_database::add_to_linker::<WasmPluginState, D>,
-        // host-crypto 已迁宿主（票 02 批次 04，`src-tauri/src/plugin/crypto.rs`）——本域
-        // 的 `add_to_linker` 随 impl 一起走路径 B（宿主自带 bindgen + HostModule 自报）。
-        // host-process / host-app / host-timer / host-connection / host-task 与
-        // host-api-call 的 WIT impl 同批（票 02 批次 05）走路径 B，见上方各域注释。
-        bedcode::plugin::host_events::add_to_linker::<WasmPluginState, D>,
-        bedcode::plugin::host_fs::add_to_linker::<WasmPluginState, D>,
-        bedcode::plugin::host_bus::add_to_linker::<WasmPluginState, D>,
-        bedcode::plugin::host_platform::add_to_linker::<WasmPluginState, D>,
-    ] {
-        iface(linker, |s| s)
-            .map_err(|e| AppError::Plugin(format!("Failed to register component host interface: {}", e)))?;
-    }
+    // 第一段：core 交集 8 域（票 03 Option A 收口进 `core_binding`——双端唯一一份，
+    // 绑契约真源 `wit/core.wit` 的 `world core`，不经端生成物）。本壳不再逐行列举。
+    crate::manager::runtime::core_binding::add_to_linker(linker)?;
     // 第二段：自动收集到的能力模块（迁出 wasm_core 的域）。当前白名单为空 ⇒ 空转，
     // mdns 域迁出后此处一次装完，**宿主装配代码不再改动**。
     host_module_registry()?
@@ -1352,8 +1167,7 @@ fn resolve_preopen_dirs_with_home(
             // 票 02 B5：`is_granted` 是 FsAuthChecker 具体机制方法（不在窄
             // FsAuthGate trait 上）——经下转型访问器取回（桌面装配恒 Some）
             let checker = host_ctx
-                .fs_auth_checker()
-                .expect("wasi preopen check requires FsAuthChecker gate");
+                .fs_auth_checker();
             block_on_async(checker.is_granted(plugin_id, dir.path(), needed))
         })
         .collect()

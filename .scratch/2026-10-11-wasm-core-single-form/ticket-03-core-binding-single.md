@@ -58,3 +58,36 @@
 - 绑定层单份化裁决记录（A/B/C 取舍 + 理由）补记 spec §7；
 - core 交集绑定单份 + 导出调用 trait 化落地；
 - 门禁结果附本票。
+
+## 8. 裁决（用户 2026-10-11 定：Option A + 单份 async）
+
+**结论**：wasm-core 内 **Option A**——`bindgen!` 改绑 `wit/core.wit` 的 `world core`（真源直指，**不经端生成物**），core 8 域一份共享；cap 全由各端宿主自有 `bindgen!` + `HostModule` 自报汇入 linker。core 导出调用面**单份 async**（`exports: { default: async }`）。
+
+### 8.1 为什么不是 C / B（裁决依据，非偏好）
+
+- **C 被新事实否决**：core 8 域（storage / log / config / plugin-database / events / fs / bus / platform）在两端**逐字同构**——都是对共享 `host_api::*` 的薄转发（桌面直调 `storage::storage_get(&sqlite::ports_for(..))`；移动经 `bare/host_impl` 转发到同一处机制）。上移宿主 = 在两个宿主各写一份，重新制造差异代码，正撞用户裁决「wasm-core 就应该是统一的，不应该有差异代码」。
+- **B 留 cap 痕迹**：仍绑桌面 SDK 生成物（`world plugin` 含 cap-pty / cap-http / cap-ws / cap-desktop），wasm-core 间接持 cap 痕迹，与 §1「零 cap」目标有差距。
+- **A 的落地前提已核实成立**：linker 第二段 `host_module_registry()?.install_all(linker)` **已在消费宿主的 inventory 自报**，cap 域汇入通路跑通，宿主加域不必碰 wasm-core；`Linker` 仅在同名 interface 重复注册时报 `defined twice`，core 8 与 cap 域天然不重叠。
+
+### 8.2 `engine.rs` 阻碍不成立（用户指定以 engine.rs 实际代码为准）
+
+票 §2 对 C 的「engine.rs 大改」顾虑**按现状撤销**：全文签名零 WIT 依赖（只用 `Store<WasmPluginState>` / `Linker` / `Component` + 泛型 `T`，`export` 一律 `&str`），导出判定 `settle*` / `trapped` / `start_call_timer` 已是纯泛型。引擎机制**不参与本票迁移**，仍留 wasm-core 单份。
+
+### 8.3 导出面切分（本票实施前新查证，spec §2 表未记）
+
+`world core` 导出 = **command / lifecycle / manifest**（3）。`abi` 与 `events` 由各端 cap 的 world 追加导出（`cap-desktop`: events + abi + abi-form；`cap-mobile`: events + abi）⇒ 合成 world 导出数 6 / 5 与 §2 表吻合。`events-binary` 明确**不进**必选导出（实例化后探测）。
+
+切分：
+
+| 导出 | 归属 | 机制 |
+| --- | --- | --- |
+| `command.invoke` / `lifecycle.*` / `manifest.get` | **wasm-core**（core 绑定的类型化 Guest） | 业务导出调用面 |
+| `abi.version` | **wasm-core** | `abi` 虽是 core interface 但未进 `world core` 导出表 ⇒ 走**原生 `wasmtime::component::TypedFunc` 探测**（`() -> u32`），不需绑定，零 cap 痕迹 |
+| `events.*` / `abi-form` | **各端宿主**（自有绑定） | cap 导出，按端形状不同（`events` 双端各自定义，非 core.wit 的 17 interface 之一） |
+
+### 8.4 迁移的连带事实（决定实施顺序，spec 未记）
+
+1. **同 crate 两次 `bindgen!` 必冲突**（生成模块名 = WIT package 名 `bedcode`）⇒ `core_binding.rs` 落地与 `common/component.rs` 桌面 bindgen 的删除**必须原子**，不存在「先建新模块后清理」的中间态。
+2. 桌面侧桌面专属面（WASI 预打开装配 `build_wasi_ctx` / `resolve_preopen_dirs`、`abi-form` 探测、SDK 夹具 e2e 测试）依赖**全 world 绑定**（cap 导出不在 core world）⇒ 只能落桌面宿主 `src/plugin/`（已有 `bindings.rs` 全 world bindgen 先例）。**故 T-03 与 T-04 桌面半在实现上耦合，须同批落地**；移动半（T-05）同理。
+3. wasm-core 自身 `cargo test` 的夹具 e2e（`common/tests/*` 15 文件）加载 SDK 夹具，夹具静态 import **全 world** ⇒ core-only 绑定后 wasm-core 测试二进制**无法实例化夹具**。按 §5 归属规则，这些装配面测试随宿主迁（桌面 `src-tauri/tests/`），wasm-core 只留机制单测（`engine.rs` 等形态无关者）。
+4. 移动 app 产物须 `--rust-only` 重构建才有效（spec 已计划，§7 风险项）。

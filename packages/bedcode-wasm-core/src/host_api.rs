@@ -62,33 +62,21 @@
 pub mod api;
 #[cfg(feature = "common-host")]
 pub mod auth_center;
-#[cfg(feature = "common-host")]
 pub(super) mod bus;
-#[cfg(feature = "common-host")]
 pub(super) mod config;
 pub mod context;
-#[cfg(feature = "common-host")]
 pub(super) mod database;
-#[cfg(feature = "common-host")]
 pub(super) mod events;
-#[cfg(feature = "common-host")]
 pub(crate) mod fs;
 #[cfg(feature = "common-host")]
 pub(crate) mod http;
-#[cfg(feature = "common-host")]
 pub(super) mod log;
 
-#[cfg(feature = "common-host")]
 pub(super) mod platform;
-#[cfg(feature = "common-host")]
 pub(crate) mod sqlite;
-#[cfg(feature = "common-host")]
 pub(crate) mod sqlite_ports;
-#[cfg(feature = "common-host")]
 pub(super) mod status;
-#[cfg(feature = "common-host")]
 pub(super) mod storage;
-#[cfg(feature = "common-host")]
 pub mod unit_executor;
 
 // v36 交集接口切片（票 02 批次 06）：`host-fs-desktop`（桌面扩展 3 函数）的 WIT
@@ -99,7 +87,6 @@ pub mod unit_executor;
 // （fs 模块本体保持 `pub(crate)`，不整模块曝面）。
 #[cfg(feature = "common-host")]
 pub use crate::host_api::fs::{fs_canonicalize, fs_read_dir, fs_stat};
-#[cfg(feature = "common-host")]
 mod wsl_fs;
 
 // ==================== 移动 adapter（bare-host，fork 迁入） ====================
@@ -160,7 +147,6 @@ pub(crate) mod sqlite_scaffold;
 ///
 /// **常编译 pub（票 02 批次 02 起）**：迁到宿主侧的域端口 adapter（首个 pty）
 /// 复用同一条拒绝路径——两处各写一份会让「拒绝必须留痕」变成两份实现。
-#[cfg(feature = "common-host")]
 #[must_use]
 pub fn check_permission(
     scope: &dyn crate::host_api::context::PermissionScope,

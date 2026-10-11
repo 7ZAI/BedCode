@@ -49,7 +49,6 @@ common-host = [
     "dep:bedcode-server-websocket",
     "dep:bedcode-server-core",
     "dep:wasmtime-wasi",
-    "dep:tauri-plugin-dialog",
     "dep:aes-gcm",
     "dep:chacha20poly1305",
     "dep:x25519-dalek",
@@ -82,8 +81,9 @@ test-support = ["dep:wit-component"]
 # Android = 系统 WebView），不构成 Android 撞车点。
 tauri = { version = "2", features = ["protocol-asset", "tray-icon", "test"] }
 # 文件选择对话框（host-platform `fs:pick` 引擎面；与 lib 同版本锁步）。
-# 桌面独有（移动 pick 走 host_impl/platform 的宿主引擎端口）——票 06 批次 01 optional 化
-tauri-plugin-dialog = { version = "2", optional = true }
+# 票 03：`platform` 域随 core 绑定层常编译化 ⇒ 依赖无条件（可选化只为形态门控，
+# 而 dialog 本身是 tauri 插件，移动/无头宿主同样可链接）。
+tauri-plugin-dialog = { version = "2" }
 
 # ==================== WASM 运行时（wasmtime 48，双端锁版 ADR 0019） ====================
 wasmtime = { version = "48", features = ["component-model"] }

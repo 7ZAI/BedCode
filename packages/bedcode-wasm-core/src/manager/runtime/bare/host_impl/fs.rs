@@ -38,7 +38,7 @@ impl FsHostPorts for StateFsPorts<'_> {
     }
 
     fn check_access(&self, plugin_id: &str, path: &str, op: FsOp) -> bool {
-        let fs_auth = host_ctx(self.state).fs_auth.clone();
+        let fs_auth = host_ctx(self.state).fs_auth_checker();
         let op = auth_op(op);
         let plugin_id = plugin_id.to_string();
         let path = path.to_string();
@@ -48,8 +48,8 @@ impl FsHostPorts for StateFsPorts<'_> {
     }
 
     fn check_access_batch(&self, plugin_id: &str, paths: &[String], op: FsOp) -> bool {
-        let fs_auth = host_ctx(self.state).fs_auth.clone();
-        let op = auth_op(op);
+        let fs_auth = host_ctx(self.state).fs_auth_checker();
+        let op = auth_ops(op);
         let plugin_id = plugin_id.to_string();
         let paths = paths.to_vec();
         tokio::task::block_in_place(|| {
@@ -80,16 +80,28 @@ impl FsHostPorts for StateFsPorts<'_> {
     }
 }
 
-/// 共享核词汇 → 本端 `FsAuthOp` 的一次性映射（两侧同名字段的形状差异在此收口）
-fn auth_op(op: FsOp) -> crate::host_api::ports::FsAuthOp {
+// ==================== 操作维度映射（两侧同名字段的形状差异在此收口） ====================
+
+/// 共享核操作词汇（`bedcode_host_api_core::fs::FsOp`）→ 安全域判定器的操作维度
+///
+/// 两个 `FsOp` 是**不同 crate 的不同类型**（共享核的域端口词汇 / 安全域的判定链
+/// 参数），同名会诱发误传；映射在此单点收口，避免每个调用点各写一次 match。
+fn auth_op(op: FsOp) -> crate::security::fs_auth::FsOp {
     match op {
-        FsOp::Read => crate::host_api::ports::FsAuthOp::Read,
-        FsOp::Write => crate::host_api::ports::FsAuthOp::Write,
+        FsOp::Read => crate::security::fs_auth::FsOp::Read,
+        FsOp::Write => crate::security::fs_auth::FsOp::Write,
+    }
+}
+
+/// 批量判定用操作集合（`check_batch` 收 `FsOps` 位掩码，非单值 `FsOp`）
+fn auth_ops(op: FsOp) -> crate::security::fs_auth::FsOps {
+    match op {
+        FsOp::Read => crate::security::fs_auth::FsOps::READ,
+        FsOp::Write => crate::security::fs_auth::FsOps::WRITE,
     }
 }
 
 // ==================== 权限门（词汇随各端 SDK，拒绝文案逐字保留） ====================
-
 /// 读面权限门（`exists` / `request-auth` 与读同门）
 fn read_gate(api: &'static str) -> PermissionGate<'static> {
     PermissionGate {

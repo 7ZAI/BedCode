@@ -1,25 +1,77 @@
 //! 配置域宿主实现（白名单配置读取）
 //!
-//! `config_get`（权限/白名单校验 + 读取）供 Component Model 绑定
-//! （`wasm_runtime::component`）调用。
+//! `config_get`（白名单校验 + 读取）供 core 绑定层
+//! （`runtime/core_binding.rs` 的 `host-config` `Host` impl）调用。
+//!
+//! ## 白名单词汇为何是「内核并集」而非某端 SDK 枚举（票 03）
+//!
+//! `host-config` 是 core.wit 的双端全等 interface，其 `Host` impl 收进单份 core 绑定
+//! 后，实现体不能再引某端 SDK 类型——两端 `ConfigKey` 枚举**实质不同**（桌面含
+//! `network.port` / `home_dir` / `os.platform` + 两项 TTL；移动是
+//! `app.downloads-dir` / `system.time_ms`），不是同一形状的两个副本。
+//!
+//! 故本模块持**并集词汇**：跨端项（时间 / 平台 / TTL）内核直算；端专属项
+//! （`network.port` 需服务器 supervisor、`app.downloads-dir` 需移动 SAF 路径）
+//! 经 [`HostEnginePorts`] 取宿主注入值，**未注入即 fail-visible 报错**而不是静默
+//! 返回空值——断链必须可见。
+//!
+//! 注意：并集意味着「某端插件可读到另一端的键」，这是词汇可用性的放宽而非
+//! 数据泄露面（各端键取的都是本端事实，缺失键按端口缺省 fail-visible）。
 
-use crate::system::config::AppConfig;
+use crate::host_api::ports::HostEnginePorts;
+use crate::runtime_util::block_on_async;
 #[cfg(test)]
 use crate::host_api::context::WasmHostContext;
-use crate::runtime_util::block_on_async;
-use bedcode_plugin_api::host::ConfigKey;
+
+/// 配置项白名单（双端并集词汇，内核自持）
+///
+/// 变体即 wire 字符串，新增项必须在 [`config_get`] 的 match 里补实现（编译器兜底）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigKey {
+    /// 服务器实际运行端口（端口冲突时返回重新分配后的值）——桌面专属
+    NetworkPort,
+    /// 用户主目录绝对路径
+    HomeDir,
+    /// 宿主当前 Unix 毫秒时间戳（wasm32-unknown-unknown 无系统时钟）
+    CurrentTimeMs,
+    /// 宿主操作系统平台（`std::env::consts::OS`）
+    OsPlatform,
+    /// 配对码有效期（秒，十进制字符串）
+    PairingCodeTtl,
+    /// QR token 有效期（秒，十进制字符串）
+    QrTokenTtl,
+    /// 应用下载目录绝对路径（移动专属）
+    AppDownloadsDir,
+}
+
+impl ConfigKey {
+    /// wire 字符串 → 枚举（白名单校验）
+    pub fn from_str(key: &str) -> Option<Self> {
+        Some(match key {
+            "network.port" => Self::NetworkPort,
+            "home_dir" => Self::HomeDir,
+            "system.time_ms" => Self::CurrentTimeMs,
+            "os.platform" => Self::OsPlatform,
+            "pairing_code_ttl" => Self::PairingCodeTtl,
+            "qr_token_ttl" => Self::QrTokenTtl,
+            "app.downloads_dir" => Self::AppDownloadsDir,
+            _ => return None,
+        })
+    }
+}
 
 /// 配对码有效期缺省值（与宿主命令面 `get_pairing_code_ttl` 同源常量）
 const DEFAULT_PAIRING_CODE_TTL_SECS: u64 = crate::system::constants::PAIRING_CODE_TTL_SECS;
 /// QR token 有效期缺省值（宿主命令面 `get_qr_token_ttl` 的 300，两处同值）
 const DEFAULT_QR_TOKEN_TTL_SECS: u64 = 300;
 
-/// 读取宿主配置项（白名单 = SDK `ConfigKey` 枚举本身）
+/// 读取宿主配置项（白名单 = [`ConfigKey`] 并集词汇）
 ///
 /// `from_str` 过滤非法 key，value match 穷尽所有变体 —— 新增配置项时
-/// 编译器强制补实现，结构性杜绝"白名单声明了但实现缺失"的漂移
+/// 编译器强制补实现，结构性杜绝"白名单声明了但实现缺失"的漂移。
 pub(crate) fn config_get(
     db: &dyn crate::host_api::context::DbScope,
+    ports: &dyn HostEnginePorts,
     plugin_id: &str,
     key: &str,
 ) -> Result<Option<String>, String> {
@@ -31,17 +83,17 @@ pub(crate) fn config_get(
 
     // 穷尽 match：新增 ConfigKey 变体必须在此补实现（编译错误兜底）
     let value = match config_key {
+        // 端口是**本端服务器**的事实（桌面才有入站服务器），经端口取实际运行值；
+        // 未注入（移动 / 无头）时 fail-visible——静默回退默认值会让插件拿到一个
+        // 看似合法实则错误的端口。
         ConfigKey::NetworkPort => {
-            // 优先获取服务器实际运行端口（端口冲突时会被重新分配）
-            let supervisor = bedcode_server_core::supervisor::ServerSupervisor::global();
-            let actual_port = block_on_async(supervisor.get_status_info()).port;
-            // 实际端口为 0 表示服务器未启动，回退到配置值
-            if actual_port > 0 {
-                actual_port.to_string()
-            } else {
-                let config = AppConfig::global();
-                config.network.port.to_string()
-            }
+            let port = ports.network_port().ok_or_else(|| {
+                format!(
+                    "network.port unavailable: host injected no network port (plugin {})",
+                    plugin_id
+                )
+            })?;
+            port.to_string()
         }
         ConfigKey::HomeDir => match dirs::home_dir() {
             Some(dir) => dir.to_string_lossy().to_string(),
@@ -71,6 +123,17 @@ pub(crate) fn config_get(
             return auth_setting_seconds(db, "pairing_code_ttl", DEFAULT_PAIRING_CODE_TTL_SECS)
         }
         ConfigKey::QrTokenTtl => return auth_setting_seconds(db, "qr_token_ttl", DEFAULT_QR_TOKEN_TTL_SECS),
+        // 下载目录是**移动宿主**的 SAF 路径事实（Android 外部私有目录），桌面无
+        // 对应物；未注入即 fail-visible。
+        ConfigKey::AppDownloadsDir => {
+            let dir = ports.app_downloads_dir().ok_or_else(|| {
+                format!(
+                    "app.downloads_dir unavailable: host injected no downloads dir (plugin {})",
+                    plugin_id
+                )
+            })?;
+            dir
+        }
     };
 
     Ok(Some(value))

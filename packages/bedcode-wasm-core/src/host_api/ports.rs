@@ -104,12 +104,17 @@ pub enum FsAuthOp {
 /// crate 侧只问「这个插件能不能读/写这个路径」；授权判定链（路径白名单 →
 /// 插件白名单 → 弹窗授权）是宿主安全闸门（ADR 0022 §5.1.3 ②），真源在宿主。
 ///
-/// `Any` 超 trait（票 02 B5）：统一上下文的 `fs_auth` 槽是 `Arc<dyn FsAuthGate>`，
-/// 桌面宿主经 `WasmHostContext::fs_auth_checker` 下转型取回具体 `FsAuthChecker`
-/// （`respond` / `authorize_picked` / `is_granted` / `seed_legacy_granted_path`
-/// 等桌面机制方法不在窄 trait 上）；移动宿主注入自己的实现，无下转型需求。
+/// 窄授权判据（机制面消费的最小面）
+///
+/// 统一上下文的 `fs_auth` 槽已收敛为具体 `Arc<FsAuthChecker>`（用户裁决
+/// 2026-10-11「机制以桌面端为准收敛一套」），本 trait 退化为**判据签名**：
+/// `FsAuthChecker` 实现它，域函数按 trait 形态调用，第三方实现亦可只满足
+/// `check` / `check_batch` 两个判定原语。桌面机制方法（`respond` /
+/// `authorize_picked` / `is_granted` / `seed_legacy_granted_path`）不在本
+/// trait 上，经 [`crate::host_api::context::WasmHostContext::fs_auth_checker`]
+/// 取具体实例。
 #[async_trait]
-pub trait FsAuthGate: Send + Sync + std::any::Any {
+pub trait FsAuthGate: Send + Sync {
     async fn check(&self, plugin_id: &str, path: &str, op: FsAuthOp) -> bool;
     async fn check_batch(&self, plugin_id: &str, paths: &[String], op: FsAuthOp) -> bool;
 }
@@ -140,6 +145,26 @@ pub trait HostEnginePorts: Send + Sync {
 
     /// 全局 JWT token（jwt-auth 首帧代发 / 宿主代注 Bearer；token 不落插件）
     fn global_token(&self) -> String;
+
+    // ==================== host-config 端专属项（票 03） ====================
+    //
+    // `host-config` 是 core.wit 的双端全等 interface，其白名单词汇由内核持并集
+    // （见 `host_api/config.rs`）。并集里两项是**端专属事实**，内核无从推导，
+    // 由各端宿主注入；默认 `None` ⇒ 域内 fail-visible 报错（不静默回退）。
+
+    /// 本端服务器实际运行端口（`network.port`；桌面入站服务器事实）
+    ///
+    /// 返回 `None` = 本端没有入站服务器（移动 / 无头）或宿主未装配。
+    fn network_port(&self) -> Option<u16> {
+        None
+    }
+
+    /// 本端应用下载目录绝对路径（`app.downloads_dir`；移动 SAF 路径事实）
+    ///
+    /// 返回 `None` = 本端无对应物（桌面）或宿主未装配。
+    fn app_downloads_dir(&self) -> Option<String> {
+        None
+    }
 
     // ==================== connection ====================
 
