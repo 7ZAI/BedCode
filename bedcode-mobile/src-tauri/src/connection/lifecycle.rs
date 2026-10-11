@@ -127,12 +127,6 @@ impl LifecycleManager {
         )
     }
 
-    /// 检查是否正在连接
-    pub async fn is_connecting(&self) -> bool {
-        let status = self.status.read().await;
-        *status == ConnectionStatus::Connecting
-    }
-
     /// 检查是否可以重连
     pub async fn can_reconnect(&self) -> bool {
         let status = self.status.read().await;

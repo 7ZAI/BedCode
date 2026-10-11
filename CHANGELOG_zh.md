@@ -9,6 +9,53 @@
 
 ## [未发布]
 
+#### 移动宿主加固：补注册漏命令、补 egress 闸门、清永不编译的测试与死框架
+
+对 `bedcode-mobile/src-tauri/src` 做的一次代码组织梳理（ADR 0022 §5.1.3 宿主边界；
+**未新增任何业务代码，无 ABI / WIT / wire 变更，移动端前端零改动**）。
+
+- **修复插件下载的 egress 旁路（安全）**：`plugin_download` 的 `zip_url` 由前端传入，
+  且用自建的 `reqwest::Client` 直接抓取，**全程零 egress 裁决**——是当时宿主里唯一
+  绕过闸门的出站路径，而隔壁 `commands/http_proxy.rs` 就做了 `is_desktop_target` + `decide()`
+  双重校验。下载即执行（zip 装完即进扫描/激活链路），放行未授权目标 = 远端代码在设备上落地。
+  该路径现经 `EgressPolicy::decide` + 授权弹窗（fail-closed），并用 `egress::redirect_policy()`
+  逐跳复检跳转目标，不再只管住首跳
+- **修复前端已在调却漏注册的命令**：`plugin_approve`（用户安装插件的人工审批入口）带
+  `#[tauri::command]`、前端 `src/plugin/commands.ts` 也有对应 `invoke` 包装，却漏在
+  `generate_handler!` 之外——装插件后 UI 卡在 `NeedsApproval`，用户看到的是「命令不存在」
+  而不是审批弹窗。现已注册。`get_startup_time`（声明未注册、且其 `AppStartTime` 从未
+  `app.manage`，注册即 panic、零消费者）选择删除而非接线
+- **清理永不编译的测试**：`src/peer_receive/tests/`（2 文件 95 行）引用的符号随接收引擎
+  下沉 `bedcode-server-peer-net` 已删除，`#[cfg(test)] mod tests` 声明也不在了——而
+  `tests/*.rs` 不会被 rustc 自动发现，于是静静躺着：读代码的人以为有覆盖，实际零覆盖。
+  已删除，并把退役锁扩到盯住该目录，防其复活
+- **移除监督任务里的 panic**：`state::get_plugin_manager()` 在插件管理器未初始化时 panic，
+  而它正被 spawn 出来的连接监控任务调用——在那里 panic 一次就静默终止整个重连自愈循环。
+  改走 Tauri 托管态 + `try_state` 兜底。两个 panic 版访问器（`get_plugin_manager` 与零调用的
+  `get_system_info`）一并删除，`state.rs` 现在不提供任何 `expect` 版访问器
+- **删掉落在移动客户端里的桌面形状服务端框架**：`connection/traits.rs` 曾携带一整套泛型 WS
+  **服务端**栈（`ClientInfoTrait` / `MessageHandlerWithClientInfo` / `SendStrategy` +
+  `RetrySendStrategy` / `SendInterceptor` + `Logging`/`Metrics` 拦截器 / `ResponseHandler`），
+  零实现方——移动端是纯 WS 客户端（ADR 0018），按设计即死，其中一个 trait 还自带
+  `#[allow(dead_code)]`「此 trait 目前未使用」。342 → 44 行
+- **断开 `router` ↔ `handler` import 环**：`router.rs` re-export `handler::*`，而 `handler/*`
+  又 import `router::{ClientRouteContext, ClientRouteHandler, MobileEvent}` 构成闭环。
+  唯一消费方改为直接从 `crate::handler` 取
+- **清理死面**：`SESSION_CONFIGS`（有读者零写者——两条已注册命令恒返回 `Ok(vec![])` /
+  `Ok(None)`，正是 AGENTS.md §5.1.4 禁止的「查不到就返回空」静默降级形态）连同
+  `model::data::SessionConfig`（带 `wsl_distro` / `auto_start` 的桌面 DTO，命中 B1，零消费者）；
+  `device.rs` 设备 ID 注册桥（对应 `DeviceIdPlugin.kt` 在 `gen/android` 里并不存在，且注册函数
+  从未进装配）；`system/constants/terminal.rs` 整个文件（终端 UI 已迁插件）；以及 ~15 个
+  零引用的 `pub` 项（含一个永不写入的预授权 provider 注册表——真机制已在
+  `bedcode-wasm-core`）。**注**：`dead_code` 对 `pub` 项从不报警，这批死面正是因此存活至今
+- **新增三道防漂移锁**（均做过变异自检）：
+  - `command_registration_completeness_lock.rs`——命令声明与注册双向比对，拦住上面那类
+    「编译全绿、真机才炸」的漏注册
+  - `outbound_egress_gate_coverage_lock.rs`——凡构造 `reqwest` 客户端的文件必须能追到 egress
+    引用，凡设 `.redirect(...)` 的必须逐跳复检；插件下载那条以接线测试钉住（闸门调用必须
+    出现在客户端构造之前）
+  - `retired_mobile_receive_orchestration_lock.rs` 扩了对「孤儿测试目录」的判据
+
 #### 对等网络能力域集中化：移动端接入共享 peer 能力域 crate + mDNS 复用（ADR 0048）
 
 - **双端唯一 peer 引擎**（用户指令：基础服务能力化集中，宿主装配端口、wasm app 编排）：移动宿主的

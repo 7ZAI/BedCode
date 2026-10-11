@@ -28,10 +28,7 @@ pub use io::{IoEvent, IoManager};
 pub use lifecycle::{ConnectionStatus, LifecycleEvent, LifecycleManager};
 pub use reconnect::{ReconnectConfig, ReconnectEvent, ReconnectManager, ReconnectState};
 pub use request_response::{MatchOutcome, RequestResponseManager};
-pub use traits::{
-    ClientInfoTrait, DefaultResponseHandler, DefaultSendStrategy, ResponseHandler, RetrySendStrategy, SendStrategy,
-};
-pub use traits::{ClientMessageHandler, HandlerResult, MessageHandler};
+pub use traits::{HandlerResult, MessageHandler};
 pub use ws_client::WsClient;
 pub use ws_connection::{WsClientConfig, WsConnectionManager};
 

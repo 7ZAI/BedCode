@@ -61,9 +61,6 @@ impl MessageCodec for JsonCodec {
     }
 }
 
-/// 默认编解码器
-pub type DefaultCodec = JsonCodec;
-
 // ==================== 单元测试 ====================
 
 #[cfg(test)]

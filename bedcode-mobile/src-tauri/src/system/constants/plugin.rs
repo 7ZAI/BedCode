@@ -5,17 +5,12 @@
 /// 格式: `plugin.enabled.{plugin_id}`，值为 `"true"` / `"false"`
 pub const PLUGIN_ENABLED_KEY_PREFIX: &str = "plugin.enabled.";
 
-/// 插件存储文件子目录名
-pub const PLUGIN_STORAGE_DIR: &str = "plugins";
-
 /// 插件存储文件扩展名
+///
+/// 已退役常量：插件存储已随 `plugin_storage_db_backed_lock.rs` 迁入主库
+/// `plugin_storage` 表，文件落盘面（`PLUGIN_STORAGE_DIR` / `storage_path` /
+/// `load_from_disk`）一并删除。本常量保留仅为让该锁能指名它（退役面记账）。
 pub const PLUGIN_STORAGE_EXT: &str = ".json";
-
-/// 插件激活超时（秒）
-pub const PLUGIN_ACTIVATE_TIMEOUT_SECS: u64 = 5;
-
-/// 插件前端模块导入超时（毫秒）
-pub const PLUGIN_IMPORT_TIMEOUT_MS: u64 = 5000;
 
 /// WASM 插件文件扩展名
 pub const WASM_FILE_EXT: &str = ".wasm";
@@ -34,9 +29,6 @@ pub const SOURCE_FILE_INSTALL: &str = "file-install";
 
 /// 来源标记：远程 URL 安装
 pub const SOURCE_REMOTE_DOWNLOAD: &str = "remote-download";
-
-/// APK assets 中内置插件目录
-pub const APK_PLUGINS_DIR: &str = "plugins";
 
 /// 插件数据目录（app_data_dir 下）
 pub const PLUGIN_DATA_DIR: &str = "plugins";

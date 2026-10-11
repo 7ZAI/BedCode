@@ -61,6 +61,4 @@ pub mod timeouts {
     pub const AUTH: Duration = Duration::from_secs(30);
     /// 生物认证请求超时（含系统生物识别弹窗，需更长等待）
     pub const BIO_AUTH: Duration = Duration::from_secs(120);
-    /// 会话控制请求超时
-    pub const SESSION_CONTROL: Duration = Duration::from_secs(15);
 }

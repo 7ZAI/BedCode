@@ -24,15 +24,3 @@ pub struct DiscoveredService {
     /// 用户可读的设备名（from device_name TXT record）
     pub device_name: String,
 }
-
-/// 发现事件
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", content = "data")]
-pub enum DiscoveryEvent {
-    /// 发现新服务（尚未解析）
-    ServiceFound { instance_name: String },
-    /// 服务解析完成（含完整信息）
-    ServiceResolved(DiscoveredService),
-    /// 服务消失
-    ServiceRemoved { instance_name: String },
-}

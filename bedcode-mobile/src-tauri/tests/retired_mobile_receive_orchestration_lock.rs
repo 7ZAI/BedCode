@@ -73,6 +73,27 @@ fn retired_mobile_receive_orchestration_is_not_reintroduced() {
 }
 
 #[test]
+fn receive_orchestration_tests_are_not_orphaned_into_a_dead_subdirectory() {
+    // `src/peer_receive/tests/` 曾是一对永不编译的单元测试（票 01–16 的能力域
+    // 集中化把 `ReceivePolicy` / `validate_concurrency` / 设置落盘等符号整体搬进
+    // `bedcode-server-peer-net` 后，生产文件被清空成纯委托，但 `tests/` 目录与
+    // 其 `#[cfg(test)] mod tests` 声明一并消失——Rust 不会自动发现 `tests/*.rs`，
+    // 于是两个文件静静躺着、引用着一批已不存在的符号，既不编译也不报错。
+    //
+    // 这比「测试缺失」更糟：读代码的人以为接收侧有覆盖，实际零覆盖。本锁把该
+    // 形态钉死——`src/peer_receive/` 下不允许再出现子目录测试面。真要把接收侧
+    // 用例补回来，必须写在 `peer_receive.rs` 的 `#[cfg(test)]` 模块里，或落到
+    // 符号真源所在的 `bedcode-server-peer-net` crate。
+    let orphan_dir = mobile_src_root().join("src/peer_receive");
+    assert!(
+        !orphan_dir.exists(),
+        "src/peer_receive/ 子目录已随能力域集中化退役：其 tests/ 会脱离编译（无 \
+         mod 声明）而成为永不编译的死测试。接收侧用例请写进 peer_receive.rs 的 \
+         #[cfg(test)] 模块，或落到 packages/bedcode-server-peer-net 真源处。"
+    );
+}
+
+#[test]
 fn retired_receive_snapshot_event_is_no_longer_bridged_to_plugin_bus() {
     // 旧快照事件 `peer-receive-changed` → topic `peer:receive` 的桥接必须摘除：
     // 接收任务表删除后无快照可推，留着映射等于给「空快照回流」留静默降级入口，

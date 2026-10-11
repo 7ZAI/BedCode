@@ -107,7 +107,9 @@ bedcode-mobile/                       # 移动端项目 (Tauri 2.0 + Vue 3)
         │                             #   JWT reauth / 生物挑战应答）+ 认证状态（票 14 起
         │                             #   不再含本地配对码面，见 Core Modules 连接段）
         ├── commands/                 # Tauri 命令层：Android 特定、认证、连接、mDNS、
-        │                             #   移动端特有（Quick Actions/Settings/Session Config）、会话、终端
+        │                             #   移动端特有（Quick Actions/Settings）、会话、终端
+        │                             #   （Session Config 内存存储面 2026-10-11 退役：只读无写，
+        │                             #   恒返回空）
         ├── connection/               # 远程连接模块（核心模块，详见 Core Modules）
         ├── enums/                    # 枚举类型：认证、控制、插件、会话、特殊键、总结
         ├── file_service/             # 文件服务：SAF 目录树读取（saf_tree.rs）
@@ -319,7 +321,9 @@ WIT 生成物由仓库根 `node scripts/compose-wit.mjs mobile --check`
 - **message_bus / fs_auth / types / commands**：插件间消息总线、文件系统校验、类型定义、Tauri 命令
 - **android_plugins/**：Android 原生插件 Rust 注册桥（前台服务、SAF 选择/写入、生物识别、
   全部文件访问、下载目录、文件删除、组播锁、通知、设备信息、插件资产解压 → 对应 Kotlin 端 Plugin，
-  Kotlin 文件位置见 Project Structure 下方的「Android 原生层」说明）
+  Kotlin 文件位置见 Project Structure 下方的「Android 原生层」说明）。
+  设备唯一 ID 的 `device.rs` 注册桥 2026-10-11 退役：对应 `DeviceIdPlugin.kt` 在 `gen/android` 中并不存在，
+  且注册函数从未进 `lib.rs` 的 plugin 装配——属「看起来有、实际既不注册也不被调」的假桥）
 
 **前端插件系统 — `src/plugin/`：** 加载器、注册表、权限、上下文、事件、命令、共享模块运行时
 （`__BEDCODE_SHARED__`）、对话框宿主、终端流 / 会话事件机制面（`terminal-stream.ts` /
@@ -667,6 +671,9 @@ Desktop PTY → Claude Code
 - **mDNS 广播死面退役**（2026-10-10，ADR 0048）：`MdnsAdvertiser` / 广播命令 / 前端死 composable / 自建 `ServiceDaemon::new` 不得回到移动宿主与前端 → `src-tauri/tests/retired_mobile_mdns_advertise_lock.rs`（退役面缺席 / browse 薄壳在场 / 共享守护复用锚点；变异自检 1/1）
 - **移动 WIT 分片拼装组合**（票 03/07）：`compose.json` 的 `abi.version` == SDK `abi.rs` 的 `ABI_VERSION` / 生成物 `bedcode.wit` include 集 == `core` + 各 caps 键 / `worlds` 列表在生成物目录有声明 → `src-tauri/tests/mobile_wit_composition_lock.rs`（变异自检 1/1）。生成物逐字漂移面另有仓库根 `node scripts/compose-wit.mjs --all --check`（CI `wit-drift-lock.yml` + husky pre-commit）
 - 票 19 Part A/B 的 A1–A4 契约锁与 fork 对称结构锁（`bedcode-mobile/packages/bedcode-wasm-core/tests/{sdk_wit_contract_locks,fork_boundary_lock}.rs`）**随移动 fork crate 一并退役**（票 06 批次 04，目录删除 = 旧读路径消失）：A1 的结构/计数面由 `mobile_wit_composition_lock.rs` 承接，A2/A3/A4 的语义面由「移动 SDK 为唯一真源 + `stale_artifact_rebuild_hint` 旧产物点名 + 双端 ABI 锁步（ADR 0019）」承接；重建需求见 `.scratch/2026-10-09-wasm-core-single-crate/ticket-07-locks-and-docs-closeout.md` §5 遗留欠账
+- **Tauri 命令面注册完备性**（2026-10-11）：`#[tauri::command]` 只贴标签，真正成为命令靠 `lib.rs` 的 `generate_handler!` 注册；漏注册能过 `cargo build`、能被 `pub` 导出，只在真机 `invoke` 时回 "command not found" → `src-tauri/tests/command_registration_completeness_lock.rs`（声明 ⇄ 注册双向比对 + 判据防空跑；变异自检 2/2）。**新增 `#[tauri::command]` 时必看它**——本锁已因此钉出过一次真实漏注册（`plugin_approve`，前端 `src/plugin/commands.ts` 有对应 `invoke`，装插件后卡 NeedsApproval 的用户会看到「命令不存在」而非审批弹窗）
+- **出站 HTTP 面 egress 闸门覆盖**（2026-10-11）：egress 是唯一外网出口裁决面，其安全前提是**覆盖全部出站路径** → `src-tauri/tests/outbound_egress_gate_coverage_lock.rs`（两条：构造 `reqwest` 客户端的文件必须能追到 egress 引用；设了 `.redirect(...)` 的必须用 `egress::redirect_policy()` 逐跳复检。豁免仅 `auth/http.rs` 一条——认证通道目标绑定已配对桌面端，非任意 URL；变异自检 1/1）。**新增出站路径 / 改动 `plugin/downloader.rs` 前必看它**——本锁已钉住一次真实旁路：`plugin_download` 命令的 `zip_url` 由前端传入且自建 `reqwest::Client`，是当时唯一不过闸门的出站面（下载即执行，放行未授权目标 = 远端代码在设备上落地）
+- **接收侧编排退役面**（票 07，含 2026-10-11 扩充）：除编排构件的结构面扫描外，另钉「`src/peer_receive/tests/` 不得复活」——该目录曾是一对**永不编译**的单测（能力域集中化把符号搬进 `bedcode-server-peer-net` 后 `#[cfg(test)] mod tests` 声明被删，`tests/*.rs` 不被 rustc 自动发现），读代码的人以为有覆盖、实际零覆盖 → 同 `retired_mobile_receive_orchestration_lock.rs`
 
 > 迁移 / 抽包类任务的规格与逐票记录在 `.scratch/2026-10-07-mobile-wasm-core-refactor/` 与
 > `.scratch/2026-10-07-capability-crates-to-root-packages/`（`.scratch` 只在 uat/master 之外分支入库）。

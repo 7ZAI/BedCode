@@ -129,7 +129,8 @@ pub async fn plugin_download(app_handle: tauri::AppHandle, zip_url: String) -> R
     let manager = app_handle.state::<Arc<PluginManager>>();
     let plugins_dir = manager.plugins_dir().clone();
 
-    let plugin_id = crate::plugin::downloader::PluginDownloader::download_and_install(&zip_url, &plugins_dir).await?;
+    let plugin_id =
+        crate::plugin::downloader::PluginDownloader::download_and_install(&app_handle, &zip_url, &plugins_dir).await?;
 
     // 重新扫描并加载
     manager.scan_and_load().await;
@@ -308,18 +309,14 @@ pub async fn plugin_invoke(
 /// app 私有下载目录按名查找，顶层优先 + 子目录递归兑底）。需 system:open 权限，
 /// 前端 requireSystemOpenPermission 已校验（与 plugin_open_file* 回调链同模式）。
 #[tauri::command]
-pub async fn plugin_reveal_received_file(
-    plugin_id: String,
-    file_name: String,
-) -> Result<()> {
+pub async fn plugin_reveal_received_file(plugin_id: String, file_name: String) -> Result<()> {
     if file_name.trim().is_empty() {
         return Err(crate::AppError::Plugin(
             "plugin_reveal_received_file: file_name is required".to_string(),
         ));
     }
     tracing::debug!(plugin_id = %plugin_id, file_name = %file_name, "reveal received file location");
-    crate::plugin::android_plugins::open_download_file_location_by_name(&file_name)
-        .await
+    crate::plugin::android_plugins::open_download_file_location_by_name(&file_name).await
 }
 
 /// 引导开启「所有文件访问」权限（打开系统公共 Download 目录所需）
@@ -347,7 +344,6 @@ pub async fn plugin_open_download_dir(plugin_id: String) -> Result<()> {
     crate::plugin::android_plugins::open_download_dir().await
 }
 
-
 // ==================== 终端输出流窄转发登记（票 12 · 批次 2b 命令薄壳） ====================
 //
 // 表本体已随批次 1b 迁 fork crate（`terminal_stream_gateway`，纯机制）；
@@ -363,8 +359,7 @@ pub async fn terminal_page_subscribe(
     if session_id.is_empty() {
         return Err("session_id is empty".to_string());
     }
-    bedcode_wasm_core_mobile::terminal_stream_gateway::terminal_stream_gateway()
-        .page_subscribe(&session_id, channel);
+    bedcode_wasm_core_mobile::terminal_stream_gateway::terminal_stream_gateway().page_subscribe(&session_id, channel);
     Ok(())
 }
 
@@ -374,7 +369,6 @@ pub async fn terminal_page_unsubscribe(session_id: String) -> std::result::Resul
     if session_id.is_empty() {
         return Err("session_id is empty".to_string());
     }
-    bedcode_wasm_core_mobile::terminal_stream_gateway::terminal_stream_gateway()
-        .page_unsubscribe(&session_id);
+    bedcode_wasm_core_mobile::terminal_stream_gateway::terminal_stream_gateway().page_unsubscribe(&session_id);
     Ok(())
 }

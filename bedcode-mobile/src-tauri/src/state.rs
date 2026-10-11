@@ -72,15 +72,10 @@ pub fn init_system_info(info: SystemInfo) -> Arc<SystemInfo> {
     arc
 }
 
-/// 获取系统信息
+/// 尝试获取系统信息（未初始化返回 None）
 ///
-/// # Panics
-/// 如果 init_system_info 未调用则 panic
-pub fn get_system_info() -> Arc<SystemInfo> {
-    SYSTEM_INFO.get().expect("SystemInfo not initialized").clone()
-}
-
-/// 尝试获取系统信息（未初始化返回 None，供 best-effort 路径使用）
+/// 无 panic 版：系统信息在异步启动任务里采集，早于它到达的调用点（连接自愈、
+/// peer 预热）都必须能继续跑，故此处**不提供** `expect` 版本。
 pub fn try_get_system_info() -> Option<Arc<SystemInfo>> {
     SYSTEM_INFO.get().cloned()
 }
@@ -96,20 +91,18 @@ pub fn init_plugin_manager(manager: Arc<PluginManager>) -> Arc<PluginManager> {
     manager
 }
 
-/// 获取插件管理器
+/// 尝试获取插件管理器（未初始化返回 None）
 ///
-/// # Panics
-/// 如果 init_plugin_manager 未调用则 panic
-pub fn get_plugin_manager() -> Arc<PluginManager> {
-    PLUGIN_MANAGER.get().expect("PluginManager not initialized").clone()
-}
-
-/// 尝试获取插件管理器（未初始化返回 None，供 best-effort 路径使用）
+/// **不要新增会 panic 的 `get_plugin_manager()`**：本模块的 OnceLock 只是
+/// Tauri 托管态（`app.manage`）的镜像，两者指向同一个 `Arc`。在拿得到
+/// `AppHandle` 的地方一律用 `app_handle.state::<Arc<PluginManager>>()`（命令层
+/// 25 处皆如此）；拿不到的地方（`BusPort` 端口 trait 方法等无 AppHandle 的
+/// 上下文）才用本函数，且必须容忍 None——启动窗口内管理器尚未就绪是正常情形，
+/// 不是错误路径。曾经的 panic 版访问器已被删：它在 spawn 的重连监控任务里被
+/// 调用，一次 panic 会连带终止整个自愈循环且不留痕迹。
 pub fn try_get_plugin_manager() -> Option<Arc<PluginManager>> {
     PLUGIN_MANAGER.get().cloned()
 }
-
-// ==================== File Service ====================
 
 // ==================== Link Crypto Context（issue 09） ====================
 

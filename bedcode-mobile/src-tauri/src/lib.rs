@@ -37,9 +37,6 @@ use log::LevelFilter;
 use std::sync::Arc;
 use tauri::Manager;
 
-/// 应用启动时间，用于计算启动耗时
-pub struct AppStartTime(std::time::Instant);
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     use crate::system::settings::SettingsManager;
@@ -88,9 +85,7 @@ pub fn run() {
             // 行为与旧 crate::mdns::engine::init_daemon 一致，真源移入共享引擎
             bedcode_discovery_engine::engine::set_daemon_init_hook(|| {
                 tauri::async_runtime::spawn(async {
-                    if let Err(e) =
-                        crate::plugin::android_plugins::multicast_lock_acquire().await
-                    {
+                    if let Err(e) = crate::plugin::android_plugins::multicast_lock_acquire().await {
                         tracing::warn!("mdns daemon: multicast lock acquire failed ({e}); receive may be degraded");
                     }
                 });
@@ -293,9 +288,6 @@ pub fn run() {
             commands::android::keep_screen_awake,
             commands::android::open_url_in_browser,
             commands::android::set_status_bar_style,
-            // Session Config (移动端使用内存存储)
-            commands::mobile_commands::list_session_configs_mobile,
-            commands::mobile_commands::get_session_config_mobile,
             // mDNS
             commands::mdns::mdns_start_discovery,
             commands::mdns::mdns_stop_discovery,
@@ -315,6 +307,7 @@ pub fn run() {
             crate::plugin::commands::plugin_preauthorize,
             crate::plugin::commands::plugin_activate,
             crate::plugin::commands::plugin_deactivate,
+            crate::plugin::commands::plugin_approve,
             crate::plugin::commands::plugin_is_enabled,
             crate::plugin::commands::plugin_set_enabled,
             crate::plugin::commands::plugin_mark_error,

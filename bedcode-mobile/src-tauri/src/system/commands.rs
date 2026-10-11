@@ -6,7 +6,7 @@
 //! `connection::pairing_service` 一并退役——移动端不再是配对码颁发方，配对码由
 //! 桌面端生成、移动端只做提交（`commands::auth::ws_verify_pairing_code`）。
 
-use tauri::{Manager, State};
+use tauri::Manager;
 
 // ==================== Settings Commands ====================
 
@@ -62,12 +62,6 @@ pub fn get_system_info() -> crate::system::info::SystemInfo {
     crate::state::try_get_system_info()
         .map(|i| i.as_ref().clone())
         .unwrap_or_else(crate::system::info::SystemInfo::fallback)
-}
-
-/// 获取自应用启动以来的耗时（毫秒）
-#[tauri::command]
-pub fn get_startup_time(start_time: State<'_, crate::AppStartTime>) -> u64 {
-    start_time.0.elapsed().as_millis() as u64
 }
 
 /// 获取本地 IP 地址（移动端不适用，返回空列表）

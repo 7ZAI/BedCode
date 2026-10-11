@@ -25,35 +25,20 @@ use std::sync::OnceLock;
 use tauri::{Emitter, Manager};
 use tokio::sync::{Mutex as TokioMutex, RwLock};
 
-/// 预授权路径提供者签名:返回插件「启用前需要授权的路径列表」。
-///
-/// 移动端镜像 desktop host.rs 同名抽象;由插件自身在 on_startup
-/// 时通过 host function 注册,优先级高于默认 storage 读取。
-pub type PreauthProvider = Arc<dyn Fn(&str) -> Vec<String> + Send + Sync>;
-
 /// 预授权 storage key(file-transfer mount-local 时追加写入)。
 pub const PREAUTH_PATHS_STORAGE_KEY: &str = "preauth_paths";
 
-/// 预授权提供者注册表 — 跨 PluginManager 实例共享。
-static PREAUTH_PROVIDERS: OnceLock<RwLock<HashMap<String, PreauthProvider>>> = OnceLock::new();
-
-fn preauth_providers() -> &'static RwLock<HashMap<String, PreauthProvider>> {
-    PREAUTH_PROVIDERS.get_or_init(|| RwLock::new(HashMap::new()))
-}
-
-/// 注册预授权路径提供者(供 plugin 内部 host function 调用,
-/// 优先级高于默认 storage 读取)。同名 plugin_id 覆盖。
-pub async fn register_preauth_provider(plugin_id: &str, provider: PreauthProvider) {
-    let mut map = preauth_providers().write().await;
-    map.insert(plugin_id.to_string(), provider);
-}
-
-/// 收集插件的预授权路径:注册的 provider 优先,否则返回空(由
-/// PluginManager::preauthorize_plugin 从 storage 补足)。
-async fn collect_preauth_paths(plugin_id: &str) -> Vec<String> {
-    if let Some(provider) = preauth_providers().read().await.get(plugin_id).cloned() {
-        return provider(plugin_id);
-    }
+/// 收集插件的预授权路径
+///
+/// 当前恒返回空：注册入口（原 `register_preauth_provider`）在本端无任何
+/// 调用方——机制真源已迁共享 crate `bedcode-wasm-core`
+/// （`manager/host/preauth.rs`），移动端没有对应的 host function / WIT 原语
+/// 能触到它。保留读侧是为了不动 `preauthorize_plugin` 的两段式取路径逻辑
+/// （先 provider 后 storage）：一旦移动端重新接入注册面，读侧无需再改。
+///
+/// 判据：真源在共享 crate 且本端无注册入口时，不要在本端留一份永不写入的
+/// 注册表——它是「看起来可扩展、实际永远为空」的假扩展点。
+async fn collect_preauth_paths(_plugin_id: &str) -> Vec<String> {
     Vec::new()
 }
 
@@ -207,10 +192,7 @@ impl PluginManager {
     /// 抽离的初始化内核：把 aot_cache_dir 作为入参注入，
     /// 允许 `#[cfg(test)]` 模块在 `app_handle = None` 场景下用 `None` 调用，
     /// 绕开 `app_handle.path().app_cache_dir()` 读
-    async fn init_wasm_runtime_with(
-        &self,
-        aot_cache_dir: Option<PathBuf>,
-    ) -> crate::Result<()> {
+    async fn init_wasm_runtime_with(&self, aot_cache_dir: Option<PathBuf>) -> crate::Result<()> {
         if let Some(dir) = &aot_cache_dir {
             if let Err(e) = std::fs::create_dir_all(dir) {
                 tracing::warn!(
@@ -536,10 +518,7 @@ impl PluginManager {
         if paths.is_empty() {
             if let Ok(Some(value)) = self.storage.get(plugin_id, PREAUTH_PATHS_STORAGE_KEY).await {
                 if let Value::Array(arr) = value {
-                    paths = arr
-                        .into_iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect();
+                    paths = arr.into_iter().filter_map(|v| v.as_str().map(String::from)).collect();
                 }
             }
         }
@@ -864,7 +843,6 @@ impl PluginManager {
         // 3. 清理消息总线订阅（async 上下文直接 await，禁止 block_on）
         self.message_bus.remove_all_subscriptions(plugin_id).await;
 
-
         // 4. 更新状态（短锁）
         let mut plugins = self.plugins.write().await;
         if let Some(plugin) = plugins.get_mut(plugin_id) {
@@ -1067,10 +1045,8 @@ impl PluginManager {
                     plugins
                         .values()
                         .filter(|p| {
-                            matches!(
-                                p.state,
-                                PluginState::Activated | PluginState::Degraded { .. }
-                            ) && p.manifest.plugin_type == PluginType::Wasm
+                            matches!(p.state, PluginState::Activated | PluginState::Degraded { .. })
+                                && p.manifest.plugin_type == PluginType::Wasm
                                 && p.manifest
                                     .contributes
                                     .lifecycle
@@ -1154,11 +1130,7 @@ impl crate::plugin::message_bus::MessageDispatcher for PluginManagerDispatcher {
     /// 桥进入；本宿主再包装 async 闭包）：短读 map 取实例句柄 → drop map 守卫 →
     /// 持单插件锁执行 on_bus_message。投递串行进行，慢插件会推迟后续投递
     /// （换取全局顺序与无死锁）。
-    fn dispatch_to_wasm(
-        &self,
-        plugin_id: &str,
-        msg: &bedcode_server_base::wire::BusMessage,
-    ) -> anyhow::Result<()> {
+    fn dispatch_to_wasm(&self, plugin_id: &str, msg: &bedcode_server_base::wire::BusMessage) -> anyhow::Result<()> {
         let wasm_plugins = self.wasm_plugins.clone();
         let pid = plugin_id.to_string();
         // 与 wasm-core 统一后的总线 trait 同型（票 02 M3）；bare 壳导出仍取
@@ -1177,9 +1149,7 @@ impl crate::plugin::message_bus::MessageDispatcher for PluginManagerDispatcher {
                 map.get(&pid).cloned()
             };
             let Some(wasm_plugin) = wasm_plugin else {
-                tracing::warn!(
-                    "PluginManagerDispatcher: WASM plugin '{pid}' not loaded, message dropped"
-                );
+                tracing::warn!("PluginManagerDispatcher: WASM plugin '{pid}' not loaded, message dropped");
                 return Ok(());
             };
 
@@ -1222,8 +1192,8 @@ impl crate::plugin::message_bus::MessageDispatcher for PluginManagerDispatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bedcode_wasm_core_mobile::test_support::{build_host_ctx, build_test_component};
     use crate::plugin::wasm_runtime::LoadedComponentPlugin;
+    use bedcode_wasm_core_mobile::test_support::{build_host_ctx, build_test_component};
     use std::collections::HashSet;
     use std::sync::Arc as StdArc;
     use tempfile::TempDir;
@@ -1276,11 +1246,7 @@ mod tests {
     }
 
     /// 在 manager.plugins map 内插入一条 LoadedPlugin 记录（state 由调用方定）
-    async fn seed_plugin(
-        manager: &PluginManager,
-        pid: &str,
-        state: PluginState,
-    ) {
+    async fn seed_plugin(manager: &PluginManager, pid: &str, state: PluginState) {
         let manifest = bedcode_plugin_api_mobile::types::PluginManifest {
             id: pid.to_string(),
             name: pid.to_string(),
@@ -1320,16 +1286,13 @@ mod tests {
     async fn attach_wasm(manager: &PluginManager, pid: &str, features: &[&str]) {
         let host_ctx = build_host_ctx();
         let runtime = manager.wasm_runtime.get().expect("wasm runtime initialized");
-        let component = Component::from_binary(runtime.engine(), &build_test_component(features))
-            .expect("compile test component");
+        let component =
+            Component::from_binary(runtime.engine(), &build_test_component(features)).expect("compile test component");
         let loaded: LoadedComponentPlugin = runtime
             .instantiate_component(&component, pid, host_ctx, HashSet::new())
             .expect("instantiate component");
         let mut wasm_plugins = manager.wasm_plugins.write().await;
-        wasm_plugins.insert(
-            pid.to_string(),
-            StdArc::new(tokio::sync::Mutex::new(loaded)),
-        );
+        wasm_plugins.insert(pid.to_string(), StdArc::new(tokio::sync::Mutex::new(loaded)));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1342,7 +1305,11 @@ mod tests {
         // phase 1b: on_startup 返回 Err("startup init failed (test)")
         // → 终态 Degraded { error 含 "startup init failed" }
         let result = manager.activate(TEST_PID_DEGRADED).await;
-        assert!(result.is_ok(), "activate 调用本身应成功（phase 1a Ok），实际: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "activate 调用本身应成功（phase 1a Ok），实际: {:?}",
+            result
+        );
 
         let info = manager.get_info(TEST_PID_DEGRADED).await.expect("plugin info");
         match info.state {
@@ -1372,7 +1339,10 @@ mod tests {
         // 首次激活：on_startup 失败 → Degraded
         manager.activate(TEST_PID_RETRY).await.expect("first activate");
         let info = manager.get_info(TEST_PID_RETRY).await.expect("info");
-        assert!(matches!(info.state, PluginState::Degraded { .. }), "首次激活应入 Degraded");
+        assert!(
+            matches!(info.state, PluginState::Degraded { .. }),
+            "首次激活应入 Degraded"
+        );
 
         // manager.rs:586 守卫：Activated | Degraded 重入早返回 Ok，**不重试 on_startup**
         // — spec §3.3 「Degraded 可重试激活但重入无副作用」明确走幂等路径
@@ -1404,13 +1374,22 @@ mod tests {
         seed_plugin(&manager, TEST_PID_DEACTIVATE, PluginState::Loaded).await;
         attach_wasm(&manager, TEST_PID_DEACTIVATE, &["on-startup-fail"]).await;
 
-        manager.activate(TEST_PID_DEACTIVATE).await.expect("activate to degraded");
+        manager
+            .activate(TEST_PID_DEACTIVATE)
+            .await
+            .expect("activate to degraded");
         let info = manager.get_info(TEST_PID_DEACTIVATE).await.expect("info");
         assert!(matches!(info.state, PluginState::Degraded { .. }), "应先入 Degraded");
 
         // manager.rs:696 守卫：Activated | Degraded 都允许 deactivate
-        manager.deactivate(TEST_PID_DEACTIVATE).await.expect("deactivate from degraded");
-        let info = manager.get_info(TEST_PID_DEACTIVATE).await.expect("info after deactivate");
+        manager
+            .deactivate(TEST_PID_DEACTIVATE)
+            .await
+            .expect("deactivate from degraded");
+        let info = manager
+            .get_info(TEST_PID_DEACTIVATE)
+            .await
+            .expect("info after deactivate");
         assert_eq!(
             info.state,
             PluginState::Deactivated,
@@ -1430,15 +1409,12 @@ mod tests {
 
         // AppStartup 事件不调 WASM on_startup（manager.rs:911-915 守卫）；
         // 行为回归断言 = 不 panic + state 不变
-        manager
-            .dispatch_lifecycle_event(PluginLifecycleEvent::AppStartup)
-            .await;
-        let info = manager.get_info(TEST_PID_DISPATCH).await.expect("info after app startup");
-        assert_eq!(
-            info.state,
-            PluginState::Activated,
-            "AppStartup 不应改变已激活插件状态"
-        );
+        manager.dispatch_lifecycle_event(PluginLifecycleEvent::AppStartup).await;
+        let info = manager
+            .get_info(TEST_PID_DISPATCH)
+            .await
+            .expect("info after app startup");
+        assert_eq!(info.state, PluginState::Activated, "AppStartup 不应改变已激活插件状态");
 
         // AuthSuccess 事件对声明 onAuthSuccess 的插件正常分发（不 panic 即代表
         // dispatch 路径在 Degraded 守卫（manager.rs:922-925 扩为 Activated|Degraded）
@@ -1446,7 +1422,10 @@ mod tests {
         manager
             .dispatch_lifecycle_event(PluginLifecycleEvent::AuthSuccess)
             .await;
-        let info = manager.get_info(TEST_PID_DISPATCH).await.expect("info after auth success");
+        let info = manager
+            .get_info(TEST_PID_DISPATCH)
+            .await
+            .expect("info after auth success");
         assert_eq!(
             info.state,
             PluginState::Activated,
@@ -1505,20 +1484,9 @@ mod tests {
         let plugin_db = StdArc::new(std::sync::Mutex::new(Database::from_connection(
             rusqlite::Connection::open_in_memory().expect("in-memory sqlite"),
         )));
-        let manager = PluginManager::new(
-            &tmp.path().to_path_buf(),
-            settings,
-            plugin_db,
-            None,
-        );
-        let err = manager
-            .init_wasm_runtime()
-            .await
-            .expect_err("app_handle=None 必须 Err");
-        assert!(
-            err.to_string().contains("app_handle missing"),
-            "err: {err}"
-        );
+        let manager = PluginManager::new(&tmp.path().to_path_buf(), settings, plugin_db, None);
+        let err = manager.init_wasm_runtime().await.expect_err("app_handle=None 必须 Err");
+        assert!(err.to_string().contains("app_handle missing"), "err: {err}");
     }
 
     #[tokio::test]
@@ -1540,14 +1508,8 @@ mod tests {
         )
         .await;
 
-        let err = manager
-            .activate(pid)
-            .await
-            .expect_err("未批准必须拒绝激活");
-        assert!(
-            err.to_string().contains("requires user approval"),
-            "err: {err}"
-        );
+        let err = manager.activate(pid).await.expect_err("未批准必须拒绝激活");
+        assert!(err.to_string().contains("requires user approval"), "err: {err}");
         let info = manager.get_info(pid).await.expect("info after gate reject");
         assert_eq!(info.state, PluginState::NeedsApproval);
     }
@@ -1612,14 +1574,8 @@ mod tests {
         let pid = "com.bedcode.test.mgr-builtin";
         seed_plugin(&manager, pid, PluginState::Activated).await;
 
-        let err = manager
-            .uninstall(pid)
-            .await
-            .expect_err("内置插件不可卸载");
-        assert!(
-            err.to_string().contains("cannot be uninstalled"),
-            "err: {err}"
-        );
+        let err = manager.uninstall(pid).await.expect_err("内置插件不可卸载");
+        assert!(err.to_string().contains("cannot be uninstalled"), "err: {err}");
         assert!(manager.get_info(pid).await.is_some(), "内置插件记录保留");
     }
 

@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+#### Mobile host hardening: unregistered commands, ungated egress, orphaned tests and dead framework removed
+
+Code-organization pass over `bedcode-mobile/src-tauri/src` (ADR 0022 §5.1.3 host boundary; no
+business code added, no ABI / WIT / wire change, no mobile front-end change).
+
+- **Fixed an egress bypass on plugin download** (security): `plugin_download` takes a front-end-supplied
+  `zip_url` and fetched it with its own `reqwest::Client`, with **zero** egress consultation — the only
+  outbound path in the host outside the gate, while `commands/http_proxy.rs` enforced
+  `is_desktop_target` + `decide()` one file away. Downloads are code execution (a fetched zip is
+  installed and then scanned/activated), so an un-gated source lets remote code land on the device.
+  The path now goes through `EgressPolicy::decide` + the consent dialog (fail-closed) and uses
+  `egress::redirect_policy()` so redirects are re-checked per hop instead of only the first one.
+- **Fixed an unregistered command that the front end calls**: `plugin_approve` (human approval entry for
+  user-installed plugins) carried `#[tauri::command]` and had a front-end `invoke` wrapper in
+  `src/plugin/commands.ts`, but was missing from `generate_handler!` — installing a plugin left the UI
+  stuck at `NeedsApproval` showing "command not found" instead of the approval dialog. Registered.
+  `get_startup_time` (declared, unregistered, and would have panicked because its `AppStartTime` was
+  never `app.manage`d, zero consumers) was removed rather than wired up.
+- **Removed tests that never compiled**: `src/peer_receive/tests/` (2 files, 95 lines) referenced symbols
+  deleted when the receive engine moved to `bedcode-server-peer-net`, and had lost its
+  `#[cfg(test)] mod tests` declaration — `tests/*.rs` is not auto-discovered by rustc, so they sat there
+  silently, reading as coverage while providing none. Deleted, and the retirement lock now also pins the
+  directory so it cannot return.
+- **Removed a panic in a supervision task**: `state::get_plugin_manager()` panicked when the plugin
+  manager was not yet initialized, and was called from the spawned connection monitor — one panic there
+  silently kills the whole reconnect self-heal loop. Switched to Tauri's managed state with a
+  `try_state` fallback. Both panicking getters (`get_plugin_manager`, `get_system_info`, zero callers)
+  are gone; `state.rs` now exposes no `expect`-based accessor for either.
+- **Removed the desktop-shaped server framework from the mobile client**: `connection/traits.rs` carried a
+  generic WS **server** stack (`ClientInfoTrait` / `MessageHandlerWithClientInfo` /
+  `SendStrategy` + `RetrySendStrategy` / `SendInterceptor` + `Logging`/`Metrics` interceptors /
+  `ResponseHandler`) with no implementors — mobile is a pure WS client (ADR 0018), so it was dead by
+  design; one trait even self-declared `#[allow(dead_code)] "此 trait 目前未使用"`. 342 → 44 lines.
+- **Broke the `router` ↔ `handler` import cycle** created by `router.rs` re-exporting `handler::*` while
+  `handler/*` imports `router::{ClientRouteContext, ClientRouteHandler, MobileEvent}`. The one consumer
+  now imports from `crate::handler` directly.
+- **Dead surface removed**: `SESSION_CONFIGS` (a store with readers but zero writers — two registered
+  commands could only ever return `Ok(vec![])` / `Ok(None)`, the exact "return empty when not found"
+  silent-degradation shape AGENTS.md §5.1.4 forbids) and with it `model::data::SessionConfig` (a
+  `wsl_distro` / `auto_start` desktop DTO, B1, with no consumer); the `device.rs` Android bridge (its
+  `DeviceIdPlugin.kt` does not exist in `gen/android` and the function was never registered);
+  `system/constants/terminal.rs` (whole file — terminal UI moved to the plugin); and ~15 unreferenced
+  `pub` items (including a never-written preauth provider registry whose real mechanism now lives in
+  `bedcode-wasm-core`). Note: `dead_code` never fires for `pub` items, which is why this surface survived.
+- **New anti-drift locks** (each mutation-verified):
+  - `command_registration_completeness_lock.rs` — declared ⇄ registered commands compared both ways;
+    catches the missing-registration class above, which compiles cleanly and only fails on a device.
+  - `outbound_egress_gate_coverage_lock.rs` — every file building a `reqwest` client must reach the
+    egress gate, and any client setting `.redirect(...)` must re-check per hop; the plugin-download
+    regression is pinned by a wiring test (gate call ordered before client construction).
+  - `retired_mobile_receive_orchestration_lock.rs` extended with the orphaned-test-directory check.
+
 #### Peer capability engine consolidation: mobile adopts the shared peer-net capability crate (ADR 0048)
 
 - **One peer engine for both ends** (user directive: basic services concentrated as capability crates,

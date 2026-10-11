@@ -143,7 +143,15 @@ wasm 应用层（业务事实面：各自私有库 + 各自前端状态 + 自身
 
 ### Rust
 
-- 文件与模块命名：snake_case，模块入口文件与目录同名（`module.rs`），不用 `mod.rs`，测试文件 `*_test.rs`
+- 文件与模块命名：snake_case，模块入口文件与目录同名（`module.rs`），不用 `mod.rs`
+- **单元测试放哪（两种形态，按体量选，别混用）**：① 少量用例 → 同文件末尾的
+  `#[cfg(test)] mod tests`（两端源码树的主流形态，60 个文件）；② 用例多到把生产文件
+  撑成两倍 → 同目录 `<模块名>_test.rs`（`packages/bedcode-wasm-core/src/manager/host/tests/`
+  全量采用）或 `<模块名>/tests/*.rs` 子目录。**新增测试文件时按 ②，勿新造第三种形态。**
+  ⚠️ 形态 ② 的前提是**必须有 `mod` 声明**：`tests/*.rs` 子目录不会像 `tests/` 集成测试
+  目录那样被 rustc 自动发现，漏写 `#[cfg(test)] mod tests { mod x; }` 会让用例静静躺着
+  永不编译（移动端 `src/peer_receive/tests/` 曾如此，见
+  `bedcode-mobile/src-tauri/tests/retired_mobile_receive_orchestration_lock.rs` 的对锁）
 - 统一错误类型 `AppError`；错误构造 / 转换处必须带操作描述，**禁止裸 `?` 透传无上下文错误**（含 `io::Result` 契约内）；`tokio::spawn` 用 `spawn_with_error_boundary()` 包装；重要路径禁止 `let _ =` 静默忽略
 - panic hook 内只用 `eprintln!`，禁止 `tracing::error!`
 - 状态共享用 `Arc<Mutex<T>>` / `Arc<RwLock<T>>`

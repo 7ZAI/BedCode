@@ -8,19 +8,20 @@
 use anyhow::Context;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{broadcast, RwLock};
 use tracing;
 
 use crate::connection::reconnect::ReconnectManager;
 use crate::connection::{ClientDefaultMessageHandler, WsClient, WsClientConfig, WsClientEvent};
 use crate::model::message::Message;
+use crate::plugin::manager::PluginManager;
 use crate::state::get_global_token;
 use crate::system::error_boundary::spawn_with_error_boundary;
 use crate::Result;
 
 use crate::handler::PluginEventRouter;
-use crate::router::{AuthHandler, SystemHandler};
+use crate::handler::{AuthHandler, SystemHandler};
 use crate::router::{ClientBusinessRouter, ClientRouteContext, MobileEvent};
 
 use crate::system::constants::connection::{
@@ -447,9 +448,8 @@ impl ConnectionManager {
                             // 「不会自愈，需手动重连」。不告知的话前端只能显示通用的
                             // 「连接已断开」，用户分不清「正在自愈」与「不会自愈」，
                             // 只能干等退避耗尽（最长 3 轮 + 认证超时）才发现。
-                            let auto_reconnect_disabled = !auto_reconnect_flag.load(Ordering::SeqCst)
-                                && !fatal
-                                && !non_retryable;
+                            let auto_reconnect_disabled =
+                                !auto_reconnect_flag.load(Ordering::SeqCst) && !fatal && !non_retryable;
                             let _ = app_clone.emit(
                                 "ws_unexpected_disconnect",
                                 serde_json::json!({
@@ -460,13 +460,24 @@ impl ConnectionManager {
                                 }),
                             );
 
-                            // 通知插件连接断开
-                            {
-                                let pm = crate::state::get_plugin_manager();
-                                pm.dispatch_lifecycle_event(crate::plugin::types::PluginLifecycleEvent::Disconnect {
-                                    reason: reason.clone(),
-                                })
-                                .await;
+                            // 通知插件连接断开。
+                            // 经 AppHandle 取托管态而非 `state::get_plugin_manager()`
+                            // 静态单例：后者在 setup 未完成时 panic，而本处在
+                            // spawn 的监控任务里——一次 panic 会连带终止整个
+                            // 重连监督循环（静默失去自愈能力）。托管态缺失是
+                            // 启动窗口的正常情形，跳过通知即可。
+                            match app_clone.try_state::<Arc<PluginManager>>() {
+                                Some(pm) => {
+                                    pm.dispatch_lifecycle_event(
+                                        crate::plugin::types::PluginLifecycleEvent::Disconnect {
+                                            reason: reason.clone(),
+                                        },
+                                    )
+                                    .await;
+                                }
+                                None => tracing::debug!(
+                                    "[ConnMonitor] plugin manager not managed yet, skip disconnect notification"
+                                ),
                             }
                         } else {
                             tracing::debug!("[ConnMonitor] Manual disconnect, skipping notification");
@@ -875,9 +886,13 @@ mod tests {
     #[test]
     fn business_envelope_is_a_permanent_credential_rejection() {
         // parse_envelope 对 `code != 0` 的映射形状（`code 1007: Invalid token`）
-        assert!(is_credential_rejection(&AppError::Auth("code 1007: Invalid token".into())));
+        assert!(is_credential_rejection(&AppError::Auth(
+            "code 1007: Invalid token".into()
+        )));
         // 业务码具体取值不敏感：判据是变体，不是文案
-        assert!(is_credential_rejection(&AppError::Auth("code 1001: Device not paired".into())));
+        assert!(is_credential_rejection(&AppError::Auth(
+            "code 1001: Device not paired".into()
+        )));
     }
 
     /// 反例：传输 / 协议 / 业务以外的各种故障**不得**被判成永久性——
@@ -890,10 +905,7 @@ mod tests {
             AppError::Parse("Invalid API response JSON".into()),
             AppError::WebSocket("connection closed".into()),
         ] {
-            assert!(
-                !is_credential_rejection(&e),
-                "传输类故障不得被判为永久性凭证拒绝: {e}"
-            );
+            assert!(!is_credential_rejection(&e), "传输类故障不得被判为永久性凭证拒绝: {e}");
         }
     }
 

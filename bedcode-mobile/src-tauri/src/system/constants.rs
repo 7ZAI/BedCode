@@ -9,4 +9,3 @@ pub mod heartbeat;
 pub mod mdns;
 pub mod plugin;
 pub mod reconnect;
-pub mod terminal;

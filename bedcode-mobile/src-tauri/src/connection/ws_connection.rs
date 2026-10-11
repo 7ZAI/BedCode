@@ -209,12 +209,6 @@ impl WsConnectionManager {
         info!("[WsConnectionManager] Disconnected");
     }
 
-    /// 标记连接失败（内部使用）
-    pub async fn mark_failed(&self, error: String) {
-        self.running.store(false, std::sync::atomic::Ordering::SeqCst);
-        self.lifecycle.set_status(ConnectionStatus::Error(error)).await;
-    }
-
     /// 重置运行标记（用于允许重新连接）
     pub fn reset_running(&self) {
         self.running.store(false, std::sync::atomic::Ordering::SeqCst);

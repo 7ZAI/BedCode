@@ -56,7 +56,12 @@ pub const WS_DEFAULT_PATH: &str = "/";
 ///
 /// 宿主路由形如 `/ws/plugin/{plugin-id}/{path}`（桌面 WS 业务硬切后的唯一形态，
 /// 旧 `/ws/event` 与 `/ws/terminal/session/{id}` 已删除 → 404）。
-/// **WS 路径字面量唯一出处**：新增端点在此追加，各调用点只引常量。
+///
+/// 注：本常量**当前零消费**——唯一在册的 `session-control` 端点有自己的
+/// 完整路径常量 `WS_PLUGIN_SESSION_CONTROL_PATH`，调用点直接引它。此前本常量
+/// 自称「WS 路径字面量唯一出处」却与那条并存，两个都写同一段字面量：一旦只改
+/// 其一就会拼出不一致的 URL。保留它作为该插件路径前缀的唯一出处，新增端点应
+/// 写完整路径常量；若两者继续并存，需重新裁定谁是字面量真源。
 pub const WS_PLUGIN_BASE_PATH: &str = "/ws/plugin/com.bedcode.terminal-session";
 
 /// 常驻事件通道端点（票 03：`session-control`，替代已删除的 `/ws/event`）
