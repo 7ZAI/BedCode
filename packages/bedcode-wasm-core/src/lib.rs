@@ -38,8 +38,10 @@ pub mod bus;
 pub mod config;
 /// 引擎面：宿主主库（schema.sql 单一事实源，ADR 0036「机制与真源同侧」）
 pub mod db;
-/// 测试 harness（§4.5）：crate 内测试起 HTTP+WS 服务器的薄壳（lib 组合根不可引用）
-#[cfg(test)]
+/// 测试 harness（§4.5）：crate 内测试起 HTTP+WS 服务器的薄壳（lib 组合根不可引用）。
+/// 桌面装配面专属：起服依赖 bedcode-server-core（common-host 依赖，票 02 M12
+/// 语义边界——移动形态无 HTTP/WS 服务端测试 harness）。
+#[cfg(all(test, feature = "common-host"))]
 pub(crate) mod host_harness;
 /// crate 边界锁共享面（票 05 落点）：拆分产物登记表 + 扫描根单一事源上提本 crate
 ///
@@ -182,8 +184,13 @@ mod tests {
     #[test]
     fn core_modules_are_public() {
         let _: fn() -> crate::db::Database;
-        let _: fn(crate::manager::host::PluginHost);
-        let _: fn(crate::host_api::context::WasmHostContext);
+        // 桌面装配面（PluginHost / WasmHostContext）为 common-host 专属——
+        // 绑定归位后的交集核心不含这两个装配类型（票 02 M7/M12 语义边界）
+        #[cfg(feature = "common-host")]
+        {
+            let _: fn(crate::manager::host::PluginHost);
+            let _: fn(crate::host_api::context::WasmHostContext);
+        }
         let _: fn(crate::bus::MessageBus);
         let _: fn(crate::security::fs_auth::FsAuthChecker);
         let _: fn(crate::storage::PluginStorage);

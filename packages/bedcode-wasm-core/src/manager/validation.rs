@@ -368,6 +368,10 @@ mod tests {
     ///
     /// 变异判据：把 `validate_preopen_category` 从 `validate_manifest_required` 摘掉，
     /// 反例全部转红（preopen 声明会静默进入宿主、按 manifest 预打开目录）。
+    // 桌面装配面（common-host）专属：WASI preopen / 角色 `type` 词汇是桌面
+    // 契约事实（ADR 0032/0034；移动 Manifest 无 kind 字段、无 WASI 面——
+    // 移动形态零 preopen、零角色驱动加载，票 02 M12 语义边界）。
+    #[cfg(feature = "common-host")]
     #[test]
     fn wasi_preopen_dirs_on_non_worker_is_rejected_at_load() {
         let parse = |extra: &str| -> crate::Result<PluginManifest> {
@@ -410,6 +414,10 @@ mod tests {
     /// 角色（`type`）的取值域在反序列化期收口：三角色 + 旧拼写别名，
     /// 其余一律拒（不回落缺省 L3——那会让「声明了基础服务却被当业务应用装配」
     /// 这类错误一路活到运行期）
+    // 桌面装配面（common-host）专属：WASI preopen / 角色 `type` 词汇是桌面
+    // 契约事实（ADR 0032/0034；移动 Manifest 无 kind 字段、无 WASI 面——
+    // 移动形态零 preopen、零角色驱动加载，票 02 M12 语义边界）。
+    #[cfg(feature = "common-host")]
     #[test]
     fn manifest_role_spelling_domain_is_closed_at_load() {
         let parse = |kind: &str| -> crate::Result<PluginManifest> {

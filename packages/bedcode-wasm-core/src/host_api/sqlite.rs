@@ -70,7 +70,7 @@ impl SqlitePorts for HostSqlitePorts<'_> {
         super::check_permission(self.ctx, plugin_id, permission, api)
     }
 
-    fn main_db(&self) -> Arc<tokio::sync::Mutex<Database>> {
+    fn main_db(&self) -> Arc<std::sync::Mutex<Database>> {
         self.ctx.database().clone()
     }
 

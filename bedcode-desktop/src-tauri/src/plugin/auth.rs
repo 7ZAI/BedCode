@@ -213,7 +213,7 @@ pub(crate) fn auth_secret_get(
     let pid = plugin_id.to_string();
     let k = key.to_string();
     let value: Option<String> = block_on_async(async move {
-        let db = db.lock().await;
+        let db = db.lock().expect("plugin secrets db lock poisoned");
         db.conn()
             .query_row(
                 "SELECT value FROM plugin_secrets WHERE plugin_id = ?1 AND key = ?2",
@@ -256,7 +256,7 @@ pub(crate) fn auth_secret_set(
     let v = value.to_string();
     let now = Utc::now().to_rfc3339();
     block_on_async(async move {
-        let db = db.lock().await;
+        let db = db.lock().expect("plugin secrets db lock poisoned");
         db.conn()
             .execute(
                 "INSERT INTO plugin_secrets (plugin_id, key, value, updated_at) \
@@ -291,7 +291,7 @@ pub(crate) fn auth_secret_delete(
     let pid = plugin_id.to_string();
     let k = key.to_string();
     block_on_async(async move {
-        let db = db.lock().await;
+        let db = db.lock().expect("plugin secrets db lock poisoned");
         db.conn()
             .execute(
                 "DELETE FROM plugin_secrets WHERE plugin_id = ?1 AND key = ?2",
@@ -320,7 +320,7 @@ pub(crate) fn auth_secret_keys(
     let db = db.database().clone();
     let pid = plugin_id.to_string();
     block_on_async(async move {
-        let db = db.lock().await;
+        let db = db.lock().expect("plugin secrets db lock poisoned");
         let mut stmt = db
             .conn()
             .prepare("SELECT key FROM plugin_secrets WHERE plugin_id = ?1 ORDER BY key")
@@ -369,7 +369,7 @@ pub(crate) fn auth_setting_set(
     let k = key.to_string();
     let v = value.to_string();
     block_on_async(async move {
-        let db = db.lock().await;
+        let db = db.lock().expect("plugin secrets db lock poisoned");
         db.set_setting(&k, &v).map_err(|e| format!("database error: {}", e))
     })?;
     tracing::info!(
@@ -811,7 +811,7 @@ mod tests {
         .unwrap();
         // 锁经 block_on_async（普通测试线程 blocking_lock 不可靠）
         block_on_async(async {
-            let db = host_ctx.database().lock().await;
+            let db = host_ctx.database().lock().expect("db lock poisoned");
             assert_eq!(db.get_setting("pairing_code_ttl").unwrap().as_deref(), Some("600"));
             assert_eq!(db.get_setting("qr_token_ttl").unwrap().as_deref(), Some("120"));
         });
@@ -838,7 +838,7 @@ mod tests {
             let host_ctx = file_host_ctx(&db_path);
             // 锁经 block_on_async（普通测试线程 blocking_lock 不可靠）
             block_on_async(async {
-                let db = host_ctx.database().lock().await;
+                let db = host_ctx.database().lock().expect("db lock poisoned");
                 assert_eq!(
                     db.get_setting("pairing_code_ttl").unwrap().as_deref(),
                     Some("900"),

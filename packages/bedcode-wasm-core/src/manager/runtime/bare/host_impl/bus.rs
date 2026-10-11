@@ -143,9 +143,8 @@ mod tests {
     /// 无操作 dispatcher：publish 要求 dispatcher 已注入，静态订阅不实际使用它
     struct NoopDispatcher;
 
-    #[async_trait::async_trait]
     impl crate::bus::MessageDispatcher for NoopDispatcher {
-        async fn dispatch_to_wasm(
+        fn dispatch_to_wasm(
             &self,
             _plugin_id: &str,
             _msg: &bedcode_plugin_api_mobile::BusMessage,
@@ -153,7 +152,7 @@ mod tests {
             Ok(())
         }
 
-        async fn is_activated(&self, _plugin_id: &str) -> bool {
+        fn is_activated(&self, _plugin_id: &str) -> bool {
             true
         }
     }
@@ -173,9 +172,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn bus_publish_public_topic_delivers_to_subscriber() {
         let state = state_with("plugin-a", &[PERMISSION_BUS]);
-        host_ctx(state).message_bus.set_dispatcher(Arc::new(NoopDispatcher)).await;
+        host_ctx(&state).message_bus.set_dispatcher(Arc::new(NoopDispatcher)).await;
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        host_ctx(state)
+        host_ctx(&state)
             .message_bus
             .subscribe_static("plugin-b", "greeting", Box::new(ChannelHandler(tx)))
             .await;
@@ -216,8 +215,10 @@ mod tests {
         assert_eq!(bus_unsubscribe(&state, "t").unwrap_err(), "permission denied: bus");
     }
 
-    /// 行为对齐③：订阅面门生效——他人命名空间 / 回复道 / legacy 拒绝；
-    /// 自有命名空间、请求道、公开 topic 放行；legacy 退订放行（清理幂等）
+    /// 行为对齐③：订阅面门生效——他人命名空间 / 回复道拒绝；
+    /// 自有命名空间、请求道、公开 topic 放行；退订只过命名空间门（幂等清理）。
+    /// legacy 定向形态（`pty:exit.com.victim` 等无 `::` 形态）已随 2026-10-10
+    /// b141a0d07 退役，订阅 / 退订均按共享核当前语义放行（无属主形态即公开）。
     #[tokio::test(flavor = "multi_thread")]
     async fn bus_subscribe_gates_now_enforced() {
         let state = state_with("com.victim", &[PERMISSION_BUS]);
@@ -225,11 +226,11 @@ mod tests {
         assert!(err.contains("namespace"), "got: {err}");
         let err = bus_subscribe(&state, "bedcode.api.reply.com.victim.req-1").unwrap_err();
         assert!(err.contains("reply"), "got: {err}");
-        let err = bus_subscribe(&state, "pty:exit.com.victim").unwrap_err();
-        assert!(err.contains("legacy") && err.contains("com.victim::pty:exit"), "got: {err}");
         bus_subscribe(&state, "com.victim::pty:exit").expect("own ns ok");
         bus_subscribe(&state, "bedcode.api.com.victim.echo").expect("request lane ok");
         bus_subscribe(&state, "peer:consent").expect("public ok");
-        bus_unsubscribe(&state, "pty:exit.com.victim").expect("legacy 退订放行");
+        bus_subscribe(&state, "pty:exit.com.victim").expect("非命名空间形态放行（legacy 门已退役）");
+        bus_unsubscribe(&state, "com.victim::pty:exit").expect("own ns ok");
+        bus_unsubscribe(&state, "pty:exit.com.victim").expect("退订只过命名空间门");
     }
 }

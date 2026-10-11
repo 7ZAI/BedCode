@@ -85,7 +85,7 @@ fn auth_setting_seconds(
     let db = db.database().clone();
     let setting_key = key.to_string();
     let stored = block_on_async(async move {
-        let db = db.lock().await;
+        let db = db.lock().expect("config db lock poisoned");
         db.get_setting(&setting_key)
             .map_err(|e| format!("database error: {}", e))
     })?;
@@ -191,7 +191,7 @@ mod tests {
 
         // ② 落库（模拟 host-auth auth-setting-set 的写入结果）后读回新值
         {
-            let db = ctx.database().blocking_lock();
+            let db = ctx.database().lock().expect("db lock");
             db.set_setting("pairing_code_ttl", "600").expect("write");
             db.set_setting("qr_token_ttl", "1200").expect("write");
         }
@@ -206,7 +206,7 @@ mod tests {
 
         // ③ 非法值（非十进制）→ 回默认值，不报错（宿主命令面同口径）
         {
-            let db = ctx.database().blocking_lock();
+            let db = ctx.database().lock().expect("db lock");
             db.set_setting("qr_token_ttl", "abc").expect("write");
         }
         assert_eq!(

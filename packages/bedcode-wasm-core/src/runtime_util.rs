@@ -235,11 +235,15 @@ pub fn ambient_handle() -> tokio::runtime::Handle {
 // 票 17 批次 2：WS 读写任务 / 重连任务迁入 crate 后在 crate 侧 spawn，需要
 // 同款 panic 防护。宿主保留原文件（宿主引擎面多处消费），双份形状由
 // fork_boundary_lock 的机制核在场断言钉住；票 19 抽共享核时随机制一并上提。
+//
+// 常编译（单形态票 02 M5）：错误边界是双端共用的公共设施——桌面包容 WS
+// 连接任务、移动壳的 WS 读写 / 重连任务都在 crate 侧 spawn 后台任务，不再
+// 按 bare-host 门控。block_on_ambient / ambient_handle（root 常编译段）供
+// 同步上下文驱动借用式 future，此处三个符号供 spawn 后盾。
 
 /// 使用错误边界包装 tokio::spawn（当前线程必须有 runtime 上下文）
 ///
 /// 捕获 spawned 任务中的 panic 并记录日志，防止任务静默终止。
-#[cfg(feature = "bare-host")]
 pub fn spawn_with_error_boundary<F>(task_name: &'static str, future: F) -> tokio::task::JoinHandle<()>
 where
     F: std::future::Future<Output = ()> + Send + 'static,
@@ -252,7 +256,6 @@ where
 /// 与 [`spawn_with_error_boundary`] 同一防护，但提交目标由调用方指定：
 /// 调用线程可能**没有**当前 runtime 上下文（spawn_blocking / 纯 std 线程上的
 /// host fn），此时裸 `tokio::spawn` 直接 panic——句柄版在任意线程均合法。
-#[cfg(feature = "bare-host")]
 pub fn spawn_with_error_boundary_on<F>(
     handle: &tokio::runtime::Handle,
     task_name: &'static str,
@@ -265,7 +268,6 @@ where
 }
 
 /// 防护包装（共用内部：panic → error! 日志，任务自身吞掉不外泄）
-#[cfg(feature = "bare-host")]
 async fn wrap_with_error_boundary<F>(task_name: &'static str, future: F)
 where
     F: std::future::Future<Output = ()> + Send + 'static,

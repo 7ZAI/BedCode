@@ -129,7 +129,7 @@ fn customizer_cannot_override_locked_knobs() {
 /// 定制失败必须显性报错，不静默降级为一个「看起来能用但参数不对」的 Engine
 #[test]
 fn customizer_error_is_reported_with_context() {
-    let storage = Arc::new(PluginStorage::new(Arc::new(Mutex::new(
+    let storage = Arc::new(PluginStorage::new(Arc::new(std::sync::Mutex::new(
         crate::db::Database::new(&PathBuf::from(":memory:")).expect("内存库应可建"),
     ))));
     let result = WasmRuntime::with_setup(

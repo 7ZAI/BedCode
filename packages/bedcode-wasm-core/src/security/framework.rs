@@ -502,7 +502,7 @@ mod tests {
         let db = crate::db::Database::new(&std::path::Path::new(":memory:")).expect("in-memory db");
         db.init_schema().expect("init schema");
         let storage = Arc::new(crate::storage::PluginStorage::new(Arc::new(
-            tokio::sync::Mutex::new(db),
+            std::sync::Mutex::new(db),
         )));
         let permission = Arc::new(PermissionManager::new());
         // 票 08/P0-2：豁免表宿主注入——本测试环境注入测试表（.claude 项目段），

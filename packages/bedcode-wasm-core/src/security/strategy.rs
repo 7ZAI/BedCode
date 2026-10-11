@@ -249,7 +249,7 @@ mod tests {
     async fn evaluate_error_carries_plugin_and_resource_context() {
         let db = crate::db::Database::new(&std::path::Path::new(":memory:")).unwrap();
         db.init_schema().unwrap();
-        let store = AuthPolicyStore::new(std::sync::Arc::new(tokio::sync::Mutex::new(db)));
+        let store = AuthPolicyStore::new(std::sync::Arc::new(std::sync::Mutex::new(db)));
         // 未初始化任何策略记录时读不存在的表会失败（AuthPolicyStore 直接读
         // plugin_auth_policies 表；这里用缺表场景触发出错路径）——按实现如实断言：
         // 要么 Err 带上下文；若实现恰好能读到（表存在返回空），则该断言分支为空。

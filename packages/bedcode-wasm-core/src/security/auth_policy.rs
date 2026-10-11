@@ -35,11 +35,9 @@ use crate::db::Database;
 use crate::monitor::MetricsRegistry;
 use crate::security::fs_auth::FirstPartyDirEntry;
 use std::sync::{Arc, RwLock};
-// db 锁形态按宿主分支分叉（票 06 批次 03，与 storage.rs 同款裁决）：
-// 桌面 tokio（async 面）/ 移动 std（fork 同步 host fn 架构）
-#[cfg(feature = "common-host")]
-use tokio::sync::Mutex;
-#[cfg(feature = "bare-host")]
+// db 锁形态统一为 std Mutex（单形态票 02 M2，与 storage.rs 同款裁决）：
+// 锁获取行统一为同步锁 + 短临界区（auth_policy 内无跨 await 持有的锁——
+// guard 非 Send，编译器强制）；`.await` 形态随 tokio 锁一并退役。
 use std::sync::Mutex;
 
 /// 每 (应用, 资源) 的授权记录条数上限（spec §8.2）
@@ -276,9 +274,6 @@ impl AuthPolicyStore {
         name: &str,
         first_party_dirs: Vec<FirstPartyDirEntry>,
     ) -> crate::Result<PluginAuthOverview> {
-        #[cfg(feature = "common-host")]
-        let db = self.db.lock().await;
-        #[cfg(feature = "bare-host")]
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
         let strategies = load_strategies(db.conn(), plugin_id)?;
         let records = load_records(db.conn(), plugin_id)?;
@@ -301,9 +296,6 @@ impl AuthPolicyStore {
     /// 缓存判定在放行，策略语义就是骗人的。缺行 / 非法值都回落默认档
     /// （fail-safe 方向见 [`AuthStrategy::parse`]）。
     pub async fn strategy(&self, plugin_id: &str, resource: AuthResource) -> crate::Result<AuthStrategy> {
-        #[cfg(feature = "common-host")]
-        let db = self.db.lock().await;
-        #[cfg(feature = "bare-host")]
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
         let raw = db.conn().query_row(
             "SELECT strategy FROM plugin_auth_policies WHERE plugin_id = ?1 AND resource = ?2",
@@ -328,9 +320,6 @@ impl AuthPolicyStore {
         plugin_id: &str,
         resource: AuthResource,
     ) -> crate::Result<Vec<AuthRecordMatch>> {
-        #[cfg(feature = "common-host")]
-        let db = self.db.lock().await;
-        #[cfg(feature = "bare-host")]
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = db.conn().prepare(
             "SELECT id, target, effect, ops, prefix_match FROM plugin_auth_records \
@@ -371,9 +360,6 @@ impl AuthPolicyStore {
         resource: AuthResource,
         strategy: AuthStrategy,
     ) -> crate::Result<()> {
-        #[cfg(feature = "common-host")]
-        let db = self.db.lock().await;
-        #[cfg(feature = "bare-host")]
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
         let now = chrono::Utc::now().timestamp_millis();
         db.conn().execute(
@@ -406,9 +392,6 @@ impl AuthPolicyStore {
         ops: &[String],
         source: AuthRecordSource,
     ) -> crate::Result<GrantOutcome> {
-        #[cfg(feature = "common-host")]
-        let db = self.db.lock().await;
-        #[cfg(feature = "bare-host")]
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
         let conn = db.conn();
         let now = chrono::Utc::now().timestamp_millis();
@@ -494,9 +477,6 @@ impl AuthPolicyStore {
         target: &str,
         source: AuthRecordSource,
     ) -> crate::Result<()> {
-        #[cfg(feature = "common-host")]
-        let db = self.db.lock().await;
-        #[cfg(feature = "bare-host")]
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
         let conn = db.conn();
         let now = chrono::Utc::now().timestamp_millis();
@@ -541,10 +521,7 @@ impl AuthPolicyStore {
     pub async fn revoke(&self, plugin_id: &str, resource: AuthResource, target: &str) -> crate::Result<usize> {
         let target = resolve_revoke_target(resource, target)?;
         let removed = {
-            #[cfg(feature = "common-host")]
-        let db = self.db.lock().await;
-        #[cfg(feature = "bare-host")]
-        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+            let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
             db.conn().execute(
                 "DELETE FROM plugin_auth_records \
                  WHERE plugin_id = ?1 AND resource = ?2 AND target = ?3 AND effect = ?4",
@@ -560,9 +537,6 @@ impl AuthPolicyStore {
     ///
     /// 只删 deny 行，不动同目标的 allow 行。返回删除行数（0 = 本就没有 deny）。
     pub async fn remove_deny(&self, plugin_id: &str, resource: AuthResource, target: &str) -> crate::Result<usize> {
-        #[cfg(feature = "common-host")]
-        let db = self.db.lock().await;
-        #[cfg(feature = "bare-host")]
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
         let removed = db.conn().execute(
             "DELETE FROM plugin_auth_records \
@@ -582,9 +556,6 @@ impl AuthPolicyStore {
     /// 返回被清掉的 (记录数, 策略数)，供调用方记日志：清零无声意味着「重装后授权
     /// 记录凭空消失」这类问题无从追查（AGENTS §8：真源侧动作要留痕）。
     pub async fn purge_plugin(&self, plugin_id: &str) -> crate::Result<(usize, usize)> {
-        #[cfg(feature = "common-host")]
-        let db = self.db.lock().await;
-        #[cfg(feature = "bare-host")]
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
         let conn = db.conn();
         let records = conn.execute(
@@ -734,7 +705,7 @@ mod tests {
         source: &str,
         created_at: i64,
     ) {
-        let db = store.db.lock().await;
+        let db = store.db.lock().expect("auth policy db lock poisoned");
         db.conn()
             .execute(
                 "INSERT INTO plugin_auth_records \
@@ -755,7 +726,7 @@ mod tests {
     }
 
     async fn seed_strategy(store: &AuthPolicyStore, plugin_id: &str, resource: &str, strategy: &str) {
-        let db = store.db.lock().await;
+        let db = store.db.lock().expect("auth policy db lock poisoned");
         db.conn()
             .execute(
                 "INSERT INTO plugin_auth_policies (plugin_id, resource, strategy, updated_at) \
@@ -1369,7 +1340,7 @@ mod tests {
             .await
             .unwrap();
         let rows: i64 = {
-            let db = store.db.lock().await;
+            let db = store.db.lock().expect("auth policy db lock poisoned");
             db.conn()
                 .query_row(
                     "SELECT COUNT(*) FROM plugin_auth_policies WHERE plugin_id = ?1",

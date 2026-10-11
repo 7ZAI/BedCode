@@ -15,13 +15,11 @@ use crate::db::Database;
 use chrono::Utc;
 use std::collections::HashMap;
 use std::sync::Arc;
-// db 锁形态按宿主分支分叉（票 06 批次 03）：桌面 = tokio Mutex（宿主 async 面
-// .lock().await）；移动 = std Mutex（fork 架构裁决：移动 host fn 是同步上下文，
-// SQL 亦同步，std 锁免 block_on 绕行——bare_context.rs 头注同款）。方法体内
-// 只有锁**获取行**随形态分叉，Database 操作双端一致。
-#[cfg(feature = "common-host")]
-use tokio::sync::Mutex;
-#[cfg(feature = "bare-host")]
+// db 锁形态统一为 std Mutex（单形态票 02 M1）：方法体内锁获取后只有**同步**
+// rusqlite 操作、无跨锁 await（guard 非 Send，编译器强制），std 锁免
+// block_on 绕行（移动同步 host fn 直锁；桌面 async fn 内同步持锁同样安全）。
+// 与 auth_policy.rs / context.rs / sqlite_ports 同款裁决（锁收敛为同步锁 +
+// 短临界区）。
 use std::sync::Mutex;
 
 /// 系统级 plugin_id，用于存储非插件私有的全局数据
@@ -35,27 +33,18 @@ const ACTIVATION_STATE_KEY: &str = "activation_state";
 
 /// 插件存储管理器
 pub struct PluginStorage {
-    #[cfg(feature = "common-host")]
-    db: Arc<Mutex<Database>>,
-    #[cfg(feature = "bare-host")]
     db: Arc<Mutex<Database>>,
 }
 
 impl PluginStorage {
-    #[cfg(feature = "common-host")]
-    pub fn new(db: Arc<Mutex<Database>>) -> Self {
-        Self { db }
-    }
-
-    #[cfg(feature = "bare-host")]
     pub fn new(db: Arc<Mutex<Database>>) -> Self {
         Self { db }
     }
 
     /// 测试构造（内存库 + 生产 schema 初始化）——跨模块测试共用夹具
     /// （迁移自宿主 plugin/storage.rs 同名函数；底库 = crate Database）。
-    /// 可见性 = crate 测试 + 宿主 test-support feature（下游 dev-dependencies）
-    #[cfg(all(feature = "bare-host", any(test, feature = "test-support")))]
+    /// 可见性 = crate 测试 + 宿主 test-support feature（下游 dev-dependencies）。
+    /// 常编译（单形态票 02）：共享测试夹具，不再按 bare-host 门控。
     pub fn test_storage() -> Arc<PluginStorage> {
         let db = Arc::new(Mutex::new({
             let db = Database::new(std::path::Path::new(":memory:")).expect("open in-memory db");
@@ -81,10 +70,6 @@ impl PluginStorage {
 
     /// 获取插件存储值
     pub async fn get(&self, plugin_id: &str, key: &str) -> crate::Result<Option<serde_json::Value>> {
-        // 锁获取形态随分支分叉（票 06 批次 03：桌面 tokio / 移动 std）
-        #[cfg(feature = "common-host")]
-        let db = self.db.lock().await;
-        #[cfg(feature = "bare-host")]
         let db = self.db.lock().expect("plugin storage db lock poisoned");
         let conn = db.conn();
         let mut stmt = conn.prepare("SELECT value FROM plugin_storage WHERE plugin_id = ?1 AND key = ?2")?;
@@ -103,10 +88,6 @@ impl PluginStorage {
 
     /// 设置插件存储值
     pub async fn set(&self, plugin_id: &str, key: &str, value: serde_json::Value) -> crate::Result<()> {
-        // 锁获取形态随分支分叉（票 06 批次 03：桌面 tokio / 移动 std）
-        #[cfg(feature = "common-host")]
-        let db = self.db.lock().await;
-        #[cfg(feature = "bare-host")]
         let db = self.db.lock().expect("plugin storage db lock poisoned");
         let json_str = serde_json::to_string(&value)?;
         let now = Utc::now().to_rfc3339();
@@ -123,10 +104,6 @@ impl PluginStorage {
 
     /// 删除插件存储值
     pub async fn delete(&self, plugin_id: &str, key: &str) -> crate::Result<()> {
-        // 锁获取形态随分支分叉（票 06 批次 03：桌面 tokio / 移动 std）
-        #[cfg(feature = "common-host")]
-        let db = self.db.lock().await;
-        #[cfg(feature = "bare-host")]
         let db = self.db.lock().expect("plugin storage db lock poisoned");
         db.conn().execute(
             "DELETE FROM plugin_storage WHERE plugin_id = ?1 AND key = ?2",
@@ -148,10 +125,6 @@ impl PluginStorage {
     where
         F: FnOnce(Option<serde_json::Value>) -> crate::Result<serde_json::Value>,
     {
-        // 锁获取形态随分支分叉（票 06 批次 03：桌面 tokio / 移动 std）
-        #[cfg(feature = "common-host")]
-        let db = self.db.lock().await;
-        #[cfg(feature = "bare-host")]
         let db = self.db.lock().expect("plugin storage db lock poisoned");
         let conn = db.conn();
         let previous = {
@@ -176,10 +149,6 @@ impl PluginStorage {
 
     /// 清空插件所有存储（插件卸载时使用）
     pub async fn clear_all(&self, plugin_id: &str) -> crate::Result<()> {
-        // 锁获取形态随分支分叉（票 06 批次 03：桌面 tokio / 移动 std）
-        #[cfg(feature = "common-host")]
-        let db = self.db.lock().await;
-        #[cfg(feature = "bare-host")]
         let db = self.db.lock().expect("plugin storage db lock poisoned");
         db.conn().execute(
             "DELETE FROM plugin_storage WHERE plugin_id = ?1",
@@ -220,8 +189,10 @@ impl PluginStorage {
         }
     }
 // ==================== 旧 JSON 文件存储迁移（移动装配面，fork 迁入，票 06 批次 03） ====================
+//
+// 常编译（单形态票 02 M1）：移动宿主 lib.rs 启动迁移仍在消费（旧 JSON 文件存储
+// 存量数据 → 主库）；桌面宿主永不调用。绑定归位（T-05）时随移动宿主收口或退役。
 
-#[cfg(feature = "bare-host")]
     /// 旧版 JSON 文件存储 → 主库一次性迁移（批次 2b 自宿主 plugin/storage.rs 迁入；
     /// 旧 `app_data_dir/plugins/{plugin_id}.json` 导入 `plugin_storage` 表后删除，
     /// 旧读路径删除 = fail-visible 三形态①）
@@ -236,7 +207,6 @@ impl PluginStorage {
         if !plugins_dir.exists() {
             return Ok(());
         }
-        #[cfg(feature = "bare-host")]
         let db = self.db.lock().expect("plugin storage db lock poisoned");
         let entries = match std::fs::read_dir(&plugins_dir) {
             Ok(entries) => entries,

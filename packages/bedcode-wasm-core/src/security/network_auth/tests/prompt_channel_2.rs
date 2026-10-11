@@ -22,7 +22,7 @@ async fn emit_failure_denies_and_cleans_the_prompt() {
     let db = Database::new(Path::new(":memory:")).expect("open in-memory db");
     db.init_schema().expect("init schema");
     let checker = NetworkAuthChecker::with_emitter(
-        Arc::new(Mutex::new(db)),
+        Arc::new(std::sync::Mutex::new(db)),
         Some(Arc::new(|_event: &str, _payload: serde_json::Value| {
             Err("event channel closed".to_string())
         })),

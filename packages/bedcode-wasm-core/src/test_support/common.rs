@@ -82,7 +82,7 @@ pub fn setup_wasm_runtime_with_setup(setup: EngineSetup) -> (WasmRuntime, Arc<Wa
     rt.block_on(async {
         let db = Database::new(&PathBuf::from(":memory:")).unwrap();
         db.init_schema().unwrap();
-        let db = Arc::new(Mutex::new(db));
+        let db = Arc::new(std::sync::Mutex::new(db));
 
         let storage = Arc::new(PluginStorage::new(db.clone()));
 
@@ -91,7 +91,7 @@ pub fn setup_wasm_runtime_with_setup(setup: EngineSetup) -> (WasmRuntime, Arc<Wa
         // `no such table`（票 07 的旧教训）。会话管理器自 v21 起无库依赖
         // （内核不再读配置表），故此处不再共库——变量保留仅为驱动
         // 建表副作用（init_schema），有意不读（下划线前缀）。
-        let _kernel_db = Arc::new(Mutex::new({
+        let _kernel_db = Arc::new(std::sync::Mutex::new({
             let db = Database::new(&PathBuf::from(":memory:")).unwrap();
             db.init_schema().unwrap();
             db
@@ -116,7 +116,7 @@ pub fn setup_wasm_runtime_with_setup(setup: EngineSetup) -> (WasmRuntime, Arc<Wa
 
         let host_ctx = WasmHostContext::new(
             db,
-            Arc::new(Mutex::new(std::collections::HashMap::new())),
+            Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             storage,
             None,
             permission,
@@ -175,14 +175,14 @@ pub fn build_host_ctx_at(db_path: Option<&std::path::Path>) -> Arc<WasmHostConte
         None => Database::new(&PathBuf::from(":memory:")).expect("in-memory db"),
     };
     db.init_schema().expect("init schema");
-    let db = Arc::new(Mutex::new(db));
+    let db = Arc::new(std::sync::Mutex::new(db));
     let storage = Arc::new(PluginStorage::new(db.clone()));
     let permission = Arc::new(PermissionManager::new());
     let fs_auth = Arc::new(FsAuthChecker::new(storage.clone(), None, Vec::new()));
     let message_bus = Arc::new(MessageBus::new());
     Arc::new(WasmHostContext::new(
         db,
-        Arc::new(Mutex::new(HashMap::new())),
+        Arc::new(std::sync::Mutex::new(HashMap::new())),
         storage,
         None,
         permission,

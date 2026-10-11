@@ -31,7 +31,7 @@ const HEADLESS_NO_PLUGIN_DB: &str = "Plugin error: plugin database unavailable i
 /// 测试替身端口
 pub(super) struct FakePorts {
     /// 主库（内存库，`init_schema` 跑过 ⇒ 表结构与生产一致）
-    db: Arc<tokio::sync::Mutex<Database>>,
+    db: Arc<std::sync::Mutex<Database>>,
     /// 已授予的 (属主, 权限位)
     granted: StdMutex<HashSet<(String, String)>>,
     /// 宿主 kv 存储（`(plugin_id, key) -> value`）
@@ -42,7 +42,7 @@ pub(super) struct FakePorts {
     /// 「命中转发」与「走宿主原语」在断言里长得一样）
     forwarded: StdMutex<HashMap<(String, String), serde_json::Value>>,
     /// 插件私有库（`plugin_db` 域函数测试注入；未登记 = 无头缺席形态）
-    plugin_dbs: StdMutex<HashMap<String, Arc<tokio::sync::Mutex<Database>>>>,
+    plugin_dbs: StdMutex<HashMap<String, Arc<std::sync::Mutex<Database>>>>,
 }
 
 impl FakePorts {
@@ -51,7 +51,7 @@ impl FakePorts {
         let db = Database::new(std::path::Path::new(":memory:")).expect("open in-memory db");
         db.init_schema().expect("init schema");
         Arc::new(Self {
-            db: Arc::new(tokio::sync::Mutex::new(db)),
+            db: Arc::new(std::sync::Mutex::new(db)),
             granted: StdMutex::new(HashSet::new()),
             kv: StdMutex::new(HashMap::new()),
             kv_forwarded: StdMutex::new(HashSet::new()),
@@ -96,9 +96,9 @@ impl FakePorts {
 
     /// 注入某插件的私有库（内存库；`host-plugin-database` 域函数测试用）。
     /// 未注入 = 无头上下文私有库缺席形态（与生产无 app_handle 一致）。
-    pub(super) fn set_plugin_db(&self, plugin_id: &str) -> Arc<tokio::sync::Mutex<Database>> {
+    pub(super) fn set_plugin_db(&self, plugin_id: &str) -> Arc<std::sync::Mutex<Database>> {
         let db = Database::new(std::path::Path::new(":memory:")).expect("open in-memory plugin db");
-        let arc = Arc::new(tokio::sync::Mutex::new(db));
+        let arc = Arc::new(std::sync::Mutex::new(db));
         self.plugin_dbs
             .lock()
             .expect("plugin_dbs lock")
@@ -144,7 +144,7 @@ impl SqlitePorts for FakePorts {
             .contains(&(plugin_id.to_string(), permission.to_string()))
     }
 
-    fn main_db(&self) -> Arc<tokio::sync::Mutex<Database>> {
+    fn main_db(&self) -> Arc<std::sync::Mutex<Database>> {
         Arc::clone(&self.db)
     }
 

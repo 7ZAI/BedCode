@@ -1329,7 +1329,7 @@ mod tests {
         let db = Database::new(&std::path::Path::new(":memory:")).unwrap();
         db.init_schema().unwrap();
         // Mutex 为 tokio::sync::Mutex（super::* 引入），与 PluginStorage 签名一致
-        Arc::new(PluginStorage::new(Arc::new(Mutex::new(db))))
+        Arc::new(PluginStorage::new(Arc::new(std::sync::Mutex::new(db))))
     }
 
     /// 内存数据库 + 无投递口（None）的校验器：无法弹窗，未授权路径应保守拒绝

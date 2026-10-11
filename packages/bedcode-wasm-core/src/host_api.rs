@@ -129,7 +129,9 @@ pub use ports::{
 
 /// 三域共用假端口（`sqlite_scaffold` 内的项是 `pub(super)`，即
 /// `pub(in wasm_core::host_api)`，故 `database::tests` / `storage::tests` 都够得着）
-#[cfg(test)]
+/// 桌面装配面专属（common-host）：假端口实现 SqlitePorts（sqlite_ports 为
+/// common-host 模块，票 02 M12 语义边界——移动形态 db 域走 bare host_impl/db）。
+#[cfg(all(test, feature = "common-host"))]
 pub(crate) mod sqlite_scaffold;
 
 // `test_seed_plugin_secret` 再导出已随 host-auth 域迁宿主退役（票 02 批次 04）：
@@ -254,7 +256,7 @@ pub(crate) mod tests {
     use std::collections::HashMap;
     use std::path::Path;
     use std::sync::Arc;
-    use tokio::sync::Mutex;
+    use std::sync::Mutex;
 
     /// 构造全内存、无头（AppHandle=None）的宿主上下文
     ///

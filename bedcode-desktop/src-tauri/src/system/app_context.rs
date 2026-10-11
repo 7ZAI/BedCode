@@ -10,7 +10,7 @@ use crate::wasm_core::PluginHost;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::AppHandle;
-use tokio::sync::Mutex;
+use std::sync::Mutex;
 
 /// 桌面端全局服务容器
 ///
@@ -18,7 +18,7 @@ use tokio::sync::Mutex;
 /// 通过 AppContext::global() 获取，各模块按需取用
 pub struct AppContext {
     /// 数据库实例
-    db: Arc<Mutex<Database>>,
+    db: Arc<std::sync::Mutex<Database>>,
     // 票 11：`session_manager` / `config_manager` 两个内核会话域字段已删除——
     // 会话真源在 `com.bedcode.terminal-session` 登记域，宿主经 `session_gateway`
     // 窄转发层互调，不再持有内核会话对象。
@@ -66,7 +66,7 @@ impl AppContext {
 
     // ==================== Accessors ====================
 
-    pub fn db(&self) -> &Arc<Mutex<Database>> {
+    pub fn db(&self) -> &Arc<std::sync::Mutex<Database>> {
         &self.db
     }
 
@@ -93,7 +93,7 @@ impl AppContext {
 
 /// 构建器，用于分步组装 AppContext
 pub struct AppContextBuilder {
-    db: Option<Arc<Mutex<Database>>>,
+    db: Option<Arc<std::sync::Mutex<Database>>>,
     plugin_host: Option<Arc<PluginHost>>,
     mdns_advertiser: Option<Arc<tokio::sync::RwLock<MdnsAdvertiser>>>,
     app_handle: Option<Arc<AppHandle>>,
@@ -113,7 +113,7 @@ impl AppContextBuilder {
         }
     }
 
-    pub fn db(mut self, db: Arc<Mutex<Database>>) -> Self {
+    pub fn db(mut self, db: Arc<std::sync::Mutex<Database>>) -> Self {
         self.db = Some(db);
         self
     }

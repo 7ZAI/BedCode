@@ -1,6 +1,7 @@
 //! bedcode-desktop/src-tauri/src/wasm_core/security/network_auth.rs 的跨分组测试脚手架（用例文件经 `use super::scaffold::*` 引用）
 
 use super::*;
+use std::sync::Mutex;
 
 use crate::security::auth_policy::AuthStrategy;
 use std::path::Path;
@@ -62,7 +63,7 @@ pub(super) async fn promptable_with_db(
     let db = Arc::new(Mutex::new(
         Database::new(Path::new(":memory:")).expect("open in-memory db"),
     ));
-    db.lock().await.init_schema().expect("init schema");
+    db.lock().expect("db lock").init_schema().expect("init schema");
     let log = EmittedLog::default();
     let sink = log.0.clone();
     let mut checker = NetworkAuthChecker::with_emitter(
@@ -148,7 +149,7 @@ pub(super) async fn source_of(checker: &NetworkAuthChecker, plugin: &str, target
 /// 故意把策略表弄没了）；其余用例走 [`source_of`]，避免测试自建第二套口径。
 pub(super) async fn source_via_raw_sql(db: &Arc<Mutex<Database>>, plugin: &str, target: &str) -> Option<String> {
     db.lock()
-        .await
+        .expect("db lock")
         .conn()
         .query_row(
             "SELECT source FROM plugin_auth_records \

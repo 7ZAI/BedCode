@@ -60,32 +60,12 @@ pub enum WsFrameDispatch {
 ///
 /// 由 PluginHost 实现，避免 MessageBus 与 PluginHost 循环引用。
 ///
-/// **投递形态按宿主分支分叉（票 06 批次 03）**：桌面宿主的投递器实现是同步
-/// 调用（PluginHost 直驱实例调用）；移动装配面（fork 票 17）投递器 async 化
-/// （`dispatch_to_wasm` / `is_activated` 为 async fn，host fn 上下文经
-/// block_on 桥进入）——同一 trait 双形态签名，实现方按形态对应。
-#[cfg(feature = "bare-host")]
-#[async_trait::async_trait]
-pub trait MessageDispatcher: Send + Sync + 'static {
-    /// 投递消息给 WASM 插件（调用 __bedcode_on_message）
-    async fn dispatch_to_wasm(&self, plugin_id: &str, msg: &BusMessage) -> anyhow::Result<()>;
-    /// 检查插件是否已激活
-    async fn is_activated(&self, plugin_id: &str) -> bool;
-
-    /// 投递 WS 帧给插件的 `events-ws` 可选导出（ABI v14）
-    ///
-    /// 返回 `Ok(true)` = 已投递；`Ok(false)` = 插件未导出该接口
-    /// （调用方按 spec §2.2 降级：丢弃 + 首次 warn + 计数，宿主不缓存）；
-    /// `Err` = 投递失败（trap / 实例不可用）。
-    ///
-    /// 默认实现返回 `Ok(false)`：非生产投递器（测试替身）未接 WS 通道时
-    /// 视为「无导出」，不影响既有实现与用例。
-    fn dispatch_ws_frame(&self, _plugin_id: &str, _frame: &WsFrameDispatch) -> anyhow::Result<bool> {
-        Ok(false)
-    }
-}
-
-#[cfg(feature = "common-host")]
+/// **单形态同步 trait（票 02 M3 收敛）**：投递形态统一为同步调用——
+/// 桌面宿主的投递器本来就是同步直驱（PluginHost 实例调用）；移动装配面
+/// （fork 票 17 曾 async 化）的异步依赖经宿主侧 block_on 桥进入
+/// （runtime_util::block_on_async / block_on_ambient），trait 自身不再分叉。
+/// 生产移动投递器在移动宿主（bedcode-mobile/src-tauri 自持 message_bus），
+/// wasm-core 内只剩 noop / 测试替身。
 pub trait MessageDispatcher: Send + Sync + 'static {
     /// 投递消息给 WASM 插件（调用 __bedcode_on_message）
     fn dispatch_to_wasm(&self, plugin_id: &str, msg: &BusMessage) -> anyhow::Result<()>;
@@ -371,28 +351,14 @@ impl MessageBus {
                     tracing::warn!(plugin_id = %pid, "MessageBus: dispatcher not set, WASM message skipped");
                     continue;
                 };
-                // 投递调用形态随 trait 分叉（票 06 批次 03：移动 async / 桌面同步）
-                #[cfg(feature = "bare-host")]
-                {
-                    if !dispatcher.is_activated(&pid).await {
-                        tracing::warn!(plugin_id = %pid, "MessageBus: subscriber not activated, skipping");
-                        continue;
-                    }
-                    if let Err(e) = dispatcher.dispatch_to_wasm(&pid, &msg).await {
-                        tracing::error!(plugin_id = %pid, error = %e, "MessageBus: dispatch to WASM plugin failed");
-                        continue;
-                    }
+                // 投递统一为同步调用（票 02 M3：单形态 trait；异步依赖经宿主桥）
+                if !dispatcher.is_activated(&pid) {
+                    tracing::warn!(plugin_id = %pid, "MessageBus: subscriber not activated, skipping");
+                    continue;
                 }
-                #[cfg(feature = "common-host")]
-                {
-                    if !dispatcher.is_activated(&pid) {
-                        tracing::warn!(plugin_id = %pid, "MessageBus: subscriber not activated, skipping");
-                        continue;
-                    }
-                    if let Err(e) = dispatcher.dispatch_to_wasm(&pid, &msg) {
-                        tracing::error!(plugin_id = %pid, error = %e, "MessageBus: dispatch to WASM plugin failed");
-                        continue;
-                    }
+                if let Err(e) = dispatcher.dispatch_to_wasm(&pid, &msg) {
+                    tracing::error!(plugin_id = %pid, error = %e, "MessageBus: dispatch to WASM plugin failed");
+                    continue;
                 }
             }
         });
@@ -733,7 +699,9 @@ mod tests {
     /// 测试用帧投递端口工厂：真实能力域窄端口（绑定传入的总线、无权限管理器）
     ///
     /// 生产路径这份由宿主 adapter 喂入（票 02 批次 03）；内核测试二进制里 adapter 仍在，
-    /// 直接复用其 `from_bus` 构造。
+    /// 直接复用其 `from_bus` 构造。桌面装配面（common-host）专属——HostBusPort /
+    /// BusBoundWsPorts 属桌面总线插座词汇（票 02 M3 语义边界：随 T-04 迁宿主）。
+    #[cfg(feature = "common-host")]
     fn test_ws_ports_factory() -> Arc<
         dyn Fn(&Arc<MessageBus>) -> Arc<dyn bedcode_server_websocket::plugin_binding::ports::WsPorts>
             + Send
@@ -1186,6 +1154,8 @@ mod tests {
     ///
     /// 杀死「构造期捕获总线」的写法（那条写法下第二次仍投 A，本用例红）
     #[tokio::test(flavor = "multi_thread")]
+    // 桌面装配面（common-host）专属：HostBusPort（票 02 M3，随 T-04 迁宿主）
+    #[cfg(feature = "common-host")]
     async fn late_bound_bus_port_publishes_to_current_bus_each_call() {
         use bedcode_server_base::ports::BusPort as _;
 
@@ -1222,6 +1192,8 @@ mod tests {
 
     /// late-bound 反例：静态订阅注册在**调用当时**的总线上，切目标后旧总线收不到订阅
     #[tokio::test(flavor = "multi_thread")]
+    // 桌面装配面（common-host）专属：HostBusPort（票 02 M3，随 T-04 迁宿主）
+    #[cfg(feature = "common-host")]
     async fn late_bound_bus_port_registers_static_subscriber_on_current_bus() {
         use bedcode_server_base::ports::BusPort as _;
 
@@ -1254,6 +1226,8 @@ mod tests {
 
     /// late-bound 二进制面：`publish_binary` 同样走当前解析目标
     #[tokio::test(flavor = "multi_thread")]
+    // 桌面装配面（common-host）专属：HostBusPort（票 02 M3，随 T-04 迁宿主）
+    #[cfg(feature = "common-host")]
     async fn late_bound_bus_port_publish_binary_to_current_bus() {
         use bedcode_server_base::ports::BusPort as _;
 
@@ -1284,6 +1258,8 @@ mod tests {
 
     /// 钉死形态回归：`new()` 仍只投给构造时给定的那条总线（无头 harness / 单测装配面）
     #[tokio::test(flavor = "multi_thread")]
+    // 桌面装配面（common-host）专属：HostBusPort（票 02 M3，随 T-04 迁宿主）
+    #[cfg(feature = "common-host")]
     async fn fixed_bus_port_publishes_only_to_its_own_bus() {
         use bedcode_server_base::ports::BusPort as _;
 

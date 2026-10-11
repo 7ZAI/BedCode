@@ -253,7 +253,7 @@ mod tests {
         assert_eq!(v[0]["v"], "1");
         // 连接表缓存：重复访问不重复打开
         {
-            let table = host_ctx(state).plugin_dbs.lock().unwrap();
+            let table = host_ctx(&state).plugin_dbs.lock().unwrap();
             assert!(table.contains_key(&state.plugin_id), "connection must be cached");
         }
     }

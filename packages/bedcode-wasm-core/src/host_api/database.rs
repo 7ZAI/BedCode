@@ -36,7 +36,7 @@ pub fn plugin_db_execute(ports: &dyn SqlitePorts, plugin_id: &str, sql: &str) ->
             .plugin_db(plugin_id.to_string())
             .await
             .map_err(|e| e.to_string())?;
-        let db = db_arc.lock().await;
+        let db = db_arc.lock().expect("plugin db lock poisoned");
         core_db::with_statement_timeout(plugin_id, db.conn(), timeout, |conn| {
             conn.execute(sql, []).map(|n| n as u32).map_err(|e| e.to_string())
         })
@@ -55,7 +55,7 @@ pub fn plugin_db_query(ports: &dyn SqlitePorts, plugin_id: &str, sql: &str) -> R
             .plugin_db(plugin_id.to_string())
             .await
             .map_err(|e| e.to_string())?;
-        let db = db_arc.lock().await;
+        let db = db_arc.lock().expect("plugin db lock poisoned");
         core_db::with_statement_timeout(plugin_id, db.conn(), timeout, |conn| {
             core_db::query_to_json(plugin_id, conn, sql)
         })
@@ -84,7 +84,7 @@ pub fn plugin_db_execute_params(
             .plugin_db(plugin_id.to_string())
             .await
             .map_err(|e| e.to_string())?;
-        let db = db_arc.lock().await;
+        let db = db_arc.lock().expect("plugin db lock poisoned");
         core_db::with_statement_timeout(plugin_id, db.conn(), timeout, |conn| {
             core_db::execute_with_params(conn, sql, &params).map(|n| n as u32)
         })
@@ -109,7 +109,7 @@ pub fn plugin_db_query_params(
             .plugin_db(plugin_id.to_string())
             .await
             .map_err(|e| e.to_string())?;
-        let db = db_arc.lock().await;
+        let db = db_arc.lock().expect("plugin db lock poisoned");
         core_db::with_statement_timeout(plugin_id, db.conn(), timeout, |conn| {
             core_db::query_with_params_to_json(plugin_id, conn, sql, &params)
         })
@@ -142,7 +142,7 @@ pub fn plugin_db_execute_batch(
             .plugin_db(plugin_id.to_string())
             .await
             .map_err(|e| e.to_string())?;
-        let db = db_arc.lock().await;
+        let db = db_arc.lock().expect("plugin db lock poisoned");
         core_db::with_statement_timeout(plugin_id, db.conn(), timeout, |conn| {
             core_db::execute_batch_on_conn(conn, &sqls)
         })

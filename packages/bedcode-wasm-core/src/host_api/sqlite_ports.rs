@@ -56,7 +56,7 @@ pub type BoxedBlocked<'a> = Pin<Box<dyn Future<Output = Box<dyn Any + Send>> + S
 /// future 借用它（与 `DbScope::get_or_create_plugin_db` 同一形状，见
 /// `host_api::context`）——无需为 `'static` 硬造一份 `Arc<WasmHostContext>`。
 pub type PluginDbFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<Arc<tokio::sync::Mutex<Database>>, String>> + Send + 'a>>;
+    Pin<Box<dyn Future<Output = Result<Arc<std::sync::Mutex<Database>>, String>> + Send + 'a>>;
 
 /// 宿主能力端口
 ///
@@ -72,7 +72,7 @@ pub trait SqlitePorts: Send + Sync {
     fn check_permission(&self, plugin_id: &str, permission: &str, api: &str) -> bool;
 
     /// 主库共享句柄（内核 + 全部插件共用一条连接 + 一把全局锁）
-    fn main_db(&self) -> Arc<tokio::sync::Mutex<Database>>;
+    fn main_db(&self) -> Arc<std::sync::Mutex<Database>>;
 
     /// 取（或懒创建）某插件的私有库句柄
     ///

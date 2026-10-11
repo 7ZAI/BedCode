@@ -240,36 +240,24 @@ mod tests {
     use std::collections::HashSet;
 
     /// 无头插件状态：权限集按 `ws:client` 授权开关构建
+    ///
+    /// 旧 fork 版本的字段直构（host_ctx / runtime_handle / granted_permissions）随
+    /// 统一 host-kit state 退役：现经 test_support 的 `build_host_ctx`（无头上下文
+    /// 同形夹具）+ `for_plugin` 权限面 + `WasmPluginState::new` 装配（管理域测试
+    /// 同款路径，wasm-core-mobile-purity 票 04）。runtime 句柄不再进 state——
+    /// ws 引擎侧统一走 `current_handle()`（无上下文线程回落 ambient）。
     fn state(
         plugin_id: &str,
         ws_granted: bool,
-        runtime: tokio::runtime::Handle,
+        _runtime: tokio::runtime::Handle,
     ) -> WasmPluginState {
-        let db = Arc::new(std::sync::Mutex::new(crate::db::Database::from_connection(
-            rusqlite::Connection::open_in_memory().expect("open in-memory db"),
-        )));
-        let storage = PluginStorage::test_storage();
-        let fs_auth = Arc::new(FsAuthChecker::new(storage.clone(), None, Vec::new()));
-        let status_reporter: Arc<dyn Fn(&str, &str) + Send + Sync> = Arc::new(|_, _| {});
         let mut granted_permissions = HashSet::new();
         if ws_granted {
             granted_permissions
                 .insert(bedcode_plugin_api_mobile::permission::PERMISSION_WS_CLIENT.to_string());
         }
-        WasmPluginState {
-            plugin_id: plugin_id.to_string(),
-            host_ctx: Arc::new(WasmHostContext::new_headless(
-                db,
-                storage,
-                None,
-                fs_auth,
-                Arc::new(MessageBus::new()),
-                status_reporter,
-            )),
-            runtime_handle: runtime,
-            granted_permissions,
-            on_message_binary: None,
-        }
+        let ctx = std::sync::Arc::new(crate::test_support::build_host_ctx().for_plugin(granted_permissions));
+        crate::test_support::build_component_state_with_ctx(plugin_id, ctx)
     }
 
     /// 权限门 fail-closed：未授权时全部 5 条原语在引擎权限门处直接拒绝，

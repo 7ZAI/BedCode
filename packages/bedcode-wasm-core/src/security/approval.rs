@@ -313,7 +313,7 @@ mod tests {
     use super::*;
     use crate::db::Database;
     use std::sync::Arc;
-    use tokio::sync::Mutex;
+    use std::sync::Mutex;
 
     async fn test_store() -> PluginApprovalStore {
         let db = Database::new(&std::path::Path::new(":memory:")).unwrap();

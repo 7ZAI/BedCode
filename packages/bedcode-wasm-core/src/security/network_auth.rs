@@ -59,11 +59,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tauri::Emitter;
 use tokio::sync::{oneshot, Mutex};
-// db 锁形态按宿主分支分叉（票 06 批次 03，与 storage.rs / auth_policy.rs 同款裁决）：
-// db 参数 = 桌面 tokio / 移动 std；prompts 锁恒 tokio（本模块内部状态，双端一致）
-#[cfg(feature = "common-host")]
-use tokio::sync::Mutex as DbMutex;
-#[cfg(feature = "bare-host")]
+// db 锁统一为 std Mutex（单形态票 02 M11，与 storage.rs / auth_policy.rs 同款裁决：
+// 同步锁 + 短临界区，guard 非 Send 编译器强制无跨 await 持锁）；
+// prompts 锁恒 tokio（本模块内部请求队列状态，双端一致，不在 db 锁收敛范围）
 use std::sync::Mutex as DbMutex;
 
 /// 出站询问的等待上限（与 fs 侧一致）

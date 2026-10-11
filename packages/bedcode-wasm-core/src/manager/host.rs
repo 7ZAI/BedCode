@@ -409,7 +409,7 @@ impl PluginHost {
     /// （`event-loop` 模型的实例级失败收敛，见 [`HostOwnerFailureSink`]），
     /// 也便于调用方共享（原先由调用方各自 `Arc::new`）
     pub async fn new(
-        db: Arc<Mutex<Database>>,
+        db: Arc<std::sync::Mutex<Database>>,
         plugins_dir: &Path,
         // 用户插件目录（app_data_dir/plugins，zip 安装目标，可卸载；dev 合入）
         user_plugins_dir: &Path,
@@ -440,7 +440,7 @@ impl PluginHost {
 
         let wasm_host_ctx = Arc::new(WasmHostContext::new(
             db.clone(),
-            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(std::sync::Mutex::new(HashMap::new())),
             storage.clone(),
             app_handle,
             permission.clone(),

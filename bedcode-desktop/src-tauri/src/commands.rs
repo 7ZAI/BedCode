@@ -535,11 +535,11 @@ pub fn get_traffic_encryption_config() -> LinkCryptoConfig {
 /// 落库失败不影响运行态（快照保持原值）
 #[tauri::command]
 pub async fn set_traffic_encryption_config(
-    db: State<'_, Arc<tokio::sync::Mutex<Database>>>,
+    db: State<'_, Arc<std::sync::Mutex<Database>>>,
     config: LinkCryptoConfig,
 ) -> Result<()> {
     {
-        let guard = db.lock().await;
+        let guard = db.lock().expect("main db lock poisoned");
         link_crypto::persist_config_to_db(guard.conn(), &config)?;
     }
     link_crypto::update_config(config);

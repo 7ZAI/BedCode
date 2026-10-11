@@ -7,6 +7,8 @@
 //! `seen_ids`，跨扫描去重缺失；本用例从宿主入口（`PluginHost::new`）锁住修复。
 
 use super::*;
+use std::sync::Mutex;
+
 
 /// 同 id 同时存在于内置与用户目录：内置条目必须胜出，且激活不得被审批门禁拒绝
 #[tokio::test]
@@ -39,10 +41,10 @@ async fn user_copy_must_not_shadow_builtin_scan_plugin() {
         .unwrap();
     }
 
-    let db = Arc::new(Mutex::new(
+    let db = Arc::new(std::sync::Mutex::new(
         Database::new(&std::path::PathBuf::from(":memory:")).unwrap(),
     ));
-    db.lock().await.init_schema().unwrap();
+    db.lock().expect("db lock").init_schema().unwrap();
     let host = PluginHost::new(db, &builtin_dir, &user_dir, None, None, Vec::new()).await;
 
     let info = host.get_plugin(shadowed_id).await.expect("plugin present");

@@ -503,7 +503,7 @@ pub fn run() {
             let db = Database::new(&db_path)?;
             db.init_schema()?;
 
-            let db = Arc::new(Mutex::new(db));
+            let db = Arc::new(std::sync::Mutex::new(db));
 
             // v33（ADR 0033）：宿主**不再持有**入场签发密钥（签发/验签均在认证
             // 中心），故此处无密钥预生成。旧的 `plugin_secrets` 属主 `host` 行

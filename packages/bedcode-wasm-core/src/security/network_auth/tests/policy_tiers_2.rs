@@ -115,7 +115,7 @@ async fn both_decision_faces_agree_on_every_tier() {
 async fn strategy_read_failure_falls_back_to_asking_and_still_records() {
     let (checker, db, log) = promptable_with_db(TINY, TINY).await;
     db.lock()
-        .await
+        .expect("db lock")
         .conn()
         .execute("DROP TABLE plugin_auth_policies", [])
         .expect("drop policies table");

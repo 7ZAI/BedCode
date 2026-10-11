@@ -3,6 +3,7 @@
 //! 跨文件复用，故顶层项标 `pub(super)`（可见于 `host::tests` 及其后代）。
 
 use super::*;
+use std::sync::Mutex;
 
 /// 本模块测试的不可测面说明：
 ///
@@ -34,7 +35,7 @@ pub(super) async fn setup_host() -> PluginHost {
     });
 
     let db = Arc::new(Mutex::new(Database::new(&PathBuf::from(":memory:")).unwrap()));
-    db.lock().await.init_schema().unwrap();
+    db.lock().expect("db lock").init_schema().unwrap();
     let storage = Arc::new(PluginStorage::new(db.clone()));
     let permission = Arc::new(PermissionManager::new());
     let registry = Arc::new(PluginRegistry::new());

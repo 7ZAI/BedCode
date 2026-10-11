@@ -48,7 +48,7 @@ impl Default for PluginState {
 }
 
 /// 插件清单
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginManifest {
     pub id: String,

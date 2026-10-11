@@ -21,7 +21,7 @@ use crate::host::{
     HostWebsocket, ProcessSyncResult, PtyRingFetch,
 };
 use crate::wasm::bedcode::plugin::{
-    host_app, host_auth, host_bus, host_config, host_connection, host_crypto, host_events,
+    host_app, host_auth_center, host_bus, host_config, host_connection_registry, host_crypto, host_events,
     host_events_desktop, host_fs, host_fs_desktop, host_http, host_http_endpoint, host_log,
     host_mdns, host_peer, host_platform, host_platform_desktop, host_plugin_database,
     host_process, host_pty, host_storage, host_task, host_timer, host_websocket,
@@ -78,27 +78,27 @@ mod tests {
 
 impl HostAuth for WasmHost {
     fn auth_secret_get(&self, key: &str) -> Result<Option<String>, HostError> {
-        host_auth::secret_get(key).map_err(|e| host_err("auth_secret_get", e))
+        host_auth_center::secret_get(key).map_err(|e| host_err("auth_secret_get", e))
     }
 
     fn auth_secret_set(&self, key: &str, value: &str) -> Result<(), HostError> {
-        host_auth::secret_set(key, value).map_err(|e| host_err("auth_secret_set", e))
+        host_auth_center::secret_set(key, value).map_err(|e| host_err("auth_secret_set", e))
     }
 
     fn auth_secret_delete(&self, key: &str) -> Result<(), HostError> {
-        host_auth::secret_delete(key).map_err(|e| host_err("auth_secret_delete", e))
+        host_auth_center::secret_delete(key).map_err(|e| host_err("auth_secret_delete", e))
     }
 
     fn auth_secret_keys(&self) -> Result<Vec<String>, HostError> {
-        host_auth::secret_keys().map_err(|e| host_err("auth_secret_keys", e))
+        host_auth_center::secret_keys().map_err(|e| host_err("auth_secret_keys", e))
     }
 
     fn auth_setting_set(&self, key: &str, value: &str) -> Result<(), HostError> {
-        host_auth::auth_setting_set(key, value).map_err(|e| host_err("auth_setting_set", e))
+        host_auth_center::auth_setting_set(key, value).map_err(|e| host_err("auth_setting_set", e))
     }
 
     fn auth_link_identity_parts(&self) -> Result<Option<serde_json::Value>, HostError> {
-        host_auth::link_identity_parts()
+        host_auth_center::link_identity_parts()
             .map_err(|e| host_err("auth_link_identity_parts", e))
             .and_then(|v| match v {
                 Some(s) => parse_json("auth_link_identity_parts", s).map(Some),
@@ -120,19 +120,19 @@ impl HostAuth for WasmHost {
     // 不解释；auth-method-invoke 零解析窄转发（宿主只校验 method 在注册表内）。
 
     fn auth_center_register(&self, methods: Vec<String>) -> Result<String, HostError> {
-        host_auth::auth_center_register(&methods).map_err(|e| host_err("auth_center_register", e))
+        host_auth_center::auth_center_register(&methods).map_err(|e| host_err("auth_center_register", e))
     }
 
     fn auth_center_unregister(&self) -> Result<(), HostError> {
-        host_auth::auth_center_unregister().map_err(|e| host_err("auth_center_unregister", e))
+        host_auth_center::auth_center_unregister().map_err(|e| host_err("auth_center_unregister", e))
     }
 
     fn auth_methods_list(&self) -> Result<Vec<String>, HostError> {
-        host_auth::auth_methods_list().map_err(|e| host_err("auth_methods_list", e))
+        host_auth_center::auth_methods_list().map_err(|e| host_err("auth_methods_list", e))
     }
 
     fn auth_method_invoke(&self, method: &str, params: &str) -> Result<String, HostError> {
-        host_auth::auth_method_invoke(method, params).map_err(|e| host_err("auth_method_invoke", e))
+        host_auth_center::auth_method_invoke(method, params).map_err(|e| host_err("auth_method_invoke", e))
     }
 }
 
@@ -230,7 +230,7 @@ impl HostConnection for WasmHost {
     /// 不随会话原语域退役；权限判据是 `connection:read`。
     fn connections_list(&self) -> Result<serde_json::Value, HostError> {
         let raw =
-            host_connection::connections_list().map_err(|e| host_err("connections_list", e))?;
+            host_connection_registry::connections_list().map_err(|e| host_err("connections_list", e))?;
         parse_json("connections_list", raw)
     }
 }

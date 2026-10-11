@@ -21,7 +21,8 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use tokio::sync::{Mutex, RwLock};
+use std::sync::Mutex;
+use tokio::sync::RwLock;
 
 use bedcode_host_kit::state::WasmPluginState;
 
@@ -618,7 +619,7 @@ impl WasmHostContext {
     /// 仅从连接池移除（不删库文件）：删除插件目录前须先释放文件句柄，
     /// 否则在部分平台（Windows）会因文件仍被占用而删不掉
     pub async fn drop_plugin_db(&self, plugin_id: &str) {
-        let dropped = self.plugin_dbs.lock().await.remove(plugin_id).is_some();
+        let dropped = self.plugin_dbs.lock().expect("plugin dbs lock poisoned").remove(plugin_id).is_some();
         if dropped {
             tracing::debug!(plugin_id = %plugin_id, "Plugin database connection dropped");
         }
@@ -646,7 +647,7 @@ impl WasmHostContext {
     pub async fn get_or_create_plugin_db(&self, plugin_id: &str) -> crate::Result<Arc<Mutex<Database>>> {
         // 快速路径：已缓存
         {
-            let dbs = self.plugin_dbs.lock().await;
+            let dbs = self.plugin_dbs.lock().expect("plugin dbs lock poisoned");
             if let Some(db) = dbs.get(plugin_id) {
                 return Ok(db.clone());
             }
@@ -689,7 +690,7 @@ impl WasmHostContext {
         // 缓存连接
         let db_arc = Arc::new(Mutex::new(db));
         {
-            let mut dbs = self.plugin_dbs.lock().await;
+            let mut dbs = self.plugin_dbs.lock().expect("plugin dbs lock poisoned");
             // 双重检查：另一个线程可能已插入
             if let Some(existing) = dbs.get(plugin_id) {
                 return Ok(existing.clone());

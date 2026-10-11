@@ -19,7 +19,7 @@ use crate::host::{
     HostStorage, HostTerminalStream, HostWs, NotifyOptions,
 };
 use crate::wasm::bedcode::plugin::{
-    host_auth, host_bus, host_config, host_connection, host_events, host_fs,
+    host_auth_client, host_bus, host_config, host_connection_target, host_events, host_fs,
     host_fs_mobile, host_http, host_log, host_mdns, host_notify, host_peer, host_platform,
     host_plugin_database, host_storage, host_terminal_stream, host_websocket,
 };
@@ -154,7 +154,7 @@ impl HostTerminalStream for WasmHost {
 
 impl HostConnection for WasmHost {
     fn connection_primary_target(&self) -> Result<String, HostError> {
-        host_connection::primary_target().map_err(|e| host_err("connection_primary_target", e))
+        host_connection_target::primary_target().map_err(|e| host_err("connection_primary_target", e))
     }
 }
 
@@ -162,23 +162,23 @@ impl HostConnection for WasmHost {
 
 impl HostAuth for WasmHost {
     fn auth_request_pairing(&self) -> Result<(), HostError> {
-        host_auth::request_pairing().map_err(|e| host_err("auth_request_pairing", e))
+        host_auth_client::request_pairing().map_err(|e| host_err("auth_request_pairing", e))
     }
 
     fn auth_verify_pairing_code(&self, code: &str) -> Result<bool, HostError> {
-        host_auth::verify_pairing_code(code).map_err(|e| host_err("auth_verify_pairing_code", e))
+        host_auth_client::verify_pairing_code(code).map_err(|e| host_err("auth_verify_pairing_code", e))
     }
 
     fn auth_qr_connect(&self, token: &str) -> Result<bool, HostError> {
-        host_auth::qr_connect(token).map_err(|e| host_err("auth_qr_connect", e))
+        host_auth_client::qr_connect(token).map_err(|e| host_err("auth_qr_connect", e))
     }
 
     fn auth_biometric_authenticate(&self) -> Result<bool, HostError> {
-        host_auth::biometric_authenticate().map_err(|e| host_err("auth_biometric_authenticate", e))
+        host_auth_client::biometric_authenticate().map_err(|e| host_err("auth_biometric_authenticate", e))
     }
 
     fn auth_has_credentials(&self) -> Result<bool, HostError> {
-        host_auth::has_credentials().map_err(|e| host_err("auth_has_credentials", e))
+        host_auth_client::has_credentials().map_err(|e| host_err("auth_has_credentials", e))
     }
 }
 

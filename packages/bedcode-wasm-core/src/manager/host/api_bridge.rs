@@ -510,7 +510,7 @@ pub async fn plugin_auth_overview(
     plugin_id: Option<String>,
     credential: String,
     plugin_host: State<'_, Arc<PluginHost>>,
-    db: State<'_, Arc<tokio::sync::Mutex<crate::db::Database>>>,
+    db: State<'_, Arc<std::sync::Mutex<crate::db::Database>>>,
     // 票 08/P0-2：第一方免弹窗项的产品清单出厂 lib，读模型经宿主装配的校验器取
     // 只读投影（与 plugin_fs_auth_respond 同一 State，已注册）
     fs_auth: State<'_, Arc<FsAuthChecker>>,
@@ -565,7 +565,7 @@ pub async fn plugin_auth_set_strategy(
     strategy: String,
     credential: String,
     plugin_host: State<'_, Arc<PluginHost>>,
-    db: State<'_, Arc<tokio::sync::Mutex<crate::db::Database>>>,
+    db: State<'_, Arc<std::sync::Mutex<crate::db::Database>>>,
 ) -> crate::Result<()> {
     use crate::security::auth_policy::{AuthPolicyStore, AuthResource, AuthStrategy};
     require_host_surface(
@@ -607,7 +607,7 @@ pub async fn plugin_auth_revoke(
     target: String,
     credential: String,
     plugin_host: State<'_, Arc<PluginHost>>,
-    db: State<'_, Arc<tokio::sync::Mutex<crate::db::Database>>>,
+    db: State<'_, Arc<std::sync::Mutex<crate::db::Database>>>,
 ) -> crate::Result<usize> {
     use crate::security::auth_policy::{AuthPolicyStore, AuthResource};
     require_host_surface(
@@ -644,7 +644,7 @@ pub async fn plugin_auth_remove_record(
     target: String,
     credential: String,
     plugin_host: State<'_, Arc<PluginHost>>,
-    db: State<'_, Arc<tokio::sync::Mutex<crate::db::Database>>>,
+    db: State<'_, Arc<std::sync::Mutex<crate::db::Database>>>,
 ) -> crate::Result<usize> {
     use crate::security::auth_policy::{AuthPolicyStore, AuthResource};
     require_host_surface(

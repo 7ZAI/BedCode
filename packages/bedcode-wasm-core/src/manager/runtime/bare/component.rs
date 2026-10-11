@@ -12,7 +12,7 @@
 //! - 与桌面端 component.rs 的差异：移动端 WIT `abi` 仅 version（无 form 字段）；
 //!   granted_permissions 校验保留（桌面端阶段 C 已删该字段）
 
-use super::{StoreSpec, WasmHostContext, WasmPluginState};
+use super::{host_ctx, StoreSpec, WasmHostContext, WasmPluginState};
 use crate::manager::runtime::engine;
 use crate::AppError;
 use std::collections::HashSet;
@@ -978,9 +978,8 @@ pub(crate) mod tests {
         captured: Arc<std::sync::Mutex<Vec<bedcode_plugin_api_mobile::BusMessage>>>,
     }
 
-    #[async_trait::async_trait]
     impl crate::bus::MessageDispatcher for CapturingDispatcher {
-        async fn dispatch_to_wasm(
+        fn dispatch_to_wasm(
             &self,
             _plugin_id: &str,
             msg: &bedcode_plugin_api_mobile::BusMessage,
@@ -989,7 +988,7 @@ pub(crate) mod tests {
             Ok(())
         }
 
-        async fn is_activated(&self, _plugin_id: &str) -> bool {
+        fn is_activated(&self, _plugin_id: &str) -> bool {
             true
         }
     }
@@ -1659,8 +1658,8 @@ pub(crate) mod tests {
                 bedcode_plugin_api_mobile::permission::PERMISSION_SESSION_READ,
                 bedcode_plugin_api_mobile::permission::PERMISSION_STORAGE,
                 bedcode_plugin_api_mobile::permission::PERMISSION_TERMINAL_OUTPUT,
-                bedcode_plugin_api_mobile::permission::PERMISSION_UI_INPUT,
-                bedcode_plugin_api_mobile::permission::PERMISSION_UI_TOOLBOX,
+                // ui:input / ui:toolbox 随 2026-10-10 批次 C2 整面退役（移动壳改纯
+                // surface 形态），移动 SDK 权限词汇表已无此两词——granted 集不再含
                 bedcode_plugin_api_mobile::permission::PERMISSION_WS_CLIENT,
             ]
             .iter()

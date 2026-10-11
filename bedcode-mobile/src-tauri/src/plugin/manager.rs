@@ -1146,46 +1146,55 @@ struct PluginManagerDispatcher {
     wasm_plugins: Arc<RwLock<HashMap<String, Arc<TokioMutex<LoadedComponentPlugin>>>>>,
 }
 
-#[async_trait]
 impl crate::plugin::message_bus::MessageDispatcher for PluginManagerDispatcher {
     /// 投递总线消息给 WASM 插件
     ///
-    /// 由投递 worker 任务调用（async 上下文）：短读 map 取实例句柄 → drop map 守卫 →
+    /// 由投递 worker 任务调用（同步 trait 形态，票 02 M3 单形态收敛——wasm-core
+    /// `bus::MessageDispatcher` 统一为同步签名，异步依赖经 `runtime_util::block_on_async`
+    /// 桥进入；本宿主再包装 async 闭包）：短读 map 取实例句柄 → drop map 守卫 →
     /// 持单插件锁执行 on_bus_message。投递串行进行，慢插件会推迟后续投递
     /// （换取全局顺序与无死锁）。
-    async fn dispatch_to_wasm(
+    fn dispatch_to_wasm(
         &self,
         plugin_id: &str,
         msg: &bedcode_plugin_api_mobile::BusMessage,
     ) -> anyhow::Result<()> {
-        let wasm_plugin = {
-            let map = self.wasm_plugins.read().await;
-            map.get(plugin_id).cloned()
-        };
-        let Some(wasm_plugin) = wasm_plugin else {
-            tracing::warn!(
-                "PluginManagerDispatcher: WASM plugin '{}' not loaded, message dropped",
-                plugin_id
-            );
-            return Ok(());
-        };
+        let wasm_plugins = self.wasm_plugins.clone();
+        let pid = plugin_id.to_string();
+        let msg = msg.clone();
+        bedcode_wasm_core_mobile::runtime_util::block_on_async(async move {
+            let wasm_plugin = {
+                let map = wasm_plugins.read().await;
+                map.get(&pid).cloned()
+            };
+            let Some(wasm_plugin) = wasm_plugin else {
+                tracing::warn!(
+                    "PluginManagerDispatcher: WASM plugin '{pid}' not loaded, message dropped"
+                );
+                return Ok(());
+            };
 
-        let mut loaded = wasm_plugin.lock().await;
-        // v9：按载荷格式路由——二进制消息走可选导出 on_message_binary
-        // （总线已按订阅者格式偏好过滤，不会对无导出的旧插件发二进制消息）
-        if let Some(bytes) = &msg.payload_binary {
-            Ok(loaded.on_message_binary(&msg.topic, &msg.sender, bytes)?)
-        } else {
-            Ok(loaded.on_bus_message(msg)?)
-        }
+            let mut loaded = wasm_plugin.lock().await;
+            // v9：按载荷格式路由——二进制消息走可选导出 on_message_binary
+            // （总线已按订阅者格式偏好过滤，不会对无导出的旧插件发二进制消息）
+            if let Some(bytes) = &msg.payload_binary {
+                Ok(loaded.on_message_binary(&msg.topic, &msg.sender, bytes)?)
+            } else {
+                Ok(loaded.on_bus_message(&msg)?)
+            }
+        })
     }
 
-    async fn is_activated(&self, plugin_id: &str) -> bool {
-        let plugins = self.plugins.read().await;
-        plugins
-            .get(plugin_id)
-            .map(|p| p.state == PluginState::Activated)
-            .unwrap_or(false)
+    fn is_activated(&self, plugin_id: &str) -> bool {
+        let plugins = self.plugins.clone();
+        let pid = plugin_id.to_string();
+        bedcode_wasm_core_mobile::runtime_util::block_on_async(async move {
+            let plugins = plugins.read().await;
+            plugins
+                .get(&pid)
+                .map(|p| p.state == PluginState::Activated)
+                .unwrap_or(false)
+        })
     }
 }
 

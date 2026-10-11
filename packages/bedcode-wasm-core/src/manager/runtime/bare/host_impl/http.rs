@@ -80,8 +80,11 @@ impl HttpPorts for StateHttpPorts {
 
     fn block_on_any(&self, fut: BoxedBlocked) -> Box<dyn std::any::Any + Send> {
         // 能力域的执行是 async，宿主在同步调用点阻塞驱动（重入避让在内核
-        // `runtime_util::block_on_async` 单点：嵌套异步上下文里它会换线程驱动）
-        Box::new(crate::runtime_util::block_on_async(fut))
+        // `runtime_util::block_on_async` 单点：嵌套异步上下文里它会换线程驱动）。
+        // fut 已是擦除后的 `Box<dyn Any + Send>`（server-http 泛型助手装箱），
+        // 直接返回驱动结果，不得再套一层 Box（套层会让 downcast 落空——
+        // 与桌面宿主 plugin/http.rs 同形，2026-10-11 单形态对齐）。
+        crate::runtime_util::block_on_async(fut)
     }
 
     /// `"jwtAuth": true` 的全局 token 代注（移动侧独有能力的托管口径：token 的
