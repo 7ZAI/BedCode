@@ -582,7 +582,7 @@ pub fn build_host_ctx_with_arc(
         Vec::new(),
     ));
     let status_reporter: Arc<dyn Fn(&str, &str) + Send + Sync> = Arc::new(|_, _| {});
-    Arc::new(crate::host_api::WasmHostContext::new(
+    Arc::new(crate::host_api::WasmHostContext::new_with_ports(
         db,
         storage,
         None,

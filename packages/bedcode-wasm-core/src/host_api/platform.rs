@@ -82,7 +82,9 @@ fn authorize_picked(
     if picked.is_empty() {
         return Ok(picked);
     }
-    let checker: Arc<FsAuthChecker> = fs.fs_auth().clone();
+    let checker: Arc<FsAuthChecker> = fs
+        .fs_auth_checker()
+        .expect("platform pick authorization requires FsAuthChecker gate");
     if block_on_async(checker.authorize_picked(plugin_id, &picked)) {
         return Ok(picked);
     }

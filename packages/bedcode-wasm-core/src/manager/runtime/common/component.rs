@@ -1349,7 +1349,12 @@ fn resolve_preopen_dirs_with_home(
         .into_iter()
         .filter(|dir| {
             let needed = if dir.readonly() { FsOps::READ } else { FsOps::READ_WRITE };
-            block_on_async(host_ctx.fs_auth.is_granted(plugin_id, dir.path(), needed))
+            // 票 02 B5：`is_granted` 是 FsAuthChecker 具体机制方法（不在窄
+            // FsAuthGate trait 上）——经下转型访问器取回（桌面装配恒 Some）
+            let checker = host_ctx
+                .fs_auth_checker()
+                .expect("wasi preopen check requires FsAuthChecker gate");
+            block_on_async(checker.is_granted(plugin_id, dir.path(), needed))
         })
         .collect()
 }

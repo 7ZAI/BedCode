@@ -118,7 +118,12 @@ fn ensure_unit_path_granted(
     // 所需能力按单元种类取（票 02 操作拆分）：写单元要写授权，其余要读授权——
     // 不带操作集的话「授权读」的目录能跑写单元，池线程这条无弹窗通道就成了绕过口
     let needed = if needs_write { FsOps::WRITE } else { FsOps::READ };
-    if block_on_async(host_ctx.fs_auth().is_granted(owner, path, needed)) {
+    // 票 02 B5：`is_granted` 是 FsAuthChecker 具体机制方法（不在窄 FsAuthGate trait
+    // 上）——经下转型访问器取回（桌面装配形态恒 Some）
+    let checker = host_ctx
+        .fs_auth_checker()
+        .expect("fs unit pre-check requires FsAuthChecker gate");
+    if block_on_async(checker.is_granted(owner, path, needed)) {
         return Ok(());
     }
     Err(format!(
@@ -202,7 +207,9 @@ pub(crate) fn fs_request_auth(
     if paths.is_empty() {
         return Ok(true);
     }
-    let fs_auth = fs_auth.fs_auth().clone();
+    let fs_auth = fs_auth
+        .fs_auth_checker()
+        .expect("fs request-auth requires FsAuthChecker gate");
     // 操作集 = 读 + 写：`request-auth` 的 WIT 签名没有操作维度，插件的用途（fs 单元
     // 可读可写）决定这里要申请两种能力——与改造前「无操作维度 = 读写等价」逐字一致
     // （票 02 只做拆分与落账，不动这条原语的契约；将来要收窄需 WIT 加参）
@@ -456,7 +463,10 @@ mod tests {
         assert!(err.contains("request-auth"), "错误文案须给出出路: {err}");
 
         // ③ 预置持久化授权（= 用户在弹窗里点过「记住」）→ 放行并真实执行成功
-        block_on_async(ctx.fs_auth().seed_legacy_granted_path("test-plugin", &path)).expect("seed grant");
+        let checker = ctx
+            .fs_auth_checker()
+            .expect("test context requires FsAuthChecker gate");
+        block_on_async(checker.seed_legacy_granted_path("test-plugin", &path)).expect("seed grant");
         executor
             .execute(&ctx, "test-plugin", "fs.read", &read_params)
             .expect("已授权路径须放行");
@@ -503,7 +513,10 @@ mod tests {
     /// `fs_granted_paths` 前缀记录，测的仍然是 fs 原语本身而不是授权豁免的后门。
     fn granted_temp_root(name: &str, ctx: &WasmHostContext) -> (tempfile::TempDir, std::path::PathBuf) {
         let (dir, root) = bare_temp_root(name);
-        block_on_async(ctx.fs_auth().seed_legacy_granted_path(PLUGIN, &root.to_string_lossy()))
+        let checker = ctx
+            .fs_auth_checker()
+            .expect("test context requires FsAuthChecker gate");
+        block_on_async(checker.seed_legacy_granted_path(PLUGIN, &root.to_string_lossy()))
             .expect("seed persisted grant");
         (dir, root)
     }

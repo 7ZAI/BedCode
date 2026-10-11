@@ -59,7 +59,12 @@ pub mod host_api;
 /// 宿主→插件互调客户端（中立层，ADR 0033 从 `utils/auth/auth_center.rs` 上提）：
 /// JSON-RPC 2.0 over host-bus 的通用发起端 + 请求 id 分配。
 /// 桌面装配面（互调回复道编排留内核，票 02 批次 05；移动形态的互调经
-/// `runtime::bare` 的 host_impl/conn 域——fork 无本模块）
+/// `runtime::bare` 的 host_impl/conn 域——fork 无本模块）。
+///
+/// **票 02 B5 保持门控**：统一上下文常编译后本模块引 `crate::manager::runtime::
+/// WasmHostContext`（已常编译）不再受阻，但其还依赖 `host_api::api`（互调回复道
+/// 编排——桌面 WIT 绑定域，`common-host` 门控）；双端机制若需合一，先把
+/// `host_api/api.rs` 常编译化（随 T-03/04 绑定归位评估），否则留门控。
 #[cfg(feature = "common-host")]
 pub mod intercall;
 pub mod manager;

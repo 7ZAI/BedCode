@@ -48,13 +48,16 @@
 //! 历史：阶段 A/B 时本目录名为 `host_functions`，包含 core module 胶水层
 //! （(ptr,len) 内存搬运 + Linker 注册）；阶段 C 已删除胶水层，仅保留实现层。
 
-// ==================== 域子模块（形态分叉，票 06 批次 03） ====================
+// ==================== 域子模块（票 02 B5：上下文与端口常编译化） ====================
 //
 // 桌面 WIT impl 域（`common-host`）：由 `runtime/common/component.rs` 的
-// Host trait 绑定逐接口调用。移动形态的对应实现在 `manager::runtime::host_impl`
-// 16 域（fork 迁入），本目录不重复。
+// Host trait 绑定逐接口调用。移动形态的对应实现在 `manager::runtime::bare`
+// 的 host_impl（fork 迁入），本目录不重复。
 // 移动 adapter（`bare-host`）：http_engine / ports / sql_guard / bare_context
-// 自 fork `host_api/` 迁入（fork 的 context.rs 与桌面同名不同物，改名消歧）。
+// 自 fork `host_api/` 迁入。**票 02 B5**：`context`（双端唯一宿主上下文，原
+// `bare_context` 已并入超集删除）与 `ports`（统一上下文 `ports`/`fs_auth` 槽的
+// trait 载体）**常编译**——桌面 / 移动 / 无 feature 三态都编译。其余 WIT 绑定域
+// 维持形态门控（随 T-03/04/05 迁宿主）。
 #[cfg(feature = "common-host")]
 pub mod api;
 #[cfg(feature = "common-host")]
@@ -63,7 +66,6 @@ pub mod auth_center;
 pub(super) mod bus;
 #[cfg(feature = "common-host")]
 pub(super) mod config;
-#[cfg(feature = "common-host")]
 pub mod context;
 #[cfg(feature = "common-host")]
 pub(super) mod database;
@@ -106,20 +108,19 @@ mod wsl_fs;
 // `bedcode-server-http::plugin_binding::egress`；移动形态经
 // `runtime/bare/host_impl/http.rs` 薄转发）——宿主侧 `plugin.rs` 的对接解释_builder
 // 随同收口（再 re-export 会表现为「看起来能用」的假入口）。
+//
+// **票 02 B5**：`ports` 常编译（统一上下文槽位载体）；`sql_guard` 维持 bare 门控
+// （绑定层面，随 T-03/05 迁宿主）；`bare_context` 已删除（并入 `context` 超集）。
 
-#[cfg(feature = "bare-host")]
 pub mod ports;
 #[cfg(feature = "bare-host")]
 pub mod sql_guard;
-#[cfg(feature = "bare-host")]
-pub mod bare_context;
-// 移动装配面的宿主上下文再导出：fork 面路径 `crate::host_api::WasmHostContext`
-// 零改动解析（host_impl.rs / host_context_registry 等迁入文件的原引用形态）
-#[cfg(feature = "bare-host")]
-pub use bare_context::WasmHostContext;
+// 统一宿主上下文再导出：fork 面路径 `crate::host_api::WasmHostContext` 零改动
+// 解析（host_impl.rs / host_context_registry / test_support/bare.rs 等引用形态），
+// 桌面侧同路径亦可用（context 常编译化后双端同物）
+pub use context::WasmHostContext;
 // ports 端口符号集过 host_api 顶层（fork host_api.rs:24 同款清单）：
 // test_support/bare.rs 的 MockPorts impl / host_impl 域经此路径引用
-#[cfg(feature = "bare-host")]
 pub use ports::{
     AuthEnginePort, ConnectionEnginePort, FsAuthGate, FsAuthOp, HostEnginePorts, PrimaryTarget,
     SafIoPort, UnimplementedPorts, WsReconnectPolicyPort, PORT_NOT_WIRED,
@@ -137,11 +138,10 @@ pub(crate) mod sqlite_scaffold;
 // `test_seed_plugin_secret` 再导出已随 host-auth 域迁宿主退役（票 02 批次 04）：
 // 种子函数与 `test_tokens` 夹具现住宿主 `src-tauri/src/{plugin/auth.rs, utils/auth/}`。
 
-// 票 05c：顶层 `grant_permissions`（常编译 pub）签名需要 WasmHostContext，
-// 本 use 提常编译（不再 cfg(test)）。桌面装配面（移动形态的权限模型是
+// 票 05c：顶层 `grant_permissions`（常编译 pub）签名需要 WasmHostContext——
+// 统一上下文经 `pub use context::WasmHostContext` 常编译再导出（见文件头），
+// 本函数签名直接用该名，无需再 import。桌面装配面（移动形态的权限模型是
 // granted_permissions state 内仲裁，无此守卫——fork host_api.rs 无本段）
-#[cfg(feature = "common-host")]
-use crate::host_api::context::WasmHostContext;
 // ==================== Shared Guards ====================
 
 /// 统一权限守卫

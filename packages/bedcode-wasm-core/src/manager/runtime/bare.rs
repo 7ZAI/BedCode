@@ -41,9 +41,9 @@ pub(crate) mod component;
 
 pub use component::LoadedComponentPlugin;
 /// 宿主垫片面：`crate::plugin::wasm_runtime::WasmHostContext` 路径经此转发。
-/// 真源 = `host_api::bare_context`（fork host_api/context.rs 迁入改名——与桌面
-/// host_api/context.rs 同名不同物，票 06 批次 03 消歧）
-pub use crate::host_api::bare_context::WasmHostContext;
+/// 真源 = `host_api::context`（票 02 B5 上下文合一：统一类型，原
+/// `bare_context` 已删除）
+pub use crate::host_api::context::WasmHostContext;
 
 // ==================== Resource Limits & Interruption ====================
 //
@@ -89,7 +89,7 @@ pub use bedcode_host_kit::state::{StoreSpec, WasmPluginState};
 /// 取代旧自持 state 的 `state.host_ctx` 字段访问：state 的 `host` 槽是
 /// `Arc<dyn HostPorts>`（host-kit 只能命名 trait 对象），本访问器做一次向下转型。
 /// 域函数（`host_impl/*`）一律经此取 `WasmHostContext`（含 `granted_permissions`
-/// 权限面——由宿主在实例化时按插件注入，见 `bare_context::WasmHostContext::for_plugin`）。
+/// 权限面——由宿主在实例化时按插件注入，见 `WasmHostContext::for_plugin`）。
 pub(crate) fn host_ctx(state: &WasmPluginState) -> &WasmHostContext {
     bedcode_host_kit::ports::downcast_host::<WasmHostContext>(state.host.as_ref())
 }

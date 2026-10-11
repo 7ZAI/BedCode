@@ -3210,14 +3210,16 @@ mod tests {
     }
 }
 
-// ==================== FsAuthGate 端口实现（移动装配面，fork 迁入，票 06 批次 03） ====================
+// ==================== FsAuthGate 端口实现（票 02 B5 起常编译） ====================
 //
 // crate 内机制面（approval / 域测试夹具）经端口 trait 消费授权判定；宿主
 // 切换后宿主 FsAuthChecker（白名单 / 弹窗真源）另行实现同一 trait 注入。
-// **必须 bare-host 门控**：`host_api::ports`（含本 trait）是移动 adapter 面，
-// 桌面形态不编译——无门控即桌面 lib 编译红（E0433，票 07 收口实测抓到）。
+// **票 02 B5 解除 bare-host 门控**：统一 `WasmHostContext` 的 `fs_auth` 槽收敛为
+// `Arc<dyn FsAuthGate>`（超集，见 `host_api/context.rs` 字段注释），桌面形态把
+// 具体 `FsAuthChecker` 注入为 trait 对象——本 impl 不常编译则桌面 lib 编译红。
+// 移动宿主在 `bedcode-mobile` 侧实现同一 trait（其 SAF URI / 白名单管理语义
+// 与桌面实现不同，B5 裁决保持注入式超集，不迁移）。
 
-#[cfg(feature = "bare-host")]
 #[async_trait::async_trait]
 impl crate::host_api::ports::FsAuthGate for FsAuthChecker {
     async fn check(&self, plugin_id: &str, path: &str, op: crate::host_api::ports::FsAuthOp) -> bool {

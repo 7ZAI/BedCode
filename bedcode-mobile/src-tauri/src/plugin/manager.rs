@@ -268,7 +268,7 @@ impl PluginManager {
             tracing::info!(plugin_id = %pid, error = %err, "Plugin reported error, marked Error and disabled");
         });
 
-        let host_ctx = Arc::new(WasmHostContext::new(
+        let host_ctx = Arc::new(WasmHostContext::new_with_ports(
             self.plugin_db.clone(),
             self.storage.clone(),
             self.app_handle.as_ref().cloned(),

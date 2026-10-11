@@ -47,7 +47,6 @@ common-host = [
     "bedcode-server-peer-net/common-host",
     "dep:bedcode-server-http",
     "dep:bedcode-server-websocket",
-    "dep:bedcode-server-peer-net",
     "dep:bedcode-server-core",
     "dep:wasmtime-wasi",
     "dep:tauri-plugin-dialog",
@@ -68,10 +67,6 @@ bare-host = [
     "dep:bedcode-plugin-api-mobile",
     "dep:bedcode-discovery-engine",
     "dep:bedcode-ws-client-engine",
-    # host-peer 域逻辑在能力域 crate（19 条 WIT-无关函数 + PeerPorts 端口，
-    # 无 feature 门控）——移动形态只薄转发，不再自持第二份（2026-10-10
-    # wasm-core-mobile-purity 票 03）
-    "dep:bedcode-server-peer-net",
     # host-http 同款：出站执行 + SSE 流 + jwtAuth 代注（`jwt_auth_token` 端口默认
     # 实现保桌面零变化）在能力域 crate，移动形态只薄转发（同流水线票 05）
     "dep:bedcode-server-http",
@@ -114,7 +109,12 @@ bedcode-server-base = { path = "../bedcode-server-base" }
 # 票 06 批次 01：optional 化——移动形态经 bare-host 组合能力域
 # （移动 host-mdns impl 用 discovery-engine，批次 03 随 bare-host feature 接入）
 bedcode-server-websocket = { path = "../bedcode-server-websocket", optional = true }
-bedcode-server-peer-net = { path = "../bedcode-server-peer-net", optional = true }
+# 对等网络上下文装配端口（统一宿主上下文 `PeerCtxProvider` 的载体，票 02 B5）：
+# 双端 feature 均组合、且统一 `context::WasmHostContext` 常编译化后无 feature 形态
+# 也要编译（`PeerCtxProvider` 类型别名引 `bedcode_server_peer_net::PeerCtx`），故
+# 从 optional + feature 门控改为无条件依赖（wasm-core 是纯宿主 crate，无 wasm
+# 目标编译顾虑；依赖图增量 = 两 feature 的交集，零新增面）。
+bedcode-server-peer-net = { path = "../bedcode-server-peer-net" }
 bedcode-server-http = { path = "../bedcode-server-http", optional = true }
 # server 传输无关内核（ServerSupervisor，host_config 用）——桌面独有
 bedcode-server-core = { path = "../bedcode-server-core", optional = true }

@@ -2,7 +2,14 @@
 //!
 //! 运行时与 16 域迁入本 crate 后，所有「离宿主无法实现」的引擎调用不再直引
 //! 宿主符号（`crate::state::get_auth_manager` / `crate::peer_net::*` /
-//! `crate::egress::policy` / android_plugins 桥……），一律经本端口注入：
+//! `crate::egress::policy` / android_plugins 桥……），一律经本端口注入。
+//!
+//! **票 02 B5 起常编译（双端共享）**：统一 `WasmHostContext` 把 `ports` 槽并入
+//! 超集后，本模块不再是移动 adapter 专属——桌面形态也编译（其上下文给
+//! `UnimplementedPorts` 占位，桌面引擎调用不经过端口）。`FsAuthGate` 的
+//! `Any` 超 trait 是下转型访问器（`WasmHostContext::fs_auth_checker`）的类型
+//! 凭据：桌面把具体 `FsAuthChecker` 注入为 trait 对象后，具体方法消费面经
+//! downcast 取回同一实例（移动宿主注入自己的闸门实现，无此需求）。
 //!
 //! - **引擎资产留宿主**：auth 引擎（C4 凭据）、egress 安全闸门（D5）、连接
 //!   管理器、peer 四模块、mDNS 共享守护、WS 重连状态机、Android 平台桥
@@ -96,8 +103,13 @@ pub enum FsAuthOp {
 ///
 /// crate 侧只问「这个插件能不能读/写这个路径」；授权判定链（路径白名单 →
 /// 插件白名单 → 弹窗授权）是宿主安全闸门（ADR 0022 §5.1.3 ②），真源在宿主。
+///
+/// `Any` 超 trait（票 02 B5）：统一上下文的 `fs_auth` 槽是 `Arc<dyn FsAuthGate>`，
+/// 桌面宿主经 `WasmHostContext::fs_auth_checker` 下转型取回具体 `FsAuthChecker`
+/// （`respond` / `authorize_picked` / `is_granted` / `seed_legacy_granted_path`
+/// 等桌面机制方法不在窄 trait 上）；移动宿主注入自己的实现，无下转型需求。
 #[async_trait]
-pub trait FsAuthGate: Send + Sync {
+pub trait FsAuthGate: Send + Sync + std::any::Any {
     async fn check(&self, plugin_id: &str, path: &str, op: FsAuthOp) -> bool;
     async fn check_batch(&self, plugin_id: &str, paths: &[String], op: FsAuthOp) -> bool;
 }

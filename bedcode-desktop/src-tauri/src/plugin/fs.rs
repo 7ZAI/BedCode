@@ -110,7 +110,10 @@ mod tests {
     /// `fs_granted_paths` 前缀记录，测 fs 原语本身而不是授权豁免后门）
     fn granted_temp_root(name: &str, ctx: &WasmHostContext) -> (tempfile::TempDir, std::path::PathBuf) {
         let (dir, root) = bare_temp_root(name);
-        block_on_async(ctx.fs_auth().seed_legacy_granted_path(PLUGIN, &root.to_string_lossy()))
+        let checker = ctx
+            .fs_auth_checker()
+            .expect("test context requires FsAuthChecker gate");
+        block_on_async(checker.seed_legacy_granted_path(PLUGIN, &root.to_string_lossy()))
             .expect("seed persisted grant");
         (dir, root)
     }

@@ -66,7 +66,7 @@ fn saf_io_checked(
         return Err("permission denied: fs:write".to_string());
     }
     let ctx = ctx_of(state);
-    let Some(app) = ctx.app_handle.clone() else {
+    let Some(app) = ctx.app_handle() else {
         return Err("app_handle unavailable, rejected".to_string());
     };
     let ports = ctx.ports.clone();

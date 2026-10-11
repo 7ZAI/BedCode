@@ -62,9 +62,9 @@
 **门禁实证（当前 HEAD）**：wasm-core 三态 check 0 error（common / 无 feature / bare-host）；双形态 test 全绿（common 596 / bare 307）；两端宿主 check 0 error。
 
 **剩余（B5 及收口，规模大、与 T-03 绑定定稿耦合，建议独立会话推进）**：
-- B5 上下文合一：`context::WasmHostContext`（桌面富服务：permission/fs_auth/net_auth/security/api_registry/capabilities/plugin_services/task_engine/process_registry/secrets_cache）与 `bare_context::WasmHostContext`（移动：ports/granted_permissions/status_reporter）合成中立类型——倾向桌面富结构 + 移动字段 Option/trait 槽；intercall 常编译依赖此（其引 WasmHostContext + host_api::api 均 common 门控）
-- M7 收尾：intercall 门控解除（随 B5）；host_context_registry / terminal_stream_gateway（bare，归 T-05）；manager::host/task/watcher 门控归 T-04
-- M11 残余：fs_auth.rs:3220 的 FsAuthGate impl（bare adapter 面，归 T-05）
+- **B5 上下文合一（已完成，2026-10-11 下午提交）**：`bare_context::WasmHostContext` 并入 `context::WasmHostContext` 超集——结构 = 桌面全字段 + 移动三件套（`ports` / `granted_permissions` / `status_reporter`，pub 供移动宿主外部 crate 消费）；`fs_auth` 槽收敛为 `Arc<dyn FsAuthGate>`（超集，**非桌面具体类型**——移动 SAF URI 授权粒度 / 用户白名单管理 / respond 契约与桌面实现语义不兼容，用户裁决的「实在不行并入超集」条款触发，向用户说明；桌面具体机制方法经 `fs_auth_checker()` 下转型取回同一实例，`FsAuthorizer` 注册同理）；`security` 字段改 `Arc<SecurityFramework>`（for_plugin 共享注册表）；`new_with_ports` / `new_headless` / `for_plugin` 两套构造器；`call_plugin_api_host` 留 common 门控（依赖 `host_api::api`，随 T-03/04）。桌面侧消费点零改动验证（155 宿主测试中仅 2 红 = HEAD 基线既有 bindings 漂移锁）。
+- M7 收尾：intercall 门控**保留**（依赖 `host_api::api` 回复道编排——common 门控 WIT 绑定域，已注 lib.rs；双端若需合一先常编译化 host_api/api.rs）；host_context_registry / terminal_stream_gateway（bare，归 T-05）
+- M11 残余：fs_auth.rs:3220 的 FsAuthGate impl 已随 B5 **解除 bare 门控常编译**（桌面注入 trait 对象的类型凭据）
 - feature 表退役 + compile_error 守卫删除（等 B5 与绑定迁移到 T-03/04/05 逐步退出，末了删除）
 - bus.rs HostBusPort/BusBoundWsPorts 12 处 common 门控（桌面装配面，归 T-04）
 - M13 test_support 合一（common/bare 测试基建归 T-04/05 迁移）
