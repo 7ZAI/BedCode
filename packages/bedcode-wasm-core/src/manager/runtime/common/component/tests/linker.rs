@@ -85,6 +85,7 @@ fn test_loaded_plugin_component_roundtrip() {
                 fuel_enabled: true,
                 metrics: crate::monitor::MetricsRegistry::new().plugin(TEST_PLUGIN_ID),
             },
+            std::sync::Arc::new(super::super::TestGuestEvents),
         )
         .expect("instantiate component");
 
