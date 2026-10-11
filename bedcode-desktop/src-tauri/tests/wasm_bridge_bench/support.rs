@@ -15,7 +15,7 @@ use bedcode_desktop_lib::db::Database;
 use bedcode_desktop_lib::wasm_core::storage::PluginStorage;
 use bedcode_desktop_lib::wasm_core::PluginHost;
 use serde_json::json;
-use tokio::sync::Mutex;
+use std::sync::Mutex;
 
 /// bench 夹具的 wasm 目标三元组（与其它 fixture 一致）
 const WASM_TARGET: &str = "wasm32-wasip3";
@@ -146,7 +146,7 @@ pub async fn build_env(full: bool) -> anyhow::Result<BenchEnv> {
 
     // 内核库落临时目录（独立文件库：fs 授权、插件存储等与生产隔离）
     let db = Arc::new(Mutex::new(Database::new(&temp_root.join("kernel.db"))?));
-    db.lock().await.init_schema()?;
+    db.lock().expect("db lock").init_schema()?;
 
     let user_plugins_dir = temp_root.join("user-plugins");
     std::fs::create_dir_all(&user_plugins_dir)?;

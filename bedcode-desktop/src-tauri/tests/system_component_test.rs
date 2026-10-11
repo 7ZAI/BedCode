@@ -13,7 +13,7 @@ use support::*;
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use std::sync::Mutex;
 
 use bedcode_desktop_lib::wasm_core::manager::host::PluginHost;
 use bedcode_plugin_api::PluginState;
@@ -665,7 +665,7 @@ async fn test_boot_activates_system_components_before_app_plugins() {
     let db = Arc::new(Mutex::new(
         Database::new(&std::path::PathBuf::from(":memory:")).unwrap(),
     ));
-    db.lock().await.init_schema().unwrap();
+    db.lock().expect("db lock").init_schema().unwrap();
     PluginStorage::new(db.clone())
         .save_activated_plugins(&HashMap::from([(app_id.to_string(), true)]))
         .await
@@ -778,7 +778,7 @@ async fn setup_three_layer_host(tmp_dir: &tempfile::TempDir, l2_manifest_extra: 
     let db = Arc::new(Mutex::new(
         Database::new(&std::path::PathBuf::from(":memory:")).unwrap(),
     ));
-    db.lock().await.init_schema().unwrap();
+    db.lock().expect("db lock").init_schema().unwrap();
     PluginStorage::new(db.clone())
         .save_activated_plugins(&HashMap::from([(L3_ID.to_string(), true)]))
         .await

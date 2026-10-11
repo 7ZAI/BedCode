@@ -99,10 +99,10 @@ async fn init_test_app_context() {
         return;
     }
     {
-        let db = Arc::new(tokio::sync::Mutex::new(
+        let db = Arc::new(std::sync::Mutex::new(
             Database::new(Path::new(":memory:")).expect("create in-memory db failed"),
         ));
-        db.lock().await.init_schema().expect("init db schema failed");
+        db.lock().expect("db lock").init_schema().expect("init db schema failed");
 
         let plugins_dir = bundled_plugins_dir();
         // 用户插件目录：独立空目录。复用 plugins_dir 会让随包插件被标成

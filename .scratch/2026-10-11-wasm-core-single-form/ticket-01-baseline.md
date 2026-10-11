@@ -33,3 +33,16 @@
 
 - 干净工作区 + 3 个提交（docs / rename / engine 第一批）+ 本票记录。
 - 遗留项登记：移动端 `cargo test` 未跑（交 T-02）；wasm 应用产物未重构建（交 T-05）。
+## 5. 状态：完成（2026-10-11 06:20，会话 01a127db 提交 + 本会话核验）
+
+- 提交链（dev，d36c4a1a4 → 8ae2384a3，平行会话 06:09-06:10 落地三提交）：
+  - `2d6ae198f` refactor(wasm-core): 形态中立化收口 + engine 机制合一（0047 staged rename + codebuddy engine.rs 第一批 + host_impl 4 域删除 + 锁同步）
+  - `693f64266` docs(wasm-core): 形态中立化 spec/ticket 记录 + ADR 0047 + CHANGELOG/code-map/AGENTS 同步
+  - `8ae2384a3` refactor(wasm-core): 删除 rename 源（desktop/mobile→common/bare）与已迁宿主的移动独有域残余
+- 门禁核验（本会话实跑，全 0 error）：
+  - wasm-core `cargo check --lib`（默认 common-host）：✓（9 warning）
+  - wasm-core `--no-default-features --features bare-host`：✓（10 warning）
+  - bedcode-mobile/src-tauri `cargo check`：✓（9 warning）
+  - bedcode-desktop/src-tauri `cargo check --lib`：✓
+- 逻辑遗留：移动端 `cargo test`（含 codebuddy 未复跑面）交 T-02 补；wasm 应用产物未重构建交 T-05。
+- 当前 cfg 计数：common-host 79 处 + bare-host 50 处（src/，无 feature 表计数见 T-02）。

@@ -71,10 +71,10 @@ pub async fn setup_host() -> Arc<PluginHost> {
         bedcode_desktop_lib::wasm_core::system::config::AppConfig::init(config);
     });
 
-    let db = Arc::new(Mutex::new(
+    let db = Arc::new(std::sync::Mutex::new(
         Database::new(&PathBuf::from(":memory:")).expect("memory db"),
     ));
-    db.lock().await.init_schema().expect("init schema");
+    db.lock().expect("db lock").init_schema().expect("init schema");
 
     let plugins_dir = bundled_plugins_dir();
     let user_plugins_dir = std::env::temp_dir().join(format!("bedcode-hosttest-userplugins-{}", std::process::id()));
