@@ -75,7 +75,7 @@ async fn test_activate_degraded_on_startup_failure_then_retry_recovers() {
         .expect("activation call must succeed even when on_startup reports failure");
     let info = host.get_plugin(&pid).await.unwrap();
     assert!(
-        matches!(&info.state, PluginState::Degraded(reason) if reason.contains("simulated startup init failure")),
+        matches!(&info.state, PluginState::Degraded { error } if error.contains("simulated startup init failure")),
         "expected Degraded with guest-reported reason, got {:?}",
         info.state
     );

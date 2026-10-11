@@ -72,7 +72,9 @@ pub use crate::host_api::context::{CapabilityProvider, PluginServices, ProcessRe
 pub(crate) use crate::config::plugin_debug_mode;
 use crate::config::CoreConfig;
 use crate::monitor::{LifecycleEvent, MetricsRegistry};
-use bedcode_plugin_api::{ResourceOverrides, WasiPreopenDir};
+
+use crate::config::ResourceOverrides;
+use crate::manifest::WasiPreopenDir;
 
 /// 从 catch_unwind 的 panic 载荷提取人类可读消息（统一 panic 诊断文案）
 pub fn panic_payload_to_string(panic: &Box<dyn std::any::Any + Send>) -> String {

@@ -9,7 +9,7 @@ use std::pin::Pin;
 use super::owner::{GuestOp, GuestReply};
 use super::PluginHost;
 use crate::manager::runtime::PluginServices;
-use bedcode_plugin_api::PluginState;
+use crate::manifest::PluginState;
 
 // ==================== 观察面派发（票 03 已退役） ====================
 //

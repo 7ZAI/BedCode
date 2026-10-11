@@ -13,12 +13,11 @@
 //! 保证 id 不可歧义（一个 id 只对应一个目录、一份 manifest），为审批
 //! 门禁（approval.rs）提供可钉扎的身份锚点。完整模型见 docs/adr/。
 
-// 双端 SDK 同名类型——`InstanceLifecycle` 移动 SDK 无（移动 manifest 无 lifecycle
-// 声明面，fork 票 17 §3.2：该校验不 fork），随 common-host
-#[cfg(feature = "common-host")]
-use bedcode_plugin_api::{InstanceLifecycle, PluginManifest};
-#[cfg(feature = "bare-host")]
-use bedcode_plugin_api_mobile::PluginManifest;
+// 中性词汇（票 02 M4）：清单统一取自 crate::manifest；`InstanceLifecycle` /
+// lifecycle 校验是桌面 manifest 专属面（移动 manifest 无 lifecycle 声明），
+// 该校验函数随 common-host（语义边界不变）
+use crate::manifest::PluginManifest;
+use crate::manifest::InstanceLifecycle;
 
 use crate::security::auth_policy::AuthStrategy;
 
@@ -339,7 +338,7 @@ mod tests {
             parse(r#","lifecycle":"persistent""#)
                 .expect("显式声明常驻合法")
                 .lifecycle,
-            bedcode_plugin_api::InstanceLifecycle::Persistent
+            crate::manifest::InstanceLifecycle::Persistent
         );
 
         let err = parse(r#","lifecycle":"ephemeral""#)

@@ -50,7 +50,7 @@ async fn test_activate_plugin_recovers_from_error_state() {
         make_plugin(
             TEST_PLUGIN_ID,
             PluginSource::FileScan,
-            PluginState::Error("wasm load failed".into()),
+            PluginState::Error { error: "wasm load failed".into() },
         ),
     );
 
@@ -86,7 +86,7 @@ async fn test_deactivate_plugin_flow() {
     host.registry()
         .register_commands(
             TEST_PLUGIN_ID,
-            &[bedcode_plugin_api::CommandContribution {
+            &[crate::manifest::CommandContribution {
                 id: "test.cmd".into(),
                 title: "T".into(),
                 icon: None,
@@ -173,7 +173,7 @@ async fn test_deactivate_all_covers_degraded() {
         make_plugin(
             "com.bedcode.degraded",
             PluginSource::FileScan,
-            PluginState::Degraded("init failed".to_string()),
+            PluginState::Degraded { error: "init failed".to_string() },
         ),
     );
     host.plugins.write().await.insert(
@@ -221,7 +221,7 @@ async fn declared_ws_endpoint_follows_activation_lifecycle() {
     let mut plugin = make_plugin(plugin_id, PluginSource::FileScan, PluginState::Loaded);
     plugin.manifest.permissions.push("ws:server".to_string());
     plugin.manifest.contributes.ws_endpoints =
-        vec![bedcode_plugin_api::WsEndpointContribution::Path("echo".to_string())];
+        vec![crate::manifest::WsEndpointContribution::Path("echo".to_string())];
     host.plugins.write().await.insert(plugin_id.to_string(), plugin);
 
     let mount = bedcode_server_websocket::endpoint::mount_path(plugin_id, "echo");

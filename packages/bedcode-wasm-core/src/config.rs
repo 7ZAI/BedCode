@@ -15,20 +15,15 @@
 //! 经逃生舱 [`crate::manager::runtime::EngineCustomizer`]；优先级链见
 //! `manager/runtime.rs` 的 `build_engine_config`。
 
-// 双端 SDK 同名类型（形状 fork 对齐逐字一致）——移动 SDK 无 `ResourceOverrides`，
-// 移动形态 crate 内自持（fork 逐字副本，见下方 cfg(bare-host) 定义）
-#[cfg(feature = "common-host")]
-use bedcode_plugin_api::ResourceOverrides;
+// ==================== 资源覆盖声明（纯钳制数据，中性单份） ====================
 
-// ==================== 资源覆盖声明（纯钳制数据，移动形态 crate 内自持） ====================
-
-/// 单插件资源上限覆盖请求（原桌面 SDK 类型逐字 fork——与 WIT 无关的纯 serde
-/// 数据，属安全钳制机制的一部分；移动 manifest 现无 `resourceOverrides` 声明面，
-/// 机制保留供批次 2 宿主与未来 manifest 演进复用）
+/// 单插件资源上限覆盖请求（票 02 M4 单份化：原桌面 SDK 类型逐字 fork 与移动
+/// 自持副本合一，本模块为唯一真源——与 WIT 无关的纯 serde 数据，属安全钳制
+/// 机制的一部分；移动 manifest 现无 `resourceOverrides` 声明面，机制保留供
+/// 宿主与未来 manifest 演进复用。绑定层在入口把 SDK 形状 JSON 往返转成本类型）
 ///
 /// 四类上限（与 [`StoreLimits`] 同域：内存字节 / 表元素 / 实例数 / 内存数 /
 /// 表数；燃料在 [`EngineConfig::tuning`]）。
-#[cfg(feature = "bare-host")]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ResourceOverrides {

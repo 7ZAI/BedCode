@@ -26,7 +26,7 @@ impl PluginHost {
         let plugins = self.plugins.read().await;
         plugins
             .get(plugin_id)
-            .map(|p| matches!(p.state, PluginState::Activated | PluginState::Degraded(_)))
+            .map(|p| matches!(p.state, PluginState::Activated | PluginState::Degraded { .. }))
             .unwrap_or(false)
     }
 
@@ -43,7 +43,7 @@ impl PluginHost {
             // 此前只收 Activated，Degraded 插件在应用关闭时被静默跳过（审计票 09）。
             plugins
                 .values()
-                .filter(|p| matches!(p.state, PluginState::Activated | PluginState::Degraded(_)))
+                .filter(|p| matches!(p.state, PluginState::Activated | PluginState::Degraded { .. }))
                 .map(|p| p.manifest.id.clone())
                 .collect()
         };
@@ -230,12 +230,12 @@ impl PluginHost {
             source: PluginSource,
             api: Vec<String>,
             subscribes: Vec<String>,
-            declared_preopen_dirs: Vec<WasiPreopenDir>,
-            kind: PluginKind,
+            declared_preopen_dirs: Vec<crate::manifest::WasiPreopenDir>,
+            kind: crate::manifest::PluginKind,
             dependencies: Vec<String>,
             /// 票 09a：manifest `contributes.wsEndpoints`——在激活成功阶段登记进宿主
             /// WS 端点注册表（声明驱动的静态路由，expand 阶段与旧硬编码分发并存）
-            ws_endpoints: Vec<WsEndpointContribution>,
+            ws_endpoints: Vec<crate::manifest::WsEndpointContribution>,
         }
         let plan = {
             let mut plugins = self.plugins.write().await;
@@ -281,7 +281,7 @@ impl PluginHost {
                     );
                     return Ok(());
                 }
-                PluginState::Error(e) => {
+                PluginState::Error { error: e } => {
                     tracing::warn!(
                         plugin_id = %plugin_id,
                         error = %e,
@@ -289,7 +289,7 @@ impl PluginHost {
                     );
                 }
                 // Degraded 重试激活：启动初始化上次失败，本次重新走完整流程
-                PluginState::Degraded(e) => {
+                PluginState::Degraded { error: e } => {
                     tracing::info!(
                         plugin_id = %plugin_id,
                         error = %e,
@@ -539,7 +539,7 @@ impl PluginHost {
             let mut plugins = self.plugins.write().await;
             if let Some(loaded) = plugins.get_mut(plugin_id) {
                 loaded.state = match &startup_failure {
-                    Some(reason) => PluginState::Degraded(reason.clone()),
+                    Some(reason) => PluginState::Degraded { error: reason.clone() },
                     None => PluginState::Activated,
                 };
                 loaded.activated_at = Some(Utc::now());
@@ -878,7 +878,7 @@ impl PluginHost {
             if loaded.manifest.kind.is_role_driven() {
                 continue;
             }
-            let is_active = matches!(loaded.state, PluginState::Activated | PluginState::Degraded(_));
+            let is_active = matches!(loaded.state, PluginState::Activated | PluginState::Degraded { .. });
             map.insert(id.clone(), is_active);
         }
         tracing::debug!(
@@ -992,7 +992,7 @@ mod tests {
 
     fn loaded_plugin(id: &str) -> LoadedPlugin {
         LoadedPlugin {
-            manifest: bedcode_plugin_api::PluginManifest {
+            manifest: crate::manifest::PluginManifest {
                 id: id.to_string(),
                 name: id.to_string(),
                 version: "1.0.0".to_string(),

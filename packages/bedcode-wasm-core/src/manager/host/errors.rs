@@ -48,7 +48,7 @@ impl PluginHost {
     pub async fn mark_error(&self, plugin_id: &str, error: String) {
         let mut plugins = self.plugins.write().await;
         if let Some(loaded) = plugins.get_mut(plugin_id) {
-            loaded.state = PluginState::Error(error);
+            loaded.state = PluginState::Error { error };
         }
     }
 

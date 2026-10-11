@@ -530,7 +530,7 @@ pub async fn plugin_auth_overview(
         .list_plugins()
         .await
         .into_iter()
-        .filter(|info| info.plugin_type == bedcode_plugin_api::PluginType::RustTs)
+        .filter(|info| info.plugin_type == crate::manifest::PluginType::RustTs)
         .collect();
     if let Some(target) = plugin_id.as_deref() {
         apps.retain(|info| info.id == target);

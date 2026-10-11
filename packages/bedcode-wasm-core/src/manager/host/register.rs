@@ -108,7 +108,7 @@ impl PluginHost {
     pub(crate) async fn register_declared_ws_endpoints(
         &self,
         plugin_id: &str,
-        endpoints: &[bedcode_plugin_api::WsEndpointContribution],
+        endpoints: &[crate::manifest::WsEndpointContribution],
     ) {
         if !self
             .permission

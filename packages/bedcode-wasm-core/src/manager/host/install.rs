@@ -163,7 +163,7 @@ impl PluginHost {
             // 规则：仅未启用插件可卸载（Activating 是激活进行中的瞬时态，同样拒绝）
             if matches!(
                 loaded.state,
-                PluginState::Activated | PluginState::Activating | PluginState::Degraded(_)
+                PluginState::Activated | PluginState::Activating | PluginState::Degraded { .. }
             ) {
                 return Err(crate::AppError::Plugin(format!(
                     "Plugin is running, deactivate it before uninstalling: {}",

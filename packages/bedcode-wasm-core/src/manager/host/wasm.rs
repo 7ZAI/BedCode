@@ -43,7 +43,7 @@ impl PluginHost {
             );
             return (
                 LoadedPlugin {
-                    state: PluginState::Error(format!("WASM module not found: {}", wasm_path.display())),
+                    state: PluginState::Error { error: format!("WASM module not found: {}", wasm_path.display()) },
                     ..loaded.clone()
                 },
                 None,
@@ -75,7 +75,7 @@ impl PluginHost {
                 );
                 (
                     LoadedPlugin {
-                        state: PluginState::Error(format!("WASM load failed: {}", e)),
+                        state: PluginState::Error { error: format!("WASM load failed: {}", e) },
                         ..loaded.clone()
                     },
                     None,

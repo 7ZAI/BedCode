@@ -63,6 +63,9 @@ pub mod host_api;
 #[cfg(feature = "common-host")]
 pub mod intercall;
 pub mod manager;
+/// 插件清单 / 状态 / 贡献 / 角色词汇的中性层（票 02 M4）：机制层不直接依赖
+/// 任一 SDK crate，双端绑定层在入口/出口经 JSON 往返转换
+pub mod manifest;
 pub mod monitor;
 pub mod permission;
 /// 异步桥基础设施：`manager` / `host_api` / `security` 共用的中立层，

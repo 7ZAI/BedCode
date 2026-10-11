@@ -16,7 +16,7 @@ use crate::manager::runtime::{InstanceMeta, LoadedWasmPlugin, WasmHostContext, W
 use crate::manager::types::{HostPluginInfo, LoadedPlugin, PluginSource};
 use crate::permission::PermissionManager;
 use crate::storage::PluginStorage;
-use bedcode_plugin_api::{PluginKind, PluginState, WasiPreopenDir, WsEndpointContribution};
+use crate::manifest::{PluginKind, PluginState, WasiPreopenDir, WsEndpointContribution};
 use chrono::Utc;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -484,12 +484,16 @@ impl PluginHost {
 
         // 添加静态注册的 Rust 插件
         for entry in static_plugins {
-            let manifest = (entry.create_manifest)();
-            let plugin_id = manifest.id.clone();
+            // 静态注册的 Rust 插件经 inventory 登记 SDK manifest（绑定面词汇）；
+            // 进机制前 JSON 往返转中性形态（票 02 M4，from_sdk_json）
+            let sdk_manifest = (entry.create_manifest)();
+            let plugin_id = sdk_manifest.id.clone();
 
             // 授权结果只落在 PermissionManager（唯一真源）；LoadedPlugin 不再镜像
             // 一份 granted 列表（票 11 第 4 项：镜像字段只写不读）
-            permission.grant_permissions(&plugin_id, &manifest.permissions);
+            permission.grant_permissions(&plugin_id, &sdk_manifest.permissions);
+            let manifest: crate::manifest::PluginManifest =
+                crate::manifest::from_sdk_json(&sdk_manifest);
 
             // 内置常驻语义：随二进制分发、无独立启停，注册即激活。
             // 直接置 Activated 使 notify_startup 的 on_startup 回调与
@@ -601,8 +605,8 @@ impl PluginHost {
         for p in host.plugins.read().await.values() {
             match &p.state {
                 PluginState::Activated => activated_count += 1,
-                PluginState::Degraded(_) => degraded_count += 1,
-                PluginState::Error(_) => error_count += 1,
+                PluginState::Degraded { .. } => degraded_count += 1,
+                PluginState::Error { .. } => error_count += 1,
                 _ => {}
             }
         }
@@ -909,9 +913,8 @@ mod tests {
     use crate::system::config::AppConfig;
     use crate::bus::{MessageBus, MessageDispatcher};
     use crate::manager::runtime::PluginServices;
-    use bedcode_plugin_api::{
-        PluginCommand, PluginContributes, PluginManifest, PluginType, RustPluginContext, TerminalHandler,
-    };
+    use crate::manifest::{PluginContributes, PluginManifest, PluginType};
+    use bedcode_plugin_api::{PluginCommand, RustPluginContext, TerminalHandler};
     use serde_json::json;
     use std::future::Future;
     use std::path::PathBuf;

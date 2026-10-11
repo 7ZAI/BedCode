@@ -5,14 +5,13 @@
 
 use crate::monitor::{MetricsRegistry, PluginMetrics};
 use async_trait::async_trait;
-// 双端 SDK 的同名 wire 副本（形状逐字一致，server-base wire/drift_lock 钉住）：
-// 机制面载荷类型按形态取对应 SDK（票 06 批次 03；真源统一留票 07）。
+// 总线消息载荷统一取共享层 `bedcode-server-base::wire::BusMessage`（票 02 M4）：
+// server-base 是双端无条件依赖的共享基础层，wire 形状自持副本由 drift_lock
+// 钉住桌面 SDK 原版逐字一致（移动 SDK 同名副本同形）；机制面不再按形态引用
+// 任一 SDK crate——双端绑定层在入口把 SDK wire 载荷 JSON 往返转成本类型。
 // **crate 内引用一律走 `crate::bus::BusMessage`**（此处 pub use 是单点切换），
 // 禁止直引 SDK 路径（否则双形态签名漂移）
-#[cfg(feature = "common-host")]
-pub use bedcode_plugin_api::BusMessage;
-#[cfg(feature = "bare-host")]
-pub use bedcode_plugin_api_mobile::BusMessage;
+pub use bedcode_server_base::wire::BusMessage;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc;

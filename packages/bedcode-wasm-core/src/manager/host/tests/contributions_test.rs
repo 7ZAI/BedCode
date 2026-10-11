@@ -10,12 +10,12 @@ async fn test_register_manifest_contributions() {
     let host = setup_host().await;
     let mut plugin = make_plugin(TEST_PLUGIN_ID, PluginSource::FileScan, PluginState::Loaded);
     plugin.manifest.contributes = PluginContributes {
-        commands: vec![bedcode_plugin_api::CommandContribution {
+        commands: vec![crate::manifest::CommandContribution {
             id: "test.hello".into(),
             title: "Hello".into(),
             icon: None,
         }],
-        views: vec![bedcode_plugin_api::ViewContribution {
+        views: vec![crate::manifest::ViewContribution {
             id: "test.view".into(),
             view_type: "sidebar".into(),
             title: "V".into(),
@@ -41,28 +41,28 @@ async fn test_register_manifest_contributions() {
 /// 六类 contributes 全填的 manifest（等价锁用）
 fn all_contributions() -> PluginContributes {
     PluginContributes {
-        commands: vec![bedcode_plugin_api::CommandContribution {
+        commands: vec![crate::manifest::CommandContribution {
             id: "test.hello".into(),
             title: "Hello".into(),
             icon: None,
         }],
-        views: vec![bedcode_plugin_api::ViewContribution {
+        views: vec![crate::manifest::ViewContribution {
             id: "test.view".into(),
             view_type: "sidebar".into(),
             title: "V".into(),
             component: "View.vue".into(),
         }],
-        terminal: Some(bedcode_plugin_api::TerminalContribution {
+        terminal: Some(crate::manifest::TerminalContribution {
             input_handlers: vec!["test.hook".into()],
             output_parsers: vec!["test.parser".into()],
         }),
-        tool_providers: vec![bedcode_plugin_api::ToolProviderContribution {
+        tool_providers: vec![crate::manifest::ToolProviderContribution {
             id: "test.tool".into(),
             name: "T".into(),
             endpoint: "test/tool".into(),
         }],
         http_endpoints: vec!["test/hello".into()],
-        file_handlers: vec![bedcode_plugin_api::FileHandlerContribution {
+        file_handlers: vec![crate::manifest::FileHandlerContribution {
             id: "test.file".into(),
             extensions: vec!["txt".into()],
             viewer: "Viewer.vue".into(),
@@ -171,7 +171,7 @@ async fn contributions_identical_across_entry_points() {
 /// 不登记——渲染侧不可达（fail-visible，不静默）。
 #[tokio::test(flavor = "multi_thread")]
 async fn registered_manifest_declared_ws_endpoints() {
-    use bedcode_plugin_api::WsEndpointContribution;
+    use crate::manifest::WsEndpointContribution;
 
     let host = setup_host().await;
     let plugin_id = "com.test.ws-declared-positive";
@@ -211,7 +211,7 @@ async fn registered_manifest_declared_ws_endpoints() {
 async fn declared_ws_endpoints_require_ws_server_permission() {
     let host = setup_host().await;
     let plugin_id = "com.test.ws-declared-permission";
-    let endpoints = vec![bedcode_plugin_api::WsEndpointContribution::Path("guarded".into())];
+    let endpoints = vec![crate::manifest::WsEndpointContribution::Path("guarded".into())];
     host.register_declared_ws_endpoints(plugin_id, &endpoints).await;
     assert!(
         bedcode_server_websocket::endpoint::find_by_mount(&bedcode_server_websocket::endpoint::mount_path(
@@ -298,7 +298,7 @@ async fn instantiate_wasm_plugin_covers_both_entries() {
     let (entry, instance) = host.instantiate_wasm_plugin(&missing);
     assert!(instance.is_none(), "产物缺失时没有可运行的实例");
     assert!(
-        matches!(entry.state, PluginState::Error(_)),
+        matches!(entry.state, PluginState::Error { .. }),
         "产物缺失必须降级 Error 而不是让插件从列表消失"
     );
 }

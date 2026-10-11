@@ -747,4 +747,9 @@ fn host_switches_on_role_predicates_not_role_values() {
 /// 空 = 宿主对三个角色一视同仁，只用谓词；每次往里加一行都是一次显式决策。
 /// （`validation.rs` 的取值域断言在内联测试段内，扫描已按 `production_code_lines`
 /// 截断，故**不需要**登记——这正是白名单必须保持干净的原因。）
-const ROLE_VALUE_ALLOWLIST: &[&str] = &[];
+///
+/// `src/manifest.rs`：中性 `PluginKind` 枚举的**定义处**（票 02 M4，类型词汇从
+/// SDK 迁入 wasm-core）——变体名与 wire 串只作为词表声明出现（enum 声明 /
+/// `as_str` 映射），不含按角色身份的宿主分支；与 SDK crate（在扫描根之外）
+/// 的定义地位等同。后续若在 manifest.rs 内新增角色值分支，须另择文件或拆出。
+const ROLE_VALUE_ALLOWLIST: &[&str] = &["src/manifest.rs"];

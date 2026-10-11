@@ -1157,11 +1157,20 @@ impl crate::plugin::message_bus::MessageDispatcher for PluginManagerDispatcher {
     fn dispatch_to_wasm(
         &self,
         plugin_id: &str,
-        msg: &bedcode_plugin_api_mobile::BusMessage,
+        msg: &bedcode_server_base::wire::BusMessage,
     ) -> anyhow::Result<()> {
         let wasm_plugins = self.wasm_plugins.clone();
         let pid = plugin_id.to_string();
-        let msg = msg.clone();
+        // 与 wasm-core 统一后的总线 trait 同型（票 02 M3）；bare 壳导出仍取
+        // 移动 SDK 载荷形状（绑定层词汇，T-05 归位时随迁），此处做形状一致的
+        // 值转换——两类型逐字段同构，形状由 `bedcode-server-base::wire::drift_lock` 钉死
+        let msg = bedcode_plugin_api_mobile::BusMessage {
+            topic: msg.topic.clone(),
+            sender: msg.sender.clone(),
+            payload: msg.payload.clone(),
+            payload_binary: msg.payload_binary.clone(),
+            timestamp: msg.timestamp,
+        };
         bedcode_wasm_core_mobile::runtime_util::block_on_async(async move {
             let wasm_plugin = {
                 let map = wasm_plugins.read().await;

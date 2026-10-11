@@ -132,12 +132,16 @@ pub(super) const SYNTHETIC_STATIC_ID: &str = "com.bedcode.test-static";
 /// 记录 on_startup 是否被宿主回调（inventory 条目进程级唯一，标志跨测试共享）
 pub(super) static SYNTHETIC_ON_STARTUP_CALLED: AtomicBool = AtomicBool::new(false);
 
-fn synthetic_manifest() -> PluginManifest {
-    PluginManifest {
+/// inventory 条目契约是**绑定层词汇**（`bedcode_plugin_api::BedcodePluginEntry` 的
+/// `create_manifest` 返回 SDK 型 manifest）；进机制前的 SDK→中性 JSON 往返
+/// 由生产装配链（`PluginHost::new` 的 `from_sdk_json`）负责，本夹具只构造 SDK 型
+/// 以匹配条目签名——中性构造在 `make_plugin`（LoadedPlugin 直构）处另立。
+fn synthetic_manifest() -> bedcode_plugin_api::PluginManifest {
+    bedcode_plugin_api::PluginManifest {
         id: SYNTHETIC_STATIC_ID.to_string(),
         name: "Synthetic Static".to_string(),
         version: "0.1.0".to_string(),
-        plugin_type: PluginType::Rust,
+        plugin_type: bedcode_plugin_api::PluginType::Rust,
         // 余下字段取 Default，避免 SDK 追加可选字段时本夹具编译红（票 14）
         ..Default::default()
     }

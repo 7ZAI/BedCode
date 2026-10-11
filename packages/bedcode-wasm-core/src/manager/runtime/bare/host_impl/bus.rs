@@ -147,7 +147,7 @@ mod tests {
         fn dispatch_to_wasm(
             &self,
             _plugin_id: &str,
-            _msg: &bedcode_plugin_api_mobile::BusMessage,
+            _msg: &bedcode_server_base::wire::BusMessage,
         ) -> anyhow::Result<()> {
             Ok(())
         }
@@ -158,10 +158,10 @@ mod tests {
     }
 
     /// 静态订阅者：把收到的消息转发到 mpsc 通道供断言
-    struct ChannelHandler(tokio::sync::mpsc::UnboundedSender<bedcode_plugin_api_mobile::BusMessage>);
+    struct ChannelHandler(tokio::sync::mpsc::UnboundedSender<bedcode_server_base::wire::BusMessage>);
 
     impl crate::bus::BusMessageHandler for ChannelHandler {
-        fn on_message(&self, msg: &bedcode_plugin_api_mobile::BusMessage) -> anyhow::Result<()> {
+        fn on_message(&self, msg: &bedcode_server_base::wire::BusMessage) -> anyhow::Result<()> {
             let _ = self.0.send(msg.clone());
             Ok(())
         }

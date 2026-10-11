@@ -3,28 +3,9 @@
 //! 扩展点注册表 — 管理 commands/views/terminal/http/file_handlers 的注册与查询
 //! 前端 PluginContext 的注册调用通过 Tauri invoke 到达此注册表
 
-// 双端 SDK 同名类型——按形态取对应 SDK；`FileHandlerContribution` 移动 SDK 无，
-// 移动形态 crate 内自持（fork 逐字副本，见文件下方 cfg(bare-host) 定义）
-#[cfg(feature = "common-host")]
-use bedcode_plugin_api::{CommandContribution, FileHandlerContribution, ViewContribution};
-#[cfg(feature = "bare-host")]
-use bedcode_plugin_api_mobile::{CommandContribution, ViewContribution};
-
-// ==================== 文件处理贡献类型（移动形态 crate 内自持，票 06 批次 03） ====================
-
-/// 文件处理扩展点声明（原桌面 SDK 类型逐字 fork——移动 manifest 现无
-/// `contributes.fileHandlers` 声明面；registry 机制保留，批次 2 宿主不消费，
-/// 未来 manifest 演进复用）
-#[cfg(feature = "bare-host")]
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FileHandlerContribution {
-    pub id: String,
-    pub extensions: Vec<String>,
-    pub viewer: String,
-    #[serde(default)]
-    pub icon: Option<String>,
-}
+// 中性词汇（票 02 M4）：贡献类型统一取自 crate::manifest（超集——含移动
+// 无的 fileHandlers 声明面，机制保留，移动宿主不消费）
+use crate::manifest::{CommandContribution, FileHandlerContribution, ViewContribution};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;

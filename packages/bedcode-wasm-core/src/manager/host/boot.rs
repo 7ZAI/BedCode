@@ -392,7 +392,7 @@ impl PluginHost {
 #[cfg(test)]
 mod tests {
     use super::l2_auth_center_unready;
-    use bedcode_plugin_api::types::PluginKind;
+    use crate::manifest::PluginKind;
 
     const SESSION: &str = "com.bedcode.terminal-session";
 

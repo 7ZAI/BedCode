@@ -3,11 +3,9 @@
 //! 桌面端插件类型 — 仅保留桌面端特有的内部模型
 //! 共享类型（PluginManifest, PluginContributes, PluginState 等）迁移到 bedcode-plugin-api
 
-// 双端 SDK 同名类型（形状 fork 对齐逐字一致）——按形态取对应 SDK
-#[cfg(feature = "common-host")]
-use bedcode_plugin_api::{PluginContributes, PluginManifest, PluginState, PluginType};
-#[cfg(feature = "bare-host")]
-use bedcode_plugin_api_mobile::{PluginContributes, PluginManifest, PluginState, PluginType};
+// 中性词汇（票 02 M4）：机制层不再按形态引用 SDK——清单/状态/类型词汇
+// 统一取自 crate::manifest（超集；双端绑定层转换）
+use crate::manifest::{PluginContributes, PluginManifest, PluginState, PluginType};
 use chrono::{DateTime, Utc};
 use std::path::Path;
 
@@ -154,11 +152,8 @@ fn manifest_installed_at(extension_path: &str) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    // 双端 SDK 同名类型——按形态取对应 SDK（测试段，票 06 批次 03）
-    #[cfg(feature = "common-host")]
-    use bedcode_plugin_api::{PluginManifest, PluginState, PluginType};
-    #[cfg(feature = "bare-host")]
-    use bedcode_plugin_api_mobile::{PluginManifest, PluginState, PluginType};
+    // 中性词汇（票 02 M4）：测试段同机制层口径
+    use crate::manifest::{PluginManifest, PluginState, PluginType};
 
     /// 构造带完整字段的测试 manifest
     ///

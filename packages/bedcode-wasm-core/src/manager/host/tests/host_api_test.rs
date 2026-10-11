@@ -147,7 +147,7 @@ async fn test_is_activated_by_state() {
         (PluginState::Loaded, false),
         (PluginState::Activated, true),
         (PluginState::Deactivated, false),
-        (PluginState::Error("boom".into()), false),
+        (PluginState::Error { error: "boom".into() }, false),
     ] {
         host.plugins.write().await.insert(
             TEST_PLUGIN_ID.to_string(),
@@ -168,7 +168,7 @@ async fn test_mark_error_updates_state() {
     host.mark_error(TEST_PLUGIN_ID, "hooks install failed".to_string())
         .await;
     let info = host.get_plugin(TEST_PLUGIN_ID).await.unwrap();
-    assert_eq!(info.state, PluginState::Error("hooks install failed".to_string()));
+    assert_eq!(info.state, PluginState::Error { error: "hooks install failed".to_string() });
 
     // 未注册插件：静默 no-op，不 panic
     host.mark_error("com.missing", "x".to_string()).await;
@@ -212,7 +212,7 @@ async fn test_should_lazy_activate_rules() {
     // Loaded + 有命令贡献 → 需要按需激活
     let mut plugin = make_plugin(TEST_PLUGIN_ID, PluginSource::FileScan, PluginState::Loaded);
     plugin.manifest.contributes = PluginContributes {
-        commands: vec![bedcode_plugin_api::CommandContribution {
+        commands: vec![crate::manifest::CommandContribution {
             id: "test.cmd".into(),
             title: "T".into(),
             icon: None,
@@ -239,7 +239,7 @@ async fn test_should_lazy_activate_rules() {
     // 静态注册插件 → false（生命周期由 inventory 注册表托管）
     let mut static_p = make_plugin("com.bedcode.s", PluginSource::StaticRegistry, PluginState::Loaded);
     static_p.manifest.contributes = PluginContributes {
-        commands: vec![bedcode_plugin_api::CommandContribution {
+        commands: vec![crate::manifest::CommandContribution {
             id: "test.cmd".into(),
             title: "T".into(),
             icon: None,

@@ -975,14 +975,14 @@ pub(crate) mod tests {
     /// 线程并发进同一 Store——wasmtime Store 非 Sync，并发即 UB。捕获型投递器
     /// 让「宿主 → 总线」段真实投递、断言在测试线程侧完成，不触碰 Store。
     struct CapturingDispatcher {
-        captured: Arc<std::sync::Mutex<Vec<bedcode_plugin_api_mobile::BusMessage>>>,
+        captured: Arc<std::sync::Mutex<Vec<bedcode_server_base::wire::BusMessage>>>,
     }
 
     impl crate::bus::MessageDispatcher for CapturingDispatcher {
         fn dispatch_to_wasm(
             &self,
             _plugin_id: &str,
-            msg: &bedcode_plugin_api_mobile::BusMessage,
+            msg: &bedcode_server_base::wire::BusMessage,
         ) -> anyhow::Result<()> {
             self.captured.lock().unwrap().push(msg.clone());
             Ok(())
@@ -1034,7 +1034,7 @@ pub(crate) mod tests {
 
             // ---- 捕获型投递器 + 真实组件实例化（权限 = ws:client）----
             let host_ctx = build_host_ctx();
-            let captured: Arc<std::sync::Mutex<Vec<bedcode_plugin_api_mobile::BusMessage>>> =
+            let captured: Arc<std::sync::Mutex<Vec<bedcode_server_base::wire::BusMessage>>> =
                 Arc::new(std::sync::Mutex::new(Vec::new()));
             host_ctx
                 .message_bus
@@ -1195,7 +1195,7 @@ pub(crate) mod tests {
             // jwt-auth 帧的 token 经端口投影（批次 2：进程级静态退役，token
             // 注入到 MockPorts——测试结束随 ctx 释放，无跨用例竞争）
             let host_ctx = build_host_ctx_with(MockPorts::new().with_token("t12-loop-token"));
-            let captured: Arc<std::sync::Mutex<Vec<bedcode_plugin_api_mobile::BusMessage>>> =
+            let captured: Arc<std::sync::Mutex<Vec<bedcode_server_base::wire::BusMessage>>> =
                 Arc::new(std::sync::Mutex::new(Vec::new()));
             host_ctx
                 .message_bus
