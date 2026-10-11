@@ -774,16 +774,6 @@ impl LoadedWasmPlugin {
         engine::refill_call_fuel(&mut self.store)
     }
 
-    /// 获取 world 导出绑定（每次调用重新索引导出，开销可忽略）
-    ///
-    /// 所有导出调用都经过此处：顺带重置燃料预算（单次调用预算，
-    /// 宿主调用阻塞不消耗燃料，见 core-config FUEL_PER_CALL 说明）
-    fn exports(&mut self) -> crate::Result<Plugin> {
-        self.refill_call_fuel()?;
-        Plugin::new(&mut self.store, &self.instance)
-            .map_err(|e| AppError::Plugin(format!("WASM component exports access failed: {}", e)))
-    }
-
     /// 获取 **core 交集** 导出绑定（command / lifecycle / manifest）
     ///
     /// 与 [`Self::exports`] 的分工：core 交集导出走 `runtime::core_binding` 的
