@@ -51,3 +51,20 @@
 
 - 机制面 cfg(common-host/bare-host) 计数归零（可 grep 验证：`grep -rn "cfg(feature = \"common-host\")" src/ | wc -l` → 仅剩绑定层相关，见 T-03 移交清单）。
 - 上下文合一 + M1-M13 逐项处置记录 + 门禁结果附本票。
+## 7. 状态：进行中（2026-10-11 中午，提交 eea06fc91 / 3c3e3fa98 / ef97024cc）
+
+**已完成并提交**：
+- M5 错误边界常编译；M1/M2 锁统一 std；M3 bus trait 单形态（`eea06fc91`，含双 SDK wasm_host 改名对齐 + 移动 dispatcher 同步化）
+- 移动 test 面补跑收口 + 形态门控（`3c3e3fa98`）
+- M4/M6/M8/M10 双 SDK 类型中性化（`ef97024cc`）：`src/manifest.rs` 中性超集词汇 + bus→server-base wire + permission 自持 + ResourceOverrides 单份；loader/registry/validation/host 绑定层全谱切中性
+- M9 from_connection 常编译；PluginLifecycleEvent 常编译（未提交，随下一批）
+
+**门禁实证（当前 HEAD）**：wasm-core 三态 check 0 error（common / 无 feature / bare-host）；双形态 test 全绿（common 596 / bare 307）；两端宿主 check 0 error。
+
+**剩余（B5 及收口，规模大、与 T-03 绑定定稿耦合，建议独立会话推进）**：
+- B5 上下文合一：`context::WasmHostContext`（桌面富服务：permission/fs_auth/net_auth/security/api_registry/capabilities/plugin_services/task_engine/process_registry/secrets_cache）与 `bare_context::WasmHostContext`（移动：ports/granted_permissions/status_reporter）合成中立类型——倾向桌面富结构 + 移动字段 Option/trait 槽；intercall 常编译依赖此（其引 WasmHostContext + host_api::api 均 common 门控）
+- M7 收尾：intercall 门控解除（随 B5）；host_context_registry / terminal_stream_gateway（bare，归 T-05）；manager::host/task/watcher 门控归 T-04
+- M11 残余：fs_auth.rs:3220 的 FsAuthGate impl（bare adapter 面，归 T-05）
+- feature 表退役 + compile_error 守卫删除（等 B5 与绑定迁移到 T-03/04/05 逐步退出，末了删除）
+- bus.rs HostBusPort/BusBoundWsPorts 12 处 common 门控（桌面装配面，归 T-04）
+- M13 test_support 合一（common/bare 测试基建归 T-04/05 迁移）
