@@ -262,6 +262,57 @@ impl bedcode::plugin::host_platform::Host for WasmPluginState {
 // reveal-in-dir` 拆入 `host-platform-desktop`（桌面独有交集切片），WIT impl 在桌面
 // 宿主 `src-tauri/src/plugin/platform.rs`。
 
+// ==================== 导出调用面（world core 的 3 个导出） ====================
+
+/// core 交集导出绑定类型（`world core` 的 `bindgen!` 生成物）
+pub(crate) type CoreExports = Core;
+
+/// core 交集导出绑定（`world core` 的类型化包装）
+///
+/// 覆盖 `command.invoke` / `lifecycle.*` / `manifest.get` —— 业务导出调用面全部
+/// 在此，双端一份。**cap 导出不在此**：`events`（双端各自定义）与 `abi-form`
+/// （桌面独有）由各端宿主自有绑定调用。
+pub(crate) fn exports(
+    store: &mut wasmtime::Store<WasmPluginState>,
+    instance: &wasmtime::component::Instance,
+) -> crate::Result<Core> {
+    Core::new(&mut *store, instance)
+        .map_err(|e| AppError::Plugin(format!("WASM component exports access failed: {}", e)))
+}
+
+/// ABI 版本探测（`bedcode:plugin/abi#version` → `u32`）
+///
+/// **走原生 `TypedFunc` 而非绑定**：`abi` 是 core.wit 的 interface，却不在
+/// `world core` 的导出表内（各端 cap 各自追加），把它绑进 core 绑定会让内核
+/// 对着「谁的 abi」表态。宿主侧发起协商时只需一个 `() -> u32`，原生探测零绑定、
+/// 零端差异。
+///
+/// 返回 `Ok(None)` = 该产物未导出 `abi`（旧 SDK 产物）；调用方据此给出
+/// 「按当前 SDK 重建」的指引——与实例化失败的处理同款可诊断性要求。
+pub(crate) fn abi_version(
+    store: &mut wasmtime::Store<WasmPluginState>,
+    instance: &wasmtime::component::Instance,
+) -> crate::Result<Option<u32>> {
+    // 组件接口导出是**嵌套实例**形态，探测必须用 ItemName 路径语法
+    // （`iface.func` 点号）——`iface#func` 平名 str 查找恒不命中（与
+    // `events-binary` / `events-ws` / `events-task` 探测同款理由）。
+    // 组件模型的返回值是 named-list：单个 `u32` 观测为 `(u32,)`。
+    let Some(item) = "bedcode:plugin/abi.version"
+        .parse::<wasmtime::component::wit_parser::ItemName>()
+        .ok()
+    else {
+        return Ok(None);
+    };
+    let func = match instance.get_typed_func::<(), (u32,)>(&mut *store, &item) {
+        Ok(f) => f,
+        Err(_) => return Ok(None),
+    };
+    crate::runtime_util::block_on_async(func.call_async(&mut *store, ()))
+        .map(|(version,)| Some(version))
+        .map_err(|e| AppError::Plugin(format!("Failed to call abi.version(): {}", e)))
+}
+
+
 // ==================== Linker 装配（交集段） ====================
 
 /// 把 core 交集 interface 注册到 component linker（双端唯一一份）

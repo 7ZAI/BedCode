@@ -25,9 +25,20 @@ use super::plugin_debug_mode;
 use super::{StoreSpec, WasmHostContext, WasmPluginState};
 #[cfg(test)]
 use crate::config::StoreLimits;
+// `host_ctx()` 下转型访问器：仅内核测试替身（`host-api-call` / 桌面扩展三域）需要
+// ——生产注册来自宿主自报，壳内无 impl 消费它
+#[cfg(test)]
+use crate::host_api::context::HostCtxOf;
 // core 8 域的 `Host` impl 已迁 `runtime/core_binding.rs`（票 03 Option A，双端单份）；
 // 本壳只留桌面专属面：WASI 预打开装配 / 导出调用面 / 桌面 cap 引用。
 use crate::manager::runtime::engine;
+
+/// `add_to_linker` 的 getter 形态别名（`HasSelf<T>` 让 getter 返回 `&mut T`）
+///
+/// 桌面 cap interface 的注册在 `#[cfg(test)]` 段（生产注册来自宿主自报，见
+/// `add_to_linker` 第二段），故别名需在模块级可见而非只作函数内局部。
+#[cfg(test)]
+type D = wasmtime::component::HasSelf<WasmPluginState>;
 use crate::monitor::LifecycleEvent;
 use crate::runtime_util::block_on_async;
 use crate::AppError;
@@ -600,14 +611,23 @@ impl LoadedWasmPlugin {
         engine::inject_call_fuel(store)?;
         let exports = Plugin::new(&mut *store, instance)
             .map_err(|e| AppError::Plugin(format!("WASM component missing required exports: {}", e)))?;
-        let abi_guest = exports.bedcode_plugin_abi();
-        // v36（票 02 批次 06）：`form` 自 `abi` 拆入独立接口 `abi-form`，
-        // SDK 按新契约导出两接口（旧 v35 产物缺 abi-form 导出 ⇒ 此处实例化期被拒，
-        // fail-visible 形态②，见 stale_artifact_rebuild_hint 判据扩展）
+        // v36（票 02 批次 06）：`form` 自 `abi` 拆入独立接口 `abi-form`（桌面独有
+        // cap 导出），SDK 按新契约导出两接口（旧 v35 产物缺 abi-form 导出 ⇒ 此处
+        // 实例化期被拒，fail-visible 形态②，见 stale_artifact_rebuild_hint 判据扩展）
         let abi_form_guest = exports.bedcode_plugin_abi_form();
 
-        let version = block_on_async(async { abi_guest.call_version(&mut *store).await })
-            .map_err(|e| AppError::Plugin(format!("WASM component abi.version() call failed: {}", e)))?;
+        // `abi.version` 走 core 绑定的原生探测（票 03）：`abi` 虽在 core.wit 却是
+        // cap 追加的导出，不在 `world core` 表内 —— 绑进内核等于让内核对「谁的
+        // abi」表态。原生 `TypedFunc` 探测零绑定零端差异，缺失返回 None 由本处
+        // 按「旧 SDK 产物」判据处理。
+        let version = crate::manager::runtime::core_binding::abi_version(store, instance)?
+            .ok_or_else(|| {
+                AppError::Plugin(
+                    "WASM component missing required export `abi.version` \
+                     （该产物由其他插件协议（ABI）的插件 SDK 构建，请用当前 SDK 重建插件产物）"
+                        .to_string(),
+                )
+            })?;
         let form = block_on_async(async { abi_form_guest.call_form(&mut *store).await })
             .map_err(|e| AppError::Plugin(format!("WASM component abi-form.form() call failed: {}", e)))?;
 
@@ -695,6 +715,19 @@ impl LoadedWasmPlugin {
             .map_err(|e| AppError::Plugin(format!("WASM component exports access failed: {}", e)))
     }
 
+    /// 获取 **core 交集** 导出绑定（command / lifecycle / manifest）
+    ///
+    /// 与 [`Self::exports`] 的分工：core 交集导出走 `runtime::core_binding` 的
+    /// 绑定（双端单份，绑契约真源 `world core`），cap 导出（`events` 等，各端
+    /// 形状不同）仍走本壳自有绑定。两者对**同一个** `Instance` 建视图，
+    /// 不重复实例化、互不影响。
+    ///
+    /// 燃料续费语义与 [`Self::exports`] 同（单次调用预算，宿主阻塞期不消耗）。
+    fn core_exports(&mut self) -> crate::Result<crate::manager::runtime::core_binding::CoreExports> {
+        self.refill_call_fuel()?;
+        crate::manager::runtime::core_binding::exports(&mut self.store, &self.instance)
+    }
+
     /// 能力导出调用（core-plugin-manager 装配框架）：按名动态获取组件的
     /// 能力接口导出函数并调用，燃料预算续费语义同 [`Self::exports`]。
     ///
@@ -752,7 +785,7 @@ impl LoadedWasmPlugin {
     /// pub（票 05b）：lib 集成测试（session_e2e）直接驱动真实产物激活
     pub fn activate(&mut self) -> crate::Result<i32> {
         let _timer = self.track_call();
-        let exports = self.exports()?;
+        let exports = self.core_exports()?;
         let lifecycle = exports.bedcode_plugin_lifecycle();
         match block_on_async(async { lifecycle.call_activate(&mut self.store).await }) {
             Ok(Ok(())) => {
@@ -774,7 +807,7 @@ impl LoadedWasmPlugin {
     /// pub（票 05b）：lib 集成测试直接驱动真实产物停用
     pub fn deactivate(&mut self) -> crate::Result<i32> {
         let _timer = self.track_call();
-        let exports = self.exports()?;
+        let exports = self.core_exports()?;
         let lifecycle = exports.bedcode_plugin_lifecycle();
         match block_on_async(async { lifecycle.call_deactivate(&mut self.store).await }) {
             Ok(Ok(())) => {
@@ -792,7 +825,7 @@ impl LoadedWasmPlugin {
     /// pub（票 05b）：lib 集成测试经插件命令面驱动被测行为
     pub fn invoke_command(&mut self, command_name: &str, args_json: &str) -> crate::Result<String> {
         let _timer = self.track_call();
-        let exports = self.exports()?;
+        let exports = self.core_exports()?;
         let cmd = exports.bedcode_plugin_command();
         match block_on_async(async { cmd.call_invoke(&mut self.store, command_name, args_json).await }) {
             Ok(v) => Ok(v),
@@ -814,7 +847,7 @@ impl LoadedWasmPlugin {
     /// 宿主据此区分「插件自报启动失败 → Degraded」与「调用故障」
     pub(crate) fn on_startup(&mut self) -> crate::Result<std::result::Result<(), String>> {
         let _timer = self.track_call();
-        let exports = self.exports()?;
+        let exports = self.core_exports()?;
         let lifecycle = exports.bedcode_plugin_lifecycle();
         match block_on_async(async { lifecycle.call_on_startup(&mut self.store).await }) {
             Ok(v) => Ok(v),
@@ -830,7 +863,7 @@ impl LoadedWasmPlugin {
     /// 清理失败仅记录，不影响状态机
     pub(crate) fn on_shutdown(&mut self) -> crate::Result<std::result::Result<(), String>> {
         let _timer = self.track_call();
-        let exports = self.exports()?;
+        let exports = self.core_exports()?;
         let lifecycle = exports.bedcode_plugin_lifecycle();
         match block_on_async(async { lifecycle.call_on_shutdown(&mut self.store).await }) {
             Ok(v) => Ok(v),
@@ -992,7 +1025,7 @@ impl LoadedWasmPlugin {
     /// pub（票 05b）：lib 集成测试读插件 manifest（api 清单比对）
     pub fn get_manifest(&mut self) -> crate::Result<String> {
         let _timer = self.track_call();
-        let exports = self.exports()?;
+        let exports = self.core_exports()?;
         let manifest = exports.bedcode_plugin_manifest();
         match block_on_async(async { manifest.call_get(&mut self.store).await }) {
             Ok(v) => Ok(v),

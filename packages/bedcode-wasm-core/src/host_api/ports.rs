@@ -148,16 +148,11 @@ pub trait HostEnginePorts: Send + Sync {
 
     // ==================== host-config 端专属项（票 03） ====================
     //
-    // `host-config` 是 core.wit 的双端全等 interface，其白名单词汇由内核持并集
-    // （见 `host_api/config.rs`）。并集里两项是**端专属事实**，内核无从推导，
-    // 由各端宿主注入；默认 `None` ⇒ 域内 fail-visible 报错（不静默回退）。
-
-    /// 本端服务器实际运行端口（`network.port`；桌面入站服务器事实）
-    ///
-    /// 返回 `None` = 本端没有入站服务器（移动 / 无头）或宿主未装配。
-    fn network_port(&self) -> Option<u16> {
-        None
-    }
+    // `host-config` 是 core.wit 的双端全等 interface，白名单词汇由内核持并集
+    // （见 `host_api/config.rs`）。并集里属**端专属事实**的一项是移动下载目录
+    // （Android SAF 路径），由移动宿主经本端口注入；未注入 ⇒ 域内 fail-visible
+    // 报错（不静默返回空值）。桌面侧无此需求（`network.port` 走 common-host
+    // 直读 supervisor，不经本端口）。
 
     /// 本端应用下载目录绝对路径（`app.downloads_dir`；移动 SAF 路径事实）
     ///
