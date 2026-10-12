@@ -1,6 +1,6 @@
 //! WASI preopen 与 wasip3 产物闭环
 //!
-//! 自 `wasm_runtime.rs` 的 `mod tests` 拆出（共享脚手架在 `mod tests`，
+//! 自 `common.rs` 的 `mod tests` 拆出（共享脚手架在 `mod tests`，
 //! 经 `use super::*` 可见）；fixture 互斥与产物构建语义不变。
 
 use super::*;
@@ -43,7 +43,7 @@ fn test_wasi_preopen_std_fs_e2e() {
     });
 
     // 阶段 2（无 handle 阻塞线程）：guest 经 std::fs 访问 preopen 目录。
-    // 与生产 run_guest_call 对齐——wasi 同步绑定（in_tokio）要求调用线程
+    // 与生产 mutex 模型调用路径对齐——wasi 同步绑定（in_tokio）要求调用线程
     // 不处于任何 tokio runtime 内，否则 "Cannot start a runtime..." panic。
     std::thread::spawn(move || {
         // 1. 插件经 std::fs 直写 /data/demo.txt → 宿主侧落盘校验

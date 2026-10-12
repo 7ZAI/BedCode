@@ -60,6 +60,60 @@ pub trait GuestEventDispatcher: Send + Sync {
         instance: wasmtime::component::Instance,
         payload_json: &str,
     ) -> crate::Result<()>;
+
+    // ==================== 移动词汇（桌面不覆写；缺省 fail-visible） ====================
+    //
+    // 移动 `events` 导出比桌面多 4 个生命周期回调（`cap-mobile.wit` 的
+    // `interface events`）。它们与 `on_message` / `on_process_done` 同样是**契约面**，
+    // 由移动宿主用自有绑定实现；桌面宿主不覆写 ⇒ 万一被误触发，缺省实现显性报错
+    // 而不是静默丢弃（与构造期未注入派发器的 `UnwiredGuestEvents` 同款 fail-visible）。
+
+    /// 派发认证成功（移动 `events.on-auth-success`）
+    fn on_auth_success(
+        &self,
+        _store: &mut Store<WasmPluginState>,
+        _instance: wasmtime::component::Instance,
+    ) -> crate::Result<()> {
+        Err(crate::AppError::Plugin(
+            "WASM guest events: on-auth-success not wired by this host (mobile-only export)".to_string(),
+        ))
+    }
+
+    /// 派发连接断开（移动 `events.on-disconnect`，`reason` 为宿主侧断开原因）
+    fn on_disconnect(
+        &self,
+        _store: &mut Store<WasmPluginState>,
+        _instance: wasmtime::component::Instance,
+        _reason: &str,
+    ) -> crate::Result<()> {
+        Err(crate::AppError::Plugin(
+            "WASM guest events: on-disconnect not wired by this host (mobile-only export)".to_string(),
+        ))
+    }
+
+    /// 派发会话创建（移动 `events.on-session-created`）
+    fn on_session_created(
+        &self,
+        _store: &mut Store<WasmPluginState>,
+        _instance: wasmtime::component::Instance,
+        _session_id: &str,
+    ) -> crate::Result<()> {
+        Err(crate::AppError::Plugin(
+            "WASM guest events: on-session-created not wired by this host (mobile-only export)".to_string(),
+        ))
+    }
+
+    /// 派发会话停止（移动 `events.on-session-stopped`）
+    fn on_session_stopped(
+        &self,
+        _store: &mut Store<WasmPluginState>,
+        _instance: wasmtime::component::Instance,
+        _session_id: &str,
+    ) -> crate::Result<()> {
+        Err(crate::AppError::Plugin(
+            "WASM guest events: on-session-stopped not wired by this host (mobile-only export)".to_string(),
+        ))
+    }
 }
 
 /// 未装配派发器时的占位（构造期到注入前、或无头上下文）

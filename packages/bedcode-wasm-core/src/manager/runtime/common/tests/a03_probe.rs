@@ -2,7 +2,7 @@
 //! P5 性能基线）
 //!
 //! 依据：`.scratch/2026-09-21-a0-3-host-async/spec.md`（用户确认实施）。
-//! 性质：**只读探针**——不修改生产路径（wasm_runtime.rs / component.rs 生产代码
+//! 性质：**只读探针**——不修改生产路径（common.rs / component.rs 生产代码
 //! 零改动），全部证据来自测试级实例化、既有 fixture 与既有产物。
 //!
 //! 场景对应：
@@ -110,19 +110,25 @@ fn a03_p1a_sync_host_impl_under_async_store() {
         println!("[a03][P1-a] ③ 无 handle 线程（ambient 直接驱动）OK");
     }
 
-    // 同实例其余导出在 async store 下可用：事件回调 / manifest
-    // （v27/票 10：终端 hooks 导出已删，不再断言）
+    // 同实例其余导出在 async store 下可用：二进制事件回调 / manifest
+    // （v27/票 10：终端 hooks 导出已删，不再断言；
+    //  票 04：字符串事件回调 `on_message` 走宿主注入的派发器，而内核测试二进制
+    //  已无替身实现（缺省 `UnwiredGuestEvents` 派发即 fail-visible）——这里改探
+    //  原生 `TypedFunc` 探测路径的 `on_message_binary`（同属「可选导出在 async
+    //  store 下可调」性质，无派发器依赖）；`on_message` 的 async store 覆盖由宿主
+    //  集成测试持有（`src-tauri/tests/` 的 sdk_e2e / pty / ws 一族经
+    //  `DesktopGuestEvents` 派发））
     {
         let rt = tokio::runtime::Runtime::new().expect("multi-thread rt");
         let plugin = Arc::clone(&plugin);
         rt.block_on(async move {
             let mut g = plugin.lock().await;
-            g.on_message("a03.topic", "host", &serde_json::json!({ "n": 1 }))
-                .expect("on_message 在 async store 下可用");
+            g.on_message_binary("a03.topic", "host", b"\x00\xff-probe")
+                .expect("on_message_binary 在 async store 下可用");
             let m: serde_json::Value = serde_json::from_str(&g.get_manifest().expect("manifest")).unwrap();
             assert_eq!(m["id"], "com.bedcode.wasip3-test");
         });
-        println!("[a03][P1-a] hooks / on_message / get_manifest 同实例 OK");
+        println!("[a03][P1-a] hooks / on_message_binary / get_manifest 同实例 OK");
     }
 }
 

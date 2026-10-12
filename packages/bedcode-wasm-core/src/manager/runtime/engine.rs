@@ -23,7 +23,7 @@
 //! | --- | --- |
 //! | 实例化 sync / async（桌面 wasip3 组件要求 async 入口） | [`InstantiateMode`] 参数 |
 //! | 旧产物实例化失败的错误文案（桌面要拼重建指引，移动不带） | 返回 `wasmtime::Error`，由调用方按形态语境构造 [`AppError`] |
-//! | WASI 预打开目录（桌面 worker 预留能力） | 不在本模块（桌面 `common/component.rs` 内的 `build_wasi_ctx`），移动形态整面不存在该机制 |
+//! | WASI 预打开目录（worker 预留能力） | 不在本模块——双端同源真源是 `manager::runtime::wasi`（用户裁决 2026-10-12：WASI 面住核心） |
 
 use std::num::NonZeroUsize;
 use std::path::Path;
