@@ -1,8 +1,10 @@
 # wasm-core 单形态 + 绑定层归位（契约组合住宿主/SDK）
 
-> **用户裁决（2026-10-11，两次）**：
+> **用户裁决（2026-10-11，两次 + 2026-10-12 补充一次）**：
 > 1. 「从功能 / 机制的角度出发，wasm-core 就应该是统一的，不应该有差异代码；差异的部分全部迁移或者移除。」
 > 2. 「WIT 通过在宿主或者 SDK 中组合来实现整体对移动端或者桌面端，而不是在 wasm-core 中实现差异统一。」
+> 3. 「不；双端都可以开启，默认开启；wasip2 p3 就放在核心——为了以后 worker wasm 使用。或者通过 config 让外部去配置开启或者关闭，默认全部开启。」
+>    ⇒ **WASI 面不迁宿主、留核心**（`manager/runtime/wasi.rs`），双端形态都编译、都**默认注册**；开 / 关走外部配置 `CoreConfig::wasi`（`enabled` / `p2` / `p3`，默认全真）。§2 的「WASI 有 / 无」差异行据此作废（形态差异轴消失，见 §裁决 3 落点）。
 >
 > **撤销原 spec 的 union world 方向**：不在 wasm-core 内做「契约差异统一」（不把 cap-desktop + cap-mobile 并进同一 package、不合并 ABI）。契约端差异 = 各端 SDK `compose.json` 各自组合 cap 分片 + 宿主侧各自注册实现；wasm-core 只保留**双端全等的交集核心**（含机制 + core.wit 交集绑定层）。
 >
@@ -16,7 +18,8 @@
         ↓ 消费 wasm-core 的纯机制（engine/manager/security/bus/config/db/storage/...）
 wasm-core（packages/bedcode-wasm-core，一份形态、零 cfg(common-host/bare-host) 分叉）：
   · 机制核心 + core.wit 交集绑定层（17 个双端全等 interface）
-  · 不得持有任何 cap 分片差异 / 端名 / WASI 差异 / 双 SDK 类型分叉
+  · 不得持有任何 cap 分片差异 / 端名 / 双 SDK 类型分叉（WASI 面是**共享机制**
+    而非形态差异：同一份 `manager/runtime/wasi.rs` 双端编译，见裁决 3）
 SDK 层（plugin-sdk-desktop / plugin-sdk-mobile）：
   compose.json 各自组合 core + 各自 cap 分片（desktop: pty/http/ws/desktop；mobile: mobile）
   ABI 各端独立演进（现阶段 37 vs 20，维持 ADR 0018——本合并不合并契约）
@@ -25,7 +28,13 @@ SDK 层（plugin-sdk-desktop / plugin-sdk-mobile）：
 **裁定派生结论**：
 - **不做 union world**：cap-desktop / cap-mobile 永不同时进 wasm-core 的绑定层；同名 interface（`host-auth` / `host-connection` / `events` 等）已按角色改名的现状**保留**（不冲突即不改）。
 - **绑定层归位**：wasm-core 内现存的桌面绑定（`common/component.rs`）与移动绑定（`bare/component.rs` + `bare/host_impl/`）全部迁出——分别落桌面宿主 / 移动宿主；wasm-core 只留 core.wit 交集应有的绑定（若双端可共用一份交集绑定则留 core，否则交集绑定也随调用面上移，见 T-03 推敲）。
-- **WASI 归桌面宿主**：`wasm32-wasip3` 装配（preopen / fs_auth 过滤）是桌面契约事实，随桌面绑定层移出；wasm-core 零 WASI 词汇。
+- ~~**WASI 归桌面宿主**：`wasm32-wasip3` 装配（preopen / fs_auth 过滤）是桌面契约事实，随桌面绑定层移出；wasm-core 零 WASI 词汇。~~
+  **（2026-10-12 裁决 3 作废）** WASI 装配面**住核心**：`manager/runtime/wasi.rs`（p2/p3 linker
+  注册 + preopen/fs_auth 过滤链，双端同源一份），`wasmtime-wasi` 无条件依赖；
+  host-kit 的 `wasi-store` 形态 feature 退役（ctx/table/`WasiView` 常编译）。
+  开 / 关是**运行期配置**（`CoreConfig::wasi`，默认全开；配置文件 `wasm-core.json` /
+  `set_config` 可改）——理由：将来 worker 类别插件双端都要跑 wasm（ADR 0034 L3.b），
+  接线必须已经双端同源，不能再挂在桌面形态上。
 - **合一份宿主上下文**：`context::WasmHostContext` 与 `bare_context::WasmHostContext` 合成一个中立类型（或统一 trait 接口），形态差异消除。
 - **feature / 依赖面收敛**：`common-host` / `bare-host` 特征退役；`bedcode-plugin-api` vs `bedcode-plugin-api-mobile` 的双 SDK 类型分叉消除（统一到源自交集契约的一份类型词汇）。
 
@@ -38,7 +47,7 @@ SDK 层（plugin-sdk-desktop / plugin-sdk-mobile）：
 | world 组成 | `core` + cap-pty + cap-http + cap-ws + cap-desktop | `core` + cap-mobile |
 | import / export | 26 import / 6 export（含 abi-form） | 17 import / 5 export |
 | ABI 版本 | 37 | 20 |
-| WASI | 有（wasip3 preopen + fs_auth 授权过滤） | 无（wasm32-unknown-unknown） |
+| WASI | 有（wasip3 preopen + fs_auth 授权过滤） | 无（wasm32-unknown-unknown）← **2026-10-12 裁决作废此差异轴**：WASI 面住核心、双端默认全开、开关走 `CoreConfig::wasi` |
 | 宿主上下文 | `host_api::context::WasmHostContext` | `host_api::bare_context::WasmHostContext`（不同类型） |
 | 依赖 | bedcode-plugin-api + wasmtime-wasi + crypto 套件 + server-core | bedcode-plugin-api-mobile + discovery-engine + ws-client-engine |
 

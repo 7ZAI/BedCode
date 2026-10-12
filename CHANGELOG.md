@@ -7,6 +7,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+#### wasm-core is now single-form: one set of mechanics, bindings live in the hosts (ADR 0049)
+
+`packages/bedcode-wasm-core` was already a single crate, but it still carried two *assembly trees* —
+`common-host` (desktop) and `bare-host` (mobile) — each mounting its own full-world `bindgen!` plus a
+dozen `impl … Host` blocks. That made the kernel itself aware that "a desktop" and "a mobile" exist,
+and forced an `all(common-host, bare-host)` `compile_error!` guard to stop the two generated `bedcode`
+modules from colliding. The kernel now holds **one** set of mechanics and **zero** end-specific
+bindings (ADR 0049).
+
+- **One form, zero mechanics divergence.** Engine construction, Store assembly, component loading /
+  AOT / instantiation, the event loop, security, storage, the db mechanics, the task engine and the
+  message bus are one copy, shared by both ends. The judgement rule is simple: if a piece of code is
+  "written this way on desktop, that way on mobile", it is not mechanics — it moves out (to a shared
+  crate or to the host) rather than growing a `cfg`.
+- **Bindings moved into the hosts (ADR 0049 D2).** The kernel's only legal WIT binding is now
+  `manager/runtime/core_binding.rs`, which binds the contract source of truth
+  `wit/core.wit`'s `world core` (the 17 interfaces that are identical on both ends) — and it is the
+  same copy for both. Everything else left the kernel: the desktop full-world `bindgen!` + 12
+  `Host` impls (`manager/runtime/common/component.rs`, 1412 lines) went to
+  `bedcode-desktop/src-tauri/src/plugin/{bindings.rs, <domain>.rs}`; the mobile full-world `bindgen!`
+  + 12 `Host` impls + the 16 `host_impl/` domains (`manager/runtime/bare/component.rs`, 1781 lines)
+  went to `bedcode-mobile/src-tauri/src/plugin/{bindings.rs, host_domains/**}` (domain logic and its
+  `Host` impl now sit side by side). The per-end shells keep only Engine/Linker/Store lifecycle and
+  the export-call skeleton — **zero `bindgen!`, zero `impl … Host`**.
+- **Removed the four in-kernel `#[cfg(test)]` stand-ins and `TestGuestEvents`.** The kernel no longer
+  keeps a private copy of the host bindings "just for tests" — the 12 fixture end-to-end cases moved
+  to the host test binaries (`bedcode-desktop/src-tauri/tests/`, `bedcode-mobile/src-tauri/tests/`),
+  which chain the lib *without* `cfg(test)`. What stays inside the kernel is real mechanics: the
+  capability-module whitelist (`common/component.rs`), AOT/Store/fuel wiring, and trap handling.
+- **WASI is now a shared mechanism, not an end difference.** `manager/runtime/wasi.rs` (p2/p3 linker
+  registration + the preopen / `fs_auth` filter chain) compiles on both ends, is **on by default on
+  both**, and is toggled at runtime via `CoreConfig::wasi` rather than by a cargo feature. This is so
+  that worker-class plugins (ADR 0034 L3.b), which will run wasm on *both* ends, do not need each end
+  to rebuild the wiring later. The previous "desktop has WASI / mobile does not" axis is gone.
+- **Event dispatch: mechanism in the kernel, call contract in the host (ADR 0022).** The event loop
+  stays in the kernel; the *call contract* differs per end and exports returning `result` cannot be
+  probed natively, so `manager/runtime/guest_events.rs` defines a `GuestEventDispatcher` trait that
+  each host implements and injects at assembly time. The default `UnwiredGuestEvents` makes a missed
+  wiring fail visibly instead of silently dropping events. The mobile host gained the four
+  end-specific lifecycle callbacks (`on_auth_success` / `on_disconnect` / `on_session_created` /
+  `on_session_stopped`).
+- **One host context, neutral naming.** `context::WasmHostContext` and `bare_context::WasmHostContext`
+  are merged into one neutral type; the zero-consumer `host_api/sql_guard.rs` shim and the
+  call-less `host_context_registry.rs` are deleted rather than left as stubs. `host_api/ports.rs`
+  deliberately **stays** in the kernel — it is the port vocabulary of that unified context.
+- **Mobile stopped consuming wasm-core under an alias.** The `bedcode-wasm-core-mobile` package-rename
+  alias is gone; `bedcode-mobile/src-tauri` depends on the root crate directly and all sources import
+  `bedcode_wasm_core::`. Along the way the unified `fs_auth` decision chain retired six path/plugin
+  whitelist management commands (the front end had no callers of them).
+- **Contract: zero change.** Both `compose.json` files are untouched, the generated WIT is byte-identical
+  (`pnpm run check:wit` passes), desktop ABI stays **37** and mobile ABI stays **20**; **ADR 0018 is not
+  revoked** — the two ends keep evolving their contracts independently, and the "union world" direction
+  from the original spec was rejected.
+- **Locks.** `retired_mobile_wasm_core_fork_lock.rs` is generalised to "no second wasm-core body"
+  (fork directory / standalone package name / rename alias key / fork-shaped paths / **any second
+  `bedcode-wasm-core*` directory**), and `mobile_wasm_core_purity_lock.rs` becomes seven judgements —
+  the new one being an end-vocabulary sweep: no cap-slice world names in kernel code lines, no end
+  names in declaration position (with a documented exemption register), and the end SDK vocabulary
+  capped at its single known site. The in-kernel lock
+  `desktop_binding_surface_must_not_return_to_wasm_core` now covers **both** ends' shells and was
+  renamed `binding_surface_must_not_return_to_wasm_core` (its old name carried an end name, violating
+  ADR 0047 D2). Every changed lock was mutation-checked: inject a violation → red → restore (sha256
+  verified) → green.
+
+**Known leftovers, stated rather than hidden** (details in ADR 0049 "遗留项"): the cargo-feature
+convergence is **not** done — `common-host` / `bare-host` are still present, the `compile_error!` guard
+still exists (its justifying comment was rewritten to say so honestly), and the kernel still consumes
+both end SDK crates in a handful of places (now capped by a lock so it cannot spread). The mobile
+core-8 domains deliberately do **not** adopt the kernel's `core_binding`: their permission vocabulary
+and their per-plugin private-database layout differ, and switching would either silently deny
+storage/fs/db calls on mobile or silently drop mobile's `bus` permission bit.
+
 #### Mobile host hardening: unregistered commands, ungated egress, orphaned tests and dead framework removed
 
 Code-organization pass over `bedcode-mobile/src-tauri/src` (ADR 0022 §5.1.3 host boundary; no

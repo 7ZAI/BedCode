@@ -9,6 +9,61 @@
 
 ## [未发布]
 
+#### wasm-core 单形态：机制一份、绑定归位宿主（ADR 0049）
+
+`packages/bedcode-wasm-core` 本已是一份 crate，但内里仍挂着两套**装配树**——`common-host`（桌面）与
+`bare-host`（移动），各挂一套全 world `bindgen!` 加十来个 `impl … Host`。这让内核自己知道
+「有桌面这回事、有移动这回事」，还得靠 `all(common-host, bare-host)` 的 `compile_error!` 守卫挡住
+两个同名 `bedcode` 生成模块冲突。现在内核只有**一份机制**、**零端绑定**（ADR 0049）。
+
+- **单形态，机制零分叉。** Engine 构建、Store 装配、组件加载 / AOT / 实例化、事件循环、安全、
+  存储、db 机制、任务引擎、消息总线全部一份双端共用。判据很简单：一段代码若「桌面这样写、移动
+  那样写」，它就不是机制——应整体迁出（到共享 crate 或端宿主），而不是长出一个 `cfg`。
+- **绑定层归位宿主（ADR 0049 D2）。** 内核唯一合法的 WIT 绑定只剩
+  `manager/runtime/core_binding.rs`，它绑契约真源 `wit/core.wit` 的 `world core`（双端全等的 17 个
+  interface），且双端是同一份。其余全部迁出：桌面全 world `bindgen!` + 12 个 `Host` impl
+  （`manager/runtime/common/component.rs`，1412 行）落到
+  `bedcode-desktop/src-tauri/src/plugin/{bindings.rs, <domain>.rs}`；移动全 world `bindgen!` +
+  12 个 `Host` impl + 16 域 `host_impl/`（`manager/runtime/bare/component.rs`，1781 行）落到
+  `bedcode-mobile/src-tauri/src/plugin/{bindings.rs, host_domains/**}`（域逻辑与对应 `Host` impl
+  同处）。两端形态壳只剩 Engine / Linker / Store 生命周期与导出调用骨架——**零 `bindgen!`、
+  零 `impl … Host`**。
+- **删掉内核里最后 4 个 `#[cfg(test)]` 替身与 `TestGuestEvents`。** 内核不再为「测试方便」私藏一份
+  宿主绑定：12 个夹具 e2e 用例迁到两端宿主的测试二进制（`bedcode-desktop/src-tauri/tests/`、
+  `bedcode-mobile/src-tauri/tests/`）——它们链的是**不带 `cfg(test)`** 的 lib。内核留下的是真机制：
+  能力模块白名单（`common/component.rs`）、AOT / Store / 燃料接线、trap 判定。
+- **WASI 从形态差异轴降级为共享机制。** `manager/runtime/wasi.rs`（p2/p3 linker 注册 + preopen /
+  `fs_auth` 过滤链）双端同源一份，**双端默认全开**，开 / 关走**运行期配置** `CoreConfig::wasi`
+  而不是 cargo feature。理由：worker 类别插件（ADR 0034 L3.b）将来双端都要跑 wasm，装接线必须已经
+  同源，不能等各端再重建一遍。原「桌面有 WASI / 移动没有」这条差异轴随之消失。
+- **事件派发：机制留内核、调用契约面上移（ADR 0022）。** 事件循环留内核；`events` 导出的**调用
+  契约**两端词汇不同，且带 `result` 返回的导出无法原生探测，故
+  `manager/runtime/guest_events.rs` 定义 `GuestEventDispatcher` trait，由各端宿主实现并在装配期
+  注入；缺省 `UnwiredGuestEvents` 让「漏接线」显性报错而不是静默丢事件。移动宿主因此多实现四个
+  端专属生命周期回调（`on_auth_success` / `on_disconnect` / `on_session_created` /
+  `on_session_stopped`）。
+- **宿主上下文合一 + 命名中立。** `context::WasmHostContext` 与 `bare_context::WasmHostContext`
+  并成一个中立类型；零消费者的 `host_api/sql_guard.rs` 垫片与已无调用点的 `host_context_registry.rs`
+  按退役删除而非留垫片。`host_api/ports.rs` **刻意留内核**——它是那个统一上下文的端口词汇。
+- **移动不再以别名消费 wasm-core。** `bedcode-wasm-core-mobile` package rename 别名删除，
+  `bedcode-mobile/src-tauri` 直连根 crate、源码统一 `bedcode_wasm_core::`。顺带把 `fs_auth` 统一判定链
+  带来的 6 个路径 / 插件白名单管理命令退役（前端 grep 实证零调用点）。
+- **契约零变更。** 双端 `compose.json` 不动，生成物逐字一致（`pnpm run check:wit` 通过），桌面 ABI
+  仍 **37**、移动 ABI 仍 **20**；**ADR 0018 维持不撤销**——双端契约各自独立演进，初版 spec 的
+  union world 方向已否决。
+- **锁。** `retired_mobile_wasm_core_fork_lock.rs` 泛化为「禁任何第二份 wasm-core 织体」（fork 目录 /
+  独立包名 / rename 别名键 / fork 形态路径 / **任何第二个 `bedcode-wasm-core*` 目录**）；
+  `mobile_wasm_core_purity_lock.rs` 重写为七判据，新增「端词汇全集」：内核代码行零 cap 分片 world 名、
+  声明位零端名（豁免走登记表）、端 SDK 词汇封顶在唯一已知落点。内核内
+  `desktop_binding_surface_must_not_return_to_wasm_core` 判据扩到**双端四壳**并**去端名化**为
+  `binding_surface_must_not_return_to_wasm_core`（旧名带端名，违反 ADR 0047 D2）。每把改写的锁都做了
+  变异自检：注入违背终态的形态 → 红 → `cp` 还原（核 sha256）→ 绿。
+
+**明列的遗留项**（详见 ADR 0049「遗留项」段）：cargo feature 收敛**未做**——`common-host` /
+`bare-host` 仍在，`compile_error!` 守卫仍在（其判据注释已改写成如实说明现状），内核仍有少量地方消费
+双端 SDK（现已由锁封顶，防扩散）。移动 core-8 刻意**不**改用内核那份 `core_binding`：权限词表与每插件
+私有库布局两处不同源，直接切会让移动侧 storage / fs / db 恒拒、或让移动的 `bus` 权限位静默失效。
+
 #### 移动宿主加固：补注册漏命令、补 egress 闸门、清永不编译的测试与死框架
 
 对 `bedcode-mobile/src-tauri/src` 做的一次代码组织梳理（ADR 0022 §5.1.3 宿主边界；
