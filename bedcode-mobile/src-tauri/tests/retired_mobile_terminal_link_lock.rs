@@ -72,11 +72,14 @@ const RETIRED_FRONTEND_LITERALS: [&str; 8] = [
 /// 面（`bedcode_wasm_core` 现为 package rename 别名），锁钉根 crate 路径。
 const RETAINED_FACE: [(&str, &str); 7] = [
     (
-        "../../packages/bedcode-wasm-core/src/terminal_stream_gateway.rs",
+        // 票 05 绑定归位：窄转发表整表自 wasm-core `terminal_stream_gateway.rs`
+        // 迁入宿主（网关 = 移动独有域机制，内核不带端词汇）——保留面断言随之
+        // 改指宿主新路径，旧路径已删（指向它必然 No such file）
+        "src/plugin/terminal_stream.rs",
         "pub fn forward_output(",
     ),
     (
-        "../../packages/bedcode-wasm-core/src/terminal_stream_gateway.rs",
+        "src/plugin/terminal_stream.rs",
         "pub fn page_subscribe(",
     ),
     (
