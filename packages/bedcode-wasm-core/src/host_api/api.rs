@@ -28,8 +28,8 @@
 //! ## 为什么回复订阅是宿主侧静态订阅
 //!
 //! WASM guest 是同步执行模型：调用方阻塞等待期间，宿主无法把回复投递到
-//! 调用方插件的 `on_message` —— 投递路径（`with_wasm_plugin_call`）需要锁住
-//! 调用方实例，而该锁正被阻塞中的调用持有，必然自锁死锁。因此宿主在
+//! 调用方插件的 `on_message` —— 投递路径（宿主 `call_guest` 的 mutex 模型）
+//! 需要锁住调用方实例，而该锁正被阻塞中的调用持有，必然自锁死锁。因此宿主在
 //! 回复 topic 上注册静态订阅（Rust callback 投递，不经过调用方 wasm 实例），
 //! 经 oneshot 通道唤醒等待者。消息形状（JSON-RPC）与 correlation id 生命周期
 //! 归 SDK 管理，本原语只是「发布请求、等待回复」的通用管道。
@@ -154,7 +154,7 @@ pub fn api_call(
     //    在 actix current_thread worker 上直接发布，`MessageBus::publish` 的
     //    `tokio::spawn`（请求消费任务 / 后续回复投递）会落入该 current_thread
     //    runtime——其唯一调度线程正被本互调同步阻塞 → 消费任务永不执行 → 超时。
-    //    与 `notify_connection_touch`（async fire-and-forget）同根因，此处改为发布也
+    //    与其它 async fire-and-forget 调用同根因（如连接触摸通知），此处改为发布也
     //    经 `block_on_async` 搬到 ambient 多线程上下文：spawn 落在 ambient 线程池，
     //    回复自由投递。
     let publish_result =

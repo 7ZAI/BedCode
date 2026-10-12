@@ -227,7 +227,7 @@ mod tests {
 
     /// 授权记录容量丢弃计数与决策计数互不串台
     ///
-    /// 变异判据：把 `record_authz_record_dropped` 记到 `authz_decisions` 的某个槽位，
+    /// 变异判据：把 `record_authz_record_dropped` 记到 `authz` 段的某个槽位，
     /// 本条的 allow 计数或 dropped 计数必有一侧转红。
     #[test]
     fn authz_record_drops_counted_separately_from_decisions() {

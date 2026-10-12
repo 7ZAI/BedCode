@@ -293,9 +293,8 @@ mod tests {
 
 // ==================== 移动装配面事件（fork 迁入，票 06 批次 03） ====================
 
-#[cfg(feature = "bare-host")]
-
-/// 插件生命周期事件
+/// 插件生命周期事件（票 02 M4 常编译：中性纯枚举——移动装配面
+/// `dispatch_lifecycle_event` 消费；桌面无消费方但保持编译，不留形态分叉）
 ///
 /// 统一的事件枚举，供 PluginManager::dispatch_lifecycle_event() 使用。
 /// 每个变体携带触发点传入的上下文数据。
@@ -309,7 +308,6 @@ pub enum PluginLifecycleEvent {
     SessionStopped { session_id: String },
 }
 
-#[cfg(feature = "bare-host")]
 impl PluginLifecycleEvent {
     /// 返回声明字段名（用于 is_declared 检查）
     pub fn name(&self) -> &'static str {

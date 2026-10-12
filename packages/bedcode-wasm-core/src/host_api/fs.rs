@@ -379,8 +379,8 @@ pub fn fs_read_dir(
 
 /// canonicalize 绝对路径（v19 追加）；路径不存在返回 `Ok(None)`
 ///
-/// 供 `../` 穿越与 symlink 逃逸的 containment 判定（宿主 file_controller
-/// 的 `is_within_root` 同语义：canonicalize 后 `starts_with`）。
+/// 供 `../` 穿越与 symlink 逃逸的 containment 判定（宿主 file 控制器
+/// 同语义：canonicalize 后校验前缀在根目录内）。
 pub fn fs_canonicalize(
     sec: &dyn crate::host_api::context::SecurityScope,
     plugin_id: &str,
@@ -396,7 +396,7 @@ pub fn fs_canonicalize(
 
 /// 文件元数据（v19 追加）：`{size, isFile, isDir}`；路径不存在返回 `Ok(None)`
 ///
-/// 供文件大小上限判定（与宿主 file-content 的 `MAX_FILE_SIZE` 语义一致）。
+/// 供文件大小上限判定（与宿主 file 域的大小上限语义一致）。
 pub fn fs_stat(
     sec: &dyn crate::host_api::context::SecurityScope,
     plugin_id: &str,

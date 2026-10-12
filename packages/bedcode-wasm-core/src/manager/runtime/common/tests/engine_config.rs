@@ -13,6 +13,11 @@
 //! 3. **真实 trap 错误串**：端到端证明钩子确实作用在生产 Engine 上。
 //!
 //! 纯逻辑（默认值 / 推导规则 / 枚举解析 / 校验规则）在 `crate::config` 的单测里。
+//!
+//! **票 04 拆分**：`customizer_overrides_unlocked_knobs_end_to_end`（第 3 层
+//! 「真实 trap」端到端，需实例化 SDK 夹具）随「wasm-core 不再持全 world 绑定」
+//! 迁桌面宿主 `src-tauri/tests/engine_e2e.rs` 同名用例；留本文件的用例全部只建
+//! Engine / 运行时、不实例化组件。
 
 use super::*;
 use crate::config::{CoreConfig, OptLevel};
@@ -21,58 +26,6 @@ use crate::manager::runtime::EngineSetup;
 use tracing::Level;
 
 // ==================== B 面：逃生舱 ====================
-
-/// 逃生舱能覆盖**非锁定**项，且在真实 trap 上生效
-///
-/// 三层断言：
-/// 1. getter 直读：钩子关掉 backtrace / 并行编译，逐字反映在 `Engine::config()`；
-/// 2. 端到端：真实 trap 错误串不再携带 `wasm backtrace:` 段；
-/// 3. **对照组**：不装钩子的运行时必须仍带 backtrace——否则本用例在「trap 错误串
-///    形状变了」时也会绿（backtrace 是诊断地基：trap 错误串是插件 Degraded 与
-///    AI agent 定位故障的唯一证据，故不在锁定项内）。
-#[test]
-fn customizer_overrides_unlocked_knobs_end_to_end() {
-    // 对照组：默认运行时（无钩子）必须带 backtrace
-    let default_err = trap_error_with_setup(EngineSetup::new(CoreConfig::default()));
-    assert!(
-        default_err.contains("wasm backtrace:"),
-        "对照组：默认运行时 trap 必须带 wasm backtrace，否则本用例失去对照意义: {default_err}"
-    );
-    assert!(
-        setup_wasm_runtime_with_setup(EngineSetup::new(CoreConfig::default()))
-            .0
-            .engine()
-            .get_parallel_compilation(),
-        "对照组：默认并行编译开启（wasmtime 默认）"
-    );
-
-    // 实验组：钩子关掉 backtrace 与并行编译（配置面语义上「诊断地基 / 编译并发」可调）
-    // 用 `wasm_backtrace_max_frames(None)` 而非已废弃的 `wasm_backtrace(false)`
-    // （上游文档：二者等价，None = trap 错误串不再附带 wasm backtrace）
-    let hooked = setup_wasm_runtime_with_setup(
-        EngineSetup::new(CoreConfig::default()).with_customizer(|config| {
-            config.wasm_backtrace_max_frames(None);
-            config.parallel_compilation(false);
-            Ok(())
-        }),
-    )
-    .0;
-    assert!(
-        !hooked.engine().get_parallel_compilation(),
-        "逃生舱必须能覆盖非锁定项（parallel_compilation）"
-    );
-    let hooked_err = trap_error_with_setup(
-        EngineSetup::new(CoreConfig::default()).with_customizer(|config| {
-            config.wasm_backtrace_max_frames(None);
-            config.parallel_compilation(false);
-            Ok(())
-        }),
-    );
-    assert!(
-        !hooked_err.contains("wasm backtrace:"),
-        "逃生舱必须能覆盖非锁定项（wasm_backtrace），且在真实 trap 上生效: {hooked_err}"
-    );
-}
 
 /// 锁定项：钩子**改不动**资源看门狗 4 项
 ///
@@ -431,22 +384,4 @@ fn runtime_with_setup(setup: EngineSetup) -> WasmRuntime {
 fn effective_engine(core_config: &CoreConfig, debug_mode: bool) -> wasmtime::Engine {
     wasmtime::Engine::new(&build_engine_config(core_config, debug_mode))
         .expect("按内核配置构建的引擎应可建")
-}
-
-/// 触发确定性 trap（`test.panic`）并取回错误串——trap 串是引擎诊断参数的唯一载体
-fn trap_error_with_setup(setup: EngineSetup) -> String {
-    let (wasm_runtime, host_ctx) = setup_wasm_runtime_with_setup(setup);
-    let component = wasm_runtime
-        .compile_component(&build_test_component())
-        .expect("编译测试组件");
-    let mut plugin = wasm_runtime
-        .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx, &[], None)
-        .expect("实例化测试组件");
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    rt.block_on(async {
-        plugin
-            .invoke_command("test.panic", "{}")
-            .expect_err("panic 必须 trap")
-            .to_string()
-    })
 }

@@ -1,16 +1,21 @@
-//! WASM 插件运行时（形态分叉壳，票 06 批次 03 · ADR 0045 D6）
+//! WASM 插件运行时（机制一份 + 两薄形态壳，票 06 批次 03 起 · ADR 0045 D6 · ADR 0049）
 //!
 //! 「只有一份 wasm-core，双端核心机制完全一致」的终局下，装配树按宿主形态
-//! cfg 挂载（spec D5/D6）：
+//! cfg 挂载（spec D5/D6）。票 04（桌面）与票 05（移动）把两个壳里的 WIT 绑定
+//! 全部迁到各端宿主后，**壳只剩机制接线**：
 //!
 //! - **桌面**（`common-host`）：[`common`] —— wasmtime Engine/Linker/Store
-//!   生命周期 + WASI p3 装配 + `component`（桌面 WIT 绑定，host-* WIT impl
-//!   面在 `crate::host_api` 各域）
-//! - **移动**（`bare-host`）：[`bare`] + [`component`] + [`host_impl`]
-//!   —— 自 `bedcode-mobile/packages/bedcode-wasm-core`（fork，票 17）迁入的
-//!   移动装配面（17 组 Host 接线 + host_impl 16 域 + 无 WASI，移动插件为
-//!   wasm32-unknown-unknown）；`WasmPluginState` 统一用 host-kit 版
-//!   （`wasi-store` 关闭形态，票 06 批次 02）
+//!   生命周期 + WASI 装配（[`wasi`]，p2/p3）+ `component`（导出调用骨架 + 宿主
+//!   自报模块的装配入口；WIT impl 面在各端宿主 `src-tauri/src/plugin/*.rs`）
+//! - **移动**（`bare-host`）：[`bare`] + [`bare::component`] —— 同形的移动壳
+//!   （原 fork 迁入的 17 组 Host 接线 + `host_impl` 16 域已随票 04 / 05 迁出到
+//!   各端宿主：移动侧真源 `bedcode-mobile/src-tauri/src/plugin/host_domains/`
+//!   域逻辑与 interface `Host` impl 同处，移动互调经 `crate::plugin::host_domains`）。
+//!   `WasmPluginState` 统一用 host-kit 版（ctx/table 常编译）。
+//!
+//! **WASI 面是双端共享的核心机制**（[`wasi`] + `CoreConfig::wasi`）：不是形态差异轴
+//! ——默认双端全开，外部配置可关；目的是将来 worker 类别插件（ADR 0034 L3.b）
+//! 双端都要跑 wasm 时无需各端重建接线。
 //!
 //! 机制面（Engine 构建参数）随各形态分支自持，真差异记录在案：桌面由
 //! `CoreConfig` 驱动（`build_engine_config` 是带单测的纯函数），移动侧硬编码且
@@ -22,9 +27,11 @@
 
 // ==================== 组件引擎机制（双端唯一一份） ====================
 //
-// `bindgen!`、`impl … Host`、linker 装配、`verify_abi`、`Loaded*Plugin` 导出调用面
-// 留在各形态壳内——那些是 WIT 绑定层，合并的前提是双端 world 合一（ADR 0018
-// 明确不成立：移动契约独立演进，不跟演桌面 ABI 破坏性变更）。
+// 组件编译 + AOT 缓存、Store 装配与资源限制接线、燃料注入与续费、实例生死观测、
+// Engine 构建纯函数、trap 判定——全部双端一份，见 [`engine`]。
+// **`bindgen!` / `impl … Host` / linker 装配 / `verify_abi` / `Loaded*Plugin` 导出
+// 调用面不在这里**：core 交集在 [`core_binding`]（唯一一份），cap 与端差异在
+// 各端宿主（ADR 0049）。
 pub(crate) mod engine;
 
 // ==================== Core 交集绑定层（双端唯一一份，票 03 Option A） ====================
@@ -57,8 +64,9 @@ pub mod guest_events;
 #[cfg(feature = "common-host")]
 mod common;
 
-#[cfg(all(test, feature = "common-host"))]
-pub(crate) use common::fixture_build;
+// `fixture_build` 的 crate 级转出随票 04 删除（原消费者是内核 host/tests 的夹具
+// 用例，已迁宿主——宿主测试只读产物、不构建）；`fixture_target` 仍被
+// `common/tests/p3_async_host_import.rs` 消费，转出保留。
 #[cfg(all(test, feature = "common-host"))]
 pub(crate) use common::fixture_target;
 // glob 过壳：common 分支的全部 pub 符号（WasmHostContext / WasmPluginState 引用 /
@@ -67,11 +75,9 @@ pub(crate) use common::fixture_target;
 #[cfg(feature = "common-host")]
 pub use common::*;
 
-/// 内核测试用的 guest 事件派发替身（票 03）——`test_support` 侧注入点
-///
-/// 与生产派发器同一契约、逐字同语义；生产二进制不含（`cfg(test)`）。
-#[cfg(feature = "common-host")]
-pub(crate) use common::TestGuestEvents;
+// 票 04：内核测试用 guest 事件派发替身（`TestGuestEvents`）随全 world 绑定一并
+// 删除——派发器只由宿主注入（桌面 `src-tauri/src/plugin/guest_events.rs`；
+// 移动宿主同族），缺省 `UnwiredGuestEvents` 派发即 fail-visible。
 
 // ==================== 移动装配树（bare-host，fork 迁入） ====================
 

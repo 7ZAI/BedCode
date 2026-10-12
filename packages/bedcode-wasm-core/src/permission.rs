@@ -183,10 +183,10 @@ pub static VALID_PERMISSIONS: &[&str] = &valid_permissions();
 ///   `src/plugin/context.ts` 的 `requirePermission` 按本表快速失败；
 /// - **`PermissionManager::check_api` 审计名**：`pty.*` / `ws.*` / `peer.*` / `mdns.*`
 ///   等 WASM-only 方法无前端调用点，登记于此仅作审计与互调面口径，
-///   实际门禁在 host_impl 各函数入口的 `check_permission`。
+///   实际门禁在宿主侧各域函数入口的 `check_permission`。
 ///
-/// 表内每个权限都必有一条门禁落点（前端 `requirePermission` 或 host_impl
-/// `check_permission`）——无落点的权限位由宿主词汇漂移锁拒绝。
+/// 表内每个权限都必有一条门禁落点（前端 `requirePermission` 或宿主侧域函数
+/// 入口 `check_permission`）——无落点的权限位由宿主词汇漂移锁拒绝。
 pub static PERMISSION_API_MAP: &[(&str, &[&str])] = &[
     // 票 08：`terminal.sendInput` 随宿主输入通道（`plugin_terminal_send_input`）
     // 注销——插件写自家会话输入走自有命令通道（不受本表管辖）。

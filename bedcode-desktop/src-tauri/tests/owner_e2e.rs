@@ -1,7 +1,9 @@
 //! 属主任务（`event-loop` 调用模型）直接驱动测试（票 06 P1）
 //!
-//! 不经 `PluginHost`：直接 `spawn_owner` + `OwnerHandle` 驱动真实夹具组件
-//! （`plugin-component-test`），覆盖 spec §3.2 的：
+//! 自 wasm-core `manager/runtime/common/tests/owner_e2e.rs` 迁入（票 04 绑定归位）：
+//! wasm-core 不再持有全 world 绑定后，其测试二进制无法实例化 SDK 夹具（夹具静态
+//! import 生态含桌面扩展接口）。**不经 `PluginHost`**：直接驱动属主任务处理真实夹具
+//! 组件，覆盖 spec §3.2 的：
 //! - **I4** 启动顺序 = 入队顺序（另配结构锁）
 //! - **I3①/②** trap = 整实例不可用 + 在等请求显式失败 + 实例级失败上报
 //! - **I3④** 请求方放弃等待不取消任务（计数）
@@ -11,16 +13,24 @@
 //!
 //! I5（存量插件行为等价）由既有 `wasm_flow` / 插件契约 / 全量 e2e 覆盖，
 //! 本文件只测属主模型自身的不变式。
+//!
+//! **迁移改造点**：`spawn_owner` / `OwnerHandle` / `OWNER_QUEUE_CAP` 等是内核私有
+//! 机制（`manager::host::owner` 是 pub(crate)）——经 `test_support` 的属主转发面
+//! （`spawn_test_owner` / `TestOwnerHandle` / `owner_queue_cap` / `OwnerFailureSink`）
+//! 取用，生产 API 零变化（见 wasm-core `test_support/common.rs` 同名段注释）。
+
+mod support;
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures_util::stream::{FuturesUnordered, StreamExt};
 
-use super::*;
-use crate::manager::host::owner::{
-    spawn_owner, GuestOp, GuestReply, OwnerFailureSink, OwnerHandle, OWNER_QUEUE_CAP,
-};
+use support::*;
+
+/// 直连运行时的夹具属主 id（`setup_wasm_runtime` 的权限授予面固定按它装配；
+/// 本文件用例经属主驱动 guest 激活 / 命令，见 `component_e2e.rs` 同名常量注释）
+const TEST_PLUGIN_ID: &str = "com.bedcode.test";
 
 // ==================== 脚手架 ====================
 
@@ -55,21 +65,21 @@ impl OwnerFailureSink for RecordingSink {
 
 /// 实例化夹具组件并启动属主任务
 ///
-/// **必须在 tokio 上下文内调用**（`spawn_owner` 内部 `tokio::spawn`）；
+/// **必须在 tokio 上下文内调用**（`spawn_test_owner` 内部 `tokio::spawn`）；
 /// 而 `setup_wasm_runtime` 自建运行时并在其中 block_on，必须在**上下文之外**调用
 /// （否则 "Cannot start a runtime from within a runtime"）——两者因此分开。
-fn spawn_test_owner(
+fn spawn_owner_for_fixture(
     wasm_runtime: &WasmRuntime,
     host_ctx: Arc<WasmHostContext>,
-) -> (Arc<RecordingSink>, Arc<OwnerHandle>) {
+) -> (Arc<RecordingSink>, Arc<TestOwnerHandle>) {
     let component = wasm_runtime
-        .compile_component(&build_test_component())
+        .compile_component(&sdk_fixture_artifact_bytes("sdk"))
         .expect("compile component-test fixture");
     let plugin = wasm_runtime
         .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx, &[], None)
         .expect("instantiate component-test fixture");
     let sink = Arc::new(RecordingSink::default());
-    let owner = Arc::new(spawn_owner(plugin, sink.clone()));
+    let owner = spawn_test_owner(plugin, sink.clone());
     (sink, owner)
 }
 
@@ -100,7 +110,7 @@ fn owner_serves_commands_and_preserves_enqueue_order() {
     let (wasm_runtime, host_ctx) = setup_wasm_runtime();
     let rt = tokio::runtime::Runtime::new().expect("multi-thread runtime");
     rt.block_on(async {
-        let (_sink, owner) = spawn_test_owner(&wasm_runtime, host_ctx);
+        let (_sink, owner) = spawn_owner_for_fixture(&wasm_runtime, host_ctx);
         const N: usize = 8;
 
         // FuturesUnordered 驱动：首个 poll 轮把所有请求按序投进属主队列，
@@ -156,7 +166,7 @@ fn owner_stop_is_prompt_and_later_calls_fail_explicitly() {
     let (wasm_runtime, host_ctx) = setup_wasm_runtime();
     let rt = tokio::runtime::Runtime::new().expect("multi-thread runtime");
     rt.block_on(async {
-        let (_sink, owner) = spawn_test_owner(&wasm_runtime, host_ctx);
+        let (_sink, owner) = spawn_owner_for_fixture(&wasm_runtime, host_ctx);
         assert!(owner.call(GuestOp::Activate).await.is_ok(), "激活必须成功");
 
         let report = owner.stop().await;
@@ -183,7 +193,7 @@ fn owner_trap_poisons_instance_and_reports_failure() {
     let (wasm_runtime, host_ctx) = setup_wasm_runtime();
     let rt = tokio::runtime::Runtime::new().expect("multi-thread runtime");
     rt.block_on(async {
-        let (sink, owner) = spawn_test_owner(&wasm_runtime, host_ctx);
+        let (sink, owner) = spawn_owner_for_fixture(&wasm_runtime, host_ctx);
 
         let err = owner
             .call(GuestOp::InvokeCommand {
@@ -227,10 +237,11 @@ fn owner_queue_full_is_explicit_failure() {
         .build()
         .expect("current-thread runtime");
     rt.block_on(async {
-        let (_sink, owner) = spawn_test_owner(&wasm_runtime, host_ctx);
+        let (_sink, owner) = spawn_owner_for_fixture(&wasm_runtime, host_ctx);
+        let queue_cap = owner_queue_cap();
         let extra = 16usize;
 
-        let calls: Vec<_> = (0..(OWNER_QUEUE_CAP + extra)).map(|i| owner.call(echo_op(i))).collect();
+        let calls: Vec<_> = (0..(queue_cap + extra)).map(|i| owner.call(echo_op(i))).collect();
         let results = futures_util::future::join_all(calls).await;
 
         let failures: Vec<_> = results.iter().filter_map(|r| r.as_ref().err()).collect();
@@ -243,7 +254,7 @@ fn owner_queue_full_is_explicit_failure() {
         let stats = owner.stats();
         assert_eq!(stats.queue_full, extra as u64, "队列满计数");
         assert_eq!(
-            stats.started as usize, OWNER_QUEUE_CAP,
+            stats.started as usize, queue_cap,
             "入队成功的请求不得丢失（有界预算内全部服务）"
         );
 
@@ -257,9 +268,11 @@ fn owner_queue_full_is_explicit_failure() {
 /// 本锁按源码形态钉死实现约束（票 03 §5.3 施工图）
 #[test]
 fn owner_i4_structural_lock() {
+    // 迁移注：`owner.rs` 属 wasm-core（内核机制），本测试二进制在宿主——按仓库
+    // 相对路径读取真源（`CARGO_MANIFEST_DIR` = bedcode-desktop/src-tauri）
     let src = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/src/manager/host/owner.rs"
+        "/../../packages/bedcode-wasm-core/src/manager/host/owner.rs"
     ))
     .expect("read owner.rs");
     assert!(

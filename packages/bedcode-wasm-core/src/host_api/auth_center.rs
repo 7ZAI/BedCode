@@ -30,7 +30,8 @@
 //! （mdns/ws/http/pty 同一组）。
 //!
 //! 消费方：
-//! - `host_api/auth.rs`：4 个 WIT 函数的权限门 + 分派（`auth-center-register` 等）
+//! - 宿主侧 auth 域（`src-tauri/src/plugin/auth.rs`）：4 个 WIT 函数的权限门 +
+//!   分派（`auth-center-register` 等）
 //! - lib 侧 `utils/auth/auth_center.rs`：裁决面（`enforce_connection_policy`）与桥接门
 //!   （`session_active`）改查本注册表（K7：退役 api_registry 锚点，不留第二套发现机制）
 
@@ -192,21 +193,12 @@ pub fn reset() {
 /// 该产物并停用它的用例都在清台。漏登记的表现是**别的**用例偶发红（2026-09-29：
 /// `a03_p1b` / `ws_e2e` ×3 / `perf_ws_terminal_output_throughput` 的 deactivate 曾把
 /// 多候选锁的裁决打成 `no_center`，而它们自己全绿）。
+///
+/// **常编译 pub**（票 05b 上提）：经 `crate::test_support` re-export 统一入口。
 #[allow(dead_code)]
 static REGISTRY_GATE: OnceLock<tokio::sync::Semaphore> = OnceLock::new();
 
-/// 测试闸门：串行化使用全局注册表的集成用例（单中心 desk 天然独占，并行测试
-/// 会互相清台；闭环 / 多候选锁两条 async 集成用例共用本闸门，互斥执行）
-///
-/// 用 `Semaphore(1)` 而非 `Mutex`：持有 permit 跨 await 是 async 语义下
-/// 合法且必须的（两个用例都以整个测试体为临界区）；permit 不是锁守卫。
-///
-/// **纪律：任何会写这张表的用例都要持闸门**——不只是「读它并断言裁决」的用例。
-/// 真实中心产物（`com.bedcode.terminal-session` v32）的 guest `activate` 会
-/// `auth-center-register`、`deactivate` 会 `auth-center-unregister`，故任何加载
-/// 该产物并停用它的用例都在清台。漏登记的表现是**别的**用例偶发红（2026-09-29：
-/// `a03_p1b` / `ws_e2e` ×3 / `perf_ws_terminal_output_throughput` 的 deactivate 曾把
-/// 多候选锁的裁决打成 `no_center`，而它们自己全绿）。
+/// 测试闸门入口：获取全局单中心 desk 的信号量（`REGISTRY_GATE`，见上）
 ///
 /// **常编译 pub**（票 05b 上提）：经 `crate::test_support` re-export 统一入口。
 pub fn registry_gate() -> &'static tokio::sync::Semaphore {
@@ -237,9 +229,9 @@ pub async fn hold_registry_desk() -> tokio::sync::SemaphorePermit<'static> {
 /// <原因>`；中心返回错误信封 → **原样透传**（业务拒绝不吞成宿主错误）。
 ///
 /// **可见性**（wasm-core 纯净性收口票 05）：本函数是 host-auth WIT 原语
-/// `auth-method-invoke` 的实现链（`host_api/auth.rs::auth_method_invoke` 生产调用），
-/// 属机制面，留在 wasm-core；`pub` 供 lib 侧测试夹具
-/// （`src-tauri/src/utils/auth/test_tokens.rs`）经
+/// `auth-method-invoke` 的实现链（宿主侧 `src-tauri/src/plugin/auth.rs` 的
+/// `auth_method_invoke` 生产调用），属机制面，留在 wasm-core；`pub` 供 lib 侧
+/// 测试夹具（`src-tauri/src/utils/auth/test_tokens.rs`）经
 /// `bedcode_wasm_core::host_api::auth_center::invoke_auth_method` 消费。
 pub fn invoke_auth_method(
     host_ctx: &crate::manager::runtime::WasmHostContext,

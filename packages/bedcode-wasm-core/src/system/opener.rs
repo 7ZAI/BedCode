@@ -3,13 +3,13 @@
 //! 「在系统文件管理器中打开所在目录并选中目标」的实现本体。两个消费方共用同一份
 //! 平台实现（Windows Shell COM / macOS `open -R` / Linux `xdg-open`）：
 //! - `commands/opener.rs::open_log_dir`（宿主设置页「打开日志目录」）
-//! - `plugin/manager/wasm_runtime/host_impl/platform.rs::platform_reveal_in_dir`
-//!   （插件原语 `host-platform.reveal-in-dir`，ABI v22）
+//! - `src-tauri/src/plugin/platform.rs::platform_reveal_in_dir`
+//!   （插件原语 `host-platform.reveal-in-dir`，ABI v22；WIT 域迁宿主后经此复用）
 //!
 //! 平台细节与历史注释（Windows `\\?\` verbatim 前缀、`SHOpenFolderAndSelectItems`
 //! 的 `ERROR_FILE_NOT_FOUND` 兜底）随 2026-09-21 从 `commands/opener.rs` 搬迁保留。
 //! 落点从命令层移到 `system/` 是分层需要：该实现是**引擎原语**，命令层不该承载
-//! 插件能力实现，而 `host_impl`（`pub(super)`）对命令层不可见。
+//! 插件能力实现，而宿主侧域实现（`pub(super)`）对命令层不可见。
 
 use std::path::{Path, PathBuf};
 

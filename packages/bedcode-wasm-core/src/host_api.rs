@@ -2,7 +2,8 @@
 //!
 //! 迁移阶段 C 后宿主能力只剩 Component Model 一种形态：
 //! 本模块提供宿主能力的功能域实现（权限校验 + 宿主服务调用），
-//! 由 `wasm_runtime::component` 的 Host trait 绑定逐接口调用。
+//! 由 `manager::runtime::core_binding` 的 Host trait 绑定逐接口调用（桌面
+//! cap 与移动独有域的 WIT impl 在各自宿主侧，均经 `HostModule` 自报汇入 linker）。
 //!
 //! 各功能域与 SDK `host/*` trait 一一对应（仍在内核者）：
 //! api / auth_center / bus / config / database / events（交集 emit）/ fs（交集 6 +
@@ -50,14 +51,16 @@
 
 // ==================== 域子模块（票 02 B5：上下文与端口常编译化） ====================
 //
-// 桌面 WIT impl 域（`common-host`）：由 `runtime/common/component.rs` 的
-// Host trait 绑定逐接口调用。移动形态的对应实现在 `manager::runtime::bare`
-// 的 host_impl（fork 迁入），本目录不重复。
-// 移动 adapter（`bare-host`）：http_engine / ports / sql_guard / bare_context
-// 自 fork `host_api/` 迁入。**票 02 B5**：`context`（双端唯一宿主上下文，原
+// 本目录留内核的是**机制执行本体 + 端口词汇 + 单元执行器**，不是 WIT impl。
+// 票 04（桌面）与票 05（移动）绑定归位后，各域 interface 的 `Host` impl 由各自
+// 宿主的 bindgen 绑定调用——桌面 `src-tauri/src/plugin/*.rs`，移动
+// `bedcode-mobile/src-tauri/src/plugin/host_domains/`（域逻辑与 `Host` impl 同处）。
+// 内核侧唯一的绑定是 core 交集（`manager::runtime::core_binding`），本目录不重复。
+// 移动适配面：`ports`（端口词汇，双端常编译）。`http_engine` / `sql_guard` /
+// `bare_context` 三个 fork 垫片均已退役（执行本体上移能力域 crate / 零消费者 / 上下文合一）。**票 02 B5**：`context`（双端唯一宿主上下文，原
 // `bare_context` 已并入超集删除）与 `ports`（统一上下文 `ports`/`fs_auth` 槽的
-// trait 载体）**常编译**——桌面 / 移动 / 无 feature 三态都编译。其余 WIT 绑定域
-// 维持形态门控（随 T-03/04/05 迁宿主）。
+// trait 载体）**常编译**——桌面 / 移动 / 无 feature 三态都编译。其余域维持形态门控
+// （执行本体经桌面形态的单元执行器 / 回复道编排消费；移动侧对应面在宿主自报）。
 #[cfg(feature = "common-host")]
 pub mod api;
 #[cfg(feature = "common-host")]
@@ -93,21 +96,24 @@ mod wsl_fs;
 //
 // `http_engine` 已于 2026-10-10 票 05 退役（出站执行并入能力域 crate
 // `bedcode-server-http::plugin_binding::egress`；移动形态经
-// `runtime/bare/host_impl/http.rs` 薄转发）——宿主侧 `plugin.rs` 的对接解释_builder
-// 随同收口（再 re-export 会表现为「看起来能用」的假入口）。
+// `bedcode-mobile/src-tauri/src/plugin/host_domains/http.rs` 薄转发）——宿主侧
+// `plugin.rs` 的对接解释_builder 随同收口（再 re-export 会表现为「看起来能用」
+// 的假入口）。
 //
-// **票 02 B5**：`ports` 常编译（统一上下文槽位载体）；`sql_guard` 维持 bare 门控
-// （绑定层面，随 T-03/05 迁宿主）；`bare_context` 已删除（并入 `context` 超集）。
+// **票 02 B5**：`ports` 常编译（统一上下文槽位载体）；`bare_context` 已删除（并入
+// `context` 超集）；`sql_guard` 垫片随票 05 退役（零消费者）。
 
 pub mod ports;
-#[cfg(feature = "bare-host")]
-pub mod sql_guard;
+// `sql_guard` 垫片（原 `validate_sql_table_prefix` / `extract_table_names` 的落点）
+// 已随票 05（wasm-core-single-form，M6）删除：主库收归（2026-10-09）后它只剩
+// `column_to_json` 的一条 re-export，且**两侧均无消费者**（域实现直连共享核
+// `bedcode-host-api-core::database`）——留作垫片只会让「符号面在场」被误读为能力面。
 // 统一宿主上下文再导出：fork 面路径 `crate::host_api::WasmHostContext` 零改动
-// 解析（host_impl.rs / host_context_registry / test_support/bare.rs 等引用形态），
+// 解析（移动宿主 host_domains / test_support/bare.rs 等引用形态），
 // 桌面侧同路径亦可用（context 常编译化后双端同物）
 pub use context::WasmHostContext;
 // ports 端口符号集过 host_api 顶层（fork host_api.rs:24 同款清单）：
-// test_support/bare.rs 的 MockPorts impl / host_impl 域经此路径引用
+// test_support/bare.rs 的 MockPorts impl / 移动 host_domains 域经此路径引用
 pub use ports::{
     AuthEnginePort, ConnectionEnginePort, FsAuthGate, FsAuthOp, HostEnginePorts, PrimaryTarget,
     SafIoPort, UnimplementedPorts, WsReconnectPolicyPort, PORT_NOT_WIRED,
@@ -118,7 +124,7 @@ pub use ports::{
 /// 三域共用假端口（`sqlite_scaffold` 内的项是 `pub(super)`，即
 /// `pub(in wasm_core::host_api)`，故 `database::tests` / `storage::tests` 都够得着）
 /// 桌面装配面专属（common-host）：假端口实现 SqlitePorts（sqlite_ports 为
-/// common-host 模块，票 02 M12 语义边界——移动形态 db 域走 bare host_impl/db）。
+/// common-host 模块，票 02 M12 语义边界——移动形态 db 域走宿主侧 host_domains/db）。
 #[cfg(all(test, feature = "common-host"))]
 pub(crate) mod sqlite_scaffold;
 
@@ -246,8 +252,8 @@ pub(crate) mod tests {
 
     /// 构造全内存、无头（AppHandle=None）的宿主上下文
     ///
-    /// 与 wasm_runtime.rs 测试的 setup_wasm_runtime 等价，但不创建 WasmRuntime：
-    /// host_impl 测试只验证宿主能力实现本身，不加载 wasm 组件（免 wasmtime 依赖）
+    /// 与 `test_support::setup_wasm_runtime` 等价，但不创建 WasmRuntime：
+    /// 测试只验证宿主能力实现本身，不加载 wasm 组件（免 wasmtime 依赖）
     pub(crate) fn build_host_ctx() -> Arc<WasmHostContext> {
         let db = Database::new(&Path::new(":memory:")).expect("in-memory db");
         db.init_schema().expect("init schema");

@@ -189,8 +189,9 @@ where
 ///
 /// 与 [`block_on_async`] 的 ambient 兜底同 runtime，但**不要求** future/
 /// 输出满足 `'static`——仅同步驱动当前 future 并返回结果，不把 future
-/// 交给其它执行器接管。`run_guest_call` 在 `spawn_blocking` 线程驱动 tokio
-/// Mutex 锁获取用（借用闭包内 Arc，无法满足 `'static` 约束）。
+/// 交给其它执行器接管。`manager::host::call_mutex_blocking` 在
+/// `spawn_blocking` 阻塞线程上用它驱动 tokio Mutex 锁获取（借用闭包内 Arc，
+/// 无法满足 `'static` 约束）。
 ///
 /// 重入（本线程已在任一路桥内）不可恢复——借用式 future 无法搬去新线程，
 /// 直接嵌套 AMBIENT_RT.block_on 会得到 Tokio 难以阅读的

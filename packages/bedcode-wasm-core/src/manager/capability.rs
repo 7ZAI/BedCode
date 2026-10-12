@@ -6,10 +6,10 @@
 //! - 每个能力恰有一个提供者（二选一装配）：宿主 Rust 原语（缺省，现状直连）
 //!   或 WASM 系统组件实例（manifest `type: "system"` 的插件，激活时按组件
 //!   实际导出的同形接口注册）；
-//! - 应用插件的 import 调用经 Linker 进入宿主函数（host_impl/*），路由层
-//!   查询本注册表：命中系统组件提供者则 host-side 转发到该组件实例的
-//!   同形导出（组件间不共享内存，载荷在 WIT 类型边界序列化），否则走
-//!   宿主原语（现状路径）。
+//! - 应用插件的 import 调用经 Linker 进入宿主函数（桌面 `src-tauri/src/plugin/*`，
+//!   移动 `host_domains/`），路由层查询本注册表：命中系统组件提供者则 host-side
+//!   转发到该组件实例的同形导出（组件间不共享内存，载荷在 WIT 类型边界序列化），
+//!   否则走宿主原语（现状路径）。
 //!
 //! 故障自愈：系统组件调用 trap / 传输出错时，错误隔离为调用方的
 //! `Err(string)` 返回（不扩散到应用插件实例），同时该能力回落为宿主原语
@@ -186,7 +186,8 @@ const PROBE_ONLY_CAPABILITIES: &[(&str, &[&str])] = &[(CAP_AUTH_POLICY, &[EXPORT
 
 /// 能力提供者（二选一装配）
 enum CapabilityProvider {
-    /// 宿主 Rust 原语（host_impl/* 现状直连实现）
+    /// 宿主 Rust 原语（桌面 `src-tauri/src/plugin/*`、移动 `host_domains/`
+    /// 现状直连实现）
     HostPrimitive,
     /// WASM 系统组件实例（host-side 转发目标；窄端口，不知道调用模型）
     SystemComponent {
@@ -403,7 +404,7 @@ pub(crate) fn probe_exported_capabilities(instance: &Instance, store: &mut Store
         .collect()
 }
 
-// ==================== host-storage 转发（host_impl/storage.rs 调用） ====================
+// ==================== host-storage 转发（host_api/storage.rs 调用） ====================
 
 /// `host-storage.get` 路由：系统组件提供时转发并返回结果；宿主原语提供时
 /// 返回 None（调用方走现状路径）

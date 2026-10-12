@@ -7,8 +7,10 @@
 //! 签名」由本文件用桌面自有绑定 [`super::bindings`] 实现并注入。
 //!
 //! 生产装配：`PluginHost::new` → `WasmRuntime::set_guest_events`（与 monitor /
-//! peer_ctx_provider 同范式）。内核测试二进制不链宿主 lib，由 wasm-core 侧
-//! `TestGuestEvents` 替身承担（逐字同语义）。
+//! peer_ctx_provider 同范式）。**票 04 起这是唯一实现**：内核侧测试替身
+//! （`TestGuestEvents`）随全 world 绑定一并删除——内核缺省 `UnwiredGuestEvents`
+//! 派发即 fail-visible；宿主集成测试经 `tests/support/mod.rs::setup_wasm_runtime`
+//! 注入本实现（与生产同一份）。
 
 use bedcode_wasm_core::manager::runtime::guest_events::GuestEventDispatcher;
 use bedcode_wasm_core::manager::runtime::WasmPluginState;
@@ -21,7 +23,7 @@ use super::bindings;
 pub struct DesktopGuestEvents;
 
 /// 观察型回调的统一收口：guest 自报失败记 warn 后返回 Ok（不拖垮整条事件分发链），
-/// trap 上抛（那是宿主侧问题）。口径与内核 `TestGuestEvents` 逐字一致。
+/// trap 上抛（那是宿主侧问题）。
 fn settle(outcome: std::result::Result<std::result::Result<(), String>, wasmtime::Error>, export: &str) -> bedcode_wasm_core::Result<()> {
     match outcome {
         Ok(Ok(())) => Ok(()),

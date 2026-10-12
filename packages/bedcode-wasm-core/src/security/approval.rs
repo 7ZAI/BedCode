@@ -157,10 +157,10 @@ fn parse_approvals(value: Option<serde_json::Value>) -> crate::Result<HashMap<St
 // 哈希排除的运行时数据文件（非安装内容）：**根级**私有 SQLite 库及其边车文件
 //
 // 插件私有 SQLite 库位于插件安装目录内（`app_data/plugins/<id>/plugin.db`，
-// 见 `wasm_runtime.rs` 的私有库路径装配），批准之后运行期会持续变化；
-// 把它计入哈希会让「批准 → 启用 → 停用 → 再启用」每次都判成 HashMismatch
-// 并撤销批准，插件再也起不来。排除的只是**数据面**：plugin.json / index.js /
-// *.wasm 等代码面仍在哈希内，替换代码依然会被抓住。
+// 见 `host_api::context` 的私有库路径装配与移动侧 `plugin_db` 布局），批准之后
+// 运行期会持续变化；把它计入哈希会让「批准 → 启用 → 停用 → 再启用」每次都
+// 判成 HashMismatch 并撤销批准，插件再也起不来。排除的只是**数据面**：
+// plugin.json / index.js / *.wasm 等代码面仍在哈希内，替换代码依然会被抓住。
 //
 // 排除规则按**根相对路径**精确匹配（S-08）：`rel == "plugin.db"` 或
 // `rel.starts_with("plugin.db-")`——只有根级的库与边车文件豁免，

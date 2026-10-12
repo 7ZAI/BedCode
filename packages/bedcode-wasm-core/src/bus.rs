@@ -697,9 +697,10 @@ mod tests {
 
     /// 测试用帧投递端口工厂：真实能力域窄端口（绑定传入的总线、无权限管理器）
     ///
-    /// 生产路径这份由宿主 adapter 喂入（票 02 批次 03）；内核测试二进制里 adapter 仍在，
-    /// 直接复用其 `from_bus` 构造。桌面装配面（common-host）专属——HostBusPort /
-    /// BusBoundWsPorts 属桌面总线插座词汇（票 02 M3 语义边界：随 T-04 迁宿主）。
+    /// 生产路径这份由宿主 adapter 喂入（票 02 批次 03）；内核测试二进制里
+    /// 直接以 [`BusBoundWsPorts::new`] 构造。桌面装配面（common-host）专属——
+    /// HostBusPort / BusBoundWsPorts 属桌面总线插座词汇（票 02 M3 语义边界：
+    /// 随 T-04 迁宿主）。
     #[cfg(feature = "common-host")]
     fn test_ws_ports_factory() -> Arc<
         dyn Fn(&Arc<MessageBus>) -> Arc<dyn bedcode_server_websocket::plugin_binding::ports::WsPorts>

@@ -1,9 +1,24 @@
 //! SDK 插件组件往返（api-call / binary bus）
 //!
-//! 自 `wasm_runtime.rs` 的 `mod tests` 拆出（共享脚手架在 `mod tests`，
-//! 经 `use super::*` 可见）；fixture 互斥与产物构建语义不变。
+//! 自 wasm-core `manager/runtime/common/tests/sdk_e2e.rs` 迁入（票 04 绑定归位）：
+//! wasm-core 不再持有全 world 绑定后，其测试二进制无法实例化 SDK 夹具（夹具静态
+//! import 全 world）。共享脚手架从 wasm-core 的 `mod tests` 改为 `mod support`；
+//! 夹具读取从 `build_sdk_test_component`（构建）改为 `sdk_fixture_artifact_bytes`
+//! （只读，产物由 wasm-core fixture_keeper 构建）。用例本体逐字保留。
 
-use super::*;
+mod support;
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use tokio::sync::{Mutex, RwLock};
+
+use support::*;
+
+/// 直连运行时的夹具属主 id（`setup_wasm_runtime` 的权限授予面固定按它装配；
+/// 需要 guest 内 storage 往返的用例必须用它——见 `component_e2e.rs` 同名常量注释）
+const TEST_PLUGIN_ID: &str = "com.bedcode.test";
+
 /// SDK 组件插件完整往返：真实 SDK（wasm_entry! 宏 + WasmHost）产物的组件
 /// 加载、ABI 协商、生命周期、WasmHost 各 trait 经组件 import 的能力往返
 #[test]
@@ -11,7 +26,7 @@ use super::*;
 fn test_sdk_plugin_component_roundtrip() {
     let (wasm_runtime, host_ctx) = setup_wasm_runtime();
     let component = wasm_runtime
-        .compile_component(&build_sdk_test_component())
+        .compile_component(&sdk_fixture_artifact_bytes("sdk"))
         .expect("compile SDK test component");
 
     let rt = tokio::runtime::Runtime::new().unwrap();
@@ -97,7 +112,7 @@ fn test_sdk_plugin_api_call_roundtrip() {
 
     let (wasm_runtime, host_ctx) = setup_wasm_runtime();
     let component = wasm_runtime
-        .compile_component(&build_sdk_test_component())
+        .compile_component(&sdk_fixture_artifact_bytes("sdk"))
         .expect("compile SDK test component");
 
     // 登记目标插件声明的 api（等价 PluginHost::activate_plugin 的登记）
@@ -229,7 +244,7 @@ fn test_sdk_plugin_binary_bus_roundtrip() {
 
     let (wasm_runtime, host_ctx) = setup_wasm_runtime();
     let component = wasm_runtime
-        .compile_component(&build_sdk_test_component())
+        .compile_component(&sdk_fixture_artifact_bytes("sdk"))
         .expect("compile SDK test component");
 
     let rt = tokio::runtime::Runtime::new().unwrap();

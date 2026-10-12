@@ -1,17 +1,34 @@
 //! Component Model 基础往返与 events-ws 导出探测
 //!
-//! 自 `wasm_runtime.rs` 的 `mod tests` 拆出（共享脚手架在 `mod tests`，
-//! 经 `use super::*` 可见）；fixture 互斥与产物构建语义不变。
+//! 自 wasm-core `manager/runtime/common/tests/component_e2e.rs` 迁入（票 04 绑定
+//! 归位）：wasm-core 不再持有全 world 绑定后，其测试二进制无法实例化 SDK 夹具
+//! （夹具静态 import 全 world）。共享脚手架从 wasm-core 的 `mod tests` 改为
+//! `mod support` + 本文件的用例段；夹具读取从 `build_sdk_fixture`（构建）改为
+//! `sdk_fixture_artifact_bytes`（只读，产物由 wasm-core fixture_keeper 构建）。
+//! 用例本体逐字保留。
 
-use super::*;
+mod support;
+
+use std::sync::Arc;
+
+use bedcode_desktop_lib::wasm_core::host_api::context::StorageScope;
+use support::*;
+
+/// 直连运行时的夹具属主 id。
+///
+/// 刻意**不用** `TEST_WASM_PLUGIN_ID`（`com.bedcode.sdk-test`，宿主装配路径用）：
+/// `setup_wasm_runtime` 的权限授予面固定按 `com.bedcode.test` 装配，而本文件的
+/// 用例全部由 guest 内经 host-storage 读写（`test.echo` 的 `stored` / 私有库往返）——
+/// 换 id 会因权限未授予整条命令退化为 `{"error": ...}`（首版迁移即踩此坑）。
+const TEST_PLUGIN_ID: &str = "com.bedcode.test";
+
 /// 组件完整往返：实例化、ABI 协商、生命周期、命令（guest 内 import 往返）、
-/// 终端钩子、事件回调、上传钩子、manifest
+/// 事件回调、上传钩子、manifest
 #[test]
-
 fn test_component_roundtrip() {
     let (wasm_runtime, host_ctx) = setup_wasm_runtime();
     let component = wasm_runtime
-        .compile_component(&build_test_component())
+        .compile_component(&sdk_fixture_artifact_bytes("sdk"))
         .expect("compile test component");
 
     let rt = tokio::runtime::Runtime::new().unwrap();
@@ -20,7 +37,7 @@ fn test_component_roundtrip() {
     rt.block_on(async {
         // 预写 storage key：验证 guest 内 host_storage import 读回（JSON 值往返）
         host_ctx
-            .storage
+            .storage()
             .set(TEST_PLUGIN_ID, "component-test-key", serde_json::json!({"k": "v"}))
             .await
             .expect("preset storage key");
@@ -110,20 +127,13 @@ fn test_component_roundtrip() {
 ///
 /// - SDK 产物（`wasm_entry!` 无条件导出 `events-ws`）→ 探测命中：
 ///   `on_ws_frame` 投递成功（`Ok(true)`），客户端域与服务端域两条回调都可达。
-///
-/// **覆盖缺口（原手写绑定降级分支已删）**：本测试原先还验「未导出 `events-ws` 的旧产物
-/// 探测为 None → 降级 `Ok(false)`、不影响加载与其余导出」。该分支随
-/// `plugin-component-test`（手写 wit-bindgen 夹具，唯一能造出缺可选导出产物的载体）
-/// 一并删除，SDK 的 `wasm_entry!` 无条件导出全部 interface，造不出这种产物。
-/// 也就是说「旧插件产物仍能加载、可选导出缺失时优雅降级」这条向后兼容保证**目前无测试覆盖**。
 #[test]
-
 fn test_ws_events_export_probe_and_dispatch() {
-    use crate::bus::WsFrameDispatch;
+    use bedcode_wasm_core::bus::WsFrameDispatch;
 
     let (wasm_runtime, host_ctx) = setup_wasm_runtime();
     let sdk_component = wasm_runtime
-        .compile_component(&build_sdk_test_component())
+        .compile_component(&sdk_fixture_artifact_bytes("sdk"))
         .expect("compile SDK test component");
 
     let rt = tokio::runtime::Runtime::new().unwrap();

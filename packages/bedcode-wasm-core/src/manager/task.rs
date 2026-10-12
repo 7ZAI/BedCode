@@ -1,8 +1,8 @@
 //! host-task 执行引擎（core-task，ABI v20）
 //!
 //! 宿主专用 OS 线程池 + 任务注册表：插件把「单元操作计划」（plan）交给宿主，
-//! 池线程真并行执行既有宿主原语（`host_impl/fs`·`process`·`http` 直调，零新
-//! DTO；入口权限 `task:run` 由 `host_impl/task.rs` 仲裁，执行时另过 kind 对应
+//! 池线程真并行执行既有宿主原语（`fs`·`process`·`http` 域直调，零新
+//! DTO；入口权限 `task:run` 由宿主侧 task 域实现仲裁，执行时另过 kind 对应
 //! 域权限门）。本模块只管**执行与事件管道**，不接触 WASM / Store——单元执行体
 //! 为普通 std 阻塞函数（内部走 `block_on_async` 的 ambient 分支，F3），从机制
 //! 上杜绝重入（spec §8.1：池线程永不回调进插件，回调只经消费派发任务）。
@@ -431,7 +431,7 @@ impl TaskEngine for CoreTaskEngine {
     }
 }
 
-// ==================== 对外 API（host_impl/task.rs 入口） ====================
+// ==================== 对外 API（宿主侧 task 域实现入口） ====================
 
 /// 登记任务并立即返回 `task-<hex>`（`submit`）：started 事件 + 池执行 + 回调
 pub(crate) fn submit(host_ctx: Arc<WasmHostContext>, owner: &str, plan_json: &str) -> Result<String, String> {
@@ -1052,8 +1052,9 @@ fn job_for_drop_counting(owner: &str, event: &serde_json::Value) -> Option<Arc<J
     }
 }
 
-/// 消费派发任务：串行取事件 → `PluginServices::dispatch_task_event`（block_on_async
-/// + with_wasm_plugin_call，F4 模式）。channel 关闭（purge 移除 tx）后退出。
+/// 消费派发任务：串行取事件 → `PluginServices::dispatch_task_event`
+/// （同步门面；内部经宿主 `call_guest_blocking` 加锁调用，F4 模式）。
+/// channel 关闭（purge 移除 tx）后退出。
 async fn consumer_loop(mut rx: tmpsc::Receiver<EventEntry>) {
     while let Some(entry) = rx.recv().await {
         let services = match entry.host_ctx.services().await {
@@ -1377,7 +1378,7 @@ mod tests {
         }
     }
 
-    /// 测试构造 helper：无头 WasmHostContext（与 host_impl tests 同源）
+    /// 测试构造 helper：无头 WasmHostContext（与 `host_api::tests` 同源）
     fn build_test_ctx() -> Arc<WasmHostContext> {
         crate::host_api::tests::build_host_ctx()
     }

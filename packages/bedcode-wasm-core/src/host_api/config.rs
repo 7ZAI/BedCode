@@ -178,7 +178,7 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
-    /// 测试宿主上下文（内嵌内存库 + 真实 schema；与 host_impl 其余模块同一构造）
+    /// 测试宿主上下文（内嵌内存库 + 真实 schema；与 host_api 其余模块同一构造）
     fn host_ctx() -> Arc<WasmHostContext> {
         super::super::tests::build_host_ctx()
     }
@@ -237,10 +237,11 @@ mod tests {
         assert!(!value.is_empty());
     }
 
-    /// network.port：服务器未启动时回退默认端口，仍应返回合法端口号
+    /// network.port：读取宿主入站服务器**运行态**实际端口（非配置默认值）
     ///
     /// ServerSupervisor 为 LazyLock 全局单例（测试进程内默认端口 8765），
     /// 不断言具体值（其它测试可能已改变端口），只验证语义：端口 > 0
+    /// （服务器未启动时是本域显性报错路径——fail-visible，不回退默认端口）
     #[tokio::test]
     async fn config_get_network_port_ok() {
         let value = config_get(host_ctx().as_ref(), host_ctx().ports().as_ref(), "test-plugin", "network.port")

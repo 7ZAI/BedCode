@@ -24,7 +24,7 @@ use std::sync::Mutex;
 ///
 /// 结构体字面量构造 PluginHost：字段私有但 tests 模块与 host.rs 同属一个
 /// 模块树，可访问。所有子系统均用真实实现 + 内存 SQLite，仅 Tauri 相关
-/// 能力降级（与 wasm_runtime.rs 测试同一策略）。
+/// 能力降级（与 `test_support::setup_wasm_runtime` 测试同一策略）。
 pub(super) async fn setup_host() -> PluginHost {
     // AppConfig 全局初始化（与 wasm_runtime 测试同策略；重复 init 幂等）
     static CONFIG_INIT: std::sync::Once = std::sync::Once::new();
@@ -96,13 +96,9 @@ pub(super) async fn setup_host() -> PluginHost {
     }
 }
 
-/// 构造无头测试宿主并包装为 `Arc`（生产 `PluginHost::new` 的装配顺序：
-/// 宿主就绪后立即绑定属主失败端口——`event-loop` 实例的 trap 恢复路径依赖它）
-pub(super) async fn setup_host_shared() -> Arc<PluginHost> {
-    let host = Arc::new(setup_host().await);
-    host.owner_sink.bind(&host);
-    host
-}
+// `setup_host_shared`（`Arc<PluginHost>` + 手工 `owner_sink.bind`）随票 04 夹具用例
+// 迁宿主一并删除：宿主侧经 `PluginHost::new` 真实装配路径构造（该路径本身已按生产
+// 顺序绑定属主失败端口），不再需要结构体字面量 scaffold。
 
 /// 构造一个最小 LoadedPlugin（manifest 含 storage + terminal:input 权限）
 pub(super) fn make_plugin(id: &str, source: PluginSource, state: PluginState) -> LoadedPlugin {

@@ -1,16 +1,17 @@
-//! Component Model 支持（迁移阶段 C：唯一形态）
+//! Component Model 壳（迁移阶段 C：唯一形态）
 //!
-//! 对应 docs/knowledge/wasmtime-component-migration.md：
-//! - 契约定义在 `packages/plugin-sdk-desktop/rust/wit/bedcode.wit`
-//!   （单一事实来源），本模块用 `bindgen!` 生成绑定：
-//!   - import 接口 → `Host` trait，由本模块对 `WasmPluginState` 实现
-//!   - export 接口 → `exports::bedcode::plugin::*::Guest`，宿主侧调用组件
-//! - 已接线 14 组 import 接口（host-app / host-storage / host-log / host-config /
-//!   host-terminal / host-database / host-plugin-database / host-session /
-//!   host-timer / host-events / host-http / host-fs / host-bus /
-//!   host-peer / host-process），完整 `plugin` world 可直接实例化；
-//!   接线模式见本文件 `add_to_linker` 与各 `impl ... Host` 块
-//! - 宿主能力实现层在 `host_impl`（阶段 C 后仅此一层，core 胶水已删）
+//! **票 04 起本模块不持有任何 WIT 绑定**（原全 world `bindgen!` 已删，其最后
+//! 消费者是内核测试替身，随夹具用例迁宿主一并退役）——桌面绑定面归宿主
+//! `src-tauri/src/plugin/bindings.rs`（cap 域 `Host` impl + 导出调用），core 交集
+//! 8 域归 `manager/runtime/core_binding.rs`（绑契约真源 `wit/core.wit`）。
+//! 本文件只剩**与 WIT 无关的实例化机制**：
+//! - linker 组装：core 本地表（`core_binding`）+ `inventory` 自报能力模块 + WASI p2/p3
+//!   （WASI 实现与开关判据在核心模块 [`crate::manager::runtime::wasi`]，本壳只调用）；
+//! - [`LoadedWasmPlugin`]：Store + Instance 所有权、导出调用骨架（`command` /
+//!   `lifecycle` / `manifest` 走 core 绑定，`events` 走宿主注入的
+//!   [`GuestEventDispatcher`]）、`abi` / 可选导出的原生 `TypedFunc` 探测；
+//! - WASI 预打开解析与装配已迁 [`crate::manager::runtime::wasi`]（用户裁决
+//!   2026-10-12：WASI 面住核心、双端同源、默认全开）。
 //!
 //! ## 与 core module 路径的差异（历史，见 WIT 注释）
 //!
@@ -20,54 +21,23 @@
 //!   组件形态暂无传递通道，见 wit/bedcode.wit 的 host-log 注释）
 //! - 内存搬运由绑定层处理，无需 (ptr,len) 配对与 alloc/dealloc
 
-#[cfg(test)]
-use super::plugin_debug_mode;
 use super::{StoreSpec, WasmHostContext, WasmPluginState};
-#[cfg(test)]
-use crate::config::StoreLimits;
-// `host_ctx()` 下转型访问器：仅内核测试替身（`host-api-call` / 桌面扩展三域）需要
-// ——生产注册来自宿主自报，壳内无 impl 消费它
-#[cfg(test)]
-use crate::host_api::context::HostCtxOf;
+use crate::config::WasiConfig;
 use crate::manager::runtime::engine;
+/// WASI 装配面（p2/p3 注册 + 预打开上下文）——核心常编译，双端同源
+/// （用户裁决 2026-10-12；本壳不再自持任何 WASI 实现，只剩调用）
+use crate::manager::runtime::wasi;
 // guest 事件派发契约面（票 03 / ADR 0022）：`events` 导出双端词汇不同、且带
 // `result` 返回（原生 TypedFunc 表达不了），调用契约由宿主实现并注入，本壳只转发。
 use crate::manager::runtime::guest_events::GuestEventDispatcher;
-
-/// `add_to_linker` 的 getter 形态别名（`HasSelf<T>` 让 getter 返回 `&mut T`）
-///
-/// 桌面 cap interface 的注册在 `#[cfg(test)]` 段（生产注册来自宿主自报，见
-/// `add_to_linker` 第二段），故别名需在模块级可见而非只作函数内局部。
-#[cfg(test)]
-type D = wasmtime::component::HasSelf<WasmPluginState>;
 use crate::monitor::LifecycleEvent;
 use crate::runtime_util::block_on_async;
 use crate::AppError;
 use bedcode_plugin_api::abi;
 use crate::manifest::WasiPreopenDir;
 use std::sync::Arc;
-use wasmtime::component::{bindgen, Component, Instance, Linker};
+use wasmtime::component::{Component, Instance, Linker};
 use wasmtime::Store;
-use wasmtime_wasi::{p2, p3, FsPerms, WasiCtxBuilder};
-
-bindgen!({
-    // 票 03：端 `wit/` 是生成物目录（同 package 拼装），path 指目录让 wit-bindgen
-    // 以 push_dir 加载合成 package（bedcode.wit 含 include 组合，单文件不可解析）。
-    path: "../../bedcode-desktop/packages/plugin-sdk-desktop/rust/wit",
-    world: "plugin",
-    // 票 02 宿主 async 化门禁：全部导出绑定生成 async 变体（call_* → async fn，
-    // 内部走 TypedFunc::call_async）。wasip3 组件实例化后 Store 为 async-required，
-    // 同步 call 会报 "store configuration requires that `*_async` functions are used"；
-    // 统一 async 化让既有 wasip2/unknown-unknown 插件与 wasip3 走同一条调用路径
-    // （同步组件在 async 路径下行为等价，见 /tmp/wasip3-probe 场景 1/4 实证）。
-    exports: { default: async },
-});
-
-// ==================== Host trait 实现（import 接口） ====================
-//
-// 每个接口对应 host_functions/ 中一个功能域的逻辑层函数；
-// 返回值映射：WIT `result<T, string>` → `Result<T, String>`，错误内容为宿主侧
-// 可读消息，跨 wasm 边界后由调用方（本模块方法）转为 AppError
 
 
 // v27（票 10 删除的 `impl bedcode::plugin::host_terminal::Host`）：
@@ -232,7 +202,13 @@ fn verify_host_module_registry(whitelist: &[&str]) -> crate::Result<bedcode_host
 /// 2. **能力模块自动注册**：迁出的域经 `inventory` 自报，这里一次遍历装完。
 ///
 /// 每个接口一个 `add_to_linker`（`HasSelf<T>` 让 getter 返回 `&mut T`）。
-pub(crate) fn add_to_linker(linker: &mut Linker<WasmPluginState>) -> crate::Result<()> {
+///
+/// `wasi_cfg`：WASI 面开关（`CoreConfig::wasi`，默认全开）。注册在此**一次固化**
+/// ——运行期 `set_config` 改不动已建 linker（见 `WasmRuntime::set_config` 的 warn）。
+pub(crate) fn add_to_linker(
+    linker: &mut Linker<WasmPluginState>,
+    wasi_cfg: &WasiConfig,
+) -> crate::Result<()> {
     // 第一段：core 交集 8 域（票 03 Option A 收口进 `core_binding`——双端唯一一份，
     // 绑契约真源 `wit/core.wit` 的 `world core`，不经端生成物）。本壳不再逐行列举。
     crate::manager::runtime::core_binding::add_to_linker(linker)?;
@@ -241,194 +217,14 @@ pub(crate) fn add_to_linker(linker: &mut Linker<WasmPluginState>) -> crate::Resu
     host_module_registry()?
         .install_all(linker)
         .map_err(|e| AppError::Plugin(format!("host capability module install failed: {e}")))?;
-    // WASI preview2（wasm32-wasip2 插件经 std::fs 直接访问文件所需的全部接口：
-    // clock/random/cli/filesystem/io/sockets）。
-    // 不导入 wasi 的插件（unknown-unknown 既有产物 / 未来无 wasi 需求者）不受影响——
-    // linker 中无对应 import 的注册是惰性的。
-    // 票 02：同步 adapter（add_to_linker_sync）在 async store 下调用线进入
-    // tokio runtime 上下文后其内部 ambient block_on 会重入 panic
-    // （"Cannot start a runtime from within a runtime"，实证 wasi preopen e2e），
-    // 改使 async adapter（fiber 内原生 await，与 wasip3 p3 同机制）。
-    p2::add_to_linker_async(linker)
-        .map_err(|e| AppError::Plugin(format!("Failed to register WASI preview2 interfaces: {}", e)))?;
-    // WASI 0.3（wasm32-wasip3 插件）：p3 模块提供 wasi:cli@0.3.0 / clocks / random /
-    // filesystem / sockets，接口版本与 p2（wasi:cli@0.2.0 等）不同名可共存；
-    // 内部以 func_wrap_async 注册（CM_ASYNC 并发模型），仅 wasip3 组件消费，
-    // 既有插件不导入 wasi0.3 则注册惰性无效。
-    p3::add_to_linker(linker)
-        .map_err(|e| AppError::Plugin(format!("Failed to register WASI 0.3 (p3) interfaces: {}", e)))?;
-    // 内核测试替身（票 02 批次 05，**仅内核测试二进制**）：SDK 夹具经互调 client
-    // 静态 import `host-api-call`，WIT impl 迁宿主后本二进制不再注册该 interface
-    // ⇒ 夹具实例化失败。替身把 guest 调用原样转发给**仍留内核的编排**（
-    // `host_api::api::api_call`，caller = 插件 id），与宿主 `plugin/api_call.rs`
-    // 的薄转发逐字同语义。生产二进制不含 cfg(test) 分支——宿主薄转发是唯一
-    // 注册来源（与 `test_support::kernel_test_domain_ports` 同范式同隔离保证）。
-    #[cfg(test)]
-    bedcode::plugin::host_api_call::add_to_linker::<WasmPluginState, D>(linker, |s| s)
-        .map_err(|e| AppError::Plugin(format!("Failed to register component host interface: {}", e)))?;
-    // 内核测试替身（票 02 批次 06，**仅内核测试二进制**）：v36 切片后 SDK 夹具
-    // 静态 import 三个桌面扩展 interface（host-fs-desktop / host-platform-desktop /
-    // host-events-desktop），其 WIT impl 已迁宿主 ⇒ 本二进制不再注册 ⇒ 夹具
-    // 实例化失败。替身语义 = headless 显性拒绝（引擎测试不触发调用；sdk_e2e 的
-    // `test_notify` 断言无头上下文报错文案含 headless/app_handle，见各 impl）。
-    // 生产二进制不含 cfg(test) 分支——宿主 plugin/{fs,platform,events}.rs 是唯一
-    // 注册来源（与 host-api-call 替身同范式同隔离保证）。
-    #[cfg(test)]
-    bedcode::plugin::host_events_desktop::add_to_linker::<WasmPluginState, D>(linker, |s| s)
-        .map_err(|e| AppError::Plugin(format!("Failed to register component host interface: {}", e)))?;
-    #[cfg(test)]
-    bedcode::plugin::host_fs_desktop::add_to_linker::<WasmPluginState, D>(linker, |s| s)
-        .map_err(|e| AppError::Plugin(format!("Failed to register component host interface: {}", e)))?;
-    #[cfg(test)]
-    bedcode::plugin::host_platform_desktop::add_to_linker::<WasmPluginState, D>(linker, |s| s)
-        .map_err(|e| AppError::Plugin(format!("Failed to register component host interface: {}", e)))?;
+    // 第三段：WASI p2/p3（双端同源的核心装配面，用户裁决 2026-10-12；实现与判据见
+    // `manager::runtime::wasi::add_to_linker`——含「同步 adapter 在 async store 下
+    // 重入 panic ⇒ 用 async adapter」的实证注释）。
+    wasi::add_to_linker(linker, wasi_cfg)?;
+    // 票 04：本函数至此不再有 `#[cfg(test)]` 分支——cap 域（含桌面扩展三接口）的
+    // `Host` impl 全在宿主（`src-tauri/src/plugin/`），内核测试二进制经宿主集成
+    // 测试覆盖夹具功能态（原四个内核测试替身已随用例迁宿主删除）。
     Ok(())
-}
-
-/// 内核测试替身（**仅 cfg(test)**）：host-api-call 的 WIT impl——转发内核编排。
-///
-/// 为什么不是「回流」：本 impl 只存在于内核测试二进制（cfg(test) 不进生产），
-/// 让 30+ 个以 SDK 夹具为载体的引擎测试（sdk_e2e / owner_e2e / engine_limits /
-/// component 往返）在 host-api-call 迁宿主后照常实例化夹具；编排本体
-/// （`host_api/api.rs`）本就留内核，替身与宿主薄转发消费同一条编排、零第二实现
-/// 语义。若编排迁出内核（未来批次），本替身与那些测试须同批裁决去向。
-#[cfg(test)]
-impl bedcode::plugin::host_api_call::Host for WasmPluginState {
-    fn call(&mut self, request_topic: String, payload_json: String, timeout_ms: u64) -> Result<String, String> {
-        crate::host_api::api::api_call(
-            self.host_ctx(),
-            self.host_ctx(),
-            self.host_ctx(),
-            &self.plugin_id,
-            &request_topic,
-            &payload_json,
-            timeout_ms,
-        )
-    }
-}
-
-// ==================== 内核测试替身：guest 事件派发（仅 cfg(test)） ====================
-//
-// 生产派发器由**桌面宿主**实现并注入（票 03 / ADR 0022：`events` 导出双端词汇不同、
-// 带 `result` 返回无法原生探测，故内核不持有其绑定）。内核测试二进制不链宿主 lib，
-// 因此在此用本文件已有的全 world 绑定提供等价实现——与 `host-api-call` /
-// `host-{events,fs,platform}-desktop` 三个替身同一范式、同一隔离保证
-//（生产二进制不含 `cfg(test)` 分支）。
-//
-// 行为口径与生产逐字一致：guest 自报失败记 warn 后返回 Ok（事件投递是
-// fire-and-forget，不让单个处理器失败拖垮整条分发链），trap 上抛。
-pub(crate) struct TestGuestEvents;
-
-impl GuestEventDispatcher for TestGuestEvents {
-    fn on_message(
-        &self,
-        store: &mut Store<WasmPluginState>,
-        instance: Instance,
-        topic: &str,
-        sender: &str,
-        payload_json: &str,
-    ) -> crate::Result<()> {
-        let exports = Plugin::new(&mut *store, &instance)
-            .map_err(|e| AppError::Plugin(format!("WASM component exports access failed: {}", e)))?;
-        let events = exports.bedcode_plugin_events();
-        match block_on_async(events.call_on_message(&mut *store, topic, sender, payload_json)) {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(msg)) => {
-                tracing::warn!("WASM on_message() failed: {}", msg);
-                Ok(())
-            }
-            Err(e) => Err(engine::trapped(store, "on_message", e)),
-        }
-    }
-
-    fn on_process_done(
-        &self,
-        store: &mut Store<WasmPluginState>,
-        instance: Instance,
-        payload_json: &str,
-    ) -> crate::Result<()> {
-        let exports = Plugin::new(&mut *store, &instance)
-            .map_err(|e| AppError::Plugin(format!("WASM component exports access failed: {}", e)))?;
-        let events = exports.bedcode_plugin_events();
-        match block_on_async(events.call_on_process_done(&mut *store, payload_json)) {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(msg)) => {
-                tracing::warn!("WASM on_process_done() failed: {}", msg);
-                Ok(())
-            }
-            Err(e) => Err(engine::trapped(store, "on_process_done", e)),
-        }
-    }
-}
-
-// ==================== 内核测试替身：v36 切片桌面扩展三接口（仅 cfg(test)） ====================
-//
-// 票 02 批次 06 把四个交集接口的桌面独有函数拆为新 interface 并迁宿主（
-// `src-tauri/src/plugin/{fs,platform,events}.rs`；`abi-form` 是 guest 导出：
-// SDK 宏按新契约导出，宿主 verify_abi 读取，`abi` 本体也已只有 version）。内核
-// 测试二进制不再注册这三个扩展 interface ⇒ SDK 夹具（import 整个 world）在内核
-// 测试实例化即失败。替身与 host-api-call 替身同范式：**仅 cfg(test) 存在**，
-// 生产二进制不含 ⇒ 宿主 plugin/*.rs 的真实现是唯一注册来源（隔离保证见
-// `test_support::kernel_test_domain_ports`）。
-//
-// 语义：headless 显性拒绝。桌面扩展在无头内核测试中不可用是**环境事实**（无
-// AppHandle / 无宿主平台依赖），不是伪装可用；sdk_e2e 的 `test_notify` 断言
-// 无头上下文报错文案含 headless/app_handle，故 `notify` 替身按生产 headless
-// 文案逐字返回（`host_api/events.rs` 旧 notify 的同一文案）。
-
-#[cfg(test)]
-impl bedcode::plugin::host_events_desktop::Host for WasmPluginState {
-    fn notify(&mut self, title: String, body: String) -> Result<(), String> {
-        // 与生产宿主 headless 路径同一文案：sdk_e2e 断言 error 含 headless / app_handle
-        let _ = (title, body);
-        Err("notify error: app_handle not available in headless context".to_string())
-    }
-}
-
-#[cfg(test)]
-impl bedcode::plugin::host_fs_desktop::Host for WasmPluginState {
-    fn read_dir(&mut self, path: String) -> Result<String, String> {
-        Err(format!(
-            "fs error: read dir '{}' failed: host-fs-desktop not registered in kernel test binary",
-            path
-        ))
-    }
-
-    fn canonicalize(&mut self, path: String) -> Result<Option<String>, String> {
-        Err(format!(
-            "fs error: canonicalize '{}' failed: host-fs-desktop not registered in kernel test binary",
-            path
-        ))
-    }
-
-    fn stat(&mut self, path: String) -> Result<Option<String>, String> {
-        Err(format!(
-            "fs error: stat '{}' failed: host-fs-desktop not registered in kernel test binary",
-            path
-        ))
-    }
-}
-
-#[cfg(test)]
-impl bedcode::plugin::host_platform_desktop::Host for WasmPluginState {
-    fn pick_folders(&mut self) -> Result<String, String> {
-        Err("platform unavailable in headless context (no app_handle)".to_string())
-    }
-
-    fn wsl_distros(&mut self) -> Result<String, String> {
-        Err("wsl distro list failed: host-platform-desktop not registered in kernel test binary".to_string())
-    }
-
-    fn local_ipv4_addresses(&mut self) -> Result<String, String> {
-        Err("local ipv4 list failed: host-platform-desktop not registered in kernel test binary".to_string())
-    }
-
-    fn reveal_in_dir(&mut self, path: String) -> Result<(), String> {
-        Err(format!(
-            "reveal failed: host-platform-desktop not registered in kernel test binary (path: {})",
-            path
-        ))
-    }
 }
 
 // ==================== 组件插件实例 ====================
@@ -504,6 +300,9 @@ impl LoadedWasmPlugin {
     ///
     /// 与 core 路径相同的防护：资源限制、燃料看门狗、ABI 版本协商
     /// （组件必须声明 form=1，版本号语义不变）
+    ///
+    /// `wasi_cfg`：WASI 面开关（`CoreConfig::wasi`）——关时不给预打开能力
+    /// （空上下文），与「无声明」同形（装配真源 `manager::runtime::wasi`）。
     pub(crate) fn new(
         engine: &wasmtime::Engine,
         component_linker: &Linker<WasmPluginState>,
@@ -511,12 +310,14 @@ impl LoadedWasmPlugin {
         plugin_id: &str,
         host_ctx: Arc<WasmHostContext>,
         declared_preopen_dirs: &[WasiPreopenDir],
+        wasi_cfg: &WasiConfig,
         spec: StoreSpec,
         guest_events: Arc<dyn GuestEventDispatcher>,
     ) -> crate::Result<Self> {
         // WASI 上下文：按 manifest 声明（wasiPreopenDirs，展开+授权过滤）预打开
-        // 目录 /data…；无声明/未授权时为空上下文
-        let (wasi_ctx, preopened_dirs) = build_wasi_ctx(&host_ctx, plugin_id, declared_preopen_dirs);
+        // 目录 /data…；无声明/未授权/配置关闭时为空上下文
+        let (wasi_ctx, preopened_dirs) =
+            wasi::build_ctx(&host_ctx, plugin_id, declared_preopen_dirs, wasi_cfg);
         let state = WasmPluginState::new(plugin_id.to_string(), host_ctx, wasi_ctx, spec);
         // Store 装配（limiter 接线 + 首调用燃料注入）走引擎模块的唯一一份
         let mut store = engine::new_store(engine, state)?;
@@ -790,7 +591,7 @@ impl LoadedWasmPlugin {
     /// 能力导出调用（core-plugin-manager 装配框架）：按名动态获取组件的
     /// 能力接口导出函数并调用，燃料预算续费语义同 [`Self::exports`]。
     ///
-    /// 宿主侧转发专用：能力注册表命中系统组件提供者时，host_impl 宿主函数
+    /// 宿主侧转发专用：能力注册表命中系统组件提供者时，宿主侧域函数
     /// 把应用插件的 import 调用经此方法转发到提供者的同形导出。
     /// 外层 Err = trap/导出缺失等传输层错误；内层 `Results` 元组含 WIT
     /// `result<T, string>` 本体（guest 自报错误），两层语义分离。
@@ -1078,175 +879,19 @@ impl LoadedWasmPlugin {
     }
 
     /// 测试访问器：直接获取 Store/Instance（燃料断言与耗尽 trap 测试用）
-    #[cfg(test)]
+    ///
+    /// 非 `#[cfg(test)]` 门控的原因：宿主集成测试链的是**不带 cfg(test)** 的
+    /// 本 crate——燃料 / limiter 记账断言随用例迁宿主机后经
+    /// `crate::test_support::plugin_raw_store` 转发消费（该模块是宿主测试的
+    /// 唯一转发面，生产跨 crate 仍不可达：pub(crate)）。
     pub(crate) fn raw_store(&mut self) -> (&mut Store<WasmPluginState>, &Instance) {
         (&mut self.store, &self.instance)
     }
 }
 
-// ==================== WASI 预打开（仅 worker 类别，ADR 0034） ====================
-
-/// 构建 WASI 上下文：将 manifest 声明（`wasiPreopenDirs`，经展开+授权过滤）的
-/// 目录逐项预打开到 guest 路径 `/data`、`/data1`、…；无声明时为空上下文。
-/// 单项失败仅告警不阻断（该目录 guest 不可见，由插件激活时自检并引导用户）。
-///
-/// **仅 worker 类别（`lifecycle: ephemeral`，ADR 0032 L3.b 预留）可用**（ADR 0034）：
-/// 主 wasm-app 文件访问一律走宿主 `host-fs` 授权机制，非 worker 声明 preopen 在
-/// 构建期与加载期双侧显性拒绝——本函数是 worker 启用后的预留能力装配点，
-/// 当前对一切可加载 manifest 不可达（worker 未实现）。
-///
-/// 挂载档由条目声明决定（审计票 07 只读档）：`readonly: true` → `FsPerms::ReadOnly`，
-/// 其余（裸路径 / `readonly` 缺省或 false）→ `FsPerms::ReadWrite`，与改造前逐字一致。
-/// 档位**不影响是否放行**——未授权目录两档都建不出 preopen（`resolve_preopen_dirs`）。
-///
-/// 返回 `(WasiCtx, 实际预打开成功目录)`：后者供激活时判定「新授权目录是否已
-/// 纳入当前实例」（见 [`LoadedWasmPlugin::preopened_dirs`]）。
-///
-/// 目录创建是宿主职责：授权即代表用户同意插件在该路径写数据；而
-/// `preopened_dir` 要求目录已存在（wasmtime 语义），首次启用前数据目录通常
-/// 尚未创建，缺失会导致 preopen 静默失败、/data 挂不上。故此处先幂等
-/// `create_dir_all` 再挂载——修复首次启用「WASI 预打开目录未就绪」死循环。
-/// 只读档同样先建目录：宿主建空目录只是给 guest 一个可挂载的锚点，guest 自己
-/// 仍写不进去——写能力在 WASI 层由 `OpenMode` 拒掉（见 wasmtime-wasi 的
-/// `preopened_dir`：`ReadOnly` → `OpenMode::READ`）。
-pub(crate) fn build_wasi_ctx(
-    host_ctx: &WasmHostContext,
-    plugin_id: &str,
-    declared_dirs: &[WasiPreopenDir],
-) -> (wasmtime_wasi::WasiCtx, Vec<String>) {
-    let mut builder = WasiCtxBuilder::new();
-    let mut preopened = Vec::new();
-    for (i, dir) in resolve_preopen_dirs(host_ctx, plugin_id, declared_dirs)
-        .into_iter()
-        .enumerate()
-    {
-        // 首个声明挂载到 /data（WASI 插件约定根），后续依次 /data1、/data2…
-        let guest_path = if i == 0 {
-            "/data".to_string()
-        } else {
-            format!("/data{}", i)
-        };
-        let host_path = dir.path().to_string();
-        let (perms, perms_label) = if dir.readonly() {
-            (FsPerms::ReadOnly, "read-only")
-        } else {
-            (FsPerms::ReadWrite, "read-write")
-        };
-        if let Err(e) = std::fs::create_dir_all(&host_path) {
-            tracing::warn!(
-                plugin_id = %plugin_id,
-                dir = %host_path,
-                error = %e,
-                "WASI preopen dir creation failed, directory not visible to plugin"
-            );
-            continue;
-        }
-        match builder.preopened_dir(&host_path, &guest_path, perms) {
-            Ok(_) => {
-                tracing::info!(
-                    plugin_id = %plugin_id,
-                    dir = %host_path,
-                    perms = %perms_label,
-                    "WASI preopened dir at {} (manifest declared)",
-                    guest_path
-                );
-                preopened.push(host_path);
-            }
-            Err(e) => {
-                tracing::warn!(
-                    plugin_id = %plugin_id,
-                    dir = %host_path,
-                    error = %e,
-                    "WASI preopen failed, directory not visible to plugin"
-                );
-            }
-        }
-    }
-    (builder.build(), preopened)
-}
-
-/// 展开 manifest `wasiPreopenDirs` 声明为主机路径候选列表（挂载档原样带过）
-///
-/// 纯字符串处理（`${home}` 展开 + 剥尾部分隔符 + 滤空），不查授权、不依赖
-/// tokio 运行时——preauthorize 阶段用它收集「需弹窗授权」的路径候选
-/// （`resolve_preopen_dirs` 在此基础上再过滤未授权项）。
-pub(crate) fn expand_preopen_declarations(plugin_id: &str, declared_dirs: &[WasiPreopenDir]) -> Vec<WasiPreopenDir> {
-    expand_preopen_declarations_with_home(plugin_id, declared_dirs, None)
-}
-
-/// [`expand_preopen_declarations`] 的可注入 home 变体（测试用临时目录构造伪 HOME，
-/// 避免依赖真实 `$HOME` 导致的无主目录环境静默跳过，dev 合入）
-fn expand_preopen_declarations_with_home(
-    plugin_id: &str,
-    declared_dirs: &[WasiPreopenDir],
-    home_override: Option<&std::path::Path>,
-) -> Vec<WasiPreopenDir> {
-    let home = home_override
-        .map(|p| p.to_string_lossy().trim_end_matches(['/', '\\']).to_string())
-        .or_else(|| dirs::home_dir().map(|p| p.to_string_lossy().trim_end_matches(['/', '\\']).to_string()));
-    declared_dirs
-        .iter()
-        .filter_map(|decl| {
-            let dir = match home.as_ref() {
-                Some(home) => decl.path().trim().replacen("${home}", home, 1),
-                None => {
-                    tracing::warn!(plugin_id = %plugin_id, "wasiPreopenDirs: home_dir unavailable, skipping");
-                    return None;
-                }
-            };
-            // 只剥尾部分隔符：trim_matches 会连 POSIX 绝对路径的起始 '/' 一起
-            // 剥掉（/tmp/x → tmp/x），相对化后授权匹配必然失败——Windows 盘符
-            // 前缀掩盖了此问题，Linux 首次跑通前从未暴露
-            let dir = dir.trim().trim_end_matches(['/', '\\']).trim_end().to_string();
-            (!dir.is_empty()).then(|| decl.clone().with_path(dir))
-        })
-        .collect()
-}
-
-/// 解析 manifest `wasiPreopenDirs` 声明为可预打开的主机路径列表（含挂载档）
-///
-/// **仅 worker 类别可用**（ADR 0034，机制保留为 worker 预留能力）；主 wasm-app
-/// 不经过此路径（非 worker 声明 preopen 已被加载期闸门拒绝）。
-///
-/// - 先经 [`expand_preopen_declarations`] 展开
-/// - 仅保留已授权目录（is_granted 无弹窗校验）：manifest 路径可能指向任意
-///   主机位置，不得绕过授权机制建立预打开。只读档同样要授权——档位只收紧
-///   guest 能力，不放宽宿主边界（票 07 裁决 3）
-/// - **所需能力按档位取**（票 02 操作拆分）：只读档要读授权，读写档要读 + 写授权。
-///   预打开把这两项能力直接交给 guest（WASI 层不再过宿主闸门），所以授权记录必须
-///   覆盖对应能力——否则「授权读」的目录换来一个可写 preopen，操作拆分被原地架空
-/// - 无 tokio 运行时上下文（无头场景）无法查询授权 → 返回空（不阻断加载）
-pub(crate) fn resolve_preopen_dirs(
-    host_ctx: &WasmHostContext,
-    plugin_id: &str,
-    declared_dirs: &[WasiPreopenDir],
-) -> Vec<WasiPreopenDir> {
-    resolve_preopen_dirs_with_home(host_ctx, plugin_id, declared_dirs, None)
-}
-
-/// [`resolve_preopen_dirs`] 的可注入 home 变体（测试用临时目录构造伪 HOME，dev 合入）
-fn resolve_preopen_dirs_with_home(
-    host_ctx: &WasmHostContext,
-    plugin_id: &str,
-    declared_dirs: &[WasiPreopenDir],
-    home_override: Option<&std::path::Path>,
-) -> Vec<WasiPreopenDir> {
-    if tokio::runtime::Handle::try_current().is_err() {
-        return Vec::new();
-    }
-    use crate::security::fs_auth::FsOps;
-    expand_preopen_declarations_with_home(plugin_id, declared_dirs, home_override)
-        .into_iter()
-        .filter(|dir| {
-            let needed = if dir.readonly() { FsOps::READ } else { FsOps::READ_WRITE };
-            // 票 02 B5：`is_granted` 是 FsAuthChecker 具体机制方法（不在窄
-            // FsAuthGate trait 上）——经下转型访问器取回（桌面装配恒 Some）
-            let checker = host_ctx
-                .fs_auth_checker();
-            block_on_async(checker.is_granted(plugin_id, dir.path(), needed))
-        })
-        .collect()
-}
+// WASI 预打开装配（build_ctx / resolve_preopen_dirs / expand_preopen_declarations）
+// 已迁核心模块 `manager::runtime::wasi`（用户裁决 2026-10-12：WASI 面住核心、
+// 双端同源、默认全开、开/关由 CoreConfig::wasi 定）——本壳只剩调用与 re-export。
 
 // ==================== 测试 ====================
 
@@ -1254,12 +899,9 @@ fn resolve_preopen_dirs_with_home(
 mod tests {
 
     use super::*;
-    // 复用 host_impl 测试基建（host_impl::tests 为 pub(super)，同子树可访问）
+    // 复用 host_api 测试基建（`crate::host_api::tests` 为 pub(super)，同子树可访问）
     use crate::host_api::tests::build_host_ctx;
     use crate::host_api::grant_permissions;
-
-    /// 测试用插件 ID（与 wasm_runtime.rs 测试一致，主库表前缀校验依赖它）
-    const TEST_PLUGIN_ID: &str = "com.bedcode.test";
 
     /// 造一个**已装配 sqlite 域端口**的无头上下文
     ///
@@ -1274,31 +916,18 @@ mod tests {
         wasmtime::Engine::new(&config).expect("create test engine")
     }
 
-    /// 构建测试用组件插件并编码为组件
-    ///
-    /// 测试插件为独立 crate（packages/plugin-component-test），基于
-    /// WIT 契约（packages/plugin-sdk-desktop/rust/wit）生成绑定；
-    /// 源码变更检测与 wasm_runtime.rs 测试同策略（产物存在且源码未更新
-    /// 时直接复用，避免每次跑测试都触发 cargo build）
-    ///
-    /// `BEDCODE_PLUGIN_DEBUG=1`（dev 构建下）时以 debug profile 构建（保留
-    /// DWARF 行号，供行号冒烟测试断言 trap 错误串含 file:line）
-    /// 构建测试用组件插件（合集 `packages/plugin-sdk-fixtures` `feature = "sdk"`）
-    ///
-    /// 原先指向 `packages/plugin-component-test`（手写 wit-bindgen 绑定的独立夹具），
-    /// 夹具删除后改用 SDK 夹具——宿主加载组件的代码路径与客体绑定方式无关。
-    /// profile 分档（`BEDCODE_PLUGIN_DEBUG=1` 走 debug 取 DWARF 行号）由
-    /// `fixture_build::build_sdk_fixture` 内部处理。
-    fn build_test_component() -> Vec<u8> {
-        crate::manager::runtime::fixture_build::build_sdk_fixture("sdk")
-    }
+    // 组件往返用例与 `build_test_component` 构建器随票 04 迁桌面宿主
+    // `src-tauri/tests/{component_e2e,engine_e2e}.rs`（wasm-core 不再持全 world
+    // 绑定 ⇒ 本测试二进制无法实例化 SDK 夹具）；夹具构建仍由本 crate 的
+    // `manager/runtime/common/tests/fixture_keeper.rs` 负责。
 
     // ==================== 分片测试（common/component/tests/） ====================
     //
     // 自本文件的 `mod tests` 拆出（共享脚手架在 `mod tests`，经 `use super::*` 可见）：
     // - whitelist.rs：能力模块白名单双向校验 + 描述符零产品名词锁
     // - linker.rs：add_to_linker 注册闭环 + 组件完整往返
-    // - preopen.rs：WASI 预打开目录解析与 build_wasi_ctx 装配
+    // - preopen.rs：WASI 预打开目录解析与 build_ctx 装配（实现真源已在核心
+    //   `manager/runtime/wasi.rs`；文件留此处仅为复用本模块脚手架）
     // - stale_hint.rs：旧 SDK 产物实例化失败的 ABI 版本重建指引判据
     mod whitelist;
     mod linker;

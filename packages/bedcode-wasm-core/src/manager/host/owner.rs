@@ -278,10 +278,10 @@ impl OpKind {
 
     /// 失败后是否需要宿主统一恢复（通知前端 + 限频调度重载）
     ///
-    /// 覆盖面与 mutex 模型的 `with_wasm_plugin_call` 完全一致：命令面与
-    /// 事件 / WS 投递（这些调用点改造前就走该封装）。生命周期导出与能力转发的
-    /// 失败各自由调用方处理（`mark_error` / Degraded / 能力回落宿主原语），
-    /// 在此重复通知与重载调度会改变既有语义（I5）
+    /// 覆盖面与 mutex 模型的宿主侧调用面一致：命令面与事件 / WS 投递
+    /// （这些调用点都走宿主统一恢复）。生命周期导出与能力转发的失败各自由
+    /// 调用方处理（`mark_error` / Degraded / 能力回落宿主原语），在此重复
+    /// 通知与重载调度会改变既有语义（I5）
     pub(crate) fn recovers_after_failure(self) -> bool {
         matches!(
             self,
@@ -300,10 +300,11 @@ impl OpKind {
 
 /// 把 [`GuestOp`] 分派到 `LoadedWasmPlugin` 的既有导出方法（`mutex` 模型分支）
 ///
-/// 逐条委派（不做任何重新包装）⇒ 返回值、错误串与改造前的
-/// `run_guest_call` / `with_wasm_plugin_call` 调用点**逐字等价**。
-/// `event-loop` 模型的同一批 op 由 [`start_op`] 以类型化 `start_call_concurrent`
-/// 启动，两个分支共用 [`GuestReply`] 与 [`GuestCallFailure`] 出口。
+/// 逐条委派（不做任何重新包装）⇒ 返回值、错误串与宿主侧 mutex 模型
+/// 调用面（`PluginHost::call_guest` 的 Mutex 分支经 `call_mutex_blocking`
+/// 直达本函数）逐字等价。`event-loop` 模型的同一批 op 由 [`start_op`]
+/// 以类型化 `start_call_concurrent` 启动，两个分支共用 [`GuestReply`] 与
+/// [`GuestCallFailure`] 出口。
 pub(crate) fn dispatch_mutex_op(plugin: &mut LoadedWasmPlugin, op: GuestOp) -> crate::Result<GuestReply> {
     use crate::bus::WsFrameDispatch;
 
@@ -402,8 +403,8 @@ pub enum GuestReply {
 /// 门面调用失败（`mutex` / `event-loop` 两模型同构，见 [`dispatch_mutex_op`]
 /// 与 [`OwnerHandle::call`]）
 ///
-/// - `error`：调用方可见错误（`mutex` 模型下与既有 `run_guest_call` +
-///   `with_wasm_plugin_call` 文案逐字等价；`event-loop` 模型下由 op 文案表生成）
+/// - `error`：调用方可见错误（`mutex` 模型下与 `call_mutex_blocking` 路径
+///   透传的 AppError 文案逐字等价；`event-loop` 模型下由 op 文案表生成）
 /// - `panic_message`：宿主函数 panic 消息（`Some` 时生命周期调用点按既有
 ///   「xxx() panicked」文案分支，其余调用点忽略）
 #[derive(Debug)]
@@ -421,13 +422,21 @@ impl GuestCallFailure {
         }
     }
 
-    /// 宿主函数 panic（旧实现的外层 `Err(panic)` 槽位）：错误文案与
-    /// `with_wasm_plugin_call` 的 panic 分支逐字等价
+    /// 宿主函数 panic（mutex 模型的 catch_unwind 载荷槽位）：错误文案与
+    /// mutex 模型的 panic 分支逐字等价
     pub(crate) fn panicked(plugin_id: &str, msg: String) -> Self {
         Self {
             error: AppError::Plugin(format!("WASM plugin {} call panicked: {}", plugin_id, msg)),
             panic_message: Some(msg),
         }
+    }
+
+    /// 宿主函数 panic 消息（`None` = 非 panic 失败；调用方可见文案见 `Display`）
+    ///
+    /// `pub` 只为宿主集成测试的「guest trap 不得被当成宿主 panic」断言（字段本身
+    /// `pub(crate)`；本类型跨 crate 已可见，访问器不新增可见面）。
+    pub fn panic_message(&self) -> Option<&str> {
+        self.panic_message.as_deref()
     }
 }
 
@@ -492,16 +501,19 @@ impl OwnerStats {
 }
 
 /// 属主计数快照
+///
+/// `pub` 但模块 `pub(crate)` ⇒ 生产跨 crate 不可达；宿主集成测试经
+/// `crate::test_support::{TestOwnerHandle, OwnerStatsSnapshot}` 取快照断言属主不变式。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct OwnerStatsSnapshot {
-    pub(crate) started: u64,
-    pub(crate) settled: u64,
-    pub(crate) detached: u64,
-    pub(crate) queue_full: u64,
-    pub(crate) in_flight: u64,
-    pub(crate) abandoned: u64,
-    pub(crate) traps: u64,
-    pub(crate) forced_abort: u64,
+pub struct OwnerStatsSnapshot {
+    pub started: u64,
+    pub settled: u64,
+    pub detached: u64,
+    pub queue_full: u64,
+    pub in_flight: u64,
+    pub abandoned: u64,
+    pub traps: u64,
+    pub forced_abort: u64,
 }
 
 /// 实例级失败处理端口（宿主实现；属主任务在退出前 `await` 它）
@@ -509,7 +521,10 @@ pub(crate) struct OwnerStatsSnapshot {
 /// 实现在 `PluginHost`：① 通知前端（统一异常通道，限频合并）；② 限频调度自动重载
 /// （`schedule_plugin_reload_after_trap`）。**在等请求的显式失败由属主循环自己做**
 /// （见 [`owner_body`]），本端口只做实例级收敛。
-pub(crate) trait OwnerFailureSink: Send + Sync + 'static {
+///
+/// `pub` 但模块 `pub(crate)` ⇒ 生产跨 crate 不可达；宿主集成测试的实现方经
+/// `crate::test_support::OwnerFailureSink` 取同一契约（单点定义，不另立副本）。
+pub trait OwnerFailureSink: Send + Sync + 'static {
     /// `kind` ∈ {"trap", "panic"}；`detail` 为 wasmtime 错误全链文本 / panic 消息
     fn on_owner_failed<'a>(
         &'a self,
@@ -520,12 +535,15 @@ pub(crate) trait OwnerFailureSink: Send + Sync + 'static {
 }
 
 /// 停止属主后的回报（fail-visible：放弃请求数 / 是否强制 abort）
+///
+/// `pub` 但模块 `pub(crate)` ⇒ 生产跨 crate 不可达；宿主集成测试经
+/// `crate::test_support::TestOwnerHandle::stop` 返回本类型。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ShutdownReport {
+pub struct ShutdownReport {
     /// 属主退出时仍在等应答的请求数（已逐条显式失败）
-    pub(crate) abandoned_requests: u64,
+    pub abandoned_requests: u64,
     /// 宽限内未退出、被 abort 兜底
-    pub(crate) forced_abort: bool,
+    pub forced_abort: bool,
 }
 
 // ==================== 属主句柄 ====================
@@ -683,7 +701,7 @@ pub(crate) fn spawn_owner(plugin: LoadedWasmPlugin, sink: Arc<dyn OwnerFailureSi
     let task_plugin_id = plugin_id.clone();
     let join = crate::system::error_boundary::spawn_with_error_boundary("plugin_instance_owner", async move {
         // panic 兜底：宿主函数 panic 会穿透 wasmtime 调用栈（mutex 模型靠
-        // run_guest_call 的 catch_unwind 捕获；属主模型必须包住整个任务体），
+        // call_mutex_blocking 的 catch_unwind 捕获；属主模型必须包住整个任务体），
         // 收敛路径与 trap 一致（实例不可用 + 显式失败在等请求）
         let outcome = std::panic::AssertUnwindSafe(owner_body(plugin, rx, task_stats.clone()))
             .catch_unwind()

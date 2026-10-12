@@ -12,6 +12,12 @@
 //! （`src-tauri/tests/terminal_output_perf.rs` / `ws_e2e.rs`）同样只读不建；此前
 //! pty 靠手动复刻构建命令补产物、ws 靠内核测试顺带构建——「宿主单独跑」时即红。
 //! 补 keeper 后与 crypto/task 同口径：产物随源码重建，宿主只读有保障。
+//!
+//! **票 04 补充 `sdk` / `http`**：迁移前的构建方就在本 crate 的迁移用例里
+//! （`component_e2e` / `sdk_e2e` / `http_e2e` 实例化夹具时顺带构建）；ticket-04
+//! 把用例迁桌面宿主（`src-tauri/tests/{component_e2e,sdk_e2e,http_e2e,engine_e2e,
+//! owner_e2e,wasm_flow_e2e}.rs`，只读消费）时，构建方随之消失——没有 keeper
+//! 时「wasm-core 测试全绿 + 桌面 e2e 红（产物缺失）」会各红一半。补上后口径统一。
 
 use super::build_sdk_fixture;
 
@@ -49,4 +55,17 @@ fn pty_fixture_artifact_is_built_for_host_e2e() {
 #[test]
 fn ws_fixture_artifact_is_built_for_host_e2e() {
     keep_fixture_alive("ws");
+}
+
+/// SDK 基础夹具（consumer = 桌面迁移 e2e：component_e2e / sdk_e2e / engine_e2e /
+/// owner_e2e / wasm_flow_e2e——见上「票 04 补充」）
+#[test]
+fn sdk_fixture_artifact_is_built_for_host_e2e() {
+    keep_fixture_alive("sdk");
+}
+
+/// HTTP 域夹具（consumer = 桌面迁移 e2e：http_e2e）
+#[test]
+fn http_fixture_artifact_is_built_for_host_e2e() {
+    keep_fixture_alive("http");
 }

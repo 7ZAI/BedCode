@@ -11,7 +11,8 @@
 //!
 //! 既有实现的归位映射：
 //! - fs 资源：[`FsAuthorizer`]——check_permission（阶段 1）+ FsAuthChecker
-//!   三层校验（阶段 2/3）；host_impl/fs.rs 调用链即此管线的手工内联形态
+//!   三层校验（阶段 2/3）；宿主侧 fs 域实现（`src-tauri/src/plugin/fs.rs`）
+//!   调用链即此管线的手工内联形态
 //! - api-call 资源：[`ApiCallAuthorizer`]——互调门（ADR 0017：注册即声明，
 //!   未声明不可调）；bus_publish 门禁经本框架路由
 //!
@@ -170,7 +171,7 @@ impl Default for SecurityFramework {
 
 /// fs 资源仲裁器：现有 fs 三层校验的框架适配
 ///
-/// 管线映射（与 host_impl/fs.rs 手工内联链语义一致）：
+/// 管线映射（与宿主侧 fs 域实现的手工内联链语义一致）：
 /// - 阶段 1：manifest `fs:read` / `fs:write` 权限声明（PermissionManager）
 /// - 阶段 2：免弹窗判定——硬拒绝记录 / 第一方目录 / 授权记录（含操作集）/ 旧记录
 ///   （`FsAuthChecker::is_granted`，票 02 起带所需能力集）

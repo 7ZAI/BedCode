@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use bedcode_desktop_lib::wasm_core::manager::host::PluginHost;
-use bedcode_plugin_api::PluginState;
+use bedcode_desktop_lib::wasm_core::manifest::PluginState;
 use serde_json::json;
 
 /// 实例化系统组件 fixture 并注入宿主（kind=System，探测断言含 host-storage）
@@ -506,7 +506,7 @@ async fn test_activation_fails_with_missing_dependency_named() {
     // 失败落 Error 终态（不留悬挂 Activating）
     let info = host.get_plugin(&app_id).await.unwrap();
     assert!(
-        matches!(&info.state, PluginState::Error(e) if e.contains("host-no-such-cap")),
+        matches!(&info.state, PluginState::Error { error: e } if e.contains("host-no-such-cap")),
         "expected Error state naming missing capability, got {:?}",
         info.state
     );
@@ -864,7 +864,7 @@ async fn test_l2_activation_failure_does_not_block_other_layers() {
 
     let l2 = host.get_plugin(L2_ID).await.expect("l2 present");
     assert!(
-        matches!(&l2.state, PluginState::Error(e) if e.contains("host-no-such-cap")),
+        matches!(&l2.state, PluginState::Error { error: e } if e.contains("host-no-such-cap")),
         "L2 失败必须落 Error 态并点名缺失能力（可见信号），got {:?}",
         l2.state
     );

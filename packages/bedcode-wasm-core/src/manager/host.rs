@@ -251,7 +251,7 @@ impl CapabilityTarget for WasmInstanceEntry {
     }
 }
 
-/// `mutex` 模型的一次 guest 调用（原 `PluginHost::run_guest_call` 的搬移，
+/// `mutex` 模型的一次 guest 调用（原 `PluginHost` 的 mutex 调用面搬移，
 /// 语义逐字不变）
 ///
 /// WASI 预打开模式下，wasi 同步绑定（`in_tokio`）要求调用线程没有进入任何
@@ -281,7 +281,7 @@ async fn call_mutex_blocking(
             crate::manager::runtime::panic_payload_to_string(&payload),
         )),
         // spawn_blocking 任务自身 panic（catch_unwind 未覆盖的极端路径）：
-        // 与既有 `run_guest_call` 同路径（join 错误文本作为 panic 载荷）
+        // 与 mutex 模型既有路径同收敛（join 错误文本作为 panic 载荷）
         Err(join) => {
             let payload: Box<dyn std::any::Any + Send> = Box::new(join.to_string());
             Err(GuestCallFailure::panicked(
@@ -400,11 +400,13 @@ impl PluginHost {
     /// 创建 PluginHost 并加载所有插件（静态注册 + 文件扫描 + WASM）
     ///
     /// # Arguments
-    /// * `db` - 数据库实例
-    /// * `plugins_dir` - 插件目录
-    /// * `session_manager` - 会话管理器
-    /// * `config_manager` - 会话配置管理器
-    /// * `app_handle` - Tauri AppHandle
+    /// * `db` - 主库连接
+    /// * `plugins_dir` - 随包内置插件目录
+    /// * `user_plugins_dir` - 用户安装插件目录（zip 安装目标，可卸载）
+    /// * `app_handle` - Tauri AppHandle（无头/测试传 None，依赖前端事件的
+    ///   宿主能力在调用处降级）
+    /// * `peer_ctx_provider` - 对等网络上下文装配端口（无头/测试传 None）
+    /// * `first_party_dirs` - 第一方免弹窗归属清单（宿主装配时注入）
     /// 返回 `Arc<Self>`：宿主需要自身的弱引用注入属主失败回报端口
     /// （`event-loop` 模型的实例级失败收敛，见 [`HostOwnerFailureSink`]），
     /// 也便于调用方共享（原先由调用方各自 `Arc::new`）
@@ -644,13 +646,11 @@ impl PluginHost {
     /// 统一 guest 调用门面：条目按调用模型分派，两模型出口同构
     ///
     /// - `mutex`：现状路径（实例锁 + 无 handle 阻塞线程）；失败时按
-    ///   `OpKind::recovers_after_failure` 与改造前的 `with_wasm_plugin_call`
-    ///   一致地通知前端 + 限频调度重载（I5）
+    ///   `OpKind::recovers_after_failure` 通知前端 + 限频调度重载（I5）
     /// - `event-loop`：投递属主队列 + oneshot 等待；实例级失败（trap / panic）
     ///   由属主任务经 [`OwnerFailureSink`] 收敛，本处只透传单次调用结果
     ///
-    /// 实例缺失 → 立即显性 Err（不静默挂起；与改造前
-    /// `with_wasm_plugin_call` 文案一致）。
+    /// 实例缺失 → 立即显性 Err（不静默挂起）。
     pub(crate) async fn call_guest(
         &self,
         plugin_id: &str,
@@ -667,7 +667,7 @@ impl PluginHost {
             Ok(reply) => Ok(reply),
             Err(failure) => {
                 // `event-loop` 的实例级失败已由属主 sink 通知 + 调度重载，不重复；
-                // `mutex` 模型补齐既有 `with_wasm_plugin_call` 的恢复动作
+                // `mutex` 模型在此补齐恢复动作（通知前端 + 调度重载）
                 if entry.call_model() == CallModel::Mutex && kind.recovers_after_failure() {
                     let (kind_str, detail) = match &failure.panic_message {
                         Some(msg) => ("panic", msg.clone()),
@@ -923,8 +923,8 @@ mod tests {
 
     /// 测试用插件 ID（非 WASM 插件）
     const TEST_PLUGIN_ID: &str = "com.bedcode.test";
-    /// 测试用组件形态 WASM 插件 ID（与 plugin-sdk-fixtures 的 sdk 夹具 manifest 一致）
-    const TEST_WASM_PLUGIN_ID: &str = "com.bedcode.sdk-test";
+    // 组件形态 WASM 夹具 id（`com.bedcode.sdk-test`，原 TEST_WASM_PLUGIN_ID）随票 04
+    // 夹具用例迁宿主一并删除——宿主 `src-tauri/tests/support/mod.rs` 自持同值常量。
 
     // 用例与脚手架按域拆分（票 11 第 7 项）：内联块只留 imports / 测试常量 / 子模块声明。
     // 模块树 `host::tests::<文件>` 与内联形态等价；各域文件经 `use super::*;` 拿到宿主项

@@ -21,10 +21,11 @@ use std::sync::{Arc, Mutex as StdMutex, MutexGuard as StdMutexGuard};
 use tokio::sync::{Mutex, RwLock, SemaphorePermit};
 
 use crate::bus::MessageBus;
-use crate::config::CoreConfig;
+use crate::config::{CallModel, CoreConfig};
 use crate::db::Database;
 use crate::host_api::context::WasmHostContext;
 use crate::manager::capability::CapabilityRegistry;
+use crate::manager::host::{GuestOp, GuestReply};
 use crate::manager::runtime::{EngineSetup, LoadedWasmPlugin, WasmRuntime};
 use crate::manager::task::{register_unit_executor, CoreTaskEngine};
 use crate::permission::PermissionManager;
@@ -109,11 +110,9 @@ pub fn setup_wasm_runtime_with_setup(setup: EngineSetup) -> (WasmRuntime, Arc<Wa
 
         // 无头构建：不创建 AppHandle（tao 事件循环不允许在测试线程初始化）
         let mut wasm_runtime = WasmRuntime::with_setup(storage.clone(), None, setup).unwrap();
-        // guest 事件派发器（票 03）：生产由宿主注入，内核测试二进制不链宿主 lib ⇒
-        // 用与生产逐字同语义的 `TestGuestEvents` 替身（`component.rs` cfg(test) 区）
-        wasm_runtime.set_guest_events(Arc::new(
-            crate::manager::runtime::TestGuestEvents,
-        ));
+        // guest 事件派发器（票 03 / 票 04）：缺省 `UnwiredGuestEvents`（派发即
+        // fail-visible，不静默丢消息）——需要 `events` 导出投递的宿主集成测试自行
+        // 注入 `DesktopGuestEvents`（见桌面 `tests/support/mod.rs` 的 setup_wasm_runtime）。
         // 注入 AOT 缓存目录（生产由 app_handle 派生，测试无头上下文手动注入）
         wasm_runtime.aot_cache_dir = Some(
             std::env::temp_dir().join(format!("bedcode_aot_{}", std::process::id())),
@@ -249,7 +248,7 @@ pub async fn lock_auth_center_desk() -> SemaphorePermit<'static> {
 
 /// 测试用消息投递器：总线消息按 plugin_id 路由到测试持有的插件实例
 ///
-/// 生产环境由 PluginHost 实现 MessageDispatcher（with_wasm_plugin_call
+/// 生产环境由 PluginHost 实现 MessageDispatcher（经 `call_guest` 门面
 /// 加锁调用 + trap 自动重载）；互调测试无 PluginHost，等价实现：查实例表
 /// 加锁调用 on_message。is_activated 恒真（本测试全部实例均已 activate，
 /// 「未激活订阅者不投递」的语义由门禁/注销断言覆盖）。
@@ -403,6 +402,109 @@ pub fn system_test_artifact_bytes() -> Vec<u8> {
              先跑 wasm-core 测试再跑本二进制"
         )
     })
+}
+
+// ==================== 内核私有机制的测试转发面（宿主集成测试用） ====================
+//
+// 为什么经这里转：`LoadedWasmPlugin::raw_store` 与 `engine::aot_cache_key` 是内核私有
+// （pub(crate)）——宿主集成测试需要它们驱动燃料 / limiter 记账断言与定位 AOT 缓存
+// 产物，但生产面没有跨 crate 消费者。本模块是宿主测试的**唯一转发点**（与
+// `sdk_fixture_artifact_bytes` 同章程：常编译 pub 测试基建），不为此放宽内核生产 API。
+
+/// 取插件实例的裸 Store / Instance（燃料注入、limiter 记账、导出直调断言用）
+pub fn plugin_raw_store(
+    plugin: &mut LoadedWasmPlugin,
+) -> (
+    &mut wasmtime::Store<crate::manager::runtime::WasmPluginState>,
+    &wasmtime::component::Instance,
+) {
+    plugin.raw_store()
+}
+
+/// AOT 缓存文件名 hash（宿主集成测试定位 `<cache_dir>/c<hash>.cwasm` 用）
+///
+/// 与内核 `compile_component_from_file` 同一 hash 真源——宿主测试不得另拼一份
+/// 文件名规则（第二真源会在内核换算法时静默失配）。
+pub fn aot_cache_key(path: &std::path::Path, source_len: u64) -> u64 {
+    crate::manager::runtime::engine::aot_cache_key(path, source_len)
+}
+
+/// 取运行时的 Engine 句柄（引擎生效配置断言用：`Config` 不可回读，`Engine` 才完整）
+pub fn runtime_engine(runtime: &WasmRuntime) -> &wasmtime::Engine {
+    runtime.engine()
+}
+
+/// 日志捕获（引擎 / trap 证据链断言用：`capture(|| ...)` 收集 tracing 事件）
+///
+/// `host_api::log` 是 `pub(super)`（crate 内可见）——宿主测试经本 re-export 取用，
+/// 不为测试把模块提为 pub。
+pub use crate::host_api::log::capture;
+
+// ==================== 属主模型（event-loop 调用模型）的测试转发面 ====================
+//
+// 为什么经这里转：`manager::host::owner` 是 pub(crate)（I1：宿主侧唯一入口是装配表
+// `WasmInstanceEntry`，属主句柄不跨 crate 暴露）——但属主不变式（I3 trap 收敛 / I4
+// 入队序 / I6 停止语义 / 有界失败）的宿主集成测试必须**直接**驱动属主（不经
+// PluginHost，见 owner_e2e 用例主旨）。本段是那组测试的唯一转发面：暴露面收窄到
+// 句柄四个方法与队列容量，生产 API 零变化。
+
+/// 实例级失败处理端口（宿主测试实现方取同一契约——单点定义，不另立副本）
+pub use crate::manager::host::owner::{OwnerFailureSink, OwnerStatsSnapshot, ShutdownReport};
+
+/// 属主请求队列容量（有界失败断言的判据，与内核同一常量）
+pub fn owner_queue_cap() -> usize {
+    crate::manager::host::owner::OWNER_QUEUE_CAP
+}
+
+/// 直接启动属主任务（等价内核 `spawn_owner`）：把实例整块交给属主，不经装配表
+/// ——宿主测试要观察的是属主模型自身的不变式，不是装配表门面
+pub fn spawn_test_owner(plugin: LoadedWasmPlugin, sink: Arc<dyn OwnerFailureSink>) -> Arc<TestOwnerHandle> {
+    Arc::new(TestOwnerHandle {
+        inner: crate::manager::host::owner::spawn_owner(plugin, sink),
+    })
+}
+
+/// 装配条目的调用模型（宿主测试断言「模型按装配参数生效」用）
+pub fn instance_call_model(entry: &crate::manager::host::WasmInstanceEntry) -> CallModel {
+    entry.call_model()
+}
+
+/// 停止装配条目上的属主（`mutex` 模型 no-op 返回 `None`）——宿主测试的
+/// 「trap 后恢复路径 / store 随属主停止释放」断言用
+pub async fn instance_shutdown(entry: &crate::manager::host::WasmInstanceEntry) -> Option<ShutdownReport> {
+    entry.shutdown().await
+}
+
+/// 属主 guest 清理被跳过次数（`event-loop` 停用计数；`mutex` 模型恒 0）
+pub fn host_owner_cleanup_skipped(host: &crate::manager::host::PluginHost) -> u64 {
+    host.owner_cleanup_skipped()
+}
+
+/// 属主句柄的测试视图（薄转发：`call` / `stop` / `is_alive` / `stats`）
+pub struct TestOwnerHandle {
+    inner: crate::manager::host::owner::OwnerHandle,
+}
+
+impl TestOwnerHandle {
+    /// 入队并等待结果（失败立即显性 Err：队列满 / 属主已停都点名原因）
+    pub async fn call(&self, op: GuestOp) -> crate::Result<GuestReply> {
+        self.inner.call(op).await
+    }
+
+    /// 停止属主（返回即 store 已 drop）
+    pub async fn stop(&self) -> ShutdownReport {
+        self.inner.stop().await
+    }
+
+    /// 属主是否仍在服务（false = 实例不可用）
+    pub fn is_alive(&self) -> bool {
+        self.inner.is_alive()
+    }
+
+    /// 计数快照
+    pub fn stats(&self) -> OwnerStatsSnapshot {
+        self.inner.stats()
+    }
 }
 
 // ==================== 内核测试二进制的域端口替身（仅 cfg(test)） ====================

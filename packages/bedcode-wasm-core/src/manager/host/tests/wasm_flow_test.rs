@@ -1,194 +1,20 @@
-//! WASM 插件实例化后的激活 / 调用 / 重载 / 定时器 / 监听器用例（含组件 fixture 脚手架）。
+//! 定时器 / 重载限频用例 + 宿主退役面源码扫描锁。
+//!
+//! **票 04 迁移记录**：原文件的夹具功能态用例（degraded 激活与恢复 / 持久化意图 /
+//! 激活-调用-停用闭环 / 热重载循环）与夹具脚手架（`build_test_component` /
+//! `setup_wasm_plugin(_with_model)`）随「wasm-core 不再持全 world 绑定」迁桌面宿主
+//! `src-tauri/tests/wasm_flow_e2e.rs`（判决性探针实测：本族是最后一批依赖内核测试
+//! 替身的夹具用例）。留本文件的不实例化夹具（`make_plugin` 直造 LoadedPlugin），
+//! 与四张退役面源码扫描锁同属内核机制面。
 
 use super::scaffold::*;
 use super::*;
-
-// ==================== WASM 插件（真实组件测试插件） ====================
-
-/// 构建测试用组件插件（合集 `packages/plugin-sdk-fixtures` `feature = "sdk"`）
-///
-/// 原先指向 `packages/plugin-component-test`（手写 wit-bindgen 绑定的独立夹具），
-/// 夹具删除后改用 SDK 夹具；宿主加载组件的代码路径与客体绑定方式无关。
-pub(super) fn build_test_component() -> Vec<u8> {
-    crate::manager::runtime::fixture_build::build_sdk_fixture("sdk")
-}
-
-/// 将组件形态测试插件实例化并注入宿主（plugins + 装配条目双表）
-///
-/// 返回插件 ID；组件 invoke 内 host_storage 读回的 key 预写入
-/// `component-test-key`。extension_path 指向临时目录（invoke 的
-/// resource_dir 注入断言用）。
-pub(super) async fn setup_wasm_plugin(host: &PluginHost, tmp_dir: &tempfile::TempDir) -> String {
-    setup_wasm_plugin_with_model(host, tmp_dir, CallModel::Mutex).await
-}
-
-/// 同上，但显式指定调用模型（两模型对照用例：不必改全局配置，可并行跑）
-pub(super) async fn setup_wasm_plugin_with_model(
-    host: &PluginHost,
-    tmp_dir: &tempfile::TempDir,
-    call_model: CallModel,
-) -> String {
-    let component = host
-        .wasm_runtime()
-        .compile_component(&build_test_component())
-        .expect("compile test component");
-    let plugin = host
-        .wasm_runtime()
-        .instantiate_component(&component, TEST_WASM_PLUGIN_ID, host.wasm_host_ctx().clone(), &[], None)
-        .expect("instantiate test component");
-
-    host.storage()
-        .set(TEST_WASM_PLUGIN_ID, "component-test-key", json!({"k": "v"}))
-        .await
-        .expect("preset storage key");
-
-    let extension_path = tmp_dir.path().to_string_lossy().to_string();
-    host.install_instance(TEST_WASM_PLUGIN_ID, plugin, call_model).await;
-
-    let mut loaded = make_plugin(TEST_WASM_PLUGIN_ID, PluginSource::Wasm, PluginState::Loaded);
-    loaded.manifest.rust_library = "bedcode_plugin_component_test".to_string();
-    loaded.extension_path = extension_path;
-    host.plugins
-        .write()
-        .await
-        .insert(TEST_WASM_PLUGIN_ID.to_string(), loaded);
-
-    TEST_WASM_PLUGIN_ID.to_string()
-}
-
-/// v8 契约端到端（宿主侧）：on_startup 自报失败 → Degraded 终态；
-/// 移除故障开关后重试 → Activated；随后停用干净回落。
-/// 失败开关为组件测试插件的 storage key `component-test-fail-startup`
-#[tokio::test(flavor = "multi_thread")]
-async fn test_activate_degraded_on_startup_failure_then_retry_recovers() {
-    let tmp_dir = tempfile::TempDir::new().unwrap();
-    let host = setup_host().await;
-    let pid = setup_wasm_plugin(&host, &tmp_dir).await;
-
-    // 预置启动失败开关：激活调用本身成功，但终态必须如实落 Degraded
-    host.storage()
-        .set(&pid, "component-test-fail-startup", json!(true))
-        .await
-        .expect("preset fail-startup switch");
-    host.activate_plugin(&pid, false)
-        .await
-        .expect("activation call must succeed even when on_startup reports failure");
-    let info = host.get_plugin(&pid).await.unwrap();
-    assert!(
-        matches!(&info.state, PluginState::Degraded { error } if error.contains("simulated startup init failure")),
-        "expected Degraded with guest-reported reason, got {:?}",
-        info.state
-    );
-
-    // 持久化意图映射：Degraded 视为已启用（下次启动仍重试）
-    let activated_state = host.get_activated_state().await;
-    assert_eq!(
-        activated_state.get(&pid),
-        Some(&true),
-        "degraded counts as enabled intent"
-    );
-
-    // 重试激活（移除开关）→ 回到 Activated
-    host.storage()
-        .delete(&pid, "component-test-fail-startup")
-        .await
-        .expect("clear fail-startup switch");
-    host.activate_plugin(&pid, false)
-        .await
-        .expect("retry activation must succeed");
-    let info = host.get_plugin(&pid).await.unwrap();
-    assert_eq!(info.state, PluginState::Activated);
-
-    // 激活态停用干净回落
-    host.deactivate_plugin(&pid, false)
-        .await
-        .expect("deactivate after recovery ok");
-    let info = host.get_plugin(&pid).await.unwrap();
-    assert_eq!(info.state, PluginState::Deactivated);
-}
-
-/// 持久化写入路径：persist=true 时 Degraded 以 true 落库（用户意图语义）
-#[tokio::test(flavor = "multi_thread")]
-async fn test_persisted_intent_keeps_degraded_enabled() {
-    let tmp_dir = tempfile::TempDir::new().unwrap();
-    let host = setup_host().await;
-    let pid = setup_wasm_plugin(&host, &tmp_dir).await;
-
-    host.storage()
-        .set(&pid, "component-test-fail-startup", json!(true))
-        .await
-        .expect("preset fail-startup switch");
-    host.activate_plugin(&pid, true)
-        .await
-        .expect("activation call must succeed");
-
-    let map = host.storage().load_activated_plugins().await.unwrap();
-    assert_eq!(
-        map.get(&pid),
-        Some(&true),
-        "degraded plugin must persist as enabled intent"
-    );
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_wasm_plugin_activate_invoke_deactivate() {
-    let tmp_dir = tempfile::TempDir::new().unwrap();
-    let host = setup_host().await;
-    let pid = setup_wasm_plugin(&host, &tmp_dir).await;
-
-    // 激活：调用组件 __bedcode_activate + on_startup，无错误码
-    host.activate_plugin(&pid, false).await.unwrap();
-    assert!(host.is_activated(&pid).await);
-
-    // 命令调用：组件 echo + host_storage 读回 + resource_dir 自动注入
-    let result = host
-        .invoke_rust_command(&pid, "test.echo", json!({"hello": "host"}))
-        .await
-        .unwrap();
-    assert_eq!(result["name"], "test.echo");
-    assert_eq!(result["stored"], json!({"k": "v"}));
-    let args: serde_json::Value = serde_json::from_str(result["args"].as_str().unwrap()).unwrap();
-    assert_eq!(args["resource_dir"], json!(tmp_dir.path().to_string_lossy()));
-
-    // 停用：调用组件 on_shutdown + __bedcode_deactivate
-    host.deactivate_plugin(&pid, false).await.unwrap();
-    assert!(!host.is_activated(&pid).await);
-    assert_eq!(host.get_plugin(&pid).await.unwrap().state, PluginState::Deactivated);
-
-    // 停用后调用被门禁拒绝
-    let err = host
-        .invoke_rust_command(&pid, "test.echo", json!({}))
-        .await
-        .unwrap_err();
-    assert!(err.to_string().contains("not activated"));
-}
 
 // 票 03 删除的用例 `test_dispatch_lifecycle_and_input_to_wasm_plugin`：
 // 它覆盖的「事件 → payload → dispatch → wasm 回调」链路随宿主观察面退役
 // （派发点、监听器实现、注册表三处同批删除），无对象可测。
 // 插件导出的 `on_session_lifecycle` / `on_input_submitted` 仍由 SDK 默认实现兜底，
 // 其 WIT 面随票 10 整 interface 删除时收口。
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_reload_wasm_plugin_cycle() {
-    let tmp_dir = tempfile::TempDir::new().unwrap();
-    let host = setup_host().await;
-    // 把组件字节写入临时插件目录（reload 从文件重新加载）
-    let wasm_bytes = build_test_component();
-    let wasm_path = tmp_dir.path().join("bedcode_plugin_component_test.wasm");
-    std::fs::write(&wasm_path, &wasm_bytes).unwrap();
-
-    let pid = setup_wasm_plugin(&host, &tmp_dir).await;
-    host.activate_plugin(&pid, false).await.unwrap();
-
-    // 完整卸载-重载-激活循环
-    host.reload_wasm_plugin(&pid).await.unwrap();
-    assert!(host.is_activated(&pid).await);
-
-    // 重载后的新实例可用
-    let result = host.invoke_rust_command(&pid, "test.echo", json!({})).await.unwrap();
-    assert_eq!(result["name"], "test.echo");
-}
 
 // ==================== PluginServices（可测部分） ====================
 

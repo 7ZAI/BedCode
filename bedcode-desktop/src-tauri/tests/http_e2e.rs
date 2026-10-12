@@ -1,18 +1,26 @@
 //! host-http 服务端域端到端（ABI v29，HTTP 路由代码注册下沉专项）
 //!
-//! 自 `wasm_runtime.rs` 的 `mod tests` 拆出（共享脚手架在 `mod tests`，
-//! 经 `use super::*` 可见）。测试节奏（spec §6 / 用户裁定 ⑧）：本文件随阶段 1
-//! 落盘，**统一在阶段 5 全量回归时运行**——fixture 构建 + 真实 WASM 闭环属
-//! 集成测试执行，阶段 1–4 期间不单独运行。
+//! 自 wasm-core `manager/runtime/common/tests/http_e2e.rs` 迁入（票 04 绑定归位）：
+//! 跨 crate 集成测试一律住宿主 `src-tauri/tests/`（wasm-core 侧不再持有全 world
+//! 绑定，无法实例化 SDK 夹具）。共享脚手架从 wasm-core 的 `mod tests` 改为
+//! `mod support`；夹具读取从 `build_http_test_component`（构建）改为
+//! `sdk_fixture_artifact_bytes("http")`（只读）。用例本体逐字保留。
 //!
 //! 覆盖：fixture 插件（`packages/plugin-sdk-fixtures`，feature=http）经 `host-http.register-endpoint`
 //! 在 activate 期注册内部路径 + host 别名 + 模板别名 → 宿主动态注册表可查（内部 /
 //! 精确 / 模板捕获）→ `_http_endpoint` 回显入参形状 → `unregister-endpoint` 属主
 //! 注销幂等。
 
-use super::*;
+mod support;
+
+use std::sync::Arc;
+
+use bedcode_desktop_lib::wasm_core::host_api::context::PermissionScope;
 use bedcode_server_http::registry;
 use bedcode_server_http::wire::EndpointAuth;
+use tokio::sync::Mutex;
+
+use support::*;
 
 #[test]
 fn test_http_route_registration_server_domain_roundtrip() {
@@ -33,10 +41,10 @@ fn test_http_route_registration_server_domain_roundtrip() {
 
         // 单测不走 manifest 授权路径：显式授予（network:http = 服务端域权限门）
         host_ctx
-            .permission
+            .permission()
             .grant_permissions(PLUGIN_ID, &["storage".to_string(), "network:http".to_string()]);
         let component = wasm_runtime
-            .compile_component(&build_http_test_component())
+            .compile_component(&sdk_fixture_artifact_bytes("http"))
             .expect("compile http fixture component");
         let plugin = Arc::new(Mutex::new(
             wasm_runtime

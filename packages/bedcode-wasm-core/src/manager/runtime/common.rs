@@ -19,14 +19,14 @@ pub(crate) mod fixture_target;
 pub(crate) mod fixture_build;
 
 /// 声明展开（不过滤授权，preauthorize 收集弹窗候选用，见 host.rs `preauthorize_plugin`）
-pub(crate) use component::expand_preopen_declarations;
+pub(crate) use crate::manager::runtime::wasi::expand_preopen_declarations;
 /// WASI 预打开目录解析（激活时重建实例判定用，见 host.rs `rebuild_wasm_instance`）
-pub(crate) use component::resolve_preopen_dirs;
+pub(crate) use crate::manager::runtime::wasi::resolve_preopen_dirs;
 pub use component::LoadedWasmPlugin;
 
-/// 内核测试用 guest 事件派发替身（票 03）——经本壳转出供 `test_support` 注入
-#[cfg(feature = "common-host")]
-pub(crate) use component::TestGuestEvents;
+// 票 04：内核 guest 事件派发替身（`TestGuestEvents`）已删——派发器契约面由宿主
+// 注入生产实现（桌面 `src-tauri/src/plugin/guest_events.rs`），缺省
+// `UnwiredGuestEvents` 派发即 fail-visible（不静默丢消息）。
 // 票 02 批次 02：生效能力模块白名单（内建在册 ∪ 宿主自报）——宿主侧集成锁
 // （`src-tauri/tests/pty_wiring.rs` 的双向比对）必须用同一份合并结果，不得各拼一份。
 pub use component::host_module_whitelist;
@@ -37,30 +37,20 @@ use crate::storage::PluginStorage;
 // 组件引擎机制（编译 + AOT 缓存 / Store 装配 / 燃料 / 实例生死观测）双端唯一一份，
 // 本模块只做形态接线（Engine 构建、WASI 预打开、宿主上下文与限额仲裁）
 use crate::manager::runtime::engine;
-// 缓存键判据的生产实现已迁引擎模块；测试仍按名消费同一份（防测试与生产两套口径）
-#[cfg(test)]
-use engine::aot_cache_key;
 // Engine 构建面（build_engine_config 等纯函数）已迁引擎模块——桌面为真源、
 // 移动侧消费同一份。`common/tests/engine_config.rs` 的判据（配置→wasmtime 的
 // 逐项映射、逃生舱锁定项重申）按名消费同一批函数，不因实现位置变化而改写。
 #[cfg(test)]
-use engine::{
-    build_engine_config, reassert_locked_knobs, wasmtime_backtrace_details, wasmtime_opt_level,
-    wasmtime_profiling,
-};
+use engine::{build_engine_config, wasmtime_backtrace_details, wasmtime_opt_level, wasmtime_profiling};
 // 异步桥（`block_on_async`）已中立化到 core-runtime-util：本模块与它的消费者
 // （host_api / security / task 等）同为其使用方，不再由本模块定义（票 01）；
 // 本模块仅测试代码使用它，故 cfg(test) 门控（非 test 构建零 unused import）
 #[cfg(test)]
 use crate::runtime_util::block_on_async;
 use crate::security::fs_auth::FsAuthChecker;
-#[cfg(test)]
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::Manager;
-#[cfg(test)]
-use tokio::sync::{Mutex, RwLock};
 use wasmtime::Engine;
 
 // ==================== 宿主上下文（票 04 迁移 host_api::context） ====================
@@ -301,8 +291,10 @@ impl WasmRuntime {
             .map_err(|e| crate::AppError::Plugin(format!("Failed to initialize WASM engine: {}", e)))?;
         let mut linker = wasmtime::component::Linker::new(&engine);
 
-        // 注册已接线的 Component import 接口（实现见 host_impl + component）
-        component::add_to_linker(&mut linker)?;
+        // 注册已接线的 Component import 接口（实现见宿主侧域实现 + component）
+        // WASI p2/p3 段由 `core_config.wasi` 决定（默认全开）——注册在此一次固化，
+        // 运行期 `set_config` 改不动（见 set_config 的 warn）
+        component::add_to_linker(&mut linker, &core_config.wasi)?;
 
         // AOT 缓存目录：宿主 cache 目录（非插件目录，见结构体字段注释）。
         // 须在 app_handle move 进 FsAuthChecker 之前取出
@@ -377,6 +369,15 @@ impl WasmRuntime {
                     "set_config 携带了 Engine 参数变更，但 Engine 构建期已固化，本次覆盖不会生效（需重建运行时）"
                 );
             }
+            // WASI 注册面（enabled / p2 / p3）与 Engine 同类：linker 在运行时构建期
+            // 一次装配后固化——运行期改它对已建 linker 无效。preopen 装配（build_ctx）
+            // 则每次实例化读配置，是即时生效的，故两者要分开说，别让运维以为全无效。
+            if current.wasi != cfg.wasi {
+                tracing::warn!(
+                    "set_config 携带了 WASI 注册面（enabled/p2/p3）变更：linker 在运行时构建期已固化，\
+                     已注册的接口集合不变（需重建运行时才生效）；仅「预打开目录装配」随配置即时生效"
+                );
+            }
         }
         *self.config.write().expect("core config lock poisoned") = cfg;
         Ok(())
@@ -405,7 +406,7 @@ impl WasmRuntime {
     ///
     /// `declared_preopen_dirs`：manifest 声明的 WASI 预打开目录（原始值，
     /// 支持 ${home} 与只读档；实例化时经展开+授权过滤并按档位挂载，
-    /// 见 component::build_wasi_ctx）
+    /// 见 `manager::runtime::wasi::build_ctx`）
     pub fn load_plugin_from_file(
         &self,
         path: &Path,
@@ -442,13 +443,16 @@ impl WasmRuntime {
         declared_preopen_dirs: &[WasiPreopenDir],
         resource_overrides: Option<&ResourceOverrides>,
     ) -> crate::Result<LoadedWasmPlugin> {
-        let (limits, fuel_enabled) = {
+        let (limits, fuel_enabled, wasi_cfg) = {
             let cfg = self.config.read().expect("core config lock poisoned");
             (
                 host_ctx
                     .security()
                     .resolve_store_limits(plugin_id, &cfg.store, resource_overrides),
                 cfg.engine.consume_fuel,
+                // WASI 面开关：preopen 装配随配置即时生效（linker 注册面已在构建期
+                // 固化，见 with_setup / set_config 的说明）
+                cfg.wasi,
             )
         };
         let metrics = self.monitor.plugin(plugin_id);
@@ -459,6 +463,7 @@ impl WasmRuntime {
             plugin_id,
             host_ctx,
             declared_preopen_dirs,
+            &wasi_cfg,
             StoreSpec {
                 limits,
                 fuel_enabled,
@@ -484,7 +489,11 @@ impl WasmRuntime {
     /// Engine 句柄（**仅测试可见**：wasmtime `Config` 构建后不可回读，锁定项 /
     /// 逃生舱的行为契约只能经构建出来的 Engine 观测；生产不开放该面，
     /// 避免宿主绕过实例化路径直接用 Engine 编译产物）
-    #[cfg(test)]
+    ///
+    /// 非 `#[cfg(test)]` 门控的原因：宿主集成测试链的是**不带 cfg(test)** 的
+    /// 本 crate，而引擎生效配置断言（逃生舱覆盖项）恰是迁宿主用例的组成部分——
+    /// 经 `crate::test_support::runtime_engine` 转发消费（该模块是宿主测试的
+    /// 唯一转发面，生产跨 crate 仍不可达：pub(crate)）。
     pub(crate) fn engine(&self) -> &Engine {
         &self.engine
     }
@@ -512,215 +521,37 @@ mod tests {
     // WS 终端输出路径吞吐探针（票 09 性能门禁 §9.3：插件 ring-fetch + WIT binary + WS send）
     // 认证中心热路径性能探针（ADR 0031 v32 fail-closed 裁决的每请求成本：
     // 宿主原生验签 vs 认证中心往返），只读探针
-    // 域拆分（P0）：测试函数自本文件拆至 wasm_runtime/tests/，共享脚手架留在下方；
-    // 各域文件 `use super::*` 复用，fixture 互斥与产物构建语义不变
-    mod component_e2e;
+    // 域拆分（P0）：测试函数自本文件拆至 common/tests/（各域测试文件仍在
+    // 本 mod 声明内），共享脚手架留在下方；各域文件 `use super::*` 复用，
+    // fixture 互斥与产物构建语义不变
+    // component_e2e / sdk_e2e / http_e2e 与 engine_{config,limits} 的夹具功能态用例
+    // 随票 04 迁桌面宿主 `src-tauri/tests/{component_e2e,sdk_e2e,http_e2e,engine_e2e}.rs`
+    // （wasm-core 不再持有全 world 绑定后，本测试二进制无法实例化 SDK 夹具）；
+    // 留本文件的 engine_{config,limits} 只含形态无关纯机制用例。
     mod engine_config;
     mod engine_limits;
     // crypto 夹具产物 keeper（票 02 批次 04）：夹具消费者 = 宿主 e2e，内核只负责构建
     mod fixture_keeper;
-    mod http_e2e;
-    // 票 06 P1：属主任务（event-loop 调用模型）直接驱动测试
-    mod owner_e2e;
+    // 票 06 P1 的属主任务用例（owner_e2e）随票 04 迁桌面宿主 `src-tauri/tests/
+    // owner_e2e.rs`——经 test_support 的属主转发面（spawn_test_owner 一族）直接
+    // 驱动属主，内核侧不再持有该测试。
     mod p3_async_host_import;
     // host-pty 端到端矩阵（pty_e2e）随票 02 批次 02 迁宿主
     // `src-tauri/tests/pty_e2e.rs`（本 crate 已不依赖 bedcode-pty-engine）。
-    mod sdk_e2e;
     // host-task 闭环（task_e2e）随票 02 批次 05 迁宿主 `src-tauri/tests/task_e2e.rs`
     // ——WIT impl 迁出后内核测试二进制不再注册 host-task import，task 夹具无法
     // 在内核实例化（产物由本 crate fixture_keeper 构建供给宿主，见该文件）。
     mod preopen_e2e;
-
-    /// 测试用插件 ID
-    const TEST_PLUGIN_ID: &str = "com.bedcode.test";
-
-    /// 校验 RFC3339 UTC 字符串格式（trust addedAt 断言用；与插件
-    /// pairing::code 的 format_rfc3339_utc 输出格式一致）
-    fn parse_rfc3339_for_test(s: &str) -> bool {
-        use chrono::{DateTime, Utc};
-        DateTime::parse_from_rfc3339(s).map(|dt| dt.with_timezone(&Utc)).is_ok()
-    }
+    // WASI 面配置开关（用户裁决 2026-10-12：住核心、双端默认全开、外部配置可关）：
+    // 关掉后 wasip2 夹具实例化必失败——开关落在 linker 注册面上的可见证据
+    mod wasi_config;
 
     // ==================== Component Model 测试 ====================
 
-    /// 构建测试用组件插件（合集 `packages/plugin-sdk-fixtures` `feature = "sdk"`）
-    ///
-    /// 原先指向 `packages/plugin-component-test`（手写 wit-bindgen 绑定的独立夹具），
-    /// 已被 30+ 处通用引擎测试当「随便一个可加载组件」使用。夹具删除后改用 SDK 夹具：
-    /// 宿主加载组件的代码路径与客体绑定方式无关（宿主无 `ComponentEncoder` 路径，
-    /// 两种写法都直出组件），实际依赖的只有 `test.echo` / `test.panic` /
-    /// `test.storage-get` / 启动失败注入四个可观测点，已并入 SDK 夹具。
-    ///
-    /// `BEDCODE_PLUGIN_DEBUG=1`（dev 构建下）时以 debug profile 构建（保留
-    /// DWARF 行号，供行号冒烟测试断言 trap 错误串含 file:line）——由
-    /// `fixture_build::build_sdk_fixture` 内部按 profile 分档处理。
-    fn build_test_component() -> Vec<u8> {
-        build_sdk_fixture("sdk")
-    }
-
-    // ==================== host-websocket 客户端域端到端（ABI v14） ====================
-
-    /// host-websocket fixture e2e 串行锁
-    ///
-    /// 三个用例共用 fixture 常量属主 id（`com.bedcode.ws-test`，宿主侧连接表 / 端点表 /
-    /// 事件 topic 均按属主**进程级全局**登记），彼此 `purge_for_plugin` 会清掉对方的
-    /// 连接与端点（并行时现象：握手 404、连接被回收）。libtest 并行执行下必须串行。
-    static WS_FIXTURE_E2E_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    /// 取得 fixture e2e 串行锁（跨用例共享全局表；中毒后取回内部值继续）
-    fn lock_ws_fixture_e2e() -> std::sync::MutexGuard<'static, ()> {
-        WS_FIXTURE_E2E_LOCK.lock().unwrap_or_else(|e| e.into_inner())
-    }
-
-    /// fixture e2e 兜底超时：把「挂起（疑似死锁）」变成明确失败
-    ///
-    /// 历史踩点：插件投递任务占住 actix arbiter → 用例无限挂起（无超时则整轮
-    /// `cargo test` 永不返回）。上限取 60s（正常用例秒级完成）。
-    const WS_E2E_TIMEOUT_SECS: u64 = 60;
-
-    /// 以兜底超时驱动 e2e 主体
-    async fn ws_e2e_guard<F>(label: &str, fut: F) -> F::Output
-    where
-        F: std::future::Future,
-    {
-        match tokio::time::timeout(std::time::Duration::from_secs(WS_E2E_TIMEOUT_SECS), fut).await {
-            Ok(out) => out,
-            Err(_) => {
-                panic!("{label}: 超过 {WS_E2E_TIMEOUT_SECS}s 未完成（疑似死锁；检查投递任务是否占住 actix arbiter）")
-            }
-        }
-    }
-
-    /// 读 fixture 的 `ws-state` 快照（锁在返回前释放，避免阻塞帧投递）
-    async fn ws_fixture_state(plugin: &Arc<Mutex<LoadedWasmPlugin>>) -> serde_json::Value {
-        let raw = {
-            let mut guard = plugin.lock().await;
-            guard.invoke_command("ws-state", "{}").expect("ws-state")
-        };
-        serde_json::from_str(&raw).expect("ws-state json")
-    }
-
-    /// 轮询快照直到谓词命中或超时（帧与事件均为异步投递，不能单次读取断言）
-    async fn ws_poll_state(
-        plugin: &Arc<Mutex<LoadedWasmPlugin>>,
-        pred: impl Fn(&serde_json::Value) -> bool,
-        timeout: std::time::Duration,
-    ) -> serde_json::Value {
-        let deadline = std::time::Instant::now() + timeout;
-        loop {
-            let state = ws_fixture_state(plugin).await;
-            if pred(&state) || std::time::Instant::now() >= deadline {
-                return state;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-        }
-    }
-
-    /// 快照中是否含指定 kind 的帧（`text` 为 Some 时要求文本一致）
-    fn ws_has_frame(state: &serde_json::Value, kind: &str, text: Option<&str>) -> bool {
-        state["frames"]
-            .as_array()
-            .map(|frames| {
-                frames
-                    .iter()
-                    .any(|f| f["kind"] == kind && text.map(|t| f["text"] == t).unwrap_or(true))
-            })
-            .unwrap_or(false)
-    }
-
-    /// 快照中首个指定 kind 帧的载荷长度
-    fn ws_frame_len(state: &serde_json::Value, kind: &str) -> Option<u64> {
-        state["frames"]
-            .as_array()?
-            .iter()
-            .find(|f| f["kind"] == kind)?
-            .get("len")?
-            .as_u64()
-    }
-
-    /// 快照中指定 topic 的事件 payload
-    fn ws_event_payload(state: &serde_json::Value, topic: &str) -> Option<serde_json::Value> {
-        state["events"]
-            .as_array()?
-            .iter()
-            .find(|e| e["topic"] == topic)
-            .map(|e| e["payload"].clone())
-    }
-
-    // ==================== host-websocket 服务端域端到端（ABI v14，票 05） ====================
-
-    /// WS 客户端类型（tokio-tungstenite 直连 ws://，与集成测试同构）
-    type WsTestClient = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
-
-    /// 探测空闲端口（OS 分配后立即释放，交给宿主服务器绑定）
-    fn ws_pick_free_port() -> u16 {
-        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("probe free port");
-        listener.local_addr().expect("probed port").port()
-    }
-
-    /// 读客户端下一条业务帧（跳过心跳帧），超时返回 `None`
-    async fn ws_client_recv(
-        client: &mut WsTestClient,
-        timeout: std::time::Duration,
-    ) -> Option<tokio_tungstenite::tungstenite::Message> {
-        use futures_util::StreamExt;
-        use tokio_tungstenite::tungstenite::Message;
-        let deadline = tokio::time::Instant::now() + timeout;
-        loop {
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            if remaining.is_zero() {
-                return None;
-            }
-            match tokio::time::timeout(remaining, client.next()).await {
-                Ok(Some(Ok(msg))) => match msg {
-                    Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => continue,
-                    other => return Some(other),
-                },
-                _ => return None,
-            }
-        }
-    }
-
-    /// 轮询 `ws-list-clients` 直到在线客户端数达到期望（注册表登记为异步）
-    async fn ws_wait_clients(
-        plugin: &Arc<Mutex<LoadedWasmPlugin>>,
-        endpoint_id: &str,
-        expected: usize,
-    ) -> Vec<serde_json::Value> {
-        let args = serde_json::json!({ "endpointId": endpoint_id }).to_string();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        loop {
-            let raw = {
-                let mut guard = plugin.lock().await;
-                guard.invoke_command("ws-list-clients", &args).expect("ws-list-clients")
-            };
-            let clients: Vec<serde_json::Value> = serde_json::from_str::<serde_json::Value>(&raw)
-                .expect("ws-list-clients json")["clients"]
-                .as_array()
-                .cloned()
-                .unwrap_or_default();
-            if clients.len() == expected || std::time::Instant::now() >= deadline {
-                return clients;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-        }
-    }
-
-    /// 构建 host-websocket fixture 插件（合集 `packages/plugin-sdk-fixtures`
-    /// `feature = "ws"`）并编码为组件
-    ///
-    /// 原先的新鲜度检查额外盯 SDK 的 `wasm_ws.rs` / `host/ws.rs` 等链路文件；合集
-    /// crate 后不再单独盯——SDK 任一文件变动会经 cargo 依赖指纹触发重建。
-    fn build_ws_test_component() -> Vec<u8> {
-        build_sdk_fixture("ws")
-    }
-
-    // ==================== host-http 服务端域端到端（ABI v29，路由注册下沉） ====================
-
-    /// host-http 服务端域 fixture（合集 `packages/plugin-sdk-fixtures` `feature = "http"`）
-    fn build_http_test_component() -> Vec<u8> {
-        build_sdk_fixture("http")
-    }
+    // SDK 夹具的构建与断言助手（`build_test_component` / `build_sdk_test_component` /
+    // `build_ws_test_component` / `build_http_test_component` + ws 串行锁 / 兜底超时 /
+    // 快照轮询）随票 04 全部迁桌面宿主 `src-tauri/tests/`：宿主侧 support 有同形副本
+    // （宿主测试只读夹具、不承担构建，构建由本 crate 的 `fixture_keeper` 负责）。
 
     // host-pty 一族测试助手（串行锁 `lock_pty_fixture_e2e` / 构建器
     // `build_pty_test_component` / 断言助手 `pty_command_error` 等）随 wasm-core
@@ -734,20 +565,10 @@ mod tests {
     // （`fixture_keeper::task_fixture_artifact_is_built_for_host_e2e`，宿主只读）。
     // host-task 消费派发测试替身（MockTaskServices）与 `task_fixture_plugin_id`
     // 同批随用例迁宿主。
-
-    /// 构建 SDK 组件形态测试插件（合集 `packages/plugin-sdk-fixtures`
-    /// `feature = "sdk"`）并编码为组件
-    ///
-    /// 与 `build_test_component` 的区别：插件经真实 SDK（wasm_entry! 宏 + WasmHost）
-    /// 构建，验证 SDK 组件产物链路。
-    ///
-    /// 注：原先本 builder 的新鲜度检查额外盯 `plugin-sdk-desktop/rust/src/{wasm,
-    /// wasm_host,api_call}.rs` 与 `rust-macros/src/lib.rs`（`#[plugin_api]` 宏）。
-    /// 合集 crate 后不再单独盯——合集产物在 `plugin-sdk-desktop` 任一文件变动时
-    /// 经 cargo 自身的依赖指纹重建（feature 变更会触发），此处只需盯夹具自身源文件。
-    fn build_sdk_test_component() -> Vec<u8> {
-        build_sdk_fixture("sdk")
-    }
+    //
+    // 原 `build_sdk_test_component`（与 `build_test_component` 同产物同语义）随其
+    // 消费者（sdk/engine_limits 等夹具用例）票 04 迁宿主一并删除——宿主经只读
+    // `sdk_fixture_artifact_bytes` 取产物。
 
     /// 构建 wasm32-wasip2 测试组件（WASI preopen E2E 用）
     ///
@@ -860,49 +681,12 @@ mod tests {
     // task_e2e（含 MockTaskServices / task_fixture_plugin_id 脚手架）已随票 02 批次 05
     // 迁宿主 `src-tauri/tests/task_e2e.rs`（本文件 task 段的指路注释）。
 
-    // ==================== ADR 0033：认证面在无头上下文里的边界 ====================
+    // ==================== 无头 harness 的认证边界（ADR 0033） ====================
     //
-    // **为什么本 harness 里没有「正向认证」用例**（一次踩坑的记录，避免后人重走）：
-    //
-    // v33 之后，WS / HTTP 认证的**唯一**判定点是认证中心插件，而宿主侧两处调用
-    // （`authenticate_endpoint_connection` / `auth_gateway`）都经 `AppContext::try_global()` 取
-    // `PluginHost`——**无 AppContext ⇒ 无中心 ⇒ fail-closed 全拒**（这本身是对的：
-    // 宿主已经没有本地验签面了，不存在「本地验签通过就放行」的旁路）。
-    //
-    // 本 harness 曾试过装一个进程级 `AppContext`（`OnceCell` + 真实中心产物）来
-    // 造正向认证，三条实测阻塞把这条路堵死了：
-    // 1. **端点表是进程级全局**：那个中心一旦 `activate` 就登记了
-    //    `session-control` / `terminal` 端点，本文件里各自装载实例的 WS 用例再登记
-    //    同路径 → `path already registered` 直接 panic；
-    // 2. **端点归属与实例绑定**：端点由某个实例登记、帧投递给那个实例，于是「用
-    //    全局中心签的 token」+「用例自己的实例收帧」必然错配（认证身份与状态快照
-    //    分属两个实例）；
-    // 3. **AppContext 是 `OnceLock`**：一个用例装上后全 harness 共享，隔离性消失，
-    //    且 `PluginHost::new` 的重量级初始化被所有用例连带。
-    //
-    // **正向认证的覆盖因此落在自带真实 AppContext 的独立测试二进制**：
-    // `tests/ws_auth_rules.rs`（WS 首消息认证四规则 + 有效凭证后业务帧可达）与
-    // `tests/http_auth_biometric.rs`（中心签发 → 验签闭环）。宿主 harness 这边只锁
-    // **无中心即全拒**这条边界——它恰好是 v33 之后最该被钉住的新性质。
-
-    /// 需要**正向认证**（中心签发 → 首消息认证 → 业务帧往返）的用例在无头 harness
-    /// 里**不可达**，此处显式退出并说明去哪儿跑
-    ///
-    /// v33 之后宿主无签发面也无验签面，认证判定全在认证中心插件里，而宿主侧两处
-    /// 调用都经 `AppContext::try_global()`——本 harness 装不出隔离的 AppContext
-    /// （三条阻塞见上方「ADR 0033：认证面在无头上下文里的边界」）。故这些用例
-    /// **显式跳过并打印去向**（不是静默 skip：静默会把「未验证」伪装成「通过」）。
-    /// 正向认证的覆盖在 `tests/ws_auth_rules.rs`（WS 首消息认证四规则 + 有效
-    /// 凭证后业务帧可达）与 `tests/http_auth_biometric.rs`（中心签发闭环）。
-    fn positive_auth_needs_dedicated_binary(test: &str) -> bool {
-        eprintln!(
-            "[skip] {test}: 需要正向认证（中心签发 → 首消息认证 → 业务帧往返），\
-             但 v33 之后认证判定在认证中心插件里，宿主侧调用需要 AppContext——\
-             无头 harness 装不出隔离的 AppContext。正向认证覆盖见 \
-             tests/ws_auth_rules.rs 与 tests/http_auth_biometric.rs。"
-        );
-        true
-    }
+    // 「为什么 harness 里没有正向认证用例 / 正向认证去哪儿跑」的记录与
+    // `positive_auth_needs_dedicated_binary` 跳过助手随 WS / HTTP 用例迁桌面宿主
+    // `src-tauri/tests/support/mod.rs`（同文）；本 crate 剩余用例（owner / preopen /
+    // a03 探针）不含认证路径。
 
     // ==================== 会话中心互调 api 清单（已上提 test_support） ====================
 }
